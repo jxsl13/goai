@@ -1,0 +1,29 @@
+#version 450
+
+// Row-major f32 GEMM: C[M,N] = A[M,K] · B[K,N] (§T43). One invocation computes
+// one output element C[row][col]. Buffers are flat row-major std430 float arrays.
+// Compiled to matmul.spv by `make vulkan-spv` (glslc) and embedded by vulkan.go.
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer BufA { float a[]; };
+layout(std430, binding = 1) readonly buffer BufB { float b[]; };
+layout(std430, binding = 2) writeonly buffer BufC { float c[]; };
+
+layout(push_constant) uniform Dims { int M; int K; int N; } d;
+
+void main() {
+    uint col = gl_GlobalInvocationID.x; // 0 .. N-1
+    uint row = gl_GlobalInvocationID.y; // 0 .. M-1
+    if (row >= uint(d.M) || col >= uint(d.N)) {
+        return; // dispatch rounds up to whole workgroups; mask the overhang
+    }
+    // Accumulate in a 32-bit float on-GPU. The Pure-Go reference accumulates in
+    // f64, so §V11 allows a K-scaled tolerance (rtol(K)=1e-6·√K) for this backend.
+    float sum = 0.0;
+    uint aRow = row * uint(d.K);
+    for (uint k = 0u; k < uint(d.K); ++k) {
+        sum += a[aRow + k] * b[k * uint(d.N) + col];
+    }
+    c[row * uint(d.N) + col] = sum;
+}

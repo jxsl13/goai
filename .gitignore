@@ -1,0 +1,26 @@
+# Build / test artifacts
+/bin/
+*.out
+*.test
+*.prof
+coverage.*
+
+# Golden generation scratch (keep committed golden files under */testdata/)
+*.tmp
+__pycache__/
+*.pyc
+.venv/
+
+# Editor/OS
+.DS_Store
+.idea/
+.vscode/
+
+# Claude Code local/session files — but KEEP .claude/workflows/ (the research-lite
+# plugin lives in-repo so it travels to other hosts, e.g. Linux/Windows for the
+# CUDA/AMD/Intel accel work).
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+
+# NOTE: the compiled Vulkan shader backend/vulkan/shaders/matmul.spv is
+# intentionally COMMITTED (embedded build artifact, wanted in-repo) — not ignored.
