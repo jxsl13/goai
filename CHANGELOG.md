@@ -4,6 +4,11 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T588 — go-test-shaped selector output (2026-07-13)
+- cichange reports and commands now use absolute import paths
+  (github.com/jxsl13/goai/nlp) and go-test-style status columns (run/skip lines),
+  matching what go test itself prints.
+
 ### T574 — XTC top-choice exclusion sampler (2026-07-13)
 - nlp.Sampler gained XTC (WithXTC/WithXTCThreshold): with a configured probability per
   draw, all above-threshold tokens except the least probable qualifier are excluded —

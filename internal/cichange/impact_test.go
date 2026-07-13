@@ -33,14 +33,14 @@ func TestImpactReverseClosure(t *testing.T) {
 	got := impactOf(t, map[string]string{
 		"a/a.go": "package a\n\nfunc Add(x, y int) int { return x - y }\n",
 	})
-	if got != ". ./a ./b ./e" {
-		t.Errorf("leaf change: got %q, want %q", got, ". ./a ./b ./e")
+	if got != "example.com/m example.com/m/a example.com/m/b example.com/m/e" {
+		t.Errorf("leaf change: got %q, want %q", got, "example.com/m example.com/m/a example.com/m/b example.com/m/e")
 	}
 	// c is imported ONLY by b's _test.go: b's tests link c (select b), but b's
 	// compiled code does not — so e (importing b) must NOT be selected.
 	got = impactOf(t, map[string]string{"c/c.go": "package c\n\nvar X = 1\n"})
-	if got != "./b ./c" {
-		t.Errorf("test-edge change: got %q, want %q", got, "./b ./c")
+	if got != "example.com/m/b example.com/m/c" {
+		t.Errorf("test-edge change: got %q, want %q", got, "example.com/m/b example.com/m/c")
 	}
 }
 
@@ -50,8 +50,8 @@ func TestImpactTestOnlyChange(t *testing.T) {
 	got := impactOf(t, map[string]string{
 		"a/a_test.go": "package a\n\nimport \"testing\"\n\nfunc TestX(t *testing.T) {}\n",
 	})
-	if got != "./a" {
-		t.Errorf("test-only change: got %q, want %q", got, "./a")
+	if got != "example.com/m/a" {
+		t.Errorf("test-only change: got %q, want %q", got, "example.com/m/a")
 	}
 }
 
@@ -71,10 +71,10 @@ func TestImpactNone(t *testing.T) {
 // §V16 tier-1: non-Go assets (assembly, testdata) attach to the nearest ancestor
 // package and propagate like code — cgo/embed reach is confined to the package subtree.
 func TestImpactNonGoAssets(t *testing.T) {
-	if got := impactOf(t, map[string]string{"c/gen.s": "// new asm\n"}); got != "./b ./c" {
+	if got := impactOf(t, map[string]string{"c/gen.s": "// new asm\n"}); got != "example.com/m/b example.com/m/c" {
 		t.Errorf("assembly change: got %q, want ./b ./c", got)
 	}
-	if got := impactOf(t, map[string]string{"c/testdata/f": "new fixture\n"}); got != "./b ./c" {
+	if got := impactOf(t, map[string]string{"c/testdata/f": "new fixture\n"}); got != "example.com/m/b example.com/m/c" {
 		t.Errorf("testdata change: got %q, want ./b ./c", got)
 	}
 }
@@ -91,14 +91,14 @@ func TestImpactGlobalAndRoot(t *testing.T) {
 		got := impactOf(t, tc)
 		want := All
 		if _, hasOrphan := tc["orphan.c"]; hasOrphan {
-			want = "." // root package owns root-level non-Go files
+			want = "example.com/m" // root package owns root-level non-Go files
 		}
 		if got != want {
 			t.Errorf("%v: got %q, want %q", tc, got, want)
 		}
 	}
 	// a change to the root package itself: nothing imports root → only root runs.
-	if got := impactOf(t, map[string]string{"root.go": "package m\n\nimport _ \"example.com/m/a\"\n\nvar X = 1\n"}); got != "." {
+	if got := impactOf(t, map[string]string{"root.go": "package m\n\nimport _ \"example.com/m/a\"\n\nvar X = 1\n"}); got != "example.com/m" {
 		t.Errorf("root change: got %q, want .", got)
 	}
 }
@@ -106,10 +106,10 @@ func TestImpactGlobalAndRoot(t *testing.T) {
 // §V16 tier-1: a new package is only itself; adding a file to an existing package
 // propagates; a deleted package fails open (its importers would break unnoticed).
 func TestImpactAddDelete(t *testing.T) {
-	if got := impactOf(t, map[string]string{"d/d.go": "package d\n"}); got != "./d" {
+	if got := impactOf(t, map[string]string{"d/d.go": "package d\n"}); got != "example.com/m/d" {
 		t.Errorf("new package: got %q, want ./d", got)
 	}
-	if got := impactOf(t, map[string]string{"a/extra.go": "package a\n\nvar Y = 2\n"}); got != ". ./a ./b ./e" {
+	if got := impactOf(t, map[string]string{"a/extra.go": "package a\n\nvar Y = 2\n"}); got != "example.com/m example.com/m/a example.com/m/b example.com/m/e" {
 		t.Errorf("added file: got %q, want . ./a ./b ./e", got)
 	}
 	if got := impactOf(t, map[string]string{"c/c.go": "<delete>", "c/gen.s": "<delete>", "c/testdata/f": "<delete>"}); got != All {
@@ -124,7 +124,7 @@ func TestImpactParseErrorFailsOpen(t *testing.T) {
 	if got := impactOf(t, map[string]string{"c/c.go": "func {{{ no package clause\n"}); got != All {
 		t.Errorf("header parse error: got %q, want all", got)
 	}
-	if got := impactOf(t, map[string]string{"c/c.go": "package c\n\nfunc {{{\n"}); got != "./b ./c" {
+	if got := impactOf(t, map[string]string{"c/c.go": "package c\n\nfunc {{{\n"}); got != "example.com/m/b example.com/m/c" {
 		t.Errorf("body parse error: got %q, want ./b ./c (selected, compile fails in CI)", got)
 	}
 }
@@ -137,7 +137,7 @@ func TestImpactDeterministicOrder(t *testing.T) {
 		"c/c.go":      "package c\n\nvar Z = 3\n",
 	}
 	first := impactOf(t, head)
-	if first != "./a ./b ./c" {
+	if first != "example.com/m/a example.com/m/b example.com/m/c" {
 		t.Fatalf("unexpected selection: %q, want ./a ./b ./c", first)
 	}
 	for range 3 {
@@ -170,7 +170,7 @@ func TestImpactBuildTagImportCounted(t *testing.T) {
 	base["f/f.go"] = "//go:build sometag\n\npackage f\n\nimport _ \"example.com/m/c\"\n"
 	dir, baseRev, headRev := scratchRepo(t, base, map[string]string{"c/c.go": "package c\n\nvar Tagged = 1\n"})
 	got := Impact(defaultConfig(dir), dir, baseRev, headRev)
-	if got != "./b ./c ./f" {
+	if got != "example.com/m/b example.com/m/c example.com/m/f" {
 		t.Errorf("tag-gated import: got %q, want ./b ./c ./f", got)
 	}
 }
@@ -185,7 +185,7 @@ func TestImpactRenameAcrossPackages(t *testing.T) {
 		"c/fromA.go": "package c\n\n// Add adds.\nfunc Add(x, y int) int { return x + y }\n",
 	})
 	// a/a.go left package a: a changed (and its importers . b e); c gained files.
-	if got != All && got != ". ./a ./b ./c ./e" {
+	if got != All && got != "example.com/m example.com/m/a example.com/m/b example.com/m/c example.com/m/e" {
 		t.Errorf("cross-package move: got %q, want closure of both (or all if a died)", got)
 	}
 }
@@ -201,7 +201,7 @@ func TestImpactEmbeddedFileChange(t *testing.T) {
 	base["g/g.go"] = "package g\n\nimport _ \"embed\"\n\n//go:embed data.txt\nvar Data string\n"
 	base["g/data.txt"] = "v1\n"
 	dir, baseRev, headRev := scratchRepo(t, base, map[string]string{"g/data.txt": "v2\n"})
-	if got := Impact(defaultConfig(dir), dir, baseRev, headRev); got != "./g" {
+	if got := Impact(defaultConfig(dir), dir, baseRev, headRev); got != "example.com/m/g" {
 		t.Errorf("embed change: got %q, want ./g", got)
 	}
 }
@@ -244,7 +244,7 @@ func TestImpactDependencyVersionBump(t *testing.T) {
 		"go.mod": "module example.com/m\n\ngo 1.26\n\nrequire dep.example/lib v1.1.0\n",
 	})
 	// c imports the dep (code) → c + b (test edge on c); a's _test.go imports it → a.
-	if got := Impact(defaultConfig(dir), dir, baseRev, headRev); got != "./a ./b ./c" {
+	if got := Impact(defaultConfig(dir), dir, baseRev, headRev); got != "example.com/m/a example.com/m/b example.com/m/c" {
 		t.Errorf("dep bump: got %q, want ./a ./b ./c", got)
 	}
 }
@@ -271,7 +271,7 @@ func TestImpactDependencyEdgeCases(t *testing.T) {
 		"a/a_test.go": "package a\n",
 	})
 	// removal: the import-dropping .go edits attribute normally (c code, a test-only).
-	if got := Impact(defaultConfig(dir), dir, baseRev, headRev); got != "./a ./b ./c" {
+	if got := Impact(defaultConfig(dir), dir, baseRev, headRev); got != "example.com/m/a example.com/m/b example.com/m/c" {
 		t.Errorf("removed dep: got %q, want ./a ./b ./c", got)
 	}
 }

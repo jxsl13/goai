@@ -60,11 +60,7 @@ func Impact(cfg *config, dir, base, head string) string {
 	}
 	list := make([]string, 0, len(affected))
 	for p := range affected {
-		if p == "." {
-			list = append(list, ".")
-		} else {
-			list = append(list, "./"+p)
-		}
+		list = append(list, g.importPath(p))
 	}
 	sort.Strings(list)
 	return strings.Join(list, " ")
@@ -340,6 +336,15 @@ func (g *moduleGraph) pkgFor(file string) (string, bool) {
 		}
 		d = parent
 	}
+}
+
+// importPath renders a rel package dir as its ABSOLUTE import path (§T588,
+// go-test-shaped output): "." → the module path itself.
+func (g *moduleGraph) importPath(rel string) string {
+	if rel == "." {
+		return g.modPath
+	}
+	return g.modPath + "/" + rel
 }
 
 // closure returns changed plus every package that transitively imports one of them

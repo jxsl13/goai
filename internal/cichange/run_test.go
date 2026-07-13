@@ -25,11 +25,11 @@ func TestRunTransparentReport(t *testing.T) {
 	for _, want := range []string{
 		"a/a.go: code → a",
 		"a/a_test.go: test-only code → a (test files are not importable: no propagation)",
-		"./a — selected: changed",
-		"./b — selected: depends on a changed package",
-		"./c — skipped: no dependency path from any changed package",
-		"./a: TestAdd",
-		"go test -count=1 . ./a ./b ./e",
+		"run \texample.com/m/a\tchanged",
+		"run \texample.com/m/b\tdepends on a changed package",
+		"skip\texample.com/m/c\tno dependency path from any changed package",
+		"example.com/m/a: TestAdd",
+		"go test -count=1 example.com/m example.com/m/a example.com/m/b example.com/m/e",
 		"ok  ", // real go test output streamed through
 	} {
 		if !strings.Contains(out, want) {

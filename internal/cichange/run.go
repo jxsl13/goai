@@ -80,22 +80,14 @@ func Run(cfg *config, dir, base, head string, goTestArgs []string, w io.Writer) 
 	}
 
 	fmt.Fprintln(w, "\n== selection ==")
-	fmt.Fprintf(w, "  affected (%d):\n", len(selected))
-	for _, p := range selected {
-		fmt.Fprintf(w, "    %s — %s\n", testPath(p), reasons[p])
+	fmt.Fprintf(w, "  affected: %d, skipped: %d\n", len(selected), len(allPkgs)-len(selected))
+	for _, p := range selected { // go-test-shaped: status column, absolute import path
+		fmt.Fprintf(w, "run \t%s\t%s\n", g.importPath(p), strings.TrimPrefix(reasons[p], "selected: "))
 	}
-	skipped := 0
-	var skippedLines []string
 	for _, p := range allPkgs {
 		if _, ok := reasons[p]; !ok {
-			skipped++
-			skippedLines = append(skippedLines,
-				fmt.Sprintf("    %s — skipped: no dependency path from any changed package", testPath(p)))
+			fmt.Fprintf(w, "skip\t%s\t%s\n", g.importPath(p), "no dependency path from any changed package")
 		}
-	}
-	fmt.Fprintf(w, "  skipped (%d):\n", skipped)
-	for _, l := range skippedLines {
-		fmt.Fprintln(w, l)
 	}
 
 	if len(selected) == 0 {
@@ -107,15 +99,15 @@ func Run(cfg *config, dir, base, head string, goTestArgs []string, w io.Writer) 
 	for _, p := range selected {
 		funcs := testFuncs(filepath.Join(dir, filepath.FromSlash(p)))
 		if len(funcs) == 0 {
-			fmt.Fprintf(w, "  %s: (no test functions)\n", testPath(p))
+			fmt.Fprintf(w, "  %s: (no test functions)\n", g.importPath(p))
 			continue
 		}
-		fmt.Fprintf(w, "  %s: %s\n", testPath(p), strings.Join(funcs, " "))
+		fmt.Fprintf(w, "  %s: %s\n", g.importPath(p), strings.Join(funcs, " "))
 	}
 
 	paths := make([]string, len(selected))
 	for i, p := range selected {
-		paths[i] = testPath(p)
+		paths[i] = g.importPath(p) // absolute import paths, as go test prints them
 	}
 	return execGoTest(dir, goTestArgs, paths, w)
 }
@@ -140,14 +132,6 @@ func reachesViaCode(g *moduleGraph, pkg string, changed map[string]bool) bool {
 		}
 	}
 	return false
-}
-
-// testPath renders a rel package dir as a go-test argument ("." stays ".").
-func testPath(p string) string {
-	if p == "." {
-		return "."
-	}
-	return "./" + p
 }
 
 // testFuncs lists the Test/Benchmark/Fuzz/Example functions declared in a package

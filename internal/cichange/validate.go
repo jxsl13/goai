@@ -52,7 +52,9 @@ func Validate(cfg *config, dir, base, head string) (report string, ok bool) {
 	}
 	sel := map[string]bool{}
 	for _, p := range strings.Fields(selected) {
-		sel[strings.TrimPrefix(p, "./")] = true
+		if rel, ok := g.relOf(p); ok {
+			sel[rel] = true
+		}
 	}
 	var missing, excess []string
 	for p := range oracle {

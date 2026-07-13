@@ -33,7 +33,7 @@ func TestConfigIgnorePathsRelAndAbs(t *testing.T) {
 	}
 	// prefix safety: ignoring "c" must not swallow a sibling like "cc".
 	dir2, base2, head2 := scratchRepo(t, modBase, map[string]string{"cc/x.go": "package cc\n"})
-	if got := Impact(cfgWith(t, dir2, []string{"c"}, nil, nil, nil), dir2, base2, head2); got != "./cc" {
+	if got := Impact(cfgWith(t, dir2, []string{"c"}, nil, nil, nil), dir2, base2, head2); got != "example.com/m/cc" {
 		t.Errorf("sibling of ignored dir: got %q, want ./cc", got)
 	}
 }
@@ -48,7 +48,7 @@ func TestConfigRegexRules(t *testing.T) {
 	if got := Impact(defaultConfig(dir), dir, base, head); got != None {
 		t.Fatalf("baseline: comment-only should be none, got %q", got)
 	}
-	if got := Impact(cfgWith(t, dir, nil, nil, nil, []string{`^a/`}), dir, base, head); got != ". ./a ./b ./e" {
+	if got := Impact(cfgWith(t, dir, nil, nil, nil, []string{`^a/`}), dir, base, head); got != "example.com/m example.com/m/a example.com/m/b example.com/m/e" {
 		t.Errorf("pkg-rerun-regex: got %q, want . ./a ./b ./e", got)
 	}
 	if got := Impact(cfgWith(t, dir, nil, nil, []string{`\.go$`}, nil), dir, base, head); got != All {
@@ -71,17 +71,17 @@ func TestConfigPrecedence(t *testing.T) {
 		t.Errorf("full>pkg>ignore: got %q, want all", got)
 	}
 	pkgAndIgnore := cfgWith(t, dir, []string{"c"}, nil, nil, []string{`^c/`})
-	if got := Impact(pkgAndIgnore, dir, base, headRev); got != "./b ./c" {
+	if got := Impact(pkgAndIgnore, dir, base, headRev); got != "example.com/m/b example.com/m/c" {
 		t.Errorf("pkg>ignore: got %q, want ./b ./c", got)
 	}
 }
 
 // §V16 tier-1 (§T584): invalid regexes are configuration errors, not silent no-ops.
 func TestConfigInvalidRegex(t *testing.T) {
-	if _, err := newConfig(".", nil, []string{"["}, nil, nil); err == nil || !strings.Contains(err.Error(), "ignore-regex") {
+	if _, err := newConfig("example.com/m", nil, []string{"["}, nil, nil); err == nil || !strings.Contains(err.Error(), "ignore-regex") {
 		t.Errorf("invalid ignore-regex must error with the flag name, got %v", err)
 	}
-	if _, err := newConfig(".", nil, nil, []string{"("}, nil); err == nil {
+	if _, err := newConfig("example.com/m", nil, nil, []string{"("}, nil); err == nil {
 		t.Error("invalid full-rerun-regex must error")
 	}
 }
