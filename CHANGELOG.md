@@ -4,6 +4,12 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T583 — selector validation against the toolchain oracle (2026-07-13)
+- cichange -validate recomputes the affected set with `go list -test -deps` (swept over
+  GOOS) and diffs it against -impact: missing packages exit 1 (selector bug), excess is
+  reported as an efficiency delta. The oracle is a CGO_ENABLED=0 lower bound, so
+  cgo-gated test edges appear as benign excess.
+
 ### B51 — pool-reuse test flaky under the race detector (2026-07-13)
 - TestPoolReuseAndZero asserted sync.Pool backing-array identity, but the race
   detector's sync.Pool drops items at random by design. The identity check is now

@@ -33,18 +33,25 @@ import (
 
 func main() {
 	args := os.Args[1:]
-	impact := false
-	if len(args) > 0 && args[0] == "-impact" {
-		impact = true
+	mode := ""
+	if len(args) > 0 && (args[0] == "-impact" || args[0] == "-validate") {
+		mode = args[0]
 		args = args[1:]
 	}
 	if len(args) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: cichange [-impact] <base-rev> <head-rev>")
+		fmt.Fprintln(os.Stderr, "usage: cichange [-impact|-validate] <base-rev> <head-rev>")
 		os.Exit(2)
 	}
-	if impact {
+	switch mode {
+	case "-impact":
 		fmt.Println(Impact(".", args[0], args[1]))
-		return
+	case "-validate": // §T583/§V27: judge the selector against the toolchain oracle
+		report, ok := Validate(".", args[0], args[1])
+		fmt.Println(report)
+		if !ok {
+			os.Exit(1)
+		}
+	default:
+		fmt.Println(Classify(".", args[0], args[1]))
 	}
-	fmt.Println(Classify(".", args[0], args[1]))
 }

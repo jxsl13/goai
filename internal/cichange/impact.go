@@ -44,36 +44,9 @@ func Impact(dir, base, head string) string {
 	if err != nil {
 		return All
 	}
-	out, err := gitRun(dir, "diff", "--name-status", "-z", base, head)
-	if err != nil {
-		return All // base unavailable (force push, shallow clone)
-	}
-	fields := strings.Split(strings.TrimRight(string(out), "\x00"), "\x00")
-	if len(fields) == 1 && fields[0] == "" {
-		return None
-	}
-	propagate := map[string]bool{} // packages whose non-test code changed
-	testOnly := map[string]bool{}  // packages with only _test.go changes
-	for i := 0; i < len(fields); {
-		status := fields[i]
-		if status == "" || i+1 >= len(fields) {
-			return All
-		}
-		paths := []string{fields[i+1]}
-		i += 2
-		if status[0] == 'R' || status[0] == 'C' { // renames/copies carry a second path
-			if i >= len(fields) {
-				return All
-			}
-			paths = append(paths, fields[i])
-			i++
-		}
-		for _, p := range paths {
-			switch g.classifyChanged(dir, base, head, status, p, propagate, testOnly) {
-			case impactGlobal:
-				return All
-			}
-		}
+	propagate, testOnly, verdict := g.changedSets(dir, base, head)
+	if verdict != "" {
+		return verdict
 	}
 	affected := g.closure(propagate)
 	for p := range testOnly {
@@ -95,6 +68,43 @@ func Impact(dir, base, head string) string {
 	}
 	sort.Strings(list)
 	return strings.Join(list, " ")
+}
+
+// changedSets attributes every file of the base..head diff: propagate = packages whose
+// non-test code changed, testOnly = packages with only _test.go changes. verdict is ""
+// for a normal result, or None/All when the diff resolves without a closure.
+func (g *moduleGraph) changedSets(dir, base, head string) (propagate, testOnly map[string]bool, verdict string) {
+	out, err := gitRun(dir, "diff", "--name-status", "-z", base, head)
+	if err != nil {
+		return nil, nil, All // base unavailable (force push, shallow clone)
+	}
+	fields := strings.Split(strings.TrimRight(string(out), "\x00"), "\x00")
+	if len(fields) == 1 && fields[0] == "" {
+		return nil, nil, None
+	}
+	propagate = map[string]bool{}
+	testOnly = map[string]bool{}
+	for i := 0; i < len(fields); {
+		status := fields[i]
+		if status == "" || i+1 >= len(fields) {
+			return nil, nil, All
+		}
+		paths := []string{fields[i+1]}
+		i += 2
+		if status[0] == 'R' || status[0] == 'C' { // renames/copies carry a second path
+			if i >= len(fields) {
+				return nil, nil, All
+			}
+			paths = append(paths, fields[i])
+			i++
+		}
+		for _, p := range paths {
+			if g.classifyChanged(dir, base, head, status, p, propagate, testOnly) == impactGlobal {
+				return nil, nil, All
+			}
+		}
+	}
+	return propagate, testOnly, ""
 }
 
 // classifyChanged outcomes.

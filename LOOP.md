@@ -390,8 +390,9 @@ demand-gated — the loop is in maintenance/opportunity mode.
   still gets a CI watch.
 - POST-PUSH SELECTOR VALIDATION (§V27, user directive 2026-07-13): after
   every push, validate the CI selector's choice for the pushed range
-  against the toolchain oracle (`cichange -validate`, once T583 lands;
-  until then compare -impact output against `go list -deps -test` by
-  hand). Under-selection = release-blocking selector bug (§B row, full
-  suite immediately); over-selection = allowed, record the excess count
-  in the fire report.
+  against the toolchain oracle: `go run ./internal/cichange -validate
+  <pushed-base> <pushed-head>` (§T583). Exit 1 = under-selection =
+  release-blocking selector bug (§B row, full suite immediately); exit 0
+  with excess = allowed, record the excess count in the fire report.
+  Note the oracle is a CGO_ENABLED=0 LOWER bound — cgo-gated test edges
+  legitimately appear as excess.
