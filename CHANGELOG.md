@@ -4,6 +4,12 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T571/T572 — Docs-only pushes skip CI (2026-07-13)
+- internal/cichange proves via comment-stripped AST comparison that a push changed only
+  documentation (markdown or godoc comments; directive comments and cgo preambles still
+  count as code, and every uncertainty fails open). The workflow's new changes gate skips
+  all expensive jobs on such pushes — verified live in both directions.
+
 ### T569 — Every exported method carries a runnable example (2026-07-13)
 - The API-doc gate now also enforces per-METHOD example coverage (ast-verified calls in
   Example bodies), always-on. 74 previously uncovered methods across 8 packages received
