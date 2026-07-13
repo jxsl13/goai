@@ -1,0 +1,237 @@
+package nlp
+
+import (
+	"fmt"
+	"strings"
+)
+
+// ChatMessage is one turn of a conversation for ChatTemplate rendering: a Role
+// ("system", "user" or "assistant") and its Content text.
+type ChatMessage struct {
+	Role    string // "system", "user" or "assistant"
+	Content string // the turn's text
+}
+
+// ChatTemplate renders a conversation into the exact prompt string an instruction-tuned
+// model was trained on (§T576). Every model family wraps turns in its own control tokens
+// — ChatML's <|im_start|>, Llama-3's <|start_header_id|>, Gemma's <start_of_turn>,
+// Mistral's [INST], Phi-3's <|user|> — and getting them wrong silently degrades the
+// model. GGUF files ship the template as Jinja source under "tokenizer.chat_template";
+// DetectChatTemplate maps that source onto one of the native renderers here, which
+// reproduce the HF transformers apply_chat_template reference output byte for byte
+// (golden-tested against jinja2 renders of the real repo templates).
+//
+// Supported families (the names NewChatTemplate accepts): "chatml" (Qwen2/2.5 class),
+// "llama3" (Meta-Llama-3-Instruct), "gemma" (gemma-it), "mistral"
+// (Mistral-7B-Instruct-v0.3 class), "phi3" (Phi-3-instruct).
+//
+// Family quirks are preserved faithfully: llama3/gemma trim message content; gemma and
+// mistral reject non-alternating user/assistant turns and have no system role — a
+// leading system message is folded into the first user turn (llama.cpp behavior);
+// mistral's trailing "[/INST]" already IS the generation prompt, so WithGenerationPrompt
+// adds nothing there; phi3 appends its <|endoftext|> EOS when no generation prompt is
+// requested (as the reference template does). Templates that render a BOS string
+// (llama3 "<|begin_of_text|>", gemma "<bos>", mistral "<s>") do so by default — pass
+// WithoutBOS when the tokenizer inserts the BOS token itself.
+type ChatTemplate struct {
+	family string
+}
+
+// chatRenderCfg collects the ChatRenderOption flags for one Render call.
+type chatRenderCfg struct {
+	generationPrompt bool
+	withoutBOS       bool
+}
+
+// ChatRenderOption configures one ChatTemplate.Render call.
+type ChatRenderOption func(*chatRenderCfg)
+
+// WithGenerationPrompt appends the family's assistant-turn opener (e.g.
+// "<|im_start|>assistant\n") so the model continues as the assistant — the
+// add_generation_prompt=true mode used for inference.
+func WithGenerationPrompt() ChatRenderOption {
+	return func(c *chatRenderCfg) { c.generationPrompt = true }
+}
+
+// WithoutBOS suppresses the beginning-of-sequence STRING some templates render (llama3
+// "<|begin_of_text|>", gemma "<bos>", mistral "<s>"). Use it when the tokenizer adds the
+// BOS token itself — otherwise the sequence would start with two.
+func WithoutBOS() ChatRenderOption {
+	return func(c *chatRenderCfg) { c.withoutBOS = true }
+}
+
+// NewChatTemplate returns the native renderer for a known family name: "chatml",
+// "llama3", "gemma", "mistral" or "phi3".
+func NewChatTemplate(family string) (*ChatTemplate, error) {
+	switch family {
+	case "chatml", "llama3", "gemma", "mistral", "phi3":
+		return &ChatTemplate{family: family}, nil
+	}
+	return nil, fmt.Errorf("nlp: NewChatTemplate: unknown family %q (want chatml, llama3, gemma, mistral or phi3)", family)
+}
+
+// DetectChatTemplate maps Jinja template source (the GGUF "tokenizer.chat_template"
+// value) onto a native renderer by its distinctive control tokens. Unknown templates
+// return an error CONTAINING THE RAW JINJA so callers can fall back to their own
+// handling rather than silently mis-prompting the model.
+func DetectChatTemplate(jinja string) (*ChatTemplate, error) {
+	switch {
+	case strings.Contains(jinja, "<|im_start|>"):
+		return &ChatTemplate{family: "chatml"}, nil
+	case strings.Contains(jinja, "<|start_header_id|>"):
+		return &ChatTemplate{family: "llama3"}, nil
+	case strings.Contains(jinja, "<start_of_turn>"):
+		return &ChatTemplate{family: "gemma"}, nil
+	case strings.Contains(jinja, "<|user|>") && strings.Contains(jinja, "<|end|>"):
+		return &ChatTemplate{family: "phi3"}, nil
+	case strings.Contains(jinja, "[INST]"):
+		return &ChatTemplate{family: "mistral"}, nil
+	}
+	return nil, fmt.Errorf("nlp: DetectChatTemplate: unrecognized chat template; raw jinja: %s", jinja)
+}
+
+// ChatTemplateFromGGUF reads the "tokenizer.chat_template" key from GGUF metadata (the
+// gguf.File.Metadata map) and detects the family. Missing or non-string values error.
+func ChatTemplateFromGGUF(metadata map[string]any) (*ChatTemplate, error) {
+	v, ok := metadata["tokenizer.chat_template"]
+	if !ok {
+		return nil, fmt.Errorf("nlp: ChatTemplateFromGGUF: metadata has no tokenizer.chat_template key")
+	}
+	jinja, ok := v.(string)
+	if !ok {
+		return nil, fmt.Errorf("nlp: ChatTemplateFromGGUF: tokenizer.chat_template is %T, want string", v)
+	}
+	return DetectChatTemplate(jinja)
+}
+
+// Family returns the template family name ("chatml", "llama3", ...).
+func (t *ChatTemplate) Family() string { return t.family }
+
+// Render formats the conversation exactly as the family's reference template would.
+// Roles must be "system", "user" or "assistant"; families without a system role
+// (gemma, mistral) fold a LEADING system message into the first user turn. Options:
+// WithGenerationPrompt to end with the assistant opener, WithoutBOS to drop a
+// template-rendered BOS string.
+func (t *ChatTemplate) Render(messages []ChatMessage, opts ...ChatRenderOption) (string, error) {
+	var cfg chatRenderCfg
+	for _, o := range opts {
+		o(&cfg)
+	}
+	for i, m := range messages {
+		switch m.Role {
+		case "user", "assistant":
+		case "system":
+			if i != 0 {
+				return "", fmt.Errorf("nlp: ChatTemplate.Render: system message must be first (got position %d)", i)
+			}
+		default:
+			return "", fmt.Errorf("nlp: ChatTemplate.Render: unknown role %q", m.Role)
+		}
+	}
+	switch t.family {
+	case "chatml":
+		return renderTurnStyle(messages, cfg, "", "<|im_start|>", "\n", "<|im_end|>\n", nil, false), nil
+	case "llama3":
+		return renderTurnStyle(messages, cfg, "<|begin_of_text|>", "<|start_header_id|>", "<|end_header_id|>\n\n", "<|eot_id|>", nil, true), nil
+	case "phi3":
+		out := renderTurnStyle(messages, cfg, "", "<|", "|>\n", "<|end|>\n", nil, false)
+		if !cfg.generationPrompt {
+			out += "<|endoftext|>" // the reference template emits EOS instead of the opener
+		}
+		return out, nil
+	case "gemma":
+		msgs, err := foldSystem(messages, t.family)
+		if err != nil {
+			return "", err
+		}
+		for i, m := range msgs { // the reference template raises on non-alternating turns
+			if (m.Role == "user") != (i%2 == 0) {
+				return "", fmt.Errorf("nlp: ChatTemplate.Render: gemma requires alternating user/assistant turns (position %d is %q)", i, m.Role)
+			}
+		}
+		return renderTurnStyle(msgs, cfg, "<bos>", "<start_of_turn>", "\n", "<end_of_turn>\n",
+			map[string]string{"assistant": "model"}, true), nil
+	case "mistral":
+		return renderMistral(messages, cfg)
+	}
+	return "", fmt.Errorf("nlp: ChatTemplate.Render: unknown family %q", t.family)
+}
+
+// renderTurnStyle covers the turn-wrapped families: bos + per message
+// open+role+sep+content+close, plus the assistant opener as generation prompt.
+// roleMap renames roles (gemma: assistant→model); trim strips content whitespace.
+func renderTurnStyle(messages []ChatMessage, cfg chatRenderCfg, bos, open, sep, closeTok string, roleMap map[string]string, trim bool) string {
+	var sb strings.Builder
+	if !cfg.withoutBOS {
+		sb.WriteString(bos)
+	}
+	gen := "assistant"
+	for _, m := range messages {
+		role := m.Role
+		if r, ok := roleMap[role]; ok {
+			role = r
+		}
+		content := m.Content
+		if trim {
+			content = strings.TrimSpace(content)
+		}
+		sb.WriteString(open)
+		sb.WriteString(role)
+		sb.WriteString(sep)
+		sb.WriteString(content)
+		sb.WriteString(closeTok)
+	}
+	if cfg.generationPrompt {
+		if r, ok := roleMap[gen]; ok {
+			gen = r
+		}
+		sb.WriteString(open)
+		sb.WriteString(gen)
+		sb.WriteString(sep)
+	}
+	return sb.String()
+}
+
+// renderMistral renders the [INST] style: "<s>[INST] u [/INST] a</s>[INST] u2 [/INST]".
+// The trailing "[/INST]" after a user turn is itself the generation prompt.
+func renderMistral(messages []ChatMessage, cfg chatRenderCfg) (string, error) {
+	msgs, err := foldSystem(messages, "mistral")
+	if err != nil {
+		return "", err
+	}
+	var sb strings.Builder
+	if !cfg.withoutBOS {
+		sb.WriteString("<s>")
+	}
+	for i, m := range msgs {
+		wantUser := i%2 == 0
+		if (m.Role == "user") != wantUser {
+			return "", fmt.Errorf("nlp: ChatTemplate.Render: mistral requires alternating user/assistant turns (position %d is %q)", i, m.Role)
+		}
+		if m.Role == "user" {
+			sb.WriteString("[INST] ")
+			sb.WriteString(m.Content)
+			sb.WriteString(" [/INST]")
+		} else {
+			sb.WriteString(" ")
+			sb.WriteString(m.Content)
+			sb.WriteString("</s>")
+		}
+	}
+	return sb.String(), nil
+}
+
+// foldSystem merges a leading system message into the first user turn
+// ("system\n\nuser") for families without a system role, and enforces that a user
+// turn follows.
+func foldSystem(messages []ChatMessage, family string) ([]ChatMessage, error) {
+	if len(messages) == 0 || messages[0].Role != "system" {
+		return messages, nil
+	}
+	if len(messages) < 2 || messages[1].Role != "user" {
+		return nil, fmt.Errorf("nlp: ChatTemplate.Render: %s has no system role; a system message must be followed by a user turn to fold into", family)
+	}
+	out := append([]ChatMessage(nil), messages[1:]...)
+	out[0].Content = messages[0].Content + "\n\n" + out[0].Content
+	return out, nil
+}

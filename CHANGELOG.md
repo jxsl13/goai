@@ -4,6 +4,14 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T576 — Chat templates (2026-07-13)
+- nlp.ChatTemplate renders conversations into the exact prompt strings instruction-tuned
+  models were trained on: native renderers for the chatml, llama3, gemma, mistral and
+  phi3 families, byte-exact against jinja2 renders of the real repo templates.
+  DetectChatTemplate maps GGUF tokenizer.chat_template Jinja onto a family (unknown
+  templates error with the raw source); ChatTemplateFromGGUF reads the metadata key
+  directly. Options: WithGenerationPrompt, WithoutBOS.
+
 ### T575 — Grammar-constrained decoding (GBNF) + JSON-Schema structured outputs (2026-07-13)
 - nlp.GrammarGuide compiles a GBNF-subset grammar to a pushdown automaton over the token
   vocabulary with the same mask-and-advance contract as RegexGuide — nested structure
