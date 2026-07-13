@@ -4,6 +4,11 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T565 — v0.1.0 published (2026-07-13)
+- github.com/jxsl13/goai is live (public, MPL-2.0, tag v0.1.0 on a fully green CI). The
+  first run caught three real cross-platform bugs (amd64 FP tolerance, ±0 formatting,
+  Windows path separators) — fixed in bd263ff; all eight CI jobs green since.
+
 ### T564 — License: MPL-2.0 (2026-07-13)
 - Mozilla Public License 2.0 staged verbatim: file-level copyleft — modified GoAI files stay
   open, while linking the library (statically or dynamically) imposes nothing on the
