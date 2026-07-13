@@ -45,7 +45,9 @@ func TestPoolReuseAndZero(t *testing.T) {
 	if cap(b2) != 8 {
 		t.Fatalf("expected reused cap 8, got %d", cap(b2))
 	}
-	if &b1[:1][0] != &b2[:1][0] {
+	// Under the race detector sync.Pool DROPS items at random by design (to shake
+	// out reuse bugs), so backing-array identity is only guaranteed without it (§B51).
+	if !raceEnabled && &b1[:1][0] != &b2[:1][0] {
 		t.Error("expected pool to reuse the same backing array")
 	}
 	for _, v := range b2 {

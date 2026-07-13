@@ -4,6 +4,11 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### B51 — pool-reuse test flaky under the race detector (2026-07-13)
+- TestPoolReuseAndZero asserted sync.Pool backing-array identity, but the race
+  detector's sync.Pool drops items at random by design. The identity check is now
+  gated off under -race; the zeroing and size-class assertions remain unconditional.
+
 ### T582 — dependency-change selection (2026-07-13)
 - A go.mod require-version change now selects exactly the packages importing the
   changed module (via the selector's external-import index) instead of the full suite;
