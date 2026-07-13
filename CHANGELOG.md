@@ -4,6 +4,11 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T606 — full benchmark comparison matrix (2026-07-14)
+- docs/benchmarking.md now shows every GoAI backend variant against numpy and torch
+  (CPU and MPS) on the same machine, for 17 workloads plus the decode table — with the
+  regeneration commands and an honest gap analysis. Tables are rendered by a Go tool.
+
 ### T605 — CI build caching and speaking step names (2026-07-14)
 - Every lane now persists the Go build cache across runs (module caching stays off —
   the module has zero dependencies): compile-bound lanes got 30-43% faster. All CI

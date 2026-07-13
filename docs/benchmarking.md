@@ -20,6 +20,84 @@ go test ./backend/ref -bench .   # a single package
 Inputs come from `internal/bench` with explicit seeds, so numbers are
 reproducible across runs and machines.
 
+## Full comparison matrix — every variant vs the industry (§T606)
+
+> **In plain terms:** the tables below put every GoAI backend variant next to
+> the mainstream Python stacks measured **on the same machine**, so you can see
+> exactly where this library stands — including where it is still behind.
+
+Method: identical shapes and seeds, one warm-up before timing, 30 iterations,
+Apple M-series (darwin/arm64), macOS; Python side is numpy 2.5.1 and
+torch 2.12.1 (`torch-mps` = torch on Apple's Metal Performance Shaders GPU
+backend; `GFLOP/s` = billions of floating-point operations per second, higher
+is better; `tok/s` = generated tokens per second). Regenerate with:
+
+```sh
+make bench-compare bench-python > /tmp/bench.txt
+go run ./internal/benchcompare/rendertables /tmp/bench.txt
+```
+
+Variants: `goai-ref` is the plain readable reference (numerical truth, not
+speed), `goai-cpu` the optimized pure-Go CPU backend, `goai-metal`/`goai-vulkan`
+the GPU backends (Metal via Apple's GPU API; Vulkan via MoltenVK, a layer that
+runs Vulkan on Metal).
+
+| Workload | goai-ref | goai-cpu | goai-metal | goai-vulkan | industry (same box) |
+|---|---|---|---|---|---|
+| Conv2D/n8c16hw32 | 353.50 ms (0.2136 GFLOP/s) | 2.41 ms (31.37 GFLOP/s) | 853.9 µs (88.41 GFLOP/s) | 551.0 µs (137.0 GFLOP/s) | torch-cpu: 621.12 GFLOP/s; torch-mps: 2418.93 GFLOP/s |
+| Conv2D/n8c64hw56 | 8.74 s (0.2116 GFLOP/s) | 35.87 ms (51.57 GFLOP/s) | 2.60 ms (711.7 GFLOP/s) | 4.55 ms (406.4 GFLOP/s) | torch-cpu: 621.12 GFLOP/s; torch-mps: 2418.93 GFLOP/s |
+| FlashAttn | 767.25 ms | 766.03 ms | 10.77 ms | 12.19 ms |  |
+| GPTForward | — | 224.69 ms (1139 tok/s) | 30.49 ms (8396 tok/s) | 42.52 ms (6020 tok/s) |  |
+| GPTTrainingStep | — | 1.05 s (244.9 tok/s) | 88.66 ms (2887 tok/s) | 130.52 ms (1961 tok/s) |  |
+| LayerNorm | 72.92 ms | 6.79 ms | 1.77 ms | 1.79 ms |  |
+| LayerNormBackward | 175.48 ms | 23.74 ms | 2.52 ms | 2.43 ms |  |
+| MHABackward | 2.73 s | 45.27 ms | 3.05 ms | 4.83 ms |  |
+| MHAForward | 795.20 ms | 20.56 ms | 1.78 ms | 1.78 ms | torch-cpu: 0.71 ms/op; torch-mps: 0.42 ms/op |
+| MatMul/1024 | 6.96 s (0.3083 GFLOP/s) | 31.71 ms (67.72 GFLOP/s) | 1.56 ms (1376 GFLOP/s) | 3.69 ms (581.4 GFLOP/s) | numpy-cpu: 2653.45 GFLOP/s; torch-cpu: 2684.50 GFLOP/s; torch-mps: 4170.66 GFLOP/s |
+| MatMul/256 | 108.04 ms (0.3106 GFLOP/s) | 760.1 µs (44.15 GFLOP/s) | 409.6 µs (81.92 GFLOP/s) | 493.5 µs (68.00 GFLOP/s) | numpy-cpu: 2653.45 GFLOP/s; torch-cpu: 2684.50 GFLOP/s; torch-mps: 4170.66 GFLOP/s |
+| MatMul/512 | 862.64 ms (0.3112 GFLOP/s) | 4.50 ms (59.61 GFLOP/s) | 659.0 µs (407.3 GFLOP/s) | 1.03 ms (261.0 GFLOP/s) | numpy-cpu: 2653.45 GFLOP/s; torch-cpu: 2684.50 GFLOP/s; torch-mps: 4170.66 GFLOP/s |
+| RMSNorm | 70.74 ms | 4.27 ms | 1.68 ms | 1.73 ms |  |
+| RMSNormBackward | 118.76 ms | 18.19 ms | 2.30 ms | 2.28 ms |  |
+| Retention | 88.90 ms | 88.81 ms | 10.98 ms | 10.92 ms |  |
+| RetentionBackward | 320.93 ms | 321.44 ms | 20.22 ms | 20.31 ms |  |
+| Softmax | 77.51 ms | 7.76 ms | 1.73 ms | 1.76 ms |  |
+
+| Decode workload | variant | rate |
+|---|---|---|
+| LlamaDecode | batched-metal | 263.1 tok/s |
+| LlamaDecode | batched-vulkan | 245.0 tok/s |
+| LlamaDecode | per-op-metal | 160.3 tok/s |
+| LlamaDecodeLongContext | batched-metal | 71.56 tok/s |
+| LlamaDecodeLongContext | batched-vulkan | 66.84 tok/s |
+| LlamaPrefill | sequential-metal | 276.9 tok/s |
+| LlamaPrefill | stepn-metal | 11068 tok/s |
+
+| Python stack workload | numpy-cpu | torch-cpu | torch-mps |
+|---|---|---|---|
+| Conv2D/8x16x32sq_k3 | — | 621.12 GFLOP/s | 2418.93 GFLOP/s |
+| MHAForward/512x8x64 | — | 0.71 ms/op | 0.42 ms/op |
+| MHAFwdBwd/512x8x64 | — | 2.26 ms/op | 1.15 ms/op |
+| MatMul/1024 | 2653.45 GFLOP/s | 2684.50 GFLOP/s | 4170.66 GFLOP/s |
+| MatMul/256 | 981.68 GFLOP/s | 989.00 GFLOP/s | 486.97 GFLOP/s |
+| MatMul/512 | 2141.68 GFLOP/s | 2172.86 GFLOP/s | 1328.09 GFLOP/s |
+
+
+Honest read of the gaps (as of 2026-07-14):
+
+- **CPU vs vendor BLAS** (BLAS = the decades-old optimized linear-algebra
+  libraries behind numpy/torch): our pure-Go f64-accumulating GEMM (general
+  matrix multiply) reaches ~68 GFLOP/s where torch-cpu reaches ~2700 — that
+  class of gap needs f32 SIMD kernels (SIMD = single-instruction-multiple-data,
+  the CPU's vector math unit) and is tracked as the §T11b track; the same
+  applies to attention (torch's fused SDPA at 0.7 ms vs our 20.6 ms).
+- **Metal matmul at 1.4 TFLOP/s vs torch-mps 4.2** reflects Apple's MPS-tuned
+  kernels; measured history in §T434.
+- **The 2026-07-14 CPU arc** (norms, softmax, attention, conv output path)
+  multiplied the end-to-end CPU transformer to 6.4× forward / 6.1× training of
+  its previous-day numbers — the per-op rows above are AFTER that arc.
+- `ref ≡ cpu` rows (FlashAttn, Retention) are unaccelerated CPU ops — the next
+  candidates of the profile-driven queue.
+
 ## Baselines (Pure-Go reference, §T5–§T9)
 
 Reference kernels favor clarity over speed (index math via `Unravel` allocates
