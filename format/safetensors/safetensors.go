@@ -18,6 +18,8 @@
 // ids, masks and index tensors are far below this).
 //
 // Further reading: the official safetensors format specification (huggingface/safetensors) — the defining reference for this format (file formats have no paper, SPEC V16).
+//
+// In plain terms: safetensors is the HuggingFace standard for storing model weights — a simple, safe layout (a JSON table of contents plus raw numbers) that cannot execute code when loaded, unlike Python pickles.
 package safetensors
 
 import (

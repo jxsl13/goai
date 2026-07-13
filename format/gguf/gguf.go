@@ -9,6 +9,8 @@
 // not just read.
 //
 // Further reading: the GGUF specification (ggml-org/ggml docs) and the llama.cpp quantization source — the defining references for this format (file formats have no paper, SPEC V16).
+//
+// In plain terms: GGUF is the file format of the llama.cpp world — weights, tokenizer and metadata in one file, usually with the weights compressed to a few bits each (quantized) so large models fit in ordinary memory.
 package gguf
 
 import (

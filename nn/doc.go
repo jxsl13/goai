@@ -63,4 +63,6 @@
 // training loop.
 //
 // Further reading: Goodfellow, Bengio & Courville, "Deep Learning" (MIT Press 2016) as the standard textbook; Ruder 2016, "An Overview of Gradient Descent Optimization Algorithms", for the optimizer family tree; Lialin et al. 2023, "Scaling Down to Scale Up", for a survey of the PEFT methods implemented here.
+//
+// In plain terms: this package is the training toolbox — the layers models are stacked from, the loss functions that say how wrong a prediction is, and the optimizers that turn gradients into better parameters.
 package nn

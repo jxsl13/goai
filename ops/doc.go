@@ -30,4 +30,8 @@
 //
 // The runnable Example functions below add two vectors, multiply two matrices,
 // take a softmax, and chain a few ops into a tiny neural-network layer.
+//
+// In plain terms: this package offers the everyday math on tensors (add, multiply, matrix product, activations) as one-line calls, so code that just wants y = relu(a·b + c) does not have to talk to the dispatch machinery directly.
+//
+// Further reading: Harris et al. 2020, "Array Programming with NumPy" (Nature) — the eager array-API model this package mirrors.
 package ops

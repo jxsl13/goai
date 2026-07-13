@@ -74,4 +74,6 @@
 // decode pipeline.
 //
 // Further reading: Jurafsky & Martin, "Speech and Language Processing" (3rd ed.) for language modeling and decoding foundations; Mielke et al. 2021, "Between Words and Characters", for the tokenization landscape; Holtzman et al. 2019, "The Curious Case of Neural Text Degeneration", for why sampling strategies matter.
+//
+// In plain terms: everything language — tokenizers that turn text into numbers, transformer models that continue a sequence, and the decoding strategies that turn model probabilities back into readable text.
 package nlp

@@ -32,4 +32,6 @@
 // examples below show both the zero-effort automatic path and manual control.
 //
 // Further reading: Goto & van de Geijn 2008, "Anatomy of High-Performance Matrix Multiplication" (ACM TOMS), for what an optimized GEMM backend is up against; the ggml/llama.cpp source for the quantized-kernel state of the art this library measures itself on.
+//
+// In plain terms: this package is the switchboard between "what to compute" (ops) and "who computes it" (a pure-Go reference, an optimized CPU path, or a GPU) — models ask for an operation and the best available implementation answers.
 package backend

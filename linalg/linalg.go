@@ -3,6 +3,10 @@
 // matrix inverse. The algorithms are the standard textbook ones (Golub & Van Loan, "Matrix
 // Computations", §3.2 LU/GEPP and §3.4 determinant; LAPACK dgetrf/dgetrs/dgetri), §R115. Everything
 // is computed in f64; inputs are read via AtF64 and results are fresh f64 tensors.
+//
+// In plain terms: classic linear algebra — solving equation systems, factorizing matrices, finding eigenvalues — implemented in pure Go on the library's tensors.
+//
+// Further reading: Golub & Van Loan, "Matrix Computations" (4th ed.), and Trefethen & Bau, "Numerical Linear Algebra" — the standard references for every routine here.
 package linalg
 
 import (

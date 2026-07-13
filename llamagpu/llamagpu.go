@@ -1,6 +1,8 @@
 //go:build darwin && cgo
 
 // Further reading: Pope et al. 2022, "Efficiently Scaling Transformer Inference", for the batched-decode systems view; Dao et al. 2022, "FlashAttention", for the memory-aware attention lineage behind the cooperative kernels.
+//
+// In plain terms: the fast lane for text generation — whole decode steps run as single pre-recorded GPU programs over weights that stay resident on the device, instead of shuttling tensors back and forth per operation.
 package llamagpu
 
 import (

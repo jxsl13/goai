@@ -451,3 +451,76 @@ func anyTypeSpec(gd *ast.GenDecl, name string) (bool, bool) {
 	}
 	return false, false
 }
+
+// TestPackageDocsCarryLaymanAndFurtherReading (§T595, §C18): every PUBLIC package's
+// package doc must contain BOTH depth levels beyond the professional prose — a
+// layman paragraph (the "In plain terms" convention) and a "Further reading"
+// pointer. Internal packages, backend implementations and the root registration
+// shims are exempt (§C13). This makes the C18 further-reading rule and the C10
+// dual-audience rule mechanical at package granularity.
+func TestPackageDocsCarryLaymanAndFurtherReading(t *testing.T) {
+	root := moduleRoot(t)
+	pkgDirs := map[string]bool{}
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			base := d.Name()
+			if base == ".git" || base == "testdata" || base == ".venv" || base == "docs" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if strings.HasSuffix(path, ".go") && !strings.HasSuffix(path, "_test.go") {
+			rel, _ := filepath.Rel(root, filepath.Dir(path))
+			pkgDirs[filepath.ToSlash(rel)] = true
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fset := token.NewFileSet()
+	var missing []string
+	dirs := make([]string, 0, len(pkgDirs))
+	for d := range pkgDirs {
+		dirs = append(dirs, d)
+	}
+	sort.Strings(dirs)
+	for _, rel := range dirs {
+		if rel == "." || strings.HasPrefix(rel, "internal") || implPkg(rel) {
+			continue
+		}
+		pkgs, perr := parser.ParseDir(fset, filepath.Join(root, rel), nil, parser.ParseComments)
+		if perr != nil {
+			t.Fatalf("parse %s: %v", rel, perr)
+		}
+		var doc strings.Builder // union over every file's package comment
+		for name, pkg := range pkgs {
+			if strings.HasSuffix(name, "_test") {
+				continue
+			}
+			for _, f := range pkg.Files {
+				if f.Doc != nil {
+					doc.WriteString(f.Doc.Text())
+					doc.WriteByte('\n')
+				}
+			}
+		}
+		var lacks []string
+		if !strings.Contains(doc.String(), "In plain terms") {
+			lacks = append(lacks, `layman paragraph ("In plain terms")`)
+		}
+		if !strings.Contains(doc.String(), "Further reading") {
+			lacks = append(lacks, `"Further reading" pointer`)
+		}
+		if len(lacks) > 0 {
+			missing = append(missing, rel+": "+strings.Join(lacks, " and "))
+		}
+	}
+	if len(missing) > 0 {
+		t.Errorf("package docs missing depth levels (§T595/§C18) — every public package doc needs professional prose, an \"In plain terms\" paragraph and a \"Further reading\" pointer:\n  %s",
+			strings.Join(missing, "\n  "))
+	}
+}

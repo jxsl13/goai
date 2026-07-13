@@ -4,6 +4,11 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T595 — mechanical package-doc depth gate (2026-07-13)
+- Every public package doc now carries all three depth levels — professional prose, an
+  "In plain terms" layman paragraph, and a "Further reading" pointer — and apicheck
+  enforces this mechanically from now on (pre-commit and CI).
+
 ### T594 — quieter, go-test-exact runner output (2026-07-13)
 - The selection report now uses the go toolchain's own line shapes (skips as
   `?   <pkg> [reason]`), prints packages one per line, and lists individual test

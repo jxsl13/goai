@@ -33,4 +33,6 @@
 // tape does it. See the runnable examples below.
 //
 // Further reading: Baydin et al. 2018, "Automatic Differentiation in Machine Learning: a Survey" (JMLR), and Griewank & Walther, "Evaluating Derivatives" (SIAM 2008), the definitive treatments of reverse-mode AD that this tape implements.
+//
+// In plain terms: training needs to know how much each parameter contributed to the error; this package records every operation on a tape while the model runs forward, then replays the tape backwards to compute exactly those contributions (gradients) automatically.
 package autograd

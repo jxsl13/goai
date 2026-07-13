@@ -6,4 +6,8 @@
 // hostile-input hardened), and npy/npz (NumPy array interop, fuzz-tested).
 // Every reader is validated against files produced by the reference tooling and
 // survives §V15 round-trip + hostile/fuzz tests.
+//
+// In plain terms: reading and writing the file formats models are shipped in, so weights trained anywhere can be loaded here and vice versa.
+//
+// Further reading: the safetensors and GGUF format specifications (huggingface/safetensors, ggml-org) — the defining references for this layer (file formats have no paper, SPEC V16).
 package format

@@ -3,6 +3,10 @@
 // format/npy codec, so a whole set of named tensors (e.g. a model's weights) round-
 // trips byte-faithfully with numpy/Python. Definitional source: the numpy .npz
 // convention (a ZIP of "<name>.npy" members); there is no paper (§V16).
+//
+// In plain terms: .npz is simply a zip archive of .npy files — one named array per entry, the standard way NumPy saves several arrays together.
+//
+// Further reading: the NumPy .npy/.npz format specification (numpy/numpy, NEP 1) — the defining reference (file formats have no paper, SPEC V16).
 package npz
 
 import (

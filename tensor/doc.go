@@ -25,4 +25,6 @@
 // below.
 //
 // Further reading: Harris et al. 2020, "Array Programming with NumPy" (Nature), for the strided-view model this tensor follows; Golub & Van Loan, "Matrix Computations" (4th ed.), for the numerical foundations.
+//
+// In plain terms: this package is the library's notion of an n-dimensional array — the box of numbers every model reads and writes — plus the bookkeeping (shapes, strides, views) that lets many operations share one block of memory instead of copying it.
 package tensor

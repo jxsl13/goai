@@ -21,6 +21,8 @@
 // to get a score per class for each image.
 //
 // Further reading: LeCun, Bottou, Bengio & Haffner 1998, "Gradient-Based Learning Applied to Document Recognition", the CNN blueprint; Goodfellow et al., "Deep Learning", ch. 9 for convolution foundations.
+//
+// In plain terms: computer vision — models that look at grids of pixels and answer "what is in this image", from the classic convolutional network to the transformer that reads images like sentences.
 package vision
 
 import (

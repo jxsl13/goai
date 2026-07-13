@@ -6,6 +6,10 @@
 // round-trips; F16 is stored as its raw IEEE binary16 bits, bit-identical to
 // numpy.float16. Format spec: numpy.lib.format (the definitional source; there
 // is no paper, §V16).
+//
+// In plain terms: .npy is NumPy's simple one-array file format — a small header describing shape and number type, then the raw values.
+//
+// Further reading: the NumPy .npy format specification (numpy/numpy, NEP 1) — the defining reference (file formats have no paper, SPEC V16).
 package npy
 
 import (

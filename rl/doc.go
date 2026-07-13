@@ -41,4 +41,6 @@
 // train a DQN agent to solve the chain.
 //
 // Further reading: Sutton & Barto, "Reinforcement Learning: An Introduction" (2nd ed., MIT Press 2018) — the canonical textbook every algorithm in this package cites into.
+//
+// In plain terms: reinforcement learning — programs that learn by trying actions in an environment and preferring what earned reward — with the canonical small algorithms and environments to study them.
 package rl

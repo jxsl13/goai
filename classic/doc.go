@@ -35,4 +35,6 @@
 // much variance a principal component captures.
 //
 // Further reading: Bishop, "Pattern Recognition and Machine Learning" (Springer 2006), and Hastie, Tibshirani & Friedman, "The Elements of Statistical Learning" (2nd ed.) — the standard references for the classical methods here.
+//
+// In plain terms: the pre-deep-learning classics — linear models, clustering, dimensionality reduction — small, fast, and often all a problem needs.
 package classic
