@@ -75,7 +75,36 @@ scientifically grounded default choice, document it in
 `docs/decisions/ADR-<n>.md` plus a SPEC amendment (§C/§B), keep building.
 Only genuine hard blockers (broken toolchain) → a short PushNotification,
 otherwise continue. NO commits/pushes without the user's explicit
-permission. The loop only ends when every §T task is "done".
+permission. The loop NEVER runs out of work: when every §T task is "done",
+proceed per the "Empty backlog" rule below.
+
+## Empty backlog rule (mandatory — the loop generates its own work)
+
+When no open §T task exists, do NOT idle. In this order:
+
+1. **Topic discovery:** autonomously research new AI topics, methods,
+   architectures, formats, and techniques that this library does NOT yet
+   implement — online search (current papers, llama.cpp/vLLM/SGLang release
+   notes, architecture roundups, framework changelogs) plus a repo
+   cross-check so only REAL gaps are booked (the §R234 method: verify every
+   candidate against the code before calling it a gap). Book each confirmed
+   gap as a §T row with cites (§R entry documenting source and scope) and
+   work them per the normal procedure, one task per fire.
+2. **Beat the incumbents:** once the library has implemented everything
+   discoverable as far as possible, the standing task becomes performance
+   leadership — make every implementation BETTER and FASTER than the
+   industry-standard implementations (usually Python-with-C++-kernels or
+   pure C++: torch/llama.cpp/ggml class), and PROVE it with clean,
+   industry-standard benchmarks: identical workloads and shapes on identical
+   hardware, warm-up excluded, repeated runs with variance reported,
+   tokens/s / latency / GFLOPs as the branch-standard metrics, methodology
+   and comparison scripts committed (`make bench-compare` /
+   `docs/benchmarking.md` discipline, §V22: measure real workloads, A/B via
+   file-toggle). Each measured, documented win (or honestly documented
+   remaining deficit with root-cause analysis) is one §T task.
+
+Rule 2 never completes — faster incumbents, new hardware, and new workloads
+keep appearing — so the loop always has a next task.
 
 ## STATUS: loop ACTIVE — as of §T565: v0.1.0 public on github.com/jxsl13/goai, CI green on 3 OSes; source-list audit 12/12 resolved (2026-07-13)
 
