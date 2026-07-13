@@ -111,18 +111,47 @@ func conv2dKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs
 		gemmF64Band(cols, wt, prod, lo, hi, k, f)
 	})
 
+	// Scatter prod[(n,oy,ox), f] into out[n,f,ho,wo] — typed slices and row-parallel:
+	// the previous per-element SetF64 loop was 17% of the profile and ran serially
+	// while the pool workers idled (§T597). Bias is hoisted to a plain slice.
 	out := tensor.NewOn(ctx.Device(), x.Dtype(), tensor.Shape{n, f, ho, wo})
-	for r := range rows {
-		ni := r / (ho * wo)
-		rem := r % (ho * wo)
-		oy, ox := rem/wo, rem%wo
+	var bs []float64
+	if bias != nil {
+		bs = make([]float64, f)
 		for fi := range f {
-			v := prod[r*f+fi]
-			if bias != nil {
-				v += bias.AtF64(fi)
-			}
-			out.SetF64(v, ni, fi, oy, ox)
+			bs[fi] = bias.AtF64(fi)
 		}
+	}
+	hw := ho * wo
+	switch out.Dtype() {
+	case tensor.F64:
+		os := out.Storage().F64()
+		parallelWork(rows, f, func(lo, hi int) {
+			for r := lo; r < hi; r++ {
+				ni, rem := r/hw, r%hw
+				for fi := range f {
+					v := prod[r*f+fi]
+					if bs != nil {
+						v += bs[fi]
+					}
+					os[(ni*f+fi)*hw+rem] = v
+				}
+			}
+		})
+	case tensor.F32:
+		os := out.Storage().F32()
+		parallelWork(rows, f, func(lo, hi int) {
+			for r := lo; r < hi; r++ {
+				ni, rem := r/hw, r%hw
+				for fi := range f {
+					v := prod[r*f+fi]
+					if bs != nil {
+						v += bs[fi]
+					}
+					os[(ni*f+fi)*hw+rem] = float32(v)
+				}
+			}
+		})
 	}
 	return []*tensor.Tensor{out}, nil
 }

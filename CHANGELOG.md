@@ -4,6 +4,13 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T597 — CPU conv2d output-path fix (2026-07-13)
+- Profiling showed the conv's output scatter ran serially through per-element
+  interface calls; it is now a typed, row-parallel write with the bias hoisted.
+  +53% on the small benchmark shape, +18% on the large one — which now sits at the
+  pure-Go f64-accumulation GEMM ceiling; the remaining gap to vendor BLAS is a
+  future f32-SIMD track.
+
 ### T596 — parallel CPU norm kernels (2026-07-13)
 - RMSNorm/LayerNorm forward and backward now run as typed, row-parallel CPU kernels:
   6.4-17.7x faster than before on the benchmark shapes (they previously fell through to
