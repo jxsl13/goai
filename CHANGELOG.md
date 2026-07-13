@@ -4,6 +4,11 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T567 — English-only repository (2026-07-13)
+- All documentation translated to English (LOOP.md, PLANNING_PROMPT.md, research docs,
+  remaining quoted fragments) and machine-local information removed; multilingual Unicode
+  strings in tokenizer tests kept as deliberate test data. CI green.
+
 ### T565 — v0.1.0 published (2026-07-13)
 - github.com/jxsl13/goai is live (public, MPL-2.0, tag v0.1.0 on a fully green CI). The
   first run caught three real cross-platform bugs (amd64 FP tolerance, ±0 formatting,
