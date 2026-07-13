@@ -203,10 +203,10 @@ func mhaBwd[T float32 | float64](q, k, v, g, dQ, dK, dV []T, geo mhaGeo) {
 				dkAcc[x] = 0
 				dvAcc[x] = 0
 			}
-			for hr := 0; hr < rep; hr++ {
+			for hr := range rep {
 				h := kv*rep + hr
 				qOff := h * dk
-				for i := 0; i < seq; i++ {
+				for i := range seq {
 					jmax := seq
 					if causal {
 						jmax = i + 1
@@ -222,7 +222,7 @@ func mhaBwd[T float32 | float64](q, k, v, g, dQ, dK, dV []T, geo mhaGeo) {
 					for j := jmin; j < jmax; j++ {
 						kBase := j*kvDM + kvOff
 						var s float64
-						for d := 0; d < dk; d++ {
+						for d := range dk {
 							s += float64(q[qBase+d]) * float64(k[kBase+d])
 						}
 						s *= scale
@@ -247,7 +247,7 @@ func mhaBwd[T float32 | float64](q, k, v, g, dQ, dK, dV []T, geo mhaGeo) {
 						kvBase := j*kvDM + kvOff
 						accBase := j * dk
 						var dav float64
-						for d := 0; d < dk; d++ {
+						for d := range dk {
 							gid := float64(g[qBase+d])
 							dvAcc[accBase+d] += a[j] * gid
 							dav += gid * float64(v[kvBase+d])
@@ -262,18 +262,18 @@ func mhaBwd[T float32 | float64](q, k, v, g, dQ, dK, dV []T, geo mhaGeo) {
 						dS := scale * a[j] * (dA[j] - dot)
 						kvBase := j*kvDM + kvOff
 						accBase := j * dk
-						for d := 0; d < dk; d++ {
+						for d := range dk {
 							dqRow[d] += dS * float64(k[kvBase+d])
 							dkAcc[accBase+d] += dS * float64(q[qBase+d])
 						}
 					}
-					for d := 0; d < dk; d++ {
+					for d := range dk {
 						dQ[qBase+d] = T(dqRow[d])
 					}
 				}
 			}
-			for j := 0; j < seq; j++ {
-				for d := 0; d < dk; d++ {
+			for j := range seq {
+				for d := range dk {
 					dK[j*kvDM+kvOff+d] = T(dkAcc[j*dk+d])
 					dV[j*kvDM+kvOff+d] = T(dvAcc[j*dk+d])
 				}

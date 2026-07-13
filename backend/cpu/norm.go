@@ -73,12 +73,12 @@ func rmsNormKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.A
 		for r := lo; r < hi; r++ {
 			base := r * d
 			var ms float64
-			for j := 0; j < d; j++ {
+			for j := range d {
 				v := xr(base + j)
 				ms += v * v
 			}
 			inv := 1 / math.Sqrt(ms/float64(d)+eps)
-			for j := 0; j < d; j++ {
+			for j := range d {
 				ow(base+j, xr(base+j)*inv*gr(j))
 			}
 		}
@@ -106,17 +106,17 @@ func layerNormKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend
 		for r := lo; r < hi; r++ {
 			base := r * d
 			var mean float64
-			for j := 0; j < d; j++ {
+			for j := range d {
 				mean += xr(base + j)
 			}
 			mean /= float64(d)
 			var varsum float64
-			for j := 0; j < d; j++ {
+			for j := range d {
 				dv := xr(base+j) - mean
 				varsum += dv * dv
 			}
 			inv := 1 / math.Sqrt(varsum/float64(d)+eps)
-			for j := 0; j < d; j++ {
+			for j := range d {
 				ow(base+j, (xr(base+j)-mean)*inv*gr(j)+br(j))
 			}
 		}
@@ -146,18 +146,18 @@ func rmsNormBackwardKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs b
 		for r := lo; r < hi; r++ {
 			base := r * d
 			var ms float64
-			for j := 0; j < d; j++ {
+			for j := range d {
 				v := xr(base + j)
 				ms += v * v
 			}
 			iv := 1 / math.Sqrt(ms/float64(d)+eps)
 			inv[r] = iv
 			var s float64
-			for j := 0; j < d; j++ {
+			for j := range d {
 				a := ur(base+j) * gr(j)
 				s += a * xr(base+j)
 			}
-			for j := 0; j < d; j++ {
+			for j := range d {
 				a := ur(base+j) * gr(j)
 				dxw(base+j, iv*(a-xr(base+j)*iv*iv*s/float64(d)))
 			}
@@ -169,7 +169,7 @@ func rmsNormBackwardKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs b
 	parallelWork(d, 2*rows, func(lo, hi int) {
 		for j := lo; j < hi; j++ {
 			var acc float64
-			for r := 0; r < rows; r++ {
+			for r := range rows {
 				acc += ur(r*d+j) * xr(r*d+j) * inv[r]
 			}
 			dgw(j, acc)
@@ -202,12 +202,12 @@ func layerNormBackwardKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs
 		for r := lo; r < hi; r++ {
 			base := r * d
 			var mu float64
-			for j := 0; j < d; j++ {
+			for j := range d {
 				mu += xr(base + j)
 			}
 			mu /= float64(d)
 			var variance float64
-			for j := 0; j < d; j++ {
+			for j := range d {
 				dv := xr(base+j) - mu
 				variance += dv * dv
 			}
@@ -215,7 +215,7 @@ func layerNormBackwardKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs
 			iv := 1 / math.Sqrt(variance+eps)
 			mean[r], inv[r] = mu, iv
 			var meanA, meanAX float64
-			for j := 0; j < d; j++ {
+			for j := range d {
 				xhat := (xr(base+j) - mu) * iv
 				a := ur(base+j) * gr(j)
 				meanA += a
@@ -223,7 +223,7 @@ func layerNormBackwardKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs
 			}
 			meanA /= float64(d)
 			meanAX /= float64(d)
-			for j := 0; j < d; j++ {
+			for j := range d {
 				xhat := (xr(base+j) - mu) * iv
 				a := ur(base+j) * gr(j)
 				dxw(base+j, iv*(a-meanA-xhat*meanAX))
@@ -235,7 +235,7 @@ func layerNormBackwardKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs
 	parallelWork(d, 3*rows, func(lo, hi int) {
 		for j := lo; j < hi; j++ {
 			var dg, db float64
-			for r := 0; r < rows; r++ {
+			for r := range rows {
 				xhat := (xr(r*d+j) - mean[r]) * inv[r]
 				dg += ur(r*d+j) * xhat
 				db += ur(r*d + j)
