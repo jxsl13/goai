@@ -4,6 +4,11 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T605 — CI build caching and speaking step names (2026-07-14)
+- Every lane now persists the Go build cache across runs (module caching stays off —
+  the module has zero dependencies): compile-bound lanes got 30-43% faster. All CI
+  step names now say what they do and why.
+
 ### T603 — cross-driver shader race fixed (2026-07-14)
 - The new lavapipe CI lane exposed a write-after-read hazard in the cooperative
   reductions of the causal-softmax and cross-entropy compute shaders (a missing

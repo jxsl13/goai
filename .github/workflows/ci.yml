@@ -35,6 +35,7 @@ jobs:
   # second fail-open layer. Soundness backstop: the test jobs still `go vet ./...`
   # in full, so under-selection can never hide a compile break (§V23).
   changes:
+    name: select affected packages (cichange)
     runs-on: ubuntu-latest
     outputs:
       code: ${{ steps.classify.outputs.code }}
@@ -50,9 +51,10 @@ jobs:
       - uses: ./.github/actions/go-build-cache
         with:
           lane: changes
-      - name: download dependencies (no-op while the module is zero-dep, §T582)
+      - name: go mod download (a no-op today — zero-dependency module, §T582)
         run: go mod download
       - id: classify
+        name: compute the affected package set from this push's diff
         run: |
           BASE="${{ github.event.pull_request.base.sha || github.event.before }}"
           AFFECTED=$(go run ./internal/cichange -impact "$BASE" HEAD || echo all)
@@ -89,15 +91,15 @@ jobs:
       - uses: ./.github/actions/go-build-cache
         with:
           lane: pure-go-${{ matrix.os }}
-      - name: vet (compiles tests too — §V23; always full, the soundness backstop)
+      - name: compile EVERYTHING incl. tests via go vet (full-tree soundness backstop, §V23)
         run: go vet ./...
-      - name: test (transparent selective run, §T587)
+      - name: run tests for the affected packages only (transparent selective runner, §T587)
         shell: bash
         run: |
           BASE="${{ github.event.pull_request.base.sha || github.event.before }}"
           go run ./internal/cichange -run "$BASE" HEAD -- -short -count=1 -timeout 10m
       # §V5: benchmarks must at least build and run one iteration.
-      - name: bench-smoke
+      - name: smoke-run every benchmark once (they must at least build+run, §V5)
         shell: bash
         run: |
           BASE="${{ github.event.pull_request.base.sha || github.event.before }}"
@@ -121,19 +123,19 @@ jobs:
       - uses: ./.github/actions/go-build-cache
         with:
           lane: cgo-race
-      - name: gofmt
+      - name: gofmt check (unformatted code fails the build)
         run: |
           out=$(gofmt -l .)
           if [ -n "$out" ]; then
             echo "gofmt needed on:" && echo "$out" && exit 1
           fi
-      - name: vet
+      - name: compile everything incl. tests via go vet (§V23)
         run: go vet ./...
-      - name: test (race, transparent selective run, §T587)
+      - name: race-detector tests for the affected packages (§T587)
         run: |
           BASE="${{ github.event.pull_request.base.sha || github.event.before }}"
           go run ./internal/cichange -run "$BASE" HEAD -- -short -count=1 -race -timeout 20m
-      - name: coverage
+      - name: coverage over the affected packages (summary line in the job page)
         run: |
           BASE="${{ github.event.pull_request.base.sha || github.event.before }}"
           go run ./internal/cichange -run "$BASE" HEAD -- -short -count=1 -covermode=atomic -coverprofile=coverage.out
@@ -164,7 +166,7 @@ jobs:
           lane: cgo-metal
       - name: capability probe (§T601 — what does this runner offer?)
         run: go run ./internal/capprobe
-      - name: vet (compiles the metal cgo backend)
+      - name: compile everything incl. the Metal cgo backend via go vet
         run: go vet ./...
       - name: test (transparent selective run, §T587)
         run: |
@@ -213,7 +215,7 @@ jobs:
       - name: capability probe (§T601 — what does this runner offer?)
         shell: bash
         run: go run ./internal/capprobe
-      - name: build
+      - name: compile the vulkan-tagged tree
         shell: bash
         run: |
           if [ "$RUNNER_OS" = "Windows" ]; then
@@ -226,7 +228,7 @@ jobs:
             export CGO_CFLAGS="-I$SDK/Include" CGO_LDFLAGS="-L$SDK/Lib"
           fi
           go build -tags vulkan ./...
-      - name: test (only when the change touches the vulkan backend, §T600)
+      - name: run backend/vulkan tests — only if this change touches it AND an ICD is present (§T600)
         shell: bash
         run: |
           BASE="${{ github.event.pull_request.base.sha || github.event.before }}"
@@ -259,7 +261,7 @@ jobs:
       - uses: ./.github/actions/go-build-cache
         with:
           lane: tidy
-      - name: drift check
+      - name: go mod tidy must not change go.mod (dependency drift gate)
         run: |
           go mod tidy
           git diff --exit-code go.mod
@@ -289,7 +291,7 @@ jobs:
       - name: capability probe (§T601 — what does this runner offer?)
         shell: bash
         run: go run ./internal/capprobe
-      - name: build (GOEXPERIMENT=simd, amd64 only)
+      - name: compile with GOEXPERIMENT=simd (amd64 runners; arm64 skips transparently)
         shell: bash
         env:
           CGO_ENABLED: "0"
@@ -321,7 +323,7 @@ jobs:
       - name: capability probe (§T601 — what does this runner offer?)
         shell: bash
         run: go run ./internal/capprobe
-      - name: vet (cgo enabled)
+      - name: compile everything with cgo enabled via go vet (mingw)
         shell: bash
         env:
           CGO_ENABLED: "1"
