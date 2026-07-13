@@ -1,57 +1,85 @@
-// Command cichange classifies the change between two git revisions as either
-// "docs-only" or "code" so CI can skip expensive pipelines for pure
-// documentation pushes (§T571).
+// Command cichange classifies the change between two git revisions so CI can run
+// exactly the work the change requires (§T571/§T579/§T583/§T584).
 //
-// In plain terms: if a push only edits markdown files or code COMMENTS, the
-// compiled program cannot have changed, so running the full test matrix
-// would burn CI minutes for nothing. This tool proves that safely: markdown
-// and docs/ files are documentation by path; for a modified .go file it
-// parses BOTH versions and compares their abstract syntax trees with all
-// comments stripped — byte-identical trees mean only comments (godoc) moved.
+// In plain terms: if a push only edits documentation, running the full test matrix
+// burns CI minutes for nothing; if it edits one package, only that package and its
+// (transitive) importers can be affected. This tool proves both safely — and every
+// rule about what counts as documentation or as globally significant is CONFIGURABLE,
+// so the tool is generic rather than tied to one repository's layout.
 //
-// Safety (§V26, fail-open): the answer is "docs-only" ONLY on positive proof.
-// Every uncertain case — parse errors, added/deleted files that are not pure
-// docs, workflow or build files, unreadable revisions, and DIRECTIVE comments
-// (//go:build, //go:embed, //go:generate, //line, cgo preambles), which change
-// compilation despite being comments — classifies as "code".
+// Modes:
 //
-// Usage:
+//	cichange [flags] <base-rev> <head-rev>            → "docs-only" | "code"
+//	cichange -impact [flags] <base-rev> <head-rev>    → "none" | "all" | "./pkg ..."
+//	cichange -validate [flags] <base-rev> <head-rev>  → soundness report; exit 1 on
+//	                                                    under-selection (§V27)
 //
-//	go run ./internal/cichange <base-rev> <head-rev>          → "docs-only" | "code"
-//	go run ./internal/cichange -impact <base-rev> <head-rev>  → "none" | "all" | "./pkg ..."
+// Rule flags (§T584), all repeatable; precedence full-rerun > pkg-rerun > ignore:
 //
-// The -impact mode (§T579) narrows further: instead of the binary docs/code verdict it
-// prints exactly the packages whose tests are affected by the change — the reverse
-// import closure of the changed packages (see Impact). CI runs `go test` on that list,
-// the full suite on "all", and nothing on "none". Exits non-zero only on usage errors.
+//	-ignore <path>            file or directory with no CI impact (docs); relative
+//	                          paths resolve against the repository root, and every
+//	                          path is absolutized before comparison
+//	-ignore-regex <re>        repo-relative paths matching → no CI impact
+//	-full-rerun-regex <re>    repo-relative paths matching → the full suite runs
+//	-pkg-rerun-regex <re>     repo-relative paths matching → their owning package's
+//	                          tests run regardless of content analysis
+//	-no-default-rules         start from an empty rule set instead of the built-in
+//	                          defaults (docs/, LICENSE, root *.md/*.txt ignored;
+//	                          go.sum, Makefile, .github/ full-rerun)
+//
+// Safety (§V26, fail-open): "docs-only"/"none" require positive proof. Parse errors,
+// unattributable paths, deleted packages, and unmodeled go.mod constructs classify as
+// code / all. Exits non-zero only on usage errors (2) and -validate under-selection (1).
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
 )
 
 func main() {
-	args := os.Args[1:]
-	mode := ""
-	if len(args) > 0 && (args[0] == "-impact" || args[0] == "-validate") {
-		mode = args[0]
-		args = args[1:]
-	}
-	if len(args) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: cichange [-impact|-validate] <base-rev> <head-rev>")
+	var (
+		impactMode   = flag.Bool("impact", false, "print the affected package list instead of the binary verdict")
+		validateMode = flag.Bool("validate", false, "judge -impact against the go list oracle (§V27)")
+		noDefaults   = flag.Bool("no-default-rules", false, "start from an empty rule set")
+		ignore       stringList
+		ignoreRe     stringList
+		fullRe       stringList
+		pkgRe        stringList
+	)
+	flag.Var(&ignore, "ignore", "path (file or dir) with no CI impact; repeatable")
+	flag.Var(&ignoreRe, "ignore-regex", "repo-relative path regex with no CI impact; repeatable")
+	flag.Var(&fullRe, "full-rerun-regex", "repo-relative path regex forcing the full suite; repeatable")
+	flag.Var(&pkgRe, "pkg-rerun-regex", "repo-relative path regex forcing the owning package's tests; repeatable")
+	flag.Parse()
+	if flag.NArg() != 2 {
+		fmt.Fprintln(os.Stderr, "usage: cichange [-impact|-validate] [rule flags] <base-rev> <head-rev>")
 		os.Exit(2)
 	}
-	switch mode {
-	case "-impact":
-		fmt.Println(Impact(".", args[0], args[1]))
-	case "-validate": // §T583/§V27: judge the selector against the toolchain oracle
-		report, ok := Validate(".", args[0], args[1])
+	if !*noDefaults {
+		dIg, dIgRe, dFull, dPkg := defaultRules()
+		ignore = append(stringList(dIg), ignore...)
+		ignoreRe = append(stringList(dIgRe), ignoreRe...)
+		fullRe = append(stringList(dFull), fullRe...)
+		pkgRe = append(stringList(dPkg), pkgRe...)
+	}
+	cfg, err := newConfig(".", ignore, ignoreRe, fullRe, pkgRe)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	base, head := flag.Arg(0), flag.Arg(1)
+	switch {
+	case *impactMode:
+		fmt.Println(Impact(cfg, ".", base, head))
+	case *validateMode: // §T583/§V27: judge the selector against the toolchain oracle
+		report, ok := Validate(cfg, ".", base, head)
 		fmt.Println(report)
 		if !ok {
 			os.Exit(1)
 		}
 	default:
-		fmt.Println(Classify(".", args[0], args[1]))
+		fmt.Println(Classify(cfg, ".", base, head))
 	}
 }

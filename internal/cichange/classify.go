@@ -18,8 +18,10 @@ const (
 
 // Classify inspects the diff between two revisions of the git repository at
 // dir and returns DocsOnly when EVERY change is provably documentation-only,
-// Code otherwise (§V26: every uncertainty fails open to Code).
-func Classify(dir, base, head string) string {
+// Code otherwise (§V26: every uncertainty fails open to Code). What counts as
+// documentation comes from cfg (§T584) — by default docs/, LICENSE and
+// root-level markdown/text.
+func Classify(cfg *config, dir, base, head string) string {
 	out, err := gitRun(dir, "diff", "--name-status", "-z", base, head)
 	if err != nil {
 		return Code // base unavailable (force push, shallow clone) → run CI
@@ -45,8 +47,8 @@ func Classify(dir, base, head string) string {
 			i++
 		}
 		switch {
-		case isDocPath(path) && isDocPath(newPath):
-			continue // markdown & friends: documentation regardless of status
+		case cfg.ignored(path) && cfg.ignored(newPath):
+			continue // configured documentation paths, regardless of status
 		case status[0] == 'M' && strings.HasSuffix(path, ".go"):
 			if goCodeUnchanged(dir, base, head, path) {
 				continue // only comments moved
@@ -61,20 +63,11 @@ func Classify(dir, base, head string) string {
 	return DocsOnly
 }
 
-// isDocPath reports whether a path is PROVABLY documentation: anything under
-// docs/, the LICENSE, and root-level .md/.txt files. Markdown or text files
-// deeper in the tree do NOT qualify — a .txt inside a package directory can be
-// //go:embed'ed into the binary (found by §T581's embed test), so they classify
-// as package assets / code instead (§V26 fail-open).
-func isDocPath(p string) bool {
-	if p == "LICENSE" || strings.HasPrefix(p, "docs/") {
-		return true
-	}
-	if strings.Contains(p, "/") {
-		return false // not root-level: could be an embedded asset
-	}
-	return strings.HasSuffix(p, ".md") || strings.HasSuffix(p, ".txt")
-}
+// What is PROVABLY documentation is configuration (§T584, config.ignored); the
+// defaults cover docs/, LICENSE and root-level .md/.txt. Markdown or text files
+// deeper in the tree deliberately do NOT default to documentation — a .txt
+// inside a package directory can be //go:embed'ed into the binary (§B50), so
+// they classify as package assets / code instead (§V26 fail-open).
 
 // goCodeUnchanged proves that the .go file at path is semantically identical
 // between the two revisions once every non-directive comment is stripped.

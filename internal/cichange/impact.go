@@ -39,12 +39,12 @@ const (
 // docs-only gate uses. Soundness at package granularity is inherited from the import
 // relation: dynamic interface dispatch requires the implementation to be linked, and
 // linkage requires an import path to it.
-func Impact(dir, base, head string) string {
+func Impact(cfg *config, dir, base, head string) string {
 	g, err := buildGraph(dir)
 	if err != nil {
 		return All
 	}
-	propagate, testOnly, verdict := g.changedSets(dir, base, head)
+	propagate, testOnly, verdict := g.changedSets(cfg, dir, base, head)
 	if verdict != "" {
 		return verdict
 	}
@@ -73,7 +73,7 @@ func Impact(dir, base, head string) string {
 // changedSets attributes every file of the base..head diff: propagate = packages whose
 // non-test code changed, testOnly = packages with only _test.go changes. verdict is ""
 // for a normal result, or None/All when the diff resolves without a closure.
-func (g *moduleGraph) changedSets(dir, base, head string) (propagate, testOnly map[string]bool, verdict string) {
+func (g *moduleGraph) changedSets(cfg *config, dir, base, head string) (propagate, testOnly map[string]bool, verdict string) {
 	out, err := gitRun(dir, "diff", "--name-status", "-z", base, head)
 	if err != nil {
 		return nil, nil, All // base unavailable (force push, shallow clone)
@@ -99,7 +99,7 @@ func (g *moduleGraph) changedSets(dir, base, head string) (propagate, testOnly m
 			i++
 		}
 		for _, p := range paths {
-			if g.classifyChanged(dir, base, head, status, p, propagate, testOnly) == impactGlobal {
+			if g.classifyChanged(cfg, dir, base, head, status, p, propagate, testOnly) == impactGlobal {
 				return nil, nil, All
 			}
 		}
@@ -113,13 +113,9 @@ const (
 	impactGlobal         // forces All
 )
 
-// globalPaths force a full run when touched: they steer the build/CI itself.
-// go.mod is NOT here — it gets precise dependency-diff handling (§T582); go.sum
-// stays global (a sum change without a matching go.mod change is anomalous).
-func isGlobalPath(p string) bool {
-	return p == "go.sum" || p == "Makefile" ||
-		strings.HasPrefix(p, ".github/")
-}
+// go.mod is not a configured full-rerun rule — it gets precise dependency-diff
+// handling (§T582); go.sum stays a default full-rerun pattern (a sum change
+// without a matching go.mod change is anomalous).
 
 // depChangeSeeds handles a go.mod change (§T582): if only require VERSIONS changed or
 // modules were added, the packages importing those modules seed the closure — code
@@ -160,16 +156,24 @@ func (g *moduleGraph) depChangeSeeds(dir, base, head string, propagate, testOnly
 	return impactHandled
 }
 
-// classifyChanged attributes one changed file to the propagate/testOnly sets, ignores
-// documentation, and reports impactGlobal for anything with unbounded reach (§V26).
-func (g *moduleGraph) classifyChanged(dir, base, head, status, p string, propagate, testOnly map[string]bool) int {
+// classifyChanged attributes one changed file to the propagate/testOnly sets per the
+// configured rules (§T584; precedence full-rerun > pkg-rerun > ignore > analysis) and
+// reports impactGlobal for anything with unbounded reach (§V26).
+func (g *moduleGraph) classifyChanged(cfg *config, dir, base, head, status, p string, propagate, testOnly map[string]bool) int {
 	switch {
-	case isDocPath(p):
+	case cfg.fullRerun(p):
+		return impactGlobal
+	case cfg.pkgRerun(p):
+		pkg, ok := g.pkgFor(p)
+		if !ok {
+			return impactGlobal // forced rerun of an unattributable path: everything
+		}
+		propagate[pkg] = true
+		return impactHandled
+	case cfg.ignored(p):
 		return impactHandled
 	case p == "go.mod":
 		return g.depChangeSeeds(dir, base, head, propagate, testOnly)
-	case isGlobalPath(p):
-		return impactGlobal
 	case strings.HasSuffix(p, ".go"):
 		// a .go file's owning package is EXACTLY its directory — no ancestor walk,
 		// else a deleted package would silently attribute to its parent.

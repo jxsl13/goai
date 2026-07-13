@@ -24,7 +24,7 @@ var modBase = map[string]string{
 func impactOf(t *testing.T, head map[string]string) string {
 	t.Helper()
 	dir, base, headRev := scratchRepo(t, modBase, head)
-	return Impact(dir, base, headRev)
+	return Impact(defaultConfig(dir), dir, base, headRev)
 }
 
 // §V16 tier-1 (§T579): the reverse closure — a leaf change selects the leaf and every
@@ -169,7 +169,7 @@ func TestImpactBuildTagImportCounted(t *testing.T) {
 	}
 	base["f/f.go"] = "//go:build sometag\n\npackage f\n\nimport _ \"example.com/m/c\"\n"
 	dir, baseRev, headRev := scratchRepo(t, base, map[string]string{"c/c.go": "package c\n\nvar Tagged = 1\n"})
-	got := Impact(dir, baseRev, headRev)
+	got := Impact(defaultConfig(dir), dir, baseRev, headRev)
 	if got != "./b ./c ./f" {
 		t.Errorf("tag-gated import: got %q, want ./b ./c ./f", got)
 	}
@@ -201,7 +201,7 @@ func TestImpactEmbeddedFileChange(t *testing.T) {
 	base["g/g.go"] = "package g\n\nimport _ \"embed\"\n\n//go:embed data.txt\nvar Data string\n"
 	base["g/data.txt"] = "v1\n"
 	dir, baseRev, headRev := scratchRepo(t, base, map[string]string{"g/data.txt": "v2\n"})
-	if got := Impact(dir, baseRev, headRev); got != "./g" {
+	if got := Impact(defaultConfig(dir), dir, baseRev, headRev); got != "./g" {
 		t.Errorf("embed change: got %q, want ./g", got)
 	}
 }
@@ -244,7 +244,7 @@ func TestImpactDependencyVersionBump(t *testing.T) {
 		"go.mod": "module example.com/m\n\ngo 1.26\n\nrequire dep.example/lib v1.1.0\n",
 	})
 	// c imports the dep (code) → c + b (test edge on c); a's _test.go imports it → a.
-	if got := Impact(dir, baseRev, headRev); got != "./a ./b ./c" {
+	if got := Impact(defaultConfig(dir), dir, baseRev, headRev); got != "./a ./b ./c" {
 		t.Errorf("dep bump: got %q, want ./a ./b ./c", got)
 	}
 }
@@ -256,13 +256,13 @@ func TestImpactDependencyEdgeCases(t *testing.T) {
 	dir, baseRev, headRev := scratchRepo(t, depBase(), map[string]string{
 		"go.mod": "module example.com/m\n\ngo 1.26\n\nrequire dep.example/lib v1.0.0\n\nreplace dep.example/lib => ../local\n",
 	})
-	if got := Impact(dir, baseRev, headRev); got != All {
+	if got := Impact(defaultConfig(dir), dir, baseRev, headRev); got != All {
 		t.Errorf("replace directive: got %q, want all", got)
 	}
 	dir, baseRev, headRev = scratchRepo(t, depBase(), map[string]string{
 		"go.mod": "module example.com/m\n\ngo 1.26\n\nrequire (\n\tdep.example/lib v1.0.0\n\tother.example/x v2.0.0\n)\n",
 	})
-	if got := Impact(dir, baseRev, headRev); got != None {
+	if got := Impact(defaultConfig(dir), dir, baseRev, headRev); got != None {
 		t.Errorf("added unimported dep: got %q, want none", got)
 	}
 	dir, baseRev, headRev = scratchRepo(t, depBase(), map[string]string{
@@ -271,7 +271,7 @@ func TestImpactDependencyEdgeCases(t *testing.T) {
 		"a/a_test.go": "package a\n",
 	})
 	// removal: the import-dropping .go edits attribute normally (c code, a test-only).
-	if got := Impact(dir, baseRev, headRev); got != "./a ./b ./c" {
+	if got := Impact(defaultConfig(dir), dir, baseRev, headRev); got != "./a ./b ./c" {
 		t.Errorf("removed dep: got %q, want ./a ./b ./c", got)
 	}
 }

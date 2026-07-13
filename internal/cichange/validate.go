@@ -23,8 +23,8 @@ import (
 // file→package attribution and the None/All verdicts are shared with -impact and are
 // covered by unit tests instead. All/None short-circuit: All is a superset of every
 // oracle answer; None is valid iff no package changed at all.
-func Validate(dir, base, head string) (report string, ok bool) {
-	selected := Impact(dir, base, head)
+func Validate(cfg *config, dir, base, head string) (report string, ok bool) {
+	selected := Impact(cfg, dir, base, head)
 	if selected == All {
 		return "validate: impact=all — trivially sound (superset of any oracle set)", true
 	}
@@ -32,7 +32,7 @@ func Validate(dir, base, head string) (report string, ok bool) {
 	if err != nil {
 		return "validate: graph unbuildable — impact fell open to all? got: " + selected, false
 	}
-	propagate, testOnly, verdict := g.changedSets(dir, base, head)
+	propagate, testOnly, verdict := g.changedSets(cfg, dir, base, head)
 	if verdict == All {
 		return "validate: attribution says all but impact printed " + selected, selected == All
 	}

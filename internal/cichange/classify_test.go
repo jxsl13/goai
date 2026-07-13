@@ -95,7 +95,7 @@ func TestClassify(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			dir, base, head := scratchRepo(t, tc.base, tc.head)
-			if got := Classify(dir, base, head); got != tc.want {
+			if got := Classify(defaultConfig(dir), dir, base, head); got != tc.want {
 				t.Fatalf("Classify = %q, want %q", got, tc.want)
 			}
 		})
@@ -105,7 +105,7 @@ func TestClassify(t *testing.T) {
 // Missing base revision (shallow clone / force push) must fail open to Code.
 func TestClassifyMissingBaseFailsOpen(t *testing.T) {
 	dir, _, head := scratchRepo(t, map[string]string{"x.go": goBase}, map[string]string{"README.md": "b"})
-	if got := Classify(dir, "deadbeef", head); got != Code {
+	if got := Classify(defaultConfig(dir), dir, "deadbeef", head); got != Code {
 		t.Fatalf("missing base = %q, want %q", got, Code)
 	}
 }

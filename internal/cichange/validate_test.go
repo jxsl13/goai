@@ -32,7 +32,7 @@ func TestValidateAgainstOracle(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			dir, base, head := scratchRepo(t, modBase, tc.head)
-			report, ok := Validate(dir, base, head)
+			report, ok := Validate(defaultConfig(dir), dir, base, head)
 			if ok != tc.ok {
 				t.Fatalf("ok = %v, want %v (%s)", ok, tc.ok, report)
 			}

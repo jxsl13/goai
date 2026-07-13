@@ -4,6 +4,13 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T584 — generic, fully configurable CI selector (2026-07-13)
+- cichange no longer hardcodes any repository layout: repeatable -ignore (files or
+  dirs, relative or absolute — everything is absolutized first), -ignore-regex,
+  -full-rerun-regex and -pkg-rerun-regex flags configure every rule, with precedence
+  full-rerun > pkg-rerun > ignore > analysis. The old built-in behavior is now just
+  the default rule set; -no-default-rules starts clean.
+
 ### T583 — selector validation against the toolchain oracle (2026-07-13)
 - cichange -validate recomputes the affected set with `go list -test -deps` (swept over
   GOOS) and diffs it against -impact: missing packages exit 1 (selector bug), excess is
