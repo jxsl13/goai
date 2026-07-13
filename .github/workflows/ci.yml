@@ -47,6 +47,9 @@ jobs:
         with:
           go-version: "1.26.x"
           cache: false
+      - uses: ./.github/actions/go-build-cache
+        with:
+          lane: changes
       - name: download dependencies (no-op while the module is zero-dep, §T582)
         run: go mod download
       - id: classify
@@ -83,6 +86,9 @@ jobs:
         with:
           go-version: "1.26.x"
           cache: false # zero-dependency module (no go.sum): nothing to cache
+      - uses: ./.github/actions/go-build-cache
+        with:
+          lane: pure-go-${{ matrix.os }}
       - name: vet (compiles tests too — §V23; always full, the soundness backstop)
         run: go vet ./...
       - name: test (transparent selective run, §T587)
@@ -112,6 +118,9 @@ jobs:
         with:
           go-version: "1.26.x"
           cache: false
+      - uses: ./.github/actions/go-build-cache
+        with:
+          lane: cgo-race
       - name: gofmt
         run: |
           out=$(gofmt -l .)
@@ -150,6 +159,9 @@ jobs:
         with:
           go-version: "1.26.x"
           cache: false
+      - uses: ./.github/actions/go-build-cache
+        with:
+          lane: cgo-metal
       - name: capability probe (§T601 — what does this runner offer?)
         run: go run ./internal/capprobe
       - name: vet (compiles the metal cgo backend)
@@ -181,9 +193,12 @@ jobs:
         with:
           go-version: "1.26.x"
           cache: false
+      - uses: ./.github/actions/go-build-cache
+        with:
+          lane: vulkan-${{ matrix.os }}
       - name: install ICD (linux — Mesa lavapipe)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libvulkan-dev vulkan-tools mesa-vulkan-drivers
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libvulkan-dev vulkan-tools mesa-vulkan-drivers
       - name: install ICD (macos — MoltenVK)
         if: runner.os == 'macOS'
         continue-on-error: true
@@ -241,6 +256,9 @@ jobs:
         with:
           go-version: "1.26.x"
           cache: false
+      - uses: ./.github/actions/go-build-cache
+        with:
+          lane: tidy
       - name: drift check
         run: |
           go mod tidy
@@ -265,6 +283,9 @@ jobs:
         with:
           go-version: "1.26.x"
           cache: false
+      - uses: ./.github/actions/go-build-cache
+        with:
+          lane: simd-${{ matrix.os }}
       - name: capability probe (§T601 — what does this runner offer?)
         shell: bash
         run: go run ./internal/capprobe
@@ -294,6 +315,9 @@ jobs:
         with:
           go-version: "1.26.x"
           cache: false
+      - uses: ./.github/actions/go-build-cache
+        with:
+          lane: cgo-windows
       - name: capability probe (§T601 — what does this runner offer?)
         shell: bash
         run: go run ./internal/capprobe
