@@ -200,7 +200,17 @@ jobs:
         run: go run ./internal/capprobe
       - name: build
         shell: bash
-        run: go build -tags vulkan ./...
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            SDK=$(ls -d /c/VulkanSDK/* 2>/dev/null | head -1)
+            if [ -z "$SDK" ]; then
+              echo "skip: no Vulkan SDK headers on this runner — build skipped, rc=0"; exit 0
+            fi
+            echo "CGO_CFLAGS=-I$SDK/Include" >> "$GITHUB_ENV"
+            echo "CGO_LDFLAGS=-L$SDK/Lib" >> "$GITHUB_ENV"
+            export CGO_CFLAGS="-I$SDK/Include" CGO_LDFLAGS="-L$SDK/Lib"
+          fi
+          go build -tags vulkan ./...
       - name: test (only when the change touches the vulkan backend, §T600)
         shell: bash
         run: |
