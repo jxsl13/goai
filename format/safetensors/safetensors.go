@@ -4,10 +4,18 @@
 // section. Offsets are validated strictly — they must tile the data section
 // exactly with no gaps or overlaps, mirroring the reference implementation.
 //
-// Supported dtypes: F32, F64, F16, BF16 (integer types arrive with §C4). The
-// 16-bit floats are stored verbatim as their raw little-endian uint16 bits, so
-// they round-trip bit-exactly with no widening. Writing is deterministic: names
-// are emitted in sorted order with contiguous offsets.
+// Writing supports F32, F64, F16, BF16. The 16-bit floats are stored verbatim
+// as their raw little-endian uint16 bits, so they round-trip bit-exactly with
+// no widening. Writing is deterministic: names are emitted in sorted order
+// with contiguous offsets.
+//
+// Loading additionally accepts every remaining dtype of the official spec and
+// WIDENS it (§T577), because the tensor layer has no integer/FP8 storage:
+// F8_E4M3 and F8_E5M2 (DeepSeek-V3-class FP8 checkpoints) decode exactly to
+// F32 — see fp8.go; BOOL (0→0, nonzero→1), I8, U8, I16 and U16 widen exactly
+// to F32; I32 and U32 widen exactly to F64; I64 and U64 widen to F64, which is
+// exact up to 2^53 (beyond that the nearest representable is taken — token
+// ids, masks and index tensors are far below this).
 package safetensors
 
 import (
@@ -47,18 +55,33 @@ func dtypeName(d tensor.Dtype) (string, error) {
 	}
 }
 
-func dtypeOf(name string) (tensor.Dtype, error) {
+// fileDtype describes how one on-disk dtype loads: its per-element byte size
+// in the data section and the tensor dtype it widens into (§T577).
+type fileDtype struct {
+	size int
+	out  tensor.Dtype
+}
+
+func dtypeOf(name string) (fileDtype, error) {
 	switch name {
 	case "F32":
-		return tensor.F32, nil
+		return fileDtype{4, tensor.F32}, nil
 	case "F64":
-		return tensor.F64, nil
+		return fileDtype{8, tensor.F64}, nil
 	case "F16":
-		return tensor.F16, nil
+		return fileDtype{2, tensor.F16}, nil
 	case "BF16":
-		return tensor.BF16, nil
+		return fileDtype{2, tensor.BF16}, nil
+	case "F8_E4M3", "F8_E5M2", "BOOL", "I8", "U8":
+		return fileDtype{1, tensor.F32}, nil
+	case "I16", "U16":
+		return fileDtype{2, tensor.F32}, nil
+	case "I32", "U32":
+		return fileDtype{4, tensor.F64}, nil
+	case "I64", "U64":
+		return fileDtype{8, tensor.F64}, nil
 	default:
-		return tensor.Invalid, fmt.Errorf("safetensors: unsupported dtype %q (int types pending §C4)", name)
+		return fileDtype{}, fmt.Errorf("safetensors: unsupported dtype %q", name)
 	}
 }
 
@@ -219,7 +242,7 @@ func Load(r io.Reader) (map[string]*tensor.Tensor, map[string]string, error) {
 			}
 		}
 		begin, end := e.DataOffsets[0], e.DataOffsets[1]
-		want := shape.Numel() * dt.Size()
+		want := shape.Numel() * dt.size
 		if begin != cursor {
 			return nil, nil, fmt.Errorf("safetensors: tensor %q: offset %d leaves gap/overlap at %d", ne.name, begin, cursor)
 		}
@@ -229,22 +252,79 @@ func Load(r io.Reader) (map[string]*tensor.Tensor, map[string]string, error) {
 		if end > len(data) {
 			return nil, nil, fmt.Errorf("safetensors: tensor %q: offsets [%d,%d) beyond data %d", ne.name, begin, end, len(data))
 		}
-		t := tensor.New(dt, shape)
-		switch dt {
-		case tensor.F32:
+		t := tensor.New(dt.out, shape)
+		switch e.Dtype {
+		case "F32":
 			dst := t.Storage().F32()
 			for i := range dst {
 				dst[i] = math.Float32frombits(binary.LittleEndian.Uint32(data[begin+i*4:]))
 			}
-		case tensor.F64:
+		case "F64":
 			dst := t.Storage().F64()
 			for i := range dst {
 				dst[i] = math.Float64frombits(binary.LittleEndian.Uint64(data[begin+i*8:]))
 			}
-		case tensor.F16, tensor.BF16:
+		case "F16", "BF16":
 			dst := t.Storage().U16() // raw 16-bit bits, verbatim
 			for i := range dst {
 				dst[i] = binary.LittleEndian.Uint16(data[begin+i*2:])
+			}
+		case "F8_E4M3": // §T577: FP8 and integer dtypes widen on load
+			dst := t.Storage().F32()
+			for i := range dst {
+				dst[i] = f8e4m3ToF32(data[begin+i])
+			}
+		case "F8_E5M2":
+			dst := t.Storage().F32()
+			for i := range dst {
+				dst[i] = f8e5m2ToF32(data[begin+i])
+			}
+		case "BOOL":
+			dst := t.Storage().F32()
+			for i := range dst {
+				if data[begin+i] != 0 {
+					dst[i] = 1
+				}
+			}
+		case "I8":
+			dst := t.Storage().F32()
+			for i := range dst {
+				dst[i] = float32(int8(data[begin+i]))
+			}
+		case "U8":
+			dst := t.Storage().F32()
+			for i := range dst {
+				dst[i] = float32(data[begin+i])
+			}
+		case "I16":
+			dst := t.Storage().F32()
+			for i := range dst {
+				dst[i] = float32(int16(binary.LittleEndian.Uint16(data[begin+i*2:])))
+			}
+		case "U16":
+			dst := t.Storage().F32()
+			for i := range dst {
+				dst[i] = float32(binary.LittleEndian.Uint16(data[begin+i*2:]))
+			}
+		case "I32":
+			dst := t.Storage().F64()
+			for i := range dst {
+				dst[i] = float64(int32(binary.LittleEndian.Uint32(data[begin+i*4:])))
+			}
+		case "U32":
+			dst := t.Storage().F64()
+			for i := range dst {
+				dst[i] = float64(binary.LittleEndian.Uint32(data[begin+i*4:]))
+			}
+		case "I64":
+			dst := t.Storage().F64()
+			for i := range dst {
+				dst[i] = float64(int64(binary.LittleEndian.Uint64(data[begin+i*8:])))
+			}
+		case "U64":
+			dst := t.Storage().F64()
+			for i := range dst {
+				dst[i] = float64(binary.LittleEndian.Uint64(data[begin+i*8:]))
 			}
 		}
 		out[ne.name] = t

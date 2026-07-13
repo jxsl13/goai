@@ -123,7 +123,7 @@ func TestValidation(t *testing.T) {
 		"gap":            mk(`{"a":{"dtype":"F64","shape":[1],"data_offsets":[8,16]}}`, 16),
 		"size mismatch":  mk(`{"a":{"dtype":"F64","shape":[2],"data_offsets":[0,8]}}`, 8),
 		"beyond data":    mk(`{"a":{"dtype":"F64","shape":[2],"data_offsets":[0,16]}}`, 8),
-		"unknown dtype":  mk(`{"a":{"dtype":"I32","shape":[2],"data_offsets":[0,8]}}`, 8),
+		"unknown dtype":  mk(`{"a":{"dtype":"C64","shape":[2],"data_offsets":[0,8]}}`, 8),
 		"trailing bytes": mk(`{"a":{"dtype":"F64","shape":[1],"data_offsets":[0,8]}}`, 16),
 		"overlap":        mk(`{"a":{"dtype":"F64","shape":[1],"data_offsets":[0,8]},"b":{"dtype":"F64","shape":[1],"data_offsets":[4,12]}}`, 12),
 	}

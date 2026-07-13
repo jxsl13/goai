@@ -4,6 +4,12 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T577 — safetensors FP8 + integer dtypes (2026-07-13)
+- Loading now accepts every dtype of the official safetensors spec and widens it:
+  F8_E4M3/F8_E5M2 decode exactly to F32 (verified against torch over all 256 byte
+  encodings — DeepSeek-V3-class FP8 checkpoints now load), BOOL/I8/U8/I16/U16 widen to
+  F32, I32/U32/I64/U64 to F64. Writing keeps the F32/F64/F16/BF16 surface.
+
 ### T576 — Chat templates (2026-07-13)
 - nlp.ChatTemplate renders conversations into the exact prompt strings instruction-tuned
   models were trained on: native renderers for the chatml, llama3, gemma, mistral and
