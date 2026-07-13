@@ -1,0 +1,59 @@
+#version 450
+
+// Fused multi-head scaled-dot-product attention forward (§T89, the Vulkan twin of
+// the Metal kernel §T85). One invocation per (head, query row); a two-pass
+// numerically-stable softmax mirrors the reference. Buffers are flat row-major
+// std430 f32 arrays: Q[sq,dm], K[sk,dkv], V[sk,dkv], O[sq,dm], dkv = kvHeads*dk,
+// dk = dm/heads. Compiled to mha.spv by `make vulkan-spv` (glslc), embedded by
+// vulkan.go. dk is bounded at 128 (fixed private accumulator).
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer BufQ { float q[]; };
+layout(std430, binding = 1) readonly buffer BufK { float k[]; };
+layout(std430, binding = 2) readonly buffer BufV { float v[]; };
+layout(std430, binding = 3) writeonly buffer BufO { float o[]; };
+
+layout(push_constant) uniform PC {
+    int sq; int sk; int dm; int heads; int kvHeads; int dk; int causal; int window; float scale;
+} p;
+
+void main() {
+    uint gid = gl_GlobalInvocationID.x;
+    int total = p.heads * p.sq;
+    if (gid >= uint(total)) {
+        return; // dispatch rounds up to whole workgroups; mask the overhang
+    }
+    int h = int(gid) / p.sq;
+    int i = int(gid) % p.sq;
+    int rep = p.heads / p.kvHeads;
+    int dkv = p.kvHeads * p.dk;
+    int qOff = h * p.dk;
+    int kvOff = (h / rep) * p.dk;
+    int off = p.sk - p.sq;
+    int jmax = (p.causal != 0) ? (off + i + 1) : p.sk;
+    // sliding window (§T115, §R62): restrict each query to its `window` most recent keys
+    int jmin = (p.window > 0 && off + i - p.window + 1 > 0) ? (off + i - p.window + 1) : 0;
+
+    // pass 1: row max (scores are bounded, so -1e30 is a safe initial sentinel).
+    float m = -1e30;
+    for (int j = jmin; j < jmax; ++j) {
+        float s = 0.0;
+        for (int d = 0; d < p.dk; ++d) { s += q[i * p.dm + qOff + d] * k[j * dkv + kvOff + d]; }
+        s *= p.scale;
+        m = max(m, s);
+    }
+    // pass 2: sum + weighted accumulate.
+    float sum = 0.0;
+    float acc[128];
+    for (int d = 0; d < p.dk; ++d) { acc[d] = 0.0; }
+    for (int j = jmin; j < jmax; ++j) {
+        float s = 0.0;
+        for (int d = 0; d < p.dk; ++d) { s += q[i * p.dm + qOff + d] * k[j * dkv + kvOff + d]; }
+        s *= p.scale;
+        float e = exp(s - m);
+        sum += e;
+        for (int d = 0; d < p.dk; ++d) { acc[d] += e * v[j * dkv + kvOff + d]; }
+    }
+    for (int d = 0; d < p.dk; ++d) { o[i * p.dm + qOff + d] = acc[d] / sum; }
+}

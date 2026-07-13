@@ -1,0 +1,30 @@
+#version 450
+
+// colout scatter for the conv2d GEMM lowering (§T342, stage 3): the GEMM result
+// G[F, N·ho·wo] is rearranged into the NCHW output and the bias added:
+// O[((n·F+f)·ho+oy)·wo+ox] = G[f, (n·ho+oy)·wo + ox] + B[f].
+// One invocation per output element; every element is written.
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer BufG { float g[]; };
+layout(std430, binding = 1) readonly buffer BufB { float bias[]; };
+layout(std430, binding = 2) writeonly buffer BufO { float o[]; };
+
+layout(push_constant) uniform PC {
+    int N; int C; int H; int Wd; int F; int KH; int KW; int stride; int pad; int ho; int wo;
+} p;
+
+void main() {
+    uint gid = gl_GlobalInvocationID.x;
+    if (gid >= uint(p.N * p.F * p.ho * p.wo)) {
+        return;
+    }
+    int idx = int(gid);
+    int ox = idx % p.wo; idx /= p.wo;
+    int oy = idx % p.ho; idx /= p.ho;
+    int f = idx % p.F;
+    int n = idx / p.F;
+    int cols = p.N * p.ho * p.wo;
+    o[gid] = g[f * cols + (n * p.ho + oy) * p.wo + ox] + bias[f];
+}

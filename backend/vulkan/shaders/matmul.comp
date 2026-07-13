@@ -1,29 +1,63 @@
 #version 450
 
-// Row-major f32 GEMM: C[M,N] = A[M,K] · B[K,N] (§T43). One invocation computes
-// one output element C[row][col]. Buffers are flat row-major std430 float arrays.
-// Compiled to matmul.spv by `make vulkan-spv` (glslc) and embedded by vulkan.go.
+// Row-major f32 GEMM: C[M,N] = A[M,K] · B[K,N] (§T43, tiled §T94). Each 16×16
+// workgroup computes a 16×16 output tile: it cooperatively stages 16×16 sub-tiles
+// of A and B into shared memory and reuses them across the tile, cutting global
+// loads ~16× versus the naive one-load-per-multiply kernel. Buffers are flat
+// row-major std430 float arrays. Compiled to matmul.spv by `make vulkan-spv`
+// (glslc) and embedded by vulkan.go. Dispatch is unchanged: ceil(N/16)×ceil(M/16)
+// workgroups.
+//
+// NOTE (§B39): a register-blocked variant (64×64 tile, 4×4 per thread) was tried
+// and gave NO speedup on MoltenVK — the kernel is memory-bandwidth-bound here, not
+// compute-bound — so the simpler tiled kernel is kept.
 
-layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+#define TS 16
+
+layout(local_size_x = TS, local_size_y = TS, local_size_z = 1) in;
 
 layout(std430, binding = 0) readonly buffer BufA { float a[]; };
 layout(std430, binding = 1) readonly buffer BufB { float b[]; };
 layout(std430, binding = 2) writeonly buffer BufC { float c[]; };
 
-layout(push_constant) uniform Dims { int M; int K; int N; } d;
+// transA/transB (§T356): when set, A is STORED [K,M] and B is STORED [N,K] — the operand
+// is a transposed view (matmul backward's dO·Wᵀ / Xᵀ·dO), read transposed here instead of
+// materialized with a CPU strided-gather copy. Conv's im2col GEMM passes 0/0.
+layout(push_constant) uniform Dims { int M; int K; int N; int transA; int transB; } d;
+
+shared float As[TS][TS];
+shared float Bs[TS][TS];
 
 void main() {
-    uint col = gl_GlobalInvocationID.x; // 0 .. N-1
-    uint row = gl_GlobalInvocationID.y; // 0 .. M-1
-    if (row >= uint(d.M) || col >= uint(d.N)) {
-        return; // dispatch rounds up to whole workgroups; mask the overhang
-    }
+    uint tx = gl_LocalInvocationID.x; // column within the tile (0..TS-1)
+    uint ty = gl_LocalInvocationID.y; // row within the tile
+    uint col = gl_GlobalInvocationID.x; // global output column
+    uint row = gl_GlobalInvocationID.y; // global output row
+
     // Accumulate in a 32-bit float on-GPU. The Pure-Go reference accumulates in
     // f64, so §V11 allows a K-scaled tolerance (rtol(K)=1e-6·√K) for this backend.
     float sum = 0.0;
-    uint aRow = row * uint(d.K);
-    for (uint k = 0u; k < uint(d.K); ++k) {
-        sum += a[aRow + k] * b[k * uint(d.N) + col];
+    int tiles = (d.K + TS - 1) / TS;
+    for (int t = 0; t < tiles; ++t) {
+        uint aCol = uint(t) * TS + tx; // K-index for this A sub-tile column
+        uint bRow = uint(t) * TS + ty; // K-index for this B sub-tile row
+        // Edge tiles load 0 outside the matrix, so the masked overhang contributes
+        // nothing to the dot product (correct for K not a multiple of TS).
+        bool aIn = row < uint(d.M) && aCol < uint(d.K);
+        As[ty][tx] = aIn ? (d.transA != 0 ? a[aCol * uint(d.M) + row]   // stored [K,M]
+                                          : a[row * uint(d.K) + aCol])  // stored [M,K]
+                         : 0.0;
+        bool bIn = bRow < uint(d.K) && col < uint(d.N);
+        Bs[ty][tx] = bIn ? (d.transB != 0 ? b[col * uint(d.K) + bRow]   // stored [N,K]
+                                          : b[bRow * uint(d.N) + col])  // stored [K,N]
+                         : 0.0;
+        barrier(); // shared tiles fully written before use (workgroup barrier)
+        for (int i = 0; i < TS; ++i) {
+            sum += As[ty][i] * Bs[i][tx];
+        }
+        barrier(); // all reads done before the next tile overwrites shared memory
     }
-    c[row * uint(d.N) + col] = sum;
+    if (row < uint(d.M) && col < uint(d.N)) {
+        c[row * uint(d.N) + col] = sum;
+    }
 }

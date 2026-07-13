@@ -15,24 +15,28 @@ import (
 //	per block: x += CausalMHA(LN1(x));  x += FFN(LN2(x)) with GELU
 //	logits = LNf(x) · Head
 type GPT struct {
-	Config GPTConfig
+	Config GPTConfig      // the model hyperparameters
 	TokEmb *tensor.Tensor // [vocab, dim]
 	PosEmb *tensor.Tensor // [ctx, dim]
-	Blocks []*Block
-	LNf    *nn.LayerNorm
+	Blocks []*Block       // the stacked transformer blocks
+	LNf    *nn.LayerNorm  // final pre-logits LayerNorm
 	Head   *tensor.Tensor // [dim, vocab]
 }
 
 // GPTConfig fixes the model geometry.
 type GPTConfig struct {
-	Vocab, Ctx, Dim, Heads, Layers int
-	Eps                            float64
+	Vocab  int     // vocabulary size
+	Ctx    int     // max context length
+	Dim    int     // embedding width
+	Heads  int     // number of attention heads
+	Layers int     // number of transformer blocks
+	Eps    float64 // LayerNorm epsilon
 }
 
 // Block is one pre-LN transformer block.
 type Block struct {
-	LN1, LN2 *nn.LayerNorm
-	Attn     *MHA
+	LN1, LN2 *nn.LayerNorm  // LN1 pre-attention, LN2 pre-MLP LayerNorm
+	Attn     *MHA           // multi-head self-attention
 	W1, B1   *tensor.Tensor // FFN up: [dim, 4dim], [4dim]
 	W2, B2   *tensor.Tensor // FFN down: [4dim, dim], [dim]
 }
@@ -154,12 +158,71 @@ func (g *GPT) Params() []*tensor.Tensor {
 	return ps
 }
 
+// Safetensors returns the model's parameters under the FromSafetensors naming
+// convention — the exact inverse of FromSafetensors — so a trained model can be
+// checkpointed with safetensors.Save/SaveFile and reloaded bit-identically. The
+// map holds the model's LIVE tensors (no copy): serialize before mutating.
+func (g *GPT) Safetensors() map[string]*tensor.Tensor {
+	ts := map[string]*tensor.Tensor{
+		"tok_emb":   g.TokEmb,
+		"pos_emb":   g.PosEmb,
+		"lnf.gamma": g.LNf.Gamma,
+		"lnf.beta":  g.LNf.Beta,
+		"head":      g.Head,
+	}
+	for l, b := range g.Blocks {
+		p := fmt.Sprintf("blocks.%d.", l)
+		ts[p+"ln1.gamma"] = b.LN1.Gamma
+		ts[p+"ln1.beta"] = b.LN1.Beta
+		ts[p+"attn.wq"] = b.Attn.Wq
+		ts[p+"attn.wk"] = b.Attn.Wk
+		ts[p+"attn.wv"] = b.Attn.Wv
+		ts[p+"attn.wo"] = b.Attn.Wo
+		ts[p+"ln2.gamma"] = b.LN2.Gamma
+		ts[p+"ln2.beta"] = b.LN2.Beta
+		ts[p+"ffn.w1"] = b.W1
+		ts[p+"ffn.b1"] = b.B1
+		ts[p+"ffn.w2"] = b.W2
+		ts[p+"ffn.b2"] = b.B2
+	}
+	return ts
+}
+
 // Forward computes logits [seq, vocab] for the prompt tokens.
 func (g *GPT) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor, error) {
 	x, err := g.Embed(ctx, tokens)
 	if err != nil {
 		return nil, err
 	}
+	return g.ForwardFromEmbed(ctx, x)
+}
+
+// ForwardFromEmbed runs the transformer blocks and LM head on a precomputed embedding
+// x [seq, dim], returning logits [seq, vocab]. Splitting the embedding step out lets a
+// training loop inject NEFTune noise (nn.NEFTune) between the embedding and the blocks.
+func (g *GPT) ForwardFromEmbed(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, error) {
+	h, err := g.hiddenFromEmbed(ctx, x)
+	if err != nil {
+		return nil, err
+	}
+	return exec1(ctx, backend.OpMatMul, nil, h, g.Head)
+}
+
+// ForwardHidden returns the final hidden states [seq, dim] — the residual stream after
+// all blocks and the final LayerNorm, i.e. Forward WITHOUT the LM head (§T443). This is
+// the representation auxiliary decoding heads attach to (Medusa, early-exit probes):
+// Forward(tokens) ≡ ForwardHidden(tokens)·Head.
+func (g *GPT) ForwardHidden(ctx *backend.Context, tokens []int) (*tensor.Tensor, error) {
+	x, err := g.Embed(ctx, tokens)
+	if err != nil {
+		return nil, err
+	}
+	return g.hiddenFromEmbed(ctx, x)
+}
+
+// hiddenFromEmbed is the shared block stack + final LayerNorm.
+func (g *GPT) hiddenFromEmbed(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, error) {
+	var err error
 	for _, b := range g.Blocks {
 		// attention sublayer: x += Attn(LN1(x))
 		h, err := b.LN1.Forward(ctx, x)
@@ -198,5 +261,5 @@ func (g *GPT) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor, error
 	if x, err = g.LNf.Forward(ctx, x); err != nil {
 		return nil, err
 	}
-	return exec1(ctx, backend.OpMatMul, nil, x, g.Head)
+	return x, nil
 }

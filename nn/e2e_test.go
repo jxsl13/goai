@@ -41,7 +41,7 @@ func blobs(nPerClass int, seed uint64) (x *tensor.Tensor, y *tensor.Tensor) {
 func accuracy(t *testing.T, logits, labels *tensor.Tensor) float64 {
 	t.Helper()
 	pred, err := backend.Execute(backend.NewContext(), backend.OpArgMax,
-		[]*tensor.Tensor{logits}, backend.Attrs{"axis": 1})
+		[]*tensor.Tensor{logits}, backend.ArgMaxAttrs{Axis: 1})
 	if err != nil {
 		t.Fatal(err)
 	}

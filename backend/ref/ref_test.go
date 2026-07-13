@@ -13,7 +13,7 @@ func idKernel(_ *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*tens
 
 // The reference backend self-registers as the truth/fallback backend (§V9, §I4).
 func TestSelfRegistered(t *testing.T) {
-	if backend.Reference() == nil || backend.Reference().Name() != "ref" {
+	if backend.Reference() == nil || backend.Reference().Name() != backend.Ref {
 		t.Fatalf("ref must register as the reference backend, got %v", backend.Reference())
 	}
 	if std.Device().Kind() != tensor.KindCPU {

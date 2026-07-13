@@ -1,7 +1,6 @@
 package autograd
 
 import (
-
 	"github.com/jxsl13/goai/backend"
 	"github.com/jxsl13/goai/tensor"
 )
@@ -13,83 +12,87 @@ import (
 //	maxpool: g routes to the FIRST window element attaining the max (§B16 rule)
 //	avgpool: g/k² spreads uniformly over the window
 
-func init() {
-	RegisterVJP(backend.OpConv2D, func(_ *backend.Context, in, _ []*tensor.Tensor, attrs backend.Attrs, g *tensor.Tensor) ([]*tensor.Tensor, error) {
-		x, w := in[0], in[1]
-		n, c, h, wd := x.Shape()[0], x.Shape()[1], x.Shape()[2], x.Shape()[3]
-		f, kh, kw := w.Shape()[0], w.Shape()[2], w.Shape()[3]
-		s := attrs.Int("stride", 1)
-		p := attrs.Int("pad", 0)
-		ho, wo := g.Shape()[2], g.Shape()[3]
+// poolAccessors returns flat-index readers for x, y, g and an accumulating writer
+// for gx on raw contiguous storage (§T463). The writer replicates the accessor
+// path's exact numerics — f32 accumulates with a narrow after every add
+// (float32(float64(old)+gv)), f64 adds directly; reads widen to f64 like AtF64.
+// Non-f32/f64 dtypes fall back to the (slow) tensor accessors.
+func poolAccessors(x, y, g, gx *tensor.Tensor) (getX, getY, getG func(int) float64, addGX func(int, float64)) {
+	reader := func(t *tensor.Tensor) func(int) float64 {
+		tc := t.Contiguous()
+		switch t.Dtype() {
+		case tensor.F64:
+			s := tc.Storage().F64()
+			return func(i int) float64 { return s[i] }
+		case tensor.F32:
+			s := tc.Storage().F32()
+			return func(i int) float64 { return float64(s[i]) }
+		default:
+			return func(i int) float64 { return tc.AtF64(tensor.Unravel(i, tc.Shape())...) }
+		}
+	}
+	switch gx.Dtype() {
+	case tensor.F64:
+		s := gx.Storage().F64()
+		addGX = func(i int, v float64) { s[i] += v }
+	case tensor.F32:
+		s := gx.Storage().F32()
+		addGX = func(i int, v float64) { s[i] = float32(float64(s[i]) + v) }
+	default:
+		addGX = func(i int, v float64) {
+			idx := tensor.Unravel(i, gx.Shape())
+			gx.SetF64(gx.AtF64(idx...)+v, idx...)
+		}
+	}
+	return reader(x), reader(y), reader(g), addGX
+}
 
-		gx := tensor.New(x.Dtype(), x.Shape())
-		gw := tensor.New(w.Dtype(), w.Shape())
-		var gb *tensor.Tensor
+func init() {
+	// conv2d backward is the fused OpConv2DBackward, dispatched on the tape's active
+	// backend (GPU when available, §T101) — the kernel returns (dX,dW,dBias); drop
+	// dBias when the forward had no bias input.
+	RegisterVJP(backend.OpConv2D, func(ctx *backend.Context, in, _ []*tensor.Tensor, attrs backend.Attrs, g *tensor.Tensor) ([]*tensor.Tensor, error) {
+		grads, err := backend.Execute(ctx, backend.OpConv2DBackward, []*tensor.Tensor{in[0], in[1], g}, attrs)
+		if err != nil {
+			return nil, err
+		}
 		if len(in) == 3 {
-			gb = tensor.New(in[2].Dtype(), in[2].Shape())
+			return grads, nil // dX, dW, dBias
 		}
-		for ni := range n {
-			for fi := range f {
-				var bsum float64
-				for oy := range ho {
-					for ox := range wo {
-						gv := g.AtF64(ni, fi, oy, ox)
-						bsum += gv
-						for ci := range c {
-							for ky := range kh {
-								iy := oy*s + ky - p
-								if iy < 0 || iy >= h {
-									continue
-								}
-								for kx := range kw {
-									ix := ox*s + kx - p
-									if ix < 0 || ix >= wd {
-										continue
-									}
-									gx.SetF64(gx.AtF64(ni, ci, iy, ix)+gv*w.AtF64(fi, ci, ky, kx), ni, ci, iy, ix)
-									gw.SetF64(gw.AtF64(fi, ci, ky, kx)+gv*x.AtF64(ni, ci, iy, ix), fi, ci, ky, kx)
-								}
-							}
-						}
-					}
-				}
-				if gb != nil {
-					gb.SetF64(gb.AtF64(fi)+bsum, fi)
-				}
-			}
-		}
-		grads := []*tensor.Tensor{gx, gw}
-		if len(in) == 3 {
-			grads = append(grads, gb)
-		}
-		return grads, nil
+		return grads[:2], nil // dX, dW
 	})
 
 	RegisterVJP(backend.OpMaxPool2D, func(_ *backend.Context, in, out []*tensor.Tensor, attrs backend.Attrs, g *tensor.Tensor) ([]*tensor.Tensor, error) {
 		x, y := in[0], out[0]
-		n, c := x.Shape()[0], x.Shape()[1]
-		k := attrs.Int("kernel", 0)
-		s := attrs.Int("stride", k)
+		n, c, h, w := x.Shape()[0], x.Shape()[1], x.Shape()[2], x.Shape()[3]
+		pX, _ := attrs.(backend.PoolAttrs)
+		pX = pX.WithDefaults()
+		k := pX.Kernel
+		s := pX.Stride
 		ho, wo := y.Shape()[2], y.Shape()[3]
 		gx := tensor.New(x.Dtype(), x.Shape())
-		for ni := range n {
-			for ci := range c {
-				for oy := range ho {
-					for ox := range wo {
-						m := y.AtF64(ni, ci, oy, ox)
-						routed := false
-						for ky := 0; ky < k && !routed; ky++ {
-							for kx := 0; kx < k && !routed; kx++ {
-								iy, ix := oy*s+ky, ox*s+kx
-								if x.AtF64(ni, ci, iy, ix) == m {
-									gx.SetF64(gx.AtF64(ni, ci, iy, ix)+g.AtF64(ni, ci, oy, ox), ni, ci, iy, ix)
-									routed = true
-								}
+		// raw-storage fast path (§T463: the accessor loops were ~half a CNN training
+		// step); identical routing — g goes to the FIRST window element attaining the
+		// max (§B16), NaN windows route to the first element.
+		getX, getY, getG, addGX := poolAccessors(x, y, g, gx)
+		for pl := range n * c {
+			xB, yB := pl*h*w, pl*ho*wo
+			for oy := range ho {
+				for ox := range wo {
+					m := getY(yB + oy*wo + ox)
+					gv := getG(yB + oy*wo + ox)
+					routed := false
+					for ky := 0; ky < k && !routed; ky++ {
+						row := xB + (oy*s+ky)*w + ox*s
+						for kx := 0; kx < k && !routed; kx++ {
+							if getX(row+kx) == m {
+								addGX(row+kx, gv)
+								routed = true
 							}
 						}
-						if !routed { // NaN window: max is NaN, == fails; route to first
-							gx.SetF64(gx.AtF64(ni, ci, oy*s, ox*s)+g.AtF64(ni, ci, oy, ox), ni, ci, oy*s, ox*s)
-						}
+					}
+					if !routed { // NaN window: max is NaN, == fails; route to first
+						addGX(xB+oy*s*w+ox*s, gv)
 					}
 				}
 			}
@@ -99,22 +102,24 @@ func init() {
 
 	RegisterVJP(backend.OpAvgPool2D, func(_ *backend.Context, in, out []*tensor.Tensor, attrs backend.Attrs, g *tensor.Tensor) ([]*tensor.Tensor, error) {
 		x, y := in[0], out[0]
-		n, c := x.Shape()[0], x.Shape()[1]
-		k := attrs.Int("kernel", 0)
-		s := attrs.Int("stride", k)
+		n, c, h, w := x.Shape()[0], x.Shape()[1], x.Shape()[2], x.Shape()[3]
+		pX, _ := attrs.(backend.PoolAttrs)
+		pX = pX.WithDefaults()
+		k := pX.Kernel
+		s := pX.Stride
 		ho, wo := y.Shape()[2], y.Shape()[3]
 		inv := 1 / float64(k*k)
 		gx := tensor.New(x.Dtype(), x.Shape())
-		for ni := range n {
-			for ci := range c {
-				for oy := range ho {
-					for ox := range wo {
-						gv := g.AtF64(ni, ci, oy, ox) * inv
-						for ky := range k {
-							for kx := range k {
-								iy, ix := oy*s+ky, ox*s+kx
-								gx.SetF64(gx.AtF64(ni, ci, iy, ix)+gv, ni, ci, iy, ix)
-							}
+		_, _, getG, addGX := poolAccessors(x, y, g, gx)
+		for pl := range n * c {
+			xB, yB := pl*h*w, pl*ho*wo
+			for oy := range ho {
+				for ox := range wo {
+					gv := getG(yB+oy*wo+ox) * inv
+					for ky := range k {
+						row := xB + (oy*s+ky)*w + ox*s
+						for kx := range k {
+							addGX(row+kx, gv)
 						}
 					}
 				}

@@ -41,7 +41,7 @@ func (heapAllocator) Alloc(dtype Dtype, n int) any {
 	}
 }
 
-func (heapAllocator) Free(any)      {}
+func (heapAllocator) Free(any)       {}
 func (heapAllocator) Alignment() int { return 0 } // natural
 
 // --- Pool: sync.Pool per (dtype, power-of-two size class) ---
@@ -72,6 +72,7 @@ func NewPool(opts ...PoolOption) *Pool {
 	return p
 }
 
+// Alignment returns the pool's byte alignment for allocations.
 func (p *Pool) Alignment() int { return p.align }
 
 // sizeClass returns the exponent c such that 1<<c is the smallest power of two
@@ -90,6 +91,8 @@ func (p *Pool) poolFor(dtype Dtype, class int) *sync.Pool {
 	return sp
 }
 
+// Alloc returns a pooled backing slice for n elements of the given dtype (rounded
+// up to a power-of-two size class).
 func (p *Pool) Alloc(dtype Dtype, n int) any {
 	if n < 0 {
 		panic("tensor: negative alloc length")

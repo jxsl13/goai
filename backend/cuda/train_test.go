@@ -78,8 +78,8 @@ func TestCUDAGPUTraining(t *testing.T) {
 	if !cuda.Available() {
 		t.Skip("cuda: no CUDA GPU — skipping (§V4)")
 	}
-	cudaB, _ := backend.Get("cuda")
-	cpuB, _ := backend.Get("cpu")
+	cudaB, _ := backend.Get(backend.CUDA)
+	cpuB, _ := backend.Get(backend.CPU)
 
 	x, y := blobsF32(40, 1)
 
@@ -101,7 +101,7 @@ func TestCUDAServesMatmul(t *testing.T) {
 	if !cuda.Available() {
 		t.Skip("cuda: no CUDA GPU — skipping (§V4)")
 	}
-	cb, _ := backend.Get("cuda")
+	cb, _ := backend.Get(backend.CUDA)
 	if _, ok := cb.Kernel(backend.OpMatMul, tensor.F32); !ok {
 		t.Fatal("cuda must serve f32 matmul for GPU training")
 	}

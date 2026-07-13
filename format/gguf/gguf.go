@@ -1,9 +1,12 @@
-// Package gguf reads the GGUF model format (ggml/llama.cpp, §T22, §R7):
-// header (magic "GGUF", version 3), metadata KVs, tensor infos, aligned data
+// Package gguf reads and writes the GGUF model format (ggml/llama.cpp, §T22, §T107,
+// §R7): header (magic "GGUF", version 3), metadata KVs, tensor infos, aligned data
 // section. Quantized tensors are dequantized to F32 on load: Q8_0 (f16 scale +
 // 32×int8 per block) and Q4_0 (f16 scale + 32 4-bit values, offset −8), plus
 // F16→F32 and raw F32/F64. GGUF stores dims innermost-first; shapes are
-// reversed into our row-major convention on read.
+// reversed into our row-major convention on read. Write serializes a File back
+// (tensors as F32), so Read→Write→Read round-trips exactly (§V15). Quantize/Dequantize
+// (§T122) also encode f32↔Q8_0/Q4_0 directly, so quantized weights can be produced,
+// not just read.
 package gguf
 
 import (
@@ -41,13 +44,18 @@ const (
 	tF16  = 1
 	tQ4_0 = 2
 	tQ8_0 = 8
+	tQ2_K = 10 // k-quant super-block, asymmetric affine 2-bit (§R104)
+	tQ3_K = 11 // k-quant super-block, symmetric 3-bit + high-bit plane (§R103)
+	tQ4_K = 12 // k-quant super-block, asymmetric affine (§R100)
+	tQ5_K = 13 // k-quant super-block, asymmetric affine + high-bit plane (§R102)
+	tQ6_K = 14 // k-quant super-block (§R99)
 )
 
 // File is a parsed GGUF file: metadata and dequantized tensors.
 type File struct {
-	Version  uint32
-	Metadata map[string]any
-	Tensors  map[string]*tensor.Tensor
+	Version  uint32                    // GGUF format version
+	Metadata map[string]any            // key→value header metadata
+	Tensors  map[string]*tensor.Tensor // tensor name→info map
 }
 
 type tensorInfo struct {
@@ -175,8 +183,18 @@ func (rd *reader) valueDepth(vt uint32, depth int) (any, error) {
 	}
 }
 
-// Read parses a GGUF stream.
-func Read(r io.Reader) (*File, error) {
+// parsed is the raw result of reading a GGUF header — metadata + tensor infos + the (still
+// encoded) data section — shared by Read (which dequantizes each tensor) and ReadRaw (which
+// keeps each tensor in its quantized byte form).
+type parsed struct {
+	version uint32
+	meta    map[string]any
+	infos   []tensorInfo
+	data    []byte
+}
+
+// parse reads the GGUF header, metadata KVs, tensor infos and the aligned data section.
+func parse(r io.Reader) (*parsed, error) {
 	rd := &reader{r: r}
 	m, err := rd.u32()
 	if err != nil {
@@ -283,13 +301,70 @@ func Read(r io.Reader) (*File, error) {
 		return nil, fmt.Errorf("gguf: read data: %w", err)
 	}
 
-	out := &File{Version: version, Metadata: meta, Tensors: make(map[string]*tensor.Tensor, nTensors)}
-	for _, ti := range infos {
-		t, err := decodeTensor(ti, data)
+	return &parsed{version: version, meta: meta, infos: infos, data: data}, nil
+}
+
+// Read parses a GGUF stream, dequantizing every tensor to an F32 tensor (File.Tensors).
+func Read(r io.Reader) (*File, error) {
+	p, err := parse(r)
+	if err != nil {
+		return nil, err
+	}
+	out := &File{Version: p.version, Metadata: p.meta, Tensors: make(map[string]*tensor.Tensor, len(p.infos))}
+	for _, ti := range p.infos {
+		t, err := decodeTensor(ti, p.data)
 		if err != nil {
 			return nil, err
 		}
 		out.Tensors[ti.name] = t
+	}
+	return out, nil
+}
+
+// QuantTensor is a tensor kept in its ggml block-quantized (or F32/F16) byte form as read from a
+// GGUF file — the memory-efficient representation for running a model quantized, instead of a
+// dequantized float tensor (§T150). Dequantize expands it on demand.
+type QuantTensor struct {
+	Data   []byte       // raw bytes in the ggml block layout for GGType
+	GGType uint32       // ggml tensor type code (0=F32, 1=F16, 8=Q8_0, 12=Q4_K, …)
+	Shape  tensor.Shape // logical shape (row-major)
+}
+
+// Dequantize decodes the tensor to an F32 tensor — the same result Read produces for it.
+func (q QuantTensor) Dequantize() (*tensor.Tensor, error) {
+	return decodeTensor(tensorInfo{shape: q.Shape, ggType: q.GGType, offset: 0}, q.Data)
+}
+
+// RawFile is a GGUF parsed with each tensor kept in its quantized byte form (QuantTensor) rather
+// than dequantized — for building models that run quantized (§T150). Metadata is read as in Read.
+type RawFile struct {
+	Version  uint32                 // GGUF version
+	Metadata map[string]any         // metadata KVs (same as Read)
+	Tensors  map[string]QuantTensor // name → still-quantized tensor
+}
+
+// ReadRaw parses a GGUF stream KEEPING each tensor quantized (QuantTensor) — the inverse of the
+// eager dequantization Read does, so a quantized model can be loaded without ever materializing
+// full-precision weights.
+func ReadRaw(r io.Reader) (*RawFile, error) {
+	p, err := parse(r)
+	if err != nil {
+		return nil, err
+	}
+	out := &RawFile{Version: p.version, Metadata: p.meta, Tensors: make(map[string]QuantTensor, len(p.infos))}
+	for _, ti := range p.infos {
+		need, err := byteSize(ti.ggType, ti.shape.Numel())
+		if err != nil {
+			return nil, fmt.Errorf("gguf: tensor %q: %w", ti.name, err)
+		}
+		// subtraction form: offset+need would overflow uint64 for hostile offsets (§B47)
+		if ti.offset > uint64(len(p.data)) || uint64(need) > uint64(len(p.data))-ti.offset {
+			return nil, fmt.Errorf("gguf: tensor %q data [%d,+%d) beyond section %d",
+				ti.name, ti.offset, need, len(p.data))
+		}
+		raw := make([]byte, need)
+		copy(raw, p.data[ti.offset:ti.offset+uint64(need)])
+		out.Tensors[ti.name] = QuantTensor{Data: raw, GGType: ti.ggType, Shape: ti.shape}
 	}
 	return out, nil
 }
@@ -311,9 +386,10 @@ func decodeTensor(ti tensorInfo, data []byte) (*tensor.Tensor, error) {
 	if err != nil {
 		return nil, fmt.Errorf("gguf: tensor %q: %w", ti.name, err)
 	}
-	if ti.offset+uint64(need) > uint64(len(data)) {
-		return nil, fmt.Errorf("gguf: tensor %q data [%d,%d) beyond section %d",
-			ti.name, ti.offset, ti.offset+uint64(need), len(data))
+	// subtraction form: offset+need would overflow uint64 for hostile offsets (§B47)
+	if ti.offset > uint64(len(data)) || uint64(need) > uint64(len(data))-ti.offset {
+		return nil, fmt.Errorf("gguf: tensor %q data [%d,+%d) beyond section %d",
+			ti.name, ti.offset, need, len(data))
 	}
 	raw := data[ti.offset : ti.offset+uint64(need)]
 
@@ -336,6 +412,16 @@ func decodeTensor(ti tensorInfo, data []byte) (*tensor.Tensor, error) {
 		return dequantQ8_0(ti.shape, raw)
 	case tQ4_0:
 		return dequantQ4_0(ti.shape, raw)
+	case tQ2_K:
+		return dequantQ2_K(ti.shape, raw)
+	case tQ3_K:
+		return dequantQ3_K(ti.shape, raw)
+	case tQ4_K:
+		return dequantQ4_K(ti.shape, raw)
+	case tQ5_K:
+		return dequantQ5_K(ti.shape, raw)
+	case tQ6_K:
+		return dequantQ6_K(ti.shape, raw)
 	default:
 		return nil, fmt.Errorf("gguf: tensor %q: unsupported ggml type %d", ti.name, ti.ggType)
 	}
@@ -359,6 +445,81 @@ func byteSize(ggType uint32, n int) (int, error) {
 			return 0, fmt.Errorf("Q4_0 numel %d not multiple of %d", n, blockElems)
 		}
 		return n / blockElems * 18, nil // f16 scale + 16 nibble-bytes
+	case tQ2_K:
+		if n%qkK != 0 {
+			return 0, fmt.Errorf("Q2_K numel %d not multiple of %d", n, qkK)
+		}
+		return n / qkK * q2kBlockSize, nil // 256-element super-block
+	case tIQ2_XXS:
+		if n%qkK != 0 {
+			return 0, fmt.Errorf("IQ2_XXS numel %d not multiple of %d", n, qkK)
+		}
+		return n / qkK * iq2xxsBlockSize, nil // §T554 i-quant super-block
+	case tIQ2_XS:
+		if n%qkK != 0 {
+			return 0, fmt.Errorf("IQ2_XS numel %d not multiple of %d", n, qkK)
+		}
+		return n / qkK * iq2xsBlockSize, nil // §T554 i-quant super-block
+	case tIQ3_XXS:
+		if n%qkK != 0 {
+			return 0, fmt.Errorf("IQ3_XXS numel %d not multiple of %d", n, qkK)
+		}
+		return n / qkK * iq3xxsBlockSize, nil // §T554 i-quant super-block
+	case tIQ4_NL:
+		if n%blockElems != 0 {
+			return 0, fmt.Errorf("IQ4_NL numel %d not multiple of %d", n, blockElems)
+		}
+		return n / blockElems * iq4nlBlockSize, nil // §T554 i-quant block
+	case tIQ4_XS:
+		if n%qkK != 0 {
+			return 0, fmt.Errorf("IQ4_XS numel %d not multiple of %d", n, qkK)
+		}
+		return n / qkK * iq4xsBlockSize, nil // §T554 i-quant super-block
+	case tIQ3_S:
+		if n%qkK != 0 {
+			return 0, fmt.Errorf("IQ3_S numel %d not multiple of %d", n, qkK)
+		}
+		return n / qkK * iq3sBlockSize, nil // §T554 i-quant super-block
+	case tIQ2_S:
+		if n%qkK != 0 {
+			return 0, fmt.Errorf("IQ2_S numel %d not multiple of %d", n, qkK)
+		}
+		return n / qkK * iq2sBlockSize, nil // §T554 i-quant super-block
+	case tIQ1_S:
+		if n%qkK != 0 {
+			return 0, fmt.Errorf("IQ1_S numel %d not multiple of %d", n, qkK)
+		}
+		return n / qkK * iq1sBlockSize, nil // §T554 i-quant super-block
+	case tIQ1_M:
+		if n%qkK != 0 {
+			return 0, fmt.Errorf("IQ1_M numel %d not multiple of %d", n, qkK)
+		}
+		return n / qkK * iq1mBlockSize, nil // §T554 i-quant super-block
+	case tMXFP4:
+		if n%blockElems != 0 {
+			return 0, fmt.Errorf("MXFP4 numel %d not multiple of %d", n, blockElems)
+		}
+		return n / blockElems * mxfp4BlockSize, nil // §T555 microscaling block
+	case tQ3_K:
+		if n%qkK != 0 {
+			return 0, fmt.Errorf("Q3_K numel %d not multiple of %d", n, qkK)
+		}
+		return n / qkK * q3kBlockSize, nil // 256-element super-block
+	case tQ4_K:
+		if n%qkK != 0 {
+			return 0, fmt.Errorf("Q4_K numel %d not multiple of %d", n, qkK)
+		}
+		return n / qkK * q4kBlockSize, nil // 256-element super-block
+	case tQ5_K:
+		if n%qkK != 0 {
+			return 0, fmt.Errorf("Q5_K numel %d not multiple of %d", n, qkK)
+		}
+		return n / qkK * q5kBlockSize, nil // 256-element super-block
+	case tQ6_K:
+		if n%qkK != 0 {
+			return 0, fmt.Errorf("Q6_K numel %d not multiple of %d", n, qkK)
+		}
+		return n / qkK * q6kBlockSize, nil // 256-element super-block
 	default:
 		return 0, fmt.Errorf("unsupported ggml type %d", ggType)
 	}

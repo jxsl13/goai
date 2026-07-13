@@ -25,15 +25,19 @@ type Env interface {
 // moves left/right. Reaching the right end pays 1.0, the left end 0.1; the
 // optimal policy is "always right". One-hot observations.
 type Chain struct {
-	N, MaxSteps int
-	pos, steps  int
+	N          int // number of states in the chain env
+	MaxSteps   int // episode step cap
+	pos, steps int
 }
 
 // NewChain builds a chain with n states (n ≥ 3).
 func NewChain(n, maxSteps int) *Chain { return &Chain{N: n, MaxSteps: maxSteps} }
 
+// NumActions returns the number of actions (2: left, right).
 func (c *Chain) NumActions() int { return 2 }
-func (c *Chain) ObsDim() int     { return c.N }
+
+// ObsDim returns the observation dimension (one-hot over the N states).
+func (c *Chain) ObsDim() int { return c.N }
 
 func (c *Chain) obs() []float64 {
 	o := make([]float64, c.N)
@@ -41,6 +45,7 @@ func (c *Chain) obs() []float64 {
 	return o
 }
 
+// Reset places the agent in the middle state and returns the initial observation.
 func (c *Chain) Reset() []float64 {
 	c.pos = c.N / 2
 	c.steps = 0
@@ -76,6 +81,50 @@ func DiscountedReturns(rewards []float64, gamma float64) []float64 {
 		g[t] = acc
 	}
 	return g
+}
+
+// GAE computes Generalized Advantage Estimation advantages and value-function
+// targets (Schulman et al. 2016, arXiv:1506.02438) — the advantages the PPO
+// clipped loss (nn.PPOClipLoss) consumes. For a trajectory of length T:
+//
+//	δ_t = r_t + γ·V(s_{t+1})·nonterminal_t − V(s_t)
+//	Â_t = δ_t + γ·λ·nonterminal_t·Â_{t+1}      (backward recursion, Â reset at episode ends)
+//	returns_t = Â_t + V(s_t)
+//
+// which equals the exponentially-weighted sum Â_t = Σ_{l≥0} (γλ)^l δ_{t+l} within
+// an episode. λ=0 gives the one-step TD advantage δ_t; λ=1 gives the Monte-Carlo
+// advantage (discounted return − V). Convention (matches CleanRL/SB3): rewards,
+// values and dones are aligned per step; dones[t] reports whether the episode
+// terminated AFTER step t. nextValue is the bootstrap V(s_T) for the state after
+// the last step and nextDone whether that state is terminal. γ default ~0.99,
+// λ ~0.95. Panics on length mismatch (a programmer error).
+func GAE(rewards, values []float64, dones []bool, nextValue float64, nextDone bool, gamma, lambda float64) (advantages, returns []float64) {
+	t := len(rewards)
+	if len(values) != t || len(dones) != t {
+		panic("rl: GAE rewards/values/dones length mismatch")
+	}
+	advantages = make([]float64, t)
+	returns = make([]float64, t)
+	var lastGAE float64
+	for i := t - 1; i >= 0; i-- {
+		var nextNonTerminal, nextV float64
+		if i == t-1 {
+			if !nextDone {
+				nextNonTerminal = 1
+			}
+			nextV = nextValue
+		} else {
+			if !dones[i] { // dones[i]: episode ended after step i → s_{i+1} fresh
+				nextNonTerminal = 1
+			}
+			nextV = values[i+1]
+		}
+		delta := rewards[i] + gamma*nextV*nextNonTerminal - values[i]
+		lastGAE = delta + gamma*lambda*nextNonTerminal*lastGAE
+		advantages[i] = lastGAE
+		returns[i] = lastGAE + values[i]
+	}
+	return advantages, returns
 }
 
 // policyNet is a small MLP obs→hidden→actions shared by both agents.
@@ -118,8 +167,8 @@ func sampleAction(probs *tensor.Tensor, row int, k int, rng *rand.Rand) int {
 // differentiable ops as Sum(W ⊙ log softmax(logits)) with the constant weight
 // matrix W[t, aₜ] = −(Gₜ−b)/T.
 type Reinforce struct {
-	Net   *nn.Sequential
-	Gamma float64
+	Net   *nn.Sequential // policy network
+	Gamma float64        // discount factor γ
 	rng   *rand.Rand
 	opt   nn.Optimizer
 
@@ -232,12 +281,12 @@ type transition struct {
 // replaced-entry MSE trick (targets equal predictions except at the taken
 // action, so non-taken entries contribute zero gradient).
 type DQN struct {
-	Net, Target *nn.Sequential
-	Gamma       float64
-	Eps, EpsMin float64
-	EpsDecay    float64
-	SyncEvery   int
-	BatchSize   int
+	Net, Target *nn.Sequential // Net = online Q-network; Target = periodically-synced copy
+	Gamma       float64        // discount factor γ
+	Eps, EpsMin float64        // Eps = current ε-greedy rate; EpsMin = ε floor
+	EpsDecay    float64        // per-step multiplicative ε decay
+	SyncEvery   int            // steps between target-net syncs
+	BatchSize   int            // replay minibatch size
 
 	buf   []transition
 	steps int
@@ -409,4 +458,3 @@ func (d *DQN) QValues(obs []float64, k int) ([]float64, error) {
 	}
 	return out, nil
 }
-

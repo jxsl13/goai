@@ -34,8 +34,10 @@ func conv2dKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs
 			return nil, fmt.Errorf("cpu: conv2d bias must be [%d], got %v", f, bias.Shape())
 		}
 	}
-	s := attrs.Int("stride", 1)
-	p := attrs.Int("pad", 0)
+	pa, _ := attrs.(backend.ConvAttrs)
+	pa = pa.WithDefaults()
+	s := pa.Stride
+	p := pa.Pad
 	if s < 1 || p < 0 {
 		return nil, fmt.Errorf("cpu: conv2d invalid stride %d / pad %d", s, p)
 	}
@@ -50,7 +52,9 @@ func conv2dKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs
 	rows := n * ho * wo
 
 	// im2col: cols[r, (c,ky,kx)] with zero padding materialized
-	cols := make([]float64, rows*k)
+	colsP := getF64(rows * k)
+	defer putF64(colsP)
+	cols := *colsP
 	fillCols := func(get func(flat int) float64) {
 		parallelWork(rows, k, func(lo, hi int) {
 			for r := lo; r < hi; r++ {
@@ -75,7 +79,9 @@ func conv2dKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs
 		})
 	}
 	// wt[(c,ky,kx), f]: transposed weights matching the column order
-	wt := make([]float64, k*f)
+	wtP := getF64(k * f)
+	defer putF64(wtP)
+	wt := *wtP
 	fillWt := func(get func(flat int) float64) {
 		for fi := range f {
 			for kk := range k {
@@ -98,7 +104,9 @@ func conv2dKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs
 	}
 
 	// GEMM: cols[rows,k] · wt[k,f] — blocked band kernel, k-order preserved
-	prod := make([]float64, rows*f)
+	prodP := getF64(rows * f)
+	defer putF64(prodP)
+	prod := *prodP
 	parallelWork(rows, k*f, func(lo, hi int) {
 		gemmF64Band(cols, wt, prod, lo, hi, k, f)
 	})

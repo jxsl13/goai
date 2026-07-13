@@ -24,7 +24,7 @@ type Kernel func(ctx *Context, inputs []*tensor.Tensor, attrs Attrs) ([]*tensor.
 // a rule fixed here so adding a GPU backend never breaks the API (§V8, closes
 // B7).
 type Backend interface {
-	Name() string
+	Name() Name
 	Device() tensor.Device
 	// Kernel returns the kernel for op at dtype, or ok=false if unsupported.
 	Kernel(op Op, dtype tensor.Dtype) (k Kernel, ok bool)
@@ -44,8 +44,8 @@ type Recorder interface {
 // Context threads the active backend and the optional autograd Recorder through
 // a computation. Kernels allocate outputs on the context device.
 type Context struct {
-	Backend  Backend
-	Recorder Recorder
+	Backend  Backend  // the backend that executes ops in this context
+	Recorder Recorder // optional autograd tape recording ops for backprop; nil = no taping
 }
 
 // NewContext returns an eager context bound to the default backend, with no

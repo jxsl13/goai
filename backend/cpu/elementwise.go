@@ -15,6 +15,24 @@ import (
 // contiguous first (still far cheaper than the reference's per-element Unravel).
 // Results are bit-identical to backend/ref (§V3, §V11 tol 0) — same f64 math.
 
+// broadcastContig materializes t broadcast to outShape as a fresh contiguous
+// tensor (numpy rules); returns t unchanged if it already has outShape. Used only
+// on the broadcasting path — the same-shape SIMD path never calls it.
+func broadcastContig(t *tensor.Tensor, outShape tensor.Shape) *tensor.Tensor {
+	if t.Shape().Equal(outShape) {
+		return t
+	}
+	offset := len(outShape) - t.Ndim()
+	out := tensor.New(t.Dtype(), outShape)
+	ic := make([]int, t.Ndim())
+	for pos := range out.Numel() {
+		oc := tensor.Unravel(pos, outShape)
+		backend.BroadcastCoords(ic, oc, t.Shape(), offset)
+		out.SetF64(t.AtF64(ic...), oc...)
+	}
+	return out
+}
+
 // binOp builds a binary kernel from the per-dtype simd primitives.
 func binOp(f64 func(dst, a, b []float64), f32 func(dst, a, b []float32)) backend.Kernel {
 	return func(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*tensor.Tensor, error) {
@@ -22,11 +40,17 @@ func binOp(f64 func(dst, a, b []float64), f32 func(dst, a, b []float32)) backend
 			return nil, fmt.Errorf("cpu: binary op wants 2 inputs, got %d", len(in))
 		}
 		a, b := in[0], in[1]
-		if !a.Shape().Equal(b.Shape()) {
-			return nil, fmt.Errorf("cpu: binary shape mismatch %v vs %v", a.Shape(), b.Shape())
-		}
 		if a.Dtype() != b.Dtype() {
 			return nil, fmt.Errorf("cpu: binary dtype mismatch %v vs %v", a.Dtype(), b.Dtype())
+		}
+		if !a.Shape().Equal(b.Shape()) {
+			// broadcasting: materialize both operands to the common shape, then run
+			// the same SIMD path (the fast same-shape path below is unchanged).
+			outShape, err := backend.BroadcastShape(a.Shape(), b.Shape())
+			if err != nil {
+				return nil, err
+			}
+			a, b = broadcastContig(a, outShape), broadcastContig(b, outShape)
 		}
 		ac, bc := a.Contiguous(), b.Contiguous()
 		out := tensor.NewOn(ctx.Device(), a.Dtype(), a.Shape())
@@ -100,6 +124,7 @@ func init() {
 	reg(backend.OpMul, binOp(simd.MulF64, simd.MulF32))
 	reg(backend.OpDiv, binOp(simd.DivF64, simd.DivF32))
 
+	reg(backend.OpStopGradient, unOp(func(x float64) float64 { return x })) // detach: identity forward
 	reg(backend.OpNeg, unOp(func(x float64) float64 { return -x }))
 	reg(backend.OpExp, unOp(math.Exp))
 	reg(backend.OpLog, unOp(math.Log))

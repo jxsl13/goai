@@ -1,0 +1,43 @@
+#version 450
+
+// Rotary position embedding (RoPE, §R28/§R92; HF rotate_half / split-half pairing) on
+// q[seq, width], width = heads·hd. Each of the seq·heads·(hd/2) rotated PAIRS gets one
+// invocation: pair i of head h at row p rotates (q[p,base+i], q[p,base+i+half]) by the
+// angle pos·inv[i], where pos=(posOffset+p)/posDiv. The per-head inverse frequencies
+// inv[half] and posDiv are precomputed on the host by backend.RoPEFreqs (so linear-PI
+// §R64 and YaRN §R66 are already folded in); the xPos magnitude variant (§R125) is
+// handled by the reference fallback, not here. Compiled to rope.spv by `make vulkan-spv`
+// (glslc). f32 on-GPU vs the reference's f64, so §V11 allows a tolerance.
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer BufQ { float q[]; };
+layout(std430, binding = 1) readonly buffer BufInv { float inv[]; };
+layout(std430, binding = 2) writeonly buffer BufO { float o[]; };
+
+layout(push_constant) uniform Dims {
+    int seq; int width; int heads; int hd; int halfd; int posOffset; float posDiv;
+} d;
+
+void main() {
+    uint gid = gl_GlobalInvocationID.x;
+    uint hh = uint(d.heads) * uint(d.halfd);
+    uint total = uint(d.seq) * hh;
+    if (gid >= total) {
+        return;
+    }
+    uint p = gid / hh;
+    uint rem = gid % hh;
+    uint h = rem / uint(d.halfd);
+    uint i = rem % uint(d.halfd);
+    uint base = p * uint(d.width) + h * uint(d.hd) + i;
+
+    float pos = float(int(p) + d.posOffset) / d.posDiv;
+    float theta = inv[i];
+    float c = cos(pos * theta);
+    float s = sin(pos * theta);
+    float qi = q[base];
+    float qih = q[base + uint(d.halfd)];
+    o[base] = qi * c - qih * s;
+    o[base + uint(d.halfd)] = qih * c + qi * s;
+}

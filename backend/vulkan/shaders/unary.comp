@@ -1,0 +1,49 @@
+#version 450
+
+// Generic unary elementwise op, one invocation per element: o[i] = f(op, x[i]). The
+// op selector (push constant) picks the function so a single kernel serves every simple
+// unary op (Neg/Exp/Log/Tanh/ReLU/Sigmoid/SiLU/Sqrt/Abs/GELU). GLSL lacks erf, so GELU
+// (§T352) uses the Abramowitz & Stegun 7.1.26 approximation (max abs err ~1.5e-7 ≤ f32
+// tol) — it was a ref/CPU fallback dominating the FFN. Flat row-major std430 f32 buffers.
+// Compiled to unary.spv by `make vulkan-spv` (glslc). f32 vs the reference's f64, §V11 tol.
+//
+// op codes (must match backend/vulkan/vulkan.go): 0 Neg, 1 Exp, 2 Log, 3 Tanh, 4 ReLU,
+// 5 Sigmoid, 6 SiLU, 7 Sqrt, 8 Abs, 9 GELU.
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer BufX { float x[]; };
+layout(std430, binding = 1) writeonly buffer BufO { float o[]; };
+
+layout(push_constant) uniform Dims { int n; int op; } d;
+
+// erf via Abramowitz & Stegun 7.1.26 (GLSL has no erf).
+float aserf(float xv) {
+    float ax = abs(xv);
+    float t = 1.0 / (1.0 + 0.3275911 * ax);
+    float y = 1.0 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * exp(-ax * ax);
+    return xv >= 0.0 ? y : -y;
+}
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= uint(d.n)) {
+        return;
+    }
+    float v = x[i];
+    float r;
+    switch (d.op) {
+        case 0:  r = -v; break;
+        case 1:  r = exp(v); break;
+        case 2:  r = log(v); break;
+        case 3:  r = tanh(v); break;
+        case 4:  r = max(v, 0.0); break;
+        case 5:  r = 1.0 / (1.0 + exp(-v)); break;
+        case 6:  r = v / (1.0 + exp(-v)); break;
+        case 7:  r = sqrt(v); break;
+        case 8:  r = abs(v); break;
+        case 9:  r = 0.5 * v * (1.0 + aserf(v * 0.70710678118654752)); break;
+        default: r = v; break;
+    }
+    o[i] = r;
+}

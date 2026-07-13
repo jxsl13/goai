@@ -21,7 +21,7 @@ import (
 type device struct{}
 
 func (device) Kind() tensor.DeviceKind     { return tensor.KindCUDA }
-func (device) String() string              { return "cuda" }
+func (d device) String() string            { return d.Kind().String() }
 func (device) Allocator() tensor.Allocator { return tensor.Heap() }
 
 // Backend implements backend.Backend over CUDA/cuBLAS. Synchronous: every kernel
@@ -29,7 +29,7 @@ func (device) Allocator() tensor.Allocator { return tensor.Heap() }
 // permits async later without an API break).
 type Backend struct{}
 
-func (Backend) Name() string          { return "cuda" }
+func (Backend) Name() backend.Name    { return backend.CUDA }
 func (Backend) Device() tensor.Device { return device{} }
 func (Backend) Synchronize() error    { return nil }
 
@@ -60,7 +60,7 @@ func matmulF32(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*t
 		return nil, fmt.Errorf("cuda: inner dim mismatch %v · %v", a.Shape(), b.Shape())
 	}
 	if m == 0 || n == 0 || k == 0 {
-		return backend.Execute(ctx.WithBackend(backend.Reference()), backend.OpMatMul, in, nil)
+		return backend.Execute(ctx.WithBackend(backend.Reference()).WithRecorder(nil), backend.OpMatMul, in, nil)
 	}
 	ac, bc := a.Contiguous(), b.Contiguous()
 	out := tensor.New(tensor.F32, tensor.Shape{m, n})

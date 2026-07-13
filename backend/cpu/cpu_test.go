@@ -14,7 +14,7 @@ import (
 
 func cpuBackend(t *testing.T) backend.Backend {
 	t.Helper()
-	b, ok := backend.Get("cpu")
+	b, ok := backend.Get(backend.CPU)
 	if !ok {
 		t.Fatal("cpu backend not registered")
 	}
@@ -32,7 +32,7 @@ func run(t *testing.T, b backend.Backend, op backend.Op, ins ...*tensor.Tensor) 
 
 // cpu is registered as the preferred Default (§T11).
 func TestCPUIsDefault(t *testing.T) {
-	if backend.Default().Name() != "cpu" {
+	if backend.Default().Name() != backend.CPU {
 		t.Errorf("Default = %q, want cpu", backend.Default().Name())
 	}
 }
@@ -41,7 +41,7 @@ func TestCPUIsDefault(t *testing.T) {
 // elementwise ops (same f64 math) — tolerance 0.
 func TestCPUCrossReferenceExact(t *testing.T) {
 	cpu := cpuBackend(t)
-	ref, _ := backend.Get("ref")
+	ref, _ := backend.Get(backend.Ref)
 
 	binOps := []backend.Op{backend.OpAdd, backend.OpSub, backend.OpMul, backend.OpDiv}
 	unOps := []backend.Op{backend.OpNeg, backend.OpExp, backend.OpLog, backend.OpTanh, backend.OpReLU, backend.OpGELU, backend.OpSigmoid}
@@ -91,7 +91,7 @@ func assertEqualExact(t *testing.T, got, want *tensor.Tensor, label string) {
 // Parallel path (n > parThreshold) must match the serial reference.
 func TestCPUParallelCorrect(t *testing.T) {
 	cpu := cpuBackend(t)
-	ref, _ := backend.Get("ref")
+	ref, _ := backend.Get(backend.Ref)
 	const n = 1 << 18 // above parThreshold → exercises goroutines
 	a := bench.RandF64(tensor.Shape{n}, 7)
 	b := bench.RandF64(tensor.Shape{n}, 8)
@@ -107,7 +107,7 @@ func TestCPUParallelCorrect(t *testing.T) {
 // Non-contiguous inputs are handled (materialized) and stay correct.
 func TestCPUNonContiguous(t *testing.T) {
 	cpu := cpuBackend(t)
-	ref, _ := backend.Get("ref")
+	ref, _ := backend.Get(backend.Ref)
 	m := tensor.FromFloat64(tensor.Shape{3, 4}, bench.RandF64(tensor.Shape{12}, 5).Storage().F64())
 	tr, _ := m.Transpose(0, 1)
 	gc := run(t, cpu, backend.OpNeg, tr)

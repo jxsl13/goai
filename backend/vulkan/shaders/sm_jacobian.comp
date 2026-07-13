@@ -1,0 +1,36 @@
+#version 450
+
+// Softmax-Jacobian for the attention backward chain (§T528): given the softmax rows P and
+// the upstream dP (both packed [rows, cols]), computes IN PLACE (into dP):
+//     dS = alpha · P ⊙ (dP − rowsum(P ⊙ dP))
+// alpha folds the attention scale (S = scale·QKᵀ ⇒ dL/dS_raw = scale·dL/dS). Masked
+// columns have P = 0 and drop out automatically. One 256-invocation workgroup per row.
+
+#define WG 256
+layout(local_size_x = WG, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer BufP { float pr[]; };
+layout(std430, binding = 1) buffer BufD { float dp[]; };
+layout(push_constant) uniform P { int rows; int cols; float alpha; } p;
+
+shared float red[WG];
+
+void main() {
+    uint row = gl_WorkGroupID.x;
+    uint lane = gl_LocalInvocationID.x;
+    if (int(row) >= p.rows) return;
+    int base = int(row) * p.cols;
+
+    float sum = 0.0;
+    for (int j = int(lane); j < p.cols; j += WG) sum += pr[base + j] * dp[base + j];
+    red[lane] = sum;
+    barrier();
+    for (uint st = WG / 2u; st > 0u; st >>= 1u) {
+        if (lane < st) red[lane] += red[lane + st];
+        barrier();
+    }
+    sum = red[0];
+    for (int j = int(lane); j < p.cols; j += WG) {
+        dp[base + j] = p.alpha * pr[base + j] * (dp[base + j] - sum);
+    }
+}

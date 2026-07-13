@@ -1,12 +1,8 @@
 package nlp
 
 import (
-	"bufio"
-	"encoding/base64"
-	"fmt"
 	"math"
 	"os"
-	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -30,27 +26,7 @@ func LoadGPT2(path string) (*Tokenizer, error) {
 		return nil, err
 	}
 	defer f.Close()
-	t := &Tokenizer{ranks: map[string]int{}, decoder: map[int]string{}}
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	for sc.Scan() {
-		line := sc.Text()
-		sp := strings.IndexByte(line, ' ')
-		if sp < 0 {
-			continue
-		}
-		b, err := base64.StdEncoding.DecodeString(line[:sp])
-		if err != nil {
-			return nil, fmt.Errorf("bpe: bad base64 %q: %w", line[:sp], err)
-		}
-		id, err := strconv.Atoi(line[sp+1:])
-		if err != nil {
-			return nil, fmt.Errorf("bpe: bad rank %q: %w", line[sp+1:], err)
-		}
-		t.ranks[string(b)] = id
-		t.decoder[id] = string(b)
-	}
-	return t, sc.Err()
+	return readTiktoken(f)
 }
 
 // bpeMerge applies byte-pair merging to a single piece's bytes, returning token

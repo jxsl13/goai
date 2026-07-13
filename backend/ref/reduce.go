@@ -42,7 +42,8 @@ func reducedShape(in tensor.Shape, reduced []bool, keepdims bool) (tensor.Shape,
 
 func parseReducedMask(attrs backend.Attrs, nd int) ([]bool, error) {
 	reduced := make([]bool, nd)
-	axes := attrs.Ints("axes")
+	pa, _ := attrs.(backend.ReduceAttrs)
+	axes := pa.Axes
 	if len(axes) == 0 {
 		for i := range reduced {
 			reduced[i] = true
@@ -72,7 +73,8 @@ func reduceKernel(init float64, combine func(acc, x float64) float64, finalize f
 		if err != nil {
 			return nil, err
 		}
-		keepdims := attrs.Bool("keepdims", false)
+		pa, _ := attrs.(backend.ReduceAttrs)
+		keepdims := pa.KeepDims
 		outShape, outAxisOf := reducedShape(x.Shape(), reduced, keepdims)
 		outStrides := tensor.RowMajorStrides(outShape)
 		outNumel := outShape.Numel()
@@ -119,7 +121,10 @@ func argmaxKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs
 	}
 	x := in[0]
 	nd := x.Ndim()
-	axis := attrs.Int("axis", reduceAllAxis)
+	axis := reduceAllAxis
+	if pa, ok := attrs.(backend.ArgMaxAttrs); ok {
+		axis = pa.Axis
+	}
 
 	if axis == reduceAllAxis {
 		best := math.Inf(-1)
@@ -181,5 +186,6 @@ func init() {
 	reg(backend.OpMean, reduceKernel(0, func(a, x float64) float64 { return a + x }, func(a float64, n int) float64 { return a / float64(n) }))
 	reg(backend.OpMax, reduceKernel(math.Inf(-1), math.Max, func(a float64, _ int) float64 { return a }))
 	reg(backend.OpMin, reduceKernel(math.Inf(1), math.Min, func(a float64, _ int) float64 { return a }))
+	reg(backend.OpProd, reduceKernel(1, func(a, x float64) float64 { return a * x }, func(a float64, _ int) float64 { return a }))
 	reg(backend.OpArgMax, argmaxKernel)
 }

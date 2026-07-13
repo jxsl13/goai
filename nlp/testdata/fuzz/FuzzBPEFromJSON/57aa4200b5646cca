@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("{\"model\":{\"type\":\"BPE\",\"vocab\":{\"x\":-1,\"y\":9999990000009}}}")

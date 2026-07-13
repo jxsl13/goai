@@ -19,14 +19,14 @@ type cvCase struct {
 	Shape []int     `json:"shape"`
 }
 type cvGolden struct {
-	X          cvTensor  `json:"x"`
-	W          cvTensor  `json:"w"`
-	B          []float64 `json:"b"`
-	ConvS1P0   cvCase    `json:"conv_s1p0"`
-	ConvS2P1   cvCase    `json:"conv_s2p1"`
-	ConvNoBias cvCase    `json:"conv_nobias"`
-	MaxPoolK2  cvCase    `json:"maxpool_k2"`
-	AvgPoolK2S1 cvCase   `json:"avgpool_k2s1"`
+	X           cvTensor  `json:"x"`
+	W           cvTensor  `json:"w"`
+	B           []float64 `json:"b"`
+	ConvS1P0    cvCase    `json:"conv_s1p0"`
+	ConvS2P1    cvCase    `json:"conv_s2p1"`
+	ConvNoBias  cvCase    `json:"conv_nobias"`
+	MaxPoolK2   cvCase    `json:"maxpool_k2"`
+	AvgPoolK2S1 cvCase    `json:"avgpool_k2s1"`
 }
 
 func loadCV(t *testing.T) cvGolden {
@@ -73,11 +73,11 @@ func TestCVParity(t *testing.T) {
 		return out[0]
 	}
 
-	assertCV(t, "conv_s1p0", run(backend.OpConv2D, backend.Attrs{"stride": 1, "pad": 0}, x, w, b), g.ConvS1P0)
-	assertCV(t, "conv_s2p1", run(backend.OpConv2D, backend.Attrs{"stride": 2, "pad": 1}, x, w, b), g.ConvS2P1)
+	assertCV(t, "conv_s1p0", run(backend.OpConv2D, backend.ConvAttrs{Stride: 1, Pad: 0}, x, w, b), g.ConvS1P0)
+	assertCV(t, "conv_s2p1", run(backend.OpConv2D, backend.ConvAttrs{Stride: 2, Pad: 1}, x, w, b), g.ConvS2P1)
 	assertCV(t, "conv_nobias", run(backend.OpConv2D, nil, x, w), g.ConvNoBias)
-	assertCV(t, "maxpool_k2", run(backend.OpMaxPool2D, backend.Attrs{"kernel": 2}, x), g.MaxPoolK2)
-	assertCV(t, "avgpool_k2s1", run(backend.OpAvgPool2D, backend.Attrs{"kernel": 2, "stride": 1}, x), g.AvgPoolK2S1)
+	assertCV(t, "maxpool_k2", run(backend.OpMaxPool2D, backend.PoolAttrs{Kernel: 2}, x), g.MaxPoolK2)
+	assertCV(t, "avgpool_k2s1", run(backend.OpAvgPool2D, backend.PoolAttrs{Kernel: 2, Stride: 1}, x), g.AvgPoolK2S1)
 }
 
 func TestCVErrors(t *testing.T) {

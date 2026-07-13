@@ -4,8 +4,10 @@
 // section. Offsets are validated strictly — they must tile the data section
 // exactly with no gaps or overlaps, mirroring the reference implementation.
 //
-// Supported dtypes: F32, F64 (f16/bf16/int arrive with §C4). Writing is
-// deterministic: names are emitted in sorted order with contiguous offsets.
+// Supported dtypes: F32, F64, F16, BF16 (integer types arrive with §C4). The
+// 16-bit floats are stored verbatim as their raw little-endian uint16 bits, so
+// they round-trip bit-exactly with no widening. Writing is deterministic: names
+// are emitted in sorted order with contiguous offsets.
 package safetensors
 
 import (
@@ -36,6 +38,10 @@ func dtypeName(d tensor.Dtype) (string, error) {
 		return "F32", nil
 	case tensor.F64:
 		return "F64", nil
+	case tensor.F16:
+		return "F16", nil
+	case tensor.BF16:
+		return "BF16", nil
 	default:
 		return "", fmt.Errorf("safetensors: unsupported dtype %v", d)
 	}
@@ -47,8 +53,12 @@ func dtypeOf(name string) (tensor.Dtype, error) {
 		return tensor.F32, nil
 	case "F64":
 		return tensor.F64, nil
+	case "F16":
+		return tensor.F16, nil
+	case "BF16":
+		return tensor.BF16, nil
 	default:
-		return tensor.Invalid, fmt.Errorf("safetensors: unsupported dtype %q (f16/bf16/int pending §C4)", name)
+		return tensor.Invalid, fmt.Errorf("safetensors: unsupported dtype %q (int types pending §C4)", name)
 	}
 }
 
@@ -86,6 +96,13 @@ func Save(w io.Writer, tensors map[string]*tensor.Tensor, meta map[string]string
 			for _, v := range t.Storage().F64() {
 				var b [8]byte
 				binary.LittleEndian.PutUint64(b[:], math.Float64bits(v))
+				data.Write(b[:])
+			}
+		case tensor.F16, tensor.BF16:
+			// 16-bit floats are kept as their raw uint16 bits; write them verbatim.
+			for _, bits := range t.Storage().U16() {
+				var b [2]byte
+				binary.LittleEndian.PutUint16(b[:], bits)
 				data.Write(b[:])
 			}
 		}
@@ -223,6 +240,11 @@ func Load(r io.Reader) (map[string]*tensor.Tensor, map[string]string, error) {
 			dst := t.Storage().F64()
 			for i := range dst {
 				dst[i] = math.Float64frombits(binary.LittleEndian.Uint64(data[begin+i*8:]))
+			}
+		case tensor.F16, tensor.BF16:
+			dst := t.Storage().U16() // raw 16-bit bits, verbatim
+			for i := range dst {
+				dst[i] = binary.LittleEndian.Uint16(data[begin+i*2:])
 			}
 		}
 		out[ne.name] = t

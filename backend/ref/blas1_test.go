@@ -78,7 +78,7 @@ func TestBlas1Parity(t *testing.T) {
 		t.Errorf("nrm2 f32: got %.9g want %.9g", got, g.Nrm2.F32)
 	}
 
-	attrs := backend.Attrs{"alpha": g.Alpha}
+	attrs := backend.AXPYAttrs{Alpha: g.Alpha}
 	out, err := backend.Execute(backend.NewContext(), backend.OpAXPY, []*tensor.Tensor{vecF64(g.A), vecF64(g.B)}, attrs)
 	if err != nil {
 		t.Fatal(err)

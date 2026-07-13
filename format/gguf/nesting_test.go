@@ -10,13 +10,13 @@ import (
 // ARRAY). A deeply nested file must error via the depth cap, not blow the stack.
 func TestDeepArrayNestingErrorsNotStackOverflow(t *testing.T) {
 	var b bytes.Buffer
-	b.Write([]byte{0x47, 0x47, 0x55, 0x46})           // GGUF
-	binary.Write(&b, binary.LittleEndian, uint32(3))  // version
-	binary.Write(&b, binary.LittleEndian, uint64(0))  // 0 tensors
-	binary.Write(&b, binary.LittleEndian, uint64(1))  // 1 KV
-	binary.Write(&b, binary.LittleEndian, uint64(1))  // key len
-	b.WriteString("x")                                // key
-	binary.Write(&b, binary.LittleEndian, uint32(9))  // value type = ARRAY
+	b.Write([]byte{0x47, 0x47, 0x55, 0x46})          // GGUF
+	binary.Write(&b, binary.LittleEndian, uint32(3)) // version
+	binary.Write(&b, binary.LittleEndian, uint64(0)) // 0 tensors
+	binary.Write(&b, binary.LittleEndian, uint64(1)) // 1 KV
+	binary.Write(&b, binary.LittleEndian, uint64(1)) // key len
+	b.WriteString("x")                               // key
+	binary.Write(&b, binary.LittleEndian, uint32(9)) // value type = ARRAY
 
 	const depth = 500 // far beyond the cap
 	for range depth {
@@ -47,8 +47,8 @@ func TestHugeArrayLengthNoData(t *testing.T) {
 	binary.Write(&b, binary.LittleEndian, uint64(1))
 	binary.Write(&b, binary.LittleEndian, uint64(1))
 	b.WriteString("x")
-	binary.Write(&b, binary.LittleEndian, uint32(9))  // ARRAY
-	binary.Write(&b, binary.LittleEndian, uint32(4))  // element type U32
+	binary.Write(&b, binary.LittleEndian, uint32(9))     // ARRAY
+	binary.Write(&b, binary.LittleEndian, uint32(4))     // element type U32
 	binary.Write(&b, binary.LittleEndian, uint64(1<<23)) // 8M elements claimed
 	// ...but no element bytes follow → must error, not allocate 8M×16B up front
 	defer func() {

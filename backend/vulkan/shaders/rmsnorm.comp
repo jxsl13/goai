@@ -1,0 +1,46 @@
+#version 450
+
+// RMSNorm over the last axis (§R29; Zhang & Sennrich 2019): y = x/√(mean(x²)+eps)·γ,
+// no mean subtraction and no bias. COOPERATIVE (§T345): ONE workgroup of 256
+// invocations per ROW. The lanes stride the row with coalesced loads (lane t reads
+// t, t+256, … — consecutive lanes hit consecutive addresses, unlike the old
+// one-invocation-per-row kernel whose neighbours were `dim` floats apart),
+// accumulate a partial mean-of-squares, then a tree reduction in shared memory
+// combines them; all lanes re-read the total and write their strided output slice
+// (coalesced). Compiled to rmsnorm.spv by `make vulkan-spv` (glslc), embedded by
+// vulkan.go. Dispatch is `rows` workgroups of 256. The Pure-Go reference accumulates
+// in f64 and in a different order, so §V11 allows a dim-scaled tolerance here.
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer BufX { float x[]; };
+layout(std430, binding = 1) readonly buffer BufG { float g[]; };
+layout(std430, binding = 2) writeonly buffer BufO { float o[]; };
+
+layout(push_constant) uniform Dims { int rows; int dim; float eps; } d;
+
+shared float red[256];
+
+void main() {
+    uint row = gl_WorkGroupID.x;
+    if (row >= uint(d.rows)) {
+        return; // whole workgroup returns together → barriers stay uniform
+    }
+    uint lane = gl_LocalInvocationID.x;
+    uint base = row * uint(d.dim);
+    float part = 0.0;
+    for (int j = int(lane); j < d.dim; j += 256) {
+        float v = x[base + uint(j)];
+        part += v * v;
+    }
+    red[lane] = part;
+    barrier();
+    for (uint s = 128u; s > 0u; s >>= 1) {
+        if (lane < s) { red[lane] += red[lane + s]; }
+        barrier();
+    }
+    float inv = inversesqrt(red[0] / float(d.dim) + d.eps);
+    for (int j = int(lane); j < d.dim; j += 256) {
+        o[base + uint(j)] = x[base + uint(j)] * inv * g[uint(j)];
+    }
+}

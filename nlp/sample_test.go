@@ -20,7 +20,7 @@ func TestGreedySampler(t *testing.T) {
 func TestTopKSupport(t *testing.T) {
 	// logits favor tokens 3 and 1; k=2 → only {1,3} may be sampled
 	logits := []float64{0.0, 3.0, 0.5, 4.0, 1.0}
-	s := nlp.NewSampler(1.0, 2, 0, 7)
+	s := nlp.NewSampler(7, nlp.WithTopK(2))
 	seen := map[int]int{}
 	for range 2000 {
 		seen[s.Sample(logits)]++
@@ -41,7 +41,7 @@ func TestTopPNucleus(t *testing.T) {
 	// probs ∝ softmax; token 0 dominates. With p=0.5 and a dominant token, only
 	// the top token(s) needed to reach 0.5 are kept.
 	logits := []float64{5.0, 3.0, 1.0, 0.0} // softmax ≈ [0.84,0.11,0.015,0.006]
-	s := nlp.NewSampler(1.0, 0, 0.5, 3)
+	s := nlp.NewSampler(3, nlp.WithTopP(0.5))
 	seen := map[int]bool{}
 	for range 3000 {
 		seen[s.Sample(logits)] = true
@@ -52,7 +52,7 @@ func TestTopPNucleus(t *testing.T) {
 	}
 
 	// p=0.95 → need tokens 0 and 1 (0.84+0.11=0.95)
-	s2 := nlp.NewSampler(1.0, 0, 0.95, 3)
+	s2 := nlp.NewSampler(3, nlp.WithTopP(0.95))
 	seen2 := map[int]bool{}
 	for range 5000 {
 		seen2[s2.Sample(logits)] = true
@@ -68,8 +68,8 @@ func TestTopPNucleus(t *testing.T) {
 // Sampling is deterministic under a fixed seed.
 func TestSamplerDeterministic(t *testing.T) {
 	logits := []float64{1, 2, 3, 0.5, -1}
-	a := nlp.NewSampler(0.8, 0, 0, 42)
-	b := nlp.NewSampler(0.8, 0, 0, 42)
+	a := nlp.NewSampler(42, nlp.WithTemperature(0.8))
+	b := nlp.NewSampler(42, nlp.WithTemperature(0.8))
 	for range 100 {
 		if a.Sample(logits) != b.Sample(logits) {
 			t.Fatal("same seed must produce same samples")
@@ -106,7 +106,7 @@ func TestGenerateGreedy(t *testing.T) {
 // Temperature → 0 approaches greedy; large temperature broadens the support.
 func TestTemperatureEffect(t *testing.T) {
 	logits := []float64{0.2, 2.0, 0.1, 1.0, 0.3}
-	cold := nlp.NewSampler(0.01, 0, 0, 1)
+	cold := nlp.NewSampler(1, nlp.WithTemperature(0.01))
 	seen := map[int]int{}
 	for range 500 {
 		seen[cold.Sample(logits)]++
@@ -114,7 +114,7 @@ func TestTemperatureEffect(t *testing.T) {
 	if seen[1] < 480 { // near-greedy → almost always the argmax (token 1)
 		t.Errorf("cold temperature not near-greedy: %v", seen)
 	}
-	hot := nlp.NewSampler(5.0, 0, 0, 1)
+	hot := nlp.NewSampler(1, nlp.WithTemperature(5.0))
 	seenHot := map[int]bool{}
 	for range 2000 {
 		seenHot[hot.Sample(logits)] = true

@@ -4,14 +4,15 @@
 //
 // Layer model (§I):
 //
-//	L0  tensor          core: Tensor, Dtype, Device, Allocator, strides/views
+//	L0  tensor          core: Tensor, Dtype, strides/views
 //	L1  backend         Backend/Kernel interface + Pure-Go reference (truth)
-//	L1b backend/*        swappable accel backends behind build tags + fallback
+//	L1b backend/*        swappable accel backends (metal, vulkan, cuda) + fallback
 //	L2  autograd        tape/graph + VJP rules
-//	L3  nn              layers, init, optimizer, loss, data
-//	L4  (nlp, vision,   domains
-//	     classic, rl)
-//	L5  format          safetensors, GGUF, ONNX
+//	L3  nn, ops, linalg layers/optimizers/losses; eager ops; dense linear algebra
+//	L4  nlp, vision,    domains
+//	    classic, rl
+//	L5  format          safetensors, GGUF, npy/npz
+//	—   llamagpu        batched GPU decoding for GPT/Llama
 //
 // Invariant: higher layers never import backend internals; every op has a
 // Pure-Go fallback; CGO_ENABLED=0 builds green on macOS, Windows, Linux.

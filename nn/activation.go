@@ -9,9 +9,17 @@ import (
 type Activation struct{ op backend.Op }
 
 // ReLU, Tanh, GELU (exact erf form, ADR-0004) and Sigmoid activation layers.
-func ReLU() *Activation    { return &Activation{op: backend.OpReLU} }
-func Tanh() *Activation    { return &Activation{op: backend.OpTanh} }
-func GELU() *Activation    { return &Activation{op: backend.OpGELU} }
+
+// ReLU returns a max(0, x) activation layer.
+func ReLU() *Activation { return &Activation{op: backend.OpReLU} }
+
+// Tanh returns a hyperbolic-tangent activation layer.
+func Tanh() *Activation { return &Activation{op: backend.OpTanh} }
+
+// GELU returns an exact Gaussian Error Linear Unit activation layer.
+func GELU() *Activation { return &Activation{op: backend.OpGELU} }
+
+// Sigmoid returns a logistic-sigmoid activation layer.
 func Sigmoid() *Activation { return &Activation{op: backend.OpSigmoid} }
 
 // Forward applies the activation elementwise through ctx.
@@ -27,7 +35,9 @@ func (a *Activation) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Te
 func (a *Activation) Params() []*tensor.Tensor { return nil }
 
 // Sequential chains layers front to back.
-type Sequential struct{ Layers []Layer }
+type Sequential struct {
+	Layers []Layer // the layers applied in order, front to back
+}
 
 // NewSequential builds a Sequential from the given layers.
 func NewSequential(layers ...Layer) *Sequential { return &Sequential{Layers: layers} }

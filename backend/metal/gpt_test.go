@@ -1,10 +1,11 @@
-//go:build metal && darwin && cgo
+//go:build darwin && cgo
 
 package metal_test
 
 import (
 	"encoding/json"
 	"math"
+	"math/rand/v2"
 	"os"
 	"testing"
 
@@ -67,8 +68,8 @@ func TestMetalGPTInference(t *testing.T) {
 		t.Skip("metal: no MPS GPU — skipping (§V4)")
 	}
 	model, c := loadGPTf32(t)
-	metalB, _ := backend.Get("metal")
-	cpuB, _ := backend.Get("cpu")
+	metalB, _ := backend.Get(backend.Metal)
+	cpuB, _ := backend.Get(backend.CPU)
 
 	run := func(be backend.Backend) *tensor.Tensor {
 		out, err := model.Forward(backend.NewContext().WithBackend(be), c.Tokens)
@@ -109,8 +110,8 @@ func TestMetalGPTTraining(t *testing.T) {
 	if !metal.Available() {
 		t.Skip("metal: no MPS GPU — skipping (§V4)")
 	}
-	metalB, _ := backend.Get("metal")
-	cpuB, _ := backend.Get("cpu")
+	metalB, _ := backend.Get(backend.Metal)
+	cpuB, _ := backend.Get(backend.CPU)
 
 	train := func(be backend.Backend) (float64, float64) {
 		model, c := loadGPTf32(t)
@@ -146,12 +147,190 @@ func TestMetalGPTTraining(t *testing.T) {
 		return first, last
 	}
 	gf, gl := train(metalB)
-	cf, cl := train(cpuB)
+	_, cl := train(cpuB)
 	if gl >= gf*0.4 {
 		t.Fatalf("GPU GPT training did not converge: %.4f → %.4f", gf, gl)
 	}
 	if math.Abs(gl-cl) > 0.2 {
 		t.Errorf("GPU vs CPU GPT training diverged: gpu %.4f vs cpu %.4f", gl, cl)
 	}
-	t.Logf("GPU GPT training: CE %.4f → %.4f (cpu %.4f → %.4f)", gf, gl, cf, cl)
+	t.Logf("GPU GPT training converged: CE %.4f → %.4f (cpu final %.4f)", gf, gl, cl)
+}
+
+// randGPTf32 builds a GPT of the given config with deterministic random f32 weights
+// (norms init to γ=1/β=0, projections small) — a realistically-sized model for the
+// end-to-end throughput benchmark, since the golden fixture (dim 8, 2 layers) is far
+// too small to show real GPU utilization. ffn is the FFN inner width.
+func randGPTf32(tb testing.TB, cfg nlp.GPTConfig, ffn int) *nlp.GPT {
+	tb.Helper()
+	rng := rand.New(rand.NewPCG(1, 2))
+	small := func(shape ...int) *tensor.Tensor {
+		t := tensor.New(tensor.F32, tensor.Shape(shape))
+		d := t.Storage().F32()
+		for i := range d {
+			d[i] = float32(rng.NormFloat64()) * 0.02
+		}
+		return t
+	}
+	ones := func(n int) *tensor.Tensor {
+		t := tensor.New(tensor.F32, tensor.Shape{n})
+		d := t.Storage().F32()
+		for i := range d {
+			d[i] = 1
+		}
+		return t
+	}
+	zeros := func(n int) *tensor.Tensor { return tensor.New(tensor.F32, tensor.Shape{n}) }
+	ts := map[string]*tensor.Tensor{
+		"tok_emb":   small(cfg.Vocab, cfg.Dim),
+		"pos_emb":   small(cfg.Ctx, cfg.Dim),
+		"head":      small(cfg.Dim, cfg.Vocab),
+		"lnf.gamma": ones(cfg.Dim),
+		"lnf.beta":  zeros(cfg.Dim),
+	}
+	for l := range cfg.Layers {
+		p := func(s string) string { return "blocks." + string(rune('0'+l)) + "." + s }
+		if l >= 10 { // rune trick only covers 0..9; keep the bench configs small
+			tb.Fatalf("randGPTf32 supports <10 layers, got %d", cfg.Layers)
+		}
+		ts[p("ln1.gamma")] = ones(cfg.Dim)
+		ts[p("ln1.beta")] = zeros(cfg.Dim)
+		ts[p("attn.wq")] = small(cfg.Dim, cfg.Dim)
+		ts[p("attn.wk")] = small(cfg.Dim, cfg.Dim)
+		ts[p("attn.wv")] = small(cfg.Dim, cfg.Dim)
+		ts[p("attn.wo")] = small(cfg.Dim, cfg.Dim)
+		ts[p("ln2.gamma")] = ones(cfg.Dim)
+		ts[p("ln2.beta")] = zeros(cfg.Dim)
+		ts[p("ffn.w1")] = small(cfg.Dim, ffn)
+		ts[p("ffn.b1")] = zeros(ffn)
+		ts[p("ffn.w2")] = small(ffn, cfg.Dim)
+		ts[p("ffn.b2")] = zeros(cfg.Dim)
+	}
+	model, err := nlp.FromSafetensors(cfg, ts)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	return model
+}
+
+// BenchmarkGPTForward times a full transformer forward pass — the REAL workload
+// (§C3/§B10: optimize against a model, not a micro-benchmark) — on cpu vs metal.
+// Reports tokens/s. A realistic small-GPT config exercises embed→(LN→attention→
+// LN→FFN)×L→LN→head, i.e. ~15 GPU dispatches per layer, so it also shows whether
+// per-op dispatch latency (§B42) dominates a real multi-op forward.
+func BenchmarkGPTForward(b *testing.B) {
+	if !metal.Available() {
+		b.Skip("metal: no MPS GPU — skipping (§V4)")
+	}
+	cfg := nlp.GPTConfig{Vocab: 4096, Ctx: 256, Dim: 512, Heads: 8, Layers: 6, Eps: 1e-5}
+	const seq = 256
+	model := randGPTf32(b, cfg, 4*cfg.Dim)
+	tokens := make([]int, seq)
+	for i := range tokens {
+		tokens[i] = i % cfg.Vocab
+	}
+	for _, name := range []backend.Name{backend.CPU, backend.Metal} {
+		be, ok := backend.Get(name)
+		if !ok {
+			continue
+		}
+		ctx := backend.NewContext().WithBackend(be)
+		if _, err := model.Forward(ctx, tokens); err != nil { // warmup (pipelines, pools)
+			b.Fatal(err)
+		}
+		b.Run(string(name), func(b *testing.B) {
+			for range b.N {
+				if _, err := model.Forward(ctx, tokens); err != nil {
+					b.Fatal(err)
+				}
+			}
+			b.ReportMetric(float64(seq)*float64(b.N)/b.Elapsed().Seconds(), "tok/s")
+		})
+	}
+}
+
+// BenchmarkGPTTrainingStep times a full forward + cross-entropy + backward pass — the
+// training workload (LOOP.md priority: Training UND Inferenz) — on cpu vs metal, the
+// companion to BenchmarkGPTForward. The optimizer step is excluded (it is a cheap
+// elementwise update; the GEMMs + their backward dominate). Reports tokens/s.
+func BenchmarkGPTTrainingStep(b *testing.B) {
+	if !metal.Available() {
+		b.Skip("metal: no MPS GPU — skipping (§V4)")
+	}
+	cfg := nlp.GPTConfig{Vocab: 4096, Ctx: 256, Dim: 512, Heads: 8, Layers: 6, Eps: 1e-5}
+	const seq = 256
+	model := randGPTf32(b, cfg, 4*cfg.Dim)
+	tokens := make([]int, seq)
+	targets := tensor.New(tensor.F32, tensor.Shape{seq})
+	for i := range tokens {
+		tokens[i] = i % cfg.Vocab
+		targets.SetF64(float64(i%cfg.Vocab), i)
+	}
+	step := func(be backend.Backend) {
+		tape := autograd.NewTapeOn(be)
+		ctx := tape.Context()
+		logits, err := model.Forward(ctx, tokens)
+		if err != nil {
+			b.Fatal(err)
+		}
+		loss, err := nn.CrossEntropy(ctx, logits, targets)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if err := tape.Backward(loss); err != nil {
+			b.Fatal(err)
+		}
+	}
+	for _, name := range []backend.Name{backend.CPU, backend.Metal} {
+		be, ok := backend.Get(name)
+		if !ok {
+			continue
+		}
+		step(be) // warmup
+		b.Run(string(name), func(b *testing.B) {
+			for range b.N {
+				step(be)
+			}
+			b.ReportMetric(float64(seq)*float64(b.N)/b.Elapsed().Seconds(), "tok/s")
+		})
+	}
+}
+
+// BenchmarkGPTDecode times autoregressive DECODE (one token per step with a KV cache) —
+// the real inference workload, distinct from the full-sequence forward of §T350. Each
+// step's ops are tiny (seq=1), so per-op GPU dispatch/waitUntilCompleted latency
+// dominates: §T360 measured Metal ~2.3× SLOWER than cpu here, the opposite of prefill.
+func BenchmarkGPTDecode(b *testing.B) {
+	if !metal.Available() {
+		b.Skip("metal: no MPS GPU — skipping (§V4)")
+	}
+	cfg := nlp.GPTConfig{Vocab: 4096, Ctx: 512, Dim: 512, Heads: 8, Layers: 6, Eps: 1e-5}
+	model := randGPTf32(b, cfg, 4*cfg.Dim)
+	for _, name := range []backend.Name{backend.CPU, backend.Metal} {
+		be, ok := backend.Get(name)
+		if !ok {
+			continue
+		}
+		ctx := backend.NewContext().WithBackend(be)
+		cache := model.NewCache()
+		for p := 0; p < 8; p++ { // warm the pipelines + prefill a short context
+			if _, err := model.DecodeStep(ctx, cache, p%cfg.Vocab, p); err != nil {
+				b.Fatal(err)
+			}
+		}
+		b.Run(string(name), func(b *testing.B) {
+			pos := 8
+			for range b.N {
+				if _, err := model.DecodeStep(ctx, cache, pos%cfg.Vocab, pos); err != nil {
+					b.Fatal(err)
+				}
+				pos++
+				if pos >= cfg.Ctx { // reset the cache before it overflows the context
+					cache = model.NewCache()
+					pos = 0
+				}
+			}
+			b.ReportMetric(float64(b.N)/b.Elapsed().Seconds(), "tok/s")
+		})
+	}
 }

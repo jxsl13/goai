@@ -17,10 +17,11 @@
 // Vulkan SDK) — exactly as `-tags cuda` needs the CUDA toolkit. Run that target
 // before `go build -tags vulkan`.
 //
-// Kernels: MatMul f32 via the compute shader; every other op falls back to the
-// Pure-Go backends through the dispatch layer (§I4). Training GEMMs reach the GPU
-// through autograd.NewTapeOn(vulkanBackend) (forward + both backward matmuls of
-// the VJP), so the backend serves inference AND training.
+// Kernels (f32 compute shaders): MatMul, fused attention MHA forward + backward,
+// FlashAttention-2 forward (online-softmax tiling), and Conv2D forward + backward;
+// every other op falls back to the Pure-Go backends through the dispatch layer (§I4).
+// Training GEMMs reach the GPU through autograd.NewTapeOn(vulkanBackend) (forward +
+// both backward matmuls of the VJP), so the backend serves inference AND training.
 //
 // Not host-verifiable on this arm64/macOS host without a Vulkan SDK — the backend
 // and its §V3 cross-reference + §C3 gate benchmarks are CI-gated (§B36, mirrors

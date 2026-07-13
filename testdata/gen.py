@@ -234,6 +234,43 @@ OP0 = [1.0, -2.0, 0.5]
 OG = [[0.1, -0.2, 0.3], [0.05, 0.1, -0.1], [-0.2, 0.3, 0.02]]
 
 
+def build_muon():
+    """Muon optimizer golden trajectory — independent numpy (Jordan et al. 2024,
+    §R78), current-master reference (lerp momentum, NS5, scale √max(1,R/C)). f64."""
+    def ns5(G, steps=5, a=3.4445, b=-4.7750, c=2.0315):
+        X = G.copy()
+        transposed = False
+        if X.shape[0] > X.shape[1]:
+            X = X.T.copy()
+            transposed = True
+        X = X / (np.linalg.norm(X) + 1e-7)
+        for _ in range(steps):
+            A = X @ X.T
+            B = b * A + c * (A @ A)
+            X = a * X + B @ X
+        return X.T if transposed else X
+
+    rng = np.random.default_rng(808)
+    R, C = 3, 4
+    p0 = rng.standard_normal((R, C))
+    grads = [rng.standard_normal((R, C)) for _ in range(3)]
+    momentum, lr, wd, steps = 0.95, 0.02, 0.1, 5
+    buf = np.zeros((R, C))
+    p = p0.copy()
+    traj = []
+    for g in grads:
+        buf = momentum * buf + (1 - momentum) * g
+        upd = (1 - momentum) * g + momentum * buf  # nesterov
+        O = ns5(upd, steps) * max(1.0, R / C) ** 0.5
+        p = p * (1 - lr * wd) - lr * O
+        traj.append([float(v) for v in p.reshape(-1)])
+    flat = lambda t: [float(v) for v in np.asarray(t).reshape(-1)]
+    return {
+        "R": R, "C": C, "momentum": momentum, "lr": lr, "wd": wd, "ns_steps": steps,
+        "p0": flat(p0), "grads": [flat(g) for g in grads], "traj": traj,
+    }
+
+
 def build_optim():
     lr = 0.1
     p = list(OP0)
@@ -274,12 +311,27 @@ def build_optim():
               for pi, mhi, vhi in zip(pw, mh, vh)]
         adamw.append(list(pw))
 
+    # Lion (Chen et al. 2023, Alg.2): c=β1·m+(1−β1)·g; θ−=lr·(sign(c)+λ·θ);
+    # m=β2·m+(1−β2)·g (β2 ≠ β1, momentum updated AFTER the step).
+    def sign(x):
+        return (x > 0) - (x < 0)
+
+    llr, lb1, lb2, lwd = 0.01, 0.9, 0.99, 0.1
+    pl, ml = list(OP0), [0.0] * 3
+    lion = []
+    for g in OG:
+        c = [lb1 * mi + (1 - lb1) * gi for mi, gi in zip(ml, g)]
+        pl = [pi - llr * (sign(ci) + lwd * pi) for pi, ci in zip(pl, c)]
+        ml = [lb2 * mi + (1 - lb2) * gi for mi, gi in zip(ml, g)]
+        lion.append(list(pl))
+
     return {
         "p0": OP0, "grads": OG,
         "sgd": {"lr": lr, "steps": sgd},
         "sgd_momentum": {"lr": lr, "momentum": mu, "steps": sgdm},
         "adam": {"lr": alr, "beta1": b1, "beta2": b2, "eps": eps, "steps": adam},
         "adamw": {"lr": alr, "beta1": b1, "beta2": b2, "eps": eps, "wd": wd, "steps": adamw},
+        "lion": {"lr": llr, "beta1": lb1, "beta2": lb2, "wd": lwd, "steps": lion},
     }
 
 
@@ -422,6 +474,214 @@ def build_classic(root):
         json.dump(data, f, indent=1)
         f.write("\n")
     print("wrote classic/testdata/classic.json (sklearn)")
+
+
+def build_dpo(root):
+    """DPO loss golden (§T48). Independent numpy computation of Rafailov 2023 Eq.7."""
+    dest = os.path.join(root, "..", "nn", "testdata")
+    os.makedirs(dest, exist_ok=True)
+    beta = 0.1
+    pc = np.array([-2.0, -3.5, -1.0, -4.0])   # policy log-probs, chosen
+    pl = np.array([-2.5, -3.0, -2.0, -3.5])   # policy log-probs, rejected
+    rc = np.array([-2.2, -3.6, -1.5, -4.2])   # reference log-probs, chosen
+    rl = np.array([-2.1, -2.9, -1.8, -3.0])   # reference log-probs, rejected
+    delta = beta * ((pc - rc) - (pl - rl))
+    # loss = mean(-log sigmoid(delta)) = mean(softplus(-delta)) = mean(log(1+exp(-delta)))
+    loss = float(np.mean(np.logaddexp(0.0, -delta)))
+    data = {
+        "beta": beta,
+        "pc": [float(v) for v in pc], "pl": [float(v) for v in pl],
+        "rc": [float(v) for v in rc], "rl": [float(v) for v in rl],
+        "loss": loss,
+    }
+    with open(os.path.join(dest, "dpo.json"), "w") as f:
+        json.dump(data, f, indent=1)
+        f.write("\n")
+    print("wrote nn/testdata/dpo.json")
+
+
+def build_labelsmooth(root):
+    """Label-smoothing CE golden (§T52). Independent numpy = −Σ q'·logsoftmax(z),
+    q'(k)=(1−ε)·onehot + ε/K (Szegedy 2016 / Vaswani 2017)."""
+    dest = os.path.join(root, "..", "nn", "testdata")
+    os.makedirs(dest, exist_ok=True)
+    eps = 0.1
+    logits = np.array([[2.0, 1.0, 0.1], [0.5, 2.5, -1.0], [-3.0, 0.0, 4.0]])
+    targets = [0, 1, 2]
+    K = logits.shape[1]
+    z = logits - logits.max(axis=1, keepdims=True)
+    lsm = z - np.log(np.exp(z).sum(axis=1, keepdims=True))  # log-softmax
+    loss = 0.0
+    for i, ti in enumerate(targets):
+        q = np.full(K, eps / K)
+        q[ti] += (1 - eps)
+        loss += float(-np.sum(q * lsm[i]))
+    loss /= len(targets)
+    data = {
+        "epsilon": eps, "shape": list(logits.shape),
+        "logits": [float(v) for v in logits.reshape(-1)],
+        "targets": [float(t) for t in targets], "loss": loss,
+    }
+    with open(os.path.join(dest, "labelsmooth.json"), "w") as f:
+        json.dump(data, f, indent=1)
+        f.write("\n")
+    print("wrote nn/testdata/labelsmooth.json")
+
+
+def build_distill(root):
+    """KD soft-target loss golden (§T51). Independent numpy = Hinton 2015 T²·KL(p‖q)."""
+    dest = os.path.join(root, "..", "nn", "testdata")
+    os.makedirs(dest, exist_ok=True)
+    temp = 2.0
+    student = np.array([[2.0, 1.0, 0.1], [0.5, 2.5, -1.0]])
+    teacher = np.array([[3.0, 0.5, -0.5], [0.2, 3.0, 0.1]])
+
+    def softmax(z):
+        z = z - z.max(axis=1, keepdims=True)
+        e = np.exp(z)
+        return e / e.sum(axis=1, keepdims=True)
+
+    p = softmax(teacher / temp)  # soft teacher targets
+    q = softmax(student / temp)  # soft student dist
+    kl = np.sum(p * (np.log(p) - np.log(q)), axis=1)
+    loss = float(np.mean(temp * temp * kl))
+    data = {
+        "temperature": temp, "shape": list(student.shape),
+        "student": [float(v) for v in student.reshape(-1)],
+        "teacher": [float(v) for v in teacher.reshape(-1)],
+        "loss": loss,
+    }
+    with open(os.path.join(dest, "distill.json"), "w") as f:
+        json.dump(data, f, indent=1)
+        f.write("\n")
+    print("wrote nn/testdata/distill.json")
+
+
+def build_moe(root):
+    """MoE load-balancing aux loss golden (§T61). Independent numpy = Switch eq.4."""
+    dest = os.path.join(root, "..", "nn", "testdata")
+    os.makedirs(dest, exist_ok=True)
+    alpha = 0.01
+    logits = np.array([[2.0, 1.0, 0.0, -1.0], [0.0, 3.0, 1.0, 0.0], [1.0, 1.0, 4.0, 0.0]])
+    assignments = [0, 1, 2]  # top-1 (argmax) per token
+    T, N = logits.shape
+    z = logits - logits.max(axis=1, keepdims=True)
+    e = np.exp(z)
+    probs = e / e.sum(axis=1, keepdims=True)
+    P = probs.mean(axis=0)  # mean router prob per expert
+    f = np.zeros(N)
+    for a in assignments:
+        f[a] += 1
+    f /= T
+    loss = float(alpha * N * np.sum(f * P))
+    data = {
+        "alpha": alpha, "shape": [int(T), int(N)],
+        "logits": [float(v) for v in logits.reshape(-1)],
+        "assignments": [float(a) for a in assignments], "loss": loss,
+    }
+    with open(os.path.join(dest, "moe.json"), "w") as fh:
+        json.dump(data, fh, indent=1)
+        fh.write("\n")
+    print("wrote nn/testdata/moe.json")
+
+
+def build_kto(root):
+    """KTO loss golden (§T59). Independent numpy = Ethayarajh 2024 σ(±(r−z_ref))."""
+    dest = os.path.join(root, "..", "nn", "testdata")
+    os.makedirs(dest, exist_ok=True)
+    beta, z_ref, lam_d, lam_u = 0.1, 0.5, 1.0, 1.0
+    pl = np.array([-2.0, -3.5, -1.0, -4.0])  # policy logps
+    rl = np.array([-2.2, -3.0, -1.5, -4.2])  # reference logps
+    labels = np.array([1, 0, 1, 0])          # desirable / undesirable
+    r = beta * (pl - rl)
+    loss = 0.0
+    for i in range(len(pl)):
+        if labels[i]:
+            loss += lam_d * sigmoid(z_ref - r[i])
+        else:
+            loss += lam_u * sigmoid(r[i] - z_ref)
+    loss = float(loss / len(pl))
+    data = {
+        "beta": beta, "z_ref": z_ref, "lambda_d": lam_d, "lambda_u": lam_u,
+        "pl": [float(v) for v in pl], "rl": [float(v) for v in rl],
+        "labels": [float(v) for v in labels], "loss": loss,
+    }
+    with open(os.path.join(dest, "kto.json"), "w") as f:
+        json.dump(data, f, indent=1)
+        f.write("\n")
+    print("wrote nn/testdata/kto.json")
+
+
+def build_ipo(root):
+    """IPO loss golden (§T58). Independent numpy = Azar 2023 (h − 1/(2β))²."""
+    dest = os.path.join(root, "..", "nn", "testdata")
+    os.makedirs(dest, exist_ok=True)
+    beta = 0.1
+    target = 1.0 / (2.0 * beta)
+    pc = np.array([-2.0, -3.5, -1.0, -4.0])
+    pl = np.array([-2.5, -3.0, -2.0, -3.5])
+    rc = np.array([-2.2, -3.6, -1.5, -4.2])
+    rl = np.array([-2.1, -2.9, -1.8, -3.0])
+    h = (pc - rc) - (pl - rl)
+    loss = float(np.mean((h - target) ** 2))
+    data = {
+        "beta": beta,
+        "pc": [float(v) for v in pc], "pl": [float(v) for v in pl],
+        "rc": [float(v) for v in rc], "rl": [float(v) for v in rl],
+        "loss": loss,
+    }
+    with open(os.path.join(dest, "ipo.json"), "w") as f:
+        json.dump(data, f, indent=1)
+        f.write("\n")
+    print("wrote nn/testdata/ipo.json")
+
+
+def build_gae(root):
+    """GAE golden (§T50). Independent FORWARD-SUM Â_t=Σ(γλ)^l δ_{t+l} vs the Go
+    backward recursion; no mid-episode dones (nonterminal=1, last uses bootstrap)."""
+    dest = os.path.join(root, "..", "rl", "testdata")
+    os.makedirs(dest, exist_ok=True)
+    gamma, lam = 0.99, 0.95
+    rewards = np.array([1.0, 0.0, -0.5, 2.0, 0.0])
+    values = np.array([0.5, 0.6, 0.4, 1.5, 0.3])
+    next_value = 0.2
+    T = len(rewards)
+    delta = np.array([rewards[t] + gamma * (values[t + 1] if t + 1 < T else next_value) - values[t]
+                      for t in range(T)])
+    adv = np.array([sum((gamma * lam) ** l * delta[t + l] for l in range(T - t)) for t in range(T)])
+    returns = adv + values
+    data = {
+        "gamma": gamma, "lam": lam, "next_value": next_value,
+        "rewards": [float(v) for v in rewards], "values": [float(v) for v in values],
+        "advantages": [float(v) for v in adv], "returns": [float(v) for v in returns],
+    }
+    with open(os.path.join(dest, "gae.json"), "w") as f:
+        json.dump(data, f, indent=1)
+        f.write("\n")
+    print("wrote rl/testdata/gae.json")
+
+
+def build_ppo(root):
+    """PPO clipped surrogate loss golden (§T49). Independent numpy = Schulman 2017 Eq.7."""
+    dest = os.path.join(root, "..", "nn", "testdata")
+    os.makedirs(dest, exist_ok=True)
+    eps = 0.2
+    lp_new = np.array([-1.0, -2.0, -1.5, -3.0, -0.5])
+    lp_old = np.array([-1.2, -1.8, -1.5, -2.5, -1.0])
+    adv = np.array([1.0, -1.0, 0.5, 2.0, -0.5])  # mix of ± advantages
+    r = np.exp(lp_new - lp_old)
+    surr1 = r * adv
+    surr2 = np.clip(r, 1 - eps, 1 + eps) * adv
+    loss = float(-np.mean(np.minimum(surr1, surr2)))
+    data = {
+        "epsilon": eps,
+        "lp_new": [float(v) for v in lp_new], "lp_old": [float(v) for v in lp_old],
+        "adv": [float(v) for v in adv], "loss": loss,
+    }
+    with open(os.path.join(dest, "ppo.json"), "w") as f:
+        json.dump(data, f, indent=1)
+        f.write("\n")
+    print("wrote nn/testdata/ppo.json")
 
 
 def build_half(root):
@@ -876,6 +1136,351 @@ def write_npy_samples(root):
     print("wrote", os.path.relpath(dest, os.path.join(root, "..")), "*.npy")
 
 
+def build_grpo(root):
+    """GRPO loss + group advantage golden — independent numpy from DeepSeekMath
+    (Shao et al. 2024 arXiv:2402.03300 eqs 3-4, §R69). Population std + eps=1e-4
+    (verl/TRL), k3 KL penalty, ε=0.2, β=0.04."""
+    dest = os.path.join(root, "..", "nn", "testdata")
+    os.makedirs(dest, exist_ok=True)
+    eps_clip, beta, adv_eps = 0.2, 0.04, 1e-4
+
+    # group advantage: two groups of rewards → normalized advantages
+    rewards = np.array([1.0, 0.0, 0.5, -0.5])
+    mean = rewards.mean()
+    std = rewards.std(ddof=0)  # population
+    adv_group = (rewards - mean) / (std + adv_eps)
+
+    # GRPO loss on a batch of per-token log-probs (advantage broadcast per token)
+    lp_new = np.array([-1.0, -2.0, -1.5, -3.0, -0.5])
+    lp_old = np.array([-1.2, -1.8, -1.5, -2.5, -1.0])
+    lp_ref = np.array([-1.1, -2.1, -1.4, -2.9, -0.7])
+    adv = np.array([1.0, -1.0, 0.5, 2.0, -0.5])
+    r = np.exp(lp_new - lp_old)
+    surr = np.minimum(r * adv, np.clip(r, 1 - eps_clip, 1 + eps_clip) * adv)
+    delta = lp_ref - lp_new
+    kl = np.exp(delta) - delta - 1.0  # Schulman k3
+    loss = float(-np.mean(surr - beta * kl))
+
+    data = {
+        "epsilon": eps_clip, "beta": beta, "adv_eps": adv_eps,
+        "rewards": [float(v) for v in rewards],
+        "adv_group": [float(v) for v in adv_group],
+        "lp_new": [float(v) for v in lp_new], "lp_old": [float(v) for v in lp_old],
+        "lp_ref": [float(v) for v in lp_ref], "adv": [float(v) for v in adv],
+        "loss": loss,
+    }
+    with open(os.path.join(dest, "grpo.json"), "w") as f:
+        json.dump(data, f, indent=1)
+        f.write("\n")
+    print("wrote nn/testdata/grpo.json")
+
+
+def build_conv1d(root):
+    """Causal depthwise 1-D conv golden — independent numpy (Mamba mixing conv,
+    §R77). out[t,c] = Σ_k w[c,k]·x_pad[t+k,c] + b[c], left-pad K-1 zeros."""
+    dest = os.path.join(root, "..", "autograd", "testdata")
+    os.makedirs(dest, exist_ok=True)
+    rng = np.random.default_rng(707)
+    L, D, K = 5, 3, 4
+    x = rng.standard_normal((L, D))
+    w = rng.standard_normal((D, K))
+    b = rng.standard_normal(D)
+    xpad = np.concatenate([np.zeros((K - 1, D)), x], axis=0)  # left-pad K-1
+    y = np.zeros((L, D))
+    for t in range(L):
+        for c in range(D):
+            for k in range(K):
+                y[t, c] += w[c, k] * xpad[t + k, c]
+            y[t, c] += b[c]
+
+    flat = lambda t: [float(v) for v in np.asarray(t).reshape(-1)]
+    data = {"L": L, "D": D, "K": K, "x": flat(x), "w": flat(w), "b": flat(b), "y": flat(y)}
+    with open(os.path.join(dest, "conv1d.json"), "w") as f:
+        json.dump(data, f, indent=1)
+        f.write("\n")
+    print("wrote autograd/testdata/conv1d.json")
+
+
+def build_ssm(root):
+    """Mamba selective-scan (S6) golden — independent numpy from the official
+    selective_scan_ref (Gu & Dao 2023 arXiv:2312.00752 §3.2, §R76). With skip."""
+    dest = os.path.join(root, "..", "autograd", "testdata")
+    os.makedirs(dest, exist_ok=True)
+    rng = np.random.default_rng(606)
+    L, D, N = 4, 3, 2
+    u = rng.standard_normal((L, D))
+    delta = np.log1p(np.exp(rng.standard_normal((L, D))))  # softplus → Δ>0
+    A = -np.exp(rng.standard_normal((D, N)))               # negative (stable Ā∈(0,1))
+    B = rng.standard_normal((L, N))
+    C = rng.standard_normal((L, N))
+    Dskip = rng.standard_normal(D)
+
+    h = np.zeros((D, N))
+    y = np.zeros((L, D))
+    for t in range(L):
+        for d in range(D):
+            for n in range(N):
+                abar = np.exp(delta[t, d] * A[d, n])
+                h[d, n] = abar * h[d, n] + delta[t, d] * B[t, n] * u[t, d]
+                y[t, d] += C[t, n] * h[d, n]
+            y[t, d] += Dskip[d] * u[t, d]
+
+    flat = lambda t: [float(v) for v in np.asarray(t).reshape(-1)]
+    data = {
+        "L": L, "D": D, "N": N,
+        "u": flat(u), "delta": flat(delta), "A": flat(A), "B": flat(B), "C": flat(C),
+        "Dskip": flat(Dskip), "y": flat(y),
+    }
+    with open(os.path.join(dest, "ssm.json"), "w") as f:
+        json.dump(data, f, indent=1)
+        f.write("\n")
+    print("wrote autograd/testdata/ssm.json")
+
+
+def build_mla(root):
+    """Multi-head Latent Attention golden — independent numpy from DeepSeek-V2
+    (Liu et al. 2024 arXiv:2405.04434 §2.1, §R74). Op-level (attention core) +
+    full-layer (all projections). Internal per-head decoupled RoPE, causal."""
+    dest = os.path.join(root, "..", "nn", "testdata")
+    os.makedirs(dest, exist_ok=True)
+    rng = np.random.default_rng(505)
+    seq, d, heads, dh, dR, dc, dcq, base = 5, 8, 2, 4, 4, 6, 6, 10000.0
+    hdh = heads * dh
+
+    def rope(src, nheads):  # src [seq, nheads*dR] → roped [seq, nheads*dR]
+        half = dR // 2
+        out = np.zeros_like(src)
+        for p in range(seq):
+            for h in range(nheads):
+                for e in range(half):
+                    th = base ** (-(2.0 * e) / dR)
+                    c, s = np.cos(p * th), np.sin(p * th)
+                    x0, x1 = src[p, h * dR + e], src[p, h * dR + e + half]
+                    out[p, h * dR + e] = x0 * c - x1 * s
+                    out[p, h * dR + e + half] = x1 * c + x0 * s
+        return out
+
+    h = rng.standard_normal((seq, d))
+    W_DKV = rng.standard_normal((d, dc)) * 0.3
+    W_UK = rng.standard_normal((dc, hdh)) * 0.3
+    W_UV = rng.standard_normal((dc, hdh)) * 0.3
+    W_KR = rng.standard_normal((d, dR)) * 0.3
+    W_DQ = rng.standard_normal((d, dcq)) * 0.3
+    W_UQ = rng.standard_normal((dcq, hdh)) * 0.3
+    W_QR = rng.standard_normal((dcq, heads * dR)) * 0.3
+    W_O = rng.standard_normal((hdh, d)) * 0.3
+
+    cKV = h @ W_DKV
+    kC, vC = cKV @ W_UK, cKV @ W_UV
+    kRpre = h @ W_KR
+    cQ = h @ W_DQ
+    qC = cQ @ W_UQ
+    qRpre = cQ @ W_QR
+
+    qRrot = rope(qRpre, heads)
+    kRrot = rope(kRpre, 1)
+    scale = 1.0 / np.sqrt(dh + dR)
+    O = np.zeros((seq, hdh))
+    for hh in range(heads):
+        hc = hh * dh
+        for i in range(seq):
+            score = np.full(i + 1, -np.inf)
+            for j in range(i + 1):  # causal
+                sc = qC[i, hc:hc + dh] @ kC[j, hc:hc + dh]
+                sc += qRrot[i, hh * dR:(hh + 1) * dR] @ kRrot[j]
+                score[j] = sc * scale
+            score = np.exp(score - score.max())
+            score /= score.sum()
+            for j in range(i + 1):
+                O[i, hc:hc + dh] += score[j] * vC[j, hc:hc + dh]
+    u = O @ W_O
+
+    flat = lambda t: [float(v) for v in np.asarray(t).reshape(-1)]
+    data = {
+        "seq": seq, "d": d, "heads": heads, "dh": dh, "dR": dR, "dc": dc, "dcq": dcq, "base": base,
+        "h": flat(h), "W_DKV": flat(W_DKV), "W_UK": flat(W_UK), "W_UV": flat(W_UV),
+        "W_KR": flat(W_KR), "W_DQ": flat(W_DQ), "W_UQ": flat(W_UQ), "W_QR": flat(W_QR), "W_O": flat(W_O),
+        "qC": flat(qC), "kC": flat(kC), "vC": flat(vC), "qRpre": flat(qRpre), "kRpre": flat(kRpre),
+        "O": flat(O), "u": flat(u),
+    }
+    with open(os.path.join(dest, "mla.json"), "w") as f:
+        json.dump(data, f, indent=1)
+        f.write("\n")
+    print("wrote nn/testdata/mla.json")
+
+
+def build_simpo_orpo(root):
+    """SimPO + ORPO reference-free preference-loss goldens — independent numpy
+    (Meng 2024 arXiv:2405.14734 eq5-7; Hong 2024 arXiv:2403.07691 eq6-7, §R71)."""
+    dest = os.path.join(root, "..", "nn", "testdata")
+    os.makedirs(dest, exist_ok=True)
+
+    def softplus(u):
+        return np.maximum(u, 0) + np.log1p(np.exp(-np.abs(u)))
+
+    # length-averaged log-probs (negative: probabilities < 1)
+    avg_w = np.array([-0.5, -1.2, -0.8, -2.0])
+    avg_l = np.array([-1.0, -0.9, -1.5, -1.8])
+
+    beta, gamma = 2.0, 1.0
+    z = beta * (avg_w - avg_l) - gamma
+    simpo = float(np.mean(softplus(-z)))
+
+    lam = 0.1
+    pw, pl = np.exp(avg_w), np.exp(avg_l)
+    log_or = (avg_w - avg_l) - (np.log1p(-pw) - np.log1p(-pl))
+    orpo = float(np.mean(-avg_w + lam * softplus(-log_or)))
+
+    data = {
+        "avg_w": [float(v) for v in avg_w], "avg_l": [float(v) for v in avg_l],
+        "beta": beta, "gamma": gamma, "lambda": lam,
+        "simpo": simpo, "orpo": orpo,
+    }
+    with open(os.path.join(dest, "simpo_orpo.json"), "w") as f:
+        json.dump(data, f, indent=1)
+        f.write("\n")
+    print("wrote nn/testdata/simpo_orpo.json")
+
+
+def build_cpo(root):
+    """CPO reference-free preference + NLL/BC golden — independent numpy
+    (Xu et al. 2024 arXiv:2401.08417 eq3-5, §R121). Log-probs are SUMMED over
+    tokens (DPO-style, not length-normalized); loss = mean(softplus(-beta*(lw-ll))
+    + alpha*(-lw)). Defaults beta=0.1, alpha (TRL cpo_alpha)=1."""
+    dest = os.path.join(root, "..", "nn", "testdata")
+    os.makedirs(dest, exist_ok=True)
+
+    def softplus(u):
+        return np.maximum(u, 0) + np.log1p(np.exp(-np.abs(u)))
+
+    # SUMMED sequence log-probs (larger magnitude than per-token averages)
+    sum_w = np.array([-8.0, -15.0, -6.5, -20.0])
+    sum_l = np.array([-10.0, -12.0, -9.0, -18.0])
+
+    beta, alpha = 0.1, 1.0
+    z = beta * (sum_w - sum_l)
+    cpo = float(np.mean(softplus(-z) + alpha * (-sum_w)))
+
+    data = {
+        "sum_w": [float(v) for v in sum_w], "sum_l": [float(v) for v in sum_l],
+        "beta": beta, "alpha": alpha, "cpo": cpo,
+    }
+    with open(os.path.join(dest, "cpo.json"), "w") as f:
+        json.dump(data, f, indent=1)
+        f.write("\n")
+    print("wrote nn/testdata/cpo.json")
+
+
+def build_dora(root):
+    """DoRA weight-decomposition golden (Liu et al. 2024 arXiv:2402.09353 eq5,
+    §R70). Independent numpy, [in,out] convention, per-output-column norm."""
+    dest = os.path.join(root, "..", "nn", "testdata")
+    os.makedirs(dest, exist_ok=True)
+    rng = np.random.default_rng(404)
+    din, dout, r, alpha = 4, 3, 2, 2.0
+    W = rng.standard_normal((din, dout))
+    A = rng.standard_normal((din, r))
+    B = rng.standard_normal((r, dout))       # nonzero → general (non-init) case
+    m = np.abs(rng.standard_normal(dout)) + 0.5  # test magnitude (positive)
+    x = rng.standard_normal((2, din))
+
+    V = W + (alpha / r) * (A @ B)
+    n = np.sqrt((V**2).sum(axis=0))          # per-output-column L2 norm [out]
+    Wp = m[None, :] * V / n[None, :]         # W' = m·V/‖V‖_col
+    y = x @ Wp
+    m_init = np.sqrt((W**2).sum(axis=0))     # ‖W‖_col → init magnitude (B=0 ⇒ W'=W)
+
+    flat = lambda t: [float(v) for v in np.asarray(t).reshape(-1)]
+    data = {
+        "in": din, "out": dout, "r": r, "alpha": alpha,
+        "W": flat(W), "A": flat(A), "B": flat(B), "m": flat(m), "x": flat(x),
+        "V": flat(V), "Wp": flat(Wp), "y": flat(y), "m_init": flat(m_init),
+    }
+    with open(os.path.join(dest, "dora.json"), "w") as f:
+        json.dump(data, f, indent=1)
+        f.write("\n")
+    print("wrote nn/testdata/dora.json")
+
+
+def build_moecombine(root):
+    """MoE renormalize-and-combine golden (Mixtral §R61, §T68). Independent numpy:
+    softmax gates → top-2 mask → renormalize over selected → mix expert outputs."""
+    dest = os.path.join(root, "..", "nn", "testdata")
+    os.makedirs(dest, exist_ok=True)
+    rng = np.random.default_rng(303)
+    T, E, D, k = 3, 4, 5, 2
+    logits = rng.standard_normal((T, E))
+    gates = np.exp(logits - logits.max(-1, keepdims=True))
+    gates /= gates.sum(-1, keepdims=True)
+    mask = np.zeros((T, E))
+    for t in range(T):
+        mask[t, np.argsort(-logits[t])[:k]] = 1  # top-k
+    w = gates * mask
+    experts = rng.standard_normal((E, T, D))
+    wn = w / w.sum(-1, keepdims=True)          # renormalize over selected
+    out = np.einsum("te,etd->td", wn, experts)  # y[t,d] = Σ_e ŵ[t,e]·E_e[t,d]
+    data = {
+        "T": T, "E": E, "D": D,
+        "w": [float(v) for v in w.reshape(-1)],
+        "experts": [[float(v) for v in experts[i].reshape(-1)] for i in range(E)],
+        "out": [float(v) for v in out.reshape(-1)],
+    }
+    with open(os.path.join(dest, "moecombine.json"), "w") as f:
+        json.dump(data, f, indent=1)
+        f.write("\n")
+    print("wrote nn/testdata/moecombine.json")
+
+
+def build_yarn(root):
+    """YaRN NTK-by-parts RoPE golden — independent numpy from the paper formula
+    (Peng et al. 2023 arXiv:2309.00071 §3.2, §R66). Params chosen so the ramp band
+    exercises extrapolated, fractional-ramp and interpolated dimensions."""
+    seq, hd, base = 6, 16, 10000.0
+    s = 4.0      # scale factor = new_ctx / orig_ctx
+    L = 2048.0   # original trained context length
+    beta_fast, beta_slow = 32.0, 1.0
+    half = hd // 2
+    rng = np.random.default_rng(202)
+    q = rng.standard_normal((seq, hd))
+
+    i = np.arange(half, dtype=np.float64)
+    theta = base ** (-(2.0 * i) / hd)     # base inverse frequencies θ_i
+
+    def corr_dim(rot):
+        return hd * np.log(L / (rot * 2.0 * np.pi)) / (2.0 * np.log(base))
+    low = max(np.floor(corr_dim(beta_fast)), 0.0)
+    high = min(np.ceil(corr_dim(beta_slow)), half - 1.0)
+    if low == high:
+        high += 0.001
+    gamma = np.clip((i - low) / (high - low), 0.0, 1.0)
+    inv = (1.0 - gamma) * theta + gamma * (theta / s)   # NTK-by-parts blend
+
+    pos = np.arange(seq, dtype=np.float64)
+    freqs = np.outer(pos, inv)                            # [seq, half]
+    emb = np.concatenate([freqs, freqs], axis=-1)
+    cos, sin = np.cos(emb), np.sin(emb)
+
+    def rotate_half(x):
+        return np.concatenate([-x[..., half:], x[..., :half]], axis=-1)
+    y = q * cos + rotate_half(q) * sin
+    m_scale = 0.1 * np.log(s) + 1.0
+
+    flat = lambda t: [float(v) for v in np.asarray(t).reshape(-1)]
+    data = {
+        "q": flat(q), "seq": seq, "hd": hd, "base": base,
+        "scale": s, "orig_ctx": L, "beta_fast": beta_fast, "beta_slow": beta_slow,
+        "low": float(low), "high": float(high),
+        "theta": flat(theta), "inv_freq": flat(inv),
+        "y": flat(y), "attn_scale": float(m_scale),
+    }
+    dest = os.path.join(root, "..", "autograd", "testdata")
+    os.makedirs(dest, exist_ok=True)
+    with open(os.path.join(dest, "yarn.json"), "w") as f:
+        json.dump(data, f, indent=1)
+        f.write("\n")
+    print("wrote autograd/testdata/yarn.json")
+
+
 def main():
     root = os.path.dirname(os.path.abspath(__file__))
     dest = os.path.join(root, "..", "backend", "ref", "testdata")
@@ -896,6 +1501,10 @@ def main():
         json.dump({"optim": build_optim()}, f, indent=1)
         f.write("\n")
     print("wrote nn/testdata/optim.json")
+    with open(os.path.join(nn_dest, "muon.json"), "w") as f:
+        json.dump(build_muon(), f, indent=1)
+        f.write("\n")
+    print("wrote nn/testdata/muon.json")
     write_npy_samples(root)
     write_safetensors_sample(root)
     build_transformer(root)
@@ -906,8 +1515,25 @@ def main():
     build_classic(root)
     build_half(root)
     build_lora(root)
+    build_dpo(root)
+    build_ppo(root)
+    build_moe(root)
+    build_kto(root)
+    build_ipo(root)
+    build_gae(root)
+    build_grpo(root)
+    build_moecombine(root)
+    build_dora(root)
+    build_simpo_orpo(root)
+    build_cpo(root)
+    build_conv1d(root)
+    build_ssm(root)
+    build_mla(root)
+    build_labelsmooth(root)
+    build_distill(root)
     build_llama(root)
     build_llama2(root)
+    build_yarn(root)
     build_tokenizer(root)
 
 

@@ -18,9 +18,9 @@ func TestHostileHeaderLength(t *testing.T) {
 		return b.Bytes() // no actual header body → must error, not allocate hlen
 	}
 	cases := map[string][]byte{
-		"v2 4GB-1 header":  mk(2, 0xFFFFFFFF),
-		"v2 1.7GB header":  mk(2, 0x69d7481e), // the fuzz-found seed
-		"v3 over-cap":      mk(3, (64<<20)+1),
+		"v2 4GB-1 header": mk(2, 0xFFFFFFFF),
+		"v2 1.7GB header": mk(2, 0x69d7481e), // the fuzz-found seed
+		"v3 over-cap":     mk(3, (64<<20)+1),
 	}
 	for name, data := range cases {
 		func() {

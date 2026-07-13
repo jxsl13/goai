@@ -72,7 +72,7 @@ func (m *MHA) StepKV(ctx *backend.Context, h, kc, vc *tensor.Tensor) (out, kNew,
 	kNew = concatRows(kc, kt)
 	vNew = concatRows(vc, vt)
 	// single query at the last position attends to all cached keys → no mask
-	attn, err := m.exec(ctx, backend.OpMHA, backend.Attrs{"heads": m.Heads, "causal": false}, q, kNew, vNew)
+	attn, err := m.exec(ctx, backend.OpMHA, backend.AttnAttrs{Heads: m.Heads, Causal: false}, q, kNew, vNew)
 	if err != nil {
 		return nil, nil, nil, err
 	}

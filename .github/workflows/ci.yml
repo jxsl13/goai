@@ -1,16 +1,36 @@
+# GoAI CI (§V4/§V7/§V23, rebuilt for the initial public push in §T562).
+#
+# Design informed by the reference Go repos:
+#   - gomlx:    -short on runners (full suites are for dev boxes), workflow_dispatch
+#   - gorgonia: -race with explicit -timeout
+#   - ollama:   multi-OS tests, `go mod tidy` drift check, PR concurrency cancel
+#   - spago:    go vet + atomic coverage profile
+#
+# The -short suite is the repo's designed fast path: every trained-model e2e is
+# -short-skipped, everything else runs — 24 packages, ~19s locally with cgo,
+# ~11s pure-Go, 75.1% statement coverage. GPU suites self-skip when no device is
+# present (metal.Available() guards); vulkan is tag-gated (needs MoltenVK/ICDs on
+# dev boxes) and is compile-checked here.
+
 name: ci
 
 on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
-# §V4 PLATFORM: Pure-Go build must stay green on macOS, Windows, Linux.
-# §V7 CGO: CGO_ENABLED=0 everywhere — no C toolchain in the ship path.
-env:
-  CGO_ENABLED: "0"
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.head_ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
 
 jobs:
+  # §V4/§V7/§V23 — the portable promise: the whole library builds, vets (which
+  # compiles _test.go files, §B45) and tests WITHOUT a C toolchain, on all
+  # three OSes. This is the gate every local iteration runs; now enforced on push.
   pure-go:
     name: pure-go / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
@@ -18,26 +38,106 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
+    env:
+      CGO_ENABLED: "0"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26.x"
-      - name: build
-        run: go build ./...
-      - name: vet
+          cache: false # zero-dependency module (no go.sum): nothing to cache
+      - name: vet (compiles tests too — §V23)
         run: go vet ./...
       - name: test
-        run: go test ./...
-      # §V5: benchmarks must at least build+run (perf-regression gate via
-      # benchstat is future work, §B30).
+        run: go test -short -count=1 -timeout 10m ./...
+      # §V5: benchmarks must at least build and run one iteration.
       - name: bench-smoke
-        run: go test -run=^$ -bench=. -benchtime=1x ./...
+        run: go test -run=^$ -bench=. -benchtime=1x -timeout 10m ./...
 
-  # §T11: experimental SIMD backend (AMD64). Allowed to be a soft gate until
-  # the simd/archsimd API stabilizes (§R1); does not block the pure-go gate.
+  # cgo on linux: the optimized CPU backend under the RACE detector (the §T511
+  # worker pool's standing guard, §B49-class bugs), plus gofmt and coverage.
+  test-linux-cgo:
+    name: cgo+race / ubuntu
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache: false
+      - name: gofmt
+        run: |
+          out=$(gofmt -l .)
+          if [ -n "$out" ]; then
+            echo "gofmt needed on:" && echo "$out" && exit 1
+          fi
+      - name: vet
+        run: go vet ./...
+      - name: test (race)
+        run: go test -short -count=1 -race -timeout 20m ./...
+      - name: coverage
+        run: |
+          go test -short -count=1 -covermode=atomic -coverprofile=coverage.out ./...
+          go tool cover -func=coverage.out | tail -1 | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.out
+
+  # darwin cgo: compiles the tag-free Metal backend (ADR-0013) and runs the
+  # -short suite. macOS arm64 runners expose a paravirtualized Metal GPU, so
+  # the metal tests run for real where available and self-skip otherwise.
+  test-macos-cgo:
+    name: cgo+metal / macos
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache: false
+      - name: vet (compiles the metal cgo backend)
+        run: go vet ./...
+      - name: test
+        run: go test -short -count=1 -timeout 20m ./...
+
+  # Tag-gated backends must at least COMPILE on every push so their code cannot
+  # rot (vulkan executes on dev boxes with MoltenVK; §B40 discipline stays local).
+  build-vulkan-tag:
+    name: build / vulkan tag
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache: false
+      - name: install vulkan headers
+        run: sudo apt-get update && sudo apt-get install -y libvulkan-dev
+      - name: build
+        run: go build -tags vulkan ./...
+
+  # go.mod stays tidy (ollama pattern; zero-dep module today, this guards drift).
+  tidy:
+    name: go mod tidy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache: false
+      - name: drift check
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod
+
+  # §T11: experimental SIMD backend (amd64). Soft gate until simd/archsimd
+  # stabilizes; does not block merges. NOTE: the ubuntu-amd64 runner is exactly
+  # the host class the parked §T11b/§T74 tasks wait for — once this repo is on
+  # GitHub, those can graduate to a real test job here.
   simd-amd64:
-    name: simd / ubuntu-amd64
+    name: simd / ubuntu-amd64 (soft)
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
@@ -45,6 +145,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26.x"
+          cache: false
       - name: build (GOEXPERIMENT=simd)
         run: GOEXPERIMENT=simd go build -tags=simd ./...
         env:

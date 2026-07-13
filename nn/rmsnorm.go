@@ -10,7 +10,7 @@ import (
 // Trainable via the OpRMSNorm VJP (§T38).
 type RMSNorm struct {
 	Gamma *tensor.Tensor // [d], init 1
-	Eps   float64
+	Eps   float64        // variance-floor epsilon (default 1e-5)
 }
 
 // NewRMSNorm builds an RMSNorm over feature size d (γ=1, eps=1e-5).
@@ -24,7 +24,7 @@ func NewRMSNorm(dtype tensor.Dtype, d int) *RMSNorm {
 
 // Forward normalizes x[..., d] through ctx.
 func (r *RMSNorm) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, error) {
-	out, err := backend.Execute(ctx, backend.OpRMSNorm, []*tensor.Tensor{x, r.Gamma}, backend.Attrs{"eps": r.Eps})
+	out, err := backend.Execute(ctx, backend.OpRMSNorm, []*tensor.Tensor{x, r.Gamma}, backend.NormAttrs{Eps: r.Eps})
 	if err != nil {
 		return nil, err
 	}

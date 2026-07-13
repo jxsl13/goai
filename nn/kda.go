@@ -1,0 +1,94 @@
+package nn
+
+import (
+	"fmt"
+	"math"
+
+	"github.com/jxsl13/goai/tensor"
+)
+
+// KimiDeltaAttention computes KDA — the linear-attention core of Kimi Linear
+// (Team Kimi 2025, arXiv:2510.26692, §T559): the Gated Delta Rule with the
+// scalar forget gate refined to a PER-KEY-CHANNEL (diagonal) decay,
+//
+//	S_t = (S_{t−1}·Diag(a_t))·(I − β_t k_t k_tᵀ) + β_t v_t k_tᵀ
+//	o_t = S_t q_t          (memory S ∈ ℝ^{d_v×d_k})
+//
+// a_t ∈ (0,1)^{d_k} forgets each key channel independently (finer-grained
+// memory control — the paper's delta over GatedDeltaNet), β_t ∈ (0,1) is the
+// delta writing strength. With every channel equal (a_t = α_t·1) this IS
+// GatedDeltaNet exactly (the collapse test); Kimi Linear stacks 3 KDA layers
+// per full-attention layer (the hybrid is architecture wiring, not new math).
+// Keys and queries are L2-normalized per row (the DeltaNet convention, matching
+// GatedDeltaNet). Host f64 analysis utility. q,k [seq,d_k]; v [seq,d_v];
+// a [seq,d_k]; beta [seq].
+func KimiDeltaAttention(q, k, v, a, beta *tensor.Tensor) (*tensor.Tensor, error) {
+	for _, t := range []*tensor.Tensor{q, k, v, a} {
+		if t.Ndim() != 2 {
+			return nil, fmt.Errorf("nn: KimiDeltaAttention wants rank-2 q,k,v,a")
+		}
+	}
+	seq, dk := q.Shape()[0], q.Shape()[1]
+	dv := v.Shape()[1]
+	if k.Shape()[0] != seq || v.Shape()[0] != seq || a.Shape()[0] != seq || beta.Shape()[0] != seq {
+		return nil, fmt.Errorf("nn: KimiDeltaAttention seq-length mismatch")
+	}
+	if k.Shape()[1] != dk || a.Shape()[1] != dk {
+		return nil, fmt.Errorf("nn: KimiDeltaAttention k/a must be [seq,%d]", dk)
+	}
+	out := tensor.New(q.Dtype(), tensor.Shape{seq, dv})
+	S := make([]float64, dv*dk) // memory [d_v, d_k]
+	sk := make([]float64, dv)   // S·k scratch
+	qt := make([]float64, dk)   // L2-normalized rows (the DeltaNet convention,
+	kt := make([]float64, dk)   // mirrored from GatedDeltaNet)
+	for t := range seq {
+		bt := beta.AtF64(t, 0)
+		var qn, kn float64
+		for c := range dk {
+			qv, kv := q.AtF64(t, c), k.AtF64(t, c)
+			qt[c], kt[c] = qv, kv
+			qn += qv * qv
+			kn += kv * kv
+		}
+		if qn > 0 {
+			qn = 1 / math.Sqrt(qn)
+			for c := range dk {
+				qt[c] *= qn
+			}
+		}
+		if kn > 0 {
+			kn = 1 / math.Sqrt(kn)
+			for c := range dk {
+				kt[c] *= kn
+			}
+		}
+		// decay each key channel, then the delta write S += β(v − S·k)·kᵀ.
+		for c := range dk {
+			ac := a.AtF64(t, c)
+			for r := range dv {
+				S[r*dk+c] *= ac
+			}
+		}
+		for r := range dv {
+			var s float64
+			for c := range dk {
+				s += S[r*dk+c] * kt[c]
+			}
+			sk[r] = s
+		}
+		for r := range dv {
+			delta := bt * (v.AtF64(t, r) - sk[r])
+			for c := range dk {
+				S[r*dk+c] += delta * kt[c]
+			}
+		}
+		for r := range dv {
+			var o float64
+			for c := range dk {
+				o += S[r*dk+c] * qt[c]
+			}
+			out.SetF64(o, t, r)
+		}
+	}
+	return out, nil
+}

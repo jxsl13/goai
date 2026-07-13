@@ -78,8 +78,8 @@ func TestVulkanGPUTraining(t *testing.T) {
 	if !vulkan.Available() {
 		t.Skip("vulkan: no compute device — skipping (§V4)")
 	}
-	vulkanB, _ := backend.Get("vulkan")
-	cpuB, _ := backend.Get("cpu")
+	vulkanB, _ := backend.Get(backend.Vulkan)
+	cpuB, _ := backend.Get(backend.CPU)
 
 	x, y := blobsF32(40, 1)
 
@@ -101,7 +101,7 @@ func TestVulkanServesMatmul(t *testing.T) {
 	if !vulkan.Available() {
 		t.Skip("vulkan: no compute device — skipping (§V4)")
 	}
-	vb, _ := backend.Get("vulkan")
+	vb, _ := backend.Get(backend.Vulkan)
 	if _, ok := vb.Kernel(backend.OpMatMul, tensor.F32); !ok {
 		t.Fatal("vulkan must serve f32 matmul for GPU training")
 	}

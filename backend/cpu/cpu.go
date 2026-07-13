@@ -31,9 +31,9 @@ func (b *Backend) add(op backend.Op, dtype tensor.Dtype, k backend.Kernel) {
 	b.table[kernelKey{op, dtype}] = k
 }
 
-func (b *Backend) Name() string                    { return "cpu" }
-func (b *Backend) Device() tensor.Device           { return tensor.CPU() }
-func (b *Backend) Synchronize() error              { return nil }
+func (b *Backend) Name() backend.Name    { return backend.CPU }
+func (b *Backend) Device() tensor.Device { return tensor.CPU() }
+func (b *Backend) Synchronize() error    { return nil }
 func (b *Backend) Kernel(op backend.Op, dtype tensor.Dtype) (backend.Kernel, bool) {
 	k, ok := b.table[kernelKey{op, dtype}]
 	return k, ok
@@ -44,9 +44,38 @@ func (b *Backend) Kernel(op backend.Op, dtype tensor.Dtype) (backend.Kernel, boo
 // benchmarks (§V5).
 const parThreshold = 1 << 15 // 32768
 
-// parallelWork splits [0,n) into chunks across GOMAXPROCS workers and runs body
-// on each, or runs body once inline when the estimated total work
-// (n × workPerItem) is small. body must be safe on disjoint sub-ranges.
+// poolTask is one chunk handed to the persistent workers (§T511).
+type poolTask struct {
+	body   func(lo, hi int)
+	lo, hi int
+	wg     *sync.WaitGroup
+}
+
+// poolCh feeds the persistent worker pool. Workers start once at package init
+// and park on the channel — previously every parallelWork call spawned
+// GOMAXPROCS goroutines, and at just-above-threshold sizes that spawn+schedule
+// barrier dominated the call. Submission is NON-blocking: when the channel is
+// full (nested parallelWork from inside a worker, or GOMAXPROCS grew after
+// init) the chunk runs inline on the caller, so the pool can never deadlock.
+var poolCh chan poolTask
+
+func init() {
+	n := runtime.GOMAXPROCS(0)
+	poolCh = make(chan poolTask, n)
+	for range n {
+		go func() {
+			for t := range poolCh {
+				t.body(t.lo, t.hi)
+				t.wg.Done()
+			}
+		}()
+	}
+}
+
+// parallelWork splits [0,n) into chunks across the persistent worker pool and
+// runs body on each — the caller works the first chunk itself — or runs body
+// once inline when the estimated total work (n × workPerItem) is small.
+// body must be safe on disjoint sub-ranges.
 func parallelWork(n, workPerItem int, body func(lo, hi int)) {
 	workers := runtime.GOMAXPROCS(0)
 	if workers <= 1 || n*workPerItem < parThreshold {
@@ -55,14 +84,18 @@ func parallelWork(n, workPerItem int, body func(lo, hi int)) {
 	}
 	chunk := (n + workers - 1) / workers
 	var wg sync.WaitGroup
-	for lo := 0; lo < n; lo += chunk {
+	first := min(chunk, n)
+	for lo := first; lo < n; lo += chunk {
 		hi := min(lo+chunk, n)
 		wg.Add(1)
-		go func(lo, hi int) {
-			defer wg.Done()
+		select {
+		case poolCh <- poolTask{body: body, lo: lo, hi: hi, wg: &wg}:
+		default: // pool saturated: run inline rather than block
 			body(lo, hi)
-		}(lo, hi)
+			wg.Done()
+		}
 	}
+	body(0, first)
 	wg.Wait()
 }
 

@@ -5,12 +5,13 @@ package tensor
 type DeviceKind uint8
 
 const (
-	KindCPU DeviceKind = iota
-	KindCUDA
-	KindMetal
-	KindVulkan
+	KindCPU    DeviceKind = iota // host CPU (always available)
+	KindCUDA                     // NVIDIA CUDA GPU
+	KindMetal                    // Apple Metal GPU
+	KindVulkan                   // Vulkan compute GPU
 )
 
+// String returns the device kind's lowercase name (e.g. "cpu", "cuda").
 func (k DeviceKind) String() string {
 	switch k {
 	case KindCPU:
@@ -42,8 +43,8 @@ type cpuDevice struct {
 	alloc Allocator
 }
 
-func (d cpuDevice) Kind() DeviceKind    { return KindCPU }
-func (d cpuDevice) String() string      { return "cpu" }
+func (d cpuDevice) Kind() DeviceKind     { return KindCPU }
+func (d cpuDevice) String() string       { return "cpu" }
 func (d cpuDevice) Allocator() Allocator { return d.alloc }
 
 // defaultCPU is the process-wide CPU device backed by the heap allocator.

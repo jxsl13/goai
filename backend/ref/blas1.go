@@ -79,7 +79,9 @@ func axpyKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) 
 	if err := sameShapeDtype(x, y); err != nil {
 		return nil, err
 	}
-	alpha := attrs.Float("alpha", 1)
+	pa, _ := attrs.(backend.AXPYAttrs)
+	pa = pa.WithDefaults()
+	alpha := pa.Alpha
 	out := tensor.NewOn(ctx.Device(), x.Dtype(), x.Shape())
 	for pos := range x.Numel() {
 		idx := tensor.Unravel(pos, x.Shape())

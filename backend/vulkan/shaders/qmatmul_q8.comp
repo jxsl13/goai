@@ -1,0 +1,51 @@
+#version 450
+
+// Q8_0 quantized matmul (§T137, the Vulkan twin of the Metal kernel §T136). One invocation
+// per output element (mi,ni) streams the ni-th weight row's K/32 Q8_0 blocks, dequantizing
+// each in-kernel: a block is [f16 scale | 32 int8], 34 bytes. O[M,N] = X[M,K] · dequant(W)ᵀ.
+// The weight buffer is the raw Q8_0 bytes reinterpreted as a uint (32-bit word) array — bytes
+// are extracted with shifts so no 8/16-bit-storage extension is needed; the f16 scale is
+// decoded with the core unpackHalf2x16 builtin. Accumulation is f32 (the CPU reference is
+// f64, so V-CROSS uses a crossTol). Compiled to qmatmul_q8.spv by `make vulkan-spv` (glslc).
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer BufX { float x[]; };
+layout(std430, binding = 1) readonly buffer BufW { uint w[]; }; // Q8_0 bytes as 32-bit words
+layout(std430, binding = 2) writeonly buffer BufO { float o[]; };
+
+layout(push_constant) uniform PC {
+    int M; int K; int N;
+} p;
+
+// getByte returns the byte at flat byte-offset off from the word-packed weight buffer.
+uint getByte(int off) {
+    uint word = w[off >> 2];
+    return (word >> ((uint(off & 3)) * 8u)) & 0xFFu;
+}
+
+void main() {
+    uint gid = gl_GlobalInvocationID.x;
+    if (gid >= uint(p.M * p.N)) {
+        return;
+    }
+    int mi = int(gid) / p.N;
+    int ni = int(gid) % p.N;
+    int nb = p.K / 32;
+    int rowBytes = nb * 34;
+    int woffRow = ni * rowBytes;
+
+    float acc = 0.0;
+    for (int b = 0; b < nb; ++b) {
+        int woff = woffRow + b * 34;
+        uint raw = getByte(woff) | (getByte(woff + 1) << 8);
+        float scale = unpackHalf2x16(raw).x; // f16 in the low 16 bits
+        int xoff = mi * p.K + b * 32;
+        for (int i = 0; i < 32; ++i) {
+            int q = int(getByte(woff + 2 + i));
+            if (q > 127) { q -= 256; } // sign-extend the int8 quant
+            acc += x[xoff + i] * scale * float(q);
+        }
+    }
+    o[mi * p.N + ni] = acc;
+}

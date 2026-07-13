@@ -1,0 +1,52 @@
+#version 450
+
+// Numerically-stable softmax over the last axis (§V12): y = exp(x−max)/Σexp(x−max),
+// per ROW (the last-axis slice of `dim` elements). COOPERATIVE (§T345/§T346): ONE
+// workgroup of 256 invocations per row, coalesced strided access. Two tree reductions
+// (row max, then Σexp) share the red[256] scratch with a barrier between phases. Flat
+// row-major std430 f32 buffers. Compiled to softmax.spv by `make vulkan-spv` (glslc).
+// Dispatch is `rows` workgroups of 256. f32 exp vs the reference's f64, §V11 tolerance.
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer BufX { float x[]; };
+layout(std430, binding = 1) writeonly buffer BufO { float o[]; };
+
+layout(push_constant) uniform Dims { int rows; int dim; } d;
+
+shared float red[256];
+
+void main() {
+    uint row = gl_WorkGroupID.x;
+    if (row >= uint(d.rows)) {
+        return; // whole workgroup returns together → barriers stay uniform
+    }
+    uint lane = gl_LocalInvocationID.x;
+    uint base = row * uint(d.dim);
+    float pm = -1e30;
+    for (int j = int(lane); j < d.dim; j += 256) {
+        pm = max(pm, x[base + uint(j)]);
+    }
+    red[lane] = pm;
+    barrier();
+    for (uint s = 128u; s > 0u; s >>= 1) {
+        if (lane < s) { red[lane] = max(red[lane], red[lane + s]); }
+        barrier();
+    }
+    float m = red[0];
+    barrier();
+    float ps = 0.0;
+    for (int j = int(lane); j < d.dim; j += 256) {
+        ps += exp(x[base + uint(j)] - m);
+    }
+    red[lane] = ps;
+    barrier();
+    for (uint s = 128u; s > 0u; s >>= 1) {
+        if (lane < s) { red[lane] += red[lane + s]; }
+        barrier();
+    }
+    float inv = 1.0 / red[0];
+    for (int j = int(lane); j < d.dim; j += 256) {
+        o[base + uint(j)] = exp(x[base + uint(j)] - m) * inv;
+    }
+}

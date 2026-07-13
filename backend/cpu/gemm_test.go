@@ -15,8 +15,8 @@ import (
 // the optimized result is bit-identical to backend/ref (tolerance 0) across
 // square, non-square, and parallel (large-M) shapes and both dtypes.
 func TestGemmCrossReferenceExact(t *testing.T) {
-	cpu, _ := backend.Get("cpu")
-	ref, _ := backend.Get("ref")
+	cpu, _ := backend.Get(backend.CPU)
+	ref, _ := backend.Get(backend.Ref)
 
 	shapes := []struct{ m, k, n int }{
 		{1, 1, 1}, {2, 3, 4}, {5, 7, 3}, {64, 64, 64}, {128, 96, 32}, {200, 10, 7},
@@ -40,8 +40,8 @@ func TestGemmCrossReferenceExact(t *testing.T) {
 
 // Transposed-view operand: materialized then bit-identical to ref.
 func TestGemmTransposedViewCross(t *testing.T) {
-	cpu, _ := backend.Get("cpu")
-	ref, _ := backend.Get("ref")
+	cpu, _ := backend.Get(backend.CPU)
+	ref, _ := backend.Get(backend.Ref)
 	a := bench.RandF64(tensor.Shape{8, 5}, 3)
 	bt := bench.RandF64(tensor.Shape{7, 5}, 4)
 	btv, _ := bt.Transpose(0, 1) // (5,7)
@@ -50,7 +50,7 @@ func TestGemmTransposedViewCross(t *testing.T) {
 	assertEqualExact(t, gc, gr, "matmul-transposed")
 }
 
-func benchMatMul(b *testing.B, name string, dtype tensor.Dtype, sz int) {
+func benchMatMul(b *testing.B, name backend.Name, dtype tensor.Dtype, sz int) {
 	be, _ := backend.Get(name)
 	ctx := backend.NewContext().WithBackend(be)
 	var a, c *tensor.Tensor
@@ -68,7 +68,9 @@ func benchMatMul(b *testing.B, name string, dtype tensor.Dtype, sz int) {
 	}
 }
 
-func BenchmarkMatMulF64_128_cpu(b *testing.B) { benchMatMul(b, "cpu", tensor.F64, 128) }
-func BenchmarkMatMulF64_256_cpu(b *testing.B) { benchMatMul(b, "cpu", tensor.F64, 256) }
-func BenchmarkMatMulF64_512_cpu(b *testing.B) { benchMatMul(b, "cpu", tensor.F64, 512) }
-func BenchmarkMatMulF32_128_cpu(b *testing.B) { benchMatMul(b, "cpu", tensor.F32, 128) }
+func BenchmarkMatMulF64_128_cpu(b *testing.B)  { benchMatMul(b, backend.CPU, tensor.F64, 128) }
+func BenchmarkMatMulF64_256_cpu(b *testing.B)  { benchMatMul(b, backend.CPU, tensor.F64, 256) }
+func BenchmarkMatMulF64_512_cpu(b *testing.B)  { benchMatMul(b, backend.CPU, tensor.F64, 512) }
+func BenchmarkMatMulF64_1024_cpu(b *testing.B) { benchMatMul(b, backend.CPU, tensor.F64, 1024) }
+func BenchmarkMatMulF32_128_cpu(b *testing.B)  { benchMatMul(b, backend.CPU, tensor.F32, 128) }
+func BenchmarkMatMulF32_1024_cpu(b *testing.B) { benchMatMul(b, backend.CPU, tensor.F32, 1024) }

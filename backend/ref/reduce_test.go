@@ -72,7 +72,7 @@ func runReduce(t *testing.T, op backend.Op, in []float64, shape []int, axes []in
 	} else {
 		x = tensor.FromFloat64(tensor.Shape(shape), in)
 	}
-	out, err := backend.Execute(backend.NewContext(), op, []*tensor.Tensor{x}, backend.Attrs{"axes": axes})
+	out, err := backend.Execute(backend.NewContext(), op, []*tensor.Tensor{x}, backend.ReduceAttrs{Axes: axes})
 	if err != nil {
 		t.Fatalf("%v axes=%v: %v", op, axes, err)
 	}
@@ -139,8 +139,8 @@ func TestArgmaxParity(t *testing.T) {
 			}
 		}
 	}
-	check(backend.Attrs{"axis": 0}, g.Reduce.Ops.Argmax["axis0"], "axis0")
-	check(backend.Attrs{"axis": 1}, g.Reduce.Ops.Argmax["axis1"], "axis1")
+	check(backend.ArgMaxAttrs{Axis: 0}, g.Reduce.Ops.Argmax["axis0"], "axis0")
+	check(backend.ArgMaxAttrs{Axis: 1}, g.Reduce.Ops.Argmax["axis1"], "axis1")
 	check(nil, g.Reduce.Ops.Argmax["flat"], "flat") // no axis → flat
 }
 
@@ -182,7 +182,7 @@ func TestReduceF64Accumulation(t *testing.T) {
 func TestReduceKeepdimsAndEmpty(t *testing.T) {
 	x := tensor.FromFloat64(tensor.Shape{3, 4}, make([]float64, 12))
 	out, err := backend.Execute(backend.NewContext(), backend.OpSum, []*tensor.Tensor{x},
-		backend.Attrs{"axes": []int{1}, "keepdims": true})
+		backend.ReduceAttrs{Axes: []int{1}, KeepDims: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,11 +192,11 @@ func TestReduceKeepdimsAndEmpty(t *testing.T) {
 
 	// empty reduction identities: sum→0, mean→NaN
 	e := tensor.New(tensor.F64, tensor.Shape{2, 0})
-	s, _ := backend.Execute(backend.NewContext(), backend.OpSum, []*tensor.Tensor{e}, backend.Attrs{"axes": []int{1}})
+	s, _ := backend.Execute(backend.NewContext(), backend.OpSum, []*tensor.Tensor{e}, backend.ReduceAttrs{Axes: []int{1}})
 	if s[0].AtF64(0) != 0 || s[0].AtF64(1) != 0 {
 		t.Error("empty sum must be identity 0")
 	}
-	m, _ := backend.Execute(backend.NewContext(), backend.OpMean, []*tensor.Tensor{e}, backend.Attrs{"axes": []int{1}})
+	m, _ := backend.Execute(backend.NewContext(), backend.OpMean, []*tensor.Tensor{e}, backend.ReduceAttrs{Axes: []int{1}})
 	if !math.IsNaN(m[0].AtF64(0)) {
 		t.Error("empty mean must be NaN")
 	}

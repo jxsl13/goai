@@ -43,8 +43,8 @@ func TestLinearForward(t *testing.T) {
 
 // §V3: cpu addbias is bit-identical to ref.
 func TestAddBiasCross(t *testing.T) {
-	cpu, _ := backend.Get("cpu")
-	ref, _ := backend.Get("ref")
+	cpu, _ := backend.Get(backend.CPU)
+	ref, _ := backend.Get(backend.Ref)
 	x := tensor.FromFloat64(tensor.Shape{3, 4}, []float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12})
 	b := tensor.FromFloat64(tensor.Shape{4}, []float64{0.25, -0.5, 1.5, -2})
 	gc, err := backend.Execute(backend.NewContext().WithBackend(cpu), backend.OpAddBias, []*tensor.Tensor{x, b}, nil)

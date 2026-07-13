@@ -12,7 +12,7 @@ import (
 type LayerNorm struct {
 	Gamma *tensor.Tensor // [d], init 1
 	Beta  *tensor.Tensor // [d], init 0
-	Eps   float64
+	Eps   float64        // variance-floor epsilon (default 1e-5)
 }
 
 // NewLayerNorm builds a LayerNorm over feature size d (γ=1, β=0, eps=1e-5).
@@ -29,7 +29,7 @@ func NewLayerNorm(dtype tensor.Dtype, d int) *LayerNorm {
 // Forward normalizes x[..., d] through ctx.
 func (l *LayerNorm) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, error) {
 	out, err := backend.Execute(ctx, backend.OpLayerNorm,
-		[]*tensor.Tensor{x, l.Gamma, l.Beta}, backend.Attrs{"eps": l.Eps})
+		[]*tensor.Tensor{x, l.Gamma, l.Beta}, backend.NormAttrs{Eps: l.Eps})
 	if err != nil {
 		return nil, err
 	}

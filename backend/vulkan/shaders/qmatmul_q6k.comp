@@ -1,0 +1,77 @@
+#version 450
+
+// Q6_K quantized matmul (§T141, the Vulkan twin of the Metal kernel §T140). One invocation per
+// output (mi,ni) streams the ni-th weight row's K/256 Q6_K super-blocks (210 B: ql[128],
+// qh[64], scales[16] int8, f16 d), dequantizing in-kernel. SYMMETRIC y = d·scale·(q6−32) with a
+// signed int8 per-sub-block scale and the 6-bit quant assembled from a ql nibble + 2 qh high
+// bits. Traversal mirrors dequantize_row_q6_K: two 128-groups, four quants per l with scale
+// indices +0/2/4/6. The weight buffer is the raw bytes as a uint word array (portable — no
+// 8/16-bit-storage extension); the f16 d uses unpackHalf2x16. Compiled by `make vulkan-spv`.
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer BufX { float x[]; };
+layout(std430, binding = 1) readonly buffer BufW { uint w[]; };
+layout(std430, binding = 2) writeonly buffer BufO { float o[]; };
+
+layout(push_constant) uniform PC {
+    int M; int K; int N;
+} p;
+
+uint getByte(int off) {
+    uint word = w[off >> 2];
+    return (word >> ((uint(off & 3)) * 8u)) & 0xFFu;
+}
+
+// getS8 reads a signed int8 (the Q6_K sub-block scale) from the byte buffer.
+int getS8(int off) {
+    int s = int(getByte(off));
+    return s > 127 ? s - 256 : s;
+}
+
+void main() {
+    uint gid = gl_GlobalInvocationID.x;
+    if (gid >= uint(p.M * p.N)) {
+        return;
+    }
+    int mi = int(gid) / p.N;
+    int ni = int(gid) % p.N;
+    int nsb = p.K / 256;
+    int rowBytes = nsb * 210;
+    int rowOff = ni * rowBytes;
+
+    float acc = 0.0;
+    for (int sb = 0; sb < nsb; ++sb) {
+        int base = rowOff + sb * 210;
+        int qlB = base;
+        int qhB = base + 128;
+        int scB = base + 192;
+        uint dr = getByte(base + 208) | (getByte(base + 209) << 8);
+        float d = unpackHalf2x16(dr).x;
+        for (int grp = 0; grp < 2; ++grp) {
+            int qlo = grp * 64;
+            int qho = grp * 32;
+            int sco = grp * 8;
+            int xk = mi * p.K + sb * 256 + grp * 128;
+            for (int l = 0; l < 32; ++l) {
+                int is = l / 16;
+                uint ql0 = getByte(qlB + qlo + l);
+                uint ql1 = getByte(qlB + qlo + l + 32);
+                uint qh = getByte(qhB + qho + l);
+                int q1 = int(ql0 & 0xFu) | int((qh & 3u) << 4);
+                int q2 = int(ql1 & 0xFu) | int(((qh >> 2) & 3u) << 4);
+                int q3 = int(ql0 >> 4) | int(((qh >> 4) & 3u) << 4);
+                int q4 = int(ql1 >> 4) | int(((qh >> 6) & 3u) << 4);
+                float s0 = float(getS8(scB + sco + is + 0));
+                float s2 = float(getS8(scB + sco + is + 2));
+                float s4 = float(getS8(scB + sco + is + 4));
+                float s6 = float(getS8(scB + sco + is + 6));
+                acc += x[xk + l]      * d * s0 * float(q1 - 32);
+                acc += x[xk + l + 32] * d * s2 * float(q2 - 32);
+                acc += x[xk + l + 64] * d * s4 * float(q3 - 32);
+                acc += x[xk + l + 96] * d * s6 * float(q4 - 32);
+            }
+        }
+    }
+    o[mi * p.N + ni] = acc;
+}

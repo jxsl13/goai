@@ -32,6 +32,37 @@ truth. Machine/arch is recorded alongside any comparison. §T12b's 4-row registe
 blocking preserves per-element k-order → still bit-identical to ref (V11 tol 0).
 Next GFLOP/s gains: archsimd FMA microkernel on amd64, §T11b.)
 
+## Cross-language baseline: GoAI vs PyTorch (§R67, 2026-07-06)
+
+The per-kernel tables above compare GoAI against its own Pure-Go reference. This
+one compares the optimized `cpu` GEMM against **PyTorch** (the parity target),
+head-to-head on identical sizes/dtypes. Harness: `backend/cpu/gflops_bench_test.go`
+(Go, `GFLOP/s` metric) + `testdata/bench_torch.py` (torch). Dense N×N = 2·N³ flops.
+
+```sh
+go test ./backend/cpu -run '^$' -bench 'GEMM.*gflops' -benchtime=1s
+.venv/bin/python testdata/bench_torch.py
+```
+
+| dtype · N | GoAI cpu | PyTorch (Accelerate) | GoAI / torch |
+|-----------|---------:|---------------------:|-------------:|
+| f64 512   | 60.6  | 660.3  | 9.2% |
+| f64 1024  | 69.3  | 683.6  | 10.1% |
+| f32 512   | 58.5  | 2312.8 | 2.5% |
+| f32 1024  | 70.4  | 2734.7 | 2.6% |
+
+(Indicative darwin/arm64, Apple M2 Pro, torch 2.12.1, Go 1.26. Committed CI is the
+source of truth.) Two levers, in priority order (see
+`docs/research/02-frontier-and-perf-2026-07-06.md` for the full roadmap):
+
+1. **f32 SIMD width** — GoAI f32 ≈ f64 (~70 GFLOP/s), but torch f32 is ~4× its f64.
+   Our kernel does not exploit f32's 2× lanes; a SIMD microkernel roughly doubles
+   f32 throughput (portable, no AMX needed).
+2. **BLIS/Goto blocking + asm microkernel** — packing + register blocking lifts a
+   scalar kernel to ~50-60% of scalar peak; asm/`avo`/Go-1.26-`simd` closes most of
+   the rest. The residual (Apple AMX / AVX-512) is a documented cgo-gate candidate,
+   not a pure-Go target.
+
 ## The first cgo gate: Metal/MPS (§T20, PASSED 2026-07-05)
 
 All three §C2 conditions held before merge: (1) Pure-Go GEMM at its documented
@@ -46,6 +77,186 @@ ceiling (§T12/§T12b); (2) benchmark over the §C3 threshold (≥1.5×); (3)
 Cross-tolerance (§V11): rtol(K) = 1e-6·√K (MPS accumulates in f32 and reorders).
 Run: `make metal-test` / `make metal-bench` (darwin + cgo only).
 
+## Cross-backend coverage: `make bench-compare` (§T92, extended §T338)
+
+`internal/benchcompare` times each accelerated op on ref/cpu/metal/vulkan side by
+side. Rows (2026-07-12): MatMul (256/512/1024), MHAForward/MHABackward, FlashAttn,
+Retention/RetentionBackward, Softmax, RMSNorm, Conv2D (n8c16hw32 latency probe +
+n8c64hw56 ResNet-block, §T341). Snapshot after the
+§T335–§T337 GPU-overhead work (M2 Pro, medians, 30x):
+
+| Op (shape) | ref | cpu | metal | vulkan |
+|------------|----:|----:|------:|-------:|
+| FlashAttn (512·8·64, causal) | 761ms | 757ms | 12.1ms | 12.2ms |
+| Retention (512×64, γ .968)   | 87.7ms | 87.7ms | 10.6ms | 10.8ms |
+| RetentionBackward (512×64)   | 319ms | 319ms | 20.2ms | 20.4ms |
+| Softmax (2048×2048)          | 83.0ms | 82.8ms | 1.65ms | 1.71ms |
+| RMSNorm (2048×2048)          | 78.8ms | 80.7ms | 1.80ms | 1.72ms |
+| LayerNorm (2048×2048)        | ~80ms  | ~80ms  | 1.66ms | 1.70ms |
+
+Regression check 2026-07-13 (§T524, after the T504–T523 era incl. the cpu worker
+pool): every row re-measured within noise or slightly better (FlashAttn metal
+12.1→10.8ms, RMSNorm metal 1.80→1.63ms; MatMul 1024 metal 1645 GFLOP/s, vulkan
+582 vs 594 GFLOP/s recorded at §T335). No drift to investigate.
+
+§T528 (2026-07-13): vulkan MHABackward got the metal-style matmul decomposition
+(strided matmuls + packed softmax + jacobian, 7 staged submits): 71.5ms → 4.74ms
+(15.1×), now 1.5× behind metal's MPS path. The per-op vulkan MHA FORWARD stays on
+flash DELIBERATELY: §T398 measured the decomposed forward at 6× in isolation but a
+real-GPT LOSS (3191→2957 tok/s — vulkan's forward is FFN-bound, not attention-bound);
+the backward is different because it was 24× off, far above dispatch overhead.
+§T530 real-workload confirmation: full training step (D512 S256 L6, the metal bench
+shape, new `BenchmarkGPTTrainingStepVK`): 934.7 → 1591 tok/s = **1.70× vulkan GPT
+training** from the backward chain alone (A/B/A file-toggle, medians of 3, a one-off
+thermal outlier ruled out with 6 further chain runs).
+§T531 profile-driven follow-up: GOAI_TIME_OPS put the FORWARD mha at 19% of the
+training step — the §T398 rejection had measured a costlier per-head-submit chain.
+Rebuilt in the §T528 structure and A/B/A'd: flash 1590 → chain 1878 tok/s (+18%),
+now the DEFAULT for the sq==sk no-window shape (flash keeps window + error fallback).
+Cumulative §T528+§T531: **934.7 → 1882 tok/s = 2.01× vulkan GPT training** —
+metal-class (its §T399 rework gave 2.04×). Remaining profile: matmul 51% (GEMM
+ceiling), attention now ~14%.
+§T534/§B49: profiling METAL's step found the residual adds at 14.6% — the per-op
+GPU binary kernels violated ADR-0008 on host-resident tensors. Binary ops now route
+to the optimized cpu backend on BOTH GPU backends (with the recorder STRIPPED on the
+re-dispatch — §B49: keeping it doubled every routed op's gradients). Final honest
+numbers: metal 2985→3219 tok/s (+7.8%), vulkan 1882→1992 (+5.8%, arc cumulative
+935→1992 = 2.13×).
+
+History of the row-parallel norm/softmax kernels (all measured 2048×2048, medians):
+- Original one-thread-per-row, ~1024-wide threadgroups → metal 10ms / vulkan 2.8ms.
+- §T339 capped metal at 64 threads/threadgroup (dispatch-granularity fix) → ~3ms.
+- §T345/§T346 made them COOPERATIVE — one 256-thread threadgroup per row, coalesced
+  strided access + a threadgroup tree reduction (the old kernel's neighbouring threads
+  read addresses `dim` floats apart, fully uncoalesced, hitting ~10% of bandwidth) →
+  ~1.7ms, metal and vulkan at parity — the coalesced kernel is the real, measured win.
+- The remaining ~1.7ms floor was *assumed* to be the host↔device memcpy, but §T348/§B42
+  **measured** it: a same-session A/B with `bytesNoCopy` zero-copy vs the copy path showed
+  **no difference** (~1.73 vs ~1.75ms). The copy is NOT the bottleneck. The kernels move
+  ~48MB at only ~25 GB/s (≪ the ~200 GB/s the hardware allows), so the floor is per-op GPU
+  dispatch / `waitUntilCompleted` latency + reduction-barrier serialization. The next lever
+  for this family is **fewer per-op GPU round-trips** (batch ops into one command buffer with
+  barriers, as §T343 did for conv; or a persistent encoder / graph submission) — not
+  zero-copy, which was built, measured, and reverted (ADR-0018).
+
+## Real-workload throughput: end-to-end GPT (§T350–§T355)
+
+The per-op tables above are micro-benchmarks; §C3/§B10 require judging optimizations
+against a real model. `BenchmarkGPTForward` / `BenchmarkGPTTrainingStep` time a full
+transformer forward (and forward+backward) on a realistically-sized synthetic GPT
+(vocab 4096, 512-dim, 8 heads, 6 layers, 256 tokens) across every backend. In
+`internal/benchcompare` (cpu/metal/vulkan via `make bench-compare`) and, for cpu-vs-metal,
+in `backend/metal/gpt_test.go`.
+
+Snapshot (M2 Pro, 2026-07-12, tokens/s, higher is better):
+
+| Workload | cpu (Pure-Go) | metal | vulkan |
+|----------|--------------:|------:|-------:|
+| GPT forward       | 181 | 4168 | 3647 |
+| GPT training step | 41  | 535  | 497  |
+
+Both GPU backends win ~20× (forward) / ~13× (training) over the Pure-Go cpu backend.
+
+**BUT autoregressive DECODE is the opposite (§T360).** `BenchmarkGPTDecode` times one-token-per-step
+generation with a KV cache — the real inference workload. Each step's ops are tiny (seq=1), so the
+per-op GPU dispatch / `waitUntilCompleted` round-trip (~200 µs, and a decode step is ~95 ops)
+dominates, and the CPU — which runs the tiny compute with no round-trip — **wins**:
+
+| Workload | cpu | metal |
+|----------|----:|------:|
+| GPT decode (tok/s, higher better) | ~101 | ~44 |
+
+So Metal is ~2.3× **slower** than cpu for decode *on the per-op path*. The systemic fix — batch a
+whole decode step into one command buffer (one submit + one wait instead of ~95) — is **done**:
+the recorder / `llamagpu` program below (ADR-0019, §T404–§T432).
+
+But this is **size-dependent** (§T361): as the model grows, the per-op GPU *compute* eventually
+outweighs the fixed dispatch overhead and the GPU wins decode too. Measured decode, metal/cpu ratio
+(lower = GPU faster):
+
+| model | metal / cpu decode |
+|-------|-------------------:|
+| dim 512, 6 layers    | 2.7× (cpu wins) |
+| dim 1024, 12 layers  | 0.99× (a wash)  |
+| dim 2048, 24 layers  | 0.62× (GPU wins) |
+
+So a blanket "decode on cpu" would be *wrong* for large models. `GPT.Generate` / `Llama.Generate`
+run decode on `backend.Default()` but accept `nlp.WithBackend(be)` so the caller — who knows the
+model size and hardware — can put small-model decode on the CPU. For serious GPU decode
+throughput, use the batched decoders below instead of the per-op path.
+Getting here was measurement-driven: the forward jumped 3.3× (1264→4168) once §T352 found
+that **GELU and bias-add were silently falling back to the CPU reference** — they, not the
+norm/attention kernels earlier fires had tuned, were ~half the forward. The training step
+rose as §T353/§T354 moved the GELU and bias-add **backwards** onto the GPU too. The lesson
+(§V22): profile the real workload to find the bottleneck before optimizing a kernel. The
+next measured training bottleneck is the MHA backward (~21 ms/layer, a naive
+one-thread-per-query atomic kernel).
+
+## Batched GPU decode: the recorder & `llamagpu` (ADR-0019, §T404–§T432)
+
+The per-op decode problem above (~95 dispatch round-trips per token) is solved by the
+**recorder**: record every op of a decode step into ONE command buffer over device-resident
+weights and KV cache, then submit + wait once. `llamagpu` is the public API
+(`New`/`NewVulkan`/`NewQuant`/`NewGPT` → `Decoder.Step`/`StepN`/`Generate`, plus lossless
+`SpeculativeGenerate` and `PromptLookupGenerate`). Standing benchmarks in
+`internal/benchcompare/decode_bench_test.go` (needs `-tags vulkan`; §T425/§T430):
+
+| Benchmark (M2 Pro, 2026-07-12, tok/s) | metal | vulkan | per-op metal |
+|---------------------------------------|------:|-------:|-------------:|
+| `BenchmarkLlamaDecode` (1 token)                | 205  | 200  | 7.5 (**27× slower**) |
+| `BenchmarkLlamaPrefill` (64-token prompt, StepN) | 5054 | —    | 140 sequential (**36×**) |
+| `BenchmarkLlamaDecodeLongContext` (@pos 1920)    | 72.3 | 71.0 | — |
+
+Long context needed its own lever (§T428–§T432): the original two-pass MHA kernel is serial in
+sequence length, a cliff at large KV (242 ms/step @2k context). A **cooperative kernel** — one
+32-lane simdgroup (Metal) / subgroup (Vulkan) per (query row, head), online-softmax partials
+merged via lane shuffles — covers every attention surface: recorder decode (§T428/§T429,
+242→13.8 ms, 17.6×), recorder prefill windows (§T431, 291→104 ms), and the per-op `OpMHA`
+path (§T432, sq=1 @sk=1920: ~40→2.18 ms). Quantized decode (`NewQuant`, §T413–§T416) trades
+~16% speed for 4× less weight memory (value = memory, not speed — measured, §T416). Its QUALITY
+cost, measured on a trained model (§T477): Q8_0 and Q4_0 are both near-lossless there —
+teacher-forced CE deltas within noise (+0.001 / −0.013 bits) and 99% / 97% argmax agreement
+with f32. Measure agreement TEACHER-FORCED; a free-running comparison diverges at the first
+mismatch and then scores different contexts (a metric artifact).
+
+### Speculative decoding on dispatch-bound decoders: drafting must be free (§T434/§T446)
+
+Both measured on the same in-repo-trained char-level base (dim 96, 3 layers, M2 Pro,
+2026-07-13; medians of 3, real trained drafts/heads, greedy):
+
+| Scheme | Acceptance | Lossless | tok/s vs plain | Speedup |
+|--------|-----------:|:--------:|---------------:|--------:|
+| Draft-model speculative (1-layer draft, §T434) | 81% | yes | 1150 → 1293 | 1.12× |
+| **Medusa chain (3 linear heads, §T446/§T455)** | 97% | no (typical acceptance) | 1152 → 3546 | **3.08×** |
+| **Prompt-lookup, n-gram (§T452)**              | 15% | yes | 1121 → 2020 | **1.80×** |
+
+Round cost is everything on a dispatch-bound decoder. Medusa's first version paid 2 steps per
+round (a StepHidden to draft, a StepN to verify) and reached 1.81×; §T455 folded the drafting
+into the verify pass — StepNHidden returns the window's hidden rows, so the heads draft the
+NEXT window from the CURRENT verification (the §T419 lastTok-lead-window convention) — making
+a round ONE step for up to K+1 tokens: 3.08×. Prompt-lookup's round was always one step but
+draws its candidates from history matching, so it needs repetitive output (here: the grammar
+corpus) — at 15% acceptance it still yields 1.80× because ~2.2 tokens/step. Medusa works on
+any text its heads learned. Draft-model speculative pays a real decoder step per drafted token
+and needs compute-bound (large) targets.
+
+Draft QUALITY is a separate lever from round cost (§T472): acceptance measures how well the
+draft matches the TARGET's distribution — which is what distillation optimizes directly. On the
+same task, same draft architecture, same step budget and same init, a draft trained
+independently on the corpus reached 73% acceptance while a draft DISTILLED from the target's
+logits (`nn.GKDLoss`, forward KL) reached 88% (`TestDistilledDraftImprovesSpeculative`). If you
+need a draft model, distill it from the target.
+
+Same setup, opposite outcomes — the acceptance rate was never the problem. A batched decode
+step is dispatch-bound (cost ∝ recorded ops, not compute), so a 1-layer draft model still pays
+~1/3 of a target step per drafted token and k·t_draft+t_verify eats the win. Medusa's heads
+draft **host-side for free** (one [dim,vocab] projection each), so a round costs ~2 steps for
+up to K+1 tokens. Lesson pair: on dispatch-bound decoders use free-drafting schemes (Medusa,
+prompt-lookup); draft-model speculative needs compute-bound (large) targets where
+t_draft/t_target is small. Standing measurements: `TestSpeculativeWithTrainedModels` and
+`TestMedusaGenerateGPTTrainedThroughput` in `llamagpu` (skipped under `-short`) train their
+models in-repo and re-measure on every full suite run.
+
 ## Regression policy (§V5)
 
 - An optimized kernel PR includes `benchstat old.txt new.txt`.
@@ -53,3 +264,28 @@ Run: `make metal-test` / `make metal-bench` (darwin + cgo only).
 - The cgo gate (§C3): merge a cgo backend only when it beats the **optimized**
   Pure-Go kernel by ≥1.5× or reaches ≥80% of the C++ baseline the Pure-Go path
   cannot — measured on a real workload, not a micro-bench (§B10).
+
+## Real-model-size decode (§T543)
+
+A 124M-parameter GPT-2-small-shaped model (12 layers, d=768, vocab 50257 — synthetic
+random weights, converter-mechanics fire; real weights are download-gated) through
+`GPT2FromHF` → the batched decoders: **metal 51 tok/s, vulkan 59 tok/s** f32 greedy
+decode (batched tokens bit-matching the analysis-path full forward on metal; note
+the small-scale ordering INVERTS at d=768 — vulkan's decode kernels lead here). First at-scale figures for the
+GPT pipeline.
+
+Quantized decode at the same class (§T545/§T546, 124M-class Llama d=768/12L/GQA
+12-4):
+
+| 124M decode (tok/s) | f32 | Q8_0 | Q4_K |
+|---------------------|----:|-----:|-----:|
+| metal               | 76.0 | 57.3 | 66.4 |
+| vulkan              | 61.8 | 70.6 | **72.4** |
+
+Two findings: Q4_K outruns Q8_0 at this width on BOTH backends (less weight
+traffic per token), and the backends INVERT on quant-vs-f32 — metal's MPS f32
+matmuls are fast enough that dequant costs, vulkan's tiled kernels are
+bandwidth-bound so quant WINS (Q4_K is the fastest 124M decode measured on
+either backend). Weight memory: f32 ~500MB → Q8 ~130MB → Q4_K ~70MB.
+Language-quality numbers need real weights (download-gated).
+

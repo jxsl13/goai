@@ -4,6 +4,9543 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T564 — License: MPL-2.0 (2026-07-13)
+- Mozilla Public License 2.0 staged verbatim: file-level copyleft — modified GoAI files stay
+  open, while linking the library (statically or dynamically) imposes nothing on the
+  product's own code. Chosen over LGPL because Go's default static linking would trigger
+  LGPL's relinking obligations.
+
+### T563 — Push-readiness audit (2026-07-13)
+- Everything that would go public checked: 7.1 MB content, no large files, no secrets,
+  gitignore current, stray files identified as legitimate. Awaiting the commit go-ahead
+  plus LICENSE and repo-URL choices.
+
+### T562 — CI pipeline for the initial GitHub push (2026-07-13)
+- .github/workflows/ci.yml rebuilt from the reference repos' patterns: 3-OS pure-Go matrix,
+  cgo+race with coverage on linux, cgo+metal on macOS arm64 runners, vulkan-tag build check,
+  tidy drift, and the amd64 simd soft gate. The -short suite it runs measures 24 packages in
+  ~19s at 75.1% statement coverage.
+
+### T561 — Post-audit sweep and docs (2026-07-13)
+- Full tree green after the audit arc (24 packages, vulkan twice, pure-Go gate); package
+  docs, README and LOOP.md reflect the new families.
+
+### T560 — PagedAttention scoped out; gap audit fully resolved (2026-07-13)
+- ADR-0020: block-table KV caching needs a multi-tenant serving engine GoAI doesn't have —
+  out of scope with a defined revisit trigger. All twelve gaps from the source-list audit
+  are now closed.
+
+### T559 — Kimi Delta Attention (2026-07-13)
+- `nn.KimiDeltaAttention`: the gated delta rule with per-channel forgetting. Collapses onto
+  GatedDeltaNet at uniform channels (the test caught a missing L2 normalization) and proves
+  channel-targeted erasure structurally.
+
+### T558 — DeepSeek Sparse Attention (2026-07-13)
+- `nn.DSAAttention`: the lightning-indexer top-k token selection, exact-collapsing onto full
+  attention and with structural routing proofs — completing the sparse-attention trio
+  (MoBA blocks, NSA branches, DSA tokens).
+
+### T556 — Native Sparse Attention branches (2026-07-13)
+- `nn.NSABranches`: DeepSeek's compressed/selected/sliding trio with the compression-driven
+  block selection — each branch pinned by an exact collapse (full attention, causal-no-self,
+  window) plus a selection-isolation proof.
+
+### T557 — MoBA block attention (2026-07-13)
+- `nn.MoBAAttention`: MoE-style top-k routing over key blocks. Collapses onto full causal
+  attention when every block is selected, is provably block-local at topK=1, and the gate
+  demonstrably selects affine blocks while repellent ones stay invisible.
+
+### T555 — MXFP4 codec (2026-07-13)
+- The gpt-oss microscaling format, both directions: dequant f32-exact and encode byte-exact
+  against gguf-py, with a round-trip bound and fuzz. gpt-oss GGUF weights now decode.
+
+### T554 — i-quant family read path complete (2026-07-13)
+- IQ1_S and IQ1_M (the ternary pair, including the split-f16 super-scale) close the family:
+  all eight IQ types now dequantize f32-exactly against gguf-py, each with hostile and fuzz
+  coverage. GGUF files in any ggml quant format load.
+
+### T554 (part 5) — IQ3_S and IQ2_S read paths (2026-07-13)
+- The direct-sign pair (9/10-bit grid indices) lands f32-exact against gguf-py — seven of
+  eight IQ types now read; only the ternary IQ1 pair remains.
+
+### T554 (part 4) — IQ4_NL and IQ4_XS read paths (2026-07-13)
+- The nonlinear-codebook 4-bit pair lands with a shared nibble decoder — five of eight IQ
+  types now read, all f32-exact against gguf-py.
+
+### T554 (part 3) — IQ3_XXS read path (2026-07-13)
+- The 3.06-bit i-quant (8-value codebook grid), f32-exact against gguf-py with
+  hostile/fuzz coverage. Three of eight IQ types now read.
+
+### T554 (part 2) — IQ2_XS read path (2026-07-13)
+- The 2.31-bit sibling: 512-entry grid with explicit per-16-element scales, verified
+  f32-exactly against gguf-py plus hostile/fuzz coverage.
+
+### T554 (part 1) — IQ2_XXS read path (2026-07-13)
+- First i-quant lands: the 2.06-bit E8-lattice codebook dequant, tables extracted
+  programmatically from gguf-py and verified f32-exactly against it on random blocks —
+  cross-implementation, plus hostile-input and fuzz coverage. The rest of the IQ family
+  follows the same recipe.
+
+### T553 — Mamba-2's state-space duality (2026-07-13)
+- `nn.SSDRecurrent`/`nn.SSDQuadratic`: the linear-time scalar-decay scan and its dual
+  1-semiseparable attention form, identical to 1e−12 — the paper's central theorem as a
+  test, plus exact diagonal/causal-linear-attention collapses at a=0/a=1.
+
+### T552 — QLoRA end to end (2026-07-13)
+- The paper's recipe from existing pieces: double-quantized NF4-frozen base + rank-4 LoRA.
+  NF4 is effectively lossless on the dialect task (CE 1.190 unchanged); adapters then tune
+  to 1.080 with the 4-bit base bit-identical throughout.
+
+### T551 — DeepSeekMoE (2026-07-13)
+- `nn.DeepSeekMoE`: shared always-active experts on top of the routed SparseMoE (the
+  DeepSeek-V2/V3 design), with fine-grained segmentation documented as a parametrization.
+  Bit-exact collapse to SparseMoE at zero shared experts; additivity and gradient-flow
+  properties pinned.
+
+### T550 — QK-Clip (2026-07-13)
+- Kimi K2's attention-logit clipping: `nn.MaxAttentionLogits` probes per-head maxima,
+  `nn.QKClip` rescales offending heads' q/k projections in place (√(τ/max) each) so their
+  logits cap at exactly τ while compliant heads stay bit-untouched — the MuonClip
+  stability ingredient, ready to pair with the existing Muon optimizer.
+
+### T549 (e2e) — GSPO trains a real policy (2026-07-13)
+- On the GRPO flagship harness, GSPO lifts the mean reward 0.042→0.958 in 40 iterations with
+  a single loss call over the concatenated rollout group. Documented in docs/alignment.md.
+
+### T549 — GSPO (2026-07-13)
+- `nn.GSPOLoss`: Qwen3's sequence-level RL objective — one length-normalized likelihood
+  ratio per response with tight sequence-level clipping. Collapses exactly onto GRPO(β=0)
+  at length 1; gradient-checked in both clip regimes; a saturated sequence provably
+  contributes zero gradient to all its tokens.
+
+### T548 — Source-list gap audit: backlog refilled (2026-07-13)
+- Reconciled the user's curated reference list against the implementation: the core stack is
+  covered end to end; twelve genuine gaps booked as open tasks (GSPO, MuonClip, DeepSeekMoE
+  shared experts, QLoRA e2e, Mamba-2 SSD, i-quants, MXFP4, NSA, MoBA, DSA, Kimi Linear,
+  PagedAttention decision).
+
+### T547 — At-scale arc consolidated (2026-07-13)
+- Status, era notes and cross-session memory record the 124M table and its two portable
+  rules (Q4_K over Q8_0 at width; per-backend quant/f32 inversion).
+
+### T546 — Vulkan quant decode at 124M: quant wins there (2026-07-13)
+- Vulkan inverts metal's ordering: Q4_K 72.4 tok/s beats f32 61.8 (bandwidth-bound kernels
+  reward quant), making vulkan Q4_K the fastest measured 124M decode on either backend.
+  Practical guidance documented: metal → f32, vulkan → Q4_K.
+
+### T545 — Quantized decode at 124M class (2026-07-13)
+- Same-class Llama through the existing quant decoder: f32 76 tok/s, Q8_0 57, Q4_K 66 —
+  Q4_K outruns Q8_0 at this width, and quantization's real value stays memory
+  (~500MB → ~70MB of weights at Q4_K).
+
+### T544 — 124M scale test on vulkan too (2026-07-13)
+- The vulkan batched decoder runs the same synthetic 124M checkpoint at 59 tok/s — ahead of
+  metal's 51 at this size (the small-scale ordering inverts at d=768). Helper moved to a
+  cgo-shared test file for linux-vulkan portability.
+
+### T543 — GPT-2 pipeline at 124M scale (2026-07-13)
+- A synthetic HF-shaped 124M checkpoint exercises GPT2FromHF and the batched decoder at
+  real size: geometry inferred, batched greedy bit-matches the full forward, 51 tok/s f32
+  decode on metal — the harness is ready to take real weights the moment they're permitted.
+
+### T542 — Docs completion; steady state declared (2026-07-13)
+- Package docs name the Self-Extend generation path. The host-buildable backlog is empty:
+  the loop shifts to verification mode (periodic sweeps, opportunity fires on new evidence);
+  open items need user input (real-weight download, amd64 host).
+
+### T541 — Self-Extend generation (2026-07-13)
+- `Llama.SelfExtendGenerate`: greedy generation with grouped attention. On the trained model,
+  text generated at 4× the training length keeps trained-level surprise (0.50) where plain
+  greedy generation degenerates (2.30).
+
+### T540 — Unary-routing question closed with evidence (2026-07-13)
+- Measured: cpu GELU on 512K elements costs 0.79ms against the GPU round-trip's 0.39ms —
+  the T535 revert was fundamental (transcendental cost per element), not an implementation
+  gap; the cpu unary path was already parallel and slice-direct. Note retired.
+
+### T539 — Status and lessons consolidated (2026-07-13)
+- LOOP.md and the cross-session memory record the T534–T538 arc: the routing wins, the
+  gradient-doubling escalation ladder, and the guard lesson (only tight trained-model bars
+  see gradient-scale bugs).
+
+### T538 — Double-recording impossible by construction (2026-07-13)
+- backend.Execute now strips the tape recorder from the context it hands to kernels, so an
+  in-kernel re-dispatch can never record an op twice — the B49 class is closed structurally
+  (new §V25 invariant), not just at the 46 audited sites.
+
+### T537 — Gradient-doubling class audit (2026-07-13)
+- All 46 in-kernel fallback re-dispatches across the GPU backends carried the same latent
+  double-recording hazard as B49 — every one now strips the tape recorder, guarded by a
+  fallback-under-tape regression test (ALiBi attention gradients bit-identical to reference).
+
+### T536 — Sweep caught a gradient-doubling bug (2026-07-13)
+- The full sweep's trained-model bars flagged the T534 routing: re-dispatching inside a GPU
+  kernel with the tape recorder attached recorded each routed op twice, doubling its
+  gradients. Fixed by stripping the recorder (plus a records-once regression test); the two
+  affected tests returned to healthy convergence and the honest re-bench improved further
+  (metal 3219, vulkan 1992 tok/s). All 23 packages green.
+
+### T535 — Unary/addbias routing: measured, lost, reverted (2026-07-13)
+- Extending the T534 routing to unaries and addbias regressed both backends (cpu's unary
+  kernels are scalar, not SIMD) and was reverted; the binary routing gained a kernel-presence
+  gate that fixes a latent Maximum/Minimum fall-through to the slow reference.
+
+### T534 — Elementwise binaries back on the CPU (2026-07-13)
+- Profiling metal's training step exposed residual adds at 14.6% — per-op GPU binary
+  kernels violated ADR-0008 on host-resident tensors. Both GPU backends now route binary
+  elementwise to the optimized cpu backend: metal +5.1%, vulkan +4.9% training throughput
+  (vulkan arc cumulative 2.11×).
+
+### T533 — Vulkan surface regression pass (2026-07-13)
+- llamagpu (vulkan-tagged, 680s) and gpudecode green after the forward-chain default flip;
+  LOOP.md status consolidated for the T523–T532 era.
+
+### T532 — Vulkan perf arc closed (2026-07-13)
+- The profile's remaining matmul share is a recorded dead end (register blocking was tried;
+  the kernel is bandwidth-bound on MoltenVK) — vulkan training stands at 2.01×,
+  architectural parity with metal; the rest is the driver/hardware GEMM ceiling.
+
+### T531 — Vulkan forward chain: training now 2.01× (2026-07-13)
+- An op-level profile showed the attention forward at 19% of the training step, justifying a
+  re-measure of the decomposed forward in the cheaper T528 structure: +18% on the real
+  training step (1590→1878 tok/s), now the default for the training/prefill shape. Combined
+  with the backward chain, vulkan GPT training went 935 → 1882 tok/s (2.01×), matching
+  metal's rework class.
+
+### T530 — Vulkan training 1.70× confirmed on the real workload (2026-07-13)
+- New standing `BenchmarkGPTTrainingStepVK` (metal's bench shape): the T528 backward chain
+  lifts full vulkan GPT training from 935 to 1591 tok/s (A/B/A, medians; a look-alike
+  outlier was ruled out as thermal with six further runs).
+
+### T529 — Forward-chain idea retracted (2026-07-13)
+- T528's "open lever" note on the vulkan attention forward was wrong: T398 had already
+  decomposed it and measured a real-workload loss (the vulkan forward is FFN-bound). A
+  drafted forward chain was reverted unrouted; the records now say why flash stays.
+
+### T528 — Vulkan attention backward 15× (2026-07-13)
+- The attention backward on Vulkan now runs the metal-style matmul decomposition (strided
+  matmuls + two new row-cooperative shaders, seven staged submits, GQA reduced host-side):
+  71.5ms → 4.74ms at 512×8×64, closing the gap to metal's MPS path to 1.5×. Full vulkan
+  suite green twice; the sliding-window case stays on the atomic kernel.
+
+### T527 — Self-Extend extension curve (2026-07-13)
+- Measured to 8× training length: plain attention degrades monotonically toward random
+  (CE 0.91→1.95→2.40) while Self-Extend stays nearly flat (0.57→0.68→0.70) — the
+  grouped-attention extrapolation holds far beyond the 4× point proven in T513.
+
+### T526 — Fuzz program completed; Q4_K bound corrected (2026-07-13)
+- Deep fuzz over the remaining 14 targets: one finding — the Q4_K adversarial error bound
+  under-estimated the 6-bit min granularity 4× (the encoder itself is optimal; a flat
+  sub-block next to an outlier min inherently eats ~amax/126). Bound fixed with the
+  derivation documented; Q2_K/Q5_K bounds audited and already correct.
+
+### T525 — Session-memory maintenance (2026-07-13)
+- Persistent cross-session memory updated with the T504–T524 state, the audit/fuzz lessons,
+  and the worker-pool perf result (no repo code changes).
+
+### T524 — Benchmark regression check (2026-07-13)
+- Full cross-backend bench re-run against the recorded snapshot: no regressions after the
+  T504–T523 era; several rows slightly better. Noted in docs/benchmarking.md.
+
+### T523 — Tree-wide race-detector sweep (2026-07-13)
+- First full-tree `go test -race`: all 23 packages green with zero data races — the worker
+  pool, backend registry, and vulkan bridge locking all hold under the race detector.
+
+### T522 — Status and docs consolidation (2026-07-13)
+- LOOP.md, README and nn package docs updated for the completed RWKV family, the sweep
+  discipline, and the fuzz hardening; open blockers are down to amd64-hosted tasks and
+  permission-gated real-weight downloads.
+
+### T521 — Hostile-input hardening follow-through (2026-07-13)
+- Explicit unit tests now pin both §B47 classes (gguf offset-overflow wrap; tokenizer
+  implausible-id rejection with a sparse-ids-still-load counter-probe), and all six
+  untrusted-load paths survived a 60s-each deep fuzz with no new findings.
+
+### T520 — Fuzz sweep: two hostile-input bug classes fixed (2026-07-13)
+- First systematic run over all 35 fuzz targets found and fixed: a uint64 overflow in gguf's
+  tensor bounds checks (hostile offsets crashed Read/ReadRaw) and unbounded token-id
+  allocation in the tokenizer-JSON parsers (a hostile id OOM-killed the process; BPE hit by
+  fuzz, WordPiece fixed by class inspection). Crashers are now permanent regression corpus.
+
+### T519 — Integration audit round 2 (2026-07-13)
+- Call-site scan over the 14 exports added since T504: all healthy except the Self-Extend
+  position functions, which the forward never used — now extracted into a shared helper and
+  pinned by a consistency test (the pure math is the tested spec of the implementation).
+
+### T518 — RWKV recurrent inference (2026-07-13)
+- `RWKVBlock.Step` + `RWKVState`: token-by-token inference with O(1) state and no KV cache —
+  the architecture's defining property — reproducing the parallel forward's rows to 1e−12.
+
+### T517 — RWKV char-LM end to end (2026-07-13)
+- New `nn.RWKVBlock` (full RWKV-4: token-shift time-mixing over the WKV recurrence with a
+  receptance gate, plus squared-ReLU channel-mixing). A 2-block char-LM trains through the
+  WKV gradient (CE 3.01→0.12), passes a bit-exact causality check, and generates — the
+  architecture e2e series (Mamba, RetNet, MLA, MoE, now RWKV) is complete.
+
+### T516 — Trainable WKV (2026-07-13)
+- RWKV-4's WKV recurrence is now a dispatched op with an exact analytic VJP (softmax-average
+  identity, O(T²) reverse pass with log-sum-exp rows) — bit-identical to the nn.WKV host
+  utility and finite-difference-checked over all four inputs. RWKV training is unblocked.
+
+### T515 — Full green sweep + sweep-discipline invariant (2026-07-13)
+- Everything green: all packages (llamagpu now needs 670s — its ~20 trained-model tests
+  outgrew go test's 600s default, which the sweep first misread as a failure), vulkan suite
+  twice, pure-Go gate. New §V24: sweeps run with -timeout 1800s and check exit codes
+  un-piped (a `| grep | tail` had masked the timeout FAIL as success).
+
+### T514 — Docs for the masked/selected-attention arc (2026-07-13)
+- docs/inference.md: tree-Medusa and Self-Extend measured claims + the masks-vs-merged-scores
+  primitive distinction; README and nlp package docs updated accordingly.
+
+### T513 — Self-Extend length extrapolation e2e (2026-07-13)
+- `Llama.SelfExtendForward`: neighbor/grouped RoPE sources merged per pair under one softmax
+  (OpMHASelect), grouped positions via a host RoPE with explicit position ids. group=1
+  collapses onto the plain forward (≤1e−9). On a char-Llama trained only on 32-token windows,
+  evaluated at 4× that length: plain CE degrades 0.316→1.488, Self-Extend (w=8, G=8) holds
+  0.515 — the paper's no-fine-tuning claim reproduced on a real trained model.
+
+### T512 — Two-source selected attention (2026-07-13)
+- New inference-only `mha_select` op: per-pair selection between two score sources under one
+  softmax — the primitive Self-Extend's merged neighbor/grouped attention actually needs
+  (additive masks can't express it). Verified by bit-exact collapses (garbage second source
+  ignored; equal sources ≡ masked attention) and source-swap symmetry.
+
+### T511 — Persistent worker pool in the CPU backend (2026-07-13)
+- `parallelWork` no longer spawns GOMAXPROCS goroutines per call: workers start once and park
+  on a channel; submission is non-blocking (saturation runs chunks inline — deadlock-free) and
+  the caller works the first chunk itself. Allocations per parallel op drop 70–75%
+  (Conv2D 63→16, MatMul 36→12, elementwise 34→10); op latency −0–2%. Verified under -race.
+
+### T510 — Tree vs chain Medusa, trained heads (2026-07-13)
+- Measured on an in-repo-trained base with rollout-trained heads: tree (topK=2) 4.00 tokens/round
+  vs chain 3.92 — the theory bar (tree never below chain: the chain path is a member of every
+  round's tree) holds. Gain is small at toy scale because acceptance sits near ceiling (143/147);
+  branching's headroom appears only where top-1 proposals fail.
+
+### T509 — Tree-Medusa decoding (2026-07-13)
+- `nlp.MedusaGenerateTree`: the Medusa paper's candidate tree in the decode loop — top-topK
+  tokens per head form a Cartesian tree under the greedy anchor, one masked forward verifies
+  every path, the deepest typical-accepted path is emitted. With topK=1 it reproduces the
+  chain variant exactly (same tokens, same stats).
+
+### T508 — Tree verification through the full model (2026-07-13)
+- `nlp.MHA` gained an optional `Mask` seam (nil = exact old path): one forward over
+  [prefix + candidate tree] with the MedusaTreeMask now reproduces, for every tree node,
+  the logits of a sequential forward over that node's root path — bit-identical on the
+  reference backend, ≤1e−9 on the default backend (where the masked op arrives via the
+  fallback chain). Correction: T507's claim that masks also unlock Self-Extend was wrong —
+  Self-Extend needs merged per-pair-position scores inside one softmax; it stays blocked.
+
+### T507 — Masked attention: one primitive, two features unblocked (2026-07-13)
+- Re-verifying the remaining blockers showed Self-Extend and tree-Medusa reduce to the same gap:
+  attention with a free additive mask. The new inference-only `mha_masked` op provides it,
+  verified by exact collapses onto plain/causal attention and by tree isolation under a real
+  Medusa tree mask — sibling mutations leave a node's output bit-identical, ancestor mutations
+  change it.
+
+### T506 — GPT-2 checkpoint converter (2026-07-13)
+- `nlp.GPT2FromHF` converts HuggingFace GPT-2 tensor maps: geometry inferred from shapes, the
+  fused QKV matrix and its bias split column-wise, the LM head tied to the transposed token
+  embedding, and the new projection biases attached. Verified bit-identically against a manually
+  hand-split reference assembly. Real GPT-2 weights now load structurally; obtaining them stays
+  a user decision.
+
+### T505 — Attention biases: the GPT-2 architecture becomes representable (2026-07-13)
+- The same seam pattern that opened LoRA now carries optional per-projection biases: absent
+  biases keep the exact old path (the golden suite runs untouched), zero biases reproduce it
+  bit-exactly, and gradients flow into set biases through the fused attention.
+- What remains for real GPT-2 checkpoints is pure conversion (HF naming, fused-QKV split) —
+  synthetically testable next.
+
+### T504 — LoRA fine-tuning of the built-in GPT; a wrong blocker corrected (2026-07-13)
+- The recorded blocker was wrong: the attention projections sit outside the fused attention core,
+  so the LoRA seam was open. `nlp.ApplyLoRAGPT` attaches adapters to every projection; attaching
+  is a bit-exact no-op, training only the adapters improves the target dialect, and every base
+  weight stays bit-identical — the full PEFT contract, verified.
+- Discipline note: re-verify recorded blockers before treating them as final.
+
+### T503 — Sophia completes the optimizer zoo (2026-07-13)
+- The zoo's one exclusion is closed: Sophia trains the real GPT with the paper's actual
+  Gauss-Newton-Bartlett Hessian estimator — labels resampled from the model, a separate backward,
+  squared gradients scaled by the batch — landing mid-field at CE 1.414. Nine optimizers and five
+  wrappers, all verified on the real workload.
+
+### T502 — RWKV blocker pinned; Vulkan health confirmed (2026-07-13)
+- A trainable RWKV block is blocked one level deeper than assumed: the WKV operator is a host
+  computation with no gradient path — building it needs a dispatched op with a backward through
+  its streaming recurrences, recorded as its own project. The Vulkan suites (which tag-gating
+  keeps out of ordinary sweeps) run green with no drift.
+
+### T501 — K-quant quality ladder; agreement beats CE as the metric (2026-07-13)
+- The dominant GGUF formats measured on a dim-256 trained Llama: Q6_K and Q4_K are near-lossless
+  (97% agreement, CE deltas in the noise band); Q2_K flips 14% of decisions.
+- Methodological finding: Q2_K's small-window cross-entropy delta even came out negative while it
+  changed one in seven decisions — under aggressive quantization, teacher-forced argmax agreement
+  is the sensitive metric, not short-window CE.
+
+### T500 — Milestone consolidation; a flaky assertion caught and fixed (2026-07-13)
+- The T500 sweep caught a real flake: NEFTune's plain-baseline bar sat within Metal's
+  run-to-run noise band and fired spuriously; relaxed to its actual meaning ("the baseline
+  trained") and re-verified three times. Everything else clean.
+- LOOP.md and session memory record the T493–T499 era and the session tally: three performance
+  eras, three orphan classes closed, the full alignment/RLHF story, twelve family and
+  architecture end-to-ends, and four findings documents — all verification re-runs with the suite.
+
+### T499 — MLA language model completes the architecture set (2026-07-13)
+- DeepSeek's latent attention passes the same LM harness: the low-rank KV compression preserves
+  causality bit-exactly and the model trains to near-memorization. The architecture end-to-end
+  set now spans SSM, retention, sparse MoE and latent attention, each verified in a real
+  language-model role.
+
+### T498 — A Mamba+MoE language model: routing verified in its real role (2026-07-13)
+- A Jamba-style model (Mamba mixing, sparse top-1 MoE FFN) trains to near-memorization with
+  causality preserved, and the auxiliary balance loss keeps all four experts between 20% and 28%
+  utilization — no routing collapse, the exact failure mode the loss exists to prevent.
+
+### T497 — RetNet language model end-to-end (2026-07-13)
+- The retention family joins the SSM family: a two-layer RetNet character model passes the same
+  harness as the Mamba LM — structural causality, training to near-memorization, deterministic
+  generation. RWKV would need a block-level wrapper first (only the WKV operator exists); noted
+  as demand-gated.
+
+### T496 — GreedySoup verified; DARE's premise shown to need scale (2026-07-13)
+- GreedySoup beats the specialists' worst cases and keeps both donors on the fine-tuned-GPT
+  merging harness. DARE is measured rather than asserted: at the paper's 0.9 drop rate it clearly
+  degrades tiny dense fine-tunes and at 0.5 it is noise-level — its redundancy premise is a
+  large-model property, the third scale-dependence finding of the series.
+
+### T495 — PPO actor-critic closes the classic-RL loop (2026-07-13)
+- GAE and the PPO clip loss — each unit-tested but never driven by an agent — now power a working
+  actor-critic on the Chain environment: optimal late-phase return, and the critic's start-state
+  value matches the optimal discounted return to 0.03. The RL domain spans REINFORCE, DQN and
+  GAE-PPO, all with learning assertions.
+
+### T494 — An attention-free Mamba language model, end-to-end (2026-07-13)
+- The post-transformer blocks get their first real-LM verification: a two-layer Mamba character
+  model trains to near-memorization on a toy grammar and generates deterministically — with
+  causality asserted structurally (mutating a later token changes no earlier logits, bit-exact).
+  The same recipe extends to RWKV/RetNet/GLA when demanded.
+
+### T493 — Era consolidation; full sweep green across all 24 packages (2026-07-13)
+- The complete non-short suite — including every trained-model end-to-end added this session —
+  passes across all packages. LOOP.md records the T480–T492 era: decode-strategy completion plus
+  the family-level end-to-end series over the training toolbox, with the distilled assertion
+  discipline. Documentation and verification only.
+
+### T492 — SimSiam end-to-end: 94% linear probe from label-free features (2026-07-13)
+- A conv encoder pretrained without labels via SimSiam reaches perfect view alignment without
+  representation collapse, and a linear probe on the frozen features classifies at 94% against a
+  33% chance level. The self-supervised family is verified on the library's own conv stack —
+  completing the family-level end-to-end series across the training toolbox.
+
+### T491 — VQ-VAE end-to-end: the straight-through path works (2026-07-13)
+- Encoder, vector quantizer and decoder trained jointly on an 8-cluster mixture: 94% of the data
+  variance reconstructed through the discrete bottleneck, six codebook entries active (no
+  collapse), and the encoder verifiably trains through the straight-through estimator — the
+  wiring that breaks silently when miswired.
+
+### T490 — Model merging verified on real fine-tunes (2026-07-13)
+- Two dialect-specialized fine-tunes of a shared base merged back into one model: both the TIES
+  merge and the uniform soup beat every specialist's weak side (worst-case CE 1.38 / 1.25 versus
+  1.49–1.99). Finding: the soup wins here — same-base fine-tunes stay linearly mode-connected,
+  the soup's home regime; TIES's machinery targets more divergent donors.
+
+### T489 — EWC verified: 50% → 89% task retention (2026-07-13)
+- The continual-learning claim in the classic two-task harness: plain sequential fine-tuning
+  forgets the first task completely (chance level) while EWC's Fisher-anchored penalty retains it
+  at 89% with the second task at 98%.
+- Two design lessons documented from honest iteration: tasks must be jointly representable (a
+  task-indicator input; pointwise label conflicts cap retention structurally), and λ must scale
+  with the fine-tune pressure.
+
+### T488 — Flow matching passes the same harness (2026-07-13)
+- The velocity-field formulation reconstructs the same ring through the identical assertion
+  harness as DDPM: trained with the conditional flow-matching loss and Euler-integrated from pure
+  noise, samples land at radius 2.09 with tight spread and no mode collapse. Both generative
+  formulations verified end-to-end.
+
+### T487 — Diffusion end-to-end: DDPM trains, DDIM samples the ring (2026-07-13)
+- The diffusion family's first complete run: a small noise-prediction MLP trained with the DDPM
+  objective on a 2-D ring distribution, sampled with 50 deterministic DDIM steps from pure noise —
+  the samples reproduce the geometry (mean radius 1.91 of 2.0, tight spread, no mode collapse),
+  in pure Go in about three seconds.
+
+### T486 — Training findings guide (2026-07-13)
+- New `docs/training.md` consolidates the real-workload training measurements: the optimizer-zoo
+  comparison table, the Shampoo amortization story, the wrapper results, NEFTune's regularization
+  signature, and the assertion discipline for training components. Documentation-only change.
+
+### T485 — NEFTune verified: the regularization claim shows (2026-07-13)
+- The documented integration (noise between embedding and blocks, training only) runs end-to-end
+  on an engineered overfitting task — and delivers: held-out cross-entropy improves 1.91 → 1.85
+  while train loss sits above the baseline, the textbook regularization signature, visible even
+  at toy scale.
+
+### T484 — Optimizer wrappers verified on the real GPT (2026-07-13)
+- Lookahead, Grokfast, Cautious masking, GaLore and SAM all train the real transformer under the
+  controlled harness; SAM exercises its genuine two-pass contract (gradients recomputed at the
+  perturbed point). GaLore's low-rank projection even leads the plain-AdamW baseline here.
+- Grokfast needed the paper's own remedy — retuning the wrapped learning rate to compensate its
+  gradient amplification — documented in the test. Training-side coverage: 8 optimizers plus 5
+  wrappers, all real-workload-verified.
+
+### T483 — Optimizer zoo on a real GPT; Shampoo root amortization (2026-07-13)
+- Every optimizer trains a real transformer for the first time, under controlled conditions (same
+  init, same data, 120 steps). The second-order methods lead: SOAP 1.19, Schedule-Free 1.34,
+  Shampoo 1.42, Muon+AdamW 1.47, then the Adam family ~1.49 and LAMB 1.51.
+- The zoo caught a real defect: Shampoo recomputed its eigendecomposition-based inverse roots
+  every step, making transformer-scale training unusable (600s timeout on 384×384
+  preconditioners). New `WithShampooRootEvery` amortizes the roots the way distributed Shampoo
+  does; the default remains the exact paper rule.
+
+### T482 — DoLa verified on the trained model; decode-strategy coverage complete (2026-07-13)
+- DoLa's layer contrast demonstrably acts (early-exit surprise 1.0 → 3.1 bits at α=0.1) while the
+  mature distribution stays within the plausibility constraint's actual per-token guarantee
+  (log₂(1/α)); tightening α tightens the output below greedy. A guessed assertion bar was replaced
+  by the theory-derived bound after failing honestly.
+- With this, every decoding strategy in the library has a trained-model verification.
+
+### T481 — Beam search verified on the trained model (2026-07-13)
+- Width-4 beam finds a sequence 0.31 nats more likely than greedy over 24 tokens — greedy is
+  demonstrably not the sequence argmax on a real model — and the reported beam scores agree with
+  independent re-scoring to 1e-6. Diverse beam produces four distinct group outputs at a bounded
+  likelihood cost.
+
+### T480 — Contrastive decoding verified on trained expert/amateur models (2026-07-13)
+- The method's native setup, measured: with β=0 it reproduces the expert exactly; with β=0.5 its
+  output is measurably more surprising to the early-stopped amateur while the plausibility
+  constraint keeps it near the expert — whose surprise even drops slightly, CD finding sequences
+  the expert scores above its own greedy path.
+
+### T479 — Green-sweep clean; GPT-2 import blocker analyzed (2026-07-13)
+- Third periodic health check: full CGO and pure-Go suites, Vulkan twice, vet both modes, and the
+  repo-wide format check — all clean, no drift.
+- Recorded without building: importing real HF GPT-2 checkpoints is blocked on architecture, not
+  naming — GPT-2 carries attention biases our torch-validated MHA does not represent; adding them
+  is golden-path surgery, deferred until demanded.
+
+### T478 — Inference findings guide (2026-07-13)
+- New `docs/inference.md` consolidates the trained-model measurement series: the findings table,
+  the sharpened understandings (Mirostat as a one-sided ceiling, sink effects needing deep models,
+  the watermark entropy threshold), and the measurement-discipline gotchas the series caught.
+  README and LOOP.md updated. Documentation-only change.
+
+### T477 — Quantization quality measured: Q8 and Q4 near-lossless on a trained model (2026-07-13)
+- The missing half of the quantization story: on the trained char-Llama, Q8_0 and Q4_0 cost
+  essentially nothing in quality — cross-entropy deltas within noise and 99%/97% teacher-forced
+  argmax agreement with f32. Combined with the earlier 4× memory result, the guidance is complete.
+- Metric lesson recorded: agreement must be measured teacher-forced; free-running comparisons
+  diverge at the first mismatch and then score different contexts.
+
+### T476 — Streaming 4× beyond the training context, on a trained RoPE model (2026-07-13)
+- A char-Llama trained in-repo (on the CPU backend, ~3 seconds — a new helper that unlocks Llama
+  measurements generally) streams 256 tokens from a context-64 model at coherent quality: far-tail
+  windowed surprise 0.95 bits versus 0.35 in-context, no cliff, well below noise. The
+  implementation has the paper-critical detail right: keys are cached pre-RoPE and re-rotated with
+  cache-relative positions.
+- The sink-free ablation again shows no dependence at toy scale, consistent with T475.
+
+### T475 — Bounded-cache decoding measured: near-full quality with 68 rows (2026-07-13)
+- KV-cache eviction gets its first real-model end-to-end measurement: streaming eviction to 4
+  sink + 64 recent rows decodes 300 tokens at +0.05 bits/token versus the unbounded cache.
+- Honest negative alongside: the sink-free ablation with the same budget matched — the
+  StreamingLLM attention-sink phenomenon does not manifest on a 3-layer toy model; the test
+  reports whichever outcome occurs.
+
+### T474 — Watermark power at paper defaults: detectable from 50 tokens (2026-07-13)
+- The soft watermark (γ=0.25, δ=2) measured on the trained model — deliberately low-entropy text,
+  the paper's hard case: z=4.08 at 50 tokens, 9.07 at 300 (48% green vs the 25% null), power
+  growing with length, and plain sampling never flagged. The low-entropy caveat did not bite at
+  ~1.8 bits/token; the finding is reported either way.
+
+### T473 — Mirostat measured on a trained model: it is a surprise ceiling, not a thermostat (2026-07-13)
+- First real-model measurement of Mirostat's control claim, and an honest sharpening of it:
+  targets below the model's natural entropy are tracked (τ=0.5 pulls realized surprise from 1.80
+  to 0.87 bits), but targets above it saturate at plain sampling (τ=4 lands at 1.63, not 4) —
+  Mirostat only truncates, it cannot raise surprise; that requires temperature (1.8 → 3.42 bits).
+- The naive assertion failed exactly where the theory says it must; the test now pins the true
+  one-sided-control property.
+
+### T472 — Distill your draft models: 73% → 88% speculative acceptance (2026-07-13)
+- Controlled experiment connecting distillation to speculative decoding: with architecture, step
+  budget and initialization held fixed, a draft distilled from the target's logits (`nn.GKDLoss`)
+  reaches 88% acceptance where an independently trained draft reaches 73% — because acceptance
+  measures exactly the draft-target distribution match that distillation optimizes directly.
+  Losslessness verified for both. The benchmarking guide records the principle.
+- This also gives GKD its real-model end-to-end test, the last alignment-adjacent loss without one.
+
+### T471 — Alignment guide: recipes and measured findings (2026-07-13)
+- New `docs/alignment.md` consolidates the T464–T470 era: the log-prob bridge, the GRPO and
+  preference-family recipes with their contract differences, the static-vs-iterated pipeline
+  comparison, the three deterministic findings on reward hacking, and the reward-head
+  architecture note — every claim backed by a named test that re-runs with the suite.
+- Documentation-only change; README and LOOP.md updated to match.
+
+### T470 — Iterated RLHF defeats the reward hacking (2026-07-13)
+- The canonical mitigation, demonstrated: retraining the reward model every few policy updates on
+  freshly labeled samples from the current policy rescues the true objective completely — the
+  metric that fell to zero under the static pipeline now rises from 4% to 100%.
+- Refresh frequency is the lever (an 8-update cadence only reached 10%); the honest tuning path is
+  documented. The RLHF story is complete: the log-prob bridge, GRPO, the preference family, the
+  reward model with its hacking failure mode, and the online mitigation.
+
+### T469 — Full RLHF pipeline runs; reward hacking faithfully reproduced (2026-07-13)
+- The classic two-stage pipeline now runs in-library on the real GPT: a Bradley-Terry reward model
+  (MLP head over frozen hidden states, trained on ranked on-distribution samples) followed by GRPO
+  against the learned reward. Asserted: reward-model pair accuracy ≥90% and the learned reward
+  rises under optimization.
+- Genuine finding, documented rather than hidden: the held-out true metric FALLS while the learned
+  reward climbs — canonical reward hacking, reproduced at every reward-head capacity tried. The
+  test logs both trajectories and names the production countermeasures.
+
+### T468 — IPO, SimPO, CPO and KTO verified end-to-end (2026-07-13)
+- The four remaining preference losses now have demonstrated real-model paths, each honoring its
+  actual contract: IPO with a frozen reference, SimPO with length-normalized log-probs and no
+  reference, CPO with its chosen-NLL term (asserted separately), and KTO with unpaired labeled
+  examples. All four decisively flip an initially negative chosen-vs-rejected margin.
+- With GRPO and DPO from the previous tasks, the entire preference/RL alignment family is now
+  proven end-to-end on a real model.
+
+### T467 — Periodic green-sweep: clean; formatting drift fixed (2026-07-13)
+- Full health check after 16 tasks of changes: complete CGO and pure-Go suites, Vulkan twice,
+  vet in both modes — no regressions. The repo-wide format check found ten unformatted files
+  from the pre-compaction era; formatted and re-verified.
+
+### T466 — Era consolidation: decode acceleration, CV, and alignment recorded (2026-07-13)
+- `LOOP.md` status extended with the three completed eras and honestly rewritten next-candidates:
+  nearly all remaining work is externally blocked or demand-gated — the loop is in
+  maintenance/opportunity mode. Session memory updated. Documentation-only change.
+
+### T465 — DPO end-to-end: both alignment paradigms proven on a real model (2026-07-13)
+- Direct Preference Optimization now runs end-to-end on the real test GPT through the new
+  log-probs bridge: after 30 steps every preference pair has a positive implicit-reward margin
+  (100% accuracy), with chosen responses pushed up and rejected pushed down relative to the
+  frozen reference — the stronger directional check.
+- With GRPO (T464) and DPO both demonstrated, the library covers RL-based and preference-based
+  alignment; the DPO variants (IPO/KTO/SimPO/CPO) consume the same bridge and are a loss-call
+  swap away.
+
+### T464 — The alignment losses become runnable: GRPO trains a real GPT policy (2026-07-13)
+- `SequenceLogProbs` was referenced by the preference-loss docs but never existed. New
+  `nn.TokenLogProbs` / `nn.SequenceLogProbs` provide the differentiable, numerically stable bridge
+  from model logits to the inputs of every preference/RL objective (DPO family, GRPO, PPO) —
+  verified by parity, a large-logit stability case, and finite-difference gradient checks.
+- Flagship end-to-end proof: a GRPO loop built purely from library pieces (Generate rollouts,
+  group-normalized programmatic reward, per-token log-probs, GRPOLoss with a KL reference) trains
+  the real test GPT's policy from 4% to 98% mean reward in 40 iterations. In-library RLHF-style
+  policy improvement now exists.
+
+### T463 — Conv scratch pooling: CNN step to 24.3 ms; 26× cumulative (2026-07-13)
+- Profiling showed ~70% of a CPU CNN training step in runtime overhead — multi-megabyte per-call
+  scratch allocations in the conv kernels (madvise churn) and goroutine barrier waits — against
+  ~10% in the actual GEMM. The im2col scratch buffers are now pooled (zeroed on reuse — the
+  kernels rely on zero-initialized scratch), cutting the step from 28.0 to 24.3 ms; cumulative
+  since the CV-perf thread started: 637 → 24.3 ms, 26×.
+- The pool VJPs also moved to raw-storage fast paths with exact numerics — honestly reported: no
+  measured win (the hypothesis that they dominated was wrong), kept as strictly better code. The
+  remaining floor is the per-call goroutine barrier in the parallel helper; parked with numbers.
+
+### T462 — Optimized CPU pooling; first payoff of the fallback chain (2026-07-13)
+- Max/avg pooling gets fast CPU kernels (bit-identical to the reference by construction),
+  profiled as the second-largest op of a CPU CNN step after the conv backward landed.
+- Real-workload effect: CPU CNN training 30.6 → 28.0 ms/step; Metal 39.3 → 33.1 ms/step with
+  zero Metal changes — its pool fallbacks now route through the new CPU kernels via the T461
+  fallback chain, exactly as designed.
+
+### T461 — Fallback chain prefers the optimized CPU backend (2026-07-13)
+- When the active backend lacks a kernel, dispatch now tries the cross-validated optimized CPU
+  backend before the naive reference (which remains the numerical truth and final fallback); the
+  fallback log names the target. Verified with a full repo sweep including both GPU suites — no
+  behavioral change today (every heavy op has backend kernels), but any future CPU-optimized op
+  automatically accelerates every backend's fallback path.
+- Honest correction to T459's side note: Vulkan does have a real GPU conv backward; its reference
+  delegation is only the non-f32 edge case. Measured Vulkan CNN training: 35 ms/step, on par with
+  Metal.
+
+### T460 — Pure-Go conv backward: CPU CNN training 20.8× faster (2026-07-13)
+- The optimized CPU backend gains `conv2d_backward`, decomposing all three gradients onto the
+  existing im2col + blocked-GEMM machinery (weight gradient as a transposed GEMM, input gradient
+  as GEMM + col2im scatter parallel over images, bias as the exact reference-order sum).
+- Cross-validated against the reference for every gradient across shapes, strides, padding and
+  dtypes. Real-workload effect: a CNN training step drops from 637 to 30.6 ms — and the CPU now
+  beats Metal at this small-model size, reconfirming the known size-dependence of GPU dispatch
+  overhead.
+
+### T459 — CV-on-GPU assessed: Metal trains CNNs 17× faster; the CPU gap is conv backward (2026-07-13)
+- Measured real CNN training on both backends with fallback and per-op instrumentation. Metal
+  works end-to-end at 37.6 ms/step (17× over CPU); its pool-op fallbacks cost only ~8% and are
+  documented as not worth a GPU kernel family.
+- The real finding: the optimized CPU backend has no conv2d backward — 96% of a CPU training step
+  runs in the naive reference. It decomposes onto the existing im2col+GEMM machinery; building it
+  is the next task.
+
+### T458 — CNN checkpointing (2026-07-13)
+- `vision.CNN` gains `Safetensors()` and `vision.FromSafetensors` — the architecture is inferred
+  from the tensor shapes, so a checkpoint needs no side-channel config. Round-trip verified
+  bit-identically. The vision story is complete: build, train, checkpoint, reload.
+
+### T457 — The vision package: a reference CNN classifier (2026-07-13)
+- New L4 `vision` package delivering the computer-vision domain named in the project goals:
+  `vision.CNN` stacks Conv2D → ReLU → MaxPool stages with a global-average-pooling head,
+  configured via functional options, trained with the standard loop.
+- Verified as a system: every parameter receives gradient through the full stack, and the model
+  reaches 100% train accuracy on a three-class task separable only by spatial pattern
+  (cross-entropy 1.12 → 0.00). Documented with three-level runnable examples; the layout tables
+  now list `vision`.
+
+### T456 — CNNs become composable: Conv2D and MaxPool2D layers (2026-07-13)
+- The convolution and pooling ops (with fused backward) existed since the backend era, but `nn`
+  had no layer wrappers — no CNN could actually be assembled. New `nn.Conv2D` (NCHW, Kaiming
+  init, stride/padding, bias) and `nn.MaxPool2D` compose with the existing layers and train
+  through the standard loop.
+- Verified by parity against the direct op call, finite-difference gradient checks through the
+  layer (input, weight, and bias), and an end-to-end synthetic image-classification training run
+  (cross-entropy 0.71 → 0.05). This opens the CV era named in the project goals; part 2 is a
+  reference vision package built from these layers.
+
+### T455 — Medusa rounds cost one step, not two: 3.08× (2026-07-13)
+- `StepNHidden` (both decoders) returns the verify window's hidden rows alongside its logits —
+  one extra small download, no extra GPU work. `MedusaGenerate` now drafts the NEXT window from
+  the CURRENT verification pass (the lastTok-lead-window convention speculative decoding already
+  uses), so a round is a single batched step for up to K+1 tokens.
+- Measured on the same trained base and heads as before: 1152 → 3546 tok/s = **3.08×** at 97%
+  acceptance (previously 1.81×). The ε=1 collapse onto plain greedy generation still holds on
+  Metal and Vulkan, and a new bookkeeping test pins the mid-round budget cut and stats exactness.
+
+### T454 — Doc audit closed: every package front page checked (2026-07-13)
+- `format` no longer claims ONNX and now describes its real subpackages with their verification
+  story; the root package's layer table matches the README; `autograd`'s front page names its
+  actual breadth (einsum and linear-algebra VJPs, SSM/MoE/alignment-loss rules, and the
+  previously-unlisted gradient checkpointing API). tensor/backend/ops/rl/linalg were audited
+  clean as-is.
+
+### T453 — README catches up: no longer "early bootstrap" (2026-07-13)
+- The repo front page now describes what actually works — LLMs end-to-end with torch-validated
+  training, the batched GPU decoders with their measured numbers, the decoding-acceleration
+  results, the `nn` toolbox by family, classic ML and RL — plus a corrected layout table (the
+  never-built `vision` package and ONNX removed; `linalg`, `ops`, `llamagpu` added) and
+  V23-compliant build/verify instructions. Every number comes from a measured task row; every
+  package claim was checked against the tree.
+
+### T452 — Prompt-lookup measured with a real trained model: 1.80×, lossless (2026-07-13)
+- The third free-drafting scheme gets its honest number: on the same in-repo-trained base,
+  prompt-lookup decoding reaches 1.80× (1121 → 2020 tok/s) with exact losslessness — verified
+  token-for-token against plain batched greedy generation — at only 15% draft acceptance: its
+  round is a single batched step, so a cheap round beats a high acceptance rate.
+- Measurement discipline: the first run showed a spurious 4.57× from a cold-start outlier in the
+  sequentially-measured baseline; the A/B is now interleaved. The benchmarking doc's comparison
+  table gains the prompt-lookup row and a losslessness column.
+
+### T451 — V23 reaches the process docs; small doc drift fixed (2026-07-13)
+- The loop's platform-check step now mandates `CGO_ENABLED=0 go vet ./...` / `go test ./...` with
+  the V23 rationale inline; the Makefile was already compliant.
+- `nlp` package docs: Medusa is described as the full trainable-heads + `MedusaGenerate` loop
+  (not "primitives"), and Jacobi names its entry points.
+
+### T450 — Full green-sweep; pure-Go gate hardened (2026-07-13)
+- Health check across the whole tree after the recent API changes: full CGO suite, Vulkan suites
+  (twice), and the pure-Go suite. Found and fixed one latent break: T432's Metal-internal test
+  file was missing its build tag, failing the pure-Go compile — invisible for 14 tasks because
+  the per-task gate ran `go build`, which skips test files.
+- New invariant V23: the pure-Go gate must compile tests (`CGO_ENABLED=0 go vet ./...` or
+  `go test`), never `go build` alone. Everything green after the fix.
+
+### T449 — nn package docs catch up with reality (2026-07-13)
+- `nn`'s package documentation described roughly a tenth of its 109 source files. The front page
+  now lists the full catalogue in 11 groups — optimizers and their composable wrappers, the PEFT
+  family, quantization/pruning, post-transformer architectures, diffusion, self-supervised
+  learning, alignment, continual learning and model merging — every claim verified against the
+  file docs.
+- Recorded (not built): LoRA-finetuning the built-in GPT/Llama is blocked on their fused attention
+  projections; adding a linear-op seam is a design task of its own if demand arises.
+
+### T448 — Benchmarking docs cover the speculative-decoding results (2026-07-13)
+- `docs/benchmarking.md` gains the draft-model-vs-Medusa comparison table (1.12× at 81% vs 1.81×
+  at 97% on the same trained base), the dispatch-bound mechanism behind it, and pointers to the
+  standing in-repo-trained measurements; the `llamagpu` package doc lists `MedusaGenerate`.
+- Documentation-only change.
+
+### T447 — Medusa parity for Llama (2026-07-13)
+- `Llama.ForwardHidden` (the head-attachment point, bit-identical to Forward when projected) and
+  `Decoder.StepHidden` bring the Llama batched decoder up to the GPT decoder's Medusa surface.
+- `MedusaGenerateGPT` generalized to `llamagpu.MedusaGenerate` over a new `HiddenStepper`
+  interface both decoders satisfy — one loop drives either architecture, verified by the ε=1
+  collapse onto plain batched greedy generation for the Llama (GQA) decoder as well.
+- The {Llama, GPT} × feature matrix is uniform again: batched steps, prefill, generation,
+  speculative, prompt-lookup, and now Medusa.
+
+### T446 — Batched Medusa closes the speculative-speedup gap: 1.81× (2026-07-13)
+- New `GPTDecoder.StepHidden` (one extra small download, no extra GPU work) and
+  `llamagpu.MedusaGenerateGPT`: the heads draft host-side for free, one batched step verifies the
+  whole window, and the position-addressed KV cache gives rollback for free. Backend-agnostic core
+  — runs on the Metal and Vulkan decoders unchanged.
+- Verified by the ε=1 collapse (token-for-token equal to plain batched greedy generation on both
+  backends) and measured end-to-end on an in-repo-trained base with rollout-aligned heads:
+  97% acceptance, 1120 → 2025 tok/s = **1.81× speedup**.
+- This confirms T434's diagnosis by construction: draft-model speculative decoding managed only
+  1.12× on the same dispatch-bound setup because the draft's own decoder steps ate the win —
+  Medusa's free drafting recovers it.
+
+### T445 — Era consolidation: integration program recorded (2026-07-13)
+- `LOOP.md` status extended with the T434–T444 integration era (the orphan-audit method, all ten
+  fires, and the transferable lessons) and refreshed next-candidates; session memory updated.
+- Documentation-only change.
+
+### T444 — Medusa decoding runs end-to-end (part 2 of 2) (2026-07-13)
+- New `nlp.MedusaGenerate`: each round emits the base's greedy token plus the longest
+  typical-acceptance prefix of the head proposals, verified in a single forward pass (the
+  single-path variant of the paper's candidate tree; greedy-anchored, intentionally not
+  distribution-exact).
+- Verified at both threshold extremes (reject-all reproduces plain greedy generation exactly;
+  accept-all keeps the budget/bookkeeping exact and deterministic) and with the real Medusa
+  recipe: heads trained on the base model's own greedy rollouts reach 100% proposal acceptance
+  under the reference thresholds.
+- Every algorithm in `nlp` now has a runnable path against a real model — the T436–T444
+  integration program is fully closed, Medusa included.
+
+### T443 — Medusa heads become trainable (part 1 of 2) (2026-07-13)
+- The last blocked algorithm gets unblocked the T434 way — by training in-repo instead of needing
+  external artifacts. New `GPT.ForwardHidden` exposes the final hidden states (Forward without the
+  LM head; bit-identical when projected through the head), and `nlp.MedusaHeads` provides K
+  trainable linear decoding heads over a frozen base, predicting the tokens 2, 3, … steps ahead.
+- Verified end-to-end with the library's own training loop: heads train on frozen hidden states
+  (cross-entropy 5.66 → 1.50 over 600 steps), differentiable through the standard tape.
+- Part 2 will assemble head predictions into candidate windows and add the typical-acceptance
+  decode loop.
+
+### T442 — DoLa layer-contrast decoding runs on the real model (2026-07-13)
+- `DoLaLogits` had no source of premature-layer logits. New `GPT.ForwardEarlyExit` taps the
+  residual stream after any requested blocks through the shared final LayerNorm + LM head (the
+  paper's early-exit convention), and `nlp.DoLaDecode` builds the full generation loop on top:
+  mature vs JSD-selected premature layer, adaptive plausibility, any TokenSampler.
+- Sharp invariants verified: the mature logits are bit-identical to `Forward`; an exit after the
+  last block is bit-identical to mature; α=1 collapses greedy DoLa to exactly the model's own
+  greedy generation. No KV cache (early exits need hidden states the cached step doesn't expose) —
+  documented as analysis-scale.
+- The T436–T442 integration program is closed: every algorithm in `nlp` that can run against a
+  real model without external artifacts now does; only Medusa remains blocked (needs trained heads).
+
+### T441 — Jacobi decoding gets its model entry point (2026-07-13)
+- `JacobiDecode` existed only against a mock step function. New `GPT.JacobiGenerate` runs it on the
+  model itself: each parallel iteration is one full forward with per-position argmax, converging to
+  exactly the model's sequential greedy output.
+- Verified on the reference model: token-for-token equal to greedy `Generate` (which also
+  cross-checks the KV-cache decode path against the full forward at the argmax level), converging
+  in 5 parallel iterations for 6 tokens; context clamping and error paths covered.
+- This closes the integration series T436–T441: every logit-level algorithm in `nlp` now has a
+  runnable path to a real model. Remaining formula-only by necessity: DoLa (needs per-layer
+  early-exit logits) and Medusa (needs trained heads).
+
+### T440 — Classifier-Free Guidance gets its generation loop (2026-07-13)
+- `GuidedLogits` was formula-only; nothing ran the two decode streams CFG requires. New
+  `nlp.CFGDecode` decodes a conditional (prompt) and an unconditional/negative (negPrompt) stream
+  with the same model and separate KV caches, combines the per-step logits with the guidance
+  strength γ, and accepts any TokenSampler — so guidance composes with temperature, penalties,
+  Mirostat, watermarking, or a regex guide.
+- Verified with sharp equivalences: γ=1 reproduces the model's own greedy generation token for
+  token; γ=0 reproduces greedy generation from the negative prompt exactly.
+
+### T439 — Watermarking and guided decoding reach the generation loops (2026-07-13)
+- `Watermark.BiasLogits` and `RegexGuide.MaskLogits` were per-step logit processors with no way
+  into any generation loop. New adapters wrap any `TokenSampler`: `Watermark.Sampler(inner)`
+  biases the green list seeded by the previous token before each draw; `RegexGuide.Sampler(inner,
+  eos)` masks FSM-disallowed tokens and tracks the state across the sequence (one instance per
+  generation). Both compose with temperature, penalties, or Mirostat.
+- Verified through the real Generate loop: an overwhelming watermark bias makes every generated
+  token green and the detector fires (z=4.58); plain output is not flagged; a `(ab)+` guide forces
+  the generated ids to alternate exactly, regardless of model preference.
+- This completes the processor-to-loop integration family: penalties (T436), Mirostat (T437),
+  watermarking + guided decoding (T439).
+
+### T438 — Orphan audit completed; nlp package docs catch up with reality (2026-07-13)
+- Mechanical audit across all packages for exported API with zero call sites (the class that
+  produced T436/T437): none remain. The only zero-reference method is a legitimate read-only
+  accessor.
+- The audit did find that `nlp`'s package documentation described roughly a third of its actual
+  feature surface. The front-page feature list now covers all of it: WordPiece + HF-JSON tokenizer
+  loading, quantized-GGUF decoding, the full sampling/search/contrast family (typical sampling,
+  contrastive search & decoding, DoLa, CFG, Diverse Beam), guided decoding and watermarking,
+  Medusa and Jacobi decoding, the long-context toolkit (attention sinks, KV eviction, SnapKV,
+  PyramidKV, quantized KV-cache, Self-Extend), and the training objectives (MLM, span corruption,
+  UL2, FIM, packing). Every claim verified against the exported API.
+
+### T437 — Mirostat becomes usable in generation (2026-07-13)
+- Same orphan class as T436: `Mirostat.Sample` existed with tests, but every generation loop took
+  the concrete `*Sampler` type, so Mirostat could not actually be used to generate.
+- New `nlp.TokenSampler` interface (Sample + SampleWithHistory); both `Sampler` and `Mirostat`
+  satisfy it, and all seven sequential generation loops now accept any implementation —
+  source-compatible for existing callers. The speculative paths deliberately keep `*Sampler`:
+  their lossless accept/reject math needs the full distribution.
+- Verified end-to-end (Mirostat through the real GPT Generate loop, deterministic per seed) and
+  documented with a runnable example showing greedy, penalty, and Mirostat used interchangeably.
+
+### T436 — Repetition penalties reach generation (2026-07-13)
+- `ApplyPenalties` (CTRL repeat penalty, OpenAI frequency/presence penalties) existed with tests
+  but no caller — no generation path could use it. The `Sampler` now carries the penalty settings
+  (`WithRepeatPenalty`, `WithFrequencyPenalty`, `WithPresencePenalty`, `WithPenaltyWindow`) and a
+  new `SampleWithHistory` applies them over the recent history before sampling — including greedy
+  decoding, the classic cure for small-model repetition loops.
+- Wired into every sequential generation loop (GPT, Llama, quantized Llama, streaming,
+  contrastive, and both batched GPU decoders). Speculative and prompt-lookup decoding deliberately
+  stay penalty-free: their lossless accept/reject math compares raw model distributions.
+- End-to-end proof: with an overwhelming presence penalty, greedy generation never repeats any
+  token of the running sequence. With no penalties configured, sampling is bit-identical to before.
+
+### T435 — GPT models can now be checkpointed (2026-07-13)
+- `FromSafetensors` had no inverse: a model trained with the library's own training loop could not
+  be saved. New `nlp.GPT.Safetensors()` exports the parameters under the exact loader naming
+  convention, pairing with `safetensors.Save`/`SaveFile` for checkpoints (returns the live tensors,
+  documented — serialize before mutating).
+- Round-trip verified bit-identically: load → model → export → save → load → model produces
+  bit-identical logits (29 tensors). Runs in the pure-Go suite.
+
+### T434 — Speculative decoding measured with real trained models (2026-07-13)
+- Every earlier speculative test used random weights (0% or 100% acceptance by construction); the
+  projected speedups came from a cost model. New test trains a target (3-layer) and a genuinely
+  related smaller draft (1-layer) on the same character-level corpus using the library's own
+  training loop (~11s total on Metal), then measures speculative decoding for real.
+- Losslessness holds with real models: the greedy speculative output is token-for-token the
+  target's own greedy output, at a measured 81% acceptance rate.
+- Honest headline: end-to-end speedup is only 1.12× despite 81% acceptance — at this small scale
+  both decoders are dispatch-bound, so the draft is not cheap enough relative to the target for
+  the acceptance win to pay. Speculative decoding needs compute-bound (large) targets; high
+  acceptance alone is not sufficient. The cost-model numbers remain valid for that regime.
+
+### T433 — Benchmarking docs catch up with the decode era (2026-07-13)
+- `docs/benchmarking.md` still described the batched-decode fix as "not done yet" — stale since
+  §T404. Rewrote that paragraph and added a dedicated section documenting the recorder/`llamagpu`
+  program: the standing decode/prefill/long-context benchmark table, the cooperative-attention
+  story, and the quantized-decode trade-off (memory, not speed).
+- `LOOP.md` status refreshed with the long-context era (§T427–§T432) and updated next-candidates.
+- Documentation-only change; all numbers copied verbatim from the measured §T rows.
+
+### T432 — Per-op attention gets the cooperative kernel too (2026-07-13)
+- The library's per-op decode (the classic `DecodeStep` on the Metal/Vulkan backends, outside the
+  batched decoder) still routed KV-cache attention through the serial two-pass kernel — the same
+  long-context cliff fixed in the recorder. Added host-slice entry points for the cooperative kernel
+  and routed both backends' attention dispatch through them for causal/single-query cases.
+- Verified: every attention cross-reference case (standard, causal, grouped-query, multi-query,
+  KV-cache, attention-scale, sliding-window fallback) passes through the new route on both backends;
+  all decoder suites stay green.
+- Measured honestly: the single-query attention op at a 1920-token cache now takes 2.18ms (the
+  serial kernel's profile implied ~40ms — about 18×), while short-context per-op decode is unchanged
+  (it is dispatch-bound; attention wasn't its bottleneck there). The cooperative attention now covers
+  every decode/prefill surface: recorder and per-op, Metal and Vulkan.
+
+### T431 — Prefill windows had the same serial cliff; cooperative kernel generalized (2026-07-13)
+- The follow-up measurement to the long-context decode fix found prefill windows against a long
+  cache hitting the same wall: a 128-token window at position 1792 took 291ms — the single-token
+  fast path didn't apply to multi-token steps, which still ran the serial two-pass kernel.
+- Generalized the cooperative attention kernel to multi-row queries on both backends: one
+  simdgroup/subgroup per (query row, head), with the causal bound applied per row. The late window
+  drops to 104ms (Metal) / 109ms (Vulkan) — 2.8× — and even the first window got 2.2× faster, since
+  the recorder had never routed prefill through the tiled kernel at all.
+- All correctness suites pass unchanged: multi-token steps still match sequential steps at every
+  position, and generation still matches the library's reference token for token across float,
+  quantized, GGUF, and GPT variants.
+- The residual growth with depth is the query-fold redundant K/V read (the classic flash-tiling
+  concern) — documented with candidates, to be built only if long-prompt prefill becomes a measured
+  pain point (a full 1920-token prefill now costs ~0.9s, down from ~2.4s).
+
+### T430 — Long-context decode joins the standing benchmarks (2026-07-12)
+- Adds a long-context decode benchmark to the cross-backend suite: the KV cache is filled to 1920
+  tokens, then single-token steps are timed at that depth — exactly where the old serial attention
+  kernel took 242ms per step.
+- First standing numbers: 72.3 (Metal) and 71.0 (Vulkan) tokens/s at a 1920-token context, matching
+  the fix measurements. A regression in the cooperative decode kernels now shows up in the routine
+  benchmark run alongside the short-context rows.
+
+### T429 — Vulkan gets the cooperative long-context decode too (2026-07-12)
+- Ports the cooperative single-query attention to Vulkan, which had the same one-invocation-per-head
+  serial structure: one 32-lane subgroup per head, keys partitioned across lanes, online-softmax
+  partials merged with subgroup shuffles (the NaN guard from the Metal fix built in from the start).
+  Routed transparently for single-token steps.
+- A decode step at position 1920 now takes 15.2ms on Vulkan (vs 5.9ms at position 16) — the same
+  healthy profile as Metal, where the serial version had taken 242ms.
+- Maintenance found along the way: the shader build rule was missing five newer shaders (they only
+  existed as committed artifacts) — all added, the new one with the SPIR-V 1.3 flag subgroup ops
+  need. Both backend suites, all decode tests, pure-Go build, and apicheck stay green.
+- Long-context decode is now healthy on both backends.
+
+### T428 — Long-context decode was nearly serial; now 17.6× faster at 2k context (2026-07-12)
+- A value-check for a possible quantized KV cache asked whether decode time even grows with context —
+  and found it exploding: a step at position 1920 took 242ms vs 7.5ms at position 16, far beyond what
+  the cache's memory reads explain. Root cause: the decode attention kernel ran **one thread per
+  head** — eight threads on the whole GPU, each streaming every cached key serially.
+- Replaced with a cooperative kernel for the single-query case: one simdgroup per head, its 32 lanes
+  splitting the keys, partial online-softmax state merged with a register shuffle tree. Routed
+  transparently inside the recorder's attention op. A step at position 1920 now takes **13.8ms
+  (17.6× faster)**, and short-context steps got faster too.
+- Two bugs found on the way: merging two empty lanes produced NaN (∞−∞) at short contexts — fixed
+  with a guard; and the logits-comparison tests were NaN-blind (NaN fails every threshold comparison
+  the "passing" way) — NaN guards added. Only the token-equality tests had caught the NaN.
+- The quantized-KV-cache idea is parked: the real long-context lever was the kernel. Vulkan has the
+  same serial decode structure — its parity fix is next.
+
+### T427 — Final llamagpu polish (2026-07-12)
+- Rounds out the package documentation: the package doc now lists prompt-lookup decoding alongside
+  the other features, and a runnable example demonstrates it on a repeating-pattern prompt (where
+  lookup drafting pays off). All six examples pass; suites, pure-Go build, and apicheck stay green.
+- The batched-decode package is feature-complete, uniformly documented, and regression-guarded.
+
+### T426 — Prompt-lookup decoding on the batched decoders (2026-07-12)
+- Adds `llamagpu.PromptLookupGenerate`: speculative decoding with **no draft model** — candidate
+  continuations are copied from the running sequence's own history via n-gram matching (the existing
+  drafter, now exported as `nlp.NgramLookup`), and the target verifies each window in one batched
+  multi-token step. Lossless: the output is exactly the target's distribution.
+- The practical favorite for tasks whose output repeats the input (summarization, RAG, code
+  editing). Works with both the Llama and GPT decoders via the shared stepper interface.
+- Verified on both ends of the spectrum: a repetitive prompt reaches 45% real n-gram acceptance and
+  matches plain greedy generation token for token; a random prompt (4% acceptance) still matches
+  exactly. All suites, pure-Go build, apicheck, and vet stay green.
+- The speculative family is now complete: draft-model speculative and draft-free prompt-lookup, both
+  lossless, both architecture-generic.
+
+### T425 — Batched-decode wins become standing benchmarks (2026-07-12)
+- Adds the batched decoders to the cross-backend benchmark suite: decode (batched Metal, batched
+  Vulkan, per-op Metal) and 64-token prefill (one multi-token step vs sequential), all reporting
+  tokens/s. Until now the 24×/41× results lived only in one-shot test logs — a regression in the
+  recorder path wouldn't have shown up anywhere routine.
+- First standing numbers confirm the session's measurements: batched decode 205 (Metal) / 200
+  (Vulkan) vs 7.5 tokens/s per-op (27×), prefill 5054 vs 140 tokens/s (36×).
+- With this, the batched-decode program is fully closed: built, proven, measured, productionized,
+  documented, and now regression-guarded.
+
+### T424 — Speculative decoding for GPT models; decoder interface unified (2026-07-12)
+- Generalizes `SpeculativeGenerate` over a small `Stepper` interface (step, multi-token step, vocab,
+  context) that both the Llama and GPT decoders satisfy — so speculative decoding now works with
+  either architecture as target or draft (any combination sharing a vocabulary).
+- All existing Llama speculative tests pass unchanged through the interface; a new test confirms GPT
+  self-draft speculative generation matches plain GPT generation token for token at 100% acceptance.
+- The package's feature matrix is now complete and uniform: both architectures get batched steps,
+  one-shot prompt prefill, generation, and speculative decoding, with quantized weights additionally
+  available for Llama. Both backend suites, pure-Go build, apicheck, and vet stay green.
+
+### T423 — GPT prefill parity: multi-token steps with broadcast bias-add (2026-07-12)
+- Adds the broadcast bias-add record op to both backends' recorders (`Recorder.AddBias`) — the one
+  op GPT's multi-token steps were missing — and with it `GPTDecoder.StepN`: a whole token window in
+  one command buffer, with the learned positional embeddings summed host-side per row.
+- GPT's `Generate` now prefills the whole prompt in a single recorded step, matching the Llama
+  decoder's 41× prefill fast path. The single-token step also switched to the new bias op, fixing a
+  break the over-allocated scratch buffers had introduced (caught immediately by the existing
+  cross-reference test).
+- Verified: the multi-token step matches sequential single-token steps at every position, and all
+  existing GPT tests pass through the new prefill. All suites, the pure-Go build, and apicheck stay
+  green. Llama and GPT now have identical feature coverage on the batched path.
+
+### T422 — Batched decode for GPT models too (2026-07-12)
+- Adds `llamagpu.GPTDecoder` (`NewGPT`/`NewGPTVulkan`): the GPT-2-style sibling of the Llama decoder
+  — LayerNorm with bias, learned positional embeddings summed into the token embedding host-side,
+  and the biased GELU MLP — so the library's second main architecture also decodes on the batched
+  path. The decoder core's recorder interface gained LayerNorm; everything else is reused.
+- Verified against the model's own per-op decode across an autoregressive run, with test weights
+  whose norm-biases and FFN-biases are non-trivial so those paths are genuinely exercised. On a real
+  size the batched GPT decode runs at 175 vs 47.7 tokens/s — 3.67× (the per-op GPT path already
+  benefits from this session's attention and kernel fixes, hence no 24×; batched GPT matches batched
+  Llama, as expected).
+- A runnable example was added (the api check demanded one for the new public type). Both backend
+  suites, pure-Go build, apicheck, and vet stay green. Both main architectures now decode batched.
+
+### T421 — llamagpu docs: examples for prefill, quantized, and speculative decoding (2026-07-12)
+- Completes the public package's documentation: the package doc now lists every feature with its
+  measured numbers (24× decode, 41× prefill, quantized models, lossless speculative decoding), and
+  three new runnable examples cover the newer entry points — prefilling a prompt with a multi-token
+  step, decoding a quantized model, and speculative generation with a small draft.
+- All examples run on GPU machines and degrade gracefully elsewhere. Both backend suites, the
+  pure-Go build, apicheck, and vet stay green.
+
+### T420 — Speculative cost structure quantified; loop status refreshed (2026-07-12)
+- Measured the honest economics of speculative decoding (a real speedup needs trained related
+  models, which random test models can't provide): with a 1-layer draft at 0.18× the target's step
+  cost, the round arithmetic gives **1.95× at 50% acceptance, 2.65× at 80%, 3.12× at 100%** — the
+  quantified value proposition for when trained model pairs exist.
+- Rewrote the loop's status notes, which had gone stale before the batched-decode era: they now
+  record the completed decode line (24×/21× decode, 41× prefill, quantized, speculative — all public
+  on both backends), the attention reformulation (1.87× forward, 2.04× training), the fallback
+  audits (2.6× training cumulative), everything parked with numbers, and the measurement
+  disciplines and dispatch rules this session established.
+
+### T419 — Speculative decoding on the batched decoders (2026-07-12)
+- Adds `llamagpu.SpeculativeGenerate`: a small draft decoder proposes a few tokens ahead, the target
+  decoder verifies the whole window in one batched multi-token step, and the library's existing
+  accept/reject sampling keeps the output distributed exactly as the target — lossless draft
+  acceleration on the fast decode path.
+- The design exploits the batched decoder's position-addressed KV caches: rolling back rejected
+  tokens is free (the next window simply overwrites those rows). The last accepted token leads the
+  next verification window, so no extra bookkeeping forwards are needed.
+- Verified at both extremes of the acceptance spectrum, each producing token-for-token the same
+  output as plain generation: a completely unrelated draft (0% acceptance — the lossless guarantee
+  under total rejection) and a draft sharing the target's weights (100% acceptance — the bonus-token
+  and full-window bookkeeping). Both backend suites, pure-Go build, apicheck, and vet stay green.
+- The batched-decode feature line is now complete: 24× single-token decode, 41× prefill, quantized
+  models, and speculative decoding — all public API on both backends.
+
+### T418 — Multi-token decoder steps: prompt prefill 41× faster (2026-07-12)
+- Adds `Decoder.StepN`: process k tokens in one recorded command buffer — the whole layer stack runs
+  over k rows with causal attention against the growing cache, and all k key/value rows are appended
+  at once. `Generate` now prefills the whole prompt in a single step instead of one round-trip per
+  prompt token.
+- Measured on a 64-token prompt (D=512, 6 layers): **12.7ms vs 519ms — 40.9× faster prefill**
+  (5040 vs 123 tokens/s). Verified: StepN's logits match sequential single-token steps at every
+  position, and every existing generate-matches-reference test (both backends, float and quantized,
+  GGUF) passes unchanged through the new prefill.
+- Under the hood: scratch buffers are sized for multi-row steps, the recorder ops accept
+  over-allocated operands, and device buffers support prefix downloads. StepN is also exactly the
+  target-verification step speculative decoding needs — the next natural feature, since the library
+  already ships the accept/reject logic.
+
+### T417 — Measured the conv floor; parked the conv gap (2026-07-12)
+- Applied the same floor-measurement discipline to the last big Metal gap, convolution (~2× behind
+  PyTorch): the conv's GEMM alone, with the same single dispatch round-trip, accounts for a third of
+  the conv's time — and most of that is the dispatch floor itself, not compute.
+- Even a perfect fused native convolution can't beat dispatch-plus-transfer at small shapes
+  (ceiling ~1.7×), and at large CV shapes the gap is ~2× — but convolution isn't on this library's
+  critical path at all (the LLM workloads use none), while a native-conv rewrite would be a large
+  effort (image-layout conversion, new API surface).
+- Parked with the numbers recorded, so the decision can be revisited with evidence. Suites stay
+  green.
+
+### T416 — Measured the quantized batched decode: 3.6× faster, 4× smaller (2026-07-12)
+- Benchmarked the quantized batched decoder on a real Q8_0 model (D=512, 6 layers): **160.7 tokens/s**
+  vs the quantized model's own per-op decode at 45.1 — a 3.6× speedup on top of the memory win.
+- Two honest findings recorded: the per-op quantized path was already 6× faster than per-op float
+  (its lazy resident weights skip the per-call upload), which is why batching adds "only" 3.6× here;
+  and the quantized batched decode is ~16% slower per token than the float batched decode (191.4),
+  because the dequantizing kernels aren't MPS-class GEMM. So Q8_0's value is fitting 4× bigger
+  models, not raw speed — a model too big to run as float runs at 160 tokens/s as Q8 instead of not
+  at all.
+- Suites, pure-Go build, and apicheck stay green. The quantized batched-decode line is complete:
+  built, verified correct, and measured.
+
+### T415 — Quantized batched decoder: small weights AND fast decode (2026-07-12)
+- Adds `llamagpu.NewQuant` (Metal) and `NewQuantVulkan`: build a batched decoder from a quantized
+  Llama (`nlp.QuantizeLlama` or a quantized GGUF), with every projection held on the GPU in its
+  4-8× smaller quantized form and consumed by the record-mode quantized matmul — combining
+  quantization's memory win with the ~20-24× batched-decode speedup.
+- No new model plumbing was needed: the library already had the quantized Llama (per-op decode,
+  GGUF loading) and quantized linear layers keeping the ggml bytes. The decoder core gained a small
+  "linear" abstraction so one core serves both float and quantized models; all existing float tests
+  pass unchanged through it.
+- Verified: the quantized batched decoder's per-step logits match the quantized model's own decode
+  on the reference backend, and full greedy generation matches token for token. Both backend suites,
+  the pure-Go build, apicheck, and vet stay green.
+
+### T414 — Quantized matmul in the Vulkan recorder too (2026-07-12)
+- Brings the record-mode quantized matmul to Vulkan, matching the Metal API method-for-method:
+  a device-resident quantized weight multiplies a device buffer inside the recorder's single command
+  buffer, with the per-quant-type shader selected from the weight.
+- Verified the same way as on Metal: against the existing reference-validated resident quantized
+  matmul, plus a chained activation consuming the result in the same command buffer (proving the
+  explicit-barrier ordering works with resident weights). Vulkan suite (twice), pure-Go build,
+  apicheck, and the Metal suite stay green.
+- The quantized batched-decode building block now exists on both backends. Remaining for a quantized
+  decoder: a model representation that keeps the quantized bytes (GGUF loading currently dequantizes).
+
+### T413 — Quantized matmul in the batched recorder (2026-07-12)
+- Adds a record-mode quantized matmul to the Metal recorder: a device-resident Q4/Q8 weight
+  (uploaded once) multiplies a device buffer inside the recorder's single command buffer, covering
+  all the library's GGUF quant types. Exposed as `Recorder.QMatMulResident`.
+- Verified against the existing (reference-validated) resident quantized matmul, including a chained
+  activation that consumes the quantized result inside the same command buffer. Metal suite, pure-Go
+  build, apicheck, and llamagpu stay green.
+- This is the building block for decoding quantized models on the batched path — combining the 4-8×
+  smaller weights of quantization with the ~24× decode batching. Remaining: a quantized model
+  representation on the nlp side (GGUF loading currently dequantizes to float), and Vulkan parity.
+
+### T412 — Public llamagpu package: 24× Llama decode as user-facing API (2026-07-12)
+- Promotes the batched Llama decoder to a public top-level package, `llamagpu`. Construct a decoder
+  from any `*nlp.Llama` (including one loaded from GGUF) with `New` (Metal) or `NewVulkan`, then call
+  `Generate` with a sampler — the same tokens as the library's own generate, 24× (Metal) / 21×
+  (Vulkan) faster on a real model.
+- The backend-agnostic core builds everywhere (the pure-Go build stays green); the constructors sit
+  behind the platform build tags. Package docs rewritten for users, and a runnable example added
+  (guarded so it passes on machines without a GPU).
+- Verified across every axis: Metal and Vulkan test suites, the pure-Go build, the api-hygiene check
+  against the new public surface, and vet. This completes the batched-decode line end to end: design,
+  primitives on both backends, real-model proof, and now a documented public API.
+
+### T411 — Measured: batching the training tape isn't worth it (1.4×) — parked (2026-07-12)
+- The training profile hinted that per-op dispatch overhead might dominate (≈400 ops per step at a
+  ~0.27ms floor), which would make a batched training tape a big win. Measured at the actual training
+  shape instead: a full transformer layer batched into one command buffer is only **1.40× faster**
+  than per-op at seq 256 — at that size the matmuls are compute-heavy enough that dispatch is a minor
+  fraction (decode at seq 1 gains 6×; prefill at 128 gains 1.6×).
+- Since the backward pass is even more compute-heavy, converting the autograd tape to record into
+  batched command buffers — a large project — would buy at most ~1.4×. Parked, with the number
+  recorded.
+- The Metal training step is now honestly characterized: ~49% matmul at the MPS rate (Apple's
+  fastest), ~30% attention (already reformulated onto MPS), ~20% small-op dispatch floor (the parked
+  1.4×). Suites stay green.
+
+### T410 — Op-level profile of training; embed regression found and fixed (2026-07-12)
+- Adds a permanent, env-gated per-op timer at the dispatch choke-point (a sibling of the fallback
+  logger): set an environment variable and every op logs its wall time, so a real workload's op mix
+  can be profiled directly.
+- Profiling the real training step showed: matmuls are 49% of the time (the MPS rate — expected),
+  small element-wise ops sit at the ~0.27ms dispatch floor, and **the recently-added GPU embedding
+  gather regressed** — it uploads the whole 8MB embedding table every call, costing more than the
+  CPU fallback it replaced.
+- The insight: a row gather is tiny and memory-bound, so the GPU can't win when uploading the table
+  costs more than the whole job — and caching the table on-device would be unsafe because training
+  mutates it every step. Replaced with a direct float32 host copy on both backends (~50µs). Training
+  goes from 2924 to 2997 tokens/s, and the regression is gone.
+- Lesson recorded: don't GPU-ify tiny memory-bound ops, and re-profile the real workload after each
+  kernel lands — the standalone audit missed the in-context upload cost. All suites stay green.
+
+### T409 — Backend-agnostic batched decoder: Vulkan decode is 21× faster too (2026-07-12)
+- Refactors the batched Llama decoder onto a small backend-agnostic core (buffer and recorder
+  interfaces) with thin Metal and Vulkan adapters — possible because the two backends' exported
+  recorder APIs were built to be identical. All existing Metal tests pass unchanged through the
+  shared core.
+- The new Vulkan variant is verified the same way: greedy generation matches the library's decode
+  token for token, and on a real model the batched path runs at **155 vs 7.5 tokens/s — 20.7×
+  faster** than the library's per-op decode on Vulkan (Metal: 24×).
+- The api-hygiene check caught two magic backend-name strings in the new code; replaced with the
+  typed constants. Both backend test suites, the pure-Go build, and apicheck stay green.
+- The batched decode is now complete on both backends: correct, measured on real models (24×/21×),
+  GGUF-capable, one shared core. Remaining polish: public promotion and on-device sampling.
+
+### T408 — Public Vulkan Recorder API (2026-07-12)
+- Exports the Vulkan batched-decode recorder — `Recorder`, `NewRecorder`, and its ops — matching the
+  Metal recorder's public API method-for-method (the two per-head attention helpers stay private, as
+  on Metal). Documentation added, including that a recorder is not safe for concurrent use.
+- This is the enabling step for a Vulkan batched-decode variant: decode is dispatch-bound on Vulkan
+  too, where batching measured ~6× on the recorder microbenchmark — and the real-model win should be
+  much larger, as on Metal.
+- The rename was verified across the package and all internal tests; Vulkan suite (twice), pure-Go
+  build, apicheck, and the Metal suite stay green.
+
+### T407 — Batched decode works from a GGUF-format model (2026-07-12)
+- Confirmed the full path from a model file to fast generation: a Llama round-tripped through the GGUF
+  representation (which stores weights as float32, unlike the float64 used elsewhere in tests) drives
+  the batched decoder and produces the exact same greedy output as the library's own generate.
+- This closes a real gap — every earlier batched-decode test used float64 weights, while real GGUF
+  models carry float32; the decoder reads weights dtype-agnostically, now verified on float32.
+- Loading a GGUF model and decoding it ~24× faster is now proven end to end. Test suite, pure-Go
+  build, and apicheck stay green. Remaining to go public: package promotion with docs, and a Vulkan
+  variant.
+
+### T406 — Text generation on the batched decoder (2026-07-12)
+- Adds a generation loop to the batched decoder: give it a prompt and a sampler, and it prefills the
+  prompt and generates tokens, feeding each back — the same shape as the library's own generate, but
+  running on the fast batched path.
+- Verified end to end: with a greedy (deterministic) sampler, the batched decoder generates the exact
+  same token sequence as the library's per-op generate — token for token — while running ~24× faster.
+  Test suite, pure-Go build, and apicheck stay green.
+- The batched Llama decode is now a usable generate call. To make it public: promote the package with
+  docs and an example, load real model weights, and add a Vulkan variant.
+
+### T405 — A reusable batched Llama decoder (24× faster) (2026-07-12)
+- Packages the 24× batched decode into a reusable decoder: construct it from a Llama model (it uploads
+  the weights and sets up the KV cache on the GPU), then call a step per token to get the logits — the
+  whole layer stack records into one command buffer instead of the slow per-op path.
+- Built as an internal package first, to settle the interface before committing to a public, stable
+  API (the same way the recorder started unexported). It handles grouped-query attention and the
+  SwiGLU feed-forward, so it covers Llama-family models.
+- Validated against the library's own decode: running a real model through the decoder produces the
+  same logits across an autoregressive run. Test suite, pure-Go build, and apicheck stay green.
+- This is the payoff of the batched-decode work in usable form. To make it public: a text-generation
+  wrapper with sampling, real model-weight loading, and a Vulkan variant.
+
+### T404 — Batched decode is 24× faster than the library's per-op decode (2026-07-12)
+- Audited the decode path: on Metal it has no CPU fallbacks, but it's dispatch-bound — the per-op
+  commit-and-wait overhead makes a single-token step slow, and Metal decode is actually slower than
+  CPU on a small model. The batched recorder (built and proven earlier) is the fix.
+- Measured the real win: driving an actual Llama's decode through the batched recorder versus the
+  library's own per-op decode step on the same backend runs at **179 vs 7.5 tokens/s — 24× faster**.
+  That's far more than the 3.5× measured against a per-op recorder microbenchmark, because the
+  library's decode step also allocates tensors and goes through the full dispatch layer for every op.
+  The batched path also beats CPU decode, fixing the earlier metal-slower-than-CPU result.
+- Kept a small env-gated diagnostic (set an environment variable to log operations that fall back to
+  the reference backend) for future audits. Test suite, pure-Go build, and apicheck stay green.
+- This quantifies the payoff of wiring the batched recorder into the library's decode path — a 24×
+  decode speedup — which is the natural next step.
+
+### T403 — Same loss/embedding forward kernels brought to Vulkan (2026-07-12)
+- Ported the cross-entropy and token-embedding forward kernels to Vulkan, where they were the same
+  silent CPU fallbacks fixed on Metal — the backends had these ops' backward kernels but not their
+  forwards. Adds the two GLSL shaders and registers the ops.
+- Cross-validated against the reference. The Vulkan training step goes from 866 to 938 tokens/s
+  (1.08× — a smaller relative gain than Metal's, since Vulkan's overall step is slower so the fixed
+  fallback cost is a smaller share). Vulkan suite (twice), pure-Go build, and apicheck stay green.
+- Both GPU backends now compute the training loss and token embedding on-device. Useful audit note:
+  a backend can have an op's backward kernel but be missing its forward — check both directions.
+
+### T402 — Metal GPT training is now fallback-free (token embedding on GPU) (2026-07-12)
+- Finished the fallback audit. A key correction: timing an op in isolation can mislead — a reduction
+  looked like a 20ms fallback in isolation but doesn't actually run in the training path. The reliable
+  way is to instrument the real workload's dispatch and see what actually falls back; doing that showed
+  the metal training step's only remaining CPU fallback was the token-embedding gather (the other
+  fallbacks in the raw log came from the pure-Go CPU backend the benchmark also runs).
+- Added a metal embedding-gather kernel and registered it. Cross-validated against the reference
+  (exact, since it's a gather). Metal suite, pure-Go build, and apicheck stay green.
+- The metal GPT training step is now fully free of CPU fallbacks — its time is legitimate GPU compute.
+  The remaining gap to PyTorch is the matmul rate, which is already Apple's optimized path.
+
+### T401 — Found and fixed a 20ms cross-entropy CPU fallback (2026-07-12)
+- Audited the GPT forward for silent CPU fallbacks (like the earlier GELU/AddBias ones): timed each op
+  on the Metal backend and found the cross-entropy loss forward was falling back to the reference
+  backend at **20 ms** — the backend had the loss's backward kernel but not its forward.
+- Added a cooperative cross-entropy forward kernel (log-sum-exp and negative-log-likelihood per row).
+  Cross-validated against the reference, it runs in **0.85 ms — 24× faster**. The loss is part of the
+  training step (not the plain forward pass, which only produces logits), so this speeds training:
+  a full step goes from 2315 to **2924 tokens/s**.
+- Together with the attention-backward work, the Metal training step is now **2.58× faster** than
+  before this series (1133 → 2924 tokens/s). Metal suite, pure-Go build, and apicheck stay green.
+- Reusable method: timing each op on the accelerator backend surfaces silent CPU fallbacks — any slow
+  one that falls back is a missing kernel worth writing.
+
+### T400 — MPS attention backward now covers grouped-query attention (2026-07-12)
+- Extends the fast MPS-matmul attention backward to grouped-query and multi-query attention (the
+  Llama case), which previously fell back to the slow atomic kernel. Grouped-query needs the key and
+  value gradients accumulated across the query heads that share each key/value head; this uses the
+  matmul's built-in accumulation (writing the first contributor fresh and adding the rest).
+- Cross-validated for standard, grouped-query, and multi-query cases against the reference-validated
+  backward; the wired path's existing cross-reference tests all pass through the MPS backend, with
+  only sliding-window attention still using the previous kernel. Metal suite, pure-Go build, and
+  apicheck stay green.
+- The 2× training-step speedup now applies to grouped-query models too, not just standard multi-head.
+
+### T399 — MPS-matmul attention backward: 27× faster, metal training step 2× (2026-07-12)
+- Applied the same reformulation that sped up the forward to the attention backward, which a
+  measurement showed was the training-step bottleneck — 70 ms, more than 50× slower than the forward,
+  because the hand-written backward is atomic-bound.
+- Recasts the backward as MPS matmuls (value, query, and key gradients) plus a softmax recompute and a
+  softmax-Jacobian kernel. Cross-validated against the existing (reference-validated) backward, it runs
+  in **2.75 ms vs 75 ms — 27× faster** at 512×8×64.
+- Wired into the standard multi-head backward, this makes a full GPT training step **2.04× faster**
+  (1133 → 2315 tokens/s). Grouped-query and sliding-window backward keep the existing kernel. Metal
+  suite, pure-Go build, and apicheck stay green.
+- The two-matmul-plus-softmax reformulation is now the key Metal attention lever on both sides:
+  6.9× forward / 1.87× GPT forward, and 27× backward / 2.04× training.
+
+### T398 — Vulkan attention: cached buffers, but attention isn't the bottleneck there (2026-07-12)
+- Followed up the reverted Vulkan attention path by caching its device buffers across calls (the
+  earlier loss was partly per-call allocation). In isolation this made the reformulated attention
+  even faster — 6× at the forward's own sequence length, 8× at a larger one.
+- But the real GPT forward still didn't improve. The reason, now diagnosed: on Vulkan, attention is
+  not the bottleneck of the forward pass — the feed-forward matmuls are (Vulkan's matmul is much
+  slower than Metal's), so a faster attention saves little and its per-head dispatch overhead cancels
+  the gain. On Metal it was the opposite, which is why the same change won there.
+- So the forward keeps the flash kernel on Vulkan; the reformulated attention, its cache, and shaders
+  are kept and tested for large sequences or once the matmul is sped up. Vulkan suite (twice), pure-Go
+  build, and apicheck stay green.
+- Takeaway: the real Vulkan lever is the matmul, not attention — and an isolated speedup only helps if
+  it targets the actual bottleneck.
+
+### T397 — Vulkan attention reformulation: fast in isolation, slower in practice — reverted (2026-07-12)
+- Built the Vulkan analog of the Metal attention speedup: a stride-aware GEMM shader and a causal
+  softmax shader, composed per head into a two-matmul-plus-softmax attention. It's cross-validated
+  (standard, grouped-query, and multi-query) and **5.2× faster in isolation** (12 → 2.33 ms at
+  512×8×64).
+- But measured on the real GPT forward it was **slower** (3191 → 2785 tokens/s), so the forward path
+  keeps the existing flash kernel. The new code and its tests are retained. The cause: this path
+  allocates device buffers on every call and dispatches per head, and that overhead outweighs the
+  matmul win at the forward's sequence length — unlike the Metal path, which is a single self-contained
+  call over its own buffers. Winning on Vulkan needs a pooled-buffer implementation, deferred.
+- Also fixed a latent bug: adding two shaders pushed the pipeline count past its cap, which made an
+  unrelated shader fail only when the whole suite ran; raised the cap. Vulkan suite (twice), pure-Go
+  build, and apicheck stay green.
+- The lesson repeats an earlier one: an isolated micro-benchmark win is not a real-workload win —
+  always measure the actual forward pass.
+
+### T396 — Confirmed the attention reformulation helps on Vulkan too (2026-07-12)
+- Before porting the Metal attention speedup to Vulkan, checked whether it pays off there — Vulkan has
+  no MPS and a slower matmul, so the two-matmul approach might not beat its flash kernel.
+- Measured at the real 512×8×64 shape: the flash kernel takes 12.05 ms, while the two attention
+  matmuls alone take 1.66 ms — so reformulating attention as two matmuls plus a softmax should be
+  several times faster on Vulkan as well, because its flash kernel is also slow. The port is
+  justified. Vulkan suite and the pure-Go build stay green.
+- Next: implement the Vulkan version — stride-aware matmuls over the packed layout plus a causal
+  softmax shader — and wire it into the Vulkan forward attention.
+
+### T395 — Wired MPS attention into the forward path: real GPT forward 1.87× faster (2026-07-12)
+- Routes the training/prefill attention forward through the new MPS-matmul path (T394) instead of the
+  hand-written flash kernel. All existing attention cross-reference tests — including grouped-query,
+  multi-query, non-causal, and attention-scaling cases — pass through the new path unchanged;
+  decode and sliding-window attention keep their existing kernel.
+- Measured end to end: a full GPT forward pass goes from 4241 to **7916 tokens/s (1.87× faster)** in a
+  same-session A/B. The 6.9× attention speedup translates to nearly 2× on the whole forward because
+  the slow flash kernel was about half of its wall-clock time — correcting an earlier belief that
+  attention was a negligible fraction of the forward pass.
+- Metal suite, pure-Go build, and apicheck stay green. Next: bring the same reformulation to Vulkan.
+
+### T394 — MPS-matmul attention forward: 6.9× faster than the flash kernel (2026-07-12)
+- Implements the reformulation the floor measurement pointed to: attention forward as two MPS matmuls
+  (scores, then value-weighting) with a causal softmax in between, instead of the hand-written flash
+  kernel. Each head's scores come from an MPS matmul over strided views of the packed Q/K/V layout,
+  a new causal-softmax kernel normalizes each row in place (masking and zeroing the future), and a
+  second MPS matmul produces the output.
+- Cross-validated against a host causal-attention reference. At the real 512×8×64 shape it runs in
+  **1.55 ms vs the flash kernel's 10.77 ms — 6.9× faster** — bringing attention forward from ~24×
+  behind PyTorch to ~3.4×. Metal suite, pure-Go build, and apicheck stay green.
+- Next: route the real forward attention through this path (matching causal and grouped-query cases,
+  with a fallback for the rest), then a full-forward benchmark; and Vulkan parity.
+
+### T393 — Measured the attention-forward floor: the gap is a slow kernel, not a hard problem (2026-07-12)
+- With the batched-decode work complete, turned to the next-biggest gap: attention forward is ~24×
+  slower than PyTorch on Metal (11 ms vs 0.45 ms for a 512×8×64 layer). The standing assumption was
+  that closing this needs a fused, cooperatively-tiled kernel — a big, uncertain rewrite.
+- Measured the matmul-only floor instead: the two matmuls attention fundamentally needs (scores and
+  the value-weighting), run through the same MPS matmul path the decoder uses, take just **0.71 ms** —
+  already close to PyTorch. The hand-written flash-attention kernel is **15× slower than its own two
+  matmuls**.
+- So the gap is not structural. The fix is to reformulate attention as two MPS matmuls with a softmax
+  in between, rather than more hand-tiling — expected to cut attention-forward time by roughly 7–10×.
+  A measure-the-floor check caught a wrong rewrite before it was built.
+- Next: implement the MPS-matmul-based attention forward, cross-validate it, and measure it against
+  the current kernel.
+
+### T392 — Batched decode reproduces a real Llama, end to end (ADR-0019 Phase 2) (2026-07-12)
+- The payoff proof: a new bridge test builds an actual `nlp.Llama` (grouped-query attention, SwiGLU,
+  two layers), uploads its weights into device buffers, drives a decode through the public batched
+  recorder, and confirms the logits match the model's own per-op decode on the reference backend
+  across several tokens. The batched path reproduces the real library model, not just a hand-written
+  reference.
+- This works because the rotary-embedding frequencies are taken from the same helper the per-op path
+  uses and the model's linear weights are already in the orientation the recorder expects — so the
+  conventions line up with no transpose or re-derivation. It also validated that the earlier
+  hand-written host references were faithful.
+- Fixed: the reference backend must be imported for its kernels to register, or the reference decode
+  crashes. Bridge test, Metal suite, pure-Go build, and apicheck stay green.
+- ADR-0019 is now proven end to end: the batched decode both reproduces the real Llama and runs
+  3.45× (Metal) / 6.15× (Vulkan) faster than per-op dispatch. Remaining is optional polish —
+  exporting the Vulkan recorder, on-device sampling, and a convenience decode wrapper.
+
+### T391 — Public Metal Recorder API (ADR-0019 Phase 2) (2026-07-12)
+- Exports the Metal batched-decode recorder — `Recorder`, `NewRecorder`, and its ops (`MatMul`,
+  `RMSNorm`, `LayerNorm`, `RoPE`, `MHA`, `Unary`, `Binary`, `Blit`, `Finish`, `Free`) alongside the
+  already-public `DeviceBuffer`. This makes the ~3× batched decode usable from outside the backend
+  package, which the internal tests couldn't reach without an import cycle.
+- Adds proper documentation to the exported types and methods (the recorder is the batched-decode
+  engine; it's not safe for concurrent use — one per goroutine). The rename was verified across the
+  package and all internal tests; the Metal suite, pure-Go build, and apicheck stay green.
+- Next: a bridge that loads a real model's weights into device buffers and drives a decode through
+  this API, confirming the speedup end to end against the library's existing decode.
+
+### T390 — Full Llama decode on Vulkan: GQA + SwiGLU, correct and 6.2× (ADR-0019 Phase 2) (2026-07-12)
+- Assembles the same Llama-style decoder (RMSNorm, rotary embeddings, grouped-query attention,
+  SwiGLU) on Vulkan, matching the Metal assembly and completing backend parity for both real model
+  architectures.
+- A test confirms the logits match a host float64 reference (grouped-query attention proven
+  end-to-end on Vulkan too), and at a realistic size the batched step is **6.15× faster** than
+  per-op (48.85 ms → 7.94 ms). Vulkan suite (twice), pure-Go build, and apicheck stay green.
+- The batched decode path is now proven correct and measured across the full matrix — GPT-2
+  (Metal 3.1×, Vulkan 5.7×) and Llama (Metal 3.5×, Vulkan 6.2×). These are conservative lower bounds:
+  the real library's per-op path also pays a host round-trip per op, so the true end-to-end win is
+  larger. Remaining is productionization — exposing a public decode API on real model weights.
+
+### T389 — Full Llama-style decode assembly: GQA + SwiGLU, correct and 3.5× (ADR-0019 Phase 2) (2026-07-12)
+- Assembles a complete Llama-style decoder over the recorder — RMSNorm, rotary embeddings,
+  grouped-query attention, and the SwiGLU feed-forward — the architecture the library's real Llama
+  uses, distinct from the GPT-style assembly built earlier (GELU MLP, no grouped-query).
+- This is the first end-to-end test of two things: grouped-query attention (fewer key/value heads
+  than query heads, with narrower K/V caches) and SwiGLU inside a multi-layer decode.
+- **Correctness**: a small model (8 query heads, 2 KV heads, SwiGLU, 2 layers) run for four steps
+  produces logits matching a host float64 reference. **Measurement**: at a realistic size (D=512,
+  6 layers, vocab 1024) the batched step is **3.45× faster** than per-op (25.0 ms → 7.25 ms),
+  consistent with the ~3× ceiling. Metal suite, pure-Go build, and apicheck stay green.
+- The recorder now assembles both real architectures — GPT-2 (3.1×) and Llama (3.5×) — correctly and
+  measured. Next: export the recorder so a test can drive a real Llama's weights through it and
+  compare against the library's existing decode.
+
+### T388 — SwiGLU feed-forward via the recorder (ADR-0019 Phase 2) (2026-07-12)
+- Adds the Llama feed-forward block (SiLU-gated, the style the library's real Llama uses) to the
+  recorder on both backends. It needs no new kernel — it composes from existing ops (two projections,
+  a SiLU activation, an element-wise multiply, and a down-projection).
+- Confirmed by inspection that the library's Llama maps onto the recorder directly: its linear
+  projections are plain x·W with the weight already in the orientation the recorder's matmul expects,
+  its norm is RMSNorm, and its attention is RoPE plus decode attention — all already supported.
+- A test assembles the SwiGLU block on each backend and confirms it matches the host reference.
+  Metal and Vulkan suites (Vulkan twice), the pure-Go build, and apicheck stay green.
+- The recorder now covers both feed-forward styles (GELU-MLP for GPT-2, SwiGLU for Llama), so every
+  structural piece of a real Llama block is a proven recorder composition. Next: load a real Llama's
+  weights and check the recorder decode against the library's existing decode, then measure throughput.
+
+### T387 — Record-mode LayerNorm on both backends (ADR-0019 Phase 2) (2026-07-12)
+- Adds LayerNorm to the recorder on Metal and Vulkan — the normalization GPT-2-style models use
+  (the recorder previously had only RMSNorm, the Llama variant). This unblocks wiring the batched
+  decode into the actual GPT models in the library.
+- A test chains a matmul and a LayerNorm on each backend and confirms the result matches the host
+  reference (mean/variance normalization with scale and bias). Metal and Vulkan suites (Vulkan run
+  twice), the pure-Go build, and apicheck stay green.
+- The recorder's norm coverage is now complete on both backends — RMSNorm for Llama-style, LayerNorm
+  for GPT-2-style. Next: wire a real model's weights through the recorder and measure against the
+  existing decode benchmark, or expose a public decode session.
+
+### T386 — On-device token embedding closes the autoregressive loop (ADR-0019 Phase 2) (2026-07-12)
+- Closes the last gap to a self-contained on-device decode: a step's input is the token's embedding
+  row, which is just a copy from a resident embedding table into the residual buffer — the existing
+  cache-append copy, no new kernel. So a decode step needs only a token id, not a host-provided
+  hidden vector.
+- A test drives a real autoregressive loop on both backends — each step copies the current token's
+  embedding row on-device, runs the full multi-layer step, and picks the next token from the logits'
+  argmax — and confirms the GPU logits match a host reference at every step. Metal and Vulkan suites,
+  the pure-Go build, and apicheck stay green.
+- Everything a real `generate()` needs is now a recorder op on both backends (embedding, layers,
+  logits). Remaining to productionize: logit sampling, a public decode-session API, and loading real
+  model weights into resident buffers.
+
+### T385 — Full batched decode on Vulkan: correct and 5.7× (ADR-0019 Phase 2) (2026-07-12)
+- Assembles the complete multi-layer decoder on the Vulkan recorder — per-layer attention and MLP
+  over persistent KV caches, then a final norm and vocab projection — the Vulkan counterpart to the
+  Metal integration, completing backend parity for the batched decode path.
+- **Correctness**: a small model run for four decode steps produces logits matching a host float64
+  reference across the full stack (attention with a growing cache, MLP with GELU, vocab head).
+- **Measurement**: at a realistic size (D=512, 8 heads, 6 layers, vocab 1024) the batched step is
+  **5.66× faster** than per-op (47.17 ms → 8.34 ms) — even more than Metal's 3.10×, because
+  Vulkan/MoltenVK's per-op submit-and-wait floor is higher while the batched path is comparable, so
+  batching recovers more here. Vulkan suite (twice), pure-Go build, and apicheck stay green.
+- The batched decode path is now proven correct and measured on both backends (Metal 3.1×, Vulkan
+  5.7×). Remaining to productionize: token embedding, logit sampling, and a public decode API on
+  real model weights.
+
+### T384 — Vulkan recorder reaches full op parity with Metal (ADR-0019 Phase 2) (2026-07-12)
+- Ports the last two decode ops to the Vulkan recorder: attention where a single query attends to a
+  whole KV cache (over-allocated caches supported — only the used rows are bound), and the
+  cache-append copy. The recorder's inter-op barrier was broadened to cover transfer (copy) as well
+  as compute, so a matmul-then-append or append-then-attention chain orders correctly.
+- Tests attend one query over a six-entry cache (matching a host softmax) and append a computed key
+  row into a sentinel-filled cache (confirming the row lands correctly and nothing else is touched).
+  Vulkan suite (twice), pure-Go build, and apicheck stay green.
+- The Vulkan recorder now has every op the Metal one has — unary/GELU, binary, matmul, RMSNorm,
+  RoPE, attention, and cache-append — each independently cross-validated. Next: assemble the full
+  multi-layer decode on Vulkan and measure batched vs per-op, completing backend parity for the
+  batched-decode path.
+
+### T383 — Vulkan recorder ops: matmul, norm, RoPE, binary (ADR-0019 Phase 2) (2026-07-12)
+- Ports four of the decode ops to the Vulkan recorder — matmul, RMSNorm, rotary embedding, and
+  binary element-wise (residual add) — each recording a dispatch over device buffers through the
+  shared helper, reusing the backend's existing compute shaders (Vulkan has no MPS, so matmul uses
+  the tiled GEMM shader). The Go API mirrors the Metal recorder method-for-method.
+- Tests chain matmul with a residual add and with an RMSNorm (the decode block's project-then-
+  normalize shape), and check RoPE against the host rotate-half reference — all matching the host at
+  the f32 tolerance. Vulkan suite (twice), pure-Go build, and apicheck stay green.
+- The Vulkan recorder now covers unary (including GELU), binary, matmul, RMSNorm, and RoPE. Left to
+  reach Metal parity: attention (single query vs KV cache) and the cache-append copy, then the full
+  decode assembly and an honest batched-vs-per-op measurement.
+
+### T382 — Vulkan recorder foundation: batched command buffer with barriers (ADR-0019 Phase 2) (2026-07-12)
+- Adds the Vulkan recorder — a persistent command buffer that records compute dispatches over
+  device buffers and submits once, the Vulkan counterpart to the Metal recorder. Because Vulkan has
+  no automatic hazard tracking, it inserts an explicit barrier between recorded ops.
+- The Vulkan-specific wrinkle: each recorded op gets its own descriptor set from a dedicated pool,
+  because a reused set would (at submit time) bind only its last write and corrupt earlier
+  dispatches — unlike Metal, where each dispatch sets its buffers directly.
+- The Go API (`newRecorder`/`unary`/`finish`/`free`) mirrors the Metal recorder exactly. A test
+  chains three ops (including a write-after-read on a reused buffer) and confirms the result matches
+  the host, proving the barrier-based chaining is correct. Vulkan suite (twice), pure-Go build, and
+  apicheck stay green.
+- Next: port the decode ops (matmul, norm, rope, attention, gelu, binary, cache-append) one at a
+  time, each cross-validated, then the full decode assembly with an honest batched-vs-per-op number.
+
+### T381 — Vulkan recorder port: device-buffer foundation (ADR-0019 Phase 2) (2026-07-12)
+- Begins bringing the batched decode path to Vulkan (it was Metal-only). Adds device-resident
+  buffers — a persistent host-visible VkBuffer that data uploads into once and reads back from,
+  overwritable in place for reuse across decode steps — reusing the backend's existing buffer
+  allocation and map helpers.
+- The Go API (`DeviceBuffer` with `NewDeviceBufferF32`/`Len`/`DownloadF32`/`UploadF32`/`Release`)
+  mirrors the Metal backend's exactly, so the rest of the recorder port reads the same on both.
+- A test round-trips a buffer and confirms in-place overwrite. Vulkan suite (run twice for
+  determinism), the pure-Go build, and apicheck stay green.
+- Next: the Vulkan recorder itself — a persistent command buffer that records dispatches over these
+  buffers with barriers and a single submit/wait, then each decode op ported and cross-validated one
+  at a time, exactly as on Metal.
+
+### T380 — De-risked the Vulkan batching win before porting the recorder (ADR-0019 Phase 2) (2026-07-12)
+- Before porting the whole command-buffer recorder to Vulkan (the batched decode path is currently
+  Metal-only), measured whether one-command-buffer batching actually wins on Vulkan/MoltenVK — it
+  couldn't be assumed, since MoltenVK is bandwidth-bound and some Metal speedups have failed to
+  carry over here.
+- Added a Vulkan batch benchmark that runs a kernel many times either as one command buffer (single
+  submit and wait, with barriers between dispatches) or one submit-and-wait per dispatch.
+- **Result** (on-device, 95 dispatches): batched is **10× faster** (17.75 ms → 1.78 ms), with the
+  per-op path pinned at ~187 µs per dispatch — the same submit/wait floor seen on Metal. The
+  batching premise holds on Vulkan, so the recorder port is justified (the 10× is a trivial kernel;
+  the real-model win will narrow to ~3× as on Metal). Vulkan suite and the pure-Go build stay green.
+- Next: port the recorder to Vulkan — a persistent command buffer recording the decode ops with
+  barriers over resident buffers and a single submit/wait, cross-validated like the Metal recorder.
+
+### T379 — Full multi-layer batched decoder: correct and 3.1× at a realistic size (ADR-0019 Phase 2) (2026-07-12)
+- Scales the T378 single-block assembly to a complete multi-layer decoder: each layer runs its
+  attention and MLP (matmul → GELU → matmul) blocks over its own persistent KV cache, then a final
+  norm and vocabulary projection produce logits — the whole step (98 ops at 6 layers) recorded into
+  one command buffer.
+- **Correctness**: a small model (2 layers, D=64) run for four decode steps produces logits that
+  match a host float64 reference across the full stack — per-layer growing-cache attention, the MLP
+  with GELU, and the vocab head — confirming the assembly is correct end to end.
+- **Honest measurement**: at a realistic decode size (D=512, 8 heads, 6 layers, vocab 1024) the
+  batched step is **3.10× faster** than the per-op path (23.98 ms → 7.73 ms) — matching the ~3×
+  ceiling measured synthetically in T374, now on the real full-model integration. (T378's 9.36× was
+  a tiny dispatch-bound D=32 model; the win narrows with compute density, as predicted.)
+- Metal suite, apicheck, and the pure-Go build stay green. Remaining to productionize: token
+  embedding, real logit sampling, a public decode API wired to real model weights, and Vulkan parity.
+
+### T378 — Assembled the batched decode step over a persistent KV cache (ADR-0019 Phase 2) (2026-07-12)
+- Assembles the individually-proven primitives into a full attention-block decode step and runs it
+  for several steps through the recorder over a persistent, device-resident KV cache — the novel
+  cross-step behavior the whole batched path depends on: the cache grows each step, rotary position
+  advances with it, attention sees the whole growing cache, and each new key/value row is appended
+  on the GPU. Adds a device-buffer overwrite (`UploadF32`) so per-step scratch buffers are reused
+  without reallocation.
+- A test runs five decode steps and confirms the GPU recorder matches a host float64 reference at
+  every step across the growing cache — proving the cross-step state management, position advance,
+  and cache-offset math are all correct. The batched step is 9.36× faster than the per-op path at
+  this size, though that figure is a tiny dispatch-bound model (D=32); the honest realistic-decode
+  ceiling remains ~3× (T374). Metal suite, apicheck, and the pure-Go build stay green.
+- The batched decode path is now proven correct end-to-end at single-layer scale — multiple layers
+  are just the same recorded block in a loop. Remaining: token embedding, a multi-layer model with a
+  vocab head and sampling, and wiring into the public decode API, then a real `BenchmarkGPTDecode`.
+
+### T377 — Record-mode blit: the KV-cache append primitive (ADR-0019 Phase 2) (2026-07-12)
+- Adds an in-command-buffer buffer copy to the recorder — the structural piece the decode loop
+  needs to append each new token's key/value row into the cache without leaving the GPU.
+- Bounds-checked and offset-addressable (in element units), so a freshly-computed row can be written
+  to any cache position; Metal's hazard tracking orders the producing matmul before the copy.
+- A test computes a key row with a matmul and appends it to a sentinel-filled cache, confirming the
+  written row matches the host computation and every other row is left untouched. Metal suite,
+  apicheck, and the pure-Go build stay green.
+- The recorder now holds both the compute ops and the cache-append primitive. Remaining before the
+  full integration: token embedding, and the decode step-loop that records a whole layer over a
+  persistent device-resident KV cache and grows it each step, plus the public API.
+
+### T376 — Record-mode RoPE: the last compute op before the batched decode step (ADR-0019 Phase 2) (2026-07-12)
+- Adds rotary position embedding to the recorder — the rotation applied to queries and keys before
+  attention. It encodes the rotate-half kernel over device-resident buffers with no per-op round-trip.
+- The decode detail that matters: the position offset is the query's absolute position (the current
+  KV-cache length), so a newly generated token is rotated by its true position each step.
+- A test rotates a single-token query at a mid-sequence position and confirms it matches the host
+  reference. Metal suite, apicheck, and the pure-Go build stay green.
+- Every compute op a decode step needs now records. Remaining before the full integration: token
+  embedding (a cheap per-step gather), a persistent device-resident KV cache that appends each step,
+  the step-loop wiring, and the public API.
+
+### T375 — Record-mode decode-attention: one query against a KV cache (ADR-0019 Phase 2) (2026-07-12)
+- Adds the one primitive the batched decode path was missing: attention where a single new query
+  attends to a whole cache of past keys/values (the tiled flash kernel from T373 assumed the query
+  and key lengths matched, which only holds during prefill).
+- No new GPU kernel was needed — the existing MHA kernel already handles separate query and key
+  lengths (with causal masking, grouped-query attention, and sliding windows); this fire adds the
+  record-mode wrapper so it runs over device-resident buffers inside the recorder.
+- A test attends one query over a six-entry cache and confirms it matches a host softmax reference.
+  Metal suite, apicheck, and the pure-Go build stay green.
+- The recorder now covers every compute op a decode step needs. Remaining before the full
+  integration: record-mode RoPE and token embedding, and a persistent device-resident KV cache
+  that grows each step, plus the public API.
+
+### T374 — Measured the real batching payoff on a full transformer layer (ADR-0019 Phase 2) (2026-07-12)
+- Before committing to the large decode-path integration, measured what command-buffer batching
+  actually saves on a *realistic* transformer layer — the earlier 41.8× figure came from a trivial
+  kernel with almost no compute and overstated the gain.
+- Added a record-mode binary op (element-wise add and friends) so the recorder can express residual
+  connections, then wired a complete 12-op GPT layer (norm → q/k/v → attention → projection →
+  residual → norm → MLP → residual) and ran it two ways over the same device buffers: each op in its
+  own command buffer (today's path) vs. all twelve in one.
+- **Result** (on-device, median of 50): at decode sizes the batched path is **2.8–3.5× faster**
+  (D512/seq1: 3.24 ms → 0.92 ms); at a compute-bound prefill size the gain narrows to 1.55×, as
+  expected. The honest decode ceiling is ~3×, not 41.8× — still a large win that justifies building
+  the full integration, now against a realistic target. Metal suite, apicheck, and pure-Go build green.
+- Next: build the decode-step integration — a persistent device-resident KV cache, any remaining
+  record-mode ops, and the public API — then measure the real `BenchmarkGPTDecode` against this ceiling.
+
+### T373 — Record-mode flash-attention: the last decode op-class in the recorder (ADR-0019 Phase 2) (2026-07-12)
+- Adds flash-attention to the batch recorder — the attention block of every transformer layer.
+  The tiled online-softmax kernel (with grouped-query support) encodes over device-resident
+  Q/K/V buffers into the recorder's command buffer with no per-op round-trip.
+- A test runs causal attention through the recorder and confirms it matches a host per-head
+  softmax-attention reference. Metal suite, apicheck, and the pure-Go build stay green.
+- **All four decode op-classes now record** — matmul, RMSNorm, elementwise, and attention — so an
+  entire transformer layer's intermediates can stay on the GPU across a step.
+- Next is the payoff: route a whole decode step through a single recorder over a device-resident
+  KV cache and measure against `BenchmarkGPTDecode` (target ~2.4×). That fire also settles the
+  KV-cache-as-device-buffer design, any remaining record-mode ops (RoPE/embed/add), and the
+  public API (the recorder is unexported until then).
+
+### T372 — Record-mode RMSNorm: the block-boundary op inside the recorder (ADR-0019 Phase 2) (2026-07-12)
+- Adds RMSNorm to the batch recorder — the normalization that opens each attention and MLP
+  sublayer in a Llama-style decoder. It encodes the cooperative kernel (one threadgroup per row)
+  over device-resident buffers into the recorder's command buffer, no per-op round-trip.
+- A test chains a matmul and an RMSNorm (`e = rmsnorm(A·B)·gamma`) over device buffers — the actual
+  decode block shape of project-then-normalize — and confirms it matches the host reference. Metal
+  suite, apicheck, and the pure-Go build stay green.
+- The recorder now chains all three of matmul, norm, and elementwise with intermediates staying on
+  the GPU. Next is the attention op-class, after which a whole decode step can run through the
+  recorder and be measured against `BenchmarkGPTDecode`.
+
+### T371 — Record-mode matmul: the decode-critical op inside the recorder (ADR-0019 Phase 2) (2026-07-12)
+- Adds matmul to the batch recorder. A decode step runs 7 matmuls (q/k/v, output projection,
+  the two MLP layers, the vocab head); this lets all of them encode into one command buffer over
+  device-resident buffers, with the MPS f32 kernel writing results the next op reads without a
+  round-trip to the host.
+- A test chains a recorder matmul and a ReLU (`d = relu(A·B)`) over device buffers and confirms the
+  result matches the host computation. Metal suite, apicheck, and the pure-Go build stay green.
+- The recorder now covers both dominant decode op-classes — matmul and elementwise — so
+  intermediates stay on the GPU across them. Forward-only for now (decode has no backward pass).
+- Next: record-mode norm and attention variants, then route a whole decode step through the
+  recorder and measure against `BenchmarkGPTDecode` (target ~2.4×, §T368).
+
+### T370 — Batch recorder: the foundation for batched decode (ADR-0019 Phase 2) (2026-07-12)
+- Builds the reusable primitive the batched-decode path needs: a recorder that holds one open
+  command buffer, lets record-mode ops encode into it over device-resident buffers without a
+  per-op commit/wait, and finishes with a single submit/wait. Intermediates stay on the GPU
+  between ops (Metal's default hazard tracking orders dependent accesses, proven in §T369).
+- The elementwise ops are wired as the first record-mode kernels; a test chains three of them
+  (`relu → exp → neg`) over device buffers and confirms the result equals running them on the host.
+  Metal suite, apicheck, and the pure-Go build stay green.
+- Next fires add record-mode matmul (feasible per §T369), norm, and attention variants, then route
+  a whole decode step through a recorder and measure against `BenchmarkGPTDecode` (target ~2.4×,
+  §T368). The recorder stays unexported until that integration settles the public surface.
+
+### T369 — Proved MPS and custom kernels chain correctly in one command buffer (2026-07-12)
+- The other feasibility question for batched decode (ADR-0019 Phase 2): can an MPS matmul and a
+  custom kernel run back-to-back in a single command buffer, with the matmul's result staying in a
+  device-resident buffer that never round-trips to the host between them? Added a small proof that
+  records `C = A·B` (MPS) then a ReLU on `C` (custom kernel) into one command buffer and downloads
+  only the final result; a test confirms it equals the two ops run separately.
+- It works: Metal's default buffer hazard tracking orders the matmul's write before the ReLU's read
+  with no explicit barrier. Together with §T368 (batching recovers the dispatch overhead), both of
+  Phase 2's uncertainties are now resolved, so the record-mode implementation can proceed.
+- Metal suite, apicheck, and the pure-Go build stay green.
+
+### T368 — Validated that command-buffer batching recovers the dispatch overhead (2026-07-12)
+- Before building the batched-decode infrastructure (ADR-0019 Phase 2), measured its core premise:
+  running 95 trivial GPU dispatches (about one decode step) as 95 separate command buffers takes
+  13.27 ms (~140 µs each, the per-op round-trip), but recording all 95 into **one** command buffer
+  with a single submit/wait takes 0.32 ms — a **41.8×** difference.
+- So batching recovers essentially all of the per-op round-trip overhead. For a real decode step
+  (~13 ms of dispatch plus ~9 ms of compute) that means ~9 ms batched versus ~22 ms today (~2.4×),
+  which would make GPU decode faster than the CPU — flipping the §T360 finding once batched, and
+  confirming ADR-0019 Phase 2 is worth building.
+- Metal suite and the pure-Go build stay green. The next phase routes a decode step's ops through
+  device buffers and a single command buffer.
+
+### T367 — Device-resident buffer primitive (ADR-0019 Phase 1) (2026-07-12)
+- First implementation step toward command-buffer batching: a general host-visible GPU-resident
+  buffer on Metal — `metal.DeviceBuffer` with `NewDeviceBufferF32` (upload), `DownloadF32`
+  (read-back), and `Release`, backed by new `mtl_devbuf_upload/download/free` bridge functions.
+  It generalizes the resident-quant-weight buffer from §T156 (which was write-only) by adding
+  read-back.
+- Nothing dispatches over it yet — this phase is the primitive plus its round-trip test (upload →
+  download is identical for sizes from empty to 4 MB, and Release is idempotent), with no behaviour
+  change; the default synchronous per-op path is untouched and the pure-Go build is unaffected. The
+  next phase keeps a decode step's intermediates in these buffers and records the whole step into
+  one command buffer to close the ~2.3× decode gap (§T360).
+- Metal suite, apicheck, and the pure-Go build stay green.
+
+### T366 — Design for device-resident tensors and command-buffer batching (ADR-0019) (2026-07-12)
+- Records the design for the highest-value remaining GPU lever. Two measured findings — decode is
+  dispatch-bound (§T360/§T361: ~95 per-op round-trips per token) and the memory-bound ops hit a
+  per-op floor (§T348/§B42: zero-copy gave nothing because the floor is the round-trip, not the
+  copy) — share one root cause: the backends run one op per command buffer, synchronously.
+- ADR-0019 accepts device-resident tensors (a storage variant backed by a persistent GPU buffer,
+  seeded by the resident-quant-weight handle from §T156) plus a deferred/batched execute mode that
+  records a sequence of ops into a single command buffer with barriers, chaining on the GPU without
+  per-op up/download. It phases the work — a device-storage primitive, then batched decode, then
+  batched training, then Vulkan parity — each a separate verified change, with the synchronous
+  default path and the pure-Go build preserved throughout.
+- This fire is the design (ADR) only; no code changed and the tree stays green. The next fire
+  implements Phase 1 (the device-storage primitive).
+
+### T365 — Test coverage for the Generate WithBackend option (2026-07-12)
+- The `WithBackend` decode option added in §T361 had no test. `TestGenerateWithBackend` now checks
+  that greedy generation produces identical tokens whether the decode runs on the default backend,
+  the CPU, or the reference — verifying the option is wired through and switches the backend
+  correctly. nlp suite and the pure-Go build stay green.
+
+### T364 — Full-tree verification and loop-context refresh (2026-07-12)
+- After the §T356–§T363 backward and decode work, the whole repository passes under both build
+  configurations (`CGO_ENABLED=1` including the Metal on-device tests, and `CGO_ENABLED=0`), plus
+  the Vulkan suite and cross-backend benchmarks — no failures, no tolerance changes.
+- Audited the remaining paths: the elementwise-multiply VJP (SwiGLU's gate) dispatches on the GPU,
+  and the KV-cache append and single-token embed are small CPU operations that are not the decode
+  bottleneck (that is per-op dispatch latency, already characterized and addressed via
+  `nlp.WithBackend`). Both the GPT and Llama/SwiGLU paths are now GPU-clean.
+- Refreshed `LOOP.md`'s status: the incremental, measurement-found GPU-performance wins are
+  exhausted, and the remaining levers (device-resident tensors enabling command-buffer batching for
+  decode, a tiled flash-backward, a simdgroup attention forward) are each large projects for a
+  dedicated session.
+
+### T363 — SiLU backward moved onto the GPU (SwiGLU/Llama training) (2026-07-12)
+- The same fix as the GELU backward (§T353), for the activation modern models use: SiLU is
+  SwiGLU's gate activation, and its backward was still the generic CPU scalar-loop VJP (~29 ms for
+  one FFN-sized SiLU at 256×2048), which would dominate Llama-style training the way GELU did for
+  the GPT.
+- Introduces `backend.OpSiLUBackward` with a reference kernel and Metal/Vulkan kernels, and rewires
+  the SiLU VJP to dispatch it on the tape's active backend. Measured: SiLU forward+backward
+  28.76→3.86 ms (**7.5×**). The finite-difference gradient check passes, new cross-reference tests
+  cover the GPU SiLU backward on both backends at unchanged tolerances, and the full suites,
+  apicheck, and pure-Go build stay green.
+- The remaining activation backwards still on the CPU scalar loop (Sigmoid, Tanh, ReLU) take the
+  same fix if a workload measures them as a bottleneck.
+
+### T361 — Decode backend is now caller-selectable (the cpu/GPU crossover is size-dependent) (2026-07-12)
+- Following §T360, measured the decode cpu-vs-GPU crossover across model sizes: metal/cpu decode
+  ratio is 2.7× (cpu wins) at dim 512, ~1.0× at dim 1024, and 0.62× (GPU wins) at dim 2048. As the
+  model grows, the per-op GPU compute outweighs the fixed dispatch overhead — so a blanket
+  "decode on cpu" would be *wrong* for large models.
+- Rather than bake a fragile hardware/size heuristic into the library, `GPT.Generate` and
+  `Llama.Generate` now accept `nlp.WithBackend(be)` (a functional option; existing three-argument
+  calls are unchanged). Decode still defaults to `backend.Default()`, but a caller who knows their
+  model size and hardware can run small-model decode on the CPU (~2.7× faster). The crossover table
+  and guidance are in `docs/benchmarking.md`.
+- nlp, Metal, and apicheck suites plus the pure-Go build stay green.
+
+### T360 — Autoregressive decode benchmark: the GPU is slower than the CPU here (2026-07-12)
+- Adds `BenchmarkGPTDecode`, timing one-token-per-step generation with a KV cache — the real
+  inference workload, distinct from the full-sequence forward of §T350. Measured: Metal ~44 tok/s
+  vs cpu ~101 tok/s, so the **GPU is ~2.3× slower than the CPU for decode** — the opposite of
+  prefill (where Metal is ~23× the cpu).
+- Cause: a decode step's ops are tiny (one token), so the per-op GPU dispatch/`waitUntilCompleted`
+  round-trip (~200 µs, and a step is ~95 ops ≈ 19 ms) dominates, while the CPU runs the tiny
+  compute with no round-trip. So on this hardware prefill and training belong on the GPU but
+  single-token decode belongs on the CPU — worth noting since Metal is the default backend on
+  macOS. The systemic fix would batch a whole decode step into one command buffer (one submit and
+  wait instead of ~95), the deferred-execution lever from §B42; not done here.
+- Documented in `docs/benchmarking.md`; Metal suite, apicheck, and the pure-Go build stay green.
+
+### T359 — MHA-backward bottleneck characterized (parked) (2026-07-12)
+- Measured where the MHA backward's time goes before attempting a fix: removing its atomic dK/dV
+  writes (as a measurement, not a real change) dropped it from ~73 to ~46 ms, so ~37 % is atomic
+  contention (many query threads accumulate into the same key rows) and the rest is
+  occupancy-bound (per §T358). An atomic-free version is structurally hard — the softmax is
+  per-query, so the natural parallelization must scatter to keys — and the only real fix is a
+  tiled flash-backward that block-reduces dK/dV in threadgroup memory, a large kernel project with
+  uncertain payoff on this hardware. Parked with the full characterization recorded (§B44) so it
+  isn't re-investigated.
+- Also audited the Llama/SwiGLU forward path and confirmed it is GPU-clean (no silent CPU fallback
+  like the GELU one from §T352). Noted separately that `nn.NewLlama` builds F64-only weights, so a
+  Llama built that way runs on the CPU; a dtype-parameterized constructor would let it use the GPU.
+- No code change (the measurement kernel was reverted); the full tree is green under both build
+  configurations.
+
+### T358 — MHA-backward register-caching investigated and reverted (negative result) (2026-07-12)
+- With the matmul-backward transposes fixed (§T356/§T357), the MHA backward (~21 ms/layer) is now
+  the largest training-backward op. It re-reads Q[i]/dO[i] from global memory inside its four
+  key-passes, which looked like the redundancy register-caching removed in the forward (§T349).
+- Measured, it does not help: caching both Q and dO makes training *slower* (the extra 384
+  floats/thread collapse occupancy), and caching Q alone is a wash. So the redundant reads are not
+  the bottleneck — the naive one-thread-per-query atomic kernel is occupancy/atomic-bound at its
+  structural limit. Reverted to the baseline (no code change); a real win needs a flash-style
+  backward that saves the forward's softmax statistics to drop two recompute passes (a larger
+  project, recorded in §B43). Full suite and pure-Go build green.
+
+### T357 — Vulkan matmul transpose via shader flag: GPT training 1.76× faster on Vulkan (2026-07-12)
+- The Vulkan twin of §T356. The Vulkan matmul paid the same CPU strided-gather transpose copy for
+  the backward's `dO·Wᵀ` / `Xᵀ·dO` — Vulkan training was ~half Metal's. Vulkan has no MPS, so the
+  tiled GEMM shader now takes `transA`/`transB` push constants and reads a transposed operand
+  directly from its transposed layout instead of a materialized copy.
+- The conv im2col GEMM shares that shader, so its push block was extended to pass `transA=transB=0`
+  (verified: conv cross-reference still green).
+- Measured: GPT training step Vulkan 497→876 tok/s (**1.76×**), now close to Metal's ~1009; both
+  GPU backends' matmul backward is copy-free. New cross-reference tests cover the transposed-operand
+  matmul on Vulkan (including edge dimensions that exercise the tiled masked path); the gradient
+  check, full Vulkan suite, apicheck, and pure-Go build stay green.
+
+### T356 — Matmul backward transpose via MPS flag: GPT training 1.95× faster on Metal (2026-07-12)
+- **The largest training win of the session, again found by profiling the real workload.** The
+  matmul backward computes `dO·Wᵀ` and `Xᵀ·dO`; the VJP builds the transposes as zero-copy stride
+  views, but the Metal matmul then called `Contiguous()` on them, materializing each transpose
+  with a **CPU element-by-element strided gather** — ~8 ms for a 2048×512 operand, versus 0.75 ms
+  for the matmul itself. Every backward matmul paid this.
+- Fix: the Metal matmul now detects when an operand is exactly a 2-D transposed view of a
+  contiguous matrix and hands MPS the contiguous base with a transpose flag
+  (`transposeLeft`/`transposeRight`), so MPS transposes internally with no copy.
+- Measured: GPT training step 520→1012 tok/s (**1.95×**), now ~25× faster than the pure-Go cpu
+  backend; the forward is unchanged (its matmul operands are already contiguous). Combined with
+  §T352–§T354, the training step is 3.2× faster this session — all from measuring the real
+  workload rather than micro-benchmarks.
+- New cross-reference tests cover the transposed-operand matmul (single, double, and FFN-sized) at
+  unchanged tolerances; the gradient check, GPT training convergence, full suites, apicheck, and
+  pure-Go build stay green. Follow-up: the Vulkan matmul pays the same CPU transpose copy and needs
+  a transpose flag in its GEMM shader (it has no MPS).
+
+### T355 — GPT throughput benchmark across all backends (2026-07-12)
+- Completes the end-to-end throughput harness (§T350/§T351 were cpu-vs-metal only): `bench-compare`
+  now times a full GPT forward and a forward+backward training step on **cpu, metal, and vulkan**,
+  with a synthetic realistically-sized model.
+- Snapshot (M2 Pro, tokens/s): forward cpu 181 / metal 4168 / vulkan 3647; training step cpu 41 /
+  metal 535 / vulkan 497 — both GPU backends ~20× (forward) and ~13× (training) over the pure-Go
+  cpu backend. This confirms the §T352–§T354 GELU/bias-add (and their backward) fixes benefit
+  Vulkan too: Vulkan's forward is close to Metal's, whereas with the old CPU fallbacks it would be
+  several times slower. A snapshot table is in `docs/benchmarking.md`.
+
+### T354 — Bias-add backward moved onto the GPU (2026-07-12)
+- Completes the FFN's GPU-resident backward: the bias gradient (a column sum `Σ_rows g`) was the
+  last piece of the FFN backward still running as a CPU scalar loop. Introduces
+  `backend.OpAddBiasBackward` with a reference kernel and Metal/Vulkan kernels (one thread per
+  column), and rewires the bias-add VJP to dispatch it on the tape's active backend — the input
+  gradient is just the upstream gradient (identity), so only the reduction needed a kernel.
+- Backward profiling at the GPT shapes (which guided this) also identified the next real training
+  bottleneck: the MHA backward at ~21 ms/layer (a naive one-thread-per-query atomic kernel), now
+  the largest single backward cost and a candidate for a tiled/simdgroup rewrite.
+- Measured: GPT training step 509→520 tok/s (modest — the bias-grad reduction is a smaller share
+  than the GELU backward was — but a real, correct win that removes the last FFN CPU fallback).
+  The gradient check still passes, new cross-reference tests cover the GPU bias-add backward on
+  both backends at unchanged tolerances, and the full suites, apicheck, and pure-Go build stay
+  green.
+
+### T353 — GELU backward moved onto the GPU: GPT training step 1.32× faster (2026-07-12)
+- Follow-up to §T352, again found by measuring: the GELU **backward** was a pure-Go scalar loop
+  (the generic elementwise VJP, computing `math.Erf`/`math.Exp` per element with no backend
+  dispatch), costing ~30 ms for one FFN-sized GELU (256×2048) — its forward is 0.42 ms, so the
+  backward alone was ~29.8 ms, and there are six per training step.
+- Introduces `backend.OpGELUBackward` with a reference kernel and Metal/Vulkan kernels (using the
+  same Abramowitz–Stegun erf approximation as the forward), and rewires the GELU VJP to dispatch
+  it on the tape's active backend — the same pattern as the norm and cross-entropy backwards.
+- Measured: GELU forward+backward 30.23→4.19 ms (**7.2×**); GPT training step metal 385→509 tok/s
+  (**1.32×**, and 1.59× combined with §T352), now 12.5× faster than cpu. The finite-difference
+  gradient check still passes (the gradient formula is unchanged, just dispatched), new
+  cross-reference tests cover the GPU GELU backward on both backends, and the full suites,
+  apicheck, and pure-Go build stay green.
+
+### T352 — GELU and bias-add moved onto the GPU: GPT forward 3.3× faster (2026-07-12)
+- **The biggest real-workload win of this session, found by measuring instead of guessing.** The
+  new GPT-forward harness (§T350) plus per-op probes revealed that ~half of the forward time was
+  two ops silently falling back to the reference *CPU* backend: exact-erf **GELU**
+  (11.09 ms/op at the FFN's 256×2048!) and **bias-add** (4.41 ms/op). Neither had a Metal/Vulkan
+  case, and the shared unary kernel had deliberately excluded GELU. All the per-kernel GPU work
+  earlier in the session optimized ops that are ~1% of the real forward while these two CPU
+  fallbacks were ~45%.
+- Both now run on the GPU, on Metal and Vulkan. GELU uses the exact `0.5·x·(1+erf(x/√2))` form;
+  since neither Metal Shading Language nor GLSL has `erf`, it uses the Abramowitz–Stegun 7.1.26
+  approximation (max abs error ~1.5e-7, well within f32 tolerance). Bias-add is a new
+  broadcast-add kernel on both backends.
+- Measured (M2 Pro, §T350 harness): GELU 256×2048 metal 11.09→0.42 ms (**26×**); **GPT forward
+  1264→4227 tok/s (3.3×)**, now 23× faster than cpu (was 7×); GPT training step 320→385 tok/s
+  (1.2× — the backward GELU/bias-add are still CPU fallbacks, a noted follow-up).
+- New cross-reference tests cover GELU and bias-add on both backends at unchanged tolerances; the
+  GPT inference/training tests exercise them end to end; full Metal/Vulkan suites, apicheck, and
+  the pure-Go build stay green. Lesson recorded: profile the real workload to find the bottleneck
+  before optimizing (§V22/§C3/§B10).
+
+### T351 — GPT training-step throughput benchmark (2026-07-12)
+- Companion to §T350: `BenchmarkGPTTrainingStep` times a full forward + cross-entropy + backward
+  pass (the optimizer step is excluded — it's a cheap elementwise update; the matmuls and their
+  backward dominate) on cpu vs metal, so the real-workload harness now covers training as well as
+  inference (LOOP.md priority: training and inference).
+- Result (M2 Pro, same GPT config as §T350): metal **320 tok/s vs cpu 41 tok/s, ~7.8×** on the
+  full forward+backward step — consistent with the 7.0× forward-only number, with the backward
+  costing roughly 3× the forward as expected. GPT training-convergence test unchanged and green;
+  Metal suite, apicheck, and the pure-Go build green.
+
+### T350 — End-to-end GPT-forward throughput benchmark (real-workload measurement) (2026-07-12)
+- Adds the first **whole-model** benchmark: `BenchmarkGPTForward` times a full transformer forward
+  pass (embedding → 6 × [LayerNorm → attention → LayerNorm → FFN] → final LayerNorm → LM head) on
+  cpu vs metal and reports tokens/second. A helper builds a realistically-sized GPT (vocab 4096,
+  512-dim, 8 heads, 6 layers, 256 tokens) with deterministic random weights, since the golden test
+  fixture (8-dim, 2-layer) is far too small to show real GPU utilization. This is the workload
+  §C3/§B10 asks optimizations to be judged against — every prior GPU benchmark was single-op.
+- Result (M2 Pro): metal **1264 tok/s vs cpu 181 tok/s, ~7×** on the full forward. So the GPU
+  genuinely wins the real workload and is not starved by per-op dispatch latency — that latency
+  (the §B42 finding) matters for tiny isolated ops, but a real forward is dominated by the large
+  head/FFN matmuls. Future "op X is slow" claims can now be weighed against this end-to-end number.
+- The existing GPT correctness tests (inference argmax match, training convergence) are unchanged
+  and green; Metal suite, apicheck, and the pure-Go build stay green. Extending the harness to
+  Vulkan and to a full training-step (forward + backward) throughput row is a noted follow-up.
+
+### T349 — Metal FlashAttention tiled through threadgroup memory (2026-07-12)
+- The Metal FlashAttention kernel (which `OpMHA` also uses for training/prefill since §T340) now
+  stages K/V in tiles through threadgroup memory: a threadgroup of 64 query rows of one head
+  cooperatively loads each key tile once and all 64 queries read it from fast threadgroup memory,
+  instead of every query reloading all of K/V from global memory. The per-query online-softmax
+  recurrence is unchanged, so results are identical up to floating-point reassociation.
+- This was measurement-justified (§V22): the old kernel ran at ~46 GFLOP/s, ~5% of peak — clearly
+  limited by the global K/V re-reads, not compute. Measured (512 seq / 8 heads / dk 64, causal,
+  same-session A/B): 12.10→10.75 ms, **1.13×**. Cross-reference green (including GQA/MQA) at
+  unchanged tolerances; Metal suite and pure-Go build green.
+- Honest finding: the win is smaller than the bandwidth estimate predicted, so the kernel is
+  co-limited by occupancy (the per-thread register accumulator caps threads per core) and the
+  serial per-thread key loop — not purely K/V bandwidth. Closing the remaining ~24× gap to
+  torch-mps needs simdgroup matrix instructions and proper cross-query score tiling (a larger
+  kernel project), not just this staging. A Vulkan twin is a follow-up, to be measured first
+  given §B39's MoltenVK bandwidth-bound caveat.
+
+### T348 — Zero-copy UMA investigated, measured, and reverted (honest negative result) (2026-07-12)
+- The §T345–§T347 notes claimed the ~1.7 ms floor of the cooperative norm/softmax kernels *is*
+  the host↔device copy and that zero-copy UMA was the confirmed next lever. That was asserted
+  three times but never measured. This change built zero-copy end to end — a pure-Go
+  page-aligned heap allocator plus Metal `newBufferWithBytesNoCopy` that wraps a tensor's storage
+  in place when it is page-aligned — verified it correct (cross-reference green, the zero-copy
+  path confirmed active), then **measured** it with a clean same-session A/B at 2048×2048:
+  copy path ~1.75 ms vs zero-copy ~1.73 ms. **No difference** — the memcpy is not the bottleneck.
+- The floor is per-op GPU dispatch / `waitUntilCompleted` latency plus reduction-barrier
+  serialization (the kernels move ~48 MB at only ~25 GB/s, far below the hardware's ~200 GB/s).
+  So the real next lever for this family is fewer per-op GPU round-trips (batching ops into one
+  command buffer with barriers, as §T343 did for conv; or a persistent encoder / graph), not
+  zero-copy.
+- All zero-copy and allocator changes were reverted per §C3 (don't merge a non-winning
+  optimization). ADR-0018 records the investigation as rejected-after-measurement; the
+  overclaims in the §T345–§T347 notes and `docs/benchmarking.md` were corrected; §B42 logs the
+  wrong-assumption, and a new invariant (§V22) now requires floor/bottleneck attributions to be
+  A/B-measured before they are recorded or built upon. Full suite green after the revert.
+
+### T347 — RMSNorm and LayerNorm backward made cooperative on both GPU backends (2026-07-12)
+- Extends the cooperative-reduction rewrite (§T345/§T346) to the **norm backward kernels**, which
+  run in every training step. RMSNorm-backward and LayerNorm-backward now use one 256-thread
+  threadgroup per row with coalesced strided access and threadgroup/shared tree reductions, on
+  both Metal and Vulkan. The cross-row parameter gradients (dγ, dβ) are still accumulated with GPU
+  float atomics — the same total number of atomic adds, now distributed across the lanes.
+- Verified two ways: the autograd finite-difference gradient check passes, and norm-backward
+  cross-reference (dx/dγ/dβ) matches the reference on both backends at unchanged tolerances. Full
+  Metal/Vulkan suites, the on-device training tests, and the pure-Go build stay green.
+- Measured (2048×2048, medians): RMSNorm-backward Metal 5.07→2.58 ms (same-session A/B, **2.0×** —
+  the backward made three uncoalesced passes over each row, so the win is larger than the
+  forwards'), Vulkan 2.30 ms; LayerNorm-backward Metal 2.38 ms, Vulkan 2.35 ms. `bench-compare`
+  gains both backward rows.
+- With this, the whole cooperative-able norm/softmax family (forwards and backwards) is done and
+  sits at the host↔device copy floor, so zero-copy UMA is now the single remaining lever for this
+  memory-bound family.
+
+### T346 — Softmax and LayerNorm made cooperative on both GPU backends (2026-07-12)
+- Applies the §T345 cooperative-reduction rewrite to the rest of the row-parallel forward family:
+  **Softmax and LayerNorm** now use one 256-thread threadgroup per row with coalesced strided
+  access and a threadgroup/shared tree reduction, on both Metal and Vulkan. Softmax runs two
+  reductions (row max, then Σexp); LayerNorm runs two (mean, then variance), reusing the shared
+  scratch across phases. A LayerNorm row was also added to `bench-compare` (it was missing).
+- Measured (2048×2048, medians): Softmax Metal 2.80→1.65 ms (same-session A/B, 1.7×), Vulkan
+  1.71 ms; LayerNorm Metal 1.66 ms, Vulkan 1.70 ms. All three norm/softmax forward kernels now sit
+  at the ~1.7 ms host↔device copy floor — the kernels are no longer the bottleneck, which is the
+  third confirmation that zero-copy UMA is the next lever for the memory-bound ops.
+- Softmax and LayerNorm cross-reference green on both backends at unchanged tolerances; full
+  Metal/Vulkan suites and the pure-Go build green.
+
+### T345 — RMSNorm ~1.9× faster: cooperative, coalesced kernel on both GPU backends (2026-07-12)
+- **The RMSNorm kernel now uses one threadgroup per row instead of one thread per row.** The old
+  kernel had each thread walk a whole row serially, so neighbouring threads read addresses `dim`
+  floats apart — fully uncoalesced, running a 2048×2048 norm at only ~20 GB/s (≈10 % of the M2
+  Pro's bandwidth). The new kernel gives each row a 256-thread group that strides the row with
+  coalesced loads, reduces the partial sums-of-squares in threadgroup/shared memory, and writes
+  the normalized row back coalesced. Metal and Vulkan both rewritten.
+- Measured (2048×2048, same-session A/B via temp-swap, medians): Metal 3.39→1.80 ms (**1.9×**),
+  Vulkan steady at ~1.72 ms (≈1.45× over the §T338 baseline). RMSNorm cross-reference green on
+  both backends at unchanged tolerances (the reference's f64 reduction order already differs, so
+  §V11's dim-scaled tolerance covers it); full Metal/Vulkan suites and the pure-Go build green.
+- The remaining ~1.7 ms is now the host↔device copy (upload X/γ, download output ≈ 8 MB), not the
+  kernel — confirming that zero-copy UMA is the next real lever for the memory-bound ops. The same
+  cooperative-reduction pattern is queued for softmax, LayerNorm, and the norm/CE backward kernels.
+
+### T344 — Full-tree verification and loop-context refresh (2026-07-12)
+- After the T335–T343 GPU-performance session, the **entire repository test suite passes under
+  both build configurations** — `CGO_ENABLED=1` (including the Metal on-device tests) and
+  `CGO_ENABLED=0` (pure Go) — with zero failures and zero tolerance changes across the whole
+  session.
+- `LOOP.md`'s status section was still frozen at "end state reached 2026-07-06"; it now reflects
+  the active GPU-performance frontier, this session's results, the ranked list of next
+  candidates (zero-copy UMA, cooperative attention tiling, skinny-M GEMM, MPSGraph conv, amd64
+  resume), and the accumulated dispatch/measurement rules.
+
+### T343 — Vulkan Conv2D stages fused into one command buffer (2026-07-12)
+- The three conv stages (im2col → GEMM → scatter) now record into a **single command buffer with
+  compute-to-compute memory barriers** instead of submitting and waiting per stage — one submit,
+  one wait. A new shared `dset_write` helper (extracted from the generic dispatcher) rewrites the
+  three cached descriptor sets.
+- Measured (vs unfused §T342, medians of 3): small shape 1.42→1.21 ms (+17 % — the small-shape
+  regression from the GEMM lowering is repaid; now faster than the original naive kernel), ResNet
+  shape 5.62→5.04 ms (367 GFLOP/s, +12 %; cumulatively 1.48× over the naive kernel). Vulkan suite
+  green 3×, pure-Go build green.
+- Recorded as the pattern for future multi-stage Vulkan ops: record with barriers, never
+  wait-idle between stages.
+
+### T342 — Vulkan Conv2D 1.33× faster: lowered to im2col + the tiled GEMM shader (2026-07-12)
+- **The Vulkan convolution now uses the same GEMM lowering as Metal's (§T341)**: a new `im2col`
+  shader unrolls the input, the existing tiled matmul shader (and its cached pipeline) multiplies
+  the row-major `[F, C·KH·KW]` weights against the column matrix, and a new `colout` shader
+  scatters into NCHW and adds the bias. The three stages run on device-resident pooled buffers —
+  the intermediate matrices never round-trip to the host. The naive conv shader is deleted.
+- Measured (M2 Pro/MoltenVK, A/B same session): ResNet-block shape 7.46→5.62 ms (248→**329
+  GFLOP/s, 1.33×**); the tiny latency-probe shape pays the three-dispatch overhead (−10 %), the
+  same shape-dependence documented for Metal. The limiter is now the tiled GEMM shader itself at
+  skinny M=64 (~330 vs Metal-MPS 593 GFLOP/s), so conv gains will track future GEMM-shader work;
+  fusing the three stages into one command buffer with pipeline barriers (instead of a
+  wait-per-stage) is a further noted candidate.
+- Vulkan suite green 3× (conv cross-reference incl. padding/stride/1×1/non-square through the new
+  path, tolerances unchanged); Metal suite and pure-Go build green.
+
+### T341 — Metal Conv2D 2.4× faster: lowered to im2col + MPS GEMM (2026-07-12)
+- **The Metal convolution no longer runs the naive one-thread-per-output kernel** (~105 GFLOP/s
+  ceiling). `mtl_conv2d_f32` now encodes three stages into one command buffer: an `im2col`
+  kernel unrolls the input into a column matrix (padding writes zeros), `MPSMatrixMultiplication`
+  multiplies the — already row-major `[F, C·KH·KW]` — weights against it, and a scatter kernel
+  writes the NCHW output and adds the bias. This realizes the parked "im2col conv" item from the
+  §T93 performance-gap analysis.
+- Measured (M2 Pro, A/B same session, naive re-measured via temporary swap): ResNet-block shape
+  (8×64×56², f64, k3) 7.56→3.12 ms (245→**593 GFLOP/s, 2.4×**); the small latency-probing shape
+  is unchanged within noise (+8 % — at 75 MFLOP the three-stage dispatch overhead dominates,
+  documented in the spec). The torch-mps conv gap at the ResNet shape shrinks from ~18× to ~2×.
+  `bench-compare` now runs Conv2D at both shapes.
+- Cross-reference tests green 3× at unchanged tolerances (the existing `crossTol(C·KH·KW)`
+  already covers reordered accumulation per §V11); full Metal and Vulkan suites and the pure-Go
+  build green. The Vulkan conv keeps its naive kernel for now (im2col + tiled-GEMM shader is the
+  noted follow-up); a further Metal lever is MPSGraph's fused convolution.
+
+### T340 — MHA forward 1.6× faster on both GPU backends: training shapes route to the FlashAttention kernel (2026-07-12)
+- **`OpMHA` now dispatches the single-pass FlashAttention kernel for training/prefill shapes**
+  (sq == sk, no sliding window) on Metal and Vulkan. The §T338 rows showed the flash kernel doing
+  the same math in 12.1 ms where the two-pass MHA kernel needs 19.1 — it computes half the Q·K dot
+  products via the online-softmax recurrence. The kernel takes scale/causal/kvHeads as parameters,
+  so the YaRN attention scale and GQA carry over exactly; decode steps (sq < sk, KV offset),
+  sliding-window, ALiBi, and dk > 128 keep their existing two-pass or reference paths.
+- Pure Go-dispatch change, no shader edits. Verified: Metal and Vulkan suites green 3× — the
+  existing MHA cross-reference cases (GQA, causal, YaRN scale) now exercise the flash path at
+  unchanged tolerances, and the on-device GPT training (which uses OpMHA at sq == sk) stays
+  green, so LLM training now runs attention through the flash path end to end.
+- Measured (M2 Pro, A/B same session, 512 seq / 8 heads / dk 64, causal): MHA forward Metal
+  19.1→12.05 ms, Vulkan 19.3→12.13 ms — **1.59× each**.
+- The remaining gap to torch-mps attention (0.45 ms) needs a cooperative tiled kernel
+  (threadgroup-shared K/V tiles, simdgroup ops) — parked as real kernel work.
+
+### T339 — Metal norm/softmax kernels ~3× faster: row-parallel threadgroup sizing fixed (2026-07-12)
+- **Fixes the finding §T338's new benchmark rows surfaced**, completing the §T337 bug class. Six
+  row-parallel kernels (Softmax, RMSNorm, LayerNorm, cross-entropy backward, RMSNorm/LayerNorm
+  backward — one thread per row) dispatched with ~1024-thread threadgroups, so a 2048-row input
+  produced just 2 threadgroups for the whole GPU; threadgroups are the unit distributed across
+  cores, so most of the chip sat idle. Now 64 threads per threadgroup, matching the Vulkan twins.
+- Measured (M2 Pro, same-session A/B, 2048×2048): Softmax 10.0→~3.2 ms (≈3×, level with Vulkan's
+  2.9 ms in the same run), RMSNorm 7.9→2.43 ms (3.3×, level with Vulkan's 2.5 ms). The other four
+  kernels share the mechanism and fix. Outputs bit-identical (dispatch shape only); Metal suite
+  green 3×; pure-Go build green.
+- Dispatch rule now recorded in the spec: never size Metal compute dispatches with
+  `maxTotalThreadsPerThreadgroup` for per-row or register-heavy kernels — use 64 per threadgroup
+  (Vulkan parity, keeps threadgroup count above the core count); the driver maximum is only safe
+  for elementwise kernels with tens of thousands of threads.
+
+### T338 — bench-compare rows for FlashAttn, Retention, Softmax, RMSNorm — and they caught the next bug (2026-07-12)
+- `make bench-compare` now also times FlashAttention, Retention forward/backward, Softmax, and
+  RMSNorm on all four backends (ref/cpu/metal/vulkan), closing the coverage gap §T337 flagged.
+  Shapes match the cross-reference tests; a snapshot table lives in `docs/benchmarking.md`.
+- The attention rows confirm §T337's fix: Metal FlashAttn 12.1 ms == Vulkan 12.2 ms (both beat
+  the two-pass MHA at 19.1 ms), Retention forward/backward at parity.
+- **New finding surfaced by the new rows:** Metal Softmax is 3.6× and RMSNorm 3.1× slower than
+  their Vulkan twins (10.0 vs 2.8 ms, 7.9 vs 2.5 ms at 2048×2048). Cause: the row-parallel
+  kernels dispatch one thread per row with ~1024-thread threadgroups, so 2048 rows form only
+  **2 threadgroups for the entire GPU** — and threadgroups are the unit distributed across
+  cores, leaving most of the M2 Pro's 19 cores idle. Vulkan's 64-wide groups spread over 32.
+  Same bug class as §T337, different mechanism; queued as the next optimization task.
+
+### T337 — Metal attention 2.2× faster: threadgroup sizing fixed for register-heavy kernels (2026-07-12)
+- **Root-caused and closed the "Metal MHA is 2× slower than the identical Vulkan kernel" gap**
+  flagged in §T336. Five kernels (MHA forward/backward, FlashAttention, Retention
+  forward/backward) each hold a 128-float register array per thread, but were dispatched with
+  `maxTotalThreadsPerThreadgroup` (≈1024 threads) — collapsing GPU occupancy under register
+  pressure. The structurally identical Vulkan twins always ran 64-wide workgroups.
+- Fix: cap those five dispatch sites at 64 threads per threadgroup, matching Vulkan. Kernel code
+  and floating-point order are untouched, so outputs are bit-identical; kernels without large
+  register arrays keep the driver-chosen sizing.
+- Measured (Apple M2 Pro, A/B same session, medians of 3, seq 512 / 8 heads / dk 64): MHA forward
+  42.4→19.1 ms (**2.2×**, now level with Vulkan's 19.3 ms), MHA backward 172.3→74.0 ms
+  (**2.3×**). FlashAttention/Retention share the mechanism and fix (no dedicated bench rows yet).
+  Metal suite green 3× including the on-device training tests; pure-Go build green.
+- Lesson recorded for future MSL kernels: with thread-local arrays beyond ~128 bytes, cap the
+  threadgroup at 64 — `maxTotalThreadsPerThreadgroup` ignores register pressure on Apple GPUs.
+
+### T336 — Metal buffer pool: per-call MTLBuffer allocations eliminated (2026-07-12)
+- **Every Metal op no longer allocates fresh GPU buffers per call.** All 27 op functions (139
+  buffer-creation sites) previously created and released an `MTLBuffer` per operand on every
+  dispatch. They now draw from a process-wide size-classed pool (powers-of-two capacities,
+  best-fit reuse, bounded at 128 entries / 512 MB with a transient-buffer fallback) — the Metal
+  twin of the Vulkan pool from §T335.
+- Reuse with stale contents is safe by audit of all sites: no kernel relies on
+  `newBufferWithLength`'s zero-fill — atomic accumulators are uploaded pre-zeroed or explicitly
+  memset, every other output element is written before the copy-back, and the MPS matmul runs
+  `beta:0.0`. Resident quantized-weight uploads are deliberately not pooled (they outlive the
+  call). A new mutex plus a scope-guard macro (`OP_BEGIN`, `__attribute__((cleanup))`) serializes
+  ops and returns the call's buffers to the pool on every exit path, so the shared state is safe
+  under concurrent callers.
+- Measured on Apple M2 Pro (A/B same session, medians of 3): MatMul@512 902→546 µs
+  (297→492 GFLOP/s, **+66 %**), @1024 2.37→1.81 ms (905→1186 GFLOP/s, +31 %), @256 347→271 µs
+  (+28 %); MHA forward unchanged (compute-bound — the Metal MHA kernel itself, ~2× slower than
+  the Vulkan twin, is a separate optimization candidate). Metal suite green across repeated runs
+  including the on-device GPT/MLP training tests; pure-Go (`CGO_ENABLED=0`) build green.
+- The GoAI-metal vs torch-mps matmul gap (§T93) narrows from ~4.7× to ~3.5×.
+
+### T335 — Vulkan per-call overhead eliminated: buffer pool + persistent command buffer + cached descriptor sets (2026-07-12)
+- **Every Vulkan dispatch no longer creates and destroys its GPU objects.** Previously each op call
+  created up to 8 buffers with fresh device memory (`vkCreateBuffer` + `vkAllocateMemory`), a
+  descriptor pool + set, and a command pool + buffer — and destroyed them all afterwards. This
+  per-call overhead was the lever §B39/§T94/§T95 identified as the next real Vulkan win.
+- Storage buffers now come from a process-wide size-classed pool (capacities rounded to powers of
+  two, best-fit reuse; bounded at 128 entries / 512 MB with a transient-buffer fallback beyond
+  that). Reuse is safe with stale contents because every kernel either writes each output element
+  it downloads or reads accumulators that are uploaded pre-zeroed. One command pool + command
+  buffer serve the whole process (reset per call), and each cached pipeline now owns its descriptor
+  set, allocated once and rewritten per call. A new mutex serializes dispatches, making the shared
+  state safe under concurrent callers (the pipeline cache previously relied on implicit
+  serialization). Per call only the host↔device copies, the descriptor rewrite, and the dispatch
+  itself remain.
+- Measured on Apple M2 Pro / MoltenVK (A/B same session, medians of 3): MatMul@512 1.96→1.58 ms
+  (137→170 GFLOP/s, +24 %), @1024 4.90→3.62 ms (438→594 GFLOP/s, +36 %), @256 +10 % (within
+  baseline noise); MHA forward −5 % (compute-bound, as expected). Full Vulkan suite green 3×,
+  pure-Go (`CGO_ENABLED=0`) build green.
+- Next lever noted in the spec: zero-copy UMA (persistently mapped pool memory / Metal
+  `newBufferWithBytesNoCopy`) to eliminate the upload/download memcpys themselves.
+
+### T334 — GPU embedding backward on Vulkan and Metal (2026-07-10)
+- **The token/position-embedding gradient now runs on the GPU** (both Vulkan and Metal) — the last
+  training gradient that was still pinned to the CPU. With it, **every backward op of a transformer
+  training step now dispatches on the active backend**, so a full LLM training step runs GPU-resident
+  end to end (embed → attention/norm/FFN → cross-entropy loss, and the whole backward pass).
+- Introduces `backend.OpEmbedBackward` and rewires the embed VJP to dispatch it. The gradient is a
+  scatter-add `dtable[idx[i],:] += g[i,:]`; because several tokens can share an index and collide on
+  the same table row, the GPU kernels use float atomics (like the norm backwards). One thread per
+  (token, dim); indices are read into an f32 buffer (any index dtype); the accumulator is uploaded
+  zero-initialized. When float atomics are unavailable (or inputs are non-f32/empty) it falls back to
+  the reference.
+- Verified by cross-reference parity against the Pure-Go reference, including cases with more tokens
+  than table rows so repeated indices exercise the atomic collisions, plus the existing autograd/nlp
+  regression through the rewired dispatch. The pure-Go (`CGO_ENABLED=0`) build stays green.
+- **Milestone**: the entire transformer training step (forward and full backward) now runs
+  GPU-resident on both backends.
+
+### T333 — GPU cross-entropy backward on Vulkan and Metal (2026-07-10)
+- **The cross-entropy loss gradient now runs on the GPU** (both Vulkan and Metal). This is the first
+  gradient of every LLM training step, so backprop now *starts* on the GPU instead of seeding from a
+  CPU-computed gradient. Introduces `backend.OpCrossEntropyBackward` and rewires the CE VJP to
+  dispatch it on the tape's active backend.
+- One GPU thread per row computes `dz = g·(softmax(z) − q')/b` with the label-smoothing target `q'`
+  and the optional z-loss term — matching the reference's fused kernel exactly. It's fully per-row
+  (no atomics). Targets are read into an f32 index buffer, so any target dtype works; non-f32 logits
+  or empty inputs fall back to the reference.
+- Verified two ways: the existing autograd finite-difference cross-entropy gradient check still passes
+  through the rewired dispatch, and cross-reference parity confirms the GPU backward matches the
+  reference across batch/class shapes and all four label-smoothing/z-loss variants. The pure-Go
+  (`CGO_ENABLED=0`) build stays green.
+- GPU training now spans the whole LLM step: cross-entropy loss backward → matmul / attention / norm
+  / RoPE backward.
+
+### T332 — GPU LayerNorm backward on Vulkan and Metal (2026-07-10)
+- **LayerNorm's backward now runs on the GPU** (both Vulkan and Metal), completing the norm-backward
+  pair (with RMSNorm from §T331) so LayerNorm-based models (BERT, GPT-2, most encoders) train
+  GPU-resident. Introduces `backend.OpLayerNormBackward` and rewires the LayerNorm VJP to dispatch it
+  on the tape's active backend.
+- One GPU thread per row computes the per-row input gradient `dx` and atomically accumulates the two
+  cross-row parameter gradients `dγ = Σ_rows g·x̂` and `dβ = Σ_rows g` with float atomics (the same
+  approach as RMSNorm backward, plus mean-subtraction and a second accumulator). On Vulkan this needs
+  `VK_EXT_shader_atomic_float`; when unavailable (or inputs non-f32/empty) it falls back to the
+  reference. Since `β`'s value doesn't affect the gradient, the op takes just `(x, gamma, g)`.
+- Verified two ways: the existing autograd finite-difference gradient check still passes through the
+  rewired dispatch, and cross-reference parity confirms the GPU backward matches the reference for
+  `dx`, `dγ`, and `dβ` across shapes (including a row count past one workgroup and a 3-D input) and
+  epsilon. The pure-Go (`CGO_ENABLED=0`) build stays green.
+- GPU training now covers matmul, attention (MHA/FlashAttn), Conv2D, Retention, RoPE, RMSNorm, and
+  LayerNorm backward.
+
+### T331 — GPU RMSNorm backward on Vulkan and Metal (2026-07-10)
+- **RMSNorm's backward now runs on the GPU** (both Vulkan and Metal), so training a norm layer no
+  longer bounces its gradient to the CPU. Introduces `backend.OpRMSNormBackward` and rewires the
+  RMSNorm VJP to dispatch it on the tape's active backend (the pattern established for RoPE in §T330).
+- One GPU thread per row computes the per-row input gradient `dx` and atomically accumulates the
+  cross-row weight gradient `dγ = Σ_rows g·x·r` using float atomics — the same approach as the conv2d
+  backward. On Vulkan this needs `VK_EXT_shader_atomic_float`; when it's unavailable (or inputs are
+  non-f32/empty) the op falls back to the reference.
+- Verified two ways: the existing autograd finite-difference gradient check still passes through the
+  rewired dispatch, and cross-reference parity confirms the GPU backward matches the reference for
+  both `dx` and `dγ` across shapes (including a row count past one workgroup and a 3-D input) and
+  epsilon. The pure-Go (`CGO_ENABLED=0`) build stays green.
+
+### T330 — GPU RoPE backward on Vulkan and Metal (2026-07-10)
+- **RoPE's backward now runs on the GPU** (both Vulkan and Metal), the first step of moving
+  *training* — not just inference — onto the GPU for the transformer position path. Previously the
+  RoPE (and RMSNorm/LayerNorm) gradient was a hand-rolled Go loop that ran on the CPU even when
+  training on the GPU; only attention and conv backward were GPU-dispatched.
+- Introduces `backend.OpRoPEBackward` and rewires the RoPE VJP to dispatch it on the tape's active
+  backend (the same pattern attention backward uses), so the RoPE gradient runs on the GPU when
+  training on Metal/Vulkan and on the reference otherwise. The rotation is orthogonal, so the backward
+  is the inverse rotation (angle → −angle) — the GPU kernels mirror the forward with the two output
+  lines transposed. The xPos variant and non-f32 inputs fall back to the reference.
+- Verified two ways: the existing autograd finite-difference gradient check still passes through the
+  rewired dispatch, and cross-reference parity confirms the GPU backward matches the reference across
+  head counts, position offsets, and the PI/YaRN frequency variants (with the xPos fallback). The
+  pure-Go (`CGO_ENABLED=0`) build stays green.
+- This establishes the dispatch-backward pattern for the norms (RMSNorm/LayerNorm backward on GPU are
+  the next step toward full GPU training).
+
+### T329 — GPU binary elementwise ops on Vulkan and Metal (2026-07-10)
+- **Six same-shape binary elementwise ops now run on the GPU** — `Add`, `Sub`, `Mul`, `Div`,
+  `Maximum`, `Minimum` — via a single generic kernel that switches on an op selector. This closes the
+  last CPU op in the SwiGLU FFN (the `SiLU(gate) ⊙ up` multiply) and the transformer residual add, so
+  a whole layer now stays resident on the GPU: matmul → SiLU → matmul → Mul → matmul, all on-device.
+- Only equal-shaped f32 inputs run on the GPU; broadcasting (unequal shapes) and non-f32 fall back to
+  the reference, which keeps numpy-broadcast arithmetic on the verified CPU path while covering the
+  same-shape FFN/residual cases.
+- One GPU thread per element on both backends, verified by cross-reference parity against the Pure-Go
+  reference for all six ops across several shapes, plus a broadcasting case that confirms the
+  fallback. The pure-Go (`CGO_ENABLED=0`) build stays green — the kernels are behind build tags.
+- GPU coverage now spans a full transformer layer: matmul, quantized matmul, MHA/FlashAttn, Conv2D,
+  Retention, RMSNorm, RoPE, Softmax, LayerNorm, and 9 unary + 6 binary elementwise ops.
+
+### T328 — GPU unary elementwise ops on Vulkan and Metal (2026-07-10)
+- **Nine unary elementwise ops now run on the GPU** — `Neg`, `Exp`, `Log`, `Tanh`, `ReLU`,
+  `Sigmoid`, `SiLU`, `Sqrt`, `Abs` — via a single generic kernel that switches on an op selector, so
+  the FFN's SiLU gate and general elementwise math stay resident on-device instead of a CPU
+  round-trip.
+- `GELU` is deliberately kept on the reference: its exact `erf`-based form has no GLSL primitive, so
+  running it on Metal only would break cross-backend parity. Empty or non-f32 inputs fall back to the
+  reference.
+- One GPU thread per element on both backends (Vulkan `unary.comp` compiled to SPIR-V; Metal MSL
+  compiled at runtime), verified by cross-reference parity against the Pure-Go reference for all nine
+  ops across several shapes (Log/Sqrt tested on positive-domain inputs). The pure-Go
+  (`CGO_ENABLED=0`) build stays green — the kernels are behind build tags.
+
+### T327 — GPU LayerNorm on Vulkan and Metal (2026-07-10)
+- **LayerNorm now runs on the GPU** (both Vulkan/MoltenVK and Metal), complementing the GPU RMSNorm
+  so LayerNorm-based models (BERT, GPT-2, most encoders) keep activations resident between matmuls
+  too. Torch semantics: `y = (x−mean)/√(var+eps)·γ + β` over the last axis (mean-subtracted, biased
+  variance).
+- One GPU thread per row: two reduction passes (mean, then variance), then the normalized,
+  γ-scaled, β-shifted write. The epsilon default (`0 → 1e-5`) matches the reference. Empty or non-f32
+  inputs fall back to the reference.
+- The algorithm is the established LayerNorm (Ba et al. 2016); the GPU kernel is verified by
+  cross-reference parity against the Pure-Go reference across shapes (including rows past one dispatch
+  workgroup and a 3-D input) and explicit/defaulted/large epsilon. The pure-Go (`CGO_ENABLED=0`)
+  build stays green — the kernels are behind build tags.
+- GPU inference coverage now spans matmul, quantized matmul, MHA/FlashAttn, Conv2D, Retention,
+  RMSNorm, RoPE, Softmax, and LayerNorm.
+
+### T326 — GPU Softmax on Vulkan and Metal (2026-07-10)
+- **Softmax now runs on the GPU** (both Vulkan/MoltenVK and Metal), continuing the push to keep
+  work resident on-device. A numerically-stable max-shift softmax over the last axis, so logits or
+  attention scores can be softmaxed on the GPU (e.g. before sampling, or a non-fused attention path)
+  instead of a CPU round-trip.
+- One GPU thread per row (reusing the RMSNorm per-row-reduction pattern): find the row max, sum the
+  shifted exponentials, then write the normalized probabilities. Empty or non-f32 inputs fall back to
+  the reference.
+- Definitional op (stable softmax, no paper); verified by cross-reference parity against the Pure-Go
+  reference across shapes including rows past one dispatch workgroup, a 3-D input, and random logits
+  that exercise the max-shift. The pure-Go (`CGO_ENABLED=0`) build stays green — the kernels are
+  behind build tags.
+
+### T325 — GPU RoPE on Vulkan and Metal (2026-07-10)
+- **Rotary position embeddings (RoPE) now run on the GPU** (both Vulkan/MoltenVK and Metal),
+  continuing the push to keep an LLM layer resident on-device. RoPE rotates Q/K immediately before
+  the attention kernel (already on GPU), so a CPU-only RoPE bounced Q/K off the GPU mid-path; now the
+  Q→RoPE→attention path stays on-device.
+- One GPU thread per rotated pair applies the split-half `rotate_half` rule. The per-head inverse
+  frequencies and position divisor are precomputed on the host by the existing `RoPEFreqs`, so
+  linear position-interpolation and YaRN are folded in and reuse the verified code — only the
+  elementwise rotation runs on the GPU. Non-f32 inputs, the xPos magnitude variant, and empty tensors
+  fall back to the reference.
+- Verification is cross-reference parity against the Pure-Go reference across single/multi-head
+  layouts, rows past one workgroup, a KV-cache position offset, PI and YaRN frequency variants, and
+  the xPos fallback, on both backends. The pure-Go (`CGO_ENABLED=0`) build stays green — the kernels
+  are behind build tags.
+- (Two GPU-shader gotchas fixed along the way: `half` is a reserved word in GLSL and a built-in type
+  in Metal, so the pair-count variable was renamed.)
+
+### T324 — GPU RMSNorm on Vulkan and Metal (2026-07-10)
+- **RMSNorm now runs on the GPU** (both the Vulkan/MoltenVK and Metal backends), not just the
+  Pure-Go reference. Hot per-token ops like RMSNorm were CPU-only, so an LLM forward pass on the GPU
+  had to bounce activations back to the CPU for every norm; keeping RMSNorm on-device lets activations
+  stay resident between matmuls.
+- One GPU thread per row: it reduces the row's mean-of-squares and writes the normalized, γ-scaled row
+  (`y = x/√(mean(x²)+eps)·γ`, no mean-subtraction, no bias — Zhang & Sennrich 2019). f32; the epsilon
+  default (`0 → 1e-5`) matches the reference. Vulkan uses a new `rmsnorm.comp` compiled to SPIR-V
+  (`make vulkan-spv`); Metal compiles the kernel from MSL source at runtime. Empty or non-f32 inputs
+  fall back to the reference.
+- Verification is cross-reference parity against the Pure-Go reference (the numeric truth): the GPU
+  sums in f32 vs the reference's f64, so a dim-scaled tolerance applies. Tests cover shapes with row
+  counts unaligned to the dispatch width, a 3-D input, and explicit/defaulted/large epsilon, on both
+  backends (skipping with a log when no GPU is present).
+- The pure-Go build (`CGO_ENABLED=0`) stays green — the GPU kernels are behind build tags with a
+  reference fallback.
+
+### T323 — einsum diagonal/trace gradients (2026-07-10)
+- **`einsum` now differentiates single-operand diagonals and traces** — `"ii->i"` (diagonal
+  extraction), `"ii->"` (trace), `"iij->j"`. A repeated letter reads the operand on its generalized
+  diagonal, so the gradient is the collapsed (de-duplicated) swap-rule gradient **scattered back onto
+  that diagonal** (zero off it). With §T322's reductions, einsum is now fully differentiable except
+  for a repeat shared across multiple operands and a repeated output index — both still error on
+  backward (forward works), documented as follow-ups.
+- Definitional (§R143: the calculus of `numpy.einsum` backward — swap rule + diagonal scatter, no
+  paper; §V16-exempt). Tests: the gradcheck suite extended with diagonal/trace specs (central
+  finite-difference, including the off-diagonal zeros), a closed-form scatter check
+  (`"ii->i"` ⇒ `dA[i,j]=g_i·δ_ij`), and the unsupported-gradient test reworked to the genuinely
+  still-unsupported cases (`"ii,ij->j"`, `"i->ii"`).
+
+### T322 — einsum reduction gradients (2026-07-10)
+- **`einsum` now differentiates single-operand reductions** — `"ij->i"`, `"ij->"`, `"ijk->ik"`, and
+  contractions that also reduce an index (`"ij,jk->i"`). Previously the swap-rule VJP only handled
+  pure contractions and errored on any index that was summed out of a single operand.
+- A summed-over index carries a gradient that is **constant (broadcast) along it**; this is
+  reconstructed by injecting a `ones` vector of that index's size and subscript into the same
+  swap-rule contraction (`dAₖ[…,c,…] = g[…]·1[c]`), so it reuses the existing `EinsumContract` with
+  no new op and no scatter. Diagonals/traces (repeated letters, `"ii"`) still error — a documented
+  follow-up needing a diagonal scatter.
+- Definitional (linear-algebra gradient rule, no paper; §V16-exempt). Tests: the gradcheck suite
+  extended with reduction specs (central finite-difference, per operand), a closed-form broadcast
+  check (`"ijk->ik"` ⇒ `dA[i,j,k]=g[i,k]`), and the unsupported-gradient test narrowed to the
+  diagonal/trace cases.
+
+### T321 — npy float16 support (2026-07-10)
+- **The `.npy` loader now handles `F16` (numpy `<f2`), not just `F32`/`F64`.** numpy float16 arrays
+  are common for ML data and quantized activations; the previous F32/F64-only loader could not
+  read or write them. F16 is stored **verbatim as its raw IEEE binary16 uint16 bits**, byte-identical
+  to `numpy.float16`.
+- Scope: F16 only. BF16 has no standard numpy descriptor (it needs the `ml_dtypes` extension), so it
+  is deliberately rejected with a clear error; integer/bool descriptors await GoAI integer dtypes
+  (§C4). Definitional source: the `numpy.lib.format` spec plus the fp16 bit layout (§R41); §V16-exempt.
+- Tests (§V15 round-trip + fuzz + numpy interop): raw-bit round-trip across
+  `+0`/normal/subnormal/NaN/±Inf, **bidirectional numpy interop** (`.venv`-gated: a GoAI-saved f16
+  array reads in numpy as `float16` with exact values, and a numpy-written `float16` array loads
+  bit-exactly — the strongest golden), the BF16-rejected/`<f2`-accepted boundary, and an f16
+  round-trip fuzzer (1.5M executions, clean). `.npz` archives (which wrap `.npy`) carry F16 through
+  unchanged.
+
+### T320 — safetensors F16 + BF16 support (2026-07-10)
+- **The safetensors loader now handles `F16` and `BF16`, not just `F32`/`F64`.** Real HuggingFace
+  LLM weights are almost always fp16/bf16, so the previous F32/F64-only loader could not read them.
+  The 16-bit floats are stored **verbatim as their raw little-endian uint16 bits** (via
+  `Storage().U16()`, no widening), so they round-trip bit-exactly with zero precision loss, using the
+  HuggingFace spec dtype strings `"F16"`/`"BF16"`.
+- Definitional source: the safetensors format spec (§R22) plus the fp16/bf16 bit layout (§R41) — no
+  paper, so §V16-exempt. No research-lite call needed.
+- Tests (§V15 round-trip + fuzz): raw-bit round-trip across `+0`/normal/subnormal/NaN/±Inf patterns
+  for both dtypes, a mixed `F16`+`BF16`+`F32` file, a header/raw-bytes check confirming the emitted
+  dtype string and little-endian payload, and a 16-bit round-trip fuzzer (1.5M executions, clean).
+  Also updated the existing validation test whose "unknown dtype" case used `F16` (now valid) to a
+  still-unsupported `I32`.
+
+### T319 — CLIP contrastive loss with a learned logit scale (Radford et al. 2021) (2026-07-10)
+- **`nn.CLIPLogitScale` + `nn.CLIPLoss` add the CLIP form of the contrastive loss** (arXiv:2103.00020;
+  open_clip). Unlike InfoNCE's fixed temperature, CLIP learns a scalar and applies `exp()` of it as
+  the multiplier on the cosine-similarity logits, so the softmax sharpness is trained jointly with
+  the encoders. `CLIPLogitScale` holds a rank-0 log-space parameter (`Scale() = exp(LogScale)`),
+  exposes `Params()`, and `Clamp()` caps it to `[0, log(MaxScale)]` between steps (matching
+  open_clip's `logit_scale.clamp_(0, log(100))`). Defaults: initial applied scale `1/0.07`, ceiling
+  `100`.
+- `CLIPLoss(ctx, image, text, scale)` is the symmetric in-batch softmax cross-entropy over
+  `S = exp(LogScale)·(î·t̂ᵀ)` (L2-normalized rows), differentiable w.r.t. the image and text
+  embeddings **and** the learned scale — the broadcast multiply's VJP correctly reduces the `[n,n]`
+  gradient back to the rank-0 scalar. With a frozen scale it is exactly InfoNCE at `τ = 1/exp(LogScale)`.
+- **§V16**: the learned-logit-scale CLIP form was already confirmed in the §R165 research verdict
+  (vs CLIP Fig.3 + open_clip `loss.py`); this iteration implements it — no fresh tier-2 (research-lite
+  weekly-limited until 2026-07-13; §V16-covered extension of §R165).
+- Tests: parity to the verified InfoNCE at frozen scales (anchors CLIP to the checked loss),
+  finite-difference gradient check over image/text/log-scale, the clamp behavior, init/params, error
+  paths, runnable example.
+
+### T318 — sample variance/std (numpy ddof) (2026-07-10)
+- **`ops.VarDDof` and `ops.StdDDof` add delta-degrees-of-freedom to the variance/std reductions**
+  (numpy `var(a, axis, ddof)` / `std(...)`). The existing `Var`/`Std` are population statistics
+  (ddof=0, divide by N); `ddof` divides the sum of squared deviations by `N − ddof`, so `ddof=1`
+  gives the **unbiased sample variance** (Bessel's correction) — the standard estimator. Reuses the
+  verified population `Var` and rescales by the exact factor `N/(N − ddof)`; `N` is derived robustly
+  as `x.Numel()/result.Numel()` (works for full, single-axis and multi-axis reductions, with or
+  without keepdims). Errors on `ddof < 0` or `ddof ≥ N`.
+- Definitional source: numpy semantics (§R140 named the ddof variant as a follow-up; no paper, so
+  §V16 tier-2 is the numpy docs, consistent with the other numpy ops). No research-lite call needed.
+- Tests: exact values (`[1,2,3,4]` → 5/3 sample variance), numpy `ddof=1` cross-check over an axis
+  (`.venv`-gated), keepdims/multi-axis rescale-factor checks, error paths, runnable example.
+
+### T317 — Grokfast-MA gradient filter (Lee et al. 2024) (2026-07-10)
+- **`nn.GrokfastMA` adds the moving-average variant of the Grokfast gradient filter**
+  (arXiv:2405.20233). Like Grokfast-EMA it isolates and amplifies the slow low-frequency gradient
+  component that drives grokking (delayed generalization), but the low-pass filter is a plain moving
+  average over the last `W` raw gradients rather than an EMA: `μ_t = mean(last W gradients)` (or the
+  sum, with `WithGrokfastMASum`), `ĝ_t = g_t + λ·μ_t` handed to the base optimizer as a drop-in
+  pre-step transform. With `Warmup` (default true, matching the reference) the amplification kicks in
+  only once the window is full — the first `W−1` steps pass the raw gradient through. `λ=0` recovers
+  the base optimizer exactly. Defaults `λ=5.0`, `W=100`, warmup on, mean; `O(numel)` per step via a
+  per-parameter ring buffer with a running sum.
+- **§V16**: the Grokfast-MA variant was already confirmed in the §R153 research verdict (vs
+  ironjr/grokfast `gradfilter_ma`) as the windowed-deque follow-up; this iteration implements it —
+  no fresh tier-2 (research-lite weekly-limited until 2026-07-13; §V16-covered extension of §R153).
+- Tests: independent deque-mean parity across window eviction (warmup off), the warmup gate (first
+  `W−1` raw then full-window mean amplified), the sum variant, `λ=0` no-op, SGD convergence on a
+  convex quadratic, runnable example.
+
+### T316 — NT-Xent / SimCLR contrastive loss (Chen et al. 2020) (2026-07-10)
+- **`nn.NTXentLoss` adds the single-encoder self-supervised variant of InfoNCE** (SimCLR's
+  normalized temperature-scaled cross-entropy, arXiv:2002.05709 Eq.1). Two augmented views
+  `a, b ∈ Rᴺˣᵈ` of the same N sources are treated as one 2N batch `z = [a; b]`; each anchor's one
+  positive is its paired view (`i ↔ i+N`), every other embedding is a negative, and the anchor is
+  **excluded from its own denominator** (self-exclusion `𝟙[k≠i]` — the distinctive difference from
+  the two-encoder CLIP/InfoNCE form, which has no self term). With `normalize` the similarities are
+  cosine; the loss is the mean over all 2N anchors of `−log( exp(sim(i,pos)/τ) / Σ_{k≠i} exp(sim(i,k)/τ) )`.
+- Built from `concat[a;b] → z·zᵀ/τ + diagonal mask → CrossEntropy(masked, pairTargets)`; the
+  `−1e30` diagonal makes `exp` underflow to exactly 0 (exact self-exclusion, no `−∞`/NaN risk), and
+  the fused cross-entropy already mean-reduces over the 2N anchors. Differentiable w.r.t. `a` and `b`.
+- **§V16**: the NT-Xent algorithm was already confirmed in the §R165 research verdict (vs
+  arXiv:2002.05709 Eq.1 + google-research/simclr `objective.py`) as the named single-encoder
+  variant; this iteration implements it — no fresh tier-2 (research-lite weekly-limited until
+  2026-07-13; §V16-covered extension of §R165).
+- Tests: independent 2N self-excluded softmax-CE parity (±normalize, τ∈{0.1,0.5,1}), the defining
+  self-exclusion property (n=1 ⇒ 0), identical-views < misaligned, finite-difference gradient check,
+  error paths, runnable example.
+
+### T315 — T5 relative-position bias trainable module (Raffel et al. 2020) (2026-07-10)
+- **`nn.T5RelativeBias` turns the verified T5 bucketing (§T307) into a usable trainable module**: a
+  learned `[numBuckets, numHeads]` table indexed by the relative-position bucket, adding a per-head
+  scalar to the attention logits (shared across layers, no absolute positions). `Bias(ctx, q, k)`
+  returns `[q, k, numHeads]` with `Bias[i][j][h] = Table[bucket(j−i)][h]`, built by a differentiable
+  one-hot gather (`onehot[q·k, numBuckets] @ Table` → reshape) so gradient flows into the table (each
+  bucket accumulates every position pair it covers). Zero-initialized, so it adds nothing until
+  trained. `NewT5RelativeBias(numBuckets, numHeads, maxDistance, bidirectional, dtype)` + `Bias` +
+  `Params()`.
+- **§V16**: the algorithm (learned per-head bias indexed by relative-position bucket) was already
+  confirmed by the §R232 research verdict (HF `T5Attention.compute_bias`); this iteration wires it up
+  and tests the gather plumbing directly — no fresh tier-2 (research-lite weekly-limited until
+  2026-07-13; §V16-covered extension of §R232).
+- Tests: zero-init ⇒ zero bias, exact gather correctness (`Bias[i][j][h] == Table[bucket(j−i)][h]`),
+  finite-difference gradient check into the table, error paths, runnable example.
+
+### T314 — tiktoken rank-file byte parse + serialize (round-trip) (2026-07-10)
+- **`nlp.TiktokenFromBytes` and `(*Tokenizer).ToTiktoken` complete the tiktoken rank-file format**
+  for the byte-level BPE `Tokenizer` (§T37): the existing `LoadGPT2` reads the format from a path,
+  and these add in-memory byte-slice parsing and serialization with a §V15 round-trip. The format
+  (used by OpenAI's gpt2 / cl100k_base / o200k_base encodings) is one `base64(token-bytes) rank` pair
+  per line, where the rank doubles as the merge priority. `LoadGPT2` was refactored to delegate to a
+  shared `readTiktoken(io.Reader)` (no behavior change); `ToTiktoken` emits the canonical
+  ascending-by-rank layout so `TiktokenFromBytes(t.ToTiktoken())` round-trips.
+- **§V15 / §V16-exempt** (definitional format — the tiktoken file layout, no paper, like GGUF /
+  tokenizer.json / npy): `nlp/tiktoken_test.go` — parsing (`Decode([2]) = "ab"`); the round-trip
+  (`FromBytes∘ToTiktoken` is stable, equals the canonical input, and decodes identically); bad-base64
+  / bad-rank errors; a **native Go fuzz test** (`FuzzTiktokenRoundTrip`, ~872k executions, 0 failures
+  — never panics on arbitrary bytes, and any tokenizer it produces re-serializes stably); and
+  `ExampleTiktokenFromBytes`.
+- **Note:** research-lite was weekly-rate-limited until 2026-07-13, so this iteration picked a
+  §V16-exempt definitional-format task (no fresh tier-2 verification required).
+- **Gate**: `go test ./nlp` green, nn/autograd/backend/rl regression green, apicheck (§V17/§V19),
+  gofmt, vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §T314.
+
+### T313 — Sinusoidal positional encoding: concat layout (Vaswani et al. 2017) (2026-07-10)
+- **`nn.SinusoidalPositionalEncodingConcat` adds the concatenated feature layout** of the original
+  Transformer's sinusoidal positional encoding (Vaswani et al. 2017, §3.5) — the `[all sines | all
+  cosines]` layout used by tensor2tensor, Fairseq and several HuggingFace models, complementing the
+  interleaved `SinusoidalPositionalEncoding` (§T305). The first half of the feature dimension holds
+  the sines and the second half the cosines, with the identical frequencies, so it is exactly a
+  **channel permutation** of the interleaved table (`concat[:,i] = interleaved[:,2i]`,
+  `concat[:,half+i] = interleaved[:,2i+1]`) — the same representational capacity, only a different
+  feature order.
+- **§V16**: the concat variant ("tensor2tensor CONCATENATES `[all sin | all cos]`, equivalent up to
+  a channel permutation") was **already CONFIRMED** in the §R230 research-lite verdict, so this
+  reuses that existing tier-2 verification — **no fresh research-lite call** (research-lite was
+  weekly-rate-limited until 2026-07-13; §V16 is satisfied by the pre-existing §R230 verdict).
+- **§V16 tier-1 / §V2** (`nn/sinusoidal_test.go`): the **channel-permutation proof** (concat equals
+  the interleaved table reordered for every position and index — establishing equivalence to the
+  already-verified interleaved encoding); the concat row 0 (`[0×half, 1×half]`); bounded output and
+  odd-`dModel` / `seqLen≤0` errors; and `ExampleSinusoidalPositionalEncodingConcat`.
+- **Gate**: `go test ./nn` green, nlp/autograd/backend/rl regression green, apicheck (§V17/§V19),
+  gofmt, vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §T313 (under §R230).
+
+### T312 — MLM special-token exclusion (Devlin et al. 2019) (2026-07-10)
+- **`nlp.MLMMaskExcluding` adds special-token protection to the BERT MLM masking** (§T304) — any
+  position whose token is in `specialIDs` (e.g. `[CLS]`, `[SEP]`, padding) is **never** selected for
+  masking (its label stays `MLMIgnoreLabel` and its input is left unchanged), matching BERT /
+  HuggingFace, which build a special-tokens mask so those positions never contribute to the MLM
+  loss; the `~maskProb` rate then applies only to the ordinary tokens. Special positions consume no
+  randomness, so `MLMMaskExcluding(…, nil, …)` reduces to `MLMMask` **exactly** (same RNG sequence)
+  — `MLMMask` now delegates to it. The pair is still losslessly reversible with `MLMReconstruct`.
+- **§V16**: special-token exclusion was **already CONFIRMED** in the §R229 research-lite verdict
+  ("special tokens excluded upstream via `get_special_tokens_mask`"), so this reuses that existing
+  tier-2 verification — **no fresh research-lite call** (research-lite was weekly-rate-limited until
+  2026-07-13; §V16 is satisfied by the pre-existing §R229 verdict).
+- **§V15 (round-trip + fuzz) / §V16 tier-1 / §V2** (`nlp/mlm_test.go`): protected ids are never
+  masked over 500 maskings at a 0.9 rate; `MLMMaskExcluding(nil)` matches `MLMMask` bit-for-bit for
+  the same seed (proving the determinism preservation); the round-trip still recovers the original;
+  a **native Go fuzz test** (`FuzzMLMExcludeRoundTrip`, ~474k executions, 0 failures) that round-trips
+  and never masks a protected id; and `ExampleMLMMaskExcluding`.
+- **Gate**: `go test ./nlp` green, nn/autograd/backend/rl regression green, apicheck (§V17/§V19),
+  gofmt, vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §T312 (under §R229).
+
+### T311 — Binary/sigmoid focal loss (Lin et al. 2018) (2026-07-10)
+- **`nn.SigmoidFocalLoss` adds the binary (sigmoid) focal loss** — the *original* form from the paper
+  (Lin, Goyal, Girshick, He & Dollár 2018, arXiv:1708.02002, Eq. 4/5; the torchvision
+  `sigmoid_focal_loss`), the per-element sibling of the multi-class softmax `FocalLoss` (§T303). Each
+  logit is an independent binary classification: with `p = σ(x)` the model's `P(y=1)` and
+  `p_t = p` (y=1) or `1−p` (y=0),
+
+  ```
+  FL = −α_t·(1−p_t)^γ·log(p_t)
+  ```
+
+  down-weights well-classified elements; `γ=0` recovers (α-weighted) binary cross-entropy. `α_t` is
+  `α` for positives and `1−α` for negatives; pass `α<0` to disable α-weighting (`α_t=1`), as
+  torchvision does. It is computed **stably in softplus space** (`z=(1−2y)·x`,
+  `log p_t = −softplus(z)`, `(1−p_t)^γ = exp(−γ·softplus(−z))`), so `FL = α_t·softplus(z)·exp(−γ·
+  softplus(−z))` — no `σ`/`log` that could under/overflow. `logits` and `targets` (0/1) share a
+  shape; the loss is the mean, differentiable w.r.t. the logits.
+- **§V16**: the paper's binary/sigmoid form (Eq. 4/5) was **already CONFIRMED** in the §R228
+  research-lite verdict (which established the paper is binary/sigmoid and the multi-class softmax of
+  §T303 is the community generalization), so this reuses that existing tier-2 verification — **no
+  fresh research-lite call** (research-lite was weekly-rate-limited until 2026-07-13; §V16 is
+  satisfied by the pre-existing §R228 verdict).
+- **§V16 tier-1 / §V-GRAD / §V2** (`nn/focal_test.go`): the `γ=0` reduction to (α-disabled) binary
+  cross-entropy; a hand-computed value; the α-balance (positives scaled by `α`, negatives by `1−α`);
+  the down-weighting of a confident-correct element; a finite-difference gradient check into the
+  logits; a shape-mismatch error; and `ExampleSigmoidFocalLoss`.
+- **Gate**: `go test ./nn` green, nlp/autograd/backend/rl regression green, apicheck (§V17/§V19),
+  gofmt, vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §T311 (under §R228).
+
+### T310 — WordPiece tokenizer.json interop (HuggingFace schema) (2026-07-10)
+- **`nlp.WordPieceFromJSON` and `(*WordPiece).ToJSON` add HuggingFace `tokenizer.json` interop for
+  WordPiece** (the `"model":{"type":"WordPiece"}` form used by BERT/DistilBERT/ELECTRA) — completing
+  the tokenizer.json trilogy alongside byte-level BPE (§T236) and SentencePiece Unigram (§T237). The
+  loader reads the vocab, `unk_token`, `continuing_subword_prefix` (`##`),
+  `max_input_chars_per_word` (100) and any `added_tokens` (which share the vocab id space), ignoring
+  the normalizer/pre_tokenizer sections (basic pre-tokenization is applied upstream); caller options
+  override the file. `ToJSON` emits the minimal WordPiece model form so
+  `WordPieceFromJSON(w.ToJSON())` round-trips.
+- **§V15 / §V16-exempt** (definitional format — the tokenizers library schema, no paper, like GGUF /
+  safetensors and the §T236/§T237 loaders): `nlp/wordpiece_json_test.go` — parsing a
+  `tokenizer.json` into a working tokenizer (`Encode("playing games") = [1,2,3,4]`, uncoverable →
+  `[UNK]`); the round-trip (`ToJSON→FromJSON` gives identical `Encode` over several strings and the
+  same config); added-token id-space sharing; malformed / non-WordPiece / empty-vocab errors; a
+  **native Go fuzz test** (`FuzzWordPieceFromJSON`, ~507k executions, 0 failures — never panics on
+  arbitrary JSON, and any tokenizer it produces re-round-trips through `ToJSON`); and
+  `ExampleWordPieceFromJSON`.
+- **Note:** research-lite was weekly-rate-limited until 2026-07-13, so this iteration deliberately
+  picked a §V16-exempt definitional-format task (no fresh tier-2 verification required) rather than a
+  new algorithm.
+- **Gate**: `go test ./nlp` green, nn/autograd/backend/rl regression green, apicheck (§V17/§V19),
+  gofmt, vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §T310.
+
+### T309 — OneCycle momentum inverse-cycle (Smith 2019) (2026-07-09)
+- **`nn.OneCycleMomentum` completes the 1cycle policy** (Smith 2019, arXiv:1708.07120; the PyTorch
+  `OneCycleLR` schedule) — the momentum companion to `OneCycleLR` (§T308). Momentum is cycled
+  **inversely** to the learning rate: as the LR rises to its peak the momentum falls from
+  `maxMomentum` to `baseMomentum`, then rises back as the LR decays (high momentum when the LR is
+  small, low momentum when it is large), using the same cosine annealing and phase boundary as the
+  LR curve. Defaults `OneCycleMaxMomentum = 0.95` (at the ends) and `OneCycleBaseMomentum = 0.85`
+  (at the peak); `OneCycleMomentum(step, total, maxMomentum, baseMomentum, pctStart)`. `OneCycleLR`
+  was refactored to share the `oneCycleAnnealCos` / `oneCycleStepUp` helpers.
+- **§V16**: the momentum inverse-cycle (`0.95↔0.85`, coupled to the LR) was **already CONFIRMED** in
+  the §R233 research-lite verdict (PyTorch `_schedule_phases`, point 4) alongside the LR curve, so
+  this reuses that existing tier-2 verification — **no fresh research-lite call** (research-lite was
+  weekly-rate-limited until 2026-07-13; §V16 is satisfied by the pre-existing §R233 verdict rather
+  than by fabricating a new one).
+- **§V16 tier-1 / §V2** (`nn/onecycle_test.go`): the anchor momenta (`0.95` at the ends, `0.85` at
+  the peak); the defining inverse coupling (momentum falls while the LR rises in phase 1 and rises
+  while the LR falls in phase 2); hand-computed cosine midpoints (both `0.90`); the `≤0`→defaults and
+  past-end clamp; and `ExampleOneCycleMomentum`.
+- **Gate**: `go test ./nn` green, nlp/autograd/backend/rl regression green, apicheck (§V17/§V19),
+  gofmt, vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §T309 (under §R233).
+
+### T308 — OneCycle / 1cycle learning-rate policy (Smith 2019) (2026-07-08)
+- **`nn.OneCycleLR` adds the 1cycle-policy learning-rate schedule** (Leslie N. Smith 2019,
+  "Super-Convergence: Very Fast Training of Neural Networks Using Large Learning Rates",
+  arXiv:1708.07120; the PyTorch `OneCycleLR` schedule) — distinct from the monotone-decay schedules
+  already present (`WarmupCosine`, `InverseSqrt`, `WSD`). It first **raises** the LR from a small
+  `initial_lr` up to `maxLR` over the first `pctStart` fraction of training, then **lowers** it below
+  the start toward `min_lr` (large mid-training rates act as regularization — "super-convergence"):
+
+  ```
+  initial_lr = maxLR / divFactor ,  min_lr = initial_lr / finalDivFactor
+  anneal_cos(a, b, p) = b + (a − b)/2·(1 + cos(π·p))
+  phase 1 (up):   anneal_cos(initial_lr, maxLR, step/stepUp)
+  phase 2 (down): anneal_cos(maxLR, min_lr, (step−stepUp)/(total−stepUp))
+  ```
+
+  Defaults (any non-positive argument): `OneCyclePctStart = 0.3`, `OneCycleDivFactor = 25`,
+  `OneCycleFinalDivFactor = 1e4`. The LR is `maxLR/25` at step 0, `maxLR` at the peak, and `min_lr`
+  at the end. The full policy also cycles momentum inversely — that half is a parked follow-up; this
+  returns the LR curve. Pure-f64 (like `WarmupCosine`).
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous against
+  the Smith paper and PyTorch `lr_scheduler.py` (`_annealing_cos` / `_schedule_phases`): the
+  `anneal_cos` formula, the anchors (`maxLR/25` start, `maxLR` peak, `min_lr` end), and the
+  `0.3`/`25`/`1e4` defaults. The research flagged one nuance — PyTorch places the peak at
+  `pct_start·total_steps − 1` over 0-indexed steps `[0, total_steps−1]` (a scheduler-init-at-−1
+  quirk), whereas this uses a `total = number of steps` convention with the peak at
+  `round(pctStart·total)` — the same curve up to a one-step boundary offset, documented in the code.
+- **§V16 tier-1 / §V2** (`nn/onecycle_test.go`): the three anchor LRs; monotone rise then fall; a
+  hand-computed cosine value at each phase midpoint (`0.52` and `≈0.5`); the peak being the global
+  maximum (`= maxLR`); the `≤0`→defaults and out-of-range clamps; and `ExampleOneCycleLR`.
+- **Gate**: `go test ./nn` green, nlp/autograd/backend/rl regression green, apicheck (§V17/§V19),
+  gofmt, vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R233, §T308.
+
+### T307 — T5 relative-position bias bucketing (Raffel et al. 2020) (2026-07-08)
+- **`nn.T5RelativePositionBucket` and `nn.T5RelativePositionBuckets` add T5's relative-position
+  attention bias bucketing** (Raffel, Shazeer, Roberts, Lee, Narang, Matena, Zhou, Li & Liu 2020,
+  "Exploring the Limits of Transfer Learning with a Unified Text-to-Text Transformer" / T5,
+  arXiv:1910.10683, §2.1). T5 drops absolute positional encodings and instead adds a **learned
+  per-head scalar** to each pre-softmax attention logit, chosen by a **bucket** of the relative
+  position (key − query), with the bias parameters shared across all layers — a content-independent,
+  position-only scheme distinct from this library's sinusoidal (absolute), RoPE and ALiBi encodings.
+- The bucketing (the exact HuggingFace `_relative_position_bucket` algorithm): for **bidirectional**
+  (encoder) the sign is encoded by offsetting into the upper half of the buckets and the distance is
+  taken absolute; for **causal** (decoder) future positions collapse to bucket 0. Small
+  `|relative position|` map to exact buckets, larger ones to a logarithmic scale up to `maxDistance`,
+  clamped to the last bucket. `T5RelativePositionBucket(rel, bidirectional, numBuckets, maxDistance)`
+  returns a single bucket; `T5RelativePositionBuckets(qLen, kLen, …)` builds the `[qLen][kLen]` index
+  matrix (`[i][j] = bucket(j−i)`) used to gather the learned `[numBuckets, numHeads]` bias table.
+  Defaults are `T5DefaultNumBuckets = 32`, `T5DefaultMaxDistance = 128`.
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous,
+  verbatim, against HF `modeling_t5.py::_relative_position_bucket` and §2.1: the bidirectional/causal
+  split, the `max_exact` exact range, the log formula, the clamp to `num_buckets − 1`, and the
+  `32`/`128` defaults.
+- **§V16 tier-1 / §V2** (`nn/t5_relpos_test.go`): a table of independently hand-computed HF bucket
+  values for the bidirectional scheme (`-3→3`, `-8→8`, `-100→15`, `3→19`, `8→24`, `100→31`) and the
+  causal scheme (`5→0`, `-5→5`, `-16→16`, `-100→30`); the clamp at extreme distances; the bucket
+  matrix (`[i][j] = bucket(j−i)`, diagonal 0); the `≤0`→32/128 defaults; odd-`numBuckets` / length /
+  too-small errors; and `ExampleT5RelativePositionBucket`.
+- **Gate**: `go test ./nn` green, nlp/autograd/backend/rl regression green, apicheck (§V17/§V19),
+  gofmt, vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R232, §T307.
+
+### T306 — Triplet margin loss (Schroff et al. 2015, FaceNet) (2026-07-08)
+- **`nn.TripletLoss` adds the triplet margin loss** (Schroff, Kalenichenko & Philbin 2015, "FaceNet:
+  A Unified Embedding for Face Recognition and Clustering", CVPR, arXiv:1503.03832, §3.1) — the
+  margin-based metric-learning objective, distinct from the contrastive/redundancy-reduction
+  embedding losses already present (`InfoNCE`, `BarlowTwinsLoss`, `VICRegLoss`, `SwAVLoss`,
+  `DINOLoss`, `SimSiamLoss`). It trains an embedding so that each anchor is closer to a **positive**
+  (same class) than to a **negative** (different class) by at least a margin:
+
+  ```
+  L = mean [ ‖a − p‖² − ‖a − n‖² + α ]_+        (squared Euclidean, [·]_+ = max(0, ·))
+  ```
+
+  The loss is zero exactly when every negative is at least `α` farther from its anchor than the
+  positive; otherwise it pulls the positive in and pushes the negative out. FaceNet L2-normalizes
+  the embeddings onto the unit hypersphere first — do that upstream (as with the other embedding
+  losses). Paper default margin `α = 0.2`. `TripletLoss(ctx, anchor, positive, negative, margin)`
+  takes `[batch, dim]` embeddings and returns the batch mean, differentiable w.r.t. all three;
+  built by `ex`-composition (`OpSub`/`OpMul`/`OpSum`/`OpReLU`/`OpAdd`/`OpMean`).
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous against
+  §3.1–3.3: the squared-Euclidean hinge (the loss is the paper's Eq. 3; Eq. 1 is the margin
+  constraint), the zero-when-separated condition, the unit-hypersphere normalization, and the
+  `α = 0.2` default (hard/semi-hard triplet mining is a separate step, not part of the loss).
+- **§V16 tier-1 / §V-GRAD / §V-PROP / §V2** (`nn/triplet_test.go`): a hand-computed value (equidistant
+  anchor at margin 0.2 → 0.2); the defining margin property (a well-separated negative gives zero
+  loss **and** zero gradient); the batch mean over one active and one satisfied triplet; a
+  finite-difference gradient check into anchor, positive and negative on an active triplet; a
+  training step that lowers the loss; shape/rank errors; and `ExampleTripletLoss`.
+- **Gate**: `go test ./nn` green, nlp/autograd/backend/rl regression green, apicheck (§V17/§V19),
+  gofmt, vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R231, §T306.
+
+### T305 — Sinusoidal positional encoding (original absolute PE) (Vaswani et al. 2017) (2026-07-08)
+- **`nn.SinusoidalPositionalEncoding` adds the original Transformer's fixed sinusoidal positional
+  encoding** (Vaswani, Shazeer, Parmar, Uszkoreit, Jones, Gomez, Kaiser & Polosukhin 2017,
+  "Attention is All You Need", NeurIPS, arXiv:1706.03762, §3.5) — the classic **absolute** encoding,
+  complementing this library's **relative** schemes (RoPE, ALiBi, xPos). It returns a fixed,
+  non-learned `[seqLen, dModel]` table to be added to token embeddings:
+
+  ```
+  PE(pos, 2i)   = sin(pos / base^(2i/dModel))
+  PE(pos, 2i+1) = cos(pos / base^(2i/dModel))
+  ```
+
+  Each adjacent feature pair `(2i, 2i+1)` shares one frequency `1/base^(2i/dModel)`, with sin at the
+  even index and cos at the odd — the sin/cos are **interleaved** across the feature dimension,
+  exactly as the paper's equation is written. `base` is the wavelength constant (paper 10000; `base
+  ≤ 0` → 10000); `dModel` must be even. A pure-f64 deterministic table (not learned, not
+  differentiable).
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous against
+  §3.5 (verbatim): the formula, the base 10000, the geometric wavelengths `2π → 10000·2π`, the
+  elementwise addition to embeddings, and the property that `PE(pos+k)` is a linear function of
+  `PE(pos)`. The research confirmed the **paper's equation is the interleaved form**; the
+  tensor2tensor implementation instead concatenates `[all sines | all cosines]` (equivalent up to a
+  channel permutation) — this variant is noted in the doc comment.
+- **§V16 tier-1 / §V2** (`nn/sinusoidal_test.go`): row 0 = `[0, 1, 0, 1, …]` (`sin 0`/`cos 0`); a
+  hand-computed parity for `dModel=4` (frequencies 1 and 1/100) at `pos=1`; the **interleaving proof**
+  (`sin²+cos² = 1` for every position and pair, which holds only if `2i` and `2i+1` share a
+  frequency); bounded output `[−1, 1]`; shape and the `base≤0`→10000 default; odd-`dModel` /
+  non-positive errors; and `ExampleSinusoidalPositionalEncoding`.
+- **Gate**: `go test ./nn` green, nlp/autograd/backend/rl regression green, apicheck (§V17/§V19),
+  gofmt, vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R230, §T305.
+
+### T304 — BERT masked-language-modeling (MLM) masking objective (Devlin et al. 2019) (2026-07-08)
+- **`nlp.MLMMask` and `nlp.MLMReconstruct` add the BERT masked-LM masking objective** (Devlin,
+  Chang, Lee & Toutanova 2019, "BERT: Pre-training of Deep Bidirectional Transformers for Language
+  Understanding", NAACL, arXiv:1810.04805, §3.1) — the encoder pretraining objective, distinct from
+  the seq2seq span corruption (`nlp.T5Corrupt`, §T288) and the causal FIM reorder: single-token
+  **in-place** masking with the 80/10/10 corruption.
+- `MLMMask(tokens, maskProb, maskID, vocabSize, rng)` selects each position with probability
+  `maskProb` (BERT: 0.15); a selected position becomes `[MASK]` with probability 0.8, a uniform
+  random id with 0.1, and is left unchanged with 0.1 — the 80/10/10 split narrowing the
+  pretrain/finetune mismatch (`[MASK]` never appears downstream). It returns the corrupted input and
+  the labels, where `labels[i]` is the original token at a selected position and `MLMIgnoreLabel`
+  (**−100**, the HF/PyTorch ignore index) elsewhere, so the loss is computed only on the ~15%.
+  Special tokens are excluded upstream. `MLMReconstruct` is the exact inverse — masked positions take
+  their label, the rest keep the (unmodified) input — so the original is losslessly recoverable.
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous against
+  §3.1 / Appendix C.2 and the HuggingFace `DataCollatorForLanguageModeling`: the 15% selection, the
+  80/10/10 split (`mask_replace_prob=0.8`, `random_replace_prob=0.1`), the `-100` ignore label
+  (`labels[~masked] = -100`), and recoverability from the corrupted input plus the labels.
+- **§V15 (round-trip + fuzz) / §V16 tier-1 / §V2** (`nlp/mlm_test.go`): the ≈15% selection rate
+  (over 20k tokens); the ≈80/10/10 corruption split (over 40k selected positions, with a disjoint
+  mask id); the label placement (original at selected, input unchanged elsewhere); the round-trip
+  `MLMReconstruct(MLMMask(doc)) == doc` over many random maskings; empty/single edges; the
+  length-mismatch error; a **native Go fuzz test** (`FuzzMLMRoundTrip`, ~1.27M executions, 0
+  failures); and `ExampleMLMMask`.
+- **Gate**: `go test ./nlp` green, nn/autograd/backend/rl regression green, apicheck (§V17/§V19),
+  gofmt, vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R229, §T304.
+
+### T303 — Focal Loss: class-imbalance training loss (Lin et al. 2018) (2026-07-08)
+- **`nn.FocalLoss` adds the multi-class softmax focal loss** (Lin, Goyal, Girshick, He & Dollár
+  2018, "Focal Loss for Dense Object Detection" / RetinaNet, arXiv:1708.02002) — a training loss
+  distinct from the existing `CrossEntropy`/`CrossEntropySmooth`/`CrossEntropyZLoss`/`ZLoss`. It
+  addresses class imbalance by **down-weighting well-classified examples** so training concentrates
+  on the hard ones:
+
+  ```
+  FL(p_t) = −α·(1−p_t)^γ·log(p_t)   ,   p_t = softmax(logits)[ground-truth class]
+  ```
+
+  The modulating factor `(1−p_t)^γ` shrinks the loss of confident-correct examples (`p_t→1` ⇒ factor
+  →0) while leaving misclassified ones nearly untouched; `γ≥0` is the focusing strength (`γ=0`
+  recovers ordinary cross-entropy `−α·log p_t`) and `α` a class-balancing weight. Paper defaults are
+  `γ=2`, `α=0.25`.
+- `FocalLoss(ctx, logits, targets, gamma, alpha)` takes `[batch, classes]` logits and `[batch]`
+  class-index targets (like `CrossEntropy`), returns the batch mean, and is differentiable w.r.t.
+  the logits. Built by `ex`-composition (softmax → one-hot gather of `p_t` → log; `(1−p_t)^γ =
+  exp(γ·log(1−p_t))` since there is no power op).
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous against
+  Eq. 4/Eq. 5 and `torchvision.ops.sigmoid_focal_loss`: the formula, the `γ=0`→CE reduction, the
+  down-weighting behaviour, and the `γ=2`/`α=0.25` defaults. The research flagged one nuance — the
+  paper defines focal loss for **binary/sigmoid** `p_t`, and this is the standard **multi-class
+  softmax** community generalization (torchvision itself uses the sigmoid form); this is documented
+  honestly in the code, and the binary/sigmoid variant is a parked follow-up.
+- **§V16 tier-1 / §V-GRAD / §V2** (`nn/focal_test.go`): the **defining reduction** (`γ=0, α=1`
+  equals `nn.CrossEntropy` exactly); a hand-computed value; the down-weighting property (a
+  confident-correct example incurs `<5%` of an uncertain one's loss at `γ=2`, and `γ=2` down-weights
+  more than `γ=0`); linear `α` scaling; a finite-difference gradient check into the logits;
+  rank/target-range/batch errors; and `ExampleFocalLoss`.
+- **Gate**: `go test ./nn` green, nlp/autograd/backend/rl regression green, apicheck (§V17/§V19),
+  gofmt, vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R228, §T303.
+
+### T302 — DyT: Dynamic Tanh, normalization-free LayerNorm replacement (Zhu et al. 2025) (2026-07-08)
+- **`nn.DyT` adds Dynamic Tanh** (Zhu, Chen, He, LeCun & Liu 2025, "Transformers without
+  Normalization", CVPR, arXiv:2503.10622) — a drop-in replacement for LayerNorm/RMSNorm that uses
+  **no normalization statistics** (no mean, no variance, no division). Motivated by the observation
+  that a trained LayerNorm maps its inputs through an S-shaped, tanh-like curve, DyT reproduces that
+  mapping directly:
+
+  ```
+  DyT(x) = γ ⊙ tanh(α·x) + β
+  ```
+
+  where `α` is a single learnable **scalar** shared across the whole layer (it controls the
+  effective input range before `tanh` saturates large activations), and `γ`, `β` are the same
+  per-channel learnable affine vectors as LayerNorm. With no reductions it is cheaper than
+  LayerNorm, and the paper shows it matches or beats it across transformers.
+- `NewDyT(dtype, d, alphaInit)` initializes `α = alphaInit` (`≤0` → `DyTDefaultAlphaInit` = **0.5**,
+  the paper default), `γ = 1`, `β = 0`; `Forward` composes `OpMul` (α broadcast) → `OpTanh` →
+  `OpMul` (γ) → `OpAdd` (β), so it is fully differentiable (`α`, `γ`, `β` all train) with no fused
+  kernel; `Params()` returns `{α, γ, β}`.
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous against
+  Eq. 2 and the official `jiachenzhu/DyT` `dynamic_tanh.py` (`tanh(alpha*x)*weight+bias`,
+  `alpha_init_value=0.5`, weight=ones, bias=zeros): the scalar `α`, the per-channel `γ`/`β`, the
+  absence of statistics, and the initialization.
+- **§V16 tier-1 / §V-GRAD / §V2** (`nn/dyt_test.go`): a hand-computed forward value; the defining
+  **no-cross-channel-coupling** property (perturbing one input channel leaves the others' outputs
+  unchanged — the contrast with LayerNorm, which couples channels through the shared mean/variance);
+  `tanh` saturation (`x=±100` → `γ·sign(x)+β`, bounded); a finite-difference gradient check into
+  `α`, `γ` and `β`; shape preservation and `Params` sizes (default `α=0.5`); the `d≤0` error; and
+  `ExampleDyT`.
+- **Gate**: `go test ./nn` green, nlp/autograd/backend/rl regression green, apicheck (§V17/§V19),
+  gofmt, vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R227, §T302.
+
+### T301 — WordPiece BERT subword tokenizer (greedy longest-match) (Devlin et al. 2019) (2026-07-08)
+- **`nlp.WordPiece` adds the BERT WordPiece tokenizer** (Devlin, Chang, Lee & Toutanova 2019; the
+  wordpiece model of Schuster & Nakajima 2012 and Wu et al. 2016 GNMT §4) — completing this
+  library's tokenizer set alongside byte-level BPE (GPT-2/Llama-3, `nlp.Tokenizer`) and
+  Unigram/SentencePiece (Llama/Mistral/T5, `nlp.Unigram`). Its encoding is **greedy
+  longest-match-first (MaxMatch)**, distinct from BPE's learned merges and Unigram's probabilistic
+  Viterbi: for each pre-tokenized word it repeatedly takes the longest prefix present in the
+  vocabulary and continues from the remainder.
+- Details (all confirmed against the reference implementations): continuation subwords — any piece
+  not at the word start — are looked up with a `##` prefix (`playing` with `{play, ##ing}` →
+  `[play, ##ing]`); if any position cannot be matched down to a single character, the **whole word**
+  becomes one `[UNK]` (never a partial tokenization); a word longer than `MaxChars` (default 100,
+  the HF/BERT value) is emitted as `[UNK]` without tokenizing; `Decode` concatenates the pieces,
+  strips `##` from continuations, and joins words with spaces. `NewWordPiece(vocab, opts...)` with
+  `WithWordPieceUnk` / `WithWordPieceContinuation` / `WithWordPieceMaxChars`. Basic pre-tokenization
+  (punctuation splitting, lowercasing) and normalization are assumed upstream, as with `Unigram`'s
+  NFKC.
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous against
+  the HuggingFace `WordpieceTokenizer` and `google-research/bert` `tokenization.py`: the
+  longest-match loop, the `##` convention, the whole-word-UNK fallback, and `max_input_chars_per_word
+  = 100` (the current `google-research/bert` file uses 200 — the research recommended 100 to match
+  HF/BERT; the 200 variant is a parked option).
+- **§V15 (round-trip + fuzz) / §V16 tier-1 / §V2** (`nlp/wordpiece_test.go`): the canonical
+  `playing → [play, ##ing]`; `unaffable → [un, ##aff, ##able]`; a **longest-match** check (with both
+  `un` and `una`, the encoder takes `una` first); the whole-word-UNK fallback; the max-chars UNK;
+  multi-word input; a round-trip (`Decode∘Encode` recovers the whitespace-normalized text under full
+  single-character coverage); empty/duplicate errors; a **native Go fuzz test**
+  (`FuzzWordPieceRoundTrip`, ~950k executions, 0 failures — which surfaced and now honestly models
+  the over-long-word → `[UNK]` lossy case); and `ExampleWordPiece`.
+- **Gate**: `go test ./nlp` green, nn/autograd/backend/rl regression green, apicheck (§V17/§V19,
+  `WordPieceOption` added to the functional-option allowlist), gofmt, vet, §V7 `CGO_ENABLED=0` build,
+  and the default cgo/metal build all clean.
+- §R226, §T301.
+
+### T300 — RSO: statistical rejection sampling for preference data (Liu et al. 2024) (2026-07-08)
+- **`nn.RSOAcceptProbs` and `nn.RSOAccept` add Statistical Rejection Sampling Optimization** (Liu,
+  Zhao, Joshi, Khalman, Saleh, Peter J. Liu & Jialu Liu 2024, "Statistical Rejection Sampling
+  Improves Preference Optimization", ICLR, arXiv:2309.06657). Unlike the many preference *losses*
+  already present (DPO/IPO/KTO/CPO/SimPO/ORPO/SLiC/…), RSO is a preference-*data-generation*
+  procedure: those losses fit a preference model defined w.r.t. the optimal policy
+  `π*(y|x) ∝ π_sft(y|x)·exp(r(x,y)/β)` but train on pairs from an arbitrary policy, and RSO closes
+  that gap by **rejection sampling** from `π*` (proposal `π_sft`, reward-model-scored candidates)
+  to keep a subset distributed as `π*`, which is then labeled into preference pairs.
+- The acceptance probability is `p(y) = exp((r(y) − r_max)/β)` (§3.2), so the highest-reward
+  candidate is always kept and lower-reward ones are dropped with exponentially decaying
+  probability; `RSOAccept` draws `u∼U(0,1)` and keeps a candidate iff `u < p`. `β` is the KL
+  temperature (`β→0` keeps only the max-reward response ≈ best-of-N; `β→∞` accepts everything ≈
+  `π_sft`). These are pure reward statistics — no gradient.
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous against
+  §3.2 and Algorithm 2: the target `π*`, the `M`-bounded acceptance ratio, the `exp((r−r_max)/β)`
+  probability, the `u<p` step, and the role of `β`. The research flagged one nuance — the paper's
+  Algorithm 2 recomputes `r_max` over the *not-yet-accepted* candidate subset as it iterates,
+  whereas this implementation uses the **static batch maximum** (the acceptance-probability form
+  stated in §3.2, and a valid rejection sampler since `M = exp(r_max/β)` bounds the batch). The
+  iterative-`M` variant is documented as a parked follow-up.
+- **§V16 tier-1 / §V2** (`nn/rso_test.go`): the hand-computed probabilities (`[e⁻¹, 1, e⁻²]`); the
+  best candidate always kept (`p=1`, surviving 200 passes); an empirical acceptance-rate check
+  matching `exp((r−r_max)/β)` over 40k trials; the `β`-sharpness effect (a smaller `β` lowers
+  sub-maximal acceptance, `e⁻²` vs `e^−0.5` exactly); the single-candidate edge; empty/`β≤0`
+  errors; and `ExampleRSOAcceptProbs`.
+- **Gate**: `go test ./nn` green, nlp/autograd/backend/rl regression green, apicheck (§V17/§V19),
+  gofmt, vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R225, §T300.
+
+### T299 — MAS: Memory Aware Synapses continual-learning importance (Aljundi et al. 2018) (2026-07-08)
+- **`nn.MASImportance` adds the Memory Aware Synapses importance estimator** (Aljundi, Babiloni,
+  Elhoseiny, Rohrbach & Tuytelaars 2018, "Memory Aware Synapses: Learning what (not) to forget",
+  ECCV, arXiv:1711.09601) — the third continual-learning importance estimator in the library,
+  completing the trio with EWC (`nn.EWCFisher`, §T283) and SI (`nn.SI`, §T292). All three feed the
+  same quadratic anchor (`nn.EWCPenalty`) but estimate parameter importance differently:
+
+  ```
+  Ω_i = (1/N)·Σ_n |g_i(x_n)| ,   g(x_n) = ∂‖F(x_n;θ)‖₂² / ∂θ        (Eq. 2)
+  ```
+  the mean **magnitude** (absolute value / L1) of the gradient of the network output's squared L2
+  norm. Its defining feature is that it is **unsupervised** — it looks only at the output `F`, needs
+  no labels, and so can be estimated on unlabeled or even test data — in contrast to EWC's Fisher
+  (the mean *squared* / L2 gradient of the *log-likelihood*, which requires labels). The resulting
+  `Ω` plugs into the same surrogate `L_new + λ·Σ_i Ω_i·(θ_i−θ*_i)²` — pass it as the
+  `fisher`/importance argument of `nn.EWCPenalty` with the previous task's parameters.
+- `MASImportance(gradSamples)` takes `gradSamples[n]` = the per-parameter gradient of `‖F(x_n)‖₂²`
+  for sample `n` and returns the elementwise mean of their absolute values (mirroring `EWCFisher`,
+  which averages the squares). A pure-f64 statistic (§V10), not differentiable.
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous against
+  Eq. 2 (importance) and Eq. 3 (regularizer): the mean-absolute-gradient of the output's squared L2
+  norm, the unsupervised nature, the shared EWC quadratic penalty, and the L1-vs-Fisher's-L2
+  distinction. (The research also corrected the equation numbering — the estimator is Eq. 2, not
+  Eq. 3 — reflected in the doc comment.)
+- **§V16 tier-1 / §V2** (`nn/mas_test.go`): a hand-computed mean-of-magnitudes (`|[1,−2]|`, `|[3,4]|`
+  → `[2,3]`); non-negativity; **distinctness from Fisher** (a gradient of 2 gives MAS `2 = |g|` vs
+  Fisher `4 = g²`); composition with `EWCPenalty` (0 at the anchor, the hand-computed `0.62`
+  quadratic once the weights move); a multi-parameter case (including a `[2,2]` tensor);
+  empty/shape-mismatch errors; and `ExampleMASImportance`.
+- **Gate**: `go test ./nn` green, nlp/autograd/backend/rl regression green, apicheck (§V17/§V19),
+  gofmt, vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R224, §T299.
+
+### T298 — SimSiam simple-Siamese self-supervised loss (Chen & He 2021) (2026-07-08)
+- **`nn.SimSiamLoss` adds the SimSiam self-supervised loss** (Chen & He 2021, "Exploring Simple
+  Siamese Representation Learning", CVPR, arXiv:2011.10566) — a non-contrastive representation
+  objective distinct from the `InfoNCE`/`BarlowTwinsLoss`/`VICRegLoss`/`SwAVLoss`/`DINOLoss` family
+  already present. It learns from two augmented views with **no negative pairs, no momentum encoder
+  and no large batches**: a prediction head plus a **stop-gradient** is enough to avoid collapse.
+  Both views go through the same encoder to projections `z1, z2`, and a predictor maps them to
+  `p1, p2`; with the negative cosine similarity `D(p,z) = −(p/‖p‖)·(z/‖z‖)` the symmetrized loss is
+
+  ```
+  L = ½·D(p1, stopgrad(z2)) + ½·D(p2, stopgrad(z1))
+  ```
+- The stop-gradient on the projection side is **essential**: gradients flow only through the
+  predictor branch `p`, never through the `z` it is matched against — which is precisely what stops
+  the representations collapsing to a constant. `SimSiamLoss(ctx, p1, z1, p2, z2)` takes
+  `[batch, dim]` projections/predictions and returns the batch mean in `[−1, 1]` (`−1` at perfect
+  alignment). It reuses the differentiable per-row `l2NormalizeRows` and `OpStopGradient`
+  (`ex`-composition — no new backend op).
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous against
+  Eq. 1–3 / Algorithm 1 and the official `facebookresearch/simsiam` code
+  (`-(criterion(p1,z2)+criterion(p2,z1))*0.5` with `z1.detach()`/`z2.detach()`): the negative
+  cosine, the `½` symmetrization, the stop-gradient placement, and the no-negatives/no-momentum
+  design.
+- **§V16 tier-1 / §V-GRAD / §V2** (`nn/simsiam_test.go`): a hand-computed value (`−0.65355339` from
+  cosines 0.6 / 0.7071); the perfect-alignment `−1` bound; **the defining stop-gradient property**
+  (the `z` projections get a nil/zero gradient while the `p` predictors get a real one); a
+  finite-difference gradient check into the predictor branch; view-swap symmetry; shape/rank errors;
+  and `ExampleSimSiamLoss`.
+- **Gate**: `go test ./nn` green, nlp/autograd/backend/rl regression green, apicheck (§V17/§V19),
+  gofmt, vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R223, §T298.
+
+### T297 — PiSSA: principal-SVD LoRA initialization (Meng et al. 2024) (2026-07-08)
+- **`nn.NewPiSSA` adds PiSSA** (Meng, Wang & Zhang 2024, "PiSSA: Principal Singular Values and
+  Singular Vectors Adaptation of Large Language Models", NeurIPS, arXiv:2404.02948) — LoRA with a
+  smarter initialization. Instead of a random `A` and zero `B` (which start `ΔW=0` and adapt the
+  weight's *residual*), PiSSA SVD-factorizes the pretrained weight `W = U·diag(σ)·Vᵀ` and seeds the
+  two trainable low-rank matrices from the **top-r principal components**:
+
+  ```
+  A = U[:,:r]·diag(σ[:r])^½ ,  B = diag(σ[:r])^½·V[:,:r]ᵀ  ⇒  A·B = U_r·diag(σ_r)·Vᵀ_r
+  W_res = W − A·B   (frozen residual)
+  Y = X·(W_res + A·B) = X·W   at initialization
+  ```
+
+  so the output is unchanged at init (identity-like, as in LoRA) but training now updates the
+  high-singular-value directions that carry most of the weight — which the paper shows converges
+  faster and to a better optimum than vanilla LoRA. There is no `α/r` scaling (scale 1).
+- It reuses the SVD op (`ops.SVD`, `a = U·diag(s)·Vᵀ`, requiring rows ≥ cols — the `in<out` case is
+  handled by decomposing `Wᵀ` and swapping the factor roles) and returns a `*LoRALinear` (frozen
+  residual base, `A[in,r]`, `B[r,out]`, `Alpha=r` so `α/r=1`), so the standard `LoRALinear.Forward`
+  (`y = x·W_res + (x·A)·B`) and `Params` (only `A,B` train) apply unchanged — no forward duplicated.
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous against
+  §3 Eqs. 2–5 and the HuggingFace PEFT `pissa_finetuning` example: the top-r factorization, the
+  even `√σ` split between `A` and `B`, the frozen residual, the identity-at-init forward, and the
+  absence of `α/r` scaling (vs LoRA's random/zero init).
+- **§V16 tier-1 / §V-PROP / §V2** (`nn/pissa_test.go`): identity-at-init (`Forward == x·W`) for a
+  tall weight; the same for a wide weight (exercising the `in<out` transpose branch); a
+  principal-component check (a diagonal weight `[[3,0],[0,1]]` at `r=1` puts the larger component in
+  `A·B = [[3,0],[0,0]]` and the smaller in the frozen residual — proving top-r selection and the σ
+  ordering, sign-invariantly); a full-rank zero-residual case; a training step that lowers an MSE
+  loss (`Params()` is `{A,B}`); rank/shape errors; and `ExampleNewPiSSA`.
+- **Gate**: `go test ./nn` green, nlp/autograd/backend/rl regression green, apicheck (§V17/§V19),
+  gofmt, vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R222, §T297.
+
+### T296 — Model Soups: uniform + greedy weight averaging (Wortsman et al. 2022) (2026-07-08)
+- **`nn.UniformSoup` and `nn.GreedySoup` add model soups** (Wortsman, Ilharco, Gadre, Roelofs,
+  Gontijo-Lopes, Morcos, Namkoong, Farhadi, Carmon, Kornblith & Schmidt 2022, "Model soups:
+  averaging weights of multiple fine-tuned models improves accuracy without increasing inference
+  time", ICML, arXiv:2203.05482). Averaging the **weights** of several models fine-tuned from the
+  same pretrained initialization (different hyperparameters/seeds/augmentations) often beats the
+  single best model at **no extra inference cost** — the soup is one model. Distinct from `SWA`/`EMA`
+  (which average snapshots along one training run) and from `TIESMerge`/`DARE`/`SLERP` (interference-
+  aware / geometric merges): a plain mean over independent fine-tunes plus a greedy selection.
+- `UniformSoup(models)` returns the unweighted elementwise mean of all models. `GreedySoup(models,
+  valAcc, eval)` implements Recipe 1: sort the models by decreasing held-out validation accuracy,
+  then walk them in order, adding each to the ingredient set only when the uniform average of the
+  ingredients-so-far plus that model scores `≥` the current ingredients' average under `eval` (a
+  caller-supplied held-out-accuracy callback). The best model is always the first ingredient, so —
+  by construction — the greedy soup never underperforms the best individual model on the held-out
+  set. It returns the averaged soup weights and the accepted original model indices. Uses the same
+  `[][]*tensor.Tensor` model layout as `TIESMerge`; float64 accumulation (§V10).
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous against
+  Recipe 1 (p.3) and the official `mlfoundations/model-soups` repository: the uniform mean, the
+  decreasing-val-accuracy sort, the empty init with the best model always added, the `≥`
+  non-decreasing acceptance with the soup recomputed as the uniform mean of the current ingredients,
+  and the "no worse than the best individual model" guarantee. (Nuance: the paper text uses `≥`
+  while the official repo uses a strict `>` on a running best; this implementation follows the
+  paper's `≥`.)
+- **§V16 tier-1 / §V2** (`nn/soup_test.go`): the uniform mean; a multi-parameter elementwise mean;
+  a hand-worked greedy trajectory (scalar weights 1.0/5.5/3.0 with an accuracy peaking at an average
+  of 2 keeps ingredients `{0,2}` and lands on 2.0); val-accuracy sorting (the highest-accuracy model
+  leads even when passed last); the **never-worse-than-best** guarantee; the single-model case;
+  empty/shape/valAcc-length/nil-eval errors; and `ExampleGreedySoup`.
+- **Gate**: `go test ./nn` green, nlp/autograd/backend/rl regression green, apicheck (§V17/§V19),
+  gofmt, vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R221, §T296.
+
+### T295 — Diverse Beam Search group-diversity decoding (Vijayakumar et al. 2018) (2026-07-08)
+- **`nlp.DiverseBeamSearch` adds Diverse Beam Search** (Vijayakumar, Cogswell, Selvaraju, Sun, Lee,
+  Crandall & Batra 2018, "Diverse Beam Search: Decoding Diverse Solutions from Neural Sequence
+  Models", AAAI, arXiv:1610.02424) — a drop-in variant of `nlp.BeamSearch` (§R54) that fixes beam
+  search's tendency to return near-identical hypotheses. It splits the `width` beams into `groups`
+  groups of `B'=width/groups`, decodes the groups **sequentially** at each step, and adds a
+  between-group **Hamming diversity penalty** so later groups are pushed off the tokens earlier
+  groups already chose this step:
+
+  ```
+  augmented = Σ log p − λ·(# earlier groups that picked this token at this step)
+  ```
+
+  Each group keeps its own top `B'` by the augmented score; the diversity term steers only the
+  search, so the returned hypotheses are ranked by their raw length-normalized log-probability (the
+  Wu-2016 penalty, as in `BeamSearch`). `λ=0` reduces to `G` independent beam searches. It reuses
+  the `NextLogits` / `Beam` types: `DiverseBeamSearch(next, start, width, groups, maxNew, eos, alpha,
+  lambda)`, returning an error when `width` is not divisible by `groups`.
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous against
+  Algorithm 1 / Eq. 3 / §5.1 and the HuggingFace `HammingDiversityLogitsProcessor`: sequential
+  groups, the `−λ·count` Hamming penalty against earlier groups at the same step, per-group top-`B'`
+  selection, and final ranking by raw log-probability. The research corrected one point — the paper
+  has **no single canonical default** `λ` (it grid-searches, reporting 0.2–0.8 works well), so `λ`
+  is an explicit caller parameter rather than a hardcoded default.
+- **§V16 tier-1 / §V2** (`nlp/diverse_beam_test.go`): a strong penalty makes one-beam groups pick the
+  distinct top-G tokens; `λ=0` collapses every group onto the same best token; an **exact
+  penalty-magnitude** check (the log-softmax gap equals the logit gap, so a 0.4-gap token pair flips
+  the second group exactly when `λ=0.5 > 0.4` but not at `λ=0.3`); `groups=1, λ=0` reproduces
+  `nlp.BeamSearch`'s best hypothesis; multi-step distinct-leading-token structure; divisibility /
+  size errors; and `ExampleDiverseBeamSearch`.
+- **Gate**: `go test ./nlp` green, nn/autograd/backend/rl regression green, apicheck (§V17/§V19),
+  gofmt, vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R220, §T295.
+
+### T294 — LLM watermarking: red-green soft watermark + z-detector (Kirchenbauer et al. 2023) (2026-07-08)
+- **`nlp.Watermark` adds LLM watermarking** (Kirchenbauer, Geiping, Wen, Katz, Miers & Goldstein
+  2023, "A Watermark for Large Language Models", ICML, arXiv:2301.10226) — a provenance/detection
+  capability (a new category alongside the sampling/contrast/beam decoders). It biases generation
+  toward a per-step pseudo-random subset of the vocabulary that only a key holder can reconstruct,
+  so machine text is detectable **without access to the model**, without perceptibly changing
+  quality.
+- **Generation** (soft watermark, Algorithm 2): at each step a green list of `⌊γ·|V|⌋` tokens is
+  chosen by a PRNG seeded from the **previous token** and the secret key; `BiasLogits` adds a
+  constant `δ` to the green tokens' logits before sampling. **Detection** (§4): `Detect` recomputes
+  the same green lists and counts green tokens, returning the one-proportion z-statistic
+  `z = (|s|_G − γT)/√(Tγ(1−γ))`; `IsWatermarked` flags `z > WatermarkZThreshold` (4.0 ⇒ false-positive
+  rate ≈ 3e−5). The green partition is a deterministic PRF of `(previous token, key)`, so generation
+  and detection reconstruct the identical list (an embed→detect round-trip).
+- API: `NewWatermark(vocabSize, opts...)` with `WithWatermarkGamma` / `WithWatermarkDelta` /
+  `WithWatermarkKey` (defaults `γ=0.25`, `δ=2.0` — `γ=0.25` is the official `lm-watermarking` repo's
+  recommended default; the paper's headline analysis uses `γ=0.5`), plus `GreenMask`, `BiasLogits`,
+  `Detect`, `IsWatermarked` and the `WatermarkZThreshold` constant. The previous-token hash is an
+  implementation choice (the paper leaves the PRF open) — a stable PCG stream keyed by
+  `(Key, prevToken)`, with the green list drawn by a partial Fisher–Yates shuffle.
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous against
+  Algorithm 2, the z-score Eq. 3 (§4), the `z>4 ⇒ FPR≈3e−5` threshold, `δ=2.0`, and the official
+  `jwkirchenbauer/lm-watermarking` repository.
+- **§V15 (round-trip + fuzz) / §V16 tier-1 / §V2** (`nlp/watermark_test.go`): a deterministic,
+  prev-token-dependent green mask of size `⌊γ|V|⌋`; `BiasLogits` adding exactly `δ` to green and
+  nothing to red; **exact** z-scores (an all-green length-16 sequence at `γ=0.5` gives `z = 4.0`
+  precisely, an all-red one `−4.0`, and a longer green run clears the threshold); a formula
+  cross-check against an independent green recount; empty/single-token edges; vocab/γ/length errors;
+  a **native Go fuzz test** (`FuzzWatermark`, **~1.7M executions, 0 failures**) asserting detector
+  determinism, the z-formula invariant, and that an embedded watermark is detected; and
+  `ExampleWatermark`.
+- **Gate**: `go test ./nlp` green, nn/autograd/backend/rl regression green, apicheck (§V17/§V19,
+  `WatermarkOption` added to the functional-option allowlist), gofmt, vet, §V7 `CGO_ENABLED=0` build,
+  and the default cgo/metal build all clean.
+- §R219, §T294.
+
+### T293 — LAMB layer-wise adaptive large-batch optimizer (You et al. 2020) (2026-07-08)
+- **`nn.LAMB` adds the Layer-wise Adaptive Moments optimizer** (You, Li, Reddi, Hseu, Kumar,
+  Bhojanapalli, Song, Demmel, Keutzer & Hsieh 2020, "Large Batch Optimization for Deep Learning:
+  Training BERT in 76 minutes", arXiv:1904.00962, Algorithm 2) — the only trust-ratio-family
+  (LARS/LAMB) optimizer in the library, distinct from the Adam/Lion/Muon/Sophia/Shampoo/SOAP/…
+  family already present. It layers a **per-tensor trust ratio** on top of Adam so very large batch
+  sizes stay stable (the optimizer that trained BERT in 76 minutes). Per step, for each parameter
+  tensor θ with gradient g (bias-corrected Adam moments):
+
+  ```
+  m ← β₁m+(1−β₁)g;  v ← β₂v+(1−β₂)g²;   m̂=m/(1−β₁ᵗ);  v̂=v/(1−β₂ᵗ)
+  u = m̂/(√v̂+ε) + λ·θ                        // Adam ratio + decoupled weight decay
+  θ ← θ − lr·(‖θ‖/‖u‖)·u                      // trust ratio ‖θ‖/‖u‖ is per-tensor
+  ```
+
+  The trust ratio uses whole-tensor L2 norms and falls back to 1 when `‖θ‖=0` or `‖u‖=0` (the
+  apex/TF convention). Defaults are `β1=0.9`, `β2=0.999`, `ε=1e-6` (larger than Adam's 1e-8), no
+  weight decay; `NewLAMB(params, lr, opts...)` with `WithLAMBBetas` / `WithLAMBEps` /
+  `WithLAMBWeightDecay`, mirroring the `Adam`/`Lion` house style. Master state is float64 (§V10).
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous against
+  Algorithm 2 and the `ymcui/LAMB_Optimizer_TF` and NVIDIA `apex` FusedLAMB references: the
+  bias-corrected moments, `ε` outside the square root, the decoupled decay added into the update
+  direction, the per-tensor trust ratio, the zero-norm→1 fallback, and `ε=1e-6`.
+- **§V16 tier-1 / §V-PROP / §V2** (`nn/lamb_test.go`): a differential parity check against an
+  independent scalar reimplementation over a multi-step trajectory (with weight decay); LAMB's
+  **defining property** — with no weight decay the per-layer update norm is *exactly* `lr·‖θ‖`,
+  invariant to gradient scale (×1, ×100, ×0.01) because the trust ratio cancels `‖u‖`; a
+  training-decreases-loss run (linear + MSE); the hand-checked zero-weight fallback; nil-grad /
+  shape-mismatch edges; and `ExampleLAMB`.
+- **Gate**: `go test ./nn` green, autograd/backend/nlp/rl regression green, apicheck (§V17/§V19,
+  `LAMBOption` added to the functional-option allowlist), gofmt, vet, §V7 `CGO_ENABLED=0` build, and
+  the default cgo/metal build all clean.
+- §R218, §T293.
+
+### T292 — Synaptic Intelligence (SI) continual-learning importance (Zenke et al. 2017) (2026-07-08)
+- **`nn.SI` adds the Synaptic Intelligence importance estimator** (Zenke, Poole & Ganguli 2017,
+  "Continual Learning Through Synaptic Intelligence", ICML, arXiv:1703.04200) — a continual-learning
+  importance measure distinct from EWC's Fisher (§T283, `nn.EWCFisher`). Where EWC measures
+  importance once at a task optimum from squared log-likelihood gradients, SI integrates each
+  parameter's contribution to the loss drop **online, along the whole training trajectory**:
+
+  ```
+  ω_k   = Σ_t −g_k(t)·Δθ_k(t)                 // Eq.3: running path integral (task-loss grad × step)
+  Ω_k  += ω_k / ((Δθ_k^task)² + ξ)            // Eq.5: consolidate at task end, ξ damping
+  L̃     = L + c·Σ_k Ω_k·(θ_k − θ̃_k)²          // Eq.4: same quadratic anchor as EWC
+  ```
+- Because the surrogate loss is the identical quadratic form to EWC, SI reuses the existing penalty:
+  pass `SI.Importance()` (Ω) and `SI.RefParams()` (the end-of-task anchor θ̃) as the `fisher` and
+  `refParams` arguments of `nn.EWCPenalty` (with `lambda = 2c`). `NewSI(params)` snapshots the
+  weights; `Accumulate(grads)` is called once per step **after** the optimizer update with the
+  task-loss gradients (folding `−g·Δθ` into ω); `Consolidate(xi)` ends a task (folding ω into Ω,
+  advancing the anchor, resetting the running state; `xi ≤ 0` → `SIDefaultDamping`). Ω accumulates
+  across successive tasks. Pure float64 master state (§V10, like `SWA`/`EMA`); the estimator itself
+  is not differentiable — differentiability lives in `EWCPenalty`.
+- The damping `ξ` is tuned per benchmark in the paper (0.1 on permuted-MNIST, 1e-3 on split-MNIST),
+  so `SIDefaultDamping` is 0.1 (the permuted-MNIST value) and `Consolidate` takes an explicit `xi`.
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous against
+  Eq. 3 (ω, minus sign), Eq. 5 (Ω denominator), Eq. 4 (surrogate loss), the task-dependent ξ, and
+  the `ganguli-lab/pathint` reference implementation.
+- **§V16 tier-1 / §V2** (`nn/si_test.go`): a hand-computed 2-parameter / 2-step parity check
+  (including a **negative** Ω, which pins the path-integral sign) plus the recovered anchor;
+  cross-task accumulation (Ω sums, the anchor advances to the latest weights); composition with
+  `EWCPenalty` (exactly 0 at the anchor, the hand-computed quadratic once the weights move); the
+  default-damping path; grad count/shape errors; and `ExampleSI`.
+- **Gate**: `go test ./nn` green, autograd/backend/nlp/rl regression green, apicheck (§V17/§V19),
+  gofmt, vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R217, §T292.
+
+### T291 — UL2 Mixture-of-Denoisers pretraining objective (Tay et al. 2022) (2026-07-08)
+- **`nlp.UL2Denoise` / `nlp.UL2Reconstruct` / `nlp.UL2MixtureOfDenoisers` add the UL2
+  Mixture-of-Denoisers objective** (Tay, Dehghani, Tran, Garcia, Wei, Wang, Chung, Bahri, Schuster,
+  Zheng, Zhou, Houlsby & Metzler 2022, "UL2: Unifying Language Learning Paradigms",
+  arXiv:2205.05131, §3.1) — the objective behind UL2/Flan-UL2/PaLM-2 that generalizes the T5
+  span-corruption objective (§T288) by mixing three denoisers and prefixing every example with a
+  paradigm token so a single model learns all modes:
+  - **R-Denoiser** (Regular): standard T5 span corruption — short spans, low corruption rate.
+  - **S-Denoiser** (Sequential): prefix language modeling — a single contiguous span at the end of
+    the sequence (condition on a prefix, predict the continuation).
+  - **X-Denoiser** (eXtreme): long spans and/or a high corruption rate.
+- `UL2MixtureOfDenoisers()` returns the paper's exact 7-denoiser config (Table 1):
+  `R(μ=3,r=.15) R(μ=8,r=.15) X(μ=3,r=.5) X(μ=8,r=.5) X(μ=64,r=.15) X(μ=64,r=.5) S(r=.25)`, mixed
+  with equal weight; `SampleUL2Denoiser` draws one per example (approximately uniform participation,
+  §3.1.2). R and X reuse `T5Corrupt` unchanged (differing only in `(μ, r)`); S is a single
+  prefix/suffix split emitted in the same sentinel format. The paradigm tokens `[R]/[S]/[X]` occupy
+  `[sentinelBase, sentinelBase+3)` and span sentinels start at `sentinelBase+3`; `UL2Reconstruct`
+  losslessly recovers both the original document **and** the denoiser mode.
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous against
+  §3.1.1–3.1.3 and Table 1: the exact 7-denoiser `(μ, r)` septet, the `[R]/[S]/[X]` prefix tokens
+  (§3.1.3), the approximately uniform mixing, R/X sharing the T5 span-corruption mechanism, and the
+  S-denoiser being a single `r=0.25` trailing span.
+- **§V15 (round-trip + fuzz) / §V16 tier-1 / §V2** (`nlp/ul2_test.go`): the mixture matches Table 1
+  exactly; the paradigm token leads each input and the span stream never reuses a paradigm id; the
+  S-denoiser target suffix is the true document tail of length ≈`r·n`; the round-trip
+  `UL2Reconstruct(UL2Denoise(doc)) == doc` with the correct recovered mode across all seven
+  denoisers; empty/single-token edges under every mode; rejection of malformed pairs; uniform
+  sampling frequencies (`R×2 / X×4 / S×1` of 7); a **native Go fuzz test** (`FuzzUL2RoundTrip`,
+  **~4.7M executions, 0 failures**) over arbitrary token streams, modes, rates, spans and seeds;
+  and `ExampleUL2Mode` / `ExampleUL2Denoise`.
+- **Gate**: `go test ./nlp` green, nn/autograd/backend/rl regression green, apicheck (§V17/§V19),
+  gofmt, vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R216, §T291.
+
+### T290 — VeRA: Vector-based Random Matrix Adaptation (Kopiczko et al. 2024) (2026-07-08)
+- **`nn.VeRALinear` + `nn.VeRAMatrices` add the VeRA parameter-efficient fine-tuning method**
+  (Kopiczko, Blankevoort & Asano 2024, "VeRA: Vector-based Random Matrix Adaptation", ICLR 2024,
+  arXiv:2310.11454) — a PEFT adapter distinct from the LoRA/DoRA/IA³/adapter/prefix-tuning family
+  already present. Instead of training per-layer low-rank matrices, VeRA **freezes a single pair of
+  random low-rank matrices A, B shared (tied) across every adapted layer** and trains only two tiny
+  per-layer scaling vectors, cutting the trainable footprint ~10× versus LoRA at similar quality.
+- Forward (paper Eq. 2, `h = W0·x + Λ_b·B·Λ_d·A·x`) in this library's `[in,out]` row convention:
+
+  ```
+  y = x·W + b ⊙ ( ( (x·A) ⊙ d ) · B )
+  ```
+
+  with shared frozen `A[in,r]`, `B[r,out]` (Kaiming-initialized, never trained) and the trainable
+  per-layer vectors `d[r]` and `b[out]` (`Λ_d`, `Λ_b`). Only `r+out` parameters train per layer.
+- `NewVeRAMatrices(in, out, r, dtype, seed)` draws the shared frozen pair once (reuse the same value
+  across layers to realize the savings); `NewVeRA(w, m, dInit)` builds a layer's adapter with `d`
+  initialized to `dInit` (`≤0` → `VeRADefaultDInit` = **0.1**, the paper default) and `b` to **zero**,
+  so `ΔW=0` at init and training starts from the exact pretrained behaviour. `Params()` returns only
+  `{d, b}`. The two `⊙` rescalings reuse `OpIA3` (whose VJP supplies the `d`/`b` gradients), so the
+  adapter is built purely by `ex`-composition (`OpMatMul`/`OpIA3`/`OpAdd`) — no new backend op.
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous against
+  Eq. 2 (§3.1), the parameter count (§3.2), the initialization strategy (§3.3), the default
+  `d_init = 0.1` (§4.1 / Table 6c), and the HuggingFace PEFT `VeraConfig`.
+- **§V16 tier-1 / §V-GRAD / §V-PROP / §V2** (`nn/vera_test.go`): forward parity against an
+  independent hand computation (`y = [1.5, 1.25]`); identity-at-init (`b=0` ⇒ `y = x·W` for any
+  random `A, B, d`); the parameter-footprint property (`Params()` is exactly `{d[r], b[out]}` and
+  `r+out` < a LoRA-like `r·(in+out)`); a finite-difference gradient check into both trainable
+  vectors; a preference-training property (one GD step lowers an MSE-to-target loss); shape/rank
+  errors; and `ExampleVeRALinear`.
+- **Gate**: `go test ./nn` green, autograd/backend/nlp/rl regression green, apicheck (§V17/§V19),
+  gofmt, vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R215, §T290.
+
+### T289 — SLiC-HF sequence-likelihood-calibration alignment loss (Zhao et al. 2023) (2026-07-08)
+- **`nn.SLiCLoss` adds the SLiC-HF calibration alignment loss** (Zhao, Joshi, Liu, Khalman, Saleh
+  & Peter J. Liu 2023, "SLiC-HF: Sequence Likelihood Calibration with Human Feedback",
+  arXiv:2305.10425; calibration objective from Zhao et al. 2022, arXiv:2210.00045) — the first
+  **max-margin (hinge)** direct-alignment loss in the library, a distinct loss geometry from every
+  logistic `−log σ` method already present (DPO/IPO/KTO/CPO/SimPO/ORPO/Bradley-Terry). It
+  calibrates the policy's sequence likelihoods with a rank hinge plus a cross-entropy pull toward
+  the SFT target, so the gradient **vanishes** once the preferred candidate already wins by the
+  margin δ (whereas the logistic losses keep pushing the gap toward infinity):
+
+  ```
+  L_cal = mean max(0, δ − logPθ(y⁺|x) + logPθ(y⁻|x))   // rank hinge, margin δ
+  L_reg = mean −logPθ(y_ref|x)                          // cross-entropy toward the SFT target
+  L     = L_cal + λ·L_reg
+  ```
+- `SLiCLoss(ctx, preferred, dispreferred, sftTarget, delta, lambda)` takes `[batch]` **summed**
+  (not length-normalized — SLiC calibrated models need no length norm, unlike SimPO/ORPO) sequence
+  log-probs; pass `sftTarget` with a positive `lambda` to add the regularizer, or `nil` / `λ ≤ 0`
+  for the bare calibration loss. The default paper margin is δ=1.0; λ has no fixed numeric default
+  in the paper (empirical, ~85% of the gain survives dropping the regularizer), so it is an explicit
+  caller parameter rather than a hardcoded constant. Built by `ex`-composition
+  (`OpSub`/`OpAdd`/`OpReLU`/`OpMean`/`OpNeg`/`OpAXPY`), like `BradleyTerryLoss`/`PlackettLuceLoss` —
+  no new fused backend op.
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous against
+  SLiC-HF Eq. 3/4 (§2.1) and the original SLiC Eq. 1/2 (§2.2): the hinge formula, the cross-entropy
+  regularizer with λ outside the term, the default margin β=1.0 (§3.2), and the summed
+  (non-length-normalized) log-prob convention (SLiC §3.4/Table 2).
+- **§V16 tier-1 / §V-GRAD / §V-PROP / §V2** (`nn/slic_test.go`): parity against an independent hand
+  computation (bare hinge 1.0, regularized 1.25); the defining max-margin property (once the margin
+  is satisfied both the loss **and** its gradient are exactly zero); a finite-difference gradient
+  check against the analytic gradient on all three inputs; a preference-training property (one GD
+  step raises `logPθ(y⁺)`, lowers `logPθ(y⁻)`, and lowers the loss); shape-mismatch errors; and
+  `ExampleSLiCLoss`.
+- **Gate**: `go test ./nn` green, autograd/backend/rl/nlp regression green, apicheck (§V17), gofmt,
+  vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R214, §T289.
+
+### T288 — T5 span-corruption denoising objective (Raffel et al. 2020) (2026-07-09)
+- **`nlp.T5Corrupt` and `nlp.T5Reconstruct` add the T5 span-corruption pretraining objective**
+  (Raffel, Shazeer, Roberts, Lee, Narang, Matena, Zhou, Li & Liu 2020, "Exploring the Limits of
+  Transfer Learning with a Unified Text-to-Text Transformer", arXiv:1910.10683, §3.1.4) — the
+  seq2seq denoising objective behind T5/UL2, distinct from the causal-LM and FIM objectives already
+  here. It drops ~`density` (T5 default 0.15) of the tokens as consecutive spans (mean length
+  `meanSpan`, default 3), replaces each dropped span in the encoder **input** with a single unique
+  sentinel, and builds a decoder **target** of `[sentinel + dropped tokens]` per span in order,
+  ending with one trailing final sentinel (e.g. input `Thank you <X> me to your party <Y> week` →
+  target `<X> for inviting <Y> last <Z>`).
+- `T5Corrupt(tokens, density, meanSpan, sentinelBase, rng)` segments the sequence into
+  non-overlapping noise/kept spans (`num_noise_tokens = round(n·density)`,
+  `num_noise_spans = round(num_noise/meanSpan)`), assigning sentinels `sentinelBase, sentinelBase+1,
+  …` in order (T5 assigns its 100 `<extra_id_N>` ids descending from the vocabulary end — an
+  equivalent structure; here they ascend from a reserved base). `T5Reconstruct` is its exact inverse
+  (a token is a sentinel iff `≥ sentinelBase`), returning `ok=false` for a malformed pair.
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous against
+  the paper (§3.1.4/Fig. 2) and the official implementation (github.com/google-research/
+  text-to-text-transfer-transformer `t5/data/preprocessors.py` `random_spans_noise_mask` /
+  `noise_span_to_unique_sentinel`) and the HuggingFace T5 docs.
+- **§V15 (round-trip + fuzz) / §V16 tier-1 / §V2** (`nlp/span_corrupt_test.go`): the structure
+  (target has one more sentinel than the input; masked fraction ≈ 15%; `input − sentinels + masked =
+  n`); ordered sentinels in both streams; the round-trip `T5Reconstruct(T5Corrupt(doc)) == doc` over
+  many random maskings; empty/single-token/fully-masked edges; rejection of malformed pairs; a
+  **native Go fuzz test** (`FuzzT5RoundTrip`, ~300k executions with zero failures) over arbitrary
+  token streams, seeds, densities and span lengths; and `ExampleT5Corrupt`.
+- **Gate**: `go test ./nlp` green, nn/ops/autograd/rl regression green, apicheck (§V17), gofmt,
+  vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R213, §T288.
+
+### T287 — SLERP weight merging (Shoemake 1985 / mergekit) (2026-07-09)
+- **`nn.SLERP` adds spherical linear interpolation for model merging** (Shoemake 1985, "Animating
+  Rotation with Quaternion Curves"; the default merge method of mergekit, Goddard et al. 2024
+  "Arcee's MergeKit", arXiv:2403.13257) — distinct from the task-vector merge methods already here
+  (TIES, DARE). Flattening two weight tensors to vectors with `Ω` the angle between them
+  (`cos Ω = (a·b)/(‖a‖‖b‖)`), `SLERP(a,b,t) = sin((1−t)Ω)/sin Ω · a + sin(tΩ)/sin Ω · b`
+  interpolates along the great circle on the hypersphere at constant angular velocity.
+- Because it stays on the geodesic, SLERP **preserves the norm** when the inputs have equal
+  magnitude — unlike linear interpolation, whose midpoint sags toward the origin (norm `√0.5` for
+  orthogonal unit vectors). `t=0` returns `a`, `t=1` returns `b`. When the tensors are nearly
+  parallel (`|cos Ω| > SLERPDotThreshold = 0.9995`, matching mergekit) it falls back to plain linear
+  interpolation to avoid the `sin Ω → 0` instability. A pure-f64 per-tensor merge utility (like
+  `TIESMerge`), not differentiable.
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous against
+  Shoemake 1985 and the official implementation (github.com/arcee-ai/mergekit
+  `merge_methods/slerp.py`: `DOT_THRESHOLD = 0.9995`, `s0 = sin(theta_0 − t·theta_0)/sin_theta_0`,
+  `s1 = sin(t·theta_0)/sin_theta_0`).
+- **§V16 tier-1 / §V2** (`nn/slerp_test.go`): the endpoints (`t=0→a`, `t=1→b`); the **great-circle
+  norm preservation** (equal-norm inputs keep their norm for every `t`, whereas LERP's midpoint
+  sags); the constant-angular-velocity property (the `t=0.5` point bisects the angle, equidistant
+  from `a` and `b`); the near-parallel LERP fallback (no NaN); the shape-mismatch error; and
+  `ExampleSLERP` (orthogonal unit vectors → midpoint norm 1).
+- **Gate**: `go test ./nn` green, ops/autograd/rl/nlp regression green, apicheck (§V17), gofmt,
+  vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R212, §T287.
+
+### T286 — Plackett-Luce ranking loss / ListMLE (Xia 2008 / LiPO 2024) (2026-07-09)
+- **`nn.PlackettLuceLoss` adds the listwise reward-model loss** (Plackett 1975 / Luce 1959; Xia,
+  Liu, Wang, Zhang & Li 2008 "Listwise Approach to Learning to Rank" / ListMLE; RLHF use in Liu et
+  al. 2024 "LiPO", arXiv:2402.01878) — the generalization of the pairwise Bradley-Terry loss
+  (`nn.BradleyTerryLoss`, T282) to full K-way rankings. Under the Plackett-Luce model the
+  probability of a ranking is a product of sequential softmax choices (at each rank the best
+  remaining item is drawn by a softmax over the still-unranked items), so the negative
+  log-likelihood of a ranking with scores in descending preference order is
+  `L = Σ_{k=0}^{K-2} [ logsumexp(s[k:]) − s[k] ]`.
+- It reduces **exactly** to Bradley-Terry for K=2 (`−log σ(s_0 − s_1)`) and equals `log(K!)` for
+  uniform scores. Implemented as a differentiable scalar w.r.t. the rewards: the suffix logsumexp
+  at each rank is computed by masking earlier columns to `−∞` (avoiding a slice op), the current
+  item is selected with a one-hot column, and the batch mean is applied via the `OpAXPY` rank-0
+  idiom (reused from EWC) to avoid rank promotion. `rewards` is `[batch, K]` with each row a
+  ranking's scores in descending preference order.
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous against
+  LiPO (Eq. 9, Prop. 2.3 for the K=2 reduction) and Xia et al. 2008 (ListMLE). Note: InstructGPT
+  trains its K-way rankings via the `(K choose 2)` pairwise Bradley-Terry decomposition; the
+  Plackett-Luce/ListMLE loss (as in LiPO) is the direct listwise instance.
+- **§V2 / §V16 tier-1 / V-GRAD** (`nn/plackett_luce_test.go`): formula parity against a ListMLE
+  reference (@1e-9); the **K=2 cross-check** that it equals `nn.BradleyTerryLoss`; the uniform-score
+  closed form `log(K!)`; a descending ranking scores lower than its reverse; a finite-difference
+  gradcheck; the rank/`K<2` errors; and `ExamplePlackettLuceLoss`.
+- **Gate**: `go test ./nn` green, ops/autograd/rl/nlp regression green, apicheck (§V17), gofmt,
+  vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R211, §T286.
+
+### T285 — PyramidKV per-layer KV budget (Cai et al. 2024) (2026-07-09)
+- **`nlp.PyramidKVBudgets` adds PyramidKV's layer-wise KV budget allocation** (Cai et al. 2024,
+  "PyramidKV: Dynamic KV Cache Compression based on Pyramidal Information Funneling",
+  arXiv:2406.02069), completing the KV-compression stack (StreamingLLM, H2O, SnapKV). It is the
+  *how much per layer* dimension, orthogonal to SnapKV's *which tokens*. Attention is broad in the
+  lower transformer layers but funnels onto a few tokens in the higher layers, so PyramidKV spreads
+  the same total budget as a decreasing pyramid — more cache in the lower layers, less in the higher.
+- `PyramidKVBudgets(numLayers, totalBudget, minBudget)` returns a linearly decreasing sequence from
+  a maximum at layer 0 down to `minBudget` at the top layer, with the total conserved: the bottom
+  budget is `b_max = 2·avg − minBudget` (so the endpoints average to `avg = totalBudget/numLayers`)
+  and intermediate layers interpolate `b_l = b_max − (b_max − minBudget)·l/(numLayers−1)`. `minBudget`
+  is clamped to `[0, avg]` (equal to `avg` gives a uniform allocation) and integer-rounding residue
+  is folded into the bottom layer so the sum is exact. Each layer's budget then drives a SnapKV-style
+  token selection (`SnapKVKeep`). The paper derives `minBudget` from a steepness β=20; this API takes
+  it directly so the caller can use β or any value.
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous against
+  the paper (§4.2.1 Eq. 1, §4.2.2 Eq. 3) and the official implementation
+  (github.com/Zefan-Cai/KVCache-Factory `pyramidkv_utils.py`: `max_num = (budget−win)*2 − min_num`,
+  linear `max_num − layer_idx·steps`).
+- **§V2 / §V16 tier-1** (`nlp/pyramidkv_test.go`): the budgets form a strictly decreasing pyramid
+  and sum exactly to the total (with the bottom above the uniform average); the endpoints
+  (`minBudget` at the top, `≈ 2·avg − minBudget` at the bottom); `minBudget = avg` gives a uniform
+  allocation; the single-layer and too-large-`minBudget` (clamped) edges; an end-to-end integration
+  where each layer's pyramid budget drives `SnapKVKeep` (keeping ≤ that budget); and
+  `ExamplePyramidKVBudgets`.
+- **Gate**: `go test ./nlp` green, nn/ops/autograd/rl regression green, apicheck (§V17), gofmt,
+  vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R210, §T285.
+
+### T284 — FIM (Fill-in-the-Middle) data transform (Bavarian et al. 2022) (2026-07-09)
+- **`nlp.FIMTransform` and `nlp.FIMReconstruct` add Fill-in-the-Middle** (Bavarian, Jun, Tezak,
+  Schulman, McLeavey, Tworek & Chen 2022, "Efficient Training of Language Models to Fill in the
+  Middle", arXiv:2207.14255) — the training-data reordering behind Codex/StarCoder/Code
+  Llama/DeepSeek-Coder infilling. A left-to-right causal LM cannot ordinarily condition on text
+  *after* the cursor; FIM teaches it to by reordering a fraction of training documents so the model
+  predicts the middle from the surrounding context.
+- `FIMTransform(tokens, sentinels, spm, rng)` splits a document at two random points into
+  prefix/middle/suffix and emits either the PSM layout `<PRE> prefix <SUF> suffix <MID> middle` or
+  (spm=true) the SPM layout `<PRE> <SUF> suffix <MID> prefix middle` — the paper's adopted
+  Appendix-D "variant 2" / Code Llama form, with `<PRE>` and `<SUF>` adjacent and the middle emitted
+  last in both. `FIMReconstruct` is its exact inverse, recovering the original document from the
+  sentinels (returning `ok=false` for malformed input). The FIM rate and PSM/SPM mixing are
+  training-loop concerns left to the caller.
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous against
+  the paper (§3/§3.1, Appendix D for the adopted SPM variant) and Code Llama (arXiv:2308.12950 §2.3):
+  the two-point split, the PSM ordering, the adopted SPM variant-2 ordering, and lossless
+  reversibility.
+- **§V15 (round-trip + fuzz) / §V16 tier-1 / §V2** (`nlp/fim_test.go`): the PSM structure (`<PRE>`
+  first, one of each sentinel, `<SUF>` before `<MID>`) and SPM structure (`<PRE><SUF>` adjacent);
+  the round-trip `FIMReconstruct(FIMTransform(doc)) == doc` over many random splits in both modes;
+  empty/single-token edges; rejection of malformed sequences; a **native Go fuzz test**
+  (`FuzzFIMRoundTrip`, ~666k executions with zero failures) asserting the round-trip for arbitrary
+  token streams, seeds, and modes; and `ExampleFIMTransform`.
+- **Gate**: `go test ./nlp` green, nn/ops/autograd/rl regression green, apicheck (§V17,
+  `FIMSentinels` fields documented), gofmt, vet, §V7 `CGO_ENABLED=0` build, and the default
+  cgo/metal build all clean.
+- §R209, §T284.
+
+### T283 — Elastic Weight Consolidation / EWC (Kirkpatrick et al. 2017) (2026-07-09)
+- **`nn.EWCPenalty` and `nn.EWCFisher` add Elastic Weight Consolidation** (Kirkpatrick et al. 2017,
+  "Overcoming catastrophic forgetting in neural networks", PNAS 114(13), arXiv:1612.00796) — the
+  library's first continual-learning method. After training on one task to an optimum θ*, training
+  on a new task with `L_new + EWCPenalty` resists catastrophic forgetting via a Fisher-weighted
+  quadratic that anchors each parameter to θ*: `Ω(θ) = Σ_i (λ/2)·F_i·(θ_i − θ*_i)²` (Eq. 3).
+  Parameters important to the old task (large Fisher `F_i`) are strongly penalized for moving, while
+  unimportant ones stay free to adapt — with a uniform Fisher this reduces to plain scaled L2, and
+  at θ = θ* the penalty is exactly 0.
+- `EWCFisher(gradSamples)` estimates the diagonal Fisher information as the mean of squared
+  per-sample log-likelihood gradients (larger ⇒ more important to protect). `EWCPenalty` is a
+  differentiable scalar w.r.t. the parameters (refParams and fisher are constants), composed from
+  `OpSub`/`OpMul`/`OpSum`; for several previous tasks, sum an `EWCPenalty` per task.
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous against
+  the paper (Sec. 2, Eq. 3) and Huszár 2018 (arXiv:1712.03847): the penalty form, the diagonal
+  Fisher = expected squared log-likelihood gradient, the L2/zero-at-optimum properties, and the
+  multi-task accumulation.
+- **§V2 / §V16 tier-1 / V-GRAD** (`nn/ewc_test.go`): the penalty formula (@1e-9); uniform Fisher
+  reduces to scaled L2; zero penalty at the optimum; Fisher weighting (a drift on a high-Fisher
+  parameter is penalized in proportion to its Fisher); a finite-difference gradcheck; the Fisher
+  estimator as the mean squared gradient; the length/shape/empty errors; and `ExampleEWCPenalty`.
+- **Fixed a real production bug** surfaced by an `AtF64()` panic in the test: the final
+  `OpMul(scalar, scalarTensor[1,1])` broadcast-promoted the rank-0 penalty to shape `[1,1]`; scaling
+  now uses the InfoNCE idiom (`OpAXPY` with a rank-0 zero), keeping the result a true scalar.
+- **Gate**: `go test ./nn` green, ops/autograd/rl/nlp regression green, apicheck (§V17), gofmt,
+  vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R208, §T283.
+
+### T282 — Bradley-Terry reward-model loss (InstructGPT / Llama-2) (2026-07-08)
+- **`nn.BradleyTerryLoss` adds the explicit reward-model objective of classic RLHF** (Christiano et
+  al. 2017, arXiv:1706.03741; Stiennon et al. 2020; Ouyang et al. 2022 InstructGPT, §3.5 Eq. 1;
+  Touvron et al. 2023 Llama-2, §3.2.2 Eq. 2). A reward model r_θ(x,y) outputs a scalar score, and
+  under the Bradley-Terry preference model `P(y_w ≻ y_l) = σ(r_w − r_l)` it is trained by the
+  negative log-likelihood of the observed preferences:
+  `L = −mean log σ(r_chosen − r_rejected − margin)`. This is the reward model that the library's
+  PPO/GRPO/RLOO optimize against — the classic counterpart of the reward-model-*free* direct methods
+  (DPO/IPO/KTO), which were the only preference losses present.
+- Computed stably via the identity `−log σ(z) = softplus(−z)` (per pair
+  `softplus(r_rejected − r_chosen + margin)`), so it is a differentiable scalar w.r.t. both reward
+  vectors (hence the reward model). The optional Llama-2 margin is *subtracted* inside the sigmoid,
+  so a stronger stated preference forces a larger reward gap (margin 0 is plain Bradley-Terry).
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous
+  against InstructGPT (§3.5 Eq. 1), Llama-2 (§3.2.2 Eq. 2), and the TRL `RewardTrainer`: the
+  chosen−rejected sign convention, the softplus identity, and the subtracted margin.
+- **§V2 / §V16 tier-1 / V-GRAD** (`nn/reward_test.go`): formula parity against
+  `mean −log σ(r_w − r_l − m)` (@1e-9, margins 0 and 0.5); the equal-rewards closed form (σ(0)=0.5 ⇒
+  loss `ln 2`); near-zero loss under perfect separation; a finite-difference gradcheck over both
+  reward vectors; the **training-signal direction** (∂L/∂r_chosen < 0 pushes the chosen reward up,
+  ∂L/∂r_rejected > 0 pushes the rejected reward down); the margin raising the loss; the shape-mismatch
+  error; and `ExampleBradleyTerryLoss`.
+- **Gate**: `go test ./nn` green, ops/autograd/rl/nlp regression green, apicheck (§V17), gofmt,
+  vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R207, §T282.
+
+### T281 — Sequence packing without cross-contamination (Krell et al. 2021) (2026-07-08)
+- **`nlp.PackSequences` / `nlp.DocumentCausalMask` / `nlp.DocumentPositions` add sequence packing**
+  (Krell, Kosec, Perez & Fitzgibbon 2021, "Efficient Sequence Packing without Cross-contamination",
+  arXiv:2107.02027; the standard packed-pretraining recipe). Padding every short document to the
+  context length wastes compute on pad tokens; instead several documents are concatenated into one
+  fixed-length pack (eliminating up to ~50–89% padding, ~2× throughput). Two corrections make packed
+  training *mathematically equivalent* to unpacked training — avoiding "cross-contamination" between
+  co-packed documents.
+- `PackSequences(seqs, maxLen)` bin-packs sequences into blocks of length ≤ maxLen using
+  first-fit-decreasing (the paper's SPFHP/NNLSHP histogram packers are noted as follow-ups),
+  returning the packed token blocks and, per block, the local document index of each position
+  (over-long documents are truncated). `DocumentCausalMask(docIDs)` builds the block-diagonal
+  additive attention mask — token `i` attends `j` iff they share a document and `j ≤ i` (intra-doc
+  causal, cross-doc masked; a single document reproduces the ordinary causal mask).
+  `DocumentPositions(docIDs)` returns position ids that reset to 0 at each document boundary
+  (`[0,1,2,0,1]`), so each document sees positions as if decoded alone.
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous
+  against the paper (arXiv:2107.02027 §3.1 packing, §3.2.1 position reset, §3.2.2 block-diagonal
+  mask, §3.2/§4.2 equivalence) and the HuggingFace packing-with-FA2 / `DataCollatorWithFlattening`
+  recipe.
+- **§V2 / §V16 tier-1** (`nlp/packing_test.go`): first-fit-decreasing packs tightly (two full
+  blocks) and preserves every token within capacity; the block-diagonal mask reduces to plain causal
+  for a single document, blocks cross-document attention, and still masks the future within a
+  document; the per-document position reset `[0,1,2,0,1]`; over-long documents are truncated; an
+  end-to-end consistency check (a position reset occurs exactly at each masked document boundary);
+  and `ExampleDocumentPositions`.
+- **Gate**: `go test ./nlp` green, nn/ops/autograd/rl regression green, apicheck (§V17), gofmt,
+  vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R206, §T281.
+
+### T280 — EDM preconditioning + σ-schedule (Karras et al. 2022) (2026-07-08)
+- **`nn.EDMPrecond` / `nn.EDMDenoise` / `nn.EDMLossWeight` / `nn.EDMSigmas` add the design-space
+  half of EDM** (Karras, Aittala, Aila & Laine 2022, arXiv:2206.00364, Table 1), completing the EDM
+  sampler from the previous change (T279). Rather than have the raw network predict the clean signal
+  directly, EDM wraps it in input/output/skip scalings that keep the network's input and training
+  target at unit variance across all noise levels — the change that makes the model well-conditioned.
+- `EDMPrecond(σ, σ_data)` returns the four coefficients `c_skip = σ_data²/(σ²+σ_data²)`,
+  `c_out = σ·σ_data/√(σ²+σ_data²)`, `c_in = 1/√(σ²+σ_data²)`, `c_noise = ln(σ)/4`; `EDMDenoise`
+  wraps a raw network `f` into the denoiser `D(x;σ) = c_skip·x + c_out·f(c_in·x; c_noise)` — directly
+  usable as the `Denoiser` in `EDMSample`. `EDMLossWeight(σ, σ_data) = 1/c_out²` gives a uniform
+  effective loss (`λ·c_out² = 1`). `EDMSigmas(n, σ_min, σ_max, ρ)` builds the ρ-warped sampling
+  schedule `σ_i = (σ_max^{1/ρ} + i/(N−1)·(σ_min^{1/ρ}−σ_max^{1/ρ}))^ρ` with 0 appended (defaults
+  `σ_max=80`, `σ_min=0.002`, `ρ=7`, `EDMSigmaData=0.5`).
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous
+  against the paper (Table 1, Eq. 5–7) and the official implementation (github.com/NVlabs/edm
+  `training/networks.py` EDMPrecond, `training/loss.py` EDMLoss, `generate.py` schedule).
+- **§V16 tier-1 / §V2** (`nn/edm_precond_test.go`): the four preconditioning formulas (@1e-12); the
+  denoiser limits (σ→0 ⇒ c_skip→1, c_out→0 so D=x; σ→∞ ⇒ c_skip→0, c_in→0); `EDMDenoise` wraps `f`
+  as `c_skip·x + c_out·f(c_in·x; c_noise)`; the loss weight cancels `c_out²`; the schedule's
+  endpoints (σ_max…σ_min with 0 appended), strict monotonicity, and the ρ=1 linear-in-σ case; an
+  end-to-end preconditioned-denoiser + schedule + `EDMSample` integration; and `ExampleEDMPrecond`.
+- **Gate**: `go test ./nn` green, ops/autograd/rl/nlp regression green, apicheck (§V17), gofmt,
+  vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R205, §T280.
+
+### T279 — EDM Heun 2nd-order diffusion sampler (Karras et al. 2022) (2026-07-08)
+- **`nn.EDMSample` / `nn.EDMEulerStep` / `nn.EDMHeunStep` add the EDM deterministic sampler**
+  (Karras, Aittala, Aila & Laine 2022, "Elucidating the Design Space of Diffusion-Based Generative
+  Models", NeurIPS 2022, arXiv:2206.00364, Algorithm 1). EDM writes the probability-flow ODE
+  directly in the noise level σ, `dx/dσ = (x − D(x; σ))/σ` (D the denoiser), and integrates it from
+  high σ (pure noise) down to 0 with Heun's 2nd-order method — an Euler predictor plus a
+  trapezoidal corrector that averages the derivative at the start and the predicted point. This is
+  the standard fast diffusion sampler and completes the library's diffusion samplers (DDPM's SDE,
+  DDIM's first-order ODE, Flow Matching).
+- Each step from σ to σ_next computes `d = (x − D(x;σ))/σ` and the Euler prediction
+  `x' = x + (σ_next − σ)·d`; if σ_next ≠ 0 it then evaluates `d' = (x' − D(x';σ_next))/σ_next` and
+  corrects `x_next = x + (σ_next − σ)·(d + d')/2`. At the final step (σ_next = 0) the corrector —
+  which would divide by zero — is skipped and the plain Euler step is used, exactly as in the
+  reference implementation. Because Heun is 2nd-order (O(h²)) versus Euler's O(h), it reaches the
+  same accuracy in far fewer denoiser evaluations. The model is supplied as a `Denoiser` closure
+  (`func([]float64, float64) []float64`).
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous
+  against the paper (arXiv:2206.00364 Algorithm 1) and the official implementation
+  (github.com/NVlabs/edm `generate.py`: `d_cur = (x_hat − denoised)/t_hat`, `0.5·d_cur + 0.5·d_prime`,
+  the `if i < num_steps − 1` last-step guard).
+- **§V16 tier-1 / §V2** (`nn/edm_test.go`): the Euler-step formula; **Heun is exact** for a
+  σ-linear, x-independent drift (@1e-9) while Euler is not — a direct proof of the trapezoidal
+  corrector's 2nd order; the **convergence order** — halving the step size cuts the Heun error ~4×
+  (order 2) but the Euler error only ~2× (order 1) against an analytic reference; the last step at
+  σ=0 reduces to Euler with no NaN; the full-schedule Heun sample is at least as accurate as Euler;
+  and `ExampleEDMSample` (linear drift ⇒ exact −7.5).
+- **Gate**: `go test ./nn` green, ops/autograd/rl/nlp regression green, apicheck (§V17, `Denoiser`
+  referenced in `ExampleEDMSample`), gofmt, vet, §V7 `CGO_ENABLED=0` build, and the default
+  cgo/metal build all clean.
+- §R204, §T279.
+
+### T278 — HQQ half-quadratic quantization (Badri & Shrivastava 2023) (2026-07-08)
+- **`nn.HQQuantize` / `nn.DequantizeHQQ` add Half-Quadratic Quantization** (Badri & Shrivastava
+  2023, "Half-Quadratic Quantization of Large Machine Learning Models", mobiusml.github.io;
+  github.com/mobiusml/hqq) — the library's first *calibration-free* quantizer. The existing
+  calibration-aware quantizers (GPTQ, AWQ, SmoothQuant) need activation statistics and NF4 is a
+  fixed grid; HQQ quantizes the **weights alone**. It fits the asymmetric affine quantizer
+  `W_q = round(W/s + z)`, `Ŵ = s·(W_q − z)` per group by minimizing a **robust Lp norm** (p<1,
+  default 0.7) of the quantization error rather than L2, so a few outlier weights don't pull the
+  zero-point off the bulk.
+- The scale `s` is fixed from the group range; only the zero-point `z` is optimized, via a
+  half-quadratic split that alternates two closed-form steps: a shrinkage on the error variable
+  `W_e = sign(x)·relu(|x| − (1/β)|x|^{p−1})` (the Lp proximal operator; ordinary soft-threshold at
+  p=1) and the closed-form update `z = mean(W_q − (W − W_e)/s)`, re-rounding `W_q` each step and
+  growing `β ← κ·β` (κ=1.01) for ~20 iterations. Configurable via `WithHQQLpNorm` and `WithHQQIters`
+  (0 iterations reduces to plain round-to-nearest). Pure-f64, data-free post-training quantization.
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous
+  against the blog and the reference implementation (`hqq/core/optimize.py`: `lp_norm=0.7`,
+  `beta=1`, `kappa=1.01`, `iters=20`; the code stores the scale as its reciprocal, algebraically
+  identical).
+- **§V2 / §V16 tier-1** (`nn/hqq_test.go`, `nn/hqq_internal_test.go`): the dequant formula
+  `ŵ = s(code − z)` (@1e-12); codes stay in `[0, 2^bits−1]` for 2/3/4/8 bits; the defining
+  benefit — HQQ's robust Lp error is lower than round-to-nearest on skewed, outlier-heavy weights
+  (aggregated over many groups); a constant group is handled without dividing by zero; per-group
+  scale/zero over full and partial groups; the `shrink_lp` proximal-operator formula (p=1 and
+  p=0.7); and `ExampleHQQuantize`.
+- **Gate**: `go test ./nn` green, ops/autograd/rl/nlp regression green, apicheck (§V17, `HQQOption`
+  exempted like `GPTQOption`), gofmt, vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal
+  build all clean.
+- §R203, §T278.
+
+### T277 — Jacobi parallel decoding (Santilli et al. 2023) (2026-07-08)
+- **`nlp.JacobiDecode` adds Jacobi (parallel) decoding** (Santilli, Severino, Postolache, Maiorca,
+  Mancusi, Marin & Rodolà 2023, "Accelerating Transformer Inference for Translation via Parallel
+  Decoding", ACL 2023, arXiv:2305.10427 — the same fixed-point iteration that underlies Lookahead
+  Decoding and CLLMs). Unlike speculative decoding (a separate draft model) or Medusa (extra
+  heads), Jacobi decoding needs neither: it reframes greedy autoregressive decoding as solving the
+  triangular system `y_i = argmax p(y_i | y_<i, x)` by fixed-point iteration, updating **all**
+  positions in parallel each step (`y_i ← argmax p(y_i | y_<i, x)` from the previous iterate) until
+  the block stops changing.
+- The fixed point is exactly the sequential greedy sequence (lossless), and the iteration converges
+  in at most `m` steps by front-to-back locking — position 0's prediction never depends on any
+  guess (so it is correct after step 1), position `i` locks once `y_<i` is fixed — while in
+  practice `k ≪ m`, which is the speedup. `JacobiDecode(step, prompt, init, maxIters)` returns the
+  generated tokens and the iteration count; the model is supplied as a `JacobiStep` closure
+  (`func([]int) []int`) that returns the per-position argmax next token for a full sequence — one
+  parallel forward pass. The initial guess only affects the iteration count, never the result.
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous
+  against the paper (arXiv:2305.10427 §3.1–3.4, Eq. 3–5, Prop. 1) and the corroborating Lookahead
+  Decoding (Fu et al. 2024) and CLLMs (Kou et al. 2024): the parallel update, the greedy
+  equivalence, the ≤m front-to-back convergence, and the stop-on-no-change criterion.
+- **§V2 / §V16 tier-1** (`nlp/jacobi_test.go`): equality with sequential greedy on a deterministic
+  prefix-sum-mod mock LM; convergence within `m+1` iterations; the fixed-point property
+  (re-applying the model reproduces the output); init-independence (any starting guess converges
+  to the same sequence, only the iteration count differs); the empty/zero-iter edges; and
+  `ExampleJacobiDecode`. The `JacobiStep` callback type is allowlisted in apicheck (exercised via
+  the example, like `nlp.NextLogits`).
+- **Gate**: `go test ./nlp` green, nn/ops/autograd/rl regression green, apicheck (§V17), gofmt,
+  vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R202, §T277.
+
+### T276 — Self-Extend length extrapolation (Jin et al. 2024) (2026-07-08)
+- **`nlp.SelfExtendRelPos` and `nlp.SelfExtendPositions` add Self-Extend** (Jin, Han, Tang, Yang,
+  Fan, Han & Hu 2024, "LLM Maison Longer Than Its Training Length with Self-Extend", ICML 2024,
+  arXiv:2401.01325) — training-free context-window extension at inference. A pretrained model
+  degrades past its training length because it encounters relative positions it never saw;
+  Self-Extend fixes this with a bi-level attention position scheme (no fine-tuning), distinct from
+  the RoPE frequency-rescaling already in `backend/rope.go` (linear PI, YaRN, xPos) — it regroups
+  *positions*, not frequencies.
+- For a query `q` attending to a key `k` (`q ≥ k`): within the neighbor window (`q−k < w`) the true
+  relative position `q−k` is used (local structure exact); beyond it, positions are floor-divided by
+  the group size `G` and the effective relative position is `⌊q/G⌋−⌊k/G⌋ + (w − ⌊w/G⌋)`. The
+  additive shift keeps the mapping continuous and monotonic across the neighbor/grouped boundary.
+  Grouping compresses large distances back into the pretrained range (a length-`L` sequence maps to
+  an original length of about `(L−w)·G + w`), so no position exceeds training. `G` and `w` are the
+  only hyperparameters; `G=1` recovers ordinary attention. `SelfExtendPositions` builds the causal
+  `[seqLen, seqLen]` matrix of effective relative positions to feed a RoPE/relative attention.
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous
+  against the paper (arXiv:2401.01325 §3.1–3.2, Eq. 3/7, Algorithm 1) and the official
+  implementation (github.com/datamllab/LongLM `self_extend_patch/Llama.py`:
+  `group_query_position = q//G + w − w//G`, `group_key_position = k//G`).
+- **§V2 / §V16 tier-1** (`nlp/self_extend_test.go`): neighbor positions are the true distance; the
+  grouped formula parity; the mapping is monotonic non-decreasing as the key recedes (no backward
+  jump at the boundary); `G=1` is the identity; a long sequence's max relative position is
+  compressed well below `L`; the causal matrix builder; and `ExampleSelfExtendRelPos`.
+- **Gate**: `go test ./nlp` green, nn/ops/autograd/rl regression green, apicheck (§V17), gofmt,
+  vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R201, §T276.
+
+### T275 — SnapKV prompt KV-cache compression (Li et al. 2024) (2026-07-08)
+- **`nlp.SnapKVKeep` and `nlp.SnapKVPool` add SnapKV prompt KV compression** (Li, Huang, Yang,
+  Yang, Zhang, Cai, Feng, Xu, Chen et al. 2024, "SnapKV: LLM Knows What You are Looking for Before
+  Generation", NeurIPS 2024, arXiv:2404.14469). Unlike the decode-time eviction policies already in
+  `nlp/kvevict.go` — StreamingLLM (recent + sink) and H2O (accumulated attention) — SnapKV
+  compresses the prompt KV cache once at *prefill*. Its insight: the last few prompt tokens (the
+  "observation window") already attend to the earlier positions that matter, so their attention
+  selects which prompt KV entries to keep.
+- Per attention head, `SnapKVKeep(obsAttn, budget, kernel)` (1) sums the observation window's
+  attention over each prefix key (Eq. 2, prefix keys only — the window is kept separately), (2)
+  max-pools the scores along position with `SnapKVPool` to retain contiguous important spans (the
+  ablation-critical step; default kernel 7, stride 1, same length), and (3) keeps the top
+  `budget − windowSize` prefix positions by pooled importance plus the whole observation window
+  (Eq. 3), returned in ascending temporal order. Prompts already within budget are kept whole. Pure
+  functions in the style of the existing `H2OKeep`/`StreamingKeep`.
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous
+  against the paper (arXiv:2404.14469 §4.1–4.2, Eq. 2–3, Listing 1) and the official implementation
+  (github.com/FasterDecoding/SnapKV `snapkv_utils.py`): the observation window, the per-head column
+  sum over the window queries, the 1D max-pool before top-k, and the top-k + always-keep-window
+  selection. The aggregation/pooling are over the prefix only, matching the code's
+  `attn_weights[...,-window:,:-window]` key slice. (Defaults: the paper uses window 32 / kernel 7 /
+  max-pool; the kernel is a caller parameter here.)
+- **§V2 / §V16 tier-1** (`nlp/snapkv_test.go`): the pooling spreads a spike to its kernel
+  neighbours (and is a no-op for kernel ≤ 1); the observation window is always retained; a
+  heavy-hitter prefix position is kept while a low-attention one is evicted under a tight budget;
+  the retained set is exactly `budget` and ascending; a prompt within budget keeps everything; the
+  empty-window edge; and `ExampleSnapKVKeep`.
+- **Gate**: `go test ./nlp` green, nn/ops/autograd/rl regression green, apicheck (§V17), gofmt,
+  vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R200, §T275.
+
+### T274 — DINO self-distillation loss (Caron et al. 2021) (2026-07-08)
+- **`nn.DINOLoss` and `nn.DINOCenterUpdate` add DINO self-distillation** (Caron, Touvron, Misra,
+  Jégou, Mairal, Bojanowski & Joulin 2021, "Emerging Properties in Self-Supervised Vision
+  Transformers", ICCV 2021, arXiv:2104.14294). DINO trains a student to match a momentum *teacher*
+  (an EMA of the student — the weight update is handled by the existing `nn.EMA`) with no labels,
+  negatives, or clustering — distinct from the contrastive InfoNCE, the statistics-based Barlow
+  Twins/VICReg, and the Sinkhorn-clustering SwAV. Collapse is prevented by two opposing operations
+  on the teacher: **centering** (subtract a running mean `C` so no output dimension dominates) and
+  **sharpening** (a smaller teacher temperature `τ_t < τ_s` so the target stays peaked).
+- The loss is the cross-entropy between the centered+sharpened teacher and the student,
+  `L = −Σ_k P_t^(k) log P_s^(k)` with `P_t = softmax((g_t − C)/τ_t)` and `P_s = softmax(g_s/τ_s)`
+  (Eq. 1–2), minimized over the student only — the teacher is a stop-gradient target. It reuses the
+  stable soft-cross-entropy helper from SwAV and wraps the teacher distribution in `StopGradient`,
+  so it is differentiable w.r.t. the student logits. `DINOCenterUpdate` applies the centering EMA
+  `C ← m·C + (1−m)·mean_batch(g_t)` (Eq. 4). Defaults: `DINOStudentTemp=0.1`,
+  `DINOTeacherTemp=0.04`, `DINOCenterMomentum=0.9`.
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous
+  against the paper (arXiv:2104.14294 §3.1 Eq. 1–2/Eq. 4) and the official implementation
+  (github.com/facebookresearch/dino `main_dino.py`: `softmax((teacher − center)/temp).detach()`,
+  `center_momentum=0.9`, `student_temp=0.1`, teacher-temp warmup 0.04→0.07).
+- **§V2 / §V16 tier-1 / V-GRAD** (`nn/dino_test.go`): formula parity against a centered+sharpened
+  cross-entropy reference (@1e-9); the perfect-match closed form (when `g_s = (τ_s/τ_t)(g_t − C)`
+  ⇒ `P_s = P_t` ⇒ the loss equals the teacher's entropy `H(P_t)`); the centering-update parity
+  (@1e-12); a finite-difference gradcheck w.r.t. the student logits; the errors; and
+  `ExampleDINOLoss`.
+- **Process note**: this iteration first drafted auxiliary-loss-free MoE balancing, then found it
+  was already implemented (`nn.LossFreeBalancer`, `lossfree.go`) — the absence check had a grep
+  false-negative on the collapsed filename. The duplicate draft was deleted (no commit, no
+  bookkeeping) and the iteration pivoted to DINO, which is genuinely absent.
+- **Gate**: `go test ./nn` green, ops/autograd/rl/nlp regression green, apicheck (§V17), gofmt,
+  vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R199, §T274.
+
+### T273 — LSQ quantization-aware training (Esser et al. 2020) (2026-07-08)
+- **`nn.LSQQuantize` adds Learned Step Size Quantization** (Esser, McKinstry, Bablani, Appuswamy &
+  Modha 2020, "Learned Step Size Quantization", ICLR 2020, arXiv:1902.08153) — the library's first
+  quantization-*aware training* method, distinct from every quantizer here so far (GPTQ, AWQ, NF4,
+  SmoothQuant, LLM.int8, Wanda, SparseGPT), which are all *post-training*. LSQ fake-quantizes
+  weights/activations during the forward pass with a **learnable step size `s`** trained by
+  gradient descent, so the network adapts to low-bit inference: `v̂ = round(clip(v/s, −Qn, Qp))·s`.
+- The round uses a straight-through estimator, so the quantizer is differentiable w.r.t. **both**
+  the value and the step size: `∂v̂/∂v` is 1 inside the clip interval and 0 outside, and `∂v̂/∂s`
+  follows the LSQ estimator (`round(v/s) − v/s` in range, `−Qn`/`Qp` when saturated). Helpers:
+  `LSQBounds(bits, signed)` for the integer range (signed weights `2^{b−1}`,`2^{b−1}−1`; unsigned
+  activations `0`,`2^b−1`), `LSQGradScale(numel, qp)` for the paper's step-size gradient scale
+  `g = 1/√(N·Qp)`, and `LSQInitStep(v, qp)` for the initialization `s = 2·mean(|v|)/√Qp`.
+- **Implementation note**: LSQ composes entirely from existing ops — no new backend op. The round
+  uses the same `StopGradient` straight-through as FSQ (`v̂bar = vbar + sg(round(vbar) − vbar)`), and
+  the `(÷s, clip, STE-round, ×s)` autograd composition *automatically* produces the exact LSQ
+  step-size gradient (including the `−v/s` term and the saturation branches, via `OpClip`'s
+  in-range VJP). The gradient scale is applied with the trick `s' = g·s + sg((1−g)·s)`, which has
+  value `s` but scales its gradient by `g`.
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous
+  against the paper (arXiv:1902.08153 §2 Eq. 1–3, §2.1–2.2, ar5iv full text): the forward, the
+  signed/unsigned bounds, the STE gradients, `g = 1/√(N·Qp)`, and the `2·mean(|v|)/√Qp` init.
+- **§V2 / §V16 tier-1** (`nn/lsq_test.go`): forward parity (@1e-12); every output lands on the
+  grid `{s·k}`; clip saturation; the bound/scale/init helpers; the **STE input gradient** checked
+  against the defined convention (1 in-clip, 0 outside — finite differences are invalid through the
+  round); the **LSQ step-size gradient** checked against the closed form (validating the
+  auto-composed gradient and the grad scale); the errors; and `ExampleLSQQuantize`.
+- **Gate**: `go test ./nn` green, ops/autograd/rl/nlp regression green, apicheck (§V17), gofmt,
+  vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R198, §T273.
+
+### T272 — GLU FFN variants (Shazeer 2020) (2026-07-08)
+- **`nn.GLU` completes the gated feed-forward family** (Shazeer 2020, "GLU Variants Improve
+  Transformer", arXiv:2002.05202 — the same paper as the existing `nn.SwiGLU`, §R30). Every modern
+  LLM's FFN is a GLU variant of the form `FFN(x) = (act(x·Wgate) ⊙ (x·Wup))·Wdown` (bias-free,
+  three projections); the variants differ only in the gate activation. Only SwiGLU (SiLU) was
+  present — this adds the rest via a single DRY `GLU` struct parameterized by the gate activation:
+  `NewGLU` (sigmoid, Dauphin et al. 2016), `NewBilinear` (identity — no activation), `NewReGLU`
+  (ReLU), and `NewGEGLU` (GELU).
+- All are fully differentiable (matmul / activation / elementwise-multiply composition), expose
+  `Params()` for the optimizer, and use Xavier-uniform initialization like `SwiGLU`. Bilinear uses
+  an `OpInvalid` sentinel to skip the gate activation.
+- **§V16**: this is a definitional activation substitution in the already-CONFIRMED §R30 FFN-GLU
+  form (Shazeer 2020 §2 enumerates all five variants; SwiGLU was verified as §R30), so no new
+  research was needed — the same precedent as SparseGPT N:M under §R194.
+- **§V2 / §V16 tier-1 / V-GRAD** (`nn/glu_test.go`): each constructor wires the correct gate
+  activation (sigmoid / identity / ReLU / GELU, checked against an op-level reference @1e-12);
+  Bilinear applies no activation; identical-weight variants produce different outputs (the
+  activation genuinely varies); a finite-difference gradcheck of GEGLU w.r.t. all three matrices;
+  the shape-mismatch error and `Params()`; and `ExampleGLU`.
+- **Gate**: `go test ./nn` green, ops/autograd/rl/nlp regression green, apicheck (§V17,
+  `ExampleGLU` for the type), gofmt, vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal
+  build all clean.
+- §T272 (under §R30).
+
+### T271 — SwAV swapped-prediction loss (Caron et al. 2020) (2026-07-08)
+- **`nn.SwAVLoss` completes SwAV** (Caron, Misra, Mairal, Goyal, Bojanowski & Joulin 2020,
+  "Unsupervised Learning of Visual Features by Contrasting Cluster Assignments", NeurIPS,
+  arXiv:2006.09882, §3 Eq. 1/2) on top of last change's Sinkhorn codes (T270). SwAV is a
+  clustering-based self-supervised objective — distinct from the instance-contrastive InfoNCE, the
+  redundancy-reduction Barlow Twins, and the variance-covariance VICReg already here: two
+  augmented views are projected onto K trainable prototypes, an online Sinkhorn code is computed
+  per view, and each view's features must predict the *other* view's code:
+  `L = ℓ(z_t, q_s) + ℓ(z_s, q_t)` with `ℓ(z, q) = −Σ_k q^(k) log softmax(z·Cᵀ/τ)^(k)`.
+- This "swapped prediction" (view t predicts s's code and vice versa) makes prototypes and features
+  consistent across augmentations without negatives. The softmax temperature default
+  `SwAVTemperature = 0.1`; the codes are fixed detached targets (no gradient flows through them,
+  matching the paper's stop-gradient). The loss is **differentiable** w.r.t. the two score matrices
+  (hence the features and prototypes), built from a numerically stable soft cross-entropy
+  (`logits/τ` → max-shifted log-softmax → `−q·log p` → batch mean) composed from
+  `OpMul/OpMax/OpSub/OpExp/OpSum/OpLog`. It reproduces the official implementation exactly
+  (`subloss -= mean(sum(q * log_softmax(x))))`).
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous
+  against the paper (arXiv:2006.09882 §3 Eq. 1/2) and the official implementation
+  (github.com/facebookresearch/swav `main_swav.py`): the swapped structure, the cross-entropy per
+  term (which is **Eq. 2**, correcting the earlier Eq. 6 guess), the `τ=0.1` default, and the
+  detached codes.
+- **§V2 / §V16 tier-1 / V-GRAD** (`nn/swav_test.go`): parity against an independent
+  swapped-prediction reference (@1e-9); the uniform closed form (uniform scores and codes ⇒
+  `L = 2·ln K`); the swapped structure (the self-aligned pairing gives a strictly lower loss than
+  the crossed one, proving each view pairs with the *other's* code); a finite-difference gradcheck
+  w.r.t. both score matrices; an end-to-end `Sinkhorn → SwAVLoss` pipeline test; the
+  shape/temperature errors; and `ExampleSwAVLoss`.
+- **Gate**: `go test ./nn` green, ops/autograd/rl/nlp regression green, apicheck (§V17), gofmt,
+  vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R197, §T271.
+
+### T270 — Sinkhorn-Knopp entropic optimal transport (Cuturi 2013 / SwAV) (2026-07-08)
+- **`nn.Sinkhorn` adds entropic-regularized optimal transport** (Cuturi 2013, "Sinkhorn Distances:
+  Lightspeed Computation of Optimal Transport", NeurIPS, arXiv:1306.0895), the enabling primitive
+  for the optimal-transport / doubly-stochastic self-supervised path (SwAV/DINO-style
+  equipartitioned clustering) that was missing next to the existing InfoNCE / Barlow Twins /
+  VICReg / ColBERT-MaxSim losses. Given a cost matrix `C [m,n]`, target marginals `r`, `c` of
+  equal total mass, and a regularization `ε>0`, it returns the plan
+  `P* = argmin_P ⟨P,C⟩ − ε·H(P)` subject to `P·1=r`, `Pᵀ·1=c`.
+- Solved by Sinkhorn-Knopp iteration on the Gibbs kernel `K = exp(−C/ε)`: from `u=v=1`, alternate
+  `u ← r ⊘ (K v)` and `v ← c ⊘ (Kᵀ u)` for `iters` rounds, giving `P = diag(u)·K·diag(v)`. The
+  plan is nonnegative and its row/column sums converge to `r`/`c`. A constant shift of `C` only
+  rescales `K` by a scalar (absorbed into `u,v`), leaving `P` unchanged — used here to subtract the
+  minimum cost for overflow-free kernel evaluation. With uniform marginals this is exactly SwAV's
+  equipartitioned online cluster assignment (Caron et al. 2020, arXiv:2006.09882, ~3 iterations).
+  Pure-f64 utility (SwAV applies it under stop-gradient to form the target code), not
+  differentiable.
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous
+  against Cuturi 2013 (Eq. 2 / Lemma 2 / §4.1 Algorithm 1), SwAV (Eq. 3–5, §3.1), and the POT
+  library docs (`ot.bregman.sinkhorn`: identical `K=exp(−M/reg)`, `u=a/(Kv)`, `v=b/(Kᵀu)`,
+  `P=diag(u)K diag(v)`). Sign note: SwAV writes a `max Tr(QᵀCᵀZ)+εH` similarity form, the mirror
+  of the min-cost `−εH` objective under `C = −similarity`.
+- **§V2 / §V16 tier-1** (`nn/sinkhorn_test.go`): row/column sums converge to the marginals
+  (@1e-6); the plan is nonnegative; the zero-cost closed form (uniform kernel ⇒ `P = r·cᵀ`
+  exactly); marginal error decreases with more iterations; uniform square marginals give a
+  doubly-stochastic plan (rows and columns `= 1/n`, the SwAV equipartition); the
+  rank/length/`ε≤0`/`iters<1`/mass-imbalance errors; and `ExampleSinkhorn`.
+- **Gate**: `go test ./nn` green, ops/autograd/rl/nlp regression green, apicheck (§V17), gofmt,
+  vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R196, §T270.
+
+### T269 — Medusa tree-decoding primitives (Cai et al. 2024) (2026-07-08)
+- **`nlp.MedusaTreeMask` and `nlp.TypicalAcceptance` add the two core mechanisms of Medusa**
+  (Cai, Li, Geng, Peng, Chen, Lee & Dao 2024, "Medusa: Simple LLM Inference Acceleration
+  Framework with Multiple Decoding Heads", ICML 2024, arXiv:2401.10774). Medusa adds K extra
+  decoding heads that predict the tokens at positions t+1…t+K in parallel; their top candidates
+  are assembled into a tree of continuations and verified in a single forward pass. This is an
+  inference-acceleration path distinct from the exact-rejection `SpeculativeSample` (which needs a
+  separate draft model).
+- **Tree attention** (`MedusaTreeMask(parent []int) → (mask, depth)`, §2.1.2/§2.3.2/Fig. 2): given
+  a candidate tree where node `i` has parent `parent[i]` (root −1, parents before children), it
+  returns the additive pre-softmax mask where each token attends only to its ancestors along the
+  path back to the root — never a sibling branch — so one forward pass scores every root-to-node
+  path independently; `depth[i]` is the node's tree depth, used as its position id. A linear chain
+  reproduces the ordinary causal mask.
+- **Typical acceptance** (`TypicalAcceptance(probs, token, ε, δ) → bool`, §2.3.1, after Hewitt et
+  al. 2022 typical sampling): accept a candidate iff `p_orig(token) > min(ε, δ·exp(−H(p_orig)))`
+  where `H` is the Shannon entropy (nats) of the original model's distribution. The hard floor `ε`
+  sets a quality bar; the entropy term relaxes it where the model is uncertain (high H ⇒ lower
+  threshold ⇒ more accepted) and tightens it where confident. Not distribution-exact (unlike
+  rejection sampling) but keeps only "typical" tokens; in a decode loop the first token is always
+  accepted and the longest passing prefix of a path is taken.
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous
+  against the paper (arXiv:2401.10774 §2.1.2/§2.3.1/§2.3.2, Fig. 2) and the reference
+  implementation (github.com/FasterDecoding/Medusa `medusa/model/utils.py`). **Paper-vs-code
+  note**: the numeric defaults `MedusaEpsilon=0.3` (posterior_threshold) and `MedusaDelta=0.09`
+  (posterior_alpha) are from the reference code, not the paper text (which only sweeps ε∈[0.01,0.25]
+  and notes the Hewitt α=√ε relation) — documented on the constants.
+- **§V2 / §V16 tier-1** (`nlp/medusa_test.go`): the chain-is-causal reduction; branching-tree
+  ancestor-only attention (siblings blocked) with correct depths; the tree-mask panics; the exact
+  acceptance formula; peaked-distribution accept/reject; the defining entropy-adaptive behavior
+  (the same p=0.05 is accepted under high entropy but rejected under low entropy); the token-range
+  panic; and runnable Examples for both.
+- **Gate**: `go test ./nlp` green, nn/ops/autograd/rl regression green, apicheck (§V17), gofmt,
+  vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R195, §T269.
+
+### T268 — SparseGPT N:M structured pruning (Frantar & Alistarh 2023) (2026-07-08)
+- **`nn.SparseGPTPruneNM` adds semi-structured N:M pruning** to SparseGPT (Frantar & Alistarh
+  2023, arXiv:2301.00774 §3.3) — within every group of `m` consecutive inputs feeding an output,
+  the `n` lowest-saliency weights are zeroed (e.g. 2:4 keeps 2 of every 4), with the same OBS
+  inverse-Hessian error compensation as `SparseGPTPrune`. Unlike unstructured sparsity, the N:M
+  pattern is what NVIDIA Ampere+ sparse tensor cores actually accelerate, so this is the
+  deployment-relevant mode for hardware speedup.
+- Following the paper, the adaptive-mask block size is set to `m` for N:M (so `WithSparseGPTBlock`
+  is ignored here; `WithSparseGPTDamp` still applies), and exactly `n` weights are pruned per
+  `m`-group per output row. `in` must be divisible by `m` and `0 ≤ n ≤ m`. Returns the
+  pruned+compensated weights and a 0/1 keep-mask.
+- **Refactor**: `SparseGPTPrune` and `SparseGPTPruneNM` now share a single `sparseGPTCore`
+  (parameterized by a per-block prune count `kOf(blk)` and the block size) — unstructured passes
+  `kOf = ⌊sparsity·blk⌋`, N:M passes `kOf = n` with block `m`. The existing T267 SparseGPT tests
+  remain green (regression check).
+- **§V16**: tier-2 was already CONFIRMED for N:M under R194 — the T267 research explicitly verified
+  the structured N:M path ("2:4/4:8, Bs=m, n smallest per m-block per row, code `prunen/prunem`
+  branch", arXiv:2301.00774 §3.3 + `IST-DASLab/sparsegpt`), so no new research was needed for this
+  parameterization of the same algorithm.
+- **§V2 / §V16 tier-1** (`nn/sparsegpt_test.go`): 2:4 keeps the 2 highest-saliency weights per
+  block of 4 and (with a diagonal Hessian) leaves the kept weights exactly unchanged; the OBS
+  benefit under the N:M constraint — 2:4 SparseGPT reconstructs `‖(W−Ŵ)X‖_F` with strictly lower
+  error than magnitude-based 2:4 pruning; exact `n/m` per-row sparsity; and the `n>m` /
+  `in`-not-divisible-by-`m` / rank errors.
+- **Gate**: `go test ./nn` green, ops/autograd/rl/nlp regression green, apicheck (§V17), gofmt,
+  vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §T268 (under §R194).
+
+### T267 — SparseGPT one-shot pruning (Frantar & Alistarh 2023) (2026-07-08)
+- **`nn.SparseGPTPrune` adds accuracy-tier weight pruning** (Frantar & Alistarh 2023, "SparseGPT:
+  Massive Language Models Can Be Accurately Pruned in One-Shot", ICML 2023, arXiv:2301.00774) —
+  the counterpart of last change's Wanda (T266) and the *pruning* analog of GPTQ. Where Wanda
+  simply zeros the lowest `|W|·‖X‖` weights with no weight update, SparseGPT solves the layer
+  reconstruction `‖WX − ŴX‖²` with the same Optimal-Brain-Surgeon inverse-Hessian machinery as
+  `GPTQuantize`: each pruned weight injects an error that is compensated into the surviving
+  weights, giving far lower reconstruction error at the same sparsity.
+- The reconstruction Hessian `H = 2·X·Xᵀ` is diagonally dampened and inverted via Cholesky (as
+  GPTQ; the paper writes `XXᵀ`, but the overall scale cancels in both the saliency ratio and the
+  compensation). The pruning saliency is `ε = W[r,c]²/[Hinv]_cc²` (Algorithm 1 — the squared
+  inverse-Hessian Cholesky diagonal), and the `⌊sparsity·in⌋` smallest-ε weights are pruned per
+  output row, selected in blocks (default `Bs=128`, `WithSparseGPTBlock`) using the running
+  compensation. On pruning, `W[r,c]→0` and the error `W[r,c]/[Hinv]_cc` propagates to later
+  columns via `W[:,j] -= e·Hinv[c,j]`; kept weights are unchanged. Configurable Hessian dampening
+  via `WithSparseGPTDamp` (default 0.01). Returns the pruned+compensated weights and a 0/1
+  keep-mask. Pure-f64 post-training utility (like GPTQ/Wanda), not differentiable.
+- **Paper-vs-code note**: Algorithm 1 masks per output row (implemented here — it yields exact
+  per-row sparsity and matches the released code's N:M path); the official code's *unstructured*
+  path instead thresholds each block globally. Propagating each pruned weight's error immediately
+  to all later columns is numerically identical to the paper's block-then-global update.
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous
+  against the primary paper (arXiv:2301.00774 Algorithm 1, Eq. 3/4) and the official
+  implementation (github.com/IST-DASLab/sparsegpt `sparsegpt.py`): the `2XXᵀ` Hessian + damping,
+  the squared-Cholesky-diagonal saliency `W²/diag(Hinv)²`, the OBS error-compensation update with
+  a pruned target of 0, and block-adaptive masking.
+- **§V2 / §V16 tier-1** (`nn/sparsegpt_test.go`): the defining benefit — SparseGPT's OBS
+  compensation reconstructs `‖(W−Ŵ)X‖_F` with strictly lower error than magnitude pruning at the
+  same sparsity; sparsity 0 is exactly the identity (no prune, no update); sparsity 1 zeros
+  everything; exact `⌊sparsity·in⌋` per-row sparsity; the diagonal-Hessian closed form (orthogonal
+  inputs ⇒ no cross-column compensation ⇒ the kept weight is left exactly unchanged and the
+  smaller weight is pruned); the shape/ratio errors; and `ExampleSparseGPTPrune`.
+- **Gate**: `go test ./nn` green, ops/autograd/rl/nlp regression green, apicheck (§V17,
+  `SparseGPTOption` exempted like `GPTQOption`), gofmt, vet, §V7 `CGO_ENABLED=0` build, and the
+  default cgo/metal build all clean.
+- §R194, §T267.
+
+### T266 — Wanda pruning (Sun et al. 2023) (2026-07-08)
+- **`nn.WandaScore` / `nn.WandaPrune` / `nn.WandaPruneNM` add weight pruning** (Sun, Liu,
+  Bhojanapalli, Vishwanathan & Kolter 2023/2024, "A Simple and Effective Pruning Approach for
+  Large Language Models", ICLR 2024, arXiv:2306.11695) — the first *sparsity*-based compression
+  in the library, distinct from the existing quantizers (GPTQ/AWQ/NF4/SmoothQuant/LLM.int8, which
+  change bit-width) and from model merging (TIES/DARE). Wanda's saliency for a weight in a linear
+  layer `Y = X·W` is `S_ij = |W_ij| · ‖X_j‖₂` (Eq. 1), where `‖X_j‖₂` is the L2 norm of the j-th
+  input feature's activations over all calibration tokens — one scalar per input channel, shared
+  by every output that reads it. Combining weight magnitude with the input-activation norm keeps a
+  *small* weight on a high-variance feature over a *large* weight on a near-dead one, which is the
+  win over pure magnitude pruning.
+- The **comparison group is per-output** (Eq. 2): weights are ranked and removed within each
+  output neuron's incoming connections — per column of the codebase's `[C_in, C_out]` `X·W`
+  layout — not against a single global threshold. **No weight update** is performed: the surviving
+  weights are left unchanged, which is the key simplification over SparseGPT's inverse-Hessian
+  update. `WandaPrune` takes a target unstructured sparsity ratio; `WandaPruneNM` does structured
+  N:M sparsity (e.g. 2:4 keeps the 2 highest-saliency weights in every block of 4 consecutive
+  inputs — the pattern accelerated by NVIDIA sparse tensor cores). Both return the pruned weights
+  and a 0/1 keep-mask. Pure-f64 post-training utilities (like the quantizers), not differentiable.
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous
+  against the primary paper (arXiv:2306.11695 §3 Eq. 1/2), the official implementation
+  (github.com/locuslab/wanda `lib/prune.py`), and torchao's `WandaSparsifier`: the `|W|·‖X‖₂`
+  metric, the per-output comparison group, the no-weight-update property, and the unstructured +
+  N:M sparsity modes.
+- **§V2 / §V16 tier-1** (`nn/wanda_test.go`): score parity against an independent `|W|·‖X‖`
+  reference (@1e-9); the defining property that a small weight on a loud feature is kept over a
+  large weight on a quiet one (the opposite of magnitude pruning); the exact per-column sparsity
+  level `⌊sparsity·C_in⌋`; the per-output comparison group (two wildly-different-scale columns
+  each keep their own `k`, which a global threshold would not); 2:4 structured pruning keeping the
+  2 largest per block; the sparsity-0 (no-op) and sparsity-1 (all-zero) edges; the shape/ratio/N:M
+  errors; and `ExampleWandaPrune`.
+- **Gate**: `go test ./nn` green, ops/autograd/rl/nlp regression green, apicheck (§V17), gofmt,
+  vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R193, §T266.
+
+### T265 — SimCTG contrastive training loss (Su et al. 2022) (2026-07-08)
+- **`nn.SimCTGContrastiveLoss` adds the training-time half of SimCTG** (Su, Lan, Wang,
+  Yogatama, Kong & Collier 2022, "A Contrastive Framework for Neural Text Generation",
+  NeurIPS, arXiv:2202.06417, Eq. 2) — the counterpart of the contrastive-search decoder
+  (`nlp.ContrastiveScore`, T264). Plain maximum-likelihood training leaves a transformer's
+  token representations *anisotropic* (packed into a narrow cone with pairwise cosine ≈ 1),
+  which is precisely what makes greedy decoding collapse into repetition. This loss decorrelates
+  (isotropizes) the representations so that the decode-time degeneration penalty becomes
+  discriminative:
+  `L_CL = 1/(n(n−1)) · Σ_i Σ_{j≠i} max(0, ρ − s(h_i,h_i) + s(h_i,h_j))`, with `s` the cosine
+  similarity of last-layer token representations and ρ the margin.
+- Because `s(h_i,h_i)=1`, each off-diagonal term is `max(0, ρ−1+s(h_i,h_j))`: a hinge that is
+  zero once two *distinct* tokens' cosine similarity drops below `1−ρ` and otherwise penalizes
+  them. The default margin `SimCTGMargin = 0.5` (ρ=0 degenerates to pure MLE); the full SimCTG
+  objective is `L = L_MLE + L_CL`, equally weighted. The loss is a **differentiable** scalar w.r.t.
+  the representations, composed from L2-normalization, matmul, a diagonal/off-diagonal mask, ReLU,
+  and a sum — and it reads the self-similarity `gold = diag(S)` from the cosine matrix exactly as
+  the reference implementation does, so the L2-normalization ε cancels consistently.
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous
+  against the primary paper (arXiv:2202.06417 §3.1 Eq. 2/3/4) and the official implementation
+  (github.com/yxuansu/SimCTG `lossfunction.py`): the formula, the ρ=0.5 default (§6.2/App. E),
+  the `s(h_i,h_i)=1` simplification, and the equally-weighted `L_MLE + L_CL` objective.
+- **§V2 / §V16 tier-1 / V-GRAD** (`nn/simctg_test.go`): parity against an independent
+  cosine-hinge reference (@1e-9); orthogonal representations give 0 (which also proves the
+  self-pairs are excluded — otherwise the loss would be ρ/(n−1)); parallel (cosine-1) pairs give
+  exactly the margin ρ; ρ=0 gives 0 for any representations; the loss is monotone increasing in
+  ρ; a finite-difference gradcheck over clustered active-hinge representations (central diff,
+  1e-4); the shape/`seq<2` errors; and `ExampleSimCTGContrastiveLoss`.
+- **Gate**: `go test ./nn` green, ops/autograd/rl/nlp regression green, apicheck (§V17), gofmt,
+  vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R192, §T265.
+
+### T264 — Contrastive Search decoding (Su et al. 2022) (2026-07-08)
+- **`nlp.ContrastiveScore` adds contrastive-search decoding** (Su, Lan, Wang, Yogatama, Kong &
+  Collier 2022, "A Contrastive Framework for Neural Text Generation" / SimCTG, NeurIPS,
+  arXiv:2202.06417). Ordinary likelihood decoding degenerates into repetition because the model
+  keeps re-selecting tokens whose representations nearly match the recent context. Contrastive
+  search counters this by ranking the top-k candidates with a balance of model confidence and a
+  degeneration penalty: `score(v) = (1−α)·prob(v) − α·max_j cos(h_v, h_{x_j})`. This is a
+  fundamentally different decoding mechanism from the distribution-combining decoders already
+  present (`ContrastiveLogits`, `DoLaLogits`, `GuidedLogits`) — it uses *representation
+  similarity*, not a combination of two distributions.
+- `α ∈ [0,1]` balances the two terms: `α=0` is greedy decoding by probability, larger α more
+  strongly discourages repetition (the paper's defaults are α=0.6, top-k=8). `MaxContextCosine`
+  computes the per-candidate maximum cosine similarity to the context representations (the
+  degeneration-penalty term), and a `cosine` helper is exposed. Pure-function decoding utilities
+  — the caller supplies the candidate probabilities and last-layer representations.
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous
+  against the primary paper (arXiv:2202.06417 Eq. 3/5, §3.2/§4) and the HuggingFace
+  introducing-csearch blog.
+- **§V2 / §V16 tier-1** (`nlp/contrastive_search_test.go`): the score formula; `α=0` reduces to
+  greedy (argmax by probability); `α=1` picks the least-similar candidate; the defining
+  confidence-vs-degeneration trade-off (a high-probability repetitive candidate loses to a novel
+  one at α=0.6); the `MaxContextCosine` max-cosine penalty (and zero with no context); the
+  length-mismatch panic; and `ExampleContrastiveScore`.
+- **Gate**: `go test ./nlp` green, nn/ops/autograd/rl regression green, apicheck (§V17), gofmt,
+  vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R191, §T264.
+
+### T263 — LLM.int8() 8-bit matmul with outlier decomposition (Dettmers et al. 2022) (2026-07-08)
+- **`nn.LLMInt8MatMul` adds the LLM.int8() 8-bit matmul** (Dettmers, Lewis, Belkada &
+  Zettlemoyer 2022, "LLM.int8(): 8-bit Matrix Multiplication for Transformers at Scale",
+  NeurIPS, arXiv:2208.07339; the bitsandbytes method). Large transformers develop a few
+  systematic outlier feature dimensions whose huge magnitudes would wreck a naive int8
+  quantization; LLM.int8() handles them with a mixed-precision decomposition of the contraction
+  dimension — the outlier dims are computed in high precision and the rest with vector-wise
+  int8. This is distinct from the weight-only GPTQ/AWQ and the smoothing of SmoothQuant already
+  present.
+- **Vector-wise int8**: each row of `X` and each column of `W` gets its own absmax int8 scale
+  (`round(127··/absmax)`), the products accumulate in int32, and the result is dequantized by the
+  outer product of scales `s_x[i]·s_w[j]/127²`. **Outlier decomposition**: a feature dimension `h`
+  is an outlier if any `|X[:,h]| ≥ threshold` (the paper's α=6.0), those dims go through the
+  high-precision path, and `Y = X[:,O]·W[O,:] + dequant(X̂[:,R]·Ŵ[R,:])`. The split itself is exact.
+- `LLMInt8MatMul(x, w, threshold)` returns the approximate `[tokens, C_out]` result and the outlier
+  dimension indices. A pure-f64 inference utility (like AWQuantize/GPTQ/SmoothQuant), not
+  differentiable.
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous
+  against the primary paper (arXiv:2208.07339 §3.1 Eq. 7, §3.2 Eq. 8) and the HuggingFace
+  bitsandbytes-integration blog.
+- **§V2 / §V16 tier-1** (`nn/llmint8_test.go`): outlier detection (`|X[:,h]| ≥ threshold` flagged);
+  the exact decomposition (threshold 0 runs everything in high precision and equals `X·W` to
+  `1e-9`); the **defining benefit** (with a ×60 outlier column, the mixed-precision error is far
+  below `0.1×` the naive all-int8 error); the no-outlier case (pure vector-wise int8 within 5%
+  relative error); the shape errors; and `ExampleLLMInt8MatMul`.
+- **Gate**: `go test ./nn` green, ops/autograd/rl/nlp regression green, apicheck (§V17), gofmt,
+  vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R190, §T263.
+
+### T262 — VICReg self-supervised loss (Bardes et al. 2021/2022) (2026-07-08)
+- **`nn.VICRegLoss` adds the VICReg self-supervised objective** (Bardes, Ponce & LeCun
+  2021/2022 ICLR, "VICReg: Variance-Invariance-Covariance Regularization for Self-Supervised
+  Learning", arXiv:2105.04906). Like Barlow Twins it needs no negatives, but it prevents
+  representation collapse with three *explicit* regularizers on two views `za, zb ∈ ℝ^{N×D}`:
+  an invariance MSE `(1/N)·Σ‖z_i−z'_i‖²` (pull the views together), a variance **hinge**
+  `(1/D)·Σ_j max(0, γ−√(Var_j+ε))` (force every dimension's std to at least γ — the anti-collapse
+  mechanism no other method has), and a covariance term `(1/D)·Σ_{i≠j} Cov_ij²` (decorrelate the
+  dimensions). The total is `ℓ = λ·s + μ·[v(za)+v(zb)] + ν·[c(za)+c(zb)]` (defaults λ=μ=25, ν=1;
+  γ=1, ε=1e-4, unbiased N−1 variance). This is a distinct mechanism from the cross-correlation of
+  the Barlow Twins loss already present.
+- Composed from existing ops (subtract/mul/sum for invariance; center/sqrt/ReLU for the variance
+  hinge; transpose/matmul with an off-diagonal mask for the covariance) — differentiable w.r.t.
+  both views, with the coefficients folded into a pre-reduction scale to keep clean scalar terms.
+  No new kernel or VJP.
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous
+  against the primary paper (arXiv:2105.04906 §4.1 Eq. 1-6) and the facebookresearch/vicreg
+  `main_vicreg.py`. The paper's `(1/N)` invariance is implemented (the reference's `F.mse_loss`
+  normalizes by `N·D` — a factor-D difference — noted).
+- **§V2 / §V16 tier-1** (`nn/vicreg_test.go`): parity against an independent three-term reference
+  (`1e-9`); the **anti-collapse property** (a collapsed representation with identical rows drives
+  the variance hinge to give the ≈49.5 penalty); the spread/decorrelated case (orthogonal
+  high-variance columns give loss ≈ 0); a finite-difference gradcheck over both views; the
+  `N<2`/shape errors; and `ExampleVICRegLoss`.
+- **Gate**: `go test ./nn` green, ops/autograd/rl/nlp regression green, apicheck (§V17), gofmt,
+  vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R189, §T262.
+
+### T261 — RWKV-4 WKV operator (Peng et al. 2023) (2026-07-08)
+- **`nn.WKV` adds the RWKV-4 WKV time-mixing operator** (Peng et al. 2023, "RWKV: Reinventing
+  RNNs for the Transformer Era", EMNLP Findings, arXiv:2305.13048) — the linear-attention that
+  gives RWKV Transformer-level quality with RNN-style O(1)-per-step inference. It extends the
+  linear-attention/RNN family already present (Mamba, RetNet, GLA, DeltaNet, Gated DeltaNet) with
+  a genuinely different mechanism: **D independent scalar weighted-averages** (channel-wise), not
+  a matrix-valued state. Each output is a recency-decayed weighted sum of past values plus the
+  current token with a special bonus weight:
+  `wkv_t = (Σ_{i<t} e^{−(t−1−i)w+k_i}·v_i + e^{u+k_t}·v_t) / (Σ_{i<t} e^{−(t−1−i)w+k_i} + e^{u+k_t})`,
+  with per-channel decay `w>0` and bonus `u`. At `t=1` the output is simply `v_1`.
+- `WKV(k, v, w, u)` takes `k,v` as `[seq, D]` and `w,u` as `[D]`. It is implemented with the
+  numerically-stable running-max recurrence (running numerator/denominator/max per channel), a
+  pure-f64 forward utility like `RetentionRecurrent`. The full RWKV time-mixing (the receptance
+  gate `σ(r)⊙wkv` and output projection) is left to the caller.
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous
+  against the primary paper (arXiv:2305.13048 §3.1.2 Eq. 16), the ACL Anthology PDF, and the
+  johanwind RWKV reference.
+- **§V16 tier-1** (`nn/rwkv_test.go`): parity of the stable kernel against the direct formula
+  (`1e-9`); the `t=1 → v_1` property; the running-mean reduction (`w=k=u=0`); and that a large
+  bonus `u` collapses the output onto the current token — which surfaced the decay-vs-bonus
+  subtlety (a large decay `w` alone does *not* isolate the current token, because the
+  immediately-previous token `i=t−1` is undecayed via the `−(t−1−i)w` offset). Plus the shape
+  errors and `ExampleWKV`.
+- **Gate**: `go test ./nn` green, ops/autograd/rl/nlp regression green, apicheck (§V17), gofmt,
+  vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R188, §T261.
+
+### T260 — DDIM implicit-model sampler (Song et al. 2020) (2026-07-08)
+- **`nn.DDIMStep` adds Denoising Diffusion Implicit Models sampling** (Song, Meng & Ermon
+  2020/2021 ICLR, "Denoising Diffusion Implicit Models", arXiv:2010.02502). DDIM reuses a
+  DDPM-trained ε-model (T259) but samples along a non-Markovian process that can be made
+  deterministic and can skip timesteps, so high-quality samples need only tens of steps instead
+  of the full T — completing the diffusion toolkit (train with DDPM, sample fast with DDIM).
+- The reverse step (Eq. 12) from step `t` to an earlier step is
+  `x_prev = √ᾱ_prev·x̂0 + √(1−ᾱ_prev−σ²)·ε_θ + σ·z`, where `x̂0` is the predicted clean sample
+  (reusing `DDPMPredictX0`) and `σ = η·√((1−ᾱ_prev)/(1−ᾱ_t))·√(1−ᾱ_t/ᾱ_prev)` (Eq. 16).
+  `η ∈ [0,1]` interpolates: `η=0` gives the deterministic DDIM (σ=0, an implicit probability-flow
+  ODE — no noise needed), `η=1` recovers the stochastic DDPM ancestral sampler. `ᾱ_t`/`ᾱ_prev`
+  may be from an arbitrary subsequence of timesteps, which is what enables accelerated sampling.
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous
+  against the primary paper (arXiv:2010.02502 Eq. 12/16, §4.1-4.2) and the HuggingFace Diffusion
+  Course.
+- **§V2 / §V16 tier-1** (`nn/ddim_test.go`): the deterministic formula (`1e-9`); the defining
+  **forward-consistency** property (with the true noise, the `η=0` step maps the forward sample
+  at step `t` to the forward sample at the earlier step exactly); the full `η=1` three-term
+  update including `σ·z`; the final step (`ᾱ_prev=1` yields the clean `x̂0`) and that `η=0`
+  ignores the noise `z`; the shape/range errors; and `ExampleDDIMStep`.
+- **Gate**: `go test ./nn` green, ops/autograd/rl/nlp regression green, apicheck (§V17), gofmt,
+  vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R187, §T260.
+
+### T259 — DDPM Denoising Diffusion Probabilistic Models (Ho et al. 2020) (2026-07-08)
+- **`nn.DDPMSchedule` (+ `DDPMForward`, `DDPMLoss`, `DDPMPredictX0`) adds the DDPM diffusion
+  objective** (Ho, Jain & Abbeel 2020, "Denoising Diffusion Probabilistic Models", NeurIPS,
+  arXiv:2006.11239) — the canonical diffusion training objective, the counterpart to the Flow
+  Matching added last iteration (DDPM = SDE / noise-schedule / ε-prediction; Flow = ODE /
+  linear path / velocity).
+- `NewDDPMSchedule(T, βstart, βend)` builds the linear noise schedule (`β` from 1e-4 to 0.02,
+  `α_t = 1−β_t`, `ᾱ_t = Π α_s`). `DDPMForward(x0, eps, ᾱ)` applies the closed-form forward
+  process `x_t = √ᾱ·x0 + √(1−ᾱ)·eps` (Eq. 4, variance-preserving). `DDPMLoss(epsPred, eps)` is
+  the simplified ε-prediction objective `mean‖ε − ε_θ‖²` (Eq. 14, differentiable w.r.t. the
+  model output). `DDPMPredictX0(xt, eps, ᾱ)` inverts the forward process to `x0 = (x_t −
+  √(1−ᾱ)·eps)/√ᾱ` (the DDIM x0-prediction; recovers `x0` exactly given the true noise).
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous
+  against the primary paper (arXiv:2006.11239 Eq. 4/11/14) and the HF diffusers `DDPMScheduler`
+  and lucidrains references (linear β, `alphas_cumprod`, `pred_noise` / `F.mse_loss`).
+- **§V2 / §V16 tier-1** (`nn/ddpm_test.go`): the linear schedule and monotone `cumprod` ᾱ (the
+  default schedule runs ᾱ ≈1→≈0); the closed-form forward (`1e-9`, endpoints, variance
+  preservation); the exact `DDPMPredictX0`-recovers-`x0` inverse; the ε-prediction loss and its
+  zero at a perfect prediction; a gradcheck over the model output; the shape/range errors; and
+  `ExampleDDPMSchedule`/`ExampleDDPMForward`.
+- **Gate**: `go test ./nn` green, ops/autograd/rl/nlp regression green, apicheck (§V17), gofmt,
+  vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R186, §T259.
+
+### T258 — Flow Matching / Rectified Flow generative objective (Lipman/Liu 2022) (2026-07-08)
+- **`nn.FlowMatchingLoss` (+ `FlowInterpolate`, `FlowEulerStep`) adds the Flow Matching /
+  Rectified Flow generative objective** (Lipman, Chen, Ben-Hamu, Nickel & Le 2022, "Flow
+  Matching for Generative Modeling", arXiv:2210.02747, the OT conditional path; Liu, Gong & Liu
+  2022, "Rectified Flow", arXiv:2209.03003; the objective used by Stable Diffusion 3). It trains
+  a generative model to transport noise `x0 ~ N(0,I)` to data `x1` along the straight-line
+  optimal-transport path by regressing a velocity field — no diffusion SDE and no noise
+  schedule, just a mean-squared error. This diversifies the library into generative modeling
+  (multimodal / diffusion-alternative).
+- `FlowInterpolate(x0, x1, t)` returns the path point `x_t = (1−t)·x0 + t·x1` (where the model
+  is evaluated); `FlowMatchingLoss(vPred, x0, x1)` is the CFM regression
+  `mean ‖vPred − (x1 − x0)‖²` (the target velocity is the constant `x1 − x0`, independent of
+  `t` — the key simplification); `FlowEulerStep(x, v, dt)` integrates one ODE step `x + dt·v` for
+  sampling. The loss is differentiable w.r.t. the model's predicted velocity. No new kernel or
+  VJP.
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous
+  against the primary papers (arXiv:2210.02747 Eq. 9/23, arXiv:2209.03003 Eq. 1-2), SD3, and the
+  TorchCFM / facebookresearch/flow_matching references (`compute_ut → x1−x0`,
+  `mean((vt−ut)²)`, Euler `x ← x + dt·v`).
+- **§V2 / §V16 tier-1** (`nn/flowmatch_test.go`): the interpolation endpoints and midpoint
+  (`1e-9`); the loss formula and its zero at a perfect velocity prediction; the defining
+  straight-line property (`FlowEulerStep(x0, x1−x0, dt=1) = x1` exactly); a finite-difference
+  gradcheck over the predicted velocity; the shape errors; and `ExampleFlowMatchingLoss`.
+- **Gate**: `go test ./nn` green, ops/autograd/rl/nlp regression green, apicheck (§V17), gofmt,
+  vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R185, §T258.
+
+### T257 — Barlow Twins self-supervised loss (Zbontar et al. 2021) (2026-07-07)
+- **`nn.BarlowTwinsLoss` adds the Barlow Twins self-supervised objective** (Zbontar, Jing,
+  Misra, LeCun & Deny 2021, "Barlow Twins: Self-Supervised Learning via Redundancy Reduction",
+  ICML, arXiv:2103.03230). Given two augmented views of a batch encoded into embeddings
+  `za, zb ∈ ℝ^{N×D}`, it makes the views agree **without negative pairs** by pushing their
+  cross-correlation matrix toward the identity: `L = Σ_i (1−C_ii)² + λ·Σ_{i≠j} C_ij²`. The
+  invariance term makes each feature agree across the two views; the redundancy-reduction term
+  decorrelates distinct features — the mechanism that prevents collapse without negatives. This
+  is a fundamentally different SSL mechanism from the contrastive `InfoNCE` already present (no
+  negatives, no temperature, no momentum encoder).
+- Each feature is standardized to mean-0/unit-std over the batch (BatchNorm-style, ε=1e-5), the
+  cross-correlation is `C = ẐᴬᵀẐᴮ / N`, and the loss is a weighted squared error against the
+  identity (weight 1 on the diagonal, `λ` off it). `λ` defaults to 0.005. Composed from the
+  batch-standardize, `OpTranspose`/`OpMatMul`, and elementwise ops — differentiable w.r.t. both
+  views. No new kernel or VJP.
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous
+  against the primary paper (arXiv:2103.03230 Eq. 1-2) and the facebookresearch/barlowtwins
+  `main.py` (`on_diag + λ·off_diag`, `BatchNorm1d(affine=False)`, `c = bn(z1).T @ bn(z2) / N`).
+- **§V2 / §V16 tier-1** (`nn/barlow_test.go`): parity against an independent standardize +
+  cross-correlation reference (`1e-9`); the identity-correlation minimum (two identical views
+  with orthogonal features give `C = I` and loss ≈ 0); the redundancy penalty (perfectly
+  correlated features give loss ≈ `2λ`, scaling linearly with `λ`); a finite-difference gradcheck
+  over both views; the shape errors; and `ExampleBarlowTwinsLoss`.
+- **Gate**: `go test ./nn` green, ops/autograd/rl/nlp regression green, apicheck (§V17), gofmt,
+  vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R184, §T257.
+
+### T256 — Group Normalization (Wu & He 2018) (2026-07-07)
+- **`nn.GroupNorm` adds Group Normalization** (Wu & He 2018, "Group Normalization", ECCV,
+  arXiv:1803.08494). It divides the `C` feature channels into `G` groups and normalizes each
+  group **per sample** — the mean and biased variance are computed over the `C/G` channels of a
+  group, independent of the batch (unlike BatchNorm) — then applies a learnable per-channel
+  affine `y = γ⊙x̂ + β`. Because the statistics never cross the batch, it is stable at any batch
+  size, completing the normalization family (LayerNorm, RMSNorm, DeepNorm, QKNorm). `G=1`
+  reduces to LayerNorm and `G=C` to InstanceNorm; `ε` defaults to 1e-5.
+- `NewGroupNorm(dtype, groups, c)` builds the layer (γ=1, β=0); `Forward(ctx, x)` takes
+  `[batch, C]`. It is composed from `OpReshape` (`[N,C]→[N,G,C/G]`), two `OpMean` reductions
+  (the biased mean and variance over the group axis), and elementwise ops plus a per-channel
+  affine — differentiable w.r.t. `x`, `γ` and `β`. No new kernel or VJP.
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous
+  against the primary paper (arXiv:1803.08494 Eq. 1-2/6, §3.1-3.2) and the PyTorch `GroupNorm`
+  docs, including the biased (population) variance and the per-channel (not per-group) affine.
+- **§V2 / §V16 tier-1** (`nn/groupnorm_test.go`): parity against an independent per-group
+  biased-variance reference (`1e-9`); the **`G=1` reduction checked against the existing
+  `nn.LayerNorm`** (`1e-9`); the standardization property (with the identity affine each group
+  has mean ≈ 0 and variance ≈ 1); a finite-difference gradcheck over `x`, `γ` and `β`; the
+  `groups ∤ C` panic and the rank error; and `ExampleGroupNorm`.
+- **Gate**: `go test ./nn` green, ops/autograd/rl/nlp regression green, apicheck (§V17), gofmt,
+  vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R183, §T256.
+
+### T255 — No-repeat n-gram blocking (Paulus et al. 2017 / HuggingFace) (2026-07-07)
+- **`nlp.NoRepeatNGramBlock` adds the `no_repeat_ngram_size` decoding constraint** (HuggingFace
+  `NoRepeatNGramLogitsProcessor`/fairseq; tri-gram blocking introduced by Paulus, Xiong & Socher
+  2017, "A Deep Reinforced Model for Abstractive Summarization", arXiv:1705.04304 §2.5). It
+  hard-blocks the model from ever repeating an n-gram: a next-token candidate is forbidden if
+  appending it would recreate an n-gram that already occurred. The current context is the last
+  `n−1` generated tokens; for every earlier position whose `(n−1)`-gram equals that context, the
+  token that followed it has its logit set to `−∞`. Unlike the soft repetition/frequency
+  penalties (`ApplyPenalties`), this is a hard constraint; `n=3` is the classic tri-gram
+  blocking.
+- A pure-function utility that mutates the logits in place (before temperature/top-k), is a
+  no-op when `n ≤ 0` or the sequence is shorter than `n`, and ignores out-of-range history
+  tokens.
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous
+  against the HuggingFace source (`NoRepeatNGramLogitsProcessor`/`_calc_banned_ngram_tokens`),
+  fairseq, and Paulus et al. 2017 §2.5. (The implementation's `L < n` no-op guard is functionally
+  equivalent to HF's `cur_len+1 < ngram_size`, since at `L = n−1` the history contains no complete
+  n-grams to match.)
+- **§V16 tier-1** (`nlp/ngram_test.go`): the tri-gram case (`[1,2,3,1,2]` with `n=3` blocks token
+  3 and leaves the rest untouched); the bigram case (`[0,1,0,2,0]` with `n=2` blocks both tokens
+  that followed the last token); the no-op cases (`L < n`, `n = 0`, empty); out-of-range safety;
+  and `ExampleNoRepeatNGramBlock`.
+- **Gate**: `go test ./nlp` green, nn/ops/autograd/rl regression green, apicheck (§V17), gofmt,
+  vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R182, §T255.
+
+### T254 — Classifier-Free Guidance decoding (Sanchez et al. 2023) (2026-07-07)
+- **`nlp.GuidedLogits` adds Classifier-Free Guidance (CFG) for autoregressive decoding**
+  (Sanchez, Fan, Spangher, Levi, Ammanabrolu & Biderman 2023, "Stay on topic with
+  Classifier-Free Guidance", arXiv:2306.17806). At each step the model is run twice — with the
+  prompt (conditional logits) and without it or with a negative prompt (unconditional logits) —
+  and the two next-token distributions are linearly extrapolated in log-probability space,
+  `log P̂ = γ·log P(w|c) − (γ−1)·log P(w)`, sharpening the influence of the prompt. `γ=1`
+  recovers the ordinary conditional distribution; `γ>1` (recommended ≈1.5) strengthens prompt
+  adherence, and using a negative prompt for the unconditional branch steers generation away
+  from it. It joins `ContrastiveLogits` and `DoLaLogits` as a third, purpose-distinct
+  logit-combination decoder (quality/repetition, factuality, prompt-adherence respectively).
+- A pure-function decoding utility (the caller supplies both logit vectors from the two forward
+  passes); the returned scores are in log-probability space, ready for a `Sampler` (argmax =
+  greedy CFG).
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous
+  against the primary paper (arXiv:2306.17806 Eq. 6-7/§2.2) and the HuggingFace
+  `UnbatchedClassifierFreeGuidanceLogitsProcessor` (`γ·(logsoftmax_cond − logsoftmax_uncond) +
+  logsoftmax_uncond`).
+- **§V16 tier-1** (`nlp/cfg_test.go`): `γ=1` recovers the conditional softmax (`1e-9`); the
+  exact extrapolation formula (`1e-12`); the amplification/negative-prompt property (with the
+  prompt favoring token 0 and the negative branch favoring token 1, raising `γ` raises `P(0)`
+  and lowers `P(1)`); the length-mismatch panic; and `ExampleGuidedLogits`.
+- **Gate**: `go test ./nlp` green, nn/ops/autograd/rl regression green, apicheck (§V17), gofmt,
+  vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R181, §T254.
+
+### T253 — ColBERT late-interaction MaxSim (Khattab & Zaharia 2020) (2026-07-07)
+- **`nn.MaxSim` adds the ColBERT late-interaction relevance score** (Khattab & Zaharia 2020,
+  "ColBERT: Efficient and Effective Passage Search via Contextualized Late Interaction over
+  BERT", SIGIR, arXiv:2004.12832). Rather than collapsing a query and a document each to a
+  single vector, ColBERT keeps a per-token embedding for both and scores them by "late
+  interaction": for every query token it takes the maximum similarity over all document tokens
+  and sums those maxima, `S(q,d) = Σ_i max_j q̂_i·d̂_j`. This extends the embedding/retrieval
+  surface (InfoNCE, MRL) with the multi-vector scoring that underpins modern dense
+  retrieval / RAG.
+- Token embeddings are L2-normalized internally so each `q̂_i·d̂_j` is a cosine similarity; the
+  score is composed from the normalize, transpose, matmul, a row-wise `OpMax` over the document
+  tokens, and a sum — differentiable w.r.t. both `q` and `doc` (the max routes each query
+  token's gradient to its best-matching document token). No new kernel or VJP.
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous
+  against the primary paper (arXiv:2004.12832 §3.2-3.3 Eq. 3) and the stanford-futuredata/ColBERT
+  reference (`scores.max(1).values.sum(-1)`, `F.normalize(Q/D, p=2, dim=2)`).
+- **§V2 / §V16 tier-1** (`nn/maxsim_test.go`): parity against an independent sum-of-max cosine
+  oracle (`1e-9`); the exact-match property (a document containing the query tokens scores ≈
+  `Nq`); the ranking property (a matching document outscores a random one); a finite-difference
+  gradcheck over `q` and `doc` (valid here — no stop-gradient, the max is sub-differentiable away
+  from ties); the shape errors; and `ExampleMaxSim`.
+- **Gate**: `go test ./nn` green, ops/autograd/rl/nlp regression green, apicheck (§V17), gofmt,
+  vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R180, §T253.
+
+### T252 — DropPath / Stochastic Depth (Huang et al. 2016) (2026-07-07)
+- **`nn.DropPath` adds stochastic depth** (Huang, Sun, Liu, Sedra & Weinberger 2016, "Deep
+  Networks with Stochastic Depth", ECCV, arXiv:1603.09382) in the modern per-sample inverted
+  form used by timm/DeiT/Swin/ConvNeXt. Where `Dropout` zeros individual activations, DropPath
+  drops the entire residual branch for a sample: applied inside a residual block
+  `y = x + DropPath(f(x))`, it randomly removes whole layers per example, training the network
+  as an implicit ensemble of shallower nets and stabilizing very deep transformers.
+- During training, for each sample independently the branch output is either zeroed (with drop
+  probability `Rate`) or kept and divided by `keep = 1−Rate` (inverted dropout, so `E[out]=x`);
+  at eval it is the identity. The mask is one value per sample (broadcast over every other
+  dimension) — the whole branch output for a sample is dropped together, not element-wise.
+  `StochasticDepthSurvival(l, total, pLast)` gives the paper's linear-decay survival schedule
+  `p_l = 1 − (l/L)(1 − pLast)`.
+- No learnable parameters; the per-sample mask is multiplied in through the recording context,
+  so autograd differentiates it via the `Mul` VJP (gradient flows only through kept, up-scaled
+  samples).
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous
+  against the primary paper (arXiv:1603.09382 §3 Eq. 2/4/5) and the timm `drop_path` reference
+  (per-sample `bernoulli(keep)/keep`, identity at eval).
+- **§V2 / §V16 tier-1** (`nn/droppath_test.go`): per-sample masking (each row is uniform and in
+  `{0, 1/keep}`, with both dropped and kept rows observed); eval/rate-0 identity; expectation
+  preservation (mean ≈ x over 400 trials); the per-sample gradient (0 or `1/keep`, uniform
+  within a row); the linear survival schedule; the rate-range panic; and `ExampleDropPath`.
+- **Gate**: `go test ./nn` green, ops/autograd/rl/nlp regression green, apicheck (§V17), gofmt,
+  vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R179, §T252.
+
+### T251 — Auxiliary-Loss-Free Load Balancing for MoE (Wang et al. 2024 / DeepSeek-V3) (2026-07-07)
+- **`nn.LossFreeBalancer` adds the auxiliary-loss-free MoE load-balancing strategy** (Wang, Gao,
+  Chen, Xie & Dai 2024, "Auxiliary-Loss-Free Load Balancing Strategy for Mixture-of-Experts",
+  arXiv:2408.15664; the routing used in DeepSeek-V3). Classic MoE balancing adds an auxiliary
+  load-balance loss (`MoEBalanceLoss`), but its gradient competes with the language-modeling
+  objective and degrades quality. Loss-Free Balancing instead keeps a per-expert **bias** that is
+  adjusted by a gradient-free control rule, complementing the existing routers (TopKGating,
+  ExpertChoice, SoftMoE).
+- `Route(affinity, k)` selects the top-k experts by the **biased** score `s_i + b_i`, but returns
+  each selected expert's **original** affinity `s_i` as the combination weight — the bias changes
+  *which* experts fire, never *how much* they contribute, so it leaves no bias term in the output
+  and needs no gradient. `Update(loads)` nudges the bias from the batch's per-expert token counts:
+  `b_i ← b_i + u·sign(c̄ − c_i)` (raise under-loaded experts, lower over-loaded ones), with update
+  rate `u` defaulting to 0.001. The bias is a control variable, never part of the autograd graph
+  — so this is a pure-Go utility (no tensors), like an optimizer's state.
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous
+  against the primary paper (arXiv:2408.15664 Eq. 3 and Algorithm 1) and the DeepSeek-V3 report,
+  including that the weight uses the original affinity and the bias is gradient-free with `u=0.001`.
+- **§V2 / §V16 tier-1** (`nn/lossfree_test.go`): biased selection with the original-affinity weight;
+  the exact sign update rule (`[3,0,0] → [−u,u,u]`; a balanced load leaves the bias untouched); the
+  defining balancing property (with a fixed skewed affinity `[1,0,0]` the controller still routes
+  every expert a ≥20% share over 300 rounds); the edge cases (`k>N` clamp, `k≤0`, empty loads,
+  default rate); and `ExampleLossFreeBalancer`.
+- **Gate**: `go test ./nn` green, ops/autograd/rl/nlp regression green, apicheck (§V17), gofmt, vet,
+  §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R178, §T251.
+
+### T250 — FSQ Finite Scalar Quantization (Mentzer et al. 2023) (2026-07-07)
+- **`nn.FSQ` adds Finite Scalar Quantization** (Mentzer, Minnen, Agustsson & Tschannen 2023,
+  "Finite Scalar Quantization: VQ-VAE Made Simple", arXiv:2309.15505, ICLR'24) — a codebook-free
+  drop-in replacement for the VQ-VAE quantizer (T249). Each of the `d` latent channels is bounded
+  and rounded to one of `L_i` integer levels; the codebook is the implicit Cartesian product of
+  the per-channel level sets (size `∏ L_i`) with **no learned parameters and no auxiliary loss**,
+  so it sidesteps VQ-VAE's codebook collapse and commitment/codebook losses.
+- Per channel `bounded = h·tanh(z + shift) − offset` (`h = (L−1)/2`, `offset = ½` for even `L`
+  else 0), rounded with a straight-through estimator `ẑ = bounded + StopGradient(round − bounded)`
+  (another consumer of the T248 op), then normalized `code = ẑ / ⌊L/2⌋`. `Quantize` returns the
+  differentiable codes and the flat mixed-radix codebook indices; `CodebookSize` is `∏ L_i` and
+  `Params` is empty.
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous
+  against the primary paper (arXiv:2309.15505 §3.1/App. A.1/Fig. 2) and both the google-research
+  and lucidrains reference implementations. The research corrected a draft error: the final
+  normalization divides by `⌊L/2⌋` (`levels//2`), not the bounding half `(L−1)/2` (they differ for
+  even `L`).
+- **§V2 / §V16 tier-1** (`nn/fsq_test.go`): codes lie on the grid (`code·⌊L/2⌋` is an integer,
+  each channel uses ≤ `L` distinct values, indices in range); the mixed-radix index encoding; the
+  straight-through gradient verified against the exact closed form `d(code)/dz = 1 − tanh²(z)`
+  (finite-diff is invalid through a stop-gradient); no learned parameters; the errors; and
+  `ExampleFSQ`.
+- **Gate**: `go test ./nn` green, ops/autograd/rl/nlp regression green, apicheck (§V17), gofmt,
+  vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R177, §T250.
+
+### T249 — VQ-VAE vector quantization (van den Oord et al. 2017) (2026-07-07)
+- **`nn.VectorQuantizer` adds the VQ-VAE vector-quantization layer** (van den Oord, Vinyals &
+  Kavukcuoglu 2017, "Neural Discrete Representation Learning", NeurIPS, arXiv:1711.00937). It
+  maps each continuous encoder vector to the nearest entry of a learned codebook, producing a
+  discrete latent — the basis of discrete representation learning (image/audio tokenizers,
+  neural codecs). It is the first real consumer of the new `StopGradient` op (T248).
+- `Quantize(ctx, ze)` returns: the straight-through quantized output `z_q_st = z_e +
+  StopGradient(z_q − z_e)` (forward is the codebook vector, but its gradient is copied straight
+  back to the encoder), the VQ loss, and the chosen codebook indices. The loss is the paper's
+  two-part objective (Eq. 3) — the codebook loss `‖sg[z_e] − e‖²` (encoder detached, trains the
+  codebook toward the encoder) plus `β·‖z_e − sg[e]‖²` (codebook detached, trains the encoder
+  toward the codebook) — so each side is trained by exactly one term. `β` defaults to 0.25. The
+  quantized vector is gathered with a one-hot selection matmul, keeping it differentiable w.r.t.
+  the codebook.
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous
+  against the primary paper (arXiv:1711.00937 §3.1-3.2 Eq. 1-3) and the DeepMind Sonnet
+  `vqvae.py` reference (`inputs + stop_gradient(quantized − inputs)`, the two `sg` loss terms).
+- **§V2 / §V16 tier-1** (`nn/vqvae_test.go`): nearest-neighbor assignment and the
+  straight-through forward value; the straight-through gradient (grad to the encoder is the
+  identity, and the codebook gets no gradient from the reconstruction path); and the two-way
+  loss routing — verified against the **exact closed-form gradients** rather than finite
+  differences, since finite-diff is invalid through a stop-gradient (it blocks the analytic
+  gradient but its forward value still tracks the input): `grad_ze` comes only from the
+  commitment term, `grad_codebook` only from the codebook term, and with `β=0` the encoder
+  receives no gradient while the codebook still trains. Plus the shape errors and
+  `ExampleVectorQuantizer`.
+- **Gate**: `go test ./nn` green, ops/autograd/rl/nlp regression green, apicheck (§V17), gofmt,
+  vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R176, §T249.
+
+### T248 — StopGradient / detach op (2026-07-07)
+- **Added `OpStopGradient` (and `ops.StopGradient`), a gradient-severing detach op** — the
+  identity on the forward pass, but no gradient flows back through it (numpy/torch `detach`
+  semantics). This is a foundational autograd primitive used by straight-through estimators,
+  VQ-VAE codebooks, EMA/teacher targets, RL baselines, and frozen reference branches. It is a
+  definitional op (§V16-exempt), verified by tier-1 tests rather than a paper.
+- Wired through the stack: the op constant and name in `backend/op.go`; identity kernels in
+  both the `ref` and `cpu` backends (a memory-bound op, so the GPU backends fall back to `ref`
+  per ADR-0008); and a VJP that returns a zero gradient in `autograd`. `ops.StopGradient(x)`
+  is the eager wrapper.
+- **Refactored `nn.GumbelSoftmaxHard`** (T247) to use it: the straight-through estimator is now
+  the principled `y = y_hard + (y_soft − StopGradient(y_soft))` instead of the previous
+  detach-by-value-copy workaround. The existing Gumbel tests still pass, validating the new op
+  end to end.
+- **§V16-exempt tier-1** (`autograd/stopgradient_test.go`): identity forward; gradient blocking
+  (for `loss = Σ x⊙stop_gradient(x)` the gradient is `x`, not `2x`); a mixed live/frozen path
+  (only the live branch contributes); and `Example`s in both `autograd` and `ops`.
+- **Gate**: the full backend (ref/cpu/metal), autograd, ops, nn, nlp and rl suites are green,
+  plus apicheck (§V17), gofmt, vet, the §V7 `CGO_ENABLED=0` build, and the default cgo/metal
+  build.
+- §T248.
+
+### T247 — Gumbel-Softmax / Concrete reparameterization (Jang et al. 2016) (2026-07-07)
+- **`nn.GumbelSoftmax` adds the Gumbel-Softmax / Concrete relaxation** (Jang, Gu & Poole 2016,
+  "Categorical Reparameterization with Gumbel-Softmax", arXiv:1611.01144; concurrent Maddison,
+  Mnih & Teh 2016, "The Concrete Distribution", arXiv:1611.00712) — the reparameterization
+  trick for discrete variables. It draws a differentiable approximate categorical sample
+  `y_i = softmax((logit_i + g_i)/τ)` with Gumbel noise `g_i = −log(−log(u_i))`; the randomness
+  lives in the externally-supplied noise so `y` is a smooth, differentiable function of the
+  logits (enables gradient-based training through discrete choices — differentiable MoE
+  routing, discrete latents/VAEs, hard attention). Temperature `τ→0` sharpens toward a
+  one-hot sample, `τ→∞` toward uniform.
+- `GumbelSoftmaxHard` is the Straight-Through estimator: the forward pass is the hard one-hot
+  `onehot(argmax_i y_i)`, but gradients flow as if the soft relaxation were used. Since GoAI
+  has no stop-gradient op, it is realized with a detach-by-value-copy (eager execution lets us
+  materialize the soft sample's forward values into an untracked constant), giving exactly
+  `y = y_hard − stopgrad(y_soft) + y_soft`. `SampleGumbelNoise(seed, shape)` draws reproducible
+  standard-Gumbel noise.
+- Composed from `OpAdd`/`OpMul`/`OpSoftmax` (plus `OpSub`/`OpAdd` for the straight-through
+  path) — differentiable w.r.t. the logits. No new kernel or VJP.
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous
+  against the primary paper (arXiv:1611.01144 §2 Eq. 1-2, §2.2), the concurrent Concrete paper,
+  and the PyTorch `gumbel_softmax` reference.
+- **§V2 / §V16 tier-1** (`nn/gumbel_test.go`): zero-noise reduces to the temperature-scaled
+  softmax (`1e-9`); each row is a valid distribution; `τ=0.01` approaches the one-hot
+  Gumbel-Max argmax; the noise sampler is deterministic, finite, and has mean ≈ the
+  Euler-Mascheroni constant γ over 20k draws; a finite-difference gradcheck over the logits;
+  the straight-through property (one-hot forward, and for a linear loss the hard gradient
+  equals the soft gradient exactly); the shape/temperature errors; and `ExampleGumbelSoftmax`.
+- **Gate**: `go test ./nn` green, ops/autograd/rl/nlp regression green, apicheck (§V17), gofmt,
+  vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R175, §T247.
+
+### T246 — DoLa layer-contrastive factuality decoding (Chuang et al. 2023) (2026-07-07)
+- **`nlp.DoLaLogits` adds DoLa decoding** (Chuang, Xie, Luo, Kim, Glass & He 2023, ICLR 2024,
+  "DoLa: Decoding by Contrasting Layers Improves Factuality of Large Language Models",
+  arXiv:2309.03883). Factual knowledge in a transformer tends to be resolved in the later
+  layers, so DoLa amplifies it by contrasting the final ("mature") layer's next-token
+  distribution against that of an earlier ("premature") layer projected through the same
+  output head. This is distinct from the model-level contrastive decoding already present
+  (`nlp.ContrastiveLogits`, which needs a second amateur model) — DoLa contrasts *layers* of
+  one model.
+- Given the mature-layer logits and the candidate premature layers' logits, it (1) selects the
+  premature layer most divergent from the mature one, `M = argmax_j JSD(q_N ‖ q_j)`, then (2)
+  returns the contrastive score `F(x) = log q_N(x) − log q_M(x)` restricted to the adaptive
+  plausibility set `{x : q_N(x) ≥ α·max_w q_N(w)}` (α default 0.1), scoring `−∞` elsewhere —
+  ready to hand to a `Sampler` (argmax = greedy DoLa). `JensenShannon(p, q)` is exposed as a
+  reusable helper.
+- A pure-function decoding utility like `ContrastiveLogits` (the caller supplies the mature
+  and candidate premature-layer logits from early exit).
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous
+  against the primary paper (arXiv:2309.03883 §2.2-2.3 Eq. 2-5) and the official voidism/DoLa
+  `dola.py`, matching both the `diff_logits = final − base` log-ratio (no beta) and the
+  `probs_max + log(relative_top)` plausibility threshold.
+- **§V16 tier-1** (`nlp/dola_test.go`): the JSD helper (`JSD([1,0],[0,1]) = ln2`, symmetric,
+  `JSD(p,p) = 0`); the argmax-JSD layer selection; the exact contrastive formula
+  (`logsoftmax_N − logsoftmax_M` to `1e-12`); the adaptive-plausibility masking; argmax
+  preservation against a uniform premature layer; the panics; and `ExampleDoLaLogits`.
+- **Gate**: `go test ./nlp` green, nn/ops/autograd/rl regression green, apicheck (§V17), gofmt,
+  vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R174, §T246.
+
+### T245 — Matryoshka Representation Learning loss (Kusupati et al. 2022) (2026-07-07)
+- **`nn.MatryoshkaLoss` adds the Matryoshka Representation Learning (MRL) objective**
+  (Kusupati, Bhatt, Rege, Wallingford, Sinha, Ramanujan, Howard-Snyder, Chen, Kakade, Jain &
+  Farhadi 2022, NeurIPS, arXiv:2205.13147). It trains a single embedding so that each nested
+  prefix `z_{1:m}` is independently usable, letting one model serve many embedding sizes
+  (adaptive retrieval/deployment — the mechanism behind OpenAI text-embedding-3, Nomic and
+  Snowflake truncatable embeddings). The loss sums a softmax cross-entropy over every
+  granularity in the nesting set, each on the first `m` coordinates:
+  `L = Σ_{m∈M} CE(z[:, :m]·W[:m, :], y)` with uniform importance weights.
+- This is the efficient **MRL-E** variant: one shared classifier `W ∈ ℝ^{d×C}` tied across
+  granularities, each slicing its first `m` rows. Because the earliest coordinates appear in
+  the loss at every granularity while later ones appear only at larger `m`, gradients
+  concentrate on the early dimensions, producing a coarse-to-fine nested representation.
+- `MatryoshkaLoss(ctx, z, w, targets, nestingDims)` takes `z [batch,d]`, the shared head
+  `w [d,C]`, class-index `targets [batch]` and a strictly-increasing `nestingDims ⊆ [1,d]`,
+  and is composed from `OpSlice`/`OpMatMul`/`OpCrossEntropy`/`OpAdd` — differentiable w.r.t.
+  `z` and `w`. No new kernel or VJP.
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous
+  against the primary paper (arXiv:2205.13147 Eq. 1/§3, uniform `c_m=1`, MRL-E weight tying)
+  and the official RAIVNLab/MRL `MRL.py`.
+- **§V2 / §V16 tier-1** (`nn/matryoshka_test.go`): parity against an independent sum of
+  nested-prefix cross-entropies (`1e-9`); the single-granularity `{d}` reduction to plain
+  `CrossEntropy` (`1e-12`); the **exact gradient-nesting property** (adding a smaller
+  granularity `m` changes the gradient only on coordinates `< m` and leaves coordinates `≥ m`
+  exactly unchanged); a finite-difference gradcheck over `z` and `w`; the
+  empty/non-increasing/out-of-range/dim-mismatch errors; and `ExampleMatryoshkaLoss`.
+- **Gate**: `go test ./nn` green, ops/autograd/rl/nlp regression green, apicheck (§V17), gofmt,
+  vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R173, §T245.
+
+### T244 — SmoothQuant W8A8 activation-weight smoothing (Xiao et al. 2022) (2026-07-07)
+- **`nn.SmoothQuant` adds the SmoothQuant post-training smoothing transform** (Xiao, Lin,
+  Seznec, Wu, Demouth & Han 2022/2023, "SmoothQuant: Accurate and Efficient Post-Training
+  Quantization for Large Language Models", arXiv:2211.10438, ICML 2023). LLM activations carry
+  a few systematic per-channel outlier dimensions that make them far harder to quantize than
+  the weights; SmoothQuant migrates that difficulty into the weights with a per-input-channel
+  factor `s`, applied as a mathematically-equivalent rescaling of a linear layer `Y = X·W`:
+  `X̂ = X·diag(s)⁻¹`, `Ŵ = diag(s)·W`, so `X̂·Ŵ = X·W` exactly and both `X̂` (per-tensor) and `Ŵ`
+  (per-channel) become easy to quantize to INT8 (W8A8). This is distinct from the weight-only
+  GPTQ/AWQ already present — AWQ folds its `act^α` scale back into the weights, whereas
+  SmoothQuant exposes `X̂` for activation quantization and balances the scale against the
+  weight max.
+- `SmoothQuant(x, w, alpha)` returns the smoothed `x̂`, `ŵ` and the per-channel scale;
+  `SmoothQuantScale(actAbsMax, weightAbsMax, alpha)` is the factor `s_j =
+  max(|X_j|)^α / max(|W_j|)^(1−α)` (Eq. 4, default α=0.5). A degenerate all-zero channel falls
+  back to `s=1` (no-op, no divide-by-zero). Like AWQuantize/GPTQ this is a pure-f64
+  post-training utility, not a differentiable op.
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous
+  against the primary paper (arXiv:2211.10438 §4 Eq. 3-4) and the official
+  mit-han-lab/smoothquant `smooth.py` (the research also corrected a sub-claim: GLM-130B uses
+  α=0.75, not 0.6).
+- **§V16 tier-1** (`nn/smoothquant_test.go`): the exact-equivalence property (`X̂Ŵ = XW` to
+  `1e-9` at α ∈ {0, 0.5, 1} with an injected ×40 outlier channel); the Eq. 4 scale formula and
+  the zero-channel no-op; the outlier-migration goal (a ×100 activation outlier gives `s_0=10`,
+  shrinking the smoothed activation's global range from 100 to 10 while the weight range grows);
+  the shape/α errors; and `ExampleSmoothQuant`.
+- **Gate**: `go test ./nn` green, ops/autograd/rl/nlp regression green, apicheck (§V17), gofmt,
+  vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R172, §T244.
+
+### T243 — Gated DeltaNet: the gated delta rule (Yang et al. 2024) (2026-07-07)
+- **`nn.GatedDeltaNet` adds the gated delta rule** (Yang, Kang, Hofmann, Zhang, van den Berg
+  & Kim 2024, "Gated Delta Networks: Improving Mamba2 with Delta Rule", arXiv:2412.06464,
+  ICLR 2025). It is the current SOTA linear-attention (the basis of Qwen3-Next and
+  Kimi-Linear) and the capstone of the linear-attention arc already built (Mamba, RetNet, GLA,
+  DeltaNet): it **unifies** a scalar data-dependent decay gate `α_t` (Mamba2-style forgetting —
+  rapid memory clearing) with DeltaNet's delta-rule error correction (targeted key overwrite),
+  which outperforms either mechanism alone.
+- Recurrence `S_t = α_t·S_{t-1} + β_t·(v_t − α_t·S_{t-1}k_t)·k_tᵀ`, `o_t = S_t q_t`: the scalar
+  `α_t ∈ (0,1)` decays the entire previous state (and the delta term) before the write, while
+  `β_t ∈ (0,1)` is the delta writing strength. Both are per-token scalar inputs (the caller
+  supplies Mamba2's `α = exp(−softplus(·))` and `β = σ(·)`), and q,k are L2-normalized
+  internally. Two exact reductions: `α=1` recovers plain DeltaNet, `β=0` recovers scalar-decay
+  memory `S_t = α_t·S_{t-1}`.
+- Implemented as the sequential recurrence (DeltaNet's structure with the state decayed by α
+  before the delta update — matching the fla reference's `b_h *= exp(g)`-then-delta path),
+  composed from the reused L2-normalize plus `OpSlice`/`OpMul`/`OpTranspose`/`OpMatMul`/`OpSub`/
+  `OpAdd`/`OpConcat` — fully differentiable w.r.t. `q,k,v,α,β`. No new kernel or VJP.
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous
+  against the primary paper (arXiv:2412.06464 §3.3 Eq. 10, footnote 4) and the authors'
+  fla-org/flash-linear-attention `gated_deltanet.py`/`fused_recurrent.py` reference.
+- **§V2 / §V16 tier-1** (`nn/gated_deltanet_test.go`): parity against an independent
+  gated-delta recurrence (`1e-9`); the **α=1 reduction checked against the independent
+  `nn.DeltaNet`** (`1e-12`); a geometric-decay property (write then hold β=0 with α=0.5 gives
+  `o_t = 0.5ᵗ·o_0` — the forgetting DeltaNet lacks); causality; a finite-difference gradcheck
+  over `q,k,v,α,β`; the shape errors; and `ExampleGatedDeltaNet`.
+- **Gate**: `go test ./nn` green, ops/autograd/rl/nlp regression green, apicheck (§V17), gofmt,
+  vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R171, §T243.
+
+### T242 — DeltaNet delta-rule linear attention (Yang et al. 2024) (2026-07-07)
+- **`nn.DeltaNet` adds delta-rule linear attention** (Yang, Wang, Zhang, Shen & Kim 2024,
+  "Parallelizing Linear Transformers with the Delta Rule over Sequence Length",
+  arXiv:2406.06484; delta rule from Schlag et al. 2021). Where plain linear attention and GLA
+  *accumulate* key→value outer products, DeltaNet *updates* the memory by the prediction
+  error (the Widrow-Hoff delta rule) — `S_t = S_{t-1} + β_t·(v_t − S_{t-1}k_t)·k_tᵀ`,
+  `o_t = S_t q_t` — so writing a key **overwrites** its old value instead of piling on top.
+  This is the basis of 2024/25 Gated-DeltaNet models and is distinct from GLA's diagonal
+  gating and RetNet's fixed decay, extending the linear-attention/RNN family (Mamba, RetNet,
+  GLA).
+- The writing strength `β_t ∈ (0,1)` is a per-token input (the caller supplies `σ(W_β·x)`),
+  and keys and queries are L2-normalized internally (the SiLU feature map is the caller's
+  projection) — so with `β=1` and a unit key the write is exact: reading the just-written key
+  returns `v` and a second write to the same key overwrites rather than accumulates.
+- Implemented as the numerically-stable sequential recurrence, composed per step from the
+  reused L2-normalize plus `OpSlice`/`OpTranspose`/`OpMatMul` (the `S·k` prediction, the
+  `error·kᵀ` outer-product update, and the `S·q` read-out)/`OpSub`/`OpMul`/`OpAdd`, with
+  `OpConcat` stacking the outputs — fully differentiable w.r.t. `q,k,v,β`. No new kernel or
+  VJP.
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous
+  against the primary paper (arXiv:2406.06484 §2.2/§3.1 Eq. 3/§3.3), the authors'
+  fla-org/flash-linear-attention `delta_rule/naive.py` reference, and the first author's blog.
+- **§V2 / §V16 tier-1** (`nn/deltanet_test.go`): parity against an independent delta-rule
+  recurrence (`1e-9`); the exact-overwrite property (β=1 same-key retrieval returns `v`, and a
+  second β=1 write yields `v_b` — the overwrite — not `v_a+v_b` as accumulation would); β=0
+  makes no update; causality; a finite-difference gradcheck over `q,k,v,β`; the shape errors;
+  and `ExampleDeltaNet`.
+- **Gate**: `go test ./nn` green, ops/autograd/rl/nlp regression green, apicheck (§V17), gofmt,
+  vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R170, §T242.
+
+### T241 — Gated Linear Attention recurrence (Yang et al. 2023/2024) (2026-07-07)
+- **`nn.GatedLinearAttention` adds Gated Linear Attention (GLA)** (Yang, Wang, Shen, Panda &
+  Kim, "Gated Linear Attention Transformers with Hardware-Efficient Training",
+  arXiv:2312.06635). It carries a matrix-valued state gated by a **data-dependent**,
+  per-key-dimension forget gate — `S_t = Diag(α_t)·S_{t-1} + k_tᵀv_t`, `o_t = q_t·S_t` — for
+  linear-time (`O(L·d²)`) sequence modeling. This extends the linear-attention/RNN family
+  already present (Mamba, RetNet): unlike RetNet's data-*independent* scalar decay `γ`, GLA's
+  gate `α_t ∈ (0,1]^{d_k}` is content-based, decaying each key dimension at its own learned
+  rate. When `α_t = 1` it reduces to plain ungated linear attention.
+- The gate is an input (`q,k` are `[seq,d_k]`, `v` is `[seq,d_v]`, `gate` is `[seq,d_k]`), so
+  the caller supplies the paper's `σ(x·W_α)^{1/τ}` low-rank projection — the core stays
+  projection-agnostic, like the other attention primitives.
+- Implemented as the numerically-stable **sequential recurrence** (the data-dependent gate
+  rules out RetNet's fixed-γ fused kernel), composed per step from `OpSlice`, `OpTranspose`,
+  `OpMatMul` (the `kᵀv` outer product and the `q·S` read-out), `OpMul` (the broadcast diagonal
+  gate) and `OpAdd`, with `OpConcat` stacking the outputs — fully differentiable w.r.t. `q`,
+  `k`, `v` and `gate`. No new kernel or VJP.
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous
+  against the primary paper (arXiv:2312.06635 §3.1/§4.1 Eq. 3-4) and the authors'
+  fla-org/flash-linear-attention `gla.py` reference.
+- **§V2 / §V16 tier-1** (`nn/gla_test.go`): parity against an independent recurrence
+  (data-dependent gate, `1e-9`); the `α=1` reduction checked against a distinct
+  attention-form linear-attention oracle; a causality check (perturbing a future key leaves
+  earlier outputs unchanged); a finite-difference gradcheck over `q,k,v,gate`; the shape
+  errors; and `ExampleGatedLinearAttention`.
+- **Gate**: `go test ./nn` green, ops/autograd/rl/nlp regression green, apicheck (§V17), gofmt,
+  vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R169, §T241.
+
+### T240 — Mixture-of-Depths routing (Raposo et al. 2024) (2026-07-07)
+- **`nn.MixtureOfDepths` adds dynamic-compute routing** (Raposo, Ritter, Richards,
+  Lillicrap, Humphreys & Santoro 2024, "Mixture-of-Depths", arXiv:2404.02258). Where every
+  token normally flows through every block, MoD gives each block a fixed compute budget: a
+  scalar router `r_i = x_i·w_router` selects the top-k tokens by weight (expert-choice
+  routing, `k = round(capacity·seq)`) and only those are processed —
+  `y_i = x_i + r_i·block(x_i)` for the selected tokens, `y_i = x_i` (pure residual) for the
+  rest. This is distinct from the MoE family already present (MoE/ExpertChoice/SoftMoE route
+  tokens to experts; MoD routes whether to spend compute at all).
+- `Route(ctx, x)` returns the gathered top-k token rows, their **raw** router weights (the
+  linear-projection scalar — no sigmoid; §V16 confirmed the residual path uses the raw logit,
+  sigmoid appears only in the paper's §3.5 auxiliary-predictor loss), and an opaque
+  selection handle; the caller runs its block on the gathered rows; `Combine(ctx, x,
+  processed, weights, sel)` scatters the result back with the residual. `NumProcessed(seq)`
+  reports the exact per-block capacity.
+- Gather/scatter are implemented with a one-hot selection matrix `S` (`gathered = S·x`,
+  scatter = `Sᵀ·(weights ⊙ processed)`), so the whole thing is differentiable via
+  `OpMatMul`/`OpMul`/`OpAdd`/`OpTranspose` — no gather/scatter op or VJP needed. The router
+  weight is on the gradient path (so the router learns); the discrete selection is treated as
+  constant (straight-through — the VJP of an argsort is zero almost everywhere).
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous
+  against the primary paper (arXiv:2404.02258 §3.4 Eq. 1 and §3.5), including the correction
+  that Eq. 1 multiplies by the raw router logit rather than a sigmoid.
+- **§V2 / §V16 tier-1** (`nn/mod_test.go`): the top-k selection matches an independent
+  argsort and returns the raw logit as the weight; the Combine residual (selected tokens get
+  `x + r·processed`, skipped tokens are returned exactly as `x`); the `round(capacity·seq)`
+  capacity (256 of 2048 at 12.5%, etc.); a finite-difference gradcheck over `x` and the
+  router; the shape errors; and `ExampleMixtureOfDepths`.
+- **Gate**: `go test ./nn` green, ops/autograd/rl/nlp regression green, apicheck (§V17,
+  `MoDSelection` allowlisted as an opaque handle), gofmt, vet, §V7 `CGO_ENABLED=0` build, and
+  the default cgo/metal build all clean.
+- §R168, §T240.
+
+### T239 — Differential Transformer attention (Ye et al. 2024) (2026-07-07)
+- **`nn.DiffAttention` adds differential attention** (Ye, Dong, Zhang, Zhu, Yang, Wang, Ma
+  & Wei 2024, "Differential Transformer", arXiv:2410.05258). The query/key projections are
+  split into two groups, producing two `1/√d`-scaled softmax maps whose **difference**,
+  scaled by a learnable `λ`, is applied to a shared `V`:
+  `DiffAttn(X) = (softmax(Q₁K₁ᵀ/√d) − λ·softmax(Q₂K₂ᵀ/√d))·V`. Subtracting the maps cancels
+  the common-mode "attention noise" both share, concentrating probability on relevant
+  context (a differential-amplifier analogy) — a distinct mechanism from the existing
+  MHA/MQA/GQA/MLA/retention/QKNorm family.
+- `λ` is reparameterized from four learnable `d`-vectors,
+  `λ = exp(λ_q1·λ_k1) − exp(λ_q2·λ_k2) + λ_init`, with a depth-dependent offset
+  `λ_init = 0.8 − 0.6·exp(−0.3·(l−1))` (1-based layer `l`). The four vectors start at zero,
+  so `λ` starts exactly at `λ_init` — faithful to the microsoft/unilm reference, which
+  initializes them to zeros.
+- `NewDiffAttention(dtype, d, layer)` builds a head; `(*DiffAttention).Attention(ctx, q1,
+  k1, q2, k2, v, causal)` runs single-head differential attention (right-aligned causal
+  mask when requested), differentiable w.r.t. `q1,k1,q2,k2,v` **and** all four λ-vectors.
+  `DiffLambdaInit(layer)` exposes the depth schedule and `SublayerScale()` returns the
+  `(1−λ_init)` factor the paper applies after the per-head GroupNorm (compose with
+  `nn.RMSNorm` for the full sublayer).
+- Built as a fully-differentiable composition of existing ops (`OpTranspose`, `OpMatMul`,
+  `OpMul`, `OpExp`, `OpSub`, `OpAdd`, `OpSoftmax`); the scalar λ is formed via a `[1,d]·[d,1]`
+  matmul that broadcasts over the `[seq,seq]` maps. No new kernel or VJP required.
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents
+  unanimous against the primary HTML paper (arXiv:2410.05258 §2.1 Eq. 1/2/3) and the
+  microsoft/unilm `multihead_diffattn.py` reference.
+- **§V2 / §V16 tier-1** (`nn/diffattn_test.go`): parity against an independent reference
+  (bidirectional and causal, non-zero λ-vectors exercising the exp-dot reparameterization,
+  `1e-9`); the common-mode-cancellation property (identical query/key groups with zero
+  λ-vectors reduce DiffAttn to `(1−λ_init)·ordinary-attention`); the `λ_init` depth schedule
+  and `SublayerScale`; a finite-difference gradcheck over all nine tensors; the shape errors;
+  and `ExampleDiffAttention`.
+- **Gate**: `go test ./nn` green, ops/autograd/rl/nlp regression green, apicheck (§V17),
+  gofmt, vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R167, §T239.
+
+### T238 — Scaled-cosine Query-Key Normalization attention (Henry et al. 2020) (2026-07-07)
+- **`nn.QKNorm` adds QK-normalized attention** (Henry, Dachapally, Pawar & Chen 2020,
+  "Query-Key Normalization for Transformers", arXiv:2010.04245). Query and key vectors are
+  L2-normalized along `head_dim` per head, so every Q̂·K̂ entry is a cosine similarity in
+  `[-1, 1]`; the fixed `1/√d_k` factor is then replaced by a single **learned scalar `g`**,
+  giving `attn = softmax(g · Q̂K̂ᵀ)·V` with pre-softmax logits bounded in `[-g, +g]`. This
+  decouples logit magnitude from `d_k` and stabilizes attention for low-resource and
+  long-context training. It complements (does not replace) LayerNorm/RMSNorm.
+- `NewQKNorm(dtype, initG)` builds the layer; `(*QKNorm).Attention(ctx, q, k, v, causal)`
+  runs single-head `[seq, head_dim]` scaled-cosine attention (with a right-aligned causal
+  mask when requested), differentiable w.r.t. `q`, `k`, `v` **and** the learned scale `G`.
+  `QKNormInitG(percentileSeqLen)` returns the paper's recommended init `g₀ = log₂(L²−L)`
+  (Eq. 3), where `L` is the 97.5th-percentile training sequence length (data-derived, not
+  the raw maximum).
+- Built as a fully-differentiable composition of existing ops (a reusable eps-floored
+  L2-normalize over the last axis — `OpMul`/`OpSum`/`OpAdd`/`OpSqrt`/`OpDiv` — plus
+  `OpTranspose`, `OpMatMul`, `OpSoftmax`); no new kernel or VJP required.
+- **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents
+  unanimous against the primary PDF (arXiv:2010.04245 / aclanthology 2020.findings-emnlp.379,
+  Eq. 2/4/5): L2-norm on Q,K along head_dim, learned `g` replacing `1/√d_k`, and
+  `g₀ = log₂(L²−L)` at the 97.5th-percentile length.
+- **§V2 / §V16 tier-1** (`nn/qknorm_test.go`): parity against an independent scaled-cosine
+  reference (bidirectional and causal, `1e-9`); a weights-property check (with `v = I` the
+  output rows are a valid softmax distribution and causal masking leaks nothing above the
+  diagonal); the `log₂(L²−L)` init; a finite-difference gradcheck over `q`, `k`, `v`, `G`;
+  the shape/`head_dim`-mismatch errors; and `ExampleQKNorm`.
+- **Gate**: `go test ./nn` green, ops/autograd/rl/nlp regression green, apicheck (§V17),
+  gofmt, vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R166, §T238.
+
+### T237 — HuggingFace tokenizer.json interop (SentencePiece Unigram) (2026-07-07)
+- **`nlp.UnigramFromJSON` loads a SentencePiece Unigram tokenizer from a HuggingFace
+  `tokenizer.json`** (the `"model":{"type":"Unigram"}` form used by Llama, Mistral and
+  T5), and `(*Unigram).ToJSON` serializes one back. Together with the BPE loader (T236),
+  both major HuggingFace tokenizer types now load directly from `tokenizer.json`.
+- It reads the model's `unk_id` and the scored `vocab` — a list of `[piece, score]`
+  pairs — into `NewUnigram`. It rejects a non-Unigram model type, an empty vocabulary,
+  and malformed vocab entries, and ignores the normalizer/pre-tokenizer/decoder sections
+  (the tokenizer applies SentencePiece whitespace escaping itself). A `unk_id` from the
+  file is applied first so caller options can still override it.
+- **§V16**: DEFINITIONAL — the `tokenizer.json` schema is the definitional source (the
+  `tokenizers` library), so it is exempt from research-lite and validated by round-trip
+  and fuzzing (§V15).
+- **§V15** (`nlp/unigram_json_test.go`): a parse check (the Viterbi 1-best picks the
+  higher-scoring `"▁hi"` over `"▁"+"h"+"i"`), a round-trip (`load → ToJSON → load`
+  reproduces identical encodings and a stable serialization), the
+  malformed/non-Unigram/empty/bad-entry errors, `ExampleUnigramFromJSON`, and a fuzz
+  target that ran ~2M executions without a panic.
+- **Gate**: `go test ./nlp` green (incl. fuzz), the full nn/ops/autograd/rl suites
+  green, apicheck (§V17), gofmt, vet, §V7 `CGO_ENABLED=0` build, and the default
+  cgo/metal build all clean.
+- §T237.
+
+### T236 — HuggingFace tokenizer.json interop (byte-level BPE) (2026-07-07)
+- **`nlp.BPEFromJSON` loads a byte-level BPE tokenizer from a HuggingFace
+  `tokenizer.json`** (the `"model":{"type":"BPE"}` form used by GPT-2, Llama-3, Qwen,
+  Mistral), and `(*BPETokenizer).ToJSON` serializes one back — so the library can
+  consume HF tokenizers directly, not only via GGUF metadata (`BPEFromGGUF`).
+- It reads the model's `vocab` (byte-mapped token → id) and `merges`, plus any
+  `added_tokens` (special tokens), and builds the tokenizer via `NewBPE`. `merges`
+  accepts both encodings — the classic `"left right"` strings and the newer
+  `[["left","right"], …]` pairs. It rejects a non-BPE model type and an empty
+  vocabulary, and ignores the normalizer/pre-tokenizer/decoder sections (the tokenizer
+  already applies GPT-2 pre-tokenization and the byte↔unicode map).
+- **§V16**: DEFINITIONAL — the `tokenizer.json` schema is the definitional source (the
+  `tokenizers` library), like GGUF/safetensors/npy, so it is exempt from research-lite
+  and validated instead by round-trip and fuzzing (§V15).
+- **§V15** (`nlp/bpe_json_test.go`): a parse check (vocab + merges + added-token id and
+  content), the `[["l","r"]]` pair-merges form, a round-trip (`load → ToJSON → load`
+  reproduces identical encodings across several strings and a stable serialization),
+  the malformed/non-BPE/empty-vocab errors, `ExampleBPEFromJSON`, and a fuzz target that
+  ran ~1.1M executions without a panic (arbitrary bytes return an error or a usable
+  tokenizer, which then re-round-trips).
+- **Gate**: `go test ./nlp` green (incl. fuzz), the full nn/ops/autograd/rl suites
+  green, apicheck (§V17), gofmt, vet, §V7 `CGO_ENABLED=0` build, and the default
+  cgo/metal build all clean.
+- §T236.
+
+### T235 — InfoNCE / contrastive loss (2026-07-07)
+- **`nn.InfoNCE` is the symmetric in-batch-negatives contrastive loss** (van den Oord
+  et al. 2018 InfoNCE; SimCLR NT-Xent; CLIP) — the objective that trains matched
+  embedding pairs (image↔text, or two augmented views) by pulling positives together
+  and pushing every other in-batch pair apart. It is distinct from the codebase's
+  existing losses (cross-entropy, the DPO family, distillation) and is foundational for
+  embedding and dense-retrieval models used in RAG.
+- **Formula**: given matched embeddings `a, b ∈ Rⁿˣᵈ` (optionally L2-normalized rows for
+  cosine similarity), the logit matrix is `S = (a·bᵀ)/τ` (temperature `τ`; smaller `τ`
+  sharpens the distribution and up-weights hard negatives), whose diagonal holds the
+  positive pairs. The loss is the symmetric softmax cross-entropy
+  `L = ½·(CrossEntropy(S, [0..n−1]) + CrossEntropy(Sᵀ, [0..n−1]))`. It is composed from
+  matmul/transpose/`CrossEntropy`, reusing the new `OpTranspose` so gradients flow back
+  through `Sᵀ` to `a` and `b`.
+- **§V16**: tier-2 CONFIRMED by `research-lite` (never `/deep-research`), unanimous
+  across three agents versus the CLIP pseudocode (Fig. 3), `open_clip`'s loss, and the
+  SimCLR objective — the `S = A·Bᵀ/τ` logits, the symmetric `½(CE + CEᵀ)` with `arange`
+  labels, the diagonal-is-positive convention, and the temperature sharpening.
+- **§V16 tier-1 / §V2** (`nn/infonce_test.go`): the loss matches an independent
+  symmetric-CE computation with and without normalization at two temperatures; a single
+  pair gives 0 and aligned embeddings beat misaligned; a gradient check on both `a` and
+  `b` (with and without normalization); shape/temperature errors; and `ExampleInfoNCE`.
+- **Gate**: `go test ./nn ./ops ./autograd` green, the full nlp/rl suites green,
+  apicheck (§V17), gofmt, vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal
+  build all clean.
+- §R165, §T235.
+
+### T234 — Maximal Update Parametrization (μP / μTransfer) (2026-07-07)
+- **`nn.MuP` implements the μP scaling rules** (Yang et al. 2022, "Tensor Programs V",
+  arXiv:2203.03466) that make optimal hyperparameters stable across model *widths* —
+  so you can tune learning rate and init on a small proxy model and reuse them at scale
+  (μTransfer). It is a self-contained scaling-rule provider the caller applies to its
+  optimizer and init.
+- **Rules** (Table 8, the microsoft/mup Adam form), relative to a base width with
+  `m = width/BaseWidth`: input/embedding weights and biases keep LR ×1 and multiplier
+  ×1; hidden weights get Adam LR ×1/m; the readout gets Adam LR ×1/m and output
+  multiplier ×1/m; attention logits use `1/head_dim` (not the standard `1/√head_dim`).
+  Init is the ordinary fan-in init — μP's width behavior comes from the LR and
+  multiplier scalings, not a special init. This differs from Standard Parametrization,
+  where the readout LR and multiplier do not scale with width, so the optimum drifts.
+- **API**: `NewMuP(baseWidth)`, `WidthMult`, `HiddenLRScale`, `ReadoutLRScale`,
+  `InputLRScale`, `ReadoutMult`, `AttentionScale`, and `StdAttentionScale`.
+- **§V16**: tier-2 CONFIRMED by `research-lite` (never `/deep-research`), unanimous
+  across three agents versus the paper (Table 3/8), the `microsoft/mup` reference, and
+  the EleutherAI μTransfer guide.
+- **§V16 tier-1** (`nn/mup_test.go`, `nn/mup_coord_test.go`): the scaling constants match
+  Table 8 exactly (1/m hidden/readout LR and readout multiplier, constant input LR,
+  attention `1/d ≠ 1/√d`); an SP-contrast check that the readout LR/multiplier shrink
+  with width; and — most importantly — an empirical **coordinate check**: a 3-layer MLP
+  trained a few Adam steps under μP vs SP shows μP's hidden-activation scale is far more
+  width-stable over an 8× width increase (measured as log-distance of the width ratio
+  from 1). If the μP scalings were wrong, this would show SP-like drift.
+- **Gate**: `go test ./nn ./ops ./autograd` green, the full nlp/rl suites green,
+  apicheck (§V17), gofmt, vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal
+  build all clean.
+- §R164, §T234.
+
+### T233 — Soft MoE + tape-recorded transpose (2026-07-07)
+- **`nn.SoftMoE` is a fully-differentiable Mixture-of-Experts layer** (Puigcerver et
+  al. 2023, arXiv:2308.00951) — completing the MoE-routing family after token-choice
+  (SparseMoE) and Expert-Choice hard routing. Instead of top-k routing it uses soft
+  convex mixtures: from logits `L = X·Φ`, a dispatch softmax over tokens forms each
+  slot's input as a convex combination of all tokens (`X̃ = Dᵀ·X`), each expert runs
+  its slots, and a combine softmax over slots mixes the results back per token
+  (`Y = C·Ỹ`). No argmax, no token dropping, no load-balancing loss — smooth in `X`
+  and `Φ`, so it gradchecks end to end.
+- **New `OpTranspose` primitive.** The dispatch softmax-over-tokens is `Softmax(Lᵀ)`,
+  but the existing view-based `tensor.Transpose` is not a tape node, so the gradient
+  back to `L` on the dispatch path was silently dropped (the Soft-MoE gradient check
+  for `x`/`Φ` caught this). Added a dispatched `OpTranspose` (rank-2, `out[j,i]=in[i,j]`,
+  numpy.T) with the self-adjoint VJP `grad = transpose(g)`, exposed as `ops.Transpose`
+  — a definitional op (§V16-exempt) and a generally useful primitive.
+- **§V16**: Soft MoE tier-2 CONFIRMED by `research-lite` (never `/deep-research`),
+  unanimous across three agents versus the paper (§2.1, Algorithm 1) and the
+  `fkodom`/google-research references — `L = X·Φ`, dispatch = softmax over tokens,
+  combine = softmax over slots, both from the same `L`, fully differentiable.
+  `OpTranspose` is definitional (numpy.T).
+- **§V16 tier-1 / §V2**: `nn/soft_moe_test.go` independently recomputes the whole
+  dispatch/combine wiring and matches `Forward`, gradchecks `x`, `Φ`, and an expert
+  weight against finite differences (proving full differentiability), and checks the
+  output shape, plus `ExampleSoftMoE`; `ops/transpose_test.go` and
+  `autograd/transpose_test.go` cover the transpose forward and gradient.
+- **Gate**: `go test ./nn ./ops ./autograd ./backend/ref ./backend/cpu` green, the
+  full nlp/rl suites green, apicheck (§V17/§V19), gofmt, vet, §V7 `CGO_ENABLED=0`
+  build, and the default cgo/metal build all clean.
+- §R162, §R163, §T233.
+
+### T232 — Expert Choice MoE routing (2026-07-07)
+- **`nn.ExpertChoiceRoute` implements Expert Choice routing** (Zhou et al. 2022,
+  arXiv:2202.09368) — the inverse of the existing token-choice `SparseMoE`/`TopKGating`:
+  instead of each token picking its top-k experts (which can overload popular experts
+  and needs an auxiliary load-balancing loss), each *expert* picks its top-k tokens. So
+  every expert processes exactly k tokens — perfect load balance by design, no auxiliary
+  loss — while a token may be selected by zero, one, or several experts.
+- **Algorithm** (pure routing, no fused op): `ExpertAffinity(logits)` gives the
+  per-token softmax over experts `S = Softmax(X·Wg)`; `ExpertChoiceCapacity(n, e, c)`
+  is the per-expert capacity `k = round(n·c/e)` (c = capacity factor); and
+  `ExpertChoiceRoute(scores, capacity)` returns, for each expert, its top-k token
+  indices and the corresponding gate weights (`TopK(Sᵀ, k)`). `ExpertChoiceCombine`
+  assembles each token's output as the gated sum over the experts that selected it.
+- **§V16**: tier-2 CONFIRMED by `research-lite` (never `/deep-research`), unanimous
+  across three agents versus the paper (§3, Eqs. 1–4) and the Google Research writeup —
+  the `Softmax(X·Wg)` affinity, the top-k-over-tokens routing, the `k = n·c/e` capacity,
+  the exact-k perfect-balance guarantee, and the `Σ P·G·Xₑ` combine.
+- **§V16 tier-1** (`nn/expert_choice_test.go`): every expert selects exactly k tokens
+  (perfect balance, total = e·k); the selected tokens are the top-k by affinity with
+  gates equal to those affinities; a token can be picked by several experts or none;
+  the combine matches the gated sum; and `ExampleExpertChoiceRoute`.
+- **Note**: the previous iteration's `research-lite` session rate-limit (which forced a
+  research-free fallback in T231) has reset, so this resumes the paper-backed track.
+- **Gate**: `go test ./nn ./ops ./autograd` green, the full nlp/rl suites green,
+  apicheck (§V17), gofmt, vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal
+  build all clean.
+- §R161, §T232.
+
+### T231 — Prod reduction (numpy.prod) (2026-07-07)
+- **`ops.Prod` reduces a tensor by multiplication over axes** (numpy.prod) — a
+  definitional numpy op continuing the numpy/gonum surface, differentiable with the
+  usual product rule `∂prod/∂xᵢ = ∏_{j≠i} xⱼ`.
+- **Forward** (`backend/ref/reduce.go`, dispatched `OpProd`): a one-line use of the
+  shared generic reduction kernel (`init = 1`, `combine = a·x`, identity finalize),
+  so it honors axes/keepdims and reuses the existing reduction machinery; f64
+  accumulation (§V10); the CPU/GPU backends fall back to ref (§I4).
+- **Backward** (`autograd/vjp_reduce.go`, `prodVJP`): `prodₐₗₗ/xᵢ` when the reduction
+  group has no zeros, with careful zero-handling — exactly one zero routes the whole
+  product of the other elements to that element (others get 0), and two or more zeros
+  give an all-zero gradient — reusing the shared group-mapping.
+- **§V16**: DEFINITIONAL (numpy.prod semantics, no paper — like Sum/Mean/Var/Cumsum),
+  so it is exempt from research-lite; verified against numpy and by gradient checks.
+  (This iteration's `research-lite` was unavailable due to a session rate-limit, so a
+  research-free definitional task was chosen per the autonomy rule.)
+- **§V16 tier-1 / §V2** (`ops/prod_test.go`, `autograd/prod_test.go`): products over
+  all axes / axis 0 / axis 1 with and without keepdims match numpy 2.5.1 (720,
+  [4,10,18], [6,120]); a finite-difference gradient check on zero-free data; and the
+  zero-handling edge cases (`[2,0,3] → [0,6,0]`, `[0,5,0] → [0,0,0]`); plus `ExampleProd`.
+- **Gate**: `go test ./ops ./autograd ./backend/ref ./backend/cpu` green (CPU == ref,
+  §V3/§V11), apicheck (§V17), gofmt, vet, §V7 `CGO_ENABLED=0` build, and the default
+  cgo/metal build all clean.
+- §T231.
+
+### T230 — SOAP optimizer (2026-07-07)
+- **`nn.SOAP` runs Adam in the eigenbasis of Shampoo's preconditioners** (Vyas et al.
+  2024, arXiv:2409.11321) — the capstone of the eigendecomposition → Shampoo → SOAP
+  arc, combining Shampoo's second-order rotation with Adam's robust per-coordinate
+  step. It reuses `internal/linalg.SymEig` (as Shampoo and GaLore do).
+- **Algorithm**: preconditioner EMAs `L ← β₂L + (1−β₂)GGᵀ`, `R ← β₂R + (1−β₂)GᵀG`;
+  their eigenvector bases `Q_L, Q_R` recomputed every `Freq` steps and reused between;
+  each step rotates the gradient (`G' = Q_LᵀGQ_R`), runs bias-corrected Adam on `G'`,
+  and rotates the update back (`W −= lr·Q_LN'Q_Rᵀ`). With `Q_L = Q_R = I` it reduces
+  exactly to Adam. On an eigenbasis refresh the first moment `M'` is rotated into the
+  new basis and the second moment `V'` is kept in place (the reference approximation).
+  Non-matrix parameters use plain Adam.
+- **API**: `NewSOAP(params, lr, opts...)`, `WithSOAPBetas`, `WithSOAPEps`, `WithSOAPFreq`
+  (defaults β₁=β₂=0.95, ε=1e-8, Freq=10). Float64 state (§V10).
+- **§V16**: tier-2 CONFIRMED by `research-lite` (never `/deep-research`), unanimous
+  across three agents versus SOAP (Algorithm 3) and the official `nikhilvyas/SOAP`
+  `soap.py` — the L/R EMAs, the `Q_LᵀGQ_R` rotation, Adam-in-the-eigenbasis, the
+  `Q_LN'Q_Rᵀ` back-rotation, the Adam reduction, and the `M'`-rotated / `V'`-kept
+  refresh handling.
+- **§V16 tier-1 / §V2** (`nn/soap_test.go`, `nn/soap_internal_test.go`): a 1×1
+  parameter reproduces an independent Adam trajectory exactly; one matrix step matches
+  an independent recomputation of the full pipeline (L/R EMA → eigenbasis → rotate →
+  Adam → rotate back); it converges on a convex quadratic across several eigenbasis
+  refreshes; the rotation helpers are exact inverses (`Q` orthogonal); and `ExampleSOAP`.
+- **Gate**: `go test ./nn ./ops ./autograd` green, the full nlp/rl suites green,
+  apicheck (§V17/§V19, `SOAPOption` allowlisted), gofmt, vet, §V7 `CGO_ENABLED=0`
+  build, and the default cgo/metal build all clean.
+- §R160, §T230.
+
+### T229 — GKD generalized-JSD distillation loss (2026-07-07)
+- **`nn.GKDLoss` implements the generalized Jensen-Shannon divergence** used by GKD
+  (Agarwal et al. 2024, arXiv:2306.13649) — extending the distillation family, which
+  previously had only the forward-KL soft-target `DistillLoss`. With teacher
+  `P = softmax(teacherLogits)`, student `Q = softmax(studentLogits)`, and mixture
+  `M = β·P + (1−β)·Q`, the loss is `JSD^β(P‖Q) = β·KL(P‖M) + (1−β)·KL(Q‖M)`, averaged
+  over rows.
+- **Properties**: it is bounded even for disjoint supports (unlike KL); `β=0.5` is the
+  standard symmetric Jensen-Shannon divergence; and it interpolates the distillation
+  direction — `β→0` behaves like the forward KL (teacher‖student) and `β→1` like the
+  reverse KL (student‖teacher). The degenerate endpoints are taken literally (`β=0` =
+  forward KL, `β=1` = reverse KL), matching HuggingFace TRL. It is composed from
+  softmax/log/arithmetic ops, so it is differentiable w.r.t. the student logits with no
+  fused kernel.
+- **§V16**: tier-2 CONFIRMED by `research-lite` (never `/deep-research`) versus the GKD
+  paper (§3, Eq. 1/2) and the TRL `gkd_trainer` — the formula, the teacher=P /
+  student=Q convention, the `β=0.5` symmetry, boundedness, and the endpoint KL
+  directions (the research corrected an initially-swapped endpoint labeling).
+- **§V16 tier-1 / §V2** (`nn/gkd_test.go`): the loss matches an independent
+  generalized-JSD/KL computation for `β ∈ {0, 0.3, 0.5, 1}` (@1e-9); it is symmetric
+  under student/teacher swap at `β=0.5`; it is non-negative; a gradient check confirms
+  the student-logit gradient matches finite differences; shape/β errors; and
+  `ExampleGKDLoss` (identical logits → 0).
+- **Gate**: `go test ./nn ./ops ./autograd` green, the full nlp/rl suites green,
+  apicheck (§V17), gofmt, vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal
+  build all clean.
+- §R159, §T229.
+
+### T228 — DeepNorm / DeepNet (2026-07-07)
+- **`nn.DeepNorm` implements the DeepNet residual connection** (Wang et al. 2022,
+  arXiv:2203.00555) — `x' = LayerNorm(α·x + G(x))`, which up-scales the skip branch
+  by `α > 1`. Paired with a `β`-down-scaled weight initialization, this bounds the
+  model update to be independent of depth, enabling stable training of transformers
+  with hundreds to thousands of layers. It completes the normalization family
+  (LayerNorm / RMSNorm / SpectralNorm / WeightNorm) and composes with the existing
+  LayerNorm via `OpAXPY`, so it stays differentiable and sublayer-agnostic.
+- **Constants** (DeepNet Table 2): `DeepNormEncoder(N)` → `α=(2N)^¼, β=(8N)^-¼`;
+  `DeepNormDecoder(M)` → `α=(2M)^¼, β=(8M)^-¼`; `DeepNormEncoderDecoder(N,M)` →
+  encoder `α_e=0.81·(N⁴M)^{1/16}, β_e=0.87·(N⁴M)^{-1/16}`, decoder `α_d=(3M)^¼,
+  β_d=(12M)^-¼`. `α=β=1` recovers vanilla post-LN.
+- **`DeepNormInit(w, fanIn, fanOut, β, seed)`** fills a weight with Xavier-uniform
+  scaled by the gain `β` — the down-scaled init DeepNet applies to the FFN, value-,
+  and output-projection weights (query/key keep the standard gain).
+- **§V16**: tier-2 CONFIRMED by `research-lite` (never `/deep-research`), unanimous
+  across four agents versus DeepNet Table 2 and `microsoft/torchscale`
+  (`encoder.py`/`decoder.py`) — the residual up-scale, the β-init down-scale on
+  fc1/fc2/v_proj/out_proj (not q/k), the per-architecture constants, and the
+  `α=β=1`→post-LN reduction.
+- **§V16 tier-1** (`nn/deepnorm_test.go`): the encoder/decoder/encoder-decoder
+  constants match the Table-2 formulas; `Forward(x, g) = LayerNorm(α·x + g)`; `α=1`
+  reduces to standard post-LN; `DeepNormInit` equals `β·XavierUniform` under the same
+  seed (and stays within the `β·√(6/(fanIn+fanOut))` bound); plus `ExampleDeepNorm`
+  and `ExampleDeepNormEncoder`.
+- **Gate**: `go test ./nn ./ops ./autograd` green, the full nlp/rl suites green,
+  apicheck (§V17/§V19), gofmt, vet, §V7 `CGO_ENABLED=0` build, and the default
+  cgo/metal build all clean.
+- §R158, §T228.
+
+### T227 — AWQ post-training quantization (2026-07-07)
+- **`nn.AWQuantize` implements AWQ** (Lin et al. 2023, arXiv:2306.00978) — the second
+  calibration-aware post-training quantizer, completing the RTN / GPTQ / AWQ trio.
+  AWQ's insight: the weights that matter are the ones multiplied by *large
+  activations*, not the large-magnitude weights. It protects those salient input
+  channels by scaling their weight column up by `s_j = act_j^α` before quantizing and
+  folding the inverse scale back — `Ŵ = Quant(W·diag(s))·diag(1/s)` — which preserves
+  `W·X` while shrinking the salient channels' relative rounding error.
+- **Algorithm** (matching `mit-han-lab/llm-awq`): `act_j = mean_samples |X[j,:]|`;
+  for each α in a grid over `[0,1)` (`ratio = i/n_grid`, default 20), the scales
+  `act^α` are clamped to ≥1e-4 and normalized by `√(max·min)` (geometric mean ≈ 1),
+  the scaled weight is quantized per output row (grid recomputed from its max-abs), and
+  the α minimizing the output error `‖W·X − Ŵ·X‖` is kept. `α = 0` recovers plain
+  round-to-nearest. It reuses `UniformQuantizer` from the GPTQ work.
+- **API**: `AWQuantize(w, x, levels, opts...)`, `WithAWQAlpha` (pin α / skip the
+  search) and `WithAWQGrid` (search resolution).
+- **§V16**: tier-2 CONFIRMED by `research-lite` (never `/deep-research`), unanimous
+  across three agents versus Lin et al. 2023 and the official `auto_scale.py` /
+  `quantizer.py` (the activation salience metric, the `s_X^α` scaling with inverse
+  fold-back, the α grid search over output MSE, the `√(max·min)` scale normalization,
+  and the `α=0`→RTN reduction).
+- **§V16 tier-1** (`nn/awq_test.go`): with skewed per-channel activations AWQ's output
+  reconstruction error is strictly below per-row RTN (the defining property);
+  `WithAWQAlpha(0)` reproduces per-row RTN exactly; shape/level errors; and
+  `ExampleAWQuantize` (the salient channel is preserved).
+- **Gate**: `go test ./nn ./ops ./autograd` green, the full nlp/rl suites green,
+  apicheck (§V17, `AWQOption` allowlisted), gofmt, vet, §V7 `CGO_ENABLED=0` build, and
+  the default cgo/metal build all clean.
+- §R157, §T227.
+
+### T226 — GPTQ post-training quantization (2026-07-07)
+- **`nn.GPTQuantize` implements GPTQ** (Frantar, Ashkboos, Hoefler & Alistarh 2022,
+  arXiv:2210.17323) — the foundational *calibration-aware* post-training weight
+  quantizer, serving the accelerator/inference priority. Unlike data-free NF4 or
+  round-to-nearest, it quantizes a linear layer's weight column by column and, after
+  rounding each input column, updates the remaining columns to compensate for the
+  rounding error using second-order information from a batch of calibration
+  activations — minimizing the layer output error `‖W·X − Ŵ·X‖²_F` far below RTN at
+  the same bit-width.
+- **Algorithm** (matching `IST-DASLab/gptq`): the reconstruction Hessian `H = 2·X·Xᵀ`
+  (with a `damp·mean(diag H)` ridge and dead-column handling); the upper Cholesky
+  factor of `H⁻¹`; then a greedy column loop where `err = (w − quant(w))/Hinv[i,i]` is
+  propagated as `W[:,i:] −= err ⊗ Hinv[i,i:]`. It reuses `linalg.Inverse` and
+  `linalg.Cholesky` (the upper factor of `H⁻¹` is `Lᵀ` of the lower Cholesky).
+- **API**: `GPTQuantize(w, x, quant, opts...)` where `quant` snaps a weight to the
+  grid, `WithGPTQDamp` (default 0.01), and a `UniformQuantizer(levels, lo, hi)` helper.
+- **§V16**: tier-2 CONFIRMED by `research-lite` (never `/deep-research`), unanimous
+  across three agents versus Frantar et al. 2022 and the official `gptq.py`
+  `fasterquant` (the `H=2XXᵀ` Hessian, dampening, upper-Cholesky of `H⁻¹`, the
+  `err=(w−q)/d` update, the outer-product error propagation, and the RTN reduction).
+- **§V16 tier-1** (`nn/gptq_test.go`): on correlated calibration inputs GPTQ's output
+  reconstruction error is strictly below RTN's by a clear margin (the defining
+  property); with an identity Hessian (`X = I`) GPTQ reduces exactly to RTN; shape
+  errors; and `ExampleGPTQuantize` (GPTQ redistributes rather than rounding naively).
+- **Gate**: `go test ./nn ./ops ./autograd` green, the full nlp/rl suites green,
+  apicheck (§V17, `GPTQOption` allowlisted), gofmt, vet, §V7 `CGO_ENABLED=0` build,
+  and the default cgo/metal build all clean.
+- §R156, §T226.
+
+### T225 — Shampoo optimizer (2026-07-07)
+- **`nn.Shampoo` is the preconditioned second-order optimizer of Gupta, Koren &
+  Singer 2018** (arXiv:1802.09568) — for a matrix parameter it keeps two full-matrix
+  preconditioners (a left `L` and a right `R`, accumulated AdaGrad-style) and
+  preconditions the gradient by their inverse fourth roots,
+  `W ← W − η·L^{−1/4}·G·R^{−1/4}`. It is distinct from the existing optimizers
+  (Sophia's diagonal Hessian, Muon's Newton-Schulz orthogonalization, the Adam
+  family) and showcases the symmetric-eigendecomposition work (T218): the inverse
+  matrix roots `L^{−1/4} = V·diag(λ^{−1/4})·Vᵀ` are formed via `internal/linalg.SymEig`
+  (reused from GaLore).
+- **Algorithm** (Algorithm 1): `L, R` initialized to `ε·I`, then `L ← L + G·Gᵀ`,
+  `R ← R + Gᵀ·G` (plain sum, no decay). Non-matrix parameters fall back to diagonal
+  AdaGrad (the order-1 case, exponent `−1/2`). Inverse roots are recomputed each step
+  (amortizing them over `k` steps, as distributed Shampoo does, is a follow-up).
+- **API**: `NewShampoo(params, lr, opts...)`, `WithShampooEps` (ridge `ε`, default
+  1e-4). Float64 state (§V10).
+- **§V16**: tier-2 CONFIRMED by `research-lite` (never `/deep-research`), unanimous
+  across three agents versus Gupta et al. 2018 (Algorithm 1 / Theorem 7) and
+  `google-research/scalable_shampoo` — the `εI` init, plain-sum accumulation, the
+  `L^{−1/4} G R^{−1/4}` update, the `−1/4` exponents, the eigendecomposition roots,
+  the order-1→AdaGrad reduction, and per-step root recomputation.
+- **§V16 tier-1 / §V2**: `nn/shampoo_test.go` hand-checks the full matrix step for a
+  diagonal gradient (where `Ĝ_ii = g_i/√(ε+g_i²)`), the vector→AdaGrad reduction, and
+  convergence on a convex quadratic, plus `ExampleShampoo`; `nn/shampoo_internal_test.go`
+  verifies `invMatrixRoot` (`diag(16,81) → diag(½,⅓)` and `(M^{−1/4})⁴·M = I`).
+- **Gate**: `go test ./nn ./ops ./autograd` green, the full nlp/rl suites green,
+  apicheck (§V17/§V19, `ShampooOption` allowlisted, fields documented), gofmt, vet,
+  §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R155, §T225.
+
+### T224 — Locally Typical Sampling (2026-07-07)
+- **`nlp.Sampler` gains locally typical sampling** (Meister, Pimentel, Wiher &
+  Cotterell 2023, arXiv:2202.00666) via a `Typical` field and `WithTypical(τ)`
+  option — a truncation method that keeps tokens whose information content is closest
+  to the distribution's entropy, filtering out both the too-predictable and the
+  too-surprising (complementing the existing top-k/top-p/min-p/epsilon/eta filters).
+- **Algorithm** (a filter in `Dist`, after min-p): compute the entropy
+  `H = −Σ p_i·log p_i`; score each token by `|−log p_i − H|` (how far its surprisal is
+  from the entropy); sort ascending (most typical first); keep the smallest prefix
+  whose cumulative probability reaches `τ` (the crossing token included, at least one
+  token always kept); renormalize. `τ ≥ 1` (or `≤ 0`) is a no-op.
+- **§V16**: tier-2 CONFIRMED by `research-lite` (never `/deep-research`), unanimous
+  across four agents versus Meister et al. 2023 (Def. 3.5 / Eq. 7, 12) and the
+  HuggingFace `TypicalLogitsWarper` (score `|−log_softmax − ent|`, ascending sort,
+  cumulative-mass cutoff, `τ=1` no-op, default 0.9).
+- **§V16 tier-1** (`nlp/typical_test.go`): a hand-computed case for
+  `p = [0.4, 0.3, 0.2, 0.1]` (entropy ≈ 1.28, typicality order 1,2,0,3) where `τ=0.7`
+  drops the least-typical tail token and `τ=0.45` keeps only the two most typical; a
+  `τ=1` no-op check; a prefix property (the kept set is exactly the ascending-score
+  prefix, renormalized to 1, never empty); and `ExampleWithTypical`.
+- **Gate**: `go test ./nlp ./nn ./ops ./autograd` green, apicheck (§V17), gofmt, vet,
+  §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R154, §T224.
+
+### T223 — Grokfast optimizer wrapper (2026-07-07)
+- **`nn.Grokfast` wraps any base optimizer with the Grokfast-EMA gradient filter**
+  (Lee, Ahn, Kim & Kim 2024, arXiv:2405.20233) — grokking (delayed generalization) is
+  driven by a slow-varying gradient component, and amplifying it accelerates
+  generalization by up to ~50×. It extends the optimizer family in a new direction
+  (gradient-frequency filtering rather than another Adam variant).
+- **Algorithm**: a per-parameter gradient EMA `μ_t = α·μ_{t−1} + (1−α)·g_t`, and the
+  amplified `ĝ_t = g_t + λ·μ_t` handed to the base optimizer. It is a drop-in
+  transform applied before the base step (the base — SGD, Adam, … — runs unchanged).
+  `μ` is seeded with the first gradient (matching the `ironjr/grokfast` reference), and
+  the EMA advances exactly once per parameter per step regardless of how the base
+  reads the gradients.
+- **API**: `NewGrokfast(base, params, opts...)`, `WithGrokfastLambda` (default 2.0;
+  `0` recovers the base optimizer exactly) and `WithGrokfastAlpha` (default 0.98).
+  Float64 state (§V10).
+- **§V16**: tier-2 CONFIRMED by `research-lite` (never `/deep-research`), unanimous
+  across three agents versus Lee et al. 2024 and the official `ironjr/grokfast`
+  `gradfilter_ema` (the EMA formula, `ĝ = g + λμ`, the `α=0.98`/`λ=2.0` defaults, the
+  first-gradient init, and the `λ=0` no-op).
+- **§V16 tier-1 / §V2** (`nn/grokfast_test.go`): the filtered gradient matches an
+  independent recurrence over several steps (@1e-12); the first step gives
+  `ĝ_0 = g_0·(1+λ)`; `λ=0` is an exact no-op; wrapping SGD still minimizes a convex
+  quadratic to <1% of the initial loss; and `ExampleGrokfast`.
+- **Gate**: `go test ./nn ./ops ./autograd` green, the full nlp/rl suites green,
+  apicheck (§V17, `GrokfastOption` allowlisted), gofmt, vet, §V7 `CGO_ENABLED=0`
+  build, and the default cgo/metal build all clean.
+- §R153, §T223.
+
+### T222 — Logit soft-capping (Gemma-2) (2026-07-07)
+- **`ops.SoftCap(x, cap)` applies the smooth logit bound `y = cap·tanh(x/cap)`**
+  (Gemma-2 technical report, arXiv:2408.00118) — a differentiable alternative to
+  hard clipping that leaves small values almost unchanged (`≈ x` for `|x| ≪ cap`)
+  and saturates gently to `±cap`, keeping logits in `(−cap, cap)`. Gemma-2 uses it
+  in the forward pass on the attention scores before softmax (`cap = 50`) and on the
+  final LM-head logits before the loss (`cap = 30`), so it participates in training,
+  not just inference.
+- **Forward** (`backend/ref/softcap.go`, dispatched `OpSoftCap` with
+  `SoftCapAttrs{Cap}`): elementwise `cap·tanh(x/cap)`, `cap ≤ 0` errors; f64 (§V10);
+  registered F32/F64 (elementwise / memory-bound, so the GPU backends fall back to
+  ref like `tanh`, per ADR-0008).
+- **Backward** (`autograd/vjp_softcap.go`): `dy/dx = 1 − tanh²(x/cap) = 1 − (y/cap)²`,
+  computed from the forward output `y` (no recompute).
+- **§V16**: tier-2 CONFIRMED by `research-lite` (never `/deep-research`), unanimous
+  across four agents versus the Gemma-2 report, HuggingFace `modeling_gemma2.py`
+  (attention cap 50 / final cap 30), and `keras_hub`.
+- **§V16 tier-1 / §V2** (`ops/softcap_test.go`): the output matches `cap·tanh(x/cap)`
+  exactly; the near-identity / saturation limits hold; `cap ≤ 0` errors; a gradient
+  check confirms the VJP matches finite differences; and `ExampleSoftCap`.
+- **Gate**: `go test ./ops ./autograd ./backend/ref` green, the full nn/nlp/rl suites
+  green, apicheck (§V17), gofmt, vet, §V7 `CGO_ENABLED=0` build, and the default
+  cgo/metal build all clean.
+- §R152, §T222.
+
+### T221 — Weight Normalization (2026-07-07)
+- **`nn.WeightNorm` reparameterizes a linear layer's weight into magnitude and
+  direction, `y = x·(g ⊙ V/‖V‖_col) + b`** (Salimans & Kingma 2016,
+  arXiv:1602.07868) — a classic training reparameterization that decouples each
+  weight vector's length from its direction to condition the optimization. It
+  completes the weight-reparameterization family alongside spectral normalization
+  (T220) and DoRA.
+- **Reuses the fused `OpDoRAWeight` kernel** (`m·V/‖V‖_col`), which is exactly
+  `g·v/‖v‖` per output column — so the forward and the paper's Eq. 3 gradient come
+  for free through autograd, with no new op, kernel, or backward code. Unlike DoRA
+  (which applies the same split to a frozen base plus a low-rank adapter), here both
+  the direction `V` and the magnitude `g` are trained freely.
+- **API**: `NewWeightNorm(dtype, in, out, seed)` (Xavier `V`, `g = ‖V‖_col` so the
+  initial effective weight equals `V` — the PyTorch `right_inverse` default; the
+  paper's data-dependent init is a documented divergence), `EffectiveWeight(ctx)`,
+  and `Params()` returning `{V, g, B}`.
+- **§V16**: tier-2 CONFIRMED by `research-lite` (never `/deep-research`), unanimous
+  across four agents versus Salimans & Kingma Eq. 2/3/4 and PyTorch
+  `parametrizations.weight_norm`.
+- **§V16 tier-1 / §V2** (`nn/weight_norm_test.go`): the `g = ‖v‖` init makes the
+  effective weight equal `V`; each effective column has length exactly `g[j]` (the
+  defining property); a gradient check confirms the `V` and `g` gradients match
+  finite differences (Eq. 3); and the direction gradient is orthogonal to `V` per
+  column, `V[:,j]·∇_V[:,j] = 0` (Eq. 4, the projection property); plus
+  `ExampleWeightNorm`.
+- **Gate**: `go test ./nn ./ops ./autograd` green, the full nlp/rl suites green,
+  apicheck (§V17), gofmt, vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal
+  build all clean.
+- §R151, §T221.
+
+### T220 — Spectral Normalization (2026-07-07)
+- **`nn.SpectralNorm` is a linear layer whose weight is normalized by its largest
+  singular value, `y = x·(W/σ(W)) + b`** (Miyato et al. 2018, arXiv:1802.05957) —
+  a training-stability method that bounds the layer's Lipschitz constant to 1. It
+  bridges the differentiable-linear-algebra suite (T214–T219) back to the training
+  methodologies, and uses the new `ops.SVD` (T219) as its verification oracle.
+- **Power iteration.** `σ(W)` is estimated by one power iteration per forward on
+  persistent left/right singular-vector buffers (`v ← Wᵀu/‖·‖`, `u ← Wv/‖·‖`,
+  `σ ≈ uᵀWv`; 15 warm-up iterations at init, `u ~ N(0,1)`). The buffers are updated
+  without gradient (paper §2.3) and are not parameters.
+- **Gradient for free.** Building `σ = uᵀWv` and `W_SN = W/σ` as a *differentiable
+  composition* on the tape (two matmuls + a broadcast divide, with `u,v` held
+  constant) makes autograd reproduce the paper's Eq. 9 gradient
+  `∂W_SN/∂W_ij = (1/σ)(E_ij − [u₁v₁ᵀ]_ij·W_SN)` exactly — no hand-coded VJP.
+- **API**: `NewSpectralNorm(dtype, in, out, seed, opts...)`,
+  `WithSpectralNormIters(n)` (`0` freezes the buffers, e.g. for a deterministic
+  gradient check), `SigmaEst()`, and `Params()` returning only `{W, B}`.
+- **§V16**: tier-2 CONFIRMED by `research-lite` (never `/deep-research`), unanimous
+  across three agents versus Miyato Eq. 8/9 / Algorithm 1 and PyTorch
+  `parametrizations.spectral_norm`.
+- **§V16 tier-1 / §V2** (`nn/spectral_norm_test.go`): the power-iteration estimate
+  equals the true `σ_max = s[0]` from `ops.SVD` (@1e-6 — a direct cross-check of
+  power iteration against the SVD); the normalized weight `W/σ` has top singular
+  value 1 (the Lipschitz-1 property); a frozen-buffer gradient check confirms the
+  autograd `W`-gradient matches finite differences (i.e. Eq. 9); and
+  `ExampleSpectralNorm`.
+- **Gate**: `go test ./nn ./ops ./autograd` green, the full nlp/rl suites green,
+  apicheck (§V17, `SpectralNormOption` allowlisted), gofmt, vet, §V7
+  `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R150, §T220.
+
+### T219 — Differentiable SVD (reduced/thin) (2026-07-07)
+- **`ops.SVD(a)` computes the reduced singular value decomposition
+  `a = U·diag(s)·Vᵀ` and is differentiable** — the capstone of the
+  differentiable-linear-algebra suite (Cholesky, log-det, SPD solve, QR, eigh, and
+  now SVD). It is the tool behind low-rank approximation, the pseudoinverse, PCA, and
+  the nuclear/spectral norms, all of which can now be trained through.
+- **Forward** (`backend/ref/svd.go`, dispatched `OpSVD`): reduced SVD of an `m×n`
+  matrix with `m ≥ n` via one-sided Jacobi/Hestenes rotations (self-contained,
+  matching `linalg.SVD`; high relative accuracy, never forms `AᵀA`), returning
+  `U [m,n]`, `s [n]` descending, `V [n,n]`; f64 accumulation (§V10); registered
+  F32/F64 (GPU falls back to ref, §I4).
+- **Backward** (`autograd/vjp_svd.go`, Townsend 2016 / Ionescu 2015): with cotangents
+  `Ū, s̄, V̄` and `F_ij = 1/(s_j² − s_i²)`, `J = F∘(UᵀŪ − ŪᵀU)`, `K = F∘(VᵀV̄ − V̄ᵀV)`,
+  `Ā = U·[diag(s̄) + J·diag(s) + diag(s)·K]·Vᵀ`, plus the strictly-tall term
+  `(I − UUᵀ)·Ū·diag(1/s)·Vᵀ` for `m > n`. The antisymmetric `J,K` make the U/V
+  gradient invariant to the per-column sign gauge. The singular-value term is exact;
+  the U/V terms require distinct, nonzero singular values (documented, as in PyTorch).
+- **§V16**: tier-2 CONFIRMED by `research-lite` (never `/deep-research`), unanimous
+  across three agents versus Townsend 2016, Ionescu 2015 (arXiv:1509.07838), and
+  PyTorch `svd_backward` — the `F` sign, the skew `J/K`, the tall `(I−UUᵀ)` term, and
+  the distinct-nonzero-singular-value degeneracy.
+- **§V16 tier-1 / §V2**: `ops/svd_test.go` checks `s` (exact) and `U, V` (per-column
+  sign-aligned) against `numpy.linalg.svd`, plus `UᵀU = VᵀV = I`, descending `s`, and
+  `U·diag(s)·Vᵀ = A`, and `ExampleSVD`; `autograd/svd_test.go` finite-differences the
+  gradient for square (2×2, 3×3) and tall (4×2, 5×3) matrices with `Ū, s̄, V̄` all
+  active (U and V columns coupled-sign-aligned to the base decomposition — this proves
+  the tall `(I−UUᵀ)` term and the multi-output tape path), and checks the nuclear-norm
+  closed form `∂‖A‖_*/∂A = U·Vᵀ`.
+- **Gate**: `go test ./ops ./autograd ./backend/ref` green, the full nn/nlp/rl suites
+  green, apicheck (§V17), gofmt, vet, §V7 `CGO_ENABLED=0` build, and the default
+  cgo/metal build all clean.
+- §R149, §T219.
+
+### T218 — Differentiable symmetric eigendecomposition (eigh) (2026-07-07)
+- **`ops.Eigh(a)` computes the eigenvalues (ascending) and orthonormal eigenvectors
+  of a real symmetric matrix (`a = V·diag(w)·Vᵀ`, numpy.linalg.eigh) and is
+  differentiable** — the basis for PCA-as-a-layer, spectral penalties and norms, and
+  differentiable whitening. It realizes the eigh follow-up from the QR work (T217)
+  and reuses that iteration's multi-output autograd path.
+- **Forward** (`backend/ref/eigh.go`, dispatched `OpEigh`): reuses the shared
+  `internal/linalg.SymEig` cyclic-Jacobi kernel (also behind PCA and GaLore) after
+  symmetrizing the input to `(A+Aᵀ)/2`, returning `w` ascending and `V` with
+  eigenvectors as columns; f64 accumulation (§V10); registered F32/F64 (GPU falls
+  back to ref, §I4).
+- **Backward** (`autograd/vjp_eigh.go`, Ionescu et al. 2015 / Giles 2008): with
+  cotangents `w̄, V̄`, `G = V·(diag(w̄) + F ∘ (Vᵀ·V̄))·Vᵀ` and the symmetric
+  `Ā = ½(G + Gᵀ)`, where `F_ij = 1/(w_j − w_i)` off the diagonal. The sign matters:
+  research and a first-principles derivation of the eigenvector perturbation both give
+  `1/(w_j − w_i)` (the Giles/PyTorch convention); the transpose form `1/(w_i − w_j)`
+  only coincides when `VᵀV̄` is antisymmetric off-diagonal, which fails for an
+  arbitrary `V̄` — so the gradcheck (random `V̄`) is what pins the sign. The eigenvalue
+  term is exact and degeneracy-free; the eigenvector term requires distinct
+  eigenvalues (`F` is singular at a repeated eigenvalue, documented, as in PyTorch).
+- **§V16**: tier-2 CONFIRMED by `research-lite` (never `/deep-research`), unanimous
+  across three agents versus Ionescu 2015 (arXiv:1509.07838), Giles 2008 §3.1, and
+  PyTorch `linalg_eigh_backward`, including the `F`-sign nuance.
+- **§V16 tier-1 / §V2**: `ops/eigh_test.go` checks `w` (exact, ascending) and `V`
+  (per-column sign-aligned) against `numpy.linalg.eigh`, plus `VᵀV = I`, ascending
+  order, and `V·diag(w)·Vᵀ = A`, and `ExampleEigh`; `autograd/eigh_test.go`
+  finite-differences the gradient with both `w̄` and `V̄` active (eigenvectors
+  sign-aligned to the base decomposition, symmetric entry-pairs, n = 2..4) and checks
+  the `V̄ = 0` closed form.
+- **Gate**: `go test ./ops ./autograd ./backend/ref` green, the full nn/nlp/rl suites
+  green (multi-output tape regression), apicheck (§V17), gofmt, vet, §V7
+  `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R148, §T218.
+
+### T217 — Differentiable QR + multi-output autograd (2026-07-07)
+- **`ops.QR(a)` computes the reduced (economy) QR factorization `a = Q·R` and is
+  differentiable** — the standard tool for orthonormalizing columns and for stable
+  least squares, now usable on the autograd tape. It realizes the QR follow-up from
+  the SPD solve (T216).
+- **Multi-output autograd (infrastructure).** QR is the library's first
+  differentiable *multi-output* op (Q and R), which the single-output tape could not
+  handle. The extension is **additive** — existing single-output VJPs are untouched:
+  a new `VJPMulti` type and `vjpsMulti` registry (`autograd/vjp.go`), and a
+  `Tape.backwardMulti` path (`autograd/autograd.go`) that gathers every output's
+  cotangent — zero-filling an output that never reached the loss, and skipping the
+  node entirely when none did. This unblocks future SVD/eigh backward.
+- **Forward** (`backend/ref/qr.go`, dispatched `OpQR`): reduced Householder QR of an
+  `m×n` matrix with `m ≥ n` (backward-stable; sign convention `α = −sign(x₀)‖x‖`
+  matching LAPACK/numpy), returning `Q [m,n]` with orthonormal columns and `R [n,n]`
+  upper-triangular; f64 accumulation (§V10); registered F32/F64 (GPU falls back to
+  ref, §I4).
+- **Backward** (`autograd/vjp_qr.go`, Seeger et al. 2017, arXiv:1710.08717): with
+  output cotangents `Q̄, R̄`, `M = R·R̄ᵀ − Q̄ᵀ·Q`, `Ā = [Q̄ + Q·copyltu(M)]·R⁻ᵀ`, where
+  `copyltu(X) = tril(X) + tril(X,−1)ᵀ` is the symmetric completion from the lower
+  triangle. A single formula covers `m = n` and `m > n`: the full (unprojected) `Q̄`
+  already carries the tall-case orthogonal-complement contribution, as PyTorch and
+  TensorFlow confirm.
+- **§V16**: tier-2 CONFIRMED by `research-lite` (never `/deep-research`), unanimous
+  across three agents versus Seeger 2017, Townsend, and the PyTorch/TF
+  `linalg_qr_backward` implementations.
+- **§V16 tier-1 / §V2**: `ops/qr_test.go` checks `Q, R` against `numpy.linalg.qr`
+  (sign-aligned per column, since QR is unique only up to per-column sign), the
+  defining properties (`QᵀQ = Iₙ`, `R` upper-triangular, `Q·R = A`) on a tall matrix,
+  the wide/rank-1 errors, and `ExampleQR`; `autograd/qr_test.go` finite-differences
+  the gradient for square (2×2, 3×3) and tall (4×2, 5×3) matrices with both `Q̄` and
+  `R̄` active (also exercising the multi-output tape path), plus a Q-only case that
+  drives the zero-cotangent fill.
+- **Gate**: `go test ./ops ./autograd ./backend/ref` green, the **full
+  autograd/nn/nlp/rl suites** green (regression check for the tape change), apicheck
+  (§V17, `VJPMulti` allowlisted), gofmt, vet, §V7 `CGO_ENABLED=0` build, and the
+  default cgo/metal build all clean.
+- §R147, §T217.
+
+### T216 — Differentiable SPD solve (2026-07-07)
+- **`ops.SolveSPD(A, B)` solves the symmetric positive-definite system `A·X = B`
+  (`X = A⁻¹B`) through the Cholesky factor and is differentiable in both `A` and
+  `B`.** With the Cholesky (T214) and log-determinant (T215), this **completes the
+  Gaussian-process triad**: the GP marginal log-likelihood
+  `−½·yᵀα − ½·logdet(K) − …` with `α = SolveSPD(K, y)` is now fully differentiable
+  end to end.
+- **Forward** (`backend/ref/solvespd.go`, dispatched `OpSolveSPD`): reuses
+  `choleskyKernel` for the factor (so the square/SPD validation is shared), then
+  forward-substitutes `L·Y = B` and back-substitutes `Lᵀ·X = Y` (LAPACK `dpotrs`).
+  The right-hand side is a vector `[n]` or a matrix `[n,k]`; f64 accumulation
+  (§V10); registered F32/F64 (GPU falls back to ref, §I4).
+- **Backward** (`autograd/vjp_solvespd.go`) is the standard reverse-mode of a linear
+  solve: from `dX = −A⁻¹·dA·X + A⁻¹·dB`, the right-hand-side cotangent is
+  `B̄ = A⁻¹·Ḡ` (another SPD solve, reusing the forward op), and the matrix cotangent
+  is the symmetrized `Ā = −½(B̄·Xᵀ + X·B̄ᵀ)` — the `½` being the composition-correct
+  convention for the symmetric input under the tape's full Frobenius product, as in
+  the Cholesky VJP.
+- **§V16**: DEFINITIONAL — `numpy.linalg.solve` plus the reverse-mode of a linear
+  solve is textbook calculus (like T215/T213), so it is exempt from research-lite and
+  pinned instead by numpy parity, gradcheck, and closed forms.
+- **§V16 tier-1 / §V2**: `ops/solvespd_test.go` checks `X` against
+  `numpy.linalg.solve` for vector and matrix right-hand sides (goldens from `.venv`
+  numpy 2.5.1, @1e-9), the residual `A·X = B`, the bad-dimension/indefinite errors,
+  and `ExampleSolveSPD`; `autograd/solvespd_test.go` finite-differences both
+  gradients (`B̄` per entry, `Ā` per symmetric entry-pair, `n = 1..4 × k ∈ {1,3}`)
+  and confirms the diagonal closed form (`B̄_i = 1/A_ii`, `Ā_ii = −b_i/A_ii²`).
+- **Gate**: `go test ./ops ./autograd ./backend/ref` green, apicheck (§V17), gofmt,
+  vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R146, §T216.
+
+### T215 — Differentiable log-determinant, SPD (2026-07-07)
+- **`ops.LogDet` returns `ln det(A)` for a symmetric positive-definite matrix and is
+  differentiable** — the workhorse term of a Gaussian / Gaussian-process marginal
+  log-likelihood (`−½·logdet(K) − …`) and of normalizing-flow log-densities. It
+  realizes the log-det follow-up flagged by the differentiable Cholesky (T214) and
+  extends the numpy/gonum surface with its second differentiable primitive.
+- **Forward** (`backend/ref/logdet.go`, dispatched `OpLogDet`): computes
+  `2·Σ ln L_ii` through the Cholesky factor (reusing `choleskyKernel`, so the
+  square/SPD validation is shared), which is stable — no overflow from a direct
+  product — and matches the log-det branch of `numpy.linalg.slogdet` (whose sign is
+  `+1` for SPD). Scalar output, f64 accumulation (§V10); registered F32/F64 (GPU
+  falls back to ref, §I4).
+- **Backward** (`autograd/vjp_logdet.go`) is Jacobi's formula: `∂ logdet(A)/∂A = A⁻ᵀ`,
+  which is `A⁻¹` for symmetric `A`, so `Ā = ḡ·A⁻¹` with `A⁻¹ = L⁻ᵀL⁻¹` formed from a
+  fresh Cholesky factor (`L⁻¹` by forward substitution). Because `A⁻¹` is already
+  symmetric, no `½`-symmetrization is needed — unlike the Cholesky VJP, whose `S` is
+  not symmetric.
+- **§V16**: DEFINITIONAL — `numpy.linalg.slogdet` plus Jacobi's formula is textbook
+  calculus (like the einsum-swap VJP of T213), so it is exempt from research-lite and
+  is instead pinned by numpy parity, gradcheck, and a closed-form check.
+- **§V16 tier-1 / §V2**: `ops/logdet_test.go` checks the value against
+  `numpy.linalg.slogdet` goldens from `.venv` numpy 2.5.1 (3×3 = 3.5835…, 4×4 =
+  6.5981…, @1e-12), a diagonal matrix (`ln 30`), the non-square/indefinite errors,
+  and `ExampleLogDet` (`ln 8`); `autograd/logdet_test.go` finite-differences the
+  gradient under symmetric perturbations (n = 1..5) and confirms the closed form
+  `Ā = A⁻¹` (`Ā[0,0] = 49.361…`) with an `Ā`-symmetry check.
+- **Gate**: `go test ./ops ./autograd ./backend/ref` green, apicheck (§V17), gofmt,
+  vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R145, §T215.
+
+### T214 — Differentiable Cholesky (reverse-mode VJP) (2026-07-07)
+- **`ops.Cholesky` factors a symmetric positive-definite matrix into its lower
+  triangular root `L` (A = L·Lᵀ, numpy.linalg.cholesky) and is differentiable** —
+  the tape-integrated counterpart to the existing eager, non-differentiable
+  `linalg.Cholesky`. This is the first *differentiable* matrix decomposition in the
+  numpy/gonum surface (after the array constructors of T180 and eager LU/eigh of
+  T181), enabling differentiable Gaussian-process marginal likelihoods, whitening,
+  and SPD-covariance reparameterizations on the autograd tape.
+- **Forward** (`backend/ref/cholesky.go`, dispatched `OpCholesky`): the
+  Cholesky–Banachiewicz recurrence, reading only the lower triangle (LAPACK
+  `uplo='L'`), accumulating in float64 (§V10); an F32 input is computed in f64 and
+  narrowed. A non-positive pivot reports that the matrix is not positive-definite;
+  a non-square input errors. Registered for F32/F64 (the GPU backends fall back to
+  ref, §I4 — the factorization is inherently sequential).
+- **Backward** (`autograd/vjp_cholesky.go`) is the reverse-mode Cholesky of Murray
+  2016 (arXiv:1602.07527, eq. 6/9/10): `P = Φ(Lᵀ·L̄)` with `Φ` the lower triangle
+  with a halved diagonal, `S = L⁻ᵀ·P·L⁻¹` (with `L⁻¹` by forward substitution), and
+  the symmetric `Ā = ½(S + Sᵀ)`. The `½(S+Sᵀ)` symmetrization is the PyTorch/JAX
+  convention — Murray's own `S+Sᵀ−diag(S)` double-counts off-diagonals under the
+  tape's full Frobenius composition, whereas `½(S+Sᵀ)` makes `⟨Ā,dA⟩=⟨L̄,dL⟩` hold
+  for any symmetric perturbation `dA`. The VJP consumes the forward output `L`
+  directly (no refactorization).
+- **§V16**: tier-2 CONFIRMED by `research-lite` (never `/deep-research`), unanimous
+  across three agents versus Murray 2016 eq. 6/9/10, PyTorch `cholesky_backward`,
+  and the numpy forward convention.
+- **§V16 tier-1 / §V2**: `ops/cholesky_test.go` checks the factor against
+  `numpy.linalg.cholesky` goldens from `.venv` numpy 2.5.1 (3×3 and 4×4, @1e-12),
+  the round-trip `L·Lᵀ = A` with an exact-zero upper triangle, the
+  non-square/indefinite/negative-pivot errors, the F32 path, and `ExampleCholesky`;
+  `autograd/cholesky_test.go` finite-differences the gradient under symmetric
+  perturbations (n = 1..5, per entry-pair, plus an `Ā`-symmetry check) and the 1×1
+  closed form `ā = ḡ/(2√a)`.
+- **Gate**: `go test ./ops ./autograd ./backend/ref` green, apicheck (§V17), gofmt,
+  vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
+- §R144, §T214.
+
+### T213 — Differentiable Einsum (swap-rule VJP) (2026-07-07)
+- **`ops.Einsum` is now differentiable** (it was forward-only in T212), so custom differentiable
+  layers — attention, arbitrary contractions — can be expressed and trained through einsum. It is now
+  a dispatched `OpEinsum` (`backend.EinsumAttrs{Spec}`); the parser and contraction engine moved to
+  `backend.ParseEinsum` / `backend.EinsumContract`, shared by the forward kernel and the VJP.
+- **The gradient is the einsum-swap rule**: for `C = einsum(s₁,…,sₙ → s_O)`, the gradient w.r.t.
+  operand `k` is itself an einsum over the *other* operands and the upstream gradient `g` (which takes
+  the output subscript), contracted down to operand `k`'s subscript:
+  `dAₖ = einsum(…skip k…, s_O → sₖ; …skip k…, g)`. This is exact for pure contractions — every index of
+  `sₖ` appears in another operand or the output, and no subscript repeats a letter — so matmul, batched
+  matmul, transpose, outer, dot, Frobenius, elementwise, and general contractions all train through it.
+  Single-operand reductions (`"ij->i"`) and diagonals/traces (`"ii"`) would need a broadcast/scatter and
+  error clearly on the backward pass; the forward still handles them.
+- **§V16**: the swap rule is the calculus of `numpy.einsum`, not a new algorithm — exempt from
+  research-lite; verified by gradcheck and a closed-form cross-check.
+- **§V16 tier-1 / §V2** (`autograd/einsum_test.go`): a finite-difference gradcheck across seven
+  contraction patterns (matmul, batched matmul, transpose, outer, elementwise, dot, and `"ij,ik->jk"`),
+  w.r.t. every operand; a closed-form check that the matmul-via-einsum gradients equal `g·Bᵀ` (row sums
+  of B) and `Aᵀ·g` (column sums of A); and that the unsupported reduction/trace gradients error on
+  backward while the forward works. The existing forward einsum tests are unchanged (now dispatched).
+- **Gate**: `go test ./ops ./autograd ./backend/ref` green, apicheck (§V17), gofmt, vet, §V7 CGO0, and
+  the default cgo/metal build all clean.
+- §R143, §T213.
+
+### T212 — Einsum (general tensor contraction) (2026-07-07)
+- **Adds `ops.Einsum`** (numpy.einsum) — the single most useful missing tensor op. A subscript spec
+  drives an Einstein-summation contraction over N operands, subsuming matrix multiplication
+  (`"ij,jk->ik"`), batched matmul (`"bij,bjk->bik"`), transpose (`"ij->ji"`), trace (`"ii->"`),
+  diagonal (`"ii->i"`), outer product (`"i,j->ij"`), dot (`"i,i->"`), row/full sums (`"ij->i"`,
+  `"ij->"`), the Frobenius inner product (`"ij,ij->"`), and elementwise products (`"ij,ij->ij"`). Each
+  letter is an index; a letter repeated across operands (or within one) is contracted, and any index
+  not in the output is summed. With no `->`, the output is the indices that appear exactly once, in
+  alphabetical order (numpy's implicit mode).
+- **Engine**: a mixed-radix iteration over every distinct-index assignment (output indices first, then
+  the summed ones), accumulating the product of the operands' elements into the output position. Index
+  sizes are validated for consistency across positions (so `"ii->"` on a non-square matrix errors).
+  Indices are single lowercase letters; ellipsis (`...`) is not supported. It is an eager pure-tensor
+  function (like the `linalg` package); the differentiable version (the einsum-swap-rule VJP) is a
+  follow-up.
+- **§V16**: a general contraction with numpy semantics, not an algorithm — exempt from research-lite;
+  the definitional source is the numpy docs, cross-verified against the reference `numpy.einsum`.
+- **§V16 tier-1** (`ops/einsum_test.go`): hand-computed patterns (matmul `[[4,5],[10,11]]`, transpose,
+  trace = 5, outer, full sum = 21, row sum, implicit output); a cross-check that a range of
+  contractions (matvec, `"ij,ik->jk"`, batched transpose, batched matmul) match `numpy.einsum` at
+  1e-10 (skips without the `.venv`); errors (operand-count, subscript-length, absent output index,
+  ellipsis, non-lowercase, non-square trace); `ExampleEinsum`.
+- **Gate**: `go test ./ops` green, apicheck (§V17), gofmt, vet, §V7 CGO0, and the default cgo/metal
+  build all clean.
+- §R142, §T212.
+
+### T211 — Cumsum (cumulative sum) (2026-07-07)
+- **Adds `ops.Cumsum`** (numpy.cumsum) — the cumulative sum along an axis, a dual-purpose op: it
+  underlies LLM sampling (nucleus / top-p compute a CDF via a cumulative sum of sorted probabilities)
+  and general prefix-sum algorithms. A negative axis counts from the end.
+- **Distinct gradient**: because element `x[j]` feeds every output `i ≥ j`, the VJP is the **reverse**
+  cumulative sum — `dx[j] = Σ_{i≥j} g[i]` along the axis (so `∂(Σ cumsum(x))/∂x[j] = L − j`). A fused
+  `OpCumsum` (`backend/ref/cumsum.go` forward, `autograd/vjp_cumsum.go` backward) shares the axis
+  normalization and line enumeration via `backend.CumsumPlan` / `backend.FillLineCoord`. Memory-bound
+  → reference/cpu only (GPU falls back, ADR-0008); f64 accumulation.
+- **§V16**: a scan op with numpy semantics, not an algorithm — exempt from research-lite; the
+  definitional source is the numpy docs, cross-verified against the reference numpy.
+- **§V16 tier-1 / §V2** (`ops/cumsum_test.go`, `autograd/cumsum_test.go`): forward matches numpy
+  (`[1,2,3,4]→[1,3,6,10]`, matrix axis-0 and axis-1, negative axis); a cross-check against
+  `numpy.cumsum` (skips without the `.venv`); errors; `ExampleCumsum`. The gradient is verified both
+  explicitly (`Σ`-loss gives `[4,3,2,1]`, the reverse count) and via a finite-difference gradcheck
+  along axis 1.
+- **Gate**: `go test ./ops ./autograd ./backend/ref` green, apicheck (§V17), gofmt, vet, §V7 CGO0,
+  and the default cgo/metal build all clean.
+- §R141, §T211.
+
+### T210 — Var + Std reductions (2026-07-07)
+- **Adds `ops.Var` and `ops.Std`** (numpy.var / numpy.std, population, ddof=0) — the statistics
+  reductions that were missing from the reduction family (Sum/Mean/Max/Min existed). `Var` is the mean
+  of the squared deviations from the mean, `mean((x − mean)²)`, over the given axes; `Std` is its
+  square root. Both take `axes` and `keepdims` like the other reductions.
+- **Composed on recent work**: `Var` is `Mean((x − Mean(x, axes, keepdims))², axes)` — it directly
+  exercises the T209 broadcasting (`x − mean` with the keepdims mean broadcasting back up to `x`) and
+  the T200 `Sqrt`. Being a composition of differentiable ops, it flows gradients through the same
+  dispatch path.
+- **§V16**: statistics reductions with numpy semantics, not an algorithm — exempt from research-lite;
+  the definitional source is the numpy docs, and it is cross-verified against the reference numpy.
+- **§V16 tier-1** (`ops/varstd_test.go`): hand-computed full-reduction values (`Var([1,2,3,4]) = 1.25`,
+  `Std = √1.25`); axis reductions on `[[1,2,3],[4,5,6]]` (var over axis 0 = `[2.25,2.25,2.25]`, axis 1
+  = `[2/3, 2/3]`, keepdims → `[2,1]`); a cross-check that `ops.Var`/`ops.Std` match `numpy.var`/
+  `numpy.std` (ddof=0) at 1e-10 (skips without the `.venv`); `ExampleVar`.
+- **Gate**: `go test ./ops` green, apicheck (§V17), gofmt, vet, §V7 CGO0, and the default cgo/metal
+  build all clean. numpy reductions now: Sum / Mean / Max / Min / ArgMax / Var / Std.
+- §R140, §T210.
+
+### T209 — Auto-broadcasting elementwise binary ops (2026-07-07)
+- **The elementwise binary ops now broadcast** (numpy rules) instead of erroring on a shape mismatch —
+  `Add`, `Sub`, `Mul`, `Div`, `Maximum`, `Minimum` accept operands like `[2,3]` with `[3]` or `[2,1]`,
+  in both eager use and training. This **resolves §B18** (general broadcasting had been deferred; only
+  `AddBias`'s `[m,n]+[n]` existed) and builds on the T208 `BroadcastTo` primitive.
+- **Zero regression by design**: the same-shape path is untouched and byte-identical (the CPU SIMD
+  kernels and their §V3 CPU==ref bit-identity still hold). Broadcasting is a *separate* branch — the
+  CPU `binOp` materializes both operands to the common shape and reuses the SIMD path; the ref
+  `binaryKernel` gets a broadcast branch; `Maximum`/`Minimum` (ref-only) broadcast there. Shared
+  `backend.BroadcastShape` (the common shape) and `backend.BroadcastCoords` (the coordinate mapping)
+  drive all of them.
+- **Broadcast-aware VJPs**: each binary op's gradient is **reduced (summed) back to its operand's
+  shape** — the gradient of a broadcast is a sum over the replicated axes. A `bcastReduce` helper
+  (a no-op when the shapes already match, so same-shape gradients are unchanged) wraps `Add`/`Sub`/
+  `Mul`; `Div` and the `Maximum`/`Minimum` `selectVJP` were rewritten with broadcast-coordinate
+  accumulation loops.
+- **§V16**: pure data-movement (numpy semantics), not an algorithm — exempt from research-lite;
+  verified by numpy semantics, gradcheck, and the unchanged same-shape suites (zero regression).
+- **§V16 tier-1 / §V2** (`autograd/broadcast_binary_test.go`): forward broadcasts match numpy
+  (`[2,3]+[3]` row, `[2,3]×[2,1]` column); a gradcheck covers all six ops across two broadcast
+  configurations (bigger-left and bigger-right), confirming each gradient reduces correctly. The
+  existing same-shape suites (CPU bit-identity, `nn`, `autograd`) stay green — no regression.
+- **Gate**: `go test ./backend/cpu ./backend/ref ./autograd ./nn ./ops` green, apicheck (§V17), gofmt,
+  vet, §V7 CGO0, and the default cgo/metal build all clean.
+- §R139, §T209.
+
+### T208 — BroadcastTo (broadcasting primitive) (2026-07-07)
+- **Adds `ops.BroadcastTo`** (numpy.broadcast_to) — the broadcasting primitive that §B18 had deferred
+  (until now the only broadcast was `AddBias`'s `[m,n]+[n]` special case). numpy broadcasts everywhere,
+  so this is a foundational gap for numpy-style tensor code. It expands a tensor to a larger target
+  shape: the shapes are right-aligned, each input dim must be 1 or equal to the target dim, and a
+  lower-rank input is treated as having leading 1s.
+- **Differentiable**: the forward replicates the input over the broadcast axes; the VJP **sums** the
+  output gradient over those axes back into the input's shape (the gradient of replication is
+  summation — so `∂(Σ broadcast(x))/∂x` equals the replication count, the product of the broadcast
+  dims). `backend.BroadcastPlan` is the shared coordinate-mapping validation for the kernel and VJP.
+  Memory-bound → reference/cpu only (the GPU backends fall back, ADR-0008).
+- **§V16**: a pure data-movement op, not an algorithm, so exempt from the paper-tier research-lite;
+  the definitional source is the numpy docs, verified by numpy semantics and gradcheck.
+- **§V16 tier-1 / §V2** (`ops/broadcast_test.go`, `autograd/broadcast_test.go`): forward matches numpy
+  (a `[3]` row → `[2,3]`, a `[2,1]` column → `[2,3]`, scalar → vector, right-aligned); errors on
+  incompatible dims and rank-down; a gradcheck confirms the gradient sums over the broadcast axes; an
+  explicit test that `Σ`-loss gives a gradient equal to the replication count; `ExampleBroadcastTo`.
+- **Gate**: `go test ./ops ./autograd ./backend/ref` green, apicheck (§V17), gofmt, vet, §V7 CGO0,
+  and the default cgo/metal build all clean.
+- §R138, §T208.
+
+### T207 — NumPy .npz archive read/write (2026-07-07)
+- **Adds the `format/npz` package** — reads and writes NumPy `.npz` archives (numpy.savez / numpy.load),
+  completing the numpy interchange pair: `.npy` holds a single array, `.npz` holds many named arrays
+  (e.g. a whole model's weights). It's a ZIP container (stdlib `archive/zip`) with one `.npy` member
+  per array, built directly on the T206 `.npy` codec.
+- **`Save`/`Load`/`SaveFile`/`LoadFile`**: `Save` writes uncompressed members (`ZIP_STORED`, matching
+  `numpy.savez`) named `"<name>.npy"` in sorted order for deterministic output; `Load(r io.ReaderAt,
+  size)` reads each member (stripping the `.npy` suffix) through the fuzz-safe `npy.Load`, and the ZIP
+  reader transparently handles both stored and deflated members. The loader caps the entry count
+  (≤2¹⁶) and relies on `npy.Load`'s per-array bounds, so a malformed or hostile archive errors rather
+  than panicking or OOM-ing.
+- **§V16**: a file format has no paper, so the definitional source is the numpy `.npz` convention plus
+  the reference numpy — and it is **cross-verified in both directions** against real numpy 2.5.1.
+- **§V15 tier-1** (`npz_test.go`, `fuzz_test.go`): a set of named tensors round-trips bit-exactly with
+  names/shapes/dtypes preserved; `LoadNumpyReference` reads a real `numpy.savez` archive
+  byte-faithfully; `SaveReadableByNumpy` confirms `numpy.load` reads a GoAI-written archive exactly
+  (skips without the `.venv`); load errors; `ExampleSave`. `FuzzLoad` (no panic on hostile bytes) and
+  `FuzzRoundTrip` (bit-exact) both pass under actual fuzzing.
+- **Gate**: `go test ./format/npz` green, apicheck (§V17), gofmt, vet, §V7 CGO0, and the default
+  cgo/metal build all clean. Interchange formats now: GGUF + safetensors + npy + npz.
+- §R137, §T207.
+
+### T206 — NumPy .npy format read/write (2026-07-07)
+- **Adds the `format/npy` package** — reads and writes single arrays in NumPy's `.npy` format, the
+  third interchange format after GGUF and safetensors. This directly serves the loop's standing §V15
+  emphasis (formats always round-trip + fuzz) and the user's numpy focus: GoAI can now exchange
+  tensors with numpy/Python (data, golden references) byte-faithfully.
+- **`Save`/`Load`/`SaveFile`/`LoadFile`**: the v1.0 layout — `\x93NUMPY` magic, version, a 64-byte-padded
+  ASCII dict header (`descr`/`fortran_order`/`shape`), then the raw **C-order little-endian** element
+  bytes. `F32 ↔ '<f4'`, `F64 ↔ '<f8'`. Big-endian and `fortran_order` arrays are rejected with clear
+  errors. The reader is **fuzz-safe**: it bounds the header length (≤1 MiB) and element count (≤2³⁰)
+  before allocating and uses `io.ReadFull`, so no hostile byte stream can panic or OOM it.
+- **§V16**: a file format has no paper, so the definitional source is the numpy `.npy` spec plus the
+  reference numpy — and the implementation is **cross-verified in both directions** against real numpy
+  2.5.1 (see below), which is the strongest byte-faithfulness check.
+- **§V15 tier-1** (`npy_test.go`, `fuzz_test.go`): `Save→Load` is bit-exact across scalar, 1-D
+  (trailing-comma tuple) and N-D shapes for both dtypes; `LoadNumpyReference` reads numpy-written
+  fixtures byte-faithfully; `SaveReadableByNumpy` confirms a GoAI-written file is read back exactly by
+  the reference numpy (skips when the `.venv` is absent); load errors; `ExampleSave`. `FuzzLoad`
+  (no panic on hostile bytes) and `FuzzRoundTrip` (bit-exact) each survived ~4 M executions.
+- **Gate**: `go test ./format/npy` green, apicheck (§V17), gofmt, vet, §V7 CGO0, and the default
+  cgo/metal build all clean.
+- §R136, §T206.
+
+### T205 — R-Drop (regularized dropout) (2026-07-07)
+- **Adds `nn.SymmetricKL` and `nn.RDropLoss`** (Wu et al. 2021, arXiv:2106.14448, NeurIPS) — the
+  R-Drop training regularizer, rounding out the regularization methods (dropout / NEFTune /
+  label-smoothing → **+R-Drop**). R-Drop runs the same input through the network twice with
+  independent dropout and adds a symmetric-KL consistency term between the two output distributions:
+
+  ```
+  L_KL = ½·( KL(P1‖P2) + KL(P2‖P1) ) = ½·Σ (p−q)·(log p − log q)      (p=softmax(l1), q=softmax(l2))
+  L    = ½·( CE(l1,y) + CE(l2,y) ) + α·L_KL
+  ```
+- **Composed, not a new op**: `SymmetricKL` is built from the existing differentiable
+  Softmax/Log/Sub/Mul/Sum/AXPY ops, so the gradient flows through **both** distributions — the key
+  distinction from knowledge distillation (§R51), where the teacher is frozen (`detach`). No new
+  kernel or VJP was needed. R-Drop adds no parameters and no architecture change.
+- **§V16 tier-2** (research-lite, NOT `/deep-research`): CONFIRMED — 3 agents unanimous, byte-faithful
+  — the symmetric KL with the ½ factor, both-directions with gradient through both (no stop-gradient),
+  the `L = NLL + α·L_KL` composition, the `½Σ(p−q)(log p−log q)` identity, and the no-extra-parameters
+  claim — against the paper §2.1 and the official dropreg/R-Drop implementation.
+- **§V16 tier-1 / §V2** (`nn/rdrop_test.go`): symmetric KL of a distribution with itself is 0; the
+  value matches an independent recomputation at 1e-12 and is symmetric and positive; a gradcheck
+  confirms the gradient flows into **both** logit sets (R-Drop's defining property); the full
+  `RDropLoss` matches `½(CE1+CE2)+α·SymmetricKL`; errors; `ExampleSymmetricKL`.
+- **Gate**: `go test ./nn` green, apicheck (§V17), gofmt, vet, §V7 CGO0, and the default cgo/metal
+  build all clean.
+- §R135, §T205.
+
+### T204 — Multi-Token Prediction loss (2026-07-07)
+- **Adds `nn.MultiTokenLoss`** (Gloeckle et al. 2024, arXiv:2404.19737) — the multi-token-prediction
+  training objective used in modern LLMs (DeepSeek-V3, Llama) for sample efficiency and
+  self-speculative decoding. Instead of predicting only the next token, the model predicts the next
+  `n` tokens at each position via `n` parallel heads on a shared trunk; the loss is the plain
+  **unweighted** sum of the `n` shifted cross-entropies:
+
+  ```
+  L = Σ_{i=1}^{n} CrossEntropy( heads[i][0:seq−i] , targets[i:seq] )
+  ```
+
+  Head `i` predicts `i` steps ahead (targets left-shifted by `i`; end positions without a valid target
+  are dropped). With `n=1` this is exactly the standard next-token cross-entropy. There is **no**
+  per-head weighting — the λ-weighting sometimes seen is from a different follow-up paper, not
+  Gloeckle et al.
+- **Implementation** (`nn/mtp.go`): composes the existing `OpSlice` (the target shift, from T198),
+  `OpCrossEntropy`, and `OpAdd` — so it is differentiable and tape-aware. The `n` head-logits are
+  supplied by the caller's architecture (shared trunk + parallel heads + shared unembedding).
+- **§V16 tier-2** (research-lite, NOT `/deep-research`): CONFIRMED — 3 agents unanimous, verbatim from
+  §2 Eq.(1)-(2) — the parallel-heads-on-a-shared-trunk architecture, the summed shifted-CE loss, the
+  **unweighted** equal head sum, `n=1` recovering next-token CE, and the self-speculative-decoding use
+  at inference — against the paper §2 and the facebookresearch/multi-token-prediction implementation.
+- **§V16 tier-1 / §V2** (`nn/mtp_test.go`): `n=1` equals the standard next-token CE at 1e-12; the
+  `n`-head sum matches an independent manual recomputation (slicing outside the `OpSlice` path) at
+  1e-12; a gradcheck confirms the gradient flows into every head's logits; errors (no heads, `seq≤n`,
+  shape mismatch); `ExampleMultiTokenLoss`.
+- **Gate**: `go test ./nn` green, apicheck (§V17), gofmt, vet, §V7 CGO0, and the default cgo/metal
+  build all clean.
+- §R134, §T204.
+
+### T203 — Prefix Tuning (PEFT) (2026-07-07)
+- **Adds `nn.PrefixTuning`** (Li & Liang 2021, arXiv:2101.00190) — the per-layer key/value counterpart
+  of prompt tuning, completing the soft-prompt pair and the PEFT family (LoRA / DoRA / QLoRA / (IA)³ /
+  prompt tuning / adapter → **+prefix tuning**). It prepends `p` learned continuous vectors to an
+  attention layer's keys and values: for `K, V ∈ [seq, d]` attention then operates over `[P_K ; K]`
+  and `[P_V ; V] ∈ [p+seq, d]`. The prefix is input-independent and the query is unchanged; only the
+  prefix parameters train (~0.1 % of the model), with all pretrained weights frozen.
+- **Reparameterization** (paper §4.3, for training stability): a small learned embedding `P' ∈ [p, k]`
+  is mapped up by an MLP — `Linear(k→h) → tanh → Linear(h→2·d)` — whose output is split into `P_K` and
+  `P_V ∈ [p, d]`. `KV(ctx)` runs this MLP (using the differentiable `OpTanh` + `OpSlice`); `Apply(k, v)`
+  prepends the prefix via `OpConcat`. This is the **first real consumer of the Slice (T198) and Concat
+  (T196) ops**, validating them in a training path.
+- **§V16 tier-2** (research-lite, NOT `/deep-research`): CONFIRMED — 3 agents unanimous — the prefix on
+  per-layer K/V (not input embeddings), the query being unchanged and input-independent, the
+  reparameterization `P = MLP(P')` with a `tanh` nonlinearity, only-prefix-trains, and the contrast
+  with prompt tuning (input-only) and adapters (residual bottleneck) — against the paper §4 and the
+  HuggingFace PEFT `PrefixEncoder`.
+- **§V16 tier-1 / §V2** (`nn/prefix_tuning_test.go`): `Apply` prepends correctly (the first `p` rows are
+  the computed `P_K`/`P_V`, the remaining `seq` rows are the unchanged keys/values, shape `[p+seq, d]`);
+  an end-to-end gradcheck confirms the gradient flows into the prefix embedding and both MLP weights
+  (the prefix trains); errors; `ExamplePrefixTuning`.
+- **Gate**: `go test ./nn` green, apicheck (§V17), gofmt, vet, §V7 CGO0, and the default cgo/metal
+  build all clean. PEFT now: LoRA + DoRA + NF4/QLoRA + (IA)³ + prompt tuning + adapter + prefix tuning.
+- §R133, §T203.
+
+### T202 — Bottleneck Adapter (PEFT) (2026-07-07)
+- **Adds `nn.Adapter`** (Houlsby et al. 2019, arXiv:1902.00751) — the **original** parameter-efficient
+  fine-tuning method (pre-LoRA), extending the PEFT family (LoRA / DoRA / QLoRA / (IA)³ / prompt
+  tuning → **+adapter**). Applied to a hidden activation `h ∈ [n, d]` it is a bottleneck module with
+  an internal residual:
+
+  ```
+  Adapter(h) = h + f(h·W_down + b_down)·W_up + b_up ,   W_down[d,r], W_up[r,d], r ≪ d
+  ```
+
+  Only the adapter's two projections (weights + biases) train (~2·d·r params); the base model is
+  frozen. The up-projection is zeroed at init, so a fresh adapter is an **exact identity** (the
+  paper's near-identity init; cf. LoRA's `B = 0`). The nonlinearity `f` is configurable via
+  `AdapterActivation` — default **GELU** (paper §3.6); the AdapterHub "houlsby" config uses ReLU (a
+  documented source conflict, resolved by making it a config).
+- **Reuses `nn.Linear`** for the two projections; unlike LoRA (a mergeable parallel low-rank weight
+  delta with no nonlinearity), an adapter is an extra **sequential** module with a nonlinearity, so it
+  adds a little inference latency and does not merge away.
+- **§V16 tier-2** (research-lite, NOT `/deep-research`): CONFIRMED — 3 agents unanimous — the formula
+  with biases on both projections, the near-zero (near-identity) init, only-adapters-train with the
+  base frozen, the two-serial-adapters-per-layer placement, the GELU/ReLU nonlinearity conflict, and
+  the contrast with LoRA — against the paper §2.1 / Figure 2 and the AdapterHub library.
+- **§V16 tier-1 / §V2** (`nn/adapter_test.go`): a fresh adapter is an exact identity; an end-to-end
+  gradcheck through the module (w.r.t. the input and both projections' weights, after randomizing the
+  up-projection off its identity init); the activation option (ReLU zeros a negative bottleneck
+  pre-activation where GELU does not); errors; `ExampleAdapter`.
+- **Gate**: `go test ./nn` green, apicheck (§V17, with `AdapterOption` added to the functional-option
+  `typeExampleExempt` list like `PrefOption`), gofmt, vet, §V7 CGO0, and the default cgo/metal build
+  all clean. PEFT now: LoRA + DoRA + NF4/QLoRA + (IA)³ + prompt tuning + adapter.
+- §R132, §T202.
+
+### T201 — Maximum + Minimum + Where select ops (2026-07-07)
+- **Adds `ops.Maximum`, `ops.Minimum`, `ops.Where`** — the binary/select numpy group (continuing the
+  user's numpy request), heavily used for numerical stability (`max(x, eps)`) and masking
+  (`where(mask, a, b)` for causal / padding masks). `Maximum`/`Minimum` are elementwise; `Where`
+  selects `cond ? a : b` per element.
+- **Differentiable, routing the gradient to the selected branch**: a shared `selectVJP` helper sends
+  the upstream gradient wholly to `a` where the pick holds (ties to `a`, a measure-zero subgradient
+  choice) and to `b` otherwise — used for both `Maximum` (`a≥b`) and `Minimum` (`a≤b`). `Where` routes
+  `da` where the mask is nonzero and `db` elsewhere; the condition mask is **not** differentiated
+  (nil gradient). `Maximum`/`Minimum` reuse the shared `binaryKernel`; `Where` is a 3-input kernel.
+- **§V16**: definitional select ops (numpy + subgradient calculus), not algorithms, so exempt from the
+  paper-tier research-lite; verified by hand values and gradcheck.
+- **§V16 tier-1 / §V2** (`ops/select_test.go`, `autograd/select_test.go`): forward hand values
+  (`max([1,5,3],[4,2,3])=[4,5,3]`, `min`, `where([1,0,1],a,b)` selecting `[a,b,a]`, shape-mismatch
+  errors); finite-difference gradchecks for all three (data without ties so the boundary is not
+  probed); and an explicit routing test showing `Maximum`'s gradient goes to the larger input;
+  `ExampleWhere`.
+- **Gate**: `go test ./ops ./autograd ./backend/ref` green, apicheck (§V17), gofmt, vet, §V7 CGO0,
+  and the default cgo/metal build all clean. The elementwise numpy family now spans
+  Exp/Log/Tanh/ReLU/GELU/Sigmoid/SiLU/Sqrt/Abs/Clip/Maximum/Minimum/Where.
+- §R131, §T201.
+
+### T200 — Sqrt + Abs + Clip elementwise math ops (2026-07-07)
+- **Adds `ops.Sqrt`, `ops.Abs`, `ops.Clip`** — foundational numpy elementwise math (continuing the
+  user's numpy request), extending the elementwise family that already had Exp/Log/Tanh/ReLU/GELU/
+  Sigmoid/SiLU. These are ubiquitous: `√` in normalization / RMS / std, `|·|` in L1 losses, and
+  `clip` in gradient clipping and bounded activations.
+- **Differentiable**: `Sqrt` (VJP `g/(2√x)`) and `Abs` (VJP `g·sign(x)`, 0 at 0) reuse the shared
+  `unaryKernel`/`unaryVJP` helpers; `Clip(x, lo, hi)` clamps to `[lo,hi]` (via `backend.ClipAttrs`)
+  and its VJP passes the gradient through where `x` is unclipped and is 0 where it was clamped — the
+  standard gradient-clipping behavior.
+- **§V16**: definitional math ops (numpy + standard calculus for the derivatives), not algorithms, so
+  exempt from the paper-tier research-lite; verified by hand values and gradcheck.
+- **§V16 tier-1 / §V2** (`ops/mathops_test.go`, `autograd/mathops_test.go`): forward hand values
+  (`√[1,4,9]=[1,2,3]`, `|·|`, clamp to `[0,1]`, and a `lo>hi` error); finite-difference gradchecks for
+  all three (probing strictly inside/outside the clip range to avoid the boundary kink); and a check
+  that clamped elements get exactly zero gradient; `ExampleClip`.
+- **Gate**: `go test ./ops ./autograd ./backend/ref` green, apicheck (§V17), gofmt, vet, §V7 CGO0,
+  and the default cgo/metal build all clean.
+- §R130, §T200.
+
+### T199 — Reshape + ExpandDims + Squeeze + Stack shape ops (2026-07-07)
+- **Completes the numpy/gonum shape-op family** (Concat / Slice / Split → **+Reshape, ExpandDims,
+  Squeeze, Stack**). The foundation is a new **differentiable `OpReshape`** — the only reshape until
+  now was `tensor.Reshape`, a non-differentiable view method — and the other three compose it:
+  `ExpandDims`/`Squeeze` compute the new shape and reshape; `Stack` (join along a new axis) is
+  expand-dims-each + `Concat`.
+- **Ops**: `ops.Reshape(x, dims...)` (row-major re-layout, element count preserved),
+  `ops.ExpandDims(x, axis)` (insert a size-1 axis), `ops.Squeeze(x, axis)` (remove a size-1 axis),
+  `ops.Stack(axis, tensors...)` (numpy.stack). All support negative axes and are differentiable — the
+  reshape VJP reshapes the gradient straight back, and Stack's gradient flows through Concat +
+  reshape. Memory-bound → reference/cpu only (the GPU backends fall back, ADR-0008).
+- **§V16**: pure metadata/data-movement ops, not algorithms, so exempt from the paper-tier
+  research-lite; the definitional source is the numpy docs, verified by round-trip and gradcheck.
+- **§V16 tier-1 / §V2** (`ops/reshape_test.go`, `autograd/reshape_test.go`): reshape preserves flat
+  order (and rejects incompatible element counts); expand-dims/squeeze round-trip with values
+  preserved (and squeezing a non-size-1 axis errors); `stack` matches numpy along axis 0 and axis 1
+  (`result[i]` equals input `i`); a reshape gradcheck confirming the gradient reshapes back to the
+  preserved flat position; `ExampleExpandDims` / `ExampleStack`.
+- **Gate**: `go test ./ops ./autograd ./backend/ref` green, apicheck (§V17), gofmt, vet, §V7 CGO0,
+  and the default cgo/metal build all clean. Shape ops now complete: Concat + Slice + Split + Reshape
+  + ExpandDims + Squeeze + Stack.
+- §R129, §T199.
+
+### T198 — Slice + Split shape ops (2026-07-07)
+- **Adds `ops.Slice` and `ops.Split`** (numpy `x[start:end]` / sized `numpy.split`) — foundational
+  numpy/gonum shape ops and the **differentiable inverse of Concat** (T196): splitting a fused QKV
+  projection or per-head slices is ubiquitous in transformer code. `Slice` extracts the half-open
+  range `[start,end)` along an axis; `Split` cuts a tensor into consecutive sized pieces (the sizes
+  must be positive and sum to the axis extent).
+- **Design note**: a differentiable 1→N `Split` as a single op isn't supported — the tape passes only
+  `outputs[0]`'s gradient to a VJP (`autograd.go:92`). So `OpSlice` is a differentiable **single**-output
+  op whose VJP scatters the gradient back into the input's shape (zeros outside the range), and
+  `Split` is built as **N Slices**. Because the same input feeds all N slices, the tape **accumulates**
+  their scattered gradients into the full input gradient (`dx` = the pieces' grads concatenated) — so
+  Split trains through. Memory-bound → reference/cpu only (the GPU backends fall back, ADR-0008);
+  `backend.SlicePlan` is the shared shape/axis validation for the forward kernel and the VJP.
+- **§V16**: pure data-movement ops, not algorithms, so exempt from the paper-tier research-lite; the
+  definitional source is the numpy docs, verified by round-trip and gradcheck.
+- **§V16 tier-1 / §V2** (`ops/slice_test.go`, `autograd/slice_test.go`): numpy-style forward (rows /
+  cols, negative axis); `Concat(Split(x)) == x` round-trip across even and uneven sizes; a slice
+  gradcheck (the scatter VJP, with exactly-zero gradient outside the range); and a split
+  gradient-accumulation test confirming `dx` equals each piece's weight placed at its offset; errors;
+  `ExampleSlice` / `ExampleSplit`.
+- **Gate**: `go test ./ops ./autograd ./backend/ref` green, apicheck (§V17), gofmt, vet, §V7 CGO0,
+  and the default cgo/metal build all clean. Shape ops now: Concat + Slice + Split.
+- §R128, §T198.
+
+### T197 — Prompt Tuning (soft-prompt PEFT) (2026-07-07)
+- **Adds `nn.PromptTuning`** (Lester et al. 2021, arXiv:2104.08691, "The Power of Scale") — the
+  simplest parameter-efficient fine-tuning method, extending the PEFT family (LoRA / DoRA / QLoRA /
+  (IA)³ → **+prompt tuning**). It prepends a learned soft prompt `P ∈ [k, d_model]` of `k` continuous
+  virtual-token embeddings to the input embeddings `X ∈ [seq, d_model]`:
+
+  ```
+  Forward(X) = [P ; X] ∈ [k + seq, d_model]     (P first, along the sequence axis)
+  ```
+
+  Only `P` trains (`k·d_model` parameters); every pretrained weight, including the token-embedding
+  table, stays frozen. The same input-agnostic `P` is used for all inputs. Prompt tuning is the
+  input-only simplification of prefix tuning (which injects learned K/V at every layer).
+- **First consumer of the T196 concat** — `Forward` is `Concat(P, embeds, axis 0)`, so the soft
+  prompt trains through the differentiable concat VJP (validating the concat op in a real training
+  use). `NewPromptTuning` randomly initializes `P` (the HuggingFace-PEFT default; sampled-vocab init
+  converges better when a token-embedding table is available, which a standalone layer does not
+  assume).
+- **§V16 tier-2** (research-lite, NOT `/deep-research`): CONFIRMED — 3 agents unanimous — P prepended
+  along the sequence axis (P first), only-P-trains with the base frozen, the `k·d_model` parameter
+  count, random-init default, the input-only relationship to prefix tuning, and the input-agnostic
+  prompt against the paper §2 and the HF PEFT implementation.
+- **§V16 tier-1 / §V2** (`nn/prompt_tuning_test.go`): the forward prepends correctly (first `k` rows
+  are exactly `P`, the rest the input); a finite-difference gradcheck confirms the gradient flows into
+  `P` through the concat; a training loop fits `P` to a target prompt (MSE→0); errors;
+  `ExamplePromptTuning`.
+- **Gate**: `go test ./nn` green, apicheck (§V17), gofmt, vet, §V7 CGO0, and the default cgo/metal
+  build all clean. PEFT now: LoRA + DoRA + NF4/QLoRA + (IA)³ + prompt tuning.
+- §R127, §T197.
+
+### T196 — Concatenate shape op (2026-07-07)
+- **Adds `ops.Concat`** (numpy.concatenate) — a foundational numpy/gonum shape op (continuing the
+  user's numpy request) that several tasks have wanted: it **unblocks** soft-prompt / prefix tuning
+  and any model code that assembles tensors. It joins N tensors along an axis — all inputs share rank
+  and dtype and match in every dimension except the concat axis, whose extents add; a negative axis
+  counts from the end.
+- **Differentiable** dispatched `OpConcat`: `backend.ConcatAttrs{Axis}`; `backend.ConcatPlan` is the
+  shared shape/offset/axis validation used by both the forward kernel and the VJP; the ref kernel
+  copies each input at its running axis offset (general N-D via `Unravel`); the VJP slices the
+  incoming gradient back into each input's segment along the axis (so a learned prefix trains through
+  it). Memory-bound → reference/cpu only (the GPU backends fall back, ADR-0008).
+- **§V16**: this is a pure data-movement op, not an algorithm, so it is exempt from the paper-tier
+  research-lite; the definitional source is the numpy docs (recorded per §V16's "no paper → cite the
+  definitional source" clause), and it is verified by round-trip and gradcheck.
+- **§V16 tier-1 / §V2** (`ops/concat_test.go`, `autograd/concat_test.go`): numpy-style forward
+  (`[2,3]`→ axis 0 `[4,3]`, axis 1 `[2,6]`, hand-verified); a rank-3, axis `−1`, three-input case
+  whose slice-back recovers each input (round-trip); a finite-difference gradcheck confirming the
+  gradient routes each output element back to its source input; errors; `ExampleConcat`.
+- **Gate**: `go test ./ops ./autograd ./backend/ref` green, apicheck (§V17), gofmt, vet, §V7 CGO0,
+  and the default cgo/metal build all clean.
+- §R126, §T196.
+
+### T195 — RetNet chunkwise retention form (2026-07-07)
+- **Adds `nn.RetentionChunkwise`** (Sun et al. 2023, Eq.7) — the **third and final** RetNet
+  representation (parallel / recurrent / chunkwise), completing the architecture. Chunkwise is the
+  practical way to train on long sequences: it processes the sequence in chunks of `chunkSize`,
+  running the parallel retention *within* each chunk and carrying a bounded state `R∈[dk,dv]`
+  *between* chunks, so memory is `O(chunk² + dk·dv)` instead of the parallel form's `O(L²)`:
+
+  ```
+  out_[i] = (Q_[i]K_[i]ᵀ ⊙ D)V_[i]  +  (Q_[i]·R) ⊙ ζ,   ζ_j = γ^(j+1)
+  R ← γ^B · R  +  K_[i]ᵀ(V_[i] ⊙ ξ),                    ξ_j = γ^(B−1−j),   R_0 = 0
+  ```
+
+  It is a pure-f64 forward utility (like `RetentionRecurrent`) and supports the value expansion
+  `d_v≠d_k`.
+- **§V16 tier-2** (research-lite, NOT `/deep-research`): CONFIRMED — 3 agents unanimous — the exact
+  exponents `ξ_j=γ^(B−1−j)`, `ζ_j=γ^(j+1)`, the whole-chunk decay `γ^B`, and the state recurrence
+  against the RetNet paper Eq.7 and torchscale (`value_inner_decay` / `query_inner_decay` /
+  `cross_decay`). The paper swaps the ξ/ζ *letters* (the exponents are identical), and torchscale's
+  per-chunk L1/√ normalization is a numerical-stability addition **not** in clean Eq.7 — correctly
+  omitted (the clean form equals the parallel form exactly). The exponents were also derived
+  independently by splitting the recurrent state `S_n=Σγ^(n−m)KᵀV` at the chunk boundary.
+- **§V16 tier-1** (`retention_test.go`): `TestRetentionChunkwiseDuality` — the defining property,
+  chunkwise output equals the parallel `Retention` at f64 1e-10 across γ∈{0..1} × 6 shapes (including
+  `d_v≠d_k`) × chunk sizes {1, 2, 3, 5, L, L+1} (chunk 1 = fully recurrent, chunk L = one parallel
+  pass); plus errors and `ExampleRetentionChunkwise`. Full `nn` suite green; apicheck (§V17), gofmt,
+  vet, and §V7 CGO0 all clean.
+- **RetNet is now complete**: all three equivalent forms (parallel / recurrent / chunkwise), the
+  faithful MSR block, the value expansion, GPU forward/backward on both backends, and the Θ rotation.
+- §T195.
+
+### T194 — RetNet MSR block positional encoding (rotation on Q/K) (2026-07-07)
+- **The faithful RetNet block now applies the Θ_n=e^{inθ} rotation to Q and K** (§R114 Eq.4-5),
+  completing the positional encoding that T176/T177 had omitted. Each head now computes
+  `Qₕ=RoPE(X·Wqₕ)`, `Kₕ=RoPE(X·Wkₕ)` (the same rotation on both, so the retention score picks up the
+  relative rotation `e^{i(n−m)θ}`), then the `k^(−½)` scale and retention.
+- **A double-decay bug averted by §V16 research.** The naive reading — "apply the xPos from T193 to
+  Q/K" — would have been **wrong**: research-lite (NOT `/deep-research`, 3 agents unanimous against
+  the RetNet paper §2 and the torchscale `theta_shift`) confirmed RetNet applies **rotation only**
+  (plain RoPE, unit magnitude), because the retention `γ^(n−m)` mask already carries the exponential
+  magnitude decay. Applying the full xPos `ζ^(±n)` scaling would double-count the decay. So the block
+  uses `OpRoPE` (rotation), not `ops.XPos` (rotation + ζ decay).
+- **Implementation** (`nn/retnet_block.go`): the rotation is the reference-only `OpRoPE` (base 10000,
+  single head per the per-head decomposition), so it falls back to the reference on the GPU while the
+  projections and retention stay GPU-native. `NewRetNetBlock` now validates that the per-head key dim
+  (`d_model/heads`) is even (required for the rotary pairing).
+- **§V16 tier-1 / §V2** (`nn/retnet_block_test.go`): the end-to-end gradcheck now also perturbs
+  `Wq0`/`Wk1` — directly exercising the gradient through the RoPE-rotated query/key path — and all
+  match central finite differences; an odd-key-dim error case is added; shapes/errors/example stay
+  green. Full `nn` suite green; apicheck (§V17), gofmt, vet, §V7 CGO0, and the default cgo/metal
+  build all clean.
+- The RetNet MSR block is now complete and faithful: value expansion (T177), GPU forward/backward
+  (T178/T179/T191/T192), and the Θ rotation. The remaining RetNet follow-up is the chunkwise
+  retention form.
+- §T194.
+
+### T193 — xPos length-extrapolatable positional encoding (2026-07-07)
+- **Adds xPos** (Sun et al. 2022, arXiv:2212.10554, "A Length-Extrapolatable Transformer") — the
+  positional encoding RetNet uses and the last remaining RetNet follow-up (§R114), extending the
+  positional-encoding family (RoPE / PI / YaRN → **+xPos**). xPos is the unchanged RoPE rotation
+  followed by a per-pair magnitude scale `ζ_i^(±n)`:
+
+  ```
+  query: fq(q,n) = RoPE(q,n)·ζ^n     key: fk(k,m) = RoPE(k,m)·ζ^(−m)
+  → the attention score q·k gains an exponential ζ^(n−m) decay in the relative distance
+  ```
+
+  with `ζ_i = (i/(hd/2)+γ)/(1+γ)`, γ=0.4. This exponential-decay-by-distance is what lets attention
+  extrapolate to longer contexts than seen in training. `ops.XPos(q, base, downscale)` — `downscale`
+  false for queries, true for keys.
+- **Implementation**: no new op — xPos extends the RoPE op via `RoPEAttrs{XPos, XPosGamma,
+  XPosDownscale}`. `backend.XPosScales` computes the per-pair `ζ_i`; the ref `ropeKernel` applies
+  `ζ_i^(±n)` after the (unchanged) rotation; the RoPE VJP scales the incoming gradient by the same
+  factor (`out = ζ·rotate(q) ⇒ dq = ζ·rotateᵀ(g)`). Like RoPE it is reference-only (a memory-bound
+  positional encoding; the GPU backends fall back per ADR-0008). RoPE / PI / YaRN are byte-identical
+  when `XPos` is off.
+- **§V16 tier-2** (research-lite, NOT `/deep-research`): CONFIRMED — 3 agents unanimous — the
+  query `+n` / key `−n` signs, the `ζ_i` formula with γ=0.4, RoPE angles unchanged, the same scale on
+  both elements of a pair, and that torchscale's `scale_base=512` divisor and midpoint recentering
+  are implementation-only (the paper uses the raw position `n`) — against the xPos paper Algorithm 1
+  and the microsoft/torchscale implementation. Those numerical variants are documented and omitted
+  (as with the §R114 RetNet GroupNorm).
+- **§V16 tier-1** (`autograd/xpos_test.go`): `XPos:false` is byte-identical to plain RoPE; the
+  magnitude ratio `xpos/rope` recovers exactly `ζ_i^(±n)` on both pair elements; the defining
+  score-decay property (`hd=2`: score = `ζ^(n−m)`·RoPE-score); a finite-difference gradcheck; the
+  position-0 identity; and `ExampleXPos`.
+- **Gate**: `go test ./autograd ./ops ./backend/ref` green, `apicheck` (§V17), gofmt, vet, and §V7
+  CGO0 build all clean.
+- §R125, §T193.
+
+### T192 — Vulkan value-expanded (d_v≠d_k) retention backward kernel (2026-07-07)
+- **The faithful RetNet MSR block now trains on _both_ GPU backends.** The Vulkan twin of T191
+  completes the value-expanded retention story: with the forward (T178/T179) and now the backward
+  (T191/T192) both GPU-native on Metal and Vulkan, the faithful (`d_v=2·d_k`) MSR block both infers
+  and trains entirely on the GPU. The `retention_bwd.comp` shader is generalized from the square `d`
+  to `d_k`/`d_v` (dQ private `dqloc[d_k]`, ≤128; `dp`/`dV` streamed over `d_v` via `atomicAdd`),
+  recompiled to `retention_bwd.spv` via `make vulkan-spv`.
+- **Changes**: the shader push-constant `PC{L, dk, dv, gamma}`; a shared C `RetentionExpPC{L,dk,dv,γ}`
+  in `vk_bridge.c` (replacing the square `RetentionPC` — now used by both the forward and backward)
+  with split `[L,dk]`/`[L,dv]` buffer sizes and zeroing; the header; and the Go wrapper, which drops
+  the `d_v≠d_k` fallback (still falls back for `d_k>128` / empty / non-f32 / no-atomic-float) and
+  returns `dQ,dK [L,d_k]`, `dV [L,d_v]`.
+- **§V16**: no new algorithm — the backward is the calculus of the §R114 paper-verified forward,
+  accepted by cross-reference against the reference (§V3/§V11) plus the existing reference gradcheck
+  (§V2), same basis as T175.
+- **Verification** (`TestVulkanRetentionValueExpansion`, on-device via MoltenVK): the value-expanded
+  backward `dQ/dK/dV` match the reference within the f32 cross-tolerance across 5 shapes (including
+  `d_v<d_k`); the square `TestVulkanRetentionBackwardCrossReference` and training-E2E tests stay
+  green; the §B40 pipeline cache holds. Full Vulkan suite green on-device; Metal unaffected; gofmt,
+  vet, and §V7 CGO0 all clean.
+- **Retention is now fully GPU-native on Metal + Vulkan** — forward (T178/T179) and backward
+  (T191/T192) — so the value-expanded RetNet MSR block both infers and trains on both GPU backends
+  (previously the backward ran on the CPU). The remaining retention follow-up is xPos positional
+  encoding.
+- §T192 (done).
+
+### T191 — Metal value-expanded (d_v≠d_k) retention backward kernel (2026-07-07)
+- **The faithful RetNet MSR block now _trains_ on the Metal GPU.** T178 put the value-expanded
+  (`d_v=2·d_k`) retention *forward* on the GPU, but the *backward* still fell back to the reference, so
+  a training step computed the retention gradient on the CPU. The `retention_bwd_f32` MSL kernel is now
+  generalized to `d_v≠d_k`: the query·key dot and `dQ`/`dK` run over `d_k` (register `dqloc[d_k]`,
+  ≤128), while `dp`/`dV` run over `d_v` — so the whole retention backward runs on-device.
+- **Changes**: the MSL kernel (`int L,dk,dv`, split strides for `Q/K/dQ/dK` vs `V/dO/dV`); the bridge
+  `mtl_retention_backward_f32(…, L, dk, dv, γ)` with separate `[L,dk]`/`[L,dv]` buffer sizes,
+  zeroing, and `P[3]`; the header; and the Go wrapper, which drops the `d_v≠d_k` fallback (still falls
+  back for `d_k>128` / empty / non-f32) and returns `dQ,dK [L,d_k]`, `dV [L,d_v]`.
+- **§V16**: no new algorithm — the backward is the calculus of the §R114 paper-verified forward (the
+  reference already computes `d_v≠d_k` since T177), accepted by cross-reference against the reference
+  (§V3/§V11) plus the existing reference gradcheck (§V2), same basis as T174/T175.
+- **Verification** (`TestMetalRetentionValueExpansion`, on-device): the value-expanded backward
+  `dQ/dK/dV` match the reference within the f32 cross-tolerance across 5 shapes (including `d_v<d_k`);
+  the square `TestMetalRetentionBackwardCrossReference` and the training-E2E test stay green. Full
+  Metal suite green; gofmt, vet, and §V7 CGO0 all clean.
+- **Never-metal-only**: the Vulkan twin is filed as **T192** (the committed follow-up, mirroring
+  T174→T175). After it, the faithful MSR block trains on both GPU backends.
+- §T191, §T192 (open).
+
+### T179 — Vulkan value-expanded (d_v≠d_k) retention forward kernel (2026-07-07)
+- **The Vulkan twin of T178 — value-expanded RetNet retention forward now runs on _both_ GPU
+  backends** (the never-metal-only invariant is satisfied for the forward path). The `retention.comp`
+  shader is generalized from the square `d` to `d_k`/`d_v`: the query·key dot runs over `d_k` and the
+  value accumulation over `d_v` (register `acc[d_v]`, ≤128), recompiled to `retention.spv` via
+  `make vulkan-spv`.
+- **Changes**: the shader push-constant `PC{L, dk, dv, gamma}`; a new C `RetentionFwdPC{L,dk,dv,γ}`
+  in `vk_bridge.c` (the backward keeps the square `RetentionPC`) with split `[L,dk]` vs `[L,dv]`
+  buffer sizes; the header prototype; and the Go wrapper, which drops the `d_v≠d_k` fallback (still
+  falls back for `d_v>128` / empty / non-f32) and returns a `[L,d_v]` output.
+- **§V16**: no new algorithm — a backend port of the §R114 paper-verified retention (the reference
+  computes `d_v≠d_k` since T177), accepted by cross-reference against the reference (§V3/§V11), same
+  basis as T178.
+- **Verification** (`TestVulkanRetentionValueExpansion`, on-device via MoltenVK): the Vulkan `d_v≠d_k`
+  forward matches the reference within the f32 cross-tolerance across 5 shapes (including `d_v<d_k`);
+  the square cross-reference, backward, and training-E2E tests stay green; the §B40 pipeline cache
+  holds. Full Vulkan suite green on-device; Metal unaffected; gofmt, vet, and §V7 CGO0 all clean.
+- Value-expanded retention **forward** is now GPU-native on Metal + Vulkan. The next follow-up is the
+  value-expanded **backward** on both backends, after which the faithful (d_v=2·d_k) MSR block trains
+  entirely on GPU (today it infers on GPU, and the backward falls back to the reference).
+- §T179 (done).
+
+### T178 — Metal value-expanded (d_v≠d_k) retention forward kernel (2026-07-07)
+- **Runs the faithful RetNet retention on the GPU.** The RetNet multi-scale-retention block uses a
+  value expansion `d_v = 2·d_k` (T177); until now the square Metal kernel only handled `d_v = d_k`, so
+  the value-expanded case fell back to the reference (CPU). The `retention_f32` MSL kernel is now
+  generalized to `d_v ≠ d_k` — the query·key dot runs over `d_k` and the value accumulation over
+  `d_v` (register `acc[d_v]`, ≤128) — so the value-expanded forward runs natively on Metal.
+- **Changes**: the MSL kernel (`int L,dk,dv` in place of the square `L,d`, split strides
+  `Q[n·dk+i]`/`V[m·dv+j]`/`O[n·dv+j]`); the bridge `mtl_retention_f32(…, L, dk, dv, γ)` with separate
+  `[L,dk]` vs `[L,dv]` buffer sizes and `P[3]={L,dk,dv}`; the header prototype; and the Go wrapper,
+  which drops the `d_v≠d_k` fallback (still falls back for `d_v>128` / empty / non-f32) and returns a
+  `[L,d_v]` output.
+- **§V16**: no new algorithm — this is the general form of the §R114 paper-verified retention (the
+  reference already computes `d_v≠d_k` since T177), so acceptance is by cross-reference against the
+  reference truth (§V3/§V11), not fresh research (same basis as T174/T175).
+- **Verification** (`TestMetalRetentionValueExpansion`, on-device): the Metal `d_v≠d_k` forward
+  matches the reference within the f32 cross-tolerance across 5 shapes (`d_k` 3–16, `d_v` 3–32,
+  including `d_v<d_k`); the square `TestMetalRetentionCrossReference` and the training-E2E test stay
+  green (the signature change is safe); the backward still falls back exactly (value-expanded backward
+  is the next follow-up). Full Metal suite green; gofmt, vet, and §V7 CGO0 build all clean.
+- **Never-metal-only**: the Vulkan twin is filed as **T179** (the committed immediate follow-up,
+  mirroring the T172→T173 / T174→T175 forward/backward splits) — the invariant is honored across the
+  pair.
+- §T178, §T179 (open).
+
+### T190 — DARE (Drop And REscale) delta sparsification (2026-07-07)
+- **Adds `nn.DARE`** (Yu et al. 2024, arXiv:2311.03099, ICML — "Language Models are Super Mario"),
+  continuing the model-merging family (**TIES → +DARE**). DARE is the per-model task-vector
+  sparsifier that composes directly with the TIES merge from T189 (the standard **DARE-TIES** combo):
+
+  ```
+  DARE(base, model, dropRate, seed) → θ_pre + δ̂,   δ̂ = (m ⊙ δ)/(1−p),  m_i ~ Bernoulli(1−p)
+  ```
+
+  For the delta `δ = θ_ft − θ_pre` it drops each parameter independently with probability `p` and
+  rescales the survivors by exactly `1/(1−p)`, which keeps the sparsified delta **unbiased in
+  expectation** (`E[δ̂]=δ`) — the reason DARE can drop 90–99 % of SFT deltas with negligible loss.
+  The result feeds a downstream merge (a plain average → DARE-linear, or `nn.TIESMerge` → DARE-TIES).
+- **Implementation** (`nn/dare.go`): pure tensor math over parameter lists — no backend op/VJP, as
+  it is a one-shot preprocessing step. Seeded `rand/v2` PCG Bernoulli mask (deterministic per seed).
+  Validates matching shapes/dtypes/param-counts and `dropRate ∈ [0,1)`; inputs are never mutated.
+- **§V16 tier-2** (research-lite, NOT `/deep-research`): CONFIRMED — 3 agents unanimous — the delta
+  definition, the i.i.d. drop (keep prob 1−p), the exact `1/(1−p)` rescale, the unbiasedness
+  rationale, and the per-model-preprocess-before-merge placement against the DARE paper §3.1 and the
+  mergekit implementation.
+- **§V16 tier-1** (`nn/dare_test.go`): no-drop identity (p=0 ⇒ model); exact rescale values (base 0,
+  ones, p=0.75 ⇒ every entry ∈ {0,4}); a statistical check on 20k params that the drop fraction ≈ p
+  and the mean ≈ δ (unbiased); seed determinism; a DARE-TIES composition smoke test; errors;
+  `ExampleDARE`.
+- **Gate**: `go test ./nn` green, `apicheck` (§V17), gofmt, vet, §V7 CGO0 build, and the default
+  cgo/metal build all clean. Model merging now: TIES + DARE (DARE-TIES).
+- §R124, §T190.
+
+### T189 — TIES-Merging (model merging) (2026-07-07)
+- **Adds `nn.TIESMerge`** (Yadav et al. 2023, arXiv:2306.01708, NeurIPS), **opening the model-merging
+  family** (none existed before) toward the user's "all training methodologies" goal. TIES ("TrIm,
+  Elect Sign & Merge") combines N models fine-tuned from a shared base into one while resolving the
+  sign/magnitude interference that makes a naive average cancel opposing edits:
+
+  ```
+  TIESMerge(base, models, density, lambda) → θ_init + λ·τ_merged
+  ```
+
+  For each parameter it forms task vectors τ_t = θ_t − θ_init, then **trims** each per-tensor to the
+  top-`density` fraction by magnitude, **elects** a per-coordinate sign γ = sign(Σ_t τ̂_t), and
+  **disjoint-merges** by averaging only the trimmed values whose sign agrees with γ (mean over the
+  agreeing count, not N). density defaults conceptually to 0.2 (paper k=20%); λ≈1.
+- **Implementation** (`nn/merge.go`): pure tensor math over parameter lists — no backend op, VJP, or
+  kernel, since merging is a one-shot post-training utility outside the autograd graph. Validates
+  matching shapes/dtypes/param-counts and density ∈ (0,1]; inputs are never mutated; `trimTopK`
+  keeps exactly the top-k magnitudes.
+- **§V16 tier-2** (research-lite, NOT `/deep-research`): CONFIRMED — 3 agents unanimous — the task
+  vectors, **per-tensor** (not global) magnitude trim, sign election by the summed trimmed values,
+  the disjoint **mean over the sign-agreeing count** (÷|A_p|, not ÷N), and θ_init + λ·τ_merged
+  against the TIES paper §3/Algorithm 1 and the mergekit implementation.
+- **§V16 tier-1** (`nn/merge_test.go`): single-model identity (density=1, λ=1 recovers the model);
+  a hand-computed sign-election case ({+3,+1,−2} → mean{+3,+1}=2, the −2 discarded); trim keeps only
+  the top magnitudes; a nonzero-base λ-scaling case; perfect-cancellation coordinate stays at the
+  base; shape/dtype/density errors; `ExampleTIESMerge`.
+- **Gate**: `go test ./nn` green, `apicheck` (§V17), gofmt, vet, §V7 CGO0 build, and the default
+  cgo/metal build all clean.
+- §R123, §T189.
+
+### T188 — (IA)³ parameter-efficient fine-tuning adapter (2026-07-07)
+- **Adds `nn.IA3`** (Liu et al. 2022, arXiv:2205.05638), extending the PEFT family
+  (LoRA / DoRA / QLoRA-NF4 → **+(IA)³**) toward the user's "all training methodologies" goal. (IA)³
+  ("Infused Adapter by Inhibiting and Amplifying Inner Activations") is the lightest PEFT method — a
+  single learned per-feature vector `l[d]` that element-wise rescales an inner activation:
+
+  ```
+  y[..., j] = l[j] · x[..., j]        (l broadcast over all sequence/batch positions)
+  ```
+
+  `l` is **initialized to ones**, so a fresh adapter is an exact identity and the model starts equal
+  to the frozen base; only `l` trains. A full (IA)³ block adaptation places three of these — on the
+  attention keys (l_k), values (l_v) and the FFN hidden activations (l_ff = l⊙γ(W1·x) before the
+  down-projection) — at just `d` parameters per adapter vs LoRA's `r·(in+out)`.
+- **Implementation**: fused dispatched op `OpIA3` with a ref/cpu kernel (`backend/ref/ia3.go`,
+  last-dim rescale over any rank≥1) and VJP (`autograd/vjp_ia3.go`: `dx = g⊙l`,
+  `dl = Σ_rows g⊙x`, f64 accumulation). Like the other elementwise adapters it is ref/cpu-only
+  (GPU-inappropriate per ADR-0008). `nn.IA3{Scale}` + `NewIA3(d, dtype)` (ones-init) + `Forward` +
+  `Params` (base frozen).
+- **§V16 tier-2** (research-lite, NOT `/deep-research`): CONFIRMED — 3 agents unanimous — the three
+  rescaling placements (l_k⊙K, l_v⊙V, l_ff⊙γ(W1x)), the ones-initialization identity, the frozen
+  base, the core `y=l⊙x`, and the gradient against the (IA)³ paper §3.3 and the HuggingFace PEFT docs.
+- **§V16 tier-1** (`nn/ia3_test.go`): fresh adapter is an exact identity; rescale parity against an
+  independent recomputation for rank-2 `[tokens,d]` and rank-3 `[batch,seq,d]`; finite-difference
+  gradcheck on both `x` and the scale vector; a training loop that fits a per-feature target scaling
+  (MSE→0, recovers the scale); shape errors; `ExampleIA3`.
+- **Gate**: `go test ./nn ./backend/ref ./autograd` green, `apicheck` (§V17), gofmt, vet, §V7 CGO0
+  build, and the default cgo/metal build all clean. PEFT now: LoRA + DoRA + NF4/QLoRA + (IA)³.
+- §R122, §T188.
+
+### T187 — CPO (Contrastive Preference Optimization) alignment loss (2026-07-07)
+- **Adds `nn.CPO`** (Xu et al. 2024, arXiv:2401.08417), extending the reference-free alignment-loss
+  family (DPO / IPO / KTO / SimPO / ORPO / Distill → **+CPO**) toward the user's "all training
+  methodologies" goal. CPO folds preference alignment and SFT into one reference-free term:
+
+  ```
+  loss = mean −log σ( β·(logπ_chosen − logπ_rejected) ) + λ·(−logπ_chosen)
+  ```
+
+  The first term is the DPO contrastive loss with the reference dropped (a uniform prior that
+  cancels); the second is a negative-log-likelihood behavior-cloning regularizer on the chosen
+  response. Inputs are the **summed** sequence log-probabilities (DPO-style, not length-normalized).
+  `nn.Beta` sets β (default 0.1), the new `nn.CPOAlpha` sets λ (TRL cpo_alpha, default 1; λ=0 leaves
+  the bare preference term). Pair with `SequenceLogProbs`.
+- **Implementation**: fused dispatched op `OpCPO` with a ref/cpu kernel (`backend/ref/cpo.go`) and VJP
+  (`autograd/vjp_cpo.go`); `backend.CPOAttrs{Beta, Alpha}`. Like the other preference losses it is
+  ref/cpu-only — a tiny [batch] reduction, GPU-inappropriate per ADR-0008 — so no metal/vulkan kernel
+  is needed. Stable via softplus, f64 accumulation. Gradients: ∂/∂logπ_w = −β·σ(−z)−λ,
+  ∂/∂logπ_l = +β·σ(−z).
+- **§V16 tier-2** (research-lite, NOT `/deep-research`): CONFIRMED — 3 agents unanimous — the
+  reference-free L_prefer (Eq.3), the NLL/BC term on the chosen response (Eq.4), the composite
+  L_CPO = L_prefer + λ·L_NLL (Eq.5), summed (not averaged) log-probs, and β=0.1 against the CPO paper
+  and the HuggingFace TRL CPOTrainer docs.
+- **§V16 tier-1** (`nn/cpo_test.go`): parity against an independent numpy golden (`make golden`,
+  `build_cpo`) at f64 1e-12; α=0 reduces to the bare preference term; finite-difference gradcheck on
+  both log-prob vectors; a behavioral "trains-preference" check (descent raises logπ_chosen, lowers
+  logπ_rejected); shape/batch errors; `ExampleCPO`.
+- **Gate**: `go test ./nn ./backend/ref ./autograd` green, `apicheck` (§V17), gofmt, vet, §V7 CGO0
+  build, and the default cgo/metal build all clean.
+- §R121, §T187.
+
+### T74 — GEMM cache-blocking rung measured & parked (no delta on arm64) (2026-07-07)
+- **Measurement-driven negative result — nothing shipped, no regression merged.** Built the
+  BLIS/Goto cache-blocking rung of the GEMM ladder (§R67): pure-Go kc×nc tiling with a packed,
+  cache-resident B-panel (the f32 path additionally hoists the f32→f64 widen into the pack step),
+  reusing each panel across the whole M-band via the existing 4-row register microkernel.
+- **Bit-identity preserved throughout the trial**: blocking reorders only *which* (i,j) are touched
+  when, never the per-element accumulation — for a fixed (i,j) the pc-blocks run ascending and p
+  ascends within each, so the running sum stays byte-for-byte the reference's ascending-p sum.
+  `TestGemmCrossReferenceExact` (§V3/§V11 tol-0) was green for the blocked kernel.
+- **Verdict: discard.** A/B on the arm64 Apple M-series host (3 samples, `-benchtime 300ms -count 3`,
+  medians): f64-512 a wash (~4.88 ms both), f64-1024 ~12 % but inside run-to-run noise and +40 %
+  memory, f32-1024 a **regression** (~30.5→33.8 ms). The M-series memory subsystem already feeds the
+  streaming ikj kernel near-optimally, so GEMM is not cache-capacity-bound at these sizes and panel
+  packing is net copy+alloc overhead — same root cause as §B39 (Vulkan GEMM, memory-bandwidth-bound)
+  and §B27 (NEON ~1 elem/cycle). Per §C3 / V-CGO discipline, a pure-Go optimization that fails to
+  beat the optimized baseline is not merged.
+- **Kernel restored** to the §T12b unblocked register-blocked GEMM (unchanged API/numerics). Kept the
+  new 1024-size benchmarks in `gemm_test.go` as future baselines. CGO0 build + vet + gofmt green.
+- The real remaining GEMM headroom is wider-FMA SIMD, host-blocked on arm64 (cf §T11b/§B13). §T74
+  moves to parked (`~`); resume the blocking rung only on a large-cache x86 server (re-measuring
+  before merge) and the SIMD rung with an amd64 CI runner.
+- §B41, ADR-0017, §T74 (`.`→`~`).
+
+### T186 — Cholesky decomposition + SPD solve `Cholesky`/`CholSolve` (2026-07-07)
+- **Adds the Cholesky factorization** to `linalg` (continuing the numpy/gonum request —
+  `np.linalg.cholesky`; seventh linalg slice, completing the decomposition set after LU, QR, SVD,
+  the SVD-derived quantities, and the symmetric eigendecomposition). For a symmetric
+  positive-definite (SPD) matrix `A`, `Cholesky(a)` returns the lower-triangular `L` with `A=L·Lᵀ`
+  and `L[i,i]>0`, and `CholSolve(a, b)` solves `A·x=b` (vector `[n]` or matrix `[n,k]` RHS). Cholesky
+  is the SPD workhorse — ~2× fewer flops than LU (n³/3 vs 2n³/3), no pivoting, numerically stable —
+  and the standard solver for normal equations, covariance matrices, and Gaussian processes.
+- **Algorithm** (`linalg/cholesky.go`): the Cholesky-Banachiewicz recurrence
+  `L[j,j]=√(A[j,j]−Σ_{k<j}L[j,k]²)`, `L[i,j]=(A[i,j]−Σ_{k<j}L[i,k]L[j,k])/L[j,j]`. The SPD check is
+  definitional and free: the √ argument goes non-positive exactly when `A` is not positive-definite
+  (a non-positive pivot at some leading minor — LAPACK dpotrf's `INFO=j`), returned as an error.
+  `CholSolve` does forward-substitution `L·y=b` then back-substitution `Lᵀ·x=y` (LAPACK dpotrs). Both
+  validate square + symmetric (rel-tol) input and never mutate it; f64 internally.
+- **§V16 tier-2** (research-lite, NOT `/deep-research`): CONFIRMED — 3 agents unanimous, zero
+  contradiction — the recurrence, the SPD-failure test, the numpy lower-`L` convention, and the
+  dpotrs forward/back solve against numpy.linalg.cholesky + LAPACK dpotrf/dpotrs + Golub & Van Loan
+  §4.2.1-4.2.5.
+- **§V16 tier-1** (`linalg/cholesky_test.go`): reconstruction `A=L·Lᵀ` with lower-triangular `L` and
+  positive diagonal (n=1..8 on `A=B·Bᵀ+nI`); `CholSolve` residual `A·x=b`, equality with the general
+  LU `Solve` on an SPD matrix, and a multi-RHS `[n,k]` shape; non-SPD rejection (indefinite
+  `[[1,2],[2,1]]` and a negative diagonal); non-symmetric and non-square errors; `ExampleCholesky`.
+- **Gate**: `go test ./linalg` green, `apicheck` (DOCS-GATE §V17), gofmt, vet, and §V7 CGO0 build all
+  clean. `linalg` now covers the core matrix toolkit — LU (Solve/Inverse/Det), QR (least-squares),
+  SVD, pinv/rank/cond/norms, symmetric `Eigh`, and `Cholesky`/`CholSolve` — a solid gonum-equivalent.
+- §R120, §T186.
+
+### T185 — Symmetric eigendecomposition `Eigh` (2026-07-07)
+- **Adds the symmetric eigendecomposition** to `linalg` (continuing the numpy/gonum request —
+  `np.linalg.eigh`; sixth linalg slice after array creation, LU, QR, SVD, and the SVD-derived
+  quantities). Symmetric eigendecomposition is central to PCA, spectral methods, and Hessian analysis.
+  §R119.
+- `linalg.Eigh(a)` decomposes a real **symmetric** matrix as `A = V·diag(w)·Vᵀ`: `w` holds the real
+  eigenvalues in **ascending** order and the **columns** of `V` are the corresponding orthonormal
+  eigenvectors (`A·V[:,k] = w[k]·V[:,k]`, `VᵀV = I`) — matching numpy/LAPACK/gonum. It wraps the
+  already-tested internal cyclic-Jacobi `SymEig` (used by PCA's sklearn-golden tests and GaLore),
+  reversing that routine's descending output to numpy's ascending order and laying the eigenvectors as
+  columns. The input must be square and symmetric (checked to a relative tolerance); it is not mutated.
+- **§V16 tier-2:** `research-lite` (not `/deep-research`) CONFIRMED the numpy conventions (ascending
+  eigenvalues, column eigenvectors, `A·v=λv`, `A=VΛVᵀ`) and the cyclic-Jacobi `(τ,t,c,s)` rotation
+  (the same form as the one-sided Jacobi SVD) 3-agent unanimous against numpy.linalg.eigh, LAPACK
+  `dsyev`, gonum `EigenSym`, and Golub & Van Loan §8.5.
+- **§V16 tier-1:** `linalg/eigh_test.go` — `Reconstruct` (the eigenvalue equation `A·V=V·diag(w)`, the
+  reconstruction `A=VΛVᵀ`, `VᵀV=I`, and ascending order, across n=1..8), `Diagonal`, a known 2×2
+  (`[[2,1],[1,2]] → w=1,3`), non-symmetric/non-square errors, and `ExampleEigh`.
+- Gate green: `go test ./linalg`, `./classic` (PCA unaffected — `SymEig` unchanged), apicheck, gofmt,
+  vet, and §V7 CGO0-green whole-repo build + suite.
+- The `linalg` package now covers LU (Solve/Inverse/Det), QR (least-squares), SVD, pinv/rank/cond/norms,
+  and symmetric Eigh — a solid gonum-equivalent matrix toolkit. Follow-ups: Cholesky, wide `m<n`
+  (min-norm) QR, and general (non-symmetric) eigenvalues.
+
+### T184 — Pseudoinverse, rank, condition number, and matrix norms (2026-07-07)
+- **Adds the SVD-derived matrix quantities and matrix norms** to `linalg` (continuing the numpy/gonum
+  request — `np.linalg.pinv`/`matrix_rank`/`cond`/`norm`; fifth linalg slice after array creation, LU,
+  QR, and SVD). Together with T181–T183 this completes the core matrix-function toolkit. §R118.
+  - `linalg.Pinv(a)` — the Moore-Penrose pseudoinverse `A⁺ = V·Σ⁺·Uᵀ` (`Σ⁺ = 1/σ` for `σ > 1e-15·σ_max`,
+    else 0). It satisfies the four Moore-Penrose conditions; for a full-rank tall matrix it is the
+    least-squares left-inverse, and `A⁺·b` is the least-squares solution.
+  - `linalg.Rank(a)` — numerical rank, the number of singular values above numpy's default tolerance
+    `σ_max · max(m,n) · eps`.
+  - `linalg.Cond(a)` — the 2-norm condition number `σ_max/σ_min` (`+Inf` when singular).
+  - `linalg.Norm2` (spectral, `σ_max`), `NormFro` (Frobenius), `Norm1` (max absolute column sum),
+    `NormInf` (max absolute row sum).
+- **§V16 tier-2:** `research-lite` (not `/deep-research`) CONFIRMED the formulas and numpy's default
+  tolerances (pinv `rcond = 1e-15`, rank `tol = σ_max·max(m,n)·eps`), the four Moore-Penrose
+  properties, and the 1-vs-∞ column/row conventions 3-agent unanimous against numpy.linalg and Golub &
+  Van Loan §2.3/§5.5.2.
+- **§V16 tier-1:** `linalg/derived_test.go` — `PinvMoorePenrose` (all four properties @1e-8 across
+  tall/square/wide, and `A⁺·b = Lstsq`), `PinvEqualsInverse`, `Rank` (identity/rank-1/zero/singular),
+  `Cond` (I=1, diagonal=2.5, singular=+Inf), matrix norms against hand-computed values, and
+  `Example{Pinv,NormFro,Rank}`.
+- Gate green: `go test ./linalg`, apicheck, gofmt, vet, and §V7 CGO0-green whole-repo build + suite.
+- The `linalg` package now covers LU (Solve/Inverse/Det), QR (least-squares), SVD, and
+  pinv/rank/cond/norms. Follow-ups: Cholesky, a public symmetric-eigendecomposition (surfacing the
+  internal `SymEig`), and wide `m < n` (min-norm) QR.
+
+### T183 — SVD via one-sided Jacobi (2026-07-07)
+- **Adds the singular value decomposition** to `linalg` (continuing the numpy/gonum request —
+  `np.linalg.svd`; fourth linalg slice after array creation, LU, and QR). SVD is the crown jewel that
+  unlocks the pseudoinverse, matrix rank, condition number, the spectral 2-norm, PCA, and low-rank
+  approximation. §R117.
+- `linalg.SVD(a)` computes the reduced/economy decomposition `A = U·diag(s)·Vᵀ` with `p = min(m,n)`:
+  `U ∈ R^{m×p}` (left singular vectors, orthonormal columns), `s` the singular values
+  `σ₁ ≥ … ≥ σ_p ≥ 0`, and `V ∈ R^{n×p}` (right singular vectors). It uses the **one-sided Jacobi
+  (Hestenes)** method — orthogonalizing the columns of A by right-applied Jacobi rotations while
+  accumulating V — which works directly on A (never forming AᵀA) and so computes even tiny singular
+  values with high relative accuracy. Any shape is handled (`m < n` via `SVD(Aᵀ)` and swapping U/V);
+  f64, input never mutated.
+- **§V16 tier-2:** `research-lite` (not `/deep-research`) CONFIRMED the exact rotation
+  (`ζ=(β−α)/2γ`, `t=sign(ζ)/(|ζ|+√(1+ζ²))`, `c=1/√(1+t²)`, `s=c·t`), the cyclic sweep, the extraction
+  (`σⱼ=‖aⱼ‖`, `uⱼ=aⱼ/σⱼ`), and the descending sort 3-agent unanimous against Golub & Van Loan §8.6.3,
+  Demmel §5.4.3, and Hestenes 1958 — and flagged that `c = 1/√(1+t²)` is the correct form (a common
+  blog typo writes `1/(1+t²)`), which the implementation uses.
+- **§V16 tier-1:** `linalg/svd_test.go` — `Reconstruct` (`U·Σ·Vᵀ = A` @1e-9, `UᵀU = I`, `VᵀV = I`,
+  singular values non-negative and descending, across tall/square/wide shapes), `Diagonal` (σ = sorted
+  |diagonal|), a rank-1 case (σ = [5, 0]), errors, and `ExampleSVD`.
+- Gate green: `go test ./linalg`, apicheck, gofmt, vet, and §V7 CGO0-green whole-repo build + suite.
+- Follow-ups (now trivial via SVD): pseudoinverse, `Rank`, `Cond`, spectral 2-norm; plus Cholesky, a
+  public symmetric-eigendecomposition (surfacing the internal `SymEig`), and matrix
+  Frobenius/1/∞ norms.
+
+### T182 — QR decomposition (Householder) + least-squares (2026-07-07)
+- **Adds QR decomposition and least-squares** to the `linalg` package (continuing the numpy/gonum
+  request — `np.linalg.qr` / `np.linalg.lstsq`; third slice after array creation T180 and LU T181).
+  §R116.
+- `linalg.QR(a)` computes the reduced/economy QR of an m×n matrix (m ≥ n) via Householder reflections:
+  `A = Q·R` with `Q ∈ R^{m×n}` orthonormal columns (`QᵀQ = I`) and `R ∈ R^{n×n}` upper-triangular.
+  Householder QR is backward-stable (unlike classical Gram-Schmidt).
+- `linalg.Lstsq(a, b)` solves the least-squares problem `min‖A·x − b‖₂` for `m ≥ n` (overdetermined or
+  square) by applying `Qᵀ` to `b` and back-substituting `R·x = (Qᵀb)[0:n]` — more stable than the
+  normal equations. `b` is a vector `[m]` or matrix `[m,k]`. Everything is f64; the input is not
+  mutated.
+- **§V16 tier-2:** `research-lite` (not `/deep-research`) CONFIRMED the exact Householder reflector
+  (`α = −sign(x₀)‖x‖`, `β = 2/vᵀv`), the right-looking algorithm, the economy-Q accumulation, and the
+  QR least-squares 3-agent unanimous against LAPACK (`dlarfg`/`dgeqrf`/`dgels`) and Golub & Van Loan
+  §5.1–5.3.
+- **§V16 tier-1:** `linalg/qr_test.go` — `QRReconstruct` (`Q·R = A` @1e-9, `QᵀQ = I`, `R`
+  upper-triangular across m×n from 1×1 to 10×3); `LstsqSquare` (`A·x = b`); `LstsqOverdetermined`
+  (satisfies the normal equations `AᵀA·x = Aᵀb`); `LstsqLineFit` (recovers `y = 2x+1` exactly);
+  errors; `Example{QR,Lstsq}`.
+- Gate green: `go test ./linalg`, apicheck, gofmt, vet, and §V7 CGO0-green whole-repo build + suite.
+- Follow-ups: wide `m < n` (min-norm) QR, Cholesky/SVD/Eig decompositions, and matrix
+  `Norm`/`Cond`/`Rank`/pseudoinverse.
+
+### T181 — gonum-style dense linear algebra: LU / Solve / Inverse / Det (2026-07-07)
+- **Adds a public `linalg` package** with dense linear algebra over rank-2 tensors — continuing the
+  numpy/gonum request (T180 added array creation; this adds the matrix operations). The library had
+  `MatMul` but no general **inverse**, **linear solve**, or **determinant** (only an internal
+  `cholSolve` for SPD normal equations and an internal symmetric-eig). §R115.
+- `linalg.LU` is a partial-pivoting LU factorization (`P·A = L·U`, `L` unit-lower, `U` upper) produced
+  by `Factor(a)`; its methods are `Det` (`sign·∏ U_kk`), `Solve(b)` (a vector `[n]` or matrix `[n,k]`
+  right-hand side, via permute + forward/back substitution), and `Inverse` (solve `A·X = I`). The free
+  functions `Solve`/`Inverse`/`Det` do a one-shot Factor + method. Everything is computed in f64; the
+  input matrix is never mutated. A singular matrix still factorizes (`Det` returns 0) but
+  `Solve`/`Inverse` error.
+- **§V16 tier-2:** `research-lite` (not `/deep-research`) CONFIRMED the exact LU/GEPP algorithm and the
+  determinant/solve/inverse conventions 3-agent unanimous against the LAPACK reference
+  (`dgetf2`/`dgetrs`/`dgetri`) and Golub & Van Loan §3.2/§3.4.
+- **§V16 tier-1:** `linalg/linalg_test.go` verifies the mathematical identities — `Solve` residual
+  `A·x = b` @1e-9 (n=1..8), `A·A⁻¹ = I`, determinant against hand-computed cases (`ad−bc`, triangular
+  `∏`diag, `det(I)=1`, `det(A)·det(A⁻¹)=1`), a matrix right-hand side, singular/non-square errors, and
+  `Example{LU,Solve,Det,Inverse}`.
+- Gate green: `go test ./linalg`, apicheck (`ExampleLU`, §V17), gofmt, vet, and §V7 CGO0-green
+  whole-repo build + suite.
+- Second slice of the numpy/gonum surface. Follow-ups: QR/SVD/Cholesky/Eig decompositions, matrix
+  `Norm`/`Cond`/`Rank`, and the numpy elementwise (`Sqrt`/`Abs`/`Pow`/`Clip`) + shape
+  (`Concatenate`/`Stack`/`Split`) functions.
+
+### T180 — numpy/gonum-style array-creation constructors (2026-07-07)
+- **Adds the numpy/gonum array-creation functions** (user request). The `ops` package already provided
+  the numpy-style *operations* (`Add`/`Sub`/`Mul`/`Div`/`MatMul`/`Dot`/`Sum`/`Mean`/`Max`/`Exp`/
+  `Softmax`/…), but there were no array-creation constructors — the most fundamental missing piece.
+- `tensor/create.go`: `Zeros`, `Ones`, `Full` (+ `ZerosLike`/`OnesLike`); `Arange` (half-open
+  `[start, stop)`, length `⌈(stop−start)/step⌉`, signed step); `Linspace` (n evenly spaced samples over
+  the closed `[start, stop]`, exact endpoint, `n=1 → [start]`); `Eye`/`Identity` (n×n identity);
+  `Rand` (uniform `[0,1)`) and `Randn` (standard normal). All are dtype-explicit like `New`, with a
+  fast f32/f64 fill path; `Rand`/`Randn` are seeded (rand/v2 PCG) for deterministic, reproducible
+  output. Their semantics follow numpy (definitional — no paper, like the file formats).
+- `tensor/create_test.go`: exact-value tests (Zeros/Ones/Full; Arange incl. fractional, negative-step,
+  and empty ranges; Linspace endpoint-exactness and `n=1`; Eye diagonal), `Rand` determinism-by-seed
+  and `[0,1)` range, `Randn` mean ≈ 0 over 10k samples, and `*Like` shape/dtype matching; plus
+  `ExampleArange`/`ExampleLinspace`/`ExampleEye`/`ExampleZeros`.
+- Gate green: `go test ./tensor`, apicheck (godoc + examples, §V17), gofmt, vet, and §V7 CGO0-green
+  whole-repo build.
+- This is the first slice of the broader numpy/gonum surface. Follow-ups: numpy elementwise math
+  free-functions (`Sqrt`/`Abs`/`Pow`/`Clip`/`Sign`/`Where`/`Maximum`/`Minimum` and scalar variants) in
+  `ops`, shape operations (`Concatenate`/`Stack`/`Split`/`Squeeze`/`ExpandDims`), and gonum-style linear
+  algebra (`Inverse`/`Solve`/`Det`/matrix `Norm`/`QR`/`SVD`/`Cholesky`/`Eig`).
+
+### T177 — Retention value expansion (d_v ≠ d_k) + faithful MSR block (2026-07-07)
+- **Generalizes the retention operator to support a value dim different from the key dim** (`d_v ≠ d_k`,
+  RetNet's value expansion), resolving the documented divergence from T176 — `RetNetBlock` now uses the
+  faithful `value_dim = 2·d_model` (Eq. 8). The operator accepts `Q,K ∈ [L,dk]` and `V ∈ [L,dv]` and
+  returns `[L,dv]` (`i` over the key dim for the `QKᵀ` dot, `j` over the value dim for the `V`
+  accumulation); the parallel–recurrent duality still holds (state `S ∈ R^{dk×dv}`).
+- Reference kernels generalized: `backend/ref/retention.go` and `retention_backward.go` split `d` into
+  `dk`/`dv`, and `nn.RetentionRecurrent`'s state is now `[dk,dv]`.
+- The GPU kernels are square-only (`d_v=d_k`) for now, so the Metal and Vulkan retention wrappers
+  (forward and backward) now validate `Q,K [L,dk]` / `V,dO [L,dv]` and **fall back to the reference**
+  (§I4) when `d_v ≠ d_k` — the fast GPU path is unchanged for the square case.
+- `nn.RetNetBlock` now sets `value head dim = 2·k` (Wv/Wg: `d_model→2k`, Wo: `2k→d_model`), the RetNet
+  value expansion; the T176 divergence note is removed.
+- Not a new algorithm — this is the general form of the verified retention (§R114) with the duality
+  preserved, so acceptance is duality + golden + gradcheck, no fresh research.
+- **§V16 tier-1 / §V2:** `nn/retention_test.go`'s `TestRetentionValueExpansion` (dk=3, dv=5: the
+  parallel form equals the recurrent form and an independent recomputation @1e-12, and the generalized
+  backward gradchecks Q/K/V); the existing `d_k=d_v` tests still pass; the `RetNetBlock` e2e gradcheck
+  now exercises `d_k≠d_v=2k` through the generalized kernels; and `TestMetal/VulkanRetentionValueExpansionFallback`
+  confirm the GPU backends fall back to the reference exactly (forward and backward) rather than error.
+- Gate green: full Metal and Vulkan suites (no regression), `go test ./nn ./autograd ./backend/ref`,
+  apicheck, gofmt, vet, and §V7 CGO0-green whole-repo build + suite.
+- Follow-ups: GPU `d_v ≠ d_k` retention kernels (Metal, Vulkan) so the value-expanded MSR runs
+  retention on the GPU too; and xPos/rotary on Q,K.
+
+### T176 — RetNet Multi-Scale Retention (MSR) block (2026-07-07)
+- **Adds `nn.RetNetBlock`**, the full Multi-Scale Retention block (Sun et al. 2023, arXiv:2307.08621,
+  Eq. 8; §R114) — it wraps the retention operator (T171–175) into a usable sequence layer, the way the
+  Mamba block (T79) wrapped the selective scan. Per head `h`: project `Qₕ,Kₕ,Vₕ`, run
+  `retₕ = Retention(Qₕ, k^(−½)·Kₕ, Vₕ, γₕ)` with per-head decay `γₕ = 1−2^(−5−h)`, apply an affine-free
+  per-head RMSNorm (the paper's "GroupNorm"), then a swish gate: `outₕ = (SiLU(X·Wgₕ) ⊙ RMSNorm(retₕ))·Woₕ`;
+  the block output is the sum over heads.
+- Implemented with a **per-head decomposition** (separate per-head projections and a summed output
+  projection), mathematically identical to RetNet's big Q/K/V/G/O projections + head-split + concat, but
+  keeping every tensor a tracked leaf so gradients flow without a differentiable slice/concat op (the
+  transpose-view gotcha from T171). All projections are bias-free (RetNet). Every op is dispatched, so
+  the block trains on the GPU (retention forward/backward from T172–175, projections via matmul).
+- **§V16 tier-2:** `research-lite` (not `/deep-research`) CONFIRMED the Eq. 8 structure against the paper
+  and torchscale `multiscale_retention.py` — bias-free projections, QK scaling `key_dim^(−½)`, the swish
+  gate, and the output projection, with the correction that the norm is an **affine-free per-head
+  RMSNorm**, not `nn.GroupNorm`.
+- **§V16 tier-1 / §V2:** `nn/retnet_block_test.go` — `Shapes`; `GradcheckE2E` (central finite differences
+  match the tape gradient for the input and representative weights, so the **whole block trains**);
+  `Errors`; `ExampleRetNetBlock`.
+- **Documented divergence:** the value/gate width equals the key width (`value_dim = d_model`), whereas
+  RetNet uses a 2× value expansion (`value head dim = 2·k`). The expansion requires the retention
+  operator to support `d_v ≠ d_k`, which `OpRetention` does not yet — a committed follow-up.
+  Structurally (multi-scale decay, per-head retention, affine-free RMSNorm, swish gate, summed output)
+  this is the full MSR block.
+- Gate green: `go test ./nn ./autograd ./backend/ref`, apicheck, gofmt, vet, and §V7 CGO0-green whole-repo
+  build + suite. Pure Go. Follow-ups: generalize `OpRetention` to `d_v ≠ d_k` (all six kernels) for the
+  value expansion, and xPos/rotary on Q,K.
+
+### T175 — RetNet retention backward on Vulkan (retention trains on both GPU backends) (2026-07-07)
+- **Retention now trains on both GPU backends**: the Vulkan retention backward, the twin of the Metal
+  kernel from T174, completes the never-metal-only requirement. Combined with the forward (T172/T173),
+  RetNet retention now infers *and* trains on Metal and Vulkan. §R114. Mirrors T86→T90.
+- `backend/vulkan/shaders/retention_bwd.comp` (`GL_EXT_shader_atomic_float`; → `retention_bwd.spv` via
+  `glslc`, embedded): one invocation per query row writes its own `dQ` row from a private accumulator
+  and **float-atomically** accumulates the shared `dK`/`dV` (row `m` collects contributions from every
+  `n ≥ m`), with `dK`/`dV` uploaded pre-zeroed — mirroring `mha_bwd.comp` and the Metal kernel.
+  `vk_bridge.c`/`.h`: `vk_retention_backward_f32` (seven storage buffers through the generic
+  `vk_dispatch`; returns `-7` if the device lacks atomic-float). `vulkan.go`: the embedded SPIR-V, the
+  `OpRetentionBackward → retentionBackwardF32` dispatch, and the wrapper (falls back to the reference
+  for `d>128`/empty/non-f32 or no `VK_EXT_shader_atomic_float`).
+- Not a new algorithm — the backward is the calculus of the paper-verified forward (§R114), accepted
+  by V-CROSS + gradcheck, no fresh research (as with T90).
+- **§V3/§V11:** `TestVulkanRetentionBackwardCrossReference` — Vulkan `dQ`/`dK`/`dV` equal the reference
+  within `crossTol(d+L)` (L=1..16, d=4..64, γ ∈ {0.5..1.0}) on MoltenVK; `TestVulkanRetentionTrainsE2E`
+  — a Vulkan-tape retention forward+backward produces the same gradients as a reference tape, proving
+  retention trains on Vulkan.
+- **§B40:** this is the 15th distinct compute shader; the pipeline cache (`VK_MAX_PIPELINES=32`) holds
+  and the full Vulkan suite stays green (no regression). Metal unaffected, gofmt/vet clean, and §V7
+  CGO0 pure-Go build + suite stays green.
+- Retention is now complete on Metal + Vulkan — forward (T172/T173) and backward (T174/T175). Follow-up:
+  the full multi-scale-retention block (heads + GroupNorm + swish gate + xPos).
+
+### T174 — RetNet retention backward on Metal (retention trains on GPU) (2026-07-07)
+- **Retention now trains on the GPU** (Metal): the forward landed in T172/T173, and this adds the
+  backward, so a Metal tape runs retention's forward *and* backward on-device. §R114. Mirrors how
+  attention got a GPU backward (`OpMHA` → `OpMHABackward`, T86).
+- New dispatched `OpRetentionBackward` (`(Q,K,V,dO) → (dQ,dK,dV)`): the exact gradient math that used
+  to live inline in the VJP is moved into a ref kernel (`backend/ref/retention_backward.go`), and
+  `autograd/vjp_retention.go` now simply `Execute`s the op — so the backward runs on whichever backend
+  the forward ran on (the same pattern as the matmul and attention VJPs).
+- Metal MSL kernel `retention_bwd_f32`: one thread per query row `n` writes its own `dQ` row from a
+  register accumulator and **atomically** accumulates into the shared `dK`/`dV` (row `m` collects
+  contributions from every `n ≥ m`), with `dK`/`dV` pre-zeroed — exactly like `mha_bwd`. Falls back to
+  the reference (§I4) for `d>128`/empty/non-f32. `op.go` gains the op constant + name; `metal.go` gains
+  the `Kernel` dispatch and the `retentionBackwardF32` wrapper.
+- Not a new algorithm — the backward is the calculus of the paper-verified forward (§R114), accepted
+  by V-CROSS + gradcheck, no fresh research (as with T86).
+- **§V2:** the existing `nn.TestRetentionGradcheck` still passes — the VJP refactor preserves the
+  gradients exactly, now via the dispatched op.
+- **§V3/§V11:** `TestMetalRetentionBackwardCrossReference` — Metal `dQ`/`dK`/`dV` equal the reference
+  within `crossTol(d+L)` (L=1..16, d=4..64, γ ∈ {0.5..1.0}); `TestMetalRetentionTrainsE2E` — a
+  Metal-tape retention forward+backward produces the same Q/K/V gradients as a reference tape,
+  **proving retention trains on the GPU**. Full Metal suite green (no regression), gofmt/vet clean, and
+  §V7 CGO0 pure-Go build + suite stays green (the ref kernel serves the CPU path).
+- Never-metal-only: the **Vulkan** retention backward is the committed follow-up **T175** (mirroring
+  T86→T90; `VK_EXT_shader_atomic_float` is already enabled for `mha_bwd`).
+
+### T173 — GPU RetNet retention forward on Vulkan (2026-07-07)
+- **Adds the Vulkan GPU kernel for the RetNet retention forward**, the twin of the Metal kernel from
+  T172 — retention now runs on **both** GPU backends, satisfying the never-metal-only rule. §R114.
+- `backend/vulkan/shaders/retention.comp` (→ `retention.spv` via `glslc`, embedded): one invocation
+  per query row `n` streams keys `m = n..0` with an incremental γ-decay into a register accumulator
+  `acc[d]` — the parallel form `(QKᵀ⊙D)V` with no `[L,L]` score matrix (mirroring the Metal kernel and
+  the flashattn GLSL). `vk_bridge.c`/`.h`: the `RetentionPC{L,d,γ}` push block and `vk_retention_f32`
+  (four storage buffers through the generic `vk_dispatch`, 1-D dispatch of ⌈L/64⌉ workgroups).
+  `vulkan.go`: the embedded SPIR-V, the `OpRetention → retentionF32` dispatch, and the wrapper (reads
+  `RetentionAttrs.Gamma`, falls back to the reference for `d>128`/empty/non-f32).
+- Not a new algorithm — the retention parallel form (§R114) is tier-2 verified, so this is a new
+  backend accepted by V-CROSS against the f64 reference (as with T110).
+- **§V3/§V11:** `TestVulkanRetentionCrossReference` — Vulkan == reference `OpRetention` within
+  `crossTol(d+L)` across L=1..16, d=4..64, γ ∈ {0.5, 0.9, 0.968, 0.99, 1.0}, on MoltenVK.
+- **§B40:** this is the 14th distinct compute shader; the pipeline cache (`VK_MAX_PIPELINES=32`) holds
+  and the full Vulkan suite stays green (no regression). gofmt/vet clean; §V7 CGO0 pure-Go build +
+  suite stays green (Vulkan is tag-gated).
+- The retention **forward** is now complete on Metal + Vulkan. Follow-ups: retention **backward** on
+  the GPU (to train retention on-device, mirroring T86/T90), and the full multi-scale-retention block.
+
+### T172 — GPU RetNet retention forward on Metal (2026-07-07)
+- **Runs the RetNet retention forward on the GPU** (Metal), completing the CPU operator from T171. The
+  parallel form `(QKᵀ ⊙ D)·V` streams keys exactly like flash-attention, so the kernel needs no
+  `[L,L]` score matrix — one GPU thread per query row `n` streams `m = n..0` with an incremental
+  γ-decay into a register accumulator `acc[d]`. §R114. This mirrors how attention went to the GPU
+  (`OpMHA` forward, T85).
+- `backend/metal/metal_bridge.m`/`.h`: the MSL kernel `retention_f32` and the `mtl_retention_f32`
+  bridge (with its own cached pipeline). `backend/metal/metal.go`: `OpRetention` dispatches to the new
+  `retentionF32` wrapper, which validates the `[L,d]` shapes, reads `RetentionAttrs.Gamma`, and falls
+  back to the reference (§I4) for `d > 128`, empty `L`, or non-f32. It is the single-head operator;
+  the multi-scale-retention heads/GroupNorm/gate remain a block-level follow-up.
+- Not a new algorithm — the retention parallel form (§R114) is already tier-2 verified, so this is a
+  new **backend** accepted by V-CROSS against the f64 reference (as with T85), no fresh research.
+- **§V3/§V11:** `TestMetalRetentionCrossReference` — the Metal result equals the reference
+  `OpRetention` within `crossTol(d+L)` across L=1..16, d=4..64, and γ ∈ {0.5, 0.9, 0.968, 0.99, 1.0},
+  on-device. The full Metal suite stays green (no regression), gofmt/vet clean, and §V7 CGO0 pure-Go
+  build + suite stays green (Metal is tag-gated).
+- Never-metal-only: the **Vulkan** retention twin is the committed follow-up **T173** (mirroring
+  T85→T89). Further follow-ups: retention **backward** on the GPU (to train retention on-device,
+  mirroring T86), and the full multi-scale-retention block.
+
+### T171 — RetNet retention operator (2026-07-07)
+- **Adds the RetNet retention mechanism** (Sun et al. 2023, *"Retentive Network: A Successor to
+  Transformer"*, arXiv:2307.08621; §R114) — the linear-attention / retention architecture class, the
+  last major sequence-model family that was missing (the library already had transformers, Mamba/SSM,
+  MoE, and MLA). Retention replaces attention's softmax with a **γ-decay mask**, which gives three
+  mathematically equivalent forms: a Transformer-like parallel train and an RNN-like constant-memory
+  decode. This mirrors the Mamba precedent (the selective-scan core op in T78, the full block in T79):
+  T171 is the retention **operator**; the multi-scale block is a follow-up.
+- New fused `OpRetention`: an op constant + name (`backend/op.go`), `backend.RetentionAttrs{Gamma}`, a
+  ref kernel (`backend/ref/retention.go`, the parallel form `O = (QKᵀ ⊙ D)·V` with `D_nm = γ^(n−m)`
+  causal, γ∈[0,1] guard), and the analytic VJP (`autograd/vjp_retention.go`, `dQ/dK/dV` — the
+  softmax-free attention gradient).
+- `nn/retention.go`:
+  - `Retention(ctx, q, k, v, gamma)` — the parallel form (Eq. 5), differentiable end-to-end.
+  - `RetentionRecurrent(q, k, v, gamma)` — the recurrent form (Eq. 6): `S_n = γ·S_{n−1} + K_nᵀV_n`,
+    `out_n = Q_n·S_n`, in `O(d²)` memory with no `[L,L]` score matrix — the constant-memory decode path.
+  - `RetentionDecays(heads)` — the multi-scale per-head decays `γ_h = 1 − 2^(−5−h)` (Eq. 8).
+- **§V16 tier-2:** `research-lite` (not `/deep-research`) CONFIRMED Eq. 5/6/8, the parallel–recurrent
+  duality, and — critically — that torchscale's scale-invariant retention-score GroupNorm is **not**
+  part of core Eq. 5 and is safe to omit so the pure forms are exactly dual (3-agent unanimous vs the
+  paper and microsoft/torchscale).
+- **§V16 tier-1 / §V2:** `nn/retention_test.go` — `Duality` (the defining RetNet property: the parallel
+  and recurrent forms agree @1e-10 across 5 decay rates × 4 shapes); `Golden` (parallel form equals an
+  independent recomputation @1e-12); `Gradcheck` (finite differences match the tape gradient for Q, K,
+  V); `Decays`; `Errors`; `ExampleRetention`.
+- Gate green: `go test ./nn ./autograd ./backend/ref ./backend`, apicheck (`RetentionAttrs`
+  category-exempt), gofmt, vet, and §V7 CGO0-green whole-repo build + suite. Pure Go, ref-only kernel
+  (cpu/metal fall back via §I4). Follow-ups: a GPU retention kernel (the parallel form is matmul-shaped,
+  mirroring `OpMHA`), the full multi-scale retention block (heads + GroupNorm + swish gate + xPos), and
+  the chunkwise form.
+
+### T170 — Standalone z-loss op (ST-MoE router z-loss) (2026-07-07)
+- **Adds `nn.ZLoss`**, the standalone log-Z softmax regularizer `coeff·mean(logsumexp(logits)²)` over
+  arbitrary `[batch,classes]` logits with **no** targets — completing the z-loss story begun in T169
+  (which fused it into cross-entropy). Its primary use is the **ST-MoE router z-loss** (Zoph et al.
+  2022, arXiv:2202.08906, Eq. 5; §R113): apply it to the MoE router gate logits alongside the
+  load-balancing loss to keep the router's softmax normalizer near 0 and stabilise sparse training.
+- New dispatched `OpZLoss`: an op constant + name (`backend/op.go`), `backend.ZLossAttrs{Coeff}`, a
+  ref kernel (`backend/ref/zloss.go`, stable max-shift, `Coeff ≥ 0` and rank-2 guards), the VJP in
+  `autograd/vjp_moe.go` (gradient `2·coeff·logZ·softmax / B`), and the `nn.ZLoss(ctx, logits, coeff)`
+  wrapper (ST-MoE router default 1e-3).
+- Not a new algorithm — this is the same z-loss whose formula, coefficient, and gradient were
+  `research-lite`-CONFIRMED in T169 (§R113 already documents the router form); here it is repackaged
+  as a standalone op, so acceptance is parity + gradcheck.
+- **§V16 tier-1 / §V2:** `nn/zloss_test.go` — `ZLossValue` (equals an independent recomputation
+  @1e-12; `coeff=0 → 0`); `ZLossMatchesFusedComponent` (the standalone equals
+  `CrossEntropyZLoss − CrossEntropy` @1e-12, proving the fused and standalone paths agree);
+  `ZLossGradcheck` (finite differences match the tape gradient); `ZLossValidation` (negative
+  coefficient and rank-1 logits rejected); `ExampleZLoss` (on router logits).
+- Gate green: `go test ./nn ./autograd ./backend/ref ./backend`, apicheck (`ZLossAttrs` is
+  category-exempt as a `backend.*Attrs` op-parameter struct; `ZLoss` covered by its Example), gofmt,
+  vet, and §V7 CGO0-green whole-repo build + suite. Pure Go, ref-only kernel (cpu/metal fall back via
+  §I4). The z-loss story is now complete: output-fused (T169) + standalone/router (T170).
+
+### T169 — z-loss / log-Z softmax regularizer (2026-07-07)
+- **Adds z-loss**, the LLM-specific pretraining stabilizer from PaLM (Chowdhery et al. 2022,
+  arXiv:2204.02311; origin the Mesh-TensorFlow softmax z-loss, Shazeer 2018; §R113). It adds
+  `z_coeff·(logsumexp(logits))²` per token to the cross-entropy loss, penalising the softmax
+  log-partition `log Z` toward 0 — which keeps the logits from drifting/exploding and markedly
+  improves large-model bf16/fp16 training stability. Used in PaLM, ST-MoE, Baichuan, OLMo 2,
+  Chameleon; distinct from label smoothing and weight decay.
+- Implemented by **fusing** into the existing `OpCrossEntropy` (the T82 attrs pattern), reusing its
+  numerically stable `logsumexp` and softmax:
+  - `backend.CrossEntropyAttrs` gains a `ZLoss` coefficient.
+  - The ref kernel adds `ZLoss·lse²` per row (with a `ZLoss ≥ 0` guard).
+  - The cross-entropy VJP adds the z-loss gradient `2·ZLoss·lse·softmax` to the existing CE gradient.
+  - `nn.CrossEntropyZLoss(ctx, logits, targets, zCoeff)` is the wrapper (paper default `zCoeff=1e-4`;
+    `0` recovers plain `CrossEntropy`).
+- **§V16 tier-2:** `research-lite` (not `/deep-research`) CONFIRMED the formula, the `1e-4` default,
+  and the `2·z_coeff·logZ·softmax` gradient 3-agent unanimous against PaLM §5 and the ST-MoE router
+  z-loss (Zoph et al. 2022, arXiv:2202.08906, Eq. 5).
+- **§V16 tier-1 / §V2:** `nn/zloss_test.go` — `Value` (CE + z-loss equals an independent recomputation
+  @1e-12; `coeff=0` equals plain CE; the penalty is strictly positive); `Gradcheck` (central finite
+  differences match the tape gradient, exercising the z-loss VJP term); `Validation` (negative
+  coefficient rejected); `ExampleCrossEntropyZLoss`.
+- Gate green: `go test ./nn ./autograd ./backend/ref` (no cross-entropy regression), apicheck, gofmt,
+  vet, and §V7 CGO0-green whole-repo build + suite. Pure Go, ref-only kernel (cpu/metal fall back via
+  §I4). Follow-up: a standalone `ZLoss` op for the ST-MoE **router** z-loss (on arbitrary logits, no CE).
+
+### T168 — Device-resident Q4_0 quantized weights on both GPU backends (2026-07-07)
+- **Adds the device-resident path for Q4_0** on both Metal and Vulkan, completing the Q4_0 GPU story
+  (per-call kernels landed in T166/T167). Residency uploads a Q4_0 weight to a GPU buffer **once** and
+  reuses it across matmuls — the decode-loop perf lever that avoids re-uploading the weight every
+  token (the same win measured for Q8_0 and the k-quants in T153–T156). §R94.
+- This reuses the **existing** T166/T167 Q4_0 compute kernels (`gQMatMulQ4_0` / `qmatmulQ4_0Spirv`) —
+  residency is purely a buffer-lifetime change, not a new kernel:
+  - Metal: `mtl_qmatmul_resident` gains a `case 2` (selects the cached Q4_0 pipeline, weight bound
+    from the resident buffer), and `residentRowBytes` gains the `qtQ4_0` case (`(k/32)·18`, align 32).
+  - Vulkan: `residentSpirv` and `residentRowBytes` gain the `qtQ4_0` case (Go-only — `vk_qmatmul_resident`
+    receives the SPIR-V module from Go).
+- Now `UploadQuant(weight, 2, n, k)` makes a Q4_0 weight resident on either backend, so `QuantLinear`
+  reuses it across every decode step instead of re-uploading.
+- Not a new algorithm — the Q4_0 dequant (§R94) is unchanged; acceptance is V-CROSS.
+- **§V3/§V11:** `TestMetalBackendResidentQuantMatMuler` and `TestVulkanResidentQuantMatMuler` now
+  cover Q4_0 (code 2) resident == `gguf.QMatMul` within 1e-5 (K=256) alongside Q8_0 and the k-quants;
+  each backend's "unsupported resident type" example was repointed from Q4_0 to Q4_1 (code 3), which
+  still has no resident kernel. Full Metal and Vulkan suites stay green (no regression), gofmt/vet
+  clean, and §V7 CGO0 pure-Go build + suite stays green.
+- The Q4_0 GPU story is now complete: per-call (T166/T167) + resident (T168) on both backends. Further
+  follow-up: more legacy quants (Q4_1/Q5_0/Q5_1) if there is demand.
+
+### T167 — GPU quantized matmul for Q4_0 on Vulkan (2026-07-07)
+- **Adds the Vulkan GPU kernel for Q4_0 quantized matmul**, the twin of the Metal kernel from T166 —
+  Q4_0 (the classic, very common 4-bit GGUF format) now runs on **both** GPU backends, satisfying the
+  never-metal-only rule. §R94.
+- `backend/vulkan/shaders/qmatmul_q4_0.comp` (→ `qmatmul_q4_0.spv` via `glslc`, embedded): one
+  invocation per output element streams its weight row's K/32 Q4_0 blocks (18 bytes: an f16 scale
+  decoded with `unpackHalf2x16` + 16 bytes of 32 nibbles read from the uint word buffer via `getByte`),
+  dequantizing in-kernel (`low nibble → element i`, `high nibble → element i+16`, value `d·(nibble−8)`)
+  exactly as `gguf.dequantQ4_0` and the Metal kernel. `vk_qmatmul_q4_0` is a thin wrapper over the
+  shared `vk_qmatmul_bytes` (only the SPIR-V module differs). `vulkan.go` gains `qtQ4_0 = 2`, a
+  `QMatMul` dispatch case, and the `QMatMulQ4_0` wrapper (K/weight-length guards, 4-byte weight pad).
+- Not a new algorithm — Q4_0 dequant (§R94) is tier-2 verified, so this is a new backend accepted by
+  V-CROSS against the f64 CPU reference (as with T137).
+- **§V3/§V11:** `TestVulkanQMatMulQ4_0CrossReference` (Vulkan == `gguf.QMatMul` within crossTol across
+  decode/prefill shapes, K=32..512, on MoltenVK), `TestVulkanQMatMulQ4_0Dispatch` (the `QuantMatMuler`
+  interface routes ggml type 2), and `TestVulkanQMatMulQ4_0Validation`.
+- **§B40:** this is the 13th distinct compute shader; the pipeline cache (`VK_MAX_PIPELINES=32`) holds
+  and the full Vulkan suite stays green. Fixed `TestVulkanBackendQuantMatMuler`, whose "unsupported
+  type" example was Q4_0 (type 2) — now supported — repointed to Q4_1 (type 3), which still has no GPU
+  kernel. gofmt/vet clean; §V7 CGO0 pure-Go build + suite stays green (Vulkan is tag-gated).
+- Follow-up: a device-resident Q4_0 kernel on both backends.
+
+### T166 — GPU quantized matmul for Q4_0 on Metal (2026-07-07)
+- **Adds the Metal GPU kernel for Q4_0 quantized matmul**, closing a real GPU coverage gap: the
+  in-kernel quantized matmuls covered Q8_0 and the k-quants (Q2_K…Q6_K) but not **Q4_0** — the
+  classic, very common 4-bit GGUF format — which had been falling back to the CPU. This accelerates
+  inference for the large body of Q4_0-quantized models. §R94.
+- `backend/metal/metal_bridge.m`/`.h`: MSL kernel `qmatmul_q4_0` — one thread per output element
+  streams its weight row's K/32 Q4_0 blocks (18 bytes each: an f16 scale + 16 bytes holding 32 4-bit
+  nibbles), dequantizing in-kernel (`low nibble → element i`, `high nibble → element i+16`, value
+  `d·(nibble−8)`) exactly matching `gguf.dequantQ4_0`, and accumulates in f32 — the full-precision
+  weights are never materialized. Plus the `mtl_qmatmul_q4_0` bridge with its own cached pipeline.
+- `backend/metal/metal.go`: `qtQ4_0 = 2` (ggml type code), a `QMatMul` dispatch case, and the
+  `QMatMulQ4_0` Go wrapper (validates `K % 32 == 0` and `len(weight) == N·(K/32)·18`).
+- Not a new algorithm — Q4_0 dequantization (§R94) is already tier-2 verified, so this is a new
+  **backend** accepted by V-CROSS against the f64 CPU reference, no fresh research (as with T136).
+- **§V3/§V11:** `TestMetalQMatMulQ4_0CrossReference` — the Metal result equals `gguf.QMatMul` within
+  the f32-vs-f64 crossTol (`1e-6·√K + 1e-4`) across decode (M=1) and prefill (M=4..16) shapes,
+  K=32..512, on-device; `TestMetalQMatMulQ4_0Dispatch` (the `QuantMatMuler` interface routes ggml
+  type 2 to the kernel); `TestMetalQMatMulQ4_0Validation`. The full Metal suite stays green (no
+  regression), gofmt/vet clean, and §V7 CGO0 pure-Go build + suite stays green (Metal is tag-gated).
+- Never-metal-only: the **Vulkan Q4_0** twin is the committed immediate follow-up (mirroring
+  T136→T137). Further follow-up: a device-resident Q4_0 kernel.
+
+### T165 — Weight-space averaging: SWA + weight-EMA (2026-07-07)
+- **Adds two weight-averaging methods** that improve generalization by averaging parameters in weight
+  space (landing in a flatter, wider optimum than the raw last-iterate). §R112.
+  - `nn.SWA` — Stochastic Weight Averaging (Izmailov et al. 2018, arXiv:1803.05407): an **equal-weight**
+    running average of parameter snapshots. `Update` folds the current parameters in via
+    `avg ← avg + (w − avg)/(n+1)` (torch's exact `get_swa_avg_fn`), so `Weights()` is the arithmetic
+    mean of all captured snapshots; call it periodically (e.g. at each LR-cycle end).
+  - `nn.EMA` — exponential moving average of weights (Polyak & Juditsky 1992; standard in diffusion and
+    LLM eval): `avg ← decay·avg + (1−decay)·w` every step, initialized to the current weights,
+    decay ≈ 0.999–0.9999.
+- Both keep a float64 master copy (§V10), read the live `Params` on `Update`, and never mutate the
+  training parameters; `Weights()` materializes fresh tensors for evaluation. SWA's post-hoc
+  `update_bn` recomputation is only relevant to BatchNorm running statistics — **not needed** for
+  LayerNorm/RMSNorm transformers — which is documented.
+- **§V16 tier-2:** `research-lite` (not `/deep-research`) CONFIRMED both formulas 3-agent unanimous
+  against arXiv:1803.05407 and `torch.optim.swa_utils` (`get_swa_avg_fn`/`get_ema_avg_fn`), including
+  the update_bn-is-BatchNorm-only point.
+- **§V16 tier-1:** `nn/weightavg_test.go` — `SWAEqualWeightAverage` (equals the arithmetic mean @1e-12),
+  `SWAMatchesTrueMean` (200 random snapshots), `EMARecurrence` (independent recurrence @1e-12, init to
+  the weights), `WeightAvgMultiParamNoMutation` (multiple shapes; snapshot independent of later param
+  edits), and `ExampleSWA`/`ExampleEMA`.
+- Gate green: `go test ./nn`, apicheck (`SWA`/`EMA` covered by their Examples, §V17), gofmt, vet, and
+  §V7 CGO0-green whole-repo build + suite. Pure Go — no backend/cgo touched.
+
+### T164 — Regex/FSM-guided constrained decoding (2026-07-07)
+- **Adds structured-output generation**: `nlp.RegexGuide` constrains an LLM's decoding to a regular
+  language so the output is **guaranteed to match a regex by construction** — valid JSON fields,
+  enums, numbers, dates, patterns. Implements Willard & Louf 2023 (*"Efficient Guided Generation for
+  Large Language Models"*, arXiv:2307.09702), the method behind Outlines. §R111.
+- `nlp/guided.go`: the regex is compiled to the standard-library `regexp/syntax` NFA (pure Go, no
+  cgo). An FSM state is the ε-closed set of NFA program counters, interned to a small integer id.
+  Each step, `MaskLogits` sets the logit of every token whose characters would drive the FSM into a
+  dead state to −Inf, and permits EOS only when the state is accepting; `Advance` consumes a chosen
+  token's characters to move to the next state. The state→token transitions are memoized lazily —
+  the paper's O(1)-per-step index (σ: state → valid tokens). `Start`/`Accepting`/`Allowed`/`Advance`/
+  `MaskLogits` form the API. Empty-width assertions (`^`,`$`,`\b`) are treated permissively as ε, and
+  the pattern matches the entire output (accept = full match).
+- **§V16 tier-2:** `research-lite` (not `/deep-research`) CONFIRMED the algorithm 3-agent unanimous
+  against the paper (§3, Algorithms 2/3/4) and the Outlines `RegexGuide` — mask-to-live-tokens,
+  advance-by-consuming-characters, precomputed state→token index, EOS only at accepting states, and
+  the output ∈ L(regex) guarantee (with the correction that the index is §3/Alg.4, not §4).
+- **§V16 tier-1:** `nlp/guided_test.go` — `Masking` (digit/non-digit/multi-character token validity);
+  `MaskLogitsAndTermination` (EOS masked until a complete match, allowed at accept, nothing extends a
+  finished match); `AlwaysMatchesFuzz` — **the guarantee**: 8 patterns × 300 random guided
+  generations, every accept-terminated output fully matches its regex (checked with Go's `regexp`);
+  `StateInterning`; `ExampleRegexGuide`.
+- Gate green: `go test ./nlp`, apicheck (the Example satisfies §V17), gofmt, vet, and §V7 CGO0-green
+  whole-repo build + suite. Pure Go (stdlib `regexp/syntax`) — no backend/cgo touched. Follow-ups:
+  CFG/GBNF grammars (the paper's pushdown-automaton extension), byte-level/partial-UTF-8 tokens, and
+  wiring the guide into the sampler's generation loop.
+
+### T163 — Sharpness-Aware Minimization (SAM) (2026-07-07)
+- **Adds Sharpness-Aware Minimization** (Foret, Kleiner, Mobahi & Neyshabur 2021, arXiv:2010.01412,
+  ICLR'21; §R110) — a training methodology that improves generalization by steering training toward
+  **flat** loss minima instead of sharp ones. It wraps any base optimizer (SGD, AdamW, …) and works
+  on any backend, so it composes with the existing optimizer set and with GPU training.
+- `nn/sam.go`: `SAM` performs the two-step update each iteration — (1) gradient `g` at `w`; (2)
+  ascend to the worst-case neighbor `w_adv = w + ρ·g/(‖g‖₂+ε)` using the **global** L2 gradient norm
+  over all parameters; (3) gradient `g_adv` at `w_adv`; (4) restore `w`, then let the base optimizer
+  step with `g_adv`. The first gradient is used only to build the perturbation and is discarded; the
+  descent direction is the sharpness-aware `g_adv`. `NewSAM(params, base, opts…)` with defaults
+  ρ=0.05, ε=1e-12 and `WithSAMRho`/`WithSAMEps` options (§C12). It costs two forward/backward passes
+  per step. `Step` takes a gradient-recomputation closure (called twice), which must return a
+  **snapshot** (like `tape.Grad`) since the base optimizer applies `g_adv` after the weights are
+  restored — documented on the method.
+- **§V16 tier-2:** `research-lite` (not `/deep-research`) CONFIRMED the algorithm 3-agent unanimous
+  against the paper's Eq.2 (perturbation) and Eq.3 (sharpness-aware gradient) and the reference
+  `davda54/sam` — the global (not per-layer) norm, first-gradient-discarded, restore-then-base-step,
+  ρ=0.05 default, and that ASAM (adaptive |w|-scaled) is a separate variant (deferred).
+- **§V16 tier-1:** `nn/sam_test.go` — `AlgorithmParity` reproduces the two-step recurrence via an
+  independent recomputation @1e-12; `UsesPerturbedGradient` shows a SAM step moves strictly farther
+  toward the optimum than plain SGD (`g_adv = g·(1+ρ/‖g‖)`); `RestoresWeights` verifies the
+  perturbation is fully undone; `ConvergesQuadratic` settles within O(ρ) of the minimum (the
+  flat-region behavior, not a bug); `ExampleSAM` (w=1 → 0.895).
+- Gate green: `go test ./nn`, apicheck (`SAMOption` allowlisted), gofmt, vet, and §V7 CGO0-green
+  whole-repo build + suite. Pure Go — no backend/cgo touched. Follow-up: ASAM (adaptive variant).
+
+### T162 — Gradient checkpointing (activation rematerialization) (2026-07-07)
+- **Adds gradient checkpointing** (Chen et al. 2016, *"Training Deep Nets with Sublinear Memory
+  Cost"*, arXiv:1604.06174; §R109) — the key training-memory methodology: it trades one extra
+  forward pass for a large reduction in activation memory, letting you train longer sequences or
+  bigger models within a fixed budget (checkpoint every √n of n blocks → O(√n) activation memory).
+- `autograd/checkpoint.go`: `Checkpoint(tape, fn, inputs…)` runs a segment's forward on the tape's
+  **non-recording** context — so the segment's intermediate activations are not taped and are
+  garbage-collected — and records a single checkpoint node. On `Backward`, the segment's forward is
+  **re-run** into a private recording sub-tape to rematerialize the activations; the sub-tape is
+  seeded with the incoming output cotangents, its reverse pass produces the input gradients, and
+  those are propagated into the parent tape. `CheckpointFunc` is the (deterministic-required)
+  segment callback.
+- Because the recomputation is deterministic, the gradients are **bit-for-bit identical** to
+  running the segment without checkpointing — only memory and compute change, never the result.
+- The tape change is **additive**: `node` gains an optional `ckpt` field and `backward` is split
+  into a seed step plus a reusable `runBackward` (which also drives the sub-tape), with a checkpoint
+  branch in the reverse walk. The existing op-VJP path is byte-unchanged — the full autograd suite
+  passes with no regression.
+- **§V16 tier-2:** `research-lite` (not `/deep-research`) CONFIRMED the mechanism and correctness
+  3-agent unanimous against the paper (§4.1/§4.3/§5.1) and `torch.utils.checkpoint`: identical
+  gradients under deterministic ops, O(√n) memory / O(n) compute, and the determinism caveat
+  (dropout/RNG must be stashed — deterministic ops have none).
+- **§V16 tier-1:** `autograd/checkpoint_test.go` — `TestCheckpointGradientsIdentical` verifies the
+  checkpointed dX/dW1/dW2 equal the non-checkpointed ones **bit-for-bit** (`!=`) over a ReLU-MLP
+  segment and that the checkpointed run records fewer tape nodes (intermediates not retained);
+  `TestCheckpointStacked` composes two checkpointed segments with bit-identical gradients; plus an
+  error case and `ExampleCheckpoint` (Σx² → 2x).
+- Gate green: `go test ./autograd` (and whole repo), apicheck (`CheckpointFunc` allowlisted as a
+  callback type shown via `ExampleCheckpoint`), gofmt, vet, and §V7 CGO0-green whole-repo build +
+  suite. Pure Go — no backend/cgo touched. Follow-up: RNG-stashing for stochastic (dropout)
+  segments.
+
+### T161 — Quantized KV cache (Q8_0) (2026-07-07)
+- **Adds an 8-bit quantized KV cache** for long-context inference — the KV cache is the dominant
+  memory cost of long-context decode, and storing it in per-block Q8_0 instead of f32 cuts it
+  ~3.76× (34 bytes per 32-element block = 1.0625 B/elem vs 4). §R108.
+- `nlp/quant_kvcache.go`: `QuantKVCache` stores each token's key and value row as Q8_0 blocks via
+  `gguf.Quantize` (the same per-block format used for weights, already tier-2 verified in §R94).
+  `Append(k, v)` quantizes and stores; `Keys()`/`Values()` dequantize the whole store back to f32
+  `[t,dim]` tensors for attention; `Len`/`Bytes` report the footprint. The row width must be a
+  multiple of 32. K and V are treated identically and symmetrically — the faithful ggml
+  `type_k/type_v = Q8_0` approach.
+- **§V16 tier-2:** `research-lite` (not `/deep-research`) CONFIRMED the approach 4-agent unanimous
+  against `ggml-quants.c` and the KVQuant paper (Hooper et al. 2024, arXiv:2401.18079): per-block
+  Q8_0 on both K and V is the standard, and 8-bit is the near-lossless "safe tier" — the
+  per-channel-Key/per-token-Value asymmetry (Key outlier channels) only matters below 4-bit
+  (measured Q8_0 KV perplexity delta ~+0.004). No new numerical algorithm: it reuses the verified
+  Q8_0 quantizer, so acceptance is by round-trip + parity, not fresh gradient/paper checks.
+- **§V15 round-trip + fuzz:** `TestQuantKVCacheRoundTripFuzz` — 200 iterations over random widths
+  (32..256), value scales and token counts; every recovered row is bit-identical to a direct
+  `gguf.Quantize→Dequantize` and within the Q8_0 per-block error bound `amax/254` (+f16 slack).
+- **§V16 tier-1:** `TestQuantKVCacheAttentionParity` — `OpMHA` over the Q8_0 cache matches attention
+  over the full-precision f32 K/V within 2e-2 (near-lossless); plus a memory-ratio check (~3.76×),
+  error cases, and `ExampleQuantKVCache`.
+- Gate green: `go test ./nlp`, apicheck (the Example satisfies §V17), gofmt, vet, and §V7 CGO0-green
+  whole-repo build + suite. Pure Go, reuses `format/gguf` — no backend/cgo touched. Follow-ups:
+  wire the cache into the QuantLlama decode loop, and add a Q4_0 KV variant.
+
+### T160 — Learning-rate schedule family: WSD + inverse-sqrt (Noam) (2026-07-07)
+- **Completes the LR-schedule set** (the repo previously had only `WarmupCosine`), adding the two
+  schedules that matter most for LLM training. Both are stateless pure functions in `nn/schedule.go`,
+  siblings to `WarmupCosine` — call one per optimizer step and assign the result to the optimizer's
+  `LR` field. `step` is 0-indexed.
+- `WSD(step, warmup, decayStart, halfLife int, peak float64)` — **Warmup-Stable-Decay** (Hu, Tu, Han
+  et al. 2024, *MiniCPM*, arXiv:2404.06395, §4.2 Eq.1; §R107). Linear warmup `(s/W)·η`, a long
+  constant **stable** plateau at the peak `η`, then **exponential decay** `η·0.5^((s−S)/H)` halving
+  every `H` steps. Its defining property versus cosine: the flat stable phase needs no preset total
+  length and lets a run continue or *branch* from any stable checkpoint — only the final stretch
+  (the paper finds ≈10 % of steps is enough) is decayed. No explicit floor (decays toward ~0; clamp
+  externally if wanted). All three phase boundaries are continuous.
+- `InverseSqrt(step, warmup, dModel int, scale float64)` — the classic Transformer **Noam** schedule
+  (Vaswani et al. 2017, §5.3): `scale·dModel^(−½)·min(sₙ^(−½), sₙ·W^(−3/2))` with 1-indexed
+  `sₙ = step+1`. Linear rise then a 1/√step decay, peaking at `sₙ = W` with value
+  `scale·(dModel·W)^(−½)`; unlike cosine it keeps a slowly-decaying tail rather than reaching zero.
+- **§V16 tier-2:** `research-lite` (not `/deep-research`) CONFIRMED the WSD schedule 3-agent unanimous
+  against the paper's §4.2 Eq.1, correcting the warmup to `s/W` (not `(s+1)/W`), the default decay to
+  **exponential** (which beat linear/cosine in the paper's ablation), the ≈10 % decay duration as a
+  training-config choice rather than part of `f`, and the absence of an explicit `η_min` floor. Noam
+  is a definitional closed form from Vaswani 2017 §5.3.
+- **§V16 tier-1:** `nn/schedule_test.go` — WSD reproduced exactly @1e-12 at every phase boundary and
+  interior point, with the flat-plateau and boundary-continuity properties and peak-linearity checked;
+  InverseSqrt checked against an independent recomputation of the paper formula @1e-12 with the
+  closed-form peak, monotonicity, and scale-linearity; `ExampleWSD` and `ExampleInverseSqrt`.
+- Gate green: `go test ./nn`, apicheck (the Examples satisfy §V17 for both new exported functions),
+  gofmt, vet, and §V7 CGO0-green whole-repo build + suite. Pure Go — no backend/cgo touched.
+
+### T159 — Cautious optimizer / C-AdamW (2026-07-07)
+- **Adds the Cautious optimizer** (Liang et al. 2024, *"Cautious Optimizers: Improving Training with
+  One Line of Code"*, arXiv:2411.16085; §R106) — an optimizer-agnostic mask that provably speeds up
+  convergence (~1.4–1.5× on LLM pretraining) by never moving a parameter against the direction the
+  current gradient calls for. Extends the training-methodology field alongside
+  SGD/Adam/AdamW/Muon/Lion/Sophia/ScheduleFree/Adafactor/Lookahead/GaLore/AdEMAMix.
+- `nn/cautious.go`:
+  - `CautiousMask(u, g []float64) int` — the reusable one-line primitive: zeroes every coordinate
+    whose proposed update `uᵢ` disagrees in sign with the gradient `gᵢ` (i.e. `uᵢ·gᵢ ≤ 0`), then
+    rescales the survivors in place and returns the kept count. Reusable by any future C-Lion/C-Sophia.
+  - `CautiousAdamW` — C-AdamW: forms the standard AdamW adaptive step `lr·m̂/(√v̂+ε)`, applies the
+    cautious mask to it, and subtracts it, with decoupled weight decay `θ·(1−lr·λ)` applied **outside**
+    the mask (never cautious-gated). `NewCautiousAdamW(params, lr, opts…)` with AdamW defaults and
+    `WithCautious{Betas,Eps,WeightDecay}` functional options (§C12). float64 state (§V10).
+- **§V16 tier-2:** `research-lite` (not `/deep-research`) CONFIRMED the exact rule 3-agent unanimous
+  against the paper's Algorithm 2 and the reference `kyleliang919/C-Optim`. It surfaced a real
+  paper-vs-code **rescale discrepancy**: the paper uses `d/(‖φ‖₀+1)` while the released code uses
+  `mask/mask.mean().clamp(min=1e-3)` ≡ `d/max(sum φ, 1e-3·d)` (no `+1`). Per §V16 (byte-faithful
+  reference authority when paper ≠ code) and the autonomy rule, we implement the **code** form — it
+  makes the all-aligned case reduce to AdamW *exactly* (scale = 1) and floors amplification when
+  nearly all coordinates are masked. The choice is documented in §R106.
+- **§V16 tier-1:** `nn/cautious_test.go` — `CautiousMask` (kept/zeroed/rescale exact); `AlgorithmParity`
+  reproduces the recurrence via an independent straight-line recomputation @1e-12; `FreezesMisalignedStep`
+  shows a coordinate whose momentum-driven step opposes a fresh (small) gradient moves by weight decay
+  only — the defining property (a *large* opposing gradient instead flips the first moment and realigns,
+  documented); `ConvergesQuadratic`; `ExampleCautiousAdamW`.
+- Gate green: `go test ./nn`, apicheck (`CautiousAdamWOption` allowlisted), gofmt, vet, and §V7
+  CGO0-green whole-repo build + suite. Pure Go — no backend/cgo touched.
+
+### T158 — AdEMAMix optimizer (2026-07-07)
+- **Adds the AdEMAMix optimizer** (Pagliardini, Ablin & Grangier 2024, *"The AdEMAMix Optimizer:
+  Better, Faster, Older"*, arXiv:2409.03137; §R105) — AdamW with a **second, much slower momentum
+  EMA** (β₃ ≈ 0.9999) mixed in with weight α, so very old gradients stay relevant far longer than a
+  single fast EMA allows. Extends the training-methodology field alongside
+  SGD/Adam/AdamW/Muon/Lion/Sophia/ScheduleFree/Adafactor/Lookahead/GaLore.
+- `nn/ademamix.go`: `AdEMAMix` keeps three float64 buffers — fast `m1` (β₁), slow `m2` (β₃), second
+  moment `ν` (β₂). Per step `m1=β₁·m1+(1−β₁)g; m2=β₃·m2+(1−β₃)g; ν=β₂·ν+(1−β₂)g²`, then
+  `θ −= lr·[(m1/(1−β₁ᵗ) + α·m2)/(√(ν/(1−β₂ᵗ)) + ε) + λ·θ]`. **Only `m1` and `ν` are bias-corrected;
+  `m2` is not** (it intentionally warms up from zero). Weight decay λ is decoupled (AdamW-style).
+  `NewAdEMAMix(params, lr, opts…)` with defaults β₁=0.9, β₂=0.999, β₃=0.9999, α=5, ε=1e-8, λ=0 and
+  `WithAdEMAMixBetas/Alpha/Eps/WeightDecay` functional options (§C12). Optimizer state is float64
+  (§V10). This is the constant-α, constant-β₃ core; the paper's α/β₃ warmup schedulers (training
+  from scratch) are left to the caller.
+- **§V16 tier-2:** `research-lite` (not `/deep-research`) CONFIRMED the exact update rule 3-agent
+  unanimous against the paper's Eq(AdEMAMix) and Apple's reference `apple/ml-ademamix` — including
+  the two subtleties (m2 unbias-corrected; α multiplies the *slow* EMA) and two corrections to the
+  initial read (code default α=2.0 vs paper 5–8; β₃-warmup starts specifically from β₁).
+- **§V16 tier-1:** `nn/ademamix_test.go` — `AlgorithmParity` reproduces the recurrence via an
+  independent straight-line recomputation @1e-12; `SlowMomentumPersists` shows `m2` keeps driving
+  updates for 50 zero-gradient steps after the fast EMA has decayed (the defining "older" property);
+  `DecoupledWeightDecay`; `ConvergesQuadratic` (5e-3 tolerance — the slow-EMA lag near the optimum
+  is the paper's property, not a convergence bug); `ExampleAdEMAMix`.
+- Gate green: `go test ./nn`, apicheck (`AdEMAMixOption` allowlisted), gofmt, vet, and §V7
+  CGO0-green whole-repo build + suite. Pure Go — no backend/cgo touched.
+
+### T157 — Resident-weight auto-free (runtime cleanup) on both backends (2026-07-07)
+- **Rounds out the residency story: forgetting `Close` no longer leaks GPU memory.** A
+  `ResidentQWeight` dropped without an explicit `Close` used to keep its GPU buffer until process
+  exit; now a runtime cleanup frees it when the value becomes unreachable.
+- Both `metal.ResidentQWeight` and `vulkan.ResidentQWeight` gain a `runtime.Cleanup`, registered at
+  upload with `runtime.AddCleanup(r, free, handle)`. The cleanup captures **only the handle** (C
+  memory), never `r`, so `r` stays collectible (the AddCleanup constraint). `Close` now calls
+  `cleanup.Stop()` before freeing, so an explicit `Close` and the finalizer never double-free —
+  `Close` is idempotent *and* optional (prompt release vs. GC-timed).
+- **§V3:** `TestMetalResidentAutoFree` and `TestVulkanResidentAutoFree` upload several weights
+  without `Close`, force `runtime.GC()`, and confirm the cgo free runs from the cleanup goroutine
+  without a crash, double-free or device corruption — a fresh resident matmul afterward still
+  equals `gguf.QMatMul`. All existing resident tests stay green (the explicit-`Close` path is
+  unchanged). No new algorithm — lifecycle plumbing over the T153–T156 buffers (§V16). Whole-repo,
+  Metal, Vulkan, CGO0, `vet`, `gofmt` green.
+- With this, **GPU quantized inference (T130–T157) is correct, decode-optimized, portable
+  (Metal + Vulkan) and leak-free.**
+
+### T156 — Device-resident quantized weights on Vulkan (2026-07-07)
+- **Completes the Metal residency (T153–T155) with the Vulkan twin** — device-resident weights now
+  work on **both** GPU backends (never-metal-only), for the whole k-quant/Q8_0 family. So a
+  quantized model's decode loop uploads each weight once on Vulkan too.
+- **`vk_bridge.c`**: refactored `vk_dispatch` into `vk_dispatch_pre(…, const VkBuffer* preBuf)` — a
+  slot whose `preBuf[i]` is non-null uses that buffer as-is (not created, uploaded, or destroyed),
+  with a `vk_dispatch` wrapper (`preBuf=NULL`) so every existing op is unchanged. Added a
+  `ResidentBuf` handle, `vk_qweight_upload`/`vk_qweight_free`, and `vk_qmatmul_resident` (X
+  uploaded, W the resident buffer via `preBuf[1]`, O read back; the `spv` argument selects the
+  per-type shader).
+- **`vulkan.go`**: `residentSpirv`/`residentRowBytes`, `ResidentQWeight` (dispatches its `qt` to the
+  right shader) with `QMatMul`/`Close`, and `Backend.UploadQuant` (pads the weight to a 4-byte
+  boundary for the `uint[]` shader indexing). `vulkan.Backend` now implements
+  `backend.ResidentQuantMatMuler`, so `nn.QuantLinear` (T154) makes weights resident on a Vulkan
+  host too.
+- **§V3/§V11:** `TestVulkanResidentQuantMatMuler` checks all six types (each resident result equals
+  `gguf.QMatMul` on MoltenVK; Q4_0 → `ErrQuantUnsupported`), and the full Vulkan suite stays green —
+  the `vk_dispatch` refactor broke no existing op. No new algorithm — the same verified shaders,
+  residency is a pure perf change (§V16). CGO0, `vet`, `gofmt`, whole-repo and the Metal suite green.
+- **Next:** a finalizer (`runtime.AddCleanup`) so `Close` becomes optional on both backends.
+
+### T155 — Device-residency for the whole k-quant family on Metal (2026-07-07)
+- **The dominant formats now get the decode speedup too.** T153/T154 made only Q8_0 weights
+  resident; this extends residency to **Q4_K/Q5_K/Q6_K/Q2_K/Q3_K**, so a real `Q4_K_M` model's
+  decode loop uploads each weight once instead of per token.
+- The upload is format-agnostic (opaque bytes → `MTLBuffer`); only the resident matmul kernel is
+  per-type. `metal_bridge.m` generalizes `mtl_qmatmul_q8_0_resident` into
+  **`mtl_qmatmul_resident(X, wbuf, O, M, K, N, qtype)`** — a switch on the ggml code selects the
+  matching cached pipeline (forward-declared so it can reference the later-defined k-quant
+  pipelines).
+- `metal.go`: `ResidentQWeight` carries a `qt` field and dispatches on it; `residentRowBytes`
+  gives each type's block size and `K` alignment; `uploadResident` validates and uploads (with
+  `ErrQuantUnsupported` for a non-resident type). `Backend.UploadQuant` now accepts the whole
+  family, so `nn.QuantLinear` (T154) transparently makes Q4_K/Q5_K/Q6_K weights resident too.
+- **§V3/§V11:** `TestMetalBackendResidentQuantMatMuler` now checks all six types (each resident
+  result equals `gguf.QMatMul`; Q4_0 → `ErrQuantUnsupported` → CPU fallback), and the existing
+  Q4_K `QuantLlama` tests (T149/T151/T152) stay green now that Q4_K decode runs resident. No new
+  algorithm — the same verified kernels, residency is a pure perf change (§V16). Benchmarked
+  (4096×4096, M=1): Q4_K resident **1.53 ms vs per-call 2.58 ms ≈ 1.7×** (a bit less than Q8_0's
+  2.3× since the Q4_K weight is ~half the bytes). Whole-repo, Metal, Vulkan, CGO0, `vet`, `gofmt`
+  green.
+- **Next** (committed): the Vulkan resident twin, and a finalizer so `Close` becomes optional.
+
+### T154 — Wire device-resident weights into QuantLinear (2026-07-07)
+- **The T153 residency mechanism now actually speeds up the model.** `QuantLinear` uploads a Q8_0
+  weight to a device-resident GPU buffer on its first `Forward` and reuses it on every subsequent
+  call — so the `QuantLlama` decode loop (which reuses every weight for every token) uploads each
+  weight once instead of per step, getting the ~2.3× lever (Metal, this host) transparently.
+- **`backend.ResidentWeight`** (`QMatMul(x)` + `Close`) and **`backend.ResidentQuantMatMuler`**
+  (`UploadQuant(weight, quantType, n, k)`) — optional capability interfaces extending the
+  ADR-0016 `QuantMatMuler` pattern. `metal.Backend.UploadQuant` returns a resident weight for
+  Q8_0 and `ErrQuantUnsupported` otherwise (with the nil-interface gotcha guarded).
+- **`nn.QuantLinear`** gains a lazy resident cache: a `sync.Once` on the first `Forward` tries
+  `Default().(ResidentQuantMatMuler).UploadQuant`; if it succeeds the handle is cached and reused,
+  otherwise it falls back to the per-call `QuantMatMuler` / CPU path. `QuantLinear.Close`,
+  `QuantSwiGLU.Close` and `QuantLlama.Close` free the buffers (idempotent; otherwise reclaimed at
+  process exit).
+- **§V3/§V11:** `TestQuantLinearResidentReuse` (Q8_0: upload → reuse → `Close` → per-call, each
+  matching `gguf.QMatMul`) and `TestMetalBackendResidentQuantMatMuler` (Q8_0 works, Q4_K →
+  `ErrQuantUnsupported`). All existing `QuantLlama`/`QuantLinear` tests stay green — the T151 exact
+  anchor and T152 bit-identical decode still hold because resident == per-call. No new algorithm —
+  plumbing over the verified resident kernel (§V16). apicheck (interfaces allowlisted), whole-repo,
+  Metal, Vulkan, CGO0, `vet`, `gofmt` green.
+- **Next:** the Vulkan resident twin, resident Q4_K/Q5_K/Q6_K, and a finalizer so `Close` is
+  optional.
+
+### T153 — Device-resident quantized weights on Metal (Q8_0) (2026-07-07)
+- **The mechanism for the big perf lever** (§B39): upload a quantized weight to the GPU **once**
+  and reuse it across matmuls, instead of the per-call re-upload every `QMatMul` did. The decode
+  loop (T152), which reuses every weight for every token, is where this pays off.
+- **`metal_bridge.m`**: `mtl_qweight_upload` (bytes → a retained `MTLBuffer` via ARC
+  `__bridge_retained`, so it survives the call), `mtl_qweight_free` (`__bridge_transfer` → ARC
+  release), and `mtl_qmatmul_q8_0_resident` (reuses the cached `qmatmul_q8_0` pipeline but binds
+  the resident buffer and uploads only `X`).
+- **`metal.ResidentQWeight`** ([metal.go](backend/metal/metal.go)) with `UploadQWeightQ8_0`,
+  `QMatMul(x)` and `Close` (frees the buffer; idempotent).
+- **§V3/§V11 V-CROSS:** `TestMetalResidentQWeight` checks the resident result equals per-call
+  `QMatMulQ8_0` (same kernel, same bytes) across decode (M=1) and prefill, that `Close` is
+  idempotent and post-`Close` calls error — residency is a pure perf change, not a numerical one
+  (§V16, no new algorithm). Benchmarked (4096×4096, M=1 decode): resident **1.42 ms vs per-call
+  3.25 ms ≈ 2.3×** on Apple UMA (where "upload" is a shared-buffer memcpy); the win is much larger
+  on a discrete GPU (bus transfer).
+- **Scope:** mechanism only — not yet wired into `QuantLinear` (the decode loop still re-uploads),
+  and `Close` is manual. Whole-repo, Metal, Vulkan, CGO0, `vet`, `gofmt`, apicheck green.
+- **Next:** wire resident weights into `QuantLinear` (lazily cache one per weight → the actual
+  decode-loop speedup), then Vulkan and the other quant types.
+
+### T152 — QuantLlama KV-cache decode + Generate (2026-07-07)
+- **Autoregressive quantized text generation on the GPU** — the last inference-ergonomics gap.
+  With this, the quantized-LLM stack (T130–T151) is complete: load a real GGUF quant model and
+  **generate** from it, with every projection GEMM running on the accelerator.
+- **`nlp/quant_llama_decode.go`**: `QuantLlama.NewCache` (reuses `LlamaCache` — the KV structure is
+  identical to the float model's), `DecodeStep(ctx, cache, token, pos)` (mirrors `Llama.DecodeStep`
+  exactly — quantized projections, RoPE at `PosOffset=pos`, post-RoPE K/V cached via `concatRows`,
+  single-query non-causal attention over the whole cache), and `Generate(prompt, maxNew, s)`
+  (prefill then one-token-per-step decode, bounded by the context window). All f32, so the
+  projections run on the GPU via `QuantLinear`.
+- **§V3:** `TestQuantLlamaDecodeMatchesForward` checks a KV-cache decode over the prompt yields the
+  same last-token logits as the full `Forward` — measured **bit-identical** (a 1e-4 tol guards f32
+  reassociation on other hardware) with the cache length correct; `TestQuantLlamaGenerateGreedy`
+  checks greedy `Generate`'s first token is the argmax of `Forward`, and the output is
+  `prompt+maxNew` within vocab and context. No new algorithm — the verified decode machinery
+  (§T121) composed with `QuantLinear` (§V16). Whole-repo, Metal, Vulkan, CGO0, `vet`, `gofmt` and
+  apicheck green.
+- **Next:** device-residency (§B) — upload the quantized weights to the GPU once instead of per
+  call; the decode loop, which reuses every weight for every token, is exactly where it pays off.
+
+### T151 — QuantLlamaFromGGUF: load a real quantized model onto the GPU (2026-07-07)
+- **Closes the loop: a real quantized GGUF model loads straight into a GPU `QuantLlama`.** Chain
+  complete — quant formats (T130–T135) → GPU kernels (T136–T148) → `QuantLinear` (T142) →
+  `QuantLlama` (T149) → `ReadRaw` (T150) → **this**: end-to-end quantized LLM inference on the GPU
+  from a file, with zero float materialization of the projection weights.
+- **`nlp.QuantLlamaFromGGUF(meta, tensors)`** ([quant_llama_gguf.go](nlp/quant_llama_gguf.go)) —
+  the quantized twin of `LlamaFromGGUF` (§R93). It reads the config from the `llama.*` metadata
+  and wraps each projection (`attn_q/k/v/output`, `ffn_gate/up/down`, `output.weight`) **directly**
+  as an `nn.QuantLinear` over the raw GGUF bytes: **no transpose, no re-quantization**, because
+  GGUF's `[out,in]` layout is exactly what `QuantLinear` expects (`In=shape[1]`, `Out=shape[0]`).
+  Only the small, precision-sensitive pieces are dequantized to f32 — the RMSNorm gains and the
+  token embedding (its lookup needs a float table). An absent `output.weight` ties the head to the
+  quantized `token_embd`; a non-quantized (F32/F16) "projection" is rejected at load with a clear
+  error.
+- **§V15 / E2E:** `TestQuantLlamaFromGGUF` takes a float Llama → `LlamaToGGUF` → `WriteQuantized`
+  (projections Q8_0, norms + embedding F32) → `ReadRaw` → `QuantLlamaFromGGUF`, and checks (tight
+  anchor) its forward equals `QuantizeLlama(m)`'s **exactly** — byte-identical Q8_0 weights, the
+  GGUF path merely skipping the float round-trip — plus cosine ≥ 0.999 vs the float model; with
+  float-projection-rejection and tied-head tests. No new algorithm — plumbing over `ReadRaw` and
+  the verified `QMatMul` kernels (§V16). Whole-repo, Metal, Vulkan, CGO0, `vet`, `gofmt` and
+  apicheck green.
+- **Next:** a KV-cache `Generate` for `QuantLlama` (autoregressive quantized generation) and
+  device-residency (§B).
+
+### T150 — GGUF `ReadRaw`: load a model keeping weights quantized (2026-07-07)
+- **The foundation for loading a real quantized GGUF model straight onto the GPU.** `QuantLlama`
+  (T149) currently quantizes a *float* Llama (which `Read` already dequantized at load, then
+  re-quantizes) — wasteful and it discards the file's original quantization. `ReadRaw` keeps each
+  tensor in its quantized byte form so a model can be loaded without ever materializing float
+  weights.
+- **`format/gguf`**: refactored `Read` into a shared `parse` (header + metadata + tensor infos +
+  data section) plus `Read` (= `parse` + `decodeTensor`, unchanged behaviour). Added
+  `QuantTensor{Data, GGType, Shape}` with `Dequantize()` (reuses `decodeTensor`, so it yields
+  exactly what `Read` would), `RawFile{Version, Metadata, Tensors map[string]QuantTensor}`, and
+  `ReadRaw` (parse + an independent per-tensor raw byte slice sized by `byteSize`).
+- Because GGUF stores linear weights as `[out,in]` — exactly `QuantLinear`'s layout — the coming
+  `QuantLlamaFromGGUF` will wrap these bytes directly, with **no transpose and no re-quantization**:
+  a genuine zero-float load path.
+- **§V15 round-trip + fuzz:** `TestReadRawRoundTrip` writes a `Q8_0`+`F32` file, reads it both ways,
+  and checks each `QuantTensor.Dequantize()` equals `Read`'s tensor exactly, the metadata matches,
+  and the quantized tensor stayed compact (34-byte Q8_0 blocks, not an expanded float);
+  `FuzzReadRaw` (3.9 M execs, no panic) and `ExampleReadRaw`. Whole-repo, CGO0, `vet`, `gofmt` and
+  apicheck green.
+- **Next:** `QuantLlamaFromGGUF(meta, *RawFile)` — wrap the quantized projections as `QuantLinear`
+  and dequantize the (small) f32 norms and embedding, to load an actual `Q4_K_M` model onto the GPU.
+
+### T149 — QuantLlama: a whole model runs quantized on the GPU (2026-07-07)
+- **The payoff of T136–T148.** The GPU quantized-matmul kernels and `QuantLinear` are now used
+  by a **full model**, not just tests: a `QuantLlama` keeps every projection weight quantized and
+  runs the entire forward pass on the accelerator, with the weights dequantized in-kernel and
+  never materialized as f32 matrices.
+- **`nn.QuantSwiGLU`** ([quant_swiglu.go](nn/quant_swiglu.go)) — the SwiGLU FFN with its three
+  projections as `QuantLinear` (`SiLU(x·gate) ⊙ (x·up)` then `·down`).
+- **`nlp.QuantLlama`** ([quant_llama.go](nlp/quant_llama.go)) with `QuantBlock` and
+  `QuantizeLlama(m, qt)`, which transposes each GoAI `[in,out]` projection to the ggml `[out,in]`
+  layout and quantizes it (RMSNorm gains and the token embedding stay f32). `Forward` mirrors
+  `Llama.ForwardFromEmbed` exactly — RMSNorm, RoPE, MHA, residual adds, SwiGLU gating — but every
+  linear projection is a quantized in-kernel matmul.
+- **Runs entirely in f32**: these are the natural quantized-inference activations, and it is also
+  what lets the f32-only GPU ops engage (F64 tensors fall back to the reference). On this host
+  `QuantLinear → Default()=metal → QMatMulQ8_0/Q4_K`, so the whole model's GEMMs run on the Metal
+  GPU.
+- **§V3/§V11:** `TestQuantLlamaForwardQ8` (2-layer, Dim=32) checks the `QuantLlama` logits keep
+  cosine similarity ≥ 0.999 with the float `Llama` — measured **0.99995** (Q8_0 is near-lossless),
+  every value finite; `…Q4K` (Dim=256) does the same for the dominant k-quant (≥ 0.98); plus a
+  misalignment-rejection test and `ExampleQuantLlama`. No new algorithm — a composition of the
+  already-verified attention/norm ops with `QuantLinear` (ADR-0016) over the verified `QMatMul`
+  kernels (§V16). Whole-repo, Metal, Vulkan, CGO0, `vet`, `gofmt` and apicheck are green.
+- **Next:** load the weights quantized straight from a GGUF file (skip the float round-trip), a
+  KV-cache `Generate` for `QuantLlama`, and device-residency (§B).
+
+### T148 — GPU quantized matmul (Q3_K) on Vulkan (2026-07-07)
+- **Completes the entire GPU quant family on both backends.** With the Vulkan Q3_K twin,
+  Q8_0/Q2_K/Q3_K/Q4_K/Q5_K/Q6_K all run their quantized GEMMs in-kernel on Metal *and* Vulkan —
+  so `QuantLinear` routes **every** mainstream GGUF quant to the GPU on either backend.
+- **`shaders/qmatmul_q3k.comp`** ([qmatmul_q3k.comp](backend/vulkan/shaders/qmatmul_q3k.comp)):
+  the GLSL mirror of the intricate Metal kernel — reads the weight bytes from a uint word array
+  (`getByte`/`getU32`), unpacks the 16 signed 6-bit sub-block scales via the `aux`/`kmask` splice
+  into a local `sc[16]`, and reconstructs the symmetric `y = d·(sc6−32)·(q3−4)` with the 3-bit
+  quant from `qs` + inverted `hmask` and the per-`j` mask `m = 1<<(nb*4+j)`, exactly as
+  `dequantize_row_q3_K`. Backed by the shared `vk_qmatmul_bytes` dispatch; Go wrapper
+  [`vulkan.QMatMulQ3_K`](backend/vulkan/vulkan.go) and a `Backend.QMatMul` dispatcher case (ggml
+  code `11`).
+- **§V3/§V11 V-CROSS:** `TestVulkanQMatMulQ3KCrossReference` matches the f64 CPU
+  `gguf.QMatMul(Q3_K)` within `crossTol(k)` across decode and prefill on MoltenVK — a new backend
+  of an already-verified op (Q3_K dequant §R103 via T134 + matmul), no fresh research (§V16). Full
+  Vulkan suite (13 shaders, under the §B40 32-slot cache), whole-repo, CGO0, `vet`, `gofmt` green.
+- **Next:** the whole GPU quant family is done; the `QuantizedLlama` (loading weights quantized so
+  an entire model infers on the GPU) and device-residency (§B) are the remaining integration steps.
+
+### T147 — GPU quantized matmul (Q3_K) on Metal (2026-07-07)
+- **Completes the k-quant family on the Metal GPU** — Q8_0/Q2_K/Q3_K/Q4_K/Q5_K/Q6_K all run
+  their quantized GEMMs in-kernel; via `QuantLinear` every mainstream quant now goes to the GPU.
+  Q3_K is the most intricate k-quant.
+- **`metal_bridge.m` MSL kernel `qmatmul_q3k`**: the 110-byte block (`hmask[32]`, `qs[64]`,
+  `scales[12]`, `f16 d` **last**). It unpacks the 16 signed 6-bit sub-block scales once per
+  super-block with the ggml `aux`/`kmask1`/`kmask2` splice inlined, then reconstructs the
+  **symmetric** `y = d·(sc6−32)·(q3−4)` with `q3` built from 2 low bits (`qs`) plus 1 high bit
+  (`hmask`, inverted — bit clear → subtract 4) and the per-`j` mask `m = 1<<(nb*4+j)`, traversing
+  exactly as `dequantize_row_q3_K`. Wired through `mtl_qmatmul_q3k`,
+  [`metal.QMatMulQ3_K`](backend/metal/metal.go), and a `Backend.QMatMul` dispatcher case (ggml
+  code `11`).
+- **§V3/§V11 V-CROSS:** `TestMetalQMatMulQ3KCrossReference` matches the f64 CPU
+  `gguf.QMatMul(Q3_K)` within `crossTol(k)` across decode and prefill, on-device — passing on the
+  first try, which validates the `aux`/`kmask` scale splice, the inverted `hmask` and the signed
+  scale all at once. A new backend of an already-verified op (Q3_K dequant §R103 via T134 +
+  matmul), no fresh research (§V16). Full Metal suite, whole-repo, CGO0, `vet`, `gofmt` green.
+- **Follow-up** (committed): the Vulkan twin (T148); then the whole GPU quant family is done on
+  both backends and the `QuantizedLlama` is the next integration.
+
+### T146 — GPU quantized matmul (Q2_K) on Vulkan (2026-07-07)
+- **Completes the Metal Q2_K quantized matmul (T145) with the Vulkan twin** (never-metal-only).
+  GPU quantized matmul now covers **Q8_0/Q2_K/Q4_K/Q5_K/Q6_K on both backends** — only Q3_K
+  remains (still handled by the CPU fallback via `QuantLinear`).
+- **`shaders/qmatmul_q2k.comp`** ([qmatmul_q2k.comp](backend/vulkan/shaders/qmatmul_q2k.comp)):
+  the simplest k-quant matmul — `y = d·(sc&0xF)·q2 − dmin·(sc>>4)`, `q2 = (qs[l]>>shift)&3`,
+  plain 4-bit nibble scale/min, traversed as `dequantize_row_q2_K`, reading the weight bytes
+  from a uint word array and the f16 `d`/`dmin` via `unpackHalf2x16`. Backed by the shared
+  `vk_qmatmul_bytes` dispatch; Go wrapper [`vulkan.QMatMulQ2_K`](backend/vulkan/vulkan.go) and a
+  `Backend.QMatMul` dispatcher case (ggml code `10`).
+- **§V3/§V11 V-CROSS:** `TestVulkanQMatMulQ2KCrossReference` matches the f64 CPU
+  `gguf.QMatMul(Q2_K)` within `crossTol(k)` across decode and prefill on MoltenVK — a new backend
+  of an already-verified op (Q2_K dequant §R104 via T135 + matmul), no fresh research (§V16). The
+  `TestVulkanBackendQuantMatMuler` unsupported-probe moved from code 10 (Q2_K, now supported) to
+  2 (Q4_0). Full Vulkan suite (12 shaders, under the §B40 32-slot pipeline cache), whole-repo,
+  CGO0, `vet`, `gofmt` green.
+
+### T145 — GPU quantized matmul (Q2_K) on Metal (2026-07-07)
+- **Adds the smallest quant (Q2_K, for huge models on tight hardware) to the GPU** — Metal now
+  accelerates Q8_0/Q2_K/Q4_K/Q5_K/Q6_K, and `QuantLinear`'s Q2_K path flips from CPU to GPU.
+- **`metal_bridge.m` MSL kernel `qmatmul_q2k`** — the simplest k-quant matmul: the 84-byte block
+  is `scales[16]` (low nibble = 4-bit scale, high nibble = 4-bit min), `qs[64]`, `f16 d`,
+  `f16 dmin`, with `y = d·(sc&0xF)·q2 − dmin·(sc>>4)`, `q2 = (qs[l]>>shift)&3 ∈ [0,3]` (no
+  `get_scale_min_k4`, no high-bit plane), traversed exactly as `dequantize_row_q2_K`. Wired
+  through `mtl_qmatmul_q2k`, [`metal.QMatMulQ2_K`](backend/metal/metal.go), and a
+  `Backend.QMatMul` dispatcher case (ggml code `10`).
+- **§V3/§V11 V-CROSS:** `TestMetalQMatMulQ2KCrossReference` matches the f64 CPU
+  `gguf.QMatMul(Q2_K)` within `crossTol(k)` across decode and prefill, on-device — a new backend
+  of an already-verified op (Q2_K dequant §R104 via T135 + matmul), no fresh research (§V16).
+- **Integration touch:** `TestQuantLinearForwardCPUFallback` moved its quant type from Q2_K to
+  **Q4_0** — a legacy format kept as the stable "no GPU kernel" fallback probe now that every
+  k-quant except Q3_K is GPU-accelerated. Full Metal suite, whole-repo, CGO0, `vet`, `gofmt`
+  green.
+- **Follow-up** (committed): the Vulkan twin (T146); then Q3_K in-kernel and the `QuantizedLlama`.
+
+### T144 — GPU quantized matmul (Q5_K) on Vulkan (2026-07-07)
+- **Completes the Metal Q5_K quantized matmul (T143) with the Vulkan twin** (never-metal-only).
+  All four common k-quant/legacy formats — Q8_0, Q4_K, Q5_K, Q6_K — now run their quantized
+  GEMMs on **both** GPU backends.
+- **`shaders/qmatmul_q5k.comp`** ([qmatmul_q5k.comp](backend/vulkan/shaders/qmatmul_q5k.comp)):
+  Q4_K's affine kernel plus the `qh` high-bit plane — `q5 = nibble | (qh bit)<<4`, per pair `pr`
+  the low-nibble sub-block uses `qh` bit `u1=1<<2pr` and the high-nibble `u2=2<<2pr`, decoding
+  the f16 `d`/`dmin` with `unpackHalf2x16` and the 6-bit scale/min via `get_scale_min_k4`.
+  Backed by the shared `vk_qmatmul_bytes` dispatch; Go wrapper
+  [`vulkan.QMatMulQ5_K`](backend/vulkan/vulkan.go) and a `Backend.QMatMul` dispatcher case
+  (ggml code `13`).
+- **§V3/§V11 V-CROSS:** `TestVulkanQMatMulQ5KCrossReference` matches the f64 CPU
+  `gguf.QMatMul(Q5_K)` within `crossTol(k)` across decode and prefill on MoltenVK — a new backend
+  of an already-verified op (Q5_K dequant §R102 via T133 + matmul), no fresh research (§V16). The
+  `TestVulkanBackendQuantMatMuler` unsupported-probe moved from code 13 (Q5_K, now supported) to
+  10 (Q2_K). The full Vulkan suite (11 shaders, well under the §B40 32-slot pipeline cache),
+  whole-repo, CGO0, `go vet` and `gofmt` are green.
+
+### T143 — GPU quantized matmul (Q5_K) on Metal (2026-07-07)
+- **Adds the Q5_K_M weight format to the GPU** — and, thanks to T142's integration,
+  `QuantLinear`'s Q5_K path now **flips from CPU fallback to the GPU** automatically.
+- **`metal_bridge.m` MSL kernel `qmatmul_q5k`**: Q4_K's asymmetric-affine matmul plus the `qh`
+  high-bit plane. The 176-byte block is `f16 d`, `f16 dmin`, `scales[12]`, `qh[32]`, `qs[128]`;
+  each quant is `q5 = nibble | (qh bit)<<4 ∈ [0,31]`, with per-pair `pr` the low-nibble
+  sub-block taking `qh` bit `u1=1<<2pr` and the high-nibble `u2=2<<2pr`. Reconstruction
+  `y = d·sc6·q5 − dmin·min6` with the `get_scale_min_k4` splice inlined. Wired through
+  `mtl_qmatmul_q5k`, the Go wrapper
+  [`metal.QMatMulQ5_K(x, weight, n, k)`](backend/metal/metal.go), and a new
+  `metal.Backend.QMatMul` dispatcher case (ggml code `13`).
+- **§V3/§V11 V-CROSS:** `TestMetalQMatMulQ5KCrossReference` matches the f64 CPU
+  `gguf.QMatMul(Q5_K)` within `crossTol(k)` across decode and prefill, on-device — a new backend
+  of an already-verified op (Q5_K dequant §R102 via T133 + matmul), no fresh research (§V16).
+- **Integration touch:** `TestQuantLinearForwardCPUFallback` switched its quant type from Q5_K to
+  Q2_K, since Q5_K is now GPU-accelerated and the fallback test needs a type without a GPU
+  kernel. The full Metal suite, whole-repo, CGO0, `go vet` and `gofmt` are green.
+- **Follow-up** (committed): the Vulkan twin (T144, never-metal-only); then Q2_K/Q3_K in-kernel
+  and a `QuantizedLlama` that loads weights quantized instead of dequantizing at load.
+
+### T142 — Quantized-inference integration: `nn.QuantLinear` → GPU (2026-07-07)
+- **Makes GPU quantized inference real.** T136–T141 built the in-kernel quantized matmuls, but
+  nothing *used* them — the Llama loader dequantizes every weight to F64 at load, so a
+  "quantized" model still ran dense f32/f64 GEMMs. This wires the kernels into a model layer.
+- **`backend.QuantMatMuler`** ([quant.go](backend/quant.go)) — an *optional* capability
+  interface, discovered by type-asserting `backend.Default()` (the same pattern as
+  `backend.Recorder`), not a core `Backend` method. `QMatMul(x, weight, quantType uint32, n, k)`
+  takes the weight as ggml block bytes and the quant type as a plain ggml code (`8`/`12`/`14`),
+  so `backend` needs no dependency on `format/gguf`. A backend returns the sentinel
+  `backend.ErrQuantUnsupported` for a code it does not accelerate. See
+  [ADR-0016](docs/decisions/ADR-0016-quant-matmul-capability.md) for why this beats forcing a
+  quantized weight through the float-tensor `Op` system.
+- **Metal and Vulkan** `Backend` now implement it, dispatching the code to their
+  `QMatMulQ8_0`/`Q4_K`/`Q6_K` kernels.
+- **`nn.QuantLinear{Weight, QT, In, Out}`** ([quant_linear.go](nn/quant_linear.go)) keeps its
+  weight in quantized bytes and `Forward` prefers the active accelerator (f32 activations),
+  falling back to the CPU `gguf.QMatMul` **only** on `ErrQuantUnsupported` (a genuine accelerator
+  error propagates). On this host `Default()` is Metal, so `QuantLinear` runs the quantized GEMM
+  on the GPU with the weight never materialized as f32.
+- **§V3/§V11:** `TestQuantLinearForwardAccelerated` (GPU path == `gguf.QMatMul` within
+  `crossTol`, and ≈ full precision within the Q4_K quant error), `…CPUFallback` (Q5_K, which has
+  no GPU kernel yet, is *exactly* the CPU `gguf.QMatMul` — proving the fallback), a validation
+  test, `ExampleQuantLinear` (576 quantized bytes vs 4096 for f32), and a direct Vulkan
+  dispatcher test. No new algorithm — plumbing over the already-verified `QMatMul` (§V16).
+  apicheck (`QuantMatMuler` allowlisted, `QuantLinear` has an Example), whole-repo, Metal,
+  Vulkan and CGO0/`vet`/`gofmt` are all green.
+
+### T141 — GPU quantized matmul (Q6_K) on Vulkan (2026-07-07)
+- **Completes the Metal Q6_K quantized matmul (T140) with the Vulkan twin** (never-metal-only).
+  With the Q4_K pair (T138/T139), a **complete `Q4_K_M` model's linear layers now run on both
+  GPU backends** — Q4_K bulk tensors + Q6_K precision tensors, Q8_0 too.
+- **`shaders/qmatmul_q6k.comp`** ([qmatmul_q6k.comp](backend/vulkan/shaders/qmatmul_q6k.comp)):
+  one invocation per output streams the `ni`-th weight row's `K/256` Q6_K super-blocks from a
+  uint word array, decoding the `f16 d` with `unpackHalf2x16` and the signed `int8` sub-scale
+  with a `getS8` helper, reconstructing the symmetric `y = d·scale·(q6−32)` (6-bit quant from a
+  `ql` nibble + 2 `qh` high bits) exactly as `dequantize_row_q6_K`. Backed by the shared
+  `vk_qmatmul_bytes` dispatch; Go wrapper
+  [`vulkan.QMatMulQ6_K(x, weight, n, k)`](backend/vulkan/vulkan.go).
+- **§V3/§V11 V-CROSS:** `TestVulkanQMatMulQ6KCrossReference` matches the f64 CPU
+  `gguf.QMatMul(Q6_K)` within `crossTol(k)` across decode and prefill on MoltenVK — a new
+  backend of an already-verified op (Q6_K dequant §R99 via T130 + matmul), no fresh research.
+- **Backprop (§B40):** adding this 9th distinct compute shader overflowed `pipeline_for`'s
+  hard-coded 8-slot pipeline cache in `vk_bridge.c`, which surfaced (deterministically, only in
+  the full-suite run) as `TestVulkanConv2DBackwardCrossReference` failing with `code -4` —
+  conv-backward couldn't get a cache slot after the qmatmul tests filled it. Root-caused by
+  bisecting (excluding Q6_K → green) and the `-4` = `pipeline_for` path; fixed by sizing the
+  cache to a named `VK_MAX_PIPELINES = 32` (headroom for future kernels), no tolerance touched.
+  The full Vulkan suite is green (3×); CGO0 excludes Vulkan; `go vet`/`gofmt` and the
+  whole-repo test are green.
+
+### T140 — GPU quantized matmul (Q6_K) on Metal (2026-07-07)
+- **Completes GPU execution of a whole `Q4_K_M` model's linear layers.** T138/T139 did the
+  Q4_K bulk tensors; this adds **Q6_K**, the higher-precision format `Q4_K_M` uses for
+  `attn_v`/`ffn_down`/`output`. Both formats now run in-kernel on Metal.
+- **`metal_bridge.m` MSL kernel `qmatmul_q6k`**: one thread per output `(mi,ni)` streams the
+  `ni`-th weight row's `K/256` Q6_K super-blocks (210 bytes: `ql[128]`, `qh[64]`,
+  `scales[16]` int8, `f16 d`). It reconstructs the **symmetric** `y = d·scale·(q6−32)` with a
+  signed `int8` per-sub-block scale and the 6-bit quant assembled from a `ql` nibble plus 2
+  `qh` high bits, traversing exactly as `dequantize_row_q6_K` (two 128-groups, four quants per
+  `l` with scale indices `+0/2/4/6`). Wired through `mtl_qmatmul_q6k` (cached pipeline) and the
+  Go wrapper [`metal.QMatMulQ6_K(x, weight, n, k)`](backend/metal/metal.go) (validates
+  `K%256==0` and the `N·K/256·210`-byte weight length).
+- **§V3/§V11 V-CROSS:** `TestMetalQMatMulQ6KCrossReference` checks the Metal result equals the
+  f64 CPU `gguf.QMatMul(Q6_K)` within `crossTol(k)` across decode (`M=1`) and prefill
+  (`M=2..16`) for `K=256/512`, on-device — a new backend of an already-verified op (Q6_K
+  dequant §R99 via T130 + matmul), accepted by V-CROSS with no fresh research (§V16). The full
+  Metal suite still passes; CGO0 excludes Metal; `go vet`/`gofmt` and the whole-repo test are
+  green.
+- **Follow-up** (committed): the Vulkan twin (T141, never-metal-only); then the remaining
+  low-bit k-quants in-kernel and the `OpQMatMul` dispatch integration.
+
+### T139 — GPU quantized matmul (Q4_K) on Vulkan (2026-07-07)
+- **Completes the Metal Q4_K quantized matmul (T138) with the Vulkan twin**, so the dominant
+  real-world quant runs on **both** GPU backends (never-metal-only). Together with the Q8_0
+  pair (T136/T137), both formats are now GPU-accelerated portably.
+- **`shaders/qmatmul_q4k.comp`** ([qmatmul_q4k.comp](backend/vulkan/shaders/qmatmul_q4k.comp)):
+  one invocation per output `(mi,ni)` streams the `ni`-th weight row's `K/256` Q4_K
+  super-blocks, reading the weight bytes from a **uint word array** (byte extraction by shifts,
+  no storage extension) and the `f16 d`/`dmin` via `unpackHalf2x16`. It reconstructs the
+  asymmetric affine `y = d·sc6·nibble − dmin·min6` with the `get_scale_min_k4` splice inlined,
+  traversing exactly as `dequantize_row_q4_K`.
+- **C bridge refactor:** a shared `vk_qmatmul_bytes(spv, …)` (generic `{M,K,N}` dispatch over
+  three storage buffers) now backs both `vk_qmatmul_q8_0` and `vk_qmatmul_q4k` — only the
+  SPIR-V module differs. Go wrapper
+  [`vulkan.QMatMulQ4_K(x, weight, n, k)`](backend/vulkan/vulkan.go) validates `K%256==0` and the
+  `N·K/256·144`-byte weight length and pads the weight to a 4-byte boundary.
+- **§V3/§V11 V-CROSS:** `TestVulkanQMatMulQ4KCrossReference` checks the Vulkan result equals the
+  f64 CPU `gguf.QMatMul(Q4_K)` within `crossTol(k)` across decode (`M=1`) and prefill
+  (`M=2..16`) for `K=256/512`, on MoltenVK — a new backend of an already-verified op (Q4_K
+  dequant §R100 via T131 + matmul), accepted by V-CROSS, no fresh research (§V16). The full
+  Vulkan suite still passes; CGO0 excludes Vulkan; `go vet`/`gofmt` and the whole-repo test are
+  green.
+
+### T138 — GPU quantized matmul (Q4_K) on Metal (2026-07-07)
+- **Extends GPU quantized inference to the dominant real-world format.** T136/T137 did Q8_0;
+  this does **Q4_K** — the format the bulk tensors of `Q4_K_M` models use — so an actual
+  downloaded model can now run its linear layers on the GPU with the weights dequantized
+  in-kernel.
+- **`metal_bridge.m` MSL kernel `qmatmul_q4k`**: one thread per output `(mi,ni)` streams the
+  `ni`-th weight row's `K/256` Q4_K super-blocks (144 bytes: `f16 d`, `f16 dmin`, `scales[12]`,
+  `qs[128]`). It reconstructs the asymmetric affine `y = d·sc6·nibble − dmin·min6`, unpacking
+  the 6-bit per-sub-block scale and min with the `get_scale_min_k4` bit splice inlined, and
+  traverses exactly as `dequantize_row_q4_K` (4 pairs, low nibbles → sub-block `is+0`, high →
+  `is+1`). Wired through `mtl_qmatmul_q4k` (cached pipeline) and the Go wrapper
+  [`metal.QMatMulQ4_K(x, weight, n, k)`](backend/metal/metal.go) (validates `K%256==0` and the
+  `N·K/256·144`-byte weight length).
+- **§V3/§V11 V-CROSS:** `TestMetalQMatMulQ4KCrossReference` checks the Metal result equals the
+  f64 CPU `gguf.QMatMul(Q4_K)` within `crossTol(k)` across decode (`M=1`) and prefill
+  (`M=2..16`) for `K=256/512`, on-device — a new backend of an already-verified op (Q4_K
+  dequant §R100 via T131 + matmul), accepted by V-CROSS with no fresh research (§V16). The
+  full Metal suite still passes; CGO0 excludes Metal; `go vet`/`gofmt` and the whole-repo test
+  are green.
+- **Follow-up** (committed): the Vulkan twin (T139, never-metal-only); then the remaining
+  k-quants in-kernel and the `OpQMatMul` dispatch integration.
+
+### T137 — GPU quantized matmul (Q8_0) on Vulkan (2026-07-07)
+- **Completes the Metal Q8_0 quantized matmul (T136) with the Vulkan twin**, so a quantized
+  linear layer now runs on **both** GPU backends — honouring the standing "never metal-only"
+  rule. The quantized-inference GEMM is now GPU-accelerated portably (MoltenVK here, native
+  Vulkan elsewhere).
+- **`shaders/qmatmul_q8.comp`** ([qmatmul_q8.comp](backend/vulkan/shaders/qmatmul_q8.comp)):
+  one invocation per output `(mi,ni)` streams the `ni`-th weight row's `K/32` Q8_0 blocks.
+  The weight buffer is the raw Q8_0 bytes reinterpreted as a **uint word array** — bytes are
+  extracted with shifts (so no `GL_EXT_shader_8bit/16bit_storage` extension is needed, keeping
+  it portable), the f16 scale is decoded with the core `unpackHalf2x16` builtin, and the
+  `int8` quants are sign-extended. Accumulation is f32.
+- Thin `vk_qmatmul_q8_0` bridge (three storage buffers + a `{M,K,N}` push-constant via the
+  generic `vk_dispatch`) and the Go wrapper
+  [`vulkan.QMatMulQ8_0(x, weight, n, k)`](backend/vulkan/vulkan.go), which validates `K%32`
+  and the `N·K/32·34`-byte weight length and pads the weight to a 4-byte boundary so the
+  shader's `uint[]` indexing never reads out of bounds. `make vulkan-spv` now compiles the new
+  shader.
+- **§V3/§V11 V-CROSS:** `TestVulkanQMatMulQ8CrossReference` checks the Vulkan result equals the
+  f64 CPU `gguf.QMatMul` within `crossTol(k)` across decode (`M=1`) and prefill (`M=4..16`) for
+  `K=32..512`, on MoltenVK — a new backend of already-verified ops (Q8_0 dequant §R94 +
+  matmul), accepted by V-CROSS with no fresh research (§V16). The full Vulkan suite still
+  passes; CGO0 excludes Vulkan; `go vet`/`gofmt` and the whole-repo test are green.
+
+### T136 — GPU quantized matmul (Q8_0) on Metal (2026-07-07)
+- **The first step of GPU quantized inference** (the user's top priority) — now that every
+  GGUF quant format loads, this runs a quantized linear layer *on the GPU*, dequantizing the
+  weights **in-kernel** so the full-precision weight matrix is never materialized.
+- **`metal_bridge.m` MSL kernel `qmatmul_q8_0`**: one thread per output `(mi,ni)` streams the
+  `ni`-th weight row's `K/32` Q8_0 blocks — the f16 scale is reassembled from two
+  little-endian bytes and bitcast to `half` (alignment-safe across the 34-byte block stride),
+  multiplied by the `int8` quants, accumulated in f32. Wired through `mtl_qmatmul_q8_0`
+  (with a cached pipeline) and the Go wrapper
+  [`metal.QMatMulQ8_0(x, weight, n, k)`](backend/metal/metal.go) (validates `K%32==0` and the
+  `N·K/32·34`-byte weight length).
+- **§V3/§V11 V-CROSS:** `TestMetalQMatMulQ8CrossReference` checks the Metal result equals the
+  f64 CPU `gguf.QMatMul` over the identical dequantized weights within `crossTol(k)` (only the
+  accumulation precision differs), across decode (`M=1`) and prefill (`M=4..16`) for
+  `K=32..512`, on-device. This is a new *backend* of already-verified ops (Q8_0 dequant §R94 +
+  matmul), accepted by V-CROSS like the other GPU kernels — no fresh research (§V16).
+- **It's a decisive win**: benchmarked at 4096×4096, M=8, the Metal path is **~98× faster**
+  than the (naive f64) CPU `QMatMul` — 4.9 ms vs 478 ms — *even with* the per-call weight
+  upload. Device-residency (uploading the quantized weights once) is a further optimization
+  parked in §B, not a prerequisite. CGO0 still excludes Metal; `go vet`/`gofmt`/apicheck and
+  the whole-repo test are green.
+- **Follow-ups** (committed): the Vulkan twin (never-metal-only rule), more quant types
+  (Q4_0/Q4_K/…), and integration into the backend `OpQMatMul` dispatch.
+
+### T135 — Q2_K k-quant read + write for GGUF (2026-07-07)
+- **Completes the entire k-quant read family.** With Q2_K alongside Q3_K/Q4_K/Q5_K/Q6_K,
+  **every mainstream GGUF `_S`/`_M`/`_L` k-quant mix now loads.** Q2_K is the smallest
+  (~2.63 bits/weight) — the `Q2_K`/`Q2_K_S` mixes use it to fit very large (70B–405B)
+  models on tight hardware, at a real accuracy cost.
+- **Simplest k-quant structurally.** Asymmetric affine like Q4_K (a scale and a subtracted
+  min per sub-block) but coarser: the quant `q2 ∈ [0,3]` is 2-bit and the per-sub-block
+  scale/min are plain 4-bit nibbles — no 6-bit `get_scale_min_k4` packing, no high-bit
+  plane. `y = d·(sc&0xF)·q2 − dmin·(sc>>4)`.
+- **`format/gguf/q2k.go`** ([q2k.go](format/gguf/q2k.go)): `dequantQ2_K` decodes the
+  84-byte block (`scales[16]`, `qs[64]`, `d`, `dmin` — scales first, `d` before `dmin`)
+  exactly as ggml's `dequantize_row_q2_K`; `quantizeQ2_K` is a valid affine inverse encoder
+  (2-bit grid `(hi−lo)/3`, min clamped non-positive, `d`/`dmin = max/15`). Wired through
+  `gguf.go` (`tQ2_K=10`, `byteSize`, `decodeTensor`), `quant.go` and `quant_matmul.go`.
+- **§V16 / §V15:** `research-lite` confirmed the layout unanimously vs the ggml source; a
+  golden test decodes a hand-built block against the spec formula (anchoring the read path
+  independently of the encoder). Round-trip (`|err| ≤ R/4 + amax·0.05` — grid-dominated at
+  `R/6`, the 4-bit min-quant term `≈amax/30` is smaller), accuracy (mean rel err < 25 %,
+  honestly coarse for 2-bit), stability, misalignment rejection, QMatMul, and a 7 M-exec
+  fuzz. CGO0, `go vet`, `gofmt`, apicheck and the whole-repo test are green.
+
+### T134 — Q3_K k-quant read + write for GGUF (2026-07-07)
+- **Completes the k-quant read family.** With Q3_K alongside Q4_K/Q5_K/Q6_K, every
+  common GGUF `_S`/`_M`/`_L` k-quant mix now loads — Q3_K is the ~3.44-bit format the
+  `Q3_K_M`/`Q3_K_L` mixes use to run large models on limited hardware.
+- **Symmetric, unlike Q4_K/Q5_K.** Q3_K has a single super-block scale and no min: each
+  3-bit quant `q3 ∈ [0,7]` reconstructs as `y = d·(sc6−32)·(q3−4)`, with `q3` built from
+  2 low bits in `qs` and 1 high bit in `hmask`, and a *signed* 6-bit per-sub-block scale
+  `sc6−32 ∈ [−32,31]`.
+- **`format/gguf/q3k.go`** ([q3k.go](format/gguf/q3k.go)):
+  - `dequantQ3_K` decodes the 110-byte block (`hmask[32]`, `qs[64]`, `scales[12]`, then
+    `d` **last**) exactly as ggml's `dequantize_row_q3_K`, including the inverted `hmask`
+    arithmetic (bit clear → subtract 4). `q3kUnpackScales` is the verbatim `aux`/`kmask`
+    splice that recovers the 16 six-bit scales; `packScalesQ3_K` is its bit-exact inverse.
+  - `quantizeQ3_K` is a valid symmetric inverse encoder (signed sub-scale
+    `max(posmax/3, negmax/4)` so neither the `+3`/`−4` quant extreme clips).
+  - Wired through `gguf.go` (`tQ3_K=11`, `byteSize`, `decodeTensor`), `quant.go` and
+    `quant_matmul.go` (`Q3_K` + `QMatMul`).
+- **§V16:** `research-lite` confirmed the layout unanimously vs the ggml source **and
+  corrected my draft** — `m <<= 1` happens per inner `j`, not per 128-block, so the
+  `hmask` high bit cycles through all 8 bits across the super-block. A golden test decodes
+  a hand-built block against the spec formula (anchoring the scale-unpack, shift/`is`
+  indexing and inverted-`hmask` read path independently of the encoder).
+- **§V15 round-trip + fuzz:** round-trip (`|err| ≤ A/5 + amax·f16`, amax-based since the
+  format is symmetric — no min-quant term like Q5_K's), scale pack/unpack round-trip,
+  accuracy (mean rel err < 13 %, honestly coarse for 3-bit), stability, misalignment
+  rejection, QMatMul, and a 7.8 M-exec fuzz. CGO0, `go vet`, `gofmt`, apicheck and the
+  whole-repo test are green.
+
+### T133 — Q5_K k-quant read + write for GGUF (2026-07-07)
+- **Unblocks the `Q5_K_M` model family** — the second-most-common download after `Q4_K_M`.
+  Q5_K is Q4_K's asymmetric-affine quant (same 6-bit scale + 6-bit min per sub-block, the
+  identical `get_scale_min_k4` packing) but **5-bit**: each quant gains a high bit from a
+  `qh` plane, so `q5 ∈ [0,31] = nibble | (highbit<<4)` and `y = (d·sc6)·q5 − (dmin·min6)`.
+- **`format/gguf/q5k.go`** ([q5k.go](format/gguf/q5k.go)):
+  - `dequantQ5_K` decodes the 176-byte block (`d`, `dmin`, `scales[12]`, then **`qh[32]`
+    before `qs[128]`**) exactly as ggml's `dequantize_row_q5_K`: for pair `p` the masks
+    `u1=1<<2p` / `u2=2<<2p` pull the 5th bit of the low/high-nibble quants out of `qh[l]`.
+    Layout confirmed **unanimously** by `research-lite` vs the ggml source (§R102).
+  - `quantizeQ5_K` is a valid inverse encoder (5-bit grid `(hi−lo)/31`, min clamped
+    non-positive, 5th bit split back into `qh`); round-trips within the k-quant error.
+  - Wired through `gguf.go` (`tQ5_K=13`, `byteSize`, `decodeTensor`), `quant.go`
+    (`Quantize`/`Dequantize`, `numel%256` guard) and `quant_matmul.go` (`Q5_K` + `QMatMul`).
+- **§V15 round-trip + fuzz + golden:** a golden test hand-builds a block with a known `qh`
+  high bit and checks the decode against the spec formula (anchoring the 5th-bit read path
+  independently of the encoder); `TestQuantizeQ5_KBeatsQ4_K` confirms the extra bit really
+  adds resolution; plus accuracy (mean rel err < 3.5 %, ~half Q4_K's), stability,
+  misalignment rejection, QMatMul, and a 6.9 M-exec fuzz.
+- **Backprop from the fuzz:** it surfaced that the per-element error bound needs an `amax`
+  term for the **6-bit min (offset) quantization** (≈ `amax/126` on clustered,
+  large-magnitude, tiny-range blocks), not just the `R/32` grid term. Bound corrected — no
+  tolerance weakened. (The same latent term exists in Q4_K, but its looser `R/8` grid bound
+  already covers it.) CGO0, `go vet`, `gofmt`, apicheck and the whole-repo test are green.
+
+### T132 — Quantized Llama GGUF end-to-end (Q4_K_M mix) (2026-07-07)
+- **The capstone that proves T119–T131 compose.** A `Llama` can now be written as a real
+  `Q4_K_M`-mix `.gguf` and read straight back into a working model — the actual user goal
+  ("load real Q4_K_M models"), now exercised end to end (`LlamaToGGUF` →
+  `WriteQuantized` → `Read` → `LlamaFromGGUF` → forward).
+- **`nlp/llama_gguf_quant.go` — `LlamaGGUFQuantMix(ts)`** returns the per-tensor quant map
+  for the llama.cpp `LLAMA_FTYPE_MOSTLY_Q4_K_M` recipe (§R101, research-lite CONFIRMED
+  unanimous vs `llama-quant.cpp`): `output.weight` and the `use_more_bits` layers of
+  `attn_v`/`ffn_down` get the higher-precision Q6_K; `token_embd` and the other 2-D
+  projections get Q4_K; 1-D RMSNorm gains stay F32. `use_more_bits(i,n) = i<n/8 || i≥7n/8
+  || (i−n/8)%3==2` (first ⅛ + last ⅛ + every third layer).
+  - Guard: a k-quant super-block spans 256 elements along a row, so a tensor whose GGUF row
+    length isn't a multiple of 256 is left out of the map (written F32) rather than
+    producing an invalid file — real Llama geometries (Dim/Hidden multiples of 256) are
+    always covered; tiny/odd ones degrade gracefully. This is `nlp`'s first production
+    dependency on `format/gguf` (no import cycle).
+- **§V15 end-to-end test** (`TestLlamaGGUFQuantizedRoundTrip`): the tight anchor asserts each
+  read-back tensor equals an independent `Dequantize(Quantize(·))` **exactly** (for quantized
+  tensors) or the F32-truncated original (for the rest) — proving the writer's offset/type/
+  shape wiring and the reader's per-type decode compose losslessly *relative to* the
+  quantization (the quant error itself is already covered by T130/T131). It then rebuilds the
+  model and checks the config round-trips, the quantized logits keep cosine similarity ≥ 0.85
+  with the F32 model, and every logit is finite. Plus recipe/predicate/alignment-guard tests
+  and a runnable `ExampleLlamaGGUFQuantMix`. Whole-repo test, CGO0, `go vet`, `gofmt` and
+  apicheck all green.
+
+### T131 — Q4_K k-quant read + write for GGUF (2026-07-07)
+- **Adds the single most common modern GGUF weight format.** Q4_K is the ~4.5-bit k-quant
+  that makes up the bulk tensors of the `Q4_K_M`/`Q4_K_S` mixes — the most-downloaded LLM
+  quantization. Together with Q6_K (T130, which carries those mixes' few high-precision
+  tensors) GoAI can now read real `Q4_K_M` models end to end.
+- **Asymmetric affine, unlike Q6_K.** Where Q6_K is symmetric (scale only), each Q4_K
+  sub-block carries a 6-bit scale **and** a 6-bit min: `y = (d·sc6)·nibble − (dmin·min6)`,
+  `nibble ∈ [0,15]`. The 144-byte block is `f16 d`, `f16 dmin`, `scales[12]` (eight 6-bit
+  scales + eight 6-bit mins bit-packed), `qs[128]` (256 nibbles).
+- **`format/gguf/q4k.go`** ([q4k.go](format/gguf/q4k.go)):
+  - `dequantQ4_K` decodes exactly as ggml's `dequantize_row_q4_K`; `getScaleMinK4` is the
+    verbatim ggml 6-bit unpack and `putScaleMinK4` its bit-exact inverse (the notoriously
+    fiddly splice, round-trip-tested). Layout and formula were confirmed **unanimously**
+    (3 agents, zero disagreements) by `research-lite` against the ggml source (§R100).
+  - `quantizeQ4_K` is a **valid inverse encoder** (sub-block `scale = (hi−lo)/15`, offset
+    `min = −min(lo,0) ≥ 0`). The min clamp is a real Q4_K trait, not a shortcut: the
+    reconstruction's subtracted min is non-negative, so the floor is ≤ 0 — the format
+    targets zero-crossing weights and cannot lift an all-positive block's floor above 0
+    (ggml's `make_qkx2_quants` clamps identically). It is not bit-identical to ggml's
+    iterative best-fit but round-trips within the k-quant error (≈ R/15 of the range).
+- **Wiring:** `gguf.go` `tQ4_K = 12` + `byteSize` (`n%256` guard → `n/256·144`) +
+  `decodeTensor`; `quant.go` `Quantize`/`Dequantize`; `quant_matmul.go` `Q4_K` `QuantType`
+  + a `QMatMul` path (one 256-aligned row dequantized at a time).
+- **§V15 round-trip + fuzz + golden:** a golden decode checks the read path against the
+  spec formula directly (so a round-trip test can't hide a shared encoder/decoder bug);
+  `TestQuantizeQ4_KAffineOffset` shows Q4_K beating symmetric Q4_0 on asymmetric
+  zero-crossing data; plus round-trip, accuracy, stability, misalignment-rejection,
+  scale/min pack round-trip, QMatMul, and a 6 M-exec fuzz. The fuzz **found a real bound
+  gap** — a constant block has range `R = 0`, so its error is dominated by the f16 rounding
+  of the offset, not by `R`; the bounds now add an `amax·f16` term. CGO0, `go vet`, `gofmt`
+  and apicheck all green.
+
+### T130 — Q6_K k-quant read + write for GGUF (2026-07-07)
+- **Unblocks loading real modern GGUF models.** Q6_K is the 6-bit k-quant ggml/llama.cpp
+  format used both standalone and as the high-precision tensors of the dominant
+  `Q4_K_M`/`Q5_K_M` mixes — so without it GoAI could only read the toy `Q8_0`/`Q4_0`
+  files, not the models people actually download (the T120 end-to-end blocker).
+- **`format/gguf/q6k.go`** ([q6k.go](format/gguf/q6k.go)):
+  - `dequantQ6_K` decodes the 210-byte super-block **exactly** as ggml's
+    `dequantize_row_q6_K`: 256 quants split as `ql[128]` (low nibbles) + `qh[64]` (2 high
+    bits, 4 packed per byte), 16 `int8` sub-block scales, one `f16` super-block scale `d`;
+    `y = d · scales[is] · (q6 − 32)` with the bit-assembly and scale indices verified
+    unanimously by `research-lite` against the ggml source (§R99). This read path is the
+    critical one and is ggml-faithful.
+  - `quantizeQ6_K` is a **valid inverse encoder** (sub-block scale `amax/32`, a
+    scale-of-scale `d = max|scale|/127`, inverse `ql`/`qh` packing). It is *not*
+    bit-identical to ggml's iterative best-fit search, but round-trips through the decoder
+    within the k-quant error (worst element error ≈ A/29 of the super-block amax).
+- **Wiring:** `gguf.go` gains the `tQ6_K = 14` ggml type, a `byteSize` case
+  (`n % 256` guard → `n/256 · 210`) and a `decodeTensor` case; `quant.go`
+  `Quantize`/`Dequantize` handle Q6_K (with a `numel % 256` guard so a misaligned tensor
+  is rejected, never silently tail-truncated); `quant_matmul.go` adds the `Q6_K`
+  `QuantType` and a `QMatMul` path that dequantizes one 256-aligned row at a time.
+- **§V15 round-trip + fuzz:** `TestQuantizeQ6_KRoundTrip` (`|err| ≤ A/24`),
+  `…Accurate` (mean relative error < 2 %), `…Stable` (re-quant drift ≤ A/24, since the
+  data-dependent scale makes byte-idempotence too strong to require), `…RejectsMisaligned`,
+  `…MatMul` (QMatMul within 2 % of full precision), `FuzzQuantizeQ6_K` (2.6 M execs, no
+  panic) and `ExampleQuantize_q6K`. CGO0 build, `go vet` and `gofmt` all green.
+
+### T129 — GPU sliding-window attention backward on Vulkan (2026-07-07)
+- **Completes the Metal SWA backward (T128) with the Vulkan twin**, so sliding-window
+  models now train on **both** GPU backends — honouring the standing "never metal-only"
+  rule (§R62). The GLSL `mha_bwd.comp`
+  ([shaders/mha_bwd.comp](backend/vulkan/shaders/mha_bwd.comp)) gains a `window`
+  push-constant and the `jmin = max(0, off+i−window+1)` lower bound on all four backward
+  passes (row-max, softmax denominator, the dot term, and the dS / dQ / dK / dV
+  scatter). The backward reuses the forward's push block (which already carries
+  `window`); `vk_mha_backward_f32` takes a `window` argument; `mhaBackwardF32`
+  ([vulkan.go](backend/vulkan/vulkan.go)) drops `Window` from its §I4 reference-fallback
+  (only ALiBi, `dk>128`, the KV-cache case and missing float-atomics remain).
+  `mha_bwd.spv` is recompiled by `make vulkan-spv`.
+- **§V16 / V-CROSS.** SWA is tier-2 paper-verified (§R62) and the backward is the
+  standard softmax-attention backward, so this is accepted by cross-reference.
+  `TestVulkanMHABackwardCrossReference` gains `swa`, `swa-gqa` and `swa-window1` cases
+  matching the reference dQ/dK/dV within the K-scaled f32 tolerance (§V3/§V11) on
+  MoltenVK; `CGO_ENABLED=0` stays green.
+- Sliding-window attention is now complete on Metal + Vulkan for both the forward
+  (T114/T115) and the backward (T128/T129), so Mistral/Mixtral-style models train fully
+  on the GPU. No new exported symbol; full suite green, apicheck/gofmt/vet clean.
+
+### T128 — GPU sliding-window attention backward on Metal (2026-07-07)
+- **Sliding-window attention models now train fully on the GPU** — the SWA backward
+  (§R62; Mistral / Mixtral) runs on Metal, completing the forward window kernel (T114).
+  Previously the backward fell back to the reference for `Window > 0` (correct but slow);
+  now the MSL `mha_bwd_f32` kernel
+  ([metal_bridge.m](backend/metal/metal_bridge.m)) gains a `window` push-constant and a
+  `jmin = max(0, off+i−window+1)` lower bound on all four backward loops (max, sum, dot,
+  and the dS / dQ / dK / dV scatter), so gradients are computed only over the windowed
+  keys. `mtl_mha_backward_f32` takes a `window` argument, and `mhaBackwardF32`
+  ([metal.go](backend/metal/metal.go)) drops `Window` from its §I4 reference-fallback
+  (only ALiBi, `dk>128`, degenerate shapes and missing float-atomics remain). Since the
+  MHA VJP dispatches `OpMHABackward`, an SWA model on a Metal-backed tape now trains
+  on-device.
+- **§V16 / V-CROSS.** SWA is already tier-2 paper-verified (§R62) and the backward is the
+  standard softmax-attention backward, so this backend coverage is accepted by
+  cross-reference. `TestMetalMHABackwardCrossReference` gains `swa`, `swa-gqa` and
+  `swa-window1` cases matching the reference dQ/dK/dV within the K-scaled f32 tolerance
+  (§V3/§V11); the existing non-window backward cases still pass; `CGO_ENABLED=0` stays
+  green.
+- Never metal-only: the **Vulkan** SWA backward is the committed follow-up (the forward
+  window is already on both backends, T114/T115). No new exported symbol; full suite
+  green, apicheck/gofmt/vet clean.
+
+### T127 — Lookahead meta-optimizer (2026-07-07)
+- **The first meta-optimizer** — Lookahead (Zhang, Lucas, Ba & Hinton 2019, "Lookahead
+  Optimizer: k steps forward, 1 step back",
+  [arXiv:1907.08610](https://arxiv.org/abs/1907.08610), §R98) wraps any base optimizer
+  (SGD, Adam, …) to reduce its variance and make training robust to the learning rate.
+  Adds [nn/lookahead.go](nn/lookahead.go):
+  - `nn.Lookahead` via `NewLookahead(base, params, opts…)` with `WithLookaheadK` /
+    `WithLookaheadAlpha` (§C12). It fits the existing `Optimizer.Step(GradFn)` interface:
+    each `Step` runs the base optimizer's step (updating the fast weights θ, the shared
+    parameters), and every `k` steps it nudges the slow weights toward the fast ones
+    `φ ← (1−α)·φ + α·θ` and resets the parameters to them `θ ← φ`. The slow weights
+    (which the parameters hold after each k-th step) are the ones to use for inference.
+    State in float64 (§V10); defaults k=5, α=0.5 (the paper's).
+- **§V16 ladder.** tier-1: `TestLookaheadInterpolation` (with a constant gradient the
+  fast trajectory is analytic, `θ_k = θ₀ − k·lr·g`, so the parameters land at exactly
+  `φ = θ₀ − α·k·lr·g` at 1e-12), `TestLookaheadNoSyncMidCycle` (before the k-th step it
+  is just the base optimizer), `TestLookaheadTwoCycles` (the slow-weight EMA composes
+  across cycles), and `ExampleLookahead`. tier-2: research-lite CONFIRMED unanimous vs
+  the paper's Algorithm 1 and the michaelrzhang/lookahead reference, NOT the built-in
+  deep-research.
+- `nn.LookaheadOption` added to the apicheck example-exempt allowlist; full suite green,
+  apicheck/gofmt/vet clean, CGO0 build green.
+
+### T126 — StreamingLLM (attention sinks) for Llama (2026-07-07)
+- **Constant-memory, unbounded streaming generation** (Xiao et al. 2023, "Efficient
+  Streaming Language Models with Attention Sinks",
+  [arXiv:2309.17453](https://arxiv.org/abs/2309.17453), §R97) — the Llama can now
+  generate far past its context length at bounded memory, completing the Llama
+  inference pipeline (T119–T121). Adds [nlp/streaming.go](nlp/streaming.go):
+  - `nlp.StreamCache` keeps at most `sinks + window` entries per layer and stores keys
+    **before** the rotary embedding. `StreamStep(cache, token, sinks, window)` projects
+    q/k/v raw, appends and evicts (keeping the first `sinks` "attention sink" tokens and
+    the last `window` recent tokens, dropping the middle), then re-applies RoPE at each
+    step using each token's position **within the current cache** (queries at
+    `cacheLen−1`, keys at `0..cacheLen−1`, via the T121 `PosOffset`) so relative
+    distances never leave the trained range. `StreamGenerate(prompt, maxNew, sinks,
+    window, s)` streams token by token, not bounded by the model's context length.
+  - The attention-sink insight: the first tokens absorb the softmax's excess attention
+    regardless of relevance, so keeping ~4 of them stabilizes generation over millions
+    of tokens; evicting them collapses it.
+- **§V16 ladder** (the mechanism composes already-verified ops): `TestStreamStepMatchesForward`
+  is the correctness anchor — when the budget covers the whole prefix (no eviction),
+  `StreamStep`'s next-token logits equal a full `Forward` at 1e-9, proving the
+  pre-RoPE-cache + re-rotate mechanism is exact; `TestKeepSinkRecent` (first-sinks +
+  last-window retention, middle evicted), `TestStreamCacheConstantMemory` (the cache
+  never exceeds `sinks+window`), and `TestStreamGenerateBoundedBeyondCtx` (22 tokens
+  generated past a context length of 8). tier-2: research-lite CONFIRMED unanimous vs
+  the paper §3 and the mit-han-lab/streaming-llm reference (keys cached pre-RoPE,
+  `key_position_ids = arange(kv_seq_len)`), NOT the built-in deep-research.
+- `nlp.StreamCache` added to the apicheck allowlist (decode state, like `LlamaCache`);
+  full suite green, apicheck/gofmt/vet clean, CGO0 build green.
+
+### T125 — NEFTune noisy-embedding fine-tuning (2026-07-07)
+- **Noisy-embedding instruction fine-tuning** (Jain et al. 2023, "NEFTune: Noisy
+  Embeddings Improve Instruction Finetuning",
+  [arXiv:2310.05914](https://arxiv.org/abs/2310.05914), §R96). Adds
+  `nn.NEFTune(ctx, emb, α, rng)` ([nn/neftune.go](nn/neftune.go)): after the token
+  embedding, it adds `(α/√(L·d))·ε` with `ε ~ Uniform(−1, 1)` per entry (L tokens, d
+  embedding dim) through a tape-aware add, so gradients flow normally to the
+  embeddings. Applied only during training, it regularizes fine-tuning.
+- **Enabler refactor.** `GPT.Forward` and `Llama.Forward` are split into
+  `Forward = ForwardFromEmbed(Embed(tokens))` with a new public `ForwardFromEmbed(ctx, x)`,
+  so a training loop can inject NEFTune between the embedding and the transformer blocks.
+  The refactor is behaviour-identical — the existing forward and gradient-check tests
+  stay green.
+- **§V16 ladder.** tier-1: `TestNEFTuneNoiseFormula` (every entry within the exact
+  `α/√(L·d)` magnitude, mean ~0 and std ≈ mag/√3 confirming Uniform), `TestNEFTuneGradFlows`
+  (`∂mean(emb+noise)/∂embᵢ = 1/n`, §V2), `TestNEFTuneTrainingIntegration`
+  (Embed→NEFTune→ForwardFromEmbed perturbs the logits versus a clean forward and the
+  token embedding still receives gradients), determinism, and `ExampleNEFTune`. tier-2:
+  research-lite CONFIRMED unanimous vs the paper's Algorithm 1, the HF
+  `neftune_post_forward_hook`, and the neelsjain/NEFTune reference, NOT the built-in
+  deep-research.
+- No new op or exported type; the Metal and Vulkan backends still build; full suite
+  green, apicheck/gofmt/vet clean, CGO0 build green.
+
+### T124 — Dr. GRPO (bias-corrected GRPO) (2026-07-07)
+- **The bias-corrected GRPO** (Liu et al. 2025, "Understanding R1-Zero-Like Training",
+  [arXiv:2503.20783](https://arxiv.org/abs/2503.20783) §3.1, "GRPO Done Right", §R95).
+  The paper "simply removes the 1/|oᵢ| and std normalization terms" from GRPO. Adds
+  `nn.DrGRPOAdvantage(rewards)` to [nn/grpo.go](nn/grpo.go):
+  - The **std-free** group advantage `Âᵢ = rᵢ − mean(r)` (versus `GroupAdvantage`'s
+    `(rᵢ − mean)/(std + ε)`), which removes GRPO's **question-level difficulty bias** —
+    dividing by the group's reward std rescales every prompt to unit variance,
+    amplifying the tiny reward differences of near-all-correct/all-wrong prompts.
+  - It composes with the existing `GRPOLoss`, whose loss is a **global token mean** (a
+    constant, not a per-response `1/|oᵢ|`, normalizer) and so already carries no
+    response-length bias; `DrGRPOAdvantage` + `GRPOLoss(WithKLBeta(0))` is the full
+    unbiased Dr. GRPO objective (β=0 as the paper uses).
+- **§V16 ladder.** tier-1: `TestDrGRPOAdvantage` (exact mean-centering, sums to zero),
+  `TestDrGRPONoDifficultyBias` (two groups with the same centering but a 100× reward
+  spread — Dr. GRPO keeps the low-variance group ~100× smaller while GRPO's `/std`
+  rescales both to ~unit magnitude, directly demonstrating the bias and its removal),
+  `TestDrGRPOWithGRPOLoss` (the advantage drives a finite, differentiable `GRPOLoss`),
+  and `ExampleDrGRPOAdvantage`. tier-2: research-lite CONFIRMED unanimous vs the paper
+  §3.1 and the sail-sg/understand-r1-zero reference, NOT the built-in deep-research.
+- No new op or exported type; full suite green, apicheck/gofmt/vet clean, CGO0 build green.
+
+### T123 — Write quantized GGUF models (2026-07-07)
+- **GoAI can now produce real quantized `.gguf` files**, wiring the quantization encoder
+  (T122) into the GGUF writer (T107). Adds `gguf.WriteQuantized(w, f, quant)` to
+  [format/gguf/writer.go](format/gguf/writer.go): each tensor named in the
+  `quant map[string]QuantType` is encoded in that block-quantized format (Q8_0/Q4_0)
+  instead of F32, with alignment-correct offsets from the quantized byte size; the rest
+  stay F32. `Write` is now `WriteQuantized(…, nil)` and is byte-identical to before, so
+  a quantized model is ~4× (Q8_0) or ~7× (Q4_0) smaller than the F32 form.
+- **§V15.** `TestWriteQuantizedRoundTrip` (a quantized tensor reads back as
+  `Dequantize(Quantize(·))` exactly — the write stores the encoder's bytes and Read runs
+  the same dequant — and is verified to differ from the original, proving it was
+  quantized, while F32 tensors round-trip at F32 precision), `TestWriteQuantizedSmaller`
+  (the quantized file is smaller), `TestWriteQuantizedDeterministic`,
+  `FuzzWriteQuantizedRoundTrip` (~4.4M executions clean), and `ExampleWriteQuantized`.
+  The existing F32 `Write` and fuzz tests are unchanged.
+- No new exported type; full suite green, apicheck/gofmt/vet clean, CGO0 build green.
+
+### T122 — GGUF Q8_0/Q4_0 quantization (encode) (2026-07-07)
+- **GoAI can now quantize, not just dequantize** — the f32→quantized direction for the
+  ggml Q8_0 and Q4_0 block formats (§R94), so quantized models (4× / ~7× smaller) can be
+  produced, not only read. Adds [format/gguf/quant.go](format/gguf/quant.go):
+  - `gguf.Quantize(t, qt)` encodes a tensor into the ggml block layout following
+    `ggml-quants.c` exactly — Q8_0 uses `d = amax/127` with round-half-away quants; Q4_0
+    uses the signed block max, `d = max/−8`, and `nibble = min(15, ⌊x/d + 8.5⌋)` packed
+    low=element j / high=element j+16. `gguf.Dequantize(data, qt, n)` is the public
+    inverse. A new `f32ToF16` encoder (round-to-nearest-even, overflow→inf, subnormals)
+    stores the block scales.
+- **Verification** (a file format — the definitional source is `ggml-quants.c`, no
+  paper): `TestF32ToF16` (canonical bit patterns and f16 round-trip), the Q8_0 and Q4_0
+  round-trip error bounds (Q4_0's asymmetric 4-bit range is documented — it represents
+  `(nibble−8) ∈ [−8,7]`), `TestQuantizeOnGridExact` (on-grid values round-trip exactly),
+  `TestQuantizeIdempotent` (§V15: dequantize→requantize is byte-identical — the grid is
+  stable), `TestQuantizeQMatMul` (§V15 end-to-end: `QMatMul` over a freshly quantized
+  weight matches the full-precision matmul within the quantization error),
+  `FuzzQuantizeRoundTrip` (~6M executions clean), and `ExampleQuantize`. research-lite
+  CONFIRMED the exact ggml encode formulas unanimously against `ggml-quants.c`, NOT the
+  built-in deep-research.
+- No new exported type (`QuantType` / `QMatMul` already exist); full suite green,
+  apicheck/gofmt/vet clean, CGO0 build green.
+
+### T121 — Llama KV-cache decode and generation (2026-07-07)
+- **Efficient autoregressive Llama generation** (one forward per new token instead of
+  recomputing the whole prefix), completing the runnable Llama model (T119) and
+  composing the full sampler suite (T118 and earlier). Adds
+  [nlp/llama_decode.go](nlp/llama_decode.go):
+  - **Prerequisite — RoPE position offset.** `RoPEAttrs` gains a `PosOffset` field; the
+    reference RoPE kernel and its VJP rotate row `p` for absolute position
+    `PosOffset+p`. `PosOffset` 0 is the previous full-sequence behaviour, byte-for-byte,
+    so a decode step can rotate its single token at its true position.
+  - `nlp.LlamaCache` + `NewCache`/`Len`; `DecodeStep(cache, token, pos)` embeds one
+    token, and per block RMSNorms, projects q/k/v, RoPEs q and k at `pos`, appends the
+    rotated k/v to the cache, and runs single-query attention over the cached keys
+    (GQA, no causal mask needed); `Generate(prompt, maxNew, s)` fills the cache from the
+    prompt then samples and decodes token by token, bounded by the context length.
+- **§V16 ladder** (KV-cache and the RoPE offset are compositions of already-verified
+  ops, so no fresh paper study): `TestRoPEPosOffset` (offset RoPE equals row `p` of the
+  full-sequence RoPE at 1e-12), `TestLlamaDecodeMatchesForward` (the cache is
+  **lossless** — the DecodeStep logits equal a full `Forward` over the prefix at 1e-9,
+  the cache's correctness contract), `TestLlamaGenerateGreedyEqualsForward` (greedy
+  `Generate` reproduces the arg-max-of-`Forward` loop exactly), and a sampling run.
+- `nlp.LlamaCache` added to the apicheck allowlist (decode state, like `GPT`'s
+  `KVCache`); the Metal and Vulkan backends still build (they don't use RoPE). Full
+  suite green, apicheck/gofmt/vet clean, CGO0 build green.
+
+### T120 — GGUF ↔ Llama weight loader (2026-07-07)
+- **A real `.gguf` model now runs end-to-end**: this loads a GGUF Llama's weights and
+  config into the `nlp.Llama` model (T119), composing the GGUF reader (T22), the Llama
+  model, and the tokenizer loaders (T111/T113). Adds
+  [nlp/llama_gguf.go](nlp/llama_gguf.go):
+  - `nlp.LlamaFromGGUF(meta, tensors)` reads the `llama.*` metadata keys into a
+    `LlamaConfig` and maps the `token_embd` / `blk.N.*` / `output` tensors into the
+    model, following the ggml/llama.cpp convention (§R93): linear weights are stored in
+    torch `[out, in]` layout, so every projection is **transposed** into GoAI's
+    `[in, out]`; embeddings and RMSNorm gains are copied as-is; an absent
+    `output.weight` ties the LM head to `token_embd`. GoAI's split-half RoPE (T119)
+    matches GGUF's post-permute rotary layout, so q/k are read without re-permuting.
+  - `nlp.LlamaToGGUF(m)` is the inverse export. Both take/return plain maps, keeping
+    `nlp` decoupled from the `gguf` package.
+- **Verification** (a format mapping — the definitional source is ggml/llama.cpp, no
+  paper): `TestLlamaGGUFRoundTrip` (transpose-in/transpose-out cancels, so config and
+  logits are reproduced exactly — Eps to F32 precision, since GGUF stores it as
+  float32), `TestLlamaGGUFWriteReadRoundTrip` (§V15 end-to-end through
+  `gguf.Write`→`gguf.Read`, logits matching at F32 precision — the whole
+  model↔`.gguf`-bytes chain), the tied-head fallback, error cases, and
+  `ExampleLlamaFromGGUF`. research-lite CONFIRMED the tensor names, `[out,in]` layout,
+  metadata keys and the q/k permute unanimously against gguf-py + `convert_hf_to_gguf.py`,
+  NOT the built-in deep-research.
+- Exact bit-parity against a file produced by upstream llama.cpp is not verifiable on
+  this host (llama.cpp is not installed, §B23) — the convention is followed and the
+  round-trip is verified. No new exported type; full suite green, apicheck/gofmt/vet
+  clean, CGO0 build green.
+
+### T119 — Runnable Llama / Llama-2 model (2026-07-07)
+- **GoAI's first full modern-LLM model**, the Llama / Llama-2 decoder (Touvron et al.
+  2023, [arXiv:2302.13971](https://arxiv.org/abs/2302.13971) / 2307.09288, §R92),
+  assembled from the already-verified primitives (RMSNorm, RoPE, grouped-query MHA,
+  SwiGLU) — the modern counterpart to the GPT-2-style [GPT] (T23).
+  - **Prerequisite — heads-aware RoPE.** `RoPEAttrs` gains a `Heads` field; the
+    reference RoPE kernel ([backend/ref/llama.go](backend/ref/llama.go)) and its VJP
+    ([autograd/vjp_transformer.go](autograd/vjp_transformer.go)) now rotate each head's
+    `headDim` slice independently (frequencies over the per-head dim). `Heads` 0 or 1 is
+    the previous single-head behaviour, byte-for-byte — the existing RoPE parity/gradient
+    tests stay green.
+  - **The model** ([nlp/llama.go](nlp/llama.go)): `nlp.Llama` +
+    `LlamaConfig`/`LlamaBlock`, `NewLlama(cfg, seed)`, `Forward`, `Params`, `Embed`. Each
+    pre-norm block is `x += Wo·Attn(RoPE(x̄·Wq), RoPE(x̄·Wk), x̄·Wv)` with `x̄ = RMSNorm(x)`
+    and causal GQA, then `x += SwiGLU(RMSNorm(x))`; a final RMSNorm and an untied output
+    projection give the logits. No biases, no positional embeddings.
+- **§V16 ladder.** tier-1: `TestRoPEMultiHeadEqualsPerHead` (heads-aware RoPE equals
+  per-head single-head RoPE at 1e-12), `TestLlamaGradCheck` (the **whole** forward is
+  differentiable — central finite differences match the analytic gradients across the
+  embedding, attention projections, RMSNorm gains, SwiGLU and output, proving every
+  sublayer is wired and backpropagated correctly, §V2), shape/determinism,
+  `TestLlamaGQARuns` (kv_heads < heads builds the reduced K/V width and runs), and
+  `ExampleLlama`. tier-2: research-lite CONFIRMED unanimous vs the LLaMA paper and the
+  facebookresearch/llama `model.py`, NOT the built-in deep-research (§V16).
+- `nlp.LlamaBlock` added to the apicheck allowlist (an internal block shown via
+  `ExampleLlama`, like `GPT`'s `Block`); the Metal and Vulkan backends still build (they
+  don't use RoPE). Full suite green, apicheck/gofmt/vet clean, CGO0 build green.
+
+### T118 — Epsilon and eta truncation sampling (2026-07-07)
+- **Rounds out the truncation-sampler family** (Hewitt, Manning & Liang 2022,
+  "Truncation Sampling as Language Model Desmoothing",
+  [arXiv:2210.15191](https://arxiv.org/abs/2210.15191), §R91) — the desmoothing
+  framework that unifies top-p / min-p / typical. Extends
+  [nlp.Sampler](nlp/sample.go) with `Epsilon` / `Eta` fields and `WithEpsilon` /
+  `WithEta` options (§C12), applied in `Dist` after the min-p filter:
+  - **epsilon sampling** keeps only tokens with probability `≥ ε` (an absolute floor;
+    typical 3e-4–2e-3).
+  - **eta sampling** keeps tokens with probability `≥ min(ε, √ε·exp(−H))`, where `H` is
+    the distribution's Shannon entropy in nats — it truncates hard when the model is
+    confident (low entropy) and keeps more when uncertain.
+  - A shared `truncateAbove` helper zeroes sub-threshold probabilities, always keeps the
+    arg-max (`min_tokens_to_keep = 1`) and renormalizes.
+- **§V16 ladder.** tier-1: `TestEpsilonSampling` (exact survivor set, tail dropped,
+  renormalized), `TestEtaSampling` (the `η = min(ε, √ε·exp(−H))` threshold recomputed
+  independently, exercising the `η<ε` high-entropy regime), `TestTruncationKeepsTopToken`
+  (a threshold above every probability still leaves the top token, one-hot),
+  `ExampleWithEta`. tier-2: research-lite CONFIRMED unanimous vs the paper (§4.3 Eq. 7 /
+  §4.4) and the HF `Epsilon`/`EtaLogitsWarper`, NOT the built-in deep-research (§V16).
+- No new op or exported type (`SamplerOption` already documented); full suite green,
+  apicheck/gofmt/vet clean, CGO0 build green.
+
+### T117 — FlashAttention-2 grouped-query attention on Vulkan (2026-07-07)
+- **Completes the Metal flash-GQA (T116) with the Vulkan twin**, so FlashAttention with
+  grouped-/multi-query attention now runs on **both** GPU backends — honouring the
+  standing "never metal-only" rule (§R72). The GLSL
+  [flashattn.comp](backend/vulkan/shaders/flashattn.comp) gains a `kv_heads`
+  push-constant and the GQA indexing (`rep = heads/kv_heads`, `dkv = kv_heads·dk`,
+  `qOff = h·dk`, `kvOff = (h/rep)·dk`), reading K/V at `j·dkv+kvOff` and Q/O at
+  `i·dm+qOff`. `vk_flashattn_f32` ([vk_bridge.c](backend/vulkan/vk_bridge.c)) sizes the
+  K/V buffers as `seq·kv_heads·dk` and takes a `kv_heads` argument; `flashAttnF32`
+  ([vulkan.go](backend/vulkan/vulkan.go)) validates the GQA shapes and forwards
+  `p.KVHeads`. `flashattn.spv` is recompiled by `make vulkan-spv`.
+- **§V16 / V-CROSS.** Flash + GQA is already tier-1 verified at the reference (T116), so
+  this backend is accepted by cross-reference (tier-1). `TestVulkanFlashAttnCrossReference`
+  gains `gqa`/`mqa`/`gqa3` cases matching both the reference flashattn and the naive
+  `OpMHA` on MoltenVK (§V3/§V11); `CGO_ENABLED=0` stays green.
+- GQA FlashAttention is now complete on Metal + Vulkan (the models that matter —
+  Llama-2/3, Mistral, Qwen — get the flash memory win); the backward was already GQA
+  via the shared VJP. No new exported symbol; full suite green, apicheck/gofmt/vet clean.
+
+### T116 — FlashAttention-2 with grouped-query attention (ref + Metal) (2026-07-07)
+- **FlashAttention now supports GQA/MQA**, so it is usable for the models that matter —
+  Llama-2/3, Mistral and Qwen all use grouped-query attention, which the flash kernel
+  previously rejected (it required K/V shape == Q). Extends the reference
+  [flashattn.go](backend/ref/flashattn.go) and the Metal
+  [flashattn_f32](backend/metal/metal_bridge.m) kernel: `Q` is `[seq, dm]`, `K,V` are
+  `[seq, kv_heads·dk]`, and query head `h` shares K/V head `h/(heads/kv_heads)` via
+  `qOff = h·dk`, `kvOff = (h/rep)·dk` — the same GQA indexing the MHA kernels already
+  use. The `mtl_flashattn_f32` bridge gains a `kv_heads` argument (K/V buffers sized
+  `seq·kv_heads·dk`); `flashAttnF32` validates the GQA shapes and still falls back to
+  the reference for `dk>128` or degenerate shapes. The backward pass was already GQA
+  (it dispatches `OpMHABackward` via the shared VJP), so GQA flash trains too.
+- **§V16 / V-CROSS.** The flash algorithm is tier-2 paper-verified (§R72) and GQA is
+  attention indexing, so this is accepted by cross-reference (tier-1).
+  `TestFlashAttnGQAMatchesMHA` checks `OpFlashAttn == OpMHA` at f64 1e-12 for
+  grouped/multi-query heads across causal and block sizes; the existing non-GQA flash
+  tests stay byte-identical (kv_heads defaults to heads). `TestMetalFlashAttnCrossReference`
+  gains `gqa`/`mqa`/`gqa3` cases matching both the reference flashattn and the naive
+  `OpMHA` on-device (§V3/§V11). `CGO_ENABLED=0` stays green.
+- Never metal-only: the **Vulkan** flash-GQA kernel is the committed follow-up. No new
+  exported symbol; full suite green, apicheck/gofmt/vet clean.
+
+### T115 — GPU sliding-window attention on Vulkan (2026-07-07)
+- **Completes the Metal sliding-window attention (T114) with the Vulkan twin**, so SWA
+  (§R62; Mistral / Mixtral) now runs on **both** GPU backends — honouring the standing
+  "never metal-only" rule (mirrors T114→T115, like T109→T110).
+  - The GLSL `mha.comp` ([shaders/mha.comp](backend/vulkan/shaders/mha.comp)) gains a
+    `window` push-constant and a `jmin = max(0, off+i−window+1)` lower bound on both
+    softmax passes, so each query attends only its `window` most recent keys. The
+    forward kernel is given its own push block (`MhaFwdPC`) in
+    [vk_bridge.c](backend/vulkan/vk_bridge.c) so the backward kernel's shared layout is
+    untouched; `vk_mha_f32` takes a `window` argument.
+  - `mhaF32` ([vulkan.go](backend/vulkan/vulkan.go)) drops `Window` from its §I4
+    reference-fallback (only ALiBi, `dk>128` and degenerate shapes remain) and forwards
+    `p.Window`. `mha.spv` is recompiled by `make vulkan-spv`.
+- **§V16 / V-CROSS.** SWA is already tier-2 paper-verified (§R62), so this backend
+  coverage is accepted by cross-reference (tier-1). `TestVulkanMHAWindowCrossReference`
+  matches the Vulkan output to the reference within the K-scaled f32 tolerance
+  (§V3/§V11) across window sizes, GQA, causal/non-causal, a window wider than the
+  sequence (≡ full attention), the KV-cache case (sq<sk) and `window==1` — all passing
+  on MoltenVK. `TestVulkanMHAFallbackFeatures` is narrowed to ALiBi; the MHA and
+  FlashAttn cross-tests still pass (no regression); `CGO_ENABLED=0` stays green.
+- Sliding-window attention is now on Metal + Vulkan; the window-aware backward stays on
+  the reference (a later task). No new exported symbol; full suite green,
+  apicheck/gofmt/vet clean.
+
+### T114 — GPU sliding-window attention on Metal (2026-07-07)
+- **Sliding-window attention (SWA) now runs on the GPU** (§R62; the mask used by
+  Mistral / Mixtral), removing the `Window→reference` fallback that T85's Metal MHA
+  kernel took. The MSL `mha_f32` kernel ([metal_bridge.m](backend/metal/metal_bridge.m))
+  gains a `window` push-constant and a `jmin = max(0, off+i−window+1)` lower bound on
+  both softmax passes, so each query attends only its `window` most recent keys
+  entirely on-device; `mhaF32` ([metal.go](backend/metal/metal.go)) drops `Window` from
+  its §I4 reference-fallback (only ALiBi, `dk>128` and degenerate shapes still fall
+  back) and forwards `p.Window`. SWA models now run attention on the GPU for inference
+  and the forward half of training.
+- **§V16 / V-CROSS.** SWA is already tier-2 paper-verified (§R62), so this new *backend
+  coverage* is accepted by cross-reference against the truth backend (tier-1).
+  `TestMetalMHAWindowCrossReference` matches the Metal output to the reference within
+  the K-scaled f32 tolerance (§V3/§V11) across window sizes, GQA, causal/non-causal, a
+  window wider than the sequence (≡ full attention), the KV-cache case (sq<sk) and
+  `window==1`. `TestMetalMHAFallbackFeatures` is narrowed to ALiBi (the remaining
+  fallback); the existing MHA and FlashAttn cross-tests still pass (no regression);
+  `CGO_ENABLED=0` stays green.
+- Never metal-only: the **Vulkan** SWA kernel is the committed follow-up; the
+  window-aware backward stays on the reference for now. No new exported symbol; full
+  suite green, apicheck/gofmt/vet clean.
+
+### T113 — Byte-level BPE tokenizer + GGUF loading (2026-07-07)
+- **Completes tokenizer-from-GGUF for the dominant model family** (Llama-3, Qwen,
+  Mistral — GGUF `tokenizer.ggml.model` `"gpt2"`/`"bpe"`), the byte-level BPE counterpart
+  to the Unigram loader (T111). Adds [nlp/bpe_gguf.go](nlp/bpe_gguf.go):
+  - `nlp.BPETokenizer` via `NewBPE(vocab, merges, opts…)` and `BPEFromGGUF(meta)` with
+    `WithBPEUnkID` (§C12). It is the GPT-2 / HuggingFace byte-level BPE (Sennrich 2016
+    BPE + Radford 2019 byte-level variant, §R90): `bytesToUnicode()` maps all 256 bytes
+    reversibly to printable code points (space→'Ġ', newline→'Ċ'); `Encode` pre-tokenizes
+    with the GPT-2 regex (reusing T37's `gpt2Split`), maps each raw byte, then applies
+    BPE **merges by rank** — the merge list is ordered and the lowest-rank adjacent pair
+    is merged first (not greedy left-to-right); `Decode` inverts the byte map.
+  - `BPEFromGGUF` reads `tokenizer.ggml.tokens` (byte-mapped vocabulary) and
+    `tokenizer.ggml.merges` (space-separated `"left right"` rules), routing SPM/Unigram
+    model types (`"t5"`/`"llama"`) to `UnigramFromGGUF` instead.
+- **§V16 ladder.** tier-1: `TestBytesToUnicode` (space→'Ġ', newline→'Ċ', bijection),
+  `TestBPEMergeByRank` (`b+c` at rank 0 beats a left-first `a+b` merge — proving
+  rank-ordered merging), `TestBPEByteRoundTrip` and `FuzzBPEByteRoundTrip` (§V15
+  byte-exact `decode∘encode` for any input, incl. non-UTF-8; ~0.9M fuzz execs clean),
+  `TestBPEFromGGUF`, `TestBPEFromGGUFWriteReadRoundTrip` (end-to-end `gguf.Write` →
+  `gguf.Read` → load), and `ExampleBPETokenizer`. tier-2: research-lite CONFIRMED
+  unanimous vs the OpenAI gpt-2 `encoder.py`, HF `GPT2Tokenizer`, and llama.cpp
+  `llama-vocab.cpp`, NOT the built-in deep-research (§V16).
+- `nlp.BPEOption` added to the apicheck example-exempt allowlist. Full suite green,
+  apicheck/gofmt/vet clean, CGO0 build green.
+
+### T112 — Prompt-lookup (n-gram) speculative decoding (2026-07-07)
+- **Draft-model-free lossless acceleration** (Yang et al. 2023, "Inference with
+  Reference", LLMA, [arXiv:2304.04487](https://arxiv.org/abs/2304.04487); Saxena's
+  Prompt Lookup Decoding, §R89), complementing the draft-model speculative decoding of
+  T97. Adds [nlp/promptlookup.go](nlp/promptlookup.go):
+  - `nlp.PromptLookupDecode(model, prompt, maxNew, maxNgram, draftLen, s)` needs no
+    second model: each round the `ngramLookup` drafter copies a candidate continuation
+    from the running sequence's own history — the last n-gram suffix's earlier
+    occurrence, longest match first — the model scores the whole draft in one forward
+    pass, and the speculative accept/reject rule (`SpeculativeRun`, §R53) keeps the
+    verified prefix plus one model token. `maxNgram≤0` defaults to 3, `draftLen≤0` to 10.
+  - Because the drafter is deterministic, each proposed token carries a point-mass
+    distribution and the speculative rule reduces to exact verification — so the output
+    is distributed exactly as `model.Generate`, **token-for-token identical under greedy
+    sampling** (the LLMA losslessness guarantee), the speedup coming from tasks whose
+    output copies the input (summarization, RAG, code editing).
+- **§V16 ladder.** tier-1: `TestPromptLookupGreedyEqualsGenerate` (greedy prompt-lookup
+  == greedy `Generate`, the defining lossless property), `TestNgramLookup` (drafter
+  longest-match / draft-length cap / nil-on-no-recurrence), `TestPromptLookupDefaultsAndDrafts`
+  (defaults stay lossless and the drafter actually engages on a recurring-n-gram
+  prompt), `TestPromptLookupSamplingRuns`. tier-2: research-lite CONFIRMED unanimous vs
+  the LLMA paper + Leviathan's speculative rule (§R53), NOT the built-in deep-research.
+- Reuses the existing `SpeculativeRun` verification — no new op or exported type; full
+  suite green, apicheck/gofmt/vet clean, CGO0 build green.
+
+### T111 — Load a Unigram tokenizer from GGUF metadata (2026-07-07)
+- **End-to-end GGUF tokenization**: wires a `.gguf` model's embedded tokenizer (read by
+  the GGUF reader T22 / writer T107) to the Viterbi Unigram (T108), so weights and
+  tokenizer come from one file. Adds [nlp/unigram_gguf.go](nlp/unigram_gguf.go):
+  - `nlp.UnigramFromGGUF(meta map[string]any)` reads the ggml/llama.cpp tokenizer
+    convention (§R88) — `tokenizer.ggml.tokens` (vocabulary strings) paired with
+    `tokenizer.ggml.scores` (float32 log-probs), and `tokenizer.ggml.unknown_token_id`
+    — and builds a `Unigram`. It takes the raw metadata map, so `nlp` stays decoupled
+    from the `gguf` package.
+  - Accepts `tokenizer.ggml.model == "t5"` (ggml's UGM — a true Unigram, the exact
+    match for the Viterbi decoding) and `"llama"` (SentencePiece, same scores and ▁
+    meta-symbol). **Documented divergence:** for `"llama"`/SPM, llama.cpp runs a greedy
+    best-score-bigram *merge*; this loader always applies the Viterbi 1-best over the
+    same scores — the higher-likelihood segmentation, which can differ token-for-token
+    (§R88). Byte-level BPE models (`"gpt2"`/`"bpe"`) and missing/mismatched scores are
+    rejected rather than mis-loaded.
+- **Verification** (a format wiring — the definitional source is ggml/llama.cpp, no
+  paper): `TestUnigramFromGGUF` (Viterbi over the loaded scores + the metadata `<unk>`
+  id + round-trip), `TestUnigramFromGGUFWriteReadRoundTrip` (§V15 end-to-end: build a
+  `gguf.File` → `gguf.Write` → `gguf.Read` → `UnigramFromGGUF` encodes identically,
+  exercising the whole writer+reader+loader chain), error cases, and
+  `ExampleUnigramFromGGUF`. research-lite CONFIRMED the GGUF tokenizer keys unanimously
+  against ≥2 official sources (ggml `docs/gguf.md` + llama.cpp), NOT the built-in
+  deep-research.
+- No new exported type; full suite green, apicheck/gofmt/vet clean, CGO0 build green.
+
+### T110 — GPU FlashAttention-2 forward on Vulkan (2026-07-07)
+- **Completes the Metal FlashAttention-2 (T109) with the Vulkan twin**, so attention's
+  O(N)-memory online-softmax tiling now runs on **both** GPU backends — honouring the
+  standing "never metal-only" rule (mirrors the T101→T102 conv-backward split; Dao
+  2023, §R72/§R32).
+  - New GLSL compute shader
+    [shaders/flashattn.comp](backend/vulkan/shaders/flashattn.comp) (compiled to
+    `flashattn.spv` by `make vulkan-spv`, embedded by vulkan.go): one invocation per
+    (head, query row) streams the keys with the online-softmax recurrence (running
+    max, normalizer and an O(dk) accumulator rescaled by `exp(m_old − m_new)`), so no
+    [seq,seq] score row is materialized — unlike the two-pass `mha.comp`.
+  - A thin `vk_flashattn_f32` wrapper ([vk_bridge.c](backend/vulkan/vk_bridge.c)) feeds
+    four storage buffers and a `{seq,dm,heads,dk,causal,scale}` push block through the
+    generic `vk_dispatch` launcher (§T95); `flashAttnF32`
+    ([vulkan.go](backend/vulkan/vulkan.go)) mirrors the Metal dispatcher — heads +
+    causal for Q,K,V all `[seq, dmodel]` (sq==sk, no GQA), reference fallback (§I4) for
+    `dk>128` or degenerate shapes, scale `1/√dk`, Block hint ignored (block-invariant).
+- **§V16 / V-CROSS.** The algorithm is already tier-2 paper-verified (§R72, T71), so
+  this backend is accepted by cross-reference (tier-1). `TestVulkanFlashAttnCrossReference`
+  checks the Vulkan flash output against **both** the reference flashattn **and** the
+  reference naive attention (`OpMHA`) within the K-scaled f32 tolerance (§V3/§V11),
+  across heads/causal/`dk` up to 32 — all passing on MoltenVK. `CGO_ENABLED=0` build
+  stays green (Vulkan is tag-gated, §I5/§V7).
+- FlashAttention-2 forward is now complete on Metal + Vulkan; the backward pass stays
+  on the reference (a later task). No new exported symbol; full suite green,
+  apicheck/gofmt/vet clean.
+
+### T109 — GPU FlashAttention-2 forward on Metal (2026-07-07)
+- **Brings attention's O(N)-memory tiling to the GPU** (Dao 2023, §R72/§R32; completes
+  the reference FlashAttention-2 of T71). Attention previously ran on Metal via the
+  non-tiled `OpMHA` two-pass softmax; `OpFlashAttn` now has a Metal kernel where the
+  online-softmax win — never materializing a [seq,seq] score row — matters most
+  (SRAM/shared memory, long contexts).
+  - New MSL kernel `flashattn_f32` in
+    [metal_bridge.m](backend/metal/metal_bridge.m): one thread per (head, query row)
+    streams the keys **once**, keeping only a running max `m`, normalizer `ℓ` and an
+    O(dk) output accumulator, rescaled by `corr = exp(m_old − m_new)` as the max grows
+    — the FlashAttention-2 recurrence, normalizing by `ℓ` once at the end.
+  - `flashAttnF32` in [metal.go](backend/metal/metal.go) dispatches heads + causal for
+    Q,K,V all `[seq, dmodel]` (sq==sk, no GQA — the reference flashattn's domain) and
+    falls back to the reference (§I4) for a per-head dim `dk>128` or degenerate shapes.
+    The scale is `1/√dk` (matching the reference flashattn); the result is
+    block-invariant, so the Block hint is ignored.
+- **§V16 / V-CROSS.** The algorithm is already tier-2 paper-verified (§R72, T71), so
+  this new *backend* is accepted by cross-reference against the truth backend (tier-1),
+  no fresh research needed. `TestMetalFlashAttnCrossReference` checks the Metal
+  flash output against **both** the reference flashattn **and** the reference naive
+  attention (`OpMHA`) within the K-scaled f32 tolerance (§V3/§V11), across
+  heads/causal/`dk` up to 32 — confirming the tiling is exact up to float
+  reassociation. `CGO_ENABLED=0` build stays green (Metal excluded, §I5/§V7).
+- Never metal-only (standing rule): the **Vulkan** FlashAttn kernel is the committed
+  next task (mirroring the T101→T102 conv-backward split). The backward pass stays on
+  the reference for now. No new exported symbol; full suite green, apicheck/gofmt/vet
+  clean.
+
+### T108 — LLM inference: Unigram (SentencePiece) tokenizer (2026-07-07)
+- **The Llama/Mistral/T5 tokenizer family** (Kudo 2018, "Subword Regularization",
+  [arXiv:1804.10959](https://arxiv.org/abs/1804.10959) §3.1, §R87), alongside the
+  existing GPT-2 byte-level BPE `Tokenizer`. Adds [nlp/unigram.go](nlp/unigram.go):
+  - `nlp.Unigram` built with `NewUnigram([]UnigramPiece, opts…)` — each vocabulary
+    piece carries a score = log p(piece) under a unigram language model — plus
+    `WithUnigramUnkID` / `WithUnigramDummyPrefix` (§C12).
+  - `Encode` is the **1-best Viterbi** segmentation that maximizes the sum of piece
+    log-probabilities (`best[i] = maxₚ best[i−len(p)] + score(p)` over character
+    positions), the most-probable tiling — *not* greedy longest-match. A character no
+    piece covers becomes a single `<unk>` at score `min(scores) − 10` (kUnkPenalty) so
+    the DP is always feasible. `Decode` concatenates pieces, maps the ▁ (U+2581)
+    whitespace meta-symbol back to spaces and drops the `add_dummy_prefix` — lossless
+    when the vocabulary covers every character.
+- **§V16 ladder.** tier-1: `TestUnigramViterbiNotGreedy` and
+  `TestUnigramViterbiPicksLongWhenBetter` (the two directions prove it is true Viterbi,
+  not longest-match), `TestUnigramRoundTrip` (space escaping inverts exactly, §V15),
+  `TestUnigramUnknown`, `ExampleUnigram`. tier-2: research-lite CONFIRMED unanimous vs
+  Kudo 2018 §3.1 + the google/sentencepiece `unigram_model.cc` reference, NOT the
+  built-in deep-research (§V16).
+- NFKC normalization and byte-fallback are documented out-of-scope (the tokenizer
+  segments the string it is given; SentencePiece applies NFKC upstream);
+  `nlp.UnigramOption` added to the apicheck example-exempt allowlist. Full suite green,
+  apicheck/gofmt/vet clean, CGO0 build green.
+
+### T107 — GGUF writer: full round-trip for the model format (2026-07-07)
+- **Completes the GGUF reader (T22) with a writer**, so GoAI can now emit the
+  ggml/llama.cpp model container, not just read it. Adds
+  [format/gguf/writer.go](format/gguf/writer.go):
+  - `gguf.Write(w, *File)` / `gguf.WriteFile(path, *File)` serialize the header,
+    metadata key/values (all 13 GGUF value types including nested and empty arrays),
+    tensor infos, and the alignment-padded data section. Metadata keys and tensor
+    names are emitted in sorted order for a byte-deterministic file, and
+    `general.alignment` (default 32) is honoured for the header→data boundary and
+    every tensor offset.
+  - Tensors are written as F32 — the lossless in-memory form `Read` produces (it
+    dequantizes Q8_0/Q4_0/F16 on load) — so a `Read → Write → Read` cycle reproduces
+    the tensor bytes exactly. Shapes are reversed back to the file's innermost-first
+    order.
+- **§V15 (round-trip + fuzz), the definitional authority being the ggml/gguf reference
+  implementation (no paper for a file format):** `TestWriteRoundTripSample` (the golden
+  sample file), `TestWriteRoundTripAllTypes` (every metadata type + nested/empty arrays
+  + several tensor shapes), `TestWriteDeterministic` (two writes are byte-identical),
+  `TestWriteAlignment` (non-default alignment), `FuzzWriteRoundTrip`, and `ExampleWrite`.
+  The fuzz (558k executions clean) surfaced that a NaN metadata value must be compared
+  **bit-exactly** rather than by value equality — the correct round-trip semantic is bit
+  equality, which the writer already satisfies; the test comparison was tightened to
+  match. No new exported type; `Write`/`WriteFile` are documented (§V19).
+- Full suite green, apicheck/gofmt/vet clean, CGO0 build green.
+
+### T106 — LLM training method: Schedule-Free optimizer (SGD + AdamW) (2026-07-07)
+- **Removes the learning-rate schedule** (Defazio et al. 2024, "The Road Less
+  Scheduled", [arXiv:2405.15682](https://arxiv.org/abs/2405.15682), §R86) — matches or
+  beats cosine-scheduled training without having to know the stopping step, by
+  replacing the schedule with an online Polyak-Ruppert average. Completes the
+  optimizer set (first-order Adam/Lion/Muon/Adafactor/GaLore + second-order Sophia +
+  schedule-free). Adds [nn/schedulefree.go](nn/schedulefree.go):
+  - `nn.ScheduleFree` with `NewScheduleFreeSGD` / `NewScheduleFreeAdamW` and functional
+    options `WithScheduleFreeBeta` / `WithScheduleFreeWeightDecay` /
+    `WithScheduleFreeWarmup` / `WithScheduleFreeWeightPower` / `WithScheduleFreeAdamParams`
+    (§C12). Three coupled sequences: the base iterate z, the running average x (the
+    point to deploy), and the interpolation `y = (1−β)z + βx` where the gradient is
+    taken. Per step: `g ← g + λ·y` (decoupled weight decay at y), `z ← z − γ·ĝ`
+    (ĝ = g for SGD, `g/(√v̂+ε)` with bias-corrected v̂ for AdamW),
+    `x ← (1−c_t)x + c_t·z` (γ²-weighted average, = 1/t at constant lr), then y is
+    written back into the parameter. State in float64 (§V10); fits the existing
+    `Optimizer.Step(GradFn)` interface.
+  - `Eval()` / `Train()` swap the parameters between the average x and the training
+    point y. Inference **must** use x (the paper's returned solution), never y or z;
+    calling `Step` in eval mode is rejected so gradients are never taken at the wrong
+    point.
+- **§V16 ladder.** tier-1: `TestScheduleFreeSGDParity` and `TestScheduleFreeAdamWParity`
+  (full z/x/y trajectory vs an independent recomputation of Algorithm 1 at rtol 1e-12,
+  covering grad-at-y, weight-decay-at-y, the γ²-average and the bias-corrected
+  preconditioner), plus `Eval`=x / `Train`=y exactness, `TestScheduleFreeInitIsTheta`
+  (y=θ before any step), `TestScheduleFreeStepInEvalModeErrors`, `ExampleScheduleFree`.
+  tier-2: research-lite CONFIRMED unanimous vs paper Algorithm 1 + the
+  facebookresearch/schedule_free reference, NOT the built-in deep-research (§V16). The
+  paper's actual-γ averaging weight is used over the reference's lr_max form (identical
+  without warmup) because §V16 makes the paper authoritative.
+- Pure optimizer over existing tensor access — no new op or kernel; `nn.ScheduleFreeOption`
+  added to the apicheck example-exempt allowlist. Full suite green, apicheck/gofmt/vet
+  clean, CGO0 build green.
+
+### T105 — LLM inference: Mirostat 2.0 adaptive sampling (2026-07-07)
+- **Perplexity-controlling decoder** (Basu et al. 2020, "Mirostat: A Neural Text
+  Decoding Algorithm that Directly Controls Perplexity",
+  [arXiv:2007.14966](https://arxiv.org/abs/2007.14966), ICLR 2021, §R85; the
+  `mirostat_v2` used in llama.cpp). Unlike top-k/top-p/min-p/typical — which fix a
+  truncation and let perplexity drift with context — Mirostat targets a fixed
+  per-token surprise τ (in bits) with a feedback loop, holding the long-run
+  perplexity at 2^τ. Adds [nlp/mirostat.go](nlp/mirostat.go):
+  - `nlp.Mirostat` + `NewMirostat(seed, opts…)` with `WithMirostatTau` /
+    `WithMirostatEta` (§C12) and `Reset`. `Sample(logits)` softmaxes, truncates to the
+    tokens whose surprise `S = −log₂p ≤ μ` (keeping at least the top token),
+    renormalizes and samples X, then nudges the threshold `μ ← μ − η·(S(X) − τ)`. μ
+    starts at 2·τ and is mutable state carried across a generated sequence.
+  - The observed surprise `S(X)` uses X's **original pre-truncation** probability,
+    matching the authors' reference `mirostat.py` and paper Algorithm 2 (llama.cpp
+    instead uses the renormalized prob — a documented divergence; per §V16 the paper
+    wins, and the original prob is the theoretically correct choice since perplexity
+    is defined on the model's own distribution). Defaults τ=5.0, η=0.1 are the
+    de-facto llama.cpp constants; the *formula* is paper-authoritative.
+- **§V16 ladder.** tier-1: `TestMirostatMuUpdate` (feedback update exact from μ=2τ
+  against the sampled token's base-2 surprise), `TestMirostatTruncationKeepsTopOnly`
+  (τ=0 ⇒ μ=0 ⇒ keeps only the top token ⇒ deterministic arg-max),
+  `TestMirostatControlsSurprise` (the defining guarantee: mean sampled surprise
+  converges to τ within 0.25 bit over 8k steps on a fixed distribution),
+  `ExampleMirostat`. tier-2: research-lite CONFIRMED unanimous vs paper Alg.2 +
+  authors' reference + llama.cpp, NOT the built-in deep-research (§V16).
+- Self-contained sampler (softmax + sort + PCG rng); `nlp.MirostatOption` added to the
+  apicheck example-exempt allowlist. Full suite green, apicheck/gofmt/vet clean, CGO0
+  build green.
+
+### T104 — LLM training method: Sophia second-order optimizer (2026-07-07)
+- **Diagonal-Hessian preconditioned, clipped optimizer** (Liu et al. 2023, "Sophia:
+  A Scalable Stochastic Second-order Optimizer for Language Model Pre-training",
+  [arXiv:2305.14342](https://arxiv.org/abs/2305.14342), §R84) — reaches a target loss
+  in roughly half the steps of AdamW, complementing the first-order set
+  (Adam/AdamW/SGD/Lion/Muon/Adafactor/GaLore). Adds [nn/sophia.go](nn/sophia.go):
+  - `nn.Sophia` + `NewSophia(params, lr, opts…)` with functional options
+    `WithSophiaBetas` / `WithSophiaGamma` / `WithSophiaEps` / `WithSophiaWeightDecay`
+    (§C12). Update (Algorithm 3 / Eq. 6): `m_t = β₁·m_{t−1} + (1−β₁)·g_t`, then
+    `θ ← θ·(1−η·λ)` (decoupled AdamW weight decay first), then
+    `θ ← θ − η·clip(m_t / max(γ·h_t, ε), 1)`. The clip bound is the paper's **fixed 1**
+    (not a tuned ρ), so no coordinate ever moves by more than the learning rate — the
+    curvature-blind safety that keeps a light second-order method stable and robust to
+    a badly-estimated or negative Hessian.
+  - `UpdateHessian(ĥ)` folds a diagonal-curvature estimate into the EMA as
+    `h ← β₂·h + (1−β₂)·ĥ`; call it every k≈10 steps. The estimator itself
+    (Gauss-Newton-Bartlett `B·(∇L̂⊙∇L̂)` or Hutchinson) needs a second model pass and
+    is caller-supplied, keeping the bare optimizer estimator-agnostic. State in
+    float64 (§V10); fits the existing `Optimizer.Step(GradFn)` interface.
+- **§V16 ladder.** tier-1: `TestSophiaAlgorithmParity` (trajectory vs an independent
+  straight-line recomputation of Algorithm 3 at rtol 1e-12, with a k=2 Hessian
+  refresh), `TestSophiaClipsToLearningRate` (unpopulated Hessian → every coordinate
+  clips to exactly ±lr), `TestSophiaDecoupledWeightDecay` (zero grad → exact
+  `θ·(1−ηλ)`), `ExampleSophia`. tier-2: research-lite CONFIRMED unanimous vs
+  arXiv:2305.14342 Alg.3/Eq.6 + §3.1 defaults, NOT the built-in deep-research (§V16).
+  Paper-canonical defaults (β₁=0.96, β₂=0.99, ε=1e-12, γ=0.05) chosen over the
+  released code's (0.965 / 1e-15 / 0.04) because §V16 makes the paper the final
+  authority.
+- No new op or kernel — a pure optimizer over existing tensor access; `nn.SophiaOption`
+  added to the apicheck example-exempt allowlist (functional-option type, shown via its
+  setters). Full suite green, apicheck/gofmt/vet clean, CGO0 build green.
+
+### T103 — LLM training method: RLOO (REINFORCE Leave-One-Out) (2026-07-07)
+- **Critic-free, clip-free RLHF** (Ahmadian et al. 2024, "Back to Basics",
+  [arXiv:2402.14740](https://arxiv.org/abs/2402.14740), §R83). Adds
+  [nn/rloo.go](nn/rloo.go):
+  - `RLOOAdvantage(rewards []float64) []float64` — the leave-one-out advantage for
+    the `k` sampled completions of one prompt: each sample's baseline is the mean of
+    the OTHER `k−1` rewards, `Âᵢ = rᵢ − (1/(k−1))·Σ_{j≠i}rⱼ = (k/(k−1))·(rᵢ−mean(r))`.
+    No value network (unlike PPO) and no group-std normalization (unlike GRPO's
+    `GroupAdvantage`); `Σ Âᵢ = 0`; `k≤1` → all-zero (no baseline).
+  - `RLOOLoss(ctx, logp, advantage)` — the REINFORCE loss with that baseline,
+    `−mean(Â·logp)`, composed from `OpMul`/`OpMean`/`OpNeg` so autograd
+    differentiates it through `logp` (`∂/∂logpᵢ = −Âᵢ/k`) with no fused kernel. Any
+    KL-to-reference penalty is folded into the rewards before `RLOOAdvantage` (as in
+    the paper), not added to the loss.
+- **§V16 ladder.** tier-1: `TestRLOOAdvantage` (exact LOO baseline + the
+  `(k/(k−1))(r−mean)` identity + `Σ=0` + `k≤1` edge), `TestRLOOLossGradCheck`
+  (finite-diff vs analytic `−Â/k`, §V2), `ExampleRLOOAdvantage`. tier-2: research-lite
+  CONFIRMED unanimous (primary source arXiv:2402.14740 §2.3/§3.2/§5.1 + TRL), NOT the
+  built-in deep-research (§V16).
+- No new op or exported type — composes existing ops; §V20/§V21/§V17 unaffected.
+  Full suite green, apicheck/gofmt/vet clean, CGO0 build green.
+
+### T102 — GPU parity: conv2d backward on Vulkan (2026-07-07)
+- **Completes T101 — 2-D convolution now trains on both GPU backends** (Metal and
+  Vulkan). Adds the conv2d backward (`OpConv2DBackward`) as a Vulkan compute kernel:
+  a GLSL shader [shaders/conv2d_bwd.comp](backend/vulkan/shaders/conv2d_bwd.comp)
+  (one invocation per output-gradient element scattering into the shared
+  `dX`/`dW`/`dBias` with float `atomicAdd` via `GL_EXT_shader_atomic_float`),
+  compiled with `glslc` and embedded; a thin `vk_conv2d_backward_f32` (six storage
+  buffers through the generic `vk_dispatch`, §T95) that returns −7 when the device
+  lacks float atomics so the Go kernel falls back to the reference (§I4).
+- **§V acceptance (on-device via MoltenVK):** V-CROSS parity
+  `vulkan dX/dW/dBias == ref` within an f32 tolerance across basic / padded /
+  strided / 1×1 / non-square shapes; the Metal conv backward stays green
+  (cross-backend parity); the full suite and `CGO_ENABLED=0` are green. §V16: the
+  conv backward is the standard calculus of the paper-verified forward (§T88), so it
+  is accepted by V-CROSS + gradcheck, not a fresh paper study.
+
+### T101 — GPU CV training: conv2d backward on Metal (2026-07-07)
+- **Completes T88 — 2-D convolution now trains on the GPU** (the analog of the
+  attention backward, T86). Introduces a dispatched `OpConv2DBackward`
+  `(X,W,dO) → (dX,dW,dBias)`. Its reference kernel
+  ([backend/ref/conv_backward.go](backend/ref/conv_backward.go)) is the exact former
+  hand-rolled conv2d VJP math; the VJP now calls
+  `Execute(ctx, OpConv2DBackward, …)`, so the conv backward runs on the tape's
+  **active backend** — Metal when training on GPU, the reference otherwise — and
+  drops `dBias` when the forward had no bias.
+- Metal kernel (`mtl_conv2d_backward_f32`, MSL): one thread per output-gradient
+  element scatters into the shared `dX`/`dW`/`dBias` with **float `atomicAdd`**
+  (pre-zeroed). f32-only; other dtypes fall back to the reference (§I4).
+- **§V acceptance:** the §V2 gradcheck suite passes **unchanged** (moving the math
+  into the ref kernel preserves gradients); V-CROSS `metal dX/dW/dBias == ref` within
+  an f32 tolerance across basic / padded / strided / 1×1 / non-square shapes, all
+  **on-device**; `CGO_ENABLED=0` stays green (Metal excluded; conv training runs via
+  the ref kernel). §V16: the conv backward is the standard calculus of the
+  paper-verified forward (§T88), so it is accepted by gradcheck + V-CROSS, not a fresh
+  paper study.
+- NOTE: the Vulkan conv backward is the immediate follow-up (it reuses the
+  `VK_EXT_shader_atomic_float` path enabled in T90); until then Vulkan/cpu conv
+  training falls back to the reference (§I4).
+
+### T100 — Contrastive decoding (2026-07-07)
+- Adds contrastive decoding (Li et al. 2023 / O'Brien & Lewis 2023, §R82), which
+  sharpens a strong **expert** LM by subtracting the failure modes it shares with a
+  weak **amateur**. `nlp.ContrastiveLogits(expert, amateur, α, β)` keeps only the
+  tokens the expert finds plausible — `V_head = {v : p_e(v) ≥ α·max p_e}` (α default
+  0.1), the rest scored −∞ — and scores the survivors `(1+β)·log p_e − β·log p_a`, so
+  β=0 is the expert alone and larger β contrasts harder. `nlp.ContrastiveDecode(expert,
+  amateur *GPT, prompt, maxNew, α, β, sampler)` runs the two models with their own
+  KV-caches and samples the contrastive scores each step.
+- **§V16 acceptance:** tier-1 — the score is checked against an independent
+  recomputation of the plausibility mask and `(1+β)log p_e − β log p_a`, and with β=0
+  `ContrastiveDecode` reproduces the expert's greedy `Generate` token-for-token (the
+  top expert token is always plausible, so the mask never changes the arg-max);
+  tier-2 — a 3-agent research-lite pass (never `/deep-research`) **confirmed
+  unanimously** the plausibility constraint, the log-ratio / (1+β) score, and the
+  α=0.1 default against both papers' equations. Docs + `ExampleContrastiveLogits`.
+  Full suite, apicheck, `CGO_ENABLED=0` green.
+
+### T99 — GaLore optimizer (memory-efficient full-parameter training) (2026-07-07)
+- Adds `nn.GaLore` (Zhao et al. 2024, §R81) — Gradient Low-Rank Projection, which
+  trains **full-rank** weights while keeping the gradient and Adam optimizer state
+  **low-rank**. For a matrix parameter it projects the gradient onto the top-r
+  singular subspace `P` (computed by SVD, refreshed only every `Gap` steps), runs
+  Adam there — so the moment state is `O(r·max(m,n))` instead of Adam's `O(m·n)` (32×
+  smaller for a 4096×4096 layer at rank 128) — then projects the normalized update
+  back and applies `W ← W − lr·scale·P·Adam(PᵀG)`. Non-matrix parameters use plain
+  Adam. Functional-options API (§C12): `NewGaLore(params, lr, WithGaLoreRank/Scale/Gap/Betas)`.
+- The symmetric eigendecomposition PCA used (`classic`'s `jacobiEigen`) moved to a
+  shared `internal/linalg.SymEig` (GaLore builds its SVD from the eigenvectors of
+  `GGᵀ`/`GᵀG`); `classic`'s PCA golden test still passes, confirming the move.
+- **§V16 acceptance:** tier-1 — for a rank-≤r gradient the projection is **lossless**
+  (`P·PᵀG = G` exactly), verified for both the row (m≤n) and column (m>n) directions;
+  a full-rank projection drives a convex quadratic's loss below 10%. tier-2 — a
+  3-agent research-lite pass (never `/deep-research`) **confirmed unanimously** the
+  algorithm against the paper's Algorithms 1–2 and the official `galore_torch`
+  (`galore_projector.py`/`adamw.py`): top-r SVD projection, reduced-shape Adam state,
+  back-projected scaled update, periodic subspace refresh with kept state, full-rank
+  weights. Docs + `ExampleGaLore`. Full suite, apicheck, `CGO_ENABLED=0` green.
+
+### T98 — Adafactor optimizer (sublinear-memory training) (2026-07-07)
+- Adds `nn.Adafactor` (Shazeer & Stern 2018, §R80), the Adam-class optimizer with
+  **sublinear memory** used to train T5-scale models. For a matrix parameter it does
+  not store the full second-moment matrix like Adam; it keeps only its per-row and
+  per-column sums `R`, `C` and reconstructs `V̂[i,j] = R[i]·C[j]/ΣR` — the rank-1
+  approximation — so the optimizer state is **O(rows+cols) instead of O(rows·cols)**
+  (512× smaller for a 1024×1024 layer). Non-matrix parameters keep the full second
+  moment. It also drops the manual learning rate: the step is relative to the
+  parameter scale (`α = max(ε₂, RMS(θ))·ρ_t`, `ρ_t = min(LR, 1/√t)`) with RMS update
+  clipping and the `β̂₂,t = 1−t^(−0.8)` decay; first moment is off by default.
+  Functional-options API (§C12): `NewAdafactor(params, WithAdafactorLR/Beta1/Eps/Clip)`.
+- **§V16 acceptance:** tier-1 — the factored reconstruction is **exact when g² is
+  rank-1** (Lemma 1, internal unit test), the vector path's first step is verified
+  bit-close against a hand computation, and it drives a convex quadratic's loss below
+  10% of the initial; tier-2 — a 3-agent research-lite pass (never `/deep-research`)
+  **confirmed unanimously** every formula and default against the paper's
+  Algorithms 4–6 and HuggingFace's `optimization.py`. Docs + `ExampleAdafactor`.
+  Full suite, apicheck, `CGO_ENABLED=0` green.
+
+### T97 — End-to-end speculative decoding (2026-07-06)
+- Completes speculative decoding (Leviathan et al. 2023 / Chen et al. 2023, §R53):
+  the accept/reject core (`SpeculativeSample`, `SpeculativeRun`) already existed;
+  this adds the GPT model loop `nlp.SpeculativeDecode(target, draft *GPT, prompt,
+  maxNew, lookahead, sampler)`. Each round the small **draft** proposes `lookahead`
+  tokens autoregressively, the large **target** scores them in one forward pass, and
+  the modified rejection rule accepts a verified prefix plus one residual-or-bonus
+  token — so the output is distributed **exactly** as `target.Generate` under the
+  same sampler, for any draft (lossless). Returns `nlp.SpecStats{Proposed, Accepted}`
+  (with `AcceptanceRate`).
+- Refactored the sampler: new `Sampler.Dist(logits)` returns the probability
+  distribution it samples from (temperature/top-k/top-p/min-p; greedy → one-hot),
+  which speculative decoding uses for the target/draft `p`,`q`; `Sample` is now
+  `Dist` + a multinomial draw and is behaviour-identical. `Greedy()` now carries an
+  rng so residual/bonus draws never hit a nil rng (the greedy result stays
+  deterministic).
+- **§V16 acceptance:** tier-1 — with draft==target and greedy sampling,
+  `SpeculativeDecode` produces **token-for-token the same output as greedy
+  `Generate`** (deterministic), and draft==target accepts every proposed token
+  (rate = 1) under both greedy and stochastic sampling. tier-2 — a 3-agent
+  research-lite pass (never `/deep-research`) **confirmed unanimously**, against
+  Leviathan Algorithm 1, Chen Algorithm 2, and HuggingFace's
+  `_speculative_sampling`, that the orchestration matches: one parallel target
+  forward, per-position conditioning `p_i(·|prefix+x_1..x_{i-1})`, `min(1, p/q)`
+  accept, `(p−q)_+` residual with the remaining drafts discarded, and a bonus token
+  only when all are accepted. Docs + `ExampleSpecStats`. Full suite, apicheck,
+  `CGO_ENABLED=0` green.
+- NOTE: the reference implementation recomputes full forward passes (no KV-cache),
+  so it is not yet faster than single-model decode; a cache-based draft loop plus a
+  batched target verify is the perf follow-up.
+
+### Investigation — register-blocked Vulkan GEMM parked (no gain) (§B39) (2026-07-06)
+- Tried a register-blocked GEMM shader (64×64 workgroup tile, a 4×4 micro-tile per
+  thread in registers, 64×8/8×64 shared-memory slabs) to push the Vulkan matmul
+  past the T94 tiled kernel. **It gave no reliable speedup on MoltenVK** (1024³:
+  442 vs 441 GFLOP/s; 512³ within noise), because the kernel is
+  **memory-bandwidth-bound here, not compute-bound** — higher arithmetic intensity
+  doesn't help — on top of the MoltenVK GLSL→MSL translation and the per-call
+  host↔device copy. Correct either way (V-CROSS stayed green, including unaligned
+  shapes), but per the optimization rule (§T loop step 4: no benchmark delta →
+  revert and park) it was **reverted** to the simpler tiled shader.
+- Calibration recorded in §B39: these MoltenVK micro-benchmarks are **thermally
+  noisy** — the same tiled shader measured 327–441 GFLOP/s across runs — so the T94
+  tiling delta sits within that noise; only the T95 pipeline-cache 2× at 512³ is a
+  clearly-real, structural win (it removes a per-call SPIR-V→Metal compile). The
+  next real lever is eliminating the per-call copy (zero-copy / device-resident
+  tensors), not the compute shader.
+
+### T95 — Vulkan pipeline caching + generic dispatch (2026-07-06)
+- Removes the per-call overhead T94 flagged. `vkCreateComputePipelines` (which
+  compiles the SPIR-V to Metal on MoltenVK) was run on **every** `Execute` and
+  dominated small/medium sizes. The per-shader objects (shader module, descriptor
+  layout, pipeline layout, pipeline) are **fixed per shader**, so they are now
+  created once and cached, keyed by the embedded SPIR-V pointer; only the
+  data-dependent buffers, descriptor set, and command buffer stay per-call.
+- Same change consolidates the ~130-lines-per-op Vulkan boilerplate into one generic
+  launcher `vk_dispatch(spv, nbuf, lens, data, upload[], download[], push, groups…)`
+  — `vk_matmul_f32` / `vk_mha_f32` / `vk_mha_backward_f32` / `vk_conv2d_f32` are now
+  thin wrappers that just build the buffer arrays and push-constant block.
+  `vk_bridge.c` shrinks from 810 to 471 lines.
+- **§V acceptance:** the full Vulkan suite stays green on-device — all four ops
+  (matmul incl. unaligned shapes, attention forward+backward incl. the atomic dK/dV
+  accumulation, conv2d) are correct through the shared path; the standard gate
+  (metal on-device, `CGO_ENABLED=0`, apicheck) passes. Benchmark delta (matmul,
+  uncontended): 512³ goes **111 → 224 GFLOP/s (2.0×)** — it was overhead-bound — and
+  1024³ **364 → 441 (+21%)**; the cache is op-agnostic so every Vulkan op benefits.
+  An optimization + refactor, so no §V16.
+
+### T94 — Tiled shared-memory Vulkan GEMM (2026-07-06)
+- First step at closing the naive-kernel gap that T93 surfaced against PyTorch. The
+  Vulkan matmul shader [shaders/matmul.comp](backend/vulkan/shaders/matmul.comp) is
+  rewritten from one-load-per-multiply into a **tiled** kernel: each 16×16 workgroup
+  cooperatively stages 16×16 sub-tiles of A and B into `shared` memory (with a
+  workgroup `barrier()`) and reuses each tile across the whole output tile, cutting
+  global memory loads ~16×. Edge tiles load zeros, so shapes with M/N/K not a
+  multiple of 16 stay correct. Only the shader changed — the dispatch and the C
+  bridge are untouched.
+- **§V acceptance:** V-CROSS parity `vulkan == ref` stays green **including the
+  unaligned cases** (7×13×3, 17×15×33) that exercise the zero-padded edge tiles; the
+  full Vulkan suite and the standard gate (metal on-device, `CGO_ENABLED=0`,
+  apicheck) all pass. Benchmark delta (clean, uncontended): matmul at 1024³ improves
+  **286 → 364 GFLOP/s (+27%)**; at 512 the result is dominated by per-call overhead
+  (pipeline/descriptor/buffer creation + host↔device copy) and is within noise.
+- The real remaining Vulkan lever is that **per-call overhead** — the pipeline,
+  shader module, descriptors, and buffers are recreated on every `Execute`. Caching
+  them across calls (plus buffer reuse and zero-copy UMA) is the next optimization;
+  register-blocked micro-tiles would push the shader further. An optimization task,
+  so no §V16.
+
+### T93 — Python-library comparison benchmarks (2026-07-06)
+- Adds [python_compare.py](internal/benchcompare/python_compare.py), which times the
+  **same ops and shapes** as the Go cross-backend benchmarks (T92) against the common
+  Python stacks — NumPy and PyTorch (CPU + the Apple-GPU MPS backend) — in the same
+  row format, so GoAI's cpu/metal/vulkan numbers can be read directly next to
+  `numpy-cpu` / `torch-cpu` / `torch-mps`. Run with `make bench-python` (uses the
+  project `.venv`; numpy 2.5.1, torch 2.12.1). MPS timings synchronize the device.
+- **Honest result (M2 Pro):** the optimized Python libraries are far ahead — matmul
+  at 1024³ is 2749 GFLOP/s on `torch-cpu` (Accelerate BLAS) vs 73 on GoAI-cpu (~37×)
+  and 4200 on `torch-mps` vs 895 on GoAI-metal (~4.7×); attention forward is 0.45 ms
+  on `torch-mps` (fused flash attention) vs 21.7 ms on GoAI-vulkan (~48×); conv2d is
+  1180 GFLOP/s on `torch-mps` vs 67 on GoAI-metal (~18×). GoAI is *correct* (V-CROSS
+  vs the reference) but its kernels are naive (one thread per output, no tiling /
+  shared memory / BLAS / flash-attention); the gap is exactly the algorithmic
+  optimizations parked as follow-ups (tiled/BLAS GEMM, flash-attention tiling,
+  im2col convolution). A measurement harness, so no §V16.
+
+### T92 — Cross-backend comparison micro-benchmarks (2026-07-06)
+- Adds `internal/benchcompare` — comparison micro-benchmarks that time each
+  accelerated op on **the reference, cpu, Metal, and Vulkan side by side** in one
+  binary (the `darwin && cgo && vulkan` build is the single config where all
+  host-supported backends can be blank-imported together). Ops: matmul (256/512/1024,
+  GFLOP/s), attention forward, attention backward (512×8×64), conv2d (GFLOP/s). Rows
+  read `Benchmark<Op>/<shape>/<backend>`. Backends that do not implement an op fall
+  back to the reference (§I4), so each row is the effective speed a caller selecting
+  that backend gets. Run with `make bench-compare` (sets the MoltenVK ICD + vulkan
+  tag). An untagged `doc.go` keeps the package non-empty on the default build path.
+
+### T91 — GPU parity: 2-D convolution forward on Vulkan (2026-07-06)
+- Brings `OpConv2D` to the Vulkan backend (portable twin of the Metal kernel §T88),
+  so Vulkan now matches Metal's op set (matmul, attention forward+backward, conv2d).
+  A GLSL shader [shaders/conv2d.comp](backend/vulkan/shaders/conv2d.comp) (one
+  invocation per output element, accumulate over `(c,ky,kx)` with zero-padding, bias
+  added last) compiled with `glslc` and embedded; an op-specific `vk_conv2d_f32` in
+  [vk_bridge.c](backend/vulkan/vk_bridge.c) (four storage buffers, 1-D dispatch).
+  The Go kernel serves stride, padding, and an optional per-filter bias; non-f32
+  falls back to the reference (§I4).
+- **§V acceptance (on-device via MoltenVK):** V-CROSS parity `vulkan == ref` within
+  an f32 tolerance across basic / padded / strided / 1×1 / non-square shapes with and
+  without bias; full suite and `CGO_ENABLED=0` green. §V16: textbook cross-correlation
+  with a golden-verified reference (§V1) → accepted by V-CROSS, no fresh paper. (The
+  Vulkan bridge still duplicates boilerplate per op; a generic `vk_dispatch` helper is
+  a parked follow-up.)
+
+### T90 — GPU parity: fused attention backward on Vulkan (attention training) (2026-07-06)
+- **Attention now trains fully on the Vulkan GPU** — the portable twin of the Metal
+  backward (§T86), completing the Vulkan attention pair started by T89 (forward).
+  Adds the SDPA backward (`OpMHABackward`) as a Vulkan compute kernel:
+  [shaders/mha_bwd.comp](backend/vulkan/shaders/mha_bwd.comp) (one invocation per
+  (head, query row), four-pass numerically-stable softmax recompute; `dQ` written
+  privately, the shared `dK`/`dV` accumulated with **float `atomicAdd`** via
+  `GL_EXT_shader_atomic_float`), compiled with `glslc` and embedded.
+- The Vulkan bridge now enables `VK_EXT_shader_atomic_float` at device creation
+  (chaining `VkPhysicalDeviceShaderAtomicFloatFeaturesEXT.shaderBufferFloat32AtomicAdd`
+  into the device `pNext`) only when the device exposes it; a `vk_atomic_float()`
+  query lets the Go kernel fall back to the reference (§I4) on devices without float
+  atomics (as well as for ALiBi / sliding-window / `dk > 128` / KV-cache). The
+  backward runs via the mha VJP's dispatched `OpMHABackward`, so a Vulkan-backed
+  tape trains attention on the GPU.
+- **§V acceptance (on-device via MoltenVK):** the host reports
+  `shaderBufferFloat32AtomicAdd = true`; `make vulkan-test` runs V-CROSS parity
+  `vulkan dQ/dK/dV == ref` within an f32 tolerance across mha / causal / GQA / MQA /
+  attn-scale, plus an end-to-end test where a full attention forward+backward on a
+  **Vulkan-backed tape** matches a reference-backed tape (**training-on-Vulkan
+  proven**); the Metal backward stays green (cross-backend parity); full suite and
+  `CGO_ENABLED=0` green. §V16: the SDPA backward is the calculus of the
+  paper-verified forward (§R/T32), accepted by V-CROSS — no fresh paper needed.
+
+### T89 — GPU parity: fused attention forward on Vulkan (2026-07-06)
+- **"Don't skip Vulkan."** The recent GPU work (attention, conv) had gone to Metal
+  only; this brings the flagship LLM GPU op — fused multi-head attention
+  (`OpMHA`) — to the **Vulkan** backend so it runs on every accelerator this host
+  supports (Metal, Vulkan, and cpu→reference).
+- Portable twin of the Metal kernel (§T85): a GLSL compute shader
+  [shaders/mha.comp](backend/vulkan/shaders/mha.comp) (one invocation per
+  (head, query row), two-pass numerically-stable softmax) compiled to SPIR-V with
+  `glslc` (`make vulkan-spv`), committed and `//go:embed`-ed; an op-specific
+  `vk_mha_f32` in [vk_bridge.c](backend/vulkan/vk_bridge.c) (four storage buffers
+  Q/K/V/O + a 32-byte push-constant block, 1-D dispatch) mirroring the existing
+  `vk_matmul_f32`. The Go kernel serves heads, GQA/MQA (`kv_heads`), causal, and the
+  YaRN attn-scale, and falls back to the reference (§I4) for ALiBi / sliding-window
+  / `dk > 128` / degenerate shapes.
+- **§V acceptance (on-device via MoltenVK):** `make vulkan-test` runs V-CROSS parity
+  `vulkan == ref` within an f32 tolerance across mha / causal / GQA / MQA / KV-cache
+  (`sq < sk`) / attn-scale — all pass; the fallback path matches ref bit-for-bit;
+  the Metal MHA tests stay green (cross-backend parity); full suite and
+  `CGO_ENABLED=0` green. §V16: same SDPA algorithm as §T85 (paper-verified §R/T32),
+  so the new backend is accepted by V-CROSS against the reference truth — no fresh
+  paper or research-lite pass.
+
+### T88 — GPU 2-D convolution: Conv2D forward on Metal (2026-07-06)
+- **Third compute-bound GPU op (after MatMul and attention).** Adds a 2-D
+  convolution forward kernel (`OpConv2D`) to the Metal backend: a custom MSL compute
+  shader (`conv2d_f32`, one thread per output element accumulating over
+  `(c, ky, kx)` with zero-padding, bias added last to mirror the reference's
+  accumulation order) in [metal_bridge.m](backend/metal/metal_bridge.m), wired
+  through [metal.go](backend/metal/metal.go).
+- Serves `X[N,C,H,W] ⋆ W[F,C,KH,KW]` with stride, padding, and an optional
+  per-filter bias (a zero bias buffer is used when the layer has none, so the kernel
+  path is uniform); non-f32 falls back to the reference via the dtype gate (§I4).
+  Forward only — the conv backward stays on the reference for now.
+- Justified per ADR-0008/§C3: convolution is compute-bound
+  (O(N·F·ho·wo·C·KH·KW)). Benchmark (N8, C16, 32×32, F32, k3): metal **954 µs** vs
+  cpu→ref **3373 µs** ≈ **3.5×** (a naive direct convolution; im2col+GEMM is a later
+  optimization).
+- **§V acceptance:** V-CROSS parity `metal == ref` within an f32 tolerance
+  (`rtol = 1e-6·√(C·KH·KW)` + atol) across basic / padded / strided / 1×1 /
+  non-square shapes, with and without bias, multi-channel/filter — all pass
+  **on-device**; `CGO_ENABLED=0` stays green. §V16: it is textbook cross-correlation
+  and the reference kernel is already golden-verified (§V1), so a new *backend* of
+  the same op is accepted by V-CROSS against the reference truth — no fresh paper or
+  research-lite pass needed.
+
+### Fix — Vulkan device kind + decouple device stringers from backend.Name (§B38) (2026-07-06)
+- Prompted by the question "are `tensor.DeviceKind` and `backend.Name` redundant?"
+  (they are not — orthogonal axes, and the mapping is many-to-one: both the `Ref`
+  and `CPU` backends run on `KindCPU` memory). The question surfaced two real
+  inconsistencies, now fixed:
+  - The Vulkan backend's `Device().Kind()` returned `tensor.KindCUDA` (a stale
+    "no KindVulkan yet" placeholder) even though `KindVulkan` exists — so its device
+    reported kind *cuda* but string *vulkan*. Now returns `tensor.KindVulkan`.
+  - The three GPU backends' `device.String()` were tied to the backend-name constant
+    (`string(backend.Metal)`, a T87 workaround). A device should name itself by its
+    own kind, so they now derive from `d.Kind().String()`, fully decoupling device
+    display from backend identity. Values are unchanged (metal→"metal", …).
+- Metal verified on-device (String still "metal"); the §V21 magic-string guard stays
+  green (no literals); full suite + `CGO_ENABLED=0` green.
+
+### T87 — Typed backend names replace magic-string identifiers (2026-07-06)
+- **No magic strings for backend identifiers (ADR-0015).** Backends were referred
+  to by bare string literals — `Get("metal")`, `SetPreference("cuda","cpu")`,
+  `Name() string { return "metal" }` — in ~114 places. Introduces a typed string
+  enum `backend.Name` ([backend/names.go](backend/names.go)) with the constants
+  `CPU`, `Ref`, `Metal`, `CUDA`, `Vulkan`, threaded through the whole selection
+  surface: `Backend.Name() Name`, `Get(Name)`, `SetPreference(...Name)`,
+  `Preference()`/`Available()` return `[]Name`, the registry map and default
+  preference order (`{CUDA, Metal, Vulkan, CPU}`) are keyed by `Name`. Every
+  backend's `Name()` and every call site (incl. tests) now uses a constant.
+- A typo is now a compile error (`backend.Metl` is undefined) and the constants are
+  discoverable/jumpable. The underlying type stays `string`, so a `Name` is still a
+  ready registry key and prints as itself — the migration is non-breaking at the
+  display and map-key layers. The reference-backend constant is `Ref` (the accessor
+  `Reference()` keeps its name).
+- Guard: `TestNoMagicBackendNameStrings` (§V21) — a go/ast pass (string literals
+  only, so comments and import paths are ignored) fails on any backend-name literal
+  outside the two files where such a literal is an enum's own definition
+  (backend/names.go, and tensor/device.go's `DeviceKind` stringer). New invariants
+  §C15, §V21. Full suite + metal on-device + `CGO_ENABLED=0` all green.
+
+### T86 — GPU attention training: fused SDPA backward on Metal (2026-07-06)
+- **Completes T85 — attention now trains on the GPU.** Introduces a dispatched
+  `OpMHABackward` op `(Q,K,V,dO) → (dQ,dK,dV)`. Its reference kernel
+  ([backend/ref/mha_backward.go](backend/ref/mha_backward.go)) is the exact former
+  hand-rolled `mhaVJP` math; `mhaVJP` now simply calls
+  `Execute(ctx, OpMHABackward, …)`, so the attention backward runs on the tape's
+  **active backend** — Metal when training on GPU, the reference otherwise — the
+  same pattern the matmul VJP already uses. Previously the attention backward was
+  pinned to the CPU.
+- Metal kernel (`mtl_mha_backward_f32`, MSL): one thread per (head, query row), a
+  four-pass numerically-stable softmax recompute; each thread writes its own `dQ`
+  slice directly and **atomically accumulates** into the shared `dK`/`dV` (which
+  GQA query-heads and all query rows contribute to). Falls back to the reference
+  (§I4) for ALiBi / sliding-window / `dk > 128` / KV-cache (`sq ≠ sk`) / non-f32, or
+  a GPU without float-atomic support.
+- **§V acceptance:** the §V2 gradcheck suite passes **unchanged** (moving the math
+  into the ref kernel preserves gradients exactly); V-CROSS `metal dQ/dK/dV == ref`
+  within an f32 tolerance across mha / causal / GQA / MQA / attn-scale; an
+  end-to-end test runs a full attention forward+backward on a **metal-backed tape**
+  and matches a reference-backed tape (**training-on-GPU proven**); `CGO_ENABLED=0`
+  stays green. §V16: the SDPA backward is the standard calculus of the already
+  paper-verified forward (§R/T32), so it is accepted by gradcheck + V-CROSS, not a
+  fresh paper study. Benchmark (seq 512, 8 heads, dk 64): metal **174 ms** vs
+  cpu→ref **2609 ms** ≈ **15×**.
+
+### T85 — GPU attention: fused multi-head attention on Metal (2026-07-06)
+- **Second compute-bound GPU op after MatMul (GPU-first priority).** Adds a fused
+  scaled-dot-product-attention forward kernel (`OpMHA`) to the Metal backend: a
+  custom MSL compute shader (`mtl_mha_f32`, one thread per (head, query row), a
+  two-pass numerically-stable softmax mirroring the reference) in
+  [metal_bridge.m](backend/metal/metal_bridge.m), wired through
+  [metal.go](backend/metal/metal.go).
+- Serves the common case — heads, grouped/multi-query attention (`kv_heads`),
+  causal mask, and the YaRN attention-scale — and **honestly falls back to the
+  reference backend** (§I4) for the features the kernel does not implement (ALiBi
+  bias, sliding window), for a per-head dim `dk > 128`, degenerate shapes, or
+  non-f32. Forward only: the backward pass stays on the reference (a follow-up), so
+  this accelerates all of inference and the forward half of training.
+- Justified per ADR-0008/§C3: attention is compute-bound (O(seq²·dk)), unlike the
+  memory-bound elementwise ops that were correctly *not* offloaded. Benchmark
+  (seq 512, 8 heads, dk 64): metal **42.9 ms** vs cpu→ref **773 ms** ≈ **18×**.
+- **§V acceptance:** V-CROSS parity `metal == ref` within an f32 tolerance
+  (`rtol = 1e-6·√(dk+sk)` + atol) across mha / causal / GQA / MQA / KV-cache
+  (`sq < sk`) / attn-scale — all pass **on-device**; the fallback path matches ref
+  bit-for-bit; `CGO_ENABLED=0` stays green (metal is cgo-gated, excluded from the
+  pure-Go build, §I5/§V7). §V16: `OpMHA`'s SDPA formula is already tier-2
+  paper-verified (Vaswani 2017, §R/T32); a new *backend* of the same algorithm is
+  accepted by V-CROSS against the reference truth, not a fresh paper study.
+
+### Docs — every exported struct field documented + gate extended (2026-07-06)
+- "Docs for everything public facing": documented all 80 previously-undocumented
+  exported struct fields across `nn`, `nlp`, `rl`, `backend`, `classic`,
+  `format/gguf` and `autograd` (optimizer hyperparameters, model configs, sampler
+  knobs, RL agent state, …) with one-line dual-audience comments (§C13).
+- Extended the mechanical gate (`internal/apicheck`, §V19): it now also fails on
+  any exported **struct field** lacking a doc/inline comment — public-facing API is
+  no longer just top-level symbols. Updated §C13 and §V19 accordingly. All public
+  packages already carry a package doc (verified: 0 missing).
+
+### T84 — Typed op parameters replace the `map[string]any` attrs bag (2026-07-06)
+- **Idiomatic-Go refactor of the whole op-parameter surface (ADR-0014).** The
+  former `backend.Attrs = map[string]any`, read with stringly-typed accessors
+  (`attrs.Float("attn_scale", 1)`) and written as `Attrs{"heads": 2}`, is now a
+  **sealed interface** `type Attrs interface{ opAttrs() }` with **one typed struct
+  per op** in [backend/attrs.go](backend/attrs.go): `AttnAttrs` (shared by OpMHA and
+  OpFlashAttn), `MLAAttrs`, `ConvAttrs`, `PoolAttrs`, `ReduceAttrs`, `ArgMaxAttrs`,
+  `NormAttrs` (LayerNorm+RMSNorm), `RoPEAttrs`, `AXPYAttrs`, `CrossEntropyAttrs`,
+  `DistillAttrs`, `DPOAttrs`, `IPOAttrs`, `KTOAttrs`, `PPOClipAttrs`, `GRPOAttrs`,
+  `SimPOAttrs`, `ORPOAttrs`, `MoEBalanceAttrs`.
+- Construction is now a compile-checked struct literal
+  (`backend.AttnAttrs{Heads: 2, Causal: true}`); a wrong field name or type is a
+  **compile error**, not a silently-defaulted typo. Each struct's fields are the
+  op's self-documenting, dual-audience godoc contract (§C13).
+- Defaults are single-sourced in each struct's `WithDefaults()`, called by both the
+  forward kernel and the backward VJP, closing a latent divergence class (they can
+  no longer disagree). Reads use the comma-ok assertion, so a nil or mismatched
+  `Attrs` degrades to the zero value exactly as the old accessor degraded to its
+  default — behaviour is byte-identical (full parity §V1 and gradcheck §V2 suites
+  pass unchanged).
+- The `Execute` / `Kernel` / `Recorder.Record` / `VJP` signatures are unchanged
+  (the parameter is still `Attrs`), so dispatch, taping, and reference-fallback stay
+  op-agnostic. `RoPEFreqs` now takes a `RoPEAttrs` directly.
+- Tooling: apicheck exempts the `backend.*Attrs` op-parameter structs from the
+  per-type Example rule by a category rule (same category as the old
+  `backend.Attrs`); a new guard test `TestNoStringKeyedAttrs` (§V20) fails if the
+  old map/accessor pattern is ever reintroduced. New invariants §I6, §C14, §V20.
+- Scope: every kernel (`backend/ref`, `backend/cpu`), every VJP (`autograd`), every
+  call site (`nn`, `nlp`, `ops`, `rl`), and every test converted. Full suite green,
+  `gofmt`/`vet` clean, `CGO_ENABLED=0` build green.
+
+### T83 — NF4 double-quantization (QLoRA §3) (2026-07-06)
+- Completes QLoRA's memory story (the T75 follow-up): the per-64-block NF4 absmax
+  scales, previously stored as fp64, are compressed to ~8 bits each. New
+  `nn.QuantizeScalesNF4(absmax, blockSize2)` centers the scales by their mean
+  (`offset = mean(absmax)`), then 8-bit block-quantizes the centered values with a
+  second block size (default 256): a shared `absmax2` per block plus a signed
+  `int8` code per scale. `nn.DequantizeScalesNF4` reconstructs
+  `absmax_hat = code/127·absmax2 + offset`. Per the paper this saves ~0.37
+  bits/parameter on top of NF4.
+- **§V15 / §V16:** round-trip stays within the 8-bit bound (`|err| ≤ absmax2/127`)
+  and is stable under a second pass (near-, not exactly, idempotent because the mean
+  re-centers); `FuzzNF4DoubleQuant` ran ~1.7M executions with no panic or bound
+  violation; an end-to-end test confirms double-quantizing the scales adds only a
+  small extra error over plain NF4 while shrinking scale storage ~8×. tier-2 — the
+  algorithm (mean offset, 256-block 8-bit quant, dequant order) is **confirmed
+  unanimously by a 3-agent research-lite pass** against the paper §3 and bitsandbytes
+  `functional.py` (§R79).
+- NOTE: bitsandbytes uses a nonlinear `create_dynamic_map` 8-bit code; this uses a
+  symmetric signed-linear map (an equivalent independent scheme — the scales are
+  internal metadata, not an interchange format), so it is not bit-compatible with
+  bitsandbytes. Documented in the godoc.
+- Docs: dual-audience godoc plus a runnable `ExampleQuantizeScalesNF4`.
+
+### T82 — YaRN attention temperature wired into MHA (2026-07-06)
+- Completes YaRN (T66): the attention-temperature half of the algorithm is now
+  usable through `OpMHA`. The kernel and its VJP gain an `attn_scale` attribute
+  (default 1) folded into the `1/√dk` scale, so the pre-softmax scores are
+  multiplied by it. Callers pass `backend.YaRNAttnScale(s) = 0.1·ln(s)+1` (already
+  present) to keep the softmax appropriately sharp on a context extended by factor
+  `s`. `attn_scale=1` is byte-for-byte backward compatible — the existing MHA, GPT
+  and FlashAttention tests stay green.
+- **§V16:** tier-1 — `OpMHA` with `attn_scale=s` matches an INDEPENDENT scaled-score
+  attention at f64 1e-12 (scaled and unscaled, causal and non-causal), and a
+  finite-difference gradient check through Q, K, V passes at rel 1e-4 (§V2, the VJP
+  sharing the scale). tier-2 — the `m_scale = 0.1·ln(s)+1` formula was already
+  confirmed in §R66.
+- Docs: godoc on the new attr plus a runnable `Example_yarnAttentionTemperature`
+  showing the full YaRN path (RoPE frequency rescaling + the attention temperature).
+  YaRN is now end-to-end usable.
+
+### T81 — vendor the full Claude Code harness in-repo (2026-07-06)
+- User-requested portability: the **entire** build-loop harness now lives in the repo
+  so a clone reproduces the whole workflow on any host (joining the already-vendored
+  `.claude/workflows/research-lite.js` and root `FORMAT.md`/`LOOP.md`).
+- `.claude/skills/` now holds the full workflow-skill suite — `spec`, `build`,
+  `research`, `review`, `grill`, `deepen`, `check`, `backprop`, `find-skills`, and
+  `caveman` — so `/spec`, `/build`, `/research`, etc. work from a fresh checkout. (The
+  `loop` skill is a built-in Claude Code skill; only its per-iteration `LOOP.md`
+  needs to travel, and that lives at the repo root.)
+- `.claude/skills/caveman/SKILL.md` — the SPEC.md encoding skill, slimmed from 118 to
+  33 lines via progressive disclosure: it no longer duplicates `FORMAT.md`, keeping
+  only the non-derivable guardrails and deferring the full grammar/symbols/shapes to
+  `FORMAT.md` (the single source, loaded once by `/spec`).
+- `.claude/README.md` — a map of the in-repo harness plus the evidence-based
+  token-optimization rationale: caveman level `lite` (the per-turn inject is the real
+  cost; `lite` ≈ `full` quality, JetBrains sign-test p=0.82), and the actually-big
+  levers (prompt caching, `/compact` + context editing, model routing, delegating
+  verbose tool output to subagents). It records the honest ~8.5% output-only ceiling
+  of the caveman style on agentic tasks (JetBrains SkillsBench) rather than the
+  advertised 65–75%.
+- Host-specific `cavemem` hooks (absolute node path) are documented but intentionally
+  NOT committed, since they would break on a different OS. The new files are
+  trackable (not gitignored).
+
+### T80 — Muon optimizer (Newton-Schulz orthogonalized momentum) (2026-07-06)
+- Muon (Jordan et al. 2024) — a recent optimizer for 2-D weight matrices that
+  orthogonalizes the momentum update via a few Newton-Schulz iterations, so every
+  direction receives an equal-sized step (≈ U·Vᵀ of the momentum's SVD) instead of
+  the dominant singular directions dominating. New `nn.Muon` + `NewMuon(params,
+  lr, opts...)` with functional options (§C12) `WithMuonMomentum` (0.95),
+  `WithMuonWeightDecay`, `WithMuonNesterov` (true) and `WithMuonNSSteps` (5).
+- Each `Step` does the lerp momentum (`buf = β·buf + (1−β)·g`), the Nesterov
+  direction, the quintic Newton-Schulz orthogonalization (coefficients
+  (3.4445, −4.7750, 2.0315), transpose if rows>cols, normalize by the Frobenius
+  norm), scales by `√max(1, R/C)`, and applies decoupled weight decay. Only 2-D
+  parameters are accepted (embeddings/biases/norms/head use Adam, the standard
+  recipe).
+- **§V16:** the full multi-step trajectory reproduces an INDEPENDENT f64 numpy
+  reference (transcribed from the current-master `KellerJordan/Muon` `muon.py`) at
+  rtol 1e-12 (`build_muon`), and the 2-D-only guard is checked. tier-2 — the lerp
+  momentum, the Newton-Schulz coefficients, and the `√max(1, R/C)` scale (not the
+  nanoGPT `0.2·√max(rows,cols)` variant) are **confirmed unanimously by a 3-agent
+  research-lite pass** against the reference implementation (§R78). NOTE: the
+  PyTorch reference casts to bf16 inside Newton-Schulz, so our f64 implementation is
+  slightly more accurate — matched to an f64 numpy reference, not bit-identical to
+  the bf16 PyTorch one (documented).
+- Docs: dual-audience godoc plus a runnable `ExampleMuon` (feeding the identity
+  gradient leaves an orthogonal update).
+
+### T79 — full Mamba block (Gu & Dao 2023) (2026-07-06)
+- Completes the Mamba architecture by wrapping the T78 selective scan in the full
+  block. Two new primitives: `OpConv1D` — a causal depthwise 1-D convolution
+  (each channel has its own left-padded length-K filter, `out[t,c] = Σ_k
+  w[c,k]·x[t−(K−1)+k,c] + b[c]`) with a scatter VJP; and `OpSoftplus` — a stable
+  `log(1+eˣ)` with a sigmoid VJP (used to keep Δ positive).
+- New `nn.MambaBlock`: `in_proj → split(x,z) → SiLU(causal_conv1d(x)) → Δ =
+  softplus(dt_proj(dt_low(x))), B,C = proj(x) → A = −exp(A_log) → selective_scan →
+  y ⊙ SiLU(z) → out_proj`. It is assembled entirely from differentiable ops
+  (`OpConv1D`, `OpSoftplus`, `OpSSM`, matmul, SiLU, mul), so the whole block — a
+  linear-time, attention-free sequence mixer — trains end to end.
+- **§V16 both tiers:** tier-1 — `OpConv1D` matches an INDEPENDENT numpy reference at
+  f64 1e-12 (`build_conv1d`); finite-difference gradient checks pass for the conv
+  (x/w/bias), softplus (value + gradient), and the full `MambaBlock` end to end
+  (conv, `A_log`, input/output/`dt_proj` projections) at rel 1e-4 (§V2). tier-2 —
+  the block's exact order, per-projection bias, and the depthwise causal conv are
+  **confirmed unanimously by a 4-agent research-lite pass** against the paper §3.4 /
+  Fig. 3 and the official `mamba_simple.py` (§R77).
+- Docs: dual-audience godoc on `MambaBlock`/`OpConv1D`/`OpSoftplus` plus a runnable
+  `ExampleMambaBlock`. (This from-scratch block uses biased projections where mamba
+  is bias-free — a harmless extra parameter, not a bit-exact port.)
+
+### T78 — Mamba selective scan (S6 SSM) (2026-07-06)
+- Mamba's selective scan (Gu & Dao 2023) — the flagship *non-attention* sequence
+  model, a linear-time O(L·D·N) input-dependent state-space recurrence. New fused
+  `OpSSM` takes `u[L,D]`, the discretization step `delta[L,D]`, the state matrix
+  `A[D,N]`, the input/output matrices `B[L,N]`/`C[L,N]` (all input-dependent) and an
+  optional skip `D_skip[D]`, and carries a per-channel latent state forward in
+  time: `h[t] = exp(Δ·A)·h[t-1] + Δ·B·u`, `y[t] = Σ_n C·h + D_skip·u`, matching the
+  official `selective_scan_ref`.
+- Its autograd VJP is the exact **reverse-time scan** (`dh[t] = Cᵀ·dy[t] +
+  Ā[t+1]·dh[t+1]`, with the dA/dB/dC/dΔ/du/dD_skip chains), so it passes a
+  finite-difference gradient check.
+- **§V16 both tiers:** tier-1 — the forward matches an INDEPENDENT numpy reference
+  at f64 1e-12 (`build_ssm`), the optional skip term decomposes exactly, and a
+  gradient check over all six inputs passes at rel 1e-4 (§V2). tier-2 — the ZOH
+  discretization, the simplified `B̄ = Δ·B`, the recurrence, and the reverse-scan
+  backward are **confirmed unanimously by a 4-agent research-lite pass** against the
+  paper §3.2 Alg. 2 and `state-spaces/mamba`'s `selective_scan_ref` (§R76).
+- Docs: dual-audience godoc plus a runnable `Example_selectiveScan` showing the
+  degenerate Ā=1 case as a running sum. NOTE: the full Mamba block (causal conv1d,
+  input/output projections, SiLU gate) around the scan is a documented follow-up.
+
+### T77 — doc gate strengthened to per-type examples (§C13/§V19) (2026-07-06)
+- User-requested follow-up: even simple methods should have dual-audience
+  documentation with examples where possible. The `apicheck` gate now additionally
+  **fails if an exported user-facing type is never shown in a runnable Example**.
+  Coverage is credited generously (so existing examples count): a type is covered
+  if its name, its `New<Type>` constructor, or an `ExampleType`/`ExampleType_*`
+  function appears in any Example body (inspected via `go/ast`).
+- Added seven examples for previously un-exampled concrete types: `nn.LayerNorm`,
+  `nn.RMSNorm`, `nn.SwiGLU`, `nn.SGD`, `nn.LoRALinear`, `nn.QLoRALinear`, and
+  `classic.SoftmaxRegression` — each with a dual-audience doc.
+- The "falls möglich" escape hatch is a **justified** `typeExampleExempt` allowlist:
+  interfaces (`nn.Layer`, `nn.Optimizer`, `tensor.Allocator`, …), functional-option
+  and callback function types (`PrefOption`, `SamplerOption`, `NextLogits`, …),
+  enums (`backend.Op`, `gguf.QuantType`), config structs, and fixture-heavy models
+  that cannot be exampled without trained weights or a vocab (`nlp.GPT`,
+  `nlp.Tokenizer`, `nlp.KVCache`, `nlp.MHA`).
+- §C13 now states docs are dual-audience even for simple methods; §V19 documents
+  the per-type example rule and its allowlist. Full suite 22 packages green.
+
+### T76 — public-API documentation gate (§C13, §V19) (2026-07-06)
+- User-requested gate: no code can be committed/pushed with undocumented public
+  API. New `internal/apicheck` parses every public package with `go/ast` (it reads
+  source rather than importing, so the build-tagged cgo backends are checked too)
+  and **fails** if any exported symbol (func, type, method, const, var) lacks a
+  godoc comment, or if any user-facing package ships no runnable `Example`. It runs
+  as a normal test (part of `go test ./...`), via `make apicheck`, and is wired into
+  `make all` and `make ci`.
+- Backend implementation subpackages (`backend/ref`, `cpu`, `cuda`, `metal`,
+  `vulkan`, `npu`) and `internal/*` are exempt — they are activated by blank import
+  and expose no user-called surface.
+- Building the checker surfaced and fixed **49 genuinely undocumented exported
+  symbols**: the `backend.Op` elementwise/reduce/BLAS enum values, the grouped
+  one-liner wrappers in `ops` (Add/Sub/.../SiLU), `nn` activation constructors and
+  `Dropout.Eval`, `rl.Chain` methods, `format/gguf` `Q4_0`/`Q8_0`, and the `tensor`
+  device kinds and `Pool` methods. (A section comment before a grouped const/func
+  attaches as doc to only the first entry, so each grouped one-liner now carries its
+  own comment.)
+- Full suite now 22 packages green; the gate itself passes, hardening the §V17
+  docs-and-examples DoD from convention into a mechanical commit/push blocker.
+
+### T75 — NF4 quantization + QLoRA (2026-07-06)
+- NF4 (4-bit NormalFloat) quantization from QLoRA (Dettmers et al. 2024) — a new
+  training-methodology entry (the R68 runner-up), enabling memory-efficient
+  fine-tuning by storing the frozen base weight in 4 bits.
+- `nn.QuantizeNF4` / `nn.DequantizeNF4` implement bitsandbytes-exact block-wise NF4:
+  each 64-value block is scaled by its absmax into [-1,1] and stored as the 4-bit
+  index (packed two per byte) of the nearest entry in the 16-value NF4 codebook
+  (the quantiles of a standard normal, information-theoretically optimal for
+  zero-centered weights, with 0.0 exactly representable). Dequant is
+  `w_hat = absmax · code[index]`. `nn.NF4Code` exposes the codebook.
+- `nn.QLoRALinear` (`NewQLoRA`) wraps an NF4-quantized frozen base weight with a
+  trainable LoRA adapter: the base is dequantized on the fly and only A, B train,
+  so a large layer fine-tunes in a fraction of the memory. Double-quantization of
+  the scales is a documented follow-up.
+- **§V15 / §V16:** round-trip and fuzz tests — dequant∘quant snaps each value to
+  `absmax·nearest-code` within the half-gap bound and is idempotent (re-quantizing
+  the reconstruction reproduces the exact packed indices and scales);
+  `FuzzNF4RoundTrip` ran ~1.2M executions with no panic or bound violation. The
+  codebook is asserted equal to the bitsandbytes reference, and QLoRA with B=0
+  reproduces the NF4 base matmul. tier-2 — the codebook, block-wise absmax
+  quantization, and dequant are **confirmed unanimously by a 3-agent research-lite
+  pass** against the paper §3 and bitsandbytes `functional.py` (§R75).
+- Docs: dual-audience godoc plus a runnable `ExampleQuantizeNF4`.
+
+### T73 — MLA (Multi-head Latent Attention) (2026-07-06)
+- MLA (DeepSeek-V2, Liu et al. 2024) — the last of the frontier queue. It shrinks
+  the KV cache by compressing keys/values through a shared low-rank latent instead
+  of caching full per-head K/V. New `nn.MLA` layer with the eight projections
+  (KV down/up `W_DKV`/`W_UK`/`W_UV`, shared decoupled-RoPE key `W_KR`, query
+  down/content-up/RoPE-up `W_DQ`/`W_UQ`/`W_QR`, output `W_O`): only the latent
+  `c^KV` (dim dc) plus the shared decoupled key `k^R` (dim dR) would be cached, vs
+  MHA's heads·2·dh.
+- New fused `OpMLA` computes the combined content + decoupled-RoPE score attention
+  `score = (q^C·k^C + q^R·k^R)/√(dh+dR)`. It applies the decoupled RoPE INTERNALLY
+  — per head for the query, shared single-head for the key — because the tape has
+  no slice op to RoPE each head separately. Its VJP is the standard softmax
+  backward split across the two score components, with the RoPE-part gradients
+  pulled back through the (orthogonal) rotation to the pre-RoPE inputs (the shared
+  `k^R` accumulates gradient over all heads). This is the naive un-absorbed forward,
+  numerically identical to the inference weight-absorption trick (a memory
+  optimization left as a follow-up).
+- **§V16 both tiers:** tier-1 — the fused `OpMLA` and the full `nn.MLA` layer match
+  an INDEPENDENT numpy reference at f64 1e-12 (`build_mla`, causal), a
+  finite-difference gradient check through all five op inputs (including the
+  internal RoPE) passes at rel 1e-4 (§V2), and the KV-cache reduction is asserted.
+  tier-2 — the full formulation (low-rank down/up projections, the shared decoupled
+  RoPE and why it cannot be absorbed, the combined score, and the dims) is
+  **confirmed unanimously by a 4-agent research-lite pass** against the paper §2.1
+  and HuggingFace `modeling_deepseek.py` (§R74).
+- Docs: dual-audience godoc plus a runnable `ExampleMLA`.
+
+### T72 — KV-cache eviction (StreamingLLM + H2O) (2026-07-06)
+- Two bounded-cache policies for long-context inference over the existing T35
+  KVCache, so decoding stays within a fixed KV budget instead of growing without
+  limit.
+- **StreamingLLM** (Xiao et al. 2023): `nlp.StreamingKeep(n, sink, recent)` keeps
+  the first `sink` "attention sink" tokens (kept permanently — softmax dumps excess
+  attention onto the always-visible initial tokens) plus the most recent `recent`
+  tokens, evicting the middle. `(*KVCache).EvictStreaming(sink, recent)` applies it
+  uniformly across all layers in place.
+- **H2O** (Zhang et al. 2023): `nlp.H2OScores(attn)` computes each key's
+  accumulated attention (the attention-matrix column sum `Σ_i A[i,j]`), and
+  `nlp.H2OKeep(scores, recent, budget)` greedily keeps the recent window plus the
+  top heavy-hitters within budget, evicting the lowest-scoring non-recent tokens.
+- Plus `nlp.GatherRows` to apply an index list to a cached K/V tensor.
+- **§V16 / §V15:** verified by property/round-trip tests — StreamingKeep retains
+  exactly the first-S + last-R rows at size S+R; H2OScores equals the manual column
+  sum; H2OKeep respects the budget, always retains the recent window, and never
+  evicts a token that outscores a kept heavy-hitter; GatherRows is byte-exact; and
+  EvictStreaming bounds the cache across layers. tier-2 — both policies (sink+recent
+  window, position-within-cache re-indexing, accumulated-attention scoring, greedy
+  keep/evict) are **confirmed unanimously by a 3-agent research-lite pass** against
+  the papers and the mit-han-lab/streaming-llm and FMInference/H2O references
+  (§R73).
+- Docs: dual-audience godoc plus a runnable `ExampleStreamingKeep`. NOTE:
+  position-within-cache re-indexing (model integration) and per-layer H2O scoring
+  are documented follow-ups.
+
+### T71 — FlashAttention-2 tiling (online-softmax attention) (2026-07-06)
+- FlashAttention-2 (Dao 2023) — computes exact scaled-dot-product attention with
+  an online softmax that streams over key/value blocks and never materializes a
+  full [seq,seq] score row (O(block) memory per row). New fused `OpFlashAttn`
+  (Q,K,V + `heads`/`causal`/`block` attrs): per query row it maintains a running
+  max `m`, normalizer `ℓ` and output accumulator `O`, rescaling by
+  `exp(m_old−m_new)` on each block and dividing by `ℓ` exactly ONCE at the end
+  (FA-2's tweak over FA-1). Causal masking skips key blocks wholly past the query
+  row and masks within the diagonal block.
+- The result is **exact** — equal to the naive softmax attention (`OpMHA`) up to
+  floating-point reassociation, not an approximation — so the backward is the
+  standard softmax-attention backward and `OpFlashAttn` simply reuses `mhaVJP`
+  (no duplicate gradient code). Scope is the core (multi-head + causal); ALiBi,
+  sliding-window, GQA and the KV-cache offset compose per-head identically and are
+  a documented follow-up.
+- **§V16 both tiers:** tier-1 — the flash output matches `OpMHA` at f64 1e-12 for
+  every seq / head-count / causal setting AND across key-block sizes {1,2,3,seq}
+  (so the tiling is genuinely exercised and block-size-invariant), and a
+  finite-difference gradient check through Q, K, V passes at rel 1e-4 (§V2).
+  tier-2 — the forward recurrence (Alg. 1), the single final normalization, the
+  causal block-skipping, and the backward (Alg. 2) are **confirmed unanimously by a
+  3-agent research-lite pass** against the paper and the Triton fused-attention
+  reference (§R72).
+- Docs: dual-audience godoc plus a runnable `Example_flashAttention` showing the
+  flash output equals the naive attention.
+
+### T70 — SimPO + ORPO (reference-free preference losses) (2026-07-06)
+- Two reference-free DPO alternatives, both operating on length-averaged
+  chosen/rejected log-probabilities with no reference model — added as fused ops
+  plus `nn` wrappers with functional options (§C12).
+- **SimPO** (Meng et al. 2024): `loss = mean −log σ(β·(avgChosen − avgRejected) − γ)`.
+  The length-normalized reward removes DPO's length bias and the target margin γ
+  is subtracted inside the sigmoid. `nn.SimPO(ctx, avgChosen, avgRejected, ...)`
+  with `Beta` (default 2) and the new `Gamma` (default 1) options; fused `OpSimPO`
+  + VJP.
+- **ORPO** (Hong et al. 2024): a monolithic SFT + odds-ratio objective (no separate
+  SFT phase), `loss = mean(−avgChosen + λ·(−log σ(logOR)))` with
+  `logOR = (avgChosen − avgRejected) − (log(1−Pc) − log(1−Pr))`, `P = exp(avg)`.
+  `nn.ORPO(ctx, avgChosen, avgRejected, ...)` with the new `Lambda` option
+  (default 0.1); fused `OpORPO` + VJP.
+- **§V16 both tiers:** tier-1 — both losses match an INDEPENDENT numpy reference at
+  f64 1e-12 (`build_simpo_orpo`) and a finite-difference gradient check passes at
+  rel 1e-4 for both losses w.r.t. both inputs (§V2). tier-2 — the exact formulas
+  (length-averaged reward, γ placement, the odds-ratio `log1p(−exp(avg))` form, the
+  SFT term, and the λ/β constants) are **confirmed unanimously by a 4-agent
+  research-lite pass** against the papers, princeton-nlp/SimPO, and TRL's
+  cpo/orpo trainers (§R71).
+- Docs: dual-audience godoc on `SimPO`/`ORPO` plus a runnable `ExampleSimPO`.
+
+### T69 — DoRA (weight-decomposed LoRA) (2026-07-06)
+- DoRA (Liu et al. 2024, ICML'24 Oral) — refines LoRA by splitting each output
+  neuron's weight into a trainable **magnitude** and a low-rank **direction**,
+  closing much of LoRA's gap to full fine-tuning at the same rank. New
+  `nn.DoRALinear` over a frozen base weight: `W' = m ⊙ V/‖V‖_col`, with
+  `V = W + (α/r)·A·B`, per-output-column norm, and magnitude `m` initialized to
+  `‖W‖_col` so the adapter starts as an exact no-op (B=0 ⇒ W'=W). Only A, B and m
+  train.
+- New fused `OpDoRAWeight(V, m)` kernel + autograd VJP computing the column-
+  normalized rescale. The VJP is the **exact through-norm gradient**
+  (`dV = (m/n)·(g − V·s/n²)`, `dm = s/n`), so it passes a finite-difference
+  gradient check (§V2). NOTE: the reference PEFT/paper backward *detaches* the
+  column norm (§4.3, ~24% memory saving, a deliberate approximation); we compute
+  the exact gradient — the forward is identical, and the backward divergence is
+  documented (§R70).
+- **§V16 both tiers:** tier-1 — `OpDoRAWeight` and the full `DoRALinear` forward
+  match an INDEPENDENT numpy reference at f64 1e-12 (`build_dora`), the initialized
+  layer reproduces `x·W` bit-for-bit, and the gradient check passes at rel 1e-4.
+  tier-2 — the decomposition (eq 5), the per-output-column norm axis, the magnitude
+  init, and the detach detail are **confirmed unanimously by a 4-agent research-lite
+  pass** against the paper, PEFT `dora.py`, and NVlabs/DoRA (§R70).
+- Docs: dual-audience godoc plus a runnable `ExampleDoRALinear`.
+
+### T68 — full sparse MoE dispatch (Mixtral) (2026-07-06)
+- Completes the Mixture-of-Experts stack: T61 gave the router gating + load-balance
+  loss; T68 adds the actual expert dispatch and combine. New `nn.SparseMoE` layer
+  (a linear router + N `SwiGLU` experts, top-k routing) turns a `[T,dim]` batch
+  into the mixed expert output `y = Σ_{i∈topk} g_i·E_i(x)`, and also returns the
+  raw gate logits so the caller can add `MoEBalanceLoss`.
+- New fused `OpMoECombine` kernel + autograd VJP: given the masked softmax gates
+  `w[T,E]` and the E expert outputs, it renormalizes the surviving gates over the
+  selected experts and mixes them (`out = Σ_i (w_i/Σw)·e_i` = Softmax(TopK)
+  combine). Gradients flow into the router (through the surviving gate weights,
+  via the renormalization derivative `dw_j = (1/denom)·Σ_d g_d·(e_j−out)`) and into
+  every selected expert; the discrete top-k choice is detached through a constant
+  mask. Computing all experts densely and mixing with zeroed gates is numerically
+  identical to sparse dispatch — skipping the non-selected experts is a compute
+  follow-up, not a numeric change.
+- **§V16 both tiers:** tier-1 — `OpMoECombine` matches an INDEPENDENT numpy
+  reference at f64 1e-12 (`build_moecombine`), a full finite-difference gradient
+  check over the gate weights and every expert output passes at rel 1e-4, and an
+  end-to-end `SparseMoE` gradient check (router + expert weights) passes (§V2).
+  tier-2 — the routing/combine formula (`y = Σ_{i∈topk} g_i·E_i(x)`, gates
+  renormalized over the top-k = Softmax(TopK)) is the one already **confirmed vs
+  Mixtral §2.1 + Switch** in §R61.
+- Docs: dual-audience godoc on `SparseMoE`/`OpMoECombine` plus a runnable
+  `ExampleSparseMoE`.
+
+### T67 — GRPO (Group Relative Policy Optimization) (2026-07-06)
+- GRPO (Shao et al. 2024, DeepSeekMath; the critic-free RL method behind
+  DeepSeek-R1) — the first item off the frontier queue (§R68). It removes PPO's
+  value network: instead of a learned baseline it scores several sampled outputs
+  per prompt and turns the rewards into a group-relative advantage.
+- New `nn.GroupAdvantage(rewards)` = (rᵢ − mean) / (std + 1e-4) with **population**
+  std (matching the verl reference), centered, all-equal-rewards → zero signal.
+- New fused `OpGRPO` kernel + autograd VJP + `nn.GRPOLoss(ctx, logpNew, logpOld,
+  logpRef, advantage, opts...)` with functional options `WithClipEpsilon` (ε=0.2)
+  and `WithKLBeta` (β=0.04) (§C12). The loss is the PPO clipped surrogate plus an
+  explicit per-token KL-to-reference penalty using Schulman's unbiased **k3**
+  estimator `kl = exp(Δ) − Δ − 1`, `Δ = logπ_ref − logπθ` — subtracted inside the
+  objective (not folded into the reward). Gradients flow only into the policy
+  log-probs (`∂kl/∂logπθ = 1 − exp(Δ)`); the rollout, reference and advantage
+  tensors are frozen.
+- **§V16 both tiers:** tier-1 — the fused loss and the group advantage match an
+  INDEPENDENT numpy reference at f64 1e-12 (`build_grpo`), the advantages are
+  centered, and a finite-difference **gradient check** passes at rel 1e-4 (§V2).
+  tier-2 — the full objective (population-std advantage, PPO-clip surrogate, k3 KL
+  penalty polarity and constants) **confirmed unanimously by a 4-agent
+  research-lite pass** against the paper §4.1 eqs 3-4, the TRL `GRPOTrainer`, and
+  the verl reference (§R69).
+- Docs: dual-audience godoc plus a runnable `ExampleGroupAdvantage`.
+
+### Research + benchmarking scouting pass (2026-07-06)
+- **Two `research-lite` passes** (both CONFIRMED, 3-agent unanimous, arXiv ids
+  verified): (a) 2024-25 LLM frontier techniques ranked by value×feasibility for
+  this codebase; (b) pure-Go performance ceiling and the BLIS/Goto GEMM
+  optimization ladder. Recorded as §R68 and §R67.
+- **New cross-language benchmark** — `backend/cpu/gflops_bench_test.go` (Go,
+  reports a `GFLOP/s` metric) and `testdata/bench_torch.py` (PyTorch, same
+  sizes/dtypes), so the optimized `cpu` GEMM is measured head-to-head against the
+  Python parity target, not just against GoAI's own reference. Measured (M2 Pro):
+  GoAI f64-1024 = 69 GFLOP/s vs torch 684 (~10%); f32 ≈ f64 (~70) vs torch 2735
+  (~2.6%) — surfacing that the kernel does not yet exploit f32's 2× SIMD lanes (the
+  top portable optimization). Results + roadmap in
+  `docs/research/02-frontier-and-perf-2026-07-06.md` and a new "GoAI vs PyTorch"
+  section in `docs/benchmarking.md`.
+- **§T queue populated** with the ranked candidates (status `.`, not yet built):
+  T67 GRPO, T68 full sparse MoE dispatch, T69 DoRA, T70 SimPO+ORPO, T71
+  FlashAttention-2 tiling, T72 KV-cache eviction, T73 MLA, and T74 the GEMM
+  optimization ladder (BLIS blocking + f32 SIMD microkernel, cgo-gate per §V-CGO).
+  No code beyond the benchmark harness changed; the techniques are proposals for
+  future iterations. (This iteration was a `/research` scouting pass at the user's
+  request, so §V16 tier-2 applies when each candidate is *implemented*, not here.)
+
+### T66 — YaRN RoPE (NTK-by-parts context extension) (2026-07-06)
+- YaRN (Peng et al. 2023, arXiv:2309.00071) — a RoPE context-window extension that
+  improves on the linear Position Interpolation of T64. Instead of scaling every
+  position uniformly, it reshapes the rotary frequencies per dimension: the
+  high-frequency pairs that encode local position are left untouched
+  (extrapolated), the low-frequency pairs are interpolated (θ/s), and a linear
+  "NTK-by-parts" ramp blends the band between.
+- New shared `backend.RoPEFreqs(hd, attrs)` computes the per-pair effective inverse
+  frequencies and the position divisor — the single source of truth now used by
+  BOTH the ref RoPE kernel and the autograd VJP, so forward and backward cannot
+  disagree. Activated by attrs `yarn_scale` (s>1), `yarn_orig_ctx` (L),
+  `yarn_beta_fast` (32) / `yarn_beta_slow` (1); `yarn_scale` unset keeps plain RoPE
+  (and linear PI via `pos_scale`) byte-for-byte unchanged — full RoPE regression
+  suite still green. Also `backend.YaRNAttnScale(s) = 0.1·ln(s)+1`, the attention
+  temperature factor (paper §3.3).
+- **§V16 both tiers:** tier-1 — the forward matches an INDEPENDENT numpy-from-paper
+  reference at f64 1e-12 (`build_yarn`, parameters chosen so the ramp exercises
+  extrapolated dims 0–2, a fractional ramp on 3–5, and interpolated dims 6–7); the
+  per-dimension band property and a finite-difference **gradient check** through
+  the interpolated rotation pass at rel 1e-4 (§V2), the VJP sharing `RoPEFreqs`.
+  tier-2 — the full closed form (correction range, ramp, extrapolate/interpolate
+  blend polarity, and the m_scale constant) **confirmed unanimously by a 3-agent
+  research-lite pass** against the paper §3.1–3.3, jquesnelle/yarn, and HuggingFace
+  `_compute_yarn_parameters` (§R66).
+- Docs: dual-audience godoc on `RoPEFreqs`/`YaRNAttnScale` plus a runnable
+  `Example_ropeYaRN`. (Wiring the attention-temperature scalar into the MHA softmax
+  is a documented, separable follow-up.)
+
+### T45 — docs+examples sweep: classic + ops packages (COMPLETE, T45 → done) (2026-07-06)
+- Added `classic/doc.go` + three runnable examples: `ExampleLinearRegression`
+  (OLS recovering y=2x+1), `ExampleKMeans` (Lloyd clustering of two groups),
+  `ExamplePCA` (first component explains 100% of variance for collinear data, using
+  eigenvalues to sidestep component-sign ambiguity). Dual-audience overview of the
+  classical ML baselines (OLS / softmax regression / k-means / PCA), all
+  sklearn-verified (§V1).
+- Added `ops/doc.go` + four runnable examples: `ExampleAdd`, `ExampleMatMul`,
+  `ExampleSoftmax`, and `Example_miniLayer` (ReLU(x·W+b) in three eager calls).
+  Dual-audience overview positioning ops as the eager/autograd-free calculator
+  layer that shares the exact same kernels as the tape path.
+- **T45 is now complete and marked done.** Every public package
+  (tensor, autograd, nn, nlp, backend, format/safetensors, format/gguf, rl,
+  classic, ops) now carries a dual-audience `doc.go` plus runnable, `// Output:`-
+  checked Example functions at the trivial / use-case / embedded levels (§V17).
+  Full suite 21/21 green, gofmt/vet clean, `CGO_ENABLED=0` build green. The V17
+  docs-and-examples requirement remains the standing Definition-of-Done for every
+  future §T task.
+
+### T45 — docs+examples sweep: rl package (2026-07-06)
+- Added `rl/doc.go` — a dual-audience package overview: the environments (Env,
+  Chain MDP), return/advantage estimation (DiscountedReturns, GAE feeding
+  nn.PPOClipLoss), and the two agents (REINFORCE, DQN), with an explicit note that
+  this is the same PPO+GAE policy-optimization machinery that underlies RLHF for
+  language models (tying rl to the nn alignment losses). Plain-language
+  "learning by trial and error" explanation for non-specialists.
+- Added three runnable `Example` functions (joining the existing `ExampleGAE`) at
+  the §V17 levels: trivial (`ExampleDiscountedReturns`), use case (`ExampleChain` —
+  stepping the environment to the goal), and embedded (`Example_dqnLearnsChain` —
+  training a DQN for 400 episodes then reading its learned greedy action, "right",
+  deterministic via seed).
+- All `go test`-green, gofmt/vet clean, `CGO_ENABLED=0` build green. T45 stays
+  ongoing (`~`): classic and ops remain.
+
+### T45 — docs+examples sweep: format/gguf package (2026-07-06)
+- Added `format/gguf/doc.go` — a dual-audience package overview: the GGUF layout
+  (header + metadata KV + tensors, dims reversed to row-major), transparent
+  dequantization of F16/Q8_0/Q4_0 to F32 on read (ggml-verified §V1, §R19/§R21),
+  the memory payoff of `QMatMul`'s one-row-at-a-time dequant (§T39), the
+  hostile-input safety guarantees (§V15), and a plain-language "compressed model
+  file, like a JPEG for weights" explanation. Notes explicitly that GoAI reads but
+  does not write GGUF, so the source of truth is the ggml reference, not a paper.
+- Added four runnable `Example` functions reading the in-repo `sample.gguf` fixture
+  at the §V17 levels: trivial (`ExampleReadFile` — version/metadata), use case
+  (`Example` — indexing a dense f32 weight, `ExampleFile_quantizedDequant` — a Q8_0
+  tensor arriving as F32), and embedded (`Example_inspectTensors` — listing every
+  tensor with its shape, the checkpoint-inspection idiom).
+- All `go test`-green, gofmt/vet clean, `CGO_ENABLED=0` build green. T45 stays
+  ongoing (`~`): classic, rl and ops remain.
+
+### T45 — docs+examples sweep: format/safetensors package (2026-07-06)
+- Added `format/safetensors/doc.go` — a dual-audience package overview: the format
+  (JSON header + flat byte block, no pickling ⇒ no code execution on load), what
+  this package guarantees (official-lib parity §V1, deterministic writer §V13,
+  round-trip + malformed-input fuzzing §V15), and a plain-language explanation of
+  why "safe" is literal.
+- Added four runnable, self-contained `Example` functions (in-memory buffers, no
+  fixtures) at the §V17 levels: trivial (`ExampleSave`), realistic use case
+  (`Example` save→load with metadata, `ExampleLoad` listing sorted tensor names),
+  and embedded (`Example_roundTripPreservesData` demonstrating the Save∘Load
+  identity that the §V15 fuzz test enforces).
+- All `go test`-green, gofmt/vet clean, `CGO_ENABLED=0` build green.
+- Also marked the `backend` package done in T45 (it already carried `doc.go` + five
+  examples: Execute, auto-selected matmul, SetPreference, Available, ALiBiSlopes)
+  and corrected the stale TODO list — there are no `vision` or `format/npy`
+  packages (npy lives in `internal/npy`). T45 stays ongoing (`~`): classic, rl,
+  format/gguf and ops remain.
+
+### T45 — docs+examples sweep: nlp package (2026-07-06)
+- Added `nlp/doc.go` — a dual-audience package overview (AI practitioners *and*
+  laypeople): what the package builds (tokenizer, attention/MHA/GQA, GPT & Llama
+  blocks, KV-cache decoding) and the decoding toolkit (temperature/top-k/top-p/
+  min-p sampling, beam search, speculative decoding, penalties), with the §V16
+  validation ladder stated up front.
+- Added four runnable `Example` functions spanning the §V17 levels so the core
+  decoding surface is now documented by executable, `// Output:`-checked code:
+  trivial (`ExampleGreedy`, `ExampleSpeculativeSample`), realistic use case
+  (`ExampleSampler` — nucleus/top-p sampling), and embedded-in-a-pipeline
+  (`Example_penaltyThenDecode` — repetition penalty then greedy choice). These join
+  the existing `ExampleSpeculativeRun`, `ExampleBeamSearch`, `ExampleApplyPenalties`
+  and `ExampleSampler_minP` for eight examples total.
+- All `go test`-green, gofmt/vet clean, `CGO_ENABLED=0` build green. T45 stays
+  ongoing (`~`): backend, vision, classic, rl and format/* remain to sweep.
+
+### T65 — Lion optimizer (sign-momentum) (2026-07-06)
+- Lion (EvoLved Sign Momentum, Chen et al. 2023) — a memory-efficient optimizer
+  discovered by symbolic program search. It keeps a **single** momentum buffer
+  (half of Adam's state, no second moment) and moves every parameter by the same
+  step size `lr`, because the update direction is `sign(c)`. The gradient sets only
+  the direction, never the step length — so Lion wants a learning rate ~3-10×
+  smaller than Adam and a correspondingly larger weight decay.
+- New `nn.Lion` + `NewLion(params, lr, opts...)` with functional options (§C12)
+  `WithLionBetas(β1, β2)` and `WithLionWeightDecay(λ)` (defaults β1=0.9, β2=0.99,
+  λ=0). One `Step`: `c = β1·m + (1−β1)·g`; `θ −= lr·(sign(c) + λ·θ)`; then the
+  momentum EMA is updated **after** the step with `m = β2·m + (1−β2)·g` (decoupled,
+  AdamW-style weight decay).
+- **§V16 both tiers:** tier-1 — the full multi-step trajectory matches an
+  **independent numpy reference** at f64 rtol 1e-12 (`build_lion`, step 0
+  hand-verified `[0.989, −1.988, 0.4895]`), and an end-to-end Linear+MSE run with
+  Lion strictly decreases the loss. tier-2 — the exact three-line update rule
+  (interpolate with β1 for the sign step, update the momentum EMA afterward with β2,
+  single buffer, decoupled decay) **confirmed vs the paper Alg. 2 and
+  lucidrains/lion-pytorch** via research-lite (§R65).
+- Docs: dual-audience godoc on `Lion` plus a runnable `ExampleLion` that shows the
+  magnitude-independence property (two gradients five orders of magnitude apart both
+  move their weight by exactly one `lr` step).
+
+### T64 — RoPE Position Interpolation (context extension) (2026-07-06)
+- RoPE Position Interpolation (Chen et al. 2023) — extend a RoPE model's context
+  window by linearly down-scaling positions `m → m/s` (s = new/old length), so the
+  rotary phases stay within the trained range and only a short fine-tune is needed.
+  The fused `OpRoPE` gains a `"pos_scale"` attribute (s ≥ 1); the kernel and the
+  autograd VJP both use the effective position `p/s`. `pos_scale=1` is ordinary
+  RoPE — backward compatible.
+- **§V16 both tiers:** tier-1 — `pos_scale=1` is byte-for-byte plain RoPE; the exact
+  rescaling identity `RoPE(scale=s)[row s·p] == RoPE(scale=1)[row p]` holds at f64
+  1e-12; and a **finite-difference gradient check through the interpolated rotation**
+  passes at rel 1e-4 (§V2), confirming the VJP uses the same scaled angle. tier-2
+  the `m·L/L'` position rescaling and the RoPE-is-an-orthogonal-rotation backward
+  **confirmed vs the paper §3.1 and the YaRN/RoFormer references** via research-lite
+  (§R64). (NTK-aware / YaRN base-frequency scaling is a documented follow-up.)
+- Doc + runnable example. Full suite green ×15, gradcheck/vet/gofmt clean,
+  cross-compiled.
+
+### T63 — min-p sampling + functional-options Sampler (2026-07-06)
+- min-p sampling (Nguyen et al. 2024) added to `nlp.Sampler`: it keeps only tokens
+  whose probability is at least `MinP × max-probability` and renormalizes — an
+  ADAPTIVE truncation that tightens when the model is confident (high top prob) and
+  loosens when it is uncertain, unlike top-p's fixed cumulative mass. The
+  most-probable token always survives; `MinP=0` disables it.
+- **API (§C12, idiomatic Go):** `nlp.NewSampler` now uses functional options —
+  `NewSampler(seed, WithTemperature(0.8), WithTopP(0.95), WithMinP(0.1))` — instead
+  of the positional `NewSampler(temperature, topK, topP, seed)`. New options
+  `WithTemperature`, `WithTopK`, `WithTopP`, `WithMinP`; defaults are temperature 1
+  and all filters off. Pre-1.0 API change (§V8).
+- **§V16 both tiers:** tier-1 — a token below `min_p·P_max` is provably never
+  sampled, the top token is always kept, `min_p=0` reaches every token, and the
+  adaptive property holds (a peaked distribution truncates to 1 token while a flat
+  one keeps all at the same `min_p`). tier-2 the `threshold = min_p·P_max` rule
+  **confirmed vs the paper and the HuggingFace / llama.cpp / vLLM implementations**
+  via research-lite (§R63).
+- Doc + runnable example. Full suite green ×15, vet/gofmt clean.
+
+### T62 — sliding-window attention (2026-07-06)
+- Sliding Window Attention (Mistral, Jiang et al. 2023; local attention from Sparse
+  Transformer / Longformer) — the fused `OpMHA` gains a `"window"` integer
+  attribute that restricts each causal query to the `W` most recent keys
+  (`j ∈ [max(0, i−W+1), i]`), cutting per-token attention cost from O(seq) to O(W)
+  while stacked layers still grow the receptive field to ~W×depth. `window=0` (or
+  ≥ sequence length) is full causal attention — backward compatible.
+- Both the kernel and the autograd VJP apply the same `jmin` window bound, so the
+  windowed forward and backward stay consistent.
+- **§V16 both tiers:** tier-1 — a windowed query provably attends only to its
+  recent keys (window-3 output is the mean of the last 3, not all 6), a window ≥
+  sequence length is byte-for-byte full causal attention, and a **finite-difference
+  gradient check of Q/K/V through the windowed attention** passes at rel 1e-4 (§V2).
+  tier-2 the `[max(0,i−W+1), i]` window, the softmax over the windowed keys, and the
+  depth-growing receptive field **confirmed vs Mistral §2, the HuggingFace docs, and
+  Longformer** via research-lite (§R62).
+- Doc + runnable example. Full suite green ×15, gradcheck/vet/gofmt clean.
+
+### API — functional options for the preference-alignment losses (2026-07-06)
+- Per user feedback (idiomatic Go, §C12): `nn.DPO`, `nn.IPO` and `nn.KTO` now take
+  their hyperparameters as **functional options** (`...nn.PrefOption`) instead of
+  positional floats — replacing the error-prone `KTO(ctx, pl, rl, labels, beta,
+  zRef, lambdaD, lambdaU)` with `KTO(ctx, pl, rl, labels, nn.Beta(0.1),
+  nn.ReferencePoint(z), nn.DesirableWeight(w), nn.UndesirableWeight(w))`. Options:
+  `nn.Beta` (all three), `nn.ReferencePoint` / `nn.DesirableWeight` /
+  `nn.UndesirableWeight` (KTO). Defaults unchanged (β=0.1, zRef=0, λ=1); calling
+  with no options gives the paper defaults. Pre-1.0 API change (§V8).
+
+### T61 — Mixture-of-Experts routing & load balancing (2026-07-06)
+- The differentiable core of Mixture-of-Experts (Switch Transformer, Fedus et al.
+  2021; Mixtral, Jiang et al. 2024):
+  - `nn.TopKGating(gateLogits, k)` routes a token to its top-k experts and returns
+    gate weights that are the softmax over just the selected logits (= Mixtral's
+    `Softmax(TopK)`, renormalized to sum to 1).
+  - `nn.MoEBalanceLoss` — the Switch load-balancing auxiliary loss
+    `L = α·N·Σ_i f_i·P_i`, where `f_i` is the (detached) fraction of tokens
+    dispatched to expert i and `P_i` the mean router probability. Fused
+    `backend.OpMoEBalance` kernel + an autograd VJP that flows gradient only
+    through the differentiable `P_i` (the hard dispatch counts are constant),
+    pushing the router toward balanced expert use.
+- **§V16 both tiers:** tier-1 golden — the fused loss matches an independent numpy
+  `α·N·Σ f_i·P_i` at f64 rtol 1e-12 (§V1); a finite-difference gradcheck of the
+  gate logits passes at rel 1e-4 (§V2); the loss equals α at uniform routing (its
+  minimum) and rises toward α·N when concentrated; and the gating weights are the
+  renormalized top-k softmax. tier-2 the gating, the eq. 4-6 loss, the uniform
+  minimum, and the detached `f_i` **confirmed vs Switch Transformer §2.2 and
+  Mixtral §2.1** via research-lite (§R61).
+- Doc + runnable example. (The full sparse expert-dispatch layer is a follow-up.)
+  Full suite green ×15, gradcheck/vet/gofmt clean, cross-compiled.
+
+### T60 — ALiBi positional attention bias (2026-07-06)
+- ALiBi (Press, Smith & Lewis 2021) — Attention with Linear Biases, the
+  positional method that enables training on short sequences and extrapolating to
+  longer ones at inference. A static, non-learned bias `m_h·(j−i)` is added to the
+  pre-softmax attention scores per head (recent keys penalized least, distant keys
+  most); no positional embeddings and no learnable parameters.
+- `backend.ALiBiSlopes(n)` returns the per-head slopes — the geometric sequence
+  `2^(−8·h/n)` for a power-of-two head count, with the paper's nearest-power-of-two
+  + interleave scheme otherwise. The fused `OpMHA` gains an `"alibi"` boolean
+  attribute: the kernel adds the bias before the softmax and the autograd VJP
+  re-adds the same bias when it recomputes the attention weights, so forward and
+  backward stay consistent. `alibi=false` is byte-for-byte the previous attention
+  (backward compatible).
+- **§V16 both tiers:** tier-1 — the slope formula is exact for power-of-two and
+  interleaved head counts; ALiBi provably shifts a causal query's weight toward
+  recent keys; and a **finite-difference gradient check of Q/K/V through the
+  biased attention** passes at rel 1e-4 (§V2), confirming the VJP re-adds the bias.
+  tier-2 the `m·(j−i)` bias, the geometric slopes, and the constant-bias backward
+  **confirmed vs the paper §3 and HuggingFace BLOOM `build_alibi_tensor`** via
+  research-lite (§R60).
+- Doc + runnable example. Full suite green ×15, gradcheck/vet/gofmt clean.
+
+### T59 — KTO preference alignment (2026-07-06)
+- `nn.KTO`: Kahneman-Tversky Optimization (Ethayarajh et al. 2024) — aligns from
+  **unpaired binary feedback**: each example is simply labeled desirable or
+  undesirable (no chosen/rejected pairs, far cheaper to collect). With reward
+  `r = β·(logπθ−logπref)` and a detached reference point `zRef = β·KL_batch`,
+  a desirable example's loss is `λ_D·σ(zRef−r)` (pushes the reward up) and an
+  undesirable one's is `λ_U·σ(r−zRef)` (pushes it down) — the prospect-theory
+  value with reference point zRef.
+- Fused `backend.OpKTO(policyLogps, refLogps, labels)` reference kernel (f64
+  accumulation §V10) + a closed-form VJP (`±λ·β·s(1−s)/N`); the reference,
+  labels, and zRef are frozen (nil grad). Completes the preference-alignment
+  trio alongside DPO (T48) and IPO (T58).
+- **§V16 both tiers:** tier-1 golden — the fused loss matches an independent numpy
+  `σ(±(r−zRef))` computation at f64 rtol 1e-12 (§V1). tier-2 the desirable/
+  undesirable losses and the β·KL reference point **confirmed vs the paper §4.1 and
+  HuggingFace TRL** (`1−sigmoid(β(logratio−kl))`) via research-lite (§R59).
+- **Verification:** finite-difference gradcheck at rel 1e-4 (§V2) with the
+  reference and labels frozen; directionality (raising a desirable reward lowers
+  the loss, raising an undesirable one raises it); end-to-end KTO training drives
+  desirable rewards positive and undesirable rewards negative (`loss 0.5→0.04`).
+  Doc + runnable example. Full suite green ×15, gradcheck/vet/gofmt clean.
+
+### T58 — IPO preference alignment (2026-07-06)
+- `nn.IPO`: Identity Preference Optimization (Azar et al. 2023) — a DPO variant
+  that replaces the logistic loss with a **squared** loss toward a finite target
+  margin: `loss = mean( ((πθ_w−πref_w) − (πθ_l−πref_l)) − 1/(2β) )²`. Same inputs
+  as `nn.DPO` (per-example sequence log-probs, frozen reference). It regularizes
+  the chosen/rejected gap to `1/(2β)` instead of pushing it to infinity — DPO's
+  overfitting failure mode on near-deterministic preferences.
+- Fused `backend.OpIPO` reference kernel (f64 accumulation §V10) + a closed-form
+  autograd VJP (`±2(h−1/(2β))/N`); the reference log-probs are frozen (nil grad).
+- **§V16 both tiers:** tier-1 golden — the fused loss matches an independent numpy
+  `(h−1/(2β))²` at f64 rtol 1e-12 (§V1). tier-2 the loss form (unnormalized Eq. 17)
+  and its gradient **confirmed vs the paper and HuggingFace TRL** (`loss_type=ipo`)
+  via research-lite (§R58).
+- **Verification:** finite-difference gradcheck at rel 1e-4 (§V2) with the
+  reference frozen; the loss is exactly 0 at `h=1/(2β)`; and end-to-end training
+  drives the margin to the **finite** target (`loss 1.0→0.0, margin→1/(2β)`), not
+  to infinity. Dual-audience doc + runnable example. Full suite green ×15,
+  gradcheck/vet/gofmt clean.
+
+### T57 — logit penalties (repetition / frequency / presence) (2026-07-06)
+- `nlp.ApplyPenalties(logits, generated, repetition, frequency, presence)`: the
+  standard generation penalties, applied to raw logits before sampling. The
+  repetition penalty (CTRL, Keskar et al. 2019) is sign-aware — a seen token's
+  positive logit is divided by θ, a negative one multiplied by θ (θ>1 discourages
+  repeats, θ=1 is a no-op). The OpenAI frequency penalty subtracts `α·count` (scales
+  with how often a token appeared) and the presence penalty subtracts a flat `α`
+  once for any token that appeared. Tokens not yet generated are left unchanged.
+- **§V16 both tiers:** tier-1 verifies the exact transforms — sign-aware ÷/×θ,
+  frequency proportional to count, presence one-off, θ=1 no-op, out-of-range
+  history ignored, and that penalizing a repeated token lowers its post-softmax
+  probability. tier-2 the CTRL θ formula, the HuggingFace sign-aware form, and the
+  OpenAI additive definitions **confirmed vs CTRL §4.1, HF
+  RepetitionPenaltyLogitsProcessor, and the OpenAI API docs** via research-lite
+  (§R57).
+- Doc + runnable example. Full suite green ×15, vet/gofmt clean.
+
+### T56 — gradient accumulation (2026-07-06)
+- `nn.GradAccumulator`: trains a large effective batch on limited memory by summing
+  the gradients of several microbatches and returning their average, so one
+  optimizer step on `acc.GradFn()` equals a step on the full concatenated batch.
+  `Add(tape.Grad)` per microbatch, then `opt.Step(acc.GradFn())` and `Reset()`.
+  The averaging is done at the end (sum ÷ Steps), so the caller does not have to
+  scale each microbatch loss by 1/K.
+- **§V16 both tiers:** tier-1 is EXACT — the accumulated-and-averaged gradient
+  equals the full-batch gradient to f64 1e-12, and a full Adam step via
+  accumulation reaches parameters identical to a full-batch step (1e-12) (§V2).
+  tier-2 the accumulate-then-step procedure, the exact equivalence for a
+  mean-reduction loss (gradient of a mean = mean of gradients, by linearity), and
+  the 1/K averaging **confirmed vs HuggingFace Accelerate and PyTorch** via
+  research-lite (§R56). Documented caveat: token-level sum-reduction losses need
+  normalization by total tokens, not a per-microbatch mean.
+- Doc + runnable example. Full suite green ×15, vet/gofmt clean, cross-compiled.
+
+### T55 — dropout regularization (2026-07-06)
+- `nn.Dropout`: inverted dropout (Srivastava, Hinton et al. 2014) as a Layer.
+  In training it zeroes each activation with probability `Rate` and scales the
+  survivors by `1/(1−Rate)`; in eval mode (`.Eval()`) it is the identity, so the
+  forward pass needs no rescaling. It carries no learnable parameters and is
+  implemented as an elementwise multiply by a fresh Bernoulli mask through the
+  recording context — so its gradient (flow only through kept, up-scaled units)
+  comes entirely from the existing `OpMul` VJP, with no new op.
+- **§V16 both tiers:** tier-1 empirical — Monte-Carlo confirms `E[out]=x`
+  (expectation preserved), eval is exact identity, every output is `0` or
+  `x/(1−p)`, the dropped fraction matches the rate, and the gradient equals the
+  mask (§V2). tier-2 the inverted-dropout convention, expectation, and mask-VJP
+  **confirmed vs Srivastava 2014 JMLR and PyTorch nn.Dropout** via research-lite
+  (§R55).
+- Doc + runnable example. Full suite green ×15, vet/gofmt clean.
+
+### T54 — beam search decoding (2026-07-06)
+- `nlp.BeamSearch`: deterministic beam-search decoding (Sutskever et al. 2014) with
+  the GNMT length penalty (Wu et al. 2016). It keeps the `width` highest-cumulative-
+  log-probability partial hypotheses, expands each by every token, and prunes the
+  frontier back to the top `width` at each step; a hypothesis emitting `eos` (or
+  reaching `maxNew`) is completed. Final scores are length-normalized by
+  `lp(n) = ((5+n)/6)^α` (α=0 → raw log-prob sum). Takes a `NextLogits` closure so
+  it decodes any model. A higher-quality alternative to greedy/sampling.
+- **§V16 both tiers:** tier-1 is EXACT — beam width 1 reproduces greedy decoding,
+  and an unbounded beam (never pruning) matches **exhaustive enumeration** of the
+  top sequences by total log-probability, scores agreeing to f64 1e-12 (§V1).
+  tier-2 the algorithm and the length-penalty formula **confirmed vs Sutskever
+  2014, Wu et al. 2016 GNMT eq. 14, and HuggingFace generate** via research-lite
+  (§R54).
+- **Verification:** beam width 2 finds a higher-total-log-prob sequence than greedy
+  on the classic locally-suboptimal case; EOS completes a hypothesis before
+  `maxNew`; the length-penalty divisor matches the GNMT formula exactly. Doc +
+  runnable example. Full suite green ×15, vet/gofmt clean, cross-compiled.
+
+### T53 — speculative decoding (lossless inference speedup) (2026-07-06)
+- `nlp.SpeculativeSample` / `nlp.SpeculativeRun`: speculative decoding (Leviathan
+  et al. 2023; Chen et al. 2023) — a small draft model proposes tokens that the
+  large target verifies in one parallel pass, for a lossless 2–3× inference
+  speedup. A drafted token from q is accepted with probability `min(1, p/q)`; on
+  rejection it is resampled from the normalized residual `max(0, p−q)`. `Run`
+  accepts a K-token draft left-to-right until the first rejection, else appends a
+  bonus token — emitting 1…K+1 tokens per step.
+- **§V16 both tiers:** tier-1 — a **Monte-Carlo verification of the losslessness
+  theorem**: over 300k samples with a draft q deliberately far from the target p,
+  the empirical output distribution equals p to within 0.01 for every token (§V1),
+  and the empirical acceptance rate equals `Σ min(p,q) = 1 − TV(p,q)`. tier-2 the
+  algorithm and the exactness theorem (output ~ p for **any** q, via the identity
+  `min(q,p)+max(0,p−q)=p`) **confirmed vs both papers** via research-lite (§R53).
+- **Verification:** p==q always accepts (output == draft); a rejected token can
+  only come from the residual support where p>q; the run emits K+1 tokens when
+  every draft is accepted and stops at 1 on an immediate rejection. Doc + runnable
+  example. Full suite green ×15, vet/gofmt clean, cross-compiled.
+
+### T52 — label smoothing (2026-07-06)
+- `nn.CrossEntropySmooth`: cross-entropy with label smoothing (Szegedy et al.
+  2016; used in the original Transformer, Vaswani et al. 2017 §5.4, with ε=0.1).
+  The one-hot target is mixed with the uniform distribution —
+  `q'(k) = (1−ε)·δ(k,target) + ε/K` over all K classes — so the loss is
+  `lse(z) − (1−ε)·z_target − (ε/K)·Σ z`, penalizing over-confident logits and
+  improving calibration/generalization.
+- Implemented by extending the existing `backend.OpCrossEntropy` kernel and its
+  autograd VJP with a `label_smoothing` attribute (gradient `softmax − q'`); ε=0
+  is byte-for-byte the previous hard-label cross-entropy (backward compatible).
+- **§V16 both tiers:** tier-1 golden — the fused loss matches an independent numpy
+  `−Σ q'·log-softmax` at f64 rtol 1e-12 (§V1). tier-2 the smoothed-target form
+  (uniform-over-K, ε/K on all classes — **not** ε/(K−1)), the loss identity, and
+  the gradient **confirmed vs Szegedy §7, Vaswani §5.4, and PyTorch
+  CrossEntropyLoss** via research-lite (§R52).
+- **Verification:** ε=0 exactly reproduces `nn.CrossEntropy`; finite-difference
+  gradcheck at rel 1e-4 (§V2); the soft-target gradient sums to zero per row
+  (normalization invariant); label smoothing yields a higher loss on a
+  confident-correct prediction. Doc + runnable example. Full suite green ×15,
+  gradcheck/vet/gofmt clean.
+
+### T51 — knowledge distillation (2026-07-06)
+- `nn.DistillLoss`: the soft-target knowledge-distillation loss (Hinton et al.
+  2015) — the standard way to compress a large teacher model into a small student.
+  It matches the student's softened output distribution to the teacher's:
+  `loss = mean_b T²·KL( softmax(teacher_b/T) ‖ softmax(student_b/T) )`, with the
+  temperature T softening both distributions and the T² factor keeping the
+  gradient magnitude comparable to a hard-label loss.
+- Fused `backend.OpDistill` reference kernel (stable max-shift softmax, f64
+  accumulation §V10) + an autograd VJP `T·(q−p)/B` into the student logits; the
+  teacher is frozen (nil gradient). Combine with `nn.CrossEntropy` on true labels
+  for the full `α·soft + (1−α)·hard` recipe.
+- **§V16 both tiers:** tier-1 golden — the fused loss matches an independent numpy
+  `T²·KL(p‖q)` at f64 rtol 1e-12 (§V1). tier-2 the loss, the T² scaling, and the
+  `(1/T)(q−p)` gradient **confirmed vs the paper §2-3 and the PyTorch KD tutorial**
+  via research-lite (§R51).
+- **Verification:** finite-difference gradcheck at rel 1e-4 (§V2) with the teacher
+  confirmed frozen; `KL(p‖p)=0` for any temperature; end-to-end a student is
+  distilled to a frozen teacher, **soft loss 1.15 → 0.000000** with the teacher
+  byte-for-byte unchanged. Dual-audience doc + runnable example. Full suite green
+  ×15, gradcheck/vet/gofmt clean.
+
+### T50 — GAE advantage estimation (completes the PPO pipeline) (2026-07-06)
+- `rl.GAE(rewards, values, dones, nextValue, nextDone, γ, λ) → (advantages,
+  returns)`: Generalized Advantage Estimation (Schulman et al. 2016) — turns a
+  trajectory of rewards and value estimates into the advantages the PPO clipped
+  loss (T49) consumes, plus the value-function regression targets `returns = adv +
+  values`. Backward recursion `Â_t = δ_t + γλ·nonterminal·Â_{t+1}` with an
+  episode-boundary mask, equal to the exponentially-weighted sum
+  `Â_t = Σ (γλ)^l δ_{t+l}`. Together T49+T50 are the full PPO/RLHF machinery
+  (rewards → advantages → clipped policy loss).
+- **§V16 both tiers:** tier-1 — the backward recursion matches an **independent
+  numpy forward-sum** of the (γλ)-weighted TD residuals at f64 rtol 1e-12 (§V1).
+  tier-2 the formula, recursion, and limits **confirmed vs the paper Eq. 11–18 and
+  CleanRL/SB3** via research-lite (§R50).
+- **Verification:** the two analytical limits are checked exactly — λ=0 gives the
+  one-step TD residual δ_t, λ=1 gives the Monte-Carlo advantage (discounted return
+  − baseline); `returns = adv + values`; and a terminal `done` resets the
+  accumulator so no advantage leaks across an episode boundary. Dual-audience
+  godoc + runnable example. Full suite green ×15, vet/gofmt clean.
+
+### T49 — PPO clipped surrogate (RLHF core) (2026-07-06)
+- `nn.PPOClipLoss`: the Proximal Policy Optimization clipped surrogate policy loss
+  (Schulman et al. 2017) — the core policy objective of RLHF. Given policy log-probs
+  logπθ(a|s), frozen rollout log-probs logπ_old, and advantages Â (all [batch]):
+  `loss = −mean min( r·Â , clip(r, 1−ε, 1+ε)·Â )`, `r = exp(logπθ − logπ_old)`,
+  ε default 0.2.
+- Fused `backend.OpPPOClip` reference kernel (f64 accumulation §V10) + a piecewise
+  autograd VJP matching PyTorch autodiff of `−min(surr1, surr2)`: gradient `Â·r`
+  when the unclipped term is selected or the ratio is inside the trust region,
+  **0** when the ratio is clamped outside it (so one batch can't push the policy
+  too far). Rollout log-probs and advantages get **nil** gradient (detached).
+- **§V16 both tiers:** tier-1 golden — the fused loss matches an independent numpy
+  computation of Eq. 7 at f64 rtol 1e-12 (§V1). tier-2 the objective, gradient, and
+  clip semantics **confirmed vs the paper §3 Eq. 6–7 and Stable-Baselines3/CleanRL**
+  via research-lite (§R49).
+- **Verification:** finite-difference gradcheck at rel 1e-4 away from the clip
+  kinks (§V2) with rollout/advantage confirmed frozen; a **trust-region test** —
+  the gradient is exactly 0 when the ratio is clamped in the pessimistic direction
+  (A>0 & r>1+ε, A<0 & r<1−ε) and live in-range; end-to-end the loss falls
+  −1.0 → −1.2 and caps at the clip ceiling −(1+ε)·Â. Dual-audience doc + runnable
+  example. Full suite green ×15, gradcheck/vet/gofmt clean.
+
+### T48 — DPO preference alignment (2026-07-06)
+- `nn.DPO`: Direct Preference Optimization (Rafailov et al. 2023) — aligns a policy
+  to human preferences directly from (chosen, rejected) pairs, **no reward model,
+  no RL** (the RLHF-free method). Inputs are per-example sequence log-probs for the
+  policy and the **frozen** reference on each response;
+  `loss = mean −log σ(β·((πθ_w−πref_w) − (πθ_l−πref_l)))`.
+- Implemented as a fused `backend.OpDPO` reference kernel (numerically stable
+  `softplus(−z)`, f64 accumulation §V10) + a closed-form autograd VJP (gradient
+  weighted by `σ(−Δ)`, largest when the model wrongly prefers the rejected
+  response; reference log-probs get **nil** gradient — frozen).
+- **§V16 both tiers:** tier-1 golden — the fused loss matches an independent numpy
+  computation of Eq. 7 at f64 rtol 1e-12 (§V1). tier-2 the loss AND its gradient
+  form **confirmed vs the paper §4/Eq. 7 and HuggingFace TRL** (`loss_type=sigmoid`,
+  `beta=0.1`) via research-lite (§R48).
+- **Verification:** finite-difference gradcheck of ∂L/∂policy at rel 1e-4 (§V2)
+  with the reference confirmed frozen; stability on extreme ±1000 margins stays
+  finite (§V12); end-to-end alignment — optimizing the policy drives **loss
+  0.6931 → 0.0505 and the chosen/rejected margin 0.0 → 5.95**. Dual-audience
+  `nn.DPO` doc + runnable example. Full suite green ×15, gradcheck/vet/gofmt clean.
+
+### T47 — tag-free Metal & zero-config accel registration (2026-07-06)
+- **Answer to "must the user pass build tags?" — on macOS, no.** The Metal backend
+  is no longer behind a `metal` tag: its build constraint is now `darwin && cgo`
+  (Metal/MPS are macOS system frameworks always present, §R47), so a plain native
+  `go build`/`go test` (cgo is the macOS default) compiles it. `CGO_ENABLED=0`
+  still excludes it → pure-Go build stays green (§V7).
+- **Zero configuration:** the top-level `goai` package now blank-imports each
+  usable backend through OS/tag companion files (`register_darwin.go` → Metal,
+  tag-free; `register_cuda.go`/`register_vulkan.go` → tag-gated). So `import
+  "github.com/jxsl13/goai"` auto-registers every backend that can run, and (via
+  T46 auto-selection) `backend.Default()` returns the GPU — no tags, no selection
+  code. **Proven on an Apple M2 Pro:** a plain `go test` yields
+  `backend.Default() == "metal"`, and Metal now runs **GPT inference and GPT
+  training on the GPU** (CE 3.29 → 0.046, matching CPU) — Metal is host-verified
+  for the first time (§B37).
+- **§V16:** feasibility confirmed vs Apple/NVIDIA/Khronos docs (§R47) — Metal
+  frameworks always present (tag-free); CUDA/Vulkan keep a tag because their
+  `-lcublas`/`-lvulkan` is a build-time link dep (a future dlopen path,
+  libcuda.so/libvulkan.so.1, can make them tag-free too). ADR-0013; §C6 amended.
+- Full pure-Go suite green ×15; Metal + Vulkan on-GPU suites green.
+
+### T46 — automatic backend selection (zero-config accel) (2026-07-06)
+- **The user does nothing to run on the GPU.** `backend.Default()` now auto-selects
+  the highest-preference *registered* backend along a descending-performance order
+  (default **cuda > metal > vulkan > cpu**), with the Pure-Go reference as the
+  guaranteed final fallback. Accel backends already register in `init()` only when
+  their device is present, so registration doubles as detection — cgo/build tags
+  are the only gating (§C11, ADR-0012).
+- Because `NewContext` and `autograd.NewTape` call `Default()`, **building with an
+  accel tag routes matmuls (and both backward GEMMs of training) to the GPU with
+  no code change.** Proven on-host: with `-tags vulkan`, `backend.Default()`
+  returns `vulkan` and an MLP trains on the Apple M2 Pro.
+- New API: `backend.SetPreference(order...)` to override the order (unknown names
+  skipped safely) and `backend.Preference()` to read it. `RegisterDefault` kept
+  (§V8), now appends to the preference instead of "last-wins".
+- **§V16 + benchmark:** the preference model (ordered, first-registered-wins, CPU
+  always fallback) confirmed vs ONNX Runtime EP priority, PyTorch cuda>mps>cpu,
+  and ggml's scored registry (§R46); GPU-first justified by on-host benchmark —
+  **Vulkan matmul 1.47× (512³) and 3.38× (1024³) faster than CPU-SIMD** on an
+  Apple M2 Pro. New §V18 invariant.
+- Dual-audience `backend/doc.go` + 4 runnable examples (auto path, override,
+  feature-probe, embedded matmul). Full suite green ×15, gofmt/vet clean.
+
+### T45 — docs + runnable examples sweep (started) (2026-07-06)
+- New §C10/§V17 mandate (dual-audience godoc + runnable `Example` fns at ≥3 levels
+  per public package) — first pass over the highest-use surface:
+  - **tensor** (L0): dual-audience package doc + `example_test.go` with 7 examples
+    (New, FromFloat64, Reshape, Slice, Transpose, Cast, and an embedded linear
+    layer showing where L0 tensors feed the L1 backend).
+  - **autograd** (L2): dual-audience doc + 3 examples (square-derivative, dL/dW
+    through a matmul, and an embedded one-step gradient descent).
+  - **nn** (L3): dual-audience doc + 3 examples (a Linear layer, a Sequential MLP,
+    and an embedded full training loop that converges).
+- All 13 examples verified by `go test` via `// Output:` (docs can't rot).
+- Repo-wide `gofmt` hygiene pass (18 files, pure struct-field-comment alignment,
+  no semantic change) → tree now gofmt-clean. Full suite green ×15, vet clean.
+- Remaining (ongoing, §T45): backend, nlp, vision, classic, rl, format/* — and
+  every future task ships its own docs+examples as part of its DoD (§V17).
+
 ### T44 — NPU: documented honest non-goal (2026-07-06)
 - `backend/npu`: pure-Go documentation package with `Available() bool` → **false**,
   so feature-detection probes NPU support uniformly and gets an explicit "no",

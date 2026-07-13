@@ -1,6 +1,64 @@
 // Package nn is layer L3: neural-network building blocks.
 //
-// Layers, parameter initialization (xavier/kaiming), losses, optimizers
-// (SGD, Adam), and the data pipeline. Built on autograd (L2) and backend (L1);
-// it never imports backend internals (§I1).
+// # For the AI professional
+//
+// Every layer implements Forward(ctx, x) and exposes its trainable tensors via
+// Params(), so a model composes with NewSequential and trains against any
+// optimizer. Built on autograd (L2) and backend (L1); it never imports backend
+// internals (§I1). The canonical loop: build a Tape, Forward through it, compute
+// a loss, Backward, then optimizer.Step(tape.Grad). The catalogue, grouped —
+// every algorithm carries its paper citation (§R) in its own doc comment:
+//
+//   - Core layers & init: Linear, Conv2D/MaxPool2D (NCHW, fused conv backward),
+//     activations, LayerNorm/RMSNorm/GroupNorm,
+//     SwiGLU/GLU, dropout/droppath, spectral & weight norm, QK-norm, DyT,
+//     DeepNorm, sinusoidal and T5 relative position encodings, Xavier/Kaiming
+//     init, and µP (Maximal Update Parametrization) scaling rules.
+//   - Losses & objectives: MSE, stable cross-entropy, focal, triplet, InfoNCE,
+//     multi-token prediction, Matryoshka representations, ColBERT MaxSim,
+//     Plackett-Luce/ListMLE ranking, and the R-Drop / SimCTG regularizers.
+//   - Optimizers: SGD, Adam/AdamW, Adafactor, LAMB, Muon, Shampoo, SOAP, Sophia,
+//     AdEMAMix, Schedule-Free — plus wrappers composing with any of them
+//     (Lookahead, SAM sharpness-aware steps, cautious masking, Grokfast EMA
+//     filtering, GaLore low-rank gradient projection), LR schedules (OneCycle),
+//     gradient clipping and accumulation, and mixed-precision (AMP) helpers.
+//   - Parameter-efficient fine-tuning: LoRA, DoRA, PiSSA, VeRA, (IA)³,
+//     bottleneck adapters, prefix tuning, prompt tuning, and NEFTune noise.
+//   - Quantization, pruning & discrete bottlenecks: AWQ, GPTQ, HQQ, NF4 (QLoRA),
+//     LLM.int8, SmoothQuant, LSQ/FSQ, SparseGPT and Wanda pruning, VQ-VAE and
+//     Gumbel-Softmax.
+//   - Architectures beyond the vanilla transformer: MoE routing with load
+//     balancing (token-choice, expert-choice, soft MoE, loss-free balancing),
+//     Mixture-of-Depths, Mamba selective SSM (+ Mamba-2's state-space duality,
+//     SSDRecurrent/SSDQuadratic), RWKV (trainable WKV op, the full
+//     RWKVBlock, and O(1)-state recurrent inference via RWKVBlock.Step),
+//     RetNet retention, Kimi Delta Attention (per-channel gated delta rule),
+//     DeepSeekMoE shared experts, and the sparse-attention trio
+//     (MoBAAttention block routing, NSABranches compressed/selected/sliding,
+//     DSAAttention lightning-indexer token selection),
+//     gated/delta-rule linear attention, DeepSeek MLA, Differential Attention.
+//   - Diffusion & generative: DDPM/DDIM schedules and samplers, EDM (with
+//     preconditioning), and Flow Matching.
+//   - Self-supervised learning: Barlow Twins, DINO, SimSiam, SwAV, VICReg.
+//   - Alignment & distillation: Bradley-Terry reward models, GRPO, RLOO, RSO,
+//     SLiC-HF, and generalized knowledge distillation (GKD) — fed from model
+//     logits via TokenLogProbs / SequenceLogProbs, the differentiable bridge
+//     every preference/RL loss consumes.
+//   - Continual learning & model merging: EWC, MAS, SI penalties; TIES/DARE
+//     merging, SLERP, model soups, and EMA/SWA weight averaging.
+//   - Transport & assignment: Sinkhorn entropic optimal transport.
+//
+// # For the newcomer
+//
+// This is where you assemble and train a neural network. A "layer" transforms
+// numbers; stacking layers (with a [NewSequential]) makes a network. [NewLinear]
+// is the basic layer (a weighted sum plus a bias); an activation like [ReLU] adds
+// the non-linearity that lets a network learn curves, not just straight lines. A
+// "loss" (e.g. [MSE]) measures how wrong the network's output is, and an
+// "optimizer" (e.g. [NewAdam]) adjusts the weights to make the loss smaller. The
+// training recipe is always the same four steps — run the network forward,
+// measure the loss, call Backward to get the gradients (see package autograd),
+// and let the optimizer take one step — repeated until the loss is small. The
+// runnable examples below show exactly that, from a single layer to a full
+// training loop.
 package nn

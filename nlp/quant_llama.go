@@ -1,0 +1,204 @@
+package nlp
+
+import (
+	"fmt"
+
+	"github.com/jxsl13/goai/backend"
+	"github.com/jxsl13/goai/format/gguf"
+	"github.com/jxsl13/goai/nn"
+	"github.com/jxsl13/goai/tensor"
+)
+
+// QuantLlama is a Llama that keeps its projection weights QUANTIZED (nn.QuantLinear) and never
+// materializes them as full-precision matrices — the memory-efficient, GPU-accelerated form of
+// a quantized model (§T149). Its forward is identical to Llama.ForwardFromEmbed except every
+// linear projection (attn q/k/v/o, the FFN, the output head) is an in-kernel dequantized matmul
+// that runs on the active accelerator when it accelerates the quant type (else the CPU
+// fallback). Everything runs in f32 — quantized-inference activations — which is also what lets
+// the GPU ops engage (the accelerators are f32-only). Inference-only: the quantized weights are
+// frozen and bypass the tape.
+type QuantLlama struct {
+	Config LlamaConfig     // model hyperparameters
+	TokEmb *tensor.Tensor  // [vocab, dim] f32 token embedding
+	Blocks []*QuantBlock   // stacked transformer blocks with quantized projections
+	Norm   *nn.RMSNorm     // final pre-logits RMSNorm (f32 gain)
+	Out    *nn.QuantLinear // quantized output projection (In=dim, Out=vocab)
+}
+
+// QuantBlock is a QuantLlama transformer block: float RMSNorm gains, quantized attention
+// projections and a quantized SwiGLU FFN.
+type QuantBlock struct {
+	AttnNorm       *nn.RMSNorm     // RMSNorm before attention (f32 gain)
+	Wq, Wk, Wv, Wo *nn.QuantLinear // quantized attention projections (no bias)
+	FFNNorm        *nn.RMSNorm     // RMSNorm before the FFN (f32 gain)
+	FFN            *nn.QuantSwiGLU // quantized SwiGLU feed-forward
+}
+
+// QuantizeLlama builds a QuantLlama from a float Llama by quantizing every linear projection to
+// qt (the ggml block layout) — the projections carry the bulk of the weights and compute, so
+// this is where quantization pays off. RMSNorm gains and the token embedding are kept in f32
+// (they are tiny and precision-sensitive). Each projection's inner dimension must be a multiple
+// of qt's block size (32 for Q8_0/Q4_0, 256 for the k-quants).
+func QuantizeLlama(m *Llama, qt gguf.QuantType) (*QuantLlama, error) {
+	mkQ := func(w *tensor.Tensor) (*nn.QuantLinear, error) {
+		in, out := w.Shape()[0], w.Shape()[1] // GoAI [in, out]
+		bytes, err := gguf.Quantize(transpose2D(w), qt)
+		if err != nil {
+			return nil, err
+		}
+		return &nn.QuantLinear{Weight: bytes, QT: qt, In: in, Out: out}, nil
+	}
+	q := &QuantLlama{Config: m.Config, TokEmb: f32Clone(m.TokEmb), Norm: f32RMSNorm(m.Norm)}
+	for _, b := range m.Blocks {
+		qb := &QuantBlock{AttnNorm: f32RMSNorm(b.AttnNorm), FFNNorm: f32RMSNorm(b.FFNNorm)}
+		var err error
+		if qb.Wq, err = mkQ(b.Wq); err != nil {
+			return nil, fmt.Errorf("nlp: QuantizeLlama Wq: %w", err)
+		}
+		if qb.Wk, err = mkQ(b.Wk); err != nil {
+			return nil, fmt.Errorf("nlp: QuantizeLlama Wk: %w", err)
+		}
+		if qb.Wv, err = mkQ(b.Wv); err != nil {
+			return nil, fmt.Errorf("nlp: QuantizeLlama Wv: %w", err)
+		}
+		if qb.Wo, err = mkQ(b.Wo); err != nil {
+			return nil, fmt.Errorf("nlp: QuantizeLlama Wo: %w", err)
+		}
+		gate, err := mkQ(b.FFN.Wgate)
+		if err != nil {
+			return nil, fmt.Errorf("nlp: QuantizeLlama ffn_gate: %w", err)
+		}
+		up, err := mkQ(b.FFN.Wup)
+		if err != nil {
+			return nil, fmt.Errorf("nlp: QuantizeLlama ffn_up: %w", err)
+		}
+		down, err := mkQ(b.FFN.Wdown)
+		if err != nil {
+			return nil, fmt.Errorf("nlp: QuantizeLlama ffn_down: %w", err)
+		}
+		qb.FFN = &nn.QuantSwiGLU{Gate: gate, Up: up, Down: down}
+		q.Blocks = append(q.Blocks, qb)
+	}
+	out, err := mkQ(m.Out)
+	if err != nil {
+		return nil, fmt.Errorf("nlp: QuantizeLlama output: %w", err)
+	}
+	q.Out = out
+	return q, nil
+}
+
+// Forward runs the quantized model on the token ids, returning logits [seq, vocab]. It mirrors
+// Llama.ForwardFromEmbed exactly — RMSNorm, RoPE, MHA, residual adds and SwiGLU gating — but
+// every projection is a quantized in-kernel matmul, all in f32.
+func (m *QuantLlama) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor, error) {
+	cfg := m.Config
+	seq := len(tokens)
+	if seq == 0 || seq > cfg.Ctx {
+		return nil, fmt.Errorf("nlp: prompt length %d outside (0,%d]", seq, cfg.Ctx)
+	}
+	idx := tensor.New(m.TokEmb.Dtype(), tensor.Shape{seq})
+	for i, t := range tokens {
+		if t < 0 || t >= cfg.Vocab {
+			return nil, fmt.Errorf("nlp: token %d outside vocab %d", t, cfg.Vocab)
+		}
+		idx.SetF64(float64(t), i)
+	}
+	x, err := exec1(ctx, backend.OpEmbed, nil, m.TokEmb, idx)
+	if err != nil {
+		return nil, err
+	}
+	kv := cfg.kvHeads()
+	attn := backend.AttnAttrs{Heads: cfg.Heads, KVHeads: kv, Causal: true}
+	for _, b := range m.Blocks {
+		xb, err := b.AttnNorm.Forward(ctx, x)
+		if err != nil {
+			return nil, err
+		}
+		q, err := b.Wq.Forward(ctx, xb)
+		if err != nil {
+			return nil, err
+		}
+		k, err := b.Wk.Forward(ctx, xb)
+		if err != nil {
+			return nil, err
+		}
+		v, err := b.Wv.Forward(ctx, xb)
+		if err != nil {
+			return nil, err
+		}
+		if q, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: cfg.Heads}, q); err != nil {
+			return nil, err
+		}
+		if k, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: kv}, k); err != nil {
+			return nil, err
+		}
+		a, err := exec1(ctx, backend.OpMHA, attn, q, k, v)
+		if err != nil {
+			return nil, err
+		}
+		o, err := b.Wo.Forward(ctx, a)
+		if err != nil {
+			return nil, err
+		}
+		if x, err = exec1(ctx, backend.OpAdd, nil, x, o); err != nil {
+			return nil, err
+		}
+		xf, err := b.FFNNorm.Forward(ctx, x)
+		if err != nil {
+			return nil, err
+		}
+		ff, err := b.FFN.Forward(ctx, xf)
+		if err != nil {
+			return nil, err
+		}
+		if x, err = exec1(ctx, backend.OpAdd, nil, x, ff); err != nil {
+			return nil, err
+		}
+	}
+	if x, err = m.Norm.Forward(ctx, x); err != nil {
+		return nil, err
+	}
+	return m.Out.Forward(ctx, x)
+}
+
+// Close frees every device-resident weight buffer held by the model's quantized projections
+// (attention, FFN, output head). Idempotent; call it when done with the model to release GPU
+// memory promptly (otherwise the buffers are reclaimed only at process exit).
+func (m *QuantLlama) Close() error {
+	var first error
+	note := func(err error) {
+		if err != nil && first == nil {
+			first = err
+		}
+	}
+	for _, b := range m.Blocks {
+		for _, l := range []*nn.QuantLinear{b.Wq, b.Wk, b.Wv, b.Wo} {
+			if l != nil {
+				note(l.Close())
+			}
+		}
+		if b.FFN != nil {
+			note(b.FFN.Close())
+		}
+	}
+	if m.Out != nil {
+		note(m.Out.Close())
+	}
+	return first
+}
+
+// f32Clone copies a tensor into a fresh F32 tensor of the same shape (quantized inference runs
+// in f32, which also engages the f32-only accelerators).
+func f32Clone(t *tensor.Tensor) *tensor.Tensor {
+	out := tensor.New(tensor.F32, t.Shape())
+	dst := out.Storage().F32()
+	for i := range t.Numel() {
+		dst[i] = float32(t.AtF64(tensor.Unravel(i, t.Shape())...))
+	}
+	return out
+}
+
+// f32RMSNorm returns an RMSNorm with an f32 copy of the gain, so it composes with f32 activations.
+func f32RMSNorm(n *nn.RMSNorm) *nn.RMSNorm {
+	return &nn.RMSNorm{Gamma: f32Clone(n.Gamma), Eps: n.Eps}
+}

@@ -19,8 +19,8 @@ import (
 
 type gradCase struct {
 	name   string
-	inputs [][]float64      // raw data per input
-	shapes []tensor.Shape   // shape per input
+	inputs [][]float64    // raw data per input
+	shapes []tensor.Shape // shape per input
 	fwd    func(ctx *backend.Context, xs []*tensor.Tensor) (*tensor.Tensor, error)
 }
 
@@ -43,9 +43,9 @@ func opCase(name string, op backend.Op, attrs backend.Attrs, shapes []tensor.Sha
 
 func cases() []gradCase {
 	v3 := tensor.Shape{3}
-	a := []float64{0.8, -1.2, 2.1}   // generic, away from relu kink
-	b := []float64{1.7, 0.9, -2.3}   // generic
-	pos := []float64{0.6, 1.4, 3.2}  // log domain
+	a := []float64{0.8, -1.2, 2.1}  // generic, away from relu kink
+	b := []float64{1.7, 0.9, -2.3}  // generic
+	pos := []float64{0.6, 1.4, 3.2} // log domain
 	m23 := tensor.Shape{2, 3}
 	m34 := tensor.Shape{3, 4} // distinct values → no max/min ties
 	am := []float64{1.1, -2.2, 0.7, 3.3, -0.4, 1.9}
@@ -62,40 +62,40 @@ func cases() []gradCase {
 		opCase("matmul", backend.OpMatMul, nil, []tensor.Shape{m23, m34}, am, bm),
 		opCase("dot", backend.OpDot, nil, []tensor.Shape{v3, v3}, a, b),
 		opCase("nrm2", backend.OpNrm2, nil, []tensor.Shape{v3}, a),
-		opCase("axpy", backend.OpAXPY, backend.Attrs{"alpha": 2.5}, []tensor.Shape{v3, v3}, a, b),
+		opCase("axpy", backend.OpAXPY, backend.AXPYAttrs{Alpha: 2.5}, []tensor.Shape{v3, v3}, a, b),
 		opCase("sum_all", backend.OpSum, nil, []tensor.Shape{m23}, am),
-		opCase("sum_axis0", backend.OpSum, backend.Attrs{"axes": []int{0}}, []tensor.Shape{m23}, am),
-		opCase("sum_axis1_keep", backend.OpSum, backend.Attrs{"axes": []int{1}, "keepdims": true}, []tensor.Shape{m23}, am),
+		opCase("sum_axis0", backend.OpSum, backend.ReduceAttrs{Axes: []int{0}}, []tensor.Shape{m23}, am),
+		opCase("sum_axis1_keep", backend.OpSum, backend.ReduceAttrs{Axes: []int{1}, KeepDims: true}, []tensor.Shape{m23}, am),
 		opCase("mean_all", backend.OpMean, nil, []tensor.Shape{m23}, am),
-		opCase("mean_axis1", backend.OpMean, backend.Attrs{"axes": []int{1}}, []tensor.Shape{m23}, am),
-		opCase("max_axis0", backend.OpMax, backend.Attrs{"axes": []int{0}}, []tensor.Shape{m23}, am),
-		opCase("min_axis1", backend.OpMin, backend.Attrs{"axes": []int{1}}, []tensor.Shape{m23}, am),
+		opCase("mean_axis1", backend.OpMean, backend.ReduceAttrs{Axes: []int{1}}, []tensor.Shape{m23}, am),
+		opCase("max_axis0", backend.OpMax, backend.ReduceAttrs{Axes: []int{0}}, []tensor.Shape{m23}, am),
+		opCase("min_axis1", backend.OpMin, backend.ReduceAttrs{Axes: []int{1}}, []tensor.Shape{m23}, am),
 		// CV (§T24b): distinct values → no max-pool ties near h
-		opCase("conv2d", backend.OpConv2D, backend.Attrs{"stride": 1, "pad": 0},
+		opCase("conv2d", backend.OpConv2D, backend.ConvAttrs{Stride: 1, Pad: 0},
 			[]tensor.Shape{{1, 2, 3, 3}, {2, 2, 2, 2}, {2}}, cvX, cvW, []float64{0.3, -0.6}),
-		opCase("conv2d_s2p1", backend.OpConv2D, backend.Attrs{"stride": 2, "pad": 1},
+		opCase("conv2d_s2p1", backend.OpConv2D, backend.ConvAttrs{Stride: 2, Pad: 1},
 			[]tensor.Shape{{1, 2, 3, 3}, {2, 2, 2, 2}}, cvX, cvW),
-		opCase("maxpool", backend.OpMaxPool2D, backend.Attrs{"kernel": 2},
+		opCase("maxpool", backend.OpMaxPool2D, backend.PoolAttrs{Kernel: 2},
 			[]tensor.Shape{{1, 1, 4, 4}}, cvPool),
-		opCase("avgpool", backend.OpAvgPool2D, backend.Attrs{"kernel": 2, "stride": 1},
+		opCase("avgpool", backend.OpAvgPool2D, backend.PoolAttrs{Kernel: 2, Stride: 1},
 			[]tensor.Shape{{1, 1, 4, 4}}, cvPool),
 		// transformer training (§T31): layernorm over last axis, grads for x,γ,β
-		opCase("layernorm", backend.OpLayerNorm, backend.Attrs{"eps": 1e-5},
+		opCase("layernorm", backend.OpLayerNorm, backend.NormAttrs{Eps: 1e-5},
 			[]tensor.Shape{{2, 4}, {4}, {4}}, lnX, lnGamma, lnBeta),
 		opCase("softmax", backend.OpSoftmax, nil, []tensor.Shape{{2, 4}}, lnX),
 		// fused attention (§T32): grads for Q,K,V, both mask modes
-		opCase("mha", backend.OpMHA, backend.Attrs{"heads": 2, "causal": false},
+		opCase("mha", backend.OpMHA, backend.AttnAttrs{Heads: 2, Causal: false},
 			[]tensor.Shape{{3, 4}, {3, 4}, {3, 4}}, mhaQ, mhaK, mhaV),
-		opCase("mha_causal", backend.OpMHA, backend.Attrs{"heads": 2, "causal": true},
+		opCase("mha_causal", backend.OpMHA, backend.AttnAttrs{Heads: 2, Causal: true},
 			[]tensor.Shape{{3, 4}, {3, 4}, {3, 4}}, mhaQ, mhaK, mhaV),
 		// llama-family (§T38): RMSNorm (x,γ) grads; RoPE (q) grad
-		opCase("rmsnorm", backend.OpRMSNorm, backend.Attrs{"eps": 1e-5},
+		opCase("rmsnorm", backend.OpRMSNorm, backend.NormAttrs{Eps: 1e-5},
 			[]tensor.Shape{{2, 4}, {4}}, rmsX, rmsGamma),
-		opCase("rope", backend.OpRoPE, backend.Attrs{"base": 10000.0},
+		opCase("rope", backend.OpRoPE, backend.RoPEAttrs{Base: 10000.0},
 			[]tensor.Shape{{3, 4}}, ropeQ),
 		opCase("silu", backend.OpSiLU, nil, []tensor.Shape{{5}}, []float64{-1.5, -0.3, 0.1, 0.7, 2.1}),
 		// GQA (§T38b): 4 query heads, 2 kv heads, dk=3
-		opCase("gqa", backend.OpMHA, backend.Attrs{"heads": 4, "kv_heads": 2},
+		opCase("gqa", backend.OpMHA, backend.AttnAttrs{Heads: 4, KVHeads: 2},
 			[]tensor.Shape{{3, 12}, {3, 6}, {3, 6}}, ramp(36, 1), ramp(18, 2), ramp(18, 3)),
 	}
 }

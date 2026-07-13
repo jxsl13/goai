@@ -35,8 +35,10 @@ func conv2dKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs
 			return nil, fmt.Errorf("ref: conv2d bias must be [%d], got %v", f, bias.Shape())
 		}
 	}
-	s := attrs.Int("stride", 1)
-	p := attrs.Int("pad", 0)
+	pa, _ := attrs.(backend.ConvAttrs)
+	pa = pa.WithDefaults()
+	s := pa.Stride
+	p := pa.Pad
 	if s < 1 || p < 0 {
 		return nil, fmt.Errorf("ref: conv2d invalid stride %d / pad %d", s, p)
 	}
@@ -89,11 +91,13 @@ func poolDims(x *tensor.Tensor, attrs backend.Attrs) (n, c, h, w, k, s, ho, wo i
 		return 0, 0, 0, 0, 0, 0, 0, 0, fmt.Errorf("ref: pool needs x[N,C,H,W], got %v", x.Shape())
 	}
 	n, c, h, w = x.Shape()[0], x.Shape()[1], x.Shape()[2], x.Shape()[3]
-	k = attrs.Int("kernel", 0)
+	pa, _ := attrs.(backend.PoolAttrs)
+	pa = pa.WithDefaults()
+	k = pa.Kernel
 	if k < 1 {
 		return 0, 0, 0, 0, 0, 0, 0, 0, fmt.Errorf("ref: pool kernel must be ≥1, got %d", k)
 	}
-	s = attrs.Int("stride", k)
+	s = pa.Stride
 	if s < 1 {
 		return 0, 0, 0, 0, 0, 0, 0, 0, fmt.Errorf("ref: pool stride must be ≥1, got %d", s)
 	}

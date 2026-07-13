@@ -38,7 +38,7 @@ func (b *Backend) add(op backend.Op, dtype tensor.Dtype, k backend.Kernel) {
 }
 
 // Name implements backend.Backend.
-func (b *Backend) Name() string { return "ref" }
+func (b *Backend) Name() backend.Name { return backend.Ref }
 
 // Device returns the host CPU device.
 func (b *Backend) Device() tensor.Device { return tensor.CPU() }

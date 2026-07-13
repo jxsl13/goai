@@ -39,6 +39,13 @@ type optimGolden struct {
 			WD    float64     `json:"wd"`
 			Steps [][]float64 `json:"steps"`
 		} `json:"adamw"`
+		Lion struct {
+			LR    float64     `json:"lr"`
+			Beta1 float64     `json:"beta1"`
+			Beta2 float64     `json:"beta2"`
+			WD    float64     `json:"wd"`
+			Steps [][]float64 `json:"steps"`
+		} `json:"lion"`
 	} `json:"optim"`
 }
 
@@ -128,6 +135,19 @@ func TestOptimizerGoldenParity(t *testing.T) {
 		}
 		assertTraj(t, "adamw", pw, g.AdamW.Steps[s])
 		advw()
+	}
+
+	// Lion (§R65): sign-momentum + decoupled weight decay, functional options (§C12)
+	pl := tensor.FromFloat64(tensor.Shape{3}, append([]float64(nil), g.P0...))
+	optl := nn.NewLion([]*tensor.Tensor{pl}, g.Lion.LR,
+		nn.WithLionBetas(g.Lion.Beta1, g.Lion.Beta2), nn.WithLionWeightDecay(g.Lion.WD))
+	fnl, advl := gradSeq(pl, g.Grads)
+	for s := range g.Grads {
+		if err := optl.Step(fnl); err != nil {
+			t.Fatal(err)
+		}
+		assertTraj(t, "lion", pl, g.Lion.Steps[s])
+		advl()
 	}
 }
 
@@ -226,6 +246,7 @@ func TestOptimizerTrainingDecreasesLoss(t *testing.T) {
 	}
 	train("sgd", func(ps []*tensor.Tensor) nn.Optimizer { return nn.NewSGD(ps, 0.05, 0) })
 	train("adam", func(ps []*tensor.Tensor) nn.Optimizer { return nn.NewAdam(ps, 0.05) })
+	train("lion", func(ps []*tensor.Tensor) nn.Optimizer { return nn.NewLion(ps, 0.02) })
 }
 
 // nil grads are skipped; shape mismatch errors.

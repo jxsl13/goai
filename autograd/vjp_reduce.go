@@ -18,7 +18,8 @@ import (
 func reduceOutMap(xShape tensor.Shape, attrs backend.Attrs) (tensor.Shape, func(idx []int) int, error) {
 	nd := len(xShape)
 	reduced := make([]bool, nd)
-	axes := attrs.Ints("axes")
+	pr, _ := attrs.(backend.ReduceAttrs)
+	axes := pr.Axes
 	if len(axes) == 0 {
 		for i := range reduced {
 			reduced[i] = true
@@ -34,7 +35,7 @@ func reduceOutMap(xShape tensor.Shape, attrs backend.Attrs) (tensor.Shape, func(
 			reduced[a] = true
 		}
 	}
-	keepdims := attrs.Bool("keepdims", false)
+	keepdims := pr.KeepDims
 
 	outShape := tensor.Shape{}
 	outAxisOf := make([]int, nd)
@@ -122,11 +123,59 @@ func extremumVJP() VJP {
 	}
 }
 
+// prodVJP builds the product-reduction gradient: ∂prod/∂xᵢ = ∏_{j≠i} xⱼ (over the
+// element's reduction group). Computed as prodₐₗₗ/xᵢ when the group has no zeros;
+// when the group has exactly one zero, only that element gets the product of the
+// other (nonzero) elements; with two or more zeros every gradient is 0.
+func prodVJP() VJP {
+	return func(_ *backend.Context, in, out []*tensor.Tensor, attrs backend.Attrs, g *tensor.Tensor) ([]*tensor.Tensor, error) {
+		x, y := in[0], out[0]
+		outShape, mapIdx, err := reduceOutMap(x.Shape(), attrs)
+		if err != nil {
+			return nil, err
+		}
+		on := outShape.Numel()
+		numZeros := make([]int, on)
+		prodNz := make([]float64, on) // product of the nonzero elements per group
+		for i := range prodNz {
+			prodNz[i] = 1
+		}
+		for i := range x.Numel() {
+			idx := tensor.Unravel(i, x.Shape())
+			of := mapIdx(idx)
+			if v := x.AtF64(idx...); v == 0 {
+				numZeros[of]++
+			} else {
+				prodNz[of] *= v
+			}
+		}
+		gin := tensor.New(x.Dtype(), x.Shape())
+		for i := range x.Numel() {
+			idx := tensor.Unravel(i, x.Shape())
+			of := mapIdx(idx)
+			oidx := tensor.Unravel(of, outShape)
+			v := x.AtF64(idx...)
+			var d float64 // ∂prod/∂xᵢ = product of the other elements
+			switch numZeros[of] {
+			case 0:
+				d = y.AtF64(oidx...) / v // prodₐₗₗ/xᵢ
+			case 1:
+				if v == 0 {
+					d = prodNz[of] // only the zero element has a nonzero derivative
+				}
+			}
+			gin.SetF64(g.AtF64(oidx...)*d, idx...)
+		}
+		return []*tensor.Tensor{gin}, nil
+	}
+}
+
 func init() {
 	RegisterVJP(backend.OpSum, broadcastVJP(false))
 	RegisterVJP(backend.OpMean, broadcastVJP(true))
 	RegisterVJP(backend.OpMax, extremumVJP())
 	RegisterVJP(backend.OpMin, extremumVJP())
+	RegisterVJP(backend.OpProd, prodVJP())
 	// argmax: index output, non-differentiable → nil grad for its input
 	RegisterVJP(backend.OpArgMax, func(_ *backend.Context, in, _ []*tensor.Tensor, _ backend.Attrs, _ *tensor.Tensor) ([]*tensor.Tensor, error) {
 		return make([]*tensor.Tensor, len(in)), nil

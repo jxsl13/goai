@@ -1,0 +1,55 @@
+#version 450
+
+// LayerNorm over the last axis (torch semantics): y = (x−mean)/√(var+eps)·γ + β, with
+// mean and (biased, ÷dim) variance over each ROW. COOPERATIVE (§T345/§T346): ONE
+// workgroup of 256 invocations per row, coalesced strided access. Two tree reductions
+// (row mean, then variance) share the red[256] scratch with a barrier between phases.
+// Flat row-major std430 f32 buffers. Compiled to layernorm.spv by `make vulkan-spv`.
+// Dispatch is `rows` workgroups of 256. f32 on-GPU vs the reference's f64, §V11 tolerance.
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer BufX { float x[]; };
+layout(std430, binding = 1) readonly buffer BufG { float g[]; };
+layout(std430, binding = 2) readonly buffer BufB { float b[]; };
+layout(std430, binding = 3) writeonly buffer BufO { float o[]; };
+
+layout(push_constant) uniform Dims { int rows; int dim; float eps; } d;
+
+shared float red[256];
+
+void main() {
+    uint row = gl_WorkGroupID.x;
+    if (row >= uint(d.rows)) {
+        return; // whole workgroup returns together → barriers stay uniform
+    }
+    uint lane = gl_LocalInvocationID.x;
+    uint base = row * uint(d.dim);
+    float psum = 0.0;
+    for (int j = int(lane); j < d.dim; j += 256) {
+        psum += x[base + uint(j)];
+    }
+    red[lane] = psum;
+    barrier();
+    for (uint s = 128u; s > 0u; s >>= 1) {
+        if (lane < s) { red[lane] += red[lane + s]; }
+        barrier();
+    }
+    float mean = red[0] / float(d.dim);
+    barrier();
+    float pv = 0.0;
+    for (int j = int(lane); j < d.dim; j += 256) {
+        float dv = x[base + uint(j)] - mean;
+        pv += dv * dv;
+    }
+    red[lane] = pv;
+    barrier();
+    for (uint s = 128u; s > 0u; s >>= 1) {
+        if (lane < s) { red[lane] += red[lane + s]; }
+        barrier();
+    }
+    float inv = inversesqrt(red[0] / float(d.dim) + d.eps);
+    for (int j = int(lane); j < d.dim; j += 256) {
+        o[base + uint(j)] = (x[base + uint(j)] - mean) * inv * g[uint(j)] + b[uint(j)];
+    }
+}

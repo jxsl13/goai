@@ -7,8 +7,8 @@ func TestShapeNumel(t *testing.T) {
 		s    Shape
 		want int
 	}{
-		{Shape{}, 1},        // scalar: empty product = 1 (§V12 edge)
-		{Shape{5}, 5},       // vector
+		{Shape{}, 1},         // scalar: empty product = 1 (§V12 edge)
+		{Shape{5}, 5},        // vector
 		{Shape{2, 3, 4}, 24}, // tensor
 		{Shape{0}, 0},        // empty axis (§V12 edge)
 		{Shape{2, 0, 3}, 0},  // any zero dim → empty

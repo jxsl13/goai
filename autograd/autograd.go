@@ -12,12 +12,15 @@ import (
 	"github.com/jxsl13/goai/tensor"
 )
 
-// node is one recorded forward op.
+// node is one recorded forward op. A node with a non-nil ckpt is a gradient-checkpoint segment
+// (§T162): its intermediate activations were NOT retained on the forward pass and are
+// rematerialized by re-running ckpt.fn during backward (see checkpoint.go).
 type node struct {
 	op      backend.Op
 	inputs  []*tensor.Tensor
 	outputs []*tensor.Tensor
 	attrs   backend.Attrs
+	ckpt    *checkpoint
 }
 
 // Tape records forward ops and computes gradients on Backward. Gradients are
@@ -70,10 +73,30 @@ func (t *Tape) BackwardScaled(out *tensor.Tensor, scale float64) error {
 
 func (t *Tape) backward(out *tensor.Tensor, seed float64) error {
 	t.grads = map[*tensor.Tensor]*tensor.Tensor{out: scaledLike(out, seed)}
+	return t.runBackward()
+}
 
+// runBackward walks the tape in reverse applying each node's VJP (or, for a checkpoint node,
+// rematerializing its activations), assuming t.grads is already seeded with the output cotangents.
+// Split out from backward so a checkpoint's recomputation sub-tape can be driven with a
+// pre-seeded, multi-output gradient map.
+func (t *Tape) runBackward() error {
 	for i := len(t.nodes) - 1; i >= 0; i-- {
 		n := t.nodes[i]
-		// Single-output ops for now; multi-output VJPs arrive with such ops.
+		if n.ckpt != nil {
+			if err := t.backwardCheckpoint(n); err != nil {
+				return err
+			}
+			continue
+		}
+		// Multi-output ops (e.g. QR → Q,R) route through the multi-output VJP,
+		// which receives every output's cotangent (zero where unused).
+		if len(n.outputs) > 1 {
+			if err := t.backwardMulti(n); err != nil {
+				return err
+			}
+			continue
+		}
 		gout := t.grads[n.outputs[0]]
 		if gout == nil {
 			continue // this node does not influence `out`
@@ -86,16 +109,53 @@ func (t *Tape) backward(out *tensor.Tensor, seed float64) error {
 		if err != nil {
 			return fmt.Errorf("autograd: VJP %v: %w", n.op, err)
 		}
-		if len(gins) != len(n.inputs) {
-			return fmt.Errorf("autograd: VJP %v returned %d grads for %d inputs", n.op, len(gins), len(n.inputs))
+		if err := t.accumulateGrads(n, gins); err != nil {
+			return err
 		}
-		for k, gin := range gins {
-			if gin == nil {
-				continue // non-differentiable input slot
-			}
-			if err := t.accumulate(n.inputs[k], gin); err != nil {
-				return err
-			}
+	}
+	return nil
+}
+
+// backwardMulti applies a multi-output op's VJP, gathering every output cotangent
+// (a zero tensor where the output did not reach the loss). Skipped when no output
+// influences the loss.
+func (t *Tape) backwardMulti(n node) error {
+	gouts := make([]*tensor.Tensor, len(n.outputs))
+	any := false
+	for j, o := range n.outputs {
+		if g := t.grads[o]; g != nil {
+			gouts[j] = g
+			any = true
+		} else {
+			gouts[j] = tensor.New(o.Dtype(), o.Shape()) // zero cotangent for an unused output
+		}
+	}
+	if !any {
+		return nil // this node does not influence `out`
+	}
+	rule, ok := vjpsMulti[n.op]
+	if !ok {
+		return fmt.Errorf("autograd: no multi-output VJP registered for op %v", n.op)
+	}
+	gins, err := rule(t.exec, n.inputs, n.outputs, n.attrs, gouts)
+	if err != nil {
+		return fmt.Errorf("autograd: multi-output VJP %v: %w", n.op, err)
+	}
+	return t.accumulateGrads(n, gins)
+}
+
+// accumulateGrads adds each returned input gradient into the tape (nil = a
+// non-differentiable input slot), validating the count.
+func (t *Tape) accumulateGrads(n node, gins []*tensor.Tensor) error {
+	if len(gins) != len(n.inputs) {
+		return fmt.Errorf("autograd: VJP %v returned %d grads for %d inputs", n.op, len(gins), len(n.inputs))
+	}
+	for k, gin := range gins {
+		if gin == nil {
+			continue // non-differentiable input slot
+		}
+		if err := t.accumulate(n.inputs[k], gin); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -123,7 +183,7 @@ func (t *Tape) accumulate(x *tensor.Tensor, g *tensor.Tensor) error {
 // Variable pairs a value tensor with the tape that tracks it — a small
 // convenience for user code.
 type Variable struct {
-	Value *tensor.Tensor
+	Value *tensor.Tensor // the wrapped forward-pass value tensor
 	tape  *Tape
 }
 

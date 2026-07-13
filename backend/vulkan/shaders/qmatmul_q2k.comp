@@ -1,0 +1,66 @@
+#version 450
+
+// Q2_K quantized matmul (§T146, the Vulkan twin of the Metal kernel §T145) — the simplest
+// k-quant matmul. Block is 84 B (scales[16], qs[64], f16 d, f16 dmin); each sub-block's
+// scale/min are the low/high nibbles of scales[is], y = d·(sc&0xF)·q2 − dmin·(sc>>4),
+// q2 = (qs[l]>>shift)&3 ∈ [0,3] (no get_scale_min_k4, no high-bit plane). Traversal mirrors
+// dequantize_row_q2_K: two 128-groups, shift=2j (j=0..3), two 16-groups per j. The weight buffer
+// is the raw bytes as a uint word array (portable); f16 d/dmin use unpackHalf2x16. Compiled by
+// `make vulkan-spv` (glslc).
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer BufX { float x[]; };
+layout(std430, binding = 1) readonly buffer BufW { uint w[]; };
+layout(std430, binding = 2) writeonly buffer BufO { float o[]; };
+
+layout(push_constant) uniform PC {
+    int M; int K; int N;
+} p;
+
+uint getByte(int off) {
+    uint word = w[off >> 2];
+    return (word >> ((uint(off & 3)) * 8u)) & 0xFFu;
+}
+
+void main() {
+    uint gid = gl_GlobalInvocationID.x;
+    if (gid >= uint(p.M * p.N)) {
+        return;
+    }
+    int mi = int(gid) / p.N;
+    int ni = int(gid) % p.N;
+    int nsb = p.K / 256;
+    int rowBytes = nsb * 84;
+    int rowOff = ni * rowBytes;
+
+    float acc = 0.0;
+    for (int sb = 0; sb < nsb; ++sb) {
+        int base = rowOff + sb * 84;
+        int scB = base;
+        int qsB = base + 16;
+        uint dr = getByte(base + 80) | (getByte(base + 81) << 8);
+        uint dmr = getByte(base + 82) | (getByte(base + 83) << 8);
+        float d = unpackHalf2x16(dr).x;
+        float dmin = unpackHalf2x16(dmr).x;
+        for (int nb = 0; nb < 2; ++nb) {
+            int q0 = qsB + nb * 32;
+            for (int j = 0; j < 4; ++j) {
+                uint shift = uint(2 * j);
+                for (int grp = 0; grp < 2; ++grp) {
+                    int is = nb * 8 + j * 2 + grp;
+                    uint sc = getByte(scB + is);
+                    float dl = d * float(sc & 0xFu);
+                    float ml = dmin * float(sc >> 4);
+                    int gOff = grp * 16;
+                    int xk = mi * p.K + sb * 256 + nb * 128 + j * 32 + grp * 16;
+                    for (int l = 0; l < 16; ++l) {
+                        int q2 = int((getByte(q0 + gOff + l) >> shift) & 3u);
+                        acc += x[xk + l] * (dl * float(q2) - ml);
+                    }
+                }
+            }
+        }
+    }
+    o[mi * p.N + ni] = acc;
+}

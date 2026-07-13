@@ -26,9 +26,9 @@ type Optimizer interface {
 // SGD is stochastic gradient descent, optionally with classical momentum in the
 // torch formulation: v ← μ·v + g; p ← p − lr·v.
 type SGD struct {
-	Params   []*tensor.Tensor
-	LR       float64
-	Momentum float64 // 0 = plain SGD
+	Params   []*tensor.Tensor // parameters this optimizer updates
+	LR       float64          // learning rate (step size)
+	Momentum float64          // 0 = plain SGD
 	vel      [][]float64
 }
 
@@ -76,11 +76,11 @@ func (s *SGD) Step(grad GradFn) error {
 //	m ← β₁m + (1−β₁)g;  v ← β₂v + (1−β₂)g²
 //	m̂ = m/(1−β₁ᵗ);  v̂ = v/(1−β₂ᵗ);  p ← p − lr·m̂/(√v̂ + ε)
 type Adam struct {
-	Params []*tensor.Tensor
-	LR     float64
-	Beta1  float64
-	Beta2  float64
-	Eps    float64
+	Params []*tensor.Tensor // parameters this optimizer updates
+	LR     float64          // learning rate (step size)
+	Beta1  float64          // 1st-moment EMA decay (~0.9)
+	Beta2  float64          // 2nd-moment EMA decay (~0.999)
+	Eps    float64          // denominator epsilon for numerical stability
 	// WeightDecay > 0 selects AdamW's decoupled decay (Loshchilov & Hutter 2019):
 	// p ← p·(1−lr·wd) − lr·m̂/(√v̂+ε). 0 = plain Adam.
 	WeightDecay float64
@@ -190,4 +190,81 @@ func WarmupCosine(step, warmup, total int, baseLR, minLR float64) float64 {
 	}
 	progress := float64(step-warmup) / float64(total-warmup)
 	return minLR + 0.5*(baseLR-minLR)*(1+math.Cos(math.Pi*progress))
+}
+
+// Lion (EvoLved Sign Momentum, Chen et al. 2023) is a memory-efficient optimizer:
+// it keeps only a momentum buffer (no second moment like Adam — half the state)
+// and steps by the SIGN of an interpolated momentum, so every coordinate moves by
+// the same magnitude lr. Update (Alg. 2, §R65): c = β1·m + (1−β1)·g; then
+// θ −= lr·(sign(c) + λ·θ); then m = β2·m + (1−β2)·g (momentum updated AFTER the
+// step, with β2 ≠ β1; the weight decay λ is decoupled, AdamW-style).
+type Lion struct {
+	Params      []*tensor.Tensor // parameters this optimizer updates
+	LR          float64          // learning rate (step size)
+	Beta1       float64          // update-interpolation EMA decay (~0.9)
+	Beta2       float64          // momentum EMA decay (~0.99)
+	WeightDecay float64          // decoupled weight-decay coefficient (λ)
+
+	m [][]float64
+}
+
+// LionOption configures a Lion optimizer (functional-options idiom, §C12).
+type LionOption func(*Lion)
+
+// WithLionBetas sets the update/momentum interpolation coefficients (β1, β2;
+// defaults 0.9, 0.99).
+func WithLionBetas(beta1, beta2 float64) LionOption {
+	return func(l *Lion) { l.Beta1, l.Beta2 = beta1, beta2 }
+}
+
+// WithLionWeightDecay sets the decoupled weight decay λ (default 0).
+func WithLionWeightDecay(wd float64) LionOption {
+	return func(l *Lion) { l.WeightDecay = wd }
+}
+
+// NewLion builds a Lion optimizer over params with learning rate lr and the
+// canonical defaults β1=0.9, β2=0.99, no weight decay.
+func NewLion(params []*tensor.Tensor, lr float64, opts ...LionOption) *Lion {
+	l := &Lion{Params: params, LR: lr, Beta1: 0.9, Beta2: 0.99}
+	for _, o := range opts {
+		o(l)
+	}
+	l.m = make([][]float64, len(params))
+	for i, p := range params {
+		l.m[i] = make([]float64, p.Numel())
+	}
+	return l
+}
+
+// Step applies one Lion update.
+func (l *Lion) Step(grad GradFn) error {
+	for pi, p := range l.Params {
+		g := grad(p)
+		if g == nil {
+			continue
+		}
+		if !g.Shape().Equal(p.Shape()) {
+			return fmt.Errorf("nn: Lion grad shape %v != param %v", g.Shape(), p.Shape())
+		}
+		for i := range p.Numel() {
+			idx := tensor.Unravel(i, p.Shape())
+			gv := g.AtF64(idx...)
+			c := l.Beta1*l.m[pi][i] + (1-l.Beta1)*gv // interpolate (β1)
+			pv := p.AtF64(idx...)
+			p.SetF64(pv-l.LR*(signf(c)+l.WeightDecay*pv), idx...) // sign step + decoupled wd
+			l.m[pi][i] = l.Beta2*l.m[pi][i] + (1-l.Beta2)*gv      // momentum after (β2)
+		}
+	}
+	return nil
+}
+
+func signf(x float64) float64 {
+	switch {
+	case x > 0:
+		return 1
+	case x < 0:
+		return -1
+	default:
+		return 0
+	}
 }

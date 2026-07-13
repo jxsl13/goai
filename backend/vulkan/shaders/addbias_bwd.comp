@@ -1,0 +1,25 @@
+#version 450
+
+// Bias-add backward db[j] = Σ_i G[rows,n][i,j] (column sum), one invocation per column
+// (§T354: the VJP's bias-grad was a CPU scalar row-sum). Flat row-major std430 f32.
+// Compiled to addbias_bwd.spv by `make vulkan-spv` (glslc). f32 vs the reference's f64
+// accumulation, so §V11 allows a tolerance.
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer BufG { float g[]; };
+layout(std430, binding = 1) writeonly buffer BufDB { float db[]; };
+
+layout(push_constant) uniform Dims { int rows; int n; } d;
+
+void main() {
+    uint j = gl_GlobalInvocationID.x;
+    if (j >= uint(d.n)) {
+        return;
+    }
+    float s = 0.0;
+    for (int i = 0; i < d.rows; ++i) {
+        s += g[i * d.n + int(j)];
+    }
+    db[j] = s;
+}

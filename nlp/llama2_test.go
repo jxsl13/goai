@@ -119,7 +119,7 @@ func TestGQAParity(t *testing.T) {
 	k := tensor.FromFloat64(tensor.Shape{g.Seq, g.NKV * g.DK}, g.K)
 	v := tensor.FromFloat64(tensor.Shape{g.Seq, g.NKV * g.DK}, g.V)
 	out, err := backend.Execute(backend.NewContext(), backend.OpMHA,
-		[]*tensor.Tensor{q, k, v}, backend.Attrs{"heads": g.NH, "kv_heads": g.NKV, "causal": false})
+		[]*tensor.Tensor{q, k, v}, backend.AttnAttrs{Heads: g.NH, KVHeads: g.NKV, Causal: false})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,13 +132,13 @@ func TestMQAShapes(t *testing.T) {
 	k := tensor.New(tensor.F64, tensor.Shape{3, 2}) // 1 kv head
 	v := tensor.New(tensor.F64, tensor.Shape{3, 2})
 	if _, err := backend.Execute(backend.NewContext(), backend.OpMHA,
-		[]*tensor.Tensor{q, k, v}, backend.Attrs{"heads": 4, "kv_heads": 1}); err != nil {
+		[]*tensor.Tensor{q, k, v}, backend.AttnAttrs{Heads: 4, KVHeads: 1}); err != nil {
 		t.Fatalf("MQA (kv_heads=1) must work: %v", err)
 	}
 	// mismatched kv dim errors
 	bad := tensor.New(tensor.F64, tensor.Shape{3, 3})
 	if _, err := backend.Execute(backend.NewContext(), backend.OpMHA,
-		[]*tensor.Tensor{q, bad, bad}, backend.Attrs{"heads": 4, "kv_heads": 1}); err == nil {
+		[]*tensor.Tensor{q, bad, bad}, backend.AttnAttrs{Heads: 4, KVHeads: 1}); err == nil {
 		t.Error("wrong kv dim must error")
 	}
 }

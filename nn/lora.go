@@ -16,11 +16,11 @@ import (
 // B is zero, so the adapter starts as a no-op (ΔW = BA = 0) — training begins
 // from the exact pretrained behaviour.
 type LoRALinear struct {
-	W       *tensor.Tensor // [in, out], frozen base
-	A       *tensor.Tensor // [in, r]
-	B       *tensor.Tensor // [r, out]
-	R       int
-	Alpha   float64
+	W     *tensor.Tensor // [in, out], frozen base
+	A     *tensor.Tensor // [in, r]
+	B     *tensor.Tensor // [r, out]
+	R     int            // LoRA rank
+	Alpha float64        // LoRA scaling α; effective scale α/R
 }
 
 // NewLoRA wraps a frozen base weight w[in,out] with a rank-r adapter.
@@ -62,7 +62,7 @@ func (l *LoRALinear) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Te
 		return nil, err
 	}
 	// y = base + (alpha/r)·delta  via axpy
-	return l.exec(ctx, backend.OpAXPY, backend.Attrs{"alpha": l.Alpha / float64(l.R)}, delta, base)
+	return l.exec(ctx, backend.OpAXPY, backend.AXPYAttrs{Alpha: l.Alpha / float64(l.R)}, delta, base)
 }
 
 // Params returns only the trainable adapter matrices A and B (W is frozen).

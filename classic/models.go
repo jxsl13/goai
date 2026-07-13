@@ -6,6 +6,7 @@ import (
 
 	"github.com/jxsl13/goai/autograd"
 	"github.com/jxsl13/goai/backend"
+	"github.com/jxsl13/goai/internal/linalg"
 	"github.com/jxsl13/goai/nn"
 	"github.com/jxsl13/goai/tensor"
 )
@@ -17,8 +18,8 @@ import (
 // equations square the condition number vs sklearn's SVD lstsq — parity holds
 // to ~1e-8 on well-conditioned data (tolerance justified in the golden test).
 type LinearRegression struct {
-	Coef      []float64
-	Intercept float64
+	Coef      []float64 // fitted per-feature coefficients/weights
+	Intercept float64   // fitted bias term
 }
 
 // Fit solves OLS for X[n][d], y[n] with an intercept column.
@@ -257,7 +258,7 @@ func KMeans(x [][]float64, init [][]float64, maxIter int) (centers [][]float64, 
 type PCA struct {
 	Components        [][]float64 // [ncomp][d]
 	ExplainedVariance []float64   // eigenvalues, descending
-	Mean              []float64
+	Mean              []float64   // per-feature mean subtracted before projection
 }
 
 // Fit computes the top ncomp components of X[n][d].
@@ -295,7 +296,7 @@ func (p *PCA) Fit(x [][]float64, ncomp int) error {
 			cov[i][j] /= float64(n - 1)
 		}
 	}
-	vals, vecs := jacobiEigen(cov)
+	vals, vecs := linalg.SymEig(cov)
 	p.ExplainedVariance = vals[:ncomp]
 	p.Components = vecs[:ncomp]
 	return nil

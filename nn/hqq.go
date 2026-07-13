@@ -1,0 +1,132 @@
+package nn
+
+import "math"
+
+// HQQ — Half-Quadratic Quantization (Badri & Shrivastava 2023, "Half-Quadratic Quantization
+// of Large Machine Learning Models", mobiusml.github.io; github.com/mobiusml/hqq). Unlike
+// the calibration-aware quantizers here (GPTQ/AWQ/SmoothQuant need activations) HQQ is
+// DATA-FREE: it quantizes weights alone. Its trick is to fit the asymmetric affine
+// quantizer W_q = round(W/s + z), Ŵ = s·(W_q − z) by minimizing a ROBUST (Lp, p<1) norm of
+// the quantization error instead of the L2 norm, so a few outlier weights don't drag the
+// zero-point off the bulk. Only the zero-point z is optimized (the scale s is fixed from the
+// group range); a half-quadratic split makes each step closed-form (a shrinkage on the error
+// and a mean update on z).
+
+// HQQOption configures HQQuantize (functional-options idiom, §C12).
+type HQQOption func(*hqqCfg)
+
+type hqqCfg struct {
+	p        float64 // Lp-norm exponent (robustness), default 0.7
+	iters    int     // half-quadratic iterations, default 20
+	betaInit float64 // initial β
+	kappa    float64 // β growth per iteration
+}
+
+// WithHQQLpNorm sets the robust-norm exponent p ∈ (0,1] (default 0.7); p=1 is the ordinary
+// soft-threshold, smaller p is more outlier-robust.
+func WithHQQLpNorm(p float64) HQQOption { return func(c *hqqCfg) { c.p = p } }
+
+// WithHQQIters sets the number of half-quadratic iterations (default 20).
+func WithHQQIters(n int) HQQOption { return func(c *hqqCfg) { c.iters = n } }
+
+// HQQuantize quantizes w to `bits`-bit asymmetric integers in per-group blocks of size
+// groupSize, optimizing each group's zero-point with the half-quadratic solver. It returns
+// the integer codes (∈ [0, 2^bits−1]) and the per-group scale and zero-point; recover the
+// weights with DequantizeHQQ. A pure-f64, data-free post-training quantizer. With 0
+// iterations it is plain round-to-nearest (the initialization).
+func HQQuantize(w []float64, bits, groupSize int, opts ...HQQOption) (codes []int, scale, zero []float64) {
+	cfg := hqqCfg{p: 0.7, iters: 20, betaInit: 1, kappa: 1.01}
+	for _, o := range opts {
+		o(&cfg)
+	}
+	if groupSize <= 0 {
+		groupSize = len(w)
+	}
+	n := len(w)
+	maxLevel := float64(int(1)<<bits - 1) // 2^bits − 1
+	codes = make([]int, n)
+	ng := (n + groupSize - 1) / groupSize
+	scale = make([]float64, ng)
+	zero = make([]float64, ng)
+
+	for g := range ng {
+		lo, hi := g*groupSize, min((g+1)*groupSize, n)
+		wg := w[lo:hi]
+
+		// fixed scale from the group range; zero-point maps min→0, max→maxLevel.
+		mn, mx := wg[0], wg[0]
+		for _, v := range wg {
+			mn, mx = math.Min(mn, v), math.Max(mx, v)
+		}
+		s := (mx - mn) / maxLevel
+		if s == 0 {
+			s = 1 // degenerate constant group
+		}
+		z := -mn / s
+
+		q := make([]float64, len(wg)) // current integer levels (float-valued)
+		round := func() {
+			for i, v := range wg {
+				q[i] = math.Min(maxLevel, math.Max(0, math.Round(v/s+z)))
+			}
+		}
+		round()
+
+		// half-quadratic: alternate the Lp shrinkage of the error and the closed-form z.
+		beta := cfg.betaInit
+		for range cfg.iters {
+			// (a) W_e = shrink_p(W − Ŵ, β), Ŵ = s(q − z).
+			// (b) z = mean( q − (W − W_e)/s ), the argmin of the quadratic in z.
+			var zsum float64
+			for i, v := range wg {
+				wHat := s * (q[i] - z)
+				we := shrinkLp(v-wHat, beta, cfg.p)
+				zsum += q[i] - (v-we)/s
+			}
+			z = zsum / float64(len(wg))
+			round()
+			beta *= cfg.kappa
+		}
+
+		scale[g], zero[g] = s, z
+		for i := range wg {
+			codes[lo+i] = int(q[i])
+		}
+	}
+	return codes, scale, zero
+}
+
+// DequantizeHQQ reconstructs weights from HQQ codes and per-group scale/zero:
+// ŵ[i] = scale[g]·(codes[i] − zero[g]).
+func DequantizeHQQ(codes []int, scale, zero []float64, groupSize int) []float64 {
+	if groupSize <= 0 {
+		groupSize = len(codes)
+	}
+	out := make([]float64, len(codes))
+	for i, c := range codes {
+		g := i / groupSize
+		out[i] = scale[g] * (float64(c) - zero[g])
+	}
+	return out
+}
+
+// shrinkLp is the proximal operator of the Lp norm (generalized soft-threshold):
+// sign(x)·max(|x| − (1/β)·|x|^(p−1), 0). For p=1 it is the ordinary soft-threshold; for
+// p<1 the threshold grows for small |x| (driving them to 0) and shrinks for large |x|
+// (preserving outliers). x=0 maps to 0.
+func shrinkLp(x, beta, p float64) float64 {
+	a := math.Abs(x)
+	if a == 0 {
+		return 0
+	}
+	var thr float64
+	if p == 1 {
+		thr = 1 / beta
+	} else {
+		thr = (1 / beta) * math.Pow(a, p-1)
+	}
+	if a <= thr {
+		return 0
+	}
+	return math.Copysign(a-thr, x)
+}

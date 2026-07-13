@@ -13,6 +13,16 @@ import (
 // tol 0) — no summation reorder. ikj also gives row-wise access to B and C (the
 // inner j-loop is a vectorizable SAXPY) and parallelizes cleanly over disjoint C
 // row-bands. f32 accumulates in an f64 scratch matrix, narrowing once (§V10).
+//
+// §T74/§B28: BLIS-style kc×nc cache blocking with a packed B-panel was built and
+// measured against this kernel on the arm64 (Apple M-series) host and DISCARDED —
+// it tied on f64-512, regressed f32-1024 (~-9%), and its one marginal f64-1024
+// median (~12%) sat inside the run-to-run noise while costing ~40% more memory.
+// The M-series memory subsystem already feeds this streaming kernel near-optimally,
+// so panel packing is net overhead here. The real remaining headroom is wider-FMA
+// SIMD, which is host-blocked on arm64 (cf §T11b/§B13). Resume blocking only on a
+// host whose cache hierarchy actually bottlenecks the unblocked stream (large-cache
+// x86 server), re-measuring before merge.
 
 func matmulKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*tensor.Tensor, error) {
 	if len(in) != 2 {

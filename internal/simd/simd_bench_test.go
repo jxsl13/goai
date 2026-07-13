@@ -22,5 +22,5 @@ func benchAdd(b *testing.B, n int) {
 	}
 }
 
-func BenchmarkAddF64_4K(b *testing.B)   { benchAdd(b, 4096) }    // L1-resident
-func BenchmarkAddF64_256K(b *testing.B) { benchAdd(b, 262144) }  // L2/SLC
+func BenchmarkAddF64_4K(b *testing.B)   { benchAdd(b, 4096) }   // L1-resident
+func BenchmarkAddF64_256K(b *testing.B) { benchAdd(b, 262144) } // L2/SLC

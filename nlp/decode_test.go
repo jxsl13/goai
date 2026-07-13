@@ -85,12 +85,43 @@ func TestMHASingleQueryAttendsAll(t *testing.T) {
 	q := tensor.FromFloat64(tensor.Shape{1, 2}, []float64{0, 0}) // zero query → uniform softmax
 	k := tensor.FromFloat64(tensor.Shape{3, 2}, []float64{1, 0, 0, 1, -1, 0})
 	v := tensor.FromFloat64(tensor.Shape{3, 2}, []float64{3, 0, 0, 6, 9, 0})
-	out, err := backend.Execute(ctx, backend.OpMHA, []*tensor.Tensor{q, k, v}, backend.Attrs{"heads": 1, "causal": false})
+	out, err := backend.Execute(ctx, backend.OpMHA, []*tensor.Tensor{q, k, v}, backend.AttnAttrs{Heads: 1, Causal: false})
 	if err != nil {
 		t.Fatal(err)
 	}
 	// zero query → equal weights 1/3 → out = mean of v = [(3+0+9)/3,(0+6+0)/3]=[4,2]
 	if math.Abs(out[0].AtF64(0, 0)-4) > 1e-12 || math.Abs(out[0].AtF64(0, 1)-2) > 1e-12 {
 		t.Errorf("single-query attention = (%v,%v), want (4,2)", out[0].AtF64(0, 0), out[0].AtF64(0, 1))
+	}
+}
+
+// §T361/§V: Generate's WithBackend option routes the decode loop to the chosen backend
+// and (greedy = deterministic) produces identical tokens across backends — verifying the
+// option is plumbed and the routing is correct. Decode is dispatch-bound, so callers use
+// this to put small-model decode on the faster cpu (§T360/§T361).
+func TestGenerateWithBackend(t *testing.T) {
+	model, prompt := loadGPTModel(t)
+	cpuB, _ := backend.Get(backend.CPU)
+	refB, _ := backend.Get(backend.Ref)
+
+	base, err := model.Generate(prompt, 4, nlp.Greedy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	onCPU, err := model.Generate(prompt, 4, nlp.Greedy(), nlp.WithBackend(cpuB))
+	if err != nil {
+		t.Fatalf("Generate WithBackend(cpu): %v", err)
+	}
+	onRef, err := model.Generate(prompt, 4, nlp.Greedy(), nlp.WithBackend(refB))
+	if err != nil {
+		t.Fatalf("Generate WithBackend(ref): %v", err)
+	}
+	if len(onCPU) != len(base) || len(onRef) != len(base) {
+		t.Fatalf("length mismatch: base %d, cpu %d, ref %d", len(base), len(onCPU), len(onRef))
+	}
+	for i := range base {
+		if onCPU[i] != base[i] || onRef[i] != base[i] {
+			t.Fatalf("token %d differs across backends: base %d, cpu %d, ref %d", i, base[i], onCPU[i], onRef[i])
+		}
 	}
 }

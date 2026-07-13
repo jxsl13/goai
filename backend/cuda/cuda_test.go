@@ -32,11 +32,11 @@ func crossTol(k int) float64 { return 1e-6 * math.Sqrt(float64(k)) }
 // swapped operand order would fail here immediately.
 func TestCUDACrossReference(t *testing.T) {
 	skipNoGPU(t)
-	cb, ok := backend.Get("cuda")
+	cb, ok := backend.Get(backend.CUDA)
 	if !ok {
 		t.Fatal("cuda available but not registered")
 	}
-	ref, _ := backend.Get("ref")
+	ref, _ := backend.Get(backend.Ref)
 
 	shapes := []struct{ m, k, n int }{
 		{1, 1, 1}, {2, 3, 4}, {33, 65, 17}, {128, 128, 128}, {256, 512, 128},
@@ -68,8 +68,8 @@ func TestCUDACrossReference(t *testing.T) {
 // gives a shape or value mismatch here.
 func TestCUDARectangular(t *testing.T) {
 	skipNoGPU(t)
-	cb, _ := backend.Get("cuda")
-	ref, _ := backend.Get("ref")
+	cb, _ := backend.Get(backend.CUDA)
+	ref, _ := backend.Get(backend.Ref)
 	a := bench.RandF32(tensor.Shape{7, 13}, 5)
 	b := bench.RandF32(tensor.Shape{13, 3}, 6)
 	gc, err := backend.Execute(backend.NewContext().WithBackend(cb), backend.OpMatMul, []*tensor.Tensor{a, b}, nil)
@@ -91,7 +91,7 @@ func TestCUDARectangular(t *testing.T) {
 // Fallback: ops the cuda backend does not serve route to the reference (§I4).
 func TestCUDAFallback(t *testing.T) {
 	skipNoGPU(t)
-	cb, _ := backend.Get("cuda")
+	cb, _ := backend.Get(backend.CUDA)
 	x := bench.RandF32(tensor.Shape{8}, 3)
 	out, err := backend.Execute(backend.NewContext().WithBackend(cb), backend.OpExp, []*tensor.Tensor{x}, nil)
 	if err != nil {
@@ -102,7 +102,7 @@ func TestCUDAFallback(t *testing.T) {
 	}
 }
 
-func benchMatMulOn(b *testing.B, name string, sz int) {
+func benchMatMulOn(b *testing.B, name backend.Name, sz int) {
 	be, ok := backend.Get(name)
 	if !ok {
 		b.Skipf("%s not available", name)
@@ -120,7 +120,7 @@ func benchMatMulOn(b *testing.B, name string, sz int) {
 }
 
 // §C3 gate benchmarks: cuda vs the ceiling-optimized Pure-Go cpu backend.
-func BenchmarkMatMulF32_512_cuda(b *testing.B)  { benchMatMulOn(b, "cuda", 512) }
-func BenchmarkMatMulF32_512_cpu(b *testing.B)   { benchMatMulOn(b, "cpu", 512) }
-func BenchmarkMatMulF32_1024_cuda(b *testing.B) { benchMatMulOn(b, "cuda", 1024) }
-func BenchmarkMatMulF32_1024_cpu(b *testing.B)  { benchMatMulOn(b, "cuda", 1024) }
+func BenchmarkMatMulF32_512_cuda(b *testing.B)  { benchMatMulOn(b, backend.CUDA, 512) }
+func BenchmarkMatMulF32_512_cpu(b *testing.B)   { benchMatMulOn(b, backend.CPU, 512) }
+func BenchmarkMatMulF32_1024_cuda(b *testing.B) { benchMatMulOn(b, backend.CUDA, 1024) }
+func BenchmarkMatMulF32_1024_cpu(b *testing.B)  { benchMatMulOn(b, backend.CUDA, 1024) }

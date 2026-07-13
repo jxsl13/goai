@@ -14,7 +14,7 @@ import (
 // cpu benchmarks, to compare against the ref baselines (§V5). Same shapes/seeds
 // as backend/ref/bench_test.go so the delta is apples-to-apples.
 
-func benchOn(b *testing.B, name string, op backend.Op, ins ...*tensor.Tensor) {
+func benchOn(b *testing.B, name backend.Name, op backend.Op, ins ...*tensor.Tensor) {
 	be, _ := backend.Get(name)
 	ctx := backend.NewContext().WithBackend(be)
 	b.ReportAllocs()
@@ -27,14 +27,14 @@ func benchOn(b *testing.B, name string, op backend.Op, ins ...*tensor.Tensor) {
 }
 
 func BenchmarkAddF64_4K_cpu(b *testing.B) {
-	benchOn(b, "cpu", backend.OpAdd, bench.RandF64(tensor.Shape{4096}, 1), bench.RandF64(tensor.Shape{4096}, 2))
+	benchOn(b, backend.CPU, backend.OpAdd, bench.RandF64(tensor.Shape{4096}, 1), bench.RandF64(tensor.Shape{4096}, 2))
 }
 func BenchmarkAddF32_4K_cpu(b *testing.B) {
-	benchOn(b, "cpu", backend.OpAdd, bench.RandF32(tensor.Shape{4096}, 1), bench.RandF32(tensor.Shape{4096}, 2))
+	benchOn(b, backend.CPU, backend.OpAdd, bench.RandF32(tensor.Shape{4096}, 1), bench.RandF32(tensor.Shape{4096}, 2))
 }
 func BenchmarkExpF64_64K_cpu(b *testing.B) {
-	benchOn(b, "cpu", backend.OpExp, bench.RandF64(tensor.Shape{65536}, 3))
+	benchOn(b, backend.CPU, backend.OpExp, bench.RandF64(tensor.Shape{65536}, 3))
 }
 func BenchmarkMulF64_256K_cpu(b *testing.B) { // exercises the parallel path
-	benchOn(b, "cpu", backend.OpMul, bench.RandF64(tensor.Shape{262144}, 1), bench.RandF64(tensor.Shape{262144}, 2))
+	benchOn(b, backend.CPU, backend.OpMul, bench.RandF64(tensor.Shape{262144}, 1), bench.RandF64(tensor.Shape{262144}, 2))
 }

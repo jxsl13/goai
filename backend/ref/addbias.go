@@ -34,7 +34,32 @@ func addBiasKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) (
 	return []*tensor.Tensor{out}, nil
 }
 
+// addBiasBackwardKernel computes dbias[j] = Σ_i g[i,j] (the column sum), f64 accumulation
+// (§V10). The bias-add VJP dispatches this so the reduction runs on the active backend
+// instead of a CPU scalar loop (§T354); the input gradient is g itself (identity).
+func addBiasBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*tensor.Tensor, error) {
+	if len(in) != 1 {
+		return nil, fmt.Errorf("ref: addbias-backward wants (g), got %d", len(in))
+	}
+	g := in[0]
+	if g.Ndim() != 2 {
+		return nil, fmt.Errorf("ref: addbias-backward needs g rank-2, got %dD", g.Ndim())
+	}
+	m, n := g.Shape()[0], g.Shape()[1]
+	db := tensor.NewOn(ctx.Device(), g.Dtype(), tensor.Shape{n})
+	for j := range n {
+		var s float64
+		for i := range m {
+			s += g.AtF64(i, j)
+		}
+		db.SetF64(s, j)
+	}
+	return []*tensor.Tensor{db}, nil
+}
+
 func init() {
 	std.add(backend.OpAddBias, tensor.F32, addBiasKernel)
 	std.add(backend.OpAddBias, tensor.F64, addBiasKernel)
+	std.add(backend.OpAddBiasBackward, tensor.F32, addBiasBackwardKernel)
+	std.add(backend.OpAddBiasBackward, tensor.F64, addBiasBackwardKernel)
 }

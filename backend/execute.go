@@ -2,9 +2,21 @@ package backend
 
 import (
 	"fmt"
+	"os"
+	"time"
 
 	"github.com/jxsl13/goai/tensor"
 )
+
+// debugFallback (GOAI_LOG_FALLBACK=1) logs every op that falls back from the active backend to the
+// reference (§I4) — the diagnostic that found the §T401 CrossEntropy + §T402 Embed silent CPU
+// fallbacks. Off by default (a single bool test on the already-slow fallback path).
+var debugFallback = os.Getenv("GOAI_LOG_FALLBACK") != ""
+
+// debugTimeOps (GOAI_TIME_OPS=1) logs every op's wall time through the dispatch choke-point as
+// "OPTIME <op> <backend> <shape> <ms>" — aggregate with sort|awk to profile a REAL workload's op
+// mix (§V22/§T410: standalone op timing misleads; this measures what actually runs). Off by default.
+var debugTimeOps = os.Getenv("GOAI_TIME_OPS") != ""
 
 // Execute is the single dispatch choke-point (ADR-0003). It resolves the kernel
 // for op at the inputs' dtype on ctx.Backend, falling back to the reference
@@ -24,23 +36,61 @@ func Execute(ctx *Context, op Op, inputs []*tensor.Tensor, attrs Attrs) ([]*tens
 
 	k, ok := ctx.Backend.Kernel(op, dtype)
 	if !ok {
-		// Fallback to the reference backend (§I4). Run it in a context bound to
-		// the reference so kernels allocate on the reference device.
-		ref := Reference()
-		if ref == nil {
-			return nil, fmt.Errorf("backend %q: no kernel for %v/%v and no reference backend",
-				ctx.Backend.Name(), op, dtype)
+		// Fallback chain (§I4/§T461): prefer the OPTIMIZED CPU backend — its kernels
+		// are cross-validated against the reference (§V3) and typically orders of
+		// magnitude faster (a GPU backend missing conv2d_backward would otherwise pay
+		// the naive reference, §T459) — then the reference, which remains the
+		// numerical truth and the guaranteed final fallback.
+		var fb Backend
+		if cpu, cok := Get(CPU); cok && cpu != ctx.Backend {
+			if _, has := cpu.Kernel(op, dtype); has {
+				fb = cpu
+			}
 		}
-		rk, rok := ref.Kernel(op, dtype)
-		if !rok {
-			return nil, fmt.Errorf("no kernel for %v/%v (active %q, reference %q)",
-				op, dtype, ctx.Backend.Name(), ref.Name())
+		if fb == nil {
+			ref := Reference()
+			if ref == nil {
+				return nil, fmt.Errorf("backend %q: no kernel for %v/%v and no reference backend",
+					ctx.Backend.Name(), op, dtype)
+			}
+			if _, rok := ref.Kernel(op, dtype); !rok {
+				return nil, fmt.Errorf("no kernel for %v/%v (active %q, reference %q)",
+					op, dtype, ctx.Backend.Name(), ref.Name())
+			}
+			fb = ref
 		}
-		k = rk
-		ctx = ctx.WithBackend(ref)
+		if debugFallback {
+			shp := ""
+			if len(inputs) > 0 {
+				shp = inputs[0].Shape().String()
+			}
+			fmt.Fprintf(os.Stderr, "FALLBACK[%s→%s] %v %v %s\n", ctx.Backend.Name(), fb.Name(), op, dtype, shp)
+		}
+		k, _ = fb.Kernel(op, dtype)
+		ctx = ctx.WithBackend(fb)
 	}
 
-	out, err := k(ctx, inputs, attrs)
+	var opStart time.Time
+	if debugTimeOps {
+		opStart = time.Now()
+	}
+	// Kernels never see the recorder (§V25): recording is Execute's job, done ONCE
+	// below. A kernel that re-dispatches (in-kernel fallback or ADR-0008 routing)
+	// would otherwise record the op twice and double its gradients — §B49 live,
+	// §T537 found 46 latent sites. Enforced here by construction.
+	kctx := ctx
+	if ctx.Recorder != nil {
+		kctx = ctx.WithRecorder(nil)
+	}
+	out, err := k(kctx, inputs, attrs)
+	if debugTimeOps {
+		shp := ""
+		if len(inputs) > 0 {
+			shp = inputs[0].Shape().String()
+		}
+		fmt.Fprintf(os.Stderr, "OPTIME %v %s %s %.3f\n", op, ctx.Backend.Name(), shp,
+			float64(time.Since(opStart).Microseconds())/1000)
+	}
 	if err != nil {
 		return nil, err
 	}

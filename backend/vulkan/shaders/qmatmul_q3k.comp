@@ -1,0 +1,86 @@
+#version 450
+
+// Q3_K quantized matmul (§T148, the Vulkan twin of the Metal kernel §T147) — the most intricate
+// k-quant matmul. Block is 110 B (hmask[32], qs[64], scales[12], f16 d LAST). The 16 signed
+// 6-bit sub-block scales are unpacked once per super-block via the ggml aux/kmask splice; then
+// y = d·(sc6−32)·(q3−4), q3 = 2 low bits (qs) | 1 high bit (hmask)<<2, the hmask arithmetic
+// INVERTED (bit clear → subtract 4), with the per-j mask m = 1<<(nb*4+j). The weight buffer is
+// the raw bytes as a uint word array (portable); the f16 d uses unpackHalf2x16. Compiled by
+// `make vulkan-spv` (glslc).
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer BufX { float x[]; };
+layout(std430, binding = 1) readonly buffer BufW { uint w[]; };
+layout(std430, binding = 2) writeonly buffer BufO { float o[]; };
+
+layout(push_constant) uniform PC {
+    int M; int K; int N;
+} p;
+
+uint getByte(int off) {
+    uint word = w[off >> 2];
+    return (word >> ((uint(off & 3)) * 8u)) & 0xFFu;
+}
+
+// getU32 reads 4 bytes as a little-endian uint (the aux words of the Q3_K scale splice).
+uint getU32(int off) {
+    return getByte(off) | (getByte(off + 1) << 8) | (getByte(off + 2) << 16) | (getByte(off + 3) << 24);
+}
+
+void main() {
+    uint gid = gl_GlobalInvocationID.x;
+    if (gid >= uint(p.M * p.N)) {
+        return;
+    }
+    int mi = int(gid) / p.N;
+    int ni = int(gid) % p.N;
+    int nsb = p.K / 256;
+    int rowBytes = nsb * 110;
+    int rowOff = ni * rowBytes;
+
+    float acc = 0.0;
+    for (int sb = 0; sb < nsb; ++sb) {
+        int base = rowOff + sb * 110;
+        int hmB = base;
+        int qsB = base + 32;
+        int scB = base + 96;
+        uint dr = getByte(base + 108) | (getByte(base + 109) << 8);
+        float dAll = unpackHalf2x16(dr).x;
+
+        uint aux0 = getU32(scB);
+        uint aux1 = getU32(scB + 4);
+        uint aux2 = getU32(scB + 8);
+        uint tmp = aux2;
+        uint a2 = ((aux0 >> 4) & 0x0f0f0f0fu) | (((tmp >> 4) & 0x03030303u) << 4);
+        uint a3 = ((aux1 >> 4) & 0x0f0f0f0fu) | (((tmp >> 6) & 0x03030303u) << 4);
+        uint a0 = (aux0 & 0x0f0f0f0fu) | (((tmp >> 0) & 0x03030303u) << 4);
+        uint a1 = (aux1 & 0x0f0f0f0fu) | (((tmp >> 2) & 0x03030303u) << 4);
+        int sc[16];
+        sc[0] = int(a0 & 0xFFu); sc[1] = int((a0 >> 8) & 0xFFu); sc[2] = int((a0 >> 16) & 0xFFu); sc[3] = int((a0 >> 24) & 0xFFu);
+        sc[4] = int(a1 & 0xFFu); sc[5] = int((a1 >> 8) & 0xFFu); sc[6] = int((a1 >> 16) & 0xFFu); sc[7] = int((a1 >> 24) & 0xFFu);
+        sc[8] = int(a2 & 0xFFu); sc[9] = int((a2 >> 8) & 0xFFu); sc[10] = int((a2 >> 16) & 0xFFu); sc[11] = int((a2 >> 24) & 0xFFu);
+        sc[12] = int(a3 & 0xFFu); sc[13] = int((a3 >> 8) & 0xFFu); sc[14] = int((a3 >> 16) & 0xFFu); sc[15] = int((a3 >> 24) & 0xFFu);
+
+        int is = 0;
+        for (int nb = 0; nb < 2; ++nb) {
+            int qb = qsB + nb * 32;
+            for (int j = 0; j < 4; ++j) {
+                uint shift = uint(2 * j);
+                uint mbit = 1u << uint(nb * 4 + j);
+                for (int grp = 0; grp < 2; ++grp) {
+                    float dl = dAll * float(sc[is] - 32);
+                    is++;
+                    int gOff = grp * 16;
+                    int xk = mi * p.K + sb * 256 + nb * 128 + j * 32 + grp * 16;
+                    for (int l = 0; l < 16; ++l) {
+                        int q3 = int((getByte(qb + gOff + l) >> shift) & 3u);
+                        int h = ((getByte(hmB + gOff + l) & mbit) != 0u) ? 0 : 4;
+                        acc += x[xk + l] * dl * float(q3 - h);
+                    }
+                }
+            }
+        }
+    }
+    o[mi * p.N + ni] = acc;
+}

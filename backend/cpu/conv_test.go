@@ -15,8 +15,8 @@ import (
 // strides, padding, bias, and both dtypes ((c,ky,kx) column order preserves the
 // accumulation order).
 func TestConvCrossReferenceExact(t *testing.T) {
-	cpu, _ := backend.Get("cpu")
-	ref, _ := backend.Get("ref")
+	cpu, _ := backend.Get(backend.CPU)
+	ref, _ := backend.Get(backend.Ref)
 
 	cases := []struct {
 		n, c, h, w, f, kh, kw, s, p int
@@ -43,7 +43,7 @@ func TestConvCrossReferenceExact(t *testing.T) {
 			if tc.bias {
 				ins = append(ins, b)
 			}
-			attrs := backend.Attrs{"stride": tc.s, "pad": tc.p}
+			attrs := backend.ConvAttrs{Stride: tc.s, Pad: tc.p}
 			gc, err := backend.Execute(backend.NewContext().WithBackend(cpu), backend.OpConv2D, ins, attrs)
 			if err != nil {
 				t.Fatalf("cpu %+v: %v", tc, err)
@@ -57,7 +57,7 @@ func TestConvCrossReferenceExact(t *testing.T) {
 	}
 }
 
-func benchConv(b *testing.B, name string) {
+func benchConv(b *testing.B, name backend.Name) {
 	be, _ := backend.Get(name)
 	x := bench.RandF64(tensor.Shape{8, 8, 28, 28}, 1)
 	w := bench.RandF64(tensor.Shape{16, 8, 3, 3}, 2)
@@ -72,5 +72,5 @@ func benchConv(b *testing.B, name string) {
 }
 
 // §V5: the im2col+GEMM path vs the direct reference loops.
-func BenchmarkConv2D_ref(b *testing.B) { benchConv(b, "ref") }
-func BenchmarkConv2D_cpu(b *testing.B) { benchConv(b, "cpu") }
+func BenchmarkConv2D_ref(b *testing.B) { benchConv(b, backend.Ref) }
+func BenchmarkConv2D_cpu(b *testing.B) { benchConv(b, backend.CPU) }

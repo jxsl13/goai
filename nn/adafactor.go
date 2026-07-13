@@ -1,0 +1,181 @@
+package nn
+
+import (
+	"fmt"
+	"math"
+
+	"github.com/jxsl13/goai/tensor"
+)
+
+// Adafactor (Shazeer & Stern 2018, arXiv:1804.04235, §R80): an Adam-class optimizer
+// with SUBLINEAR memory. For a matrix parameter it does not store the full
+// second-moment matrix V (as Adam does) but only its per-row and per-column sums R
+// and C, reconstructing V̂[i,j] = R[i]·C[j]/ΣR — the rank-1 (independence)
+// approximation — so state is O(rows+cols) instead of O(rows·cols). It also drops
+// the manual learning rate: the step is RELATIVE to the parameter scale
+// (α_t = max(ε₂, RMS(θ))·ρ_t) and updates are clipped by their RMS. First moment is
+// off by default (the memory-saving configuration used to train T5).
+//
+//	matrix:  R ← β̂₂R + (1−β̂₂)rowsum(g²+ε₁);  C ← β̂₂C + (1−β̂₂)colsum(g²+ε₁)
+//	         V̂ = R⊗C/ΣR
+//	vector:  V̂ ← β̂₂V̂ + (1−β̂₂)(g²+ε₁)            (no factoring)
+//	U = g/√V̂;  Û = U/max(1, RMS(U)/d);  θ ← θ − max(ε₂,RMS(θ))·ρ_t·Û
+//	with β̂₂,t = 1−t^(−0.8) and ρ_t = min(LR, 1/√t).
+type Adafactor struct {
+	Params []*tensor.Tensor // parameters this optimizer updates
+	LR     float64          // relative-step cap ρ (default 1e-2); ρ_t = min(LR, 1/√t)
+	Beta1  float64          // first-moment EMA decay; 0 = off (default, memory-saving)
+	Eps1   float64          // second-moment regularization added to g² (default 1e-30)
+	Eps2   float64          // relative-step floor on RMS(θ) (default 1e-3)
+	Clip   float64          // update-clipping threshold d (default 1)
+
+	t    int
+	r, c [][]float64 // factored row/col second moments for rank-2 params (else nil)
+	v    [][]float64 // full second moment for non-matrix params (else nil)
+	m    [][]float64 // first moment (allocated only when Beta1 > 0)
+}
+
+// AdafactorOption configures an Adafactor optimizer (functional-options idiom, §C12).
+type AdafactorOption func(*Adafactor)
+
+// WithAdafactorLR sets the relative-step cap ρ (default 1e-2): ρ_t = min(LR, 1/√t).
+func WithAdafactorLR(lr float64) AdafactorOption { return func(a *Adafactor) { a.LR = lr } }
+
+// WithAdafactorBeta1 enables the first moment with EMA decay β1 (default 0 = off,
+// which is the sublinear-memory configuration).
+func WithAdafactorBeta1(b1 float64) AdafactorOption { return func(a *Adafactor) { a.Beta1 = b1 } }
+
+// WithAdafactorEps sets the regularization ε1 (added to g²) and the relative-step
+// floor ε2 (defaults 1e-30, 1e-3).
+func WithAdafactorEps(eps1, eps2 float64) AdafactorOption {
+	return func(a *Adafactor) { a.Eps1, a.Eps2 = eps1, eps2 }
+}
+
+// WithAdafactorClip sets the update-clipping threshold d (default 1).
+func WithAdafactorClip(d float64) AdafactorOption { return func(a *Adafactor) { a.Clip = d } }
+
+// NewAdafactor builds an Adafactor optimizer over params with the paper's defaults
+// (ρ cap 1e-2, ε1 1e-30, ε2 1e-3, clip d 1, no first moment). Matrix (rank-2)
+// parameters use the factored second moment; others fall back to the full one.
+func NewAdafactor(params []*tensor.Tensor, opts ...AdafactorOption) *Adafactor {
+	a := &Adafactor{Params: params, LR: 1e-2, Eps1: 1e-30, Eps2: 1e-3, Clip: 1}
+	for _, o := range opts {
+		o(a)
+	}
+	a.r = make([][]float64, len(params))
+	a.c = make([][]float64, len(params))
+	a.v = make([][]float64, len(params))
+	if a.Beta1 > 0 {
+		a.m = make([][]float64, len(params))
+	}
+	for i, p := range params {
+		if p.Ndim() == 2 {
+			a.r[i] = make([]float64, p.Shape()[0])
+			a.c[i] = make([]float64, p.Shape()[1])
+		} else {
+			a.v[i] = make([]float64, p.Numel())
+		}
+		if a.Beta1 > 0 {
+			a.m[i] = make([]float64, p.Numel())
+		}
+	}
+	return a
+}
+
+// adafactorVhat reconstructs the factored second moment V̂[i,j] = R[i]·C[j]/ΣR (row-
+// major, len(R)×len(C)). This rank-1 form is EXACT when g² is itself rank-1, which
+// is the property the factorization exploits (Shazeer & Stern §3).
+func adafactorVhat(r, c []float64) []float64 {
+	var sumR float64
+	for _, rv := range r {
+		sumR += rv
+	}
+	out := make([]float64, len(r)*len(c))
+	for i, rv := range r {
+		for j, cv := range c {
+			out[i*len(c)+j] = rv * cv / sumR
+		}
+	}
+	return out
+}
+
+// Step applies one Adafactor update. Parameters with a nil gradient are skipped.
+func (a *Adafactor) Step(grad GradFn) error {
+	a.t++
+	t := float64(a.t)
+	beta2t := 1 - math.Pow(t, -0.8)
+	rho := math.Min(a.LR, 1/math.Sqrt(t))
+
+	for pi, p := range a.Params {
+		g := grad(p)
+		if g == nil {
+			continue
+		}
+		if !g.Shape().Equal(p.Shape()) {
+			return fmt.Errorf("nn: Adafactor grad shape %v != param %v", g.Shape(), p.Shape())
+		}
+		n := p.Numel()
+
+		// second-moment estimate V̂ (flat, row-major).
+		var vhat []float64
+		if p.Ndim() == 2 {
+			rows, cols := p.Shape()[0], p.Shape()[1]
+			rowsum := make([]float64, rows)
+			colsum := make([]float64, cols)
+			for i := range rows {
+				for j := range cols {
+					gv := g.AtF64(i, j)
+					g2 := gv*gv + a.Eps1
+					rowsum[i] += g2
+					colsum[j] += g2
+				}
+			}
+			R, C := a.r[pi], a.c[pi]
+			for i := range R {
+				R[i] = beta2t*R[i] + (1-beta2t)*rowsum[i]
+			}
+			for j := range C {
+				C[j] = beta2t*C[j] + (1-beta2t)*colsum[j]
+			}
+			vhat = adafactorVhat(R, C)
+		} else {
+			V := a.v[pi]
+			vhat = make([]float64, n)
+			for i := range n {
+				idx := tensor.Unravel(i, p.Shape())
+				gv := g.AtF64(idx...)
+				V[i] = beta2t*V[i] + (1-beta2t)*(gv*gv+a.Eps1)
+				vhat[i] = V[i]
+			}
+		}
+
+		// U = g/√V̂, optional first moment, then RMS update-clipping and the
+		// parameter-relative step.
+		u := make([]float64, n)
+		for i := range n {
+			idx := tensor.Unravel(i, p.Shape())
+			u[i] = g.AtF64(idx...) / math.Sqrt(vhat[i])
+		}
+		if a.Beta1 > 0 {
+			M := a.m[pi]
+			for i := range n {
+				M[i] = a.Beta1*M[i] + (1-a.Beta1)*u[i]
+				u[i] = M[i]
+			}
+		}
+		var su, sp float64
+		for i := range n {
+			su += u[i] * u[i]
+			idx := tensor.Unravel(i, p.Shape())
+			pv := p.AtF64(idx...)
+			sp += pv * pv
+		}
+		clip := math.Max(1, math.Sqrt(su/float64(n))/a.Clip)
+		alpha := math.Max(a.Eps2, math.Sqrt(sp/float64(n))) * rho
+		for i := range n {
+			idx := tensor.Unravel(i, p.Shape())
+			p.SetF64(p.AtF64(idx...)-alpha*(u[i]/clip), idx...)
+		}
+	}
+	return nil
+}

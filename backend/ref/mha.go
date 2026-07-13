@@ -27,14 +27,16 @@ func mhaKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) (
 	}
 	sq, dm := q.Shape()[0], q.Shape()[1]
 	sk := k.Shape()[0]
-	heads := attrs.Int("heads", 1)
+	pa, _ := attrs.(backend.AttnAttrs)
+	pa = pa.WithDefaults()
+	heads := pa.Heads
 	if heads <= 0 || dm%heads != 0 {
 		return nil, fmt.Errorf("ref: mha dmodel %d not divisible by heads %d", dm, heads)
 	}
 	dk := dm / heads
 	// GQA (§T38b): kv_heads ≤ heads key/value heads; query head h shares KV head
 	// h/(heads/kv_heads). Default kv_heads==heads = standard MHA; kv_heads==1 = MQA.
-	kvHeads := attrs.Int("kv_heads", heads)
+	kvHeads := pa.KVHeads
 	if kvHeads <= 0 || heads%kvHeads != 0 {
 		return nil, fmt.Errorf("ref: mha heads %d not divisible by kv_heads %d", heads, kvHeads)
 	}
@@ -47,9 +49,26 @@ func mhaKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) (
 	if sq > sk {
 		return nil, fmt.Errorf("ref: mha query len %d exceeds key len %d", sq, sk)
 	}
-	causal := attrs.Bool("causal", false)
-	scale := 1 / math.Sqrt(float64(dk))
+	causal := pa.Causal
+	// "attn_scale" multiplies the pre-softmax scores (default 1) — the YaRN
+	// attention temperature (backend.YaRNAttnScale, §R66) that keeps the softmax
+	// sharpness right when the context is extended. Folded into the 1/√dk scale.
+	scale := pa.Scale / math.Sqrt(float64(dk))
 	off := sk - sq
+
+	// ALiBi (§T60, §R60): add a static per-head linear bias slopeₕ·(j−iₐᵦₛ) to the
+	// pre-softmax scores, penalizing distant keys. No positional embeddings, no
+	// learnable params. Applied per query head h with its own slope.
+	var slopes []float64
+	if pa.ALiBi {
+		slopes = backend.ALiBiSlopes(heads)
+	}
+
+	// Sliding-window attention (§T62, §R62): a positive "window" restricts each
+	// query at abs pos iₐᵦₛ to the W most recent keys, j ∈ [iₐᵦₛ−W+1, jmax); with
+	// W ≥ sk it is a no-op (full attention). Mistral-style local attention (used
+	// with causal); the effective receptive field grows with depth.
+	window := pa.Window
 
 	out := tensor.NewOn(ctx.Device(), q.Dtype(), tensor.Shape{sq, dm})
 	row := make([]float64, sk)
@@ -61,26 +80,35 @@ func mhaKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) (
 			if causal {
 				jmax = off + i + 1 // query abs pos + 1
 			}
+			jmin := 0
+			if window > 0 {
+				if lo := off + i - window + 1; lo > 0 {
+					jmin = lo
+				}
+			}
 			m := math.Inf(-1)
-			for j := range jmax {
+			for j := jmin; j < jmax; j++ {
 				var s float64
 				for d := range dk {
 					s += q.AtF64(i, qOff+d) * k.AtF64(j, kvOff+d)
 				}
 				s *= scale
+				if slopes != nil {
+					s += slopes[h] * float64(j-(off+i)) // ALiBi bias
+				}
 				row[j] = s
 				if s > m {
 					m = s
 				}
 			}
 			var sum float64
-			for j := range jmax {
+			for j := jmin; j < jmax; j++ {
 				row[j] = math.Exp(row[j] - m)
 				sum += row[j]
 			}
 			for d := range dk {
 				var o float64
-				for j := range jmax {
+				for j := jmin; j < jmax; j++ {
 					o += (row[j] / sum) * v.AtF64(j, kvOff+d)
 				}
 				out.SetF64(o, i, qOff+d)

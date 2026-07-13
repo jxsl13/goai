@@ -1,4 +1,4 @@
-//go:build metal && darwin && cgo
+//go:build darwin && cgo
 
 package metal_test
 
@@ -77,8 +77,8 @@ func TestMetalGPUTraining(t *testing.T) {
 	if !metal.Available() {
 		t.Skip("metal: no MPS GPU — skipping (§V4)")
 	}
-	metalB, _ := backend.Get("metal")
-	cpuB, _ := backend.Get("cpu")
+	metalB, _ := backend.Get(backend.Metal)
+	cpuB, _ := backend.Get(backend.CPU)
 
 	x, y := blobsF32(40, 1)
 
@@ -100,8 +100,89 @@ func TestMetalServesMatmul(t *testing.T) {
 	if !metal.Available() {
 		t.Skip("metal: no MPS GPU — skipping (§V4)")
 	}
-	mb, _ := backend.Get("metal")
+	mb, _ := backend.Get(backend.Metal)
 	if _, ok := mb.Kernel(backend.OpMatMul, tensor.F32); !ok {
 		t.Fatal("metal must serve f32 matmul for GPU training")
+	}
+}
+
+// §B49: the ADR-0008 cpu-routing gate inside a GPU kernel must strip the tape
+// recorder — with it attached the op records TWICE (inner + outer Execute) and
+// every routed op's gradient doubles. y = x + x ⇒ dy/dx = 2 exactly; the buggy
+// gate produced 4 (caught only by the full sweep's tight trained-model bars).
+func TestBinaryRoutingRecordsOnce(t *testing.T) {
+	if !metal.Available() {
+		t.Skip("metal: no gpu")
+	}
+	be, ok := backend.Get(backend.Metal)
+	if !ok {
+		t.Skip("metal not registered")
+	}
+	x := tensor.FromFloat32(tensor.Shape{4}, []float32{1, 2, 3, 4})
+	tape := autograd.NewTapeOn(be)
+	out, err := backend.Execute(tape.Context(), backend.OpAdd, []*tensor.Tensor{x, x}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tape.Backward(out[0]); err != nil {
+		t.Fatal(err)
+	}
+	g := tape.Grad(x)
+	if g == nil {
+		t.Fatal("no gradient for x")
+	}
+	for i := range 4 {
+		if got := g.AtF64(i); got != 2 {
+			t.Fatalf("grad[%d] = %g, want exactly 2 (doubled recording gives 4)", i, got)
+		}
+	}
+}
+
+// §B49 class audit (§T537): EVERY in-kernel ref-fallback on a recorded forward had the
+// same double-recording hazard. Exercise one representative fallback path under the tape —
+// ALiBi attention (metal's mha kernel falls back to the reference) — and pin its gradients
+// against a tape run directly on the reference backend: identical kernels, so any
+// difference means the fallback recorded twice.
+func TestFallbackUnderTapeRecordsOnce(t *testing.T) {
+	if !metal.Available() {
+		t.Skip("metal: no gpu")
+	}
+	be, ok := backend.Get(backend.Metal)
+	if !ok {
+		t.Skip("metal not registered")
+	}
+	mk := func(seed int) *tensor.Tensor {
+		x := tensor.New(tensor.F32, tensor.Shape{4, 8})
+		for i := range x.Numel() {
+			x.SetF64(math.Sin(float64(seed*100+i))*0.5, tensor.Unravel(i, x.Shape())...)
+		}
+		return x
+	}
+	attrs := backend.AttnAttrs{Heads: 2, Causal: true, ALiBi: true} // ALiBi → ref fallback
+	grads := func(b backend.Backend) []*tensor.Tensor {
+		q, k, v := mk(1), mk(2), mk(3)
+		tape := autograd.NewTapeOn(b)
+		out, err := backend.Execute(tape.Context(), backend.OpMHA, []*tensor.Tensor{q, k, v}, attrs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := tape.Backward(out[0]); err != nil {
+			t.Fatal(err)
+		}
+		return []*tensor.Tensor{tape.Grad(q), tape.Grad(k), tape.Grad(v)}
+	}
+	gm := grads(be)
+	gr := grads(backend.Reference())
+	for n := range gm {
+		if gm[n] == nil || gr[n] == nil {
+			t.Fatalf("input %d: missing gradient", n)
+		}
+		for i := range gr[n].Numel() {
+			idx := tensor.Unravel(i, gr[n].Shape())
+			if gm[n].AtF64(idx...) != gr[n].AtF64(idx...) {
+				t.Fatalf("input %d grad diverges at %v: fallback %g vs ref %g (2× = double-recorded)",
+					n, idx, gm[n].AtF64(idx...), gr[n].AtF64(idx...))
+			}
+		}
 	}
 }

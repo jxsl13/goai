@@ -1,0 +1,50 @@
+#version 450
+#extension GL_EXT_shader_atomic_float : require
+
+// 2-D convolution backward (§T102, the Vulkan twin of the Metal kernel §T101). One
+// invocation per output-gradient element (n,f,oy,ox) scatters into the shared
+// dX/dW/dBias with float atomicAdd (VK_EXT_shader_atomic_float); dX/dW/dBias are
+// uploaded pre-zeroed. Flat row-major std430 f32. Compiled to conv2d_bwd.spv by
+// `make vulkan-spv`.
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer BufX { float x[]; };
+layout(std430, binding = 1) readonly buffer BufW { float w[]; };
+layout(std430, binding = 2) readonly buffer BufDO { float dO[]; };
+layout(std430, binding = 3) buffer BufDX { float dX[]; };
+layout(std430, binding = 4) buffer BufDW { float dW[]; };
+layout(std430, binding = 5) buffer BufDB { float dB[]; };
+
+layout(push_constant) uniform PC {
+    int N; int C; int H; int Wd; int F; int KH; int KW; int stride; int pad; int ho; int wo;
+} p;
+
+void main() {
+    uint gid = gl_GlobalInvocationID.x;
+    if (gid >= uint(p.N * p.F * p.ho * p.wo)) {
+        return;
+    }
+    int idx = int(gid);
+    int ox = idx % p.wo; idx /= p.wo;
+    int oy = idx % p.ho; idx /= p.ho;
+    int f = idx % p.F;
+    int n = idx / p.F;
+
+    float g = dO[((n * p.F + f) * p.ho + oy) * p.wo + ox];
+    atomicAdd(dB[f], g);
+    for (int c = 0; c < p.C; ++c) {
+        for (int ky = 0; ky < p.KH; ++ky) {
+            int iy = oy * p.stride + ky - p.pad;
+            if (iy < 0 || iy >= p.H) { continue; }
+            for (int kx = 0; kx < p.KW; ++kx) {
+                int ix = ox * p.stride + kx - p.pad;
+                if (ix < 0 || ix >= p.Wd) { continue; }
+                int xi = ((n * p.C + c) * p.H + iy) * p.Wd + ix;
+                int wi = ((f * p.C + c) * p.KH + ky) * p.KW + kx;
+                atomicAdd(dX[xi], g * w[wi]);
+                atomicAdd(dW[wi], g * x[xi]);
+            }
+        }
+    }
+}
