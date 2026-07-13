@@ -77,25 +77,25 @@ jobs:
       CGO_ENABLED: "0"
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # the transparent runner recomputes the selection itself (§T587)
       - uses: actions/setup-go@v6
         with:
           go-version: "1.26.x"
           cache: false # zero-dependency module (no go.sum): nothing to cache
       - name: vet (compiles tests too — §V23; always full, the soundness backstop)
         run: go vet ./...
-      - name: test (affected packages only, §T580)
+      - name: test (transparent selective run, §T587)
         shell: bash
         run: |
-          AFFECTED="${{ needs.changes.outputs.affected }}"
-          if [ "$AFFECTED" = "all" ]; then AFFECTED="./..."; fi
-          go test -short -count=1 -timeout 10m $AFFECTED
+          BASE="${{ github.event.pull_request.base.sha || github.event.before }}"
+          go run ./internal/cichange -run "$BASE" HEAD -- -short -count=1 -timeout 10m
       # §V5: benchmarks must at least build and run one iteration.
       - name: bench-smoke
         shell: bash
         run: |
-          AFFECTED="${{ needs.changes.outputs.affected }}"
-          if [ "$AFFECTED" = "all" ]; then AFFECTED="./..."; fi
-          go test -run=^$ -bench=. -benchtime=1x -timeout 10m $AFFECTED
+          BASE="${{ github.event.pull_request.base.sha || github.event.before }}"
+          go run ./internal/cichange -run "$BASE" HEAD -- -run='^$' -bench=. -benchtime=1x -timeout 10m
 
   # cgo on linux: the optimized CPU backend under the RACE detector (the §T511
   # worker pool's standing guard, §B49-class bugs), plus gofmt and coverage.
@@ -106,6 +106,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # §T587
       - uses: actions/setup-go@v6
         with:
           go-version: "1.26.x"
@@ -118,16 +120,14 @@ jobs:
           fi
       - name: vet
         run: go vet ./...
-      - name: test (race, affected packages only, §T580)
+      - name: test (race, transparent selective run, §T587)
         run: |
-          AFFECTED="${{ needs.changes.outputs.affected }}"
-          if [ "$AFFECTED" = "all" ]; then AFFECTED="./..."; fi
-          go test -short -count=1 -race -timeout 20m $AFFECTED
+          BASE="${{ github.event.pull_request.base.sha || github.event.before }}"
+          go run ./internal/cichange -run "$BASE" HEAD -- -short -count=1 -race -timeout 20m
       - name: coverage
         run: |
-          AFFECTED="${{ needs.changes.outputs.affected }}"
-          if [ "$AFFECTED" = "all" ]; then AFFECTED="./..."; fi
-          go test -short -count=1 -covermode=atomic -coverprofile=coverage.out $AFFECTED
+          BASE="${{ github.event.pull_request.base.sha || github.event.before }}"
+          go run ./internal/cichange -run "$BASE" HEAD -- -short -count=1 -covermode=atomic -coverprofile=coverage.out
           go tool cover -func=coverage.out | tail -1 | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v7
         with:
@@ -144,17 +144,18 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # §T587
       - uses: actions/setup-go@v6
         with:
           go-version: "1.26.x"
           cache: false
       - name: vet (compiles the metal cgo backend)
         run: go vet ./...
-      - name: test (affected packages only, §T580)
+      - name: test (transparent selective run, §T587)
         run: |
-          AFFECTED="${{ needs.changes.outputs.affected }}"
-          if [ "$AFFECTED" = "all" ]; then AFFECTED="./..."; fi
-          go test -short -count=1 -timeout 20m $AFFECTED
+          BASE="${{ github.event.pull_request.base.sha || github.event.before }}"
+          go run ./internal/cichange -run "$BASE" HEAD -- -short -count=1 -timeout 20m
 
   # Tag-gated backends must at least COMPILE on every push so their code cannot
   # rot (vulkan executes on dev boxes with MoltenVK; §B40 discipline stays local).

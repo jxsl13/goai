@@ -74,37 +74,48 @@ func Impact(cfg *config, dir, base, head string) string {
 // non-test code changed, testOnly = packages with only _test.go changes. verdict is ""
 // for a normal result, or None/All when the diff resolves without a closure.
 func (g *moduleGraph) changedSets(cfg *config, dir, base, head string) (propagate, testOnly map[string]bool, verdict string) {
+	p, t, v, _ := g.changedSetsTraced(cfg, dir, base, head)
+	return p, t, v
+}
+
+// changedSetsTraced is changedSets plus a human-readable per-file decision trace
+// (§T587): one line per changed path naming the decision AND the rule that made it,
+// in git-diff order (deterministic). On an All verdict the trace ends with the line
+// that forced it.
+func (g *moduleGraph) changedSetsTraced(cfg *config, dir, base, head string) (propagate, testOnly map[string]bool, verdict string, trace []string) {
 	out, err := gitRun(dir, "diff", "--name-status", "-z", base, head)
 	if err != nil {
-		return nil, nil, All // base unavailable (force push, shallow clone)
+		return nil, nil, All, []string{"(diff unavailable — force push or shallow clone → all)"}
 	}
 	fields := strings.Split(strings.TrimRight(string(out), "\x00"), "\x00")
 	if len(fields) == 1 && fields[0] == "" {
-		return nil, nil, None
+		return nil, nil, None, []string{"(empty diff)"}
 	}
 	propagate = map[string]bool{}
 	testOnly = map[string]bool{}
 	for i := 0; i < len(fields); {
 		status := fields[i]
 		if status == "" || i+1 >= len(fields) {
-			return nil, nil, All
+			return nil, nil, All, append(trace, "(malformed diff record → all)")
 		}
 		paths := []string{fields[i+1]}
 		i += 2
 		if status[0] == 'R' || status[0] == 'C' { // renames/copies carry a second path
 			if i >= len(fields) {
-				return nil, nil, All
+				return nil, nil, All, append(trace, "(malformed rename record → all)")
 			}
 			paths = append(paths, fields[i])
 			i++
 		}
 		for _, p := range paths {
-			if g.classifyChanged(cfg, dir, base, head, status, p, propagate, testOnly) == impactGlobal {
-				return nil, nil, All
+			outcome, why := g.classifyChanged(cfg, dir, base, head, status, p, propagate, testOnly)
+			trace = append(trace, p+": "+why)
+			if outcome == impactGlobal {
+				return nil, nil, All, trace
 			}
 		}
 	}
-	return propagate, testOnly, ""
+	return propagate, testOnly, "", trace
 }
 
 // classifyChanged outcomes.
@@ -120,26 +131,32 @@ const (
 // depChangeSeeds handles a go.mod change (§T582): if only require VERSIONS changed or
 // modules were added, the packages importing those modules seed the closure — code
 // importers propagate, test-only importers are selected without propagating. Any other
-// difference (module line, go/toolchain, replace, exclude, malformed) → global.
-func (g *moduleGraph) depChangeSeeds(dir, base, head string, propagate, testOnly map[string]bool) int {
+// difference (module line, go/toolchain, replace, exclude, malformed) → global. The
+// returned reason names the changed modules and their seeds, sorted (§T587).
+func (g *moduleGraph) depChangeSeeds(dir, base, head string, propagate, testOnly map[string]bool) (int, string) {
 	baseSrc, err := gitRun(dir, "show", base+":go.mod")
 	if err != nil {
-		return impactGlobal
+		return impactGlobal, "FULL RERUN (go.mod unreadable at base)"
 	}
 	headSrc, err := gitRun(dir, "show", head+":go.mod")
 	if err != nil {
-		return impactGlobal
+		return impactGlobal, "FULL RERUN (go.mod unreadable at head)"
 	}
 	baseReq, baseRest := parseGoMod(string(baseSrc))
 	headReq, headRest := parseGoMod(string(headSrc))
 	if strings.Join(baseRest, "\n") != strings.Join(headRest, "\n") {
-		return impactGlobal // go directive / replace / exclude / module line changed
+		return impactGlobal, "FULL RERUN (go.mod changed beyond require versions: module/go/replace/exclude)"
 	}
-	for _, mod := range changedModules(baseReq, headReq) {
+	mods := changedModules(baseReq, headReq)
+	sort.Strings(mods)
+	var parts []string
+	for _, mod := range mods {
+		var seeds []string
 		for pkg, ext := range g.extImports {
 			for ip := range ext {
 				if modOwns(mod, ip) {
 					propagate[pkg] = true
+					seeds = append(seeds, pkg)
 					break
 				}
 			}
@@ -148,57 +165,68 @@ func (g *moduleGraph) depChangeSeeds(dir, base, head string, propagate, testOnly
 			for ip := range ext {
 				if modOwns(mod, ip) {
 					testOnly[pkg] = true
+					seeds = append(seeds, pkg+" (test-only)")
 					break
 				}
 			}
 		}
+		sort.Strings(seeds)
+		parts = append(parts, mod+" → seeds: "+strings.Join(seeds, " "))
 	}
-	return impactHandled
+	if len(parts) == 0 {
+		return impactHandled, "go.mod dependency diff: no changed require entries (removals seed nothing)"
+	}
+	return impactHandled, "go.mod dependency diff: " + strings.Join(parts, "; ")
 }
 
 // classifyChanged attributes one changed file to the propagate/testOnly sets per the
-// configured rules (§T584; precedence full-rerun > pkg-rerun > ignore > analysis) and
-// reports impactGlobal for anything with unbounded reach (§V26).
-func (g *moduleGraph) classifyChanged(cfg *config, dir, base, head, status, p string, propagate, testOnly map[string]bool) int {
-	switch {
-	case cfg.fullRerun(p):
-		return impactGlobal
-	case cfg.pkgRerun(p):
-		pkg, ok := g.pkgFor(p)
-		if !ok {
-			return impactGlobal // forced rerun of an unattributable path: everything
+// configured rules (§T584; precedence full-rerun > pkg-rerun > ignore > analysis),
+// reports impactGlobal for anything with unbounded reach (§V26), and names the
+// decision plus the rule that made it (§T587).
+func (g *moduleGraph) classifyChanged(cfg *config, dir, base, head, status, p string, propagate, testOnly map[string]bool) (int, string) {
+	if rule, ok := cfg.fullRerunBy(p); ok {
+		return impactGlobal, "FULL RERUN (rule: " + rule + ")"
+	}
+	if rule, ok := cfg.pkgRerunBy(p); ok {
+		pkg, found := g.pkgFor(p)
+		if !found {
+			return impactGlobal, "FULL RERUN (rule: " + rule + ", but no owning package → all)"
 		}
 		propagate[pkg] = true
-		return impactHandled
-	case cfg.ignored(p):
-		return impactHandled
+		return impactHandled, "package rerun → " + pkg + " (rule: " + rule + ")"
+	}
+	if rule, ok := cfg.ignoredBy(p); ok {
+		return impactHandled, "ignored (rule: " + rule + ")"
+	}
+	switch {
 	case p == "go.mod":
-		return g.depChangeSeeds(dir, base, head, propagate, testOnly)
+		outcome, why := g.depChangeSeeds(dir, base, head, propagate, testOnly)
+		return outcome, why
 	case strings.HasSuffix(p, ".go"):
 		// a .go file's owning package is EXACTLY its directory — no ancestor walk,
 		// else a deleted package would silently attribute to its parent.
 		pkg := filepath.ToSlash(filepath.Dir(p))
 		if !g.pkgs[pkg] {
-			return impactGlobal // package gone at head: importers' breakage unknowable
+			return impactGlobal, "FULL RERUN (package " + pkg + " gone at head: importer breakage unknowable)"
 		}
 		if status[0] == 'M' && goCodeUnchanged(dir, base, head, p) {
-			return impactHandled // only comments moved
+			return impactHandled, "ignored (comment-only Go change: AST identical after comment strip)"
 		}
 		if strings.HasSuffix(p, "_test.go") {
 			testOnly[pkg] = true
-		} else {
-			propagate[pkg] = true
+			return impactHandled, "test-only code → " + pkg + " (test files are not importable: no propagation)"
 		}
-		return impactHandled
+		propagate[pkg] = true
+		return impactHandled, "code → " + pkg
 	default:
 		// C, assembly, shaders, testdata, embedded data: the nearest ancestor
 		// package owns it (cgo/embed cannot reach outside the package subtree).
 		pkg, ok := g.pkgFor(p)
 		if !ok {
-			return impactGlobal // outside every package: reach unknowable
+			return impactGlobal, "FULL RERUN (outside every package: reach unknowable)"
 		}
 		propagate[pkg] = true
-		return impactHandled
+		return impactHandled, "package asset → " + pkg
 	}
 }
 

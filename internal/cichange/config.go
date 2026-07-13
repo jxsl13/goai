@@ -93,40 +93,47 @@ func defaultConfig(dir string) *config {
 	return c
 }
 
-// ignored reports whether the repo-relative changed path is ruled out of impact —
-// under an absolutized -ignore entry, or matching an -ignore-regex.
-func (c *config) ignored(rel string) bool {
+// ignoredBy reports whether the repo-relative changed path is ruled out of impact —
+// under an absolutized -ignore entry, or matching an -ignore-regex — and WHICH rule
+// did it (§T587: every decision in the log names its rule).
+func (c *config) ignoredBy(rel string) (string, bool) {
 	abs := filepath.Clean(filepath.Join(c.root, filepath.FromSlash(rel)))
 	for _, ip := range c.ignoreParts {
 		if abs == ip || strings.HasPrefix(abs, ip+string(filepath.Separator)) {
-			return true
+			return "-ignore " + ip, true
 		}
 	}
 	for _, re := range c.ignoreRe {
 		if re.MatchString(rel) {
-			return true
+			return "-ignore-regex '" + re.String() + "'", true
 		}
 	}
-	return false
+	return "", false
 }
 
-// fullRerun reports whether the changed path forces the full suite.
-func (c *config) fullRerun(rel string) bool {
+// ignored is ignoredBy without the rule name.
+func (c *config) ignored(rel string) bool {
+	_, ok := c.ignoredBy(rel)
+	return ok
+}
+
+// fullRerunBy reports whether the changed path forces the full suite, and which rule.
+func (c *config) fullRerunBy(rel string) (string, bool) {
 	for _, re := range c.fullRe {
 		if re.MatchString(rel) {
-			return true
+			return "-full-rerun-regex '" + re.String() + "'", true
 		}
 	}
-	return false
+	return "", false
 }
 
-// pkgRerun reports whether the changed path forces its owning package's tests
-// regardless of content analysis (comment-only Go edits included).
-func (c *config) pkgRerun(rel string) bool {
+// pkgRerunBy reports whether the changed path forces its owning package's tests
+// regardless of content analysis (comment-only Go edits included), and which rule.
+func (c *config) pkgRerunBy(rel string) (string, bool) {
 	for _, re := range c.pkgRe {
 		if re.MatchString(rel) {
-			return true
+			return "-pkg-rerun-regex '" + re.String() + "'", true
 		}
 	}
-	return false
+	return "", false
 }

@@ -42,6 +42,7 @@ func main() {
 	var (
 		impactMode   = flag.Bool("impact", false, "print the affected package list instead of the binary verdict")
 		validateMode = flag.Bool("validate", false, "judge -impact against the go list oracle (§V27)")
+		runMode      = flag.Bool("run", false, "transparent end-to-end mode: report every decision, then EXECUTE the selected tests (args after -- go to go test)")
 		noDefaults   = flag.Bool("no-default-rules", false, "start from an empty rule set")
 		ignore       stringList
 		ignoreRe     stringList
@@ -53,8 +54,12 @@ func main() {
 	flag.Var(&fullRe, "full-rerun-regex", "repo-relative path regex forcing the full suite; repeatable")
 	flag.Var(&pkgRe, "pkg-rerun-regex", "repo-relative path regex forcing the owning package's tests; repeatable")
 	flag.Parse()
-	if flag.NArg() != 2 {
-		fmt.Fprintln(os.Stderr, "usage: cichange [-impact|-validate] [rule flags] <base-rev> <head-rev>")
+	if flag.NArg() < 2 {
+		fmt.Fprintln(os.Stderr, "usage: cichange [-impact|-validate|-run] [rule flags] <base-rev> <head-rev> [-- go-test-args]")
+		os.Exit(2)
+	}
+	if flag.NArg() > 2 && !*runMode {
+		fmt.Fprintln(os.Stderr, "usage: extra arguments are only valid with -run (they are passed to go test)")
 		os.Exit(2)
 	}
 	if !*noDefaults {
@@ -71,6 +76,8 @@ func main() {
 	}
 	base, head := flag.Arg(0), flag.Arg(1)
 	switch {
+	case *runMode: // §T587: full transparency, then execute — the last step IS the tests
+		os.Exit(Run(cfg, ".", base, head, flag.Args()[2:], os.Stdout))
 	case *impactMode:
 		fmt.Println(Impact(cfg, ".", base, head))
 	case *validateMode: // §T583/§V27: judge the selector against the toolchain oracle

@@ -4,6 +4,14 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T587 — transparent test runner (2026-07-13)
+- cichange -run makes the CI selection fully auditable and then executes it: every
+  changed file is logged with the rule that classified it, every selected and skipped
+  package with its reason, the test functions per package, and the exact go test
+  command — then go test runs with its output streamed through and its exit code
+  propagated. All report sequences are sorted, so identical inputs give
+  byte-identical reports. The CI test steps now invoke this runner.
+
 ### T586 — warning-free CI runs (2026-07-13)
 - GitHub Actions upgraded to current majors (checkout v7, setup-go v6,
   upload-artifact v7); the Node-20 deprecation warnings are gone and the CI watch now
