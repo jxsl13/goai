@@ -8,15 +8,15 @@
 // provides the pieces a GPT- or Llama-family model is made of and the machinery
 // to run and train them:
 //
-//   - Tokenization: a byte-level BPE Tokenizer (GPT-2 compatible, encode
-//     bit-exact vs tiktoken, decode∘encode byte-exact under fuzzing, §T37), a GPT-2/HF
+//   - Tokenization: a byte-level BPE (byte-pair encoding — merging frequent character pairs into tokens) Tokenizer (GPT-2 compatible, encode
+//     bit-exact vs tiktoken, decode∘encode byte-exact under fuzzing, §T37), a GPT-2/HF (HuggingFace)
 //     byte-level BPETokenizer, a Unigram tokenizer (SentencePiece, 1-best Viterbi over
-//     a scored vocabulary, §T108), and BERT's WordPiece — loadable from a GGUF model's
+//     a scored vocabulary, §T108), and BERT's WordPiece — loadable from a GGUF (llama.cpp’s single-file model format) model's
 //     embedded vocabulary (BPEFromGGUF / UnigramFromGGUF) or from HuggingFace
 //     tokenizer JSON, so a .gguf or HF checkpoint tokenizes end-to-end.
 //   - Attention: fused multi-head attention (MHA) with a hand-derived SDPA VJP,
 //     grouped/multi-query variants (GQA/MQA), causal masking, ALiBi and
-//     sliding-window biases, and a KV-cache for O(1)-per-step incremental decode.
+//     sliding-window biases, and a KV (key/value attention cache)-cache for O(1)-per-step incremental decode.
 //   - Models: the GPT decoder (pre-LN, causal MHA, GELU FFN) and the Llama/Llama-2
 //     decoder (pre-norm RMSNorm, RoPE queries/keys, grouped-query attention, SwiGLU,
 //     no biases), assembled from the same verified primitives and loadable straight
@@ -44,7 +44,7 @@
 //     cache budgets, an 8-bit quantized KV-cache, and Self-Extend length
 //     extrapolation (Llama.SelfExtendForward / SelfExtendGenerate — grouped
 //     attention, no fine-tuning; generation stays coherent at 4× training length).
-//   - Training objectives & data: BERT masked-LM, T5 span corruption, UL2
+//   - Training objectives & data: BERT masked-LM (language model), T5 span corruption, UL2
 //     mixture-of-denoisers, Fill-in-the-Middle transformation, and sequence packing.
 //
 // Every algorithm is validated on the §V16 ladder: tier-1 bit- or tolerance-exact

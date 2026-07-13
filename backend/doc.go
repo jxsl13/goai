@@ -13,7 +13,7 @@
 // so registration doubles as detection. Default returns the highest-preference
 // registered backend along a descending-performance order — cuda > metal >
 // vulkan > cpu — with the reference as the guaranteed final fallback (validated
-// vs ONNX Runtime EP priority, PyTorch cuda>mps>cpu, ggml's scored registry §R46,
+// vs ONNX (the Open Neural Network Exchange format) Runtime EP priority, PyTorch cuda>mps>cpu, ggml's scored registry §R46,
 // and on-host benchmark). Because NewContext and autograd.NewTape call Default,
 // building with an accel tag makes real work run on the GPU with no code change.
 // Override the order with SetPreference; pick a specific backend per call with
@@ -31,7 +31,7 @@
 // your own order with [SetPreference] or pass one backend to a single call. The
 // examples below show both the zero-effort automatic path and manual control.
 //
-// Further reading: Goto & van de Geijn 2008, "Anatomy of High-Performance Matrix Multiplication" (ACM TOMS), for what an optimized GEMM backend is up against; the ggml/llama.cpp source for the quantized-kernel state of the art this library measures itself on.
+// Further reading: Goto & van de Geijn 2008, "Anatomy of High-Performance Matrix Multiplication" (ACM TOMS), for what an optimized GEMM (general matrix multiply) backend is up against; the ggml/llama.cpp source for the quantized-kernel state of the art this library measures itself on.
 //
 // In plain terms: this package is the switchboard between "what to compute" (ops) and "who computes it" (a pure-Go reference, an optimized CPU path, or a GPU) — models ask for an operation and the best available implementation answers.
 package backend

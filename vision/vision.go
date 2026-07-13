@@ -3,10 +3,10 @@
 //
 // # For the AI professional
 //
-// CNN is a reference convolutional classifier over NCHW image tensors: a stack
+// CNN (convolutional neural network) is a reference convolutional classifier over NCHW (batch×channel×height×width layout) image tensors: a stack
 // of Conv2D(k, pad k/2) → ReLU → MaxPool2D(2) blocks (each halving the spatial
 // size and expanding channels), global average pooling, and a Linear head to
-// class logits — the classic LeNet/VGG-style shape with a modern GAP head. All
+// class logits — the classic LeNet/VGG-style shape with a modern GAP (global average pooling) head. All
 // compute runs through the backend dispatch (fused conv backward, backend
 // auto-selection), and Params feeds any optimizer in nn, so the standard
 // tape → loss → Backward → Step loop trains it.

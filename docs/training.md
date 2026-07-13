@@ -5,6 +5,9 @@
 > when teaching the same small model under identical conditions — so you can
 > pick between them based on measurements instead of folklore.
 
+
+**Abbreviations in this document:** **PEFT** = parameter-efficient fine-tuning; **FFN** = feed-forward network; **MLP** = multi-layer perceptron; **MSE** = mean squared error; **DDPM/DDIM** = denoising-diffusion training/sampling; **NF4** = 4-bit NormalFloat quantization; **SAM** = sharpness-aware minimization; **EWC** = elastic weight consolidation.
+
 Companion to [`benchmarking.md`](benchmarking.md), [`alignment.md`](alignment.md)
 and [`inference.md`](inference.md): the training toolbox exercised on a REAL
 transformer for the first time. Harness: identical architecture, identical init

@@ -1,7 +1,7 @@
-// Package linalg provides gonum/numpy-style dense linear algebra over rank-2 tensors: an LU
+// Package linalg provides gonum/numpy-style dense linear algebra over rank-2 tensors: an LU (lower–upper triangular factorization)
 // factorization with partial pivoting (P·A = L·U) and the derived determinant, linear solve, and
 // matrix inverse. The algorithms are the standard textbook ones (Golub & Van Loan, "Matrix
-// Computations", §3.2 LU/GEPP and §3.4 determinant; LAPACK dgetrf/dgetrs/dgetri), §R115. Everything
+// Computations", §3.2 LU/GEPP and §3.4 determinant; LAPACK (the standard Fortran linear-algebra library) dgetrf/dgetrs/dgetri), §R115. Everything
 // is computed in f64; inputs are read via AtF64 and results are fresh f64 tensors.
 //
 // In plain terms: classic linear algebra — solving equation systems, factorizing matrices, finding eigenvalues — implemented in pure Go on the library's tensors.

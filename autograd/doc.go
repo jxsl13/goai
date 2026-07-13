@@ -4,7 +4,7 @@
 //
 // It provides a tape (Wengert list), Variable, and Backward, intercepting the op
 // dispatch exposed by package backend so L1 kernels need no rewrite (§T13). Each
-// differentiable op registers a vector-Jacobian-product (VJP) rule, validated by
+// differentiable op registers a vector-Jacobian-product (VJP (vector-Jacobian product — the per-operation backward rule)) rule, validated by
 // central finite-difference gradient checking (§V2). A [Tape] records the forward
 // ops executed through its Context; Backward walks them in reverse, seeding the
 // output cotangent (1 by default, or an arbitrary scale via BackwardScaled — the
@@ -32,7 +32,7 @@
 // and the network gets a bit better. You never write the calculus yourself; the
 // tape does it. See the runnable examples below.
 //
-// Further reading: Baydin et al. 2018, "Automatic Differentiation in Machine Learning: a Survey" (JMLR), and Griewank & Walther, "Evaluating Derivatives" (SIAM 2008), the definitive treatments of reverse-mode AD that this tape implements.
+// Further reading: Baydin et al. 2018, "Automatic Differentiation in Machine Learning: a Survey" (JMLR), and Griewank & Walther, "Evaluating Derivatives" (SIAM 2008), the definitive treatments of reverse-mode AD (automatic differentiation) that this tape implements.
 //
 // In plain terms: training needs to know how much each parameter contributed to the error; this package records every operation on a tape while the model runs forward, then replays the tape backwards to compute exactly those contributions (gradients) automatically.
 package autograd

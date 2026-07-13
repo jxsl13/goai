@@ -3,7 +3,7 @@
 [![ci](https://github.com/jxsl13/goai/actions/workflows/ci.yml/badge.svg)](https://github.com/jxsl13/goai/actions/workflows/ci.yml)
 
 A Go-native, full-spectrum AI library: tensors, autograd, training, transformer
-inference, quantized GGUF models, vision, classic ML and RL — **pure Go first,
+inference, quantized GGUF (llama.cpp’s single-file model format) models, vision, classic ML and RL — **pure Go first,
 zero dependencies, no C toolchain required**.
 
 In plain terms: everything you need to load a language model, generate text,
@@ -70,14 +70,14 @@ for step := 0; step < 150; step++ {
 
 ## What works today
 
-- **Transformer LLMs end-to-end**: GPT and Llama (GQA/SwiGLU/RoPE) — build,
+- **Transformer LLMs end-to-end**: GPT and Llama (GQA (grouped-query attention: several query heads share one key/value head, shrinking the cache)/SwiGLU (the gated feed-forward activation modern llamas use)/RoPE (rotary position embeddings — positions encoded as rotations)) — build,
   train (full backward validated against real torch gradients at f64 rtol
   ~1e-9), checkpoint (safetensors/GGUF round-trips), tokenize (BPE bit-exact
   vs tiktoken, SentencePiece-Unigram, WordPiece), and generate.
-- **Structured generation**: GBNF grammar-constrained decoding compiled to a
+- **Structured generation**: GBNF (llama.cpp’s grammar notation) grammar-constrained decoding compiled to a
   pushdown automaton (nested JSON a regex guide structurally cannot enforce),
-  a JSON-Schema→grammar compiler, regex/FSM guiding, and chat templates for
-  the chatml/llama3/gemma/mistral/phi3 families byte-exact against the HF
+  a JSON-Schema→grammar compiler, regex/FSM (finite-state machine) guiding, and chat templates for
+  the chatml/llama3/gemma/mistral/phi3 families byte-exact against the HF (HuggingFace)
   reference renders.
 - **Sampling, complete**: temperature, top-k/p, min-p, epsilon/eta, typical,
   Mirostat, repetition/frequency/presence penalties, **DRY** sequence-repetition
@@ -85,7 +85,7 @@ for step := 0; step < 150; step++ {
   contrastive search & decoding, beam/diverse beam, watermarking.
 - **GPU inference (Metal + Vulkan/MoltenVK)**: the `llamagpu` batched decoders
   record a whole decode step into one command buffer over device-resident
-  weights and KV cache — measured **24× (Metal) / 21× (Vulkan)** over per-op
+  weights and KV (key/value attention cache) cache — measured **24× (Metal) / 21× (Vulkan)** over per-op
   decode, **41×** prompt prefill, cooperative long-context attention on every
   surface, and quantized (ggml Q-block) decode at 4–8× less weight memory.
 - **Accelerated decoding, measured on real trained models**: Medusa
@@ -95,19 +95,19 @@ for step := 0; step < 150; step++ {
   fine-tuning). Numbers and method: [`docs/benchmarking.md`](docs/benchmarking.md),
   [`docs/inference.md`](docs/inference.md).
 - **Training toolbox** (`nn`): optimizers from SGD to Muon/SOAP/Sophia/
-  Schedule-Free with composable wrappers (SAM, Lookahead, GaLore, …), the PEFT
-  family (LoRA/DoRA/PiSSA/VeRA/IA³/prefix/prompt, QLoRA end-to-end),
+  Schedule-Free with composable wrappers (SAM, Lookahead, GaLore, …), the PEFT (parameter-efficient fine-tuning)
+  family (LoRA (low-rank adapters: train tiny add-on matrices instead of the full model)/DoRA/PiSSA/VeRA/IA³/prefix/prompt, QLoRA end-to-end),
   quantization & pruning (AWQ/GPTQ/HQQ/NF4/SparseGPT/Wanda), post-transformer
   blocks (MoE, Mamba/Mamba-2 SSD, RWKV with O(1) recurrent inference, RetNet,
-  MLA, Gated DeltaNet/GLA/KDA — every family proven end-to-end as a trained
-  char-LM), diffusion (DDPM/DDIM/EDM/flow matching), SSL, RLHF/alignment
-  (GRPO/GSPO and the DPO family on a real model, including a
+  MLA (multi-head latent attention (DeepSeek’s compressed-cache attention)), Gated DeltaNet/GLA/KDA — every family proven end-to-end as a trained
+  char-LM), diffusion (DDPM/DDIM/EDM/flow matching), SSL, RLHF (reinforcement learning from human feedback)/alignment
+  (GRPO/GSPO and the DPO (direct preference optimization) family on a real model, including a
   reproduced-and-mitigated reward-hacking case study —
   [`docs/alignment.md`](docs/alignment.md)), continual learning, model merging.
 - **Multimodal**: Vision Transformer (torch-parity forward), SigLIP sigmoid
-  contrastive loss, and a LLaVA-style projector that feeds ViT patch tokens
+  contrastive loss, and a LLaVA-style projector that feeds ViT (Vision Transformer) patch tokens
   into the GPT decoder — trained image→caption end-to-end.
-- **Vision, classic ML & RL**: CNN classifier over the NCHW conv/pool stack,
+- **Vision, classic ML & RL**: CNN (convolutional neural network) classifier over the NCHW (the batch×channel×height×width tensor layout) conv/pool stack,
   linear/softmax regression, K-Means, PCA, RL environments and canonical
   agents.
 - **Formats**: safetensors (reads every official dtype including FP8

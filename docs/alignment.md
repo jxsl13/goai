@@ -5,6 +5,9 @@
 > documents GoAI's alignment methods (RLHF, DPO, GRPO and friends), including
 > a reproduced case of the model "gaming" its reward — and the fix.
 
+
+**Abbreviations in this document:** **DPO** = direct preference optimization; **IPO** = identity preference optimization; **KTO** = Kahneman–Tversky optimization (unpaired preferences); **CPO** = contrastive preference optimization; **NLL** = negative log-likelihood; **RLHF** = reinforcement learning from human feedback.
+
 Every claim below is enforced by a test that trains a REAL model (the torch-golden
 GPT in `nlp/testdata`) end-to-end with library pieces only; file names are given so
 the experiments re-run on every full suite pass.

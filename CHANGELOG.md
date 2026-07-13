@@ -4,6 +4,10 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T608 — abbreviations explained everywhere (2026-07-14)
+- Every abbreviation in the README, package docs and docs/ pages is now expanded with
+  a layman gloss at first use (or in a compact per-document abbreviation block).
+
 ### T606 — full benchmark comparison matrix (2026-07-14)
 - docs/benchmarking.md now shows every GoAI backend variant against numpy and torch
   (CPU and MPS) on the same machine, for 17 workloads plus the decode table — with the

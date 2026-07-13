@@ -12,10 +12,10 @@
 //     an Adam-polished solve), returning calibrated class probabilities.
 //   - [KMeans] — Lloyd's algorithm from explicit initial centers, returning final
 //     centers and hard labels.
-//   - [PCA] — principal components via a symmetric-eigen (Jacobi) decomposition,
+//   - [PCA (principal component analysis — finding the directions of largest variation)] — principal components via a symmetric-eigen (Jacobi) decomposition,
 //     exposing Components, ExplainedVariance (eigenvalues, descending) and Mean.
 //
-// Each is validated to reference tolerance against scikit-learn (§V1): OLS
+// Each is validated to reference tolerance against scikit-learn (§V1): OLS (ordinary least squares)
 // coefficients to ~1e-8, softmax probabilities to ~1e-5, k-means labels exactly,
 // and PCA components up to the inherent sign ambiguity (|cosine| ≈ 1). They are
 // useful in their own right and as sanity baselines a neural model must beat.

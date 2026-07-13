@@ -6,6 +6,9 @@
 > and a change that cannot show such a number does not get merged. The rest
 > of the page records those numbers and the rules for producing them.
 
+
+**Abbreviations in this document:** **GELU** = the Gaussian-error activation function; **BLIS** = a modern BLAS-like kernel library; **CE** = cross-entropy.
+
 Every optimization task (§T11, §T12, …) must show a benchmark delta against the
 Pure-Go reference before it lands, and cgo is only considered after the Pure-Go
 path is optimized to its ceiling and still loses by the §C3 threshold.

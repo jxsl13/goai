@@ -53,7 +53,7 @@ func (m mRec) Free()         { m.r.Free() }
 
 func mb(b buffer) *metal.DeviceBuffer { return b.(mBuf).DeviceBuffer }
 
-// New uploads m's weights into metal device buffers and prepares a KV cache up to m.Config.Ctx
+// New uploads m's weights into metal device buffers and prepares a KV (key/value attention cache) cache up to m.Config.Ctx
 // tokens (the 24× batched decode, §T404).
 func New(m *nlp.Llama) (*Decoder, error) {
 	if !metal.Available() {

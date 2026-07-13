@@ -6,20 +6,20 @@
 // The pieces are:
 //
 //   - [Env] — a minimal episodic environment interface (Reset/Step/NumActions/
-//     ObsDim), with [Chain] as a small, exactly-analyzable N-state MDP whose
+//     ObsDim), with [Chain] as a small, exactly-analyzable N-state MDP (Markov decision process — the formal model of states, actions and rewards) whose
 //     optimal policy is "always right".
 //   - [DiscountedReturns] — G_t = Σ γ^k r_{t+k}, the Monte-Carlo target.
-//   - [GAE] — Generalized Advantage Estimation (Schulman et al. 2016,
+//   - [GAE (generalized advantage estimation)] — Generalized Advantage Estimation (Schulman et al. 2016,
 //     arXiv:1506.02438): turns rewards and value estimates into the advantages a
-//     clipped policy-gradient loss trains on. λ=0 is one-step TD, λ=1 is
+//     clipped policy-gradient loss trains on. λ=0 is one-step TD (temporal-difference), λ=1 is
 //     Monte-Carlo; it produces exactly the advantages nn.PPOClipLoss consumes.
 //   - [Reinforce] — the REINFORCE policy-gradient agent (Williams 1992) with a
 //     cross-episode EMA baseline.
-//   - [DQN] — a minimal deep Q-learner (Mnih et al. 2015): replay buffer, target
+//   - [DQN (deep Q-network)] — a minimal deep Q-learner (Mnih et al. 2015): replay buffer, target
 //     network, ε-greedy decay, and the replaced-entry MSE update.
 //
 // This is the same policy-optimization machinery that underlies RLHF for language
-// models: PPO with GAE advantages is the standard RLHF optimizer, and the
+// models: PPO (proximal policy optimization) with GAE advantages is the standard RLHF optimizer, and the
 // nn package's alignment losses (PPO/DPO/KTO/IPO) plug into the same training
 // pattern. Each agent is deterministic given a seed; the exactly-computable pieces
 // (returns, GAE, the chain dynamics) are verified against hand-derived values, and

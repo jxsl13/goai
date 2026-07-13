@@ -19,8 +19,8 @@
 //     Plackett-Luce/ListMLE ranking, and the R-Drop / SimCTG regularizers.
 //   - Optimizers: SGD, Adam/AdamW, Adafactor, LAMB, Muon, Shampoo, SOAP, Sophia,
 //     AdEMAMix, Schedule-Free — plus wrappers composing with any of them
-//     (Lookahead, SAM sharpness-aware steps, cautious masking, Grokfast EMA
-//     filtering, GaLore low-rank gradient projection), LR schedules (OneCycle),
+//     (Lookahead, SAM sharpness-aware steps, cautious masking, Grokfast EMA (exponential moving average)
+//     filtering, GaLore low-rank gradient projection), LR (learning rate) schedules (OneCycle),
 //     gradient clipping and accumulation, and mixed-precision (AMP) helpers.
 //   - Parameter-efficient fine-tuning: LoRA, DoRA, PiSSA, VeRA, (IA)³,
 //     bottleneck adapters, prefix tuning, prompt tuning, and NEFTune noise.
@@ -44,7 +44,7 @@
 //     SLiC-HF, and generalized knowledge distillation (GKD) — fed from model
 //     logits via TokenLogProbs / SequenceLogProbs, the differentiable bridge
 //     every preference/RL loss consumes.
-//   - Continual learning & model merging: EWC, MAS, SI penalties; TIES/DARE
+//   - Continual learning & model merging: EWC (elastic weight consolidation), MAS, SI penalties; TIES/DARE
 //     merging, SLERP, model soups, and EMA/SWA weight averaging.
 //   - Transport & assignment: Sinkhorn entropic optimal transport.
 //
