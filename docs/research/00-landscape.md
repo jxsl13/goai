@@ -1,158 +1,159 @@
-# GoAI — Landschafts- & Machbarkeits-Report (Bootstrap Phase 0)
+# GoAI — Landscape & Feasibility Report (Bootstrap Phase 0)
 
-> Erstellt: 2026-07-05 · Ziel-Go-Version: 1.26 · Policy: cgo-last (Pure Go zuerst)
-> Status: Iteration 1 des autonomen Loops. Quellen unten. `?` = noch unbestätigt,
-> in Phase 1 (`/research`) zu härten.
+> Created: 2026-07-05 · Target Go version: 1.26 · Policy: cgo-last (Pure Go first)
+> Status: Iteration 1 of the autonomous loop. Sources below. `?` = not yet confirmed,
+> to be hardened in Phase 1 (`/research`).
 >
-> Hinweis zur Methodik: Der `deep-research`-Workflow scheiterte an einem
-> Harness-Schemafehler (StructuredOutput-Retry-Cap). Gemäß Autonomie-Regel wurde
-> umgeleitet auf direkte, gezielte WebSearch-Verifikation der versionssensiblen
-> Fakten + Fachwissen. Nicht adversarial gegengeprüfte Behauptungen sind mit `?`
-> markiert.
+> Note on methodology: The `deep-research` workflow failed due to a
+> harness schema error (StructuredOutput retry cap). Per the autonomy rule, work
+> was rerouted to direct, targeted WebSearch verification of the version-sensitive
+> facts + domain knowledge. Claims not adversarially cross-checked are marked
+> with `?`.
 
 ---
 
-## 1. Stand der Technik in Go-ML — und die Lücke
+## 1. State of the Art in Go ML — and the Gap
 
-| Projekt | Reifegrad / Wartung (2025–26) | Beschleunigung | Bewertung |
+| Project | Maturity / maintenance (2025–26) | Acceleration | Assessment |
 |---|---|---|---|
-| **GoMLX** | Aktivster Go-ML-Stack, v0.26.0 (Dez 2025) | OpenXLA-JIT (CPU/GPU/TPU) **via `gopjrt` = cgo**; optionaler Pure-Go-Backend (unoptimiert), WASM | Stark, aber Peak-Performance hängt an C++-XLA; Pure-Go-Pfad ist nur Fallback |
-| **Gorgonia** | Weitgehend **dormant/legacy**, funktional | Graph-basiert, teils cgo (CUDA) | Kein tragfähiges Fundament mehr |
-| **gonum** | Aktiv, solide Numerik | Pure-Go **BLAS unvollständig**, nur float32/float64; optional cgo→OpenBLAS | Gute Basis für Numerik-Bausteine, aber kein DL/Autograd/GPU |
-| **tract (Rust)** | Referenz für ONNX-Inferenz | — | Vergleichsmaßstab, kein Go |
+| **GoMLX** | Most active Go ML stack, v0.26.0 (Dec 2025) | OpenXLA JIT (CPU/GPU/TPU) **via `gopjrt` = cgo**; optional pure-Go backend (unoptimized), WASM | Strong, but peak performance depends on C++ XLA; the pure-Go path is only a fallback |
+| **Gorgonia** | Largely **dormant/legacy**, functional | Graph-based, partly cgo (CUDA) | No longer a viable foundation |
+| **gonum** | Active, solid numerics | Pure-Go **BLAS incomplete**, float32/float64 only; optional cgo→OpenBLAS | Good basis for numerics building blocks, but no DL/autograd/GPU |
+| **tract (Rust)** | Reference for ONNX inference | — | Comparison benchmark, not Go |
 
-**Konsequenz (die Lücke, die Neubau rechtfertigt):** Es gibt keinen
-Go-nativen, **Pure-Go-first / cgo-last** Full-Spectrum-Stack, der (a) das neue
-Go-1.26-`simd`-Paket als primären Beschleuniger ausreizt, (b) eine referenz-valide
-Pure-Go-Wahrheit mit numerischer Parität garantiert und (c) cgo/GPU nur als
-optionales, benchmarkgetriggertes Add-on führt. GoMLX kehrt die Priorität um
-(XLA/cgo zuerst); Gorgonia ist tot; gonum deckt nur Numerik. → GoAI besetzt genau
-diese Nische.
+**Consequence (the gap that justifies building anew):** There is no
+Go-native, **pure-Go-first / cgo-last** full-spectrum stack that (a) fully
+exploits the new Go 1.26 `simd` package as the primary accelerator, (b) guarantees
+a reference-valid pure-Go ground truth with numerical parity, and (c) treats
+cgo/GPU only as an optional, benchmark-triggered add-on. GoMLX inverts the priority
+(XLA/cgo first); Gorgonia is dead; gonum covers only numerics. → GoAI occupies
+exactly this niche.
 
-## 2. CPU-SIMD in reinem Go (der Kern der Pure-Go-Decke)
+## 2. CPU SIMD in Pure Go (the core of the pure-Go ceiling)
 
-- **`simd/archsimd`** (Go 1.26, `GOEXPERIMENT=simd`, Release Feb 2026): erstmals
-  explizite SIMD-Intrinsics **ohne cgo und ohne handgeschriebene asm-Stubs**.
-  Vektortypen als Structs (`Int8x16`, `Float64x8`, …), 128/256/512-bit, **AVX2 +
-  AVX-512**. **Aktuell AMD64-only.** API generiert vorerst immer AVX-Form;
-  `X86`-Variable für Feature-Detection (AVX2/AVX512). Quelle: golang/go #73787,
-  go1.26 Release Notes, pkg.go.dev/simd/archsimd. `?` API-Stabilität (experimentell,
-  kann sich ändern).
-- **Performance-Ranking (Okt 2025, Callista-Benchmark):** `simd`-Paket **inlined
-  ~4× schneller** als die nächstbeste Lösung und ~16× vs. plain Go-Loop; `avo`
-  ~3× vs. plain Loop (kann durch `.s`-Stub nicht inlinen); `simd` (nicht-inlined)
-  ~30 % über avo. → **Reihenfolge der Wahl:** `simd`-Paket > `avo` > Plan9-Asm >
-  Auto-Vektorisierung.
-- **ARM64 (Apple Silicon, das Entwickler-Primärziel hier):** `simd`-Paket deckt
-  ARM64/NEON **noch nicht** ab → dort Pure-Go via **Plan9-Asm (NEON)** oder
-  `avo`-Äquivalent bzw. Fallback. `?` Zeitplan für ARM64 im `simd`-Paket.
-- **Realistische Pure-Go-Decke:** Für BLAS-1/2 (elementwise, dot, axpy) und
-  gut kachelbare GEMM ist mit `simd`+Blocking+Goroutinen ein **substanzieller
-  Anteil an OpenBLAS/oneDNN** erreichbar; die exakte %-Zahl ist Op- und
-  Hardware-abhängig und wird pro Kernel gemessen (setzt die §C-cgo-Schwelle).
-- **Weitere Bausteine ohne cgo:** `math/bits`, `segmentio/asm`, `go-highway`
-  (portable SIMD-Abstraktion mit Pure-Go-Fallback). `?` Reife von go-highway.
+- **`simd/archsimd`** (Go 1.26, `GOEXPERIMENT=simd`, released Feb 2026): for the
+  first time, explicit SIMD intrinsics **without cgo and without hand-written asm
+  stubs**. Vector types as structs (`Int8x16`, `Float64x8`, …), 128/256/512-bit,
+  **AVX2 + AVX-512**. **Currently AMD64-only.** The API always generates the AVX
+  form for now; `X86` variable for feature detection (AVX2/AVX512). Source:
+  golang/go #73787, go1.26 release notes, pkg.go.dev/simd/archsimd. `?` API
+  stability (experimental, subject to change).
+- **Performance ranking (Oct 2025, Callista benchmark):** `simd` package **inlined
+  ~4× faster** than the next-best solution and ~16× vs. a plain Go loop; `avo`
+  ~3× vs. plain loop (cannot inline due to `.s` stub); `simd` (non-inlined)
+  ~30% above avo. → **Order of preference:** `simd` package > `avo` > Plan9 asm >
+  auto-vectorization.
+- **ARM64 (Apple Silicon, the primary developer target here):** the `simd` package
+  does **not yet** cover ARM64/NEON → there, pure Go via **Plan9 asm (NEON)** or
+  an `avo` equivalent, or fallback. `?` Timeline for ARM64 in the `simd` package.
+- **Realistic pure-Go ceiling:** For BLAS-1/2 (elementwise, dot, axpy) and
+  well-tileable GEMM, a **substantial fraction of OpenBLAS/oneDNN** is achievable
+  with `simd`+blocking+goroutines; the exact percentage is op- and
+  hardware-dependent and is measured per kernel (sets the §C cgo threshold).
+- **Further building blocks without cgo:** `math/bits`, `segmentio/asm`, `go-highway`
+  (portable SIMD abstraction with pure-Go fallback). `?` Maturity of go-highway.
 
-## 3. GPU-Wege aus Go — alle brauchen faktisch cgo
+## 3. GPU Paths from Go — all effectively require cgo
 
-| Weg | cgo-Bedarf | Plattform | Anmerkung |
+| Path | cgo required | Platform | Note |
 |---|---|---|---|
-| CUDA / cuBLAS / cuDNN | **Ja** (C-Libs) | Linux, Windows | Höchste Peak-Perf für NVIDIA |
-| Metal | **Ja** (Obj-C/cgo) | macOS | Pflicht für Apple-GPU/ANE-Nähe |
-| Vulkan-Compute | **Ja** (Loader ist C) | portabel | Ein Backend für viele GPUs |
-| WebGPU / wgpu | **Ja** (wgpu = Rust, via C-ABI) | portabel/WASM | Zukunftsträchtig, jung |
-| ROCm / HIP | **Ja** | Linux | AMD |
+| CUDA / cuBLAS / cuDNN | **Yes** (C libs) | Linux, Windows | Highest peak perf for NVIDIA |
+| Metal | **Yes** (Obj-C/cgo) | macOS | Mandatory for Apple GPU/ANE proximity |
+| Vulkan compute | **Yes** (loader is C) | portable | One backend for many GPUs |
+| WebGPU / wgpu | **Yes** (wgpu = Rust, via C ABI) | portable/WASM | Promising, young |
+| ROCm / HIP | **Yes** | Linux | AMD |
 
-**Befund:** Es gibt **keinen praktikablen Pure-Go-Weg zu diskreter GPU-Compute.**
-Das ist kein Widerspruch zur Policy, sondern ihr Kern: GPU ist genau die Klasse,
-in der cgo seinen Platz **nach** Ausschöpfung der Pure-Go-CPU-Decke verdient —
-als optionales Build-Tag-Backend mit Pure-Go-Fallback. `?` Reifegrad einzelner
-Go-Bindings (Metal-cgo, vulkan-go) in Phase 1 prüfen.
+**Finding:** There is **no practicable pure-Go path to discrete GPU compute.**
+This is not a contradiction of the policy but its core: GPU is exactly the class
+where cgo earns its place **after** the pure-Go CPU ceiling has been exhausted —
+as an optional build-tag backend with a pure-Go fallback. `?` Maturity of
+individual Go bindings (Metal cgo, vulkan-go) to be checked in Phase 1.
 
-## 4. NPU / Accelerator — überwiegend ehrliches Nicht-Ziel (vorerst)
+## 4. NPU / Accelerator — mostly an honest non-goal (for now)
 
-- **Apple Neural Engine (ANE):** nur indirekt über **CoreML** (cgo/Obj-C)
-  ansprechbar; kein direkter Zugriff. Realistisch als spätes optionales Backend.
-- **Windows DirectML:** über cgo/COM. Machbar, aber Aufwand.
-- **Intel oneDNN (inkl. NPU-Pfade):** cgo.
-- **Empfehlung:** NPU als **explizites Nicht-Ziel der ersten Ausbaustufe**
-  markieren (kein stilles Versprechen); nach GPU-Reife re-evaluieren.
+- **Apple Neural Engine (ANE):** only addressable indirectly via **CoreML**
+  (cgo/Obj-C); no direct access. Realistic as a late optional backend.
+- **Windows DirectML:** via cgo/COM. Feasible, but effort.
+- **Intel oneDNN (incl. NPU paths):** cgo.
+- **Recommendation:** mark NPU as an **explicit non-goal of the first expansion
+  stage** (no silent promise); re-evaluate after GPU maturity.
 
-## 5. Referenz-Baselines für numerische Parität
+## 5. Reference Baselines for Numerical Parity
 
-- **BLAS/GEMM:** OpenBLAS / Eigen als Perf-Baseline; NumPy (`@`) als Korrektheits-
-  Golden. Toleranz f64: rtol≈1e-12, f32: rtol≈1e-5 (`?` pro Op fixieren).
-- **DL-Ops (Conv/Norm/Attention/Optimizer):** PyTorch/ATen als Golden-Quelle;
-  Werte reproduzierbar per kleinem Python-Skript (torch, fixierter Seed) nach
-  `testdata/golden/*.npy` exportieren → in Go via npy-Reader laden.
-- **LLM-Inferenz:** llama.cpp/ggml als Perf- und Bit-Referenz (Quantisierung).
-- **Golden-Erzeugung:** deterministisch (Seed, dtype, Shape dokumentiert),
-  eingecheckt; Python 3.14 + NumPy/torch lokal vorhanden.
+- **BLAS/GEMM:** OpenBLAS / Eigen as perf baseline; NumPy (`@`) as correctness
+  golden. Tolerance f64: rtol≈1e-12, f32: rtol≈1e-5 (`?` fix per op).
+- **DL ops (Conv/Norm/Attention/Optimizer):** PyTorch/ATen as golden source;
+  values reproducible via a small Python script (torch, fixed seed) exported to
+  `testdata/golden/*.npy` → loaded in Go via npy reader.
+- **LLM inference:** llama.cpp/ggml as perf and bit reference (quantization).
+- **Golden generation:** deterministic (seed, dtype, shape documented),
+  checked in; Python 3.14 + NumPy/torch available locally.
 
-## 6. Modell-Interop-Formate
+## 6. Model Interop Formats
 
-| Format | Pure-Go-Aufwand | Priorität |
+| Format | Pure-Go effort | Priority |
 |---|---|---|
-| **safetensors** | Niedrig (JSON-Header + rohe Tensoren, zero-copy) | **Zuerst** |
-| **GGUF** | Mittel (Header + Quant-Blöcke; Pure-Go-Reader existieren) | Für LLM-Inferenz |
-| **ONNX** | Hoch (Protobuf-Schema + großes Opset) | Später, inkrementell nach Opset |
-| HuggingFace | = safetensors + Tokenizer/Config | Mit NLP-Schicht |
+| **safetensors** | Low (JSON header + raw tensors, zero-copy) | **First** |
+| **GGUF** | Medium (header + quant blocks; pure-Go readers exist) | For LLM inference |
+| **ONNX** | High (protobuf schema + large opset) | Later, incrementally by opset |
+| HuggingFace | = safetensors + tokenizer/config | With the NLP layer |
 
-## 7. Verifikations-Methodik
+## 7. Verification Methodology
 
-- **V-PARITY:** Golden-Tests gegen NumPy/torch in fixierten Toleranzen.
-- **V-GRAD:** numerische Gradientenprüfung (central finite differences,
-  Schwelle ~1e-4 rel.) für jede differenzierbare Op.
-- **V-PROP:** Property-Based-Tests (Shape-Algebra, Linearität, Assoziativität wo
-  mathematisch garantiert) via `testing/quick` bzw. rapid.
-- **V-CROSS:** Backend-Ergebnis == Pure-Go-Referenz (Differential-Testing).
-- **Fuzzing:** Go-native `go test -fuzz` für Shape-/Numerik-Randfälle.
-- **CI-Matrix:** {macOS, Windows, Linux} × {Pure-Go-Fallback (immer) + verfügbarer
-  Accel}; fehlender Accel ⇒ Skip mit Log, nie stiller Pass; `CGO_ENABLED=0`-Build
-  muss überall grün bleiben (V-CGO).
+- **V-PARITY:** golden tests against NumPy/torch within fixed tolerances.
+- **V-GRAD:** numerical gradient check (central finite differences,
+  threshold ~1e-4 rel.) for every differentiable op.
+- **V-PROP:** property-based tests (shape algebra, linearity, associativity where
+  mathematically guaranteed) via `testing/quick` or rapid.
+- **V-CROSS:** backend result == pure-Go reference (differential testing).
+- **Fuzzing:** Go-native `go test -fuzz` for shape/numerics edge cases.
+- **CI matrix:** {macOS, Windows, Linux} × {pure-Go fallback (always) + available
+  accel}; missing accel ⇒ skip with log, never a silent pass; `CGO_ENABLED=0`
+  build must stay green everywhere (V-CGO).
 
 ---
 
-## (a) Tragende Architektur-Wetten
+## (a) Load-Bearing Architecture Bets
 
-1. **Pure-Go-`simd`-Paket als primärer Beschleuniger.** Es schlägt `avo` messbar
-   und braucht keine C-Toolchain → es trägt die Pure-Go-Decke auf AMD64. ARM64
-   über Plan9-NEON, bis das `simd`-Paket ARM64 unterstützt.
-2. **Ein backend-agnostisches `Backend`/`Kernel`-Interface** mit Pure-Go-Referenz
-   als Wahrheit; cgo/GPU/NPU nur als austauschbare, benchmarkgetriggerte Add-ons
-   hinter Build-Tags. `CGO_ENABLED=0` bleibt vollwertig lauffähig.
-3. **Golden-Parität als Abnahme.** Jede Op wird gegen NumPy/torch-Golden in
-   fixierten Toleranzen abgenommen, bevor optimiert wird.
-4. **GPU = cgo, bewusst und spät.** Da kein Pure-Go-GPU-Weg existiert, ist GPU
-   der kanonische Ort, an dem der cgo-Gate greift — nach ausgereizter CPU-Decke.
+1. **Pure-Go `simd` package as the primary accelerator.** It measurably beats
+   `avo` and needs no C toolchain → it carries the pure-Go ceiling on AMD64. ARM64
+   via Plan9 NEON until the `simd` package supports ARM64.
+2. **A backend-agnostic `Backend`/`Kernel` interface** with the pure-Go reference
+   as ground truth; cgo/GPU/NPU only as interchangeable, benchmark-triggered
+   add-ons behind build tags. `CGO_ENABLED=0` remains fully functional.
+3. **Golden parity as acceptance.** Every op is accepted against NumPy/torch
+   goldens within fixed tolerances before it is optimized.
+4. **GPU = cgo, deliberate and late.** Since no pure-Go GPU path exists, GPU is
+   the canonical place where the cgo gate applies — after the CPU ceiling has
+   been exhausted.
 
-## (b) Größte Risiken + Gegenmaßnahmen
+## (b) Biggest Risks + Mitigations
 
-| Risiko | Gegenmaßnahme |
+| Risk | Mitigation |
 |---|---|
-| `simd`-Paket ist experimentell, API kann brechen | Hinter dünnem internem SIMD-Wrapper kapseln; Pure-Scalar-Fallback immer vorhanden; auf Go-1.26-Version pinnen |
-| ARM64 (Apple Silicon = Dev-Host) fehlt im `simd`-Paket | Plan9-NEON-Kernels + Scalar-Fallback; Perf-Ziel dort separat messen |
-| GPU/NPU zwingen cgo → Portabilitätsbruch | Strikte Build-Tag-Trennung, `CGO_ENABLED=0`-CI-Job als Pflicht-Gate |
-| Golden aus torch nicht bit-reproduzierbar | Seeds/dtype/Shape fixieren, Toleranzen mit §R-Begründung, keine Aufweichung |
-| Scope-Explosion (ganzes KI-Spektrum) | Strikte §T-Reihenfolge, ein auslieferbares Inkrement pro Task |
+| `simd` package is experimental, API may break | Encapsulate behind a thin internal SIMD wrapper; pure-scalar fallback always present; pin to the Go 1.26 version |
+| ARM64 (Apple Silicon = dev host) missing from the `simd` package | Plan9 NEON kernels + scalar fallback; measure the perf target there separately |
+| GPU/NPU force cgo → portability break | Strict build-tag separation, `CGO_ENABLED=0` CI job as a mandatory gate |
+| Goldens from torch not bit-reproducible | Fix seeds/dtype/shape, tolerances with §R justification, no loosening |
+| Scope explosion (entire AI spectrum) | Strict §T ordering, one shippable increment per task |
 
-## (c) Empfohlene Bau-Reihenfolge
+## (c) Recommended Build Order
 
-1. **L0 Core:** Tensor, Dtype (f32/f64 zuerst), Device, Allocator, Strides/Views.
-2. **L1 Referenz-Compute (Pure Go, skalar):** elementwise, reduce, dot, GEMM +
-   Golden-Tests + Bench-Harness. **Wahrheit, unoptimiert.**
-3. **L1-Opt (separat):** GEMM/elementwise via `simd`-Paket (AMD64) / NEON (ARM64),
-   Blocking, Goroutinen — gegen die Referenz aus (2), mit Benchmark-Delta.
-4. **L2 Autograd:** Tape + VJP-Regeln der L1-Ops, V-GRAD.
-5. **L3 NN:** Linear, Aktivierungen, Loss, SGD/Adam — end-to-end auf CPU.
-6. **L5 IO:** safetensors zuerst.
-7. **L1b GPU (cgo-Gate):** erstes GPU-Backend (Metal auf macOS / CUDA) als
-   optionales Build-Tag-Backend, nur bei gerissener §C-Schwelle.
-8. **L4 Domänen:** Transformer/LLM-Inferenz (GGUF), dann CV, klassisches ML, RL.
+1. **L0 Core:** tensor, dtype (f32/f64 first), device, allocator, strides/views.
+2. **L1 reference compute (pure Go, scalar):** elementwise, reduce, dot, GEMM +
+   golden tests + bench harness. **Ground truth, unoptimized.**
+3. **L1-Opt (separate):** GEMM/elementwise via `simd` package (AMD64) / NEON (ARM64),
+   blocking, goroutines — against the reference from (2), with benchmark delta.
+4. **L2 autograd:** tape + VJP rules of the L1 ops, V-GRAD.
+5. **L3 NN:** linear, activations, loss, SGD/Adam — end-to-end on CPU.
+6. **L5 IO:** safetensors first.
+7. **L1b GPU (cgo gate):** first GPU backend (Metal on macOS / CUDA) as an
+   optional build-tag backend, only when the §C threshold is breached.
+8. **L4 domains:** transformer/LLM inference (GGUF), then CV, classical ML, RL.
 
 ---
 
-## Quellen
+## Sources
 
 - [Go 1.26 Release Notes](https://go.dev/doc/go1.26)
 - [golang/go #73787 — simd/archsimd intrinsics under GOEXPERIMENT](https://github.com/golang/go/issues/73787)
@@ -160,9 +161,8 @@ Go-Bindings (Metal-cgo, vulkan-go) in Phase 1 prüfen.
 - [pkg.go.dev/simd/archsimd](https://pkg.go.dev/simd/archsimd)
 - [Go 1.26 features overview — saraikin.com](https://saraikin.com/posts/go-1-26-features/)
 - [Go 1.26 interactive tour — antonz.org](https://antonz.org/go-1-26/)
-- [Go SIMD part 1 (Benchmark simd vs avo), Callista, Okt 2025](https://callistaenterprise.se/blogg/teknik/2025/10/20/trying-out-go-simd-support/)
-- [go-highway — portable SIMD mit Pure-Go-Fallback](https://github.com/ajroetker/go-highway)
+- [Go SIMD part 1 (Benchmark simd vs avo), Callista, Oct 2025](https://callistaenterprise.se/blogg/teknik/2025/10/20/trying-out-go-simd-support/)
+- [go-highway — portable SIMD with pure-Go fallback](https://github.com/ajroetker/go-highway)
 - [segmentio/asm](https://github.com/segmentio/asm)
 - [gonum/blas](https://pkg.go.dev/gonum.org/v1/gonum/blas)
 - [GoMLX (GitHub)](https://github.com/gomlx/gomlx) · [gopjrt](https://pkg.go.dev/github.com/gomlx/gopjrt)
-- [Gorgonia (GitHub)](https://github.com/gorgonia/gorgonia)

@@ -8761,7 +8761,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 - Added seven examples for previously un-exampled concrete types: `nn.LayerNorm`,
   `nn.RMSNorm`, `nn.SwiGLU`, `nn.SGD`, `nn.LoRALinear`, `nn.QLoRALinear`, and
   `classic.SoftmaxRegression` — each with a dual-audience doc.
-- The "falls möglich" escape hatch is a **justified** `typeExampleExempt` allowlist:
+- The "where meaningful" escape hatch is a **justified** `typeExampleExempt` allowlist:
   interfaces (`nn.Layer`, `nn.Optimizer`, `tensor.Allocator`, …), functional-option
   and callback function types (`PrefOption`, `SamplerOption`, `NextLogits`, …),
   enums (`backend.Op`, `gguf.QuantType`), config structs, and fixture-heavy models

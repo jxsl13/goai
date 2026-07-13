@@ -1,367 +1,367 @@
-# GoAI — Master-Planungs- und Implementierungs-Prompt
+# GoAI — Master Planning and Implementation Prompt
 
-> Zweck dieser Datei: Ein wiederverwendbares Prompt-Set, um mit den Skills
-> `/deep-research`, `/research`, `/spec`, `/review`, `/build` und `/loop` eine
-> vollwertige Go-AI-Bibliothek von der Architektur bis zur optimierten
-> Implementierung zu planen, zu bauen und zu verifizieren.
+> Purpose of this file: A reusable prompt set for planning, building, and
+> verifying a full-fledged Go AI library from architecture to optimized
+> implementation, using the skills `/deep-research`, `/research`, `/spec`,
+> `/review`, `/build`, and `/loop`.
 >
-> Nutzung: Jeder Abschnitt („PHASE …") ist ein eigenständiger Prompt-Block.
-> Kopiere den jeweiligen Block hinter den passenden Slash-Command.
-> Reihenfolge: PHASE 0 → 1 → 2 → 3 → dann Dauerbetrieb mit `/loop`.
+> Usage: Each section ("PHASE …") is a self-contained prompt block.
+> Copy the respective block after the matching slash command.
+> Order: PHASE 0 → 1 → 2 → 3 → then continuous operation with `/loop`.
 
 ---
 
-## 0. Nordstern (gilt für ALLE Phasen — immer mitgeben)
+## 0. North Star (applies to ALL phases — always include)
 
-**Mission:** Eine idiomatische, modulare Go-Bibliothek für das gesamte KI-Spektrum
-(lineare Algebra, Autograd, klassisches ML, Deep Learning, NLP/LLM-Inferenz, CV,
-RL, probabilistische Modelle), deren Kernoperationen über SIMD-Assembler und
-GPU-/NPU-Beschleuniger so nah wie möglich an äquivalente C/C++-Implementierungen
-(PyTorch/ATen, llama.cpp, ONNX Runtime, Eigen, oneDNN) herankommen.
+**Mission:** An idiomatic, modular Go library for the entire AI spectrum
+(linear algebra, autograd, classic ML, deep learning, NLP/LLM inference, CV,
+RL, probabilistic models), whose core operations come as close as possible to
+equivalent C/C++ implementations (PyTorch/ATen, llama.cpp, ONNX Runtime, Eigen,
+oneDNN) via SIMD assembly and GPU/NPU accelerators.
 
-**Oberste Prinzipien (nicht verhandelbar):**
-1. **Korrektheit vor Geschwindigkeit.** Jede Funktion existiert zuerst als
-   referenz-valide, gut getestete Pure-Go-Implementierung. Optimierung ist ein
-   *zweiter, separater* Schritt gegen genau diese Referenz.
-2. **Mathematische/wissenschaftliche Fundierung.** Jede Einheit zitiert die
-   zugrundeliegende Definition (Paper, Lehrbuch, kanonische Referenz-Impl.).
-   Numerik-Entscheidungen (Stabilität, Genauigkeit, Overflow) werden explizit
-   dokumentiert, nicht implizit getroffen.
-3. **Numerische Parität als Abnahmekriterium.** „Fertig" heißt: Ergebnisse
-   stimmen innerhalb definierter Toleranzen (ULP/rtol/atol) mit einer
-   Referenz-Implementierung (NumPy/PyTorch/Referenz-C) überein — nachgewiesen,
-   nicht behauptet.
-4. **Performance ist messbar oder existiert nicht.** Kein „schneller" ohne
-   Benchmark, Roofline-Einordnung und Vergleich gegen ein C/C++-Baseline.
-5. **Plattform- und Hardware-Portabilität von Anfang an.** Native Unterstützung
-   für **macOS, Windows, Linux** auf **CPU, GPU und NPU**. Jede beschleunigte
-   Operation hat einen Pure-Go-Fallback, der überall läuft.
-6. **Eine Verantwortung pro Modul, tiefe Module mit schmaler Schnittstelle.**
-   Backend-Details (CUDA/Metal/Vulkan/SIMD) leben hinter stabilen Interfaces.
+**Top principles (non-negotiable):**
+1. **Correctness before speed.** Every function first exists as a
+   reference-valid, well-tested pure-Go implementation. Optimization is a
+   *second, separate* step against exactly this reference.
+2. **Mathematical/scientific grounding.** Every unit cites the underlying
+   definition (paper, textbook, canonical reference implementation).
+   Numerics decisions (stability, accuracy, overflow) are documented
+   explicitly, not made implicitly.
+3. **Numerical parity as the acceptance criterion.** "Done" means: results
+   match a reference implementation (NumPy/PyTorch/reference C) within
+   defined tolerances (ULP/rtol/atol) — demonstrated,
+   not asserted.
+4. **Performance is measurable or does not exist.** No "faster" without a
+   benchmark, roofline classification, and comparison against a C/C++ baseline.
+5. **Platform and hardware portability from the start.** Native support
+   for **macOS, Windows, Linux** on **CPU, GPU, and NPU**. Every accelerated
+   operation has a pure-Go fallback that runs everywhere.
+6. **One responsibility per module, deep modules with a narrow interface.**
+   Backend details (CUDA/Metal/Vulkan/SIMD) live behind stable interfaces.
 
-**cgo-Policy (harter Gate — gilt in jeder Phase und jeder Task):**
-- **Standard ist Pure Go.** Jede Op wird zuerst in reinem Go implementiert und
-  dann so weit wie möglich in reinem Go optimiert: Algorithmus, Cache-Blocking/
-  Layout, `math/bits`, experimentelles **`simd`-Paket** (GOEXPERIMENT, sofern für
-  die Ziel-Go-Version verfügbar — Status in §R verifizieren), `avo`-generierter
-  x86-Asm, Plan9-Asm (NEON/ARM64), Goroutine-Parallelisierung.
-- **cgo ist die Ausnahme, nicht der Default.** cgo (bzw. externe C/C++-Libs wie
-  OpenBLAS/cuBLAS/cuDNN/oneDNN) darf erst eingeführt werden, wenn ALLE folgenden
-  Bedingungen erfüllt sind:
-  1. Die Pure-Go-Version existiert, ist §V-grün und wurde nachweislich bis an
-     ihre praktische Decke optimiert (dokumentierte Stufen + Roofline-Einordnung).
-  2. Ein Benchmark zeigt eine **deutliche** Performance-Überlegenheit der
-     cgo-Variante gegen genau diese ausoptimierte Pure-Go-Version (Schwelle in
-     §C festlegen, z. B. „≥ X× oder ≥ Y % näher an C++-Baseline"; „deutlich" wird
-     als Zahl definiert, nicht nach Gefühl).
-  3. Die cgo-Variante liegt hinter Build-Tags als OPTIONALES Backend; der
-     Pure-Go-Pfad bleibt vollständig funktionsfähig und ist der Cross-Compile-
-     Default (Fallback überall).
-  Ist eine der drei Bedingungen nicht erfüllt ⇒ cgo wird abgelehnt, die Pure-Go-
-  Version bleibt Auslieferungsstand, und die cgo-Idee wird als Kandidat in §B/§T
-  geparkt statt gemerged.
-- Pure-Go vs. generierter Assembler (`avo`) vs. Plan9-Asm — pro Backend abwägen
-  (Portabilität, Build-Komplexität, Cross-Compilation, Performance-Decke). All
-  diese Wege gelten als „Pure Go" im Sinne der Policy (kein C-Toolchain-Zwang).
-- Lizenzmodell und Abhängigkeitspolitik (welche cgo-/Vendor-Libs sind erlaubt?).
-- Speicher-/Tensor-Layout (row-major, Strides, Views, Alignment, Arena-Alloc,
-  Zero-Copy zu GPU).
-- Zahlentypen: f64/f32/f16/bf16/int8-Quantisierung — welche zuerst, wie getestet.
-- Threading-Modell (Goroutines vs. fester Worker-Pool, NUMA, GOMAXPROCS-Wechselwirkung).
+**cgo policy (hard gate — applies in every phase and every task):**
+- **The default is pure Go.** Every op is first implemented in pure Go and
+  then optimized as far as possible in pure Go: algorithm, cache blocking/
+  layout, `math/bits`, the experimental **`simd` package** (GOEXPERIMENT, if
+  available for the target Go version — verify status in §R), `avo`-generated
+  x86 asm, Plan9 asm (NEON/ARM64), goroutine parallelization.
+- **cgo is the exception, not the default.** cgo (or external C/C++ libs such as
+  OpenBLAS/cuBLAS/cuDNN/oneDNN) may only be introduced once ALL of the following
+  conditions are met:
+  1. The pure-Go version exists, is §V-green, and has demonstrably been
+     optimized up to its practical ceiling (documented stages + roofline classification).
+  2. A benchmark shows a **significant** performance superiority of the
+     cgo variant against exactly this fully optimized pure-Go version (set the
+     threshold in §C, e.g. "≥ X× or ≥ Y % closer to the C++ baseline"; "significant"
+     is defined as a number, not by gut feeling).
+  3. The cgo variant lives behind build tags as an OPTIONAL backend; the
+     pure-Go path remains fully functional and is the cross-compile
+     default (fallback everywhere).
+  If any of the three conditions is not met ⇒ cgo is rejected, the pure-Go
+  version remains the shipping state, and the cgo idea is parked as a candidate
+  in §B/§T instead of being merged.
+- Pure Go vs. generated assembly (`avo`) vs. Plan9 asm — weigh per backend
+  (portability, build complexity, cross-compilation, performance ceiling). All
+  of these paths count as "pure Go" in the sense of the policy (no C-toolchain requirement).
+- Licensing model and dependency policy (which cgo/vendor libs are allowed?).
+- Memory/tensor layout (row-major, strides, views, alignment, arena alloc,
+  zero-copy to GPU).
+- Numeric types: f64/f32/f16/bf16/int8 quantization — which first, how tested.
+- Threading model (goroutines vs. fixed worker pool, NUMA, GOMAXPROCS interaction).
 
 ---
 
-## PHASE 0 — Landschaft & Machbarkeit  →  `/deep-research`
+## PHASE 0 — Landscape & Feasibility  →  `/deep-research`
 
 **Slash:** `/deep-research`
 
 **Prompt:**
-> Erstelle einen tief recherchierten, quellenbelegten Report als Grundlage für
-> den Bau einer vollwertigen KI-Bibliothek in Go, die via SIMD-Assembler und
-> GPU/NPU-Beschleunigern an C/C++-Performance heranreichen soll. Beantworte
-> faktenbasiert (mit Quellen, Datum, Versionsangaben):
+> Produce a deeply researched, source-backed report as the foundation for
+> building a full-fledged AI library in Go that is meant to approach C/C++
+> performance via SIMD assembly and GPU/NPU accelerators. Answer
+> fact-based (with sources, dates, version numbers):
 >
-> 1. **Stand der Technik in Go-ML:** Was existiert bereits (Gorgonia, gonum,
->    GoMLX, go-torch/cgo-Bindings, tract, candle-Vergleich)? Wo genau scheitern
->    sie an Performance/Portabilität/Wartung? Welche Lücke rechtfertigt Neubau?
-> 2. **CPU-SIMD in reinem Go:** Realistisch erreichbare Performance OHNE cgo mit
->    (a) dem experimentellen `simd`-Paket der Go-Stdlib (GOEXPERIMENT — aktuellen
->    Verfügbarkeits-/Reifestatus und Ziel-Go-Version klären), (b) `avo`-generiertem
->    x86-Asm (AVX2/AVX-512), (c) ARM NEON/SVE (Plan9-Asm, Go-Support-Status),
->    (d) Auto-Vektorisierung des Go-Compilers, (e) `math/bits`. Benchmarks/Belege
->    für erreichbaren Anteil an Eigen/oneDNN/OpenBLAS — und ab wo eine Pure-Go-
->    Decke realistisch liegt, jenseits derer nur noch cgo weiterhilft.
-> 3. **GPU-Wege aus Go:** cgo→CUDA/cuBLAS/cuDNN; Metal (macOS) via cgo/Objective-C;
->    Vulkan-Compute; WebGPU/wgpu; ROCm/HIP; SYCL. Trade-offs Build-Komplexität vs.
->    Portabilität vs. Peak-Performance. Zero-Copy-Optionen.
-> 4. **NPU/Accelerator-Wege:** Apple Neural Engine via CoreML, Windows DirectML,
->    Intel oneDNN/NPU, Qualcomm/ARM. Was ist aus Go heraus überhaupt ansprechbar?
-> 5. **Referenz-Baselines für Parität:** Welche C/C++-Bibliotheken dienen als
->    Korrektheits- und Performance-Referenz je Domäne (Eigen, OpenBLAS, oneDNN,
->    llama.cpp/ggml, ONNX Runtime, PyTorch/ATen)? Wie extrahiert man reproduzierbar
->    Golden-Referenzwerte?
-> 6. **Modell-Interop-Formate:** ONNX, GGUF, safetensors, HuggingFace — Reifegrad,
->    Aufwand.
-> 7. **Verifikations-Methodik im Feld:** Numerische Gradientenprüfung,
->    Property-Based-Testing, ULP-Toleranzen, differential testing gegen Referenz,
->    fuzzing für Numerik.
+> 1. **State of the art in Go ML:** What already exists (Gorgonia, gonum,
+>    GoMLX, go-torch/cgo bindings, tract, candle comparison)? Where exactly do
+>    they fail on performance/portability/maintenance? Which gap justifies a rebuild?
+> 2. **CPU SIMD in pure Go:** Realistically achievable performance WITHOUT cgo with
+>    (a) the experimental `simd` package of the Go stdlib (GOEXPERIMENT — clarify
+>    current availability/maturity status and target Go version), (b) `avo`-generated
+>    x86 asm (AVX2/AVX-512), (c) ARM NEON/SVE (Plan9 asm, Go support status),
+>    (d) auto-vectorization by the Go compiler, (e) `math/bits`. Benchmarks/evidence
+>    for the achievable fraction of Eigen/oneDNN/OpenBLAS — and where a pure-Go
+>    ceiling realistically lies, beyond which only cgo helps.
+> 3. **GPU paths from Go:** cgo→CUDA/cuBLAS/cuDNN; Metal (macOS) via cgo/Objective-C;
+>    Vulkan compute; WebGPU/wgpu; ROCm/HIP; SYCL. Trade-offs: build complexity vs.
+>    portability vs. peak performance. Zero-copy options.
+> 4. **NPU/accelerator paths:** Apple Neural Engine via CoreML, Windows DirectML,
+>    Intel oneDNN/NPU, Qualcomm/ARM. What is even addressable from Go?
+> 5. **Reference baselines for parity:** Which C/C++ libraries serve as the
+>    correctness and performance reference per domain (Eigen, OpenBLAS, oneDNN,
+>    llama.cpp/ggml, ONNX Runtime, PyTorch/ATen)? How does one reproducibly
+>    extract golden reference values?
+> 6. **Model interop formats:** ONNX, GGUF, safetensors, HuggingFace — maturity,
+>    effort.
+> 7. **Verification methodology in the field:** Numerical gradient checking,
+>    property-based testing, ULP tolerances, differential testing against a reference,
+>    fuzzing for numerics.
 >
-> Liefere am Ende: (a) Empfehlung für die 3–4 tragenden Architektur-Wetten,
-> (b) die größten technischen Risiken mit Gegenmaßnahmen, (c) eine begründete
-> Reihenfolge, in welcher Domänen/Backends gebaut werden sollten.
+> Deliver at the end: (a) a recommendation for the 3–4 load-bearing architecture bets,
+> (b) the biggest technical risks with countermeasures, (c) a justified
+> order in which domains/backends should be built.
 
-**Output-Erwartung:** Ein Report (wird zur Rohquelle für §R im Spec).
+**Output expectation:** A report (becomes the raw source for §R in the spec).
 
 ---
 
-## PHASE 1 — Gezielte Detail-Recherche  →  `/research`
+## PHASE 1 — Targeted Detail Research  →  `/research`
 
-**Slash:** `/research`  (mehrfach, je offener Entscheidung eine Runde)
+**Slash:** `/research`  (multiple times, one round per open decision)
 
-Für jede noch offene Kern-Entscheidung aus PHASE 0 eine fokussierte Runde. Beispiele:
+One focused round for each still-open core decision from PHASE 0. Examples:
 
-> `/research` Vergleiche `avo` (generierter x86-Asm) gegen handgeschriebenen
-> Plan9-Assembler gegen cgo→OpenBLAS für GEMM in Go: Wartbarkeit,
-> Cross-Compile-Fähigkeit, gemessene GFLOP/s-Decke, Alignment-Anforderungen.
-> Empfiehl eine Default-Strategie und benenne, wann man abweicht. Trag die
-> Befunde als §R ins Spec.
+> `/research` Compare `avo` (generated x86 asm) against handwritten
+> Plan9 assembly against cgo→OpenBLAS for GEMM in Go: maintainability,
+> cross-compile capability, measured GFLOP/s ceiling, alignment requirements.
+> Recommend a default strategy and name when to deviate. Record the
+> findings as §R in the spec.
 
-> `/research` Kläre den aktuellen Reifegrad des experimentellen `simd`-Pakets der
-> Go-Stdlib (GOEXPERIMENT): Verfügbarkeit je Go-Version, unterstützte Architekturen
-> (x86 AVX2/AVX-512, ARM64 NEON), API-Stabilität, gemessene Performance vs.
-> `avo`/Plan9-Asm, Cross-Compile-Verhalten. Definiere daraus die konkrete
-> „deutlich"-Schwelle für den cgo-Gate (Speedup-Faktor / % der C++-Baseline).
-> Trag Befund + Schwelle als §R/§C ein.
+> `/research` Clarify the current maturity of the experimental `simd` package of the
+> Go stdlib (GOEXPERIMENT): availability per Go version, supported architectures
+> (x86 AVX2/AVX-512, ARM64 NEON), API stability, measured performance vs.
+> `avo`/Plan9 asm, cross-compile behavior. From that, define the concrete
+> "significant" threshold for the cgo gate (speedup factor / % of the C++ baseline).
+> Record finding + threshold as §R/§C.
 
-> `/research` Ermittle den kanonischen, numerisch stabilen Algorithmus + die
-> übliche Referenz-Toleranz für: Softmax, LayerNorm, GELU, Adam, Conv2d (im2col
-> vs. Winograd vs. direct), Attention (naiv vs. FlashAttention). Jeweils mit
-> Quelle. Trag als §R ein.
+> `/research` Determine the canonical, numerically stable algorithm + the
+> usual reference tolerance for: Softmax, LayerNorm, GELU, Adam, Conv2d (im2col
+> vs. Winograd vs. direct), Attention (naive vs. FlashAttention). Each with a
+> source. Record as §R.
 
-**Regel:** Jede Behauptung mit Quelle; Unbelegtes wird als `?` markiert, nie als
-Fakt geschrieben. Ergebnisse landen im **§R (Research-Log)** des Specs.
+**Rule:** Every claim with a source; anything unsourced is marked as `?`, never
+written as fact. Results land in the **§R (research log)** of the spec.
 
-**Research-Mechanik (Pflicht):** NICHT den eingebauten `/deep-research`-Workflow
-verwenden (erzwingt StructuredOutput-Schema → crasht unter Rate-Limits). Immer
-`research-lite` (`.claude/workflows/research-lite.js`): eine fokussierte Frage
-pro Lauf, schema-frei, komprimierende Sub-Agenten, graceful bei toten Agenten.
-Details siehe `LOOP.md` → „Research-Regel".
+**Research mechanics (mandatory):** Do NOT use the built-in `/deep-research`
+workflow (forces a StructuredOutput schema → crashes under rate limits). Always use
+`research-lite` (`.claude/workflows/research-lite.js`): one focused question
+per run, schema-free, compressing sub-agents, graceful with dead agents.
+For details see `LOOP.md` → "Research rule".
 
 ---
 
-## PHASE 2 — Spec & Architektur  →  `/spec`
+## PHASE 2 — Spec & Architecture  →  `/spec`
 
 **Slash:** `/spec`
 
 **Prompt:**
-> Erzeuge `SPEC.md` für die Go-AI-Bibliothek „GoAI" auf Basis des Nordsterns
-> (oben) und der §R-Befunde. Struktur:
+> Generate `SPEC.md` for the Go AI library "GoAI" based on the North Star
+> (above) and the §R findings. Structure:
 >
-> - **§G (Goals):** Der Nordstern, verdichtet. Messbare Definition von „vollwertig".
-> - **§C (Constraints):** Aufgelöste Entscheidungen aus PHASE 0/1 (Backend-Strategie
->   pro Plattform, Zahlentypen-Roadmap, Tensor-Layout, Threading, Lizenz/Deps).
->   MUSS die **cgo-Policy** als messbaren Gate fixieren: Pure Go ist Default;
->   cgo nur nach ausoptimierter Pure-Go-Version + benchmarkbelegter, als konkrete
->   Zahl definierter „deutlicher" Überlegenheit; cgo immer optional hinter
->   Build-Tags mit Pure-Go-Fallback. Lege die „deutlich"-Schwelle hier numerisch
->   fest (z. B. Speedup-Faktor und/oder % der C++-Baseline).
-> - **§I (Invariants der Architektur):** Das Schichtenmodell und seine harten
->   Grenzen — z. B.:
->   - `L0 core`: Tensor, Dtype, Device, Speicher/Allocator, Strides/Views.
->   - `L1 compute`: Backend-Interface (`Backend`, `Kernel`) + Pure-Go-Referenz-Backend,
->     das ÜBERALL läuft und Definition der Wahrheit ist.
->   - `L1b accel`: austauschbare Backends (cpu-simd, cuda, metal, vulkan, npu),
->     alle gegen dasselbe Interface, mit Feature-Detection + Fallback.
->   - `L2 autograd`: Tape/Graph, VJP-Regeln je Op.
->   - `L3 nn`: Layers, Init, Optimizer, Loss, Datenpipeline.
->   - `L4 domains`: classic-ML, vision, nlp/llm-inference, rl, probabilistic.
->   - `L5 io`: ONNX/GGUF/safetensors, Serialisierung, Model-Zoo.
->   INVARIANT: Höhere Schichten kennen keine Backend-Interna. Jede Op hat einen
->   Pure-Go-Fallback. Kein `cgo` in `L0`. Public API ist backend-agnostisch.
-> - **§V (Verifikations-Invarianten — die Abnahme-Regeln):** z. B.
->   - V-PARITY: Jede Op besteht einen Golden-Test gegen die benannte Referenz
->     innerhalb der in §R fixierten Toleranz (rtol/atol/ULP).
->   - V-GRAD: Jede differenzierbare Op besteht numerische Gradientenprüfung
->     (finite differences) unter definierter Schwelle.
->   - V-CROSS: Backend-X-Ergebnis == Pure-Go-Referenz innerhalb Backend-Toleranz.
->   - V-PLATFORM: CI grün auf {macOS, Windows, Linux} × {CPU-Fallback + verfügbarer
->     Accel}. Fehlender Accel ⇒ Skip mit Log, nie stiller Pass.
->   - V-BENCH: Jede optimierte Op hat einen Benchmark + Baseline-Vergleichszahl;
->     Regressionen brechen CI.
->   - V-PROP: Property-Based-Tests für Invarianten (Shape, Linearität, Assoziativität
->     wo mathematisch garantiert).
->   - V-CGO: Kein cgo im Auslieferungspfad ohne (a) grüne, ausoptimierte Pure-Go-
->     Referenz und (b) eingecheckten Benchmark, der die §C-Schwelle überschreitet.
->     Der Pure-Go-Build (ohne C-Toolchain) muss auf allen Plattformen grün bleiben.
->   - V-STABLE: Public API ändert sich nur über dokumentierten Deprecation-Pfad.
-> - **§T (Task-Backlog):** Die eigentliche Arbeitsliste. Jede Task ist EIN
->   auslieferbares, testbares Inkrement, geordnet nach Abhängigkeit. Jede Task
->   trägt: Ziel, betroffene Schicht, Referenz für Parität, Definition-of-Done
->   (welche §V-Regeln sie erfüllen muss). Reihenfolge-Leitlinie:
->   1. `L0` Tensor/Dtype/Device + Allocator + Pure-Go-Referenz-Backend.
->   2. `L1` GEMM/elementwise/reduce als Referenz + Golden-Tests + Bench-Harness.
->   3. **Erst dann** erste Optimierung (SIMD-GEMM) — als separate Task gegen die
->      Referenz aus Schritt 2.
->   4. Autograd-Kern + VJP-Regeln der L1-Ops.
->   5. NN-Basics (Linear, Activation, Loss, SGD/Adam) end-to-end auf CPU.
->   6. Erst danach GPU-Backend, dann Transformer/LLM-Inferenz, dann weitere Domänen.
-> - **§B (Backprop-Log):** anfangs leer; Bugs/Fehlschläge werden hier zu neuen
->   §V-Invarianten verdichtet.
+> - **§G (Goals):** The North Star, condensed. Measurable definition of "full-fledged".
+> - **§C (Constraints):** Resolved decisions from PHASE 0/1 (backend strategy
+>   per platform, numeric-type roadmap, tensor layout, threading, license/deps).
+>   MUST fix the **cgo policy** as a measurable gate: pure Go is the default;
+>   cgo only after a fully optimized pure-Go version + benchmark-proven
+>   "significant" superiority defined as a concrete number; cgo always optional behind
+>   build tags with a pure-Go fallback. Fix the "significant" threshold here
+>   numerically (e.g. speedup factor and/or % of the C++ baseline).
+> - **§I (Invariants of the architecture):** The layer model and its hard
+>   boundaries — e.g.:
+>   - `L0 core`: Tensor, Dtype, Device, memory/allocator, strides/views.
+>   - `L1 compute`: backend interface (`Backend`, `Kernel`) + pure-Go reference backend
+>     that runs EVERYWHERE and is the definition of truth.
+>   - `L1b accel`: swappable backends (cpu-simd, cuda, metal, vulkan, npu),
+>     all against the same interface, with feature detection + fallback.
+>   - `L2 autograd`: tape/graph, VJP rules per op.
+>   - `L3 nn`: layers, init, optimizer, loss, data pipeline.
+>   - `L4 domains`: classic ML, vision, nlp/llm-inference, rl, probabilistic.
+>   - `L5 io`: ONNX/GGUF/safetensors, serialization, model zoo.
+>   INVARIANT: Higher layers know no backend internals. Every op has a
+>   pure-Go fallback. No `cgo` in `L0`. Public API is backend-agnostic.
+> - **§V (Verification invariants — the acceptance rules):** e.g.
+>   - V-PARITY: Every op passes a golden test against the named reference
+>     within the tolerance fixed in §R (rtol/atol/ULP).
+>   - V-GRAD: Every differentiable op passes numerical gradient checking
+>     (finite differences) under a defined threshold.
+>   - V-CROSS: Backend-X result == pure-Go reference within backend tolerance.
+>   - V-PLATFORM: CI green on {macOS, Windows, Linux} × {CPU fallback + available
+>     accel}. Missing accel ⇒ skip with log, never a silent pass.
+>   - V-BENCH: Every optimized op has a benchmark + baseline comparison number;
+>     regressions break CI.
+>   - V-PROP: Property-based tests for invariants (shape, linearity, associativity
+>     where mathematically guaranteed).
+>   - V-CGO: No cgo in the shipping path without (a) a green, fully optimized pure-Go
+>     reference and (b) a checked-in benchmark that exceeds the §C threshold.
+>     The pure-Go build (without a C toolchain) must stay green on all platforms.
+>   - V-STABLE: Public API changes only via a documented deprecation path.
+> - **§T (Task backlog):** The actual work list. Every task is ONE
+>   shippable, testable increment, ordered by dependency. Every task
+>   carries: goal, affected layer, reference for parity, definition of done
+>   (which §V rules it must satisfy). Ordering guideline:
+>   1. `L0` Tensor/Dtype/Device + allocator + pure-Go reference backend.
+>   2. `L1` GEMM/elementwise/reduce as reference + golden tests + bench harness.
+>   3. **Only then** the first optimization (SIMD GEMM) — as a separate task against the
+>      reference from step 2.
+>   4. Autograd core + VJP rules of the L1 ops.
+>   5. NN basics (Linear, Activation, Loss, SGD/Adam) end-to-end on CPU.
+>   6. Only after that the GPU backend, then transformer/LLM inference, then further domains.
+> - **§B (Backprop log):** initially empty; bugs/failures are condensed here into new
+>   §V invariants.
 >
-> Halte §T bewusst in kleinen Schritten: „Korrektheit zuerst, Optimierung als
-> eigene Folge-Task" muss sich in der Task-Struktur physisch widerspiegeln.
+> Keep §T deliberately in small steps: "correctness first, optimization as its
+> own follow-up task" must be physically reflected in the task structure.
 
 ---
 
-## PHASE 3 — Adversariales Review des Specs  →  `/review`
+## PHASE 3 — Adversarial Review of the Spec  →  `/review`
 
 **Slash:** `/review`
 
 **Prompt:**
-> Red-Team das `SPEC.md`, bevor Code entsteht. Prüfe insbesondere:
-> - Sind die §V-Regeln WIRKLICH ausreichend, um C++-Parität nachzuweisen, oder
->   erlauben sie stillen Genauigkeitsverlust?
-> - Ist die Backend-Abstraktion (§I) tragfähig für CUDA UND Metal UND Vulkan UND
->   NPU, oder leakt ein Backend zwangsläufig in die API?
-> - Ist die Task-Reihenfolge frei von versteckten Zyklen (Autograd vs. Kernel vs.
->   Device-Placement)?
-> - Wo verleitet der Plan dazu, zu früh zu optimieren?
-> - Welche numerischen Fallen (f16-Overflow, Reduktions-Reihenfolge,
->   nicht-assoziative FP-Summation, Determinismus über Backends) fehlen in §V?
-> Jede Beanstandung mit Beleg (Datei:Zeile im Spec oder §R-Quelle). Überlebende
-> Findings härten §V. Ende mit explizitem Go/No-Go.
+> Red-team the `SPEC.md` before any code is written. Check in particular:
+> - Are the §V rules REALLY sufficient to demonstrate C++ parity, or do
+>   they allow silent loss of accuracy?
+> - Is the backend abstraction (§I) viable for CUDA AND Metal AND Vulkan AND
+>   NPU, or does one backend inevitably leak into the API?
+> - Is the task order free of hidden cycles (autograd vs. kernels vs.
+>   device placement)?
+> - Where does the plan tempt one to optimize too early?
+> - Which numerical traps (f16 overflow, reduction order,
+>   non-associative FP summation, determinism across backends) are missing in §V?
+> Every objection with evidence (file:line in the spec or a §R source). Surviving
+> findings harden §V. End with an explicit go/no-go.
 
-Nach Go: SPEC.md ist eingefroren als Wahrheit. Erst jetzt beginnt der Bau.
-
----
-
-## DAUERBETRIEB — kontinuierliche Implementierung  →  `/loop` + `/build`
-
-Der Bau läuft über den `/build`-Skill (plan-then-execute gegen SPEC.md, mit
-automatischem `backprop` bei Test-/Build-Fehlern). `/loop` treibt das
-selbstgetaktet Task für Task.
-
-### /loop-Definition (selbstgetaktet, ohne festes Intervall)
-
-**Slash:** `/loop`  (kein Intervall ⇒ das Modell taktet sich selbst pro Task)
-
-**Prompt (genau so übergeben):**
-> Arbeite VOLL AUTONOM, ohne Rückfragen an den Nutzer. Implementiere GoAI
-> kontinuierlich streng nach `SPEC.md`. Führe pro Iteration GENAU EINE Aufgabe
-> zu Ende und stoppe die Schleife erst, wenn alle §T-Tasks den Status „done"
-> tragen. Ablauf je Iteration:
->
-> 0. **Bootstrap (falls `SPEC.md` fehlt oder unvollständig ist):** Erzeuge zuerst
->    autonom die Planungsgrundlage, EINE Phase pro Iteration, in dieser Reihenfolge:
->    (a) `/deep-research` → Report nach `docs/research/00-landscape.md`; (b)
->    `/research` für die offenen Kern-Entscheidungen → §R/§C; (c) `/spec` →
->    `SPEC.md` mit §G §C §I §V §T §B; (d) `/review` → Findings härten §V, Ergebnis
->    als Go/No-Go-Notiz. Erst wenn `SPEC.md` existiert und ein Review-„Go" trägt,
->    gehe zu Schritt 1 über. Nutze `PLANNING_PROMPT.md` als Vorlage der Phasen-Prompts.
->
-> 1. **Auswahl:** Wähle die nächste nicht-erledigte §T-Task, deren Abhängigkeiten
->    erfüllt sind. Nenne ihre ID und Definition-of-Done, bevor du beginnst.
-> 2. **Bauen:** `/build` diese Task. Falls es eine Optimierungs-Task ist, MUSS die
->    referenz-valide Pure-Go-Version bereits existieren und grün sein — sonst
->    zuerst deren Korrektheits-Task bauen.
-> 3. **Verifizieren (Abnahme nach §V):**
->    - V-PARITY: Golden-Test gegen die in der Task benannte Referenz innerhalb
->      der §R-Toleranz. Fehlt eine Golden-Datei, erzeuge/aktualisiere sie
->      reproduzierbar aus der Referenz und committe sie.
->    - V-GRAD (falls differenzierbar): numerische Gradientenprüfung.
->    - V-CROSS (falls Backend-Task): Ergebnis == Pure-Go-Referenz.
->    - V-PROP: einschlägige Property-Tests.
-> 4. **Messen + cgo-Gate (nur bei Optimierungs-Tasks):** Optimiere zuerst in
->    reinem Go bis an die Decke (Algorithmus → Layout/Blocking → `simd`/`avo`/
->    NEON → Goroutines), jede Stufe mit grüner §V und dokumentiertem Benchmark-
->    Delta (GFLOP/s, Speedup, % der C++-Baseline, Roofline). Erst wenn die Pure-
->    Go-Decke erreicht ist, prüfe einen cgo-Kandidaten NUR falls die §C-Schwelle
->    plausibel erreichbar scheint: baue ihn als optionales Build-Tag-Backend,
->    benchmarke gegen die ausoptimierte Pure-Go-Version. Überschreitet er die
->    §C-Schwelle ⇒ V-CGO erfüllt, mergen (Pure-Go bleibt Default-Fallback).
->    Sonst ⇒ verwerfen, Pure-Go bleibt Auslieferungsstand, cgo-Idee als Notiz in
->    §B parken. Keine Optimierung gilt als fertig ohne die Benchmark-Zahl.
-> 5. **Fehlerbehandlung:** Bei Test-/Build-/Paritäts-/Regressions-Fehler `backprop`
->    aufrufen: Ursache tracen, prüfen ob ein NEUER §V-Invariant den Rückfall
->    künftig fängt, §B ergänzen, dann Fix. Niemals einen roten Test überspringen
->    oder Toleranzen aufweichen, um grün zu werden — Toleranz-Änderungen brauchen
->    eine §R-Begründung.
-> 6. **Plattform-Check:** Stelle sicher, dass die Pure-Go-Pfade plattformneutral
->    bleiben und beschleunigte Pfade sauber hinter Build-Tags/Feature-Detection
->    liegen (macOS/Windows/Linux × CPU/GPU/NPU), mit Fallback. Nicht verfügbare
->    Accel-Backends ⇒ dokumentierter Skip, kein stiller Pass.
-> 7. **Abschluss:** Task in §T auf „done" setzen, kurzes Changelog (was, Parität,
->    Benchmark), und — nur wenn der Nutzer Commits erlaubt hat — committen. Dann
->    zur nächsten Iteration.
->
-> Invarianten der Schleife: Immer nur eine Task offen. Korrektheit vor
-> Performance. Kein Fortschritt ohne bestandene §V-Abnahme. Kein „optimiert" ohne
-> Benchmark-Zahl.
->
-> **Autonomie-Regel (statt Nutzer-Stopp):** Bei struktureller Unklarheit oder
-> einer offenen Design-Entscheidung NICHT stoppen und NICHT den Nutzer fragen.
-> Stattdessen: (a) die wissenschaftlich/mathematisch am besten begründete Default-
-> Option wählen (mit Quelle, wenn möglich); (b) die Entscheidung als Eintrag in
-> `docs/decisions/ADR-<n>.md` festhalten (Kontext, Optionen, Wahl, Begründung,
-> Revidierbarkeit) UND als `?`-Merker bzw. Amendment in `SPEC.md` (§C/§B)
-> vermerken; (c) mit der so getroffenen Annahme weiterbauen. Nur ECHTE harte
-> Blocker (fehlende Toolchain, kaputte Umgebung, die der Loop nicht selbst
-> reparieren kann) rechtfertigen einen Halt — dann eine knappe
-> `PushNotification` senden und die nächste Iteration abwarten. Niemals
-> Toleranzen aufweichen oder Tests überspringen, um Fortschritt vorzutäuschen —
-> ein roter Test ist ein `backprop`-Fall, kein Grund zum Lockern.
-> Commits/Pushes bleiben untersagt, solange der Nutzer sie nicht ausdrücklich
-> erlaubt; der Loop arbeitet bis dahin nur im Working Tree.
-
-### Optional: intervallgetaktete Variante (für Langläufer/Übernacht)
-
-> `/loop 30m` + denselben Prompt — nützlich, wenn einzelne Tasks lange Builds/
-> Benchmarks nach sich ziehen und du regelmäßige Fortschritts-Checkpoints willst.
-> Für reine Rechenlast ist die selbstgetaktete Variante (kein Intervall) meist
-> besser, weil sie erst nach echtem Task-Abschluss weitertaktet.
+After the go: SPEC.md is frozen as the truth. Only now does the build begin.
 
 ---
 
-## Querschnitt: Verifikations- & Performance-Standard (gilt in jeder Task)
+## CONTINUOUS OPERATION — continuous implementation  →  `/loop` + `/build`
 
-**Korrektheits-Nachweis (bevor überhaupt optimiert wird):**
-- Golden-Tests gegen benannte Referenz (NumPy/PyTorch/Referenz-C), Toleranzen
-  aus §R, reproduzierbar erzeugt und eingecheckt.
-- Numerische Gradientenprüfung für alle differenzierbaren Ops.
-- Property-Based-Tests für mathematisch garantierte Eigenschaften.
-- Cross-Backend-Differential-Testing gegen die Pure-Go-Referenz.
+The build runs via the `/build` skill (plan-then-execute against SPEC.md, with
+automatic `backprop` on test/build failures). `/loop` drives this
+self-paced, task by task.
 
-**Performance-Methodik (der zweite, separate Schritt):**
-1. Roofline/Komplexität analysieren (compute- vs. memory-bound).
-2. **In reinem Go** optimieren in Stufen: Algorithmus → Cache-Blocking/Layout →
-   SIMD (experimentelles `simd`-Paket / `avo` / NEON) → Multithreading. Nach
-   JEDER Stufe: Korrektheit erneut grün + Benchmark-Delta dokumentiert.
-3. Vergleich gegen C/C++-Baseline in % der erreichten Peak-Performance.
-4. **cgo-Gate** erst nach erreichter Pure-Go-Decke: cgo/externe-Lib nur mergen,
-   wenn Benchmark die §C-Schwelle gegen die ausoptimierte Pure-Go-Version reißt;
-   sonst verwerfen. GPU/NPU-Offload folgt derselben Logik (optionales Backend,
-   Pure-Go-Fallback bleibt).
-5. Benchmark-Regressionsschutz in CI (V-BENCH), Pure-Go-Build ohne C-Toolchain
-   bleibt auf allen Plattformen grün (V-CGO).
+### /loop definition (self-paced, no fixed interval)
 
-**Plattform-/Hardware-Matrix (Zielabdeckung):**
+**Slash:** `/loop`  (no interval ⇒ the model paces itself per task)
+
+**Prompt (pass exactly as is):**
+> Work FULLY AUTONOMOUSLY, without questions back to the user. Implement GoAI
+> continuously, strictly according to `SPEC.md`. Per iteration, carry EXACTLY ONE task
+> to completion, and only stop the loop when all §T tasks carry the status
+> "done". Flow per iteration:
+>
+> 0. **Bootstrap (if `SPEC.md` is missing or incomplete):** First autonomously
+>    produce the planning foundation, ONE phase per iteration, in this order:
+>    (a) `/deep-research` → report to `docs/research/00-landscape.md`; (b)
+>    `/research` for the open core decisions → §R/§C; (c) `/spec` →
+>    `SPEC.md` with §G §C §I §V §T §B; (d) `/review` → findings harden §V, result
+>    as a go/no-go note. Only once `SPEC.md` exists and carries a review "go",
+>    proceed to step 1. Use `PLANNING_PROMPT.md` as the template for the phase prompts.
+>
+> 1. **Selection:** Pick the next unfinished §T task whose dependencies
+>    are satisfied. Name its ID and definition of done before you begin.
+> 2. **Build:** `/build` this task. If it is an optimization task, the
+>    reference-valid pure-Go version MUST already exist and be green — otherwise
+>    build its correctness task first.
+> 3. **Verify (acceptance per §V):**
+>    - V-PARITY: golden test against the reference named in the task within
+>      the §R tolerance. If a golden file is missing, generate/update it
+>      reproducibly from the reference and commit it.
+>    - V-GRAD (if differentiable): numerical gradient checking.
+>    - V-CROSS (if a backend task): result == pure-Go reference.
+>    - V-PROP: pertinent property tests.
+> 4. **Measure + cgo gate (optimization tasks only):** First optimize in
+>    pure Go up to the ceiling (algorithm → layout/blocking → `simd`/`avo`/
+>    NEON → goroutines), each stage with a green §V and a documented benchmark
+>    delta (GFLOP/s, speedup, % of the C++ baseline, roofline). Only once the pure-Go
+>    ceiling is reached, evaluate a cgo candidate ONLY if the §C threshold
+>    seems plausibly reachable: build it as an optional build-tag backend,
+>    benchmark it against the fully optimized pure-Go version. If it exceeds the
+>    §C threshold ⇒ V-CGO satisfied, merge (pure Go remains the default fallback).
+>    Otherwise ⇒ discard, pure Go remains the shipping state, park the cgo idea as a note in
+>    §B. No optimization counts as done without the benchmark number.
+> 5. **Error handling:** On a test/build/parity/regression failure, invoke `backprop`:
+>    trace the cause, check whether a NEW §V invariant would catch the regression
+>    in the future, extend §B, then fix. Never skip a red test
+>    or soften tolerances to get green — tolerance changes require
+>    a §R justification.
+> 6. **Platform check:** Ensure that the pure-Go paths remain platform-neutral
+>    and accelerated paths sit cleanly behind build tags/feature detection
+>    (macOS/Windows/Linux × CPU/GPU/NPU), with fallback. Unavailable
+>    accel backends ⇒ documented skip, no silent pass.
+> 7. **Wrap-up:** Set the task to "done" in §T, a short changelog (what, parity,
+>    benchmark), and — only if the user has allowed commits — commit. Then
+>    on to the next iteration.
+>
+> Invariants of the loop: Only one task open at a time. Correctness before
+> performance. No progress without a passed §V acceptance. No "optimized" without
+> a benchmark number.
+>
+> **Autonomy rule (instead of stopping for the user):** On structural ambiguity or
+> an open design decision, do NOT stop and do NOT ask the user.
+> Instead: (a) choose the scientifically/mathematically best-justified default
+> option (with a source, if possible); (b) record the decision as an entry in
+> `docs/decisions/ADR-<n>.md` (context, options, choice, rationale,
+> revisability) AND note it as a `?` marker or amendment in `SPEC.md` (§C/§B);
+> (c) keep building with the assumption made this way. Only GENUINE hard
+> blockers (missing toolchain, broken environment that the loop cannot
+> repair itself) justify a halt — then send a brief
+> `PushNotification` and await the next iteration. Never
+> soften tolerances or skip tests to fake progress —
+> a red test is a `backprop` case, not a reason to loosen.
+> Commits/pushes remain forbidden as long as the user has not explicitly
+> allowed them; until then, the loop works only in the working tree.
+
+### Optional: interval-paced variant (for long runners/overnight)
+
+> `/loop 30m` + the same prompt — useful when individual tasks entail long builds/
+> benchmarks and you want regular progress checkpoints.
+> For pure compute load, the self-paced variant (no interval) is usually
+> better, because it only advances after a genuine task completion.
+
+---
+
+## Cross-cutting: Verification & Performance Standard (applies in every task)
+
+**Correctness proof (before any optimization at all):**
+- Golden tests against a named reference (NumPy/PyTorch/reference C), tolerances
+  from §R, reproducibly generated and checked in.
+- Numerical gradient checking for all differentiable ops.
+- Property-based tests for mathematically guaranteed properties.
+- Cross-backend differential testing against the pure-Go reference.
+
+**Performance methodology (the second, separate step):**
+1. Analyze roofline/complexity (compute- vs. memory-bound).
+2. Optimize **in pure Go** in stages: algorithm → cache blocking/layout →
+   SIMD (experimental `simd` package / `avo` / NEON) → multithreading. After
+   EVERY stage: correctness green again + benchmark delta documented.
+3. Comparison against the C/C++ baseline in % of achieved peak performance.
+4. **cgo gate** only after the pure-Go ceiling is reached: merge cgo/external lib only
+   if the benchmark breaks the §C threshold against the fully optimized pure-Go version;
+   otherwise discard. GPU/NPU offload follows the same logic (optional backend,
+   pure-Go fallback remains).
+5. Benchmark regression protection in CI (V-BENCH); the pure-Go build without a C toolchain
+   stays green on all platforms (V-CGO).
+
+**Platform/hardware matrix (target coverage):**
 - OS: macOS, Windows, Linux.
-- CPU: x86-64 (AVX2/AVX-512) via `avo`; ARM64 (NEON, ggf. SVE) via Plan9-Asm;
-  überall Pure-Go-Fallback.
-- GPU: CUDA/cuBLAS/cuDNN (Linux/Windows), Metal (macOS), Vulkan-Compute
-  (portabel), ROCm (optional).
-- NPU: CoreML/ANE (macOS), DirectML (Windows), oneDNN (Intel) — soweit aus Go
-  ansprechbar; sonst als Nicht-Ziel markiert (kein stilles Versprechen).
+- CPU: x86-64 (AVX2/AVX-512) via `avo`; ARM64 (NEON, possibly SVE) via Plan9 asm;
+  pure-Go fallback everywhere.
+- GPU: CUDA/cuBLAS/cuDNN (Linux/Windows), Metal (macOS), Vulkan compute
+  (portable), ROCm (optional).
+- NPU: CoreML/ANE (macOS), DirectML (Windows), oneDNN (Intel) — insofar as
+  addressable from Go; otherwise marked as a non-goal (no silent promise).
 
 ---
 
-## Reihenfolge auf einen Blick
+## Order at a glance
 
 ```
-/deep-research   → Landschaft, Wetten, Risiken, Domänen-Reihenfolge   (→ Rohquelle)
-/research (×N)   → offene Entscheidungen faktisch klären              (→ §R)
-/spec            → SPEC.md: §G §C §I §V §T §B                          (→ Wahrheit)
-/review          → Red-Team, §V härten, Go/No-Go                      (→ Freeze)
-/loop + /build   → Task für Task bauen, verifizieren, messen          (→ Dauerbetrieb)
-   └─ backprop bei jedem Fehlschlag → neue §V-Invarianten
+/deep-research   → landscape, bets, risks, domain order                (→ raw source)
+/research (×N)   → factually resolve open decisions                   (→ §R)
+/spec            → SPEC.md: §G §C §I §V §T §B                          (→ truth)
+/review          → red-team, harden §V, go/no-go                      (→ freeze)
+/loop + /build   → build task by task, verify, measure                (→ continuous operation)
+   └─ backprop on every failure → new §V invariants
 ```

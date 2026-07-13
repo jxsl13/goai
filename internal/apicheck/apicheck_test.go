@@ -35,7 +35,7 @@ var exampleExempt = map[string]bool{
 
 // typeExampleExempt lists "pkg.Type" entries that need NOT ship a runnable
 // Example — types where a standalone usage example is not meaningful (interfaces,
-// tiny config/option structs, error/marker types). This is the "falls möglich"
+// tiny config/option structs, error/marker types). This is the "where meaningful"
 // escape hatch for the per-type example rule (§C13/§V19); keep it short and each
 // entry justified.
 var typeExampleExempt = map[string]bool{
@@ -336,7 +336,7 @@ func TestPublicAPIDocumentedWithExamples(t *testing.T) {
 		// per-type example coverage (§C13/§V19): every exported user-facing type
 		// should carry a runnable Example (Go's ExampleType / ExampleType_Method
 		// convention) so even simple methods are shown in use — unless the type is
-		// on the "not meaningfully exampled" allowlist ("falls möglich").
+		// on the "not meaningfully exampled" allowlist ("where meaningful").
 		if !exampleExempt[rel] {
 			for _, tn := range typeNames {
 				if typeExampleExempt[rel+"."+tn] {

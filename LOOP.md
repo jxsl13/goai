@@ -1,319 +1,355 @@
-# GoAI — Autonomer Loop-Prompt
+# GoAI — Autonomous Loop Prompt
 
-> Maßgebliche Iterationsanweisung für den autonomen Build-Loop.
-> Wird vom Cron-Job referenziert; Änderungen hier wirken ab dem nächsten Fire.
-> Rahmen: `PLANNING_PROMPT.md` (Abschnitt DAUERBETRIEB), `SPEC.md` (Wahrheit).
+> Authoritative per-iteration instruction for the autonomous build loop.
+> Referenced by the cron job; changes here take effect from the next fire.
+> Frame: `PLANNING_PROMPT.md` (section CONTINUOUS OPERATION), `SPEC.md` (the truth).
 
-VOLL AUTONOM, ohne Rückfragen an den Nutzer. Arbeite an der Go-AI-Bibliothek
-GoAI unter `/Users/john/Desktop/goai`. Führe pro Fire GENAU EINE Aufgabe zu
-Ende.
+FULLY AUTONOMOUS, no questions back to the user. Work on the GoAI Go AI
+library in this repository. Complete EXACTLY ONE task per fire, end to end.
 
-## Ablauf
+## Procedure
 
-0. **BOOTSTRAP** falls `SPEC.md` fehlt/unvollständig: erzeuge autonom die
-   Planungsgrundlage, EINE Phase pro Fire — (a) `/deep-research` →
-   `docs/research/00-landscape.md`; (b) `/research` offene Kern-Entscheidungen
-   → §R/§C; (c) `/spec` → `SPEC.md` (§G §C §I §V §T §B); (d) `/review` → §V
-   härten + Go/No-Go-Notiz. Erst mit `SPEC.md` + Review-„Go" zu Schritt 1.
-1. **Auswahl:** Nächste abhängigkeitsfreie §T-Task wählen, ID +
-   Definition-of-Done nennen.
-2. **Bauen:** `/build` (bzw. direkt implementieren, plan-then-execute gegen
+0. **BOOTSTRAP** if `SPEC.md` is missing/incomplete: autonomously produce the
+   planning basis, ONE phase per fire — (a) `/deep-research` →
+   `docs/research/00-landscape.md`; (b) `/research` open core decisions
+   → §R/§C; (c) `/spec` → `SPEC.md` (§G §C §I §V §T §B); (d) `/review` →
+   harden §V + go/no-go note. Only proceed to step 1 with `SPEC.md` + a
+   review "go".
+1. **Selection:** pick the next dependency-free §T task; state its ID and
+   definition of done.
+2. **Build:** `/build` (or implement directly, plan-then-execute against
    SPEC.md).
-3. **§V-Abnahme:** V-PARITY (Golden gegen Referenz-Toleranz, via
-   `.venv`-Python/NumPy erzeugen falls nötig), V-GRAD, V-CROSS, V-PROP.
-4. **Optimierungs-Task:** erst in REINEM Go bis zur Decke
-   (Algorithmus→Layout→simd/avo/NEON→Goroutines, jede Stufe grün +
-   Benchmark-Delta), dann cgo-Gate (V-CGO): cgo nur als optionales
-   Build-Tag-Backend mergen, wenn Benchmark die §C-Schwelle gegen die
-   ausoptimierte Pure-Go-Version reißt — sonst verwerfen, Idee in §B parken.
-5. **Fehlschlag** → backprop: Ursache tracen, ggf. neuen §V-Invariant, §B
-   ergänzen, Fix. Nie Toleranzen aufweichen oder Tests überspringen.
-6. **Plattform-Check:** Pure-Go OHNE C-Toolchain grün — PFLICHT via
-   `CGO_ENABLED=0 go vet ./...` oder `go test ./...` (§V23: `go build` allein
-   kompiliert KEINE _test.go-Dateien und übersieht fehlende Build-Tags, §B45);
-   Accel hinter Build-Tags mit Fallback. Voll-Sweeps (`go test ./...`) IMMER mit
-   `-timeout 1800s` (llamagpu > 600s-Default, §B46) und Exit-Code UNGEPIPET
-   prüfen — `| grep | tail` maskiert FAIL als Exit 0 (§V24).
-7. **Abschluss:** Task in §T auf „done" (`x`), kurzer Changelog-Eintrag in
+3. **§V acceptance:** V-PARITY (goldens against the reference tolerance,
+   generated via the `.venv` Python/NumPy when needed), V-GRAD, V-CROSS,
+   V-PROP.
+4. **Optimization tasks:** first push PURE Go to its ceiling
+   (algorithm→layout→simd/avo/NEON→goroutines, every rung green + a
+   benchmark delta), then the cgo gate (V-CGO): merge cgo only as an
+   optional build-tag backend when a benchmark beats the §C threshold
+   against the fully optimized pure-Go version — otherwise discard, park
+   the idea in §B.
+5. **Failure** → backprop: trace the root cause, add a §V invariant and/or
+   §B row when warranted, fix. Never loosen tolerances or skip tests.
+6. **Platform check:** pure Go WITHOUT a C toolchain must be green —
+   MANDATORY via `CGO_ENABLED=0 go vet ./...` or `go test ./...` (§V23:
+   `go build` alone compiles NO _test.go files and misses missing build
+   tags, §B45); accel stays behind build tags with a fallback. Full sweeps
+   (`go test ./...`) ALWAYS with `-timeout 1800s` (llamagpu exceeds the
+   600s default, §B46) and the exit code checked UN-PIPED — `| grep | tail`
+   masks a FAIL as exit 0 (§V24).
+7. **Completion:** set the task to "done" (`x`) in §T, add a short entry to
    `CHANGELOG.md`.
 
-## Research-Regel (Pflicht — mitigiert den StructuredOutput-Fehler)
+## Research rule (mandatory — mitigates the StructuredOutput failure)
 
-Für externe Recherche NIE den eingebauten `/deep-research`-Workflow verwenden:
-er zwingt jeden Sub-Agenten zu einem `StructuredOutput`-Schema-Call, der unter
-Rate-Limits 5× fehlschlägt und den ganzen Workflow crasht
+NEVER use the built-in `/deep-research` workflow for external research: it
+forces every sub-agent into a `StructuredOutput` schema call that fails 5×
+under rate limits and crashes the whole workflow
 (`StructuredOutput retry cap exceeded`).
 
-Stattdessen IMMER den eigenen Workflow `research-lite`
-(`.claude/workflows/research-lite.js`) nutzen:
-- **kleiner Scope**: genau EINE fokussierte Frage pro Lauf (Kontext schonen);
-- **schema-frei**: kein `agent({schema})` → der StructuredOutput-Fehler ist
-  strukturell unmöglich;
-- **komprimierende Sub-Agenten**: jeder Angle-Agent gibt ≤6 verdichtete Zeilen
-  zurück, ein Synth-Agent verdichtet auf ≤8 Zeilen → sprengt den Kontext nicht;
-- **graceful**: tote Agenten → `null`, gefiltert, nie Throw.
+ALWAYS use the repo's own `research-lite` workflow
+(`.claude/workflows/research-lite.js`) instead:
+- **small scope**: exactly ONE focused question per run (protects context);
+- **schema-free**: no `agent({schema})` → the StructuredOutput failure is
+  structurally impossible;
+- **compressing sub-agents**: every angle agent returns ≤6 condensed lines,
+  one synth agent condenses to ≤8 lines → never blows the context;
+- **graceful**: dead agents → `null`, filtered, never a throw.
 
-Aufruf: `Workflow({ scriptPath: ".claude/workflows/research-lite.js", args: "<eine präzise Frage>" })`.
-**Validierungs-Ladder (§V16, Pflicht bei jeder Algorithmus-Implementierung):**
-- Stufe 1 = bit-/tol-exakte Parität gegen die offizielle Referenz-Lib
-  (torch/sklearn/gguf-py/safetensors). Notwendig, NICHT hinreichend.
-- Stufe 2 (finale Autorität) = das **wissenschaftliche Paper**, das den
-  Algorithmus definiert (arXiv/DOI/kanonisches Lehrbuch) — die implementierte
-  Formel MUSS der Paper-Gleichung entsprechen, zitiert in §R.
-- Dateiformate haben kein Paper → definitorische Quelle = Format-Spec/Ref-Impl
-  (explizit so festhalten, kein Paper erfinden).
-Dateiformate: immer Round-Trip + Fuzz (§V15).
+Invocation: `Workflow({ scriptPath: ".claude/workflows/research-lite.js", args: "<one precise question>" })`.
+**Validation ladder (§V16, mandatory for every algorithm implementation):**
+- Tier 1 = bit-/tolerance-exact parity against the official reference lib
+  (torch/sklearn/gguf-py/safetensors). Necessary, NOT sufficient.
+- Tier 2 (final authority) = the **scientific paper** defining the algorithm
+  (arXiv/DOI/canonical textbook) — the implemented formula MUST match the
+  paper's equation, cited in §R.
+- File formats have no paper → the defining source is the format spec /
+  reference implementation (record it explicitly as such; never invent a
+  paper).
+File formats: always round-trip + fuzz (§V15).
 
-## Autonomie-Regel
+## Autonomy rule
 
-Bei Unklarheit/Design-Entscheidung NICHT stoppen, NICHT fragen —
-wissenschaftlich begründete Default-Wahl treffen, in
-`docs/decisions/ADR-<n>.md` + SPEC-Amendment (§C/§B) dokumentieren,
-weiterbauen. Nur echte harte Blocker (kaputte Toolchain) → kurze
-PushNotification, sonst weiter. KEINE Commits/Pushes ohne ausdrückliche
-Nutzer-Erlaubnis. Schleife endet erst, wenn alle §T-Tasks „done".
+On ambiguity or a design decision, do NOT stop, do NOT ask — make a
+scientifically grounded default choice, document it in
+`docs/decisions/ADR-<n>.md` plus a SPEC amendment (§C/§B), keep building.
+Only genuine hard blockers (broken toolchain) → a short PushNotification,
+otherwise continue. NO commits/pushes without the user's explicit
+permission. The loop only ends when every §T task is "done".
 
-## STATUS: Loop AKTIV — Stand §T561: Quellenlisten-Audit 12/12 aufgelöst (GSPO/QLoRA/SSD/i-Quants/MXFP4/Sparse-Trio/KDA); alles grün (2026-07-13)
+## STATUS: loop ACTIVE — as of §T565: v0.1.0 public on github.com/jxsl13/goai, CI green on 3 OSes; source-list audit 12/12 resolved (2026-07-13)
 
-Spec bei §T493. Die Session T364–T432 hat ADR-0019 (Batched Decode) komplett
-durchgezogen UND die Attention/Training-Hebel geholt. Alle Gewinne §V22-gemessen,
-jede Op gegen ref kreuzvalidiert, beide Backends ([[gpu-ops-all-backends]]).
-T434–T444 hat danach das INTEGRATIONS-Programm geschlossen (siehe Ära-Bullet).
-T472–T477 = TRAINED-MODEL-MESS-SERIE (docs/inference.md): Distill-your-drafts
-73→88% Akzeptanz; Mirostat = Surprise-CEILING (einseitig); Watermark δ=2
-detektierbar ab 50 Tokens; Bounded-Cache +0,05 Bits; Streaming 4× über Ctx
-(RoPE, pre-RoPE-Cache verifiziert); Q8/Q4 quasi verlustfrei (99%/97% teacher-
-forced Agreement — NIE free-running messen). Sink-Phänomen zeigt sich im
-Toy-Maßstab NICHT (2× ehrlich negativ). trainCharLlama (cpu, 3s) entsperrt
-Llama-Messungen generell.
-T480–T492 = DECODE-ABSCHLUSS + FAMILIEN-E2E-SERIE (docs/training.md): jede
-Decode-Strategie trained-model-verifiziert (CD/DoLa via Mechanismus-Surprise,
-Beam +0,31 Nats über Greedy, DoLa-Plausibilität = log₂(1/α)-Garantie); Optimizer-
-Zoo (8: SOAP führt 1,188; Shampoo-Bug gefixt → WithShampooRootEvery) + 5 Wrapper
-(GaLore 1,380 schlägt AdamW; SAM-Zwei-Pass; Grokfast braucht LR-Kompensation);
-NEFTune-Claim zeigt sich (Held-out ↓ bei Train ↑); DDPM/DDIM + Flow-Matching
-rekonstruieren denselben Ring; EWC 50→89% Retention (Tasks müssen gemeinsam
-repräsentierbar sein!); TIES/Soup schlagen Spezialisten-Worst-Case (Soup > TIES
-bei Same-Base); VQ-VAE 94% Varianz durch den ST-Flaschenhals; SimSiam 94%
-Linear-Probe labelfrei. Assert-Disziplin: Theorie-Garantien asserten, Rest
-loggen; Regularisierer auf Held-out beurteilen; Agreement teacher-forced.
-T493–T499 = ARCHITEKTUR-E2Es + RL/MERGING-ABSCHLUSS: Mamba-, RetNet-, MLA- und
-Mamba+MoE-Char-LMs (jeweils strukturelle KAUSALITÄTS-Assertion + Training +
-Generierung; MoE-Balance-Loss hält 4 Experten bei 20–28%); GAE+PPOClip zum
-PPO-Actor-Critic verbunden (Return 1,0, Critic V(start)≈γ⁴); GreedySoup
-verifiziert; DARE = dritter SKALENABHÄNGIGER Claim (0,9-Drop schadet klar,
-0,5 = Rauschen — Redundanz-Prämisse braucht Großmodelle). RWKV-Block-Wrapper,
-K-Quant-Qualität (braucht dim≥256-Llama), Sophia-GNB-Harnisch: demand-gated.
-T504–T514 = BLOCKER-ABBAU (gepinnte Blocker einzeln geöffnet, jede Behauptung
-re-verifiziert): MHA bekam DREI Nähte (LoRA §T504, Bias §T505, Mask §T508 —
-nil = exakt alter Pfad, Golden-Suiten unberührt); GPT2FromHF (§T506, c_attn-
-Split, tied head); OpMHAMasked (§T507) → Tree-Verify durchs volle Modell
-(§T508, bit-identisch auf ref + T461-Kette durchs Modell verifiziert) →
-MedusaGenerateTree (§T509, topK=1 ≡ Chain EXAKT) → Messung mit trainierten
-Heads (§T510: Tree 4,00 vs Chain 3,92 tok/round; Akzeptanz-DECKE bei Toy-Scale).
-WICHTIGE KORREKTUR §T508: Masken ≠ gemergte Score-Quellen — Self-Extend braucht
-Letzteres → OpMHASelect (§T512, drei bit-exakte Kollaps-/Symmetrie-Tests) →
-Self-Extend-E2E (§T513: Training NUR auf 32er-Fenstern, Eval bei 4×: plain CE
-0,316→1,488 degradiert, Self-Extend w=8/G=8 hält 0,515 — OHNE Fine-Tuning).
-Dazu §T511: persistenter Worker-Pool in cpu.parallelWork (Allocs −70–75%/Op,
-Zeit ±0–2%, -race-verifiziert; A/B via Datei-Toggle, NIE git stash). Docs §T514.
-T515–T521 = SWEEP + RWKV-FAMILIE + FUZZ-HÄRTUNG: Voll-Sweep grün (llamagpu
-braucht jetzt -timeout 1800s, §B46/§V24: Exits UNGEPIPET prüfen!); OpWKV-Backward
-GEBAUT (§T516: Softmax-Average-Identität, O(T²)-Reverse, Gradcheck über alle 4
-Inputs — der "eigenes Projekt"-Blocker fiel in einem Fire) → nn.RWKVBlock +
-Char-LM-E2E (§T517: CE 3,01→0,12, Kausalität bit-exakt; Architektur-Serie
-KOMPLETT) → Rekurrenz-Inferenz (§T518: Step ≡ Forward ≤1e−12, O(1)-State).
-Integrations-Audit R2 (§T519: Self-Extend-Positionsmathematik war vom Forward
-entkoppelt → selfExtendPos + Spec-Konsistenztest). Fuzz-Sweep über ALLE 35
-Targets (§T520/§B47): gguf-Bounds-Check-uint64-OVERFLOW (2 Stellen, Subtraktions-
-form) + Tokenizer-JSON unbegrenzte-ID-Alloc (BPE per Fuzz, WordPiece per
-Klassen-Audit) gefixt; explizite Hostile-Tests + 6×60s-Deep-Fuzz grün (§T521).
-Offene ECHTE Blocker: nur noch amd64-Tasks (T11b/T74, host-blockiert) und echte
-GPT-2-Gewichte (Download braucht Nutzer-Erlaubnis).
-T523–T532 = WARTUNG + VULKAN-PERF-ARC: Race-Sweep baumweit 0 Races (§T523);
-Bench-Regressions-Check keine Drift (§T524); Memory-Wartung (§T525); Fuzz-Programm
-komplett — Q4_K-Schranke strukturell korrigiert, Encoder optimal (§T526/§B48);
-Self-Extend-Extensionskurve: plain 0,91→2,40 monoton, SE flach 0,57→0,70 bis 8×
-(§T527). VULKAN-PERF: mha_bwd Matmul-Dekomposition 71,5→4,74ms = 15× (§T528,
-2 neue Shader softmax_packed/sm_jacobian, 7-Stage-Kette); §T529 Forward-Idee
-zurückgezogen (T398-Akte) → §T531 mit NEUER Evidenz (Profil: fwd 19%; billigere
-Struktur) Forward-Kette +18% = Default; kumuliert 935→1882 tok/s = 2,01×
-(BenchmarkGPTTrainingStepVK neu, metal-Klasse); §T532 GEMM-Decke per §B39-Akte
-bestätigt → Arc GESCHLOSSEN. Lektionen: Akte VOR dem Bauen lesen (T529 vs T531 =
-Rückzug ohne / Bau mit neuer Evidenz); §V24 auch für Einzelsuiten.
-T534–T538 = ADR-0008-ROUTING + B49-BOGEN: Binary-Elementwise zurück auf die
-SIMD-CPU (metal +7,8%, vulkan +5,8% Training; cpuPrefers-Gate gegen ref-Lecks);
-Unary/AddBias-Routing GEMESSEN VERLOREN (cpu-unOp = skalare Closures) → revertiert
-(§T535). §B49: In-Kernel-Redispatch mit erhaltenem Recorder = Op doppelt aufs Tape
-= GRADIENTEN VERDOPPELT — nur die scharfen Trained-Model-Schranken des Voll-Sweeps
-sahen es (Shape/Parität/Gradcheck blind!). Fix → 46-Stellen-Klassen-Audit (§T537)
-→ strukturell: Execute strippt Recorder vor Kernel-Aufruf, NEU §V25 (§T538).
-Endstand: metal 3219 tok/s, vulkan 935→1992 = 2,13×. Zwei Regressionstests
-(RecordsOnce binary + Fallback-under-tape ALiBi bit-identisch vs ref).
-T540–T546 = STEADY-STATE + AT-SCALE-BOGEN: Demand-Gates evidenzbasiert
-geschlossen (§T540 cpu-GELU 0,79ms > GPU 0,39ms); SelfExtendGenerate (§T541:
-generierter Text hält 0,50 Surprise bei 4×, plain degeneriert 2,30); 124M-SKALA
-mit synthetischen Gewichten (§T543–T546): GPT2FromHF-Mechanik + Batched-Decode
-bei echter Größe verifiziert (batched ≡ analysis bit-gleich), Tabelle 2 Backends
-× 3 Formate — metal-f32 76 / vulkan-Q4_K 72 tok/s, Backend-INVERSION bei
-Quant-vs-f32, Q4_K > Q8 beidseitig. Harness nimmt echte Gewichte, sobald erlaubt.
-T548–T560 = QUELLENLISTEN-AUDIT (Nutzer-Referenzliste → 12 Gaps → alle
-aufgelöst): GSPO (Op+VJP, Kollaps auf GRPO(β=0) exakt, Trained-E2E 0,04→0,96);
-QK-Clip (γ²-Gesetz); DeepSeekMoE (Shared Experts, bit-Kollaps); QLoRA-E2E
-(NF4 verlustfrei, Adapter 1,19→1,08, Basis bit-gefroren); Mamba-2-SSD
-(Dualitäts-Theorem ≤1e−12); i-QUANT-FAMILIE komplett (alle 8 Typen f32-exakt
-vs gguf-py — Rezept: Tabellen programmatisch extrahieren, Golden+Fuzz je Typ;
-gguf-py im .venv = lokale Cross-Referenz!); MXFP4 (Encode byte-exakt);
-Sparse-Trio MoBA/NSA/DSA (Kollaps- + Isolations-/Routing-Beweise je Mechanik);
-KDA (Kanal-Decay, Kollaps auf GatedDeltaNet — Test fing fehlende L2-Norm);
-PagedAttention → ADR-0020 out-of-scope mit Revisit-Trigger. Muster der Ära:
-Kollaps-Tests gegen existierende verifizierte Pfade tragen die ganze Familie.
+Spec through §T565. The T364–T432 session carried ADR-0019 (batched decode)
+to completion AND harvested the attention/training levers. Every win
+§V22-measured, every op cross-validated against ref, both GPU backends.
+T434–T444 then closed the INTEGRATION program (see its era bullet).
+T472–T477 = TRAINED-MODEL MEASUREMENT SERIES (docs/inference.md):
+distill-your-drafts 73→88% acceptance; Mirostat = a surprise CEILING
+(one-sided); watermark δ=2 detectable from 50 tokens; bounded cache
++0.05 bits; streaming 4× beyond ctx (RoPE, pre-RoPE cache verified);
+Q8/Q4 near-lossless (99%/97% teacher-forced agreement — NEVER measure
+free-running). The sink phenomenon does NOT show at toy scale (2× honestly
+negative). trainCharLlama (cpu, 3s) unlocks Llama measurements generally.
+T480–T492 = DECODE CLOSE-OUT + FAMILY E2E SERIES (docs/training.md): every
+decode strategy trained-model-verified (CD/DoLa via mechanism surprise,
+beam +0.31 nats over greedy, DoLa plausibility = the log₂(1/α) guarantee);
+optimizer zoo (8: SOAP leads at 1.188; Shampoo bug fixed →
+WithShampooRootEvery) + 5 wrappers (GaLore 1.380 beats AdamW; SAM two-pass;
+Grokfast needs LR compensation); the NEFTune claim shows (held-out ↓ while
+train ↑); DDPM/DDIM + flow matching reconstruct the same ring; EWC 50→89%
+retention (tasks must be jointly representable!); TIES/soup beat the
+specialist worst case (soup > TIES on same-base); VQ-VAE 94% variance
+through the ST bottleneck; SimSiam 94% linear probe label-free. Assert
+discipline: assert theory guarantees, log the rest; judge regularizers on
+held-out data; measure agreement teacher-forced.
+T493–T499 = ARCHITECTURE E2Es + RL/MERGING CLOSE-OUT: Mamba, RetNet, MLA
+and Mamba+MoE char-LMs (each with a structural CAUSALITY assertion +
+training + generation; the MoE balance loss holds 4 experts at 20–28%);
+GAE+PPOClip wired into the PPO actor-critic (return 1.0, critic
+V(start)≈γ⁴); GreedySoup verified; DARE = the third SCALE-DEPENDENT claim
+(a 0.9 drop clearly hurts, 0.5 = noise — the redundancy premise needs large
+models). RWKV block wrapper, K-quant quality (needs a dim≥256 Llama),
+Sophia GNB harness: demand-gated (all later built).
+T504–T514 = BLOCKER TEARDOWN (pinned blockers opened one by one, every
+claim re-verified): MHA gained THREE seams (LoRA §T504, bias §T505, mask
+§T508 — nil = the exact old path, golden suites untouched); GPT2FromHF
+(§T506, c_attn split, tied head); OpMHAMasked (§T507) → tree verify through
+the full model (§T508, bit-identical on ref + the T461 chain verified
+through a model) → MedusaGenerateTree (§T509, topK=1 ≡ chain EXACTLY) →
+measurement with trained heads (§T510: tree 4.00 vs chain 3.92 tok/round;
+acceptance CEILING at toy scale). IMPORTANT CORRECTION §T508: masks ≠
+merged score sources — Self-Extend needs the latter → OpMHASelect (§T512,
+three bit-exact collapse/symmetry tests) → Self-Extend e2e (§T513: trained
+ONLY on 32-token windows, evaluated at 4×: plain CE 0.316→1.488 degrades,
+Self-Extend w=8/G=8 holds 0.515 — with NO fine-tuning). Plus §T511: a
+persistent worker pool in cpu.parallelWork (allocs −70–75%/op, time ±0–2%,
+-race-verified; A/B via file toggle, NEVER git stash). Docs §T514.
+T515–T521 = SWEEP + RWKV FAMILY + FUZZ HARDENING: full sweep green
+(llamagpu now needs -timeout 1800s, §B46/§V24: check exits UN-PIPED!);
+the OpWKV backward BUILT (§T516: softmax-average identity, O(T²) reverse,
+gradcheck over all 4 inputs — the "own project" blocker fell in one fire)
+→ nn.RWKVBlock + char-LM e2e (§T517: CE 3.01→0.12, causality bit-exact;
+architecture series COMPLETE) → recurrent inference (§T518: Step ≡ Forward
+≤1e−12, O(1) state). Integration audit R2 (§T519: the Self-Extend position
+math was decoupled from the forward → selfExtendPos + a spec-consistency
+test). Fuzz sweep over ALL 35 targets (§T520/§B47): the gguf bounds-check
+uint64 OVERFLOW (2 sites, subtraction form) + tokenizer-JSON unbounded id
+alloc (BPE via fuzz, WordPiece via class audit) fixed; explicit hostile
+tests + a 6×60s deep fuzz green (§T521).
+T523–T532 = MAINTENANCE + VULKAN PERF ARC: tree-wide race sweep 0 races
+(§T523); bench regression check no drift (§T524); memory maintenance
+(§T525); fuzz program complete — the Q4_K bound structurally corrected,
+encoder optimal (§T526/§B48); Self-Extend extension curve: plain
+0.91→2.40 monotonic, SE flat 0.57→0.70 out to 8× (§T527). VULKAN PERF:
+mha_bwd matmul decomposition 71.5→4.74ms = 15× (§T528, 2 new shaders
+softmax_packed/sm_jacobian, a 7-stage chain); the §T529 forward idea
+retracted (T398 record) → §T531 with NEW evidence (profile: fwd 19%;
+cheaper structure) forward chain +18% = default; cumulative 935→1882
+tok/s = 2.01× (BenchmarkGPTTrainingStepVK new, metal-class); §T532
+confirmed the GEMM ceiling via the §B39 record → arc CLOSED. Lessons:
+read the record BEFORE building (T529 vs T531 = retract without / build
+with new evidence); §V24 applies to single suites too.
+T534–T538 = ADR-0008 ROUTING + THE B49 ARC: binary elementwise back on the
+SIMD CPU (metal +7.8%, vulkan +5.8% training; the cpuPrefers gate against
+ref leaks); unary/addbias routing MEASURED AS A LOSS (cpu unOp = scalar
+closures) → reverted (§T535). §B49: an in-kernel re-dispatch with the
+recorder preserved = the op lands on the tape twice = GRADIENTS DOUBLED —
+only the full sweep's tight trained-model bars saw it (shape/parity/
+gradcheck blind!). Fix → 46-site class audit (§T537) → structural: Execute
+strips the recorder before invoking kernels, NEW §V25 (§T538). Final state:
+metal 3219 tok/s, vulkan 935→1992 = 2.13×. Two regression tests
+(RecordsOnce binary + fallback-under-tape ALiBi bit-identical vs ref).
+T540–T546 = STEADY STATE + AT-SCALE ARC: demand gates closed with evidence
+(§T540 cpu GELU 0.79ms > GPU 0.39ms); SelfExtendGenerate (§T541: generated
+text holds 0.50 surprise at 4×, plain degenerates to 2.30); 124M SCALE with
+synthetic weights (§T543–T546): GPT2FromHF mechanics + batched decode
+verified at real size (batched ≡ analysis bit-equal), a 2-backend × 3-format
+table — metal f32 76 / vulkan Q4_K 72 tok/s, a backend INVERSION on
+quant-vs-f32, Q4_K > Q8 on both. The harness takes real weights the moment
+they are permitted.
+T548–T560 = SOURCE-LIST AUDIT (user reference list → 12 gaps → all
+resolved): GSPO (op+VJP, exact collapse onto GRPO(β=0), trained e2e
+0.04→0.96); QK-Clip (the γ² law); DeepSeekMoE (shared experts, bit
+collapse); QLoRA e2e (NF4 lossless, adapters 1.19→1.08, base bit-frozen);
+Mamba-2 SSD (the duality theorem ≤1e−12); the i-QUANT FAMILY complete (all
+8 types f32-exact vs gguf-py — recipe: extract tables programmatically,
+golden+fuzz per type; gguf-py in the .venv = a local cross-reference!);
+MXFP4 (encode byte-exact); the sparse trio MoBA/NSA/DSA (collapse +
+isolation/routing proofs per mechanism); KDA (channel decay, collapse onto
+GatedDeltaNet — the test caught a missing L2 norm); PagedAttention →
+ADR-0020 out of scope with a revisit trigger. Pattern of the era: collapse
+tests against existing verified paths carry whole families.
+T562–T565 = PUBLIC RELEASE: CI pipeline researched across the reference Go
+repos and rebuilt (.github/workflows/ci.yml: pure-go 3-OS matrix, cgo+race,
+cgo+metal on arm64 runners, vulkan-tag build, tidy, simd soft gate);
+push-readiness audit (7.1 MB content, no secrets, no local info); license
+MPL-2.0 (file-level copyleft — linking imposes nothing on the product);
+v0.1.0 pushed and tagged. The FIRST CI run caught 3 real cross-platform
+bugs arm64-darwin development could never see (amd64 FP tolerance, ±0
+formatting, Windows path separators) — fixed, all 8 jobs green since. The
+ubuntu-amd64 runner is the host class the parked T11b/T74 wait for.
 
-**Die großen Ergebnisse dieser Session:**
-- **ADR-0019 Batched Decode (T366–T412):** Recorder (ein Command-Buffer/Schritt)
-  + DeviceBuffer auf metal UND vulkan, alle Decode-Ops record-mode (matmul/norm/
-  rope/mha sq≠sk/blit-KV-append/qmatmul), beide Architekturen (GPT+Llama/GQA/
-  SwiGLU). ÖFFENTLICHES Paket `llamagpu`: New/NewVulkan(*nlp.Llama) → Decoder →
-  Step/StepN/Generate. Real-Modell-Decode **24× metal / 21× vulkan** vs nlp
-  per-op; Logits == Referenz, Greedy token-für-token identisch, GGUF(F32) ok.
-- **Attention MPS-Reformulierung (T393–T400):** mha fwd als MPS(QKᵀ)→softmax→
-  MPS(PV): 6,9× Kernel / **1,87× GPT-Forward**; mha BACKWARD analog (+softmax-
-  jacobian): 27× Kernel / **2,04× Training**; GQA/MQA via MPS-beta-Akkumulation.
-  Der Hand-Flash-Kernel war 15× langsamer als seine eigenen zwei Matmuls (§T393-
-  Floor-Messung — verhinderte einen falschen Cooperative-Tiling-Rewrite).
-- **Silent-Fallback-Audits (T401–T403):** OpCrossEntropy-FWD (20ms!) + OpEmbed-FWD
-  fehlten auf metal+vulkan (Backwards existierten!) → Kernel → Training kumulativ
-  1133→2997 tok/s (2,6×). Definitve Audit-Methode: GOAI_LOG_FALLBACK=1 (execute.go)
-  am ECHTEN Workload; Standalone-Op-Timing führt in die Irre (OpSum-Falle §T402).
-- **Op-Profiling (T410):** GOAI_TIME_OPS=1 (execute.go). Fand die T402-embed-
-  Regression (GPU-Gather lud 8MB-Tabelle/Call → Host-f32-Gather, beide Backends).
-- **Quant-Decode (T413–T416):** Recorder-QMatMulResident (alle ggml-Typen, beide
-  Backends) + llamagpu.NewQuant: Q8-Decode 3,6× vs per-op-quant; ~16% langsamer
-  als f32-batched → Q8-Wert = 4× SPEICHER, nicht Speed.
-- **StepN + Speculative (T418–T420):** Multi-Token-Step → **Prefill 41×** (Generate
-  prefillt via EINEM StepN); llamagpu.SpeculativeGenerate (Draft-Step + Target-
-  StepN + nlp.SpeculativeRun, lossless, KV-Rollback gratis via Positions-Cache);
-  Kosten gemessen: Speedup 1,95×@50% / 2,65×@80% Akzeptanz (braucht trainierte
-  verwandte Modelle).
-- **GPT + Feature-Vervollständigung (T421–T426):** GPTDecoder (LayerNorm+pos-emb+
-  AddBias-record-op, beide Backends) inkl. StepN; SpeculativeGenerate über das
-  exportierte Stepper-Interface (beide Architekturen); PromptLookupGenerate
-  (draft-frei, nlp.NgramLookup, 45% Akzeptanz auf repetitiven Prompts, lossless);
-  6 Examples; Decode/Prefill als stehende bench-compare-Benchmarks (205/200 tok/s
-  batched, 27×/36× — Regression-Guard). Finale Matrix: {Llama,GPT}×{Step,StepN,
-  Generate,Speculative,PromptLookup}+Llama×Quant.
-- **Long-Context / kooperative Attention (T428–T432):** Der Zwei-Pass-MHA-Kernel
-  war seriell in der Sequenzlänge → Klippe bei großem KV (242ms/Step @2k). NEUER
-  kooperativer Kernel: EIN 32-Lane-simdgroup (metal, simd_shuffle_down) bzw.
-  Subgroup (vulkan, SPIR-V 1.3, glslc --target-env=vulkan1.1) pro (Query-Zeile,
-  Head), Lanes partitionieren Keys, Online-Softmax-Partials (m,l,acc[dk≤128]) in
-  Registern via Lane-Shuffles gemerged; NaN-Guard beim Merge leerer Lanes
-  (M==-INF→c=0, §T428-Bug). Deckt ALLE Attention-Oberflächen: Recorder-Decode
-  (T428/T429: 242→13,8ms, **17,6×**; Standing-Bench T430: 72,3/71,0 tok/s
-  @L=1920), Recorder-Prefill-Fenster sq>1 (T431: per-Zeile jmax=sk-sq+i+1,
-  291→104ms), per-op OpMHA (T432: metal+vulkan Host-Slice-Wrapper, sq=1 @sk=1920
-  ~40→2,18ms). Kurz-Kontext ehrlich unverändert (dispatch-bound, §T430/T432).
+**The big results of this project so far:**
+- **ADR-0019 batched decode (T366–T412):** recorder (one command buffer per
+  step) + DeviceBuffer on metal AND vulkan, every decode op in record mode
+  (matmul/norm/rope/mha sq≠sk/blit KV-append/qmatmul), both architectures
+  (GPT + Llama/GQA/SwiGLU). PUBLIC package `llamagpu`:
+  New/NewVulkan(*nlp.Llama) → Decoder → Step/StepN/Generate. Real-model
+  decode **24× metal / 21× vulkan** vs nlp per-op; logits == reference,
+  greedy token-for-token identical, GGUF(F32) ok.
+- **Attention MPS reformulation (T393–T400):** mha fwd as MPS(QKᵀ)→softmax→
+  MPS(PV): 6.9× kernel / **1.87× GPT forward**; mha BACKWARD analogous
+  (+ softmax jacobian): 27× kernel / **2.04× training**; GQA/MQA via MPS
+  beta accumulation. The hand-written flash kernel was 15× slower than its
+  own two matmuls (the §T393 floor measurement — prevented a wrong
+  cooperative-tiling rewrite).
+- **Silent-fallback audits (T401–T403):** OpCrossEntropy fwd (20ms!) +
+  OpEmbed fwd were missing on metal+vulkan (the backwards existed!) →
+  kernels → training cumulatively 1133→2997 tok/s (2.6×). The definitive
+  audit method: GOAI_LOG_FALLBACK=1 (execute.go) on the REAL workload;
+  standalone op timing misleads (the OpSum trap, §T402).
+- **Op profiling (T410):** GOAI_TIME_OPS=1 (execute.go). Found the T402
+  embed regression (the GPU gather uploaded an 8MB table per call → host
+  f32 gather, both backends).
+- **Quant decode (T413–T416):** recorder QMatMulResident (every ggml type,
+  both backends) + llamagpu.NewQuant: Q8 decode 3.6× vs per-op quant; ~16%
+  slower than f32-batched → Q8's value = 4× MEMORY, not speed.
+- **StepN + speculative (T418–T420):** multi-token step → **prefill 41×**
+  (Generate prefills via ONE StepN); llamagpu.SpeculativeGenerate (draft
+  step + target StepN + nlp.SpeculativeRun, lossless, KV rollback free via
+  the position cache); costs measured: speedup 1.95×@50% / 2.65×@80%
+  acceptance (needs trained, related models).
+- **GPT + feature completion (T421–T426):** GPTDecoder (LayerNorm + pos-emb
+  + AddBias record ops, both backends) incl. StepN; SpeculativeGenerate over
+  the exported Stepper interface (both architectures); PromptLookupGenerate
+  (draft-free, nlp.NgramLookup, 45% acceptance on repetitive prompts,
+  lossless); 6 examples; decode/prefill as standing bench-compare benchmarks
+  (205/200 tok/s batched, 27×/36× — regression guard). Final matrix:
+  {Llama,GPT}×{Step,StepN,Generate,Speculative,PromptLookup}+Llama×Quant.
+- **Long context / cooperative attention (T428–T432):** the two-pass MHA
+  kernel was serial in sequence length → a cliff at large KV (242ms/step
+  @2k). NEW cooperative kernel: ONE 32-lane simdgroup (metal,
+  simd_shuffle_down) or subgroup (vulkan, SPIR-V 1.3, glslc
+  --target-env=vulkan1.1) per (query row, head), lanes partition the keys,
+  online-softmax partials (m,l,acc[dk≤128]) merged in registers via lane
+  shuffles; a NaN guard when merging empty lanes (M==-INF→c=0, the §T428
+  bug). Covers ALL attention surfaces: recorder decode (T428/T429:
+  242→13.8ms, **17.6×**; standing bench T430: 72.3/71.0 tok/s @L=1920),
+  recorder prefill windows sq>1 (T431: per-row jmax=sk-sq+i+1, 291→104ms),
+  per-op OpMHA (T432: metal+vulkan host-slice wrappers, sq=1 @sk=1920
+  ~40→2.18ms). Short context honestly unchanged (dispatch-bound,
+  §T430/T432).
 
-- **Integrations-Ära (T434–T444), Methode „Orphan-Audit":** Systematisch alles
-  gefunden, was exportiert-aber-unverdrahtet war, und mit kleinen Adaptern/Loops
-  an echte Modelle angeschlossen. (a) T434: Speculative mit ECHT trainierten
-  Modellen — „braucht Model-Files" via IN-REPO-TRAINING aufgelöst (81% Akzeptanz,
-  aber nur 1,12× — dispatch-bound Draft/Target-Ratio; lohnt erst bei großen
-  Targets). (b) T435 GPT.Safetensors() Checkpointing (bit-Round-Trip). (c) T436
-  ApplyPenalties→Sampler (SampleWithHistory, 7 Loops). (d) T437 TokenSampler-
-  Interface → Mirostat generierfähig. (e) T438 mechanisches Audit: Klasse leer;
-  nlp/doc.go deckte nur ~1/3 der Features — neu geschrieben. (f) T439
-  Watermark.Sampler + RegexGuide.Sampler (Kompositions-Adapter; scharfe Tests:
-  z=4,58-Detektion, (ab)+-Erzwingung). (g) T440 CFGDecode (γ=1/γ=0-Äquivalenzen).
-  (h) T441 GPT.JacobiGenerate (lossless vs greedy, 6 Tok in 5 Iter). (i) T442
-  ForwardEarlyExit+DoLaDecode (bit-Identitäten, α=1-Äquivalenz). (j) T443/T444
-  Medusa KOMPLETT: ForwardHidden, trainierbare Heads (frozen-base Tape), Chain-
-  MedusaGenerate mit Typical Acceptance — Heads auf Base-Rollouts: 100% Akzeptanz.
-  KEIN Algorithmus in nlp ist mehr ohne lauffähigen Real-Modell-Pfad.
-  ÜBERTRAGBARE LESSONS: (1) exportiert-mit-Tests ≠ nutzbar — Call-Site-Audit
-  lohnt; (2) In-Repo-Training entsperrt jede „braucht Artefakte"-Messung;
-  (3) scharfe Äquivalenz-Invarianten (Parameter-Extremwerte kollabieren neue
-  Pfade auf bekannte) schlagen weiche Qualitätsasserts.
+- **Integration era (T434–T444), the "orphan audit" method:** systematically
+  found everything exported-but-unwired and connected it to real models with
+  small adapters/loops. (a) T434: speculative with GENUINELY trained models —
+  "needs model files" resolved via IN-REPO TRAINING (81% acceptance, but
+  only 1.12× — dispatch-bound draft/target ratio; pays only on large
+  targets). (b) T435 GPT.Safetensors() checkpointing (bit round-trip).
+  (c) T436 ApplyPenalties→sampler (SampleWithHistory, 7 loops). (d) T437 the
+  TokenSampler interface → Mirostat can generate. (e) T438 mechanical audit:
+  class empty; nlp/doc.go covered only ~1/3 of the features — rewritten.
+  (f) T439 Watermark.Sampler + RegexGuide.Sampler (composition adapters;
+  sharp tests: z=4.58 detection, (ab)+ enforcement). (g) T440 CFGDecode
+  (γ=1/γ=0 equivalences). (h) T441 GPT.JacobiGenerate (lossless vs greedy,
+  6 tokens in 5 iterations). (i) T442 ForwardEarlyExit+DoLaDecode (bit
+  identities, the α=1 equivalence). (j) T443/T444 Medusa COMPLETE:
+  ForwardHidden, trainable heads (frozen-base tape), chain MedusaGenerate
+  with typical acceptance — heads on base rollouts: 100% acceptance. NO
+  algorithm in nlp remains without a runnable real-model path.
+  TRANSFERABLE LESSONS: (1) exported-with-tests ≠ usable — call-site audits
+  pay; (2) in-repo training unlocks every "needs artifacts" measurement;
+  (3) sharp equivalence invariants (parameter extremes collapse new paths
+  onto known ones) beat soft quality asserts.
 
-- **Decode-Beschleunigungs-Ära (T446–T455):** Batched Medusa (StepHidden/
-  StepNHidden + MedusaGenerate über HiddenStepper, beide Architekturen) —
-  T446: 1,81× @97% Akzeptanz (bestätigte die T434-These: Draft-KOSTEN, nicht
-  Akzeptanz, sind der Hebel); T455 halbierte die Rundenkosten via lastTok-lead-
-  window (Proposals aus dem Verify-Pass, StepNHidden) → **3,08×** (1152→3546
-  tok/s). Prompt-Lookup real gemessen (T452): **1,80× LOSSLESS @15%** — billige
-  Runde schlägt hohe Akzeptanz. Mess-Gotcha: sequentielle A/B-Blöcke fangen
-  Kalt-Ausreißer → verschränkt messen (A,B,A,B). Alles in benchmarking.md.
-- **CV-Ära (T456–T463):** §G1 geliefert — nn.Conv2D/MaxPool2D-Layer, vision-
-  Paket (CNN, 100% auf Spatial-Task, Checkpoint-Round-Trip), dann Perf-Faden
-  §V22-profilgetrieben: cpu conv2d_backward auf im2col+GEMM (637→30,6 ms/Step),
-  cpu-Pools (bit-identisch), Fallback-Kette aktiv→cpu→ref (T461 — Metal-Pools
-  liefen sofort schneller, 39→33), Scratch-sync.Pool gegen madvise-Churn
-  (→24,3). KUMULATIV 637→24,3 = **26×**; CPU schlägt Metal bei kleinen CNNs
-  (§T361-Größenabhängigkeit gilt auch für CNNs). Geparkt: parallelWork-
-  Barrieren-Boden (42% des Profils) — Persistent-Worker-Pool nur bei Bedarf.
-- **Alignment-Ära (T464–T470, KOMPLETT — docs/alignment.md):** DRITTE Orphan-Klasse „dokumentiert-aber-nie-
-  gebaut": SequenceLogProbs war nur Doku-Referenz. Gebaut: TokenLogProbs/
-  SequenceLogProbs (stabiler komponierter Log-Softmax-Gather, Gradcheck).
-  FLAGSHIPS: GRPO trainiert die echte GPT-Policy 0,042→0,979 Reward (Generate-
-  Rollouts + GroupAdvantage + GRPOLoss; Lesson: spärliche Null-Reward-Gruppen
-  ⇒ Advantage 0 — längere Rollouts/größere Gruppen/KL-β runter); DPO: 3/3
-  positive Margins, chosen↑/rejected↓ vs Referenz. T468: IPO/SimPO/CPO/KTO
-  VERIFIZIERT (Verträge unterscheiden sich wirklich: SimPO längennormiert ohne
-  Ref, KTO ungepaart+Labels, CPO+NLL) — alle drehen die anfangs NEGATIVE Margin.
-  T469: volle RM+GRPO-Pipeline — REWARD-HACKING reproduziert (gelernter Reward
-  steigt, True-Metrik →0; bei jeder Head-Kapazität). T470: iteriertes RLHF
-  (RM-Refresh alle 5 Updates auf frischen Policy-Samples) rettet die True-
-  Metrik KOMPLETT (0,042→1,000; 8er-Kadenz nur 0,104 — Frequenz ist der Hebel;
-  KL allein reicht nicht). Auch: V23 (CGO0-Gate kompiliert Tests, §B45),
-  README/doc.go-Audits aller Pakete, GPT/CNN-Checkpointing (T435/T458).
+- **Decode acceleration era (T446–T455):** batched Medusa (StepHidden/
+  StepNHidden + MedusaGenerate over HiddenStepper, both architectures) —
+  T446: 1.81× @97% acceptance (confirmed the T434 thesis: draft COST, not
+  acceptance, is the lever); T455 halved the round cost via the
+  lastTok-lead-window (proposals from the verify pass, StepNHidden) →
+  **3.08×** (1152→3546 tok/s). Prompt lookup measured for real (T452):
+  **1.80× LOSSLESS @15%** — a cheap round beats high acceptance.
+  Measurement gotcha: sequential A/B blocks catch cold-start outliers →
+  measure interleaved (A,B,A,B). All in benchmarking.md.
+- **CV era (T456–T463):** conv/pool layers, the vision package (CNN, 100% on
+  the spatial task, checkpoint round-trip), then the perf thread §V22
+  profile-driven: cpu conv2d_backward onto im2col+GEMM (637→30.6 ms/step),
+  cpu pools (bit-identical), the fallback chain active→cpu→ref (T461 —
+  metal pools instantly ran faster, 39→33), a scratch sync.Pool against
+  madvise churn (→24.3). CUMULATIVE 637→24.3 = **26×**; CPU beats Metal on
+  small CNNs (the §T361 size dependence holds for CNNs too). Parked then:
+  the parallelWork barrier floor — the persistent worker pool was built
+  later on demand (§T511).
+- **Alignment era (T464–T470, COMPLETE — docs/alignment.md):** a THIRD
+  orphan class, "documented but never built": SequenceLogProbs existed only
+  as a doc reference. Built: TokenLogProbs/SequenceLogProbs (stable composed
+  log-softmax gather, gradchecked). FLAGSHIPS: GRPO trains the real GPT
+  policy 0.042→0.979 reward (Generate rollouts + GroupAdvantage + GRPOLoss;
+  lesson: sparse zero-reward groups ⇒ advantage 0 — longer rollouts/bigger
+  groups/lower KL β); DPO: 3/3 positive margins, chosen↑/rejected↓ vs the
+  reference. T468: IPO/SimPO/CPO/KTO VERIFIED (the contracts genuinely
+  differ: SimPO length-normalized without a ref, KTO unpaired+labels,
+  CPO+NLL) — all flip the initially NEGATIVE margin. T469: the full RM+GRPO
+  pipeline — REWARD HACKING reproduced (the learned reward climbs, the true
+  metric →0; at every head capacity). T470: iterated RLHF (RM refresh every
+  5 updates on fresh policy samples) rescues the true metric COMPLETELY
+  (0.042→1.000; an 8-update cadence only 0.104 — frequency is the lever; KL
+  alone does not suffice). Also: V23 (the CGO0 gate compiles tests, §B45),
+  README/doc.go audits of every package, GPT/CNN checkpointing (T435/T458).
 
-**GEPARKT mit Zahlen (nicht ohne neue Evidenz wieder anfassen):**
-- Tape-Batching fürs Training: Decke 1,4× @S256 (§T411) — Compute dominiert.
-- Conv-Gap: ≤2×, nicht auf dem LLM-Pfad, MPSCNN=große API (§T417).
-- MPS-Matmul-Rate (~3,5× zu torch): Apples Bestes; 49% der Trainings-Zeit (§T410).
-- Zero-Copy UMA (§B42), Vulkan-GEMM-Blocking (§B39/41), mha_bwd-Register (§B43),
-  Vulkan-Attention-fwd-Reformulierung (§T397/398: isoliert 6-8×, real LANGSAMER —
-  Attention ist nicht Vulkans Bottleneck, die FFN-Matmuls sind es).
+**PARKED with numbers (do not touch again without new evidence):**
+- Tape batching for training: ceiling 1.4× @S256 (§T411) — compute dominates.
+- The conv gap: ≤2×, not on the LLM path, MPSCNN = a large API (§T417).
+- The MPS matmul rate (~3.5× behind torch): Apple's best; 49% of training
+  time (§T410).
+- Zero-copy UMA (§B42), vulkan GEMM blocking (§B39/41), mha_bwd registers
+  (§B43), the vulkan attention fwd reformulation for INFERENCE
+  (§T397/398: isolated 6-8×, real-workload SLOWER — attention is not
+  vulkan's bottleneck there, the FFN matmuls are; the TRAINING-shape
+  default was later justified with new evidence, §T531).
 
-**MESS-DISZIPLIN (§V22, PFLICHT — diese Session: ~6 Überraschungen, ~5 verhinderte
-Fehlbauten):** (1) ECHTEN Workload messen/instrumentieren (GOAI_LOG_FALLBACK /
-GOAI_TIME_OPS / Bench-Suites), nie Standalone-Ops. (2) Floor A/B-messen VOR jedem
-Rewrite (§T393/T396/T411/T417). (3) Nach jedem Kernel den echten Workload RE-messen
-(§T410-Regression). (4) Isolierter Gewinn ≠ Real-Gewinn (§T397). (5) Bottleneck ist
-BACKEND-SPEZIFISCH (metal: Attention war es; vulkan: Matmul). (6) Same-Session-A/B,
-kein git stash (Repo=1 Commit), Temp-Swap via Scratchpad.
+**MEASUREMENT DISCIPLINE (§V22, MANDATORY — so far: ~6 surprises, ~5
+prevented wrong builds):** (1) measure/instrument the REAL workload
+(GOAI_LOG_FALLBACK / GOAI_TIME_OPS / bench suites), never standalone ops.
+(2) A/B-measure the floor BEFORE any rewrite (§T393/T396/T411/T417).
+(3) RE-measure the real workload after every kernel (the §T410 regression).
+(4) isolated gain ≠ real gain (§T397). (5) the bottleneck is
+BACKEND-SPECIFIC (metal: attention was it; vulkan: matmul). (6)
+same-session A/B, no git stash (shallow history), temp-swap via the
+scratchpad.
 
-**Dispatch-Regeln (für alle künftigen Kernel):** Metal nie
-maxTotalThreadsPerThreadgroup für per-row/registerlastige Kernel — 64/TG bzw.
-kooperativ (§T337/345); MSL/GLSL kein erf → A&S (§T352); Backward als OpXBackward
-auf aktivem Backend (§T353); transponierte Operanden per Flag (§T356/357); GPU nie
-für winzige memory-bound Ops (Gather §T410); Recorder-Ops brauchen auf vulkan
-per-Op-Descriptor-Sets + explizite Barriers (§T382), auf metal Hazard-Tracking;
-VK_MAX_PIPELINES-Headroom beachten (§T397-Bug: 33>32 → Random-Shader-Fail);
-apicheck verbietet Magic-Backend-Strings (§C15) und will Forwards UND Backwards
-pro Op geprüft (§T401-Asymmetrie).
+**Dispatch rules (for every future kernel):** on Metal never use
+maxTotalThreadsPerThreadgroup for per-row/register-heavy kernels — 64/TG or
+cooperative (§T337/345); MSL/GLSL have no erf → A&S approximation (§T352);
+backwards as OpXBackward on the active backend (§T353); transposed operands
+via flags (§T356/357); never the GPU for tiny memory-bound ops (the gather,
+§T410); recorder ops need per-op descriptor sets + explicit barriers on
+vulkan (§T382), hazard tracking on metal; respect the VK_MAX_PIPELINES
+headroom (the §T397 bug: 33>32 → random shader failures); apicheck forbids
+magic backend strings (§C15) and wants forwards AND backwards checked per
+op (the §T401 asymmetry).
 
-**Nächste Kandidaten:** CPU-GEMM/archsimd (host-blockiert T11b/T74, braucht
-amd64); MoE/MLA/weitere Architekturen auf den Recorder (nur mit Demand);
-Tree-Medusa via MedusaTreeMask (braucht Recorder-MHA mit freiem Masken-Input —
-nur mit gemessenem Bedarf über die 3,08× hinaus); LoRA-Naht durch die
-fusionierten Modell-Projektionen (Design-Task + ADR, §T449-Befund);
-parallelWork-Worker-Pool (§T463-Boden, 42% Barrieren); IPO/KTO/SimPO/CPO-E2E
-(je ein Loss-Call-Swap auf T465-Muster, geringer Erkenntniswert); echte
-Modell-Gewichte (GPT-2/TinyLlama) NUR mit Nutzer-Erlaubnis für Downloads.
-Fast alles Verbliebene ist extern blockiert oder demand-gated — der Loop ist
-im Wartungs-/Opportunitätsmodus.
+**Next candidates:** CPU GEMM/archsimd (T11b/T74 — the ubuntu-amd64 CI
+runner now exists; needs the user's decision on CI-iterated branch
+development); MoE/MLA/further architectures on the recorder (only with
+demand); real model weights (GPT-2/TinyLlama) ONLY with the user's download
+permission. Almost everything remaining is externally blocked or
+demand-gated — the loop is in maintenance/opportunity mode.
 
-## Arbeitskontext (Stand zuletzt aktualisiert: 2026-07-13)
+## Working context (last updated: 2026-07-13)
 
-- Toolchain: Go 1.26.4 (arm64 host), git, `.venv` mit numpy 2.5.1 + torch
-  2.12.1 (`make golden`; torch-Goldens via `testdata/verify_torch.py`);
-  Vulkan via MoltenVK (brew; `VK_ICD_FILENAMES` setzt das Makefile).
-- Referenz-Backend `ref` = numerische Wahrheit (§V9); `cpu` = CGO0-Default;
-  auf macOS ist `metal` der Zero-Config-Default (§T47/§B37); `vulkan` per
-  Build-Tag, host-verifiziert (§B36).
-- Benchmarks: `docs/benchmarking.md` (+ Snapshot-Tabelle §T338);
-  `make bench-compare` = Cross-Backend-Harness; ADRs: `docs/decisions/`.
-- Beim A/B-Messen: kein `git stash` (Repo hat nur den Initial-Commit —
-  Stash setzt auf den Ur-Zustand zurück); alte Variante temporär einsetzen
-  und aus dem Scratchpad-Backup wiederherstellen (Muster §T336/§T341).
+- Toolchain: Go 1.26.4 (arm64 dev host), git, a `.venv` with numpy 2.5.1 +
+  torch 2.12.1 (`make golden`; torch goldens via `testdata/verify_torch.py`);
+  vulkan via MoltenVK (brew; the Makefile sets `VK_ICD_FILENAMES`).
+- The reference backend `ref` = numerical truth (§V9); `cpu` = the CGO0
+  default; on macOS `metal` is the zero-config default (§T47/§B37);
+  `vulkan` behind a build tag, host-verified (§B36).
+- Benchmarks: `docs/benchmarking.md` (+ the §T338 snapshot table);
+  `make bench-compare` = the cross-backend harness; ADRs:
+  `docs/decisions/`.
+- When A/B measuring: no `git stash` (shallow history — a stash resets to
+  the base state); temporarily swap in the old variant and restore it from
+  a scratchpad backup (pattern §T336/§T341).
+- Public repo: github.com/jxsl13/goai (MPL-2.0, tag v0.1.0, CI green).
+  Everything committed must be written in English and free of machine-local
+  information (absolute paths, hostnames — §T567).
