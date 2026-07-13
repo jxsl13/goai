@@ -29,7 +29,7 @@ func Run(cfg *config, dir, base, head string, goTestArgs []string, w io.Writer) 
 	}
 	propagate, testOnly, verdict, trace := g.changedSetsTraced(cfg, dir, base, head)
 
-	fmt.Fprintln(w, "\n== changed files (decision + rule) ==")
+	fmt.Fprintln(w, "\n== changed files — classifier decisions (informational, not errors) ==")
 	for _, line := range trace {
 		fmt.Fprintln(w, "  "+line)
 	}
@@ -81,12 +81,14 @@ func Run(cfg *config, dir, base, head string, goTestArgs []string, w io.Writer) 
 
 	fmt.Fprintln(w, "\n== selection ==")
 	fmt.Fprintf(w, "  affected: %d, skipped: %d\n", len(selected), len(allPkgs)-len(selected))
-	for _, p := range selected { // go-test-shaped: status column, absolute import path
-		fmt.Fprintf(w, "run \t%s\t%s\n", g.importPath(p), strings.TrimPrefix(reasons[p], "selected: "))
+	// go-test column geometry (cmd/go/internal/test/test.go): a 4-char status
+	// column + tab; skips use go's own `?   \t<pkg>\t[reason]` shape (§T594).
+	for _, p := range selected {
+		fmt.Fprintf(w, "run \t%s\t[%s]\n", g.importPath(p), strings.TrimPrefix(reasons[p], "selected: "))
 	}
 	for _, p := range allPkgs {
 		if _, ok := reasons[p]; !ok {
-			fmt.Fprintf(w, "skip\t%s\t%s\n", g.importPath(p), "no dependency path from any changed package")
+			fmt.Fprintf(w, "?   \t%s\t[not affected by this change]\n", g.importPath(p))
 		}
 	}
 
@@ -95,14 +97,19 @@ func Run(cfg *config, dir, base, head string, goTestArgs []string, w io.Writer) 
 		return 0
 	}
 
-	fmt.Fprintln(w, "\n== test functions in selected packages ==")
-	for _, p := range selected {
-		funcs := testFuncs(filepath.Join(dir, filepath.FromSlash(p)))
-		if len(funcs) == 0 {
-			fmt.Fprintf(w, "  %s: (no test functions)\n", g.importPath(p))
-			continue
+	// Per-function listing ONLY when the go-test args explicitly filter test
+	// functions (-run=/-skip=) — whole-package selections list packages, not
+	// their every function (§T594).
+	if hasFunctionFilter(goTestArgs) {
+		fmt.Fprintln(w, "\n== test functions in selected packages (a -run/-skip filter is active) ==")
+		for _, p := range selected {
+			funcs := testFuncs(filepath.Join(dir, filepath.FromSlash(p)))
+			if len(funcs) == 0 {
+				fmt.Fprintf(w, "  %s: (no test functions)\n", g.importPath(p))
+				continue
+			}
+			fmt.Fprintf(w, "  %s: %s\n", g.importPath(p), strings.Join(funcs, " "))
 		}
-		fmt.Fprintf(w, "  %s: %s\n", g.importPath(p), strings.Join(funcs, " "))
 	}
 
 	paths := make([]string, len(selected))
@@ -110,6 +117,19 @@ func Run(cfg *config, dir, base, head string, goTestArgs []string, w io.Writer) 
 		paths[i] = g.importPath(p) // absolute import paths, as go test prints them
 	}
 	return execGoTest(dir, goTestArgs, paths, w)
+}
+
+// hasFunctionFilter reports whether the go-test args narrow to individual test
+// functions — only then is the per-function listing worth printing (§T594).
+func hasFunctionFilter(args []string) bool {
+	for _, a := range args {
+		for _, f := range []string{"-run", "-skip", "-test.run", "-test.skip", "--run", "--skip"} {
+			if a == f || strings.HasPrefix(a, f+"=") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // reachesViaCode reports whether pkg reaches any member of changed through NON-test

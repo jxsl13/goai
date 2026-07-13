@@ -4,6 +4,12 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T594 — quieter, go-test-exact runner output (2026-07-13)
+- The selection report now uses the go toolchain's own line shapes (skips as
+  `?   <pkg> [reason]`), prints packages one per line, and lists individual test
+  functions only when a -run/-skip filter is active. The per-file decision trace is
+  headed "classifier decisions (informational, not errors)".
+
 ### T593 — sentence embeddings and cosine reranking (2026-07-13)
 - nlp.MeanPool (masked mean pooling to a unit sentence vector, the
   sentence-transformers default) and nlp.CosineRerank (deterministic best-first

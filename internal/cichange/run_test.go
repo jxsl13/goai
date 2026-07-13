@@ -17,7 +17,7 @@ func TestRunTransparentReport(t *testing.T) {
 	}
 	dir, base, headRev := scratchRepo(t, modBase, head)
 	var buf bytes.Buffer
-	code := Run(defaultConfig(dir), dir, base, headRev, []string{"-count=1"}, &buf)
+	code := Run(defaultConfig(dir), dir, base, headRev, []string{"-count=1", "-run=TestAdd"}, &buf)
 	out := buf.String()
 	if code != 0 {
 		t.Fatalf("exit %d, output:\n%s", code, out)
@@ -25,11 +25,11 @@ func TestRunTransparentReport(t *testing.T) {
 	for _, want := range []string{
 		"a/a.go: code → a",
 		"a/a_test.go: test-only code → a (test files are not importable: no propagation)",
-		"run \texample.com/m/a\tchanged",
-		"run \texample.com/m/b\tdepends on a changed package",
-		"skip\texample.com/m/c\tno dependency path from any changed package",
+		"run \texample.com/m/a\t[changed]",
+		"run \texample.com/m/b\t[depends on a changed package]",
+		"?   \texample.com/m/c\t[not affected by this change]",
 		"example.com/m/a: TestAdd",
-		"go test -count=1 example.com/m example.com/m/a example.com/m/b example.com/m/e",
+		"go test -count=1 -run=TestAdd example.com/m example.com/m/a example.com/m/b example.com/m/e",
 		"ok  ", // real go test output streamed through
 	} {
 		if !strings.Contains(out, want) {
@@ -83,5 +83,26 @@ func TestRunNoneAndDeterminism(t *testing.T) {
 		if got := report(); got != first {
 			t.Fatalf("non-deterministic report:\n--- first ---\n%s\n--- got ---\n%s", first, got)
 		}
+	}
+}
+
+// §T594: without a -run/-skip filter, whole-package selections print NO per-function
+// listing; with one, the listing appears.
+func TestRunFunctionListingOnlyWhenFiltered(t *testing.T) {
+	head := map[string]string{
+		"a/a.go":      "package a\n\nfunc Add(x, y int) int { return x - y }\n",
+		"a/a_test.go": "package a\n\nimport \"testing\"\n\nfunc TestAdd(t *testing.T) {}\n",
+	}
+	dir, base, headRev := scratchRepo(t, modBase, head)
+	var plain bytes.Buffer
+	Run(defaultConfig(dir), dir, base, headRev, []string{"-count=1"}, &plain)
+	if strings.Contains(plain.String(), "test functions in selected packages") {
+		t.Error("no filter → no function listing")
+	}
+	var filtered bytes.Buffer
+	Run(defaultConfig(dir), dir, base, headRev, []string{"-count=1", "-run=TestAdd"}, &filtered)
+	if !strings.Contains(filtered.String(), "test functions in selected packages") ||
+		!strings.Contains(filtered.String(), "example.com/m/a: TestAdd") {
+		t.Error("-run filter → function listing expected")
 	}
 }
