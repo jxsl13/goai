@@ -49,7 +49,7 @@ runs Vulkan on Metal).
 |---|---|---|---|---|---|
 | Conv2D/n8c16hw32 | 353.50 ms (0.2136 GFLOP/s) | 2.41 ms (31.37 GFLOP/s) | 853.9 µs (88.41 GFLOP/s) | 551.0 µs (137.0 GFLOP/s) | torch-cpu: 621.12 GFLOP/s; torch-mps: 2418.93 GFLOP/s |
 | Conv2D/n8c64hw56 | 8.74 s (0.2116 GFLOP/s) | 35.87 ms (51.57 GFLOP/s) | 2.60 ms (711.7 GFLOP/s) | 4.55 ms (406.4 GFLOP/s) | torch-cpu: 621.12 GFLOP/s; torch-mps: 2418.93 GFLOP/s |
-| FlashAttn | 767.25 ms | 766.03 ms | 10.77 ms | 12.19 ms |  |
+| FlashAttn | 767.25 ms | 25.89 ms | 10.77 ms | 12.19 ms |  |
 | GPTForward | — | 224.69 ms (1139 tok/s) | 30.49 ms (8396 tok/s) | 42.52 ms (6020 tok/s) |  |
 | GPTTrainingStep | — | 1.05 s (244.9 tok/s) | 88.66 ms (2887 tok/s) | 130.52 ms (1961 tok/s) |  |
 | LayerNorm | 72.92 ms | 6.79 ms | 1.77 ms | 1.79 ms |  |
@@ -61,8 +61,8 @@ runs Vulkan on Metal).
 | MatMul/512 | 862.64 ms (0.3112 GFLOP/s) | 4.50 ms (59.61 GFLOP/s) | 659.0 µs (407.3 GFLOP/s) | 1.03 ms (261.0 GFLOP/s) | numpy-cpu: 2653.45 GFLOP/s; torch-cpu: 2684.50 GFLOP/s; torch-mps: 4170.66 GFLOP/s |
 | RMSNorm | 70.74 ms | 4.27 ms | 1.68 ms | 1.73 ms |  |
 | RMSNormBackward | 118.76 ms | 18.19 ms | 2.30 ms | 2.28 ms |  |
-| Retention | 88.90 ms | 88.81 ms | 10.98 ms | 10.92 ms |  |
-| RetentionBackward | 320.93 ms | 321.44 ms | 20.22 ms | 20.31 ms |  |
+| Retention | 88.90 ms | 10.57 ms | 10.98 ms | 10.92 ms |  |
+| RetentionBackward | 320.93 ms | 25.29 ms | 20.22 ms | 20.31 ms |  |
 | Softmax | 77.51 ms | 7.76 ms | 1.73 ms | 1.76 ms |  |
 
 | Decode workload | variant | rate |
@@ -119,8 +119,8 @@ Honest read of the gaps (as of 2026-07-14):
 - **The 2026-07-14 CPU arc** (norms, softmax, attention, conv output path)
   multiplied the end-to-end CPU transformer to 6.4× forward / 6.1× training of
   its previous-day numbers — the per-op rows above are AFTER that arc.
-- `ref ≡ cpu` rows (FlashAttn, Retention) are unaccelerated CPU ops — the next
-  candidates of the profile-driven queue.
+- FlashAttn and Retention received their typed parallel CPU kernels on
+  2026-07-14 (29.6×/8.4×/12.7×, §T610) — no `ref ≡ cpu` row remains.
 
 ## Baselines (Pure-Go reference, §T5–§T9)
 
