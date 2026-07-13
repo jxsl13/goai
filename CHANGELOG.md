@@ -4,6 +4,13 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T596 — parallel CPU norm kernels (2026-07-13)
+- RMSNorm/LayerNorm forward and backward now run as typed, row-parallel CPU kernels:
+  6.4-17.7x faster than before on the benchmark shapes (they previously fell through to
+  the reference implementation). Parity vs ref is asserted within a few ulps — Go's
+  context-dependent FMA contraction makes bit-exactness unattainable, documented in
+  the kernel source.
+
 ### T592 — LLaVA-style vision-language bridge (2026-07-13)
 - vision.VLMProjector (the LLaVA-1.5 MLP projector) and vision.VLMLogits wire ViT patch
   features as soft tokens into the GPT decoder; ViT gained Features(). Trained end to
