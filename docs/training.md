@@ -1,5 +1,10 @@
 # Training on real models: measured findings (§T483–§T485)
 
+> **In plain terms:** "training" is teaching a model from data. GoAI ships a
+> box of optimizers and training tricks; this page shows how each one behaved
+> when teaching the same small model under identical conditions — so you can
+> pick between them based on measurements instead of folklore.
+
 Companion to [`benchmarking.md`](benchmarking.md), [`alignment.md`](alignment.md)
 and [`inference.md`](inference.md): the training toolbox exercised on a REAL
 transformer for the first time. Harness: identical architecture, identical init

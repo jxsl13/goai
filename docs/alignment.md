@@ -1,5 +1,10 @@
 # Alignment in GoAI: recipes and measured findings (§T464–§T470)
 
+> **In plain terms:** "alignment" means steering a trained model toward
+> behavior people actually want, usually by rewarding good outputs. This page
+> documents GoAI's alignment methods (RLHF, DPO, GRPO and friends), including
+> a reproduced case of the model "gaming" its reward — and the fix.
+
 Every claim below is enforced by a test that trains a REAL model (the torch-golden
 GPT in `nlp/testdata`) end-to-end with library pieces only; file names are given so
 the experiments re-run on every full suite pass.

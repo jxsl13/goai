@@ -1,5 +1,11 @@
 # Benchmarking & the cgo gate (§V5, §C3)
 
+> **In plain terms:** this document explains how we prove that a "faster"
+> version of the code is actually faster. Every speed claim in GoAI comes
+> with a measured before/after number, produced by a repeatable benchmark —
+> and a change that cannot show such a number does not get merged. The rest
+> of the page records those numbers and the rules for producing them.
+
 Every optimization task (§T11, §T12, …) must show a benchmark delta against the
 Pure-Go reference before it lands, and cgo is only considered after the Pure-Go
 path is optimized to its ceiling and still loses by the §C3 threshold.

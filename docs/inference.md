@@ -1,5 +1,11 @@
 # Inference on trained models: measured findings (§T472–§T477, §T504–§T513)
 
+> **In plain terms:** "inference" is using a trained model to generate text.
+> This page lists what GoAI's generation features (faster decoding tricks,
+> compression, watermarking, long-context modes) actually achieve — measured
+> on small models the test suite trains from scratch on every run, so every
+> number here reproduces on your machine.
+
 Companion to [`benchmarking.md`](benchmarking.md) (speed) and
 [`alignment.md`](alignment.md) (training-time alignment): what the inference
 features actually deliver on REAL trained models. Models are trained in-repo per
