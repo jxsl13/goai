@@ -61,12 +61,19 @@ func Classify(dir, base, head string) string {
 	return DocsOnly
 }
 
-// isDocPath reports whether a path is documentation by location or suffix.
+// isDocPath reports whether a path is PROVABLY documentation: anything under
+// docs/, the LICENSE, and root-level .md/.txt files. Markdown or text files
+// deeper in the tree do NOT qualify — a .txt inside a package directory can be
+// //go:embed'ed into the binary (found by §T581's embed test), so they classify
+// as package assets / code instead (§V26 fail-open).
 func isDocPath(p string) bool {
-	if strings.HasSuffix(p, ".md") || strings.HasSuffix(p, ".txt") || p == "LICENSE" {
+	if p == "LICENSE" || strings.HasPrefix(p, "docs/") {
 		return true
 	}
-	return strings.HasPrefix(p, "docs/")
+	if strings.Contains(p, "/") {
+		return false // not root-level: could be an embedded asset
+	}
+	return strings.HasSuffix(p, ".md") || strings.HasSuffix(p, ".txt")
 }
 
 // goCodeUnchanged proves that the .go file at path is semantically identical

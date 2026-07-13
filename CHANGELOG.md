@@ -4,6 +4,12 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T581 — impact selector edge-case sweep, embed-asset fix (2026-07-13)
+- The edge-case sweep caught a latent classifier bug (SPEC B50): .md/.txt files were
+  documentation by suffix alone, but such files inside a package can be //go:embed'ed —
+  a change to one skipped CI entirely. Doc classification now requires root level or
+  docs/; deeper text files count as package assets.
+
 ### T579 — CI impact selector (2026-07-13)
 - internal/cichange gained an -impact mode: a std-lib-only package import graph (tag
   union, test-import edges tracked separately so they select but never propagate) maps

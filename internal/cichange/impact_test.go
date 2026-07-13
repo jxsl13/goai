@@ -158,3 +158,68 @@ func sort_StringsAreSorted(s []string) bool {
 	}
 	return true
 }
+
+// §V16 tier-1 (§T581): a build-tag-gated import still counts — the graph is the UNION
+// over all tags, so platform- or tag-specific edges (register_darwin.go, vulkan) are
+// permanent and can never be missed by running the selector on a different platform.
+func TestImpactBuildTagImportCounted(t *testing.T) {
+	base := map[string]string{}
+	for k, v := range modBase {
+		base[k] = v
+	}
+	base["f/f.go"] = "//go:build sometag\n\npackage f\n\nimport _ \"example.com/m/c\"\n"
+	dir, baseRev, headRev := scratchRepo(t, base, map[string]string{"c/c.go": "package c\n\nvar Tagged = 1\n"})
+	got := Impact(dir, baseRev, headRev)
+	if got != "./b ./c ./f" {
+		t.Errorf("tag-gated import: got %q, want ./b ./c ./f", got)
+	}
+}
+
+// §V16 tier-1 (§T581): a file MOVED between packages changes both — the old package
+// lost code, the new one gained it; both closures join.
+func TestImpactRenameAcrossPackages(t *testing.T) {
+	got := impactOf(t, map[string]string{
+		"c/c.go":     "<delete>",
+		"c/moved.go": "package c\n",
+		"a/a.go":     "<delete>",
+		"c/fromA.go": "package c\n\n// Add adds.\nfunc Add(x, y int) int { return x + y }\n",
+	})
+	// a/a.go left package a: a changed (and its importers . b e); c gained files.
+	if got != All && got != ". ./a ./b ./c ./e" {
+		t.Errorf("cross-package move: got %q, want closure of both (or all if a died)", got)
+	}
+}
+
+// §V16 tier-1 (§T581): a change to an embedded data file selects the embedding
+// package — //go:embed patterns cannot reach outside the package directory, so the
+// ancestor-attach rule covers embeds by construction.
+func TestImpactEmbeddedFileChange(t *testing.T) {
+	base := map[string]string{}
+	for k, v := range modBase {
+		base[k] = v
+	}
+	base["g/g.go"] = "package g\n\nimport _ \"embed\"\n\n//go:embed data.txt\nvar Data string\n"
+	base["g/data.txt"] = "v1\n"
+	dir, baseRev, headRev := scratchRepo(t, base, map[string]string{"g/data.txt": "v2\n"})
+	if got := Impact(dir, baseRev, headRev); got != "./g" {
+		t.Errorf("embed change: got %q, want ./g", got)
+	}
+}
+
+// §V16 tier-1 (§T581): closure monotonicity — changing a dependency affects at least
+// everything that changing its dependent affects (b imports a ⇒ affected(b) ⊆ affected(a)).
+func TestImpactClosureMonotonic(t *testing.T) {
+	affectedA := strings.Fields(impactOf(t, map[string]string{
+		"a/a.go": "package a\n\nfunc Add(x, y int) int { return x - y }\n"}))
+	affectedB := strings.Fields(impactOf(t, map[string]string{
+		"b/b.go": "package b\n\nimport \"example.com/m/a\"\n\nvar _ = a.Add\nvar Q = 1\n"}))
+	inA := map[string]bool{}
+	for _, p := range affectedA {
+		inA[p] = true
+	}
+	for _, p := range affectedB {
+		if !inA[p] {
+			t.Errorf("monotonicity violated: %q affected by dependent-change but not by dependency-change", p)
+		}
+	}
+}
