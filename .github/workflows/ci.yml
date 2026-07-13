@@ -40,10 +40,10 @@ jobs:
       code: ${{ steps.classify.outputs.code }}
       affected: ${{ steps.classify.outputs.affected }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0 # classify needs the base revision
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: "1.26.x"
           cache: false
@@ -76,8 +76,8 @@ jobs:
     env:
       CGO_ENABLED: "0"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
         with:
           go-version: "1.26.x"
           cache: false # zero-dependency module (no go.sum): nothing to cache
@@ -105,8 +105,8 @@ jobs:
     name: cgo+race / ubuntu
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
         with:
           go-version: "1.26.x"
           cache: false
@@ -129,7 +129,7 @@ jobs:
           if [ "$AFFECTED" = "all" ]; then AFFECTED="./..."; fi
           go test -short -count=1 -covermode=atomic -coverprofile=coverage.out $AFFECTED
           go tool cover -func=coverage.out | tail -1 | tee -a "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: coverage
           path: coverage.out
@@ -143,8 +143,8 @@ jobs:
     name: cgo+metal / macos
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
         with:
           go-version: "1.26.x"
           cache: false
@@ -164,8 +164,8 @@ jobs:
     name: build / vulkan tag
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
         with:
           go-version: "1.26.x"
           cache: false
@@ -179,8 +179,8 @@ jobs:
     name: go mod tidy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
         with:
           go-version: "1.26.x"
           cache: false
@@ -200,8 +200,8 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
         with:
           go-version: "1.26.x"
           cache: false
