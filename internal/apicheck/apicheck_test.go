@@ -83,6 +83,7 @@ var typeExampleExempt = map[string]bool{
 	"nlp.MedusaHeadsOption":         true, // functional-option type (shown via WithMedusaHeadsDtype)
 	"nlp.ChatRenderOption":          true, // functional-option type (shown via WithGenerationPrompt/WithoutBOS)
 	"vision.CNNOption":              true, // functional-option type (shown via WithChannels/WithKernel/WithDtype)
+	"vision.ViTOption":              true, // functional-option type (shown via WithViTDim/WithViTHeads etc.)
 	"nlp.Beam":                      true, // returned by BeamSearch, shown in ExampleBeamSearch
 	"nlp.Block":                     true, // internal transformer block (part of GPT)
 	"nlp.LlamaBlock":                true, // internal transformer block (part of Llama, shown in ExampleLlama)

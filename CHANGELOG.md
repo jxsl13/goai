@@ -4,6 +4,12 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T590 — Vision Transformer (2026-07-13)
+- vision.ViT: patchify + class token + learned position embeddings + pre-LN encoder
+  stack (non-causal MHA, exact-erf GELU MLP) + class-token head. Forward parity with a
+  torch f64 reference to 15 digits; trains to convergence on the CNN's spatial task.
+  The standard vision backbone — and the prerequisite for the VLM projector path.
+
 ### T589 — further-reading references everywhere (2026-07-13)
 - Every docs/*.md and every package doc now points the interested reader at the
   canonical papers, surveys and textbooks for its topic (SPEC C18): from Sutton & Barto
