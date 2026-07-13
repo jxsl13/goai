@@ -85,6 +85,27 @@ runs Vulkan on Metal).
 | MatMul/512 | 2141.68 GFLOP/s | 2172.86 GFLOP/s | 1328.09 GFLOP/s |
 
 
+### Head-to-head: llama.cpp on the SAME weights (§T607)
+
+The decode benchmark's llama (17.7 M parameters, dim 512, 6 layers, GQA 8/2,
+F32) is exported as a llama.cpp-loadable GGUF by
+`go run ./internal/benchcompare/exportgguf`, so both engines time **identical
+weights** (llama-bench b9960, 3 repetitions, same machine):
+
+| Engine | prefill (pp64) | decode (tg64) |
+|---|---|---|
+| llama.cpp Metal | 15,900 ± 751 tok/s | 1,098 ± 72 tok/s |
+| llama.cpp CPU (Accelerate BLAS) | 8,778 ± 355 tok/s | 1,143 ± 35 tok/s |
+| GoAI metal (batched decoder) | 11,068 tok/s | 263 tok/s |
+| GoAI vulkan (batched decoder) | — | 245 tok/s |
+
+Read: our batched prefill is within 1.4× of llama.cpp's Metal prefill — the
+one-command-buffer recording strategy holds up. Single-token decode is ~4.2×
+behind: llama.cpp's hand-tuned kernels and years of decode-path engineering
+(and at this toy size, Apple's Accelerate BLAS alone already saturates it).
+Honest caveat: 17.7 M parameters is far below production size; the gap
+composition will differ at 7B-class sizes where memory bandwidth dominates.
+
 Honest read of the gaps (as of 2026-07-14):
 
 - **CPU vs vendor BLAS** (BLAS = the decades-old optimized linear-algebra

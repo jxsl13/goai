@@ -4,6 +4,13 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T607 — llama.cpp head-to-head on identical weights (2026-07-14)
+- A new export tool writes the decode-benchmark model as a llama.cpp-loadable GGUF
+  (tokenizer section included) and llama-bench ran it: our batched prefill is within
+  1.4x of llama.cpp Metal; single-token decode is ~4.2x behind — numbers, method and
+  caveats in docs/benchmarking.md. That llama.cpp loads our writer's file is a
+  format-compatibility proof in itself.
+
 ### T608 — abbreviations explained everywhere (2026-07-14)
 - Every abbreviation in the README, package docs and docs/ pages is now expanded with
   a layman gloss at first use (or in a compact per-document abbreviation block).
