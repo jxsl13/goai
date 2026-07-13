@@ -28,13 +28,17 @@ permissions:
   contents: read
 
 jobs:
-  # Docs-only pushes skip the expensive jobs (§T571/§T572): internal/cichange
-  # proves via AST comparison that only documentation (markdown, godoc
-  # comments) changed. Every uncertainty fails open to running CI (§V26).
+  # Impact gate (§T579/§T580): internal/cichange -impact maps the diff to exactly
+  # the packages whose tests are affected — "none" (docs-only: skip everything),
+  # "all" (global reach: full suite), or a package list (test just those). Every
+  # uncertainty fails open to "all" (§V26); a shell-level `|| echo all` is the
+  # second fail-open layer. Soundness backstop: the test jobs still `go vet ./...`
+  # in full, so under-selection can never hide a compile break (§V23).
   changes:
     runs-on: ubuntu-latest
     outputs:
       code: ${{ steps.classify.outputs.code }}
+      affected: ${{ steps.classify.outputs.affected }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -46,9 +50,10 @@ jobs:
       - id: classify
         run: |
           BASE="${{ github.event.pull_request.base.sha || github.event.before }}"
-          VERDICT=$(go run ./internal/cichange "$BASE" HEAD || echo code)
-          echo "verdict=$VERDICT"
-          if [ "$VERDICT" = "docs-only" ]; then
+          AFFECTED=$(go run ./internal/cichange -impact "$BASE" HEAD || echo all)
+          echo "affected=$AFFECTED" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "affected=$AFFECTED" >> "$GITHUB_OUTPUT"
+          if [ "$AFFECTED" = "none" ]; then
             echo "code=false" >> "$GITHUB_OUTPUT"
           else
             echo "code=true" >> "$GITHUB_OUTPUT"
@@ -74,13 +79,21 @@ jobs:
         with:
           go-version: "1.26.x"
           cache: false # zero-dependency module (no go.sum): nothing to cache
-      - name: vet (compiles tests too — §V23)
+      - name: vet (compiles tests too — §V23; always full, the soundness backstop)
         run: go vet ./...
-      - name: test
-        run: go test -short -count=1 -timeout 10m ./...
+      - name: test (affected packages only, §T580)
+        shell: bash
+        run: |
+          AFFECTED="${{ needs.changes.outputs.affected }}"
+          if [ "$AFFECTED" = "all" ]; then AFFECTED="./..."; fi
+          go test -short -count=1 -timeout 10m $AFFECTED
       # §V5: benchmarks must at least build and run one iteration.
       - name: bench-smoke
-        run: go test -run=^$ -bench=. -benchtime=1x -timeout 10m ./...
+        shell: bash
+        run: |
+          AFFECTED="${{ needs.changes.outputs.affected }}"
+          if [ "$AFFECTED" = "all" ]; then AFFECTED="./..."; fi
+          go test -run=^$ -bench=. -benchtime=1x -timeout 10m $AFFECTED
 
   # cgo on linux: the optimized CPU backend under the RACE detector (the §T511
   # worker pool's standing guard, §B49-class bugs), plus gofmt and coverage.
@@ -103,11 +116,16 @@ jobs:
           fi
       - name: vet
         run: go vet ./...
-      - name: test (race)
-        run: go test -short -count=1 -race -timeout 20m ./...
+      - name: test (race, affected packages only, §T580)
+        run: |
+          AFFECTED="${{ needs.changes.outputs.affected }}"
+          if [ "$AFFECTED" = "all" ]; then AFFECTED="./..."; fi
+          go test -short -count=1 -race -timeout 20m $AFFECTED
       - name: coverage
         run: |
-          go test -short -count=1 -covermode=atomic -coverprofile=coverage.out ./...
+          AFFECTED="${{ needs.changes.outputs.affected }}"
+          if [ "$AFFECTED" = "all" ]; then AFFECTED="./..."; fi
+          go test -short -count=1 -covermode=atomic -coverprofile=coverage.out $AFFECTED
           go tool cover -func=coverage.out | tail -1 | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         with:
@@ -130,8 +148,11 @@ jobs:
           cache: false
       - name: vet (compiles the metal cgo backend)
         run: go vet ./...
-      - name: test
-        run: go test -short -count=1 -timeout 20m ./...
+      - name: test (affected packages only, §T580)
+        run: |
+          AFFECTED="${{ needs.changes.outputs.affected }}"
+          if [ "$AFFECTED" = "all" ]; then AFFECTED="./..."; fi
+          go test -short -count=1 -timeout 20m $AFFECTED
 
   # Tag-gated backends must at least COMPILE on every push so their code cannot
   # rot (vulkan executes on dev boxes with MoltenVK; §B40 discipline stays local).
