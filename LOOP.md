@@ -382,3 +382,9 @@ demand-gated — the loop is in maintenance/opportunity mode.
 - Public repo: github.com/jxsl13/goai (MPL-2.0, tag v0.1.0, CI green).
   Everything committed must be written in English and free of machine-local
   information (absolute paths, hostnames — §T567).
+- PUSH THROTTLE (§C16, user directive 2026-07-13): push at most once per
+  hour — commit completed tasks locally and push the batch when ≥1h has
+  passed since the last push. EXCEPTION: changes to the CI-CLI optimizer
+  (internal/cichange, internal/ciimpact, .github/workflows/*) push
+  immediately — their whole point is live pipeline behavior. Every push
+  still gets a CI watch.
