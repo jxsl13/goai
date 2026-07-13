@@ -24,7 +24,7 @@
 //	-pkg-rerun-regex <re>     repo-relative paths matching → their owning package's
 //	                          tests run regardless of content analysis
 //	-no-default-rules         start from an empty rule set instead of the built-in
-//	                          defaults (docs/, LICENSE, root *.md/*.txt ignored;
+//	                          defaults (docs/ and root *.md/*.txt ignored;
 //	                          go.sum, Makefile, .github/ full-rerun)
 //
 // Safety (§V26, fail-open): "docs-only"/"none" require positive proof. Parse errors,

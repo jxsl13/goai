@@ -4,6 +4,10 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T585 — LICENSE renamed to LICENSE.md (2026-07-13)
+- The license file is now markdown, so the selector's ordinary root-markdown rule
+  covers it and the last hardcoded file name left the default rule set.
+
 ### T584 — generic, fully configurable CI selector (2026-07-13)
 - cichange no longer hardcodes any repository layout: repeatable -ignore (files or
   dirs, relative or absolute — everything is absolutized first), -ignore-regex,

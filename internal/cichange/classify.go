@@ -19,7 +19,7 @@ const (
 // Classify inspects the diff between two revisions of the git repository at
 // dir and returns DocsOnly when EVERY change is provably documentation-only,
 // Code otherwise (§V26: every uncertainty fails open to Code). What counts as
-// documentation comes from cfg (§T584) — by default docs/, LICENSE and
+// documentation comes from cfg (§T584) — by default docs/ and
 // root-level markdown/text.
 func Classify(cfg *config, dir, base, head string) string {
 	out, err := gitRun(dir, "diff", "--name-status", "-z", base, head)
@@ -64,7 +64,7 @@ func Classify(cfg *config, dir, base, head string) string {
 }
 
 // What is PROVABLY documentation is configuration (§T584, config.ignored); the
-// defaults cover docs/, LICENSE and root-level .md/.txt. Markdown or text files
+// defaults cover docs/ and root-level .md/.txt (LICENSE.md included, §T585). Markdown or text files
 // deeper in the tree deliberately do NOT default to documentation — a .txt
 // inside a package directory can be //go:embed'ed into the binary (§B50), so
 // they classify as package assets / code instead (§V26 fail-open).

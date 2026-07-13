@@ -40,7 +40,7 @@ func (s *stringList) Set(v string) error {
 // defaultRules returns this repository's rules expressed as config vocabulary —
 // exactly what the hardcoded classifier used to do (§T584).
 func defaultRules() (ignore, ignoreRe, fullRe, pkgRe []string) {
-	ignore = []string{"docs", "LICENSE"}
+	ignore = []string{"docs"}                // LICENSE.md is covered by the root-markdown regex (§T585)
 	ignoreRe = []string{`^[^/]+\.(md|txt)$`} // root-level markdown/text (deeper ones can be embedded, §B50)
 	fullRe = []string{`^go\.sum$`, `^Makefile$`, `^\.github/`}
 	return ignore, ignoreRe, fullRe, pkgRe

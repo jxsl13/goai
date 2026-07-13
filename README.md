@@ -88,7 +88,7 @@ TBD.
 
 ## License
 
-GoAI is licensed under the **Mozilla Public License 2.0** (see [LICENSE](LICENSE)):
+GoAI is licensed under the **Mozilla Public License 2.0** (see [LICENSE.md](LICENSE.md)):
 file-level copyleft. In practice:
 
 - **Using GoAI in your product** — statically or dynamically linked, open or
