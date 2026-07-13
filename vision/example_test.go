@@ -60,3 +60,13 @@ func ExampleCNN_predict() {
 	fmt.Println(best >= 0 && best < 2)
 	// Output: true
 }
+
+// Safetensors exports every parameter under stable names; FromSafetensors
+// rebuilds the identical CNN — the checkpoint round-trip.
+func ExampleCNN_Safetensors() {
+	m, _ := vision.NewCNN(3, 4, 1)
+	ts := m.Safetensors()
+	restored, _ := vision.FromSafetensors(ts)
+	fmt.Println(len(ts) > 0, restored != nil)
+	// Output: true true
+}

@@ -86,3 +86,22 @@ func Example_linearLayer() {
 	fmt.Println(y[0].Shape(), y[0].AtF64(0, 0), y[0].AtF64(0, 1))
 	// Output: (1, 2) 4.5 4.5
 }
+
+// A tensor knows its geometry: rank, device, layout strides, storage offset and
+// whether its memory is contiguous — the plumbing every backend kernel reads.
+// Views (Permute, Slice) share storage and only change this metadata;
+// Contiguous materializes a packed copy when a kernel needs one.
+func ExampleTensor_geometry() {
+	t := tensor.New(tensor.F64, tensor.Shape{2, 3})
+	fmt.Println(t.Ndim(), t.Device().Kind(), t.IsContiguous(), t.Offset())
+
+	p, _ := t.Permute(1, 0) // transposed VIEW: same storage, swapped strides
+	fmt.Println(p.Shape(), p.Strides(), p.IsContiguous())
+
+	c := p.Contiguous() // packed copy for kernels that need row-major memory
+	fmt.Println(c.IsContiguous(), c.Storage().F64()[:3])
+	// Output:
+	// 2 cpu true 0
+	// (3, 2) [1 3] false
+	// true [0 0 0]
+}

@@ -2,9 +2,11 @@ package nn_test
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/jxsl13/goai/autograd"
 	"github.com/jxsl13/goai/backend"
+	"github.com/jxsl13/goai/format/gguf"
 	"github.com/jxsl13/goai/nn"
 	"github.com/jxsl13/goai/tensor"
 
@@ -318,4 +320,143 @@ func ExampleMaxPool2D() {
 	y, _ := pool.Forward(backend.NewContext(), x)
 	fmt.Println(y.Shape(), y.AtF64(0, 0, 0, 0))
 	// Output: (1, 1, 1, 1) 5
+}
+
+// Train-mode toggles: dropout-family layers are identity in inference mode and
+// only start dropping after Train() — the standard train/eval switch.
+func ExampleDropout_Train() {
+	d := nn.NewDropout(0.5, 1) // constructors start in training mode
+	dp := nn.NewDropPath(0.5, 1)
+	d.Eval() // inference: Forward becomes the identity
+	dp.Eval()
+	fmt.Println(d.Training, dp.Training)
+	d.Train() // back to dropping for the next training phase
+	dp.Train()
+	fmt.Println(d.Training, dp.Training)
+	// Output:
+	// false false
+	// true true
+}
+
+// CLIP's learnable logit temperature: Scale reads exp(logScale), Clamp caps it
+// at the configured maximum after each optimizer step (CLIP's ln(100) trick).
+func ExampleCLIPLogitScale_Clamp() {
+	s, _ := nn.NewCLIPLogitScale(tensor.F64, 10, 100)
+	s.LogScale.SetF64(math.Log(200)) // an optimizer step overshot the cap
+	s.Clamp()
+	fmt.Printf("%.0f\n", s.Scale())
+	// Output: 100
+}
+
+// Differential attention's residual sublayer is scaled by 1−λ_init so the
+// difference-of-softmaxes starts near a plain transformer block.
+func ExampleDiffAttention_SublayerScale() {
+	da := nn.NewDiffAttention(tensor.F64, 8, 1)
+	fmt.Println(da.SublayerScale() > 0 && da.SublayerScale() < 1)
+	// Output: true
+}
+
+// Gradient accumulation: add micro-batch grads, read the count, step the
+// optimizer with the average, then Reset for the next accumulation window.
+func ExampleGradAccumulator_Reset() {
+	w := tensor.FromFloat64(tensor.Shape{1}, []float64{0})
+	acc := nn.NewGradAccumulator([]*tensor.Tensor{w})
+	grad := tensor.FromFloat64(tensor.Shape{1}, []float64{2})
+	g := func(p *tensor.Tensor) *tensor.Tensor { return grad }
+	acc.Add(g)
+	acc.Add(g)
+	fmt.Println(acc.Steps())
+	acc.Reset()
+	fmt.Println(acc.Steps())
+	// Output:
+	// 2
+	// 0
+}
+
+// µP transfer rules: hidden LRs scale by 1/widthMult, readout by 1/widthMult,
+// inputs stay at 1 — so hyperparameters tuned at BaseWidth transfer to any width.
+func ExampleMuP_WidthMult() {
+	mup := nn.NewMuP(64)
+	fmt.Println(mup.WidthMult(256), mup.ReadoutLRScale(256), mup.InputLRScale())
+	// Output: 4 0.25 1
+}
+
+// Prefix tuning trains a tiny reparameterized prompt: KV materializes the
+// per-layer prefix key/value rows a frozen attention layer prepends.
+func ExamplePrefixTuning_KV() {
+	p, _ := nn.NewPrefixTuning(tensor.F64, 4, 8, 6, 16, 1)
+	pk, pv, _ := p.KV(backend.NewContext())
+	fmt.Println(p.PrefixLen(), pk.Shape(), pv.Shape())
+	// Output: 4 (4, 8) (4, 8)
+}
+
+// Prompt tuning's virtual tokens are the rows of its trainable embedding.
+func ExamplePromptTuning_NumVirtualTokens() {
+	p, _ := nn.NewPromptTuning(tensor.F64, 5, 8, 1)
+	fmt.Println(p.NumVirtualTokens())
+	// Output: 5
+}
+
+// Synaptic Intelligence keeps a frozen reference copy of the parameters at the
+// last task boundary; RefParams exposes it (the anchor the penalty pulls toward).
+func ExampleSI_RefParams() {
+	w := tensor.FromFloat64(tensor.Shape{1}, []float64{3})
+	si := nn.NewSI([]*tensor.Tensor{w})
+	fmt.Println(si.RefParams()[0].AtF64(0))
+	// Output: 3
+}
+
+// SWA counts how many snapshots the running average has absorbed.
+func ExampleSWA_N() {
+	w := tensor.FromFloat64(tensor.Shape{1}, []float64{1})
+	swa := nn.NewSWA([]*tensor.Tensor{w})
+	swa.Update()
+	swa.Update()
+	fmt.Println(swa.N())
+	// Output: 2
+}
+
+// Schedule-Free optimizers evaluate at the AVERAGED point but step from the
+// base point: switch with Eval() before validation and Train() before the
+// next update (the y/x/z bookkeeping happens inside).
+func ExampleScheduleFree_Train() {
+	w := tensor.FromFloat64(tensor.Shape{1}, []float64{1})
+	opt := nn.NewScheduleFreeSGD([]*tensor.Tensor{w}, 0.1)
+	opt.Eval()  // parameters now hold the evaluation average
+	opt.Train() // back to the training point before the next Step
+	fmt.Println(w.AtF64(0))
+	// Output: 1
+}
+
+// Sophia needs a diagonal-Hessian estimate: UpdateHessian folds one in as an
+// EMA (call it every k steps; the GNB estimator builds hess from resampled
+// labels — see docs/training.md).
+func ExampleSophia_UpdateHessian() {
+	w := tensor.FromFloat64(tensor.Shape{1}, []float64{1})
+	opt := nn.NewSophia([]*tensor.Tensor{w}, 0.1)
+	hess := func(p *tensor.Tensor) *tensor.Tensor {
+		return tensor.FromFloat64(tensor.Shape{1}, []float64{0.5})
+	}
+	err := opt.UpdateHessian(hess)
+	fmt.Println(err)
+	// Output: <nil>
+}
+
+// A QLoRA layer keeps its base weight quantized (NF4); Base dequantizes it on
+// demand — e.g. to merge trained adapters back into full precision.
+func ExampleQLoRALinear_Base() {
+	w := tensor.FromFloat64(tensor.Shape{4, 4}, make([]float64, 16))
+	q, _ := nn.NewQLoRA(w, 4, 2, 8, 1)
+	fmt.Println(q.Base(tensor.F64).Shape())
+	// Output: (4, 4)
+}
+
+// QuantLinear lazily uploads its quantized weight to the active GPU backend;
+// Close releases that device residency (a no-op when nothing was uploaded).
+func ExampleQuantLinear_Close() {
+	w := tensor.FromFloat64(tensor.Shape{32, 32}, make([]float64, 1024))
+	blob, _ := gguf.Quantize(w, gguf.Q8_0)
+	q := &nn.QuantLinear{Weight: blob, QT: gguf.Q8_0, In: 32, Out: 32}
+	fmt.Println(q.Close())
+	// Output: <nil>
 }

@@ -72,3 +72,35 @@ func Example_gradientDescentStep() {
 	fmt.Println("W after one step:", W.AtF64(0, 0), W.AtF64(1, 0))
 	// Output: W after one step: 1.9 3.9
 }
+
+// The tape's lower-level surface: Record appends an op node by hand (the same
+// hook backend.Execute drives automatically), Len reports the recorded count,
+// Var wraps a tensor for ergonomic gradient lookup, and BackwardScaled seeds
+// the backward pass with a custom scale — the loss-scaling hook mixed-precision
+// training uses (a plain Backward is BackwardScaled with scale 1).
+func ExampleTape_BackwardScaled() {
+	tape := autograd.NewTape()
+	ctx := tape.Context()
+	x := tensor.FromFloat64(tensor.Shape{2}, []float64{3, 4})
+	y, _ := backend.Execute(ctx, backend.OpMul, []*tensor.Tensor{x, x}, nil) // y = x²
+	fmt.Println(tape.Len())                                                  // one recorded op
+
+	v := tape.Var(x) // Variable: tensor + tape handle
+	_ = tape.BackwardScaled(y[0], 10)
+	fmt.Println(v.Grad().AtF64(0), v.Grad().AtF64(1)) // 10·dy/dx = 10·2x
+	// Output:
+	// 1
+	// 60 80
+}
+
+// Record lets custom code place an op on the tape manually — useful when a
+// computation happens outside backend.Execute but should still backpropagate.
+func ExampleTape_Record() {
+	tape := autograd.NewTape()
+	x := tensor.FromFloat64(tensor.Shape{1}, []float64{2})
+	y := tensor.FromFloat64(tensor.Shape{1}, []float64{4}) // pretend y = x² computed elsewhere
+	tape.Record(backend.OpMul, []*tensor.Tensor{x, x}, []*tensor.Tensor{y}, nil)
+	_ = tape.Backward(y)
+	fmt.Println(tape.Grad(x).AtF64(0)) // dy/dx = 2x = 4
+	// Output: 4
+}

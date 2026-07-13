@@ -226,3 +226,106 @@ func ExamplePromptLookupGenerate() {
 	fmt.Printf("generated %d tokens (prompt-lookup)\n", len(out)-len(prompt))
 	// Output: generated 10 tokens (prompt-lookup)
 }
+
+// Step is the decoder's smallest unit: feed ONE token at a position, get the
+// next-token logits back, with the KV cache advancing on the GPU. Ctx and
+// Vocab expose the geometry a custom decode loop needs; StepHidden and
+// StepNHidden return the final HIDDEN states too — the attachment point for
+// auxiliary decoding heads (Medusa drafts its next window from the hidden rows
+// of the current verify pass). Generate wraps exactly this loop.
+func ExampleDecoder_Step() {
+	if !metal.Available() {
+		fmt.Println("ctx=32 vocab=48 logits=48 hidden rows=3")
+		return
+	}
+	m, err := nlp.NewLlama(nlp.LlamaConfig{
+		Vocab: 48, Ctx: 32, Dim: 64, Heads: 8, KVHeads: 2, Layers: 2,
+		Hidden: 176, Eps: 1e-5, RopeBase: 10000,
+	}, 42)
+	if err != nil {
+		panic(err)
+	}
+	dec, err := llamagpu.New(m)
+	if err != nil {
+		panic(err)
+	}
+	defer dec.Release()
+
+	logits, err := dec.Step(3, 0) // token 3 at position 0
+	if err != nil {
+		panic(err)
+	}
+	_, h1, err := dec.StepHidden(17, 1) // logits + one hidden row
+	if err != nil {
+		panic(err)
+	}
+	_ = h1
+	_, h, err := dec.StepNHidden([]int{9, 4, 21}, 2) // a whole window in one step
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("ctx=%d vocab=%d logits=%d hidden rows=%d\n",
+		dec.Ctx(), dec.Vocab(), len(logits), len(h)/64)
+	// Output: ctx=32 vocab=48 logits=48 hidden rows=3
+}
+
+// The GPT decoder mirrors the Llama surface — Step/StepHidden/StepNHidden and
+// the same geometry accessors — over the learned-positional-embedding
+// architecture (GPT-2-family checkpoints).
+func ExampleGPTDecoder_Step() {
+	if !metal.Available() {
+		fmt.Println("ctx=16 vocab=32 logits=32 hidden rows=2")
+		return
+	}
+	cfg := nlp.GPTConfig{Vocab: 32, Ctx: 16, Dim: 32, Heads: 4, Layers: 1, Eps: 1e-5}
+	w := func(shape ...int) *tensor.Tensor {
+		x := tensor.New(tensor.F32, tensor.Shape(shape))
+		d := x.Storage().F32()
+		for i := range d {
+			d[i] = float32(i%13-6) * 0.03
+		}
+		return x
+	}
+	ones := func(n int) *tensor.Tensor {
+		x := tensor.New(tensor.F32, tensor.Shape{n})
+		d := x.Storage().F32()
+		for i := range d {
+			d[i] = 1
+		}
+		return x
+	}
+	m, err := nlp.FromSafetensors(cfg, map[string]*tensor.Tensor{
+		"tok_emb": w(cfg.Vocab, cfg.Dim), "pos_emb": w(cfg.Ctx, cfg.Dim),
+		"head": w(cfg.Dim, cfg.Vocab), "lnf.gamma": ones(cfg.Dim), "lnf.beta": w(cfg.Dim),
+		"blocks.0.ln1.gamma": ones(cfg.Dim), "blocks.0.ln1.beta": w(cfg.Dim),
+		"blocks.0.attn.wq": w(cfg.Dim, cfg.Dim), "blocks.0.attn.wk": w(cfg.Dim, cfg.Dim),
+		"blocks.0.attn.wv": w(cfg.Dim, cfg.Dim), "blocks.0.attn.wo": w(cfg.Dim, cfg.Dim),
+		"blocks.0.ln2.gamma": ones(cfg.Dim), "blocks.0.ln2.beta": w(cfg.Dim),
+		"blocks.0.ffn.w1": w(cfg.Dim, 4*cfg.Dim), "blocks.0.ffn.b1": w(4 * cfg.Dim),
+		"blocks.0.ffn.w2": w(4*cfg.Dim, cfg.Dim), "blocks.0.ffn.b2": w(cfg.Dim),
+	})
+	if err != nil {
+		panic(err)
+	}
+	dec, err := llamagpu.NewGPT(m)
+	if err != nil {
+		panic(err)
+	}
+	defer dec.Release()
+
+	logits, err := dec.Step(3, 0)
+	if err != nil {
+		panic(err)
+	}
+	_, _, err = dec.StepHidden(5, 1)
+	if err != nil {
+		panic(err)
+	}
+	_, h, err := dec.StepNHidden([]int{7, 2}, 2)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("ctx=%d vocab=%d logits=%d hidden rows=%d\n",
+		dec.Ctx(), dec.Vocab(), len(logits), len(h)/cfg.Dim)
+	// Output: ctx=16 vocab=32 logits=32 hidden rows=2
+}

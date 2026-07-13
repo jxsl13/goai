@@ -38,6 +38,14 @@ var exampleExempt = map[string]bool{
 // tiny config/option structs, error/marker types). This is the "where meaningful"
 // escape hatch for the per-type example rule (§C13/§V19); keep it short and each
 // entry justified.
+// methodExampleExempt lists "pkg.Type.Method" entries that need NOT be exercised
+// in a runnable Example (§C13 "where meaningful" — the justification lives on each
+// entry; trivial accessors already visible through their type's example, contract
+// methods like Params() shown across the optimizer examples, etc.).
+var methodExampleExempt = map[string]bool{
+	"backend.Name.String": true, // fmt.Stringer contract — invoked implicitly by every Printf in the examples
+}
+
 var typeExampleExempt = map[string]bool{
 	"backend.Op":                    true, // opcode enum; shown via ops/nn examples, not per-op
 	"llamagpu.Stepper":              true, // parameter-constraint interface (Decoder/GPTDecoder); shown via ExampleSpeculativeGenerate
@@ -222,7 +230,7 @@ func TestPublicAPIDocumentedWithExamples(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var missingDoc, missingExample, missingTypeExample []string
+	var missingDoc, missingExample, missingTypeExample, missingMethodExample []string
 	fset := token.NewFileSet()
 	dirs := make([]string, 0, len(pkgDirs))
 	for d := range pkgDirs {
@@ -250,7 +258,9 @@ func TestPublicAPIDocumentedWithExamples(t *testing.T) {
 		exportedSyms := 0 // funcs + types exported (user-facing surface)
 		hasExample := false
 		var typeNames []string
-		exampleIdents := map[string]bool{} // identifiers appearing in Example bodies
+		exampleIdents := map[string]bool{}    // identifiers appearing in Example bodies
+		exampleCalls := map[string]bool{}     // method names CALLED via selector in Example bodies (§C13 per-method rule)
+		methodOwners := map[string][]string{} // exported type → its exported methods
 		for _, pkg := range pkgs {
 			for name, file := range pkg.Files {
 				isTest := strings.HasSuffix(name, "_test.go")
@@ -264,8 +274,19 @@ func TestPublicAPIDocumentedWithExamples(t *testing.T) {
 									if id, ok := n.(*ast.Ident); ok {
 										exampleIdents[id.Name] = true
 									}
+									if call, ok := n.(*ast.CallExpr); ok {
+										if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+											exampleCalls[sel.Sel.Name] = true
+										}
+									}
 									return true
 								})
+								// ExampleType_Method → credit "Type.Method" directly
+								if rest := strings.TrimPrefix(dd.Name.Name, "Example"); rest != "" {
+									if i := strings.IndexByte(rest, '_'); i > 0 && i+1 < len(rest) {
+										exampleCalls[rest[i+1:]] = true
+									}
+								}
 								// ExampleType / ExampleType_Method → credit "Type"
 								if rest := strings.TrimPrefix(dd.Name.Name, "Example"); rest != "" && rest[0] != '_' {
 									if i := strings.IndexByte(rest, '_'); i >= 0 {
@@ -281,6 +302,9 @@ func TestPublicAPIDocumentedWithExamples(t *testing.T) {
 						}
 						// method: only require doc if receiver type is exported
 						if rn, ok := recvTypeName(dd); ok {
+							if ast.IsExported(rn) {
+								methodOwners[rn] = append(methodOwners[rn], dd.Name.Name)
+							}
 							if !ast.IsExported(rn) {
 								continue
 							}
@@ -358,6 +382,30 @@ func TestPublicAPIDocumentedWithExamples(t *testing.T) {
 				}
 			}
 		}
+		// per-METHOD example coverage (§C13/§V19 class (d), user feedback 2026-07-13):
+		// every exported method on a user-facing type must be exercised in a
+		// runnable Example — credited when the method name is CALLED via a selector
+		// in any Example body or a dedicated ExampleType_Method exists. Always-on
+		// since the §T569 sweep (74 methods covered across 8 packages).
+		if !exampleExempt[rel] {
+			for _, tn := range typeNames {
+				if typeExampleExempt[rel+"."+tn] {
+					continue
+				}
+				if rel == "backend" && strings.HasSuffix(tn, "Attrs") {
+					continue
+				}
+				for _, mn := range methodOwners[tn] {
+					if exampleCalls[mn] {
+						continue
+					}
+					if methodExampleExempt[rel+"."+tn+"."+mn] {
+						continue
+					}
+					missingMethodExample = append(missingMethodExample, rel+"."+tn+"."+mn)
+				}
+			}
+		}
 	}
 
 	sort.Strings(missingDoc)
@@ -368,6 +416,11 @@ func TestPublicAPIDocumentedWithExamples(t *testing.T) {
 	if len(missingExample) > 0 {
 		t.Errorf("public packages without a runnable Example (%d) — every user-facing package needs one (§V19):\n  %s",
 			len(missingExample), strings.Join(missingExample, "\n  "))
+	}
+	sort.Strings(missingMethodExample)
+	if len(missingMethodExample) > 0 {
+		t.Errorf("exported methods not exercised in any runnable Example (%d) — every method needs one where meaningful (§C13/§V19 class (d)); call it in an Example or allowlist in methodExampleExempt:\n  %s",
+			len(missingMethodExample), strings.Join(missingMethodExample, "\n  "))
 	}
 	sort.Strings(missingTypeExample)
 	if len(missingTypeExample) > 0 {

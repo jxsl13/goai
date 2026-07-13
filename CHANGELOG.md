@@ -4,6 +4,13 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T569 — Every exported method carries a runnable example (2026-07-13)
+- The API-doc gate now also enforces per-METHOD example coverage (ast-verified calls in
+  Example bodies), always-on. 74 previously uncovered methods across 8 packages received
+  deterministic, dual-audience examples — several encode equivalence properties (KV decode
+  ≡ full forward, Self-Extend group=1 ≡ plain forward) and two constructor gotchas surfaced
+  in the process. One justified exemption (fmt.Stringer).
+
 ### T567 — English-only repository (2026-07-13)
 - All documentation translated to English (LOOP.md, PLANNING_PROMPT.md, research docs,
   remaining quoted fragments) and machine-local information removed; multilingual Unicode

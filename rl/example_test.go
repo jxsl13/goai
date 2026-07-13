@@ -72,3 +72,17 @@ func ExampleGAE() {
 	// advantages: [3 2 1]
 	// returns:    [3 2 1]
 }
+
+// An environment exposes its geometry (observation width, action count) so
+// agents can size their networks; DQN.QValues inspects the learned per-action
+// values for one observation — the greedy policy is its argmax.
+func ExampleDQN_QValues() {
+	env := rl.NewChain(4, 20)
+	fmt.Println(env.ObsDim(), env.NumActions())
+	agent := rl.NewDQN(env, 8, 0.01, 0.9, 1)
+	q, _ := agent.QValues(env.Reset(), env.NumActions())
+	fmt.Println(len(q))
+	// Output:
+	// 4 2
+	// 2
+}
