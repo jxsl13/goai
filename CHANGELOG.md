@@ -4,6 +4,12 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T591 — SigLIP sigmoid contrastive loss (2026-07-13)
+- nn.SigLIPLoss + nn.SigLIPHead (learned temperature and bias, paper init): every
+  image/text pair is scored with an independent sigmoid instead of CLIP's batch
+  softmax. Loss and gradients match a torch reference to 15 digits; a training run
+  separates all matched pairs.
+
 ### T590 — Vision Transformer (2026-07-13)
 - vision.ViT: patchify + class token + learned position embeddings + pre-LN encoder
   stack (non-causal MHA, exact-erf GELU MLP) + class-token head. Forward parity with a
