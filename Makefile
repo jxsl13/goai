@@ -116,6 +116,16 @@ bench-compare: vulkan-spv
 bench-python:
 	.venv/bin/python internal/benchcompare/python_compare.py
 
+## lint-md: dependency-free markdown lint over every committed .md (SPEC T612).
+## Also runs as a test in ./internal/mdlint (CI-enforced on code pushes).
+lint-md:
+	$(GO) run ./internal/mdlint README.md CHANGELOG.md FORMAT.md LOOP.md PLANNING_PROMPT.md SPEC.md LICENSE.md docs/*.md
+
+## install-hooks: wire lint-md as a git pre-commit hook.
+install-hooks:
+	printf '#!/bin/sh\nmake lint-md || exit 1\n' > .git/hooks/pre-commit
+	chmod +x .git/hooks/pre-commit
+
 ## golden: regenerate reference values from NumPy/torch (§V1,§V13).
 ## Uses a local venv (PEP 668). Bootstrap: python3 -m venv .venv && .venv/bin/pip install numpy
 golden:

@@ -4,6 +4,13 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T612 — dependency-free markdown linter (2026-07-14)
+- internal/mdlint checks every committed markdown file for the mistakes that break
+  GitHub rendering (unclosed fences, ragged tables, swallowed `<token>` pseudo-tags,
+  unbalanced code spans, heading jumps, malformed links) — as a repo test, a make
+  target and an installable pre-commit hook. It immediately found and we fixed 20
+  real rendering bugs, most of them vanished tokens in SPEC.md.
+
 ### T610 — typed parallel FlashAttention and Retention (2026-07-14)
 - The last two unaccelerated CPU ops now run as typed parallel kernels: FlashAttention
   29.6x, RetNet retention 8.4x forward / 12.7x backward — every row of the benchmark

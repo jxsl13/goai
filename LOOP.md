@@ -397,7 +397,7 @@ demand-gated — the loop is in maintenance/opportunity mode.
   Note the oracle is a CGO_ENABLED=0 LOWER bound — cgo-gated test edges
   legitimately appear as excess.
 - CI WARNINGS = ERRORS (§C17): every CI watch also greps the full run log
-  for warnings/deprecations (`gh run view <id> --log | grep -iE
+  for warnings/deprecations (`gh run view ``<id>`` --log | grep -iE
   'deprecat|warning'`); new hits (beyond the accepted git
   init.defaultBranch hint inside actions/checkout, §T586) become fix
   tasks immediately.
