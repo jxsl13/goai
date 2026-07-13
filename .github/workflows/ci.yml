@@ -159,15 +159,20 @@ jobs:
           BASE="${{ github.event.pull_request.base.sha || github.event.before }}"
           go run ./internal/cichange -run "$BASE" HEAD -- -short -count=1 -timeout 20m
 
-  # The vulkan-tagged backend COMPILES on every code push and, when the change
-  # touches it (§T600: cichange names cgo/native-asset changes explicitly), its
-  # tests EXECUTE against Mesa's software Vulkan (lavapipe). A capability probe
-  # runs first; without a loadable ICD the lane skips transparently with rc=0.
-  build-vulkan-tag:
+  # §T604 capability matrix, vulkan axis: the tagged backend compiles on every
+  # OS and its tests EXECUTE wherever an ICD is installable — Mesa lavapipe on
+  # linux, MoltenVK on macOS, the LunarG runtime on windows (best effort). A
+  # capability probe (§T601) prints first; absent capability → transparent rc=0
+  # skip. Cross-driver divergences are the goal, not a nuisance (§T603).
+  vulkan:
     needs: changes
     if: needs.changes.outputs.code == 'true'
-    name: build / vulkan tag
-    runs-on: ubuntu-latest
+    name: vulkan / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v7
         with:
@@ -176,13 +181,28 @@ jobs:
         with:
           go-version: "1.26.x"
           cache: false
-      - name: install vulkan headers + software ICD (lavapipe)
+      - name: install ICD (linux — Mesa lavapipe)
+        if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libvulkan-dev vulkan-tools mesa-vulkan-drivers
-      - name: build
-        run: go build -tags vulkan ./...
+      - name: install ICD (macos — MoltenVK)
+        if: runner.os == 'macOS'
+        continue-on-error: true
+        run: |
+          brew install --quiet molten-vk vulkan-headers vulkan-loader vulkan-tools
+          echo "VK_ICD_FILENAMES=$(brew --prefix)/share/vulkan/icd.d/MoltenVK_icd.json" >> "$GITHUB_ENV"
+          echo "DYLD_LIBRARY_PATH=$(brew --prefix)/lib" >> "$GITHUB_ENV"
+      - name: install ICD (windows — LunarG runtime, best effort)
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        run: choco install -y --no-progress vulkan-sdk
       - name: capability probe (§T601 — what does this runner offer?)
+        shell: bash
         run: go run ./internal/capprobe
+      - name: build
+        shell: bash
+        run: go build -tags vulkan ./...
       - name: test (only when the change touches the vulkan backend, §T600)
+        shell: bash
         run: |
           BASE="${{ github.event.pull_request.base.sha || github.event.before }}"
           AFFECTED=$(go run ./internal/cichange -impact "$BASE" HEAD || echo all)
@@ -193,7 +213,7 @@ jobs:
           if ! vulkaninfo --summary >/dev/null 2>&1; then
             echo "skip: no loadable Vulkan ICD on this runner — rc=0"; exit 0
           fi
-          if vulkaninfo --summary 2>/dev/null | grep -qi llvmpipe; then
+          if vulkaninfo --summary 2>/dev/null | grep -qiE "llvmpipe|swiftshader"; then
             export GOAI_VULKAN_SOFTWARE_ICD=1  # software ICD: known-divergent tests self-skip with reasons (T603)
           fi
           go test -tags vulkan -short -count=1 -timeout 15m -v ./backend/vulkan/ > vk.log 2>&1
@@ -216,16 +236,19 @@ jobs:
           go mod tidy
           git diff --exit-code go.mod
 
-  # §T11: experimental SIMD backend (amd64). Soft gate until simd/archsimd
-  # stabilizes; does not block merges. NOTE: the ubuntu-amd64 runner is exactly
-  # the host class the parked §T11b/§T74 tasks wait for — once this repo is on
-  # GitHub, those can graduate to a real test job here.
-  simd-amd64:
+  # §T604 capability matrix, simd axis: the GOEXPERIMENT=simd build on every
+  # amd64 OS (windows included); arm64 runners skip transparently — their SIMD
+  # class (NEON) is served by the default build. Soft gate until §T11b lands.
+  simd:
     needs: changes
     if: needs.changes.outputs.code == 'true'
-    name: simd / ubuntu-amd64 (soft)
-    runs-on: ubuntu-latest
+    name: simd / ${{ matrix.os }} (soft)
+    runs-on: ${{ matrix.os }}
     continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v6
@@ -233,8 +256,46 @@ jobs:
           go-version: "1.26.x"
           cache: false
       - name: capability probe (§T601 — what does this runner offer?)
+        shell: bash
         run: go run ./internal/capprobe
-      - name: build (GOEXPERIMENT=simd)
-        run: GOEXPERIMENT=simd go build -tags=simd ./...
+      - name: build (GOEXPERIMENT=simd, amd64 only)
+        shell: bash
         env:
           CGO_ENABLED: "0"
+        run: |
+          if [ "$(go env GOARCH)" != "amd64" ]; then
+            echo "skip: GOEXPERIMENT=simd is amd64-only; this runner is $(go env GOARCH) (NEON served by the default build) — rc=0"
+            exit 0
+          fi
+          GOEXPERIMENT=simd go build -tags=simd ./...
+
+  # §T604 capability matrix, cgo axis on windows (mingw): the tagless cgo build
+  # must behave like everywhere else; tests run selectively via the runner.
+  test-windows-cgo:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    name: cgo / windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # §T587
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.x"
+          cache: false
+      - name: capability probe (§T601 — what does this runner offer?)
+        shell: bash
+        run: go run ./internal/capprobe
+      - name: vet (cgo enabled)
+        shell: bash
+        env:
+          CGO_ENABLED: "1"
+        run: go vet ./...
+      - name: test (transparent selective run, §T587)
+        shell: bash
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          BASE="${{ github.event.pull_request.base.sha || github.event.before }}"
+          go run ./internal/cichange -run "$BASE" HEAD -- -short -count=1 -timeout 20m
