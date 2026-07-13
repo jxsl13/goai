@@ -265,7 +265,7 @@ func (g *gpuLlama) stepOps(L int) []func(r *Recorder) error {
 
 func TestLlamaDecodeCorrectness(t *testing.T) {
 	if !Available() {
-		t.Skip("no gpu")
+		t.Skip("metal: no gpu device — skipped")
 	}
 	const D, H, KVH, hidden, V, nLayers, maxLen, steps = 64, 8, 2, 176, 48, 2, 16, 4
 	m := newLlamaModel(D, H, KVH, hidden, V, nLayers, maxLen)
@@ -311,7 +311,7 @@ func TestLlamaDecodeCorrectness(t *testing.T) {
 
 func TestLlamaDecodeBench(t *testing.T) {
 	if !Available() {
-		t.Skip("no gpu")
+		t.Skip("metal: no gpu device — skipped")
 	}
 	const D, H, KVH, hidden, V, nLayers, maxLen = 512, 8, 2, 1376, 1024, 6, 64
 	m := newLlamaModel(D, H, KVH, hidden, V, nLayers, maxLen)

@@ -16,7 +16,7 @@ import (
 // model's decode step can run as one command buffer over resident quantized weights.
 func TestRecorderQMatMulResident(t *testing.T) {
 	if !Available() {
-		t.Skip("no gpu")
+		t.Skip("metal: no gpu device — skipped")
 	}
 	const m, k, n = 3, 64, 24 // k multiple of 32 (Q8_0 block)
 	// weight [n,k] as an f32 tensor, quantized to Q8_0 bytes.

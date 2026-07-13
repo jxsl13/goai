@@ -269,7 +269,7 @@ func (g *gpuFullModel) stepOps(L int) []func(r *Recorder) error {
 
 func TestFullModelDecodeCorrectness(t *testing.T) {
 	if !Available() {
-		t.Skip("no gpu")
+		t.Skip("metal: no gpu device — skipped")
 	}
 	const D, H, nLayers, V, maxLen, steps = 64, 4, 2, 48, 16, 4
 	m := newFullModel(D, H, nLayers, V, maxLen)
@@ -322,7 +322,7 @@ func TestFullModelDecodeCorrectness(t *testing.T) {
 // uploaded hidden.
 func TestFullModelDecodeEmbedViaBlit(t *testing.T) {
 	if !Available() {
-		t.Skip("no gpu")
+		t.Skip("metal: no gpu device — skipped")
 	}
 	const D, H, nLayers, V, maxLen, steps = 64, 4, 2, 40, 16, 5
 	m := newFullModel(D, H, nLayers, V, maxLen)
@@ -392,7 +392,7 @@ func TestFullModelDecodeEmbedViaBlit(t *testing.T) {
 
 func TestFullModelDecodeBench(t *testing.T) {
 	if !Available() {
-		t.Skip("no gpu")
+		t.Skip("metal: no gpu device — skipped")
 	}
 	// realistic decode size (§T374 honest ceiling comparison).
 	const D, H, nLayers, V, maxLen = 512, 8, 6, 1024, 64

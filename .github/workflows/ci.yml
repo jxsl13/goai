@@ -150,6 +150,8 @@ jobs:
         with:
           go-version: "1.26.x"
           cache: false
+      - name: capability probe (§T601 — what does this runner offer?)
+        run: go run ./internal/capprobe
       - name: vet (compiles the metal cgo backend)
         run: go vet ./...
       - name: test (transparent selective run, §T587)
@@ -178,9 +180,8 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libvulkan-dev vulkan-tools mesa-vulkan-drivers
       - name: build
         run: go build -tags vulkan ./...
-      - name: capability probe (what does this runner offer?)
-        run: |
-          vulkaninfo --summary 2>/dev/null | head -25 || echo "probe - no loadable Vulkan ICD on this runner"
+      - name: capability probe (§T601 — what does this runner offer?)
+        run: go run ./internal/capprobe
       - name: test (only when the change touches the vulkan backend, §T600)
         run: |
           BASE="${{ github.event.pull_request.base.sha || github.event.before }}"
@@ -231,6 +232,8 @@ jobs:
         with:
           go-version: "1.26.x"
           cache: false
+      - name: capability probe (§T601 — what does this runner offer?)
+        run: go run ./internal/capprobe
       - name: build (GOEXPERIMENT=simd)
         run: GOEXPERIMENT=simd go build -tags=simd ./...
         env:

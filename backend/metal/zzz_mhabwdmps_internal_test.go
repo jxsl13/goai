@@ -13,7 +13,7 @@ import (
 // bottleneck. Cross-validated against the ref-validated flash-backward, then A/B'd at 512×8×64.
 func TestMHABackwardMPSCrossReference(t *testing.T) {
 	if !Available() {
-		t.Skip("no gpu")
+		t.Skip("metal: no gpu device — skipped")
 	}
 	for _, tc := range []struct {
 		name                string
@@ -65,7 +65,7 @@ func TestMHABackwardMPSCrossReference(t *testing.T) {
 
 func TestMHABackwardMPSvsFlashBench(t *testing.T) {
 	if !Available() {
-		t.Skip("no gpu")
+		t.Skip("metal: no gpu device — skipped")
 	}
 	const seq, heads, dk = 512, 8, 64
 	const dm = heads * dk

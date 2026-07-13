@@ -4,6 +4,11 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T601 — capability probe and transparent accelerator skips (2026-07-14)
+- internal/capprobe prints the runner's acceleration surface (Metal, Vulkan ICD, CUDA,
+  SIMD class) in go-test-shaped lines; the CI accelerated lanes run it before any test.
+  Every accelerator skip now names its API explicitly.
+
 ### T600 — cgo-aware selection and a real Vulkan test lane (2026-07-14)
 - The selector's decision trace now names cgo changes explicitly (native assets and
   .go files importing "C"), and the CI vulkan lane executes the backend's tests against

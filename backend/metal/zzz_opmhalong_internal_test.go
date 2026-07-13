@@ -13,7 +13,7 @@ import (
 
 func TestOpMHADecodeLongContext(t *testing.T) {
 	if !Available() {
-		t.Skip("no gpu")
+		t.Skip("metal: no gpu device — skipped")
 	}
 	const sk, heads, dk = 1920, 8, 64
 	const dm = heads * dk

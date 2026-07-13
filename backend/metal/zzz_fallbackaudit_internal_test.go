@@ -17,7 +17,7 @@ import (
 // (~110ms, §T399) — like the §T352 GELU/AddBias fallbacks were — before writing metal kernels.
 func TestFallbackAuditForward(t *testing.T) {
 	if !Available() {
-		t.Skip("no gpu")
+		t.Skip("metal: no gpu device — skipped")
 	}
 	const seq, dim, vocab = 256, 512, 4096 // BenchmarkGPTForward shapes (§T355)
 	mctx := backend.NewContext().WithBackend(Backend{})
@@ -78,7 +78,7 @@ func TestFallbackAuditForward(t *testing.T) {
 // §T401: the new metal OpCrossEntropy forward == the reference @1e-4.
 func TestCrossEntropyForwardCrossReference(t *testing.T) {
 	if !Available() {
-		t.Skip("no gpu")
+		t.Skip("metal: no gpu device — skipped")
 	}
 	for _, sh := range [][2]int{{4, 16}, {8, 40}, {17, 4096}} {
 		b, c := sh[0], sh[1]
@@ -106,7 +106,7 @@ func TestCrossEntropyForwardCrossReference(t *testing.T) {
 // §T402: the new metal OpEmbed forward == the reference (exact — it's a gather).
 func TestEmbedForwardCrossReference(t *testing.T) {
 	if !Available() {
-		t.Skip("no gpu")
+		t.Skip("metal: no gpu device — skipped")
 	}
 	const n, d, m = 4096, 512, 256
 	table := reshape2(t, randTensor(n*d, 8), n, d)

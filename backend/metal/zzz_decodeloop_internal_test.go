@@ -147,7 +147,7 @@ func (m *decodeModel) hostDecodeStep(x []float32, kCache, vCache *[]float32, L i
 
 func TestDecodeLoopKVCache(t *testing.T) {
 	if !Available() {
-		t.Skip("no gpu")
+		t.Skip("metal: no gpu device — skipped")
 	}
 	const D, H, maxLen, steps = 32, 4, 16, 5
 	m := newDecodeModel(D, H, maxLen)

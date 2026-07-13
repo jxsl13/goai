@@ -21,7 +21,7 @@ import (
 // (seq=1, dispatch-bound) and a prefill size (seq=128, compute-bound) to see how it scales.
 func TestLayerBatchBench(t *testing.T) {
 	if !Available() {
-		t.Skip("no gpu")
+		t.Skip("metal: no gpu device — skipped")
 	}
 	type cfg struct {
 		name        string

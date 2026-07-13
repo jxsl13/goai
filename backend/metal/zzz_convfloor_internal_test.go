@@ -19,7 +19,7 @@ import (
 // honest ceiling any fused/native-conv rewrite could recover.
 func TestConvMatmulFloor(t *testing.T) {
 	if !Available() {
-		t.Skip("no gpu")
+		t.Skip("metal: no gpu device — skipped")
 	}
 	const n, c, hw, f, k = 8, 16, 32, 32, 3
 	const ho, wo = hw, hw // stride 1, pad 1

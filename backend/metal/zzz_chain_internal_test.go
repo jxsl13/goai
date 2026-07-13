@@ -13,7 +13,7 @@ import (
 // default hazard tracking ordering the MPS write before the ReLU read).
 func TestChainMatMulReLU(t *testing.T) {
 	if !Available() {
-		t.Skip("no gpu")
+		t.Skip("metal: no gpu device — skipped")
 	}
 	const m, k, n = 5, 7, 6
 	a := make([]float32, m*k)

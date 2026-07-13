@@ -13,7 +13,7 @@ import (
 // softmax-attention reference, then A/B'd against the flash kernel at the real 512×8×64 shape.
 func TestMHAMPSCrossReference(t *testing.T) {
 	if !Available() {
-		t.Skip("no gpu")
+		t.Skip("metal: no gpu device — skipped")
 	}
 	const seq, heads, dk = 8, 2, 8
 	const dm = heads * dk
@@ -73,7 +73,7 @@ func TestMHAMPSCrossReference(t *testing.T) {
 
 func TestMHAMPSvsFlashBench(t *testing.T) {
 	if !Available() {
-		t.Skip("no gpu")
+		t.Skip("metal: no gpu device — skipped")
 	}
 	const seq, heads, dk = 512, 8, 64
 	const dm = heads * dk

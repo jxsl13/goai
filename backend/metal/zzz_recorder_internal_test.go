@@ -12,7 +12,7 @@ import (
 // Recorder primitive (device-buffer chaining, one submit/wait, Metal hazard tracking).
 func TestRecorderUnaryChain(t *testing.T) {
 	if !Available() {
-		t.Skip("no gpu")
+		t.Skip("metal: no gpu device — skipped")
 	}
 	const n = 4096
 	src := make([]float32, n)
@@ -66,7 +66,7 @@ func TestRecorderUnaryChain(t *testing.T) {
 // This is the decode-critical op (7 matmuls/step) proven inside the Recorder primitive.
 func TestRecorderMatMulChain(t *testing.T) {
 	if !Available() {
-		t.Skip("no gpu")
+		t.Skip("metal: no gpu device — skipped")
 	}
 	const m, k, n = 12, 20, 8
 	aSrc := make([]float32, m*k)
@@ -129,7 +129,7 @@ func TestRecorderMatMulChain(t *testing.T) {
 // e = rmsnorm(A·B)·gamma — the decode block shape (project → norm) proven in the Recorder.
 func TestRecorderRMSNormChain(t *testing.T) {
 	if !Available() {
-		t.Skip("no gpu")
+		t.Skip("metal: no gpu device — skipped")
 	}
 	const m, k, n = 8, 16, 24 // rows=m, norm dim=n
 	const eps = 1e-5
@@ -206,7 +206,7 @@ func TestRecorderRMSNormChain(t *testing.T) {
 // the GPT-2 style); with it + RMSNorm + RoPE + decode-attn the Recorder covers a full Llama block.
 func TestRecorderSwiGLU(t *testing.T) {
 	if !Available() {
-		t.Skip("no gpu")
+		t.Skip("metal: no gpu device — skipped")
 	}
 	const dim, hidden = 32, 88 // hidden ≈ (2/3)·4·dim, Llama-ish
 	xSrc := make([]float32, dim)
@@ -296,7 +296,7 @@ func TestRecorderSwiGLU(t *testing.T) {
 // e = layernorm(A·B)·gamma + beta — the GPT-2-style block boundary (rmsnorm is the Llama variant).
 func TestRecorderLayerNormChain(t *testing.T) {
 	if !Available() {
-		t.Skip("no gpu")
+		t.Skip("metal: no gpu device — skipped")
 	}
 	const m, k, n = 8, 16, 24
 	const eps = 1e-5
@@ -382,7 +382,7 @@ func TestRecorderLayerNormChain(t *testing.T) {
 // causal softmax-attention reference — the last decode op-class inside the Recorder.
 func TestRecorderFlashAttn(t *testing.T) {
 	if !Available() {
-		t.Skip("no gpu")
+		t.Skip("metal: no gpu device — skipped")
 	}
 	const seq, heads, dk = 5, 2, 8
 	const dm = heads * dk // 16, kvHeads==heads (no GQA)
@@ -469,7 +469,7 @@ func TestRecorderFlashAttn(t *testing.T) {
 // reference. This is the missing primitive the batched DecodeStep integration blocks on.
 func TestRecorderDecodeAttn(t *testing.T) {
 	if !Available() {
-		t.Skip("no gpu")
+		t.Skip("metal: no gpu device — skipped")
 	}
 	const sq, kvLen, heads, dk = 1, 6, 2, 8
 	const dm = heads * dk // 16, kvHeads==heads
@@ -555,7 +555,7 @@ func TestRecorderDecodeAttn(t *testing.T) {
 // absolute position posOffset (= KV-cache length), so the new token rotates by its true position.
 func TestRecorderRoPE(t *testing.T) {
 	if !Available() {
-		t.Skip("no gpu")
+		t.Skip("metal: no gpu device — skipped")
 	}
 	const seq, heads, hd = 1, 2, 8
 	const half = hd / 2       // 4
@@ -624,7 +624,7 @@ func TestRecorderRoPE(t *testing.T) {
 // that other cache rows are untouched. This is the structural primitive the decode loop needs.
 func TestRecorderKVAppend(t *testing.T) {
 	if !Available() {
-		t.Skip("no gpu")
+		t.Skip("metal: no gpu device — skipped")
 	}
 	const D, dkv, maxLen = 16, 12, 8
 	const cacheLen = 3 // append the new k at row 3

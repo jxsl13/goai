@@ -18,7 +18,7 @@ import (
 // lever, not more hand-tiling of the flash kernel.
 func TestAttentionMatmulFloor(t *testing.T) {
 	if !Available() {
-		t.Skip("no gpu")
+		t.Skip("metal: no gpu device — skipped")
 	}
 	const seq, heads, dk = 512, 8, 64
 	// per-head device buffers (reused across heads — we measure throughput, not correctness).

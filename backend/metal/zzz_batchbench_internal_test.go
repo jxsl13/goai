@@ -13,7 +13,7 @@ import (
 // is worth building; if not, park it.
 func TestBatchDispatchBench(t *testing.T) {
 	if !Available() {
-		t.Skip("no gpu")
+		t.Skip("metal: no gpu device — skipped")
 	}
 	const iters = 95
 	timeit := func(one bool) float64 {
