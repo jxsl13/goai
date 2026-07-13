@@ -4,6 +4,12 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T592 — LLaVA-style vision-language bridge (2026-07-13)
+- vision.VLMProjector (the LLaVA-1.5 MLP projector) and vision.VLMLogits wire ViT patch
+  features as soft tokens into the GPT decoder; ViT gained Features(). Trained end to
+  end on synthetic image→caption pairs: every caption correct, and swapping the image
+  swaps the caption — the multimodal path works as a system.
+
 ### T595 — mechanical package-doc depth gate (2026-07-13)
 - Every public package doc now carries all three depth levels — professional prose, an
   "In plain terms" layman paragraph, and a "Further reading" pointer — and apicheck

@@ -236,13 +236,17 @@ func (m *ViT) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, e
 	return out[0], nil
 }
 
-// forwardOne runs one [C,H,W] image to [1, classes] logits.
-func (m *ViT) forwardOne(ctx *backend.Context, img *tensor.Tensor) (*tensor.Tensor, error) {
+// Features returns the encoder's final token representations [N+1, D] for one
+// [C,H,W] image — row 0 is the [class] token, rows 1..N the patch tokens, all
+// after the final LayerNorm. This is the vision-encoder output a VLM projector
+// consumes (LLaVA-style systems take the patch rows, §T592); Forward is
+// Features' class row through the classification head.
+func (m *ViT) Features(ctx *backend.Context, img *tensor.Tensor) (*tensor.Tensor, error) {
 	patches, err := m.patchify(img)
 	if err != nil {
 		return nil, err
 	}
-	x, err := m.Embed.Forward(ctx, patches) // [N, D]
+	x, err := m.Embed.Forward(ctx, patches)
 	if err != nil {
 		return nil, err
 	}
@@ -260,7 +264,13 @@ func (m *ViT) forwardOne(ctx *backend.Context, img *tensor.Tensor) (*tensor.Tens
 			return nil, err
 		}
 	}
-	if h, err = m.Norm.Forward(ctx, h); err != nil {
+	return m.Norm.Forward(ctx, h)
+}
+
+// forwardOne runs one [C,H,W] image to [1, classes] logits.
+func (m *ViT) forwardOne(ctx *backend.Context, img *tensor.Tensor) (*tensor.Tensor, error) {
+	h, err := m.Features(ctx, img)
+	if err != nil {
 		return nil, err
 	}
 	cls, err := backend.Execute(ctx, backend.OpSlice, []*tensor.Tensor{h},
