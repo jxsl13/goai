@@ -4,6 +4,12 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T602 — devirtualized attention cores (2026-07-14)
+- The CPU attention kernels now run on generic typed slices instead of per-element
+  closures: +46% CPU GPT forward (1141 tok/s), +27% training (247 tok/s). The CPU arc
+  of the day (norms, softmax, attention, conv scatter) multiplies to 6.4x forward /
+  6.1x training.
+
 ### T601 — capability probe and transparent accelerator skips (2026-07-14)
 - internal/capprobe prints the runner's acceleration surface (Metal, Vulkan ICD, CUDA,
   SIMD class) in go-test-shaped lines; the CI accelerated lanes run it before any test.

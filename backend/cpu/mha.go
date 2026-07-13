@@ -56,37 +56,63 @@ func mhaKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs
 	}
 	window := pa.Window
 
-	qr, kr, vr := f64at(q.Contiguous()), f64at(k.Contiguous()), f64at(v.Contiguous())
+	geo := mhaGeo{sq: sq, sk: sk, dm: dm, dk: dk, kvDM: kvDM, heads: heads, rep: rep,
+		off: off, window: window, causal: causal, scale: scale, slopes: slopes}
 	out := tensor.NewOn(ctx.Device(), q.Dtype(), tensor.Shape{sq, dm})
-	ow := f64set(out)
+	qc, kc, vc := q.Contiguous(), k.Contiguous(), v.Contiguous()
+	// Concrete typed instantiations (§T602): the previous per-element closure
+	// reads were 11% of the training profile; generics devirtualize them.
+	if q.Dtype() == tensor.F64 {
+		mhaFwd(qc.Storage().F64(), kc.Storage().F64(), vc.Storage().F64(), out.Storage().F64(), geo)
+	} else {
+		mhaFwd(qc.Storage().F32(), kc.Storage().F32(), vc.Storage().F32(), out.Storage().F32(), geo)
+	}
+	return []*tensor.Tensor{out}, nil
+}
 
-	parallelWork(heads*sq, sk*dk, func(lo, hi int) {
-		row := make([]float64, sk)
+// mhaGeo bundles the attention geometry and attributes shared by the typed cores.
+type mhaGeo struct {
+	sq, sk, dm, dk, kvDM, heads, rep, off, window int
+	causal                                        bool
+	scale                                         float64
+	slopes                                        []float64
+}
+
+// bounds returns the [jmin, jmax) key range for query row i.
+func (g mhaGeo) bounds(i int) (int, int) {
+	jmax := g.sk
+	if g.causal {
+		jmax = g.off + i + 1
+	}
+	jmin := 0
+	if g.window > 0 {
+		if lo := g.off + i - g.window + 1; lo > 0 {
+			jmin = lo
+		}
+	}
+	return jmin, jmax
+}
+
+// mhaFwd is the typed attention forward over raw slices (f64 accumulation, §V10).
+func mhaFwd[T float32 | float64](q, k, v, out []T, g mhaGeo) {
+	parallelWork(g.heads*g.sq, g.sk*g.dk, func(lo, hi int) {
+		row := make([]float64, g.sk)
 		for t := lo; t < hi; t++ {
-			h, i := t/sq, t%sq
-			qOff := h * dk
-			kvOff := (h / rep) * dk
-			jmax := sk
-			if causal {
-				jmax = off + i + 1
-			}
-			jmin := 0
-			if window > 0 {
-				if lo := off + i - window + 1; lo > 0 {
-					jmin = lo
-				}
-			}
-			qBase := i*dm + qOff
+			h, i := t/g.sq, t%g.sq
+			qOff := h * g.dk
+			kvOff := (h / g.rep) * g.dk
+			jmin, jmax := g.bounds(i)
+			qBase := i*g.dm + qOff
 			m := math.Inf(-1)
 			for j := jmin; j < jmax; j++ {
-				kBase := j*kvDM + kvOff
+				kBase := j*g.kvDM + kvOff
 				var s float64
-				for d := 0; d < dk; d++ {
-					s += qr(qBase+d) * kr(kBase+d)
+				for d := 0; d < g.dk; d++ {
+					s += float64(q[qBase+d]) * float64(k[kBase+d])
 				}
-				s *= scale
-				if slopes != nil {
-					s += slopes[h] * float64(j-(off+i))
+				s *= g.scale
+				if g.slopes != nil {
+					s += g.slopes[h] * float64(j-(g.off+i))
 				}
 				row[j] = s
 				if s > m {
@@ -98,16 +124,15 @@ func mhaKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs
 				row[j] = math.Exp(row[j] - m)
 				sum += row[j]
 			}
-			for d := 0; d < dk; d++ {
+			for d := 0; d < g.dk; d++ {
 				var o float64
 				for j := jmin; j < jmax; j++ {
-					o += (row[j] / sum) * vr(j*kvDM+kvOff+d)
+					o += (row[j] / sum) * float64(v[j*g.kvDM+kvOff+d])
 				}
-				ow(qBase+d, o)
+				out[qBase+d] = T(o)
 			}
 		}
 	})
-	return []*tensor.Tensor{out}, nil
 }
 
 // mhaBackwardKernelCPU: see the package comment above. Training has sq==sk.
@@ -141,15 +166,32 @@ func mhaBackwardKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backe
 	}
 	window := pa.Window
 
-	qr, kr, vr, gr := f64at(q.Contiguous()), f64at(k.Contiguous()), f64at(v.Contiguous()), f64at(g.Contiguous())
 	dQ := tensor.NewOn(ctx.Device(), q.Dtype(), q.Shape())
 	dK := tensor.NewOn(ctx.Device(), k.Dtype(), k.Shape())
 	dV := tensor.NewOn(ctx.Device(), v.Dtype(), v.Shape())
-	dqw, dkw, dvw := f64set(dQ), f64set(dK), f64set(dV)
+	geo := mhaGeo{sq: seq, sk: seq, dm: dm, dk: dk, kvDM: kvDM, heads: heads, rep: rep,
+		off: 0, window: window, causal: causal, scale: scale, slopes: slopes}
+	qc, kc, vc, gc := q.Contiguous(), k.Contiguous(), v.Contiguous(), g.Contiguous()
+	if q.Dtype() == tensor.F64 {
+		mhaBwd(qc.Storage().F64(), kc.Storage().F64(), vc.Storage().F64(), gc.Storage().F64(),
+			dQ.Storage().F64(), dK.Storage().F64(), dV.Storage().F64(), geo)
+	} else {
+		mhaBwd(qc.Storage().F32(), kc.Storage().F32(), vc.Storage().F32(), gc.Storage().F32(),
+			dQ.Storage().F32(), dK.Storage().F32(), dV.Storage().F32(), geo)
+	}
+	return []*tensor.Tensor{dQ, dK, dV}, nil
+}
+
+// mhaBwd is the typed attention backward over raw slices (§T602); kvHeads
+// parallel tasks with disjoint output regions, f64 scratch accumulation (§V10).
+func mhaBwd[T float32 | float64](q, k, v, g, dQ, dK, dV []T, geo mhaGeo) {
+	seq, dk, dm, kvDM, rep := geo.sq, geo.dk, geo.dm, geo.kvDM, geo.rep
+	kvHeads := geo.heads / rep
 
 	// One task per KV group: its rep query heads touch exactly the group's
 	// K/V columns and their own Q columns — fully disjoint output regions.
 	parallelWork(kvHeads, rep*seq*seq*dk, func(glo, ghi int) {
+		causal, window, scale, slopes := geo.causal, geo.window, geo.scale, geo.slopes
 		a := make([]float64, seq)
 		dA := make([]float64, seq)
 		dkAcc := make([]float64, seq*dk) // f64 accumulators for this group's dK/dV
@@ -181,7 +223,7 @@ func mhaBackwardKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backe
 						kBase := j*kvDM + kvOff
 						var s float64
 						for d := 0; d < dk; d++ {
-							s += qr(qBase+d) * kr(kBase+d)
+							s += float64(q[qBase+d]) * float64(k[kBase+d])
 						}
 						s *= scale
 						if slopes != nil {
@@ -206,9 +248,9 @@ func mhaBackwardKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backe
 						accBase := j * dk
 						var dav float64
 						for d := 0; d < dk; d++ {
-							gid := gr(qBase + d)
+							gid := float64(g[qBase+d])
 							dvAcc[accBase+d] += a[j] * gid
-							dav += gid * vr(kvBase+d)
+							dav += gid * float64(v[kvBase+d])
 						}
 						dA[j] = dav
 						dot += dav * a[j]
@@ -221,24 +263,23 @@ func mhaBackwardKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backe
 						kvBase := j*kvDM + kvOff
 						accBase := j * dk
 						for d := 0; d < dk; d++ {
-							dqRow[d] += dS * kr(kvBase+d)
-							dkAcc[accBase+d] += dS * qr(qBase+d)
+							dqRow[d] += dS * float64(k[kvBase+d])
+							dkAcc[accBase+d] += dS * float64(q[qBase+d])
 						}
 					}
 					for d := 0; d < dk; d++ {
-						dqw(qBase+d, dqRow[d])
+						dQ[qBase+d] = T(dqRow[d])
 					}
 				}
 			}
 			for j := 0; j < seq; j++ {
 				for d := 0; d < dk; d++ {
-					dkw(j*kvDM+kvOff+d, dkAcc[j*dk+d])
-					dvw(j*kvDM+kvOff+d, dvAcc[j*dk+d])
+					dK[j*kvDM+kvOff+d] = T(dkAcc[j*dk+d])
+					dV[j*kvDM+kvOff+d] = T(dvAcc[j*dk+d])
 				}
 			}
 		}
 	})
-	return []*tensor.Tensor{dQ, dK, dV}, nil
 }
 
 func init() {
