@@ -12,11 +12,24 @@ import (
 func TestRepoMarkdownIsClean(t *testing.T) {
 	root := "../.."
 	var files []string
-	for _, top := range []string{"README.md", "CHANGELOG.md", "FORMAT.md", "LOOP.md", "PLANNING_PROMPT.md", "SPEC.md", "LICENSE.md"} {
-		files = append(files, filepath.Join(root, top))
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if n := d.Name(); n == ".git" || n == ".venv" || n == "node_modules" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if strings.HasSuffix(path, ".md") {
+			files = append(files, path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	docs, _ := filepath.Glob(filepath.Join(root, "docs", "*.md"))
-	files = append(files, docs...)
 	for _, f := range files {
 		raw, err := os.ReadFile(f)
 		if err != nil {

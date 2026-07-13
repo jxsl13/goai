@@ -116,10 +116,10 @@ bench-compare: vulkan-spv
 bench-python:
 	.venv/bin/python internal/benchcompare/python_compare.py
 
-## lint-md: dependency-free markdown lint over every committed .md (SPEC T612).
+## lint-md: dependency-free markdown lint — discovers every *.md recursively (SPEC T612).
 ## Also runs as a test in ./internal/mdlint (CI-enforced on code pushes).
 lint-md:
-	$(GO) run ./internal/mdlint README.md CHANGELOG.md FORMAT.md LOOP.md PLANNING_PROMPT.md SPEC.md LICENSE.md docs/*.md
+	$(GO) run ./internal/mdlint ./...
 
 ## install-hooks: wire lint-md as a git pre-commit hook.
 install-hooks:

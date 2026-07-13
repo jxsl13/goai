@@ -28,7 +28,7 @@ a diff; drift caught in prod is a §B.
 
 ## CHECK §V — invariants
 
-For each V<n>:
+For each V`<n>`:
 
 1. Translate invariant into verifiable claim about code.
 2. Grep / read relevant files.
@@ -48,7 +48,7 @@ For each I item:
 
 ## CHECK §T — tasks
 
-For each T<n>:
+For each T`<n>`:
 
 1. If `x`: verify claimed work present.
 2. If `~`: note as in-progress.

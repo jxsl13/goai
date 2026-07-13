@@ -11,12 +11,19 @@
 // page wrong — a code block that never ends, a table row with a missing
 // column, a heading that jumps two levels — without needing any library.
 //
-// Usage: go run ./internal/mdlint <file.md ...>   (exit 1 on findings)
+// Usage:
+//
+//	go run ./internal/mdlint ./...            lint every *.md under the repo
+//	go run ./internal/mdlint <dir|file.md …>  lint specific paths (dirs recurse)
+//
+// Exit 1 on findings. Discovery skips .git and .venv; no file list to maintain.
 package main
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -30,11 +37,46 @@ type finding struct {
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: mdlint <file.md ...>")
+		fmt.Fprintln(os.Stderr, "usage: mdlint ./... | <dir|file.md ...>")
 		os.Exit(2)
 	}
+	var files []string
+	for _, arg := range os.Args[1:] {
+		root := arg
+		if arg == "./..." {
+			root = "."
+		}
+		info, err := os.Stat(root)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		if !info.IsDir() {
+			files = append(files, root)
+			continue
+		}
+		err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() {
+				if name := d.Name(); name == ".git" || name == ".venv" || name == "node_modules" {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if strings.HasSuffix(path, ".md") {
+				files = append(files, path)
+			}
+			return nil
+		})
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+	}
 	var all []finding
-	for _, f := range os.Args[1:] {
+	for _, f := range files {
 		raw, err := os.ReadFile(f)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)

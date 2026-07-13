@@ -38,8 +38,8 @@ Draft the spec change. Never skip §B; §V/§I/§T are case-by-case.
 
 Template:
 ```
-§B row: B<next>|<date>|<root cause>|V<N>
-§V line: V<next>: <testable rule that would have caught it>
+§B row: B`<next>`|`<date>`|<root cause>|V`<N>`
+§V line: V`<next>`: <testable rule that would have caught it>
 ```
 
 Example:
