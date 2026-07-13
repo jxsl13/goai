@@ -18,6 +18,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/jxsl13/goai/backend"
 )
 
 var (
@@ -76,7 +78,7 @@ func main() {
 		}
 	}
 
-	variants := []string{"ref", "cpu", "metal", "vulkan"}
+	variants := []string{string(backend.Ref), string(backend.CPU), string(backend.Metal), string(backend.Vulkan)}
 	names := sortedKeys(goRows)
 	fmt.Println("| Workload | goai-ref | goai-cpu | goai-metal | goai-vulkan | industry (same box) |")
 	fmt.Println("|---|---|---|---|---|---|")
