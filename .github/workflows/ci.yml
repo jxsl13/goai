@@ -17,6 +17,13 @@ name: ci
 on:
   push:
     branches: [main]
+    # C16 exception 2 / T609: pure-docs pushes start NO runner at all. These
+    # patterns mirror the selector's default doc classification exactly —
+    # root-level markdown and the docs tree; deeper .md files still trigger
+    # (they can be //go:embed'ed, the B50 lesson).
+    paths-ignore:
+      - "*.md"
+      - "docs/**"
   pull_request:
   workflow_dispatch:
 
