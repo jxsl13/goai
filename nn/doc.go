@@ -61,4 +61,6 @@
 // and let the optimizer take one step — repeated until the loss is small. The
 // runnable examples below show exactly that, from a single layer to a full
 // training loop.
+//
+// Further reading: Goodfellow, Bengio & Courville, "Deep Learning" (MIT Press 2016) as the standard textbook; Ruder 2016, "An Overview of Gradient Descent Optimization Algorithms", for the optimizer family tree; Lialin et al. 2023, "Scaling Down to Scale Up", for a survey of the PEFT methods implemented here.
 package nn

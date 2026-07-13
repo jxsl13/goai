@@ -33,4 +33,6 @@
 //
 // The runnable Example functions below fit a line, cluster points, and measure how
 // much variance a principal component captures.
+//
+// Further reading: Bishop, "Pattern Recognition and Machine Learning" (Springer 2006), and Hastie, Tibshirani & Friedman, "The Elements of Statistical Learning" (2nd ed.) — the standard references for the classical methods here.
 package classic

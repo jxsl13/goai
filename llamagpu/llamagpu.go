@@ -1,5 +1,6 @@
 //go:build darwin && cgo
 
+// Further reading: Pope et al. 2022, "Efficiently Scaling Transformer Inference", for the batched-decode systems view; Dao et al. 2022, "FlashAttention", for the memory-aware attention lineage behind the cooperative kernels.
 package llamagpu
 
 import (

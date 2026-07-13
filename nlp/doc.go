@@ -72,4 +72,6 @@
 // The runnable Example functions below show each of these at three levels: a
 // one-line trivial call, a realistic use case, and a piece embedded in a larger
 // decode pipeline.
+//
+// Further reading: Jurafsky & Martin, "Speech and Language Processing" (3rd ed.) for language modeling and decoding foundations; Mielke et al. 2021, "Between Words and Characters", for the tokenization landscape; Holtzman et al. 2019, "The Curious Case of Neural Text Degeneration", for why sampling strategies matter.
 package nlp

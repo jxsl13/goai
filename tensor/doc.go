@@ -23,4 +23,6 @@
 // here; you do math on them with the backend package and take gradients with the
 // autograd package. Start with [New], [FromFloat64], and the runnable examples
 // below.
+//
+// Further reading: Harris et al. 2020, "Array Programming with NumPy" (Nature), for the strided-view model this tensor follows; Golub & Van Loan, "Matrix Computations" (4th ed.), for the numerical foundations.
 package tensor

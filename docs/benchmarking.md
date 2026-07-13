@@ -295,3 +295,8 @@ bandwidth-bound so quant WINS (Q4_K is the fastest 124M decode measured on
 either backend). Weight memory: f32 ~500MB → Q8 ~130MB → Q4_K ~70MB.
 Language-quality numbers need real weights (download-gated).
 
+## Further reading
+
+- Hoefler & Belli, *Scientific Benchmarking of Parallel Computing Systems* (SC '15) — the canonical treatment of run variance, warm-up and honest reporting that this document's rules follow.
+- Georges, Buytaert & Eeckhout, *Statistically Rigorous Java Performance Evaluation* (OOPSLA '07) — why repeated runs with variance beat single numbers, in any language.
+- The Go blog, *Profiling Go Programs* and the `testing` package's benchmark docs — the mechanics behind every number here.

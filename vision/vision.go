@@ -19,6 +19,8 @@
 // final layers average what the filters found and score each class. Build one
 // with NewCNN, train it with the loop shown in the examples, and call Forward
 // to get a score per class for each image.
+//
+// Further reading: LeCun, Bottou, Bengio & Haffner 1998, "Gradient-Based Learning Applied to Document Recognition", the CNN blueprint; Goodfellow et al., "Deep Learning", ch. 9 for convolution foundations.
 package vision
 
 import (

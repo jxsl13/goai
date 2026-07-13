@@ -39,4 +39,6 @@
 //
 // The runnable Example functions below compute returns and advantages by hand and
 // train a DQN agent to solve the chain.
+//
+// Further reading: Sutton & Barto, "Reinforcement Learning: An Introduction" (2nd ed., MIT Press 2018) — the canonical textbook every algorithm in this package cites into.
 package rl

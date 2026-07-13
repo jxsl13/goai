@@ -63,3 +63,10 @@ CPU backend in ~3s), so every number re-derives with the full suite; all tests a
 - **Assert what the theory guarantees, log the rest.** The Mirostat τ=4 and
   reward-hacking cases both "failed" naive assertions exactly where theory says
   they must — the failures were the findings (§T473, §T469).
+
+## Further reading
+
+- Pope et al. 2022, *Efficiently Scaling Transformer Inference* — the systems view (batching, memory, latency ceilings) behind these measurements.
+- Leviathan, Kalman & Matias 2023, *Fast Inference from Transformers via Speculative Decoding* — the lossless acceptance math all speculative paths here implement.
+- Kwon et al. 2023, *Efficient Memory Management for LLM Serving with PagedAttention* — the serving-side counterpart deliberately out of scope here (SPEC ADR-0020).
+- Jurafsky & Martin, *Speech and Language Processing* (3rd ed. draft) — the textbook grounding for decoding and language modeling generally.

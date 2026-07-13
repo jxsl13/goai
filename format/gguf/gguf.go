@@ -7,6 +7,8 @@
 // (tensors as F32), so Read→Write→Read round-trips exactly (§V15). Quantize/Dequantize
 // (§T122) also encode f32↔Q8_0/Q4_0 directly, so quantized weights can be produced,
 // not just read.
+//
+// Further reading: the GGUF specification (ggml-org/ggml docs) and the llama.cpp quantization source — the defining references for this format (file formats have no paper, SPEC V16).
 package gguf
 
 import (

@@ -30,4 +30,6 @@
 // because a GPU is missing. If you want to force a particular choice, you can set
 // your own order with [SetPreference] or pass one backend to a single call. The
 // examples below show both the zero-effort automatic path and manual control.
+//
+// Further reading: Goto & van de Geijn 2008, "Anatomy of High-Performance Matrix Multiplication" (ACM TOMS), for what an optimized GEMM backend is up against; the ggml/llama.cpp source for the quantized-kernel state of the art this library measures itself on.
 package backend

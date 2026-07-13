@@ -16,6 +16,8 @@
 // to F32; I32 and U32 widen exactly to F64; I64 and U64 widen to F64, which is
 // exact up to 2^53 (beyond that the nearest representable is taken — token
 // ids, masks and index tensors are far below this).
+//
+// Further reading: the official safetensors format specification (huggingface/safetensors) — the defining reference for this format (file formats have no paper, SPEC V16).
 package safetensors
 
 import (

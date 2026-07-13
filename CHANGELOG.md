@@ -4,6 +4,12 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T589 — further-reading references everywhere (2026-07-13)
+- Every docs/*.md and every package doc now points the interested reader at the
+  canonical papers, surveys and textbooks for its topic (SPEC C18): from Sutton & Barto
+  for rl to the Baydin AD survey for autograd and the Hoefler & Belli benchmarking
+  methodology for docs/benchmarking.md.
+
 ### T588 — go-test-shaped selector output (2026-07-13)
 - cichange reports and commands now use absolute import paths
   (github.com/jxsl13/goai/nlp) and go-test-style status columns (run/skip lines),

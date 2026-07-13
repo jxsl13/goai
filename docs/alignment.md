@@ -78,3 +78,8 @@ concatenated group instead of a per-rollout loop. Exact collapse onto GRPO(β=0)
 at sequence length 1; a clipped sequence contributes zero gradient to all its
 tokens (the stability property it exists for).
 
+## Further reading
+
+- Ouyang et al. 2022, *Training Language Models to Follow Instructions with Human Feedback* (InstructGPT) — the RLHF pipeline all of these methods descend from.
+- Casper et al. 2023, *Open Problems and Fundamental Limitations of RLHF* — the survey; the reward-hacking case study reproduced here is one of its central failure modes.
+- Rafailov et al. 2023, *Direct Preference Optimization* — the paper that started the reward-model-free family (DPO/IPO/KTO) measured in this document.

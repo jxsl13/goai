@@ -149,3 +149,8 @@ the paper's fidelity claim) → QLoRA-tuned 1.080, with the 4-bit base bit-ident
 after training. The math is the paper's; packed 4-bit storage during training is
 not claimed (the frozen base is materialized dequantized in memory).
 
+## Further reading
+
+- Goodfellow, Bengio & Courville, *Deep Learning* (MIT Press 2016) — the standard textbook behind the optimizer/regularization vocabulary used here.
+- Ruder 2016, *An Overview of Gradient Descent Optimization Algorithms* — the classic survey connecting SGD to the adaptive family.
+- Lialin, Deshpande & Rumshisky 2023, *Scaling Down to Scale Up: A Guide to Parameter-Efficient Fine-Tuning* — the PEFT survey covering the LoRA-family methods measured here.

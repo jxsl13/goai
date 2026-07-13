@@ -31,4 +31,6 @@
 // subtract a little of each gradient from each weight (a "gradient-descent step")
 // and the network gets a bit better. You never write the calculus yourself; the
 // tape does it. See the runnable examples below.
+//
+// Further reading: Baydin et al. 2018, "Automatic Differentiation in Machine Learning: a Survey" (JMLR), and Griewank & Walther, "Evaluating Derivatives" (SIAM 2008), the definitive treatments of reverse-mode AD that this tape implements.
 package autograd
