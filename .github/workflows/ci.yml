@@ -192,7 +192,13 @@ jobs:
           if ! vulkaninfo --summary >/dev/null 2>&1; then
             echo "skip: no loadable Vulkan ICD on this runner — rc=0"; exit 0
           fi
-          go test -tags vulkan -short -count=1 -timeout 15m ./backend/vulkan/
+          if vulkaninfo --summary 2>/dev/null | grep -qi llvmpipe; then
+            export GOAI_VULKAN_SOFTWARE_ICD=1  # software ICD: known-divergent tests self-skip with reasons (T603)
+          fi
+          go test -tags vulkan -short -count=1 -timeout 15m -v ./backend/vulkan/ > vk.log 2>&1
+          rc=$?  # un-piped exit code (V24); the excerpt below is display-only
+          grep -E "^(--- (PASS|FAIL|SKIP)|ok |FAIL)|skipped:" vk.log | head -60 || true
+          exit $rc
 
   # go.mod stays tidy (ollama pattern; zero-dep module today, this guards drift).
   tidy:
