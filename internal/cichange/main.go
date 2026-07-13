@@ -15,8 +15,15 @@
 // (//go:build, //go:embed, //go:generate, //line, cgo preambles), which change
 // compilation despite being comments — classifies as "code".
 //
-// Usage: go run ./internal/cichange <base-rev> <head-rev>
-// Prints "docs-only" or "code" on stdout; exits non-zero only on usage errors.
+// Usage:
+//
+//	go run ./internal/cichange <base-rev> <head-rev>          → "docs-only" | "code"
+//	go run ./internal/cichange -impact <base-rev> <head-rev>  → "none" | "all" | "./pkg ..."
+//
+// The -impact mode (§T579) narrows further: instead of the binary docs/code verdict it
+// prints exactly the packages whose tests are affected by the change — the reverse
+// import closure of the changed packages (see Impact). CI runs `go test` on that list,
+// the full suite on "all", and nothing on "none". Exits non-zero only on usage errors.
 package main
 
 import (
@@ -25,9 +32,19 @@ import (
 )
 
 func main() {
-	if len(os.Args) != 3 {
-		fmt.Fprintln(os.Stderr, "usage: cichange <base-rev> <head-rev>")
+	args := os.Args[1:]
+	impact := false
+	if len(args) > 0 && args[0] == "-impact" {
+		impact = true
+		args = args[1:]
+	}
+	if len(args) != 2 {
+		fmt.Fprintln(os.Stderr, "usage: cichange [-impact] <base-rev> <head-rev>")
 		os.Exit(2)
 	}
-	fmt.Println(Classify(".", os.Args[1], os.Args[2]))
+	if impact {
+		fmt.Println(Impact(".", args[0], args[1]))
+		return
+	}
+	fmt.Println(Classify(".", args[0], args[1]))
 }

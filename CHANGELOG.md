@@ -4,6 +4,13 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T579 — CI impact selector (2026-07-13)
+- internal/cichange gained an -impact mode: a std-lib-only package import graph (tag
+  union, test-import edges tracked separately so they select but never propagate) maps
+  a diff to exactly the packages whose tests are affected — "none", "all", or a sorted
+  package list for `go test`. The govulncheck -scan package insight applied to test
+  selection (SPEC R235).
+
 ### T577 — safetensors FP8 + integer dtypes (2026-07-13)
 - Loading now accepts every dtype of the official safetensors spec and widens it:
   F8_E4M3/F8_E5M2 decode exactly to F32 (verified against torch over all 256 byte

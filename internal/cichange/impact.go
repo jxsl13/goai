@@ -1,0 +1,288 @@
+package main
+
+import (
+	"fmt"
+	"go/parser"
+	"go/token"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+)
+
+// Impact verdicts besides a concrete package list.
+const (
+	// None means no test needs to run (every change is documentation).
+	None = "none"
+	// All means the full suite must run (a change with global or unknowable reach).
+	All = "all"
+)
+
+// Impact computes WHICH packages' tests are affected by the diff between two revisions
+// of the git repository at dir (§T579, the hyper-optimized CI selector). It returns:
+//
+//   - None: every change is documentation — nothing to test;
+//   - All: a change with global or unknowable reach (go.mod, workflows, Makefile,
+//     parse failures, files outside any package, deleted packages) — fail open, §V26;
+//   - otherwise a space-separated, sorted list of package paths relative to the module
+//     root ("." for the root package), ready for `go test`.
+//
+// Method (§R235, govulncheck's -scan package mode applied to test selection): parse
+// EVERY .go file of the head checkout with go/parser in ImportsOnly mode — including
+// _test.go files and files behind build tags (tag-UNION, so register_darwin.go's blank
+// backend imports count on every platform) — into a package import graph. Map each
+// changed file to its owning package (non-Go files — C, assembly, Metal shaders,
+// SPIR-V, testdata, embedded data — attach to the nearest ancestor package). Take the
+// REVERSE transitive closure of the code-changed packages; a package whose change is
+// confined to _test.go files joins the set WITHOUT propagating (test files cannot be
+// imported). Comment-only .go changes are excluded by the same AST comparison the
+// docs-only gate uses. Soundness at package granularity is inherited from the import
+// relation: dynamic interface dispatch requires the implementation to be linked, and
+// linkage requires an import path to it.
+func Impact(dir, base, head string) string {
+	g, err := buildGraph(dir)
+	if err != nil {
+		return All
+	}
+	out, err := gitRun(dir, "diff", "--name-status", "-z", base, head)
+	if err != nil {
+		return All // base unavailable (force push, shallow clone)
+	}
+	fields := strings.Split(strings.TrimRight(string(out), "\x00"), "\x00")
+	if len(fields) == 1 && fields[0] == "" {
+		return None
+	}
+	propagate := map[string]bool{} // packages whose non-test code changed
+	testOnly := map[string]bool{}  // packages with only _test.go changes
+	for i := 0; i < len(fields); {
+		status := fields[i]
+		if status == "" || i+1 >= len(fields) {
+			return All
+		}
+		paths := []string{fields[i+1]}
+		i += 2
+		if status[0] == 'R' || status[0] == 'C' { // renames/copies carry a second path
+			if i >= len(fields) {
+				return All
+			}
+			paths = append(paths, fields[i])
+			i++
+		}
+		for _, p := range paths {
+			switch g.classifyChanged(dir, base, head, status, p, propagate, testOnly) {
+			case impactGlobal:
+				return All
+			}
+		}
+	}
+	affected := g.closure(propagate)
+	for p := range testOnly {
+		affected[p] = true
+	}
+	if len(affected) == 0 {
+		return None
+	}
+	if len(affected) == len(g.pkgs) {
+		return All
+	}
+	list := make([]string, 0, len(affected))
+	for p := range affected {
+		if p == "." {
+			list = append(list, ".")
+		} else {
+			list = append(list, "./"+p)
+		}
+	}
+	sort.Strings(list)
+	return strings.Join(list, " ")
+}
+
+// classifyChanged outcomes.
+const (
+	impactHandled = iota // attributed to a package (or ignorable)
+	impactGlobal         // forces All
+)
+
+// globalPaths force a full run when touched: they steer the build/CI itself.
+func isGlobalPath(p string) bool {
+	return p == "go.mod" || p == "go.sum" || p == "Makefile" ||
+		strings.HasPrefix(p, ".github/")
+}
+
+// classifyChanged attributes one changed file to the propagate/testOnly sets, ignores
+// documentation, and reports impactGlobal for anything with unbounded reach (§V26).
+func (g *moduleGraph) classifyChanged(dir, base, head, status, p string, propagate, testOnly map[string]bool) int {
+	switch {
+	case isDocPath(p):
+		return impactHandled
+	case isGlobalPath(p):
+		return impactGlobal
+	case strings.HasSuffix(p, ".go"):
+		// a .go file's owning package is EXACTLY its directory — no ancestor walk,
+		// else a deleted package would silently attribute to its parent.
+		pkg := filepath.ToSlash(filepath.Dir(p))
+		if !g.pkgs[pkg] {
+			return impactGlobal // package gone at head: importers' breakage unknowable
+		}
+		if status[0] == 'M' && goCodeUnchanged(dir, base, head, p) {
+			return impactHandled // only comments moved
+		}
+		if strings.HasSuffix(p, "_test.go") {
+			testOnly[pkg] = true
+		} else {
+			propagate[pkg] = true
+		}
+		return impactHandled
+	default:
+		// C, assembly, shaders, testdata, embedded data: the nearest ancestor
+		// package owns it (cgo/embed cannot reach outside the package subtree).
+		pkg, ok := g.pkgFor(p)
+		if !ok {
+			return impactGlobal // outside every package: reach unknowable
+		}
+		propagate[pkg] = true
+		return impactHandled
+	}
+}
+
+// moduleGraph is the package import graph of the head checkout: package dirs relative
+// to the module root ("." for the root package) and their module-internal imports.
+// Imports from _test.go files are tracked SEPARATELY: they make the importing package's
+// tests depend on the target, but not its compiled code — so in the reverse closure a
+// test edge selects the importer without propagating further through it.
+type moduleGraph struct {
+	modPath     string
+	pkgs        map[string]bool
+	imports     map[string]map[string]bool // edges from non-test files
+	testImports map[string]map[string]bool // edges from _test.go files
+}
+
+// buildGraph walks the module at root and parses every .go file (ImportsOnly,
+// tag-union: build constraints are deliberately ignored) into the import graph.
+func buildGraph(root string) (*moduleGraph, error) {
+	modBytes, err := os.ReadFile(filepath.Join(root, "go.mod"))
+	if err != nil {
+		return nil, err
+	}
+	modPath := ""
+	for _, line := range strings.Split(string(modBytes), "\n") {
+		if rest, ok := strings.CutPrefix(strings.TrimSpace(line), "module "); ok {
+			modPath = strings.TrimSpace(rest)
+			break
+		}
+	}
+	if modPath == "" {
+		return nil, fmt.Errorf("cichange: no module line in go.mod")
+	}
+	g := &moduleGraph{
+		modPath:     modPath,
+		pkgs:        map[string]bool{},
+		imports:     map[string]map[string]bool{},
+		testImports: map[string]map[string]bool{},
+	}
+	fset := token.NewFileSet()
+	err = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		name := d.Name()
+		if d.IsDir() {
+			if path != root && (name == ".git" || name == "testdata" || strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_")) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(name, ".go") {
+			return nil
+		}
+		rel, err := filepath.Rel(root, filepath.Dir(path))
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		f, err := parser.ParseFile(fset, path, nil, parser.ImportsOnly)
+		if err != nil {
+			return fmt.Errorf("cichange: parse %s: %w", path, err)
+		}
+		g.pkgs[rel] = true
+		edges := g.imports
+		if strings.HasSuffix(name, "_test.go") {
+			edges = g.testImports
+		}
+		if edges[rel] == nil {
+			edges[rel] = map[string]bool{}
+		}
+		for _, imp := range f.Imports {
+			ip := strings.Trim(imp.Path.Value, `"`)
+			if ip == g.modPath {
+				edges[rel]["."] = true
+			} else if rest, ok := strings.CutPrefix(ip, g.modPath+"/"); ok {
+				edges[rel][rest] = true
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return g, nil
+}
+
+// pkgFor maps a changed file path (slash-separated, module-relative) to its owning
+// package: the file's directory if that is a package, else the nearest ancestor
+// package (C sources, shaders, testdata, embedded data live below their package).
+func (g *moduleGraph) pkgFor(file string) (string, bool) {
+	d := filepath.ToSlash(filepath.Dir(file))
+	for {
+		if g.pkgs[d] {
+			return d, true
+		}
+		if d == "." {
+			return "", false
+		}
+		parent := filepath.ToSlash(filepath.Dir(d))
+		if parent == d {
+			return "", false
+		}
+		d = parent
+	}
+}
+
+// closure returns changed plus every package that transitively imports one of them
+// through CODE edges, plus — one hop, non-propagating — every package whose _test.go
+// files import a member of that set (their test binaries link the changed code, their
+// compiled packages do not, so their own importers stay unaffected).
+func (g *moduleGraph) closure(changed map[string]bool) map[string]bool {
+	rev := map[string][]string{}
+	for from, tos := range g.imports {
+		for to := range tos {
+			rev[to] = append(rev[to], from)
+		}
+	}
+	out := map[string]bool{}
+	var stack []string
+	for p := range changed {
+		stack = append(stack, p)
+	}
+	for len(stack) > 0 {
+		p := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if out[p] {
+			continue
+		}
+		out[p] = true
+		stack = append(stack, rev[p]...)
+	}
+	for from, tos := range g.testImports {
+		if out[from] {
+			continue
+		}
+		for to := range tos {
+			if out[to] {
+				out[from] = true
+				break
+			}
+		}
+	}
+	return out
+}
