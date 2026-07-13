@@ -52,6 +52,7 @@ func TestNoMagicBackendNameStrings(t *testing.T) {
 			return nil
 		}
 		rel, _ := filepath.Rel(root, path)
+		rel = filepath.ToSlash(rel) // windows: Rel yields backslashes (§T565)
 		if magicStringExempt(rel) || strings.HasSuffix(path, "nomagicstrings_test.go") {
 			return nil
 		}

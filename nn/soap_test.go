@@ -76,7 +76,9 @@ func TestSOAPOneStepParity(t *testing.T) {
 	for i := range m {
 		for j := range n {
 			want := w0[i*n+j] - lr*upd[i][j]
-			if math.Abs(w.AtF64(i, j)-want) > 1e-9 {
+			// relative tolerance: amd64 and arm64 libm/FMA differ in the last
+			// digit of the eigendecomposition chain (CI finding, §T565)
+			if math.Abs(w.AtF64(i, j)-want) > 1e-8*math.Max(1, math.Abs(want)) {
 				t.Errorf("W[%d,%d] = %.10g, want %.10g", i, j, w.AtF64(i, j), want)
 			}
 		}

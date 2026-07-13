@@ -213,6 +213,7 @@ func TestPublicAPIDocumentedWithExamples(t *testing.T) {
 		}
 		if strings.HasSuffix(path, ".go") {
 			rel, _ := filepath.Rel(root, filepath.Dir(path))
+			rel = filepath.ToSlash(rel) // windows: Rel yields backslashes (§T565)
 			pkgDirs[rel] = true
 		}
 		return nil

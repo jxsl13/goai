@@ -116,7 +116,11 @@ func ExampleDeepNorm() {
 	for i := range 4 {
 		mean += y.AtF64(0, i)
 	}
-	fmt.Printf("%.4f\n", mean/4)
+	mean /= 4
+	if math.Abs(mean) < 1e-12 {
+		mean = 0 // normalize ±0: amd64 libm rounds this to −1e−17, arm64 to +0
+	}
+	fmt.Printf("%.4f\n", mean)
 	// Output:
 	// 0.0000
 }
