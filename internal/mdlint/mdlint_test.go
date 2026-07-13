@@ -71,3 +71,27 @@ func TestLintRules(t *testing.T) {
 }
 
 var _ = strings.TrimSpace // silence unused-import drift if rules change
+
+// §T615: the go-block rules — unformatted snippets are findings, -w fixes them,
+// and non-Go content in a go fence is flagged.
+func TestGoBlockRules(t *testing.T) {
+	bad := "# t\n\n```go\nx:=1\nif x==1 { y := 2; _ = y }\n```\n"
+	fs, _ := lintGoBlocks("x.md", strings.Split(bad, "\n"), false)
+	if len(fs) != 1 || fs[0].rule != "go-block-fmt" {
+		t.Fatalf("want one go-block-fmt finding, got %v", fs)
+	}
+	_, fixed := lintGoBlocks("x.md", strings.Split(bad, "\n"), true)
+	joined := strings.Join(fixed, "\n")
+	if !strings.Contains(joined, "x := 1") {
+		t.Errorf("rewrite did not format: %q", joined)
+	}
+	fs2, _ := lintGoBlocks("x.md", fixed, false)
+	if len(fs2) != 0 {
+		t.Errorf("formatted block still flagged: %v", fs2)
+	}
+	garbage := "```go\nthis is not go at all {{{\n```\n"
+	fs3, _ := lintGoBlocks("x.md", strings.Split(garbage, "\n"), false)
+	if len(fs3) != 1 || fs3[0].rule != "go-block-parse" {
+		t.Errorf("want go-block-parse, got %v", fs3)
+	}
+}

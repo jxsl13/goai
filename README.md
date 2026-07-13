@@ -18,15 +18,18 @@ on Linux, macOS and Windows.
 
 ## Quickstart
 
-Load a quantized llama.cpp model and generate text:
+Load a quantized llama.cpp model and generate text — in plain terms: open a
+ready-made model file, ask it a question, print its answer:
 
 ```go
 f, err := gguf.ReadFile("model.gguf") // any llama.cpp GGUF: K-quants, i-quants, MXFP4
-if err != nil { log.Fatal(err) }
+if err != nil {
+	log.Fatal(err)
+}
 
 model, err := nlp.LlamaFromGGUF(f.Metadata, f.Tensors)
-tok, err   := nlp.BPEFromGGUF(f.Metadata)
-tpl, err   := nlp.ChatTemplateFromGGUF(f.Metadata) // chatml/llama3/gemma/mistral/phi3
+tok, err := nlp.BPEFromGGUF(f.Metadata)
+tpl, err := nlp.ChatTemplateFromGGUF(f.Metadata) // chatml/llama3/gemma/mistral/phi3
 
 prompt, _ := tpl.Render([]nlp.ChatMessage{
 	{Role: "user", Content: "Why is the sky blue?"},
@@ -38,7 +41,9 @@ out, err := model.Generate(tok.Encode(prompt), 256, sampler)
 fmt.Println(tok.Decode(out))
 ```
 
-Force the model to emit JSON that conforms to a schema (structured outputs):
+Force the model to emit JSON that conforms to a schema (structured outputs) —
+in plain terms: instead of hoping the model answers in the right format, make
+any other output literally impossible:
 
 ```go
 grammar, err := nlp.JSONSchemaToGrammar([]byte(`{
@@ -47,13 +52,14 @@ grammar, err := nlp.JSONSchemaToGrammar([]byte(`{
 	"required": ["city", "temp_c"]
 }`))
 // vocab[i] is token i's text, eosID the end token — both from the GGUF metadata.
-guide, err := nlp.NewGrammarGuide(grammar, vocab) // pushdown automaton over the vocab
-guided := guide.Sampler(sampler, eosID)           // masks every off-grammar token
+guide, err := nlp.NewGrammarGuide(grammar, vocab)          // pushdown automaton over the vocab
+guided := guide.Sampler(sampler, eosID)                    // masks every off-grammar token
 out, err = model.Generate(tok.Encode(prompt), 256, guided) // guaranteed parseable JSON
 ```
 
 Train a model — here the Vision Transformer on a toy task — with the standard
-tape/optimizer loop:
+tape/optimizer loop. In plain terms: show the model labeled examples, measure
+how wrong it is, nudge every parameter downhill, repeat:
 
 ```go
 model, err := vision.NewViT(1, 8, 3 /*classes*/, seed, vision.WithViTDtype(tensor.F64))
@@ -61,10 +67,14 @@ opt := nn.NewAdamW(model.Params(), 0.01, 0)
 for step := 0; step < 150; step++ {
 	tape := autograd.NewTape()
 	logits, err := model.Forward(tape.Context(), images) // [batch, classes]
-	loss, err   := nn.CrossEntropy(tape.Context(), logits, targets)
-	if err := tape.Backward(loss); err != nil { log.Fatal(err) }
+	loss, err := nn.CrossEntropy(tape.Context(), logits, targets)
+	if err := tape.Backward(loss); err != nil {
+		log.Fatal(err)
+	}
 	clipped, _ := nn.ClipGradNorm(model.Params(), tape.Grad, 1.0)
-	if err := opt.Step(clipped); err != nil { log.Fatal(err) }
+	if err := opt.Step(clipped); err != nil {
+		log.Fatal(err)
+	}
 }
 ```
 

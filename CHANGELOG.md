@@ -4,6 +4,11 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T615/T616 — gofmt'ed docs code and plainer quickstarts (2026-07-14)
+- Go code blocks inside markdown are now gofmt-checked by the linter (with a -w
+  auto-fix mode) and the pre-commit hook; the README quickstarts and four ADR blocks
+  were reformatted, and each quickstart now says in plain words what it achieves.
+
 ### T612 — dependency-free markdown linter (2026-07-14)
 - internal/mdlint checks every committed markdown file for the mistakes that break
   GitHub rendering (unclosed fences, ragged tables, swallowed `<token>` pseudo-tags,

@@ -36,12 +36,18 @@ type finding struct {
 }
 
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: mdlint ./... | <dir|file.md ...>")
+	args := os.Args[1:]
+	rewrite := false
+	if len(args) > 0 && args[0] == "-w" {
+		rewrite = true
+		args = args[1:]
+	}
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "usage: mdlint [-w] ./... | <dir|file.md ...>")
 		os.Exit(2)
 	}
 	var files []string
-	for _, arg := range os.Args[1:] {
+	for _, arg := range args {
 		root := arg
 		if arg == "./..." {
 			root = "."
@@ -83,6 +89,19 @@ func main() {
 			os.Exit(2)
 		}
 		all = append(all, Lint(f, string(raw))...)
+		lines := strings.Split(string(raw), "\n")
+		gf, fixed := lintGoBlocks(f, lines, rewrite)
+		all = append(all, gf...)
+		if rewrite {
+			joined := strings.Join(fixed, "\n")
+			if joined != string(raw) {
+				if err := os.WriteFile(f, []byte(joined), 0o644); err != nil {
+					fmt.Fprintln(os.Stderr, err)
+					os.Exit(2)
+				}
+				fmt.Println("reformatted:", f)
+			}
+		}
 	}
 	for _, fd := range all {
 		fmt.Printf("%s:%d: [%s] %s\n", fd.file, fd.line, fd.rule, fd.msg)

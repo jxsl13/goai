@@ -10,7 +10,7 @@ autograd tape, and into its VJP. Since ADR-0003 `Attrs` was `map[string]any` wit
 typed accessors:
 
 ```go
-scale := attrs.Float("attn_scale", 1)              // read
+scale := attrs.Float("attn_scale", 1)                       // read
 Execute(ctx, OpMHA, ins, Attrs{"heads": 2, "causal": true}) // write
 ```
 
@@ -36,9 +36,15 @@ where ops genuinely share a parameter set):
 type Attrs interface{ opAttrs() } // sealed by the unexported marker method
 
 type AttnAttrs struct {
-    Heads   int; KVHeads int; Causal bool; Scale float64; ALiBi bool; Window, Block int
+	Heads         int
+	KVHeads       int
+	Causal        bool
+	Scale         float64
+	ALiBi         bool
+	Window, Block int
 }
-func (AttnAttrs) opAttrs() {}
+
+func (AttnAttrs) opAttrs()                  {}
 func (a AttnAttrs) WithDefaults() AttnAttrs { /* Heads→1, KVHeads→Heads, Scale→1 */ }
 ```
 

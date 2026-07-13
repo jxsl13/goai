@@ -20,12 +20,13 @@ constant per backend and thread it through the whole selection surface:
 
 ```go
 type Name string
+
 const (
-    CPU    Name = "cpu"
-    Ref    Name = "ref"    // the constant; Reference() still returns the backend
-    Metal  Name = "metal"
-    CUDA   Name = "cuda"
-    Vulkan Name = "vulkan"
+	CPU    Name = "cpu"
+	Ref    Name = "ref" // the constant; Reference() still returns the backend
+	Metal  Name = "metal"
+	CUDA   Name = "cuda"
+	Vulkan Name = "vulkan"
 )
 ```
 

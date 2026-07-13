@@ -28,7 +28,7 @@ Add an **optional capability interface** in `backend`, discovered by type-assert
 
 ```go
 type QuantMatMuler interface {
-    QMatMul(x *tensor.Tensor, weight []byte, quantType uint32, n, k int) (*tensor.Tensor, error)
+	QMatMul(x *tensor.Tensor, weight []byte, quantType uint32, n, k int) (*tensor.Tensor, error)
 }
 ```
 
