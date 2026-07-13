@@ -78,3 +78,25 @@ func assertCloseUlps(t *testing.T, got, want *tensor.Tensor, label string) {
 		}
 	}
 }
+
+// §T598/§V9: the parallel softmax matches ref within ulps across serial and
+// parallel shapes and both dtypes (same standard and reasoning as the norms).
+func TestSoftmaxKernelMatchesRefWithinUlps(t *testing.T) {
+	for _, dt := range []tensor.Dtype{tensor.F32, tensor.F64} {
+		for _, sh := range []tensor.Shape{{3, 8}, {64, 512}, {257, 1024}} {
+			x := tensor.Randn(dt, 9, sh)
+			ctx := backend.NewContext()
+			cpuB := cpuBackend(t)
+			refB, _ := backend.Get(backend.Ref)
+			got, err := backend.Execute(ctx.WithBackend(cpuB), backend.OpSoftmax, []*tensor.Tensor{x}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want, err := backend.Execute(ctx.WithBackend(refB), backend.OpSoftmax, []*tensor.Tensor{x}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertCloseUlps(t, got[0], want[0], fmt.Sprintf("softmax/%s/%v", dt, sh))
+		}
+	}
+}

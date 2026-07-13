@@ -4,6 +4,11 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T598 — parallel CPU softmax (2026-07-14)
+- Softmax now runs as a typed, row-parallel CPU kernel: 9.7x faster on the benchmark
+  shape (it previously fell through to the reference implementation), +2.9% on the
+  end-to-end CPU GPT forward.
+
 ### T597 — CPU conv2d output-path fix (2026-07-13)
 - Profiling showed the conv's output scatter ran serially through per-element
   interface calls; it is now a typed, row-parallel write with the bias hoisted.
