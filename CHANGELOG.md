@@ -4,6 +4,12 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T573 — DRY sequence-repetition sampler (2026-07-13)
+- nlp.Sampler gained the DRY penalty (WithDRY plus base/allowed-length/range/breaker
+  options): tokens that would extend a suffix already seen earlier are penalized
+  exponentially in the match length, catching phrase-level loops that per-token
+  penalties miss. Ollama does not expose DRY; llama.cpp does — now GoAI does too.
+
 ### T587 — transparent test runner (2026-07-13)
 - cichange -run makes the CI selection fully auditable and then executes it: every
   changed file is logged with the rule that classified it, every selected and skipped

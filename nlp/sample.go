@@ -39,6 +39,14 @@ type Sampler struct {
 	PresencePenalty float64 // subtract PresencePenalty once if the token appears in the window at all; 0 = off
 	PenaltyLastN    int     // history window the penalties look at; 0 = the entire history
 
+	// DRY sequence-repetition penalty (p-e-w 2024, see dry.go; applied by
+	// SampleWithHistory). Off unless DRYMultiplier > 0.
+	DRYMultiplier float64 // penalty strength; 0 = off, typical 0.8
+	DRYBase       float64 // exponential growth per extra matched token; ≤0 → 1.75
+	DRYAllowedLen int     // longest repetition left unpenalized; ≤0 → 2
+	DRYRange      int     // history window DRY scans; 0 = the entire history
+	DRYBreakers   []int   // token ids matches may not extend across (e.g. newline)
+
 	rng *rand.Rand
 }
 
@@ -111,6 +119,31 @@ func WithPresencePenalty(p float64) SamplerOption { return func(s *Sampler) { s.
 // WithPenaltyWindow limits the repetition penalties to the last n history tokens
 // (llama.cpp's repeat_last_n). 0 (the default) penalizes over the entire history.
 func WithPenaltyWindow(n int) SamplerOption { return func(s *Sampler) { s.PenaltyLastN = n } }
+
+// WithDRY enables the DRY sequence-repetition penalty (p-e-w 2024, see dry.go) with
+// the given strength; 0 disables it, the reference default is 0.8. Tokens that would
+// extend a suffix already seen earlier are penalized by multiplier·base^(k−allowed),
+// exponentially harder the longer the would-be repetition k.
+func WithDRY(multiplier float64) SamplerOption {
+	return func(s *Sampler) { s.DRYMultiplier = multiplier }
+}
+
+// WithDRYBase sets DRY's exponential growth per extra matched token (default 1.75).
+func WithDRYBase(b float64) SamplerOption { return func(s *Sampler) { s.DRYBase = b } }
+
+// WithDRYAllowedLength sets the longest repetition DRY leaves unpenalized (default 2)
+// — short natural collocations stay free.
+func WithDRYAllowedLength(n int) SamplerOption { return func(s *Sampler) { s.DRYAllowedLen = n } }
+
+// WithDRYRange limits how far back DRY scans the history (0 = the entire history).
+func WithDRYRange(n int) SamplerOption { return func(s *Sampler) { s.DRYRange = n } }
+
+// WithDRYBreakers sets the token ids DRY matches may not extend across — the
+// token-level analogue of the reference implementation's "\n"/":"/quote sequence
+// breakers; pass the ids those strings tokenize to in the vocabulary in use.
+func WithDRYBreakers(ids ...int) SamplerOption {
+	return func(s *Sampler) { s.DRYBreakers = append([]int(nil), ids...) }
+}
 
 // NewSampler builds a deterministic sampler seeded by seed. Defaults: temperature
 // 1, no top-k / top-p / min-p — configure with the options, e.g.
@@ -186,7 +219,14 @@ func (s *Sampler) penalize(logits []float64, history []int) []float64 {
 // apply penalties: their lossless accept/reject math compares raw model
 // distributions.
 func (s *Sampler) SampleWithHistory(logits []float64, history []int) int {
-	return s.Sample(s.penalize(logits, history))
+	out := s.penalize(logits, history)
+	if s.DRYMultiplier > 0 && len(out) > 0 {
+		if &out[0] == &logits[0] { // penalize passed the original through: copy
+			out = append([]float64(nil), logits...)
+		}
+		s.applyDRY(out, history) // DRY after the token-level penalties (§T573)
+	}
+	return s.Sample(out)
 }
 
 // Dist returns the probability distribution this sampler draws from for the given
