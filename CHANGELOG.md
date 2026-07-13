@@ -4,6 +4,11 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T610 — typed parallel FlashAttention and Retention (2026-07-14)
+- The last two unaccelerated CPU ops now run as typed parallel kernels: FlashAttention
+  29.6x, RetNet retention 8.4x forward / 12.7x backward — every row of the benchmark
+  matrix now has an optimized CPU entry.
+
 ### T607 — llama.cpp head-to-head on identical weights (2026-07-14)
 - A new export tool writes the decode-benchmark model as a llama.cpp-loadable GGUF
   (tokenizer section included) and llama-bench ran it: our batched prefill is within

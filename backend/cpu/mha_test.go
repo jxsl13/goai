@@ -99,3 +99,71 @@ func BenchmarkMHA512(b *testing.B) {
 		})
 	}
 }
+
+// §T610/§V9: FlashAttn and Retention fwd/bwd match ref within ulps across
+// dtypes, causal/GQA/block variants and serial+parallel sizes.
+func TestFlashAttnRetentionMatchRefWithinUlps(t *testing.T) {
+	cpuB := cpuBackend(t)
+	refB, _ := backend.Get(backend.Ref)
+	ctx := backend.NewContext()
+	for _, dt := range []tensor.Dtype{tensor.F32, tensor.F64} {
+		for _, tc := range []struct {
+			name string
+			at   backend.AttnAttrs
+			seq  int
+		}{
+			{"flash-causal", backend.AttnAttrs{Heads: 4, Causal: true, Block: 8}, 24},
+			{"flash-full", backend.AttnAttrs{Heads: 2, Block: 0}, 16},
+			{"flash-gqa", backend.AttnAttrs{Heads: 4, KVHeads: 2, Causal: true, Block: 4}, 96},
+		} {
+			dm := 32
+			if tc.seq > 32 {
+				dm = 128
+			}
+			kvHeads := tc.at.KVHeads
+			if kvHeads == 0 {
+				kvHeads = tc.at.Heads
+			}
+			dkv := kvHeads * (dm / tc.at.Heads)
+			q := tensor.Randn(dt, 1, tensor.Shape{tc.seq, dm})
+			k := tensor.Randn(dt, 2, tensor.Shape{tc.seq, dkv})
+			v := tensor.Randn(dt, 3, tensor.Shape{tc.seq, dkv})
+			got, err := backend.Execute(ctx.WithBackend(cpuB), backend.OpFlashAttn, []*tensor.Tensor{q, k, v}, tc.at)
+			if err != nil {
+				t.Fatalf("%s cpu: %v", tc.name, err)
+			}
+			want, err := backend.Execute(ctx.WithBackend(refB), backend.OpFlashAttn, []*tensor.Tensor{q, k, v}, tc.at)
+			if err != nil {
+				t.Fatalf("%s ref: %v", tc.name, err)
+			}
+			assertCloseUlps(t, got[0], want[0], "flashattn/"+tc.name+"/"+dt.String())
+		}
+		for _, sz := range []struct{ l, dk, dv int }{{12, 8, 6}, {96, 32, 48}} {
+			q := tensor.Randn(dt, 4, tensor.Shape{sz.l, sz.dk})
+			k := tensor.Randn(dt, 5, tensor.Shape{sz.l, sz.dk})
+			v := tensor.Randn(dt, 6, tensor.Shape{sz.l, sz.dv})
+			g := tensor.Randn(dt, 7, tensor.Shape{sz.l, sz.dv})
+			at := backend.RetentionAttrs{Gamma: 0.9375}
+			got, err := backend.Execute(ctx.WithBackend(cpuB), backend.OpRetention, []*tensor.Tensor{q, k, v}, at)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want, err := backend.Execute(ctx.WithBackend(refB), backend.OpRetention, []*tensor.Tensor{q, k, v}, at)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertCloseUlps(t, got[0], want[0], fmt.Sprintf("retention/%v/%s", sz, dt))
+			gotB, err := backend.Execute(ctx.WithBackend(cpuB), backend.OpRetentionBackward, []*tensor.Tensor{q, k, v, g}, at)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantB, err := backend.Execute(ctx.WithBackend(refB), backend.OpRetentionBackward, []*tensor.Tensor{q, k, v, g}, at)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for o, lbl := range []string{"dQ", "dK", "dV"} {
+				assertCloseUlps(t, gotB[o], wantB[o], fmt.Sprintf("retention-bwd/%v/%s/%s", sz, dt, lbl))
+			}
+		}
+	}
+}
