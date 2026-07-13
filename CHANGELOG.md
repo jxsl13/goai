@@ -4,6 +4,13 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T603 — cross-driver shader race fixed (2026-07-14)
+- The new lavapipe CI lane exposed a write-after-read hazard in the cooperative
+  reductions of the causal-softmax and cross-entropy compute shaders (a missing
+  barrier after reading the reduced maximum). Apple GPUs masked it; Mesa's staggered
+  software threads did not. Both shaders now barrier correctly and the
+  driver-specific test skips are gone.
+
 ### T604 — full OS x capability CI matrix (2026-07-14)
 - CI now spans {ubuntu, macos, windows} x {pure-go, cgo, vulkan, simd}: the vulkan
   suite executes on MoltenVK (macOS) and lavapipe (linux) and compiles against the

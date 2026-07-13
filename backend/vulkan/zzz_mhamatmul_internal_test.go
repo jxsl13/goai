@@ -4,7 +4,6 @@ package vulkan
 
 import (
 	"math"
-	"os"
 	"testing"
 	"time"
 )
@@ -13,11 +12,6 @@ import (
 // causal softmax → strided matmul S·V, all in one Recorder command buffer. Cross-validated against a
 // host causal softmax-attention reference, then A/B'd against the flash kernel at 512×8×64.
 func TestVulkanMHAMatmulCrossReference(t *testing.T) {
-	if os.Getenv("GOAI_VULKAN_SOFTWARE_ICD") != "" {
-		// Known value divergence on software ICDs (Mesa lavapipe), found by the
-		// §T600 CI lane; green on MoltenVK. Root-cause investigation: SPEC §T603.
-		t.Skip("skipped: known divergence on software Vulkan ICDs (lavapipe) — tracked as SPEC T603")
-	}
 	if !Available() {
 		t.Skip("vulkan: no compute-capable device (§V4)")
 	}

@@ -19,6 +19,7 @@ void main() {
     red[lane] = m; barrier();
     for (uint s = WG / 2u; s > 0u; s >>= 1u) { if (lane < s) red[lane] = max(red[lane], red[lane + s]); barrier(); }
     m = red[0];
+    barrier(); // WAR: red[0] must be read by ALL lanes before red is rewritten (§T603 — exposed by lavapipe)
     float sum = 0.0;
     for (int j = int(lane); j < p.c; j += WG) sum += exp(z[base + j] - m);
     red[lane] = sum; barrier();

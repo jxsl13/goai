@@ -30,6 +30,7 @@ void main() {
         barrier();
     }
     m = red[0];
+    barrier(); // WAR: red[0] must be read by ALL lanes before red is rewritten (§T603 — exposed by lavapipe)
 
     // exp and sum over valid columns
     float sum = 0.0;
