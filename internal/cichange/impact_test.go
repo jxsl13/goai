@@ -275,3 +275,29 @@ func TestImpactDependencyEdgeCases(t *testing.T) {
 		t.Errorf("removed dep: got %q, want ./a ./b ./c", got)
 	}
 }
+
+// §T600: cgo/native changes are NAMED in the decision trace — CI lanes key off it.
+func TestImpactCgoClassificationNamed(t *testing.T) {
+	base := map[string]string{}
+	for k, v := range modBase {
+		base[k] = v
+	}
+	base["c/bridge.m"] = "// objc\n"
+	base["c/glue.go"] = "package c\n\n// #include <stdio.h>\nimport \"C\"\n\nfunc G() { C.puts(nil) }\n"
+	dir, baseRev, headRev := scratchRepo(t, base, map[string]string{
+		"c/bridge.m": "// objc v2\n",
+		"c/glue.go":  "package c\n\n// #include <stdio.h>\nimport \"C\"\n\nfunc G() { C.puts(nil) }\n\nvar X = 1\n",
+	})
+	g, err := buildGraph(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, trace := g.changedSetsTraced(defaultConfig(dir), dir, baseRev, headRev)
+	joined := strings.Join(trace, "\n")
+	if !strings.Contains(joined, "cgo/native asset → c (cgo-variant lanes affected)") {
+		t.Errorf("native asset not named:\n%s", joined)
+	}
+	if !strings.Contains(joined, "cgo glue code → c (cgo-variant lanes affected)") {
+		t.Errorf("cgo glue .go not named:\n%s", joined)
+	}
+}

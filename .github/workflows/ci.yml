@@ -157,8 +157,10 @@ jobs:
           BASE="${{ github.event.pull_request.base.sha || github.event.before }}"
           go run ./internal/cichange -run "$BASE" HEAD -- -short -count=1 -timeout 20m
 
-  # Tag-gated backends must at least COMPILE on every push so their code cannot
-  # rot (vulkan executes on dev boxes with MoltenVK; §B40 discipline stays local).
+  # The vulkan-tagged backend COMPILES on every code push and, when the change
+  # touches it (§T600: cichange names cgo/native-asset changes explicitly), its
+  # tests EXECUTE against Mesa's software Vulkan (lavapipe). A capability probe
+  # runs first; without a loadable ICD the lane skips transparently with rc=0.
   build-vulkan-tag:
     needs: changes
     if: needs.changes.outputs.code == 'true'
@@ -166,14 +168,31 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # the selector decides whether the vulkan tests run (§T600)
       - uses: actions/setup-go@v6
         with:
           go-version: "1.26.x"
           cache: false
-      - name: install vulkan headers
-        run: sudo apt-get update && sudo apt-get install -y libvulkan-dev
+      - name: install vulkan headers + software ICD (lavapipe)
+        run: sudo apt-get update && sudo apt-get install -y libvulkan-dev vulkan-tools mesa-vulkan-drivers
       - name: build
         run: go build -tags vulkan ./...
+      - name: capability probe (what does this runner offer?)
+        run: |
+          vulkaninfo --summary 2>/dev/null | head -25 || echo "probe - no loadable Vulkan ICD on this runner"
+      - name: test (only when the change touches the vulkan backend, §T600)
+        run: |
+          BASE="${{ github.event.pull_request.base.sha || github.event.before }}"
+          AFFECTED=$(go run ./internal/cichange -impact "$BASE" HEAD || echo all)
+          case "$AFFECTED" in
+            all|*backend/vulkan*) ;;
+            *) echo "skip: change does not touch backend/vulkan (affected: $AFFECTED) — rc=0"; exit 0;;
+          esac
+          if ! vulkaninfo --summary >/dev/null 2>&1; then
+            echo "skip: no loadable Vulkan ICD on this runner — rc=0"; exit 0
+          fi
+          go test -tags vulkan -short -count=1 -timeout 15m ./backend/vulkan/
 
   # go.mod stays tidy (ollama pattern; zero-dep module today, this guards drift).
   tidy:

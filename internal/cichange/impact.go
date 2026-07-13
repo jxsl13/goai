@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"go/parser"
 	"go/token"
@@ -64,6 +65,27 @@ func Impact(cfg *config, dir, base, head string) string {
 	}
 	sort.Strings(list)
 	return strings.Join(list, " ")
+}
+
+// isNativeAsset reports C/ObjC/assembly/shader sources — the native half of the
+// cgo or GPU glue (§T600): a change here alters compiled behavior on the
+// cgo-variant lanes even though no .go file moved.
+func isNativeAsset(p string) bool {
+	for _, ext := range []string{".c", ".h", ".m", ".mm", ".metal", ".comp", ".spv", ".s", ".S", ".cu"} {
+		if strings.HasSuffix(p, ext) {
+			return true
+		}
+	}
+	return false
+}
+
+// fileUsesCgo reports whether the head revision of a .go file imports "C".
+func fileUsesCgo(dir, head, p string) bool {
+	src, err := gitRun(dir, "show", head+":"+p)
+	if err != nil {
+		return false
+	}
+	return bytes.Contains(src, []byte("\"C\"")) && bytes.Contains(src, []byte("import"))
 }
 
 // changedSets attributes every file of the base..head diff: propagate = packages whose
@@ -213,6 +235,9 @@ func (g *moduleGraph) classifyChanged(cfg *config, dir, base, head, status, p st
 			return impactHandled, "test-only code → " + pkg + " (test files are not importable: no propagation)"
 		}
 		propagate[pkg] = true
+		if fileUsesCgo(dir, head, p) { // §T600: name the cgo nature so CI lanes can react
+			return impactHandled, "cgo glue code → " + pkg + " (cgo-variant lanes affected)"
+		}
 		return impactHandled, "code → " + pkg
 	default:
 		// C, assembly, shaders, testdata, embedded data: the nearest ancestor
@@ -222,6 +247,9 @@ func (g *moduleGraph) classifyChanged(cfg *config, dir, base, head, status, p st
 			return impactGlobal, "FULL RERUN (outside every package: reach unknowable)"
 		}
 		propagate[pkg] = true
+		if isNativeAsset(p) { // §T600: C/ObjC/shader sources = the cgo/GPU glue itself
+			return impactHandled, "cgo/native asset → " + pkg + " (cgo-variant lanes affected)"
+		}
 		return impactHandled, "package asset → " + pkg
 	}
 }

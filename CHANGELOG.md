@@ -4,6 +4,12 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T600 — cgo-aware selection and a real Vulkan test lane (2026-07-14)
+- The selector's decision trace now names cgo changes explicitly (native assets and
+  .go files importing "C"), and the CI vulkan lane executes the backend's tests against
+  Mesa's software Vulkan when the change touches it — with a capability probe printed
+  first and transparent rc=0 skips otherwise.
+
 ### T599 — typed parallel CPU attention (2026-07-14)
 - Fused multi-head attention forward/backward now run as typed, parallel CPU kernels
   (backward parallelized over KV-head groups — disjoint output regions, no atomics).
