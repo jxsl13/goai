@@ -3,7 +3,8 @@
 package vulkan
 
 /*
-#cgo pkg-config: vulkan
+#cgo !windows pkg-config: vulkan
+#cgo windows LDFLAGS: -lvulkan-1
 #include "vk_bridge.h"
 */
 import "C"
