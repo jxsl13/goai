@@ -104,9 +104,50 @@ const (
 )
 
 // globalPaths force a full run when touched: they steer the build/CI itself.
+// go.mod is NOT here — it gets precise dependency-diff handling (§T582); go.sum
+// stays global (a sum change without a matching go.mod change is anomalous).
 func isGlobalPath(p string) bool {
-	return p == "go.mod" || p == "go.sum" || p == "Makefile" ||
+	return p == "go.sum" || p == "Makefile" ||
 		strings.HasPrefix(p, ".github/")
+}
+
+// depChangeSeeds handles a go.mod change (§T582): if only require VERSIONS changed or
+// modules were added, the packages importing those modules seed the closure — code
+// importers propagate, test-only importers are selected without propagating. Any other
+// difference (module line, go/toolchain, replace, exclude, malformed) → global.
+func (g *moduleGraph) depChangeSeeds(dir, base, head string, propagate, testOnly map[string]bool) int {
+	baseSrc, err := gitRun(dir, "show", base+":go.mod")
+	if err != nil {
+		return impactGlobal
+	}
+	headSrc, err := gitRun(dir, "show", head+":go.mod")
+	if err != nil {
+		return impactGlobal
+	}
+	baseReq, baseRest := parseGoMod(string(baseSrc))
+	headReq, headRest := parseGoMod(string(headSrc))
+	if strings.Join(baseRest, "\n") != strings.Join(headRest, "\n") {
+		return impactGlobal // go directive / replace / exclude / module line changed
+	}
+	for _, mod := range changedModules(baseReq, headReq) {
+		for pkg, ext := range g.extImports {
+			for ip := range ext {
+				if modOwns(mod, ip) {
+					propagate[pkg] = true
+					break
+				}
+			}
+		}
+		for pkg, ext := range g.extTestImports {
+			for ip := range ext {
+				if modOwns(mod, ip) {
+					testOnly[pkg] = true
+					break
+				}
+			}
+		}
+	}
+	return impactHandled
 }
 
 // classifyChanged attributes one changed file to the propagate/testOnly sets, ignores
@@ -115,6 +156,8 @@ func (g *moduleGraph) classifyChanged(dir, base, head, status, p string, propaga
 	switch {
 	case isDocPath(p):
 		return impactHandled
+	case p == "go.mod":
+		return g.depChangeSeeds(dir, base, head, propagate, testOnly)
 	case isGlobalPath(p):
 		return impactGlobal
 	case strings.HasSuffix(p, ".go"):
@@ -151,10 +194,12 @@ func (g *moduleGraph) classifyChanged(dir, base, head, status, p string, propaga
 // tests depend on the target, but not its compiled code — so in the reverse closure a
 // test edge selects the importer without propagating further through it.
 type moduleGraph struct {
-	modPath     string
-	pkgs        map[string]bool
-	imports     map[string]map[string]bool // edges from non-test files
-	testImports map[string]map[string]bool // edges from _test.go files
+	modPath        string
+	pkgs           map[string]bool
+	imports        map[string]map[string]bool // edges from non-test files
+	testImports    map[string]map[string]bool // edges from _test.go files
+	extImports     map[string]map[string]bool // pkg → external import paths (non-test)
+	extTestImports map[string]map[string]bool // pkg → external import paths (_test.go)
 }
 
 // buildGraph walks the module at root and parses every .go file (ImportsOnly,
@@ -175,10 +220,12 @@ func buildGraph(root string) (*moduleGraph, error) {
 		return nil, fmt.Errorf("cichange: no module line in go.mod")
 	}
 	g := &moduleGraph{
-		modPath:     modPath,
-		pkgs:        map[string]bool{},
-		imports:     map[string]map[string]bool{},
-		testImports: map[string]map[string]bool{},
+		modPath:        modPath,
+		pkgs:           map[string]bool{},
+		imports:        map[string]map[string]bool{},
+		testImports:    map[string]map[string]bool{},
+		extImports:     map[string]map[string]bool{},
+		extTestImports: map[string]map[string]bool{},
 	}
 	fset := token.NewFileSet()
 	err = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
@@ -205,12 +252,15 @@ func buildGraph(root string) (*moduleGraph, error) {
 			return fmt.Errorf("cichange: parse %s: %w", path, err)
 		}
 		g.pkgs[rel] = true
-		edges := g.imports
+		edges, ext := g.imports, g.extImports
 		if strings.HasSuffix(name, "_test.go") {
-			edges = g.testImports
+			edges, ext = g.testImports, g.extTestImports
 		}
 		if edges[rel] == nil {
 			edges[rel] = map[string]bool{}
+		}
+		if ext[rel] == nil {
+			ext[rel] = map[string]bool{}
 		}
 		for _, imp := range f.Imports {
 			ip := strings.Trim(imp.Path.Value, `"`)
@@ -218,6 +268,8 @@ func buildGraph(root string) (*moduleGraph, error) {
 				edges[rel]["."] = true
 			} else if rest, ok := strings.CutPrefix(ip, g.modPath+"/"); ok {
 				edges[rel][rest] = true
+			} else if strings.Contains(strings.SplitN(ip, "/", 2)[0], ".") {
+				ext[rel][ip] = true // dotted first element = external module, not std
 			}
 		}
 		return nil

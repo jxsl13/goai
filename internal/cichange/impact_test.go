@@ -223,3 +223,55 @@ func TestImpactClosureMonotonic(t *testing.T) {
 		}
 	}
 }
+
+// depBase extends modBase with an external dependency: c imports dep.example/lib
+// (code), a imports it from a _test.go only.
+func depBase() map[string]string {
+	base := map[string]string{}
+	for k, v := range modBase {
+		base[k] = v
+	}
+	base["go.mod"] = "module example.com/m\n\ngo 1.26\n\nrequire dep.example/lib v1.0.0\n"
+	base["c/c.go"] = "package c\n\nimport _ \"dep.example/lib/sub\"\n"
+	base["a/a_test.go"] = "package a\n\nimport _ \"dep.example/lib\"\n"
+	return base
+}
+
+// §V16 tier-1 (§T582): a dependency VERSION BUMP selects exactly the importers of that
+// module — code importers with their closure, test-only importers without propagation.
+func TestImpactDependencyVersionBump(t *testing.T) {
+	dir, baseRev, headRev := scratchRepo(t, depBase(), map[string]string{
+		"go.mod": "module example.com/m\n\ngo 1.26\n\nrequire dep.example/lib v1.1.0\n",
+	})
+	// c imports the dep (code) → c + b (test edge on c); a's _test.go imports it → a.
+	if got := Impact(dir, baseRev, headRev); got != "./a ./b ./c" {
+		t.Errorf("dep bump: got %q, want ./a ./b ./c", got)
+	}
+}
+
+// §V16 tier-1 (§T582): non-require go.mod changes (go directive, replace) still force
+// the full suite; an added-but-unimported dependency selects nothing; a removed
+// dependency seeds nothing beyond the import-dropping file changes themselves.
+func TestImpactDependencyEdgeCases(t *testing.T) {
+	dir, baseRev, headRev := scratchRepo(t, depBase(), map[string]string{
+		"go.mod": "module example.com/m\n\ngo 1.26\n\nrequire dep.example/lib v1.0.0\n\nreplace dep.example/lib => ../local\n",
+	})
+	if got := Impact(dir, baseRev, headRev); got != All {
+		t.Errorf("replace directive: got %q, want all", got)
+	}
+	dir, baseRev, headRev = scratchRepo(t, depBase(), map[string]string{
+		"go.mod": "module example.com/m\n\ngo 1.26\n\nrequire (\n\tdep.example/lib v1.0.0\n\tother.example/x v2.0.0\n)\n",
+	})
+	if got := Impact(dir, baseRev, headRev); got != None {
+		t.Errorf("added unimported dep: got %q, want none", got)
+	}
+	dir, baseRev, headRev = scratchRepo(t, depBase(), map[string]string{
+		"go.mod":      "module example.com/m\n\ngo 1.26\n",
+		"c/c.go":      "package c\n",
+		"a/a_test.go": "package a\n",
+	})
+	// removal: the import-dropping .go edits attribute normally (c code, a test-only).
+	if got := Impact(dir, baseRev, headRev); got != "./a ./b ./c" {
+		t.Errorf("removed dep: got %q, want ./a ./b ./c", got)
+	}
+}

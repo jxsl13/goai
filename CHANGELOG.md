@@ -4,6 +4,12 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T582 — dependency-change selection (2026-07-13)
+- A go.mod require-version change now selects exactly the packages importing the
+  changed module (via the selector's external-import index) instead of the full suite;
+  any other go.mod difference (go directive, replace, exclude) still runs everything.
+  The CI gate gained a go mod download step — a no-op while the module is zero-dep.
+
 ### T581 — impact selector edge-case sweep, embed-asset fix (2026-07-13)
 - The edge-case sweep caught a latent classifier bug (SPEC B50): .md/.txt files were
   documentation by suffix alone, but such files inside a package can be //go:embed'ed —
