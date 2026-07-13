@@ -4,6 +4,12 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T599 — typed parallel CPU attention (2026-07-14)
+- Fused multi-head attention forward/backward now run as typed, parallel CPU kernels
+  (backward parallelized over KV-head groups — disjoint output regions, no atomics).
+  9.5x/18.6x on the 512x8x64 benchmark, and the end-to-end effect is dramatic: CPU GPT
+  forward 4.2x (779 tok/s), CPU training step 4.7x (194 tok/s).
+
 ### T598 — parallel CPU softmax (2026-07-14)
 - Softmax now runs as a typed, row-parallel CPU kernel: 9.7x faster on the benchmark
   shape (it previously fell through to the reference implementation), +2.9% on the
