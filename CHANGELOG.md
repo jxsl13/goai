@@ -4,6 +4,11 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T586 — warning-free CI runs (2026-07-13)
+- GitHub Actions upgraded to current majors (checkout v7, setup-go v6,
+  upload-artifact v7); the Node-20 deprecation warnings are gone and the CI watch now
+  greps every run log for new warnings.
+
 ### T585 — LICENSE renamed to LICENSE.md (2026-07-13)
 - The license file is now markdown, so the selector's ordinary root-markdown rule
   covers it and the last hardcoded file name left the default rule set.
