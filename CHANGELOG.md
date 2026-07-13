@@ -4,6 +4,13 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T604 — full OS x capability CI matrix (2026-07-14)
+- CI now spans {ubuntu, macos, windows} x {pure-go, cgo, vulkan, simd}: the vulkan
+  suite executes on MoltenVK (macOS) and lavapipe (linux) and compiles against the
+  LunarG SDK on windows; every lane starts with the capability probe and skips
+  transparently where a capability is absent. The vulkan backend links vulkan-1
+  directly on windows (no pkg-config there).
+
 ### T602 — devirtualized attention cores (2026-07-14)
 - The CPU attention kernels now run on generic typed slices instead of per-element
   closures: +46% CPU GPT forward (1141 tok/s), +27% training (247 tok/s). The CPU arc
