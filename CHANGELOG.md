@@ -4,6 +4,12 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T574 — XTC top-choice exclusion sampler (2026-07-13)
+- nlp.Sampler gained XTC (WithXTC/WithXTCThreshold): with a configured probability per
+  draw, all above-threshold tokens except the least probable qualifier are excluded —
+  breaking cliché continuations while a surviving qualifier bounds coherence. Applied
+  in the final draw only; Dist stays pure so speculative decoding remains lossless.
+
 ### T573 — DRY sequence-repetition sampler (2026-07-13)
 - nlp.Sampler gained the DRY penalty (WithDRY plus base/allowed-length/range/breaker
   options): tokens that would extend a suffix already seen earlier are penalized

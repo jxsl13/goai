@@ -47,6 +47,11 @@ type Sampler struct {
 	DRYRange      int     // history window DRY scans; 0 = the entire history
 	DRYBreakers   []int   // token ids matches may not extend across (e.g. newline)
 
+	// XTC top-choice exclusion (p-e-w 2024, see xtc.go; applied in Sample's final
+	// draw, never in Dist or greedy decoding). Off unless both are > 0.
+	XTCProbability float64 // chance per draw that exclusion fires; typical 0.5
+	XTCThreshold   float64 // qualifying probability; typical 0.1 (>0.5 disables)
+
 	rng *rand.Rand
 }
 
@@ -145,6 +150,19 @@ func WithDRYBreakers(ids ...int) SamplerOption {
 	return func(s *Sampler) { s.DRYBreakers = append([]int(nil), ids...) }
 }
 
+// WithXTC enables XTC top-choice exclusion (p-e-w 2024, see xtc.go) with the given
+// firing probability per draw; 0 disables it, typical 0.5. Requires a threshold —
+// WithXTCThreshold — to define which tokens count as "top choices".
+func WithXTC(probability float64) SamplerOption {
+	return func(s *Sampler) { s.XTCProbability = probability }
+}
+
+// WithXTCThreshold sets the probability a token needs to count as a top choice
+// (typical 0.1). Above 0.5 at most one token can qualify, disabling XTC naturally.
+func WithXTCThreshold(t float64) SamplerOption {
+	return func(s *Sampler) { s.XTCThreshold = t }
+}
+
 // NewSampler builds a deterministic sampler seeded by seed. Defaults: temperature
 // 1, no top-k / top-p / min-p — configure with the options, e.g.
 // NewSampler(seed, WithTemperature(0.8), WithTopP(0.95)).
@@ -178,6 +196,7 @@ func (s *Sampler) Sample(logits []float64) int {
 		return argmax(logits) // greedy: deterministic, no rng draw
 	}
 	probs := s.Dist(logits)
+	s.applyXTC(probs) // §T574: after truncation, before the draw; Dist stays pure
 	u := s.rng.Float64()
 	var cum float64
 	for i, p := range probs {
