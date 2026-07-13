@@ -28,10 +28,38 @@ permissions:
   contents: read
 
 jobs:
+  # Docs-only pushes skip the expensive jobs (§T571/§T572): internal/cichange
+  # proves via AST comparison that only documentation (markdown, godoc
+  # comments) changed. Every uncertainty fails open to running CI (§V26).
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.classify.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # classify needs the base revision
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache: false
+      - id: classify
+        run: |
+          BASE="${{ github.event.pull_request.base.sha || github.event.before }}"
+          VERDICT=$(go run ./internal/cichange "$BASE" HEAD || echo code)
+          echo "verdict=$VERDICT"
+          if [ "$VERDICT" = "docs-only" ]; then
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          fi
+
   # §V4/§V7/§V23 — the portable promise: the whole library builds, vets (which
   # compiles _test.go files, §B45) and tests WITHOUT a C toolchain, on all
   # three OSes. This is the gate every local iteration runs; now enforced on push.
   pure-go:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     name: pure-go / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
@@ -57,6 +85,8 @@ jobs:
   # cgo on linux: the optimized CPU backend under the RACE detector (the §T511
   # worker pool's standing guard, §B49-class bugs), plus gofmt and coverage.
   test-linux-cgo:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     name: cgo+race / ubuntu
     runs-on: ubuntu-latest
     steps:
@@ -88,6 +118,8 @@ jobs:
   # -short suite. macOS arm64 runners expose a paravirtualized Metal GPU, so
   # the metal tests run for real where available and self-skip otherwise.
   test-macos-cgo:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     name: cgo+metal / macos
     runs-on: macos-latest
     steps:
@@ -104,6 +136,8 @@ jobs:
   # Tag-gated backends must at least COMPILE on every push so their code cannot
   # rot (vulkan executes on dev boxes with MoltenVK; §B40 discipline stays local).
   build-vulkan-tag:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     name: build / vulkan tag
     runs-on: ubuntu-latest
     steps:
@@ -137,6 +171,8 @@ jobs:
   # the host class the parked §T11b/§T74 tasks wait for — once this repo is on
   # GitHub, those can graduate to a real test job here.
   simd-amd64:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     name: simd / ubuntu-amd64 (soft)
     runs-on: ubuntu-latest
     continue-on-error: true
