@@ -132,8 +132,16 @@ func (g *RegexGuide) Sampler(inner TokenSampler, eosID int) TokenSampler {
 	return &guidedSampler{g: g, inner: inner, eos: eosID, state: g.Start()}
 }
 
+// tokenGuide is the mask-and-advance contract shared by RegexGuide (FSM) and
+// GrammarGuide (PDA): both drive the same guidedSampler wrapper.
+type tokenGuide interface {
+	Start() int
+	Advance(state, token int) int
+	MaskLogits(state int, logits []float64, eosID int) bool
+}
+
 type guidedSampler struct {
-	g          *RegexGuide
+	g          tokenGuide
 	inner      TokenSampler
 	eos, state int
 }

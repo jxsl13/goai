@@ -4,6 +4,17 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T575 — Grammar-constrained decoding (GBNF) + JSON-Schema structured outputs (2026-07-13)
+- nlp.GrammarGuide compiles a GBNF-subset grammar to a pushdown automaton over the token
+  vocabulary with the same mask-and-advance contract as RegexGuide — nested structure
+  (JSON in arrays in objects) that no finite-state guide can enforce. Left-recursive
+  grammars are rejected at compile time; states are interned and per-token transitions
+  memoized.
+- nlp.JSONSchemaToGrammar compiles a JSON-Schema subset (types, properties/required,
+  items, enum/const, anyOf/oneOf, type lists) to GBNF for the guide — the llama.cpp/vLLM
+  "structured outputs" path. Unsupported keywords are ignored (grammar stays a superset);
+  $ref and patternProperties fail closed.
+
 ### T571/T572 — Docs-only pushes skip CI (2026-07-13)
 - internal/cichange proves via comment-stripped AST comparison that a push changed only
   documentation (markdown or godoc comments; directive comments and cgo preambles still
