@@ -82,6 +82,7 @@ var typeExampleExempt = map[string]bool{
 	"nlp.WordPieceOption":           true, // functional-option type (shown via WithWordPieceUnk etc.)
 	"nlp.MedusaHeadsOption":         true, // functional-option type (shown via WithMedusaHeadsDtype)
 	"nlp.ChatRenderOption":          true, // functional-option type (shown via WithGenerationPrompt/WithoutBOS)
+	"nlp.RerankResult":              true, // plain result record returned by CosineRerank; shown in its examples
 	"vision.CNNOption":              true, // functional-option type (shown via WithChannels/WithKernel/WithDtype)
 	"vision.ViTOption":              true, // functional-option type (shown via WithViTDim/WithViTHeads etc.)
 	"nlp.Beam":                      true, // returned by BeamSearch, shown in ExampleBeamSearch

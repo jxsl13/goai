@@ -4,6 +4,12 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T593 — sentence embeddings and cosine reranking (2026-07-13)
+- nlp.MeanPool (masked mean pooling to a unit sentence vector, the
+  sentence-transformers default) and nlp.CosineRerank (deterministic best-first
+  candidate ranking) complete the bi-encoder retrieval path next to the existing
+  ColBERT MaxSim late interaction.
+
 ### T591 — SigLIP sigmoid contrastive loss (2026-07-13)
 - nn.SigLIPLoss + nn.SigLIPHead (learned temperature and bias, paper init): every
   image/text pair is scored with an independent sigmoid instead of CLIP's batch
