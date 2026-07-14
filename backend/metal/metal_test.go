@@ -479,6 +479,98 @@ func TestMetalConv2DCrossReference(t *testing.T) {
 	}
 }
 
+// TestMetalConvCacheEviction exercises the §T622 shape-keyed MPSGraph conv cache
+// EVICTION path, which the multi-shape benchmark never reaches (it cycles ~5
+// shapes, all below the default cap of 16). With a small cap (4) and 8 distinct
+// shapes, cycling forces FIFO eviction+rebuild: a wrong-graph-after-eviction bug
+// (e.g. the wrong slot fed, or a stale graph re-run) surfaces as a numeric
+// mismatch on a later pass, when a shape's slot was evicted then rebuilt. The
+// native MPSGraph path gets the same 2× crossTol headroom the cross-ref test uses.
+func TestMetalConvCacheEviction(t *testing.T) {
+	skipNoGPU(t)
+	mb, _ := backend.Get(backend.Metal)
+	ref, _ := backend.Get(backend.Ref)
+
+	// Force the native MPSGraph (cached) path, then shrink the cache so that
+	// 8 shapes cannot all coexist → eviction on every wrap-around.
+	old := metal.SetConvUseMPS(true)
+	defer metal.SetConvUseMPS(old)
+	oldCap := metal.SetConvCacheCap(4)
+	defer metal.SetConvCacheCap(oldCap)
+
+	// ≥8 DISTINCT shapes (vary N/C/H/Wd/F); k=3 s=1 p=1 keeps output shapes simple.
+	shapes := []struct {
+		name           string
+		n, c, h, wd, f int
+	}{
+		{"s0", 1, 1, 5, 5, 2},
+		{"s1", 2, 3, 6, 6, 4},
+		{"s2", 1, 4, 7, 5, 3},
+		{"s3", 2, 2, 8, 8, 5},
+		{"s4", 1, 5, 5, 7, 6},
+		{"s5", 3, 3, 6, 4, 2},
+		{"s6", 2, 6, 4, 9, 4},
+		{"s7", 1, 2, 9, 6, 7},
+	}
+	const kh, kw = 3, 3
+	attrs := backend.ConvAttrs{Stride: 1, Pad: 1}
+
+	// Precompute the ref outputs once per shape (deterministic inputs by seed).
+	refOut := make([]*tensor.Tensor, len(shapes))
+	ins := make([][]*tensor.Tensor, len(shapes))
+	for si, s := range shapes {
+		x := bench.RandF32(tensor.Shape{s.n, s.c, s.h, s.wd}, uint64(si*2+1))
+		w := bench.RandF32(tensor.Shape{s.f, s.c, kh, kw}, uint64(si*2+2))
+		ins[si] = []*tensor.Tensor{x, w}
+		gr, err := backend.Execute(backend.NewContext().WithBackend(ref), backend.OpConv2D, ins[si], attrs)
+		if err != nil {
+			t.Fatalf("ref conv2d %s: %v", s.name, err)
+		}
+		refOut[si] = gr[0]
+	}
+
+	check := func(t *testing.T, si, pass int) {
+		s := shapes[si]
+		gm, err := backend.Execute(backend.NewContext().WithBackend(mb), backend.OpConv2D, ins[si], attrs)
+		if err != nil {
+			t.Fatalf("metal conv2d %s (pass %d): %v", s.name, pass, err)
+		}
+		gr := refOut[si]
+		if !gm[0].Shape().Equal(gr.Shape()) {
+			t.Fatalf("%s (pass %d): shape %v vs ref %v", s.name, pass, gm[0].Shape(), gr.Shape())
+		}
+		rtol := 2*crossTol(s.c*kh*kw) + 1e-6
+		for i := range gm[0].Numel() {
+			idx := tensor.Unravel(i, gm[0].Shape())
+			g, r := gm[0].AtF64(idx...), gr.AtF64(idx...)
+			if math.Abs(g-r) > rtol*math.Max(1, math.Abs(r))+1e-5 {
+				t.Fatalf("%s (pass %d) [%d]: metal %v vs ref %v (rtol %g) — likely wrong graph after cache eviction",
+					s.name, pass, i, g, r, rtol)
+			}
+		}
+	}
+
+	// 3 passes over all 8 shapes with cap 4 → each shape is evicted and rebuilt
+	// multiple times. Every element must still match the ref on every pass.
+	for pass := range 3 {
+		for si := range shapes {
+			check(t, si, pass)
+		}
+	}
+
+	// Core eviction-correctness property, isolated: run shape s0, then run enough
+	// OTHER distinct shapes to guarantee s0's slot is evicted (cap 4 → 4 more
+	// shapes fully cycle the cache), then re-run s0 and require it still matches.
+	// If eviction fed a stale/wrong graph, s0 would now be wrong.
+	t.Run("same-shape-after-eviction", func(t *testing.T) {
+		check(t, 0, 100)             // prime s0
+		for si := 1; si <= 4; si++ { // evict s0's slot with 4 unrelated shapes
+			check(t, si, 100)
+		}
+		check(t, 0, 101) // s0 slot was evicted then rebuilt — must still be correct
+	})
+}
+
 // §V3/§V11: the metal conv2d backward (OpConv2DBackward) matches the reference
 // dX/dW/dBias within an f32 tolerance. Shared dX/dW/dBias accumulate via float
 // atomics, so the tolerance scales with the number of contributions (§T101).
