@@ -428,3 +428,38 @@ func TestHyperConnectionOrthogonalGradcheck(t *testing.T) {
 		}
 	}
 }
+
+// A 2-layer stack via Apply: Expand → per-layer (LayerInput→layer→Update) → Collapse. Uses one
+// cell per layer, as Hyper-Connections prescribe.
+func TestHyperConnectionStack(t *testing.T) {
+	const n, f = 2, 3
+	c0, _ := nn.NewHyperConnection(tensor.F64, n, nn.HCNone)
+	c1, _ := nn.NewHyperConnection(tensor.F64, n, nn.HCNone)
+	ctx := backend.NewContext()
+	x := tensor.FromFloat64(tensor.Shape{1, f}, []float64{1, 2, 3})
+	// two identity layers: 𝒯(h0)=h0. With the residual-equiv init this is deterministic.
+	id := func(_ *backend.Context, h0 *tensor.Tensor) (*tensor.Tensor, error) { return h0, nil }
+
+	h, err := c0.Expand(ctx, x)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h, err = c0.Apply(ctx, h, id); err != nil {
+		t.Fatal(err)
+	}
+	if h, err = c1.Apply(ctx, h, id); err != nil {
+		t.Fatal(err)
+	}
+	out, err := c1.Collapse(ctx, h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Hand trace (Am=B=1, Ar=I, id layer): after Expand H=[[x],[x]].
+	// layer0: h0=2x; Ĥ=[1·2x + I·x] per stream = 3x each → H=[[3x],[3x]].
+	// layer1: h0=6x; Ĥ=[6x + 3x]=9x each → H=[[9x],[9x]]. Collapse=sum=18x.
+	for j := range f {
+		if want := 18 * x.AtF64(0, j); math.Abs(out.AtF64(0, j)-want) > 1e-9 {
+			t.Fatalf("stack out col %d = %v, want %v", j, out.AtF64(0, j), want)
+		}
+	}
+}

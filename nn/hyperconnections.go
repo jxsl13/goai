@@ -429,6 +429,24 @@ func (hc *HyperConnection) checkH(h *tensor.Tensor, who string) error {
 	return nil
 }
 
+// Apply runs one layer through the cell — the per-layer convenience that wraps the full flow:
+// h₀ = LayerInput(H); y = layer(h₀); Ĥ = Update(H, y). A layer stack calls Apply once per layer,
+// each with that layer's own cell (Hyper-Connections use per-layer parameters). layer receives the
+// aggregated input h₀ [1,F] and must return the layer output [1,F]. Between Expand at the start and
+// Collapse at the end, a stack is: H = Expand(x); for each (cell, f): H = cell.Apply(ctx, H, f);
+// out = Collapse(H).
+func (hc *HyperConnection) Apply(ctx *backend.Context, h *tensor.Tensor, layer func(*backend.Context, *tensor.Tensor) (*tensor.Tensor, error)) (*tensor.Tensor, error) {
+	h0, err := hc.LayerInput(ctx, h)
+	if err != nil {
+		return nil, err
+	}
+	y, err := layer(ctx, h0)
+	if err != nil {
+		return nil, err
+	}
+	return hc.Update(ctx, h, y)
+}
+
 // Params returns the learnable tensors for the optimizer: the static Am, B, Ar, plus the DHC
 // dynamic projections and scales (and the RMSNorm gain) when the cell is dynamic. The
 // ones-vectors used by Expand/Collapse are constants and are not returned.

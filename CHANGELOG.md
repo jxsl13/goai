@@ -4,15 +4,18 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
-### T618 — Hyper-Connections and mHC (2026-07-14)
+### T618 — Hyper-Connections, mHC, orthogonal, and dynamic variants (2026-07-14)
 - New `nn.HyperConnection`: a generalization of the residual connection that keeps
   several parallel information streams and learns how to mix them at each layer
-  (Hyper-Connections, arXiv:2409.19606), with an mHC mode (`HCDoublyStochastic`,
-  DeepSeek arXiv:2512.24880) that constrains the mixing to a balanced weighted
-  average via a differentiable Sinkhorn-Knopp projection — keeping very deep models
-  stable. Gradients flow through the whole projection (verified by finite-difference
-  gradient checks). Found by autonomous research into the 2026 architecture wave;
-  the dynamic (DHC) variant and a full-transformer wrapper are follow-ups.
+  (Hyper-Connections, arXiv:2409.19606). Three ways to keep very deep models stable
+  are provided as constraint modes on the mixing matrix: `HCDoublyStochastic` (mHC,
+  DeepSeek arXiv:2512.24880 — a balanced weighted average via a differentiable
+  Sinkhorn-Knopp projection) and `HCOrthogonal` (a norm-preserving orthogonal mixing
+  via Newton-Schulz, the JPmHC idea, arXiv:2602.18308). `NewDynamicHyperConnection`
+  adds the dynamic (DHC) variant, where the mixing adapts to each token. Every path is
+  differentiable end to end (verified by finite-difference gradient checks). Found and
+  implemented autonomously from research into the 2026 architecture wave; a
+  full-transformer wrapper is the remaining follow-up.
 
 ### T617 — research-grounded, fully-documented configuration knobs (2026-07-14)
 - Every public configuration option across the library (samplers, all optimizers,
