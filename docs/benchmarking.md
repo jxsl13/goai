@@ -164,6 +164,29 @@ default and MPSGraph is a proven, tested opt-in. Flipping the global default is
 blocked pending a small shape-keyed graph cache + a variable-length A/B.
 
 
+### CPU kernel devirtualization (§T596/§T602 pattern, class-audit 2026-07-14)
+
+Several optimized CPU kernels read and wrote every element through `f64at`/`f64set`
+per-element closures (one indirect call per element, plus a float32↔float64 convert
+for f32 tensors). Routing each hot kernel through a generic `[]T` core (`T =
+float32|float64`) over the concrete storage slice lets the compiler inline every
+access; f64 accumulation and the per-row operation order stay unchanged, so
+reference parity holds within ulps. Same-machine A/B (CGO_ENABLED=0, ref+cpu only):
+
+| kernel | before (closures) | after (generic `[]T`) | speedup |
+|---|---|---|---|
+| RMSNorm (2048²) | 4.42 ms | 1.26 ms | ≈3.5× |
+| LayerNorm (2048²) | 6.85 ms | 1.83 ms | ≈3.7× |
+| Softmax (2048² f32) | 7.71 ms | 5.82 ms | ≈1.33× |
+| Retention fwd (512×64 f32) | 10.66 ms | 2.77 ms | ≈3.85× |
+| Retention bwd (512×64 f32) | 24.12 ms | 5.69 ms | ≈4.25× |
+
+The wins scale with how closure-heavy the kernel's inner loops were: softmax's
+per-element `exp` dilutes the closure overhead (small win), while retention's nested
+score/aggregate loops call the accessor many times per output (largest win). After
+this class-audit the only remaining `f64at`/`f64set` uses in `backend/cpu/` are
+comments — every hot CPU kernel is devirtualized.
+
 ### Head-to-head: llama.cpp on the SAME weights (§T607)
 
 The decode benchmark's llama (17.7 M parameters, dim 512, 6 layers, GQA 8/2,
