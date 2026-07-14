@@ -55,50 +55,20 @@ func conv2dKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs
 	colsP := getF64(rows * k)
 	defer putF64(colsP)
 	cols := *colsP
-	fillCols := func(get func(flat int) float64) {
-		parallelWork(rows, k, func(lo, hi int) {
-			for r := lo; r < hi; r++ {
-				ni := r / (ho * wo)
-				rem := r % (ho * wo)
-				oy, ox := rem/wo, rem%wo
-				base := r * k
-				kk := 0
-				for ci := range c {
-					for ky := range kh {
-						iy := oy*s + ky - p
-						for kx := range kw {
-							ix := ox*s + kx - p
-							if iy >= 0 && iy < h && ix >= 0 && ix < wd {
-								cols[base+kk] = get(((ni*c+ci)*h+iy)*wd + ix)
-							} // else stays 0 (adding 0·w ≡ skipping, bit-safe)
-							kk++
-						}
-					}
-				}
-			}
-		})
-	}
 	// wt[(c,ky,kx), f]: transposed weights matching the column order
 	wtP := getF64(k * f)
 	defer putF64(wtP)
 	wt := *wtP
-	fillWt := func(get func(flat int) float64) {
-		for fi := range f {
-			for kk := range k {
-				wt[kk*f+fi] = get(fi*k + kk) // w row-major [F, C·KH·KW]
-			}
-		}
-	}
 
+	// devirtualized im2col + weight fill (§base-perf/§T602): concrete []T reads
+	// instead of a per-element get closure + float32→float64 round-trip closure.
 	switch x.Dtype() {
 	case tensor.F64:
-		xs, ws := xc.Storage().F64(), wcont.Storage().F64()
-		fillCols(func(i int) float64 { return xs[i] })
-		fillWt(func(i int) float64 { return ws[i] })
+		im2colFill(cols, xc.Storage().F64(), rows, k, ho, wo, c, kh, kw, s, p, h, wd)
+		wtFill(wt, wcont.Storage().F64(), f, k)
 	case tensor.F32:
-		xs, ws := xc.Storage().F32(), wcont.Storage().F32()
-		fillCols(func(i int) float64 { return float64(xs[i]) })
-		fillWt(func(i int) float64 { return float64(ws[i]) })
+		im2colFill(cols, xc.Storage().F32(), rows, k, ho, wo, c, kh, kw, s, p, h, wd)
+		wtFill(wt, wcont.Storage().F32(), f, k)
 	default:
 		return nil, fmt.Errorf("cpu: unsupported dtype %v", x.Dtype())
 	}
@@ -159,4 +129,41 @@ func conv2dKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs
 func init() {
 	std.add(backend.OpConv2D, tensor.F32, conv2dKernel)
 	std.add(backend.OpConv2D, tensor.F64, conv2dKernel)
+}
+
+// im2colFill materializes the im2col column matrix (§T342) from a concrete []T
+// input slice into the f64 GEMM scratch — direct indexed reads instead of the old
+// per-element get closure. Padding taps stay 0 (adding 0·w is bit-safe).
+func im2colFill[T normFloat](cols []float64, xs []T, rows, k, ho, wo, c, kh, kw, s, p, h, wd int) {
+	parallelWork(rows, k, func(lo, hi int) {
+		for r := lo; r < hi; r++ {
+			ni := r / (ho * wo)
+			rem := r % (ho * wo)
+			oy, ox := rem/wo, rem%wo
+			base := r * k
+			kk := 0
+			for ci := 0; ci < c; ci++ {
+				for ky := 0; ky < kh; ky++ {
+					iy := oy*s + ky - p
+					for kx := 0; kx < kw; kx++ {
+						ix := ox*s + kx - p
+						if iy >= 0 && iy < h && ix >= 0 && ix < wd {
+							cols[base+kk] = float64(xs[((ni*c+ci)*h+iy)*wd+ix])
+						}
+						kk++
+					}
+				}
+			}
+		}
+	})
+}
+
+// wtFill transposes the weights [F, C·KH·KW] into column order [C·KH·KW, F] over a
+// concrete []T slice (devirtualized, no get closure).
+func wtFill[T normFloat](wt []float64, ws []T, f, k int) {
+	for fi := 0; fi < f; fi++ {
+		for kk := 0; kk < k; kk++ {
+			wt[kk*f+fi] = float64(ws[fi*k+kk])
+		}
+	}
 }
