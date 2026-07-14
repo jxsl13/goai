@@ -78,6 +78,29 @@ otherwise continue. NO commits/pushes without the user's explicit
 permission. The loop NEVER runs out of work: when every §T task is "done",
 proceed per the "Empty backlog" rule below.
 
+## Never idle (mandatory — user directive 2026-07-14)
+
+NEVER be idle. Every fire must do productive work — never sit and wait, and
+never spend a fire only re-scheduling the next wakeup. Waiting on an external
+gate is NOT a reason to idle: when one thread is blocked, advance another.
+Concretely, when blocked on the C16 push throttle (waiting for the hourly
+window), a CI run, or a wakeup deadline, keep BUILDING locally — commits
+accumulate in the working tree and push when the window opens. Always have
+a next productive action from this list, in priority order:
+
+1. Continue the current task's next slice/step.
+2. Harden what just landed: more tests (edge cases, fuzz §V15, gradchecks
+   §V2), documentation, benchmarks.
+3. Verify-ahead the next task (research + primary-source extraction so the
+   implementation is unblocked) — the §R234 verify-first discipline.
+4. The Empty-backlog rule below (gap research, then beat-the-incumbents).
+
+The ONLY legitimate idle is a genuine external wait with NO available local
+work — which, given rules 1–4 and the empty-backlog rule, does not occur.
+Idle-rescheduling a wakeup with productive work available is a process
+failure. (Context-length is not a blocker either: if the context is
+saturated, do the smallest safe useful increment and commit it, don't idle.)
+
 ## Empty backlog rule (mandatory — the loop generates its own work)
 
 When no open §T task exists, do NOT idle. In this order:
