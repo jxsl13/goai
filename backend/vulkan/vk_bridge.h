@@ -288,6 +288,16 @@ int vk_conv2d_f32(const uint32_t* spvIm2col, int im2colLen,
                   int N, int C, int H, int Wd, int F, int KH, int KW,
                   int stride, int pad, int ho, int wo);
 
+// vk_conv2d_igemm_f32 is the FUSED implicit-GEMM forward conv (§T620): a single
+// dispatch of the conv_igemm.comp kernel that gathers X directly in the GEMM tile
+// load (no im2col materialization) and scatters+biases straight to NCHW. Takes only
+// the fused SPIR-V module; no col/G intermediate buffers. Same shape contract and
+// result as vk_conv2d_f32. Returns 0 on success, nonzero on failure.
+int vk_conv2d_igemm_f32(const uint32_t* spv, int spvLen,
+                        const float* X, const float* W, const float* B, float* Out,
+                        int N, int C, int H, int Wd, int F, int KH, int KW,
+                        int stride, int pad, int ho, int wo);
+
 // vk_conv2d_backward_f32 is the conv2d backward: (X,W,dO) → (dX,dW,dBias). dX/dW/dBias
 // are passed in pre-zeroed and accumulate with float atomics. Returns 0 on success,
 // -7 if float atomics are unavailable (caller falls back to the reference), else

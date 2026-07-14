@@ -267,6 +267,14 @@ var im2colSpirv []byte
 //go:embed shaders/colout.spv
 var coloutSpirv []byte
 
+// convIgemmSpirv is the FUSED implicit-GEMM forward conv (§T620): a single kernel
+// that gathers X directly in the tiled-GEMM B-panel load (killing the im2col
+// materialization) and scatters+biases straight to NCHW. It replaces the three-stage
+// im2col→matmul→colout path in conv2dF32; the old modules stay embedded as a fallback.
+//
+//go:embed shaders/conv_igemm.spv
+var convIgemmSpirv []byte
+
 // conv2dBwdSpirv is the compiled conv2d backward shader (shaders/conv2d_bwd.comp →
 // conv2d_bwd.spv), embedded like the others (§T102). It uses float atomics
 // (VK_EXT_shader_atomic_float) for the shared dX/dW/dBias.
@@ -2133,16 +2141,17 @@ func conv2dF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) (
 	if ho < 1 || wo < 1 {
 		return nil, fmt.Errorf("vulkan: conv2d output would be empty (%dx%d)", ho, wo)
 	}
-	if len(im2colSpirv) == 0 || len(coloutSpirv) == 0 || len(spirv) == 0 {
-		return nil, fmt.Errorf("vulkan: conv2d shaders not embedded — run `make vulkan-spv` (glslc)")
+	if len(convIgemmSpirv) == 0 {
+		return nil, fmt.Errorf("vulkan: conv2d shader not embedded — run `make vulkan-spv` (glslc)")
 	}
 
 	xc, wcont := x.Contiguous(), w.Contiguous()
 	out := tensor.New(tensor.F32, tensor.Shape{n, f, ho, wo})
-	rc := C.vk_conv2d_f32(
-		(*C.uint32_t)(unsafe.Pointer(&im2colSpirv[0])), C.int(len(im2colSpirv)),
-		(*C.uint32_t)(unsafe.Pointer(&spirv[0])), C.int(len(spirv)),
-		(*C.uint32_t)(unsafe.Pointer(&coloutSpirv[0])), C.int(len(coloutSpirv)),
+	// Fused implicit-GEMM (§T620): one kernel gathers X in the tile load and writes
+	// NCHW directly — no im2col/G intermediate buffers. Replaces the old three-stage
+	// im2col→matmul→colout dispatch (im2colSpirv/coloutSpirv still embedded as a fallback).
+	rc := C.vk_conv2d_igemm_f32(
+		(*C.uint32_t)(unsafe.Pointer(&convIgemmSpirv[0])), C.int(len(convIgemmSpirv)),
 		(*C.float)(&xc.Storage().F32()[0]),
 		(*C.float)(&wcont.Storage().F32()[0]),
 		(*C.float)(&bias[0]),

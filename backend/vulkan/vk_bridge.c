@@ -1726,6 +1726,33 @@ unlock:
     return rc;
 }
 
+// vk_conv2d_igemm_f32 is the FUSED implicit-GEMM forward conv (§T620): one dispatch
+// of conv_igemm.comp, no im2col/G intermediate buffers. The kernel's B-panel load
+// gathers X directly via the im2col index and the epilogue scatters+biases straight
+// to NCHW, so only X, W, Bias (uploaded) and Out (downloaded) touch global memory —
+// killing the O(N·C·K²·HW) col write+read that dominated the im2col path. The GEMM
+// dims (M=F, K=C·KH·KW, Ncol=N·ho·wo) are derived in-shader from ConvPC. Dispatch:
+// ceil(Ncol/16) × ceil(F/16) 16×16 workgroups. Returns 0 on success, nonzero on error.
+int vk_conv2d_igemm_f32(const uint32_t* spv, int spvLen,
+                        const float* X, const float* W, const float* B, float* Out,
+                        int N, int C, int H, int Wd, int F, int KH, int KW,
+                        int stride, int pad, int ho, int wo) {
+    int K    = C * KH * KW;   // GEMM interior
+    int Ncol = N * ho * wo;   // GEMM columns
+    VkDeviceSize lens[4] = {
+        (VkDeviceSize)N * C * H * Wd * sizeof(float),   // X[N,C,H,Wd]
+        (VkDeviceSize)F * K * sizeof(float),            // W[F, C·KH·KW]
+        (VkDeviceSize)F * sizeof(float),                // Bias[F]
+        (VkDeviceSize)N * F * ho * wo * sizeof(float),  // Out[N,F,ho,wo]
+    };
+    void* data[4] = { (void*)X, (void*)W, (void*)B, Out };
+    int up[4]   = {1, 1, 1, 0};
+    int down[4] = {0, 0, 0, 1};
+    ConvPC pc = { N, C, H, Wd, F, KH, KW, stride, pad, ho, wo };
+    return vk_dispatch(spv, spvLen, 4, lens, data, up, down, &pc, sizeof(pc),
+                       ((uint32_t)Ncol + 15u) / 16u, ((uint32_t)F + 15u) / 16u, 1u);
+}
+
 int vk_conv2d_backward_f32(const uint32_t* spv, int spvLen,
                            const float* X, const float* W, const float* dO,
                            float* dX, float* dW, float* dBias,

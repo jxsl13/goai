@@ -77,6 +77,7 @@ vulkan-spv:
 	glslc backend/vulkan/shaders/im2col.comp -o backend/vulkan/shaders/im2col.spv
 	glslc backend/vulkan/shaders/colout.comp -o backend/vulkan/shaders/colout.spv
 	glslc backend/vulkan/shaders/conv2d_bwd.comp -o backend/vulkan/shaders/conv2d_bwd.spv
+	glslc backend/vulkan/shaders/conv_igemm.comp -o backend/vulkan/shaders/conv_igemm.spv
 	glslc backend/vulkan/shaders/rmsnorm.comp -o backend/vulkan/shaders/rmsnorm.spv
 	glslc backend/vulkan/shaders/rmsnorm_bwd.comp -o backend/vulkan/shaders/rmsnorm_bwd.spv
 	glslc backend/vulkan/shaders/crossentropy_bwd.comp -o backend/vulkan/shaders/crossentropy_bwd.spv

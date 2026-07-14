@@ -1,0 +1,94 @@
+#version 450
+
+// Fused implicit-GEMM conv2d (§T620, the Vulkan implicit-GEMM that kills im2col
+// materialization). This is a COPY of the 16×16 tiled GEMM (matmul.comp §T94)
+// specialised for conv: the conv is the lowered product
+//   G[F, N·ho·wo] = W[F, C·KH·KW] · col[C·KH·KW, N·ho·wo]
+// where col is the im2col unroll (§T342). Instead of first materializing `col`
+// to global memory (a im2col pass writing O(N·C·K²·HW) floats that the GEMM then
+// reads back — the measured Conv2D bottleneck §T620), the B sub-tile load COMPUTES
+// the im2col source index for its (K-row, N-col) coordinate and gathers X directly
+// (0.0 for padded/out-of-bounds taps). The A operand (weights W) loads normally.
+// The epilogue folds in the bias and scatters straight to the NCHW output, so the
+// separate colout pass is gone too: one dispatch, no col/G intermediate buffers.
+//
+// GEMM dims (derived from the conv params so the push block == ConvPC): M = F,
+// K = C·KH·KW, Ncol = N·ho·wo. Dispatch: ceil(Ncol/16) × ceil(F/16) workgroups.
+//
+// NOTE (§B39): register blocking (64×64, 4×4/thread) gave NO speedup on MoltenVK —
+// memory-bandwidth-bound — so the plain 16×16 tiled structure is kept here too.
+
+#define TS 16
+
+layout(local_size_x = TS, local_size_y = TS, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer BufX { float x[]; };    // X[N,C,H,Wd]
+layout(std430, binding = 1) readonly buffer BufW { float w[]; };    // W[F, C·KH·KW]
+layout(std430, binding = 2) readonly buffer BufB { float bias[]; }; // Bias[F] (zeros when none)
+layout(std430, binding = 3) writeonly buffer BufO { float o[]; };   // Out[N,F,ho,wo]
+
+layout(push_constant) uniform PC {
+    int N; int C; int H; int Wd; int F; int KH; int KW; int stride; int pad; int ho; int wo;
+} p;
+
+shared float As[TS][TS]; // weights sub-tile (A operand, stored [M=F, K])
+shared float Bs[TS][TS]; // im2col sub-tile (B operand, gathered from X, never materialized)
+
+void main() {
+    uint tx = gl_LocalInvocationID.x; // column within the tile (0..TS-1)
+    uint ty = gl_LocalInvocationID.y; // row within the tile
+    uint col = gl_GlobalInvocationID.x; // global GEMM column = output col index (n·ho+oy)·wo+ox
+    uint row = gl_GlobalInvocationID.y; // global GEMM row = filter f
+
+    int M = p.F;                       // GEMM rows
+    int K = p.C * p.KH * p.KW;         // GEMM interior (im2col row count)
+    int Ncol = p.N * p.ho * p.wo;      // GEMM columns (im2col col count)
+
+    // Decode the output column c0 = col into (n, oy, ox); reused every K-tile.
+    int c0 = int(col);
+    int ox = c0 % p.wo;
+    int oy = (c0 / p.wo) % p.ho;
+    int nn = c0 / (p.wo * p.ho);
+
+    float sum = 0.0; // f32 accumulate on-GPU (§V11 K-scaled tolerance), like matmul.comp
+    int tiles = (K + TS - 1) / TS;
+    for (int t = 0; t < tiles; ++t) {
+        uint aCol = uint(t) * TS + tx; // K-index for this A (weights) sub-tile column
+        uint krow = uint(t) * TS + ty; // K-index for this B (im2col) sub-tile row
+
+        // A = W[F, K], stored row-major [M,K] — loaded normally (§T94).
+        bool aIn = row < uint(M) && aCol < uint(K);
+        As[ty][tx] = aIn ? w[row * uint(K) + aCol] : 0.0;
+
+        // B = col[K, Ncol], the im2col matrix — GATHERED from X instead of read from a
+        // materialized buffer. krow is the col-matrix row (c·KH·KW + ky·KW + kx); col is
+        // the output column (n,oy,ox). Compute the source (n,c,iy,ix) tap and read X,
+        // returning 0.0 for the padding halo (§T342 im2col.comp index math, inlined).
+        bool bIn = krow < uint(K) && col < uint(Ncol);
+        float bv = 0.0;
+        if (bIn) {
+            int kk = int(krow);
+            int kx = kk % p.KW;
+            int ky = (kk / p.KW) % p.KH;
+            int c  = kk / (p.KW * p.KH);
+            int iy = oy * p.stride + ky - p.pad;
+            int ix = ox * p.stride + kx - p.pad;
+            if (iy >= 0 && iy < p.H && ix >= 0 && ix < p.Wd) {
+                bv = x[((nn * p.C + c) * p.H + iy) * p.Wd + ix];
+            }
+        }
+        Bs[ty][tx] = bv;
+
+        barrier(); // shared tiles fully written before use (workgroup barrier)
+        for (int i = 0; i < TS; ++i) {
+            sum += As[ty][i] * Bs[i][tx];
+        }
+        barrier(); // all reads done before the next tile overwrites shared memory
+    }
+
+    // Epilogue: fold bias and scatter to NCHW (§T342 colout.comp, inlined). row = f.
+    if (row < uint(M) && col < uint(Ncol)) {
+        int f = int(row);
+        o[((nn * p.F + f) * p.ho + oy) * p.wo + ox] = sum + bias[f];
+    }
+}
