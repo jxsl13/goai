@@ -57,7 +57,7 @@ GPU-6 (async stream, §V14 Phase-2): whole backend stream-based — 1 cublas str
 ## §GAP — vendor-BLAS gap on this Zen3 (torch-cpu 2.13, numpy 2.4.4/OpenBLAS)
 
 GAP-1 (1024³ GFLOP/s): F64 goai 84 | torch 177 | numpy 227 → ≈2.7×. F32 goai(f32-native nr16) 153 | torch 580 | numpy 485 → ≈3.8× (was 13× vs scalar 43).
-GAP-2: F64 gap partly = bit-exact `Mul`+`Add` (≈2× of FMA peak) + vendor cache blocking (ADR-0017 re-openable on this large-cache x86).
+GAP-2: F64 gap partly = bit-exact `Mul`+`Add` (≈2× of FMA peak). CACHE BLOCKING re-measured on this Zen3 (ADR-0017 resume condition): packed-B REGRESSED (512 −16%, 1024 −6%) → DISCARDED, x86 resume condition CLOSED with data (kernel ⊥ cache-capacity/B-read-bound; B fits L3). remaining ≈3× vendor gap = microkernel saturation + §V10 f64-accum policy, ⊥ blocking.
 GAP-3 (thread finding): torch FASTER at 8 threads than 16 on 8c/16t (SMT contention, compute-bound GEMM). BUT goai GEMM is SLOWER at 8 than 16 (69 vs 81 GFLOP/s) — its less-saturated kernel benefits from SMT hiding stalls → ⊥ cap parallelWork at physical cores (measured negative).
 
 ## §Tw — worker task log (merged PRs)
@@ -89,6 +89,7 @@ Tw24|x|CUDA GQA (grouped-query attn, pointer-array batched Sgemm) verified vs pe
 Tw25|x|CUDA embedding row-gather (bit-exact) — full-model forward-pass op set COMPLETE on-device (PR#26)|GPU-4,Nx1
 Tw26|x|CUDA fused SwiGLU (SiLU⊙up, 1 pass) — device traffic 5n→3n, FFN launch fusion (PR#27)|GPU-7
 Tw27|x|CPU f32-native GEMM direct-store (drop f64 carrier) +28% → 196 GFLOP/s, 4.7× scalar (PR#28); mr=8 tiling measured as -7% loss, rejected|CPU-3
+Tw28|x|CPU GEMM B-packing re-measured on Zen3 (ADR-0017 resume) — REGRESSED -6/-16%, discarded; x86 resume condition closed with data (PR#29)|§GAP
 
 ## §NEXT — open levers
 

@@ -66,3 +66,28 @@ SIMD lanes (f32 2×/4× FMA), which is architecturally host-blocked on arm64.
   before any merge** — never ship blocking on the strength of this host.
 - The SIMD rung resumes with an amd64 CI runner (`goexperiment.simd` /
   `simd/archsimd`) exactly as §T11b/§B13.
+
+## Re-measured on amd64 Zen 3 (2026-07-14) — resume condition met, still no delta
+
+The blocking rung's resume condition ("re-measure on a large-cache x86") was met
+on the Linux worker (AMD Ryzen 7 5700G, Zen 3, 16 MB L3, AVX2+FMA), on top of the
+now-`f32-native` direct-store SIMD kernel (`gemmF32BandDirect`, 196 GFLOP/s — see
+`SPEC-worker-linux-amd64-cuda.md` §CPU-3, ADR-0021). A packed-B variant
+(`gemmF32BandPacked`: each 16-column B panel copied once into a contiguous k×16
+scratch, sequential inner-loop reads, reused across the band's row-blocks;
+identical f32 accumulation → identical result) was built and A/B-measured:
+
+| F32 GEMM | direct (stride-n B) | packed-B | delta |
+|----------|---------------------|----------|-------|
+| 512³  | ~187 GFLOP/s | ~157 GFLOP/s | **−16%** |
+| 1024³ | ~196 GFLOP/s | ~185 GFLOP/s | **−6%**  |
+
+**REGRESSION on x86 too — DISCARDED (§C3).** The pack copy + allocation cost
+exceeds any prefetch benefit: at these sizes the streaming kernel is *not*
+cache-capacity- or B-read-bound (B fits L3 and is reused across the 4-row block;
+the hardware prefetcher handles the stride-n loads), so packing removes no real
+stall — the identical root cause as the arm64 result above and §B41/§B39/§B27.
+The x86-server resume condition is now **closed with data**: blocking does not
+help this kernel on this class of host either. The remaining gap to vendor SGEMM
+(≈3× on this Zen 3) is microkernel saturation (register/prefetch scheduling, and
+the f64-accumulation policy §V10/ADR-0021), not cache blocking.
