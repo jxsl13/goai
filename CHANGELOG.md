@@ -4,6 +4,14 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T636 — MoE gradient backward ~7× faster (2026-07-14)
+- The mixture-of-experts backward passes (load-balance loss, expert combine, router
+  z-loss) read their 2D tensors element by element. Typed fast paths (dtype switched
+  once, contiguous storage) cut the expert-combine backward from **4.60 ms to 0.66 ms
+  (~7×)** at 64 tokens × 8 experts × 512 dims, gradients unchanged. Added F32-vs-F64
+  parity tests for all three ops — the finite-difference gradient check only runs in
+  double precision, so the single-precision path needed its own coverage.
+
 ### T634 — BLAS-1 gradient backward ~15× faster (2026-07-14)
 - The dot-product, L2-norm and AXPY backward passes walked each element through
   `Unravel`/`AtF64`/`SetF64`. A shared typed helper (`scaleInto`, dtype switched once)
