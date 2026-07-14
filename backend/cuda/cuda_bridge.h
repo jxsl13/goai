@@ -13,4 +13,19 @@ int cu_available(void);
 // Returns 0 on success, nonzero on failure (see cuda_bridge.c for codes).
 int cu_matmul_f32(const float* A, const float* B, float* C, int M, int K, int N);
 
+// Resident-B matmul (§V14 Phase-1, mirrors the metal §T156 resident-weight seed):
+// upload a weight B[K,N] to the GPU ONCE, then reuse it across many matmuls,
+// skipping its per-call H2D. This is the transfer lever for inference, where the
+// weight is fixed and only the activation A varies.
+//
+// cu_upload_f32 copies n row-major floats to a fresh device buffer and returns an
+// opaque device handle (NULL on failure). cu_free_f32 releases it (NULL-safe).
+void* cu_upload_f32(const float* src, int n);
+void cu_free_f32(void* dptr);
+
+// cu_matmul_f32_bres computes C[M,N] = A[M,K]·dB[K,N] with A and C host-side and
+// dB a resident handle from cu_upload_f32 (its element count must be K*N). A and
+// C use the same pooled device buffers as cu_matmul_f32. Returns 0 on success.
+int cu_matmul_f32_bres(const float* A, const void* dB, float* C, int M, int K, int N);
+
 #endif
