@@ -51,7 +51,7 @@ experiment build); a dedicated conv A/B is a follow-up.
 
 The natural f64-accumulating F32 SIMD twin — per inner iteration
 `LoadFloat32x4Slice(B).ConvertToFloat64()` then `Float64x4` `Mul`/`Add` — was
-built and measured, and **regressed ~25×** (512³/1024³: ~43 → ~1.7 GFLOP/s).
+built and measured, and **regressed ≈25×** (512³/1024³: ≈43 → ≈1.7 GFLOP/s).
 The 128-bit f32 load + `ConvertToFloat64` widen in the hot loop is pathological
 on this path. Per §C3 (never ship a non-winning opt) it was **discarded**; F32
 GEMM keeps the blocked scalar kernel under the experiment too — unchanged and
