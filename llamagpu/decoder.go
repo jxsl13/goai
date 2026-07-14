@@ -42,10 +42,11 @@ import (
 // unarySiLU/binaryAdd/binaryMul are the shared kernel selectors (identical on both backends —
 // they must match shaders/unary.comp / metal_bridge.m's unary switch and the binary op tables).
 const (
-	unarySiLU = 6
-	unaryGELU = 9
-	binaryAdd = 0
-	binaryMul = 2
+	unarySiLU    = 6
+	unaryGELU    = 9
+	binaryAdd    = 0
+	binaryMul    = 2
+	binarySwiGLU = 6 // fused silu(a)·b — one dispatch instead of SiLU+Mul (§T613)
 )
 
 // buffer is a device-resident f32 buffer (metal.DeviceBuffer / vulkan.DeviceBuffer).
@@ -308,9 +309,8 @@ func (d *Decoder) Step(token, pos int) ([]float32, error) {
 			r.Binary(d.dx.b, d.ao.b, d.dx.b, binaryAdd),
 			r.RMSNorm(d.dx.b, b.gFFN, d.xn2.b, 1, D, d.eps),
 			b.wG.record(r, d.xn2.b, d.gate.b, 1),
-			r.Unary(d.gate.b, d.gate.b, unarySiLU),
 			b.wU.record(r, d.xn2.b, d.up.b, 1),
-			r.Binary(d.gate.b, d.up.b, d.gate.b, binaryMul),
+			r.Binary(d.gate.b, d.up.b, d.gate.b, binarySwiGLU),
 			b.wD.record(r, d.gate.b, d.mo.b, 1),
 			r.Binary(d.dx.b, d.mo.b, d.dx.b, binaryAdd),
 		)
@@ -381,9 +381,8 @@ func (d *Decoder) StepN(tokens []int, pos int) ([]float32, error) {
 			r.Binary(d.dx.b, d.ao.b, d.dx.b, binaryAdd),
 			r.RMSNorm(d.dx.b, b.gFFN, d.xn2.b, k, D, d.eps),
 			b.wG.record(r, d.xn2.b, d.gate.b, k),
-			r.Unary(d.gate.b, d.gate.b, unarySiLU),
 			b.wU.record(r, d.xn2.b, d.up.b, k),
-			r.Binary(d.gate.b, d.up.b, d.gate.b, binaryMul),
+			r.Binary(d.gate.b, d.up.b, d.gate.b, binarySwiGLU),
 			b.wD.record(r, d.gate.b, d.mo.b, k),
 			r.Binary(d.dx.b, d.mo.b, d.dx.b, binaryAdd),
 		)

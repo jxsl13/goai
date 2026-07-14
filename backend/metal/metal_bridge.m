@@ -928,6 +928,7 @@ static NSString* const kBinarySource =
      "    case 3: r=x/y; break;\n"
      "    case 4: r=max(x,y); break;\n"
      "    case 5: r=min(x,y); break;\n"
+     "    case 6: r=(x/(1.0f+exp(-x)))*y; break;\n" // fused SwiGLU: silu(gate)*up (SPEC T613)
      "    default: r=x; break;\n"
      "  }\n"
      "  O[gid]=r;\n"

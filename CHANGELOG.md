@@ -4,6 +4,11 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T613 (slice 1) — fused SwiGLU on both GPU backends (2026-07-14)
+- The decoder's SiLU-then-multiply pair is now one fused kernel on Metal and Vulkan
+  (one dispatch fewer per layer; parity suites green). Individually inside run noise —
+  the full fusion arc continues.
+
 ### T615/T616 — gofmt'ed docs code and plainer quickstarts (2026-07-14)
 - Go code blocks inside markdown are now gofmt-checked by the linter (with a -w
   auto-fix mode) and the pre-commit hook; the README quickstarts and four ADR blocks
