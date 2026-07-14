@@ -71,13 +71,28 @@ func (c *QuantKVCache) Values() (*tensor.Tensor, error) { return c.stack(c.vals)
 func (c *QuantKVCache) stack(rows [][]byte) (*tensor.Tensor, error) {
 	t := len(rows)
 	out := tensor.New(tensor.F32, tensor.Shape{t, c.dim})
+	dst := out.Storage().F32()
 	for r, row := range rows {
 		dq, err := gguf.Dequantize(row, gguf.Q8_0, c.dim)
 		if err != nil {
 			return nil, err
 		}
-		for j := range c.dim {
-			out.SetF64(dq.AtF64(j), r, j)
+		// pack the dequantized row directly into out[r,:] — typed, no per-element
+		// AtF64/SetF64 dispatch (§base-perf; this runs per attention over the cache).
+		o := dst[r*c.dim : r*c.dim+c.dim]
+		dqc := dq.Contiguous()
+		switch dqc.Dtype() {
+		case tensor.F64:
+			s := dqc.Storage().F64()
+			for j := 0; j < c.dim; j++ {
+				o[j] = float32(s[j])
+			}
+		case tensor.F32:
+			copy(o, dqc.Storage().F32())
+		default:
+			for j := 0; j < c.dim; j++ {
+				o[j] = float32(dqc.AtF64(j))
+			}
 		}
 	}
 	return out, nil
