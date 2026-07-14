@@ -2034,6 +2034,23 @@ func (r *Recorder) RoPEAt(q, inv, o *DeviceBuffer, off, seq, width, heads, hd, h
 	return nil
 }
 
+// RoPEPair records the fused two-band rotation (§T613): ONE dispatch rotates the q band
+// (headsQ heads at element offset offQ) AND the k band (headsK heads at offK) of a fused
+// QKV buffer in place, rows `stride` floats wide — replacing two RoPEAt dispatches.
+func (r *Recorder) RoPEPair(qkv, inv *DeviceBuffer, seq, stride, headsQ, offQ, headsK, offK, hd, half, posOffset int, posDiv float32) error {
+	maxOff := max(offQ, offK)
+	if offQ < 0 || offK < 0 || qkv.n < maxOff+seq*stride || inv.n < half {
+		return fmt.Errorf("metal: Recorder rope2 shape mismatch: qkv=%d (want %d at off %d) inv=%d (want %d)", qkv.n, seq*stride, maxOff, inv.n, half)
+	}
+	rc := C.mtl_recorder_rope2(r.handle, qkv.handle, inv.handle,
+		C.int(seq), C.int(stride), C.int(headsQ), C.int(offQ), C.int(headsK), C.int(offK),
+		C.int(hd), C.int(half), C.int(posOffset), C.float(posDiv))
+	if rc != 0 {
+		return fmt.Errorf("metal: Recorder rope2 failed (%d)", int(rc))
+	}
+	return nil
+}
+
 // LayerNorm records O = layernorm(X)·gamma + beta into the command buffer over device buffers
 // (GPT-2-style norm; rmsnorm is the Llama variant). x, o are rows×dim; g, b are dim-length.
 func (r *Recorder) LayerNorm(x, g, b, o *DeviceBuffer, rows, dim int, eps float32) error {

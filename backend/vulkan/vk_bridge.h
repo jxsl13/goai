@@ -191,6 +191,9 @@ int vk_recorder_addbias(void* rec, const uint32_t* spv, int spvLen, void* xh, vo
 int vk_recorder_rope(void* rec, const uint32_t* spv, int spvLen, void* qh, void* invh, void* oh,
                      int seq, int width, int heads, int hd, int half, int posOffset, float posDiv,
                      int elemOff);
+int vk_recorder_rope2(void* rec, const uint32_t* spv, int spvLen, void* qh, void* invh,
+                      int seq, int stride, int headsQ, int offQ, int headsK, int offK,
+                      int hd, int half, int posOffset, float posDiv);
 int vk_recorder_matmul_strided(void* rec, const uint32_t* spv, int spvLen, void* ah, void* bh, void* ch,
                                int M, int K, int N, int transA, int transB,
                                int lda, int ldb, int ldc, int offA, int offB, int offC, float alpha);

@@ -230,6 +230,76 @@ static int ensure_rope(void) {
     return gRoPE != nil ? 0 : -6;
 }
 
+// rope2 (SPEC T613): ONE dispatch rotates BOTH bands of a fused QKV row in place — the q band
+// (headsQ heads at element offset offQ) and the k band (headsK heads at offset offK), each row
+// `stride` floats wide. Thread t covers pair i of virtual head h over seq rows: h < headsQ is a
+// q-band head, the rest map to the k band. Replaces two back-to-back rope dispatches per layer.
+// P={seq,stride,headsQ,offQ,headsK,offK,hd,half,posOffset}, F={posDiv}.
+static NSString* const kRoPE2Source =
+    @"#include <metal_stdlib>\n"
+     "using namespace metal;\n"
+     "kernel void rope2(device float* Q [[buffer(0)]],\n"
+     "                  device const float* INV [[buffer(1)]],\n"
+     "                  constant int* P [[buffer(2)]],\n"
+     "                  constant float* F [[buffer(3)]],\n"
+     "                  uint gid [[thread_position_in_grid]]) {\n"
+     "  int seq=P[0], stride=P[1], headsQ=P[2], offQ=P[3], headsK=P[4], offK=P[5];\n"
+     "  int hd=P[6], halfd=P[7], posOffset=P[8];\n"
+     "  int hh=(headsQ+headsK)*halfd; int total=seq*hh;\n"
+     "  if ((int)gid >= total) return;\n"
+     "  int p=(int)gid/hh; int rem=(int)gid%hh; int h=rem/halfd; int i=rem%halfd;\n"
+     "  int base = (h < headsQ) ? (offQ + p*stride + h*hd + i)\n"
+     "                          : (offK + p*stride + (h-headsQ)*hd + i);\n"
+     "  float pos=float(p+posOffset)/F[0];\n"
+     "  float theta=INV[i];\n"
+     "  float c=cos(pos*theta), s=sin(pos*theta);\n"
+     "  float qi=Q[base], qih=Q[base+halfd];\n"
+     "  Q[base]=qi*c-qih*s;\n"
+     "  Q[base+halfd]=qih*c+qi*s;\n"
+     "}\n";
+
+static id<MTLComputePipelineState> gRoPE2 = nil;
+
+static int ensure_rope2(void) {
+    if (gRoPE2 != nil) return 0;
+    NSError* err = nil;
+    id<MTLLibrary> lib = [gDevice newLibraryWithSource:kRoPE2Source options:nil error:&err];
+    if (lib == nil) return -6;
+    id<MTLFunction> fn = [lib newFunctionWithName:@"rope2"];
+    if (fn == nil) return -6;
+    gRoPE2 = [gDevice newComputePipelineStateWithFunction:fn error:&err];
+    return gRoPE2 != nil ? 0 : -6;
+}
+
+// mtl_recorder_rope2 encodes the fused two-band in-place rotation (see kRoPE2Source) into the
+// recorder's command buffer. No commit.
+int mtl_recorder_rope2(void* rec, void* qh, void* invh,
+                       int seq, int stride, int headsQ, int offQ, int headsK, int offK,
+                       int hd, int half, int posOffset, float posDiv) {
+    if (rec == NULL || qh == NULL || invh == NULL) return -2;
+    if (ensure_rope2() != 0) return -6;
+    id<MTLCommandBuffer> cmd = (__bridge id<MTLCommandBuffer>)rec;
+    id<MTLBuffer> qb = (__bridge id<MTLBuffer>)qh;
+    id<MTLBuffer> ib = (__bridge id<MTLBuffer>)invh;
+    int P[9] = {seq, stride, headsQ, offQ, headsK, offK, hd, half, posOffset};
+    id<MTLBuffer> pb = [gDevice newBufferWithBytes:P length:sizeof(P) options:MTLResourceStorageModeShared];
+    float F[1] = {posDiv};
+    id<MTLBuffer> fb = [gDevice newBufferWithBytes:F length:sizeof(F) options:MTLResourceStorageModeShared];
+    if (pb == nil || fb == nil) return -2;
+    int total = seq * (headsQ + headsK) * half;
+    id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
+    [enc setComputePipelineState:gRoPE2];
+    [enc setBuffer:qb offset:0 atIndex:0];
+    [enc setBuffer:ib offset:0 atIndex:1];
+    [enc setBuffer:pb offset:0 atIndex:2];
+    [enc setBuffer:fb offset:0 atIndex:3];
+    NSUInteger tg = gRoPE2.maxTotalThreadsPerThreadgroup;
+    if ((NSUInteger)total < tg) tg = (NSUInteger)total;
+    [enc dispatchThreads:MTLSizeMake(total,1,1) threadsPerThreadgroup:MTLSizeMake(tg,1,1)];
+    [enc endEncoding];
+    return 0;
+}
+
 int mtl_rope_f32(const float* Q, const float* inv, float* O,
                  int seq, int width, int heads, int hd, int half, int posOffset, float posDiv) {
     if (ensure_init() != 0) return -1;

@@ -114,6 +114,9 @@ type recorder interface {
 	// buffer — the q/k bands of a fused QKV projection output (§T613). width acts as the
 	// ROW STRIDE; only the first heads·hd columns of each row are rotated, in place.
 	RoPEAt(q, inv, o buffer, off, seq, width, heads, hd, half, pos int, posDiv float32) error
+	// RoPEPair rotates the q band (headsQ heads at offQ) AND the k band (headsK at offK) of
+	// a fused QKV buffer in ONE dispatch (§T613), rows `stride` floats wide, in place.
+	RoPEPair(qkv, inv buffer, seq, stride, headsQ, offQ, headsK, offK, hd, half, pos int, posDiv float32) error
 	Blit(src buffer, srcOff int, dst buffer, dstOff, n int) error
 	// Copy2D moves a strided rows×rowFloats sub-matrix (the fused-QKV band extraction, §T613):
 	// row r copies from src[srcOff+r·srcStride:] to dst[dstOff+r·dstStride:].
@@ -373,8 +376,7 @@ func (d *Decoder) Step(token, pos int) ([]float32, error) {
 			qBuf = d.qkv.b
 			e = firstErr(
 				b.wqkv.record(r, d.xn.b, d.qkv.b, 1),
-				r.RoPEAt(d.qkv.b, d.dinv.b, d.qkv.b, 0, 1, D, H, dk, d.half, pos, d.posDiv),
-				r.RoPEAt(d.qkv.b, d.dinv.b, d.qkv.b, D, 1, kvDim, KVH, dk, d.half, pos, d.posDiv),
+				r.RoPEPair(d.qkv.b, d.dinv.b, 1, D+2*kvDim, H, 0, KVH, D, dk, d.half, pos, d.posDiv), // q+k bands, ONE dispatch (§T613)
 				r.Blit(d.qkv.b, D, b.kC, pos*kvDim, kvDim),
 				r.Blit(d.qkv.b, D+kvDim, b.vC, pos*kvDim, kvDim),
 			)
@@ -459,8 +461,7 @@ func (d *Decoder) StepN(tokens []int, pos int) ([]float32, error) {
 		if e == nil && b.wqkv != nil {
 			e = firstErr(
 				b.wqkv.record(r, d.xn.b, d.qkv.b, k),
-				r.RoPEAt(d.qkv.b, d.dinv.b, d.qkv.b, 0, k, stride, H, dk, d.half, pos, d.posDiv),
-				r.RoPEAt(d.qkv.b, d.dinv.b, d.qkv.b, D, k, stride, KVH, dk, d.half, pos, d.posDiv),
+				r.RoPEPair(d.qkv.b, d.dinv.b, k, stride, H, 0, KVH, D, dk, d.half, pos, d.posDiv), // q+k bands, ONE dispatch (§T613)
 				r.Copy2D(d.qkv.b, 0, stride, d.q.b, 0, D, k, D),
 				r.Copy2D(d.qkv.b, D, stride, b.kC, pos*kvDim, kvDim, k, kvDim),
 				r.Copy2D(d.qkv.b, D+kvDim, stride, b.vC, pos*kvDim, kvDim, k, kvDim),

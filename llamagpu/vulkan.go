@@ -38,6 +38,9 @@ func (v vRec) RoPE(q, inv, o buffer, seq, width, heads, hd, half, pos int, posDi
 func (v vRec) RoPEAt(q, inv, o buffer, off, seq, width, heads, hd, half, pos int, posDiv float32) error {
 	return v.r.RoPEAt(vb(q), vb(inv), vb(o), off, seq, width, heads, hd, half, pos, posDiv)
 }
+func (v vRec) RoPEPair(qkv, inv buffer, seq, stride, headsQ, offQ, headsK, offK, hd, half, pos int, posDiv float32) error {
+	return v.r.RoPEPair(vb(qkv), vb(inv), seq, stride, headsQ, offQ, headsK, offK, hd, half, pos, posDiv)
+}
 func (v vRec) Blit(src buffer, srcOff int, dst buffer, dstOff, n int) error {
 	return v.r.Blit(vb(src), srcOff, vb(dst), dstOff, n)
 }

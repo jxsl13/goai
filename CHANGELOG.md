@@ -4,6 +4,13 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T613 (slice 4) — one-dispatch RoPE over both QKV bands (2026-07-14)
+- The position rotation (RoPE) of the query and key bands now runs as a single GPU
+  dispatch on both backends instead of two. The decoder is down to 12 dispatches per
+  layer (from 18 before the fusion arc); bench-model f32 decode is ~335 tok/s,
+  +24% cumulative — the remaining cost is per-step fixed overhead, which is the
+  next task (T614).
+
 ### T613 (slice 3) — residual-add matmul epilogues (2026-07-14)
 - The two projections whose results feed the transformer's residual stream (attention
   output and FFN down) now add in place as part of the matrix multiplication itself

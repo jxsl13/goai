@@ -1,0 +1,43 @@
+#version 450
+
+// Fused two-band RoPE (SPEC T613): ONE dispatch rotates BOTH bands of a fused QKV row in
+// place — the q band (headsQ heads at element offset offQ) and the k band (headsK heads at
+// offset offK), each row `stride` floats wide. Invocation t covers rotated pair i of virtual
+// head h over seq rows: h < headsQ is a q-band head, the rest map to the k band. Replaces the
+// two back-to-back rope dispatches per decoder layer. Same rotation math as rope.comp (the
+// host-precomputed inv[half]/posDiv fold PI/YaRN in). Compiled to rope2.spv (glslc).
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) buffer BufQ { float q[]; }; // read-write: in-place rotation
+layout(std430, binding = 1) readonly buffer BufInv { float inv[]; };
+
+layout(push_constant) uniform Dims {
+    int seq; int stride; int headsQ; int offQ; int headsK; int offK;
+    int hd; int halfd; int posOffset; float posDiv;
+} d;
+
+void main() {
+    uint gid = gl_GlobalInvocationID.x;
+    uint hh = uint(d.headsQ + d.headsK) * uint(d.halfd);
+    uint total = uint(d.seq) * hh;
+    if (gid >= total) {
+        return;
+    }
+    uint p = gid / hh;
+    uint rem = gid % hh;
+    int h = int(rem / uint(d.halfd));
+    uint i = rem % uint(d.halfd);
+    uint base = (h < d.headsQ)
+        ? uint(d.offQ) + p * uint(d.stride) + uint(h) * uint(d.hd) + i
+        : uint(d.offK) + p * uint(d.stride) + uint(h - d.headsQ) * uint(d.hd) + i;
+
+    float pos = float(int(p) + d.posOffset) / d.posDiv;
+    float theta = inv[i];
+    float c = cos(pos * theta);
+    float s = sin(pos * theta);
+    float qi = q[base];
+    float qih = q[base + uint(d.halfd)];
+    q[base] = qi * c - qih * s;
+    q[base + uint(d.halfd)] = qih * c + qi * s;
+}

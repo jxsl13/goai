@@ -69,6 +69,12 @@ var ropeSpirv []byte
 //go:embed shaders/rope_bwd.spv
 var ropeBwdSpirv []byte
 
+// rope2Spirv is the fused two-band RoPE (shaders/rope2.comp, §T613): one dispatch rotates
+// the q AND k bands of a fused QKV buffer in place.
+//
+//go:embed shaders/rope2.spv
+var rope2Spirv []byte
+
 // softmaxSpirv is the compiled softmax shader (shaders/softmax.comp → softmax.spv via
 // `make vulkan-spv`), embedded like the others.
 //
@@ -1275,6 +1281,25 @@ func (r *Recorder) RoPEAt(q, inv, o *DeviceBuffer, off, seq, width, heads, hd, h
 		C.int(seq), C.int(width), C.int(heads), C.int(hd), C.int(half), C.int(posOffset), C.float(posDiv), C.int(off))
 	if rc != 0 {
 		return fmt.Errorf("vulkan: Recorder rope failed (%d)", int(rc))
+	}
+	return nil
+}
+
+// RoPEPair records the fused two-band rotation (§T613): ONE dispatch rotates the q band
+// (headsQ heads at element offset offQ) AND the k band (headsK heads at offK) of a fused
+// QKV buffer in place, rows `stride` floats wide — replacing two RoPEAt dispatches.
+func (r *Recorder) RoPEPair(qkv, inv *DeviceBuffer, seq, stride, headsQ, offQ, headsK, offK, hd, half, posOffset int, posDiv float32) error {
+	maxOff := max(offQ, offK)
+	if offQ < 0 || offK < 0 || qkv.n < maxOff+seq*stride || inv.n < half {
+		return fmt.Errorf("vulkan: Recorder rope2 shape mismatch: qkv=%d (want %d at off %d) inv=%d (want %d)", qkv.n, seq*stride, maxOff, inv.n, half)
+	}
+	rc := C.vk_recorder_rope2(r.handle,
+		(*C.uint32_t)(unsafe.Pointer(&rope2Spirv[0])), C.int(len(rope2Spirv)),
+		qkv.handle, inv.handle,
+		C.int(seq), C.int(stride), C.int(headsQ), C.int(offQ), C.int(headsK), C.int(offK),
+		C.int(hd), C.int(half), C.int(posOffset), C.float(posDiv))
+	if rc != 0 {
+		return fmt.Errorf("vulkan: Recorder rope2 failed (%d)", int(rc))
 	}
 	return nil
 }

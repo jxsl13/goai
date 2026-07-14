@@ -1379,6 +1379,33 @@ int vk_recorder_rope(void* rec, const uint32_t* spv, int spvLen, void* qh, void*
     return rc;
 }
 
+// vk_recorder_rope2 records the fused two-band in-place rotation (SPEC T613): ONE dispatch
+// rotates the q band (headsQ heads at element offset offQ) AND the k band (headsK heads at
+// offK) of a fused QKV buffer, rows `stride` floats wide. Replaces two rope dispatches.
+int vk_recorder_rope2(void* rec, const uint32_t* spv, int spvLen, void* qh, void* invh,
+                      int seq, int stride, int headsQ, int offQ, int headsK, int offK,
+                      int hd, int half, int posOffset, float posDiv) {
+    if (!rec || !qh || !invh || seq < 1 || stride < 1 || headsQ < 1 || headsK < 1 ||
+        offQ < 0 || offK < 0) return -2;
+    DevBuf* q = (DevBuf*)qh; DevBuf* inv = (DevBuf*)invh;
+    PipeCache* pc = NULL;
+    struct { int32_t seq, stride, headsQ, offQ, headsK, offK, hd, half, posOffset; float posDiv; } push = {
+        seq, stride, headsQ, offQ, headsK, offK, hd, half, posOffset, posDiv };
+    pthread_mutex_lock(&gLock);
+    int rc = -4;
+    if (pipeline_for(spv, spvLen, 2, sizeof(push), &pc) == 0) {
+        int maxOff = offQ > offK ? offQ : offK;
+        VkDeviceSize span = ((VkDeviceSize)maxOff + (VkDeviceSize)seq*stride) * 4;
+        if (span > q->nbytes) span = q->nbytes;
+        VkBuffer buf[2] = { q->buf, inv->buf };
+        VkDeviceSize lens[2] = { span, (VkDeviceSize)half*4 };
+        uint32_t total = (uint32_t)seq * (uint32_t)(headsQ + headsK) * (uint32_t)half;
+        rc = rec_dispatch(pc, 2, buf, lens, &push, sizeof(push), (total + 63u) / 64u, 1u, 1u);
+    }
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
 // vk_recorder_mha_decode (§T429, the vulkan twin of metal §T428): cooperative single-query decode
 // attention — one 32-lane subgroup per head (vs the two-pass kernel's one invocation per head,
 // which made decode ~serial in the context length). Push {sk,dm,heads,kvHeads,dk,scale}. No submit.

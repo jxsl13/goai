@@ -82,6 +82,7 @@ vulkan-spv:
 	glslc backend/vulkan/shaders/crossentropy_bwd.comp -o backend/vulkan/shaders/crossentropy_bwd.spv
 	glslc backend/vulkan/shaders/embed_bwd.comp -o backend/vulkan/shaders/embed_bwd.spv
 	glslc backend/vulkan/shaders/rope.comp -o backend/vulkan/shaders/rope.spv
+	glslc backend/vulkan/shaders/rope2.comp -o backend/vulkan/shaders/rope2.spv
 	glslc backend/vulkan/shaders/rope_bwd.comp -o backend/vulkan/shaders/rope_bwd.spv
 	glslc backend/vulkan/shaders/softmax.comp -o backend/vulkan/shaders/softmax.spv
 	glslc backend/vulkan/shaders/layernorm.comp -o backend/vulkan/shaders/layernorm.spv
