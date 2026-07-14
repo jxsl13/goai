@@ -123,4 +123,4 @@ func benchMatMulOn(b *testing.B, name backend.Name, sz int) {
 func BenchmarkMatMulF32_512_cuda(b *testing.B)  { benchMatMulOn(b, backend.CUDA, 512) }
 func BenchmarkMatMulF32_512_cpu(b *testing.B)   { benchMatMulOn(b, backend.CPU, 512) }
 func BenchmarkMatMulF32_1024_cuda(b *testing.B) { benchMatMulOn(b, backend.CUDA, 1024) }
-func BenchmarkMatMulF32_1024_cpu(b *testing.B)  { benchMatMulOn(b, backend.CUDA, 1024) }
+func BenchmarkMatMulF32_1024_cpu(b *testing.B)  { benchMatMulOn(b, backend.CPU, 1024) }
