@@ -144,6 +144,46 @@ func geluKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) (
 	}
 	return []*tensor.Tensor{out}, nil
 }
+func negKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*tensor.Tensor, error) {
+	xc := in[0].Contiguous()
+	out := tensor.NewOn(ctx.Device(), in[0].Dtype(), in[0].Shape())
+	switch in[0].Dtype() {
+	case tensor.F64:
+		d, o := xc.Storage().F64(), out.Storage().F64()
+		parallel(len(o), func(lo, hi int) {
+			for i := lo; i < hi; i++ {
+				o[i] = -d[i]
+			}
+		})
+	case tensor.F32:
+		d, o := xc.Storage().F32(), out.Storage().F32()
+		parallel(len(o), func(lo, hi int) {
+			for i := lo; i < hi; i++ {
+				o[i] = -d[i]
+			}
+		})
+	default:
+		return nil, fmt.Errorf("cpu: neg unsupported dtype %v", in[0].Dtype())
+	}
+	return []*tensor.Tensor{out}, nil
+}
+
+// stopGradKernelCPU is the identity forward (detach); the VJP zeros the grad. A
+// direct copy beats the old per-element unOp closure (memmove vs indirect calls).
+func stopGradKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*tensor.Tensor, error) {
+	xc := in[0].Contiguous()
+	out := tensor.NewOn(ctx.Device(), in[0].Dtype(), in[0].Shape())
+	switch in[0].Dtype() {
+	case tensor.F64:
+		copy(out.Storage().F64(), xc.Storage().F64())
+	case tensor.F32:
+		copy(out.Storage().F32(), xc.Storage().F32())
+	default:
+		return nil, fmt.Errorf("cpu: stopgradient unsupported dtype %v", in[0].Dtype())
+	}
+	return []*tensor.Tensor{out}, nil
+}
+
 func reluKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*tensor.Tensor, error) {
 	xc := in[0].Contiguous()
 	out := tensor.NewOn(ctx.Device(), in[0].Dtype(), in[0].Shape())
@@ -207,8 +247,8 @@ func init() {
 	reg(backend.OpMul, binOp(simd.MulF64, simd.MulF32))
 	reg(backend.OpDiv, binOp(simd.DivF64, simd.DivF32))
 
-	reg(backend.OpStopGradient, unOp(func(x float64) float64 { return x })) // detach: identity forward
-	reg(backend.OpNeg, unOp(func(x float64) float64 { return -x }))
+	reg(backend.OpStopGradient, stopGradKernelCPU)
+	reg(backend.OpNeg, negKernelCPU)
 	reg(backend.OpExp, unOp(math.Exp))
 	reg(backend.OpLog, unOp(math.Log))
 	reg(backend.OpTanh, unOp(math.Tanh))
