@@ -3139,6 +3139,114 @@ int mtl_mha_mps(const float* Q, const float* K, const float* V, float* O,
     }
 }
 
+// ---- MPSGraph attention forward (§T621, EXPERIMENT) -------------------------
+// mtl_mha_mpsgraph builds ONE MPSGraph that batches all heads (unlike mtl_mha_mps's per-head
+// serialized MPSMatrixMultiplication loop) and runs Apple's native graph compiler:
+//   Q[seq,dm] -> [kvHeads,rep,seq,dk];  K,V[seq,kvDim] -> [kvHeads,rep,seq,dk] (rep broadcast)
+//   S = scale·Q·Kᵀ  (+ baked causal −∞ mask)  ->  P = softmax_lastaxis(S)  ->  O = P·V  -> [seq,dm]
+// The graph + its placeholders are cached by (seq,kvHeads,rep,dk,causal); the causal mask is baked
+// in as a graph constant. Manual matmul/softmax graph (macOS 12.3+) — NOT the macOS-15
+// scaledDotProductAttention primitive — so it runs on this OS. A/B toggle only (SetMHAUseMPSGraph).
+#import <MetalPerformanceShadersGraph/MetalPerformanceShadersGraph.h>
+
+static MPSGraph* gAttnGraph = nil;
+static MPSGraphTensor* gAttnQ = nil;
+static MPSGraphTensor* gAttnK = nil;
+static MPSGraphTensor* gAttnV = nil;
+static MPSGraphTensor* gAttnO = nil;
+static int gAttnSig[5] = {-1,-1,-1,-1,-1}; // seq, kvHeads, rep, dk, causal
+
+static int ensure_attn_graph(int seq, int kvHeads, int rep, int dk, int causal) {
+    if (gAttnGraph != nil && gAttnSig[0]==seq && gAttnSig[1]==kvHeads &&
+        gAttnSig[2]==rep && gAttnSig[3]==dk && gAttnSig[4]==causal) return 0;
+    @autoreleasepool {
+        int heads = kvHeads * rep;
+        int dm = heads * dk;
+        int kvDim = kvHeads * dk;
+        MPSGraph* g = [MPSGraph new];
+        MPSGraphTensor* Q = [g placeholderWithShape:@[@(seq), @(dm)]    dataType:MPSDataTypeFloat32 name:@"Q"];
+        MPSGraphTensor* K = [g placeholderWithShape:@[@(seq), @(kvDim)] dataType:MPSDataTypeFloat32 name:@"K"];
+        MPSGraphTensor* V = [g placeholderWithShape:@[@(seq), @(kvDim)] dataType:MPSDataTypeFloat32 name:@"V"];
+
+        // Q[seq, kvHeads, rep, dk] -> [kvHeads, rep, seq, dk]. Head h = kvh*rep + r (matches
+        // ref: kvOff=(h/rep)*dk, so heads rep-grouped by kv head — contiguous in the reshape).
+        MPSGraphTensor* Qr = [g reshapeTensor:Q withShape:@[@(seq), @(kvHeads), @(rep), @(dk)] name:nil];
+        MPSGraphTensor* Qt = [g transposeTensor:Qr permutation:@[@1,@2,@0,@3] name:nil]; // [kvHeads,rep,seq,dk]
+        // K,V[seq, kvHeads, 1, dk] -> [kvHeads, 1, seq, dk] -> broadcast rep -> [kvHeads,rep,seq,dk].
+        MPSGraphTensor* Kr = [g reshapeTensor:K withShape:@[@(seq), @(kvHeads), @1, @(dk)] name:nil];
+        MPSGraphTensor* Kt = [g transposeTensor:Kr permutation:@[@1,@2,@0,@3] name:nil]; // [kvHeads,1,seq,dk]
+        MPSGraphTensor* Kb = [g broadcastTensor:Kt toShape:@[@(kvHeads), @(rep), @(seq), @(dk)] name:nil];
+        MPSGraphTensor* Vr = [g reshapeTensor:V withShape:@[@(seq), @(kvHeads), @1, @(dk)] name:nil];
+        MPSGraphTensor* Vt = [g transposeTensor:Vr permutation:@[@1,@2,@0,@3] name:nil];
+        MPSGraphTensor* Vb = [g broadcastTensor:Vt toShape:@[@(kvHeads), @(rep), @(seq), @(dk)] name:nil];
+        // Kᵀ over the last two axes: [kvHeads,rep,dk,seq].
+        MPSGraphTensor* KbT = [g transposeTensor:Kb dimension:2 withDimension:3 name:nil];
+
+        // S = Q'·Kᵀ  ->  [kvHeads,rep,seq,seq]. The 1/√dk·attn-temp scale is folded into Q on the
+        // host (Q'=scale·Q) so the cached graph stays scale-independent (see mtl_mha_mpsgraph).
+        MPSGraphTensor* S = [g matrixMultiplicationWithPrimaryTensor:Qt secondaryTensor:KbT name:nil];
+
+        // Causal additive mask baked as a graph constant: 0 for j<=i, -1e30 for j>i.
+        MPSGraphTensor* Sm = S;
+        if (causal) {
+            size_t n = (size_t)seq * seq;
+            float* mask = (float*)malloc(n * sizeof(float));
+            for (int i = 0; i < seq; i++)
+                for (int j = 0; j < seq; j++)
+                    mask[(size_t)i*seq + j] = (j <= i) ? 0.0f : -1.0e30f;
+            NSData* md = [NSData dataWithBytes:mask length:n*sizeof(float)];
+            free(mask);
+            MPSGraphTensor* M = [g constantWithData:md shape:@[@(seq), @(seq)] dataType:MPSDataTypeFloat32];
+            Sm = [g additionWithPrimaryTensor:S secondaryTensor:M name:nil];
+        }
+        MPSGraphTensor* P = [g softMaxWithTensor:Sm axis:3 name:nil];
+        MPSGraphTensor* O4 = [g matrixMultiplicationWithPrimaryTensor:P secondaryTensor:Vb name:nil]; // [kvHeads,rep,seq,dk]
+        MPSGraphTensor* Ot = [g transposeTensor:O4 permutation:@[@2,@0,@1,@3] name:nil]; // [seq,kvHeads,rep,dk]
+        MPSGraphTensor* O  = [g reshapeTensor:Ot withShape:@[@(seq), @(dm)] name:nil];
+
+        gAttnGraph = g;
+        gAttnQ = Q; gAttnK = K; gAttnV = V; gAttnO = O;
+        gAttnSig[0]=seq; gAttnSig[1]=kvHeads; gAttnSig[2]=rep; gAttnSig[3]=dk; gAttnSig[4]=causal;
+    }
+    return gAttnGraph != nil ? 0 : -20;
+}
+
+int mtl_mha_mpsgraph(const float* Q, const float* K, const float* V, float* O,
+                     int seq, int dm, int heads, int dk, int causal, int kvHeads, float scale) {
+    if (ensure_init() != 0) return -1;
+    int rep = heads / kvHeads;
+    int kvDim = kvHeads * dk;
+    @autoreleasepool {
+        // The scale varies with dk and the YaRN attn temperature, so it is folded on the host into Q
+        // (Q' = scale·Q) rather than baked into the cached graph — keeps the graph scale-independent.
+        size_t qN = (size_t)seq * dm, kvN = (size_t)seq * kvDim;
+        float* Qs = (float*)malloc(qN * sizeof(float));
+        if (Qs == NULL) return -2;
+        for (size_t i = 0; i < qN; i++) Qs[i] = Q[i] * scale;
+
+        if (ensure_attn_graph(seq, kvHeads, rep, dk, causal) != 0) { free(Qs); return -20; }
+
+        id<MTLBuffer> qb = [gDevice newBufferWithBytes:Qs length:qN*sizeof(float) options:MTLResourceStorageModeShared];
+        id<MTLBuffer> kb = [gDevice newBufferWithBytes:K  length:kvN*sizeof(float) options:MTLResourceStorageModeShared];
+        id<MTLBuffer> vb = [gDevice newBufferWithBytes:V  length:kvN*sizeof(float) options:MTLResourceStorageModeShared];
+        id<MTLBuffer> ob = [gDevice newBufferWithLength:qN*sizeof(float) options:MTLResourceStorageModeShared];
+        free(Qs);
+        if (qb == nil || kb == nil || vb == nil || ob == nil) return -2;
+
+        MPSGraphTensorData* qd = [[MPSGraphTensorData alloc] initWithMTLBuffer:qb shape:@[@(seq), @(dm)]    dataType:MPSDataTypeFloat32];
+        MPSGraphTensorData* kd = [[MPSGraphTensorData alloc] initWithMTLBuffer:kb shape:@[@(seq), @(kvDim)] dataType:MPSDataTypeFloat32];
+        MPSGraphTensorData* vd = [[MPSGraphTensorData alloc] initWithMTLBuffer:vb shape:@[@(seq), @(kvDim)] dataType:MPSDataTypeFloat32];
+        MPSGraphTensorData* od = [[MPSGraphTensorData alloc] initWithMTLBuffer:ob shape:@[@(seq), @(dm)]    dataType:MPSDataTypeFloat32];
+
+        NSDictionary* feeds = @{gAttnQ:qd, gAttnK:kd, gAttnV:vd};
+        NSDictionary* results = @{gAttnO:od};
+        [gAttnGraph runWithMTLCommandQueue:gQueue feeds:feeds targetOperations:nil resultsDictionary:results];
+
+        memcpy(O, ob.contents, qN*sizeof(float));
+        return 0;
+    }
+}
+
 // softmax_jacobian (§T399): given P=softmax(S) and dP (both [rows,cols]), compute the softmax VJP
 // dS[i,j] = P[i,j]·(dP[i,j] − Σ_k P[i,k]·dP[i,k]) IN PLACE on dP (dS overwrites dP). Causal: only
 // j≤i valid (P is already 0 for j>i, so masked terms drop out; the tail is set to 0). One

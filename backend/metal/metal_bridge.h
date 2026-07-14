@@ -237,6 +237,13 @@ int mtl_flashattn_f32(const float* Q, const float* K, const float* V, float* O,
 int mtl_mha_mps(const float* Q, const float* K, const float* V, float* O,
                 int seq, int dm, int heads, int dk, int causal, int kvHeads, float scale);
 
+// mtl_mha_mpsgraph (§T621, EXPERIMENT): attention forward via a single cached MPSGraph
+// (reshape→transpose→matmul QKᵀ→scale→+causal-mask→softmax→matmul PV→transpose back). All heads
+// batched in ONE graph run (vs mtl_mha_mps's per-head serialized MPS loop). Q,O are [seq,dm];
+// K,V are [seq,kvHeads·dk]. GQA via explicit KV broadcast. A/B toggle only — see SetMHAUseMPSGraph.
+int mtl_mha_mpsgraph(const float* Q, const float* K, const float* V, float* O,
+                     int seq, int dm, int heads, int dk, int causal, int kvHeads, float scale);
+
 // mtl_mha_decode_host (§T432): cooperative decode/prefill attention over host slices — the per-op
 // path's route onto the §T428/431 kernel (the two-pass kernel is ~serial in sk at small sq).
 int mtl_mha_decode_host(const float* Q, const float* K, const float* V, float* O,

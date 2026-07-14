@@ -13,11 +13,22 @@ import (
 	"fmt"
 	"math"
 	"runtime"
+	"sync/atomic"
 	"unsafe"
 
 	"github.com/jxsl13/goai/backend"
 	"github.com/jxsl13/goai/tensor"
 )
+
+// mhaUseMPSGraph toggles the EXPERIMENTAL MPSGraph attention prefill path (§T621) in place of the
+// default per-head MPS-matmul path (mtl_mha_mps). Off by default; flipped only by SetMHAUseMPSGraph
+// for the A/B benchmark. Applies to the sq==sk, window==0, non-ALiBi, dk≤128 prefill fast path only.
+var mhaUseMPSGraph atomic.Bool
+
+// SetMHAUseMPSGraph selects the MPSGraph attention prefill path (true) or the default per-head MPS
+// path (false), returning the previous value. Experiment toggle (§T621) — the custom path is the
+// live default. Not goroutine-safe against a concurrent OpMHA on a different backend instance.
+func SetMHAUseMPSGraph(v bool) bool { return mhaUseMPSGraph.Swap(v) }
 
 // device is the metal tensor.Device. Tensor memory stays host-side (Apple
 // Silicon UMA); the kernel copies through shared MTLBuffers per call — honest
@@ -1485,6 +1496,20 @@ func mhaF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*
 		// bringing attention fwd from ~24× to ~3.4× vs torch-mps. Same scale/causal/kvHeads, so
 		// YaRN attn-scale and GQA carry over; it materializes the [seq,seq] scores (fine on UMA).
 		// Decode (sq<sk) and sliding-window stay on the two-pass kernel below.
+		if mhaUseMPSGraph.Load() {
+			// EXPERIMENT (§T621): Apple's native MPSGraph, all heads batched in one graph run.
+			rc := C.mtl_mha_mpsgraph(
+				(*C.float)(&qc.Storage().F32()[0]),
+				(*C.float)(&kc.Storage().F32()[0]),
+				(*C.float)(&vc.Storage().F32()[0]),
+				(*C.float)(&out.Storage().F32()[0]),
+				C.int(sq), C.int(dm), C.int(heads), C.int(dk), C.int(causal), C.int(kvHeads), C.float(scale),
+			)
+			if rc != 0 {
+				return nil, fmt.Errorf("metal: mha (MPSGraph path) failed (code %d)", int(rc))
+			}
+			return []*tensor.Tensor{out}, nil
+		}
 		rc := C.mtl_mha_mps(
 			(*C.float)(&qc.Storage().F32()[0]),
 			(*C.float)(&kc.Storage().F32()[0]),

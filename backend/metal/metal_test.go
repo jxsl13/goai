@@ -168,6 +168,64 @@ func TestMetalMHAWindowCrossReference(t *testing.T) {
 	}
 }
 
+// §V3/§V11 (§T621 EXPERIMENT): the MPSGraph prefill attention path (SetMHAUseMPSGraph) matches the
+// Pure-Go reference within an f32 tolerance across heads, GQA/MQA, causal and attn-scale — the
+// prefill fast-path cases (sq==sk) only, since MPSGraph replaces the mtl_mha_mps prefill path.
+// Same crossTol(dk+seq) as the custom-path MHA cross-ref (sq==sk ⇒ sk==seq): MPSGraph's fused
+// softmax uses a different reduction order but stays within the identical f32 tolerance — measured
+// green through the seq=512 benchmark shape, so no tolerance relaxation was needed.
+func TestMetalMHAMPSGraphCrossReference(t *testing.T) {
+	skipNoGPU(t)
+	mb, _ := backend.Get(backend.Metal)
+	ref, _ := backend.Get(backend.Ref)
+
+	prev := metal.SetMHAUseMPSGraph(true)
+	defer metal.SetMHAUseMPSGraph(prev)
+
+	cases := []struct {
+		name           string
+		seq, heads, kv int
+		dk             int
+		causal         bool
+		scale          float64
+	}{
+		{"mha", 4, 2, 2, 4, false, 1},
+		{"causal", 6, 4, 4, 4, true, 1},
+		{"gqa", 8, 4, 2, 8, true, 1},           // grouped-query
+		{"mqa", 8, 8, 1, 4, false, 1},          // multi-query
+		{"attnscale", 6, 4, 4, 8, true, 1.2},   // YaRN attn temperature
+		{"prefill512", 512, 8, 8, 64, true, 1}, // the A/B benchmark shape
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dm := c.heads * c.dk
+			dkv := c.kv * c.dk
+			q := bench.RandF32(tensor.Shape{c.seq, dm}, 1)
+			k := bench.RandF32(tensor.Shape{c.seq, dkv}, 2)
+			v := bench.RandF32(tensor.Shape{c.seq, dkv}, 3)
+			attrs := backend.AttnAttrs{Heads: c.heads, KVHeads: c.kv, Causal: c.causal, Scale: c.scale}
+			ins := []*tensor.Tensor{q, k, v}
+			gm, err := backend.Execute(backend.NewContext().WithBackend(mb), backend.OpMHA, ins, attrs)
+			if err != nil {
+				t.Fatalf("metal mha (MPSGraph): %v", err)
+			}
+			gr, err := backend.Execute(backend.NewContext().WithBackend(ref), backend.OpMHA, ins, attrs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rtol := crossTol(c.dk + c.seq)
+			atol := 1e-5
+			for i := range gm[0].Numel() {
+				idx := tensor.Unravel(i, gm[0].Shape())
+				g, r := gm[0].AtF64(idx...), gr[0].AtF64(idx...)
+				if math.Abs(g-r) > rtol*math.Max(1, math.Abs(r))+atol {
+					t.Fatalf("%s [%d]: metal(MPSGraph) %v vs ref %v (rtol %g)", c.name, i, g, r, rtol)
+				}
+			}
+		})
+	}
+}
+
 // §V3/§V11: metal FlashAttention-2 forward (OpFlashAttn) matches BOTH the reference
 // flashattn AND the reference naive attention (OpMHA) within an f32 tolerance — the
 // online-softmax tiling is exact, differing only by float reassociation — across
@@ -533,6 +591,14 @@ func benchMHAOn(b *testing.B, name backend.Name, seq, heads, dk int) {
 // (unlike memory-bound elementwise, ADR-0008). metal vs the cpu backend (→ref).
 func BenchmarkMHA_512x8x64_metal(b *testing.B) { benchMHAOn(b, backend.Metal, 512, 8, 64) }
 func BenchmarkMHA_512x8x64_cpu(b *testing.B)   { benchMHAOn(b, backend.CPU, 512, 8, 64) }
+
+// §T621 A/B: same prefill shape as BenchmarkMHA_512x8x64_metal but on the EXPERIMENTAL MPSGraph
+// path — head-to-head against the custom per-head MPS path (the default). Interleave-run the two.
+func BenchmarkMHAMPSGraph_512x8x64_metal(b *testing.B) {
+	prev := metal.SetMHAUseMPSGraph(true)
+	defer metal.SetMHAUseMPSGraph(prev)
+	benchMHAOn(b, backend.Metal, 512, 8, 64)
+}
 
 func benchMHABwdOn(b *testing.B, name backend.Name, seq, heads, dk int) {
 	be, ok := backend.Get(name)

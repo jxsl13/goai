@@ -130,6 +130,40 @@ a different f32 reduction order). The vulkan fused+vec4 kernel, the metal MPSGra
 switch, and these findings are §T620.
 
 
+### MPSGraph attention prefill on Metal (§T621, experiment — opt-in)
+
+The Metal attention prefill (sq==sk, window==0) default runs `mtl_mha_mps`: a
+per-head loop of `MPSMatrixMultiplication` (Q·Kᵀ) → custom softmax kernel →
+`MPSMatrixMultiplication` (P·V), sharing one `[seq,seq]` scratch, so the heads are
+serialized. `mtl_mha_mpsgraph` instead builds ONE cached `MPSGraph` (reshape →
+transpose → batched matmul QKᵀ → +causal −∞ mask → fused softmax → batched matmul
+P·V → transpose back) that runs **all heads in a single graph** — Apple's native
+graph compiler picks the schedule. Manual matmul/softmax graph (macOS 12.3+), not
+the macOS-15 `scaledDotProductAttention` primitive, so it runs on-OS. Tightly
+interleaved same-machine A/B (`BenchmarkMHA[MPSGraph]_512x8x64_metal`, seq=512
+heads=8 dk=64 causal, 1000×, 5 rounds; MPSGraph won **every** round):
+
+| path | µs/op | GFLOP/s | Δ |
+|------|-------|---------|---|
+| custom per-head MPS (`mtl_mha_mps`, default) | ≈1417 | ≈379 | — |
+| MPSGraph batched (`mtl_mha_mpsgraph`, §T621) | ≈1124 | ≈478 | **+≈26% (1.26×)** |
+
+Correctness is cross-referenced vs the f64 Pure-Go reference
+(`TestMetalMHAMPSGraphCrossReference`: mha/causal/GQA/MQA/attn-scale + the seq=512
+shape) within the **same** `crossTol(dk+seq)` as the custom path — no tolerance
+relaxation was needed. Absolutes are ≈2× below a healthy machine (§B55); the
+same-machine relative delta is the signal.
+
+**Disposition — opt-in, NOT the default.** The win is real for *fixed* shapes,
+but the graph carries a **one-time ≈15–30 ms compile per unique
+`(seq,kvHeads,rep,dk,causal)`** (the custom path compiles nothing). A fixed-shape
+training loop amortizes this to zero and should flip it on
+(`metal.SetMHAUseMPSGraph(true)`); variable-length inference prefill would
+recompile per prompt length and regress. So the custom path stays the compiled-in
+default and MPSGraph is a proven, tested opt-in. Flipping the global default is
+blocked pending a small shape-keyed graph cache + a variable-length A/B.
+
+
 ### Head-to-head: llama.cpp on the SAME weights (§T607)
 
 The decode benchmark's llama (17.7 M parameters, dim 512, 6 layers, GQA 8/2,
