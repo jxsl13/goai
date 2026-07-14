@@ -1,19 +1,22 @@
 //go:build cuda && cgo && (linux || windows)
 
-// CUDA/cuBLAS side of the cuda backend (§T42). Compiled only under `-tags cuda`
-// with a CUDA toolkit. One process-wide cublasHandle, lazily created. Each
-// matmul copies A/B H2D, runs cublasSgemm, copies C D2H and syncs before
-// returning — honest about transfer cost; device-resident tensors are the next
-// optimization (§V14 keeps the Go interface stable so that lands without a break).
+// CUDA/cuBLAS side of the cuda backend (§T42). Compiled only under `-tags cuda`.
+// One process-wide cublasHandle + one CUDA stream, lazily created. All GPU work
+// (copies, Sgemm, alloc, free) is queued on that stream; the host only blocks at
+// the points that return data (cu_matmul_f32*, cu_download_f32) via one
+// cudaStreamSynchronize. A device-resident matmul CHAIN therefore pipelines on
+// the GPU with ~2 host barriers total (initial upload + final download) instead
+// of a CPU round-trip per link (§V14 Phase-2 async).
 //
-// Device buffers are POOLED, not malloc'd per call: cudaMalloc/cudaFree cost
-// ~10-100us each and the profile is alloc+transfer-bound (cuBLAS itself is a
-// small fraction of a 512^3 call), so three malloc + three free per matmul
-// dominated small and medium GEMMs. gA/gB/gC persist across calls and grow to
-// the largest (M*K, K*N, M*N) seen; a steady training loop with fixed shapes
-// allocates once. A single mutex serializes the whole matmul, so the shared
-// handle AND the shared buffers are safe under concurrent callers (the old code
-// left the global handle unguarded — a latent race the pool would only widen).
+// Caller-owned device buffers (cu_upload_f32 / cu_alloc_f32 / cu_free_f32) use
+// the STREAM-ORDERED allocator (cudaMallocAsync/cudaFreeAsync): a freed chain
+// intermediate returns to the pool and is reused by the next alloc without a
+// device sync, and the ordering is the stream's (free is queued after the matmul
+// that read the buffer). The gA/gB/gC pool (host-facing single matmuls) stays on
+// plain cudaMalloc — grow-only, reallocated rarely.
+//
+// A single mutex serializes enqueue, so the shared handle, stream and pool are
+// safe under concurrent callers.
 
 #include "cuda_bridge.h"
 #include <cuda_runtime.h>
@@ -22,6 +25,7 @@
 
 static pthread_mutex_t gLock = PTHREAD_MUTEX_INITIALIZER;
 static cublasHandle_t gHandle = NULL;
+static cudaStream_t gStream = NULL;
 
 static float *gA = NULL, *gB = NULL, *gC = NULL;
 static size_t gACap = 0, gBCap = 0, gCCap = 0; // capacities in bytes
@@ -30,7 +34,9 @@ static int ensure_init(void) {
     if (gHandle != NULL) return 0;
     int n = 0;
     if (cudaGetDeviceCount(&n) != cudaSuccess || n <= 0) return -1;
+    if (cudaStreamCreate(&gStream) != cudaSuccess) { gStream = NULL; return -1; }
     if (cublasCreate(&gHandle) != CUBLAS_STATUS_SUCCESS) { gHandle = NULL; return -1; }
+    if (cublasSetStream(gHandle, gStream) != CUBLAS_STATUS_SUCCESS) { return -1; }
     return 0;
 }
 
@@ -71,8 +77,8 @@ int cu_matmul_f32(const float* A, const float* B, float* C, int M, int K, int N)
     if (ensure_cap(&gB, &gBCap, bLen) != 0) { rc = -2; goto done; }
     if (ensure_cap(&gC, &gCCap, cLen) != 0) { rc = -2; goto done; }
 
-    if (cudaMemcpy(gA, A, aLen, cudaMemcpyHostToDevice) != cudaSuccess) { rc = -3; goto done; }
-    if (cudaMemcpy(gB, B, bLen, cudaMemcpyHostToDevice) != cudaSuccess) { rc = -3; goto done; }
+    if (cudaMemcpyAsync(gA, A, aLen, cudaMemcpyHostToDevice, gStream) != cudaSuccess) { rc = -3; goto done; }
+    if (cudaMemcpyAsync(gB, B, bLen, cudaMemcpyHostToDevice, gStream) != cudaSuccess) { rc = -3; goto done; }
 
     // Row-major C[M,N]=A·B via column-major C^T = B^T·A^T (see comment above).
     st = cublasSgemm(gHandle, CUBLAS_OP_N, CUBLAS_OP_N,
@@ -83,8 +89,8 @@ int cu_matmul_f32(const float* A, const float* B, float* C, int M, int K, int N)
                      &beta,
                      gC, N);
     if (st != CUBLAS_STATUS_SUCCESS) { rc = -4; goto done; }
-    if (cudaDeviceSynchronize() != cudaSuccess) { rc = -5; goto done; }
-    if (cudaMemcpy(C, gC, cLen, cudaMemcpyDeviceToHost) != cudaSuccess) { rc = -6; goto done; }
+    if (cudaMemcpyAsync(C, gC, cLen, cudaMemcpyDeviceToHost, gStream) != cudaSuccess) { rc = -6; goto done; }
+    if (cudaStreamSynchronize(gStream) != cudaSuccess) { rc = -5; goto done; }
     rc = 0;
 
 done:
@@ -92,16 +98,17 @@ done:
     return rc;
 }
 
-// Resident-B (§V14 Phase-1). cu_upload_f32 owns a standalone device buffer (NOT
-// the gA/gB/gC pool) so it can outlive individual matmuls; the caller frees it.
+// Resident-B (§V14 Phase-1). cu_upload_f32 owns a stream-ordered device buffer
+// (NOT the gA/gB/gC pool) so it can outlive individual matmuls; caller frees it.
 void* cu_upload_f32(const float* src, int n) {
     void* d = NULL;
     size_t sz = (size_t)n * sizeof(float);
     pthread_mutex_lock(&gLock);
     if (ensure_init() != 0) { goto done; }
-    if (cudaMalloc(&d, sz) != cudaSuccess) { d = NULL; goto done; }
-    if (cudaMemcpy(d, src, sz, cudaMemcpyHostToDevice) != cudaSuccess) {
-        cudaFree(d);
+    if (cudaMallocAsync(&d, sz, gStream) != cudaSuccess) { d = NULL; goto done; }
+    if (cudaMemcpyAsync(d, src, sz, cudaMemcpyHostToDevice, gStream) != cudaSuccess ||
+        cudaStreamSynchronize(gStream) != cudaSuccess) {
+        cudaFreeAsync(d, gStream);
         d = NULL;
     }
 done:
@@ -112,7 +119,7 @@ done:
 void cu_free_f32(void* dptr) {
     if (!dptr) return;
     pthread_mutex_lock(&gLock);
-    cudaFree(dptr);
+    cudaFreeAsync(dptr, gStream);
     pthread_mutex_unlock(&gLock);
 }
 
@@ -132,7 +139,7 @@ int cu_matmul_f32_bres(const float* A, const void* dB, float* C, int M, int K, i
     if (ensure_cap(&gA, &gACap, aLen) != 0) { rc = -2; goto done; }
     if (ensure_cap(&gC, &gCCap, cLen) != 0) { rc = -2; goto done; }
 
-    if (cudaMemcpy(gA, A, aLen, cudaMemcpyHostToDevice) != cudaSuccess) { rc = -3; goto done; }
+    if (cudaMemcpyAsync(gA, A, aLen, cudaMemcpyHostToDevice, gStream) != cudaSuccess) { rc = -3; goto done; }
 
     st = cublasSgemm(gHandle, CUBLAS_OP_N, CUBLAS_OP_N,
                      N, M, K,
@@ -142,8 +149,8 @@ int cu_matmul_f32_bres(const float* A, const void* dB, float* C, int M, int K, i
                      &beta,
                      gC, N);
     if (st != CUBLAS_STATUS_SUCCESS) { rc = -4; goto done; }
-    if (cudaDeviceSynchronize() != cudaSuccess) { rc = -5; goto done; }
-    if (cudaMemcpy(C, gC, cLen, cudaMemcpyDeviceToHost) != cudaSuccess) { rc = -6; goto done; }
+    if (cudaMemcpyAsync(C, gC, cLen, cudaMemcpyDeviceToHost, gStream) != cudaSuccess) { rc = -6; goto done; }
+    if (cudaStreamSynchronize(gStream) != cudaSuccess) { rc = -5; goto done; }
     rc = 0;
 
 done:
@@ -151,28 +158,33 @@ done:
     return rc;
 }
 
-// Fully-device path (§V14 Phase-2). cu_alloc_f32 / cu_download_f32 are caller-
-// owned device buffers (like cu_upload_f32), NOT the gA/gB/gC pool.
+// Fully-device path (§V14 Phase-2). cu_alloc_f32 / cu_download_f32 use the same
+// stream-ordered allocator + stream as the chain, so allocs/frees pipeline.
 void* cu_alloc_f32(int n) {
     void* d = NULL;
     pthread_mutex_lock(&gLock);
     if (ensure_init() == 0) {
-        if (cudaMalloc(&d, (size_t)n * sizeof(float)) != cudaSuccess) d = NULL;
+        if (cudaMallocAsync(&d, (size_t)n * sizeof(float), gStream) != cudaSuccess) d = NULL;
     }
     pthread_mutex_unlock(&gLock);
     return d;
 }
 
 int cu_download_f32(const void* dsrc, float* dst, int n) {
-    int rc;
+    int rc = -6;
     pthread_mutex_lock(&gLock);
-    rc = (cudaMemcpy(dst, dsrc, (size_t)n * sizeof(float), cudaMemcpyDeviceToHost) == cudaSuccess) ? 0 : -6;
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    // D2H on the stream + one sync = the chain's single terminal barrier; any
+    // queued Sgemm error also surfaces here.
+    if (cudaMemcpyAsync(dst, dsrc, (size_t)n * sizeof(float), cudaMemcpyDeviceToHost, gStream) != cudaSuccess) { goto done; }
+    rc = (cudaStreamSynchronize(gStream) == cudaSuccess) ? 0 : -5;
+done:
     pthread_mutex_unlock(&gLock);
     return rc;
 }
 
-// cu_matmul_f32_ddd: dC = dA·dB, all resident. No copies — the intermediate of a
-// matmul chain stays on the GPU. Same column-major idiom as cu_matmul_f32.
+// cu_matmul_f32_ddd: dC = dA·dB, all resident, queued on the stream with NO sync —
+// a chain of these pipelines end to end; cu_download_f32 is the barrier.
 int cu_matmul_f32_ddd(const void* dA, const void* dB, void* dC, int M, int K, int N) {
     const float alpha = 1.0f, beta = 0.0f;
     cublasStatus_t st;
@@ -189,7 +201,6 @@ int cu_matmul_f32_ddd(const void* dA, const void* dB, void* dC, int M, int K, in
                      &beta,
                      (float*)dC, N);
     if (st != CUBLAS_STATUS_SUCCESS) { rc = -4; goto done; }
-    if (cudaDeviceSynchronize() != cudaSuccess) { rc = -5; goto done; }
     rc = 0;
 
 done:
