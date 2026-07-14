@@ -78,7 +78,7 @@ int cu_swiglu_f32(void* gate, const void* up, int n);
 
 // cu_rmsnorm_f32 applies RMSNorm y = x/√(mean(x²)+eps)·gamma in-place over the
 // last axis (x is rows×cols row-major; gamma is a resident [cols] weight).
-int cu_rmsnorm_f32(void* x, const void* gamma, int rows, int cols, float eps);
+int cu_rmsnorm_f32(const void* in, void* out, const void* gamma, int rows, int cols, float eps);
 
 // cu_softmax_f32 applies stable softmax over the last axis in-place (rows×cols).
 int cu_softmax_f32(void* x, int rows, int cols);

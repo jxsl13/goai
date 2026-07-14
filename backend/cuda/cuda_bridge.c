@@ -211,35 +211,41 @@ done:
 // cu_rmsnorm_f32: in-place RMSNorm over the last axis, y = x/√(mean(x²)+eps)·w,
 // one thread-block per row with a shared-memory reduction. Sum-of-squares is
 // accumulated in DOUBLE to match backend/ref's f64 accumulation (§V10) closely.
-int cu_rmsnorm_f32(void* x, const void* gamma, int rows, int cols, float eps) {
+// cu_rmsnorm_f32: out[row] = in[row]/rms(in[row]) · gamma. in==out is the valid
+// in-place form; passing a distinct out normalizes without a preceding clone
+// (the residual buffer stays intact) — one fewer launch + alloc per norm on the
+// decode hot path (§PERF launch-bound).
+int cu_rmsnorm_f32(const void* in, void* out, const void* gamma, int rows, int cols, float eps) {
     int rc = -1;
     pthread_mutex_lock(&gLock);
     if (ensure_init() != 0) { rc = -1; goto done; }
     if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
     if (!gRms && compile_kernel(
-                     "extern \"C\" __global__ void rmsnorm_f32(float* x, const float* w, int rows, int cols, float eps){\n"
+                     "extern \"C\" __global__ void rmsnorm_f32(const float* in, float* out, const float* w, int rows, int cols, float eps){\n"
                      "  int row = blockIdx.x; if (row>=rows) return;\n"
                      "  extern __shared__ double sh[];\n"
                      "  int t=threadIdx.x, nt=blockDim.x;\n"
-                     "  float* xr = x + (size_t)row*cols;\n"
+                     "  const float* xr = in + (size_t)row*cols;\n"
+                     "  float* yr = out + (size_t)row*cols;\n"
                      "  double local=0.0;\n"
                      "  for (int j=t;j<cols;j+=nt){ double v=xr[j]; local+=v*v; }\n"
                      "  sh[t]=local; __syncthreads();\n"
                      "  for (int s=nt/2;s>0;s>>=1){ if(t<s) sh[t]+=sh[t+s]; __syncthreads(); }\n"
                      "  double ms = sh[0]/(double)cols;\n"
                      "  float inv = (float)(1.0/sqrt(ms+(double)eps));\n"
-                     "  for (int j=t;j<cols;j+=nt){ xr[j] = xr[j]*inv*w[j]; }\n"
+                     "  for (int j=t;j<cols;j+=nt){ yr[j] = xr[j]*inv*w[j]; }\n"
                      "}\n",
                      "rmsnorm.cu", "rmsnorm_f32", &gRms) != 0) { rc = -2; goto done; }
     {
         int threads = 256, blocks = rows;
         size_t shmem = (size_t)threads * sizeof(double);
-        void* args[5];
-        args[0] = &x;
-        args[1] = &gamma;
-        args[2] = &rows;
-        args[3] = &cols;
-        args[4] = &eps;
+        void* args[6];
+        args[0] = &in;
+        args[1] = &out;
+        args[2] = &gamma;
+        args[3] = &rows;
+        args[4] = &cols;
+        args[5] = &eps;
         rc = (cuLaunchKernel(gRms, blocks, 1, 1, threads, 1, 1, shmem, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 done:
