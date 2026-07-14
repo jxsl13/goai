@@ -41,16 +41,38 @@ type galoreState struct {
 // GaLoreOption configures a GaLore optimizer (functional-options idiom, §C12).
 type GaLoreOption func(*GaLore)
 
-// WithGaLoreRank sets the projection rank r (default 128).
+// WithGaLoreRank sets the projection rank r — the dimension of the low-rank subspace GaLore
+// keeps its Adam optimizer state in (the whole point: memory-efficient training).
+//
+// In plain terms: GaLore compresses the optimizer's memory by working in a small r-dimensional
+// slice of each weight matrix instead of the full thing. r is that slice's size. Boundary
+// behavior — small r saves the most memory but may miss update directions (underfitting the
+// step); large r approaches full-rank Adam and loses the memory savings.
+//
+// Default 128 (research-grounded: the GaLore paper's reference rank for LLM training, §R81).
 func WithGaLoreRank(r int) GaLoreOption { return func(g *GaLore) { g.Rank = r } }
 
-// WithGaLoreScale sets the update scale α (default 0.25).
+// WithGaLoreScale sets the update scale α applied to the projected-back gradient.
+//
+// In plain terms: how strongly the low-rank update is scaled before it hits the weights — the
+// analogue of a LoRA scaling factor. Boundary behavior — too small underuses the update; too
+// large overshoots. Default 0.25 (research-grounded: the GaLore reference scale, §R81).
 func WithGaLoreScale(a float64) GaLoreOption { return func(g *GaLore) { g.Scale = a } }
 
-// WithGaLoreGap sets the number of steps between SVD subspace refreshes (default 200).
+// WithGaLoreGap sets the number of steps between SVD refreshes of the low-rank subspace.
+//
+// In plain terms: GaLore periodically recomputes (via SVD) which low-rank slice to work in;
+// this is how many steps it reuses one before refreshing. Boundary behavior — small gap keeps
+// the subspace accurate but pays frequent SVD cost; large gap amortizes the SVD but lets the
+// subspace go stale. Default 200 (research-grounded: the GaLore reference update gap, §R81).
 func WithGaLoreGap(gap int) GaLoreOption { return func(g *GaLore) { g.Gap = gap } }
 
-// WithGaLoreBetas sets the Adam moment decays (defaults 0.9, 0.999).
+// WithGaLoreBetas sets the inner Adam's moment EMA decays β₁, β₂ (applied within the low-rank
+// subspace).
+//
+// In plain terms: same momentum/variance smoothing as Adam, just done in GaLore's compressed
+// space. Boundary behavior as in Adam. Defaults 0.9, 0.999 (research-grounded: standard Adam
+// values, GaLore paper §R81).
 func WithGaLoreBetas(b1, b2 float64) GaLoreOption {
 	return func(g *GaLore) { g.Beta1, g.Beta2 = b1, b2 }
 }

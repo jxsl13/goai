@@ -42,13 +42,31 @@ type soapState struct {
 // SOAPOption configures a SOAP optimizer (functional-options idiom, §C12).
 type SOAPOption func(*SOAP)
 
-// WithSOAPBetas sets the Adam/preconditioner EMA decays (β₁, β₂); default 0.95, 0.95.
+// WithSOAPBetas sets SOAP's two EMA decays: β₁ for the Adam momentum, β₂ for the
+// preconditioner (the second-moment statistics whose eigenbasis rotates the update).
+//
+// In plain terms: SOAP runs Adam inside a slowly-rotating coordinate frame that adapts to the
+// curvature; β₁ smooths the step, β₂ smooths that frame. Boundary behavior — as in Adam (near 1
+// = sluggish, too low = noisy). Defaults 0.95, 0.95 (research-grounded: SOAP paper, §R160 —
+// note both default to 0.95, unlike Adam's 0.9/0.999).
 func WithSOAPBetas(b1, b2 float64) SOAPOption { return func(s *SOAP) { s.Beta1, s.Beta2 = b1, b2 } }
 
-// WithSOAPEps sets the denominator epsilon (default 1e-8).
+// WithSOAPEps sets the denominator epsilon ε for numerical stability.
+//
+// In plain terms: a tiny stability floor (see Adam). Boundary behavior as in Adam. Default
+// 1e-8 (research-grounded: SOAP paper, §R160, Adam convention).
 func WithSOAPEps(e float64) SOAPOption { return func(s *SOAP) { s.Eps = e } }
 
-// WithSOAPFreq sets the eigenbasis recompute frequency in steps (default 10).
+// WithSOAPFreq sets how often (in steps) the preconditioner's eigenbasis is recomputed — the
+// expensive eigendecomposition that defines SOAP's rotated coordinate frame.
+//
+// In plain terms: SOAP occasionally recomputes the "good coordinate system" to run Adam in;
+// this is how many steps it reuses one before refreshing. Boundary behavior — 1 recomputes
+// every step (most accurate, slowest); large values amortize the cost but let the basis go
+// stale between refreshes. SPECIAL VALUE: non-positive is ignored (keeps the current value).
+//
+// Default 10 (research-grounded: the SOAP reference preconditioning frequency, §R160 — the
+// eigenbasis drifts slowly, so refreshing every ~10 steps captures most of the benefit cheaply).
 func WithSOAPFreq(f int) SOAPOption {
 	return func(s *SOAP) {
 		if f > 0 {

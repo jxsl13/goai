@@ -34,16 +34,41 @@ type GrokfastMA struct {
 // GrokfastMAOption configures a GrokfastMA optimizer (functional-options idiom, §C12).
 type GrokfastMAOption func(*GrokfastMA)
 
-// WithGrokfastMALambda sets the slow-gradient amplification λ (default 5.0; 0 = off).
+// WithGrokfastMALambda sets λ, how strongly the slow (low-frequency) gradient component is
+// amplified before the base optimizer sees it.
+//
+// In plain terms: Grokfast accelerates "grokking" (the delayed jump to generalization) by
+// boosting the slowly-changing part of the gradient. λ is the size of that boost. Boundary
+// behavior — λ=0 disables the filter (the base optimizer runs unmodified); large λ over-weights
+// the slow component and can destabilize training. SPECIAL VALUE: 0 = off.
+//
+// Default 5.0 (research-grounded: the Grokfast paper's reference λ, §R153).
 func WithGrokfastMALambda(l float64) GrokfastMAOption { return func(g *GrokfastMA) { g.Lambda = l } }
 
-// WithGrokfastMAWindow sets the moving-average window size W (default 100; clamped to ≥ 1).
+// WithGrokfastMAWindow sets W, the moving-average window (in steps) used to extract the slow
+// gradient component.
+//
+// In plain terms: how many recent steps are averaged to find the "slow trend" of the gradient.
+// Boundary behavior — small W tracks a shorter, noisier trend (less smoothing); large W is
+// smoother but uses more memory (a ring buffer per parameter) and reacts slower. Clamped to ≥1.
+//
+// Default 100 (research-grounded: the Grokfast-MA reference window, §R153).
 func WithGrokfastMAWindow(w int) GrokfastMAOption { return func(g *GrokfastMA) { g.Window = w } }
 
-// WithGrokfastMAWarmup sets whether amplification waits for the window to fill (default true).
+// WithGrokfastMAWarmup sets whether amplification waits until the moving-average window is full
+// before it kicks in.
+//
+// In plain terms: if true, Grokfast holds off boosting until it has W steps of history, so the
+// early estimate isn't based on too few samples. Boundary behavior — a boolean; false starts
+// amplifying immediately with a partial window. Default true (research-grounded, §R153).
 func WithGrokfastMAWarmup(b bool) GrokfastMAOption { return func(g *GrokfastMA) { g.Warmup = b } }
 
-// WithGrokfastMASum uses the window SUM instead of the mean as the slow component (default mean).
+// WithGrokfastMASum uses the window SUM instead of the MEAN as the slow component.
+//
+// In plain terms: two ways to combine the window — averaging (mean) or summing. Summing scales
+// the slow component by W, effectively folding the window size into λ. Boundary behavior — a
+// boolean; leave it on mean unless matching a reference that used the sum form. Default false
+// (mean), research-grounded: the Grokfast-MA reference default (§R153).
 func WithGrokfastMASum(b bool) GrokfastMAOption { return func(g *GrokfastMA) { g.FilterSum = b } }
 
 // NewGrokfastMA wraps base (which optimizes params) with the Grokfast-MA filter. params must be

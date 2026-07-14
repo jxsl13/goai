@@ -49,11 +49,27 @@ type shampooState struct {
 // ShampooOption configures a Shampoo optimizer (functional-options idiom, §C12).
 type ShampooOption func(*Shampoo)
 
-// WithShampooEps sets the ridge ε (preconditioner init + inverse-root stability, default 1e-4).
+// WithShampooEps sets the ridge ε added to Shampoo's preconditioner matrices (both at init and
+// for inverse-root numerical stability).
+//
+// In plain terms: a small value added to the diagonal of the curvature matrices so their
+// matrix inverse-roots stay well-defined even when the matrices are near-singular. Boundary
+// behavior — too small risks unstable inverse roots on rank-deficient statistics; larger ε
+// regularizes the preconditioner toward plain SGD. Default 1e-4 (research-grounded: the
+// Shampoo reference ridge, §R155 — larger than Adam's ε because it stabilizes a MATRIX inverse
+// root, not a scalar division).
 func WithShampooEps(e float64) ShampooOption { return func(s *Shampoo) { s.Eps = e } }
 
-// WithShampooRootEvery amortizes the eigendecomposition-based inverse roots over k
-// steps (default 1 = recompute every step, the exact paper rule). 10–50 is the usual
+// WithShampooRootEvery amortizes the expensive eigendecomposition-based matrix inverse-roots
+// over k steps.
+//
+// In plain terms: Shampoo's power comes from inverting curvature matrices, which is costly;
+// this reuses each inverse for k steps instead of recomputing every step. Boundary behavior —
+// k=1 recomputes every step (the exact paper rule, most accurate, slowest); larger k amortizes
+// the cost but works with slightly stale preconditioners. SPECIAL VALUE: k<1 is ignored (keeps
+// the current value).
+//
+// Default 1 (research-grounded: the exact Shampoo update, §R155); 10–50 is the usual practical
 // range for transformer-sized parameters.
 func WithShampooRootEvery(k int) ShampooOption {
 	return func(s *Shampoo) {
