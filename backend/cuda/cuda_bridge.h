@@ -53,4 +53,7 @@ int cu_add_f32(void* dst, const void* src, int n);
 // last axis (x is rows×cols row-major; gamma is a resident [cols] weight).
 int cu_rmsnorm_f32(void* x, const void* gamma, int rows, int cols, float eps);
 
+// cu_softmax_f32 applies stable softmax over the last axis in-place (rows×cols).
+int cu_softmax_f32(void* x, int rows, int cols);
+
 #endif

@@ -297,6 +297,19 @@ func (d *DeviceF32) RMSNorm(gamma *ResidentVec, eps float32) error {
 	return nil
 }
 
+// Softmax applies a numerically-stable softmax (exp(x−max)/Σexp) in-place along
+// the last axis (each row), on the GPU — the attention-weight normalization,
+// kept device-resident. Matches the Pure-Go softmax within the f32 tolerance.
+func (d *DeviceF32) Softmax() error {
+	if d.ptr == nil {
+		return fmt.Errorf("cuda: Softmax on a freed handle")
+	}
+	if rc := C.cu_softmax_f32(d.ptr, C.int(d.rows), C.int(d.cols)); rc != 0 {
+		return fmt.Errorf("cuda: softmax failed (code %d)", int(rc))
+	}
+	return nil
+}
+
 // Free releases the device buffer. Safe to call more than once.
 func (d *DeviceF32) Free() {
 	if d.ptr != nil {
