@@ -31,6 +31,70 @@ func wkvKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) (
 		return nil, fmt.Errorf("ref: wkv w,u must be [D=%d], got %v/%v", d, w.Shape(), u.Shape())
 	}
 	out := tensor.NewOn(ctx.Device(), k.Dtype(), k.Shape())
+
+	// Devirtualised fast paths (§T645): the generic AtF64/SetF64 loop below pays a
+	// dtype dispatch + flat-offset computation per element. When every read tensor
+	// shares the output dtype we grab the raw typed slices once (row-major: (t,c) of
+	// [seq,d] at t*d+c, channel c of [d] at c) and index directly. The channel/time
+	// iteration order, the per-channel running numerator/denominator/max state, the
+	// max-tracking exp rescaling and every accumulation are byte-for-byte identical
+	// to the generic path; the running state stays float64 on ALL paths and the F32
+	// path only rounds the STORED output. Contiguous() is called once per tensor
+	// (returns self when already contiguous).
+	switch out.Dtype() {
+	case tensor.F64:
+		kc, vc, wcv, ucv := k.Contiguous(), v.Contiguous(), w.Contiguous(), u.Contiguous()
+		if kc.Dtype() == tensor.F64 && vc.Dtype() == tensor.F64 &&
+			wcv.Dtype() == tensor.F64 && ucv.Dtype() == tensor.F64 {
+			ks, vs := kc.Storage().F64(), vc.Storage().F64()
+			ws, us := wcv.Storage().F64(), ucv.Storage().F64()
+			os := out.Storage().F64()
+			for c := range d {
+				wc, uc := ws[c], us[c]
+				aa, bb, pp := 0.0, 0.0, -1e38 // running numerator, denominator, max exponent
+				for t := range seq {
+					kk, vv := ks[t*d+c], vs[t*d+c]
+					ww := uc + kk
+					q := math.Max(pp, ww)
+					e1, e2 := math.Exp(pp-q), math.Exp(ww-q)
+					os[t*d+c] = (e1*aa + e2*vv) / (e1*bb + e2)
+					q = math.Max(pp-wc, kk)
+					e1, e2 = math.Exp(pp-wc-q), math.Exp(kk-q)
+					aa = e1*aa + e2*vv
+					bb = e1*bb + e2
+					pp = q
+				}
+			}
+			return []*tensor.Tensor{out}, nil
+		}
+	case tensor.F32:
+		kc, vc, wcv, ucv := k.Contiguous(), v.Contiguous(), w.Contiguous(), u.Contiguous()
+		if kc.Dtype() == tensor.F32 && vc.Dtype() == tensor.F32 &&
+			wcv.Dtype() == tensor.F32 && ucv.Dtype() == tensor.F32 {
+			ks, vs := kc.Storage().F32(), vc.Storage().F32()
+			ws, us := wcv.Storage().F32(), ucv.Storage().F32()
+			os := out.Storage().F32()
+			for c := range d {
+				wc, uc := float64(ws[c]), float64(us[c])
+				aa, bb, pp := 0.0, 0.0, -1e38 // running state stays float64; only the store rounds
+				for t := range seq {
+					kk, vv := float64(ks[t*d+c]), float64(vs[t*d+c])
+					ww := uc + kk
+					q := math.Max(pp, ww)
+					e1, e2 := math.Exp(pp-q), math.Exp(ww-q)
+					os[t*d+c] = float32((e1*aa + e2*vv) / (e1*bb + e2))
+					q = math.Max(pp-wc, kk)
+					e1, e2 = math.Exp(pp-wc-q), math.Exp(kk-q)
+					aa = e1*aa + e2*vv
+					bb = e1*bb + e2
+					pp = q
+				}
+			}
+			return []*tensor.Tensor{out}, nil
+		}
+	}
+
+	// Generic fallback for exotic dtypes / mixed inputs (verbatim original loop).
 	for c := range d {
 		wc, uc := w.AtF64(c), u.AtF64(c)
 		aa, bb, pp := 0.0, 0.0, -1e38 // running numerator, denominator, max exponent
