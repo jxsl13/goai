@@ -35,17 +35,37 @@ type Muon struct {
 // MuonOption configures a Muon optimizer (functional-options idiom, §C12).
 type MuonOption func(*Muon)
 
-// WithMuonMomentum sets the momentum coefficient (default 0.95).
+// WithMuonMomentum sets Muon's momentum coefficient.
+//
+// In plain terms: how much of the running gradient direction to keep from step to step
+// before it is orthogonalized. Boundary behavior — 0 = no momentum; →1 = very long memory,
+// sluggish. Default 0.95 (research-grounded: the KellerJordan/Muon reference default, §R78).
 func WithMuonMomentum(m float64) MuonOption { return func(o *Muon) { o.Momentum = m } }
 
-// WithMuonWeightDecay sets the decoupled weight decay (default 0).
+// WithMuonWeightDecay sets Muon's decoupled (AdamW-style) weight decay.
+//
+// In plain terms: shrink weights toward zero each step. Boundary behavior — 0 = none; large
+// underfits. SPECIAL VALUE: 0 = disabled. Default 0 (research-grounded: the Muon reference
+// ships wd=0 and tunes it per run, §R78).
 func WithMuonWeightDecay(wd float64) MuonOption { return func(o *Muon) { o.WeightDecay = wd } }
 
-// WithMuonNesterov toggles the Nesterov update direction (default true).
+// WithMuonNesterov toggles the Nesterov look-ahead form of the momentum update.
+//
+// In plain terms: a variant that peeks one step ahead before committing, usually a small
+// convergence win. Boundary behavior — a boolean, no extremes. Default true (research-grounded:
+// the KellerJordan/Muon reference enables Nesterov, §R78).
 func WithMuonNesterov(n bool) MuonOption { return func(o *Muon) { o.Nesterov = n } }
 
-// WithMuonNSSteps sets the number of Newton-Schulz iterations (default 5);
-// non-positive is ignored.
+// WithMuonNSSteps sets the number of Newton-Schulz iterations used to orthogonalize the
+// momentum matrix (the step that gives every direction an equal-sized update).
+//
+// In plain terms: how many polishing passes make the update matrix "evenly spread" — more
+// passes = closer to a perfect orthogonalization but more compute per step. Boundary behavior
+// — too few (1–2) leaves the update poorly conditioned; beyond ~5 the gain saturates while
+// cost keeps rising. SPECIAL VALUE: non-positive is ignored (keeps the current value).
+//
+// Default 5 (research-grounded): the KellerJordan/Muon reference uses 5 iterations (§R78) —
+// the knee where the quintic Newton-Schulz iteration is close enough to orthogonal.
 func WithMuonNSSteps(s int) MuonOption {
 	return func(o *Muon) {
 		if s > 0 {

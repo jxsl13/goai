@@ -53,29 +53,53 @@ type ScheduleFree struct {
 // ScheduleFreeOption configures a ScheduleFree optimizer (functional-options, §C12).
 type ScheduleFreeOption func(*ScheduleFree)
 
-// WithScheduleFreeBeta sets the interpolation/momentum coefficient β (default 0.9).
+// WithScheduleFreeBeta sets the interpolation/momentum coefficient β that blends the base
+// iterate and the running average into the point where the gradient is taken.
+//
+// In plain terms: Schedule-Free replaces the learning-rate schedule with a clever averaging of
+// past iterates; β controls how much of that average steers each step. Boundary behavior —
+// β→0 removes the momentum-like blend; β→1 leans entirely on the average and stalls. Default
+// 0.9 (research-grounded: Defazio et al. 2024, §R86).
 func WithScheduleFreeBeta(beta float64) ScheduleFreeOption {
 	return func(s *ScheduleFree) { s.Beta = beta }
 }
 
-// WithScheduleFreeWeightDecay sets the decoupled weight decay λ (default 0).
+// WithScheduleFreeWeightDecay sets the decoupled weight decay λ (applied at the gradient
+// point y).
+//
+// In plain terms: shrink weights toward zero each step. Boundary behavior — 0 = none; large
+// underfits. SPECIAL VALUE: 0 = disabled. Default 0 (research-grounded: set per task, §R86).
 func WithScheduleFreeWeightDecay(wd float64) ScheduleFreeOption {
 	return func(s *ScheduleFree) { s.WeightDecay = wd }
 }
 
-// WithScheduleFreeWarmup sets the number of linear LR-warmup steps (default 0).
+// WithScheduleFreeWarmup sets the number of linear learning-rate warmup steps.
+//
+// In plain terms: ramp the step size up from zero over this many steps so early training does
+// not jolt the weights. Boundary behavior — 0 = no warmup (full LR from step 1); very large
+// spends much of training ramping. SPECIAL VALUE: 0 = disabled. Default 0 — Schedule-Free
+// needs no decay schedule, but a short warmup still helps from-scratch stability (§R86).
 func WithScheduleFreeWarmup(steps int) ScheduleFreeOption {
 	return func(s *ScheduleFree) { s.Warmup = steps }
 }
 
-// WithScheduleFreeWeightPower sets the averaging exponent p in c_t ∝ γ_tᵖ (default 2,
-// the paper's γ²-weighting; 0 gives plain equal-weight averaging).
+// WithScheduleFreeWeightPower sets the averaging exponent p in the iterate-averaging weight
+// c_t ∝ γ_tᵖ.
+//
+// In plain terms: how much more the later (better-tuned) iterates count in the running average
+// that becomes the deployed model. Boundary behavior — p=0 gives plain equal-weight averaging;
+// larger p weights recent iterates more heavily. SPECIAL VALUE: 0 = equal-weight average.
+// Default 2 (research-grounded: the paper's γ²-weighting, Defazio et al. 2024, §R86).
 func WithScheduleFreeWeightPower(p float64) ScheduleFreeOption {
 	return func(s *ScheduleFree) { s.WeightPower = p }
 }
 
-// WithScheduleFreeAdamParams sets the AdamW-variant second-moment decay β₂ and ε
-// (defaults 0.999, 1e-8); ignored by the SGD variant.
+// WithScheduleFreeAdamParams sets the AdamW-variant second-moment decay β₂ and epsilon ε
+// (ignored by the SGD variant).
+//
+// In plain terms: for the AdamW flavor of Schedule-Free, the same variance-smoothing (β₂) and
+// stability floor (ε) as Adam. Boundary behavior as in Adam. Defaults 0.999, 1e-8
+// (research-grounded: AdamW convention, Defazio et al. 2024, §R86).
 func WithScheduleFreeAdamParams(beta2, eps float64) ScheduleFreeOption {
 	return func(s *ScheduleFree) { s.Beta2, s.Eps = beta2, eps }
 }

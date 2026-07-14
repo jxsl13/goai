@@ -40,17 +40,30 @@ type LAMB struct {
 // LAMBOption configures a LAMB optimizer (functional-options idiom, §C12).
 type LAMBOption func(*LAMB)
 
-// WithLAMBBetas sets the moment EMA decays (β1, β2; defaults 0.9, 0.999).
+// WithLAMBBetas sets LAMB's Adam-style moment EMA decays β1, β2.
+//
+// In plain terms: same momentum/variance smoothing as Adam — LAMB adds a per-layer trust
+// ratio on top so very large batches stay stable. Boundary behavior as in Adam (both near 1 =
+// sluggish; too low = noisy). Defaults 0.9, 0.999 (research-grounded: You et al. 2020, §R218).
 func WithLAMBBetas(beta1, beta2 float64) LAMBOption {
 	return func(l *LAMB) { l.Beta1, l.Beta2 = beta1, beta2 }
 }
 
-// WithLAMBEps sets the denominator epsilon (default 1e-6).
+// WithLAMBEps sets the denominator epsilon ε.
+//
+// In plain terms: a tiny stability floor in the per-coordinate step. Boundary behavior as in
+// Adam. Default 1e-6 (research-grounded: You et al. 2020, §R218 — larger than Adam's 1e-8, the
+// LAMB reference value).
 func WithLAMBEps(eps float64) LAMBOption {
 	return func(l *LAMB) { l.Eps = eps }
 }
 
-// WithLAMBWeightDecay sets the decoupled weight decay λ (default 0).
+// WithLAMBWeightDecay sets the decoupled weight decay λ, folded into the per-layer update
+// direction before the trust ratio.
+//
+// In plain terms: shrink weights toward zero each step. Boundary behavior — 0 = none; large
+// underfits. SPECIAL VALUE: 0 = disabled. Default 0 (the paper uses λ=0.01 for BERT;
+// research-grounded, §R218 — left to the caller here).
 func WithLAMBWeightDecay(wd float64) LAMBOption {
 	return func(l *LAMB) { l.WeightDecay = wd }
 }

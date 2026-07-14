@@ -38,20 +38,47 @@ type Adafactor struct {
 // AdafactorOption configures an Adafactor optimizer (functional-options idiom, §C12).
 type AdafactorOption func(*Adafactor)
 
-// WithAdafactorLR sets the relative-step cap ρ (default 1e-2): ρ_t = min(LR, 1/√t).
+// WithAdafactorLR sets the relative-step cap ρ, applied as ρ_t = min(LR, 1/√t).
+//
+// In plain terms: an upper bound on Adafactor's automatically-decaying step size — it starts
+// near this value and shrinks as 1/√t. Boundary behavior — larger LR lets early steps be
+// bigger (faster but riskier); smaller caps them throughout. Unlike Adam this is a CAP on a
+// self-scheduling step, not a fixed rate.
+//
+// Default 1e-2 (research-grounded): the ρ cap from Shazeer & Stern 2018 (§R80).
 func WithAdafactorLR(lr float64) AdafactorOption { return func(a *Adafactor) { a.LR = lr } }
 
-// WithAdafactorBeta1 enables the first moment with EMA decay β1 (default 0 = off,
-// which is the sublinear-memory configuration).
+// WithAdafactorBeta1 enables a first-moment (momentum) EMA with decay β1.
+//
+// In plain terms: turn on momentum. Adafactor's whole point is sublinear memory, and momentum
+// costs a full-size extra buffer — so it is OFF by default. Boundary behavior — 0 = no
+// momentum (the memory-saving configuration); a value like 0.9 adds Adam-style momentum at the
+// cost of that buffer. SPECIAL VALUE: 0 = disabled (no first-moment state allocated).
+//
+// Default 0 (research-grounded): Shazeer & Stern 2018 (§R80) run Adafactor without the first
+// moment to keep state at O(rows+cols).
 func WithAdafactorBeta1(b1 float64) AdafactorOption { return func(a *Adafactor) { a.Beta1 = b1 } }
 
-// WithAdafactorEps sets the regularization ε1 (added to g²) and the relative-step
-// floor ε2 (defaults 1e-30, 1e-3).
+// WithAdafactorEps sets the two epsilons: ε1 regularizes the squared gradient, ε2 floors the
+// relative step size.
+//
+// In plain terms: ε1 is a tiny floor added to g² so the variance estimate never collapses to
+// zero; ε2 keeps the relative step from vanishing on parameters whose values are near zero.
+// Boundary behavior — ε1 too large biases the variance estimate; ε2 too large stops the step
+// from ever shrinking below that floor.
+//
+// Defaults 1e-30, 1e-3 (research-grounded): the ε1/ε2 from Shazeer & Stern 2018 (§R80).
 func WithAdafactorEps(eps1, eps2 float64) AdafactorOption {
 	return func(a *Adafactor) { a.Eps1, a.Eps2 = eps1, eps2 }
 }
 
-// WithAdafactorClip sets the update-clipping threshold d (default 1).
+// WithAdafactorClip sets the update root-mean-square clipping threshold d.
+//
+// In plain terms: cap how large a typical coordinate of the update may be, which stabilizes
+// training when gradients spike. Boundary behavior — small d clamps hard (slower, very
+// stable); large d effectively disables clipping. The update is scaled by 1/max(1, RMS(U)/d).
+//
+// Default 1 (research-grounded): the clipping threshold d=1 from Shazeer & Stern 2018 (§R80).
 func WithAdafactorClip(d float64) AdafactorOption { return func(a *Adafactor) { a.Clip = d } }
 
 // NewAdafactor builds an Adafactor optimizer over params with the paper's defaults

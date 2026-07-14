@@ -61,17 +61,30 @@ type CautiousAdamW struct {
 // CautiousAdamWOption configures a CautiousAdamW optimizer (functional-options idiom, §C12).
 type CautiousAdamWOption func(*CautiousAdamW)
 
-// WithCautiousBetas sets the first/second-moment EMA decays β₁, β₂.
+// WithCautiousBetas sets the underlying AdamW's first/second-moment EMA decays β₁, β₂.
+//
+// In plain terms: same momentum (β₁) and variance (β₂) smoothing as AdamW — Cautious only
+// adds a mask on top that skips coordinates fighting the current gradient. Boundary behavior:
+// as in Adam (both near 1 = sluggish; too low = noisy). Defaults 0.9, 0.999 (research-grounded:
+// inherited AdamW values, Cautious paper §R106).
 func WithCautiousBetas(beta1, beta2 float64) CautiousAdamWOption {
 	return func(a *CautiousAdamW) { a.Beta1, a.Beta2 = beta1, beta2 }
 }
 
-// WithCautiousEps sets the denominator epsilon ε.
+// WithCautiousEps sets the AdamW denominator epsilon ε.
+//
+// In plain terms: a tiny stability floor (see Adam). Boundary behavior as in Adam. Default
+// 1e-8 (research-grounded: AdamW convention, §R106).
 func WithCautiousEps(eps float64) CautiousAdamWOption {
 	return func(a *CautiousAdamW) { a.Eps = eps }
 }
 
-// WithCautiousWeightDecay sets the decoupled weight-decay coefficient λ.
+// WithCautiousWeightDecay sets the decoupled weight decay λ (applied OUTSIDE the cautious
+// mask, never gated).
+//
+// In plain terms: shrink weights toward zero each step; unlike the gradient step this always
+// applies, even on the coordinates the mask freezes. Boundary behavior — 0 = none; large
+// underfits. SPECIAL VALUE: 0 = disabled. Default 0 (research-grounded: set per task, §R106).
 func WithCautiousWeightDecay(wd float64) CautiousAdamWOption {
 	return func(a *CautiousAdamW) { a.WeightDecay = wd }
 }

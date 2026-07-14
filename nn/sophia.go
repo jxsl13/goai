@@ -52,19 +52,42 @@ type Sophia struct {
 // SophiaOption configures a Sophia optimizer (functional-options idiom, §C12).
 type SophiaOption func(*Sophia)
 
-// WithSophiaBetas sets the moment/Hessian EMA decays (β₁, β₂; defaults 0.96, 0.99).
+// WithSophiaBetas sets Sophia's two EMA decays: β₁ for the momentum, β₂ for the
+// diagonal-Hessian estimate.
+//
+// In plain terms: β₁ smooths the gradient direction, β₂ smooths the curvature estimate that
+// scales each coordinate's step. Boundary behavior — both near 1 make Sophia slow to adapt;
+// too low makes the curvature estimate noisy. Defaults 0.96, 0.99 (research-grounded: Sophia
+// paper §3.1, §R84 — the paper values are authoritative over the reference code's 0.965).
 func WithSophiaBetas(beta1, beta2 float64) SophiaOption {
 	return func(s *Sophia) { s.Beta1, s.Beta2 = beta1, beta2 }
 }
 
-// WithSophiaGamma sets the Hessian denominator scale γ (default 0.05); a larger γ
-// makes more coordinates clip to the fixed ±1 bound.
+// WithSophiaGamma sets the Hessian denominator scale γ.
+//
+// In plain terms: how strongly the curvature estimate divides the step. Because Sophia clips
+// every per-coordinate update to ±1, a larger γ shrinks the raw ratio so MORE coordinates hit
+// that clip (safer, smaller effective steps); a smaller γ lets more coordinates move the full
+// curvature-scaled amount. Boundary behavior — γ→0 removes the clip's protective effect
+// (steps follow the raw Hessian ratio); large γ drives almost everything to the ±1 clip,
+// making Sophia behave like sign-SGD.
+//
+// Default 0.05 (research-grounded): the Sophia-G value from the paper §3.1 (§R84).
 func WithSophiaGamma(gamma float64) SophiaOption { return func(s *Sophia) { s.Gamma = gamma } }
 
-// WithSophiaEps sets the denominator floor ε (default 1e-12).
+// WithSophiaEps sets the denominator floor ε that stabilizes the curvature division.
+//
+// In plain terms: a tiny floor so near-zero curvature can't blow up a step. Boundary behavior
+// — too small risks huge steps where the Hessian estimate is near zero; larger ε caps them.
+// Default 1e-12 (research-grounded: Sophia paper §3.1, §R84 — smaller than Adam's 1e-8 because
+// the denominator is a Hessian, not a squared gradient).
 func WithSophiaEps(eps float64) SophiaOption { return func(s *Sophia) { s.Eps = eps } }
 
-// WithSophiaWeightDecay sets the decoupled weight decay λ (default 0).
+// WithSophiaWeightDecay sets Sophia's decoupled (AdamW-style) weight decay λ.
+//
+// In plain terms: shrink weights toward zero each step. Boundary behavior — 0 = none; large
+// underfits. SPECIAL VALUE: 0 = disabled. Default 0; the paper uses λ up to 0.2 for LM
+// pretraining (research-grounded, §R84).
 func WithSophiaWeightDecay(wd float64) SophiaOption {
 	return func(s *Sophia) { s.WeightDecay = wd }
 }

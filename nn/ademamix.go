@@ -36,18 +36,40 @@ type AdEMAMix struct {
 // AdEMAMixOption configures an AdEMAMix optimizer (functional-options idiom, §C12).
 type AdEMAMixOption func(*AdEMAMix)
 
-// WithAdEMAMixBetas sets the three EMA decays β₁ (fast), β₂ (second moment) and β₃ (slow).
+// WithAdEMAMixBetas sets AdEMAMix's three EMA decays: β₁ the FAST momentum, β₂ the second
+// moment, β₃ the SLOW momentum whose long memory is the method's whole point.
+//
+// In plain terms: AdEMAMix keeps two momentums at once — a responsive one (β₁) and a
+// long-memoried one (β₃) — because a single EMA can't be both. β₂ scales the step like Adam's.
+// Boundary behavior — β₃ must be much closer to 1 than β₁ (e.g. 0.9999 vs 0.9) or the two
+// EMAs collapse into one and the benefit vanishes; β₃→1 remembers gradients almost forever.
+//
+// Defaults 0.9, 0.999, 0.9999 (research-grounded): Pagliardini et al. 2024 (§R105).
 func WithAdEMAMixBetas(beta1, beta2, beta3 float64) AdEMAMixOption {
 	return func(a *AdEMAMix) { a.Beta1, a.Beta2, a.Beta3 = beta1, beta2, beta3 }
 }
 
-// WithAdEMAMixAlpha sets the slow-momentum mixing weight α.
+// WithAdEMAMixAlpha sets α, the weight of the SLOW momentum in the update.
+//
+// In plain terms: how strongly the long-memory momentum contributes on top of the fast one.
+// Boundary behavior — α=0 reduces AdEMAMix to AdamW (slow EMA ignored); large α leans hard on
+// old gradients, which speeds convergence but can lag near a moving optimum.
+//
+// Default 5 (research-grounded): the paper's LLM experiments use α∈[4,10] (5–8 typical) and
+// GoAI defaults to 5 (§R105; note the Apple reference code defaults to 2.0 — documented there).
 func WithAdEMAMixAlpha(alpha float64) AdEMAMixOption { return func(a *AdEMAMix) { a.Alpha = alpha } }
 
-// WithAdEMAMixEps sets the denominator floor ε.
+// WithAdEMAMixEps sets the denominator floor ε for numerical stability.
+//
+// In plain terms: a tiny floor so a near-zero variance estimate can't blow up a step.
+// Boundary behavior — too small risks huge steps; larger caps them. Default 1e-8
+// (research-grounded: Pagliardini et al. 2024, §R105, matching Adam's convention).
 func WithAdEMAMixEps(eps float64) AdEMAMixOption { return func(a *AdEMAMix) { a.Eps = eps } }
 
-// WithAdEMAMixWeightDecay sets the decoupled weight-decay coefficient λ.
+// WithAdEMAMixWeightDecay sets the decoupled (AdamW-style) weight decay λ.
+//
+// In plain terms: shrink weights toward zero each step. Boundary behavior — 0 = none; large
+// underfits. SPECIAL VALUE: 0 = disabled. Default 0 (research-grounded: set per task, §R105).
 func WithAdEMAMixWeightDecay(wd float64) AdEMAMixOption {
 	return func(a *AdEMAMix) { a.WeightDecay = wd }
 }
