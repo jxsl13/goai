@@ -107,6 +107,7 @@ Tw34|x|KV-CACHE DECODE: cu_copy_rows + KVCache type (resident [maxSeq,wkv] K/V, 
 Tw35|x|GQA persistent scratch (kill 264 cudaMalloc/free per token) — parity holds, but only ≈1% (12.6→12.75): decode is LAUNCH-COUNT-bound not alloc-bound → real lever = fusion + CUDA graphs (PR#37)|§PERF
 Tw36|x|RESIDUAL FUSION: cu_matmul_f32_ddd_acc (cuBLAS beta=1) + MatMulAccInto — fuse 2 residual Adds/layer into Wo/Wd projection matmuls (−44 launches/token). Exact (full-fwd 6/6 1.7e-5, KV==re-forward). Decode 12.75→13.95 @p32 (+9%), prefill 1204→1282/2002→2090 (+5%) — confirms launch-bound (PR#38)|§PERF
 Tw37|x|OUT-OF-PLACE RMSNORM: cu_rmsnorm_f32(in,out) + RMSNormTo — drop 2 Clone launches+allocs/layer on residual path (−44/token). Exact (all parity green). Decode 13.95→16.35 @p32 (+17%) / →17.07 @p128; prefill 2090→2353 @128 (+13%). Cumulative decode 12.6→16.35 (+30%) (PR#39)|§PERF
+Tw38|x|FUSED ATTN SOFTMAX: cu_attn_softmax folds scale+causal-mask+softmax into 1 kernel (was 2) in gqaCore — −22 launches/token. Exact (all parity). PAIRED A/B (same contention window, since 4 opt-subagents load CPU): decode +4.4% p32 / +4.5% p128. NB launch-bound GPU bench needs paired A/B when CPU contended (PR#40→41)|§PERF
 Tw25|x|CUDA embedding row-gather (bit-exact) — full-model forward-pass op set COMPLETE on-device (PR#26)|GPU-4,Nx1
 Tw26|x|CUDA fused SwiGLU (SiLU⊙up, 1 pass) — device traffic 5n→3n, FFN launch fusion (PR#27)|GPU-7
 Tw27|x|CPU f32-native GEMM direct-store (drop f64 carrier) +28% → 196 GFLOP/s, 4.7× scalar (PR#28); mr=8 tiling measured as -7% loss, rejected|CPU-3

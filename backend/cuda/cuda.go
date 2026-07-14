@@ -612,9 +612,9 @@ func GroupedQueryAttentionKV(q, k, v *DeviceF32, qHeads, kvHeads int) (*DeviceF3
 	return gqaCore(q, k, v, qHeads, kvHeads, hd, seqKV-seqQ)
 }
 
-// gqaCore runs the batched QKᵀ → scale/causal-mask(offset) → softmax → ·V pipeline
+// gqaCore runs the batched QKᵀ → fused scale/causal-mask/softmax → ·V pipeline
 // for q [seqQ,·] against k/v [seqKV,·]. offset is passed to the mask: key j is
-// kept for query row i when j ≤ i+offset (offset==seqKV disables masking).
+// kept for query row i when j ≤ i+offset (offset≥seqKV disables masking).
 func gqaCore(q, k, v *DeviceF32, qHeads, kvHeads, hd, offset int) (*DeviceF32, error) {
 	seqQ, seqKV, wq := q.rows, k.rows, q.cols
 	scores := C.cu_alloc_f32(C.int(qHeads * seqQ * seqKV))
@@ -625,11 +625,9 @@ func gqaCore(q, k, v *DeviceF32, qHeads, kvHeads, hd, offset int) (*DeviceF32, e
 	if rc := C.cu_gqa_scores(q.ptr, k.ptr, scores, C.int(seqQ), C.int(seqKV), C.int(qHeads), C.int(kvHeads), C.int(hd)); rc != 0 {
 		return nil, fmt.Errorf("cuda: GQA scores failed (code %d)", int(rc))
 	}
-	if rc := C.cu_causal_scale_mh(scores, C.int(qHeads), C.int(seqQ), C.int(seqKV), C.float(1/math.Sqrt(float64(hd))), C.int(offset)); rc != 0 {
-		return nil, fmt.Errorf("cuda: GQA scale/mask failed (code %d)", int(rc))
-	}
-	if rc := C.cu_softmax_f32(scores, C.int(qHeads*seqQ), C.int(seqKV)); rc != 0 {
-		return nil, fmt.Errorf("cuda: GQA softmax failed (code %d)", int(rc))
+	// One fused kernel: scale (1/√hd) + causal mask (offset) + stable softmax.
+	if rc := C.cu_attn_softmax(scores, C.int(qHeads*seqQ), C.int(seqKV), C.float(1/math.Sqrt(float64(hd))), C.int(offset), C.int(seqQ)); rc != 0 {
+		return nil, fmt.Errorf("cuda: GQA fused softmax failed (code %d)", int(rc))
 	}
 	out := C.cu_alloc_f32(C.int(seqQ * wq))
 	if out == nil {
