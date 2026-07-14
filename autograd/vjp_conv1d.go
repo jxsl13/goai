@@ -12,6 +12,32 @@ func init() {
 	RegisterVJP(backend.OpSoftplus, func(_ *backend.Context, in, _ []*tensor.Tensor, _ backend.Attrs, g *tensor.Tensor) ([]*tensor.Tensor, error) {
 		x := in[0]
 		dx := tensor.New(x.Dtype(), x.Shape())
+		n := x.Numel()
+		switch x.Dtype() {
+		case tensor.F64:
+			if g.Dtype() == tensor.F64 {
+				xs := x.Contiguous().Storage().F64()
+				gs := g.Contiguous().Storage().F64()
+				ds := dx.Storage().F64()
+				for i := 0; i < n; i++ {
+					s := 1 / (1 + math.Exp(-xs[i]))
+					ds[i] = gs[i] * s
+				}
+				return []*tensor.Tensor{dx}, nil
+			}
+		case tensor.F32:
+			if g.Dtype() == tensor.F32 {
+				xs := x.Contiguous().Storage().F32()
+				gs := g.Contiguous().Storage().F32()
+				ds := dx.Storage().F32()
+				for i := 0; i < n; i++ {
+					s := 1 / (1 + math.Exp(-float64(xs[i])))
+					ds[i] = float32(float64(gs[i]) * s)
+				}
+				return []*tensor.Tensor{dx}, nil
+			}
+		}
+		// generic fallback for exotic dtypes / mixed inputs
 		for i := range x.Numel() {
 			idx := tensor.Unravel(i, x.Shape())
 			s := 1 / (1 + math.Exp(-x.AtF64(idx...)))
@@ -36,6 +62,75 @@ func init() {
 		if hasBias {
 			db = tensor.New(in[2].Dtype(), in[2].Shape())
 		}
+
+		switch x.Dtype() {
+		case tensor.F64:
+			if w.Dtype() == tensor.F64 && g.Dtype() == tensor.F64 && (!hasBias || in[2].Dtype() == tensor.F64) {
+				xs := x.Contiguous().Storage().F64()
+				ws := w.Contiguous().Storage().F64()
+				gs := g.Contiguous().Storage().F64()
+				dxs := dx.Storage().F64()
+				dws := dw.Storage().F64()
+				var dbs []float64
+				if hasBias {
+					dbs = db.Storage().F64()
+				}
+				for t := 0; t < L; t++ {
+					for c := 0; c < D; c++ {
+						gv := gs[t*D+c]
+						if hasBias {
+							dbs[c] += gv
+						}
+						for k := 0; k < K; k++ {
+							j := t - (K - 1) + k
+							if j >= 0 {
+								dws[c*K+k] += gv * xs[j*D+c]
+								dxs[j*D+c] += gv * ws[c*K+k]
+							}
+						}
+					}
+				}
+				grads := []*tensor.Tensor{dx, dw}
+				if hasBias {
+					grads = append(grads, db)
+				}
+				return grads, nil
+			}
+		case tensor.F32:
+			if w.Dtype() == tensor.F32 && g.Dtype() == tensor.F32 && (!hasBias || in[2].Dtype() == tensor.F32) {
+				xs := x.Contiguous().Storage().F32()
+				ws := w.Contiguous().Storage().F32()
+				gs := g.Contiguous().Storage().F32()
+				dxs := dx.Storage().F32()
+				dws := dw.Storage().F32()
+				var dbs []float32
+				if hasBias {
+					dbs = db.Storage().F32()
+				}
+				for t := 0; t < L; t++ {
+					for c := 0; c < D; c++ {
+						gv := float64(gs[t*D+c])
+						if hasBias {
+							dbs[c] = float32(float64(dbs[c]) + gv)
+						}
+						for k := 0; k < K; k++ {
+							j := t - (K - 1) + k
+							if j >= 0 {
+								dws[c*K+k] = float32(float64(dws[c*K+k]) + gv*float64(xs[j*D+c]))
+								dxs[j*D+c] = float32(float64(dxs[j*D+c]) + gv*float64(ws[c*K+k]))
+							}
+						}
+					}
+				}
+				grads := []*tensor.Tensor{dx, dw}
+				if hasBias {
+					grads = append(grads, db)
+				}
+				return grads, nil
+			}
+		}
+
+		// generic fallback for exotic dtypes / mixed inputs
 		for t := range L {
 			for c := range D {
 				gv := g.AtF64(t, c)
