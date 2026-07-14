@@ -3,7 +3,7 @@
 package cuda
 
 /*
-#cgo LDFLAGS: -lcudart -lcublas
+#cgo LDFLAGS: -lcudart -lcublas -lnvrtc -lcuda
 #include "cuda_bridge.h"
 */
 import "C"
@@ -200,6 +200,22 @@ func (d *DeviceF32) ToHost() (*tensor.Tensor, error) {
 		return nil, fmt.Errorf("cuda: download failed (code %d)", int(rc))
 	}
 	return out, nil
+}
+
+// GELU applies the exact Gaussian Error Linear Unit (0.5·x·(1+erf(x/√2)))
+// in-place on the resident activation, on the GPU. The kernel is compiled once
+// from CUDA-C via nvrtc (no nvcc) and launched on the matmul stream, so a
+// transformer-style matmul→GELU→matmul block stays fully device-resident with no
+// host round-trip for the activation. Result matches the Pure-Go GELU within the
+// f32 tolerance.
+func (d *DeviceF32) GELU() error {
+	if d.ptr == nil {
+		return fmt.Errorf("cuda: GELU on a freed handle")
+	}
+	if rc := C.cu_gelu_f32(d.ptr, C.int(d.rows*d.cols)); rc != 0 {
+		return fmt.Errorf("cuda: gelu failed (code %d)", int(rc))
+	}
+	return nil
 }
 
 // Free releases the device buffer. Safe to call more than once.

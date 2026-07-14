@@ -39,4 +39,11 @@ void* cu_alloc_f32(int n);
 int cu_download_f32(const void* dsrc, float* dst, int n);
 int cu_matmul_f32_ddd(const void* dA, const void* dB, void* dC, int M, int K, int N);
 
+// On-device elementwise op (§V14 Phase-2, breadth beyond matmul). The kernel is
+// compiled at runtime from CUDA-C source via nvrtc (no nvcc needed) and launched
+// on the same stream as the matmuls, so a matmul→activation→matmul block stays
+// fully resident. cu_gelu_f32 applies exact GELU (0.5·x·(1+erf(x/√2))) in-place
+// to n floats of the resident buffer d. Returns 0 on success.
+int cu_gelu_f32(void* d, int n);
+
 #endif

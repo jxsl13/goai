@@ -21,11 +21,17 @@
 #include "cuda_bridge.h"
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
+#include <cuda.h>    // driver API (cuLaunchKernel), for nvrtc-compiled kernels
+#include <nvrtc.h>   // runtime CUDA-C→PTX compilation (no nvcc needed)
 #include <pthread.h>
+#include <stdlib.h>
+#include <stdio.h>
 
 static pthread_mutex_t gLock = PTHREAD_MUTEX_INITIALIZER;
 static cublasHandle_t gHandle = NULL;
 static cudaStream_t gStream = NULL;
+static CUcontext gCtx = NULL;    // runtime's primary context, retained for driver-API launches
+static CUfunction gGelu = NULL;  // lazily nvrtc-compiled
 
 static float *gA = NULL, *gB = NULL, *gC = NULL;
 static size_t gACap = 0, gBCap = 0, gCCap = 0; // capacities in bytes
@@ -37,7 +43,72 @@ static int ensure_init(void) {
     if (cudaStreamCreate(&gStream) != cudaSuccess) { gStream = NULL; return -1; }
     if (cublasCreate(&gHandle) != CUBLAS_STATUS_SUCCESS) { gHandle = NULL; return -1; }
     if (cublasSetStream(gHandle, gStream) != CUBLAS_STATUS_SUCCESS) { return -1; }
+    // Retain the runtime's primary context so driver-API kernel launches
+    // (nvrtc-compiled) share it with the runtime allocations/stream. The driver
+    // API needs cuInit + an explicit current context per thread (see cu_gelu_f32).
+    {
+        CUdevice dev;
+        if (cuInit(0) != CUDA_SUCCESS) return -1;
+        if (cuDeviceGet(&dev, 0) != CUDA_SUCCESS) return -1;
+        if (cuDevicePrimaryCtxRetain(&gCtx, dev) != CUDA_SUCCESS) return -1;
+    }
     return 0;
+}
+
+// ensure_gelu_kernel lazily compiles the GELU kernel from CUDA-C source with
+// nvrtc (targeting the device's own compute capability) and loads it via the
+// driver API. gCtx must be current on the calling thread.
+static int ensure_gelu_kernel(void) {
+    if (gGelu) return 0;
+    int major = 0, minor = 0;
+    cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, 0);
+    cudaDeviceGetAttribute(&minor, cudaDevAttrComputeCapabilityMinor, 0);
+    char arch[40];
+    snprintf(arch, sizeof(arch), "--gpu-architecture=compute_%d%d", major, minor);
+    // exact GELU (matches backend/ref: 0.5·x·(1+erf(x/√2))); erff is a CUDA builtin.
+    const char* src =
+        "extern \"C\" __global__ void gelu_f32(float* x, int n){\n"
+        "  int i = blockIdx.x*blockDim.x + threadIdx.x;\n"
+        "  if (i < n){ float v = x[i]; x[i] = 0.5f*v*(1.0f+erff(v*0.7071067811865476f)); }\n"
+        "}\n";
+    nvrtcProgram prog;
+    if (nvrtcCreateProgram(&prog, src, "gelu.cu", 0, NULL, NULL) != NVRTC_SUCCESS) return -1;
+    const char* opts[1] = { arch };
+    if (nvrtcCompileProgram(prog, 1, opts) != NVRTC_SUCCESS) { nvrtcDestroyProgram(&prog); return -2; }
+    size_t ptxSize = 0;
+    if (nvrtcGetPTXSize(prog, &ptxSize) != NVRTC_SUCCESS) { nvrtcDestroyProgram(&prog); return -3; }
+    char* ptx = (char*)malloc(ptxSize);
+    if (!ptx) { nvrtcDestroyProgram(&prog); return -4; }
+    nvrtcGetPTX(prog, ptx);
+    nvrtcDestroyProgram(&prog);
+    CUmodule mod;
+    CUresult lr = cuModuleLoadDataEx(&mod, ptx, 0, NULL, NULL);
+    free(ptx);
+    if (lr != CUDA_SUCCESS) return -6;
+    if (cuModuleGetFunction(&gGelu, mod, "gelu_f32") != CUDA_SUCCESS) return -7;
+    return 0;
+}
+
+int cu_gelu_f32(void* d, int n) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; } // bind ctx to this thread
+    if (ensure_gelu_kernel() != 0) { rc = -2; goto done; }
+    {
+        int threads = 256;
+        int blocks = (n + threads - 1) / threads;
+        void *args[2];
+        args[0] = &d;
+        args[1] = &n;
+        // launch on gStream (a cudaStream_t is a CUstream) → ordered with the
+        // matmuls, no sync; the terminal cu_download_f32 is the barrier.
+        CUresult klr = cuLaunchKernel(gGelu, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL);
+        rc = (klr == CUDA_SUCCESS) ? 0 : -3;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
 }
 
 // ensure_cap grows *buf to at least need bytes (grow-only; reuses on repeat).
