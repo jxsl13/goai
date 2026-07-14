@@ -107,9 +107,55 @@ func (t *Tensor) SetF64(v float64, idx ...int) {
 func (t *Tensor) Cast(dtype Dtype) *Tensor {
 	out := NewOn(t.dev, dtype, t.shape)
 	n := t.Numel()
-	for pos := range n {
-		idx := Unravel(pos, t.shape)
-		out.SetF64(t.AtF64(idx...), idx...)
+	if n == 0 {
+		return out
+	}
+	// Fast typed path for CONTIGUOUS float casts — the hot F64↔F32 GPU-prep
+	// conversion (§base-perf): a direct flat loop, no per-element Unravel heap alloc
+	// or AtF64/SetF64 dtype dispatch.
+	if t.IsContiguous() {
+		b := t.offset
+		switch {
+		case t.Dtype() == F64 && dtype == F32:
+			src, dst := t.storage.F64(), out.storage.F32()
+			for i := 0; i < n; i++ {
+				dst[i] = float32(src[b+i])
+			}
+			return out
+		case t.Dtype() == F32 && dtype == F64:
+			src, dst := t.storage.F32(), out.storage.F64()
+			for i := 0; i < n; i++ {
+				dst[i] = float64(src[b+i])
+			}
+			return out
+		case t.Dtype() == dtype && dtype == F32:
+			copy(out.storage.F32(), t.storage.F32()[b:b+n])
+			return out
+		case t.Dtype() == dtype && dtype == F64:
+			copy(out.storage.F64(), t.storage.F64()[b:b+n])
+			return out
+		}
+	}
+	// Generic fallback (strided, or int/other dtypes): widen-through-f64 with an
+	// INCREMENTAL source offset — no per-element Unravel alloc.
+	nd := len(t.shape)
+	if nd == 0 {
+		out.storage.setF64(0, t.storage.atF64(t.offset))
+		return out
+	}
+	idx := make([]int, nd)
+	off := t.offset
+	for pos := 0; pos < n; pos++ {
+		out.storage.setF64(pos, t.storage.atF64(off))
+		for d := nd - 1; d >= 0; d-- {
+			idx[d]++
+			off += t.strides[d]
+			if idx[d] < t.shape[d] {
+				break
+			}
+			idx[d] = 0
+			off -= t.strides[d] * t.shape[d]
+		}
 	}
 	return out
 }
