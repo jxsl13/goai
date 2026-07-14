@@ -4,6 +4,18 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T626 — top-k sampling 10× faster via quickselect (2026-07-14)
+- `Sampler.Dist` masked all but the top-k logits by fully sorting the whole
+  vocabulary (`sort.Slice`, O(V log V)) every token — about 5–6 ms per token at a
+  50k vocab, 12–15× the cost of the softmax itself. Top-k now uses quickselect
+  (`kthLargest`, deterministic median-of-three pivot, O(V) average) to find the
+  k-th largest logit and mask below it: **5.64 ms → 0.56 ms (10×)** at V=50257,
+  bit-identical output (a new old-vs-new parity test covers 9 sampler configs × 3
+  vocab sizes × 3 seeds). The top-p and locally-typical paths switched from the
+  reflection-based `sort.Slice` to a typed `slices.SortFunc` (exact same order); the
+  measured gain there is marginal, so their algorithmic speed-up (a max-heap nucleus
+  extraction) is tracked as a follow-up.
+
 ### T625 — BPE tokenizer merge 6.4× faster (2026-07-14)
 - Rewrote `bpeMerge` (`nlp/bpe.go`), the byte-pair-encoding step that runs on every
   prompt, to tiktoken's `byte_pair_merge` scheme. The old code kept a list of copied

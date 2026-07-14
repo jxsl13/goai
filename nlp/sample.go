@@ -3,7 +3,7 @@ package nlp
 import (
 	"math"
 	"math/rand/v2"
-	"sort"
+	"slices"
 
 	"github.com/jxsl13/goai/backend"
 	"github.com/jxsl13/goai/tensor"
@@ -392,6 +392,49 @@ func argmax(x []float64) int {
 	return best
 }
 
+// kthLargest returns the k-th largest value in vals (k in [1, len(vals)]),
+// permuting vals in place — pass a scratch COPY. It is quickselect with a
+// deterministic median-of-three pivot: O(n) average, reproducible (no rng), used
+// to threshold top-k without a full O(n log n) sort (§T626).
+func kthLargest(vals []float64, k int) float64 {
+	lo, hi := 0, len(vals)-1
+	target := k - 1 // 0-indexed position in DESCENDING order
+	for lo < hi {
+		// median-of-three of vals[lo],vals[mid],vals[hi] → land the median at hi as
+		// the pivot (guards against the sorted/reverse-sorted worst case).
+		mid := lo + (hi-lo)/2
+		if vals[mid] > vals[lo] {
+			vals[lo], vals[mid] = vals[mid], vals[lo]
+		}
+		if vals[hi] > vals[lo] {
+			vals[lo], vals[hi] = vals[hi], vals[lo]
+		}
+		if vals[mid] > vals[hi] {
+			vals[mid], vals[hi] = vals[hi], vals[mid]
+		}
+		pivot := vals[hi] // the median of the three
+		// Lomuto partition, DESCENDING: values strictly greater than the pivot move
+		// to the front; equal values stay right (benign for distinct logits).
+		i := lo
+		for j := lo; j < hi; j++ {
+			if vals[j] > pivot {
+				vals[i], vals[j] = vals[j], vals[i]
+				i++
+			}
+		}
+		vals[i], vals[hi] = vals[hi], vals[i]
+		switch {
+		case i == target:
+			return vals[i]
+		case i < target:
+			lo = i + 1
+		default:
+			hi = i - 1
+		}
+	}
+	return vals[lo]
+}
+
 // Sample returns a token id for the given logits.
 func (s *Sampler) Sample(logits []float64) int {
 	if s.Temperature <= 0 {
@@ -469,15 +512,20 @@ func (s *Sampler) Dist(logits []float64) []float64 {
 		z[i] = v / s.Temperature
 	}
 
-	// top-k: keep the k highest logits, mask the rest to −inf
+	// top-k: keep the k highest logits, mask the rest to −inf. Instead of a full
+	// O(n log n) sort of the whole vocabulary just to drop the tail, quickselect
+	// the k-th largest value in O(n) average and mask everything below it — the
+	// kept set is identical for distinct logits (ties at the boundary keep all
+	// their members, a benign, arguably-more-principled difference from the old
+	// arbitrary sort tie-break). §T626.
 	if s.TopK > 0 && s.TopK < n {
-		idx := make([]int, n)
-		for i := range idx {
-			idx[i] = i
-		}
-		sort.Slice(idx, func(a, b int) bool { return z[idx[a]] > z[idx[b]] })
-		for _, i := range idx[s.TopK:] {
-			z[i] = math.Inf(-1)
+		scratch := make([]float64, n)
+		copy(scratch, z)
+		kv := kthLargest(scratch, s.TopK) // the k-th largest logit is the threshold
+		for i := range z {
+			if z[i] < kv {
+				z[i] = math.Inf(-1)
+			}
 		}
 	}
 
@@ -505,7 +553,17 @@ func (s *Sampler) Dist(logits []float64) []float64 {
 		for i := range idx {
 			idx[i] = i
 		}
-		sort.Slice(idx, func(a, b int) bool { return probs[idx[a]] > probs[idx[b]] })
+		// typed descending sort (no reflection, unlike sort.Slice) — same order.
+		slices.SortFunc(idx, func(a, b int) int {
+			switch {
+			case probs[a] > probs[b]:
+				return -1
+			case probs[a] < probs[b]:
+				return 1
+			default:
+				return 0
+			}
+		})
 		var cum float64
 		keep := make([]bool, n)
 		for _, i := range idx {
@@ -570,7 +628,16 @@ func (s *Sampler) Dist(logits []float64) []float64 {
 				score[i] = math.Inf(1)
 			}
 		}
-		sort.Slice(idx, func(a, b int) bool { return score[idx[a]] < score[idx[b]] })
+		slices.SortFunc(idx, func(a, b int) int { // typed ascending sort, no reflection
+			switch {
+			case score[a] < score[b]:
+				return -1
+			case score[a] > score[b]:
+				return 1
+			default:
+				return 0
+			}
+		})
 		var cum float64
 		keep := make([]bool, n)
 		for _, i := range idx {

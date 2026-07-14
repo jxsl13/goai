@@ -265,6 +265,41 @@ Parity is locked by the real-tiktoken golden (`TestBPEEncodeParityTiktoken`), a 
 piece-for-piece old-vs-new check (`TestBPEMergeNaiveParity`), and the existing
 2.5M-exec round-trip fuzz — all green, CGO0 vet + full `nlp` suite green.
 
+### Sampler top-k via quickselect (§T626, 2026-07-14)
+
+`Sampler.Dist` is the other end of every generated token: it turns a logit vector
+into a probability distribution, applying whatever truncation the sampler is
+configured for. Each truncation path (top-k, top-p, locally-typical) sorted the
+**entire** vocabulary with `sort.Slice` just to keep a handful of tokens. Measured
+floor at V=50257 (the plain softmax is the baseline):
+
+| path | ns/op | over softmax |
+|---|---|---|
+| plain softmax | 441 µs | — |
+| top-k=40 | 5637 µs | +5.2 ms (full sort) |
+| top-p=0.9 | 5856 µs | +5.4 ms |
+| typical | 6970 µs | +6.5 ms |
+
+Top-k only needs the k largest, not a total order, so it now uses **quickselect**
+(`kthLargest`, deterministic median-of-three pivot, O(V) average) to find the k-th
+largest logit and mask everything below it. Same-session A/B (`BenchmarkDistTopK40`
+vs `…Naive`, interleaved):
+
+| top-k=40 | ns/op | allocs/op |
+|---|---|---|
+| full sort (old) | 5637 µs | 5 |
+| quickselect (new) | 562 µs | 3 |
+| factor | **10.0×** | — |
+
+Output is bit-identical (`TestDistQuickselectParity` compares against the old
+full-sort across 9 sampler configs × {64, 1024, 50257} vocab × 3 seeds ≤ 1e-12;
+`TestKthLargest` checks the selector against a full sort on adversarial inputs). The
+top-p and typical paths were switched to a typed `slices.SortFunc` (no reflection),
+but that alone measured only ≈1.06× — modern `sort.Slice`'s reflection overhead is
+small and the O(V log V) sort work dominates. Their real speed-up needs a partial
+(max-heap) nucleus extraction, tracked as §T627; the win there is nucleus-size
+dependent (peaky real-LLM logits → small nucleus → big win; a flat vector → none).
+
 ### Head-to-head: llama.cpp on the SAME weights (§T607)
 
 The decode benchmark's llama (17.7 M parameters, dim 512, 6 layers, GQA 8/2,
