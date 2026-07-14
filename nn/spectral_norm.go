@@ -33,9 +33,19 @@ type SpectralNorm struct {
 // SpectralNormOption configures a SpectralNorm (functional options, §C12).
 type SpectralNormOption func(*SpectralNorm)
 
-// WithSpectralNormIters sets the number of power iterations run per forward pass
-// (default 1, the paper's choice; 0 freezes the u,v buffers — useful for a
-// deterministic gradient check or inference on a fixed estimate).
+// WithSpectralNormIters sets the number of power-iteration steps run per forward pass to
+// estimate the weight matrix's largest singular value (spectral norm).
+//
+// In plain terms: spectral normalization keeps a layer from amplifying its input too much by
+// dividing the weights by their largest singular value; that value is estimated cheaply with
+// "power iteration", and this is how many refinement steps run each forward pass. Boundary
+// behavior — 1 refines the running estimate by one step per pass (the estimate stays accurate
+// because it carries over between steps); more iterations converge faster on a changing weight
+// but cost more. SPECIAL VALUE: 0 freezes the u,v estimate buffers — useful for a deterministic
+// gradient check or for inference on a fixed estimate.
+//
+// Default 1 (research-grounded: Miyato et al. 2018's choice of one power iteration per step,
+// §R150 — sufficient because the estimate is amortized across training steps).
 func WithSpectralNormIters(n int) SpectralNormOption { return func(s *SpectralNorm) { s.iters = n } }
 
 // NewSpectralNorm builds a spectrally-normalized linear layer with Xavier-uniform W,

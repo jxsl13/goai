@@ -221,15 +221,26 @@ type sparseGPTCfg struct {
 	blockSize int
 }
 
-// WithSparseGPTDamp sets the Hessian dampening fraction (default 0.01): a ridge of
-// damp·mean(diag H) is added to the Hessian diagonal for a stable inverse (as GPTQ).
+// WithSparseGPTDamp sets the Hessian dampening fraction — a ridge of damp·mean(diag H) added
+// to the Hessian diagonal before inversion (the same stabilizer GPTQ uses).
+//
+// In plain terms: SparseGPT decides which weights to prune and how to correct the survivors
+// using an inverse curvature matrix; a small amount is added to that matrix's diagonal so the
+// inverse stays stable. Boundary behavior — too small risks an ill-conditioned inverse (noisy
+// pruning); too large over-regularizes and weakens the error compensation. Default 0.01
+// (research-grounded: the SparseGPT reference dampening, §R193, mirroring GPTQ's 1%).
 func WithSparseGPTDamp(d float64) SparseGPTOption {
 	return func(c *sparseGPTCfg) { c.damp = d }
 }
 
-// WithSparseGPTBlock sets the adaptive-masking block size Bs (default 128): each row's
-// prune mask is chosen per block of Bs columns using the running OBS compensation. A
-// block ≥ in selects one mask over the whole row.
+// WithSparseGPTBlock sets the adaptive-masking block size Bs — the number of columns over
+// which each row's prune mask is chosen together using the running OBS error compensation.
+//
+// In plain terms: SparseGPT decides what to prune in chunks of Bs columns at a time, updating
+// its error-compensation as it goes; the chunk size trades accuracy against speed. Boundary
+// behavior — small Bs re-optimizes the mask more finely (better, slower); a block ≥ the number
+// of input columns selects a single mask over the whole row (fastest, coarsest). Default 128
+// (research-grounded: the SparseGPT reference block size, §R193).
 func WithSparseGPTBlock(b int) SparseGPTOption {
 	return func(c *sparseGPTCfg) { c.blockSize = b }
 }

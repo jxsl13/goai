@@ -12,9 +12,18 @@ type GSPOOption func(*gspoConfig)
 
 type gspoConfig struct{ epsilon float64 }
 
-// WithGSPOClipEpsilon sets the sequence-level clip range ε (default 3e-4 — the
-// paper's regime; GSPO's length-normalized sequence ratios concentrate near 1,
-// so the clip is orders of magnitude tighter than PPO/GRPO's 0.2).
+// WithGSPOClipEpsilon sets the sequence-level clip range ε for the GSPO policy ratio.
+//
+// In plain terms: like PPO, GSPO refuses to trust a policy update that changed the generation
+// probability too much in one step, and clips it back; ε is how much change is tolerated. But
+// GSPO clips a LENGTH-NORMALIZED whole-sequence ratio (not per-token), and those ratios sit
+// very close to 1, so its ε is far smaller than PPO/GRPO's. Boundary behavior — ε→0 clips
+// almost every update (over-conservative, slow learning); too large lets destabilizing jumps
+// through. A per-token ε like PPO's 0.2 would be meaningless here.
+//
+// Default 3e-4 (research-grounded: the GSPO paper's regime — Zheng et al. 2025, Qwen3's RL
+// objective, §T549 — orders of magnitude tighter than PPO/GRPO's 0.2 because the sequence
+// ratios concentrate near 1).
 func WithGSPOClipEpsilon(eps float64) GSPOOption { return func(c *gspoConfig) { c.epsilon = eps } }
 
 // GSPOLoss is the Group Sequence Policy Optimization loss (Zheng et al. 2025,

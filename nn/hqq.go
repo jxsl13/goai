@@ -22,11 +22,26 @@ type hqqCfg struct {
 	kappa    float64 // β growth per iteration
 }
 
-// WithHQQLpNorm sets the robust-norm exponent p ∈ (0,1] (default 0.7); p=1 is the ordinary
-// soft-threshold, smaller p is more outlier-robust.
+// WithHQQLpNorm sets the robust-norm exponent p ∈ (0,1] used when fitting each group's
+// quantization zero-point.
+//
+// In plain terms: HQQ minimizes the quantization error under an Lp norm; a smaller p cares
+// less about a few big outlier weights and more about the bulk, giving a fit that a handful of
+// extreme values can't drag around. Boundary behavior — p=1 is the ordinary soft-threshold
+// (least-absolute); as p→0 the fit is increasingly outlier-robust but the solver is less
+// smooth. Must be in (0, 1].
+//
+// Default 0.7 (research-grounded: the HQQ reference value, §R203 — robust to weight outliers
+// while keeping the half-quadratic solve well-behaved).
 func WithHQQLpNorm(p float64) HQQOption { return func(c *hqqCfg) { c.p = p } }
 
-// WithHQQIters sets the number of half-quadratic iterations (default 20).
+// WithHQQIters sets the number of half-quadratic optimization iterations per group.
+//
+// In plain terms: how many refinement passes the solver runs to fit each block's zero-point —
+// more passes = a slightly better fit at more compute. Boundary behavior — too few leaves the
+// zero-point under-optimized (higher quantization error); beyond convergence extra iterations
+// don't help. Default 20 (research-grounded: the HQQ reference iteration count, §R203 — the
+// solver converges within ~20 steps).
 func WithHQQIters(n int) HQQOption { return func(c *hqqCfg) { c.iters = n } }
 
 // HQQuantize quantizes w to `bits`-bit asymmetric integers in per-group blocks of size

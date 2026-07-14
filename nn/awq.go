@@ -25,10 +25,27 @@ type awqCfg struct {
 	grid  int     // grid-search resolution over α∈[0,1]
 }
 
-// WithAWQAlpha pins the scaling exponent α (skips the grid search); α=0 is plain RTN.
+// WithAWQAlpha pins the per-channel scaling exponent α, skipping AWQ's grid search.
+//
+// In plain terms: AWQ protects the most important weight channels by scaling them up before
+// quantizing (and down after), so their precision is preserved; α controls how aggressively
+// that scaling follows the activation magnitudes. Normally AWQ searches for the best α — this
+// pins it. Boundary behavior — SPECIAL VALUE α=0 disables scaling entirely (plain
+// round-to-nearest quantization); larger α scales salient channels harder, which helps until
+// it starts distorting the non-salient ones.
+//
+// Default: unset (the grid search picks α); pin it only to reproduce a specific configuration.
+// Research-grounded: the salience-aware scaling of Lin et al. 2023 (AWQ, §R172).
 func WithAWQAlpha(a float64) AWQOption { return func(c *awqCfg) { c.alpha = a } }
 
-// WithAWQGrid sets the α grid-search resolution over [0,1] (default 20 points).
+// WithAWQGrid sets the resolution of AWQ's α grid search over [0, 1].
+//
+// In plain terms: how many candidate scaling exponents AWQ tries before keeping the one with
+// the lowest quantization error — more points = a finer search at more calibration compute.
+// Boundary behavior — small grids may miss the best α; large grids cost more with diminishing
+// returns. SPECIAL VALUE: n ≤ 1 is ignored (keeps the current value).
+//
+// Default 20 (research-grounded: the AWQ reference grid of 20 points over [0,1], §R172).
 func WithAWQGrid(n int) AWQOption {
 	return func(c *awqCfg) {
 		if n > 1 {

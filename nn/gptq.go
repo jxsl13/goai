@@ -22,8 +22,17 @@ type GPTQOption func(*gptqCfg)
 
 type gptqCfg struct{ damp float64 }
 
-// WithGPTQDamp sets the Hessian dampening fraction (default 0.01): a ridge of
-// damp·mean(diag H) is added to the Hessian diagonal for a stable inverse.
+// WithGPTQDamp sets the Hessian dampening fraction — a ridge of damp·mean(diag H) added to the
+// Hessian diagonal before it is inverted.
+//
+// In plain terms: GPTQ decides how to round each weight using the inverse of a curvature
+// (Hessian) matrix built from calibration data; that matrix can be near-singular, so a small
+// amount is added to its diagonal to keep the inverse stable. This knob is how much. Boundary
+// behavior — too small risks an unstable/ill-conditioned inverse (noisy quantization); too
+// large over-regularizes toward plain round-to-nearest, discarding GPTQ's error compensation.
+//
+// Default 0.01 (research-grounded: the GPTQ reference dampening of 1% of the mean diagonal,
+// §R172).
 func WithGPTQDamp(d float64) GPTQOption { return func(c *gptqCfg) { c.damp = d } }
 
 // UniformQuantizer returns a quantizer that snaps a value to the nearest of `levels`
