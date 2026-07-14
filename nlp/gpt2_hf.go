@@ -39,11 +39,31 @@ func GPT2FromHF(ts map[string]*tensor.Tensor, heads int) (*GPT, error) {
 		return nil, fmt.Errorf("nlp: GPT2FromHF found no h.N blocks")
 	}
 
-	// tied head: head[d, vocab] = wteᵀ.
+	// tied head: head[d, vocab] = wteᵀ (typed transpose, §base-perf).
 	head := tensor.New(wte.Dtype(), tensor.Shape{d, vocab})
-	for v := 0; v < vocab; v++ {
-		for j := 0; j < d; j++ {
-			head.SetF64(wte.AtF64(v, j), j, v)
+	wtec := wte.Contiguous()
+	switch wtec.Dtype() {
+	case tensor.F64:
+		src, dst := wtec.Storage().F64(), head.Storage().F64()
+		for vv := 0; vv < vocab; vv++ {
+			row := vv * d
+			for j := 0; j < d; j++ {
+				dst[j*vocab+vv] = src[row+j]
+			}
+		}
+	case tensor.F32:
+		src, dst := wtec.Storage().F32(), head.Storage().F32()
+		for vv := 0; vv < vocab; vv++ {
+			row := vv * d
+			for j := 0; j < d; j++ {
+				dst[j*vocab+vv] = src[row+j]
+			}
+		}
+	default:
+		for vv := 0; vv < vocab; vv++ {
+			for j := 0; j < d; j++ {
+				head.SetF64(wtec.AtF64(vv, j), j, vv)
+			}
 		}
 	}
 
@@ -57,21 +77,44 @@ func GPT2FromHF(ts map[string]*tensor.Tensor, heads int) (*GPT, error) {
 		}
 		return t, nil
 	}
-	// column slice of a [rows, 3d] tensor.
+	// column slice of a [rows, W] tensor → [rows, hi-lo] (typed row copy, §base-perf).
 	cols := func(t *tensor.Tensor, lo, hi int) *tensor.Tensor {
-		rows := t.Shape()[0]
-		o := tensor.New(t.Dtype(), tensor.Shape{rows, hi - lo})
-		for i := 0; i < rows; i++ {
-			for j := lo; j < hi; j++ {
-				o.SetF64(t.AtF64(i, j), i, j-lo)
+		rows, w := t.Shape()[0], t.Shape()[1]
+		cw := hi - lo
+		o := tensor.New(t.Dtype(), tensor.Shape{rows, cw})
+		tc := t.Contiguous()
+		switch tc.Dtype() {
+		case tensor.F64:
+			src, dst := tc.Storage().F64(), o.Storage().F64()
+			for i := 0; i < rows; i++ {
+				copy(dst[i*cw:i*cw+cw], src[i*w+lo:i*w+hi])
+			}
+		case tensor.F32:
+			src, dst := tc.Storage().F32(), o.Storage().F32()
+			for i := 0; i < rows; i++ {
+				copy(dst[i*cw:i*cw+cw], src[i*w+lo:i*w+hi])
+			}
+		default:
+			for i := 0; i < rows; i++ {
+				for j := lo; j < hi; j++ {
+					o.SetF64(tc.AtF64(i, j), i, j-lo)
+				}
 			}
 		}
 		return o
 	}
 	seg := func(t *tensor.Tensor, lo, hi int) *tensor.Tensor {
 		o := tensor.New(t.Dtype(), tensor.Shape{hi - lo})
-		for j := lo; j < hi; j++ {
-			o.SetF64(t.AtF64(j), j-lo)
+		tc := t.Contiguous()
+		switch tc.Dtype() {
+		case tensor.F64:
+			copy(o.Storage().F64(), tc.Storage().F64()[lo:hi])
+		case tensor.F32:
+			copy(o.Storage().F32(), tc.Storage().F32()[lo:hi])
+		default:
+			for j := lo; j < hi; j++ {
+				o.SetF64(tc.AtF64(j), j-lo)
+			}
 		}
 		return o
 	}
