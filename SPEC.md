@@ -4,6 +4,9 @@ Go-native AI library, full spectrum, Pure-Go-first / cgo-last.
 Encoding: caveman (see `FORMAT.md`). Target Go 1.26.
 Source research: `docs/research/00-landscape.md`. Framing: `PLANNING_PROMPT.md`.
 
+WORKER SUB-SPECS (hardware-capability-scoped, one per secondary machine; this root spec = cross-platform truth, sub-specs record host-specific SIMD/GPU work + measured A/B by capability):
+- `SPEC-worker-linux-amd64-cuda.md` — Linux/amd64 (Zen 3 AVX2+FMA CPU-SIMD) + NVIDIA RTX 3060 (CUDA/cuBLAS). Owns §T11b/§T74 amd64-SIMD + the CUDA backend, PR-only.
+
 ## §G — goals
 
 G1: idiomatic modular Go lib ∀ AI domains — linalg, autograd, classic-ML, deep-learning, NLP/LLM-inference, CV, RL, probabilistic.
