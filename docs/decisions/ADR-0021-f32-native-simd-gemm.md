@@ -3,8 +3,8 @@
 - Status: Accepted (measurement-driven, experiment-gated)
 - Date: 2026-07-14
 - Task: §T11b / §T74 (f32 SIMD GEMM), amends §V10 (accumulation precision)
-- Related: ADR-0017 (cache blocking parked), `simd-gemm-amd64.md`,
-  `benchmarking-amd64.md` (the ≈13× F32 vendor gap that motivated this)
+- Related: ADR-0017 (cache blocking parked), `SPEC-worker-linux-amd64-cuda.md` §CPU-3,
+  `SPEC-worker-linux-amd64-cuda.md` §GAP (the ≈13× F32 vendor gap that motivated this)
 
 ## Context
 
@@ -13,8 +13,8 @@ matmul is bit-identical to the f64 reference (§V3/§V11, tol 0). That policy ca
 any f32 GEMM at the f64 throughput: on this Zen 3 host the bit-exact f64-SIMD
 kernel reaches ≈84 GFLOP/s while `cpu` **F32 GEMM stayed scalar at ≈43** (the
 f64-accumulating F32 SIMD twin regressed 25× on the per-iteration f32→f64
-convert — `simd-gemm-amd64.md`). Measured directly against vendor BLAS on this
-silicon (`benchmarking-amd64.md`), that left F32 GEMM **≈13× behind torch-cpu
+convert — `SPEC-worker-linux-amd64-cuda.md` §CPU-3). Measured directly against vendor BLAS on this
+silicon (`SPEC-worker-linux-amd64-cuda.md` §GAP), that left F32 GEMM **≈13× behind torch-cpu
 (580 GFLOP/s)** — the single largest CPU-GEMM gap, and almost entirely
 scalar-vs-SIMD.
 
