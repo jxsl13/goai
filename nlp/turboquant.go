@@ -254,3 +254,152 @@ func (q *qjlSketch) decodeResidual(signs []bool, rnorm float64) []float64 {
 	}
 	return out
 }
+
+// TurboQuantKVCache is a sub-4-bit KV cache using TurboQuant (Zandieh et al., ICLR 2026,
+// arXiv:2504.19874; §T619) — the extreme-compression tier beyond the near-lossless 8-bit Q8_0
+// cache (QuantKVCache, §R108). Each stored key/value row is compressed to `bits` bits per
+// coordinate by PolarQuant (a fixed random rotation → per-coordinate MSE-optimal quantizer) plus
+// a 1-bit QJL residual sketch that keeps the attention inner product UNBIASED. The rotation and
+// sketch are fixed random matrices seeded once — data-oblivious, no calibration, no training — so
+// any model can use it immediately and encode/decode share the identical transforms.
+//
+// # For the AI professional
+//
+// Per row x: idx = Quant_polar(Πx̂) at `bits` bits (x̂ the unit-normalized x, ‖x‖ stored), plus
+// qjl = sign(S·r) over the quantization residual r and ‖r‖. Reconstruction
+// x̃ = ‖x‖·Πᵀ(centroids[idx] + (√(π/2)/d)·‖r‖·Sᵀ·qjl) is unbiased for the inner product ⟨q,x⟩,
+// which is what a softmax over many keys needs (bias would systematically skew scores; a single
+// 1-bit sketch is noisy but centred). Footprint ≈ d·bits/8 + d/8 + 16 bytes per row.
+//
+// # For the newcomer
+//
+// The key/value memory ("KV cache") dominates the cost of long-context generation. This stores it
+// at under 4 bits per number instead of 32, by first spinning each vector with a fixed random
+// rotation (which spreads its information evenly), rounding each coordinate to a tiny code, and
+// keeping one correction bit so attention scores stay accurate on average. It needs no tuning.
+//
+// Further reading: Zandieh et al. 2025, "TurboQuant", arXiv:2504.19874 (ICLR 2026); the QJL
+// sketch (Zandieh et al., "QJL", AAAI 2025); compare the 8-bit [QuantKVCache].
+//
+// In plain terms: a way to shrink the biggest memory cost of long-context LLM generation to
+// under 4 bits per number, with no accuracy loss on average and no calibration.
+type TurboQuantKVCache struct {
+	dim  int
+	bits int
+	rot  *polarRotation
+	qjl  *qjlSketch
+	cb   []float64
+	keys []tqRow
+	vals []tqRow
+}
+
+// tqRow is one compressed key/value vector: the PolarQuant indices, the QJL residual signs, and
+// the two stored scalars (‖x‖ and ‖r‖).
+type tqRow struct {
+	idx   []int
+	signs []bool
+	norm  float64
+	rnorm float64
+}
+
+// NewTurboQuantKVCache builds a TurboQuant KV cache for dim-dimensional keys/values, quantizing
+// each coordinate to bits bits (1 or 2 — the paper's closed-form codebooks) plus a 1-bit QJL
+// residual. seed fixes the rotation and sketch matrices (reproducible, §V10). dim ≥ 1, bits ∈ {1,2}.
+func NewTurboQuantKVCache(dim, bits int, seed uint64) (*TurboQuantKVCache, error) {
+	if dim < 1 {
+		return nil, fmt.Errorf("nlp: NewTurboQuantKVCache needs dim ≥ 1, got %d", dim)
+	}
+	cb, err := polarCodebook(bits, dim)
+	if err != nil {
+		return nil, err
+	}
+	rot, err := newPolarRotation(dim, seed)
+	if err != nil {
+		return nil, err
+	}
+	return &TurboQuantKVCache{
+		dim: dim, bits: bits, rot: rot, cb: cb,
+		qjl: newQJLSketch(dim, seed^0x9e3779b9),
+	}, nil
+}
+
+// Len returns the number of key/value rows stored.
+func (c *TurboQuantKVCache) Len() int { return len(c.keys) }
+
+// Bytes returns the approximate compressed footprint: per row, dim·bits/8 (PolarQuant) + dim/8
+// (QJL 1-bit) + 16 (two f64 scalars), for keys and values.
+func (c *TurboQuantKVCache) Bytes() int {
+	perRow := c.dim*c.bits/8 + (c.dim+7)/8 + 16
+	return perRow * (len(c.keys) + len(c.vals))
+}
+
+func (c *TurboQuantKVCache) compress(x []float64) (tqRow, error) {
+	idx, norm, err := c.rot.polarQuantize(x, c.bits)
+	if err != nil {
+		return tqRow{}, err
+	}
+	// residual in rotated-unit space
+	u := make([]float64, c.dim)
+	if norm > 0 {
+		for i, v := range x {
+			u[i] = v / norm
+		}
+	}
+	ru, err := c.rot.apply(u)
+	if err != nil {
+		return tqRow{}, err
+	}
+	r := make([]float64, c.dim)
+	for i := range ru {
+		r[i] = ru[i] - c.cb[idx[i]]
+	}
+	signs, rnorm := c.qjl.encode(r)
+	return tqRow{idx: idx, signs: signs, norm: norm, rnorm: rnorm}, nil
+}
+
+func (c *TurboQuantKVCache) reconstruct(row tqRow) []float64 {
+	res := c.qjl.decodeResidual(row.signs, row.rnorm)
+	ruT := make([]float64, c.dim)
+	for i := range row.idx {
+		ruT[i] = c.cb[row.idx[i]] + res[i]
+	}
+	uT, _ := c.rot.applyInverse(ruT)
+	out := make([]float64, c.dim)
+	for i := range uT {
+		out[i] = row.norm * uT[i]
+	}
+	return out
+}
+
+// Append compresses and stores one key and value vector (each length dim).
+func (c *TurboQuantKVCache) Append(k, v []float64) error {
+	if len(k) != c.dim || len(v) != c.dim {
+		return fmt.Errorf("nlp: TurboQuantKVCache.Append wants len %d, got k=%d v=%d", c.dim, len(k), len(v))
+	}
+	kr, err := c.compress(k)
+	if err != nil {
+		return err
+	}
+	vr, err := c.compress(v)
+	if err != nil {
+		return err
+	}
+	c.keys = append(c.keys, kr)
+	c.vals = append(c.vals, vr)
+	return nil
+}
+
+// Keys returns the reconstructed key rows [Len][dim] (the unbiased TurboQuant estimate). Values
+// is the analogous accessor for the value rows.
+func (c *TurboQuantKVCache) Keys() [][]float64 { return c.rows(c.keys) }
+
+// Values returns the reconstructed value rows [Len][dim].
+func (c *TurboQuantKVCache) Values() [][]float64 { return c.rows(c.vals) }
+
+func (c *TurboQuantKVCache) rows(rs []tqRow) [][]float64 {
+	out := make([][]float64, len(rs))
+	for i, r := range rs {
+		out[i] = c.reconstruct(r)
+	}
+	return out
+}

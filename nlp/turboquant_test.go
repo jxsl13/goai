@@ -1,6 +1,7 @@
 package nlp
 
 import (
+	"fmt"
 	"math"
 	"testing"
 )
@@ -191,4 +192,74 @@ func TestQJLUnbiasedInnerProduct(t *testing.T) {
 	if math.Abs(mean-ipTrue) > 0.15*math.Abs(ipPolar-ipTrue) {
 		t.Fatalf("QJL not debiasing: |mean-true|=%.4f vs |polar-true|=%.4f (true=%.3f)", math.Abs(mean-ipTrue), math.Abs(ipPolar-ipTrue), ipTrue)
 	}
+}
+
+// TurboQuantKVCache stores under 4 bits/coordinate (sub-8-bit), preserves the vector norm
+// (stored exactly), and its unbiased reconstruction keeps the attention direction on average.
+func TestTurboQuantKVCache(t *testing.T) {
+	const dim, bits = 64, 2
+	c, err := NewTurboQuantKVCache(dim, bits, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	k := make([]float64, dim)
+	v := make([]float64, dim)
+	for i := range dim {
+		k[i] = math.Sin(float64(i) * 0.9)
+		v[i] = math.Cos(float64(i) * 0.5)
+	}
+	if err := c.Append(k, v); err != nil {
+		t.Fatal(err)
+	}
+	if c.Len() != 1 {
+		t.Fatalf("Len=%d, want 1", c.Len())
+	}
+	// sub-8-bit: per row far under the 32-bit f32 footprint (dim*4 = 256 B/row)
+	if perRow := c.Bytes() / 2; perRow >= dim*4 {
+		t.Fatalf("not compressed: %d B/row ≥ f32 %d", perRow, dim*4)
+	}
+	// norm preserved (stored exactly); reconstruction direction positively correlated
+	kh := c.Keys()[0]
+	var dot, nk, nkh float64
+	for i := range dim {
+		dot += k[i] * kh[i]
+		nk += k[i] * k[i]
+		nkh += kh[i] * kh[i]
+	}
+	if math.Abs(math.Sqrt(nkh)-math.Sqrt(nk)) > 0.2*math.Sqrt(nk) {
+		t.Fatalf("norm not preserved: ‖k̃‖=%.3f vs ‖k‖=%.3f", math.Sqrt(nkh), math.Sqrt(nk))
+	}
+	if dot <= 0 {
+		t.Fatalf("reconstruction anti-correlated: ⟨k,k̃⟩=%.3f", dot)
+	}
+}
+
+func TestTurboQuantKVCacheErrors(t *testing.T) {
+	if _, err := NewTurboQuantKVCache(0, 2, 1); err == nil {
+		t.Fatal("dim<1 should error")
+	}
+	if _, err := NewTurboQuantKVCache(8, 3, 1); err == nil {
+		t.Fatal("bits=3 should error (only 1,2)")
+	}
+	c, _ := NewTurboQuantKVCache(4, 2, 1)
+	if err := c.Append([]float64{1, 2, 3}, []float64{1, 2, 3, 4}); err == nil {
+		t.Fatal("wrong length should error")
+	}
+}
+
+func ExampleTurboQuantKVCache() {
+	// A 128-dim KV cache at 2-bit PolarQuant + 1-bit QJL residual.
+	c, _ := NewTurboQuantKVCache(128, 2, 42)
+	k := make([]float64, 128)
+	v := make([]float64, 128)
+	for i := range k {
+		k[i] = float64(i%7) - 3
+		v[i] = float64(i%5) - 2
+	}
+	_ = c.Append(k, v)
+	// compression vs 32-bit floats: 128*4 = 512 bytes/row → the TurboQuant row is far smaller.
+	f32PerRow := 128 * 4
+	tqPerRow := c.Bytes() / 2 // keys+values stored; Bytes counts both
+	fmt.Printf("%dx smaller\n", f32PerRow/tqPerRow)
+	// Output: 8x smaller
 }

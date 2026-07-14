@@ -4,6 +4,16 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T619 — TurboQuant sub-4-bit KV cache (2026-07-14)
+- New `nlp.TurboQuantKVCache`: compresses the key/value cache to under 4 bits per
+  number (TurboQuant, arXiv:2504.19874, ICLR 2026) — the extreme tier beyond the
+  8-bit `QuantKVCache`. It spins each vector with a fixed random rotation, rounds
+  each coordinate to a tiny code (PolarQuant), and keeps a 1-bit QJL residual sketch
+  that makes the attention inner product unbiased. Data-oblivious — no calibration,
+  no training. ~8x smaller than 32-bit floats at 2 bits. Found and implemented
+  autonomously from research into 2026 inference techniques. Verified stage by stage
+  (orthogonal rotation, quantizer round-trip, QJL unbiasedness over sketch seeds).
+
 ### T618 — Hyper-Connections, mHC, orthogonal, and dynamic variants (2026-07-14)
 - New `nn.HyperConnection`: a generalization of the residual connection that keeps
   several parallel information streams and learns how to mix them at each layer
