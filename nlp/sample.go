@@ -77,18 +77,82 @@ var (
 // SamplerOption configures a Sampler via the functional-options idiom (§C12).
 type SamplerOption func(*Sampler)
 
-// WithTemperature sets the softmax temperature (default 1; ≤0 = greedy).
+// WithTemperature sets the softmax temperature — the single knob that trades safety
+// for creativity.
+//
+// In plain terms: temperature is how adventurous the model is when it picks the next
+// word. Low = it almost always takes the word it's most sure of (predictable, repetitive);
+// high = it gives unlikely words a real chance (surprising, but more mistakes).
+//
+// Professional: logits are divided by t before the softmax, so t scales the entropy of
+// the sampled distribution. Boundary behavior — as t→0⁺ the distribution collapses onto
+// the argmax (this implementation treats t ≤ 0 as an explicit greedy short-circuit, a
+// SPECIAL VALUE: no RNG draw, TopK/TopP/MinP ignored); as t grows the distribution
+// flattens toward uniform and coherence degrades, with runaway incoherence typically past
+// t≈1.5. t = 1 leaves the model's own trained distribution unchanged.
+//
+// Default 1 (research-grounded): 1 is the identity — it reproduces the distribution the
+// model was trained to emit under maximum-likelihood, so out of the box the sampler adds
+// no distortion (Holtzman et al. 2019, "The Curious Case of Neural Text Degeneration",
+// §R34 — temperature scales the logits before truncation; llama.cpp and Hugging Face
+// both default to 1). Lower it (≈0.7) for factual/deterministic tasks, raise it (≈1.2)
+// for brainstorming.
 func WithTemperature(t float64) SamplerOption { return func(s *Sampler) { s.Temperature = t } }
 
-// WithTopK keeps only the k highest-logit tokens (0 = disabled).
+// WithTopK keeps only the k highest-probability tokens, zeroing the rest before the draw.
+//
+// In plain terms: only let the model choose among its k best guesses, throwing away the
+// long tail of unlikely words that cause derailments.
+//
+// Professional: a fixed-size truncation of the tail (Fan et al. 2018, "Hierarchical Neural
+// Story Generation"; the truncation family is catalogued in §R34). Boundary behavior — k = 1
+// is equivalent to greedy (only the argmax survives); as k → vocabulary size the filter does
+// nothing. Because k is a FIXED
+// count it over-truncates flat distributions (many plausible tokens, most discarded) and
+// under-truncates peaked ones — which is why nucleus/min-p, whose cutoff adapts to the
+// distribution's shape, are usually preferred.
+//
+// Default 0 = DISABLED (special value), research-grounded: leaving top-k off is the modern
+// default (llama.cpp ships top_k=40 but the nucleus/min-p line of work — Holtzman 2019,
+// Nguyen 2024 — shows shape-adaptive cutoffs dominate a fixed count, so GoAI keeps it off
+// and lets WithMinP carry the truncation). Set k≈40 only to emulate the classic pipeline.
 func WithTopK(k int) SamplerOption { return func(s *Sampler) { s.TopK = k } }
 
-// WithTopP keeps the smallest nucleus with cumulative probability ≥ p (Holtzman
-// et al. 2019); 0 or ≥1 disables it.
+// WithTopP keeps the smallest set of most-probable tokens whose probabilities sum to at
+// least p (nucleus sampling), zeroing the rest.
+//
+// In plain terms: keep just enough of the model's top guesses to cover p of its confidence
+// (e.g. 95%) and drop the improbable remainder — the kept set shrinks when the model is
+// sure and grows when it's hesitant.
+//
+// Professional: nucleus sampling (Holtzman et al. 2019 arXiv:1904.09751, §R34). The cutoff is
+// distribution-adaptive, unlike top-k. Boundary behavior — as p → 0⁺ only the single most
+// probable token survives (greedy-like); p ≥ 1 keeps everything (disabled). SPECIAL VALUES:
+// 0 or ≥1 disable the filter.
+//
+// Default 0 = DISABLED, research-grounded: GoAI's zero-config default truncates via min-p
+// (WithMinP), which Nguyen et al. 2024 (§R63) show is more robust than nucleus at higher
+// temperatures; enable nucleus explicitly at p≈0.9–0.95 (Holtzman's reported sweet spot,
+// also Hugging Face's default when nucleus is used) to match the conventional pipeline.
 func WithTopP(p float64) SamplerOption { return func(s *Sampler) { s.TopP = p } }
 
-// WithMinP keeps tokens with probability ≥ p·max-prob (Nguyen et al. 2024); 0
-// disables it. Typical 0.05–0.1.
+// WithMinP keeps tokens whose probability is at least p times the single most probable
+// token's probability, zeroing the rest.
+//
+// In plain terms: drop any word that's much less likely than the model's favorite — the
+// bar scales with how confident the top pick is, so it stays strict when the model is sure
+// and lenient when the field is open.
+//
+// Professional: min-p sampling (Nguyen et al. 2024, "Turning Up the Heat", §R63). The
+// relative cutoff p·maxProb makes it more temperature-robust than nucleus: raising
+// temperature flattens the distribution but the cutoff tracks the peak, so quality holds
+// at higher t. Boundary behavior — as p → 0⁺ nothing is filtered; as p → 1 only tokens
+// essentially tied with the top token survive (greedy-like). SPECIAL VALUE: 0 disables it.
+//
+// Default 0 = DISABLED (a bare NewSampler samples untruncated at t=1); the RECOMMENDED
+// enabled value is 0.05–0.1 — Nguyen et al. 2024 report 0.05–0.1 as the quality sweet spot
+// across tasks, and llama.cpp defaults min_p to 0.05. This is GoAI's suggested single
+// truncation knob: NewSampler(seed, WithMinP(0.05)) is a strong general-purpose setup.
 func WithMinP(p float64) SamplerOption { return func(s *Sampler) { s.MinP = p } }
 
 // WithEpsilon enables epsilon sampling (Hewitt et al. 2022, §R91): keep only tokens
