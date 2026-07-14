@@ -32,7 +32,7 @@ for pair in "cuda_runtime/lib:libcudart" "cublas/lib:libcublas" "cuda_nvrtc/lib:
 done
 
 export CGO_ENABLED=1
-export CGO_CFLAGS="-I$NV/cuda_runtime/include -I$NV/cublas/include -I$NV/cuda_cccl/include -I$NV/cuda_nvcc/include"
-export CGO_LDFLAGS="-L$NV/cuda_runtime/lib -L$NV/cublas/lib -Wl,-rpath,$NV/cuda_runtime/lib -Wl,-rpath,$NV/cublas/lib -Wl,-rpath,$NV/cuda_nvrtc/lib"
+export CGO_CFLAGS="-I$NV/cuda_runtime/include -I$NV/cublas/include -I$NV/cuda_cccl/include -I$NV/cuda_nvcc/include -I$NV/cuda_nvrtc/include"
+export CGO_LDFLAGS="-L$NV/cuda_runtime/lib -L$NV/cublas/lib -L$NV/cuda_nvrtc/lib -Wl,-rpath,$NV/cuda_runtime/lib -Wl,-rpath,$NV/cublas/lib -Wl,-rpath,$NV/cuda_nvrtc/lib"
 export LD_LIBRARY_PATH="$NV/cuda_runtime/lib:$NV/cublas/lib:$NV/cuda_nvrtc/lib:/usr/lib64:${LD_LIBRARY_PATH:-}"
 echo "cuda-pip-env: CGO flags set for $NV"
