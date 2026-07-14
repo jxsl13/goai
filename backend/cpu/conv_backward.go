@@ -117,12 +117,28 @@ func conv2dBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backe
 	dX := tensor.NewOn(ctx.Device(), x.Dtype(), x.Shape())
 	dW := tensor.NewOn(ctx.Device(), w.Dtype(), w.Shape())
 	dB := tensor.NewOn(ctx.Device(), w.Dtype(), tensor.Shape{f})
-	for i, v := range dXf {
-		dX.SetF64(v, tensor.Unravel(i, x.Shape())...)
-	}
-	for fi := range f {
-		for kk := range k {
-			dW.SetF64(dWt[kk*f+fi], tensor.Unravel(fi*k+kk, w.Shape())...)
+	// Scatter into the (fresh contiguous) grad tensors with typed writes — dX is a
+	// flat-aligned copy (the old Unravel(i) round-tripped to the same index i), dW is
+	// a [k,f]→[f,k] transpose by direct index (§base-perf, no per-element Unravel alloc).
+	switch x.Dtype() {
+	case tensor.F64:
+		copy(dX.Storage().F64(), dXf)
+		dw := dW.Storage().F64()
+		for fi := 0; fi < f; fi++ {
+			for kk := 0; kk < k; kk++ {
+				dw[fi*k+kk] = dWt[kk*f+fi]
+			}
+		}
+	case tensor.F32:
+		dx := dX.Storage().F32()
+		for i, v := range dXf {
+			dx[i] = float32(v)
+		}
+		dw := dW.Storage().F32()
+		for fi := 0; fi < f; fi++ {
+			for kk := 0; kk < k; kk++ {
+				dw[fi*k+kk] = float32(dWt[kk*f+fi])
+			}
 		}
 	}
 	// dBias in the reference's exact order: per filter over r ascending (n, oy, ox).
