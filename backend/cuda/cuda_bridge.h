@@ -36,6 +36,7 @@ int cu_matmul_f32_bres(const float* A, const void* dB, float* C, int M, int K, i
 // cu_download_f32 copies n floats device→host. cu_matmul_f32_ddd computes
 // dC[M,N] = dA[M,K]·dB[K,N] with every operand resident (no H2D/D2H).
 void* cu_alloc_f32(int n);
+void* cu_clone_f32(const void* src, int n);
 int cu_download_f32(const void* dsrc, float* dst, int n);
 int cu_matmul_f32_ddd(const void* dA, const void* dB, void* dC, int M, int K, int N);
 // dC[M,N] = dA[M,K]·dB[N,K]ᵀ, all resident (attention QKᵀ).
