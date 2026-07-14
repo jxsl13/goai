@@ -359,6 +359,39 @@ truncation in isolation. The 0.61 ms host cost this leaves is what makes the
 SIMD+GPU overlap analysis in ADR-0021 valid (≈13% of a ~4 ms GPU decode step); the
 7.5 ms figure would have inverted that conclusion.
 
+### The CGO0-default fallback devirtualization (§T645/§T646, 2026-07-15)
+
+The `cpu` backend registers only ~12 optimized kernels (matmul, conv2d, pools, MHA,
+softmax, retention, add-bias forward); every other op falls back to the `ref`
+backend (the §V9 numerical-truth reference), which is written per-element
+(`AtF64`/`SetF64` dispatch). A `GOAI_LOG_FALLBACK=1` audit (§T401 method) on a real
+CPU Mamba/MoE/MLA char-LM training exposed how much of the CGO0-default training path
+this covers — fallbacks per training run, by call count:
+
+| op | calls/run | was |
+|---|---|---|
+| `addbias_backward` | 6250 | per-element ref |
+| `silu_backward` | 2500 | per-element ref |
+| `crossentropy` + `_backward` | 1500 | per-element ref |
+| `conv1d`, `softplus` (fwd) | 805 each | per-element ref |
+| `ssm`, `mla`, `moe*`, `wkv` | 250–805 | per-element ref |
+
+Every one of these was devirtualized in `backend/ref` (typed dtype-switched fast
+paths + generic fallback, bit-identical, each with a new F32 forward/backward parity
+test since the suites were F64-only). The per-op speedups match the sibling
+devirtualizations (≈7–15× on the typed kernel). Note the audit's fallback *counts*
+are unchanged afterward — and that is correct: devirtualizing `ref` does not remove
+the `cpu→ref` fallback (cpu still has no kernel for these ops), it makes the `ref`
+path fast. The fallback dispatch itself (a map miss + one indirection) is negligible
+next to the now-typed kernel, so a fast `ref` fallback is the complete fix, not a
+reason to duplicate every op into `cpu`.
+
+Two method lessons: (1) a crude "grep the op name in the cpu package" audit is
+unreliable — registration patterns vary; `GOAI_LOG_FALLBACK` on the real workload is
+the definitive gap-finder. (2) Re-running that audit measures *coverage* (which ops
+route to ref), not speed — the speed win is per-op-typed, so verify it with the op's
+own parity/gradcheck, not a fallback-count diff.
+
 ### Head-to-head: llama.cpp on the SAME weights (§T607)
 
 The decode benchmark's llama (17.7 M parameters, dim 512, 6 layers, GQA 8/2,
