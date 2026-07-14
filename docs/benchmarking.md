@@ -180,6 +180,17 @@ reference parity holds within ulps. Same-machine A/B (CGO_ENABLED=0, ref+cpu onl
 | Softmax (2048² f32) | 7.71 ms | 5.82 ms | ≈1.33× |
 | Retention fwd (512×64 f32) | 10.66 ms | 2.77 ms | ≈3.85× |
 | Retention bwd (512×64 f32) | 24.12 ms | 5.69 ms | ≈4.25× |
+| ReLU (1M f32) | 1.14 ms | 0.87 ms | ≈1.32× |
+| SiLU (1M f32) | 2.00 ms | 1.43 ms | ≈1.40× |
+| GELU (1M f32) | 2.12 ms | 2.00 ms | ≈1.06× |
+
+The unary **activations** (relu/silu/gelu) sat on the same closure path — `unOp(f
+func(float64)float64)` called an indirect `f` per element plus a float32↔float64
+round-trip; SiLU even nested a second closure (`x·sigmoid(x)`). Native per-op `[]T`
+kernels remove that. These are **base ops** — every FFN in every layer runs an
+activation — so the win compounds across the whole stack. GELU gains little (its
+cost is `math.Erf`, an f64 transcendental, so the round-trip is inherent); relu/silu
+gain most (little math, so the closure overhead dominated).
 
 The wins scale with how closure-heavy the kernel's inner loops were: softmax's
 per-element `exp` dilutes the closure overhead (small win), while retention's nested
