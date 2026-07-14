@@ -718,8 +718,10 @@ func benchConv2DMultiShape(b *testing.B, cacheCap int) {
 }
 
 // §T622 A/B: the KEY PROOF. Same multi-shape CNN forward pass, two cache caps.
-//   _lastshape (cap=1): pre-§T622 behavior — every layer evicts the previous graph → recompile.
-//   _shapekeyed (cap=16): all layer graphs stay resident → no recompile after warm-up.
+//
+//	_lastshape (cap=1): pre-§T622 behavior — every layer evicts the previous graph → recompile.
+//	_shapekeyed (cap=16): all layer graphs stay resident → no recompile after warm-up.
+//
 // Interleave-run the two; shape-keyed should be dramatically faster.
 func BenchmarkConv2DMultiShape_lastshape_metal(b *testing.B)  { benchConv2DMultiShape(b, 1) }
 func BenchmarkConv2DMultiShape_shapekeyed_metal(b *testing.B) { benchConv2DMultiShape(b, 16) }
