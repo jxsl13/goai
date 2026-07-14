@@ -183,6 +183,8 @@ reference parity holds within ulps. Same-machine A/B (CGO_ENABLED=0, ref+cpu onl
 | ReLU (1M f32) | 1.14 ms | 0.87 ms | ≈1.32× |
 | SiLU (1M f32) | 2.00 ms | 1.43 ms | ≈1.40× |
 | GELU (1M f32) | 2.12 ms | 2.00 ms | ≈1.06× |
+| Neg (1M f32) | 0.37 ms | 0.22 ms | ≈1.68× |
+| StopGradient (1M f32) | 0.37 ms | 0.17 ms | ≈2.14× |
 | AvgPool2D (n8c64hw56 k3s2 f32) | 1.83 ms | 0.65 ms | ≈2.83× |
 | MaxPool2D (n8c64hw56 k3s2 f32) | 2.83 ms | 1.74 ms | ≈1.63× |
 | Conv2D fwd (im2col fill, f32) | 0.71 ms | 0.59 ms | ≈1.21× |
