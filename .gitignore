@@ -18,6 +18,7 @@ coverage.*
 __pycache__/
 *.pyc
 .venv/
+.venv-cuda/
 
 # Editor/OS
 .DS_Store
