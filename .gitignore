@@ -33,3 +33,7 @@ __pycache__/
 
 # NOTE: the compiled Vulkan shader backend/vulkan/shaders/matmul.spv is
 # intentionally COMMITTED (embedded build artifact, wanted in-repo) — not ignored.
+
+# fetched model weights (never commit — multi-GB); keep the README
+models/*
+!models/README.md
