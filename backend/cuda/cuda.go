@@ -141,6 +141,75 @@ func (r *ResidentB) Free() {
 	}
 }
 
+// DeviceF32 is a rank-2 f32 activation resident on the GPU (§V14 Phase-2). It
+// lets a chain of matmuls keep its intermediates on-device: only the first
+// UploadF32 and the final ToHost touch host memory, so an MLP x·W1·W2 pays one
+// H2D + one D2H instead of a round-trip per matmul. Combine with ResidentB
+// (resident weights) for a fully-on-GPU linear stack. Free when done.
+type DeviceF32 struct {
+	ptr        unsafe.Pointer
+	rows, cols int
+}
+
+// UploadF32 copies a rank-2 f32 tensor to the GPU as the start of an on-device
+// chain. Free the result (directly or via the last chain output) when done.
+func UploadF32(a *tensor.Tensor) (*DeviceF32, error) {
+	if a.Ndim() != 2 || a.Dtype() != tensor.F32 {
+		return nil, fmt.Errorf("cuda: UploadF32 needs rank-2 f32, got %dD %v", a.Ndim(), a.Dtype())
+	}
+	ac := a.Contiguous()
+	s := ac.Storage().F32()
+	ptr := C.cu_upload_f32((*C.float)(&s[0]), C.int(len(s)))
+	if ptr == nil {
+		return nil, fmt.Errorf("cuda: UploadF32 failed (%v)", a.Shape())
+	}
+	return &DeviceF32{ptr: ptr, rows: ac.Shape()[0], cols: ac.Shape()[1]}, nil
+}
+
+// MatMulDevice computes a·B with the activation a already resident and the weight
+// B resident, leaving the result on the GPU — no host round-trip. Chain it:
+// h := W1.MatMulDevice(dx); y := W2.MatMulDevice(h). Free intermediates you no
+// longer need.
+func (r *ResidentB) MatMulDevice(a *DeviceF32) (*DeviceF32, error) {
+	if r.ptr == nil || a.ptr == nil {
+		return nil, fmt.Errorf("cuda: MatMulDevice on a freed handle")
+	}
+	if a.cols != r.k {
+		return nil, fmt.Errorf("cuda: MatMulDevice inner dim mismatch a[%d,%d]·B[%d,%d]", a.rows, a.cols, r.k, r.n)
+	}
+	out := C.cu_alloc_f32(C.int(a.rows * r.n))
+	if out == nil {
+		return nil, fmt.Errorf("cuda: MatMulDevice output alloc failed")
+	}
+	rc := C.cu_matmul_f32_ddd(a.ptr, r.ptr, out, C.int(a.rows), C.int(r.k), C.int(r.n))
+	if rc != 0 {
+		C.cu_free_f32(out)
+		return nil, fmt.Errorf("cuda: device matmul failed (code %d)", int(rc))
+	}
+	return &DeviceF32{ptr: out, rows: a.rows, cols: r.n}, nil
+}
+
+// ToHost downloads the resident activation to a new host tensor.
+func (d *DeviceF32) ToHost() (*tensor.Tensor, error) {
+	if d.ptr == nil {
+		return nil, fmt.Errorf("cuda: ToHost on a freed handle")
+	}
+	out := tensor.New(tensor.F32, tensor.Shape{d.rows, d.cols})
+	rc := C.cu_download_f32(d.ptr, (*C.float)(&out.Storage().F32()[0]), C.int(d.rows*d.cols))
+	if rc != 0 {
+		return nil, fmt.Errorf("cuda: download failed (code %d)", int(rc))
+	}
+	return out, nil
+}
+
+// Free releases the device buffer. Safe to call more than once.
+func (d *DeviceF32) Free() {
+	if d.ptr != nil {
+		C.cu_free_f32(d.ptr)
+		d.ptr = nil
+	}
+}
+
 func init() {
 	if Available() {
 		backend.Register(Backend{})

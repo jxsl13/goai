@@ -28,4 +28,15 @@ void cu_free_f32(void* dptr);
 // C use the same pooled device buffers as cu_matmul_f32. Returns 0 on success.
 int cu_matmul_f32_bres(const float* A, const void* dB, float* C, int M, int K, int N);
 
+// Fully-device matmul (§V14 Phase-2, activation residency): all three operands
+// are device handles, so a chain of matmuls keeps its intermediates on the GPU —
+// only the first activation upload and the final download touch host memory.
+//
+// cu_alloc_f32 returns an uninitialized device buffer of n floats (NULL on fail);
+// cu_download_f32 copies n floats device→host. cu_matmul_f32_ddd computes
+// dC[M,N] = dA[M,K]·dB[K,N] with every operand resident (no H2D/D2H).
+void* cu_alloc_f32(int n);
+int cu_download_f32(const void* dsrc, float* dst, int n);
+int cu_matmul_f32_ddd(const void* dA, const void* dB, void* dC, int M, int K, int N);
+
 #endif
