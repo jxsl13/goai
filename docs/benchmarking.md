@@ -183,6 +183,9 @@ reference parity holds within ulps. Same-machine A/B (CGO_ENABLED=0, ref+cpu onl
 | ReLU (1M f32) | 1.14 ms | 0.87 ms | ≈1.32× |
 | SiLU (1M f32) | 2.00 ms | 1.43 ms | ≈1.40× |
 | GELU (1M f32) | 2.12 ms | 2.00 ms | ≈1.06× |
+| AvgPool2D (n8c64hw56 k3s2 f32) | 1.83 ms | 0.65 ms | ≈2.83× |
+| MaxPool2D (n8c64hw56 k3s2 f32) | 2.83 ms | 1.74 ms | ≈1.63× |
+| Conv2D fwd (im2col fill, f32) | 0.71 ms | 0.59 ms | ≈1.21× |
 
 The unary **activations** (relu/silu/gelu) sat on the same closure path — `unOp(f
 func(float64)float64)` called an indirect `f` per element plus a float32↔float64
@@ -191,6 +194,14 @@ kernels remove that. These are **base ops** — every FFN in every layer runs an
 activation — so the win compounds across the whole stack. GELU gains little (its
 cost is `math.Erf`, an f64 transcendental, so the round-trip is inherent); relu/silu
 gain most (little math, so the closure overhead dominated).
+
+The same closure pattern sat on the **CV path** — pooling read every window tap
+through a `get`/`set` closure pair, and the conv im2col fill (forward and backward)
+read `X`/`W`/`dO` through per-element closures. These are the base ops CNN layers
+build on, so devirtualizing them lifts every CV model. AvgPool wins most (2.83×):
+its inner loop is a pure sum over the window, so the closure indirection was almost
+all of it. Conv gains ≈1.21× on the whole op (the im2col fill is memory-bound and
+a minority of conv time — the blocked GEMM dominates and was already typed).
 
 The wins scale with how closure-heavy the kernel's inner loops were: softmax's
 per-element `exp` dilutes the closure overhead (small win), while retention's nested
