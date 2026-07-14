@@ -584,8 +584,10 @@ int vk_rope_f32(const uint32_t* spv, int spvLen,
     };
     void* data[3] = { (void*)Q, (void*)inv, O };
     int up[3] = {1, 1, 0}, down[3] = {0, 0, 1};
-    struct { int32_t seq, width, heads, hd, half, posOffset; float posDiv; } pc = {
-        seq, width, heads, hd, half, posOffset, posDiv };
+    // off=0: the host per-op path never uses fused-QKV sub-row views (SPEC T613); the
+    // struct must still match the shader's widened push block byte-for-byte.
+    struct { int32_t seq, width, heads, hd, half, posOffset, off; float posDiv; } pc = {
+        seq, width, heads, hd, half, posOffset, 0, posDiv };
     // one invocation per rotated pair: seq·heads·(hd/2) threads, 64 per workgroup.
     uint32_t total = (uint32_t)seq * (uint32_t)heads * (uint32_t)half;
     return vk_dispatch(spv, spvLen, 3, lens, data, up, down, &pc, sizeof(pc),
