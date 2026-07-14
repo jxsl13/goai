@@ -236,6 +236,35 @@ score/aggregate loops call the accessor many times per output (largest win). Aft
 this class-audit the only remaining `f64at`/`f64set` uses in `backend/cpu/` are
 comments — every hot CPU kernel is devirtualized.
 
+### BPE tokenizer merge — allocation-free byte-pair merge (§T625, 2026-07-14)
+
+Tokenization is a base path in the same sense: it runs on every prompt, upstream of
+all inference. `bpeMerge` (`nlp/bpe.go`) was the textbook-naive byte-pair merge — a
+list of copied byte-slices, and on every candidate pair on every iteration it built
+the merge-table key as `string(parts[i]) + string(parts[i+1])`: three string
+allocations per pair, an O(L²) allocation load per piece of length `L`.
+
+The fix is tiktoken's `byte_pair_merge` (§R33): keep only byte **offsets** into the
+immutable piece and rank each pair with `ranks[string(piece[a:c])]`. The Go compiler
+special-cases `m[string(byteSlice)]` — when the converted string is used only as a
+map key it elides the allocation entirely — so the whole merge does **zero** map-key
+allocations. The per-pair minimum is maintained incrementally (only the two
+neighbours of a merge recompute their pair rank). The merge order (leftmost lowest
+rank) and the final token boundaries are bit-identical, so encode parity is exact.
+
+Same-session A/B (`BenchmarkBPEMergeNew` vs `…Naive`, a mixed natural-language / code
+/ digit-run / CJK / URL corpus, interleaved ×3):
+
+| | ns/op | B/op | allocs/op |
+|---|---|---|---|
+| naive scan (old) | 502 µs | 68656 | 2084 |
+| offset merge (new) | 78.7 µs | 42456 | 601 |
+| factor | **6.4×** | 1.62× | 3.47× |
+
+Parity is locked by the real-tiktoken golden (`TestBPEEncodeParityTiktoken`), a new
+piece-for-piece old-vs-new check (`TestBPEMergeNaiveParity`), and the existing
+2.5M-exec round-trip fuzz — all green, CGO0 vet + full `nlp` suite green.
+
 ### Head-to-head: llama.cpp on the SAME weights (§T607)
 
 The decode benchmark's llama (17.7 M parameters, dim 512, 6 layers, GQA 8/2,

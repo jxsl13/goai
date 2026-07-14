@@ -4,6 +4,19 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T625 — BPE tokenizer merge 6.4× faster (2026-07-14)
+- Rewrote `bpeMerge` (`nlp/bpe.go`), the byte-pair-encoding step that runs on every
+  prompt, to tiktoken's `byte_pair_merge` scheme. The old code kept a list of copied
+  byte-slices and re-concatenated `string(a)+string(b)` as the merge-table key on
+  every candidate pair every iteration — three string allocations per pair. The new
+  code keeps only byte offsets into the immutable piece and ranks each pair via
+  `ranks[string(piece[a:c])]`, a lookup the Go compiler special-cases to avoid
+  allocating the key at all, plus incremental min-rank maintenance. Same-session A/B
+  on a mixed natural-language/code/digits/CJK/URL corpus: **502 µs → 78.7 µs per op
+  (6.4×)**, allocations 2084 → 601 (3.5×). The merge order and token boundaries are
+  bit-identical, so the tiktoken golden parity, round-trip, and 2.5M-exec fuzz all
+  stay green (a new old-vs-new parity test locks it).
+
 ### mdlint — detect stray-tilde strikethrough and mid-document h1 headings (2026-07-14)
 - The markdown linter now catches two more GitHub-rendering mistakes: lines with 2+
   single "~" characters (the "approx" shorthand like `~4x`) that GFM renders as an

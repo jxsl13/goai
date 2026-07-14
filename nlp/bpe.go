@@ -29,34 +29,79 @@ func LoadGPT2(path string) (*Tokenizer, error) {
 	return readTiktoken(f)
 }
 
+// bpePart is one token boundary during the merge: start = its byte offset into
+// the contiguous piece; rank = the merge rank of the pair (this token, the next),
+// i.e. ranks[piece[start : parts[i+1].next.start]] — or maxInt when not mergeable.
+type bpePart struct{ start, rank int }
+
 // bpeMerge applies byte-pair merging to a single piece's bytes, returning token
 // ids. Repeatedly merges the adjacent pair whose concatenation has the lowest
 // rank until none is mergeable; every remaining part is a base/merged token.
+//
+// This mirrors tiktoken's byte_pair_merge (§R33): instead of a list of copied
+// byte-slices re-concatenated on every candidate pair, it keeps only the byte
+// OFFSETS into the immutable piece and ranks each pair via ranks[piece[a:c]].
+// The Go compiler special-cases m[string(byteSlice)] to look up WITHOUT
+// allocating the string, so the whole merge does ZERO map-key allocations — vs
+// the old string(parts[i])+string(parts[i+1]), which allocated three strings per
+// candidate pair per iteration. Merge order (leftmost lowest rank) and the final
+// token boundaries are bit-identical to the old scan, so encode parity holds.
 func (t *Tokenizer) bpeMerge(piece []byte) []int {
-	if len(piece) == 1 {
+	if len(piece) <= 1 {
+		if len(piece) == 0 {
+			return nil
+		}
 		return []int{t.ranks[string(piece)]}
 	}
-	parts := make([][]byte, len(piece))
-	for i := range piece {
-		parts[i] = piece[i : i+1]
+	// parts[i] = {start offset of token i, rank of merging token i with i+1}; the
+	// trailing sentinel {len, maxInt} makes token i span piece[parts[i].start :
+	// parts[i+1].start]. Build all adjacent-pair ranks once, tracking the min.
+	parts := make([]bpePart, len(piece)+1)
+	minRank, minI := math.MaxInt, -1
+	for i := 0; i < len(piece)-1; i++ {
+		r := math.MaxInt
+		if v, ok := t.ranks[string(piece[i:i+2])]; ok {
+			r = v
+		}
+		parts[i] = bpePart{i, r}
+		if r < minRank { // leftmost lowest rank (strict < ⇒ first wins), as before
+			minRank, minI = r, i
+		}
 	}
-	for len(parts) > 1 {
-		minRank, minI := math.MaxInt, -1
-		for i := 0; i < len(parts)-1; i++ {
-			if r, ok := t.ranks[string(parts[i])+string(parts[i+1])]; ok && r < minRank {
-				minRank, minI = r, i
+	parts[len(piece)-1] = bpePart{len(piece) - 1, math.MaxInt}
+	parts[len(piece)] = bpePart{len(piece), math.MaxInt}
+
+	// getRank(i) = rank of the pair centered on parts[i] AFTER a merge there =
+	// ranks[piece[parts[i].start : parts[i+3].start]] (i+3 because the merge that
+	// triggers this recompute removes one boundary to parts[i]'s right).
+	getRank := func(i int) int {
+		if i+3 < len(parts) {
+			if v, ok := t.ranks[string(piece[parts[i].start:parts[i+3].start])]; ok {
+				return v
 			}
 		}
-		if minI < 0 {
-			break
-		}
-		merged := append(append([]byte{}, parts[minI]...), parts[minI+1]...)
-		parts[minI] = merged
-		parts = append(parts[:minI+1], parts[minI+2:]...)
+		return math.MaxInt
 	}
-	ids := make([]int, len(parts))
-	for i, p := range parts {
-		ids[i] = t.ranks[string(p)]
+
+	for minRank != math.MaxInt {
+		i := minI
+		if i > 0 {
+			parts[i-1].rank = getRank(i - 1)
+		}
+		parts[i].rank = getRank(i)
+		parts = append(parts[:i+1], parts[i+2:]...) // drop the merged-away boundary
+		// rescan for the new leftmost-min pair (exclude the trailing sentinel).
+		minRank, minI = math.MaxInt, -1
+		for j := 0; j < len(parts)-1; j++ {
+			if parts[j].rank < minRank {
+				minRank, minI = parts[j].rank, j
+			}
+		}
+	}
+
+	ids := make([]int, len(parts)-1)
+	for i := 0; i < len(parts)-1; i++ {
+		ids[i] = t.ranks[string(piece[parts[i].start:parts[i+1].start])]
 	}
 	return ids
 }
