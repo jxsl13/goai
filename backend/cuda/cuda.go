@@ -497,7 +497,7 @@ func MultiHeadAttention(q, k, v *DeviceF32, heads int, causal bool) (*DeviceF32,
 		offset = 0
 	}
 	scale := C.float(1 / math.Sqrt(float64(hd)))
-	if rc := C.cu_causal_scale_mh(scores, C.int(heads), C.int(seq), scale, C.int(offset)); rc != 0 {
+	if rc := C.cu_causal_scale_mh(scores, C.int(heads), C.int(seq), C.int(seq), scale, C.int(offset)); rc != 0 {
 		return nil, fmt.Errorf("cuda: MHA scale/mask failed (code %d)", int(rc))
 	}
 	if rc := C.cu_softmax_f32(scores, C.int(heads*seq), C.int(seq)); rc != 0 {
@@ -534,33 +534,67 @@ func GroupedQueryAttention(q, k, v *DeviceF32, qHeads, kvHeads int, causal bool)
 	if k.rows != seq || k.cols != wkv || v.rows != seq || v.cols != wkv {
 		return nil, fmt.Errorf("cuda: GQA k/v must be [%d,%d], got k%v v%v", seq, wkv, k.shape(), v.shape())
 	}
-	scores := C.cu_alloc_f32(C.int(qHeads * seq * seq))
-	if scores == nil {
-		return nil, fmt.Errorf("cuda: GQA scores alloc failed")
-	}
-	defer C.cu_free_f32(scores)
-	if rc := C.cu_gqa_scores(q.ptr, k.ptr, scores, C.int(seq), C.int(qHeads), C.int(kvHeads), C.int(hd)); rc != 0 {
-		return nil, fmt.Errorf("cuda: GQA scores failed (code %d)", int(rc))
-	}
+	// offset seq disables masking (full prefill, seqQ==seqKV); offset 0 = causal.
 	offset := seq
 	if causal {
 		offset = 0
 	}
-	if rc := C.cu_causal_scale_mh(scores, C.int(qHeads), C.int(seq), C.float(1/math.Sqrt(float64(hd))), C.int(offset)); rc != 0 {
+	return gqaCore(q, k, v, qHeads, kvHeads, hd, offset)
+}
+
+// GroupedQueryAttentionKV is the KV-cache decode form of GroupedQueryAttention:
+// q holds the seqQ NEW query rows, k and v hold the FULL cached context of seqKV
+// rows (seqQ ≤ seqKV), and the new rows are the tail of that context. Attention
+// is causal — new query row i is at absolute position (seqKV−seqQ)+i and attends
+// cached keys 0..that. With seqQ==1 this is a single decode step attending the
+// whole cache. Returns the resident [seqQ, qHeads·hd] output; free when done.
+func GroupedQueryAttentionKV(q, k, v *DeviceF32, qHeads, kvHeads int) (*DeviceF32, error) {
+	if q.ptr == nil || k.ptr == nil || v.ptr == nil {
+		return nil, fmt.Errorf("cuda: GQA-KV on a freed handle")
+	}
+	seqQ, wq := q.rows, q.cols
+	if qHeads <= 0 || kvHeads <= 0 || qHeads%kvHeads != 0 || wq%qHeads != 0 {
+		return nil, fmt.Errorf("cuda: GQA-KV bad head config q=%d kv=%d width=%d", qHeads, kvHeads, wq)
+	}
+	hd := wq / qHeads
+	seqKV, wkv := k.rows, kvHeads*hd
+	if seqQ > seqKV {
+		return nil, fmt.Errorf("cuda: GQA-KV seqQ %d > seqKV %d", seqQ, seqKV)
+	}
+	if k.cols != wkv || v.rows != seqKV || v.cols != wkv {
+		return nil, fmt.Errorf("cuda: GQA-KV k/v must be [%d,%d], got k%v v%v", seqKV, wkv, k.shape(), v.shape())
+	}
+	return gqaCore(q, k, v, qHeads, kvHeads, hd, seqKV-seqQ)
+}
+
+// gqaCore runs the batched QKᵀ → scale/causal-mask(offset) → softmax → ·V pipeline
+// for q [seqQ,·] against k/v [seqKV,·]. offset is passed to the mask: key j is
+// kept for query row i when j ≤ i+offset (offset==seqKV disables masking).
+func gqaCore(q, k, v *DeviceF32, qHeads, kvHeads, hd, offset int) (*DeviceF32, error) {
+	seqQ, seqKV, wq := q.rows, k.rows, q.cols
+	scores := C.cu_alloc_f32(C.int(qHeads * seqQ * seqKV))
+	if scores == nil {
+		return nil, fmt.Errorf("cuda: GQA scores alloc failed")
+	}
+	defer C.cu_free_f32(scores)
+	if rc := C.cu_gqa_scores(q.ptr, k.ptr, scores, C.int(seqQ), C.int(seqKV), C.int(qHeads), C.int(kvHeads), C.int(hd)); rc != 0 {
+		return nil, fmt.Errorf("cuda: GQA scores failed (code %d)", int(rc))
+	}
+	if rc := C.cu_causal_scale_mh(scores, C.int(qHeads), C.int(seqQ), C.int(seqKV), C.float(1/math.Sqrt(float64(hd))), C.int(offset)); rc != 0 {
 		return nil, fmt.Errorf("cuda: GQA scale/mask failed (code %d)", int(rc))
 	}
-	if rc := C.cu_softmax_f32(scores, C.int(qHeads*seq), C.int(seq)); rc != 0 {
+	if rc := C.cu_softmax_f32(scores, C.int(qHeads*seqQ), C.int(seqKV)); rc != 0 {
 		return nil, fmt.Errorf("cuda: GQA softmax failed (code %d)", int(rc))
 	}
-	out := C.cu_alloc_f32(C.int(seq * wq))
+	out := C.cu_alloc_f32(C.int(seqQ * wq))
 	if out == nil {
 		return nil, fmt.Errorf("cuda: GQA out alloc failed")
 	}
-	if rc := C.cu_gqa_out(scores, v.ptr, out, C.int(seq), C.int(qHeads), C.int(kvHeads), C.int(hd)); rc != 0 {
+	if rc := C.cu_gqa_out(scores, v.ptr, out, C.int(seqQ), C.int(seqKV), C.int(qHeads), C.int(kvHeads), C.int(hd)); rc != 0 {
 		C.cu_free_f32(out)
 		return nil, fmt.Errorf("cuda: GQA out failed (code %d)", int(rc))
 	}
-	return &DeviceF32{ptr: out, rows: seq, cols: wq}, nil
+	return &DeviceF32{ptr: out, rows: seqQ, cols: wq}, nil
 }
 
 func (d *DeviceF32) shape() tensor.Shape { return tensor.Shape{d.rows, d.cols} }
