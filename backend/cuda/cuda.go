@@ -310,6 +310,46 @@ func (d *DeviceF32) Softmax() error {
 	return nil
 }
 
+// RoPE applies rotary position embeddings in-place to this activation, treated
+// as q[seq, heads·headDim] (rows = seq, cols = heads·headDim), on the GPU — the
+// query/key rotation of a Llama-style attention, kept device-resident. The
+// rotary frequencies (incl. PI/YaRN scaling) come from backend.RoPEFreqs, so the
+// result matches the Pure-Go RoPE within the f32 tolerance. XPos is not yet
+// supported on-device.
+func (d *DeviceF32) RoPE(attrs backend.RoPEAttrs) error {
+	if d.ptr == nil {
+		return fmt.Errorf("cuda: RoPE on a freed handle")
+	}
+	if attrs.XPos {
+		return fmt.Errorf("cuda: RoPE XPos not supported on device yet")
+	}
+	heads := attrs.Heads
+	if heads <= 0 {
+		heads = 1
+	}
+	if d.cols%heads != 0 {
+		return fmt.Errorf("cuda: RoPE width %d not divisible by heads %d", d.cols, heads)
+	}
+	hd := d.cols / heads
+	if hd%2 != 0 {
+		return fmt.Errorf("cuda: RoPE head dim %d must be even", hd)
+	}
+	inv, posDiv := backend.RoPEFreqs(hd, attrs)
+	inv32 := make([]float32, len(inv))
+	for i, v := range inv {
+		inv32[i] = float32(v)
+	}
+	invPtr := C.cu_upload_f32((*C.float)(&inv32[0]), C.int(len(inv32)))
+	if invPtr == nil {
+		return fmt.Errorf("cuda: RoPE frequency upload failed")
+	}
+	defer C.cu_free_f32(invPtr)
+	if rc := C.cu_rope_f32(d.ptr, invPtr, C.int(d.rows), C.int(heads), C.int(hd), C.int(attrs.PosOffset), C.double(posDiv)); rc != 0 {
+		return fmt.Errorf("cuda: rope failed (code %d)", int(rc))
+	}
+	return nil
+}
+
 // Free releases the device buffer. Safe to call more than once.
 func (d *DeviceF32) Free() {
 	if d.ptr != nil {
