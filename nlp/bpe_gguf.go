@@ -79,8 +79,13 @@ func NewBPE(vocab []string, merges []string, opts ...BPEOption) (*BPETokenizer, 
 // BPEOption configures a BPETokenizer (functional-options idiom, §C12).
 type BPEOption func(*BPETokenizer)
 
-// WithBPEUnkID sets the id emitted for a symbol absent from the vocabulary (rare for a
-// complete byte-level vocab; default: none, unknown symbols are skipped).
+// WithBPEUnkID sets the id emitted when a symbol has no entry in the vocabulary.
+//
+// In plain terms: the "unknown token" id. This is RARE for a byte-level BPE vocabulary (GPT-2
+// style), which can represent any byte and so has no true unknowns. Boundary behavior — any
+// valid vocab id. SPECIAL VALUE / default: unset — unknown symbols are simply SKIPPED rather
+// than mapped to an unk id (the right behavior for a complete byte-level vocab, §R90); set this
+// only for a vocabulary that genuinely needs an explicit unknown token.
 func WithBPEUnkID(id int) BPEOption {
 	return func(t *BPETokenizer) { t.unkID, t.hasUnk = id, true }
 }

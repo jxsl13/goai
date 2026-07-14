@@ -56,22 +56,67 @@ type vitCfg struct {
 	dtype                         tensor.Dtype
 }
 
-// WithViTPatch sets the square patch size (default 4; must divide the image size).
+// NOTE on defaults: the ViT option defaults below are DELIBERATELY TINY — sized so the tests
+// and runnable examples train in milliseconds, NOT the research configurations. For reference,
+// ViT-Base (Dosovitskiy et al. 2021, §R236) uses patch 16, dim 768, depth 12, heads 12, MLP
+// 4·dim. Scale these up toward those values for real workloads; the shapes must stay
+// consistent (dim divisible by heads, patch dividing the image size).
+
+// WithViTPatch sets the square patch edge length — the size of the image tiles that become the
+// transformer's "words".
+//
+// In plain terms: how finely the image is chopped up. Smaller patches = more tiles = more
+// detail but quadratically more attention compute (the sequence length is (size/patch)²);
+// larger patches are cheaper but coarser. Boundary behavior — patch must DIVIDE the image size
+// (else NewViT errors); patch = size gives a single token (no spatial structure).
+//
+// Default 4 (a tiny-image demo value; ViT-Base uses 16, §R236).
 func WithViTPatch(p int) ViTOption { return func(c *vitCfg) { c.patch = p } }
 
-// WithViTDim sets the embedding dimension D (default 32; must be divisible by heads).
+// WithViTDim sets the embedding dimension D — the width of each token's vector through the
+// encoder.
+//
+// In plain terms: how much "room" each tile's representation has; wider = more capacity and
+// more compute/parameters. Boundary behavior — must be divisible by the head count (each head
+// gets D/heads channels); too small underfits, too large is wasteful for the task.
+//
+// Default 32 (a tiny demo value; ViT-Base uses 768, §R236).
 func WithViTDim(d int) ViTOption { return func(c *vitCfg) { c.dim = d } }
 
-// WithViTDepth sets the number of encoder blocks (default 2).
+// WithViTDepth sets the number of transformer encoder blocks stacked in the model.
+//
+// In plain terms: how many layers of processing — deeper models capture more abstract features
+// but cost proportionally more compute and are harder to train. Boundary behavior — depth 1 is
+// a single block (shallow); very deep needs residuals + normalization (both present) to train.
+//
+// Default 2 (a tiny demo value; ViT-Base uses 12, §R236).
 func WithViTDepth(n int) ViTOption { return func(c *vitCfg) { c.depth = n } }
 
-// WithViTHeads sets the number of attention heads (default 4).
+// WithViTHeads sets the number of attention heads per block.
+//
+// In plain terms: attention is split into this many parallel "views", each attending to a
+// different subspace of the D channels. Boundary behavior — heads must DIVIDE dim; 1 head is
+// ordinary single attention; more heads give finer specialization but each gets fewer channels
+// (D/heads).
+//
+// Default 4 (a tiny demo value; ViT-Base uses 12, §R236).
 func WithViTHeads(h int) ViTOption { return func(c *vitCfg) { c.heads = h } }
 
-// WithViTMLP sets the MLP hidden width (default 4·dim, the paper's ratio).
+// WithViTMLP sets the hidden width of the per-block feed-forward MLP.
+//
+// In plain terms: the size of the little two-layer network applied to each token after
+// attention; wider = more per-token capacity. Boundary behavior — narrower than dim bottlenecks
+// the block; the standard is a multiple of dim.
+//
+// Default 4·dim (research-grounded: the paper's 4× expansion ratio, Dosovitskiy et al. 2021,
+// §R236 — the near-universal transformer MLP ratio).
 func WithViTMLP(m int) ViTOption { return func(c *vitCfg) { c.mlp = m } }
 
-// WithViTDtype sets the parameter dtype (default F32).
+// WithViTDtype sets the parameter dtype.
+//
+// In plain terms: the numeric precision of the weights — F32 (default) is the safe, accurate
+// choice; F64 doubles memory for extra precision (mainly useful for gradient checks). Boundary
+// behavior: a dtype enum, no numeric extremes. Default F32 (the standard training precision).
 func WithViTDtype(d tensor.Dtype) ViTOption { return func(c *vitCfg) { c.dtype = d } }
 
 // NewViT builds a ViT classifier for [channels, size, size] images and the given

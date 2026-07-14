@@ -52,15 +52,33 @@ type cnnCfg struct {
 	dtype    tensor.Dtype
 }
 
-// WithChannels sets the per-stage output channel counts (default [8, 16]); the
-// length is the number of conv/pool stages.
+// WithChannels sets the per-stage output channel counts; the LENGTH of the slice is the number
+// of conv→ReLU→pool stages, and each value is how many filters that stage learns.
+//
+// In plain terms: each entry adds one downsampling stage with that many feature detectors —
+// more/wider stages see more patterns but cost more compute, and each stage halves the spatial
+// size (so the image must be divisible by 2^stages). Boundary behavior — one entry = a single
+// shallow stage; channels usually grow across stages (coarse→fine features).
+//
+// Default [8, 16] (a small demo classifier; real CNNs use far more channels and stages —
+// VGG-16 runs 64→512 across 5 stages).
 func WithChannels(ch ...int) CNNOption { return func(c *cnnCfg) { c.channels = ch } }
 
-// WithKernel sets the square conv kernel size (default 3; must be odd so
-// pad = kernel/2 preserves the spatial size).
+// WithKernel sets the square convolution kernel edge length.
+//
+// In plain terms: the size of the sliding window each filter looks through — 3 sees a 3×3
+// neighborhood. Boundary behavior — must be ODD so the padding kernel/2 keeps the spatial size
+// unchanged; larger kernels see wider context per layer but cost more.
+//
+// Default 3 (research-grounded: the 3×3 kernel is the modern standard since VGG — stacking
+// 3×3s matches a larger receptive field with fewer parameters).
 func WithKernel(k int) CNNOption { return func(c *cnnCfg) { c.kernel = k } }
 
-// WithDtype sets the parameter dtype (default F32).
+// WithDtype sets the parameter dtype.
+//
+// In plain terms: the numeric precision of the weights — F32 (default) is the safe choice; F64
+// doubles memory for extra precision (mainly for gradient checks). Boundary behavior: a dtype
+// enum, no numeric extremes. Default F32 (the standard training precision).
 func WithDtype(d tensor.Dtype) CNNOption { return func(c *cnnCfg) { c.dtype = d } }
 
 // NewCNN builds the classifier for in-channel images and the given number of

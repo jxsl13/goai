@@ -4,6 +4,14 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T617 — research-grounded, fully-documented configuration knobs (2026-07-14)
+- Every public configuration option across the library (samplers, all optimizers,
+  quantizers, tokenizers, watermarking, the vision models) now documents, in both
+  plain and professional terms: what the knob does, how it behaves as you approach
+  its limits, what special values like 0 or nil mean, and — with a citation — why
+  its default was chosen. The goal is great out-of-the-box behavior with no fiddling,
+  and a clear explanation the moment you do want to change something.
+
 ### T614 — overlap GPU execution with host encoding (2026-07-14)
 - Each decode step's GPU program is now pre-recorded for the next position while the
   current one runs on the GPU, instead of the host sitting idle during execution and

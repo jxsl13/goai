@@ -57,8 +57,16 @@ type Pool struct {
 // PoolOption configures a Pool.
 type PoolOption func(*Pool)
 
-// WithAlignment records an advisory byte alignment (see ADR-0002). It does not
-// currently change the layout — it is a forward hook for §T11.
+// WithAlignment records an advisory byte alignment for pooled buffers (see ADR-0002).
+//
+// In plain terms: a request that buffers begin on an address that is a multiple of `bytes` —
+// which SIMD/GPU code paths prefer for aligned loads. Boundary behavior — this is currently a
+// NO-OP forward hook: L0 honors only natural element alignment, and guaranteed over-alignment
+// is deferred to §T11, so the value is RECORDED (readable via Alignment) but does not yet
+// change the layout. SPECIAL VALUE: 0 / unset = natural element alignment only.
+//
+// Default unset (natural alignment): no research-grounded value applies until the hook is
+// active; a typical target once implemented is 64 bytes (a cache line / AVX-512 width).
 func WithAlignment(bytes int) PoolOption {
 	return func(p *Pool) { p.align = bytes }
 }

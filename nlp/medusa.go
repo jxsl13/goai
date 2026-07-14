@@ -100,8 +100,12 @@ type MedusaHeadsOption func(*medusaHeadsCfg)
 
 type medusaHeadsCfg struct{ dtype tensor.Dtype }
 
-// WithMedusaHeadsDtype sets the head weight dtype (default F32); match the base
-// model's hidden-state dtype.
+// WithMedusaHeadsDtype sets the dtype of the extra Medusa prediction-head weights.
+//
+// In plain terms: the numeric precision of the small extra heads that draft future tokens.
+// Boundary behavior: a dtype enum, no numeric extremes. Match it to the base model's
+// hidden-state dtype so the heads consume those states without a conversion. Default F32
+// (the standard weight precision; §R195).
 func WithMedusaHeadsDtype(d tensor.Dtype) MedusaHeadsOption {
 	return func(c *medusaHeadsCfg) { c.dtype = d }
 }
