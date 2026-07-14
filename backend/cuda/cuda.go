@@ -10,6 +10,7 @@ import "C"
 
 import (
 	"fmt"
+	"math"
 	"unsafe"
 
 	"github.com/jxsl13/goai/backend"
@@ -420,6 +421,55 @@ func (d *DeviceF32) MatMulBT(b *DeviceF32) (*DeviceF32, error) {
 		return nil, fmt.Errorf("cuda: device matmul-bt failed (code %d)", int(rc))
 	}
 	return &DeviceF32{ptr: out, rows: d.rows, cols: b.rows}, nil
+}
+
+// MultiHeadAttention runs scaled dot-product attention over q, k, v — each a
+// resident [seq, heads·headDim] activation with RoPE already applied — entirely
+// on the GPU, and returns the resident [seq, heads·headDim] output. Every head's
+// QKᵀ and scores·V run as one batched strided cuBLAS Sgemm; the scale (1/√headDim)
+// + optional causal mask + per-(head,query) softmax run on-device. Free the
+// result when done.
+func MultiHeadAttention(q, k, v *DeviceF32, heads int, causal bool) (*DeviceF32, error) {
+	if q.ptr == nil || k.ptr == nil || v.ptr == nil {
+		return nil, fmt.Errorf("cuda: MultiHeadAttention on a freed handle")
+	}
+	seq, w := q.rows, q.cols
+	if heads <= 0 || w%heads != 0 {
+		return nil, fmt.Errorf("cuda: MHA width %d not divisible by heads %d", w, heads)
+	}
+	if k.rows != seq || k.cols != w || v.rows != seq || v.cols != w {
+		return nil, fmt.Errorf("cuda: MHA q/k/v shape mismatch")
+	}
+	hd := w / heads
+	scores := C.cu_alloc_f32(C.int(heads * seq * seq))
+	if scores == nil {
+		return nil, fmt.Errorf("cuda: MHA scores alloc failed")
+	}
+	defer C.cu_free_f32(scores)
+	if rc := C.cu_mha_scores(q.ptr, k.ptr, scores, C.int(seq), C.int(heads), C.int(hd)); rc != 0 {
+		return nil, fmt.Errorf("cuda: MHA scores failed (code %d)", int(rc))
+	}
+	// offset seq disables masking (no key is ever in the future) → scale only.
+	offset := seq
+	if causal {
+		offset = 0
+	}
+	scale := C.float(1 / math.Sqrt(float64(hd)))
+	if rc := C.cu_causal_scale_mh(scores, C.int(heads), C.int(seq), scale, C.int(offset)); rc != 0 {
+		return nil, fmt.Errorf("cuda: MHA scale/mask failed (code %d)", int(rc))
+	}
+	if rc := C.cu_softmax_f32(scores, C.int(heads*seq), C.int(seq)); rc != 0 {
+		return nil, fmt.Errorf("cuda: MHA softmax failed (code %d)", int(rc))
+	}
+	out := C.cu_alloc_f32(C.int(seq * w))
+	if out == nil {
+		return nil, fmt.Errorf("cuda: MHA out alloc failed")
+	}
+	if rc := C.cu_mha_out(scores, v.ptr, out, C.int(seq), C.int(heads), C.int(hd)); rc != 0 {
+		C.cu_free_f32(out)
+		return nil, fmt.Errorf("cuda: MHA out failed (code %d)", int(rc))
+	}
+	return &DeviceF32{ptr: out, rows: seq, cols: w}, nil
 }
 
 // Clone returns a new resident activation with a device→device copy of this

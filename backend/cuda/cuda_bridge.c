@@ -31,7 +31,7 @@ static pthread_mutex_t gLock = PTHREAD_MUTEX_INITIALIZER;
 static cublasHandle_t gHandle = NULL;
 static cudaStream_t gStream = NULL;
 static CUcontext gCtx = NULL; // runtime's primary context, retained for driver-API launches
-static CUfunction gGelu = NULL, gSilu = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gCausal = NULL; // lazily nvrtc-compiled
+static CUfunction gGelu = NULL, gSilu = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gCausal = NULL, gCausalMH = NULL; // lazily nvrtc-compiled
 
 static float *gA = NULL, *gB = NULL, *gC = NULL;
 static size_t gACap = 0, gBCap = 0, gCCap = 0; // capacities in bytes
@@ -521,6 +521,83 @@ int cu_matmul_f32_ddd(const void* dA, const void* dB, void* dC, int M, int K, in
     if (st != CUBLAS_STATUS_SUCCESS) { rc = -4; goto done; }
     rc = 0;
 
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// ---- Multi-head attention (batched, strided). Q/K/V are [seq, heads*hd]; each
+// head's [seq,hd] slice starts at column h*hd with row stride W=heads*hd, so a
+// single cublas strided-batched Sgemm with ld=W, stride=hd, batch=heads does all
+// heads at once. Scores are [heads, seq, seq] contiguous (head-major).
+
+// cu_mha_scores: scores[h] = Q[h]·K[h]ᵀ for every head. Row-major A·Bᵀ batched
+// = column-major sgemm(OP_T,OP_N) with the QKᵀ idiom, ld=W (embedded head).
+int cu_mha_scores(const void* dQ, const void* dK, void* dScores, int seq, int heads, int hd) {
+    const float alpha = 1.0f, beta = 0.0f;
+    int W = heads * hd, rc = -2;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cublasSgemmStridedBatched(gHandle, CUBLAS_OP_T, CUBLAS_OP_N,
+                                  seq, seq, hd, &alpha,
+                                  (const float*)dK, W, hd,
+                                  (const float*)dQ, W, hd, &beta,
+                                  (float*)dScores, seq, (long long)seq * seq,
+                                  heads) != CUBLAS_STATUS_SUCCESS) { rc = -4; goto done; }
+    rc = 0;
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_mha_out: out[h] = scores[h]·V[h] for every head, written back into the
+// [seq, heads*hd] output (each head at column h*hd). Plain A·B batched.
+int cu_mha_out(const void* dScores, const void* dV, void* dOut, int seq, int heads, int hd) {
+    const float alpha = 1.0f, beta = 0.0f;
+    int W = heads * hd, rc = -2;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cublasSgemmStridedBatched(gHandle, CUBLAS_OP_N, CUBLAS_OP_N,
+                                  hd, seq, seq, &alpha,
+                                  (const float*)dV, W, hd,
+                                  (const float*)dScores, seq, (long long)seq * seq, &beta,
+                                  (float*)dOut, W, hd,
+                                  heads) != CUBLAS_STATUS_SUCCESS) { rc = -4; goto done; }
+    rc = 0;
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_causal_scale_mh: scale + causal mask on scores[heads, seq, seq] (head-major)
+// — per head, mask key j for query i when j > i (offset for a KV window).
+int cu_causal_scale_mh(void* x, int heads, int seq, float scale, int offset) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (!gCausalMH && compile_kernel(
+                          "extern \"C\" __global__ void causal_scale_mh(float* x, int heads, int seq, float scale, int offset){\n"
+                          "  long gid = (long)blockIdx.x*blockDim.x + threadIdx.x;\n"
+                          "  long total = (long)heads*seq*seq;\n"
+                          "  if (gid >= total) return;\n"
+                          "  int j = (int)(gid % seq);\n"
+                          "  int i = (int)((gid / seq) % seq);\n"
+                          "  x[gid] = (j > i + offset) ? __int_as_float(0xff800000) : x[gid]*scale;\n"
+                          "}\n",
+                          "causal_mh.cu", "causal_scale_mh", &gCausalMH) != 0) { rc = -2; goto done; }
+    {
+        long total = (long)heads * seq * seq;
+        int threads = 256, blocks = (int)((total + threads - 1) / threads);
+        if (blocks < 1) blocks = 1;
+        void* args[5];
+        args[0] = &x;
+        args[1] = &heads;
+        args[2] = &seq;
+        args[3] = &scale;
+        args[4] = &offset;
+        rc = (cuLaunchKernel(gCausalMH, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
 done:
     pthread_mutex_unlock(&gLock);
     return rc;
