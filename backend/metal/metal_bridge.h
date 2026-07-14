@@ -269,6 +269,14 @@ int mtl_conv2d_f32(const float* X, const float* W, const float* B, float* Out,
                    int N, int C, int H, int Wd, int F, int KH, int KW,
                    int stride, int pad, int ho, int wo);
 
+// mtl_conv2d_mps_f32 is the same 2-D cross-correlation forward via Apple's native
+// MPSGraph convolution2D primitive (implicit-GEMM/Winograd internally) instead of
+// the im2col+MPS-GEMM lowering. Same arguments and semantics as mtl_conv2d_f32.
+// Returns 0 on success, nonzero on failure.
+int mtl_conv2d_mps_f32(const float* X, const float* W, const float* B, float* Out,
+                       int N, int C, int H, int Wd, int F, int KH, int KW,
+                       int stride, int pad, int ho, int wo);
+
 // mtl_conv2d_backward_f32 is the conv2d backward: (X,W,dO) → (dX,dW,dBias). One
 // thread per output-gradient element (n,f,oy,ox) scatters into the shared dX/dW/dBias
 // with atomic float adds. dX/dW/dBias are passed in pre-zeroed. Returns 0 on success,

@@ -7,6 +7,7 @@
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #import <MetalPerformanceShaders/MetalPerformanceShaders.h>
+#import <MetalPerformanceShadersGraph/MetalPerformanceShadersGraph.h>
 #include <pthread.h>
 
 #include "metal_bridge.h"
@@ -3687,6 +3688,106 @@ int mtl_conv2d_f32(const float* X, const float* W, const float* B, float* Out,
         [cmd waitUntilCompleted];
         if (cmd.status != MTLCommandBufferStatusCompleted) return -4;
 
+        memcpy(Out, ob.contents, oLen);
+        return 0;
+    }
+}
+
+// ---- native MPS convolution via MPSGraph (§T620) ----------------------------
+// Apple's tuned convolution primitive. Instead of the im2col→MPS-GEMM→scatter
+// lowering above (which materializes the O(N·C·K²·HW) column buffer), this hands
+// the whole conv to MPSGraph's convolution2D op — implicit-GEMM / Winograd chosen
+// internally by MPS, matching what torch-mps calls. NCHW source, OIHW weights
+// ([F,C,KH,KW], exactly our W layout), cross-correlation (like every DL conv),
+// explicit padding so ho/wo match the im2col path. Per-filter bias is folded in
+// as a [1,F,1,1] broadcast add. The graph (placeholders + compiled kernel) is
+// cached for the LAST shape, so an inference/training loop reusing one conv shape
+// pays the build+compile once — subsequent calls only feed buffers and run.
+static MPSGraph*       gConvGraph = nil;
+static MPSGraphTensor* gConvSrc   = nil;
+static MPSGraphTensor* gConvWt    = nil;
+static MPSGraphTensor* gConvBias  = nil;
+static MPSGraphTensor* gConvOut   = nil;
+static int gConvKey[11] = {0};
+static int gConvKeySet  = 0;
+
+static int conv_build_graph(int N, int C, int H, int Wd, int F, int KH, int KW,
+                            int stride, int pad, int ho, int wo) {
+    int key[11] = {N, C, H, Wd, F, KH, KW, stride, pad, ho, wo};
+    if (gConvKeySet && memcmp(key, gConvKey, sizeof(key)) == 0) return 0;
+    @autoreleasepool {
+        MPSGraph* g = [MPSGraph new];
+        MPSGraphTensor* src = [g placeholderWithShape:@[@(N), @(C), @(H), @(Wd)]
+                                             dataType:MPSDataTypeFloat32 name:nil];
+        MPSGraphTensor* wt  = [g placeholderWithShape:@[@(F), @(C), @(KH), @(KW)]
+                                             dataType:MPSDataTypeFloat32 name:nil];
+        MPSGraphTensor* bias = [g placeholderWithShape:@[@1, @(F), @1, @1]
+                                              dataType:MPSDataTypeFloat32 name:nil];
+        MPSGraphConvolution2DOpDescriptor* d = [MPSGraphConvolution2DOpDescriptor
+            descriptorWithStrideInX:stride strideInY:stride
+                    dilationRateInX:1 dilationRateInY:1
+                             groups:1
+                        paddingLeft:pad paddingRight:pad paddingTop:pad paddingBottom:pad
+                       paddingStyle:MPSGraphPaddingStyleExplicit
+                         dataLayout:MPSGraphTensorNamedDataLayoutNCHW
+                      weightsLayout:MPSGraphTensorNamedDataLayoutOIHW];
+        if (d == nil) return -6;
+        MPSGraphTensor* conv = [g convolution2DWithSourceTensor:src weightsTensor:wt
+                                                     descriptor:d name:nil];
+        if (conv == nil) return -6;
+        MPSGraphTensor* out = [g additionWithPrimaryTensor:conv secondaryTensor:bias name:nil];
+        gConvGraph = g;
+        gConvSrc = src; gConvWt = wt; gConvBias = bias; gConvOut = out;
+        memcpy(gConvKey, key, sizeof(key));
+        gConvKeySet = 1;
+    }
+    return 0;
+}
+
+// mtl_conv2d_mps_f32: same contract as mtl_conv2d_f32 but through MPSGraph's
+// native convolution2D instead of im2col+GEMM. B is a length-F bias (zeros when
+// the layer has none). Returns 0 on success, nonzero on failure.
+int mtl_conv2d_mps_f32(const float* X, const float* W, const float* B, float* Out,
+                       int N, int C, int H, int Wd, int F, int KH, int KW,
+                       int stride, int pad, int ho, int wo) {
+    if (ensure_init() != 0) return -1;
+    OP_BEGIN;
+    @autoreleasepool {
+        if (conv_build_graph(N, C, H, Wd, F, KH, KW, stride, pad, ho, wo) != 0) return -6;
+        size_t xLen = (size_t)N * C * H * Wd * sizeof(float);
+        size_t wLen = (size_t)F * C * KH * KW * sizeof(float);
+        size_t bLen = (size_t)F * sizeof(float);
+
+        size_t oLen = (size_t)N * F * ho * wo * sizeof(float);
+        id<MTLBuffer> xb = pool_in(X, xLen);
+        id<MTLBuffer> wb = pool_in(W, wLen);
+        id<MTLBuffer> bb = pool_in(B, bLen);
+        id<MTLBuffer> ob = pool_buf(oLen);
+        if (xb == nil || wb == nil || bb == nil || ob == nil) return -2;
+
+        MPSGraphTensorData* xd = [[MPSGraphTensorData alloc] initWithMTLBuffer:xb
+            shape:@[@(N), @(C), @(H), @(Wd)] dataType:MPSDataTypeFloat32];
+        MPSGraphTensorData* wd = [[MPSGraphTensorData alloc] initWithMTLBuffer:wb
+            shape:@[@(F), @(C), @(KH), @(KW)] dataType:MPSDataTypeFloat32];
+        MPSGraphTensorData* bd = [[MPSGraphTensorData alloc] initWithMTLBuffer:bb
+            shape:@[@1, @(F), @1, @1] dataType:MPSDataTypeFloat32];
+        MPSGraphTensorData* od = [[MPSGraphTensorData alloc] initWithMTLBuffer:ob
+            shape:@[@(N), @(F), @(ho), @(wo)] dataType:MPSDataTypeFloat32];
+        if (xd == nil || wd == nil || bd == nil || od == nil) return -2;
+
+        // Encode into our pooled output buffer (single shared-memory memcpy back,
+        // like the im2col path) rather than runWithMTLCommandQueue's own alloc+copy
+        // — cuts per-call overhead that dominated small shapes.
+        NSDictionary* feeds = @{gConvSrc: xd, gConvWt: wd, gConvBias: bd};
+        MPSCommandBuffer* cmd = [MPSCommandBuffer commandBufferFromCommandQueue:gQueue];
+        if (cmd == nil) return -3;
+        [gConvGraph encodeToCommandBuffer:cmd
+                                    feeds:feeds
+                         targetOperations:nil
+                        resultsDictionary:@{gConvOut: od}
+                      executionDescriptor:nil];
+        [cmd commit];
+        [cmd waitUntilCompleted];
         memcpy(Out, ob.contents, oLen);
         return 0;
     }

@@ -4,7 +4,7 @@ package metal
 
 /*
 #cgo CFLAGS: -fobjc-arc -x objective-c
-#cgo LDFLAGS: -framework Metal -framework MetalPerformanceShaders -framework Foundation
+#cgo LDFLAGS: -framework Metal -framework MetalPerformanceShaders -framework MetalPerformanceShadersGraph -framework Foundation
 #include "metal_bridge.h"
 */
 import "C"
@@ -1306,19 +1306,33 @@ func conv2dF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) (
 
 	xc, wcont := x.Contiguous(), w.Contiguous()
 	out := tensor.New(tensor.F32, tensor.Shape{n, f, ho, wo})
-	rc := C.mtl_conv2d_f32(
-		(*C.float)(&xc.Storage().F32()[0]),
-		(*C.float)(&wcont.Storage().F32()[0]),
-		(*C.float)(&bias[0]),
-		(*C.float)(&out.Storage().F32()[0]),
-		C.int(n), C.int(c), C.int(h), C.int(wd), C.int(f), C.int(kh), C.int(kw),
-		C.int(s), C.int(p), C.int(ho), C.int(wo),
-	)
+	xp := (*C.float)(&xc.Storage().F32()[0])
+	wp := (*C.float)(&wcont.Storage().F32()[0])
+	bp := (*C.float)(&bias[0])
+	op := (*C.float)(&out.Storage().F32()[0])
+	var rc C.int
+	if convUseMPS {
+		// Apple's native MPSGraph convolution (§T620) — the live path.
+		rc = C.mtl_conv2d_mps_f32(xp, wp, bp, op,
+			C.int(n), C.int(c), C.int(h), C.int(wd), C.int(f), C.int(kh), C.int(kw),
+			C.int(s), C.int(p), C.int(ho), C.int(wo))
+	} else {
+		// im2col + MPS-GEMM lowering — kept as a fallback and for A/B measurement.
+		rc = C.mtl_conv2d_f32(xp, wp, bp, op,
+			C.int(n), C.int(c), C.int(h), C.int(wd), C.int(f), C.int(kh), C.int(kw),
+			C.int(s), C.int(p), C.int(ho), C.int(wo))
+	}
 	if rc != 0 {
 		return nil, fmt.Errorf("metal: conv2d failed (code %d)", int(rc))
 	}
 	return []*tensor.Tensor{out}, nil
 }
+
+// convUseMPS routes conv2d forward through Apple's native MPSGraph convolution
+// (§T620) instead of the im2col+MPS-GEMM lowering. Native MPS is the default
+// (measured faster on the benchmarked shapes); the im2col path stays reachable as
+// a fallback and for same-machine A/B measurement (metal_test.go toggles this).
+var convUseMPS = true
 
 // mhaBackwardF32 is the GPU SDPA backward (§T86): (Q,K,V,dO) → (dQ,dK,dV). It
 // serves the same subset as the forward (heads, GQA, causal, sliding window §T128,

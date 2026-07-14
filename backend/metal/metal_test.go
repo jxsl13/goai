@@ -372,35 +372,52 @@ func TestMetalConv2DCrossReference(t *testing.T) {
 		{"1x1", 2, 4, 5, 5, 6, 1, 1, 1, 0, true},
 		{"nonsquare", 1, 2, 7, 5, 3, 2, 3, 2, 1, false},
 	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			x := bench.RandF32(tensor.Shape{c.n, c.c, c.h, c.wd}, 1)
-			w := bench.RandF32(tensor.Shape{c.f, c.c, c.kh, c.kw}, 2)
-			ins := []*tensor.Tensor{x, w}
-			if c.bias {
-				ins = append(ins, bench.RandF32(tensor.Shape{c.f}, 3))
-			}
-			attrs := backend.ConvAttrs{Stride: c.stride, Pad: c.pad}
-			gm, err := backend.Execute(backend.NewContext().WithBackend(mb), backend.OpConv2D, ins, attrs)
-			if err != nil {
-				t.Fatalf("metal conv2d: %v", err)
-			}
-			gr, err := backend.Execute(backend.NewContext().WithBackend(ref), backend.OpConv2D, ins, attrs)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !gm[0].Shape().Equal(gr[0].Shape()) {
-				t.Fatalf("shape %v vs ref %v", gm[0].Shape(), gr[0].Shape())
-			}
-			rtol := crossTol(c.c*c.kh*c.kw) + 1e-6
-			for i := range gm[0].Numel() {
-				idx := tensor.Unravel(i, gm[0].Shape())
-				g, r := gm[0].AtF64(idx...), gr[0].AtF64(idx...)
-				if math.Abs(g-r) > rtol*math.Max(1, math.Abs(r))+1e-5 {
-					t.Fatalf("%s [%d]: metal %v vs ref %v (rtol %g)", c.name, i, g, r, rtol)
+	// Both forward paths must match the CPU reference: the native MPSGraph conv
+	// (§T620, the live path) and the im2col+MPS-GEMM fallback. MPSGraph's conv
+	// uses a different f32 reduction order, so it needs a slightly looser tol —
+	// crossTol already scales with the reduced dim (C·KH·KW), and native gets an
+	// extra 2× headroom below.
+	paths := []struct {
+		name   string
+		useMPS bool
+		tolMul float64
+	}{
+		{"native", true, 2},
+		{"im2col", false, 1},
+	}
+	for _, pth := range paths {
+		for _, c := range cases {
+			t.Run(pth.name+"/"+c.name, func(t *testing.T) {
+				old := metal.SetConvUseMPS(pth.useMPS)
+				defer metal.SetConvUseMPS(old)
+				x := bench.RandF32(tensor.Shape{c.n, c.c, c.h, c.wd}, 1)
+				w := bench.RandF32(tensor.Shape{c.f, c.c, c.kh, c.kw}, 2)
+				ins := []*tensor.Tensor{x, w}
+				if c.bias {
+					ins = append(ins, bench.RandF32(tensor.Shape{c.f}, 3))
 				}
-			}
-		})
+				attrs := backend.ConvAttrs{Stride: c.stride, Pad: c.pad}
+				gm, err := backend.Execute(backend.NewContext().WithBackend(mb), backend.OpConv2D, ins, attrs)
+				if err != nil {
+					t.Fatalf("metal conv2d: %v", err)
+				}
+				gr, err := backend.Execute(backend.NewContext().WithBackend(ref), backend.OpConv2D, ins, attrs)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !gm[0].Shape().Equal(gr[0].Shape()) {
+					t.Fatalf("shape %v vs ref %v", gm[0].Shape(), gr[0].Shape())
+				}
+				rtol := pth.tolMul*crossTol(c.c*c.kh*c.kw) + 1e-6
+				for i := range gm[0].Numel() {
+					idx := tensor.Unravel(i, gm[0].Shape())
+					g, r := gm[0].AtF64(idx...), gr[0].AtF64(idx...)
+					if math.Abs(g-r) > rtol*math.Max(1, math.Abs(r))+1e-5 {
+						t.Fatalf("%s [%d]: metal %v vs ref %v (rtol %g)", c.name, i, g, r, rtol)
+					}
+				}
+			})
+		}
 	}
 }
 
@@ -565,6 +582,29 @@ func BenchmarkConv2D_8x16x32x32_metal(b *testing.B) {
 	benchConv2DOn(b, backend.Metal, 8, 16, 32, 32, 3)
 }
 func BenchmarkConv2D_8x16x32x32_cpu(b *testing.B) { benchConv2DOn(b, backend.CPU, 8, 16, 32, 32, 3) }
+
+// §T620 A/B: native MPSGraph conv vs the im2col+MPS-GEMM lowering, same shape,
+// back-to-back. Toggle SetConvUseMPS around each so the RELATIVE same-machine
+// delta is the signal (B55 depresses absolutes ~2×).
+func BenchmarkConv2D_8x16x32x32_metal_mps(b *testing.B) {
+	defer metal.SetConvUseMPS(metal.SetConvUseMPS(true))
+	benchConv2DOn(b, backend.Metal, 8, 16, 32, 32, 3)
+}
+func BenchmarkConv2D_8x16x32x32_metal_im2col(b *testing.B) {
+	defer metal.SetConvUseMPS(metal.SetConvUseMPS(false))
+	benchConv2DOn(b, backend.Metal, 8, 16, 32, 32, 3)
+}
+
+// Larger shape (n8 c64 hw56 f64 k3) — arithmetic-heavier, where a tuned conv has
+// more room to beat the im2col lowering.
+func BenchmarkConv2D_8x64x56x56_metal_mps(b *testing.B) {
+	defer metal.SetConvUseMPS(metal.SetConvUseMPS(true))
+	benchConv2DOn(b, backend.Metal, 8, 64, 56, 64, 3)
+}
+func BenchmarkConv2D_8x64x56x56_metal_im2col(b *testing.B) {
+	defer metal.SetConvUseMPS(metal.SetConvUseMPS(false))
+	benchConv2DOn(b, backend.Metal, 8, 64, 56, 64, 3)
+}
 
 // TestMetalRetentionCrossReference V-CROSSes the GPU RetNet retention forward against the f64 CPU
 // reference OpRetention over several sequence lengths, head dims and decay rates (§T172). Both
