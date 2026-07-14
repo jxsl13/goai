@@ -120,8 +120,8 @@ func TestPolarQuantRoundTrip(t *testing.T) {
 
 func TestPolarQuantErrors(t *testing.T) {
 	p, _ := newPolarRotation(4, 1)
-	if _, _, err := p.polarQuantize([]float64{1, 2, 3, 4}, 3); err == nil {
-		t.Fatal("b=3 should error (only b=1,2 supported)")
+	if _, _, err := p.polarQuantize([]float64{1, 2, 3, 4}, 0); err == nil {
+		t.Fatal("b<1 should error")
 	}
 	if _, err := p.polarDequantize([]int{0, 0, 0}, 1, 2); err == nil {
 		t.Fatal("wrong index length should error")
@@ -239,8 +239,8 @@ func TestTurboQuantKVCacheErrors(t *testing.T) {
 	if _, err := NewTurboQuantKVCache(0, 2, 1); err == nil {
 		t.Fatal("dim<1 should error")
 	}
-	if _, err := NewTurboQuantKVCache(8, 3, 1); err == nil {
-		t.Fatal("bits=3 should error (only 1,2)")
+	if _, err := NewTurboQuantKVCache(8, 0, 1); err == nil {
+		t.Fatal("bits<1 should error")
 	}
 	c, _ := NewTurboQuantKVCache(4, 2, 1)
 	if err := c.Append([]float64{1, 2, 3}, []float64{1, 2, 3, 4}); err == nil {
@@ -313,5 +313,37 @@ func TestTurboQuantKVCacheRoundTripFuzz(t *testing.T) {
 				t.Fatalf("iter %d row %d: norm drift ‖x̃‖=%.3f vs ‖x‖=%.3f (dim=%d bits=%d)", iter, r, nr, no, dim, bits)
 			}
 		}
+	}
+}
+
+// §T619 the numeric Lloyd-Max Gaussian quantizer must reproduce the paper's closed-form codebooks
+// (b=1 ±√(2/π); b=2 ±0.4528, ±1.510) and extend to b≥3 (unblocking the 2.5-bit outlier split).
+func TestLloydMaxGaussianMatchesClosedForms(t *testing.T) {
+	c1 := lloydMaxGaussian(1)
+	if w := math.Sqrt(2 / math.Pi); math.Abs(c1[0]+w) > 1e-3 || math.Abs(c1[1]-w) > 1e-3 {
+		t.Fatalf("b=1 %v != ±%.4f", c1, w)
+	}
+	c2 := lloydMaxGaussian(2)
+	for i, w := range []float64{-1.510, -0.4528, 0.4528, 1.510} {
+		if math.Abs(c2[i]-w) > 5e-3 {
+			t.Fatalf("b=2[%d]=%.4f != %.4f", i, c2[i], w)
+		}
+	}
+	// b=3: 8 centroids, strictly ascending, symmetric about 0.
+	c3 := lloydMaxGaussian(3)
+	if len(c3) != 8 {
+		t.Fatalf("b=3 has %d centroids, want 8", len(c3))
+	}
+	for i := 1; i < len(c3); i++ {
+		if c3[i] <= c3[i-1] {
+			t.Fatalf("b=3 not ascending at %d: %v", i, c3)
+		}
+	}
+	if math.Abs(c3[0]+c3[7]) > 1e-6 || math.Abs(c3[3]+c3[4]) > 1e-6 {
+		t.Fatalf("b=3 not symmetric: %v", c3)
+	}
+	// polarCodebook now scales by 1/√d and supports b=3
+	if _, err := polarCodebook(3, 64); err != nil {
+		t.Fatalf("polarCodebook b=3: %v", err)
 	}
 }

@@ -108,21 +108,103 @@ func (p *polarRotation) applyInverse(y []float64) ([]float64, error) {
 }
 
 // polarCodebook returns the MSE-optimal (Lloyd-Max) reconstruction centroids for a b-bit
-// per-coordinate quantizer of TurboQuant's rotated unit-vector coordinates, whose marginal is the
-// Beta density f_X(x)=Γ(d/2)/(π·Γ((d−1)/2))·(1−x²)^((d−3)/2) (arXiv:2504.19874). The paper gives
-// the closed-form codebooks for b=1 (±√(2/(πd))) and b=2 (±0.453/√d, ±1.51/√d), scaled by 1/√d
-// because a coordinate of a unit vector in ℝ^d has magnitude ≈ 1/√d. Higher b (numerically-solved
-// centroids) is a follow-up. Returns ascending centroids.
+// per-coordinate quantizer of TurboQuant's rotated unit-vector coordinates (arXiv:2504.19874).
+// A coordinate of a unit vector in ℝ^d has magnitude ≈ 1/√d, and after rotation its SCALED
+// value (×√d) converges to a STANDARD NORMAL in high dimension (the Beta density → N(0,1)); so
+// the codebook is the Lloyd-Max quantizer of N(0,1) divided by √d. lloydMaxGaussian solves it
+// numerically for any b ≥ 1 and reproduces the paper's closed forms (b=1 ±√(2/π); b=2 ±0.4528,
+// ±1.510). Returns ascending centroids. This unblocks the 2.5-bit outlier split (3-bit channels).
 func polarCodebook(b, d int) ([]float64, error) {
+	if b < 1 {
+		return nil, fmt.Errorf("nlp: polarCodebook needs b ≥ 1, got %d", b)
+	}
+	g := lloydMaxGaussian(b)
 	sd := math.Sqrt(float64(d))
-	switch b {
-	case 1:
-		c := math.Sqrt(2 / (math.Pi * float64(d)))
-		return []float64{-c, c}, nil
-	case 2:
-		return []float64{-1.51 / sd, -0.453 / sd, 0.453 / sd, 1.51 / sd}, nil
+	out := make([]float64, len(g))
+	for i, c := range g {
+		out[i] = c / sd
+	}
+	return out, nil
+}
+
+// lloydMaxGaussian returns the 2^b MSE-optimal reconstruction centroids of a standard normal
+// N(0,1), found by Lloyd's algorithm: alternate decision boundaries at centroid midpoints with
+// centroid updates to the Gaussian's conditional mean on each interval, E[Z | a≤Z<c] =
+// (φ(a)−φ(c))/(Φ(c)−Φ(a)) with φ the pdf and Φ the cdf. Symmetric; converges in a few dozen
+// iterations. Ascending centroids.
+func lloydMaxGaussian(b int) []float64 {
+	n := 1 << b
+	// init centroids at uniform quantiles of the Gaussian (a good starting partition)
+	c := make([]float64, n)
+	for i := range c {
+		p := (float64(i) + 0.5) / float64(n)
+		c[i] = gaussianQuantile(p)
+	}
+	phi := func(x float64) float64 { return math.Exp(-x*x/2) / math.Sqrt(2*math.Pi) }
+	cdf := func(x float64) float64 { return 0.5 * math.Erfc(-x/math.Sqrt2) }
+	for iter := 0; iter < 100; iter++ {
+		// boundaries: midpoints between consecutive centroids; outer boundaries ±∞.
+		bnd := make([]float64, n+1)
+		bnd[0], bnd[n] = math.Inf(-1), math.Inf(1)
+		for i := 1; i < n; i++ {
+			bnd[i] = (c[i-1] + c[i]) / 2
+		}
+		var maxΔ float64
+		for i := range c {
+			lo, hi := bnd[i], bnd[i+1]
+			var pl, ph, cl, ch float64 = 0, 0, 0, 1
+			if !math.IsInf(lo, -1) {
+				pl, cl = phi(lo), cdf(lo)
+			}
+			if !math.IsInf(hi, 1) {
+				ph, ch = phi(hi), cdf(hi)
+			}
+			mass := ch - cl
+			if mass < 1e-15 {
+				continue
+			}
+			nc := (pl - ph) / mass // conditional mean
+			if d := math.Abs(nc - c[i]); d > maxΔ {
+				maxΔ = d
+			}
+			c[i] = nc
+		}
+		if maxΔ < 1e-12 {
+			break
+		}
+	}
+	return c
+}
+
+// gaussianQuantile is the inverse standard-normal CDF (probit) via the Beasley-Springer/Moro
+// rational approximation — accurate enough to seed Lloyd's iteration.
+func gaussianQuantile(p float64) float64 {
+	if p <= 0 {
+		return -5
+	}
+	if p >= 1 {
+		return 5
+	}
+	// use the symmetric rational approximation around the tails/centre.
+	a := []float64{-3.969683028665376e+01, 2.209460984245205e+02, -2.759285104469687e+02, 1.383577518672690e+02, -3.066479806614716e+01, 2.506628277459239e+00}
+	bco := []float64{-5.447609879822406e+01, 1.615858368580409e+02, -1.556989798598866e+02, 6.680131188771972e+01, -1.328068155288572e+01}
+	cco := []float64{-7.784894002430293e-03, -3.223964580411365e-01, -2.400758277161838e+00, -2.549732539343734e+00, 4.374664141464968e+00, 2.938163982698783e+00}
+	dco := []float64{7.784695709041462e-03, 3.224671290700398e-01, 2.445134137142996e+00, 3.754408661907416e+00}
+	plow, phigh := 0.02425, 1-0.02425
+	switch {
+	case p < plow:
+		q := math.Sqrt(-2 * math.Log(p))
+		return (((((cco[0]*q+cco[1])*q+cco[2])*q+cco[3])*q+cco[4])*q + cco[5]) /
+			((((dco[0]*q+dco[1])*q+dco[2])*q+dco[3])*q + 1)
+	case p <= phigh:
+		q := p - 0.5
+		r := q * q
+		return (((((a[0]*r+a[1])*r+a[2])*r+a[3])*r+a[4])*r + a[5]) * q /
+			(((((bco[0]*r+bco[1])*r+bco[2])*r+bco[3])*r+bco[4])*r + 1)
 	default:
-		return nil, fmt.Errorf("nlp: polarCodebook supports b=1,2 (paper closed-forms), got b=%d", b)
+		q := math.Sqrt(-2 * math.Log(1-p))
+		return -(((((cco[0]*q+cco[1])*q+cco[2])*q+cco[3])*q+cco[4])*q + cco[5]) /
+			((((dco[0]*q+dco[1])*q+dco[2])*q+dco[3])*q + 1)
 	}
 }
 
