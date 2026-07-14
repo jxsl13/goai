@@ -64,17 +64,36 @@ f32 square GEMM, `-tags cuda`, this host:
 > §C3 gate's whole point is cuda-vs-cpu. Only running the suite on real
 > hardware surfaced it (`benchMatMulOn(b, backend.CPU, 1024)` now).
 
-## The most-impact next optimization (bottom-up)
+## Optimizing the memory layer (bottom-up)
 
-808 GFLOP/s at 1024³ is far below the RTX 3060's ~12.7 TFLOP/s f32 peak. The
-backend is **transfer-bound**, not compute-bound: every `matmulF32` call
-`cudaMalloc`s three device buffers, copies A/B H2D, runs `cublasSgemm`, copies C
-D2H, and frees — synchronously (honest per the code's own note). At 1024³ that
-is ~12 MB of round-trip PCIe traffic and three allocations to hide ~2 GFLOP of
-compute.
+808 GFLOP/s at 1024³ is far below the RTX 3060's ~12.7 TFLOP/s f32 peak: the
+backend is **alloc + transfer-bound**, not compute-bound. Every `matmulF32`
+call spent time on three `cudaMalloc` + three `cudaFree` and ~12 MB of
+round-trip PCIe traffic to hide ~2 GFLOP of compute.
 
-The foundational lever (the "bottom layer") is therefore **device-resident
-tensors** (§V14): keep tensors on the GPU across ops so a training step's
-matmuls don't bounce through host memory each call, and pool device allocations.
-That is the next CUDA task — cuBLAS itself is already optimal for the GEMM
-kernel, so the win is in the memory/transfer layer around it.
+### Step 1 — device-buffer pool (landed)
+
+`cudaMalloc`/`cudaFree` cost ~10–100 µs each, so three of each per matmul
+dominated small/medium GEMMs. `cuda_bridge.c` now **pools** the device buffers:
+`gA/gB/gC` persist across calls and grow to the largest `M*K`/`K*N`/`M*N` seen —
+a steady training loop with fixed shapes allocates once. A single mutex
+serializes the matmul, so the shared cuBLAS handle and buffers are safe under
+concurrent callers (the previous global handle was unguarded).
+
+A/B (§V22, same host, file-toggle baseline, count=2 medians):
+
+| size | malloc-per-call | pooled | speedup |
+|------|-----------------|--------|---------|
+| 512³  | 374 GFLOP/s | 464 GFLOP/s  | **1.24×** |
+| 1024³ | 813 GFLOP/s | 1045 GFLOP/s | **1.29×** |
+
+Bit-exactness is unchanged (cuBLAS result identical; the pool only changes where
+the buffers come from) — the cross-reference suite stays green.
+
+### Step 2 — device-resident tensors (next)
+
+The remaining overhead is the **H2D/D2H copies themselves**. The foundational
+lever is **device-resident tensors** (§V14): keep tensors on the GPU across ops
+so a training step's matmuls don't round-trip through host memory each call.
+cuBLAS is already optimal for the kernel; the win is still in the memory layer
+around it.
