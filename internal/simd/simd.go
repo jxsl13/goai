@@ -1,10 +1,11 @@
+//go:build !(amd64 && goexperiment.simd)
+
 package simd
 
 // Portable SIMD-class primitives: tight, allocation-free elementwise loops the
 // Go compiler can auto-vectorize. dst, a, b must have equal length. These are the
-// fallback used on every arch; the amd64 `simd/archsimd` overrides land in §T11b
-// behind `//go:build amd64 && goexperiment.simd`, at which point this file gains
-// the complementary `!(amd64 && goexperiment.simd)` tag (ADR-0005).
+// fallback used on every arch EXCEPT amd64+GOEXPERIMENT=simd, where simd_avx.go
+// provides archsimd (AVX/FMA) overrides of the same API (§T11b, ADR-0005).
 
 func AddF64(dst, a, b []float64) {
 	for i := range dst {
