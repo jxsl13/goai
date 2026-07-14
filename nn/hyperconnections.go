@@ -20,6 +20,14 @@ const (
 	// mixing step is a CONVEX COMBINATION of the streams. This restores the identity-mapping
 	// property and prevents the >3000× signal blow-up unconstrained HC suffers at scale.
 	HCDoublyStochastic
+	// HCOrthogonal projects Ar onto the ORTHOGONAL group (the Stiefel-manifold constraint of
+	// the JPmHC family, "Dynamical Isometry via Orthogonal Hyper-Connections", arXiv:2602.18308):
+	// an orthogonal mixing matrix preserves the norm of the signal it mixes (dynamical isometry),
+	// another route to stable deep training. Realized here by the CLASSIC Newton-Schulz
+	// orthogonalization (X ← X(1.5I − 0.5XᵀX), which converges to the orthogonal polar factor) —
+	// a standard differentiable orthogonalization; the exact JPmHC projection variant is not
+	// claimed (its 50-page appendix was not machine-extractable at implementation time, §T618).
+	HCOrthogonal
 )
 
 // HyperConnection is one per-layer Hyper-Connection cell — a strict generalization of the
@@ -319,9 +327,20 @@ func (hc *HyperConnection) Collapse(ctx *backend.Context, h *tensor.Tensor) (*te
 // applies internally, exposed so callers can inspect the constrained mixing. Every step is a
 // tape-recorded op, so the gradient flows through the whole unroll.
 func (hc *HyperConnection) EffectiveAr(ctx *backend.Context) (*tensor.Tensor, error) {
-	if hc.Mode != HCDoublyStochastic {
+	switch hc.Mode {
+	case HCDoublyStochastic:
+		return hc.sinkhornAr(ctx)
+	case HCOrthogonal:
+		return hc.orthogonalAr(ctx)
+	default:
 		return hc.Ar, nil
 	}
+}
+
+// sinkhornAr is the mHC differentiable doubly-stochastic projection (see EffectiveAr /
+// HCDoublyStochastic): from K = exp(Ar) it alternately row- then column-normalizes to sum to 1
+// for SinkhornIters rounds, all tape ops so the gradient flows through the unroll.
+func (hc *HyperConnection) sinkhornAr(ctx *backend.Context) (*tensor.Tensor, error) {
 	k, err := hcExec(ctx, backend.OpExp, nil, hc.Ar) // positive start
 	if err != nil {
 		return nil, err
@@ -345,6 +364,62 @@ func (hc *HyperConnection) EffectiveAr(ctx *backend.Context) (*tensor.Tensor, er
 		}
 	}
 	return k, nil
+}
+
+// orthogonalAr is the HCOrthogonal projection: classic Newton-Schulz orthogonalization. It first
+// scales Ar to spectral norm ≤ 1 (via the Frobenius upper bound, the safe convergence region),
+// then iterates X ← X·(1.5·I − 0.5·XᵀX) for SinkhornIters rounds, which converges quadratically
+// to the orthogonal polar factor of Ar. All tape ops → gradient flows through the whole unroll.
+func (hc *HyperConnection) orthogonalAr(ctx *backend.Context) (*tensor.Tensor, error) {
+	dt := hc.Ar.Dtype()
+	// X = Ar / (‖Ar‖_F + eps)
+	sq, err := hcExec(ctx, backend.OpMul, nil, hc.Ar, hc.Ar)
+	if err != nil {
+		return nil, err
+	}
+	ss, err := hcExec(ctx, backend.OpSum, backend.ReduceAttrs{Axes: []int{0, 1}, KeepDims: true}, sq)
+	if err != nil {
+		return nil, err
+	}
+	fro, err := hcExec(ctx, backend.OpSqrt, nil, ss)
+	if err != nil {
+		return nil, err
+	}
+	denom, err := hcExec(ctx, backend.OpAdd, nil, fro, tensor.Full(dt, tensor.Shape{1, 1}, 1e-7))
+	if err != nil {
+		return nil, err
+	}
+	x, err := hcExec(ctx, backend.OpDiv, nil, hc.Ar, denom)
+	if err != nil {
+		return nil, err
+	}
+	negHalf := tensor.Full(dt, tensor.Shape{1, 1}, -0.5)
+	oneHalfI := tensor.New(dt, tensor.Shape{hc.N, hc.N}) // 1.5·Iₙ constant
+	for i := range hc.N {
+		oneHalfI.SetF64(1.5, i, i)
+	}
+	for range hc.SinkhornIters {
+		xt, err := hcExec(ctx, backend.OpTranspose, nil, x)
+		if err != nil {
+			return nil, err
+		}
+		xtx, err := hcExec(ctx, backend.OpMatMul, nil, xt, x) // XᵀX
+		if err != nil {
+			return nil, err
+		}
+		half, err := hcExec(ctx, backend.OpMul, nil, xtx, negHalf) // −0.5·XᵀX (broadcast)
+		if err != nil {
+			return nil, err
+		}
+		poly, err := hcExec(ctx, backend.OpAdd, nil, oneHalfI, half) // 1.5·I − 0.5·XᵀX
+		if err != nil {
+			return nil, err
+		}
+		if x, err = hcExec(ctx, backend.OpMatMul, nil, x, poly); err != nil { // X·poly
+			return nil, err
+		}
+	}
+	return x, nil
 }
 
 func (hc *HyperConnection) checkH(h *tensor.Tensor, who string) error {

@@ -336,3 +336,38 @@ func TestDynamicHyperConnectionGradcheck(t *testing.T) {
 	check("Wb", hc.Dyn.Wb, func(h *nn.HyperConnection) *tensor.Tensor { return h.Dyn.Wb })
 	check("Sr", hc.Dyn.Sr, func(h *nn.HyperConnection) *tensor.Tensor { return h.Dyn.Sr })
 }
+
+// HCOrthogonal projects Ar so that Ar·Arᵀ ≈ I (an orthogonal matrix): the Newton-Schulz
+// orthogonalization converges to the orthogonal polar factor.
+func TestHyperConnectionOrthogonal(t *testing.T) {
+	const n = 3
+	hc, err := nn.NewHyperConnection(tensor.F64, n, nn.HCOrthogonal, nn.WithSinkhornIters(30))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hc.Ar = tensor.FromFloat64(tensor.Shape{n, n}, []float64{
+		1.2, 0.3, -0.5,
+		0.1, 0.9, 0.4,
+		-0.6, 0.2, 1.1,
+	})
+	ar, err := hc.EffectiveAr(backend.NewContext())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Q·Qᵀ should be the identity
+	for i := range n {
+		for j := range n {
+			var dot float64
+			for k := range n {
+				dot += ar.AtF64(i, k) * ar.AtF64(j, k)
+			}
+			want := 0.0
+			if i == j {
+				want = 1.0
+			}
+			if math.Abs(dot-want) > 1e-5 {
+				t.Fatalf("Q·Qᵀ[%d,%d] = %v, want %v (not orthogonal)", i, j, dot, want)
+			}
+		}
+	}
+}
