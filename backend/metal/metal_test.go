@@ -524,12 +524,22 @@ func TestMetalConv2DCrossReference(t *testing.T) {
 		n, c, h, wd, f, kh, kw int
 		stride, pad            int
 		bias                   bool
+		big                    bool // §T624: model-scale — native (live) path only, ref is O(N·F·HW·C·K²)
 	}{
-		{"basic", 1, 1, 5, 5, 1, 3, 3, 1, 0, false},
-		{"pad", 2, 3, 6, 6, 4, 3, 3, 1, 1, true},
-		{"stride2", 1, 3, 8, 8, 5, 3, 3, 2, 1, true},
-		{"1x1", 2, 4, 5, 5, 6, 1, 1, 1, 0, true},
-		{"nonsquare", 1, 2, 7, 5, 3, 2, 3, 2, 1, false},
+		{"basic", 1, 1, 5, 5, 1, 3, 3, 1, 0, false, false},
+		{"pad", 2, 3, 6, 6, 4, 3, 3, 1, 1, true, false},
+		{"stride2", 1, 3, 8, 8, 5, 3, 3, 2, 1, true, false},
+		{"1x1", 2, 4, 5, 5, 6, 1, 1, 1, 0, true, false},
+		{"nonsquare", 1, 2, 7, 5, 3, 2, 3, 2, 1, false, false},
+		// §T624: realistic CNN feature-map scales — the tiny cases above never
+		// exercised a large C·KH·KW reduction, the same coverage gap that hid §B45
+		// (matmul) and §B56 (MHA). deep28 has the largest reduction (k=576 ≫ the
+		// tiny cases' ≤36) so it is the crossTol stress case; conv1x1 is a realistic
+		// bottleneck (reduction k=256). native (live MPSGraph) path only — the f64
+		// ref is O(N·F·HW·C·K²) and would double if also run through im2col.
+		{"fmap32", 4, 16, 32, 32, 32, 3, 3, 1, 1, true, true},    // reduction k=144
+		{"deep28", 2, 64, 28, 28, 32, 3, 3, 1, 1, true, true},    // reduction k=576 (max)
+		{"conv1x1", 8, 256, 14, 14, 128, 1, 1, 1, 0, true, true}, // reduction k=256
 	}
 	// Both forward paths must match the CPU reference: the native MPSGraph conv
 	// (§T620, the live path) and the im2col+MPS-GEMM fallback. MPSGraph's conv
@@ -546,6 +556,11 @@ func TestMetalConv2DCrossReference(t *testing.T) {
 	}
 	for _, pth := range paths {
 		for _, c := range cases {
+			// §T624: model-scale cases run through the native (live) path only —
+			// the f64 ref is O(N·F·HW·C·K²) and would double under im2col.
+			if c.big && !pth.useMPS {
+				continue
+			}
 			t.Run(pth.name+"/"+c.name, func(t *testing.T) {
 				old := metal.SetConvUseMPS(pth.useMPS)
 				defer metal.SetConvUseMPS(old)
@@ -568,15 +583,33 @@ func TestMetalConv2DCrossReference(t *testing.T) {
 					t.Fatalf("shape %v vs ref %v", gm[0].Shape(), gr[0].Shape())
 				}
 				rtol := pth.tolMul*crossTol(c.c*c.kh*c.kw) + 1e-6
+				var maxRel float64
 				for i := range gm[0].Numel() {
 					idx := tensor.Unravel(i, gm[0].Shape())
 					g, r := gm[0].AtF64(idx...), gr[0].AtF64(idx...)
+					rel := math.Abs(g-r) / math.Max(1, math.Abs(r))
+					if rel > maxRel {
+						maxRel = rel
+					}
 					if math.Abs(g-r) > rtol*math.Max(1, math.Abs(r))+1e-5 {
 						t.Fatalf("%s [%d]: metal %v vs ref %v (rtol %g)", c.name, i, g, r, rtol)
 					}
 				}
+				// §T624: measure the f32-vs-f64 error at scale so the margin is
+				// visible in the log (crossTol holds ⟺ maxRel ≤ rtol).
+				if c.big {
+					t.Logf("§T624 %s/%s: k=%d rtol=%g maxRel=%g margin=%.2fx",
+						pth.name, c.name, c.c*c.kh*c.kw, rtol, maxRel, rtol/math.Max(maxRel, 1e-30))
+				}
 			})
 		}
+	}
+	// §T624 non-vacuousness: a gross conv error (1e-2, ≈100× the largest legit
+	// f32 deviation measured above) must still exceed the loosest tol used here
+	// (native path, largest reduction k=576) — the test can actually fail.
+	grossTol := 2*crossTol(64*3*3) + 1e-6
+	if 1e-2 <= grossTol*1+1e-5 {
+		t.Fatalf("§T624 vacuous: gross 1e-2 error within conv tol %g", grossTol)
 	}
 }
 

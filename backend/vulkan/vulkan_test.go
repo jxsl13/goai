@@ -438,12 +438,22 @@ func TestVulkanConv2DCrossReference(t *testing.T) {
 		n, c, h, wd, f, kh, kw int
 		stride, pad            int
 		bias                   bool
+		big                    bool // §T624: model-scale case
 	}{
-		{"basic", 1, 1, 5, 5, 1, 3, 3, 1, 0, false},
-		{"pad", 2, 3, 6, 6, 4, 3, 3, 1, 1, true},
-		{"stride2", 1, 3, 8, 8, 5, 3, 3, 2, 1, true},
-		{"1x1", 2, 4, 5, 5, 6, 1, 1, 1, 0, true},
-		{"nonsquare", 1, 2, 7, 5, 3, 2, 3, 2, 1, false},
+		{"basic", 1, 1, 5, 5, 1, 3, 3, 1, 0, false, false},
+		{"pad", 2, 3, 6, 6, 4, 3, 3, 1, 1, true, false},
+		{"stride2", 1, 3, 8, 8, 5, 3, 3, 2, 1, true, false},
+		{"1x1", 2, 4, 5, 5, 6, 1, 1, 1, 0, true, false},
+		{"nonsquare", 1, 2, 7, 5, 3, 2, 3, 2, 1, false, false},
+		// §T624: realistic CNN feature-map scales through the fused conv_igemm
+		// (live) path — the tiny cases above never exercised a large C·KH·KW
+		// reduction, the same coverage gap that hid §B45 (matmul) and §B56 (MHA).
+		// deep28 has the largest reduction (k=576) so it is the crossTol stress
+		// case; conv1x1 is a realistic bottleneck (k=256). Kept small (f64 ref is
+		// O(N·F·HW·C·K²)) to stay well under the §B55 wall-time budget.
+		{"fmap32", 4, 16, 32, 32, 32, 3, 3, 1, 1, true, true},    // reduction k=144
+		{"deep28", 2, 64, 28, 28, 32, 3, 3, 1, 1, true, true},    // reduction k=576 (max)
+		{"conv1x1", 8, 256, 14, 14, 128, 1, 1, 1, 0, true, true}, // reduction k=256
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -466,14 +476,31 @@ func TestVulkanConv2DCrossReference(t *testing.T) {
 				t.Fatalf("shape %v vs ref %v", gv[0].Shape(), gr[0].Shape())
 			}
 			rtol := crossTol(c.c*c.kh*c.kw) + 1e-6
+			var maxRel float64
 			for i := range gv[0].Numel() {
 				idx := tensor.Unravel(i, gv[0].Shape())
 				g, r := gv[0].AtF64(idx...), gr[0].AtF64(idx...)
+				rel := math.Abs(g-r) / math.Max(1, math.Abs(r))
+				if rel > maxRel {
+					maxRel = rel
+				}
 				if math.Abs(g-r) > rtol*math.Max(1, math.Abs(r))+1e-5 {
 					t.Fatalf("%s [%d]: vulkan %v vs ref %v (rtol %g)", c.name, i, g, r, rtol)
 				}
 			}
+			// §T624: log the f32-vs-f64 error at scale so the margin is visible.
+			if c.big {
+				t.Logf("§T624 %s: k=%d rtol=%g maxRel=%g margin=%.2fx",
+					c.name, c.c*c.kh*c.kw, rtol, maxRel, rtol/math.Max(maxRel, 1e-30))
+			}
 		})
+	}
+	// §T624 non-vacuousness: a gross conv error (1e-2, ≈100× the largest legit
+	// f32 deviation) must still exceed the loosest tol used here (largest
+	// reduction k=576) — the test can actually fail.
+	grossTol := crossTol(64*3*3) + 1e-6
+	if 1e-2 <= grossTol*1+1e-5 {
+		t.Fatalf("§T624 vacuous: gross 1e-2 error within conv tol %g", grossTol)
 	}
 }
 
