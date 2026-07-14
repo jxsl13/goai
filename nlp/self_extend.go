@@ -65,15 +65,57 @@ func hostRoPE(x *tensor.Tensor, pos []int, heads int, base float64) *tensor.Tens
 	half := hd / 2
 	inv, posDiv := backend.RoPEFreqs(hd, backend.RoPEAttrs{Base: base})
 	out := tensor.New(x.Dtype(), x.Shape())
-	for p := range seq {
-		n := float64(pos[p]) / posDiv
-		for h := range heads {
-			b := h * hd
-			for i := range half {
-				c, s := math.Cos(n*inv[i]), math.Sin(n*inv[i])
-				lo, hi := x.AtF64(p, b+i), x.AtF64(p, b+i+half)
-				out.SetF64(lo*c-hi*s, p, b+i)
-				out.SetF64(hi*c+lo*s, p, b+i+half)
+	xc := x.Contiguous()
+	// cos/sin(n·inv[i]) depend only on (p,i) — hoist them OUT of the head loop
+	// (they were recomputed heads× before) and use typed []T access (§base-perf).
+	cosA := make([]float64, half)
+	sinA := make([]float64, half)
+	switch xc.Dtype() {
+	case tensor.F32:
+		src, dst := xc.Storage().F32(), out.Storage().F32()
+		for p := 0; p < seq; p++ {
+			n := float64(pos[p]) / posDiv
+			for i := 0; i < half; i++ {
+				cosA[i], sinA[i] = math.Cos(n*inv[i]), math.Sin(n*inv[i])
+			}
+			prow := p * width
+			for h := 0; h < heads; h++ {
+				b := prow + h*hd
+				for i := 0; i < half; i++ {
+					lo, hi := float64(src[b+i]), float64(src[b+i+half])
+					dst[b+i] = float32(lo*cosA[i] - hi*sinA[i])
+					dst[b+i+half] = float32(hi*cosA[i] + lo*sinA[i])
+				}
+			}
+		}
+	case tensor.F64:
+		src, dst := xc.Storage().F64(), out.Storage().F64()
+		for p := 0; p < seq; p++ {
+			n := float64(pos[p]) / posDiv
+			for i := 0; i < half; i++ {
+				cosA[i], sinA[i] = math.Cos(n*inv[i]), math.Sin(n*inv[i])
+			}
+			prow := p * width
+			for h := 0; h < heads; h++ {
+				b := prow + h*hd
+				for i := 0; i < half; i++ {
+					lo, hi := src[b+i], src[b+i+half]
+					dst[b+i] = lo*cosA[i] - hi*sinA[i]
+					dst[b+i+half] = hi*cosA[i] + lo*sinA[i]
+				}
+			}
+		}
+	default:
+		for p := 0; p < seq; p++ {
+			n := float64(pos[p]) / posDiv
+			for h := 0; h < heads; h++ {
+				b := h * hd
+				for i := 0; i < half; i++ {
+					c, s := math.Cos(n*inv[i]), math.Sin(n*inv[i])
+					lo, hi := xc.AtF64(p, b+i), xc.AtF64(p, b+i+half)
+					out.SetF64(lo*c-hi*s, p, b+i)
+					out.SetF64(hi*c+lo*s, p, b+i+half)
+				}
 			}
 		}
 	}
