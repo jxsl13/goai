@@ -30,8 +30,8 @@
 static pthread_mutex_t gLock = PTHREAD_MUTEX_INITIALIZER;
 static cublasHandle_t gHandle = NULL;
 static cudaStream_t gStream = NULL;
-static CUcontext gCtx = NULL;    // runtime's primary context, retained for driver-API launches
-static CUfunction gGelu = NULL;  // lazily nvrtc-compiled
+static CUcontext gCtx = NULL; // runtime's primary context, retained for driver-API launches
+static CUfunction gGelu = NULL, gSilu = NULL, gAdd = NULL; // lazily nvrtc-compiled
 
 static float *gA = NULL, *gB = NULL, *gC = NULL;
 static size_t gACap = 0, gBCap = 0, gCCap = 0; // capacities in bytes
@@ -55,24 +55,17 @@ static int ensure_init(void) {
     return 0;
 }
 
-// ensure_gelu_kernel lazily compiles the GELU kernel from CUDA-C source with
-// nvrtc (targeting the device's own compute capability) and loads it via the
-// driver API. gCtx must be current on the calling thread.
-static int ensure_gelu_kernel(void) {
-    if (gGelu) return 0;
+// compile_kernel compiles one CUDA-C source with nvrtc (targeting the device's
+// own compute capability), loads it via the driver API, and returns the named
+// entry point in *out. gCtx must be current on the calling thread.
+static int compile_kernel(const char* src, const char* name, const char* entry, CUfunction* out) {
     int major = 0, minor = 0;
     cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, 0);
     cudaDeviceGetAttribute(&minor, cudaDevAttrComputeCapabilityMinor, 0);
     char arch[40];
     snprintf(arch, sizeof(arch), "--gpu-architecture=compute_%d%d", major, minor);
-    // exact GELU (matches backend/ref: 0.5·x·(1+erf(x/√2))); erff is a CUDA builtin.
-    const char* src =
-        "extern \"C\" __global__ void gelu_f32(float* x, int n){\n"
-        "  int i = blockIdx.x*blockDim.x + threadIdx.x;\n"
-        "  if (i < n){ float v = x[i]; x[i] = 0.5f*v*(1.0f+erff(v*0.7071067811865476f)); }\n"
-        "}\n";
     nvrtcProgram prog;
-    if (nvrtcCreateProgram(&prog, src, "gelu.cu", 0, NULL, NULL) != NVRTC_SUCCESS) return -1;
+    if (nvrtcCreateProgram(&prog, src, name, 0, NULL, NULL) != NVRTC_SUCCESS) return -1;
     const char* opts[1] = { arch };
     if (nvrtcCompileProgram(prog, 1, opts) != NVRTC_SUCCESS) { nvrtcDestroyProgram(&prog); return -2; }
     size_t ptxSize = 0;
@@ -85,26 +78,76 @@ static int ensure_gelu_kernel(void) {
     CUresult lr = cuModuleLoadDataEx(&mod, ptx, 0, NULL, NULL);
     free(ptx);
     if (lr != CUDA_SUCCESS) return -6;
-    if (cuModuleGetFunction(&gGelu, mod, "gelu_f32") != CUDA_SUCCESS) return -7;
+    if (cuModuleGetFunction(out, mod, entry) != CUDA_SUCCESS) return -7;
     return 0;
+}
+
+// launch_unary runs an in-place elementwise kernel (float* x, int n) on gStream.
+static int launch_unary(CUfunction fn, void* d, int n) {
+    int threads = 256, blocks = (n + threads - 1) / threads;
+    void* args[2];
+    args[0] = &d;
+    args[1] = &n;
+    return (cuLaunchKernel(fn, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
 }
 
 int cu_gelu_f32(void* d, int n) {
     int rc = -1;
     pthread_mutex_lock(&gLock);
     if (ensure_init() != 0) { rc = -1; goto done; }
-    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; } // bind ctx to this thread
-    if (ensure_gelu_kernel() != 0) { rc = -2; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    // exact GELU (matches backend/ref: 0.5·x·(1+erf(x/√2))); erff is a CUDA builtin.
+    if (!gGelu && compile_kernel(
+                      "extern \"C\" __global__ void gelu_f32(float* x, int n){\n"
+                      "  int i = blockIdx.x*blockDim.x + threadIdx.x;\n"
+                      "  if (i < n){ float v = x[i]; x[i] = 0.5f*v*(1.0f+erff(v*0.7071067811865476f)); }\n"
+                      "}\n",
+                      "gelu.cu", "gelu_f32", &gGelu) != 0) { rc = -2; goto done; }
+    rc = launch_unary(gGelu, d, n);
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+int cu_silu_f32(void* d, int n) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    // x·sigmoid(x); stable sigmoid (branch at 0) matching backend/ref's sigmoid.
+    if (!gSilu && compile_kernel(
+                      "extern \"C\" __global__ void silu_f32(float* x, int n){\n"
+                      "  int i = blockIdx.x*blockDim.x + threadIdx.x;\n"
+                      "  if (i < n){ float v = x[i];\n"
+                      "    float s = v>=0.0f ? 1.0f/(1.0f+expf(-v)) : expf(v)/(1.0f+expf(v));\n"
+                      "    x[i] = v*s; }\n"
+                      "}\n",
+                      "silu.cu", "silu_f32", &gSilu) != 0) { rc = -2; goto done; }
+    rc = launch_unary(gSilu, d, n);
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_add_f32: dst += src elementwise (residual connection), on gStream.
+int cu_add_f32(void* dst, const void* src, int n) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (!gAdd && compile_kernel(
+                     "extern \"C\" __global__ void add_f32(float* dst, const float* src, int n){\n"
+                     "  int i = blockIdx.x*blockDim.x + threadIdx.x;\n"
+                     "  if (i < n){ dst[i] += src[i]; }\n"
+                     "}\n",
+                     "add.cu", "add_f32", &gAdd) != 0) { rc = -2; goto done; }
     {
-        int threads = 256;
-        int blocks = (n + threads - 1) / threads;
-        void *args[2];
-        args[0] = &d;
-        args[1] = &n;
-        // launch on gStream (a cudaStream_t is a CUstream) → ordered with the
-        // matmuls, no sync; the terminal cu_download_f32 is the barrier.
-        CUresult klr = cuLaunchKernel(gGelu, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL);
-        rc = (klr == CUDA_SUCCESS) ? 0 : -3;
+        int threads = 256, blocks = (n + threads - 1) / threads;
+        void* args[3];
+        args[0] = &dst;
+        args[1] = &src;
+        args[2] = &n;
+        rc = (cuLaunchKernel(gAdd, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 done:
     pthread_mutex_unlock(&gLock);
