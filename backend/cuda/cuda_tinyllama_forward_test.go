@@ -58,28 +58,22 @@ func (l *resLayer) forward(dx *cuda.DeviceF32) (*cuda.DeviceF32, error) {
 	dq.Free()
 	dk.Free()
 	dv.Free()
-	do, err := l.wo.MatMulDevice(da)
-	if err != nil {
+	if err := l.wo.MatMulAccInto(da, dx); err != nil { // dx += Wo·attn  → dx = x + attn
 		return nil, err
 	}
 	da.Free()
-	do.Add(dx) // do = x + attn
-	dx.Free()
-	dh2, _ := do.Clone()
+	dh2, _ := dx.Clone()
 	dh2.RMSNorm(l.gFFN, float32(l.eps))
 	dgate, _ := l.wg.MatMulDevice(dh2)
 	dup, _ := l.wu.MatMulDevice(dh2)
 	dh2.Free()
 	dgate.SwiGLU(dup)
 	dup.Free()
-	ddown, err := l.wd.MatMulDevice(dgate)
-	if err != nil {
+	if err := l.wd.MatMulAccInto(dgate, dx); err != nil { // dx += Wd·ffn → dx = x1 + ffn
 		return nil, err
 	}
 	dgate.Free()
-	ddown.Add(do) // ddown = x1 + ffn
-	do.Free()
-	return ddown, nil
+	return dx, nil
 }
 
 // End-to-end: the FULL TinyLlama-1.1B forward on the GPU — embedding → 22 resident

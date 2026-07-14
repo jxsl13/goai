@@ -634,6 +634,33 @@ done:
     return rc;
 }
 
+// cu_matmul_f32_ddd_acc: dC = dA·dB + dC (beta=1) — fuses the transformer residual
+// add into the projection matmul. dC must already hold the residual; the gemm
+// accumulates in place, saving a separate elementwise-add kernel launch + its
+// output allocation on the decode hot path. Same column-major idiom as ddd.
+int cu_matmul_f32_ddd_acc(const void* dA, const void* dB, void* dC, int M, int K, int N) {
+    const float alpha = 1.0f, beta = 1.0f;
+    cublasStatus_t st;
+    int rc = -2;
+
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+
+    st = cublasSgemm(gHandle, CUBLAS_OP_N, CUBLAS_OP_N,
+                     N, M, K,
+                     &alpha,
+                     (const float*)dB, N,
+                     (const float*)dA, K,
+                     &beta,
+                     (float*)dC, N);
+    if (st != CUBLAS_STATUS_SUCCESS) { rc = -4; goto done; }
+    rc = 0;
+
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
 // ---- Multi-head attention (batched, strided). Q/K/V are [seq, heads*hd]; each
 // head's [seq,hd] slice starts at column h*hd with row stride W=heads*hd, so a
 // single cublas strided-batched Sgemm with ld=W, stride=hd, batch=heads does all
