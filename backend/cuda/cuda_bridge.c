@@ -31,7 +31,7 @@ static pthread_mutex_t gLock = PTHREAD_MUTEX_INITIALIZER;
 static cublasHandle_t gHandle = NULL;
 static cudaStream_t gStream = NULL;
 static CUcontext gCtx = NULL; // runtime's primary context, retained for driver-API launches
-static CUfunction gGelu = NULL, gSilu = NULL, gAdd = NULL, gRms = NULL; // lazily nvrtc-compiled
+static CUfunction gGelu = NULL, gSilu = NULL, gAdd = NULL, gRms = NULL, gSoftmax = NULL; // lazily nvrtc-compiled
 
 static float *gA = NULL, *gB = NULL, *gC = NULL;
 static size_t gACap = 0, gBCap = 0, gCCap = 0; // capacities in bytes
@@ -187,6 +187,47 @@ int cu_rmsnorm_f32(void* x, const void* gamma, int rows, int cols, float eps) {
         args[3] = &cols;
         args[4] = &eps;
         rc = (cuLaunchKernel(gRms, blocks, 1, 1, threads, 1, 1, shmem, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_softmax_f32: in-place stable softmax over the last axis, y=exp(x−max)/Σexp,
+// one block per row with two shared-memory reductions (max, then sum-exp). The
+// exp sum is accumulated in DOUBLE (matches backend/ref's f64, §V10).
+int cu_softmax_f32(void* x, int rows, int cols) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (!gSoftmax && compile_kernel(
+                         "extern \"C\" __global__ void softmax_f32(float* x, int rows, int cols){\n"
+                         "  int row=blockIdx.x; if(row>=rows) return;\n"
+                         "  extern __shared__ double sh[];\n"
+                         "  int t=threadIdx.x, nt=blockDim.x;\n"
+                         "  float* xr = x + (size_t)row*cols;\n"
+                         "  double m=-1e300;\n"
+                         "  for(int j=t;j<cols;j+=nt){ double v=xr[j]; if(v>m)m=v; }\n"
+                         "  sh[t]=m; __syncthreads();\n"
+                         "  for(int s=nt/2;s>0;s>>=1){ if(t<s && sh[t+s]>sh[t]) sh[t]=sh[t+s]; __syncthreads(); }\n"
+                         "  double rowmax=sh[0]; __syncthreads();\n"
+                         "  double local=0.0;\n"
+                         "  for(int j=t;j<cols;j+=nt){ double e=exp((double)xr[j]-rowmax); xr[j]=(float)e; local+=e; }\n"
+                         "  sh[t]=local; __syncthreads();\n"
+                         "  for(int s=nt/2;s>0;s>>=1){ if(t<s) sh[t]+=sh[t+s]; __syncthreads(); }\n"
+                         "  double inv=1.0/sh[0];\n"
+                         "  for(int j=t;j<cols;j+=nt){ xr[j]=(float)(xr[j]*inv); }\n"
+                         "}\n",
+                         "softmax.cu", "softmax_f32", &gSoftmax) != 0) { rc = -2; goto done; }
+    {
+        int threads = 256, blocks = rows;
+        size_t shmem = (size_t)threads * sizeof(double);
+        void* args[3];
+        args[0] = &x;
+        args[1] = &rows;
+        args[2] = &cols;
+        rc = (cuLaunchKernel(gSoftmax, blocks, 1, 1, threads, 1, 1, shmem, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 done:
     pthread_mutex_unlock(&gLock);
