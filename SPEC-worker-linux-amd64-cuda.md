@@ -60,6 +60,12 @@ GAP-1 (1024³ GFLOP/s): F64 goai 84 | torch 177 | numpy 227 → ≈2.7×. F32 go
 GAP-2: F64 gap partly = bit-exact `Mul`+`Add` (≈2× of FMA peak). CACHE BLOCKING re-measured on this Zen3 (ADR-0017 resume condition): packed-B REGRESSED (512 −16%, 1024 −6%) → DISCARDED, x86 resume condition CLOSED with data (kernel ⊥ cache-capacity/B-read-bound; B fits L3). remaining ≈3× vendor gap = microkernel saturation + §V10 f64-accum policy, ⊥ blocking.
 GAP-3 (thread finding): torch FASTER at 8 threads than 16 on 8c/16t (SMT contention, compute-bound GEMM). BUT goai GEMM is SLOWER at 8 than 16 (69 vs 81 GFLOP/s) — its less-saturated kernel benefits from SMT hiding stalls → ⊥ cap parallelWork at physical cores (measured negative).
 
+## §PERF — inference throughput (user directive 2026-07-15: benchmark vs industry-standard, then hyper-optimize)
+
+PERF-1 (goai TinyLlama-1.1B prefill, f32, NO KV-cache, RTX 3060, §V22): GPU 1204 tok/s @seq32 / 2002 @seq128; CPU (nlp.Llama f64) 5.9 tok/s @seq32 → GPU ≈204–340× CPU. `BenchmarkTinyLlamaPrefill{GPU,CPU}`.
+PERF-GAP: goai runs F32 (dequantized) + NO KV-cache (re-forwards each step, O(N²) decode) — vs llama.cpp's quantized + KV-cache + fused kernels. Expect goai currently SLOWER than llama.cpp; measure honestly then close.
+PERF-NEXT (hyper-opt, biggest first): (1) llama.cpp `llama-bench` baseline on same GGUF+GPU (needs nvcc for CUDA build — pip wheels lack it; investigate runfile/prebuilt). (2) KV-CACHE decode on-device (RoPE PosOffset) — O(N²)→O(N), the huge decode win. (3) quantized matmul on device (Q8/Q4 resident → 4× memory + quant GEMM). (4) kernel fusion (RMSNorm+matmul, flash attention) + fewer launches. (5) pooled intermediates.
+
 ## §Tw — worker task log (merged PRs)
 
 Tw1|x|floor doc: amd64 GEMM scalar floor + F32≈F64 finding (PR#1)|§V22
@@ -88,6 +94,7 @@ Tw23|x|CUDA full MULTI-HEAD decoder LAYER composed & verified e2e vs ref (max re
 Tw24|x|CUDA GQA (grouped-query attn, pointer-array batched Sgemm) verified vs per-head ref (PR#25)|GPU-5,Nx1
 Tw29|x|REAL-MODEL: TinyLlama-1.1B block-0 on CUDA path w/ actual GGUF weights == CPU nlp block (OpMHA) max rel 1.4e-6 (PR#31)|Nx1,GPU-5
 Tw30|x|REAL-MODEL FULL FORWARD: TinyLlama-1.1B (embed→22 layers→norm→logits) on GPU == CPU nlp.Llama TOKEN-FOR-TOKEN (6/6 greedy argmax, logit 1.7e-5) (PR#32)|Nx1
+Tw31|x|inference THROUGHPUT bench: TinyLlama prefill GPU 1204/2002 tok/s (seq32/128) vs CPU 5.9 — baseline for the llama.cpp comparison + hyper-opt (PR#33)|§PERF
 Tw25|x|CUDA embedding row-gather (bit-exact) — full-model forward-pass op set COMPLETE on-device (PR#26)|GPU-4,Nx1
 Tw26|x|CUDA fused SwiGLU (SiLU⊙up, 1 pass) — device traffic 5n→3n, FFN launch fusion (PR#27)|GPU-7
 Tw27|x|CPU f32-native GEMM direct-store (drop f64 carrier) +28% → 196 GFLOP/s, 4.7× scalar (PR#28); mr=8 tiling measured as -7% loss, rejected|CPU-3
