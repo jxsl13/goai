@@ -33,6 +33,45 @@ func poolDimsCPU(x *tensor.Tensor, attrs backend.Attrs) (n, c, h, w, k, s, ho, w
 	return n, c, h, w, k, s, ho, wo, nil
 }
 
+// pool2dTyped is the devirtualized 2-D max/avg pool over concrete []T slices
+// (§base-perf, the §T602 pattern): direct indexed reads instead of the per-element
+// get/set closures + float32↔float64 round-trip the closure path paid on every one
+// of the k*k window taps. f64 accumulate (avg) / f64 compare (max) keep parity.
+func pool2dTyped[T normFloat](xs, os []T, isMax bool, n, c, h, w, k, s, ho, wo int, inv float64) {
+	planes := n * c
+	parallelWork(planes, ho*wo*k*k, func(lo, hi int) {
+		for pl := lo; pl < hi; pl++ {
+			in0 := pl * h * w
+			out0 := pl * ho * wo
+			for oy := 0; oy < ho; oy++ {
+				for ox := 0; ox < wo; ox++ {
+					if isMax {
+						best := math.Inf(-1)
+						for ky := 0; ky < k; ky++ {
+							row := in0 + (oy*s+ky)*w + ox*s
+							for kx := 0; kx < k; kx++ {
+								if v := float64(xs[row+kx]); v > best {
+									best = v
+								}
+							}
+						}
+						os[out0+oy*wo+ox] = T(best)
+					} else {
+						var acc float64
+						for ky := 0; ky < k; ky++ {
+							row := in0 + (oy*s+ky)*w + ox*s
+							for kx := 0; kx < k; kx++ {
+								acc += float64(xs[row+kx])
+							}
+						}
+						os[out0+oy*wo+ox] = T(acc * inv)
+					}
+				}
+			}
+		}
+	})
+}
+
 func pool2dKernel(isMax bool) backend.Kernel {
 	return func(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
 		if len(in) != 1 {
@@ -46,48 +85,11 @@ func pool2dKernel(isMax bool) backend.Kernel {
 		xc := x.Contiguous()
 		out := tensor.NewOn(ctx.Device(), x.Dtype(), tensor.Shape{n, c, ho, wo})
 		inv := 1 / float64(k*k)
-
-		run := func(get func(flat int) float64, set func(flat int, v float64)) {
-			planes := n * c
-			parallelWork(planes, ho*wo*k*k, func(lo, hi int) {
-				for pl := lo; pl < hi; pl++ {
-					in0 := pl * h * w
-					out0 := pl * ho * wo
-					for oy := range ho {
-						for ox := range wo {
-							if isMax {
-								best := math.Inf(-1)
-								for ky := range k {
-									row := in0 + (oy*s+ky)*w + ox*s
-									for kx := range k {
-										if v := get(row + kx); v > best {
-											best = v
-										}
-									}
-								}
-								set(out0+oy*wo+ox, best)
-							} else {
-								var acc float64
-								for ky := range k {
-									row := in0 + (oy*s+ky)*w + ox*s
-									for kx := range k {
-										acc += get(row + kx)
-									}
-								}
-								set(out0+oy*wo+ox, acc*inv)
-							}
-						}
-					}
-				}
-			})
-		}
 		switch x.Dtype() {
 		case tensor.F64:
-			xs, os := xc.Storage().F64(), out.Storage().F64()
-			run(func(i int) float64 { return xs[i] }, func(i int, v float64) { os[i] = v })
+			pool2dTyped(xc.Storage().F64(), out.Storage().F64(), isMax, n, c, h, w, k, s, ho, wo, inv)
 		case tensor.F32:
-			xs, os := xc.Storage().F32(), out.Storage().F32()
-			run(func(i int) float64 { return float64(xs[i]) }, func(i int, v float64) { os[i] = float32(v) })
+			pool2dTyped(xc.Storage().F32(), out.Storage().F32(), isMax, n, c, h, w, k, s, ho, wo, inv)
 		default:
 			return nil, fmt.Errorf("cpu: unsupported dtype %v", x.Dtype())
 		}
