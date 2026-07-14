@@ -13,12 +13,22 @@
 // separate colout pass is gone too: one dispatch, no col/G intermediate buffers.
 //
 // GEMM dims (derived from the conv params so the push block == ConvPC): M = F,
-// K = C·KH·KW, Ncol = N·ho·wo. Dispatch: ceil(Ncol/16) × ceil(F/16) workgroups.
+// K = C·KH·KW, Ncol = N·ho·wo. Dispatch: ceil(Ncol/(TS·NB)) × ceil(F/TS) workgroups.
 //
-// NOTE (§B39): register blocking (64×64, 4×4/thread) gave NO speedup on MoltenVK —
-// memory-bandwidth-bound — so the plain 16×16 tiled structure is kept here too.
+// COALESCING RUNG (§T620): each thread owns NB=4 consecutive output columns (an
+// N-direction register block) and gathers its B panel as a CONTIGUOUS vec4 on the
+// interior fast-path — stride-1, all four taps in-bounds inside one input row, so
+// ix = ox+kx-pad steps by 1 → four adjacent X floats read in one 16-byte access.
+// The padding halo / row boundary / strided cases fall back to per-element scalar
+// gathers. This widens the per-warp X gather (16 threads' vec4 loads cover a
+// contiguous 64-float run) and cuts the workgroup count 4×; measured ≈+7% over the
+// scalar 16×16 kernel on MoltenVK/M2 Pro (same-machine interleaved A/B, §V22).
+// NOTE (§B39): full 64×64 4×4 register blocking gave NO gain (it also blocks the
+// M=F≤32 dim, wasting threads) — the win here is the vec4 gather + N-only blocking.
 
-#define TS 16
+#define TS 16         // GEMM contraction tile / M-row tile
+#define NB 4          // output columns per thread (N-direction register block)
+#define TW (TS * NB)  // 64: column-tile width
 
 layout(local_size_x = TS, local_size_y = TS, local_size_z = 1) in;
 
@@ -32,63 +42,100 @@ layout(push_constant) uniform PC {
 } p;
 
 shared float As[TS][TS]; // weights sub-tile (A operand, stored [M=F, K])
-shared float Bs[TS][TS]; // im2col sub-tile (B operand, gathered from X, never materialized)
+shared float Bs[TS][TW]; // im2col sub-tile (B operand, gathered from X, never materialized)
 
 void main() {
-    uint tx = gl_LocalInvocationID.x; // column within the tile (0..TS-1)
-    uint ty = gl_LocalInvocationID.y; // row within the tile
-    uint col = gl_GlobalInvocationID.x; // global GEMM column = output col index (n·ho+oy)·wo+ox
-    uint row = gl_GlobalInvocationID.y; // global GEMM row = filter f
+    uint tx = gl_LocalInvocationID.x; // 0..TS-1
+    uint ty = gl_LocalInvocationID.y; // 0..TS-1
+    uint row = gl_GlobalInvocationID.y;         // global GEMM row = filter f
+    int  colBase = int(gl_WorkGroupID.x) * TW;  // first output column of this tile
 
     int M = p.F;                       // GEMM rows
     int K = p.C * p.KH * p.KW;         // GEMM interior (im2col row count)
     int Ncol = p.N * p.ho * p.wo;      // GEMM columns (im2col col count)
 
-    // Decode the output column c0 = col into (n, oy, ox); reused every K-tile.
-    int c0 = int(col);
-    int ox = c0 % p.wo;
-    int oy = (c0 / p.wo) % p.ho;
-    int nn = c0 / (p.wo * p.ho);
+    // Each thread owns NB consecutive columns: colBase + tx*NB + {0..NB-1}.
+    int myCol0 = colBase + int(tx) * NB;
 
-    float sum = 0.0; // f32 accumulate on-GPU (§V11 K-scaled tolerance), like matmul.comp
+    float sum[NB];
+    for (int j = 0; j < NB; ++j) sum[j] = 0.0;
+
     int tiles = (K + TS - 1) / TS;
     for (int t = 0; t < tiles; ++t) {
-        uint aCol = uint(t) * TS + tx; // K-index for this A (weights) sub-tile column
-        uint krow = uint(t) * TS + ty; // K-index for this B (im2col) sub-tile row
-
-        // A = W[F, K], stored row-major [M,K] — loaded normally (§T94).
+        // A = W[F,K], stored [M,K] — loaded normally (§T94). One element per thread.
+        uint aCol = uint(t) * TS + tx;
         bool aIn = row < uint(M) && aCol < uint(K);
         As[ty][tx] = aIn ? w[row * uint(K) + aCol] : 0.0;
 
-        // B = col[K, Ncol], the im2col matrix — GATHERED from X instead of read from a
-        // materialized buffer. krow is the col-matrix row (c·KH·KW + ky·KW + kx); col is
-        // the output column (n,oy,ox). Compute the source (n,c,iy,ix) tap and read X,
-        // returning 0.0 for the padding halo (§T342 im2col.comp index math, inlined).
-        bool bIn = krow < uint(K) && col < uint(Ncol);
-        float bv = 0.0;
-        if (bIn) {
-            int kk = int(krow);
-            int kx = kk % p.KW;
-            int ky = (kk / p.KW) % p.KH;
-            int c  = kk / (p.KW * p.KH);
-            int iy = oy * p.stride + ky - p.pad;
-            int ix = ox * p.stride + kx - p.pad;
-            if (iy >= 0 && iy < p.H && ix >= 0 && ix < p.Wd) {
-                bv = x[((nn * p.C + c) * p.H + iy) * p.Wd + ix];
+        // B = col[K, Ncol], gathered from X. This thread fills Bs[ty][tx*NB .. +NB-1]
+        // for K-row krow = t*TS+ty over its NB columns. krow → (kx,ky,c); the NB
+        // columns share (nn,oy) but step ox by 1 (stride-1 → ix steps by 1 too).
+        int krow = int(t) * TS + int(ty);
+        int bcol0 = int(tx) * NB;
+        if (krow < K) {
+            int kx = krow % p.KW;
+            int ky = (krow / p.KW) % p.KH;
+            int c  = krow / (p.KW * p.KH);
+            int col0 = colBase + bcol0;      // this thread's first output column
+            int ox0 = col0 % p.wo;
+            int oy  = (col0 / p.wo) % p.ho;
+            int nn  = col0 / (p.wo * p.ho);
+            int iy  = oy * p.stride + ky - p.pad;
+            int base = ((nn * p.C + c) * p.H + iy) * p.Wd; // X input-row base
+            bool rowIn = (iy >= 0 && iy < p.H && nn < p.N);
+            int ix0 = ox0 * p.stride + kx - p.pad;
+            // Interior fast-path: stride-1, four columns inside one input row, all
+            // four ix in-bounds → one contiguous 16-byte (vec4) load from X.
+            if (p.stride == 1 && rowIn && ox0 + NB <= p.wo &&
+                ix0 >= 0 && ix0 + NB <= p.Wd) {
+                Bs[ty][bcol0 + 0] = x[base + ix0 + 0];
+                Bs[ty][bcol0 + 1] = x[base + ix0 + 1];
+                Bs[ty][bcol0 + 2] = x[base + ix0 + 2];
+                Bs[ty][bcol0 + 3] = x[base + ix0 + 3];
+            } else {
+                // Halo / row-boundary / strided fallback: per-element scalar gather.
+                for (int j = 0; j < NB; ++j) {
+                    int col = col0 + j;
+                    float bv = 0.0;
+                    if (col < Ncol) {
+                        int ox  = col % p.wo;
+                        int oyj = (col / p.wo) % p.ho;
+                        int nnj = col / (p.wo * p.ho);
+                        int iyj = oyj * p.stride + ky - p.pad;
+                        int ixj = ox * p.stride + kx - p.pad;
+                        if (iyj >= 0 && iyj < p.H && ixj >= 0 && ixj < p.Wd) {
+                            bv = x[((nnj * p.C + c) * p.H + iyj) * p.Wd + ixj];
+                        }
+                    }
+                    Bs[ty][bcol0 + j] = bv;
+                }
             }
+        } else {
+            for (int j = 0; j < NB; ++j) Bs[ty][bcol0 + j] = 0.0;
         }
-        Bs[ty][tx] = bv;
 
         barrier(); // shared tiles fully written before use (workgroup barrier)
         for (int i = 0; i < TS; ++i) {
-            sum += As[ty][i] * Bs[i][tx];
+            float a = As[ty][i];
+            for (int j = 0; j < NB; ++j) {
+                sum[j] += a * Bs[i][bcol0 + j];
+            }
         }
         barrier(); // all reads done before the next tile overwrites shared memory
     }
 
     // Epilogue: fold bias and scatter to NCHW (§T342 colout.comp, inlined). row = f.
-    if (row < uint(M) && col < uint(Ncol)) {
+    if (row < uint(M)) {
         int f = int(row);
-        o[((nn * p.F + f) * p.ho + oy) * p.wo + ox] = sum + bias[f];
+        float b = bias[f];
+        for (int j = 0; j < NB; ++j) {
+            int col = myCol0 + j;
+            if (col < Ncol) {
+                int ox = col % p.wo;
+                int oy = (col / p.wo) % p.ho;
+                int nn = col / (p.wo * p.ho);
+                o[((nn * p.F + f) * p.ho + oy) * p.wo + ox] = sum[j] + b;
+            }
+        }
     }
 }

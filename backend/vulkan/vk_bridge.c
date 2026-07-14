@@ -1731,8 +1731,10 @@ unlock:
 // gathers X directly via the im2col index and the epilogue scatters+biases straight
 // to NCHW, so only X, W, Bias (uploaded) and Out (downloaded) touch global memory —
 // killing the O(N·C·K²·HW) col write+read that dominated the im2col path. The GEMM
-// dims (M=F, K=C·KH·KW, Ncol=N·ho·wo) are derived in-shader from ConvPC. Dispatch:
-// ceil(Ncol/16) × ceil(F/16) 16×16 workgroups. Returns 0 on success, nonzero on error.
+// dims (M=F, K=C·KH·KW, Ncol=N·ho·wo) are derived in-shader from ConvPC. The kernel
+// is N-blocked (NB=4 output cols/thread, vec4 gather §T620 coalescing rung), so a
+// 16×16 workgroup covers a 64-wide column tile. Dispatch: ceil(Ncol/64) × ceil(F/16)
+// workgroups. Returns 0 on success, nonzero on error.
 int vk_conv2d_igemm_f32(const uint32_t* spv, int spvLen,
                         const float* X, const float* W, const float* B, float* Out,
                         int N, int C, int H, int Wd, int F, int KH, int KW,
@@ -1750,7 +1752,7 @@ int vk_conv2d_igemm_f32(const uint32_t* spv, int spvLen,
     int down[4] = {0, 0, 0, 1};
     ConvPC pc = { N, C, H, Wd, F, KH, KW, stride, pad, ho, wo };
     return vk_dispatch(spv, spvLen, 4, lens, data, up, down, &pc, sizeof(pc),
-                       ((uint32_t)Ncol + 15u) / 16u, ((uint32_t)F + 15u) / 16u, 1u);
+                       ((uint32_t)Ncol + 63u) / 64u, ((uint32_t)F + 15u) / 16u, 1u);
 }
 
 int vk_conv2d_backward_f32(const uint32_t* spv, int spvLen,
