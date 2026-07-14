@@ -23,6 +23,29 @@ func unaryKernel(f func(float64) float64) backend.Kernel {
 		x := in[0]
 		out := tensor.NewOn(ctx.Device(), x.Dtype(), x.Shape())
 		n := x.Numel()
+		// Devirtualised traversal (§T646): the generic AtF64/SetF64 loop pays a
+		// dtype dispatch + per-element Unravel; here we grab the raw typed slice
+		// once (elementwise is flat over Numel) and index directly, still calling
+		// the scalar f per element. Iteration order and arithmetic are identical to
+		// the generic path; the F32 path reads float64, computes in float64 (f), and
+		// rounds only the STORED result.
+		switch x.Dtype() {
+		case tensor.F64:
+			xs := x.Contiguous().Storage().F64()
+			os := out.Storage().F64()
+			for i := range n {
+				os[i] = f(xs[i])
+			}
+			return []*tensor.Tensor{out}, nil
+		case tensor.F32:
+			xs := x.Contiguous().Storage().F32()
+			os := out.Storage().F32()
+			for i := range n {
+				os[i] = float32(f(float64(xs[i])))
+			}
+			return []*tensor.Tensor{out}, nil
+		}
+		// Generic fallback for exotic dtypes (verbatim original loop).
 		for pos := range n {
 			idx := tensor.Unravel(pos, x.Shape())
 			out.SetF64(f(x.AtF64(idx...)), idx...)
@@ -42,9 +65,33 @@ func binaryKernel(op func(a, b float64) float64) backend.Kernel {
 		if a.Dtype() != b.Dtype() {
 			return nil, fmt.Errorf("ref: binary dtype mismatch %v vs %v", a.Dtype(), b.Dtype())
 		}
-		if a.Shape().Equal(b.Shape()) { // same-shape fast path (unchanged)
+		if a.Shape().Equal(b.Shape()) { // same-shape fast path
 			out := tensor.NewOn(ctx.Device(), a.Dtype(), a.Shape())
-			for pos := range a.Numel() {
+			n := a.Numel()
+			// Devirtualised traversal (§T646): a and b share a dtype (guarded
+			// above); grab the raw typed slices once and index flat, still calling
+			// the scalar op per element. Order/arithmetic identical to the generic
+			// loop; F32 reads float64, computes in float64 (op), rounds the store.
+			switch a.Dtype() {
+			case tensor.F64:
+				as := a.Contiguous().Storage().F64()
+				bs := b.Contiguous().Storage().F64()
+				os := out.Storage().F64()
+				for i := range n {
+					os[i] = op(as[i], bs[i])
+				}
+				return []*tensor.Tensor{out}, nil
+			case tensor.F32:
+				as := a.Contiguous().Storage().F32()
+				bs := b.Contiguous().Storage().F32()
+				os := out.Storage().F32()
+				for i := range n {
+					os[i] = float32(op(float64(as[i]), float64(bs[i])))
+				}
+				return []*tensor.Tensor{out}, nil
+			}
+			// Generic fallback for exotic dtypes (verbatim original loop).
+			for pos := range n {
 				idx := tensor.Unravel(pos, a.Shape())
 				out.SetF64(op(a.AtF64(idx...), b.AtF64(idx...)), idx...)
 			}
@@ -98,7 +145,42 @@ func siluBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Att
 		return nil, fmt.Errorf("ref: silu-backward g %v != x %v", g.Shape(), x.Shape())
 	}
 	dx := tensor.NewOn(ctx.Device(), x.Dtype(), x.Shape())
-	for i := range x.Numel() {
+	n := x.Numel()
+	// Devirtualised traversal (§T646): the hottest cpu→ref fallback on the CPU
+	// training path (~2500 calls/run). The generic AtF64/SetF64 loop pays a dtype
+	// dispatch + per-element Unravel; here x and g share a dtype (g.Shape==x.Shape
+	// guarded above, and OpSiLUBackward registers per-dtype so g's dtype matches),
+	// so grab the raw typed slices once and index flat. Order/arithmetic identical
+	// to the generic loop; F32 reads float64, computes silu' in float64, rounds the
+	// store.
+	switch x.Dtype() {
+	case tensor.F64:
+		if g.Dtype() == tensor.F64 {
+			xs := x.Contiguous().Storage().F64()
+			gs := g.Contiguous().Storage().F64()
+			ds := dx.Storage().F64()
+			for i := range n {
+				xv := xs[i]
+				s := sigmoid(xv)
+				ds[i] = gs[i] * s * (1 + xv*(1-s))
+			}
+			return []*tensor.Tensor{dx}, nil
+		}
+	case tensor.F32:
+		if g.Dtype() == tensor.F32 {
+			xs := x.Contiguous().Storage().F32()
+			gs := g.Contiguous().Storage().F32()
+			ds := dx.Storage().F32()
+			for i := range n {
+				xv := float64(xs[i])
+				s := sigmoid(xv)
+				ds[i] = float32(float64(gs[i]) * s * (1 + xv*(1-s)))
+			}
+			return []*tensor.Tensor{dx}, nil
+		}
+	}
+	// Generic fallback for exotic dtypes (verbatim original loop).
+	for i := range n {
 		idx := tensor.Unravel(i, x.Shape())
 		xv := x.AtF64(idx...)
 		s := sigmoid(xv)
@@ -118,7 +200,36 @@ func geluBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Att
 		return nil, fmt.Errorf("ref: gelu-backward g %v != x %v", g.Shape(), x.Shape())
 	}
 	dx := tensor.NewOn(ctx.Device(), x.Dtype(), x.Shape())
-	for i := range x.Numel() {
+	n := x.Numel()
+	// Devirtualised traversal (§T646): a hot cpu→ref fallback on the CPU training
+	// path. x and g share a dtype (shape guarded above, op registered per-dtype);
+	// grab the raw typed slices once and index flat, still calling geluGrad per
+	// element. Order/arithmetic identical to the generic loop; F32 reads float64,
+	// computes geluGrad in float64, rounds the store.
+	switch x.Dtype() {
+	case tensor.F64:
+		if g.Dtype() == tensor.F64 {
+			xs := x.Contiguous().Storage().F64()
+			gs := g.Contiguous().Storage().F64()
+			ds := dx.Storage().F64()
+			for i := range n {
+				ds[i] = geluGrad(xs[i], gs[i])
+			}
+			return []*tensor.Tensor{dx}, nil
+		}
+	case tensor.F32:
+		if g.Dtype() == tensor.F32 {
+			xs := x.Contiguous().Storage().F32()
+			gs := g.Contiguous().Storage().F32()
+			ds := dx.Storage().F32()
+			for i := range n {
+				ds[i] = float32(geluGrad(float64(xs[i]), float64(gs[i])))
+			}
+			return []*tensor.Tensor{dx}, nil
+		}
+	}
+	// Generic fallback for exotic dtypes (verbatim original loop).
+	for i := range n {
 		idx := tensor.Unravel(i, x.Shape())
 		dx.SetF64(geluGrad(x.AtF64(idx...), g.AtF64(idx...)), idx...)
 	}
@@ -145,7 +256,28 @@ func clipKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) 
 	}
 	x := in[0]
 	out := tensor.NewOn(ctx.Device(), x.Dtype(), x.Shape())
-	for pos := range x.Numel() {
+	n := x.Numel()
+	// Devirtualised traversal (§T646): grab the raw typed slice once and index
+	// flat instead of the per-element AtF64/SetF64 dispatch + Unravel. Clamp math
+	// stays in float64 on both paths; F32 rounds only the STORED result.
+	switch x.Dtype() {
+	case tensor.F64:
+		xs := x.Contiguous().Storage().F64()
+		os := out.Storage().F64()
+		for i := range n {
+			os[i] = math.Max(pa.Lo, math.Min(xs[i], pa.Hi))
+		}
+		return []*tensor.Tensor{out}, nil
+	case tensor.F32:
+		xs := x.Contiguous().Storage().F32()
+		os := out.Storage().F32()
+		for i := range n {
+			os[i] = float32(math.Max(pa.Lo, math.Min(float64(xs[i]), pa.Hi)))
+		}
+		return []*tensor.Tensor{out}, nil
+	}
+	// Generic fallback for exotic dtypes (verbatim original loop).
+	for pos := range n {
 		idx := tensor.Unravel(pos, x.Shape())
 		v := x.AtF64(idx...)
 		out.SetF64(math.Max(pa.Lo, math.Min(v, pa.Hi)), idx...)
@@ -199,7 +331,47 @@ func whereKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]
 		return nil, fmt.Errorf("ref: where a/b dtype mismatch %v vs %v", a.Dtype(), b.Dtype())
 	}
 	out := tensor.NewOn(ctx.Device(), a.Dtype(), a.Shape())
-	for pos := range a.Numel() {
+	n := a.Numel()
+	// Devirtualised traversal (§T646): a and b share the output dtype (guarded);
+	// when cond shares that plain float dtype too we grab the raw typed slices once
+	// and index flat instead of the per-element AtF64/SetF64 dispatch + Unravel.
+	// The select is a verbatim copy (same dtype, no narrowing), so byte-for-byte
+	// identical to the generic loop. cond of a different dtype falls through to the
+	// generic path (which reads it via AtF64), preserving the any-dtype contract.
+	switch a.Dtype() {
+	case tensor.F64:
+		if cond.Dtype() == tensor.F64 {
+			cs := cond.Contiguous().Storage().F64()
+			as := a.Contiguous().Storage().F64()
+			bs := b.Contiguous().Storage().F64()
+			os := out.Storage().F64()
+			for i := range n {
+				if cs[i] != 0 {
+					os[i] = as[i]
+				} else {
+					os[i] = bs[i]
+				}
+			}
+			return []*tensor.Tensor{out}, nil
+		}
+	case tensor.F32:
+		if cond.Dtype() == tensor.F32 {
+			cs := cond.Contiguous().Storage().F32()
+			as := a.Contiguous().Storage().F32()
+			bs := b.Contiguous().Storage().F32()
+			os := out.Storage().F32()
+			for i := range n {
+				if cs[i] != 0 {
+					os[i] = as[i]
+				} else {
+					os[i] = bs[i]
+				}
+			}
+			return []*tensor.Tensor{out}, nil
+		}
+	}
+	// Generic fallback for exotic dtypes (verbatim original loop).
+	for pos := range n {
 		idx := tensor.Unravel(pos, a.Shape())
 		if cond.AtF64(idx...) != 0 {
 			out.SetF64(a.AtF64(idx...), idx...)
