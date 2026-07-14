@@ -250,9 +250,12 @@ jobs:
           if vulkaninfo --summary 2>/dev/null | grep -qiE "llvmpipe|swiftshader"; then
             export GOAI_VULKAN_SOFTWARE_ICD=1  # software ICD: known-divergent tests self-skip with reasons (T603)
           fi
-          go test -tags vulkan -short -count=1 -timeout 15m -v ./backend/vulkan/ > vk.log 2>&1
-          rc=$?  # un-piped exit code (V24); the excerpt below is display-only
-          grep -E "^(--- (PASS|FAIL|SKIP)|ok |FAIL)|skipped:" vk.log | head -60 || true
+          # `|| rc=$?` keeps the un-piped exit code (V24) AND survives bash -e: a bare
+          # failing command would abort the script before the log excerpt ever prints —
+          # exactly on failure, when the excerpt matters most (B53).
+          rc=0
+          go test -tags vulkan -short -count=1 -timeout 15m -v ./backend/vulkan/ > vk.log 2>&1 || rc=$?
+          grep -E "^(--- (PASS|FAIL|SKIP)|ok |FAIL)|skipped:" vk.log | head -80 || true
           exit $rc
 
   # go.mod stays tidy (ollama pattern; zero-dep module today, this guards drift).
