@@ -56,4 +56,9 @@ int cu_rmsnorm_f32(void* x, const void* gamma, int rows, int cols, float eps);
 // cu_softmax_f32 applies stable softmax over the last axis in-place (rows×cols).
 int cu_softmax_f32(void* x, int rows, int cols);
 
+// cu_rope_f32 applies rotary position embeddings in-place to x[seq, heads*hd]
+// (HF rotate_half). inv is the resident [hd/2] frequency table and posDiv the
+// position divisor (both from backend.RoPEFreqs on the host).
+int cu_rope_f32(void* x, const void* inv, int seq, int heads, int hd, int posOffset, double posDiv);
+
 #endif

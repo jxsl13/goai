@@ -31,7 +31,7 @@ static pthread_mutex_t gLock = PTHREAD_MUTEX_INITIALIZER;
 static cublasHandle_t gHandle = NULL;
 static cudaStream_t gStream = NULL;
 static CUcontext gCtx = NULL; // runtime's primary context, retained for driver-API launches
-static CUfunction gGelu = NULL, gSilu = NULL, gAdd = NULL, gRms = NULL, gSoftmax = NULL; // lazily nvrtc-compiled
+static CUfunction gGelu = NULL, gSilu = NULL, gAdd = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL; // lazily nvrtc-compiled
 
 static float *gA = NULL, *gB = NULL, *gC = NULL;
 static size_t gACap = 0, gBCap = 0, gCCap = 0; // capacities in bytes
@@ -228,6 +228,53 @@ int cu_softmax_f32(void* x, int rows, int cols) {
         args[1] = &rows;
         args[2] = &cols;
         rc = (cuLaunchKernel(gSoftmax, blocks, 1, 1, threads, 1, 1, shmem, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_rope_f32: in-place rotary position embeddings on x[seq, heads*hd] (HF
+// rotate_half; §R28), one thread per (position, head, dim-pair). inv is the
+// resident [hd/2] frequency table and posDiv the position divisor — both from
+// backend.RoPEFreqs on the host, so PI/YaRN scaling matches backend/ref exactly.
+// Angles are computed in double.
+int cu_rope_f32(void* x, const void* inv, int seq, int heads, int hd, int posOffset, double posDiv) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (!gRope && compile_kernel(
+                      "extern \"C\" __global__ void rope_f32(float* x, const float* inv, int seq, int heads, int hd, int posOffset, double posDiv){\n"
+                      "  int half = hd/2;\n"
+                      "  long total = (long)seq*heads*half;\n"
+                      "  long gid = (long)blockIdx.x*blockDim.x + threadIdx.x;\n"
+                      "  if (gid >= total) return;\n"
+                      "  int i = (int)(gid % half);\n"
+                      "  int h = (int)((gid / half) % heads);\n"
+                      "  int p = (int)(gid / ((long)half*heads));\n"
+                      "  double pos = (double)(posOffset + p) / posDiv;\n"
+                      "  double ang = pos * (double)inv[i];\n"
+                      "  double c = cos(ang), s = sin(ang);\n"
+                      "  float* xr = x + (size_t)p*heads*hd + (size_t)h*hd;\n"
+                      "  double qi = xr[i], qih = xr[i+half];\n"
+                      "  xr[i] = (float)(qi*c - qih*s);\n"
+                      "  xr[i+half] = (float)(qih*c + qi*s);\n"
+                      "}\n",
+                      "rope.cu", "rope_f32", &gRope) != 0) { rc = -2; goto done; }
+    {
+        long total = (long)seq * heads * (hd / 2);
+        int threads = 256, blocks = (int)((total + threads - 1) / threads);
+        if (blocks < 1) blocks = 1;
+        void* args[7];
+        args[0] = &x;
+        args[1] = &inv;
+        args[2] = &seq;
+        args[3] = &heads;
+        args[4] = &hd;
+        args[5] = &posOffset;
+        args[6] = &posDiv;
+        rc = (cuLaunchKernel(gRope, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 done:
     pthread_mutex_unlock(&gLock);
