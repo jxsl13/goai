@@ -35,11 +35,8 @@ func (l *resLayer) free() {
 func (l *resLayer) forward(dx *cuda.DeviceF32) (*cuda.DeviceF32, error) {
 	rq := backend.RoPEAttrs{Base: l.ropeBase, Heads: l.heads}
 	rk := backend.RoPEAttrs{Base: l.ropeBase, Heads: l.kv}
-	dh, err := dx.Clone()
+	dh, err := dx.RMSNormTo(l.gAttn, float32(l.eps))
 	if err != nil {
-		return nil, err
-	}
-	if err := dh.RMSNorm(l.gAttn, float32(l.eps)); err != nil {
 		return nil, err
 	}
 	dq, err := l.wq.MatMulDevice(dh)
@@ -62,8 +59,7 @@ func (l *resLayer) forward(dx *cuda.DeviceF32) (*cuda.DeviceF32, error) {
 		return nil, err
 	}
 	da.Free()
-	dh2, _ := dx.Clone()
-	dh2.RMSNorm(l.gFFN, float32(l.eps))
+	dh2, _ := dx.RMSNormTo(l.gFFN, float32(l.eps))
 	dgate, _ := l.wg.MatMulDevice(dh2)
 	dup, _ := l.wu.MatMulDevice(dh2)
 	dh2.Free()

@@ -370,10 +370,35 @@ func (d *DeviceF32) RMSNorm(gamma *ResidentVec, eps float32) error {
 	if eps <= 0 {
 		eps = 1e-5
 	}
-	if rc := C.cu_rmsnorm_f32(d.ptr, gamma.ptr, C.int(d.rows), C.int(d.cols), C.float(eps)); rc != 0 {
+	if rc := C.cu_rmsnorm_f32(d.ptr, d.ptr, gamma.ptr, C.int(d.rows), C.int(d.cols), C.float(eps)); rc != 0 {
 		return fmt.Errorf("cuda: rmsnorm failed (code %d)", int(rc))
 	}
 	return nil
+}
+
+// RMSNormTo returns a NEW resident buffer holding RMSNorm(d)·gamma, leaving d
+// unchanged — the out-of-place form used on the transformer residual path so the
+// residual need not be cloned before normalizing (one fewer launch + alloc per
+// norm than Clone+RMSNorm). Free the result when done.
+func (d *DeviceF32) RMSNormTo(gamma *ResidentVec, eps float32) (*DeviceF32, error) {
+	if d.ptr == nil || gamma.ptr == nil {
+		return nil, fmt.Errorf("cuda: RMSNormTo on a freed handle")
+	}
+	if gamma.n != d.cols {
+		return nil, fmt.Errorf("cuda: RMSNormTo gamma [%d] != cols %d", gamma.n, d.cols)
+	}
+	if eps <= 0 {
+		eps = 1e-5
+	}
+	out := C.cu_alloc_f32(C.int(d.rows * d.cols))
+	if out == nil {
+		return nil, fmt.Errorf("cuda: RMSNormTo alloc failed")
+	}
+	if rc := C.cu_rmsnorm_f32(d.ptr, out, gamma.ptr, C.int(d.rows), C.int(d.cols), C.float(eps)); rc != 0 {
+		C.cu_free_f32(out)
+		return nil, fmt.Errorf("cuda: rmsnorm-to failed (code %d)", int(rc))
+	}
+	return &DeviceF32{ptr: out, rows: d.rows, cols: d.cols}, nil
 }
 
 // Softmax applies a numerically-stable softmax (exp(x−max)/Σexp) in-place along
