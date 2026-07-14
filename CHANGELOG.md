@@ -4,7 +4,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
-### T638–T639 — Mamba SSM & MLA gradient backward devirtualized (2026-07-14)
+### T638–T640 — Mamba SSM, MLA & RWKV gradient backward devirtualized (2026-07-14)
 - The Mamba selective-scan (`OpSSM`) and multi-head-latent-attention (`OpMLA`)
   backward passes now use typed contiguous storage instead of per-element
   dtype-dispatch, matching the sibling backward ops. The scan's time order and
