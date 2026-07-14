@@ -4,6 +4,17 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T649 — nGPT normalized-Transformer block (2026-07-15)
+- New `nn.NGPTBlock`: the normalized Transformer (Loshchilov et al., arXiv:2410.01131)
+  that keeps every representation on the unit hypersphere instead of using LayerNorm.
+  Attention and MLP weights live on the sphere, queries/keys are unit-normalized (so
+  the softmax scale flips to √d_k), and the residual is a learnable per-dimension step
+  toward the sub-layer output followed by re-normalization. Call `NormalizeWeights()`
+  after each optimizer step to keep the weights on the sphere (GoAI's optimizers have
+  no post-step hook, so this is explicit). Verified against the paper (§R243); tests
+  cover the sphere invariant, the weight re-normalization, gradient flow to weights /
+  scales / eigen-learning-rates, and a short training run.
+
 ### T648 — auxiliary-loss-free MoE load balancing (2026-07-15)
 - `SparseMoE` can now balance expert usage the DeepSeek-V3 way — without an auxiliary
   loss that competes with the language-model objective. Opt in with
