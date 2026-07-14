@@ -103,8 +103,18 @@ Correctness is bit-checked vs the CPU reference (`TestVulkanConv2DCrossReference
 baseline (137 GFLOP/s, §T606 matrix above) because of transient local GPU
 degradation (§B55) — the **same-machine relative delta** is the signal, not the
 absolute. A naive single 30× run first read 67.55 and looked like a regression;
-the paired same-machine A/B corrected that (verify-don't-assume). Metal's fused
-kernel and gather coalescing + fp16 are the next rungs toward the torch-mps gap.
+the paired same-machine A/B corrected that (verify-don't-assume).
+
+**Rung 2 (vec4-coalesced gather):** giving each thread NB=4 output columns and
+gathering the B panel as a contiguous vec4 (one 16-byte load) on the stride-1
+fast path adds another ≈7% (≈80→≈87.5 GFLOP/s, tightly-interleaved same-machine
+A/B). fp16 was measured-and-skipped: this kernel is latency/occupancy-bound
+(≈6 GB/s « the M2 Pro's ≈200), not bandwidth-bound, so half-precision has no
+bottleneck to relieve. **Metal:** the same fused lowering was measured ≈1.7×
+*slower* than metal's im2col+MPS path (MPS's tuned GEMM ≈1200 GFLOP/s can't be
+matched by a hand-tiled kernel) — so on metal the next lever is Winograd
+F(2×2,3×3), not implicit-GEMM. The vulkan fused+vec4 kernel and these findings
+are §T620.
 
 
 ### Head-to-head: llama.cpp on the SAME weights (§T607)
