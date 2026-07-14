@@ -397,6 +397,23 @@ bandwidth-bound so quant WINS (Q4_K is the fastest 124M decode measured on
 either backend). Weight memory: f32 ≈500MB → Q8 ≈130MB → Q4_K ≈70MB.
 Language-quality numbers need real weights (download-gated).
 
+## KV-cache memory tiers (§R108, §T619)
+
+The key/value cache dominates long-context inference memory. GoAI offers two compressed
+tiers beyond raw f32; both are pure-Go and drop into the decode path. Footprint measured at
+dim=512 over 100 rows (keys + values), `TestTurboQuantMemoryHierarchy`:
+
+| Cache                      | Bytes   | vs f32 | vs Q8_0 |
+|----------------------------|---------|--------|---------|
+| f32 (uncompressed)         | 409,600 | 1.0×   | —       |
+| Q8_0 8-bit (`QuantKVCache`, §R108) | 108,800 | 3.8×   | 1.0×    |
+| TurboQuant 2-bit (`TurboQuantKVCache`, §T619) | 41,600 | 9.8×   | 2.6×    |
+
+Q8_0 is the near-lossless safe tier; TurboQuant is the extreme sub-4-bit tier
+(arXiv:2504.19874) — a fixed random rotation plus a per-coordinate Lloyd-Max quantizer and a
+1-bit QJL residual that keeps attention scores unbiased. Data-oblivious: no calibration, no
+training. The scalar-per-row overhead (norm plus residual norm) amortizes as dim grows.
+
 ## Further reading
 
 - Hoefler & Belli, *Scientific Benchmarking of Parallel Computing Systems* (SC '15) — the canonical treatment of run variance, warm-up and honest reporting that this document's rules follow.
