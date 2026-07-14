@@ -59,6 +59,76 @@ func TopKGating(gateLogits []float64, k int) (experts []int, weights []float64) 
 	return experts, weights
 }
 
+// TopKGatingBiased is the auxiliary-loss-free load-balancing router (Wang et al.
+// 2024, arXiv:2408.15664, "Auxiliary-Loss-Free Load Balancing", as deployed in
+// DeepSeek-V3, arXiv:2412.19437; §R242). It generalizes TopKGating with a
+// per-expert bias b_i that steers WHICH experts win the top-k selection WITHOUT
+// touching the gate weights:
+//
+//   - SELECTION is by argmax over (gateLogitsᵢ + biasᵢ): raising bias_i makes
+//     expert i more likely to be picked, lowering it makes i less likely.
+//   - The returned WEIGHTS are still Softmax over the RAW gateLogits of the
+//     selected experts (renormalized over the selected set) — the bias never
+//     enters a gate value. This separation is the crux: balancing changes the
+//     routing distribution, not the mixing coefficients, so it cannot fight the
+//     main training objective the way an auxiliary loss can.
+//
+// A nil bias is treated as all-zero and yields byte-identical results to
+// TopKGating. bias, when non-nil, must be at least len(gateLogits) long.
+//
+// In plain terms: it is a thermostat for experts. If one expert is getting too
+// much traffic, its bias is nudged down so the router picks it less often — but
+// the amount each chosen expert contributes to the answer is untouched, so
+// nudging the thermostat never distorts the model's predictions.
+func TopKGatingBiased(gateLogits, bias []float64, k int) (experts []int, weights []float64) {
+	if bias == nil {
+		return TopKGating(gateLogits, k) // zero bias ⇒ identical to the unbiased router
+	}
+	n := len(gateLogits)
+	if k > n {
+		k = n
+	}
+	if k <= 0 {
+		return nil, nil
+	}
+	// Gate weights come from the RAW logits (softmax over all, renormalized over
+	// the selected set) — exactly as TopKGating computes them; bias is absent here.
+	m := math.Inf(-1)
+	for _, v := range gateLogits {
+		if v > m {
+			m = v
+		}
+	}
+	probs := make([]float64, n)
+	var sum float64
+	for i, v := range gateLogits {
+		probs[i] = math.Exp(v - m)
+		sum += probs[i]
+	}
+	for i := range probs {
+		probs[i] /= sum
+	}
+	idx := make([]int, n)
+	for i := range idx {
+		idx[i] = i
+	}
+	// SELECTION key = raw logit + bias (the only place bias participates).
+	sort.SliceStable(idx, func(a, b int) bool {
+		return gateLogits[idx[a]]+bias[idx[a]] > gateLogits[idx[b]]+bias[idx[b]]
+	})
+
+	experts = append([]int(nil), idx[:k]...)
+	var wsum float64
+	for _, e := range experts {
+		wsum += probs[e]
+	}
+	weights = make([]float64, k)
+	for i, e := range experts {
+		weights[i] = probs[e] / wsum // RAW-logit gate weight — bias never inflates it
+	}
+	return experts, weights
+}
+
 // SparseMoE is a Mixtral-style sparse Mixture-of-Experts feed-forward layer
 // (Jiang et al. 2024, §R61) — the differentiable core of an MoE transformer
 // block. A linear router scores E experts per token; each token is routed to its
@@ -77,20 +147,66 @@ type SparseMoE struct {
 	Router  *Linear   // dim → E gate logits
 	Experts []*SwiGLU // E expert FFNs (dim → hidden → dim)
 	TopK    int       // number of experts routed to per token
+
+	// balancer holds the auxiliary-loss-free load-balancing state (§R242): the
+	// per-expert bias b_i and update rate u. It is nil when balancing is disabled
+	// (the default). It is a plain control object, NOT a trainable Parameter — it
+	// lives outside the autograd graph, has no VJP, and is excluded from Params().
+	// See WithLossFreeBalance and UpdateLoadBias.
+	balancer *LossFreeBalancer
+	// loadCount accumulates, per expert, the number of tokens routed to it since
+	// the last UpdateLoadBias; Forward increments it while balancing is enabled.
+	loadCount []int
+}
+
+// SparseMoEOption configures a SparseMoE at construction (functional-options
+// idiom, §C12). The zero set of options reproduces the historical behavior
+// exactly; each option opts into an additional capability.
+type SparseMoEOption func(*SparseMoE)
+
+// WithLossFreeBalance enables auxiliary-loss-free load balancing (Wang et al.
+// 2024, arXiv:2408.15664; DeepSeek-V3, arXiv:2412.19437; §R242) with bias-update
+// step u = rate. A per-expert bias steers the top-k SELECTION toward
+// under-used experts while leaving every gate WEIGHT untouched (see
+// TopKGatingBiased). The training loop calls UpdateLoadBias once per batch to
+// adjust the bias from the observed per-expert load; the bias is a control
+// buffer, never a learned Parameter, so it adds no gradient and cannot conflict
+// with the main objective.
+//
+// rate ≤ 0 selects the research default 0.001. The knob trades responsiveness
+// against stability: larger u balances faster but, if too large, makes the bias
+// oscillate around the balanced point; u → 0 freezes the bias so no balancing
+// occurs (routing then matches the unbiased router). When this option is not
+// passed the layer is byte-identical to a SparseMoE built without it.
+//
+// In plain terms: this balances how evenly the experts are used without adding a
+// penalty term that pulls against the model's real goal — a thermostat, not a
+// tug-of-war.
+func WithLossFreeBalance(rate float64) SparseMoEOption {
+	return func(m *SparseMoE) {
+		m.balancer = NewLossFreeBalancer(len(m.Experts), rate) // rate ≤ 0 ⇒ default 0.001
+		m.loadCount = make([]int, len(m.Experts))
+	}
 }
 
 // NewSparseMoE builds a layer with numExperts SwiGLU experts (dim→hidden→dim) and
-// top-k routing. Deterministic via seed.
-func NewSparseMoE(dtype tensor.Dtype, dim, hidden, numExperts, topK int, seed uint64) *SparseMoE {
+// top-k routing. Deterministic via seed. Pass WithLossFreeBalance to opt into
+// auxiliary-loss-free load balancing (§R242); with no options the layer behaves
+// exactly as before.
+func NewSparseMoE(dtype tensor.Dtype, dim, hidden, numExperts, topK int, seed uint64, opts ...SparseMoEOption) *SparseMoE {
 	experts := make([]*SwiGLU, numExperts)
 	for i := range experts {
 		experts[i] = NewSwiGLU(dtype, dim, hidden, seed+uint64(i)*7+1)
 	}
-	return &SparseMoE{
+	m := &SparseMoE{
 		Router:  NewLinear(dtype, dim, numExperts, seed),
 		Experts: experts,
 		TopK:    topK,
 	}
+	for _, o := range opts {
+		o(m)
+	}
+	return m
 }
 
 // Forward routes x[T,dim] through the top-k experts and returns the mixed output
@@ -115,7 +231,18 @@ func (m *SparseMoE) Forward(ctx *backend.Context, x *tensor.Tensor) (y, gateLogi
 		for i := range e {
 			row[i] = logits.AtF64(t, i)
 		}
-		selected, _ := TopKGating(row, m.TopK)
+		// Biased selection when auxiliary-loss-free balancing is enabled; the gate
+		// weights (computed later via OpSoftmax over the RAW logits) are unaffected.
+		// When disabled this is exactly the historical TopKGating call.
+		var selected []int
+		if m.balancer != nil {
+			selected, _ = TopKGatingBiased(row, m.balancer.Bias, m.TopK)
+			for _, i := range selected {
+				m.loadCount[i]++ // accumulate per-expert routed-token load for UpdateLoadBias
+			}
+		} else {
+			selected, _ = TopKGating(row, m.TopK)
+		}
 		for _, i := range selected {
 			mask.SetF64(1, t, i)
 		}
@@ -142,7 +269,40 @@ func (m *SparseMoE) Forward(ctx *backend.Context, x *tensor.Tensor) (y, gateLogi
 	return comb[0], logits, nil
 }
 
-// Params returns the router and all expert weights.
+// UpdateLoadBias performs one gradient-free load-balancing step (§R242) and
+// returns the per-expert routed-token counts it acted on. Call it once per batch,
+// AFTER the Forward calls whose routing should be balanced: each Forward has
+// accumulated how many tokens went to each expert, and this method nudges every
+// bias toward the mean load,
+//
+//	b_i ← b_i + u·sign(meanLoad − load_i),   meanLoad = Σloadⱼ / E
+//
+// (sign-based, NOT proportional — the DeepSeek-V3 rule), then resets the
+// accumulator for the next batch. u is the rate set by WithLossFreeBalance
+// (default 0.001). Over-loaded experts get a lower bias (picked less often),
+// under-loaded experts a higher one, driving routing toward uniform use.
+//
+// It is a no-op returning nil when auxiliary-loss-free balancing is disabled
+// (the layer was built without WithLossFreeBalance). The bias lives outside the
+// autograd graph, so this update touches no gradients and never runs during
+// Backward — it is a control loop, not learning.
+//
+// In plain terms: after each batch, look at which experts were overworked and
+// which were idle, and gently rebalance future traffic — without ever changing
+// how the model weighs the experts it did pick.
+func (m *SparseMoE) UpdateLoadBias() []int {
+	if m.balancer == nil {
+		return nil // balancing disabled — nothing to do
+	}
+	load := m.loadCount
+	m.balancer.Update(load)                   // b_i ← b_i + u·sign(meanLoad − load_i)
+	m.loadCount = make([]int, len(m.Experts)) // reset the accumulator for the next batch
+	return load
+}
+
+// Params returns the router and all expert weights. The load-balancing bias
+// buffer (§R242) is deliberately excluded — it is a control buffer, not a
+// trainable Parameter, so optimizers never see it.
 func (m *SparseMoE) Params() []*tensor.Tensor {
 	ps := m.Router.Params()
 	for _, ex := range m.Experts {

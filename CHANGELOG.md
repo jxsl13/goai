@@ -4,6 +4,16 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T648 — auxiliary-loss-free MoE load balancing (2026-07-15)
+- `SparseMoE` can now balance expert usage the DeepSeek-V3 way — without an auxiliary
+  loss that competes with the language-model objective. Opt in with
+  `nn.WithLossFreeBalance(rate)`: a per-expert bias steers *which* experts win the
+  top-k routing (raised for under-used experts, lowered for over-used), while the
+  gate weight that scales each expert's output still comes from the raw router score,
+  so gradients are untouched. The bias is a gradient-free control buffer updated once
+  per batch via `UpdateLoadBias()` (`b += rate·sign(mean − load)`, default rate
+  0.001, per arXiv:2408.15664). Off by default — existing MoE behaviour is unchanged.
+
 ### T638–T640 — Mamba SSM, MLA & RWKV gradient backward devirtualized (2026-07-14)
 - The Mamba selective-scan (`OpSSM`) and multi-head-latent-attention (`OpMLA`)
   backward passes now use typed contiguous storage instead of per-element
