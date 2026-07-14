@@ -22,13 +22,65 @@ func broadcastContig(t *tensor.Tensor, outShape tensor.Shape) *tensor.Tensor {
 	if t.Shape().Equal(outShape) {
 		return t
 	}
-	offset := len(outShape) - t.Ndim()
-	out := tensor.New(t.Dtype(), outShape)
-	ic := make([]int, t.Ndim())
-	for pos := range out.Numel() {
-		oc := tensor.Unravel(pos, outShape)
-		backend.BroadcastCoords(ic, oc, t.Shape(), offset)
-		out.SetF64(t.AtF64(ic...), oc...)
+	tc := t.Contiguous() // dense input (fast §base-perf Contiguous)
+	offset := len(outShape) - tc.Ndim()
+	out := tensor.New(tc.Dtype(), outShape)
+	n := out.Numel()
+	if n == 0 {
+		return out
+	}
+	ndo := len(outShape)
+	tsh := tc.Shape()
+	// Input's strides expressed in the OUTPUT coordinate space (§base-perf): 0 where
+	// the input is absent (leading dims) or size-1 (broadcast), else its row-major
+	// stride. Walking output coords with these keeps the source flat offset
+	// incrementally — no per-element Unravel alloc / BroadcastCoords / AtF64-SetF64.
+	tst := tensor.RowMajorStrides(tsh)
+	bstride := make([]int, ndo)
+	for d := 0; d < ndo; d++ {
+		if id := d - offset; id >= 0 && tsh[id] != 1 {
+			bstride[d] = tst[id]
+		}
+	}
+	idx := make([]int, ndo)
+	switch tc.Dtype() {
+	case tensor.F32:
+		src, dst := tc.Storage().F32(), out.Storage().F32()
+		off := 0
+		for pos := 0; pos < n; pos++ {
+			dst[pos] = src[off]
+			for d := ndo - 1; d >= 0; d-- {
+				idx[d]++
+				off += bstride[d]
+				if idx[d] < outShape[d] {
+					break
+				}
+				idx[d] = 0
+				off -= bstride[d] * outShape[d]
+			}
+		}
+	case tensor.F64:
+		src, dst := tc.Storage().F64(), out.Storage().F64()
+		off := 0
+		for pos := 0; pos < n; pos++ {
+			dst[pos] = src[off]
+			for d := ndo - 1; d >= 0; d-- {
+				idx[d]++
+				off += bstride[d]
+				if idx[d] < outShape[d] {
+					break
+				}
+				idx[d] = 0
+				off -= bstride[d] * outShape[d]
+			}
+		}
+	default: // int and other dtypes: the generic coord path
+		ic := make([]int, tc.Ndim())
+		for pos := range n {
+			oc := tensor.Unravel(pos, outShape)
+			backend.BroadcastCoords(ic, oc, tsh, offset)
+			out.SetF64(tc.AtF64(ic...), oc...)
+		}
 	}
 	return out
 }
