@@ -197,6 +197,31 @@ activation — so the win compounds across the whole stack. GELU gains little (i
 cost is `math.Erf`, an f64 transcendental, so the round-trip is inherent); relu/silu
 gain most (little math, so the closure overhead dominated).
 
+### L0 tensor-layer hot paths (the same anti-pattern, one level down)
+
+The devirtualization sweep of the compute kernels missed a deeper layer: the L0
+`tensor` operations everything is built on. `Contiguous()` (materialize a
+transposed/permuted view — hit by every attention Q/K/V reshape), `Cast()` (the
+F64↔F32 conversion every tensor pays to reach the f32-only GPU backends), and the
+elementwise `broadcastContig` helper all walked the tensor **element by element**,
+and each element called `Unravel(pos, shape)` — which **heap-allocates a fresh
+`[]int` multi-index per element** — then read/wrote through the dtype-dispatching
+`AtF64`/`SetF64`. Replacing that with a running multi-index whose source offset is
+maintained **incrementally** (no per-element alloc) plus typed `[]T` access:
+
+| L0 op | before | after | speedup |
+|---|---|---|---|
+| Cast (512² f64→f32, contiguous) | 2.65 ms | 0.16 ms | **≈17×** |
+| broadcastContig (512→512², via mul) | 2.79 ms | 0.73 ms | ≈3.8× |
+| Contiguous (512² transposed) | 1.72 ms | 0.58 ms | ≈3.0× |
+| conv-backward grad scatter | (17% of op) | typed copy | ≈1.23× on the op |
+
+`Cast` is the standout: it's on the hot path to every GPU op (F64 model → F32
+kernels), and it was allocating one `[]int` per element (≈262 k allocs for a 512²
+tensor). These are the **base of the base** — L0 ops that compound into every layer
+above — so the win is stack-wide even though no model code changed. Guarded by
+`BenchmarkContiguousStrided`/`BenchmarkCastF64toF32` (§V5).
+
 The same closure pattern sat on the **CV path** — pooling read every window tap
 through a `get`/`set` closure pair, and the conv im2col fill (forward and backward)
 read `X`/`W`/`dO` through per-element closures. These are the base ops CNN layers
