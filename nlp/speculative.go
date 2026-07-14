@@ -118,12 +118,25 @@ func (s SpecStats) AcceptanceRate() float64 {
 	return float64(s.Accepted) / float64(s.Proposed)
 }
 
-// rowAt copies row i of a [seq, vocab] logits tensor into a slice.
+// rowAt copies row i of a [seq, vocab] logits tensor into a slice. On the
+// speculative verify/draft path (many rows per window) → typed access (§base-perf).
 func rowAt(t *tensor.Tensor, i int) []float64 {
 	v := t.Shape()[1]
 	out := make([]float64, v)
-	for j := range v {
-		out[j] = t.AtF64(i, j)
+	tc := t.Contiguous()
+	base := i * v // row i of a contiguous [seq,v]
+	switch tc.Dtype() {
+	case tensor.F64:
+		copy(out, tc.Storage().F64()[base:base+v])
+	case tensor.F32:
+		src := tc.Storage().F32()
+		for j := 0; j < v; j++ {
+			out[j] = float64(src[base+j])
+		}
+	default:
+		for j := 0; j < v; j++ {
+			out[j] = tc.AtF64(i, j)
+		}
 	}
 	return out
 }
