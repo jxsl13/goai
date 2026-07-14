@@ -316,8 +316,24 @@ Real LLM logits concentrate their mass on a handful of tokens, so the peaky row 
 the case that matters in practice. The flat row confirms §C3 — even when the bounded
 probe misses and the code re-sorts, the typed fallback beats the old reflection sort.
 Parity is locked by `TestDistQuickselectParity` (top-p configs, ≤ 1e-12 vs the old
-full sort over {64, 1024, 50257} × 3 seeds). Locally-typical sampling still full-sorts
-(the key/weight split makes it its own case, §T628).
+full sort over {64, 1024, 50257} × 3 seeds).
+
+Locally-typical sampling (§T628) gets the same bounded selection, with two wrinkles:
+it orders by the typical score `|−log p − H|` (ascending) while accumulating
+*probability*, and it keeps the exact index prefix rather than a value threshold —
+`|score|` can tie across two distinct probabilities symmetric about `e^−H`, so a
+threshold would be ambiguous. The win is smaller because the per-token entropy and
+score computation (two logs over the whole vocab) is unavoidable O(V) and dominates
+once the sort is removed:
+
+| sampler | logits | ns/op (old → new) | factor |
+|---|---|---|---|
+| typical τ=0.9 | peaky | 4603 µs → 1618 µs | **2.85×** |
+| typical τ=0.95 | flat (fallback) | 6883 µs → 6585 µs | 1.05× (no regression) |
+
+Together the three truncation paths — top-k (§T626, 10×), top-p (§T627, 6.1×) and
+typical (§T628, 2.85×) — take `Sampler.Dist` off its per-token full-sort of the
+vocabulary, bit-identically.
 
 ### Head-to-head: llama.cpp on the SAME weights (§T607)
 

@@ -546,6 +546,139 @@ func truncateNucleus(probs []float64, thresh float64) {
 	}
 }
 
+// quickselectIdxAsc partitions idx in place so that idx[:k] hold the k indices with
+// the SMALLEST key[idx[·]] values (mirror of quickselectIdxDesc), O(n) average.
+func quickselectIdxAsc(idx []int, key []float64, k int) {
+	lo, hi := 0, len(idx)-1
+	target := k - 1
+	for lo < hi {
+		mid := lo + (hi-lo)/2
+		if key[idx[mid]] < key[idx[lo]] {
+			idx[lo], idx[mid] = idx[mid], idx[lo]
+		}
+		if key[idx[hi]] < key[idx[lo]] {
+			idx[lo], idx[hi] = idx[hi], idx[lo]
+		}
+		if key[idx[mid]] < key[idx[hi]] {
+			idx[mid], idx[hi] = idx[hi], idx[mid]
+		}
+		pivot := key[idx[hi]]
+		i := lo
+		for j := lo; j < hi; j++ {
+			if key[idx[j]] < pivot {
+				idx[i], idx[j] = idx[j], idx[i]
+				i++
+			}
+		}
+		idx[i], idx[hi] = idx[hi], idx[i]
+		switch {
+		case i == target:
+			return
+		case i < target:
+			lo = i + 1
+		default:
+			hi = i - 1
+		}
+	}
+}
+
+// sortIdxAscByKey sorts idx so key[idx[·]] is ascending (typed, no reflection).
+func sortIdxAscByKey(idx []int, key []float64) {
+	slices.SortFunc(idx, func(a, b int) int {
+		switch {
+		case key[a] < key[b]:
+			return -1
+		case key[a] > key[b]:
+			return 1
+		default:
+			return 0
+		}
+	})
+}
+
+// applyKeep zeroes every probability whose keep flag is false and renormalizes over
+// the survivors — the exact prefix mask the old typical/top-p loops used.
+func applyKeep(probs []float64, keep []bool) {
+	var ksum float64
+	for i := range probs {
+		if !keep[i] {
+			probs[i] = 0
+		} else {
+			ksum += probs[i]
+		}
+	}
+	if ksum > 0 {
+		for i := range probs {
+			probs[i] /= ksum
+		}
+	}
+}
+
+// typicalTruncate applies locally-typical truncation (Meister et al. 2023) to probs
+// in place: keep the smallest set of tokens whose surprisal −log p is closest to the
+// entropy H, in ascending |−log p − H| order, until their cumulative probability ≥ τ.
+// Like nucleusTopP it bounds the work: quickselect the K lowest-score candidates,
+// sort only those, and accumulate — falling back to a full sort only if the typical
+// set exceeds K. The kept prefix (by index) is identical to the old full sort, so the
+// result is bit-exact for distinct scores (§T628). Zero-probability tokens carry a
+// +inf score and are never kept, matching the old `if probs[i]==0 break`.
+func typicalTruncate(probs []float64, tau float64) {
+	n := len(probs)
+	var h float64 // Shannon entropy in nats over the current distribution
+	for _, p := range probs {
+		if p > 0 {
+			h -= p * math.Log(p)
+		}
+	}
+	score := make([]float64, n) // |−log p − H|; masked (zero-prob) tokens sort last
+	idx := make([]int, n)
+	for i, p := range probs {
+		idx[i] = i
+		if p > 0 {
+			score[i] = math.Abs(-math.Log(p) - h)
+		} else {
+			score[i] = math.Inf(1)
+		}
+	}
+	keep := make([]bool, n)
+	const k = 512
+	if k < n {
+		quickselectIdxAsc(idx, score, k)
+		top := idx[:k]
+		sortIdxAscByKey(top, score)
+		var cum float64
+		for _, i := range top {
+			if probs[i] == 0 {
+				applyKeep(probs, keep) // reached the masked tail → typical set complete
+				return
+			}
+			keep[i] = true
+			cum += probs[i]
+			if cum >= tau {
+				applyKeep(probs, keep)
+				return
+			}
+		}
+		// typical set larger than K candidates → exact full-sort fallback below
+		for i := range keep {
+			keep[i] = false
+		}
+	}
+	sortIdxAscByKey(idx, score)
+	var cum float64
+	for _, i := range idx {
+		if probs[i] == 0 {
+			break
+		}
+		keep[i] = true
+		cum += probs[i]
+		if cum >= tau {
+			break
+		}
+	}
+	applyKeep(probs, keep)
+}
+
 // Sample returns a token id for the given logits.
 func (s *Sampler) Sample(logits []float64) int {
 	if s.Temperature <= 0 {
@@ -687,59 +820,10 @@ func (s *Sampler) Dist(logits []float64) []float64 {
 	}
 
 	// locally typical sampling (Meister et al. 2023): keep the smallest set of tokens
-	// whose surprisal −log p is closest to the entropy H, by cumulative probability τ.
+	// whose surprisal −log p is closest to the entropy H, by cumulative probability τ
+	// (§T628: bounded selection over the typical score, not a full sort).
 	if s.Typical > 0 && s.Typical < 1 {
-		var h float64 // Shannon entropy in nats over the current distribution
-		for _, p := range probs {
-			if p > 0 {
-				h -= p * math.Log(p)
-			}
-		}
-		score := make([]float64, n) // |−log p − H|; masked tokens sort last (+inf)
-		idx := make([]int, n)
-		for i, p := range probs {
-			idx[i] = i
-			if p > 0 {
-				score[i] = math.Abs(-math.Log(p) - h)
-			} else {
-				score[i] = math.Inf(1)
-			}
-		}
-		slices.SortFunc(idx, func(a, b int) int { // typed ascending sort, no reflection
-			switch {
-			case score[a] < score[b]:
-				return -1
-			case score[a] > score[b]:
-				return 1
-			default:
-				return 0
-			}
-		})
-		var cum float64
-		keep := make([]bool, n)
-		for _, i := range idx {
-			if probs[i] == 0 {
-				break // no probability mass left to add
-			}
-			keep[i] = true // most-typical first; always keeps ≥1 token
-			cum += probs[i]
-			if cum >= s.Typical {
-				break // this token crosses τ and is included
-			}
-		}
-		var ksum float64
-		for i := range probs {
-			if !keep[i] {
-				probs[i] = 0
-			} else {
-				ksum += probs[i]
-			}
-		}
-		if ksum > 0 {
-			for i := range probs {
-				probs[i] /= ksum
-			}
-		}
+		typicalTruncate(probs, s.Typical)
 	}
 
 	// epsilon sampling: absolute-probability floor (Hewitt et al. 2022, §R91).

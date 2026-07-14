@@ -303,3 +303,11 @@ func BenchmarkDistTopP99Flat(b *testing.B) {
 func BenchmarkDistTopP99FlatNaive(b *testing.B) {
 	benchDistLogits(b, realisticLogits(50257, 7), true, WithTemperature(1), WithTopP(0.99))
 }
+
+// peaky typical: small typical set — bounded selection should win (§T628).
+func BenchmarkDistTypicalPeaky(b *testing.B) {
+	benchDistLogits(b, peakyLogits(50257, 7), false, WithTemperature(1), WithTypical(0.9))
+}
+func BenchmarkDistTypicalPeakyNaive(b *testing.B) {
+	benchDistLogits(b, peakyLogits(50257, 7), true, WithTemperature(1), WithTypical(0.9))
+}

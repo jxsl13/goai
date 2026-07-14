@@ -4,6 +4,16 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T628 — locally-typical sampling ~2.9× faster (2026-07-14)
+- `Sampler.Dist`'s locally-typical truncation now uses the same bounded selection as
+  top-p: quickselect the 512 lowest-typical-score candidates, sort only those, and
+  accumulate to τ, falling back to a full sort only if the typical set is larger. On
+  realistic peaky logits: **4.60 ms → 1.62 ms (2.85×)** at V=50257 (the remaining
+  cost is the unavoidable per-token entropy/score computation, which is why the win
+  is smaller than top-p's). Output is bit-identical (the kept prefix is unchanged),
+  no regression on flat distributions. This completes the sampler-truncation
+  trilogy: top-k 10×, top-p 6.1×, typical 2.9×.
+
 ### T627 — top-p (nucleus) sampling up to 6× faster (2026-07-14)
 - `Sampler.Dist` selected the top-p nucleus by fully sorting the whole vocabulary
   every token. It now quickselects the top-512 candidates (far more than any
