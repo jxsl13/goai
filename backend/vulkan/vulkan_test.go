@@ -24,9 +24,30 @@ func skipNoGPU(t *testing.T) {
 	}
 }
 
-// crossTol is the §V11 tolerance for GPU f32 GEMM: the compute shader accumulates
-// in f32 and the reference in f64, so rtol scales with reduction length K.
-func crossTol(k int) float64 { return 1e-6 * math.Sqrt(float64(k)) }
+// crossTol is the §V11 tolerance for GPU f32 GEMM: the tiled matmul.comp shader
+// accumulates in f32 (reordered vs the f64 reference), so rtol scales with the
+// reduction length: rtol(K) = 2.5e-6·√K.
+//
+// The √K FORM is dictated by f32 accumulation error (~O(√K) growth); the CONSTANT
+// was raised 1e-6 → 2.5e-6 (§B45/§T624 backprop) after measuring the vulkan
+// matmul.comp path vs the f64 ref across realistic hidden dims. The old 1e-6
+// constant only had headroom for K≤512 (it was NEVER exercised above 512, matmul
+// cross-ref topped out at 5×7 / 256×512) and FAILED at model-scale K — measured
+// maxRel (vulkan f32 vs ref f64, worst of 8 seed pairs, m=n=256):
+//
+//	K= 128  3.7e-6   old-tol(1e-6) 1.13e-5   new-tol(2.5e-6) 2.83e-5
+//	K= 512  1.5e-5   old-tol 2.26e-5   new-tol 5.66e-5
+//	K= 768  2.6e-5   old-tol 2.77e-5   new-tol 6.93e-5   (old GRAZED: 1.07× margin)
+//	K=1024  2.7e-5   old-tol 3.20e-5   new-tol 8.00e-5
+//	K=2048  4.9e-5   old-tol 4.53e-5   new-tol 1.13e-4   (old FAILED: tol<err)
+//	K=4096  8.3e-5   old-tol 6.40e-5   new-tol 1.60e-4   (old FAILED: tol<err)
+//
+// The vulkan tiled-shader error profile is nearly identical to metal's MPS GEMM
+// (§B45) despite the different accumulation order, so the SAME 2.5e-6 constant
+// applies. It keeps a ~1.9–7.6× margin over the worst measured f32 error at every
+// tested K (thinnest 1.93× at K=4096), yet stays ≈100× below the ≥1e-2 error a
+// REAL matmul bug produces, so it still catches bugs (non-vacuousness assert below).
+func crossTol(k int) float64 { return 2.5e-6 * math.Sqrt(float64(k)) }
 
 // §V3/§V11: the Vulkan compute matmul matches the Pure-Go reference within the
 // K-scaled tolerance across shapes — guards the shader's row-major indexing and
@@ -41,6 +62,12 @@ func TestVulkanCrossReference(t *testing.T) {
 
 	shapes := []struct{ m, k, n int }{
 		{1, 1, 1}, {2, 3, 4}, {16, 16, 16}, {17, 15, 33}, {128, 128, 128}, {256, 512, 128},
+		// Model-scale reduction dims (hidden sizes): the matmul cross-ref was
+		// previously untested above K=512, where f32 accumulation error grows
+		// ~√K and the old 1e-6·√K tol grazed (K=768) then failed (K≥2048) —
+		// the §B45/§T624 latent tol bug. Shapes match the crossTol calibration
+		// measurements documented above.
+		{256, 768, 256}, {512, 1024, 512}, {512, 2048, 512}, {512, 4096, 512},
 	}
 	for _, s := range shapes {
 		a := bench.RandF32(tensor.Shape{s.m, s.k}, 1)
@@ -59,6 +86,19 @@ func TestVulkanCrossReference(t *testing.T) {
 			g, r := gv[0].AtF64(idx...), gr[0].AtF64(idx...)
 			if math.Abs(g-r) > rtol*math.Max(1, math.Abs(r)) {
 				t.Fatalf("shape %v [%d]: vulkan %v vs ref %v (rtol %g)", s, i, g, r, rtol)
+			}
+		}
+
+		// Non-vacuousness (§B45/§T624): confirm crossTol would CATCH a real bug
+		// at this K. A genuine matmul error yields ≥1e-2 rel deviation — perturb
+		// one element by 1e-2·|r| and assert it exceeds the (loosened) tolerance,
+		// so the wider constant still fails on real regressions, not just noise.
+		if n := gv[0].Numel(); n > 0 {
+			idx := tensor.Unravel(n/2, gv[0].Shape())
+			r := gr[0].AtF64(idx...)
+			bug := 1e-2 * math.Max(1, math.Abs(r))
+			if bug <= rtol*math.Max(1, math.Abs(r)) {
+				t.Fatalf("shape %v: crossTol %g too loose — a 1e-2 rel bug (Δ=%g) would slip through", s, rtol, bug)
 			}
 		}
 	}
