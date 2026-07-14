@@ -23,6 +23,14 @@ import (
 // source in a different function contracted differently. Chasing bit equality
 // against that is fighting the language; the norm parity test asserts a
 // tight relative tolerance instead (4 ulps f64, 1e-6 f32).
+//
+// DEVIRTUALIZATION (§T602 pattern): the hot loops run on concrete []T slices via
+// generic cores, so the compiler inlines every read/write — the per-element
+// f64at/f64set closures below are kept only as a fallback for the (untested,
+// uncommon) case where the inputs do not all share one dtype.
+
+// normFloat bounds the generic norm cores to the two float storage types.
+type normFloat interface{ ~float32 | ~float64 }
 
 // normData extracts the contiguous storage and geometry shared by the kernels.
 func normData(x, gamma *tensor.Tensor) (xc *tensor.Tensor, rows, d int, err error) {
@@ -68,6 +76,16 @@ func rmsNormKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.A
 	gc := in[1].Contiguous()
 	eps := normEps(attrs)
 	out := tensor.NewOn(ctx.Device(), xc.Dtype(), xc.Shape())
+	if xc.Dtype() == gc.Dtype() {
+		switch xc.Dtype() {
+		case tensor.F32:
+			rmsNormFwd(xc.Storage().F32(), gc.Storage().F32(), out.Storage().F32(), rows, d, eps)
+			return []*tensor.Tensor{out}, nil
+		case tensor.F64:
+			rmsNormFwd(xc.Storage().F64(), gc.Storage().F64(), out.Storage().F64(), rows, d, eps)
+			return []*tensor.Tensor{out}, nil
+		}
+	}
 	xr, gr, ow := f64at(xc), f64at(gc), f64set(out)
 	parallelWork(rows, 3*d, func(lo, hi int) {
 		for r := lo; r < hi; r++ {
@@ -86,6 +104,27 @@ func rmsNormKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.A
 	return []*tensor.Tensor{out}, nil
 }
 
+// rmsNormFwd: out[r,j] = x[r,j]·(1/rms_r)·γ_j, rms_r=√(mean_j x²+eps). f64
+// accumulation, row-parallel via the §T511 pool (small shapes stay serial).
+func rmsNormFwd[T normFloat](x, gamma, out []T, rows, d int, eps float64) {
+	parallelWork(rows, 3*d, func(lo, hi int) {
+		for r := lo; r < hi; r++ {
+			base := r * d
+			xr := x[base : base+d : base+d]
+			or := out[base : base+d : base+d]
+			var ms float64
+			for j := 0; j < d; j++ {
+				v := float64(xr[j])
+				ms += v * v
+			}
+			inv := 1 / math.Sqrt(ms/float64(d)+eps)
+			for j := 0; j < d; j++ {
+				or[j] = T(float64(xr[j]) * inv * float64(gamma[j]))
+			}
+		}
+	})
+}
+
 func layerNormKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
 	if len(in) != 3 {
 		return nil, fmt.Errorf("cpu: layernorm wants (x, gamma, beta), got %d", len(in))
@@ -101,6 +140,16 @@ func layerNormKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend
 	gc, bc := in[1].Contiguous(), beta.Contiguous()
 	eps := normEps(attrs)
 	out := tensor.NewOn(ctx.Device(), xc.Dtype(), xc.Shape())
+	if xc.Dtype() == gc.Dtype() && xc.Dtype() == bc.Dtype() {
+		switch xc.Dtype() {
+		case tensor.F32:
+			layerNormFwd(xc.Storage().F32(), gc.Storage().F32(), bc.Storage().F32(), out.Storage().F32(), rows, d, eps)
+			return []*tensor.Tensor{out}, nil
+		case tensor.F64:
+			layerNormFwd(xc.Storage().F64(), gc.Storage().F64(), bc.Storage().F64(), out.Storage().F64(), rows, d, eps)
+			return []*tensor.Tensor{out}, nil
+		}
+	}
 	xr, gr, br, ow := f64at(xc), f64at(gc), f64at(bc), f64set(out)
 	parallelWork(rows, 4*d, func(lo, hi int) {
 		for r := lo; r < hi; r++ {
@@ -124,6 +173,32 @@ func layerNormKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend
 	return []*tensor.Tensor{out}, nil
 }
 
+// layerNormFwd: out[r,j] = (x[r,j]-μ_r)·(1/σ_r)·γ_j + β_j. f64 accumulation,
+// row-parallel (small shapes serial).
+func layerNormFwd[T normFloat](x, gamma, beta, out []T, rows, d int, eps float64) {
+	parallelWork(rows, 4*d, func(lo, hi int) {
+		for r := lo; r < hi; r++ {
+			base := r * d
+			xr := x[base : base+d : base+d]
+			or := out[base : base+d : base+d]
+			var mean float64
+			for j := 0; j < d; j++ {
+				mean += float64(xr[j])
+			}
+			mean /= float64(d)
+			var varsum float64
+			for j := 0; j < d; j++ {
+				dv := float64(xr[j]) - mean
+				varsum += dv * dv
+			}
+			inv := 1 / math.Sqrt(varsum/float64(d)+eps)
+			for j := 0; j < d; j++ {
+				or[j] = T((float64(xr[j])-mean)*inv*float64(gamma[j]) + float64(beta[j]))
+			}
+		}
+	})
+}
+
 func rmsNormBackwardKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
 	if len(in) != 3 {
 		return nil, fmt.Errorf("cpu: rmsnorm-backward wants (x, gamma, g), got %d", len(in))
@@ -140,6 +215,16 @@ func rmsNormBackwardKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs b
 	eps := normEps(attrs)
 	dx := tensor.NewOn(ctx.Device(), x.Dtype(), x.Shape())
 	dgamma := tensor.NewOn(ctx.Device(), gamma.Dtype(), gamma.Shape())
+	if xc.Dtype() == gc.Dtype() && xc.Dtype() == gg.Dtype() {
+		switch xc.Dtype() {
+		case tensor.F32:
+			rmsNormBwd(xc.Storage().F32(), gc.Storage().F32(), gg.Storage().F32(), dx.Storage().F32(), dgamma.Storage().F32(), rows, d, eps)
+			return []*tensor.Tensor{dx, dgamma}, nil
+		case tensor.F64:
+			rmsNormBwd(xc.Storage().F64(), gc.Storage().F64(), gg.Storage().F64(), dx.Storage().F64(), dgamma.Storage().F64(), rows, d, eps)
+			return []*tensor.Tensor{dx, dgamma}, nil
+		}
+	}
 	xr, gr, ur, dxw, dgw := f64at(xc), f64at(gc), f64at(gg), f64set(dx), f64set(dgamma)
 	inv := make([]float64, rows) // per-row 1/rms, shared with the column pass
 	parallelWork(rows, 4*d, func(lo, hi int) {
@@ -178,6 +263,46 @@ func rmsNormBackwardKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs b
 	return []*tensor.Tensor{dx, dgamma}, nil
 }
 
+// rmsNormBwd: dx row-parallel (each row independent), then dγ in a COLUMN-parallel
+// second pass so every per-column sum keeps ref's ascending-row order. inv[] (f64)
+// is shared between the passes.
+func rmsNormBwd[T normFloat](x, gamma, up, dx, dgamma []T, rows, d int, eps float64) {
+	inv := make([]float64, rows)
+	parallelWork(rows, 4*d, func(lo, hi int) {
+		for r := lo; r < hi; r++ {
+			base := r * d
+			xr := x[base : base+d : base+d]
+			ur := up[base : base+d : base+d]
+			dr := dx[base : base+d : base+d]
+			var ms float64
+			for j := 0; j < d; j++ {
+				v := float64(xr[j])
+				ms += v * v
+			}
+			iv := 1 / math.Sqrt(ms/float64(d)+eps)
+			inv[r] = iv
+			var s float64
+			for j := 0; j < d; j++ {
+				a := float64(ur[j]) * float64(gamma[j])
+				s += a * float64(xr[j])
+			}
+			for j := 0; j < d; j++ {
+				a := float64(ur[j]) * float64(gamma[j])
+				dr[j] = T(iv * (a - float64(xr[j])*iv*iv*s/float64(d)))
+			}
+		}
+	})
+	parallelWork(d, 2*rows, func(lo, hi int) {
+		for j := lo; j < hi; j++ {
+			var acc float64
+			for r := 0; r < rows; r++ {
+				acc += float64(up[r*d+j]) * float64(x[r*d+j]) * inv[r]
+			}
+			dgamma[j] = T(acc)
+		}
+	})
+}
+
 func layerNormBackwardKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
 	if len(in) != 3 {
 		return nil, fmt.Errorf("cpu: layernorm-backward wants (x, gamma, g), got %d", len(in))
@@ -195,6 +320,16 @@ func layerNormBackwardKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs
 	dx := tensor.NewOn(ctx.Device(), x.Dtype(), x.Shape())
 	dgamma := tensor.NewOn(ctx.Device(), gamma.Dtype(), gamma.Shape())
 	dbeta := tensor.NewOn(ctx.Device(), gamma.Dtype(), gamma.Shape())
+	if xc.Dtype() == gc.Dtype() && xc.Dtype() == gg.Dtype() {
+		switch xc.Dtype() {
+		case tensor.F32:
+			layerNormBwd(xc.Storage().F32(), gc.Storage().F32(), gg.Storage().F32(), dx.Storage().F32(), dgamma.Storage().F32(), dbeta.Storage().F32(), rows, d, eps)
+			return []*tensor.Tensor{dx, dgamma, dbeta}, nil
+		case tensor.F64:
+			layerNormBwd(xc.Storage().F64(), gc.Storage().F64(), gg.Storage().F64(), dx.Storage().F64(), dgamma.Storage().F64(), dbeta.Storage().F64(), rows, d, eps)
+			return []*tensor.Tensor{dx, dgamma, dbeta}, nil
+		}
+	}
 	xr, gr, ur, dxw, dgw, dbw := f64at(xc), f64at(gc), f64at(gg), f64set(dx), f64set(dgamma), f64set(dbeta)
 	mean := make([]float64, rows)
 	inv := make([]float64, rows)
@@ -245,6 +380,60 @@ func layerNormBackwardKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs
 		}
 	})
 	return []*tensor.Tensor{dx, dgamma, dbeta}, nil
+}
+
+// layerNormBwd: dx row-parallel; dγ/dβ in a COLUMN-parallel second pass keeping
+// ref's ascending-row order. mean[]/inv[] (f64) shared between the passes.
+func layerNormBwd[T normFloat](x, gamma, up, dx, dgamma, dbeta []T, rows, d int, eps float64) {
+	mean := make([]float64, rows)
+	inv := make([]float64, rows)
+	parallelWork(rows, 6*d, func(lo, hi int) {
+		for r := lo; r < hi; r++ {
+			base := r * d
+			xr := x[base : base+d : base+d]
+			ur := up[base : base+d : base+d]
+			dr := dx[base : base+d : base+d]
+			var mu float64
+			for j := 0; j < d; j++ {
+				mu += float64(xr[j])
+			}
+			mu /= float64(d)
+			var variance float64
+			for j := 0; j < d; j++ {
+				dv := float64(xr[j]) - mu
+				variance += dv * dv
+			}
+			variance /= float64(d)
+			iv := 1 / math.Sqrt(variance+eps)
+			mean[r], inv[r] = mu, iv
+			var meanA, meanAX float64
+			for j := 0; j < d; j++ {
+				xhat := (float64(xr[j]) - mu) * iv
+				a := float64(ur[j]) * float64(gamma[j])
+				meanA += a
+				meanAX += a * xhat
+			}
+			meanA /= float64(d)
+			meanAX /= float64(d)
+			for j := 0; j < d; j++ {
+				xhat := (float64(xr[j]) - mu) * iv
+				a := float64(ur[j]) * float64(gamma[j])
+				dr[j] = T(iv * (a - meanA - xhat*meanAX))
+			}
+		}
+	})
+	parallelWork(d, 3*rows, func(lo, hi int) {
+		for j := lo; j < hi; j++ {
+			var dg, db float64
+			for r := 0; r < rows; r++ {
+				xhat := (float64(x[r*d+j]) - mean[r]) * inv[r]
+				dg += float64(up[r*d+j]) * xhat
+				db += float64(up[r*d+j])
+			}
+			dgamma[j] = T(dg)
+			dbeta[j] = T(db)
+		}
+	})
 }
 
 // normEps pulls the epsilon out of NormAttrs with the shared defaults.
