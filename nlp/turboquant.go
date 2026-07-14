@@ -278,39 +278,54 @@ func (p *polarRotation) polarDequantize(idx []int, norm float64, b int) ([]float
 }
 
 // qjlSketch is TurboQuant's QJL (Quantized Johnson-Lindenstrauss) 1-bit residual corrector
-// (arXiv:2504.19874, Algorithm 2). A fixed random S∈ℝ^{d×d}, i.i.d N(0,1), sketches the PolarQuant
-// residual r = ru − ruHat (rotated-unit space) into 1-bit signs qjl=sign(S·r). The residual is
-// reconstructed as (√(π/2)/d)·‖r‖·Sᵀ·qjl, giving an UNBIASED estimate of r (E_S[·]=r, since per
-// row E[S_i·sign(⟨S_i,r⟩)]=√(2/π)·r/‖r‖ and √(π/2)·√(2/π)=1) — so ⟨q, key⟩ becomes unbiased. This
-// is variance-for-bias: a single 1-bit sketch is noisy, but the estimate is centred on the true
-// value, which is what a softmax over many keys needs (bias would systematically distort scores).
+// (QJL, Zandieh et al., AAAI 2025, arXiv:2406.03482). It sketches the PolarQuant residual r into
+// 1-bit signs qjl = sign(S·r) with the FAST JL transform S = (1/√d)·H·D (D a Rademacher ±1
+// diagonal, H the d×d Walsh-Hadamard matrix) instead of a dense Gaussian matrix — O(d log d) via
+// the fwht butterfly, not O(d²). The residual is reconstructed as (√(π/2)/√d)·‖r‖·Sᵀ·qjl, an
+// UNBIASED estimate of r: for the (1/√d)HD sketch, (Sr)_i ≈ N(0, ‖r‖²/d) so per-row
+// E[(Sq)_i·sign((Sr)_i)] = √(2/π)·⟨q,r⟩/(√d·‖r‖), summed over d rows ⇒ the √(π/2)/√d constant
+// (empirically verified — the dense √(π/2)/d is 10× too small here). Unbiasedness is what a
+// softmax over many keys needs; a single 1-bit sketch is noisy but centred. Requires d a power of
+// two (the cache always sketches in the padded ℝ^m, m = nextPow2(dim)).
 type qjlSketch struct {
-	d int
-	s [][]float64 // [d,d] i.i.d N(0,1), fixed/seeded
+	d     int
+	signs []float64 // Rademacher diagonal D, length d
 }
 
 func newQJLSketch(d int, seed uint64) *qjlSketch {
 	rng := rand.New(rand.NewPCG(seed, 0x2545f4914f6cdd1d))
-	s := make([][]float64, d)
+	s := make([]float64, d)
 	for i := range s {
-		s[i] = make([]float64, d)
-		for j := range s[i] {
-			s[i][j] = rng.NormFloat64()
+		if rng.Uint64()&1 == 0 {
+			s[i] = 1
+		} else {
+			s[i] = -1
 		}
 	}
-	return &qjlSketch{d: d, s: s}
+	return &qjlSketch{d: d, signs: s}
 }
 
-// encode sketches a residual r into 1-bit signs qjl=sign(S·r) and returns ‖r‖₂.
+// transform applies S·x = (1/√d)·H·(D·x) via the fast Walsh-Hadamard butterfly (x length d,
+// a power of two).
+func (q *qjlSketch) transform(x []float64) []float64 {
+	b := make([]float64, q.d)
+	for i := range x {
+		b[i] = x[i] * q.signs[i]
+	}
+	fwht(b)
+	inv := 1 / math.Sqrt(float64(q.d))
+	for i := range b {
+		b[i] *= inv
+	}
+	return b
+}
+
+// encode sketches a residual r into 1-bit signs qjl = sign(S·r) and returns ‖r‖₂.
 func (q *qjlSketch) encode(r []float64) (signs []bool, rnorm float64) {
+	sr := q.transform(r)
 	signs = make([]bool, q.d)
-	for i := range q.d {
-		var dot float64
-		row := q.s[i]
-		for j := range q.d {
-			dot += row[j] * r[j]
-		}
-		signs[i] = dot >= 0
+	for i, v := range sr {
+		signs[i] = v >= 0
 	}
 	for _, v := range r {
 		rnorm += v * v
@@ -318,21 +333,22 @@ func (q *qjlSketch) encode(r []float64) (signs []bool, rnorm float64) {
 	return signs, math.Sqrt(rnorm)
 }
 
-// decodeResidual returns the unbiased residual estimate (√(π/2)/d)·‖r‖·Sᵀ·qjl (rotated-unit
-// space), to add to the PolarQuant reconstruction before rotating back.
+// decodeResidual returns the unbiased residual estimate (√(π/2)/√d)·‖r‖·Sᵀ·qjl, where
+// Sᵀ·qjl = (1/√d)·D·H·qjl (H symmetric) is another fwht — O(d log d).
 func (q *qjlSketch) decodeResidual(signs []bool, rnorm float64) []float64 {
-	scale := math.Sqrt(math.Pi/2) / float64(q.d) * rnorm
-	out := make([]float64, q.d)
-	for j := range q.d {
-		var acc float64
-		for i := range q.d {
-			if signs[i] {
-				acc += q.s[i][j]
-			} else {
-				acc -= q.s[i][j]
-			}
+	z := make([]float64, q.d)
+	for i, s := range signs {
+		if s {
+			z[i] = 1
+		} else {
+			z[i] = -1
 		}
-		out[j] = scale * acc
+	}
+	fwht(z)                                              // H·qjl
+	scale := math.Sqrt(math.Pi/2) / float64(q.d) * rnorm // (√(π/2)/√d)·‖r‖·(1/√d) = √(π/2)/d·‖r‖
+	out := make([]float64, q.d)
+	for i := range out {
+		out[i] = scale * z[i] * q.signs[i]
 	}
 	return out
 }

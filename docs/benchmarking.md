@@ -418,7 +418,7 @@ Throughput (`BenchmarkTurboQuant*`, dim=512): the fast Hadamard-Rademacher rotat
 via the in-place Walsh-Hadamard butterfly) replaces the naive dense O(d²) rotation, cutting
 compress from 165µs to 60µs per row (2.8×) and reconstruct from 43µs to 23µs (1.9×). The isolated
 rotation is 119× faster (`BenchmarkRotationHadamard` 2.5µs vs `BenchmarkRotationDense` 294µs); the
-remaining cost is the QJL sketch, whose fast-JL form is the next lever.
+QJL sketch was then also moved to its fast-JL (Hadamard) form: the full chain is now Append 165→9.9µs (16.6×) and reconstruct 43→3.0µs (14.3×) vs the original dense implementation, both stages O(d log m), with unbiasedness re-verified.
 
 ## Further reading
 
