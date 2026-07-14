@@ -28,8 +28,10 @@ type DeepSeekMoE struct {
 }
 
 // NewDeepSeekMoE builds sharedN always-active SwiGLU experts plus a routed
-// SparseMoE with routedN experts and top-k routing (all dim→hidden→dim).
-func NewDeepSeekMoE(dtype tensor.Dtype, dim, hidden, sharedN, routedN, topK int, seed uint64) (*DeepSeekMoE, error) {
+// SparseMoE with routedN experts and top-k routing (all dim→hidden→dim). Any
+// SparseMoEOption (e.g. WithLossFreeBalance) is forwarded to the routed layer — the
+// DeepSeek-V3 combination is exactly shared experts + loss-free-balanced routing.
+func NewDeepSeekMoE(dtype tensor.Dtype, dim, hidden, sharedN, routedN, topK int, seed uint64, opts ...SparseMoEOption) (*DeepSeekMoE, error) {
 	if sharedN < 0 || routedN <= 0 || topK <= 0 || topK > routedN {
 		return nil, fmt.Errorf("nn: DeepSeekMoE needs sharedN ≥ 0, 0 < topK ≤ routedN (got %d, %d, %d)", sharedN, topK, routedN)
 	}
@@ -39,7 +41,7 @@ func NewDeepSeekMoE(dtype tensor.Dtype, dim, hidden, sharedN, routedN, topK int,
 	}
 	return &DeepSeekMoE{
 		Shared: shared,
-		Routed: NewSparseMoE(dtype, dim, hidden, routedN, topK, seed),
+		Routed: NewSparseMoE(dtype, dim, hidden, routedN, topK, seed, opts...),
 	}, nil
 }
 
@@ -73,3 +75,9 @@ func (m *DeepSeekMoE) Params() []*tensor.Tensor {
 	}
 	return append(ps, m.Routed.Params()...)
 }
+
+// UpdateLoadBias applies the routed layer's auxiliary-loss-free balancing bias
+// update for the batch just processed (a no-op when WithLossFreeBalance was not
+// set). Call it once per batch after the optimizer step, exactly as for a plain
+// SparseMoE; it returns the per-expert routed-token counts it acted on.
+func (m *DeepSeekMoE) UpdateLoadBias() []int { return m.Routed.UpdateLoadBias() }

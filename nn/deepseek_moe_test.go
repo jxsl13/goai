@@ -121,3 +121,42 @@ func ExampleDeepSeekMoE() {
 	fmt.Println(y.Shape(), gates.Shape())
 	// Output: (3, 8) (3, 4)
 }
+
+// TestDeepSeekMoELossFreeBalance checks the WithLossFreeBalance option is forwarded
+// to the routed SparseMoE and that UpdateLoadBias acts through DeepSeekMoE (§T648
+// follow-up — the DeepSeek-V3 combination: shared experts + loss-free routing).
+func TestDeepSeekMoELossFreeBalance(t *testing.T) {
+	ctx := backend.NewContext()
+	dim, hidden, routedN, k, rows := 8, 16, 6, 2, 12
+	x := moeProbe(3, rows, dim)
+
+	ds, err := nn.NewDeepSeekMoE(tensor.F64, dim, hidden, 1, routedN, k, 7, nn.WithLossFreeBalance(0.01))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := ds.Forward(ctx, x); err != nil {
+		t.Fatal(err)
+	}
+	counts := ds.UpdateLoadBias()
+	if counts == nil {
+		t.Fatal("lossfree enabled → UpdateLoadBias must return per-expert counts")
+	}
+	sum := 0
+	for _, c := range counts {
+		sum += c
+	}
+	if sum != rows*k {
+		t.Fatalf("routed-token counts sum = %d, want rows*topK = %d", sum, rows*k)
+	}
+
+	plain, err := nn.NewDeepSeekMoE(tensor.F64, dim, hidden, 1, routedN, k, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := plain.Forward(ctx, x); err != nil {
+		t.Fatal(err)
+	}
+	if plain.UpdateLoadBias() != nil {
+		t.Fatal("no option → UpdateLoadBias must be a nil no-op")
+	}
+}
