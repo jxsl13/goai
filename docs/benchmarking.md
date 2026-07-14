@@ -414,6 +414,12 @@ Q8_0 is the near-lossless safe tier; TurboQuant is the extreme sub-4-bit tier
 1-bit QJL residual that keeps attention scores unbiased. Data-oblivious: no calibration, no
 training. The scalar-per-row overhead (norm plus residual norm) amortizes as dim grows.
 
+Throughput (`BenchmarkTurboQuant*`, dim=512): the fast Hadamard-Rademacher rotation (O(d log m)
+via the in-place Walsh-Hadamard butterfly) replaces the naive dense O(d²) rotation, cutting
+compress from 165µs to 60µs per row (2.8×) and reconstruct from 43µs to 23µs (1.9×). The isolated
+rotation is 119× faster (`BenchmarkRotationHadamard` 2.5µs vs `BenchmarkRotationDense` 294µs); the
+remaining cost is the QJL sketch, whose fast-JL form is the next lever.
+
 ## Further reading
 
 - Hoefler & Belli, *Scientific Benchmarking of Parallel Computing Systems* (SC '15) — the canonical treatment of run variance, warm-up and honest reporting that this document's rules follow.
