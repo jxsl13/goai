@@ -42,6 +42,13 @@ int cu_matmul_f32_ddd(const void* dA, const void* dB, void* dC, int M, int K, in
 // dC[M,N] = dA[M,K]·dB[N,K]ᵀ, all resident (attention QKᵀ).
 int cu_matmul_f32_ddd_bt(const void* dA, const void* dB, void* dC, int M, int K, int N);
 
+// Multi-head attention (batched strided). Q/K/V are [seq, heads*hd]; scores is
+// [heads, seq, seq]. cu_mha_scores = batched Q·Kᵀ; cu_causal_scale_mh = per-head
+// scale+causal-mask; cu_mha_out = batched scores·V into [seq, heads*hd].
+int cu_mha_scores(const void* dQ, const void* dK, void* dScores, int seq, int heads, int hd);
+int cu_causal_scale_mh(void* x, int heads, int seq, float scale, int offset);
+int cu_mha_out(const void* dScores, const void* dV, void* dOut, int seq, int heads, int hd);
+
 // On-device elementwise op (§V14 Phase-2, breadth beyond matmul). The kernel is
 // compiled at runtime from CUDA-C source via nvrtc (no nvcc needed) and launched
 // on the same stream as the matmuls, so a matmul→activation→matmul block stays
