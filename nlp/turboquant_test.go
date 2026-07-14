@@ -414,3 +414,35 @@ func TestTurboQuantMemoryHierarchy(t *testing.T) {
 		t.Fatalf("expected TurboQuant %d < Q8_0 %d < f32 %d", tqBytes, q8Bytes, f32Bytes)
 	}
 }
+
+// BenchmarkTurboQuantAppend measures the compress-per-row throughput (the GoAI baseline for the
+// perf comparison against reference KV-quant implementations). Reconstruction is benchmarked
+// separately since attention only pays it on read.
+func BenchmarkTurboQuantAppend(b *testing.B) {
+	const dim = 128
+	c, _ := NewTurboQuantKVCache(dim, 2, 1)
+	k := make([]float64, dim)
+	v := make([]float64, dim)
+	for i := range k {
+		k[i] = math.Sin(float64(i)) + 0.1
+		v[i] = math.Cos(float64(i))
+	}
+	b.ResetTimer()
+	for range b.N {
+		_ = c.Append(k, v)
+	}
+}
+
+func BenchmarkTurboQuantReconstruct(b *testing.B) {
+	const dim = 128
+	c, _ := NewTurboQuantKVCache(dim, 2, 1)
+	k := make([]float64, dim)
+	for i := range k {
+		k[i] = math.Sin(float64(i)) + 0.1
+	}
+	_ = c.Append(k, k)
+	b.ResetTimer()
+	for range b.N {
+		_ = c.Keys()
+	}
+}
