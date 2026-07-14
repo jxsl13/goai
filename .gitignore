@@ -4,6 +4,14 @@
 *.test
 *.prof
 coverage.*
+# Stray command binaries: `go build ./internal/<cmd>` drops a same-named
+# executable in cwd (usually repo root). Anchored to / so the internal/<cmd>
+# source dirs are NOT ignored. Keep in sync with internal/*/ package main dirs.
+/capprobe
+/cichange
+/exportgguf
+/mdlint
+/rendertables
 
 # Golden generation scratch (keep committed golden files under */testdata/)
 *.tmp
