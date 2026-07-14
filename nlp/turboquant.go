@@ -194,3 +194,63 @@ func (p *polarRotation) polarDequantize(idx []int, norm float64, b int) ([]float
 	}
 	return out, nil
 }
+
+// qjlSketch is TurboQuant's QJL (Quantized Johnson-Lindenstrauss) 1-bit residual corrector
+// (arXiv:2504.19874, Algorithm 2). A fixed random S∈ℝ^{d×d}, i.i.d N(0,1), sketches the PolarQuant
+// residual r = ru − ruHat (rotated-unit space) into 1-bit signs qjl=sign(S·r). The residual is
+// reconstructed as (√(π/2)/d)·‖r‖·Sᵀ·qjl, giving an UNBIASED estimate of r (E_S[·]=r, since per
+// row E[S_i·sign(⟨S_i,r⟩)]=√(2/π)·r/‖r‖ and √(π/2)·√(2/π)=1) — so ⟨q, key⟩ becomes unbiased. This
+// is variance-for-bias: a single 1-bit sketch is noisy, but the estimate is centred on the true
+// value, which is what a softmax over many keys needs (bias would systematically distort scores).
+type qjlSketch struct {
+	d int
+	s [][]float64 // [d,d] i.i.d N(0,1), fixed/seeded
+}
+
+func newQJLSketch(d int, seed uint64) *qjlSketch {
+	rng := rand.New(rand.NewPCG(seed, 0x2545f4914f6cdd1d))
+	s := make([][]float64, d)
+	for i := range s {
+		s[i] = make([]float64, d)
+		for j := range s[i] {
+			s[i][j] = rng.NormFloat64()
+		}
+	}
+	return &qjlSketch{d: d, s: s}
+}
+
+// encode sketches a residual r into 1-bit signs qjl=sign(S·r) and returns ‖r‖₂.
+func (q *qjlSketch) encode(r []float64) (signs []bool, rnorm float64) {
+	signs = make([]bool, q.d)
+	for i := range q.d {
+		var dot float64
+		row := q.s[i]
+		for j := range q.d {
+			dot += row[j] * r[j]
+		}
+		signs[i] = dot >= 0
+	}
+	for _, v := range r {
+		rnorm += v * v
+	}
+	return signs, math.Sqrt(rnorm)
+}
+
+// decodeResidual returns the unbiased residual estimate (√(π/2)/d)·‖r‖·Sᵀ·qjl (rotated-unit
+// space), to add to the PolarQuant reconstruction before rotating back.
+func (q *qjlSketch) decodeResidual(signs []bool, rnorm float64) []float64 {
+	scale := math.Sqrt(math.Pi/2) / float64(q.d) * rnorm
+	out := make([]float64, q.d)
+	for j := range q.d {
+		var acc float64
+		for i := range q.d {
+			if signs[i] {
+				acc += q.s[i][j]
+			} else {
+				acc -= q.s[i][j]
+			}
+		}
+		out[j] = scale * acc
+	}
+	return out
+}

@@ -125,3 +125,70 @@ func TestPolarQuantErrors(t *testing.T) {
 		t.Fatal("wrong index length should error")
 	}
 }
+
+// §T619 QJL residual: the 1-bit sketch makes the attention inner-product estimate UNBIASED. At
+// 1-bit PolarQuant the score is heavily biased (most of the residual is dropped); adding the QJL
+// residual and averaging over the sketch randomness S recovers the true ⟨q,k⟩. (Any single S is
+// noisy — unbiasedness is the property softmax-over-many-keys relies on, §T619 finding.)
+func TestQJLUnbiasedInnerProduct(t *testing.T) {
+	const d = 64
+	p, err := newPolarRotation(d, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	x := make([]float64, d)
+	y := make([]float64, d)
+	for i := range d {
+		x[i] = math.Sin(float64(i)*1.1) - 0.3
+		y[i] = math.Cos(float64(i)*0.6) + 0.2
+	}
+	var ipTrue float64
+	for i := range d {
+		ipTrue += x[i] * y[i]
+	}
+	idx, norm, _ := p.polarQuantize(x, 1)
+	xhPolar, _ := p.polarDequantize(idx, norm, 1)
+	var ipPolar float64
+	for i := range d {
+		ipPolar += xhPolar[i] * y[i]
+	}
+	// residual (rotated-unit space)
+	var nx float64
+	for _, v := range x {
+		nx += v * v
+	}
+	nx = math.Sqrt(nx)
+	u := make([]float64, d)
+	for i := range d {
+		u[i] = x[i] / nx
+	}
+	ru, _ := p.apply(u)
+	cb, _ := polarCodebook(1, d)
+	r := make([]float64, d)
+	for i := range d {
+		r[i] = ru[i] - cb[idx[i]]
+	}
+	// QJL-corrected estimate averaged over sketch seeds → unbiased
+	const seeds = 2000
+	var mean float64
+	for sd := range seeds {
+		q := newQJLSketch(d, uint64(sd)+1)
+		signs, rn := q.encode(r)
+		res := q.decodeResidual(signs, rn)
+		ruT := make([]float64, d)
+		for i := range d {
+			ruT[i] = cb[idx[i]] + res[i]
+		}
+		uT, _ := p.applyInverse(ruT)
+		var ip float64
+		for i := range d {
+			ip += norm * uT[i] * y[i]
+		}
+		mean += ip
+	}
+	mean /= seeds
+	// the QJL-corrected mean must be much closer to the true score than biased polar-only.
+	if math.Abs(mean-ipTrue) > 0.15*math.Abs(ipPolar-ipTrue) {
+		t.Fatalf("QJL not debiasing: |mean-true|=%.4f vs |polar-true|=%.4f (true=%.3f)", math.Abs(mean-ipTrue), math.Abs(ipPolar-ipTrue), ipTrue)
+	}
+}
