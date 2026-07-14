@@ -326,6 +326,20 @@ func (d *DeviceF32) Softmax() error {
 	return nil
 }
 
+// CausalScaleMask scales these attention scores[qRows, kCols] by scale and masks
+// out future keys (score(i,j) → −inf when j > i + offset) in-place, on the GPU —
+// the pre-softmax step of causal attention. offset = kCols − qRows aligns a short
+// query window to the tail of the key sequence (0 for a full square prefill).
+func (d *DeviceF32) CausalScaleMask(scale float32, offset int) error {
+	if d.ptr == nil {
+		return fmt.Errorf("cuda: CausalScaleMask on a freed handle")
+	}
+	if rc := C.cu_causal_scale_f32(d.ptr, C.int(d.rows), C.int(d.cols), C.float(scale), C.int(offset)); rc != 0 {
+		return fmt.Errorf("cuda: causal-scale failed (code %d)", int(rc))
+	}
+	return nil
+}
+
 // RoPE applies rotary position embeddings in-place to this activation, treated
 // as q[seq, heads·headDim] (rows = seq, cols = heads·headDim), on the GPU — the
 // query/key rotation of a Llama-style attention, kept device-resident. The
