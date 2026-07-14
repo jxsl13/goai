@@ -527,3 +527,49 @@ func BenchmarkRotationHadamard(b *testing.B) {
 		_, _ = r.apply(x)
 	}
 }
+
+// §V10 reproducibility: two caches with the same seed compress and reconstruct identically
+// (the rotation and sketch are deterministic in the seed) — required for encode/decode to agree
+// across processes.
+func TestTurboQuantDeterministic(t *testing.T) {
+	const dim = 96
+	a, err := NewTurboQuantKVCache(dim, 2, 12345)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := NewTurboQuantKVCache(dim, 2, 12345)
+	if err != nil {
+		t.Fatal(err)
+	}
+	k := make([]float64, dim)
+	v := make([]float64, dim)
+	for i := range k {
+		k[i] = math.Sin(float64(i)*0.9) + 0.2
+		v[i] = math.Cos(float64(i) * 0.3)
+	}
+	for r := 0; r < 5; r++ {
+		if err := a.Append(k, v); err != nil {
+			t.Fatal(err)
+		}
+		if err := b.Append(k, v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if a.Bytes() != b.Bytes() {
+		t.Fatalf("Bytes differ: %d vs %d", a.Bytes(), b.Bytes())
+	}
+	ka, kb := a.Keys(), b.Keys()
+	for r := range ka {
+		for i := range ka[r] {
+			if ka[r][i] != kb[r][i] {
+				t.Fatalf("reconstruction differs at row %d col %d: %v vs %v", r, i, ka[r][i], kb[r][i])
+			}
+		}
+	}
+	// a different seed gives a different (but valid) rotation/sketch
+	c, _ := NewTurboQuantKVCache(dim, 2, 999)
+	_ = c.Append(k, v)
+	if c.Keys()[0][0] == ka[0][0] {
+		t.Log("note: different-seed reconstruction coincidentally matched at [0][0] (rare, not an error)")
+	}
+}
