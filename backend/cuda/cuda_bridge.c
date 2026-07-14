@@ -31,7 +31,7 @@ static pthread_mutex_t gLock = PTHREAD_MUTEX_INITIALIZER;
 static cublasHandle_t gHandle = NULL;
 static cudaStream_t gStream = NULL;
 static CUcontext gCtx = NULL; // runtime's primary context, retained for driver-API launches
-static CUfunction gGelu = NULL, gSilu = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gCausal = NULL, gCausalMH = NULL; // lazily nvrtc-compiled
+static CUfunction gGelu = NULL, gSilu = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL; // lazily nvrtc-compiled
 
 static float *gA = NULL, *gB = NULL, *gC = NULL;
 static size_t gACap = 0, gBCap = 0, gCCap = 0; // capacities in bytes
@@ -469,6 +469,56 @@ void* cu_alloc_f32(int n) {
     }
     pthread_mutex_unlock(&gLock);
     return d;
+}
+
+// cu_upload_i32 copies n int32 to a fresh device buffer (token ids for embed).
+void* cu_upload_i32(const int* src, int n) {
+    void* d = NULL;
+    size_t sz = (size_t)n * sizeof(int);
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { goto done; }
+    if (cudaMallocAsync(&d, sz, gStream) != cudaSuccess) { d = NULL; goto done; }
+    if (cudaMemcpyAsync(d, src, sz, cudaMemcpyHostToDevice, gStream) != cudaSuccess ||
+        cudaStreamSynchronize(gStream) != cudaSuccess) {
+        cudaFreeAsync(d, gStream);
+        d = NULL;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return d;
+}
+
+// cu_embed_f32: out[i,:] = table[ids[i],:] — the input embedding row gather. One
+// thread per output element; table is [vocab,d] resident, ids [seq] resident.
+int cu_embed_f32(const void* dTable, const void* dIds, void* dOut, int seq, int d) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (!gEmbed && compile_kernel(
+                       "extern \"C\" __global__ void embed_f32(const float* table, const int* ids, float* out, int seq, int d){\n"
+                       "  long gid = (long)blockIdx.x*blockDim.x + threadIdx.x;\n"
+                       "  long total = (long)seq*d;\n"
+                       "  if (gid >= total) return;\n"
+                       "  int i = (int)(gid / d), dim = (int)(gid % d);\n"
+                       "  out[gid] = table[(size_t)ids[i]*d + dim];\n"
+                       "}\n",
+                       "embed.cu", "embed_f32", &gEmbed) != 0) { rc = -2; goto done; }
+    {
+        long total = (long)seq * d;
+        int threads = 256, blocks = (int)((total + threads - 1) / threads);
+        if (blocks < 1) blocks = 1;
+        void* args[5];
+        args[0] = &dTable;
+        args[1] = &dIds;
+        args[2] = &dOut;
+        args[3] = &seq;
+        args[4] = &d;
+        rc = (cuLaunchKernel(gEmbed, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
 }
 
 // cu_clone_f32 allocates a new device buffer and device→device copies n floats

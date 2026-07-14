@@ -134,6 +134,32 @@ func (r *ResidentB) MatMul(a *tensor.Tensor) (*tensor.Tensor, error) {
 	return out, nil
 }
 
+// Embed treats this resident matrix as an embedding table [vocab, d] and gathers
+// the rows for the given token ids into a resident [len(ids), d] activation, on
+// the GPU — the input embedding of a language model. Free the result when done.
+func (r *ResidentB) Embed(ids []int32) (*DeviceF32, error) {
+	if r.ptr == nil {
+		return nil, fmt.Errorf("cuda: Embed on a freed table")
+	}
+	if len(ids) == 0 {
+		return nil, fmt.Errorf("cuda: Embed needs ≥1 id")
+	}
+	dIds := C.cu_upload_i32((*C.int)(&ids[0]), C.int(len(ids)))
+	if dIds == nil {
+		return nil, fmt.Errorf("cuda: Embed id upload failed")
+	}
+	defer C.cu_free_f32(dIds)
+	out := C.cu_alloc_f32(C.int(len(ids) * r.n))
+	if out == nil {
+		return nil, fmt.Errorf("cuda: Embed output alloc failed")
+	}
+	if rc := C.cu_embed_f32(r.ptr, dIds, out, C.int(len(ids)), C.int(r.n)); rc != 0 {
+		C.cu_free_f32(out)
+		return nil, fmt.Errorf("cuda: embed failed (code %d)", int(rc))
+	}
+	return &DeviceF32{ptr: out, rows: len(ids), cols: r.n}, nil
+}
+
 // Free releases the device buffer. Safe to call more than once.
 func (r *ResidentB) Free() {
 	if r.ptr != nil {
