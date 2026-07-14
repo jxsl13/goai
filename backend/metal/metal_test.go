@@ -119,7 +119,7 @@ func TestMetalMHACrossReference(t *testing.T) {
 		{"mqa", 8, 8, 8, 1, 4, false, 1},        // multi-query
 		{"kvcache", 3, 7, 2, 2, 8, true, 1},     // sq<sk incremental decode
 		{"attnscale", 6, 6, 4, 4, 8, true, 1.2}, // YaRN attn temperature
-		// NOTE (§T624/§B46): model-scale cases are NOT added on this (mtl_mha_mps
+		// NOTE (§T624/§B56): model-scale cases are NOT added on this (mtl_mha_mps
 		// two-matmul) path — its shared [seq,seq] scratch has a non-deterministic
 		// race at seq≥~512 (see TestMetalMHAMPSRaceRegression). Model-scale MHA
 		// coverage lives on the race-free MPSGraph and flash cross-refs below.
@@ -157,7 +157,7 @@ func TestMetalMHACrossReference(t *testing.T) {
 	}
 }
 
-// TestMetalMHAMPSRaceRegression reproduces §B46: the mtl_mha_mps two-matmul prefill
+// TestMetalMHAMPSRaceRegression reproduces §B56: the mtl_mha_mps two-matmul prefill
 // path (OpMHA, sq==sk, Window==0 — the DEFAULT per-op prefill route) returns
 // NON-DETERMINISTIC, WRONG outputs at seq≥~512. The shared [seq,seq] scores scratch `sb`
 // is reused across heads through a Q·Kᵀ(MPS)→softmax(compute)→P·V(MPS) chain; Metal's
@@ -170,7 +170,7 @@ func TestMetalMHACrossReference(t *testing.T) {
 // race-free, then it enforces the fix.
 func TestMetalMHAMPSRaceRegression(t *testing.T) {
 	skipNoGPU(t)
-	t.Skip("§B46: mtl_mha_mps prefill has a non-deterministic scratch-buffer race at seq≥512; un-skip when fixed")
+	t.Skip("§B56: mtl_mha_mps prefill has a non-deterministic scratch-buffer race at seq≥512; un-skip when fixed")
 	mb, _ := backend.Get(backend.Metal)
 	ref, _ := backend.Get(backend.Ref)
 	const seq, heads, kv, dk = 1024, 8, 8, 64
@@ -283,7 +283,7 @@ func TestMetalMHAMPSGraphCrossReference(t *testing.T) {
 		{"prefill512", 512, 8, 8, 64, true, 1}, // the A/B benchmark shape
 		// Model-scale coverage (§T624): MPSGraph batches all heads in ONE graph with
 		// no manually-shared scratch, so it is the race-free route for prefill at
-		// model scale (mtl_mha_mps has the §B46 shared-buffer race at seq≥512). Real
+		// model scale (mtl_mha_mps has the §B56 shared-buffer race at seq≥512). Real
 		// transformer shapes, heads=8, dk=64, causal.
 		{"gqa512", 512, 8, 2, 64, true, 1},       // grouped-query @ model scale
 		{"prefill1024", 1024, 8, 8, 64, true, 1}, // longer context, causal
@@ -344,7 +344,7 @@ func TestMetalFlashAttnCrossReference(t *testing.T) {
 		// Model-scale coverage (§T624): flash-attention-2 is the exact, race-free
 		// path (online-softmax tiling, one thread per query row, no shared [seq,seq]
 		// scratch), so it carries the model-scale MHA coverage that mtl_mha_mps cannot
-		// (§B46). Real transformer prefill: heads=8, dk=64, causal — the f64 ref is
+		// (§B56). Real transformer prefill: heads=8, dk=64, causal — the f64 ref is
 		// O(seq²·dk) so the count is kept minimal.
 		{"prefill512", 512, 8, 8, 64, true},   // causal prefill @ model scale
 		{"gqa512", 512, 8, 2, 64, true},       // grouped-query @ model scale
