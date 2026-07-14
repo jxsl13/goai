@@ -78,11 +78,40 @@ microkernel (§T11b) must beat, with:
 - an A/B delta measured on *this* host (§V22), no `git stash` toggling
   (§B52 process note — scratchpad file-copy toggle only).
 
-## Next measurements (verify-ahead, this machine)
+## Vendor-BLAS gap on THIS silicon (resolved)
 
-1. Same-host `torch-cpu` GEMM A/B so the "×N behind vendor BLAS" gap is
-   stated against *this* silicon rather than carried over from arm64.
-2. AVX2+FMA f32 microkernel prototype behind `goexperiment.simd` →
-   re-run this exact bench for the A/B.
-3. Install the CUDA toolkit and stand up the `register_cuda.go` backend —
-   the RTX 3060 is the first NVIDIA GPU available to this project.
+The ≈600 GFLOP/s figure was carried over from the arm64 host (§R237). Measured
+directly here (`testdata/bench_torch.py` + numpy, same 2·N³/t methodology, warm-up
+excluded, 30 reps), 1024³ f32/f64, GFLOP/s:
+
+| GEMM | goai scalar | goai SIMD | torch-cpu | numpy (OpenBLAS) |
+|------|-------------|-----------|-----------|------------------|
+| F64 1024³ | 40 | **84** (nr=8) | 177 | 227 |
+| F32 1024³ | 43 | 43 (scalar) | **580** | 485 |
+
+Gap of best-goai vs best-incumbent on this Zen 3:
+
+- **F64: ~2.7×** (84 vs numpy 227). goai's SIMD kernel is deliberately
+  bit-exact — `Mul`+`Add`, *not* fused `MulAdd` — which alone costs ~2× of peak
+  FMA throughput; the rest is cache blocking (vendor BLAS packs panels; goai
+  streams, §B41). A bit-exact kernel cannot fully close this.
+- **F32: ~13×** (44 vs torch 580). This is the headline gap and it is almost
+  entirely *scalar-vs-SIMD*: goai's F32 GEMM is still the scalar kernel (the
+  f64-accumulating SIMD twin regressed, see `simd-gemm-amd64.md`). An
+  f32-*native* 8-wide kernel is the single biggest CPU-GEMM lever — but it
+  trades §V10's f64 accumulation for a tolerance, so it needs an ADR / policy
+  decision before it can land.
+
+**Thread-count finding:** torch is *faster at 8 threads than 16* on this
+8-core/16-thread part (f64 1024³: 177 → 134 GFLOP/s when forced to 16) —
+GEMM is compute-bound, so SMT oversubscription just adds contention. goai's
+`parallelWork` uses `GOMAXPROCS` (16 here), so it likely leaves the same
+headroom on the table; capping GEMM parallelism at the physical-core count is
+a cheap, bit-exact experiment worth running.
+
+## Roadmap status (from this doc's original "next")
+
+1. ✅ Same-host vendor-BLAS A/B (above).
+2. ◐ F64 AVX SIMD landed (`simd-gemm-amd64.md`, ~2× scalar, bit-exact);
+   f32-*native* SIMD still pending the §V10 policy decision.
+3. ✅ CUDA toolkit + backend stood up on the RTX 3060 (`cuda-amd64.md`).
