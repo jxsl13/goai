@@ -143,3 +143,41 @@ func benchChain(b *testing.B, device bool, m, d int) {
 
 func BenchmarkDeviceChain_M8_D4096(b *testing.B)  { benchChain(b, true, 8, 4096) }
 func BenchmarkPerCallChain_M8_D4096(b *testing.B) { benchChain(b, false, 8, 4096) }
+
+// Deep chain: N resident-weight device matmuls, 1 upload + 1 download. With the
+// stream-based backend the whole chain pipelines (allocs/frees/matmuls queue on
+// one stream; a single barrier at ToHost), so per-layer sync cost is gone.
+func benchDeep(b *testing.B, layers, m, d int) {
+	if _, ok := backend.Get(backend.CUDA); !ok {
+		b.Skip("cuda not available")
+	}
+	ws := make([]*cuda.ResidentB, layers)
+	for l := range ws {
+		ws[l], _ = cuda.NewResidentB(bench.RandF32(tensor.Shape{d, d}, uint64(l+2)))
+	}
+	defer func() {
+		for _, w := range ws {
+			w.Free()
+		}
+	}()
+	x := bench.RandF32(tensor.Shape{m, d}, 1)
+	b.ResetTimer()
+	for range b.N {
+		dh, _ := cuda.UploadF32(x)
+		for _, w := range ws {
+			nx, err := w.MatMulDevice(dh)
+			if err != nil {
+				b.Fatal(err)
+			}
+			dh.Free()
+			dh = nx
+		}
+		if _, err := dh.ToHost(); err != nil {
+			b.Fatal(err)
+		}
+		dh.Free()
+	}
+}
+
+func BenchmarkDeepChain_L8_M8_D1024(b *testing.B) { benchDeep(b, 8, 8, 1024) }
+func BenchmarkDeepChain_L16_M8_D512(b *testing.B) { benchDeep(b, 16, 8, 512) }

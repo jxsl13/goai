@@ -50,6 +50,8 @@ GPU-4 (resident weights, §V14 Phase-1, mirrors metal §T156): `cuda.NewResident
 
 GPU-5 (activation residency, §V14 Phase-2): `DeviceF32` = on-GPU rank-2 f32 activation; `UploadF32(x)` → device; `ResidentB.MatMulDevice(dact)` → device out (⊥ H2D/D2H); `.ToHost()` downloads. a matmul CHAIN keeps intermediates on-GPU: MLP x·W1·W2 = 1 upload + 1 download (⊥ per-matmul bounce). bridge `cu_alloc_f32`/`cu_download_f32`/`cu_matmul_f32_ddd`. identical to per-call cuda chain (same Sgemm seq), tolerance vs ref. A/B chain M=8 D=4096: per-call 15.9ms → device 0.54ms = 29×.
 
+GPU-6 (async stream, §V14 Phase-2): whole backend stream-based — 1 cublas stream + cudaMallocAsync/FreeAsync for caller buffers; ALL work (H2D/Sgemm/alloc/free/D2H) queued, host blocks only at data-returning points (cu_matmul*, cu_download) via 1 cudaStreamSynchronize. a DEEP matmul chain pipelines with ~2 barriers (upload+download) not 1/link (cudaMalloc AND cudaFree also implicitly sync → the real cost). A/B deep chain: L8 D1024 303→206µs=1.47×; L16 D512 349→202µs=1.73× (deeper→more syncs cut). parity green (stream ordering).
+
 ## §GAP — vendor-BLAS gap on this Zen3 (torch-cpu 2.13, numpy 2.4.4/OpenBLAS)
 
 GAP-1 (1024³ GFLOP/s): F64 goai 84 | torch 177 | numpy 227 → ≈2.7×. F32 goai(f32-native nr16) 153 | torch 580 | numpy 485 → ≈3.8× (was 13× vs scalar 43).
@@ -69,6 +71,7 @@ Tw8|x|f32-native SIMD GEMM 3.0× + ADR-0021 §V10 amend (PR#8)|Iw4,CPU-3
 Tw9|x|CUDA resident-weight matmul 26× decode (PR#9)|GPU-4
 Tw10|x|f32-native GEMM nr=16 (8 ILP chains) +22% → 3.6× scalar (PR#11)|CPU-3
 Tw11|x|CUDA activation residency (device matmul chain) 29× MLP (PR#12)|GPU-5,Nx1
+Tw12|x|CUDA async stream (malloc/free async, sync only at download) deep chain 1.5-1.7× (PR#13)|GPU-6
 
 ## §NEXT — open levers
 
