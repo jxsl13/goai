@@ -44,6 +44,8 @@ void* cu_upload_i32(const int* src, int n);
 int cu_embed_f32(const void* dTable, const void* dIds, void* dOut, int seq, int d);
 int cu_download_f32(const void* dsrc, float* dst, int n);
 int cu_matmul_f32_ddd(const void* dA, const void* dB, void* dC, int M, int K, int N);
+// dC = dA·dB + dC (beta=1): fuses the residual add into the projection matmul.
+int cu_matmul_f32_ddd_acc(const void* dA, const void* dB, void* dC, int M, int K, int N);
 // dC[M,N] = dA[M,K]·dB[N,K]ᵀ, all resident (attention QKᵀ).
 int cu_matmul_f32_ddd_bt(const void* dA, const void* dB, void* dC, int M, int K, int N);
 

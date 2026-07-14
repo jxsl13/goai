@@ -46,28 +46,22 @@ func (l *resLayer) forwardKV(dx *cuda.DeviceF32, kc *cuda.KVCache) (*cuda.Device
 	dq.Free()
 	dk.Free()
 	dv.Free()
-	do, err := l.wo.MatMulDevice(da)
-	if err != nil {
+	if err := l.wo.MatMulAccInto(da, dx); err != nil { // dx += Wo·attn → dx = x + attn
 		return nil, err
 	}
 	da.Free()
-	do.Add(dx)
-	dx.Free()
-	dh2, _ := do.Clone()
+	dh2, _ := dx.Clone()
 	dh2.RMSNorm(l.gFFN, float32(l.eps))
 	dgate, _ := l.wg.MatMulDevice(dh2)
 	dup, _ := l.wu.MatMulDevice(dh2)
 	dh2.Free()
 	dgate.SwiGLU(dup)
 	dup.Free()
-	ddown, err := l.wd.MatMulDevice(dgate)
-	if err != nil {
+	if err := l.wd.MatMulAccInto(dgate, dx); err != nil { // dx += Wd·ffn → dx = x1 + ffn
 		return nil, err
 	}
 	dgate.Free()
-	ddown.Add(do)
-	do.Free()
-	return ddown, nil
+	return dx, nil
 }
 
 func (rl *residentLlama) newCaches(maxSeq int) ([]*cuda.KVCache, error) {

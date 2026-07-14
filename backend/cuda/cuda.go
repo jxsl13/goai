@@ -245,6 +245,26 @@ func (r *ResidentB) MatMulDevice(a *DeviceF32) (*DeviceF32, error) {
 	return &DeviceF32{ptr: out, rows: a.rows, cols: r.n}, nil
 }
 
+// MatMulAccInto computes c += a·B in place (cuBLAS beta=1), fusing a transformer
+// residual add into the projection matmul: c must already hold the residual and
+// have shape [a.rows, B.n]. Saves a separate Add kernel launch and an output
+// allocation per residual on the decode hot path (§PERF: decode is launch-bound).
+func (r *ResidentB) MatMulAccInto(a, c *DeviceF32) error {
+	if r.ptr == nil || a.ptr == nil || c.ptr == nil {
+		return fmt.Errorf("cuda: MatMulAccInto on a freed handle")
+	}
+	if a.cols != r.k {
+		return fmt.Errorf("cuda: MatMulAccInto inner dim mismatch a[%d,%d]·B[%d,%d]", a.rows, a.cols, r.k, r.n)
+	}
+	if c.rows != a.rows || c.cols != r.n {
+		return fmt.Errorf("cuda: MatMulAccInto accumulator must be [%d,%d], got [%d,%d]", a.rows, r.n, c.rows, c.cols)
+	}
+	if rc := C.cu_matmul_f32_ddd_acc(a.ptr, r.ptr, c.ptr, C.int(a.rows), C.int(r.k), C.int(r.n)); rc != 0 {
+		return fmt.Errorf("cuda: device matmul-acc failed (code %d)", int(rc))
+	}
+	return nil
+}
+
 // ToHost downloads the resident activation to a new host tensor.
 func (d *DeviceF32) ToHost() (*tensor.Tensor, error) {
 	if d.ptr == nil {
