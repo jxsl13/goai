@@ -6,7 +6,7 @@
 > one variant that made it *slower* and was thrown away.
 
 Builds on `simd-amd64.md` (the elementwise landing) and `benchmarking-amd64.md`
-(the ~43 GFLOP/s scalar floor).
+(the ≈43 GFLOP/s scalar floor).
 
 ## Design — vectorize the free dimension, stay bit-exact
 
@@ -40,22 +40,22 @@ nails every column residue 0..3 and non-4-multiple `m`.
 |------|--------|---------------|---------------|------------|
 | **F64** 512³  | 40.8 GFLOP/s | 63.5 | **80.5** | **1.97×** |
 | **F64** 1024³ | 42.3 GFLOP/s | 62.4 | **82.3** | **1.95×** |
-| F32 512³  | 43.1 GFLOP/s | 43.1 | 43.1 | 1.00× (scalar, unchanged) |
-| F32 1024³ | 43.1 GFLOP/s | 43.1 | 43.1 | 1.00× (scalar, unchanged) |
+| F32 1024³ (f64-accum) | 43.1 GFLOP/s | 43.1 | 43.1 | 1.00× (bit-exact) |
+| **F32 1024³ (f32-native)** | 43.1 | — | **128.3** | **3.0×** (tolerance, ADR-0021) |
 
 **Register-blocking tune (nr=4 → nr=8).** The first cut kept one `Float64x4`
-accumulator per row (4 live chains). At ~4 GFLOP/s/core that was well under the
+accumulator per row (4 live chains). At ≈4 GFLOP/s/core that was well under the
 Zen 3 f64 ceiling, and the tell was that it scaled with *more independent
 accumulators*, not more bandwidth: the `acc = acc.Add(a·b)` chain is
 latency-bound (each Add depends on the previous), and 4 chains barely cover the
-~4-cycle add latency. Widening to **two column groups per row = 8 chains**
+≈4-cycle add latency. Widening to **two column groups per row = 8 chains**
 (`nv8 = n − n%8`, a 4-wide cleanup for `n%8∈[4,7]`, scalar tail for `n%4`) gives
-enough ILP to hide it: **+28–32%** on top of nr=4, a **~1.96× cumulative**
+enough ILP to hide it: **+28–32%** on top of nr=4, a **≈1.96× cumulative**
 bit-exact win over scalar (same ascending-p order → tol 0, parity suites green).
 8 accumulators + 2 B-loads + 4 A-broadcasts sit within the 16 YMM registers.
 
 Because `gemmF64Band` is shared, **F64 conv (im2col→GEMM) inherits the same
-~2×** at bit-exact parity (its cross-ref suites stay green under the experiment
+≈2×** at bit-exact parity (its cross-ref suites stay green under the experiment
 build); a dedicated conv A/B is a follow-up.
 
 ## The discarded F32 SIMD variant (§C3/V-CGO)
@@ -68,17 +68,25 @@ on this path. Per §C3 (never ship a non-winning opt) it was **discarded**; F32
 GEMM keeps the blocked scalar kernel under the experiment too — unchanged and
 still bit-exact, no regression.
 
-## Why F32 is a separate, bigger task
+## f32-native F32 GEMM (landed — ADR-0021)
 
-f64 accumulation (§V10) caps *any* f32 kernel at the f64 throughput (~63
-GFLOP/s here) — an order of magnitude short of vendor-BLAS SGEMM (~600). The
-real f32 win needs **f32-native 8-wide accumulation** (`Float32x8` + `MulAdd`),
-which:
+f64 accumulation (§V10) caps *any* f32 kernel at the f64 throughput, so the real
+f32 win needs **f32-native 8-wide accumulation** (`Float32x8` + fused `MulAdd`).
+That is now the F32 kernel under the experiment build:
 
-1. changes the §V10 f64-accumulation policy → needs an ADR + a **tolerance**
-   parity gate (f32 accumulation error ≈ √K·ε_f32), not tol-0;
-2. can use FMA (`MulAdd`) since bit-exactness is no longer the contract.
+- accumulate in `Float32x8` (8 lanes) with `MulAdd` (FMA); the f32→f64 widen for
+  the accumulation carrier happens **once per tile** on store (`storeF32x8`),
+  amortized over `k` — so none of the per-iteration convert cliff that killed
+  the f64-accumulating twin;
+- **3.0×** over scalar (42.6 → 128.3 GFLOP/s, 1024³), closing the measured
+  vendor-BLAS gap from ≈13× to ≈4.5× (`benchmarking-amd64.md`).
 
-That is the next task and where the headline speedup lives. This F64 landing
-proves the bit-exact SIMD-GEMM structure (free-dim vectorization, `+=`-
-preserving accumulator, tail handling) it will build on.
+This trades §V10's f64 accumulation for a **tolerance** (rel `2e-3`, abs `1e-4`;
+observed max ≈1e-4 for K ≤ 128) — an experiment-gated amendment, **default build
+stays bit-exact** (see ADR-0021 for the policy + measured blast radius). F32
+matmul parity is now build-tagged (`assertMatMul` → `gemmF32Tolerant`): exact on
+the default build, within-tolerance under the experiment. F64 stays bit-exact in
+both builds, and `gemmF64Band` (shared with conv) is untouched.
+
+The remaining ≈4.5× to vendor SGEMM is cache blocking (ADR-0017, re-openable on
+this large-cache x86 host) + FMA-saturation tuning.

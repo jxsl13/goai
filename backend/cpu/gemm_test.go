@@ -33,7 +33,7 @@ func TestGemmCrossReferenceExact(t *testing.T) {
 			}
 			gc := run(t, cpu, backend.OpMatMul, a, b)
 			gr := run(t, ref, backend.OpMatMul, a, b)
-			assertEqualExact(t, gc, gr, "matmul")
+			assertMatMul(t, gc, gr, "matmul")
 		}
 	}
 }
