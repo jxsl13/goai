@@ -52,42 +52,12 @@ func conv2dBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backe
 	defer putF64(dOP)
 	defer putF64(wmatP)
 	cols, dO, wmat := *colsP, *dOP, *wmatP // W row-major [F, C·KH·KW]
-	fill := func(getX, getW, getG func(flat int) float64) {
-		parallelWork(rows, k+f, func(lo, hi int) {
-			for r := lo; r < hi; r++ {
-				ni := r / (ho * wo)
-				rem := r % (ho * wo)
-				oy, ox := rem/wo, rem%wo
-				base := r * k
-				kk := 0
-				for ci := range c {
-					for ky := range kh {
-						iy := oy*s + ky - p
-						for kx := range kw {
-							ix := ox*s + kx - p
-							if iy >= 0 && iy < h && ix >= 0 && ix < wd {
-								cols[base+kk] = getX(((ni*c+ci)*h+iy)*wd + ix)
-							}
-							kk++
-						}
-					}
-				}
-				for fi := range f {
-					dO[r*f+fi] = getG(((ni*f+fi)*ho+oy)*wo + ox)
-				}
-			}
-		})
-		for i := range wmat {
-			wmat[i] = getW(i)
-		}
-	}
+	// devirtualized im2col(X) + dO + weight fill (§base-perf): concrete []T reads.
 	switch x.Dtype() {
 	case tensor.F64:
-		xs, ws, gs := xc.Storage().F64(), wcont.Storage().F64(), gc.Storage().F64()
-		fill(func(i int) float64 { return xs[i] }, func(i int) float64 { return ws[i] }, func(i int) float64 { return gs[i] })
+		conv2dBwdFill(cols, dO, wmat, xc.Storage().F64(), wcont.Storage().F64(), gc.Storage().F64(), rows, k, f, ho, wo, c, kh, kw, s, p, h, wd)
 	case tensor.F32:
-		xs, ws, gs := xc.Storage().F32(), wcont.Storage().F32(), gc.Storage().F32()
-		fill(func(i int) float64 { return float64(xs[i]) }, func(i int) float64 { return float64(ws[i]) }, func(i int) float64 { return float64(gs[i]) })
+		conv2dBwdFill(cols, dO, wmat, xc.Storage().F32(), wcont.Storage().F32(), gc.Storage().F32(), rows, k, f, ho, wo, c, kh, kw, s, p, h, wd)
 	default:
 		return nil, fmt.Errorf("cpu: unsupported dtype %v", x.Dtype())
 	}
@@ -169,4 +139,37 @@ func conv2dBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backe
 func init() {
 	std.add(backend.OpConv2DBackward, tensor.F32, conv2dBackwardKernel)
 	std.add(backend.OpConv2DBackward, tensor.F64, conv2dBackwardKernel)
+}
+
+// conv2dBwdFill materializes X's im2col columns, the dO matrix, and the transposed
+// weight matrix from concrete []T slices for the conv backward (§base-perf) — direct
+// indexed reads instead of the getX/getW/getG per-element closures.
+func conv2dBwdFill[T normFloat](cols, dO, wmat []float64, xs, ws, gs []T, rows, k, f, ho, wo, c, kh, kw, s, p, h, wd int) {
+	parallelWork(rows, k+f, func(lo, hi int) {
+		for r := lo; r < hi; r++ {
+			ni := r / (ho * wo)
+			rem := r % (ho * wo)
+			oy, ox := rem/wo, rem%wo
+			base := r * k
+			kk := 0
+			for ci := 0; ci < c; ci++ {
+				for ky := 0; ky < kh; ky++ {
+					iy := oy*s + ky - p
+					for kx := 0; kx < kw; kx++ {
+						ix := ox*s + kx - p
+						if iy >= 0 && iy < h && ix >= 0 && ix < wd {
+							cols[base+kk] = float64(xs[((ni*c+ci)*h+iy)*wd+ix])
+						}
+						kk++
+					}
+				}
+			}
+			for fi := 0; fi < f; fi++ {
+				dO[r*f+fi] = float64(gs[((ni*f+fi)*ho+oy)*wo+ox])
+			}
+		}
+	})
+	for i := range wmat {
+		wmat[i] = float64(ws[i])
+	}
 }
