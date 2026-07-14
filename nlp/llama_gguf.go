@@ -201,24 +201,43 @@ func swiGLUFromGGUF(gate, up, down *tensor.Tensor) *nn.SwiGLU {
 	return &nn.SwiGLU{Wgate: transpose2D(gate), Wup: transpose2D(up), Wdown: transpose2D(down)}
 }
 
-// transpose2D returns the [b,a] transpose of a [a,b] tensor (F64).
+// transpose2D returns the [b,a] transpose of a [a,b] tensor (F64). Runs once per
+// weight matrix at model load — a direct typed index transpose (§base-perf) instead
+// of per-element AtF64/SetF64 dispatch keeps loading large models fast.
 func transpose2D(t *tensor.Tensor) *tensor.Tensor {
 	a, b := t.Shape()[0], t.Shape()[1]
 	out := tensor.New(tensor.F64, tensor.Shape{b, a})
-	for i := range a {
-		for j := range b {
-			out.SetF64(t.AtF64(i, j), j, i)
+	tc := t.Contiguous()
+	dst := out.Storage().F64() // [b,a] row-major
+	switch tc.Dtype() {
+	case tensor.F64:
+		src := tc.Storage().F64() // [a,b] row-major
+		for i := 0; i < a; i++ {
+			row := i * b
+			for j := 0; j < b; j++ {
+				dst[j*a+i] = src[row+j]
+			}
+		}
+	case tensor.F32:
+		src := tc.Storage().F32()
+		for i := 0; i < a; i++ {
+			row := i * b
+			for j := 0; j < b; j++ {
+				dst[j*a+i] = float64(src[row+j])
+			}
+		}
+	default:
+		for i := 0; i < a; i++ {
+			for j := 0; j < b; j++ {
+				dst[j*a+i] = tc.AtF64(i, j)
+			}
 		}
 	}
 	return out
 }
 
-// cloneF64 copies a tensor into a fresh F64 tensor of the same shape.
+// cloneF64 copies a tensor into a fresh F64 tensor of the same shape (widening from
+// any dtype). This is exactly Cast to F64, which is the §base-perf fast typed path.
 func cloneF64(t *tensor.Tensor) *tensor.Tensor {
-	out := tensor.New(tensor.F64, t.Shape())
-	for i := range t.Numel() {
-		idx := tensor.Unravel(i, t.Shape())
-		out.SetF64(t.AtF64(idx...), idx...)
-	}
-	return out
+	return t.Cast(tensor.F64)
 }
