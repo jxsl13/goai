@@ -37,13 +37,42 @@ type Watermark struct {
 // WatermarkOption configures a Watermark via the functional-options idiom (§C12).
 type WatermarkOption func(*Watermark)
 
-// WithWatermarkGamma sets the green-list fraction γ (default 0.25).
+// WithWatermarkGamma sets the green-list fraction γ — the share of the vocabulary marked
+// "green" (favored) at each step.
+//
+// In plain terms: how big a slice of possible next words the watermark quietly nudges the
+// model toward. A hidden reader who knows the key can later count how often green words were
+// chosen and tell the text was machine-generated. Boundary behavior — γ→0 makes the green set
+// tiny (a strong, easily-detected signal but a bigger dent in text quality); γ→1 makes almost
+// everything green (invisible watermark, undetectable). Must be strictly in (0, 1).
+//
+// Default 0.25 (research-grounded): the official lm-watermarking repo's recommended default
+// (Kirchenbauer et al. 2023, §R219; the paper's headline analysis uses γ=0.5 — 0.25 detects
+// with fewer tokens at a modest quality cost).
 func WithWatermarkGamma(g float64) WatermarkOption { return func(w *Watermark) { w.Gamma = g } }
 
-// WithWatermarkDelta sets the green-list logit bias δ (default 2.0).
+// WithWatermarkDelta sets the green-list logit bias δ — how hard the watermark pushes toward
+// green tokens.
+//
+// In plain terms: the size of the thumb on the scale. Bigger δ makes the watermark easier to
+// detect but distorts the text more (the model is forced toward green words even when a red
+// one fit better). Boundary behavior — δ→0 removes the watermark (green and red equally
+// likely, undetectable); large δ (>5) nearly forbids red tokens and visibly degrades fluency.
+//
+// Default 2.0 (research-grounded): the value from Kirchenbauer et al. 2023 (§R219) — a good
+// detectability/quality balance (with γ=0.25 an all-green run of 16 tokens already hits z≈4).
 func WithWatermarkDelta(d float64) WatermarkOption { return func(w *Watermark) { w.Delta = d } }
 
-// WithWatermarkKey sets the secret key seeding the green lists (default 0).
+// WithWatermarkKey sets the secret key that seeds the per-step green lists.
+//
+// In plain terms: the password. Generation and detection must use the SAME key to line up the
+// same green lists; anyone without it cannot tell the text is watermarked or forge one.
+// Boundary behavior — any uint64 is valid; different keys give independent, non-interfering
+// watermarks. SPECIAL VALUE: 0 is the default seed (fine for demos; use a real secret in
+// production, since a known key lets others detect OR strip the mark).
+//
+// Default 0 (research-grounded): a fixed seed for reproducibility; the scheme's security rests
+// on the key being secret (Kirchenbauer et al. 2023, §R219).
 func WithWatermarkKey(k uint64) WatermarkOption { return func(w *Watermark) { w.Key = k } }
 
 // NewWatermark builds a watermark over a vocabulary of vocabSize with the defaults γ=0.25,

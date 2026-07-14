@@ -54,12 +54,23 @@ type Unigram struct {
 // UnigramOption configures a Unigram tokenizer (functional-options idiom, §C12).
 type UnigramOption func(*Unigram)
 
-// WithUnigramUnkID sets the id emitted for characters no piece covers (default: the
-// id of a piece literally named "<unk>", else 0).
+// WithUnigramUnkID sets the id emitted for a character no piece in the vocabulary covers.
+//
+// In plain terms: the "unknown" token id, used when a character can't be built from any known
+// piece. Boundary behavior — any valid vocab id. SPECIAL VALUE / default: the id of a piece
+// literally named "<unk>" if present, else 0 (research-grounded: the SentencePiece Unigram
+// convention of a dedicated <unk> symbol).
 func WithUnigramUnkID(id int) UnigramOption { return func(u *Unigram) { u.unkID = id } }
 
-// WithUnigramDummyPrefix toggles prepending a ▁ before encoding (add_dummy_prefix,
-// default true) so a leading word is tokenized like a mid-sentence one.
+// WithUnigramDummyPrefix toggles prepending a ▁ (the SentencePiece space marker) before
+// encoding, so a word at the START of the text tokenizes the same way it would mid-sentence.
+//
+// In plain terms: SentencePiece marks spaces with ▁ and treats them as part of the following
+// word; without this, "Hello" at the very start would tokenize differently from " Hello" in
+// the middle. Turning it on makes the two consistent. Boundary behavior — a boolean; off only
+// if your vocabulary was trained without add_dummy_prefix.
+//
+// Default true (research-grounded: SentencePiece's add_dummy_prefix default).
 func WithUnigramDummyPrefix(on bool) UnigramOption { return func(u *Unigram) { u.dummy = on } }
 
 // NewUnigram builds a Unigram tokenizer from a scored vocabulary (piece id = index).

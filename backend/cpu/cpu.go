@@ -39,9 +39,14 @@ func (b *Backend) Kernel(op backend.Op, dtype tensor.Dtype) (backend.Kernel, boo
 	return k, ok
 }
 
-// parThreshold is the total work (items × work-per-item) below which parallelism
-// is not worth the goroutine overhead. Tuned conservatively; refined by
-// benchmarks (§V5).
+// parThreshold is the total work (items × work-per-item) below which parallelism is not
+// worth the overhead of handing chunks to the worker pool. Boundary behavior: set it too
+// LOW and small ops pay pool-dispatch + cache-sync cost that exceeds the compute they save
+// (a net slowdown on the many tiny elementwise/norm calls a decode step makes); too HIGH and
+// medium-sized ops that would benefit stay serial. 1<<15 (32768) is the measured crossover on
+// M-series cores (§T511 pool design, §V22 A/B) — the point where GOMAXPROCS-way splitting
+// starts to win. Not a user knob (internal, §C13-exempt); revisit via benchmarks (§V5) if the
+// pool dispatch cost changes.
 const parThreshold = 1 << 15 // 32768
 
 // poolTask is one chunk handed to the persistent workers (§T511).

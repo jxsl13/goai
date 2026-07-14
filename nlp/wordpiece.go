@@ -30,17 +30,34 @@ type WordPiece struct {
 // WordPieceOption configures a WordPiece tokenizer (functional-options idiom, §C12).
 type WordPieceOption func(*WordPiece)
 
-// WithWordPieceUnk sets the id emitted for an unmatchable or over-long word (default: the id of
-// the "[UNK]" piece if present, else 0).
+// WithWordPieceUnk sets the id emitted for a word that cannot be tokenized (no subword match,
+// or longer than the max-chars limit).
+//
+// In plain terms: the "unknown word" token id. Boundary behavior — any valid vocab id; point
+// it at your real unknown token so downstream code recognizes gaps. SPECIAL VALUE / default:
+// the id of the "[UNK]" piece if the vocabulary has one, else 0 (research-grounded: the
+// BERT/WordPiece convention of a dedicated [UNK] symbol).
 func WithWordPieceUnk(id int) WordPieceOption { return func(w *WordPiece) { w.unkID = id } }
 
-// WithWordPieceContinuation sets the continuation-subword prefix (default "##").
+// WithWordPieceContinuation sets the prefix marking a subword that continues the previous one
+// (rather than starting a new word).
+//
+// In plain terms: the little marker glued to the front of mid-word pieces ("play", "##ing").
+// Boundary behavior — must match the marker your vocabulary was built with, or nothing
+// tokenizes. Default "##" (research-grounded: the BERT/WordPiece continuation prefix).
 func WithWordPieceContinuation(p string) WordPieceOption {
 	return func(w *WordPiece) { w.continuation = p }
 }
 
-// WithWordPieceMaxChars sets the max characters (runes) per word before it is emitted as unk
-// (default 100, the BERT/HF value); non-positive is ignored.
+// WithWordPieceMaxChars caps the length (in runes) of a single word; longer words are emitted
+// as the unknown token instead of being tokenized.
+//
+// In plain terms: a safety valve — WordPiece's greedy matching is quadratic in word length, so
+// pathologically long "words" (e.g. a 5000-char blob) are skipped rather than stalling the
+// tokenizer. Boundary behavior — too small drops legitimate long words to unk; very large
+// removes the protection. SPECIAL VALUE: non-positive is ignored (keeps the current value).
+//
+// Default 100 (research-grounded: the BERT/Hugging Face max_input_chars_per_word default).
 func WithWordPieceMaxChars(n int) WordPieceOption {
 	return func(w *WordPiece) {
 		if n > 0 {
