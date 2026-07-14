@@ -276,6 +276,22 @@ func (d *DeviceF32) Add(other *DeviceF32) error {
 	return nil
 }
 
+// Mul multiplies another resident activation of the same shape into this one
+// in-place (d *= other), on the GPU — e.g. the SwiGLU gate·up product. other is
+// unchanged.
+func (d *DeviceF32) Mul(other *DeviceF32) error {
+	if d.ptr == nil || other.ptr == nil {
+		return fmt.Errorf("cuda: Mul on a freed handle")
+	}
+	if d.rows != other.rows || d.cols != other.cols {
+		return fmt.Errorf("cuda: Mul shape mismatch [%d,%d] *= [%d,%d]", d.rows, d.cols, other.rows, other.cols)
+	}
+	if rc := C.cu_mul_f32(d.ptr, other.ptr, C.int(d.rows*d.cols)); rc != 0 {
+		return fmt.Errorf("cuda: mul failed (code %d)", int(rc))
+	}
+	return nil
+}
+
 // RMSNorm applies RMSNorm (y = x/√(mean(x²)+eps)·gamma) in-place, row-wise over
 // the last axis, on the GPU — the pre-block norm of a Llama-style transformer,
 // kept device-resident. gamma is a resident [cols] weight; eps ≤ 0 uses 1e-5
