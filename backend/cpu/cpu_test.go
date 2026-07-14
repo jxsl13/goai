@@ -114,3 +114,33 @@ func TestCPUNonContiguous(t *testing.T) {
 	gr := run(t, ref, backend.OpNeg, tr)
 	assertEqualExact(t, gc, gr, "noncontig-neg")
 }
+
+// TestCPUActivationEdge locks in the NaN/±Inf behavior of the devirtualized unary
+// activations (relu/silu/gelu, plus exp/neg) against the reference. The parity test
+// used only finite inputs, so this guards the edge cases the closure→native rewrite
+// could have changed (e.g. relu(NaN): NaN>0 is false → 0; silu/gelu propagate NaN).
+func TestCPUActivationEdge(t *testing.T) {
+	cpu := cpuBackend(t)
+	ref, _ := backend.Get(backend.Ref)
+	inf, ninf, nan := math.Inf(1), math.Inf(-1), math.NaN()
+	edge := []float32{float32(nan), float32(inf), float32(ninf), 2, -2}
+	for _, op := range []backend.Op{backend.OpReLU, backend.OpSiLU, backend.OpGELU, backend.OpExp, backend.OpNeg} {
+		x := tensor.New(tensor.F32, tensor.Shape{len(edge)})
+		copy(x.Storage().F32(), edge)
+		gc, err := backend.Execute(backend.NewContext().WithBackend(cpu), op, []*tensor.Tensor{x}, nil)
+		if err != nil {
+			t.Fatalf("%v cpu: %v", op, err)
+		}
+		gr, err := backend.Execute(backend.NewContext().WithBackend(ref), op, []*tensor.Tensor{x}, nil)
+		if err != nil {
+			t.Fatalf("%v ref: %v", op, err)
+		}
+		c, r := gc[0].Storage().F32(), gr[0].Storage().F32()
+		for i := range c {
+			cf, rf := float64(c[i]), float64(r[i])
+			if math.IsNaN(cf) != math.IsNaN(rf) || (!math.IsNaN(cf) && cf != rf) {
+				t.Errorf("%v[%d] in=%v: cpu=%v ref=%v", op, i, edge[i], c[i], r[i])
+			}
+		}
+	}
+}
