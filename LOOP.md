@@ -101,6 +101,18 @@ Idle-rescheduling a wakeup with productive work available is a process
 failure. (Context-length is not a blocker either: if the context is
 saturated, do the smallest safe useful increment and commit it, don't idle.)
 
+DEFAULT WHEN IDLING (user directive 2026-07-14): whenever you would otherwise
+idle — no current-task step, nothing to harden, nothing to verify-ahead —
+spend that time BEATING THE PYTHON/C++ INCUMBENTS' PERFORMANCE. Pick a hot
+path GoAI implements (matmul, attention, a decode step, a quantized kernel,
+a tokenizer) and make it FASTER than the reference (torch/llama.cpp/ggml/
+numpy), proven with a clean A/B benchmark (identical shapes + hardware,
+warm-up excluded, variance reported, §V22 discipline; `make bench-compare` /
+`make bench-python`). Every measured win — or an honestly documented deficit
+with a root-cause analysis and the next lever — is one §T task and one
+docs/benchmarking.md entry. This is the empty-backlog rule 2 promoted to the
+standing default: idle time is performance-leadership time.
+
 ## Empty backlog rule (mandatory — the loop generates its own work)
 
 When no open §T task exists, do NOT idle. In this order:
