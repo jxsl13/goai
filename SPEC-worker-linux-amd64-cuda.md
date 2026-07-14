@@ -87,6 +87,7 @@ Tw22|x|CUDA MULTI-HEAD attention (batched strided Sgemm) verified vs per-head re
 Tw23|x|CUDA full MULTI-HEAD decoder LAYER composed & verified e2e vs ref (max rel 7.7e-4) (PR#24)|GPU-5,Nx1
 Tw24|x|CUDA GQA (grouped-query attn, pointer-array batched Sgemm) verified vs per-head ref (PR#25)|GPU-5,Nx1
 Tw29|x|REAL-MODEL: TinyLlama-1.1B block-0 on CUDA path w/ actual GGUF weights == CPU nlp block (OpMHA) max rel 1.4e-6 (PR#31)|Nx1,GPU-5
+Tw30|x|REAL-MODEL FULL FORWARD: TinyLlama-1.1B (embed→22 layers→norm→logits) on GPU == CPU nlp.Llama TOKEN-FOR-TOKEN (6/6 greedy argmax, logit 1.7e-5) (PR#32)|Nx1
 Tw25|x|CUDA embedding row-gather (bit-exact) — full-model forward-pass op set COMPLETE on-device (PR#26)|GPU-4,Nx1
 Tw26|x|CUDA fused SwiGLU (SiLU⊙up, 1 pass) — device traffic 5n→3n, FFN launch fusion (PR#27)|GPU-7
 Tw27|x|CPU f32-native GEMM direct-store (drop f64 carrier) +28% → 196 GFLOP/s, 4.7× scalar (PR#28); mr=8 tiling measured as -7% loss, rejected|CPU-3
