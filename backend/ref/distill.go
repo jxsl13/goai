@@ -41,20 +41,64 @@ func distillKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attr
 	}
 
 	var total float64
-	for i := range b {
-		p := softmaxRow(zt, i, c, temp) // teacher soft targets
-		q := softmaxRow(zs, i, c, temp) // student soft distribution
-		var kl float64
-		for j := range c {
-			if p[j] > 0 {
-				kl += p[j] * (math.Log(p[j]) - math.Log(q[j]))
+	// Devirtualised typed core (§T646 follow-up): flat []float64 views replace
+	// the per-element AtF64 dispatch inside the softmax rows, and the p/q buffers
+	// are hoisted out of the batch loop. Same max/exp/normalize/KL sequence per
+	// row — bit-identical.
+	ss, sok := f64Data(zs)
+	ts, tok := f64Data(zt)
+	if sok && tok {
+		p := make([]float64, c)
+		q := make([]float64, c)
+		for i := range b {
+			softmaxRowFlat(p, ts[i*c:i*c+c], temp) // teacher soft targets
+			softmaxRowFlat(q, ss[i*c:i*c+c], temp) // student soft distribution
+			var kl float64
+			for j := range c {
+				if p[j] > 0 {
+					kl += p[j] * (math.Log(p[j]) - math.Log(q[j]))
+				}
 			}
+			total += temp * temp * kl
 		}
-		total += temp * temp * kl
+	} else {
+		// Generic fallback for exotic dtypes (verbatim original loop).
+		for i := range b {
+			p := softmaxRow(zt, i, c, temp) // teacher soft targets
+			q := softmaxRow(zs, i, c, temp) // student soft distribution
+			var kl float64
+			for j := range c {
+				if p[j] > 0 {
+					kl += p[j] * (math.Log(p[j]) - math.Log(q[j]))
+				}
+			}
+			total += temp * temp * kl
+		}
 	}
 	out := tensor.NewOn(ctx.Device(), zs.Dtype(), tensor.Shape{})
 	out.SetF64(total / float64(b))
 	return []*tensor.Tensor{out}, nil
+}
+
+// softmaxRowFlat writes the stable softmax of the flat row zrow (scaled by
+// 1/temp) into out — the devirtualised twin of softmaxRow with the identical
+// max/exp/normalize sequence.
+func softmaxRowFlat(out, zrow []float64, temp float64) {
+	m := math.Inf(-1)
+	for _, z := range zrow {
+		if v := z / temp; v > m {
+			m = v
+		}
+	}
+	var sum float64
+	for j, z := range zrow {
+		e := math.Exp(z/temp - m)
+		out[j] = e
+		sum += e
+	}
+	for j := range out {
+		out[j] /= sum
+	}
 }
 
 // softmaxRow returns the stable softmax of row i of z scaled by 1/temp.

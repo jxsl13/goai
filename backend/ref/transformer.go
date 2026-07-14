@@ -27,6 +27,35 @@ func softmaxKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) (
 	rows := x.Numel() / d
 	out := tensor.NewOn(ctx.Device(), x.Dtype(), x.Shape())
 	row := make([]float64, d)
+	// Devirtualised typed core (§T646 follow-up): flat []float64 views replace
+	// the per-element Unravel alloc + AtF64/SetF64 dispatch; flat pos r·d+j IS
+	// the row-major index. Same max/exp/sum/divide sequence — bit-identical.
+	if xs, xok := f64Data(x); xok {
+		if os, flush, ook := outF64(out); ook {
+			for r := range rows {
+				xrow := xs[r*d : r*d+d]
+				orow := os[r*d : r*d+d]
+				m := math.Inf(-1)
+				for _, v := range xrow {
+					if v > m {
+						m = v
+					}
+				}
+				var sum float64
+				for j, v := range xrow {
+					e := math.Exp(v - m)
+					row[j] = e
+					sum += e
+				}
+				for j, e := range row {
+					orow[j] = e / sum
+				}
+			}
+			flush()
+			return []*tensor.Tensor{out}, nil
+		}
+	}
+	// Generic fallback for exotic dtypes (verbatim original loop).
 	for r := range rows {
 		m := math.Inf(-1)
 		for j := range d {
@@ -73,6 +102,38 @@ func layerNormKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.At
 	rows := x.Numel() / d
 	out := tensor.NewOn(ctx.Device(), x.Dtype(), x.Shape())
 	row := make([]float64, d)
+	// Devirtualised typed core (§T646 follow-up): flat []float64 views replace
+	// the per-element Unravel alloc + AtF64/SetF64 dispatch. Same mean/variance/
+	// normalize sequence — bit-identical.
+	if xs, xok := f64Data(x); xok {
+		if gs, gok := f64Data(gamma); gok {
+			if bs, bok := f64Data(beta); bok {
+				if os, flush, ook := outF64(out); ook {
+					for r := range rows {
+						xrow := xs[r*d : r*d+d]
+						orow := os[r*d : r*d+d]
+						var mean float64
+						for _, v := range xrow {
+							mean += v
+						}
+						mean /= float64(d)
+						var varsum float64
+						for _, v := range xrow {
+							dv := v - mean
+							varsum += dv * dv
+						}
+						inv := 1 / math.Sqrt(varsum/float64(d)+eps)
+						for j, v := range xrow {
+							orow[j] = (v-mean)*inv*gs[j] + bs[j]
+						}
+					}
+					flush()
+					return []*tensor.Tensor{out}, nil
+				}
+			}
+		}
+	}
+	// Generic fallback for exotic dtypes (verbatim original loop).
 	for r := range rows {
 		var mean float64
 		for j := range d {
@@ -121,6 +182,77 @@ func layerNormBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, attrs ba
 	dbeta := tensor.NewOn(ctx.Device(), gamma.Dtype(), gamma.Shape())
 	xhat := make([]float64, d)
 	a := make([]float64, d)
+	// Devirtualised typed core (§T646 follow-up): flat []float64 views replace
+	// the per-element Unravel alloc + AtF64/SetF64 dispatch. dgamma/dbeta keep
+	// their own typed accumulators because the generic path narrows the running
+	// F32 sums on EVERY row update — the float32 branches reproduce exactly that
+	// widen/add/narrow sequence, so results stay bit-identical.
+	if xs, xok := f64Data(x); xok {
+		if gs, gok := f64Data(g); gok {
+			if gms, gmok := f64Data(gamma); gmok {
+				var dg64, db64 []float64
+				var dg32, db32 []float32
+				switch dgamma.Dtype() {
+				case tensor.F64:
+					dg64, db64 = dgamma.Storage().F64(), dbeta.Storage().F64()
+				case tensor.F32:
+					dg32, db32 = dgamma.Storage().F32(), dbeta.Storage().F32()
+				}
+				if dg64 != nil || dg32 != nil {
+					dxs, flushDx, _ := outF64(dx) // dx dtype is F32/F64 here (f64Data(x) ok)
+					dgrow := make([]float64, d)
+					for r := range rows {
+						xrow := xs[r*d : r*d+d]
+						grow := gs[r*d : r*d+d]
+						var mean float64
+						for _, v := range xrow {
+							mean += v
+						}
+						mean /= float64(d)
+						var variance float64
+						for _, v := range xrow {
+							dv := v - mean
+							variance += dv * dv
+						}
+						variance /= float64(d)
+						inv := 1 / math.Sqrt(variance+eps)
+						var meanA, meanAX float64
+						for j, gj := range grow {
+							xhat[j] = (xrow[j] - mean) * inv
+							a[j] = gj * gms[j]
+							meanA += a[j]
+							meanAX += a[j] * xhat[j]
+							dgrow[j] = gj * xhat[j]
+						}
+						if dg64 != nil {
+							for j, v := range dgrow {
+								dg64[j] += v
+							}
+							for j, gj := range grow {
+								db64[j] += gj
+							}
+						} else {
+							for j, v := range dgrow {
+								dg32[j] = float32(float64(dg32[j]) + v)
+							}
+							for j, gj := range grow {
+								db32[j] = float32(float64(db32[j]) + gj)
+							}
+						}
+						meanA /= float64(d)
+						meanAX /= float64(d)
+						dxrow := dxs[r*d : r*d+d]
+						for j := range dxrow {
+							dxrow[j] = inv * (a[j] - meanA - xhat[j]*meanAX)
+						}
+					}
+					flushDx()
+					return []*tensor.Tensor{dx, dgamma, dbeta}, nil
+				}
+			}
+		}
+	}
+	// Generic fallback for exotic dtypes (verbatim original loop).
 	for r := range rows {
 		var mean float64
 		for j := range d {

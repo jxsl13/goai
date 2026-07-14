@@ -87,6 +87,46 @@ func reduceKernel(init float64, combine func(acc, x float64) float64, finalize f
 		if outNumel > 0 {
 			count = x.Numel() / outNumel // product of reduced-axis sizes
 		}
+		// Devirtualised traversal (§T646 follow-up): the generic loop pays a
+		// per-element Unravel heap alloc + AtF64 dispatch + an O(nd) offset
+		// rebuild. Here the input is exposed once as a flat row-major []float64
+		// (exact widening for F32) and the output offset is carried
+		// INCREMENTALLY by an odometer over per-axis effective strides
+		// (eff[ax] = outStrides[outAxisOf[ax]], 0 for reduced axes — exactly the
+		// coord·stride sum of the generic loop). Element order is the same
+		// ascending row-major pos, so each accumulator sees the same combine
+		// sequence — bit-identical.
+		if xs, ok := f64Data(x); ok {
+			shape := x.Shape()
+			eff := make([]int, nd)
+			for ax := range nd {
+				if p := outAxisOf[ax]; p >= 0 && !reduced[ax] {
+					eff[ax] = outStrides[p]
+				}
+			}
+			idx := make([]int, nd)
+			of := 0
+			for pos := range xs {
+				acc[of] = combine(acc[of], xs[pos])
+				for d := nd - 1; d >= 0; d-- {
+					idx[d]++
+					of += eff[d]
+					if idx[d] < shape[d] {
+						break
+					}
+					idx[d] = 0
+					of -= eff[d] * shape[d]
+				}
+			}
+			out := tensor.NewOn(ctx.Device(), x.Dtype(), outShape)
+			os, flush, _ := outF64(out) // dtype is F32/F64 here (f64Data ok), so outF64 cannot fail
+			for i := range acc {
+				os[i] = finalize(acc[i], count)
+			}
+			flush()
+			return []*tensor.Tensor{out}, nil
+		}
+		// Generic fallback for exotic dtypes (verbatim original loop).
 		for pos := range x.Numel() {
 			idx := tensor.Unravel(pos, x.Shape())
 			of := 0
@@ -129,10 +169,20 @@ func argmaxKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs
 	if axis == reduceAllAxis {
 		best := math.Inf(-1)
 		bi := 0
-		for pos := range x.Numel() {
-			v := x.AtF64(tensor.Unravel(pos, x.Shape())...)
-			if v > best {
-				best, bi = v, pos
+		// Devirtualised flat scan (§T646 follow-up): same ascending-pos order and
+		// strict > comparison as the generic loop — bit-identical tie handling.
+		if xs, ok := f64Data(x); ok {
+			for pos, v := range xs {
+				if v > best {
+					best, bi = v, pos
+				}
+			}
+		} else {
+			for pos := range x.Numel() {
+				v := x.AtF64(tensor.Unravel(pos, x.Shape())...)
+				if v > best {
+					best, bi = v, pos
+				}
 			}
 		}
 		out := tensor.NewOn(ctx.Device(), x.Dtype(), tensor.Shape{})
@@ -157,6 +207,41 @@ func argmaxKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs
 	for i := range best {
 		best[i] = math.Inf(-1)
 	}
+	// Devirtualised traversal (§T646 follow-up): flat typed input + an odometer
+	// carrying the output offset incrementally (see reduceKernel). Same
+	// ascending-pos order and strict > comparison — bit-identical tie handling.
+	if xs, ok := f64Data(x); ok {
+		shape := x.Shape()
+		eff := make([]int, nd)
+		for ax := range nd {
+			if p := outAxisOf[ax]; p >= 0 {
+				eff[ax] = outStrides[p]
+			}
+		}
+		idx := make([]int, nd)
+		of := 0
+		for pos := range xs {
+			if v := xs[pos]; v > best[of] {
+				best[of] = v
+				bidx[of] = float64(idx[axis])
+			}
+			for d := nd - 1; d >= 0; d-- {
+				idx[d]++
+				of += eff[d]
+				if idx[d] < shape[d] {
+					break
+				}
+				idx[d] = 0
+				of -= eff[d] * shape[d]
+			}
+		}
+		out := tensor.NewOn(ctx.Device(), x.Dtype(), outShape)
+		os, flush, _ := outF64(out) // dtype is F32/F64 here, outF64 cannot fail
+		copy(os, bidx)
+		flush()
+		return []*tensor.Tensor{out}, nil
+	}
+	// Generic fallback for exotic dtypes (verbatim original loop).
 	for pos := range x.Numel() {
 		idx := tensor.Unravel(pos, x.Shape())
 		of := 0

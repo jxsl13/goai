@@ -64,6 +64,87 @@ func flashAttnKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.At
 	out := tensor.NewOn(ctx.Device(), q.Dtype(), q.Shape())
 	acc := make([]float64, dk) // running output O for the current (head,row)
 	p := make([]float64, block)
+	// Devirtualised typed core (§T646 follow-up): flat row-major []float64 views
+	// of Q/K/V (exact widening for F32) replace the per-element AtF64 dispatch.
+	// The P·V block product is restructured j-outer/d-inner for contiguous V
+	// rows, but each pv[d] still sums p[j]·v[j,d] in the SAME ascending-j order
+	// before the single acc[d] = corr·acc[d] + pv[d] update — bit-identical.
+	if qs, qok := f64Data(q); qok {
+		if ks, kok := f64Data(k); kok {
+			if vs, vok := f64Data(v); vok {
+				if os, flush, ook := outF64(out); ook {
+					pv := make([]float64, dk)
+					for h := range heads {
+						qOff := h * dk          // Q/O slice for query head h
+						kvOff := (h / rep) * dk // shared K/V slice (GQA)
+						for i := range seq {
+							jmax := seq
+							if causal {
+								jmax = i + 1 // keys strictly past i are masked
+							}
+							m := math.Inf(-1)
+							l := 0.0
+							for d := range dk {
+								acc[d] = 0
+							}
+							qrow := qs[i*dm+qOff : i*dm+qOff+dk]
+							for j0 := 0; j0 < jmax; j0 += block {
+								j1 := min(j0+block, jmax)
+								// block scores S and its row max
+								mBlk := math.Inf(-1)
+								for j := j0; j < j1; j++ {
+									krow := ks[j*dkv+kvOff : j*dkv+kvOff+dk]
+									var s float64
+									for d, qv := range qrow {
+										s += qv * krow[d]
+									}
+									s *= scale
+									p[j-j0] = s
+									if s > mBlk {
+										mBlk = s
+									}
+								}
+								mNew := m
+								if mBlk > mNew {
+									mNew = mBlk
+								}
+								corr := math.Exp(m - mNew) // 0 on the first block (m=−∞)
+								// P = exp(S − mNew), block normalizer, rescale accumulators
+								var pSum float64
+								for j := j0; j < j1; j++ {
+									e := math.Exp(p[j-j0] - mNew)
+									p[j-j0] = e
+									pSum += e
+								}
+								l = corr*l + pSum
+								for d := range pv {
+									pv[d] = 0
+								}
+								for j := j0; j < j1; j++ {
+									pj := p[j-j0]
+									vrow := vs[j*dkv+kvOff : j*dkv+kvOff+dk]
+									for d, vv := range vrow {
+										pv[d] += pj * vv
+									}
+								}
+								for d := range dk {
+									acc[d] = corr*acc[d] + pv[d]
+								}
+								m = mNew
+							}
+							orow := os[i*dm+qOff : i*dm+qOff+dk]
+							for d := range dk {
+								orow[d] = acc[d] / l // single final normalization
+							}
+						}
+					}
+					flush()
+					return []*tensor.Tensor{out}, nil
+				}
+			}
+		}
+	}
+	// Generic fallback for exotic dtypes (verbatim original loops).
 	for h := range heads {
 		qOff := h * dk          // Q/O slice for query head h
 		kvOff := (h / rep) * dk // shared K/V slice (GQA)

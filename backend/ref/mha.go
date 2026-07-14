@@ -72,6 +72,74 @@ func mhaKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) (
 
 	out := tensor.NewOn(ctx.Device(), q.Dtype(), tensor.Shape{sq, dm})
 	row := make([]float64, sk)
+	// Devirtualised typed core (§T646 follow-up): expose Q/K/V once as flat
+	// row-major []float64 (exact widening for F32) instead of the per-element
+	// AtF64 dispatch inside the O(heads·sq·sk·dk) loops. The score dot product
+	// keeps the SAME ascending-d order; the output accumulation is restructured
+	// j-outer/d-inner for contiguous V rows, but each o[d] still sums
+	// (row[j]/sum)·v[j,d] in the SAME ascending-j order — bit-identical.
+	if qs, qok := f64Data(q); qok {
+		if ks, kok := f64Data(k); kok {
+			if vs, vok := f64Data(v); vok {
+				if os, flush, ook := outF64(out); ook {
+					kdm := kvHeads * dk
+					obuf := make([]float64, dk)
+					for h := range heads {
+						qOff := h * dk
+						kvOff := (h / rep) * dk
+						for i := range sq {
+							jmax := sk
+							if causal {
+								jmax = off + i + 1 // query abs pos + 1
+							}
+							jmin := 0
+							if window > 0 {
+								if lo := off + i - window + 1; lo > 0 {
+									jmin = lo
+								}
+							}
+							qrow := qs[i*dm+qOff : i*dm+qOff+dk]
+							m := math.Inf(-1)
+							for j := jmin; j < jmax; j++ {
+								krow := ks[j*kdm+kvOff : j*kdm+kvOff+dk]
+								var s float64
+								for d, qv := range qrow {
+									s += qv * krow[d]
+								}
+								s *= scale
+								if slopes != nil {
+									s += slopes[h] * float64(j-(off+i)) // ALiBi bias
+								}
+								row[j] = s
+								if s > m {
+									m = s
+								}
+							}
+							var sum float64
+							for j := jmin; j < jmax; j++ {
+								row[j] = math.Exp(row[j] - m)
+								sum += row[j]
+							}
+							for d := range obuf {
+								obuf[d] = 0
+							}
+							for j := jmin; j < jmax; j++ {
+								w := row[j] / sum
+								vrow := vs[j*kdm+kvOff : j*kdm+kvOff+dk]
+								for d, vv := range vrow {
+									obuf[d] += w * vv
+								}
+							}
+							copy(os[i*dm+qOff:i*dm+qOff+dk], obuf)
+						}
+					}
+					flush()
+					return []*tensor.Tensor{out}, nil
+				}
+			}
+		}
+	}
+	// Generic fallback for exotic dtypes (verbatim original loops).
 	for h := range heads {
 		qOff := h * dk
 		kvOff := (h / rep) * dk

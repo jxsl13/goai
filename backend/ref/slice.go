@@ -23,6 +23,41 @@ func sliceKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs)
 		return nil, err
 	}
 	out := tensor.NewOn(ctx.Device(), x.Dtype(), outShape)
+	// Devirtualised block copy (§T646 follow-up): slicing moves one contiguous
+	// [outLen·inner] block per outer index, so a same-dtype typed copy() replaces
+	// the TWO per-element Unravel allocs + AtF64/SetF64 dispatch (the f64
+	// round-trip is exact for a same-dtype copy) — byte-identical.
+	if x.Dtype() == tensor.F64 || x.Dtype() == tensor.F32 {
+		xs := x.Shape()
+		inner := 1
+		for d := ax + 1; d < len(xs); d++ {
+			inner *= xs[d]
+		}
+		outer := 1
+		for d := 0; d < ax; d++ {
+			outer *= xs[d]
+		}
+		axLen, outLen := xs[ax], outShape[ax]
+		n := x.Numel()
+		switch x.Dtype() {
+		case tensor.F64:
+			src := x.Contiguous().Storage().F64()[:n]
+			dst := out.Storage().F64()
+			for o := 0; o < outer; o++ {
+				s := (o*axLen + pa.Start) * inner
+				copy(dst[o*outLen*inner:(o+1)*outLen*inner], src[s:s+outLen*inner])
+			}
+		case tensor.F32:
+			src := x.Contiguous().Storage().F32()[:n]
+			dst := out.Storage().F32()
+			for o := 0; o < outer; o++ {
+				s := (o*axLen + pa.Start) * inner
+				copy(dst[o*outLen*inner:(o+1)*outLen*inner], src[s:s+outLen*inner])
+			}
+		}
+		return []*tensor.Tensor{out}, nil
+	}
+	// Generic fallback for exotic dtypes (verbatim original loop).
 	for e := range out.Numel() {
 		oc := tensor.Unravel(e, outShape)
 		xc := append([]int(nil), oc...)

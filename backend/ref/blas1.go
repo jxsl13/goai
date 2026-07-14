@@ -34,9 +34,30 @@ func dotKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*t
 		return nil, err
 	}
 	var acc float64
-	for pos := range a.Numel() {
-		idx := tensor.Unravel(pos, a.Shape())
-		acc += a.AtF64(idx...) * b.AtF64(idx...)
+	n := a.Numel()
+	// Devirtualised traversal (§T646 follow-up): grab the raw typed slices once
+	// and index flat instead of the per-element Unravel alloc + AtF64 dispatch.
+	// Same ascending order, products and sum in float64 on both paths (§V10) —
+	// bit-identical.
+	switch a.Dtype() {
+	case tensor.F64:
+		as := a.Contiguous().Storage().F64()[:n]
+		bs := b.Contiguous().Storage().F64()[:n]
+		for i, av := range as {
+			acc += av * bs[i]
+		}
+	case tensor.F32:
+		as := a.Contiguous().Storage().F32()[:n]
+		bs := b.Contiguous().Storage().F32()[:n]
+		for i, av := range as {
+			acc += float64(av) * float64(bs[i])
+		}
+	default:
+		// Generic fallback for exotic dtypes (verbatim original loop).
+		for pos := range n {
+			idx := tensor.Unravel(pos, a.Shape())
+			acc += a.AtF64(idx...) * b.AtF64(idx...)
+		}
 	}
 	out := tensor.NewOn(ctx.Device(), a.Dtype(), tensor.Shape{})
 	out.SetF64(acc)
@@ -50,10 +71,11 @@ func nrm2Kernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*
 	}
 	x := in[0]
 	scale, ssq := 0.0, 1.0
-	for pos := range x.Numel() {
-		v := x.AtF64(tensor.Unravel(pos, x.Shape())...)
+	// step folds one value into the running scaled sum-of-squares (LAPACK dnrm2
+	// update, unchanged from the original loop body).
+	step := func(v float64) {
 		if v == 0 {
-			continue
+			return
 		}
 		a := math.Abs(v)
 		if scale < a {
@@ -63,6 +85,24 @@ func nrm2Kernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*
 		} else {
 			r := a / scale
 			ssq += r * r
+		}
+	}
+	n := x.Numel()
+	// Devirtualised traversal (§T646 follow-up): flat typed scan in the same
+	// ascending order, update math untouched — bit-identical.
+	switch x.Dtype() {
+	case tensor.F64:
+		for _, v := range x.Contiguous().Storage().F64()[:n] {
+			step(v)
+		}
+	case tensor.F32:
+		for _, v := range x.Contiguous().Storage().F32()[:n] {
+			step(float64(v))
+		}
+	default:
+		// Generic fallback for exotic dtypes (verbatim original loop).
+		for pos := range n {
+			step(x.AtF64(tensor.Unravel(pos, x.Shape())...))
 		}
 	}
 	out := tensor.NewOn(ctx.Device(), x.Dtype(), tensor.Shape{})
@@ -83,7 +123,29 @@ func axpyKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) 
 	pa = pa.WithDefaults()
 	alpha := pa.Alpha
 	out := tensor.NewOn(ctx.Device(), x.Dtype(), x.Shape())
-	for pos := range x.Numel() {
+	n := x.Numel()
+	// Devirtualised traversal (§T646 follow-up): flat typed loop, alpha·x+y in
+	// float64 on both paths; F32 rounds only the STORED result — bit-identical.
+	switch x.Dtype() {
+	case tensor.F64:
+		xs := x.Contiguous().Storage().F64()[:n]
+		ys := y.Contiguous().Storage().F64()[:n]
+		os := out.Storage().F64()
+		for i, xv := range xs {
+			os[i] = alpha*xv + ys[i]
+		}
+		return []*tensor.Tensor{out}, nil
+	case tensor.F32:
+		xs := x.Contiguous().Storage().F32()[:n]
+		ys := y.Contiguous().Storage().F32()[:n]
+		os := out.Storage().F32()
+		for i, xv := range xs {
+			os[i] = float32(alpha*float64(xv) + float64(ys[i]))
+		}
+		return []*tensor.Tensor{out}, nil
+	}
+	// Generic fallback for exotic dtypes (verbatim original loop).
+	for pos := range n {
 		idx := tensor.Unravel(pos, x.Shape())
 		out.SetF64(alpha*x.AtF64(idx...)+y.AtF64(idx...), idx...)
 	}

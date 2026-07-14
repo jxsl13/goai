@@ -38,6 +38,28 @@ func conv2dBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backe
 	dW := tensor.NewOn(ctx.Device(), w.Dtype(), w.Shape())
 	dB := tensor.NewOn(ctx.Device(), w.Dtype(), tensor.Shape{f})
 
+	// Devirtualised typed core (§T646 follow-up): inputs exposed once as flat
+	// []float64 (exact widening), gradients accumulated through a generic
+	// refFloat core so the F32 instantiation reproduces the generic path's
+	// per-update widen/add/narrow sequence exactly — bit-identical.
+	if x.Dtype() == w.Dtype() && x.Dtype() == g.Dtype() {
+		if xs, ok := f64Data(x); ok {
+			ws, _ := f64Data(w)
+			gs, _ := f64Data(g)
+			switch x.Dtype() {
+			case tensor.F64:
+				conv2dBackwardCore(xs, ws, gs,
+					dX.Storage().F64(), dW.Storage().F64(), dB.Storage().F64(),
+					n, c, h, wd, f, kh, kw, ho, wo, s, p)
+			case tensor.F32:
+				conv2dBackwardCore(xs, ws, gs,
+					dX.Storage().F32(), dW.Storage().F32(), dB.Storage().F32(),
+					n, c, h, wd, f, kh, kw, ho, wo, s, p)
+			}
+			return []*tensor.Tensor{dX, dW, dB}, nil
+		}
+	}
+	// Generic fallback for exotic dtypes (verbatim original loop).
 	for ni := range n {
 		for fi := range f {
 			var bsum float64
@@ -67,6 +89,47 @@ func conv2dBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backe
 		}
 	}
 	return []*tensor.Tensor{dX, dW, dB}, nil
+}
+
+// conv2dBackwardCore runs the conv2d backward over flat row-major slices. Reads
+// come from exact-widened []float64; writes go to []T with every intermediate
+// store narrowed for T=float32 (identical to the generic SetF64(AtF64+δ)
+// chain). Loop structure and accumulation order match the generic loops exactly
+// — bit-identical.
+func conv2dBackwardCore[T refFloat](xs, ws, gs []float64, dxs, dws, dbs []T,
+	n, c, h, wd, f, kh, kw, ho, wo, s, p int) {
+	for ni := 0; ni < n; ni++ {
+		for fi := 0; fi < f; fi++ {
+			var bsum float64
+			for oy := 0; oy < ho; oy++ {
+				for ox := 0; ox < wo; ox++ {
+					gv := gs[((ni*f+fi)*ho+oy)*wo+ox]
+					bsum += gv
+					for ci := 0; ci < c; ci++ {
+						xplane := xs[(ni*c+ci)*h*wd : (ni*c+ci+1)*h*wd]
+						dxplane := dxs[(ni*c+ci)*h*wd : (ni*c+ci+1)*h*wd]
+						for ky := 0; ky < kh; ky++ {
+							iy := oy*s + ky - p
+							if iy < 0 || iy >= h {
+								continue
+							}
+							wrow := ws[((fi*c+ci)*kh+ky)*kw : ((fi*c+ci)*kh+ky)*kw+kw]
+							dwrow := dws[((fi*c+ci)*kh+ky)*kw : ((fi*c+ci)*kh+ky)*kw+kw]
+							for kx := 0; kx < kw; kx++ {
+								ix := ox*s + kx - p
+								if ix < 0 || ix >= wd {
+									continue
+								}
+								dxplane[iy*wd+ix] = T(float64(dxplane[iy*wd+ix]) + gv*wrow[kx])
+								dwrow[kx] = T(float64(dwrow[kx]) + gv*xplane[iy*wd+ix])
+							}
+						}
+					}
+				}
+			}
+			dbs[fi] = T(float64(dbs[fi]) + bsum)
+		}
+	}
 }
 
 func init() {

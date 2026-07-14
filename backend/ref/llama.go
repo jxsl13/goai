@@ -26,6 +26,31 @@ func rmsNormKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attr
 	eps := pa.Eps
 	rows := x.Numel() / d
 	out := tensor.NewOn(ctx.Device(), x.Dtype(), x.Shape())
+	// Devirtualised typed core (§T646 follow-up): flat row-major []float64 views
+	// (exact widening for F32) replace the per-element Unravel alloc + AtF64
+	// dispatch. Flat position r·d+j IS the row-major index, so order and
+	// arithmetic are identical — bit-identical.
+	if xs, xok := f64Data(x); xok {
+		if gs, gok := f64Data(gamma); gok {
+			if os, flush, ook := outF64(out); ook {
+				for r := range rows {
+					xrow := xs[r*d : r*d+d]
+					orow := os[r*d : r*d+d]
+					var ms float64
+					for _, v := range xrow {
+						ms += v * v
+					}
+					inv := 1 / math.Sqrt(ms/float64(d)+eps)
+					for j, v := range xrow {
+						orow[j] = v * inv * gs[j]
+					}
+				}
+				flush()
+				return []*tensor.Tensor{out}, nil
+			}
+		}
+	}
+	// Generic fallback for exotic dtypes (verbatim original loop).
 	for r := range rows {
 		var ms float64
 		for j := range d {
@@ -75,6 +100,55 @@ func ropeKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) 
 		zeta = backend.XPosScales(hd, pr) // length-extrapolatable magnitude (§R125)
 	}
 	out := tensor.NewOn(ctx.Device(), q.Dtype(), q.Shape())
+	// Devirtualised typed core (§T646 follow-up): flat []float64 views replace
+	// the per-element AtF64/SetF64 dispatch, and cos/sin (and the xPos scale) are
+	// hoisted per (p,i) — the generic loop recomputes the SAME values for every
+	// head, so reuse is bit-identical.
+	if qs, qok := f64Data(q); qok {
+		if os, flush, ook := outF64(out); ook {
+			cbuf := make([]float64, half)
+			sbuf := make([]float64, half)
+			var scbuf []float64
+			if zeta != nil {
+				scbuf = make([]float64, half)
+			}
+			for p := range seq {
+				n := float64(pr.PosOffset + p) // raw position (xPos exponent)
+				pos := n / posDiv              // PI/YaRN-adjusted position (rotation angle)
+				for i, theta := range inv[:half] {
+					cbuf[i], sbuf[i] = math.Cos(pos*theta), math.Sin(pos*theta)
+				}
+				if zeta != nil {
+					e := n
+					if pr.XPosDownscale {
+						e = -n
+					}
+					for i := range half {
+						scbuf[i] = math.Pow(zeta[i], e)
+					}
+				}
+				prow := qs[p*width : p*width+width]
+				orow := os[p*width : p*width+width]
+				for h := range heads {
+					base := h * hd
+					for i := range half {
+						c, s := cbuf[i], sbuf[i]
+						qi, qih := prow[base+i], prow[base+i+half]
+						lo, hi := qi*c-qih*s, qih*c+qi*s
+						if scbuf != nil {
+							sc := scbuf[i]
+							lo, hi = lo*sc, hi*sc
+						}
+						orow[base+i] = lo
+						orow[base+i+half] = hi
+					}
+				}
+			}
+			flush()
+			return []*tensor.Tensor{out}, nil
+		}
+	}
+	// Generic fallback for exotic dtypes (verbatim original loop).
 	for p := range seq {
 		n := float64(pr.PosOffset + p) // raw position (xPos exponent)
 		pos := n / posDiv              // PI/YaRN-adjusted position (rotation angle)
@@ -134,6 +208,53 @@ func ropeBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend
 		zeta = backend.XPosScales(hd, pr)
 	}
 	dq := tensor.NewOn(ctx.Device(), g.Dtype(), g.Shape())
+	// Devirtualised typed core (§T646 follow-up): mirrors ropeKernel — flat
+	// []float64 views, cos/sin and xPos scale hoisted per (p,i); the generic loop
+	// computes the SAME values per head, so reuse is bit-identical.
+	if gs, gok := f64Data(g); gok {
+		if os, flush, ook := outF64(dq); ook {
+			cbuf := make([]float64, half)
+			sbuf := make([]float64, half)
+			var scbuf []float64
+			if zeta != nil {
+				scbuf = make([]float64, half)
+			}
+			for p := range seq {
+				n := float64(pr.PosOffset + p)
+				pos := n / posDiv
+				for i, theta := range inv[:half] {
+					cbuf[i], sbuf[i] = math.Cos(pos*theta), math.Sin(pos*theta)
+				}
+				if zeta != nil {
+					e := n
+					if pr.XPosDownscale {
+						e = -n
+					}
+					for i := range half {
+						scbuf[i] = math.Pow(zeta[i], e)
+					}
+				}
+				grow := gs[p*width : p*width+width]
+				orow := os[p*width : p*width+width]
+				for h := range heads {
+					base := h * hd
+					for i := range half {
+						c, s := cbuf[i], sbuf[i]
+						gi, gih := grow[base+i], grow[base+i+half]
+						if scbuf != nil {
+							sc := scbuf[i]
+							gi, gih = gi*sc, gih*sc
+						}
+						orow[base+i] = gi*c + gih*s
+						orow[base+i+half] = -gi*s + gih*c
+					}
+				}
+			}
+			flush()
+			return []*tensor.Tensor{dq}, nil
+		}
+	}
+	// Generic fallback for exotic dtypes (verbatim original loop).
 	for p := range seq {
 		n := float64(pr.PosOffset + p)
 		pos := n / posDiv
@@ -180,6 +301,60 @@ func rmsNormBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, attrs back
 	dgamma := tensor.NewOn(ctx.Device(), gamma.Dtype(), gamma.Shape())
 	xr := make([]float64, d)
 	a := make([]float64, d)
+	// Devirtualised typed core (§T646 follow-up): flat []float64 views replace
+	// the per-element Unravel alloc + AtF64/SetF64 dispatch. dgamma keeps its own
+	// typed accumulator because the generic path narrows the running F32 sum on
+	// EVERY row update (AtF64→add→SetF64) — the F32 branch reproduces exactly
+	// that widen/add/narrow sequence, so results stay bit-identical.
+	if xs, xok := f64Data(x); xok {
+		if gs, gok := f64Data(g); gok {
+			if gms, gmok := f64Data(gamma); gmok {
+				var dg64 []float64
+				var dg32 []float32
+				switch dgamma.Dtype() {
+				case tensor.F64:
+					dg64 = dgamma.Storage().F64()
+				case tensor.F32:
+					dg32 = dgamma.Storage().F32()
+				}
+				if dg64 != nil || dg32 != nil {
+					dxs, flushDx, _ := outF64(dx) // dx dtype is F32/F64 here (f64Data(x) ok)
+					dgrow := make([]float64, d)
+					for row := range rows {
+						xrow := xs[row*d : row*d+d]
+						grow := gs[row*d : row*d+d]
+						var ms float64
+						for _, v := range xrow {
+							ms += v * v
+						}
+						r := 1 / math.Sqrt(ms/float64(d)+eps)
+						var s float64
+						for j, gj := range grow {
+							a[j] = gj * gms[j]
+							s += a[j] * xrow[j]
+							dgrow[j] = gj * xrow[j] * r
+						}
+						if dg64 != nil {
+							for j, v := range dgrow {
+								dg64[j] += v
+							}
+						} else {
+							for j, v := range dgrow {
+								dg32[j] = float32(float64(dg32[j]) + v)
+							}
+						}
+						dxrow := dxs[row*d : row*d+d]
+						for j := range dxrow {
+							dxrow[j] = r * (a[j] - xrow[j]*r*r*s/float64(d))
+						}
+					}
+					flushDx()
+					return []*tensor.Tensor{dx, dgamma}, nil
+				}
+			}
+		}
+	}
+	// Generic fallback for exotic dtypes (verbatim original loop).
 	for row := range rows {
 		var ms float64
 		for j := range d {

@@ -40,6 +40,28 @@ func retentionBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, attrs ba
 	dq := tensor.NewOn(ctx.Device(), q.Dtype(), q.Shape())
 	dk := tensor.NewOn(ctx.Device(), k.Dtype(), k.Shape())
 	dv := tensor.NewOn(ctx.Device(), v.Dtype(), v.Shape())
+	// Devirtualised typed core (§T646 follow-up): inputs exposed once as flat
+	// []float64 (exact widening), γ^t precomputed once (same math.Pow calls,
+	// identical values), gradients accumulated through a generic refFloat core so
+	// the F32 instantiation reproduces the generic path's per-update
+	// widen/add/narrow sequence exactly — bit-identical.
+	if q.Dtype() == k.Dtype() && q.Dtype() == v.Dtype() && q.Dtype() == g.Dtype() {
+		if qs, ok := f64Data(q); ok {
+			ks, _ := f64Data(k)
+			vs, _ := f64Data(v)
+			gs, _ := f64Data(g)
+			switch q.Dtype() {
+			case tensor.F64:
+				retentionBackwardCore(qs, ks, vs, gs,
+					dq.Storage().F64(), dk.Storage().F64(), dv.Storage().F64(), l, kd, vd, gamma)
+			case tensor.F32:
+				retentionBackwardCore(qs, ks, vs, gs,
+					dq.Storage().F32(), dk.Storage().F32(), dv.Storage().F32(), l, kd, vd, gamma)
+			}
+			return []*tensor.Tensor{dq, dk, dv}, nil
+		}
+	}
+	// Generic fallback for exotic dtypes (verbatim original loop).
 	for n := range l {
 		for m := 0; m <= n; m++ {
 			decay := math.Pow(gamma, float64(n-m))
@@ -62,6 +84,46 @@ func retentionBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, attrs ba
 		}
 	}
 	return []*tensor.Tensor{dq, dk, dv}, nil
+}
+
+// retentionBackwardCore runs the retention backward over flat row-major slices.
+// Reads come from exact-widened []float64; writes go to []T with every
+// intermediate store narrowed for T=float32 (identical to the generic
+// SetF64(AtF64+δ) chain). Loop structure and accumulation order match the
+// generic loops exactly — bit-identical.
+func retentionBackwardCore[T refFloat](qs, ks, vs, gs []float64, dqs, dks, dvs []T,
+	l, kd, vd int, gamma float64) {
+	pow := make([]float64, l)
+	for t := range pow {
+		pow[t] = math.Pow(gamma, float64(t))
+	}
+	for n := 0; n < l; n++ {
+		qrow := qs[n*kd : n*kd+kd]
+		grow := gs[n*vd : n*vd+vd]
+		dqrow := dqs[n*kd : n*kd+kd]
+		for m := 0; m <= n; m++ {
+			decay := pow[n-m]
+			krow := ks[m*kd : m*kd+kd]
+			var a float64
+			for i, qv := range qrow {
+				a += qv * krow[i]
+			}
+			pnm := a * decay
+			vrow := vs[m*vd : m*vd+vd]
+			dvrow := dvs[m*vd : m*vd+vd]
+			var dp float64
+			for j, gnj := range grow { // value dim
+				dp += gnj * vrow[j]
+				dvrow[j] = T(float64(dvrow[j]) + pnm*gnj)
+			}
+			dA := dp * decay
+			dkrow := dks[m*kd : m*kd+kd]
+			for i := range dqrow { // key dim
+				dqrow[i] = T(float64(dqrow[i]) + dA*krow[i])
+				dkrow[i] = T(float64(dkrow[i]) + dA*qrow[i])
+			}
+		}
+	}
 }
 
 func init() {

@@ -22,6 +22,34 @@ func embedKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]
 	n, d := table.Shape()[0], table.Shape()[1]
 	m := idx.Shape()[0]
 	out := tensor.NewOn(ctx.Device(), table.Dtype(), tensor.Shape{m, d})
+	// Devirtualised row gather (§T646 follow-up): the inner loop is a plain
+	// same-dtype row copy (AtF64→SetF64 widen/narrow round-trips exactly), so a
+	// typed copy() is byte-identical and skips the per-element dispatch.
+	switch table.Dtype() {
+	case tensor.F64:
+		ts := table.Contiguous().Storage().F64()[:n*d]
+		os := out.Storage().F64()
+		for i := range m {
+			t := int(idx.AtF64(i))
+			if t < 0 || t >= n {
+				return nil, fmt.Errorf("ref: embed index %d out of range [0,%d)", t, n)
+			}
+			copy(os[i*d:i*d+d], ts[t*d:t*d+d])
+		}
+		return []*tensor.Tensor{out}, nil
+	case tensor.F32:
+		ts := table.Contiguous().Storage().F32()[:n*d]
+		os := out.Storage().F32()
+		for i := range m {
+			t := int(idx.AtF64(i))
+			if t < 0 || t >= n {
+				return nil, fmt.Errorf("ref: embed index %d out of range [0,%d)", t, n)
+			}
+			copy(os[i*d:i*d+d], ts[t*d:t*d+d])
+		}
+		return []*tensor.Tensor{out}, nil
+	}
+	// Generic fallback for exotic dtypes (verbatim original loop).
 	for i := range m {
 		t := int(idx.AtF64(i))
 		if t < 0 || t >= n {
@@ -53,6 +81,48 @@ func embedBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.At
 		return nil, fmt.Errorf("ref: embed-backward g must be [%d,%d], got %v", m, d, g.Shape())
 	}
 	dtable := tensor.NewOn(ctx.Device(), table.Dtype(), table.Shape())
+	// Devirtualised scatter-add (§T646 follow-up): typed flat rows instead of the
+	// per-element AtF64/SetF64 dispatch. The F32 path keeps the EXACT generic
+	// semantics — read f32→f64, add in f64, narrow the store back to f32 per
+	// element — so repeated indices accumulate with the same intermediate
+	// rounding, bit-identical.
+	switch dtable.Dtype() {
+	case tensor.F64:
+		if g.Dtype() == tensor.F64 {
+			ds := dtable.Storage().F64()
+			gs := g.Contiguous().Storage().F64()[:m*d]
+			for i := range m {
+				t := int(idx.AtF64(i))
+				if t < 0 || t >= n {
+					return nil, fmt.Errorf("ref: embed-backward index %d out of range [0,%d)", t, n)
+				}
+				drow := ds[t*d : t*d+d]
+				grow := gs[i*d : i*d+d]
+				for j, gv := range grow {
+					drow[j] += gv
+				}
+			}
+			return []*tensor.Tensor{dtable}, nil
+		}
+	case tensor.F32:
+		if g.Dtype() == tensor.F32 {
+			ds := dtable.Storage().F32()
+			gs := g.Contiguous().Storage().F32()[:m*d]
+			for i := range m {
+				t := int(idx.AtF64(i))
+				if t < 0 || t >= n {
+					return nil, fmt.Errorf("ref: embed-backward index %d out of range [0,%d)", t, n)
+				}
+				drow := ds[t*d : t*d+d]
+				grow := gs[i*d : i*d+d]
+				for j, gv := range grow {
+					drow[j] = float32(float64(drow[j]) + float64(gv))
+				}
+			}
+			return []*tensor.Tensor{dtable}, nil
+		}
+	}
+	// Generic fallback for exotic dtypes (verbatim original loop).
 	for i := range m {
 		t := int(idx.AtF64(i))
 		if t < 0 || t >= n {

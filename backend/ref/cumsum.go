@@ -24,6 +24,36 @@ func cumsumKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs
 	L := x.Shape()[ax]
 	out := tensor.NewOn(ctx.Device(), x.Dtype(), x.Shape())
 	coord := make([]int, x.Ndim())
+	// Devirtualised traversal (§T646 follow-up): flat typed access with the line
+	// base offset built once per line and stepped by the axis stride, instead of
+	// the per-element coord→AtF64/SetF64 dispatch (which re-dotted the full coord
+	// each element). Same line order, same ascending-axis f64 running sum; F32
+	// narrows only the STORED prefix values (sum itself stays f64, exactly like
+	// the generic loop) — bit-identical.
+	if xs, ok := f64Data(x); ok {
+		os, flush, _ := outF64(out) // dtype is F32/F64 here (f64Data ok), cannot fail
+		strides := tensor.RowMajorStrides(x.Shape())
+		step := strides[ax]
+		for l := range reduced.Numel() {
+			backend.FillLineCoord(coord, l, reduced, ax)
+			base := 0
+			for d, c := range coord {
+				if d != ax {
+					base += c * strides[d]
+				}
+			}
+			var sum float64
+			off := base
+			for range L {
+				sum += xs[off]
+				os[off] = sum
+				off += step
+			}
+		}
+		flush()
+		return []*tensor.Tensor{out}, nil
+	}
+	// Generic fallback for exotic dtypes (verbatim original loop).
 	for l := range reduced.Numel() {
 		backend.FillLineCoord(coord, l, reduced, ax)
 		var sum float64
