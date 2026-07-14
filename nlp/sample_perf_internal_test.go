@@ -258,3 +258,48 @@ func BenchmarkDistTopP90Naive(b *testing.B) { benchDistNaive(b, WithTemperature(
 func BenchmarkDistTypicalNaive(b *testing.B) {
 	benchDistNaive(b, WithTemperature(1), WithTypical(0.95))
 }
+
+// peakyLogits mimics REAL LLM logits: a sharp head (a handful of dominant tokens)
+// with an exponential decay, so the top-p nucleus is small — the realistic case
+// where the §T627 bounded selection wins. Distinct by construction.
+func peakyLogits(v int, seed uint64) []float64 {
+	rng := rand.New(rand.NewPCG(seed, 0x2545f4914f6cdd1d))
+	out := make([]float64, v)
+	for i := range out {
+		out[i] = rng.NormFloat64()*0.3 - float64(i)*0.01 // steep ramp ⟹ concentrated head
+	}
+	out[0] += 6
+	out[1] += 5
+	out[2] += 4
+	return out
+}
+
+func benchDistLogits(b *testing.B, logits []float64, naive bool, opts ...SamplerOption) {
+	s := NewSampler(1, opts...)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if naive {
+			_ = distNaive(s, logits)
+		} else {
+			_ = s.Dist(logits)
+		}
+	}
+}
+
+// peaky top-p: the realistic small-nucleus case — bounded selection should win big.
+func BenchmarkDistTopP90Peaky(b *testing.B) {
+	benchDistLogits(b, peakyLogits(50257, 7), false, WithTemperature(1), WithTopP(0.9))
+}
+func BenchmarkDistTopP90PeakyNaive(b *testing.B) {
+	benchDistLogits(b, peakyLogits(50257, 7), true, WithTemperature(1), WithTopP(0.9))
+}
+
+// flat top-p: nucleus exceeds the K candidates ⟹ full-sort fallback — must NOT
+// regress versus the old full sort (§C3).
+func BenchmarkDistTopP99Flat(b *testing.B) {
+	benchDistLogits(b, realisticLogits(50257, 7), false, WithTemperature(1), WithTopP(0.99))
+}
+func BenchmarkDistTopP99FlatNaive(b *testing.B) {
+	benchDistLogits(b, realisticLogits(50257, 7), true, WithTemperature(1), WithTopP(0.99))
+}

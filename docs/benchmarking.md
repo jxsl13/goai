@@ -296,9 +296,28 @@ full-sort across 9 sampler configs × {64, 1024, 50257} vocab × 3 seeds ≤ 1e-
 `TestKthLargest` checks the selector against a full sort on adversarial inputs). The
 top-p and typical paths were switched to a typed `slices.SortFunc` (no reflection),
 but that alone measured only ≈1.06× — modern `sort.Slice`'s reflection overhead is
-small and the O(V log V) sort work dominates. Their real speed-up needs a partial
-(max-heap) nucleus extraction, tracked as §T627; the win there is nucleus-size
-dependent (peaky real-LLM logits → small nucleus → big win; a flat vector → none).
+small and the O(V log V) sort work dominates.
+
+### Sampler top-p via bounded nucleus selection (§T627, 2026-07-14)
+
+The real top-p win is algorithmic. The nucleus is almost always a tiny fraction of
+the vocabulary, so `nucleusTopP` quickselects the top-512 candidates (far more than
+any realistic nucleus), sorts only those, and accumulates in exact descending order
+until the mass crosses `p` — falling back to a full sort only when the nucleus
+genuinely exceeds the candidate set. Because the accumulation order is unchanged the
+result is bit-identical, and the fallback means it is never worse than the old sort.
+
+| top-p | logits | ns/op (old → new) | factor |
+|---|---|---|---|
+| p=0.9 | peaky (realistic, small nucleus) | 3651 µs → 596 µs | **6.1×** |
+| p=0.99 | flat (nucleus > candidates → fallback) | 5980 µs → 5512 µs | 1.08× (no regression) |
+
+Real LLM logits concentrate their mass on a handful of tokens, so the peaky row is
+the case that matters in practice. The flat row confirms §C3 — even when the bounded
+probe misses and the code re-sorts, the typed fallback beats the old reflection sort.
+Parity is locked by `TestDistQuickselectParity` (top-p configs, ≤ 1e-12 vs the old
+full sort over {64, 1024, 50257} × 3 seeds). Locally-typical sampling still full-sorts
+(the key/weight split makes it its own case, §T628).
 
 ### Head-to-head: llama.cpp on the SAME weights (§T607)
 

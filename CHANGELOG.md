@@ -4,6 +4,17 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T627 — top-p (nucleus) sampling up to 6× faster (2026-07-14)
+- `Sampler.Dist` selected the top-p nucleus by fully sorting the whole vocabulary
+  every token. It now quickselects the top-512 candidates (far more than any
+  realistic nucleus), sorts only those, and accumulates in descending order until
+  the mass crosses p, falling back to a full sort only if the nucleus is larger.
+  On realistic peaky logits: **3.65 ms → 0.60 ms (6.1×)** at V=50257; on a flat
+  distribution where the nucleus exceeds the candidate set the fallback engages and
+  the path is still slightly faster than the old sort (no regression). Output is
+  bit-identical — the accumulation order is unchanged — and the existing parity test
+  covers the top-p configs. Locally-typical sampling gets the same treatment next.
+
 ### T626 — top-k sampling 10× faster via quickselect (2026-07-14)
 - `Sampler.Dist` masked all but the top-k logits by fully sorting the whole
   vocabulary (`sort.Slice`, O(V log V)) every token — about 5–6 ms per token at a

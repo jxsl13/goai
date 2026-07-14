@@ -435,6 +435,117 @@ func kthLargest(vals []float64, k int) float64 {
 	return vals[lo]
 }
 
+// quickselectIdxDesc partitions idx in place so that idx[:k] hold the k indices
+// with the LARGEST key[idx[·]] values (arbitrary internal order), O(n) average with
+// a deterministic median-of-three pivot. Used to bound the top-p nucleus scan to a
+// small candidate prefix instead of sorting the whole vocabulary.
+func quickselectIdxDesc(idx []int, key []float64, k int) {
+	lo, hi := 0, len(idx)-1
+	target := k - 1
+	for lo < hi {
+		mid := lo + (hi-lo)/2
+		if key[idx[mid]] > key[idx[lo]] {
+			idx[lo], idx[mid] = idx[mid], idx[lo]
+		}
+		if key[idx[hi]] > key[idx[lo]] {
+			idx[lo], idx[hi] = idx[hi], idx[lo]
+		}
+		if key[idx[mid]] > key[idx[hi]] {
+			idx[mid], idx[hi] = idx[hi], idx[mid]
+		}
+		pivot := key[idx[hi]]
+		i := lo
+		for j := lo; j < hi; j++ {
+			if key[idx[j]] > pivot {
+				idx[i], idx[j] = idx[j], idx[i]
+				i++
+			}
+		}
+		idx[i], idx[hi] = idx[hi], idx[i]
+		switch {
+		case i == target:
+			return
+		case i < target:
+			lo = i + 1
+		default:
+			hi = i - 1
+		}
+	}
+}
+
+// sortIdxDescByKey sorts idx so key[idx[·]] is descending (typed, no reflection).
+func sortIdxDescByKey(idx []int, key []float64) {
+	slices.SortFunc(idx, func(a, b int) int {
+		switch {
+		case key[a] > key[b]:
+			return -1
+		case key[a] < key[b]:
+			return 1
+		default:
+			return 0
+		}
+	})
+}
+
+// nucleusTopP applies top-p (nucleus) truncation to probs in place: keep the
+// minimal set of highest-probability tokens whose mass ≥ p, then renormalize. The
+// nucleus is almost always tiny relative to the vocabulary, so instead of sorting
+// all n it quickselects the top-K candidates (K ≫ any realistic nucleus), sorts
+// only those, and accumulates in exact descending order. Only when the nucleus
+// genuinely exceeds K does it fall back to a full sort — so the result is identical
+// to the old full-sort prefix (same accumulation order ⟹ bit-exact for distinct
+// probs) and the cost is never worse than that sort (§T627).
+func nucleusTopP(probs []float64, p float64) {
+	n := len(probs)
+	idx := make([]int, n)
+	for i := range idx {
+		idx[i] = i
+	}
+	const k = 512
+	if k < n {
+		quickselectIdxDesc(idx, probs, k)
+		top := idx[:k]
+		sortIdxDescByKey(top, probs)
+		var cum float64
+		for _, i := range top {
+			cum += probs[i]
+			if cum >= p { // crossing token inside the K-candidate prefix
+				truncateNucleus(probs, probs[i])
+				return
+			}
+		}
+		// nucleus larger than K candidates → exact full-sort fallback below
+	}
+	sortIdxDescByKey(idx, probs)
+	var cum float64
+	for _, i := range idx {
+		cum += probs[i]
+		if cum >= p {
+			truncateNucleus(probs, probs[i])
+			return
+		}
+	}
+}
+
+// truncateNucleus zeroes every probability strictly below thresh (the crossing
+// token's probability) and renormalizes over the survivors — the top-p keep-set for
+// distinct probabilities, matching the old prefix mask.
+func truncateNucleus(probs []float64, thresh float64) {
+	var ksum float64
+	for i := range probs {
+		if probs[i] < thresh {
+			probs[i] = 0
+		} else {
+			ksum += probs[i]
+		}
+	}
+	if ksum > 0 {
+		for i := range probs {
+			probs[i] /= ksum
+		}
+	}
+}
+
 // Sample returns a token id for the given logits.
 func (s *Sampler) Sample(logits []float64) int {
 	if s.Temperature <= 0 {
@@ -547,43 +658,9 @@ func (s *Sampler) Dist(logits []float64) []float64 {
 	}
 
 	// top-p nucleus: keep smallest desc-prob prefix with cumsum ≥ p (crossing
-	// token included), renormalize
+	// token included), renormalize (§T627: bounded selection, not a full sort).
 	if s.TopP > 0 && s.TopP < 1 {
-		idx := make([]int, n)
-		for i := range idx {
-			idx[i] = i
-		}
-		// typed descending sort (no reflection, unlike sort.Slice) — same order.
-		slices.SortFunc(idx, func(a, b int) int {
-			switch {
-			case probs[a] > probs[b]:
-				return -1
-			case probs[a] < probs[b]:
-				return 1
-			default:
-				return 0
-			}
-		})
-		var cum float64
-		keep := make([]bool, n)
-		for _, i := range idx {
-			keep[i] = true
-			cum += probs[i]
-			if cum >= s.TopP {
-				break // this token crosses p and is kept
-			}
-		}
-		var ksum float64
-		for i := range probs {
-			if !keep[i] {
-				probs[i] = 0
-			} else {
-				ksum += probs[i]
-			}
-		}
-		for i := range probs {
-			probs[i] /= ksum
-		}
+		nucleusTopP(probs, s.TopP)
 	}
 
 	// min-p: keep tokens with prob ≥ MinP·max-prob (Nguyen et al. 2024, §R63), an
