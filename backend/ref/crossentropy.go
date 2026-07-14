@@ -47,6 +47,86 @@ func crossEntropyKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend
 		return nil, fmt.Errorf("ref: crossentropy z_loss coefficient %g must be ≥ 0", pa.ZLoss)
 	}
 
+	out := tensor.NewOn(ctx.Device(), z.Dtype(), tensor.Shape{})
+
+	// Devirtualised fast paths (§T646): this is a hot cpu→ref fallback on the CPU
+	// training path (the loss, every step). The generic AtF64 loop below pays a
+	// dtype dispatch + flat-offset per logit; here we grab the raw [b,c] slice once
+	// (row-major: (i,j) at i*c+j) and index directly. The batch accumulator, per-row
+	// softmax sum and row-sum stay float64 on ALL paths and the F32 path reads logits
+	// as float64 — so the arithmetic and per-row iteration order are byte-for-byte
+	// identical to the generic path (§V9). targets[b] holds class indices as floats
+	// (§B12) and is read generically once per row (cheap, dtype-agnostic). The scalar
+	// output store (SetF64) rounds to z.Dtype() exactly as before. Contiguous() runs
+	// once (returns self when already contiguous).
+	switch z.Dtype() {
+	case tensor.F64:
+		zs := z.Contiguous().Storage().F64()
+		var total float64
+		for i := range b {
+			ti := int(tg.AtF64(i))
+			if ti < 0 || ti >= c {
+				return nil, fmt.Errorf("ref: crossentropy target %d out of range [0,%d)", ti, c)
+			}
+			base := i * c
+			m := math.Inf(-1)
+			for j := range c {
+				if v := zs[base+j]; v > m {
+					m = v
+				}
+			}
+			var sum, rowSum float64
+			for j := range c {
+				sum += math.Exp(zs[base+j] - m)
+				rowSum += zs[base+j]
+			}
+			lse := m + math.Log(sum)
+			if eps == 0 {
+				total += lse - zs[base+ti]
+			} else {
+				total += lse - (1-eps)*zs[base+ti] - (eps/float64(c))*rowSum
+			}
+			if pa.ZLoss != 0 {
+				total += pa.ZLoss * lse * lse // PaLM z-loss: coeff·(logsumexp)² keeps log Z ≈ 0 (§R113)
+			}
+		}
+		out.SetF64(total / float64(b))
+		return []*tensor.Tensor{out}, nil
+	case tensor.F32:
+		zs := z.Contiguous().Storage().F32()
+		var total float64
+		for i := range b {
+			ti := int(tg.AtF64(i))
+			if ti < 0 || ti >= c {
+				return nil, fmt.Errorf("ref: crossentropy target %d out of range [0,%d)", ti, c)
+			}
+			base := i * c
+			m := math.Inf(-1)
+			for j := range c {
+				if v := float64(zs[base+j]); v > m {
+					m = v
+				}
+			}
+			var sum, rowSum float64
+			for j := range c {
+				sum += math.Exp(float64(zs[base+j]) - m)
+				rowSum += float64(zs[base+j])
+			}
+			lse := m + math.Log(sum)
+			if eps == 0 {
+				total += lse - float64(zs[base+ti])
+			} else {
+				total += lse - (1-eps)*float64(zs[base+ti]) - (eps/float64(c))*rowSum
+			}
+			if pa.ZLoss != 0 {
+				total += pa.ZLoss * lse * lse // PaLM z-loss: coeff·(logsumexp)² keeps log Z ≈ 0 (§R113)
+			}
+		}
+		out.SetF64(total / float64(b))
+		return []*tensor.Tensor{out}, nil
+	}
+
+	// Generic fallback for exotic dtypes (verbatim original loop).
 	var total float64
 	for i := range b {
 		ti := int(tg.AtF64(i))
@@ -74,7 +154,6 @@ func crossEntropyKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend
 			total += pa.ZLoss * lse * lse // PaLM z-loss: coeff·(logsumexp)² keeps log Z ≈ 0 (§R113)
 		}
 	}
-	out := tensor.NewOn(ctx.Device(), z.Dtype(), tensor.Shape{})
 	out.SetF64(total / float64(b))
 	return []*tensor.Tensor{out}, nil
 }
@@ -101,6 +180,80 @@ func crossEntropyBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, attrs
 	zl := pX.ZLoss
 	gv := g.AtF64()
 	dz := tensor.NewOn(ctx.Device(), z.Dtype(), z.Shape())
+
+	// Devirtualised fast paths (§T646): the loss gradient seeds the whole backward
+	// pass and is a hot cpu→ref fallback every training step. The generic AtF64/SetF64
+	// loop pays a dtype dispatch + flat-offset per logit; here we grab the raw [b,c]
+	// slices once (row-major: (i,j) at i*c+j) and index directly. The per-row max,
+	// softmax sum and lse stay float64 on ALL paths and the F32 path reads logits as
+	// float64 and only rounds the STORED gradient once — so the math and per-row
+	// iteration order are byte-for-byte identical to the generic path (§V9). targets[b]
+	// (float class indices, §B12) and the scalar g are read generically. Contiguous()
+	// runs once (returns self when already contiguous).
+	switch z.Dtype() {
+	case tensor.F64:
+		zs := z.Contiguous().Storage().F64()
+		dzs := dz.Storage().F64()
+		for i := range b {
+			base := i * c
+			m := math.Inf(-1)
+			for j := range c {
+				if v := zs[base+j]; v > m {
+					m = v
+				}
+			}
+			var sum float64
+			for j := range c {
+				sum += math.Exp(zs[base+j] - m)
+			}
+			ti := int(tg.AtF64(i))
+			var lseTerm float64
+			if zl != 0 {
+				lseTerm = 2 * zl * (m + math.Log(sum))
+			}
+			for j := range c {
+				p := math.Exp(zs[base+j]-m) / sum
+				q := eps / float64(c)
+				if j == ti {
+					q += 1 - eps
+				}
+				dzs[base+j] = gv * (p - q + lseTerm*p) / float64(b)
+			}
+		}
+		return []*tensor.Tensor{dz}, nil
+	case tensor.F32:
+		zs := z.Contiguous().Storage().F32()
+		dzs := dz.Storage().F32()
+		for i := range b {
+			base := i * c
+			m := math.Inf(-1)
+			for j := range c {
+				if v := float64(zs[base+j]); v > m {
+					m = v
+				}
+			}
+			var sum float64
+			for j := range c {
+				sum += math.Exp(float64(zs[base+j]) - m)
+			}
+			ti := int(tg.AtF64(i))
+			var lseTerm float64
+			if zl != 0 {
+				lseTerm = 2 * zl * (m + math.Log(sum))
+			}
+			for j := range c {
+				p := math.Exp(float64(zs[base+j])-m) / sum
+				q := eps / float64(c)
+				if j == ti {
+					q += 1 - eps
+				}
+				dzs[base+j] = float32(gv * (p - q + lseTerm*p) / float64(b))
+			}
+		}
+		return []*tensor.Tensor{dz}, nil
+	}
+
+	// Generic fallback for exotic dtypes (verbatim original loop).
 	for i := range b {
 		m := math.Inf(-1)
 		for j := range c {
