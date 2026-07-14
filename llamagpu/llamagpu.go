@@ -35,8 +35,14 @@ func (m mRec) MatMul(a, b, c buffer, mm, k, n int) error {
 func (m mRec) RoPE(q, inv, o buffer, seq, width, heads, hd, half, pos int, posDiv float32) error {
 	return m.r.RoPE(mb(q), mb(inv), mb(o), seq, width, heads, hd, half, pos, posDiv)
 }
+func (m mRec) RoPEAt(q, inv, o buffer, off, seq, width, heads, hd, half, pos int, posDiv float32) error {
+	return m.r.RoPEAt(mb(q), mb(inv), mb(o), off, seq, width, heads, hd, half, pos, posDiv)
+}
 func (m mRec) Blit(src buffer, srcOff int, dst buffer, dstOff, n int) error {
 	return m.r.Blit(mb(src), srcOff, mb(dst), dstOff, n)
+}
+func (m mRec) Copy2D(src buffer, srcOff, srcStride int, dst buffer, dstOff, dstStride, rows, rowFloats int) error {
+	return m.r.Copy2D(mb(src), srcOff, srcStride, mb(dst), dstOff, dstStride, rows, rowFloats)
 }
 func (m mRec) MHA(q, k, v, o buffer, sq, sk, dm, heads, kvHeads, dk, causal, window int, scale float32) error {
 	return m.r.MHA(mb(q), mb(k), mb(v), mb(o), sq, sk, dm, heads, kvHeads, dk, causal, window, scale)

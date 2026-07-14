@@ -32,8 +32,14 @@ func (v vRec) MatMul(a, b, c buffer, m, k, n int) error {
 func (v vRec) RoPE(q, inv, o buffer, seq, width, heads, hd, half, pos int, posDiv float32) error {
 	return v.r.RoPE(vb(q), vb(inv), vb(o), seq, width, heads, hd, half, pos, posDiv)
 }
+func (v vRec) RoPEAt(q, inv, o buffer, off, seq, width, heads, hd, half, pos int, posDiv float32) error {
+	return v.r.RoPEAt(vb(q), vb(inv), vb(o), off, seq, width, heads, hd, half, pos, posDiv)
+}
 func (v vRec) Blit(src buffer, srcOff int, dst buffer, dstOff, n int) error {
 	return v.r.Blit(vb(src), srcOff, vb(dst), dstOff, n)
+}
+func (v vRec) Copy2D(src buffer, srcOff, srcStride int, dst buffer, dstOff, dstStride, rows, rowFloats int) error {
+	return v.r.Copy2D(vb(src), srcOff, srcStride, vb(dst), dstOff, dstStride, rows, rowFloats)
 }
 func (v vRec) MHA(q, k, va, o buffer, sq, sk, dm, heads, kvHeads, dk, causal, window int, scale float32) error {
 	return v.r.MHA(vb(q), vb(k), vb(va), vb(o), sq, sk, dm, heads, kvHeads, dk, causal, window, scale)

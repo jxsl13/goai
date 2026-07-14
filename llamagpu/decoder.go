@@ -92,7 +92,14 @@ type recorder interface {
 	AddBias(x, b, o buffer, rows, n int) error
 	MatMul(a, b, c buffer, m, k, n int) error
 	RoPE(q, inv, o buffer, seq, width, heads, hd, half, pos int, posDiv float32) error
+	// RoPEAt rotates a sub-row view living at float-element offset `off` inside a wider
+	// buffer — the q/k bands of a fused QKV projection output (§T613). width acts as the
+	// ROW STRIDE; only the first heads·hd columns of each row are rotated, in place.
+	RoPEAt(q, inv, o buffer, off, seq, width, heads, hd, half, pos int, posDiv float32) error
 	Blit(src buffer, srcOff int, dst buffer, dstOff, n int) error
+	// Copy2D moves a strided rows×rowFloats sub-matrix (the fused-QKV band extraction, §T613):
+	// row r copies from src[srcOff+r·srcStride:] to dst[dstOff+r·dstStride:].
+	Copy2D(src buffer, srcOff, srcStride int, dst buffer, dstOff, dstStride, rows, rowFloats int) error
 	MHA(q, k, v, o buffer, sq, sk, dm, heads, kvHeads, dk, causal, window int, scale float32) error
 	Unary(x, o buffer, op int) error
 	Binary(a, b, o buffer, op int) error
@@ -111,7 +118,11 @@ type backendOps struct {
 
 type block struct {
 	wq, wk, wv, wo, wG, wU, wD linear
-	gAttn, gFFN, kC, vC        buffer
+	// wqkv is the fused QKV projection (§T613): one [in, D+2·kvDim] weight whose output row
+	// is [q | k | v]. Non-nil = Step/StepN run the fused chain (one matmul instead of three);
+	// nil = fall back to wq/wk/wv (quantized blocks whose projections mix quant types).
+	wqkv                linear
+	gAttn, gFFN, kC, vC buffer
 }
 
 // Decoder holds a Llama's weights + KV cache as device-resident buffers and runs one batched decode
@@ -125,6 +136,7 @@ type Decoder struct {
 	out                                                   linear
 	gFinal, dinv                                          *bufSlot
 	dx, xn, xn2, q, k, v_, attn, ao, gate, up, mo, logits *bufSlot
+	qkv                                                   *bufSlot       // fused QKV output rows [·, d+2·kvDim] (§T613)
 	table                                                 *tensor.Tensor // token embedding, host-side gather source
 	invHost                                               []float32      // RoPE inverse freqs (uploaded by allocScratch)
 	all                                                   []buffer
@@ -174,6 +186,7 @@ func (d *Decoder) allocScratch(mk func(data []float32) *bufSlot) {
 	d.q = mk(make([]float32, c*d.d))
 	d.k = mk(make([]float32, c*d.kvDim))
 	d.v_ = mk(make([]float32, c*d.kvDim))
+	d.qkv = mk(make([]float32, c*(d.d+2*d.kvDim)))
 	d.attn = mk(make([]float32, c*d.d))
 	d.ao = mk(make([]float32, c*d.d))
 	d.gate = mk(make([]float32, c*d.hidden))
@@ -212,9 +225,26 @@ func newDecoder(m *nlp.Llama, ops backendOps) (*Decoder, error) {
 		in, out := w.Shape()[0], w.Shape()[1]
 		return f32Linear{w: mk(flat2D(w)).b, k: in, n: out}
 	}
+	// fused QKV weight (§T613): weights are [in,out] with out along the row, so the fusion
+	// concatenates the three output bands PER INPUT ROW — one [in, D+2·kvDim] matrix whose
+	// product row is [q | k | v]. The separate wq/wk/wv uploads are dropped (no dup storage).
+	fused := func(wq, wk, wv *tensor.Tensor) linear {
+		in := wq.Shape()[0]
+		nq, nk, nv := wq.Shape()[1], wk.Shape()[1], wv.Shape()[1]
+		fq, fk, fv := flat2D(wq), flat2D(wk), flat2D(wv)
+		nt := nq + nk + nv
+		w := make([]float32, in*nt)
+		for i := range in {
+			row := w[i*nt : (i+1)*nt]
+			copy(row[:nq], fq[i*nq:(i+1)*nq])
+			copy(row[nq:nq+nk], fk[i*nk:(i+1)*nk])
+			copy(row[nq+nk:], fv[i*nv:(i+1)*nv])
+		}
+		return f32Linear{w: mk(w).b, k: in, n: nt}
+	}
 	for _, b := range m.Blocks {
 		gb := block{
-			wq: lin(b.Wq), wk: lin(b.Wk), wv: lin(b.Wv), wo: lin(b.Wo),
+			wqkv: fused(b.Wq, b.Wk, b.Wv), wo: lin(b.Wo),
 			gAttn: mk(flat1D(b.AttnNorm.Gamma)).b, gFFN: mk(flat1D(b.FFNNorm.Gamma)).b,
 			wG: lin(b.FFN.Wgate), wU: lin(b.FFN.Wup), wD: lin(b.FFN.Wdown),
 			kC: mk(make([]float32, d.maxLen*d.kvDim)).b, vC: mk(make([]float32, d.maxLen*d.kvDim)).b,
@@ -257,12 +287,32 @@ func newQuantDecoder(m *nlp.QuantLlama, ops backendOps) (*Decoder, error) {
 		d.qweights = append(d.qweights, w)
 		return quantLinear{w: w}
 	}
+	// fused QKV for quantized blocks (§T613): ggml resident weights are [Out,In] ROW-major, so
+	// fusing = appending the raw quantized bytes (out rows q‖k‖v) — valid only when all three
+	// projections share one quant type; mixed-type blocks keep the unfused three-matmul chain.
+	qfused := func(q1, q2, q3 *nn.QuantLinear) linear {
+		if err != nil || q1.QT != q2.QT || q2.QT != q3.QT {
+			return nil
+		}
+		wb := make([]byte, 0, len(q1.Weight)+len(q2.Weight)+len(q3.Weight))
+		wb = append(append(append(wb, q1.Weight...), q2.Weight...), q3.Weight...)
+		w, e := ops.uploadQWeight(wb, uint32(q1.QT), q1.Out+q2.Out+q3.Out, q1.In)
+		if e != nil {
+			err = e
+			return nil
+		}
+		d.qweights = append(d.qweights, w)
+		return quantLinear{w: w}
+	}
 	for _, b := range m.Blocks {
 		gb := block{
-			wq: qlin(b.Wq), wk: qlin(b.Wk), wv: qlin(b.Wv), wo: qlin(b.Wo),
+			wqkv: qfused(b.Wq, b.Wk, b.Wv), wo: qlin(b.Wo),
 			gAttn: mk(flat1D(b.AttnNorm.Gamma)).b, gFFN: mk(flat1D(b.FFNNorm.Gamma)).b,
 			wG: qlin(b.FFN.Gate), wU: qlin(b.FFN.Up), wD: qlin(b.FFN.Down),
 			kC: mk(make([]float32, d.maxLen*d.kvDim)).b, vC: mk(make([]float32, d.maxLen*d.kvDim)).b,
+		}
+		if gb.wqkv == nil { // mixed quant types: keep the unfused projections
+			gb.wq, gb.wk, gb.wv = qlin(b.Wq), qlin(b.Wk), qlin(b.Wv)
 		}
 		d.blocks = append(d.blocks, gb)
 	}
@@ -295,16 +345,35 @@ func (d *Decoder) Step(token, pos int) ([]float32, error) {
 	}
 	D, H, KVH, dk, kvDim := d.d, d.h, d.kvH, d.dk, d.kvDim
 	for _, b := range d.blocks {
-		e := firstErr(
-			r.RMSNorm(d.dx.b, b.gAttn, d.xn.b, 1, D, d.eps),
-			b.wq.record(r, d.xn.b, d.q.b, 1),
-			b.wk.record(r, d.xn.b, d.k.b, 1),
-			b.wv.record(r, d.xn.b, d.v_.b, 1),
-			r.RoPE(d.q.b, d.dinv.b, d.q.b, 1, D, H, dk, d.half, pos, d.posDiv),
-			r.RoPE(d.k.b, d.dinv.b, d.k.b, 1, kvDim, KVH, dk, d.half, pos, d.posDiv),
-			r.Blit(d.k.b, 0, b.kC, pos*kvDim, kvDim),
-			r.Blit(d.v_.b, 0, b.vC, pos*kvDim, kvDim),
-			r.MHA(d.q.b, b.kC, b.vC, d.attn.b, 1, pos+1, D, H, KVH, dk, 1, 0, d.scale),
+		// attention projections: fused single QKV matmul when available (§T613 — the q/k
+		// bands rotate IN PLACE inside the combined row, k/v append to the cache straight
+		// from their bands, attention reads q at band offset 0), else the unfused three.
+		// Recording order is execution order: norm FIRST, then the projection branch.
+		e := r.RMSNorm(d.dx.b, b.gAttn, d.xn.b, 1, D, d.eps)
+		qBuf := d.q.b
+		if e == nil && b.wqkv != nil {
+			qBuf = d.qkv.b
+			e = firstErr(
+				b.wqkv.record(r, d.xn.b, d.qkv.b, 1),
+				r.RoPEAt(d.qkv.b, d.dinv.b, d.qkv.b, 0, 1, D, H, dk, d.half, pos, d.posDiv),
+				r.RoPEAt(d.qkv.b, d.dinv.b, d.qkv.b, D, 1, kvDim, KVH, dk, d.half, pos, d.posDiv),
+				r.Blit(d.qkv.b, D, b.kC, pos*kvDim, kvDim),
+				r.Blit(d.qkv.b, D+kvDim, b.vC, pos*kvDim, kvDim),
+			)
+		} else if e == nil {
+			e = firstErr(
+				b.wq.record(r, d.xn.b, d.q.b, 1),
+				b.wk.record(r, d.xn.b, d.k.b, 1),
+				b.wv.record(r, d.xn.b, d.v_.b, 1),
+				r.RoPE(d.q.b, d.dinv.b, d.q.b, 1, D, H, dk, d.half, pos, d.posDiv),
+				r.RoPE(d.k.b, d.dinv.b, d.k.b, 1, kvDim, KVH, dk, d.half, pos, d.posDiv),
+				r.Blit(d.k.b, 0, b.kC, pos*kvDim, kvDim),
+				r.Blit(d.v_.b, 0, b.vC, pos*kvDim, kvDim),
+			)
+		}
+		e = firstErr(
+			e,
+			r.MHA(qBuf, b.kC, b.vC, d.attn.b, 1, pos+1, D, H, KVH, dk, 1, 0, d.scale),
 			b.wo.record(r, d.attn.b, d.ao.b, 1),
 			r.Binary(d.dx.b, d.ao.b, d.dx.b, binaryAdd),
 			r.RMSNorm(d.dx.b, b.gFFN, d.xn2.b, 1, D, d.eps),
@@ -364,16 +433,35 @@ func (d *Decoder) StepN(tokens []int, pos int) ([]float32, error) {
 		return nil, err
 	}
 	D, H, KVH, dk, kvDim := d.d, d.h, d.kvH, d.dk, d.kvDim
+	stride := D + 2*kvDim
 	for _, b := range d.blocks {
-		e := firstErr(
-			r.RMSNorm(d.dx.b, b.gAttn, d.xn.b, k, D, d.eps),
-			b.wq.record(r, d.xn.b, d.q.b, k),
-			b.wk.record(r, d.xn.b, d.k.b, k),
-			b.wv.record(r, d.xn.b, d.v_.b, k),
-			r.RoPE(d.q.b, d.dinv.b, d.q.b, k, D, H, dk, d.half, pos, d.posDiv),
-			r.RoPE(d.k.b, d.dinv.b, d.k.b, k, kvDim, KVH, dk, d.half, pos, d.posDiv),
-			r.Blit(d.k.b, 0, b.kC, pos*kvDim, k*kvDim),
-			r.Blit(d.v_.b, 0, b.vC, pos*kvDim, k*kvDim),
+		// fused QKV (§T613): one [k,stride] matmul; q/k bands rotate in place (RoPEAt's
+		// width parameter acts as the row stride), then Copy2D extracts q contiguously
+		// and deposits the k/v bands directly as cache rows. Recording order = execution
+		// order: norm first, then the projection branch.
+		e := r.RMSNorm(d.dx.b, b.gAttn, d.xn.b, k, D, d.eps)
+		if e == nil && b.wqkv != nil {
+			e = firstErr(
+				b.wqkv.record(r, d.xn.b, d.qkv.b, k),
+				r.RoPEAt(d.qkv.b, d.dinv.b, d.qkv.b, 0, k, stride, H, dk, d.half, pos, d.posDiv),
+				r.RoPEAt(d.qkv.b, d.dinv.b, d.qkv.b, D, k, stride, KVH, dk, d.half, pos, d.posDiv),
+				r.Copy2D(d.qkv.b, 0, stride, d.q.b, 0, D, k, D),
+				r.Copy2D(d.qkv.b, D, stride, b.kC, pos*kvDim, kvDim, k, kvDim),
+				r.Copy2D(d.qkv.b, D+kvDim, stride, b.vC, pos*kvDim, kvDim, k, kvDim),
+			)
+		} else if e == nil {
+			e = firstErr(
+				b.wq.record(r, d.xn.b, d.q.b, k),
+				b.wk.record(r, d.xn.b, d.k.b, k),
+				b.wv.record(r, d.xn.b, d.v_.b, k),
+				r.RoPE(d.q.b, d.dinv.b, d.q.b, k, D, H, dk, d.half, pos, d.posDiv),
+				r.RoPE(d.k.b, d.dinv.b, d.k.b, k, kvDim, KVH, dk, d.half, pos, d.posDiv),
+				r.Blit(d.k.b, 0, b.kC, pos*kvDim, k*kvDim),
+				r.Blit(d.v_.b, 0, b.vC, pos*kvDim, k*kvDim),
+			)
+		}
+		e = firstErr(
+			e,
 			// sq=k vs sk=pos+k: the kernel's causal offset (sk-sq = pos) makes row i attend
 			// through absolute position pos+i — exactly the prefill/verify semantics.
 			r.MHA(d.q.b, b.kC, b.vC, d.attn.b, k, pos+k, D, H, KVH, dk, 1, 0, d.scale),

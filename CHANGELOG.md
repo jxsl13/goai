@@ -4,6 +4,17 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T613 (slice 2b) — fused QKV projection in the Llama decoder (2026-07-14)
+- The decoder now computes Q, K and V with ONE combined matrix multiplication per
+  layer instead of three (the weights are joined at load time — for quantized
+  models by appending the raw quantized rows, so there is no extra memory). Result
+  on the benchmark model: f32 decode 270 → 319 tokens/second (+18%); quantized
+  decode unchanged (its cost is dominated by dequantization, not dispatches);
+  prompt prefill pays ~7% once per prompt for extracting the query rows. Both
+  backends verified against the CPU reference, including GGUF-loaded and
+  speculative-decoding paths. Blocks mixing quant types per projection keep the
+  old three-multiplication path automatically.
+
 ### T613 (slice 2a) — offset views for fused QKV on both GPU backends (2026-07-14)
 - The Metal and Vulkan recorders gained RoPEAt and MHAAt: RoPE (rotary position
   embedding — the rotation that encodes token positions) and attention can now read
