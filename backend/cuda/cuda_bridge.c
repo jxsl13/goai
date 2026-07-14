@@ -652,8 +652,10 @@ done:
 // Query head h uses kv head h/group — a non-constant batch stride on K/V, so the
 // strided path can't express it. cublasSgemmBatched takes explicit device
 // pointer arrays instead: build them (query h → its kv head), upload, call.
-// cu_gqa_scores: scores[h] = Q[h]·K[h/group]ᵀ for every query head.
-int cu_gqa_scores(const void* dQ, const void* dK, void* dScores, int seq, int qHeads, int kvHeads, int hd) {
+// cu_gqa_scores: scores[h] = Q[h]·K[h/group]ᵀ for every query head. Q is
+// [seqQ, WQ], K is [seqKV, WKV]; scores[h] is [seqQ, seqKV]. Full prefill passes
+// seqQ==seqKV; a KV-cache step passes seqQ (new tokens) < seqKV (cache length).
+int cu_gqa_scores(const void* dQ, const void* dK, void* dScores, int seqQ, int seqKV, int qHeads, int kvHeads, int hd) {
     const float alpha = 1.0f, beta = 0.0f;
     int group = qHeads / kvHeads, WQ = qHeads * hd, WKV = kvHeads * hd, rc = -2;
     const float **hK = NULL, **hQ = NULL, **dKa = NULL, **dQa = NULL;
@@ -667,15 +669,15 @@ int cu_gqa_scores(const void* dQ, const void* dK, void* dScores, int seq, int qH
     for (int h = 0; h < qHeads; h++) {
         hK[h] = (const float*)dK + (size_t)(h / group) * hd;
         hQ[h] = (const float*)dQ + (size_t)h * hd;
-        hC[h] = (float*)dScores + (size_t)h * seq * seq;
+        hC[h] = (float*)dScores + (size_t)h * seqQ * seqKV;
     }
     if (cudaMalloc((void**)&dKa, asz) != cudaSuccess || cudaMalloc((void**)&dQa, asz) != cudaSuccess ||
         cudaMalloc((void**)&dCa, asz) != cudaSuccess) { rc = -9; goto done; }
     cudaMemcpy(dKa, hK, asz, cudaMemcpyHostToDevice);
     cudaMemcpy(dQa, hQ, asz, cudaMemcpyHostToDevice);
     cudaMemcpy(dCa, hC, asz, cudaMemcpyHostToDevice);
-    if (cublasSgemmBatched(gHandle, CUBLAS_OP_T, CUBLAS_OP_N, seq, seq, hd, &alpha,
-                           dKa, WKV, dQa, WQ, &beta, dCa, seq, qHeads) != CUBLAS_STATUS_SUCCESS) { rc = -4; goto done; }
+    if (cublasSgemmBatched(gHandle, CUBLAS_OP_T, CUBLAS_OP_N, seqKV, seqQ, hd, &alpha,
+                           dKa, WKV, dQa, WQ, &beta, dCa, seqKV, qHeads) != CUBLAS_STATUS_SUCCESS) { rc = -4; goto done; }
     rc = 0;
 done:
     if (dKa) cudaFree((void*)dKa);
@@ -686,8 +688,9 @@ done:
     return rc;
 }
 
-// cu_gqa_out: out[h] = scores[h]·V[h/group] for every query head, into [seq,WQ].
-int cu_gqa_out(const void* dScores, const void* dV, void* dOut, int seq, int qHeads, int kvHeads, int hd) {
+// cu_gqa_out: out[h] = scores[h]·V[h/group] for every query head, into [seqQ,WQ].
+// scores[h] is [seqQ, seqKV], V is [seqKV, WKV]. Full prefill passes seqQ==seqKV.
+int cu_gqa_out(const void* dScores, const void* dV, void* dOut, int seqQ, int seqKV, int qHeads, int kvHeads, int hd) {
     const float alpha = 1.0f, beta = 0.0f;
     int group = qHeads / kvHeads, WQ = qHeads * hd, WKV = kvHeads * hd, rc = -2;
     const float **hV = NULL, **hS = NULL, **dVa = NULL, **dSa = NULL;
@@ -700,7 +703,7 @@ int cu_gqa_out(const void* dScores, const void* dV, void* dOut, int seq, int qHe
     if (!hV || !hS || !hO) { rc = -9; goto done; }
     for (int h = 0; h < qHeads; h++) {
         hV[h] = (const float*)dV + (size_t)(h / group) * hd;
-        hS[h] = (const float*)dScores + (size_t)h * seq * seq;
+        hS[h] = (const float*)dScores + (size_t)h * seqQ * seqKV;
         hO[h] = (float*)dOut + (size_t)h * hd;
     }
     if (cudaMalloc((void**)&dVa, asz) != cudaSuccess || cudaMalloc((void**)&dSa, asz) != cudaSuccess ||
@@ -708,8 +711,8 @@ int cu_gqa_out(const void* dScores, const void* dV, void* dOut, int seq, int qHe
     cudaMemcpy(dVa, hV, asz, cudaMemcpyHostToDevice);
     cudaMemcpy(dSa, hS, asz, cudaMemcpyHostToDevice);
     cudaMemcpy(dOa, hO, asz, cudaMemcpyHostToDevice);
-    if (cublasSgemmBatched(gHandle, CUBLAS_OP_N, CUBLAS_OP_N, hd, seq, seq, &alpha,
-                           dVa, WKV, dSa, seq, &beta, dOa, WQ, qHeads) != CUBLAS_STATUS_SUCCESS) { rc = -4; goto done; }
+    if (cublasSgemmBatched(gHandle, CUBLAS_OP_N, CUBLAS_OP_N, hd, seqQ, seqKV, &alpha,
+                           dVa, WKV, dSa, seqKV, &beta, dOa, WQ, qHeads) != CUBLAS_STATUS_SUCCESS) { rc = -4; goto done; }
     rc = 0;
 done:
     if (dVa) cudaFree((void*)dVa);
@@ -720,33 +723,37 @@ done:
     return rc;
 }
 
-// cu_causal_scale_mh: scale + causal mask on scores[heads, seq, seq] (head-major)
-// — per head, mask key j for query i when j > i (offset for a KV window).
-int cu_causal_scale_mh(void* x, int heads, int seq, float scale, int offset) {
+// cu_causal_scale_mh: scale + causal mask on scores[heads, seqQ, seqKV]
+// (head-major) — per head, mask key j for query row i when j > i + offset. Full
+// prefill passes seqQ==seqKV; a KV-cache step passes seqQ<=seqKV with the query
+// rows being the tail of the context, offset = seqKV-seqQ (query row i is at
+// absolute position i+offset, so it attends keys 0..i+offset).
+int cu_causal_scale_mh(void* x, int heads, int seqQ, int seqKV, float scale, int offset) {
     int rc = -1;
     pthread_mutex_lock(&gLock);
     if (ensure_init() != 0) { rc = -1; goto done; }
     if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
     if (!gCausalMH && compile_kernel(
-                          "extern \"C\" __global__ void causal_scale_mh(float* x, int heads, int seq, float scale, int offset){\n"
+                          "extern \"C\" __global__ void causal_scale_mh(float* x, int heads, int seqQ, int seqKV, float scale, int offset){\n"
                           "  long gid = (long)blockIdx.x*blockDim.x + threadIdx.x;\n"
-                          "  long total = (long)heads*seq*seq;\n"
+                          "  long total = (long)heads*seqQ*seqKV;\n"
                           "  if (gid >= total) return;\n"
-                          "  int j = (int)(gid % seq);\n"
-                          "  int i = (int)((gid / seq) % seq);\n"
+                          "  int j = (int)(gid % seqKV);\n"
+                          "  int i = (int)((gid / seqKV) % seqQ);\n"
                           "  x[gid] = (j > i + offset) ? __int_as_float(0xff800000) : x[gid]*scale;\n"
                           "}\n",
                           "causal_mh.cu", "causal_scale_mh", &gCausalMH) != 0) { rc = -2; goto done; }
     {
-        long total = (long)heads * seq * seq;
+        long total = (long)heads * seqQ * seqKV;
         int threads = 256, blocks = (int)((total + threads - 1) / threads);
         if (blocks < 1) blocks = 1;
-        void* args[5];
+        void* args[6];
         args[0] = &x;
         args[1] = &heads;
-        args[2] = &seq;
-        args[3] = &scale;
-        args[4] = &offset;
+        args[2] = &seqQ;
+        args[3] = &seqKV;
+        args[4] = &scale;
+        args[5] = &offset;
         rc = (cuLaunchKernel(gCausalMH, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 done:
