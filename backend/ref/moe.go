@@ -41,25 +41,94 @@ func moeBalanceKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.A
 
 	P := make([]float64, n) // mean softmax prob per expert
 	f := make([]float64, n) // dispatch fraction per expert
-	for t := range tks {
-		m := math.Inf(-1)
-		for i := range n {
-			if v := logits.AtF64(t, i); v > m {
-				m = v
+
+	// Devirtualised fast paths (§T645): the generic AtF64 loop below pays a dtype
+	// dispatch + flat-offset per logit read. When the logits contiguous storage
+	// matches the tensor dtype we grab the raw typed slice once (row-major: (t,i)
+	// of [T,N] at t*N+i) and index directly. The per-token softmax (max subtraction,
+	// denominator, P accumulation) and the assignment counting stay byte-for-byte
+	// identical — every accumulator (sum, P) is float64 on ALL paths and F32 only
+	// widens the loaded logit. assign is read generically (T reads, dtype-agnostic
+	// index, off the hot N·T path). Contiguous() is called once (self when dense).
+	done := false
+	switch logits.Dtype() {
+	case tensor.F64:
+		lc := logits.Contiguous()
+		if lc.Dtype() == tensor.F64 {
+			ls := lc.Storage().F64()
+			for t := range tks {
+				base := t * n
+				m := math.Inf(-1)
+				for i := range n {
+					if v := ls[base+i]; v > m {
+						m = v
+					}
+				}
+				var sum float64
+				for i := range n {
+					sum += math.Exp(ls[base+i] - m)
+				}
+				for i := range n {
+					P[i] += math.Exp(ls[base+i]-m) / sum
+				}
+				a := int(assign.AtF64(t))
+				if a < 0 || a >= n {
+					return nil, fmt.Errorf("ref: moebalance assignment %d out of range [0,%d)", a, n)
+				}
+				f[a]++
 			}
+			done = true
 		}
-		var sum float64
-		for i := range n {
-			sum += math.Exp(logits.AtF64(t, i) - m)
+	case tensor.F32:
+		lc := logits.Contiguous()
+		if lc.Dtype() == tensor.F32 {
+			ls := lc.Storage().F32()
+			for t := range tks {
+				base := t * n
+				m := math.Inf(-1)
+				for i := range n {
+					if v := float64(ls[base+i]); v > m {
+						m = v
+					}
+				}
+				var sum float64
+				for i := range n {
+					sum += math.Exp(float64(ls[base+i]) - m)
+				}
+				for i := range n {
+					P[i] += math.Exp(float64(ls[base+i])-m) / sum
+				}
+				a := int(assign.AtF64(t))
+				if a < 0 || a >= n {
+					return nil, fmt.Errorf("ref: moebalance assignment %d out of range [0,%d)", a, n)
+				}
+				f[a]++
+			}
+			done = true
 		}
-		for i := range n {
-			P[i] += math.Exp(logits.AtF64(t, i)-m) / sum
+	}
+	if !done {
+		// Generic fallback for exotic dtypes (verbatim original loop).
+		for t := range tks {
+			m := math.Inf(-1)
+			for i := range n {
+				if v := logits.AtF64(t, i); v > m {
+					m = v
+				}
+			}
+			var sum float64
+			for i := range n {
+				sum += math.Exp(logits.AtF64(t, i) - m)
+			}
+			for i := range n {
+				P[i] += math.Exp(logits.AtF64(t, i)-m) / sum
+			}
+			a := int(assign.AtF64(t))
+			if a < 0 || a >= n {
+				return nil, fmt.Errorf("ref: moebalance assignment %d out of range [0,%d)", a, n)
+			}
+			f[a]++
 		}
-		a := int(assign.AtF64(t))
-		if a < 0 || a >= n {
-			return nil, fmt.Errorf("ref: moebalance assignment %d out of range [0,%d)", a, n)
-		}
-		f[a]++
 	}
 	var loss float64
 	for i := range n {
@@ -108,19 +177,103 @@ func moeCombineKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs
 	}
 
 	out := tensor.NewOn(ctx.Device(), experts[0].Dtype(), tensor.Shape{tks, d})
-	for t := range tks {
-		var denom float64
-		for i := range e {
-			denom += w.AtF64(t, i)
+
+	// Devirtualised fast paths (§T645): the generic AtF64/SetF64 loop below pays a
+	// dtype dispatch + flat-offset per element on the hot T·D·E mixture. When the
+	// gate weights and every expert output share the output dtype we grab the raw
+	// typed slices once (row-major: (t,i) of [T,E] at t*E+i, (t,j) of [T,D] at t*D+j)
+	// and index directly. Iteration order, the per-token denom, the denom>0 guard and
+	// the mixture accumulation are byte-for-byte identical: denom and the mixture acc
+	// stay float64 on ALL paths and the F32 path only rounds the STORED output element
+	// once (acc is written once per (t,j), matching the single narrowing SetF64).
+	// Contiguous() is called once per tensor (returns self when already dense).
+	done := false
+	switch out.Dtype() {
+	case tensor.F64:
+		wc := w.Contiguous()
+		ok := wc.Dtype() == tensor.F64
+		ecs := make([][]float64, e)
+		for i, ex := range experts {
+			ci := ex.Contiguous()
+			if ci.Dtype() != tensor.F64 {
+				ok = false
+				break
+			}
+			ecs[i] = ci.Storage().F64()
 		}
-		for j := range d {
-			var acc float64
-			if denom > 0 {
+		if ok {
+			ws := wc.Storage().F64()
+			os := out.Storage().F64()
+			for t := range tks {
+				wbase := t * e
+				var denom float64
 				for i := range e {
-					acc += (w.AtF64(t, i) / denom) * experts[i].AtF64(t, j)
+					denom += ws[wbase+i]
+				}
+				base := t * d
+				for j := range d {
+					var acc float64
+					if denom > 0 {
+						for i := range e {
+							acc += (ws[wbase+i] / denom) * ecs[i][base+j]
+						}
+					}
+					os[base+j] = acc
 				}
 			}
-			out.SetF64(acc, t, j)
+			done = true
+		}
+	case tensor.F32:
+		wc := w.Contiguous()
+		ok := wc.Dtype() == tensor.F32
+		ecs := make([][]float32, e)
+		for i, ex := range experts {
+			ci := ex.Contiguous()
+			if ci.Dtype() != tensor.F32 {
+				ok = false
+				break
+			}
+			ecs[i] = ci.Storage().F32()
+		}
+		if ok {
+			ws := wc.Storage().F32()
+			os := out.Storage().F32()
+			for t := range tks {
+				wbase := t * e
+				var denom float64
+				for i := range e {
+					denom += float64(ws[wbase+i])
+				}
+				base := t * d
+				for j := range d {
+					var acc float64 // mixture accumulates in float64; only the store rounds
+					if denom > 0 {
+						for i := range e {
+							acc += (float64(ws[wbase+i]) / denom) * float64(ecs[i][base+j])
+						}
+					}
+					os[base+j] = float32(acc)
+				}
+			}
+			done = true
+		}
+	}
+	if !done {
+		// Generic fallback for exotic dtypes / mixed inputs (verbatim original loop).
+		for t := range tks {
+			var denom float64
+			for i := range e {
+				denom += w.AtF64(t, i)
+			}
+			for j := range d {
+				var acc float64
+				if denom > 0 {
+					for i := range e {
+						acc += (w.AtF64(t, i) / denom) * experts[i].AtF64(t, j)
+					}
+				}
+				out.SetF64(acc, t, j)
+			}
 		}
 	}
 	return []*tensor.Tensor{out}, nil
