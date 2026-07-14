@@ -114,6 +114,89 @@ func sigmoid(x float64) float64 {
 	return z / (1 + z)
 }
 
+// reluKernel / geluKernel / siluKernel: devirtualized unary hot paths (§base-perf) —
+// concrete []T loops so the F32 path avoids the unOp closure's per-element indirect call
+// AND the float32↔float64 round-trip. relu/neg are fully native; gelu/silu keep f64 math
+// (erf/exp are f64-only) but inline it (no func-value indirection). Parity unchanged.
+func geluKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*tensor.Tensor, error) {
+	xc := in[0].Contiguous()
+	out := tensor.NewOn(ctx.Device(), in[0].Dtype(), in[0].Shape())
+	const s = math.Sqrt2
+	switch in[0].Dtype() {
+	case tensor.F64:
+		d, o := xc.Storage().F64(), out.Storage().F64()
+		parallel(len(o), func(lo, hi int) {
+			for i := lo; i < hi; i++ {
+				x := d[i]
+				o[i] = 0.5 * x * (1 + math.Erf(x/s))
+			}
+		})
+	case tensor.F32:
+		d, o := xc.Storage().F32(), out.Storage().F32()
+		parallel(len(o), func(lo, hi int) {
+			for i := lo; i < hi; i++ {
+				x := float64(d[i])
+				o[i] = float32(0.5 * x * (1 + math.Erf(x/s)))
+			}
+		})
+	default:
+		return nil, fmt.Errorf("cpu: gelu unsupported dtype %v", in[0].Dtype())
+	}
+	return []*tensor.Tensor{out}, nil
+}
+func reluKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*tensor.Tensor, error) {
+	xc := in[0].Contiguous()
+	out := tensor.NewOn(ctx.Device(), in[0].Dtype(), in[0].Shape())
+	switch in[0].Dtype() {
+	case tensor.F64:
+		d, o := xc.Storage().F64(), out.Storage().F64()
+		parallel(len(o), func(lo, hi int) {
+			for i := lo; i < hi; i++ {
+				if d[i] > 0 {
+					o[i] = d[i]
+				}
+			}
+		})
+	case tensor.F32:
+		d, o := xc.Storage().F32(), out.Storage().F32()
+		parallel(len(o), func(lo, hi int) {
+			for i := lo; i < hi; i++ {
+				if d[i] > 0 {
+					o[i] = d[i]
+				}
+			}
+		})
+	default:
+		return nil, fmt.Errorf("cpu: relu unsupported dtype %v", in[0].Dtype())
+	}
+	return []*tensor.Tensor{out}, nil
+}
+func siluKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*tensor.Tensor, error) {
+	xc := in[0].Contiguous()
+	out := tensor.NewOn(ctx.Device(), in[0].Dtype(), in[0].Shape())
+	switch in[0].Dtype() {
+	case tensor.F64:
+		d, o := xc.Storage().F64(), out.Storage().F64()
+		parallel(len(o), func(lo, hi int) {
+			for i := lo; i < hi; i++ {
+				x := d[i]
+				o[i] = x / (1 + math.Exp(-x))
+			}
+		})
+	case tensor.F32:
+		d, o := xc.Storage().F32(), out.Storage().F32()
+		parallel(len(o), func(lo, hi int) {
+			for i := lo; i < hi; i++ {
+				x := float64(d[i])
+				o[i] = float32(x / (1 + math.Exp(-x)))
+			}
+		})
+	default:
+		return nil, fmt.Errorf("cpu: silu unsupported dtype %v", in[0].Dtype())
+	}
+	return []*tensor.Tensor{out}, nil
+}
+
 func init() {
 	reg := func(op backend.Op, k backend.Kernel) {
 		std.add(op, tensor.F32, k)
@@ -129,8 +212,8 @@ func init() {
 	reg(backend.OpExp, unOp(math.Exp))
 	reg(backend.OpLog, unOp(math.Log))
 	reg(backend.OpTanh, unOp(math.Tanh))
-	reg(backend.OpReLU, unOp(relu))
-	reg(backend.OpGELU, unOp(gelu))
+	reg(backend.OpReLU, reluKernelCPU)
+	reg(backend.OpGELU, geluKernelCPU)
 	reg(backend.OpSigmoid, unOp(sigmoid))
-	reg(backend.OpSiLU, unOp(func(x float64) float64 { return x * sigmoid(x) }))
+	reg(backend.OpSiLU, siluKernelCPU)
 }
