@@ -218,6 +218,35 @@ func (d *DeviceF32) GELU() error {
 	return nil
 }
 
+// SiLU applies the SiLU / swish activation (x·sigmoid(x)) in-place on the GPU
+// (SwiGLU feed-forward). Same on-device, no-round-trip contract as GELU; matches
+// the Pure-Go SiLU within the f32 tolerance.
+func (d *DeviceF32) SiLU() error {
+	if d.ptr == nil {
+		return fmt.Errorf("cuda: SiLU on a freed handle")
+	}
+	if rc := C.cu_silu_f32(d.ptr, C.int(d.rows*d.cols)); rc != 0 {
+		return fmt.Errorf("cuda: silu failed (code %d)", int(rc))
+	}
+	return nil
+}
+
+// Add adds another resident activation of the same shape into this one in-place
+// (d += other), on the GPU — the residual connection of a transformer block,
+// kept device-resident. other is unchanged.
+func (d *DeviceF32) Add(other *DeviceF32) error {
+	if d.ptr == nil || other.ptr == nil {
+		return fmt.Errorf("cuda: Add on a freed handle")
+	}
+	if d.rows != other.rows || d.cols != other.cols {
+		return fmt.Errorf("cuda: Add shape mismatch [%d,%d] += [%d,%d]", d.rows, d.cols, other.rows, other.cols)
+	}
+	if rc := C.cu_add_f32(d.ptr, other.ptr, C.int(d.rows*d.cols)); rc != 0 {
+		return fmt.Errorf("cuda: add failed (code %d)", int(rc))
+	}
+	return nil
+}
+
 // Free releases the device buffer. Safe to call more than once.
 func (d *DeviceF32) Free() {
 	if d.ptr != nil {
