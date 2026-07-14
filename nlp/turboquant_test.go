@@ -5,6 +5,8 @@ import (
 	"math"
 	"math/rand/v2"
 	"testing"
+
+	"github.com/jxsl13/goai/tensor"
 )
 
 // §T619 TurboQuant, rotation stage. The fixed random Π is orthogonal, so: QᵀQ = I, the
@@ -376,5 +378,39 @@ func TestTurboQuantKVCache3Bit(t *testing.T) {
 	c2, c3 := cos(2), cos(3)
 	if c3 <= c2 {
 		t.Fatalf("3-bit should reconstruct better than 2-bit: cos b3=%.3f !> b2=%.3f", c3, c2)
+	}
+}
+
+// The KV-cache memory hierarchy (§R108 → §T619): TurboQuant (sub-4-bit) is markedly smaller than
+// the 8-bit Q8_0 cache, which is markedly smaller than raw f32. Documents the sub-4-bit tier's
+// memory advantage at a realistic dimension.
+func TestTurboQuantMemoryHierarchy(t *testing.T) {
+	const dim, rows = 512, 100
+	q8, err := NewQuantKVCache(dim) // §R108 8-bit Q8_0
+	if err != nil {
+		t.Fatal(err)
+	}
+	tq2, err := NewTurboQuantKVCache(dim, 2, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kt := tensor.New(tensor.F32, tensor.Shape{dim})
+	kf := make([]float64, dim)
+	for r := 0; r < rows; r++ {
+		if err := q8.Append(kt, kt); err != nil {
+			t.Fatal(err)
+		}
+		if err := tq2.Append(kf, kf); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f32Bytes := dim * 4 * 2 * rows // keys+values f32
+	q8Bytes := q8.Bytes()
+	tqBytes := tq2.Bytes()
+	t.Logf("KV footprint @dim=%d, %d rows: f32=%d  Q8_0=%d (%.1f× vs f32)  TurboQuant-2bit=%d (%.1f× vs f32, %.1f× vs Q8_0)",
+		dim, rows, f32Bytes, q8Bytes, float64(f32Bytes)/float64(q8Bytes), tqBytes,
+		float64(f32Bytes)/float64(tqBytes), float64(q8Bytes)/float64(tqBytes))
+	if !(tqBytes < q8Bytes && q8Bytes < f32Bytes) {
+		t.Fatalf("expected TurboQuant %d < Q8_0 %d < f32 %d", tqBytes, q8Bytes, f32Bytes)
 	}
 }
