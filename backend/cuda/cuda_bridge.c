@@ -150,3 +150,49 @@ done:
     pthread_mutex_unlock(&gLock);
     return rc;
 }
+
+// Fully-device path (§V14 Phase-2). cu_alloc_f32 / cu_download_f32 are caller-
+// owned device buffers (like cu_upload_f32), NOT the gA/gB/gC pool.
+void* cu_alloc_f32(int n) {
+    void* d = NULL;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() == 0) {
+        if (cudaMalloc(&d, (size_t)n * sizeof(float)) != cudaSuccess) d = NULL;
+    }
+    pthread_mutex_unlock(&gLock);
+    return d;
+}
+
+int cu_download_f32(const void* dsrc, float* dst, int n) {
+    int rc;
+    pthread_mutex_lock(&gLock);
+    rc = (cudaMemcpy(dst, dsrc, (size_t)n * sizeof(float), cudaMemcpyDeviceToHost) == cudaSuccess) ? 0 : -6;
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_matmul_f32_ddd: dC = dA·dB, all resident. No copies — the intermediate of a
+// matmul chain stays on the GPU. Same column-major idiom as cu_matmul_f32.
+int cu_matmul_f32_ddd(const void* dA, const void* dB, void* dC, int M, int K, int N) {
+    const float alpha = 1.0f, beta = 0.0f;
+    cublasStatus_t st;
+    int rc = -2;
+
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+
+    st = cublasSgemm(gHandle, CUBLAS_OP_N, CUBLAS_OP_N,
+                     N, M, K,
+                     &alpha,
+                     (const float*)dB, N,
+                     (const float*)dA, K,
+                     &beta,
+                     (float*)dC, N);
+    if (st != CUBLAS_STATUS_SUCCESS) { rc = -4; goto done; }
+    if (cudaDeviceSynchronize() != cudaSuccess) { rc = -5; goto done; }
+    rc = 0;
+
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}

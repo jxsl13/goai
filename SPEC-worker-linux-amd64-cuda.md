@@ -48,6 +48,8 @@ GPU-3 (device-buffer pool, `cuda_bridge.c`): gA/gB/gC persist across calls, grow
 
 GPU-4 (resident weights, §V14 Phase-1, mirrors metal §T156): `cuda.NewResidentB(w)` uploads weight ONCE, `.MatMul(a)` reuses across activations, skips per-call weight H2D. bridge `cu_upload_f32`/`cu_free_f32`/`cu_matmul_f32_bres`. identical to per-call Sgemm. A/B: 1024/2048 square 1.26×; DECODE M=8 K=N=4096 7.81ms→0.30ms = 26× (transfer-dominated inference shape, skips 64MB weight re-upload).
 
+GPU-5 (activation residency, §V14 Phase-2): `DeviceF32` = on-GPU rank-2 f32 activation; `UploadF32(x)` → device; `ResidentB.MatMulDevice(dact)` → device out (⊥ H2D/D2H); `.ToHost()` downloads. a matmul CHAIN keeps intermediates on-GPU: MLP x·W1·W2 = 1 upload + 1 download (⊥ per-matmul bounce). bridge `cu_alloc_f32`/`cu_download_f32`/`cu_matmul_f32_ddd`. identical to per-call cuda chain (same Sgemm seq), tolerance vs ref. A/B chain M=8 D=4096: per-call 15.9ms → device 0.54ms = 29×.
+
 ## §GAP — vendor-BLAS gap on this Zen3 (torch-cpu 2.13, numpy 2.4.4/OpenBLAS)
 
 GAP-1 (1024³ GFLOP/s): F64 goai 84 | torch 177 | numpy 227 → ≈2.7×. F32 goai(f32-native nr16) 153 | torch 580 | numpy 485 → ≈3.8× (was 13× vs scalar 43).
@@ -66,9 +68,10 @@ Tw7|x|vendor-BLAS gap measured on Zen3 (PR#7)|§GAP
 Tw8|x|f32-native SIMD GEMM 3.0× + ADR-0021 §V10 amend (PR#8)|Iw4,CPU-3
 Tw9|x|CUDA resident-weight matmul 26× decode (PR#9)|GPU-4
 Tw10|x|f32-native GEMM nr=16 (8 ILP chains) +22% → 3.6× scalar (PR#11)|CPU-3
+Tw11|x|CUDA activation residency (device matmul chain) 29× MLP (PR#12)|GPU-5,Nx1
 
 ## §NEXT — open levers
 
-Nx1: CUDA activation residency (§V14/ADR-0019 full) — keep activations resident across ops (CUDA recorder/stream chaining, one submit). BIG architectural change (metal did §T366–T412); tensor device-storage model = backend-specific (⊥ generic `tensor.Storage`) → CUDA needs own. USER PRIORITY.
+Nx1: ◐ CUDA activation residency — Phase-2 device-matmul CHAIN DONE (GPU-5/Tw11, `DeviceF32`, 29× MLP). remaining = full recorder (arbitrary op chains in one submit, async, non-matmul ops on device) + integrate into an nn/llamagpu decode path (currently a standalone primitive, orphan until wired). BIG. USER PRIORITY.
 Nx2: ◐ f32-native nr=16 DONE (Tw10, 153 GFLOP/s). remaining → cache blocking (ADR-0017 re-open this large-cache x86) + FMA-saturation microkernel to close §GAP F32 3.8×/F64 2.7×.
 Nx3: extend CUDA beyond OpMatMul f32 (batched Sgemm for attention); measure each (transfer-bound → only compute-heavy ops win).
