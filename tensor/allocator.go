@@ -48,10 +48,15 @@ func (heapAllocator) Alignment() int { return 0 } // natural
 
 // Pool is a reuse-oriented allocator that recycles buffers by power-of-two size
 // class. Safe for concurrent use. Alignment is advisory (ADR-0002).
+//
+// Size classes are indexed directly into fixed per-dtype arrays (§base-perf:
+// the previous map[uint64]*sync.Pool guarded by a mutex serialized every
+// Alloc/Free; a class can never exceed bits.UintSize, so a flat array needs no
+// locking — sync.Pool itself is concurrency-safe).
 type Pool struct {
 	align int
-	mu    sync.Mutex
-	pools map[uint64]*sync.Pool // key: dtype<<32 | class
+	f32   [bits.UintSize]sync.Pool // index: size class (1<<class capacity)
+	f64   [bits.UintSize]sync.Pool
 }
 
 // PoolOption configures a Pool.
@@ -73,7 +78,7 @@ func WithAlignment(bytes int) PoolOption {
 
 // NewPool builds a pooling allocator.
 func NewPool(opts ...PoolOption) *Pool {
-	p := &Pool{pools: make(map[uint64]*sync.Pool)}
+	p := &Pool{}
 	for _, o := range opts {
 		o(p)
 	}
@@ -86,18 +91,6 @@ func (p *Pool) Alignment() int { return p.align }
 // sizeClass returns the exponent c such that 1<<c is the smallest power of two
 // >= n (with n>=1). n==1 → 0 (cap 1).
 func sizeClass(n int) int { return bits.Len(uint(n - 1)) }
-
-func (p *Pool) poolFor(dtype Dtype, class int) *sync.Pool {
-	key := uint64(dtype)<<32 | uint64(uint32(class))
-	p.mu.Lock()
-	sp := p.pools[key]
-	if sp == nil {
-		sp = &sync.Pool{}
-		p.pools[key] = sp
-	}
-	p.mu.Unlock()
-	return sp
-}
 
 // Alloc returns a pooled backing slice for n elements of the given dtype (rounded
 // up to a power-of-two size class).
@@ -116,14 +109,14 @@ func (p *Pool) Alloc(dtype Dtype, n int) any {
 	}
 	class := sizeClass(n)
 	capacity := 1 << class
-	sp := p.poolFor(dtype, class)
-	v := sp.Get()
 	switch dtype {
 	case F32:
 		var s []float32
-		if v == nil {
+		if v := p.f32[class].Get(); v == nil {
 			s = make([]float32, capacity)
 		} else {
+			// Pooled entries keep whatever length Free received; only the
+			// (power-of-two) capacity is class-invariant, so reslice via cap.
 			s = v.([]float32)
 		}
 		s = s[:n]
@@ -131,7 +124,7 @@ func (p *Pool) Alloc(dtype Dtype, n int) any {
 		return s
 	case F64:
 		var s []float64
-		if v == nil {
+		if v := p.f64[class].Get(); v == nil {
 			s = make([]float64, capacity)
 		} else {
 			s = v.([]float64)
@@ -145,7 +138,9 @@ func (p *Pool) Alloc(dtype Dtype, n int) any {
 }
 
 // Free returns buf to its size-class pool. Buffers whose capacity is not a
-// power of two (foreign) are dropped rather than mis-filed.
+// power of two (foreign) are dropped rather than mis-filed. The incoming `any`
+// box is stored as-is (§base-perf: re-slicing to b[:c] re-boxed the slice
+// header, one heap alloc per Free; Alloc reslices by capacity instead).
 func (p *Pool) Free(buf any) {
 	switch b := buf.(type) {
 	case []float32:
@@ -153,13 +148,13 @@ func (p *Pool) Free(buf any) {
 		if c == 0 || c&(c-1) != 0 {
 			return
 		}
-		p.poolFor(F32, bits.Len(uint(c-1))).Put(b[:c]) //nolint:staticcheck // pooling a slice
+		p.f32[bits.Len(uint(c-1))].Put(buf) //nolint:staticcheck // pooling a slice
 	case []float64:
 		c := cap(b)
 		if c == 0 || c&(c-1) != 0 {
 			return
 		}
-		p.poolFor(F64, bits.Len(uint(c-1))).Put(b[:c]) //nolint:staticcheck
+		p.f64[bits.Len(uint(c-1))].Put(buf) //nolint:staticcheck
 	}
 }
 

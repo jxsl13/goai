@@ -17,10 +17,11 @@ func (t *Tensor) Reshape(newShape Shape) (*Tensor, error) {
 	if !t.IsContiguous() || t.offset != 0 {
 		return nil, fmt.Errorf("tensor: reshape requires contiguous offset-0 view (call Contiguous)")
 	}
+	sh, st := cloneShapeStrides(newShape)
 	return &Tensor{
 		storage: t.storage,
-		shape:   newShape.Clone(),
-		strides: RowMajorStrides(newShape),
+		shape:   sh,
+		strides: st,
 		offset:  t.offset,
 		dev:     t.dev,
 	}, nil
@@ -37,9 +38,8 @@ func (t *Tensor) Slice(dim, start, stop int) (*Tensor, error) {
 		return nil, fmt.Errorf("tensor: slice [%d:%d) out of range for axis %d size %d",
 			start, stop, dim, t.shape[dim])
 	}
-	sh := t.shape.Clone()
+	sh, st := copyShapeStrides(t.shape, t.strides)
 	sh[dim] = stop - start
-	st := append(Strides(nil), t.strides...)
 	return &Tensor{
 		storage: t.storage,
 		shape:   sh,
@@ -56,8 +56,7 @@ func (t *Tensor) Transpose(i, j int) (*Tensor, error) {
 	if i < 0 || i >= n || j < 0 || j >= n {
 		return nil, fmt.Errorf("tensor: transpose axes (%d,%d) out of range for %v", i, j, t.shape)
 	}
-	sh := t.shape.Clone()
-	st := append(Strides(nil), t.strides...)
+	sh, st := copyShapeStrides(t.shape, t.strides)
 	sh[i], sh[j] = sh[j], sh[i]
 	st[i], st[j] = st[j], st[i]
 	return &Tensor{storage: t.storage, shape: sh, strides: st, offset: t.offset, dev: t.dev}, nil
@@ -71,15 +70,28 @@ func (t *Tensor) Permute(perm ...int) (*Tensor, error) {
 	if len(perm) != n {
 		return nil, fmt.Errorf("tensor: permute needs %d axes, got %d", n, len(perm))
 	}
-	seen := make([]bool, n)
-	for _, p := range perm {
-		if p < 0 || p >= n || seen[p] {
-			return nil, fmt.Errorf("tensor: permute %v is not a permutation of 0..%d", perm, n-1)
+	// Permutation check without a heap-allocated seen-slice: a bitmask covers
+	// every realistic rank (§base-perf); ranks beyond 64 fall back to a slice.
+	if n <= 64 {
+		var seen uint64
+		for _, p := range perm {
+			if p < 0 || p >= n || seen&(1<<uint(p)) != 0 {
+				return nil, fmt.Errorf("tensor: permute %v is not a permutation of 0..%d", perm, n-1)
+			}
+			seen |= 1 << uint(p)
 		}
-		seen[p] = true
+	} else {
+		seen := make([]bool, n)
+		for _, p := range perm {
+			if p < 0 || p >= n || seen[p] {
+				return nil, fmt.Errorf("tensor: permute %v is not a permutation of 0..%d", perm, n-1)
+			}
+			seen[p] = true
+		}
 	}
-	sh := make(Shape, n)
-	st := make(Strides, n)
+	buf := make([]int, 2*n)
+	sh := Shape(buf[:n:n])
+	st := Strides(buf[n : 2*n : 2*n])
 	for k, p := range perm {
 		sh[k] = t.shape[p]
 		st[k] = t.strides[p]
