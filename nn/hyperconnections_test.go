@@ -228,3 +228,111 @@ func ExampleHyperConnection_mHC() {
 	fmt.Printf("row0 sum = %.0f\n", ar.AtF64(0, 0)+ar.AtF64(0, 1))
 	// Output: row0 sum = 1
 }
+
+// DHC with zero-init scales is EXACTLY the static SHC cell (the dynamic correction vanishes),
+// so training "warms in" from the stable static baseline.
+func TestDynamicHyperConnectionReducesToStatic(t *testing.T) {
+	const n, d = 2, 4
+	dyn, err := nn.NewDynamicHyperConnection(tensor.F64, n, d, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stat, err := nn.NewHyperConnection(tensor.F64, n, nn.HCNone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := backend.NewContext()
+	h := tensor.FromFloat64(tensor.Shape{n, d}, []float64{1, -1, 0.5, 2, 0.3, 1, -2, 0.7})
+	y := tensor.FromFloat64(tensor.Shape{1, d}, []float64{0.2, -0.4, 0.6, 0.1})
+
+	dynH0, _ := dyn.LayerInput(ctx, h)
+	statH0, _ := stat.LayerInput(ctx, h)
+	dynU, _ := dyn.Update(ctx, h, y)
+	statU, _ := stat.Update(ctx, h, y)
+	for j := range d {
+		if math.Abs(dynH0.AtF64(0, j)-statH0.AtF64(0, j)) > 1e-12 {
+			t.Fatalf("DHC LayerInput != SHC at col %d: %v vs %v", j, dynH0.AtF64(0, j), statH0.AtF64(0, j))
+		}
+	}
+	for i := range n {
+		for j := range d {
+			if math.Abs(dynU.AtF64(i, j)-statU.AtF64(i, j)) > 1e-12 {
+				t.Fatalf("DHC Update != SHC at [%d,%d]: %v vs %v", i, j, dynU.AtF64(i, j), statU.AtF64(i, j))
+			}
+		}
+	}
+}
+
+// §V2: DHC gradients through the RMSNorm→proj→tanh→scale dynamic path match finite differences.
+func TestDynamicHyperConnectionGradcheck(t *testing.T) {
+	const n, d = 2, 3
+	newHC := func() *nn.HyperConnection {
+		hc, err := nn.NewDynamicHyperConnection(tensor.F64, n, d, 5)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// activate the dynamic path with non-trivial scales
+		hc.Dyn.Sm = tensor.FromFloat64(tensor.Shape{1, 1}, []float64{0.5})
+		hc.Dyn.Sr = tensor.FromFloat64(tensor.Shape{1, 1}, []float64{0.3})
+		hc.Dyn.Sb = tensor.FromFloat64(tensor.Shape{1, 1}, []float64{0.4})
+		return hc
+	}
+	h := tensor.FromFloat64(tensor.Shape{n, d}, []float64{1, -1, 0.5, 0.3, 2, -0.7})
+	mask := tensor.FromFloat64(tensor.Shape{n, d}, []float64{0.7, -1.2, 0.4, 0.9, -0.6, 1.1})
+	forward := func(hc *nn.HyperConnection, ctx *backend.Context) (*tensor.Tensor, error) {
+		h0, err := hc.LayerInput(ctx, h)
+		if err != nil {
+			return nil, err
+		}
+		return hc.Update(ctx, h, h0)
+	}
+	hc := newHC()
+	tape := autograd.NewTape()
+	hn, err := forward(hc, tape.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	prod, _ := backend.Execute(tape.Context(), backend.OpMul, []*tensor.Tensor{hn, mask}, nil)
+	loss, _ := backend.Execute(tape.Context(), backend.OpSum, []*tensor.Tensor{prod[0]}, nil)
+	if err := tape.Backward(loss[0]); err != nil {
+		t.Fatal(err)
+	}
+	lossOf := func(hc *nn.HyperConnection) float64 {
+		out, err := forward(hc, backend.NewContext())
+		if err != nil {
+			t.Fatal(err)
+		}
+		var acc float64
+		for i := range n {
+			for j := range d {
+				acc += mask.AtF64(i, j) * out.AtF64(i, j)
+			}
+		}
+		return acc
+	}
+	const eps = 1e-6
+	check := func(name string, param *tensor.Tensor, get func(*nn.HyperConnection) *tensor.Tensor) {
+		g := tape.Grad(param)
+		if g == nil {
+			t.Fatalf("%s: nil gradient", name)
+		}
+		sh := param.Shape()
+		rows, cols := sh[0], sh[1]
+		for i := range rows {
+			for j := range cols {
+				hcp, hcm := newHC(), newHC()
+				orig := param.AtF64(i, j)
+				get(hcp).SetF64(orig+eps, i, j)
+				get(hcm).SetF64(orig-eps, i, j)
+				fd := (lossOf(hcp) - lossOf(hcm)) / (2 * eps)
+				if an := g.AtF64(i, j); math.Abs(an-fd) > 1e-5 {
+					t.Fatalf("%s grad[%d,%d]: analytic %v vs finite-diff %v", name, i, j, an, fd)
+				}
+			}
+		}
+	}
+	check("Wm", hc.Dyn.Wm, func(h *nn.HyperConnection) *tensor.Tensor { return h.Dyn.Wm })
+	check("Wr", hc.Dyn.Wr, func(h *nn.HyperConnection) *tensor.Tensor { return h.Dyn.Wr })
+	check("Wb", hc.Dyn.Wb, func(h *nn.HyperConnection) *tensor.Tensor { return h.Dyn.Wb })
+	check("Sr", hc.Dyn.Sr, func(h *nn.HyperConnection) *tensor.Tensor { return h.Dyn.Sr })
+}

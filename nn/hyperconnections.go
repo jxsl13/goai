@@ -65,6 +65,23 @@ type HyperConnection struct {
 	Ar            *tensor.Tensor // [n,n] width inter-stream residual mixing
 	Mode          HCMode         // constraint on Ar (§T618)
 	SinkhornIters int            // Sinkhorn-Knopp iterations for HCDoublyStochastic
+
+	// Dynamic Hyper-Connections (DHC, §T618): when Dyn is non-nil the mixing parameters gain a
+	// per-token, input-dependent correction static + s∘tanh(RMSNorm(H)·W). This requires H to be
+	// [n, D] (one token, F = D = model dim) — the content-dependent projection needs the real D,
+	// unlike the static/mHC cell which is agnostic to the payload width. NewDynamicHyperConnection
+	// sets it up; a nil Dyn is the plain static (SHC) / mHC cell.
+	Dyn *dhcParams
+}
+
+// dhcParams holds the DHC dynamic-projection weights and small-init scales (§T618). Each effective
+// parameter is static + scaleₓ ∘ tanh(RMSNorm(H)·Wₓ); the scales init small so DHC starts ≈ SHC.
+type dhcParams struct {
+	D          int            // model dimension (H is [n,D])
+	Gamma      *tensor.Tensor // [D] RMSNorm gain applied before the projections
+	Wm, Wr, Wb *tensor.Tensor // [D,1], [D,n], [D,1] dynamic projections for Am, Ar, B
+	Sm, Sr, Sb *tensor.Tensor // [1,1] learnable scales (small init)
+	Eps        float64        // RMSNorm epsilon
 }
 
 // NewHyperConnection builds a per-layer Hyper-Connection cell with expansion rate n, on the
@@ -87,6 +104,110 @@ func NewHyperConnection(dtype tensor.Dtype, n int, mode HCMode, opts ...HyperCon
 		o(hc)
 	}
 	return hc, nil
+}
+
+// NewDynamicHyperConnection builds a DYNAMIC Hyper-Connection cell (DHC, §T618): the mixing
+// parameters gain a per-token, input-dependent correction static + s∘tanh(RMSNorm(H)·W), which
+// lets the network adapt the connection strengths to each token. It requires the model dimension
+// d (H is [n, d], one token) because the dynamic projection reads H's content. The dynamic
+// scales init to 0, so at step 0 the cell is EXACTLY the static SHC and DHC "warms in" as the
+// scales train. mode is ignored for the dynamic path (DHC uses unconstrained dynamic mixing;
+// combining DHC with the mHC constraint is a future refinement). n, d must be ≥ 1.
+func NewDynamicHyperConnection(dtype tensor.Dtype, n, d int, seed uint64, opts ...HyperConnectionOption) (*HyperConnection, error) {
+	if n < 1 || d < 1 {
+		return nil, fmt.Errorf("nn: NewDynamicHyperConnection needs n,d ≥ 1, got n=%d d=%d", n, d)
+	}
+	hc, err := NewHyperConnection(dtype, n, HCNone, opts...)
+	if err != nil {
+		return nil, err
+	}
+	wm := tensor.New(dtype, tensor.Shape{d, 1})
+	wr := tensor.New(dtype, tensor.Shape{d, n})
+	wb := tensor.New(dtype, tensor.Shape{d, 1})
+	XavierUniform(wm, d, 1, seed+1)
+	XavierUniform(wr, d, n, seed+2)
+	XavierUniform(wb, d, 1, seed+3)
+	hc.Dyn = &dhcParams{
+		D:     d,
+		Gamma: tensor.Ones(dtype, tensor.Shape{d}),
+		Wm:    wm, Wr: wr, Wb: wb,
+		Sm:  tensor.Zeros(dtype, tensor.Shape{1, 1}), // small (zero) init → starts at static SHC
+		Sr:  tensor.Zeros(dtype, tensor.Shape{1, 1}),
+		Sb:  tensor.Zeros(dtype, tensor.Shape{1, 1}),
+		Eps: 1e-5,
+	}
+	return hc, nil
+}
+
+// rmsNormH applies RMSNorm(H)·γ over the model-dim axis (the DHC pre-projection normalization).
+func (hc *HyperConnection) rmsNormH(ctx *backend.Context, h *tensor.Tensor) (*tensor.Tensor, error) {
+	return hcExec(ctx, backend.OpRMSNorm, backend.NormAttrs{Eps: hc.Dyn.Eps}, h, hc.Dyn.Gamma)
+}
+
+// dynCorrection computes s ∘ tanh(RMSNorm(H)·W) — the DHC per-token additive correction for a
+// mixing parameter, given its projection W and scale s. h is [n,D]; the result matches W's
+// column count ([n, cols(W)]).
+func (hc *HyperConnection) dynCorrection(ctx *backend.Context, hbar, w, s *tensor.Tensor) (*tensor.Tensor, error) {
+	proj, err := hcExec(ctx, backend.OpMatMul, nil, hbar, w) // [n, cols]
+	if err != nil {
+		return nil, err
+	}
+	act, err := hcExec(ctx, backend.OpTanh, nil, proj)
+	if err != nil {
+		return nil, err
+	}
+	return hcExec(ctx, backend.OpMul, nil, act, s) // broadcast [n,cols]·[1,1]
+}
+
+// effAm/effAr/effB return the effective mixing parameters given the current streams H: the static
+// (or mHC-constrained, for Ar) value, plus the DHC dynamic correction when Dyn is set.
+func (hc *HyperConnection) effAm(ctx *backend.Context, h *tensor.Tensor) (*tensor.Tensor, error) {
+	if hc.Dyn == nil {
+		return hc.Am, nil
+	}
+	hbar, err := hc.rmsNormH(ctx, h)
+	if err != nil {
+		return nil, err
+	}
+	corr, err := hc.dynCorrection(ctx, hbar, hc.Dyn.Wm, hc.Dyn.Sm) // [n,1]
+	if err != nil {
+		return nil, err
+	}
+	return hcExec(ctx, backend.OpAdd, nil, hc.Am, corr)
+}
+
+func (hc *HyperConnection) effAr(ctx *backend.Context, h *tensor.Tensor) (*tensor.Tensor, error) {
+	if hc.Dyn == nil {
+		return hc.EffectiveAr(ctx)
+	}
+	hbar, err := hc.rmsNormH(ctx, h)
+	if err != nil {
+		return nil, err
+	}
+	corr, err := hc.dynCorrection(ctx, hbar, hc.Dyn.Wr, hc.Dyn.Sr) // [n,n]
+	if err != nil {
+		return nil, err
+	}
+	return hcExec(ctx, backend.OpAdd, nil, hc.Ar, corr)
+}
+
+func (hc *HyperConnection) effB(ctx *backend.Context, h *tensor.Tensor) (*tensor.Tensor, error) {
+	if hc.Dyn == nil {
+		return hc.B, nil
+	}
+	hbar, err := hc.rmsNormH(ctx, h)
+	if err != nil {
+		return nil, err
+	}
+	corr, err := hc.dynCorrection(ctx, hbar, hc.Dyn.Wb, hc.Dyn.Sb) // [n,1]
+	if err != nil {
+		return nil, err
+	}
+	corrT, err := hcExec(ctx, backend.OpTranspose, nil, corr) // [1,n]
+	if err != nil {
+		return nil, err
+	}
+	return hcExec(ctx, backend.OpAdd, nil, hc.B, corrT)
 }
 
 // HyperConnectionOption configures a HyperConnection via the functional-options idiom (§C12).
@@ -134,7 +255,11 @@ func (hc *HyperConnection) LayerInput(ctx *backend.Context, h *tensor.Tensor) (*
 	if err := hc.checkH(h, "LayerInput"); err != nil {
 		return nil, err
 	}
-	amT, err := hcExec(ctx, backend.OpTranspose, nil, hc.Am)
+	am, err := hc.effAm(ctx, h)
+	if err != nil {
+		return nil, err
+	}
+	amT, err := hcExec(ctx, backend.OpTranspose, nil, am)
 	if err != nil {
 		return nil, err
 	}
@@ -151,7 +276,11 @@ func (hc *HyperConnection) Update(ctx *backend.Context, h, y *tensor.Tensor) (*t
 	if y.Ndim() != 2 || y.Shape()[0] != 1 || y.Shape()[1] != h.Shape()[1] {
 		return nil, fmt.Errorf("nn: HyperConnection.Update wants y [1,%d], got %v", h.Shape()[1], y.Shape())
 	}
-	bT, err := hcExec(ctx, backend.OpTranspose, nil, hc.B)
+	b, err := hc.effB(ctx, h)
+	if err != nil {
+		return nil, err
+	}
+	bT, err := hcExec(ctx, backend.OpTranspose, nil, b)
 	if err != nil {
 		return nil, err
 	}
@@ -159,7 +288,7 @@ func (hc *HyperConnection) Update(ctx *backend.Context, h, y *tensor.Tensor) (*t
 	if err != nil {
 		return nil, err
 	}
-	ar, err := hc.EffectiveAr(ctx)
+	ar, err := hc.effAr(ctx, h)
 	if err != nil {
 		return nil, err
 	}
@@ -225,8 +354,13 @@ func (hc *HyperConnection) checkH(h *tensor.Tensor, who string) error {
 	return nil
 }
 
-// Params returns the learnable tensors (Am, B, Ar) for the optimizer. The ones-vectors used by
-// Expand/Collapse are constants and are not returned.
+// Params returns the learnable tensors for the optimizer: the static Am, B, Ar, plus the DHC
+// dynamic projections and scales (and the RMSNorm gain) when the cell is dynamic. The
+// ones-vectors used by Expand/Collapse are constants and are not returned.
 func (hc *HyperConnection) Params() []*tensor.Tensor {
-	return []*tensor.Tensor{hc.Am, hc.B, hc.Ar}
+	p := []*tensor.Tensor{hc.Am, hc.B, hc.Ar}
+	if hc.Dyn != nil {
+		p = append(p, hc.Dyn.Wm, hc.Dyn.Wr, hc.Dyn.Wb, hc.Dyn.Sm, hc.Dyn.Sr, hc.Dyn.Sb, hc.Dyn.Gamma)
+	}
+	return p
 }
