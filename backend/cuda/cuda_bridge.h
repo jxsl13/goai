@@ -38,6 +38,8 @@ int cu_matmul_f32_bres(const float* A, const void* dB, float* C, int M, int K, i
 void* cu_alloc_f32(int n);
 int cu_download_f32(const void* dsrc, float* dst, int n);
 int cu_matmul_f32_ddd(const void* dA, const void* dB, void* dC, int M, int K, int N);
+// dC[M,N] = dA[M,K]·dB[N,K]ᵀ, all resident (attention QKᵀ).
+int cu_matmul_f32_ddd_bt(const void* dA, const void* dB, void* dC, int M, int K, int N);
 
 // On-device elementwise op (§V14 Phase-2, breadth beyond matmul). The kernel is
 // compiled at runtime from CUDA-C source via nvrtc (no nvcc needed) and launched
