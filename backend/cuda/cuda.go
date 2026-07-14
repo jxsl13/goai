@@ -422,6 +422,20 @@ func (d *DeviceF32) MatMulBT(b *DeviceF32) (*DeviceF32, error) {
 	return &DeviceF32{ptr: out, rows: d.rows, cols: b.rows}, nil
 }
 
+// Clone returns a new resident activation with a device→device copy of this
+// one's data — for a residual branch, keeping x while an in-place op (RMSNorm,
+// activation) runs on the copy. Free the clone when done.
+func (d *DeviceF32) Clone() (*DeviceF32, error) {
+	if d.ptr == nil {
+		return nil, fmt.Errorf("cuda: Clone on a freed handle")
+	}
+	p := C.cu_clone_f32(d.ptr, C.int(d.rows*d.cols))
+	if p == nil {
+		return nil, fmt.Errorf("cuda: Clone failed")
+	}
+	return &DeviceF32{ptr: p, rows: d.rows, cols: d.cols}, nil
+}
+
 // Free releases the device buffer. Safe to call more than once.
 func (d *DeviceF32) Free() {
 	if d.ptr != nil {

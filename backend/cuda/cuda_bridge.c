@@ -471,6 +471,23 @@ void* cu_alloc_f32(int n) {
     return d;
 }
 
+// cu_clone_f32 allocates a new device buffer and device→device copies n floats
+// into it (for a residual branch: keep x while an in-place op runs on a copy).
+void* cu_clone_f32(const void* src, int n) {
+    void* d = NULL;
+    size_t sz = (size_t)n * sizeof(float);
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { goto done; }
+    if (cudaMallocAsync(&d, sz, gStream) != cudaSuccess) { d = NULL; goto done; }
+    if (cudaMemcpyAsync(d, src, sz, cudaMemcpyDeviceToDevice, gStream) != cudaSuccess) {
+        cudaFreeAsync(d, gStream);
+        d = NULL;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return d;
+}
+
 int cu_download_f32(const void* dsrc, float* dst, int n) {
     int rc = -6;
     pthread_mutex_lock(&gLock);
