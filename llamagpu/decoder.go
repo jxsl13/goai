@@ -125,6 +125,10 @@ type recorder interface {
 	Unary(x, o buffer, op int) error
 	Binary(a, b, o buffer, op int) error
 	QMatMulResident(x buffer, w qweight, o buffer, m int) error
+	// Commit submits without waiting; Wait blocks until done (§T614 encode-overlap split).
+	// Backends without async submit implement Commit as a deferral and Wait as Finish.
+	Commit() error
+	Wait() error
 	Finish() error
 	Free()
 }
@@ -135,6 +139,10 @@ type backendOps struct {
 	newBuffer     func([]float32) (buffer, error)
 	newRecorder   func() (recorder, error)
 	uploadQWeight func(weight []byte, qt uint32, n, k int) (qweight, error) // resident quantized upload
+	// asyncEncode: the backend can encode a second recorder while one executes (§T614).
+	// Metal command buffers are independent objects → true; the vulkan bridge keeps ONE
+	// global recording context → false (pre-encoding there would clobber the in-flight one).
+	asyncEncode bool
 }
 
 type block struct {
@@ -158,6 +166,8 @@ type Decoder struct {
 	gFinal, dinv                                          *bufSlot
 	dx, xn, xn2, q, k, v_, attn, ao, gate, up, mo, logits *bufSlot
 	qkv                                                   *bufSlot       // fused QKV output rows [·, d+2·kvDim] (§T613)
+	pending                                               recorder       // pre-encoded next-step command buffer (§T614)
+	pendingPos                                            int            // position pending encodes; -1 = none
 	table                                                 *tensor.Tensor // token embedding, host-side gather source
 	invHost                                               []float32      // RoPE inverse freqs (uploaded by allocScratch)
 	all                                                   []buffer
@@ -174,6 +184,7 @@ func newDecoderCommon(cfg nlp.LlamaConfig, tokEmb *tensor.Tensor, ops backendOps
 		ops: ops,
 		d:   cfg.Dim, h: cfg.Heads, kvH: cfg.KVHeads, hidden: cfg.Hidden, v: cfg.Vocab,
 		maxLen: cfg.Ctx, eps: float32(cfg.Eps), table: tokEmb,
+		pendingPos: -1,
 	}
 	if d.kvH <= 0 {
 		d.kvH = d.h
@@ -347,19 +358,12 @@ func newQuantDecoder(m *nlp.QuantLlama, ops backendOps) (*Decoder, error) {
 	return d, nil
 }
 
-// Step advances the decoder by one token at absolute position pos (== cache length before the call),
-// recording the whole layer stack + vocab head into one command buffer, and returns the [vocab]
-// logits. pos must be < the model's Ctx.
-func (d *Decoder) Step(token, pos int) ([]float32, error) {
-	if pos < 0 || pos >= d.maxLen {
-		return nil, fmt.Errorf("llamagpu(%s): pos %d out of [0,%d)", d.ops.name, pos, d.maxLen)
-	}
-	if token < 0 || token >= d.v {
-		return nil, fmt.Errorf("llamagpu(%s): token %d out of vocab %d", d.ops.name, token, d.v)
-	}
-	if err := d.dx.b.UploadF32(embedRow(d.table, token, d.d)); err != nil {
-		return nil, err
-	}
+// encodeStep records the whole single-token layer stack + vocab head for absolute position
+// pos into a fresh command buffer WITHOUT committing it. The recorded commands depend only
+// on pos — not on the token, whose embedding is read from d.dx at execution time — which is
+// what makes the §T614 encode-overlap legal: while the GPU executes step pos, the host
+// pre-encodes step pos+1, and the next Step only uploads dx and commits.
+func (d *Decoder) encodeStep(pos int) (recorder, error) {
 	r, err := d.ops.newRecorder()
 	if err != nil {
 		return nil, err
@@ -409,10 +413,63 @@ func (d *Decoder) Step(token, pos int) ([]float32, error) {
 	if e := firstErr(
 		r.RMSNorm(d.dx.b, d.gFinal.b, d.xn.b, 1, D, d.eps),
 		d.out.record(r, d.xn.b, d.logits.b, 1),
-		r.Finish(),
 	); e != nil {
 		r.Free()
 		return nil, e
+	}
+	return r, nil
+}
+
+// dropPending frees a pre-encoded next-step recorder that can no longer be used (the
+// position moved unexpectedly, a prefill rewrote the cache, or the decoder is released).
+func (d *Decoder) dropPending() {
+	if d.pending != nil {
+		d.pending.Free()
+		d.pending = nil
+	}
+	d.pendingPos = -1
+}
+
+// Step advances the decoder by one token at absolute position pos (== cache length before the call),
+// recording the whole layer stack + vocab head into one command buffer, and returns the [vocab]
+// logits. pos must be < the model's Ctx. Sequential calls run the §T614 encode-overlap: while the
+// GPU executes this step, the next position's command buffer is pre-encoded on the host.
+func (d *Decoder) Step(token, pos int) ([]float32, error) {
+	if pos < 0 || pos >= d.maxLen {
+		return nil, fmt.Errorf("llamagpu(%s): pos %d out of [0,%d)", d.ops.name, pos, d.maxLen)
+	}
+	if token < 0 || token >= d.v {
+		return nil, fmt.Errorf("llamagpu(%s): token %d out of vocab %d", d.ops.name, token, d.v)
+	}
+	// the token's embedding must be resident BEFORE commit — the recorded chain reads d.dx.
+	if err := d.dx.b.UploadF32(embedRow(d.table, token, d.d)); err != nil {
+		return nil, err
+	}
+	var r recorder
+	if d.pending != nil && d.pendingPos == pos {
+		r, d.pending, d.pendingPos = d.pending, nil, -1
+	} else {
+		d.dropPending()
+		var err error
+		if r, err = d.encodeStep(pos); err != nil {
+			return nil, err
+		}
+	}
+	if err := r.Commit(); err != nil {
+		r.Free()
+		return nil, err
+	}
+	// encode-overlap (§T614): pre-encode pos+1 while the GPU executes pos. Failure is not
+	// fatal — the next Step simply encodes fresh. Gated on asyncEncode: the vulkan bridge's
+	// single global recording context cannot hold a second open recorder.
+	if d.ops.asyncEncode && pos+1 < d.maxLen {
+		if nr, err := d.encodeStep(pos + 1); err == nil {
+			d.pending, d.pendingPos = nr, pos+1
+		}
+	}
+	if err := r.Wait(); err != nil {
+		r.Free()
+		return nil, err
 	}
 	r.Free()
 	out := make([]float32, d.v)
@@ -436,6 +493,9 @@ func (d *Decoder) StepN(tokens []int, pos int) ([]float32, error) {
 	if pos < 0 || pos+k > d.maxLen {
 		return nil, fmt.Errorf("llamagpu(%s): StepN [%d,%d) out of [0,%d)", d.ops.name, pos, pos+k, d.maxLen)
 	}
+	// a batched step rewrites the cache and scratch — any single-step encode pre-staged for
+	// the old position is now invalid (§T614).
+	d.dropPending()
 	host := make([]float32, k*d.d)
 	for i, tok := range tokens {
 		if tok < 0 || tok >= d.v {
@@ -554,6 +614,7 @@ func (d *Decoder) Ctx() int { return d.maxLen }
 
 // Release frees all device buffers and resident quantized weights.
 func (d *Decoder) Release() {
+	d.dropPending()
 	for _, b := range d.all {
 		if b != nil {
 			b.Release()

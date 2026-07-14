@@ -1553,6 +1553,15 @@ func (r *Recorder) Finish() error {
 	return nil
 }
 
+// Commit and Wait exist for API symmetry with metal's encode-overlap split (§T614). The
+// vulkan bridge keeps ONE recording context (global command buffer), so a second recorder
+// cannot be encoded while one is in flight — Commit is deferred and Wait does the real
+// submit+wait. Overlap becomes possible once the bridge holds per-recorder command buffers.
+func (r *Recorder) Commit() error { return nil }
+
+// Wait submits and blocks — see Commit.
+func (r *Recorder) Wait() error { return r.Finish() }
+
 func (r *Recorder) Free() {
 	if r.handle != nil {
 		C.vk_recorder_free(r.handle)

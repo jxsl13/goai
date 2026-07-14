@@ -2105,6 +2105,26 @@ func (r *Recorder) Finish() error {
 	return nil
 }
 
+// Commit submits the command buffer WITHOUT waiting — the encode-overlap split (§T614):
+// the host encodes the next step's command buffer while this one executes on the GPU.
+// Pair with Wait; a committed recorder must not record further ops.
+func (r *Recorder) Commit() error {
+	rc := C.mtl_recorder_commit(r.handle)
+	if rc != 0 {
+		return fmt.Errorf("metal: Recorder commit failed (%d)", int(rc))
+	}
+	return nil
+}
+
+// Wait blocks until a Commit'ed command buffer completes on the GPU.
+func (r *Recorder) Wait() error {
+	rc := C.mtl_recorder_wait(r.handle)
+	if rc != 0 {
+		return fmt.Errorf("metal: Recorder wait failed (%d)", int(rc))
+	}
+	return nil
+}
+
 func (r *Recorder) Free() {
 	if r.handle != nil {
 		C.mtl_recorder_free(r.handle)

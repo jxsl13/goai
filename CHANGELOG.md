@@ -4,6 +4,14 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T614 — overlap GPU execution with host encoding (2026-07-14)
+- Each decode step's GPU program is now pre-recorded for the next position while the
+  current one runs on the GPU, instead of the host sitting idle during execution and
+  then encoding from scratch. On Metal this lifts bench-model decode from 335 to 375
+  tokens/second (f32) and 212 to 232 (quantized). Together with the fusion arc (T613)
+  the decoder is 39% faster than before the arc began. Vulkan keeps the previous
+  behaviour for now (its bridge holds a single recording context).
+
 ### T613 (slice 4) — one-dispatch RoPE over both QKV bands (2026-07-14)
 - The position rotation (RoPE) of the query and key bands now runs as a single GPU
   dispatch on both backends instead of two. The decoder is down to 12 dispatches per

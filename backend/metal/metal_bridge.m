@@ -1972,6 +1972,23 @@ int mtl_recorder_finish(void* rec) {
     return cmd.status == MTLCommandBufferStatusCompleted ? 0 : -4;
 }
 
+// mtl_recorder_commit submits without waiting — the SPEC T614 encode-overlap split: the host
+// encodes the NEXT step's command buffer while this one executes. Pair with mtl_recorder_wait.
+int mtl_recorder_commit(void* rec) {
+    if (rec == NULL) return -2;
+    id<MTLCommandBuffer> cmd = (__bridge id<MTLCommandBuffer>)rec;
+    [cmd commit];
+    return 0;
+}
+
+// mtl_recorder_wait blocks until a mtl_recorder_commit'ed buffer completes.
+int mtl_recorder_wait(void* rec) {
+    if (rec == NULL) return -2;
+    id<MTLCommandBuffer> cmd = (__bridge id<MTLCommandBuffer>)rec;
+    [cmd waitUntilCompleted];
+    return cmd.status == MTLCommandBufferStatusCompleted ? 0 : -4;
+}
+
 void mtl_recorder_free(void* rec) {
     if (rec == NULL) return;
     id<MTLCommandBuffer> cmd = (__bridge_transfer id<MTLCommandBuffer>)rec; // ARC releases

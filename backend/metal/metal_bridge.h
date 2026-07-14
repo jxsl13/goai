@@ -192,6 +192,8 @@ int mtl_recorder_mha(void* rec, void* qh, void* kh, void* vh, void* oh,
                      int sq, int sk, int dm, int heads, int kvHeads, int dk,
                      int causal, int window, float scale, int qElemOff);
 int mtl_recorder_finish(void* rec);
+int mtl_recorder_commit(void* rec);
+int mtl_recorder_wait(void* rec);
 void mtl_recorder_free(void* rec);
 void* mtl_devbuf_upload(const void* data, int nbytes);
 int mtl_devbuf_download(void* handle, void* dst, int nbytes);

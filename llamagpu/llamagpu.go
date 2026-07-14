@@ -60,6 +60,8 @@ func (m mRec) Binary(a, b, o buffer, op int) error {
 func (m mRec) QMatMulResident(x buffer, w qweight, o buffer, mm int) error {
 	return m.r.QMatMulResident(mb(x), w.(*metal.ResidentQWeight), mb(o), mm)
 }
+func (m mRec) Commit() error { return m.r.Commit() }
+func (m mRec) Wait() error   { return m.r.Wait() }
 func (m mRec) Finish() error { return m.r.Finish() }
 func (m mRec) Free()         { m.r.Free() }
 
@@ -72,7 +74,8 @@ func New(m *nlp.Llama) (*Decoder, error) {
 		return nil, fmt.Errorf("llamagpu: no metal GPU")
 	}
 	return newDecoder(m, backendOps{
-		name: string(backend.Metal),
+		name:        string(backend.Metal),
+		asyncEncode: true, // metal command buffers are independent objects (§T614)
 		newBuffer: func(data []float32) (buffer, error) {
 			b, err := metal.NewDeviceBufferF32(data)
 			if err != nil {
@@ -132,7 +135,8 @@ func NewQuant(m *nlp.QuantLlama) (*Decoder, error) {
 		return nil, fmt.Errorf("llamagpu: no metal GPU")
 	}
 	return newQuantDecoder(m, backendOps{
-		name: string(backend.Metal),
+		name:        string(backend.Metal),
+		asyncEncode: true, // metal command buffers are independent objects (§T614)
 		newBuffer: func(data []float32) (buffer, error) {
 			b, err := metal.NewDeviceBufferF32(data)
 			if err != nil {

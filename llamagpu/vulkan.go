@@ -57,6 +57,8 @@ func (v vRec) Binary(a, b, o buffer, op int) error {
 func (v vRec) QMatMulResident(x buffer, w qweight, o buffer, m int) error {
 	return v.r.QMatMulResident(vb(x), w.(*vulkan.ResidentQWeight), vb(o), m)
 }
+func (v vRec) Commit() error { return v.r.Commit() }
+func (v vRec) Wait() error   { return v.r.Wait() }
 func (v vRec) Finish() error { return v.r.Finish() }
 func (v vRec) Free()         { v.r.Free() }
 
