@@ -15,7 +15,7 @@ layout(std430, binding = 2) readonly buffer BufV { float v[]; };
 layout(std430, binding = 3) writeonly buffer BufO { float o[]; };
 
 layout(push_constant) uniform PC {
-    int sq; int sk; int dm; int heads; int kvHeads; int dk; int causal; int window; float scale;
+    int sq; int sk; int dm; int heads; int kvHeads; int dk; int causal; int window; int qBase; float scale;
 } p;
 
 void main() {
@@ -28,6 +28,8 @@ void main() {
     int i = int(gid) % p.sq;
     int rep = p.heads / p.kvHeads;
     int dkv = p.kvHeads * p.dk;
+    // p.qBase: float-element offset of the query view inside a fused QKV buffer (SPEC T613);
+    // O writes stay at offset 0 (the attention output is its own buffer).
     int qOff = h * p.dk;
     int kvOff = (h / rep) * p.dk;
     int off = p.sk - p.sq;
@@ -39,7 +41,7 @@ void main() {
     float m = -1e30;
     for (int j = jmin; j < jmax; ++j) {
         float s = 0.0;
-        for (int d = 0; d < p.dk; ++d) { s += q[i * p.dm + qOff + d] * k[j * dkv + kvOff + d]; }
+        for (int d = 0; d < p.dk; ++d) { s += q[p.qBase + i * p.dm + qOff + d] * k[j * dkv + kvOff + d]; }
         s *= p.scale;
         m = max(m, s);
     }
@@ -49,7 +51,7 @@ void main() {
     for (int d = 0; d < p.dk; ++d) { acc[d] = 0.0; }
     for (int j = jmin; j < jmax; ++j) {
         float s = 0.0;
-        for (int d = 0; d < p.dk; ++d) { s += q[i * p.dm + qOff + d] * k[j * dkv + kvOff + d]; }
+        for (int d = 0; d < p.dk; ++d) { s += q[p.qBase + i * p.dm + qOff + d] * k[j * dkv + kvOff + d]; }
         s *= p.scale;
         float e = exp(s - m);
         sum += e;

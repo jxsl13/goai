@@ -1836,8 +1836,9 @@ int mtl_recorder_addbias(void* rec, void* xh, void* bh, void* oh, int rows, int 
 // buffer. Q,O are [seq,width]; invh holds `half` inverse frequencies. posOffset is the
 // query's absolute start position (= KV-cache length at a decode step). No commit.
 int mtl_recorder_rope(void* rec, void* qh, void* invh, void* oh,
-                      int seq, int width, int heads, int hd, int half, int posOffset, float posDiv) {
-    if (rec == NULL || qh == NULL || invh == NULL || oh == NULL) return -2;
+                      int seq, int width, int heads, int hd, int half, int posOffset, float posDiv,
+                      int elemOff) {
+    if (rec == NULL || qh == NULL || invh == NULL || oh == NULL || elemOff < 0) return -2;
     if (ensure_rope() != 0) return -6;
     id<MTLCommandBuffer> cmd = (__bridge id<MTLCommandBuffer>)rec;
     id<MTLBuffer> qb = (__bridge id<MTLBuffer>)qh;
@@ -1851,9 +1852,11 @@ int mtl_recorder_rope(void* rec, void* qh, void* invh, void* oh,
     int total = seq * heads * half;
     id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
     [enc setComputePipelineState:gRoPE];
-    [enc setBuffer:qb offset:0 atIndex:0];
+    // elemOff is a float-element offset into Q AND O (the fused-QKV sub-row view, §T613);
+    // Metal buffer-bind offsets are bytes with 4-byte alignment for float — no shader change.
+    [enc setBuffer:qb offset:(NSUInteger)elemOff*4 atIndex:0];
     [enc setBuffer:ib offset:0 atIndex:1];
-    [enc setBuffer:ob offset:0 atIndex:2];
+    [enc setBuffer:ob offset:(NSUInteger)elemOff*4 atIndex:2];
     [enc setBuffer:pb offset:0 atIndex:3];
     [enc setBuffer:fb offset:0 atIndex:4];
     NSUInteger tg = gRoPE.maxTotalThreadsPerThreadgroup;
@@ -2717,8 +2720,8 @@ int mtl_mha_decode_host(const float* Q, const float* K, const float* V, float* O
 
 int mtl_recorder_mha(void* rec, void* qh, void* kh, void* vh, void* oh,
                      int sq, int sk, int dm, int heads, int kvHeads, int dk,
-                     int causal, int window, float scale) {
-    if (rec == NULL || qh == NULL || kh == NULL || vh == NULL || oh == NULL) return -2;
+                     int causal, int window, float scale, int qElemOff) {
+    if (rec == NULL || qh == NULL || kh == NULL || vh == NULL || oh == NULL || qElemOff < 0) return -2;
     // Cooperative fast path (§T428 decode, §T431 generalized to sq>1 for prefill windows): one
     // 32-lane simdgroup per (query row, head) — sq·heads simdgroups vs the two-pass kernel's
     // sq·heads single THREADS, whose serial key streaming made long-context prefill windows
@@ -2738,7 +2741,8 @@ int mtl_recorder_mha(void* rec, void* qh, void* kh, void* vh, void* oh,
         if (dpb == nil || dfpb == nil) return -2;
         id<MTLComputeCommandEncoder> denc = [dcmd computeCommandEncoder];
         [denc setComputePipelineState:gMHADecode];
-        [denc setBuffer:dqb offset:0 atIndex:0];
+        // qElemOff: float-element offset into Q (the fused-QKV sub-row view, §T613).
+        [denc setBuffer:dqb offset:(NSUInteger)qElemOff*4 atIndex:0];
         [denc setBuffer:dkb offset:0 atIndex:1];
         [denc setBuffer:dvb offset:0 atIndex:2];
         [denc setBuffer:dob offset:0 atIndex:3];
@@ -2761,7 +2765,7 @@ int mtl_recorder_mha(void* rec, void* qh, void* kh, void* vh, void* oh,
     if (pb == nil || fpb == nil) return -2;
     id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
     [enc setComputePipelineState:gMHA];
-    [enc setBuffer:qb offset:0 atIndex:0];
+    [enc setBuffer:qb offset:(NSUInteger)qElemOff*4 atIndex:0];
     [enc setBuffer:kb offset:0 atIndex:1];
     [enc setBuffer:vb offset:0 atIndex:2];
     [enc setBuffer:ob offset:0 atIndex:3];

@@ -17,7 +17,7 @@ layout(std430, binding = 2) readonly buffer BufV { float v[]; };
 layout(std430, binding = 3) writeonly buffer BufO { float o[]; };
 
 layout(push_constant) uniform P {
-    int sq; int sk; int dm; int heads; int kvHeads; int dk; int causal; float scale;
+    int sq; int sk; int dm; int heads; int kvHeads; int dk; int causal; int qBase; float scale;
 } p;
 
 void main() {
@@ -32,7 +32,7 @@ void main() {
     int jmax = (p.causal != 0) ? (p.sk - p.sq + i + 1) : p.sk; // §T431 per-row causal bound
 
     float qreg[128];
-    for (int d = 0; d < p.dk; d++) qreg[d] = q[i * p.dm + qOff + d];
+    for (int d = 0; d < p.dk; d++) qreg[d] = q[p.qBase + i * p.dm + qOff + d]; // qBase: fused-QKV query view (SPEC T613)
     float m = -1.0 / 0.0;
     float l = 0.0;
     float acc[128];

@@ -888,9 +888,12 @@ int vk_addbias_backward_f32(const uint32_t* spv, int spvLen,
 // match shaders/mha.comp and shaders/mha_bwd.comp (seven int32 then one float).
 typedef struct { int32_t sq, sk, dm, heads, kvHeads, dk, causal; float scale; } MhaPC;
 
-// the forward kernel additionally takes a sliding-window bound (§T115); it has its own
-// push block so the shared backward MhaPC layout stays unchanged.
-typedef struct { int32_t sq, sk, dm, heads, kvHeads, dk, causal, window; float scale; } MhaFwdPC;
+// the forward kernel additionally takes a sliding-window bound (§T115) and a query-view
+// element offset qBase (fused QKV, SPEC T613); must match shaders/mha.comp.
+typedef struct { int32_t sq, sk, dm, heads, kvHeads, dk, causal, window, qBase; float scale; } MhaFwdPC;
+
+// the backward kernel (shaders/mha_bwd.comp) keeps the pre-T613 layout: window but no qBase.
+typedef struct { int32_t sq, sk, dm, heads, kvHeads, dk, causal, window; float scale; } MhaBwdPC;
 
 int vk_mha_f32(const uint32_t* spv, int spvLen,
                const float* Q, const float* K, const float* V, float* O,
@@ -902,7 +905,7 @@ int vk_mha_f32(const uint32_t* spv, int spvLen,
     VkDeviceSize lens[4] = { q, kv, kv, q };
     void* data[4] = { (void*)Q, (void*)K, (void*)V, O };
     int up[4] = {1, 1, 1, 0}, down[4] = {0, 0, 0, 1};
-    MhaFwdPC pc = { sq, sk, dm, heads, kvHeads, dk, causal, window, scale };
+    MhaFwdPC pc = { sq, sk, dm, heads, kvHeads, dk, causal, window, 0, scale };
     return vk_dispatch(spv, spvLen, 4, lens, data, up, down, &pc, sizeof(pc),
                        ((uint32_t)(heads * sq) + 63u) / 64u, 1u, 1u);
 }
@@ -919,7 +922,7 @@ int vk_mha_decode_f32(const uint32_t* spv, int spvLen,
     VkDeviceSize lens[4] = { q, kv, kv, q };
     void* data[4] = { (void*)Q, (void*)K, (void*)V, O };
     int up[4] = {1, 1, 1, 0}, down[4] = {0, 0, 0, 1};
-    struct { int32_t sq, sk, dm, heads, kvHeads, dk, causal; float scale; } pc = { sq, sk, dm, heads, kvHeads, dk, causal, scale };
+    struct { int32_t sq, sk, dm, heads, kvHeads, dk, causal, qBase; float scale; } pc = { sq, sk, dm, heads, kvHeads, dk, causal, 0, scale };
     return vk_dispatch(spv, spvLen, 4, lens, data, up, down, &pc, sizeof(pc),
                        (uint32_t)heads, (uint32_t)sq, 1u);
 }
@@ -938,7 +941,7 @@ int vk_mha_backward_f32(const uint32_t* spv, int spvLen,
     VkDeviceSize lens[7] = { q, kv, kv, q, q, kv, kv };
     void* data[7] = { (void*)Q, (void*)K, (void*)V, (void*)dO, dQ, dK, dV };
     int up[7] = {1, 1, 1, 1, 1, 1, 1}, down[7] = {0, 0, 0, 0, 1, 1, 1};
-    MhaFwdPC pc = { sq, sk, dm, heads, kvHeads, dk, causal, window, scale };
+    MhaBwdPC pc = { sq, sk, dm, heads, kvHeads, dk, causal, window, scale };
     return vk_dispatch(spv, spvLen, 7, lens, data, up, down, &pc, sizeof(pc),
                        ((uint32_t)(heads * sq) + 63u) / 64u, 1u, 1u);
 }
@@ -1349,17 +1352,22 @@ int vk_recorder_layernorm(void* rec, const uint32_t* spv, int spvLen, void* xh, 
 // vk_recorder_rope records O = RoPE(Q) over device buffers (one invocation per rotated pair,
 // 64/workgroup). posOffset = the query's absolute start position (KV-cache length). No submit.
 int vk_recorder_rope(void* rec, const uint32_t* spv, int spvLen, void* qh, void* invh, void* oh,
-                     int seq, int width, int heads, int hd, int half, int posOffset, float posDiv) {
-    if (!rec || !qh || !invh || !oh || seq < 1 || width < 1) return -2;
+                     int seq, int width, int heads, int hd, int half, int posOffset, float posDiv,
+                     int elemOff) {
+    if (!rec || !qh || !invh || !oh || seq < 1 || width < 1 || elemOff < 0) return -2;
     DevBuf* q = (DevBuf*)qh; DevBuf* inv = (DevBuf*)invh; DevBuf* o = (DevBuf*)oh;
     PipeCache* pc = NULL;
-    struct { int32_t seq, width, heads, hd, half, posOffset; float posDiv; } push = {
-        seq, width, heads, hd, half, posOffset, posDiv };
+    // elemOff is a float-element offset applied to Q AND O inside the shader (the fused-QKV
+    // sub-row view, SPEC T613) — an index, not a descriptor offset, so no
+    // minStorageBufferOffsetAlignment constraint. The bound ranges must cover it.
+    struct { int32_t seq, width, heads, hd, half, posOffset, off; float posDiv; } push = {
+        seq, width, heads, hd, half, posOffset, elemOff, posDiv };
     pthread_mutex_lock(&gLock);
     int rc = -4;
     if (pipeline_for(spv, spvLen, 3, sizeof(push), &pc) == 0) {
         VkBuffer buf[3] = { q->buf, inv->buf, o->buf };
-        VkDeviceSize lens[3] = { (VkDeviceSize)seq*width*4, (VkDeviceSize)half*4, (VkDeviceSize)seq*width*4 };
+        VkDeviceSize span = ((VkDeviceSize)elemOff + (VkDeviceSize)seq*width) * 4;
+        VkDeviceSize lens[3] = { span, (VkDeviceSize)half*4, span };
         uint32_t total = (uint32_t)seq * (uint32_t)heads * (uint32_t)half;
         rc = rec_dispatch(pc, 3, buf, lens, &push, sizeof(push), (total + 63u) / 64u, 1u, 1u);
     }
@@ -1371,17 +1379,19 @@ int vk_recorder_rope(void* rec, const uint32_t* spv, int spvLen, void* qh, void*
 // attention — one 32-lane subgroup per head (vs the two-pass kernel's one invocation per head,
 // which made decode ~serial in the context length). Push {sk,dm,heads,kvHeads,dk,scale}. No submit.
 int vk_recorder_mha_decode(void* rec, const uint32_t* spv, int spvLen, void* qh, void* kh, void* vh, void* oh,
-                           int sq, int sk, int dm, int heads, int kvHeads, int dk, int causal, float scale) {
-    if (!rec || !qh || !kh || !vh || !oh || sq < 1 || sk < 1) return -2;
+                           int sq, int sk, int dm, int heads, int kvHeads, int dk, int causal, float scale,
+                           int qElemOff) {
+    if (!rec || !qh || !kh || !vh || !oh || sq < 1 || sk < 1 || qElemOff < 0) return -2;
     DevBuf* q = (DevBuf*)qh; DevBuf* k = (DevBuf*)kh; DevBuf* v = (DevBuf*)vh; DevBuf* o = (DevBuf*)oh;
     int dkv = kvHeads * dk;
     PipeCache* pc = NULL;
-    struct { int32_t sq, sk, dm, heads, kvHeads, dk, causal; float scale; } push = { sq, sk, dm, heads, kvHeads, dk, causal, scale };
+    // qElemOff: float-element offset of the query view inside a fused QKV buffer (SPEC T613).
+    struct { int32_t sq, sk, dm, heads, kvHeads, dk, causal, qBase; float scale; } push = { sq, sk, dm, heads, kvHeads, dk, causal, qElemOff, scale };
     pthread_mutex_lock(&gLock);
     int rc = -4;
     if (pipeline_for(spv, spvLen, 4, sizeof(push), &pc) == 0) {
         VkBuffer buf[4] = { q->buf, k->buf, v->buf, o->buf };
-        VkDeviceSize lens[4] = { (VkDeviceSize)sq*dm*4, (VkDeviceSize)sk*dkv*4, (VkDeviceSize)sk*dkv*4, (VkDeviceSize)sq*dm*4 };
+        VkDeviceSize lens[4] = { ((VkDeviceSize)qElemOff + (VkDeviceSize)sq*dm)*4, (VkDeviceSize)sk*dkv*4, (VkDeviceSize)sk*dkv*4, (VkDeviceSize)sq*dm*4 };
         rc = rec_dispatch(pc, 4, buf, lens, &push, sizeof(push), (uint32_t)heads, (uint32_t)sq, 1u);
     }
     pthread_mutex_unlock(&gLock);
@@ -1456,18 +1466,20 @@ int vk_recorder_softmax_causal(void* rec, const uint32_t* spv, int spvLen, void*
 }
 
 int vk_recorder_mha(void* rec, const uint32_t* spv, int spvLen, void* qh, void* kh, void* vh, void* oh,
-                    int sq, int sk, int dm, int heads, int kvHeads, int dk, int causal, int window, float scale) {
-    if (!rec || !qh || !kh || !vh || !oh || sq < 1 || sk < 1) return -2;
+                    int sq, int sk, int dm, int heads, int kvHeads, int dk, int causal, int window, float scale,
+                    int qElemOff) {
+    if (!rec || !qh || !kh || !vh || !oh || sq < 1 || sk < 1 || qElemOff < 0) return -2;
     DevBuf* q = (DevBuf*)qh; DevBuf* k = (DevBuf*)kh; DevBuf* v = (DevBuf*)vh; DevBuf* o = (DevBuf*)oh;
     int dkv = kvHeads * dk;
     PipeCache* pc = NULL;
-    MhaFwdPC push = { sq, sk, dm, heads, kvHeads, dk, causal, window, scale };
+    // qElemOff: float-element offset of the query view inside a fused QKV buffer (SPEC T613).
+    MhaFwdPC push = { sq, sk, dm, heads, kvHeads, dk, causal, window, qElemOff, scale };
     pthread_mutex_lock(&gLock);
     int rc = -4;
     if (pipeline_for(spv, spvLen, 4, sizeof(push), &pc) == 0) {
         VkBuffer buf[4] = { q->buf, k->buf, v->buf, o->buf };
         VkDeviceSize qb = (VkDeviceSize)sq * dm * 4, kv = (VkDeviceSize)sk * dkv * 4;
-        VkDeviceSize lens[4] = { qb, kv, kv, qb };
+        VkDeviceSize lens[4] = { (VkDeviceSize)qElemOff*4 + qb, kv, kv, qb };
         rc = rec_dispatch(pc, 4, buf, lens, &push, sizeof(push), ((uint32_t)(heads * sq) + 63u) / 64u, 1u, 1u);
     }
     pthread_mutex_unlock(&gLock);

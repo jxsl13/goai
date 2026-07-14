@@ -1248,13 +1248,20 @@ func (r *Recorder) RMSNorm(x, g, o *DeviceBuffer, rows, dim int, eps float32) er
 // RoPE records O = RoPE(Q) into the command buffer over device buffers. q, o are [seq,width];
 // inv holds `half` inverse frequencies. posOffset is the query's absolute start position.
 func (r *Recorder) RoPE(q, inv, o *DeviceBuffer, seq, width, heads, hd, half, posOffset int, posDiv float32) error {
-	if q.n < seq*width || o.n < seq*width || inv.n < half {
-		return fmt.Errorf("vulkan: Recorder rope shape mismatch: q=%d o=%d (want %d) inv=%d (want %d)", q.n, o.n, seq*width, inv.n, half)
+	return r.RoPEAt(q, inv, o, 0, seq, width, heads, hd, half, posOffset, posDiv)
+}
+
+// RoPEAt is RoPE with q AND o addressed from float-element offset `off` — the fused-QKV
+// view (§T613): the query/key sub-rows of a combined qkv buffer rotate in place without a
+// copy. The offset is an in-shader index, so no descriptor-alignment constraint applies.
+func (r *Recorder) RoPEAt(q, inv, o *DeviceBuffer, off, seq, width, heads, hd, half, posOffset int, posDiv float32) error {
+	if off < 0 || q.n < off+seq*width || o.n < off+seq*width || inv.n < half {
+		return fmt.Errorf("vulkan: Recorder rope shape mismatch: q=%d o=%d (want %d at off %d) inv=%d (want %d)", q.n, o.n, seq*width, off, inv.n, half)
 	}
 	rc := C.vk_recorder_rope(r.handle,
 		(*C.uint32_t)(unsafe.Pointer(&ropeSpirv[0])), C.int(len(ropeSpirv)),
 		q.handle, inv.handle, o.handle,
-		C.int(seq), C.int(width), C.int(heads), C.int(hd), C.int(half), C.int(posOffset), C.float(posDiv))
+		C.int(seq), C.int(width), C.int(heads), C.int(hd), C.int(half), C.int(posOffset), C.float(posDiv), C.int(off))
 	if rc != 0 {
 		return fmt.Errorf("vulkan: Recorder rope failed (%d)", int(rc))
 	}
@@ -1265,8 +1272,15 @@ func (r *Recorder) RoPE(q, inv, o *DeviceBuffer, seq, width, heads, hd, half, po
 // the decode-against-KV-cache shape (sq=1 query row, sk=cache length). q, o are [sq,dm]; k, v are
 // [sk,kvHeads*dk] and may be over-allocated caches (only the first sk rows are read).
 func (r *Recorder) MHA(q, k, v, o *DeviceBuffer, sq, sk, dm, heads, kvHeads, dk, causal, window int, scale float32) error {
-	if q.n < sq*dm || o.n < sq*dm || k.n < sk*kvHeads*dk || v.n < sk*kvHeads*dk {
-		return fmt.Errorf("vulkan: Recorder mha shape mismatch: q=%d o=%d (want %d) k=%d v=%d (need >=%d)", q.n, o.n, sq*dm, k.n, v.n, sk*kvHeads*dk)
+	return r.MHAAt(q, k, v, o, 0, sq, sk, dm, heads, kvHeads, dk, causal, window, scale)
+}
+
+// MHAAt is MHA with the query rows starting at float-element offset qOff into q — the
+// fused-QKV view (§T613): after ONE combined QKV matmul the query part is a sub-range of
+// the wider qkv buffer. o still receives its sq×dm rows from offset 0.
+func (r *Recorder) MHAAt(q, k, v, o *DeviceBuffer, qOff, sq, sk, dm, heads, kvHeads, dk, causal, window int, scale float32) error {
+	if qOff < 0 || q.n < qOff+sq*dm || o.n < sq*dm || k.n < sk*kvHeads*dk || v.n < sk*kvHeads*dk {
+		return fmt.Errorf("vulkan: Recorder mha shape mismatch: q=%d(off %d) o=%d (want %d) k=%d v=%d (need >=%d)", q.n, qOff, o.n, sq*dm, k.n, v.n, sk*kvHeads*dk)
 	}
 	// Cooperative fast path (§T429 decode, §T431 generalized to sq>1 for prefill windows): one
 	// 32-lane subgroup per (query row, head); per-row causal bound jmax = sk-sq+i+1. Window stays
@@ -1275,7 +1289,7 @@ func (r *Recorder) MHA(q, k, v, o *DeviceBuffer, sq, sk, dm, heads, kvHeads, dk,
 		rc := C.vk_recorder_mha_decode(r.handle,
 			(*C.uint32_t)(unsafe.Pointer(&mhaDecodeSpirv[0])), C.int(len(mhaDecodeSpirv)),
 			q.handle, k.handle, v.handle, o.handle,
-			C.int(sq), C.int(sk), C.int(dm), C.int(heads), C.int(kvHeads), C.int(dk), C.int(causal), C.float(scale))
+			C.int(sq), C.int(sk), C.int(dm), C.int(heads), C.int(kvHeads), C.int(dk), C.int(causal), C.float(scale), C.int(qOff))
 		if rc != 0 {
 			return fmt.Errorf("vulkan: Recorder mha (decode path) failed (%d)", int(rc))
 		}
@@ -1284,7 +1298,7 @@ func (r *Recorder) MHA(q, k, v, o *DeviceBuffer, sq, sk, dm, heads, kvHeads, dk,
 	rc := C.vk_recorder_mha(r.handle,
 		(*C.uint32_t)(unsafe.Pointer(&mhaSpirv[0])), C.int(len(mhaSpirv)),
 		q.handle, k.handle, v.handle, o.handle,
-		C.int(sq), C.int(sk), C.int(dm), C.int(heads), C.int(kvHeads), C.int(dk), C.int(causal), C.int(window), C.float(scale))
+		C.int(sq), C.int(sk), C.int(dm), C.int(heads), C.int(kvHeads), C.int(dk), C.int(causal), C.int(window), C.float(scale), C.int(qOff))
 	if rc != 0 {
 		return fmt.Errorf("vulkan: Recorder mha failed (%d)", int(rc))
 	}

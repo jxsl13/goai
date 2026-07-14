@@ -4,6 +4,14 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T613 (slice 2a) — offset views for fused QKV on both GPU backends (2026-07-14)
+- The Metal and Vulkan recorders gained RoPEAt and MHAAt: RoPE (rotary position
+  embedding — the rotation that encodes token positions) and attention can now read
+  their query/key rows at an element offset inside one wider buffer, the layout a
+  single fused QKV matmul produces. Metal uses native buffer-bind byte offsets;
+  Vulkan passes the offset as an in-shader index, sidestepping descriptor alignment
+  limits. Offset runs are bit-identical to the unfused baseline on both backends.
+
 ### T613 (slice 1) — fused SwiGLU on both GPU backends (2026-07-14)
 - The decoder's SiLU-then-multiply pair is now one fused kernel on Metal and Vulkan
   (one dispatch fewer per layer; parity suites green). Individually inside run noise —

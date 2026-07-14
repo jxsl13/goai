@@ -1962,13 +1962,20 @@ func (r *Recorder) flashattn(q, k, v, o *DeviceBuffer, seq, dm, heads, dk, causa
 // length). q, o are [sq,dm]; k, v are [sk,kvHeads*dk]. causal!=0 masks future positions,
 // window>0 limits attention to the last `window` keys.
 func (r *Recorder) MHA(q, k, v, o *DeviceBuffer, sq, sk, dm, heads, kvHeads, dk, causal, window int, scale float32) error {
+	return r.MHAAt(q, k, v, o, 0, sq, sk, dm, heads, kvHeads, dk, causal, window, scale)
+}
+
+// MHAAt is MHA with the query rows starting at float-element offset qOff into q — the
+// fused-QKV view (§T613): after ONE combined QKV matmul the query part is a sub-range of
+// the wider qkv buffer. o still receives its sq×dm rows from offset 0.
+func (r *Recorder) MHAAt(q, k, v, o *DeviceBuffer, qOff, sq, sk, dm, heads, kvHeads, dk, causal, window int, scale float32) error {
 	// k,v may be an over-allocated KV cache; the kernel reads only the first sk rows, so
 	// require they are AT LEAST sk*kvHeads*dk (not exactly).
-	if q.n < sq*dm || o.n < sq*dm || k.n < sk*kvHeads*dk || v.n < sk*kvHeads*dk {
-		return fmt.Errorf("metal: Recorder mha shape mismatch: q=%d o=%d (want %d) k=%d v=%d (need >=%d)", q.n, o.n, sq*dm, k.n, v.n, sk*kvHeads*dk)
+	if qOff < 0 || q.n < qOff+sq*dm || o.n < sq*dm || k.n < sk*kvHeads*dk || v.n < sk*kvHeads*dk {
+		return fmt.Errorf("metal: Recorder mha shape mismatch: q=%d(off %d) o=%d (want %d) k=%d v=%d (need >=%d)", q.n, qOff, o.n, sq*dm, k.n, v.n, sk*kvHeads*dk)
 	}
 	rc := C.mtl_recorder_mha(r.handle, q.handle, k.handle, v.handle, o.handle,
-		C.int(sq), C.int(sk), C.int(dm), C.int(heads), C.int(kvHeads), C.int(dk), C.int(causal), C.int(window), C.float(scale))
+		C.int(sq), C.int(sk), C.int(dm), C.int(heads), C.int(kvHeads), C.int(dk), C.int(causal), C.int(window), C.float(scale), C.int(qOff))
 	if rc != 0 {
 		return fmt.Errorf("metal: Recorder mha failed (%d)", int(rc))
 	}
@@ -1979,11 +1986,18 @@ func (r *Recorder) MHA(q, k, v, o *DeviceBuffer, sq, sk, dm, heads, kvHeads, dk,
 // inv holds `half` inverse frequencies. posOffset is the query's absolute start position
 // (= KV-cache length at a decode step, so the new token rotates by its true position).
 func (r *Recorder) RoPE(q, inv, o *DeviceBuffer, seq, width, heads, hd, half, posOffset int, posDiv float32) error {
-	if q.n < seq*width || o.n < seq*width || inv.n < half {
-		return fmt.Errorf("metal: Recorder rope shape mismatch: q=%d o=%d (want %d) inv=%d (want %d)", q.n, o.n, seq*width, inv.n, half)
+	return r.RoPEAt(q, inv, o, 0, seq, width, heads, hd, half, posOffset, posDiv)
+}
+
+// RoPEAt is RoPE with q AND o addressed from float-element offset `off` — the fused-QKV
+// view (§T613): the query/key sub-rows of a combined qkv buffer rotate in place without a
+// copy. Both reads and writes shift by off; everything else matches RoPE.
+func (r *Recorder) RoPEAt(q, inv, o *DeviceBuffer, off, seq, width, heads, hd, half, posOffset int, posDiv float32) error {
+	if off < 0 || q.n < off+seq*width || o.n < off+seq*width || inv.n < half {
+		return fmt.Errorf("metal: Recorder rope shape mismatch: q=%d o=%d (want %d at off %d) inv=%d (want %d)", q.n, o.n, seq*width, off, inv.n, half)
 	}
 	rc := C.mtl_recorder_rope(r.handle, q.handle, inv.handle, o.handle,
-		C.int(seq), C.int(width), C.int(heads), C.int(hd), C.int(half), C.int(posOffset), C.float(posDiv))
+		C.int(seq), C.int(width), C.int(heads), C.int(hd), C.int(half), C.int(posOffset), C.float(posDiv), C.int(off))
 	if rc != 0 {
 		return fmt.Errorf("metal: Recorder rope failed (%d)", int(rc))
 	}

@@ -178,12 +178,13 @@ int mtl_recorder_rmsnorm(void* rec, void* xh, void* gh, void* oh, int rows, int 
 int mtl_recorder_layernorm(void* rec, void* xh, void* gh, void* bh, void* oh, int rows, int dim, float eps);
 int mtl_recorder_addbias(void* rec, void* xh, void* bh, void* oh, int rows, int n);
 int mtl_recorder_rope(void* rec, void* qh, void* invh, void* oh,
-                      int seq, int width, int heads, int hd, int half, int posOffset, float posDiv);
+                      int seq, int width, int heads, int hd, int half, int posOffset, float posDiv,
+                      int elemOff);
 int mtl_recorder_flashattn(void* rec, void* qh, void* kh, void* vh, void* oh,
                            int seq, int dm, int heads, int dk, int causal, int kvHeads, float scale);
 int mtl_recorder_mha(void* rec, void* qh, void* kh, void* vh, void* oh,
                      int sq, int sk, int dm, int heads, int kvHeads, int dk,
-                     int causal, int window, float scale);
+                     int causal, int window, float scale, int qElemOff);
 int mtl_recorder_finish(void* rec);
 void mtl_recorder_free(void* rec);
 void* mtl_devbuf_upload(const void* data, int nbytes);

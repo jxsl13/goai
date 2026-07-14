@@ -188,17 +188,20 @@ int vk_recorder_rmsnorm(void* rec, const uint32_t* spv, int spvLen, void* xh, vo
 int vk_recorder_layernorm(void* rec, const uint32_t* spv, int spvLen, void* xh, void* gh, void* bh, void* oh, int rows, int dim, float eps);
 int vk_recorder_addbias(void* rec, const uint32_t* spv, int spvLen, void* xh, void* bh, void* oh, int rows, int n);
 int vk_recorder_rope(void* rec, const uint32_t* spv, int spvLen, void* qh, void* invh, void* oh,
-                     int seq, int width, int heads, int hd, int half, int posOffset, float posDiv);
+                     int seq, int width, int heads, int hd, int half, int posOffset, float posDiv,
+                     int elemOff);
 int vk_recorder_matmul_strided(void* rec, const uint32_t* spv, int spvLen, void* ah, void* bh, void* ch,
                                int M, int K, int N, int transA, int transB,
                                int lda, int ldb, int ldc, int offA, int offB, int offC, float alpha);
 int vk_recorder_softmax_causal(void* rec, const uint32_t* spv, int spvLen, void* sh, int rows, int cols, int causal);
 int vk_recorder_mha(void* rec, const uint32_t* spv, int spvLen, void* qh, void* kh, void* vh, void* oh,
-                    int sq, int sk, int dm, int heads, int kvHeads, int dk, int causal, int window, float scale);
+                    int sq, int sk, int dm, int heads, int kvHeads, int dk, int causal, int window, float scale,
+                    int qElemOff);
 int vk_recorder_qmatmul(void* rec, const uint32_t* spv, int spvLen, void* xh, void* wHandle, void* oh,
                         int M, int K, int N, int wBytes);
 int vk_recorder_mha_decode(void* rec, const uint32_t* spv, int spvLen, void* qh, void* kh, void* vh, void* oh,
-                           int sq, int sk, int dm, int heads, int kvHeads, int dk, int causal, float scale);
+                           int sq, int sk, int dm, int heads, int kvHeads, int dk, int causal, float scale,
+                           int qElemOff);
 int vk_recorder_blit(void* rec, void* srcH, int srcOff, void* dstH, int dstOff, int nbytes);
 int vk_recorder_finish(void* rec);
 void vk_recorder_free(void* rec);
