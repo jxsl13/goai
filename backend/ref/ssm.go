@@ -52,7 +52,88 @@ func selectiveScanKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.At
 	}
 
 	out := tensor.NewOn(ctx.Device(), u.Dtype(), u.Shape())
-	h := make([]float64, D*N) // recurrent state per (d,n), persists across t
+	h := make([]float64, D*N) // recurrent state per (d,n), persists across t (f64 on ALL paths)
+
+	// Devirtualised fast paths (§T645): the generic AtF64/SetF64 loop below pays a
+	// dtype dispatch + flat-offset computation per element. When every read tensor
+	// shares the output dtype we instead grab the raw typed slices once (row-major:
+	// (t,d) of [L,D] at t*D+d, (d,n) of [D,N] at d*N+n, (t,n) of [L,N] at t*N+n) and
+	// index directly. Iteration order, state buffer indexing and accumulation are
+	// byte-for-byte identical to the generic path; the scan state stays float64
+	// everywhere and the F32 path only rounds the STORED output. Contiguous() is
+	// called once per tensor (returns self when already contiguous).
+	switch out.Dtype() {
+	case tensor.F64:
+		uc, dc := u.Contiguous(), delta.Contiguous()
+		ac, bc, cc := A.Contiguous(), B.Contiguous(), C.Contiguous()
+		if uc.Dtype() == tensor.F64 && dc.Dtype() == tensor.F64 && ac.Dtype() == tensor.F64 &&
+			bc.Dtype() == tensor.F64 && cc.Dtype() == tensor.F64 &&
+			(dskip == nil || dskip.Dtype() == tensor.F64) {
+			us, ds := uc.Storage().F64(), dc.Storage().F64()
+			as, bs, cs := ac.Storage().F64(), bc.Storage().F64(), cc.Storage().F64()
+			os := out.Storage().F64()
+			var dsk []float64
+			if dskip != nil {
+				dsk = dskip.Contiguous().Storage().F64()
+			}
+			for t := range L {
+				for d := range D {
+					dt := ds[t*D+d]
+					ut := us[t*D+d]
+					base := d * N
+					tn := t * N
+					var y float64
+					for n := range N {
+						abar := math.Exp(dt * as[base+n])
+						hv := abar*h[base+n] + dt*bs[tn+n]*ut
+						h[base+n] = hv
+						y += cs[tn+n] * hv
+					}
+					if dskip != nil {
+						y += dsk[d] * ut
+					}
+					os[t*D+d] = y
+				}
+			}
+			return []*tensor.Tensor{out}, nil
+		}
+	case tensor.F32:
+		uc, dc := u.Contiguous(), delta.Contiguous()
+		ac, bc, cc := A.Contiguous(), B.Contiguous(), C.Contiguous()
+		if uc.Dtype() == tensor.F32 && dc.Dtype() == tensor.F32 && ac.Dtype() == tensor.F32 &&
+			bc.Dtype() == tensor.F32 && cc.Dtype() == tensor.F32 &&
+			(dskip == nil || dskip.Dtype() == tensor.F32) {
+			us, ds := uc.Storage().F32(), dc.Storage().F32()
+			as, bs, cs := ac.Storage().F32(), bc.Storage().F32(), cc.Storage().F32()
+			os := out.Storage().F32()
+			var dsk []float32
+			if dskip != nil {
+				dsk = dskip.Contiguous().Storage().F32()
+			}
+			for t := range L {
+				for d := range D {
+					dt := float64(ds[t*D+d])
+					ut := float64(us[t*D+d])
+					base := d * N
+					tn := t * N
+					var y float64 // scan state accumulates in float64; only the store rounds
+					for n := range N {
+						abar := math.Exp(dt * float64(as[base+n]))
+						hv := abar*h[base+n] + dt*float64(bs[tn+n])*ut
+						h[base+n] = hv
+						y += float64(cs[tn+n]) * hv
+					}
+					if dskip != nil {
+						y += float64(dsk[d]) * ut
+					}
+					os[t*D+d] = float32(y)
+				}
+			}
+			return []*tensor.Tensor{out}, nil
+		}
+	}
+
+	// Generic fallback for exotic dtypes / mixed inputs (verbatim original loop).
 	for t := range L {
 		for d := range D {
 			dt := delta.AtF64(t, d)
