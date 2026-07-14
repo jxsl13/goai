@@ -32,7 +32,7 @@ CPU-1 (elementwise, `internal/simd/simd_avx.go`): archsimd Add/Sub/Mul/Div × F3
 
 CPU-2 (GEMM F64, `backend/cpu/gemm_simd.go` `gemmF64Band`): archsimd, BIT-EXACT (Iw5). nr=8 register blocking (2 `Float64x4`/row = 8 ILP chains; nr=4 was FMA-latency-bound). A/B 1024³: scalar 40.8 → nr4 62.4 → nr8 82.3 GFLOP/s = 1.95× over scalar. conv F64 (im2col→GEMM, shared kernel) inherits ≈2×.
 
-CPU-3 (GEMM F32, f32-NATIVE, Iw4/ADR-0021): `Float32x8`+`MulAdd`, widen→f64 carrier ONCE per tile (`storeF32x8`, ⊥ per-iter convert). nr=16 register blocking (2 `Float32x8`/row = 8 ILP chains; nr=8 was FMA-latency-bound, ≈half-saturated). A/B 1024³: scalar 42.6 → nr8 128 → nr16 153 GFLOP/s = 3.6× over scalar (nr16 +22% over nr8). blast radius MEASURED = only 2 backend/cpu parity tests (nn/nlp/autograd ⊥ assert F32-exact matmul). same per-element p-order → nr16≡nr8 f32 result, tolerance test unchanged.
+CPU-3 (GEMM F32, f32-NATIVE, Iw4/ADR-0021): `Float32x8`+`MulAdd`, widen→f64 carrier ONCE per tile (`storeF32x8`, ⊥ per-iter convert). nr=16 register blocking (2 `Float32x8`/row = 8 ILP chains; nr=8 was FMA-latency-bound, ≈half-saturated). A/B 1024³: scalar 42.6 → nr8 128 → nr16 153 → DIRECT-store 196 GFLOP/s = 4.7× over scalar. DIRECT store (`gemmF32BandDirect` writes f32 to C, no f64 carrier): eliminating the f64-acc round-trip (doubled store traffic + full narrowing pass) = +28% (153→196); build-tagged `gemmF32` wrapper (default = f64-acc bit-exact, experiment = direct). vendor gap 3.8×→3.0×. blast radius MEASURED = only 2 backend/cpu parity tests (nn/nlp/autograd ⊥ assert F32-exact matmul). same per-element p-order → nr16≡nr8 f32 result, tolerance test unchanged.
   REJECTED (§C3): f64-accumulating F32 SIMD twin (per-iter `LoadFloat32x4Slice`+`ConvertToFloat64`) regressed ≈25× (43→1.7 GFLOP/s) — 128-bit load+widen in hot loop pathological.
 
 CPU-FLOOR (measured pre-SIMD, §V22): scalar pure-Go GEMM 1024³ = F64 42, F32 43 GFLOP/s (F32≈F64 → scalar captured none of f32 density). arm64 M-series ceiling was ≈50 (§T597).
@@ -88,6 +88,7 @@ Tw23|x|CUDA full MULTI-HEAD decoder LAYER composed & verified e2e vs ref (max re
 Tw24|x|CUDA GQA (grouped-query attn, pointer-array batched Sgemm) verified vs per-head ref (PR#25)|GPU-5,Nx1
 Tw25|x|CUDA embedding row-gather (bit-exact) — full-model forward-pass op set COMPLETE on-device (PR#26)|GPU-4,Nx1
 Tw26|x|CUDA fused SwiGLU (SiLU⊙up, 1 pass) — device traffic 5n→3n, FFN launch fusion (PR#27)|GPU-7
+Tw27|x|CPU f32-native GEMM direct-store (drop f64 carrier) +28% → 196 GFLOP/s, 4.7× scalar (PR#28); mr=8 tiling measured as -7% loss, rejected|CPU-3
 
 ## §NEXT — open levers
 

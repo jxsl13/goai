@@ -51,14 +51,8 @@ func matmulKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([
 		})
 	case tensor.F32:
 		A, B := ac.Storage().F32(), bc.Storage().F32()
-		acc := make([]float64, m*n) // f64 accumulation (§V10)
-		parallelWork(m, k*n, func(loRow, hiRow int) {
-			gemmF32Band(A, B, acc, loRow, hiRow, k, n)
-		})
 		C := out.Storage().F32()
-		for i := range C {
-			C[i] = float32(acc[i])
-		}
+		gemmF32(A, B, C, m, k, n)
 	default:
 		return nil, fmt.Errorf("cpu: unsupported dtype %v", a.Dtype())
 	}
