@@ -313,6 +313,14 @@ func gemmF32BandDirect(A, B, C []float32, loRow, hiRow, k, n int) {
 // gemmF32BandDirectCols computes columns [jLo,jHi) of rows [loRow,hiRow).
 // jLo is 16-aligned (blocks are multiples of 16); jHi==n on the last block
 // carries the 8-wide and scalar tails.
+//
+// mr=4 × nr=16 (8 accumulators) is the register-blocking ceiling for the
+// current Go SIMD compiler: its allocator only uses Y0–Y14 (golang/go#76969,
+// closed not-planned), and an mr=6 × nr=16 variant (12 accumulators + 2 B
+// vectors + rotating broadcast) was BUILT and MEASURED here — the inner loop
+// picked up 33 SP-relative spill ops and 512³ dropped 198→102 GFLOP/s.
+// REVERTED per §C3. Re-try only after the upstream allocator can keep ≥15
+// vectors live.
 func gemmF32BandDirectCols(A, B, C []float32, loRow, hiRow, k, n, jLo, jHi int) {
 	span := jHi - jLo
 	nv16 := jLo + span - span%16
