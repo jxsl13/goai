@@ -91,3 +91,62 @@ done:
     pthread_mutex_unlock(&gLock);
     return rc;
 }
+
+// Resident-B (§V14 Phase-1). cu_upload_f32 owns a standalone device buffer (NOT
+// the gA/gB/gC pool) so it can outlive individual matmuls; the caller frees it.
+void* cu_upload_f32(const float* src, int n) {
+    void* d = NULL;
+    size_t sz = (size_t)n * sizeof(float);
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { goto done; }
+    if (cudaMalloc(&d, sz) != cudaSuccess) { d = NULL; goto done; }
+    if (cudaMemcpy(d, src, sz, cudaMemcpyHostToDevice) != cudaSuccess) {
+        cudaFree(d);
+        d = NULL;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return d;
+}
+
+void cu_free_f32(void* dptr) {
+    if (!dptr) return;
+    pthread_mutex_lock(&gLock);
+    cudaFree(dptr);
+    pthread_mutex_unlock(&gLock);
+}
+
+// cu_matmul_f32_bres: C = A·dB with dB already resident. A/C use the pool; B is
+// not uploaded (the whole point). Same column-major idiom as cu_matmul_f32.
+int cu_matmul_f32_bres(const float* A, const void* dB, float* C, int M, int K, int N) {
+    size_t aLen = (size_t)M * K * sizeof(float);
+    size_t cLen = (size_t)M * N * sizeof(float);
+
+    const float alpha = 1.0f, beta = 0.0f;
+    cublasStatus_t st;
+    int rc = -2;
+
+    pthread_mutex_lock(&gLock);
+
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (ensure_cap(&gA, &gACap, aLen) != 0) { rc = -2; goto done; }
+    if (ensure_cap(&gC, &gCCap, cLen) != 0) { rc = -2; goto done; }
+
+    if (cudaMemcpy(gA, A, aLen, cudaMemcpyHostToDevice) != cudaSuccess) { rc = -3; goto done; }
+
+    st = cublasSgemm(gHandle, CUBLAS_OP_N, CUBLAS_OP_N,
+                     N, M, K,
+                     &alpha,
+                     (const float*)dB, N,
+                     gA, K,
+                     &beta,
+                     gC, N);
+    if (st != CUBLAS_STATUS_SUCCESS) { rc = -4; goto done; }
+    if (cudaDeviceSynchronize() != cudaSuccess) { rc = -5; goto done; }
+    if (cudaMemcpy(C, gC, cLen, cudaMemcpyDeviceToHost) != cudaSuccess) { rc = -6; goto done; }
+    rc = 0;
+
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}

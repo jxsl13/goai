@@ -90,10 +90,33 @@ A/B (§V22, same host, file-toggle baseline, count=2 medians):
 Bit-exactness is unchanged (cuBLAS result identical; the pool only changes where
 the buffers come from) — the cross-reference suite stays green.
 
-### Step 2 — device-resident tensors (next)
+### Step 2 — device-resident weights (landed, §V14 Phase-1)
 
-The remaining overhead is the **H2D/D2H copies themselves**. The foundational
-lever is **device-resident tensors** (§V14): keep tensors on the GPU across ops
-so a training step's matmuls don't round-trip through host memory each call.
-cuBLAS is already optimal for the kernel; the win is still in the memory layer
-around it.
+The remaining overhead is the **H2D/D2H copies themselves**. The first piece of
+device residency (mirroring the metal §T156 resident-weight seed) is a
+**resident weight**: `cuda.NewResidentB(w)` uploads a matrix to the GPU once and
+`(*ResidentB).MatMul(a)` reuses it across many activations, skipping the weight's
+per-call H2D. It is the inference lever — the weight is fixed, only the
+activation varies. Result is *identical* to the per-call cuBLAS matmul (same
+Sgemm); `cuda_resident_test.go` checks that plus ref tolerance, reuse, and
+use-after-free.
+
+A/B (§V22, RTX 3060, resident vs per-call re-upload of the same weight):
+
+| shape | per-call | resident | speedup |
+|-------|----------|----------|---------|
+| 1024³ square         | 2.07 ms | 1.65 ms | 1.26× |
+| 2048³ square         | 10.0 ms | 7.95 ms | 1.26× |
+| **decode** M=8, K=N=4096 | **7.81 ms** | **0.30 ms** | **26×** |
+
+Square GEMM sees a modest ≈1.26× (the weight upload is a fraction of the
+compute), but the real inference shape — a small activation against a large
+reused weight — is transfer-*dominated*, and skipping the 64 MB weight re-upload
+per call is **26×**. This is the concrete payoff of keeping weights on-device.
+
+### Step 3 — full device residency (next)
+
+`ResidentB` keeps *weights* resident; the next step keeps *activations* resident
+across ops (§V14 / ADR-0019), so a whole decode step or training graph records
+without host round-trips between ops — the larger architectural change the metal
+recorder made (§T366–T412), replicated for CUDA.
