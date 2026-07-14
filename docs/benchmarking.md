@@ -85,6 +85,28 @@ runs Vulkan on Metal).
 | MatMul/512 | 2141.68 GFLOP/s | 2172.86 GFLOP/s | 1328.09 GFLOP/s |
 
 
+### Conv2D fused implicit-GEMM on Vulkan (§T620, rung 1)
+
+The Vulkan Conv2D was lowered as im2col (materialize the column matrix to global
+memory) → tiled GEMM → scatter. The `col` write+read is the bottleneck (§T620).
+The fused `conv_igemm.comp` kernel instead gathers `X` directly in the tiled-GEMM
+tile load — no `col` buffer, one dispatch. Same-machine A/B
+(`BenchmarkVulkanConv2D`, n8c16hw32 f32 k3, 100×3):
+
+| path | GFLOP/s | Δ |
+|------|---------|---|
+| im2col + tiled GEMM (old) | ≈68 | — |
+| fused implicit-GEMM (§T620) | ≈83.5 | +≈20–23% |
+
+Correctness is bit-checked vs the CPU reference (`TestVulkanConv2DCrossReference`,
+5 shape cases). NOTE: absolute numbers here are ≈2× below the healthy-machine
+baseline (137 GFLOP/s, §T606 matrix above) because of transient local GPU
+degradation (§B55) — the **same-machine relative delta** is the signal, not the
+absolute. A naive single 30× run first read 67.55 and looked like a regression;
+the paired same-machine A/B corrected that (verify-don't-assume). Metal's fused
+kernel and gather coalescing + fp16 are the next rungs toward the torch-mps gap.
+
+
 ### Head-to-head: llama.cpp on the SAME weights (§T607)
 
 The decode benchmark's llama (17.7 M parameters, dim 512, 6 layers, GQA 8/2,
