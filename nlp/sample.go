@@ -637,12 +637,25 @@ func truncateAbove(probs []float64, thresh float64) {
 	}
 }
 
-// rowLogits copies row 0 of a [1,vocab] logits tensor to a slice.
+// rowLogits copies row 0 of a [1,vocab] logits tensor to a slice. On the hot
+// per-token sampling path, so it uses typed []T access (§base-perf) instead of a
+// per-element AtF64 dispatch over the whole vocab.
 func rowLogits(t *tensor.Tensor) []float64 {
 	v := t.Shape()[1]
 	out := make([]float64, v)
-	for j := range v {
-		out[j] = t.AtF64(0, j)
+	tc := t.Contiguous()
+	switch tc.Dtype() {
+	case tensor.F64:
+		copy(out, tc.Storage().F64()[:v]) // row 0 of a contiguous [1,v]
+	case tensor.F32:
+		src := tc.Storage().F32()
+		for j := 0; j < v; j++ {
+			out[j] = float64(src[j])
+		}
+	default:
+		for j := 0; j < v; j++ {
+			out[j] = tc.AtF64(0, j)
+		}
 	}
 	return out
 }
