@@ -141,6 +141,35 @@ func (r *ResidentB) Free() {
 	}
 }
 
+// ResidentVec is a 1-D f32 weight resident on the GPU (e.g. an RMSNorm gamma),
+// uploaded once and reused. Free when done.
+type ResidentVec struct {
+	ptr unsafe.Pointer
+	n   int
+}
+
+// NewResidentVec uploads a 1-D f32 tensor to the GPU.
+func NewResidentVec(v *tensor.Tensor) (*ResidentVec, error) {
+	if v.Ndim() != 1 || v.Dtype() != tensor.F32 {
+		return nil, fmt.Errorf("cuda: ResidentVec needs rank-1 f32, got %dD %v", v.Ndim(), v.Dtype())
+	}
+	vc := v.Contiguous()
+	s := vc.Storage().F32()
+	ptr := C.cu_upload_f32((*C.float)(&s[0]), C.int(len(s)))
+	if ptr == nil {
+		return nil, fmt.Errorf("cuda: ResidentVec upload failed (%d)", len(s))
+	}
+	return &ResidentVec{ptr: ptr, n: vc.Shape()[0]}, nil
+}
+
+// Free releases the device buffer. Safe to call more than once.
+func (r *ResidentVec) Free() {
+	if r.ptr != nil {
+		C.cu_free_f32(r.ptr)
+		r.ptr = nil
+	}
+}
+
 // DeviceF32 is a rank-2 f32 activation resident on the GPU (§V14 Phase-2). It
 // lets a chain of matmuls keep its intermediates on-device: only the first
 // UploadF32 and the final ToHost touch host memory, so an MLP x·W1·W2 pays one
@@ -243,6 +272,27 @@ func (d *DeviceF32) Add(other *DeviceF32) error {
 	}
 	if rc := C.cu_add_f32(d.ptr, other.ptr, C.int(d.rows*d.cols)); rc != 0 {
 		return fmt.Errorf("cuda: add failed (code %d)", int(rc))
+	}
+	return nil
+}
+
+// RMSNorm applies RMSNorm (y = x/√(mean(x²)+eps)·gamma) in-place, row-wise over
+// the last axis, on the GPU — the pre-block norm of a Llama-style transformer,
+// kept device-resident. gamma is a resident [cols] weight; eps ≤ 0 uses 1e-5
+// (the reference default). Matches the Pure-Go RMSNorm within the f32 tolerance
+// (sum-of-squares accumulated in double, mirroring §V10).
+func (d *DeviceF32) RMSNorm(gamma *ResidentVec, eps float32) error {
+	if d.ptr == nil || gamma.ptr == nil {
+		return fmt.Errorf("cuda: RMSNorm on a freed handle")
+	}
+	if gamma.n != d.cols {
+		return fmt.Errorf("cuda: RMSNorm gamma [%d] != cols %d", gamma.n, d.cols)
+	}
+	if eps <= 0 {
+		eps = 1e-5
+	}
+	if rc := C.cu_rmsnorm_f32(d.ptr, gamma.ptr, C.int(d.rows), C.int(d.cols), C.float(eps)); rc != 0 {
+		return fmt.Errorf("cuda: rmsnorm failed (code %d)", int(rc))
 	}
 	return nil
 }
