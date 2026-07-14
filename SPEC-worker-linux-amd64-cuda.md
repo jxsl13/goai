@@ -32,7 +32,7 @@ CPU-1 (elementwise, `internal/simd/simd_avx.go`): archsimd Add/Sub/Mul/Div × F3
 
 CPU-2 (GEMM F64, `backend/cpu/gemm_simd.go` `gemmF64Band`): archsimd, BIT-EXACT (Iw5). nr=8 register blocking (2 `Float64x4`/row = 8 ILP chains; nr=4 was FMA-latency-bound). A/B 1024³: scalar 40.8 → nr4 62.4 → nr8 82.3 GFLOP/s = 1.95× over scalar. conv F64 (im2col→GEMM, shared kernel) inherits ≈2×.
 
-CPU-3 (GEMM F32, f32-NATIVE, Iw4/ADR-0021): `Float32x8`+`MulAdd`, widen→f64 carrier ONCE per tile (`storeF32x8`, ⊥ per-iter convert). A/B 1024³: scalar 42.6 → 128.3 GFLOP/s = 3.0×. blast radius MEASURED = only 2 backend/cpu parity tests (nn/nlp/autograd ⊥ assert F32-exact matmul).
+CPU-3 (GEMM F32, f32-NATIVE, Iw4/ADR-0021): `Float32x8`+`MulAdd`, widen→f64 carrier ONCE per tile (`storeF32x8`, ⊥ per-iter convert). nr=16 register blocking (2 `Float32x8`/row = 8 ILP chains; nr=8 was FMA-latency-bound, ≈half-saturated). A/B 1024³: scalar 42.6 → nr8 128 → nr16 153 GFLOP/s = 3.6× over scalar (nr16 +22% over nr8). blast radius MEASURED = only 2 backend/cpu parity tests (nn/nlp/autograd ⊥ assert F32-exact matmul). same per-element p-order → nr16≡nr8 f32 result, tolerance test unchanged.
   REJECTED (§C3): f64-accumulating F32 SIMD twin (per-iter `LoadFloat32x4Slice`+`ConvertToFloat64`) regressed ≈25× (43→1.7 GFLOP/s) — 128-bit load+widen in hot loop pathological.
 
 CPU-FLOOR (measured pre-SIMD, §V22): scalar pure-Go GEMM 1024³ = F64 42, F32 43 GFLOP/s (F32≈F64 → scalar captured none of f32 density). arm64 M-series ceiling was ≈50 (§T597).
@@ -50,7 +50,7 @@ GPU-4 (resident weights, §V14 Phase-1, mirrors metal §T156): `cuda.NewResident
 
 ## §GAP — vendor-BLAS gap on this Zen3 (torch-cpu 2.13, numpy 2.4.4/OpenBLAS)
 
-GAP-1 (1024³ GFLOP/s): F64 goai 84 | torch 177 | numpy 227 → ≈2.7×. F32 goai(f32-native) 128 | torch 580 | numpy 485 → ≈4.5× (was 13× vs scalar 43).
+GAP-1 (1024³ GFLOP/s): F64 goai 84 | torch 177 | numpy 227 → ≈2.7×. F32 goai(f32-native nr16) 153 | torch 580 | numpy 485 → ≈3.8× (was 13× vs scalar 43).
 GAP-2: F64 gap partly = bit-exact `Mul`+`Add` (≈2× of FMA peak) + vendor cache blocking (ADR-0017 re-openable on this large-cache x86).
 GAP-3 (thread finding): torch FASTER at 8 threads than 16 on 8c/16t (SMT contention, compute-bound GEMM). BUT goai GEMM is SLOWER at 8 than 16 (69 vs 81 GFLOP/s) — its less-saturated kernel benefits from SMT hiding stalls → ⊥ cap parallelWork at physical cores (measured negative).
 
@@ -65,9 +65,10 @@ Tw6|x|F64 GEMM nr=8 register blocking ≈2.0× (PR#6)|CPU-2
 Tw7|x|vendor-BLAS gap measured on Zen3 (PR#7)|§GAP
 Tw8|x|f32-native SIMD GEMM 3.0× + ADR-0021 §V10 amend (PR#8)|Iw4,CPU-3
 Tw9|x|CUDA resident-weight matmul 26× decode (PR#9)|GPU-4
+Tw10|x|f32-native GEMM nr=16 (8 ILP chains) +22% → 3.6× scalar (PR#11)|CPU-3
 
 ## §NEXT — open levers
 
 Nx1: CUDA activation residency (§V14/ADR-0019 full) — keep activations resident across ops (CUDA recorder/stream chaining, one submit). BIG architectural change (metal did §T366–T412); tensor device-storage model = backend-specific (⊥ generic `tensor.Storage`) → CUDA needs own. USER PRIORITY.
-Nx2: f32-native GEMM more ILP (nr=16 = 8 chains, FMA-latency; same lever as CPU-2 nr8) + cache blocking (ADR-0017 re-open this host) → close §GAP F32/F64.
+Nx2: ◐ f32-native nr=16 DONE (Tw10, 153 GFLOP/s). remaining → cache blocking (ADR-0017 re-open this large-cache x86) + FMA-saturation microkernel to close §GAP F32 3.8×/F64 2.7×.
 Nx3: extend CUDA beyond OpMatMul f32 (batched Sgemm for attention); measure each (transfer-bound → only compute-heavy ops win).

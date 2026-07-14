@@ -156,7 +156,8 @@ func gemmF32Band(A, B []float32, acc []float64, loRow, hiRow, k, n int) {
 		gemmF32BandScalarF64(A, B, acc, loRow, hiRow, k, n)
 		return
 	}
-	nv := n - n%8
+	nv16 := n - n%16 // 16-wide: two Float32x8 per row = 8 accumulator chains
+	nv := n - n%8    // 8-wide cleanup boundary
 	i := loRow
 	for ; i+3 < hiRow; i += 4 {
 		r0, r1, r2, r3 := (i+0)*k, (i+1)*k, (i+2)*k, (i+3)*k
@@ -165,7 +166,43 @@ func gemmF32Band(A, B []float32, acc []float64, loRow, hiRow, k, n int) {
 		c2 := acc[(i+2)*n : (i+2)*n+n]
 		c3 := acc[(i+3)*n : (i+3)*n+n]
 		j := 0
-		for ; j < nv; j += 8 {
+		// 8 independent MulAdd chains — enough in flight to hide the FMA latency
+		// on the 2 FMA units (mr=4 × nr=8 left only 4, ≈half-saturated).
+		for ; j < nv16; j += 16 {
+			s0 := archsimd.BroadcastFloat32x8(0)
+			s0h := archsimd.BroadcastFloat32x8(0)
+			s1 := archsimd.BroadcastFloat32x8(0)
+			s1h := archsimd.BroadcastFloat32x8(0)
+			s2 := archsimd.BroadcastFloat32x8(0)
+			s2h := archsimd.BroadcastFloat32x8(0)
+			s3 := archsimd.BroadcastFloat32x8(0)
+			s3h := archsimd.BroadcastFloat32x8(0)
+			for p := 0; p < k; p++ {
+				lo := archsimd.LoadFloat32x8Slice(B[p*n+j:])
+				hi := archsimd.LoadFloat32x8Slice(B[p*n+j+8:])
+				b0 := archsimd.BroadcastFloat32x8(A[r0+p])
+				b1 := archsimd.BroadcastFloat32x8(A[r1+p])
+				b2 := archsimd.BroadcastFloat32x8(A[r2+p])
+				b3 := archsimd.BroadcastFloat32x8(A[r3+p])
+				s0 = b0.MulAdd(lo, s0)
+				s0h = b0.MulAdd(hi, s0h)
+				s1 = b1.MulAdd(lo, s1)
+				s1h = b1.MulAdd(hi, s1h)
+				s2 = b2.MulAdd(lo, s2)
+				s2h = b2.MulAdd(hi, s2h)
+				s3 = b3.MulAdd(lo, s3)
+				s3h = b3.MulAdd(hi, s3h)
+			}
+			storeF32x8(s0, c0[j:])
+			storeF32x8(s0h, c0[j+8:])
+			storeF32x8(s1, c1[j:])
+			storeF32x8(s1h, c1[j+8:])
+			storeF32x8(s2, c2[j:])
+			storeF32x8(s2h, c2[j+8:])
+			storeF32x8(s3, c3[j:])
+			storeF32x8(s3h, c3[j+8:])
+		}
+		for ; j < nv; j += 8 { // 8-wide cleanup (n%16 in [8,15])
 			s0 := archsimd.BroadcastFloat32x8(0)
 			s1 := archsimd.BroadcastFloat32x8(0)
 			s2 := archsimd.BroadcastFloat32x8(0)
@@ -182,7 +219,7 @@ func gemmF32Band(A, B []float32, acc []float64, loRow, hiRow, k, n int) {
 			storeF32x8(s2, c2[j:])
 			storeF32x8(s3, c3[j:])
 		}
-		for ; j < n; j++ { // f32-native scalar tail
+		for ; j < n; j++ { // f32-native scalar tail (n%8)
 			var t0, t1, t2, t3 float32
 			for p := 0; p < k; p++ {
 				bv := B[p*n+j]
