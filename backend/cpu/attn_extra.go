@@ -151,28 +151,43 @@ func retentionKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend
 	}
 	out := tensor.NewOn(ctx.Device(), q.Dtype(), tensor.Shape{l, dv})
 	decay := decayTable(g, l)
-	qr, kr, vr := f64at(q.Contiguous()), f64at(k.Contiguous()), f64at(v.Contiguous())
-	ow := f64set(out)
+	// §T602-style devirtualization: concrete []T slices so every access inlines,
+	// instead of the f64at/f64set per-element closures. f64 accumulation + op order
+	// unchanged → parity within ulps (§V9). Q,K,V,out share one dtype.
+	qc, kc, vc := q.Contiguous(), k.Contiguous(), v.Contiguous()
+	switch q.Dtype() {
+	case tensor.F32:
+		retentionFwd(qc.Storage().F32(), kc.Storage().F32(), vc.Storage().F32(), out.Storage().F32(), l, dk, dv, decay)
+	case tensor.F64:
+		retentionFwd(qc.Storage().F64(), kc.Storage().F64(), vc.Storage().F64(), out.Storage().F64(), l, dk, dv, decay)
+	default:
+		return nil, fmt.Errorf("cpu: retention unsupported dtype %v", q.Dtype())
+	}
+	return []*tensor.Tensor{out}, nil
+}
+
+// retentionFwd is the parallel form (QKᵀ⊙decay)V over concrete []T slices
+// (T = float32|float64), accumulating in f64 for stability and ref-parity.
+func retentionFwd[T normFloat](qs, ks, vs, os []T, l, dk, dv int, decay []float64) {
 	parallelWork(l, l*(dk+dv)/2, func(lo, hi int) {
 		p := make([]float64, l)
 		for n := lo; n < hi; n++ {
 			for m := 0; m <= n; m++ {
 				var a float64
-				for i := range dk {
-					a += qr(n*dk+i) * kr(m*dk+i)
+				for i := 0; i < dk; i++ {
+					a += float64(qs[n*dk+i]) * float64(ks[m*dk+i])
 				}
 				p[m] = a * decay[n-m]
 			}
-			for j := range dv {
+			for j := 0; j < dv; j++ {
 				var acc float64
 				for m := 0; m <= n; m++ {
-					acc += p[m] * vr(m*dv+j)
+					acc += p[m] * float64(vs[m*dv+j])
 				}
-				ow(n*dv+j, acc)
+				os[n*dv+j] = T(acc)
 			}
 		}
 	})
-	return []*tensor.Tensor{out}, nil
 }
 
 func retentionBackwardKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
