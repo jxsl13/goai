@@ -119,10 +119,11 @@ func TestMetalMHACrossReference(t *testing.T) {
 		{"mqa", 8, 8, 8, 1, 4, false, 1},        // multi-query
 		{"kvcache", 3, 7, 2, 2, 8, true, 1},     // sq<sk incremental decode
 		{"attnscale", 6, 6, 4, 4, 8, true, 1.2}, // YaRN attn temperature
-		// NOTE (§T624/§B56): model-scale cases are NOT added on this (mtl_mha_mps
-		// two-matmul) path — its shared [seq,seq] scratch has a non-deterministic
-		// race at seq≥~512 (see TestMetalMHAMPSRaceRegression). Model-scale MHA
-		// coverage lives on the race-free MPSGraph and flash cross-refs below.
+		// NOTE (§T624/§B56): kept at small seq. The sq==sk prefill route now goes
+		// through MPSGraph (the §B56 fix), since the old mtl_mha_mps strided two-matmul
+		// path returned non-deterministic wrong outputs at seq≥~512 (see
+		// TestMetalMHAMPSRaceRegression). Model-scale MHA coverage lives on the
+		// race-free MPSGraph and flash cross-refs below.
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -157,20 +158,19 @@ func TestMetalMHACrossReference(t *testing.T) {
 	}
 }
 
-// TestMetalMHAMPSRaceRegression reproduces §B56: the mtl_mha_mps two-matmul prefill
-// path (OpMHA, sq==sk, Window==0 — the DEFAULT per-op prefill route) returns
-// NON-DETERMINISTIC, WRONG outputs at seq≥~512. The shared [seq,seq] scores scratch `sb`
-// is reused across heads through a Q·Kᵀ(MPS)→softmax(compute)→P·V(MPS) chain; Metal's
-// automatic hazard tracking does NOT reliably order it at scale (measured maxAbs up to
-// ~6.9e-2, varying every run). CAUSAL amplifies the failure rate (near-certain at
-// seq≥512); NON-causal large-seq races too but far less often. seq≤256 is stable-exact;
-// the MPSGraph and flash paths are always exact — those carry the model-scale coverage
-// meanwhile. The reproducer uses causal seq=1024 (the reliable trigger) and runs several
-// iterations. SKIPPED until the race is fixed — DELETE the Skip once mtl_mha_mps is
-// race-free, then it enforces the fix.
+// TestMetalMHAMPSRaceRegression enforces the §B56 fix: OpMHA prefill (sq==sk, Window==0) at
+// model scale (causal seq=1024) must match the reference on EVERY run. The old default route
+// (mtl_mha_mps, per-head strided MPSMatrix Q·Kᵀ→softmax→P·V) returned NON-DETERMINISTIC WRONG
+// outputs at seq≥~512 (measured maxAbs up to ~6.9e-2, varying every run; seq≤256 stable). The
+// §B56 investigation ruled out both suspected mechanisms — it is NOT cross-head scratch reuse
+// and NOT encoder ordering: per-head scratch (disjoint offsets AND separate MTLBuffers), per-head
+// kernel objects, and even fully serialized per-stage command buffers ALL still reproduced it.
+// The strided-matmul path itself misbehaves at scale, so the FIX routes all prefill through the
+// contiguous, race-free MPSGraph path (mtl_mha_mpsgraph), which is exact at every shape. This
+// test runs the causal seq=1024 trigger several times; a non-deterministic race needs repeated
+// runs to trust, so CI/local should run it with -count≥20 (confirmed 20/20 green at the fix).
 func TestMetalMHAMPSRaceRegression(t *testing.T) {
 	skipNoGPU(t)
-	t.Skip("§B56: mtl_mha_mps prefill has a non-deterministic scratch-buffer race at seq≥512; un-skip when fixed")
 	mb, _ := backend.Get(backend.Metal)
 	ref, _ := backend.Get(backend.Ref)
 	const seq, heads, kv, dk = 1024, 8, 8, 64
@@ -281,10 +281,11 @@ func TestMetalMHAMPSGraphCrossReference(t *testing.T) {
 		{"mqa", 8, 8, 1, 4, false, 1},          // multi-query
 		{"attnscale", 6, 4, 4, 8, true, 1.2},   // YaRN attn temperature
 		{"prefill512", 512, 8, 8, 64, true, 1}, // the A/B benchmark shape
-		// Model-scale coverage (§T624): MPSGraph batches all heads in ONE graph with
-		// no manually-shared scratch, so it is the race-free route for prefill at
-		// model scale (mtl_mha_mps has the §B56 shared-buffer race at seq≥512). Real
-		// transformer shapes, heads=8, dk=64, causal.
+		// Model-scale coverage (§T624): MPSGraph batches all heads in ONE contiguous
+		// graph, so it is the race-free route for prefill at model scale and (per the
+		// §B56 fix) now carries ALL OpMHA prefill (mtl_mha_mps's strided two-matmul
+		// path misbehaved non-deterministically at seq≥512). Real transformer shapes,
+		// heads=8, dk=64, causal.
 		{"gqa512", 512, 8, 2, 64, true, 1},       // grouped-query @ model scale
 		{"prefill1024", 1024, 8, 8, 64, true, 1}, // longer context, causal
 	}

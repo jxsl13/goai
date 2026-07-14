@@ -3081,6 +3081,15 @@ static int ensure_softmax_causal(void) {
 // h·dk, rowBytes = full row) → causal softmax in place → O_h = S·V_h. One [seq,seq] scratch S is
 // reused across heads; Metal hazard tracking orders each head's P·V read before the next Q·Kᵀ write.
 // Q,O are [seq,dm]; K,V are [seq,kvHeads·dk]. GQA: kv head = h/(heads/kvHeads).
+// §B56 (2026-07-14): this per-head strided two-matmul path returns NON-DETERMINISTIC WRONG
+// outputs at seq≥≈512 (measured maxAbs 5e-3…7e-2, varies per run; seq≤256 stable). Extensive
+// isolation proved it is NOT the cross-head scratch reuse the comment above assumed: per-head
+// scratch (disjoint offsets AND separate MTLBuffers), per-head kernel objects, and even splitting
+// the three stages into SEPARATE serialized command buffers ALL still reproduced it — so it is
+// neither a scratch-aliasing nor an encoder-ordering hazard, but the strided MPSMatrix matmul path
+// itself misbehaving at scale (the contiguous MPSGraph & flash paths are exact at identical shapes).
+// The production OpMHA prefill route therefore uses mtl_mha_mpsgraph (see metal.go); this function
+// is retained ONLY for the §T394 A/B benchmark (small-seq correctness + 512×8×64 timing).
 int mtl_mha_mps(const float* Q, const float* K, const float* V, float* O,
                 int seq, int dm, int heads, int dk, int causal, int kvHeads, float scale) {
     if (ensure_init() != 0) return -1;

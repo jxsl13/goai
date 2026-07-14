@@ -1501,27 +1501,18 @@ func mhaF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*
 	qc, kc, vc := q.Contiguous(), k.Contiguous(), v.Contiguous()
 	out := tensor.New(tensor.F32, tensor.Shape{sq, dm})
 	if sq == sk && p.Window == 0 {
-		// Training/prefill fast path: attention as MPS(Q·Kᵀ)→causal softmax→MPS(P·V) (§T394).
-		// §T393's floor measurement showed the two matmuls via MPS are ~15× faster than the
-		// hand-written flash kernel; the full path measured 6.9× (10.77→1.55ms at 512×8×64),
-		// bringing attention fwd from ~24× to ~3.4× vs torch-mps. Same scale/causal/kvHeads, so
-		// YaRN attn-scale and GQA carry over; it materializes the [seq,seq] scores (fine on UMA).
-		// Decode (sq<sk) and sliding-window stay on the two-pass kernel below.
-		if mhaUseMPSGraph.Load() {
-			// EXPERIMENT (§T621): Apple's native MPSGraph, all heads batched in one graph run.
-			rc := C.mtl_mha_mpsgraph(
-				(*C.float)(&qc.Storage().F32()[0]),
-				(*C.float)(&kc.Storage().F32()[0]),
-				(*C.float)(&vc.Storage().F32()[0]),
-				(*C.float)(&out.Storage().F32()[0]),
-				C.int(sq), C.int(dm), C.int(heads), C.int(dk), C.int(causal), C.int(kvHeads), C.float(scale),
-			)
-			if rc != 0 {
-				return nil, fmt.Errorf("metal: mha (MPSGraph path) failed (code %d)", int(rc))
-			}
-			return []*tensor.Tensor{out}, nil
-		}
-		rc := C.mtl_mha_mps(
+		// Training/prefill fast path: all heads batched in ONE MPSGraph run (Q·Kᵀ → causal
+		// softmax → P·V). Same scale/causal/kvHeads, so YaRN attn-scale and GQA carry over.
+		// §B56 FIX: the earlier default (mtl_mha_mps, per-head strided MPSMatrix two-matmul with a
+		// materialized [seq,seq] scratch) returns NON-DETERMINISTIC WRONG outputs at seq≥≈512 —
+		// isolation ruled out scratch reuse AND encoder ordering (per-head/separate scratch buffers,
+		// per-head kernels, and fully serialized per-stage command buffers all still reproduced it);
+		// the strided-matmul path itself misbehaves at scale. MPSGraph (contiguous, no shared scratch)
+		// is exact at every shape (seq 4…1024, verified by TestMetalMHAMPSGraphCrossReference) and
+		// race-free, so ALL prefill now routes through it. The mhaUseMPSGraph toggle is retained for
+		// the A/B tests but no longer gates correctness here. Decode (sq<sk) and sliding-window stay
+		// on the two-pass kernel below.
+		rc := C.mtl_mha_mpsgraph(
 			(*C.float)(&qc.Storage().F32()[0]),
 			(*C.float)(&kc.Storage().F32()[0]),
 			(*C.float)(&vc.Storage().F32()[0]),
@@ -1529,7 +1520,7 @@ func mhaF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*
 			C.int(sq), C.int(dm), C.int(heads), C.int(dk), C.int(causal), C.int(kvHeads), C.float(scale),
 		)
 		if rc != 0 {
-			return nil, fmt.Errorf("metal: mha (MPS path) failed (code %d)", int(rc))
+			return nil, fmt.Errorf("metal: mha (MPSGraph path) failed (code %d)", int(rc))
 		}
 		return []*tensor.Tensor{out}, nil
 	}
