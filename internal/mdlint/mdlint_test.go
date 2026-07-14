@@ -51,6 +51,8 @@ func TestLintRules(t *testing.T) {
 		{"html", "the <unk> token\n", "the `<unk>` token\n", "swallowed-html"},
 		{"backtick", "one ` dangling\n", "one `` pair\n", "odd-backticks"},
 		{"link", "[text](broken\n", "[text](ok)\n", "malformed-link"},
+		{"tilde", "gains of ~4x and ~16x here\n", "gains of ≈4x, and a ~~properly struck~~ span\n", "tilde-strikethrough"},
+		{"h1", "# Title\n\n# a mid-doc comment\n", "# Title\n\n## a section\n", "multiple-h1"},
 	}
 	for _, tc := range cases {
 		found := false

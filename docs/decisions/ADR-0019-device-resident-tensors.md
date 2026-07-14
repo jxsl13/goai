@@ -9,11 +9,11 @@ below, each its own verified change. No behaviour changes until Phase 2 lands.
 Two independent findings from the §T350–§T361 real-workload measurements point at the
 same root cause — the backends execute **one op per command buffer, synchronously**
 (encode → commit → `waitUntilCompleted` → download), so every op pays a full CPU↔GPU
-round-trip (~200 µs on this hardware, §T352):
+round-trip (≈200 µs on this hardware, §T352):
 
-1. **Decode is dispatch-bound (§T360/§T361).** A single-token decode step is ~95 tiny
-   ops → ~95 round-trips ≈ 19 ms, so Metal is ~2.3× *slower* than the CPU for small
-   models (the crossover is at ~dim 1024). Generation is the real inference workload.
+1. **Decode is dispatch-bound (§T360/§T361).** A single-token decode step is ≈95 tiny
+   ops → ≈95 round-trips ≈ 19 ms, so Metal is ≈2.3× *slower* than the CPU for small
+   models (the crossover is at ≈dim 1024). Generation is the real inference workload.
 2. **Memory-bound ops hit a per-op floor (§T348/§B42).** Zero-copy UMA gave 0 delta
    because the floor is the round-trip latency + per-op overhead, not the copy.
 
@@ -47,7 +47,7 @@ Concretely, the pieces:
   no behaviour change. Lowest risk.
 - **Phase 2 — batched decode.** A decode step keeps its per-layer intermediates device-
   resident and records into one command buffer; one submit/wait per step. Measure against
-  `BenchmarkGPTDecode` (target: close the ~2.3× gap, aim for GPU-competitive decode).
+  `BenchmarkGPTDecode` (target: close the ≈2.3× gap, aim for GPU-competitive decode).
   V-CROSS: greedy output identical to the current path (§T365 test generalizes).
 - **Phase 3 — batched training/prefill.** Extend the deferred mode to the forward/backward
   graph (autograd tape flushes once), removing the memory-bound per-op floor (§T348).

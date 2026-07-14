@@ -264,7 +264,7 @@ ubuntu-amd64 runner is the host class the parked T11b/T74 wait for.
   embed regression (the GPU gather uploaded an 8MB table per call → host
   f32 gather, both backends).
 - **Quant decode (T413–T416):** recorder QMatMulResident (every ggml type,
-  both backends) + llamagpu.NewQuant: Q8 decode 3.6× vs per-op quant; ~16%
+  both backends) + llamagpu.NewQuant: Q8 decode 3.6× vs per-op quant; ≈16%
   slower than f32-batched → Q8's value = 4× MEMORY, not speed.
 - **StepN + speculative (T418–T420):** multi-token step → **prefill 41×**
   (Generate prefills via ONE StepN); llamagpu.SpeculativeGenerate (draft
@@ -289,7 +289,7 @@ ubuntu-amd64 runner is the host class the parked T11b/T74 wait for.
   242→13.8ms, **17.6×**; standing bench T430: 72.3/71.0 tok/s @L=1920),
   recorder prefill windows sq>1 (T431: per-row jmax=sk-sq+i+1, 291→104ms),
   per-op OpMHA (T432: metal+vulkan host-slice wrappers, sq=1 @sk=1920
-  ~40→2.18ms). Short context honestly unchanged (dispatch-bound,
+  ≈40→2.18ms). Short context honestly unchanged (dispatch-bound,
   §T430/T432).
 
 - **Integration era (T434–T444), the "orphan audit" method:** systematically
@@ -300,7 +300,7 @@ ubuntu-amd64 runner is the host class the parked T11b/T74 wait for.
   targets). (b) T435 GPT.Safetensors() checkpointing (bit round-trip).
   (c) T436 ApplyPenalties→sampler (SampleWithHistory, 7 loops). (d) T437 the
   TokenSampler interface → Mirostat can generate. (e) T438 mechanical audit:
-  class empty; nlp/doc.go covered only ~1/3 of the features — rewritten.
+  class empty; nlp/doc.go covered only ≈1/3 of the features — rewritten.
   (f) T439 Watermark.Sampler + RegexGuide.Sampler (composition adapters;
   sharp tests: z=4.58 detection, (ab)+ enforcement). (g) T440 CFGDecode
   (γ=1/γ=0 equivalences). (h) T441 GPT.JacobiGenerate (lossless vs greedy,
@@ -352,7 +352,7 @@ ubuntu-amd64 runner is the host class the parked T11b/T74 wait for.
 **PARKED with numbers (do not touch again without new evidence):**
 - Tape batching for training: ceiling 1.4× @S256 (§T411) — compute dominates.
 - The conv gap: ≤2×, not on the LLM path, MPSCNN = a large API (§T417).
-- The MPS matmul rate (~3.5× behind torch): Apple's best; 49% of training
+- The MPS matmul rate (≈3.5× behind torch): Apple's best; 49% of training
   time (§T410).
 - Zero-copy UMA (§B42), vulkan GEMM blocking (§B39/41), mha_bwd registers
   (§B43), the vulkan attention fwd reformulation for INFERENCE
@@ -360,7 +360,7 @@ ubuntu-amd64 runner is the host class the parked T11b/T74 wait for.
   vulkan's bottleneck there, the FFN matmuls are; the TRAINING-shape
   default was later justified with new evidence, §T531).
 
-**MEASUREMENT DISCIPLINE (§V22, MANDATORY — so far: ~6 surprises, ~5
+**MEASUREMENT DISCIPLINE (§V22, MANDATORY — so far: ≈6 surprises, ≈5
 prevented wrong builds):** (1) measure/instrument the REAL workload
 (GOAI_LOG_FALLBACK / GOAI_TIME_OPS / bench suites), never standalone ops.
 (2) A/B-measure the floor BEFORE any rewrite (§T393/T396/T411/T417).

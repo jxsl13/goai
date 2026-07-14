@@ -100,7 +100,7 @@ weights** (llama-bench b9960, 3 repetitions, same machine):
 | GoAI vulkan (batched decoder) | — | 245 tok/s |
 
 Read: our batched prefill is within 1.4× of llama.cpp's Metal prefill — the
-one-command-buffer recording strategy holds up. Single-token decode is ~4.2×
+one-command-buffer recording strategy holds up. Single-token decode is ≈4.2×
 behind: llama.cpp's hand-tuned kernels and years of decode-path engineering
 (and at this toy size, Apple's Accelerate BLAS alone already saturates it).
 Honest caveat: 17.7 M parameters is far below production size; the gap
@@ -110,7 +110,7 @@ Honest read of the gaps (as of 2026-07-14):
 
 - **CPU vs vendor BLAS** (BLAS = the decades-old optimized linear-algebra
   libraries behind numpy/torch): our pure-Go f64-accumulating GEMM (general
-  matrix multiply) reaches ~68 GFLOP/s where torch-cpu reaches ~2700 — that
+  matrix multiply) reaches ≈68 GFLOP/s where torch-cpu reaches ≈2700 — that
   class of gap needs f32 SIMD kernels (SIMD = single-instruction-multiple-data,
   the CPU's vector math unit) and is tracked as the §T11b track; the same
   applies to attention (torch's fused SDPA at 0.7 ms vs our 20.6 ms).
@@ -130,10 +130,10 @@ the optimized kernels have a concrete target:
 
 | Benchmark | ref ns/op | cpu ns/op | speedup | note |
 |-----------|-----------|-----------|---------|------|
-| AddF64 4K | ~1.27e5 (4104 allocs) | ~1.2e4 (9 allocs) | ~10× | §T11, bit-identical |
-| MatMulF64 128³ | ~9.1e6 (0.46 GFLOP/s) | ~2.97e5 (14.1 GFLOP/s) | ~31× | §T12/§T12b, bit-identical |
-| MatMulF64 256³ | — | ~9.22e5 (36.4 GFLOP/s) | +31% vs ikj | §T12b 4-row blocking |
-| MatMulF64 512³ | — | ~5.30e6 (50.6 GFLOP/s) | — | §T12b |
+| AddF64 4K | ≈1.27e5 (4104 allocs) | ≈1.2e4 (9 allocs) | ≈10× | §T11, bit-identical |
+| MatMulF64 128³ | ≈9.1e6 (0.46 GFLOP/s) | ≈2.97e5 (14.1 GFLOP/s) | ≈31× | §T12/§T12b, bit-identical |
+| MatMulF64 256³ | — | ≈9.22e5 (36.4 GFLOP/s) | +31% vs ikj | §T12b 4-row blocking |
+| MatMulF64 512³ | — | ≈5.30e6 (50.6 GFLOP/s) | — | §T12b |
 
 (Indicative darwin/arm64 numbers; treat the committed CI run as the source of
 truth. Machine/arch is recorded alongside any comparison. §T12b's 4-row register
@@ -163,11 +163,11 @@ go test ./backend/cpu -run '^$' -bench 'GEMM.*gflops' -benchtime=1s
 source of truth.) Two levers, in priority order (see
 `docs/research/02-frontier-and-perf-2026-07-06.md` for the full roadmap):
 
-1. **f32 SIMD width** — GoAI f32 ≈ f64 (~70 GFLOP/s), but torch f32 is ~4× its f64.
+1. **f32 SIMD width** — GoAI f32 ≈ f64 (≈70 GFLOP/s), but torch f32 is ≈4× its f64.
    Our kernel does not exploit f32's 2× lanes; a SIMD microkernel roughly doubles
    f32 throughput (portable, no AMX needed).
 2. **BLIS/Goto blocking + asm microkernel** — packing + register blocking lifts a
-   scalar kernel to ~50-60% of scalar peak; asm/`avo`/Go-1.26-`simd` closes most of
+   scalar kernel to ≈50-60% of scalar peak; asm/`avo`/Go-1.26-`simd` closes most of
    the rest. The residual (Apple AMX / AVX-512) is a documented cgo-gate candidate,
    not a pure-Go target.
 
@@ -200,7 +200,7 @@ n8c64hw56 ResNet-block, §T341). Snapshot after the
 | RetentionBackward (512×64)   | 319ms | 319ms | 20.2ms | 20.4ms |
 | Softmax (2048×2048)          | 83.0ms | 82.8ms | 1.65ms | 1.71ms |
 | RMSNorm (2048×2048)          | 78.8ms | 80.7ms | 1.80ms | 1.72ms |
-| LayerNorm (2048×2048)        | ~80ms  | ~80ms  | 1.66ms | 1.70ms |
+| LayerNorm (2048×2048)        | ≈80ms  | ≈80ms  | 1.66ms | 1.70ms |
 
 Regression check 2026-07-13 (§T524, after the T504–T523 era incl. the cpu worker
 pool): every row re-measured within noise or slightly better (FlashAttn metal
@@ -223,7 +223,7 @@ Rebuilt in the §T528 structure and A/B/A'd: flash 1590 → chain 1878 tok/s (+1
 now the DEFAULT for the sq==sk no-window shape (flash keeps window + error fallback).
 Cumulative §T528+§T531: **934.7 → 1882 tok/s = 2.01× vulkan GPT training** —
 metal-class (its §T399 rework gave 2.04×). Remaining profile: matmul 51% (GEMM
-ceiling), attention now ~14%.
+ceiling), attention now ≈14%.
 §T534/§B49: profiling METAL's step found the residual adds at 14.6% — the per-op
 GPU binary kernels violated ADR-0008 on host-resident tensors. Binary ops now route
 to the optimized cpu backend on BOTH GPU backends (with the recorder STRIPPED on the
@@ -232,16 +232,16 @@ numbers: metal 2985→3219 tok/s (+7.8%), vulkan 1882→1992 (+5.8%, arc cumulat
 935→1992 = 2.13×).
 
 History of the row-parallel norm/softmax kernels (all measured 2048×2048, medians):
-- Original one-thread-per-row, ~1024-wide threadgroups → metal 10ms / vulkan 2.8ms.
-- §T339 capped metal at 64 threads/threadgroup (dispatch-granularity fix) → ~3ms.
+- Original one-thread-per-row, ≈1024-wide threadgroups → metal 10ms / vulkan 2.8ms.
+- §T339 capped metal at 64 threads/threadgroup (dispatch-granularity fix) → ≈3ms.
 - §T345/§T346 made them COOPERATIVE — one 256-thread threadgroup per row, coalesced
   strided access + a threadgroup tree reduction (the old kernel's neighbouring threads
-  read addresses `dim` floats apart, fully uncoalesced, hitting ~10% of bandwidth) →
-  ~1.7ms, metal and vulkan at parity — the coalesced kernel is the real, measured win.
-- The remaining ~1.7ms floor was *assumed* to be the host↔device memcpy, but §T348/§B42
+  read addresses `dim` floats apart, fully uncoalesced, hitting ≈10% of bandwidth) →
+  ≈1.7ms, metal and vulkan at parity — the coalesced kernel is the real, measured win.
+- The remaining ≈1.7ms floor was *assumed* to be the host↔device memcpy, but §T348/§B42
   **measured** it: a same-session A/B with `bytesNoCopy` zero-copy vs the copy path showed
-  **no difference** (~1.73 vs ~1.75ms). The copy is NOT the bottleneck. The kernels move
-  ~48MB at only ~25 GB/s (≪ the ~200 GB/s the hardware allows), so the floor is per-op GPU
+  **no difference** (≈1.73 vs ≈1.75ms). The copy is NOT the bottleneck. The kernels move
+  ≈48MB at only ≈25 GB/s (≪ the ≈200 GB/s the hardware allows), so the floor is per-op GPU
   dispatch / `waitUntilCompleted` latency + reduction-barrier serialization. The next lever
   for this family is **fewer per-op GPU round-trips** (batch ops into one command buffer with
   barriers, as §T343 did for conv; or a persistent encoder / graph submission) — not
@@ -263,19 +263,19 @@ Snapshot (M2 Pro, 2026-07-12, tokens/s, higher is better):
 | GPT forward       | 181 | 4168 | 3647 |
 | GPT training step | 41  | 535  | 497  |
 
-Both GPU backends win ~20× (forward) / ~13× (training) over the Pure-Go cpu backend.
+Both GPU backends win ≈20× (forward) / ≈13× (training) over the Pure-Go cpu backend.
 
 **BUT autoregressive DECODE is the opposite (§T360).** `BenchmarkGPTDecode` times one-token-per-step
 generation with a KV cache — the real inference workload. Each step's ops are tiny (seq=1), so the
-per-op GPU dispatch / `waitUntilCompleted` round-trip (~200 µs, and a decode step is ~95 ops)
+per-op GPU dispatch / `waitUntilCompleted` round-trip (≈200 µs, and a decode step is ≈95 ops)
 dominates, and the CPU — which runs the tiny compute with no round-trip — **wins**:
 
 | Workload | cpu | metal |
 |----------|----:|------:|
-| GPT decode (tok/s, higher better) | ~101 | ~44 |
+| GPT decode (tok/s, higher better) | ≈101 | ≈44 |
 
-So Metal is ~2.3× **slower** than cpu for decode *on the per-op path*. The systemic fix — batch a
-whole decode step into one command buffer (one submit + one wait instead of ~95) — is **done**:
+So Metal is ≈2.3× **slower** than cpu for decode *on the per-op path*. The systemic fix — batch a
+whole decode step into one command buffer (one submit + one wait instead of ≈95) — is **done**:
 the recorder / `llamagpu` program below (ADR-0019, §T404–§T432).
 
 But this is **size-dependent** (§T361): as the model grows, the per-op GPU *compute* eventually
@@ -294,15 +294,15 @@ model size and hardware — can put small-model decode on the CPU. For serious G
 throughput, use the batched decoders below instead of the per-op path.
 Getting here was measurement-driven: the forward jumped 3.3× (1264→4168) once §T352 found
 that **GELU and bias-add were silently falling back to the CPU reference** — they, not the
-norm/attention kernels earlier fires had tuned, were ~half the forward. The training step
+norm/attention kernels earlier fires had tuned, were ≈half the forward. The training step
 rose as §T353/§T354 moved the GELU and bias-add **backwards** onto the GPU too. The lesson
 (§V22): profile the real workload to find the bottleneck before optimizing a kernel. The
-next measured training bottleneck is the MHA backward (~21 ms/layer, a naive
+next measured training bottleneck is the MHA backward (≈21 ms/layer, a naive
 one-thread-per-query atomic kernel).
 
 ## Batched GPU decode: the recorder & `llamagpu` (ADR-0019, §T404–§T432)
 
-The per-op decode problem above (~95 dispatch round-trips per token) is solved by the
+The per-op decode problem above (≈95 dispatch round-trips per token) is solved by the
 **recorder**: record every op of a decode step into ONE command buffer over device-resident
 weights and KV cache, then submit + wait once. `llamagpu` is the public API
 (`New`/`NewVulkan`/`NewQuant`/`NewGPT` → `Decoder.Step`/`StepN`/`Generate`, plus lossless
@@ -320,8 +320,8 @@ sequence length, a cliff at large KV (242 ms/step @2k context). A **cooperative 
 32-lane simdgroup (Metal) / subgroup (Vulkan) per (query row, head), online-softmax partials
 merged via lane shuffles — covers every attention surface: recorder decode (§T428/§T429,
 242→13.8 ms, 17.6×), recorder prefill windows (§T431, 291→104 ms), and the per-op `OpMHA`
-path (§T432, sq=1 @sk=1920: ~40→2.18 ms). Quantized decode (`NewQuant`, §T413–§T416) trades
-~16% speed for 4× less weight memory (value = memory, not speed — measured, §T416). Its QUALITY
+path (§T432, sq=1 @sk=1920: ≈40→2.18 ms). Quantized decode (`NewQuant`, §T413–§T416) trades
+≈16% speed for 4× less weight memory (value = memory, not speed — measured, §T416). Its QUALITY
 cost, measured on a trained model (§T477): Q8_0 and Q4_0 are both near-lossless there —
 teacher-forced CE deltas within noise (+0.001 / −0.013 bits) and 99% / 97% argmax agreement
 with f32. Measure agreement TEACHER-FORCED; a free-running comparison diverges at the first
@@ -344,7 +344,7 @@ into the verify pass — StepNHidden returns the window's hidden rows, so the he
 NEXT window from the CURRENT verification (the §T419 lastTok-lead-window convention) — making
 a round ONE step for up to K+1 tokens: 3.08×. Prompt-lookup's round was always one step but
 draws its candidates from history matching, so it needs repetitive output (here: the grammar
-corpus) — at 15% acceptance it still yields 1.80× because ~2.2 tokens/step. Medusa works on
+corpus) — at 15% acceptance it still yields 1.80× because ≈2.2 tokens/step. Medusa works on
 any text its heads learned. Draft-model speculative pays a real decoder step per drafted token
 and needs compute-bound (large) targets.
 
@@ -357,8 +357,8 @@ need a draft model, distill it from the target.
 
 Same setup, opposite outcomes — the acceptance rate was never the problem. A batched decode
 step is dispatch-bound (cost ∝ recorded ops, not compute), so a 1-layer draft model still pays
-~1/3 of a target step per drafted token and k·t_draft+t_verify eats the win. Medusa's heads
-draft **host-side for free** (one [dim,vocab] projection each), so a round costs ~2 steps for
+≈1/3 of a target step per drafted token and k·t_draft+t_verify eats the win. Medusa's heads
+draft **host-side for free** (one [dim,vocab] projection each), so a round costs ≈2 steps for
 up to K+1 tokens. Lesson pair: on dispatch-bound decoders use free-drafting schemes (Medusa,
 prompt-lookup); draft-model speculative needs compute-bound (large) targets where
 t_draft/t_target is small. Standing measurements: `TestSpeculativeWithTrainedModels` and
@@ -394,7 +394,7 @@ Two findings: Q4_K outruns Q8_0 at this width on BOTH backends (less weight
 traffic per token), and the backends INVERT on quant-vs-f32 — metal's MPS f32
 matmuls are fast enough that dequant costs, vulkan's tiled kernels are
 bandwidth-bound so quant WINS (Q4_K is the fastest 124M decode measured on
-either backend). Weight memory: f32 ~500MB → Q8 ~130MB → Q4_K ~70MB.
+either backend). Weight memory: f32 ≈500MB → Q8 ≈130MB → Q4_K ≈70MB.
 Language-quality numbers need real weights (download-gated).
 
 ## Further reading

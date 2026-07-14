@@ -2,7 +2,8 @@
 // T612, C19). It deliberately implements a small RULE SET instead of a full
 // CommonMark parser: the failure modes that actually break our rendered docs
 // are structural (unclosed code fences, ragged tables, skipped heading
-// levels, malformed links) and are detectable line-wise. goldmark — the Go
+// levels, malformed links, stray-tilde strikethrough, mid-document h1
+// headings) and are detectable line-wise. goldmark — the Go
 // reference CommonMark implementation — served as the semantics reference
 // when designing the rules; depending on it would end the zero-dependency
 // module, and the evaluation showed the rule set suffices (SPEC T612).
@@ -162,7 +163,24 @@ func Lint(file, src string) []finding {
 				out = append(out, finding{file, n, "heading-jump",
 					fmt.Sprintf("heading level %d follows level %d (skips %d)", lvl, prevHeading, lvl-prevHeading-1)})
 			}
+			// multiple-h1: a document should have ONE h1 (its title). A second `# ` after
+			// the first heading renders LARGER than the `##` sections around it (inverted
+			// hierarchy) — the caveman `# comment` lines that read as giant headings. Use
+			// `##`+, bold, or a blockquote for mid-document annotations.
+			if lvl == 1 && prevHeading > 0 {
+				out = append(out, finding{file, n, "multiple-h1",
+					"a second `# ` heading after the first — renders larger than the section headers; use ##+, bold, or a blockquote"})
+			}
 			prevHeading = lvl
+		}
+
+		// tilde-strikethrough: GitHub GFM renders a single-tilde span ~like this~ as
+		// struck-through. Two stray `~` (e.g. the "approx" shorthand ~4× … ~16×) on one line
+		// silently strike everything between them. Intentional ~~strikethrough~~ (double
+		// tildes) is fine. Report so `~` gets replaced with ≈ or escaped.
+		if unintendedStrikethrough(ln) {
+			out = append(out, finding{file, n, "tilde-strikethrough",
+				"2+ single `~` on a line render as GitHub strikethrough — use ≈ for \"approx\" or \\~ to escape"})
 		}
 
 		// code-span balance is checked per PARAGRAPH below (spans may wrap lines).
@@ -219,6 +237,17 @@ func Lint(file, src string) []finding {
 	}
 	flush(len(lines))
 	return out
+}
+
+// unintendedStrikethrough reports whether a line has 2+ single-tilde delimiters that GitHub GFM
+// would render as strikethrough. Code spans are stripped (tildes in `code` are literal) and
+// intentional ~~double-tilde~~ strikethrough is removed first; if 2+ single `~` remain, they pair
+// into an unintended struck span.
+func unintendedStrikethrough(s string) bool {
+	s = stripSpans(s)                    // tildes inside `code` are literal
+	s = strings.ReplaceAll(s, "\\~", "") // escaped tildes never strike
+	s = strings.ReplaceAll(s, "~~", "")  // intentional double-tilde strikethrough is fine
+	return strings.Count(s, "~") >= 2
 }
 
 var htmlish = regexp.MustCompile(`</?[a-zA-Z][a-zA-Z0-9]*/?>`)

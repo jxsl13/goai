@@ -15,13 +15,13 @@ norm/softmax family was benchmarked at), same session, back-to-back:
 
 | RMSNorm/metal 2048² | median ns/op |
 |---|---|
-| copy path (bytesNoCopy forced off) | ~1.75 ms |
-| zero-copy (bytesNoCopy active)     | ~1.73 ms |
+| copy path (bytesNoCopy forced off) | ≈1.75 ms |
+| zero-copy (bytesNoCopy active)     | ≈1.73 ms |
 
-Within noise — **eliminating both 16 MB memcpys changed nothing.** So the ~1.7 ms
+Within noise — **eliminating both 16 MB memcpys changed nothing.** So the ≈1.7 ms
 floor these ops hit after §T345–§T347 is NOT the host↔device copy; it is per-op GPU
 dispatch/`waitUntilCompleted` latency and/or reduction-barrier serialization (the
-cooperative kernels move ~48 MB at only ~25 GB/s, far under the ~200 GB/s the
+cooperative kernels move ≈48 MB at only ≈25 GB/s, far under the ≈200 GB/s the
 hardware can do, so they are latency/occupancy-bound, not copy- or bandwidth-bound).
 
 Consequence: the "remaining floor is the memcpy" claim recorded in the §T345/§T346/
@@ -47,8 +47,8 @@ dispatch, and buffer `.contents` → host tensor slice (download) after.
 §T335–§T347 drove the compute kernels of the whole norm/softmax family down to
 their bandwidth limit. At that point the benchmarks showed the op time is
 dominated by those two memcpys, not the kernel: a 2048×2048 RMSNorm/softmax/
-LayerNorm sits at a ~1.7 ms floor that is exactly `32 MB / (single-thread memcpy
-BW ~19 GB/s)`. Copying host memory into host memory to run a kernel that could
+LayerNorm sits at a ≈1.7 ms floor that is exactly `32 MB / (single-thread memcpy
+BW ≈19 GB/s)`. Copying host memory into host memory to run a kernel that could
 read the original is pure overhead on UMA.
 
 ## Decision

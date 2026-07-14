@@ -39,9 +39,9 @@ exactly this niche.
   golang/go #73787, go1.26 release notes, pkg.go.dev/simd/archsimd. `?` API
   stability (experimental, subject to change).
 - **Performance ranking (Oct 2025, Callista benchmark):** `simd` package **inlined
-  ~4× faster** than the next-best solution and ~16× vs. a plain Go loop; `avo`
-  ~3× vs. plain loop (cannot inline due to `.s` stub); `simd` (non-inlined)
-  ~30% above avo. → **Order of preference:** `simd` package > `avo` > Plan9 asm >
+  ≈4× faster** than the next-best solution and ≈16× vs. a plain Go loop; `avo`
+  ≈3× vs. plain loop (cannot inline due to `.s` stub); `simd` (non-inlined)
+  ≈30% above avo. → **Order of preference:** `simd` package > `avo` > Plan9 asm >
   auto-vectorization.
 - **ARM64 (Apple Silicon, the primary developer target here):** the `simd` package
   does **not yet** cover ARM64/NEON → there, pure Go via **Plan9 asm (NEON)** or
@@ -102,7 +102,7 @@ individual Go bindings (Metal cgo, vulkan-go) to be checked in Phase 1.
 
 - **V-PARITY:** golden tests against NumPy/torch within fixed tolerances.
 - **V-GRAD:** numerical gradient check (central finite differences,
-  threshold ~1e-4 rel.) for every differentiable op.
+  threshold ≈1e-4 rel.) for every differentiable op.
 - **V-PROP:** property-based tests (shape algebra, linearity, associativity where
   mathematically guaranteed) via `testing/quick` or rapid.
 - **V-CROSS:** backend result == pure-Go reference (differential testing).

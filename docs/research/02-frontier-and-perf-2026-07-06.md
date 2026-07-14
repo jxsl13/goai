@@ -25,10 +25,10 @@ candidate reuses parts already built. Every row is a proposed §T task.
 | 1 | **GRPO** (Group Relative Policy Optimization) | arXiv:2402.03300 | PPO+GAE, advantage norm | Low | Critic-free RL behind DeepSeek-R1; drop the value net, normalize rewards within a sampled group. Highest value×feasibility. |
 | 2 | **Full sparse MoE top-2 dispatch** | arXiv:2401.04088 (Mixtral) | MoE gating + balance loss (T61), Linear/SwiGLU | Low-Med | Router gather → per-expert FFN → weighted combine. Completes the MoE we already gate. |
 | 3 | **DoRA** (weight-decomposed LoRA) | arXiv:2402.09353 (ICML'24 Oral) | LoRA (T40) | Low | Decompose W into magnitude + direction, LoRA on the direction. Thin wrapper over existing LoRA. |
-| 4 | **SimPO** | arXiv:2405.14734 | DPO path (T-DPO) | Very Low | Reference-free, length-normalized reward margin. ~10-line loss swap. |
+| 4 | **SimPO** | arXiv:2405.14734 | DPO path (T-DPO) | Very Low | Reference-free, length-normalized reward margin. ≈10-line loss swap. |
 | 5 | **ORPO** | arXiv:2403.07691 | DPO path, CrossEntropy | Very Low | Single-step SFT + odds-ratio preference loss, no reference model. |
 | 6 | **FlashAttention-2 tiling (numerics)** | arXiv:2307.08691 | MHA/SDPA VJP, GQA/SWA/ALiBi | Med | Online-softmax blocked attention, O(N) memory, bit-exact. A pure-Go loop; composes with existing masks. Also an inference-memory win. |
-| 7 | **MLA** (Multi-head Latent Attention) | arXiv:2405.04434 (DeepSeek-V2) | RoPE, GQA, KV-cache | Med-High | Low-rank joint KV compression (~93% cache cut) + decoupled RoPE. Higher effort, high value. |
+| 7 | **MLA** (Multi-head Latent Attention) | arXiv:2405.04434 (DeepSeek-V2) | RoPE, GQA, KV-cache | Med-High | Low-rank joint KV compression (≈93% cache cut) + decoupled RoPE. Higher effort, high value. |
 | 8 | **KV-cache eviction** (StreamingLLM sinks + H2O heavy-hitters) | arXiv:2309.17453, arXiv:2306.14048 | KV-cache (T35) | Low-Med | Keep attention-sink + recent / evict low-attention KV. Small add, big long-context win. |
 
 Runner-up: **QLoRA/NF4** (arXiv:2305.14314) — 4-bit NF4 base + LoRA; combines
@@ -73,12 +73,12 @@ go test ./backend/cpu -run '^$' -bench 'GEMM.*gflops' -benchtime=1s
 
 **Two findings drive the roadmap:**
 
-1. **GoAI GEMM sits at ~10% of PyTorch on f64** — consistent with the documented
+1. **GoAI GEMM sits at ≈10% of PyTorch on f64** — consistent with the documented
    pure-Go ceiling (gonum ≈ 1/10 of OpenBLAS without asm microkernels). PyTorch on
    this host uses Apple's Accelerate/AMX matrix coprocessor, which pure Go cannot
    reach; the realistic pure-Go target is a larger fraction of *scalar* peak, not
    of AMX.
-2. **GoAI f32 ≈ f64 (~70 GFLOP/s), but torch f32 is ~4× its f64.** Our kernel does
+2. **GoAI f32 ≈ f64 (≈70 GFLOP/s), but torch f32 is ≈4× its f64.** Our kernel does
    not exploit f32's 2× SIMD lane width — the single biggest, most portable
    pure-Go win available (no AMX needed). This alone should roughly double f32
    throughput.
@@ -97,11 +97,11 @@ by the §C3 threshold (§V-CGO) — proposed §T-optimization tasks:
    B into kc×nc panels for contiguous streaming; an mr×nr register-blocked
    microkernel reused from registers. Current cpu GEMM is 4-row-blocked ikj
    (§T12b); moving to a packed BLIS structure is the foundation for everything
-   below. Expected: naive/register-tiled reaches ~50-60% of *scalar* peak.
+   below. Expected: naive/register-tiled reaches ≈50-60% of *scalar* peak.
 2. **SIMD microkernel.** Two portable paths: `avo`-generated AVX2/AVX-512 `.s`
-   kernels (~3× scalar, the mature route gonum uses), or Go 1.26's experimental
+   kernels (≈3× scalar, the mature route gonum uses), or Go 1.26's experimental
    `GOEXPERIMENT=simd` `simd/archsimd` (Float64x8/AVX-512, amd64-only, inlinable,
-   ~30% faster than non-inlined avo, >4× with inlining; API unstable). This is the
+   ≈30% faster than non-inlined avo, >4× with inlining; API unstable). This is the
    step that lifts f32 to its 2× lane advantage. NOTE: amd64-only today → keep
    behind build tags with the scalar fallback green (ties to the parked T11b).
 3. **Bandwidth-bound fusion.** softmax / layernorm / elementwise / attention sit
@@ -115,7 +115,7 @@ by the §C3 threshold (§V-CGO) — proposed §T-optimization tasks:
    compute-bound / graph-resident work).
 
 **Realistic ceiling (honest):** a from-scratch Goto/BLIS-style kernel with
-packing + SIMD microkernel + threads can reach ~90-106% of *OpenBLAS* on x86 — but
+packing + SIMD microkernel + threads can reach ≈90-106% of *OpenBLAS* on x86 — but
 that requires asm microkernels, and on Apple silicon the AMX-backed Accelerate
 number (2700+ GFLOP/s f32) is not reachable from portable Go. The pure-Go goal is
 therefore: **close the f32 SIMD-width gap (≈2×), adopt BLIS blocking, and document

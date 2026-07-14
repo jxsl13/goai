@@ -4,13 +4,21 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### mdlint — detect stray-tilde strikethrough and mid-document h1 headings (2026-07-14)
+- The markdown linter now catches two more GitHub-rendering mistakes: lines with 2+
+  single "~" characters (the "approx" shorthand like `~4x`) that GFM renders as an
+  unintended strikethrough span, and a second `# ` heading after the first (which
+  renders larger than the `##` section titles). Both were fixed across SPEC.md,
+  CHANGELOG.md, and the docs (~ replaced with the ≈ sign; comment headings turned
+  into blockquotes). User-directed.
+
 ### T619 — TurboQuant sub-4-bit KV cache (2026-07-14)
 - New `nlp.TurboQuantKVCache`: compresses the key/value cache to under 4 bits per
   number (TurboQuant, arXiv:2504.19874, ICLR 2026) — the extreme tier beyond the
   8-bit `QuantKVCache`. It spins each vector with a fixed random rotation, rounds
   each coordinate to a tiny code (PolarQuant), and keeps a 1-bit QJL residual sketch
   that makes the attention inner product unbiased. Data-oblivious — no calibration,
-  no training. ~8x smaller than 32-bit floats at 2 bits. Found and implemented
+  no training. ≈8x smaller than 32-bit floats at 2 bits. Found and implemented
   autonomously from research into 2026 inference techniques. Verified stage by stage
   (orthogonal rotation, quantizer round-trip, QJL unbiasedness over sketch seeds).
 
@@ -46,7 +54,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 ### T613 (slice 4) — one-dispatch RoPE over both QKV bands (2026-07-14)
 - The position rotation (RoPE) of the query and key bands now runs as a single GPU
   dispatch on both backends instead of two. The decoder is down to 12 dispatches per
-  layer (from 18 before the fusion arc); bench-model f32 decode is ~335 tok/s,
+  layer (from 18 before the fusion arc); bench-model f32 decode is ≈335 tok/s,
   +24% cumulative — the remaining cost is per-step fixed overhead, which is the
   next task (T614).
 
@@ -63,7 +71,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   models by appending the raw quantized rows, so there is no extra memory). Result
   on the benchmark model: f32 decode 270 → 319 tokens/second (+18%); quantized
   decode unchanged (its cost is dominated by dequantization, not dispatches);
-  prompt prefill pays ~7% once per prompt for extracting the query rows. Both
+  prompt prefill pays ≈7% once per prompt for extracting the query rows. Both
   backends verified against the CPU reference, including GGUF-loaded and
   speculative-decoding paths. Blocks mixing quant types per projection keep the
   old three-multiplication path automatically.
@@ -101,7 +109,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 ### T607 — llama.cpp head-to-head on identical weights (2026-07-14)
 - A new export tool writes the decode-benchmark model as a llama.cpp-loadable GGUF
   (tokenizer section included) and llama-bench ran it: our batched prefill is within
-  1.4x of llama.cpp Metal; single-token decode is ~4.2x behind — numbers, method and
+  1.4x of llama.cpp Metal; single-token decode is ≈4.2x behind — numbers, method and
   caveats in docs/benchmarking.md. That llama.cpp loads our writer's file is a
   format-compatibility proof in itself.
 
@@ -350,7 +358,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 - .github/workflows/ci.yml rebuilt from the reference repos' patterns: 3-OS pure-Go matrix,
   cgo+race with coverage on linux, cgo+metal on macOS arm64 runners, vulkan-tag build check,
   tidy drift, and the amd64 simd soft gate. The -short suite it runs measures 24 packages in
-  ~19s at 75.1% statement coverage.
+  ≈19s at 75.1% statement coverage.
 
 ### T561 — Post-audit sweep and docs (2026-07-13)
 - Full tree green after the audit arc (24 packages, vulkan twice, pure-Go gate); package
@@ -462,7 +470,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 ### T545 — Quantized decode at 124M class (2026-07-13)
 - Same-class Llama through the existing quant decoder: f32 76 tok/s, Q8_0 57, Q4_K 66 —
   Q4_K outruns Q8_0 at this width, and quantization's real value stays memory
-  (~500MB → ~70MB of weights at Q4_K).
+  (≈500MB → ≈70MB of weights at Q4_K).
 
 ### T544 — 124M scale test on vulkan too (2026-07-13)
 - The vulkan batched decoder runs the same synthetic 124M checkpoint at 59 tok/s — ahead of
@@ -562,7 +570,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 ### T526 — Fuzz program completed; Q4_K bound corrected (2026-07-13)
 - Deep fuzz over the remaining 14 targets: one finding — the Q4_K adversarial error bound
   under-estimated the 6-bit min granularity 4× (the encoder itself is optimal; a flat
-  sub-block next to an outlier min inherently eats ~amax/126). Bound fixed with the
+  sub-block next to an outlier min inherently eats ≈amax/126). Bound fixed with the
   derivation documented; Q2_K/Q5_K bounds audited and already correct.
 
 ### T525 — Session-memory maintenance (2026-07-13)
@@ -614,7 +622,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   utility and finite-difference-checked over all four inputs. RWKV training is unblocked.
 
 ### T515 — Full green sweep + sweep-discipline invariant (2026-07-13)
-- Everything green: all packages (llamagpu now needs 670s — its ~20 trained-model tests
+- Everything green: all packages (llamagpu now needs 670s — its ≈20 trained-model tests
   outgrew go test's 600s default, which the sweep first misread as a failure), vulkan suite
   twice, pure-Go gate. New §V24: sweeps run with -timeout 1800s and check exit codes
   un-piped (a `| grep | tail` had masked the timeout FAIL as success).
@@ -818,7 +826,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 ### T483 — Optimizer zoo on a real GPT; Shampoo root amortization (2026-07-13)
 - Every optimizer trains a real transformer for the first time, under controlled conditions (same
   init, same data, 120 steps). The second-order methods lead: SOAP 1.19, Schedule-Free 1.34,
-  Shampoo 1.42, Muon+AdamW 1.47, then the Adam family ~1.49 and LAMB 1.51.
+  Shampoo 1.42, Muon+AdamW 1.47, then the Adam family ≈1.49 and LAMB 1.51.
 - The zoo caught a real defect: Shampoo recomputed its eigendecomposition-based inverse roots
   every step, making transformer-scale training unusable (600s timeout on 384×384
   preconditioners). New `WithShampooRootEvery` amortizes the roots the way distributed Shampoo
@@ -864,7 +872,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   diverge at the first mismatch and then score different contexts.
 
 ### T476 — Streaming 4× beyond the training context, on a trained RoPE model (2026-07-13)
-- A char-Llama trained in-repo (on the CPU backend, ~3 seconds — a new helper that unlocks Llama
+- A char-Llama trained in-repo (on the CPU backend, ≈3 seconds — a new helper that unlocks Llama
   measurements generally) streams 256 tokens from a context-64 model at coherent quality: far-tail
   windowed surprise 0.95 bits versus 0.35 in-context, no cliff, well below noise. The
   implementation has the paper-critical detail right: keys are cached pre-RoPE and re-rotated with
@@ -882,7 +890,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 - The soft watermark (γ=0.25, δ=2) measured on the trained model — deliberately low-entropy text,
   the paper's hard case: z=4.08 at 50 tokens, 9.07 at 300 (48% green vs the 25% null), power
   growing with length, and plain sampling never flagged. The low-entropy caveat did not bite at
-  ~1.8 bits/token; the finding is reported either way.
+  ≈1.8 bits/token; the finding is reported either way.
 
 ### T473 — Mirostat measured on a trained model: it is a surprise ceiling, not a thermostat (2026-07-13)
 - First real-model measurement of Mirostat's control claim, and an honest sharpening of it:
@@ -962,9 +970,9 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   policy improvement now exists.
 
 ### T463 — Conv scratch pooling: CNN step to 24.3 ms; 26× cumulative (2026-07-13)
-- Profiling showed ~70% of a CPU CNN training step in runtime overhead — multi-megabyte per-call
+- Profiling showed ≈70% of a CPU CNN training step in runtime overhead — multi-megabyte per-call
   scratch allocations in the conv kernels (madvise churn) and goroutine barrier waits — against
-  ~10% in the actual GEMM. The im2col scratch buffers are now pooled (zeroed on reuse — the
+  ≈10% in the actual GEMM. The im2col scratch buffers are now pooled (zeroed on reuse — the
   kernels rely on zero-initialized scratch), cutting the step from 28.0 to 24.3 ms; cumulative
   since the CV-perf thread started: 637 → 24.3 ms, 26×.
 - The pool VJPs also moved to raw-storage fast paths with exact numerics — honestly reported: no
@@ -999,7 +1007,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ### T459 — CV-on-GPU assessed: Metal trains CNNs 17× faster; the CPU gap is conv backward (2026-07-13)
 - Measured real CNN training on both backends with fallback and per-op instrumentation. Metal
-  works end-to-end at 37.6 ms/step (17× over CPU); its pool-op fallbacks cost only ~8% and are
+  works end-to-end at 37.6 ms/step (17× over CPU); its pool-op fallbacks cost only ≈8% and are
   documented as not worth a GPU kernel family.
 - The real finding: the optimized CPU backend has no conv2d backward — 96% of a CPU training step
   runs in the naive reference. It decomposes onto the existing im2col+GEMM machinery; building it
@@ -1229,7 +1237,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 - Every earlier speculative test used random weights (0% or 100% acceptance by construction); the
   projected speedups came from a cost model. New test trains a target (3-layer) and a genuinely
   related smaller draft (1-layer) on the same character-level corpus using the library's own
-  training loop (~11s total on Metal), then measures speculative decoding for real.
+  training loop (≈11s total on Metal), then measures speculative decoding for real.
 - Losslessness holds with real models: the greedy speculative output is token-for-token the
   target's own greedy output, at a measured 81% acceptance rate.
 - Honest headline: end-to-end speedup is only 1.12× despite 81% acceptance — at this small scale
@@ -1254,7 +1262,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   KV-cache, attention-scale, sliding-window fallback) passes through the new route on both backends;
   all decoder suites stay green.
 - Measured honestly: the single-query attention op at a 1920-token cache now takes 2.18ms (the
-  serial kernel's profile implied ~40ms — about 18×), while short-context per-op decode is unchanged
+  serial kernel's profile implied ≈40ms — about 18×), while short-context per-op decode is unchanged
   (it is dispatch-bound; attention wasn't its bottleneck there). The cooperative attention now covers
   every decode/prefill surface: recorder and per-op, Metal and Vulkan.
 
@@ -1271,7 +1279,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   quantized, GGUF, and GPT variants.
 - The residual growth with depth is the query-fold redundant K/V read (the classic flash-tiling
   concern) — documented with candidates, to be built only if long-prompt prefill becomes a measured
-  pain point (a full 1920-token prefill now costs ~0.9s, down from ~2.4s).
+  pain point (a full 1920-token prefill now costs ≈0.9s, down from ≈2.4s).
 
 ### T430 — Long-context decode joins the standing benchmarks (2026-07-12)
 - Adds a long-context decode benchmark to the cross-backend suite: the KV cache is filled to 1920
@@ -1421,11 +1429,11 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   already ships the accept/reject logic.
 
 ### T417 — Measured the conv floor; parked the conv gap (2026-07-12)
-- Applied the same floor-measurement discipline to the last big Metal gap, convolution (~2× behind
+- Applied the same floor-measurement discipline to the last big Metal gap, convolution (≈2× behind
   PyTorch): the conv's GEMM alone, with the same single dispatch round-trip, accounts for a third of
   the conv's time — and most of that is the dispatch floor itself, not compute.
 - Even a perfect fused native convolution can't beat dispatch-plus-transfer at small shapes
-  (ceiling ~1.7×), and at large CV shapes the gap is ~2× — but convolution isn't on this library's
+  (ceiling ≈1.7×), and at large CV shapes the gap is ≈2× — but convolution isn't on this library's
   critical path at all (the LLM workloads use none), while a native-conv rewrite would be a large
   effort (image-layout conversion, new API surface).
 - Parked with the numbers recorded, so the decision can be revisited with evidence. Suites stay
@@ -1436,7 +1444,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   vs the quantized model's own per-op decode at 45.1 — a 3.6× speedup on top of the memory win.
 - Two honest findings recorded: the per-op quantized path was already 6× faster than per-op float
   (its lazy resident weights skip the per-call upload), which is why batching adds "only" 3.6× here;
-  and the quantized batched decode is ~16% slower per token than the float batched decode (191.4),
+  and the quantized batched decode is ≈16% slower per token than the float batched decode (191.4),
   because the dequantizing kernels aren't MPS-class GEMM. So Q8_0's value is fitting 4× bigger
   models, not raw speed — a model too big to run as float runs at 160 tokens/s as Q8 instead of not
   at all.
@@ -1447,7 +1455,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 - Adds `llamagpu.NewQuant` (Metal) and `NewQuantVulkan`: build a batched decoder from a quantized
   Llama (`nlp.QuantizeLlama` or a quantized GGUF), with every projection held on the GPU in its
   4-8× smaller quantized form and consumed by the record-mode quantized matmul — combining
-  quantization's memory win with the ~20-24× batched-decode speedup.
+  quantization's memory win with the ≈20-24× batched-decode speedup.
 - No new model plumbing was needed: the library already had the quantized Llama (per-op decode,
   GGUF loading) and quantized linear layers keeping the ggml bytes. The decoder core gained a small
   "linear" abstraction so one core serves both float and quantized models; all existing float tests
@@ -1475,7 +1483,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   activation that consumes the quantized result inside the same command buffer. Metal suite, pure-Go
   build, apicheck, and llamagpu stay green.
 - This is the building block for decoding quantized models on the batched path — combining the 4-8×
-  smaller weights of quantization with the ~24× decode batching. Remaining: a quantized model
+  smaller weights of quantization with the ≈24× decode batching. Remaining: a quantized model
   representation on the nlp side (GGUF loading currently dequantizes to float), and Vulkan parity.
 
 ### T412 — Public llamagpu package: 24× Llama decode as user-facing API (2026-07-12)
@@ -1492,15 +1500,15 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ### T411 — Measured: batching the training tape isn't worth it (1.4×) — parked (2026-07-12)
 - The training profile hinted that per-op dispatch overhead might dominate (≈400 ops per step at a
-  ~0.27ms floor), which would make a batched training tape a big win. Measured at the actual training
+  ≈0.27ms floor), which would make a batched training tape a big win. Measured at the actual training
   shape instead: a full transformer layer batched into one command buffer is only **1.40× faster**
   than per-op at seq 256 — at that size the matmuls are compute-heavy enough that dispatch is a minor
   fraction (decode at seq 1 gains 6×; prefill at 128 gains 1.6×).
 - Since the backward pass is even more compute-heavy, converting the autograd tape to record into
-  batched command buffers — a large project — would buy at most ~1.4×. Parked, with the number
+  batched command buffers — a large project — would buy at most ≈1.4×. Parked, with the number
   recorded.
-- The Metal training step is now honestly characterized: ~49% matmul at the MPS rate (Apple's
-  fastest), ~30% attention (already reformulated onto MPS), ~20% small-op dispatch floor (the parked
+- The Metal training step is now honestly characterized: ≈49% matmul at the MPS rate (Apple's
+  fastest), ≈30% attention (already reformulated onto MPS), ≈20% small-op dispatch floor (the parked
   1.4×). Suites stay green.
 
 ### T410 — Op-level profile of training; embed regression found and fixed (2026-07-12)
@@ -1508,12 +1516,12 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   logger): set an environment variable and every op logs its wall time, so a real workload's op mix
   can be profiled directly.
 - Profiling the real training step showed: matmuls are 49% of the time (the MPS rate — expected),
-  small element-wise ops sit at the ~0.27ms dispatch floor, and **the recently-added GPU embedding
+  small element-wise ops sit at the ≈0.27ms dispatch floor, and **the recently-added GPU embedding
   gather regressed** — it uploads the whole 8MB embedding table every call, costing more than the
   CPU fallback it replaced.
 - The insight: a row gather is tiny and memory-bound, so the GPU can't win when uploading the table
   costs more than the whole job — and caching the table on-device would be unsafe because training
-  mutates it every step. Replaced with a direct float32 host copy on both backends (~50µs). Training
+  mutates it every step. Replaced with a direct float32 host copy on both backends (≈50µs). Training
   goes from 2924 to 2997 tokens/s, and the regression is gone.
 - Lesson recorded: don't GPU-ify tiny memory-bound ops, and re-profile the real workload after each
   kernel lands — the standalone audit missed the in-context upload cost. All suites stay green.
@@ -1536,7 +1544,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   Metal recorder's public API method-for-method (the two per-head attention helpers stay private, as
   on Metal). Documentation added, including that a recorder is not safe for concurrent use.
 - This is the enabling step for a Vulkan batched-decode variant: decode is dispatch-bound on Vulkan
-  too, where batching measured ~6× on the recorder microbenchmark — and the real-model win should be
+  too, where batching measured ≈6× on the recorder microbenchmark — and the real-model win should be
   much larger, as on Metal.
 - The rename was verified across the package and all internal tests; Vulkan suite (twice), pure-Go
   build, apicheck, and the Metal suite stay green.
@@ -1547,7 +1555,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   the batched decoder and produces the exact same greedy output as the library's own generate.
 - This closes a real gap — every earlier batched-decode test used float64 weights, while real GGUF
   models carry float32; the decoder reads weights dtype-agnostically, now verified on float32.
-- Loading a GGUF model and decoding it ~24× faster is now proven end to end. Test suite, pure-Go
+- Loading a GGUF model and decoding it ≈24× faster is now proven end to end. Test suite, pure-Go
   build, and apicheck stay green. Remaining to go public: package promotion with docs, and a Vulkan
   variant.
 
@@ -1556,7 +1564,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   prompt and generates tokens, feeding each back — the same shape as the library's own generate, but
   running on the fast batched path.
 - Verified end to end: with a greedy (deterministic) sampler, the batched decoder generates the exact
-  same token sequence as the library's per-op generate — token for token — while running ~24× faster.
+  same token sequence as the library's per-op generate — token for token — while running ≈24× faster.
   Test suite, pure-Go build, and apicheck stay green.
 - The batched Llama decode is now a usable generate call. To make it public: promote the package with
   docs and an example, load real model weights, and add a Vulkan variant.
@@ -1703,13 +1711,13 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   a new causal-softmax kernel normalizes each row in place (masking and zeroing the future), and a
   second MPS matmul produces the output.
 - Cross-validated against a host causal-attention reference. At the real 512×8×64 shape it runs in
-  **1.55 ms vs the flash kernel's 10.77 ms — 6.9× faster** — bringing attention forward from ~24×
-  behind PyTorch to ~3.4×. Metal suite, pure-Go build, and apicheck stay green.
+  **1.55 ms vs the flash kernel's 10.77 ms — 6.9× faster** — bringing attention forward from ≈24×
+  behind PyTorch to ≈3.4×. Metal suite, pure-Go build, and apicheck stay green.
 - Next: route the real forward attention through this path (matching causal and grouped-query cases,
   with a fallback for the rest), then a full-forward benchmark; and Vulkan parity.
 
 ### T393 — Measured the attention-forward floor: the gap is a slow kernel, not a hard problem (2026-07-12)
-- With the batched-decode work complete, turned to the next-biggest gap: attention forward is ~24×
+- With the batched-decode work complete, turned to the next-biggest gap: attention forward is ≈24×
   slower than PyTorch on Metal (11 ms vs 0.45 ms for a 512×8×64 layer). The standing assumption was
   that closing this needs a fused, cooperatively-tiled kernel — a big, uncertain rewrite.
 - Measured the matmul-only floor instead: the two matmuls attention fundamentally needs (scores and
@@ -1741,7 +1749,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 ### T391 — Public Metal Recorder API (ADR-0019 Phase 2) (2026-07-12)
 - Exports the Metal batched-decode recorder — `Recorder`, `NewRecorder`, and its ops (`MatMul`,
   `RMSNorm`, `LayerNorm`, `RoPE`, `MHA`, `Unary`, `Binary`, `Blit`, `Finish`, `Free`) alongside the
-  already-public `DeviceBuffer`. This makes the ~3× batched decode usable from outside the backend
+  already-public `DeviceBuffer`. This makes the ≈3× batched decode usable from outside the backend
   package, which the internal tests couldn't reach without an import cycle.
 - Adds proper documentation to the exported types and methods (the recorder is the batched-decode
   engine; it's not safe for concurrent use — one per goroutine). The rename was verified across the
@@ -1770,7 +1778,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 - **Correctness**: a small model (8 query heads, 2 KV heads, SwiGLU, 2 layers) run for four steps
   produces logits matching a host float64 reference. **Measurement**: at a realistic size (D=512,
   6 layers, vocab 1024) the batched step is **3.45× faster** than per-op (25.0 ms → 7.25 ms),
-  consistent with the ~3× ceiling. Metal suite, pure-Go build, and apicheck stay green.
+  consistent with the ≈3× ceiling. Metal suite, pure-Go build, and apicheck stay green.
 - The recorder now assembles both real architectures — GPT-2 (3.1×) and Llama (3.5×) — correctly and
   measured. Next: export the recorder so a test can drive a real Llama's weights through it and
   compare against the library's existing decode.
@@ -1886,9 +1894,9 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 - Added a Vulkan batch benchmark that runs a kernel many times either as one command buffer (single
   submit and wait, with barriers between dispatches) or one submit-and-wait per dispatch.
 - **Result** (on-device, 95 dispatches): batched is **10× faster** (17.75 ms → 1.78 ms), with the
-  per-op path pinned at ~187 µs per dispatch — the same submit/wait floor seen on Metal. The
+  per-op path pinned at ≈187 µs per dispatch — the same submit/wait floor seen on Metal. The
   batching premise holds on Vulkan, so the recorder port is justified (the 10× is a trivial kernel;
-  the real-model win will narrow to ~3× as on Metal). Vulkan suite and the pure-Go build stay green.
+  the real-model win will narrow to ≈3× as on Metal). Vulkan suite and the pure-Go build stay green.
 - Next: port the recorder to Vulkan — a persistent command buffer recording the decode ops with
   barriers over resident buffers and a single submit/wait, cross-validated like the Metal recorder.
 
@@ -1901,7 +1909,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   match a host float64 reference across the full stack — per-layer growing-cache attention, the MLP
   with GELU, and the vocab head — confirming the assembly is correct end to end.
 - **Honest measurement**: at a realistic decode size (D=512, 8 heads, 6 layers, vocab 1024) the
-  batched step is **3.10× faster** than the per-op path (23.98 ms → 7.73 ms) — matching the ~3×
+  batched step is **3.10× faster** than the per-op path (23.98 ms → 7.73 ms) — matching the ≈3×
   ceiling measured synthetically in T374, now on the real full-model integration. (T378's 9.36× was
   a tiny dispatch-bound D=32 model; the win narrows with compute density, as predicted.)
 - Metal suite, apicheck, and the pure-Go build stay green. Remaining to productionize: token
@@ -1918,7 +1926,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   every step across the growing cache — proving the cross-step state management, position advance,
   and cache-offset math are all correct. The batched step is 9.36× faster than the per-op path at
   this size, though that figure is a tiny dispatch-bound model (D=32); the honest realistic-decode
-  ceiling remains ~3× (T374). Metal suite, apicheck, and the pure-Go build stay green.
+  ceiling remains ≈3× (T374). Metal suite, apicheck, and the pure-Go build stay green.
 - The batched decode path is now proven correct end-to-end at single-layer scale — multiple layers
   are just the same recorded block in a loop. Remaining: token embedding, a multi-layer model with a
   vocab head and sampling, and wiring into the public decode API, then a real `BenchmarkGPTDecode`.
@@ -1969,7 +1977,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   own command buffer (today's path) vs. all twelve in one.
 - **Result** (on-device, median of 50): at decode sizes the batched path is **2.8–3.5× faster**
   (D512/seq1: 3.24 ms → 0.92 ms); at a compute-bound prefill size the gain narrows to 1.55×, as
-  expected. The honest decode ceiling is ~3×, not 41.8× — still a large win that justifies building
+  expected. The honest decode ceiling is ≈3×, not 41.8× — still a large win that justifies building
   the full integration, now against a realistic target. Metal suite, apicheck, and pure-Go build green.
 - Next: build the decode-step integration — a persistent device-resident KV cache, any remaining
   record-mode ops, and the public API — then measure the real `BenchmarkGPTDecode` against this ceiling.
@@ -1983,7 +1991,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 - **All four decode op-classes now record** — matmul, RMSNorm, elementwise, and attention — so an
   entire transformer layer's intermediates can stay on the GPU across a step.
 - Next is the payoff: route a whole decode step through a single recorder over a device-resident
-  KV cache and measure against `BenchmarkGPTDecode` (target ~2.4×). That fire also settles the
+  KV cache and measure against `BenchmarkGPTDecode` (target ≈2.4×). That fire also settles the
   KV-cache-as-device-buffer design, any remaining record-mode ops (RoPE/embed/add), and the
   public API (the recorder is unexported until then).
 
@@ -2008,7 +2016,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 - The recorder now covers both dominant decode op-classes — matmul and elementwise — so
   intermediates stay on the GPU across them. Forward-only for now (decode has no backward pass).
 - Next: record-mode norm and attention variants, then route a whole decode step through the
-  recorder and measure against `BenchmarkGPTDecode` (target ~2.4×, §T368).
+  recorder and measure against `BenchmarkGPTDecode` (target ≈2.4×, §T368).
 
 ### T370 — Batch recorder: the foundation for batched decode (ADR-0019 Phase 2) (2026-07-12)
 - Builds the reusable primitive the batched-decode path needs: a recorder that holds one open
@@ -2019,7 +2027,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   (`relu → exp → neg`) over device buffers and confirms the result equals running them on the host.
   Metal suite, apicheck, and the pure-Go build stay green.
 - Next fires add record-mode matmul (feasible per §T369), norm, and attention variants, then route
-  a whole decode step through a recorder and measure against `BenchmarkGPTDecode` (target ~2.4×,
+  a whole decode step through a recorder and measure against `BenchmarkGPTDecode` (target ≈2.4×,
   §T368). The recorder stays unexported until that integration settles the public surface.
 
 ### T369 — Proved MPS and custom kernels chain correctly in one command buffer (2026-07-12)
@@ -2036,10 +2044,10 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 ### T368 — Validated that command-buffer batching recovers the dispatch overhead (2026-07-12)
 - Before building the batched-decode infrastructure (ADR-0019 Phase 2), measured its core premise:
   running 95 trivial GPU dispatches (about one decode step) as 95 separate command buffers takes
-  13.27 ms (~140 µs each, the per-op round-trip), but recording all 95 into **one** command buffer
+  13.27 ms (≈140 µs each, the per-op round-trip), but recording all 95 into **one** command buffer
   with a single submit/wait takes 0.32 ms — a **41.8×** difference.
 - So batching recovers essentially all of the per-op round-trip overhead. For a real decode step
-  (~13 ms of dispatch plus ~9 ms of compute) that means ~9 ms batched versus ~22 ms today (~2.4×),
+  (≈13 ms of dispatch plus ≈9 ms of compute) that means ≈9 ms batched versus ≈22 ms today (≈2.4×),
   which would make GPU decode faster than the CPU — flipping the §T360 finding once batched, and
   confirming ADR-0019 Phase 2 is worth building.
 - Metal suite and the pure-Go build stay green. The next phase routes a decode step's ops through
@@ -2055,12 +2063,12 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   download is identical for sizes from empty to 4 MB, and Release is idempotent), with no behaviour
   change; the default synchronous per-op path is untouched and the pure-Go build is unaffected. The
   next phase keeps a decode step's intermediates in these buffers and records the whole step into
-  one command buffer to close the ~2.3× decode gap (§T360).
+  one command buffer to close the ≈2.3× decode gap (§T360).
 - Metal suite, apicheck, and the pure-Go build stay green.
 
 ### T366 — Design for device-resident tensors and command-buffer batching (ADR-0019) (2026-07-12)
 - Records the design for the highest-value remaining GPU lever. Two measured findings — decode is
-  dispatch-bound (§T360/§T361: ~95 per-op round-trips per token) and the memory-bound ops hit a
+  dispatch-bound (§T360/§T361: ≈95 per-op round-trips per token) and the memory-bound ops hit a
   per-op floor (§T348/§B42: zero-copy gave nothing because the floor is the round-trip, not the
   copy) — share one root cause: the backends run one op per command buffer, synchronously.
 - ADR-0019 accepts device-resident tensors (a storage variant backed by a persistent GPU buffer,
@@ -2093,7 +2101,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ### T363 — SiLU backward moved onto the GPU (SwiGLU/Llama training) (2026-07-12)
 - The same fix as the GELU backward (§T353), for the activation modern models use: SiLU is
-  SwiGLU's gate activation, and its backward was still the generic CPU scalar-loop VJP (~29 ms for
+  SwiGLU's gate activation, and its backward was still the generic CPU scalar-loop VJP (≈29 ms for
   one FFN-sized SiLU at 256×2048), which would dominate Llama-style training the way GELU did for
   the GPT.
 - Introduces `backend.OpSiLUBackward` with a reference kernel and Metal/Vulkan kernels, and rewires
@@ -2106,32 +2114,32 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ### T361 — Decode backend is now caller-selectable (the cpu/GPU crossover is size-dependent) (2026-07-12)
 - Following §T360, measured the decode cpu-vs-GPU crossover across model sizes: metal/cpu decode
-  ratio is 2.7× (cpu wins) at dim 512, ~1.0× at dim 1024, and 0.62× (GPU wins) at dim 2048. As the
+  ratio is 2.7× (cpu wins) at dim 512, ≈1.0× at dim 1024, and 0.62× (GPU wins) at dim 2048. As the
   model grows, the per-op GPU compute outweighs the fixed dispatch overhead — so a blanket
   "decode on cpu" would be *wrong* for large models.
 - Rather than bake a fragile hardware/size heuristic into the library, `GPT.Generate` and
   `Llama.Generate` now accept `nlp.WithBackend(be)` (a functional option; existing three-argument
   calls are unchanged). Decode still defaults to `backend.Default()`, but a caller who knows their
-  model size and hardware can run small-model decode on the CPU (~2.7× faster). The crossover table
+  model size and hardware can run small-model decode on the CPU (≈2.7× faster). The crossover table
   and guidance are in `docs/benchmarking.md`.
 - nlp, Metal, and apicheck suites plus the pure-Go build stay green.
 
 ### T360 — Autoregressive decode benchmark: the GPU is slower than the CPU here (2026-07-12)
 - Adds `BenchmarkGPTDecode`, timing one-token-per-step generation with a KV cache — the real
-  inference workload, distinct from the full-sequence forward of §T350. Measured: Metal ~44 tok/s
-  vs cpu ~101 tok/s, so the **GPU is ~2.3× slower than the CPU for decode** — the opposite of
-  prefill (where Metal is ~23× the cpu).
+  inference workload, distinct from the full-sequence forward of §T350. Measured: Metal ≈44 tok/s
+  vs cpu ≈101 tok/s, so the **GPU is ≈2.3× slower than the CPU for decode** — the opposite of
+  prefill (where Metal is ≈23× the cpu).
 - Cause: a decode step's ops are tiny (one token), so the per-op GPU dispatch/`waitUntilCompleted`
-  round-trip (~200 µs, and a step is ~95 ops ≈ 19 ms) dominates, while the CPU runs the tiny
+  round-trip (≈200 µs, and a step is ≈95 ops ≈ 19 ms) dominates, while the CPU runs the tiny
   compute with no round-trip. So on this hardware prefill and training belong on the GPU but
   single-token decode belongs on the CPU — worth noting since Metal is the default backend on
   macOS. The systemic fix would batch a whole decode step into one command buffer (one submit and
-  wait instead of ~95), the deferred-execution lever from §B42; not done here.
+  wait instead of ≈95), the deferred-execution lever from §B42; not done here.
 - Documented in `docs/benchmarking.md`; Metal suite, apicheck, and the pure-Go build stay green.
 
 ### T359 — MHA-backward bottleneck characterized (parked) (2026-07-12)
 - Measured where the MHA backward's time goes before attempting a fix: removing its atomic dK/dV
-  writes (as a measurement, not a real change) dropped it from ~73 to ~46 ms, so ~37 % is atomic
+  writes (as a measurement, not a real change) dropped it from ≈73 to ≈46 ms, so ≈37 % is atomic
   contention (many query threads accumulate into the same key rows) and the rest is
   occupancy-bound (per §T358). An atomic-free version is structurally hard — the softmax is
   per-query, so the natural parallelization must scatter to keys — and the only real fix is a
@@ -2145,7 +2153,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   configurations.
 
 ### T358 — MHA-backward register-caching investigated and reverted (negative result) (2026-07-12)
-- With the matmul-backward transposes fixed (§T356/§T357), the MHA backward (~21 ms/layer) is now
+- With the matmul-backward transposes fixed (§T356/§T357), the MHA backward (≈21 ms/layer) is now
   the largest training-backward op. It re-reads Q[i]/dO[i] from global memory inside its four
   key-passes, which looked like the redundancy register-caching removed in the forward (§T349).
 - Measured, it does not help: caching both Q and dO makes training *slower* (the extra 384
@@ -2157,12 +2165,12 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ### T357 — Vulkan matmul transpose via shader flag: GPT training 1.76× faster on Vulkan (2026-07-12)
 - The Vulkan twin of §T356. The Vulkan matmul paid the same CPU strided-gather transpose copy for
-  the backward's `dO·Wᵀ` / `Xᵀ·dO` — Vulkan training was ~half Metal's. Vulkan has no MPS, so the
+  the backward's `dO·Wᵀ` / `Xᵀ·dO` — Vulkan training was ≈half Metal's. Vulkan has no MPS, so the
   tiled GEMM shader now takes `transA`/`transB` push constants and reads a transposed operand
   directly from its transposed layout instead of a materialized copy.
 - The conv im2col GEMM shares that shader, so its push block was extended to pass `transA=transB=0`
   (verified: conv cross-reference still green).
-- Measured: GPT training step Vulkan 497→876 tok/s (**1.76×**), now close to Metal's ~1009; both
+- Measured: GPT training step Vulkan 497→876 tok/s (**1.76×**), now close to Metal's ≈1009; both
   GPU backends' matmul backward is copy-free. New cross-reference tests cover the transposed-operand
   matmul on Vulkan (including edge dimensions that exercise the tiled masked path); the gradient
   check, full Vulkan suite, apicheck, and pure-Go build stay green.
@@ -2171,12 +2179,12 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 - **The largest training win of the session, again found by profiling the real workload.** The
   matmul backward computes `dO·Wᵀ` and `Xᵀ·dO`; the VJP builds the transposes as zero-copy stride
   views, but the Metal matmul then called `Contiguous()` on them, materializing each transpose
-  with a **CPU element-by-element strided gather** — ~8 ms for a 2048×512 operand, versus 0.75 ms
+  with a **CPU element-by-element strided gather** — ≈8 ms for a 2048×512 operand, versus 0.75 ms
   for the matmul itself. Every backward matmul paid this.
 - Fix: the Metal matmul now detects when an operand is exactly a 2-D transposed view of a
   contiguous matrix and hands MPS the contiguous base with a transpose flag
   (`transposeLeft`/`transposeRight`), so MPS transposes internally with no copy.
-- Measured: GPT training step 520→1012 tok/s (**1.95×**), now ~25× faster than the pure-Go cpu
+- Measured: GPT training step 520→1012 tok/s (**1.95×**), now ≈25× faster than the pure-Go cpu
   backend; the forward is unchanged (its matmul operands are already contiguous). Combined with
   §T352–§T354, the training step is 3.2× faster this session — all from measuring the real
   workload rather than micro-benchmarks.
@@ -2190,7 +2198,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   now times a full GPT forward and a forward+backward training step on **cpu, metal, and vulkan**,
   with a synthetic realistically-sized model.
 - Snapshot (M2 Pro, tokens/s): forward cpu 181 / metal 4168 / vulkan 3647; training step cpu 41 /
-  metal 535 / vulkan 497 — both GPU backends ~20× (forward) and ~13× (training) over the pure-Go
+  metal 535 / vulkan 497 — both GPU backends ≈20× (forward) and ≈13× (training) over the pure-Go
   cpu backend. This confirms the §T352–§T354 GELU/bias-add (and their backward) fixes benefit
   Vulkan too: Vulkan's forward is close to Metal's, whereas with the old CPU fallbacks it would be
   several times slower. A snapshot table is in `docs/benchmarking.md`.
@@ -2202,7 +2210,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   column), and rewires the bias-add VJP to dispatch it on the tape's active backend — the input
   gradient is just the upstream gradient (identity), so only the reduction needed a kernel.
 - Backward profiling at the GPT shapes (which guided this) also identified the next real training
-  bottleneck: the MHA backward at ~21 ms/layer (a naive one-thread-per-query atomic kernel), now
+  bottleneck: the MHA backward at ≈21 ms/layer (a naive one-thread-per-query atomic kernel), now
   the largest single backward cost and a candidate for a tiled/simdgroup rewrite.
 - Measured: GPT training step 509→520 tok/s (modest — the bias-grad reduction is a smaller share
   than the GELU backward was — but a real, correct win that removes the last FFN CPU fallback).
@@ -2213,8 +2221,8 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 ### T353 — GELU backward moved onto the GPU: GPT training step 1.32× faster (2026-07-12)
 - Follow-up to §T352, again found by measuring: the GELU **backward** was a pure-Go scalar loop
   (the generic elementwise VJP, computing `math.Erf`/`math.Exp` per element with no backend
-  dispatch), costing ~30 ms for one FFN-sized GELU (256×2048) — its forward is 0.42 ms, so the
-  backward alone was ~29.8 ms, and there are six per training step.
+  dispatch), costing ≈30 ms for one FFN-sized GELU (256×2048) — its forward is 0.42 ms, so the
+  backward alone was ≈29.8 ms, and there are six per training step.
 - Introduces `backend.OpGELUBackward` with a reference kernel and Metal/Vulkan kernels (using the
   same Abramowitz–Stegun erf approximation as the forward), and rewires the GELU VJP to dispatch
   it on the tape's active backend — the same pattern as the norm and cross-entropy backwards.
@@ -2226,15 +2234,15 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ### T352 — GELU and bias-add moved onto the GPU: GPT forward 3.3× faster (2026-07-12)
 - **The biggest real-workload win of this session, found by measuring instead of guessing.** The
-  new GPT-forward harness (§T350) plus per-op probes revealed that ~half of the forward time was
+  new GPT-forward harness (§T350) plus per-op probes revealed that ≈half of the forward time was
   two ops silently falling back to the reference *CPU* backend: exact-erf **GELU**
   (11.09 ms/op at the FFN's 256×2048!) and **bias-add** (4.41 ms/op). Neither had a Metal/Vulkan
   case, and the shared unary kernel had deliberately excluded GELU. All the per-kernel GPU work
-  earlier in the session optimized ops that are ~1% of the real forward while these two CPU
-  fallbacks were ~45%.
+  earlier in the session optimized ops that are ≈1% of the real forward while these two CPU
+  fallbacks were ≈45%.
 - Both now run on the GPU, on Metal and Vulkan. GELU uses the exact `0.5·x·(1+erf(x/√2))` form;
   since neither Metal Shading Language nor GLSL has `erf`, it uses the Abramowitz–Stegun 7.1.26
-  approximation (max abs error ~1.5e-7, well within f32 tolerance). Bias-add is a new
+  approximation (max abs error ≈1.5e-7, well within f32 tolerance). Bias-add is a new
   broadcast-add kernel on both backends.
 - Measured (M2 Pro, §T350 harness): GELU 256×2048 metal 11.09→0.42 ms (**26×**); **GPT forward
   1264→4227 tok/s (3.3×)**, now 23× faster than cpu (was 7×); GPT training step 320→385 tok/s
@@ -2249,7 +2257,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   pass (the optimizer step is excluded — it's a cheap elementwise update; the matmuls and their
   backward dominate) on cpu vs metal, so the real-workload harness now covers training as well as
   inference (LOOP.md priority: training and inference).
-- Result (M2 Pro, same GPT config as §T350): metal **320 tok/s vs cpu 41 tok/s, ~7.8×** on the
+- Result (M2 Pro, same GPT config as §T350): metal **320 tok/s vs cpu 41 tok/s, ≈7.8×** on the
   full forward+backward step — consistent with the 7.0× forward-only number, with the backward
   costing roughly 3× the forward as expected. GPT training-convergence test unchanged and green;
   Metal suite, apicheck, and the pure-Go build green.
@@ -2261,7 +2269,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   512-dim, 8 heads, 6 layers, 256 tokens) with deterministic random weights, since the golden test
   fixture (8-dim, 2-layer) is far too small to show real GPU utilization. This is the workload
   §C3/§B10 asks optimizations to be judged against — every prior GPU benchmark was single-op.
-- Result (M2 Pro): metal **1264 tok/s vs cpu 181 tok/s, ~7×** on the full forward. So the GPU
+- Result (M2 Pro): metal **1264 tok/s vs cpu 181 tok/s, ≈7×** on the full forward. So the GPU
   genuinely wins the real workload and is not starved by per-op dispatch latency — that latency
   (the §B42 finding) matters for tiny isolated ops, but a real forward is dominated by the large
   head/FFN matmuls. Future "op X is slow" claims can now be weighed against this end-to-end number.
@@ -2275,27 +2283,27 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   cooperatively loads each key tile once and all 64 queries read it from fast threadgroup memory,
   instead of every query reloading all of K/V from global memory. The per-query online-softmax
   recurrence is unchanged, so results are identical up to floating-point reassociation.
-- This was measurement-justified (§V22): the old kernel ran at ~46 GFLOP/s, ~5% of peak — clearly
+- This was measurement-justified (§V22): the old kernel ran at ≈46 GFLOP/s, ≈5% of peak — clearly
   limited by the global K/V re-reads, not compute. Measured (512 seq / 8 heads / dk 64, causal,
   same-session A/B): 12.10→10.75 ms, **1.13×**. Cross-reference green (including GQA/MQA) at
   unchanged tolerances; Metal suite and pure-Go build green.
 - Honest finding: the win is smaller than the bandwidth estimate predicted, so the kernel is
   co-limited by occupancy (the per-thread register accumulator caps threads per core) and the
-  serial per-thread key loop — not purely K/V bandwidth. Closing the remaining ~24× gap to
+  serial per-thread key loop — not purely K/V bandwidth. Closing the remaining ≈24× gap to
   torch-mps needs simdgroup matrix instructions and proper cross-query score tiling (a larger
   kernel project), not just this staging. A Vulkan twin is a follow-up, to be measured first
   given §B39's MoltenVK bandwidth-bound caveat.
 
 ### T348 — Zero-copy UMA investigated, measured, and reverted (honest negative result) (2026-07-12)
-- The §T345–§T347 notes claimed the ~1.7 ms floor of the cooperative norm/softmax kernels *is*
+- The §T345–§T347 notes claimed the ≈1.7 ms floor of the cooperative norm/softmax kernels *is*
   the host↔device copy and that zero-copy UMA was the confirmed next lever. That was asserted
   three times but never measured. This change built zero-copy end to end — a pure-Go
   page-aligned heap allocator plus Metal `newBufferWithBytesNoCopy` that wraps a tensor's storage
   in place when it is page-aligned — verified it correct (cross-reference green, the zero-copy
   path confirmed active), then **measured** it with a clean same-session A/B at 2048×2048:
-  copy path ~1.75 ms vs zero-copy ~1.73 ms. **No difference** — the memcpy is not the bottleneck.
+  copy path ≈1.75 ms vs zero-copy ≈1.73 ms. **No difference** — the memcpy is not the bottleneck.
 - The floor is per-op GPU dispatch / `waitUntilCompleted` latency plus reduction-barrier
-  serialization (the kernels move ~48 MB at only ~25 GB/s, far below the hardware's ~200 GB/s).
+  serialization (the kernels move ≈48 MB at only ≈25 GB/s, far below the hardware's ≈200 GB/s).
   So the real next lever for this family is fewer per-op GPU round-trips (batching ops into one
   command buffer with barriers, as §T343 did for conv; or a persistent encoder / graph), not
   zero-copy.
@@ -2330,23 +2338,23 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   scratch across phases. A LayerNorm row was also added to `bench-compare` (it was missing).
 - Measured (2048×2048, medians): Softmax Metal 2.80→1.65 ms (same-session A/B, 1.7×), Vulkan
   1.71 ms; LayerNorm Metal 1.66 ms, Vulkan 1.70 ms. All three norm/softmax forward kernels now sit
-  at the ~1.7 ms host↔device copy floor — the kernels are no longer the bottleneck, which is the
+  at the ≈1.7 ms host↔device copy floor — the kernels are no longer the bottleneck, which is the
   third confirmation that zero-copy UMA is the next lever for the memory-bound ops.
 - Softmax and LayerNorm cross-reference green on both backends at unchanged tolerances; full
   Metal/Vulkan suites and the pure-Go build green.
 
-### T345 — RMSNorm ~1.9× faster: cooperative, coalesced kernel on both GPU backends (2026-07-12)
+### T345 — RMSNorm ≈1.9× faster: cooperative, coalesced kernel on both GPU backends (2026-07-12)
 - **The RMSNorm kernel now uses one threadgroup per row instead of one thread per row.** The old
   kernel had each thread walk a whole row serially, so neighbouring threads read addresses `dim`
-  floats apart — fully uncoalesced, running a 2048×2048 norm at only ~20 GB/s (≈10 % of the M2
+  floats apart — fully uncoalesced, running a 2048×2048 norm at only ≈20 GB/s (≈10 % of the M2
   Pro's bandwidth). The new kernel gives each row a 256-thread group that strides the row with
   coalesced loads, reduces the partial sums-of-squares in threadgroup/shared memory, and writes
   the normalized row back coalesced. Metal and Vulkan both rewritten.
 - Measured (2048×2048, same-session A/B via temp-swap, medians): Metal 3.39→1.80 ms (**1.9×**),
-  Vulkan steady at ~1.72 ms (≈1.45× over the §T338 baseline). RMSNorm cross-reference green on
+  Vulkan steady at ≈1.72 ms (≈1.45× over the §T338 baseline). RMSNorm cross-reference green on
   both backends at unchanged tolerances (the reference's f64 reduction order already differs, so
   §V11's dim-scaled tolerance covers it); full Metal/Vulkan suites and the pure-Go build green.
-- The remaining ~1.7 ms is now the host↔device copy (upload X/γ, download output ≈ 8 MB), not the
+- The remaining ≈1.7 ms is now the host↔device copy (upload X/γ, download output ≈ 8 MB), not the
   kernel — confirming that zero-copy UMA is the next real lever for the memory-bound ops. The same
   cooperative-reduction pattern is queued for softmax, LayerNorm, and the norm/CE backward kernels.
 
@@ -2381,14 +2389,14 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 - Measured (M2 Pro/MoltenVK, A/B same session): ResNet-block shape 7.46→5.62 ms (248→**329
   GFLOP/s, 1.33×**); the tiny latency-probe shape pays the three-dispatch overhead (−10 %), the
   same shape-dependence documented for Metal. The limiter is now the tiled GEMM shader itself at
-  skinny M=64 (~330 vs Metal-MPS 593 GFLOP/s), so conv gains will track future GEMM-shader work;
+  skinny M=64 (≈330 vs Metal-MPS 593 GFLOP/s), so conv gains will track future GEMM-shader work;
   fusing the three stages into one command buffer with pipeline barriers (instead of a
   wait-per-stage) is a further noted candidate.
 - Vulkan suite green 3× (conv cross-reference incl. padding/stride/1×1/non-square through the new
   path, tolerances unchanged); Metal suite and pure-Go build green.
 
 ### T341 — Metal Conv2D 2.4× faster: lowered to im2col + MPS GEMM (2026-07-12)
-- **The Metal convolution no longer runs the naive one-thread-per-output kernel** (~105 GFLOP/s
+- **The Metal convolution no longer runs the naive one-thread-per-output kernel** (≈105 GFLOP/s
   ceiling). `mtl_conv2d_f32` now encodes three stages into one command buffer: an `im2col`
   kernel unrolls the input into a column matrix (padding writes zeros), `MPSMatrixMultiplication`
   multiplies the — already row-major `[F, C·KH·KW]` — weights against it, and a scatter kernel
@@ -2397,7 +2405,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 - Measured (M2 Pro, A/B same session, naive re-measured via temporary swap): ResNet-block shape
   (8×64×56², f64, k3) 7.56→3.12 ms (245→**593 GFLOP/s, 2.4×**); the small latency-probing shape
   is unchanged within noise (+8 % — at 75 MFLOP the three-stage dispatch overhead dominates,
-  documented in the spec). The torch-mps conv gap at the ResNet shape shrinks from ~18× to ~2×.
+  documented in the spec). The torch-mps conv gap at the ResNet shape shrinks from ≈18× to ≈2×.
   `bench-compare` now runs Conv2D at both shapes.
 - Cross-reference tests green 3× at unchanged tolerances (the existing `crossTol(C·KH·KW)`
   already covers reordered accumulation per §V11); full Metal and Vulkan suites and the pure-Go
@@ -2420,13 +2428,13 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 - The remaining gap to torch-mps attention (0.45 ms) needs a cooperative tiled kernel
   (threadgroup-shared K/V tiles, simdgroup ops) — parked as real kernel work.
 
-### T339 — Metal norm/softmax kernels ~3× faster: row-parallel threadgroup sizing fixed (2026-07-12)
+### T339 — Metal norm/softmax kernels ≈3× faster: row-parallel threadgroup sizing fixed (2026-07-12)
 - **Fixes the finding §T338's new benchmark rows surfaced**, completing the §T337 bug class. Six
   row-parallel kernels (Softmax, RMSNorm, LayerNorm, cross-entropy backward, RMSNorm/LayerNorm
-  backward — one thread per row) dispatched with ~1024-thread threadgroups, so a 2048-row input
+  backward — one thread per row) dispatched with ≈1024-thread threadgroups, so a 2048-row input
   produced just 2 threadgroups for the whole GPU; threadgroups are the unit distributed across
   cores, so most of the chip sat idle. Now 64 threads per threadgroup, matching the Vulkan twins.
-- Measured (M2 Pro, same-session A/B, 2048×2048): Softmax 10.0→~3.2 ms (≈3×, level with Vulkan's
+- Measured (M2 Pro, same-session A/B, 2048×2048): Softmax 10.0→≈3.2 ms (≈3×, level with Vulkan's
   2.9 ms in the same run), RMSNorm 7.9→2.43 ms (3.3×, level with Vulkan's 2.5 ms). The other four
   kernels share the mechanism and fix. Outputs bit-identical (dispatch shape only); Metal suite
   green 3×; pure-Go build green.
@@ -2443,7 +2451,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   the two-pass MHA at 19.1 ms), Retention forward/backward at parity.
 - **New finding surfaced by the new rows:** Metal Softmax is 3.6× and RMSNorm 3.1× slower than
   their Vulkan twins (10.0 vs 2.8 ms, 7.9 vs 2.5 ms at 2048×2048). Cause: the row-parallel
-  kernels dispatch one thread per row with ~1024-thread threadgroups, so 2048 rows form only
+  kernels dispatch one thread per row with ≈1024-thread threadgroups, so 2048 rows form only
   **2 threadgroups for the entire GPU** — and threadgroups are the unit distributed across
   cores, leaving most of the M2 Pro's 19 cores idle. Vulkan's 64-wide groups spread over 32.
   Same bug class as §T337, different mechanism; queued as the next optimization task.
@@ -2461,7 +2469,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   42.4→19.1 ms (**2.2×**, now level with Vulkan's 19.3 ms), MHA backward 172.3→74.0 ms
   (**2.3×**). FlashAttention/Retention share the mechanism and fix (no dedicated bench rows yet).
   Metal suite green 3× including the on-device training tests; pure-Go build green.
-- Lesson recorded for future MSL kernels: with thread-local arrays beyond ~128 bytes, cap the
+- Lesson recorded for future MSL kernels: with thread-local arrays beyond ≈128 bytes, cap the
   threadgroup at 64 — `maxTotalThreadsPerThreadgroup` ignores register pressure on Apple GPUs.
 
 ### T336 — Metal buffer pool: per-call MTLBuffer allocations eliminated (2026-07-12)
@@ -2479,10 +2487,10 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   under concurrent callers.
 - Measured on Apple M2 Pro (A/B same session, medians of 3): MatMul@512 902→546 µs
   (297→492 GFLOP/s, **+66 %**), @1024 2.37→1.81 ms (905→1186 GFLOP/s, +31 %), @256 347→271 µs
-  (+28 %); MHA forward unchanged (compute-bound — the Metal MHA kernel itself, ~2× slower than
+  (+28 %); MHA forward unchanged (compute-bound — the Metal MHA kernel itself, ≈2× slower than
   the Vulkan twin, is a separate optimization candidate). Metal suite green across repeated runs
   including the on-device GPT/MLP training tests; pure-Go (`CGO_ENABLED=0`) build green.
-- The GoAI-metal vs torch-mps matmul gap (§T93) narrows from ~4.7× to ~3.5×.
+- The GoAI-metal vs torch-mps matmul gap (§T93) narrows from ≈4.7× to ≈3.5×.
 
 ### T335 — Vulkan per-call overhead eliminated: buffer pool + persistent command buffer + cached descriptor sets (2026-07-12)
 - **Every Vulkan dispatch no longer creates and destroys its GPU objects.** Previously each op call
@@ -2825,7 +2833,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 - **§V15 / §V16-exempt** (definitional format — the tiktoken file layout, no paper, like GGUF /
   tokenizer.json / npy): `nlp/tiktoken_test.go` — parsing (`Decode([2]) = "ab"`); the round-trip
   (`FromBytes∘ToTiktoken` is stable, equals the canonical input, and decodes identically); bad-base64
-  / bad-rank errors; a **native Go fuzz test** (`FuzzTiktokenRoundTrip`, ~872k executions, 0 failures
+  / bad-rank errors; a **native Go fuzz test** (`FuzzTiktokenRoundTrip`, ≈872k executions, 0 failures
   — never panics on arbitrary bytes, and any tokenizer it produces re-serializes stably); and
   `ExampleTiktokenFromBytes`.
 - **Note:** research-lite was weekly-rate-limited until 2026-07-13, so this iteration picked a
@@ -2860,7 +2868,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   position whose token is in `specialIDs` (e.g. `[CLS]`, `[SEP]`, padding) is **never** selected for
   masking (its label stays `MLMIgnoreLabel` and its input is left unchanged), matching BERT /
   HuggingFace, which build a special-tokens mask so those positions never contribute to the MLM
-  loss; the `~maskProb` rate then applies only to the ordinary tokens. Special positions consume no
+  loss; the `≈maskProb` rate then applies only to the ordinary tokens. Special positions consume no
   randomness, so `MLMMaskExcluding(…, nil, …)` reduces to `MLMMask` **exactly** (same RNG sequence)
   — `MLMMask` now delegates to it. The pair is still losslessly reversible with `MLMReconstruct`.
 - **§V16**: special-token exclusion was **already CONFIRMED** in the §R229 research-lite verdict
@@ -2870,7 +2878,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 - **§V15 (round-trip + fuzz) / §V16 tier-1 / §V2** (`nlp/mlm_test.go`): protected ids are never
   masked over 500 maskings at a 0.9 rate; `MLMMaskExcluding(nil)` matches `MLMMask` bit-for-bit for
   the same seed (proving the determinism preservation); the round-trip still recovers the original;
-  a **native Go fuzz test** (`FuzzMLMExcludeRoundTrip`, ~474k executions, 0 failures) that round-trips
+  a **native Go fuzz test** (`FuzzMLMExcludeRoundTrip`, ≈474k executions, 0 failures) that round-trips
   and never masks a protected id; and `ExampleMLMMaskExcluding`.
 - **Gate**: `go test ./nlp` green, nn/autograd/backend/rl regression green, apicheck (§V17/§V19),
   gofmt, vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
@@ -2920,7 +2928,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   `tokenizer.json` into a working tokenizer (`Encode("playing games") = [1,2,3,4]`, uncoverable →
   `[UNK]`); the round-trip (`ToJSON→FromJSON` gives identical `Encode` over several strings and the
   same config); added-token id-space sharing; malformed / non-WordPiece / empty-vocab errors; a
-  **native Go fuzz test** (`FuzzWordPieceFromJSON`, ~507k executions, 0 failures — never panics on
+  **native Go fuzz test** (`FuzzWordPieceFromJSON`, ≈507k executions, 0 failures — never panics on
   arbitrary JSON, and any tokenizer it produces re-round-trips through `ToJSON`); and
   `ExampleWordPieceFromJSON`.
 - **Note:** research-lite was weekly-rate-limited until 2026-07-13, so this iteration deliberately
@@ -3088,18 +3096,18 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   random id with 0.1, and is left unchanged with 0.1 — the 80/10/10 split narrowing the
   pretrain/finetune mismatch (`[MASK]` never appears downstream). It returns the corrupted input and
   the labels, where `labels[i]` is the original token at a selected position and `MLMIgnoreLabel`
-  (**−100**, the HF/PyTorch ignore index) elsewhere, so the loss is computed only on the ~15%.
+  (**−100**, the HF/PyTorch ignore index) elsewhere, so the loss is computed only on the ≈15%.
   Special tokens are excluded upstream. `MLMReconstruct` is the exact inverse — masked positions take
   their label, the rest keep the (unmodified) input — so the original is losslessly recoverable.
 - **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous against
   §3.1 / Appendix C.2 and the HuggingFace `DataCollatorForLanguageModeling`: the 15% selection, the
   80/10/10 split (`mask_replace_prob=0.8`, `random_replace_prob=0.1`), the `-100` ignore label
-  (`labels[~masked] = -100`), and recoverability from the corrupted input plus the labels.
+  (`labels[≈masked] = -100`), and recoverability from the corrupted input plus the labels.
 - **§V15 (round-trip + fuzz) / §V16 tier-1 / §V2** (`nlp/mlm_test.go`): the ≈15% selection rate
   (over 20k tokens); the ≈80/10/10 corruption split (over 40k selected positions, with a disjoint
   mask id); the label placement (original at selected, input unchanged elsewhere); the round-trip
   `MLMReconstruct(MLMMask(doc)) == doc` over many random maskings; empty/single edges; the
-  length-mismatch error; a **native Go fuzz test** (`FuzzMLMRoundTrip`, ~1.27M executions, 0
+  length-mismatch error; a **native Go fuzz test** (`FuzzMLMRoundTrip`, ≈1.27M executions, 0
   failures); and `ExampleMLMMask`.
 - **Gate**: `go test ./nlp` green, nn/autograd/backend/rl regression green, apicheck (§V17/§V19),
   gofmt, vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
@@ -3199,7 +3207,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   `un` and `una`, the encoder takes `una` first); the whole-word-UNK fallback; the max-chars UNK;
   multi-word input; a round-trip (`Decode∘Encode` recovers the whitespace-normalized text under full
   single-character coverage); empty/duplicate errors; a **native Go fuzz test**
-  (`FuzzWordPieceRoundTrip`, ~950k executions, 0 failures — which surfaced and now honestly models
+  (`FuzzWordPieceRoundTrip`, ≈950k executions, 0 failures — which surfaced and now honestly models
   the over-long-word → `[UNK]` lossy case); and `ExampleWordPiece`.
 - **Gate**: `go test ./nlp` green, nn/autograd/backend/rl regression green, apicheck (§V17/§V19,
   `WordPieceOption` added to the functional-option allowlist), gofmt, vet, §V7 `CGO_ENABLED=0` build,
@@ -3430,7 +3438,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   nothing to red; **exact** z-scores (an all-green length-16 sequence at `γ=0.5` gives `z = 4.0`
   precisely, an all-red one `−4.0`, and a longer green run clears the threshold); a formula
   cross-check against an independent green recount; empty/single-token edges; vocab/γ/length errors;
-  a **native Go fuzz test** (`FuzzWatermark`, **~1.7M executions, 0 failures**) asserting detector
+  a **native Go fuzz test** (`FuzzWatermark`, **≈1.7M executions, 0 failures**) asserting detector
   determinism, the z-formula invariant, and that an embedded watermark is detected; and
   `ExampleWatermark`.
 - **Gate**: `go test ./nlp` green, nn/autograd/backend/rl regression green, apicheck (§V17/§V19,
@@ -3534,7 +3542,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   `UL2Reconstruct(UL2Denoise(doc)) == doc` with the correct recovered mode across all seven
   denoisers; empty/single-token edges under every mode; rejection of malformed pairs; uniform
   sampling frequencies (`R×2 / X×4 / S×1` of 7); a **native Go fuzz test** (`FuzzUL2RoundTrip`,
-  **~4.7M executions, 0 failures**) over arbitrary token streams, modes, rates, spans and seeds;
+  **≈4.7M executions, 0 failures**) over arbitrary token streams, modes, rates, spans and seeds;
   and `ExampleUL2Mode` / `ExampleUL2Denoise`.
 - **Gate**: `go test ./nlp` green, nn/autograd/backend/rl regression green, apicheck (§V17/§V19),
   gofmt, vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
@@ -3546,7 +3554,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   arXiv:2310.11454) — a PEFT adapter distinct from the LoRA/DoRA/IA³/adapter/prefix-tuning family
   already present. Instead of training per-layer low-rank matrices, VeRA **freezes a single pair of
   random low-rank matrices A, B shared (tied) across every adapted layer** and trains only two tiny
-  per-layer scaling vectors, cutting the trainable footprint ~10× versus LoRA at similar quality.
+  per-layer scaling vectors, cutting the trainable footprint ≈10× versus LoRA at similar quality.
 - Forward (paper Eq. 2, `h = W0·x + Λ_b·B·Λ_d·A·x`) in this library's `[in,out]` row convention:
 
   ```
@@ -3593,7 +3601,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   (not length-normalized — SLiC calibrated models need no length norm, unlike SimPO/ORPO) sequence
   log-probs; pass `sftTarget` with a positive `lambda` to add the regularizer, or `nil` / `λ ≤ 0`
   for the bare calibration loss. The default paper margin is δ=1.0; λ has no fixed numeric default
-  in the paper (empirical, ~85% of the gain survives dropping the regularizer), so it is an explicit
+  in the paper (empirical, ≈85% of the gain survives dropping the regularizer), so it is an explicit
   caller parameter rather than a hardcoded constant. Built by `ex`-composition
   (`OpSub`/`OpAdd`/`OpReLU`/`OpMean`/`OpNeg`/`OpAXPY`), like `BradleyTerryLoss`/`PlackettLuceLoss` —
   no new fused backend op.
@@ -3616,7 +3624,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   (Raffel, Shazeer, Roberts, Lee, Narang, Matena, Zhou, Li & Liu 2020, "Exploring the Limits of
   Transfer Learning with a Unified Text-to-Text Transformer", arXiv:1910.10683, §3.1.4) — the
   seq2seq denoising objective behind T5/UL2, distinct from the causal-LM and FIM objectives already
-  here. It drops ~`density` (T5 default 0.15) of the tokens as consecutive spans (mean length
+  here. It drops ≈`density` (T5 default 0.15) of the tokens as consecutive spans (mean length
   `meanSpan`, default 3), replaces each dropped span in the encoder **input** with a single unique
   sentinel, and builds a decoder **target** of `[sentinel + dropped tokens]` per span in order,
   ending with one trailing final sentinel (e.g. input `Thank you <X> me to your party <Y> week` →
@@ -3635,7 +3643,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   (target has one more sentinel than the input; masked fraction ≈ 15%; `input − sentinels + masked =
   n`); ordered sentinels in both streams; the round-trip `T5Reconstruct(T5Corrupt(doc)) == doc` over
   many random maskings; empty/single-token/fully-masked edges; rejection of malformed pairs; a
-  **native Go fuzz test** (`FuzzT5RoundTrip`, ~300k executions with zero failures) over arbitrary
+  **native Go fuzz test** (`FuzzT5RoundTrip`, ≈300k executions with zero failures) over arbitrary
   token streams, seeds, densities and span lengths; and `ExampleT5Corrupt`.
 - **Gate**: `go test ./nlp` green, nn/ops/autograd/rl regression green, apicheck (§V17), gofmt,
   vet, §V7 `CGO_ENABLED=0` build, and the default cgo/metal build all clean.
@@ -3745,7 +3753,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   first, one of each sentinel, `<SUF>` before `<MID>`) and SPM structure (`<PRE><SUF>` adjacent);
   the round-trip `FIMReconstruct(FIMTransform(doc)) == doc` over many random splits in both modes;
   empty/single-token edges; rejection of malformed sequences; a **native Go fuzz test**
-  (`FuzzFIMRoundTrip`, ~666k executions with zero failures) asserting the round-trip for arbitrary
+  (`FuzzFIMRoundTrip`, ≈666k executions with zero failures) asserting the round-trip for arbitrary
   token streams, seeds, and modes; and `ExampleFIMTransform`.
 - **Gate**: `go test ./nlp` green, nn/ops/autograd/rl regression green, apicheck (§V17,
   `FIMSentinels` fields documented), gofmt, vet, §V7 `CGO_ENABLED=0` build, and the default
@@ -3811,7 +3819,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   (Krell, Kosec, Perez & Fitzgibbon 2021, "Efficient Sequence Packing without Cross-contamination",
   arXiv:2107.02027; the standard packed-pretraining recipe). Padding every short document to the
   context length wastes compute on pad tokens; instead several documents are concatenated into one
-  fixed-length pack (eliminating up to ~50–89% padding, ~2× throughput). Two corrections make packed
+  fixed-length pack (eliminating up to ≈50–89% padding, ≈2× throughput). Two corrections make packed
   training *mathematically equivalent* to unpacked training — avoiding "cross-contamination" between
   co-packed documents.
 - `PackSequences(seqs, maxLen)` bin-packs sequences into blocks of length ≤ maxLen using
@@ -3883,8 +3891,8 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   the `if i < num_steps − 1` last-step guard).
 - **§V16 tier-1 / §V2** (`nn/edm_test.go`): the Euler-step formula; **Heun is exact** for a
   σ-linear, x-independent drift (@1e-9) while Euler is not — a direct proof of the trapezoidal
-  corrector's 2nd order; the **convergence order** — halving the step size cuts the Heun error ~4×
-  (order 2) but the Euler error only ~2× (order 1) against an analytic reference; the last step at
+  corrector's 2nd order; the **convergence order** — halving the step size cuts the Heun error ≈4×
+  (order 2) but the Euler error only ≈2× (order 1) against an analytic reference; the last step at
   σ=0 reduces to Euler with no NaN; the full-schedule Heun sample is at least as accurate as Euler;
   and `ExampleEDMSample` (linear drift ⇒ exact −7.5).
 - **Gate**: `go test ./nn` green, ops/autograd/rl/nlp regression green, apicheck (§V17, `Denoiser`
@@ -3905,7 +3913,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   half-quadratic split that alternates two closed-form steps: a shrinkage on the error variable
   `W_e = sign(x)·relu(|x| − (1/β)|x|^{p−1})` (the Lp proximal operator; ordinary soft-threshold at
   p=1) and the closed-form update `z = mean(W_q − (W − W_e)/s)`, re-rounding `W_q` each step and
-  growing `β ← κ·β` (κ=1.01) for ~20 iterations. Configurable via `WithHQQLpNorm` and `WithHQQIters`
+  growing `β ← κ·β` (κ=1.01) for ≈20 iterations. Configurable via `WithHQQLpNorm` and `WithHQQIters`
   (0 iterations reduces to plain round-to-nearest). Pure-f64, data-free post-training quantization.
 - **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous
   against the blog and the reference implementation (`hqq/core/optimize.py`: `lp_norm=0.7`,
@@ -4144,7 +4152,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   plan is nonnegative and its row/column sums converge to `r`/`c`. A constant shift of `C` only
   rescales `K` by a scalar (absorbed into `u,v`), leaving `P` unchanged — used here to subtract the
   minimum cost for overflow-free kernel evaluation. With uniform marginals this is exactly SwAV's
-  equipartitioned online cluster assignment (Caron et al. 2020, arXiv:2006.09882, ~3 iterations).
+  equipartitioned online cluster assignment (Caron et al. 2020, arXiv:2006.09882, ≈3 iterations).
   Pure-f64 utility (SwAV applies it under stop-gradient to form the target code), not
   differentiable.
 - **§V16**: tier-2 CONFIRMED via research-lite (never `/deep-research`) — 3 agents unanimous
@@ -4493,7 +4501,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   Rectified Flow generative objective** (Lipman, Chen, Ben-Hamu, Nickel & Le 2022, "Flow
   Matching for Generative Modeling", arXiv:2210.02747, the OT conditional path; Liu, Gong & Liu
   2022, "Rectified Flow", arXiv:2209.03003; the objective used by Stable Diffusion 3). It trains
-  a generative model to transport noise `x0 ~ N(0,I)` to data `x1` along the straight-line
+  a generative model to transport noise `x0 ≈ N(0,I)` to data `x1` along the straight-line
   optimal-transport path by regressing a velocity field — no diffusion SDE and no noise
   schedule, just a mean-squared error. This diversifies the library into generative modeling
   (multimodal / diffusion-alternative).
@@ -5101,7 +5109,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   higher-scoring `"▁hi"` over `"▁"+"h"+"i"`), a round-trip (`load → ToJSON → load`
   reproduces identical encodings and a stable serialization), the
   malformed/non-Unigram/empty/bad-entry errors, `ExampleUnigramFromJSON`, and a fuzz
-  target that ran ~2M executions without a panic.
+  target that ran ≈2M executions without a panic.
 - **Gate**: `go test ./nlp` green (incl. fuzz), the full nn/ops/autograd/rl suites
   green, apicheck (§V17), gofmt, vet, §V7 `CGO_ENABLED=0` build, and the default
   cgo/metal build all clean.
@@ -5125,7 +5133,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   content), the `[["l","r"]]` pair-merges form, a round-trip (`load → ToJSON → load`
   reproduces identical encodings across several strings and a stable serialization),
   the malformed/non-BPE/empty-vocab errors, `ExampleBPEFromJSON`, and a fuzz target that
-  ran ~1.1M executions without a panic (arbitrary bytes return an error or a usable
+  ran ≈1.1M executions without a panic (arbitrary bytes return an error or a usable
   tokenizer, which then re-round-trips).
 - **Gate**: `go test ./nlp` green (incl. fuzz), the full nn/ops/autograd/rl suites
   green, apicheck (§V17), gofmt, vet, §V7 `CGO_ENABLED=0` build, and the default
@@ -5476,7 +5484,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 - **`nn.Grokfast` wraps any base optimizer with the Grokfast-EMA gradient filter**
   (Lee, Ahn, Kim & Kim 2024, arXiv:2405.20233) — grokking (delayed generalization) is
   driven by a slow-varying gradient component, and amplifying it accelerates
-  generalization by up to ~50×. It extends the optimizer family in a new direction
+  generalization by up to ≈50×. It extends the optimizer family in a new direction
   (gradient-frequency filtering rather than another Adam variant).
 - **Algorithm**: a per-parameter gradient EMA `μ_t = α·μ_{t−1} + (1−α)·g_t`, and the
   amplified `ĝ_t = g_t + λ·μ_t` handed to the base optimizer. It is a drop-in
@@ -5563,7 +5571,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   methodologies, and uses the new `ops.SVD` (T219) as its verification oracle.
 - **Power iteration.** `σ(W)` is estimated by one power iteration per forward on
   persistent left/right singular-vector buffers (`v ← Wᵀu/‖·‖`, `u ← Wv/‖·‖`,
-  `σ ≈ uᵀWv`; 15 warm-up iterations at init, `u ~ N(0,1)`). The buffers are updated
+  `σ ≈ uᵀWv`; 15 warm-up iterations at init, `u ≈ N(0,1)`). The buffers are updated
   without gradient (paper §2.3) and are not parameters.
 - **Gradient for free.** Building `σ = uᵀWv` and `W_SN = W/σ` as a *differentiable
   composition* on the tape (two matmuls + a broadcast divide, with `u,v` held
@@ -5964,7 +5972,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   (trailing-comma tuple) and N-D shapes for both dtypes; `LoadNumpyReference` reads numpy-written
   fixtures byte-faithfully; `SaveReadableByNumpy` confirms a GoAI-written file is read back exactly by
   the reference numpy (skips when the `.venv` is absent); load errors; `ExampleSave`. `FuzzLoad`
-  (no panic on hostile bytes) and `FuzzRoundTrip` (bit-exact) each survived ~4 M executions.
+  (no panic on hostile bytes) and `FuzzRoundTrip` (bit-exact) each survived ≈4 M executions.
 - **Gate**: `go test ./format/npy` green, apicheck (§V17), gofmt, vet, §V7 CGO0, and the default
   cgo/metal build all clean.
 - §R136, §T206.
@@ -6031,7 +6039,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   prompt tuning / adapter → **+prefix tuning**). It prepends `p` learned continuous vectors to an
   attention layer's keys and values: for `K, V ∈ [seq, d]` attention then operates over `[P_K ; K]`
   and `[P_V ; V] ∈ [p+seq, d]`. The prefix is input-independent and the query is unchanged; only the
-  prefix parameters train (~0.1 % of the model), with all pretrained weights frozen.
+  prefix parameters train (≈0.1 % of the model), with all pretrained weights frozen.
 - **Reparameterization** (paper §4.3, for training stability): a small learned embedding `P' ∈ [p, k]`
   is mapped up by an MLP — `Linear(k→h) → tanh → Linear(h→2·d)` — whose output is split into `P_K` and
   `P_V ∈ [p, d]`. `KV(ctx)` runs this MLP (using the differentiable `OpTanh` + `OpSlice`); `Apply(k, v)`
@@ -6060,7 +6068,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   Adapter(h) = h + f(h·W_down + b_down)·W_up + b_up ,   W_down[d,r], W_up[r,d], r ≪ d
   ```
 
-  Only the adapter's two projections (weights + biases) train (~2·d·r params); the base model is
+  Only the adapter's two projections (weights + biases) train (≈2·d·r params); the base model is
   frozen. The up-projection is zeroed at init, so a fresh adapter is an **exact identity** (the
   paper's near-identity init; cf. LoRA's `B = 0`). The nonlinearity `f` is configurable via
   `AdapterActivation` — default **GELU** (paper §3.6); the AdapterHub "houlsby" config uses ReLU (a
@@ -6532,18 +6540,18 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   ascends within each, so the running sum stays byte-for-byte the reference's ascending-p sum.
   `TestGemmCrossReferenceExact` (§V3/§V11 tol-0) was green for the blocked kernel.
 - **Verdict: discard.** A/B on the arm64 Apple M-series host (3 samples, `-benchtime 300ms -count 3`,
-  medians): f64-512 a wash (~4.88 ms both), f64-1024 ~12 % but inside run-to-run noise and +40 %
-  memory, f32-1024 a **regression** (~30.5→33.8 ms). The M-series memory subsystem already feeds the
+  medians): f64-512 a wash (≈4.88 ms both), f64-1024 ≈12 % but inside run-to-run noise and +40 %
+  memory, f32-1024 a **regression** (≈30.5→33.8 ms). The M-series memory subsystem already feeds the
   streaming ikj kernel near-optimally, so GEMM is not cache-capacity-bound at these sizes and panel
   packing is net copy+alloc overhead — same root cause as §B39 (Vulkan GEMM, memory-bandwidth-bound)
-  and §B27 (NEON ~1 elem/cycle). Per §C3 / V-CGO discipline, a pure-Go optimization that fails to
+  and §B27 (NEON ≈1 elem/cycle). Per §C3 / V-CGO discipline, a pure-Go optimization that fails to
   beat the optimized baseline is not merged.
 - **Kernel restored** to the §T12b unblocked register-blocked GEMM (unchanged API/numerics). Kept the
   new 1024-size benchmarks in `gemm_test.go` as future baselines. CGO0 build + vet + gofmt green.
 - The real remaining GEMM headroom is wider-FMA SIMD, host-blocked on arm64 (cf §T11b/§B13). §T74
-  moves to parked (`~`); resume the blocking rung only on a large-cache x86 server (re-measuring
+  moves to parked (`≈`); resume the blocking rung only on a large-cache x86 server (re-measuring
   before merge) and the SIMD rung with an amd64 CI runner.
-- §B41, ADR-0017, §T74 (`.`→`~`).
+- §B41, ADR-0017, §T74 (`.`→`≈`).
 
 ### T186 — Cholesky decomposition + SPD solve `Cholesky`/`CholSolve` (2026-07-07)
 - **Adds the Cholesky factorization** to `linalg` (continuing the numpy/gonum request —
@@ -6551,7 +6559,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   the SVD-derived quantities, and the symmetric eigendecomposition). For a symmetric
   positive-definite (SPD) matrix `A`, `Cholesky(a)` returns the lower-triangular `L` with `A=L·Lᵀ`
   and `L[i,i]>0`, and `CholSolve(a, b)` solves `A·x=b` (vector `[n]` or matrix `[n,k]` RHS). Cholesky
-  is the SPD workhorse — ~2× fewer flops than LU (n³/3 vs 2n³/3), no pivoting, numerically stable —
+  is the SPD workhorse — ≈2× fewer flops than LU (n³/3 vs 2n³/3), no pivoting, numerically stable —
   and the standard solver for normal equations, covariance matrices, and Gaussian processes.
 - **Algorithm** (`linalg/cholesky.go`): the Cholesky-Banachiewicz recurrence
   `L[j,j]=√(A[j,j]−Σ_{k<j}L[j,k]²)`, `L[i,j]=(A[i,j]−Σ_{k<j}L[i,k]L[j,k])/L[j,j]`. The SPD check is
@@ -7114,7 +7122,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 ### T161 — Quantized KV cache (Q8_0) (2026-07-07)
 - **Adds an 8-bit quantized KV cache** for long-context inference — the KV cache is the dominant
   memory cost of long-context decode, and storing it in per-block Q8_0 instead of f32 cuts it
-  ~3.76× (34 bytes per 32-element block = 1.0625 B/elem vs 4). §R108.
+  ≈3.76× (34 bytes per 32-element block = 1.0625 B/elem vs 4). §R108.
 - `nlp/quant_kvcache.go`: `QuantKVCache` stores each token's key and value row as Q8_0 blocks via
   `gguf.Quantize` (the same per-block format used for weights, already tier-2 verified in §R94).
   `Append(k, v)` quantizes and stores; `Keys()`/`Values()` dequantize the whole store back to f32
@@ -7125,13 +7133,13 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   against `ggml-quants.c` and the KVQuant paper (Hooper et al. 2024, arXiv:2401.18079): per-block
   Q8_0 on both K and V is the standard, and 8-bit is the near-lossless "safe tier" — the
   per-channel-Key/per-token-Value asymmetry (Key outlier channels) only matters below 4-bit
-  (measured Q8_0 KV perplexity delta ~+0.004). No new numerical algorithm: it reuses the verified
+  (measured Q8_0 KV perplexity delta ≈+0.004). No new numerical algorithm: it reuses the verified
   Q8_0 quantizer, so acceptance is by round-trip + parity, not fresh gradient/paper checks.
 - **§V15 round-trip + fuzz:** `TestQuantKVCacheRoundTripFuzz` — 200 iterations over random widths
   (32..256), value scales and token counts; every recovered row is bit-identical to a direct
   `gguf.Quantize→Dequantize` and within the Q8_0 per-block error bound `amax/254` (+f16 slack).
 - **§V16 tier-1:** `TestQuantKVCacheAttentionParity` — `OpMHA` over the Q8_0 cache matches attention
-  over the full-precision f32 K/V within 2e-2 (near-lossless); plus a memory-ratio check (~3.76×),
+  over the full-precision f32 K/V within 2e-2 (near-lossless); plus a memory-ratio check (≈3.76×),
   error cases, and `ExampleQuantKVCache`.
 - Gate green: `go test ./nlp`, apicheck (the Example satisfies §V17), gofmt, vet, and §V7 CGO0-green
   whole-repo build + suite. Pure Go, reuses `format/gguf` — no backend/cgo touched. Follow-ups:
@@ -7147,7 +7155,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   constant **stable** plateau at the peak `η`, then **exponential decay** `η·0.5^((s−S)/H)` halving
   every `H` steps. Its defining property versus cosine: the flat stable phase needs no preset total
   length and lets a run continue or *branch* from any stable checkpoint — only the final stretch
-  (the paper finds ≈10 % of steps is enough) is decayed. No explicit floor (decays toward ~0; clamp
+  (the paper finds ≈10 % of steps is enough) is decayed. No explicit floor (decays toward ≈0; clamp
   externally if wanted). All three phase boundaries are continuous.
 - `InverseSqrt(step, warmup, dModel int, scale float64)` — the classic Transformer **Noam** schedule
   (Vaswani et al. 2017, §5.3): `scale·dModel^(−½)·min(sₙ^(−½), sₙ·W^(−3/2))` with 1-indexed
@@ -7168,7 +7176,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 ### T159 — Cautious optimizer / C-AdamW (2026-07-07)
 - **Adds the Cautious optimizer** (Liang et al. 2024, *"Cautious Optimizers: Improving Training with
   One Line of Code"*, arXiv:2411.16085; §R106) — an optimizer-agnostic mask that provably speeds up
-  convergence (~1.4–1.5× on LLM pretraining) by never moving a parameter against the direction the
+  convergence (≈1.4–1.5× on LLM pretraining) by never moving a parameter against the direction the
   current gradient calls for. Extends the training-methodology field alongside
   SGD/Adam/AdamW/Muon/Lion/Sophia/ScheduleFree/Adafactor/Lookahead/GaLore/AdEMAMix.
 - `nn/cautious.go`:
@@ -7277,7 +7285,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   Q4_K `QuantLlama` tests (T149/T151/T152) stay green now that Q4_K decode runs resident. No new
   algorithm — the same verified kernels, residency is a pure perf change (§V16). Benchmarked
   (4096×4096, M=1): Q4_K resident **1.53 ms vs per-call 2.58 ms ≈ 1.7×** (a bit less than Q8_0's
-  2.3× since the Q4_K weight is ~half the bytes). Whole-repo, Metal, Vulkan, CGO0, `vet`, `gofmt`
+  2.3× since the Q4_K weight is ≈half the bytes). Whole-repo, Metal, Vulkan, CGO0, `vet`, `gofmt`
   green.
 - **Next** (committed): the Vulkan resident twin, and a finalizer so `Close` becomes optional.
 
@@ -7285,7 +7293,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 - **The T153 residency mechanism now actually speeds up the model.** `QuantLinear` uploads a Q8_0
   weight to a device-resident GPU buffer on its first `Forward` and reuses it on every subsequent
   call — so the `QuantLlama` decode loop (which reuses every weight for every token) uploads each
-  weight once instead of per step, getting the ~2.3× lever (Metal, this host) transparently.
+  weight once instead of per step, getting the ≈2.3× lever (Metal, this host) transparently.
 - **`backend.ResidentWeight`** (`QMatMul(x)` + `Close`) and **`backend.ResidentQuantMatMuler`**
   (`UploadQuant(weight, quantType, n, k)`) — optional capability interfaces extending the
   ADR-0016 `QuantMatMuler` pattern. `metal.Backend.UploadQuant` returns a resident weight for
@@ -7682,7 +7690,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   accumulation precision differs), across decode (`M=1`) and prefill (`M=4..16`) for
   `K=32..512`, on-device. This is a new *backend* of already-verified ops (Q8_0 dequant §R94 +
   matmul), accepted by V-CROSS like the other GPU kernels — no fresh research (§V16).
-- **It's a decisive win**: benchmarked at 4096×4096, M=8, the Metal path is **~98× faster**
+- **It's a decisive win**: benchmarked at 4096×4096, M=8, the Metal path is **≈98× faster**
   than the (naive f64) CPU `QMatMul` — 4.9 ms vs 478 ms — *even with* the per-call weight
   upload. Device-residency (uploading the quantized weights once) is a further optimization
   parked in §B, not a prerequisite. CGO0 still excludes Metal; `go vet`/`gofmt`/apicheck and
@@ -7693,7 +7701,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 ### T135 — Q2_K k-quant read + write for GGUF (2026-07-07)
 - **Completes the entire k-quant read family.** With Q2_K alongside Q3_K/Q4_K/Q5_K/Q6_K,
   **every mainstream GGUF `_S`/`_M`/`_L` k-quant mix now loads.** Q2_K is the smallest
-  (~2.63 bits/weight) — the `Q2_K`/`Q2_K_S` mixes use it to fit very large (70B–405B)
+  (≈2.63 bits/weight) — the `Q2_K`/`Q2_K_S` mixes use it to fit very large (70B–405B)
   models on tight hardware, at a real accuracy cost.
 - **Simplest k-quant structurally.** Asymmetric affine like Q4_K (a scale and a subtracted
   min per sub-block) but coarser: the quant `q2 ∈ [0,3]` is 2-bit and the per-sub-block
@@ -7713,7 +7721,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ### T134 — Q3_K k-quant read + write for GGUF (2026-07-07)
 - **Completes the k-quant read family.** With Q3_K alongside Q4_K/Q5_K/Q6_K, every
-  common GGUF `_S`/`_M`/`_L` k-quant mix now loads — Q3_K is the ~3.44-bit format the
+  common GGUF `_S`/`_M`/`_L` k-quant mix now loads — Q3_K is the ≈3.44-bit format the
   `Q3_K_M`/`Q3_K_L` mixes use to run large models on limited hardware.
 - **Symmetric, unlike Q4_K/Q5_K.** Q3_K has a single super-block scale and no min: each
   3-bit quant `q3 ∈ [0,7]` reconstructs as `y = d·(sc6−32)·(q3−4)`, with `q3` built from
@@ -7756,7 +7764,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 - **§V15 round-trip + fuzz + golden:** a golden test hand-builds a block with a known `qh`
   high bit and checks the decode against the spec formula (anchoring the 5th-bit read path
   independently of the encoder); `TestQuantizeQ5_KBeatsQ4_K` confirms the extra bit really
-  adds resolution; plus accuracy (mean rel err < 3.5 %, ~half Q4_K's), stability,
+  adds resolution; plus accuracy (mean rel err < 3.5 %, ≈half Q4_K's), stability,
   misalignment rejection, QMatMul, and a 6.9 M-exec fuzz.
 - **Backprop from the fuzz:** it surfaced that the per-element error bound needs an `amax`
   term for the **6-bit min (offset) quantization** (≈ `amax/126` on clustered,
@@ -7791,7 +7799,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   apicheck all green.
 
 ### T131 — Q4_K k-quant read + write for GGUF (2026-07-07)
-- **Adds the single most common modern GGUF weight format.** Q4_K is the ~4.5-bit k-quant
+- **Adds the single most common modern GGUF weight format.** Q4_K is the ≈4.5-bit k-quant
   that makes up the bulk tensors of the `Q4_K_M`/`Q4_K_S` mixes — the most-downloaded LLM
   quantization. Together with Q6_K (T130, which carries those mixes' few high-precision
   tensors) GoAI can now read real `Q4_K_M` models end to end.
@@ -7931,7 +7939,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
     distances never leave the trained range. `StreamGenerate(prompt, maxNew, sinks,
     window, s)` streams token by token, not bounded by the model's context length.
   - The attention-sink insight: the first tokens absorb the softmax's excess attention
-    regardless of relevance, so keeping ~4 of them stabilizes generation over millions
+    regardless of relevance, so keeping ≈4 of them stabilizes generation over millions
     of tokens; evicting them collapses it.
 - **§V16 ladder** (the mechanism composes already-verified ops): `TestStreamStepMatchesForward`
   is the correctness anchor — when the budget covers the whole prefix (no eviction),
@@ -7950,7 +7958,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   Embeddings Improve Instruction Finetuning",
   [arXiv:2310.05914](https://arxiv.org/abs/2310.05914), §R96). Adds
   `nn.NEFTune(ctx, emb, α, rng)` ([nn/neftune.go](nn/neftune.go)): after the token
-  embedding, it adds `(α/√(L·d))·ε` with `ε ~ Uniform(−1, 1)` per entry (L tokens, d
+  embedding, it adds `(α/√(L·d))·ε` with `ε ≈ Uniform(−1, 1)` per entry (L tokens, d
   embedding dim) through a tape-aware add, so gradients flow normally to the
   embeddings. Applied only during training, it regularizes fine-tuning.
 - **Enabler refactor.** `GPT.Forward` and `Llama.Forward` are split into
@@ -7959,7 +7967,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   The refactor is behaviour-identical — the existing forward and gradient-check tests
   stay green.
 - **§V16 ladder.** tier-1: `TestNEFTuneNoiseFormula` (every entry within the exact
-  `α/√(L·d)` magnitude, mean ~0 and std ≈ mag/√3 confirming Uniform), `TestNEFTuneGradFlows`
+  `α/√(L·d)` magnitude, mean ≈0 and std ≈ mag/√3 confirming Uniform), `TestNEFTuneGradFlows`
   (`∂mean(emb+noise)/∂embᵢ = 1/n`, §V2), `TestNEFTuneTrainingIntegration`
   (Embed→NEFTune→ForwardFromEmbed perturbs the logits versus a clean forward and the
   token embedding still receives gradients), determinism, and `ExampleNEFTune`. tier-2:
@@ -7984,8 +7992,8 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
     unbiased Dr. GRPO objective (β=0 as the paper uses).
 - **§V16 ladder.** tier-1: `TestDrGRPOAdvantage` (exact mean-centering, sums to zero),
   `TestDrGRPONoDifficultyBias` (two groups with the same centering but a 100× reward
-  spread — Dr. GRPO keeps the low-variance group ~100× smaller while GRPO's `/std`
-  rescales both to ~unit magnitude, directly demonstrating the bias and its removal),
+  spread — Dr. GRPO keeps the low-variance group ≈100× smaller while GRPO's `/std`
+  rescales both to ≈unit magnitude, directly demonstrating the bias and its removal),
   `TestDrGRPOWithGRPOLoss` (the advantage drives a finite, differentiable `GRPOLoss`),
   and `ExampleDrGRPOAdvantage`. tier-2: research-lite CONFIRMED unanimous vs the paper
   §3.1 and the sail-sg/understand-r1-zero reference, NOT the built-in deep-research.
@@ -7998,19 +8006,19 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   `quant map[string]QuantType` is encoded in that block-quantized format (Q8_0/Q4_0)
   instead of F32, with alignment-correct offsets from the quantized byte size; the rest
   stay F32. `Write` is now `WriteQuantized(…, nil)` and is byte-identical to before, so
-  a quantized model is ~4× (Q8_0) or ~7× (Q4_0) smaller than the F32 form.
+  a quantized model is ≈4× (Q8_0) or ≈7× (Q4_0) smaller than the F32 form.
 - **§V15.** `TestWriteQuantizedRoundTrip` (a quantized tensor reads back as
   `Dequantize(Quantize(·))` exactly — the write stores the encoder's bytes and Read runs
   the same dequant — and is verified to differ from the original, proving it was
   quantized, while F32 tensors round-trip at F32 precision), `TestWriteQuantizedSmaller`
   (the quantized file is smaller), `TestWriteQuantizedDeterministic`,
-  `FuzzWriteQuantizedRoundTrip` (~4.4M executions clean), and `ExampleWriteQuantized`.
+  `FuzzWriteQuantizedRoundTrip` (≈4.4M executions clean), and `ExampleWriteQuantized`.
   The existing F32 `Write` and fuzz tests are unchanged.
 - No new exported type; full suite green, apicheck/gofmt/vet clean, CGO0 build green.
 
 ### T122 — GGUF Q8_0/Q4_0 quantization (encode) (2026-07-07)
 - **GoAI can now quantize, not just dequantize** — the f32→quantized direction for the
-  ggml Q8_0 and Q4_0 block formats (§R94), so quantized models (4× / ~7× smaller) can be
+  ggml Q8_0 and Q4_0 block formats (§R94), so quantized models (4× / ≈7× smaller) can be
   produced, not only read. Adds [format/gguf/quant.go](format/gguf/quant.go):
   - `gguf.Quantize(t, qt)` encodes a tensor into the ggml block layout following
     `ggml-quants.c` exactly — Q8_0 uses `d = amax/127` with round-half-away quants; Q4_0
@@ -8025,7 +8033,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   `TestQuantizeIdempotent` (§V15: dequantize→requantize is byte-identical — the grid is
   stable), `TestQuantizeQMatMul` (§V15 end-to-end: `QMatMul` over a freshly quantized
   weight matches the full-precision matmul within the quantization error),
-  `FuzzQuantizeRoundTrip` (~6M executions clean), and `ExampleQuantize`. research-lite
+  `FuzzQuantizeRoundTrip` (≈6M executions clean), and `ExampleQuantize`. research-lite
   CONFIRMED the exact ggml encode formulas unanimously against `ggml-quants.c`, NOT the
   built-in deep-research.
 - No new exported type (`QuantType` / `QMatMul` already exist); full suite green,
@@ -8238,7 +8246,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 - **§V16 ladder.** tier-1: `TestBytesToUnicode` (space→'Ġ', newline→'Ċ', bijection),
   `TestBPEMergeByRank` (`b+c` at rank 0 beats a left-first `a+b` merge — proving
   rank-ordered merging), `TestBPEByteRoundTrip` and `FuzzBPEByteRoundTrip` (§V15
-  byte-exact `decode∘encode` for any input, incl. non-UTF-8; ~0.9M fuzz execs clean),
+  byte-exact `decode∘encode` for any input, incl. non-UTF-8; ≈0.9M fuzz execs clean),
   `TestBPEFromGGUF`, `TestBPEFromGGUFWriteReadRoundTrip` (end-to-end `gguf.Write` →
   `gguf.Read` → load), and `ExampleBPETokenizer`. tier-2: research-lite CONFIRMED
   unanimous vs the OpenAI gpt-2 `encoder.py`, HF `GPT2Tokenizer`, and llama.cpp
@@ -8672,7 +8680,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   layout, pipeline layout, pipeline) are **fixed per shader**, so they are now
   created once and cached, keyed by the embedded SPIR-V pointer; only the
   data-dependent buffers, descriptor set, and command buffer stay per-call.
-- Same change consolidates the ~130-lines-per-op Vulkan boilerplate into one generic
+- Same change consolidates the ≈130-lines-per-op Vulkan boilerplate into one generic
   launcher `vk_dispatch(spv, nbuf, lens, data, upload[], download[], push, groups…)`
   — `vk_matmul_f32` / `vk_mha_f32` / `vk_mha_backward_f32` / `vk_conv2d_f32` are now
   thin wrappers that just build the buffer arrays and push-constant block.
@@ -8691,7 +8699,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   rewritten from one-load-per-multiply into a **tiled** kernel: each 16×16 workgroup
   cooperatively stages 16×16 sub-tiles of A and B into `shared` memory (with a
   workgroup `barrier()`) and reuses each tile across the whole output tile, cutting
-  global memory loads ~16×. Edge tiles load zeros, so shapes with M/N/K not a
+  global memory loads ≈16×. Edge tiles load zeros, so shapes with M/N/K not a
   multiple of 16 stay correct. Only the shader changed — the dispatch and the C
   bridge are untouched.
 - **§V acceptance:** V-CROSS parity `vulkan == ref` stays green **including the
@@ -8714,10 +8722,10 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   `numpy-cpu` / `torch-cpu` / `torch-mps`. Run with `make bench-python` (uses the
   project `.venv`; numpy 2.5.1, torch 2.12.1). MPS timings synchronize the device.
 - **Honest result (M2 Pro):** the optimized Python libraries are far ahead — matmul
-  at 1024³ is 2749 GFLOP/s on `torch-cpu` (Accelerate BLAS) vs 73 on GoAI-cpu (~37×)
-  and 4200 on `torch-mps` vs 895 on GoAI-metal (~4.7×); attention forward is 0.45 ms
-  on `torch-mps` (fused flash attention) vs 21.7 ms on GoAI-vulkan (~48×); conv2d is
-  1180 GFLOP/s on `torch-mps` vs 67 on GoAI-metal (~18×). GoAI is *correct* (V-CROSS
+  at 1024³ is 2749 GFLOP/s on `torch-cpu` (Accelerate BLAS) vs 73 on GoAI-cpu (≈37×)
+  and 4200 on `torch-mps` vs 895 on GoAI-metal (≈4.7×); attention forward is 0.45 ms
+  on `torch-mps` (fused flash attention) vs 21.7 ms on GoAI-vulkan (≈48×); conv2d is
+  1180 GFLOP/s on `torch-mps` vs 67 on GoAI-metal (≈18×). GoAI is *correct* (V-CROSS
   vs the reference) but its kernels are naive (one thread per output, no tiling /
   shared memory / BLAS / flash-attention); the gap is exactly the algorithmic
   optimizations parked as follow-ups (tiled/BLAS GEMM, flash-attention tiling,
@@ -8837,7 +8845,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 ### T87 — Typed backend names replace magic-string identifiers (2026-07-06)
 - **No magic strings for backend identifiers (ADR-0015).** Backends were referred
   to by bare string literals — `Get("metal")`, `SetPreference("cuda","cpu")`,
-  `Name() string { return "metal" }` — in ~114 places. Introduces a typed string
+  `Name() string { return "metal" }` — in ≈114 places. Introduces a typed string
   enum `backend.Name` ([backend/names.go](backend/names.go)) with the constants
   `CPU`, `Ref`, `Metal`, `CUDA`, `Vulkan`, threaded through the whole selection
   surface: `Backend.Name() Name`, `Get(Name)`, `SetPreference(...Name)`,
@@ -8947,18 +8955,18 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ### T83 — NF4 double-quantization (QLoRA §3) (2026-07-06)
 - Completes QLoRA's memory story (the T75 follow-up): the per-64-block NF4 absmax
-  scales, previously stored as fp64, are compressed to ~8 bits each. New
+  scales, previously stored as fp64, are compressed to ≈8 bits each. New
   `nn.QuantizeScalesNF4(absmax, blockSize2)` centers the scales by their mean
   (`offset = mean(absmax)`), then 8-bit block-quantizes the centered values with a
   second block size (default 256): a shared `absmax2` per block plus a signed
   `int8` code per scale. `nn.DequantizeScalesNF4` reconstructs
-  `absmax_hat = code/127·absmax2 + offset`. Per the paper this saves ~0.37
+  `absmax_hat = code/127·absmax2 + offset`. Per the paper this saves ≈0.37
   bits/parameter on top of NF4.
 - **§V15 / §V16:** round-trip stays within the 8-bit bound (`|err| ≤ absmax2/127`)
   and is stable under a second pass (near-, not exactly, idempotent because the mean
-  re-centers); `FuzzNF4DoubleQuant` ran ~1.7M executions with no panic or bound
+  re-centers); `FuzzNF4DoubleQuant` ran ≈1.7M executions with no panic or bound
   violation; an end-to-end test confirms double-quantizing the scales adds only a
-  small extra error over plain NF4 while shrinking scale storage ~8×. tier-2 — the
+  small extra error over plain NF4 while shrinking scale storage ≈8×. tier-2 — the
   algorithm (mean offset, 256-block 8-bit quant, dequant order) is **confirmed
   unanimously by a 3-agent research-lite pass** against the paper §3 and bitsandbytes
   `functional.py` (§R79).
@@ -9002,7 +9010,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   token-optimization rationale: caveman level `lite` (the per-turn inject is the real
   cost; `lite` ≈ `full` quality, JetBrains sign-test p=0.82), and the actually-big
   levers (prompt caching, `/compact` + context editing, model routing, delegating
-  verbose tool output to subagents). It records the honest ~8.5% output-only ceiling
+  verbose tool output to subagents). It records the honest ≈8.5% output-only ceiling
   of the caveman style on agentic tasks (JetBrains SkillsBench) rather than the
   advertised 65–75%.
 - Host-specific `cavemem` hooks (absolute node path) are documented but intentionally
@@ -9134,7 +9142,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 - **§V15 / §V16:** round-trip and fuzz tests — dequant∘quant snaps each value to
   `absmax·nearest-code` within the half-gap bound and is idempotent (re-quantizing
   the reconstruction reproduces the exact packed indices and scales);
-  `FuzzNF4RoundTrip` ran ~1.2M executions with no panic or bound violation. The
+  `FuzzNF4RoundTrip` ran ≈1.2M executions with no panic or bound violation. The
   codebook is asserted equal to the bitsandbytes reference, and QLoRA with B=0
   reproduces the NF4 base matmul. tier-2 — the codebook, block-wise absmax
   quantization, and dequant are **confirmed unanimously by a 3-agent research-lite
@@ -9256,7 +9264,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   normalized rescale. The VJP is the **exact through-norm gradient**
   (`dV = (m/n)·(g − V·s/n²)`, `dm = s/n`), so it passes a finite-difference
   gradient check (§V2). NOTE: the reference PEFT/paper backward *detaches* the
-  column norm (§4.3, ~24% memory saving, a deliberate approximation); we compute
+  column norm (§4.3, ≈24% memory saving, a deliberate approximation); we compute
   the exact gradient — the forward is identical, and the backward divergence is
   documented (§R70).
 - **§V16 both tiers:** tier-1 — `OpDoRAWeight` and the full `DoRALinear` forward
@@ -9325,8 +9333,8 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   reports a `GFLOP/s` metric) and `testdata/bench_torch.py` (PyTorch, same
   sizes/dtypes), so the optimized `cpu` GEMM is measured head-to-head against the
   Python parity target, not just against GoAI's own reference. Measured (M2 Pro):
-  GoAI f64-1024 = 69 GFLOP/s vs torch 684 (~10%); f32 ≈ f64 (~70) vs torch 2735
-  (~2.6%) — surfacing that the kernel does not yet exploit f32's 2× SIMD lanes (the
+  GoAI f64-1024 = 69 GFLOP/s vs torch 684 (≈10%); f32 ≈ f64 (≈70) vs torch 2735
+  (≈2.6%) — surfacing that the kernel does not yet exploit f32's 2× SIMD lanes (the
   top portable optimization). Results + roadmap in
   `docs/research/02-frontier-and-perf-2026-07-06.md` and a new "GoAI vs PyTorch"
   section in `docs/benchmarking.md`.
@@ -9398,7 +9406,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   training a DQN for 400 episodes then reading its learned greedy action, "right",
   deterministic via seed).
 - All `go test`-green, gofmt/vet clean, `CGO_ENABLED=0` build green. T45 stays
-  ongoing (`~`): classic and ops remain.
+  ongoing (`≈`): classic and ops remain.
 
 ### T45 — docs+examples sweep: format/gguf package (2026-07-06)
 - Added `format/gguf/doc.go` — a dual-audience package overview: the GGUF layout
@@ -9414,7 +9422,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   tensor arriving as F32), and embedded (`Example_inspectTensors` — listing every
   tensor with its shape, the checkpoint-inspection idiom).
 - All `go test`-green, gofmt/vet clean, `CGO_ENABLED=0` build green. T45 stays
-  ongoing (`~`): classic, rl and ops remain.
+  ongoing (`≈`): classic, rl and ops remain.
 
 ### T45 — docs+examples sweep: format/safetensors package (2026-07-06)
 - Added `format/safetensors/doc.go` — a dual-audience package overview: the format
@@ -9431,7 +9439,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 - Also marked the `backend` package done in T45 (it already carried `doc.go` + five
   examples: Execute, auto-selected matmul, SetPreference, Available, ALiBiSlopes)
   and corrected the stale TODO list — there are no `vision` or `format/npy`
-  packages (npy lives in `internal/npy`). T45 stays ongoing (`~`): classic, rl,
+  packages (npy lives in `internal/npy`). T45 stays ongoing (`≈`): classic, rl,
   format/gguf and ops remain.
 
 ### T45 — docs+examples sweep: nlp package (2026-07-06)
@@ -9448,14 +9456,14 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   the existing `ExampleSpeculativeRun`, `ExampleBeamSearch`, `ExampleApplyPenalties`
   and `ExampleSampler_minP` for eight examples total.
 - All `go test`-green, gofmt/vet clean, `CGO_ENABLED=0` build green. T45 stays
-  ongoing (`~`): backend, vision, classic, rl and format/* remain to sweep.
+  ongoing (`≈`): backend, vision, classic, rl and format/* remain to sweep.
 
 ### T65 — Lion optimizer (sign-momentum) (2026-07-06)
 - Lion (EvoLved Sign Momentum, Chen et al. 2023) — a memory-efficient optimizer
   discovered by symbolic program search. It keeps a **single** momentum buffer
   (half of Adam's state, no second moment) and moves every parameter by the same
   step size `lr`, because the update direction is `sign(c)`. The gradient sets only
-  the direction, never the step length — so Lion wants a learning rate ~3-10×
+  the direction, never the step length — so Lion wants a learning rate ≈3-10×
   smaller than Adam and a correspondingly larger weight decay.
 - New `nn.Lion` + `NewLion(params, lr, opts...)` with functional options (§C12)
   `WithLionBetas(β1, β2)` and `WithLionWeightDecay(λ)` (defaults β1=0.9, β2=0.99,
@@ -9514,7 +9522,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   Transformer / Longformer) — the fused `OpMHA` gains a `"window"` integer
   attribute that restricts each causal query to the `W` most recent keys
   (`j ∈ [max(0, i−W+1), i]`), cutting per-token attention cost from O(seq) to O(W)
-  while stacked layers still grow the receptive field to ~W×depth. `window=0` (or
+  while stacked layers still grow the receptive field to ≈W×depth. `window=0` (or
   ≥ sequence length) is full causal attention — backward compatible.
 - Both the kernel and the autograd VJP apply the same `jmin` window bound, so the
   windowed forward and backward stay consistent.
@@ -9703,7 +9711,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   theorem**: over 300k samples with a draft q deliberately far from the target p,
   the empirical output distribution equals p to within 0.01 for every token (§V1),
   and the empirical acceptance rate equals `Σ min(p,q) = 1 − TV(p,q)`. tier-2 the
-  algorithm and the exactness theorem (output ~ p for **any** q, via the identity
+  algorithm and the exactness theorem (output ≈ p for **any** q, via the identity
   `min(q,p)+max(0,p−q)=p`) **confirmed vs both papers** via research-lite (§R53).
 - **Verification:** p==q always accepts (output == draft); a rejected token can
   only come from the residual support where p>q; the run emits K+1 tokens when
@@ -10133,7 +10141,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   (transfer≫compute) → §T28/§T29 dropped. Durable high-throughput path is graph
   residency (MPSGraph/CUDA graphs).
 - `autograd.NewTapeOn(backend)`: forward AND backward ops dispatch to the chosen
-  backend; ops it lacks fall back to cpu (§I4). ~15 lines, no new kernels.
+  backend; ops it lacks fall back to cpu (§I4). ≈15 lines, no new kernels.
 - **GPU training works & is validated:** an f32 MLP trained with a metal-backed
   tape runs its Linear GEMMs (forward + both backward GEMMs of the matmul VJP)
   on the GPU and **converges identically to the CPU reference** (gpu loss 0.037
@@ -10167,7 +10175,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   round-trips assert bit-exact recovery incl. NaN/±0/±Inf; robustness fuzz
   asserts no input can panic. Seeded with the real golden files.
 - **3 real robustness bugs found & fixed** (all DoS-class, hostile-input only):
-  - §B31 (fuzz-found): npy uint32 header length uncapped → ~4 GB `make` OOM;
+  - §B31 (fuzz-found): npy uint32 header length uncapped → ≈4 GB `make` OOM;
     and data buffer pre-allocated from the *claimed* shape (npy streams, so no
     offset cross-check like safetensors/gguf). Fixed: 64 MiB header cap +
     1<<25 numel cap.
@@ -10188,7 +10196,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 ### Loop end state on arm64 host (2026-07-06)
 - **28/29 §T tasks complete.** T11b remains, structurally gated: archsimd needs
   an amd64 runtime for V-CROSS (§B13); the NEON/arm64 half was **parked by
-  measurement** (§B27) — the portable loop already sustains 55 GB/s (~1
+  measurement** (§B27) — the portable loop already sustains 55 GB/s (≈1
   elem/cycle, flat L1→L2; `internal/simd` benchmarks added), hand-NEON would
   net ≤7% end-to-end and is obsoleted by upcoming archsimd-arm64.
 - Resume conditions documented in `LOOP.md` (amd64 runner, archsimd-arm64
@@ -10205,7 +10213,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 - **Verification:** §V3 cross bit-exact over shapes/stride/pad/bias/dtypes;
   §V2 gradchecks for conv2d (both geometries, incl. bias), maxpool, avgpool
   against central finite differences; ref torch-golden still green after the
-  bias-order change. **§V5: conv 8×8×28×28·16f 40.3ms → 1.11ms (~36×).**
+  bias-order change. **§V5: conv 8×8×28×28·16f 40.3ms → 1.11ms (≈36×).**
   Full suite green, cross-compiled (§V4/§V7). `go vet` clean.
 
 ### T26 — RL basics: REINFORCE + DQN (2026-07-06)
@@ -10327,7 +10335,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   stays ascending → results remain **bit-identical to ref** (§V3/§V11 tol 0);
   no tolerance trade. F32 twin keeps the f64 scratch accumulator (§V10).
 - **§V5 delta (darwin/arm64):** 256³ f64 1.20ms→0.92ms (**+31%, 36.4 GFLOP/s**);
-  512³ **50.6 GFLOP/s**; 128³ unchanged (cache-resident). Ref-vs-cpu now ~110×
+  512³ **50.6 GFLOP/s**; 128³ unchanged (cache-resident). Ref-vs-cpu now ≈110×
   at 256³. archsimd FMA microkernel folded into §T11b (amd64 CI, §B13).
 - **Policy note:** T20 (GPU/cgo) was deliberately deferred — §C2 requires the
   Pure-Go ceiling first; this task raises it. Full suite green, cross-compiled,
@@ -10449,7 +10457,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   total work (GEMM parallelizes at M·K·N ≥ threshold; elementwise unchanged).
 - **Verification:** §V3/§V11 — cpu GEMM bit-identical to ref across square/
   non-square/large-M shapes, both dtypes, and transposed-view operands. §V5:
-  **MatMulF64 128³ 9.1ms→294µs (~31×), 0.46→14.3 GFLOP/s; 256³ 27.9 GFLOP/s.**
+  **MatMulF64 128³ 9.1ms→294µs (≈31×), 0.46→14.3 GFLOP/s; 256³ 27.9 GFLOP/s.**
   All platforms + `GOEXPERIMENT=simd` amd64 build green (§V4/§V7). `go vet` clean.
 - §T12b tracks cache-blocking + archsimd FMA microkernel for higher GFLOP/s.
 
@@ -10465,7 +10473,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 - **Verification:** §V3/§V11 CROSS — cpu is **bit-identical to ref** (tolerance 0)
   across all elementwise ops, both dtypes, incl. the parallel path (256K) and
   non-contiguous inputs. §V5 delta: **AddF64 4K 127µs/4104 allocs → 12µs/9 allocs
-  (~10×, 456× fewer allocs)**. All platforms + `GOEXPERIMENT=simd` amd64 build
+  (≈10×, 456× fewer allocs)**. All platforms + `GOEXPERIMENT=simd` amd64 build
   green (§V4/§V7). `go vet` clean.
 
 ### T10 — golden/npy tooling + benchmark harness (2026-07-05)
@@ -10479,7 +10487,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 - `testdata/gen.py` also emits real `.npy` samples for the reader tests.
 - **Verification:** npy reads real numpy files + Go round-trip (incl. scalar,
   non-contiguous, bad-magic); bench harness runs. Baselines recorded: AddF64 4K
-  ~100µs/4.1k allocs, MatMulF64 128³ ~9.4ms — targets for §T11/§T12.
+  ≈100µs/4.1k allocs, MatMulF64 128³ ≈9.4ms — targets for §T11/§T12.
   Cross-compiled win/darwin (§V4). `go vet` clean.
 - **§T10 complete** (JSON goldens landed early with §T6).
 
