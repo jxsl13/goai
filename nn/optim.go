@@ -26,13 +26,22 @@ type Optimizer interface {
 // SGD is stochastic gradient descent, optionally with classical momentum in the
 // torch formulation: v ← μ·v + g; p ← p − lr·v.
 type SGD struct {
-	Params   []*tensor.Tensor // parameters this optimizer updates
-	LR       float64          // learning rate (step size)
-	Momentum float64          // 0 = plain SGD
+	Params []*tensor.Tensor // parameters this optimizer updates
+	// LR is the learning rate (step size). In plain terms: how far to step downhill each
+	// update. Boundary behavior: LR→0 stalls learning; too large diverges. SGD is more
+	// LR-sensitive than Adam (no per-coordinate scaling) — must be tuned per task; common
+	// vision starting points are 0.1 with momentum, far smaller without.
+	LR float64
+	// Momentum is the classical momentum coefficient μ. In plain terms: how much of the
+	// previous step's direction to carry forward, which smooths noise and accelerates down
+	// long valleys. Boundary behavior: 0 = plain SGD (no inertia); →1 overshoots and can
+	// oscillate. SPECIAL VALUE: 0 = disabled (no velocity buffer allocated). Typical 0.9.
+	Momentum float64
 	vel      [][]float64
 }
 
-// NewSGD builds an SGD optimizer over params.
+// NewSGD builds an SGD optimizer over params. momentum 0 gives plain SGD; 0.9 is the
+// standard momentum value (Sutskever et al. 2013) and a good default when in doubt.
 func NewSGD(params []*tensor.Tensor, lr, momentum float64) *SGD {
 	s := &SGD{Params: params, LR: lr, Momentum: momentum}
 	if momentum != 0 {
@@ -77,20 +86,49 @@ func (s *SGD) Step(grad GradFn) error {
 //	m̂ = m/(1−β₁ᵗ);  v̂ = v/(1−β₂ᵗ);  p ← p − lr·m̂/(√v̂ + ε)
 type Adam struct {
 	Params []*tensor.Tensor // parameters this optimizer updates
-	LR     float64          // learning rate (step size)
-	Beta1  float64          // 1st-moment EMA decay (~0.9)
-	Beta2  float64          // 2nd-moment EMA decay (~0.999)
-	Eps    float64          // denominator epsilon for numerical stability
-	// WeightDecay > 0 selects AdamW's decoupled decay (Loshchilov & Hutter 2019):
-	// p ← p·(1−lr·wd) − lr·m̂/(√v̂+ε). 0 = plain Adam.
+
+	// LR is the learning rate (step size). In plain terms: how big a step to take
+	// downhill each update — too small and training crawls, too large and it diverges
+	// (loss to NaN). Boundary behavior: as LR→0 no learning happens; past the stability
+	// threshold (problem-specific) the loss oscillates or explodes. No universal default
+	// (it is the one hyperparameter you must tune) — 1e-3 is the classic Adam starting
+	// point (Kingma & Ba 2015 §6.1), 1e-4–3e-4 typical for transformer pretraining.
+	LR float64
+	// Beta1 is the first-moment (momentum) EMA decay. In plain terms: how much the
+	// optimizer smooths the gradient direction over recent steps — higher = smoother,
+	// more inertia. Boundary behavior: 0 = no momentum (react only to the current
+	// gradient); →1 = averages over a very long horizon and reacts sluggishly. Default
+	// 0.9 (Kingma & Ba 2015 §6, the near-universal value).
+	Beta1 float64
+	// Beta2 is the second-moment (variance) EMA decay used for per-coordinate step
+	// scaling. In plain terms: how much history goes into estimating each parameter's
+	// gradient magnitude, which normalizes the step. Boundary behavior: too low makes
+	// the variance estimate noisy (unstable steps); →1 makes it slow to adapt. Default
+	// 0.999 (Kingma & Ba 2015 §6); some LLM recipes use 0.95 for stability at scale.
+	Beta2 float64
+	// Eps is the denominator epsilon added outside the square root for numerical
+	// stability. In plain terms: a tiny floor that stops division by (near-)zero when a
+	// parameter's gradient variance is small. Boundary behavior: too small risks huge
+	// steps on rarely-updated parameters; larger eps (1e-6..1e-4) caps the effective
+	// step and can help stability at scale. Default 1e-8 (Kingma & Ba 2015 §6 / PyTorch; §R9).
+	Eps float64
+	// WeightDecay > 0 selects AdamW's decoupled decay (Loshchilov & Hutter 2019, §R26):
+	// p ← p·(1−lr·wd) − lr·m̂/(√v̂+ε). In plain terms: gently shrink every
+	// weight toward zero each step (regularization) — decoupled means it does not get
+	// tangled into the adaptive step like classic L2. Boundary behavior: 0 = plain Adam
+	// (no decay); large wd over-regularizes and underfits. SPECIAL VALUE: 0 = disabled.
+	// Typical 0.01–0.1 for transformer training (0.1 is a common LLM default).
 	WeightDecay float64
 
 	m, v [][]float64
 	t    int
 }
 
-// NewAdam builds an Adam optimizer with the canonical defaults β₁=0.9,
-// β₂=0.999, ε=1e-8, no weight decay.
+// NewAdam builds an Adam optimizer (Kingma & Ba 2015) with the canonical, research-grounded
+// defaults β₁=0.9, β₂=0.999, ε=1e-8 and no weight decay — the values the paper recommends in
+// §6 and that PyTorch/TensorFlow ship. Only the learning rate lr has no universal default and
+// must be chosen for the task (see the LR field doc). Override the β/ε fields directly for the
+// occasional recipe that needs it (e.g. β₂=0.95 at large scale).
 func NewAdam(params []*tensor.Tensor, lr float64) *Adam {
 	a := &Adam{Params: params, LR: lr, Beta1: 0.9, Beta2: 0.999, Eps: 1e-8}
 	a.m = make([][]float64, len(params))
@@ -102,8 +140,11 @@ func NewAdam(params []*tensor.Tensor, lr float64) *Adam {
 	return a
 }
 
-// NewAdamW builds AdamW (Loshchilov & Hutter 2019) — Adam with decoupled weight
-// decay wd, the standard LLM optimizer.
+// NewAdamW builds AdamW (Loshchilov & Hutter 2019) — Adam with DECOUPLED weight decay wd, the
+// standard optimizer for transformer/LLM training. In plain terms: like Adam but also shrinks
+// weights toward zero each step, which generalizes better than folding decay into the gradient.
+// wd is the one extra knob (see the WeightDecay field): 0 reduces to plain Adam, 0.01–0.1 is
+// the usual band, 0.1 a common LLM default.
 func NewAdamW(params []*tensor.Tensor, lr, wd float64) *Adam {
 	a := NewAdam(params, lr)
 	a.WeightDecay = wd
@@ -211,13 +252,29 @@ type Lion struct {
 // LionOption configures a Lion optimizer (functional-options idiom, §C12).
 type LionOption func(*Lion)
 
-// WithLionBetas sets the update/momentum interpolation coefficients (β1, β2;
-// defaults 0.9, 0.99).
+// WithLionBetas sets Lion's two EMA coefficients: β1 blends the momentum into the
+// update direction, β2 decays the momentum buffer carried to the next step.
+//
+// In plain terms: β1 controls how much recent history steers this step; β2 how long the
+// momentum remembers. Boundary behavior — both near 1 make Lion sluggish; near 0 make it
+// react only to the latest gradient. Because Lion steps by the SIGN of the momentum (every
+// coordinate moves ±lr regardless of gradient size), it needs a smaller lr and larger
+// weight decay than Adam.
+//
+// Defaults 0.9, 0.99 (research-grounded): the values from Chen et al. 2023 (§R65) and the
+// lion-pytorch reference; β2 > β1 is intentional (a longer memory for the stored momentum).
 func WithLionBetas(beta1, beta2 float64) LionOption {
 	return func(l *Lion) { l.Beta1, l.Beta2 = beta1, beta2 }
 }
 
-// WithLionWeightDecay sets the decoupled weight decay λ (default 0).
+// WithLionWeightDecay sets Lion's decoupled weight decay λ (AdamW-style).
+//
+// In plain terms: shrink weights toward zero each step. Boundary behavior — 0 = no decay;
+// too large underfits. Lion typically wants λ ROUGHLY 3–10× larger than Adam's because its
+// sign-based update has a smaller effective step. SPECIAL VALUE: 0 = disabled.
+//
+// Default 0 (research-grounded): off unless set; Chen et al. 2023 (§R65) use decoupled decay
+// tuned per task — a common starting point is ~10× the AdamW value you would otherwise use.
 func WithLionWeightDecay(wd float64) LionOption {
 	return func(l *Lion) { l.WeightDecay = wd }
 }
