@@ -31,7 +31,7 @@ static pthread_mutex_t gLock = PTHREAD_MUTEX_INITIALIZER;
 static cublasHandle_t gHandle = NULL;
 static cudaStream_t gStream = NULL;
 static CUcontext gCtx = NULL; // runtime's primary context, retained for driver-API launches
-static CUfunction gGelu = NULL, gSilu = NULL, gAdd = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL; // lazily nvrtc-compiled
+static CUfunction gGelu = NULL, gSilu = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL; // lazily nvrtc-compiled
 
 static float *gA = NULL, *gB = NULL, *gC = NULL;
 static size_t gACap = 0, gBCap = 0, gCCap = 0; // capacities in bytes
@@ -148,6 +148,31 @@ int cu_add_f32(void* dst, const void* src, int n) {
         args[1] = &src;
         args[2] = &n;
         rc = (cuLaunchKernel(gAdd, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_mul_f32: dst *= src elementwise (e.g. the SwiGLU gate·up product), on gStream.
+int cu_mul_f32(void* dst, const void* src, int n) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (!gMul && compile_kernel(
+                     "extern \"C\" __global__ void mul_f32(float* dst, const float* src, int n){\n"
+                     "  int i = blockIdx.x*blockDim.x + threadIdx.x;\n"
+                     "  if (i < n){ dst[i] *= src[i]; }\n"
+                     "}\n",
+                     "mul.cu", "mul_f32", &gMul) != 0) { rc = -2; goto done; }
+    {
+        int threads = 256, blocks = (n + threads - 1) / threads;
+        void* args[3];
+        args[0] = &dst;
+        args[1] = &src;
+        args[2] = &n;
+        rc = (cuLaunchKernel(gMul, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 done:
     pthread_mutex_unlock(&gLock);
