@@ -40,14 +40,36 @@ func concatRows(a, b *tensor.Tensor) *tensor.Tensor {
 		rb = b.Shape()[0]
 	}
 	out := tensor.New(a.Dtype(), tensor.Shape{ra + rb, d})
-	for i := range ra {
-		for j := range d {
-			out.SetF64(a.AtF64(i, j), i, j)
+	ac := a.Contiguous()
+	// The KV-cache append runs every decode step and grows with context — a typed
+	// row-block copy (§base-perf) instead of a per-element AtF64/SetF64 dispatch.
+	sameDtype := b == nil || b.Dtype() == a.Dtype()
+	switch {
+	case sameDtype && a.Dtype() == tensor.F64:
+		dst := out.Storage().F64()
+		copy(dst[:ra*d], ac.Storage().F64()[:ra*d])
+		if b != nil {
+			copy(dst[ra*d:], b.Contiguous().Storage().F64()[:rb*d])
 		}
-	}
-	for i := range rb {
-		for j := range d {
-			out.SetF64(b.AtF64(i, j), ra+i, j)
+	case sameDtype && a.Dtype() == tensor.F32:
+		dst := out.Storage().F32()
+		copy(dst[:ra*d], ac.Storage().F32()[:ra*d])
+		if b != nil {
+			copy(dst[ra*d:], b.Contiguous().Storage().F32()[:rb*d])
+		}
+	default:
+		for i := 0; i < ra; i++ {
+			for j := 0; j < d; j++ {
+				out.SetF64(ac.AtF64(i, j), i, j)
+			}
+		}
+		if b != nil {
+			bc := b.Contiguous()
+			for i := 0; i < rb; i++ {
+				for j := 0; j < d; j++ {
+					out.SetF64(bc.AtF64(i, j), ra+i, j)
+				}
+			}
 		}
 	}
 	return out
@@ -91,8 +113,28 @@ func (g *GPT) embedAt(token, pos int) (*tensor.Tensor, error) {
 	}
 	d := g.Config.Dim
 	x := tensor.New(g.TokEmb.Dtype(), tensor.Shape{1, d})
-	for j := range d {
-		x.SetF64(g.TokEmb.AtF64(token, j)+g.PosEmb.AtF64(pos, j), 0, j)
+	// Per-token embedding lookup: read the two rows directly and add, typed
+	// (§base-perf) instead of a per-element AtF64 over the whole dim.
+	te, pe := g.TokEmb.Contiguous(), g.PosEmb.Contiguous()
+	switch {
+	case te.Dtype() == tensor.F32 && pe.Dtype() == tensor.F32:
+		ts := te.Storage().F32()[token*d : token*d+d]
+		ps := pe.Storage().F32()[pos*d : pos*d+d]
+		dst := x.Storage().F32()
+		for j := 0; j < d; j++ {
+			dst[j] = ts[j] + ps[j]
+		}
+	case te.Dtype() == tensor.F64 && pe.Dtype() == tensor.F64:
+		ts := te.Storage().F64()[token*d : token*d+d]
+		ps := pe.Storage().F64()[pos*d : pos*d+d]
+		dst := x.Storage().F64()
+		for j := 0; j < d; j++ {
+			dst[j] = ts[j] + ps[j]
+		}
+	default:
+		for j := 0; j < d; j++ {
+			x.SetF64(te.AtF64(token, j)+pe.AtF64(pos, j), 0, j)
+		}
 	}
 	return x, nil
 }
