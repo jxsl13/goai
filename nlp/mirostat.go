@@ -33,11 +33,34 @@ type Mirostat struct {
 // MirostatOption configures a Mirostat sampler (functional-options idiom, §C12).
 type MirostatOption func(*Mirostat)
 
-// WithMirostatTau sets the target surprise τ in bits (default 5.0); the controlled
-// perplexity is 2^τ.
+// WithMirostatTau sets the target surprise τ, in bits.
+//
+// In plain terms: the "surprise dial" — how unpredictable you want the text to be on
+// average. Low τ = safe and repetitive; high τ = adventurous and varied. Mirostat then
+// steers generation to hold that level regardless of context, instead of letting it drift
+// the way top-k/top-p do.
+//
+// Professional: τ is the per-token cross-entropy target; the controlled perplexity is 2^τ.
+// Boundary behavior — as τ → 0 the sampler drives toward the single most likely token every
+// step (greedy-like, minimal surprise); large τ (past ≈8) targets high perplexity and text
+// grows incoherent. The feedback keeps the long-run average surprise at τ.
+//
+// Default 5.0 bits (research-grounded): the de-facto llama.cpp default; Basu et al. 2020
+// (§R85) sweep τ ∈ {2.5, 3, 4, 5}, and 5 is the standard general-purpose setting.
 func WithMirostatTau(tau float64) MirostatOption { return func(m *Mirostat) { m.Tau = tau } }
 
-// WithMirostatEta sets the feedback learning rate η (default 0.1).
+// WithMirostatEta sets the feedback learning rate η.
+//
+// In plain terms: how fast Mirostat corrects course when the last word was more or less
+// surprising than the target — big η reacts quickly but jitters, small η adjusts slowly
+// and smoothly.
+//
+// Professional: the step size of the μ ← μ − η·(S − τ) update. Boundary behavior — η → 0
+// freezes the threshold μ (no adaptation, behaves like a fixed surprise cutoff); large η
+// overshoots and oscillates around the target. SPECIAL VALUE: 0 = no feedback (static μ).
+//
+// Default 0.1 (research-grounded): the llama.cpp default and the authors' reference learning
+// rate (Basu et al. 2020, §R85).
 func WithMirostatEta(eta float64) MirostatOption { return func(m *Mirostat) { m.Eta = eta } }
 
 // NewMirostat builds a deterministic Mirostat 2.0 sampler seeded by seed, with the

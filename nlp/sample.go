@@ -155,74 +155,212 @@ func WithTopP(p float64) SamplerOption { return func(s *Sampler) { s.TopP = p } 
 // truncation knob: NewSampler(seed, WithMinP(0.05)) is a strong general-purpose setup.
 func WithMinP(p float64) SamplerOption { return func(s *Sampler) { s.MinP = p } }
 
-// WithEpsilon enables epsilon sampling (Hewitt et al. 2022, §R91): keep only tokens
-// with probability ≥ eps, an absolute floor. 0 disables it; typical 3e-4–2e-3.
+// WithEpsilon enables epsilon sampling (Hewitt et al. 2022, §R91).
+//
+// In plain terms: throw away any word below a fixed rarity floor, no matter the context.
+//
+// Professional: an absolute probability floor — keep tokens with p ≥ eps. Boundary behavior
+// — tiny eps (≈3e-4) trims only the extreme tail; large eps clips into the plausible set and
+// forces near-greedy output. Unlike min-p the floor is absolute, not relative to the peak.
+// SPECIAL VALUE: 0 disables it.
+//
+// Default 0 = DISABLED, research-grounded: epsilon/eta are specialist desmoothing filters,
+// off by default; Hewitt et al. 2022 suggest eps≈3e-4–2e-3 when enabled.
 func WithEpsilon(eps float64) SamplerOption { return func(s *Sampler) { s.Epsilon = eps } }
 
-// WithEta enables eta sampling (Hewitt et al. 2022, §R91): an entropy-adaptive
-// threshold η = min(eps, √eps·exp(−H)) where H is the distribution's Shannon entropy
-// in nats — it truncates hard when the model is confident (low entropy) and keeps more
-// when uncertain. 0 disables it; typical eps≈9e-4.
+// WithEta enables eta sampling (Hewitt et al. 2022, §R91).
+//
+// In plain terms: an automatic rarity floor that gets stricter when the model is confident
+// and more permissive when it's unsure.
+//
+// Professional: an entropy-adaptive floor η = min(eps, √eps·exp(−H)), H the distribution's
+// Shannon entropy in nats. Boundary behavior — in low-entropy (confident) states the
+// √eps·exp(−H) term is large so η saturates at the eps cap and truncates hard; in
+// high-entropy states η shrinks and keeps more. SPECIAL VALUE: 0 disables it.
+//
+// Default 0 = DISABLED, research-grounded: off by default; Hewitt et al. 2022 report
+// eps≈9e-4 as a good working value (their desmoothing framework, §R91).
 func WithEta(eps float64) SamplerOption { return func(s *Sampler) { s.Eta = eps } }
 
-// WithTypical enables locally typical sampling (Meister, Pimentel, Wiher & Cotterell
-// 2023, "Locally Typical Sampling"): keep the smallest set of tokens whose information
-// content −log p is closest to the distribution's entropy H(p) until their cumulative
-// probability reaches τ, filtering out both the too-predictable and the too-surprising.
-// 0 or ≥1 disables it; typical τ 0.9–0.95.
+// WithTypical enables locally typical sampling (Meister, Pimentel, Wiher & Cotterell 2023,
+// §R154).
+//
+// In plain terms: prefer words that are neither boringly obvious nor bizarrely surprising —
+// the ones carrying an "average" amount of information, which reads as natural.
+//
+// Professional: keep the smallest set of tokens whose information content −log p is closest
+// to the distribution's entropy H(p) until their cumulative probability reaches τ, trimming
+// both the too-predictable and the too-surprising. Boundary behavior — small τ keeps only a
+// few most-typical tokens (conservative); τ near 1 keeps almost everything. SPECIAL VALUES:
+// 0 or ≥1 disable it.
+//
+// Default 0 = DISABLED, research-grounded: off by default; Meister et al. 2023 use τ≈0.9–0.95
+// (also Hugging Face's TypicalLogitsWarper default 0.9).
 func WithTypical(tau float64) SamplerOption { return func(s *Sampler) { s.Typical = tau } }
 
-// WithRepeatPenalty enables the CTRL repetition penalty (Keskar et al. 2019): for
-// every token in the penalty window, a positive logit is divided by p and a negative
-// one multiplied by it. 0 or 1 disables it; typical 1.1–1.3.
+// WithRepeatPenalty enables the CTRL repetition penalty (Keskar et al. 2019, §R57).
+//
+// In plain terms: discourage the model from reusing words it has already said, so it
+// stops looping on the same phrase.
+//
+// Professional: for every token seen in the penalty window, a positive logit is divided
+// by p and a negative one multiplied by it (the asymmetric CTRL rule, which keeps the
+// direction of the penalty consistent regardless of logit sign). Boundary behavior — at
+// p = 1 the operation is identity (division and multiplication by 1); as p grows the
+// suppression of already-seen tokens strengthens and above ≈1.3 the text starts avoiding
+// necessary words (articles, common tokens) and degrades. SPECIAL VALUES: 0 or 1 disable it.
+//
+// Default 0 = DISABLED, research-grounded: repetition penalties distort the model's
+// calibrated distribution, so GoAI leaves them off out of the box; when enabled, 1.1–1.3
+// is the community-standard band (llama.cpp defaults repeat_penalty to 1.1) — start at 1.1.
 func WithRepeatPenalty(p float64) SamplerOption { return func(s *Sampler) { s.RepeatPenalty = p } }
 
-// WithFrequencyPenalty subtracts f · count(token in the penalty window) from each
-// seen token's logit (the OpenAI-style frequency penalty). 0 disables it.
+// WithFrequencyPenalty subtracts f · count(token in the penalty window) from each seen
+// token's logit (the OpenAI-style frequency penalty).
+//
+// In plain terms: the more often the model has already used a word, the harder it is to
+// use it again — proportional to the repeat count.
+//
+// Professional: a linear-in-count logit penalty. Boundary behavior — small f (≈0.1–0.5)
+// gently reduces verbatim repeats; large f (>1) can blacklist frequent tokens entirely and
+// break fluency. Unlike the multiplicative CTRL penalty it scales with how many times a
+// token recurred, so runaway loops are punished progressively. SPECIAL VALUE: 0 disables it.
+//
+// Default 0 = DISABLED, research-grounded: the OpenAI API defaults frequency_penalty to 0
+// (no distortion); a light 0.1–0.5 is the typical enabled range when repetition is a problem.
 func WithFrequencyPenalty(f float64) SamplerOption { return func(s *Sampler) { s.FreqPenalty = f } }
 
 // WithPresencePenalty subtracts p from the logit of every token that appears in the
-// penalty window at all (the OpenAI-style presence penalty). 0 disables it.
+// penalty window at all (the OpenAI-style presence penalty).
+//
+// In plain terms: a flat one-time nudge away from any word already used — encourages new
+// vocabulary regardless of how many times a word appeared.
+//
+// Professional: a constant logit offset applied once per token present in the window (vs
+// the frequency penalty's count-scaled offset). Boundary behavior — small p broadens topic
+// coverage; large p (>1) forces the model onto unused, often less appropriate tokens.
+// SPECIAL VALUE: 0 disables it.
+//
+// Default 0 = DISABLED, research-grounded: the OpenAI API defaults presence_penalty to 0;
+// enable at 0.1–0.6 to push topical diversity.
 func WithPresencePenalty(p float64) SamplerOption { return func(s *Sampler) { s.PresencePenalty = p } }
 
-// WithPenaltyWindow limits the repetition penalties to the last n history tokens
-// (llama.cpp's repeat_last_n). 0 (the default) penalizes over the entire history.
+// WithPenaltyWindow limits every repetition penalty to the last n history tokens
+// (llama.cpp's repeat_last_n).
+//
+// In plain terms: how far back the "have I said this already?" check looks — a short window
+// only fights local loops, a long one fights repetition across the whole text.
+//
+// Professional: bounds the history slice the repeat/frequency/presence penalties scan.
+// Boundary behavior — very small n misses longer-range repetition; very large n makes early
+// common tokens permanently penalized, which can hurt fluency in long generations. SPECIAL
+// VALUE: 0 = scan the ENTIRE history (not "no window").
+//
+// Default 0 = whole history, research-grounded: with penalties off by default the window is
+// moot; when penalties are enabled, llama.cpp's repeat_last_n=64 is the usual practical bound.
 func WithPenaltyWindow(n int) SamplerOption { return func(s *Sampler) { s.PenaltyLastN = n } }
 
-// WithDRY enables the DRY sequence-repetition penalty (p-e-w 2024, see dry.go) with
-// the given strength; 0 disables it, the reference default is 0.8. Tokens that would
-// extend a suffix already seen earlier are penalized by multiplier·base^(k−allowed),
-// exponentially harder the longer the would-be repetition k.
+// WithDRY enables the DRY ("Don't Repeat Yourself") sequence-repetition penalty (p-e-w
+// 2024; llama.cpp standard sampler, see dry.go and §T573).
+//
+// In plain terms: unlike the per-word penalties, DRY catches the model repeating whole
+// phrases it already produced — it spots when the next word would continue a chunk seen
+// earlier and pushes back, harder the longer that repeated chunk gets.
+//
+// Professional: a token that would extend an already-seen suffix of length k is penalized by
+// multiplier·base^(k−allowed). Boundary behavior — as the would-be repetition k grows the
+// penalty grows exponentially, so long loops are crushed while short natural collocations
+// (k ≤ allowed) stay free; larger multiplier raises the whole curve. SPECIAL VALUE: 0
+// disables it.
+//
+// Default 0 = DISABLED, research-grounded: off by default (it reshapes the distribution);
+// the reference/community default when enabled is 0.8 (koboldcpp, llama.cpp dry_multiplier).
 func WithDRY(multiplier float64) SamplerOption {
 	return func(s *Sampler) { s.DRYMultiplier = multiplier }
 }
 
-// WithDRYBase sets DRY's exponential growth per extra matched token (default 1.75).
+// WithDRYBase sets DRY's exponential growth base per extra matched token.
+//
+// In plain terms: how much steeper the penalty gets for each additional repeated word.
+//
+// Professional: the base of multiplier·base^(k−allowed). Boundary behavior — base near 1
+// flattens DRY toward a constant penalty regardless of repetition length; larger base makes
+// long repeats explode faster. SPECIAL VALUE: ≤0 falls back to the reference default 1.75.
+//
+// Default 1.75 (research-grounded): the koboldcpp/llama.cpp reference dry_base.
 func WithDRYBase(b float64) SamplerOption { return func(s *Sampler) { s.DRYBase = b } }
 
-// WithDRYAllowedLength sets the longest repetition DRY leaves unpenalized (default 2)
-// — short natural collocations stay free.
+// WithDRYAllowedLength sets the longest repeated run DRY leaves unpenalized.
+//
+// In plain terms: repeats up to this length are free, so common short phrases ("of the",
+// "New York") aren't punished — only longer parroting is.
+//
+// Professional: the `allowed` exponent offset; penalty applies for match length k > allowed.
+// Boundary behavior — small allowed penalizes even short natural n-grams (can hurt fluency);
+// large allowed only catches very long loops. SPECIAL VALUE: ≤0 falls back to 2.
+//
+// Default 2 (research-grounded): the reference dry_allowed_length — bigrams stay free.
 func WithDRYAllowedLength(n int) SamplerOption { return func(s *Sampler) { s.DRYAllowedLen = n } }
 
-// WithDRYRange limits how far back DRY scans the history (0 = the entire history).
+// WithDRYRange limits how far back DRY scans the history for repeats.
+//
+// In plain terms: how much of the text so far DRY checks against — the whole thing, or just
+// the recent part.
+//
+// Professional: bounds the DRY history window (an O(window²) scan). Boundary behavior — small
+// range only catches local loops and is cheaper; large range catches long-range repetition at
+// higher cost. SPECIAL VALUE: 0 = scan the ENTIRE history.
+//
+// Default 0 = whole history, research-grounded: matches the reference dry_penalty_last_n=0
+// ("whole context") default.
 func WithDRYRange(n int) SamplerOption { return func(s *Sampler) { s.DRYRange = n } }
 
-// WithDRYBreakers sets the token ids DRY matches may not extend across — the
-// token-level analogue of the reference implementation's "\n"/":"/quote sequence
-// breakers; pass the ids those strings tokenize to in the vocabulary in use.
+// WithDRYBreakers sets the token ids that DRY matches may not extend across.
+//
+// In plain terms: natural boundaries (newline, colon, quotes) where a "repeat" shouldn't
+// count — DRY resets its matching when it hits one, so repeating across a paragraph break
+// isn't treated as a loop.
+//
+// Professional: the token-level analogue of the reference implementation's "\n"/":"/quote
+// sequence breakers. Pass the ids those strings tokenize to in the vocabulary in use.
+// SPECIAL VALUE: empty/nil = no breakers (matches extend freely).
+//
+// Default empty, research-grounded: callers supply the ids because breakers are
+// vocabulary-specific; the reference set is newline/colon/quotation marks.
 func WithDRYBreakers(ids ...int) SamplerOption {
 	return func(s *Sampler) { s.DRYBreakers = append([]int(nil), ids...) }
 }
 
-// WithXTC enables XTC top-choice exclusion (p-e-w 2024, see xtc.go) with the given
-// firing probability per draw; 0 disables it, typical 0.5. Requires a threshold —
-// WithXTCThreshold — to define which tokens count as "top choices".
+// WithXTC enables XTC ("eXclude Top Choices") sampling (p-e-w 2024, see xtc.go and §T574).
+//
+// In plain terms: occasionally the model drops its most obvious top answers and keeps a
+// less-obvious one instead — a deliberate anti-cliché nudge that only fires sometimes, so
+// coherence mostly survives.
+//
+// Professional: with the given per-draw probability, all tokens above WithXTCThreshold except
+// the least-probable qualifier are removed before the draw (fires only when ≥2 tokens clear
+// the threshold, so ≥1 always survives). Boundary behavior — probability near 1 excludes top
+// choices almost every step (creative but risks derailment); near 0 rarely fires. SPECIAL
+// VALUE: 0 disables it. Requires WithXTCThreshold to define "top choice".
+//
+// Default 0 = DISABLED, research-grounded: off by default; the community-typical firing
+// probability when enabled is 0.5 (koboldcpp/llama.cpp xtc_probability).
 func WithXTC(probability float64) SamplerOption {
 	return func(s *Sampler) { s.XTCProbability = probability }
 }
 
-// WithXTCThreshold sets the probability a token needs to count as a top choice
-// (typical 0.1). Above 0.5 at most one token can qualify, disabling XTC naturally.
+// WithXTCThreshold sets the probability a token needs to count as a "top choice" for XTC.
+//
+// In plain terms: how likely a word must be before XTC considers it an obvious pick eligible
+// for exclusion.
+//
+// Professional: the qualifying probability for XTC's exclusion set. Boundary behavior — a low
+// threshold makes many tokens "top choices" (aggressive exclusion); above 0.5 at most one
+// token can ever qualify, so XTC can never fire (self-disabling). SPECIAL VALUE: >0.5 disables
+// XTC naturally.
+//
+// Default 0 (with XTC off); the recommended enabled value is 0.1 (koboldcpp/llama.cpp
+// xtc_threshold) — research-grounded as the reference default.
 func WithXTCThreshold(t float64) SamplerOption {
 	return func(s *Sampler) { s.XTCThreshold = t }
 }
