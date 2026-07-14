@@ -151,23 +151,42 @@ var gemmHasFMA = archsimd.X86.FMA()
 // matmulKernel; each row-band writes disjoint rows once, so results are stored,
 // not accumulated. §V16 accuracy: f32 dot-product error ~ K·eps_f32 worst case,
 // gated by the tolerance parity test.
-func gemmF32Band(A, B []float32, acc []float64, loRow, hiRow, k, n int) {
+// gemmF32 computes C[m,n]=A·B, f32. With FMA it runs the f32-native SIMD kernel
+// writing C DIRECTLY — no f64 accumulation scratch and no narrowing pass, which
+// were ~pure overhead for f32-native (doubled store traffic + a full extra pass).
+// Without FMA it falls back to the bit-exact f64-accumulating scalar. The
+// f32-native result is within the ADR-0021 tolerance of ref, not bit-exact.
+func gemmF32(A, B, C []float32, m, k, n int) {
 	if !gemmHasFMA {
-		gemmF32BandScalarF64(A, B, acc, loRow, hiRow, k, n)
+		acc := make([]float64, m*n)
+		parallelWork(m, k*n, func(loRow, hiRow int) {
+			gemmF32BandScalarF64(A, B, acc, loRow, hiRow, k, n)
+		})
+		for i := range C {
+			C[i] = float32(acc[i])
+		}
 		return
 	}
-	nv16 := n - n%16 // 16-wide: two Float32x8 per row = 8 accumulator chains
-	nv := n - n%8    // 8-wide cleanup boundary
+	parallelWork(m, k*n, func(loRow, hiRow int) {
+		gemmF32BandDirect(A, B, C, loRow, hiRow, k, n)
+	})
+}
+
+// gemmF32BandDirect: f32-NATIVE 8-wide accumulation (Float32x8 + MulAdd) writing
+// rows [loRow,hiRow) of C in f32 DIRECTLY (no f64 carrier). Each C[i][j] sums its
+// k products in f32 (ADR-0021 tolerance). mr=4 × nr=16 (8 chains); C rows written
+// once (disjoint per row-band).
+func gemmF32BandDirect(A, B, C []float32, loRow, hiRow, k, n int) {
+	nv16 := n - n%16
+	nv := n - n%8
 	i := loRow
 	for ; i+3 < hiRow; i += 4 {
 		r0, r1, r2, r3 := (i+0)*k, (i+1)*k, (i+2)*k, (i+3)*k
-		c0 := acc[(i+0)*n : (i+0)*n+n]
-		c1 := acc[(i+1)*n : (i+1)*n+n]
-		c2 := acc[(i+2)*n : (i+2)*n+n]
-		c3 := acc[(i+3)*n : (i+3)*n+n]
+		c0 := C[(i+0)*n : (i+0)*n+n]
+		c1 := C[(i+1)*n : (i+1)*n+n]
+		c2 := C[(i+2)*n : (i+2)*n+n]
+		c3 := C[(i+3)*n : (i+3)*n+n]
 		j := 0
-		// 8 independent MulAdd chains — enough in flight to hide the FMA latency
-		// on the 2 FMA units (mr=4 × nr=8 left only 4, ≈half-saturated).
 		for ; j < nv16; j += 16 {
 			s0 := archsimd.BroadcastFloat32x8(0)
 			s0h := archsimd.BroadcastFloat32x8(0)
@@ -193,16 +212,16 @@ func gemmF32Band(A, B []float32, acc []float64, loRow, hiRow, k, n int) {
 				s3 = b3.MulAdd(lo, s3)
 				s3h = b3.MulAdd(hi, s3h)
 			}
-			storeF32x8(s0, c0[j:])
-			storeF32x8(s0h, c0[j+8:])
-			storeF32x8(s1, c1[j:])
-			storeF32x8(s1h, c1[j+8:])
-			storeF32x8(s2, c2[j:])
-			storeF32x8(s2h, c2[j+8:])
-			storeF32x8(s3, c3[j:])
-			storeF32x8(s3h, c3[j+8:])
+			s0.StoreSlice(c0[j:])
+			s0h.StoreSlice(c0[j+8:])
+			s1.StoreSlice(c1[j:])
+			s1h.StoreSlice(c1[j+8:])
+			s2.StoreSlice(c2[j:])
+			s2h.StoreSlice(c2[j+8:])
+			s3.StoreSlice(c3[j:])
+			s3h.StoreSlice(c3[j+8:])
 		}
-		for ; j < nv; j += 8 { // 8-wide cleanup (n%16 in [8,15])
+		for ; j < nv; j += 8 {
 			s0 := archsimd.BroadcastFloat32x8(0)
 			s1 := archsimd.BroadcastFloat32x8(0)
 			s2 := archsimd.BroadcastFloat32x8(0)
@@ -214,10 +233,10 @@ func gemmF32Band(A, B []float32, acc []float64, loRow, hiRow, k, n int) {
 				s2 = archsimd.BroadcastFloat32x8(A[r2+p]).MulAdd(bv, s2)
 				s3 = archsimd.BroadcastFloat32x8(A[r3+p]).MulAdd(bv, s3)
 			}
-			storeF32x8(s0, c0[j:])
-			storeF32x8(s1, c1[j:])
-			storeF32x8(s2, c2[j:])
-			storeF32x8(s3, c3[j:])
+			s0.StoreSlice(c0[j:])
+			s1.StoreSlice(c1[j:])
+			s2.StoreSlice(c2[j:])
+			s3.StoreSlice(c3[j:])
 		}
 		for ; j < n; j++ { // f32-native scalar tail (n%8)
 			var t0, t1, t2, t3 float32
@@ -228,11 +247,11 @@ func gemmF32Band(A, B []float32, acc []float64, loRow, hiRow, k, n int) {
 				t2 += A[r2+p] * bv
 				t3 += A[r3+p] * bv
 			}
-			c0[j], c1[j], c2[j], c3[j] = float64(t0), float64(t1), float64(t2), float64(t3)
+			c0[j], c1[j], c2[j], c3[j] = t0, t1, t2, t3
 		}
 	}
 	for ; i < hiRow; i++ {
-		ci := acc[i*n : i*n+n]
+		ci := C[i*n : i*n+n]
 		ri := i * k
 		j := 0
 		for ; j < nv; j += 8 {
@@ -240,30 +259,16 @@ func gemmF32Band(A, B []float32, acc []float64, loRow, hiRow, k, n int) {
 			for p := 0; p < k; p++ {
 				s = archsimd.BroadcastFloat32x8(A[ri+p]).MulAdd(archsimd.LoadFloat32x8Slice(B[p*n+j:]), s)
 			}
-			storeF32x8(s, ci[j:])
+			s.StoreSlice(ci[j:])
 		}
 		for ; j < n; j++ {
 			var t float32
 			for p := 0; p < k; p++ {
 				t += A[ri+p] * B[p*n+j]
 			}
-			ci[j] = float64(t)
+			ci[j] = t
 		}
 	}
-}
-
-// storeF32x8 widens an 8-lane f32 vector into the f64 accumulation carrier.
-func storeF32x8(v archsimd.Float32x8, dst []float64) {
-	var t [8]float32
-	v.Store(&t)
-	dst[0] = float64(t[0])
-	dst[1] = float64(t[1])
-	dst[2] = float64(t[2])
-	dst[3] = float64(t[3])
-	dst[4] = float64(t[4])
-	dst[5] = float64(t[5])
-	dst[6] = float64(t[6])
-	dst[7] = float64(t[7])
 }
 
 // gemmF32BandScalarF64 is the bit-exact f64-accumulating fallback (no FMA).

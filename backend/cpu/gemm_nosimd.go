@@ -9,6 +9,19 @@ package cpu
 // both: C is ACCUMULATED into (+=), so callers pass a zeroed buffer for a plain
 // product and a live buffer to add onto (conv im2col scatter relies on this).
 
+// gemmF32 computes C[m,n] = A·B, f32. Default build: accumulate in an f64 scratch
+// (§V10) then narrow — bit-exact. The amd64+simd build overrides this with an
+// f32-native kernel that writes C directly (gemm_simd.go).
+func gemmF32(A, B, C []float32, m, k, n int) {
+	acc := make([]float64, m*n) // f64 accumulation (§V10)
+	parallelWork(m, k*n, func(loRow, hiRow int) {
+		gemmF32Band(A, B, acc, loRow, hiRow, k, n)
+	})
+	for i := range C {
+		C[i] = float32(acc[i])
+	}
+}
+
 // gemmF64Band computes rows [loRow,hiRow) of C with 4-row register blocking
 // (§T12b): each B row is loaded once and reused for four C rows, quartering
 // B-traffic. Every C element still accumulates its k-products in ascending p
