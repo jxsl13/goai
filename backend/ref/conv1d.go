@@ -16,7 +16,34 @@ func softplusKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) 
 	}
 	x := in[0]
 	out := tensor.NewOn(ctx.Device(), x.Dtype(), x.Shape())
-	for i := range x.Numel() {
+	n := x.Numel()
+
+	// Devirtualised fast paths (§T646): a hot cpu→ref fallback on the CPU training
+	// path. The generic AtF64/SetF64 loop pays a dtype dispatch + Unravel/flat-offset
+	// per element; here we grab the raw typed slices once and index flat (softplus is
+	// elementwise, so flat order over Numel matches the generic ravel order exactly).
+	// The scalar formula is identical; the F32 path reads as float64, computes in
+	// float64 and rounds the STORED result once. Contiguous() runs once (returns self
+	// when already contiguous).
+	switch x.Dtype() {
+	case tensor.F64:
+		xs := x.Contiguous().Storage().F64()
+		os := out.Storage().F64()
+		for i := range n {
+			os[i] = softplus(xs[i])
+		}
+		return []*tensor.Tensor{out}, nil
+	case tensor.F32:
+		xs := x.Contiguous().Storage().F32()
+		os := out.Storage().F32()
+		for i := range n {
+			os[i] = float32(softplus(float64(xs[i])))
+		}
+		return []*tensor.Tensor{out}, nil
+	}
+
+	// Generic fallback for exotic dtypes (verbatim original loop).
+	for i := range n {
 		idx := tensor.Unravel(i, x.Shape())
 		out.SetF64(softplus(x.AtF64(idx...)), idx...)
 	}
@@ -53,6 +80,68 @@ func conv1dKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([
 	}
 
 	out := tensor.NewOn(ctx.Device(), x.Dtype(), x.Shape())
+
+	// Devirtualised fast paths (§T646): a hot cpu→ref fallback on the CPU training
+	// path. The generic AtF64/SetF64 nest pays a dtype dispatch + flat-offset per
+	// tap; here we grab the raw typed slices once (row-major: x[j,c] at j*D+c,
+	// w[c,k] at c*K+k, out[t,c] at t*D+c, bias[c] at c) and index directly. The loop
+	// nesting, index/stride/pad arithmetic, boundary guard and accumulation order are
+	// copied verbatim; the accumulator stays float64 on ALL paths, and the F32 path
+	// only rounds the single STORED sum — so results are byte-for-byte identical to
+	// the generic path. Contiguous() runs once per tensor (returns self when already
+	// contiguous).
+	switch x.Dtype() {
+	case tensor.F64:
+		xs := x.Contiguous().Storage().F64()
+		ws := w.Contiguous().Storage().F64()
+		os := out.Storage().F64()
+		var bs []float64
+		if bias != nil {
+			bs = bias.Contiguous().Storage().F64()
+		}
+		for t := range L {
+			for c := range D {
+				var acc float64
+				for k := range K {
+					j := t - (K - 1) + k
+					if j >= 0 {
+						acc += ws[c*K+k] * xs[j*D+c]
+					}
+				}
+				if bias != nil {
+					acc += bs[c]
+				}
+				os[t*D+c] = acc
+			}
+		}
+		return []*tensor.Tensor{out}, nil
+	case tensor.F32:
+		xs := x.Contiguous().Storage().F32()
+		ws := w.Contiguous().Storage().F32()
+		os := out.Storage().F32()
+		var bs []float32
+		if bias != nil {
+			bs = bias.Contiguous().Storage().F32()
+		}
+		for t := range L {
+			for c := range D {
+				var acc float64 // accumulate in float64; only the store rounds
+				for k := range K {
+					j := t - (K - 1) + k
+					if j >= 0 {
+						acc += float64(ws[c*K+k]) * float64(xs[j*D+c])
+					}
+				}
+				if bias != nil {
+					acc += float64(bs[c])
+				}
+				os[t*D+c] = float32(acc)
+			}
+		}
+		return []*tensor.Tensor{out}, nil
+	}
+
+	// Generic fallback for exotic dtypes (verbatim original loop).
 	for t := range L {
 		for c := range D {
 			var acc float64
