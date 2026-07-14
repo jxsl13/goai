@@ -295,7 +295,8 @@ func TestTurboQuantKVCacheRoundTripFuzz(t *testing.T) {
 		if c.Len() != nRows {
 			t.Fatalf("iter %d: Len=%d want %d", iter, c.Len(), nRows)
 		}
-		if want := (dim*bits/8 + (dim+7)/8 + 16) * 2 * nRows; c.Bytes() != want {
+		m := nextPow2(dim)
+		if want := (m*bits/8 + (m+7)/8 + 16) * 2 * nRows; c.Bytes() != want {
 			t.Fatalf("iter %d: Bytes=%d want %d", iter, c.Bytes(), want)
 		}
 		keys := c.Keys()

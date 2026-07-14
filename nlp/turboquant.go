@@ -367,10 +367,11 @@ func (q *qjlSketch) decodeResidual(signs []bool, rnorm float64) []float64 {
 // under 4 bits per number, with no accuracy loss on average and no calibration.
 type TurboQuantKVCache struct {
 	dim  int
+	m    int // padded dimension = nextPow2(dim); the Hadamard rotation works in ℝ^m
 	bits int
-	rot  *polarRotation
+	rot  *hadamardRotation
 	qjl  *qjlSketch
-	cb   []float64
+	cb   []float64 // per-coordinate centroids, scaled by 1/√m
 	keys []tqRow
 	vals []tqRow
 }
@@ -385,67 +386,72 @@ type tqRow struct {
 }
 
 // NewTurboQuantKVCache builds a TurboQuant KV cache for dim-dimensional keys/values, quantizing
-// each coordinate to bits bits (1 or 2 — the paper's closed-form codebooks) plus a 1-bit QJL
-// residual. seed fixes the rotation and sketch matrices (reproducible, §V10). dim ≥ 1, bits ∈ {1,2}.
+// each coordinate to bits bits (Lloyd-Max codebook, any bits ≥ 1; the paper uses 2, plus a 3-bit
+// outlier tier) plus a 1-bit QJL residual. It uses the fast Hadamard-Rademacher rotation (O(d
+// log m) vs the dense O(d²)); vectors are zero-padded to m = nextPow2(dim). seed fixes the
+// rotation and sketch matrices (reproducible, §V10). dim ≥ 1, bits ≥ 1.
 func NewTurboQuantKVCache(dim, bits int, seed uint64) (*TurboQuantKVCache, error) {
 	if dim < 1 {
 		return nil, fmt.Errorf("nlp: NewTurboQuantKVCache needs dim ≥ 1, got %d", dim)
 	}
-	cb, err := polarCodebook(bits, dim)
+	rot, err := newHadamardRotation(dim, seed)
 	if err != nil {
 		return nil, err
 	}
-	rot, err := newPolarRotation(dim, seed)
+	cb, err := polarCodebook(bits, rot.m) // scaled by 1/√m — the rotated coords live in ℝ^m
 	if err != nil {
 		return nil, err
 	}
 	return &TurboQuantKVCache{
-		dim: dim, bits: bits, rot: rot, cb: cb,
-		qjl: newQJLSketch(dim, seed^0x9e3779b9),
+		dim: dim, m: rot.m, bits: bits, rot: rot, cb: cb,
+		qjl: newQJLSketch(rot.m, seed^0x9e3779b9),
 	}, nil
 }
 
 // Len returns the number of key/value rows stored.
 func (c *TurboQuantKVCache) Len() int { return len(c.keys) }
 
-// Bytes returns the approximate compressed footprint: per row, dim·bits/8 (PolarQuant) + dim/8
-// (QJL 1-bit) + 16 (two f64 scalars), for keys and values.
+// Bytes returns the approximate compressed footprint: per row, m·bits/8 (PolarQuant over the m
+// padded/rotated coordinates) + m/8 (QJL 1-bit) + 16 (two f64 scalars), for keys and values. For
+// power-of-two dims m = dim; otherwise the few padding coordinates cost a little extra.
 func (c *TurboQuantKVCache) Bytes() int {
-	perRow := c.dim*c.bits/8 + (c.dim+7)/8 + 16
+	perRow := c.m*c.bits/8 + (c.m+7)/8 + 16
 	return perRow * (len(c.keys) + len(c.vals))
 }
 
 func (c *TurboQuantKVCache) compress(x []float64) (tqRow, error) {
-	idx, norm, err := c.rot.polarQuantize(x, c.bits)
-	if err != nil {
-		return tqRow{}, err
+	var norm float64
+	for _, v := range x {
+		norm += v * v
 	}
-	// residual in rotated-unit space
+	norm = math.Sqrt(norm)
 	u := make([]float64, c.dim)
 	if norm > 0 {
 		for i, v := range x {
 			u[i] = v / norm
 		}
 	}
-	ru, err := c.rot.apply(u)
+	ru, err := c.rot.apply(u) // m rotated coordinates
 	if err != nil {
 		return tqRow{}, err
 	}
-	r := make([]float64, c.dim)
-	for i := range ru {
-		r[i] = ru[i] - c.cb[idx[i]]
+	idx := make([]int, c.m)
+	r := make([]float64, c.m)
+	for i, v := range ru {
+		idx[i] = nearestCentroid(v, c.cb)
+		r[i] = v - c.cb[idx[i]]
 	}
 	signs, rnorm := c.qjl.encode(r)
 	return tqRow{idx: idx, signs: signs, norm: norm, rnorm: rnorm}, nil
 }
 
 func (c *TurboQuantKVCache) reconstruct(row tqRow) []float64 {
-	res := c.qjl.decodeResidual(row.signs, row.rnorm)
-	ruT := make([]float64, c.dim)
+	res := c.qjl.decodeResidual(row.signs, row.rnorm) // m coords
+	ruT := make([]float64, c.m)
 	for i := range row.idx {
 		ruT[i] = c.cb[row.idx[i]] + res[i]
 	}
-	uT, _ := c.rot.applyInverse(ruT)
+	uT, _ := c.rot.applyInverse(ruT) // back to dim coords
 	out := make([]float64, c.dim)
 	for i := range uT {
 		out[i] = row.norm * uT[i]
