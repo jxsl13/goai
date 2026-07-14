@@ -347,3 +347,34 @@ func TestLloydMaxGaussianMatchesClosedForms(t *testing.T) {
 		t.Fatalf("polarCodebook b=3: %v", err)
 	}
 }
+
+// The numeric codebook now lets the public cache use 3-bit (the outlier tier): higher bits
+// reconstruct better than 2-bit, confirming b=3 works end to end.
+func TestTurboQuantKVCache3Bit(t *testing.T) {
+	const dim = 96
+	cos := func(bits int) float64 {
+		c, err := NewTurboQuantKVCache(dim, bits, 5)
+		if err != nil {
+			t.Fatal(err)
+		}
+		k := make([]float64, dim)
+		for i := range k {
+			k[i] = math.Sin(float64(i)*0.8) + 0.2
+		}
+		if err := c.Append(k, k); err != nil {
+			t.Fatal(err)
+		}
+		kh := c.Keys()[0]
+		var dot, nk, nkh float64
+		for i := range dim {
+			dot += k[i] * kh[i]
+			nk += k[i] * k[i]
+			nkh += kh[i] * kh[i]
+		}
+		return dot / (math.Sqrt(nk) * math.Sqrt(nkh))
+	}
+	c2, c3 := cos(2), cos(3)
+	if c3 <= c2 {
+		t.Fatalf("3-bit should reconstruct better than 2-bit: cos b3=%.3f !> b2=%.3f", c3, c2)
+	}
+}
