@@ -106,3 +106,91 @@ func (p *polarRotation) applyInverse(y []float64) ([]float64, error) {
 	}
 	return out, nil
 }
+
+// polarCodebook returns the MSE-optimal (Lloyd-Max) reconstruction centroids for a b-bit
+// per-coordinate quantizer of TurboQuant's rotated unit-vector coordinates, whose marginal is the
+// Beta density f_X(x)=Γ(d/2)/(π·Γ((d−1)/2))·(1−x²)^((d−3)/2) (arXiv:2504.19874). The paper gives
+// the closed-form codebooks for b=1 (±√(2/(πd))) and b=2 (±0.453/√d, ±1.51/√d), scaled by 1/√d
+// because a coordinate of a unit vector in ℝ^d has magnitude ≈ 1/√d. Higher b (numerically-solved
+// centroids) is a follow-up. Returns ascending centroids.
+func polarCodebook(b, d int) ([]float64, error) {
+	sd := math.Sqrt(float64(d))
+	switch b {
+	case 1:
+		c := math.Sqrt(2 / (math.Pi * float64(d)))
+		return []float64{-c, c}, nil
+	case 2:
+		return []float64{-1.51 / sd, -0.453 / sd, 0.453 / sd, 1.51 / sd}, nil
+	default:
+		return nil, fmt.Errorf("nlp: polarCodebook supports b=1,2 (paper closed-forms), got b=%d", b)
+	}
+}
+
+// nearestCentroid returns the index of the codebook centroid closest to v (the decision
+// boundaries are the midpoints between consecutive centroids, so nearest-centroid is exact).
+func nearestCentroid(v float64, cb []float64) int {
+	best, bestD := 0, math.Abs(v-cb[0])
+	for i := 1; i < len(cb); i++ {
+		if dd := math.Abs(v - cb[i]); dd < bestD {
+			best, bestD = i, dd
+		}
+	}
+	return best
+}
+
+// polarQuantize is the PolarQuant storage path: unit-normalize x (store ‖x‖ exactly), rotate the
+// unit vector by Π, and quantize each rotated coordinate to a b-bit codebook index. Returns the
+// indices and the stored norm. A zero vector round-trips to zero.
+func (p *polarRotation) polarQuantize(x []float64, b int) (idx []int, norm float64, err error) {
+	cb, err := polarCodebook(b, p.d)
+	if err != nil {
+		return nil, 0, err
+	}
+	for _, v := range x {
+		norm += v * v
+	}
+	norm = math.Sqrt(norm)
+	u := make([]float64, p.d)
+	if norm > 0 {
+		for i, v := range x {
+			u[i] = v / norm
+		}
+	}
+	ru, err := p.apply(u)
+	if err != nil {
+		return nil, 0, err
+	}
+	idx = make([]int, p.d)
+	for i, v := range ru {
+		idx[i] = nearestCentroid(v, cb)
+	}
+	return idx, norm, nil
+}
+
+// polarDequantize reconstructs x̃ from the stored indices and norm: look up the centroids, rotate
+// back by Πᵀ, and rescale by the norm. It is the lossy inverse of polarQuantize.
+func (p *polarRotation) polarDequantize(idx []int, norm float64, b int) ([]float64, error) {
+	cb, err := polarCodebook(b, p.d)
+	if err != nil {
+		return nil, err
+	}
+	if len(idx) != p.d {
+		return nil, fmt.Errorf("nlp: polarDequantize wants %d indices, got %d", p.d, len(idx))
+	}
+	ru := make([]float64, p.d)
+	for i, k := range idx {
+		if k < 0 || k >= len(cb) {
+			return nil, fmt.Errorf("nlp: polarDequantize index %d out of range [0,%d)", k, len(cb))
+		}
+		ru[i] = cb[k]
+	}
+	u, err := p.applyInverse(ru)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]float64, p.d)
+	for i, v := range u {
+		out[i] = norm * v
+	}
+	return out, nil
+}

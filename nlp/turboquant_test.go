@@ -63,3 +63,65 @@ func TestPolarRotationRoundTripAndInnerProduct(t *testing.T) {
 		t.Fatalf("⟨Πx,Πy⟩=%v ≠ ⟨x,y⟩=%v", ipRot, ipOrig)
 	}
 }
+
+// PolarQuant storage round-trip: quantize→dequantize preserves DIRECTION well (high cosine),
+// improving with more bits — the TurboQuant property. A zero vector round-trips to zero.
+func TestPolarQuantRoundTrip(t *testing.T) {
+	const d = 128
+	p, err := newPolarRotation(d, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// deterministic pseudo-random vector
+	x := make([]float64, d)
+	for i := range x {
+		x[i] = math.Sin(float64(i)*1.3) + 0.4*math.Cos(float64(i)*0.2)
+	}
+	cosFor := func(b int) float64 {
+		idx, norm, err := p.polarQuantize(x, b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		xh, err := p.polarDequantize(idx, norm, b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var dot, nx, nxh float64
+		for i := range x {
+			dot += x[i] * xh[i]
+			nx += x[i] * x[i]
+			nxh += xh[i] * xh[i]
+		}
+		return dot / (math.Sqrt(nx) * math.Sqrt(nxh))
+	}
+	c1, c2 := cosFor(1), cosFor(2)
+	if c2 <= c1 {
+		t.Fatalf("more bits should reconstruct better: cos b=2 %.3f !> b=1 %.3f", c2, c1)
+	}
+	if c2 < 0.9 {
+		t.Fatalf("b=2 cosine %.3f too low (expect ≈0.94)", c2)
+	}
+
+	// zero vector → zero reconstruction
+	zero := make([]float64, d)
+	idx, norm, _ := p.polarQuantize(zero, 2)
+	if norm != 0 {
+		t.Fatalf("zero vector norm should be 0, got %v", norm)
+	}
+	xh, _ := p.polarDequantize(idx, norm, 2)
+	for i := range xh {
+		if xh[i] != 0 {
+			t.Fatalf("zero round-trip nonzero at %d: %v", i, xh[i])
+		}
+	}
+}
+
+func TestPolarQuantErrors(t *testing.T) {
+	p, _ := newPolarRotation(4, 1)
+	if _, _, err := p.polarQuantize([]float64{1, 2, 3, 4}, 3); err == nil {
+		t.Fatal("b=3 should error (only b=1,2 supported)")
+	}
+	if _, err := p.polarDequantize([]int{0, 0, 0}, 1, 2); err == nil {
+		t.Fatal("wrong index length should error")
+	}
+}
