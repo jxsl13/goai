@@ -9,12 +9,39 @@ import (
 // exact, dtype-agnostic, and free of op-composition overhead. x = forward input,
 // y = forward output (reused where the derivative is cheapest in terms of y).
 
-// unaryVJP lifts a scalar derivative rule into a VJP.
+// unaryVJP lifts a scalar derivative rule into a VJP. x = forward input, y =
+// forward output, g = upstream gradient — all the output's shape (unary). The fast
+// path is a typed flat loop over contiguous []T storage: no per-element Unravel
+// heap-alloc and no AtF64/SetF64 dtype dispatch, which on the training backward path
+// is the dominant cost (§base-perf, C25). The generic per-element loop stays as the
+// fallback for mixed-dtype / exotic tensors.
 func unaryVJP(f func(x, y, g float64) float64) VJP {
 	return func(_ *backend.Context, in, out []*tensor.Tensor, _ backend.Attrs, g *tensor.Tensor) ([]*tensor.Tensor, error) {
 		x, y := in[0], out[0]
 		gin := tensor.New(x.Dtype(), x.Shape())
-		for i := range x.Numel() {
+		n := x.Numel()
+		xc, yc, gc := x.Contiguous(), y.Contiguous(), g.Contiguous()
+		switch x.Dtype() {
+		case tensor.F64:
+			if yc.Dtype() == tensor.F64 && gc.Dtype() == tensor.F64 {
+				xs, ys, gs := xc.Storage().F64(), yc.Storage().F64(), gc.Storage().F64()
+				ds := gin.Storage().F64()
+				for i := 0; i < n; i++ {
+					ds[i] = f(xs[i], ys[i], gs[i])
+				}
+				return []*tensor.Tensor{gin}, nil
+			}
+		case tensor.F32:
+			if yc.Dtype() == tensor.F32 && gc.Dtype() == tensor.F32 {
+				xs, ys, gs := xc.Storage().F32(), yc.Storage().F32(), gc.Storage().F32()
+				ds := gin.Storage().F32()
+				for i := 0; i < n; i++ {
+					ds[i] = float32(f(float64(xs[i]), float64(ys[i]), float64(gs[i])))
+				}
+				return []*tensor.Tensor{gin}, nil
+			}
+		}
+		for i := 0; i < n; i++ { // generic fallback (mixed dtype / exotic layout)
 			idx := tensor.Unravel(i, x.Shape())
 			gin.SetF64(f(x.AtF64(idx...), y.AtF64(idx...), g.AtF64(idx...)), idx...)
 		}

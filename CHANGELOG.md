@@ -4,6 +4,15 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T632 — activation-gradient backward 14× faster (2026-07-14)
+- The autograd VJP for scalar unary activations (exp, log, tanh, sigmoid, relu,
+  sqrt, abs) allocated a coordinate slice for every element and read/wrote each value
+  through the dtype-dispatching `AtF64`/`SetF64`. A typed flat loop over the
+  contiguous storage (dtype switched once) cuts a 512×512 backward from **6.82 ms to
+  0.49 ms (14×)** and its allocations from 262 154 to 10, gradients unchanged
+  (`TestGradCheckAllOps` still passes). SiLU and GELU already used typed backend
+  kernels. Part of the standing last-percent devirtualization mandate (C25).
+
 ### T629 — fix quadratic nucleus selection on masked distributions (2026-07-14)
 - Investigating whether CPU SIMD and the GPU backends could be combined (ADR-0021),
   a measurement of the real per-token host cost surfaced a latent quadratic: the
