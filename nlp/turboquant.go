@@ -485,3 +485,89 @@ func (c *TurboQuantKVCache) rows(rs []tqRow) [][]float64 {
 	}
 	return out
 }
+
+// hadamardRotation is TurboQuant's FAST rotation: the randomized Hadamard-Rademacher transform
+// R = (1/√m)·H·D, where D is a random ±1 (Rademacher) diagonal, H the m×m Walsh-Hadamard matrix,
+// and m the next power of two ≥ d (the vector is zero-padded to m). It is orthogonal and spreads
+// the signal into near-Gaussian coordinates exactly like the dense Gaussian rotation, but the
+// Walsh-Hadamard transform runs in O(m log m) via the in-place butterfly instead of the dense
+// O(d²) mat-vec (arXiv:2504.19874; the "standard fast preconditioner" of the QJL/JL literature).
+// It is the drop-in fast replacement for polarRotation.
+type hadamardRotation struct {
+	d, m  int
+	signs []float64 // Rademacher diagonal D, length m
+}
+
+// nextPow2 returns the smallest power of two ≥ n (≥1).
+func nextPow2(n int) int {
+	m := 1
+	for m < n {
+		m <<= 1
+	}
+	return m
+}
+
+// fwht applies the UNNORMALIZED in-place Fast Walsh-Hadamard Transform (len(a) a power of two).
+// H is symmetric and H·H = m·I, so a second call scaled by 1/m inverts it.
+func fwht(a []float64) {
+	n := len(a)
+	for h := 1; h < n; h <<= 1 {
+		for i := 0; i < n; i += h << 1 {
+			for j := i; j < i+h; j++ {
+				x, y := a[j], a[j+h]
+				a[j], a[j+h] = x+y, x-y
+			}
+		}
+	}
+}
+
+func newHadamardRotation(d int, seed uint64) (*hadamardRotation, error) {
+	if d < 1 {
+		return nil, fmt.Errorf("nlp: newHadamardRotation needs d ≥ 1, got %d", d)
+	}
+	m := nextPow2(d)
+	rng := rand.New(rand.NewPCG(seed, 0x14057b7ef767814f))
+	signs := make([]float64, m)
+	for i := range signs {
+		if rng.Uint64()&1 == 0 {
+			signs[i] = 1
+		} else {
+			signs[i] = -1
+		}
+	}
+	return &hadamardRotation{d: d, m: m, signs: signs}, nil
+}
+
+// apply returns R·x = (1/√m)·H·(D·x_padded). len(x) must be d; the result is length m (the
+// rotated coordinates live in the padded space, quantized there).
+func (r *hadamardRotation) apply(x []float64) ([]float64, error) {
+	if len(x) != r.d {
+		return nil, fmt.Errorf("nlp: hadamardRotation.apply wants len %d, got %d", r.d, len(x))
+	}
+	buf := make([]float64, r.m)
+	for i := range x {
+		buf[i] = x[i] * r.signs[i]
+	}
+	fwht(buf)
+	inv := 1 / math.Sqrt(float64(r.m))
+	for i := range buf {
+		buf[i] *= inv
+	}
+	return buf, nil
+}
+
+// applyInverse returns Rᵀ·y = D·(1/√m)·H·y, truncated to the original d coordinates (R
+// orthogonal ⇒ R⁻¹ = Rᵀ; H,D symmetric). len(y) must be m.
+func (r *hadamardRotation) applyInverse(y []float64) ([]float64, error) {
+	if len(y) != r.m {
+		return nil, fmt.Errorf("nlp: hadamardRotation.applyInverse wants len %d, got %d", r.m, len(y))
+	}
+	buf := append([]float64(nil), y...)
+	fwht(buf)
+	inv := 1 / math.Sqrt(float64(r.m))
+	out := make([]float64, r.d)
+	for i := range out {
+		out[i] = buf[i] * inv * r.signs[i]
+	}
+	return out, nil
+}

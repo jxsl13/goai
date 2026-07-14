@@ -446,3 +446,79 @@ func BenchmarkTurboQuantReconstruct(b *testing.B) {
 		_ = c.Keys()
 	}
 }
+
+// §T619 fast rotation: the randomized Hadamard-Rademacher transform is orthogonal (exact
+// round-trip, norm-preserving) and handles non-power-of-two dims by padding — TurboQuant's
+// O(d log d) replacement for the dense O(d²) rotation.
+func TestHadamardRotation(t *testing.T) {
+	for _, d := range []int{64, 96, 128, 200} {
+		h, err := newHadamardRotation(d, 7)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if h.m < d || h.m&(h.m-1) != 0 {
+			t.Fatalf("d=%d: m=%d not a power of two ≥ d", d, h.m)
+		}
+		x := make([]float64, d)
+		var nx float64
+		for i := range x {
+			x[i] = math.Sin(float64(i)*0.7) - 0.2
+			nx += x[i] * x[i]
+		}
+		rx, err := h.apply(x)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(rx) != h.m {
+			t.Fatalf("apply output len %d, want %d", len(rx), h.m)
+		}
+		// orthogonal → norm preserved
+		var nrx float64
+		for _, v := range rx {
+			nrx += v * v
+		}
+		if math.Abs(math.Sqrt(nrx)-math.Sqrt(nx)) > 1e-9 {
+			t.Fatalf("d=%d: norm not preserved ‖Rx‖=%.6f vs ‖x‖=%.6f", d, math.Sqrt(nrx), math.Sqrt(nx))
+		}
+		// exact round-trip
+		back, err := h.applyInverse(rx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := range x {
+			if math.Abs(back[i]-x[i]) > 1e-9 {
+				t.Fatalf("d=%d round-trip[%d]=%v want %v", d, i, back[i], x[i])
+			}
+		}
+	}
+	if _, err := newHadamardRotation(0, 1); err == nil {
+		t.Fatal("d<1 should error")
+	}
+}
+
+// BenchmarkRotationDense vs BenchmarkRotationHadamard quantify the O(d²)→O(d log d) win.
+func BenchmarkRotationDense(b *testing.B) {
+	const d = 512
+	r, _ := newPolarRotation(d, 1)
+	x := make([]float64, d)
+	for i := range x {
+		x[i] = float64(i%7) - 3
+	}
+	b.ResetTimer()
+	for range b.N {
+		_, _ = r.apply(x)
+	}
+}
+
+func BenchmarkRotationHadamard(b *testing.B) {
+	const d = 512
+	r, _ := newHadamardRotation(d, 1)
+	x := make([]float64, d)
+	for i := range x {
+		x[i] = float64(i%7) - 3
+	}
+	b.ResetTimer()
+	for range b.N {
+		_, _ = r.apply(x)
+	}
+}
