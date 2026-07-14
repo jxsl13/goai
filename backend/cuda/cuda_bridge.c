@@ -569,6 +569,78 @@ done:
     return rc;
 }
 
+// GQA: qHeads query heads share kvHeads key/value heads (group = qHeads/kvHeads).
+// Query head h uses kv head h/group — a non-constant batch stride on K/V, so the
+// strided path can't express it. cublasSgemmBatched takes explicit device
+// pointer arrays instead: build them (query h → its kv head), upload, call.
+// cu_gqa_scores: scores[h] = Q[h]·K[h/group]ᵀ for every query head.
+int cu_gqa_scores(const void* dQ, const void* dK, void* dScores, int seq, int qHeads, int kvHeads, int hd) {
+    const float alpha = 1.0f, beta = 0.0f;
+    int group = qHeads / kvHeads, WQ = qHeads * hd, WKV = kvHeads * hd, rc = -2;
+    const float **hK = NULL, **hQ = NULL, **dKa = NULL, **dQa = NULL;
+    float **hC = NULL, **dCa = NULL;
+    size_t asz = (size_t)qHeads * sizeof(void*);
+
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    hK = (const float**)malloc(asz); hQ = (const float**)malloc(asz); hC = (float**)malloc(asz);
+    if (!hK || !hQ || !hC) { rc = -9; goto done; }
+    for (int h = 0; h < qHeads; h++) {
+        hK[h] = (const float*)dK + (size_t)(h / group) * hd;
+        hQ[h] = (const float*)dQ + (size_t)h * hd;
+        hC[h] = (float*)dScores + (size_t)h * seq * seq;
+    }
+    if (cudaMalloc((void**)&dKa, asz) != cudaSuccess || cudaMalloc((void**)&dQa, asz) != cudaSuccess ||
+        cudaMalloc((void**)&dCa, asz) != cudaSuccess) { rc = -9; goto done; }
+    cudaMemcpy(dKa, hK, asz, cudaMemcpyHostToDevice);
+    cudaMemcpy(dQa, hQ, asz, cudaMemcpyHostToDevice);
+    cudaMemcpy(dCa, hC, asz, cudaMemcpyHostToDevice);
+    if (cublasSgemmBatched(gHandle, CUBLAS_OP_T, CUBLAS_OP_N, seq, seq, hd, &alpha,
+                           dKa, WKV, dQa, WQ, &beta, dCa, seq, qHeads) != CUBLAS_STATUS_SUCCESS) { rc = -4; goto done; }
+    rc = 0;
+done:
+    if (dKa) cudaFree((void*)dKa);
+    if (dQa) cudaFree((void*)dQa);
+    if (dCa) cudaFree((void*)dCa);
+    free(hK); free(hQ); free(hC);
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_gqa_out: out[h] = scores[h]·V[h/group] for every query head, into [seq,WQ].
+int cu_gqa_out(const void* dScores, const void* dV, void* dOut, int seq, int qHeads, int kvHeads, int hd) {
+    const float alpha = 1.0f, beta = 0.0f;
+    int group = qHeads / kvHeads, WQ = qHeads * hd, WKV = kvHeads * hd, rc = -2;
+    const float **hV = NULL, **hS = NULL, **dVa = NULL, **dSa = NULL;
+    float **hO = NULL, **dOa = NULL;
+    size_t asz = (size_t)qHeads * sizeof(void*);
+
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    hV = (const float**)malloc(asz); hS = (const float**)malloc(asz); hO = (float**)malloc(asz);
+    if (!hV || !hS || !hO) { rc = -9; goto done; }
+    for (int h = 0; h < qHeads; h++) {
+        hV[h] = (const float*)dV + (size_t)(h / group) * hd;
+        hS[h] = (const float*)dScores + (size_t)h * seq * seq;
+        hO[h] = (float*)dOut + (size_t)h * hd;
+    }
+    if (cudaMalloc((void**)&dVa, asz) != cudaSuccess || cudaMalloc((void**)&dSa, asz) != cudaSuccess ||
+        cudaMalloc((void**)&dOa, asz) != cudaSuccess) { rc = -9; goto done; }
+    cudaMemcpy(dVa, hV, asz, cudaMemcpyHostToDevice);
+    cudaMemcpy(dSa, hS, asz, cudaMemcpyHostToDevice);
+    cudaMemcpy(dOa, hO, asz, cudaMemcpyHostToDevice);
+    if (cublasSgemmBatched(gHandle, CUBLAS_OP_N, CUBLAS_OP_N, hd, seq, seq, &alpha,
+                           dVa, WKV, dSa, seq, &beta, dOa, WQ, qHeads) != CUBLAS_STATUS_SUCCESS) { rc = -4; goto done; }
+    rc = 0;
+done:
+    if (dVa) cudaFree((void*)dVa);
+    if (dSa) cudaFree((void*)dSa);
+    if (dOa) cudaFree((void*)dOa);
+    free(hV); free(hS); free(hO);
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
 // cu_causal_scale_mh: scale + causal mask on scores[heads, seq, seq] (head-major)
 // — per head, mask key j for query i when j > i (offset for a KV window).
 int cu_causal_scale_mh(void* x, int heads, int seq, float scale, int offset) {

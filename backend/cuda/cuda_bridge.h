@@ -49,6 +49,11 @@ int cu_mha_scores(const void* dQ, const void* dK, void* dScores, int seq, int he
 int cu_causal_scale_mh(void* x, int heads, int seq, float scale, int offset);
 int cu_mha_out(const void* dScores, const void* dV, void* dOut, int seq, int heads, int hd);
 
+// GQA: qHeads query heads share kvHeads kv heads (query h → kv head h/group).
+// Pointer-array batched Sgemm; scores are [qHeads, seq, seq].
+int cu_gqa_scores(const void* dQ, const void* dK, void* dScores, int seq, int qHeads, int kvHeads, int hd);
+int cu_gqa_out(const void* dScores, const void* dV, void* dOut, int seq, int qHeads, int kvHeads, int hd);
+
 // On-device elementwise op (§V14 Phase-2, breadth beyond matmul). The kernel is
 // compiled at runtime from CUDA-C source via nvrtc (no nvcc needed) and launched
 // on the same stream as the matmuls, so a matmul→activation→matmul block stays

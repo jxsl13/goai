@@ -472,6 +472,57 @@ func MultiHeadAttention(q, k, v *DeviceF32, heads int, causal bool) (*DeviceF32,
 	return &DeviceF32{ptr: out, rows: seq, cols: w}, nil
 }
 
+// GroupedQueryAttention is MultiHeadAttention with fewer key/value heads than
+// query heads (Llama-3 / Mistral GQA): q is [seq, qHeads·hd], k and v are
+// [seq, kvHeads·hd] with qHeads a multiple of kvHeads, and query head h attends
+// to kv head h/(qHeads/kvHeads). RoPE is applied by the caller. Returns the
+// resident [seq, qHeads·hd] output; free when done. With kvHeads == qHeads this
+// is ordinary multi-head attention (MultiHeadAttention is the faster strided
+// path for that case).
+func GroupedQueryAttention(q, k, v *DeviceF32, qHeads, kvHeads int, causal bool) (*DeviceF32, error) {
+	if q.ptr == nil || k.ptr == nil || v.ptr == nil {
+		return nil, fmt.Errorf("cuda: GQA on a freed handle")
+	}
+	seq, wq := q.rows, q.cols
+	if qHeads <= 0 || kvHeads <= 0 || qHeads%kvHeads != 0 || wq%qHeads != 0 {
+		return nil, fmt.Errorf("cuda: GQA bad head config q=%d kv=%d width=%d", qHeads, kvHeads, wq)
+	}
+	hd := wq / qHeads
+	wkv := kvHeads * hd
+	if k.rows != seq || k.cols != wkv || v.rows != seq || v.cols != wkv {
+		return nil, fmt.Errorf("cuda: GQA k/v must be [%d,%d], got k%v v%v", seq, wkv, k.shape(), v.shape())
+	}
+	scores := C.cu_alloc_f32(C.int(qHeads * seq * seq))
+	if scores == nil {
+		return nil, fmt.Errorf("cuda: GQA scores alloc failed")
+	}
+	defer C.cu_free_f32(scores)
+	if rc := C.cu_gqa_scores(q.ptr, k.ptr, scores, C.int(seq), C.int(qHeads), C.int(kvHeads), C.int(hd)); rc != 0 {
+		return nil, fmt.Errorf("cuda: GQA scores failed (code %d)", int(rc))
+	}
+	offset := seq
+	if causal {
+		offset = 0
+	}
+	if rc := C.cu_causal_scale_mh(scores, C.int(qHeads), C.int(seq), C.float(1/math.Sqrt(float64(hd))), C.int(offset)); rc != 0 {
+		return nil, fmt.Errorf("cuda: GQA scale/mask failed (code %d)", int(rc))
+	}
+	if rc := C.cu_softmax_f32(scores, C.int(qHeads*seq), C.int(seq)); rc != 0 {
+		return nil, fmt.Errorf("cuda: GQA softmax failed (code %d)", int(rc))
+	}
+	out := C.cu_alloc_f32(C.int(seq * wq))
+	if out == nil {
+		return nil, fmt.Errorf("cuda: GQA out alloc failed")
+	}
+	if rc := C.cu_gqa_out(scores, v.ptr, out, C.int(seq), C.int(qHeads), C.int(kvHeads), C.int(hd)); rc != 0 {
+		C.cu_free_f32(out)
+		return nil, fmt.Errorf("cuda: GQA out failed (code %d)", int(rc))
+	}
+	return &DeviceF32{ptr: out, rows: seq, cols: wq}, nil
+}
+
+func (d *DeviceF32) shape() tensor.Shape { return tensor.Shape{d.rows, d.cols} }
+
 // Clone returns a new resident activation with a device→device copy of this
 // one's data — for a residual branch, keeping x while an in-place op (RMSNorm,
 // activation) runs on the copy. Free the clone when done.
