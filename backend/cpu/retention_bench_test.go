@@ -22,3 +22,20 @@ func BenchmarkRetentionFwdF32_512x64(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkRetentionBwdF32_512x64(b *testing.B) {
+	be, _ := backend.Get(backend.CPU)
+	q := bench.RandF32(tensor.Shape{512, 64}, 1)
+	k := bench.RandF32(tensor.Shape{512, 64}, 2)
+	v := bench.RandF32(tensor.Shape{512, 64}, 3)
+	dO := bench.RandF32(tensor.Shape{512, 64}, 4)
+	ctx := backend.NewContext().WithBackend(be)
+	ins := []*tensor.Tensor{q, k, v, dO}
+	attrs := backend.RetentionAttrs{Gamma: 0.968}
+	b.ResetTimer()
+	for range b.N {
+		if _, err := backend.Execute(ctx, backend.OpRetentionBackward, ins, attrs); err != nil {
+			b.Fatal(err)
+		}
+	}
+}

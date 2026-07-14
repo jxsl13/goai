@@ -210,8 +210,27 @@ func retentionBackwardKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs
 	dq := tensor.NewOn(ctx.Device(), q.Dtype(), q.Shape())
 	dK := tensor.NewOn(ctx.Device(), k.Dtype(), k.Shape())
 	dV := tensor.NewOn(ctx.Device(), v.Dtype(), v.Shape())
-	qr, kr, vr, gr := f64at(q.Contiguous()), f64at(k.Contiguous()), f64at(v.Contiguous()), f64at(g.Contiguous())
-	dqw, dkw, dvw := f64set(dq), f64set(dK), f64set(dV)
+	// §T602-style devirtualization: concrete []T slices with direct indexed access
+	// replace the f64at/f64set per-element closures. f64 accumulation + per-pass
+	// op order unchanged → parity within ulps (§V9/§V10). Q,K,V,dO,dQ,dK,dV share dtype.
+	qc, kc, vc, gc := q.Contiguous(), k.Contiguous(), v.Contiguous(), g.Contiguous()
+	switch q.Dtype() {
+	case tensor.F32:
+		retentionBwd(qc.Storage().F32(), kc.Storage().F32(), vc.Storage().F32(), gc.Storage().F32(),
+			dq.Storage().F32(), dK.Storage().F32(), dV.Storage().F32(), l, kd, vd, decay)
+	case tensor.F64:
+		retentionBwd(qc.Storage().F64(), kc.Storage().F64(), vc.Storage().F64(), gc.Storage().F64(),
+			dq.Storage().F64(), dK.Storage().F64(), dV.Storage().F64(), l, kd, vd, decay)
+	default:
+		return nil, fmt.Errorf("cpu: retention-backward unsupported dtype %v", q.Dtype())
+	}
+	return []*tensor.Tensor{dq, dK, dV}, nil
+}
+
+// retentionBwd is the parallel backward for (QKᵀ⊙decay)V over concrete []T slices
+// (T = float32|float64), accumulating in f64 and preserving each pass's exact
+// operation order for ref-parity (§V9/§V10). gs is dO.
+func retentionBwd[T normFloat](qs, ks, vs, gs, dqs, dks, dvs []T, l, kd, vd int, decay []float64) {
 	// Pass A: dQ rows are independent over n (m ≤ n ascending — ref's order).
 	parallelWork(l, l*(kd+vd), func(lo, hi int) {
 		row := make([]float64, kd)
@@ -222,15 +241,15 @@ func retentionBackwardKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs
 			for m := 0; m <= n; m++ {
 				var dp float64
 				for j := range vd {
-					dp += gr(n*vd+j) * vr(m*vd+j)
+					dp += float64(gs[n*vd+j]) * float64(vs[m*vd+j])
 				}
 				dA := dp * decay[n-m]
 				for i := range kd {
-					row[i] += dA * kr(m*kd+i)
+					row[i] += dA * float64(ks[m*kd+i])
 				}
 			}
 			for i := range kd {
-				dqw(n*kd+i, row[i])
+				dqs[n*kd+i] = T(row[i])
 			}
 		}
 	})
@@ -248,29 +267,28 @@ func retentionBackwardKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs
 			for n := m; n < l; n++ {
 				var a float64
 				for i := range kd {
-					a += qr(n*kd+i) * kr(m*kd+i)
+					a += float64(qs[n*kd+i]) * float64(ks[m*kd+i])
 				}
 				pnm := a * decay[n-m]
 				var dp float64
 				for j := range vd {
-					gnj := gr(n*vd + j)
-					dp += gnj * vr(m*vd+j)
+					gnj := float64(gs[n*vd+j])
+					dp += gnj * float64(vs[m*vd+j])
 					rowV[j] += pnm * gnj
 				}
 				dA := dp * decay[n-m]
 				for i := range kd {
-					rowK[i] += dA * qr(n*kd+i)
+					rowK[i] += dA * float64(qs[n*kd+i])
 				}
 			}
 			for i := range kd {
-				dkw(m*kd+i, rowK[i])
+				dks[m*kd+i] = T(rowK[i])
 			}
 			for j := range vd {
-				dvw(m*vd+j, rowV[j])
+				dvs[m*vd+j] = T(rowV[j])
 			}
 		}
 	})
-	return []*tensor.Tensor{dq, dK, dV}, nil
 }
 
 func init() {
