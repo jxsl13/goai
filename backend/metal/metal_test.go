@@ -25,8 +25,26 @@ func skipNoGPU(t *testing.T) {
 }
 
 // crossTol is the §V11 tolerance for GPU f32 GEMM: MPS accumulates in f32 and
-// reorders sums, so rtol scales with reduction length: rtol(K) = 1e-6·√K.
-func crossTol(k int) float64 { return 1e-6 * math.Sqrt(float64(k)) }
+// reorders sums, so rtol scales with reduction length: rtol(K) = 2.5e-6·√K.
+//
+// The √K FORM is dictated by f32 accumulation error (~O(√K) growth); the CONSTANT
+// was raised 1e-6 → 2.5e-6 (§T623 backprop) after measuring metal OpMatMul vs the
+// f64 ref across realistic hidden dims. The old 1e-6 constant only had headroom for
+// K≤512 (it was NEVER exercised above 512) and FAILED outright at model-scale K —
+// measured maxRel (metal f32 vs ref f64, det. seeds 1,2 / worst of 8 seeds):
+//
+//	K= 128  2.8e-6 / 4.1e-6   old-tol 1.13e-5  new-tol 2.83e-5
+//	K= 512  1.1e-5 / 1.4e-5   old-tol 2.26e-5  new-tol 5.66e-5
+//	K= 768  2.6e-5 / 2.6e-5   old-tol 2.77e-5  new-tol 6.93e-5
+//	K=1024  3.4e-5 / 3.4e-5   old-tol 3.20e-5  new-tol 8.00e-5   (old FAILED: tol<err)
+//	K=2048  4.9e-5 / 6.1e-5   old-tol 4.53e-5  new-tol 1.13e-4   (old FAILED)
+//	K=4096  8.9e-5 / 1.2e-4   old-tol 6.40e-5  new-tol 1.60e-4   (old FAILED)
+//
+// The new constant keeps a ~1.4–2.7× margin over the worst measured f32 error at
+// every tested K, yet stays ~100× below the ≥1e-2 error a REAL matmul bug produces,
+// so it still catches bugs. (Error grows slightly super-√K at large K, so the
+// single-constant √K form is looser at small K — harmless: bugs there are 100×+.)
+func crossTol(k int) float64 { return 2.5e-6 * math.Sqrt(float64(k)) }
 
 // §V3/§V11: metal matmul matches the Pure-Go reference within the K-scaled
 // tolerance across shapes.
@@ -40,6 +58,11 @@ func TestMetalCrossReference(t *testing.T) {
 
 	shapes := []struct{ m, k, n int }{
 		{1, 1, 1}, {2, 3, 4}, {33, 65, 17}, {128, 128, 128}, {256, 512, 128},
+		// Model-scale reduction dims (hidden sizes): the most-used op was
+		// previously untested above K=512, where f32 accumulation error grows
+		// ~√K and the old 1e-6·√K tol grazed/failed (§T623 backprop). Shapes
+		// match the crossTol calibration measurements documented above.
+		{256, 768, 256}, {512, 1024, 512}, {512, 2048, 512}, {512, 4096, 512},
 	}
 	for _, s := range shapes {
 		a := bench.RandF32(tensor.Shape{s.m, s.k}, 1)
@@ -58,6 +81,19 @@ func TestMetalCrossReference(t *testing.T) {
 			g, r := gm[0].AtF64(idx...), gr[0].AtF64(idx...)
 			if math.Abs(g-r) > rtol*math.Max(1, math.Abs(r)) {
 				t.Fatalf("shape %v [%d]: metal %v vs ref %v (rtol %g)", s, i, g, r, rtol)
+			}
+		}
+
+		// Non-vacuousness (§T623): confirm crossTol would CATCH a real bug at
+		// this K. A genuine matmul error yields ≥1e-2 rel deviation — perturb one
+		// element by 1e-2·|r| and assert it exceeds the (loosened) tolerance, so
+		// the wider constant still fails on real regressions, not just noise.
+		if n := gm[0].Numel(); n > 0 {
+			idx := tensor.Unravel(n/2, gm[0].Shape())
+			r := gr[0].AtF64(idx...)
+			bug := 1e-2 * math.Max(1, math.Abs(r))
+			if bug <= rtol*math.Max(1, math.Abs(r)) {
+				t.Fatalf("shape %v: crossTol %g too loose — a 1e-2 rel bug (Δ=%g) would slip through", s, rtol, bug)
 			}
 		}
 	}
