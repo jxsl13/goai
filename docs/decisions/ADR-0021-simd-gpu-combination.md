@@ -42,6 +42,20 @@ only trustworthy *after* §T629 fixed a quadratic-selection bug that had inflate
 it to 7.5 ms — see below; before the fix the host work would have *dominated*
 the step and the whole overlap analysis would have been wrong.)
 
+**CONFIRMED by a real instrumented metal decode (§T644,
+`llamagpu/hostdevice_split_test.go`):** on a D512/h8/kv2/6L/vocab-32k model,
+per-token host `SampleWithHistory` ≈ 0.56–1.3 ms vs device `Step` ≈ 3.45–5.8 ms
+→ **host fraction ≈ 14–18 %** (absolute times vary with machine load; the ratio
+is the signal). So the composed estimate holds. **Verdict: decode-overlap is LOW
+priority** — the ceiling is ~16–22 %, but it is *not* fully realizable because of
+a hard serial dependency (sampling needs this step's logits; the next `Step`
+needs the sampled token), the easy host/GPU overlap is already shipped (§T614
+async-encodes step N+1), tHost is already minimized (§T626–628 made sampling
+10×/6×/2.9× faster), and larger models push the host fraction *down*. The
+higher-potential heterogeneous lever stays CPU-draft/GPU-target speculative
+decoding (3); low-VRAM offload (C24) is a separate functionality goal, so the
+§T630 routing mechanism is justified by that, not by decode-overlap.
+
 **3. Heterogeneous speculative decoding (CPU-SIMD draft ∥ GPU target) — the
 highest-potential lever.** This is the one place SIMD + GPU genuinely multiply: a
 small draft model runs on the fast CPU-SIMD path proposing k tokens while the
