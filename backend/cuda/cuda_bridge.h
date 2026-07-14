@@ -49,4 +49,8 @@ int cu_gelu_f32(void* d, int n);
 int cu_silu_f32(void* d, int n);
 int cu_add_f32(void* dst, const void* src, int n);
 
+// cu_rmsnorm_f32 applies RMSNorm y = x/√(mean(x²)+eps)·gamma in-place over the
+// last axis (x is rows×cols row-major; gamma is a resident [cols] weight).
+int cu_rmsnorm_f32(void* x, const void* gamma, int rows, int cols, float eps);
+
 #endif

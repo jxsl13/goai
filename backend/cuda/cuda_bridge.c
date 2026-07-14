@@ -31,7 +31,7 @@ static pthread_mutex_t gLock = PTHREAD_MUTEX_INITIALIZER;
 static cublasHandle_t gHandle = NULL;
 static cudaStream_t gStream = NULL;
 static CUcontext gCtx = NULL; // runtime's primary context, retained for driver-API launches
-static CUfunction gGelu = NULL, gSilu = NULL, gAdd = NULL; // lazily nvrtc-compiled
+static CUfunction gGelu = NULL, gSilu = NULL, gAdd = NULL, gRms = NULL; // lazily nvrtc-compiled
 
 static float *gA = NULL, *gB = NULL, *gC = NULL;
 static size_t gACap = 0, gBCap = 0, gCCap = 0; // capacities in bytes
@@ -148,6 +148,45 @@ int cu_add_f32(void* dst, const void* src, int n) {
         args[1] = &src;
         args[2] = &n;
         rc = (cuLaunchKernel(gAdd, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_rmsnorm_f32: in-place RMSNorm over the last axis, y = x/√(mean(x²)+eps)·w,
+// one thread-block per row with a shared-memory reduction. Sum-of-squares is
+// accumulated in DOUBLE to match backend/ref's f64 accumulation (§V10) closely.
+int cu_rmsnorm_f32(void* x, const void* gamma, int rows, int cols, float eps) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (!gRms && compile_kernel(
+                     "extern \"C\" __global__ void rmsnorm_f32(float* x, const float* w, int rows, int cols, float eps){\n"
+                     "  int row = blockIdx.x; if (row>=rows) return;\n"
+                     "  extern __shared__ double sh[];\n"
+                     "  int t=threadIdx.x, nt=blockDim.x;\n"
+                     "  float* xr = x + (size_t)row*cols;\n"
+                     "  double local=0.0;\n"
+                     "  for (int j=t;j<cols;j+=nt){ double v=xr[j]; local+=v*v; }\n"
+                     "  sh[t]=local; __syncthreads();\n"
+                     "  for (int s=nt/2;s>0;s>>=1){ if(t<s) sh[t]+=sh[t+s]; __syncthreads(); }\n"
+                     "  double ms = sh[0]/(double)cols;\n"
+                     "  float inv = (float)(1.0/sqrt(ms+(double)eps));\n"
+                     "  for (int j=t;j<cols;j+=nt){ xr[j] = xr[j]*inv*w[j]; }\n"
+                     "}\n",
+                     "rmsnorm.cu", "rmsnorm_f32", &gRms) != 0) { rc = -2; goto done; }
+    {
+        int threads = 256, blocks = rows;
+        size_t shmem = (size_t)threads * sizeof(double);
+        void* args[5];
+        args[0] = &x;
+        args[1] = &gamma;
+        args[2] = &rows;
+        args[3] = &cols;
+        args[4] = &eps;
+        rc = (cuLaunchKernel(gRms, blocks, 1, 1, threads, 1, 1, shmem, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 done:
     pthread_mutex_unlock(&gLock);
