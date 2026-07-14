@@ -4,6 +4,14 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T634 — BLAS-1 gradient backward ~15× faster (2026-07-14)
+- The dot-product, L2-norm and AXPY backward passes walked each element through
+  `Unravel`/`AtF64`/`SetF64`. A shared typed helper (`scaleInto`, dtype switched once)
+  cuts the L2-norm backward — the global gradient-norm computed for gradient clipping
+  every training step — from **2.86 ms to 0.18 ms (~15×)** over a 262k-element tensor,
+  gradients unchanged (`TestGradCheckAllOps` green). Matmul, add-bias and
+  cross-entropy backward already used typed backend kernels. Continues C25.
+
 ### T633 — sum/mean gradient backward ~11× faster (2026-07-14)
 - The sum/mean reduction backward (`broadcastVJP`) computed each input gradient by
   unravelling the element index twice (once for the input, once redundantly for the

@@ -9,6 +9,37 @@ import (
 // nothing; the optimized cpu GEMM does the work). dot/nrm2/axpy are small scalar
 // loops.
 
+// scaleInto writes dst[i] = src[i]·scale over contiguous typed storage (dtype-switch
+// once, no per-element Unravel/AtF64/SetF64), with a generic fallback for exotic
+// dtypes. dst is a fresh contiguous tensor with src's shape (§base-perf, C25).
+func scaleInto(dst, src *tensor.Tensor, scale float64) {
+	n := src.Numel()
+	sc := src.Contiguous()
+	switch dst.Dtype() {
+	case tensor.F64:
+		if sc.Dtype() == tensor.F64 {
+			ss, ds := sc.Storage().F64(), dst.Storage().F64()
+			for i := 0; i < n; i++ {
+				ds[i] = ss[i] * scale
+			}
+			return
+		}
+	case tensor.F32:
+		if sc.Dtype() == tensor.F32 {
+			ss, ds := sc.Storage().F32(), dst.Storage().F32()
+			s32 := float32(scale)
+			for i := 0; i < n; i++ {
+				ds[i] = ss[i] * s32
+			}
+			return
+		}
+	}
+	for i := 0; i < n; i++ { // generic fallback (mixed dtype / exotic layout)
+		idx := tensor.Unravel(i, src.Shape())
+		dst.SetF64(src.AtF64(idx...)*scale, idx...)
+	}
+}
+
 func init() {
 	// C = A·B → gA = g·Bᵀ, gB = Aᵀ·g
 	RegisterVJP(backend.OpMatMul, func(ctx *backend.Context, in, _ []*tensor.Tensor, _ backend.Attrs, g *tensor.Tensor) ([]*tensor.Tensor, error) {
@@ -38,11 +69,8 @@ func init() {
 		gv := g.AtF64()
 		ga := tensor.New(a.Dtype(), a.Shape())
 		gb := tensor.New(b.Dtype(), b.Shape())
-		for i := range a.Numel() {
-			idx := tensor.Unravel(i, a.Shape())
-			ga.SetF64(gv*b.AtF64(idx...), idx...)
-			gb.SetF64(gv*a.AtF64(idx...), idx...)
-		}
+		scaleInto(ga, b, gv) // ∂/∂a = g·b
+		scaleInto(gb, a, gv) // ∂/∂b = g·a
 		return []*tensor.Tensor{ga, gb}, nil
 	})
 
@@ -53,10 +81,7 @@ func init() {
 		gv := g.AtF64()
 		gin := tensor.New(x.Dtype(), x.Shape())
 		if norm != 0 {
-			for i := range x.Numel() {
-				idx := tensor.Unravel(i, x.Shape())
-				gin.SetF64(gv*x.AtF64(idx...)/norm, idx...)
-			}
+			scaleInto(gin, x, gv/norm) // g·x/‖x‖
 		}
 		return []*tensor.Tensor{gin}, nil
 	})
@@ -90,10 +115,7 @@ func init() {
 		alpha := pX.WithDefaults().Alpha
 		x := in[0]
 		gx := tensor.New(x.Dtype(), x.Shape())
-		for i := range x.Numel() {
-			idx := tensor.Unravel(i, x.Shape())
-			gx.SetF64(alpha*g.AtF64(idx...), idx...)
-		}
+		scaleInto(gx, g, alpha) // ∂/∂x = α·g
 		return []*tensor.Tensor{gx, g}, nil
 	})
 }

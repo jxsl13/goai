@@ -83,3 +83,25 @@ func BenchmarkReduceVJPSumNaive(b *testing.B) {
 		_ = broadcastVJPNaive(x, attrs, g)
 	}
 }
+
+// BenchmarkNrm2VJP guards the §T634 scaleInto devirtualization of the L2-norm
+// backward — on the gradient-clipping hot path (a global grad-norm every step).
+func BenchmarkNrm2VJP(b *testing.B) {
+	vjp := vjps[backend.OpNrm2]
+	x := tensor.New(tensor.F32, tensor.Shape{512, 512})
+	s := x.Storage().F32()
+	for i := range s {
+		s[i] = float32(i%7) * 0.1
+	}
+	out := tensor.New(tensor.F32, tensor.Shape{})
+	out.Storage().F32()[0] = 100
+	g := tensor.New(tensor.F32, tensor.Shape{})
+	g.Storage().F32()[0] = 1
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := vjp(nil, []*tensor.Tensor{x}, []*tensor.Tensor{out}, nil, g); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
