@@ -4,6 +4,17 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T633 — sum/mean gradient backward ~11× faster (2026-07-14)
+- The sum/mean reduction backward (`broadcastVJP`) computed each input gradient by
+  unravelling the element index twice (once for the input, once redundantly for the
+  already-flat output offset) and reading through `AtF64`/`SetF64`. It now walks the
+  input in flat order with an incrementally maintained output offset (an odometer
+  over the axis strides) and typed storage access: a 512×512 reduce-axis backward
+  drops from **6.02 ms to 0.56 ms (10.8×)**, allocations 262 157 → 16, gradients
+  unchanged (`TestGradCheckAllOps` green). Continues the C25 last-percent
+  devirtualization into the training backward path (max/min and product reductions,
+  which carry per-group state, are a follow-up).
+
 ### T632 — activation-gradient backward 14× faster (2026-07-14)
 - The autograd VJP for scalar unary activations (exp, log, tanh, sigmoid, relu,
   sqrt, abs) allocated a coordinate slice for every element and read/wrote each value

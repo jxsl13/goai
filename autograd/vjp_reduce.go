@@ -15,7 +15,7 @@ import (
 // reduceOutMap mirrors the reference reduction geometry: it returns the output
 // shape and a function mapping an input multi-index to the flat output offset,
 // honoring the "axes" and "keepdims" attrs.
-func reduceOutMap(xShape tensor.Shape, attrs backend.Attrs) (tensor.Shape, func(idx []int) int, error) {
+func reduceOutMap(xShape tensor.Shape, attrs backend.Attrs) (tensor.Shape, func(idx []int) int, []int, error) {
 	nd := len(xShape)
 	reduced := make([]bool, nd)
 	pr, _ := attrs.(backend.ReduceAttrs)
@@ -30,7 +30,7 @@ func reduceOutMap(xShape tensor.Shape, attrs backend.Attrs) (tensor.Shape, func(
 				a += nd
 			}
 			if a < 0 || a >= nd {
-				return nil, nil, fmt.Errorf("autograd: reduce axis %d out of range for rank %d", a, nd)
+				return nil, nil, nil, fmt.Errorf("autograd: reduce axis %d out of range for rank %d", a, nd)
 			}
 			reduced[a] = true
 		}
@@ -70,14 +70,23 @@ func reduceOutMap(xShape tensor.Shape, attrs backend.Attrs) (tensor.Shape, func(
 		}
 		return of
 	}
-	return outShape, mapIdx, nil
+	// axStride[ax] = the change in the output flat offset per unit increment of input
+	// axis ax (0 for reduced axes, since mapIdx pins their coord to 0). Lets callers
+	// walk the input with an incremental offset instead of re-Unravel-ing per element.
+	axStride := make([]int, nd)
+	for ax := range nd {
+		if !reduced[ax] && outAxisOf[ax] >= 0 {
+			axStride[ax] = outStrides[outAxisOf[ax]]
+		}
+	}
+	return outShape, mapIdx, axStride, nil
 }
 
 // broadcastVJP builds sum/mean gradients: gin[idx] = g[map(idx)] · scale(count).
 func broadcastVJP(mean bool) VJP {
 	return func(_ *backend.Context, in, _ []*tensor.Tensor, attrs backend.Attrs, g *tensor.Tensor) ([]*tensor.Tensor, error) {
 		x := in[0]
-		outShape, mapIdx, err := reduceOutMap(x.Shape(), attrs)
+		outShape, _, axStride, err := reduceOutMap(x.Shape(), attrs)
 		if err != nil {
 			return nil, err
 		}
@@ -88,10 +97,57 @@ func broadcastVJP(mean bool) VJP {
 			}
 		}
 		gin := tensor.New(x.Dtype(), x.Shape())
-		for i := range x.Numel() {
-			idx := tensor.Unravel(i, x.Shape())
-			gv := g.AtF64(tensor.Unravel(mapIdx(idx), outShape)...)
-			gin.SetF64(gv*scale, idx...)
+		n := x.Numel()
+		xs := x.Shape()
+		nd := len(xs)
+		gc := g.Contiguous()
+		// walk x in row-major flat order, maintaining the output flat offset `of`
+		// incrementally (odometer) — no per-element Unravel, no double index round-trip;
+		// dtype-switch once for direct []T access (§base-perf, C25, §T633).
+		coord := make([]int, nd)
+		of := 0
+		switch x.Dtype() {
+		case tensor.F64:
+			gs, ds := gc.Storage().F64(), gin.Storage().F64()
+			for i := 0; i < n; i++ {
+				ds[i] = gs[of] * scale
+				for ax := nd - 1; ax >= 0; ax-- {
+					coord[ax]++
+					of += axStride[ax]
+					if coord[ax] < xs[ax] {
+						break
+					}
+					coord[ax] = 0
+					of -= axStride[ax] * xs[ax]
+				}
+			}
+		case tensor.F32:
+			gs, ds := gc.Storage().F32(), gin.Storage().F32()
+			sc := float32(scale)
+			for i := 0; i < n; i++ {
+				ds[i] = gs[of] * sc
+				for ax := nd - 1; ax >= 0; ax-- {
+					coord[ax]++
+					of += axStride[ax]
+					if coord[ax] < xs[ax] {
+						break
+					}
+					coord[ax] = 0
+					of -= axStride[ax] * xs[ax]
+				}
+			}
+		default:
+			mapIdx := func(c []int) int {
+				o := 0
+				for ax := 0; ax < nd; ax++ {
+					o += c[ax] * axStride[ax]
+				}
+				return o
+			}
+			for i := 0; i < n; i++ {
+				idx := tensor.Unravel(i, xs)
+				gin.SetF64(gc.AtF64(tensor.Unravel(mapIdx(idx), outShape)...)*scale, idx...)
+			}
 		}
 		return []*tensor.Tensor{gin}, nil
 	}
@@ -101,7 +157,7 @@ func broadcastVJP(mean bool) VJP {
 func extremumVJP() VJP {
 	return func(_ *backend.Context, in, out []*tensor.Tensor, attrs backend.Attrs, g *tensor.Tensor) ([]*tensor.Tensor, error) {
 		x, y := in[0], out[0]
-		outShape, mapIdx, err := reduceOutMap(x.Shape(), attrs)
+		outShape, mapIdx, _, err := reduceOutMap(x.Shape(), attrs)
 		if err != nil {
 			return nil, err
 		}
@@ -130,7 +186,7 @@ func extremumVJP() VJP {
 func prodVJP() VJP {
 	return func(_ *backend.Context, in, out []*tensor.Tensor, attrs backend.Attrs, g *tensor.Tensor) ([]*tensor.Tensor, error) {
 		x, y := in[0], out[0]
-		outShape, mapIdx, err := reduceOutMap(x.Shape(), attrs)
+		outShape, mapIdx, _, err := reduceOutMap(x.Shape(), attrs)
 		if err != nil {
 			return nil, err
 		}
