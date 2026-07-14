@@ -26,6 +26,40 @@ func addBiasKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) (
 		return nil, fmt.Errorf("ref: addbias bias len %d != cols %d", b.Shape()[0], n)
 	}
 	out := tensor.NewOn(ctx.Device(), x.Dtype(), x.Shape())
+
+	// Devirtualised fast paths (§T646): the generic AtF64/SetF64 loop below pays a
+	// dtype dispatch + flat-offset computation per element. x and b share a dtype
+	// (guarded above); when it is a plain float type we grab the raw typed slices
+	// once (row-major: (i,j) of [m,n] at i*n+j, b[j] at j) and index directly.
+	// Iteration order and arithmetic are byte-for-byte identical to the generic
+	// path; the F32 path reads inputs as float64 and rounds the STORED sum once.
+	// Contiguous() is called once per tensor (returns self when already contiguous).
+	switch x.Dtype() {
+	case tensor.F64:
+		xs := x.Contiguous().Storage().F64()
+		bs := b.Contiguous().Storage().F64()
+		os := out.Storage().F64()
+		for i := range m {
+			base := i * n
+			for j := range n {
+				os[base+j] = xs[base+j] + bs[j]
+			}
+		}
+		return []*tensor.Tensor{out}, nil
+	case tensor.F32:
+		xs := x.Contiguous().Storage().F32()
+		bs := b.Contiguous().Storage().F32()
+		os := out.Storage().F32()
+		for i := range m {
+			base := i * n
+			for j := range n {
+				os[base+j] = float32(float64(xs[base+j]) + float64(bs[j]))
+			}
+		}
+		return []*tensor.Tensor{out}, nil
+	}
+
+	// Generic fallback for exotic dtypes (verbatim original loop).
 	for i := range m {
 		for j := range n {
 			out.SetF64(x.AtF64(i, j)+b.AtF64(j), i, j)
@@ -47,6 +81,40 @@ func addBiasBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.
 	}
 	m, n := g.Shape()[0], g.Shape()[1]
 	db := tensor.NewOn(ctx.Device(), g.Dtype(), tensor.Shape{n})
+
+	// Devirtualised fast paths (§T646): the hottest cpu→ref fallback on the CPU
+	// training path. The generic AtF64/SetF64 loop pays a dtype dispatch + flat
+	// offset per element; here we grab the raw typed slices once (g[i,j] of [m,n]
+	// at i*n+j, db[j] at j) and index directly. The column-sum accumulator stays
+	// float64 on ALL paths and the F32 path only rounds the STORED result — so the
+	// reduction is byte-for-byte identical to the generic path. Contiguous() runs
+	// once (returns self when already contiguous).
+	switch g.Dtype() {
+	case tensor.F64:
+		gs := g.Contiguous().Storage().F64()
+		dbs := db.Storage().F64()
+		for j := range n {
+			var s float64
+			for i := range m {
+				s += gs[i*n+j]
+			}
+			dbs[j] = s
+		}
+		return []*tensor.Tensor{db}, nil
+	case tensor.F32:
+		gs := g.Contiguous().Storage().F32()
+		dbs := db.Storage().F32()
+		for j := range n {
+			var s float64 // column-sum accumulates in float64; only the store rounds
+			for i := range m {
+				s += float64(gs[i*n+j])
+			}
+			dbs[j] = float32(s)
+		}
+		return []*tensor.Tensor{db}, nil
+	}
+
+	// Generic fallback for exotic dtypes (verbatim original loop).
 	for j := range n {
 		var s float64
 		for i := range m {
