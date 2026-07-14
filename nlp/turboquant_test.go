@@ -3,6 +3,7 @@ package nlp
 import (
 	"fmt"
 	"math"
+	"math/rand/v2"
 	"testing"
 )
 
@@ -262,4 +263,55 @@ func ExampleTurboQuantKVCache() {
 	tqPerRow := c.Bytes() / 2 // keys+values stored; Bytes counts both
 	fmt.Printf("%dx smaller\n", f32PerRow/tqPerRow)
 	// Output: 8x smaller
+}
+
+// §V15 fuzz: TurboQuantKVCache round-trips over random shapes/values without panics or NaNs, keeps
+// Len/Bytes correct, and preserves each vector's norm (stored exactly) within the quantizer bound.
+func TestTurboQuantKVCacheRoundTripFuzz(t *testing.T) {
+	rng := rand.New(rand.NewPCG(619, 0xabcd))
+	for iter := range 200 {
+		dim := 8 + rng.IntN(120)
+		bits := 1 + rng.IntN(2) // 1 or 2
+		c, err := NewTurboQuantKVCache(dim, bits, uint64(iter)+1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		nRows := 1 + rng.IntN(4)
+		orig := make([][]float64, nRows)
+		for r := range nRows {
+			k := make([]float64, dim)
+			v := make([]float64, dim)
+			for i := range dim {
+				k[i] = rng.NormFloat64() * (0.1 + 3*rng.Float64())
+				v[i] = rng.NormFloat64()
+			}
+			orig[r] = k
+			if err := c.Append(k, v); err != nil {
+				t.Fatalf("iter %d: append: %v", iter, err)
+			}
+		}
+		if c.Len() != nRows {
+			t.Fatalf("iter %d: Len=%d want %d", iter, c.Len(), nRows)
+		}
+		if want := (dim*bits/8 + (dim+7)/8 + 16) * 2 * nRows; c.Bytes() != want {
+			t.Fatalf("iter %d: Bytes=%d want %d", iter, c.Bytes(), want)
+		}
+		keys := c.Keys()
+		for r := range nRows {
+			var no, nr float64
+			for i := range dim {
+				if math.IsNaN(keys[r][i]) || math.IsInf(keys[r][i], 0) {
+					t.Fatalf("iter %d row %d: non-finite reconstruction", iter, r)
+				}
+				no += orig[r][i] * orig[r][i]
+				nr += keys[r][i] * keys[r][i]
+			}
+			no, nr = math.Sqrt(no), math.Sqrt(nr)
+			// single-row norm preservation is a bits=2 property; at bits=1 the QJL residual
+			// reconstruction is unbiased for the inner product but too coarse per-row for the norm.
+			if bits == 2 && no > 1e-9 && math.Abs(nr-no) > 0.4*no {
+				t.Fatalf("iter %d row %d: norm drift ‖x̃‖=%.3f vs ‖x‖=%.3f (dim=%d bits=%d)", iter, r, nr, no, dim, bits)
+			}
+		}
+	}
 }
