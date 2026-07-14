@@ -119,6 +119,10 @@ func TestMetalMHACrossReference(t *testing.T) {
 		{"mqa", 8, 8, 8, 1, 4, false, 1},        // multi-query
 		{"kvcache", 3, 7, 2, 2, 8, true, 1},     // sq<sk incremental decode
 		{"attnscale", 6, 6, 4, 4, 8, true, 1.2}, // YaRN attn temperature
+		// NOTE (§T624/§B46): model-scale cases are NOT added on this (mtl_mha_mps
+		// two-matmul) path — its shared [seq,seq] scratch has a non-deterministic
+		// race at seq≥~512 (see TestMetalMHAMPSRaceRegression). Model-scale MHA
+		// coverage lives on the race-free MPSGraph and flash cross-refs below.
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -150,6 +154,52 @@ func TestMetalMHACrossReference(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestMetalMHAMPSRaceRegression reproduces §B46: the mtl_mha_mps two-matmul prefill
+// path (OpMHA, sq==sk, Window==0 — the DEFAULT per-op prefill route) returns
+// NON-DETERMINISTIC, WRONG outputs at seq≥~512. The shared [seq,seq] scores scratch `sb`
+// is reused across heads through a Q·Kᵀ(MPS)→softmax(compute)→P·V(MPS) chain; Metal's
+// automatic hazard tracking does NOT reliably order it at scale (measured maxAbs up to
+// ~6.9e-2, varying every run). CAUSAL amplifies the failure rate (near-certain at
+// seq≥512); NON-causal large-seq races too but far less often. seq≤256 is stable-exact;
+// the MPSGraph and flash paths are always exact — those carry the model-scale coverage
+// meanwhile. The reproducer uses causal seq=1024 (the reliable trigger) and runs several
+// iterations. SKIPPED until the race is fixed — DELETE the Skip once mtl_mha_mps is
+// race-free, then it enforces the fix.
+func TestMetalMHAMPSRaceRegression(t *testing.T) {
+	skipNoGPU(t)
+	t.Skip("§B46: mtl_mha_mps prefill has a non-deterministic scratch-buffer race at seq≥512; un-skip when fixed")
+	mb, _ := backend.Get(backend.Metal)
+	ref, _ := backend.Get(backend.Ref)
+	const seq, heads, kv, dk = 1024, 8, 8, 64
+	dm := heads * dk
+	q := bench.RandF32(tensor.Shape{seq, dm}, 1)
+	k := bench.RandF32(tensor.Shape{seq, kv * dk}, 2)
+	v := bench.RandF32(tensor.Shape{seq, kv * dk}, 3)
+	attrs := backend.AttnAttrs{Heads: heads, KVHeads: kv, Causal: true}
+	ins := []*tensor.Tensor{q, k, v}
+	// Run several times: a race shows as run-to-run variation and gross error.
+	for iter := 0; iter < 8; iter++ {
+		gm, err := backend.Execute(backend.NewContext().WithBackend(mb), backend.OpMHA, ins, attrs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		gr, err := backend.Execute(backend.NewContext().WithBackend(ref), backend.OpMHA, ins, attrs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var maxAbs float64
+		for i := range gm[0].Numel() {
+			idx := tensor.Unravel(i, gm[0].Shape())
+			if ab := math.Abs(gm[0].AtF64(idx...) - gr[0].AtF64(idx...)); ab > maxAbs {
+				maxAbs = ab
+			}
+		}
+		if maxAbs > crossTol(dk+seq)*10+1e-4 {
+			t.Fatalf("iter %d: mtl_mha_mps causal maxAbs=%.3e — race regressed", iter, maxAbs)
+		}
 	}
 }
 
@@ -231,6 +281,12 @@ func TestMetalMHAMPSGraphCrossReference(t *testing.T) {
 		{"mqa", 8, 8, 1, 4, false, 1},          // multi-query
 		{"attnscale", 6, 4, 4, 8, true, 1.2},   // YaRN attn temperature
 		{"prefill512", 512, 8, 8, 64, true, 1}, // the A/B benchmark shape
+		// Model-scale coverage (§T624): MPSGraph batches all heads in ONE graph with
+		// no manually-shared scratch, so it is the race-free route for prefill at
+		// model scale (mtl_mha_mps has the §B46 shared-buffer race at seq≥512). Real
+		// transformer shapes, heads=8, dk=64, causal.
+		{"gqa512", 512, 8, 2, 64, true, 1},       // grouped-query @ model scale
+		{"prefill1024", 1024, 8, 8, 64, true, 1}, // longer context, causal
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -285,6 +341,14 @@ func TestMetalFlashAttnCrossReference(t *testing.T) {
 		{"gqa", 8, 4, 2, 8, true},   // grouped-query
 		{"mqa", 7, 6, 1, 4, true},   // multi-query
 		{"gqa3", 9, 6, 3, 4, false}, // grouped-query, non-causal
+		// Model-scale coverage (§T624): flash-attention-2 is the exact, race-free
+		// path (online-softmax tiling, one thread per query row, no shared [seq,seq]
+		// scratch), so it carries the model-scale MHA coverage that mtl_mha_mps cannot
+		// (§B46). Real transformer prefill: heads=8, dk=64, causal — the f64 ref is
+		// O(seq²·dk) so the count is kept minimal.
+		{"prefill512", 512, 8, 8, 64, true},   // causal prefill @ model scale
+		{"gqa512", 512, 8, 2, 64, true},       // grouped-query @ model scale
+		{"prefill1024", 1024, 8, 8, 64, true}, // longer context
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

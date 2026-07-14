@@ -29,6 +29,14 @@ func TestMetalQMatMulQ8CrossReference(t *testing.T) {
 	}
 	cases := []struct{ m, k, n int }{
 		{1, 32, 8}, {1, 256, 16}, {4, 64, 5}, {8, 128, 12}, {2, 512, 7}, {16, 256, 3},
+		// Model-scale K (§T624): the quantization error CANCELS here (ref
+		// dequantizes the SAME bytes), so the comparison is purely f32-vs-f64
+		// accumulation over K. Unlike the dense matmul (§B45), the Q8_0 kernel
+		// accumulates block-wise (32-element blocks, scale applied per block), which
+		// keeps its f32 error FAR below the raw-GEMM √K growth — measured maxRel
+		// ≤4.4e-7 @K4096, ~145× under the (unchanged) tight 1e-6·√k tol. So this tol
+		// needs NO recalibration at model scale; the large-K cases simply confirm it.
+		{1, 1024, 8}, {4, 2048, 6}, {1, 4096, 4},
 	}
 	for _, c := range cases {
 		x := tensor.FromFloat64(tensor.Shape{c.m, c.k}, qmRand(c.m*c.k, 1))
@@ -54,13 +62,24 @@ func TestMetalQMatMulQ8CrossReference(t *testing.T) {
 			t.Fatalf("case %+v: shape %v", c, got.Shape())
 		}
 		rtol, atol := 1e-6*math.Sqrt(float64(c.k)), 1e-4
+		var maxRel float64
 		for mi := range c.m {
 			for ni := range c.n {
 				g, r := got.AtF64(mi, ni), ref.AtF64(mi, ni)
+				if rel := math.Abs(g-r) / math.Max(1, math.Abs(r)); rel > maxRel {
+					maxRel = rel
+				}
 				if math.Abs(g-r) > rtol*math.Max(1, math.Abs(r))+atol {
 					t.Errorf("case %+v [%d,%d]: metal %g vs ref %g (Δ %g)", c, mi, ni, g, r, math.Abs(g-r))
 				}
 			}
+		}
+		t.Logf("Q8_0 K=%d: maxRel=%.2e (tol %.2e)", c.k, maxRel, rtol)
+		// Non-vacuousness (§T624): a real quantized-matmul bug yields ≥1e-2 rel
+		// deviation; confirm crossTol at this K still catches it.
+		r := ref.AtF64(0, 0)
+		if bug := 1e-2 * math.Max(1, math.Abs(r)); bug <= rtol*math.Max(1, math.Abs(r))+atol {
+			t.Fatalf("K=%d: crossTol %g too loose — a 1e-2 rel bug (Δ=%g) would slip through", c.k, rtol, bug)
 		}
 	}
 }
@@ -75,6 +94,12 @@ func TestMetalQMatMulQ4KCrossReference(t *testing.T) {
 	}
 	cases := []struct{ m, k, n int }{
 		{1, 256, 8}, {4, 256, 5}, {8, 512, 12}, {2, 512, 7}, {16, 256, 3},
+		// Model-scale K (§T624): multiples of the 256-element Q4_K super-block.
+		// As in Q8_0, quantization cancels (ref dequantizes the SAME bytes) → pure
+		// f32-vs-f64 accumulation, and the super-block-wise kernel accumulation keeps
+		// the error far below raw-GEMM √K growth: measured maxRel ≤2.2e-6 @K4096,
+		// ~30× under the (unchanged) tight 1e-6·√k tol. No recalibration needed.
+		{1, 1024, 8}, {4, 2048, 6}, {1, 4096, 4},
 	}
 	for _, c := range cases {
 		xf := tensor.New(tensor.F32, tensor.Shape{c.m, c.k})
@@ -99,13 +124,23 @@ func TestMetalQMatMulQ4KCrossReference(t *testing.T) {
 			t.Fatalf("case %+v: shape %v", c, got.Shape())
 		}
 		rtol, atol := 1e-6*math.Sqrt(float64(c.k)), 1e-4
+		var maxRel float64
 		for mi := range c.m {
 			for ni := range c.n {
 				g, r := got.AtF64(mi, ni), ref.AtF64(mi, ni)
+				if rel := math.Abs(g-r) / math.Max(1, math.Abs(r)); rel > maxRel {
+					maxRel = rel
+				}
 				if math.Abs(g-r) > rtol*math.Max(1, math.Abs(r))+atol {
 					t.Errorf("case %+v [%d,%d]: metal %g vs ref %g (Δ %g)", c, mi, ni, g, r, math.Abs(g-r))
 				}
 			}
+		}
+		t.Logf("Q4_K K=%d: maxRel=%.2e (tol %.2e)", c.k, maxRel, rtol)
+		// Non-vacuousness (§T624): a real bug yields ≥1e-2 rel deviation.
+		r := ref.AtF64(0, 0)
+		if bug := 1e-2 * math.Max(1, math.Abs(r)); bug <= rtol*math.Max(1, math.Abs(r))+atol {
+			t.Fatalf("K=%d: crossTol %g too loose — a 1e-2 rel bug (Δ=%g) would slip through", c.k, rtol, bug)
 		}
 	}
 }
