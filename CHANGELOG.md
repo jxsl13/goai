@@ -4,6 +4,15 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T638–T639 — Mamba SSM & MLA gradient backward devirtualized (2026-07-14)
+- The Mamba selective-scan (`OpSSM`) and multi-head-latent-attention (`OpMLA`)
+  backward passes now use typed contiguous storage instead of per-element
+  dtype-dispatch, matching the sibling backward ops. The scan's time order and
+  state carry are preserved exactly; gradients are unchanged (finite-difference
+  gradcheck, the Mamba/MLA end-to-end training tests, and new F32-vs-F64 parity tests
+  all pass). Part of the C25 last-percent devirtualization; these were done by
+  fresh-context sub-agents and independently reviewed.
+
 ### T636 — MoE gradient backward ~7× faster (2026-07-14)
 - The mixture-of-experts backward passes (load-balance loss, expert combine, router
   z-loss) read their 2D tensors element by element. Typed fast paths (dtype switched
