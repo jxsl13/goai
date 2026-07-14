@@ -335,6 +335,30 @@ Together the three truncation paths — top-k (§T626, 10×), top-p (§T627, 6.1
 typical (§T628, 2.85×) — take `Sampler.Dist` off its per-token full-sort of the
 vocabulary, bit-identically.
 
+### The combined-config trap: quadratic nucleus selection (§T629, §B58)
+
+Measuring the *full* host cost per token (`SampleWithHistoryRealistic`: temp +
+top-k=200 + top-p=0.9 + repeat penalty, V=50257) surfaced a surprise — **7.5 ms**,
+worse than the plain softmax. The cause was in the nucleus quickselects: their
+two-way partition degrades to O(n²) when most keys are equal, and a top-k that
+already masked all but 200 tokens to zero left ~50k identical zeros for the top-p
+quickselect to partition one at a time. The per-truncation benchmarks never showed
+it (each path alone sees distinct keys), and parity was always correct — only the
+combined config exposed it.
+
+A three-way (Dutch-flag) partition resolves the equal-key band in a single pass:
+
+| combined sampler (top-k + top-p + penalty) | ns/op |
+|---|---|
+| two-way partition | 7527 µs |
+| three-way partition | 611 µs (**12.3×**) |
+
+Lesson: a selection helper fed post-truncation data has *many* duplicate keys — make
+it duplicate-robust, and benchmark the **combined** sampler config, not each
+truncation in isolation. The 0.61 ms host cost this leaves is what makes the
+SIMD+GPU overlap analysis in ADR-0021 valid (≈13% of a ~4 ms GPU decode step); the
+7.5 ms figure would have inverted that conclusion.
+
 ### Head-to-head: llama.cpp on the SAME weights (§T607)
 
 The decode benchmark's llama (17.7 M parameters, dim 512, 6 layers, GQA 8/2,

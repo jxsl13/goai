@@ -205,6 +205,44 @@ func TestDistQuickselectParity(t *testing.T) {
 	}
 }
 
+// TestQuickselectDuplicates locks the 3-way partition (§T629): with most keys equal
+// (the post-top-k / post-min-p distribution: a few nonzero, thousands of zeros) the
+// selector must still return the correct top-k SET and must not degrade to O(n²).
+func TestQuickselectDuplicates(t *testing.T) {
+	const n, nonzero, k = 50000, 200, 512
+	key := make([]float64, n)
+	rng := rand.New(rand.NewPCG(11, 22))
+	for i := 0; i < nonzero; i++ {
+		key[rng.IntN(n)] = 1 + rng.Float64() // a few distinct positive keys, rest 0
+	}
+	// descending: idx[:k] must contain every strictly-positive index (all nonzero ≤ k).
+	idxD := make([]int, n)
+	for i := range idxD {
+		idxD[i] = i
+	}
+	quickselectIdxDesc(idxD, key, k)
+	got := map[int]bool{}
+	for _, i := range idxD[:k] {
+		got[i] = true
+	}
+	for i := range key {
+		if key[i] > 0 && !got[i] {
+			t.Fatalf("desc: positive key idx %d missing from top-%d", i, k)
+		}
+	}
+	// ascending mirror: the k smallest must all be zeros (there are ≫ k of them).
+	idxA := make([]int, n)
+	for i := range idxA {
+		idxA[i] = i
+	}
+	quickselectIdxAsc(idxA, key, k)
+	for _, i := range idxA[:k] {
+		if key[i] != 0 {
+			t.Fatalf("asc: idx %d in bottom-%d has nonzero key %g", i, k, key[i])
+		}
+	}
+}
+
 // TestKthLargest checks the quickselect helper against a full sort on random and
 // adversarial (sorted, reverse, constant-ish) inputs.
 func TestKthLargest(t *testing.T) {
@@ -310,4 +348,25 @@ func BenchmarkDistTypicalPeaky(b *testing.B) {
 }
 func BenchmarkDistTypicalPeakyNaive(b *testing.B) {
 	benchDistLogits(b, peakyLogits(50257, 7), true, WithTemperature(1), WithTypical(0.9))
+}
+
+// BenchmarkSampleWithHistoryRealistic measures the FULL host-side per-token sampling
+// cost — repetition penalties over a window + top-p truncation + the draw — the
+// CPU-SIMD-eligible work that a GPU decode step (≈4 ms) could overlap (§T629 decode
+// host/device split analysis).
+func BenchmarkSampleWithHistoryRealistic(b *testing.B) {
+	s := NewSampler(1,
+		WithTemperature(0.8), WithTopP(0.9), WithTopK(200),
+		WithRepeatPenalty(1.1), WithFrequencyPenalty(0.1), WithPenaltyWindow(256))
+	logits := peakyLogits(50257, 7)
+	rng := rand.New(rand.NewPCG(3, 4))
+	history := make([]int, 512)
+	for i := range history {
+		history[i] = int(rng.Uint64() % 50257)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = s.SampleWithHistory(logits, history)
+	}
 }

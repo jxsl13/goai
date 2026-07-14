@@ -4,6 +4,20 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T629 — fix quadratic nucleus selection on masked distributions (2026-07-14)
+- Investigating whether CPU SIMD and the GPU backends could be combined (ADR-0021),
+  a measurement of the real per-token host cost surfaced a latent quadratic: the
+  index quickselects added in the top-p/typical work used a two-way partition, which
+  degrades to O(n²) when most keys are equal. A preceding top-k (or min-p) zeroes
+  almost the whole vocabulary, so the very common **top-k + top-p** sampler cost
+  **7.5 ms/token** — worse than the softmax it was meant to speed up. A three-way
+  (Dutch-flag) partition groups the equal-key band in one pass: **7.5 ms → 0.61 ms
+  (12.3×)**, output unchanged. Only a combined-config host benchmark caught it — the
+  per-truncation microbenchmarks and the parity tests were blind, since correctness
+  was never wrong. ADR-0021 records the SIMD+GPU analysis: op-level split is a loss,
+  pipeline overlap has a ~13% ceiling, heterogeneous speculative decoding is the
+  highest-potential lever — all measurement-gated.
+
 ### T628 — locally-typical sampling ~2.9× faster (2026-07-14)
 - `Sampler.Dist`'s locally-typical truncation now uses the same bounded selection as
   top-p: quickselect the 512 lowest-typical-score candidates, sort only those, and

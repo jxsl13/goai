@@ -436,9 +436,11 @@ func kthLargest(vals []float64, k int) float64 {
 }
 
 // quickselectIdxDesc partitions idx in place so that idx[:k] hold the k indices
-// with the LARGEST key[idx[·]] values (arbitrary internal order), O(n) average with
-// a deterministic median-of-three pivot. Used to bound the top-p nucleus scan to a
-// small candidate prefix instead of sorting the whole vocabulary.
+// with the LARGEST key[idx[·]] values (arbitrary internal order), O(n) average. It
+// uses a THREE-WAY (Dutch-flag) partition so runs of equal keys are grouped in one
+// pass — essential here because an earlier truncation (top-k, min-p) zeroes most of
+// the vocabulary, and a two-way quickselect degrades to O(n²) on those thousands of
+// identical zeros (§T629). Median-of-three pivot keeps it deterministic.
 func quickselectIdxDesc(idx []int, key []float64, k int) {
 	lo, hi := 0, len(idx)-1
 	target := k - 1
@@ -453,22 +455,29 @@ func quickselectIdxDesc(idx []int, key []float64, k int) {
 		if key[idx[mid]] > key[idx[hi]] {
 			idx[mid], idx[hi] = idx[hi], idx[mid]
 		}
-		pivot := key[idx[hi]]
-		i := lo
-		for j := lo; j < hi; j++ {
-			if key[idx[j]] > pivot {
-				idx[i], idx[j] = idx[j], idx[i]
+		pivot := key[idx[mid]] // median of three
+		// 3-way: [lo..lt-1] > pivot, [lt..gt] == pivot, [gt+1..hi] < pivot.
+		lt, gt, i := lo, hi, lo
+		for i <= gt {
+			switch {
+			case key[idx[i]] > pivot:
+				idx[lt], idx[i] = idx[i], idx[lt]
+				lt++
+				i++
+			case key[idx[i]] < pivot:
+				idx[gt], idx[i] = idx[i], idx[gt]
+				gt--
+			default:
 				i++
 			}
 		}
-		idx[i], idx[hi] = idx[hi], idx[i]
 		switch {
-		case i == target:
-			return
-		case i < target:
-			lo = i + 1
+		case target < lt:
+			hi = lt - 1
+		case target <= gt:
+			return // the k-th largest lies in the equal-to-pivot band → done
 		default:
-			hi = i - 1
+			lo = gt + 1
 		}
 	}
 }
@@ -547,7 +556,8 @@ func truncateNucleus(probs []float64, thresh float64) {
 }
 
 // quickselectIdxAsc partitions idx in place so that idx[:k] hold the k indices with
-// the SMALLEST key[idx[·]] values (mirror of quickselectIdxDesc), O(n) average.
+// the SMALLEST key[idx[·]] values (mirror of quickselectIdxDesc, three-way for the
+// same duplicate-key robustness — masked tokens share a +inf score), O(n) average.
 func quickselectIdxAsc(idx []int, key []float64, k int) {
 	lo, hi := 0, len(idx)-1
 	target := k - 1
@@ -562,22 +572,29 @@ func quickselectIdxAsc(idx []int, key []float64, k int) {
 		if key[idx[mid]] < key[idx[hi]] {
 			idx[mid], idx[hi] = idx[hi], idx[mid]
 		}
-		pivot := key[idx[hi]]
-		i := lo
-		for j := lo; j < hi; j++ {
-			if key[idx[j]] < pivot {
-				idx[i], idx[j] = idx[j], idx[i]
+		pivot := key[idx[mid]] // median of three
+		// 3-way: [lo..lt-1] < pivot, [lt..gt] == pivot, [gt+1..hi] > pivot.
+		lt, gt, i := lo, hi, lo
+		for i <= gt {
+			switch {
+			case key[idx[i]] < pivot:
+				idx[lt], idx[i] = idx[i], idx[lt]
+				lt++
+				i++
+			case key[idx[i]] > pivot:
+				idx[gt], idx[i] = idx[i], idx[gt]
+				gt--
+			default:
 				i++
 			}
 		}
-		idx[i], idx[hi] = idx[hi], idx[i]
 		switch {
-		case i == target:
-			return
-		case i < target:
-			lo = i + 1
+		case target < lt:
+			hi = lt - 1
+		case target <= gt:
+			return // the k-th smallest lies in the equal-to-pivot band → done
 		default:
-			hi = i - 1
+			lo = gt + 1
 		}
 	}
 }
