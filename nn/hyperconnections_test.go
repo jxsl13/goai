@@ -371,3 +371,60 @@ func TestHyperConnectionOrthogonal(t *testing.T) {
 		}
 	}
 }
+
+// §V2: HCOrthogonal gradients of Ar flow through the Newton-Schulz unroll (differentiability).
+func TestHyperConnectionOrthogonalGradcheck(t *testing.T) {
+	const n = 2
+	newHC := func() *nn.HyperConnection {
+		hc, err := nn.NewHyperConnection(tensor.F64, n, nn.HCOrthogonal, nn.WithSinkhornIters(6))
+		if err != nil {
+			t.Fatal(err)
+		}
+		hc.Ar = tensor.FromFloat64(tensor.Shape{n, n}, []float64{0.8, 0.3, -0.2, 1.1})
+		hc.Am = tensor.FromFloat64(tensor.Shape{n, 1}, []float64{0.6, 0.4})
+		hc.B = tensor.FromFloat64(tensor.Shape{1, n}, []float64{0.7, 0.3})
+		return hc
+	}
+	h := tensor.FromFloat64(tensor.Shape{n, 2}, []float64{1, -1, 0.5, 2})
+	y := tensor.FromFloat64(tensor.Shape{1, 2}, []float64{0.3, 0.8})
+	mask := tensor.FromFloat64(tensor.Shape{n, 2}, []float64{0.7, -1.2, 0.4, 0.9})
+
+	hc := newHC()
+	tape := autograd.NewTape()
+	hn, err := hc.Update(tape.Context(), h, y)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prod, _ := backend.Execute(tape.Context(), backend.OpMul, []*tensor.Tensor{hn, mask}, nil)
+	loss, _ := backend.Execute(tape.Context(), backend.OpSum, []*tensor.Tensor{prod[0]}, nil)
+	if err := tape.Backward(loss[0]); err != nil {
+		t.Fatal(err)
+	}
+	g := tape.Grad(hc.Ar)
+	if g == nil {
+		t.Fatal("nil Ar gradient through Newton-Schulz")
+	}
+	lossOf := func(hc *nn.HyperConnection) float64 {
+		out, _ := hc.Update(backend.NewContext(), h, y)
+		var acc float64
+		for i := range n {
+			for j := range 2 {
+				acc += mask.AtF64(i, j) * out.AtF64(i, j)
+			}
+		}
+		return acc
+	}
+	const eps = 1e-6
+	for i := range n {
+		for j := range n {
+			hcp, hcm := newHC(), newHC()
+			orig := hc.Ar.AtF64(i, j)
+			hcp.Ar.SetF64(orig+eps, i, j)
+			hcm.Ar.SetF64(orig-eps, i, j)
+			fd := (lossOf(hcp) - lossOf(hcm)) / (2 * eps)
+			if an := g.AtF64(i, j); math.Abs(an-fd) > 1e-5 {
+				t.Fatalf("Ar grad[%d,%d] thru Newton-Schulz: analytic %v vs fd %v", i, j, an, fd)
+			}
+		}
+	}
+}
