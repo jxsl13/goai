@@ -24,7 +24,7 @@ type residentLlama struct {
 	eps        float64
 }
 
-func buildResidentLlama(b *testing.B, m *nlp.Llama) *residentLlama {
+func buildResidentLlama(tb testing.TB, m *nlp.Llama) *residentLlama {
 	cfg := m.Config
 	kv := cfg.KVHeads
 	if kv == 0 {
@@ -61,46 +61,46 @@ func (rl *residentLlama) free() {
 }
 
 // forward runs embed → layers → final norm → output and returns host logits.
-func (rl *residentLlama) forward(b *testing.B, ids []int32) *tensor.Tensor {
+func (rl *residentLlama) forward(tb testing.TB, ids []int32) *tensor.Tensor {
 	dx, err := rl.emb.Embed(ids)
 	if err != nil {
-		b.Fatal(err)
+		tb.Fatal(err)
 	}
 	for _, l := range rl.layers {
 		if dx, err = l.forward(dx); err != nil {
-			b.Fatal(err)
+			tb.Fatal(err)
 		}
 	}
 	if err := dx.RMSNorm(rl.norm, float32(rl.eps)); err != nil {
-		b.Fatal(err)
+		tb.Fatal(err)
 	}
 	dl, err := rl.out.MatMulDevice(dx)
 	if err != nil {
-		b.Fatal(err)
+		tb.Fatal(err)
 	}
 	dx.Free()
 	out, err := dl.ToHost()
 	if err != nil {
-		b.Fatal(err)
+		tb.Fatal(err)
 	}
 	dl.Free()
 	return out
 }
 
-func loadTinyLlama(b *testing.B) *nlp.Llama {
+func loadTinyLlama(tb testing.TB) *nlp.Llama {
 	if !cuda.Available() {
-		b.Skip("no gpu")
+		tb.Skip("no gpu")
 	}
 	if _, err := os.Stat(tinyLlamaPath); err != nil {
-		b.Skipf("model not present (%s)", tinyLlamaPath)
+		tb.Skipf("model not present (%s)", tinyLlamaPath)
 	}
 	f, err := gguf.ReadFile(tinyLlamaPath)
 	if err != nil {
-		b.Fatal(err)
+		tb.Fatal(err)
 	}
 	m, err := nlp.LlamaFromGGUF(f.Metadata, f.Tensors)
 	if err != nil {
-		b.Fatal(err)
+		tb.Fatal(err)
 	}
 	return m
 }

@@ -550,6 +550,21 @@ done:
     return rc;
 }
 
+// cu_copy_rows device→device copies nElems floats from src into dst starting at
+// float offset dstOffset — the KV-cache append: write a new token's key/value
+// rows into the contiguous cache buffer just past the rows already stored.
+int cu_copy_rows(void* dst, const void* src, int dstOffset, int nElems) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cudaMemcpyAsync((float*)dst + dstOffset, src, (size_t)nElems * sizeof(float),
+                        cudaMemcpyDeviceToDevice, gStream) != cudaSuccess) { rc = -3; goto done; }
+    rc = 0;
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
 // cu_clone_f32 allocates a new device buffer and device→device copies n floats
 // into it (for a residual branch: keep x while an in-place op runs on a copy).
 void* cu_clone_f32(const void* src, int n) {

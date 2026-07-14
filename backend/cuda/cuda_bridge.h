@@ -37,6 +37,8 @@ int cu_matmul_f32_bres(const float* A, const void* dB, float* C, int M, int K, i
 // dC[M,N] = dA[M,K]·dB[K,N] with every operand resident (no H2D/D2H).
 void* cu_alloc_f32(int n);
 void* cu_clone_f32(const void* src, int n);
+// cu_copy_rows: device→device copy nElems floats from src to dst+dstOffset (KV-cache append).
+int cu_copy_rows(void* dst, const void* src, int dstOffset, int nElems);
 void* cu_upload_i32(const int* src, int n);
 // out[i,:] = table[ids[i],:] — input embedding row gather (table [vocab,d] resident).
 int cu_embed_f32(const void* dTable, const void* dIds, void* dOut, int seq, int d);

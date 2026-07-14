@@ -68,9 +68,9 @@ PERF-2 INDUSTRY BASELINE (llama.cpp b10012 Vulkan, same RTX 3060 + same TinyLlam
   |---|---|---|---|
   | prefill pp32 | 3298 tok/s | 1204 | 0.37× (2.7× behind) |
   | prefill pp128 | 8389 tok/s | 2002 | 0.24× (4.2× behind) |
-  | decode tg128 | 243 tok/s | (no KV-cache) | — |
+  | decode tg128 | 243 tok/s | 12.6 (KV-cache) | 0.052× (19× behind) |
 PERF-GAP (honest): (a) llama.cpp Q8_0 = 4× less weight bandwidth than goai f32 (favours llcpp, esp. memory-bound decode). (b) llama.cpp fuses kernels + batched/flash attention → prefill throughput scales HARD with batch (3298→8389 pp32→pp128); goai rises far less (1204→2002) — many separate cuBLAS + per-op kernel launches per layer. (c) goai has NO KV-cache → no comparable decode number yet (would be O(N²)). goai's from-scratch CUDA prefill is within 2.7–4.2× of a mature impl — a solid start; the levers below close it.
-PERF-NEXT (hyper-opt, biggest first): (1) KV-CACHE decode on-device (RoPE PosOffset) — O(N²)→O(N), unlocks the tg comparison, THE decode win. [attn kernel DONE §Tw33 — GroupedQueryAttentionKV(seqQ new rows over seqKV cache); NEXT = KVCache buffer type (append) + decode loop + tg bench]. (2) quantized matmul on device (Q8/Q4 resident → 4× bandwidth, matches llcpp). (3) kernel fusion (RMSNorm+matmul, flash-style attention) + fewer launches — closes the prefill-scaling gap. (4) pooled intermediates. (5) larger prefill batch.
+PERF-NEXT (hyper-opt, biggest first): (1) KV-CACHE decode DONE §Tw33/§Tw34 — GroupedQueryAttentionKV + KVCache(append) + decode loop == full re-forward token-for-token (argmax exact, logits 1e-5); decode 12.6 tok/s, FLAT across context (12.62@p32/12.51@p128 → cache truly O(1)/step). GAP to llama.cpp 243 = 19×, diagnosed LAUNCH/SYNC-BOUND not bandwidth (12.6 tok/s ⇒ 55 GB/s effective, far below 360 GB/s peak; single-token forward = ~330 op launches w/ same fixed cost as prefill but 1/128th compute). NEXT LEVER = cut per-op overhead: GQA pointer-array does cudaMalloc+cudaMemcpy+implicit-sync EVERY call (22×/token) → persistent scratch + fewer host syncs + fusion; THEN quant matmul for bandwidth once compute-bound. (2) quantized matmul on device (Q8/Q4 resident → 4× bandwidth, matches llcpp). (3) kernel fusion (RMSNorm+matmul, flash-style attention) + fewer launches — closes the prefill-scaling gap. (4) pooled intermediates. (5) larger prefill batch.
 
 ## §Tw — worker task log (merged PRs)
 
@@ -103,6 +103,7 @@ Tw30|x|REAL-MODEL FULL FORWARD: TinyLlama-1.1B (embed→22 layers→norm→logit
 Tw31|x|inference THROUGHPUT bench: TinyLlama prefill GPU 1204/2002 tok/s (seq32/128) vs CPU 5.9 — baseline for the llama.cpp comparison + hyper-opt (PR#33)|§PERF
 Tw32|x|INDUSTRY BASELINE: llama.cpp b10012 Vulkan on same GPU+model — prefill 3298/8389 (pp32/128), decode 243 tok/s; goai CUDA within 2.7–4.2× on prefill, decode gap = KV-cache. Reproducible `scripts/bench-llamacpp.sh` (PR#34)|§PERF
 Tw33|x|KV-CACHE attn FOUNDATION: generalized GQA/mask kernels seq→seqQ×seqKV; GroupedQueryAttentionKV (seqQ new query rows over full seqKV cache, causal offset seqKV−seqQ) == tail of full causal GQA (seqQ=1 maxAbs 2.6e-8, seqQ=3/12 exact); no regression in MHA/GQA/block/full-forward parity (PR#35)|§PERF
+Tw34|x|KV-CACHE DECODE: cu_copy_rows + KVCache type (resident [maxSeq,wkv] K/V, append post-RoPE) + forwardKV/decode loop; autoregressive greedy decode == full re-forward TOKEN-FOR-TOKEN (argmax exact 5 steps, logits ≤1.1e-5); decode 12.6 tok/s flat across context. Gap to llama.cpp 243=19×, launch/sync-bound (PR#36)|§PERF
 Tw25|x|CUDA embedding row-gather (bit-exact) — full-model forward-pass op set COMPLETE on-device (PR#26)|GPU-4,Nx1
 Tw26|x|CUDA fused SwiGLU (SiLU⊙up, 1 pass) — device traffic 5n→3n, FFN launch fusion (PR#27)|GPU-7
 Tw27|x|CPU f32-native GEMM direct-store (drop f64 carrier) +28% → 196 GFLOP/s, 4.7× scalar (PR#28); mr=8 tiling measured as -7% loss, rejected|CPU-3
