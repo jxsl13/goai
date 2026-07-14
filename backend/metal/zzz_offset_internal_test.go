@@ -150,3 +150,56 @@ func TestRecorderMHAAtOffsetParity(t *testing.T) {
 		}
 	}
 }
+
+func TestRecorderCopy2DParity(t *testing.T) {
+	if !Available() {
+		t.Skip("metal unavailable")
+	}
+	// Extract the middle column band of a rows×stride matrix into a contiguous
+	// rows×w matrix — the fused-QKV sub-column extraction shape (§T613).
+	const rows, stride, w, off = 5, 24, 7, 9
+	src := make([]float32, rows*stride)
+	for i := range src {
+		src[i] = float32(i)*0.25 + 1
+	}
+	sb, err := NewDeviceBufferF32(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sb.Release()
+	dstInit := make([]float32, rows*w+3) // +3 sentinel tail
+	for i := range dstInit {
+		dstInit[i] = -99
+	}
+	db, _ := NewDeviceBufferF32(dstInit)
+	defer db.Release()
+
+	rec, err := NewRecorder()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rec.Copy2D(sb, off, stride, db, 0, w, rows, w); err != nil {
+		t.Fatal(err)
+	}
+	if err := rec.Finish(); err != nil {
+		t.Fatal(err)
+	}
+	rec.Free()
+
+	got := make([]float32, rows*w+3)
+	if err := db.DownloadF32(got); err != nil {
+		t.Fatal(err)
+	}
+	for r := range rows {
+		for c := range w {
+			if want := src[off+r*stride+c]; got[r*w+c] != want {
+				t.Fatalf("copy2d row %d col %d: %v vs %v", r, c, got[r*w+c], want)
+			}
+		}
+	}
+	for i := rows * w; i < rows*w+3; i++ {
+		if got[i] != -99 {
+			t.Fatalf("copy2d tail sentinel clobbered at %d: %v", i, got[i])
+		}
+	}
+}

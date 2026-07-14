@@ -203,6 +203,8 @@ int vk_recorder_mha_decode(void* rec, const uint32_t* spv, int spvLen, void* qh,
                            int sq, int sk, int dm, int heads, int kvHeads, int dk, int causal, float scale,
                            int qElemOff);
 int vk_recorder_blit(void* rec, void* srcH, int srcOff, void* dstH, int dstOff, int nbytes);
+int vk_recorder_copy2d(void* rec, void* srcH, int srcOff, int srcStride,
+                       void* dstH, int dstOff, int dstStride, int rows, int rowFloats);
 int vk_recorder_finish(void* rec);
 void vk_recorder_free(void* rec);
 

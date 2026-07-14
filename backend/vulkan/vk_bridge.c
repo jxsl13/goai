@@ -1502,6 +1502,34 @@ int vk_recorder_blit(void* rec, void* srcH, int srcOff, void* dstH, int dstOff, 
     return 0;
 }
 
+// vk_recorder_copy2d records a strided rows×rowFloats sub-matrix copy src→dst: row r copies
+// rowFloats f32 from src[srcOff + r·srcStride] to dst[dstOff + r·dstStride] (offsets/strides
+// in ELEMENTS). ONE vkCmdCopyBuffer with `rows` regions — a single command, not rows commands.
+// Extracts/deposits the q/k/v sub-columns of a fused QKV buffer at prefill (SPEC T613).
+int vk_recorder_copy2d(void* rec, void* srcH, int srcOff, int srcStride,
+                       void* dstH, int dstOff, int dstStride, int rows, int rowFloats) {
+    if (!rec || !srcH || !dstH || rows < 1 || rowFloats < 1 ||
+        srcOff < 0 || dstOff < 0 || srcStride < rowFloats || dstStride < rowFloats) return -2;
+    DevBuf* s = (DevBuf*)srcH; DevBuf* d = (DevBuf*)dstH;
+    VkDeviceSize sEnd = ((VkDeviceSize)srcOff + (VkDeviceSize)(rows-1)*srcStride + rowFloats) * 4;
+    VkDeviceSize dEnd = ((VkDeviceSize)dstOff + (VkDeviceSize)(rows-1)*dstStride + rowFloats) * 4;
+    if (sEnd > s->nbytes || dEnd > d->nbytes) return -2;
+    VkBufferCopy* regions = (VkBufferCopy*)malloc(sizeof(VkBufferCopy) * (size_t)rows);
+    if (!regions) return -3;
+    for (int r = 0; r < rows; r++) {
+        regions[r].srcOffset = ((VkDeviceSize)srcOff + (VkDeviceSize)r*srcStride) * 4;
+        regions[r].dstOffset = ((VkDeviceSize)dstOff + (VkDeviceSize)r*dstStride) * 4;
+        regions[r].size = (VkDeviceSize)rowFloats * 4;
+    }
+    pthread_mutex_lock(&gLock);
+    rec_barrier();
+    vkCmdCopyBuffer(gRecCmd, s->buf, d->buf, (uint32_t)rows, regions);
+    gRecOpCount++;
+    pthread_mutex_unlock(&gLock);
+    free(regions);
+    return 0;
+}
+
 int vk_recorder_finish(void* rec) {
     if (!rec) return -2;
     pthread_mutex_lock(&gLock);

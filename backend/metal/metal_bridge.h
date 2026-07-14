@@ -173,6 +173,8 @@ void* mtl_recorder_begin(void);
 int mtl_recorder_unary(void* rec, void* xh, void* oh, int n, int op);
 int mtl_recorder_binary(void* rec, void* ah, void* bh, void* oh, int n, int op);
 int mtl_recorder_blit(void* rec, void* srcH, int srcOff, void* dstH, int dstOff, int nbytes);
+int mtl_recorder_copy2d(void* rec, void* srcH, int srcOff, int srcStride,
+                        void* dstH, int dstOff, int dstStride, int rows, int rowFloats);
 int mtl_recorder_matmul(void* rec, void* ah, void* bh, void* ch, int M, int K, int N);
 int mtl_recorder_rmsnorm(void* rec, void* xh, void* gh, void* oh, int rows, int dim, float eps);
 int mtl_recorder_layernorm(void* rec, void* xh, void* gh, void* bh, void* oh, int rows, int dim, float eps);

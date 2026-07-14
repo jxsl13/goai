@@ -1435,6 +1435,25 @@ func (r *Recorder) Blit(src *DeviceBuffer, srcOff int, dst *DeviceBuffer, dstOff
 	return nil
 }
 
+// Copy2D records a strided rows×rowFloats sub-matrix copy: row r moves rowFloats elements
+// from src[srcOff+r·srcStride:] to dst[dstOff+r·dstStride:] (all in f32 elements). This is
+// the fused-QKV extraction primitive (§T613): after one combined QKV matmul the q/k/v parts
+// are column bands of a wider matrix, and prefill needs them as contiguous rows (or written
+// row-wise into the KV cache). One vkCmdCopyBuffer with rows regions; rows=1 degenerates to Blit.
+func (r *Recorder) Copy2D(src *DeviceBuffer, srcOff, srcStride int, dst *DeviceBuffer, dstOff, dstStride, rows, rowFloats int) error {
+	if srcOff < 0 || dstOff < 0 || rows < 1 || rowFloats < 1 || srcStride < rowFloats || dstStride < rowFloats ||
+		srcOff+(rows-1)*srcStride+rowFloats > src.n || dstOff+(rows-1)*dstStride+rowFloats > dst.n {
+		return fmt.Errorf("vulkan: Recorder copy2d out of range: src off=%d stride=%d n=%d dst off=%d stride=%d n=%d rows=%d rowFloats=%d",
+			srcOff, srcStride, src.n, dstOff, dstStride, dst.n, rows, rowFloats)
+	}
+	rc := C.vk_recorder_copy2d(r.handle, src.handle, C.int(srcOff), C.int(srcStride),
+		dst.handle, C.int(dstOff), C.int(dstStride), C.int(rows), C.int(rowFloats))
+	if rc != 0 {
+		return fmt.Errorf("vulkan: Recorder copy2d failed (%d)", int(rc))
+	}
+	return nil
+}
+
 // LayerNorm records O = layernorm(X)·gamma + beta into the command buffer over device buffers
 // (GPT-2-style norm; rmsnorm is the Llama variant). x, o are rows×dim; g, b are dim-length.
 func (r *Recorder) LayerNorm(x, g, b, o *DeviceBuffer, rows, dim int, eps float32) error {

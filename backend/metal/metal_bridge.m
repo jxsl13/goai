@@ -1701,6 +1701,31 @@ int mtl_recorder_blit(void* rec, void* srcH, int srcOff, void* dstH, int dstOff,
     return 0;
 }
 
+// mtl_recorder_copy2d encodes a strided rows×rowFloats sub-matrix copy src→dst into the
+// recorder's command buffer: row r copies rowFloats f32 from src[srcOff + r·srcStride] to
+// dst[dstOff + r·dstStride] (offsets/strides in ELEMENTS). One blit encoder, `rows` copy
+// commands. This extracts/deposits the q/k/v sub-columns of a fused QKV buffer at prefill
+// (SPEC T613); at rows=1 it degenerates to mtl_recorder_blit.
+int mtl_recorder_copy2d(void* rec, void* srcH, int srcOff, int srcStride,
+                        void* dstH, int dstOff, int dstStride, int rows, int rowFloats) {
+    if (rec == NULL || srcH == NULL || dstH == NULL || rows < 1 || rowFloats < 1 ||
+        srcOff < 0 || dstOff < 0 || srcStride < rowFloats || dstStride < rowFloats) return -2;
+    id<MTLCommandBuffer> cmd = (__bridge id<MTLCommandBuffer>)rec;
+    id<MTLBuffer> sb = (__bridge id<MTLBuffer>)srcH;
+    id<MTLBuffer> db = (__bridge id<MTLBuffer>)dstH;
+    NSUInteger sEnd = ((NSUInteger)srcOff + (NSUInteger)(rows-1)*srcStride + rowFloats) * 4;
+    NSUInteger dEnd = ((NSUInteger)dstOff + (NSUInteger)(rows-1)*dstStride + rowFloats) * 4;
+    if (sEnd > sb.length || dEnd > db.length) return -2;
+    id<MTLBlitCommandEncoder> enc = [cmd blitCommandEncoder];
+    for (int r = 0; r < rows; r++) {
+        [enc copyFromBuffer:sb sourceOffset:((NSUInteger)srcOff + (NSUInteger)r*srcStride)*4
+                   toBuffer:db destinationOffset:((NSUInteger)dstOff + (NSUInteger)r*dstStride)*4
+                       size:(NSUInteger)rowFloats*4];
+    }
+    [enc endEncoding];
+    return 0;
+}
+
 // mtl_recorder_binary encodes O = A (op) B over n f32 elements of device buffers into the
 // recorder's command buffer (op 0=add,1=sub,2=mul,3=div,4=max,5=min). No commit.
 int mtl_recorder_binary(void* rec, void* ah, void* bh, void* oh, int n, int op) {
