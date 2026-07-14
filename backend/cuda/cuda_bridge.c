@@ -473,3 +473,30 @@ done:
     pthread_mutex_unlock(&gLock);
     return rc;
 }
+
+// cu_matmul_f32_ddd_bt: dC[M,N] = dA[M,K]·dB[N,K]ᵀ, all resident (attention QKᵀ:
+// A=Q[seq,hd], B=K[seq,hd] → scores[seq,seq]). Row-major A·Bᵀ maps to the
+// column-major call sgemm(OP_T,OP_N, N,M,K, B(ld=K), A(ld=K), C(ld=N)) — the
+// transpose of A·B's idiom with the first operand transposed (§R43).
+int cu_matmul_f32_ddd_bt(const void* dA, const void* dB, void* dC, int M, int K, int N) {
+    const float alpha = 1.0f, beta = 0.0f;
+    cublasStatus_t st;
+    int rc = -2;
+
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+
+    st = cublasSgemm(gHandle, CUBLAS_OP_T, CUBLAS_OP_N,
+                     N, M, K,
+                     &alpha,
+                     (const float*)dB, K,
+                     (const float*)dA, K,
+                     &beta,
+                     (float*)dC, N);
+    if (st != CUBLAS_STATUS_SUCCESS) { rc = -4; goto done; }
+    rc = 0;
+
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}

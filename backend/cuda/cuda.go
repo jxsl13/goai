@@ -366,6 +366,48 @@ func (d *DeviceF32) RoPE(attrs backend.RoPEAttrs) error {
 	return nil
 }
 
+// MatMul computes d·b for two resident activations (d[M,K]·b[K,N] → [M,N]),
+// leaving the result on the GPU — e.g. attention scores·V. Both operands are
+// device-resident; the result is a new DeviceF32 the caller frees.
+func (d *DeviceF32) MatMul(b *DeviceF32) (*DeviceF32, error) {
+	if d.ptr == nil || b.ptr == nil {
+		return nil, fmt.Errorf("cuda: MatMul on a freed handle")
+	}
+	if d.cols != b.rows {
+		return nil, fmt.Errorf("cuda: MatMul inner dim mismatch [%d,%d]·[%d,%d]", d.rows, d.cols, b.rows, b.cols)
+	}
+	out := C.cu_alloc_f32(C.int(d.rows * b.cols))
+	if out == nil {
+		return nil, fmt.Errorf("cuda: MatMul output alloc failed")
+	}
+	if rc := C.cu_matmul_f32_ddd(d.ptr, b.ptr, out, C.int(d.rows), C.int(d.cols), C.int(b.cols)); rc != 0 {
+		C.cu_free_f32(out)
+		return nil, fmt.Errorf("cuda: device matmul failed (code %d)", int(rc))
+	}
+	return &DeviceF32{ptr: out, rows: d.rows, cols: b.cols}, nil
+}
+
+// MatMulBT computes d·bᵀ for two resident activations (d[M,K]·b[N,K]ᵀ → [M,N]),
+// on the GPU — attention scores = Q·Kᵀ. Requires d.cols == b.cols; the result is
+// [d.rows, b.rows]. Both operands device-resident; caller frees the result.
+func (d *DeviceF32) MatMulBT(b *DeviceF32) (*DeviceF32, error) {
+	if d.ptr == nil || b.ptr == nil {
+		return nil, fmt.Errorf("cuda: MatMulBT on a freed handle")
+	}
+	if d.cols != b.cols {
+		return nil, fmt.Errorf("cuda: MatMulBT contraction mismatch [%d,%d]·[%d,%d]ᵀ", d.rows, d.cols, b.rows, b.cols)
+	}
+	out := C.cu_alloc_f32(C.int(d.rows * b.rows))
+	if out == nil {
+		return nil, fmt.Errorf("cuda: MatMulBT output alloc failed")
+	}
+	if rc := C.cu_matmul_f32_ddd_bt(d.ptr, b.ptr, out, C.int(d.rows), C.int(d.cols), C.int(b.rows)); rc != 0 {
+		C.cu_free_f32(out)
+		return nil, fmt.Errorf("cuda: device matmul-bt failed (code %d)", int(rc))
+	}
+	return &DeviceF32{ptr: out, rows: d.rows, cols: b.rows}, nil
+}
+
 // Free releases the device buffer. Safe to call more than once.
 func (d *DeviceF32) Free() {
 	if d.ptr != nil {
