@@ -31,7 +31,7 @@ static pthread_mutex_t gLock = PTHREAD_MUTEX_INITIALIZER;
 static cublasHandle_t gHandle = NULL;
 static cudaStream_t gStream = NULL;
 static CUcontext gCtx = NULL; // runtime's primary context, retained for driver-API launches
-static CUfunction gGelu = NULL, gSilu = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL; // lazily nvrtc-compiled
+static CUfunction gGelu = NULL, gSilu = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gCausal = NULL; // lazily nvrtc-compiled
 
 static float *gA = NULL, *gB = NULL, *gC = NULL;
 static size_t gACap = 0, gBCap = 0, gCCap = 0; // capacities in bytes
@@ -253,6 +253,41 @@ int cu_softmax_f32(void* x, int rows, int cols) {
         args[1] = &rows;
         args[2] = &cols;
         rc = (cuLaunchKernel(gSoftmax, blocks, 1, 1, threads, 1, 1, shmem, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_causal_scale_f32: for attention scores x[qRows, kCols], multiply by scale
+// and apply a causal mask — element (i,j) is set to −inf when key j is in the
+// future of query i, i.e. j > i + offset. offset = kCols − qRows aligns a short
+// query window to the end of the key sequence (prefill of the last qRows rows).
+int cu_causal_scale_f32(void* x, int qRows, int kCols, float scale, int offset) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (!gCausal && compile_kernel(
+                        "extern \"C\" __global__ void causal_scale_f32(float* x, int rows, int cols, float scale, int offset){\n"
+                        "  long gid = (long)blockIdx.x*blockDim.x + threadIdx.x;\n"
+                        "  long total = (long)rows*cols;\n"
+                        "  if (gid >= total) return;\n"
+                        "  int i = (int)(gid / cols), j = (int)(gid % cols);\n"
+                        "  x[gid] = (j > i + offset) ? __int_as_float(0xff800000) : x[gid]*scale;\n"
+                        "}\n",
+                        "causal.cu", "causal_scale_f32", &gCausal) != 0) { rc = -2; goto done; }
+    {
+        long total = (long)qRows * kCols;
+        int threads = 256, blocks = (int)((total + threads - 1) / threads);
+        if (blocks < 1) blocks = 1;
+        void* args[5];
+        args[0] = &x;
+        args[1] = &qRows;
+        args[2] = &kCols;
+        args[3] = &scale;
+        args[4] = &offset;
+        rc = (cuLaunchKernel(gCausal, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 done:
     pthread_mutex_unlock(&gLock);
