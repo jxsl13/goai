@@ -36,16 +36,27 @@ nails every column residue 0..3 and non-4-multiple `m`.
 
 ## A/B (§V22) — Ryzen 7 5700G (Zen 3, AVX2+FMA), count=3 medians
 
-| GEMM | scalar | archsimd | speedup |
-|------|--------|----------|---------|
-| **F64** 512³  | 40.8 GFLOP/s | 63.5 GFLOP/s | **1.56×** |
-| **F64** 1024³ | 42.3 GFLOP/s | 62.4 GFLOP/s | **1.48×** |
-| F32 512³  | 43.1 GFLOP/s | 43.1 GFLOP/s | 1.00× (scalar, unchanged) |
-| F32 1024³ | 43.1 GFLOP/s | 43.1 GFLOP/s | 1.00× (scalar, unchanged) |
+| GEMM | scalar | archsimd nr=4 | archsimd nr=8 | scalar→nr8 |
+|------|--------|---------------|---------------|------------|
+| **F64** 512³  | 40.8 GFLOP/s | 63.5 | **80.5** | **1.97×** |
+| **F64** 1024³ | 42.3 GFLOP/s | 62.4 | **82.3** | **1.95×** |
+| F32 512³  | 43.1 GFLOP/s | 43.1 | 43.1 | 1.00× (scalar, unchanged) |
+| F32 1024³ | 43.1 GFLOP/s | 43.1 | 43.1 | 1.00× (scalar, unchanged) |
+
+**Register-blocking tune (nr=4 → nr=8).** The first cut kept one `Float64x4`
+accumulator per row (4 live chains). At ~4 GFLOP/s/core that was well under the
+Zen 3 f64 ceiling, and the tell was that it scaled with *more independent
+accumulators*, not more bandwidth: the `acc = acc.Add(a·b)` chain is
+latency-bound (each Add depends on the previous), and 4 chains barely cover the
+~4-cycle add latency. Widening to **two column groups per row = 8 chains**
+(`nv8 = n − n%8`, a 4-wide cleanup for `n%8∈[4,7]`, scalar tail for `n%4`) gives
+enough ILP to hide it: **+28–32%** on top of nr=4, a **~1.96× cumulative**
+bit-exact win over scalar (same ascending-p order → tol 0, parity suites green).
+8 accumulators + 2 B-loads + 4 A-broadcasts sit within the 16 YMM registers.
 
 Because `gemmF64Band` is shared, **F64 conv (im2col→GEMM) inherits the same
-~1.5×** at bit-exact parity (its cross-ref suites stay green under the
-experiment build); a dedicated conv A/B is a follow-up.
+~2×** at bit-exact parity (its cross-ref suites stay green under the experiment
+build); a dedicated conv A/B is a follow-up.
 
 ## The discarded F32 SIMD variant (§C3/V-CGO)
 

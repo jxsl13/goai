@@ -29,7 +29,8 @@ func gemmF64Band(A, B, C []float64, loRow, hiRow, k, n int) {
 		gemmF64BandScalar(A, B, C, loRow, hiRow, k, n)
 		return
 	}
-	nv := n - n%4 // columns covered by full 4-wide vectors
+	nv := n - n%4  // 4-wide vector boundary
+	nv8 := n - n%8 // 8-wide boundary (two Float64x4 per row)
 	i := loRow
 	for ; i+3 < hiRow; i += 4 {
 		r0, r1, r2, r3 := (i+0)*k, (i+1)*k, (i+2)*k, (i+3)*k
@@ -38,7 +39,43 @@ func gemmF64Band(A, B, C []float64, loRow, hiRow, k, n int) {
 		c2 := C[(i+2)*n : (i+2)*n+n]
 		c3 := C[(i+3)*n : (i+3)*n+n]
 		j := 0
-		for ; j < nv; j += 4 {
+		// 8-wide body: two column groups per row = 8 independent accumulator
+		// chains, enough in flight to hide the add latency (nr=4 left only 4).
+		for ; j < nv8; j += 8 {
+			a0 := archsimd.LoadFloat64x4Slice(c0[j:])
+			a0h := archsimd.LoadFloat64x4Slice(c0[j+4:])
+			a1 := archsimd.LoadFloat64x4Slice(c1[j:])
+			a1h := archsimd.LoadFloat64x4Slice(c1[j+4:])
+			a2 := archsimd.LoadFloat64x4Slice(c2[j:])
+			a2h := archsimd.LoadFloat64x4Slice(c2[j+4:])
+			a3 := archsimd.LoadFloat64x4Slice(c3[j:])
+			a3h := archsimd.LoadFloat64x4Slice(c3[j+4:])
+			for p := 0; p < k; p++ {
+				lo := archsimd.LoadFloat64x4Slice(B[p*n+j:])
+				hi := archsimd.LoadFloat64x4Slice(B[p*n+j+4:])
+				b0 := archsimd.BroadcastFloat64x4(A[r0+p])
+				b1 := archsimd.BroadcastFloat64x4(A[r1+p])
+				b2 := archsimd.BroadcastFloat64x4(A[r2+p])
+				b3 := archsimd.BroadcastFloat64x4(A[r3+p])
+				a0 = a0.Add(b0.Mul(lo))
+				a0h = a0h.Add(b0.Mul(hi))
+				a1 = a1.Add(b1.Mul(lo))
+				a1h = a1h.Add(b1.Mul(hi))
+				a2 = a2.Add(b2.Mul(lo))
+				a2h = a2h.Add(b2.Mul(hi))
+				a3 = a3.Add(b3.Mul(lo))
+				a3h = a3h.Add(b3.Mul(hi))
+			}
+			a0.StoreSlice(c0[j:])
+			a0h.StoreSlice(c0[j+4:])
+			a1.StoreSlice(c1[j:])
+			a1h.StoreSlice(c1[j+4:])
+			a2.StoreSlice(c2[j:])
+			a2h.StoreSlice(c2[j+4:])
+			a3.StoreSlice(c3[j:])
+			a3h.StoreSlice(c3[j+4:])
+		}
+		for ; j < nv; j += 4 { // 4-wide cleanup (n%8 in [4,7])
 			acc0 := archsimd.LoadFloat64x4Slice(c0[j:])
 			acc1 := archsimd.LoadFloat64x4Slice(c1[j:])
 			acc2 := archsimd.LoadFloat64x4Slice(c2[j:])
@@ -55,7 +92,7 @@ func gemmF64Band(A, B, C []float64, loRow, hiRow, k, n int) {
 			acc2.StoreSlice(c2[j:])
 			acc3.StoreSlice(c3[j:])
 		}
-		for ; j < n; j++ { // column tail
+		for ; j < n; j++ { // scalar column tail (n%4)
 			s0, s1, s2, s3 := c0[j], c1[j], c2[j], c3[j]
 			for p := 0; p < k; p++ {
 				bv := B[p*n+j]
