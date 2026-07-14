@@ -1754,7 +1754,8 @@ int mtl_recorder_binary(void* rec, void* ah, void* bh, void* oh, int n, int op) 
 // mtl_recorder_matmul encodes C = A·B (MPS, f32) over the device buffers ah, bh, ch into the
 // recorder's command buffer. C must be a distinct device buffer (MPS forbids aliasing result).
 // M×K · K×N → M×N, all row-major. No commit — intermediates stay device-resident (§T369).
-int mtl_recorder_matmul(void* rec, void* ah, void* bh, void* ch, int M, int K, int N) {
+int mtl_recorder_matmul(void* rec, void* ah, void* bh, void* ch, int M, int K, int N,
+                        int accumulate) {
     if (rec == NULL || ah == NULL || bh == NULL || ch == NULL) return -2;
     if (ensure_init() != 0) return -1;
     id<MTLCommandBuffer> cmd = (__bridge id<MTLCommandBuffer>)rec;
@@ -1767,9 +1768,11 @@ int mtl_recorder_matmul(void* rec, void* ah, void* bh, void* ch, int M, int K, i
     MPSMatrix* mA = [[MPSMatrix alloc] initWithBuffer:aBuf descriptor:aDesc];
     MPSMatrix* mB = [[MPSMatrix alloc] initWithBuffer:bBuf descriptor:bDesc];
     MPSMatrix* mC = [[MPSMatrix alloc] initWithBuffer:cBuf descriptor:cDesc];
+    // accumulate!=0: beta=1 turns the multiply into C += A·B — the residual-add
+    // epilogue (SPEC T613), one dispatch instead of matmul-then-elementwise-add.
     MPSMatrixMultiplication* mm = [[MPSMatrixMultiplication alloc]
         initWithDevice:gDevice transposeLeft:NO transposeRight:NO
-        resultRows:M resultColumns:N interiorColumns:K alpha:1.0 beta:0.0];
+        resultRows:M resultColumns:N interiorColumns:K alpha:1.0 beta:(accumulate != 0 ? 1.0 : 0.0)];
     [mm encodeToCommandBuffer:cmd leftMatrix:mA rightMatrix:mB resultMatrix:mC];
     return 0;
 }

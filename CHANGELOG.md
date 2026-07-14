@@ -4,6 +4,13 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T613 (slice 3) — residual-add matmul epilogues (2026-07-14)
+- The two projections whose results feed the transformer's residual stream (attention
+  output and FFN down) now add in place as part of the matrix multiplication itself
+  (Metal via MPS beta=1, Vulkan via an accumulate flag in the GEMM shader) — two
+  fewer dispatches per layer. Bench-model f32 decode: 319 → 333 tokens/second;
+  cumulative over the fusion arc: 270 → 333 (+23%).
+
 ### T613 (slice 2b) — fused QKV projection in the Llama decoder (2026-07-14)
 - The decoder now computes Q, K and V with ONE combined matrix multiplication per
   layer instead of three (the weights are joined at load time — for quantized

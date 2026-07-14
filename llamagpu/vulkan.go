@@ -29,6 +29,9 @@ func (v vRec) AddBias(x, b, o buffer, rows, n int) error {
 func (v vRec) MatMul(a, b, c buffer, m, k, n int) error {
 	return v.r.MatMul(vb(a), vb(b), vb(c), m, k, n)
 }
+func (v vRec) MatMulAcc(a, b, c buffer, m, k, n int) error {
+	return v.r.MatMulAcc(vb(a), vb(b), vb(c), m, k, n)
+}
 func (v vRec) RoPE(q, inv, o buffer, seq, width, heads, hd, half, pos int, posDiv float32) error {
 	return v.r.RoPE(vb(q), vb(inv), vb(o), seq, width, heads, hd, half, pos, posDiv)
 }

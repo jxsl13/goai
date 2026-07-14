@@ -551,7 +551,7 @@ int vk_matmul_f32(const uint32_t* spv, int spvLen,
     int up[3] = {1, 1, 0}, down[3] = {0, 0, 1};
     // {M,K,N,transA,transB} — a transposed operand is read transposed in the shader
     // (§T356) instead of materialized with a CPU strided-gather copy.
-    int32_t pc[5] = { M, K, N, transA, transB };
+    int32_t pc[6] = { M, K, N, transA, transB, 0 }; // acc=0: host path always overwrites (SPEC T613)
     // tiled GEMM: each 16×16 workgroup covers a 16×16 output tile (§T94; register
     // blocking gave no gain on MoltenVK, §B39).
     return vk_dispatch(spv, spvLen, 3, lens, data, up, down, pc, sizeof(pc),
@@ -1280,11 +1280,13 @@ int vk_recorder_binary(void* rec, const uint32_t* spv, int spvLen, void* ah, voi
 
 // vk_recorder_matmul records C = A·B (M×K · K×N → M×N) over device buffers via the tiled GEMM
 // shader (16×16 output tiles). Forward-only (no transpose — decode needs none). No submit.
-int vk_recorder_matmul(void* rec, const uint32_t* spv, int spvLen, void* ah, void* bh, void* ch, int M, int K, int N) {
+int vk_recorder_matmul(void* rec, const uint32_t* spv, int spvLen, void* ah, void* bh, void* ch, int M, int K, int N,
+                       int accumulate) {
     if (!rec || !ah || !bh || !ch || M < 1 || K < 1 || N < 1) return -2;
     DevBuf* a = (DevBuf*)ah; DevBuf* b = (DevBuf*)bh; DevBuf* c = (DevBuf*)ch;
     PipeCache* pc = NULL;
-    int32_t push[5] = { M, K, N, 0, 0 }; // {M,K,N,transA,transB}
+    // accumulate!=0: C += A·B — the residual-add epilogue (SPEC T613).
+    int32_t push[6] = { M, K, N, 0, 0, accumulate }; // {M,K,N,transA,transB,acc}
     pthread_mutex_lock(&gLock);
     int rc = -4;
     if (pipeline_for(spv, spvLen, 3, sizeof(push), &pc) == 0) {
@@ -1621,7 +1623,7 @@ int vk_conv2d_f32(const uint32_t* spvIm2col, int im2colLen,
         upload(mem[2], B, (size_t)bLen);
 
         ConvPC pc = { N, C, H, Wd, F, KH, KW, stride, pad, ho, wo };
-        int32_t mpc[5] = { F, rows, cols, 0, 0 }; // matmul push now {M,K,N,transA,transB} (§T356)
+        int32_t mpc[6] = { F, rows, cols, 0, 0, 0 }; // matmul push {M,K,N,transA,transB,acc} (SPEC T356, T613)
 
         // All three stages record into ONE command buffer with compute→compute
         // memory barriers ordering the writes (§T343) — one submit + one wait

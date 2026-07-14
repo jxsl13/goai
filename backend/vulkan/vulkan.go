@@ -1216,6 +1216,17 @@ func (r *Recorder) Binary(a, b, o *DeviceBuffer, op int) error {
 // MatMul records C = A·B (M×K · K×N → M×N) into the command buffer over device buffers.
 // Forward-only (no transpose). c must be distinct from a and b.
 func (r *Recorder) MatMul(a, b, c *DeviceBuffer, m, k, n int) error {
+	return r.matmulRec(a, b, c, m, k, n, 0)
+}
+
+// MatMulAcc records C += A·B — the residual-add epilogue (§T613): a projection whose result
+// feeds an elementwise add (the transformer residual stream) lands directly in the running
+// sum, saving the separate add dispatch. C must hold valid input values.
+func (r *Recorder) MatMulAcc(a, b, c *DeviceBuffer, m, k, n int) error {
+	return r.matmulRec(a, b, c, m, k, n, 1)
+}
+
+func (r *Recorder) matmulRec(a, b, c *DeviceBuffer, m, k, n, accumulate int) error {
 	// >= not ==: operands may be over-allocated scratch (§T418 StepN); the kernel reads/writes
 	// only the leading m*k/k*n/m*n elements.
 	if a.n < m*k || b.n < k*n || c.n < m*n {
@@ -1223,7 +1234,7 @@ func (r *Recorder) MatMul(a, b, c *DeviceBuffer, m, k, n int) error {
 	}
 	rc := C.vk_recorder_matmul(r.handle,
 		(*C.uint32_t)(unsafe.Pointer(&spirv[0])), C.int(len(spirv)),
-		a.handle, b.handle, c.handle, C.int(m), C.int(k), C.int(n))
+		a.handle, b.handle, c.handle, C.int(m), C.int(k), C.int(n), C.int(accumulate))
 	if rc != 0 {
 		return fmt.Errorf("vulkan: Recorder matmul failed (%d)", int(rc))
 	}

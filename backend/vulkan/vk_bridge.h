@@ -183,7 +183,8 @@ void vk_devbuf_free(void* handle);
 void* vk_recorder_begin(void);
 int vk_recorder_unary(void* rec, const uint32_t* spv, int spvLen, void* xh, void* oh, int n, int op);
 int vk_recorder_binary(void* rec, const uint32_t* spv, int spvLen, void* ah, void* bh, void* oh, int n, int op);
-int vk_recorder_matmul(void* rec, const uint32_t* spv, int spvLen, void* ah, void* bh, void* ch, int M, int K, int N);
+int vk_recorder_matmul(void* rec, const uint32_t* spv, int spvLen, void* ah, void* bh, void* ch, int M, int K, int N,
+                       int accumulate);
 int vk_recorder_rmsnorm(void* rec, const uint32_t* spv, int spvLen, void* xh, void* gh, void* oh, int rows, int dim, float eps);
 int vk_recorder_layernorm(void* rec, const uint32_t* spv, int spvLen, void* xh, void* gh, void* bh, void* oh, int rows, int dim, float eps);
 int vk_recorder_addbias(void* rec, const uint32_t* spv, int spvLen, void* xh, void* bh, void* oh, int rows, int n);

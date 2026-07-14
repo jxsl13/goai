@@ -18,12 +18,12 @@ layout(local_size_x = TS, local_size_y = TS, local_size_z = 1) in;
 
 layout(std430, binding = 0) readonly buffer BufA { float a[]; };
 layout(std430, binding = 1) readonly buffer BufB { float b[]; };
-layout(std430, binding = 2) writeonly buffer BufC { float c[]; };
+layout(std430, binding = 2) buffer BufC { float c[]; }; // read-write: acc epilogue (SPEC T613)
 
 // transA/transB (§T356): when set, A is STORED [K,M] and B is STORED [N,K] — the operand
 // is a transposed view (matmul backward's dO·Wᵀ / Xᵀ·dO), read transposed here instead of
 // materialized with a CPU strided-gather copy. Conv's im2col GEMM passes 0/0.
-layout(push_constant) uniform Dims { int M; int K; int N; int transA; int transB; } d;
+layout(push_constant) uniform Dims { int M; int K; int N; int transA; int transB; int acc; } d;
 
 shared float As[TS][TS];
 shared float Bs[TS][TS];
@@ -58,6 +58,9 @@ void main() {
         barrier(); // all reads done before the next tile overwrites shared memory
     }
     if (row < uint(d.M) && col < uint(d.N)) {
-        c[row * uint(d.N) + col] = sum;
+        // acc!=0: C += A·B (residual-add epilogue, SPEC T613) — one dispatch instead of
+        // matmul-then-elementwise-add; acc==0 keeps the plain overwrite.
+        uint ci = row * uint(d.N) + col;
+        c[ci] = (d.acc != 0 ? c[ci] : 0.0) + sum;
     }
 }

@@ -67,6 +67,10 @@ type qweight interface {
 // f32 and the quantized model (§T415).
 type linear interface {
 	record(r recorder, x, o buffer, m int) error
+	// recordAdd records dst += x·W (the residual-add epilogue, §T613). The f32 weight fuses
+	// the add into the matmul (one dispatch); the quantized weight has no accumulate path,
+	// so it multiplies into scratch and adds — the pre-fusion two-dispatch shape.
+	recordAdd(r recorder, x, scratch, dst buffer, m int) error
 }
 
 type f32Linear struct {
@@ -78,10 +82,21 @@ func (l f32Linear) record(r recorder, x, o buffer, m int) error {
 	return r.MatMul(x, l.w, o, m, l.k, l.n)
 }
 
+func (l f32Linear) recordAdd(r recorder, x, _, dst buffer, m int) error {
+	return r.MatMulAcc(x, l.w, dst, m, l.k, l.n)
+}
+
 type quantLinear struct{ w qweight }
 
 func (l quantLinear) record(r recorder, x, o buffer, m int) error {
 	return r.QMatMulResident(x, l.w, o, m)
+}
+
+func (l quantLinear) recordAdd(r recorder, x, scratch, dst buffer, m int) error {
+	return firstErr(
+		r.QMatMulResident(x, l.w, scratch, m),
+		r.Binary(dst, scratch, dst, binaryAdd),
+	)
 }
 
 // recorder is one open batched command buffer (metal.Recorder / vulkan.Recorder); the adapter
@@ -91,6 +106,9 @@ type recorder interface {
 	LayerNorm(x, g, b, o buffer, rows, dim int, eps float32) error
 	AddBias(x, b, o buffer, rows, n int) error
 	MatMul(a, b, c buffer, m, k, n int) error
+	// MatMulAcc records c += a·b — the residual-add epilogue (§T613): the projection lands
+	// directly in the running residual stream, saving the separate elementwise-add dispatch.
+	MatMulAcc(a, b, c buffer, m, k, n int) error
 	RoPE(q, inv, o buffer, seq, width, heads, hd, half, pos int, posDiv float32) error
 	// RoPEAt rotates a sub-row view living at float-element offset `off` inside a wider
 	// buffer — the q/k bands of a fused QKV projection output (§T613). width acts as the
@@ -374,14 +392,12 @@ func (d *Decoder) Step(token, pos int) ([]float32, error) {
 		e = firstErr(
 			e,
 			r.MHA(qBuf, b.kC, b.vC, d.attn.b, 1, pos+1, D, H, KVH, dk, 1, 0, d.scale),
-			b.wo.record(r, d.attn.b, d.ao.b, 1),
-			r.Binary(d.dx.b, d.ao.b, d.dx.b, binaryAdd),
+			b.wo.recordAdd(r, d.attn.b, d.ao.b, d.dx.b, 1), // dx += attn·Wo (fused epilogue, §T613)
 			r.RMSNorm(d.dx.b, b.gFFN, d.xn2.b, 1, D, d.eps),
 			b.wG.record(r, d.xn2.b, d.gate.b, 1),
 			b.wU.record(r, d.xn2.b, d.up.b, 1),
 			r.Binary(d.gate.b, d.up.b, d.gate.b, binarySwiGLU),
-			b.wD.record(r, d.gate.b, d.mo.b, 1),
-			r.Binary(d.dx.b, d.mo.b, d.dx.b, binaryAdd),
+			b.wD.recordAdd(r, d.gate.b, d.mo.b, d.dx.b, 1), // dx += swiglu·Wdown (fused epilogue)
 		)
 		if e != nil {
 			r.Free()
@@ -465,14 +481,12 @@ func (d *Decoder) StepN(tokens []int, pos int) ([]float32, error) {
 			// sq=k vs sk=pos+k: the kernel's causal offset (sk-sq = pos) makes row i attend
 			// through absolute position pos+i — exactly the prefill/verify semantics.
 			r.MHA(d.q.b, b.kC, b.vC, d.attn.b, k, pos+k, D, H, KVH, dk, 1, 0, d.scale),
-			b.wo.record(r, d.attn.b, d.ao.b, k),
-			r.Binary(d.dx.b, d.ao.b, d.dx.b, binaryAdd),
+			b.wo.recordAdd(r, d.attn.b, d.ao.b, d.dx.b, k), // dx += attn·Wo (fused epilogue, §T613)
 			r.RMSNorm(d.dx.b, b.gFFN, d.xn2.b, k, D, d.eps),
 			b.wG.record(r, d.xn2.b, d.gate.b, k),
 			b.wU.record(r, d.xn2.b, d.up.b, k),
 			r.Binary(d.gate.b, d.up.b, d.gate.b, binarySwiGLU),
-			b.wD.record(r, d.gate.b, d.mo.b, k),
-			r.Binary(d.dx.b, d.mo.b, d.dx.b, binaryAdd),
+			b.wD.recordAdd(r, d.gate.b, d.mo.b, d.dx.b, k), // dx += swiglu·Wdown (fused epilogue)
 		)
 		if e != nil {
 			r.Free()

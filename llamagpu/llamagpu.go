@@ -32,6 +32,9 @@ func (m mRec) AddBias(x, bb, o buffer, rows, n int) error {
 func (m mRec) MatMul(a, b, c buffer, mm, k, n int) error {
 	return m.r.MatMul(mb(a), mb(b), mb(c), mm, k, n)
 }
+func (m mRec) MatMulAcc(a, b, c buffer, mm, k, n int) error {
+	return m.r.MatMulAcc(mb(a), mb(b), mb(c), mm, k, n)
+}
 func (m mRec) RoPE(q, inv, o buffer, seq, width, heads, hd, half, pos int, posDiv float32) error {
 	return m.r.RoPE(mb(q), mb(inv), mb(o), seq, width, heads, hd, half, pos, posDiv)
 }
