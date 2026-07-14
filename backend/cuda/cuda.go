@@ -319,6 +319,22 @@ func (d *DeviceF32) Mul(other *DeviceF32) error {
 	return nil
 }
 
+// SwiGLU fuses the gated-FFN nonlinearity in-place: d = SiLU(d) ⊙ up (this
+// activation is the gate). One kernel/one memory pass instead of SiLU then Mul.
+// up must have the same shape and is unchanged. Matches SiLU-then-Mul to f32.
+func (d *DeviceF32) SwiGLU(up *DeviceF32) error {
+	if d.ptr == nil || up.ptr == nil {
+		return fmt.Errorf("cuda: SwiGLU on a freed handle")
+	}
+	if d.rows != up.rows || d.cols != up.cols {
+		return fmt.Errorf("cuda: SwiGLU shape mismatch [%d,%d] vs [%d,%d]", d.rows, d.cols, up.rows, up.cols)
+	}
+	if rc := C.cu_swiglu_f32(d.ptr, up.ptr, C.int(d.rows*d.cols)); rc != 0 {
+		return fmt.Errorf("cuda: swiglu failed (code %d)", int(rc))
+	}
+	return nil
+}
+
 // RMSNorm applies RMSNorm (y = x/√(mean(x²)+eps)·gamma) in-place, row-wise over
 // the last axis, on the GPU — the pre-block norm of a Llama-style transformer,
 // kept device-resident. gamma is a resident [cols] weight; eps ≤ 0 uses 1e-5
