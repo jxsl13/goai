@@ -87,11 +87,28 @@ type grpoConfig struct {
 // GRPOOption configures GRPOLoss.
 type GRPOOption func(*grpoConfig)
 
-// WithClipEpsilon sets the PPO probability-ratio clip range ε (default 0.2).
+// WithClipEpsilon sets the PPO-style probability-ratio clip range ε.
+//
+// In plain terms: GRPO won't trust a policy update that changed a token's probability by more
+// than a factor of roughly 1±ε in one step — it clips the update back to stay stable. ε is how
+// much change is allowed. Boundary behavior — ε→0 clips almost everything (over-conservative,
+// slow); large ε removes the guardrail and lets destabilizing jumps through. This is a
+// PER-TOKEN ratio (contrast GSPO's tiny sequence-level ε, which lives on a different scale).
+//
+// Default 0.2 (research-grounded: the PPO/GRPO reference clip range, Shao et al. 2024 §R95,
+// inherited from PPO — Schulman et al. 2017).
 func WithClipEpsilon(eps float64) GRPOOption { return func(c *grpoConfig) { c.epsilon = eps } }
 
-// WithKLBeta sets the k3 KL-to-reference penalty weight β (default 0.04; set 0 to
-// disable the KL term, as in some DeepSeek-R1-style runs).
+// WithKLBeta sets β, the weight of the KL-to-reference penalty (the k3 estimator) that keeps
+// the trained policy from drifting too far from the reference model.
+//
+// In plain terms: a leash — β controls how strongly the policy is pulled back toward the
+// original model, trading reward-chasing against staying sensible. Boundary behavior — larger β
+// keeps the policy very close to the reference (safe but limits how much it can improve); as
+// β→0 the leash loosens. SPECIAL VALUE: 0 disables the KL term entirely, as in some
+// DeepSeek-R1-style runs that rely on clipping alone.
+//
+// Default 0.04 (research-grounded: the GRPO reference KL weight, Shao et al. 2024 §R95).
 func WithKLBeta(beta float64) GRPOOption { return func(c *grpoConfig) { c.beta = beta } }
 
 // GRPOLoss is the Group Relative Policy Optimization loss (Shao et al. 2024,

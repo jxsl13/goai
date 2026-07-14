@@ -28,7 +28,16 @@ type Lookahead struct {
 // LookaheadOption configures a Lookahead optimizer (functional-options idiom, §C12).
 type LookaheadOption func(*Lookahead)
 
-// WithLookaheadK sets the synchronization period k (default 5).
+// WithLookaheadK sets the synchronization period k — how many fast (base-optimizer) steps run
+// between each slow-weight update.
+//
+// In plain terms: Lookahead keeps a second, slow set of weights that it snaps toward the fast
+// weights every k steps; this smooths out the fast optimizer's noise. k is how often that snap
+// happens. Boundary behavior — k=1 syncs every step (little smoothing, near the base
+// optimizer); large k lets the fast weights wander far before each correction, which can
+// destabilize. SPECIAL VALUE: k ≤ 0 is ignored (keeps the current value).
+//
+// Default 5 (research-grounded: the Lookahead paper's reference k, Zhang et al. 2019, §R98).
 func WithLookaheadK(k int) LookaheadOption {
 	return func(l *Lookahead) {
 		if k > 0 {
@@ -37,7 +46,15 @@ func WithLookaheadK(k int) LookaheadOption {
 	}
 }
 
-// WithLookaheadAlpha sets the slow-weight interpolation factor α (default 0.5).
+// WithLookaheadAlpha sets α, how far the slow weights move toward the fast weights at each
+// synchronization.
+//
+// In plain terms: at each sync, the slow weights interpolate a fraction α of the way to the
+// fast weights. Boundary behavior — α→0 barely moves the slow weights (very conservative,
+// slow to follow progress); α=1 snaps them fully onto the fast weights (no smoothing, Lookahead
+// has no effect). 0.5 sits in the middle.
+//
+// Default 0.5 (research-grounded: the Lookahead paper's reference α, Zhang et al. 2019, §R98).
 func WithLookaheadAlpha(a float64) LookaheadOption {
 	return func(l *Lookahead) { l.Alpha = a }
 }

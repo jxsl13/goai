@@ -34,10 +34,24 @@ type SAM struct {
 // SAMOption configures a SAM wrapper (functional-options idiom, §C12).
 type SAMOption func(*SAM)
 
-// WithSAMRho sets the neighborhood radius ρ (default 0.05).
+// WithSAMRho sets the neighborhood radius ρ — how far SAM steps "uphill" to probe the
+// sharpness of the loss before taking its real step.
+//
+// In plain terms: SAM looks for FLAT minima (which generalize better) by first nudging the
+// weights toward the worst nearby point within radius ρ, measuring the gradient there, and
+// stepping with that. ρ is the size of that probe. Boundary behavior — ρ→0 reduces SAM to the
+// base optimizer (no sharpness probing); too large probes a point so far away its gradient no
+// longer reflects the local geometry, hurting training.
+//
+// Default 0.05 (research-grounded: the SAM paper's reference ρ, Foret et al. 2021, §R110).
 func WithSAMRho(rho float64) SAMOption { return func(s *SAM) { s.Rho = rho } }
 
-// WithSAMEps sets the perturbation denominator epsilon (default 1e-12).
+// WithSAMEps sets the epsilon in the denominator that normalizes SAM's perturbation direction.
+//
+// In plain terms: a tiny floor so the "which way is uphill" step is well-defined even when the
+// gradient norm is near zero. Boundary behavior — too small risks an unstable perturbation on
+// near-flat regions; larger ε slightly shrinks the probe. Default 1e-12 (research-grounded:
+// the SAM reference perturbation epsilon, §R110).
 func WithSAMEps(eps float64) SAMOption { return func(s *SAM) { s.Eps = eps } }
 
 // NewSAM wraps base with Sharpness-Aware Minimization over params (which must be the same tensors

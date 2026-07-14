@@ -30,10 +30,25 @@ type Grokfast struct {
 // GrokfastOption configures a Grokfast optimizer (functional-options idiom, §C12).
 type GrokfastOption func(*Grokfast)
 
-// WithGrokfastLambda sets the slow-gradient amplification λ (default 2.0; 0 = off).
+// WithGrokfastLambda sets λ, how strongly the slow (low-frequency) gradient component is
+// amplified before the base optimizer sees it.
+//
+// In plain terms: Grokfast speeds up "grokking" (the delayed jump to generalization) by
+// boosting the slowly-changing part of the gradient; λ is the size of that boost. This is the
+// EMA variant (a running average, cheaper than the moving-window GrokfastMA). Boundary behavior
+// — λ=0 disables the filter (base optimizer runs unmodified); large λ over-weights the slow
+// component and can destabilize training. SPECIAL VALUE: 0 = off.
+//
+// Default 2.0 (research-grounded: the Grokfast-EMA reference λ, §R153 — smaller than the
+// moving-average variant's 5.0 because the EMA weights the slow component differently).
 func WithGrokfastLambda(l float64) GrokfastOption { return func(g *Grokfast) { g.Lambda = l } }
 
-// WithGrokfastAlpha sets the EMA momentum α (default 0.98).
+// WithGrokfastAlpha sets α, the EMA decay that defines the "slow" gradient component.
+//
+// In plain terms: how much history the running average keeps — closer to 1 means a longer
+// memory and a slower-moving trend. Boundary behavior — α→0 makes the "slow" component track
+// the raw gradient (no separation, filter does nothing useful); α→1 remembers almost forever
+// and reacts very slowly. Default 0.98 (research-grounded: the Grokfast-EMA reference α, §R153).
 func WithGrokfastAlpha(a float64) GrokfastOption { return func(g *Grokfast) { g.Alpha = a } }
 
 // NewGrokfast wraps base (which optimizes params) with the Grokfast-EMA filter. params
