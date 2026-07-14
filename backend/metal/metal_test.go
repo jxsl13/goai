@@ -672,6 +672,94 @@ func BenchmarkConv2D_8x64x56x56_metal_im2col(b *testing.B) {
 	benchConv2DOn(b, backend.Metal, 8, 64, 56, 64, 3)
 }
 
+// convLayer is one distinct conv shape in a simulated multi-layer CNN forward pass.
+type convLayer struct{ n, c, hw, f, k int }
+
+// cnnShapes mimics a small multi-layer CNN: each layer is a DISTINCT conv shape, so a
+// last-shape cache (cap==1) misses on every layer while a shape-keyed cache (cap≥len)
+// keeps them all resident. Five shapes < CONV_CACHE_CAP(16), so all fit at full cap.
+var cnnShapes = []convLayer{
+	{8, 3, 32, 16, 3},
+	{8, 16, 32, 32, 3},
+	{8, 32, 16, 64, 3},
+	{8, 64, 16, 64, 3},
+	{8, 64, 8, 128, 3},
+}
+
+// benchConv2DMultiShape cycles the whole cnnShapes set once per b.N (one CNN forward
+// pass), all on the MPSGraph conv path. cacheCap sets the effective §T622 cache cap:
+// cap==1 reproduces the OLD last-shape cache (recompile every layer), cap>=len(shapes)
+// is the shape-keyed cache (build each shape once, then pure feed+run). Same code path,
+// one knob → the RELATIVE delta isolates recompile cost (§B55 depresses absolutes ~2×).
+func benchConv2DMultiShape(b *testing.B, cacheCap int) {
+	be, ok := backend.Get(backend.Metal)
+	if !ok {
+		b.Skip("metal not available")
+	}
+	defer metal.SetConvUseMPS(metal.SetConvUseMPS(true))
+	defer metal.SetConvCacheCap(metal.SetConvCacheCap(cacheCap))
+	ctx := backend.NewContext().WithBackend(be)
+	attrs := backend.ConvAttrs{Stride: 1, Pad: 1}
+	type prepared struct{ ins []*tensor.Tensor }
+	layers := make([]prepared, len(cnnShapes))
+	for i, s := range cnnShapes {
+		x := bench.RandF32(tensor.Shape{s.n, s.c, s.hw, s.hw}, uint64(i*2+1))
+		w := bench.RandF32(tensor.Shape{s.f, s.c, s.k, s.k}, uint64(i*2+2))
+		layers[i] = prepared{ins: []*tensor.Tensor{x, w}}
+	}
+	b.ResetTimer()
+	for range b.N {
+		for i := range layers {
+			if _, err := backend.Execute(ctx, backend.OpConv2D, layers[i].ins, attrs); err != nil {
+				b.Fatal(err)
+			}
+		}
+	}
+}
+
+// §T622 A/B: the KEY PROOF. Same multi-shape CNN forward pass, two cache caps.
+//   _lastshape (cap=1): pre-§T622 behavior — every layer evicts the previous graph → recompile.
+//   _shapekeyed (cap=16): all layer graphs stay resident → no recompile after warm-up.
+// Interleave-run the two; shape-keyed should be dramatically faster.
+func BenchmarkConv2DMultiShape_lastshape_metal(b *testing.B)  { benchConv2DMultiShape(b, 1) }
+func BenchmarkConv2DMultiShape_shapekeyed_metal(b *testing.B) { benchConv2DMultiShape(b, 16) }
+
+// benchMHAMultiLenPrefill cycles several DISTINCT prefill lengths per b.N on the MPSGraph
+// attention path (§T621), mimicking variable-length prompts. cacheCap==1 is the old last-shape
+// cache (recompile per length); cacheCap>=len is shape-keyed (each length built once).
+func benchMHAMultiLenPrefill(b *testing.B, cacheCap int) {
+	be, ok := backend.Get(backend.Metal)
+	if !ok {
+		b.Skip("metal not available")
+	}
+	defer metal.SetMHAUseMPSGraph(metal.SetMHAUseMPSGraph(true))
+	defer metal.SetAttnCacheCap(metal.SetAttnCacheCap(cacheCap))
+	const heads, dk = 8, 64
+	dm := heads * dk
+	seqs := []int{128, 192, 256, 320, 384}
+	ctx := backend.NewContext().WithBackend(be)
+	attrs := backend.AttnAttrs{Heads: heads, Causal: true}
+	ins := make([][]*tensor.Tensor, len(seqs))
+	for i, seq := range seqs {
+		q := bench.RandF32(tensor.Shape{seq, dm}, uint64(i*3+1))
+		k := bench.RandF32(tensor.Shape{seq, dm}, uint64(i*3+2))
+		v := bench.RandF32(tensor.Shape{seq, dm}, uint64(i*3+3))
+		ins[i] = []*tensor.Tensor{q, k, v}
+	}
+	b.ResetTimer()
+	for range b.N {
+		for i := range ins {
+			if _, err := backend.Execute(ctx, backend.OpMHA, ins[i], attrs); err != nil {
+				b.Fatal(err)
+			}
+		}
+	}
+}
+
+// §T622 A/B: variable-length prefill (the §T621 recompile caveat). Same lengths, two caps.
+func BenchmarkMHAMultiLen_lastshape_metal(b *testing.B)  { benchMHAMultiLenPrefill(b, 1) }
+func BenchmarkMHAMultiLen_shapekeyed_metal(b *testing.B) { benchMHAMultiLenPrefill(b, 16) }
+
 // TestMetalRetentionCrossReference V-CROSSes the GPU RetNet retention forward against the f64 CPU
 // reference OpRetention over several sequence lengths, head dims and decay rates (§T172). Both
 // compute the parallel form (QKᵀ⊙D)V; only the accumulation precision/order differs, so they agree

@@ -1345,6 +1345,17 @@ func conv2dF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) (
 // a fallback and for same-machine A/B measurement (metal_test.go toggles this).
 var convUseMPS = true
 
+// SetConvCacheCap sets the effective shape-keyed conv-graph cache cap (§T622), clears all
+// resident graphs, and returns the previous cap. cap is clamped to [1,16]; cap==1 reproduces
+// the pre-§T622 single last-shape cache (recompile per shape). Benchmark/A-B knob (see the
+// Conv2DMultiShape benchmarks) — not part of the stable op surface.
+func SetConvCacheCap(cap int) int { return int(C.mtl_conv_cache_cap_set(C.int(cap))) }
+
+// SetAttnCacheCap sets the effective shape-keyed attention-graph cache cap (§T622), clears all
+// resident graphs, and returns the previous cap. cap is clamped to [1,16]; cap==1 reproduces the
+// pre-§T622 single last-shape cache (recompile per prefill length). Benchmark/A-B knob.
+func SetAttnCacheCap(cap int) int { return int(C.mtl_attn_cache_cap_set(C.int(cap))) }
+
 // mhaBackwardF32 is the GPU SDPA backward (§T86): (Q,K,V,dO) → (dQ,dK,dV). It
 // serves the same subset as the forward (heads, GQA, causal, sliding window §T128,
 // attn-scale) and falls back to the reference (§I4) for ALiBi/dk>128/degenerate

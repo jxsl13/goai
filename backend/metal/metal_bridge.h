@@ -244,6 +244,11 @@ int mtl_mha_mps(const float* Q, const float* K, const float* V, float* O,
 int mtl_mha_mpsgraph(const float* Q, const float* K, const float* V, float* O,
                      int seq, int dm, int heads, int dk, int causal, int kvHeads, float scale);
 
+// mtl_attn_cache_cap_set (§T622) sets the effective MPSGraph attention cache cap (clamped to
+// [1,16]), clears all resident graphs, and returns the previous cap. cap==1 reproduces the old
+// single last-shape cache (per-length recompile) for the variable-length prefill A/B. Test-only.
+int mtl_attn_cache_cap_set(int cap);
+
 // mtl_mha_decode_host (§T432): cooperative decode/prefill attention over host slices — the per-op
 // path's route onto the §T428/431 kernel (the two-pass kernel is ~serial in sk at small sq).
 int mtl_mha_decode_host(const float* Q, const float* K, const float* V, float* O,
@@ -283,6 +288,11 @@ int mtl_conv2d_f32(const float* X, const float* W, const float* B, float* Out,
 int mtl_conv2d_mps_f32(const float* X, const float* W, const float* B, float* Out,
                        int N, int C, int H, int Wd, int F, int KH, int KW,
                        int stride, int pad, int ho, int wo);
+
+// mtl_conv_cache_cap_set (§T622) sets the effective MPSGraph conv cache cap (clamped to [1,16]),
+// clears all resident graphs, and returns the previous cap. cap==1 reproduces the old single
+// last-shape cache (per-call recompile for a multi-shape CNN) for the A/B benchmark. Test-only.
+int mtl_conv_cache_cap_set(int cap);
 
 // mtl_conv2d_backward_f32 is the conv2d backward: (X,W,dO) → (dX,dW,dBias). One
 // thread per output-gradient element (n,f,oy,ox) scatters into the shared dX/dW/dBias

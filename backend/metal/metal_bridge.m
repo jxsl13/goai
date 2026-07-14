@@ -3145,20 +3145,47 @@ int mtl_mha_mps(const float* Q, const float* K, const float* V, float* O,
 //   Q[seq,dm] -> [kvHeads,rep,seq,dk];  K,V[seq,kvDim] -> [kvHeads,rep,seq,dk] (rep broadcast)
 //   S = scale·Q·Kᵀ  (+ baked causal −∞ mask)  ->  P = softmax_lastaxis(S)  ->  O = P·V  -> [seq,dm]
 // The graph + its placeholders are cached by (seq,kvHeads,rep,dk,causal); the causal mask is baked
-// in as a graph constant. Manual matmul/softmax graph (macOS 12.3+) — NOT the macOS-15
-// scaledDotProductAttention primitive — so it runs on this OS. A/B toggle only (SetMHAUseMPSGraph).
+// in as a graph constant. §T622: SHAPE-KEYED bounded cache (FIFO evict at ATTN_CACHE_CAP) so
+// variable-length prefill (each prompt length is a distinct seq) keeps recently-seen lengths
+// resident instead of recompiling ≈15-30ms per length (the prior cache held the LAST shape only).
+// Manual matmul/softmax graph (macOS 12.3+) — NOT the macOS-15 scaledDotProductAttention
+// primitive — so it runs on this OS. A/B toggle only (SetMHAUseMPSGraph).
 #import <MetalPerformanceShadersGraph/MetalPerformanceShadersGraph.h>
 
-static MPSGraph* gAttnGraph = nil;
-static MPSGraphTensor* gAttnQ = nil;
-static MPSGraphTensor* gAttnK = nil;
-static MPSGraphTensor* gAttnV = nil;
-static MPSGraphTensor* gAttnO = nil;
-static int gAttnSig[5] = {-1,-1,-1,-1,-1}; // seq, kvHeads, rep, dk, causal
+#define ATTN_CACHE_CAP 16
+static MPSGraph*       gAttnGraphs[ATTN_CACHE_CAP] = {nil};
+static MPSGraphTensor* gAttnQs[ATTN_CACHE_CAP] = {nil};
+static MPSGraphTensor* gAttnKs[ATTN_CACHE_CAP] = {nil};
+static MPSGraphTensor* gAttnVs[ATTN_CACHE_CAP] = {nil};
+static MPSGraphTensor* gAttnOs[ATTN_CACHE_CAP] = {nil};
+static int gAttnSigs[ATTN_CACHE_CAP][5]; // seq, kvHeads, rep, dk, causal
+static int gAttnValid[ATTN_CACHE_CAP] = {0};
+static int gAttnNext = 0; // FIFO insertion cursor
+static int gAttnCacheCap = ATTN_CACHE_CAP; // effective cap (§T622 A/B: 1 == old last-shape cache)
 
+// mtl_attn_cache_cap_set clamps the effective attention-graph cache cap to [1,ATTN_CACHE_CAP],
+// clears all resident graphs (ARC releases them), resets the FIFO cursor, and returns the previous
+// cap. cap==1 reproduces the pre-§T622 single last-shape cache for variable-length prefill A/B.
+int mtl_attn_cache_cap_set(int cap) {
+    int prev = gAttnCacheCap;
+    if (cap < 1) cap = 1;
+    if (cap > ATTN_CACHE_CAP) cap = ATTN_CACHE_CAP;
+    for (int i = 0; i < ATTN_CACHE_CAP; i++) {
+        gAttnGraphs[i] = nil; gAttnQs[i] = nil; gAttnKs[i] = nil;
+        gAttnVs[i] = nil; gAttnOs[i] = nil; gAttnValid[i] = 0;
+    }
+    gAttnNext = 0;
+    gAttnCacheCap = cap;
+    return prev;
+}
+
+// ensure_attn_graph returns the cache slot index for the given signature (building
+// & storing on miss), or -20 on failure. Object-pointer statics are __strong under
+// ARC: slot assignment retains the new graph/tensors and releases evicted ones.
 static int ensure_attn_graph(int seq, int kvHeads, int rep, int dk, int causal) {
-    if (gAttnGraph != nil && gAttnSig[0]==seq && gAttnSig[1]==kvHeads &&
-        gAttnSig[2]==rep && gAttnSig[3]==dk && gAttnSig[4]==causal) return 0;
+    int sig[5] = {seq, kvHeads, rep, dk, causal};
+    for (int i = 0; i < gAttnCacheCap; i++)
+        if (gAttnValid[i] && memcmp(sig, gAttnSigs[i], sizeof(sig)) == 0) return i;
     @autoreleasepool {
         int heads = kvHeads * rep;
         int dm = heads * dk;
@@ -3204,11 +3231,15 @@ static int ensure_attn_graph(int seq, int kvHeads, int rep, int dk, int causal) 
         MPSGraphTensor* Ot = [g transposeTensor:O4 permutation:@[@2,@0,@1,@3] name:nil]; // [seq,kvHeads,rep,dk]
         MPSGraphTensor* O  = [g reshapeTensor:Ot withShape:@[@(seq), @(dm)] name:nil];
 
-        gAttnGraph = g;
-        gAttnQ = Q; gAttnK = K; gAttnV = V; gAttnO = O;
-        gAttnSig[0]=seq; gAttnSig[1]=kvHeads; gAttnSig[2]=rep; gAttnSig[3]=dk; gAttnSig[4]=causal;
+        int slot = gAttnNext;                 // FIFO: overwrite oldest at cap.
+        gAttnGraphs[slot] = g;                 // ARC __strong: retains g, releases
+        gAttnQs[slot] = Q; gAttnKs[slot] = K;  // any prior occupant of the slot.
+        gAttnVs[slot] = V; gAttnOs[slot] = O;
+        memcpy(gAttnSigs[slot], sig, sizeof(sig));
+        gAttnValid[slot] = 1;
+        gAttnNext = (slot + 1) % gAttnCacheCap;
+        return g != nil ? slot : -20;
     }
-    return gAttnGraph != nil ? 0 : -20;
 }
 
 int mtl_mha_mpsgraph(const float* Q, const float* K, const float* V, float* O,
@@ -3224,7 +3255,8 @@ int mtl_mha_mpsgraph(const float* Q, const float* K, const float* V, float* O,
         if (Qs == NULL) return -2;
         for (size_t i = 0; i < qN; i++) Qs[i] = Q[i] * scale;
 
-        if (ensure_attn_graph(seq, kvHeads, rep, dk, causal) != 0) { free(Qs); return -20; }
+        int slot = ensure_attn_graph(seq, kvHeads, rep, dk, causal);
+        if (slot < 0) { free(Qs); return -20; }
 
         id<MTLBuffer> qb = [gDevice newBufferWithBytes:Qs length:qN*sizeof(float) options:MTLResourceStorageModeShared];
         id<MTLBuffer> kb = [gDevice newBufferWithBytes:K  length:kvN*sizeof(float) options:MTLResourceStorageModeShared];
@@ -3238,9 +3270,9 @@ int mtl_mha_mpsgraph(const float* Q, const float* K, const float* V, float* O,
         MPSGraphTensorData* vd = [[MPSGraphTensorData alloc] initWithMTLBuffer:vb shape:@[@(seq), @(kvDim)] dataType:MPSDataTypeFloat32];
         MPSGraphTensorData* od = [[MPSGraphTensorData alloc] initWithMTLBuffer:ob shape:@[@(seq), @(dm)]    dataType:MPSDataTypeFloat32];
 
-        NSDictionary* feeds = @{gAttnQ:qd, gAttnK:kd, gAttnV:vd};
-        NSDictionary* results = @{gAttnO:od};
-        [gAttnGraph runWithMTLCommandQueue:gQueue feeds:feeds targetOperations:nil resultsDictionary:results];
+        NSDictionary* feeds = @{gAttnQs[slot]:qd, gAttnKs[slot]:kd, gAttnVs[slot]:vd};
+        NSDictionary* results = @{gAttnOs[slot]:od};
+        [gAttnGraphs[slot] runWithMTLCommandQueue:gQueue feeds:feeds targetOperations:nil resultsDictionary:results];
 
         memcpy(O, ob.contents, qN*sizeof(float));
         return 0;
@@ -3808,21 +3840,47 @@ int mtl_conv2d_f32(const float* X, const float* W, const float* B, float* Out,
 // internally by MPS, matching what torch-mps calls. NCHW source, OIHW weights
 // ([F,C,KH,KW], exactly our W layout), cross-correlation (like every DL conv),
 // explicit padding so ho/wo match the im2col path. Per-filter bias is folded in
-// as a [1,F,1,1] broadcast add. The graph (placeholders + compiled kernel) is
-// cached for the LAST shape, so an inference/training loop reusing one conv shape
-// pays the build+compile once — subsequent calls only feed buffers and run.
-static MPSGraph*       gConvGraph = nil;
-static MPSGraphTensor* gConvSrc   = nil;
-static MPSGraphTensor* gConvWt    = nil;
-static MPSGraphTensor* gConvBias  = nil;
-static MPSGraphTensor* gConvOut   = nil;
-static int gConvKey[11] = {0};
-static int gConvKeySet  = 0;
+// as a [1,F,1,1] broadcast add. §T622: the graph (placeholders + compiled kernel)
+// is cached in a SHAPE-KEYED bounded cache (FIFO evict at CONV_CACHE_CAP), so a
+// multi-layer CNN cycling several conv shapes keeps every layer's graph resident
+// and pays build+compile once per distinct shape — not once per call. (The prior
+// single last-shape cache missed on every layer of such a workload → per-call
+// recompile ≈15-30ms.) Object-pointer statics are __strong under ARC, so slot
+// assignment retains the new graph/tensors and releases the evicted ones.
+#define CONV_CACHE_CAP 16
+static MPSGraph*       gConvGraphs[CONV_CACHE_CAP] = {nil};
+static MPSGraphTensor* gConvSrcs[CONV_CACHE_CAP]   = {nil};
+static MPSGraphTensor* gConvWts[CONV_CACHE_CAP]    = {nil};
+static MPSGraphTensor* gConvBiases[CONV_CACHE_CAP] = {nil};
+static MPSGraphTensor* gConvOuts[CONV_CACHE_CAP]   = {nil};
+static int gConvKeys[CONV_CACHE_CAP][11];
+static int gConvValid[CONV_CACHE_CAP] = {0}; // slot occupied?
+static int gConvNext = 0;                    // FIFO insertion cursor
+static int gConvCacheCap = CONV_CACHE_CAP;   // effective cap (§T622 A/B: 1 == old last-shape cache)
 
+// mtl_conv_cache_cap_set clamps the effective conv-graph cache cap to [1,CONV_CACHE_CAP],
+// clears all resident graphs (ARC releases them), resets the FIFO cursor, and returns the
+// previous cap. cap==1 reproduces the pre-§T622 single last-shape cache for A/B measurement.
+int mtl_conv_cache_cap_set(int cap) {
+    int prev = gConvCacheCap;
+    if (cap < 1) cap = 1;
+    if (cap > CONV_CACHE_CAP) cap = CONV_CACHE_CAP;
+    for (int i = 0; i < CONV_CACHE_CAP; i++) {
+        gConvGraphs[i] = nil; gConvSrcs[i] = nil; gConvWts[i] = nil;
+        gConvBiases[i] = nil; gConvOuts[i] = nil; gConvValid[i] = 0;
+    }
+    gConvNext = 0;
+    gConvCacheCap = cap;
+    return prev;
+}
+
+// conv_build_graph returns the cache slot index for the given shape (building &
+// storing on miss), or -6 on failure.
 static int conv_build_graph(int N, int C, int H, int Wd, int F, int KH, int KW,
                             int stride, int pad, int ho, int wo) {
     int key[11] = {N, C, H, Wd, F, KH, KW, stride, pad, ho, wo};
-    if (gConvKeySet && memcmp(key, gConvKey, sizeof(key)) == 0) return 0;
+    for (int i = 0; i < gConvCacheCap; i++)
+        if (gConvValid[i] && memcmp(key, gConvKeys[i], sizeof(key)) == 0) return i;
     @autoreleasepool {
         MPSGraph* g = [MPSGraph new];
         MPSGraphTensor* src = [g placeholderWithShape:@[@(N), @(C), @(H), @(Wd)]
@@ -3844,12 +3902,15 @@ static int conv_build_graph(int N, int C, int H, int Wd, int F, int KH, int KW,
                                                      descriptor:d name:nil];
         if (conv == nil) return -6;
         MPSGraphTensor* out = [g additionWithPrimaryTensor:conv secondaryTensor:bias name:nil];
-        gConvGraph = g;
-        gConvSrc = src; gConvWt = wt; gConvBias = bias; gConvOut = out;
-        memcpy(gConvKey, key, sizeof(key));
-        gConvKeySet = 1;
+        int slot = gConvNext;                       // FIFO: overwrite oldest at cap.
+        gConvGraphs[slot] = g;                       // ARC __strong: retains g,
+        gConvSrcs[slot]  = src; gConvWts[slot] = wt; // releases any prior occupant.
+        gConvBiases[slot] = bias; gConvOuts[slot] = out;
+        memcpy(gConvKeys[slot], key, sizeof(key));
+        gConvValid[slot] = 1;
+        gConvNext = (slot + 1) % gConvCacheCap;
+        return slot;
     }
-    return 0;
 }
 
 // mtl_conv2d_mps_f32: same contract as mtl_conv2d_f32 but through MPSGraph's
@@ -3861,7 +3922,8 @@ int mtl_conv2d_mps_f32(const float* X, const float* W, const float* B, float* Ou
     if (ensure_init() != 0) return -1;
     OP_BEGIN;
     @autoreleasepool {
-        if (conv_build_graph(N, C, H, Wd, F, KH, KW, stride, pad, ho, wo) != 0) return -6;
+        int slot = conv_build_graph(N, C, H, Wd, F, KH, KW, stride, pad, ho, wo);
+        if (slot < 0) return -6;
         size_t xLen = (size_t)N * C * H * Wd * sizeof(float);
         size_t wLen = (size_t)F * C * KH * KW * sizeof(float);
         size_t bLen = (size_t)F * sizeof(float);
@@ -3886,13 +3948,13 @@ int mtl_conv2d_mps_f32(const float* X, const float* W, const float* B, float* Ou
         // Encode into our pooled output buffer (single shared-memory memcpy back,
         // like the im2col path) rather than runWithMTLCommandQueue's own alloc+copy
         // — cuts per-call overhead that dominated small shapes.
-        NSDictionary* feeds = @{gConvSrc: xd, gConvWt: wd, gConvBias: bd};
+        NSDictionary* feeds = @{gConvSrcs[slot]: xd, gConvWts[slot]: wd, gConvBiases[slot]: bd};
         MPSCommandBuffer* cmd = [MPSCommandBuffer commandBufferFromCommandQueue:gQueue];
         if (cmd == nil) return -3;
-        [gConvGraph encodeToCommandBuffer:cmd
+        [gConvGraphs[slot] encodeToCommandBuffer:cmd
                                     feeds:feeds
                          targetOperations:nil
-                        resultsDictionary:@{gConvOut: od}
+                        resultsDictionary:@{gConvOuts[slot]: od}
                       executionDescriptor:nil];
         [cmd commit];
         [cmd waitUntilCompleted];
