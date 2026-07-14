@@ -123,9 +123,65 @@ func (t *Tensor) Contiguous() *Tensor {
 	}
 	out := NewOn(t.dev, t.Dtype(), t.shape)
 	n := t.Numel()
-	for pos := range n {
-		idx := Unravel(pos, t.shape)
-		out.storage.setF64(pos, t.storage.atF64(t.flatOffset(idx)))
+	nd := len(t.shape)
+	if n == 0 {
+		return out
+	}
+	if nd == 0 { // rank-0 scalar carrying an offset
+		out.storage.setF64(0, t.storage.atF64(t.offset))
+		return out
+	}
+	// Strided gather WITHOUT a per-element Unravel heap alloc (§base-perf): walk a
+	// running row-major multi-index and keep the source flat offset INCREMENTALLY,
+	// and use typed []T access instead of the per-element atF64/setF64 dtype dispatch.
+	// Same traversal order as the old Unravel path → identical result. Every op that
+	// materializes a transposed/permuted view (attention Q/K/V reshapes) hits this.
+	idx := make([]int, nd)
+	switch t.Dtype() {
+	case F32:
+		src, dst := t.storage.F32(), out.storage.F32()
+		off := t.offset
+		for pos := 0; pos < n; pos++ {
+			dst[pos] = src[off]
+			for d := nd - 1; d >= 0; d-- {
+				idx[d]++
+				off += t.strides[d]
+				if idx[d] < t.shape[d] {
+					break
+				}
+				idx[d] = 0
+				off -= t.strides[d] * t.shape[d]
+			}
+		}
+	case F64:
+		src, dst := t.storage.F64(), out.storage.F64()
+		off := t.offset
+		for pos := 0; pos < n; pos++ {
+			dst[pos] = src[off]
+			for d := nd - 1; d >= 0; d-- {
+				idx[d]++
+				off += t.strides[d]
+				if idx[d] < t.shape[d] {
+					break
+				}
+				idx[d] = 0
+				off -= t.strides[d] * t.shape[d]
+			}
+		}
+	default: // int and any other dtype: keep the generic accessor
+		off := t.offset
+		for pos := 0; pos < n; pos++ {
+			out.storage.setF64(pos, t.storage.atF64(off))
+			for d := nd - 1; d >= 0; d-- {
+				idx[d]++
+				off += t.strides[d]
+				if idx[d] < t.shape[d] {
+					break
+				}
+				idx[d] = 0
+				off -= t.strides[d] * t.shape[d]
+			}
+		}
 	}
 	return out
 }
