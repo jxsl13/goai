@@ -15,6 +15,50 @@ import (
 func mlaRoPE(src *tensor.Tensor, nheads, dR int, base float64, dst []float64) {
 	half := dR / 2
 	seq := src.Shape()[0]
+	cols := src.Shape()[1] // nheads*dR (row stride of the row-major [seq, nheads*dR] src)
+
+	// Devirtualised fast paths (§T645): the generic AtF64 loop below pays a dtype
+	// dispatch + flat-offset per read. When src's contiguous storage matches its
+	// dtype we grab the raw typed slice once (element (p,c) of [seq,cols] at p*cols+c)
+	// and index directly. dst is always float64 and the rotation math (theta, cos,
+	// sin, the two combines) stays float64 on ALL paths — F32 only widens the loaded
+	// input, matching AtF64 on an F32 tensor byte-for-byte. Contiguous() is called
+	// once (returns self when already dense).
+	switch src.Dtype() {
+	case tensor.F64:
+		if sc := src.Contiguous(); sc.Dtype() == tensor.F64 {
+			s := sc.Storage().F64()
+			for p := range seq {
+				for h := range nheads {
+					for e := range half {
+						theta := math.Pow(base, -float64(2*e)/float64(dR))
+						c, sn := math.Cos(float64(p)*theta), math.Sin(float64(p)*theta)
+						x0, x1 := s[p*cols+h*dR+e], s[p*cols+h*dR+e+half]
+						dst[(p*nheads+h)*dR+e] = x0*c - x1*sn
+						dst[(p*nheads+h)*dR+e+half] = x1*c + x0*sn
+					}
+				}
+			}
+			return
+		}
+	case tensor.F32:
+		if sc := src.Contiguous(); sc.Dtype() == tensor.F32 {
+			s := sc.Storage().F32()
+			for p := range seq {
+				for h := range nheads {
+					for e := range half {
+						theta := math.Pow(base, -float64(2*e)/float64(dR))
+						c, sn := math.Cos(float64(p)*theta), math.Sin(float64(p)*theta)
+						x0, x1 := float64(s[p*cols+h*dR+e]), float64(s[p*cols+h*dR+e+half])
+						dst[(p*nheads+h)*dR+e] = x0*c - x1*sn
+						dst[(p*nheads+h)*dR+e+half] = x1*c + x0*sn
+					}
+				}
+			}
+			return
+		}
+	}
+	// Generic fallback for exotic dtypes (verbatim original loop).
 	for p := range seq {
 		for h := range nheads {
 			for e := range half {
@@ -78,6 +122,109 @@ func mlaKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) (
 
 	out := tensor.NewOn(ctx.Device(), qC.Dtype(), qC.Shape())
 	a := make([]float64, seq)
+
+	// Devirtualised fast paths (§T645): the generic AtF64/SetF64 loop below pays a
+	// dtype dispatch + flat-offset per element on the hot heads·seq·(seq·dh) score
+	// and value-mix. When qC/kC/vC and the output share the drive dtype we grab the
+	// raw typed slices once (element (r,c) of [seq,hdh] at r*hdh+c) and index by
+	// explicit row-major arithmetic. Iteration order, the RoPE-augmented score, the
+	// softmax (max subtraction, denominator) and the value accumulation are byte-for-
+	// byte identical: every attention accumulator (score s, denom sum, output o) stays
+	// float64 on ALL paths, qR/kR are already f64, and the F32 path only widens each
+	// loaded input and rounds the STORED output element ONCE per (i,hc+d) — matching
+	// the single narrowing SetF64. Contiguous() is called once per read tensor (self
+	// when dense); out is freshly allocated so it is already dense.
+	switch qC.Dtype() {
+	case tensor.F64:
+		qcc, kcc, vcc := qC.Contiguous(), kC.Contiguous(), vC.Contiguous()
+		if qcc.Dtype() == tensor.F64 && kcc.Dtype() == tensor.F64 && vcc.Dtype() == tensor.F64 {
+			qs, ks, vs := qcc.Storage().F64(), kcc.Storage().F64(), vcc.Storage().F64()
+			os := out.Storage().F64()
+			for h := range heads {
+				hc := h * dh
+				for i := range seq {
+					jmax := seq
+					if causal {
+						jmax = i + 1
+					}
+					m := math.Inf(-1)
+					for j := range jmax {
+						var s float64
+						qb, kb := i*hdh+hc, j*hdh+hc
+						for d := range dh {
+							s += qs[qb+d] * ks[kb+d]
+						}
+						for e := range dR {
+							s += qR[(i*heads+h)*dR+e] * kR[j*dR+e]
+						}
+						s *= scale
+						a[j] = s
+						if s > m {
+							m = s
+						}
+					}
+					var sum float64
+					for j := range jmax {
+						a[j] = math.Exp(a[j] - m)
+						sum += a[j]
+					}
+					for d := range dh {
+						var o float64
+						for j := range jmax {
+							o += a[j] / sum * vs[j*hdh+hc+d]
+						}
+						os[i*hdh+hc+d] = o
+					}
+				}
+			}
+			return []*tensor.Tensor{out}, nil
+		}
+	case tensor.F32:
+		qcc, kcc, vcc := qC.Contiguous(), kC.Contiguous(), vC.Contiguous()
+		if qcc.Dtype() == tensor.F32 && kcc.Dtype() == tensor.F32 && vcc.Dtype() == tensor.F32 {
+			qs, ks, vs := qcc.Storage().F32(), kcc.Storage().F32(), vcc.Storage().F32()
+			os := out.Storage().F32()
+			for h := range heads {
+				hc := h * dh
+				for i := range seq {
+					jmax := seq
+					if causal {
+						jmax = i + 1
+					}
+					m := math.Inf(-1)
+					for j := range jmax {
+						var s float64 // score accumulates in float64; only inputs widen
+						qb, kb := i*hdh+hc, j*hdh+hc
+						for d := range dh {
+							s += float64(qs[qb+d]) * float64(ks[kb+d])
+						}
+						for e := range dR {
+							s += qR[(i*heads+h)*dR+e] * kR[j*dR+e]
+						}
+						s *= scale
+						a[j] = s
+						if s > m {
+							m = s
+						}
+					}
+					var sum float64
+					for j := range jmax {
+						a[j] = math.Exp(a[j] - m)
+						sum += a[j]
+					}
+					for d := range dh {
+						var o float64 // output accumulates in float64; only the store rounds
+						for j := range jmax {
+							o += a[j] / sum * float64(vs[j*hdh+hc+d])
+						}
+						os[i*hdh+hc+d] = float32(o)
+					}
+				}
+			}
+			return []*tensor.Tensor{out}, nil
+		}
+	}
+	// Generic fallback for exotic / mixed dtypes (verbatim original loop).
 	for h := range heads {
 		hc := h * dh
 		for i := range seq {
