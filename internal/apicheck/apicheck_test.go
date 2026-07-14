@@ -117,6 +117,8 @@ var typeExampleExempt = map[string]bool{
 	"nn.SOAPOption":                 true, // functional-option type (shown via WithSOAPBetas/Eps/Freq)
 	"nn.MoDSelection":               true, // opaque routing handle from MixtureOfDepths.Route (shown via ExampleMixtureOfDepths)
 	"nn.MuonOption":                 true, // functional-option type (shown via WithMuonMomentum)
+	"nn.HyperConnectionOption":      true, // functional-option type (shown via WithSinkhornIters)
+	"nn.HCMode":                     true, // enum (HCNone/HCDoublyStochastic, shown in ExampleHyperConnection)
 	"nn.AdafactorOption":            true, // functional-option type (shown via WithAdafactor*)
 	"nn.GaLoreOption":               true, // functional-option type (shown via WithGaLore*)
 	"nn.SophiaOption":               true, // functional-option type (shown via WithSophia*)
