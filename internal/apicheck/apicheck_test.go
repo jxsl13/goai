@@ -142,6 +142,7 @@ var typeExampleExempt = map[string]bool{
 	"nn.ScheduleFreeOption":         true, // functional-option type (shown via WithScheduleFree*)
 	"nn.DAdaptAdamOption":           true, // functional-option type (shown via WithDAdapt*)
 	"nn.ProdigyOption":              true, // functional-option type (shown via WithProdigy*)
+	"nn.AdamMiniOption":             true, // functional-option type (shown via WithAdamMini*)
 	"nn.LookaheadOption":            true, // functional-option type (shown via WithLookahead*)
 	"nn.LossScaler":                 true, // mixed-precision helper; shown in the AMP training tests
 	"nn.MixedPrecision":             true, // mixed-precision helper; shown in the AMP training tests
