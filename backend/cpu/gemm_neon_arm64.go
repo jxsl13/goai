@@ -48,6 +48,11 @@ var (
 	// gemmF32AMX: raw AMX via Plan9 asm (pure Go, no cgo), set by
 	// gemm_amx_arm64.go under darwin when the chip is M1/M2/M3.
 	gemmF32AMX func(a, b, c []float32, m, k, n int) bool
+	// gemmF32GemvAccel: Accelerate cblas_sgemv y[n] = x[k]·w[k,n] for the
+	// decode (m<3) shapes, set alongside gemmF32Accel. GEMV is bandwidth-
+	// bound; the per-row BLAS2 call ties cblas_sgemm at m=1 and beats its
+	// small-m hole 1.40× at m=2 (§V22 A/B in gemm_gemv_bench_test.go).
+	gemmF32GemvAccel func(w, x, y []float32, k, n int)
 )
 
 // gemmF32 computes C[m,n] = A·B, f32-native (ADR-0026 tolerance, not
@@ -58,6 +63,19 @@ var (
 func gemmF32(A, B, C []float32, m, k, n int) {
 	if k == 0 { // degenerate: A[m,0]·B[0,n] = 0; the asm k-loop is do-while
 		clear(C[:m*n])
+		return
+	}
+	if m < 3 && m > 0 && n > 0 && gemmF32GemvAccel != nil {
+		// Decode shapes: cblas_sgemv per output row. §V22 A/B vs cblas_sgemm
+		// at the same shape (gemm_gemv_bench_test.go, M2 Pro medians): m=1 is
+		// a tie (~40 GFLOP/s @ k=n=2048 — sgemm's m=1 path IS Apple's GEMV,
+		// both bandwidth-bound), but sgemm has a hole at m=2 (27.6 vs 38.7 =
+		// 1.40× for per-row sgemv); from m=3 up sgemm wins again (41.8 vs
+		// 39.0) — hence the m<3 cutoff. The BLAS2 call is also the honest
+		// primitive for m=1, immune to future sgemm small-m regressions.
+		for i := 0; i < m; i++ {
+			gemmF32GemvAccel(B, A[i*k:(i+1)*k], C[i*n:(i+1)*n], k, n)
+		}
 		return
 	}
 	if m > 0 && n > 0 {

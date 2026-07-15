@@ -28,4 +28,5 @@ func init() {
 			return true
 		}
 	}
+	gemmF32GemvAccel = accel.SGEMV
 }
