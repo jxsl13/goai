@@ -4,6 +4,14 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA inference — sampled GPU generation (worker linux-amd64/cuda, 2026-07-15)
+- The optimized Q8 GPU decode now drives the full `nlp.Sampler` (temperature, top-k,
+  top-p, repeat penalty) — greedy on TinyLlama-1.1B degenerates into repetition, the
+  sampler produces varied text. `TestCUDATinyLlamaGenerate{,Sampled}` demonstrate the
+  end-to-end pipeline: GGUF → SentencePiece tokenizer → resident Q8 model → device
+  decode (fixed-buffer + CUDA graph) → on-device/host draw → detokenize. Caps the
+  CUDA decode arc (26→164 tok/s, within 1.48× of llama.cpp Vulkan). Worker sub-spec §PERF.
+
 ### T650 — Mixture-of-Recursions: adaptive per-token recursion depth (2026-07-15)
 - New `nn.MixtureOfRecursions`: the expert-choice Mixture-of-Recursions layer (Bae,
   Sun, Kim et al. 2025, arXiv:2507.10524). ONE weight-shared block `B` is applied up
