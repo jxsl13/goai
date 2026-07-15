@@ -105,6 +105,21 @@ func (r *ResidentBQ8) QMatMulDevice(a *DeviceF32) (*DeviceF32, error) {
 	return &DeviceF32{ptr: out, rows: a.rows, cols: r.n}, nil
 }
 
+// QMatMulInto computes out = a·dequant(B) into the caller's fixed buffer (beta=0)
+// — the persistent-buffer Q8 matmul for the fixed-buffer / graph decode path.
+func (r *ResidentBQ8) QMatMulInto(a, out *DeviceF32) error {
+	if r.q == nil || a.ptr == nil || out.ptr == nil {
+		return fmt.Errorf("cuda: QMatMulInto on a freed handle")
+	}
+	if a.cols != r.k || out.rows != a.rows || out.cols != r.n {
+		return fmt.Errorf("cuda: QMatMulInto shape a[%d,%d]·B[%d,%d]→out[%d,%d]", a.rows, a.cols, r.k, r.n, out.rows, out.cols)
+	}
+	if rc := C.cu_qmatmul_q8(a.ptr, r.q, r.scales, out.ptr, C.int(a.rows), C.int(r.k), C.int(r.n), C.int(r.nb), C.float(0)); rc != 0 {
+		return fmt.Errorf("cuda: Q8 matmul-into failed (code %d)", int(rc))
+	}
+	return nil
+}
+
 // QMatMulAccInto computes c += a·dequant(B) in place (Q8 weight, beta=1), fusing
 // the transformer residual add into the quantized projection — the Q8 analogue of
 // ResidentB.MatMulAccInto. c must hold the residual and be [a.rows, N].
