@@ -3,8 +3,6 @@ package cpu
 import (
 	"fmt"
 
-	"github.com/jxsl13/goai/internal/simd"
-
 	"github.com/jxsl13/goai/backend"
 	"github.com/jxsl13/goai/internal/simd"
 	"github.com/jxsl13/goai/tensor"
@@ -33,9 +31,6 @@ func addBiasKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) (
 	xc, bc := x.Contiguous(), b.Contiguous()
 	out := tensor.NewOn(ctx.Device(), x.Dtype(), x.Shape())
 
-	// Each row is exactly a same-length vector add — route it through the
-	// internal/simd primitive (tight BCE'd loop here, archsimd AVX on
-	// amd64+GOEXPERIMENT=simd). Same adds in the same order: bit-identical.
 	switch x.Dtype() {
 	case tensor.F64:
 		X, B, O := xc.Storage().F64(), bc.Storage().F64(), out.Storage().F64()
