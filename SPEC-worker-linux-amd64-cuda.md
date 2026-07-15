@@ -138,8 +138,8 @@ implement its recorder/linear/buffer interfaces over my backend/cuda primitives
 (the Decoder core then gives Step/StepN/Generate/sampler FOR FREE). My primitives
 already cover most of `recorder`: RMSNorm✓ MatMul/MatMulAcc✓ RoPE✓ MHA/GQA✓
 Unary/Binary✓ QMatMulResident✓(Q8). GAPS to add in backend/cuda first (low-collision,
-mine): ~~LayerNorm~~ DONE(PR#63,==ref 2.9e-6), ~~AddBias(broadcast)~~ DONE(PR#63,==ref exact),
-Copy2D(strided), RoPEAt/RoPEPair(fused-QKV bands), Blit; Commit/Wait ← my CUDA graph/stream. No import cycle (nlp/llamagpu
+mine): LayerNorm✓ AddBias✓ (PR#63), Copy2D✓ Blit✓ (PR#73),
+RoPEAt/RoPEPair(fused-QKV bands, strided RoPE) LEFT; Commit/Wait ← my CUDA graph/stream. MAIN MACHINE IDLE ≈12 fires → adapter collision risk LOW, building it incrementally: gap primitives first (backend/cuda, mine), then llamagpu/cuda.go (NewCUDA + cudaBuf/cudaRec via backendOps struct — mirrors llamagpu.go/vulkan.go ≈150L). No import cycle (nlp/llamagpu
 don't import backend/cuda).
 **BLOCKER — DEFER:** llamagpu is a MAIN-MACHINE HOTSPOT right now (T613 QKV/RoPE/
 SwiGLU fusions, T614 encode-overlap, T644 in-flight) → editing its interfaces now

@@ -35,6 +35,48 @@ static CUcontext gCtx = NULL; // runtime's primary context, retained for driver-
 static CUfunction gGelu = NULL, gSilu = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gQgemv = NULL; // lazily nvrtc-compiled
 static CUfunction gRopeDpos = NULL, gAttnSoftmaxDpos = NULL, gAppendDpos = NULL; // device-position (graph-capturable) twins
 static CUfunction gArgmax = NULL, gLayerNorm = NULL, gAddBias = NULL; // greedy argmax; layernorm; broadcast bias-add
+static CUfunction gCopy2d = NULL; // strided 2D copy (fused-QKV band extraction, llamagpu adapter)
+static int ensure_init(void); // fwd decls (defined later)
+static int compile_kernel(const char* src, const char* name, const char* entry, CUfunction* out);
+
+// cu_blit: contiguous device→device copy of n floats, src[srcOff:] → dst[dstOff:]
+// (the llamagpu recorder Blit — offset band moves in the fused-QKV path).
+int cu_blit(void* dst, int dstOff, const void* src, int srcOff, int n) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cudaMemcpyAsync((float*)dst + dstOff, (const float*)src + srcOff, (size_t)n * sizeof(float),
+                        cudaMemcpyDeviceToDevice, gStream) != cudaSuccess) { rc = -3; goto done; }
+    rc = 0;
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_copy2d: copy a rows×rowFloats sub-matrix with independent src/dst row strides
+// (the llamagpu recorder Copy2D — extracts the q/k/v bands from a fused-QKV output).
+int cu_copy2d(void* dst, int dstOff, int dstStride, const void* src, int srcOff, int srcStride, int rows, int rowFloats) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (!gCopy2d && compile_kernel(
+                        "extern \"C\" __global__ void copy2d(float* dst, int dstOff, int dstStride, const float* src, int srcOff, int srcStride, int rows, int rowFloats){\n"
+                        "  long gid = (long)blockIdx.x*blockDim.x + threadIdx.x;\n"
+                        "  long total = (long)rows*rowFloats; if (gid >= total) return;\n"
+                        "  int r = (int)(gid / rowFloats), c = (int)(gid % rowFloats);\n"
+                        "  dst[(size_t)dstOff + (size_t)r*dstStride + c] = src[(size_t)srcOff + (size_t)r*srcStride + c];\n"
+                        "}\n", "copy2d.cu", "copy2d", &gCopy2d) != 0) { rc = -2; goto done; }
+    {
+        long total = (long)rows * rowFloats;
+        int threads = 256, blocks = (int)((total + threads - 1) / threads); if (blocks < 1) blocks = 1;
+        void* args[8] = {&dst, &dstOff, &dstStride, &src, &srcOff, &srcStride, &rows, &rowFloats};
+        rc = (cuLaunchKernel(gCopy2d, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
 static int ensure_init(void);
 static int compile_kernel(const char* src, const char* name, const char* entry, CUfunction* out);
 
