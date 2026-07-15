@@ -1,0 +1,136 @@
+package nn_test
+
+import (
+	"math/rand/v2"
+	"testing"
+
+	"github.com/jxsl13/goai/autograd"
+	"github.com/jxsl13/goai/nn"
+	"github.com/jxsl13/goai/tensor"
+
+	_ "github.com/jxsl13/goai/backend/cpu"
+	_ "github.com/jxsl13/goai/backend/ref"
+)
+
+// benchTrainStep measures one full training step — tape-recorded forward,
+// CrossEntropy loss, Backward, optimizer Step — through the pure-Go
+// orchestration path (tape/dispatch/VJP/optimizer). Small MLP so Go-level
+// overhead (allocations, per-element accessor dispatch, tape bookkeeping) is
+// visible next to the kernels.
+func benchTrainStep(b *testing.B, dt tensor.Dtype, newOpt func([]*tensor.Tensor) nn.Optimizer) {
+	const (
+		batch   = 64
+		inDim   = 32
+		hidden  = 64
+		classes = 10
+	)
+	rng := rand.New(rand.NewPCG(42, 0xbe7c4))
+	xd := make([]float64, batch*inDim)
+	for i := range xd {
+		xd[i] = rng.NormFloat64()
+	}
+	yd := make([]float64, batch)
+	for i := range yd {
+		yd[i] = float64(rng.IntN(classes))
+	}
+	x := tensor.FromFloat64(tensor.Shape{batch, inDim}, xd).Cast(dt)
+	y := tensor.FromFloat64(tensor.Shape{batch}, yd).Cast(dt)
+
+	model := nn.NewSequential(
+		nn.NewLinear(dt, inDim, hidden, 7),
+		nn.ReLU(),
+		nn.NewLinear(dt, hidden, classes, 8),
+	)
+	opt := newOpt(model.Params())
+
+	b.ReportAllocs()
+	for b.Loop() {
+		tape := autograd.NewTape()
+		ctx := tape.Context()
+		logits, err := model.Forward(ctx, x)
+		if err != nil {
+			b.Fatal(err)
+		}
+		loss, err := nn.CrossEntropy(ctx, logits, y)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if err := tape.Backward(loss); err != nil {
+			b.Fatal(err)
+		}
+		if err := opt.Step(tape.Grad); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkTrainStepAdamF64(b *testing.B) {
+	benchTrainStep(b, tensor.F64, func(p []*tensor.Tensor) nn.Optimizer { return nn.NewAdam(p, 1e-3) })
+}
+
+func BenchmarkTrainStepAdamF32(b *testing.B) {
+	benchTrainStep(b, tensor.F32, func(p []*tensor.Tensor) nn.Optimizer { return nn.NewAdam(p, 1e-3) })
+}
+
+func BenchmarkTrainStepSGDF64(b *testing.B) {
+	benchTrainStep(b, tensor.F64, func(p []*tensor.Tensor) nn.Optimizer { return nn.NewSGD(p, 1e-2, 0.9) })
+}
+
+// stepOnlyFixture builds transformer-ish parameters with fixed synthetic
+// gradients so optimizer.Step can be timed in isolation (no tape/kernels).
+func stepOnlyFixture(dt tensor.Dtype) ([]*tensor.Tensor, nn.GradFn) {
+	shapes := []tensor.Shape{{256, 256}, {256}, {256, 512}, {512}}
+	params := make([]*tensor.Tensor, len(shapes))
+	grads := map[*tensor.Tensor]*tensor.Tensor{}
+	for i, s := range shapes {
+		params[i] = tensor.New(dt, s)
+		g := tensor.New(tensor.F64, s)
+		gd := g.Storage().F64()
+		for j := range gd {
+			gd[j] = float64(j%17) * 1e-3
+		}
+		grads[params[i]] = g.Cast(dt)
+	}
+	return params, func(p *tensor.Tensor) *tensor.Tensor { return grads[p] }
+}
+
+// benchStepOnly isolates optimizer.Step over ~264k parameters.
+func benchStepOnly(b *testing.B, dt tensor.Dtype, newOpt func([]*tensor.Tensor) nn.Optimizer) {
+	params, gf := stepOnlyFixture(dt)
+	opt := newOpt(params)
+	b.ReportAllocs()
+	for b.Loop() {
+		if err := opt.Step(gf); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkAdamStepOnly(b *testing.B) {
+	benchStepOnly(b, tensor.F64, func(p []*tensor.Tensor) nn.Optimizer { return nn.NewAdam(p, 1e-3) })
+}
+
+func BenchmarkAdamStepOnlyF32(b *testing.B) {
+	benchStepOnly(b, tensor.F32, func(p []*tensor.Tensor) nn.Optimizer { return nn.NewAdam(p, 1e-3) })
+}
+
+func BenchmarkSGDStepOnly(b *testing.B) {
+	benchStepOnly(b, tensor.F64, func(p []*tensor.Tensor) nn.Optimizer { return nn.NewSGD(p, 1e-2, 0.9) })
+}
+
+func BenchmarkLionStepOnly(b *testing.B) {
+	benchStepOnly(b, tensor.F64, func(p []*tensor.Tensor) nn.Optimizer { return nn.NewLion(p, 1e-4) })
+}
+
+// BenchmarkClipGradNorm times the global-norm pass plus one clipped read of
+// every gradient — the per-step cost of gradient clipping.
+func BenchmarkClipGradNorm(b *testing.B) {
+	params, gf := stepOnlyFixture(tensor.F64)
+	b.ReportAllocs()
+	for b.Loop() {
+		clipped, _ := nn.ClipGradNorm(params, gf, 1e-9) // tiny max-norm → scaling path
+		for _, p := range params {
+			_ = clipped(p)
+		}
+	}
+}

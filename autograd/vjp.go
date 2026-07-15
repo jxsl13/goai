@@ -65,6 +65,23 @@ func bcastReduce(g *tensor.Tensor, inShape tensor.Shape) *tensor.Tensor {
 	offset := g.Ndim() - len(inShape)
 	gs := g.Shape()
 	dx := tensor.New(g.Dtype(), inShape) // zero-initialized
+	// Typed fast paths for contiguous f32/f64 g (§base-perf): row-major walk with an
+	// incremental destination offset — no per-element Unravel alloc, no AtF64/SetF64
+	// dtype dispatch. Same traversal + accumulation order as the generic path (an f64
+	// add of two widened f32s narrows to the correctly-rounded f32 sum, so the flat
+	// f32 loop is bit-identical too).
+	if g.IsContiguous() && g.Numel() > 0 {
+		b := g.Offset()
+		n := g.Numel()
+		switch g.Dtype() {
+		case tensor.F64:
+			bcastSumInto(dx.Storage().F64(), g.Storage().F64()[b:b+n], gs, inShape, offset)
+			return dx
+		case tensor.F32:
+			bcastSumInto(dx.Storage().F32(), g.Storage().F32()[b:b+n], gs, inShape, offset)
+			return dx
+		}
+	}
 	ic := make([]int, len(inShape))
 	for pos := range g.Numel() {
 		oc := tensor.Unravel(pos, gs)
@@ -72,6 +89,37 @@ func bcastReduce(g *tensor.Tensor, inShape tensor.Shape) *tensor.Tensor {
 		dx.SetF64(dx.AtF64(ic...)+g.AtF64(oc...), ic...)
 	}
 	return dx
+}
+
+// bcastSumInto accumulates the contiguous row-major src (shape gs) into the
+// contiguous row-major dst (shape inShape, right-aligned to gs at `offset`),
+// summing over broadcast axes. It walks src once, maintaining the destination
+// flat offset incrementally with an effective per-axis stride that is 0 on
+// broadcast axes (axes left of the alignment offset, and size-1 input axes) —
+// the flat-loop form of BroadcastCoords.
+func bcastSumInto[T interface{ ~float32 | ~float64 }](dst, src []T, gs, inShape tensor.Shape, offset int) {
+	nd := len(gs)
+	ist := tensor.RowMajorStrides(inShape)
+	eff := make([]int, nd) // destination stride per g axis; 0 = broadcast axis
+	for j := offset; j < nd; j++ {
+		if d := j - offset; inShape[d] != 1 {
+			eff[j] = ist[d]
+		}
+	}
+	idx := make([]int, nd)
+	dOff := 0
+	for _, v := range src {
+		dst[dOff] += v
+		for d := nd - 1; d >= 0; d-- {
+			idx[d]++
+			dOff += eff[d]
+			if idx[d] < gs[d] {
+				break
+			}
+			idx[d] = 0
+			dOff -= eff[d] * gs[d]
+		}
+	}
 }
 
 func init() {

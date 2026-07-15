@@ -20,6 +20,20 @@ func init() {
 		xs := x.Shape()
 		dx := tensor.New(x.Dtype(), xs) // zero-initialized accumulator
 		gShape := g.Shape()
+		// Typed fast paths for contiguous f32/f64 g: one incremental-offset walk
+		// (see bcastSumInto), no per-element Unravel/AtF64/SetF64.
+		if g.IsContiguous() && g.Numel() > 0 {
+			b := g.Offset()
+			n := g.Numel()
+			switch g.Dtype() {
+			case tensor.F64:
+				bcastSumInto(dx.Storage().F64(), g.Storage().F64()[b:b+n], gShape, xs, offset)
+				return []*tensor.Tensor{dx}, nil
+			case tensor.F32:
+				bcastSumInto(dx.Storage().F32(), g.Storage().F32()[b:b+n], gShape, xs, offset)
+				return []*tensor.Tensor{dx}, nil
+			}
+		}
 		ic := make([]int, x.Ndim())
 		for pos := range g.Numel() {
 			oc := tensor.Unravel(pos, gShape)

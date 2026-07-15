@@ -195,9 +195,5 @@ func (v *Variable) Grad() *tensor.Tensor { return v.tape.Grad(v.Value) }
 
 // scaledLike returns a tensor of x's dtype/shape filled with v.
 func scaledLike(x *tensor.Tensor, v float64) *tensor.Tensor {
-	out := tensor.New(x.Dtype(), x.Shape())
-	for i := range out.Numel() {
-		out.SetF64(v, tensor.Unravel(i, out.Shape())...)
-	}
-	return out
+	return tensor.Full(x.Dtype(), x.Shape(), v)
 }

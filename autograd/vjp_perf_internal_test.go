@@ -84,6 +84,34 @@ func BenchmarkReduceVJPSumNaive(b *testing.B) {
 	}
 }
 
+// benchBcastReduce times bcastReduce for the bias-gradient shape — reducing a
+// [batch, features] output cotangent to a [features] input — the backward of
+// every broadcast Add/Mul (bias adds, per-channel scales).
+func benchBcastReduce(b *testing.B, dt tensor.Dtype) {
+	g := tensor.New(dt, tensor.Shape{128, 1024})
+	switch dt {
+	case tensor.F32:
+		s := g.Storage().F32()
+		for i := range s {
+			s[i] = float32(i%11) * 0.1
+		}
+	case tensor.F64:
+		s := g.Storage().F64()
+		for i := range s {
+			s[i] = float64(i%11) * 0.1
+		}
+	}
+	inShape := tensor.Shape{1024}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = bcastReduce(g, inShape)
+	}
+}
+
+func BenchmarkBcastReduceBiasF32(b *testing.B) { benchBcastReduce(b, tensor.F32) }
+func BenchmarkBcastReduceBiasF64(b *testing.B) { benchBcastReduce(b, tensor.F64) }
+
 // BenchmarkNrm2VJP guards the §T634 scaleInto devirtualization of the L2-norm
 // backward — on the gradient-clipping hot path (a global grad-norm every step).
 func BenchmarkNrm2VJP(b *testing.B) {

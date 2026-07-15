@@ -16,6 +16,27 @@ import (
 // GradFn maps a parameter tensor to its gradient (nil = no gradient this step).
 type GradFn func(*tensor.Tensor) *tensor.Tensor
 
+// flatF64 returns the flat row-major []float64 view of t when t is F64 and
+// contiguous (any base offset), else nil — the precondition for the typed
+// optimizer fast paths below (§base-perf: dtype-switch once, no per-element
+// Unravel/AtF64/SetF64 dispatch).
+func flatF64(t *tensor.Tensor) []float64 {
+	if t.Dtype() != tensor.F64 || !t.IsContiguous() {
+		return nil
+	}
+	off := t.Offset()
+	return t.Storage().F64()[off : off+t.Numel()]
+}
+
+// flatF32 is flatF64 for F32 tensors.
+func flatF32(t *tensor.Tensor) []float32 {
+	if t.Dtype() != tensor.F32 || !t.IsContiguous() {
+		return nil
+	}
+	off := t.Offset()
+	return t.Storage().F32()[off : off+t.Numel()]
+}
+
 // Optimizer updates its parameters from gradients.
 type Optimizer interface {
 	Step(grad GradFn) error
@@ -63,12 +84,43 @@ func (s *SGD) Step(grad GradFn) error {
 		if !g.Shape().Equal(p.Shape()) {
 			return fmt.Errorf("nn: SGD grad shape %v != param %v", g.Shape(), p.Shape())
 		}
+		var vel []float64
+		if s.Momentum != 0 {
+			vel = s.vel[pi]
+		}
+		// Typed fast paths (contiguous f64/f32 pairs): flat loops with the update
+		// arithmetic in float64 exactly as the generic path computes it.
+		if pf := flatF64(p); pf != nil {
+			if gf := flatF64(g); gf != nil {
+				for i, gv := range gf {
+					if vel != nil {
+						vel[i] = s.Momentum*vel[i] + gv
+						gv = vel[i]
+					}
+					pf[i] -= s.LR * gv
+				}
+				continue
+			}
+		} else if pf := flatF32(p); pf != nil {
+			if gf := flatF32(g); gf != nil {
+				for i := range gf {
+					gv := float64(gf[i])
+					if vel != nil {
+						vel[i] = s.Momentum*vel[i] + gv
+						gv = vel[i]
+					}
+					pf[i] = float32(float64(pf[i]) - s.LR*gv)
+				}
+				continue
+			}
+		}
+		// Generic fallback: any dtype/layout via the widening accessors.
 		for i := range p.Numel() {
 			idx := tensor.Unravel(i, p.Shape())
 			gv := g.AtF64(idx...)
-			if s.Momentum != 0 {
-				s.vel[pi][i] = s.Momentum*s.vel[pi][i] + gv
-				gv = s.vel[pi][i]
+			if vel != nil {
+				vel[i] = s.Momentum*vel[i] + gv
+				gv = vel[i]
 			}
 			p.SetF64(p.AtF64(idx...)-s.LR*gv, idx...)
 		}
@@ -165,13 +217,41 @@ func (a *Adam) Step(grad GradFn) error {
 		if !g.Shape().Equal(p.Shape()) {
 			return fmt.Errorf("nn: Adam grad shape %v != param %v", g.Shape(), p.Shape())
 		}
+		m, v := a.m[pi], a.v[pi]
+		// Typed fast paths (contiguous f64/f32 pairs): flat loops, moments and the
+		// update arithmetic in float64 exactly as the generic path computes them.
+		if pf := flatF64(p); pf != nil {
+			if gf := flatF64(g); gf != nil {
+				for i, gv := range gf {
+					m[i] = a.Beta1*m[i] + (1-a.Beta1)*gv
+					v[i] = a.Beta2*v[i] + (1-a.Beta2)*gv*gv
+					mh := m[i] / c1
+					vh := v[i] / c2
+					pf[i] = pf[i]*decay - a.LR*mh/(math.Sqrt(vh)+a.Eps)
+				}
+				continue
+			}
+		} else if pf := flatF32(p); pf != nil {
+			if gf := flatF32(g); gf != nil {
+				for i := range gf {
+					gv := float64(gf[i])
+					m[i] = a.Beta1*m[i] + (1-a.Beta1)*gv
+					v[i] = a.Beta2*v[i] + (1-a.Beta2)*gv*gv
+					mh := m[i] / c1
+					vh := v[i] / c2
+					pf[i] = float32(float64(pf[i])*decay - a.LR*mh/(math.Sqrt(vh)+a.Eps))
+				}
+				continue
+			}
+		}
+		// Generic fallback: any dtype/layout via the widening accessors.
 		for i := range p.Numel() {
 			idx := tensor.Unravel(i, p.Shape())
 			gv := g.AtF64(idx...)
-			a.m[pi][i] = a.Beta1*a.m[pi][i] + (1-a.Beta1)*gv
-			a.v[pi][i] = a.Beta2*a.v[pi][i] + (1-a.Beta2)*gv*gv
-			mh := a.m[pi][i] / c1
-			vh := a.v[pi][i] / c2
+			m[i] = a.Beta1*m[i] + (1-a.Beta1)*gv
+			v[i] = a.Beta2*v[i] + (1-a.Beta2)*gv*gv
+			mh := m[i] / c1
+			vh := v[i] / c2
 			p.SetF64(p.AtF64(idx...)*decay-a.LR*mh/(math.Sqrt(vh)+a.Eps), idx...)
 		}
 	}
@@ -187,6 +267,21 @@ func ClipGradNorm(params []*tensor.Tensor, grad GradFn, maxNorm float64) (GradFn
 	for _, p := range params {
 		g := grad(p)
 		if g == nil {
+			continue
+		}
+		// Typed fast paths (contiguous f32/f64): flat accumulation in float64,
+		// exactly the arithmetic of the generic widening path.
+		if gf := flatF64(g); gf != nil {
+			for _, v := range gf {
+				sumsq += v * v
+			}
+			continue
+		}
+		if gf := flatF32(g); gf != nil {
+			for _, gv := range gf {
+				v := float64(gv)
+				sumsq += v * v
+			}
 			continue
 		}
 		for i := range g.Numel() {
@@ -208,6 +303,22 @@ func ClipGradNorm(params []*tensor.Tensor, grad GradFn, maxNorm float64) (GradFn
 			return nil
 		}
 		out := tensor.New(g.Dtype(), g.Shape())
+		// Typed fast paths: fresh `out` is contiguous, so a flat scaled copy is the
+		// generic per-element loop without the Unravel/accessor overhead.
+		if gf := flatF64(g); gf != nil {
+			of := out.Storage().F64()
+			for i, v := range gf {
+				of[i] = v * scale
+			}
+			return out
+		}
+		if gf := flatF32(g); gf != nil {
+			of := out.Storage().F32()
+			for i, v := range gf {
+				of[i] = float32(float64(v) * scale)
+			}
+			return out
+		}
 		for i := range g.Numel() {
 			idx := tensor.Unravel(i, g.Shape())
 			out.SetF64(g.AtF64(idx...)*scale, idx...)
@@ -303,13 +414,39 @@ func (l *Lion) Step(grad GradFn) error {
 		if !g.Shape().Equal(p.Shape()) {
 			return fmt.Errorf("nn: Lion grad shape %v != param %v", g.Shape(), p.Shape())
 		}
+		m := l.m[pi]
+		// Typed fast paths (contiguous f64/f32 pairs): flat loops, momentum and the
+		// update arithmetic in float64 exactly as the generic path computes them.
+		if pf := flatF64(p); pf != nil {
+			if gf := flatF64(g); gf != nil {
+				for i, gv := range gf {
+					c := l.Beta1*m[i] + (1-l.Beta1)*gv // interpolate (β1)
+					pv := pf[i]
+					pf[i] = pv - l.LR*(signf(c)+l.WeightDecay*pv) // sign step + decoupled wd
+					m[i] = l.Beta2*m[i] + (1-l.Beta2)*gv          // momentum after (β2)
+				}
+				continue
+			}
+		} else if pf := flatF32(p); pf != nil {
+			if gf := flatF32(g); gf != nil {
+				for i := range gf {
+					gv := float64(gf[i])
+					c := l.Beta1*m[i] + (1-l.Beta1)*gv
+					pv := float64(pf[i])
+					pf[i] = float32(pv - l.LR*(signf(c)+l.WeightDecay*pv))
+					m[i] = l.Beta2*m[i] + (1-l.Beta2)*gv
+				}
+				continue
+			}
+		}
+		// Generic fallback: any dtype/layout via the widening accessors.
 		for i := range p.Numel() {
 			idx := tensor.Unravel(i, p.Shape())
 			gv := g.AtF64(idx...)
-			c := l.Beta1*l.m[pi][i] + (1-l.Beta1)*gv // interpolate (β1)
+			c := l.Beta1*m[i] + (1-l.Beta1)*gv // interpolate (β1)
 			pv := p.AtF64(idx...)
 			p.SetF64(pv-l.LR*(signf(c)+l.WeightDecay*pv), idx...) // sign step + decoupled wd
-			l.m[pi][i] = l.Beta2*l.m[pi][i] + (1-l.Beta2)*gv      // momentum after (β2)
+			m[i] = l.Beta2*m[i] + (1-l.Beta2)*gv                  // momentum after (β2)
 		}
 	}
 	return nil
