@@ -111,6 +111,7 @@ var typeExampleExempt = map[string]bool{
 	"nn.GrokfastMAOption":           true, // functional-option type (shown via WithGrokfastMA*)
 	"nn.NGPTOption":                 true, // functional-option type (shown via WithNGPTCausal/WithNGPTEps)
 	"nn.FoXOption":                  true, // functional-option type (shown via WithFoXEps)
+	"nn.HymbaOption":                true, // functional-option type (shown via WithHymbaMetaTokens)
 	"nn.ShampooOption":              true, // functional-option type (shown via WithShampooEps)
 	"nn.GPTQOption":                 true, // functional-option type (shown via WithGPTQDamp)
 	"nn.SparseGPTOption":            true, // functional-option type (shown via WithSparseGPTDamp/Block)

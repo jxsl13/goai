@@ -4,6 +4,16 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T649 — Hymba hybrid-head block; the T649 architecture cluster complete (2026-07-15)
+- New `nn.HymbaBlock`: the Hymba parallel-hybrid layer (Dong et al., arXiv:2411.13676)
+  that runs attention heads and Mamba/SSM heads **in parallel** on the same input and
+  fuses them — each branch normalized and rescaled by a learned per-channel weight,
+  summed, then a single shared output projection. Optional learnable meta tokens
+  (`WithHymbaMetaTokens`). Distinct from stacked hybrids (Jamba) and from naively
+  averaging the two blocks (the fusion is before a shared projection). Verified
+  against the paper (R245). This completes the T649 architecture cluster —
+  normalized-Transformer (nGPT), Forgetting Transformer (FoX), and Hymba.
+
 ### T649 — Forgetting Transformer (FoX) attention block (2026-07-15)
 - New `nn.FoXBlock`: causal softmax attention with a per-head, data-dependent forget
   gate (Lin et al., arXiv:2503.02130) — a learned recency bias that replaces
