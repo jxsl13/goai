@@ -51,6 +51,41 @@ func deviceUnary(x *tensor.Tensor, kern func(d unsafe.Pointer, n C.int) C.int) (
 	return out, true
 }
 
+// embedF32 gathers table rows for the integer indices in idx (an F32 [m] tensor holding
+// integer values, matching the model's dtype) into a [m,d] output on the GPU.
+func embedF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
+	if len(in) == 2 && in[0].Dtype() == tensor.F32 && in[0].Ndim() == 2 && in[1].Ndim() == 1 {
+		table := in[0].Contiguous()
+		idx := in[1]
+		n, d := table.Shape()[0], table.Shape()[1]
+		m := idx.Shape()[0]
+		ids := make([]int32, m)
+		inRange := m > 0
+		for i := 0; i < m; i++ {
+			ti := int(idx.AtF64(i))
+			if ti < 0 || ti >= n {
+				inRange = false
+				break
+			}
+			ids[i] = int32(ti)
+		}
+		if inRange {
+			if r, err := NewResidentB(table); err == nil {
+				defer r.Free()
+				if out, err := NewDeviceF32(m, d); err == nil {
+					defer out.Free()
+					if r.EmbedInto(ids, out) == nil {
+						if h, err := out.ToHost(); err == nil {
+							return []*tensor.Tensor{h}, nil
+						}
+					}
+				}
+			}
+		}
+	}
+	return refFallback(ctx, backend.OpEmbed, in, attrs)
+}
+
 func siluF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
 	if len(in) == 1 && in[0].Dtype() == tensor.F32 {
 		if out, ok := deviceUnary(in[0], func(d unsafe.Pointer, n C.int) C.int { return C.cu_silu_f32(d, n) }); ok {

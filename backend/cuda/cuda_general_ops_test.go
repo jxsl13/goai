@@ -167,3 +167,90 @@ func TestCUDAGeneralLayerForward(t *testing.T) {
 	}
 	t.Logf("full F32 transformer layer via general backend.Execute: CUDA == reference (%d elems)", len(gpu))
 }
+
+// A whole small F32 MODEL forward — token embedding → 2 transformer layers → final RMSNorm
+// → output projection to logits — through the generic backend.Execute path on CUDA must
+// match the reference. Extends the single-layer capstone with OpEmbed + the output head, so
+// the ENTIRE model forward (not just a block) is proven to compose on the general backend.
+func TestCUDAGeneralModelForward(t *testing.T) {
+	skipNoGPU(t)
+	cu, ok := backend.Get(backend.CUDA)
+	if !ok {
+		t.Skip("cuda backend not registered")
+	}
+	ref, _ := backend.Get(backend.Ref)
+
+	const seq, vocab, dim, heads, kvHeads, hidden, layers = 4, 40, 32, 4, 2, 64, 2
+	dk := dim / heads
+	kvDim := kvHeads * dk
+	tokEmb := bench.RandF32(tensor.Shape{vocab, dim}, 20)
+	idx := tensor.New(tensor.F32, tensor.Shape{seq})
+	for i := 0; i < seq; i++ {
+		idx.SetF64(float64((i*7+3)%vocab), i)
+	}
+	type blk struct{ an, fn, wq, wk, wv, wo, wg, wu, wd *tensor.Tensor }
+	blocks := make([]blk, layers)
+	for l := 0; l < layers; l++ {
+		s := uint64(30 + l*10)
+		blocks[l] = blk{
+			an: bench.RandF32(tensor.Shape{dim}, s+1), fn: bench.RandF32(tensor.Shape{dim}, s+2),
+			wq: bench.RandF32(tensor.Shape{dim, dim}, s+3), wk: bench.RandF32(tensor.Shape{dim, kvDim}, s+4),
+			wv: bench.RandF32(tensor.Shape{dim, kvDim}, s+5), wo: bench.RandF32(tensor.Shape{dim, dim}, s+6),
+			wg: bench.RandF32(tensor.Shape{dim, hidden}, s+7), wu: bench.RandF32(tensor.Shape{dim, hidden}, s+8),
+			wd: bench.RandF32(tensor.Shape{hidden, dim}, s+9),
+		}
+	}
+	fnorm := bench.RandF32(tensor.Shape{dim}, 90)
+	wout := bench.RandF32(tensor.Shape{dim, vocab}, 91)
+
+	modelFwd := func(be backend.Backend) *tensor.Tensor {
+		ctx := backend.NewContext().WithBackend(be)
+		ex := func(op backend.Op, a backend.Attrs, ins ...*tensor.Tensor) *tensor.Tensor {
+			o, e := backend.Execute(ctx, op, ins, a)
+			must(t, e)
+			return o[0]
+		}
+		na := backend.NormAttrs{Eps: 1e-5}
+		x := ex(backend.OpEmbed, nil, tokEmb, idx)
+		for _, b := range blocks {
+			h := ex(backend.OpRMSNorm, na, x, b.an)
+			q := ex(backend.OpRoPE, backend.RoPEAttrs{Base: 10000, Heads: heads}, ex(backend.OpMatMul, nil, h, b.wq))
+			k := ex(backend.OpRoPE, backend.RoPEAttrs{Base: 10000, Heads: kvHeads}, ex(backend.OpMatMul, nil, h, b.wk))
+			v := ex(backend.OpMatMul, nil, h, b.wv)
+			a := ex(backend.OpMHA, backend.AttnAttrs{Heads: heads, KVHeads: kvHeads, Causal: true}, q, k, v)
+			x = ex(backend.OpAdd, nil, x, ex(backend.OpMatMul, nil, a, b.wo))
+			hf := ex(backend.OpRMSNorm, na, x, b.fn)
+			g := ex(backend.OpSiLU, nil, ex(backend.OpMatMul, nil, hf, b.wg))
+			act := ex(backend.OpMul, nil, g, ex(backend.OpMatMul, nil, hf, b.wu))
+			x = ex(backend.OpAdd, nil, x, ex(backend.OpMatMul, nil, act, b.wd))
+		}
+		return ex(backend.OpMatMul, nil, ex(backend.OpRMSNorm, na, x, fnorm), wout) // logits [seq,vocab]
+	}
+
+	gpu := modelFwd(cu).Contiguous().Storage().F32()
+	cpu := modelFwd(ref).Cast(tensor.F32).Contiguous().Storage().F32()
+	if len(gpu) != len(cpu) {
+		t.Fatalf("model logits len %d != %d", len(gpu), len(cpu))
+	}
+	for i := range gpu {
+		if d := math.Abs(float64(gpu[i] - cpu[i])); d > 4e-3+4e-3*math.Abs(float64(cpu[i])) {
+			t.Fatalf("logits[%d]: cuda %v vs ref %v (Δ%g)", i, gpu[i], cpu[i], d)
+		}
+	}
+	// The argmax next-token per row must agree (the actual generation decision).
+	argmax := func(v []float32, row int) int {
+		best, bi := v[row*vocab], 0
+		for j := 1; j < vocab; j++ {
+			if v[row*vocab+j] > best {
+				best, bi = v[row*vocab+j], j
+			}
+		}
+		return bi
+	}
+	for r := 0; r < seq; r++ {
+		if argmax(gpu, r) != argmax(cpu, r) {
+			t.Fatalf("row %d argmax: cuda %d != ref %d", r, argmax(gpu, r), argmax(cpu, r))
+		}
+	}
+	t.Logf("full F32 %d-layer model forward (embed→layers→head) via general backend.Execute: CUDA == reference, argmax agrees", layers)
+}
