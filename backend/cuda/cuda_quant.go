@@ -98,11 +98,30 @@ func (r *ResidentBQ8) QMatMulDevice(a *DeviceF32) (*DeviceF32, error) {
 	if out == nil {
 		return nil, fmt.Errorf("cuda: QMatMulDevice output alloc failed")
 	}
-	if rc := C.cu_qmatmul_q8(a.ptr, r.q, r.scales, out, C.int(a.rows), C.int(r.k), C.int(r.n), C.int(r.nb)); rc != 0 {
+	if rc := C.cu_qmatmul_q8(a.ptr, r.q, r.scales, out, C.int(a.rows), C.int(r.k), C.int(r.n), C.int(r.nb), C.float(0)); rc != 0 {
 		C.cu_free_f32(out)
 		return nil, fmt.Errorf("cuda: Q8 matmul failed (code %d)", int(rc))
 	}
 	return &DeviceF32{ptr: out, rows: a.rows, cols: r.n}, nil
+}
+
+// QMatMulAccInto computes c += a·dequant(B) in place (Q8 weight, beta=1), fusing
+// the transformer residual add into the quantized projection — the Q8 analogue of
+// ResidentB.MatMulAccInto. c must hold the residual and be [a.rows, N].
+func (r *ResidentBQ8) QMatMulAccInto(a, c *DeviceF32) error {
+	if r.q == nil || a.ptr == nil || c.ptr == nil {
+		return fmt.Errorf("cuda: QMatMulAccInto on a freed handle")
+	}
+	if a.cols != r.k {
+		return fmt.Errorf("cuda: QMatMulAccInto inner dim mismatch a[%d,%d]·B[%d,%d]", a.rows, a.cols, r.k, r.n)
+	}
+	if c.rows != a.rows || c.cols != r.n {
+		return fmt.Errorf("cuda: QMatMulAccInto accumulator must be [%d,%d], got [%d,%d]", a.rows, r.n, c.rows, c.cols)
+	}
+	if rc := C.cu_qmatmul_q8(a.ptr, r.q, r.scales, c.ptr, C.int(a.rows), C.int(r.k), C.int(r.n), C.int(r.nb), C.float(1)); rc != 0 {
+		return fmt.Errorf("cuda: Q8 matmul-acc failed (code %d)", int(rc))
+	}
+	return nil
 }
 
 // Free releases the quantized weight and scale buffers.

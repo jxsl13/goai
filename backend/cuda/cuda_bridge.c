@@ -643,7 +643,7 @@ done:
 // less bandwidth than f32 — the decode (M=1, memory-bound GEMV) win. One thread
 // per output element loops its K contraction over blocks. §PERF quantization arc.
 int cu_qmatmul_q8(const void* dA, const void* dQ, const void* dScales, void* dOut,
-                  int M, int K, int N, int nb) {
+                  int M, int K, int N, int nb, float beta) {
     int rc = -1;
     pthread_mutex_lock(&gLock);
     if (ensure_init() != 0) { rc = -1; goto done; }
@@ -654,7 +654,7 @@ int cu_qmatmul_q8(const void* dA, const void* dQ, const void* dScales, void* dOu
                        // (consecutive lanes → consecutive k → coalesced int8 loads),
                        // each lane accumulating its scale·a·q terms, then a single
                        // warp shuffle-reduce. Realizes the int8 bandwidth win.
-                       "extern \"C\" __global__ void qmatmul_q8(const float* a, const signed char* q, const float* scales, float* out, int M, int K, int N, int nb){\n"
+                       "extern \"C\" __global__ void qmatmul_q8(const float* a, const signed char* q, const float* scales, float* out, int M, int K, int N, int nb, float beta){\n"
                        "  long warp = ((long)blockIdx.x*blockDim.x + threadIdx.x) >> 5;\n"
                        "  int lane = threadIdx.x & 31;\n"
                        "  long total = (long)M*N;\n"
@@ -669,15 +669,15 @@ int cu_qmatmul_q8(const void* dA, const void* dQ, const void* dScales, void* dOu
                        "    if (k < K){ acc += sr[b]*ar[k]*(float)qr[k]; }\n"
                        "  }\n"
                        "  for (int o = 16; o > 0; o >>= 1){ acc += __shfl_down_sync(0xffffffff, acc, o); }\n"
-                       "  if (lane == 0){ out[warp] = acc; }\n"
+                       "  if (lane == 0){ out[warp] = beta*out[warp] + acc; }\n" // beta=1 fuses the residual add
                        "}\n",
                        "qmatmul_q8.cu", "qmatmul_q8", &gQgemv) != 0) { rc = -2; goto done; }
     {
         long total = (long)M * N * 32; // one warp (32 threads) per output element
         int threads = 256, blocks = (int)((total + threads - 1) / threads); if (blocks < 1) blocks = 1;
-        void* args[8];
+        void* args[9];
         args[0] = &dA; args[1] = &dQ; args[2] = &dScales; args[3] = &dOut;
-        args[4] = &M; args[5] = &K; args[6] = &N; args[7] = &nb;
+        args[4] = &M; args[5] = &K; args[6] = &N; args[7] = &nb; args[8] = &beta;
         rc = (cuLaunchKernel(gQgemv, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 done:
