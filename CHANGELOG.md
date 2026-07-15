@@ -4,6 +4,17 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — unified serving path: batched f16 prefill seeds the Q4_K decoder, 19.4× prompt processing (worker linux-amd64, Tw47, 2026-07-15)
+- `seedForward` appends the f16 prefill's post-RoPE K/V rows into the Q4_K graph decoder's
+  KV caches (positions 0..P-1); greedy decode continues from position P. Replaces the
+  engine's token-by-token prompt processing: **533.5 ms → 27.5 ms (19.4×) at P=94** on
+  TinyLlama. The mechanism gate is a cache-content comparison — the f16-seeded K rows match
+  the decode path's own rows at rel L1 0.0087, i.e. exactly the f16-vs-Q4_K projection
+  precision delta, proving the handoff is position- and value-correct.
+- Test-design lessons recorded: literal-coherence gates fail on long greedy prose (a 1.1B
+  babbles identically in both paths); short-prompt speed gates mislead (P=6 shows 1.3×,
+  P=94 shows 19.4×); cache-content beats token-sequence comparison for handoff validation.
+
 ### CUDA — f16 tensor-core prefill: 1.66× with argmax-identical output (worker linux-amd64, Tw44/Tw45, 2026-07-15)
 - Measured decision chain: (1) the Q4_K deinterleave experiment REGRESSED 4–8% (the ggml
   144-byte block has perfect spatial locality) — lever (a3) closed with data; (2) a per-class
