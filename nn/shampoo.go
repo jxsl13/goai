@@ -162,11 +162,33 @@ func (s *Shampoo) Step(grad GradFn) error {
 		if st.v == nil {
 			st.v = make([]float64, nEl)
 		}
+		v := st.v
+		// Typed fast paths (contiguous f64/f32 pairs): flat loops, accumulator and
+		// update arithmetic in float64 exactly as the generic path computes them.
+		if pf := flatF64(p); pf != nil {
+			if gf := flatF64(g); gf != nil {
+				for i, gv := range gf {
+					v[i] += gv * gv
+					pf[i] = pf[i] - s.LR*gv/(math.Sqrt(v[i])+s.Eps)
+				}
+				continue
+			}
+		} else if pf := flatF32(p); pf != nil {
+			if gf := flatF32(g); gf != nil {
+				for i := range gf {
+					gv := float64(gf[i])
+					v[i] += gv * gv
+					pf[i] = float32(float64(pf[i]) - s.LR*gv/(math.Sqrt(v[i])+s.Eps))
+				}
+				continue
+			}
+		}
+		// Generic fallback: any dtype/layout via the widening accessors.
 		for i := range nEl {
 			idx := tensor.Unravel(i, p.Shape())
 			gv := g.AtF64(idx...)
-			st.v[i] += gv * gv
-			p.SetF64(p.AtF64(idx...)-s.LR*gv/(math.Sqrt(st.v[i])+s.Eps), idx...)
+			v[i] += gv * gv
+			p.SetF64(p.AtF64(idx...)-s.LR*gv/(math.Sqrt(v[i])+s.Eps), idx...)
 		}
 	}
 	return nil

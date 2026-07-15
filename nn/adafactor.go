@@ -142,6 +142,11 @@ func (a *Adafactor) Step(grad GradFn) error {
 			return fmt.Errorf("nn: Adafactor grad shape %v != param %v", g.Shape(), p.Shape())
 		}
 		n := p.Numel()
+		// Typed fast paths (contiguous f64/f32): flat loops over the row-major
+		// order the generic Unravel walk visits, arithmetic in float64 exactly as
+		// the generic path computes it.
+		pf64, gf64 := flatF64(p), flatF64(g)
+		pf32, gf32 := flatF32(p), flatF32(g)
 
 		// second-moment estimate V̂ (flat, row-major).
 		var vhat []float64
@@ -149,12 +154,35 @@ func (a *Adafactor) Step(grad GradFn) error {
 			rows, cols := p.Shape()[0], p.Shape()[1]
 			rowsum := make([]float64, rows)
 			colsum := make([]float64, cols)
-			for i := range rows {
-				for j := range cols {
-					gv := g.AtF64(i, j)
-					g2 := gv*gv + a.Eps1
-					rowsum[i] += g2
-					colsum[j] += g2
+			switch {
+			case gf64 != nil:
+				for i := range rows {
+					base := i * cols
+					for j := range cols {
+						gv := gf64[base+j]
+						g2 := gv*gv + a.Eps1
+						rowsum[i] += g2
+						colsum[j] += g2
+					}
+				}
+			case gf32 != nil:
+				for i := range rows {
+					base := i * cols
+					for j := range cols {
+						gv := float64(gf32[base+j])
+						g2 := gv*gv + a.Eps1
+						rowsum[i] += g2
+						colsum[j] += g2
+					}
+				}
+			default:
+				for i := range rows {
+					for j := range cols {
+						gv := g.AtF64(i, j)
+						g2 := gv*gv + a.Eps1
+						rowsum[i] += g2
+						colsum[j] += g2
+					}
 				}
 			}
 			R, C := a.r[pi], a.c[pi]
@@ -168,20 +196,45 @@ func (a *Adafactor) Step(grad GradFn) error {
 		} else {
 			V := a.v[pi]
 			vhat = make([]float64, n)
-			for i := range n {
-				idx := tensor.Unravel(i, p.Shape())
-				gv := g.AtF64(idx...)
-				V[i] = beta2t*V[i] + (1-beta2t)*(gv*gv+a.Eps1)
-				vhat[i] = V[i]
+			switch {
+			case gf64 != nil:
+				for i, gv := range gf64 {
+					V[i] = beta2t*V[i] + (1-beta2t)*(gv*gv+a.Eps1)
+					vhat[i] = V[i]
+				}
+			case gf32 != nil:
+				for i := range gf32 {
+					gv := float64(gf32[i])
+					V[i] = beta2t*V[i] + (1-beta2t)*(gv*gv+a.Eps1)
+					vhat[i] = V[i]
+				}
+			default:
+				for i := range n {
+					idx := tensor.Unravel(i, p.Shape())
+					gv := g.AtF64(idx...)
+					V[i] = beta2t*V[i] + (1-beta2t)*(gv*gv+a.Eps1)
+					vhat[i] = V[i]
+				}
 			}
 		}
 
 		// U = g/√V̂, optional first moment, then RMS update-clipping and the
 		// parameter-relative step.
 		u := make([]float64, n)
-		for i := range n {
-			idx := tensor.Unravel(i, p.Shape())
-			u[i] = g.AtF64(idx...) / math.Sqrt(vhat[i])
+		switch {
+		case gf64 != nil:
+			for i, gv := range gf64 {
+				u[i] = gv / math.Sqrt(vhat[i])
+			}
+		case gf32 != nil:
+			for i := range gf32 {
+				u[i] = float64(gf32[i]) / math.Sqrt(vhat[i])
+			}
+		default:
+			for i := range n {
+				idx := tensor.Unravel(i, p.Shape())
+				u[i] = g.AtF64(idx...) / math.Sqrt(vhat[i])
+			}
 		}
 		if a.Beta1 > 0 {
 			M := a.m[pi]
@@ -191,17 +244,42 @@ func (a *Adafactor) Step(grad GradFn) error {
 			}
 		}
 		var su, sp float64
-		for i := range n {
-			su += u[i] * u[i]
-			idx := tensor.Unravel(i, p.Shape())
-			pv := p.AtF64(idx...)
-			sp += pv * pv
+		switch {
+		case pf64 != nil:
+			for i, pv := range pf64 {
+				su += u[i] * u[i]
+				sp += pv * pv
+			}
+		case pf32 != nil:
+			for i := range pf32 {
+				su += u[i] * u[i]
+				pv := float64(pf32[i])
+				sp += pv * pv
+			}
+		default:
+			for i := range n {
+				su += u[i] * u[i]
+				idx := tensor.Unravel(i, p.Shape())
+				pv := p.AtF64(idx...)
+				sp += pv * pv
+			}
 		}
 		clip := math.Max(1, math.Sqrt(su/float64(n))/a.Clip)
 		alpha := math.Max(a.Eps2, math.Sqrt(sp/float64(n))) * rho
-		for i := range n {
-			idx := tensor.Unravel(i, p.Shape())
-			p.SetF64(p.AtF64(idx...)-alpha*(u[i]/clip), idx...)
+		switch {
+		case pf64 != nil:
+			for i := range pf64 {
+				pf64[i] = pf64[i] - alpha*(u[i]/clip)
+			}
+		case pf32 != nil:
+			for i := range pf32 {
+				pf32[i] = float32(float64(pf32[i]) - alpha*(u[i]/clip))
+			}
+		default:
+			for i := range n {
+				idx := tensor.Unravel(i, p.Shape())
+				p.SetF64(p.AtF64(idx...)-alpha*(u[i]/clip), idx...)
+			}
 		}
 	}
 	return nil

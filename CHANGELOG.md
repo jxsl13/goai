@@ -16,6 +16,20 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   = 1.33× faster** on `[1,2048]·[2048,2048]`. This is the primitive (decode-only GEMV); wiring it
   into the decode path + validating end-to-end token quality is the follow-up. If quality holds,
   a Q4 decode path beats llama.cpp on the larger models. Q8 path unaffected; §PERF-Q4.
+### T654 — Diffusion LM: non-autoregressive text generation (2026-07-15)
+- New `nlp.DiffusionLM`: a LLaDA-style masked-diffusion language model (Nie et al. 2025,
+  arXiv:2502.09992) — the first DISCRETE/text diffusion in the library (complements the
+  continuous `nn.DDPM`/flow-matching). A bidirectional transformer (the GPT block stack
+  with causal masking OFF, plus a [MASK] token row) is trained to predict masked tokens:
+  each sequence is corrupted by masking every position independently with probability
+  t~U(0,1) to an absorbing [MASK] state, and the loss is the cross-entropy on the masked
+  positions weighted by 1/t (the diffusion ELBO), computed via a differentiable
+  row-gather so gradients reach only the masked rows. Generation is non-autoregressive:
+  `DiffusionGenerate` starts from an all-[MASK] sequence and iteratively unmasks,
+  re-masking the lowest-confidence predictions each step. Built entirely from existing
+  ops (non-causal OpMHA, OpEmbed, cross-entropy) — no new kernels, no second-order.
+  Verified: full-parameter gradcheck + an e2e char-LM that trains (CE halves) and
+  generates valid grammar strings.
 
 ### CUDA — Q8 GEMV is near its bandwidth ceiling (measurement, worker linux-amd64, 2026-07-15)
 - A clean device-only bandwidth probe (kernel only, no D2H download — the `[1,2048]²`
