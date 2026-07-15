@@ -60,16 +60,17 @@ func flashAttnKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend
 // flashAttnTyped streams key/value blocks with the FA-2 online softmax, one
 // parallel task per (head, query row) — each row's running (m, ℓ, O) is local.
 func flashAttnTyped[T float32 | float64](q, k, v, out []T, seq, dm, dk, dkv, rep, heads, block int, causal bool, scale float64) {
+	_, isF32 := any(q).([]float32) // dot4 reassociation fits the f32 budget only
 	parallelWork(heads*seq, seq*dk, func(lo, hi int) {
 		acc := make([]float64, dk)
-		pv := make([]float64, dk)
+		pv := make([]float64, dk) // per-block Σ p·V, keeps acc's corr·acc+pv order
 		p := make([]float64, block)
 		for t := lo; t < hi; t++ {
 			h, i := t/seq, t%seq
 			qOff := h * dk
 			kvOff := (h / rep) * dk
 			qBase := i*dm + qOff
-			qr := q[qBase : qBase+dk : qBase+dk] // hoisted rows + range loops (BCE)
+			qr := q[qBase : qBase+dk : qBase+dk]
 			jmax := seq
 			if causal {
 				jmax = i + 1
@@ -86,8 +87,12 @@ func flashAttnTyped[T float32 | float64](q, k, v, out []T, seq, dm, dk, dkv, rep
 					kBase := j*dkv + kvOff
 					kr := k[kBase : kBase+dk : kBase+dk]
 					var s float64
-					for d, qv := range qr {
-						s += float64(qv) * float64(kr[d])
+					if isF32 {
+						s = dot4T(qr, kr)
+					} else {
+						for d, qv := range qr {
+							s += float64(qv) * float64(kr[d])
+						}
 					}
 					s *= scale
 					p[j-j0] = s
@@ -102,14 +107,16 @@ func flashAttnTyped[T float32 | float64](q, k, v, out []T, seq, dm, dk, dkv, rep
 				corr := math.Exp(m - mNew)
 				var pSum float64
 				for j := j0; j < j1; j++ {
-					pv := math.Exp(p[j-j0] - mNew)
-					p[j-j0] = pv
-					pSum += pv
+					e := math.Exp(p[j-j0] - mNew)
+					p[j-j0] = e
+					pSum += e
 				}
 				l = corr*l + pSum
-				// j-outer/d-inner: each pv[d] still sums p_j·v[j,d] in ascending-j
-				// order (bit-identical to the d-outer form) with contiguous v reads.
-				for d := range dk {
+				// Key-outer/d-inner Σ p·V over the pv scratch: V is read along its
+				// contiguous rows (was stride dkv); each pv[d] still sums ascending
+				// j and acc[d] = corr·acc[d]+pv[d] keeps the FA-2 update's exact
+				// operand order, so the result is unchanged.
+				for d := range pv {
 					pv[d] = 0
 				}
 				for j := j0; j < j1; j++ {
@@ -120,13 +127,152 @@ func flashAttnTyped[T float32 | float64](q, k, v, out []T, seq, dm, dk, dkv, rep
 						pv[d] += pj * float64(vv)
 					}
 				}
-				for d := range dk {
+				for d := range acc {
 					acc[d] = corr*acc[d] + pv[d]
 				}
 				m = mNew
 			}
-			for d := range dk {
-				out[qBase+d] = T(acc[d] / l)
+			or := out[qBase : qBase+dk : qBase+dk]
+			for d := range or {
+				or[d] = T(acc[d] / l)
+			}
+		}
+	})
+}
+
+// ropeGeom validates a RoPE input and returns (seq, width, heads, half).
+// Shared by forward and backward — identical constraints to ref's kernels.
+func ropeGeom(t *tensor.Tensor, pr backend.RoPEAttrs) (seq, width, heads, half int, err error) {
+	if t.Ndim() != 2 {
+		return 0, 0, 0, 0, fmt.Errorf("cpu: rope needs [seq,width], got %v", t.Shape())
+	}
+	seq, width = t.Shape()[0], t.Shape()[1]
+	heads = pr.Heads
+	if heads <= 0 {
+		heads = 1
+	}
+	if width%heads != 0 {
+		return 0, 0, 0, 0, fmt.Errorf("cpu: rope width %d not divisible by heads %d", width, heads)
+	}
+	hd := width / heads
+	if hd%2 != 0 {
+		return 0, 0, 0, 0, fmt.Errorf("cpu: rope head dim %d must be even", hd)
+	}
+	return seq, width, heads, hd / 2, nil
+}
+
+// ropeKernelCPU is the typed rotary-embedding forward (§R28 rotate_half, ref
+// semantics: PI/YaRN via backend.RoPEFreqs, xPos via backend.XPosScales,
+// PosOffset). ref recomputes math.Cos/Sin for every (row, head, pair) — the
+// angle only depends on (row, pair), so this kernel computes each row's
+// cos/sin (and xPos pow) table ONCE and reuses it across all heads, and runs
+// on concrete []T storage instead of AtF64/SetF64 interface arithmetic
+// (§T602 pattern). Same expressions per element → parity within ulps (§V9).
+func ropeKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
+	if len(in) != 1 {
+		return nil, fmt.Errorf("cpu: rope wants 1 input, got %d", len(in))
+	}
+	return ropeApplyKernel(ctx, in[0], attrs, false)
+}
+
+// ropeBackwardKernelCPU is the RoPE gradient: the inverse (angle→−angle)
+// rotation of the upstream g, with the xPos scale applied BEFORE the rotation
+// (mirroring ref's ropeBackwardKernel exactly).
+func ropeBackwardKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
+	if len(in) != 1 {
+		return nil, fmt.Errorf("cpu: rope-backward wants 1 input, got %d", len(in))
+	}
+	return ropeApplyKernel(ctx, in[0], attrs, true)
+}
+
+func ropeApplyKernel(ctx *backend.Context, q *tensor.Tensor, attrs backend.Attrs, backward bool) ([]*tensor.Tensor, error) {
+	pr, _ := attrs.(backend.RoPEAttrs)
+	seq, width, heads, half, err := ropeGeom(q, pr)
+	if err != nil {
+		return nil, err
+	}
+	inv, posDiv := backend.RoPEFreqs(2*half, pr)
+	var zeta []float64
+	if pr.XPos {
+		zeta = backend.XPosScales(2*half, pr)
+	}
+	out := tensor.NewOn(ctx.Device(), q.Dtype(), q.Shape())
+	qc := q.Contiguous()
+	switch q.Dtype() {
+	case tensor.F32:
+		ropeApply(qc.Storage().F32(), out.Storage().F32(), seq, width, heads, half,
+			pr.PosOffset, posDiv, inv, zeta, pr.XPosDownscale, backward)
+	case tensor.F64:
+		ropeApply(qc.Storage().F64(), out.Storage().F64(), seq, width, heads, half,
+			pr.PosOffset, posDiv, inv, zeta, pr.XPosDownscale, backward)
+	default:
+		return nil, fmt.Errorf("cpu: rope unsupported dtype %v", q.Dtype())
+	}
+	return []*tensor.Tensor{out}, nil
+}
+
+// ropeApply rotates every head's (i, i+half) pair of row p by angle
+// ((PosOffset+p)/posDiv)·inv[i]. cos/sin (and the xPos ζ^±n pow) are computed
+// once per (row, pair) and reused across heads; rows are parallel via the
+// §T511 pool. Forward: (lo,hi) = (x·c−y·s, y·c+x·s), then ×ζ^e. Backward:
+// scale first, then (lo,hi) = (x·c+y·s, −x·s+y·c) — exactly ref's order.
+func ropeApply[T normFloat](x, out []T, seq, width, heads, half, posOff int,
+	posDiv float64, inv, zeta []float64, downscale, backward bool) {
+	hd := 2 * half
+	parallelWork(seq, width*8, func(plo, phi int) {
+		cs := make([]float64, half)
+		sn := make([]float64, half)
+		var sc []float64
+		if zeta != nil {
+			sc = make([]float64, half)
+		}
+		for p := plo; p < phi; p++ {
+			n := float64(posOff + p)
+			pos := n / posDiv
+			for i, th := range inv {
+				a := pos * th
+				cs[i], sn[i] = math.Cos(a), math.Sin(a)
+			}
+			if zeta != nil {
+				e := n
+				if downscale {
+					e = -n
+				}
+				for i, z := range zeta {
+					sc[i] = math.Pow(z, e)
+				}
+			}
+			row := x[p*width : (p+1)*width]
+			orow := out[p*width : (p+1)*width]
+			for h := 0; h < heads; h++ {
+				xlo := row[h*hd : h*hd+half : h*hd+half]
+				xhi := row[h*hd+half : h*hd+hd : h*hd+hd]
+				olo := orow[h*hd : h*hd+half : h*hd+half]
+				ohi := orow[h*hd+half : h*hd+hd : h*hd+hd]
+				if backward {
+					for i := range half {
+						gi, gih := float64(xlo[i]), float64(xhi[i])
+						if sc != nil {
+							gi *= sc[i]
+							gih *= sc[i]
+						}
+						c, s := cs[i], sn[i]
+						olo[i] = T(gi*c + gih*s)
+						ohi[i] = T(-gi*s + gih*c)
+					}
+				} else {
+					for i := range half {
+						qi, qih := float64(xlo[i]), float64(xhi[i])
+						c, s := cs[i], sn[i]
+						lo, hi := qi*c-qih*s, qih*c+qi*s
+						if sc != nil {
+							lo *= sc[i]
+							hi *= sc[i]
+						}
+						olo[i] = T(lo)
+						ohi[i] = T(hi)
+					}
+				}
 			}
 		}
 	})
@@ -185,30 +331,31 @@ func retentionFwd[T normFloat](qs, ks, vs, os []T, l, dk, dv int, decay []float6
 		p := make([]float64, l)
 		acc := make([]float64, dv)
 		for n := lo; n < hi; n++ {
-			qr := qs[n*dk : n*dk+dk : n*dk+dk] // hoisted rows + range loops (BCE)
+			qn := qs[n*dk : n*dk+dk : n*dk+dk]
 			for m := 0; m <= n; m++ {
-				kr := ks[m*dk : m*dk+dk : m*dk+dk]
+				km := ks[m*dk : m*dk+dk : m*dk+dk]
 				var a float64
-				for i, qv := range qr {
-					a += float64(qv) * float64(kr[i])
+				for i, qv := range qn {
+					a += float64(qv) * float64(km[i])
 				}
 				p[m] = a * decay[n-m]
 			}
-			// m-outer/j-inner: each os[n,j] still sums p[m]·v[m,j] in ascending-m
-			// order (bit-identical to the j-outer form) but vs is read contiguously
-			// instead of column-strided.
-			for j := 0; j < dv; j++ {
+			// Key-outer/j-inner over an acc row: V is read along its contiguous
+			// rows (was stride dv); each acc[j] still sums m ascending → identical
+			// values (§V9 parity intact).
+			for j := range acc {
 				acc[j] = 0
 			}
 			for m := 0; m <= n; m++ {
 				pm := p[m]
-				vRow := vs[m*dv : m*dv+dv : m*dv+dv]
-				for j, vv := range vRow {
+				vr := vs[m*dv : m*dv+dv : m*dv+dv]
+				for j, vv := range vr {
 					acc[j] += pm * float64(vv)
 				}
 			}
-			for j := 0; j < dv; j++ {
-				os[n*dv+j] = T(acc[j])
+			or := os[n*dv : n*dv+dv : n*dv+dv]
+			for j := range or {
+				or[j] = T(acc[j])
 			}
 		}
 	})
@@ -262,21 +409,22 @@ func retentionBwd[T normFloat](qs, ks, vs, gs, dqs, dks, dvs []T, l, kd, vd int,
 			for i := range row {
 				row[i] = 0
 			}
-			gr := gs[n*vd : n*vd+vd : n*vd+vd] // hoisted rows + range loops (BCE)
+			gn := gs[n*vd : n*vd+vd : n*vd+vd]
 			for m := 0; m <= n; m++ {
-				vr := vs[m*vd : m*vd+vd : m*vd+vd]
+				vm := vs[m*vd : m*vd+vd : m*vd+vd]
 				var dp float64
-				for j, gv := range gr {
-					dp += float64(gv) * float64(vr[j])
+				for j, gv := range gn {
+					dp += float64(gv) * float64(vm[j])
 				}
 				dA := dp * decay[n-m]
-				kr := ks[m*kd : m*kd+kd : m*kd+kd]
-				for i, kv := range kr {
+				km := ks[m*kd : m*kd+kd : m*kd+kd]
+				for i, kv := range km {
 					row[i] += dA * float64(kv)
 				}
 			}
-			for i := range kd {
-				dqs[n*kd+i] = T(row[i])
+			or := dqs[n*kd : n*kd+kd : n*kd+kd]
+			for i := range or {
+				or[i] = T(row[i])
 			}
 		}
 	})
@@ -291,32 +439,34 @@ func retentionBwd[T normFloat](qs, ks, vs, gs, dqs, dks, dvs []T, l, kd, vd int,
 			for j := range rowV {
 				rowV[j] = 0
 			}
-			kr := ks[m*kd : m*kd+kd : m*kd+kd] // hoisted rows + range loops (BCE)
+			km := ks[m*kd : m*kd+kd : m*kd+kd]
 			vm := vs[m*vd : m*vd+vd : m*vd+vd]
 			for n := m; n < l; n++ {
-				qr := qs[n*kd : n*kd+kd : n*kd+kd]
+				qn := qs[n*kd : n*kd+kd : n*kd+kd]
 				var a float64
-				for i, qv := range qr {
-					a += float64(qv) * float64(kr[i])
+				for i, qv := range qn {
+					a += float64(qv) * float64(km[i])
 				}
 				pnm := a * decay[n-m]
-				gr := gs[n*vd : n*vd+vd : n*vd+vd]
+				gn := gs[n*vd : n*vd+vd : n*vd+vd]
 				var dp float64
-				for j, gv := range gr {
+				for j, gv := range gn {
 					gnj := float64(gv)
 					dp += gnj * float64(vm[j])
 					rowV[j] += pnm * gnj
 				}
 				dA := dp * decay[n-m]
-				for i, qv := range qr {
+				for i, qv := range qn {
 					rowK[i] += dA * float64(qv)
 				}
 			}
-			for i := range kd {
-				dks[m*kd+i] = T(rowK[i])
+			ok := dks[m*kd : m*kd+kd : m*kd+kd]
+			for i := range ok {
+				ok[i] = T(rowK[i])
 			}
-			for j := range vd {
-				dvs[m*vd+j] = T(rowV[j])
+			ov := dvs[m*vd : m*vd+vd : m*vd+vd]
+			for j := range ov {
+				ov[j] = T(rowV[j])
 			}
 		}
 	})
@@ -327,5 +477,7 @@ func init() {
 		std.add(backend.OpFlashAttn, dt, flashAttnKernelCPU)
 		std.add(backend.OpRetention, dt, retentionKernelCPU)
 		std.add(backend.OpRetentionBackward, dt, retentionBackwardKernelCPU)
+		std.add(backend.OpRoPE, dt, ropeKernelCPU)
+		std.add(backend.OpRoPEBackward, dt, ropeBackwardKernelCPU)
 	}
 }
