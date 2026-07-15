@@ -82,6 +82,12 @@ int cu_append_dpos(void* dst, const void* src, const void* dPos, int wkv);
 // Flash decode attention (seqQ==1): GQA K/V-shared split-K online-softmax partials + merge.
 int cu_gqa_flash_dpos(const void* dQ, const void* dK, const void* dV, void* dOut,
                       int seqKV, int qHeads, int kvHeads, int hd, float scale, const void* dOff);
+// f16 KV-cache twins: u16 storage (half the K/V bytes), f32 compute in shared.
+void* cu_alloc_u16(int n);
+int cu_zero_u16(void* d, int n);
+int cu_append_dpos_f16(void* dst16, const void* src, const void* dPos, int wkv);
+int cu_gqa_flash_f16_dpos(const void* dQ, const void* dK16, const void* dV16, void* dOut,
+                          int seqKV, int qHeads, int kvHeads, int hd, float scale, const void* dOff);
 // out[i,:] = table[ids[i],:] — input embedding row gather (table [vocab,d] resident).
 int cu_embed_f32(const void* dTable, const void* dIds, void* dOut, int seq, int d);
 int cu_download_f32(const void* dsrc, float* dst, int n);
