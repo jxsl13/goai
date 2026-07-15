@@ -4,6 +4,14 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — capstone: a full transformer layer composes on the general backend (worker linux-amd64, 2026-07-15)
+- `TestCUDAGeneralLayerForward` runs a whole F32 transformer block (RMSNorm → QKV
+  projections → RoPE → GQA-MHA → output proj → residual → RMSNorm → SwiGLU → down proj →
+  residual) through the generic `backend.Execute` path on `backend.Get(CUDA)` and confirms
+  it matches the same chain on the reference within tolerance. This proves the general CUDA
+  ops (added in the prior three PRs) COMPOSE end-to-end on-device, not just individually —
+  the capstone of making CUDA a full general backend.
+
 ### CUDA — general backend now covers a full transformer layer: OpMHA added (worker linux-amd64, 2026-07-15)
 - Adds `OpMHA` (grouped-query attention) to the general CUDA backend. With the prior
   ops this completes the transformer-layer set — `backend.Get(CUDA)` now runs MatMul,
