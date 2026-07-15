@@ -107,3 +107,63 @@ func TestCUDAGeneralOps(t *testing.T) {
 	mha("OpMHA/gqa", 6, 6, 8, 2, 8, true)
 	mha("OpMHA/decode", 1, 6, 8, 2, 8, true)
 }
+
+// A whole F32 transformer layer (RMSNorm → QKV → RoPE → GQA-MHA → o-proj → residual →
+// RMSNorm → SwiGLU → down-proj → residual) run through the generic backend.Execute path on
+// the CUDA backend must match the same chain on the reference — proving the general CUDA
+// ops COMPOSE end-to-end (not just individually), the capstone of the general-backend arc.
+func TestCUDAGeneralLayerForward(t *testing.T) {
+	skipNoGPU(t)
+	cu, ok := backend.Get(backend.CUDA)
+	if !ok {
+		t.Skip("cuda backend not registered")
+	}
+	ref, _ := backend.Get(backend.Ref)
+
+	const seq, dim, heads, kvHeads, hidden = 4, 32, 4, 2, 64
+	dk := dim / heads
+	kvDim := kvHeads * dk
+	x := bench.RandF32(tensor.Shape{seq, dim}, 1)
+	an := bench.RandF32(tensor.Shape{dim}, 2)
+	fn := bench.RandF32(tensor.Shape{dim}, 3)
+	wq := bench.RandF32(tensor.Shape{dim, dim}, 4)
+	wk := bench.RandF32(tensor.Shape{dim, kvDim}, 5)
+	wv := bench.RandF32(tensor.Shape{dim, kvDim}, 6)
+	wo := bench.RandF32(tensor.Shape{dim, dim}, 7)
+	wg := bench.RandF32(tensor.Shape{dim, hidden}, 8)
+	wu := bench.RandF32(tensor.Shape{dim, hidden}, 9)
+	wd := bench.RandF32(tensor.Shape{hidden, dim}, 10)
+
+	// layerFwd runs the block through backend.Execute on the given backend.
+	layerFwd := func(be backend.Backend) *tensor.Tensor {
+		ctx := backend.NewContext().WithBackend(be)
+		ex := func(op backend.Op, a backend.Attrs, ins ...*tensor.Tensor) *tensor.Tensor {
+			o, e := backend.Execute(ctx, op, ins, a)
+			must(t, e)
+			return o[0]
+		}
+		na := backend.NormAttrs{Eps: 1e-5}
+		h := ex(backend.OpRMSNorm, na, x, an)
+		q := ex(backend.OpRoPE, backend.RoPEAttrs{Base: 10000, Heads: heads}, ex(backend.OpMatMul, nil, h, wq))
+		k := ex(backend.OpRoPE, backend.RoPEAttrs{Base: 10000, Heads: kvHeads}, ex(backend.OpMatMul, nil, h, wk))
+		v := ex(backend.OpMatMul, nil, h, wv)
+		a := ex(backend.OpMHA, backend.AttnAttrs{Heads: heads, KVHeads: kvHeads, Causal: true}, q, k, v)
+		x1 := ex(backend.OpAdd, nil, x, ex(backend.OpMatMul, nil, a, wo))
+		hf := ex(backend.OpRMSNorm, na, x1, fn)
+		g := ex(backend.OpSiLU, nil, ex(backend.OpMatMul, nil, hf, wg))
+		act := ex(backend.OpMul, nil, g, ex(backend.OpMatMul, nil, hf, wu))
+		return ex(backend.OpAdd, nil, x1, ex(backend.OpMatMul, nil, act, wd))
+	}
+
+	gpu := layerFwd(cu).Contiguous().Storage().F32()
+	cpu := layerFwd(ref).Cast(tensor.F32).Contiguous().Storage().F32()
+	if len(gpu) != len(cpu) {
+		t.Fatalf("layer output len %d != %d", len(gpu), len(cpu))
+	}
+	for i := range gpu {
+		if d := math.Abs(float64(gpu[i] - cpu[i])); d > 3e-3+3e-3*math.Abs(float64(cpu[i])) {
+			t.Fatalf("layer out[%d]: cuda %v vs ref %v (Δ%g)", i, gpu[i], cpu[i], d)
+		}
+	}
+	t.Logf("full F32 transformer layer via general backend.Execute: CUDA == reference (%d elems)", len(gpu))
+}
