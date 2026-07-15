@@ -43,8 +43,13 @@ type rawLayer struct {
 	bq, bk, bv     *cuda.ResidentVec // QKV bias (qwen2); nil for the llama family
 	wq, wk, wv, wo qProj
 	wg, wu, wd     qProj
-	cache          *cuda.KVCache
+	cache          *cuda.KVCache    // f32 cache (chain + flash paths)
+	cacheF         *cuda.KVCacheF16 // f16 cache (GOAI_CUDA_KV=f16, flash-only)
 }
+
+// kvF16 selects the f16 KV cache (half the K/V bytes — the flash kernel's
+// bandwidth currency). Opt-in while the A/B runs; flipped by measurement.
+func kvF16() bool { return os.Getenv("GOAI_CUDA_KV") == "f16" }
 
 // rawGraphDecoder is the optimized decode path (fixed buffers + device-pos + fixed-size
 // attention + CUDA graph + on-device argmax) built DIRECTLY from a gguf.RawFile: each
@@ -150,16 +155,24 @@ func buildRawGraphDecoder(tb testing.TB, rf *gguf.RawFile, arch string, maxSeq i
 	gd.layers = make([]*rawLayer, nL)
 	for i := 0; i < nL; i++ {
 		p := "blk." + itoa(i) + "."
-		c, err := cuda.NewKVCache(maxSeq, wkv)
-		mustTB(tb, err)
-		mustTB(tb, c.ZeroCache())
-		c.SetLen(maxSeq)
+		var c *cuda.KVCache
+		var cf *cuda.KVCacheF16
+		if kvF16() {
+			cf, err = cuda.NewKVCacheF16(maxSeq, wkv)
+			mustTB(tb, err)
+			mustTB(tb, cf.ZeroCache())
+		} else {
+			c, err = cuda.NewKVCache(maxSeq, wkv)
+			mustTB(tb, err)
+			mustTB(tb, c.ZeroCache())
+			c.SetLen(maxSeq)
+		}
 		l := &rawLayer{
 			gAttn: vec(p + "attn_norm.weight"), gFFN: vec(p + "ffn_norm.weight"),
 			wq: q(p + "attn_q.weight"), wk: q(p + "attn_k.weight"),
 			wv: q(p + "attn_v.weight"), wo: q(p + "attn_output.weight"),
 			wg: q(p + "ffn_gate.weight"), wu: q(p + "ffn_up.weight"), wd: q(p + "ffn_down.weight"),
-			cache: c,
+			cache: c, cacheF: cf,
 		}
 		if _, ok := rf.Tensors[p+"attn_q.bias"]; ok { // qwen2 QKV bias
 			l.bq, l.bk, l.bv = vec(p+"attn_q.bias"), vec(p+"attn_k.bias"), vec(p+"attn_v.bias")
@@ -182,12 +195,17 @@ func (gd *rawGraphDecoder) forwardBody(tb testing.TB) {
 		}
 		mustTB(tb, gd.dq.RoPEDposInv(gd.heads, gd.inv, gd.pos, 0))
 		mustTB(tb, gd.dk.RoPEDposInv(gd.kv, gd.inv, gd.pos, 0))
-		mustTB(tb, l.cache.AppendDpos(gd.dk, gd.dv, gd.pos))
-		kF, vF := l.cache.FullView()
-		if os.Getenv("GOAI_CUDA_FUSED_ATTN") == "0" { // A/B toggle: the 3-kernel cuBLAS chain (beaten by flash: -3.5% @ctx160, -26% @ctx2004)
-			mustTB(tb, cuda.GroupedQueryAttentionKVDposInto(gd.dq, kF, vF, gd.heads, gd.kv, gd.pos, gd.scores, gd.da))
-		} else { // flash decode: GQA K/V-shared split-K + merge — the winner at every context depth
-			mustTB(tb, cuda.GroupedQueryAttentionKVDposFlashInto(gd.dq, kF, vF, gd.heads, gd.kv, gd.pos, gd.da))
+		if l.cacheF != nil { // f16 KV (GOAI_CUDA_KV=f16): half the K/V bytes, flash-only
+			mustTB(tb, l.cacheF.AppendDpos(gd.dk, gd.dv, gd.pos))
+			mustTB(tb, cuda.GroupedQueryAttentionKVF16DposFlashInto(gd.dq, l.cacheF, gd.heads, gd.kv, gd.pos, gd.da))
+		} else {
+			mustTB(tb, l.cache.AppendDpos(gd.dk, gd.dv, gd.pos))
+			kF, vF := l.cache.FullView()
+			if os.Getenv("GOAI_CUDA_FUSED_ATTN") == "0" { // A/B toggle: the 3-kernel cuBLAS chain (beaten by flash: -3.5% @ctx160, -26% @ctx2004)
+				mustTB(tb, cuda.GroupedQueryAttentionKVDposInto(gd.dq, kF, vF, gd.heads, gd.kv, gd.pos, gd.scores, gd.da))
+			} else { // flash decode: GQA K/V-shared split-K + merge — the winner at every context depth
+				mustTB(tb, cuda.GroupedQueryAttentionKVDposFlashInto(gd.dq, kF, vF, gd.heads, gd.kv, gd.pos, gd.da))
+			}
 		}
 		mustTB(tb, l.wo.QMatMulAccInto(gd.da, gd.dx))
 		mustTB(tb, gd.dx.RMSNormInto(l.gFFN, float32(gd.eps), gd.dh2))
@@ -239,7 +257,12 @@ func (gd *rawGraphDecoder) free() {
 	for _, l := range gd.layers {
 		l.gAttn.Free()
 		l.gFFN.Free()
-		l.cache.Free()
+		if l.cache != nil {
+			l.cache.Free()
+		}
+		if l.cacheF != nil {
+			l.cacheF.Free()
+		}
 		for _, b := range []*cuda.ResidentVec{l.bq, l.bk, l.bv} {
 			if b != nil {
 				b.Free()

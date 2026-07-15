@@ -1083,6 +1083,27 @@ tok/s @2k, v2 (f32, warp-partitioned output) 102 vs the chain's 168. Lesson: the
 was never launch-bound inside a captured graph; only the structural K/V-sharing win
 (which needs the flash organization) beats it. Both rejected kernels were removed.
 
+### f16 KV cache: memory win, honestly NOT a speed win (Tw53)
+
+With the flash kernel in place, the obvious next lever was halving K/V bytes (f16
+storage, f32 compute — `KVCacheF16` + `cu_gqa_flash_f16_dpos`, round-to-nearest append,
+tiles converted in shared so conversion is amortized over the GQA group). MEASURED
+FLAT: interleaved A/B at ctx≈2004 gives f16 209.9–210.3 vs f32 211.8–212.9 tok/s (≤1%,
+noise). The traffic model says why: after the 8× GQA sharing, K/V global reads are only
+~11µs of the flash kernel's ~34µs/layer at 2k — the rest is compute and tile staging,
+so halving the bytes moves ~2%. The hypothesis "attention is K/V-read-bound" died with
+the very kernel that made it true before.
+
+The f16 cache still lands, as an OPT-IN (`GOAI_CUDA_KV=f16`): quality gates are
+UNCHANGED (Qwen text and agreement identical to the f32 cache; kernel parity 2.2e-4),
+and the KV VRAM halves — the capacity lever for longer contexts on the 12 GB card.
+llama.cpp defaults to f16 KV, so goai's scoreboard numbers (f32 cache) carry a small
+built-in handicap and win anyway. f32 stays the default: exactness at zero cost.
+
+Also measured this arc: the prefill profile (`TestCUDAPrefillProfile`, seq=128) puts
+attention at 13.8% and the FFN GEMMs at 53.8% of prefill — a flash PREFILL kernel has
+a ≤14% ceiling and is parked; the prefill gap to llama.cpp is a GEMM-utilization story.
+
 ## Unified serving: batched f16 prefill feeding the Q4_K decoder (worker linux-amd64)
 
 The engine's last structural serving weakness was prompt processing: the graph decoder
