@@ -771,6 +771,27 @@ hand-tuned implementation** on the same GPU + model — competitive. The remaini
 gap needs a better quantized kernel (Q4_K) or flash-style attention; prefill (less
 optimized) trails more because llama.cpp fuses + batches attention.
 
+### T631 CPU-offload viability (ADR-0021 measurement gate, worker linux-amd64)
+
+To run a model that EXCEEDS device VRAM, T631 would offload the overflow layers to
+the amd64 CPU-SIMD backend (llama.cpp-style partial offload). `TestT631OffloadViability
+Probe` measures the per-token cost first (TinyLlama-1.1B, RTX 3060 vs the amd64 CPU):
+
+| layers offloaded to CPU | decode tok/s | vs all-GPU |
+|---|---|---|
+| 0 (all GPU) | 164.7 | 100% |
+| 1 | 30.1 | 18% |
+| 2 | 16.5 | 10% |
+| 4 | 8.7 | 5% |
+| 8 | 4.5 | 3% |
+
+Per layer: CPU-SIMD ≈27.5 ms vs GPU-Q8 ≈0.28 ms → **CPU ≈99× the GPU per layer**.
+So even one offloaded layer becomes the bottleneck. VERDICT: CPU-SIMD offload is
+FUNCTIONAL (runs >VRAM models with no hard OOM) but throughput collapses fast — T631
+must spill the MINIMUM overflow layers, keeping the hottest ones on the GPU. Caveat:
+this is the f64 `nlp.Llama` CPU path vs the Q8 GPU path; a Q8/f32 CPU offload path
+would narrow the ratio (though offloaded layers would still dominate).
+
 ## Further reading
 
 - Hoefler & Belli, *Scientific Benchmarking of Parallel Computing Systems* (SC '15) — the canonical treatment of run variance, warm-up and honest reporting that this document's rules follow.
