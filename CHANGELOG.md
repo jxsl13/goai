@@ -4,6 +4,18 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CPU — amd64 SIMD decode-GEMV parallelism: +90% on the common decode shape (worker linux-amd64, 2026-07-15)
+- The `GOEXPERIMENT=simd` F32 GEMM small-m branch (m ≤ 3 — the decode GEMV shape) sized its
+  column-parallel blocks at a fixed 512 cols, so `n=2048` produced only 4 blocks → 4 of 16
+  cores busy. A GEMV is memory-bandwidth-bound, so throughput scales with the number of
+  cores streaming B; the block size now adapts to ≈`n/workers` (floored to a whole 32-wide
+  tile, capped at 512 for an L2-friendly per-worker B slice). Measured `[1,2048]·[2048,2048]`
+  on 16 cores: **14.4 → 27.5 GFLOP/s (+90%)**, with the m ≥ 4 GEMM path untouched
+  (`MatMul/512` ≈230 GFLOP/s). Block ranges stay disjoint → bit-identical result; parity vs
+  the reference holds at every n (`TestGemmSmallMCrossReference`, extended with the large-N
+  regimes). amd64-only path (the ARM dev machine can't compile it); `CGO_ENABLED=0` and the
+  non-experiment scalar build are unaffected.
+
 ### CUDA — T631 layer-assignment policy: VRAM-budget-driven offload planner (worker linux-amd64, 2026-07-15)
 - `cuda.PlanOffload(nLayers, perLayerBytes, fixedBytes, budgetBytes) OffloadPlan` decides
   the GPU/CPU layer split for a model that may exceed VRAM: it fills the budget with the
