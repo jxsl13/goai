@@ -24,6 +24,10 @@ const qBlock = 32
 // weights contiguous) with a per-32-block scale, so B[k,n] ≈ scale[n,k/32]·q[n,k].
 // Reading int8 weights is 4× less memory bandwidth than f32 — the decode
 // (memory-bound GEMV) win that mirrors llama.cpp's quantized kernels.
+//
+// DECODE-ONLY: the warp-per-output kernel is a GEMV. For prefill's M=P GEMM it is
+// 6–10× SLOWER than cuBLAS f32 (measured, §PERF) — prefill is compute-bound, so it
+// stays on the f32 cuBLAS path. Q8 is the memory-bound single-token decode lever.
 type ResidentBQ8 struct {
 	q      unsafe.Pointer // device int8 [N*K], row n = quantized B[:,n]
 	scales unsafe.Pointer // device f32 [N*nb]
