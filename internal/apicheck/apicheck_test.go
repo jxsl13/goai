@@ -142,6 +142,7 @@ var typeExampleExempt = map[string]bool{
 	"nn.MiniLMOption":               true, // functional-option type (shown via WithMiniLMRelations)
 	"nn.AQLMOption":                 true, // functional-option type (shown via WithAQLMCodebooks etc. in ExampleEncodeAQLM)
 	"nn.SpinOption":                 true, // functional-option type (shown via WithSpinSeed)
+	"nn.MARSOption":                 true, // functional-option type (shown via WithMARSGamma etc.)
 	"autograd.CheckpointFunc":       true, // callback-signature type (shown via ExampleCheckpoint)
 	"nn.ScheduleFreeOption":         true, // functional-option type (shown via WithScheduleFree*)
 	"nn.DAdaptAdamOption":           true, // functional-option type (shown via WithDAdapt*)
