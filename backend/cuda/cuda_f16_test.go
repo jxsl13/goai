@@ -308,7 +308,7 @@ func (l *resLayerF16) forward(dx *cuda.DeviceF32) (*cuda.DeviceF32, error) {
 	dh.Free()
 	dq.RoPE(rq)
 	dk.RoPE(rk)
-	da, err := cuda.GroupedQueryAttention(dq, dk, dv, l.heads, l.kv, true)
+	da, err := cuda.GroupedQueryAttentionTF32(dq, dk, dv, l.heads, l.kv, true)
 	if err != nil {
 		return nil, err
 	}

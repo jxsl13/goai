@@ -1549,7 +1549,7 @@ done:
 // cu_gqa_scores: scores[h] = Q[h]·K[h/group]ᵀ for every query head. Q is
 // [seqQ, WQ], K is [seqKV, WKV]; scores[h] is [seqQ, seqKV]. Full prefill passes
 // seqQ==seqKV; a KV-cache step passes seqQ (new tokens) < seqKV (cache length).
-int cu_gqa_scores(const void* dQ, const void* dK, void* dScores, int seqQ, int seqKV, int qHeads, int kvHeads, int hd) {
+int cu_gqa_scores(const void* dQ, const void* dK, void* dScores, int seqQ, int seqKV, int qHeads, int kvHeads, int hd, int tf32) {
     // Persistent (grow-only, gLock-guarded) host + device pointer arrays: the
     // attention pointer lists are rebuilt each call but reuse one allocation, and
     // the uploads ride gStream (async) so there is no per-call cudaMalloc/cudaFree
@@ -1568,10 +1568,13 @@ int cu_gqa_scores(const void* dQ, const void* dK, void* dScores, int seqQ, int s
     // K grouped (h/group)·hd, Q per-head h·hd, scores per-head h·(seqQ·seqKV).
     if (cu_build_batch_ptrs(dK, dQ, dScores, sK, sQ, sC, qHeads, group,
                             hd, hd, (long)seqQ * seqKV) != 0) { rc = -3; goto done; }
+    if (tf32) cublasSetMathMode(gHandle, CUBLAS_TF32_TENSOR_OP_MATH); // opt-in: prefill only (§PERF-F16-PREFILL follow-up); decode parity paths pass 0
     if (cublasSgemmBatched(gHandle, CUBLAS_OP_T, CUBLAS_OP_N, seqKV, seqQ, hd, gOne,
                            (const float* const*)sK, WKV, (const float* const*)sQ, WQ, gZero,
-                           (float* const*)sC, seqKV, qHeads) != CUBLAS_STATUS_SUCCESS) { rc = -4; goto done; }
+                           (float* const*)sC, seqKV, qHeads) != CUBLAS_STATUS_SUCCESS) { rc = -4; goto tf32done; }
     rc = 0;
+tf32done:
+    if (tf32) cublasSetMathMode(gHandle, CUBLAS_DEFAULT_MATH);
 done:
     pthread_mutex_unlock(&gLock);
     return rc;
@@ -1579,7 +1582,7 @@ done:
 
 // cu_gqa_out: out[h] = scores[h]·V[h/group] for every query head, into [seqQ,WQ].
 // scores[h] is [seqQ, seqKV], V is [seqKV, WKV]. Full prefill passes seqQ==seqKV.
-int cu_gqa_out(const void* dScores, const void* dV, void* dOut, int seqQ, int seqKV, int qHeads, int kvHeads, int hd) {
+int cu_gqa_out(const void* dScores, const void* dV, void* dOut, int seqQ, int seqKV, int qHeads, int kvHeads, int hd, int tf32) {
     // Persistent grow-only pointer arrays (see cu_gqa_scores) — no per-call
     // cudaMalloc/cudaFree, uploads on gStream.
     static void *sV = NULL, *sS = NULL, *sO = NULL;
@@ -1596,10 +1599,13 @@ int cu_gqa_out(const void* dScores, const void* dV, void* dOut, int seqQ, int se
     // per-head h·(seqQ·seqKV), out per-head h·hd.
     if (cu_build_batch_ptrs(dV, dScores, dOut, sV, sS, sO, qHeads, group,
                             hd, (long)seqQ * seqKV, hd) != 0) { rc = -3; goto done; }
+    if (tf32) cublasSetMathMode(gHandle, CUBLAS_TF32_TENSOR_OP_MATH);
     if (cublasSgemmBatched(gHandle, CUBLAS_OP_N, CUBLAS_OP_N, hd, seqQ, seqKV, gOne,
                            (const float* const*)sV, WKV, (const float* const*)sS, seqKV, gZero,
-                           (float* const*)sO, WQ, qHeads) != CUBLAS_STATUS_SUCCESS) { rc = -4; goto done; }
+                           (float* const*)sO, WQ, qHeads) != CUBLAS_STATUS_SUCCESS) { rc = -4; goto tf32done2; }
     rc = 0;
+tf32done2:
+    if (tf32) cublasSetMathMode(gHandle, CUBLAS_DEFAULT_MATH);
 done:
     pthread_mutex_unlock(&gLock);
     return rc;

@@ -154,7 +154,7 @@ func GroupedQueryAttentionKVDpos(q, k, v *DeviceF32, qHeads, kvHeads int, off *D
 		return nil, fmt.Errorf("cuda: GQA-KV-dpos scores alloc failed")
 	}
 	defer C.cu_free_f32(scores)
-	if rc := C.cu_gqa_scores(q.ptr, k.ptr, scores, C.int(seqQ), C.int(seqKV), C.int(qHeads), C.int(kvHeads), C.int(hd)); rc != 0 {
+	if rc := C.cu_gqa_scores(q.ptr, k.ptr, scores, C.int(seqQ), C.int(seqKV), C.int(qHeads), C.int(kvHeads), C.int(hd), 0); rc != 0 {
 		return nil, fmt.Errorf("cuda: GQA-KV-dpos scores failed (code %d)", int(rc))
 	}
 	if rc := C.cu_attn_softmax_dpos(scores, C.int(qHeads*seqQ), C.int(seqKV), C.float(1/math.Sqrt(float64(hd))), off.ptr, C.int(seqQ)); rc != 0 {
@@ -164,7 +164,7 @@ func GroupedQueryAttentionKVDpos(q, k, v *DeviceF32, qHeads, kvHeads int, off *D
 	if out == nil {
 		return nil, fmt.Errorf("cuda: GQA-KV-dpos out alloc failed")
 	}
-	if rc := C.cu_gqa_out(scores, v.ptr, out, C.int(seqQ), C.int(seqKV), C.int(qHeads), C.int(kvHeads), C.int(hd)); rc != 0 {
+	if rc := C.cu_gqa_out(scores, v.ptr, out, C.int(seqQ), C.int(seqKV), C.int(qHeads), C.int(kvHeads), C.int(hd), 0); rc != 0 {
 		C.cu_free_f32(out)
 		return nil, fmt.Errorf("cuda: GQA-KV-dpos out failed (code %d)", int(rc))
 	}

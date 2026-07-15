@@ -104,8 +104,8 @@ int cu_mha_out(const void* dScores, const void* dV, void* dOut, int seq, int hea
 // Pointer-array batched Sgemm; Q is [seqQ,WQ], K/V are [seqKV,WKV], scores are
 // [qHeads, seqQ, seqKV]. Full prefill passes seqQ==seqKV; a KV-cache decode step
 // passes seqQ new query rows against seqKV cached keys/values.
-int cu_gqa_scores(const void* dQ, const void* dK, void* dScores, int seqQ, int seqKV, int qHeads, int kvHeads, int hd);
-int cu_gqa_out(const void* dScores, const void* dV, void* dOut, int seqQ, int seqKV, int qHeads, int kvHeads, int hd);
+int cu_gqa_scores(const void* dQ, const void* dK, void* dScores, int seqQ, int seqKV, int qHeads, int kvHeads, int hd, int tf32);
+int cu_gqa_out(const void* dScores, const void* dV, void* dOut, int seqQ, int seqKV, int qHeads, int kvHeads, int hd, int tf32);
 
 // On-device elementwise op (§V14 Phase-2, breadth beyond matmul). The kernel is
 // compiled at runtime from CUDA-C source via nvrtc (no nvcc needed) and launched
