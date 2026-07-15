@@ -4,6 +4,18 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — f16 KV cache: half the KV VRAM, speed and quality measured flat (worker linux-amd64, Tw53, 2026-07-15)
+- `KVCacheF16` + `cu_append_dpos_f16` + `cu_gqa_flash_f16_dpos`: f16 (u16) K/V storage
+  with f32 compute — tiles converted in shared memory, so the conversion is amortized
+  over the GQA group. Kernel parity 2.2e-4 vs the f32 cache; e2e text and agreement
+  identical. Opt-in via `GOAI_CUDA_KV=f16`.
+- Honest verdict: **speed is FLAT** (interleaved A/B at ctx≈2004: ≤1%) — after Tw52's
+  8× GQA K/V sharing, global K/V reads are a minor share of the flash kernel's time,
+  so the "attention is K/V-bandwidth-bound" hypothesis no longer holds. The value is
+  **KV VRAM −50%** (long-context capacity on 12 GB) and llama.cpp-format comparability.
+- Prefill profile (`TestCUDAPrefillProfile`): attention 13.8% vs FFN GEMMs 53.8% —
+  flash-prefill has a ≤14% ceiling and is parked; the prefill gap is GEMM utilization.
+
 ### CUDA — flash decode attention: GQA K/V sharing beats the cuBLAS chain at every depth (worker linux-amd64, Tw52, 2026-07-15)
 - `cu_gqa_flash_dpos` + `GroupedQueryAttentionKVDposFlashInto`: flash decoding for the
   graph path — one block per (kv head, key chunk) stages K/V tiles into shared memory

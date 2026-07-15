@@ -9,6 +9,7 @@ import "C"
 
 import (
 	"fmt"
+	"math"
 	"unsafe"
 )
 
@@ -95,4 +96,100 @@ func (c *KVCache) Free() {
 		c.dV = nil
 	}
 	c.n = 0
+}
+
+// KVCacheF16 is KVCache with f16 (u16) storage — half the K/V bytes, which is
+// the flash decode kernel's bandwidth currency (Tw52: attention is K/V-read-
+// bound by construction). Rows are converted f32→f16 (round-to-nearest-even) on
+// append; the flash kernel converts tiles back to f32 in shared memory, so the
+// compute precision matches the f32-cache kernel given the rounded values.
+// llama.cpp stores its KV in f16 by default — this also makes cross-engine
+// comparisons same-format. Decode-only: usable via the flash attention path
+// (GroupedQueryAttentionKVF16DposFlashInto), not the cuBLAS chain (Sgemm needs
+// f32 operands).
+type KVCacheF16 struct {
+	dK, dV      unsafe.Pointer
+	maxSeq, wkv int
+}
+
+// NewKVCacheF16 allocates u16 K/V buffers for up to maxSeq tokens of width wkv.
+func NewKVCacheF16(maxSeq, wkv int) (*KVCacheF16, error) {
+	if maxSeq <= 0 || wkv <= 0 {
+		return nil, fmt.Errorf("cuda: KVCacheF16 bad dims maxSeq=%d wkv=%d", maxSeq, wkv)
+	}
+	dK := C.cu_alloc_u16(C.int(maxSeq * wkv))
+	if dK == nil {
+		return nil, fmt.Errorf("cuda: KVCacheF16 alloc K failed")
+	}
+	dV := C.cu_alloc_u16(C.int(maxSeq * wkv))
+	if dV == nil {
+		C.cu_free_f32(dK)
+		return nil, fmt.Errorf("cuda: KVCacheF16 alloc V failed")
+	}
+	return &KVCacheF16{dK: dK, dV: dV, maxSeq: maxSeq, wkv: wkv}, nil
+}
+
+// AppendDpos converts one token's k and v rows ([1,wkv] f32, already RoPE'd) to
+// f16 and writes them at row *pos — the graph-capturable f16 append.
+func (c *KVCacheF16) AppendDpos(k, v *DeviceF32, pos *DevicePos) error {
+	if k.cols != c.wkv || v.cols != c.wkv || k.rows != 1 || v.rows != 1 {
+		return fmt.Errorf("cuda: KVCacheF16 AppendDpos needs [1,%d] k/v, got k%v v%v", c.wkv, k.shape(), v.shape())
+	}
+	if rc := C.cu_append_dpos_f16(c.dK, k.ptr, pos.ptr, C.int(c.wkv)); rc != 0 {
+		return fmt.Errorf("cuda: KVCacheF16 AppendDpos K failed (code %d)", int(rc))
+	}
+	if rc := C.cu_append_dpos_f16(c.dV, v.ptr, pos.ptr, C.int(c.wkv)); rc != 0 {
+		return fmt.Errorf("cuda: KVCacheF16 AppendDpos V failed (code %d)", int(rc))
+	}
+	return nil
+}
+
+// ZeroCache zeros both buffers (f16 zero == all-zero bytes).
+func (c *KVCacheF16) ZeroCache() error {
+	if rc := C.cu_zero_u16(c.dK, C.int(c.maxSeq*c.wkv)); rc != 0 {
+		return fmt.Errorf("cuda: KVCacheF16 zero K failed (code %d)", int(rc))
+	}
+	if rc := C.cu_zero_u16(c.dV, C.int(c.maxSeq*c.wkv)); rc != 0 {
+		return fmt.Errorf("cuda: KVCacheF16 zero V failed (code %d)", int(rc))
+	}
+	return nil
+}
+
+// Free releases both buffers.
+func (c *KVCacheF16) Free() {
+	if c.dK != nil {
+		C.cu_free_f32(c.dK)
+		C.cu_free_f32(c.dV)
+		c.dK, c.dV = nil, nil
+	}
+}
+
+// GroupedQueryAttentionKVF16DposFlashInto is the flash decode attention over an
+// f16 cache: identical organization to GroupedQueryAttentionKVDposFlashInto but
+// K/V global reads are half the bytes (tiles converted to f32 in shared during
+// staging). q is [1, qHeads·hd]; out [1, qHeads·hd]. Needs hd ≤ 128, group ≤ 8.
+func GroupedQueryAttentionKVF16DposFlashInto(q *DeviceF32, c *KVCacheF16, qHeads, kvHeads int, off *DevicePos, out *DeviceF32) error {
+	if q.ptr == nil || c.dK == nil || out.ptr == nil {
+		return fmt.Errorf("cuda: GQA-f16-flash on a freed handle")
+	}
+	seqQ, wq := q.rows, q.cols
+	if seqQ != 1 {
+		return fmt.Errorf("cuda: GQA-f16-flash needs seqQ==1 (decode), got %d", seqQ)
+	}
+	if qHeads <= 0 || kvHeads <= 0 || qHeads%kvHeads != 0 || wq%qHeads != 0 {
+		return fmt.Errorf("cuda: GQA-f16-flash bad head config")
+	}
+	hd := wq / qHeads
+	if kvHeads*hd != c.wkv {
+		return fmt.Errorf("cuda: GQA-f16-flash cache width %d, want %d", c.wkv, kvHeads*hd)
+	}
+	if out.rows != 1 || out.cols != wq {
+		return fmt.Errorf("cuda: GQA-f16-flash out shape [%d,%d], want [1,%d]", out.rows, out.cols, wq)
+	}
+	if rc := C.cu_gqa_flash_f16_dpos(q.ptr, c.dK, c.dV, out.ptr,
+		C.int(c.maxSeq), C.int(qHeads), C.int(kvHeads), C.int(hd),
+		C.float(1/math.Sqrt(float64(hd))), off.ptr); rc != 0 {
+		return fmt.Errorf("cuda: GQA-f16-flash failed (code %d)", int(rc))
+	}
+	return nil
 }
