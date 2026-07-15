@@ -614,6 +614,56 @@ done:
     return rc;
 }
 
+// cu_rope_f32_band: strided-band RoPE. Rotates `heads` heads (hd wide each) that
+// start at float-element column `off` inside rows of stride `stride` floats, in
+// place (HF rotate_half; §T613 fused-QKV path). This is cu_rope_f32 generalised
+// with a row stride and a column offset, so the q and k bands of a single fused
+// [seq, stride] QKV buffer rotate without being copied out first. Angles in double.
+static CUfunction gRopeBand = NULL;
+int cu_rope_f32_band(void* x, const void* inv, int seq, int stride, int off, int heads, int hd, int posOffset, double posDiv) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (!gRopeBand && compile_kernel(
+                      "extern \"C\" __global__ void rope_band(float* x, const float* inv, int seq, int stride, int off, int heads, int hd, int posOffset, double posDiv){\n"
+                      "  int half = hd/2;\n"
+                      "  long total = (long)seq*heads*half;\n"
+                      "  long gid = (long)blockIdx.x*blockDim.x + threadIdx.x;\n"
+                      "  if (gid >= total) return;\n"
+                      "  int i = (int)(gid % half);\n"
+                      "  int h = (int)((gid / half) % heads);\n"
+                      "  int p = (int)(gid / ((long)half*heads));\n"
+                      "  double pos = (double)(posOffset + p) / posDiv;\n"
+                      "  double ang = pos * (double)inv[i];\n"
+                      "  double c = cos(ang), s = sin(ang);\n"
+                      "  float* xr = x + (size_t)p*stride + off + (size_t)h*hd;\n"
+                      "  double qi = xr[i], qih = xr[i+half];\n"
+                      "  xr[i] = (float)(qi*c - qih*s);\n"
+                      "  xr[i+half] = (float)(qih*c + qi*s);\n"
+                      "}\n",
+                      "rope_band.cu", "rope_band", &gRopeBand) != 0) { rc = -2; goto done; }
+    {
+        long total = (long)seq * heads * (hd / 2);
+        int threads = 256, blocks = (int)((total + threads - 1) / threads);
+        if (blocks < 1) blocks = 1;
+        void* args[9];
+        args[0] = &x;
+        args[1] = &inv;
+        args[2] = &seq;
+        args[3] = &stride;
+        args[4] = &off;
+        args[5] = &heads;
+        args[6] = &hd;
+        args[7] = &posOffset;
+        args[8] = &posDiv;
+        rc = (cuLaunchKernel(gRopeBand, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
 // ensure_cap grows *buf to at least need bytes (grow-only; reuses on repeat).
 static int ensure_cap(float **buf, size_t *cap, size_t need) {
     if (*cap >= need) return 0;

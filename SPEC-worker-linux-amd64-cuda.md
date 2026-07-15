@@ -139,7 +139,7 @@ implement its recorder/linear/buffer interfaces over my backend/cuda primitives
 already cover most of `recorder`: RMSNorm✓ MatMul/MatMulAcc✓ RoPE✓ MHA/GQA✓
 Unary/Binary✓ QMatMulResident✓(Q8). GAPS to add in backend/cuda first (low-collision,
 mine): LayerNorm✓ AddBias✓ (PR#63), Copy2D✓ Blit✓ (PR#73),
-RoPEAt/RoPEPair(fused-QKV bands, strided RoPE) LEFT; Commit/Wait ← my CUDA graph/stream. MAIN MACHINE IDLE ≈12 fires → adapter collision risk LOW, building it incrementally: gap primitives first (backend/cuda, mine), then llamagpu/cuda.go (NewCUDA + cudaBuf/cudaRec via backendOps struct — mirrors llamagpu.go/vulkan.go ≈150L). No import cycle (nlp/llamagpu
+RoPEAt/RoPEPair✓(fused-QKV bands, strided RoPE — cu_rope_f32_band + RoPEAtBand/RoPEPairBand, PR#74; validated == host ref, v band untouched) — ALL RECORDER GAP PRIMITIVES NOW COVERED; Commit/Wait ← my CUDA graph/stream. NEXT: llamagpu/cuda.go adapter itself. MAIN MACHINE IDLE ≈12 fires → adapter collision risk LOW, building it incrementally: gap primitives first (backend/cuda, mine), then llamagpu/cuda.go (NewCUDA + cudaBuf/cudaRec via backendOps struct — mirrors llamagpu.go/vulkan.go ≈150L). No import cycle (nlp/llamagpu
 don't import backend/cuda).
 **BLOCKER — DEFER:** llamagpu is a MAIN-MACHINE HOTSPOT right now (T613 QKV/RoPE/
 SwiGLU fusions, T614 encode-overlap, T644 in-flight) → editing its interfaces now
