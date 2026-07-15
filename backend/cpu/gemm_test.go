@@ -38,6 +38,34 @@ func TestGemmCrossReferenceExact(t *testing.T) {
 	}
 }
 
+// Medium-m matmul (m in [4, 4·cores)) exercises the 2D tile×column grain split of the
+// amd64 SIMD F32 dispatch — where there are fewer 4-row tiles than workers, so columns
+// are split too. Odd n and m values that leave a partial final row tile stress the
+// disjoint-range block math; the result must stay bit-identical to the reference.
+func TestGemmMediumMCrossReference(t *testing.T) {
+	cpu, _ := backend.Get(backend.CPU)
+	ref, _ := backend.Get(backend.Ref)
+	for _, m := range []int{4, 5, 7, 8, 15, 16, 17, 33, 48, 65} {
+		for _, s := range []struct{ k, n int }{
+			{64, 2048}, {2048, 2048}, {5632, 2048}, {33, 1061}, {2048, 17},
+		} {
+			for _, dtype := range []tensor.Dtype{tensor.F32, tensor.F64} {
+				var a, b *tensor.Tensor
+				if dtype == tensor.F64 {
+					a = bench.RandF64(tensor.Shape{m, s.k}, 21)
+					b = bench.RandF64(tensor.Shape{s.k, s.n}, 22)
+				} else {
+					a = bench.RandF32(tensor.Shape{m, s.k}, 21)
+					b = bench.RandF32(tensor.Shape{s.k, s.n}, 22)
+				}
+				gc := run(t, cpu, backend.OpMatMul, a, b)
+				gr := run(t, ref, backend.OpMatMul, a, b)
+				assertMatMul(t, gc, gr, "matmul-mediumm")
+			}
+		}
+	}
+}
+
 // Transposed-view operand: materialized then bit-identical to ref.
 func TestGemmTransposedViewCross(t *testing.T) {
 	cpu, _ := backend.Get(backend.CPU)

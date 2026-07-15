@@ -849,6 +849,32 @@ The fits-in-tile GEMM path (m ≥ 4) is untouched — `MatMul/512` stays ≈230 
 `512×2048×8192` ≈200 GFLOP/s. The block ranges stay disjoint, so the result is
 bit-identical (parity vs the reference holds at every n, `TestGemmSmallMCrossReference`).
 
+### amd64 SIMD medium-m GEMM: 2D tile×column grains (worker linux-amd64)
+
+The same amd64-only F32 path had a second gap: the m ≥ 4 dispatch (the 4-row register
+tile, which reuses each B load across 4 rows) parallelised over **rows**. A worker handed
+1–3 leftover rows can't form a 4-row tile and falls to the no-reuse single-row remainder,
+and when `m < 4·cores` most cores sit idle — so **batched/speculative decode and chunked
+prefill** (m ≈ 4–48) ran far below peak. Grain over **4-row tiles** instead, and — when
+there are fewer tiles than workers — split **columns** too, so every core always runs a
+full 4-row tile with B-reuse:
+
+| `[m,2048]·[2048,2048]`, 16 cores | row-parallel | 2D tile×col |
+|---|---:|---:|
+| m=4 | 15 | **73** |
+| m=8 | 21 | **79** |
+| m=16 | 31 | **94** |
+| m=32 | 35 | **101** |
+| m=48 | 38 | **119** |
+| m=64 | 112 | 112 |
+| m=512 | 230 | 233 |
+
+2.5–4.9× across m=4–48, on the large-k down-proj shape too (m=32 `[32,5632]·[5632,2048]`
+28 → 74), with the large-m GEMM (m=512) and the m=1 GEMV path unchanged. Each (tile,column)
+range writes a disjoint C region and accumulates each `C[i][j]` in one ascending-p pass, so
+the result is bit-identical — parity vs the reference holds across m and odd n
+(`TestGemmMediumMCrossReference`).
+
 ## Further reading
 
 - Hoefler & Belli, *Scientific Benchmarking of Parallel Computing Systems* (SC '15) — the canonical treatment of run variance, warm-up and honest reporting that this document's rules follow.
