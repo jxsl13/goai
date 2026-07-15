@@ -34,6 +34,29 @@ static cudaStream_t gStream = NULL;
 static CUcontext gCtx = NULL; // runtime's primary context, retained for driver-API launches
 static CUfunction gGelu = NULL, gSilu = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gQgemv = NULL; // lazily nvrtc-compiled
 static CUfunction gRopeDpos = NULL, gAttnSoftmaxDpos = NULL, gAppendDpos = NULL; // device-position (graph-capturable) twins
+static CUfunction gBuildPtrs = NULL; // device-side batched pointer-array builder (graph-capturable GQA)
+static int compile_kernel(const char* src, const char* name, const char* entry, CUfunction* out); // fwd decl
+
+// cu_build_batch_ptrs computes the cublas*Batched pointer arrays ON DEVICE from the
+// base buffer pointers, so there is no host→device pointer memcpy. That memcpy was
+// NOT graph-capture-safe: the shared host source array is overwritten by later
+// layers during capture, so every replayed layer read the last layer's pointers.
+// A grouped (h/group), B/C per-head. Caller holds gLock and has set gCtx current.
+static int cu_build_batch_ptrs(const void* A, const void* B, const void* C,
+                               void* sA, void* sB, void* sC,
+                               int n, int group, long strideA, long strideB, long strideC) {
+    if (!gBuildPtrs && compile_kernel(
+            "extern \"C\" __global__ void build_batch_ptrs(const float* A, const float* B, const float* C, const float** sA, const float** sB, const float** sC, int n, int group, long strideA, long strideB, long strideC){\n"
+            "  int h = blockIdx.x*blockDim.x + threadIdx.x;\n"
+            "  if (h >= n) return;\n"
+            "  sA[h] = A + (size_t)(h/group)*strideA;\n"
+            "  sB[h] = B + (size_t)h*strideB;\n"
+            "  sC[h] = C + (size_t)h*strideC;\n"
+            "}\n", "build_ptrs.cu", "build_batch_ptrs", &gBuildPtrs) != 0) return -2;
+    int threads = 64, blocks = (n + threads - 1) / threads; if (blocks < 1) blocks = 1;
+    void* args[11] = {&A, &B, &C, &sA, &sB, &sC, &n, &group, &strideA, &strideB, &strideC};
+    return (cuLaunchKernel(gBuildPtrs, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+}
 
 static float *gA = NULL, *gB = NULL, *gC = NULL;
 static size_t gACap = 0, gBCap = 0, gCCap = 0; // capacities in bytes
@@ -1046,36 +1069,23 @@ int cu_gqa_scores(const void* dQ, const void* dK, void* dScores, int seqQ, int s
     // attention pointer lists are rebuilt each call but reuse one allocation, and
     // the uploads ride gStream (async) so there is no per-call cudaMalloc/cudaFree
     // and no device-wide sync — the decode-latency win (§PERF).
-    static const float **hK = NULL, **hQ = NULL;
-    static float **hC = NULL;
-    static size_t hcap = 0;
     static void *sK = NULL, *sQ = NULL, *sC = NULL;
     static size_t cK = 0, cQ = 0, cC = 0;
-    const float alpha = 1.0f, beta = 0.0f;
     int group = qHeads / kvHeads, WQ = qHeads * hd, WKV = kvHeads * hd, rc = -2;
     size_t asz = (size_t)qHeads * sizeof(void*);
 
     pthread_mutex_lock(&gLock);
     if (ensure_init() != 0) { rc = -1; goto done; }
-    if (hcap < (size_t)qHeads) {
-        free(hK); free(hQ); free(hC);
-        hK = (const float**)malloc(asz); hQ = (const float**)malloc(asz); hC = (float**)malloc(asz);
-        hcap = (hK && hQ && hC) ? (size_t)qHeads : 0;
-        if (!hcap) { rc = -9; goto done; }
-    }
-    for (int h = 0; h < qHeads; h++) {
-        hK[h] = (const float*)dK + (size_t)(h / group) * hd;
-        hQ[h] = (const float*)dQ + (size_t)h * hd;
-        hC[h] = (float*)dScores + (size_t)h * seqQ * seqKV;
-    }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
     if (ensure_devp(&sK, &cK, asz) != 0 || ensure_devp(&sQ, &cQ, asz) != 0 ||
         ensure_devp(&sC, &cC, asz) != 0) { rc = -9; goto done; }
-    cudaMemcpyAsync(sK, hK, asz, cudaMemcpyHostToDevice, gStream);
-    cudaMemcpyAsync(sQ, hQ, asz, cudaMemcpyHostToDevice, gStream);
-    cudaMemcpyAsync(sC, hC, asz, cudaMemcpyHostToDevice, gStream);
+    // Build the pointer arrays on device (graph-capture-safe — no host memcpy):
+    // K grouped (h/group)·hd, Q per-head h·hd, scores per-head h·(seqQ·seqKV).
+    if (cu_build_batch_ptrs(dK, dQ, dScores, sK, sQ, sC, qHeads, group,
+                            hd, hd, (long)seqQ * seqKV) != 0) { rc = -3; goto done; }
     if (cublasSgemmBatched(gHandle, CUBLAS_OP_T, CUBLAS_OP_N, seqKV, seqQ, hd, gOne,
-                           (const float**)sK, WKV, (const float**)sQ, WQ, gZero,
-                           (float**)sC, seqKV, qHeads) != CUBLAS_STATUS_SUCCESS) { rc = -4; goto done; }
+                           (const float* const*)sK, WKV, (const float* const*)sQ, WQ, gZero,
+                           (float* const*)sC, seqKV, qHeads) != CUBLAS_STATUS_SUCCESS) { rc = -4; goto done; }
     rc = 0;
 done:
     pthread_mutex_unlock(&gLock);
@@ -1087,36 +1097,23 @@ done:
 int cu_gqa_out(const void* dScores, const void* dV, void* dOut, int seqQ, int seqKV, int qHeads, int kvHeads, int hd) {
     // Persistent grow-only pointer arrays (see cu_gqa_scores) — no per-call
     // cudaMalloc/cudaFree, uploads on gStream.
-    static const float **hV = NULL, **hS = NULL;
-    static float **hO = NULL;
-    static size_t hcap = 0;
     static void *sV = NULL, *sS = NULL, *sO = NULL;
     static size_t cV = 0, cS = 0, cO = 0;
-    const float alpha = 1.0f, beta = 0.0f;
     int group = qHeads / kvHeads, WQ = qHeads * hd, WKV = kvHeads * hd, rc = -2;
     size_t asz = (size_t)qHeads * sizeof(void*);
 
     pthread_mutex_lock(&gLock);
     if (ensure_init() != 0) { rc = -1; goto done; }
-    if (hcap < (size_t)qHeads) {
-        free(hV); free(hS); free(hO);
-        hV = (const float**)malloc(asz); hS = (const float**)malloc(asz); hO = (float**)malloc(asz);
-        hcap = (hV && hS && hO) ? (size_t)qHeads : 0;
-        if (!hcap) { rc = -9; goto done; }
-    }
-    for (int h = 0; h < qHeads; h++) {
-        hV[h] = (const float*)dV + (size_t)(h / group) * hd;
-        hS[h] = (const float*)dScores + (size_t)h * seqQ * seqKV;
-        hO[h] = (float*)dOut + (size_t)h * hd;
-    }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
     if (ensure_devp(&sV, &cV, asz) != 0 || ensure_devp(&sS, &cS, asz) != 0 ||
         ensure_devp(&sO, &cO, asz) != 0) { rc = -9; goto done; }
-    cudaMemcpyAsync(sV, hV, asz, cudaMemcpyHostToDevice, gStream);
-    cudaMemcpyAsync(sS, hS, asz, cudaMemcpyHostToDevice, gStream);
-    cudaMemcpyAsync(sO, hO, asz, cudaMemcpyHostToDevice, gStream);
+    // Device-built pointer arrays (graph-safe): V grouped (h/group)·hd, scores
+    // per-head h·(seqQ·seqKV), out per-head h·hd.
+    if (cu_build_batch_ptrs(dV, dScores, dOut, sV, sS, sO, qHeads, group,
+                            hd, (long)seqQ * seqKV, hd) != 0) { rc = -3; goto done; }
     if (cublasSgemmBatched(gHandle, CUBLAS_OP_N, CUBLAS_OP_N, hd, seqQ, seqKV, gOne,
-                           (const float**)sV, WKV, (const float**)sS, seqKV, gZero,
-                           (float**)sO, WQ, qHeads) != CUBLAS_STATUS_SUCCESS) { rc = -4; goto done; }
+                           (const float* const*)sV, WKV, (const float* const*)sS, seqKV, gZero,
+                           (float* const*)sO, WQ, qHeads) != CUBLAS_STATUS_SUCCESS) { rc = -4; goto done; }
     rc = 0;
 done:
     pthread_mutex_unlock(&gLock);

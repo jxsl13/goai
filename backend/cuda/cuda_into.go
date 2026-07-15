@@ -23,6 +23,21 @@ func NewDeviceF32(rows, cols int) (*DeviceF32, error) {
 	return &DeviceF32{ptr: p, rows: rows, cols: cols}, nil
 }
 
+// CopyFrom overwrites this buffer's contents with src's (device→device, same
+// size). Used to reset a captured graph's fixed input buffer between replays.
+func (d *DeviceF32) CopyFrom(src *DeviceF32) error {
+	if d.ptr == nil || src.ptr == nil {
+		return fmt.Errorf("cuda: CopyFrom on a freed handle")
+	}
+	if d.rows*d.cols != src.rows*src.cols {
+		return fmt.Errorf("cuda: CopyFrom size mismatch %d vs %d", d.rows*d.cols, src.rows*src.cols)
+	}
+	if rc := C.cu_copy_rows(d.ptr, src.ptr, C.int(0), C.int(d.rows*d.cols)); rc != 0 {
+		return fmt.Errorf("cuda: CopyFrom failed (code %d)", int(rc))
+	}
+	return nil
+}
+
 // Zero sets the buffer to all zeros (on the stream).
 func (d *DeviceF32) Zero() error {
 	if rc := C.cu_zero_f32(d.ptr, C.int(d.rows*d.cols)); rc != 0 {
