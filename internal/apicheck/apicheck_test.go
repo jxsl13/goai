@@ -140,6 +140,8 @@ var typeExampleExempt = map[string]bool{
 	"nn.SAMOption":                  true, // functional-option type (shown via WithSAM*)
 	"autograd.CheckpointFunc":       true, // callback-signature type (shown via ExampleCheckpoint)
 	"nn.ScheduleFreeOption":         true, // functional-option type (shown via WithScheduleFree*)
+	"nn.DAdaptAdamOption":           true, // functional-option type (shown via WithDAdapt*)
+	"nn.ProdigyOption":              true, // functional-option type (shown via WithProdigy*)
 	"nn.LookaheadOption":            true, // functional-option type (shown via WithLookahead*)
 	"nn.LossScaler":                 true, // mixed-precision helper; shown in the AMP training tests
 	"nn.MixedPrecision":             true, // mixed-precision helper; shown in the AMP training tests
