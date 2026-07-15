@@ -4,6 +4,13 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA inference — Qwen2.5 scale check (0.5B + 1.5B, worker linux-amd64/cuda, 2026-07-15)
+- `TestCUDAQwenGenerate` now runs both Qwen2.5-0.5B (dim 896, 24L, GQA 14:2) and
+  Qwen2.5-1.5B (dim 1536, 28L, GQA 12:2) on the RTX 3060, both generating coherent
+  text — proving the CUDA engine generalizes across model families (Llama+Qwen),
+  scales, and configs. Decode (alloc-path, un-graphed): 0.5B 208.8 tok/s, 1.5B
+  96.3 tok/s. Worker sub-spec §PERF.
+
 ### CUDA inference — Qwen2.5 on the GPU (2nd model family, worker linux-amd64/cuda, 2026-07-15)
 - `TestCUDAQwenGenerate` runs Qwen2.5-0.5B (arch=qwen2, GQA 14:2) on the RTX 3060.
   arch=qwen2 is rejected by `nlp.LlamaFromGGUF`, so the config/weights/biases are read

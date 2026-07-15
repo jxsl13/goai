@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jxsl13/goai/backend"
 	"github.com/jxsl13/goai/backend/cuda"
@@ -39,11 +40,18 @@ type qwenLayer struct {
 	cache          *cuda.KVCache
 }
 
-// Qwen2.5-0.5B on the GPU: arch=qwen2 (rejected by nlp.LlamaFromGGUF), so the
+// Qwen on the GPU: arch=qwen2 (rejected by nlp.LlamaFromGGUF), so the
 // weights/biases/config are read straight from the GGUF and made resident here —
 // the DISTINCT bit vs Llama is the Q/K/V projection BIASES, added via the new
-// DeviceF32.AddBias. Demonstrates a 2nd model family + the AddBias primitive.
+// DeviceF32.AddBias. Demonstrates additional model families + the AddBias
+// primitive, and that the engine generalizes across Qwen scales (0.5B & 1.5B).
 func TestCUDAQwenGenerate(t *testing.T) {
+	for _, path := range []string{qwenPath, "../../models/qwen2.5-1.5b-instruct-q8_0.gguf"} {
+		t.Run(path, func(t *testing.T) { runQwen(t, path) })
+	}
+}
+
+func runQwen(t *testing.T, qwenPath string) {
 	skipNoGPU(t)
 	if _, err := os.Stat(qwenPath); err != nil {
 		t.Skipf("model not present (%s)", qwenPath)
@@ -173,9 +181,10 @@ func TestCUDAQwenGenerate(t *testing.T) {
 
 	var last int
 	for i, id := range ids {
-		last = step(int32(id), i)
+		last = step(int32(id), i) // prefill (untimed)
 	}
 	gen := make([]int, 0, maxGen)
+	t0 := time.Now()
 	for n := 0; n < maxGen; n++ {
 		if last == 151643 || last == 151645 { // Qwen EOS / im_end
 			break
@@ -183,8 +192,11 @@ func TestCUDAQwenGenerate(t *testing.T) {
 		gen = append(gen, last)
 		last = step(int32(last), len(ids)+n)
 	}
+	tokPerSec := float64(len(gen)) / time.Since(t0).Seconds()
 
-	t.Logf("MODEL: Qwen2.5-0.5B (arch=qwen2, GQA %d:%d, QKV-bias) on RTX 3060", heads, kv)
+	t.Logf("MODEL: qwen2 dim=%d layers=%d GQA %d:%d QKV-bias (%s) on RTX 3060",
+		dim, nLayers, heads, kv, qwenPath[strings.LastIndex(qwenPath, "/")+1:])
+	t.Logf("DECODE: %.1f tok/s (alloc-path, un-graphed)", tokPerSec)
 	t.Logf("PROMPT:    %q", prompt)
 	t.Logf("GENERATED: %q", strings.TrimSpace(tokzr.Decode(gen)))
 	if len(gen) == 0 {
