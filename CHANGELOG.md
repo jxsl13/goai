@@ -15,6 +15,32 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   device memory isn't reclaimed by Go's GC), so a caller that then built a second copy
   (the fixed-vs-alloc comparison) doubled residency and OOMed at 3B. It now frees all
   resident weights + KV caches before returning.
+### T650 — Titans: test-time neural long-term memory (2026-07-15)
+- New `nn.NeuralMemory` + `nn.Titans` (MAC block): the Titans architecture (Behrouz,
+  Zhong, Mirrokni 2024, arXiv:2501.00663) — a memory that keeps LEARNING at inference
+  time. While processing a sequence, each token takes one gradient step on the
+  associative surprise loss ‖M(k)−v‖², written with a surprise-momentum + adaptive-
+  forget update, so the memory memorizes the current context on the fly and the
+  attention layer reads from it (Memory-As-Context). The memory can be linear or a
+  small MLP; its inner gradient is HAND-DERIVED in closed form from ordinary forward
+  ops, so this needs NO second-order/create-graph autograd (see ADR-0022). The linear,
+  zero-momentum, zero-forget limit collapses EXACTLY to the delta rule
+  (`nn.DeltaNet`), verified to machine epsilon — which pins the hand-derived gradient.
+  Distinct from `nn.GatedDeltaNet` (that IS the linear special case; Titans generalizes
+  it with a deep memory + momentum + data-dependent forget).
+
+### T651 — APOLLO optimizer: SGD-like memory, AdamW-level training (2026-07-15)
+- New `nn.APOLLO`: the APOLLO memory-efficient optimizer (Zhu, Zhang, Hao et al. 2024,
+  arXiv:2412.05270), a successor to GaLore. Instead of GaLore's SVD subspace, APOLLO
+  projects the gradient into an auxiliary rank-r space with a cheap SEEDED RANDOM
+  Gaussian projection (no SVD), runs Adam-style moments there (O(r·max(m,n)) state),
+  and converts the normalized low-rank update into one CHANNEL-WISE scaling factor
+  `s_j = ‖Ř[:,j]‖ / ‖R[:,j]‖` that is applied to the RAW full-rank gradient — so both
+  the weight and its update stay full-rank, only the optimizer state is compressed. A
+  Norm-Growth Limiter tames early-training spikes; `WithAPOLLOMini` is the rank-1
+  tensor-wise variant with O(max(m,n)) state. Distinct from `nn.GaLore` (SVD subspace,
+  projects the update back low-rank). Convergence verified against plain Adam on a
+  synthetic problem; deterministic under a seeded projection.
 
 ### CUDA — Qwen2.5-3B validated: engine generalizes across a 6× parameter range (worker linux-amd64, 2026-07-15)
 - `TestCUDAQwenGenerate` now also runs **Qwen2.5-3B** (qwen2, 36 layers, dim 2048, GQA

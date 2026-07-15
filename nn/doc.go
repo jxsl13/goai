@@ -20,7 +20,7 @@
 //   - Optimizers: SGD, Adam/AdamW, Adafactor, LAMB, Muon, Shampoo, SOAP, Sophia,
 //     AdEMAMix, Schedule-Free — plus wrappers composing with any of them
 //     (Lookahead, SAM sharpness-aware steps, cautious masking, Grokfast EMA (exponential moving average)
-//     filtering, GaLore low-rank gradient projection), LR (learning rate) schedules (OneCycle),
+//     filtering, GaLore and APOLLO memory-efficient low-rank gradient projection), LR (learning rate) schedules (OneCycle),
 //     gradient clipping and accumulation, and mixed-precision (AMP) helpers.
 //   - Parameter-efficient fine-tuning: LoRA, DoRA, PiSSA, VeRA, (IA)³,
 //     bottleneck adapters, prefix tuning, prompt tuning, and NEFTune noise.
@@ -36,7 +36,12 @@
 //     DeepSeekMoE shared experts, and the sparse-attention trio
 //     (MoBAAttention block routing, NSABranches compressed/selected/sliding,
 //     DSAAttention lightning-indexer token selection),
-//     gated/delta-rule linear attention, DeepSeek MLA, Differential Attention.
+//     gated/delta-rule linear attention, DeepSeek MLA, Differential Attention,
+//     GatedAttention (sigmoid output gate on softmax attention), the normalized
+//     Transformer (NGPTBlock, on-sphere weights), the Forgetting Transformer
+//     (FoXBlock, log-cumulative forget bias), Hymba (parallel attention∥SSM
+//     hybrid heads), and Mixture-of-Recursions (per-token adaptive recursion
+//     depth over a weight-shared block).
 //   - Diffusion & generative: DDPM/DDIM schedules and samplers, EDM (with
 //     preconditioning), and Flow Matching.
 //   - Self-supervised learning: Barlow Twins, DINO, SimSiam, SwAV, VICReg.
