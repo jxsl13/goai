@@ -34,6 +34,22 @@ import (
 //go:noescape
 func gemmF32Tile4x16Neon(a, b, c *float32, k, lda, ldb, ldc int)
 
+// The Apple AMX fast-path hooks (ADR-0027). Either may be nil depending on
+// the build/host; gemmF32 dispatches per-shape to the measured winner and
+// falls back to the NEON path below when both are nil (e.g. CGO_ENABLED=0 on
+// a non-Apple arm64 host) — fully functional either way. Both fast paths
+// accumulate f32-native like the NEON kernel, so the same ADR-0021 tolerance
+// contract applies; the default (non-simd) build never sees any of this.
+var (
+	// gemmF32Accel: Accelerate cblas_sgemm (AMX via Apple's BLAS), set by
+	// gemm_accel_darwin.go under darwin && cgo. Handles the whole matmul
+	// (self-threads) when invoked.
+	gemmF32Accel func(a, b, c []float32, m, k, n int) bool
+	// gemmF32AMX: raw AMX via Plan9 asm (pure Go, no cgo), set by
+	// gemm_amx_arm64.go under darwin when the chip is M1/M2/M3.
+	gemmF32AMX func(a, b, c []float32, m, k, n int) bool
+)
+
 // gemmF32 computes C[m,n] = A·B, f32-native (ADR-0026 tolerance, not
 // bit-exact). C is written once (store semantics, matching the other gemmF32
 // implementations). Parallel grain mirrors gemm_simd.go: 4-row tiles, with a
@@ -43,6 +59,23 @@ func gemmF32(A, B, C []float32, m, k, n int) {
 	if k == 0 { // degenerate: A[m,0]·B[0,n] = 0; the asm k-loop is do-while
 		clear(C[:m*n])
 		return
+	}
+	if m > 0 && n > 0 {
+		// ADR-0027 per-shape dispatch (M2 Pro head-to-head, §V22 medians in
+		// the ADR): raw AMX wins once the k×n B panel outgrows the shared L2
+		// and there are enough row tiles to amortize its packing passes —
+		// Accelerate falls off there (512×2048×4096: 1606 vs 1300 GFLOP/s)
+		// while the prepacked supertiled AMX kernel keeps streaming. On
+		// everything smaller Accelerate wins (squares ≤1024³, small/decode
+		// shapes). Without cgo, raw AMX takes every shape it supports
+		// (m,n ≥ 32 — it beats NEON from 64³ up) and NEON serves the rest.
+		if gemmF32AMX != nil && ((k*n >= 4<<20 && m >= 256) || gemmF32Accel == nil) &&
+			gemmF32AMX(A, B, C, m, k, n) {
+			return
+		}
+		if gemmF32Accel != nil && gemmF32Accel(A, B, C, m, k, n) {
+			return
+		}
 	}
 	if m < 4 {
 		// Decode/GEMV shapes: too few rows for a 4-row tile — parallelize over

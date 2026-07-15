@@ -1072,3 +1072,29 @@ through Accelerate but pure-Go NEON cannot — a silicon limit, not a code limit
 `GOEXPERIMENT=simd make bench-compare` to see it; the default `make bench-compare` uses the
 bit-exact scalar path. (T656.)
  MHA and Conv2D were also routed through this f32-native GEMM (T657): MHA-forward ≈9.9→1.9 ms (torch-cpu gap 13×→2.6×), Conv2D/n8c64hw56 ≈57→281 GFLOP/s (gap 11×→2.2×) — same GOEXPERIMENT=simd gating.
+
+## Apple AMX f32 GEMM (GOEXPERIMENT=simd, darwin/arm64, ADR-0027)
+
+The ADR-0026 residual (≈3.25× vs torch-cpu's 2584 GFLOP/s @1024³) was Apple's AMX matrix
+coprocessor, reached two ways (T658, ADR-0027): **Accelerate `cblas_sgemm` via cgo**
+(`gemm_accel_darwin.go` + `internal/accel`, needs `CGO_ENABLED=1`) and a **pure-Go raw-AMX
+Plan9-asm kernel** (`gemm_amx_arm64.{go,s}`, WORD-encoded AMX ops, M1/M2/M3 only). `gemmF32`
+dispatches per shape to the measured winner. Head-to-head medians (M2 Pro, §V22 paired A/B,
+GFLOP/s; harness `gemm_amx_bench_test.go`):
+
+| shape | NEON | raw AMX | Accelerate | dispatched winner |
+|---|---:|---:|---:|---|
+| 256³ | 428 | 537 | 1116 | Accelerate |
+| 512³ | 707 | 1524 | 2210 | Accelerate |
+| 1024³ | 758 | ≈2100 | ≈2590 | Accelerate (**≈1.0× torch-cpu**) |
+| 512×2048×2048 | 656 | **1878** | 1786 | raw AMX (+5%) |
+| 2048³ | — | **2325** | 2100 | raw AMX (+11%) |
+| 512×2048×4096 | — | **1695** | 1294 | raw AMX (+31%) |
+| 512×2048×8192 | 550 | 1570 | 1610 | raw AMX (tie: −3% ≈ thermal noise) |
+
+Dispatch: raw AMX when the B panel `k·n·4 ≥ 16 MiB` and `m ≥ 256` (the >L2 band where
+Accelerate falls off), Accelerate otherwise. With `CGO_ENABLED=0` the Accelerate file drops
+out and raw AMX serves every m,n ≥ 32 shape — the pure-Go build now reaches ≈2100 GFLOP/s
+@1024³ (was 795 NEON-only). MatMul/1024 through the full op path (`GEMM_F32_1024_gflops`):
+≈2380 GFLOP/s with cgo, ≈1740 without. Same ADR-0021 tolerance contract as the NEON kernel;
+the default (non-simd) build stays bit-exact and untouched. (T658.)
