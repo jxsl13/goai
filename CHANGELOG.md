@@ -4,6 +4,21 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — T631 layer-assignment policy: VRAM-budget-driven offload planner (worker linux-amd64, 2026-07-15)
+- `cuda.PlanOffload(nLayers, perLayerBytes, fixedBytes, budgetBytes) OffloadPlan` decides
+  the GPU/CPU layer split for a model that may exceed VRAM: it fills the budget with the
+  hottest-first layers and spills the MINIMUM overflow to the CPU-SIMD path (§PERF-T631:
+  each offloaded layer is ≈30× a GPU layer). `PlanOffloadForDevice` runs it against live
+  free VRAM (`MemInfo`) minus a caller headroom reserve; `EstimateLayerVRAMQ8(dim, kvDim,
+  hidden)` gives the weights-only Q8 per-layer estimate (×36/32).
+- This is the layer-assignment POLICY for T631 (run models bigger than VRAM by offloading
+  overflow layers) — the offload MECHANISM (dual GPU/CPU KV caches, hidden crossing the
+  boundary) is already proven (`TestCUDAHybridDecode`). Validated: `TestCUDAPlanOffload`
+  (fits / partial-spill / all-CPU / fixed-overflow) and `TestCUDAEstimateLayerVRAMQ8`
+  (TinyLlama ≈47 MiB/layer weights; a 1 GiB cap → 16 GPU + 6 CPU; the real device fits
+  TinyLlama fully). Pure `backend/cuda`, dependency-free; real-API wiring is the T630
+  shared-executor step (to coordinate). `CGO_ENABLED=0` build unaffected.
+
 ### CUDA — unified public API validated on a real model (worker linux-amd64, 2026-07-15)
 - `TestCUDAUnifiedRealModelGenerate` drives real TinyLlama-1.1B (f32) + its SentencePiece
   tokenizer through `llamagpu.NewCUDA` — the public backend-agnostic Decoder over the
