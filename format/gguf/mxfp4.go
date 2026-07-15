@@ -90,9 +90,10 @@ func dequantMXFP4(shape tensor.Shape, data []byte) (*tensor.Tensor, error) {
 	for b := range nb {
 		blk := data[b*mxfp4BlockSize : (b+1)*mxfp4BlockSize]
 		d := e8m0ToF32Half(blk[0])
-		for i := range 16 {
-			dst[b*blockElems+i] = d * mxfp4KValues[blk[1+i]&0x0F]
-			dst[b*blockElems+16+i] = d * mxfp4KValues[blk[1+i]>>4]
+		y, q := dst[b*blockElems:b*blockElems+blockElems], blk[1:17]
+		for i, v := range q {
+			y[i] = d * mxfp4KValues[v&0x0F]
+			y[16+i] = d * mxfp4KValues[v>>4]
 		}
 	}
 	return out, nil

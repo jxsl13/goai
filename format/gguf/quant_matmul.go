@@ -48,7 +48,21 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 		return nil, fmt.Errorf("gguf: QMatMul weight %d bytes != %d rows × %d", len(weight), n, rowBytes)
 	}
 
+	// Read x through contiguous storage once instead of the per-element AtF64
+	// dispatch in the K-loop (§base-perf: the AtF64 anti-pattern; measured
+	// 2.4–3.3× depending on M, docs/perf-notes-lowlevel.md).
+	xc := x.Contiguous()
+	var xf32 []float32
+	var xf64 []float64
+	switch xc.Dtype() {
+	case tensor.F32:
+		xf32 = xc.Storage().F32()
+	case tensor.F64:
+		xf64 = xc.Storage().F64()
+	}
+
 	out := tensor.New(tensor.F32, tensor.Shape{m, n})
+	outf := out.Storage().F32()
 	for ni := range n {
 		rowBits := weight[ni*rowBytes : (ni+1)*rowBytes]
 		var wrow *tensor.Tensor
@@ -73,13 +87,26 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 		if err != nil {
 			return nil, err
 		}
-		wf := wrow.Storage().F32()
+		wf := wrow.Storage().F32()[:k]
 		for mi := range m {
 			var acc float64
-			for ki := range k {
-				acc += x.AtF64(mi, ki) * float64(wf[ki])
+			switch {
+			case xf32 != nil:
+				row := xf32[mi*k : mi*k+k]
+				for ki, wv := range wf {
+					acc += float64(row[ki]) * float64(wv)
+				}
+			case xf64 != nil:
+				row := xf64[mi*k : mi*k+k]
+				for ki, wv := range wf {
+					acc += row[ki] * float64(wv)
+				}
+			default:
+				for ki := range k {
+					acc += x.AtF64(mi, ki) * float64(wf[ki])
+				}
 			}
-			out.SetF64(acc, mi, ni)
+			outf[mi*n+ni] = float32(acc)
 		}
 	}
 	return out, nil

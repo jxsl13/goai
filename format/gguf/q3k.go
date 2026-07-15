@@ -78,6 +78,10 @@ func dequantQ3_K(shape tensor.Shape, raw []byte) (*tensor.Tensor, error) {
 				for _, g := range [2]int{0, 16} { // two groups of 16 (q[l], q[l+16])
 					dl := dAll * float32(int(sc[is])-32)
 					is++
+					// NOTE: measured — this loop resists both a dst subslice and a
+					// branchless h rewrite (the h-select already compiles to a
+					// CSEL on arm64; both variants were ≥4% slower,
+					// docs/perf-notes-lowlevel.md).
 					for l := range 16 {
 						h := 4
 						if hm[l+g]&m != 0 {

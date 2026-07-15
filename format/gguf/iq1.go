@@ -206,8 +206,9 @@ func dequantIQ1_S(shape tensor.Shape, data []byte) (*tensor.Tensor, error) {
 				u := uint16(qs[g*4+j]) | (qh>>(3*j)&7)<<8
 				gridRow := &iq1Grid[u]
 				base := b*qkK + g*32 + j*8
-				for k := range 8 {
-					dst[base+k] = dl * (gridRow[k] + delta)
+				y := dst[base : base+8]
+				for k := range y {
+					y[k] = dl * (gridRow[k] + delta)
 				}
 			}
 		}
@@ -249,8 +250,9 @@ func dequantIQ1_M(shape tensor.Shape, data []byte) (*tensor.Tensor, error) {
 			}
 			gridRow := &iq1Grid[u]
 			base := b*qkK + i*8
-			for k := range 8 {
-				dst[base+k] = dl * (gridRow[k] + delta)
+			y := dst[base : base+8]
+			for k := range y {
+				y[k] = dl * (gridRow[k] + delta)
 			}
 		}
 	}

@@ -263,16 +263,19 @@ func parse(r io.Reader) (*parsed, error) {
 		// Validate BEFORE building the tensor: hostile dims must error, never
 		// panic or wrap (§V15, B28). Cap each dim and the running product so
 		// int overflow (2^63 → negative, n·size wrapping to 0) is impossible.
+		// The product guard divides BEFORE multiplying: a post-multiply check
+		// itself wraps uint64 (dims 2^40 × 2^40 = 2^80 ≡ 0) and would let a
+		// hostile header pass the cap with a shape whose Numel lies.
 		const maxDim = 1 << 40
 		numel := uint64(1)
 		for _, dv := range dims {
 			if dv > maxDim {
 				return nil, fmt.Errorf("gguf: tensor %q dim %d exceeds cap", name, dv)
 			}
-			numel *= dv
-			if numel > maxDim {
+			if dv != 0 && numel > maxDim/dv {
 				return nil, fmt.Errorf("gguf: tensor %q element count exceeds cap", name)
 			}
+			numel *= dv
 		}
 		// file order is innermost-first → reverse into row-major
 		shape := make(tensor.Shape, nd)
@@ -530,14 +533,17 @@ func byteSize(ggType uint32, n int) (int, error) {
 }
 
 // dequantQ8_0: per 32-block, x[i] = d · q[i] with d f16 and q int8.
+// Fixed-length block subslices let the compiler drop the per-element bounds
+// checks in the inner loop (docs/perf-notes-lowlevel.md).
 func dequantQ8_0(shape tensor.Shape, raw []byte) (*tensor.Tensor, error) {
 	t := tensor.New(tensor.F32, shape)
 	dst := t.Storage().F32()
 	for b := 0; b*blockElems < len(dst); b++ {
-		blk := raw[b*34:]
+		blk := raw[b*34 : b*34+34]
 		d := f16ToF32(binary.LittleEndian.Uint16(blk))
-		for i := range blockElems {
-			dst[b*blockElems+i] = d * float32(int8(blk[2+i]))
+		y, q := dst[b*blockElems:b*blockElems+blockElems], blk[2:34]
+		for i := range y {
+			y[i] = d * float32(int8(q[i]))
 		}
 	}
 	return t, nil
@@ -549,20 +555,36 @@ func dequantQ4_0(shape tensor.Shape, raw []byte) (*tensor.Tensor, error) {
 	t := tensor.New(tensor.F32, shape)
 	dst := t.Storage().F32()
 	for b := 0; b*blockElems < len(dst); b++ {
-		blk := raw[b*18:]
+		blk := raw[b*18 : b*18+18]
 		d := f16ToF32(binary.LittleEndian.Uint16(blk))
-		for i := range 16 {
-			q := blk[2+i]
-			dst[b*blockElems+i] = d * float32(int(q&0x0F)-8)
-			dst[b*blockElems+i+16] = d * float32(int(q>>4)-8)
+		y, qs := dst[b*blockElems:b*blockElems+blockElems], blk[2:18]
+		for i, q := range qs {
+			y[i] = d * float32(int(q&0x0F)-8)
+			y[i+16] = d * float32(int(q>>4)-8)
 		}
 	}
 	return t, nil
 }
 
-// f16ToF32 converts an IEEE-754 binary16 to float32 (handles subnormals, inf,
-// NaN).
-func f16ToF32(h uint16) float32 {
+// f16Table caches all 65536 f16→f32 conversions (256 KiB), built at init from
+// the reference converter below so the two cannot drift. The F16 tensor decode
+// loop and every per-block scale load go through the table — a single L1/L2
+// load instead of the branchy bit manipulation (~1.6× on the F16 decode path,
+// docs/perf-notes-lowlevel.md; same approach as ggml's ggml_table_f32_f16).
+var f16Table [1 << 16]float32
+
+func init() {
+	for i := range f16Table {
+		f16Table[i] = f16ToF32bits(uint16(i))
+	}
+}
+
+// f16ToF32 converts an IEEE-754 binary16 to float32 via the lookup table.
+func f16ToF32(h uint16) float32 { return f16Table[h] }
+
+// f16ToF32bits converts an IEEE-754 binary16 to float32 (handles subnormals,
+// inf, NaN). Reference implementation; runtime conversions use f16Table.
+func f16ToF32bits(h uint16) float32 {
 	sign := uint32(h>>15) << 31
 	exp := uint32(h>>10) & 0x1F
 	frac := uint32(h) & 0x3FF

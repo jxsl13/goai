@@ -98,42 +98,28 @@ func Save(w io.Writer, tensors map[string]*tensor.Tensor, meta map[string]string
 	}
 	sort.Strings(names)
 
+	// Pass 1: contiguize once, compute offsets, build the header. Pass 2 then
+	// streams each tensor's bytes through a fixed scratch chunk directly to w —
+	// no full-size intermediate buffer and no per-element bytes.Buffer.Write
+	// call (the old inner loop paid a Write() call per 2–8 byte element;
+	// bulk-encoding is ~2.5× faster, docs/perf-notes-lowlevel.md).
 	header := make(map[string]any, len(tensors)+1)
 	if len(meta) > 0 {
 		header["__metadata__"] = meta
 	}
-	offset := 0
-	var data bytes.Buffer
-	for _, n := range names {
+	contig := make([]*tensor.Tensor, len(names))
+	offset, maxSize := 0, 0
+	for i, n := range names {
 		t := tensors[n].Contiguous()
+		contig[i] = t
 		dn, err := dtypeName(t.Dtype())
 		if err != nil {
 			return fmt.Errorf("%w (tensor %q)", err, n)
 		}
 		size := t.Numel() * t.Dtype().Size()
 		header[n] = entry{Dtype: dn, Shape: append([]int{}, t.Shape()...), DataOffsets: [2]int{offset, offset + size}}
-		switch t.Dtype() {
-		case tensor.F32:
-			for _, v := range t.Storage().F32() {
-				var b [4]byte
-				binary.LittleEndian.PutUint32(b[:], math.Float32bits(v))
-				data.Write(b[:])
-			}
-		case tensor.F64:
-			for _, v := range t.Storage().F64() {
-				var b [8]byte
-				binary.LittleEndian.PutUint64(b[:], math.Float64bits(v))
-				data.Write(b[:])
-			}
-		case tensor.F16, tensor.BF16:
-			// 16-bit floats are kept as their raw uint16 bits; write them verbatim.
-			for _, bits := range t.Storage().U16() {
-				var b [2]byte
-				binary.LittleEndian.PutUint16(b[:], bits)
-				data.Write(b[:])
-			}
-		}
 		offset += size
+		maxSize = max(maxSize, size)
 	}
 
 	hj, err := json.Marshal(header) // Go maps marshal key-sorted → deterministic
@@ -149,8 +135,57 @@ func Save(w io.Writer, tensors map[string]*tensor.Tensor, meta map[string]string
 	if _, err := w.Write(hj); err != nil {
 		return err
 	}
-	_, err = w.Write(data.Bytes())
-	return err
+
+	const chunkBytes = 256 << 10
+	var b []byte
+	if maxSize > 0 {
+		b = make([]byte, min(maxSize, chunkBytes))
+	}
+	for _, t := range contig {
+		switch t.Dtype() {
+		case tensor.F32:
+			src := t.Storage().F32()
+			for len(src) > 0 {
+				m := min(len(src), len(b)/4)
+				c := b[:4*m]
+				for i, v := range src[:m] {
+					binary.LittleEndian.PutUint32(c[i*4:], math.Float32bits(v))
+				}
+				if _, err := w.Write(c); err != nil {
+					return err
+				}
+				src = src[m:]
+			}
+		case tensor.F64:
+			src := t.Storage().F64()
+			for len(src) > 0 {
+				m := min(len(src), len(b)/8)
+				c := b[:8*m]
+				for i, v := range src[:m] {
+					binary.LittleEndian.PutUint64(c[i*8:], math.Float64bits(v))
+				}
+				if _, err := w.Write(c); err != nil {
+					return err
+				}
+				src = src[m:]
+			}
+		case tensor.F16, tensor.BF16:
+			// 16-bit floats are kept as their raw uint16 bits; write them verbatim.
+			src := t.Storage().U16()
+			for len(src) > 0 {
+				m := min(len(src), len(b)/2)
+				c := b[:2*m]
+				for i, bits := range src[:m] {
+					binary.LittleEndian.PutUint16(c[i*2:], bits)
+				}
+				if _, err := w.Write(c); err != nil {
+					return err
+				}
+				src = src[m:]
+			}
+		}
+	}
+	return nil
 }
 
 // SaveFile writes tensors to path.
@@ -233,17 +268,21 @@ func Load(r io.Reader) (map[string]*tensor.Tensor, map[string]string, error) {
 		if !shape.IsValid() {
 			return nil, nil, fmt.Errorf("safetensors: tensor %q: invalid shape %v", ne.name, e.Shape)
 		}
-		// cap dims/product so Numel cannot wrap and lie to the size check (§V15)
+		// cap dims/product so Numel cannot wrap and lie to the size check (§V15).
+		// The product guard divides BEFORE multiplying: the old post-multiply
+		// check itself wrapped uint64 (shape [2^40, 2^40] → 2^80 ≡ 0), letting a
+		// hostile header pass the cap and return a tensor whose shape claims
+		// 2^80 elements over empty storage.
 		const maxDim = 1 << 40
 		numel := uint64(1)
 		for _, dv := range shape {
 			if uint64(dv) > maxDim {
 				return nil, nil, fmt.Errorf("safetensors: tensor %q dim %d exceeds cap", ne.name, dv)
 			}
-			numel *= uint64(dv)
-			if numel > maxDim {
+			if dv != 0 && numel > maxDim/uint64(dv) {
 				return nil, nil, fmt.Errorf("safetensors: tensor %q element count exceeds cap", ne.name)
 			}
+			numel *= uint64(dv)
 		}
 		begin, end := e.DataOffsets[0], e.DataOffsets[1]
 		want := shape.Numel() * dt.size
@@ -257,78 +296,82 @@ func Load(r io.Reader) (map[string]*tensor.Tensor, map[string]string, error) {
 			return nil, nil, fmt.Errorf("safetensors: tensor %q: offsets [%d,%d) beyond data %d", ne.name, begin, end, len(data))
 		}
 		t := tensor.New(dt.out, shape)
+		// src is exactly this tensor's byte span: hoisting it out of the loops
+		// drops the begin+i*k index arithmetic and lets the compiler prove the
+		// per-element accesses in range (docs/perf-notes-lowlevel.md).
+		src := data[begin:end:end]
 		switch e.Dtype {
 		case "F32":
 			dst := t.Storage().F32()
 			for i := range dst {
-				dst[i] = math.Float32frombits(binary.LittleEndian.Uint32(data[begin+i*4:]))
+				dst[i] = math.Float32frombits(binary.LittleEndian.Uint32(src[i*4:]))
 			}
 		case "F64":
 			dst := t.Storage().F64()
 			for i := range dst {
-				dst[i] = math.Float64frombits(binary.LittleEndian.Uint64(data[begin+i*8:]))
+				dst[i] = math.Float64frombits(binary.LittleEndian.Uint64(src[i*8:]))
 			}
 		case "F16", "BF16":
 			dst := t.Storage().U16() // raw 16-bit bits, verbatim
 			for i := range dst {
-				dst[i] = binary.LittleEndian.Uint16(data[begin+i*2:])
+				dst[i] = binary.LittleEndian.Uint16(src[i*2:])
 			}
 		case "F8_E4M3": // §T577: FP8 and integer dtypes widen on load
 			dst := t.Storage().F32()
-			for i := range dst {
-				dst[i] = f8e4m3ToF32(data[begin+i])
+			for i, b := range src {
+				dst[i] = f8e4m3Table[b]
 			}
 		case "F8_E5M2":
 			dst := t.Storage().F32()
-			for i := range dst {
-				dst[i] = f8e5m2ToF32(data[begin+i])
+			for i, b := range src {
+				dst[i] = f8e5m2Table[b]
 			}
 		case "BOOL":
 			dst := t.Storage().F32()
-			for i := range dst {
-				if data[begin+i] != 0 {
+			for i, b := range src {
+				if b != 0 {
 					dst[i] = 1
 				}
 			}
 		case "I8":
 			dst := t.Storage().F32()
-			for i := range dst {
-				dst[i] = float32(int8(data[begin+i]))
+			for i, b := range src {
+				dst[i] = float32(int8(b))
 			}
 		case "U8":
 			dst := t.Storage().F32()
-			for i := range dst {
-				dst[i] = float32(data[begin+i])
+			for i, b := range src {
+				dst[i] = float32(b)
 			}
 		case "I16":
 			dst := t.Storage().F32()
 			for i := range dst {
-				dst[i] = float32(int16(binary.LittleEndian.Uint16(data[begin+i*2:])))
+				dst[i] = float32(int16(binary.LittleEndian.Uint16(src[i*2:])))
 			}
 		case "U16":
 			dst := t.Storage().F32()
 			for i := range dst {
-				dst[i] = float32(binary.LittleEndian.Uint16(data[begin+i*2:]))
+				dst[i] = float32(binary.LittleEndian.Uint16(src[i*2:]))
 			}
 		case "I32":
 			dst := t.Storage().F64()
 			for i := range dst {
-				dst[i] = float64(int32(binary.LittleEndian.Uint32(data[begin+i*4:])))
+				dst[i] = float64(int32(binary.LittleEndian.Uint32(src[i*4:])))
 			}
 		case "U32":
 			dst := t.Storage().F64()
 			for i := range dst {
-				dst[i] = float64(binary.LittleEndian.Uint32(data[begin+i*4:]))
+				dst[i] = float64(binary.LittleEndian.Uint32(src[i*4:]))
 			}
 		case "I64":
 			dst := t.Storage().F64()
 			for i := range dst {
-				dst[i] = float64(int64(binary.LittleEndian.Uint64(data[begin+i*8:])))
+				dst[i] = float64(int64(binary.LittleEndian.Uint64(src[i*8:])))
 			}
 		case "U64":
 			dst := t.Storage().F64()
 			for i := range dst {
-				dst[i] = float64(binary.LittleEndian.Uint64(data[begin+i*8:]))
+				dst[i] = float64(binary.LittleEndian.Uint64(src[i*8:]))
 			}
 		}
 		out[ne.name] = t

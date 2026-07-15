@@ -24,9 +24,21 @@ func Quantize(t *tensor.Tensor, qt QuantType) ([]byte, error) {
 	if n%be != 0 {
 		return nil, fmt.Errorf("gguf: Quantize numel %d not a multiple of %d", n, be)
 	}
+	// Bulk-extract the values: read contiguous storage directly instead of the
+	// per-element AtF64(Unravel(...)) dispatch (§base-perf: the Unravel/AtF64
+	// anti-pattern; ~2.4× on a whole Quantize call, docs/perf-notes-lowlevel.md).
 	x := make([]float32, n)
-	for i := range n {
-		x[i] = float32(t.AtF64(tensor.Unravel(i, t.Shape())...))
+	switch c := t.Contiguous(); c.Dtype() {
+	case tensor.F32:
+		copy(x, c.Storage().F32())
+	case tensor.F64:
+		for i, v := range c.Storage().F64() {
+			x[i] = float32(v)
+		}
+	default:
+		for i := range n {
+			x[i] = float32(t.AtF64(tensor.Unravel(i, t.Shape())...))
+		}
 	}
 	switch qt {
 	case Q8_0:

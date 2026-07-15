@@ -28,9 +28,10 @@ var iq4KValues = [16]float32{-127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25
 // iq4Nibbles decodes one 16-byte group: elements 0..15 from the LOW nibbles,
 // 16..31 from the HIGH nibbles (gguf-py's unpack order).
 func iq4Nibbles(qs []byte, scale float32, dst []float32) {
-	for e := range 16 {
-		dst[e] = scale * iq4KValues[qs[e]&0x0F]
-		dst[16+e] = scale * iq4KValues[qs[e]>>4]
+	y, q := dst[:32], qs[:16]
+	for e, b := range q {
+		y[e] = scale * iq4KValues[b&0x0F]
+		y[16+e] = scale * iq4KValues[b>>4]
 	}
 }
 

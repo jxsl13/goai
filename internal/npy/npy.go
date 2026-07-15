@@ -71,33 +71,55 @@ func Read(r io.Reader) (*tensor.Tensor, error) {
 	// a multi-GB allocation. 32M elems = 256 MB at f64 — ample for golden data.
 	const maxDim = 1 << 40
 	const maxNumel = 1 << 25
+	// Overflow-safe product: guard with division BEFORE multiplying. The old
+	// post-multiply check wrapped uint64 for e.g. shape (2^24, 2^40) — product
+	// exactly 2^64 ≡ 0 — silently bypassing the cap and returning a tensor whose
+	// shape claims 2^64 elements over empty storage.
 	numel := uint64(1)
 	for _, d := range shape {
 		if d < 0 || uint64(d) > maxDim {
 			return nil, fmt.Errorf("npy: dim %d out of range", d)
 		}
-		numel *= uint64(d)
-		if numel > maxNumel {
-			return nil, fmt.Errorf("npy: element count %d exceeds cap %d", numel, maxNumel)
+		if d != 0 && numel > maxNumel/uint64(d) {
+			return nil, fmt.Errorf("npy: element count exceeds cap %d", maxNumel)
 		}
+		numel *= uint64(d)
 	}
 
 	t := tensor.New(dtype, shape)
 	n := shape.Numel()
-	buf := make([]byte, n*dtype.Size())
-	if _, err := io.ReadFull(br, buf); err != nil {
-		return nil, fmt.Errorf("npy: read data: %w", err)
-	}
+	// Stream the payload through a fixed 256 KiB scratch chunk and decode each
+	// chunk while its bytes are cache-warm, instead of allocating+zeroing a
+	// full-size intermediate buffer (up to 256 MB at the numel cap) and decoding
+	// it in a cold second pass (docs/perf-notes-lowlevel.md).
+	const chunkBytes = 256 << 10
+	buf := make([]byte, min(n*dtype.Size(), chunkBytes))
 	switch dtype {
 	case tensor.F32:
 		dst := t.Storage().F32()
-		for i := range dst {
-			dst[i] = math.Float32frombits(binary.LittleEndian.Uint32(buf[i*4:]))
+		for len(dst) > 0 {
+			m := min(len(dst), len(buf)/4)
+			c := buf[:m*4]
+			if _, err := io.ReadFull(br, c); err != nil {
+				return nil, fmt.Errorf("npy: read data: %w", err)
+			}
+			for i := range m {
+				dst[i] = math.Float32frombits(binary.LittleEndian.Uint32(c[i*4:]))
+			}
+			dst = dst[m:]
 		}
 	case tensor.F64:
 		dst := t.Storage().F64()
-		for i := range dst {
-			dst[i] = math.Float64frombits(binary.LittleEndian.Uint64(buf[i*8:]))
+		for len(dst) > 0 {
+			m := min(len(dst), len(buf)/8)
+			c := buf[:m*8]
+			if _, err := io.ReadFull(br, c); err != nil {
+				return nil, fmt.Errorf("npy: read data: %w", err)
+			}
+			for i := range m {
+				dst[i] = math.Float64frombits(binary.LittleEndian.Uint64(c[i*8:]))
+			}
+			dst = dst[m:]
 		}
 	}
 	return t, nil
@@ -232,24 +254,39 @@ func Write(w io.Writer, t *tensor.Tensor) error {
 		return err
 	}
 
-	n := t.Numel()
+	// Encode through a fixed 256 KiB scratch chunk instead of one full-size
+	// buffer: avoids allocating+zeroing up to 8*numel bytes per call and keeps
+	// the encode loop L1-resident (docs/perf-notes-lowlevel.md).
+	const chunkBytes = 256 << 10
 	switch t.Dtype() {
 	case tensor.F32:
 		src := t.Storage().F32()
-		b := make([]byte, 4*n)
-		for i, v := range src {
-			binary.LittleEndian.PutUint32(b[i*4:], math.Float32bits(v))
+		b := make([]byte, min(4*len(src), chunkBytes))
+		for len(src) > 0 {
+			m := min(len(src), len(b)/4)
+			c := b[:4*m]
+			for i, v := range src[:m] {
+				binary.LittleEndian.PutUint32(c[i*4:], math.Float32bits(v))
+			}
+			if _, err := w.Write(c); err != nil {
+				return err
+			}
+			src = src[m:]
 		}
-		_, err := w.Write(b)
-		return err
 	case tensor.F64:
 		src := t.Storage().F64()
-		b := make([]byte, 8*n)
-		for i, v := range src {
-			binary.LittleEndian.PutUint64(b[i*8:], math.Float64bits(v))
+		b := make([]byte, min(8*len(src), chunkBytes))
+		for len(src) > 0 {
+			m := min(len(src), len(b)/8)
+			c := b[:8*m]
+			for i, v := range src[:m] {
+				binary.LittleEndian.PutUint64(c[i*8:], math.Float64bits(v))
+			}
+			if _, err := w.Write(c); err != nil {
+				return err
+			}
+			src = src[m:]
 		}
-		_, err := w.Write(b)
-		return err
 	}
 	return nil
 }

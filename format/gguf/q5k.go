@@ -31,23 +31,21 @@ func dequantQ5_K(shape tensor.Shape, raw []byte) (*tensor.Tensor, error) {
 		yo := sb * qkK
 		for pair := range 4 { // 4 pairs of (32 low, 32 high) = 8 sub-blocks
 			is, ql := pair*2, qs[pair*32:pair*32+32]
-			u1, u2 := byte(1)<<(2*pair), byte(2)<<(2*pair)
 			sc1, m1 := getScaleMinK4(is+0, scales)
 			sc2, m2 := getScaleMinK4(is+1, scales)
 			d1, off1 := d*float32(sc1), dmin*float32(m1)
 			d2, off2 := d*float32(sc2), dmin*float32(m2)
 			base := yo + pair*64
-			for l := range 32 {
-				lo := int(ql[l] & 0xF)
-				if qh[l]&u1 != 0 {
-					lo += 16
-				}
-				hi := int(ql[l] >> 4)
-				if qh[l]&u2 != 0 {
-					hi += 16
-				}
-				dst[base+l] = d1*float32(lo) - off1
-				dst[base+l+32] = d2*float32(hi) - off2
+			y := dst[base : base+64]
+			sh := 2 * pair
+			for l, q := range ql {
+				// branchless high bit: the qh bits are data-dependent, a
+				// branch mispredicts ~50% (docs/perf-notes-lowlevel.md)
+				h := qh[l] >> sh
+				lo := int(q&0xF) | int(h&1)<<4
+				hi := int(q>>4) | int(h>>1&1)<<4
+				y[l] = d1*float32(lo) - off1
+				y[l+32] = d2*float32(hi) - off2
 			}
 		}
 	}
