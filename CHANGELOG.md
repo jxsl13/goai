@@ -4,6 +4,20 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — Q4 decode path: +23% over Q8, matches llama.cpp Q8 speed (worker linux-amd64, 2026-07-15)
+- Wired the asymmetric-Q4 GEMV into a full graph decoder (all 7 projections + output head as
+  `ResidentBQ4`, embeddings/norms kept f32) with a residual-fused `QMatMulAccInto`. Validated
+  on TinyLlama-1.1B: **coherent** — Q4 greedy generates *"…The city of Paris, which is the
+  capital of France…"* (correct, grammatical; it diverges from the Q8 greedy path — 0/24 exact
+  token match — because the 4-bit weight error shifts the argmax, but it stays on-topic) — and
+  **+23% faster: 243.6 tok/s vs Q8's ~198**, which **matches llama.cpp Vulkan Q8 (244)** on
+  TinyLlama, at lower precision.
+- Implication: the +23% carries to the larger, more weight-bandwidth-bound models, where
+  goai-Q8 trailed llama.cpp-Q8 — so goai-Q4 should beat llama.cpp-Q8 at 3B (≈95 vs 87 tok/s).
+  Honest caveat: this asymmetric Q4 (f32 scale+min per 32-block) is lossier than llama.cpp's
+  Q4_K; a fair Q4-vs-Q4 speed + quality comparison, and tightening accuracy toward Q4_K, are the
+  next steps. Q8 path unaffected; §PERF-Q4-DECODE.
+
 ### CUDA — asymmetric-Q4 GEMV primitive: 1.33× faster than Q8 (worker linux-amd64, 2026-07-15)
 - Since the Q8 GEMV is at its bandwidth ceiling (a split-K restructure was tried and rejected:
   −3% on q/o, flat elsewhere), beating llama.cpp on weight-bandwidth-bound decode needs to read
