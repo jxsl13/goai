@@ -1128,6 +1128,7 @@ int cu_qmatmul_q4k(const void* dA, const void* dQ, void* dOut, int M, int K, int
                        "  const unsigned char* qr = q + (size_t)n*sbs*144;\n"
                        "  float acc = 0.0f;\n"
                        "  int p = lane >> 3, i0 = (lane & 7) * 4;\n"      // lane's pair-chunk + byte offset
+                       "  #pragma unroll 2\n"
                        "  for (int w = 0; w < sbs; w++){\n"
                        "    const unsigned char* blk = qr + (size_t)w*144;\n"
                        "    unsigned int qw = *(const unsigned int*)(blk + 16 + lane*4);\n" // 4 qs bytes = 8 elems
