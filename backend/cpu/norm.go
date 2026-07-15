@@ -32,6 +32,85 @@ import (
 // normFloat bounds the generic norm cores to the two float storage types.
 type normFloat interface{ ~float32 | ~float64 }
 
+// The f32 reduction helpers below use FOUR independent f64 accumulators,
+// breaking the FP-add latency chain that serializes a single-accumulator sum
+// (one add per ~4 cycles). Reassociating the sum changes the result by a few
+// f32 ulps — inside the f32 parity budget (5e-5 relative, norm_test.go) but
+// NOT inside the f64 budget (~4 ulps), so the f64 paths keep ref's exact
+// sequential order and only []float32 inputs take these.
+
+// sumF32 returns Σx accumulated in f64, 4-way unrolled.
+func sumF32(x []float32) float64 {
+	var s0, s1, s2, s3 float64
+	i := 0
+	for ; i+3 < len(x); i += 4 {
+		s0 += float64(x[i])
+		s1 += float64(x[i+1])
+		s2 += float64(x[i+2])
+		s3 += float64(x[i+3])
+	}
+	for ; i < len(x); i++ {
+		s0 += float64(x[i])
+	}
+	return (s0 + s1) + (s2 + s3)
+}
+
+// sumSqF32 returns Σx² accumulated in f64, 4-way unrolled.
+func sumSqF32(x []float32) float64 {
+	var s0, s1, s2, s3 float64
+	i := 0
+	for ; i+3 < len(x); i += 4 {
+		v0, v1, v2, v3 := float64(x[i]), float64(x[i+1]), float64(x[i+2]), float64(x[i+3])
+		s0 += v0 * v0
+		s1 += v1 * v1
+		s2 += v2 * v2
+		s3 += v3 * v3
+	}
+	for ; i < len(x); i++ {
+		v := float64(x[i])
+		s0 += v * v
+	}
+	return (s0 + s1) + (s2 + s3)
+}
+
+// dot3F32 returns Σ (u·g)·x accumulated in f64, 4-way unrolled (the rmsnorm
+// backward's per-row Σ aₖxₖ with a=g⊙γ; same (u·g)·x grouping as ref).
+func dot3F32(u, g, x []float32) float64 {
+	var s0, s1, s2, s3 float64
+	i := 0
+	for ; i+3 < len(u) && i+3 < len(g) && i+3 < len(x); i += 4 {
+		s0 += float64(u[i]) * float64(g[i]) * float64(x[i])
+		s1 += float64(u[i+1]) * float64(g[i+1]) * float64(x[i+1])
+		s2 += float64(u[i+2]) * float64(g[i+2]) * float64(x[i+2])
+		s3 += float64(u[i+3]) * float64(g[i+3]) * float64(x[i+3])
+	}
+	for ; i < len(u) && i < len(g) && i < len(x); i++ {
+		s0 += float64(u[i]) * float64(g[i]) * float64(x[i])
+	}
+	return (s0 + s1) + (s2 + s3)
+}
+
+// varSumF32 returns Σ(x−mu)² accumulated in f64, 4-way unrolled.
+func varSumF32(x []float32, mu float64) float64 {
+	var s0, s1, s2, s3 float64
+	i := 0
+	for ; i+3 < len(x); i += 4 {
+		d0 := float64(x[i]) - mu
+		d1 := float64(x[i+1]) - mu
+		d2 := float64(x[i+2]) - mu
+		d3 := float64(x[i+3]) - mu
+		s0 += d0 * d0
+		s1 += d1 * d1
+		s2 += d2 * d2
+		s3 += d3 * d3
+	}
+	for ; i < len(x); i++ {
+		d := float64(x[i]) - mu
+		s0 += d * d
+	}
+	return (s0 + s1) + (s2 + s3)
+}
+
 // normData extracts the contiguous storage and geometry shared by the kernels.
 func normData(x, gamma *tensor.Tensor) (xc *tensor.Tensor, rows, d int, err error) {
 	if x.Ndim() < 1 {
@@ -106,20 +185,27 @@ func rmsNormKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.A
 
 // rmsNormFwd: out[r,j] = x[r,j]·(1/rms_r)·γ_j, rms_r=√(mean_j x²+eps). f64
 // accumulation, row-parallel via the §T511 pool (small shapes stay serial).
+// f32 rows take the 4-accumulator Σx² (see sumSqF32); f64 keeps ref's order.
 func rmsNormFwd[T normFloat](x, gamma, out []T, rows, d int, eps float64) {
+	x32, isF32 := any(x).([]float32) // boxed ONCE per kernel call, not per row
+	gm := gamma[:d:d]
 	parallelWork(rows, 3*d, func(lo, hi int) {
 		for r := lo; r < hi; r++ {
 			base := r * d
 			xr := x[base : base+d : base+d]
 			or := out[base : base+d : base+d]
 			var ms float64
-			for j := 0; j < d; j++ {
-				v := float64(xr[j])
-				ms += v * v
+			if isF32 {
+				ms = sumSqF32(x32[base : base+d])
+			} else {
+				for j := 0; j < d; j++ {
+					v := float64(xr[j])
+					ms += v * v
+				}
 			}
 			inv := 1 / math.Sqrt(ms/float64(d)+eps)
-			for j := 0; j < d; j++ {
-				or[j] = T(float64(xr[j]) * inv * float64(gamma[j]))
+			for j, g := range gm {
+				or[j] = T(float64(xr[j]) * inv * float64(g))
 			}
 		}
 	})
@@ -174,26 +260,34 @@ func layerNormKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend
 }
 
 // layerNormFwd: out[r,j] = (x[r,j]-μ_r)·(1/σ_r)·γ_j + β_j. f64 accumulation,
-// row-parallel (small shapes serial).
+// row-parallel (small shapes serial). f32 rows take the 4-accumulator mean and
+// variance reductions (sumF32/varSumF32); f64 keeps ref's sequential order.
 func layerNormFwd[T normFloat](x, gamma, beta, out []T, rows, d int, eps float64) {
+	x32, isF32 := any(x).([]float32)
+	gm, bt := gamma[:d:d], beta[:d:d]
 	parallelWork(rows, 4*d, func(lo, hi int) {
 		for r := lo; r < hi; r++ {
 			base := r * d
 			xr := x[base : base+d : base+d]
 			or := out[base : base+d : base+d]
-			var mean float64
-			for j := 0; j < d; j++ {
-				mean += float64(xr[j])
-			}
-			mean /= float64(d)
-			var varsum float64
-			for j := 0; j < d; j++ {
-				dv := float64(xr[j]) - mean
-				varsum += dv * dv
+			var mean, varsum float64
+			if isF32 {
+				row := x32[base : base+d]
+				mean = sumF32(row) / float64(d)
+				varsum = varSumF32(row, mean)
+			} else {
+				for j := 0; j < d; j++ {
+					mean += float64(xr[j])
+				}
+				mean /= float64(d)
+				for j := 0; j < d; j++ {
+					dv := float64(xr[j]) - mean
+					varsum += dv * dv
+				}
 			}
 			inv := 1 / math.Sqrt(varsum/float64(d)+eps)
-			for j := 0; j < d; j++ {
-				or[j] = T((float64(xr[j])-mean)*inv*float64(gamma[j]) + float64(beta[j]))
+			for j, g := range gm {
+				or[j] = T((float64(xr[j])-mean)*inv*float64(g) + float64(bt[j]))
 			}
 		}
 	})
@@ -268,40 +362,87 @@ func rmsNormBackwardKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs b
 // is shared between the passes.
 func rmsNormBwd[T normFloat](x, gamma, up, dx, dgamma []T, rows, d int, eps float64) {
 	inv := make([]float64, rows)
+	x32, isF32 := any(x).([]float32)
+	u32, _ := any(up).([]float32)
+	g32, _ := any(gamma).([]float32)
+	gm := gamma[:d:d]
 	parallelWork(rows, 4*d, func(lo, hi int) {
 		for r := lo; r < hi; r++ {
 			base := r * d
 			xr := x[base : base+d : base+d]
 			ur := up[base : base+d : base+d]
 			dr := dx[base : base+d : base+d]
-			var ms float64
-			for j := 0; j < d; j++ {
-				v := float64(xr[j])
-				ms += v * v
+			var ms, s float64
+			if isF32 {
+				ms = sumSqF32(x32[base : base+d])
+			} else {
+				for j := 0; j < d; j++ {
+					v := float64(xr[j])
+					ms += v * v
+				}
 			}
 			iv := 1 / math.Sqrt(ms/float64(d)+eps)
 			inv[r] = iv
-			var s float64
-			for j := 0; j < d; j++ {
-				a := float64(ur[j]) * float64(gamma[j])
-				s += a * float64(xr[j])
+			if isF32 {
+				s = dot3F32(u32[base:base+d], g32, x32[base:base+d])
+			} else {
+				for j := 0; j < d; j++ {
+					a := float64(ur[j]) * float64(gm[j])
+					s += a * float64(xr[j])
+				}
 			}
-			for j := 0; j < d; j++ {
-				a := float64(ur[j]) * float64(gamma[j])
-				dr[j] = T(iv * (a - float64(xr[j])*iv*iv*s/float64(d)))
+			if isF32 {
+				// hoisted c = r²·s/d (f32 budget absorbs the regrouping);
+				// f64 keeps ref's exact per-element expression below.
+				c := iv * iv * s / float64(d)
+				for j, g := range gm {
+					a := float64(ur[j]) * float64(g)
+					dr[j] = T(iv * (a - float64(xr[j])*c))
+				}
+			} else {
+				for j, g := range gm {
+					a := float64(ur[j]) * float64(g)
+					dr[j] = T(iv * (a - float64(xr[j])*iv*iv*s/float64(d)))
+				}
 			}
 		}
 	})
-	parallelWork(d, 2*rows, func(lo, hi int) {
-		for j := lo; j < hi; j++ {
-			var acc float64
-			for r := 0; r < rows; r++ {
-				acc += float64(up[r*d+j]) * float64(x[r*d+j]) * inv[r]
+	// Column pass, COLUMN-BLOCKED: the naive j-outer/r-inner walk reads the
+	// row-major arrays at stride d — a cache miss per element. Blocking ~128
+	// columns and iterating rows OUTER reads x/up along contiguous rows while
+	// each dγ_j still accumulates rows ascending — identical values (§V9).
+	nb := (d + normColBlock - 1) / normColBlock
+	parallelWork(nb, 3*rows*normColBlock, func(blo, bhi int) {
+		acc := make([]float64, normColBlock)
+		for b := blo; b < bhi; b++ {
+			j0 := b * normColBlock
+			j1 := min(j0+normColBlock, d)
+			w := j1 - j0
+			ac := acc[:w]
+			for jj := range ac {
+				ac[jj] = 0
 			}
-			dgamma[j] = T(acc)
+			for r := 0; r < rows; r++ {
+				base := r * d
+				ur := up[base+j0 : base+j1 : base+j1]
+				xr := x[base+j0 : base+j1 : base+j1]
+				ivr := inv[r]
+				for jj, uv := range ur {
+					ac[jj] += float64(uv) * float64(xr[jj]) * ivr
+				}
+			}
+			og := dgamma[j0:j1:j1]
+			for jj := range og {
+				og[jj] = T(ac[jj])
+			}
 		}
 	})
 }
+
+// normColBlock is the column-block width of the backward dγ/dβ passes: wide
+// enough for contiguous row reads to amortize the row-pointer arithmetic,
+// small enough that the accumulator block stays in L1 (128×8B = 1KiB).
+const normColBlock = 128
 
 func layerNormBackwardKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
 	if len(in) != 3 {
@@ -387,53 +528,113 @@ func layerNormBackwardKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs
 func layerNormBwd[T normFloat](x, gamma, up, dx, dgamma, dbeta []T, rows, d int, eps float64) {
 	mean := make([]float64, rows)
 	inv := make([]float64, rows)
+	x32, isF32 := any(x).([]float32)
+	u32, _ := any(up).([]float32)
+	g32, _ := any(gamma).([]float32)
+	gm := gamma[:d:d]
 	parallelWork(rows, 6*d, func(lo, hi int) {
 		for r := lo; r < hi; r++ {
 			base := r * d
 			xr := x[base : base+d : base+d]
 			ur := up[base : base+d : base+d]
 			dr := dx[base : base+d : base+d]
-			var mu float64
-			for j := 0; j < d; j++ {
-				mu += float64(xr[j])
+			var mu, variance float64
+			if isF32 {
+				row := x32[base : base+d]
+				mu = sumF32(row) / float64(d)
+				variance = varSumF32(row, mu) / float64(d)
+			} else {
+				for j := 0; j < d; j++ {
+					mu += float64(xr[j])
+				}
+				mu /= float64(d)
+				for j := 0; j < d; j++ {
+					dv := float64(xr[j]) - mu
+					variance += dv * dv
+				}
+				variance /= float64(d)
 			}
-			mu /= float64(d)
-			var variance float64
-			for j := 0; j < d; j++ {
-				dv := float64(xr[j]) - mu
-				variance += dv * dv
-			}
-			variance /= float64(d)
 			iv := 1 / math.Sqrt(variance+eps)
 			mean[r], inv[r] = mu, iv
 			var meanA, meanAX float64
-			for j := 0; j < d; j++ {
-				xhat := (float64(xr[j]) - mu) * iv
-				a := float64(ur[j]) * float64(gamma[j])
-				meanA += a
-				meanAX += a * xhat
+			if isF32 {
+				meanA, meanAX = lnGradSumsF32(u32[base:base+d], g32, x32[base:base+d], mu, iv)
+			} else {
+				for j := 0; j < d; j++ {
+					xhat := (float64(xr[j]) - mu) * iv
+					a := float64(ur[j]) * float64(gm[j])
+					meanA += a
+					meanAX += a * xhat
+				}
 			}
 			meanA /= float64(d)
 			meanAX /= float64(d)
-			for j := 0; j < d; j++ {
+			for j, g := range gm {
 				xhat := (float64(xr[j]) - mu) * iv
-				a := float64(ur[j]) * float64(gamma[j])
+				a := float64(ur[j]) * float64(g)
 				dr[j] = T(iv * (a - meanA - xhat*meanAX))
 			}
 		}
 	})
-	parallelWork(d, 3*rows, func(lo, hi int) {
-		for j := lo; j < hi; j++ {
-			var dg, db float64
-			for r := 0; r < rows; r++ {
-				xhat := (float64(x[r*d+j]) - mean[r]) * inv[r]
-				dg += float64(up[r*d+j]) * xhat
-				db += float64(up[r*d+j])
+	// Column pass, COLUMN-BLOCKED (see rmsNormBwd): rows outer for contiguous
+	// reads; each dγ_j/dβ_j still sums rows ascending — identical values.
+	nb := (d + normColBlock - 1) / normColBlock
+	parallelWork(nb, 4*rows*normColBlock, func(blo, bhi int) {
+		accG := make([]float64, normColBlock)
+		accB := make([]float64, normColBlock)
+		for b := blo; b < bhi; b++ {
+			j0 := b * normColBlock
+			j1 := min(j0+normColBlock, d)
+			w := j1 - j0
+			ag, ab := accG[:w], accB[:w]
+			for jj := 0; jj < w; jj++ {
+				ag[jj] = 0
+				ab[jj] = 0
 			}
-			dgamma[j] = T(dg)
-			dbeta[j] = T(db)
+			for r := 0; r < rows; r++ {
+				base := r * d
+				ur := up[base+j0 : base+j1 : base+j1]
+				xr := x[base+j0 : base+j1 : base+j1]
+				mu, iv := mean[r], inv[r]
+				for jj, uv := range ur {
+					xhat := (float64(xr[jj]) - mu) * iv
+					u := float64(uv)
+					ag[jj] += u * xhat
+					ab[jj] += u
+				}
+			}
+			og := dgamma[j0:j1:j1]
+			ob := dbeta[j0:j1:j1]
+			for jj := range og {
+				og[jj] = T(ag[jj])
+				ob[jj] = T(ab[jj])
+			}
 		}
 	})
+}
+
+// lnGradSumsF32 returns (Σa, Σa·x̂) with a=u·γ, x̂=(x−mu)·iv — the layernorm
+// backward's per-row gradient sums — with two independent accumulators per sum.
+func lnGradSumsF32(u, g, x []float32, mu, iv float64) (meanA, meanAX float64) {
+	var a0, a1, ax0, ax1 float64
+	i := 0
+	for ; i+1 < len(u) && i+1 < len(g) && i+1 < len(x); i += 2 {
+		xh0 := (float64(x[i]) - mu) * iv
+		xh1 := (float64(x[i+1]) - mu) * iv
+		v0 := float64(u[i]) * float64(g[i])
+		v1 := float64(u[i+1]) * float64(g[i+1])
+		a0 += v0
+		a1 += v1
+		ax0 += v0 * xh0
+		ax1 += v1 * xh1
+	}
+	for ; i < len(u) && i < len(g) && i < len(x); i++ {
+		xh := (float64(x[i]) - mu) * iv
+		v := float64(u[i]) * float64(g[i])
+		a0 += v
+		ax0 += v * xh
+	}
+	return a0 + a1, ax0 + ax1
 }
 
 // normEps pulls the epsilon out of NormAttrs with the shared defaults.
