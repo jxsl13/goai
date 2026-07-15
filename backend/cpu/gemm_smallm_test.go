@@ -25,6 +25,10 @@ func TestGemmSmallMCrossReference(t *testing.T) {
 	for _, m := range []int{1, 2, 3} {
 		for _, s := range []struct{ k, n int }{
 			{129, 1061}, {64, 544}, {33, 40}, {5, 7}, {2048, 513},
+			// Large-N decode/vocab widths that exercise the adaptive column-block
+			// sizing (§small-m GEMV): n=2048 → ≈one block/worker, n=8192 → the 512
+			// cap, so the disjoint block ranges must still tile n exactly.
+			{2048, 2048}, {512, 8192},
 		} {
 			for _, dtype := range []tensor.Dtype{tensor.F32, tensor.F64} {
 				var a, b *tensor.Tensor

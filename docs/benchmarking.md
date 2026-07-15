@@ -825,6 +825,30 @@ N=2 → 46 (28%), N=4 → 27 (16%). So with the optimized f32/Q8 offload path, s
 VRAM**, not just a hard-failure fallback. (Matmul-only estimate; real T631 adds the
 CPU attention/norm + the device↔host transfer at the split boundary.)
 
+## amd64 SIMD decode-GEMV parallelism (worker linux-amd64)
+
+The `GOEXPERIMENT=simd` F32 GEMM path (`gemm_simd.go`, archsimd/AVX) is amd64-only, so
+these numbers can only be measured on the amd64 worker (the M2 dev machine is ARM and
+cannot compile the path). The small-m branch (m ≤ 3 — the **decode GEMV** shape, one
+token × the weight matrix) parallelizes over COLUMN blocks because there are too few rows
+to split. A GEMV is memory-bandwidth-bound (each B element is read once, no reuse), so its
+throughput scales with the number of cores streaming B — the column-block size must yield
+≈one block **per worker**.
+
+It previously used a fixed 512-column block, giving only `ceil(n/512)` blocks — e.g. **4**
+for the common `n=2048`, leaving 12 of 16 cores idle. Sizing the block to ≈`n/workers`
+(floored to a whole 32-wide tile, capped at 512 to keep each worker's `k×jblk×4B` B slice
+L2/L3-friendly) puts every core to work:
+
+| decode GEMV `[1,2048]·[2048,2048]`, 16 cores | GFLOP/s |
+|---|---:|
+| fixed 512-col blocks (4 workers) | 14.4 |
+| adaptive ≈`n/workers` blocks (16 workers) | **27.5** (+90%) |
+
+The fits-in-tile GEMM path (m ≥ 4) is untouched — `MatMul/512` stays ≈230 GFLOP/s,
+`512×2048×8192` ≈200 GFLOP/s. The block ranges stay disjoint, so the result is
+bit-identical (parity vs the reference holds at every n, `TestGemmSmallMCrossReference`).
+
 ## Further reading
 
 - Hoefler & Belli, *Scientific Benchmarking of Parallel Computing Systems* (SC '15) — the canonical treatment of run variance, warm-up and honest reporting that this document's rules follow.
