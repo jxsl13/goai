@@ -122,6 +122,35 @@ Tw28|x|CPU GEMM B-packing re-measured on Zen3 (ADR-0017 resume) — REGRESSED -6
 
 ## §NEXT — open levers
 
+**STATE 2026-07-15: the CUDA inference arc is COMPLETE + documented + validated.**
+Decode 26→164.7 tok/s (6.3×), within 1.48× of llama.cpp Vulkan; greedy+sampled
+generation writes real text; graceful −14% to 2048 ctx (PERF-LONGCTX). All
+primitives public in backend/cuda. Recent probes were REJECTIONS (Q4, Q8-prefill)
+→ the easy optimization space is exhausted.
+
+**HIGHEST-VALUE NEXT (public API — usable library): a llamagpu CUDA adapter.**
+llamagpu.Decoder is already a backend-agnostic, single-command-buffer,
+resident-quantized GPU decoder with New(Metal)/NewVulkan/NewQuant adapters + a
+clean public Generate(prompt,maxNew,sampler). Adding NewCUDA/NewQuantCUDA =
+implement its recorder/linear/buffer interfaces over my backend/cuda primitives
+(the Decoder core then gives Step/StepN/Generate/sampler FOR FREE). My primitives
+already cover most of `recorder`: RMSNorm✓ MatMul/MatMulAcc✓ RoPE✓ MHA/GQA✓
+Unary/Binary✓ QMatMulResident✓(Q8). GAPS to add in backend/cuda first (low-collision,
+mine): LayerNorm, AddBias(broadcast), Copy2D(strided), RoPEAt/RoPEPair(fused-QKV
+bands), Blit; Commit/Wait ← my CUDA graph/stream. No import cycle (nlp/llamagpu
+don't import backend/cuda).
+**BLOCKER — DEFER:** llamagpu is a MAIN-MACHINE HOTSPOT right now (T613 QKV/RoPE/
+SwiGLU fusions, T614 encode-overlap, T644 in-flight) → editing its interfaces now
+COLLIDES. Wait for llamagpu to settle, then add the CUDA adapter (coordinated),
+OR the main machine adds it on my public primitives. Until then my primitives are
+the enablement; the assembled decoder stays in backend/cuda tests.
+
+Other deferred levers: flash-style attention + tiled quant GEMM (prefill gap
+2.5-3.6×, modest EV at short ctx); f16 KV cache (only ≈14% context-dependent, low
+EV); Qwen (needs nlp QKV-bias fields, main-machine); T631 VRAM-offload (needs a
+>12GB model + shared-executor infra).
+
+--- historical (pre-completion) ---
 Nx1: ◐ CUDA activation residency — Phase-2 device-matmul CHAIN DONE (GPU-5/Tw11, `DeviceF32`, 29× MLP). remaining = full recorder (arbitrary op chains in one submit, async, non-matmul ops on device) + integrate into an nn/llamagpu decode path (currently a standalone primitive, orphan until wired). BIG. USER PRIORITY.
 Nx2: ◐ f32-native nr=16 DONE (Tw10, 153 GFLOP/s). remaining → cache blocking (ADR-0017 re-open this large-cache x86) + FMA-saturation microkernel to close §GAP F32 3.8×/F64 2.7×.
 Nx3: ✅ FULL Llama-block kernel set on-device (GPU-7): matmul + GELU/SiLU + residual-add + RMSNorm + Softmax + RoPE. attention (RoPE→QKᵀ→softmax→·V) AND FFN (RMSNorm→matmul→SiLU→matmul→residual) run fully resident. ◐ Nx1: SwiGLU FFN block composed+verified e2e (Tw18). ✅ FULL single-head decoder LAYER composed+verified e2e (Tw21, max rel 1.4e-5): pre-norm attn (Q/K/V/O proj + RoPE + causal attn + residual) + pre-norm SwiGLU FFN + residual, all resident. ✅ FULL-MODEL FORWARD-PASS OP SET COMPLETE on-device: embed-gather → decoder layers (MHA/GQA + SwiGLU FFN + norms + residuals) → final RMSNorm → output matmul→logits. All verified vs ref. ONLY REMAINING for real inference: real GGUF weights (needs USER download permission) + tokenizer + the glue (multi-layer loop, load weights into ResidentB). NEXT candidates: multi-layer stack test (synthetic); perf-tune resident reduction kernels (warp-shuffle); XPos RoPE; OR real weights if user approves. then a full decoder layer; real GGUF weights; batched/GQA Sgemm; expose via backend Kernel interface for nn/llamagpu. + XPos RoPE.
