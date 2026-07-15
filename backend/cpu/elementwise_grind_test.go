@@ -122,6 +122,36 @@ func TestCPUAddBiasMatchesRef(t *testing.T) {
 	}
 }
 
+// TestCPUAddBiasBackwardMatchesRef locks the parallel column-owned addbias
+// backward (dbias[j] = Σ_i g[i,j]) against ref BIT-EXACTLY, both dtypes.
+// Column ownership preserves each column's row-order f64 accumulation, so the
+// sum sequence is identical to ref's serial loop (§V3). Shapes cover the
+// serial path (below parThreshold), both profiled training shapes ([256,2048],
+// [256,512] — parallel, chunked over columns), a non-multiple-of-workers width
+// (uneven last chunk), and a non-contiguous g via transpose.
+func TestCPUAddBiasBackwardMatchesRef(t *testing.T) {
+	cpu := cpuBackend(t)
+	ref, _ := backend.Get(backend.Ref)
+	for _, dt := range []tensor.Dtype{tensor.F32, tensor.F64} {
+		mk := func(sh tensor.Shape, seed uint64) *tensor.Tensor {
+			if dt == tensor.F64 {
+				return bench.RandF64(sh, seed)
+			}
+			return bench.RandF32(sh, seed)
+		}
+		for _, sh := range []tensor.Shape{{3, 17}, {256, 2048}, {256, 512}, {130, 129}} {
+			g := mk(sh, 41)
+			gc, gr := run(t, cpu, backend.OpAddBiasBackward, g), run(t, ref, backend.OpAddBiasBackward, g)
+			assertEqualExact(t, gc, gr, "addbias-backward/"+dt.String())
+		}
+		// non-contiguous g via transpose
+		g := mk(tensor.Shape{9, 6}, 42)
+		gt, _ := g.Transpose(0, 1)
+		gc, gr := run(t, cpu, backend.OpAddBiasBackward, gt), run(t, ref, backend.OpAddBiasBackward, gt)
+		assertEqualExact(t, gc, gr, "addbias-backward-noncontig/"+dt.String())
+	}
+}
+
 // TestCPUSoftmaxEdge locks the scratch-free softmax's edge behavior to ref:
 // +Inf rows (NaN everywhere: Inf−Inf), −Inf rows (exp(NaN)), NaN propagation,
 // huge-magnitude rows (max-shift prevents overflow), and a tiny d=1 axis.

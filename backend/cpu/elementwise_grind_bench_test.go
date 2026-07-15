@@ -32,6 +32,31 @@ func BenchmarkAddBiasF32_1x2048_cpu(b *testing.B) { // decode-step shape (serial
 		bench.RandF32(tensor.Shape{1, 2048}, 1), bench.RandF32(tensor.Shape{2048}, 2))
 }
 
+// --- AddBias backward (§V22 A/B): dbias[j] = Σ_i g[i,j], the last cpu→ref
+// fallback of size on the f32 CPU GPT training step (~3.3%). _cpu is the
+// parallel column-owned kernel (addbias.go), _ref the serial scalar baseline
+// it previously fell back to. Profiled training shapes: [256,2048] (FFN
+// hidden) and [256,512] (model width). ---
+
+func BenchmarkAddBiasBackwardF32_256x2048_cpu(b *testing.B) {
+	benchOn(b, backend.CPU, backend.OpAddBiasBackward, bench.RandF32(tensor.Shape{256, 2048}, 5))
+}
+func BenchmarkAddBiasBackwardF32_256x2048_ref(b *testing.B) {
+	benchOn(b, backend.Ref, backend.OpAddBiasBackward, bench.RandF32(tensor.Shape{256, 2048}, 5))
+}
+func BenchmarkAddBiasBackwardF32_256x512_cpu(b *testing.B) {
+	benchOn(b, backend.CPU, backend.OpAddBiasBackward, bench.RandF32(tensor.Shape{256, 512}, 5))
+}
+func BenchmarkAddBiasBackwardF32_256x512_ref(b *testing.B) {
+	benchOn(b, backend.Ref, backend.OpAddBiasBackward, bench.RandF32(tensor.Shape{256, 512}, 5))
+}
+func BenchmarkAddBiasBackwardF64_256x2048_cpu(b *testing.B) {
+	benchOn(b, backend.CPU, backend.OpAddBiasBackward, bench.RandF64(tensor.Shape{256, 2048}, 5))
+}
+func BenchmarkAddBiasBackwardF64_256x2048_ref(b *testing.B) {
+	benchOn(b, backend.Ref, backend.OpAddBiasBackward, bench.RandF64(tensor.Shape{256, 2048}, 5))
+}
+
 // --- Softmax over last axis ---
 
 func BenchmarkSoftmaxF32_32x2048_cpu(b *testing.B) { // attention-row scale
