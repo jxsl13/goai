@@ -262,10 +262,18 @@ func (rec *Recorder) Binary(a, b, o *DeviceF32, op int) error {
 	return nil
 }
 
-// QMatMulResident (resident Q8 GEMV) lands in slice 2 — the f32 Decoder path
-// (NewCUDA) never calls it; only NewQuantCUDA will.
+// QMatMulResident records o[m, w.n] = x[m, w.k]·dequant(w) — the resident Q8 matmul
+// (beta=0, overwrite o). w's transposed int8 [n,k] + per-32-block f32 scales are
+// consumed by the warp-per-output GEMV kernel; the flat buffer shapes are ignored in
+// favour of the explicit m / w.k / w.n dims (as MatMul does).
 func (rec *Recorder) QMatMulResident(x *DeviceF32, w *ResidentBQ8, o *DeviceF32, m int) error {
-	return fmt.Errorf("cuda: rec QMatMulResident not yet implemented (adapter slice 2)")
+	if x.ptr == nil || w.q == nil || w.scales == nil || o.ptr == nil {
+		return fmt.Errorf("cuda: rec QMatMulResident on a freed handle")
+	}
+	if rc := C.cu_qmatmul_q8(x.ptr, w.q, w.scales, o.ptr, C.int(m), C.int(w.k), C.int(w.n), C.int(w.nb), C.float(0)); rc != 0 {
+		return fmt.Errorf("cuda: rec QMatMulResident failed (code %d)", int(rc))
+	}
+	return nil
 }
 
 // Commit is a no-op: ops are already enqueued on the stream as recorded.

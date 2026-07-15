@@ -8,6 +8,7 @@ import (
 	"github.com/jxsl13/goai/backend"
 	"github.com/jxsl13/goai/backend/cuda"
 	_ "github.com/jxsl13/goai/backend/ref"
+	"github.com/jxsl13/goai/format/gguf"
 	"github.com/jxsl13/goai/llamagpu"
 	"github.com/jxsl13/goai/nlp"
 )
@@ -94,4 +95,52 @@ func TestCUDAPrefillStepMatchesReference(t *testing.T) {
 		}
 	}
 	t.Logf("llamagpu CUDA prefill+decode == reference greedy: %d-token prompt → %d tokens", len(prompt), len(gpuOut))
+}
+
+// NewQuantCUDA decodes a Q8-quantized Llama through the unified Decoder: every projection is a
+// resident Q8 weight driven by the recorder's QMatMulResident. Quantization changes the outputs vs
+// f32, so — as with the metal/vulkan quant tests — the contract is a valid, prefix-preserving,
+// correct-length greedy generation (the Q8 numeric accuracy is pinned separately by the backend's
+// TestCUDARecorderQ8).
+func TestCUDAQuantGenerateValid(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("cuda: no CUDA-capable device")
+	}
+	cfg := nlp.LlamaConfig{
+		Vocab: 256, Ctx: 128, Dim: 128, Heads: 8, KVHeads: 2, Layers: 4,
+		Hidden: 352, Eps: 1e-5, RopeBase: 10000,
+	}
+	m, err := nlp.NewLlama(cfg, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	qm, err := nlp.QuantizeLlama(m, gguf.Q8_0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer qm.Close()
+	dec, err := llamagpu.NewQuantCUDA(qm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dec.Release()
+
+	prompt := []int{1, 9, 42, 17}
+	const maxNew = 24
+	out, err := dec.Generate(prompt, maxNew, nlp.Greedy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out) != len(prompt)+maxNew {
+		t.Fatalf("generated %d tokens, want %d", len(out)-len(prompt), maxNew)
+	}
+	for i, tok := range out {
+		if i < len(prompt) && tok != prompt[i] {
+			t.Fatalf("prompt prefix violated at %d: %d != %d", i, tok, prompt[i])
+		}
+		if tok < 0 || tok >= cfg.Vocab {
+			t.Fatalf("token[%d]=%d out of vocab %d", i, tok, cfg.Vocab)
+		}
+	}
+	t.Logf("llamagpu NewQuantCUDA (Q8) greedy: %d-token prompt → %d valid tokens", len(prompt), len(out))
 }

@@ -4,6 +4,21 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — quantized (Q8) inference through the unified llamagpu backend (adapter slice 2, worker linux-amd64, 2026-07-15)
+- `llamagpu.NewQuantCUDA(m *nlp.QuantLlama)` runs a quantized Llama on NVIDIA with every
+  projection a resident Q8 weight, via the same batched `Decoder` core (Generate/Step +
+  samplers unchanged). The CUDA backend has ONE quant kernel (Q8 GEMV), so
+  `cudaUploadQWeight` dequantizes any source ggml type (Q4_K, Q6_K, …) to f32 and
+  re-quantizes to a uniform resident Q8 — unlike metal/vulkan, which keep each native
+  type and dequantize in-kernel. (Q8→f32→Q8 is near-lossless; lower-bit sources lose
+  only what they already lost.)
+- `cuda.Recorder.QMatMulResident` records the resident-Q8 matmul (`cu_qmatmul_q8`,
+  beta=0); `cuda.ResidentBQ8` now implements the `qweight` interface via `Close()`.
+- Validated: `TestCUDARecorderQ8` cross-checks the Q8 GEMV against a host f32 matmul
+  (max rel err 2.7% — genuine Q8 accuracy), and `TestCUDAQuantGenerateValid` runs an
+  end-to-end Q8 decode (valid, prefix-preserving, correct-length greedy). **The CUDA
+  llamagpu adapter is now complete — f32 and Q8 both live through the unified Decoder.**
+
 ### CUDA — NVIDIA is now a first-class llamagpu backend (adapter slice 3, worker linux-amd64, 2026-07-15)
 - `llamagpu.NewCUDA(m *nlp.Llama)` wires the `cuda.Recorder` into the backend-agnostic
   batched `Decoder` (via `cBuf`/`cRec` thin assertions, the same shape as the metal

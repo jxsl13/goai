@@ -32,6 +32,58 @@ func closeVec(t *testing.T, tag string, got []float32, want []float32, tol float
 	}
 }
 
+// The recorder's resident-Q8 GEMV (QMatMulResident) must match a host f32 matmul within
+// Q8 quantization tolerance — the quantized-decode path the llamagpu NewQuantCUDA uses.
+func TestCUDARecorderQ8(t *testing.T) {
+	skipNoGPU(t)
+	rec, err := cuda.NewRecorder()
+	must(t, err)
+	defer rec.Free()
+
+	const m, k, n = 2, 64, 96 // k,n multiples of 32
+	dx, x := dev(t, m, k, 11)
+	// Weight is [K,N] (in,out) — NewResidentBQ8's orientation; host ref uses the pre-quant values.
+	wten := bench.RandF32(tensor.Shape{k, n}, 12)
+	wf := wten.Contiguous().Storage().F32()
+	w, err := cuda.NewResidentBQ8(wten)
+	must(t, err)
+	defer w.Close()
+	do, err := cuda.NewDeviceF32(m, n)
+	must(t, err)
+	defer do.Free()
+
+	must(t, rec.QMatMulResident(dx, w, do, m))
+	must(t, rec.Wait())
+	got, err := do.ToHost()
+	must(t, err)
+
+	gf := got.Contiguous().Storage().F32()
+	var maxAbs, maxRel float64
+	for i := 0; i < m; i++ {
+		for j := 0; j < n; j++ {
+			var s float64
+			for p := 0; p < k; p++ {
+				s += float64(x[i*k+p]) * float64(wf[p*n+j])
+			}
+			d := math.Abs(float64(gf[i*n+j]) - s)
+			if d > maxAbs {
+				maxAbs = d
+			}
+			// Relative error only where the output is significant (near-zero outputs
+			// blow up the ratio without signalling real error).
+			if math.Abs(s) > 1 {
+				if rel := d / math.Abs(s); rel > maxRel {
+					maxRel = rel
+				}
+			}
+			if d > 0.05+0.03*math.Abs(s) {
+				t.Fatalf("Q8[%d,%d]=%v want %v (Δ%g)", i, j, gf[i*n+j], s, d)
+			}
+		}
+	}
+	t.Logf("QMatMulResident (resident Q8 GEMV) == host f32 within Q8 tol (max abs err %.4f, max rel err %.3f%% over |out|>1)", maxAbs, maxRel*100)
+}
+
 // The CUDA Recorder (the llamagpu backend-agnostic decode interface on NVIDIA) must
 // produce the same results as host references for the ops with real wiring risk:
 // the 3-buffer MatMul/MatMulAcc, the op-code + copy-path Unary/Binary, and the
