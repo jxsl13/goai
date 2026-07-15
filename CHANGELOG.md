@@ -4,6 +4,19 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T651 — APOLLO optimizer: SGD-like memory, AdamW-level training (2026-07-15)
+- New `nn.APOLLO`: the APOLLO memory-efficient optimizer (Zhu, Zhang, Hao et al. 2024,
+  arXiv:2412.05270), a successor to GaLore. Instead of GaLore's SVD subspace, APOLLO
+  projects the gradient into an auxiliary rank-r space with a cheap SEEDED RANDOM
+  Gaussian projection (no SVD), runs Adam-style moments there (O(r·max(m,n)) state),
+  and converts the normalized low-rank update into one CHANNEL-WISE scaling factor
+  `s_j = ‖Ř[:,j]‖ / ‖R[:,j]‖` that is applied to the RAW full-rank gradient — so both
+  the weight and its update stay full-rank, only the optimizer state is compressed. A
+  Norm-Growth Limiter tames early-training spikes; `WithAPOLLOMini` is the rank-1
+  tensor-wise variant with O(max(m,n)) state. Distinct from `nn.GaLore` (SVD subspace,
+  projects the update back low-rank). Convergence verified against plain Adam on a
+  synthetic problem; deterministic under a seeded projection.
+
 ### CUDA — Qwen2.5-3B validated: engine generalizes across a 6× parameter range (worker linux-amd64, 2026-07-15)
 - `TestCUDAQwenGenerate` now also runs **Qwen2.5-3B** (qwen2, 36 layers, dim 2048, GQA
   16:2, QKV-bias) — the largest scale validated end-to-end on the CUDA engine. It decodes
