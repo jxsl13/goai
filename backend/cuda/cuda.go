@@ -74,6 +74,8 @@ func (Backend) Kernel(op backend.Op, dtype tensor.Dtype) (backend.Kernel, bool) 
 		return ropeF32, true
 	case backend.OpMHA:
 		return mhaF32, true
+	case backend.OpEmbed:
+		return embedF32, true
 	}
 	return nil, false // everything else: fallback to Pure-Go (§I4)
 }

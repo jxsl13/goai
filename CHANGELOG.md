@@ -4,6 +4,16 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — general backend runs a whole model forward: OpEmbed + full-model capstone (worker linux-amd64, 2026-07-15)
+- Adds `OpEmbed` (token-embedding row gather) to the general CUDA backend, completing the
+  input path. `TestCUDAGeneralModelForward` then runs a whole small F32 model forward —
+  embedding → 2 transformer layers → final RMSNorm → output projection to logits — through
+  the generic `backend.Execute` path on `backend.Get(CUDA)` and confirms it matches the
+  reference within tolerance AND agrees on the per-row argmax (the actual next-token
+  decision). So an ENTIRE model forward, not just a block, composes on the general backend.
+  F32 table + integer indices; F64 tables and out-of-range indices fall back to the
+  reference.
+
 ### CUDA — capstone: a full transformer layer composes on the general backend (worker linux-amd64, 2026-07-15)
 - `TestCUDAGeneralLayerForward` runs a whole F32 transformer block (RMSNorm → QKV
   projections → RoPE → GQA-MHA → output proj → residual → RMSNorm → SwiGLU → down proj →
