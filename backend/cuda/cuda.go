@@ -38,6 +38,17 @@ func (Backend) Synchronize() error    { return nil }
 // Available reports whether a CUDA-capable GPU is present.
 func Available() bool { return C.cu_available() == 1 }
 
+// MemInfo returns the device's free and total VRAM in bytes (cudaMemGetInfo) — the
+// budget probe for deciding how many model layers fit resident vs must offload to
+// CPU-SIMD (T631). Returns (0,0) if unavailable.
+func MemInfo() (free, total uint64) {
+	var f, t C.ulonglong
+	if C.cu_mem_info(&f, &t) != 0 {
+		return 0, 0
+	}
+	return uint64(f), uint64(t)
+}
+
 func (Backend) Kernel(op backend.Op, dtype tensor.Dtype) (backend.Kernel, bool) {
 	if op == backend.OpMatMul && dtype == tensor.F32 {
 		return matmulF32, true
