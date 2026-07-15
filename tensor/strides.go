@@ -55,6 +55,52 @@ func (st Strides) IsContiguous(shape Shape) bool {
 	return true
 }
 
+// cloneShapeStrides returns an independent copy of shape together with its
+// row-major strides, carved out of ONE backing allocation (§base-perf: halves
+// the slice allocs on every tensor creation vs Clone+RowMajorStrides). Both
+// slices are full-capacity (three-index) so an append on one can never bleed
+// into the other.
+func cloneShapeStrides(shape Shape) (Shape, Strides) {
+	n := len(shape)
+	if n == 0 {
+		// Bit-exact with Clone()+RowMajorStrides(): nil stays nil, empty stays empty.
+		if shape == nil {
+			return nil, Strides{}
+		}
+		return Shape{}, Strides{}
+	}
+	buf := make([]int, 2*n)
+	sh := Shape(buf[:n:n])
+	st := Strides(buf[n : 2*n : 2*n])
+	acc := 1
+	for i := n - 1; i >= 0; i-- {
+		sh[i] = shape[i]
+		st[i] = acc
+		acc *= shape[i]
+	}
+	return sh, st
+}
+
+// copyShapeStrides copies an existing shape+strides pair into ONE backing
+// allocation (view-creation hot path: Slice/Transpose/Permute made two slice
+// allocs each, §base-perf). Full-capacity slicing prevents append bleed, same
+// as cloneShapeStrides.
+func copyShapeStrides(shape Shape, strides Strides) (Shape, Strides) {
+	n := len(shape)
+	if n == 0 {
+		if shape == nil {
+			return nil, Strides{}
+		}
+		return Shape{}, Strides{}
+	}
+	buf := make([]int, 2*n)
+	sh := Shape(buf[:n:n])
+	st := Strides(buf[n : 2*n : 2*n])
+	copy(sh, shape)
+	copy(st, strides)
+	return sh, st
+}
+
 // Unravel converts a flat position in [0, shape.Numel()) into its row-major
 // multi-index for shape. It is the inverse of Offset with row-major strides and
 // base 0. Scalar shape → empty index. The returned slice is freshly allocated.

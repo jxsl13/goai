@@ -47,8 +47,11 @@ func (d cpuDevice) Kind() DeviceKind     { return KindCPU }
 func (d cpuDevice) String() string       { return "cpu" }
 func (d cpuDevice) Allocator() Allocator { return d.alloc }
 
-// defaultCPU is the process-wide CPU device backed by the heap allocator.
-var defaultCPU = cpuDevice{alloc: Heap()}
+// defaultCPU is the process-wide CPU device backed by the heap allocator. It is
+// declared as the Device INTERFACE (pre-boxed once at init) so CPU() does not
+// re-box the cpuDevice struct into an interface — that boxing heap-allocated on
+// every call, i.e. on every New/NewOn (§base-perf).
+var defaultCPU Device = cpuDevice{alloc: Heap()}
 
 // CPU returns the default host device (heap-allocated, no pooling).
 func CPU() Device { return defaultCPU }

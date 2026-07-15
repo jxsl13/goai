@@ -11,7 +11,9 @@ import (
 // semantics is numpy (definitional, no paper). All return a fresh contiguous CPU tensor.
 
 // fill writes gen(i) into every element of a fresh contiguous tensor t (row-major flat index i) and
-// returns t. Fast paths for f32/f64; other float dtypes go through the dtype-converting setter.
+// returns t. Fast paths for f32/f64/f16/bf16; other dtypes go through the dtype-converting setter.
+// t is always freshly created here (contiguous, offset 0), so the row-major flat index IS the
+// storage index — no Unravel needed (§base-perf: the old per-element Unravel heap-allocated).
 func fill(t *Tensor, gen func(i int) float64) *Tensor {
 	switch t.Dtype() {
 	case F64:
@@ -24,9 +26,19 @@ func fill(t *Tensor, gen func(i int) float64) *Tensor {
 		for i := range s {
 			s[i] = float32(gen(i))
 		}
+	case F16:
+		s := t.storage.U16()
+		for i := range s {
+			s[i] = f32ToF16(float32(gen(i)))
+		}
+	case BF16:
+		s := t.storage.U16()
+		for i := range s {
+			s[i] = f32ToBF16(float32(gen(i)))
+		}
 	default:
 		for i := range t.Numel() {
-			t.SetF64(gen(i), Unravel(i, t.shape)...)
+			t.storage.setF64(i, gen(i))
 		}
 	}
 	return t
@@ -85,12 +97,25 @@ func Eye(dtype Dtype, n int) *Tensor {
 	if n < 0 {
 		panic(fmt.Sprintf("tensor: Eye n=%d must be ≥ 0", n))
 	}
-	return fill(New(dtype, Shape{n, n}), func(i int) float64 {
-		if i/n == i%n { // row == col
-			return 1
+	t := New(dtype, Shape{n, n}) // already zeroed: only the diagonal needs writes (§base-perf:
+	// O(n) sets instead of n² generator calls with two integer divisions each).
+	switch dtype {
+	case F64:
+		s := t.storage.F64()
+		for i := 0; i < n; i++ {
+			s[i*(n+1)] = 1
 		}
-		return 0
-	})
+	case F32:
+		s := t.storage.F32()
+		for i := 0; i < n; i++ {
+			s[i*(n+1)] = 1
+		}
+	default:
+		for i := 0; i < n; i++ {
+			t.storage.setF64(i*(n+1), 1)
+		}
+	}
+	return t
 }
 
 // Identity is an alias for Eye (np.identity), the n×n identity matrix.
