@@ -504,8 +504,10 @@ func TestPackageDocsCarryLaymanAndFurtherReading(t *testing.T) {
 	}
 	sort.Strings(dirs)
 	for _, rel := range dirs {
-		if rel == "." || strings.HasPrefix(rel, "internal") || implPkg(rel) {
-			continue
+		if rel == "." || strings.HasPrefix(rel, "internal") ||
+			strings.Contains(rel, "/internal/") || strings.HasSuffix(rel, "/internal") ||
+			implPkg(rel) {
+			continue // internal packages (incl. nested, e.g. backend/cpu/internal/accel) are not user-facing
 		}
 		pkgs, perr := parser.ParseDir(fset, filepath.Join(root, rel), nil, parser.ParseComments)
 		if perr != nil {
