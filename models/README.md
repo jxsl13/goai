@@ -15,14 +15,21 @@ choices below sit well under the ~10.7 GB free VRAM.
 | `qwen2.5-0.5b-instruct-q8_0.gguf` | qwen2 | 24 | 14 / 2 (GQA) | 896 | 32768 | ~2 GB | needs QKV bias |
 | `tinyllama-1.1b-chat-q8_0.gguf` | llama | 22 | 32 / 4 (GQA) | 2048 | 2048 | ~4.4 GB | **runs directly** |
 | `qwen2.5-1.5b-instruct-q8_0.gguf` | qwen2 | 28 | 12 / 2 (GQA) | 1536 | 32768 | ~6 GB | needs QKV bias |
+| `qwen2.5-3b-instruct-q8_0.gguf` | qwen2 | 36 | 16 / 2 (GQA) | 2048 | 32768 | ~3.4 GB (Q8 resident) | needs QKV bias |
 
 All three parse **and dequantize** cleanly through goai's own `format/gguf`
 reader. **TinyLlama-1.1B** (arch=llama, GQA 32:4, no attention bias) is the first
 end-to-end GPU target — every op it needs (RMSNorm, RoPE, `GroupedQueryAttention`,
 SwiGLU FFN, `Embed`) is already on the CUDA path.
 
-Sources: `Qwen/Qwen2.5-{0.5B,1.5B}-Instruct-GGUF`,
+Sources: `Qwen/Qwen2.5-{0.5B,1.5B,3B}-Instruct-GGUF`,
 `TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF` (HuggingFace `resolve/main`).
+
+**Qwen2.5-3B** (36 layers, dim 2048) is the largest scale validated end-to-end on the
+CUDA engine so far — `TestCUDAQwenGenerate` decodes it to coherent text
+("Paris. The capital of Spain is Madrid…") at ≈56 tok/s (Q8, alloc-path), the same
+config-driven path as 0.5B/1.5B (0.5B ≈210, 1.5B ≈96 tok/s), so the engine generalizes
+across a 6× parameter range with no code changes.
 
 ## Fetch command
 

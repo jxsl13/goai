@@ -44,9 +44,13 @@ type qwenLayer struct {
 // weights/biases/config are read straight from the GGUF and made resident here —
 // the DISTINCT bit vs Llama is the Q/K/V projection BIASES, added via the new
 // DeviceF32.AddBias. Demonstrates additional model families + the AddBias
-// primitive, and that the engine generalizes across Qwen scales (0.5B & 1.5B).
+// primitive, and that the engine generalizes across Qwen scales (0.5B → 3B).
 func TestCUDAQwenGenerate(t *testing.T) {
-	for _, path := range []string{qwenPath, "../../models/qwen2.5-1.5b-instruct-q8_0.gguf"} {
+	for _, path := range []string{
+		qwenPath,
+		"../../models/qwen2.5-1.5b-instruct-q8_0.gguf",
+		"../../models/qwen2.5-3b-instruct-q8_0.gguf", // config-driven, skips if absent
+	} {
 		t.Run(path, func(t *testing.T) { runQwen(t, path) })
 	}
 }

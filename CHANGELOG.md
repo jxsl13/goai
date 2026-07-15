@@ -4,6 +4,16 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — Qwen2.5-3B validated: engine generalizes across a 6× parameter range (worker linux-amd64, 2026-07-15)
+- `TestCUDAQwenGenerate` now also runs **Qwen2.5-3B** (qwen2, 36 layers, dim 2048, GQA
+  16:2, QKV-bias) — the largest scale validated end-to-end on the CUDA engine. It decodes
+  to coherent text ("Paris. The capital of Spain is Madrid. The capital of Italy is
+  Rome…") at ≈56 tok/s (Q8, alloc-path), through the exact same config-driven path as
+  0.5B (≈210 tok/s) and 1.5B (≈96 tok/s) — no code changes, the config is read from the
+  GGUF. Confirms the from-scratch CUDA engine generalizes across a **6× parameter range**
+  (0.5B → 3B) and two families (Llama + Qwen). The 3.4 GB Q8 model is gitignored
+  (`models/README.md` records the fetch); the test skips if absent.
+
 ### CPU — amd64 SIMD medium-m GEMM: 2.5–4.9× via 2D tile×column grains (worker linux-amd64, 2026-07-15)
 - The `GOEXPERIMENT=simd` F32 GEMM m ≥ 4 dispatch parallelized over rows, so a worker with
   1–3 leftover rows fell to the no-B-reuse single-row remainder and, when `m < 4·cores`,
