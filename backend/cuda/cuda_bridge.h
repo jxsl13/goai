@@ -101,6 +101,10 @@ int cu_swiglu_f32(void* gate, const void* up, int n);
 // cu_rmsnorm_f32 applies RMSNorm y = x/√(mean(x²)+eps)·gamma in-place over the
 // last axis (x is rows×cols row-major; gamma is a resident [cols] weight).
 int cu_rmsnorm_f32(const void* in, void* out, const void* gamma, int rows, int cols, float eps);
+// cu_layernorm_f32: out = (x−mean)·inv·gamma + beta over the last axis (OpLayerNorm).
+int cu_layernorm_f32(const void* in, void* out, const void* gamma, const void* beta, int rows, int cols, float eps);
+// cu_addbias_f32: out[r,j] = x[r,j] + bias[j] (row-broadcast, OpAddBias).
+int cu_addbias_f32(const void* x, const void* bias, void* out, int rows, int n);
 
 // cu_softmax_f32 applies stable softmax over the last axis in-place (rows×cols).
 int cu_softmax_f32(void* x, int rows, int cols);

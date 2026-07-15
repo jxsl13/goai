@@ -34,7 +34,7 @@ static cudaStream_t gStream = NULL;
 static CUcontext gCtx = NULL; // runtime's primary context, retained for driver-API launches
 static CUfunction gGelu = NULL, gSilu = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gQgemv = NULL; // lazily nvrtc-compiled
 static CUfunction gRopeDpos = NULL, gAttnSoftmaxDpos = NULL, gAppendDpos = NULL; // device-position (graph-capturable) twins
-static CUfunction gArgmax = NULL; // greedy argmax over logits
+static CUfunction gArgmax = NULL, gLayerNorm = NULL, gAddBias = NULL; // greedy argmax; layernorm; broadcast bias-add
 static int ensure_init(void);
 static int compile_kernel(const char* src, const char* name, const char* entry, CUfunction* out);
 
@@ -330,6 +330,70 @@ int cu_rmsnorm_f32(const void* in, void* out, const void* gamma, int rows, int c
         args[4] = &cols;
         args[5] = &eps;
         rc = (cuLaunchKernel(gRms, blocks, 1, 1, threads, 1, 1, shmem, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_layernorm_f32: out[r,j] = (x[r,j]−mean_r)·inv_r·γ_j + β_j over the last axis
+// (torch LayerNorm, backend OpLayerNorm), mean/var accumulated in DOUBLE per row
+// (§V10). One block per row, two shared-mem reductions (mean, then variance).
+int cu_layernorm_f32(const void* in, void* out, const void* gamma, const void* beta, int rows, int cols, float eps) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (!gLayerNorm && compile_kernel(
+                           "extern \"C\" __global__ void layernorm_f32(const float* in, float* out, const float* g, const float* b, int rows, int cols, float eps){\n"
+                           "  int row = blockIdx.x; if (row>=rows) return;\n"
+                           "  extern __shared__ double sh[];\n"
+                           "  int t=threadIdx.x, nt=blockDim.x;\n"
+                           "  const float* xr = in + (size_t)row*cols;\n"
+                           "  float* yr = out + (size_t)row*cols;\n"
+                           "  double s=0.0; for(int j=t;j<cols;j+=nt) s+=(double)xr[j];\n"
+                           "  sh[t]=s; __syncthreads();\n"
+                           "  for(int k=nt/2;k>0;k>>=1){ if(t<k) sh[t]+=sh[t+k]; __syncthreads(); }\n"
+                           "  double mean=sh[0]/(double)cols; __syncthreads();\n"
+                           "  double v=0.0; for(int j=t;j<cols;j+=nt){ double d=(double)xr[j]-mean; v+=d*d; }\n"
+                           "  sh[t]=v; __syncthreads();\n"
+                           "  for(int k=nt/2;k>0;k>>=1){ if(t<k) sh[t]+=sh[t+k]; __syncthreads(); }\n"
+                           "  double var=sh[0]/(double)cols;\n"
+                           "  float inv=(float)(1.0/sqrt(var+(double)eps));\n"
+                           "  for(int j=t;j<cols;j+=nt){ yr[j]=(float)(((double)xr[j]-mean)*inv*(double)g[j]+(double)b[j]); }\n"
+                           "}\n",
+                           "layernorm.cu", "layernorm_f32", &gLayerNorm) != 0) { rc = -2; goto done; }
+    {
+        int threads = 256, blocks = rows; if (blocks < 1) blocks = 1;
+        size_t shmem = (size_t)threads * sizeof(double);
+        void* args[7] = {&in, &out, &gamma, &beta, &rows, &cols, &eps};
+        rc = (cuLaunchKernel(gLayerNorm, blocks, 1, 1, threads, 1, 1, shmem, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_addbias_f32: out[r,j] = x[r,j] + bias[j] (row-broadcast bias, backend
+// OpAddBias) — the Qwen QKV-projection bias and GPT linear biases.
+int cu_addbias_f32(const void* x, const void* bias, void* out, int rows, int n) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (!gAddBias && compile_kernel(
+                         "extern \"C\" __global__ void addbias_f32(const float* x, const float* bias, float* out, int rows, int n){\n"
+                         "  long gid=(long)blockIdx.x*blockDim.x+threadIdx.x;\n"
+                         "  long total=(long)rows*n; if(gid>=total) return;\n"
+                         "  int j=(int)(gid % n);\n"
+                         "  out[gid]=x[gid]+bias[j];\n"
+                         "}\n",
+                         "addbias.cu", "addbias_f32", &gAddBias) != 0) { rc = -2; goto done; }
+    {
+        long total=(long)rows*n;
+        int threads=256, blocks=(int)((total+threads-1)/threads); if(blocks<1) blocks=1;
+        void* args[5] = {&x, &bias, &out, &rows, &n};
+        rc = (cuLaunchKernel(gAddBias, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 done:
     pthread_mutex_unlock(&gLock);
