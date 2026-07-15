@@ -4,6 +4,19 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T650 — Gated Attention: sigmoid output gate on softmax attention (2026-07-15)
+- New `nn.GatedAttention`: standard causal multi-head softmax self-attention with
+  a data-dependent, head-specific **sigmoid output gate** (Qiu et al. 2025,
+  arXiv:2505.06708) — `Y = (σ(X·Wθ) ⊙ SDPA(X))·Wo`, the gate applied elementwise
+  to the raw per-head attention output AFTER attention and BEFORE the output
+  projection. The paper reports this single extra sigmoid improves stability and
+  eliminates attention sinks / massive activations at negligible cost. Optional
+  coarser `WithGatedAttentionHeadwiseGate` (one scalar per head). Distinct from
+  FoX (biases the pre-softmax scores), DiffAttention (subtracts two softmaxes),
+  and GatedDeltaNet (gates a linear-attention state) — here the ordinary softmax
+  is untouched and only its output is gated. Verify-first confirmed the gap
+  (T650(b)); built by calling OpMHA directly (Hymba-style, no baked out-proj).
+
 ### T649 — Hymba hybrid-head block; the T649 architecture cluster complete (2026-07-15)
 - New `nn.HymbaBlock`: the Hymba parallel-hybrid layer (Dong et al., arXiv:2411.13676)
   that runs attention heads and Mamba/SSM heads **in parallel** on the same input and
