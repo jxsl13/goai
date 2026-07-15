@@ -4,6 +4,14 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA inference — Qwen graph fast-path validated at both scales (worker linux-amd64/cuda, 2026-07-15)
+- `TestCUDAQwenFixedMatchesAlloc` now covers Qwen2.5-0.5B and 1.5B: both run on the
+  full optimized decode (fixed buffers + device-pos + fixed-size attention + Q8 +
+  CUDA graph + QKV AddBias) and generate the SAME greedy tokens as the alloc-path,
+  token-for-token. Graph decode 0.5B 271.8 tok/s (+30% vs alloc), 1.5B 110.9 tok/s
+  (+15%) — the optimized path + CUDA graph is correct and faster across Qwen scales
+  (the 1.5B graph = 28 layers, dim 1536). Worker sub-spec §PERF.
+
 ### CUDA inference — Qwen on the optimized graph path (worker linux-amd64/cuda, 2026-07-15)
 - `TestCUDAQwenFixedMatchesAlloc`: Qwen2.5-0.5B on the FULL optimized decode
   (persistent fixed buffers + device-position + fixed-size padded attention + Q8 +

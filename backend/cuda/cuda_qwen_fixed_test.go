@@ -203,11 +203,17 @@ func (q *qwenFixed) free() {
 // as the simple alloc-path Qwen — proving the whole optimized stack is correct for
 // a 2nd architecture, and measuring Qwen at full speed.
 func TestCUDAQwenFixedMatchesAlloc(t *testing.T) {
+	for _, path := range []string{qwenPath, "../../models/qwen2.5-1.5b-instruct-q8_0.gguf"} {
+		t.Run(path, func(t *testing.T) { qwenFixedVsAlloc(t, path) })
+	}
+}
+
+func qwenFixedVsAlloc(t *testing.T, path string) {
 	skipNoGPU(t)
-	allocToks := runQwen(t, qwenPath) // alloc-path reference (also skips if model absent)
+	allocToks := runQwen(t, path) // alloc-path reference (also skips if model absent)
 
 	prompt := "The capital of France is"
-	q := buildQwenFixed(t, qwenPath, 64)
+	q := buildQwenFixed(t, path, len(allocToks)+16)
 	defer q.free()
 	ids := q.tok.Encode(prompt)
 	var last int
@@ -228,5 +234,5 @@ func TestCUDAQwenFixedMatchesAlloc(t *testing.T) {
 			t.Fatalf("token %d: fixed/graph %d != alloc %d", i, fixed[i], allocToks[i])
 		}
 	}
-	t.Logf("Qwen fixed-buffer+graph == alloc-path (%d tokens); DECODE %.1f tok/s (graph, vs 208.8 alloc)", len(fixed), tps)
+	t.Logf("Qwen fixed-buffer+graph == alloc-path (%d tokens); DECODE %.1f tok/s (graph)", len(fixed), tps)
 }
