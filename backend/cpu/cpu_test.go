@@ -69,7 +69,33 @@ func TestCPUCrossReferenceExact(t *testing.T) {
 			}
 			gc := run(t, cpu, op, in)
 			gr := run(t, ref, op, in)
+			if op == backend.OpGELU && dtype == tensor.F32 && geluF32Tolerant {
+				// arm64 perf build: F32 GELU is the f32-native NEON pipeline
+				// (vexp.go) — TestGeluF32Accuracy's budget, not bit-exact.
+				assertCloseGelu(t, gc, gr, op.String()+"/"+dtype.String())
+				continue
+			}
 			assertEqualExact(t, gc, gr, op.String()+"/"+dtype.String())
+		}
+	}
+}
+
+// assertCloseGelu: the F32 GELU budget on the arm64 perf build (geluF32Tolerant)
+// — |got−ref| ≤ 1e-6 + 2e-4·|ref|, the TestGeluF32Accuracy envelope, an order
+// inside the ADR-0021 f32 tolerance. NaN must agree exactly.
+func assertCloseGelu(t *testing.T, got, want *tensor.Tensor, label string) {
+	t.Helper()
+	if !got.Shape().Equal(want.Shape()) {
+		t.Fatalf("%s: shape %v vs %v", label, got.Shape(), want.Shape())
+	}
+	for i := range got.Numel() {
+		idx := tensor.Unravel(i, got.Shape())
+		g, w := got.AtF64(idx...), want.AtF64(idx...)
+		if math.IsNaN(g) != math.IsNaN(w) {
+			t.Fatalf("%s [%d]: cpu %v vs ref %v (NaN mismatch)", label, i, g, w)
+		}
+		if !math.IsNaN(g) && math.Abs(g-w) > 1e-6+2e-4*math.Abs(w) {
+			t.Fatalf("%s [%d]: cpu %v vs ref %v", label, i, g, w)
 		}
 	}
 }
@@ -138,7 +164,28 @@ func TestCPUActivationEdge(t *testing.T) {
 		c, r := gc[0].Storage().F32(), gr[0].Storage().F32()
 		for i := range c {
 			cf, rf := float64(c[i]), float64(r[i])
-			if math.IsNaN(cf) != math.IsNaN(rf) || (!math.IsNaN(cf) && cf != rf) {
+			if math.IsNaN(cf) != math.IsNaN(rf) {
+				t.Errorf("%v[%d] in=%v: cpu=%v ref=%v (NaN mismatch)", op, i, edge[i], c[i], r[i])
+				continue
+			}
+			if math.IsNaN(cf) {
+				continue
+			}
+			if op == backend.OpGELU && geluF32Tolerant {
+				// arm64 perf build: finite F32 GELU values carry the NEON
+				// pipeline's budget; ±Inf still match exactly (|Inf−Inf|=NaN
+				// fails the bound only if they differ, which the IsInf check
+				// below rules out).
+				if math.IsInf(cf, 0) || math.IsInf(rf, 0) {
+					if cf != rf {
+						t.Errorf("%v[%d] in=%v: cpu=%v ref=%v", op, i, edge[i], c[i], r[i])
+					}
+				} else if math.Abs(cf-rf) > 1e-6+2e-4*math.Abs(rf) {
+					t.Errorf("%v[%d] in=%v: cpu=%v ref=%v", op, i, edge[i], c[i], r[i])
+				}
+				continue
+			}
+			if cf != rf {
 				t.Errorf("%v[%d] in=%v: cpu=%v ref=%v", op, i, edge[i], c[i], r[i])
 			}
 		}

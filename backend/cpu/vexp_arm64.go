@@ -18,3 +18,22 @@ func vexpQuadsNeonF32(p *float32, quads int, m float32) float32
 func vexpF32(p []float32, m float32) float32 {
 	return vexpQuadsNeonF32(&p[0], len(p)>>2, m)
 }
+
+// vgeluQuadsNeonF32 is the 4-wide NEON GELU kernel (vexp_arm64.s):
+// dst[i] = gelu(src[i]) for i in [0, 4·quads) — AS-7.1.26 erf on the vexp
+// exp primitive (numerics in vexp.go).
+//
+//go:noescape
+func vgeluQuadsNeonF32(dst, src *float32, quads int)
+
+// vgeluF32 computes dst[i] = gelu(src[i]) f32-native: whole quads through the
+// NEON kernel, the len%4 tail through scalar geluF32 (same math per element).
+func vgeluF32(dst, src []float32) {
+	nv := len(src) &^ 3
+	if nv > 0 {
+		vgeluQuadsNeonF32(&dst[0], &src[0], nv>>2)
+	}
+	for i := nv; i < len(src); i++ {
+		dst[i] = geluF32(src[i])
+	}
+}

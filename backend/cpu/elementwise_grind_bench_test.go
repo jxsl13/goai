@@ -63,6 +63,15 @@ func BenchmarkLogF32_64K_cpu(b *testing.B) {
 func BenchmarkSigmoidF32_2048_cpu(b *testing.B) { // small/serial path
 	benchOn(b, backend.CPU, backend.OpSigmoid, bench.RandF32(tensor.Shape{2048}, 3))
 }
+func BenchmarkGELUF32_256x2048_cpu(b *testing.B) { // GPT FFN hidden (256 tok × 4·512)
+	benchOn(b, backend.CPU, backend.OpGELU, bench.RandF32(tensor.Shape{256, 2048}, 3))
+}
+func BenchmarkGELUF64_256x2048_cpu(b *testing.B) {
+	benchOn(b, backend.CPU, backend.OpGELU, bench.RandF64(tensor.Shape{256, 2048}, 3))
+}
+func BenchmarkGELUF32_1x2048_cpu(b *testing.B) { // decode-step shape (serial path)
+	benchOn(b, backend.CPU, backend.OpGELU, bench.RandF32(tensor.Shape{1, 2048}, 3))
+}
 
 // --- Broadcast binary ops (materialization candidates) ---
 

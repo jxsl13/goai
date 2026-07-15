@@ -20,3 +20,12 @@ func vexpF32(p []float32, m float32) float32 {
 	}
 	return sum
 }
+
+// vgeluF32 computes dst[i] = gelu(src[i]) via the scalar poly — exists only so
+// the OpGELU F32 fast path type-checks (dead code at run time here: vexpNeon
+// is false, so geluKernelCPU keeps the exact f64 math.Erf path).
+func vgeluF32(dst, src []float32) {
+	for i, v := range src {
+		dst[i] = geluF32(v)
+	}
+}

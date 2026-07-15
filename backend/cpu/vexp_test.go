@@ -164,6 +164,123 @@ func TestSoftmaxVexpF32ParityVsF64Ref(t *testing.T) {
 	t.Logf("f32-native softmax vs f64 ref: max rel err %.2e (rtol %g, vexpNeon=%v)", maxRel, rtol, vexpNeon)
 }
 
+// TestGeluF32Accuracy sweeps the vgelu pipeline (through the build-selected
+// vgeluF32 — NEON on arm64+simd, the scalar poly elsewhere) against the exact
+// f64 math.Erf GELU. Budget: |got−ref| ≤ 1e-6 + 2e-4·|ref| (observed max abs
+// err ~5e-7, rel err ~1e-7 across GELU's active region) — an order under the
+// ADR-0021 f32 tolerance (rtol 2e-3). The atol term covers the deep-negative
+// tail (x ≲ −5.5, |gelu| < ~1.5e-6) where AS-7.1.26's absolute erf error
+// dominates the vanishing reference. Tails must saturate exactly: x for
+// large +x, −0 for large −x; ±Inf/NaN mirror the f64 reference.
+func TestGeluF32Accuracy(t *testing.T) {
+	rng := rand.New(rand.NewPCG(13, 17))
+	geluRef := func(x float32) float64 {
+		xd := float64(x)
+		return 0.5 * xd * (1 + math.Erf(xd/math.Sqrt2))
+	}
+	check := func(xs []float32, label string) {
+		t.Helper()
+		got := make([]float32, len(xs))
+		vgeluF32(got, xs)
+		var maxAbs, maxRel float64
+		for i, x := range xs {
+			w := geluRef(x)
+			gv := float64(got[i])
+			abs := math.Abs(gv - w)
+			if abs > maxAbs {
+				maxAbs = abs
+			}
+			if math.Abs(w) > 1e-6 {
+				if rel := abs / math.Abs(w); rel > maxRel {
+					maxRel = rel
+				}
+			}
+			if abs > 1e-6+2e-4*math.Abs(w) {
+				t.Fatalf("%s: gelu(%g) = %g, want %g (abs %.2e)", label, x, gv, w, abs)
+			}
+		}
+		t.Logf("%s: max abs err %.2e, max rel err %.2e (|ref|>1e-6) over %d points (vexpNeon=%v)",
+			label, maxAbs, maxRel, len(xs), vexpNeon)
+	}
+
+	// Dense uniform sweep of the active region.
+	n := 1 << 20
+	xs := make([]float32, n)
+	for i := range xs {
+		xs[i] = float32(-10 + 20*float64(i)/float64(n-1))
+	}
+	check(xs, "uniform[-10,10]")
+
+	// Random FFN-typical pre-activations.
+	for i := range xs {
+		xs[i] = 8 * (rng.Float32() - 0.5)
+	}
+	check(xs, "random[-4,4]")
+
+	// Fine grid around 0 (erf poly center, sign handoff).
+	for i := range xs {
+		xs[i] = rng.Float32() - 0.5
+	}
+	check(xs, "center[-0.5,0.5]")
+
+	// Tail saturation: gelu → x on the right, −0 on the left.
+	sat := []float32{8, 10, 100, 1e30}
+	out := make([]float32, len(sat))
+	vgeluF32(out, sat)
+	for i, x := range sat {
+		if out[i] != x {
+			t.Errorf("gelu(%g) = %g, want exact x", x, out[i])
+		}
+	}
+	neg := []float32{-8, -10, -100, -1e30}
+	vgeluF32(out[:len(neg)], neg)
+	for i, x := range neg {
+		if out[i] != 0 || !math.Signbit(float64(out[i])) {
+			t.Errorf("gelu(%g) = %g, want -0", x, out[i])
+		}
+	}
+
+	// Edge semantics mirror the f64 reference: gelu(+Inf)=+Inf,
+	// gelu(-Inf)=NaN (Inf·0), NaN propagates, ±0 keep their sign.
+	edge := []float32{float32(math.Inf(1)), float32(math.Inf(-1)), float32(math.NaN()), 0, float32(math.Copysign(0, -1))}
+	eout := make([]float32, len(edge))
+	vgeluF32(eout, edge)
+	if !math.IsInf(float64(eout[0]), 1) {
+		t.Errorf("gelu(+Inf) = %g, want +Inf", eout[0])
+	}
+	if !math.IsNaN(float64(eout[1])) {
+		t.Errorf("gelu(-Inf) = %g, want NaN", eout[1])
+	}
+	if !math.IsNaN(float64(eout[2])) {
+		t.Errorf("gelu(NaN) = %g, want NaN", eout[2])
+	}
+	if eout[3] != 0 || math.Signbit(float64(eout[3])) {
+		t.Errorf("gelu(+0) = %g, want +0", eout[3])
+	}
+	if eout[4] != 0 || !math.Signbit(float64(eout[4])) {
+		t.Errorf("gelu(-0) = %g, want -0", eout[4])
+	}
+}
+
+// TestVgeluF32MatchesScalarTail: the vector lanes and the scalar tail poly
+// agree to a few ulps, so a chunk's values don't jump at the len%4 boundary.
+func TestVgeluF32MatchesScalarTail(t *testing.T) {
+	rng := rand.New(rand.NewPCG(19, 23))
+	xs := make([]float32, 256)
+	for i := range xs {
+		xs[i] = 12 * (rng.Float32() - 0.5)
+	}
+	vec := make([]float32, len(xs))
+	vgeluF32(vec, xs)
+	for i, x := range xs {
+		s := geluF32(x)
+		diff := math.Abs(float64(vec[i]) - float64(s))
+		if diff > 1e-6+2e-6*math.Abs(float64(s)) {
+			t.Fatalf("lane %d: vgelu(%g) = %g vs scalar %g", i, x, vec[i], s)
+		}
+	}
+}
+
 // The exp-kernel microbenchmarks isolate the softmax exp fraction of the MHA
 // forward: one 512-wide attention row, exp(x-m)+sum, matching the band
 // softmax's inner loop.

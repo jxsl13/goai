@@ -62,6 +62,47 @@ func expF32(x float32) float32 {
 	return (p*r*r + r + 1) * math.Float32frombits(uint32(int32(n)+127)<<23)
 }
 
+// GELU on the vexp leaf (§C26 assemble-on-a-verified-leaf): the f32 GELU fast
+// path evaluates erf via Abramowitz-Stegun 7.1.26 — erf(x) ≈ sign(x)·(1 −
+// t·(a1 + t·(a2 + t·(a3 + t·(a4 + t·a5))))·e^(−x²)), t = 1/(1+p·|x|) — whose
+// only transcendental is e^(−x²), i.e. the vexp exp primitive above. So
+// gelu(x) = x·(0.5 + 0.5·erf(x/√2)) becomes a NEON pipeline (vgeluQuadsNeonF32
+// in vexp_arm64.s) with no f64 math.Erf. Gated exactly like vexp: only the
+// arm64 perf build (vexpNeon) routes the OpGELU F32 kernel here; every other
+// build keeps the scalar f64 math.Erf path bit-for-bit. Accuracy vs the exact
+// erf GELU (TestGeluF32Accuracy): max abs err ~5e-7, rel err ≤ ~2e-4 wherever
+// |gelu| > 1e-6 — far inside the ADR-0021 f32 tolerance (rtol 2e-3). The
+// AS-7.1.26 absolute erf error (~1.5e-7) makes the deep-negative tail
+// saturate to −0 slightly early (|gelu| < ~1.5e-6 there), which the combined
+// atol+rtol budget covers.
+const (
+	geluInvSqrt2 = float32(0.7071067811865476)
+	geluP        = float32(0.3275911)
+	geluA1       = float32(0.254829592)
+	geluA2       = float32(-0.284496736)
+	geluA3       = float32(1.421413741)
+	geluA4       = float32(-1.453152027)
+	geluA5       = float32(1.061405429)
+)
+
+// geluF32 is the scalar instantiation of the vgelu pipeline — the tail lanes
+// (len%4) and the type-check fallback build use it. Same operations per
+// element as the NEON lanes (only FMA contraction may differ): AS-7.1.26 erf
+// magnitude on expF32, sign re-applied bitwise from x (E ∈ [0,1], so the OR
+// is exact; NaN payloads stay NaN), then x·(0.5 + 0.5·erf).
+func geluF32(x float32) float32 {
+	a := math.Float32frombits(math.Float32bits(x*geluInvSqrt2) &^ (1 << 31)) // |x/√2|
+	t := 1 / (1 + geluP*a)
+	s := geluA4 + geluA5*t
+	s = geluA3 + s*t
+	s = geluA2 + s*t
+	s = geluA1 + s*t
+	e := expF32(-(a * a))
+	E := 1 - s*t*e
+	erf := math.Float32frombits(math.Float32bits(E) | math.Float32bits(x)&(1<<31))
+	return x * (0.5 + 0.5*erf)
+}
+
 // mhaSoftmaxBandVexpF32 is the arm64 perf-build body of mhaSoftmaxBandF32
 // (reached only when vexpNeon; see the gate there): the same scale (+ALiBi) →
 // max-shift exp → normalize pipeline, but f32-native end to end — no f64
