@@ -19,9 +19,9 @@ Invariant (under §V): `V<n> <TAG>: <subject> <relation> <condition>`
 
 §T, §B, §R are **CLEAN GFM MARKDOWN TABLES** — they MUST render as tables and pass mdlint's table checks (`table-ragged` + `table-separator-mismatch`). Each = a header row, a delimiter row, then data rows; every row has leading & trailing `|` and the SAME column count. Columns:
 
-- §T (tasks): `| id | status | task | cites |` — status `x` done, `~` wip, `.` todo.
+- §T (tasks): `| id | status | task | cites | state | priority |` — status `x` done, `~` wip, `.` todo; state ∈ done/wip/. (secondary lifecycle); priority ∈ high/med/low. Old rows may leave state+priority empty.
 - §B (bugs): `| id | date | cause | fix |`
-- §R (research): `| id | claim | source | conf |`
+- §R (research): `| id | claim | source | conf |` — conf ∈ high/med/low/ref.
 
 Each table opens with its header + delimiter row, e.g. §T:
 
