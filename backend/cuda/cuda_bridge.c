@@ -994,7 +994,22 @@ int cu_qmatmul_q8(const void* dA, const void* dQ, const void* dScales, void* dOu
                        "  const signed char* qr = q + (size_t)n*K;\n"
                        "  const float* sr = scales + (size_t)n*nb;\n"
                        "  float acc = 0.0f;\n"
-                       "  if ((K & 127) == 0){\n"
+                       "  if ((K & 511) == 0){\n"          // int4 (16B/lane = 512 k/step): more memory requests in flight, same warp count
+                       "    const int4* qr4 = (const int4*)qr;\n"
+                       "    int steps = K >> 9;\n"
+                       "    for (int w = 0; w < steps; w++){\n"
+                       "      int4 pk = qr4[w*32 + lane];\n"
+                       "      int kb = w*512 + lane*16;\n"
+                       "      float s = sr[w*16 + (lane >> 1)];\n"   // lane's 16 k lie in one per-32 block
+                       "      int P[4]; P[0]=pk.x; P[1]=pk.y; P[2]=pk.z; P[3]=pk.w;\n"
+                       "      #pragma unroll\n"
+                       "      for (int j = 0; j < 4; j++){\n"
+                       "        float4 av = *(const float4*)(ar + kb + j*4);\n"
+                       "        int pj = P[j];\n"
+                       "        acc += s*(av.x*(float)(signed char)(pj&0xff) + av.y*(float)(signed char)((pj>>8)&0xff) + av.z*(float)(signed char)((pj>>16)&0xff) + av.w*(float)(signed char)((pj>>24)&0xff));\n"
+                       "      }\n"
+                       "    }\n"
+                       "  } else if ((K & 127) == 0){\n"
                        "    const int* qr32 = (const int*)qr;\n"
                        "    int steps = K >> 7;\n"          // K/128 windows of 128 k
                        "    for (int w = 0; w < steps; w++){\n"

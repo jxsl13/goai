@@ -900,6 +900,15 @@ fixed-buffer == alloc, all scales still pass — same arithmetic, just wider loa
 closes a large part of the gap: TinyLlama decode goes from 0.68× to **0.79×** of llama.cpp
 (1.48× → 1.26× behind), and every Q8 decode (Llama + Qwen, all scales) benefits.
 
+A follow-up widened the weight load again — `int4` (16 B/lane, 512 contraction elements per
+step) for `K % 512 == 0`, keeping the **same** warp count (unlike a wider *output* tile) so
+occupancy is preserved — for another **+2.8 %** (decode 193.3 → 198.8 tok/s, same-window
+A/B; cumulative from the scalar baseline: 161.4 → 198.8, **+23.2 %**). Two output rows per
+warp was tried and **rejected**: flat in isolation but −4 % end-to-end, because halving the
+warp count starves the small-N key/value projections and costs occupancy. The GEMV is now
+at the sweet spot for the warp-per-output structure; further gains would need a different
+structure (split-K with a block reduction) — diminishing returns.
+
 ## goai CUDA vs llama.cpp Vulkan across model scales (worker linux-amd64)
 
 The single-model TinyLlama comparison (above) extends to a scale + family sweep, all on the

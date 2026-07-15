@@ -4,6 +4,16 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — Q8 GEMV int4 loads: +2.8% more decode (worker linux-amd64, 2026-07-15)
+- Widens the Q8 GEMV weight load again — `int4` (16 B/lane = 512 contraction elements per
+  step, more memory requests in flight) for `K % 512 == 0`, keeping the SAME warp count so
+  occupancy is preserved (int32 for `K % 128 == 0`, scalar otherwise). Numerically identical
+  (Q8 == f32 token-for-token still passes). Clean same-window A/B: decode 193.3 → 198.8 tok/s
+  (**+2.8%**), cumulative from the pre-vectorization scalar baseline 161.4 → 198.8 (+23.2%).
+- Rejected with data (measure-first): two output rows per warp — flat in isolation but −4%
+  end-to-end, because halving the warp count starves the small-N key/value projections and
+  costs occupancy. The GEMV is now at the sweet spot for its warp-per-output structure.
+
 ### CUDA — vectorized Q8 GEMV: +19.7% end-to-end decode (worker linux-amd64, 2026-07-15)
 - The resident-Q8 GEMV kernel (the hot kernel of decode — 7 projections per step) was
   bandwidth-inefficient: scalar 1-byte int8 loads ran `[1,2048]·[2048,2048]` at ~108 GB/s,
