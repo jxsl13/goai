@@ -875,6 +875,31 @@ range writes a disjoint C region and accumulates each `C[i][j]` in one ascending
 the result is bit-identical — parity vs the reference holds across m and odd n
 (`TestGemmMediumMCrossReference`).
 
+## Vectorized Q8 GEMV: closing the decode bandwidth gap (worker linux-amd64)
+
+The scale sweep below showed decode is **weight-bandwidth-bound** and goai trailed llama.cpp
+≈1.4–1.5× there. Profiling the hot kernel — the resident-Q8 GEMV (one warp per output row,
+the 7 projections of every decode step) — found it **bandwidth-inefficient**:
+`[1,2048]·[2048,2048]` ran at 43 µs ≈ 108 GB/s, only **≈30 % of the RTX 3060's 360 GB/s
+peak**. The inner loop issued **scalar 1-byte int8 loads** (32 B per warp transaction).
+
+Vectorizing it — each lane loads an `int32` (4 packed int8 → a 128 B coalesced warp
+transaction) plus a `float4` activation, so a step covers 128 contraction elements with 4×
+fewer, 4× wider weight loads (the 128-element window spans 4 of the per-32 scale blocks, so
+lane *l* uses scale block *l*/8) — with a scalar fallback for `K % 128 ≠ 0`:
+
+| metric (clean same-window A/B) | scalar | vectorized |
+|---|---:|---:|
+| isolated GEMV `[1,2048]·[2048,2048]` | 43 µs | 38.5 µs (+12 %) |
+| **end-to-end TinyLlama Q8 graph decode** | 161.4 tok/s | **193.2 tok/s (+19.7 %)** |
+
+The end-to-end gain exceeds the single-shape number because a real decode step is dominated
+by the *larger*-K GEMVs (5632-wide down-projection, 32000-wide output head) where the wider
+loads help more. The result is **numerically identical** (Q8 == f32 token-for-token, Qwen
+fixed-buffer == alloc, all scales still pass — same arithmetic, just wider loads). This
+closes a large part of the gap: TinyLlama decode goes from 0.68× to **0.79×** of llama.cpp
+(1.48× → 1.26× behind), and every Q8 decode (Llama + Qwen, all scales) benefits.
+
 ## goai CUDA vs llama.cpp Vulkan across model scales (worker linux-amd64)
 
 The single-model TinyLlama comparison (above) extends to a scale + family sweep, all on the

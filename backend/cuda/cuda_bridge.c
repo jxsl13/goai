@@ -973,10 +973,17 @@ int cu_qmatmul_q8(const void* dA, const void* dQ, const void* dScales, void* dOu
     if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
     if (!gQgemv && compile_kernel(
                        // One WARP per output element: the 32 lanes split the K
-                       // contraction with lane l handling k = b*32+l in each 32-block
-                       // (consecutive lanes → consecutive k → coalesced int8 loads),
-                       // each lane accumulating its scale·a·q terms, then a single
-                       // warp shuffle-reduce. Realizes the int8 bandwidth win.
+                       // contraction. Two paths, chosen by K%128:
+                       //  - VECTORISED (K%128==0): each lane loads an int32 = 4
+                       //    packed int8 (one 16-byte-coalesced 128B warp transaction
+                       //    per step vs 32B scalar), and a float4 activation, so a
+                       //    step covers 128 k. 4× fewer, 4× wider weight loads →
+                       //    far better DRAM bandwidth utilisation (the decode is
+                       //    weight-bandwidth-bound; §PERF-SCALEBENCH). The 128-k
+                       //    window spans 4 of the per-32 scale blocks, so lane l
+                       //    (owning k=l*4..l*4+3, all inside one block) uses scale
+                       //    sr[base + l/8].
+                       //  - SCALAR (else): lane l → k=b*32+l, coalesced int8.
                        "extern \"C\" __global__ void qmatmul_q8(const float* a, const signed char* q, const float* scales, float* out, int M, int K, int N, int nb, float beta){\n"
                        "  long warp = ((long)blockIdx.x*blockDim.x + threadIdx.x) >> 5;\n"
                        "  int lane = threadIdx.x & 31;\n"
@@ -987,9 +994,25 @@ int cu_qmatmul_q8(const void* dA, const void* dQ, const void* dScales, void* dOu
                        "  const signed char* qr = q + (size_t)n*K;\n"
                        "  const float* sr = scales + (size_t)n*nb;\n"
                        "  float acc = 0.0f;\n"
-                       "  for (int b = 0; b < nb; b++){\n"
-                       "    int k = b*32 + lane;\n"
-                       "    if (k < K){ acc += sr[b]*ar[k]*(float)qr[k]; }\n"
+                       "  if ((K & 127) == 0){\n"
+                       "    const int* qr32 = (const int*)qr;\n"
+                       "    int steps = K >> 7;\n"          // K/128 windows of 128 k
+                       "    for (int w = 0; w < steps; w++){\n"
+                       "      int packed = qr32[w*32 + lane];\n"      // 4 int8 for this lane
+                       "      int k = w*128 + lane*4;\n"
+                       "      float4 av = *(const float4*)(ar + k);\n"
+                       "      float s = sr[w*4 + (lane >> 3)];\n"     // per-32 block scale
+                       "      float q0 = (float)(signed char)(packed & 0xff);\n"
+                       "      float q1 = (float)(signed char)((packed >> 8) & 0xff);\n"
+                       "      float q2 = (float)(signed char)((packed >> 16) & 0xff);\n"
+                       "      float q3 = (float)(signed char)((packed >> 24) & 0xff);\n"
+                       "      acc += s*(av.x*q0 + av.y*q1 + av.z*q2 + av.w*q3);\n"
+                       "    }\n"
+                       "  } else {\n"
+                       "    for (int b = 0; b < nb; b++){\n"
+                       "      int k = b*32 + lane;\n"
+                       "      if (k < K){ acc += sr[b]*ar[k]*(float)qr[k]; }\n"
+                       "    }\n"
                        "  }\n"
                        "  for (int o = 16; o > 0; o >>= 1){ acc += __shfl_down_sync(0xffffffff, acc, o); }\n"
                        "  if (lane == 0){ out[warp] = beta*out[warp] + acc; }\n" // beta=1 fuses the residual add
