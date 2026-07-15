@@ -149,6 +149,7 @@ var typeExampleExempt = map[string]bool{
 	"nn.SoftpickAttentionOption":    true, // functional-option type (shown via WithSoftpickCausal)
 	"nn.MixupOption":                true, // functional-option type (shown via WithMixupLambda in ExampleMixup)
 	"nn.CutMixOption":               true, // functional-option type (shown via WithCutMixLambda)
+	"nn.QGaLoreOption":              true, // functional-option type (shown via WithQGaLore*)
 	"autograd.CheckpointFunc":       true, // callback-signature type (shown via ExampleCheckpoint)
 	"nn.ScheduleFreeOption":         true, // functional-option type (shown via WithScheduleFree*)
 	"nn.DAdaptAdamOption":           true, // functional-option type (shown via WithDAdapt*)
