@@ -57,6 +57,9 @@ int cu_argmax_f32(const void* x, int n);
 void* cu_upload_i8(const signed char* src, int n);
 // cu_qmatmul_q8: out[M,N] = a[M,K]·dequant(W), W = transposed Q8 q[N,K] + per-32-block scales[N,nb].
 int cu_qmatmul_q8(const void* dA, const void* dQ, const void* dScales, void* dOut, int M, int K, int N, int nb, float beta);
+// cu_qmatmul_q4: out[M,N] = a·dequant(W4), W4 = asymmetric Q4 (packed nibbles q[N,K/2] +
+// per-32-block f32 scale + f32 min), dequant w = min + nibble·scale. K must be a mult of 256.
+int cu_qmatmul_q4(const void* dA, const void* dQ, const void* dScales, const void* dMins, void* dOut, int M, int K, int N, int nb, float beta);
 // cu_copy_rows: device→device copy nElems floats from src to dst+dstOffset (KV-cache append).
 int cu_copy_rows(void* dst, const void* src, int dstOffset, int nElems);
 void* cu_upload_i32(const int* src, int n);

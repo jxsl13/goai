@@ -4,6 +4,18 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — asymmetric-Q4 GEMV primitive: 1.33× faster than Q8 (worker linux-amd64, 2026-07-15)
+- Since the Q8 GEMV is at its bandwidth ceiling (a split-K restructure was tried and rejected:
+  −3% on q/o, flat elsewhere), beating llama.cpp on weight-bandwidth-bound decode needs to read
+  FEWER weight bytes — Q4. `cuda.ResidentBQ4` quantizes a weight to **asymmetric 4-bit** (per-
+  32-block f32 scale + **min**, packed nibbles, dequant `w = min + nibble·scale`) — far more
+  accurate than the symmetric Q4_0 the earlier experiment rejected — with the `cu_qmatmul_q4`
+  warp-per-output GEMV (int32 = 8-nibble loads, 256 contraction elements/step, K%256==0).
+- Validated: the Q4 GEMV matches a host f32 matmul to **10.66% mean rel err** (the 4-bit budget;
+  4× Q8's 2.7%, packing/dequant verified), and reads 0.67× the bytes → **14.0 µs vs Q8's 18.6 µs
+  = 1.33× faster** on `[1,2048]·[2048,2048]`. This is the primitive (decode-only GEMV); wiring it
+  into the decode path + validating end-to-end token quality is the follow-up. If quality holds,
+  a Q4 decode path beats llama.cpp on the larger models. Q8 path unaffected; §PERF-Q4.
 ### T654 — Diffusion LM: non-autoregressive text generation (2026-07-15)
 - New `nlp.DiffusionLM`: a LLaDA-style masked-diffusion language model (Nie et al. 2025,
   arXiv:2502.09992) — the first DISCRETE/text diffusion in the library (complements the
