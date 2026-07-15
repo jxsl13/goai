@@ -81,6 +81,7 @@ var typeExampleExempt = map[string]bool{
 	"nlp.WatermarkOption":           true, // functional-option type (shown via WithWatermarkGamma etc.)
 	"nlp.WordPieceOption":           true, // functional-option type (shown via WithWordPieceUnk etc.)
 	"nlp.MedusaHeadsOption":         true, // functional-option type (shown via WithMedusaHeadsDtype)
+	"nlp.EagleHeadOption":           true, // functional-option type (shown via WithEagleFFNMult)
 	"nlp.ChatRenderOption":          true, // functional-option type (shown via WithGenerationPrompt/WithoutBOS)
 	"nlp.RerankResult":              true, // plain result record returned by CosineRerank; shown in its examples
 	"vision.CNNOption":              true, // functional-option type (shown via WithChannels/WithKernel/WithDtype)
@@ -115,6 +116,7 @@ var typeExampleExempt = map[string]bool{
 	"nn.FoXOption":                  true, // functional-option type (shown via WithFoXEps)
 	"nn.HymbaOption":                true, // functional-option type (shown via WithHymbaMetaTokens)
 	"nn.GatedAttentionOption":       true, // functional-option type (shown via WithGatedAttentionHeadwiseGate)
+	"nn.BitLinearOption":            true, // functional-option type (shown via WithBitLinear8BitAct etc.)
 	"nn.MixtureOfRecursionsOption":  true, // functional-option type (shown via WithMoRCapacities)
 	"nn.RecursionBlock":             true, // interface; nn.Linear is the impl shown in ExampleMixtureOfRecursions
 	"nn.APOLLOOption":               true, // functional-option type (shown via WithAPOLLORank/WithAPOLLOMini)

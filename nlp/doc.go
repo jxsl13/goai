@@ -24,8 +24,10 @@
 //     QuantLlama decodes directly from the ggml Q-blocks without dequantizing to f32.
 //     Beyond the autoregressive decoders: DiffusionLM, a LLaDA-style masked-diffusion
 //     model that generates non-autoregressively by iterative unmasking (bidirectional,
-//     not causal), and CLA, cross-layer attention that shares one group's keys/values
-//     across its layers to shrink the decode KV cache.
+//     not causal), CLA, cross-layer attention that shares one group's keys/values
+//     across its layers to shrink the decode KV cache, and BLT, the Byte Latent
+//     Transformer — a tokenizer-free model over raw bytes that entropy-patches the
+//     byte stream and runs a latent transformer over the patches.
 //   - Sampling: a Sampler implementing the standard HuggingFace pipeline
 //     (temperature → top-k → top-p nucleus → min-p → epsilon/eta → locally-typical →
 //     multinomial), Mirostat adaptive sampling, and repetition / frequency / presence
@@ -41,8 +43,10 @@
 //     draft-model-free prompt-lookup (n-gram), Medusa multi-head drafting
 //     (trainable MedusaHeads over ForwardHidden + MedusaGenerate with typical
 //     acceptance; MedusaGenerateTree verifies a topK candidate tree in ONE
-//     masked forward; the GPU loop lives in llamagpu), and Jacobi parallel
-//     decoding (JacobiDecode / GPT.JacobiGenerate).
+//     masked forward; the GPU loop lives in llamagpu), EAGLE feature-level
+//     autoregressive drafting (EagleHead over ForwardHidden + lossless
+//     EagleGenerate), and Jacobi parallel decoding (JacobiDecode /
+//     GPT.JacobiGenerate).
 //   - Long-context inference: attention-sink streaming (StreamGenerate), bounded
 //     KV-cache eviction policies, SnapKV prompt compression, PyramidKV per-layer
 //     cache budgets, an 8-bit quantized KV-cache, and Self-Extend length

@@ -25,7 +25,8 @@
 //   - Parameter-efficient fine-tuning: LoRA, DoRA, PiSSA, VeRA, (IA)³,
 //     bottleneck adapters, prefix tuning, prompt tuning, and NEFTune noise.
 //   - Quantization, pruning & discrete bottlenecks: AWQ, GPTQ, HQQ, NF4 (QLoRA),
-//     LLM.int8, SmoothQuant, LSQ/FSQ, SparseGPT and Wanda pruning, VQ-VAE and
+//     LLM.int8, SmoothQuant, LSQ/FSQ, BitNet b1.58 ternary quantization-aware
+//     training (BitLinear), SparseGPT and Wanda pruning, VQ-VAE and
 //     Gumbel-Softmax.
 //   - Architectures beyond the vanilla transformer: MoE routing with load
 //     balancing (token-choice, expert-choice, soft MoE, loss-free balancing),

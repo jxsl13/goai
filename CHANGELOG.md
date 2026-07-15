@@ -20,6 +20,43 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   the ×2^112 multiply-rebias f16 decode (exact incl. subnormals) and all-lane uniform 6-bit
   unpacking. Parity gate: kernel == the gguf dequant semantics of the same blocks (≤1e-5,
   f32 order only); beta=1 residual fuse covered.
+### T655 — Process Reward Model: step-level reward with a measurable value test (2026-07-15)
+- New `nlp.ProcessRewardModel` (+ `nlp.OutcomeRewardModel` as the ablation baseline): a
+  process reward model (Lightman et al. 2023 arXiv:2305.20050; Math-Shepherd
+  arXiv:2312.08935) — a small transformer with a sigmoid step-scoring head that judges
+  EACH reasoning step (correct/incorrect), vs the library's existing outcome-level reward
+  models (Bradley-Terry, GRPO). Trained with per-step BCE. The point of a PRM — localizing
+  the FIRST wrong step and better verification — is captured by a measurable test rather
+  than left to a scale claim: on a deterministic corrupted-arithmetic-chain benchmark it
+  reaches step-error-detection F1 0.963 (ProcessBench-style — a capability the outcome
+  model structurally lacks), and best-of-8 selection with the PRM (0.933) beats the
+  outcome model (0.750) and random (0.733) on final-answer accuracy. Full gradcheck.
+
+### T655 — EAGLE speculative decoding (2026-07-15)
+- New `nlp.EagleHead` + `nlp.EagleGenerate`: EAGLE speculative decoding (Li et al. 2024,
+  arXiv:2401.15077). A small autoregressive DRAFT head predicts the base model's next
+  hidden FEATURE (fusing the next-token embedding with the current feature), chained to
+  draft several steps ahead; the base LM head turns drafted features into draft tokens,
+  and a single base forward pass verifies them — accepting the longest prefix that matches
+  greedy base decoding, so the output is LOSSLESS (token-for-token what plain greedy
+  decoding produces). EAGLE drafts at the feature level (more predictable than tokens),
+  distinct from Medusa's parallel token heads and from draft-model speculative decoding.
+  The head trains on a frozen base via ForwardHidden (feature MSE + a small token CE).
+  Verified: lossless equality with greedy for random and trained heads, acceptance rate
+  12%→54% after training, full gradcheck.
+
+### T655 — BitNet b1.58: ternary quantization-aware training (2026-07-15)
+- New `nn.BitLinear`: a drop-in linear layer that TRAINS with 1.58-bit ternary weights
+  (BitNet b1.58, Ma et al. 2024, arXiv:2402.17764). The forward pass uses ternary
+  weights γ·clamp(round(W/γ),−1,+1) with γ = mean(|W|) (absmean) and 8-bit per-token
+  activation quantization, while a full-precision "master" weight is kept and updated —
+  the straight-through estimator (reusing the existing OpStopGradient idiom, no new op)
+  passes gradients to the master as identity. Unlike the library's POST-training
+  quantizers (AWQ/GPTQ/HQQ/SmoothQuant, which compress an already-trained model), BitNet
+  trains the ternary model from scratch. Verified: the effective weight takes only the
+  three values {−γ,0,+γ}, the STE gradient matches its closed form, disabling
+  quantization reduces BitLinear exactly to `nn.Linear`, and a small ternary MLP trains
+  (loss 1.51→0.019). `BitNetBitsPerWeight()` reports log2(3)≈1.58.
 
 ### CUDA — Q4 sweep + fair Q4-vs-Q4 + first 7B: goai-Q4 beats llama.cpp-Q8 at every scale (worker linux-amd64, Tw40, 2026-07-15)
 - Extended the asymmetric-Q4 graph decode to every K%256-eligible model — Qwen2.5-1.5B/3B

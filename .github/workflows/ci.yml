@@ -151,6 +151,9 @@ jobs:
         with:
           name: coverage
           path: coverage.out
+          # an empty selection legitimately produces no coverage.out (C17: the
+          # "No files were found" warning is expected there, not a defect)
+          if-no-files-found: ignore
 
   # darwin cgo: compiles the tag-free Metal backend (ADR-0013) and runs the
   # -short suite. macOS arm64 runners expose a paravirtualized Metal GPU, so
@@ -212,7 +215,11 @@ jobs:
         if: runner.os == 'macOS'
         continue-on-error: true
         run: |
-          brew install --quiet molten-vk vulkan-headers vulkan-loader vulkan-tools
+          # C17 hygiene: the runner image ships an untrusted aws/tap that brew
+          # warns about on every install — drop it (we use homebrew-core only);
+          # NO_ENV_HINTS silences the remaining env hints
+          brew untap aws/tap 2>/dev/null || true
+          HOMEBREW_NO_ENV_HINTS=1 brew install --quiet molten-vk vulkan-headers vulkan-loader vulkan-tools
           echo "VK_ICD_FILENAMES=$(brew --prefix)/share/vulkan/icd.d/MoltenVK_icd.json" >> "$GITHUB_ENV"
           echo "DYLD_LIBRARY_PATH=$(brew --prefix)/lib" >> "$GITHUB_ENV"
       - name: install ICD (windows — LunarG runtime, best effort)
