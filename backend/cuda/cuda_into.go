@@ -30,6 +30,39 @@ func (d *DeviceF32) Argmax() int {
 	return int(C.cu_argmax_f32(d.ptr, C.int(d.rows*d.cols)))
 }
 
+// LayerNormInto writes LayerNorm(d)·gamma + beta into out over the last axis
+// (torch LayerNorm), leaving d unchanged. gamma/beta are resident [cols] vectors.
+func (d *DeviceF32) LayerNormInto(gamma, beta *ResidentVec, eps float32, out *DeviceF32) error {
+	if d.ptr == nil || gamma.ptr == nil || beta.ptr == nil || out.ptr == nil {
+		return fmt.Errorf("cuda: LayerNormInto on a freed handle")
+	}
+	if gamma.n != d.cols || beta.n != d.cols || out.rows != d.rows || out.cols != d.cols {
+		return fmt.Errorf("cuda: LayerNormInto shape mismatch")
+	}
+	if eps <= 0 {
+		eps = 1e-5
+	}
+	if rc := C.cu_layernorm_f32(d.ptr, out.ptr, gamma.ptr, beta.ptr, C.int(d.rows), C.int(d.cols), C.float(eps)); rc != 0 {
+		return fmt.Errorf("cuda: layernorm failed (code %d)", int(rc))
+	}
+	return nil
+}
+
+// AddBias adds a resident [cols] bias vector to every row of d, in place
+// (row-broadcast) — the QKV-projection bias for Qwen and GPT linear biases.
+func (d *DeviceF32) AddBias(bias *ResidentVec) error {
+	if d.ptr == nil || bias.ptr == nil {
+		return fmt.Errorf("cuda: AddBias on a freed handle")
+	}
+	if bias.n != d.cols {
+		return fmt.Errorf("cuda: AddBias bias [%d] != cols %d", bias.n, d.cols)
+	}
+	if rc := C.cu_addbias_f32(d.ptr, bias.ptr, d.ptr, C.int(d.rows), C.int(d.cols)); rc != 0 {
+		return fmt.Errorf("cuda: addbias failed (code %d)", int(rc))
+	}
+	return nil
+}
+
 // CopyFrom overwrites this buffer's contents with src's (device→device, same
 // size). Used to reset a captured graph's fixed input buffer between replays.
 func (d *DeviceF32) CopyFrom(src *DeviceF32) error {

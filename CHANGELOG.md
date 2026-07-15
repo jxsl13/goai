@@ -4,6 +4,12 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA primitives — LayerNorm + AddBias (worker linux-amd64/cuda, 2026-07-15)
+- `DeviceF32.LayerNormInto` (torch LayerNorm, f64 mean/var accumulation, == CPU ref
+  2.9e-6) and `DeviceF32.AddBias` (row-broadcast bias, == ref exact) added to the
+  CUDA op set — enabling GPT-style models (LayerNorm) and Qwen QKV-projection biases
+  (AddBias), and pre-staging the deferred llamagpu CUDA adapter. Worker sub-spec §NEXT.
+
 ### CUDA inference — sampled GPU generation (worker linux-amd64/cuda, 2026-07-15)
 - The optimized Q8 GPU decode now drives the full `nlp.Sampler` (temperature, top-k,
   top-p, repeat penalty) — greedy on TinyLlama-1.1B degenerates into repetition, the
