@@ -51,6 +51,11 @@ int cu_qmatmul_q8(const void* dA, const void* dQ, const void* dScales, void* dOu
 // cu_copy_rows: device→device copy nElems floats from src to dst+dstOffset (KV-cache append).
 int cu_copy_rows(void* dst, const void* src, int dstOffset, int nElems);
 void* cu_upload_i32(const int* src, int n);
+// Device-position (graph-capturable) op twins: position lives in a device int.
+int cu_set_i32(void* d, int val);
+int cu_rope_f32_dpos(void* x, const void* inv, int seq, int heads, int hd, const void* dPos, double posDiv);
+int cu_attn_softmax_dpos(void* x, int rows, int cols, float scale, const void* dOff, int seqQ);
+int cu_append_dpos(void* dst, const void* src, const void* dPos, int wkv);
 // out[i,:] = table[ids[i],:] — input embedding row gather (table [vocab,d] resident).
 int cu_embed_f32(const void* dTable, const void* dIds, void* dOut, int seq, int d);
 int cu_download_f32(const void* dsrc, float* dst, int n);
