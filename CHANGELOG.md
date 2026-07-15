@@ -4,6 +4,33 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CPU (Apple Silicon / arm64) — the "be better than pytorch" f32 campaign: matched, then beaten (T656–T666, 2026-07-15)
+
+The pure-Go CPU backend's f32 hot paths went from ≈42× behind torch-cpu to matching or beating
+it, and the real f32 GPT forward is **≈10.9×** faster end-to-end. All of this rides the opt-in
+`GOEXPERIMENT=simd` fast path; the default `CGO_ENABLED=0` build stays byte-for-byte bit-exact.
+
+- **F32 GEMM → Apple AMX (T656/T658, ADR-0027).** A hand-written Plan9 NEON GEMM (61 → ≈795
+  GFLOP/s, 13×) closed most of the gap; the residual was Apple's AMX matrix coprocessor. We now
+  reach AMX two ways and dispatch per-shape to the faster: Accelerate `cblas_sgemm` via cgo
+  (2506 GFLOP/s @1024³ = **matches torch-cpu's 2584**) and a hand-written **pure-Go** raw-AMX
+  Plan9-asm kernel (no cgo) that **beats Accelerate by 6–31% on >L2 shapes**. `CGO_ENABLED=0`
+  falls back to the raw-AMX kernel (≈2100 GFLOP/s, pure Go) then NEON. A `cblas_sgemv` path fills
+  an m=2 decode hole (1.6×, T662).
+- **One NEON transcendental leaf, every activation (T660–T666).** A single verified NEON `exp`
+  kernel (Cephes reduction) now serves the whole library's f32 transcendentals — softmax and
+  fused MHA (T660), the standalone `OpSoftmax` (T661), GELU forward (5.1×, T663) and its backward
+  plus cross-entropy (45× / 25× / 32× — both had been silently falling back to the reference
+  backend, T664), SiLU forward+backward and sigmoid for the Llama/Qwen/Mistral SwiGLU path (T665),
+  and the standalone `OpExp`/`OpTanh`/`OpLog` (T666, `OpLog` via a new Cephes NEON log). Every
+  kernel is accuracy-checked against the f64 reference (≤≈3e-5 rel err, far inside the tolerant
+  f32 budget) and, for the gradients, passes the autograd gradcheck.
+- **End-to-end, profile-driven.** After each rung, a `GOAI_TIME_OPS` op-profile of the real
+  workload picked the next target. The f32 GPT forward reached ≈13,600 tok/s (from ≈1,250 scalar,
+  ≈10.9×) and the training step ≈1,930 tok/s (1.48×); both are now **matmul-bound at the AMX
+  ceiling** — every compute-bound op is vectorized, the remainder is bandwidth-bound. Numbers and
+  method are in `docs/benchmarking.md`.
+
 ### CUDA — native Q6_K GEMV: Q4_K_M files now load fully bit-native (worker linux-amd64, Tw54, 2026-07-15)
 - `cu_qmatmul_q6k` + `ResidentBQ6K`: warp-per-output GEMV over ggml's 210-byte Q6_K
   super-blocks, golden vs the gguf dequant reference at maxRel 2.5e-6. `quantDirect`
