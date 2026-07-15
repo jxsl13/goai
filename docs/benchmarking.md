@@ -727,6 +727,50 @@ compress from 165µs to 60µs per row (2.8×) and reconstruct from 43µs to 23µ
 rotation is 119× faster (`BenchmarkRotationHadamard` 2.5µs vs `BenchmarkRotationDense` 294µs); the
 QJL sketch was then also moved to its fast-JL (Hadamard) form: the full chain is now Append 165→9.9µs (16.6×) and reconstruct 43→3.0µs (14.3×) vs the original dense implementation, both stages O(d log m), with unbiasedness re-verified.
 
+## CUDA GPU inference vs llama.cpp (worker: linux/amd64 + RTX 3060, §PERF)
+
+The `-tags cuda` backend runs a full TinyLlama-1.1B decoder resident on an NVIDIA
+RTX 3060 (12 GB), built from scratch on nvrtc kernels + cuBLAS (no nvcc — the pip
+CUDA wheels ship only ptxas). End-to-end it loads the GGUF, tokenizes, decodes on
+device, and detokenizes real text (`TestCUDATinyLlamaGenerate{,Sampled}`).
+Industry baseline: llama.cpp `llama-bench` on the **same** GGUF + GPU via its
+prebuilt **Vulkan** build (a CUDA build is impossible here — no nvcc, no Linux
+CUDA prebuilt; Vulkan on NVIDIA is a first-class backend). Reproduce the industry
+side with `scripts/bench-llamacpp.sh`; the goai side with
+`GOEXPERIMENT=simd go test -tags cuda -bench 'TinyLlamaDecode|TinyLlamaPrefill' ./backend/cuda/`.
+
+| metric (TinyLlama-1.1B, RTX 3060) | llama.cpp Vulkan Q8_0 | goai CUDA | goai/llcpp |
+|---|---|---|---|
+| decode tg (Q8 + fixed-buffer + graph + on-device argmax) | 243 tok/s | **164.7 tok/s** | 0.68× (1.48× behind) |
+| prefill pp32 (f32) | 3298 tok/s | 1330 tok/s | 0.40× |
+| prefill pp128 (f32) | 8389 tok/s | 2353 tok/s | 0.28× |
+
+**Decode optimization journey** (26 → 164.7 tok/s = 6.3×, every step correctness-
+gated token-for-token vs the CPU reference; each bottleneck diagnosed by
+measurement, not assumption):
+
+| step | tok/s | lever / diagnosis |
+|---|---|---|
+| KV-cache decode (f32, per-op alloc) | 26 | O(1)/step cache; ≈250 `cudaMallocAsync`/token |
+| launch-reduction fusions | ≈26 (paired-A/B +30%) | residual-into-matmul, out-of-place RMSNorm, fused attn-softmax |
+| **fixed persistent buffers** | 69 | **decode was ALLOC-bound**, not launch-bound — kill per-token allocs (2.56×) |
+| CUDA graph replay | 71 | +2% — decode already mostly GPU-bound after fixed buffers |
+| **Q8 quantized weights** | 154→161 | **now MEMORY-bound** — int8 = 4× less weight bandwidth (2.3×); was −20% when alloc/launch-bound (masked) |
+| on-device argmax | 164.7 | +2% — 4-byte token id, not the 128 KB logit vector; confirms GPU-bound |
+
+Rejected with data (§C3): Q4_0 (correct kernel, 6.5% L1 = 16× Q8, but no speed win
+post-Q8 — decode no longer weight-bandwidth-bound — and too lossy for 1.1B greedy);
+gate-up projection fusion (−4%, strided-SwiGLU coalescing); GQA pointer-array
+scratch (≈1%). Key CUDA-graph gotcha found by bisection: cuBLAS-batched attention
+built its pointer arrays on the **host** and memcpy'd them — the shared host buffer
+is overwritten across layers during capture, so every replayed layer read the last
+layer's pointers; fixed by building the pointer arrays **on device**.
+
+Takeaway: a from-scratch Go CUDA decode reaches **within 1.48× of a mature,
+hand-tuned implementation** on the same GPU + model — competitive. The remaining
+gap needs a better quantized kernel (Q4_K) or flash-style attention; prefill (less
+optimized) trails more because llama.cpp fuses + batches attention.
+
 ## Further reading
 
 - Hoefler & Belli, *Scientific Benchmarking of Parallel Computing Systems* (SC '15) — the canonical treatment of run variance, warm-up and honest reporting that this document's rules follow.
