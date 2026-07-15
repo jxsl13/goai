@@ -85,6 +85,130 @@ func broadcastContig(t *tensor.Tensor, outShape tensor.Shape) *tensor.Tensor {
 	return out
 }
 
+// suffixPeriod reports whether t (right-aligned against outShape, numpy rules)
+// broadcasts as a pure suffix tile: flat output index i reads t at i%period.
+// True when t's dims form a contiguous trailing run matching outShape, with
+// every dim left of that run equal to 1. Covers the two dominant broadcast
+// shapes in model code — bias vectors [..,N]⊕[N] and scalars [..]⊕[1] — which
+// then skip the materialize-both-operands slow path entirely.
+func suffixPeriod(tsh, outShape tensor.Shape) (int, bool) {
+	off := len(outShape) - len(tsh)
+	period := 1
+	i := len(outShape) - 1
+	for ; i >= off; i-- {
+		if tsh[i-off] != outShape[i] {
+			break // run ends; everything left must be size 1
+		}
+		period *= tsh[i-off]
+	}
+	for ; i >= off; i-- {
+		if tsh[i-off] != 1 {
+			return 0, false
+		}
+	}
+	return period, true
+}
+
+// prefixBlock reports whether t broadcasts as constant blocks: flat output
+// index i reads t at i/block. True when t has outShape's rank, its leading dims
+// match outShape, and every dim after the first mismatch is 1. Covers column
+// broadcasts like [M,N]⊘[M,1] (row normalization). Mutually exclusive with the
+// shapes-equal case (block would be 1), and checked after suffixPeriod, which
+// owns the scalar/all-ones overlap.
+func prefixBlock(tsh, outShape tensor.Shape) (int, bool) {
+	if len(tsh) != len(outShape) {
+		return 0, false
+	}
+	i := 0
+	for ; i < len(tsh); i++ {
+		if tsh[i] != outShape[i] {
+			break
+		}
+	}
+	block := 1
+	for ; i < len(tsh); i++ {
+		if tsh[i] != 1 {
+			return 0, false
+		}
+		block *= outShape[i]
+	}
+	return block, true
+}
+
+// bcastTile: minimum slice length fed to a simd primitive on the broadcast fast
+// path. Tiny periods (scalar, narrow vectors) are pre-tiled to this length so
+// the per-call dispatch and vector-tail costs amortize over ≥bcastTile lanes.
+const bcastTile = 4096
+
+// bcastSuffixApply computes out = f(full, small-tiled) (or f(small-tiled, full)
+// when smallIsA) where small repeats every period elements. Identical
+// element-pair operations to the materialized path — bit-identical results
+// (§V3) — but without writing an n-sized broadcast copy first.
+func bcastSuffixApply[T normFloat](f func(dst, a, b []T), out, full, small []T, period int, smallIsA bool) {
+	n := len(out)
+	if n == 0 {
+		return
+	}
+	s := small
+	if period < bcastTile && n > period {
+		reps := min((bcastTile+period-1)/period, n/period)
+		tile := make([]T, reps*period)
+		for i := 0; i < len(tile); i += period {
+			copy(tile[i:], small)
+		}
+		s = tile
+	}
+	sp := len(s) // chunk stride; always a multiple of period, so s realigns
+	rows := (n + sp - 1) / sp
+	parallelWork(rows, sp, func(lo, hi int) {
+		for r := lo; r < hi; r++ {
+			start := r * sp
+			end := min(start+sp, n)
+			sv := s[:end-start]
+			if smallIsA {
+				f(out[start:end], sv, full[start:end])
+			} else {
+				f(out[start:end], full[start:end], sv)
+			}
+		}
+	})
+}
+
+// bcastBlockApply computes out = f(full, small-blocks) (or the swap when
+// smallIsA) where small[k] is constant over output block k of length block.
+// Each worker splats the block's scalar into a small cached tile and feeds the
+// simd primitive — identical element pairs to the materialized path
+// (bit-identical results, §V3) without allocating or streaming an n-sized
+// broadcast copy.
+func bcastBlockApply[T normFloat](f func(dst, a, b []T), out, full, small []T, block int, smallIsA bool) {
+	n := len(out)
+	if n == 0 {
+		return
+	}
+	nb := n / block
+	parallelWork(nb, block, func(lo, hi int) {
+		tile := make([]T, min(block, bcastTile))
+		for k := lo; k < hi; k++ {
+			// Refill unconditionally: a value-equality skip would treat -0.0 and
+			// +0.0 as the same tile and flip Mul/Div result signs.
+			v := small[k]
+			for i := range tile {
+				tile[i] = v
+			}
+			start := k * block
+			for off := 0; off < block; off += len(tile) {
+				end := min(off+len(tile), block)
+				sv := tile[:end-off]
+				if smallIsA {
+					f(out[start+off:start+end], sv, full[start+off:start+end])
+				} else {
+					f(out[start+off:start+end], full[start+off:start+end], sv)
+				}
+			}
+		}
+	})
+}
+
 // binOp builds a binary kernel from the per-dtype simd primitives.
 func binOp(f64 func(dst, a, b []float64), f32 func(dst, a, b []float32)) backend.Kernel {
 	return func(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*tensor.Tensor, error) {
@@ -96,12 +220,50 @@ func binOp(f64 func(dst, a, b []float64), f32 func(dst, a, b []float32)) backend
 			return nil, fmt.Errorf("cpu: binary dtype mismatch %v vs %v", a.Dtype(), b.Dtype())
 		}
 		if !a.Shape().Equal(b.Shape()) {
-			// broadcasting: materialize both operands to the common shape, then run
-			// the same SIMD path (the fast same-shape path below is unchanged).
 			outShape, err := backend.BroadcastShape(a.Shape(), b.Shape())
 			if err != nil {
 				return nil, err
 			}
+			// Fast path: one operand already has the output shape and the other
+			// tiles it as a contiguous suffix (bias vector / scalar) — apply f
+			// per tile, skipping the O(n) broadcast materialization below.
+			var full, small *tensor.Tensor
+			smallIsA := false
+			if a.Shape().Equal(outShape) {
+				full, small = a, b
+			} else if b.Shape().Equal(outShape) {
+				full, small, smallIsA = b, a, true
+			}
+			if full != nil {
+				if period, ok := suffixPeriod(small.Shape(), outShape); ok {
+					fc, sc := full.Contiguous(), small.Contiguous()
+					out := tensor.NewOn(ctx.Device(), a.Dtype(), outShape)
+					switch a.Dtype() {
+					case tensor.F64:
+						bcastSuffixApply(f64, out.Storage().F64(), fc.Storage().F64(), sc.Storage().F64(), period, smallIsA)
+					case tensor.F32:
+						bcastSuffixApply(f32, out.Storage().F32(), fc.Storage().F32(), sc.Storage().F32(), period, smallIsA)
+					default:
+						return nil, fmt.Errorf("cpu: unsupported dtype %v", a.Dtype())
+					}
+					return []*tensor.Tensor{out}, nil
+				}
+				if block, ok := prefixBlock(small.Shape(), outShape); ok {
+					fc, sc := full.Contiguous(), small.Contiguous()
+					out := tensor.NewOn(ctx.Device(), a.Dtype(), outShape)
+					switch a.Dtype() {
+					case tensor.F64:
+						bcastBlockApply(f64, out.Storage().F64(), fc.Storage().F64(), sc.Storage().F64(), block, smallIsA)
+					case tensor.F32:
+						bcastBlockApply(f32, out.Storage().F32(), fc.Storage().F32(), sc.Storage().F32(), block, smallIsA)
+					default:
+						return nil, fmt.Errorf("cpu: unsupported dtype %v", a.Dtype())
+					}
+					return []*tensor.Tensor{out}, nil
+				}
+			}
+			// General broadcasting: materialize both operands to the common
+			// shape, then run the same SIMD path.
 			a, b = broadcastContig(a, outShape), broadcastContig(b, outShape)
 		}
 		ac, bc := a.Contiguous(), b.Contiguous()
@@ -120,56 +282,12 @@ func binOp(f64 func(dst, a, b []float64), f32 func(dst, a, b []float32)) backend
 	}
 }
 
-// unOp builds a unary kernel applying scalar f (computed in f64) over contiguous
-// data, narrowing for F32.
-func unOp(f func(float64) float64) backend.Kernel {
-	return func(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*tensor.Tensor, error) {
-		if len(in) != 1 {
-			return nil, fmt.Errorf("cpu: unary op wants 1 input, got %d", len(in))
-		}
-		xc := in[0].Contiguous()
-		out := tensor.NewOn(ctx.Device(), in[0].Dtype(), in[0].Shape())
-		switch in[0].Dtype() {
-		case tensor.F64:
-			d, o := xc.Storage().F64(), out.Storage().F64()
-			parallel(len(o), func(lo, hi int) {
-				for i := lo; i < hi; i++ {
-					o[i] = f(d[i])
-				}
-			})
-		case tensor.F32:
-			d, o := xc.Storage().F32(), out.Storage().F32()
-			parallel(len(o), func(lo, hi int) {
-				for i := lo; i < hi; i++ {
-					o[i] = float32(f(float64(d[i])))
-				}
-			})
-		default:
-			return nil, fmt.Errorf("cpu: unsupported dtype %v", in[0].Dtype())
-		}
-		return []*tensor.Tensor{out}, nil
-	}
-}
-
-func relu(x float64) float64 {
-	if x > 0 {
-		return x
-	}
-	return 0
-}
-func gelu(x float64) float64 { return 0.5 * x * (1 + math.Erf(x/math.Sqrt2)) }
-func sigmoid(x float64) float64 {
-	if x >= 0 {
-		return 1 / (1 + math.Exp(-x))
-	}
-	z := math.Exp(x)
-	return z / (1 + z)
-}
-
-// reluKernel / geluKernel / siluKernel: devirtualized unary hot paths (§base-perf) —
-// concrete []T loops so the F32 path avoids the unOp closure's per-element indirect call
-// AND the float32↔float64 round-trip. relu/neg are fully native; gelu/silu keep f64 math
-// (erf/exp are f64-only) but inline it (no func-value indirection). Parity unchanged.
+// reluKernel / geluKernel / siluKernel / expKernel / logKernel / tanhKernel /
+// sigmoidKernel: devirtualized unary hot paths (§base-perf) — concrete []T loops
+// so the F32 path avoids the unOp closure's per-element indirect call AND the
+// float32↔float64 round-trip. relu/neg are fully native; the transcendentals
+// keep f64 math (erf/exp/log/tanh are f64-only) but inline it (no func-value
+// indirection). Parity unchanged — same f64 ops per element as ref (§V3 tol 0).
 func geluKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*tensor.Tensor, error) {
 	xc := in[0].Contiguous()
 	out := tensor.NewOn(ctx.Device(), in[0].Dtype(), in[0].Shape())
@@ -263,6 +381,113 @@ func reluKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) (
 	}
 	return []*tensor.Tensor{out}, nil
 }
+func expKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*tensor.Tensor, error) {
+	xc := in[0].Contiguous()
+	out := tensor.NewOn(ctx.Device(), in[0].Dtype(), in[0].Shape())
+	switch in[0].Dtype() {
+	case tensor.F64:
+		d, o := xc.Storage().F64(), out.Storage().F64()
+		parallel(len(o), func(lo, hi int) {
+			for i := lo; i < hi; i++ {
+				o[i] = math.Exp(d[i])
+			}
+		})
+	case tensor.F32:
+		d, o := xc.Storage().F32(), out.Storage().F32()
+		parallel(len(o), func(lo, hi int) {
+			for i := lo; i < hi; i++ {
+				o[i] = float32(math.Exp(float64(d[i])))
+			}
+		})
+	default:
+		return nil, fmt.Errorf("cpu: exp unsupported dtype %v", in[0].Dtype())
+	}
+	return []*tensor.Tensor{out}, nil
+}
+func logKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*tensor.Tensor, error) {
+	xc := in[0].Contiguous()
+	out := tensor.NewOn(ctx.Device(), in[0].Dtype(), in[0].Shape())
+	switch in[0].Dtype() {
+	case tensor.F64:
+		d, o := xc.Storage().F64(), out.Storage().F64()
+		parallel(len(o), func(lo, hi int) {
+			for i := lo; i < hi; i++ {
+				o[i] = math.Log(d[i])
+			}
+		})
+	case tensor.F32:
+		d, o := xc.Storage().F32(), out.Storage().F32()
+		parallel(len(o), func(lo, hi int) {
+			for i := lo; i < hi; i++ {
+				o[i] = float32(math.Log(float64(d[i])))
+			}
+		})
+	default:
+		return nil, fmt.Errorf("cpu: log unsupported dtype %v", in[0].Dtype())
+	}
+	return []*tensor.Tensor{out}, nil
+}
+func tanhKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*tensor.Tensor, error) {
+	xc := in[0].Contiguous()
+	out := tensor.NewOn(ctx.Device(), in[0].Dtype(), in[0].Shape())
+	switch in[0].Dtype() {
+	case tensor.F64:
+		d, o := xc.Storage().F64(), out.Storage().F64()
+		parallel(len(o), func(lo, hi int) {
+			for i := lo; i < hi; i++ {
+				o[i] = math.Tanh(d[i])
+			}
+		})
+	case tensor.F32:
+		d, o := xc.Storage().F32(), out.Storage().F32()
+		parallel(len(o), func(lo, hi int) {
+			for i := lo; i < hi; i++ {
+				o[i] = float32(math.Tanh(float64(d[i])))
+			}
+		})
+	default:
+		return nil, fmt.Errorf("cpu: tanh unsupported dtype %v", in[0].Dtype())
+	}
+	return []*tensor.Tensor{out}, nil
+}
+
+// sigmoidKernelCPU keeps ref's numerically-stable split form: exp(-x) for x≥0,
+// exp(x)/(1+exp(x)) for x<0 — never exponentiates a positive magnitude.
+func sigmoidKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*tensor.Tensor, error) {
+	xc := in[0].Contiguous()
+	out := tensor.NewOn(ctx.Device(), in[0].Dtype(), in[0].Shape())
+	switch in[0].Dtype() {
+	case tensor.F64:
+		d, o := xc.Storage().F64(), out.Storage().F64()
+		parallel(len(o), func(lo, hi int) {
+			for i := lo; i < hi; i++ {
+				x := d[i]
+				if x >= 0 {
+					o[i] = 1 / (1 + math.Exp(-x))
+				} else {
+					z := math.Exp(x)
+					o[i] = z / (1 + z)
+				}
+			}
+		})
+	case tensor.F32:
+		d, o := xc.Storage().F32(), out.Storage().F32()
+		parallel(len(o), func(lo, hi int) {
+			for i := lo; i < hi; i++ {
+				x := float64(d[i])
+				if x >= 0 {
+					o[i] = float32(1 / (1 + math.Exp(-x)))
+				} else {
+					z := math.Exp(x)
+					o[i] = float32(z / (1 + z))
+				}
+			}
+		})
+	default:
+		return nil, fmt.Errorf("cpu: sigmoid unsupported dtype %v", in[0].Dtype())
+	}
+	return []*tensor.Tensor{out}, nil
+}
 func siluKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*tensor.Tensor, error) {
 	xc := in[0].Contiguous()
 	out := tensor.NewOn(ctx.Device(), in[0].Dtype(), in[0].Shape())
@@ -301,11 +526,11 @@ func init() {
 
 	reg(backend.OpStopGradient, stopGradKernelCPU)
 	reg(backend.OpNeg, negKernelCPU)
-	reg(backend.OpExp, unOp(math.Exp))
-	reg(backend.OpLog, unOp(math.Log))
-	reg(backend.OpTanh, unOp(math.Tanh))
+	reg(backend.OpExp, expKernelCPU)
+	reg(backend.OpLog, logKernelCPU)
+	reg(backend.OpTanh, tanhKernelCPU)
 	reg(backend.OpReLU, reluKernelCPU)
 	reg(backend.OpGELU, geluKernelCPU)
-	reg(backend.OpSigmoid, unOp(sigmoid))
+	reg(backend.OpSigmoid, sigmoidKernelCPU)
 	reg(backend.OpSiLU, siluKernelCPU)
 }
