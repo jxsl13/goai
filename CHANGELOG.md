@@ -4,6 +4,21 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T654 — Coconut: latent-space reasoning with a measurable value test (2026-07-15)
+- New `nlp.Coconut`: Chain of Continuous Thought (Hao et al. 2024, arXiv:2412.06769). The
+  model reasons in LATENT space — the last hidden state is fed back as the next input
+  embedding (a "continuous thought"), K such latent steps before it decodes an answer, so
+  it can do several sequential computation steps internally rather than committing to a
+  token at each. Trained with the paper's multi-stage curriculum (each stage replaces one
+  language reasoning step with a continuous thought). Its value — depth of latent
+  computation — is captured by a measurable test rather than a scale claim: on an H-hop
+  graph-pointer-chasing task where a 2-layer model is depth-bounded (H=7 unsolvable in one
+  forward pass), the model reaches 1.00 held-out accuracy with K=6 thoughts vs 0.14 without
+  (K=0) and 0.20 with K=6 constant "pause" embeddings — the pause control proving the gain
+  is the recurrent hidden-state feedback, not extra positions. K=0 collapses exactly to a
+  plain GPT; full gradcheck flows through the thought feedback.
+
+
 ### CUDA — direct Q4_K_M file loading: any llama.cpp 4-bit file runs standalone (worker linux-amd64, Tw43, 2026-07-15)
 - `quantDirect` (test-side loader) keeps a Q4_K_M GGUF's tensors native: Q4_K blocks upload
   as-is into `ResidentBQ4K` (zero requantization — llama.cpp's iterative-encoder bits), the
