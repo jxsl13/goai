@@ -225,6 +225,171 @@ func sigmoidF32(x float32) float32 {
 	return num / (1 + z)
 }
 
+// STANDALONE UNARIES on the same leaf (§T666, the §C26 pattern's 5th
+// application): the T660-T665 campaign vectorized every FUSED transcendental
+// (softmax/MHA/GELU±/crossentropy/SiLU±/sigmoid) but left the standalone
+// OpExp / OpTanh / OpLog F32 kernels on scalar f64 math.Exp/Tanh/Log — a
+// caller hitting backend.Execute(OpExp, ...) got the slow path while the same
+// exp inside softmax was NEON. These close the gap. Gated exactly like the
+// siblings: only the arm64 perf build (vexpNeon) routes the F32 kernels here;
+// every other build keeps the scalar f64 paths bit-for-bit.
+//
+// exp: unlike the softmax's x−max ≤ 0, a standalone exp sees large +x, so the
+// softmax kernel's single 2^n exponent-insertion (n ≤ 127) is not enough —
+// f32 exp is finite up to x = 88.72283 (n = 128). expFullF32 splits the scale
+// into 2^(n>>1)·2^(n−n>>1) (both factors' exponents stay in range for the
+// whole clamped domain, n ∈ [−126, 128]) and raises the hi clamp above the
+// overflow cutoff. Semantics vs the f64 ref: x > 88.72283172607421875 (the
+// largest f32 with a finite float32(math.Exp(x)); bits 0x42B17217) → +Inf
+// exactly; x < expLoClamp → 0 exactly (ref returns subnormals down to
+// x ≈ −103.28 — the true values there are ≤ 1.18e-38, inside the atol
+// budget — and 0 below; this also makes exp(−Inf) = 0 exact); a spuriously
+// overflowing poly result just under the cutoff is pinned to MaxFloat32
+// (FMIN); NaN propagates. Max rel err vs math.Exp over the full finite
+// domain: ~8e-8 (TestExpFullF32Accuracy).
+//
+// tanh: the numerically stable sign-split form on one exp — for a = |x|,
+// z = e^(−2a) ∈ (0, 1], tanh magnitude t = (1−z)/(1+z), sign re-applied
+// bitwise from x (t ∈ [0,1], so the OR is exact; NaN payloads stay NaN). No
+// positive magnitude is ever exponentiated, and both 1−z and 1+z are exact or
+// half-ulp f32 ops, so the only error sources are z itself (~1e-7 abs near
+// z=1) and the final divide: max abs err ~9e-8, rel err ≤ ~2e-4 for
+// |x| ≥ 1e-5 (TestTanhF32Accuracy; the atol term covers smaller x, where
+// tanh(x) = x±1e-7 anyway). Tails are exact: tanh(±Inf) = ±1 (z underflows,
+// (1−z)/(1+z) rounds to 1), tanh(±0) = ±0.
+//
+// log: a NEW NEON primitive (not exp) — the Cephes logf reduction. x is split
+// as m·2^e by exponent-field extraction (subnormals pre-scaled by 2^25 with
+// e adjusted, so the full positive range is covered), m ∈ [1,2) folded to
+// m ∈ [√½, √2) (m ≥ √2 → m/2, e+1), f = m−1 ∈ [−0.293, 0.414), then
+// log(x) = e·ln2 + f + f³·P(f) − f²/2 with Cephes' degree-8 P and the same
+// hi/lo ln2 split as exp (e·ln2Hi exact: 12-bit ln2Hi mantissa, |e| ≤ 151).
+// f = m−1 is exact (Sterbenz), so there is no catastrophic cancellation near
+// x = 1 and log(1) = +0 exactly. Max rel err vs math.Log: ~8e-8 across
+// [1e-30, 1e30] AND the subnormal range (TestLogF32Accuracy). Specials match
+// ref exactly: log(±0) = −Inf, log(x<0) = NaN, log(+Inf) = +Inf, NaN
+// propagates.
+const (
+	expFullHiClamp = 89.0                               // > the Inf cutoff; safe with split scaling (n ≤ 129)
+	expFullInfCut  = 88.72283172607421875               // bits 0x42B17217: largest f32 with finite f32(exp(x))
+	logSqrtHalfx2  = float32(1.41421353816986083984375) // bits 0x3FB504F3: f32(√2), the m-fold threshold
+	logMinNormal   = float32(1.1754943508222875e-38)    // bits 0x00800000: smallest normal f32
+	logTwoP25      = float32(1 << 25)                   // subnormal pre-scale
+	logLn2Hi       = float32(0.693359375)               // same hi/lo split as exp
+	logLn2Lo       = float32(-2.12194440e-4)            //
+	logL0          = float32(7.0376836292e-2)
+	logL1          = float32(-1.1514610310e-1)
+	logL2          = float32(1.1676998740e-1)
+	logL3          = float32(-1.2420140846e-1)
+	logL4          = float32(1.4249322787e-1)
+	logL5          = float32(-1.6668057665e-1)
+	logL6          = float32(2.0000714765e-1)
+	logL7          = float32(-2.4999993993e-1)
+	logL8          = float32(3.3333331174e-1)
+)
+
+// expFullF32 is the scalar instantiation of the full-domain vexpFull pipeline —
+// the tail lanes (len%4) and the type-check fallback build use it. Same
+// operations per element as the NEON lanes (only FMA contraction may differ):
+// the vexp Cephes reduction with hi clamp 89, split 2^n scaling, MaxFloat32
+// pin, then the NaN-safe underflow-zero and overflow-Inf masks on the
+// ORIGINAL x (comparisons with NaN are false, so NaN keeps the poly's NaN).
+func expFullF32(x float32) float32 {
+	xc := x
+	if xc < expLoClamp {
+		xc = expLoClamp
+	}
+	if xc > expFullHiClamp {
+		xc = expFullHiClamp
+	}
+	zm := xc*expLog2e + expMagic
+	n := zm - expMagic
+	r := xc - n*expLn2Hi
+	r -= n * expLn2Lo
+	p := float32(1.9875691500e-4)
+	p = p*r + 1.3981999507e-3
+	p = p*r + 8.3334519073e-3
+	p = p*r + 4.1665795894e-2
+	p = p*r + 1.6666665459e-1
+	p = p*r + 0.5
+	res := p*r*r + r + 1
+	ni := int32(n)
+	n1 := ni >> 1
+	res *= math.Float32frombits(uint32(n1+127) << 23)
+	res *= math.Float32frombits(uint32(ni-n1+127) << 23)
+	if res > math.MaxFloat32 { // FMIN(res, MaxFloat32); NaN falls through
+		res = math.MaxFloat32
+	}
+	if expLoClamp > x { // underflow → exact 0 (NaN-safe spelling)
+		res = 0
+	}
+	if x > expFullInfCut { // overflow → exact +Inf (matches ref's cutoff)
+		res = float32(math.Inf(1))
+	}
+	return res
+}
+
+// tanhF32 is the scalar instantiation of the vtanh pipeline — the tail lanes
+// (len%4) and the type-check fallback build use it. Same operations per
+// element as the NEON lanes (only FMA contraction may differ).
+func tanhF32(x float32) float32 {
+	a := math.Float32frombits(math.Float32bits(x) &^ (1 << 31)) // |x|
+	z := expF32(-(a + a))                                       // e^(−2|x|) ≤ 1: only the lo clamp is live
+	t := (1 - z) / (1 + z)
+	return math.Float32frombits(math.Float32bits(t) | math.Float32bits(x)&(1<<31))
+}
+
+// logF32 is the scalar instantiation of the vlog pipeline — the tail lanes
+// (len%4) and the type-check fallback build use it. Same operations per
+// element as the NEON lanes (only FMA contraction may differ); the special-
+// case selects mirror the NEON mask order exactly (ordered → zero → negative
+// → +Inf, each later select winning).
+func logF32(x float32) float32 {
+	xs := x
+	var eAdj int32
+	if logMinNormal > x { // subnormal pre-scale (also 0/neg — fixed by masks below)
+		xs = x * logTwoP25
+		eAdj = 25
+	}
+	bx := math.Float32bits(xs)
+	e := int32(bx>>23) - 127 - eAdj
+	m := math.Float32frombits(bx&0x007FFFFF | 0x3F800000) // m ∈ [1,2)
+	if m >= logSqrtHalfx2 {
+		m *= 0.5
+		e++
+	}
+	f := m - 1 // exact (Sterbenz)
+	z := f * f
+	p := logL0
+	p = p*f + logL1
+	p = p*f + logL2
+	p = p*f + logL3
+	p = p*f + logL4
+	p = p*f + logL5
+	p = p*f + logL6
+	p = p*f + logL7
+	p = p*f + logL8
+	ef := float32(e)
+	y := f * (z * p)
+	y += ef * logLn2Lo
+	y -= 0.5 * z
+	r := f + y
+	r += ef * logLn2Hi
+	if !(x == x) { // NaN propagates (BSL on FCMEQ x,x)
+		r = x
+	}
+	if x == 0 { // ±0 → −Inf
+		r = float32(math.Inf(-1))
+	}
+	if x < 0 { // negative → NaN
+		r = float32(math.NaN())
+	}
+	if x == float32(math.Inf(1)) { // +Inf → +Inf
+		r = x
+	}
+	return r
+}
+
 // mhaSoftmaxBandVexpF32 is the arm64 perf-build body of mhaSoftmaxBandF32
 // (reached only when vexpNeon; see the gate there): the same scale (+ALiBi) →
 // max-shift exp → normalize pipeline, but f32-native end to end — no f64

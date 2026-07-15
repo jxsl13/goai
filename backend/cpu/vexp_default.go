@@ -61,3 +61,25 @@ func vsigmoidF32(dst, src []float32) {
 		dst[i] = sigmoidF32(v)
 	}
 }
+
+// vexpFullF32 / vtanhF32 / vlogF32 compute the standalone-unary scalar polys
+// (§T666) — they exist only so the arm64-perf fast paths type-check (dead code
+// at run time here: vexpNeon is false, so expKernelCPU / tanhKernelCPU /
+// logKernelCPU keep the exact scalar-f64 math.Exp/Tanh/Log paths bit-for-bit).
+func vexpFullF32(dst, src []float32) {
+	for i, v := range src {
+		dst[i] = expFullF32(v)
+	}
+}
+
+func vtanhF32(dst, src []float32) {
+	for i, v := range src {
+		dst[i] = tanhF32(v)
+	}
+}
+
+func vlogF32(dst, src []float32) {
+	for i, v := range src {
+		dst[i] = logF32(v)
+	}
+}

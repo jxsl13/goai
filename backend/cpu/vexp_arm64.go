@@ -115,3 +115,63 @@ func vsigmoidF32(dst, src []float32) {
 		dst[i] = sigmoidF32(src[i])
 	}
 }
+
+// vexpFullQuadsNeonF32 is the 4-wide NEON full-domain exp kernel
+// (vexp_arm64.s, §T666): dst[i] = exp(src[i]) over the ENTIRE f32 domain —
+// the vexp Cephes reduction with split 2^n scaling plus the exact
+// underflow-zero / overflow-Inf masks (numerics in vexp.go).
+//
+//go:noescape
+func vexpFullQuadsNeonF32(dst, src *float32, quads int)
+
+// vexpFullF32 computes dst[i] = exp(src[i]) f32-native: whole quads through
+// the NEON kernel, the len%4 tail through scalar expFullF32 (same math per
+// element).
+func vexpFullF32(dst, src []float32) {
+	nv := len(src) &^ 3
+	if nv > 0 {
+		vexpFullQuadsNeonF32(&dst[0], &src[0], nv>>2)
+	}
+	for i := nv; i < len(src); i++ {
+		dst[i] = expFullF32(src[i])
+	}
+}
+
+// vtanhQuadsNeonF32 is the 4-wide NEON tanh kernel (vexp_arm64.s, §T666):
+// dst[i] = tanh(src[i]) via the stable sign-split (1−e^(−2|x|))/(1+e^(−2|x|))
+// on the vexp exp primitive, sign re-applied bitwise (numerics in vexp.go).
+//
+//go:noescape
+func vtanhQuadsNeonF32(dst, src *float32, quads int)
+
+// vtanhF32 computes dst[i] = tanh(src[i]) f32-native: whole quads through the
+// NEON kernel, the len%4 tail through scalar tanhF32 (same math per element).
+func vtanhF32(dst, src []float32) {
+	nv := len(src) &^ 3
+	if nv > 0 {
+		vtanhQuadsNeonF32(&dst[0], &src[0], nv>>2)
+	}
+	for i := nv; i < len(src); i++ {
+		dst[i] = tanhF32(src[i])
+	}
+}
+
+// vlogQuadsNeonF32 is the 4-wide NEON natural-log kernel (vexp_arm64.s,
+// §T666): dst[i] = log(src[i]) via the Cephes logf reduction — exponent-field
+// extraction (subnormals pre-scaled), m folded to [√½, √2), degree-8 poly in
+// m−1, e·ln2 hi/lo — a NEW primitive, not the exp leaf (numerics in vexp.go).
+//
+//go:noescape
+func vlogQuadsNeonF32(dst, src *float32, quads int)
+
+// vlogF32 computes dst[i] = log(src[i]) f32-native: whole quads through the
+// NEON kernel, the len%4 tail through scalar logF32 (same math per element).
+func vlogF32(dst, src []float32) {
+	nv := len(src) &^ 3
+	if nv > 0 {
+		vlogQuadsNeonF32(&dst[0], &src[0], nv>>2)
+	}
+	for i := nv; i < len(src); i++ {
+		dst[i] = logF32(src[i])
+	}
+}

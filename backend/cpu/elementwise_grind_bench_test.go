@@ -1,6 +1,7 @@
 package cpu_test
 
 import (
+	"math"
 	"testing"
 
 	"github.com/jxsl13/goai/backend"
@@ -117,6 +118,35 @@ func BenchmarkSiLUBackwardF32_256x2048_cpu(b *testing.B) {
 func BenchmarkSiLUBackwardF32_256x2048_ref(b *testing.B) {
 	benchOn(b, backend.Ref, backend.OpSiLUBackward,
 		bench.RandF32(tensor.Shape{256, 2048}, 3), bench.RandF32(tensor.Shape{256, 2048}, 4))
+}
+
+// --- Standalone unary transcendentals (§T666 §V22 A/B): the OpExp / OpTanh /
+// OpLog F32 kernels at the training shape [256,2048] (complementing the 64K
+// lanes above). On the arm64 perf build _cpu runs the NEON vexp-leaf kernels;
+// on every other build these are the scalar f64 math.Exp/Tanh/Log paths.
+// Log gets a strictly positive input (log-uniform over ~[0.6, 1.6]) so the
+// baseline measures the real math.Log path, not its NaN early-out. ---
+
+func posRandF32(shape tensor.Shape, seed uint64) *tensor.Tensor {
+	t := bench.RandF32(shape, seed) // values in [-1,1)
+	d := t.Storage().F32()
+	for i, v := range d {
+		d[i] = float32(math.Exp(float64(v) * 0.5)) // (0.6, 1.65)
+	}
+	return t
+}
+
+func BenchmarkExpF32_256x2048_cpu(b *testing.B) {
+	benchOn(b, backend.CPU, backend.OpExp, bench.RandF32(tensor.Shape{256, 2048}, 3))
+}
+func BenchmarkTanhF32_256x2048_cpu(b *testing.B) {
+	benchOn(b, backend.CPU, backend.OpTanh, bench.RandF32(tensor.Shape{256, 2048}, 3))
+}
+func BenchmarkLogF32_256x2048_cpu(b *testing.B) {
+	benchOn(b, backend.CPU, backend.OpLog, posRandF32(tensor.Shape{256, 2048}, 4))
+}
+func BenchmarkLogPosF32_64K_cpu(b *testing.B) { // positive-input twin of the 64K lane
+	benchOn(b, backend.CPU, backend.OpLog, posRandF32(tensor.Shape{65536}, 4))
 }
 
 // --- Broadcast binary ops (materialization candidates) ---

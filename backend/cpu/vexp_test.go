@@ -831,3 +831,355 @@ func TestVsigmoidF32MatchesScalarTail(t *testing.T) {
 		}
 	}
 }
+
+// TestExpFullF32Accuracy sweeps the standalone full-domain exp (through the
+// build-selected vexpFullF32 — NEON on arm64+simd, the scalar poly elsewhere)
+// against the f64 math.Exp reference — the VERIFY-BEFORE-BENCH parity gate
+// for the OpExp F32 fast path (§T666). Budget: 1e-6 relative over the whole
+// finite domain INCLUDING the (88, 88.7228] band the softmax kernel's single
+// 2^n scale could not represent (observed ~8e-8). Overflow must hit +Inf at
+// exactly the ref's cutoff (x > 88.72283172607422), underflow returns an
+// exact 0 for x < the lo clamp (ref's subnormals there are ≤ 1.18e-38 — the
+// atol side of the ADR-0021 budget), and exp(±Inf)/exp(0)/NaN are exact.
+func TestExpFullF32Accuracy(t *testing.T) {
+	rng := rand.New(rand.NewPCG(101, 103))
+	check := func(xs []float32, label string) {
+		t.Helper()
+		got := make([]float32, len(xs))
+		vexpFullF32(got, xs)
+		var maxRel float64
+		for i, x := range xs {
+			w := math.Exp(float64(x))
+			gv := float64(got[i])
+			if x < expLoClamp {
+				if gv != 0 {
+					t.Fatalf("%s: exp(%g) = %g, want exact 0", label, x, gv)
+				}
+				continue
+			}
+			rel := math.Abs(gv-w) / w
+			if rel > maxRel {
+				maxRel = rel
+			}
+			if rel > 1e-6 {
+				t.Fatalf("%s: exp(%g) = %g, want %g (rel %.2e)", label, x, gv, w, rel)
+			}
+		}
+		t.Logf("%s: max rel err %.2e over %d points (vexpNeon=%v)", label, maxRel, len(xs), vexpNeon)
+	}
+
+	// Dense uniform sweep of the task's accuracy bracket [−80, 80].
+	n := 1 << 20
+	xs := make([]float32, n)
+	for i := range xs {
+		xs[i] = float32(-80 + 160*float64(i)/float64(n-1))
+	}
+	check(xs, "uniform[-80,80]")
+
+	// The full finite domain, including the split-scaling band n = 128.
+	for i := range xs {
+		xs[i] = float32(-87.33 + (88.7228+87.33)*float64(i)/float64(n-1))
+	}
+	check(xs, "uniform[-87.33,88.7228]")
+
+	// Random near-zero fine grid (poly center) and RL/reward-typical range.
+	for i := range xs {
+		xs[i] = rng.Float32() - 0.5
+	}
+	check(xs, "center[-0.5,0.5]")
+	for i := range xs {
+		xs[i] = 20 * (rng.Float32() - 0.5)
+	}
+	check(xs, "random[-10,10]")
+
+	// Overflow cutoff is bit-exact vs the f64 ref: the largest finite-exp f32
+	// (88.72283172607422 = 0x42B17217) stays finite, the next ulp is +Inf.
+	lastFinite := math.Float32frombits(0x42B17217)
+	firstInf := math.Float32frombits(0x42B17218)
+	cut := []float32{88, 88.5, lastFinite, firstInf, 88.8, 89, 100, 1e30}
+	out := make([]float32, len(cut))
+	vexpFullF32(out, cut)
+	for i, x := range cut {
+		w := float64(float32(math.Exp(float64(x))))
+		gv := float64(out[i])
+		if math.IsInf(w, 1) != math.IsInf(gv, 1) {
+			t.Errorf("exp(%g) = %g, want Inf-ness of %g", x, gv, w)
+		}
+		if !math.IsInf(w, 1) && math.Abs(gv-w)/w > 1e-6 {
+			t.Errorf("exp(%g) = %g, want %g", x, gv, w)
+		}
+	}
+
+	// Underflow band and edges: exact 0 below the lo clamp (incl. −Inf); the
+	// ref's subnormal results there are ≤ 1.18e-38, inside the atol budget.
+	edge := []float32{-87.34, -90, -103, -200, float32(math.Inf(-1))}
+	vexpFullF32(out[:len(edge)], edge)
+	for i, x := range edge {
+		if out[i] != 0 {
+			t.Errorf("exp(%g) = %g, want exact 0", x, out[i])
+		}
+	}
+
+	// exp(±0) = 1 exactly, exp(+Inf) = +Inf, NaN propagates.
+	sp := []float32{0, float32(math.Copysign(0, -1)), float32(math.Inf(1)), float32(math.NaN())}
+	vexpFullF32(out[:len(sp)], sp)
+	if out[0] != 1 || out[1] != 1 {
+		t.Errorf("exp(±0) = %g/%g, want 1", out[0], out[1])
+	}
+	if !math.IsInf(float64(out[2]), 1) {
+		t.Errorf("exp(+Inf) = %g, want +Inf", out[2])
+	}
+	if !math.IsNaN(float64(out[3])) {
+		t.Errorf("exp(NaN) = %g, want NaN", out[3])
+	}
+}
+
+// TestTanhF32Accuracy sweeps the vtanh pipeline (through the build-selected
+// vtanhF32) against the f64 math.Tanh reference — the VERIFY-BEFORE-BENCH
+// parity gate for the OpTanh F32 fast path (§T666). Budget: |got−ref| ≤
+// 1e-6 + 2e-4·|ref| (observed max abs err ~9e-8; the atol term governs only
+// |x| ≲ 1e-4, where 1−e^(−2|x|) meets the half-ulp-of-1 floor of the exp
+// poly). Tails must saturate exactly: tanh(±Inf) = ±1, tanh(x) = ±1 for
+// |x| ≥ ~9; tanh(±0) = ±0 with the sign preserved; NaN propagates.
+func TestTanhF32Accuracy(t *testing.T) {
+	rng := rand.New(rand.NewPCG(107, 109))
+	check := func(xs []float32, label string) {
+		t.Helper()
+		got := make([]float32, len(xs))
+		vtanhF32(got, xs)
+		var maxAbs, maxRel float64
+		for i, x := range xs {
+			w := math.Tanh(float64(x))
+			gv := float64(got[i])
+			abs := math.Abs(gv - w)
+			if abs > maxAbs {
+				maxAbs = abs
+			}
+			if math.Abs(w) > 1e-3 {
+				if rel := abs / math.Abs(w); rel > maxRel {
+					maxRel = rel
+				}
+			}
+			if abs > 1e-6+2e-4*math.Abs(w) {
+				t.Fatalf("%s: tanh(%g) = %g, want %g (abs %.2e)", label, x, gv, w, abs)
+			}
+		}
+		t.Logf("%s: max abs err %.2e, max rel err %.2e (|ref|>1e-3) over %d points (vexpNeon=%v)",
+			label, maxAbs, maxRel, len(xs), vexpNeon)
+	}
+
+	// Dense uniform sweep of the task's accuracy domain [−40, 40].
+	n := 1 << 20
+	xs := make([]float32, n)
+	for i := range xs {
+		xs[i] = float32(-40 + 80*float64(i)/float64(n-1))
+	}
+	check(xs, "uniform[-40,40]")
+
+	// Random gate/DyT-typical inputs and the active region.
+	for i := range xs {
+		xs[i] = 8 * (rng.Float32() - 0.5)
+	}
+	check(xs, "random[-4,4]")
+	for i := range xs {
+		xs[i] = rng.Float32() - 0.5
+	}
+	check(xs, "center[-0.5,0.5]")
+
+	// Saturation: exact ±1 from ~|x| ≥ 9 up through ±Inf.
+	sat := []float32{9, 44, 100, 1e30, float32(math.Inf(1))}
+	out := make([]float32, len(sat))
+	vtanhF32(out, sat)
+	for i, x := range sat {
+		if out[i] != 1 {
+			t.Errorf("tanh(%g) = %g, want exact 1", x, out[i])
+		}
+	}
+	neg := []float32{-9, -44, -100, -1e30, float32(math.Inf(-1))}
+	vtanhF32(out[:len(neg)], neg)
+	for i, x := range neg {
+		if out[i] != -1 {
+			t.Errorf("tanh(%g) = %g, want exact -1", x, out[i])
+		}
+	}
+
+	// ±0 keep their sign; NaN propagates.
+	edge := []float32{0, float32(math.Copysign(0, -1)), float32(math.NaN())}
+	eout := make([]float32, len(edge))
+	vtanhF32(eout, edge)
+	if eout[0] != 0 || math.Signbit(float64(eout[0])) {
+		t.Errorf("tanh(+0) = %g, want +0", eout[0])
+	}
+	if eout[1] != 0 || !math.Signbit(float64(eout[1])) {
+		t.Errorf("tanh(-0) = %g, want -0", eout[1])
+	}
+	if !math.IsNaN(float64(eout[2])) {
+		t.Errorf("tanh(NaN) = %g, want NaN", eout[2])
+	}
+}
+
+// TestLogF32Accuracy sweeps the vlog pipeline (through the build-selected
+// vlogF32) against the f64 math.Log reference — the VERIFY-BEFORE-BENCH
+// parity gate for the OpLog F32 fast path (§T666). The tricky budget is
+// RELATIVE accuracy across magnitudes (log's task bracket [1e-30, 1e30], 125
+// binades): ≤ 1e-6 relative wherever |ref| ≥ 1e-3 (observed ~8e-8 — the ln2
+// hi/lo split keeps e·ln2 exact), plus the abs envelope 1e-6 + 2e-4·|ref|
+// near log(1) = 0 where f = m−1 is exact and the result vanishes. Subnormal
+// inputs go through the 2^25 pre-scale and must hold the same relative
+// budget. Specials must be exact: log(±0) = −Inf, log(x<0) = NaN (incl.
+// −Inf), log(+Inf) = +Inf, log(1) = +0, NaN propagates.
+func TestLogF32Accuracy(t *testing.T) {
+	rng := rand.New(rand.NewPCG(113, 127))
+	check := func(xs []float32, label string) {
+		t.Helper()
+		got := make([]float32, len(xs))
+		vlogF32(got, xs)
+		var maxAbs, maxRel float64
+		for i, x := range xs {
+			w := math.Log(float64(x))
+			gv := float64(got[i])
+			abs := math.Abs(gv - w)
+			if abs > maxAbs {
+				maxAbs = abs
+			}
+			if math.Abs(w) > 1e-3 {
+				rel := abs / math.Abs(w)
+				if rel > maxRel {
+					maxRel = rel
+				}
+				if rel > 1e-6 {
+					t.Fatalf("%s: log(%g) = %g, want %g (rel %.2e)", label, x, gv, w, rel)
+				}
+				continue
+			}
+			if abs > 1e-6+2e-4*math.Abs(w) {
+				t.Fatalf("%s: log(%g) = %g, want %g (abs %.2e)", label, x, gv, w, abs)
+			}
+		}
+		t.Logf("%s: max abs err %.2e, max rel err %.2e (|ref|>1e-3) over %d points (vexpNeon=%v)",
+			label, maxAbs, maxRel, len(xs), vexpNeon)
+	}
+
+	// Log-uniform sweep of the task's accuracy bracket [1e-30, 1e30].
+	n := 1 << 20
+	xs := make([]float32, n)
+	lo, hi := math.Log(1e-30), math.Log(1e30)
+	for i := range xs {
+		xs[i] = float32(math.Exp(lo + (hi-lo)*float64(i)/float64(n-1)))
+	}
+	check(xs, "loguniform[1e-30,1e30]")
+
+	// Dense linear sweep around 1 (the f = m−1 cancellation-free zone and the
+	// √2 fold boundary) and a probability-typical range.
+	for i := range xs {
+		xs[i] = float32(0.5 + 1.5*float64(i)/float64(n-1))
+	}
+	check(xs, "uniform[0.5,2]")
+	for i := range xs {
+		xs[i] = rng.Float32()*0.999 + 0.001
+	}
+	check(xs, "random(0.001,1]")
+
+	// Subnormal inputs (2^25 pre-scale path) and the largest finite values.
+	sub := make([]float32, 4096)
+	for i := range sub {
+		sub[i] = math.Float32frombits(uint32(rng.Int64N(0x007FFFFF)) + 1) // (0, minNormal)
+	}
+	check(sub, "subnormal")
+	check([]float32{logMinNormal, math.MaxFloat32, 1e30, 3e38}, "extremes")
+
+	// The task's named probes.
+	probes := []float32{1e-30, 1e30}
+	pout := make([]float32, len(probes))
+	vlogF32(pout, probes)
+	for i, x := range probes {
+		w := math.Log(float64(x))
+		if rel := math.Abs(float64(pout[i])-w) / math.Abs(w); rel > 1e-6 {
+			t.Errorf("log(%g) = %g, want %g (rel %.2e)", x, pout[i], w, rel)
+		}
+	}
+
+	// Specials: log(±0) = −Inf, negatives (incl. −Inf) = NaN, log(+Inf) =
+	// +Inf, log(1) = +0 exactly, NaN propagates.
+	edge := []float32{0, float32(math.Copysign(0, -1)), -1, -1e-42, float32(math.Inf(-1)), float32(math.Inf(1)), 1, float32(math.NaN())}
+	eout := make([]float32, len(edge))
+	vlogF32(eout, edge)
+	if !math.IsInf(float64(eout[0]), -1) || !math.IsInf(float64(eout[1]), -1) {
+		t.Errorf("log(±0) = %g/%g, want -Inf", eout[0], eout[1])
+	}
+	for i := 2; i <= 4; i++ {
+		if !math.IsNaN(float64(eout[i])) {
+			t.Errorf("log(%g) = %g, want NaN", edge[i], eout[i])
+		}
+	}
+	if !math.IsInf(float64(eout[5]), 1) {
+		t.Errorf("log(+Inf) = %g, want +Inf", eout[5])
+	}
+	if eout[6] != 0 || math.Signbit(float64(eout[6])) {
+		t.Errorf("log(1) = %g, want +0", eout[6])
+	}
+	if !math.IsNaN(float64(eout[7])) {
+		t.Errorf("log(NaN) = %g, want NaN", eout[7])
+	}
+}
+
+// TestVexpFullF32MatchesScalarTail / TestVtanhF32MatchesScalarTail /
+// TestVlogF32MatchesScalarTail: the vector lanes and the scalar tail poly
+// agree to a few ulps, so a chunk's values don't jump at the len%4 boundary
+// (the parallel() chunking makes the lane/tail split position vary).
+func TestVexpFullF32MatchesScalarTail(t *testing.T) {
+	rng := rand.New(rand.NewPCG(131, 137))
+	xs := make([]float32, 257) // odd length: exercises quads + tail in one call
+	for i := range xs {
+		xs[i] = 176 * (rng.Float32() - 0.5) // spans under/overflow
+	}
+	vec := make([]float32, len(xs))
+	vexpFullF32(vec, xs)
+	for i, x := range xs {
+		s := expFullF32(x)
+		if math.IsInf(float64(s), 1) || s == 0 {
+			if vec[i] != s {
+				t.Fatalf("lane %d: vexpFull(%g) = %g vs scalar %g", i, x, vec[i], s)
+			}
+			continue
+		}
+		diff := math.Abs(float64(vec[i]) - float64(s))
+		if diff > 2e-7*float64(s) {
+			t.Fatalf("lane %d: vexpFull(%g) = %g vs scalar %g", i, x, vec[i], s)
+		}
+	}
+}
+
+func TestVtanhF32MatchesScalarTail(t *testing.T) {
+	rng := rand.New(rand.NewPCG(139, 149))
+	xs := make([]float32, 257)
+	for i := range xs {
+		xs[i] = 24 * (rng.Float32() - 0.5)
+	}
+	vec := make([]float32, len(xs))
+	vtanhF32(vec, xs)
+	for i, x := range xs {
+		s := tanhF32(x)
+		diff := math.Abs(float64(vec[i]) - float64(s))
+		if diff > 1e-6+2e-6*math.Abs(float64(s)) {
+			t.Fatalf("lane %d: vtanh(%g) = %g vs scalar %g", i, x, vec[i], s)
+		}
+	}
+}
+
+func TestVlogF32MatchesScalarTail(t *testing.T) {
+	rng := rand.New(rand.NewPCG(151, 157))
+	xs := make([]float32, 257)
+	for i := range xs {
+		xs[i] = float32(math.Exp(140 * (rng.Float64() - 0.5))) // log-uniform e^±70
+	}
+	vec := make([]float32, len(xs))
+	vlogF32(vec, xs)
+	for i, x := range xs {
+		s := logF32(x)
+		diff := math.Abs(float64(vec[i]) - float64(s))
+		if diff > 1e-6+2e-6*math.Abs(float64(s)) {
+			t.Fatalf("lane %d: vlog(%g) = %g vs scalar %g", i, x, vec[i], s)
+		}
+	}
+}

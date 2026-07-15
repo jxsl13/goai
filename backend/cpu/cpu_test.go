@@ -75,12 +75,14 @@ func TestCPUCrossReferenceExact(t *testing.T) {
 			}
 			gc := run(t, cpu, op, in)
 			gr := run(t, ref, op, in)
-			vexpVectorized := op == backend.OpGELU || op == backend.OpSigmoid || op == backend.OpSiLU
+			vexpVectorized := op == backend.OpGELU || op == backend.OpSigmoid || op == backend.OpSiLU ||
+				op == backend.OpExp || op == backend.OpTanh || op == backend.OpLog
 			if vexpVectorized && dtype == tensor.F32 && geluF32Tolerant {
-				// arm64 perf build: F32 GELU/sigmoid/SiLU are the f32-native
-				// NEON pipelines (vexp.go) — the TestGeluF32Accuracy /
-				// TestSigmoidF32Accuracy / TestSiluF32Accuracy budget, not
-				// bit-exact.
+				// arm64 perf build: F32 GELU/sigmoid/SiLU and the standalone
+				// exp/tanh/log (§T666) are the f32-native NEON pipelines
+				// (vexp.go) — the TestGeluF32Accuracy-family budget, not
+				// bit-exact. On the default build (geluF32Tolerant=false)
+				// all of them remain asserted bit-exact vs ref.
 				assertCloseGelu(t, gc, gr, op.String()+"/"+dtype.String())
 				continue
 			}
