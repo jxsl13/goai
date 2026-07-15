@@ -184,11 +184,16 @@ func (wr *writer) f32Data(t *tensor.Tensor) {
 		return
 	}
 	buf := make([]byte, t.Numel()*4)
-	if t.Dtype() == tensor.F32 {
-		for i, v := range t.Storage().F32() {
+	switch c := t.Contiguous(); c.Dtype() {
+	case tensor.F32:
+		for i, v := range c.Storage().F32() {
 			binary.LittleEndian.PutUint32(buf[i*4:], math.Float32bits(v))
 		}
-	} else { // best-effort convert any other dtype to F32
+	case tensor.F64: // bulk convert (avoids the per-element AtF64/Unravel dispatch)
+		for i, v := range c.Storage().F64() {
+			binary.LittleEndian.PutUint32(buf[i*4:], math.Float32bits(float32(v)))
+		}
+	default: // best-effort convert any other dtype to F32
 		for i := range t.Numel() {
 			v := float32(t.AtF64(tensor.Unravel(i, t.Shape())...))
 			binary.LittleEndian.PutUint32(buf[i*4:], math.Float32bits(v))

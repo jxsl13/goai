@@ -68,3 +68,20 @@ func TestPool2DCrossReference(t *testing.T) {
 		t.Fatal("window > input accepted")
 	}
 }
+
+func benchPool(b *testing.B, op backend.Op) {
+	be, _ := backend.Get(backend.CPU)
+	x := tensor.Randn(tensor.F32, 1, tensor.Shape{8, 16, 64, 64})
+	attrs := backend.PoolAttrs{Kernel: 2, Stride: 2}
+	ctx := backend.NewContext().WithBackend(be)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if _, err := backend.Execute(ctx, op, []*tensor.Tensor{x}, attrs); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkMaxPool2D_cpu(b *testing.B) { benchPool(b, backend.OpMaxPool2D) }
+func BenchmarkAvgPool2D_cpu(b *testing.B) { benchPool(b, backend.OpAvgPool2D) }

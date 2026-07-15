@@ -77,3 +77,22 @@ func TestConv2DBackwardCrossReference(t *testing.T) {
 		}
 	}
 }
+
+// Guard for the conv2d backward hot path (§V22 A/B): batch 8, 16→32 channels,
+// 16×16 input, 3×3 kernel — a realistic small CNN training layer.
+func BenchmarkConv2DBackward_cpu(b *testing.B) {
+	be, _ := backend.Get(backend.CPU)
+	x := tensor.Randn(tensor.F32, 1, tensor.Shape{8, 16, 16, 16})
+	w := tensor.Randn(tensor.F32, 2, tensor.Shape{32, 16, 3, 3})
+	g := tensor.Randn(tensor.F32, 3, tensor.Shape{8, 32, 16, 16})
+	attrs := backend.ConvAttrs{Stride: 1, Pad: 1}
+	ctx := backend.NewContext().WithBackend(be)
+	ins := []*tensor.Tensor{x, w, g}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if _, err := backend.Execute(ctx, backend.OpConv2DBackward, ins, attrs); err != nil {
+			b.Fatal(err)
+		}
+	}
+}

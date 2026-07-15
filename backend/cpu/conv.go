@@ -60,30 +60,16 @@ func conv2dKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs
 	defer putF64(wtP)
 	wt := *wtP
 
-	// devirtualized im2col + weight fill (§base-perf/§T602): concrete []T reads
-	// instead of a per-element get closure + float32→float64 round-trip closure.
-	switch x.Dtype() {
-	case tensor.F64:
-		im2colFill(cols, xc.Storage().F64(), rows, k, ho, wo, c, kh, kw, s, p, h, wd)
-		wtFill(wt, wcont.Storage().F64(), f, k)
-	case tensor.F32:
-		im2colFill(cols, xc.Storage().F32(), rows, k, ho, wo, c, kh, kw, s, p, h, wd)
-		wtFill(wt, wcont.Storage().F32(), f, k)
-	default:
-		return nil, fmt.Errorf("cpu: unsupported dtype %v", x.Dtype())
-	}
-
-	// GEMM: cols[rows,k] · wt[k,f] — blocked band kernel, k-order preserved
+	// GEMM scratch + output, allocated up front so ONE fused row-parallel pass
+	// can run im2col → GEMM band → scatter per disjoint row band. The three
+	// per-row stages were separate parallelWork barriers; the profile showed
+	// ~75% of the op in pool wake/park churn between them. Per row band the
+	// operations (and thus results) are identical — bit-identical output —
+	// but there is now a single fork/join and cols rows are still cache-hot
+	// when the GEMM reads them.
 	prodP := getF64(rows * f)
 	defer putF64(prodP)
 	prod := *prodP
-	parallelWork(rows, k*f, func(lo, hi int) {
-		gemmF64Band(cols, wt, prod, lo, hi, k, f)
-	})
-
-	// Scatter prod[(n,oy,ox), f] into out[n,f,ho,wo] — typed slices and row-parallel:
-	// the previous per-element SetF64 loop was 17% of the profile and ran serially
-	// while the pool workers idled (§T597). Bias is hoisted to a plain slice.
 	out := tensor.NewOn(ctx.Device(), x.Dtype(), tensor.Shape{n, f, ho, wo})
 	var bs []float64
 	if bias != nil {
@@ -93,37 +79,46 @@ func conv2dKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs
 		}
 	}
 	hw := ho * wo
-	switch out.Dtype() {
+	work := k + k*f + f // per-row: im2col fill + GEMM row + scatter
+	switch x.Dtype() {
 	case tensor.F64:
-		os := out.Storage().F64()
-		parallelWork(rows, f, func(lo, hi int) {
-			for r := lo; r < hi; r++ {
-				ni, rem := r/hw, r%hw
-				for fi := range f {
-					v := prod[r*f+fi]
-					if bs != nil {
-						v += bs[fi]
-					}
-					os[(ni*f+fi)*hw+rem] = v
-				}
-			}
+		xs, os := xc.Storage().F64(), out.Storage().F64()
+		wtFill(wt, wcont.Storage().F64(), f, k)
+		parallelWork(rows, work, func(lo, hi int) {
+			im2colFillBand(cols, xs, lo, hi, k, ho, wo, c, kh, kw, s, p, h, wd)
+			gemmF64Band(cols, wt, prod, lo, hi, k, f)
+			convScatterBand(prod, os, bs, lo, hi, f, hw)
 		})
 	case tensor.F32:
-		os := out.Storage().F32()
-		parallelWork(rows, f, func(lo, hi int) {
-			for r := lo; r < hi; r++ {
-				ni, rem := r/hw, r%hw
-				for fi := range f {
-					v := prod[r*f+fi]
-					if bs != nil {
-						v += bs[fi]
-					}
-					os[(ni*f+fi)*hw+rem] = float32(v)
-				}
-			}
+		xs, os := xc.Storage().F32(), out.Storage().F32()
+		wtFill(wt, wcont.Storage().F32(), f, k)
+		parallelWork(rows, work, func(lo, hi int) {
+			im2colFillBand(cols, xs, lo, hi, k, ho, wo, c, kh, kw, s, p, h, wd)
+			gemmF64Band(cols, wt, prod, lo, hi, k, f)
+			convScatterBand(prod, os, bs, lo, hi, f, hw)
 		})
+	default:
+		return nil, fmt.Errorf("cpu: unsupported dtype %v", x.Dtype())
 	}
 	return []*tensor.Tensor{out}, nil
+}
+
+// convScatterBand writes prod rows [lo,hi) — prod[(n,oy,ox), f] — into
+// out[n,f,ho,wo], adding the hoisted bias when present.
+func convScatterBand[T normFloat](prod []float64, os []T, bs []float64, lo, hi, f, hw int) {
+	for r := lo; r < hi; r++ {
+		ni, rem := r/hw, r%hw
+		pr := prod[r*f : r*f+f : r*f+f]
+		if bs != nil {
+			for fi, v := range pr {
+				os[(ni*f+fi)*hw+rem] = T(v + bs[fi])
+			}
+		} else {
+			for fi, v := range pr {
+				os[(ni*f+fi)*hw+rem] = T(v)
+			}
+		}
+	}
 }
 
 func init() {
@@ -131,31 +126,30 @@ func init() {
 	std.add(backend.OpConv2D, tensor.F64, conv2dKernel)
 }
 
-// im2colFill materializes the im2col column matrix (§T342) from a concrete []T
+// im2colFillBand materializes im2col rows [lo,hi) (§T342) from a concrete []T
 // input slice into the f64 GEMM scratch — direct indexed reads instead of the old
-// per-element get closure. Padding taps stay 0 (adding 0·w is bit-safe).
-func im2colFill[T normFloat](cols []float64, xs []T, rows, k, ho, wo, c, kh, kw, s, p, h, wd int) {
-	parallelWork(rows, k, func(lo, hi int) {
-		for r := lo; r < hi; r++ {
-			ni := r / (ho * wo)
-			rem := r % (ho * wo)
-			oy, ox := rem/wo, rem%wo
-			base := r * k
-			kk := 0
-			for ci := 0; ci < c; ci++ {
-				for ky := 0; ky < kh; ky++ {
-					iy := oy*s + ky - p
-					for kx := 0; kx < kw; kx++ {
-						ix := ox*s + kx - p
-						if iy >= 0 && iy < h && ix >= 0 && ix < wd {
-							cols[base+kk] = float64(xs[((ni*c+ci)*h+iy)*wd+ix])
-						}
-						kk++
+// per-element get closure. Padding taps stay 0 (adding 0·w is bit-safe). Runs
+// inside the fused conv row-band pass (no parallelWork of its own).
+func im2colFillBand[T normFloat](cols []float64, xs []T, lo, hi, k, ho, wo, c, kh, kw, s, p, h, wd int) {
+	for r := lo; r < hi; r++ {
+		ni := r / (ho * wo)
+		rem := r % (ho * wo)
+		oy, ox := rem/wo, rem%wo
+		base := r * k
+		kk := 0
+		for ci := 0; ci < c; ci++ {
+			for ky := 0; ky < kh; ky++ {
+				iy := oy*s + ky - p
+				for kx := 0; kx < kw; kx++ {
+					ix := ox*s + kx - p
+					if iy >= 0 && iy < h && ix >= 0 && ix < wd {
+						cols[base+kk] = float64(xs[((ni*c+ci)*h+iy)*wd+ix])
 					}
+					kk++
 				}
 			}
 		}
-	})
+	}
 }
 
 // wtFill transposes the weights [F, C·KH·KW] into column order [C·KH·KW, F] over a

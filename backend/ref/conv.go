@@ -49,6 +49,61 @@ func conv2dKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs
 	}
 
 	out := tensor.NewOn(ctx.Device(), x.Dtype(), tensor.Shape{n, f, ho, wo})
+	// Devirtualised typed core (§T646 follow-up): flat row-major []float64 views
+	// of x/w/bias (exact widening for F32) replace the per-element AtF64 dispatch
+	// in the O(n·f·ho·wo·c·kh·kw) loop nest. Products stay in (c,ky,kx) order
+	// with bias added LAST — bit-identical to the generic path (§V11 tol 0).
+	xs, xok := f64Data(x)
+	ws, wok := f64Data(w)
+	bs := []float64(nil)
+	bok := true
+	if bias != nil {
+		bs, bok = f64Data(bias)
+	}
+	if xok && wok && bok {
+		if os, flush, ook := outF64(out); ook {
+			oi := 0
+			for ni := range n {
+				xn := xs[ni*c*h*wd : (ni+1)*c*h*wd]
+				for fi := range f {
+					var b float64
+					if bs != nil {
+						b = bs[fi]
+					}
+					wf := ws[fi*c*kh*kw : (fi+1)*c*kh*kw]
+					for oy := range ho {
+						for ox := range wo {
+							acc := 0.0
+							for ci := range c {
+								xc := xn[ci*h*wd : (ci+1)*h*wd]
+								wcRow := wf[ci*kh*kw : (ci+1)*kh*kw]
+								for ky := range kh {
+									iy := oy*s + ky - p
+									if iy < 0 || iy >= h {
+										continue // zero padding
+									}
+									xrow := xc[iy*wd : iy*wd+wd]
+									wrow := wcRow[ky*kw : ky*kw+kw]
+									for kx := range kw {
+										ix := ox*s + kx - p
+										if ix < 0 || ix >= wd {
+											continue
+										}
+										acc += xrow[ix] * wrow[kx]
+									}
+								}
+							}
+							os[oi] = acc + b
+							oi++
+						}
+					}
+				}
+			}
+			flush()
+			return []*tensor.Tensor{out}, nil
+		}
+	}
+	// Generic fallback for exotic dtypes (verbatim original loop).
 	for ni := range n {
 		for fi := range f {
 			var b float64
@@ -114,11 +169,41 @@ func maxPool2dKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.At
 		return nil, fmt.Errorf("ref: maxpool2d wants 1 input, got %d", len(in))
 	}
 	x := in[0]
-	n, c, _, _, k, s, ho, wo, err := poolDims(x, attrs)
+	n, c, h, w, k, s, ho, wo, err := poolDims(x, attrs)
 	if err != nil {
 		return nil, err
 	}
 	out := tensor.NewOn(ctx.Device(), x.Dtype(), tensor.Shape{n, c, ho, wo})
+	// Devirtualised typed core (§T646 follow-up): same (ky,kx) scan order and
+	// strict > comparison as the generic loop — bit-identical.
+	if xs, ok := f64Data(x); ok {
+		if os, flush, ook := outF64(out); ook {
+			oi := 0
+			for ni := range n {
+				for ci := range c {
+					plane := xs[(ni*c+ci)*h*w : (ni*c+ci+1)*h*w]
+					for oy := range ho {
+						for ox := range wo {
+							best := math.Inf(-1)
+							for ky := range k {
+								row := plane[(oy*s+ky)*w+ox*s : (oy*s+ky)*w+ox*s+k]
+								for _, v := range row {
+									if v > best {
+										best = v
+									}
+								}
+							}
+							os[oi] = best
+							oi++
+						}
+					}
+				}
+			}
+			flush()
+			return []*tensor.Tensor{out}, nil
+		}
+	}
+	// Generic fallback for exotic dtypes (verbatim original loop).
 	for ni := range n {
 		for ci := range c {
 			for oy := range ho {
@@ -144,12 +229,40 @@ func avgPool2dKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.At
 		return nil, fmt.Errorf("ref: avgpool2d wants 1 input, got %d", len(in))
 	}
 	x := in[0]
-	n, c, _, _, k, s, ho, wo, err := poolDims(x, attrs)
+	n, c, h, w, k, s, ho, wo, err := poolDims(x, attrs)
 	if err != nil {
 		return nil, err
 	}
 	out := tensor.NewOn(ctx.Device(), x.Dtype(), tensor.Shape{n, c, ho, wo})
 	inv := 1 / float64(k*k)
+	// Devirtualised typed core (§T646 follow-up): same (ky,kx) accumulation
+	// order, f64 sum, scale applied LAST — bit-identical to the generic loop.
+	if xs, ok := f64Data(x); ok {
+		if os, flush, ook := outF64(out); ook {
+			oi := 0
+			for ni := range n {
+				for ci := range c {
+					plane := xs[(ni*c+ci)*h*w : (ni*c+ci+1)*h*w]
+					for oy := range ho {
+						for ox := range wo {
+							var acc float64
+							for ky := range k {
+								row := plane[(oy*s+ky)*w+ox*s : (oy*s+ky)*w+ox*s+k]
+								for _, v := range row {
+									acc += v
+								}
+							}
+							os[oi] = acc * inv
+							oi++
+						}
+					}
+				}
+			}
+			flush()
+			return []*tensor.Tensor{out}, nil
+		}
+	}
+	// Generic fallback for exotic dtypes (verbatim original loop).
 	for ni := range n {
 		for ci := range c {
 			for oy := range ho {

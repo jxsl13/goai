@@ -38,3 +38,15 @@ func BenchmarkExpF64_64K_cpu(b *testing.B) {
 func BenchmarkMulF64_256K_cpu(b *testing.B) { // exercises the parallel path
 	benchOn(b, backend.CPU, backend.OpMul, bench.RandF64(tensor.Shape{262144}, 1), bench.RandF64(tensor.Shape{262144}, 2))
 }
+func BenchmarkLogF64_64K_cpu(b *testing.B) {
+	benchOn(b, backend.CPU, backend.OpLog, bench.RandF64(tensor.Shape{65536}, 3))
+}
+func BenchmarkTanhF64_64K_cpu(b *testing.B) {
+	benchOn(b, backend.CPU, backend.OpTanh, bench.RandF64(tensor.Shape{65536}, 3))
+}
+func BenchmarkSigmoidF64_64K_cpu(b *testing.B) {
+	benchOn(b, backend.CPU, backend.OpSigmoid, bench.RandF64(tensor.Shape{65536}, 3))
+}
+func BenchmarkAddBiasF32_512x1024_cpu(b *testing.B) {
+	benchOn(b, backend.CPU, backend.OpAddBias, bench.RandF32(tensor.Shape{512, 1024}, 1), bench.RandF32(tensor.Shape{1024}, 2))
+}

@@ -3,6 +3,7 @@ package gguf
 import (
 	"encoding/binary"
 	"fmt"
+	"math"
 
 	"github.com/jxsl13/goai/tensor"
 )
@@ -136,12 +137,11 @@ func dequantIQ2_S(shape tensor.Shape, data []byte) (*tensor.Tensor, error) {
 			gridRow := &iq2sGrid[u]
 			sg := signs[i]
 			base := b*qkK + i*8
-			for k := range 8 {
-				v := db * gridRow[k]
-				if sg>>k&1 == 1 {
-					v = -v
-				}
-				dst[base+k] = v
+			y := dst[base : base+8]
+			for k := range y {
+				// branchless negate — see iq2xxs.go (docs/perf-notes-lowlevel.md)
+				sbit := (uint32(sg>>k) & 1) << 31
+				y[k] = math.Float32frombits(math.Float32bits(db*gridRow[k]) ^ sbit)
 			}
 		}
 	}

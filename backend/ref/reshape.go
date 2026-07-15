@@ -26,8 +26,22 @@ func reshapeKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attr
 		}
 	}
 	out := tensor.NewOn(ctx.Device(), x.Dtype(), pa.Shape)
+	n := x.Numel()
+	// Devirtualised typed copy (§T646 follow-up): reshape preserves row-major
+	// flat order, so it is ONE same-dtype flat copy — replaces two per-element
+	// Unravel allocs + the AtF64/SetF64 dispatch (the f64 round-trip is exact for
+	// a same-dtype copy) — byte-identical.
+	switch x.Dtype() {
+	case tensor.F64:
+		copy(out.Storage().F64(), x.Contiguous().Storage().F64()[:n])
+		return []*tensor.Tensor{out}, nil
+	case tensor.F32:
+		copy(out.Storage().F32(), x.Contiguous().Storage().F32()[:n])
+		return []*tensor.Tensor{out}, nil
+	}
+	// Generic fallback for exotic dtypes (verbatim original loop).
 	xs, os := x.Shape(), pa.Shape
-	for i := range x.Numel() {
+	for i := range n {
 		out.SetF64(x.AtF64(tensor.Unravel(i, xs)...), tensor.Unravel(i, os)...)
 	}
 	return []*tensor.Tensor{out}, nil

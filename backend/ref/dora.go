@@ -35,6 +35,34 @@ func doraWeightKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs
 	}
 
 	out := tensor.NewOn(ctx.Device(), v.Dtype(), v.Shape())
+	// Devirtualised typed core (§T646 follow-up): flat []float64 views replace
+	// the per-element AtF64/SetF64 dispatch. Column accumulation keeps the SAME
+	// ascending-i order and the same mj·v/n expression — bit-identical.
+	if vs, vok := f64Data(v); vok {
+		if ms, mok := f64Data(m); mok {
+			if os, flush, ook := outF64(out); ook {
+				for j := range cols {
+					var ss float64
+					for i := 0; i < rows; i++ {
+						x := vs[i*cols+j]
+						ss += x * x
+					}
+					n := math.Sqrt(ss)
+					mj := ms[j]
+					for i := 0; i < rows; i++ {
+						if n > 0 {
+							os[i*cols+j] = mj * vs[i*cols+j] / n
+						} else {
+							os[i*cols+j] = 0
+						}
+					}
+				}
+				flush()
+				return []*tensor.Tensor{out}, nil
+			}
+		}
+	}
+	// Generic fallback for exotic dtypes (verbatim original loop).
 	for j := range cols {
 		var ss float64
 		for i := range rows {

@@ -21,7 +21,28 @@ func softCapKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attr
 	}
 	x := in[0]
 	out := tensor.NewOn(ctx.Device(), x.Dtype(), x.Shape())
-	for pos := range x.Numel() {
+	n := x.Numel()
+	// Devirtualised traversal (§T646 follow-up): flat typed loop instead of the
+	// per-element Unravel alloc + AtF64/SetF64 dispatch; math in float64 on both
+	// paths, F32 rounds only the STORED result — bit-identical.
+	switch x.Dtype() {
+	case tensor.F64:
+		xs := x.Contiguous().Storage().F64()[:n]
+		os := out.Storage().F64()
+		for i, v := range xs {
+			os[i] = pa.Cap * math.Tanh(v/pa.Cap)
+		}
+		return []*tensor.Tensor{out}, nil
+	case tensor.F32:
+		xs := x.Contiguous().Storage().F32()[:n]
+		os := out.Storage().F32()
+		for i, v := range xs {
+			os[i] = float32(pa.Cap * math.Tanh(float64(v)/pa.Cap))
+		}
+		return []*tensor.Tensor{out}, nil
+	}
+	// Generic fallback for exotic dtypes (verbatim original loop).
+	for pos := range n {
 		idx := tensor.Unravel(pos, x.Shape())
 		out.SetF64(pa.Cap*math.Tanh(x.AtF64(idx...)/pa.Cap), idx...)
 	}

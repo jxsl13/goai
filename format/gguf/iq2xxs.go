@@ -3,6 +3,7 @@ package gguf
 import (
 	"encoding/binary"
 	"fmt"
+	"math"
 
 	"github.com/jxsl13/goai/tensor"
 )
@@ -106,12 +107,13 @@ func dequantIQ2_XXS(shape tensor.Shape, data []byte) (*tensor.Tensor, error) {
 				gridRow := &iq2xxsGrid[byte(qs0>>(8*g))]
 				signs := iq2xxsKSigns[(qs1>>(7*g))&0x7F]
 				base := b*qkK + pair*32 + g*8
-				for k := range 8 {
-					v := db * gridRow[k]
-					if signs>>k&1 == 1 {
-						v = -v
-					}
-					dst[base+k] = v
+				y := dst[base : base+8]
+				for k := range y {
+					// branchless negate: IEEE negation is a sign-bit flip, and
+					// random sign bits mispredict a branch ~50% of the time
+					// (docs/perf-notes-lowlevel.md)
+					sbit := (uint32(signs>>k) & 1) << 31
+					y[k] = math.Float32frombits(math.Float32bits(db*gridRow[k]) ^ sbit)
 				}
 			}
 		}

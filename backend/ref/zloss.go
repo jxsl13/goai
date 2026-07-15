@@ -32,19 +32,40 @@ func zLossKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs)
 	}
 
 	var total float64
-	for i := range b {
-		m := math.Inf(-1)
-		for j := range c {
-			if v := z.AtF64(i, j); v > m {
-				m = v
+	// Devirtualised traversal (§T646 follow-up): flat typed rows instead of the
+	// per-element AtF64 dispatch; same max/exp/log sequence — bit-identical.
+	if zs, ok := f64Data(z); ok {
+		for i := range b {
+			zrow := zs[i*c : i*c+c]
+			m := math.Inf(-1)
+			for _, v := range zrow {
+				if v > m {
+					m = v
+				}
 			}
+			var sum float64
+			for _, v := range zrow {
+				sum += math.Exp(v - m)
+			}
+			lse := m + math.Log(sum)
+			total += lse * lse
 		}
-		var sum float64
-		for j := range c {
-			sum += math.Exp(z.AtF64(i, j) - m)
+	} else {
+		// Generic fallback for exotic dtypes (verbatim original loop).
+		for i := range b {
+			m := math.Inf(-1)
+			for j := range c {
+				if v := z.AtF64(i, j); v > m {
+					m = v
+				}
+			}
+			var sum float64
+			for j := range c {
+				sum += math.Exp(z.AtF64(i, j) - m)
+			}
+			lse := m + math.Log(sum)
+			total += lse * lse
 		}
-		lse := m + math.Log(sum)
-		total += lse * lse
 	}
 	out := tensor.NewOn(ctx.Device(), z.Dtype(), tensor.Shape{})
 	out.SetF64(pa.Coeff * total / float64(b))

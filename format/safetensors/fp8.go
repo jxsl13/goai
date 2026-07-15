@@ -13,6 +13,19 @@ import "math"
 // Verified byte-for-byte against torch.float8_e4m3fn / torch.float8_e5m2 over
 // all 256 encodings.
 
+// Decode tables: only 256 encodings exist per format, so Load widens through a
+// [256]float32 lookup instead of re-deriving the value per element (~6.4× on
+// a whole FP8 Load, M2 Pro — docs/perf-notes-lowlevel.md). Built at init FROM the reference
+// decoders below, so table and function cannot drift apart.
+var f8e4m3Table, f8e5m2Table [256]float32
+
+func init() {
+	for i := range 256 {
+		f8e4m3Table[i] = f8e4m3ToF32(byte(i))
+		f8e5m2Table[i] = f8e5m2ToF32(byte(i))
+	}
+}
+
 // f8e4m3ToF32 decodes one F8_E4M3 byte.
 func f8e4m3ToF32(b byte) float32 {
 	e := int(b>>3) & 0xF

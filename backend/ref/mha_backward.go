@@ -58,6 +58,30 @@ func mhaBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.
 	dK := tensor.NewOn(ctx.Device(), k.Dtype(), k.Shape())
 	dV := tensor.NewOn(ctx.Device(), v.Dtype(), v.Shape())
 
+	// Devirtualised typed core (§T646 follow-up): inputs exposed once as flat
+	// []float64 (exact widening), gradients accumulated through a generic
+	// refFloat core so the F32 instantiation reproduces the generic path's
+	// per-update widen/add/narrow sequence exactly — bit-identical.
+	if q.Dtype() == k.Dtype() && q.Dtype() == v.Dtype() && q.Dtype() == g.Dtype() {
+		if qs, ok := f64Data(q); ok {
+			ks, _ := f64Data(k)
+			vs, _ := f64Data(v)
+			gs, _ := f64Data(g)
+			kdm := k.Shape()[1]
+			switch q.Dtype() {
+			case tensor.F64:
+				mhaBackwardCore(qs, ks, vs, gs,
+					dQ.Storage().F64(), dK.Storage().F64(), dV.Storage().F64(),
+					seq, dm, dk, kdm, heads, rep, window, causal, scale, slopes)
+			case tensor.F32:
+				mhaBackwardCore(qs, ks, vs, gs,
+					dQ.Storage().F32(), dK.Storage().F32(), dV.Storage().F32(),
+					seq, dm, dk, kdm, heads, rep, window, causal, scale, slopes)
+			}
+			return []*tensor.Tensor{dQ, dK, dV}, nil
+		}
+	}
+
 	a := make([]float64, seq)  // softmax weights for the current (head,row)
 	dA := make([]float64, seq) // grad w.r.t. those weights
 	for h := range heads {
@@ -121,6 +145,85 @@ func mhaBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.
 		}
 	}
 	return []*tensor.Tensor{dQ, dK, dV}, nil
+}
+
+// mhaBackwardCore runs the SDPA backward over flat row-major slices. Reads come
+// from exact-widened []float64; writes go to []T with every intermediate store
+// narrowed for T=float32 (identical to the generic SetF64(AtF64+δ) chain; for
+// T=float64 the conversions are identities). Loop structure and accumulation
+// order match the generic loops exactly — bit-identical.
+func mhaBackwardCore[T refFloat](qs, ks, vs, gs []float64, dqs, dks, dvs []T,
+	seq, dm, dk, kdm, heads, rep, window int, causal bool, scale float64, slopes []float64) {
+	a := make([]float64, seq)  // softmax weights for the current (head,row)
+	dA := make([]float64, seq) // grad w.r.t. those weights
+	for h := 0; h < heads; h++ {
+		qOff := h * dk
+		kvOff := (h / rep) * dk
+		for i := 0; i < seq; i++ {
+			jmax := seq
+			if causal {
+				jmax = i + 1
+			}
+			jmin := 0
+			if window > 0 {
+				if lo := i - window + 1; lo > 0 { // sq==sk → abs pos = i
+					jmin = lo
+				}
+			}
+			qrow := qs[i*dm+qOff : i*dm+qOff+dk]
+			// recompute A[i,:] (same as forward)
+			m := math.Inf(-1)
+			for j := jmin; j < jmax; j++ {
+				krow := ks[j*kdm+kvOff : j*kdm+kvOff+dk]
+				var s float64
+				for d, qv := range qrow {
+					s += qv * krow[d]
+				}
+				s *= scale
+				if slopes != nil {
+					s += slopes[h] * float64(j-i) // ALiBi bias (sq==sk → abs pos = i)
+				}
+				a[j] = s
+				if s > m {
+					m = s
+				}
+			}
+			var sum float64
+			for j := jmin; j < jmax; j++ {
+				a[j] = math.Exp(a[j] - m)
+				sum += a[j]
+			}
+			for j := jmin; j < jmax; j++ {
+				a[j] /= sum
+			}
+			// dV[j] += A[i,j]·dO[i] ; dA[i,j] = dO[i]·V[j]
+			grow := gs[i*dm+qOff : i*dm+qOff+dk]
+			var dot float64
+			for j := jmin; j < jmax; j++ {
+				aj := a[j]
+				vrow := vs[j*kdm+kvOff : j*kdm+kvOff+dk]
+				dvrow := dvs[j*kdm+kvOff : j*kdm+kvOff+dk]
+				var dav float64
+				for d, gid := range grow {
+					dvrow[d] = T(float64(dvrow[d]) + aj*gid)
+					dav += gid * vrow[d]
+				}
+				dA[j] = dav
+				dot += dav * aj
+			}
+			// dS = A⊙(dA − dot); dQ/dK via bilinear form with scale
+			dqrow := dqs[i*dm+qOff : i*dm+qOff+dk]
+			for j := jmin; j < jmax; j++ {
+				dS := scale * a[j] * (dA[j] - dot)
+				krow := ks[j*kdm+kvOff : j*kdm+kvOff+dk]
+				dkrow := dks[j*kdm+kvOff : j*kdm+kvOff+dk]
+				for d := range dqrow {
+					dqrow[d] = T(float64(dqrow[d]) + dS*krow[d])
+					dkrow[d] = T(float64(dkrow[d]) + dS*qrow[d])
+				}
+			}
+		}
+	}
 }
 
 func init() {

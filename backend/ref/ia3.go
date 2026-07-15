@@ -30,6 +30,26 @@ func ia3Kernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*t
 	}
 	rows := x.Numel() / d
 	out := tensor.NewOn(ctx.Device(), x.Dtype(), x.Shape())
+	// Devirtualised typed core (§T646 follow-up): flat []float64 views replace
+	// the per-element Unravel alloc + AtF64/SetF64 dispatch; flat pos r·d+j IS
+	// the row-major index. Same multiply, F32 rounds only the STORED result —
+	// bit-identical.
+	if xs, xok := f64Data(x); xok {
+		if ls, lok := f64Data(l); lok {
+			if os, flush, ook := outF64(out); ook {
+				for r := range rows {
+					xrow := xs[r*d : r*d+d]
+					orow := os[r*d : r*d+d]
+					for j, v := range xrow {
+						orow[j] = v * ls[j]
+					}
+				}
+				flush()
+				return []*tensor.Tensor{out}, nil
+			}
+		}
+	}
+	// Generic fallback for exotic dtypes (verbatim original loop).
 	for r := range rows {
 		for j := range d {
 			idx := tensor.Unravel(r*d+j, x.Shape())

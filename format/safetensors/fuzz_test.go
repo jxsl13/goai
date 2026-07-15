@@ -31,6 +31,41 @@ func FuzzLoad(f *testing.F) {
 	})
 }
 
+// §V15 regression: the shape-product cap must be overflow-safe. The old
+// post-multiply check wrapped uint64 — shape [2^40, 2^40] gives 2^80 ≡ 0 —
+// so a hostile header passed the cap and Load returned a nil-error tensor
+// claiming 2^80 elements over empty storage.
+func TestHostileNumelOverflow(t *testing.T) {
+	mk := func(shape string) []byte {
+		hdr := `{"t":{"dtype":"F32","shape":` + shape + `,"data_offsets":[0,0]}}`
+		for len(hdr)%8 != 0 {
+			hdr += " "
+		}
+		var b bytes.Buffer
+		binary.Write(&b, binary.LittleEndian, uint64(len(hdr)))
+		b.WriteString(hdr)
+		return b.Bytes()
+	}
+	cases := map[string][]byte{
+		"wrap to zero [2^40,2^40]":     mk("[1099511627776,1099511627776]"),
+		"wrap [2^30,2^30,2^30,2^30]":   mk("[1073741824,1073741824,1073741824,1073741824]"),
+		"over cap plain [2^40+1 x 2]":  mk("[1099511627777,2]"),
+		"over cap product [2^39,2^39]": mk("[549755813888,549755813888]"),
+	}
+	for name, data := range cases {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("%s: panicked: %v", name, r)
+				}
+			}()
+			if _, _, err := Load(bytes.NewReader(data)); err == nil {
+				t.Errorf("%s: must error, cap bypassed", name)
+			}
+		}()
+	}
+}
+
 // FuzzRoundTrip: any tensor we build must survive Save→Load bit-exactly (NaN
 // included), across both dtypes and small shapes.
 func FuzzRoundTrip(f *testing.F) {

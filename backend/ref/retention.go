@@ -35,6 +35,52 @@ func retentionKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.At
 	}
 
 	out := tensor.NewOn(ctx.Device(), q.Dtype(), tensor.Shape{l, dv})
+	// Devirtualised typed core (§T646 follow-up): flat []float64 views replace
+	// the per-element AtF64 dispatch; the p buffer is hoisted out of the n loop
+	// and the decay powers γ^t are precomputed once (same math.Pow calls with the
+	// same operands the inner loop made — identical values). The P·V product is
+	// restructured m-outer/j-inner for contiguous V rows, but each out[n,j] still
+	// sums p[m]·v[m,j] in the SAME ascending-m order — bit-identical.
+	if qs, qok := f64Data(q); qok {
+		if ks, kok := f64Data(k); kok {
+			if vs, vok := f64Data(v); vok {
+				if os, flush, ook := outF64(out); ook {
+					pow := make([]float64, l)
+					for t := range pow {
+						pow[t] = math.Pow(g, float64(t))
+					}
+					p := make([]float64, l)
+					obuf := make([]float64, dv)
+					for n := range l {
+						// P_nm = (Σ_i Q[n,i]·K[m,i]) · γ^(n−m) for m ≤ n
+						qrow := qs[n*dk : n*dk+dk]
+						for m := 0; m <= n; m++ {
+							krow := ks[m*dk : m*dk+dk]
+							var a float64
+							for i, qv := range qrow {
+								a += qv * krow[i]
+							}
+							p[m] = a * pow[n-m]
+						}
+						for j := range obuf {
+							obuf[j] = 0
+						}
+						for m := 0; m <= n; m++ {
+							pm := p[m]
+							vrow := vs[m*dv : m*dv+dv]
+							for j, vv := range vrow {
+								obuf[j] += pm * vv
+							}
+						}
+						copy(os[n*dv:n*dv+dv], obuf)
+					}
+					flush()
+					return []*tensor.Tensor{out}, nil
+				}
+			}
+		}
+	}
+	// Generic fallback for exotic dtypes (verbatim original loop).
 	for n := range l {
 		// P_nm = (Σ_i Q[n,i]·K[m,i]) · γ^(n−m) for m ≤ n, i over the key dim dk
 		p := make([]float64, n+1)

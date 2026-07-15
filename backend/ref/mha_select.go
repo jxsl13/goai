@@ -56,6 +56,74 @@ func mhaSelectKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.At
 
 	out := tensor.NewOn(ctx.Device(), q1.Dtype(), tensor.Shape{sq, dm})
 	row := make([]float64, sk)
+	// Devirtualised typed core (§T646 follow-up): flat []float64 views replace
+	// the per-element AtF64 dispatch. The output accumulation is restructured
+	// j-outer/d-inner for contiguous V rows, but each o[d] still sums
+	// (row[j]/sum)·v[j,d] in the SAME ascending-j order — bit-identical.
+	qs1, ok1 := f64Data(q1)
+	ks1, ok2 := f64Data(k1)
+	qs2, ok3 := f64Data(q2)
+	ks2, ok4 := f64Data(k2)
+	vs, ok5 := f64Data(v)
+	sels, ok6 := f64Data(sel)
+	if ok1 && ok2 && ok3 && ok4 && ok5 && ok6 {
+		if os, flush, ook := outF64(out); ook {
+			kdm := kvHeads * dk
+			obuf := make([]float64, dk)
+			for h := range heads {
+				qOff := h * dk
+				kvOff := (h / rep) * dk
+				for i := range sq {
+					srow := sels[i*sk : i*sk+sk]
+					m := math.Inf(-1)
+					for j, sv := range srow {
+						if math.IsInf(sv, -1) {
+							row[j] = math.Inf(-1)
+							continue
+						}
+						qrow, krow := qs1[i*dm+qOff:i*dm+qOff+dk], ks1[j*kdm+kvOff:j*kdm+kvOff+dk]
+						if sv != 0 {
+							qrow, krow = qs2[i*dm+qOff:i*dm+qOff+dk], ks2[j*kdm+kvOff:j*kdm+kvOff+dk]
+						}
+						var s float64
+						for d, qv := range qrow {
+							s += qv * krow[d]
+						}
+						s *= scale
+						row[j] = s
+						if s > m {
+							m = s
+						}
+					}
+					var sum float64
+					for j := range sk {
+						if math.IsInf(row[j], -1) {
+							row[j] = 0
+							continue
+						}
+						row[j] = math.Exp(row[j] - m)
+						sum += row[j]
+					}
+					for d := range obuf {
+						obuf[d] = 0
+					}
+					if sum > 0 {
+						for j := range sk {
+							w := row[j] / sum
+							vrow := vs[j*kdm+kvOff : j*kdm+kvOff+dk]
+							for d, vv := range vrow {
+								obuf[d] += w * vv
+							}
+						}
+					}
+					copy(os[i*dm+qOff:i*dm+qOff+dk], obuf)
+				}
+			}
+			flush()
+			return []*tensor.Tensor{out}, nil
+		}
+	}
+	// Generic fallback for exotic dtypes (verbatim original loops).
 	for h := range heads {
 		qOff := h * dk
 		kvOff := (h / rep) * dk

@@ -39,10 +39,11 @@ func dequantQ2_K(shape tensor.Shape, raw []byte) (*tensor.Tensor, error) {
 					is++
 					dl := d * float32(sc&0xF)
 					ml := dmin * float32(sc>>4)
-					for l := range 16 {
-						dst[yi] = dl*float32((q[l+g]>>shift)&3) - ml
-						yi++
+					y := dst[yi : yi+16]
+					for l := range y {
+						y[l] = dl*float32((q[l+g]>>shift)&3) - ml
 					}
+					yi += 16
 				}
 				shift += 2
 			}
