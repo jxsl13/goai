@@ -4,6 +4,18 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — general backend now covers a full transformer layer: OpMHA added (worker linux-amd64, 2026-07-15)
+- Adds `OpMHA` (grouped-query attention) to the general CUDA backend. With the prior
+  ops this completes the transformer-layer set — `backend.Get(CUDA)` now runs MatMul,
+  SiLU, GELU, Add, Mul, Softmax, RMSNorm, LayerNorm, RoPE **and** MHA on the GPU, so a
+  whole Llama/GPT block executes through the generic `backend.Execute` path on-device
+  (previously everything but MatMul fell back to the CPU reference).
+- MHA covers GQA + causal + a pre-softmax score scale (via `Recorder.MHA`), including the
+  KV-cache decode shape (Q shorter than K/V). ALiBi, sliding-window (`window < sk`) and any
+  unsupported shape fall back to the reference, so the result never changes. Validated:
+  `TestCUDAGeneralOps` cross-checks standard / GQA / decode MHA (plus the other ten ops)
+  against the reference within tolerance.
+
 ### CUDA — general backend gains RMSNorm/LayerNorm/RoPE (worker linux-amd64, 2026-07-15)
 - Extends the general CUDA backend (after SiLU/GELU/Add/Mul/Softmax) with `OpRMSNorm`,
   `OpLayerNorm` and `OpRoPE` on the GPU (F32). With `OpMatMul` these cover almost every op

@@ -8,6 +8,7 @@ package cuda
 import "C"
 
 import (
+	"math"
 	"unsafe"
 
 	"github.com/jxsl13/goai/backend"
@@ -206,6 +207,74 @@ func ropeF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]
 		}
 	}
 	return refFallback(ctx, backend.OpRoPE, in, attrs)
+}
+
+// mhaF32 runs (grouped-query) multi-head attention on the GPU: Q,K,V are 2D [seq,dmodel]
+// (K/V may be longer than Q for KV-cache decode), causal + score-scale + GQA supported via
+// Recorder.MHA. ALiBi, sliding-window (window < sk) and score shapes the device path can't
+// serve fall back to the reference, so the result never changes.
+func mhaF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
+	pa, ok := attrs.(backend.AttnAttrs)
+	if ok && len(in) == 3 && in[0].Dtype() == tensor.F32 && in[1].Dtype() == tensor.F32 && in[2].Dtype() == tensor.F32 &&
+		in[0].Ndim() == 2 && in[1].Ndim() == 2 && in[2].Ndim() == 2 {
+		pa = pa.WithDefaults()
+		q, k, v := in[0], in[1], in[2]
+		sq, dm := q.Shape()[0], q.Shape()[1]
+		sk := k.Shape()[0]
+		heads, kvHeads := pa.Heads, pa.KVHeads
+		// Only the plain (no-ALiBi) GQA-causal path is on device; everything else → ref.
+		if !pa.ALiBi && heads > 0 && dm%heads == 0 && kvHeads > 0 && heads%kvHeads == 0 {
+			dk := dm / heads
+			if k.Shape()[1] == kvHeads*dk && v.Shape().Equal(k.Shape()) && sq <= sk &&
+				!(pa.Window > 0 && pa.Window < sk) {
+				if out, done := mhaDevice(q, k, v, sq, sk, dm, heads, kvHeads, dk, pa); done {
+					return []*tensor.Tensor{out}, nil
+				}
+			}
+		}
+	}
+	return refFallback(ctx, backend.OpMHA, in, attrs)
+}
+
+func mhaDevice(q, k, v *tensor.Tensor, sq, sk, dm, heads, kvHeads, dk int, pa backend.AttnAttrs) (*tensor.Tensor, bool) {
+	dq, err := UploadF32(q)
+	if err != nil {
+		return nil, false
+	}
+	defer dq.Free()
+	dkb, err := UploadF32(k)
+	if err != nil {
+		return nil, false
+	}
+	defer dkb.Free()
+	dv, err := UploadF32(v)
+	if err != nil {
+		return nil, false
+	}
+	defer dv.Free()
+	out, err := NewDeviceF32(sq, dm)
+	if err != nil {
+		return nil, false
+	}
+	defer out.Free()
+	rec, err := NewRecorder()
+	if err != nil {
+		return nil, false
+	}
+	defer rec.Free()
+	causal := 0
+	if pa.Causal {
+		causal = 1
+	}
+	scale := float32(pa.Scale / math.Sqrt(float64(dk)))
+	if rec.MHA(dq, dkb, dv, out, sq, sk, dm, heads, kvHeads, dk, causal, pa.Window, scale) != nil {
+		return nil, false
+	}
+	h, err := out.ToHost()
+	if err != nil {
+		return nil, false
+	}
+	return h, true
 }
 
 func softmaxF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
