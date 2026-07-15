@@ -4,6 +4,17 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — Q8 GEMV is near its bandwidth ceiling (measurement, worker linux-amd64, 2026-07-15)
+- A clean device-only bandwidth probe (kernel only, no D2H download — the `[1,2048]²`
+  microbenchmark's µs is download-dominated and understates the kernel) shows the optimized
+  Q8 GEMV runs the real projection shapes at **70–92% of the RTX 3060's 360 GB/s peak**:
+  q/o 253, gate/up 306, down 286, output-head **330 GB/s (92%)**. This corrects the earlier
+  "≈30% of peak" figure (which conflated kernel + download) and establishes that the GEMV is
+  **near its ceiling** — a split-K restructure would chase at most the headroom on the
+  smallest, least-impactful projection. Conclusion: the residual decode gap vs llama.cpp is
+  attention/overhead, not the projections; further decode optimization should target fused
+  attention. Documented in `docs/benchmarking.md`; §PERF-GEMV-CEILING.
+
 ### CUDA — refreshed competitive benchmark: goai now within 1.0–1.23× of llama.cpp (worker linux-amd64, 2026-07-15)
 - Re-measured the full decode sweep with the optimized (vectorized + int4) Q8 GEMV. Graph
   decode tok/s rose across the board — Qwen-0.5B 271→316, TinyLlama 165→199, Qwen-1.5B
