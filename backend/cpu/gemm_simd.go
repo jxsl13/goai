@@ -246,8 +246,45 @@ func gemmF32(A, B, C []float32, m, k, n int) {
 		})
 		return
 	}
-	parallelWork(m, k*n, func(loRow, hiRow int) {
-		gemmF32BandDirect(A, B, C, loRow, hiRow, k, n)
+	// m ≥ 4: the fast path is the 4-row register tile (gemmF32BandDirect reuses each
+	// B load across 4 rows). Parallelising over ROWS alone starves it — a worker handed
+	// 1–3 leftover rows can't form a 4-row tile and falls to the no-B-reuse single-row
+	// remainder, and when m < 4·workers most cores stay idle. So grain over 4-ROW TILES,
+	// and — when there are fewer tiles than workers (small m) — also split COLUMNS, so
+	// every core runs a full 4-row tile with B-reuse. This lifts the medium-m regime
+	// (chunked prefill / batched + speculative decode) 2–3× (e.g. m=32 35→66, m=48 38→117
+	// GFLOP/s @2048²) with no change to the large-m GEMM (m=512 stays ≈230). Each
+	// (tile,col-block) range writes a disjoint C region and still accumulates each C[i][j]
+	// in one ascending-p pass, so the result is bit-identical.
+	rowTiles := (m + 3) / 4
+	workers := runtime.GOMAXPROCS(0)
+	if workers < 1 {
+		workers = 1
+	}
+	colBlocks := 1
+	if rowTiles < workers {
+		colBlocks = (workers + rowTiles - 1) / rowTiles
+	}
+	if colBlocks == 1 {
+		// Enough row tiles to fill every core — grain over tiles only.
+		parallelWork(rowTiles, 4*k*n, func(loT, hiT int) {
+			gemmF32BandDirect(A, B, C, loT*4, min(hiT*4, m), k, n)
+		})
+		return
+	}
+	jblk := (n + colBlocks - 1) / colBlocks
+	jblk = (jblk + 15) &^ 15 // whole 16-wide j-tiles
+	if jblk < 16 {
+		jblk = 16
+	}
+	colBlocks = (n + jblk - 1) / jblk
+	grains := rowTiles * colBlocks
+	parallelWork(grains, 4*k*jblk, func(loG, hiG int) {
+		for g := loG; g < hiG; g++ {
+			rt, cb := g/colBlocks, g%colBlocks
+			jLo := cb * jblk
+			gemmF32BandDirectCols(A, B, C, rt*4, min(rt*4+4, m), k, n, jLo, min(jLo+jblk, n))
+		}
 	})
 }
 

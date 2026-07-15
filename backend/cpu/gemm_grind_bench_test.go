@@ -61,6 +61,12 @@ func BenchmarkGemmDirF32_512x2048x2048(b *testing.B) { benchGemmF32Direct(b, 512
 func BenchmarkGemmDirF32_512x2048x8192(b *testing.B) { benchGemmF32Direct(b, 512, 2048, 8192) }
 func BenchmarkGemmDirF32_1x2048x2048(b *testing.B)   { benchGemmF32Direct(b, 1, 2048, 2048) } // decode GEMV shape
 
+// Medium-m shapes (batched / speculative decode, chunked prefill) — the 2D tile×column
+// grain regime where m < 4·cores. Regression guards for that split.
+func BenchmarkGemmDirF32_8x2048x2048(b *testing.B)  { benchGemmF32Direct(b, 8, 2048, 2048) }
+func BenchmarkGemmDirF32_32x2048x2048(b *testing.B) { benchGemmF32Direct(b, 32, 2048, 2048) }
+func BenchmarkGemmDirF32_32x5632x2048(b *testing.B) { benchGemmF32Direct(b, 32, 5632, 2048) } // down-proj
+
 // Odd shapes exercising tails (n%16, n%8, n%4, row remainder).
 func BenchmarkGemmDirF32_511x513x515(b *testing.B) { benchGemmF32Direct(b, 511, 513, 515) }
 

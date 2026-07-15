@@ -4,6 +4,19 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CPU — amd64 SIMD medium-m GEMM: 2.5–4.9× via 2D tile×column grains (worker linux-amd64, 2026-07-15)
+- The `GOEXPERIMENT=simd` F32 GEMM m ≥ 4 dispatch parallelized over rows, so a worker with
+  1–3 leftover rows fell to the no-B-reuse single-row remainder and, when `m < 4·cores`,
+  most cores idled — starving the batched/speculative-decode and chunked-prefill regime
+  (m ≈ 4–48). It now grains over 4-row tiles (which reuse each B load across 4 rows) and,
+  when there are fewer tiles than workers, splits columns too, so every core always runs a
+  full 4-row tile. Measured `[m,2048]·[2048,2048]` on 16 cores: m=4 15→73, m=8 21→79,
+  m=16 31→94, m=32 35→101, m=48 38→119 GFLOP/s (**2.5–4.9×**); down-proj `[32,5632]·[5632,2048]`
+  28→74. The large-m GEMM (m=512 ≈230) and the m=1 GEMV path are unchanged. Disjoint
+  (tile,column) C regions, ascending-p accumulation → bit-identical; parity vs the reference
+  holds across m and odd n (`TestGemmMediumMCrossReference`). amd64-only; scalar + CGO0 builds
+  unaffected.
+
 ### CUDA — T631 acceptance closed: policy-driven low-VRAM offload runs correctly (worker linux-amd64, 2026-07-15)
 - `TestCUDAHybridDecode` is now **policy-driven**: it simulates a VRAM cap, lets
   `PlanOffload` (PR #80) choose how many layers spill, and runs the hybrid GPU+CPU decode
