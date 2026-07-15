@@ -22,6 +22,10 @@
 //     no biases), assembled from the same verified primitives and loadable straight
 //     from safetensors weights or GGUF files — including quantized GGUF, which
 //     QuantLlama decodes directly from the ggml Q-blocks without dequantizing to f32.
+//     Beyond the autoregressive decoders: DiffusionLM, a LLaDA-style masked-diffusion
+//     model that generates non-autoregressively by iterative unmasking (bidirectional,
+//     not causal), and CLA, cross-layer attention that shares one group's keys/values
+//     across its layers to shrink the decode KV cache.
 //   - Sampling: a Sampler implementing the standard HuggingFace pipeline
 //     (temperature → top-k → top-p nucleus → min-p → epsilon/eta → locally-typical →
 //     multinomial), Mirostat adaptive sampling, and repetition / frequency / presence
