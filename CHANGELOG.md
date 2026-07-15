@@ -4,6 +4,19 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T655 — EAGLE speculative decoding (2026-07-15)
+- New `nlp.EagleHead` + `nlp.EagleGenerate`: EAGLE speculative decoding (Li et al. 2024,
+  arXiv:2401.15077). A small autoregressive DRAFT head predicts the base model's next
+  hidden FEATURE (fusing the next-token embedding with the current feature), chained to
+  draft several steps ahead; the base LM head turns drafted features into draft tokens,
+  and a single base forward pass verifies them — accepting the longest prefix that matches
+  greedy base decoding, so the output is LOSSLESS (token-for-token what plain greedy
+  decoding produces). EAGLE drafts at the feature level (more predictable than tokens),
+  distinct from Medusa's parallel token heads and from draft-model speculative decoding.
+  The head trains on a frozen base via ForwardHidden (feature MSE + a small token CE).
+  Verified: lossless equality with greedy for random and trained heads, acceptance rate
+  12%→54% after training, full gradcheck.
+
 ### T655 — BitNet b1.58: ternary quantization-aware training (2026-07-15)
 - New `nn.BitLinear`: a drop-in linear layer that TRAINS with 1.58-bit ternary weights
   (BitNet b1.58, Ma et al. 2024, arXiv:2402.17764). The forward pass uses ternary
