@@ -572,6 +572,19 @@ done:
     return d;
 }
 
+// cu_zero_f32 zeroes n floats on the stream (fixed-size KV cache init so masked
+// 0·V terms are 0·0, never 0·NaN from uninitialized memory).
+int cu_zero_f32(void* d, int n) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cudaMemsetAsync(d, 0, (size_t)n * sizeof(float), gStream) != cudaSuccess) { rc = -3; goto done; }
+    rc = 0;
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
 void cu_free_f32(void* dptr) {
     if (!dptr) return;
     pthread_mutex_lock(&gLock);
