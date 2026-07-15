@@ -1044,3 +1044,4 @@ from ≈42× to ≈3.3×. The residual is Apple's AMX matrix coprocessor, which 
 through Accelerate but pure-Go NEON cannot — a silicon limit, not a code limit. Run
 `GOEXPERIMENT=simd make bench-compare` to see it; the default `make bench-compare` uses the
 bit-exact scalar path. (T656.)
+ MHA and Conv2D were also routed through this f32-native GEMM (T657): MHA-forward ≈9.9→1.9 ms (torch-cpu gap 13×→2.6×), Conv2D/n8c64hw56 ≈57→281 GFLOP/s (gap 11×→2.2×) — same GOEXPERIMENT=simd gating.

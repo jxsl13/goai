@@ -25,3 +25,37 @@ func getF64(n int) *[]float64 {
 
 // putF64 returns a buffer to the pool.
 func putF64(bp *[]float64) { f64Scratch.Put(bp) }
+
+// f32Scratch pools the transient f32 buffers of the gemm-routed f32-native
+// MHA/Conv paths (f32NativeKernels builds). Same zero-on-get contract as
+// f64Scratch: im2col leaves padding entries untouched and the attention
+// score buffer relies on masked columns staying zero.
+var f32Scratch = sync.Pool{New: func() any { b := make([]float32, 0); return &b }}
+
+// getF32 returns a zeroed []float32 of length n from the pool.
+func getF32(n int) *[]float32 {
+	bp := f32Scratch.Get().(*[]float32)
+	if cap(*bp) < n {
+		*bp = make([]float32, n)
+	} else {
+		*bp = (*bp)[:n]
+		clear(*bp)
+	}
+	return bp
+}
+
+// putF32 returns a buffer to the pool.
+func putF32(bp *[]float32) { f32Scratch.Put(bp) }
+
+// getF32Raw returns a []float32 of length n from the pool WITHOUT zeroing —
+// for buffers every element of which is overwritten before use (packed
+// operands, store-semantics gemm outputs). Same pool as getF32.
+func getF32Raw(n int) *[]float32 {
+	bp := f32Scratch.Get().(*[]float32)
+	if cap(*bp) < n {
+		*bp = make([]float32, n)
+	} else {
+		*bp = (*bp)[:n]
+	}
+	return bp
+}
