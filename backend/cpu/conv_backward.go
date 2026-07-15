@@ -46,83 +46,107 @@ func conv2dBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backe
 	k := c * kh * kw
 	rows := n * ho * wo
 
-	// im2col of X (identical layout to the forward, §T24b) and dO as [rows, f].
+	// im2col of X (identical layout to the forward, §T24b) and dO as [rows, f],
+	// FUSED with the dXcols = dO·W band GEMM: dXcols row r needs only dO row r
+	// and wmat, so one rows-parallel pass fills the band and multiplies it —
+	// one fork/join instead of two, same per-row operations (bit-identical).
 	colsP, dOP, wmatP := getF64(rows*k), getF64(rows*f), getF64(f*k)
 	defer putF64(colsP)
 	defer putF64(dOP)
 	defer putF64(wmatP)
 	cols, dO, wmat := *colsP, *dOP, *wmatP // W row-major [F, C·KH·KW]
+	dXcolsP := getF64(rows * k)
+	defer putF64(dXcolsP)
+	dXcols := *dXcolsP
 	// devirtualized im2col(X) + dO + weight fill (§base-perf): concrete []T reads.
 	switch x.Dtype() {
 	case tensor.F64:
-		conv2dBwdFill(cols, dO, wmat, xc.Storage().F64(), wcont.Storage().F64(), gc.Storage().F64(), rows, k, f, ho, wo, c, kh, kw, s, p, h, wd)
+		xs, gs := xc.Storage().F64(), gc.Storage().F64()
+		for i, v := range wcont.Storage().F64() {
+			wmat[i] = float64(v)
+		}
+		parallelWork(rows, k+f+f*k, func(lo, hi int) {
+			conv2dBwdFillBand(cols, dO, xs, gs, lo, hi, k, f, ho, wo, c, kh, kw, s, p, h, wd)
+			gemmF64Band(dO, wmat, dXcols, lo, hi, f, k)
+		})
 	case tensor.F32:
-		conv2dBwdFill(cols, dO, wmat, xc.Storage().F32(), wcont.Storage().F32(), gc.Storage().F32(), rows, k, f, ho, wo, c, kh, kw, s, p, h, wd)
+		xs, gs := xc.Storage().F32(), gc.Storage().F32()
+		for i, v := range wcont.Storage().F32() {
+			wmat[i] = float64(v)
+		}
+		parallelWork(rows, k+f+f*k, func(lo, hi int) {
+			conv2dBwdFillBand(cols, dO, xs, gs, lo, hi, k, f, ho, wo, c, kh, kw, s, p, h, wd)
+			gemmF64Band(dO, wmat, dXcols, lo, hi, f, k)
+		})
 	default:
 		return nil, fmt.Errorf("cpu: unsupported dtype %v", x.Dtype())
 	}
 
-	// dW = colsᵀ · dO: materialize colsᵀ [k, rows] and run the band GEMM over its k rows.
-	colsTP := getF64(k * rows)
-	defer putF64(colsTP)
-	colsT := *colsTP
-	parallelWork(rows, k, func(lo, hi int) {
-		for r := lo; r < hi; r++ {
-			for kk := range k {
-				colsT[kk*rows+r] = cols[r*k+kk]
-			}
-		}
-	})
+	// dW = colsᵀ · dO: the transposed-A band GEMM reads cols [rows,k] directly —
+	// same ascending-r accumulation per element as materializing colsᵀ and running
+	// gemmF64Band (bit-identical), without the k·rows transpose pass + scratch
+	// (it was 12% of this kernel's profile, all strided writes).
 	dWtP := getF64(k * f)
 	defer putF64(dWtP)
 	dWt := *dWtP
 	parallelWork(k, rows*f, func(lo, hi int) {
-		gemmF64Band(colsT, dO, dWt, lo, hi, rows, f)
+		gemmATF64Band(cols, dO, dWt, lo, hi, k, rows, f)
 	})
 
-	// dXcols = dO · W, then col2im scatter-add (parallel over images — windows of the
-	// same image overlap, different images never share input pixels).
-	dXcolsP := getF64(rows * k)
-	defer putF64(dXcolsP)
-	dXcols := *dXcolsP
-	parallelWork(rows, f*k, func(lo, hi int) {
-		gemmF64Band(dO, wmat, dXcols, lo, hi, f, k)
-	})
+	// col2im scatter-add of dXcols + the dX store, fused per image (windows of the
+	// same image overlap; different images never share input pixels, so the dXf
+	// region AND the dX output block of an image are disjoint across tasks).
+	dX := tensor.NewOn(ctx.Device(), x.Dtype(), x.Shape())
+	dW := tensor.NewOn(ctx.Device(), w.Dtype(), w.Shape())
+	dB := tensor.NewOn(ctx.Device(), w.Dtype(), tensor.Shape{f})
 	dXfP := getF64(n * c * h * wd)
 	defer putF64(dXfP)
 	dXf := *dXfP
-	parallelWork(n, ho*wo*k, func(loN, hiN int) {
-		for ni := loN; ni < hiN; ni++ {
-			for rr := range ho * wo {
-				r := ni*ho*wo + rr
-				oy, ox := rr/wo, rr%wo
-				base := r * k
-				kk := 0
-				for ci := range c {
-					for ky := range kh {
-						iy := oy*s + ky - p
-						for kx := range kw {
-							ix := ox*s + kx - p
-							if iy >= 0 && iy < h && ix >= 0 && ix < wd {
-								dXf[((ni*c+ci)*h+iy)*wd+ix] += dXcols[base+kk]
-							}
-							kk++
+	chw := c * h * wd
+	col2im := func(ni int) {
+		for rr := range ho * wo {
+			r := ni*ho*wo + rr
+			oy, ox := rr/wo, rr%wo
+			base := r * k
+			kk := 0
+			for ci := range c {
+				for ky := range kh {
+					iy := oy*s + ky - p
+					for kx := range kw {
+						ix := ox*s + kx - p
+						if iy >= 0 && iy < h && ix >= 0 && ix < wd {
+							dXf[((ni*c+ci)*h+iy)*wd+ix] += dXcols[base+kk]
 						}
+						kk++
 					}
 				}
 			}
 		}
-	})
-
-	dX := tensor.NewOn(ctx.Device(), x.Dtype(), x.Shape())
-	dW := tensor.NewOn(ctx.Device(), w.Dtype(), w.Shape())
-	dB := tensor.NewOn(ctx.Device(), w.Dtype(), tensor.Shape{f})
-	// Scatter into the (fresh contiguous) grad tensors with typed writes — dX is a
-	// flat-aligned copy (the old Unravel(i) round-tripped to the same index i), dW is
-	// a [k,f]→[f,k] transpose by direct index (§base-perf, no per-element Unravel alloc).
+	}
 	switch x.Dtype() {
 	case tensor.F64:
-		copy(dX.Storage().F64(), dXf)
+		dx := dX.Storage().F64()
+		parallelWork(n, ho*wo*k+chw, func(loN, hiN int) {
+			for ni := loN; ni < hiN; ni++ {
+				col2im(ni)
+				copy(dx[ni*chw:(ni+1)*chw], dXf[ni*chw:(ni+1)*chw])
+			}
+		})
+	case tensor.F32:
+		dx := dX.Storage().F32()
+		parallelWork(n, ho*wo*k+chw, func(loN, hiN int) {
+			for ni := loN; ni < hiN; ni++ {
+				col2im(ni)
+				for i, v := range dXf[ni*chw : (ni+1)*chw] {
+					dx[ni*chw+i] = float32(v)
+				}
+			}
+		})
+	}
+	// dW is a [k,f]→[f,k] transpose by direct index (§base-perf, no per-element
+	// Unravel alloc).
+	switch w.Dtype() {
+	case tensor.F64:
 		dw := dW.Storage().F64()
 		for fi := 0; fi < f; fi++ {
 			for kk := 0; kk < k; kk++ {
@@ -130,10 +154,6 @@ func conv2dBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backe
 			}
 		}
 	case tensor.F32:
-		dx := dX.Storage().F32()
-		for i, v := range dXf {
-			dx[i] = float32(v)
-		}
 		dw := dW.Storage().F32()
 		for fi := 0; fi < f; fi++ {
 			for kk := 0; kk < k; kk++ {
@@ -142,12 +162,17 @@ func conv2dBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backe
 		}
 	}
 	// dBias in the reference's exact order: per filter over r ascending (n, oy, ox).
-	for fi := range f {
-		var sum float64
-		for r := range rows {
-			sum += dO[r*f+fi]
+	// One row-major pass with f accumulators — each filter's sum keeps ascending-r
+	// order (bit-identical) but dO is read contiguously instead of f strided columns.
+	bsum := make([]float64, f)
+	for r := 0; r < rows; r++ {
+		row := dO[r*f : r*f+f]
+		for fi, v := range row {
+			bsum[fi] += v
 		}
-		dB.SetF64(sum, fi)
+	}
+	for fi := range f {
+		dB.SetF64(bsum[fi], fi)
 	}
 	return []*tensor.Tensor{dX, dW, dB}, nil
 }
@@ -157,35 +182,66 @@ func init() {
 	std.add(backend.OpConv2DBackward, tensor.F64, conv2dBackwardKernel)
 }
 
-// conv2dBwdFill materializes X's im2col columns, the dO matrix, and the transposed
-// weight matrix from concrete []T slices for the conv backward (§base-perf) — direct
-// indexed reads instead of the getX/getW/getG per-element closures.
-func conv2dBwdFill[T normFloat](cols, dO, wmat []float64, xs, ws, gs []T, rows, k, f, ho, wo, c, kh, kw, s, p, h, wd int) {
-	parallelWork(rows, k+f, func(lo, hi int) {
-		for r := lo; r < hi; r++ {
-			ni := r / (ho * wo)
-			rem := r % (ho * wo)
-			oy, ox := rem/wo, rem%wo
-			base := r * k
-			kk := 0
-			for ci := 0; ci < c; ci++ {
-				for ky := 0; ky < kh; ky++ {
-					iy := oy*s + ky - p
-					for kx := 0; kx < kw; kx++ {
-						ix := ox*s + kx - p
-						if iy >= 0 && iy < h && ix >= 0 && ix < wd {
-							cols[base+kk] = float64(xs[((ni*c+ci)*h+iy)*wd+ix])
-						}
-						kk++
-					}
-				}
-			}
-			for fi := 0; fi < f; fi++ {
-				dO[r*f+fi] = float64(gs[((ni*f+fi)*ho+oy)*wo+ox])
+// gemmATF64Band computes rows [loRow,hiRow) of C[M,N] += Aᵀ·B where A is stored
+// row-major [K,M] (so Aᵀ[i][p] = A[p*m+i]) — the dW = colsᵀ·dO product without
+// materializing the transpose. Same 4-row register blocking as gemmF64Band and
+// the same ascending-p accumulation per C element, so the result is bit-identical
+// to transposing A and calling gemmF64Band (§V3-style order preservation).
+func gemmATF64Band(A, B, C []float64, loRow, hiRow, m, k, n int) {
+	i := loRow
+	for ; i+3 < hiRow; i += 4 {
+		c0 := C[(i+0)*n : (i+1)*n]
+		c1 := C[(i+1)*n : (i+2)*n]
+		c2 := C[(i+2)*n : (i+3)*n]
+		c3 := C[(i+3)*n : (i+4)*n]
+		for p := range k {
+			bp := B[p*n : (p+1)*n]
+			ap := A[p*m+i : p*m+i+4 : p*m+i+4]
+			a0, a1, a2, a3 := ap[0], ap[1], ap[2], ap[3]
+			for j, bv := range bp {
+				c0[j] += a0 * bv
+				c1[j] += a1 * bv
+				c2[j] += a2 * bv
+				c3[j] += a3 * bv
 			}
 		}
-	})
-	for i := range wmat {
-		wmat[i] = float64(ws[i])
+	}
+	for ; i < hiRow; i++ { // remainder rows
+		ci := C[i*n : (i+1)*n]
+		for p := range k {
+			aip := A[p*m+i]
+			bp := B[p*n : (p+1)*n]
+			for j, bv := range bp {
+				ci[j] += aip * bv
+			}
+		}
+	}
+}
+
+// conv2dBwdFillBand materializes X's im2col columns and the dO matrix for rows
+// [lo,hi) from concrete []T slices (§base-perf) — direct indexed reads instead of
+// the getX/getG per-element closures. Runs inside the fused fill+GEMM band pass.
+func conv2dBwdFillBand[T normFloat](cols, dO []float64, xs, gs []T, lo, hi, k, f, ho, wo, c, kh, kw, s, p, h, wd int) {
+	for r := lo; r < hi; r++ {
+		ni := r / (ho * wo)
+		rem := r % (ho * wo)
+		oy, ox := rem/wo, rem%wo
+		base := r * k
+		kk := 0
+		for ci := 0; ci < c; ci++ {
+			for ky := 0; ky < kh; ky++ {
+				iy := oy*s + ky - p
+				for kx := 0; kx < kw; kx++ {
+					ix := ox*s + kx - p
+					if iy >= 0 && iy < h && ix >= 0 && ix < wd {
+						cols[base+kk] = float64(xs[((ni*c+ci)*h+iy)*wd+ix])
+					}
+					kk++
+				}
+			}
+		}
+		for fi := 0; fi < f; fi++ {
+			dO[r*f+fi] = float64(gs[((ni*f+fi)*ho+oy)*wo+ox])
+		}
 	}
 }

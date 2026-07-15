@@ -292,13 +292,26 @@ func rmsNormBwd[T normFloat](x, gamma, up, dx, dgamma []T, rows, d int, eps floa
 			}
 		}
 	})
+	// Row-tiled column pass: each dγ_j still sums rows ascending (bit-identical
+	// values), but the worker walks its [lo,hi) column band row-major — contiguous
+	// chunks per row instead of one full stride-d column per j.
+	// The explicit float64() conversion is the spec's FMA-fusion barrier: it pins
+	// each row's term to plain mul+add so the sum is contraction-independent (the
+	// unfenced form drifted past the ref tolerance when unrelated package edits
+	// changed gc's contraction choice for this loop).
 	parallelWork(d, 2*rows, func(lo, hi int) {
-		for j := lo; j < hi; j++ {
-			var acc float64
-			for r := 0; r < rows; r++ {
-				acc += float64(up[r*d+j]) * float64(x[r*d+j]) * inv[r]
+		acc := make([]float64, hi-lo)
+		for r := 0; r < rows; r++ {
+			base := r * d
+			ivr := inv[r]
+			ur := up[base+lo : base+hi]
+			xr := x[base+lo : base+hi]
+			for jj, uv := range ur {
+				acc[jj] += float64(float64(uv) * float64(xr[jj]) * ivr)
 			}
-			dgamma[j] = T(acc)
+		}
+		for jj, a := range acc {
+			dgamma[lo+jj] = T(a)
 		}
 	})
 }
@@ -422,16 +435,31 @@ func layerNormBwd[T normFloat](x, gamma, up, dx, dgamma, dbeta []T, rows, d int,
 			}
 		}
 	})
+	// Row-tiled column pass (see rmsNormBwd): ascending-row per-column sums are
+	// preserved bit-identically; memory is walked row-major.
 	parallelWork(d, 3*rows, func(lo, hi int) {
-		for j := lo; j < hi; j++ {
-			var dg, db float64
-			for r := 0; r < rows; r++ {
-				xhat := (float64(x[r*d+j]) - mean[r]) * inv[r]
-				dg += float64(up[r*d+j]) * xhat
-				db += float64(up[r*d+j])
+		w := hi - lo
+		dg := make([]float64, w)
+		db := make([]float64, w)
+		for r := 0; r < rows; r++ {
+			base := r * d
+			mu, ivr := mean[r], inv[r]
+			ur := up[base+lo : base+hi]
+			xr := x[base+lo : base+hi]
+			for jj, uv := range ur {
+				xhat := (float64(xr[jj]) - mu) * ivr
+				u := float64(uv)
+				// FMA fence (see rmsNormBwd): ref's devirtualized core rounds
+				// g·x̂ through a scratch slice before accumulating, i.e. plain
+				// mul-then-add — the explicit conversion pins the same semantics
+				// here regardless of gc's contraction mood (§V9 note).
+				dg[jj] += float64(u * xhat)
+				db[jj] += u
 			}
-			dgamma[j] = T(dg)
-			dbeta[j] = T(db)
+		}
+		for jj := 0; jj < w; jj++ {
+			dgamma[lo+jj] = T(dg[jj])
+			dbeta[lo+jj] = T(db[jj])
 		}
 	})
 }

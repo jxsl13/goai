@@ -97,18 +97,23 @@ func (g mhaGeo) bounds(i int) (int, int) {
 func mhaFwd[T float32 | float64](q, k, v, out []T, g mhaGeo) {
 	parallelWork(g.heads*g.sq, g.sk*g.dk, func(lo, hi int) {
 		row := make([]float64, g.sk)
+		acc := make([]float64, g.dk)
 		for t := lo; t < hi; t++ {
 			h, i := t/g.sq, t%g.sq
 			qOff := h * g.dk
 			kvOff := (h / g.rep) * g.dk
 			jmin, jmax := g.bounds(i)
 			qBase := i*g.dm + qOff
+			// Hoisted row subslices + range loops (BCE; measured 2.4× on the
+			// backward's identical pattern). Values / op order unchanged.
+			qr := q[qBase : qBase+g.dk : qBase+g.dk]
 			m := math.Inf(-1)
 			for j := jmin; j < jmax; j++ {
 				kBase := j*g.kvDM + kvOff
+				kr := k[kBase : kBase+g.dk : kBase+g.dk]
 				var s float64
-				for d := 0; d < g.dk; d++ {
-					s += float64(q[qBase+d]) * float64(k[kBase+d])
+				for d, qv := range qr {
+					s += float64(qv) * float64(kr[d])
 				}
 				s *= g.scale
 				if g.slopes != nil {
@@ -124,12 +129,23 @@ func mhaFwd[T float32 | float64](q, k, v, out []T, g mhaGeo) {
 				row[j] = math.Exp(row[j] - m)
 				sum += row[j]
 			}
+			// Normalize once per key (row[j]/sum is the identical float either
+			// way) and accumulate j-outer/d-inner: each out[d] still sums its
+			// weighted values in ascending-j order — bit-identical — but v is
+			// now read contiguously and the sk·dk divisions collapse to sk.
 			for d := 0; d < g.dk; d++ {
-				var o float64
-				for j := jmin; j < jmax; j++ {
-					o += (row[j] / sum) * float64(v[j*g.kvDM+kvOff+d])
+				acc[d] = 0
+			}
+			for j := jmin; j < jmax; j++ {
+				p := row[j] / sum
+				vBase := j*g.kvDM + kvOff
+				vr := v[vBase : vBase+g.dk : vBase+g.dk]
+				for d, vv := range vr {
+					acc[d] += p * float64(vv)
 				}
-				out[qBase+d] = T(o)
+			}
+			for d := 0; d < g.dk; d++ {
+				out[qBase+d] = T(acc[d])
 			}
 		}
 	})
@@ -218,12 +234,18 @@ func mhaBwd[T float32 | float64](q, k, v, g, dQ, dK, dV []T, geo mhaGeo) {
 						}
 					}
 					qBase := i*dm + qOff
+					// Hoisted row subslices: range-driven inner loops let the
+					// compiler elide bounds checks and strength-reduce the
+					// addressing; values and per-element op order are unchanged.
+					qr := q[qBase : qBase+dk : qBase+dk]
+					gr := g[qBase : qBase+dk : qBase+dk]
 					m := math.Inf(-1)
 					for j := jmin; j < jmax; j++ {
 						kBase := j*kvDM + kvOff
+						kr := k[kBase : kBase+dk : kBase+dk]
 						var s float64
-						for d := range dk {
-							s += float64(q[qBase+d]) * float64(k[kBase+d])
+						for d, qv := range qr {
+							s += float64(qv) * float64(kr[d])
 						}
 						s *= scale
 						if slopes != nil {
@@ -246,14 +268,17 @@ func mhaBwd[T float32 | float64](q, k, v, g, dQ, dK, dV []T, geo mhaGeo) {
 					for j := jmin; j < jmax; j++ {
 						kvBase := j*kvDM + kvOff
 						accBase := j * dk
+						vr := v[kvBase : kvBase+dk : kvBase+dk]
+						dvr := dvAcc[accBase : accBase+dk : accBase+dk]
+						aj := a[j]
 						var dav float64
-						for d := range dk {
-							gid := float64(g[qBase+d])
-							dvAcc[accBase+d] += a[j] * gid
-							dav += gid * float64(v[kvBase+d])
+						for d, gv := range gr {
+							gid := float64(gv)
+							dvr[d] += aj * gid
+							dav += gid * float64(vr[d])
 						}
 						dA[j] = dav
-						dot += dav * a[j]
+						dot += dav * aj
 					}
 					for d := range dqRow {
 						dqRow[d] = 0
@@ -262,9 +287,11 @@ func mhaBwd[T float32 | float64](q, k, v, g, dQ, dK, dV []T, geo mhaGeo) {
 						dS := scale * a[j] * (dA[j] - dot)
 						kvBase := j*kvDM + kvOff
 						accBase := j * dk
-						for d := range dk {
-							dqRow[d] += dS * float64(k[kvBase+d])
-							dkAcc[accBase+d] += dS * float64(q[qBase+d])
+						kr := k[kvBase : kvBase+dk : kvBase+dk]
+						dkr := dkAcc[accBase : accBase+dk : accBase+dk]
+						for d, qv := range qr {
+							dqRow[d] += dS * float64(kr[d])
+							dkr[d] += dS * float64(qv)
 						}
 					}
 					for d := range dk {

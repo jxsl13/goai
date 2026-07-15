@@ -62,12 +62,14 @@ func flashAttnKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend
 func flashAttnTyped[T float32 | float64](q, k, v, out []T, seq, dm, dk, dkv, rep, heads, block int, causal bool, scale float64) {
 	parallelWork(heads*seq, seq*dk, func(lo, hi int) {
 		acc := make([]float64, dk)
+		pv := make([]float64, dk)
 		p := make([]float64, block)
 		for t := lo; t < hi; t++ {
 			h, i := t/seq, t%seq
 			qOff := h * dk
 			kvOff := (h / rep) * dk
 			qBase := i*dm + qOff
+			qr := q[qBase : qBase+dk : qBase+dk] // hoisted rows + range loops (BCE)
 			jmax := seq
 			if causal {
 				jmax = i + 1
@@ -82,9 +84,10 @@ func flashAttnTyped[T float32 | float64](q, k, v, out []T, seq, dm, dk, dkv, rep
 				mBlk := math.Inf(-1)
 				for j := j0; j < j1; j++ {
 					kBase := j*dkv + kvOff
+					kr := k[kBase : kBase+dk : kBase+dk]
 					var s float64
-					for d := range dk {
-						s += float64(q[qBase+d]) * float64(k[kBase+d])
+					for d, qv := range qr {
+						s += float64(qv) * float64(kr[d])
 					}
 					s *= scale
 					p[j-j0] = s
@@ -104,12 +107,21 @@ func flashAttnTyped[T float32 | float64](q, k, v, out []T, seq, dm, dk, dkv, rep
 					pSum += pv
 				}
 				l = corr*l + pSum
+				// j-outer/d-inner: each pv[d] still sums p_j·v[j,d] in ascending-j
+				// order (bit-identical to the d-outer form) with contiguous v reads.
 				for d := range dk {
-					var pv float64
-					for j := j0; j < j1; j++ {
-						pv += p[j-j0] * float64(v[j*dkv+kvOff+d])
+					pv[d] = 0
+				}
+				for j := j0; j < j1; j++ {
+					pj := p[j-j0]
+					vBase := j*dkv + kvOff
+					vr := v[vBase : vBase+dk : vBase+dk]
+					for d, vv := range vr {
+						pv[d] += pj * float64(vv)
 					}
-					acc[d] = corr*acc[d] + pv
+				}
+				for d := range dk {
+					acc[d] = corr*acc[d] + pv[d]
 				}
 				m = mNew
 			}
@@ -171,20 +183,32 @@ func retentionKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend
 func retentionFwd[T normFloat](qs, ks, vs, os []T, l, dk, dv int, decay []float64) {
 	parallelWork(l, l*(dk+dv)/2, func(lo, hi int) {
 		p := make([]float64, l)
+		acc := make([]float64, dv)
 		for n := lo; n < hi; n++ {
+			qr := qs[n*dk : n*dk+dk : n*dk+dk] // hoisted rows + range loops (BCE)
 			for m := 0; m <= n; m++ {
+				kr := ks[m*dk : m*dk+dk : m*dk+dk]
 				var a float64
-				for i := 0; i < dk; i++ {
-					a += float64(qs[n*dk+i]) * float64(ks[m*dk+i])
+				for i, qv := range qr {
+					a += float64(qv) * float64(kr[i])
 				}
 				p[m] = a * decay[n-m]
 			}
+			// m-outer/j-inner: each os[n,j] still sums p[m]·v[m,j] in ascending-m
+			// order (bit-identical to the j-outer form) but vs is read contiguously
+			// instead of column-strided.
 			for j := 0; j < dv; j++ {
-				var acc float64
-				for m := 0; m <= n; m++ {
-					acc += p[m] * float64(vs[m*dv+j])
+				acc[j] = 0
+			}
+			for m := 0; m <= n; m++ {
+				pm := p[m]
+				vRow := vs[m*dv : m*dv+dv : m*dv+dv]
+				for j, vv := range vRow {
+					acc[j] += pm * float64(vv)
 				}
-				os[n*dv+j] = T(acc)
+			}
+			for j := 0; j < dv; j++ {
+				os[n*dv+j] = T(acc[j])
 			}
 		}
 	})
@@ -238,14 +262,17 @@ func retentionBwd[T normFloat](qs, ks, vs, gs, dqs, dks, dvs []T, l, kd, vd int,
 			for i := range row {
 				row[i] = 0
 			}
+			gr := gs[n*vd : n*vd+vd : n*vd+vd] // hoisted rows + range loops (BCE)
 			for m := 0; m <= n; m++ {
+				vr := vs[m*vd : m*vd+vd : m*vd+vd]
 				var dp float64
-				for j := range vd {
-					dp += float64(gs[n*vd+j]) * float64(vs[m*vd+j])
+				for j, gv := range gr {
+					dp += float64(gv) * float64(vr[j])
 				}
 				dA := dp * decay[n-m]
-				for i := range kd {
-					row[i] += dA * float64(ks[m*kd+i])
+				kr := ks[m*kd : m*kd+kd : m*kd+kd]
+				for i, kv := range kr {
+					row[i] += dA * float64(kv)
 				}
 			}
 			for i := range kd {
@@ -264,21 +291,25 @@ func retentionBwd[T normFloat](qs, ks, vs, gs, dqs, dks, dvs []T, l, kd, vd int,
 			for j := range rowV {
 				rowV[j] = 0
 			}
+			kr := ks[m*kd : m*kd+kd : m*kd+kd] // hoisted rows + range loops (BCE)
+			vm := vs[m*vd : m*vd+vd : m*vd+vd]
 			for n := m; n < l; n++ {
+				qr := qs[n*kd : n*kd+kd : n*kd+kd]
 				var a float64
-				for i := range kd {
-					a += float64(qs[n*kd+i]) * float64(ks[m*kd+i])
+				for i, qv := range qr {
+					a += float64(qv) * float64(kr[i])
 				}
 				pnm := a * decay[n-m]
+				gr := gs[n*vd : n*vd+vd : n*vd+vd]
 				var dp float64
-				for j := range vd {
-					gnj := float64(gs[n*vd+j])
-					dp += gnj * float64(vs[m*vd+j])
+				for j, gv := range gr {
+					gnj := float64(gv)
+					dp += gnj * float64(vm[j])
 					rowV[j] += pnm * gnj
 				}
 				dA := dp * decay[n-m]
-				for i := range kd {
-					rowK[i] += dA * float64(qs[n*kd+i])
+				for i, qv := range qr {
+					rowK[i] += dA * float64(qv)
 				}
 			}
 			for i := range kd {
