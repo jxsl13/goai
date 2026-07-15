@@ -1029,6 +1029,33 @@ the whole warp. Parity is gated structurally: the test reference dequantizes the
 blocks the kernel reads, so the tolerance (1e-5) covers only f32 summation order, never
 the quantization error.
 
+## Unified serving: batched f16 prefill feeding the Q4_K decoder (worker linux-amd64)
+
+The engine's last structural serving weakness was prompt processing: the graph decoder
+consumed prompts token-by-token at decode speed. The unified path runs the prompt
+through the f16 tensor-core prefill stack ONCE (batched), appends each layer's post-RoPE
+K/V rows into the Q4_K decoder's caches (positions 0..P-1), and greedy decode continues
+from position P. Prompt-processing wall time (RTX 3060, warm, §V22):
+
+| model | P | decode-path prefill | f16 batched | speedup | seeded-vs-decode K rows (rel L1) |
+|---|---:|---:|---:|---:|---:|
+| TinyLlama-1.1B | 94 | 533.5 ms | 27.5 ms | **19.4×** | 0.0087 |
+| Qwen2.5-1.5B | 33 | 342.6 ms | 20.1 ms | **17.1×** | 0.0023 |
+| Qwen2.5-3B | 33 | 351.5 ms | 35.3 ms | **9.9×** | 0.0078 |
+
+The load-bearing gate is the CACHE-CONTENT comparison (last column): the f16-seeded
+rows match what the decode path itself writes for the same prompt to within the
+f16-vs-Q4_K projection-precision delta — proving the handoff position- and
+value-correct without depending on model behavior. (Token-sequence gates mislead here:
+a 1.1B babbles identically in both paths on long greedy prose, and one precision-flipped
+argmax sends the two token streams on different but equally valid trajectories — at 3B
+the unified continuation is in fact token-for-token equal to pure decode.) Both model
+families run with the f16 and Q4_K stacks resident simultaneously (3B ≈ 7.9 GB); a 7B
+stays decode-only on 12 GB (f16 weights alone would need 14.5 GB).
+
+Repro: `TestCUDAUnifiedServePrefillHandoff` / `TestCUDAUnifiedServeQwen` (backend/cuda,
+`-tags cuda`).
+
 ## Further reading
 
 - Hoefler & Belli, *Scientific Benchmarking of Parallel Computing Systems* (SC '15) — the canonical treatment of run variance, warm-up and honest reporting that this document's rules follow.
