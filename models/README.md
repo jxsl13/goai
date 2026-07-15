@@ -29,7 +29,12 @@ Sources: `Qwen/Qwen2.5-{0.5B,1.5B,3B}-Instruct-GGUF`,
 CUDA engine so far — `TestCUDAQwenGenerate` decodes it to coherent text
 ("Paris. The capital of Spain is Madrid…") at ≈56 tok/s (Q8, alloc-path), the same
 config-driven path as 0.5B/1.5B (0.5B ≈210, 1.5B ≈96 tok/s), so the engine generalizes
-across a 6× parameter range with no code changes.
+across a 6× parameter range with no code changes. `TestCUDAQwenFixedMatchesAlloc` also
+runs it on the FULL optimized decode (fixed-buffer + device-pos + Q8 + CUDA graph, bias
+in the graph body) — **token-for-token identical to the alloc path at 62 tok/s (+10%)**,
+proving CUDA-graph capture is correct at 36-layer scale (graph speedups shrink with size:
+0.5B +29%, 1.5B +15%, 3B +10%, as larger models become GPU-compute- rather than
+launch-bound).
 
 ## Fetch command
 

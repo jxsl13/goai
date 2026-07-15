@@ -206,6 +206,27 @@ func runQwen(t *testing.T, qwenPath string) []int {
 	if len(gen) == 0 {
 		t.Fatal("generated nothing")
 	}
+	// Free the resident weights before returning — CUDA device memory is NOT reclaimed
+	// by Go's GC, so leaking a full model here would double VRAM residency when a caller
+	// (qwenFixedVsAlloc) then builds a second copy, OOMing at 3B scale.
+	emb.Free()
+	onorm.Free()
+	out.Free()
+	for _, l := range layers {
+		l.an.Free()
+		l.fn.Free()
+		l.wq.Free()
+		l.wk.Free()
+		l.wv.Free()
+		l.wo.Free()
+		l.bq.Free()
+		l.bk.Free()
+		l.bv.Free()
+		l.wg.Free()
+		l.wu.Free()
+		l.wd.Free()
+		l.cache.Free()
+	}
 	return gen
 }
 

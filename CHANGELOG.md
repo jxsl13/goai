@@ -4,6 +4,18 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — Qwen2.5-3B on the optimized graph path + a VRAM leak fix (worker linux-amd64, 2026-07-15)
+- `TestCUDAQwenFixedMatchesAlloc` now also runs **Qwen2.5-3B** on the FULL optimized decode
+  (fixed persistent buffers + device-position + fixed-size attention + Q8 + CUDA graph, with
+  the QKV bias composed into the graph body): **token-for-token identical to the alloc path
+  at 62 tok/s (+10%)**. This validates CUDA-graph capture at **36-layer scale** — the largest
+  graph body yet. Graph speedups shrink with model size (0.5B +29%, 1.5B +15%, 3B +10%) as
+  larger models shift from launch-bound to GPU-compute-bound.
+- Fixed a VRAM leak in `runQwen`: it built a full resident model but never freed it (CUDA
+  device memory isn't reclaimed by Go's GC), so a caller that then built a second copy
+  (the fixed-vs-alloc comparison) doubled residency and OOMed at 3B. It now frees all
+  resident weights + KV caches before returning.
+
 ### CUDA — Qwen2.5-3B validated: engine generalizes across a 6× parameter range (worker linux-amd64, 2026-07-15)
 - `TestCUDAQwenGenerate` now also runs **Qwen2.5-3B** (qwen2, 36 layers, dim 2048, GQA
   16:2, QKV-bias) — the largest scale validated end-to-end on the CUDA engine. It decodes
