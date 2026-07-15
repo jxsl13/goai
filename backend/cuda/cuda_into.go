@@ -23,6 +23,13 @@ func NewDeviceF32(rows, cols int) (*DeviceF32, error) {
 	return &DeviceF32{ptr: p, rows: rows, cols: cols}, nil
 }
 
+// Argmax returns the index of the maximum element (greedy next token) computed on
+// device — only the 4-byte index is downloaded, not the whole [1,vocab] logit
+// vector. Returns -1 on error.
+func (d *DeviceF32) Argmax() int {
+	return int(C.cu_argmax_f32(d.ptr, C.int(d.rows*d.cols)))
+}
+
 // CopyFrom overwrites this buffer's contents with src's (device→device, same
 // size). Used to reset a captured graph's fixed input buffer between replays.
 func (d *DeviceF32) CopyFrom(src *DeviceF32) error {
