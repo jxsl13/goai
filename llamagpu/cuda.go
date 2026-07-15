@@ -7,7 +7,9 @@ import (
 
 	"github.com/jxsl13/goai/backend"
 	"github.com/jxsl13/goai/backend/cuda"
+	"github.com/jxsl13/goai/format/gguf"
 	"github.com/jxsl13/goai/nlp"
+	"github.com/jxsl13/goai/tensor"
 )
 
 // cuda adapter: thin assertions from the backend-agnostic buffer/recorder interfaces to the
@@ -58,9 +60,7 @@ func (c cRec) Binary(a, b, o buffer, op int) error {
 	return c.r.Binary(cb(a), cb(b), cb(o), op)
 }
 func (c cRec) QMatMulResident(x buffer, w qweight, o buffer, m int) error {
-	// Quantized (Q8) adapter is a follow-up: it needs a cuda qweight type with Close()
-	// plus cuda.Recorder.QMatMulResident. The f32 NewCUDA path never records this.
-	return fmt.Errorf("llamagpu: CUDA QMatMulResident not yet wired (NewCUDA is f32-only)")
+	return c.r.QMatMulResident(cb(x), w.(*cuda.ResidentBQ8), cb(o), m)
 }
 func (c cRec) Commit() error { return c.r.Commit() }
 func (c cRec) Wait() error   { return c.r.Wait() }
@@ -94,5 +94,55 @@ func NewCUDA(m *nlp.Llama) (*Decoder, error) {
 			}
 			return cRec{r}, nil
 		},
+	})
+}
+
+// cudaUploadQWeight makes a ggml quantized [Out,In] weight resident on the GPU as Q8.
+// The CUDA backend has ONE quant kernel (Q8 GEMV), so — unlike metal/vulkan, which keep
+// each native ggml type and dequantize in-kernel — any source type (Q4_K, Q6_K, …) is
+// dequantized to f32 and re-quantized to a uniform resident Q8_0. That's a faithful Q8
+// inference path (Q8→f32→Q8 is near-lossless; lower-bit sources lose only what they
+// already lost). NewResidentBQ8 wants [In,Out], so the dequantized [Out,In] is transposed.
+func cudaUploadQWeight(weight []byte, qt uint32, n, k int) (qweight, error) {
+	f32, err := gguf.QuantTensor{Data: weight, GGType: qt, Shape: tensor.Shape{n, k}}.Dequantize()
+	if err != nil {
+		return nil, fmt.Errorf("llamagpu: CUDA dequant qt=%d [%d,%d]: %w", qt, n, k, err)
+	}
+	tin, err := f32.Transpose(0, 1) // [Out,In] → [In,Out]
+	if err != nil {
+		return nil, fmt.Errorf("llamagpu: CUDA weight transpose: %w", err)
+	}
+	rw, err := cuda.NewResidentBQ8(tin)
+	if err != nil {
+		return nil, fmt.Errorf("llamagpu: CUDA Q8 upload: %w", err)
+	}
+	return rw, nil
+}
+
+// NewQuantCUDA uploads a quantized Llama with every projection as a resident Q8 weight
+// (source types re-quantized to Q8) — the NVIDIA variant of NewQuant/NewQuantVulkan.
+// Same batched Decoder core, so Generate/Step and every sampler work unchanged.
+func NewQuantCUDA(m *nlp.QuantLlama) (*Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newQuantDecoder(m, backendOps{
+		name:        string(backend.CUDA),
+		asyncEncode: false,
+		newBuffer: func(data []float32) (buffer, error) {
+			b, err := cuda.NewDeviceBufferF32(data)
+			if err != nil {
+				return nil, err
+			}
+			return cBuf{b}, nil
+		},
+		newRecorder: func() (recorder, error) {
+			r, err := cuda.NewRecorder()
+			if err != nil {
+				return nil, err
+			}
+			return cRec{r}, nil
+		},
+		uploadQWeight: cudaUploadQWeight,
 	})
 }

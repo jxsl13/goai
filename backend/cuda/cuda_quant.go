@@ -154,3 +154,9 @@ func (r *ResidentBQ8) Free() {
 		r.scales = nil
 	}
 }
+
+// Close frees the resident weight — the llamagpu `qweight` interface (alias for Free).
+func (r *ResidentBQ8) Close() error {
+	r.Free()
+	return nil
+}
