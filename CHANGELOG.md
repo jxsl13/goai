@@ -4,6 +4,23 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — Q4_K resident decode: ggml's standard format, 7B at Q8 quality +29% faster (worker linux-amd64, Tw42, 2026-07-15)
+- `cuda.ResidentBQ4K` + `cu_qmatmul_q4k`: weights resident in ggml's Q4_K super-block layout
+  (144 B / 256 weights — f16 d/dmin, packed 6-bit sub-scales/mins, nibbles), dequantized
+  in-kernel (y = d·sc6·q − dmin·min6). Half of Q8's weight bytes, 25% fewer than the
+  asymmetric Q4, and byte-compatible with Q4_K_M GGUF tensors (upload as-is, no transpose,
+  no requantization). Quantization stays in `format/gguf` (`NewResidentBQ4KFromBlocks`
+  accepts pre-encoded blocks) — no backend→format layering inversion.
+- Measured (same-run three-precision compare, tg128): Qwen1.5B 140.2|168.3|**171.2**,
+  Qwen3B 77.9|96.8|96.1, **Mistral-7B 37.4|47.1|48.1** (Q8|Q4|Q4_K) — and at 7B Q4_K greedy
+  agrees with Q8 **24/24 tokens** (asym Q4: 2/24): fastest AND Q8-quality at half the bytes.
+  goai-Q4_K at 7B beats llama.cpp-Q8 by 16% (48.1 vs 41.6), 0.81× of llama.cpp Q4_K_M.
+- Kernel lesson (73→78→96 tok/s at 3B, two A/B rounds): in-kernel format decode must be
+  branch-free — the divergent `if(lane<8)` + branchy-subnormal f16 loop cost 23%; fixed via
+  the ×2^112 multiply-rebias f16 decode (exact incl. subnormals) and all-lane uniform 6-bit
+  unpacking. Parity gate: kernel == the gguf dequant semantics of the same blocks (≤1e-5,
+  f32 order only); beta=1 residual fuse covered.
+
 ### CUDA — Q4 sweep + fair Q4-vs-Q4 + first 7B: goai-Q4 beats llama.cpp-Q8 at every scale (worker linux-amd64, Tw40, 2026-07-15)
 - Extended the asymmetric-Q4 graph decode to every K%256-eligible model — Qwen2.5-1.5B/3B
   (QKV bias in-graph) and **Mistral-7B-Instruct-v0.2, the first production-size 7B on the

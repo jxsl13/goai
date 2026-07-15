@@ -320,37 +320,45 @@ func TestCUDAQwenQ4QualityAndSpeed(t *testing.T) {
 	}
 }
 
-// q4vsQ8 runs the same model at Q8 and Q4, then applies the shared gates: both stay
-// coherent (the prompt's factual answer appears) and Q4 decodes faster than Q8.
+// q4vsQ8 runs the same model at Q8, asymmetric Q4 and Q4_K, then applies the shared
+// gates: every precision stays coherent (the prompt's factual answer appears) and the
+// 4-bit paths decode faster than Q8 (fewer weight bytes on a bandwidth-bound GEMV).
 func q4vsQ8(t *testing.T, rf *gguf.RawFile, arch, label string, ids []int, gen, maxSeq int, decode func([]int) string) {
 	q8 := func(w *tensor.Tensor) (qProj, error) { return cuda.NewResidentBQ8(w) }
 	q4 := func(w *tensor.Tensor) (qProj, error) { return cuda.NewResidentBQ4(w) }
 
 	q8toks, q8tps := runRawDecode(t, rf, arch, ids, gen, maxSeq, q8)
 	q4toks, q4tps := runRawDecode(t, rf, arch, ids, gen, maxSeq, q4)
+	q4ktoks, q4ktps := runRawDecode(t, rf, arch, ids, gen, maxSeq, quantQ4K)
 
-	match := 0
-	for i := range q8toks {
-		if q4toks[i] == q8toks[i] {
-			match++
+	agree := func(toks []int) int {
+		match := 0
+		for i := range q8toks {
+			if toks[i] == q8toks[i] {
+				match++
+			}
 		}
+		return match
 	}
-	q8text := decode(q8toks)
-	q4text := decode(q4toks)
+	q8text, q4text, q4ktext := decode(q8toks), decode(q4toks), decode(q4ktoks)
 	t.Logf("%s Q8 text: %q", label, q8text)
 	t.Logf("%s Q4 text: %q", label, q4text)
-	t.Logf("%s Q4 vs Q8 greedy: %d/%d tokens agree", label, match, gen)
-	t.Logf("%s DECODE tok/s: Q8 %.1f | Q4 %.1f (%.2fx)", label, q8tps, q4tps, q4tps/q8tps)
+	t.Logf("%s Q4_K text: %q", label, q4ktext)
+	t.Logf("%s greedy agreement vs Q8: Q4 %d/%d | Q4_K %d/%d", label, agree(q4toks), gen, agree(q4ktoks), gen)
+	t.Logf("%s DECODE tok/s: Q8 %.1f | Q4 %.1f (%.2fx) | Q4_K %.1f (%.2fx)",
+		label, q8tps, q4tps, q4tps/q8tps, q4ktps, q4ktps/q8tps)
 
-	// Quality gates: both precisions must answer correctly.
-	if !strings.Contains(strings.ToLower(q8text), "paris") {
-		t.Errorf("%s Q8 decode incoherent (no 'Paris'): %q", label, q8text)
+	// Quality gates: every precision must answer correctly.
+	for _, pr := range []struct{ name, text string }{{"Q8", q8text}, {"Q4", q4text}, {"Q4_K", q4ktext}} {
+		if !strings.Contains(strings.ToLower(pr.text), "paris") {
+			t.Errorf("%s %s decode incoherent (no 'Paris'): %q", label, pr.name, pr.text)
+		}
 	}
-	if !strings.Contains(strings.ToLower(q4text), "paris") {
-		t.Errorf("%s Q4 decode incoherent (no 'Paris'): %q", label, q4text)
-	}
-	// Speed gate: at these scales decode is weight-bandwidth-bound — Q4 must beat Q8.
+	// Speed gates: at these scales decode is weight-bandwidth-bound — 4-bit must beat Q8.
 	if q4tps <= q8tps {
 		t.Errorf("%s Q4 (%.1f tok/s) not faster than Q8 (%.1f tok/s)", label, q4tps, q8tps)
+	}
+	if q4ktps <= q8tps {
+		t.Errorf("%s Q4_K (%.1f tok/s) not faster than Q8 (%.1f tok/s)", label, q4ktps, q8tps)
 	}
 }
