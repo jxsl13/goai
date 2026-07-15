@@ -4,6 +4,18 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T655 — Process Reward Model: step-level reward with a measurable value test (2026-07-15)
+- New `nlp.ProcessRewardModel` (+ `nlp.OutcomeRewardModel` as the ablation baseline): a
+  process reward model (Lightman et al. 2023 arXiv:2305.20050; Math-Shepherd
+  arXiv:2312.08935) — a small transformer with a sigmoid step-scoring head that judges
+  EACH reasoning step (correct/incorrect), vs the library's existing outcome-level reward
+  models (Bradley-Terry, GRPO). Trained with per-step BCE. The point of a PRM — localizing
+  the FIRST wrong step and better verification — is captured by a measurable test rather
+  than left to a scale claim: on a deterministic corrupted-arithmetic-chain benchmark it
+  reaches step-error-detection F1 0.963 (ProcessBench-style — a capability the outcome
+  model structurally lacks), and best-of-8 selection with the PRM (0.933) beats the
+  outcome model (0.750) and random (0.733) on final-answer accuracy. Full gradcheck.
+
 ### T655 — EAGLE speculative decoding (2026-07-15)
 - New `nlp.EagleHead` + `nlp.EagleGenerate`: EAGLE speculative decoding (Li et al. 2024,
   arXiv:2401.15077). A small autoregressive DRAFT head predicts the base model's next
