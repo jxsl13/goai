@@ -116,6 +116,7 @@ I6: op parameters = TYPED. `backend.Attrs` is a SEALED interface (`interface{ op
 
 | id | claim | source | conf |
 | --- | --- | --- | --- |
+| R246 | PERF FLOOR (T652/T653 pprof, measured M2 Pro): after devirtualizing the optimizer Step (T652 SGD/Adam/Lion/ClipGradNorm, T653 LAMB/AdEMAMix/Adafactor/SOAP/Shampoo), the broadcast-reduce VJP (T652), and the T632/T633 elementwise/reduce VJPs, the Go-level TRAINING-step hot path is at its floor — remaining AtF64/SetF64/Unravel uses are cold paths (awq/gptq/dare/ssl), architecture-specific blocks (retnet/rwkv/mamba), or the intentionally-kept generic fallbacks. The DOMINANT remaining small-batch training-step cost is the cpu-backend worker-pool SYNC (pthread_cond_signal/wait ≈78% of the step): parallel-dispatch overhead exceeds compute for tiny per-step kernels. Likely lever (backend/cpu domain, NOT touched here): raise cpu.parThreshold ∨ serialize sub-threshold ops so tiny kernels run single-goroutine. Full step is now kernel+sync bound, not Go-dispatch bound. | T652/T653 pprof cpu.prof | med |
 | R1 | Go 1.26 `simd/archsimd` ships Feb 2026 under `GOEXPERIMENT=simd`, AMD64-only, 128/256/512-bit, AVX2+AVX-512, no cgo/asm-stub | golang/go#73787, go.dev/doc/go1.26, pkg.go.dev/simd/archsimd | high |
 | R2 | `simd` pkg inlined ≈4× vs next-best, ≈16× vs plain loop; `avo` ≈3× vs plain, can't inline thru `.s` stub | callistaenterprise.se 2025-10-20 | med |
 | R3 | `simd/archsimd` ARM64/NEON not yet covered → use Plan9-NEON on ARM64 | golang/go#73787 | med |
