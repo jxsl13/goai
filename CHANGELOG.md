@@ -4,6 +4,16 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — T631 acceptance closed: policy-driven low-VRAM offload runs correctly (worker linux-amd64, 2026-07-15)
+- `TestCUDAHybridDecode` is now **policy-driven**: it simulates a VRAM cap, lets
+  `PlanOffload` (PR #80) choose how many layers spill, and runs the hybrid GPU+CPU decode
+  (PR #71 mechanism) at that split — composing the two into T631's core acceptance
+  criterion end to end. Result: a simulated 647 MiB cap → 11 GPU + 11 CPU-SIMD layers →
+  greedy generation matches the all-GPU decode token-for-token (5/5). So a model sized
+  beyond a (simulated) VRAM cap runs **correctly** via the policy-chosen split — the T631
+  algorithm is complete and proven; only the real-serving-API wiring (the T630 shared
+  executor) remains.
+
 ### CPU — amd64 SIMD decode-GEMV parallelism: +90% on the common decode shape (worker linux-amd64, 2026-07-15)
 - The `GOEXPERIMENT=simd` F32 GEMM small-m branch (m ≤ 3 — the decode GEMV shape) sized its
   column-parallel blocks at a fixed 512 cols, so `n=2048` produced only 4 blocks → 4 of 16

@@ -101,7 +101,21 @@ func TestCUDAHybridDecode(t *testing.T) {
 	}
 
 	// --- hybrid decode: GPU layers [0,split) + CPU-SIMD layers [split,nL) ---
-	const split = 11 // half on CPU
+	// The split is POLICY-DRIVEN (T631): simulate a VRAM cap that fits only ≈half the
+	// model and let PlanOffload choose how many layers spill — the exact policy a real
+	// low-VRAM run uses, instead of a hardcoded number. This closes the T631 acceptance
+	// criterion end to end: a model sized beyond a (simulated) VRAM cap runs correctly
+	// via the policy-chosen split (parity vs all-GPU below).
+	perLayer := cuda.EstimateLayerVRAMQ8(cfg.Dim, kvh*(cfg.Dim/cfg.Heads), cfg.Hidden)
+	const fixedEst = 128 << 20                   // embeddings + output head headroom
+	capBytes := fixedEst + uint64(nL/2)*perLayer // a cap that fits ≈half the layers
+	plan := cuda.PlanOffload(nL, perLayer, fixedEst, capBytes)
+	split := plan.GPULayers
+	if split <= 0 || split >= nL || plan.Fits {
+		t.Fatalf("policy split out of range for the simulated cap: %+v (nL=%d)", plan, nL)
+	}
+	t.Logf("T631 policy: simulated %d MiB cap → PlanOffload keeps %d layers on GPU, spills %d to CPU-SIMD",
+		capBytes>>20, plan.GPULayers, plan.CPULayers)
 	hrl := buildResidentLlama(t, model)
 	defer hrl.free()
 	hCaches := make([]*cuda.KVCache, split)
@@ -169,10 +183,10 @@ func TestCUDAHybridDecode(t *testing.T) {
 		}
 		last = hybridDecode(int32(tok), len(prompt)+s)
 	}
-	t.Logf("HYBRID DECODE %d GPU + %d CPU-SIMD layers, dual KV-caches: %d/%d tokens == all-GPU decode",
+	t.Logf("HYBRID DECODE %d GPU + %d CPU-SIMD layers (policy-chosen), dual KV-caches: %d/%d tokens == all-GPU decode",
 		split, nL-split, match, steps)
 	if match < steps {
 		t.Fatal("hybrid decode diverged from all-GPU")
 	}
-	t.Log("T631 decode mechanism proven: autoregressive generation split across GPU+CPU with caches on both sides.")
+	t.Log("T631 acceptance closed: a model past a simulated VRAM cap runs correctly via the PlanOffload-chosen GPU+CPU split, parity with all-GPU.")
 }
