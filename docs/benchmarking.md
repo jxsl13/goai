@@ -875,6 +875,32 @@ range writes a disjoint C region and accumulates each `C[i][j]` in one ascending
 the result is bit-identical — parity vs the reference holds across m and odd n
 (`TestGemmMediumMCrossReference`).
 
+## goai CUDA vs llama.cpp Vulkan across model scales (worker linux-amd64)
+
+The single-model TinyLlama comparison (above) extends to a scale + family sweep, all on the
+same RTX 3060, **both sides Q8_0** (a fair match — goai's Qwen/TinyLlama decode path runs
+resident Q8, same as llama.cpp), goai on its optimized fixed-buffer + CUDA-graph decode,
+llama.cpp `llama-bench -ngl 99` (`scripts/bench-llamacpp.sh`). Decode = tg128 tok/s:
+
+| model | params | goai CUDA (Q8, graph) | llama.cpp Vulkan (Q8) | goai / llama.cpp |
+|---|---:|---:|---:|---:|
+| Qwen2.5-0.5B | 0.63 B | 271 | 306 | **0.89×** (1.13× behind) |
+| TinyLlama-1.1B | 1.10 B | 165 | 244 | 0.68× |
+| Qwen2.5-1.5B | 1.78 B | 111 | 166 | 0.67× |
+| Qwen2.5-3B | 3.40 B | 62 | 87 | 0.71× |
+
+Reading: a from-scratch Go CUDA decoder lands **within 1.1–1.5×** of a mature, hand-tuned
+engine across a 5× parameter range and two model families. It is **closest at the smallest
+scale** (0.5B, 1.13×) — where decode is most launch/overhead-bound and goai's CUDA-graph
+capture (one replayed program per token) shines — and settles at ≈1.4–1.5× on the larger
+models, where decode becomes weight-bandwidth-bound and llama.cpp's more mature memory
+pipelining and kernel fusion pull ahead. The remaining gap is a kernel-quality gap
+(quantized GEMV bandwidth + fused attention), not an architectural one; it is consistent
+across scales, which is the honest signal that the engine is competitive rather than
+accidentally close on one model. (llama.cpp prefill pp32/pp128 also scales harder —
+e.g. Qwen-3B 1098/3452 vs goai's fewer-but-larger cuBLAS launches — the documented
+flash/fused-attention prefill gap.)
+
 ## Further reading
 
 - Hoefler & Belli, *Scientific Benchmarking of Parallel Computing Systems* (SC '15) — the canonical treatment of run variance, warm-up and honest reporting that this document's rules follow.

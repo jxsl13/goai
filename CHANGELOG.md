@@ -4,6 +4,18 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — competitive decode benchmark vs llama.cpp across scales (worker linux-amd64, 2026-07-15)
+- Extends the single-model llama.cpp comparison to a **4-model, 2-family, 5× parameter**
+  sweep, all on one RTX 3060, both sides Q8_0 (a fair match — goai's decode path is resident
+  Q8, same as llama.cpp). Decode tg128 tok/s (goai CUDA graph | llama.cpp Vulkan | ratio):
+  Qwen-0.5B 271 | 306 | 0.89×; TinyLlama-1.1B 165 | 244 | 0.68×; Qwen-1.5B 111 | 166 | 0.67×;
+  Qwen-3B 62 | 87 | 0.71×. The from-scratch Go engine lands **within 1.1–1.5×** of a mature
+  hand-tuned one across the range — closest at 0.5B (launch-bound, where CUDA-graph capture
+  shines) and ≈1.4–1.5× on larger models (weight-bandwidth-bound, where llama.cpp's memory
+  pipelining + fused attention pull ahead). The consistent gap is a kernel-quality gap
+  (quantized GEMV bandwidth + flash attention), not architectural. Documented in
+  `docs/benchmarking.md`; worker sub-spec §PERF-SCALEBENCH.
+
 ### CUDA — lock the general-backend fallback contract (worker linux-amd64, 2026-07-15)
 - `TestCUDAGeneralFallbackContract` pins the invariant that registering a CUDA general
   kernel NEVER changes a result vs Pure-Go: every case the device path can't serve —
