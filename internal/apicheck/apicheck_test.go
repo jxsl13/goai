@@ -93,6 +93,8 @@ var typeExampleExempt = map[string]bool{
 	"nlp.GPTConfig":                 true, // config struct
 	"nlp.GPT":                       true, // needs safetensors weight fixtures; covered by GPT tests
 	"nlp.KVCache":                   true, // decode state; needs a full model, covered by decode tests
+	"nlp.CLABlock":                  true, // internal cross-layer-attention block (part of CLA, shown in ExampleCLA)
+	"nlp.CLACache":                  true, // CLA decode state (Layers/Share slots), covered by CLA decode tests
 	"nlp.LlamaCache":                true, // Llama decode state; needs a full model, covered by llama_decode tests
 	"nlp.StreamCache":               true, // StreamingLLM decode state; needs a full model, covered by streaming tests
 	"nlp.Tokenizer":                 true, // needs a GPT-2 vocab fixture; covered by tokenizer tests

@@ -4,6 +4,20 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T654 — Cross-Layer Attention (CLA): shared-KV cache reduction (2026-07-15)
+- New `nlp.CLA`: cross-layer attention (Brandon et al. 2024, arXiv:2405.12981). Adjacent
+  transformer layers are grouped in runs of `Share`; the leader of each group projects
+  keys and values, and the followers REUSE them (each layer still has its own query and
+  output projection). The decode KV cache holds `Layers/Share` slots instead of one per
+  layer — a `Share`× smaller cache — and follower blocks carry no key/value weights at all
+  (a real parameter saving). Complements GQA/MQA (which reduce KV heads WITHIN a layer)
+  and MLA (within-layer latent compression); CLA reduces ACROSS layers. Built as an
+  isolated variant reusing the existing fused attention op (no core/backend changes);
+  `Share=1` degenerates exactly to a plain GPT. Verified: Share=1 matches GPT to 1e-10,
+  full gradcheck (including the fan-out gradient into the shared K,V), the Layers/Share
+  cache-size invariant, decode==forward parity, and an e2e char-LM that trains.
+
+
 ### CUDA — Q4 decode path: +23% over Q8, matches llama.cpp Q8 speed (worker linux-amd64, 2026-07-15)
 - Wired the asymmetric-Q4 GEMV into a full graph decoder (all 7 projections + output head as
   `ResidentBQ4`, embeddings/norms kept f32) with a residual-fused `QMatMulAccInto`. Validated
