@@ -67,7 +67,7 @@ func main() {
 				return err
 			}
 			if d.IsDir() {
-				if name := d.Name(); name == ".git" || name == ".venv" || name == "node_modules" {
+				if name := d.Name(); name == ".git" || strings.HasPrefix(name, ".venv") || name == "node_modules" {
 					return filepath.SkipDir
 				}
 				return nil

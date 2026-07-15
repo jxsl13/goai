@@ -1,10 +1,39 @@
 # SPEC-worker — linux/amd64 + NVIDIA (RTX 3060)
 
-Worker sub-spec of root `SPEC.md` (§ main references this). Scopes the
-hardware-specific work + measured results of the Linux/amd64 secondary machine,
-by capability. Encoding: caveman (`FORMAT.md`) — LLM-audience, C13-exempt.
-Worker mode: PR-only, one dedicated branch+PR per task, auto-merge on green CI.
-Consolidates the former `docs/{benchmarking,simd,simd-gemm,cuda}-amd64.md`.
+THE single derived runner spec of this machine (user directive 2026-07-15):
+worker sub-spec of root `SPEC.md` (referenced there under WORKER SUB-SPECS).
+Scopes the hardware-specific work + measured results of the Linux/amd64
+secondary machine by capability, PLUS the runner protocol (§RUN) and the local
+model assets (§MODELS). Encoding: caveman (`FORMAT.md`) — LLM-audience,
+C13-exempt. Consolidates: the former `docs/{benchmarking,simd,simd-gemm,cuda}-
+amd64.md` (2026-07-14) + `models/README.md` state + the runner protocol
+previously implicit in LOOP.md/session memory (2026-07-15).
+
+## §RUN — runner protocol (worker deltas over LOOP.md)
+
+RUN1: loop = LOOP.md procedure ∘ THIS spec (worker deltas here OVERRIDE). 1 task/fire, end-to-end. task source: §NEXT here, then LOOP.md empty-backlog rule (beat-incumbents default).
+RUN2: PR-ONLY (§H5). ⊥ commit/push `main`. ∀ task: 1 dedicated branch `linux-amd64/<slug>` + 1 PR. push = `git push -u origin <branch>` (gh credential helper), PR = `gh pr create`.
+RUN3: merge protocol = watch CI → GREEN → `gh pr merge --merge` MANUALLY. ⊥ `--auto` (no branch protection → merges before checks). main moved → `git merge origin/main` INTO branch, 3-way resolve (⊥ `checkout --ours`, ⊥ stash — shallow history §Iw6). ! CONFLICTING PR = GitHub starts NO pull_request CI (no merge ref) → resolve, THEN expect checks.
+RUN4: gates ∀ PR: `CGO_ENABLED=0 go vet ./...` (§V23) + affected-pkg tests CGO0+cgo + `go run ./internal/mdlint ./...` + cuda suite LOCAL on the 3060 (Iw3: CI has NO GPU — green CI ≠ cuda coverage). exits UN-PIPED (§V24).
+RUN5: post-push: §V27 selector validate (`go run ./internal/cichange -validate <base> <head>`; exit 1 = release-blocking, excess = record) + §C17 CI-warning grep on the run log.
+RUN6: cuda env: `source scripts/cuda-pip-env.sh` before ∀ `-tags cuda` build/test (H4). GPU EXCLUSIVE: serialize goai GPU tests vs llama.cpp benches; a leaked/killed `llama-cli` HOLDS VRAM (observed 9.9GB) → check `nvidia-smi --query-compute-apps` + kill before GPU work. llama.cpp b10012 Vulkan prebuilt cached `/tmp/llamacpp-b10012` (`scripts/bench-llamacpp.sh` fetches).
+RUN7: state authority: THIS file = worker truth (§Tw tasks, §PERF/§CPU/§GPU results, §MODELS assets, §RUN protocol). `docs/benchmarking.md` = SHARED measurement log (worker sections mirror; on divergence THIS spec wins). Cross-platform lessons → root `SPEC.md` §B/§R rows. Session memory files = ergonomics only, ⊥ state authority.
+RUN8: host facts for scheduling: 31 GB RAM (⊥ materialize f32 ≥7B: use `gguf.ReadRaw` per-tensor path, §PERF-Q4-SWEEP); 12 GB VRAM (Q8 ≤8-9B; ≥13B → T631 offload); brew/pip allowed for dev deps; downloads resumable `curl -C -` (! bash-crash leaves TRUNCATED gguf → verify via llama.cpp load ∨ gguf bounds before use, then re-quantize).
+
+## §MODELS — local model assets (models/, gitignored; formerly models/README.md)
+
+M1: files (all open-weight, ungated, HF `resolve/main`):
+  | file | arch | L | heads/kv | dim | source |
+  |---|---|---|---|---|---|
+  | tinyllama-1.1b-chat-q8_0.gguf | llama | 22 | 32/4 | 2048 | TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF |
+  | qwen2.5-0.5b-instruct-q8_0.gguf | qwen2 | 24 | 14/2 | 896 | Qwen/Qwen2.5-0.5B-Instruct-GGUF |
+  | qwen2.5-1.5b-instruct-q8_0.gguf | qwen2 | 28 | 12/2 | 1536 | Qwen/Qwen2.5-1.5B-Instruct-GGUF |
+  | qwen2.5-3b-instruct-q8_0.gguf | qwen2 | 36 | 16/2 | 2048 | Qwen/Qwen2.5-3B-Instruct-GGUF |
+  | mistral-7b-instruct-v0.2.Q8_0.gguf | llama | 32 | 32/8 | 4096 | TheBloke/Mistral-7B-Instruct-v0.2-GGUF |
+M2: `*q4_k_m*`/`*Q4_K_M*` siblings = LOCAL requants (`llama-quantize --allow-requantize … Q4_K_M`) = the llama.cpp side of the fair Q4-class compare ONLY; goai always loads the Q8_0 files + quantizes to its own resident Q8/Q4 at build.
+M3: loaders: llama-family w/ REAL SPM scores (Mistral) → `nlp.SPMFromGGUF` (! ⊥ UnigramFromGGUF, §B59); zero-score files (TheBloke TinyLlama) work w/ either; qwen2 → `nlp.BPEFromGGUF`. qwen2 rejected by `nlp.LlamaFromGGUF` → read config/weights straight from GGUF metadata/tensors (pattern: buildQwenFixed / rawGraphDecoder).
+M4: ≥7B: `gguf.ReadRaw` + per-tensor Dequantize→requant→upload (RUN8). VRAM: Q8 TinyLlama ≈1376 MiB total (≈62.5 MiB/layer); Mistral-7B Q8 ≈7.9 GB / Q4 ≈3.9 GB resident — both fit 12 GB.
+M5: validated e2e coverage: {TinyLlama, Qwen 0.5/1.5/3B, Mistral-7B} × {f32|Q8|Q4 where K%256 ✓} — see §PERF-SCALEBENCH-2 / §PERF-Q4-SWEEP for the numbers; Qwen-0.5B = Q8-only (dim 896 ⊥ K%256).
 
 ## §H — hardware & toolchain
 
@@ -86,6 +115,8 @@ PERF-GEMV-CEILING (PR#95): CLEAN device-only bandwidth probe (no D2H, unlike Ben
 PERF-SPLITK-REJECT (measure-first, discarded): 2-warp split-K (block per output, K split in half, shared-mem combine) to give medium-N GEMVs more waves → q/o 253→246 (−3%), down flat. Confirms GEMV at ceiling; structural change doesn't help. Discarded.
 PERF-Q4 (PR#97, USER DIRECTIVE "beat llama.cpp"): since Q8 GEMV is at bandwidth ceiling, beating llama.cpp on decode needs FEWER weight bytes → Q4. ResidentBQ4 = ASYMMETRIC Q4 (per-32-block f32 scale+MIN, packed nibbles, transposed [N,K/2]; dequant w=min+nibble·scale) — far more accurate than the rejected symmetric Q4_0. cu_qmatmul_q4 kernel (warp-per-output, int32=8-nibble loads, 256 k/step, K%256==0). VALIDATED: Q4 GEMV vs host f32 mean rel err 10.66% (Q4 budget, 4× Q8's 2.7% but packing/dequant correct); **Q4 14.0µs vs Q8 18.6µs = 1.33× FASTER** (0.67× bytes). This is the primitive.
 PERF-Q4-DECODE (PR#98): wired Q4 into a full graph decoder (q4GraphDecoder, all 7 projections + out as ResidentBQ4, embed/norms f32) + QMatMulAccInto (beta=1 residual). VALIDATED on TinyLlama: (a) COHERENT — Q4 greedy generates "...The city of Paris, which is the capital of France..." (correct/grammatical) though 0/24 exact-match Q8 (4-bit error shifts argmax, stays on-topic); (b) SPEED **243.6 tok/s vs Q8 ≈198 = +23%**, and MATCHES llama.cpp Vulkan Q8 (244) on TinyLlama at lower precision. IMPLICATION: goai-Q4 +23% over Q8 → beats llama.cpp-Q8 on the larger weight-bound models (3B Q8 77 → Q4 ≈95 > llama.cpp 87). CAVEAT (honest): my asymmetric Q4 (f32 scale+min/32-block, 10.66% err) is LOSSIER than llama.cpp's Q4_K (per-super-block 6-bit scales) — a FAIR Q4-vs-Q4 speed compare + a quality-vs-Q4_K compare are the next step; and improving accuracy toward Q4_K (or f16 scale+min for fewer bytes) is the follow-up.
+PERF-Q4-SWEEP (fair Q4-vs-Q4 + 7B, this PR): Q4 extended to EVERY eligible model (K%256: 1.5B/3B/7B ✓, 0.5B dim=896 ✗) + llama.cpp Q4_K_M locally requantized (--allow-requantize) for the same-class compare. tg128 (goai Q8 | goai Q4 | llcpp Q8 | llcpp Q4_K_M): TinyLlama 199|243.6|244|328; Qwen1.5B 140.5|167.9|166|214.9; Qwen3B 77.8|96.9|87|121.9; **Mistral-7B 37.4|47.0|41.6|59.1**. RESULTS: (1) **goai-Q4 ≥ llama.cpp-Q8 at EVERY scale, lead grows with size (1.00→1.13×)** — the PERF-Q4-DECODE prediction measured, not extrapolated; (2) honest: llcpp Q4_K_M stays 1.25–1.35× ahead of asymmetric-Q4 at ≈same bytes (kernel-quality margin: super-block quant + fused attn); (3) **FIRST 7B on the engine**: Mistral-7B via gguf.ReadRaw (per-tensor deq→requant→upload; f32-materialized 7B = 28GB host, raw path ≈6GB peak), coherent both precisions on 12GB VRAM. Q4/Q8 speedup by scale: +23/+20/+25/+26% — flat-ish, weight-bound share already dominant from 1.1B. rawGraphDecoder (test-side) = arch-generic (llama+qwen2 via metadata prefix, QKV-bias optional) × precision-generic (qProj iface Q8/Q4). BUG FOUND by the 7B coherence gate: §B59 (see below).
+PERF-B59-TOKENIZER (backprop, §B59): Mistral-7B generated FLUENT BUT DERAILED text at Q8 AND Q4 ("capital of France" → Italy rambling) — every logit/parity test blind. Root cause: UnigramFromGGUF Viterbi over llama-family GGUF scores, which are NEGATIVE MERGE RANKS not log-probs → fragmenting beats whole words ("▁T"+"he"=−67 > "▁The"=−156) → prompt shattered into pieces the model never saw. TinyLlama MASKED it (TheBloke zeroes scores → ties → longest-match wins). FIX: nlp.SPM/SPMFromGGUF (NEW, additive — llama.cpp llm_tokenizer_spm: greedy best-score pair-merge + <0xNN> byte fallback), Mistral encode == llama.cpp ids; 3 unit tests incl. the rank-score trap; UnigramFromGGUF doc rerouted, stays for t5/UGM. LESSON: end-to-end generation gates catch what parity can't; "documented divergence" from the reference = latent bug unless the premise is artifact-verified.
 PERF-SCALEBENCH (PR#92, docs/benchmarking.md): full goai-CUDA-Q8-graph vs llama.cpp-Vulkan-Q8 decode sweep, same RTX 3060, 4 models × 2 families × 5× param range. tg128 tok/s (goai graph | llama.cpp | ratio): Qwen0.5B 271|306|0.89×, TinyLlama1.1B 165|244|0.68×, Qwen1.5B 111|166|0.67×, Qwen3B 62|87|0.71×. FINDING: within 1.1–1.5× across the board; CLOSEST at 0.5B (launch-bound → graph capture shines), ≈1.4–1.5× on larger (weight-bandwidth-bound → llama.cpp's memory pipelining + fused attention pull ahead). Consistent gap = a KERNEL-quality gap (quant GEMV bandwidth + flash attention), not architectural. llama.cpp prefill scales harder too (Qwen3B pp128 3452) = the documented flash/fused-prefill gap. Honest competitive: a from-scratch Go engine within 1.1-1.5× of a mature hand-tuned one.
 QWEN (PR#64): 2ND MODEL FAMILY on the GPU — Qwen2.5-0.5B (arch=qwen2, GQA 14:2, Q/K/V BIASES, RopeBase 1e6, BPE tok). arch=qwen2 rejected by nlp.LlamaFromGGUF → read config/weights/biases straight from GGUF (transpose [out,in]→[in,out]) + Q8-resident here; QKV bias via the new DeviceF32.AddBias. Generates coherent text ('The capital of France is'→'Paris. It is the largest city...'). Proves the engine generalizes beyond Llama + AddBias correct e2e — entirely in backend/cuda, NO nlp changes. SCALE (PR#65): also runs Qwen2.5-1.5B (dim 1536, 28L, GQA 12:2) coherent — engine generalizes across FAMILIES (Llama+Qwen) × SCALES (0.5→1.5B) × CONFIGS. Decode alloc-path: 0.5B 208.8 tok/s, 1.5B 96.3 tok/s (un-graphed). QWEN FAST-PATH (PR#66): Qwen on the FULL optimized decode (fixed-buffer+device-pos+fixed-size-attn+Q8+CUDA-GRAPH, AddBias composed IN the graph body) == alloc-path TOKEN-FOR-TOKEN (28/28) → the whole optimized stack is correct for a 2ND ARCHITECTURE (not Llama-specific) + AddBias composes in a captured graph. Decode 273.7 tok/s graph vs 208.8 alloc = +31% (0.5B). SCALE (PR#67): graph fast-path validated at BOTH Qwen scales — 0.5B 271.8 (+30%), 1.5B 110.9 tok/s (+15%), each == alloc token-for-token → optimized decode + CUDA graph correct+faster across scales (1.5B graph=28L dim1536).
 PERF-NEXT (hyper-opt, biggest first): (1) KV-CACHE decode DONE §Tw33/§Tw34 — GroupedQueryAttentionKV + KVCache(append) + decode loop == full re-forward token-for-token (argmax exact, logits 1e-5); decode 12.6 tok/s, FLAT across context (12.62@p32/12.51@p128 → cache truly O(1)/step). GAP to llama.cpp 243 = 19×, diagnosed LAUNCH/SYNC-BOUND not bandwidth (12.6 tok/s ⇒ 55 GB/s effective, far below 360 GB/s peak; single-token forward = ≈330 op launches w/ same fixed cost as prefill but 1/128th compute). GQA persistent scratch DONE §Tw35 (removed 264 cudaMalloc/free per token) → only ≈1% (12.6→12.75): so decode is NOT alloc-bound. RE-DIAGNOSIS: decode is LAUNCH-COUNT-bound — ≈330 sequential host→driver ops/token (cgo+mutex+cuCtxSetCurrent each), chain is async w/ 1 sync/token; matmul_ddd + elementwise don't sync. REAL LEVER = FEWER launches: kernel FUSION (fuse RMSNorm+matmul, RoPE into proj, SwiGLU chain) + CUDA GRAPHS (capture per-token op sequence, replay — kills per-launch overhead); THEN quant matmul for bandwidth. (2) quantized matmul on device (Q8/Q4 resident → 4× bandwidth, matches llcpp). (3) kernel fusion (RMSNorm+matmul, flash-style attention) + fewer launches — closes the prefill-scaling gap. (4) pooled intermediates. (5) larger prefill batch.
@@ -131,10 +162,20 @@ Tw25|x|CUDA embedding row-gather (bit-exact) — full-model forward-pass op set 
 Tw26|x|CUDA fused SwiGLU (SiLU⊙up, 1 pass) — device traffic 5n→3n, FFN launch fusion (PR#27)|GPU-7
 Tw27|x|CPU f32-native GEMM direct-store (drop f64 carrier) +28% → 196 GFLOP/s, 4.7× scalar (PR#28); mr=8 tiling measured as -7% loss, rejected|CPU-3
 Tw28|x|CPU GEMM B-packing re-measured on Zen3 (ADR-0017 resume) — REGRESSED -6/-16%, discarded; x86 resume condition closed with data (PR#29)|§GAP
+Tw40|x|Q4 SWEEP + FAIR Q4-vs-Q4 + FIRST 7B: goai-Q4 ≥ llcpp-Q8 every scale (1.00→1.13× at 7B); llcpp Q4_K_M 1.25-1.35× ahead (same-class); Mistral-7B coherent 47 tok/s on 12GB via ReadRaw builder|PERF-Q4-SWEEP
+Tw41|x|nlp.SPM/SPMFromGGUF — llama-family SPM merge tokenizer (llama.cpp semantics); fixes §B59 Viterbi-over-merge-ranks fragmentation caught by the 7B coherence gate|PERF-B59-TOKENIZER,§B59
 
 ## §NEXT — open levers
 
-**STATE 2026-07-15: the CUDA inference arc is COMPLETE + documented + validated.**
+**STATE 2026-07-15 (post-Tw40/41): Q4 arc closed with the fair compare; goai-Q4 leads
+llama.cpp-Q8 at every scale (max +13% at 7B); a real 7B (Mistral) runs coherently on
+the 12GB card. Remaining decode gap is same-class Q4 (0.74-0.80× vs Q4_K_M) = the
+super-block-quant + fused-attention kernel margin. Next decode levers, biggest first:
+(a) Q4_K-class super-block scheme (6-bit sub-scales — accuracy AND llcpp-parity bytes),
+(b) fused/flash attention (also closes the prefill gap), (c) f16 KV. Tokenizer §B59
+fixed via nlp.SPM (additive).**
+
+**STATE 2026-07-15 (pre-Tw40, historical): the CUDA inference arc is COMPLETE + documented + validated.**
 Decode 26→164.7 tok/s (6.3×), within 1.48× of llama.cpp Vulkan; greedy+sampled
 generation writes real text; graceful −14% to 2048 ctx (PERF-LONGCTX). All
 primitives public in backend/cuda. Recent probes were REJECTIONS (Q4, Q8-prefill)

@@ -4,6 +4,35 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — Q4 sweep + fair Q4-vs-Q4 + first 7B: goai-Q4 beats llama.cpp-Q8 at every scale (worker linux-amd64, Tw40, 2026-07-15)
+- Extended the asymmetric-Q4 graph decode to every K%256-eligible model — Qwen2.5-1.5B/3B
+  (QKV bias in-graph) and **Mistral-7B-Instruct-v0.2, the first production-size 7B on the
+  engine** — via a new test-side `rawGraphDecoder` built directly from `gguf.ReadRaw`
+  (per-tensor dequantize→requantize→upload; a materialized f32 7B would need 28 GB host RAM,
+  the raw path peaks ≈6 GB), arch-generic (llama/qwen2) × precision-generic (Q8/Q4).
+- Decode tg128, RTX 3060 (goai Q8 | goai Q4 | llama.cpp-Vulkan Q8 | Q4_K_M): TinyLlama
+  199|243.6|244|328 · Qwen1.5B 140.5|167.9|166|214.9 · Qwen3B 77.8|96.9|87|121.9 ·
+  **Mistral-7B 37.4|47.0|41.6|59.1**. **goai-Q4 ≥ llama.cpp-Q8 at every scale, lead growing
+  with size (1.00×→1.13×)** — the PERF-Q4-DECODE prediction confirmed by measurement. Honest
+  same-class result: llama.cpp Q4_K_M stays 1.25–1.35× ahead at ≈equal weight bytes (the
+  super-block-quant + fused-attention kernel margin). `docs/benchmarking.md` has the full
+  table; llama.cpp Q4_K_M files locally requantized (`llama-quantize --allow-requantize`).
+
+### nlp — SPM merge tokenizer: fixes llama-family GGUF tokenization (§B59, worker linux-amd64, Tw41, 2026-07-15)
+- The Mistral-7B end-to-end coherence gate caught a latent tokenizer bug invisible to every
+  parity test: `UnigramFromGGUF` runs Unigram Viterbi, but llama-family GGUF scores are
+  **negative merge ranks, not log-probabilities** — sum-maximization then prefers fragments
+  ("▁T"+"he" = −67 beats "▁The" = −156), shattering prompts into pieces the model never saw
+  and derailing generation (fluent Italy-rambling for "The capital of France is", at Q8 AND
+  Q4). TinyLlama masked it: its GGUF zeroes all scores, so the tie-break degenerates to
+  longest-match.
+- Fix (additive): `nlp.SPM` / `nlp.SPMFromGGUF` — llama.cpp `llm_tokenizer_spm` semantics
+  (greedy best-score adjacent-pair merge, ▁ escaping, `<0xNN>` byte fallback). Mistral now
+  encodes token-for-token equal to llama.cpp (`▁The ▁capital ▁of ▁France ▁is`). Three unit
+  tests including the exact rank-score trap; `UnigramFromGGUF` doc rerouted (it remains
+  correct for true Unigram "t5"/UGM vocabularies). §B59 records the lesson: a documented
+  divergence from the reference is a latent bug unless its premise is artifact-verified.
+
 ### T655 — Byte Latent Transformer (BLT): tokenizer-free byte-level LM (2026-07-15)
 - New `nlp.BLT` + `nlp.EntropyPatcher`: the Byte Latent Transformer (Meta 2024,
   arXiv:2412.09871) — a language model with NO tokenizer that works directly on raw
