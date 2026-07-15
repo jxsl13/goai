@@ -37,6 +37,10 @@ int cu_matmul_f32_bres(const float* A, const void* dB, float* C, int M, int K, i
 // dC[M,N] = dA[M,K]·dB[K,N] with every operand resident (no H2D/D2H).
 void* cu_alloc_f32(int n);
 void* cu_clone_f32(const void* src, int n);
+// cu_upload_i8: upload n signed bytes (Q8 weights) to a fresh device buffer.
+void* cu_upload_i8(const signed char* src, int n);
+// cu_qmatmul_q8: out[M,N] = a[M,K]·dequant(W), W = transposed Q8 q[N,K] + per-32-block scales[N,nb].
+int cu_qmatmul_q8(const void* dA, const void* dQ, const void* dScales, void* dOut, int M, int K, int N, int nb);
 // cu_copy_rows: device→device copy nElems floats from src to dst+dstOffset (KV-cache append).
 int cu_copy_rows(void* dst, const void* src, int dstOffset, int nElems);
 void* cu_upload_i32(const int* src, int n);

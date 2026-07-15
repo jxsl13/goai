@@ -31,7 +31,7 @@ static pthread_mutex_t gLock = PTHREAD_MUTEX_INITIALIZER;
 static cublasHandle_t gHandle = NULL;
 static cudaStream_t gStream = NULL;
 static CUcontext gCtx = NULL; // runtime's primary context, retained for driver-API launches
-static CUfunction gGelu = NULL, gSilu = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL; // lazily nvrtc-compiled
+static CUfunction gGelu = NULL, gSilu = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gQgemv = NULL; // lazily nvrtc-compiled
 
 static float *gA = NULL, *gB = NULL, *gC = NULL;
 static size_t gACap = 0, gBCap = 0, gCCap = 0; // capacities in bytes
@@ -613,6 +613,72 @@ int cu_embed_f32(const void* dTable, const void* dIds, void* dOut, int seq, int 
         args[3] = &seq;
         args[4] = &d;
         rc = (cuLaunchKernel(gEmbed, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_upload_i8 copies n signed bytes to a fresh device buffer (Q8 quantized
+// weights). Caller frees via cu_free_f32 (cudaFreeAsync is dtype-agnostic).
+void* cu_upload_i8(const signed char* src, int n) {
+    void* d = NULL;
+    size_t sz = (size_t)n;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { goto done; }
+    if (cudaMallocAsync(&d, sz, gStream) != cudaSuccess) { d = NULL; goto done; }
+    if (cudaMemcpyAsync(d, src, sz, cudaMemcpyHostToDevice, gStream) != cudaSuccess ||
+        cudaStreamSynchronize(gStream) != cudaSuccess) {
+        cudaFreeAsync(d, gStream);
+        d = NULL;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return d;
+}
+
+// cu_qmatmul_q8: out[M,N] = a[M,K] · dequant(W), where W is stored TRANSPOSED and
+// Q8_0-quantized — q[n,k] (int8, row-contiguous over K) with a per-32-block scale
+// scales[n, k/32], so W[k,n] ≈ scales[n,k/32] · q[n,k]. Reading int8 weights is 4×
+// less bandwidth than f32 — the decode (M=1, memory-bound GEMV) win. One thread
+// per output element loops its K contraction over blocks. §PERF quantization arc.
+int cu_qmatmul_q8(const void* dA, const void* dQ, const void* dScales, void* dOut,
+                  int M, int K, int N, int nb) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (!gQgemv && compile_kernel(
+                       // One WARP per output element: the 32 lanes split the K
+                       // contraction with lane l handling k = b*32+l in each 32-block
+                       // (consecutive lanes → consecutive k → coalesced int8 loads),
+                       // each lane accumulating its scale·a·q terms, then a single
+                       // warp shuffle-reduce. Realizes the int8 bandwidth win.
+                       "extern \"C\" __global__ void qmatmul_q8(const float* a, const signed char* q, const float* scales, float* out, int M, int K, int N, int nb){\n"
+                       "  long warp = ((long)blockIdx.x*blockDim.x + threadIdx.x) >> 5;\n"
+                       "  int lane = threadIdx.x & 31;\n"
+                       "  long total = (long)M*N;\n"
+                       "  if (warp >= total) return;\n"
+                       "  int m = (int)(warp / N), n = (int)(warp % N);\n"
+                       "  const float* ar = a + (size_t)m*K;\n"
+                       "  const signed char* qr = q + (size_t)n*K;\n"
+                       "  const float* sr = scales + (size_t)n*nb;\n"
+                       "  float acc = 0.0f;\n"
+                       "  for (int b = 0; b < nb; b++){\n"
+                       "    int k = b*32 + lane;\n"
+                       "    if (k < K){ acc += sr[b]*ar[k]*(float)qr[k]; }\n"
+                       "  }\n"
+                       "  for (int o = 16; o > 0; o >>= 1){ acc += __shfl_down_sync(0xffffffff, acc, o); }\n"
+                       "  if (lane == 0){ out[warp] = acc; }\n"
+                       "}\n",
+                       "qmatmul_q8.cu", "qmatmul_q8", &gQgemv) != 0) { rc = -2; goto done; }
+    {
+        long total = (long)M * N * 32; // one warp (32 threads) per output element
+        int threads = 256, blocks = (int)((total + threads - 1) / threads); if (blocks < 1) blocks = 1;
+        void* args[8];
+        args[0] = &dA; args[1] = &dQ; args[2] = &dScales; args[3] = &dOut;
+        args[4] = &M; args[5] = &K; args[6] = &N; args[7] = &nb;
+        rc = (cuLaunchKernel(gQgemv, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 done:
     pthread_mutex_unlock(&gLock);
