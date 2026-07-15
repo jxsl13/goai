@@ -4,6 +4,20 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — vectorized Q8 GEMV: +19.7% end-to-end decode (worker linux-amd64, 2026-07-15)
+- The resident-Q8 GEMV kernel (the hot kernel of decode — 7 projections per step) was
+  bandwidth-inefficient: scalar 1-byte int8 loads ran `[1,2048]·[2048,2048]` at ~108 GB/s,
+  only ~30% of the RTX 3060's peak (decode is weight-bandwidth-bound, per the scale
+  benchmark). Vectorized it — each lane loads an `int32` (4 packed int8 → a 128 B coalesced
+  transaction) + a `float4` activation, covering 128 contraction elements per step (4× fewer,
+  4× wider weight loads; the window spans 4 per-32 scale blocks so lane `l` uses block `l/8`).
+  Scalar fallback for `K % 128 ≠ 0`.
+- Numerically identical (Q8 == f32 token-for-token, Qwen fixed == alloc, all scales still
+  pass). Clean same-window A/B: isolated GEMV 43 → 38.5 µs (+12 %); **end-to-end TinyLlama
+  Q8 graph decode 161.4 → 193.2 tok/s (+19.7 %)** — bigger than the single-shape number
+  because a decode step is dominated by the larger-K GEMVs (down-proj, output head). Closes
+  the llama.cpp gap from 0.68× to 0.79× (1.48× → 1.26× behind); all Q8 decode benefits.
+
 ### CUDA — competitive decode benchmark vs llama.cpp across scales (worker linux-amd64, 2026-07-15)
 - Extends the single-model llama.cpp comparison to a **4-model, 2-family, 5× parameter**
   sweep, all on one RTX 3060, both sides Q8_0 (a fair match — goai's decode path is resident
