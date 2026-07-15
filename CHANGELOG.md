@@ -4,6 +4,21 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T655 — Byte Latent Transformer (BLT): tokenizer-free byte-level LM (2026-07-15)
+- New `nlp.BLT` + `nlp.EntropyPatcher`: the Byte Latent Transformer (Meta 2024,
+  arXiv:2412.09871) — a language model with NO tokenizer that works directly on raw
+  bytes. A small entropy model scores each byte's surprise and splits the byte stream
+  into variable-length PATCHES at high-entropy points; a local encoder pools the bytes
+  of each patch into a patch vector (masked cross-attention), a latent transformer runs
+  over the patch sequence, and a local decoder cross-attends from bytes back to patches
+  to predict the next byte. Built purely by composing existing ops — the variable patch
+  count is just a per-forward tensor dimension (no ragged tensors, no new kernels) and
+  the patch-restricted attention reuses the composed additive-mask softmax already used
+  by QK-norm. Correctness pinned by a collapse test (one-byte-per-patch + identity
+  pooling reproduces a plain byte-level GPT to 1e-10), full gradcheck, and an e2e
+  byte-level model that trains (cross-entropy halves) and generates valid text.
+  Distinct from the token-based GPT/Llama decoders and the diffusion/CLA models.
+
 ### T654 — Cross-Layer Attention (CLA): shared-KV cache reduction (2026-07-15)
 - New `nlp.CLA`: cross-layer attention (Brandon et al. 2024, arXiv:2405.12981). Adjacent
   transformer layers are grouped in runs of `Share`; the leader of each group projects
