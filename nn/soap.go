@@ -159,12 +159,36 @@ func (s *SOAP) Step(grad GradFn) error {
 		if st.mv == nil {
 			st.mv, st.vv = make([]float64, nEl), make([]float64, nEl)
 		}
+		mv, vv := st.mv, st.vv
+		// Typed fast paths (contiguous f64/f32 pairs): flat loops, moments and the
+		// update arithmetic in float64 exactly as the generic path computes them.
+		if pf := flatF64(p); pf != nil {
+			if gf := flatF64(g); gf != nil {
+				for i, gv := range gf {
+					mv[i] = b1*mv[i] + (1-b1)*gv
+					vv[i] = b2*vv[i] + (1-b2)*gv*gv
+					pf[i] = pf[i] - s.LR*(mv[i]/c1)/(math.Sqrt(vv[i]/c2)+s.Eps)
+				}
+				continue
+			}
+		} else if pf := flatF32(p); pf != nil {
+			if gf := flatF32(g); gf != nil {
+				for i := range gf {
+					gv := float64(gf[i])
+					mv[i] = b1*mv[i] + (1-b1)*gv
+					vv[i] = b2*vv[i] + (1-b2)*gv*gv
+					pf[i] = float32(float64(pf[i]) - s.LR*(mv[i]/c1)/(math.Sqrt(vv[i]/c2)+s.Eps))
+				}
+				continue
+			}
+		}
+		// Generic fallback: any dtype/layout via the widening accessors.
 		for i := range nEl {
 			idx := tensor.Unravel(i, p.Shape())
 			gv := g.AtF64(idx...)
-			st.mv[i] = b1*st.mv[i] + (1-b1)*gv
-			st.vv[i] = b2*st.vv[i] + (1-b2)*gv*gv
-			p.SetF64(p.AtF64(idx...)-s.LR*(st.mv[i]/c1)/(math.Sqrt(st.vv[i]/c2)+s.Eps), idx...)
+			mv[i] = b1*mv[i] + (1-b1)*gv
+			vv[i] = b2*vv[i] + (1-b2)*gv*gv
+			p.SetF64(p.AtF64(idx...)-s.LR*(mv[i]/c1)/(math.Sqrt(vv[i]/c2)+s.Eps), idx...)
 		}
 	}
 	return nil

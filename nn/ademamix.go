@@ -108,15 +108,49 @@ func (a *AdEMAMix) Step(grad GradFn) error {
 		if !g.Shape().Equal(p.Shape()) {
 			return fmt.Errorf("nn: AdEMAMix grad shape %v != param %v", g.Shape(), p.Shape())
 		}
+		m1, m2, v := a.m1[pi], a.m2[pi], a.v[pi]
+		// Typed fast paths (contiguous f64/f32 pairs): flat loops, moments and the
+		// update arithmetic in float64 exactly as the generic path computes them.
+		if pf := flatF64(p); pf != nil {
+			if gf := flatF64(g); gf != nil {
+				for i, gv := range gf {
+					m1[i] = a.Beta1*m1[i] + (1-a.Beta1)*gv
+					m2[i] = a.Beta3*m2[i] + (1-a.Beta3)*gv
+					v[i] = a.Beta2*v[i] + (1-a.Beta2)*gv*gv
+					m1hat := m1[i] / bc1
+					vhat := v[i] / bc2
+					upd := (m1hat + a.Alpha*m2[i]) / (math.Sqrt(vhat) + a.Eps)
+					pv := pf[i]
+					pf[i] = pv - a.LR*(upd+a.WeightDecay*pv)
+				}
+				continue
+			}
+		} else if pf := flatF32(p); pf != nil {
+			if gf := flatF32(g); gf != nil {
+				for i := range gf {
+					gv := float64(gf[i])
+					m1[i] = a.Beta1*m1[i] + (1-a.Beta1)*gv
+					m2[i] = a.Beta3*m2[i] + (1-a.Beta3)*gv
+					v[i] = a.Beta2*v[i] + (1-a.Beta2)*gv*gv
+					m1hat := m1[i] / bc1
+					vhat := v[i] / bc2
+					upd := (m1hat + a.Alpha*m2[i]) / (math.Sqrt(vhat) + a.Eps)
+					pv := float64(pf[i])
+					pf[i] = float32(pv - a.LR*(upd+a.WeightDecay*pv))
+				}
+				continue
+			}
+		}
+		// Generic fallback: any dtype/layout via the widening accessors.
 		for i := range p.Numel() {
 			idx := tensor.Unravel(i, p.Shape())
 			gv := g.AtF64(idx...)
-			a.m1[pi][i] = a.Beta1*a.m1[pi][i] + (1-a.Beta1)*gv
-			a.m2[pi][i] = a.Beta3*a.m2[pi][i] + (1-a.Beta3)*gv
-			a.v[pi][i] = a.Beta2*a.v[pi][i] + (1-a.Beta2)*gv*gv
-			m1hat := a.m1[pi][i] / bc1
-			vhat := a.v[pi][i] / bc2
-			upd := (m1hat + a.Alpha*a.m2[pi][i]) / (math.Sqrt(vhat) + a.Eps)
+			m1[i] = a.Beta1*m1[i] + (1-a.Beta1)*gv
+			m2[i] = a.Beta3*m2[i] + (1-a.Beta3)*gv
+			v[i] = a.Beta2*v[i] + (1-a.Beta2)*gv*gv
+			m1hat := m1[i] / bc1
+			vhat := v[i] / bc2
+			upd := (m1hat + a.Alpha*m2[i]) / (math.Sqrt(vhat) + a.Eps)
 			pv := p.AtF64(idx...)
 			p.SetF64(pv-a.LR*(upd+a.WeightDecay*pv), idx...)
 		}

@@ -99,29 +99,74 @@ func (l *LAMB) Step(grad GradFn) error {
 			return fmt.Errorf("nn: LAMB grad shape %v != param %v", g.Shape(), p.Shape())
 		}
 		n := p.Numel()
+		m, v := l.m[pi], l.v[pi]
 		u := make([]float64, n) // per-layer update direction m̂/(√v̂+ε) + λθ
 		var wNorm2, uNorm2 float64
-		for i := range n {
-			idx := tensor.Unravel(i, p.Shape())
-			gv := g.AtF64(idx...)
-			l.m[pi][i] = l.Beta1*l.m[pi][i] + (1-l.Beta1)*gv
-			l.v[pi][i] = l.Beta2*l.v[pi][i] + (1-l.Beta2)*gv*gv
-			mh := l.m[pi][i] / c1
-			vh := l.v[pi][i] / c2
-			theta := p.AtF64(idx...)
-			ui := mh/(math.Sqrt(vh)+l.Eps) + l.WeightDecay*theta
-			u[i] = ui
-			wNorm2 += theta * theta
-			uNorm2 += ui * ui
+		// Typed fast paths (contiguous f64/f32 pairs): flat loops, moments and the
+		// update arithmetic in float64 exactly as the generic path computes them.
+		pf64, gf64 := flatF64(p), flatF64(g)
+		pf32, gf32 := flatF32(p), flatF32(g)
+		switch {
+		case pf64 != nil && gf64 != nil:
+			for i, gv := range gf64 {
+				m[i] = l.Beta1*m[i] + (1-l.Beta1)*gv
+				v[i] = l.Beta2*v[i] + (1-l.Beta2)*gv*gv
+				mh := m[i] / c1
+				vh := v[i] / c2
+				theta := pf64[i]
+				ui := mh/(math.Sqrt(vh)+l.Eps) + l.WeightDecay*theta
+				u[i] = ui
+				wNorm2 += theta * theta
+				uNorm2 += ui * ui
+			}
+		case pf32 != nil && gf32 != nil:
+			for i := range gf32 {
+				gv := float64(gf32[i])
+				m[i] = l.Beta1*m[i] + (1-l.Beta1)*gv
+				v[i] = l.Beta2*v[i] + (1-l.Beta2)*gv*gv
+				mh := m[i] / c1
+				vh := v[i] / c2
+				theta := float64(pf32[i])
+				ui := mh/(math.Sqrt(vh)+l.Eps) + l.WeightDecay*theta
+				u[i] = ui
+				wNorm2 += theta * theta
+				uNorm2 += ui * ui
+			}
+		default:
+			// Generic fallback: any dtype/layout via the widening accessors.
+			for i := range n {
+				idx := tensor.Unravel(i, p.Shape())
+				gv := g.AtF64(idx...)
+				m[i] = l.Beta1*m[i] + (1-l.Beta1)*gv
+				v[i] = l.Beta2*v[i] + (1-l.Beta2)*gv*gv
+				mh := m[i] / c1
+				vh := v[i] / c2
+				theta := p.AtF64(idx...)
+				ui := mh/(math.Sqrt(vh)+l.Eps) + l.WeightDecay*theta
+				u[i] = ui
+				wNorm2 += theta * theta
+				uNorm2 += ui * ui
+			}
 		}
 		trust := 1.0 // ‖θ‖=0 or ‖u‖=0 ⇒ no rescaling (apex/TF convention)
 		if wNorm2 > 0 && uNorm2 > 0 {
 			trust = math.Sqrt(wNorm2) / math.Sqrt(uNorm2)
 		}
 		step := l.LR * trust
-		for i := range n {
-			idx := tensor.Unravel(i, p.Shape())
-			p.SetF64(p.AtF64(idx...)-step*u[i], idx...)
+		switch {
+		case pf64 != nil && gf64 != nil:
+			for i := range pf64 {
+				pf64[i] = pf64[i] - step*u[i]
+			}
+		case pf32 != nil && gf32 != nil:
+			for i := range pf32 {
+				pf32[i] = float32(float64(pf32[i]) - step*u[i])
+			}
+		default:
+			for i := range n {
+				idx := tensor.Unravel(i, p.Shape())
+				p.SetF64(p.AtF64(idx...)-step*u[i], idx...)
+			}
 		}
 	}
 	return nil

@@ -122,6 +122,129 @@ func BenchmarkLionStepOnly(b *testing.B) {
 	benchStepOnly(b, tensor.F64, func(p []*tensor.Tensor) nn.Optimizer { return nn.NewLion(p, 1e-4) })
 }
 
+func BenchmarkLAMBStepOnly(b *testing.B) {
+	benchStepOnly(b, tensor.F64, func(p []*tensor.Tensor) nn.Optimizer { return nn.NewLAMB(p, 1e-3) })
+}
+
+func BenchmarkAdEMAMixStepOnly(b *testing.B) {
+	benchStepOnly(b, tensor.F64, func(p []*tensor.Tensor) nn.Optimizer { return nn.NewAdEMAMix(p, 1e-3) })
+}
+
+func BenchmarkAdafactorStepOnly(b *testing.B) {
+	benchStepOnly(b, tensor.F64, func(p []*tensor.Tensor) nn.Optimizer { return nn.NewAdafactor(p) })
+}
+
+// stepOnlyFixture2D is stepOnlyFixture restricted to matrix parameters (Muon
+// accepts 2-D only).
+func stepOnlyFixture2D(dt tensor.Dtype) ([]*tensor.Tensor, nn.GradFn) {
+	shapes := []tensor.Shape{{256, 256}, {256, 512}}
+	params := make([]*tensor.Tensor, len(shapes))
+	grads := map[*tensor.Tensor]*tensor.Tensor{}
+	for i, s := range shapes {
+		params[i] = tensor.New(dt, s)
+		g := tensor.New(tensor.F64, s)
+		gd := g.Storage().F64()
+		for j := range gd {
+			gd[j] = float64(j%17) * 1e-3
+		}
+		grads[params[i]] = g.Cast(dt)
+	}
+	return params, func(p *tensor.Tensor) *tensor.Tensor { return grads[p] }
+}
+
+func BenchmarkMuonStepOnly(b *testing.B) {
+	params, gf := stepOnlyFixture2D(tensor.F64)
+	opt := nn.NewMuon(params, 0.02)
+	b.ReportAllocs()
+	for b.Loop() {
+		if err := opt.Step(gf); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// stepOnlyFixtureSmall shrinks the matrices so the eigendecomposition-based
+// optimizers (SOAP, Shampoo) stay benchmarkable; the element-wise loops are
+// still a visible fraction of the step.
+func stepOnlyFixtureSmall() ([]*tensor.Tensor, nn.GradFn) {
+	shapes := []tensor.Shape{{64, 64}, {64}, {64, 128}, {128}}
+	params := make([]*tensor.Tensor, len(shapes))
+	grads := map[*tensor.Tensor]*tensor.Tensor{}
+	for i, s := range shapes {
+		params[i] = tensor.New(tensor.F64, s)
+		g := tensor.New(tensor.F64, s)
+		gd := g.Storage().F64()
+		for j := range gd {
+			gd[j] = float64(j%17) * 1e-3
+		}
+		grads[params[i]] = g
+	}
+	return params, func(p *tensor.Tensor) *tensor.Tensor { return grads[p] }
+}
+
+func BenchmarkSOAPStepOnly(b *testing.B) {
+	params, gf := stepOnlyFixtureSmall()
+	opt := nn.NewSOAP(params, 1e-3)
+	b.ReportAllocs()
+	for b.Loop() {
+		if err := opt.Step(gf); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkShampooStepOnly(b *testing.B) {
+	params, gf := stepOnlyFixtureSmall()
+	opt := nn.NewShampoo(params, 1e-3, nn.WithShampooRootEvery(10))
+	b.ReportAllocs()
+	for b.Loop() {
+		if err := opt.Step(gf); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// stepOnlyFixtureVec is stepOnlyFixture with vector (1-D) parameters only —
+// for SOAP/Shampoo it isolates their element-wise diagonal path (plain Adam /
+// AdaGrad), which is the entire Step for non-matrix parameters.
+func stepOnlyFixtureVec() ([]*tensor.Tensor, nn.GradFn) {
+	shapes := []tensor.Shape{{65536}, {256}, {131072}, {512}}
+	params := make([]*tensor.Tensor, len(shapes))
+	grads := map[*tensor.Tensor]*tensor.Tensor{}
+	for i, s := range shapes {
+		params[i] = tensor.New(tensor.F64, s)
+		g := tensor.New(tensor.F64, s)
+		gd := g.Storage().F64()
+		for j := range gd {
+			gd[j] = float64(j%17) * 1e-3
+		}
+		grads[params[i]] = g
+	}
+	return params, func(p *tensor.Tensor) *tensor.Tensor { return grads[p] }
+}
+
+func BenchmarkSOAPStepOnlyVec(b *testing.B) {
+	params, gf := stepOnlyFixtureVec()
+	opt := nn.NewSOAP(params, 1e-3)
+	b.ReportAllocs()
+	for b.Loop() {
+		if err := opt.Step(gf); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkShampooStepOnlyVec(b *testing.B) {
+	params, gf := stepOnlyFixtureVec()
+	opt := nn.NewShampoo(params, 1e-3)
+	b.ReportAllocs()
+	for b.Loop() {
+		if err := opt.Step(gf); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 // BenchmarkClipGradNorm times the global-norm pass plus one clipped read of
 // every gradient — the per-step cost of gradient clipping.
 func BenchmarkClipGradNorm(b *testing.B) {
