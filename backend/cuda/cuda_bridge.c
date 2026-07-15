@@ -1058,7 +1058,7 @@ static int q8_gemv_launch(const void* dA, const void* dQ, const void* dScales, v
                        "  for (int o = 16; o > 0; o >>= 1){ acc += __shfl_down_sync(0xffffffff, acc, o); }\n"
                        "  if (lane == 0){\n"
                        "    float r = acc;\n"
-                       "    if (gate){ float g = gate[warp]; r = (g / (1.f + __expf(-g))) * acc; }\n" // SwiGLU epilogue: out = silu(gate)*(a.W)
+                       "    if (gate){ float g = gate[warp]; float sg = g>=0.0f ? 1.0f/(1.0f+expf(-g)) : expf(g)/(1.0f+expf(g)); r = g*sg*acc; }\n" // SwiGLU epilogue, arithmetic == the standalone swiglu kernel (token parity)
                        "    out[warp] = beta*out[warp] + r;\n"                                        // beta=1 fuses the residual add
                        "  }\n"
                        "}\n",
@@ -1192,7 +1192,7 @@ static int q4k_gemv_launch(const void* dA, const void* dQ, void* dOut, int M, in
                        "  for (int o = 16; o > 0; o >>= 1){ acc += __shfl_down_sync(0xffffffff, acc, o); }\n"
                        "  if (lane == 0){\n"
                        "    float r = acc;\n"
-                       "    if (gate){ float g = gate[warp]; r = (g / (1.f + __expf(-g))) * acc; }\n" // SwiGLU epilogue
+                       "    if (gate){ float g = gate[warp]; float sg = g>=0.0f ? 1.0f/(1.0f+expf(-g)) : expf(g)/(1.0f+expf(g)); r = g*sg*acc; }\n" // SwiGLU epilogue, arithmetic == the standalone swiglu kernel
                        "    out[warp] = beta*out[warp] + r;\n"
                        "  }\n"
                        "}\n",
