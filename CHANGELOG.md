@@ -4,6 +4,16 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — refreshed competitive benchmark: goai now within 1.0–1.23× of llama.cpp (worker linux-amd64, 2026-07-15)
+- Re-measured the full decode sweep with the optimized (vectorized + int4) Q8 GEMV. Graph
+  decode tok/s rose across the board — Qwen-0.5B 271→316, TinyLlama 165→199, Qwen-1.5B
+  111→140, Qwen-3B 62→77 — the larger, more weight-bandwidth-bound models gaining most
+  (+25%). New ratios vs llama.cpp Vulkan (both Q8): **Qwen-0.5B 1.03× (goai faster)**,
+  TinyLlama 0.81×, Qwen-1.5B 0.84×, Qwen-3B 0.89× — the from-scratch Go engine is now
+  **within 1.0–1.23×** of a mature hand-tuned one across a 5× parameter range (was
+  0.67–0.89×). The residual gap is attention fusion + the last of the GEMV bandwidth;
+  the prefill (flash/fused) gap is separate. `docs/benchmarking.md`; §PERF-SCALEBENCH-2.
+
 ### CUDA — Q8 GEMV int4 loads: +2.8% more decode (worker linux-amd64, 2026-07-15)
 - Widens the Q8 GEMV weight load again — `int4` (16 B/lane = 512 contraction elements per
   step, more memory requests in flight) for `K % 512 == 0`, keeping the SAME warp count so

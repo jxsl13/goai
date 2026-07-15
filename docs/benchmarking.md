@@ -916,24 +916,26 @@ same RTX 3060, **both sides Q8_0** (a fair match — goai's Qwen/TinyLlama decod
 resident Q8, same as llama.cpp), goai on its optimized fixed-buffer + CUDA-graph decode,
 llama.cpp `llama-bench -ngl 99` (`scripts/bench-llamacpp.sh`). Decode = tg128 tok/s:
 
+Numbers below are **after** the vectorized/int4 Q8-GEMV work (the earlier `271/165/111/62`
+snapshot predated it); every scale was re-measured on the same box. Decode = tg128 tok/s:
+
 | model | params | goai CUDA (Q8, graph) | llama.cpp Vulkan (Q8) | goai / llama.cpp |
 |---|---:|---:|---:|---:|
-| Qwen2.5-0.5B | 0.63 B | 271 | 306 | **0.89×** (1.13× behind) |
-| TinyLlama-1.1B | 1.10 B | 165 | 244 | 0.68× |
-| Qwen2.5-1.5B | 1.78 B | 111 | 166 | 0.67× |
-| Qwen2.5-3B | 3.40 B | 62 | 87 | 0.71× |
+| Qwen2.5-0.5B | 0.63 B | **316** | 306 | **1.03×** (goai faster) |
+| TinyLlama-1.1B | 1.10 B | 199 | 244 | 0.81× |
+| Qwen2.5-1.5B | 1.78 B | 140 | 166 | 0.84× |
+| Qwen2.5-3B | 3.40 B | 77 | 87 | 0.89× |
 
-Reading: a from-scratch Go CUDA decoder lands **within 1.1–1.5×** of a mature, hand-tuned
-engine across a 5× parameter range and two model families. It is **closest at the smallest
-scale** (0.5B, 1.13×) — where decode is most launch/overhead-bound and goai's CUDA-graph
-capture (one replayed program per token) shines — and settles at ≈1.4–1.5× on the larger
-models, where decode becomes weight-bandwidth-bound and llama.cpp's more mature memory
-pipelining and kernel fusion pull ahead. The remaining gap is a kernel-quality gap
-(quantized GEMV bandwidth + fused attention), not an architectural one; it is consistent
-across scales, which is the honest signal that the engine is competitive rather than
-accidentally close on one model. (llama.cpp prefill pp32/pp128 also scales harder —
-e.g. Qwen-3B 1098/3452 vs goai's fewer-but-larger cuBLAS launches — the documented
-flash/fused-attention prefill gap.)
+Reading: a from-scratch Go CUDA decoder now lands **within 1.0–1.23×** of a mature,
+hand-tuned engine across a 5× parameter range and two model families — and is **faster at
+0.5B** (1.03×), where decode is launch-bound and goai's CUDA-graph capture (one replayed
+program per token) shines. The GEMV bandwidth work closed most of the earlier gap, and it
+helped the **larger** models most (Qwen-3B +25%, from 0.71× to 0.89×) because they are more
+weight-bandwidth-bound — exactly where the vectorized quant GEMV pays off. The residual
+≈1.1–1.23× on the bigger models is the last of the kernel-quality gap (attention fusion +
+the final slice of GEMV bandwidth), not an architectural one. (llama.cpp prefill pp32/pp128
+still scales harder — e.g. Qwen-3B 1098/3452 vs goai's fewer-but-larger cuBLAS launches —
+the documented flash/fused-attention **prefill** gap, a separate lever from decode.)
 
 ## Further reading
 
