@@ -151,6 +151,7 @@ var typeExampleExempt = map[string]bool{
 	"nn.CutMixOption":               true, // functional-option type (shown via WithCutMixLambda)
 	"nn.QGaLoreOption":              true, // functional-option type (shown via WithQGaLore*)
 	"nn.SimCSEOption":               true, // functional-option type (shown via WithSimCSETemperature etc.)
+	"nn.Matryoshka2DOption":         true, // functional-option type (shown via WithMatryoshka2DLayerWeights/DimWeights)
 	"autograd.CheckpointFunc":       true, // callback-signature type (shown via ExampleCheckpoint)
 	"nn.ScheduleFreeOption":         true, // functional-option type (shown via WithScheduleFree*)
 	"nn.DAdaptAdamOption":           true, // functional-option type (shown via WithDAdapt*)
