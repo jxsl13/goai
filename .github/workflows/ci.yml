@@ -215,8 +215,10 @@ jobs:
         if: runner.os == 'macOS'
         continue-on-error: true
         run: |
-          # HOMEBREW_NO_ENV_HINTS silences brew's env hints incl. the runner
-          # image's untrusted-taps warning (C17: warnings-as-errors hygiene)
+          # C17 hygiene: the runner image ships an untrusted aws/tap that brew
+          # warns about on every install — drop it (we use homebrew-core only);
+          # NO_ENV_HINTS silences the remaining env hints
+          brew untap aws/tap 2>/dev/null || true
           HOMEBREW_NO_ENV_HINTS=1 brew install --quiet molten-vk vulkan-headers vulkan-loader vulkan-tools
           echo "VK_ICD_FILENAMES=$(brew --prefix)/share/vulkan/icd.d/MoltenVK_icd.json" >> "$GITHUB_ENV"
           echo "DYLD_LIBRARY_PATH=$(brew --prefix)/lib" >> "$GITHUB_ENV"

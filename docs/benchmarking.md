@@ -996,6 +996,39 @@ Repro: `TestCUDAMistral7BQ4QualityAndSpeed` / `TestCUDAQwenQ4QualityAndSpeed`
 (backend/cuda, `-tags cuda`, models under `models/`), llama.cpp side per
 `scripts/bench-llamacpp.sh` conventions (b10012 Vulkan).
 
+### Q4_K resident: the ggml-standard super-block format (Tw42)
+
+`ResidentBQ4K` keeps weights in ggml's own Q4_K super-block layout (144 B per 256
+weights = 0.5625 B/w: f16 scale-of-scales + packed 6-bit sub-scales/mins + nibbles) and
+dequantizes in-kernel — half of Q8's bytes, 25% fewer than the asymmetric Q4, and
+byte-compatible with Q4_K_M GGUF tensors (a Q4_K weight from a llama.cpp file uploads
+as-is: gguf's `[out,in]` row-major block order is exactly the GEMV layout). Same run,
+three precisions (decode tok/s | greedy agreement with Q8 over 24 tokens):
+
+| model | Q8 | asym Q4 | **Q4_K** | Q4 agree | **Q4_K agree** |
+|---|---:|---:|---:|---:|---:|
+| Qwen2.5-1.5B | 140.2 | 168.3 | **171.2** | 22/24 | 7/24 |
+| Qwen2.5-3B | 77.9 | 96.8 | 96.1 | 1/24 | 2/24 |
+| Mistral-7B | 37.4 | 47.1 | **48.1** | 2/24 | **24/24** |
+
+The 7B line is the headline: **Q4_K is the fastest precision AND token-for-token
+identical to Q8 over the whole run** — at 7B the format's 6-bit affine sub-scales
+absorb the 4-bit noise almost entirely, while halving Q8's weight traffic. goai-Q4_K
+at 7B (48.1) beats llama.cpp-Q8 (41.6) by 16% and stands at 0.81× of llama.cpp's own
+Q4_K_M (59.1). Smaller models diverge more (the simple non-iterative encoder — ggml
+uses an iterative best-fit; encoder quality is the follow-up lever).
+
+Kernel lesson (two measured rounds, 73→78→96 tok/s at 3B): the first Q4_K kernel was
+COMPUTE-bound, not bandwidth-bound — every lane redundantly decoded the same f16
+scales (64 branchy decodes per super-block per warp). Cooperative decode (lanes 0–7 +
+`__shfl` broadcast) bought +7%; the big win (+23%) was making the decode **branch-free**
+(f16 via the ×2^112 multiply-rebias trick — exact for subnormals — and unconditional
+`get_scale_min(lane&7)` on all lanes). Rule for every future in-kernel format decoder:
+no branches in the hot loop, even lane-uniform ones — their serial scalar body stalls
+the whole warp. Parity is gated structurally: the test reference dequantizes the SAME
+blocks the kernel reads, so the tolerance (1e-5) covers only f32 summation order, never
+the quantization error.
+
 ## Further reading
 
 - Hoefler & Belli, *Scientific Benchmarking of Parallel Computing Systems* (SC '15) — the canonical treatment of run variance, warm-up and honest reporting that this document's rules follow.

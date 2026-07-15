@@ -4,6 +4,35 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — direct Q4_K_M file loading: any llama.cpp 4-bit file runs standalone (worker linux-amd64, Tw43, 2026-07-15)
+- `quantDirect` (test-side loader) keeps a Q4_K_M GGUF's tensors native: Q4_K blocks upload
+  as-is into `ResidentBQ4K` (zero requantization — llama.cpp's iterative-encoder bits), the
+  Q6_K minority (v/down in half the layers + the output head) goes Dequantize→resident-Q8
+  (higher precision than Q6_K), f32 norms/biases as usual. No new kernels — the per-tensor
+  interface mixes precisions. Validated on Mistral-7B (23/24 greedy tokens == the Q8-file
+  reference, 47.7 tok/s), Qwen-1.5B/3B (coherent). Users can now run a standard HF Q4_K_M
+  download without fetching the 2× larger Q8 sibling.
+- Measured hypothesis kill: llama.cpp's encoder does NOT improve small-model greedy
+  agreement (4/24 and 3/24 vs the requant path's 7/24 and 2/24) — token divergence at
+  small scale is intrinsic 4-bit noise on flat logit distributions, not encoder quality;
+  generated text stays coherent and correct at every scale.
+
+### CUDA — Q4_K resident decode: ggml's standard format, 7B at Q8 quality +29% faster (worker linux-amd64, Tw42, 2026-07-15)
+- `cuda.ResidentBQ4K` + `cu_qmatmul_q4k`: weights resident in ggml's Q4_K super-block layout
+  (144 B / 256 weights — f16 d/dmin, packed 6-bit sub-scales/mins, nibbles), dequantized
+  in-kernel (y = d·sc6·q − dmin·min6). Half of Q8's weight bytes, 25% fewer than the
+  asymmetric Q4, and byte-compatible with Q4_K_M GGUF tensors (upload as-is, no transpose,
+  no requantization). Quantization stays in `format/gguf` (`NewResidentBQ4KFromBlocks`
+  accepts pre-encoded blocks) — no backend→format layering inversion.
+- Measured (same-run three-precision compare, tg128): Qwen1.5B 140.2|168.3|**171.2**,
+  Qwen3B 77.9|96.8|96.1, **Mistral-7B 37.4|47.1|48.1** (Q8|Q4|Q4_K) — and at 7B Q4_K greedy
+  agrees with Q8 **24/24 tokens** (asym Q4: 2/24): fastest AND Q8-quality at half the bytes.
+  goai-Q4_K at 7B beats llama.cpp-Q8 by 16% (48.1 vs 41.6), 0.81× of llama.cpp Q4_K_M.
+- Kernel lesson (73→78→96 tok/s at 3B, two A/B rounds): in-kernel format decode must be
+  branch-free — the divergent `if(lane<8)` + branchy-subnormal f16 loop cost 23%; fixed via
+  the ×2^112 multiply-rebias f16 decode (exact incl. subnormals) and all-lane uniform 6-bit
+  unpacking. Parity gate: kernel == the gguf dequant semantics of the same blocks (≤1e-5,
+  f32 order only); beta=1 residual fuse covered.
 ### T655 — Process Reward Model: step-level reward with a measurable value test (2026-07-15)
 - New `nlp.ProcessRewardModel` (+ `nlp.OutcomeRewardModel` as the ablation baseline): a
   process reward model (Lightman et al. 2023 arXiv:2305.20050; Math-Shepherd
