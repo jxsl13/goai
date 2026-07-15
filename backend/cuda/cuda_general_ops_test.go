@@ -59,4 +59,22 @@ func TestCUDAGeneralOps(t *testing.T) {
 	closeTo("OpMul", exec(cctx, backend.OpMul, x, y), exec(rctx, backend.OpMul, x, y))
 	// Softmax over the last axis.
 	closeTo("OpSoftmax", exec(cctx, backend.OpSoftmax, x), exec(rctx, backend.OpSoftmax, x))
+
+	// RMSNorm (x, gamma) and LayerNorm (x, gamma, beta) over the last axis.
+	gamma := bench.RandF32(tensor.Shape{50}, 3)
+	beta := bench.RandF32(tensor.Shape{50}, 4)
+	na := backend.NormAttrs{Eps: 1e-5}
+	rmsG, _ := backend.Execute(cctx, backend.OpRMSNorm, []*tensor.Tensor{x, gamma}, na)
+	rmsR, _ := backend.Execute(rctx, backend.OpRMSNorm, []*tensor.Tensor{x, gamma}, na)
+	closeTo("OpRMSNorm", rmsG[0], rmsR[0])
+	lnG, _ := backend.Execute(cctx, backend.OpLayerNorm, []*tensor.Tensor{x, gamma, beta}, na)
+	lnR, _ := backend.Execute(rctx, backend.OpLayerNorm, []*tensor.Tensor{x, gamma, beta}, na)
+	closeTo("OpLayerNorm", lnG[0], lnR[0])
+
+	// RoPE on a 2D [seq, heads·hd] tensor.
+	q := bench.RandF32(tensor.Shape{6, 64}, 5)
+	ra := backend.RoPEAttrs{Base: 10000, Heads: 8, PosOffset: 3}
+	ropeG, _ := backend.Execute(cctx, backend.OpRoPE, []*tensor.Tensor{q}, ra)
+	ropeR, _ := backend.Execute(rctx, backend.OpRoPE, []*tensor.Tensor{q}, ra)
+	closeTo("OpRoPE", ropeG[0], ropeR[0])
 }
