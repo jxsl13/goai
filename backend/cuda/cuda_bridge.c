@@ -34,6 +34,44 @@ static cudaStream_t gStream = NULL;
 static CUcontext gCtx = NULL; // runtime's primary context, retained for driver-API launches
 static CUfunction gGelu = NULL, gSilu = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gQgemv = NULL; // lazily nvrtc-compiled
 static CUfunction gRopeDpos = NULL, gAttnSoftmaxDpos = NULL, gAppendDpos = NULL; // device-position (graph-capturable) twins
+static CUfunction gArgmax = NULL; // greedy argmax over logits
+static int ensure_init(void);
+static int compile_kernel(const char* src, const char* name, const char* entry, CUfunction* out);
+
+// cu_argmax_f32 returns argmax_i x[i] (greedy token) — one block reduction over
+// the [n] logits on device, downloading only the 4-byte index instead of the full
+// [1,vocab] logit vector (128 KB for vocab=32000) every decode token.
+int cu_argmax_f32(const void* x, int n) {
+    static int* dIdx = NULL;
+    int rc = -1, host = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { goto done; }
+    if (dIdx == NULL && cudaMalloc((void**)&dIdx, sizeof(int)) != cudaSuccess) { goto done; }
+    if (!gArgmax && compile_kernel(
+            "extern \"C\" __global__ void argmax_f32(const float* x, int n, int* outIdx){\n"
+            "  extern __shared__ char sh[];\n"
+            "  float* sv = (float*)sh; int* si = (int*)(sv + blockDim.x);\n"
+            "  int t = threadIdx.x, nt = blockDim.x;\n"
+            "  float bv = -1e30f; int bi = 0;\n"
+            "  for (int i = t; i < n; i += nt){ float v = x[i]; if (v > bv){ bv = v; bi = i; } }\n"
+            "  sv[t] = bv; si[t] = bi; __syncthreads();\n"
+            "  for (int s = nt/2; s > 0; s >>= 1){ if (t < s && sv[t+s] > sv[t]){ sv[t] = sv[t+s]; si[t] = si[t+s]; } __syncthreads(); }\n"
+            "  if (t == 0) *outIdx = si[0];\n"
+            "}\n", "argmax.cu", "argmax_f32", &gArgmax) != 0) { goto done; }
+    {
+        int threads = 256;
+        size_t shmem = (size_t)threads * (sizeof(float) + sizeof(int));
+        void* args[3] = {&x, &n, &dIdx};
+        if (cuLaunchKernel(gArgmax, 1, 1, 1, threads, 1, 1, shmem, (CUstream)gStream, args, NULL) != CUDA_SUCCESS) { goto done; }
+        if (cudaMemcpyAsync(&host, dIdx, sizeof(int), cudaMemcpyDeviceToHost, gStream) != cudaSuccess) { goto done; }
+        if (cudaStreamSynchronize(gStream) != cudaSuccess) { goto done; }
+        rc = 0;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return (rc == 0) ? host : -1;
+}
 static CUfunction gBuildPtrs = NULL; // device-side batched pointer-array builder (graph-capturable GQA)
 static int compile_kernel(const char* src, const char* name, const char* entry, CUfunction* out); // fwd decl
 
