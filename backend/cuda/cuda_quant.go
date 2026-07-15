@@ -124,6 +124,23 @@ func (r *ResidentBQ8) QMatMulInto(a, out *DeviceF32) error {
 	return nil
 }
 
+// QMatMulSwiGLUInto computes out = silu(gate) ⊙ (a·dequant(B)) — the up-projection
+// GEMV with SwiGLU applied in the kernel epilogue (Tw55 fusion): replaces the
+// up-GEMV + separate SwiGLU launch and the hidden-vector round-trip between them.
+// gate must have out's [a.rows, N] layout (the gate projection's output).
+func (r *ResidentBQ8) QMatMulSwiGLUInto(a, gate, out *DeviceF32) error {
+	if r.q == nil || a.ptr == nil || gate.ptr == nil || out.ptr == nil {
+		return fmt.Errorf("cuda: QMatMulSwiGLUInto on a freed handle")
+	}
+	if a.cols != r.k || out.rows != a.rows || out.cols != r.n || gate.rows != out.rows || gate.cols != out.cols {
+		return fmt.Errorf("cuda: QMatMulSwiGLUInto shape a[%d,%d]·B[%d,%d] gate[%d,%d]→out[%d,%d]", a.rows, a.cols, r.k, r.n, gate.rows, gate.cols, out.rows, out.cols)
+	}
+	if rc := C.cu_qmatmul_q8_swiglu(a.ptr, r.q, r.scales, gate.ptr, out.ptr, C.int(a.rows), C.int(r.k), C.int(r.n), C.int(r.nb)); rc != 0 {
+		return fmt.Errorf("cuda: Q8 swiglu matmul failed (code %d)", int(rc))
+	}
+	return nil
+}
+
 // QMatMulAccInto computes c += a·dequant(B) in place (Q8 weight, beta=1), fusing
 // the transformer residual add into the quantized projection — the Q8 analogue of
 // ResidentB.MatMulAccInto. c must hold the residual and be [a.rows, N].

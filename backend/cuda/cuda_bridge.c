@@ -991,8 +991,8 @@ done:
 // scales[n, k/32], so W[k,n] ≈ scales[n,k/32] · q[n,k]. Reading int8 weights is 4×
 // less bandwidth than f32 — the decode (M=1, memory-bound GEMV) win. One thread
 // per output element loops its K contraction over blocks. §PERF quantization arc.
-int cu_qmatmul_q8(const void* dA, const void* dQ, const void* dScales, void* dOut,
-                  int M, int K, int N, int nb, float beta) {
+static int q8_gemv_launch(const void* dA, const void* dQ, const void* dScales, void* dOut,
+                          int M, int K, int N, int nb, float beta, const void* dGate) {
     int rc = -1;
     pthread_mutex_lock(&gLock);
     if (ensure_init() != 0) { rc = -1; goto done; }
@@ -1010,7 +1010,7 @@ int cu_qmatmul_q8(const void* dA, const void* dQ, const void* dScales, void* dOu
                        //    (owning k=l*4..l*4+3, all inside one block) uses scale
                        //    sr[base + l/8].
                        //  - SCALAR (else): lane l → k=b*32+l, coalesced int8.
-                       "extern \"C\" __global__ void qmatmul_q8(const float* a, const signed char* q, const float* scales, float* out, int M, int K, int N, int nb, float beta){\n"
+                       "extern \"C\" __global__ void qmatmul_q8(const float* a, const signed char* q, const float* scales, float* out, int M, int K, int N, int nb, float beta, const float* gate){\n"
                        "  long warp = ((long)blockIdx.x*blockDim.x + threadIdx.x) >> 5;\n"
                        "  int lane = threadIdx.x & 31;\n"
                        "  long total = (long)M*N;\n"
@@ -1056,20 +1056,37 @@ int cu_qmatmul_q8(const void* dA, const void* dQ, const void* dScales, void* dOu
                        "    }\n"
                        "  }\n"
                        "  for (int o = 16; o > 0; o >>= 1){ acc += __shfl_down_sync(0xffffffff, acc, o); }\n"
-                       "  if (lane == 0){ out[warp] = beta*out[warp] + acc; }\n" // beta=1 fuses the residual add
+                       "  if (lane == 0){\n"
+                       "    float r = acc;\n"
+                       "    if (gate){ float g = gate[warp]; r = (g / (1.f + __expf(-g))) * acc; }\n" // SwiGLU epilogue: out = silu(gate)*(a.W)
+                       "    out[warp] = beta*out[warp] + r;\n"                                        // beta=1 fuses the residual add
+                       "  }\n"
                        "}\n",
                        "qmatmul_q8.cu", "qmatmul_q8", &gQgemv) != 0) { rc = -2; goto done; }
     {
         long total = (long)M * N * 32; // one warp (32 threads) per output element
         int threads = 256, blocks = (int)((total + threads - 1) / threads); if (blocks < 1) blocks = 1;
-        void* args[9];
+        void* args[10];
         args[0] = &dA; args[1] = &dQ; args[2] = &dScales; args[3] = &dOut;
-        args[4] = &M; args[5] = &K; args[6] = &N; args[7] = &nb; args[8] = &beta;
+        args[4] = &M; args[5] = &K; args[6] = &N; args[7] = &nb; args[8] = &beta; args[9] = &dGate;
         rc = (cuLaunchKernel(gQgemv, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 done:
     pthread_mutex_unlock(&gLock);
     return rc;
+}
+
+int cu_qmatmul_q8(const void* dA, const void* dQ, const void* dScales, void* dOut,
+                  int M, int K, int N, int nb, float beta) {
+    return q8_gemv_launch(dA, dQ, dScales, dOut, M, K, N, nb, beta, NULL);
+}
+
+// cu_qmatmul_q8_swiglu: out = silu(gate) ⊙ (a·dequant(W)) — the up-projection GEMV with
+// the SwiGLU applied in the epilogue (Tw55 fusion stack): kills the separate SwiGLU
+// launch and a full hidden-vector round-trip. gate has out's [M,N] layout.
+int cu_qmatmul_q8_swiglu(const void* dA, const void* dQ, const void* dScales, const void* dGate, void* dOut,
+                         int M, int K, int N, int nb) {
+    return q8_gemv_launch(dA, dQ, dScales, dOut, M, K, N, nb, 0.0f, dGate);
 }
 
 // cu_qmatmul_q4: out[M,N] = a[M,K]·dequant(W4), W4 = ASYMMETRIC Q4 stored TRANSPOSED —
@@ -1129,7 +1146,7 @@ done:
 // 2p, the high nibbles 2p+1). Dequant y = d*sc6*q - dmin*min6. SAME warp-per-output GEMV shape
 // as cu_qmatmul_q4; 0.5625 B/weight = 25% fewer bytes than the asymmetric Q4 (0.75) at much
 // higher accuracy (super-block-scaled 6-bit sub-scales vs one f32 scale+min per 32). K%256==0.
-int cu_qmatmul_q4k(const void* dA, const void* dQ, void* dOut, int M, int K, int N, float beta) {
+static int q4k_gemv_launch(const void* dA, const void* dQ, void* dOut, int M, int K, int N, float beta, const void* dGate) {
     int rc = -1;
     pthread_mutex_lock(&gLock);
     if (ensure_init() != 0) { rc = -1; goto done; }
@@ -1144,7 +1161,7 @@ int cu_qmatmul_q4k(const void* dA, const void* dQ, void* dOut, int M, int K, int
                        "  if (j<4){ *sc=(float)(q[j]&63); *mn=(float)(q[j+4]&63); }\n"
                        "  else { *sc=(float)((q[j+4]&0xF)|((q[j-4]>>6)<<4)); *mn=(float)((q[j+4]>>4)|((q[j]>>6)<<4)); }\n"
                        "}\n"
-                       "extern \"C\" __global__ void qmatmul_q4k(const float* a, const unsigned char* q, float* out, int M, int K, int N, float beta){\n"
+                       "extern \"C\" __global__ void qmatmul_q4k(const float* a, const unsigned char* q, float* out, int M, int K, int N, float beta, const float* gate){\n"
                        "  long warp = ((long)blockIdx.x*blockDim.x + threadIdx.x) >> 5;\n"
                        "  int lane = threadIdx.x & 31;\n"
                        "  if (warp >= (long)M*N) return;\n"
@@ -1173,20 +1190,34 @@ int cu_qmatmul_q4k(const void* dA, const void* dQ, void* dOut, int M, int K, int
                        "    acc += dl*sql - o1*sal + dh*sqh - o2*sah;\n"   // y=d*sc*q-dmin*m folded per SUB-BLOCK, not per element
                        "  }\n"
                        "  for (int o = 16; o > 0; o >>= 1){ acc += __shfl_down_sync(0xffffffff, acc, o); }\n"
-                       "  if (lane == 0){ out[warp] = beta*out[warp] + acc; }\n"
+                       "  if (lane == 0){\n"
+                       "    float r = acc;\n"
+                       "    if (gate){ float g = gate[warp]; r = (g / (1.f + __expf(-g))) * acc; }\n" // SwiGLU epilogue
+                       "    out[warp] = beta*out[warp] + r;\n"
+                       "  }\n"
                        "}\n",
                        "qmatmul_q4k.cu", "qmatmul_q4k", &gQgemv4k) != 0) { rc = -2; goto done; }
     {
         long total = (long)M * N * 32;
         int threads = 256, blocks = (int)((total + threads - 1) / threads); if (blocks < 1) blocks = 1;
-        void* args[7];
+        void* args[8];
         args[0] = &dA; args[1] = &dQ; args[2] = &dOut;
-        args[3] = &M; args[4] = &K; args[5] = &N; args[6] = &beta;
+        args[3] = &M; args[4] = &K; args[5] = &N; args[6] = &beta; args[7] = &dGate;
         rc = (cuLaunchKernel(gQgemv4k, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 done:
     pthread_mutex_unlock(&gLock);
     return rc;
+}
+
+int cu_qmatmul_q4k(const void* dA, const void* dQ, void* dOut, int M, int K, int N, float beta) {
+    return q4k_gemv_launch(dA, dQ, dOut, M, K, N, beta, NULL);
+}
+
+// cu_qmatmul_q4k_swiglu: out = silu(gate) ⊙ (a·dequant(W)) — see cu_qmatmul_q8_swiglu.
+int cu_qmatmul_q4k_swiglu(const void* dA, const void* dQ, const void* dGate, void* dOut,
+                          int M, int K, int N) {
+    return q4k_gemv_launch(dA, dQ, dOut, M, K, N, 0.0f, dGate);
 }
 
 // cu_qmatmul_q6k: out[M,N] = a[M,K]·dequant(W), W = ggml Q6_K (§R99) stored per OUTPUT

@@ -51,6 +51,13 @@ type rawLayer struct {
 // bandwidth currency). Opt-in while the A/B runs; flipped by measurement.
 func kvF16() bool { return os.Getenv("GOAI_CUDA_KV") == "f16" }
 
+// swigluProj is the optional SwiGLU-epilogue capability of a quantized projection
+// (Tw55): out = silu(gate) ⊙ (a·W) in one GEMV launch. Q8 and Q4_K implement it —
+// the formats gate/up tensors actually use; others fall back to the 3-op chain.
+type swigluProj interface {
+	QMatMulSwiGLUInto(a, gate, out *cuda.DeviceF32) error
+}
+
 // rawGraphDecoder is the optimized decode path (fixed buffers + device-pos + fixed-size
 // attention + CUDA graph + on-device argmax) built DIRECTLY from a gguf.RawFile: each
 // weight is dequantized one at a time, re-quantized, uploaded, then released — a 7B
@@ -210,9 +217,16 @@ func (gd *rawGraphDecoder) forwardBody(tb testing.TB) {
 		mustTB(tb, l.wo.QMatMulAccInto(gd.da, gd.dx))
 		mustTB(tb, gd.dx.RMSNormInto(l.gFFN, float32(gd.eps), gd.dh2))
 		mustTB(tb, l.wg.QMatMulInto(gd.dh2, gd.dgate))
-		mustTB(tb, l.wu.QMatMulInto(gd.dh2, gd.dup))
-		mustTB(tb, gd.dgate.SwiGLU(gd.dup))
-		mustTB(tb, l.wd.QMatMulAccInto(gd.dgate, gd.dx))
+		if f, ok := l.wu.(swigluProj); ok && os.Getenv("GOAI_CUDA_FFN_FUSE") != "0" {
+			// Tw55 fusion: SwiGLU in the up-GEMV epilogue — no separate SwiGLU
+			// launch, no dgate round-trip between kernels.
+			mustTB(tb, f.QMatMulSwiGLUInto(gd.dh2, gd.dgate, gd.dup))
+			mustTB(tb, l.wd.QMatMulAccInto(gd.dup, gd.dx))
+		} else {
+			mustTB(tb, l.wu.QMatMulInto(gd.dh2, gd.dup))
+			mustTB(tb, gd.dgate.SwiGLU(gd.dup))
+			mustTB(tb, l.wd.QMatMulAccInto(gd.dgate, gd.dx))
+		}
 	}
 	mustTB(tb, gd.dx.RMSNormInto(gd.norm, float32(gd.eps), gd.dh))
 	mustTB(tb, gd.out.QMatMulInto(gd.dh, gd.logits))
