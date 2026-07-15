@@ -114,6 +114,60 @@ func assertEqualExact(t *testing.T, got, want *tensor.Tensor, label string) {
 	}
 }
 
+// §V3/§V11 CROSS for the GELU VJP (§T664): on the default build (and amd64,
+// and F64 everywhere) the cpu backend registers no gelu_backward kernel, so
+// dispatch falls back to ref — asserted BIT-EXACT here. On the arm64 perf
+// build the F32 kernel is the f32-native NEON vgeluGrad pipeline (vexp.go) —
+// asserted within the TestGeluGradF32Accuracy envelope (geluF32Tolerant gates
+// on exactly the vexpNeon build combination). The FFN training shape
+// [256,2048] exceeds parThreshold, so the parallel chunking (and its NEON
+// lane/scalar-tail splits) is exercised too.
+func TestCPUGeluBackwardCrossReference(t *testing.T) {
+	cpu := cpuBackend(t)
+	ref, _ := backend.Get(backend.Ref)
+	shape := tensor.Shape{256, 2048}
+	for _, dtype := range []tensor.Dtype{tensor.F64, tensor.F32} {
+		mk := func(seed uint64, scale float64) *tensor.Tensor {
+			var tt *tensor.Tensor
+			if dtype == tensor.F64 {
+				tt = bench.RandF64(shape, seed)
+				d := tt.Storage().F64()
+				for i := range d {
+					d[i] = scale * (d[i] - 0.5)
+				}
+			} else {
+				tt = bench.RandF32(shape, seed)
+				d := tt.Storage().F32()
+				for i := range d {
+					d[i] = float32(scale) * (d[i] - 0.5)
+				}
+			}
+			return tt
+		}
+		x := mk(21, 8) // pre-activations spanning GELU's active region
+		g := mk(22, 4) // upstream gradients, both signs
+		gc, err := backend.Execute(backend.NewContext().WithBackend(cpu), backend.OpGELUBackward, []*tensor.Tensor{x, g}, nil)
+		if err != nil {
+			t.Fatalf("cpu gelu_backward/%v: %v", dtype, err)
+		}
+		gr, err := backend.Execute(backend.NewContext().WithBackend(ref), backend.OpGELUBackward, []*tensor.Tensor{x, g}, nil)
+		if err != nil {
+			t.Fatalf("ref gelu_backward/%v: %v", dtype, err)
+		}
+		if dtype == tensor.F32 && geluF32Tolerant {
+			c, r := gc[0].Storage().F32(), gr[0].Storage().F32()
+			for i := range c {
+				cf, rf := float64(c[i]), float64(r[i])
+				if math.Abs(cf-rf) > 1e-6+2e-4*math.Abs(rf) {
+					t.Fatalf("gelu_backward/F32 [%d]: cpu %v vs ref %v", i, c[i], r[i])
+				}
+			}
+			continue
+		}
+		assertEqualExact(t, gc[0], gr[0], "gelu_backward/"+dtype.String())
+	}
+}
+
 // Parallel path (n > parThreshold) must match the serial reference.
 func TestCPUParallelCorrect(t *testing.T) {
 	cpu := cpuBackend(t)

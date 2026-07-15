@@ -305,7 +305,18 @@ DATA geluConsts<>+304(SB)/4, $0xC2AEAC4F // V31 lo clamp = -87.33654
 DATA geluConsts<>+308(SB)/4, $0xC2AEAC4F // V31
 DATA geluConsts<>+312(SB)/4, $0xC2AEAC4F // V31
 DATA geluConsts<>+316(SB)/4, $0xC2AEAC4F // V31
-GLOBL geluConsts<>(SB), RODATA|NOPTR, $320
+// Tail entries: the GRAD kernel only (vgeluGradQuadsNeonF32 below) — loaded
+// per pass into free scratch (no register spare for 22 resident constants).
+// The forward kernel's init loads stop at +320.
+DATA geluConsts<>+320(SB)/4, $0x008D8EB6 // pdfMin = 1.3e-38 (geluGradPdfMin, vexp.go)
+DATA geluConsts<>+324(SB)/4, $0x008D8EB6 // pdfMin
+DATA geluConsts<>+328(SB)/4, $0x008D8EB6 // pdfMin
+DATA geluConsts<>+332(SB)/4, $0x008D8EB6 // pdfMin
+DATA geluConsts<>+336(SB)/4, $0x3ECC422A // invSqrt2Pi = 0.3989422804014327
+DATA geluConsts<>+340(SB)/4, $0x3ECC422A // invSqrt2Pi
+DATA geluConsts<>+344(SB)/4, $0x3ECC422A // invSqrt2Pi
+DATA geluConsts<>+348(SB)/4, $0x3ECC422A // invSqrt2Pi
+GLOBL geluConsts<>(SB), RODATA|NOPTR, $352
 
 TEXT ·vgeluQuadsNeonF32(SB), NOSPLIT, $0-24
 	MOVD dst+0(FP), R1
@@ -481,4 +492,217 @@ geluOdd:
 	VST1.P [V0.S4], 16(R1)
 
 geluDone:
+	RET
+
+// func vgeluGradQuadsNeonF32(dst, x, grad *float32, quads int)
+//
+// 4-wide f32 GELU BACKWARD (vexp.go, §T664): dst[i] = g[i]·(Φ(x) + x·φ(x)),
+// Φ(x) = 0.5·(1+erf(x/√2)), φ(x) = e^(−x²/2)/√(2π), for x = x[i],
+// i in [0, 4*quads). Same erf-on-exp pipeline as vgeluQuadsNeonF32 above —
+// with a = |x|/√2 the AS-7.1.26 erf already computes e^(−a²) = e^(−x²/2), so
+// ONE exp feeds both erf and the pdf. Two extras vs the forward: (1) e is
+// masked to a true 0 when ≤ pdfMin (FCMGT+AND) so the exp underflow clamp
+// can't leak into x·φ (x=±Inf must give Inf·0 = NaN like ref — see vexp.go);
+// (2) the tail multiplies by the pdf and by g. The two per-pass tail
+// constants (pdfMin, invSqrt2Pi) live past the 20 resident constants
+// (geluConsts+320) and load into scratch each pass — no spare registers.
+// Same two-quads-per-pass structure (A: V0..V5, B: V6..V11); g loads reuse
+// V0/V6 after x dies. WORD encodings objdump-verified like the kernels above.
+//
+// Register map: R0 x ptr, R1 dst ptr, R6 g ptr, R2 quads, R3 consts tail,
+// R4 pairs, R5 odd; V12..V31 constants as in vgeluQuadsNeonF32.
+TEXT ·vgeluGradQuadsNeonF32(SB), NOSPLIT, $0-32
+	MOVD dst+0(FP), R1
+	MOVD x+8(FP), R0
+	MOVD grad+16(FP), R6
+	MOVD quads+24(FP), R2
+	MOVD $geluConsts<>(SB), R3
+	VLD1.P 64(R3), [V12.S4, V13.S4, V14.S4, V15.S4]
+	VLD1.P 64(R3), [V16.S4, V17.S4, V18.S4, V19.S4]
+	VLD1.P 64(R3), [V20.S4, V21.S4, V22.S4, V23.S4]
+	VLD1.P 64(R3), [V24.S4, V25.S4, V26.S4, V27.S4]
+	VLD1.P 64(R3), [V28.S4, V29.S4, V30.S4, V31.S4]
+	// R3 now points at the tail: +320 pdfMin, +336 invSqrt2Pi.
+	LSR $1, R2, R4 // pairs of quads
+	AND $1, R2, R5 // odd quad
+	CBZ R4, gradOdd
+
+gradLoop2:
+	VLD1.P 16(R0), [V0.S4]
+	VLD1.P 16(R0), [V6.S4]
+
+	// t = 1/(1 + pAS·|x·invSqrt2|), both quads (as the forward).
+	WORD  $0x6E2DDC01 // FMUL V1.4S, V0.4S, V13.4S   (A: u = x·invSqrt2)
+	WORD  $0x6E2DDCC7 // FMUL V7.4S, V6.4S, V13.4S   (B: u = x·invSqrt2)
+	WORD  $0x4EA0F821 // FABS V1.4S, V1.4S           (A: a = |u|)
+	WORD  $0x4EA0F8E7 // FABS V7.4S, V7.4S           (B: a = |u|)
+	WORD  $0x4EB41E82 // ORR V2 = one                (A)
+	WORD  $0x4EB41E88 // ORR V8 = one                (B)
+	VFMLA V1.S4, V14.S4, V2.S4 // A: denom = 1 + pAS·a
+	VFMLA V7.S4, V14.S4, V8.S4 // B: denom = 1 + pAS·a
+	WORD  $0x6E22FE83 // FDIV V3.4S, V20.4S, V2.4S   (A: t = 1/denom)
+	WORD  $0x6E28FE89 // FDIV V9.4S, V20.4S, V8.4S   (B: t = 1/denom)
+
+	// P = t·(a1 + t·(a2 + t·(a3 + t·(a4 + t·a5)))), Horner ping-pong.
+	WORD  $0x4EB21E42 // ORR V2 = a4                 (A)
+	WORD  $0x4EB21E48 // ORR V8 = a4                 (B)
+	VFMLA V19.S4, V3.S4, V2.S4 // A: s = a4 + a5·t
+	VFMLA V19.S4, V9.S4, V8.S4 // B: s = a4 + a5·t
+	WORD  $0x4EB11E24 // ORR V4 = a3                 (A)
+	WORD  $0x4EB11E2A // ORR V10 = a3                (B)
+	VFMLA V2.S4, V3.S4, V4.S4  // A: s = a3 + s·t
+	VFMLA V8.S4, V9.S4, V10.S4 // B: s = a3 + s·t
+	WORD  $0x4EB01E02 // ORR V2 = a2                 (A)
+	WORD  $0x4EB01E08 // ORR V8 = a2                 (B)
+	VFMLA V4.S4, V3.S4, V2.S4  // A: s = a2 + s·t
+	VFMLA V10.S4, V9.S4, V8.S4 // B: s = a2 + s·t
+	WORD  $0x4EAF1DE4 // ORR V4 = a1                 (A)
+	WORD  $0x4EAF1DEA // ORR V10 = a1                (B)
+	VFMLA V2.S4, V3.S4, V4.S4  // A: s = a1 + s·t
+	VFMLA V8.S4, V9.S4, V10.S4 // B: s = a1 + s·t
+	WORD  $0x6E23DC85 // FMUL V5.4S, V4.4S, V3.4S    (A: P = s·t)
+	WORD  $0x6E29DD4B // FMUL V11.4S, V10.4S, V9.4S  (B: P = s·t)
+
+	// e = exp(clamp(−a²)) — the vexp reduction (lo clamp only).
+	WORD  $0x6E21DC21 // FMUL V1.4S, V1.4S, V1.4S    (A: a² = a·a)
+	WORD  $0x6E27DCE7 // FMUL V7.4S, V7.4S, V7.4S    (B: a² = a·a)
+	WORD  $0x6EA0F821 // FNEG V1.4S, V1.4S           (A: w = −a²)
+	WORD  $0x6EA0F8E7 // FNEG V7.4S, V7.4S           (B: w = −a²)
+	WORD  $0x4E3FF421 // FMAX V1.4S, V1.4S, V31.4S   (A: clamp lo)
+	WORD  $0x4E3FF4E7 // FMAX V7.4S, V7.4S, V31.4S   (B: clamp lo)
+	WORD  $0x6E37DC22 // FMUL V2.4S, V1.4S, V23.4S   (A: z = w·log2e)
+	WORD  $0x6E37DCE8 // FMUL V8.4S, V7.4S, V23.4S   (B: z = w·log2e)
+	WORD  $0x4E218842 // FRINTN V2.4S, V2.4S         (A: n = rint(z))
+	WORD  $0x4E218908 // FRINTN V8.4S, V8.4S         (B: n = rint(z))
+	VFMLS V2.S4, V24.S4, V1.S4 // A: r -= n·ln2hi
+	VFMLS V8.S4, V24.S4, V7.S4 // B: r -= n·ln2hi
+	VFMLS V2.S4, V25.S4, V1.S4 // A: r -= n·ln2lo
+	VFMLS V8.S4, V25.S4, V7.S4 // B: r -= n·ln2lo
+	WORD  $0x4EBB1F63 // ORR V3 = p1                 (A)
+	WORD  $0x4EBB1F69 // ORR V9 = p1                 (B)
+	VFMLA V26.S4, V1.S4, V3.S4 // A: p = p1 + p0·r
+	VFMLA V26.S4, V7.S4, V9.S4 // B: p = p1 + p0·r
+	WORD  $0x4EBC1F84 // ORR V4 = p2                 (A)
+	WORD  $0x4EBC1F8A // ORR V10 = p2                (B)
+	VFMLA V3.S4, V1.S4, V4.S4  // A: p = p2 + p·r
+	VFMLA V9.S4, V7.S4, V10.S4 // B: p = p2 + p·r
+	WORD  $0x4EBD1FA3 // ORR V3 = p3                 (A)
+	WORD  $0x4EBD1FA9 // ORR V9 = p3                 (B)
+	VFMLA V4.S4, V1.S4, V3.S4  // A: p = p3 + p·r
+	VFMLA V10.S4, V7.S4, V9.S4 // B: p = p3 + p·r
+	WORD  $0x4EBE1FC4 // ORR V4 = p4                 (A)
+	WORD  $0x4EBE1FCA // ORR V10 = p4                (B)
+	VFMLA V3.S4, V1.S4, V4.S4  // A: p = p4 + p·r
+	VFMLA V9.S4, V7.S4, V10.S4 // B: p = p4 + p·r
+	WORD  $0x4EB51EA3 // ORR V3 = p5(=half)          (A)
+	WORD  $0x4EB51EA9 // ORR V9 = p5(=half)          (B)
+	VFMLA V4.S4, V1.S4, V3.S4  // A: p = p5 + p·r
+	VFMLA V10.S4, V7.S4, V9.S4 // B: p = p5 + p·r
+	WORD  $0x6E21DC24 // FMUL V4.4S, V1.4S, V1.4S    (A: r² = r·r)
+	WORD  $0x6E27DCEA // FMUL V10.4S, V7.4S, V7.4S   (B: r² = r·r)
+	WORD  $0x4E34D421 // FADD V1.4S, V1.4S, V20.4S   (A: q = 1 + r)
+	WORD  $0x4E34D4E7 // FADD V7.4S, V7.4S, V20.4S   (B: q = 1 + r)
+	VFMLA V3.S4, V4.S4, V1.S4  // A: e = q + p·r²
+	VFMLA V9.S4, V10.S4, V7.S4 // B: e = q + p·r²
+	WORD  $0x4EA1B842 // FCVTZS V2.4S, V2.4S         (A: ni = int(n))
+	WORD  $0x4EA1B908 // FCVTZS V8.4S, V8.4S         (B: ni = int(n))
+	VADD  V12.S4, V2.S4, V2.S4 // A: ni += 127
+	VADD  V12.S4, V8.S4, V8.S4 // B: ni += 127
+	VSHL  $23, V2.S4, V2.S4    // A: 2^n bits
+	VSHL  $23, V8.S4, V8.S4    // B: 2^n bits
+	WORD  $0x6E22DC21 // FMUL V1.4S, V1.4S, V2.4S    (A: e *= 2^n)
+	WORD  $0x6E28DCE7 // FMUL V7.4S, V7.4S, V8.4S    (B: e *= 2^n)
+
+	// Grad tail: zero sub-pdfMin e, E = 1 − e·P, erf = sign(x)|E,
+	// Φ = 0.5 + 0.5·erf, d = Φ + x·(e·invSqrt2Pi), out = g·d.
+	VLD1  (R3), [V2.S4, V3.S4] // V2 = pdfMin, V3 = invSqrt2Pi
+	WORD  $0x6EA2E424 // FCMGT V4.4S, V1.4S, V2.4S   (A: mask e > pdfMin)
+	WORD  $0x6EA2E4EA // FCMGT V10.4S, V7.4S, V2.4S  (B: mask e > pdfMin)
+	WORD  $0x4E241C21 // AND V1.16B, V1.16B, V4.16B  (A: e &= mask)
+	WORD  $0x4E2A1CE7 // AND V7.16B, V7.16B, V10.16B (B: e &= mask)
+	WORD  $0x4EB41E82 // ORR V2 = one                (A)
+	WORD  $0x4EB41E88 // ORR V8 = one                (B)
+	VFMLS V1.S4, V5.S4, V2.S4  // A: E = 1 − e·P
+	VFMLS V7.S4, V11.S4, V8.S4 // B: E = 1 − e·P
+	WORD  $0x4E361C04 // AND V4.16B, V0.16B, V22.16B  (A: sign bit of x)
+	WORD  $0x4E361CCA // AND V10.16B, V6.16B, V22.16B (B: sign bit of x)
+	WORD  $0x4EA41C42 // ORR V2.16B, V2.16B, V4.16B  (A: erf = sign|E)
+	WORD  $0x4EAA1D08 // ORR V8.16B, V8.16B, V10.16B (B: erf = sign|E)
+	WORD  $0x4EB51EA4 // ORR V4 = half               (A)
+	WORD  $0x4EB51EAA // ORR V10 = half              (B)
+	VFMLA V2.S4, V21.S4, V4.S4  // A: Φ = 0.5 + 0.5·erf
+	VFMLA V8.S4, V21.S4, V10.S4 // B: Φ = 0.5 + 0.5·erf
+	WORD  $0x6E23DC21 // FMUL V1.4S, V1.4S, V3.4S    (A: pdf = e·invSqrt2Pi)
+	WORD  $0x6E23DCE7 // FMUL V7.4S, V7.4S, V3.4S    (B: pdf = e·invSqrt2Pi)
+	VFMLA V1.S4, V0.S4, V4.S4   // A: d = Φ + pdf·x
+	VFMLA V7.S4, V6.S4, V10.S4  // B: d = Φ + pdf·x
+	VLD1.P 16(R6), [V0.S4] // A: g (x dead)
+	VLD1.P 16(R6), [V6.S4] // B: g (x dead)
+	WORD  $0x6E24DC00 // FMUL V0.4S, V0.4S, V4.4S    (A: out = g·d)
+	WORD  $0x6E2ADCC6 // FMUL V6.4S, V6.4S, V10.4S   (B: out = g·d)
+
+	VST1.P [V0.S4], 16(R1)
+	VST1.P [V6.S4], 16(R1)
+
+	SUBS $1, R4, R4
+	BNE  gradLoop2
+
+gradOdd:
+	CBZ R5, gradDone
+
+	VLD1.P 16(R0), [V0.S4]
+	WORD   $0x6E2DDC01 // FMUL V1.4S, V0.4S, V13.4S  (u = x·invSqrt2)
+	WORD   $0x4EA0F821 // FABS V1.4S, V1.4S          (a = |u|)
+	WORD   $0x4EB41E82 // ORR V2 = one
+	VFMLA  V1.S4, V14.S4, V2.S4 // denom = 1 + pAS·a
+	WORD   $0x6E22FE83 // FDIV V3.4S, V20.4S, V2.4S  (t = 1/denom)
+	WORD   $0x4EB21E42 // ORR V2 = a4
+	VFMLA  V19.S4, V3.S4, V2.S4 // s = a4 + a5·t
+	WORD   $0x4EB11E24 // ORR V4 = a3
+	VFMLA  V2.S4, V3.S4, V4.S4 // s = a3 + s·t
+	WORD   $0x4EB01E02 // ORR V2 = a2
+	VFMLA  V4.S4, V3.S4, V2.S4 // s = a2 + s·t
+	WORD   $0x4EAF1DE4 // ORR V4 = a1
+	VFMLA  V2.S4, V3.S4, V4.S4 // s = a1 + s·t
+	WORD   $0x6E23DC85 // FMUL V5.4S, V4.4S, V3.4S   (P = s·t)
+	WORD   $0x6E21DC21 // FMUL V1.4S, V1.4S, V1.4S   (a² = a·a)
+	WORD   $0x6EA0F821 // FNEG V1.4S, V1.4S          (w = −a²)
+	WORD   $0x4E3FF421 // FMAX V1.4S, V1.4S, V31.4S  (clamp lo)
+	WORD   $0x6E37DC22 // FMUL V2.4S, V1.4S, V23.4S  (z = w·log2e)
+	WORD   $0x4E218842 // FRINTN V2.4S, V2.4S        (n = rint(z))
+	VFMLS  V2.S4, V24.S4, V1.S4 // r -= n·ln2hi
+	VFMLS  V2.S4, V25.S4, V1.S4 // r -= n·ln2lo
+	WORD   $0x4EBB1F63 // ORR V3 = p1
+	VFMLA  V26.S4, V1.S4, V3.S4 // p = p1 + p0·r
+	WORD   $0x4EBC1F84 // ORR V4 = p2
+	VFMLA  V3.S4, V1.S4, V4.S4 // p = p2 + p·r
+	WORD   $0x4EBD1FA3 // ORR V3 = p3
+	VFMLA  V4.S4, V1.S4, V3.S4 // p = p3 + p·r
+	WORD   $0x4EBE1FC4 // ORR V4 = p4
+	VFMLA  V3.S4, V1.S4, V4.S4 // p = p4 + p·r
+	WORD   $0x4EB51EA3 // ORR V3 = p5(=half)
+	VFMLA  V4.S4, V1.S4, V3.S4 // p = p5 + p·r
+	WORD   $0x6E21DC24 // FMUL V4.4S, V1.4S, V1.4S   (r² = r·r)
+	WORD   $0x4E34D421 // FADD V1.4S, V1.4S, V20.4S  (q = 1 + r)
+	VFMLA  V3.S4, V4.S4, V1.S4 // e = q + p·r²
+	WORD   $0x4EA1B842 // FCVTZS V2.4S, V2.4S        (ni = int(n))
+	VADD   V12.S4, V2.S4, V2.S4 // ni += 127
+	VSHL   $23, V2.S4, V2.S4    // 2^n bits
+	WORD   $0x6E22DC21 // FMUL V1.4S, V1.4S, V2.4S   (e *= 2^n)
+	VLD1   (R3), [V2.S4, V3.S4] // V2 = pdfMin, V3 = invSqrt2Pi
+	WORD   $0x6EA2E424 // FCMGT V4.4S, V1.4S, V2.4S  (mask e > pdfMin)
+	WORD   $0x4E241C21 // AND V1.16B, V1.16B, V4.16B (e &= mask)
+	WORD   $0x4EB41E82 // ORR V2 = one
+	VFMLS  V1.S4, V5.S4, V2.S4 // E = 1 − e·P
+	WORD   $0x4E361C04 // AND V4.16B, V0.16B, V22.16B (sign bit of x)
+	WORD   $0x4EA41C42 // ORR V2.16B, V2.16B, V4.16B  (erf = sign|E)
+	WORD   $0x4EB51EA4 // ORR V4 = half
+	VFMLA  V2.S4, V21.S4, V4.S4 // Φ = 0.5 + 0.5·erf
+	WORD   $0x6E23DC21 // FMUL V1.4S, V1.4S, V3.4S   (pdf = e·invSqrt2Pi)
+	VFMLA  V1.S4, V0.S4, V4.S4 // d = Φ + pdf·x
+	VLD1.P 16(R6), [V0.S4]     // g (x dead)
+	WORD   $0x6E24DC00 // FMUL V0.4S, V0.4S, V4.4S   (out = g·d)
+	VST1.P [V0.S4], 16(R1)
+
+gradDone:
 	RET

@@ -29,3 +29,13 @@ func vgeluF32(dst, src []float32) {
 		dst[i] = geluF32(v)
 	}
 }
+
+// vgeluGradF32 computes dst[i] = g[i]·gelu'(x[i]) via the scalar poly — exists
+// only so the OpGELUBackward F32 fast path type-checks (dead code at run time
+// here: vexpNeon is false, so the kernel is never registered and gelu-backward
+// keeps the exact ref f64 path).
+func vgeluGradF32(dst, x, g []float32) {
+	for i, v := range x {
+		dst[i] = geluGradF32(v, g[i])
+	}
+}

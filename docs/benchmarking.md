@@ -587,6 +587,18 @@ M2 Pro), the whole campaign compounds:
 | + AMX GEMM + vexp MHA/softmax (§T656–T661) | ≈11050 | ≈23.1 |
 | + NEON erf-GELU (§T663) | **≈13600** | **≈18.9** |
 
+The **training step** (forward+backward) got its own profile-driven rung (§T664): `gelu_backward`
+(18.9% of the step) and `crossentropy` fwd+bwd (10.7%) were **silent reference-backend fallbacks**
+(serial scalar `math.Erf`/`math.Exp`) — NEON cpu kernels reusing the same vexp/vgelu leaves made
+them 45× / 25× / 32× in isolation, and the whole training step **1.48×** (1325 → 1930 tok/s,
+193 → 130 ms). After it, an op-profile shows matmul at 81% — the training step is now
+matmul-bound at the AMX ceiling, the same floor the forward reached.
+
+| CPU f32 GPT training step | tok/s | ms/step |
+|---------------------------|------:|--------:|
+| before §T664 (gelu_bwd + CE on ref) | ≈1325 | ≈193 |
+| + NEON gelu_backward + crossentropy (§T664) | **≈1930** | **≈130** |
+
 **≈10.9×** on the whole forward — the per-op wins (AMX matmul, vexp attention/softmax, vexp
 GELU) stack into an order-of-magnitude real-workload speedup. A profile-driven progression: once
 the AMX/vexp rungs landed, a `GOAI_TIME_OPS` op-profile showed matmul at 54% (Apple's AMX
@@ -1114,7 +1126,7 @@ storage, f32 compute — `KVCacheF16` + `cu_gqa_flash_f16_dpos`, round-to-neares
 tiles converted in shared so conversion is amortized over the GQA group). MEASURED
 FLAT: interleaved A/B at ctx≈2004 gives f16 209.9–210.3 vs f32 211.8–212.9 tok/s (≤1%,
 noise). The traffic model says why: after the 8× GQA sharing, K/V global reads are only
-~11µs of the flash kernel's ~34µs/layer at 2k — the rest is compute and tile staging,
+≈11µs of the flash kernel's ≈34µs/layer at 2k — the rest is compute and tile staging,
 so halving the bytes moves ~2%. The hypothesis "attention is K/V-read-bound" died with
 the very kernel that made it true before.
 

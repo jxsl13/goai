@@ -103,6 +103,51 @@ func geluF32(x float32) float32 {
 	return x * (0.5 + 0.5*erf)
 }
 
+// GELU BACKWARD on the same leaf (§T664): the exact-erf GELU derivative is
+// d/dx[0.5·x·(1+erf(x/√2))] = Φ(x) + x·φ(x), Φ(x) = 0.5·(1+erf(x/√2)),
+// φ(x) = e^(−x²/2)/√(2π) — the SAME two primitives the vgelu forward computes:
+// with a = |x|/√2, the AS-7.1.26 erf magnitude already needs e^(−a²) = e^(−x²/2),
+// so ONE exp evaluation feeds both erf and the pdf. The VJP kernel then does
+// dx = g·(Φ + x·φ) per element (formula identical to ref's geluGrad, §T353 —
+// only the evaluation is f32/NEON). Gated exactly like vexp/vgelu: only the
+// arm64 perf build (vexpNeon) registers the OpGELUBackward F32 kernel; every
+// other build keeps the ref scalar f64 path bit-for-bit.
+//
+// geluGradPdfMin guards the exp underflow clamp: expF32 pins deep-negative
+// inputs at ~1.1755e-38 instead of a true zero, which is harmless inside the
+// erf (≤1e-38 on a value near 1) but NOT inside x·φ(x) — a huge |x| would
+// resurrect the clamped residue (and x=±Inf must yield Inf·0 = NaN exactly
+// like ref's f64 math.Exp path). Zeroing e when it is at-or-below the clamp
+// floor (any true pdf that small contributes ≤ 6e-39·|x| ≈ 0 anyway, since
+// unclamped e < 1.3e-38 implies |x| < 13.3) restores exact ±Inf/NaN semantics.
+const (
+	geluInvSqrt2Pi = float32(0.3989422804014327) // 1/√(2π), pdf normalizer
+	geluGradPdfMin = float32(1.3e-38)            // just above expF32's underflow-clamp output
+)
+
+// geluGradF32 is the scalar instantiation of the vgeluGrad pipeline — the tail
+// lanes (len%4) and the type-check fallback build use it. Same operations per
+// element as the NEON lanes (only FMA contraction may differ). Note the
+// !(e > min) spelling: it must zero e for NaN exp results too, matching the
+// NEON FCMGT+AND mask (NaN still propagates through t/s and the erf bits).
+func geluGradF32(x, g float32) float32 {
+	a := math.Float32frombits(math.Float32bits(x*geluInvSqrt2) &^ (1 << 31)) // |x/√2|
+	t := 1 / (1 + geluP*a)
+	s := geluA4 + geluA5*t
+	s = geluA3 + s*t
+	s = geluA2 + s*t
+	s = geluA1 + s*t
+	e := expF32(-(a * a)) // e^(−x²/2): shared by erf and pdf
+	if !(e > geluGradPdfMin) {
+		e = 0
+	}
+	E := 1 - s*t*e
+	erf := math.Float32frombits(math.Float32bits(E) | math.Float32bits(x)&(1<<31))
+	phi := float32(0.5) + 0.5*erf // Φ(x)
+	pdf := geluInvSqrt2Pi * e     // φ(x)
+	return g * (phi + x*pdf)
+}
+
 // mhaSoftmaxBandVexpF32 is the arm64 perf-build body of mhaSoftmaxBandF32
 // (reached only when vexpNeon; see the gate there): the same scale (+ALiBi) →
 // max-shift exp → normalize pipeline, but f32-native end to end — no f64

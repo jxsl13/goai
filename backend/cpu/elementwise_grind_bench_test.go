@@ -73,6 +73,19 @@ func BenchmarkGELUF32_1x2048_cpu(b *testing.B) { // decode-step shape (serial pa
 	benchOn(b, backend.CPU, backend.OpGELU, bench.RandF32(tensor.Shape{1, 2048}, 3))
 }
 
+// --- GELU backward (§T664 §V22 A/B): FFN training shape. On the arm64 perf
+// build _cpu runs the NEON vgeluGrad kernel; _ref is the scalar-f64 baseline
+// (and on every other build _cpu falls back to it — identical numbers). ---
+
+func BenchmarkGELUBackwardF32_256x2048_cpu(b *testing.B) {
+	benchOn(b, backend.CPU, backend.OpGELUBackward,
+		bench.RandF32(tensor.Shape{256, 2048}, 3), bench.RandF32(tensor.Shape{256, 2048}, 4))
+}
+func BenchmarkGELUBackwardF32_256x2048_ref(b *testing.B) {
+	benchOn(b, backend.Ref, backend.OpGELUBackward,
+		bench.RandF32(tensor.Shape{256, 2048}, 3), bench.RandF32(tensor.Shape{256, 2048}, 4))
+}
+
 // --- Broadcast binary ops (materialization candidates) ---
 
 func BenchmarkAddBcastRowF32_128x2048_cpu(b *testing.B) { // [M,N] + [N]

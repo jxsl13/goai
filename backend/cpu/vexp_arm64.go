@@ -37,3 +37,23 @@ func vgeluF32(dst, src []float32) {
 		dst[i] = geluF32(src[i])
 	}
 }
+
+// vgeluGradQuadsNeonF32 is the 4-wide NEON GELU-backward kernel (vexp_arm64.s):
+// dst[i] = g[i]·(Φ(x[i]) + x[i]·φ(x[i])) for i in [0, 4·quads) — the AS-7.1.26
+// erf + shared e^(−x²/2) pipeline (numerics in vexp.go).
+//
+//go:noescape
+func vgeluGradQuadsNeonF32(dst, x, grad *float32, quads int)
+
+// vgeluGradF32 computes dst[i] = g[i]·gelu'(x[i]) f32-native: whole quads
+// through the NEON kernel, the len%4 tail through scalar geluGradF32 (same
+// math per element).
+func vgeluGradF32(dst, x, g []float32) {
+	nv := len(x) &^ 3
+	if nv > 0 {
+		vgeluGradQuadsNeonF32(&dst[0], &x[0], &g[0], nv>>2)
+	}
+	for i := nv; i < len(x); i++ {
+		dst[i] = geluGradF32(x[i], g[i])
+	}
+}

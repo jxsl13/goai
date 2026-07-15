@@ -323,6 +323,30 @@ func geluKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) (
 	}
 	return []*tensor.Tensor{out}, nil
 }
+
+// geluBackwardKernelCPU is the arm64 perf-build F32 GELU VJP (§T664): dx =
+// g·(Φ(x) + x·φ(x)) evaluated f32-native through the NEON vgeluGrad pipeline
+// (vexp.go / vexp_arm64.s) — the same AS-7.1.26 erf + shared e^(−x²/2) the
+// forward vgelu path uses, so ONE exp feeds both terms. gelu_backward was
+// 18.9% of the f32 GPT training step as the scalar-f64 ref fallback (§V22
+// op-profile). Formula identical to ref's geluGrad (§T353); only the
+// evaluation is vectorized, riding the ADR-0021 f32 tolerant-parity budget
+// (TestGeluGradF32Accuracy). Registered ONLY when vexpNeon and ONLY for F32 —
+// the default build and amd64 keep the untouched ref fallback bit-for-bit,
+// and so does F64 on this build. A mixed-dtype or mismatched-shape input pair
+// is handed to the reference kernel unchanged.
+func geluBackwardKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
+	if len(in) == 2 && in[0].Dtype() == tensor.F32 && in[1].Dtype() == tensor.F32 &&
+		in[1].Shape().Equal(in[0].Shape()) {
+		xc, gc := in[0].Contiguous(), in[1].Contiguous()
+		dx := tensor.NewOn(ctx.Device(), tensor.F32, in[0].Shape())
+		xs, gs, ds := xc.Storage().F32(), gc.Storage().F32(), dx.Storage().F32()
+		parallel(len(ds), func(lo, hi int) { vgeluGradF32(ds[lo:hi], xs[lo:hi], gs[lo:hi]) })
+		return []*tensor.Tensor{dx}, nil
+	}
+	return backend.Execute(ctx.WithBackend(backend.Reference()).WithRecorder(nil), backend.OpGELUBackward, in, attrs)
+}
+
 func negKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*tensor.Tensor, error) {
 	xc := in[0].Contiguous()
 	out := tensor.NewOn(ctx.Device(), in[0].Dtype(), in[0].Shape())
@@ -542,4 +566,11 @@ func init() {
 	reg(backend.OpGELU, geluKernelCPU)
 	reg(backend.OpSigmoid, sigmoidKernelCPU)
 	reg(backend.OpSiLU, siluKernelCPU)
+
+	if vexpNeon {
+		// arm64 perf build only, F32 only (§T664): the NEON GELU VJP. vexpNeon
+		// is a compile-time const, so every other build registers nothing here
+		// and gelu_backward keeps its ref fallback bit-for-bit (as does F64).
+		std.add(backend.OpGELUBackward, tensor.F32, geluBackwardKernelCPU)
+	}
 }
