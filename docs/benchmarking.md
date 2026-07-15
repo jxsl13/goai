@@ -572,6 +572,26 @@ Snapshot (M2 Pro, 2026-07-12, tokens/s, higher is better):
 
 Both GPU backends win ≈20× (forward) / ≈13× (training) over the Pure-Go cpu backend.
 
+### The f32-native CPU SIMD campaign, end-to-end (§T656–§T662, 2026-07-15)
+
+The per-op tables record each rung of the "be better than pytorch" CPU grind — the NEON GEMM
+(§T656), MHA/Conv routing (§T657), Apple AMX (§T658, ADR-0027), the NEON `exp` for the MHA
+softmax (§T660) and the standalone `OpSoftmax` (§T661), and the `cblas_sgemv` m=2 decode path
+(§T662). Measured **end-to-end on the real f32 GPT forward** (`BenchmarkGPTForward/cpu`, same
+vocab-4096/512-dim/8-head/6-layer/256-token model, f32 weights, M2 Pro), the whole campaign
+compounds:
+
+| CPU f32 GPT forward | tok/s | ms/forward |
+|---------------------|------:|-----------:|
+| f32 scalar (no `GOEXPERIMENT=simd`) | ≈1250 | ≈205 |
+| f32-native SIMD (AMX GEMM + vexp MHA/softmax) | **≈11050** | **≈23.1** |
+
+**≈8.9×** on the whole forward — the per-op wins (AMX matmul, vexp attention, vexp softmax)
+stack into a near-order-of-magnitude real-workload speedup. This confirms the f32-native fast
+paths are on the inference critical path (f32 models route matmul→AMX and MHA/softmax→vexp), not
+dormant — f64 is only the gradcheck/reference regime. The fast path is opt-in, so `make
+bench-compare` must run with `GOEXPERIMENT=simd` to see it; the default build stays bit-exact.
+
 **BUT autoregressive DECODE is the opposite (§T360).** `BenchmarkGPTDecode` times one-token-per-step
 generation with a KV cache — the real inference workload. Each step's ops are tiny (seq=1), so the
 per-op GPU dispatch / `waitUntilCompleted` round-trip (≈200 µs, and a decode step is ≈95 ops)
