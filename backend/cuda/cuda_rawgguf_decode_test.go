@@ -17,6 +17,18 @@ import (
 
 const mistral7BPath = "../../models/mistral-7b-instruct-v0.2.Q8_0.gguf"
 
+// fromF32 lifts a [K,N]-f32 quantizer to a QuantTensor quantizer: dequantize the raw
+// gguf tensor ([out,in]) and transpose to the input-major [K,N] the f32 constructors take.
+func fromF32(f func(*tensor.Tensor) (qProj, error)) func(gguf.QuantTensor) (qProj, error) {
+	return func(qt gguf.QuantTensor) (qProj, error) {
+		w, err := qt.Dequantize()
+		if err != nil {
+			return nil, err
+		}
+		return f(transpose2D(w))
+	}
+}
+
 // qProj abstracts a GPU-resident quantized projection weight (Q8 or Q4) so ONE decoder
 // measures both precisions at 7B scale — the A/B that decides whether Q4's bandwidth
 // advantage carries to a production-size, weight-bandwidth-bound model.
@@ -81,7 +93,7 @@ func rawMetaFloat(meta map[string]any, k string, def float64) float64 {
 	return def
 }
 
-func buildRawGraphDecoder(tb testing.TB, rf *gguf.RawFile, arch string, maxSeq int, quant func(*tensor.Tensor) (qProj, error)) *rawGraphDecoder {
+func buildRawGraphDecoder(tb testing.TB, rf *gguf.RawFile, arch string, maxSeq int, quant func(gguf.QuantTensor) (qProj, error)) *rawGraphDecoder {
 	deq := func(n string) *tensor.Tensor {
 		qt, ok := rf.Tensors[n]
 		if !ok {
@@ -91,8 +103,12 @@ func buildRawGraphDecoder(tb testing.TB, rf *gguf.RawFile, arch string, maxSeq i
 		mustTB(tb, err)
 		return t
 	}
-	q := func(n string) qProj {
-		r, err := quant(transpose2D(deq(n))) // gguf [out,in] → B[K=in, N=out]
+	q := func(n string) qProj { // quantizers receive the RAW QuantTensor ([out,in] blocks)
+		qt, ok := rf.Tensors[n]
+		if !ok {
+			tb.Fatalf("missing tensor %s", n)
+		}
+		r, err := quant(qt)
 		mustTB(tb, err)
 		return r
 	}
@@ -233,7 +249,7 @@ func (gd *rawGraphDecoder) free() {
 
 // runRawDecode builds the decoder at one precision, generates greedily, then measures
 // graph decode throughput. Returns the generated tokens and tok/s.
-func runRawDecode(t *testing.T, rf *gguf.RawFile, arch string, ids []int, gen, maxSeq int, quant func(*tensor.Tensor) (qProj, error)) ([]int, float64) {
+func runRawDecode(t *testing.T, rf *gguf.RawFile, arch string, ids []int, gen, maxSeq int, quant func(gguf.QuantTensor) (qProj, error)) ([]int, float64) {
 	gd := buildRawGraphDecoder(t, rf, arch, maxSeq, quant)
 	defer gd.free()
 
@@ -324,12 +340,12 @@ func TestCUDAQwenQ4QualityAndSpeed(t *testing.T) {
 // gates: every precision stays coherent (the prompt's factual answer appears) and the
 // 4-bit paths decode faster than Q8 (fewer weight bytes on a bandwidth-bound GEMV).
 func q4vsQ8(t *testing.T, rf *gguf.RawFile, arch, label string, ids []int, gen, maxSeq int, decode func([]int) string) {
-	q8 := func(w *tensor.Tensor) (qProj, error) { return cuda.NewResidentBQ8(w) }
-	q4 := func(w *tensor.Tensor) (qProj, error) { return cuda.NewResidentBQ4(w) }
+	q8 := fromF32(func(w *tensor.Tensor) (qProj, error) { return cuda.NewResidentBQ8(w) })
+	q4 := fromF32(func(w *tensor.Tensor) (qProj, error) { return cuda.NewResidentBQ4(w) })
 
 	q8toks, q8tps := runRawDecode(t, rf, arch, ids, gen, maxSeq, q8)
 	q4toks, q4tps := runRawDecode(t, rf, arch, ids, gen, maxSeq, q4)
-	q4ktoks, q4ktps := runRawDecode(t, rf, arch, ids, gen, maxSeq, quantQ4K)
+	q4ktoks, q4ktps := runRawDecode(t, rf, arch, ids, gen, maxSeq, fromF32(quantQ4K))
 
 	agree := func(toks []int) int {
 		match := 0

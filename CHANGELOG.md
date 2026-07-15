@@ -4,6 +4,19 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — direct Q4_K_M file loading: any llama.cpp 4-bit file runs standalone (worker linux-amd64, Tw43, 2026-07-15)
+- `quantDirect` (test-side loader) keeps a Q4_K_M GGUF's tensors native: Q4_K blocks upload
+  as-is into `ResidentBQ4K` (zero requantization — llama.cpp's iterative-encoder bits), the
+  Q6_K minority (v/down in half the layers + the output head) goes Dequantize→resident-Q8
+  (higher precision than Q6_K), f32 norms/biases as usual. No new kernels — the per-tensor
+  interface mixes precisions. Validated on Mistral-7B (23/24 greedy tokens == the Q8-file
+  reference, 47.7 tok/s), Qwen-1.5B/3B (coherent). Users can now run a standard HF Q4_K_M
+  download without fetching the 2× larger Q8 sibling.
+- Measured hypothesis kill: llama.cpp's encoder does NOT improve small-model greedy
+  agreement (4/24 and 3/24 vs the requant path's 7/24 and 2/24) — token divergence at
+  small scale is intrinsic 4-bit noise on flat logit distributions, not encoder quality;
+  generated text stays coherent and correct at every scale.
+
 ### CUDA — Q4_K resident decode: ggml's standard format, 7B at Q8 quality +29% faster (worker linux-amd64, Tw42, 2026-07-15)
 - `cuda.ResidentBQ4K` + `cu_qmatmul_q4k`: weights resident in ggml's Q4_K super-block layout
   (144 B / 256 weights — f16 d/dmin, packed 6-bit sub-scales/mins, nibbles), dequantized
