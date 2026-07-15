@@ -77,4 +77,33 @@ func TestCUDAGeneralOps(t *testing.T) {
 	ropeG, _ := backend.Execute(cctx, backend.OpRoPE, []*tensor.Tensor{q}, ra)
 	ropeR, _ := backend.Execute(rctx, backend.OpRoPE, []*tensor.Tensor{q}, ra)
 	closeTo("OpRoPE", ropeG[0], ropeR[0])
+
+	// MHA (softmax → looser f32 tolerance): standard causal, GQA, and KV-cache decode (sq<sk).
+	closeMHA := func(tag string, g, r *tensor.Tensor) {
+		gf := g.Contiguous().Storage().F32()
+		rf := r.Cast(tensor.F32).Contiguous().Storage().F32()
+		if len(gf) != len(rf) {
+			t.Fatalf("%s: len %d != %d", tag, len(gf), len(rf))
+		}
+		for i := range gf {
+			if d := math.Abs(float64(gf[i] - rf[i])); d > 1e-3+1e-3*math.Abs(float64(rf[i])) {
+				t.Fatalf("%s[%d]: cuda %v vs ref %v (Δ%g)", tag, i, gf[i], rf[i], d)
+			}
+		}
+		t.Logf("%s: CUDA general backend == reference", tag)
+	}
+	mha := func(tag string, sq, sk, heads, kvHeads, dk int, causal bool) {
+		dm := heads * dk
+		kvw := kvHeads * dk
+		qq := bench.RandF32(tensor.Shape{sq, dm}, 10)
+		kk := bench.RandF32(tensor.Shape{sk, kvw}, 11)
+		vv := bench.RandF32(tensor.Shape{sk, kvw}, 12)
+		aa := backend.AttnAttrs{Heads: heads, KVHeads: kvHeads, Causal: causal}
+		gg, _ := backend.Execute(cctx, backend.OpMHA, []*tensor.Tensor{qq, kk, vv}, aa)
+		rr, _ := backend.Execute(rctx, backend.OpMHA, []*tensor.Tensor{qq, kk, vv}, aa)
+		closeMHA(tag, gg[0], rr[0])
+	}
+	mha("OpMHA/standard", 6, 6, 8, 8, 8, true)
+	mha("OpMHA/gqa", 6, 6, 8, 2, 8, true)
+	mha("OpMHA/decode", 1, 6, 8, 2, 8, true)
 }
