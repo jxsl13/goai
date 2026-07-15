@@ -1,4 +1,4 @@
-//go:build !(amd64 && goexperiment.simd)
+//go:build !(amd64 && goexperiment.simd) && !(arm64 && goexperiment.simd)
 
 package cpu_test
 
