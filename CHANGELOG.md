@@ -4,6 +4,20 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T650 — Titans: test-time neural long-term memory (2026-07-15)
+- New `nn.NeuralMemory` + `nn.Titans` (MAC block): the Titans architecture (Behrouz,
+  Zhong, Mirrokni 2024, arXiv:2501.00663) — a memory that keeps LEARNING at inference
+  time. While processing a sequence, each token takes one gradient step on the
+  associative surprise loss ‖M(k)−v‖², written with a surprise-momentum + adaptive-
+  forget update, so the memory memorizes the current context on the fly and the
+  attention layer reads from it (Memory-As-Context). The memory can be linear or a
+  small MLP; its inner gradient is HAND-DERIVED in closed form from ordinary forward
+  ops, so this needs NO second-order/create-graph autograd (see ADR-0022). The linear,
+  zero-momentum, zero-forget limit collapses EXACTLY to the delta rule
+  (`nn.DeltaNet`), verified to machine epsilon — which pins the hand-derived gradient.
+  Distinct from `nn.GatedDeltaNet` (that IS the linear special case; Titans generalizes
+  it with a deep memory + momentum + data-dependent forget).
+
 ### T651 — APOLLO optimizer: SGD-like memory, AdamW-level training (2026-07-15)
 - New `nn.APOLLO`: the APOLLO memory-efficient optimizer (Zhu, Zhang, Hao et al. 2024,
   arXiv:2412.05270), a successor to GaLore. Instead of GaLore's SVD subspace, APOLLO

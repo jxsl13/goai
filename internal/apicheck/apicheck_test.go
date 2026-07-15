@@ -116,6 +116,7 @@ var typeExampleExempt = map[string]bool{
 	"nn.MixtureOfRecursionsOption":  true, // functional-option type (shown via WithMoRCapacities)
 	"nn.RecursionBlock":             true, // interface; nn.Linear is the impl shown in ExampleMixtureOfRecursions
 	"nn.APOLLOOption":               true, // functional-option type (shown via WithAPOLLORank/WithAPOLLOMini)
+	"nn.TitansOption":               true, // functional-option type (shown via WithTitansLinearMemory/WithTitansPersistentTokens)
 	"nn.ShampooOption":              true, // functional-option type (shown via WithShampooEps)
 	"nn.GPTQOption":                 true, // functional-option type (shown via WithGPTQDamp)
 	"nn.SparseGPTOption":            true, // functional-option type (shown via WithSparseGPTDamp/Block)
