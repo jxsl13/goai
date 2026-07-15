@@ -4,6 +4,17 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — unified serving generalized to Qwen2 (worker linux-amd64, Tw48, 2026-07-15)
+- `rawF16Prefill`: an arch-generic f16 tensor-core prefill builder straight from
+  `gguf.ReadRaw` (metadata prefix + optional QKV bias — covers families
+  `nlp.LlamaFromGGUF` rejects), with the arch-generic `seedForward` handoff into the
+  Q4_K decoder's caches. Qwen2.5-1.5B at P=33: prompt processing 341.5 ms → 19.9 ms
+  (17.1×); seeded K rows match the decode path's at rel L1 0.0023; both paths generate
+  coherent text (confirming Tw47's long-prose babble was TinyLlama-, not path-related).
+  At 3B: 9.9× (351.5→35.3 ms) with the unified continuation token-for-token equal to
+  pure decode. Both model families (1.1B/1.5B/3B) now serve with batched f16 prefill +
+  Q4_K graph decode.
+
 ### CUDA — unified serving path: batched f16 prefill seeds the Q4_K decoder, 19.4× prompt processing (worker linux-amd64, Tw47, 2026-07-15)
 - `seedForward` appends the f16 prefill's post-RoPE K/V rows into the Q4_K graph decoder's
   KV caches (positions 0..P-1); greedy decode continues from position P. Replaces the
