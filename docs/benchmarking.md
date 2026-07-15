@@ -905,9 +905,24 @@ step) for `K % 512 == 0`, keeping the **same** warp count (unlike a wider *outpu
 occupancy is preserved — for another **+2.8 %** (decode 193.3 → 198.8 tok/s, same-window
 A/B; cumulative from the scalar baseline: 161.4 → 198.8, **+23.2 %**). Two output rows per
 warp was tried and **rejected**: flat in isolation but −4 % end-to-end, because halving the
-warp count starves the small-N key/value projections and costs occupancy. The GEMV is now
-at the sweet spot for the warp-per-output structure; further gains would need a different
-structure (split-K with a block reduction) — diminishing returns.
+warp count starves the small-N key/value projections and costs occupancy.
+
+**How close to the ceiling?** A *clean device-only* bandwidth probe (kernel only, no D2H
+download — the single-shape `[1,2048]²` µs figure above is dominated by a per-call download
+and understates the kernel) shows the optimized GEMV runs each real projection shape at
+**70–92 % of the RTX 3060's 360 GB/s peak**:
+
+| projection (Q8, `[1,K]·[K,N]`) | GB/s | % of peak |
+|---|---:|---:|
+| q/o `2048·2048` | 253 | 70 % |
+| gate/up `2048·5632` | 306 | 85 % |
+| down `5632·2048` | 286 | 79 % |
+| output head `2048·32000` | 330 | **92 %** |
+
+So the GEMV is now **near its bandwidth ceiling** — a split-K restructure would chase at most
+the ~10–30 % headroom on the *smallest* projection, the least impactful. The residual decode
+gap vs llama.cpp is therefore **not** the GEMV; it is attention/overhead. That redirects any
+further decode optimization away from the projections and toward fused attention.
 
 ## goai CUDA vs llama.cpp Vulkan across model scales (worker linux-amd64)
 
