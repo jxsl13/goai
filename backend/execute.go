@@ -34,6 +34,25 @@ func Execute(ctx *Context, op Op, inputs []*tensor.Tensor, attrs Attrs) ([]*tens
 		dtype = inputs[0].Dtype()
 	}
 
+	// Per-op backend routing (§C23/§T630): if an override names a backend for this
+	// op, re-point ctx to it BEFORE kernel resolution, mirroring the fallback
+	// path's ctx = ctx.WithBackend(fb) re-point below. OFF by default: opBackends
+	// is nil, so this is a nil-map lookup that changes nothing and every op stays
+	// on ctx.Backend (§V16-1, the zero-change-when-unused anchor). We only re-point
+	// when the named backend is registered AND actually serves op at dtype;
+	// otherwise we leave ctx.Backend untouched and fall through to the normal
+	// resolution/fallback chain (§I4), so an override for an unsupported kernel
+	// still produces a correct result and never crashes. The boundary transfer is
+	// implicit — GPU backends upload/download host-resident inputs per Execute
+	// (ADR-0021).
+	if name, routed := ctx.opBackends[op]; routed {
+		if rb, rok := Get(name); rok && rb != ctx.Backend {
+			if _, has := rb.Kernel(op, dtype); has {
+				ctx = ctx.WithBackend(rb)
+			}
+		}
+	}
+
 	k, ok := ctx.Backend.Kernel(op, dtype)
 	if !ok {
 		// Fallback chain (§I4/§T461): prefer the OPTIMIZED CPU backend — its kernels
