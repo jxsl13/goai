@@ -428,7 +428,11 @@ func rmsNormBwd[T normFloat](x, gamma, up, dx, dgamma []T, rows, d int, eps floa
 				xr := x[base+j0 : base+j1 : base+j1]
 				ivr := inv[r]
 				for jj, uv := range ur {
-					ac[jj] += float64(uv) * float64(xr[jj]) * ivr
+					// float64() fence: pin each row's term to plain mul-then-add so
+					// the sum matches ref's scratch-rounded contraction regardless of
+					// gc's FMA-fusion choice (parity-fragility fix, ref-parity ulp
+					// test; carried over from the main-branch norm bugfix in 4060f93).
+					ac[jj] += float64(float64(uv) * float64(xr[jj]) * ivr)
 				}
 			}
 			og := dgamma[j0:j1:j1]
@@ -599,7 +603,9 @@ func layerNormBwd[T normFloat](x, gamma, up, dx, dgamma, dbeta []T, rows, d int,
 				for jj, uv := range ur {
 					xhat := (float64(xr[jj]) - mu) * iv
 					u := float64(uv)
-					ag[jj] += u * xhat
+					// float64() fence (see rmsNormBwd): plain mul-then-add matching
+					// ref, contraction-independent (main-branch bugfix 4060f93).
+					ag[jj] += float64(u * xhat)
 					ab[jj] += u
 				}
 			}
