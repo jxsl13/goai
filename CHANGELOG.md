@@ -4,6 +4,40 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nn/nlp — topic-discovery round 6: 14 new techniques across optimizers, attention, quant, sampling, MoE, distillation (T668–T679, 2026-07-15)
+
+A systematic verify-first sweep per category (the earlier rounds were architecture-block-focused
+and had wrongly concluded the frontier exhausted) surfaced real gaps; each was built additively,
+with a measurable-value test and a collapse/equivalence/gradcheck anchor (~1e-10), and independently
+re-verified on `main`.
+
+- **Optimizers (5).** Learning-rate-free **Prodigy** and **D-Adaptation** (untuned reach the loss of
+  a tuned Adam while Adam at the same nominal LR stalls); **Adam-mini** (~50% less optimizer state
+  via one second-moment scalar per parameter block); **MARS** (variance-reduced AdamW, γ=0 ≡ AdamW);
+  **PSGD-Kron** (diagonal Kronecker-preconditioned SGD, beats a tuned Adam on an ill-conditioned
+  problem). Each collapses bit-identically to its baseline at the disabling setting.
+- **Attention (3).** **TPA** (Tensor Product Attention — per-token rank-R Q/K/V factorization,
+  ~72% KV-cache compression, plus an incremental decode cache of factors); **Softpick /
+  softmax-off-by-one** ("attend to nothing", built as a composed layer with no backend change);
+  **Lightning-attention** was correctly found *already present* (RetentionChunkwise) and not
+  duplicated.
+- **Quantization (2).** **AQLM** (additive multi-codebook 2–3-bit weight quantization, rate-distortion
+  faithful); **SpinQuant** (rotation-based outlier removal with a learnable orthogonal via QR, ~31×
+  lower quantization MSE on outlier-heavy activations).
+- **Also:** **top-nσ** sampling (temperature-stable logit truncation), **ReMoE** (fully-differentiable
+  ReLU-routed mixture-of-experts, no auxiliary load-balancing loss), and **MiniLM** deep
+  self-attention distillation (v1 + v2, width-independent teacher→student transfer).
+
+### backend — configurable per-op / per-layer backend routing (T630, C23, 2026-07-16)
+
+`Context.WithOpBackend(op, name)` / `WithLayerBackend(name, ops…)` route a chosen op (or a group)
+to a chosen backend; off by default (an empty override is a nil-map lookup, byte-for-byte
+unchanged). It exists for low-VRAM offload and heterogeneous speculative decoding, not as a default
+speedup (a split on a device that fits the whole model is a transfer-bound loss). The scheduling
+policy for the former, `backend.PlanOffload`, also landed: it packs the hottest layers onto the GPU
+up to its memory budget and spills the rest to the CPU, always yielding a runnable plan for an
+oversized model (llama.cpp-style partial offload) rather than an out-of-memory failure.
+
 ### CPU (Apple Silicon / arm64) — the "be better than pytorch" f32 campaign: matched, then beaten (T656–T666, 2026-07-15)
 
 The pure-Go CPU backend's f32 hot paths went from ≈42× behind torch-cpu to matching or beating
