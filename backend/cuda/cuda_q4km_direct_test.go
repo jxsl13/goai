@@ -13,15 +13,23 @@ import (
 	"github.com/jxsl13/goai/tensor"
 )
 
-// quantDirect keeps a Q4_K_M file's tensors in their NATIVE encodings: Q4_K blocks
-// upload AS-IS (gguf's [out,in] row-major block order is exactly the GEMV layout —
-// zero requantization, inheriting llama.cpp's iterative-fit encoder quality), and the
-// mix's minority tensors (Q6_K: v/down in half the layers + the output head) dequantize
-// into resident Q8 (higher precision than Q6_K, so the mix's quality floor holds).
+// quantDirect keeps a Q4_K_M file's tensors in their NATIVE encodings: Q4_K and Q6_K
+// blocks upload AS-IS (gguf's [out,in] row-major block order is exactly the GEMV
+// layout — zero requantization, inheriting llama.cpp's iterative-fit encoder quality;
+// Q6_K covers the mix's minority tensors: v/down in half the layers + the output
+// head). Anything else dequantizes into resident Q8. Native Q6_K (0.82 B/w, Tw54)
+// replaced the earlier dequant→Q8 detour (1.06 B/w, requant loss) — fewer bytes AND
+// bit-native.
 func quantDirect(qt gguf.QuantTensor) (qProj, error) {
-	if qt.GGType == 12 { // Q4_K
-		n, k := qt.Shape[0], qt.Shape[1]
+	n, k := qt.Shape[0], qt.Shape[1]
+	switch qt.GGType {
+	case 12: // Q4_K
 		return cuda.NewResidentBQ4KFromBlocks(qt.Data, k, n)
+	case 14: // Q6_K
+		if os.Getenv("GOAI_CUDA_Q6K") == "q8" { // A/B: the old dequant→Q8 detour
+			break
+		}
+		return cuda.NewResidentBQ6KFromBlocks(qt.Data, k, n)
 	}
 	w, err := qt.Dequantize()
 	if err != nil {

@@ -64,6 +64,8 @@ int cu_qmatmul_q4(const void* dA, const void* dQ, const void* dScales, const voi
 // q[N, K/256 * 144] (144-byte blocks: f16 d + f16 dmin + 12B packed 6-bit scales/mins + 128B
 // nibbles), dequant y = d*sc6*nibble - dmin*min6 per 32-sub-block. K%256==0. DECODE-ONLY (GEMV).
 int cu_qmatmul_q4k(const void* dA, const void* dQ, void* dOut, int M, int K, int N, float beta);
+// cu_qmatmul_q6k: out[M,N] = a·dequant(W), W = ggml Q6_K 210-byte super-blocks per output row.
+int cu_qmatmul_q6k(const void* dA, const void* dQ, void* dOut, int M, int K, int N, float beta);
 // cu_upload_f16: upload host f32, convert to a device f16 (u16) buffer of n elements
 // (the f32 staging buffer is freed). For resident prefill weights (tensor-core GEMM).
 void* cu_upload_f16(const float* src, long n);
