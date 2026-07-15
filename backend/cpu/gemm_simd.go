@@ -12,9 +12,9 @@ package cpu
 //
 // The accumulator is loaded from C before the p-loop and stored after, so the
 // += contract of the scalar kernel is preserved verbatim (conv im2col scatter
-// depends on it, §T597). Only gemmF64Band is vectorized: the F32 SIMD twin
-// regressed and stays scalar (see gemmF32Band's note); f64 accumulation (§V10)
-// is unchanged.
+// depends on it, §T597). F32 has its own f32-NATIVE direct kernel below
+// (ADR-0021 tolerance, FMA-gated); F64 keeps f64 accumulation (§V10) and
+// bit-exactness.
 //
 // gemmHasAVX runtime-gates the intrinsics (§I4): built with the experiment but
 // run on a pre-AVX CPU, gemmF64Band falls back to a correct scalar accumulate
@@ -29,16 +29,47 @@ func gemmF64Band(A, B, C []float64, loRow, hiRow, k, n int) {
 		gemmF64BandScalar(A, B, C, loRow, hiRow, k, n)
 		return
 	}
-	nv := n - n%4  // 4-wide vector boundary
-	nv8 := n - n%8 // 8-wide boundary (two Float64x4 per row)
+	// Column blocking, same rationale as gemmF32BandDirect: keep the k×NC B
+	// block L2-resident across the band's i-tiles so B is streamed from memory
+	// once per band, not once per 4-row tile. Blocks are j-splits only — every
+	// C[i][j] still accumulates its k products in one ascending-p pass, so the
+	// result stays bit-identical (§V3, §V11 tol 0) and the += contract holds.
+	const l2Target = 256 << 10
+	nc := n
+	if k*n*8 > l2Target {
+		nc = l2Target / (8 * k) / 8 * 8 // multiple of the 8-wide j-tile
+		if nc < 32 {
+			nc = 32
+		}
+	}
+	for jb := 0; jb < n; jb += nc {
+		gemmF64BandCols(A, B, C, loRow, hiRow, k, n, jb, min(jb+nc, n))
+	}
+}
+
+// gemmF64BandCols computes columns [jLo,jHi) of rows [loRow,hiRow). jLo is
+// 8-aligned (blocks are multiples of 8); jHi==n on the last block carries the
+// 4-wide and scalar tails.
+func gemmF64BandCols(A, B, C []float64, loRow, hiRow, k, n, jLo, jHi int) {
+	span := jHi - jLo
+	nv := jLo + span - span%4  // 4-wide vector boundary
+	nv8 := jLo + span - span%8 // 8-wide boundary (two Float64x4 per row)
 	i := loRow
 	for ; i+3 < hiRow; i += 4 {
-		r0, r1, r2, r3 := (i+0)*k, (i+1)*k, (i+2)*k, (i+3)*k
+		// Hoisted k-length A row slices (p < k == len(ar0) eliminates the four A
+		// bounds checks) and a running bo offset (strength-reduces p*n+j): same
+		// address-computation-only rewrite as gemmF32BandDirect, measured there
+		// to empty the loop of GPR spill/reload bookkeeping. Arithmetic order is
+		// untouched, so the result stays bit-identical (§V3, §V11 tol 0).
+		ar0 := A[(i+0)*k : (i+1)*k]
+		ar1 := A[(i+1)*k : (i+2)*k]
+		ar2 := A[(i+2)*k : (i+3)*k]
+		ar3 := A[(i+3)*k : (i+4)*k]
 		c0 := C[(i+0)*n : (i+0)*n+n]
 		c1 := C[(i+1)*n : (i+1)*n+n]
 		c2 := C[(i+2)*n : (i+2)*n+n]
 		c3 := C[(i+3)*n : (i+3)*n+n]
-		j := 0
+		j := jLo
 		// 8-wide body: two column groups per row = 8 independent accumulator
 		// chains, enough in flight to hide the add latency (nr=4 left only 4).
 		for ; j < nv8; j += 8 {
@@ -50,13 +81,14 @@ func gemmF64Band(A, B, C []float64, loRow, hiRow, k, n int) {
 			a2h := archsimd.LoadFloat64x4Slice(c2[j+4:])
 			a3 := archsimd.LoadFloat64x4Slice(c3[j:])
 			a3h := archsimd.LoadFloat64x4Slice(c3[j+4:])
+			bo := j
 			for p := 0; p < k; p++ {
-				lo := archsimd.LoadFloat64x4Slice(B[p*n+j:])
-				hi := archsimd.LoadFloat64x4Slice(B[p*n+j+4:])
-				b0 := archsimd.BroadcastFloat64x4(A[r0+p])
-				b1 := archsimd.BroadcastFloat64x4(A[r1+p])
-				b2 := archsimd.BroadcastFloat64x4(A[r2+p])
-				b3 := archsimd.BroadcastFloat64x4(A[r3+p])
+				lo := archsimd.LoadFloat64x4Slice(B[bo:])
+				hi := archsimd.LoadFloat64x4Slice(B[bo+4:])
+				b0 := archsimd.BroadcastFloat64x4(ar0[p])
+				b1 := archsimd.BroadcastFloat64x4(ar1[p])
+				b2 := archsimd.BroadcastFloat64x4(ar2[p])
+				b3 := archsimd.BroadcastFloat64x4(ar3[p])
 				a0 = a0.Add(b0.Mul(lo))
 				a0h = a0h.Add(b0.Mul(hi))
 				a1 = a1.Add(b1.Mul(lo))
@@ -65,6 +97,7 @@ func gemmF64Band(A, B, C []float64, loRow, hiRow, k, n int) {
 				a2h = a2h.Add(b2.Mul(hi))
 				a3 = a3.Add(b3.Mul(lo))
 				a3h = a3h.Add(b3.Mul(hi))
+				bo += n
 			}
 			a0.StoreSlice(c0[j:])
 			a0h.StoreSlice(c0[j+4:])
@@ -80,45 +113,53 @@ func gemmF64Band(A, B, C []float64, loRow, hiRow, k, n int) {
 			acc1 := archsimd.LoadFloat64x4Slice(c1[j:])
 			acc2 := archsimd.LoadFloat64x4Slice(c2[j:])
 			acc3 := archsimd.LoadFloat64x4Slice(c3[j:])
+			bo := j
 			for p := 0; p < k; p++ {
-				bv := archsimd.LoadFloat64x4Slice(B[p*n+j:])
-				acc0 = acc0.Add(archsimd.BroadcastFloat64x4(A[r0+p]).Mul(bv))
-				acc1 = acc1.Add(archsimd.BroadcastFloat64x4(A[r1+p]).Mul(bv))
-				acc2 = acc2.Add(archsimd.BroadcastFloat64x4(A[r2+p]).Mul(bv))
-				acc3 = acc3.Add(archsimd.BroadcastFloat64x4(A[r3+p]).Mul(bv))
+				bv := archsimd.LoadFloat64x4Slice(B[bo:])
+				acc0 = acc0.Add(archsimd.BroadcastFloat64x4(ar0[p]).Mul(bv))
+				acc1 = acc1.Add(archsimd.BroadcastFloat64x4(ar1[p]).Mul(bv))
+				acc2 = acc2.Add(archsimd.BroadcastFloat64x4(ar2[p]).Mul(bv))
+				acc3 = acc3.Add(archsimd.BroadcastFloat64x4(ar3[p]).Mul(bv))
+				bo += n
 			}
 			acc0.StoreSlice(c0[j:])
 			acc1.StoreSlice(c1[j:])
 			acc2.StoreSlice(c2[j:])
 			acc3.StoreSlice(c3[j:])
 		}
-		for ; j < n; j++ { // scalar column tail (n%4)
+		for ; j < jHi; j++ { // scalar column tail (span%4)
 			s0, s1, s2, s3 := c0[j], c1[j], c2[j], c3[j]
+			bo := j
 			for p := 0; p < k; p++ {
-				bv := B[p*n+j]
-				s0 += A[r0+p] * bv
-				s1 += A[r1+p] * bv
-				s2 += A[r2+p] * bv
-				s3 += A[r3+p] * bv
+				bv := B[bo]
+				s0 += ar0[p] * bv
+				s1 += ar1[p] * bv
+				s2 += ar2[p] * bv
+				s3 += ar3[p] * bv
+				bo += n
 			}
 			c0[j], c1[j], c2[j], c3[j] = s0, s1, s2, s3
 		}
 	}
 	for ; i < hiRow; i++ { // remainder rows
 		ci := C[i*n : i*n+n]
-		ri := i * k
-		j := 0
+		ai := A[i*k : (i+1)*k]
+		j := jLo
 		for ; j < nv; j += 4 {
 			acc := archsimd.LoadFloat64x4Slice(ci[j:])
+			bo := j
 			for p := 0; p < k; p++ {
-				acc = acc.Add(archsimd.BroadcastFloat64x4(A[ri+p]).Mul(archsimd.LoadFloat64x4Slice(B[p*n+j:])))
+				acc = acc.Add(archsimd.BroadcastFloat64x4(ai[p]).Mul(archsimd.LoadFloat64x4Slice(B[bo:])))
+				bo += n
 			}
 			acc.StoreSlice(ci[j:])
 		}
-		for ; j < n; j++ {
+		for ; j < jHi; j++ {
 			s := ci[j]
+			bo := j
 			for p := 0; p < k; p++ {
-				s += A[ri+p] * B[p*n+j]
+				s += ai[p] * B[bo]
+				bo += n
 			}
 			ci[j] = s
 		}
@@ -158,13 +199,29 @@ var gemmHasFMA = archsimd.X86.FMA()
 // f32-native result is within the ADR-0021 tolerance of ref, not bit-exact.
 func gemmF32(A, B, C []float32, m, k, n int) {
 	if !gemmHasFMA {
-		acc := make([]float64, m*n)
+		accP := getF64(m * n) // pooled zeroed f64 accumulation scratch (§V10, §T463)
+		acc := *accP
 		parallelWork(m, k*n, func(loRow, hiRow int) {
 			gemmF32BandScalarF64(A, B, acc, loRow, hiRow, k, n)
 		})
 		for i := range C {
 			C[i] = float32(acc[i])
 		}
+		putF64(accP)
+		return
+	}
+	if m < 4 {
+		// Small-m (decode GEMV shapes, m ≤ 3): row-parallel gives ≤3 workers and
+		// only the slow 1-row remainder kernel. Parallelize over COLUMN blocks
+		// instead — each worker owns a j-range of C, so writes stay disjoint and
+		// every core streams its own slice of B. Blocks of 512 cols keep the
+		// per-worker B working set (k×512×4B) L2/L3-friendly while giving
+		// parallelWork enough grains to balance.
+		const jblk = 512
+		blocks := (n + jblk - 1) / jblk
+		parallelWork(blocks, m*k*jblk, func(loB, hiB int) {
+			gemmF32SmallM(A, B, C, loB*jblk, min(hiB*jblk, n), m, k, n)
+		})
 		return
 	}
 	parallelWork(m, k*n, func(loRow, hiRow int) {
@@ -172,21 +229,118 @@ func gemmF32(A, B, C []float32, m, k, n int) {
 	})
 }
 
+// gemmF32SmallM computes C[i][jLo:jHi] for ALL rows i < m (m ≤ 3), f32-native.
+// Per row: 32-wide j-tiles = 4 independent FMA chains to hide latency. B is
+// walked with stride n between p steps, but a 32-col tile covers two whole 64B
+// lines per step, so every fetched line is fully consumed and the k×128B
+// per-tile footprint streams through L2. Same ADR-0021 f32 accumulation as
+// gemmF32BandDirect.
+func gemmF32SmallM(A, B, C []float32, jLo, jHi, m, k, n int) {
+	span := jHi - jLo
+	nv32 := jLo + span - span%32
+	nv := jLo + span - span%8
+	for i := 0; i < m; i++ {
+		ai := A[i*k : (i+1)*k]
+		ci := C[i*n : (i+1)*n]
+		j := jLo
+		for ; j < nv32; j += 32 {
+			s0 := archsimd.BroadcastFloat32x8(0)
+			s1 := archsimd.BroadcastFloat32x8(0)
+			s2 := archsimd.BroadcastFloat32x8(0)
+			s3 := archsimd.BroadcastFloat32x8(0)
+			bo := j
+			for p := 0; p < k; p++ {
+				b := archsimd.BroadcastFloat32x8(ai[p])
+				s0 = b.MulAdd(archsimd.LoadFloat32x8Slice(B[bo:]), s0)
+				s1 = b.MulAdd(archsimd.LoadFloat32x8Slice(B[bo+8:]), s1)
+				s2 = b.MulAdd(archsimd.LoadFloat32x8Slice(B[bo+16:]), s2)
+				s3 = b.MulAdd(archsimd.LoadFloat32x8Slice(B[bo+24:]), s3)
+				bo += n
+			}
+			s0.StoreSlice(ci[j:])
+			s1.StoreSlice(ci[j+8:])
+			s2.StoreSlice(ci[j+16:])
+			s3.StoreSlice(ci[j+24:])
+		}
+		for ; j < nv; j += 8 {
+			s := archsimd.BroadcastFloat32x8(0)
+			bo := j
+			for p := 0; p < k; p++ {
+				s = archsimd.BroadcastFloat32x8(ai[p]).MulAdd(archsimd.LoadFloat32x8Slice(B[bo:]), s)
+				bo += n
+			}
+			s.StoreSlice(ci[j:])
+		}
+		for ; j < jHi; j++ {
+			var t float32
+			bo := j
+			for p := 0; p < k; p++ {
+				t += ai[p] * B[bo]
+				bo += n
+			}
+			ci[j] = t
+		}
+	}
+}
+
 // gemmF32BandDirect: f32-NATIVE 8-wide accumulation (Float32x8 + MulAdd) writing
 // rows [loRow,hiRow) of C in f32 DIRECTLY (no f64 carrier). Each C[i][j] sums its
 // k products in f32 (ADR-0021 tolerance). mr=4 × nr=16 (8 chains); C rows written
 // once (disjoint per row-band).
+//
+// Cache blocking: when the k×n B panel outgrows L2, each 4-row i-tile streaming
+// all of B evicts it for the next tile — B then comes from L3/memory (hiRow-
+// loRow)/4 times per band. Splitting the columns into NC-wide blocks sized so
+// k×NC×4B ≈ half of L2 (512 KiB on Zen 3) keeps the block resident across all
+// i-tiles of the band: B is read from memory once per band instead of once per
+// i-tile. Column blocking does not touch the per-element accumulation order,
+// and every (i,j) tile is still computed in one pass (store-once), so numerics
+// are unchanged.
 func gemmF32BandDirect(A, B, C []float32, loRow, hiRow, k, n int) {
-	nv16 := n - n%16
-	nv := n - n%8
+	const l2Target = 256 << 10 // bytes of L2 to budget for the B block
+	nc := n
+	if k*n*4 > l2Target {
+		nc = l2Target / (4 * k) / 16 * 16 // multiple of the 16-wide j-tile
+		if nc < 64 {
+			nc = 64
+		}
+	}
+	for jb := 0; jb < n; jb += nc {
+		gemmF32BandDirectCols(A, B, C, loRow, hiRow, k, n, jb, min(jb+nc, n))
+	}
+}
+
+// gemmF32BandDirectCols computes columns [jLo,jHi) of rows [loRow,hiRow).
+// jLo is 16-aligned (blocks are multiples of 16); jHi==n on the last block
+// carries the 8-wide and scalar tails.
+//
+// mr=4 × nr=16 (8 accumulators) is the register-blocking ceiling for the
+// current Go SIMD compiler: its allocator only uses Y0–Y14 (golang/go#76969,
+// closed not-planned), and an mr=6 × nr=16 variant (12 accumulators + 2 B
+// vectors + rotating broadcast) was BUILT and MEASURED here — the inner loop
+// picked up 33 SP-relative spill ops and 512³ dropped 198→102 GFLOP/s.
+// REVERTED per §C3. Re-try only after the upstream allocator can keep ≥15
+// vectors live.
+func gemmF32BandDirectCols(A, B, C []float32, loRow, hiRow, k, n, jLo, jHi int) {
+	span := jHi - jLo
+	nv16 := jLo + span - span%16
+	nv := jLo + span - span%8
 	i := loRow
 	for ; i+3 < hiRow; i += 4 {
-		r0, r1, r2, r3 := (i+0)*k, (i+1)*k, (i+2)*k, (i+3)*k
+		// Hoisted k-length A row slices: the p-loop condition p < k == len(a0)
+		// lets the compiler eliminate all four A bounds checks, and the running
+		// bo offset strength-reduces p*n+j — together they empty the inner loop
+		// of GPR spill/reload bookkeeping (measured on the SSA dump: r0..r3 and
+		// the B header were reloaded from SP every iteration before).
+		a0 := A[(i+0)*k : (i+1)*k]
+		a1 := A[(i+1)*k : (i+2)*k]
+		a2 := A[(i+2)*k : (i+3)*k]
+		a3 := A[(i+3)*k : (i+4)*k]
 		c0 := C[(i+0)*n : (i+0)*n+n]
 		c1 := C[(i+1)*n : (i+1)*n+n]
 		c2 := C[(i+2)*n : (i+2)*n+n]
 		c3 := C[(i+3)*n : (i+3)*n+n]
-		j := 0
+		j := jLo
 		for ; j < nv16; j += 16 {
 			s0 := archsimd.BroadcastFloat32x8(0)
 			s0h := archsimd.BroadcastFloat32x8(0)
@@ -196,13 +350,14 @@ func gemmF32BandDirect(A, B, C []float32, loRow, hiRow, k, n int) {
 			s2h := archsimd.BroadcastFloat32x8(0)
 			s3 := archsimd.BroadcastFloat32x8(0)
 			s3h := archsimd.BroadcastFloat32x8(0)
+			bo := j
 			for p := 0; p < k; p++ {
-				lo := archsimd.LoadFloat32x8Slice(B[p*n+j:])
-				hi := archsimd.LoadFloat32x8Slice(B[p*n+j+8:])
-				b0 := archsimd.BroadcastFloat32x8(A[r0+p])
-				b1 := archsimd.BroadcastFloat32x8(A[r1+p])
-				b2 := archsimd.BroadcastFloat32x8(A[r2+p])
-				b3 := archsimd.BroadcastFloat32x8(A[r3+p])
+				lo := archsimd.LoadFloat32x8Slice(B[bo:])
+				hi := archsimd.LoadFloat32x8Slice(B[bo+8:])
+				b0 := archsimd.BroadcastFloat32x8(a0[p])
+				b1 := archsimd.BroadcastFloat32x8(a1[p])
+				b2 := archsimd.BroadcastFloat32x8(a2[p])
+				b3 := archsimd.BroadcastFloat32x8(a3[p])
 				s0 = b0.MulAdd(lo, s0)
 				s0h = b0.MulAdd(hi, s0h)
 				s1 = b1.MulAdd(lo, s1)
@@ -211,6 +366,7 @@ func gemmF32BandDirect(A, B, C []float32, loRow, hiRow, k, n int) {
 				s2h = b2.MulAdd(hi, s2h)
 				s3 = b3.MulAdd(lo, s3)
 				s3h = b3.MulAdd(hi, s3h)
+				bo += n
 			}
 			s0.StoreSlice(c0[j:])
 			s0h.StoreSlice(c0[j+8:])
@@ -226,45 +382,53 @@ func gemmF32BandDirect(A, B, C []float32, loRow, hiRow, k, n int) {
 			s1 := archsimd.BroadcastFloat32x8(0)
 			s2 := archsimd.BroadcastFloat32x8(0)
 			s3 := archsimd.BroadcastFloat32x8(0)
+			bo := j
 			for p := 0; p < k; p++ {
-				bv := archsimd.LoadFloat32x8Slice(B[p*n+j:])
-				s0 = archsimd.BroadcastFloat32x8(A[r0+p]).MulAdd(bv, s0)
-				s1 = archsimd.BroadcastFloat32x8(A[r1+p]).MulAdd(bv, s1)
-				s2 = archsimd.BroadcastFloat32x8(A[r2+p]).MulAdd(bv, s2)
-				s3 = archsimd.BroadcastFloat32x8(A[r3+p]).MulAdd(bv, s3)
+				bv := archsimd.LoadFloat32x8Slice(B[bo:])
+				s0 = archsimd.BroadcastFloat32x8(a0[p]).MulAdd(bv, s0)
+				s1 = archsimd.BroadcastFloat32x8(a1[p]).MulAdd(bv, s1)
+				s2 = archsimd.BroadcastFloat32x8(a2[p]).MulAdd(bv, s2)
+				s3 = archsimd.BroadcastFloat32x8(a3[p]).MulAdd(bv, s3)
+				bo += n
 			}
 			s0.StoreSlice(c0[j:])
 			s1.StoreSlice(c1[j:])
 			s2.StoreSlice(c2[j:])
 			s3.StoreSlice(c3[j:])
 		}
-		for ; j < n; j++ { // f32-native scalar tail (n%8)
+		for ; j < jHi; j++ { // f32-native scalar tail (span%8)
 			var t0, t1, t2, t3 float32
+			bo := j
 			for p := 0; p < k; p++ {
-				bv := B[p*n+j]
-				t0 += A[r0+p] * bv
-				t1 += A[r1+p] * bv
-				t2 += A[r2+p] * bv
-				t3 += A[r3+p] * bv
+				bv := B[bo]
+				t0 += a0[p] * bv
+				t1 += a1[p] * bv
+				t2 += a2[p] * bv
+				t3 += a3[p] * bv
+				bo += n
 			}
 			c0[j], c1[j], c2[j], c3[j] = t0, t1, t2, t3
 		}
 	}
 	for ; i < hiRow; i++ {
 		ci := C[i*n : i*n+n]
-		ri := i * k
-		j := 0
+		ai := A[i*k : (i+1)*k]
+		j := jLo
 		for ; j < nv; j += 8 {
 			s := archsimd.BroadcastFloat32x8(0)
+			bo := j
 			for p := 0; p < k; p++ {
-				s = archsimd.BroadcastFloat32x8(A[ri+p]).MulAdd(archsimd.LoadFloat32x8Slice(B[p*n+j:]), s)
+				s = archsimd.BroadcastFloat32x8(ai[p]).MulAdd(archsimd.LoadFloat32x8Slice(B[bo:]), s)
+				bo += n
 			}
 			s.StoreSlice(ci[j:])
 		}
-		for ; j < n; j++ {
+		for ; j < jHi; j++ {
 			var t float32
+			bo := j
 			for p := 0; p < k; p++ {
-				t += A[ri+p] * B[p*n+j]
+				t += ai[p] * B[bo]
+				bo += n
 			}
 			ci[j] = t
 		}

@@ -13,13 +13,15 @@ package cpu
 // (§V10) then narrow — bit-exact. The amd64+simd build overrides this with an
 // f32-native kernel that writes C directly (gemm_simd.go).
 func gemmF32(A, B, C []float32, m, k, n int) {
-	acc := make([]float64, m*n) // f64 accumulation (§V10)
+	accP := getF64(m * n) // pooled zeroed f64 accumulation scratch (§V10, §T463)
+	acc := *accP
 	parallelWork(m, k*n, func(loRow, hiRow int) {
 		gemmF32Band(A, B, acc, loRow, hiRow, k, n)
 	})
 	for i := range C {
 		C[i] = float32(acc[i])
 	}
+	putF64(accP)
 }
 
 // gemmF64Band computes rows [loRow,hiRow) of C with 4-row register blocking

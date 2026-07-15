@@ -23,6 +23,14 @@ import (
 // SIMD, which is host-blocked on arm64 (cf §T11b/§B13). Resume blocking only on a
 // host whose cache hierarchy actually bottlenecks the unblocked stream (large-cache
 // x86 server), re-measuring before merge.
+//
+// Update (amd64/Zen 3, this branch): that re-measurement happened. On a Ryzen
+// 5700G the unblocked stream DOES bottleneck once the k×n B panel outgrows L2
+// (512×2048×2048 f32 ran at ~half the 1024³ rate), and packing-free COLUMN
+// blocking (j-splits sized to ~256 KiB of B per block, no packed buffer, no
+// extra memory) recovered it: f32 +88%, f64 +60% on that shape, squares
+// neutral, numerics untouched. Lives in gemm_simd.go (amd64+simd only); the
+// portable scalar kernels below stay unblocked per the arm64 result.
 
 func matmulKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*tensor.Tensor, error) {
 	if len(in) != 2 {
