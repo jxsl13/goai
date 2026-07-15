@@ -4,6 +4,15 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA inference — Qwen on the optimized graph path (worker linux-amd64/cuda, 2026-07-15)
+- `TestCUDAQwenFixedMatchesAlloc`: Qwen2.5-0.5B on the FULL optimized decode
+  (persistent fixed buffers + device-position + fixed-size padded attention + Q8 +
+  CUDA graph, with the Q/K/V `AddBias` composed into the captured graph body)
+  generates the SAME greedy tokens as the simple alloc-path, token-for-token —
+  proving the whole optimized stack is correct for a 2nd architecture (not just
+  Llama) and the bias-add composes inside a CUDA graph. Decode 273.7 tok/s (graph)
+  vs 208.8 (alloc) = +31%. Worker sub-spec §PERF.
+
 ### CUDA inference — Qwen2.5 scale check (0.5B + 1.5B, worker linux-amd64/cuda, 2026-07-15)
 - `TestCUDAQwenGenerate` now runs both Qwen2.5-0.5B (dim 896, 24L, GQA 14:2) and
   Qwen2.5-1.5B (dim 1536, 28L, GQA 12:2) on the RTX 3060, both generating coherent
