@@ -19,8 +19,10 @@ spike checked whether GoAI can express it; verdict below.
   `backend/attrs.go` AttnAttrs.Causal defaults false; ref forward/backward
   (`backend/ref/mha.go`, `mha_backward.go`) parameterize on it; `autograd/gradcheck_test.go`
   runs a passing non-causal MHA gradcheck; the ViT (`vision/vit.go` via `nlp/mha.go`)
-  is built on exactly this. Metal/vulkan kernels already take the flag — only parity
-  tests for Causal:false are missing.
+  is built on exactly this. Metal/vulkan/cpu ALREADY parity-test the non-causal path
+  (verified 2026-07-15: metal_test.go "mha"/"mqa", vulkan_test.go "mha"/"gqa3"/
+  "swa-noncausal", cpu mha_test.go "plain"/"mqa" — all with Causal false/omitted), so
+  bidirectional attention is fully covered; no added kernel or coverage work.
 - **Backbone reuses the GPT block verbatim.** `nlp/gpt.go` Forward is mask-agnostic;
   the only causal coupling is one constructor line (`attn.Causal = true`). The diffusion
   backbone is the same GPT shape with Causal=false and a vocab+1 embedding/head row for [MASK].
@@ -40,8 +42,9 @@ Reuse non-causal OpMHA + the GPT-shaped block + OpEmbed-gather CE; add three new
 pieces in `nlp/diffusion_lm.go`: DiffusionMask (forward corruption), the masked weighted-CE
 training step, and DiffusionGenerate (iterative unmasking). Tests: unit (mask stats, CE
 gather, sampler convergence) + an e2e char-LM on the in-repo grammar corpus (loss halves +
-generation matches the grammar), mirroring `nn/newblocks_lm_e2e_test.go`. Discipline item:
-add Causal:false OpMHA parity tests on metal/vulkan (kernels already support it).
+generation matches the grammar), mirroring `nn/newblocks_lm_e2e_test.go`. No backend
+coverage work: the non-causal OpMHA path is already parity-tested on cpu/metal/vulkan
+(verified), so diffusion-LM inherits verified bidirectional attention.
 
 Not started autonomously — this is a user-pick feature (the Titans pattern). The ADR makes
 it implementation-ready on greenlight.
