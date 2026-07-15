@@ -29,6 +29,7 @@
 
 static pthread_mutex_t gLock = PTHREAD_MUTEX_INITIALIZER;
 static cublasHandle_t gHandle = NULL;
+static float *gOne = NULL, *gZero = NULL; // device 1.0f/0.0f — cuBLAS DEVICE pointer mode (graph-capture-safe alpha/beta)
 static cudaStream_t gStream = NULL;
 static CUcontext gCtx = NULL; // runtime's primary context, retained for driver-API launches
 static CUfunction gGelu = NULL, gSilu = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gQgemv = NULL; // lazily nvrtc-compiled
@@ -44,6 +45,26 @@ static int ensure_init(void) {
     if (cudaStreamCreate(&gStream) != cudaSuccess) { gStream = NULL; return -1; }
     if (cublasCreate(&gHandle) != CUBLAS_STATUS_SUCCESS) { gHandle = NULL; return -1; }
     if (cublasSetStream(gHandle, gStream) != CUBLAS_STATUS_SUCCESS) { return -1; }
+    // Give cuBLAS a persistent user workspace so it does NOT allocate a workspace
+    // lazily on first use — a lazy alloc inside a CUDA-graph stream capture breaks
+    // the captured graph. 4 MB matches cuBLAS's own default (§PERF graph decode).
+    {
+        static void* gCublasWs = NULL;
+        const size_t wsSize = 4u * 1024u * 1024u;
+        if (gCublasWs == NULL && cudaMalloc(&gCublasWs, wsSize) != cudaSuccess) return -1;
+        if (cublasSetWorkspace(gHandle, gCublasWs, wsSize) != CUBLAS_STATUS_SUCCESS) return -1;
+    }
+    // DEVICE pointer mode: alpha/beta are read from device memory at kernel
+    // execution — required for cuBLAS calls to be captured into a CUDA graph
+    // (host-pointer alpha/beta on the stack aren't valid at graph replay time).
+    {
+        float h1 = 1.0f, h0 = 0.0f;
+        if (gOne == NULL && cudaMalloc((void**)&gOne, sizeof(float)) != cudaSuccess) return -1;
+        if (gZero == NULL && cudaMalloc((void**)&gZero, sizeof(float)) != cudaSuccess) return -1;
+        cudaMemcpy(gOne, &h1, sizeof(float), cudaMemcpyHostToDevice);
+        cudaMemcpy(gZero, &h0, sizeof(float), cudaMemcpyHostToDevice);
+        if (cublasSetPointerMode(gHandle, CUBLAS_POINTER_MODE_DEVICE) != CUBLAS_STATUS_SUCCESS) return -1;
+    }
     // Retain the runtime's primary context so driver-API kernel launches
     // (nvrtc-compiled) share it with the runtime allocations/stream. The driver
     // API needs cuInit + an explicit current context per thread (see cu_gelu_f32).
@@ -539,10 +560,10 @@ int cu_matmul_f32(const float* A, const float* B, float* C, int M, int K, int N)
     // Row-major C[M,N]=A·B via column-major C^T = B^T·A^T (see comment above).
     st = cublasSgemm(gHandle, CUBLAS_OP_N, CUBLAS_OP_N,
                      N, M, K,
-                     &alpha,
+                     gOne,
                      gB, N,
                      gA, K,
-                     &beta,
+                     gZero,
                      gC, N);
     if (st != CUBLAS_STATUS_SUCCESS) { rc = -4; goto done; }
     if (cudaMemcpyAsync(C, gC, cLen, cudaMemcpyDeviceToHost, gStream) != cudaSuccess) { rc = -6; goto done; }
@@ -612,10 +633,10 @@ int cu_matmul_f32_bres(const float* A, const void* dB, float* C, int M, int K, i
 
     st = cublasSgemm(gHandle, CUBLAS_OP_N, CUBLAS_OP_N,
                      N, M, K,
-                     &alpha,
+                     gOne,
                      (const float*)dB, N,
                      gA, K,
-                     &beta,
+                     gZero,
                      gC, N);
     if (st != CUBLAS_STATUS_SUCCESS) { rc = -4; goto done; }
     if (cudaMemcpyAsync(C, gC, cLen, cudaMemcpyDeviceToHost, gStream) != cudaSuccess) { rc = -6; goto done; }
@@ -930,10 +951,10 @@ int cu_matmul_f32_ddd(const void* dA, const void* dB, void* dC, int M, int K, in
 
     st = cublasSgemm(gHandle, CUBLAS_OP_N, CUBLAS_OP_N,
                      N, M, K,
-                     &alpha,
+                     gOne,
                      (const float*)dB, N,
                      (const float*)dA, K,
-                     &beta,
+                     gZero,
                      (float*)dC, N);
     if (st != CUBLAS_STATUS_SUCCESS) { rc = -4; goto done; }
     rc = 0;
@@ -957,10 +978,10 @@ int cu_matmul_f32_ddd_acc(const void* dA, const void* dB, void* dC, int M, int K
 
     st = cublasSgemm(gHandle, CUBLAS_OP_N, CUBLAS_OP_N,
                      N, M, K,
-                     &alpha,
+                     gOne,
                      (const float*)dB, N,
                      (const float*)dA, K,
-                     &beta,
+                     gOne,
                      (float*)dC, N);
     if (st != CUBLAS_STATUS_SUCCESS) { rc = -4; goto done; }
     rc = 0;
@@ -983,9 +1004,9 @@ int cu_mha_scores(const void* dQ, const void* dK, void* dScores, int seq, int he
     pthread_mutex_lock(&gLock);
     if (ensure_init() != 0) { rc = -1; goto done; }
     if (cublasSgemmStridedBatched(gHandle, CUBLAS_OP_T, CUBLAS_OP_N,
-                                  seq, seq, hd, &alpha,
+                                  seq, seq, hd, gOne,
                                   (const float*)dK, W, hd,
-                                  (const float*)dQ, W, hd, &beta,
+                                  (const float*)dQ, W, hd, gZero,
                                   (float*)dScores, seq, (long long)seq * seq,
                                   heads) != CUBLAS_STATUS_SUCCESS) { rc = -4; goto done; }
     rc = 0;
@@ -1002,9 +1023,9 @@ int cu_mha_out(const void* dScores, const void* dV, void* dOut, int seq, int hea
     pthread_mutex_lock(&gLock);
     if (ensure_init() != 0) { rc = -1; goto done; }
     if (cublasSgemmStridedBatched(gHandle, CUBLAS_OP_N, CUBLAS_OP_N,
-                                  hd, seq, seq, &alpha,
+                                  hd, seq, seq, gOne,
                                   (const float*)dV, W, hd,
-                                  (const float*)dScores, seq, (long long)seq * seq, &beta,
+                                  (const float*)dScores, seq, (long long)seq * seq, gZero,
                                   (float*)dOut, W, hd,
                                   heads) != CUBLAS_STATUS_SUCCESS) { rc = -4; goto done; }
     rc = 0;
@@ -1052,8 +1073,8 @@ int cu_gqa_scores(const void* dQ, const void* dK, void* dScores, int seqQ, int s
     cudaMemcpyAsync(sK, hK, asz, cudaMemcpyHostToDevice, gStream);
     cudaMemcpyAsync(sQ, hQ, asz, cudaMemcpyHostToDevice, gStream);
     cudaMemcpyAsync(sC, hC, asz, cudaMemcpyHostToDevice, gStream);
-    if (cublasSgemmBatched(gHandle, CUBLAS_OP_T, CUBLAS_OP_N, seqKV, seqQ, hd, &alpha,
-                           (const float**)sK, WKV, (const float**)sQ, WQ, &beta,
+    if (cublasSgemmBatched(gHandle, CUBLAS_OP_T, CUBLAS_OP_N, seqKV, seqQ, hd, gOne,
+                           (const float**)sK, WKV, (const float**)sQ, WQ, gZero,
                            (float**)sC, seqKV, qHeads) != CUBLAS_STATUS_SUCCESS) { rc = -4; goto done; }
     rc = 0;
 done:
@@ -1093,8 +1114,8 @@ int cu_gqa_out(const void* dScores, const void* dV, void* dOut, int seqQ, int se
     cudaMemcpyAsync(sV, hV, asz, cudaMemcpyHostToDevice, gStream);
     cudaMemcpyAsync(sS, hS, asz, cudaMemcpyHostToDevice, gStream);
     cudaMemcpyAsync(sO, hO, asz, cudaMemcpyHostToDevice, gStream);
-    if (cublasSgemmBatched(gHandle, CUBLAS_OP_N, CUBLAS_OP_N, hd, seqQ, seqKV, &alpha,
-                           (const float**)sV, WKV, (const float**)sS, seqKV, &beta,
+    if (cublasSgemmBatched(gHandle, CUBLAS_OP_N, CUBLAS_OP_N, hd, seqQ, seqKV, gOne,
+                           (const float**)sV, WKV, (const float**)sS, seqKV, gZero,
                            (float**)sO, WQ, qHeads) != CUBLAS_STATUS_SUCCESS) { rc = -4; goto done; }
     rc = 0;
 done:
@@ -1154,10 +1175,10 @@ int cu_matmul_f32_ddd_bt(const void* dA, const void* dB, void* dC, int M, int K,
 
     st = cublasSgemm(gHandle, CUBLAS_OP_T, CUBLAS_OP_N,
                      N, M, K,
-                     &alpha,
+                     gOne,
                      (const float*)dB, K,
                      (const float*)dA, K,
-                     &beta,
+                     gZero,
                      (float*)dC, N);
     if (st != CUBLAS_STATUS_SUCCESS) { rc = -4; goto done; }
     rc = 0;
