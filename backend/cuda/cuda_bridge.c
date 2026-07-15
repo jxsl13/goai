@@ -32,7 +32,7 @@ static cublasHandle_t gHandle = NULL;
 static float *gOne = NULL, *gZero = NULL; // device 1.0f/0.0f — cuBLAS DEVICE pointer mode (graph-capture-safe alpha/beta)
 static cudaStream_t gStream = NULL;
 static CUcontext gCtx = NULL; // runtime's primary context, retained for driver-API launches
-static CUfunction gGelu = NULL, gSilu = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gQgemv = NULL; // lazily nvrtc-compiled
+static CUfunction gGelu = NULL, gSilu = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gQgemv = NULL, gQgemv4 = NULL; // lazily nvrtc-compiled
 static CUfunction gRopeDpos = NULL, gAttnSoftmaxDpos = NULL, gAppendDpos = NULL; // device-position (graph-capturable) twins
 static CUfunction gArgmax = NULL, gLayerNorm = NULL, gAddBias = NULL; // greedy argmax; layernorm; broadcast bias-add
 static CUfunction gCopy2d = NULL; // strided 2D copy (fused-QKV band extraction, llamagpu adapter)
@@ -1040,6 +1040,57 @@ int cu_qmatmul_q8(const void* dA, const void* dQ, const void* dScales, void* dOu
         args[0] = &dA; args[1] = &dQ; args[2] = &dScales; args[3] = &dOut;
         args[4] = &M; args[5] = &K; args[6] = &N; args[7] = &nb; args[8] = &beta;
         rc = (cuLaunchKernel(gQgemv, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_qmatmul_q4: out[M,N] = a[M,K]·dequant(W4), W4 = ASYMMETRIC Q4 stored TRANSPOSED —
+// q[N,K/2] packed 4-bit nibbles + per-32-block f32 scale + f32 min, dequant
+// w = min_b + nibble·scale_b (nibble∈[0,15]). Asymmetric (scale+min) is far more accurate
+// than symmetric Q4_0. Reads ≈0.67× the bytes of the Q8 GEMV (0.75 vs 1.125 B/weight) —
+// the weight-bandwidth lever for decode, where the GEMV is bandwidth-bound at ≈peak. One
+// warp per output; lane l loads an int32 (8 nibbles) and 8 activations, 256 k/step (K%256==0).
+int cu_qmatmul_q4(const void* dA, const void* dQ, const void* dScales, const void* dMins, void* dOut,
+                  int M, int K, int N, int nb, float beta) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (!gQgemv4 && compile_kernel(
+                       "extern \"C\" __global__ void qmatmul_q4(const float* a, const unsigned char* q, const float* scales, const float* mins, float* out, int M, int K, int N, int nb, float beta){\n"
+                       "  long warp = ((long)blockIdx.x*blockDim.x + threadIdx.x) >> 5;\n"
+                       "  int lane = threadIdx.x & 31;\n"
+                       "  if (warp >= (long)M*N) return;\n"
+                       "  int m = (int)(warp / N), n = (int)(warp % N);\n"
+                       "  const float* ar = a + (size_t)m*K;\n"
+                       "  const int* qr = (const int*)(q + (size_t)n*(K/2));\n"  // K/2 packed bytes/row
+                       "  const float* sr = scales + (size_t)n*nb;\n"
+                       "  const float* mr = mins + (size_t)n*nb;\n"
+                       "  float acc = 0.0f;\n"
+                       "  int steps = K >> 8;\n"      // 256 k / step = 8 per-32 blocks
+                       "  for (int w = 0; w < steps; w++){\n"
+                       "    int p = qr[w*32 + lane];\n"          // 8 nibbles = 8 weights
+                       "    int k = w*256 + lane*8;\n"
+                       "    int blk = w*8 + (lane >> 2);\n"      // this lane's 8 k lie in one block
+                       "    float s = sr[blk], mn = mr[blk];\n"
+                       "    float4 a0 = *(const float4*)(ar + k);\n"
+                       "    float4 a1 = *(const float4*)(ar + k + 4);\n"
+                       "    acc += a0.x*(mn + (float)(p&0xf)*s) + a0.y*(mn + (float)((p>>4)&0xf)*s) + a0.z*(mn + (float)((p>>8)&0xf)*s) + a0.w*(mn + (float)((p>>12)&0xf)*s);\n"
+                       "    acc += a1.x*(mn + (float)((p>>16)&0xf)*s) + a1.y*(mn + (float)((p>>20)&0xf)*s) + a1.z*(mn + (float)((p>>24)&0xf)*s) + a1.w*(mn + (float)((p>>28)&0xf)*s);\n"
+                       "  }\n"
+                       "  for (int o = 16; o > 0; o >>= 1){ acc += __shfl_down_sync(0xffffffff, acc, o); }\n"
+                       "  if (lane == 0){ out[warp] = beta*out[warp] + acc; }\n"
+                       "}\n",
+                       "qmatmul_q4.cu", "qmatmul_q4", &gQgemv4) != 0) { rc = -2; goto done; }
+    {
+        long total = (long)M * N * 32;
+        int threads = 256, blocks = (int)((total + threads - 1) / threads); if (blocks < 1) blocks = 1;
+        void* args[10];
+        args[0] = &dA; args[1] = &dQ; args[2] = &dScales; args[3] = &dMins; args[4] = &dOut;
+        args[5] = &M; args[6] = &K; args[7] = &N; args[8] = &nb; args[9] = &beta;
+        rc = (cuLaunchKernel(gQgemv4, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 done:
     pthread_mutex_unlock(&gLock);
