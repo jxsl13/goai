@@ -138,6 +138,7 @@ var typeExampleExempt = map[string]bool{
 	"nn.AdEMAMixOption":             true, // functional-option type (shown via WithAdEMAMix*)
 	"nn.CautiousAdamWOption":        true, // functional-option type (shown via WithCautious*)
 	"nn.SAMOption":                  true, // functional-option type (shown via WithSAM*)
+	"nn.ReMoEOption":                true, // functional-option type (shown via WithReMoELambda/WithReMoEAdaptRate)
 	"autograd.CheckpointFunc":       true, // callback-signature type (shown via ExampleCheckpoint)
 	"nn.ScheduleFreeOption":         true, // functional-option type (shown via WithScheduleFree*)
 	"nn.DAdaptAdamOption":           true, // functional-option type (shown via WithDAdapt*)
