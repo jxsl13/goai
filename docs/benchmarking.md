@@ -1029,6 +1029,27 @@ the whole warp. Parity is gated structurally: the test reference dequantizes the
 blocks the kernel reads, so the tolerance (1e-5) covers only f32 summation order, never
 the quantization error.
 
+## The decode scoreboard: Q4_K on the graph path vs llama.cpp (worker linux-amd64)
+
+The authoritative decode numbers after the full Q4_K + CUDA-graph arc
+(`TestCUDAQ4KGraphDecodeSweep`, tg128-equivalent, warm, on-device argmax; llama.cpp
+Vulkan baselines as recorded earlier on the same RTX 3060):
+
+| model | goai Q4_K graph | llama.cpp Q8 | llama.cpp Q4_K_M | vs their Q8 | vs their Q4_K_M |
+|---|---:|---:|---:|---:|---:|
+| TinyLlama-1.1B | **249.4** | 244 | 328.0 | **1.02×** | 0.76× |
+| Qwen2.5-1.5B | **174.4** | 166 | 214.9 | **1.05×** | 0.81× |
+| Qwen2.5-3B | **97.9** | 87 | 121.9 | **1.13×** | 0.80× |
+| Mistral-7B | **49.5** | 41.6 | 59.1 | **1.19×** | 0.84× |
+
+**goai now leads llama.cpp-Q8 at every scale, and the lead grows with model size**
+(1.02× → 1.19×) — the weight-bandwidth story playing out in goai's favor: the more
+weight-bound the model, the more the 0.5625 B/w Q4_K format and near-ceiling GEMV pay.
+Against llama.cpp's own Q4_K_M the gap is a consistent 0.76–0.84× (their iterative
+encoder + fused attention margin). Graph-capture gains concentrate at small scales
+(TinyLlama eager 199 → graph 249; 3B is GPU-bound either way — consistent with the
+documented +29%/+10% graph-speedup-by-size curve).
+
 ## Unified serving: batched f16 prefill feeding the Q4_K decoder (worker linux-amd64)
 
 The engine's last structural serving weakness was prompt processing: the graph decoder

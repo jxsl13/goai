@@ -4,6 +4,14 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — the decode scoreboard: goai leads llama.cpp-Q8 at every scale (worker linux-amd64, Tw51, 2026-07-15)
+- `TestCUDAQ4KGraphDecodeSweep`: Q4_K on the CUDA-graph path across all eligible models —
+  TinyLlama 249.4, Qwen1.5B 174.4, Qwen3B 97.9, **Mistral-7B 49.5 tok/s**. Against
+  llama.cpp-Vulkan-Q8 on the same GPU that is **1.02× / 1.05× / 1.13× / 1.19× — a lead at
+  every scale that grows with model size**; against their Q4_K_M a consistent 0.76–0.84×.
+  The flagship table in docs/benchmarking.md now carries these as the authoritative
+  decode numbers.
+
 ### CUDA — serving capstone: 100 ms end-to-end, graph-path Q4_K decode at 249 tok/s (worker linux-amd64, Tw49/Tw50, 2026-07-15)
 - `TestCUDAUnifiedServeDemo`: the complete serving story at full speed — tokenize →
   batched f16 tensor-core prefill (seeding the decoder's KV caches) → CUDA-graph Q4_K

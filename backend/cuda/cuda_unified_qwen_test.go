@@ -166,6 +166,7 @@ func (l *rawF16Layer) seedForward(dx *cuda.DeviceF32, cache *cuda.KVCache) (*cud
 func TestCUDAUnifiedServeQwen(t *testing.T) {
 	skipNoGPU(t)
 	for _, tc := range []struct{ path, label string }{
+		{"../../models/qwen2.5-0.5b-instruct-q8_0.gguf", "Qwen2.5-0.5B"}, // dim 896: Q4_K-ineligible → Q8 decode
 		{"../../models/qwen2.5-1.5b-instruct-q8_0.gguf", "Qwen2.5-1.5B"},
 		{"../../models/qwen2.5-3b-instruct-q8_0.gguf", "Qwen2.5-3B"},
 	} {
@@ -192,7 +193,13 @@ func unifiedServeQwen(t *testing.T, path, label string) {
 	const gen = 16
 	maxSeq := P + gen + 8
 
-	q4k := buildRawGraphDecoder(t, rf, "qwen2", maxSeq, fromF32(quantQ4K))
+	// decode precision: Q4_K where the dims allow (K%256), else resident Q8 —
+	// the 0.5B case proves the unified path is precision-agnostic on the decode side.
+	quant := fromF32(quantQ4K)
+	if rawMetaInt(t, rf.Metadata, "qwen2.embedding_length")%256 != 0 {
+		quant = fromF32(func(w *tensor.Tensor) (qProj, error) { return cuda.NewResidentBQ8(w) })
+	}
+	q4k := buildRawGraphDecoder(t, rf, "qwen2", maxSeq, quant)
 	defer q4k.free()
 
 	// pure decode-path prompt processing (reference timing + reference cache rows)
