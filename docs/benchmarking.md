@@ -1037,10 +1037,13 @@ Vulkan baselines as recorded earlier on the same RTX 3060):
 
 | model | goai Q4_K graph | llama.cpp Q8 | llama.cpp Q4_K_M | vs their Q8 | vs their Q4_K_M |
 |---|---:|---:|---:|---:|---:|
-| TinyLlama-1.1B | **249.4** | 244 | 328.0 | **1.02×** | 0.76× |
-| Qwen2.5-1.5B | **174.4** | 166 | 214.9 | **1.05×** | 0.81× |
-| Qwen2.5-3B | **97.9** | 87 | 121.9 | **1.13×** | 0.80× |
-| Mistral-7B | **49.5** | 41.6 | 59.1 | **1.19×** | 0.84× |
+| TinyLlama-1.1B | **258.4** | 244 | 328.0 | **1.06×** | 0.79× |
+| Qwen2.5-1.5B | **175.0** | 166 | 214.9 | **1.05×** | 0.81× |
+| Qwen2.5-3B | **98.4** | 87 | 121.9 | **1.13×** | 0.81× |
+| Mistral-7B | **49.6** | 41.6 | 59.1 | **1.19×** | 0.84× |
+
+(Refreshed after the Tw52 flash-attention switch — TinyLlama +3.6% at the sweep's short
+window; the flash win is far larger at long context, see the flash section below.)
 
 **goai now leads llama.cpp-Q8 at every scale, and the lead grows with model size**
 (1.02× → 1.19×) — the weight-bandwidth story playing out in goai's favor: the more
@@ -1049,6 +1052,36 @@ Against llama.cpp's own Q4_K_M the gap is a consistent 0.76–0.84× (their iter
 encoder + fused attention margin). Graph-capture gains concentrate at small scales
 (TinyLlama eager 199 → graph 249; 3B is GPU-bound either way — consistent with the
 documented +29%/+10% graph-speedup-by-size curve).
+
+## Flash decode attention: GQA K/V sharing beats the cuBLAS chain (worker linux-amd64)
+
+The decode attention was a 3-kernel chain (batched QKᵀ → fused scale/causal/softmax →
+batched ·V) — already at the K/V read bandwidth limit (~90µs/layer at 2048 context on
+TinyLlama), but that limit INCLUDES an 8× inefficiency: batched GEMM re-reads each kv
+head's K/V once per query head of its GQA group. A kernel can share those reads; cuBLAS
+structurally cannot. `cu_gqa_flash_dpos` (flash decoding): one block per (kv head, key
+chunk) stages K/V tiles into shared memory ONCE for all `group` query heads, online
+softmax (lane-per-key batches, warp-level m/l/acc state), split-K partials merged by a
+tiny second kernel. Graph-capturable (device-position causal limit, capture-constant
+chunking), parity ≤1e-5 vs the chain across GQA/MQA/MHA shapes, pos=0, and 2048 depth.
+
+TinyLlama-1.1B Q4_K graph decode, interleaved A/B pairs (RTX 3060, §V22):
+
+| context | 3-kernel chain | flash | Δ |
+|---|---:|---:|---:|
+| 160 (sweep window) | 249.0–250.2 | 257.0–259.5 | **+3.5%** |
+| ~2004 (2048 cache) | 168.2–168.4 | 211.4–213.0 | **+26%** |
+
+The win grows with context exactly as the traffic model predicts (K/V bytes ∝ ctx, cut
+8× on TinyLlama's 32q/4kv). Long context was the engine's softest spot — the 249→168
+tok/s fade to 2k ctx is now 249→212 (−15% instead of −33%).
+
+Two simpler fusions were BUILT, measured, and rejected first (§V22 measure-first): a
+one-block-per-q-head fused kernel with the whole QKᵀ+softmax+·V in one launch lost to
+the chain at every depth — v1 (fp64 output accumulation: GeForce fp64 is 1/64 rate) 74
+tok/s @2k, v2 (f32, warp-partitioned output) 102 vs the chain's 168. Lesson: the chain
+was never launch-bound inside a captured graph; only the structural K/V-sharing win
+(which needs the flash organization) beats it. Both rejected kernels were removed.
 
 ## Unified serving: batched f16 prefill feeding the Q4_K decoder (worker linux-amd64)
 

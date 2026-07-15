@@ -137,7 +137,7 @@ func (q *qwenFixed) forwardBody(t *testing.T) {
 		must(t, q.dk.RoPEDposInv(q.kv, q.inv, q.pos, 0))
 		must(t, l.cache.AppendDpos(q.dk, q.dv, q.pos))
 		kF, vF := l.cache.FullView()
-		must(t, cuda.GroupedQueryAttentionKVDposInto(q.dq, kF, vF, q.heads, q.kv, q.pos, q.scores, q.da))
+		must(t, cuda.GroupedQueryAttentionKVDposFlashInto(q.dq, kF, vF, q.heads, q.kv, q.pos, q.da))
 		must(t, l.wo.QMatMulAccInto(q.da, q.dx))
 		must(t, q.dx.RMSNormInto(l.fn, float32(q.eps), q.dh2))
 		must(t, l.wg.QMatMulInto(q.dh2, q.dgate))

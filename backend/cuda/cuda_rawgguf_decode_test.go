@@ -184,7 +184,11 @@ func (gd *rawGraphDecoder) forwardBody(tb testing.TB) {
 		mustTB(tb, gd.dk.RoPEDposInv(gd.kv, gd.inv, gd.pos, 0))
 		mustTB(tb, l.cache.AppendDpos(gd.dk, gd.dv, gd.pos))
 		kF, vF := l.cache.FullView()
-		mustTB(tb, cuda.GroupedQueryAttentionKVDposInto(gd.dq, kF, vF, gd.heads, gd.kv, gd.pos, gd.scores, gd.da))
+		if os.Getenv("GOAI_CUDA_FUSED_ATTN") == "0" { // A/B toggle: the 3-kernel cuBLAS chain (beaten by flash: -3.5% @ctx160, -26% @ctx2004)
+			mustTB(tb, cuda.GroupedQueryAttentionKVDposInto(gd.dq, kF, vF, gd.heads, gd.kv, gd.pos, gd.scores, gd.da))
+		} else { // flash decode: GQA K/V-shared split-K + merge — the winner at every context depth
+			mustTB(tb, cuda.GroupedQueryAttentionKVDposFlashInto(gd.dq, kF, vF, gd.heads, gd.kv, gd.pos, gd.da))
+		}
 		mustTB(tb, l.wo.QMatMulAccInto(gd.da, gd.dx))
 		mustTB(tb, gd.dx.RMSNormInto(l.gFFN, float32(gd.eps), gd.dh2))
 		mustTB(tb, l.wg.QMatMulInto(gd.dh2, gd.dgate))

@@ -277,6 +277,39 @@ func GroupedQueryAttentionKVDposInto(q, k, v *DeviceF32, qHeads, kvHeads int, of
 	return nil
 }
 
+// GroupedQueryAttentionKVDposFlashInto is the FLASH decode attention (seqQ==1):
+// one block per (kv head, key chunk) stages K/V tiles into shared memory once
+// for ALL query heads of the group — cutting K/V global traffic by the GQA
+// group factor, which the cuBLAS chain structurally cannot do — with split-K
+// online-softmax partials merged by a second small kernel. Graph-capturable
+// (device position, capture-constant chunking). Needs hd ≤ 128 and group ≤ 8.
+func GroupedQueryAttentionKVDposFlashInto(q, k, v *DeviceF32, qHeads, kvHeads int, off *DevicePos, out *DeviceF32) error {
+	if q.ptr == nil || k.ptr == nil || v.ptr == nil || out.ptr == nil {
+		return fmt.Errorf("cuda: GQA-dpos-flash on a freed handle")
+	}
+	seqQ, wq := q.rows, q.cols
+	if seqQ != 1 {
+		return fmt.Errorf("cuda: GQA-dpos-flash needs seqQ==1 (decode), got %d", seqQ)
+	}
+	if qHeads <= 0 || kvHeads <= 0 || qHeads%kvHeads != 0 || wq%qHeads != 0 {
+		return fmt.Errorf("cuda: GQA-dpos-flash bad head config")
+	}
+	hd := wq / qHeads
+	seqKV, wkv := k.rows, kvHeads*hd
+	if k.cols != wkv || v.rows != seqKV || v.cols != wkv {
+		return fmt.Errorf("cuda: GQA-dpos-flash k/v shape")
+	}
+	if out.rows != 1 || out.cols != wq {
+		return fmt.Errorf("cuda: GQA-dpos-flash out shape [%d,%d], want [1,%d]", out.rows, out.cols, wq)
+	}
+	if rc := C.cu_gqa_flash_dpos(q.ptr, k.ptr, v.ptr, out.ptr,
+		C.int(seqKV), C.int(qHeads), C.int(kvHeads), C.int(hd),
+		C.float(1/math.Sqrt(float64(hd))), off.ptr); rc != 0 {
+		return fmt.Errorf("cuda: GQA-dpos-flash failed (code %d)", int(rc))
+	}
+	return nil
+}
+
 // FullView returns a [rows, wkv] view of the whole cache buffer (for fixed-size
 // attention over the padded cache; masked positions past the length contribute
 // nothing). Do NOT Free the view.
