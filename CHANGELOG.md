@@ -4,6 +4,21 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — f16 tensor-core prefill: 1.66× with argmax-identical output (worker linux-amd64, Tw44/Tw45, 2026-07-15)
+- Measured decision chain: (1) the Q4_K deinterleave experiment REGRESSED 4–8% (the ggml
+  144-byte block has perfect spatial locality) — lever (a3) closed with data; (2) a per-class
+  profile of the real TinyLlama prefill showed ffn-gemm 53.8% vs attention 13.8% — the
+  flash-attention hypothesis refuted (≤14% ceiling), and since the FFN GEMMs already run at
+  the cuBLAS-f32 ceiling, the prefill gap to llama.cpp is a PRECISION gap; (3) so the lever
+  built was `ResidentBF16` + `cu_matmul_f16w` (cublasGemmEx, f16 inputs / f32 accumulate,
+  Ampere tensor cores): **prefill 2476 → 4107 tok/s (1.66×), greedy argmax 128/128 identical
+  to the f32 path**. Gap to llama.cpp pp128 halves (0.26× → 0.49×). Decode stays on the
+  memory-bound Q4_K/Q8 GEMV path.
+- Trap documented: the cuBLAS handle runs in POINTER_MODE_DEVICE (graph-capture-safe), so
+  GemmEx alpha/beta must be resident device constants — host stack pointers yield SILENT
+  non-deterministic garbage with a success status; caught only by real-shape parity tests
+  (all prefill shapes + beta=1) against an f16-rounded host reference.
+
 ### CUDA — direct Q4_K_M file loading: any llama.cpp 4-bit file runs standalone (worker linux-amd64, Tw43, 2026-07-15)
 - `quantDirect` (test-side loader) keeps a Q4_K_M GGUF's tensors native: Q4_K blocks upload
   as-is into `ResidentBQ4K` (zero requantization — llama.cpp's iterative-encoder bits), the

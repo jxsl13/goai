@@ -32,7 +32,7 @@ static cublasHandle_t gHandle = NULL;
 static float *gOne = NULL, *gZero = NULL; // device 1.0f/0.0f — cuBLAS DEVICE pointer mode (graph-capture-safe alpha/beta)
 static cudaStream_t gStream = NULL;
 static CUcontext gCtx = NULL; // runtime's primary context, retained for driver-API launches
-static CUfunction gGelu = NULL, gSilu = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gQgemv = NULL, gQgemv4 = NULL, gQgemv4k = NULL; // lazily nvrtc-compiled
+static CUfunction gGelu = NULL, gSilu = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gQgemv = NULL, gQgemv4 = NULL, gQgemv4k = NULL, gCvtF16 = NULL; // lazily nvrtc-compiled
 static CUfunction gRopeDpos = NULL, gAttnSoftmaxDpos = NULL, gAppendDpos = NULL; // device-position (graph-capturable) twins
 static CUfunction gArgmax = NULL, gLayerNorm = NULL, gAddBias = NULL; // greedy argmax; layernorm; broadcast bias-add
 static CUfunction gCopy2d = NULL; // strided 2D copy (fused-QKV band extraction, llamagpu adapter)
@@ -1159,6 +1159,112 @@ int cu_qmatmul_q4k(const void* dA, const void* dQ, void* dOut, int M, int K, int
         rc = (cuLaunchKernel(gQgemv4k, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// ---- f16 tensor-core prefill path (lever b1): weights resident as f16, activations
+// converted per call, cublasGemmEx with f32 accumulation. Prefill is compute-bound at
+// the cuBLAS f32 ceiling (PERF-PREFILL-PROFILE: ffn-gemm 54%); Ampere runs f16 tensor
+// cores at ~2x the f32 FMA rate, which is how llama.cpp's prefill pulls ahead.
+
+static const char* kCvtF16Src =
+    "extern \"C\" __global__ void cvt_f32_f16(const float* src, unsigned short* dst, long n){\n"
+    "  long i = (long)blockIdx.x*blockDim.x + threadIdx.x;\n"
+    "  if (i >= n) return;\n"
+    "  float v = src[i];\n"
+    "  dst[i] = __float2half_rn_bits(v);\n"
+    "}\n";
+
+// __float2half intrinsics need cuda_fp16.h under nvrtc; a bit-exact manual RN
+// conversion avoids the header (round-to-nearest-even, handles subnormals/inf).
+static const char* kCvtF16ManualSrc =
+    "extern \"C\" __global__ void cvt_f32_f16(const float* src, unsigned short* dst, long n){\n"
+    "  long i = (long)blockIdx.x*blockDim.x + threadIdx.x;\n"
+    "  if (i >= n) return;\n"
+    "  unsigned int x = __float_as_uint(src[i]);\n"
+    "  unsigned int sign = (x >> 16) & 0x8000u;\n"
+    "  unsigned int em = x & 0x7fffffffu;\n"
+    "  unsigned short h;\n"
+    "  if (em >= 0x47800000u) { h = (unsigned short)(sign | (em > 0x7f800000u ? 0x7e00u : 0x7c00u)); }\n" // inf/nan/overflow
+    "  else if (em < 0x38800000u) {\n"                                                                    // subnormal/zero
+    "    unsigned int m = (em & 0x007fffffu) | 0x00800000u;\n"
+    "    int shift = 126 - (int)(em >> 23);\n"
+    "    unsigned int v = (shift < 32) ? (m >> shift) : 0u;\n"
+    "    unsigned int r = (shift < 33 && shift > 0) ? ((m >> (shift-1)) & 1u) : 0u;\n"
+    "    unsigned int s = (shift < 32 && (m & ((1u << (shift-1)) - 1u))) ? 1u : 0u;\n"
+    "    v += (r & (s | (v & 1u)));\n"
+    "    h = (unsigned short)(sign | v);\n"
+    "  } else {\n"
+    "    unsigned int e = ((em >> 23) - 112u) << 10;\n"
+    "    unsigned int m = (em >> 13) & 0x3ffu;\n"
+    "    unsigned int r = (em >> 12) & 1u;\n"
+    "    unsigned int s = (em & 0xfffu) ? 1u : 0u;\n"
+    "    unsigned int v = (sign | e | m) + (r & (s | (m & 1u)));\n"
+    "    h = (unsigned short)v;\n"
+    "  }\n"
+    "  dst[i] = h;\n"
+    "}\n";
+
+static int ensure_cvt_f16(void) {
+    if (gCvtF16) return 0;
+    (void)kCvtF16Src; // intrinsic variant kept for reference; manual RN is header-free
+    return compile_kernel(kCvtF16ManualSrc, "cvt_f16.cu", "cvt_f32_f16", &gCvtF16);
+}
+
+static int launch_cvt_f16(const void* src, void* dst, long n) {
+    if (ensure_cvt_f16() != 0) return -2;
+    int threads = 256;
+    long blocks = (n + threads - 1) / threads;
+    void* args[3] = { &src, &dst, &n };
+    return (cuLaunchKernel(gCvtF16, (unsigned)blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+}
+
+void* cu_upload_f16(const float* src, long n) {
+    void* d32 = NULL; void* d16 = NULL;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) goto fail;
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) goto fail;
+    if (cudaMallocAsync(&d32, n * sizeof(float), gStream) != cudaSuccess) goto fail;
+    if (cudaMallocAsync(&d16, n * sizeof(unsigned short), gStream) != cudaSuccess) goto fail;
+    if (cudaMemcpyAsync(d32, src, n * sizeof(float), cudaMemcpyHostToDevice, gStream) != cudaSuccess) goto fail;
+    if (launch_cvt_f16(d32, d16, n) != 0) goto fail;
+    cudaFreeAsync(d32, gStream); d32 = NULL;
+    if (cudaStreamSynchronize(gStream) != cudaSuccess) goto fail; // src is caller host memory
+    pthread_mutex_unlock(&gLock);
+    return d16;
+fail:
+    if (d32) cudaFreeAsync(d32, gStream);
+    if (d16) cudaFreeAsync(d16, gStream);
+    pthread_mutex_unlock(&gLock);
+    return NULL;
+}
+
+int cu_matmul_f16w(const void* dA32, const void* dW16, void* dC32, int M, int K, int N, float beta) {
+    int rc = -2;
+    void* a16 = NULL;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (cudaMallocAsync(&a16, (size_t)M * K * sizeof(unsigned short), gStream) != cudaSuccess) { rc = -5; goto done; }
+    if (launch_cvt_f16(dA32, a16, (long)M * K) != 0) { rc = -6; goto done; }
+    {
+        // the handle is in CUBLAS_POINTER_MODE_DEVICE (graph-capture-safe): alpha/beta
+        // MUST be the resident gOne/gZero constants, never host stack pointers (the
+        // silent-garbage trap: cublas reads a bogus device address without erroring)
+        cublasStatus_t st = cublasGemmEx(gHandle, CUBLAS_OP_N, CUBLAS_OP_N,
+                                         N, M, K,
+                                         gOne,
+                                         dW16, CUDA_R_16F, N,
+                                         a16, CUDA_R_16F, K,
+                                         beta == 0.0f ? gZero : gOne,
+                                         dC32, CUDA_R_32F, N,
+                                         CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT);
+        if (st != CUBLAS_STATUS_SUCCESS) { rc = -4; goto done; }
+    }
+    rc = 0;
+done:
+    if (a16) cudaFreeAsync(a16, gStream);
     pthread_mutex_unlock(&gLock);
     return rc;
 }
