@@ -109,6 +109,21 @@ func (r *ResidentBQ4) QMatMulInto(a, out *DeviceF32) error {
 	return nil
 }
 
+// QMatMulAccInto computes c += a·dequant(W4) in place (beta=1) — fuses a transformer
+// residual add into the projection (the o and down projections).
+func (r *ResidentBQ4) QMatMulAccInto(a, c *DeviceF32) error {
+	if r.q == nil || a.ptr == nil || c.ptr == nil {
+		return fmt.Errorf("cuda: Q4 QMatMulAccInto on a freed handle")
+	}
+	if a.cols != r.k || c.rows != a.rows || c.cols != r.n {
+		return fmt.Errorf("cuda: Q4 QMatMulAccInto shape a[%d,%d]·B[%d,%d]→c[%d,%d]", a.rows, a.cols, r.k, r.n, c.rows, c.cols)
+	}
+	if rc := C.cu_qmatmul_q4(a.ptr, r.q, r.scales, r.mins, c.ptr, C.int(a.rows), C.int(r.k), C.int(r.n), C.int(r.nb), C.float(1)); rc != 0 {
+		return fmt.Errorf("cuda: Q4 matmul-acc failed (code %d)", int(rc))
+	}
+	return nil
+}
+
 // Free releases the resident Q4 weight.
 func (r *ResidentBQ4) Free() {
 	if r.q != nil {
