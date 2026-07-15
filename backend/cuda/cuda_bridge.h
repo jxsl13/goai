@@ -8,6 +8,13 @@
 
 // cu_available returns 1 if at least one CUDA-capable GPU is present.
 int cu_available(void);
+// CUDA graph capture: begin/end capture on the work stream, launch/sync/free the
+// instantiated graph. Caller must LockOSThread across begin→ops→end.
+int cu_capture_begin(void);
+void* cu_capture_end(void);
+int cu_graph_launch(void* exec);
+int cu_graph_sync(void);
+void cu_graph_free(void* exec);
 
 // cu_matmul_f32 computes C[M,N] = A[M,K]·B[K,N], all row-major float32.
 // Returns 0 on success, nonzero on failure (see cuda_bridge.c for codes).
