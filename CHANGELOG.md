@@ -4,6 +4,13 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — Blit + Copy2D strided-copy primitives (llamagpu adapter groundwork, worker linux-amd64, 2026-07-15)
+- `DeviceF32.Blit` (offset contiguous device copy) and `DeviceF32.Copy2D` (strided
+  rows×rowFloats sub-matrix copy), both == host reference. The fused-QKV band-move
+  ops the deferred llamagpu CUDA adapter's `recorder` needs (also generally useful).
+  With LayerNorm+AddBias (PR#63), the adapter's recorder is now covered except the
+  strided-band RoPE (RoPEAt/RoPEPair). Worker sub-spec §NEXT.
+
 ### CUDA — MemInfo primitive + T631 VRAM-budget probe (worker linux-amd64, 2026-07-15)
 - `cuda.MemInfo()` (cudaMemGetInfo → free/total VRAM bytes), a generally-useful
   budget primitive. `TestCUDAVRAMBudgetProbe` measures the actual resident-model

@@ -78,6 +78,30 @@ func (d *DeviceF32) CopyFrom(src *DeviceF32) error {
 	return nil
 }
 
+// Blit copies n floats from src[srcOff:] into d[dstOff:] (contiguous device→device)
+// — the llamagpu recorder Blit for offset band moves.
+func (d *DeviceF32) Blit(dstOff int, src *DeviceF32, srcOff, n int) error {
+	if d.ptr == nil || src.ptr == nil {
+		return fmt.Errorf("cuda: Blit on a freed handle")
+	}
+	if rc := C.cu_blit(d.ptr, C.int(dstOff), src.ptr, C.int(srcOff), C.int(n)); rc != 0 {
+		return fmt.Errorf("cuda: blit failed (code %d)", int(rc))
+	}
+	return nil
+}
+
+// Copy2D copies a rows×rowFloats sub-matrix from src into d, each with its own row
+// stride/offset — the llamagpu recorder Copy2D (fused-QKV band extraction).
+func (d *DeviceF32) Copy2D(dstOff, dstStride int, src *DeviceF32, srcOff, srcStride, rows, rowFloats int) error {
+	if d.ptr == nil || src.ptr == nil {
+		return fmt.Errorf("cuda: Copy2D on a freed handle")
+	}
+	if rc := C.cu_copy2d(d.ptr, C.int(dstOff), C.int(dstStride), src.ptr, C.int(srcOff), C.int(srcStride), C.int(rows), C.int(rowFloats)); rc != 0 {
+		return fmt.Errorf("cuda: copy2d failed (code %d)", int(rc))
+	}
+	return nil
+}
+
 // Zero sets the buffer to all zeros (on the stream).
 func (d *DeviceF32) Zero() error {
 	if rc := C.cu_zero_f32(d.ptr, C.int(d.rows*d.cols)); rc != 0 {
