@@ -90,3 +90,46 @@ func TestCUDAQ4KMatMulParity(t *testing.T) {
 		}
 	}
 }
+
+// benchQ4K reports the Q4_K GEMV's effective weight bandwidth (device-only, single
+// sync — the PERF-GEMV-CEILING method) so its distance to the RTX 3060's ≈360 GB/s
+// peak is a standing number next to the Q8 (1.125 B/w) and asym-Q4 (0.75 B/w) probes.
+func benchQ4K(b *testing.B, k, n int) {
+	if !cuda.Available() {
+		b.Skip("no gpu")
+	}
+	rng := rand.New(rand.NewSource(3))
+	w := tensor.New(tensor.F32, tensor.Shape{k, n})
+	wf := w.Storage().F32()
+	for i := range wf {
+		wf[i] = float32(rng.NormFloat64())
+	}
+	a := make([]float32, k)
+	for i := range a {
+		a[i] = float32(rng.NormFloat64())
+	}
+	rq, err := quantQ4K(w)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer rq.Free()
+	da, _ := cuda.NewDeviceF32(1, k)
+	defer da.Free()
+	da.UploadF32(a)
+	out, _ := cuda.NewDeviceF32(1, n)
+	defer out.Free()
+	rq.QMatMulInto(da, out)
+	cuda.GraphSync()
+	b.ResetTimer()
+	for range b.N {
+		rq.QMatMulInto(da, out)
+	}
+	cuda.GraphSync()
+	b.StopTimer()
+	b.ReportMetric(float64(k)*float64(n)*0.5625/(b.Elapsed().Seconds()/float64(b.N))/1e9, "GB/s")
+}
+
+func BenchmarkGemvQ4K_2048(b *testing.B)      { benchQ4K(b, 2048, 2048) }      // q/o proj
+func BenchmarkGemvQ4K_2048x5632(b *testing.B) { benchQ4K(b, 2048, 5632) }      // gate/up
+func BenchmarkGemvQ4K_5632x2048(b *testing.B) { benchQ4K(b, 5632, 2048) }      // down
+func BenchmarkGemvQ4K_2048x32000(b *testing.B) { benchQ4K(b, 2048, 32000) }    // vocab head
