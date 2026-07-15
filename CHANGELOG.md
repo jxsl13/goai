@@ -4,7 +4,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
-### nn/nlp — topic-discovery round 6: 14 new techniques across optimizers, attention, quant, sampling, MoE, distillation (T668–T679, 2026-07-15)
+### nn/nlp — topic-discovery round 6: 18 new techniques across optimizers, attention, quant, sampling, MoE, distillation, embeddings, augmentation, RL (T668–T684, 2026-07-15/16)
 
 A systematic verify-first sweep per category (the earlier rounds were architecture-block-focused
 and had wrongly concluded the frontier exhausted) surfaced real gaps; each was built additively,
@@ -21,12 +21,18 @@ re-verified on `main`.
   softmax-off-by-one** ("attend to nothing", built as a composed layer with no backend change);
   **Lightning-attention** was correctly found *already present* (RetentionChunkwise) and not
   duplicated.
-- **Quantization (2).** **AQLM** (additive multi-codebook 2–3-bit weight quantization, rate-distortion
+- **Quantization (3).** **AQLM** (additive multi-codebook 2–3-bit weight quantization, rate-distortion
   faithful); **SpinQuant** (rotation-based outlier removal with a learnable orthogonal via QR, ~31×
-  lower quantization MSE on outlier-heavy activations).
-- **Also:** **top-nσ** sampling (temperature-stable logit truncation), **ReMoE** (fully-differentiable
-  ReLU-routed mixture-of-experts, no auxiliary load-balancing loss), and **MiniLM** deep
-  self-attention distillation (v1 + v2, width-independent teacher→student transfer).
+  lower quantization MSE on outlier-heavy activations); **Q-GaLore** (GaLore with INT8 log-magnitude
+  quantized optimizer state, ~7.8× less state, bit-identical to GaLore at full precision).
+- **Sampling / MoE / distillation.** **top-nσ** (temperature-stable logit truncation); **ReMoE**
+  (fully-differentiable ReLU-routed mixture-of-experts, no auxiliary load-balancing loss); **MiniLM**
+  deep self-attention distillation (v1 + v2, width-independent teacher→student transfer).
+- **Embeddings / augmentation / RL.** **SimCSE** (dropout-as-augmentation contrastive sentence
+  embeddings); **2D-Matryoshka** (nested representations across both dims and layers); **Mixup +
+  CutMix** (input-mixing data augmentation with mixed-label loss); **DAPO** (the DeepSeek-R1-era
+  GRPO improvement — decoupled clip-higher + token-level loss + dynamic sampling, collapses to
+  GRPO at ε_low=ε_high).
 
 ### backend — configurable per-op / per-layer backend routing (T630, C23, 2026-07-16)
 
