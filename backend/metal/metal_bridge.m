@@ -9,6 +9,8 @@
 #import <MetalPerformanceShaders/MetalPerformanceShaders.h>
 #import <MetalPerformanceShadersGraph/MetalPerformanceShadersGraph.h>
 #include <pthread.h>
+#include <sys/mman.h> // mincore (zero-copy operand wrapping)
+#include <unistd.h>   // getpagesize
 
 #include "metal_bridge.h"
 
@@ -84,6 +86,10 @@ static id<MTLBuffer> pool_buf(size_t len) {
 }
 
 // pool_in is pool_buf plus the host→buffer upload copy (replaces newBufferWithBytes).
+// NOTE (perf grind 2026-07-15, banked negative): a GCD-parallel chunked memcpy here
+// measured only 1.05-1.45× on the 4-12MB copies (dispatch/wake overhead + poor
+// fan-out) — no op-level win (matmul unchanged within noise), reverted; the real
+// large-operand lever is the zero-copy wrap (wrap_nocopy below).
 static id<MTLBuffer> pool_in(const void* src, size_t len) {
     id<MTLBuffer> b = pool_buf(len);
     if (b != nil) memcpy(b.contents, src, len);
@@ -3148,17 +3154,18 @@ int mtl_mha_mps(const float* Q, const float* K, const float* V, float* O,
     }
 }
 
-// ---- MPSGraph attention forward (§T621, EXPERIMENT) -------------------------
+// ---- MPSGraph attention forward (§T621; the DEFAULT prefill path since §B56) --
 // mtl_mha_mpsgraph builds ONE MPSGraph that batches all heads (unlike mtl_mha_mps's per-head
 // serialized MPSMatrixMultiplication loop) and runs Apple's native graph compiler:
 //   Q[seq,dm] -> [kvHeads,rep,seq,dk];  K,V[seq,kvDim] -> [kvHeads,rep,seq,dk] (rep broadcast)
 //   S = scale·Q·Kᵀ  (+ baked causal −∞ mask)  ->  P = softmax_lastaxis(S)  ->  O = P·V  -> [seq,dm]
-// The graph + its placeholders are cached by (seq,kvHeads,rep,dk,causal); the causal mask is baked
-// in as a graph constant. §T622: SHAPE-KEYED bounded cache (FIFO evict at ATTN_CACHE_CAP) so
-// variable-length prefill (each prompt length is a distinct seq) keeps recently-seen lengths
-// resident instead of recompiling ≈15-30ms per length (the prior cache held the LAST shape only).
-// Manual matmul/softmax graph (macOS 12.3+) — NOT the macOS-15 scaledDotProductAttention
-// primitive — so it runs on this OS. A/B toggle only (SetMHAUseMPSGraph).
+// The scale rides in as a [1] graph INPUT (broadcast multiply on Q), so the cached graph stays
+// scale-independent with no per-call host-side fold. The graph + its placeholders are cached by
+// (seq,kvHeads,rep,dk,causal); the causal mask is baked in as a graph constant. §T622: SHAPE-KEYED
+// bounded cache (FIFO evict at ATTN_CACHE_CAP) so variable-length prefill (each prompt length is
+// a distinct seq) keeps recently-seen lengths resident instead of recompiling ≈15-30ms per length
+// (the prior cache held the LAST shape only). Manual matmul/softmax graph (macOS 12.3+) — NOT the
+// macOS-15 scaledDotProductAttention primitive — so it runs on this OS.
 #import <MetalPerformanceShadersGraph/MetalPerformanceShadersGraph.h>
 
 #define ATTN_CACHE_CAP 16
@@ -3166,6 +3173,7 @@ static MPSGraph*       gAttnGraphs[ATTN_CACHE_CAP] = {nil};
 static MPSGraphTensor* gAttnQs[ATTN_CACHE_CAP] = {nil};
 static MPSGraphTensor* gAttnKs[ATTN_CACHE_CAP] = {nil};
 static MPSGraphTensor* gAttnVs[ATTN_CACHE_CAP] = {nil};
+static MPSGraphTensor* gAttnScs[ATTN_CACHE_CAP] = {nil}; // [1] scale input (fed per call)
 static MPSGraphTensor* gAttnOs[ATTN_CACHE_CAP] = {nil};
 static int gAttnSigs[ATTN_CACHE_CAP][5]; // seq, kvHeads, rep, dk, causal
 static int gAttnValid[ATTN_CACHE_CAP] = {0};
@@ -3181,7 +3189,7 @@ int mtl_attn_cache_cap_set(int cap) {
     if (cap > ATTN_CACHE_CAP) cap = ATTN_CACHE_CAP;
     for (int i = 0; i < ATTN_CACHE_CAP; i++) {
         gAttnGraphs[i] = nil; gAttnQs[i] = nil; gAttnKs[i] = nil;
-        gAttnVs[i] = nil; gAttnOs[i] = nil; gAttnValid[i] = 0;
+        gAttnVs[i] = nil; gAttnScs[i] = nil; gAttnOs[i] = nil; gAttnValid[i] = 0;
     }
     gAttnNext = 0;
     gAttnCacheCap = cap;
@@ -3203,10 +3211,15 @@ static int ensure_attn_graph(int seq, int kvHeads, int rep, int dk, int causal) 
         MPSGraphTensor* Q = [g placeholderWithShape:@[@(seq), @(dm)]    dataType:MPSDataTypeFloat32 name:@"Q"];
         MPSGraphTensor* K = [g placeholderWithShape:@[@(seq), @(kvDim)] dataType:MPSDataTypeFloat32 name:@"K"];
         MPSGraphTensor* V = [g placeholderWithShape:@[@(seq), @(kvDim)] dataType:MPSDataTypeFloat32 name:@"V"];
+        // The 1/√dk·attn-temp scale as a [1] INPUT (broadcast multiply) — fed per call, so
+        // the cached graph stays scale-independent WITHOUT the old per-call host-side
+        // Q'=scale·Q fold (a 1MB malloc + single-threaded loop that cost ≈100µs a call).
+        MPSGraphTensor* Sc = [g placeholderWithShape:@[@1] dataType:MPSDataTypeFloat32 name:@"scale"];
+        MPSGraphTensor* Qsc = [g multiplicationWithPrimaryTensor:Q secondaryTensor:Sc name:nil];
 
         // Q[seq, kvHeads, rep, dk] -> [kvHeads, rep, seq, dk]. Head h = kvh*rep + r (matches
         // ref: kvOff=(h/rep)*dk, so heads rep-grouped by kv head — contiguous in the reshape).
-        MPSGraphTensor* Qr = [g reshapeTensor:Q withShape:@[@(seq), @(kvHeads), @(rep), @(dk)] name:nil];
+        MPSGraphTensor* Qr = [g reshapeTensor:Qsc withShape:@[@(seq), @(kvHeads), @(rep), @(dk)] name:nil];
         MPSGraphTensor* Qt = [g transposeTensor:Qr permutation:@[@1,@2,@0,@3] name:nil]; // [kvHeads,rep,seq,dk]
         // K,V[seq, kvHeads, 1, dk] -> [kvHeads, 1, seq, dk] -> broadcast rep -> [kvHeads,rep,seq,dk].
         MPSGraphTensor* Kr = [g reshapeTensor:K withShape:@[@(seq), @(kvHeads), @1, @(dk)] name:nil];
@@ -3218,8 +3231,8 @@ static int ensure_attn_graph(int seq, int kvHeads, int rep, int dk, int causal) 
         // Kᵀ over the last two axes: [kvHeads,rep,dk,seq].
         MPSGraphTensor* KbT = [g transposeTensor:Kb dimension:2 withDimension:3 name:nil];
 
-        // S = Q'·Kᵀ  ->  [kvHeads,rep,seq,seq]. The 1/√dk·attn-temp scale is folded into Q on the
-        // host (Q'=scale·Q) so the cached graph stays scale-independent (see mtl_mha_mpsgraph).
+        // S = Q'·Kᵀ  ->  [kvHeads,rep,seq,seq]. Q' = Sc·Q was applied above via the [1]
+        // scale input, so the cached graph stays scale-independent.
         MPSGraphTensor* S = [g matrixMultiplicationWithPrimaryTensor:Qt secondaryTensor:KbT name:nil];
 
         // Causal additive mask baked as a graph constant: 0 for j<=i, -1e30 for j>i.
@@ -3244,6 +3257,7 @@ static int ensure_attn_graph(int seq, int kvHeads, int rep, int dk, int causal) 
         gAttnGraphs[slot] = g;                 // ARC __strong: retains g, releases
         gAttnQs[slot] = Q; gAttnKs[slot] = K;  // any prior occupant of the slot.
         gAttnVs[slot] = V; gAttnOs[slot] = O;
+        gAttnScs[slot] = Sc;
         memcpy(gAttnSigs[slot], sig, sizeof(sig));
         gAttnValid[slot] = 1;
         gAttnNext = (slot + 1) % gAttnCacheCap;
@@ -3256,32 +3270,43 @@ int mtl_mha_mpsgraph(const float* Q, const float* K, const float* V, float* O,
     if (ensure_init() != 0) return -1;
     int rep = heads / kvHeads;
     int kvDim = kvHeads * dk;
+    OP_BEGIN;
     @autoreleasepool {
-        // The scale varies with dk and the YaRN attn temperature, so it is folded on the host into Q
-        // (Q' = scale·Q) rather than baked into the cached graph — keeps the graph scale-independent.
-        size_t qN = (size_t)seq * dm, kvN = (size_t)seq * kvDim;
-        float* Qs = (float*)malloc(qN * sizeof(float));
-        if (Qs == NULL) return -2;
-        for (size_t i = 0; i < qN; i++) Qs[i] = Q[i] * scale;
-
         int slot = ensure_attn_graph(seq, kvHeads, rep, dk, causal);
-        if (slot < 0) { free(Qs); return -20; }
+        if (slot < 0) return -20;
 
-        id<MTLBuffer> qb = [gDevice newBufferWithBytes:Qs length:qN*sizeof(float) options:MTLResourceStorageModeShared];
-        id<MTLBuffer> kb = [gDevice newBufferWithBytes:K  length:kvN*sizeof(float) options:MTLResourceStorageModeShared];
-        id<MTLBuffer> vb = [gDevice newBufferWithBytes:V  length:kvN*sizeof(float) options:MTLResourceStorageModeShared];
-        id<MTLBuffer> ob = [gDevice newBufferWithLength:qN*sizeof(float) options:MTLResourceStorageModeShared];
-        free(Qs);
-        if (qb == nil || kb == nil || vb == nil || ob == nil) return -2;
+        // The scale varies with dk and the YaRN attn temperature; it is fed as the [1]
+        // scale INPUT of the cached graph (broadcast multiply on the GPU) — no per-call
+        // host-side Q'=scale·Q fold (was a 1MB malloc + single-threaded loop) and the
+        // graph stays scale-independent. Buffers come from the op pool (§T336) instead
+        // of fresh per-call device allocations, and the graph is ENCODED into one
+        // MPSCommandBuffer rather than runWithMTLCommandQueue's heavier run path.
+        size_t qN = (size_t)seq * dm, kvN = (size_t)seq * kvDim;
+        id<MTLBuffer> qb = pool_in(Q, qN*sizeof(float));
+        id<MTLBuffer> kb = pool_in(K, kvN*sizeof(float));
+        id<MTLBuffer> vb = pool_in(V, kvN*sizeof(float));
+        id<MTLBuffer> sb = pool_in(&scale, sizeof(float));
+        id<MTLBuffer> ob = pool_buf(qN*sizeof(float));
+        if (qb == nil || kb == nil || vb == nil || sb == nil || ob == nil) return -2;
 
         MPSGraphTensorData* qd = [[MPSGraphTensorData alloc] initWithMTLBuffer:qb shape:@[@(seq), @(dm)]    dataType:MPSDataTypeFloat32];
         MPSGraphTensorData* kd = [[MPSGraphTensorData alloc] initWithMTLBuffer:kb shape:@[@(seq), @(kvDim)] dataType:MPSDataTypeFloat32];
         MPSGraphTensorData* vd = [[MPSGraphTensorData alloc] initWithMTLBuffer:vb shape:@[@(seq), @(kvDim)] dataType:MPSDataTypeFloat32];
+        MPSGraphTensorData* sd = [[MPSGraphTensorData alloc] initWithMTLBuffer:sb shape:@[@1]               dataType:MPSDataTypeFloat32];
         MPSGraphTensorData* od = [[MPSGraphTensorData alloc] initWithMTLBuffer:ob shape:@[@(seq), @(dm)]    dataType:MPSDataTypeFloat32];
+        if (qd == nil || kd == nil || vd == nil || sd == nil || od == nil) return -2;
 
-        NSDictionary* feeds = @{gAttnQs[slot]:qd, gAttnKs[slot]:kd, gAttnVs[slot]:vd};
-        NSDictionary* results = @{gAttnOs[slot]:od};
-        [gAttnGraphs[slot] runWithMTLCommandQueue:gQueue feeds:feeds targetOperations:nil resultsDictionary:results];
+        NSDictionary* feeds = @{gAttnQs[slot]:qd, gAttnKs[slot]:kd, gAttnVs[slot]:vd, gAttnScs[slot]:sd};
+        MPSCommandBuffer* cmd = [MPSCommandBuffer commandBufferFromCommandQueue:gQueue];
+        if (cmd == nil) return -3;
+        [gAttnGraphs[slot] encodeToCommandBuffer:cmd
+                                    feeds:feeds
+                         targetOperations:nil
+                        resultsDictionary:@{gAttnOs[slot]:od}
+                      executionDescriptor:nil];
+        [cmd commit];
+        [cmd waitUntilCompleted];
+        if (cmd.status != MTLCommandBufferStatusCompleted) return -4;
 
         memcpy(O, ob.contents, qN*sizeof(float));
         return 0;
@@ -3862,6 +3887,10 @@ static MPSGraphTensor* gConvSrcs[CONV_CACHE_CAP]   = {nil};
 static MPSGraphTensor* gConvWts[CONV_CACHE_CAP]    = {nil};
 static MPSGraphTensor* gConvBiases[CONV_CACHE_CAP] = {nil};
 static MPSGraphTensor* gConvOuts[CONV_CACHE_CAP]   = {nil};
+// NOTE (perf grind 2026-07-15, banked negative): pre-compiling an MPSGraphExecutable
+// per shape and encoding it instead of the per-call graph encode measured a WASH
+// (0.97-1.03× interleaved A/B at n8c16hw32/n8c64hw56) — MPSGraph already caches its
+// compiled executable internally, so the per-call encode overhead is small. Reverted.
 static int gConvKeys[CONV_CACHE_CAP][11];
 static int gConvValid[CONV_CACHE_CAP] = {0}; // slot occupied?
 static int gConvNext = 0;                    // FIFO insertion cursor
@@ -4065,6 +4094,67 @@ int mtl_conv2d_backward_f32(const float* X, const float* W, const float* dO,
     }
 }
 
+// ---- opportunistic zero-copy operand wrapping (UMA) --------------------------
+// Apple Silicon unified memory means the GPU can read/write HOST memory directly —
+// the per-call operand memcpys (≈330µs of a 1024³ matmul's ≈980µs) exist only
+// because MTLBuffers normally require their own allocation. newBufferWithBytesNoCopy
+// wraps an existing PAGE-ALIGNED, page-multiple range zero-copy; tensor data is
+// interior heap memory, so we wrap the page-TRUNCATED enclosing range and address
+// the data by byte offset (MPSMatrix initWithBuffer:offset:). The rounded-up tail
+// page can exceed the Go allocation, so mincore() first verifies every page of the
+// wrapped range is actually mapped — if not (or the wrap fails), the caller falls
+// back to the pooled-copy path. Synchronous op ⇒ the Go caller keeps the memory
+// alive and unmoved (non-moving GC, cgo-pinned args) until completion.
+// Wrap cache: creating a no-copy buffer costs ≈150µs of VM work per call — more
+// than the memcpy it saves (measured 0.8× uncached, 1.4× cached at 1024³) — but the
+// SAME host ranges recur across calls (weights always, activations usually), so
+// wraps are cached by (base,total) and reused. Safe: the buffer references the
+// MAPPING, not the allocation — Go's heap is never unmapped (non-moving GC, arenas
+// persist), and zero-copy semantics re-read the range's CURRENT bytes each call,
+// which is exactly what passing that pointer means. Caveat: a pointer into a
+// caller-mmap'd region (e.g. a GGUF file) that is munmap'd and later re-passed at
+// the same address would hit a stale cache entry — the GPU access then faults
+// LOUDLY into cmd.status != Completed (op returns an error), never silent data
+// corruption; f32 model weights live for the model's lifetime in practice.
+#define WRAP_CACHE_CAP 64
+static id<MTLBuffer> gWrapBufs[WRAP_CACHE_CAP] = {nil};
+static uintptr_t     gWrapBases[WRAP_CACHE_CAP];
+static size_t        gWrapLens[WRAP_CACHE_CAP];
+static int           gWrapValid[WRAP_CACHE_CAP] = {0};
+static int           gWrapNext = 0; // FIFO insertion cursor
+
+static id<MTLBuffer> wrap_nocopy(const void* p, size_t len, size_t* off) {
+    size_t page = (size_t)getpagesize();
+    uintptr_t addr = (uintptr_t)p;
+    uintptr_t base = addr & ~(uintptr_t)(page - 1);
+    size_t total = (size_t)(((addr + len + page - 1) & ~(uintptr_t)(page - 1)) - base);
+    *off = (size_t)(addr - base);
+    for (int i = 0; i < WRAP_CACHE_CAP; i++) {
+        if (gWrapValid[i] && gWrapBases[i] == base && gWrapLens[i] == total)
+            return gWrapBufs[i];
+    }
+    char vec[4096]; // 4096 16K-pages = 64MB — beyond that let the pool handle it
+    if (total / page > sizeof(vec)) return nil;
+    if (mincore((void*)base, total, vec) != 0) return nil; // tail page unmapped etc.
+    id<MTLBuffer> b = [gDevice newBufferWithBytesNoCopy:(void*)base
+                                                 length:total
+                                                options:MTLResourceStorageModeShared
+                                            deallocator:nil];
+    if (b == nil) return nil;
+    int slot = gWrapNext; // FIFO: overwrite oldest at cap (ARC releases the evictee).
+    gWrapBufs[slot] = b;
+    gWrapBases[slot] = base;
+    gWrapLens[slot] = total;
+    gWrapValid[slot] = 1;
+    gWrapNext = (slot + 1) % WRAP_CACHE_CAP;
+    return b;
+}
+
+// gMatMulNoCopy selects zero-copy operand wrapping (1, default) or the pooled-copy
+// path (0) for mtl_matmul_f32 — interleaved A/B measurement hook.
+static int gMatMulNoCopy = 1;
+int mtl_matmul_nocopy_set(int on) { int prev = gMatMulNoCopy; gMatMulNoCopy = on ? 1 : 0; return prev; }
+
 // mtl_matmul_f32 computes C[M,N] = opA(A)·opB(B). When transA, A is STORED as [K,M] and
 // MPS transposes it (opA = Aᵀ); else A is [M,K]. Likewise transB: B stored [N,K] → opB=Bᵀ,
 // else [K,N]. This lets the matmul backward pass a weight/input transpose as an MPS flag
@@ -4078,9 +4168,21 @@ int mtl_matmul_f32(const float* A, const float* B, float* C, int M, int K, int N
         size_t bLen = (size_t)K * N * sizeof(float);
         size_t cLen = (size_t)M * N * sizeof(float);
 
-        id<MTLBuffer> aBuf = pool_in(A, aLen);
-        id<MTLBuffer> bBuf = pool_in(B, bLen);
-        id<MTLBuffer> cBuf = pool_buf(cLen);
+        // Zero-copy wrap of all three operands (UMA), falling back per operand to the
+        // pooled copy. C is wrapped too: MPS writes exactly the M×N result region, and
+        // the synchronous wait means the host sees the result with no copy-back.
+        size_t aOff = 0, bOff = 0, cOff = 0;
+        id<MTLBuffer> aBuf = nil, bBuf = nil, cBuf = nil;
+        int cWrapped = 0;
+        if (gMatMulNoCopy) {
+            aBuf = wrap_nocopy(A, aLen, &aOff);
+            bBuf = wrap_nocopy(B, bLen, &bOff);
+            cBuf = wrap_nocopy(C, cLen, &cOff);
+            cWrapped = (cBuf != nil);
+        }
+        if (aBuf == nil) { aOff = 0; aBuf = pool_in(A, aLen); }
+        if (bBuf == nil) { bOff = 0; bBuf = pool_in(B, bLen); }
+        if (cBuf == nil) { cOff = 0; cBuf = pool_buf(cLen); }
         if (aBuf == nil || bBuf == nil || cBuf == nil) return -2;
 
         // Descriptor dims describe the STORED matrix; the transpose flag reinterprets it.
@@ -4090,9 +4192,9 @@ int mtl_matmul_f32(const float* A, const float* B, float* C, int M, int K, int N
         MPSMatrixDescriptor* bDesc = [MPSMatrixDescriptor matrixDescriptorWithRows:bRows columns:bCols rowBytes:(size_t)bCols * sizeof(float) dataType:MPSDataTypeFloat32];
         MPSMatrixDescriptor* cDesc = [MPSMatrixDescriptor matrixDescriptorWithRows:M columns:N rowBytes:(size_t)N * sizeof(float) dataType:MPSDataTypeFloat32];
 
-        MPSMatrix* mA = [[MPSMatrix alloc] initWithBuffer:aBuf descriptor:aDesc];
-        MPSMatrix* mB = [[MPSMatrix alloc] initWithBuffer:bBuf descriptor:bDesc];
-        MPSMatrix* mC = [[MPSMatrix alloc] initWithBuffer:cBuf descriptor:cDesc];
+        MPSMatrix* mA = [[MPSMatrix alloc] initWithBuffer:aBuf offset:aOff descriptor:aDesc];
+        MPSMatrix* mB = [[MPSMatrix alloc] initWithBuffer:bBuf offset:bOff descriptor:bDesc];
+        MPSMatrix* mC = [[MPSMatrix alloc] initWithBuffer:cBuf offset:cOff descriptor:cDesc];
 
         MPSMatrixMultiplication* mm = [[MPSMatrixMultiplication alloc]
             initWithDevice:gDevice transposeLeft:(transA?YES:NO) transposeRight:(transB?YES:NO)
@@ -4105,7 +4207,7 @@ int mtl_matmul_f32(const float* A, const float* B, float* C, int M, int K, int N
         [cmd waitUntilCompleted];
         if (cmd.status != MTLCommandBufferStatusCompleted) return -4;
 
-        memcpy(C, cBuf.contents, cLen);
+        if (!cWrapped) memcpy(C, cBuf.contents, cLen);
         return 0;
     }
 }

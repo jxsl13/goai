@@ -1351,6 +1351,17 @@ var convUseMPS = true
 // Conv2DMultiShape benchmarks) — not part of the stable op surface.
 func SetConvCacheCap(cap int) int { return int(C.mtl_conv_cache_cap_set(C.int(cap))) }
 
+// setMatMulNoCopy selects zero-copy operand wrapping (true, default) or the pooled-copy
+// path (false) for the standalone matmul, returning the previous value. Interleaved
+// same-process A/B measurement hook (internal tests only).
+func setMatMulNoCopy(on bool) bool {
+	v := 0
+	if on {
+		v = 1
+	}
+	return C.mtl_matmul_nocopy_set(C.int(v)) == 1
+}
+
 // SetAttnCacheCap sets the effective shape-keyed attention-graph cache cap (§T622), clears all
 // resident graphs, and returns the previous cap. cap is clamped to [1,16]; cap==1 reproduces the
 // pre-§T622 single last-shape cache (recompile per prefill length). Benchmark/A-B knob.

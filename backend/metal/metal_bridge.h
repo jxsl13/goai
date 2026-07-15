@@ -294,6 +294,10 @@ int mtl_conv2d_mps_f32(const float* X, const float* W, const float* B, float* Ou
 // last-shape cache (per-call recompile for a multi-shape CNN) for the A/B benchmark. Test-only.
 int mtl_conv_cache_cap_set(int cap);
 
+// mtl_matmul_nocopy_set selects zero-copy operand wrapping (1, default) or the
+// pooled-copy path (0) for mtl_matmul_f32; returns the previous value. A/B hook.
+int mtl_matmul_nocopy_set(int on);
+
 // mtl_conv2d_backward_f32 is the conv2d backward: (X,W,dO) → (dX,dW,dBias). One
 // thread per output-gradient element (n,f,oy,ox) scatters into the shared dX/dW/dBias
 // with atomic float adds. dX/dW/dBias are passed in pre-zeroed. Returns 0 on success,
