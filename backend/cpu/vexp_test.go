@@ -97,6 +97,73 @@ func TestVexpF32MatchesScalarTail(t *testing.T) {
 	}
 }
 
+// TestSoftmaxVexpF32ParityVsF64Ref: the f32-native OpSoftmax fast path
+// (softmaxVexpF32, taken on the arm64 perf build) matches an f64 math.Exp
+// reference within the ADR-0021 tolerant budget (rtol 2e-3; observed ~1e-6 —
+// the vexp poly is ~3e-7 and the 4-lane f32 sum dominates). Runs on every
+// build (the driver falls back to the scalar poly when !vexpNeon), across
+// normal, all-equal, large-magnitude, single-element, negative and huge-d
+// (wide intra-row split) rows.
+func TestSoftmaxVexpF32ParityVsF64Ref(t *testing.T) {
+	rng := rand.New(rand.NewPCG(17, 23))
+	const rtol = 2e-3
+	var maxRel float64
+	check := func(x []float32, rows, d int, label string) {
+		t.Helper()
+		got := make([]float32, len(x))
+		softmaxVexpF32(x, got, rows, d)
+		for r := 0; r < rows; r++ {
+			xr := x[r*d : (r+1)*d]
+			m := math.Inf(-1)
+			for _, v := range xr {
+				if f := float64(v); f > m {
+					m = f
+				}
+			}
+			var sum float64
+			w := make([]float64, d)
+			for j, v := range xr {
+				w[j] = math.Exp(float64(v) - m)
+				sum += w[j]
+			}
+			for j := range w {
+				want := w[j] / sum
+				rel := math.Abs(float64(got[r*d+j])-want) / math.Max(want, 1e-30)
+				if rel > maxRel {
+					maxRel = rel
+				}
+				if rel > rtol {
+					t.Fatalf("%s row %d col %d: got %g want %g (rel %.2e)", label, r, j, got[r*d+j], want, rel)
+				}
+			}
+		}
+	}
+
+	randRows := func(n, d int, scale float32) []float32 {
+		x := make([]float32, n*d)
+		for i := range x {
+			x[i] = scale * (rng.Float32() - 0.5)
+		}
+		return x
+	}
+	check(randRows(64, 512, 8), 64, 512, "normal[64x512]")
+	check(randRows(7, 33, 8), 7, 33, "tail[7x33]") // d%4 != 0 exercises the scalar tail
+	check(randRows(4, 1024, 160), 4, 1024, "largemag[4x1024,±80]")
+	neg := randRows(8, 256, 20)
+	for i := range neg {
+		neg[i] = -1 - float32(math.Abs(float64(neg[i]))) // all-negative rows
+	}
+	check(neg, 8, 256, "negative[8x256]")
+	eq := make([]float32, 3*64)
+	for i := range eq {
+		eq[i] = 3.25
+	}
+	check(eq, 3, 64, "allequal[3x64]")
+	check([]float32{-42}, 1, 1, "single[1x1]")
+	check(randRows(1, 32000, 12), 1, 32000, "wide[1x32000]") // softmaxWideVexpF32 split
+	t.Logf("f32-native softmax vs f64 ref: max rel err %.2e (rtol %g, vexpNeon=%v)", maxRel, rtol, vexpNeon)
+}
+
 // The exp-kernel microbenchmarks isolate the softmax exp fraction of the MHA
 // forward: one 512-wide attention row, exp(x-m)+sum, matching the band
 // softmax's inner loop.

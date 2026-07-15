@@ -1,6 +1,9 @@
 package cpu
 
-import "math"
+import (
+	"math"
+	"runtime"
+)
 
 // Vectorized f32 exp for the gemm-routed MHA softmax (§T657 follow-up): after
 // the NEON GEMM landed, scalar math.Exp was ~35% of the MHA forward. The vexp
@@ -94,16 +97,7 @@ func mhaSoftmaxBandVexpF32(sb []float32, g mhaGeo, h, i0, iN int) {
 				}
 			}
 		}
-		nv := len(span) &^ 3
-		var sum float32
-		if nv > 0 {
-			sum = vexpF32(span[:nv], m)
-		}
-		for jj := nv; jj < len(span); jj++ {
-			e := expF32(span[jj] - m)
-			span[jj] = e
-			sum += e
-		}
+		sum := vexpRowF32(span, m)
 		inv := 1 / sum
 		for jj := range span {
 			span[jj] *= inv
@@ -111,4 +105,107 @@ func mhaSoftmaxBandVexpF32(sb []float32, g mhaGeo, h, i0, iN int) {
 		clear(sr[:jmin])
 		clear(sr[jmax:])
 	}
+}
+
+// vexpRowF32 computes row[j] = exp(row[j]-m) in place over the whole row —
+// the 4-wide NEON kernel for the quad-aligned body, the scalar poly for the
+// len%4 tail — and returns the f32 sum of the results. This is THE shared
+// exp+sum band: the MHA band softmax, the OpSoftmax f32 fast path and the
+// FlashAttn online-softmax block all route through it (one asm kernel, one
+// tail contract).
+func vexpRowF32(row []float32, m float32) float32 {
+	nv := len(row) &^ 3
+	var sum float32
+	if nv > 0 {
+		sum = vexpF32(row[:nv], m)
+	}
+	for j := nv; j < len(row); j++ {
+		e := expF32(row[j] - m)
+		row[j] = e
+		sum += e
+	}
+	return sum
+}
+
+// softmaxVexpF32 is the arm64 perf-build body of the standalone OpSoftmax
+// kernel for F32 (softmaxKernelCPU gates on vexpNeon — the default build and
+// amd64 keep softmaxTyped's f64 math.Exp path bit-for-bit): the same stable
+// max-shift softmax, but f32-native end to end — f32 row max, exp+sum through
+// vexpRowF32 (4-wide NEON), ×1/sum normalize in f32. Same rows==1 huge-d
+// split as softmaxTyped (§C3). Numerics ride the ADR-0021 tolerant-parity
+// budget: the poly adds ~3e-7 relative, the 4-lane f32 sum of ≤ d positives
+// adds ≤ d/4·2⁻²⁴ (1.5e-5 at d=1024, observed ~1e-6 — TestSoftmaxVexpF32
+// ParityVsF64Ref), all far inside rtol 2e-3 and inside the 5e-5 f32 kernel
+// parity budget at the ref-parity test shapes.
+func softmaxVexpF32(x, out []float32, rows, d int) {
+	if nw := runtime.GOMAXPROCS(0); rows == 1 && d >= wideSoftmaxMinD && nw > 1 {
+		softmaxWideVexpF32(x, out, d, nw)
+		return
+	}
+	parallelWork(rows, 4*d, func(lo, hi int) {
+		for r := lo; r < hi; r++ {
+			base := r * d
+			xr := x[base : base+d : base+d]
+			or := out[base : base+d : base+d]
+			m := float32(math.Inf(-1)) // −Inf start keeps ref's NaN/−Inf row semantics
+			for _, v := range xr {
+				if v > m {
+					m = v
+				}
+			}
+			copy(or, xr)
+			sum := vexpRowF32(or, m)
+			inv := 1 / sum
+			for j, v := range or {
+				or[j] = v * inv
+			}
+		}
+	})
+}
+
+// softmaxWideVexpF32 is softmaxVexpF32's few-rows × huge-d form (LLM logit
+// shape, 1×32000), parallel WITHIN the row like softmaxWide: chunked f32 max,
+// then per-chunk vexp exp+sum (chunks quad-aligned so only the last chunk has
+// a scalar tail), chunk sums combined in f64, parallel ×1/sum. No f64 scratch
+// row — exp streams straight into out.
+func softmaxWideVexpF32(x, out []float32, d, nw int) {
+	chunk := ((d+nw-1)/nw + 3) &^ 3
+	nch := (d + chunk - 1) / chunk
+	maxs := make([]float32, nch)
+	sums := make([]float64, nch)
+	parallelWork(nch, 4*chunk, func(lo, hi int) {
+		for c := lo; c < hi; c++ {
+			m := float32(math.Inf(-1))
+			for _, v := range x[c*chunk : min((c+1)*chunk, d)] {
+				if v > m {
+					m = v
+				}
+			}
+			maxs[c] = m
+		}
+	})
+	m := float32(math.Inf(-1))
+	for _, cm := range maxs {
+		if cm > m {
+			m = cm
+		}
+	}
+	parallelWork(nch, 4*chunk, func(lo, hi int) {
+		for c := lo; c < hi; c++ {
+			j0, j1 := c*chunk, min((c+1)*chunk, d)
+			or := out[j0:j1]
+			copy(or, x[j0:j1])
+			sums[c] = float64(vexpRowF32(or, m))
+		}
+	})
+	var sum float64
+	for _, s := range sums {
+		sum += s
+	}
+	inv := float32(1 / sum)
+	parallelWork(d, 2, func(lo, hi int) {
+		for j := lo; j < hi; j++ {
+			out[j] *= inv
+		}
+	})
 }
