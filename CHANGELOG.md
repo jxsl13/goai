@@ -4,6 +4,21 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T650 — Mixture-of-Recursions: adaptive per-token recursion depth (2026-07-15)
+- New `nn.MixtureOfRecursions`: the expert-choice Mixture-of-Recursions layer (Bae,
+  Sun, Kim et al. 2025, arXiv:2507.10524). ONE weight-shared block `B` is applied up
+  to `Nr` times, but a per-recursion-step expert-choice router decides which tokens
+  keep recursing — easy tokens exit early, hard tokens loop through the same weights
+  again, under a per-step compute budget. The active set shrinks geometrically and
+  per-token depths are contiguous counts in 0..Nr. Reuses the existing differentiable
+  `nn.MixtureOfDepths` router (Route/Combine one-hot gather-scatter) at each step, so
+  the whole layer is end-to-end differentiable w.r.t. the shared block, every router,
+  and the input. The block is a caller-provided `nn.RecursionBlock` interface (any
+  hidden→hidden layer). Distinct from MixtureOfDepths (one skip decision, per-block
+  weights) and from a weight-tied Universal Transformer (fixed depth for all tokens).
+  Two exact reductions pinned: `maxRecursion==1` collapses to a single MoD pass;
+  `capacity==1` collapses to the shared block applied Nr times to all tokens.
+
 ### T650 — Gated Attention: sigmoid output gate on softmax attention (2026-07-15)
 - New `nn.GatedAttention`: standard causal multi-head softmax self-attention with
   a data-dependent, head-specific **sigmoid output gate** (Qiu et al. 2025,
