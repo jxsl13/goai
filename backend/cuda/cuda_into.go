@@ -277,6 +277,38 @@ func GroupedQueryAttentionKVDposInto(q, k, v *DeviceF32, qHeads, kvHeads int, of
 	return nil
 }
 
+// GroupedQueryAttentionKVDposFusedInto is GroupedQueryAttentionKVDposInto for
+// the decode case (seqQ==1) as ONE fused kernel launch: QKᵀ, scale+causal-mask+
+// softmax and ·V with the scores kept in shared memory — no scores buffer, no
+// global score traffic, 3 launches → 1. The causal limit is read from the
+// device position (graph-capturable).
+func GroupedQueryAttentionKVDposFusedInto(q, k, v *DeviceF32, qHeads, kvHeads int, off *DevicePos, out *DeviceF32) error {
+	if q.ptr == nil || k.ptr == nil || v.ptr == nil || out.ptr == nil {
+		return fmt.Errorf("cuda: GQA-dpos-fused on a freed handle")
+	}
+	seqQ, wq := q.rows, q.cols
+	if seqQ != 1 {
+		return fmt.Errorf("cuda: GQA-dpos-fused needs seqQ==1 (decode), got %d", seqQ)
+	}
+	if qHeads <= 0 || kvHeads <= 0 || qHeads%kvHeads != 0 || wq%qHeads != 0 {
+		return fmt.Errorf("cuda: GQA-dpos-fused bad head config")
+	}
+	hd := wq / qHeads
+	seqKV, wkv := k.rows, kvHeads*hd
+	if k.cols != wkv || v.rows != seqKV || v.cols != wkv {
+		return fmt.Errorf("cuda: GQA-dpos-fused k/v shape")
+	}
+	if out.rows != 1 || out.cols != wq {
+		return fmt.Errorf("cuda: GQA-dpos-fused out shape [%d,%d], want [1,%d]", out.rows, out.cols, wq)
+	}
+	if rc := C.cu_gqa_fused_dpos(q.ptr, k.ptr, v.ptr, out.ptr,
+		C.int(seqKV), C.int(qHeads), C.int(kvHeads), C.int(hd),
+		C.float(1/math.Sqrt(float64(hd))), off.ptr); rc != 0 {
+		return fmt.Errorf("cuda: GQA-dpos-fused failed (code %d)", int(rc))
+	}
+	return nil
+}
+
 // FullView returns a [rows, wkv] view of the whole cache buffer (for fixed-size
 // attention over the padded cache; masked positions past the length contribute
 // nothing). Do NOT Free the view.

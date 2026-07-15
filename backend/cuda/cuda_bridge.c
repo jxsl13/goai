@@ -34,6 +34,7 @@ static cudaStream_t gStream = NULL;
 static CUcontext gCtx = NULL; // runtime's primary context, retained for driver-API launches
 static CUfunction gGelu = NULL, gSilu = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gQgemv = NULL, gQgemv4 = NULL, gQgemv4k = NULL, gCvtF16 = NULL; // lazily nvrtc-compiled
 static CUfunction gRopeDpos = NULL, gAttnSoftmaxDpos = NULL, gAppendDpos = NULL; // device-position (graph-capturable) twins
+static CUfunction gGqaFusedDpos = NULL; // fused decode attention (QKᵀ+softmax+·V, one launch)
 static CUfunction gArgmax = NULL, gLayerNorm = NULL, gAddBias = NULL; // greedy argmax; layernorm; broadcast bias-add
 static CUfunction gCopy2d = NULL; // strided 2D copy (fused-QKV band extraction, llamagpu adapter)
 static int ensure_init(void); // fwd decls (defined later)
@@ -1356,6 +1357,99 @@ int cu_attn_softmax_dpos(void* x, int rows, int cols, float scale, const void* d
         void* args[6];
         args[0] = &x; args[1] = &rows; args[2] = &cols; args[3] = &scale; args[4] = &dOff; args[5] = &seqQ;
         rc = (cuLaunchKernel(gAttnSoftmaxDpos, blocks, 1, 1, threads, 1, 1, shmem, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_gqa_fused_dpos: the FUSED decode attention — QKᵀ, scale+causal-mask+softmax
+// and ·V in ONE kernel launch for the seqQ==1 (decode) case. Replaces the
+// cu_gqa_scores → cu_attn_softmax_dpos → cu_gqa_out chain (3 launches + a
+// [qHeads,seqKV] global score round-trip); scores live in shared memory.
+// One block per query head: warps partition keys (coalesced K reads, shuffle
+// dot-reduce), block softmax in double (mirrors cu_attn_softmax_dpos
+// arithmetic), then threads partition output dims (coalesced V reads). The
+// causal limit is read from device int *dOff (graph-capturable); keys
+// 0..*dOff inclusive contribute. Q is [1, qHeads·hd], K/V span the full
+// fixed cache [seqKV, kvHeads·hd], out is [1, qHeads·hd].
+int cu_gqa_fused_dpos(const void* dQ, const void* dK, const void* dV, void* dOut,
+                      int seqKV, int qHeads, int kvHeads, int hd, float scale, const void* dOff) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (!gGqaFusedDpos && compile_kernel(
+                              "extern \"C\" __global__ void gqa_fused_dpos(const float* q, const float* k, const float* v, float* out,\n"
+                              "                                            int seqKV, int qHeads, int kvHeads, int hd, float scale, const int* dOff){\n"
+                              "  int h = blockIdx.x; if (h >= qHeads) return;\n"
+                              "  int kvh = h / (qHeads / kvHeads);\n"
+                              "  int WKV = kvHeads * hd;\n"
+                              "  int lim = *dOff; if (lim >= seqKV) lim = seqKV - 1;\n"
+                              "  extern __shared__ float sh[];\n"
+                              "  float* shq = sh;                                   // [hd] the query head\n"
+                              "  float* shs = sh + hd;                              // [seqKV] scores then probabilities\n"
+                              "  double* red = (double*)(sh + ((hd + seqKV + 1) & ~1)); // [nt] reduction scratch (8B-aligned)\n"
+                              "  int t = threadIdx.x, nt = blockDim.x;\n"
+                              "  const float* qh = q + h * hd;\n"
+                              "  for (int d = t; d < hd; d += nt) shq[d] = qh[d];\n"
+                              "  __syncthreads();\n"
+                              "  int lane = t & 31, w = t >> 5, nw = nt >> 5;\n"
+                              "  for (int j = w; j <= lim; j += nw) {\n"
+                              "    const float* kr = k + (size_t)j * WKV + (size_t)kvh * hd;\n"
+                              "    float dot = 0.f;\n"
+                              "    for (int d = lane; d < hd; d += 32) dot += shq[d] * kr[d];\n"
+                              "    for (int s = 16; s > 0; s >>= 1) dot += __shfl_down_sync(0xffffffffu, dot, s);\n"
+                              "    if (lane == 0) shs[j] = dot;\n"
+                              "  }\n"
+                              "  __syncthreads();\n"
+                              "  double m = -1e300;\n"
+                              "  for (int j = t; j <= lim; j += nt) { double s = (double)shs[j] * scale; if (s > m) m = s; }\n"
+                              "  red[t] = m; __syncthreads();\n"
+                              "  for (int s = nt/2; s > 0; s >>= 1) { if (t < s && red[t+s] > red[t]) red[t] = red[t+s]; __syncthreads(); }\n"
+                              "  double rowmax = red[0]; __syncthreads();\n"
+                              "  double local = 0.0;\n"
+                              "  for (int j = t; j <= lim; j += nt) { double e = exp((double)shs[j]*scale - rowmax); shs[j] = (float)e; local += e; }\n"
+                              "  red[t] = local; __syncthreads();\n"
+                              "  for (int s = nt/2; s > 0; s >>= 1) { if (t < s) red[t] += red[t+s]; __syncthreads(); }\n"
+                              "  float inv = (float)(1.0 / red[0]);\n"
+                              "  float* accP = (float*)(red + nt);           // [nw*hd] per-warp output partials\n"
+                              "  __syncthreads();\n"
+                              "  // Output: warps partition keys (f32 register accumulators — GeForce fp64 is\n"
+                              "  // 1/64 rate; cublasSgemm accumulates f32 too), then a cross-warp reduce.\n"
+                              "  float acc0 = 0.f, acc1 = 0.f, acc2 = 0.f, acc3 = 0.f; // d = lane + {0,32,64,96} (hd <= 128)\n"
+                              "  for (int j = w; j <= lim; j += nw) {\n"
+                              "    float p = shs[j];\n"
+                              "    const float* vr = v + (size_t)j * WKV + (size_t)kvh * hd;\n"
+                              "    if (lane < hd)      acc0 += p * vr[lane];\n"
+                              "    if (lane + 32 < hd) acc1 += p * vr[lane + 32];\n"
+                              "    if (lane + 64 < hd) acc2 += p * vr[lane + 64];\n"
+                              "    if (lane + 96 < hd) acc3 += p * vr[lane + 96];\n"
+                              "  }\n"
+                              "  float* ap = accP + w * hd;\n"
+                              "  if (lane < hd)      ap[lane] = acc0;\n"
+                              "  if (lane + 32 < hd) ap[lane + 32] = acc1;\n"
+                              "  if (lane + 64 < hd) ap[lane + 64] = acc2;\n"
+                              "  if (lane + 96 < hd) ap[lane + 96] = acc3;\n"
+                              "  __syncthreads();\n"
+                              "  float* oh = out + h * hd;\n"
+                              "  for (int d = t; d < hd; d += nt) {\n"
+                              "    float s = 0.f;\n"
+                              "    for (int ww = 0; ww < nw; ww++) s += accP[ww * hd + d];\n"
+                              "    oh[d] = s * inv;\n"
+                              "  }\n"
+                              "}\n",
+                              "gqa_fused_dpos.cu", "gqa_fused_dpos", &gGqaFusedDpos) != 0) { rc = -2; goto done; }
+    {
+        int threads = 256, blocks = qHeads;
+        if (hd > 128) { rc = -4; goto done; } // register accumulators cover d = lane + {0,32,64,96}
+        size_t shmem = (size_t)((hd + seqKV + 1) & ~1) * sizeof(float) + (size_t)threads * sizeof(double)
+                     + (size_t)(threads / 32) * hd * sizeof(float);
+        void* args[10];
+        args[0] = &dQ; args[1] = &dK; args[2] = &dV; args[3] = &dOut;
+        args[4] = &seqKV; args[5] = &qHeads; args[6] = &kvHeads; args[7] = &hd;
+        args[8] = &scale; args[9] = &dOff;
+        rc = (cuLaunchKernel(gGqaFusedDpos, blocks, 1, 1, threads, 1, 1, shmem, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 done:
     pthread_mutex_unlock(&gLock);

@@ -79,6 +79,9 @@ int cu_set_i32(void* d, int val);
 int cu_rope_f32_dpos(void* x, const void* inv, int seq, int heads, int hd, const void* dPos, double posDiv);
 int cu_attn_softmax_dpos(void* x, int rows, int cols, float scale, const void* dOff, int seqQ);
 int cu_append_dpos(void* dst, const void* src, const void* dPos, int wkv);
+// Fused decode attention (seqQ==1): QKᵀ + scale/causal/softmax + ·V in one launch.
+int cu_gqa_fused_dpos(const void* dQ, const void* dK, const void* dV, void* dOut,
+                      int seqKV, int qHeads, int kvHeads, int hd, float scale, const void* dOff);
 // out[i,:] = table[ids[i],:] — input embedding row gather (table [vocab,d] resident).
 int cu_embed_f32(const void* dTable, const void* dIds, void* dOut, int seq, int d);
 int cu_download_f32(const void* dsrc, float* dst, int n);
