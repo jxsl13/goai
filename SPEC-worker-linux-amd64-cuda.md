@@ -1,10 +1,39 @@
 # SPEC-worker — linux/amd64 + NVIDIA (RTX 3060)
 
-Worker sub-spec of root `SPEC.md` (§ main references this). Scopes the
-hardware-specific work + measured results of the Linux/amd64 secondary machine,
-by capability. Encoding: caveman (`FORMAT.md`) — LLM-audience, C13-exempt.
-Worker mode: PR-only, one dedicated branch+PR per task, auto-merge on green CI.
-Consolidates the former `docs/{benchmarking,simd,simd-gemm,cuda}-amd64.md`.
+THE single derived runner spec of this machine (user directive 2026-07-15):
+worker sub-spec of root `SPEC.md` (referenced there under WORKER SUB-SPECS).
+Scopes the hardware-specific work + measured results of the Linux/amd64
+secondary machine by capability, PLUS the runner protocol (§RUN) and the local
+model assets (§MODELS). Encoding: caveman (`FORMAT.md`) — LLM-audience,
+C13-exempt. Consolidates: the former `docs/{benchmarking,simd,simd-gemm,cuda}-
+amd64.md` (2026-07-14) + `models/README.md` state + the runner protocol
+previously implicit in LOOP.md/session memory (2026-07-15).
+
+## §RUN — runner protocol (worker deltas over LOOP.md)
+
+RUN1: loop = LOOP.md procedure ∘ THIS spec (worker deltas here OVERRIDE). 1 task/fire, end-to-end. task source: §NEXT here, then LOOP.md empty-backlog rule (beat-incumbents default).
+RUN2: PR-ONLY (§H5). ⊥ commit/push `main`. ∀ task: 1 dedicated branch `linux-amd64/<slug>` + 1 PR. push = `git push -u origin <branch>` (gh credential helper), PR = `gh pr create`.
+RUN3: merge protocol = watch CI → GREEN → `gh pr merge --merge` MANUALLY. ⊥ `--auto` (no branch protection → merges before checks). main moved → `git merge origin/main` INTO branch, 3-way resolve (⊥ `checkout --ours`, ⊥ stash — shallow history §Iw6). ! CONFLICTING PR = GitHub starts NO pull_request CI (no merge ref) → resolve, THEN expect checks.
+RUN4: gates ∀ PR: `CGO_ENABLED=0 go vet ./...` (§V23) + affected-pkg tests CGO0+cgo + `go run ./internal/mdlint ./...` + cuda suite LOCAL on the 3060 (Iw3: CI has NO GPU — green CI ≠ cuda coverage). exits UN-PIPED (§V24).
+RUN5: post-push: §V27 selector validate (`go run ./internal/cichange -validate <base> <head>`; exit 1 = release-blocking, excess = record) + §C17 CI-warning grep on the run log.
+RUN6: cuda env: `source scripts/cuda-pip-env.sh` before ∀ `-tags cuda` build/test (H4). GPU EXCLUSIVE: serialize goai GPU tests vs llama.cpp benches; a leaked/killed `llama-cli` HOLDS VRAM (observed 9.9GB) → check `nvidia-smi --query-compute-apps` + kill before GPU work. llama.cpp b10012 Vulkan prebuilt cached `/tmp/llamacpp-b10012` (`scripts/bench-llamacpp.sh` fetches).
+RUN7: state authority: THIS file = worker truth (§Tw tasks, §PERF/§CPU/§GPU results, §MODELS assets, §RUN protocol). `docs/benchmarking.md` = SHARED measurement log (worker sections mirror; on divergence THIS spec wins). Cross-platform lessons → root `SPEC.md` §B/§R rows. Session memory files = ergonomics only, ⊥ state authority.
+RUN8: host facts for scheduling: 31 GB RAM (⊥ materialize f32 ≥7B: use `gguf.ReadRaw` per-tensor path, §PERF-Q4-SWEEP); 12 GB VRAM (Q8 ≤8-9B; ≥13B → T631 offload); brew/pip allowed for dev deps; downloads resumable `curl -C -` (! bash-crash leaves TRUNCATED gguf → verify via llama.cpp load ∨ gguf bounds before use, then re-quantize).
+
+## §MODELS — local model assets (models/, gitignored; formerly models/README.md)
+
+M1: files (all open-weight, ungated, HF `resolve/main`):
+  | file | arch | L | heads/kv | dim | source |
+  |---|---|---|---|---|---|
+  | tinyllama-1.1b-chat-q8_0.gguf | llama | 22 | 32/4 | 2048 | TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF |
+  | qwen2.5-0.5b-instruct-q8_0.gguf | qwen2 | 24 | 14/2 | 896 | Qwen/Qwen2.5-0.5B-Instruct-GGUF |
+  | qwen2.5-1.5b-instruct-q8_0.gguf | qwen2 | 28 | 12/2 | 1536 | Qwen/Qwen2.5-1.5B-Instruct-GGUF |
+  | qwen2.5-3b-instruct-q8_0.gguf | qwen2 | 36 | 16/2 | 2048 | Qwen/Qwen2.5-3B-Instruct-GGUF |
+  | mistral-7b-instruct-v0.2.Q8_0.gguf | llama | 32 | 32/8 | 4096 | TheBloke/Mistral-7B-Instruct-v0.2-GGUF |
+M2: `*q4_k_m*`/`*Q4_K_M*` siblings = LOCAL requants (`llama-quantize --allow-requantize … Q4_K_M`) = the llama.cpp side of the fair Q4-class compare ONLY; goai always loads the Q8_0 files + quantizes to its own resident Q8/Q4 at build.
+M3: loaders: llama-family w/ REAL SPM scores (Mistral) → `nlp.SPMFromGGUF` (! ⊥ UnigramFromGGUF, §B59); zero-score files (TheBloke TinyLlama) work w/ either; qwen2 → `nlp.BPEFromGGUF`. qwen2 rejected by `nlp.LlamaFromGGUF` → read config/weights straight from GGUF metadata/tensors (pattern: buildQwenFixed / rawGraphDecoder).
+M4: ≥7B: `gguf.ReadRaw` + per-tensor Dequantize→requant→upload (RUN8). VRAM: Q8 TinyLlama ≈1376 MiB total (≈62.5 MiB/layer); Mistral-7B Q8 ≈7.9 GB / Q4 ≈3.9 GB resident — both fit 12 GB.
+M5: validated e2e coverage: {TinyLlama, Qwen 0.5/1.5/3B, Mistral-7B} × {f32|Q8|Q4 where K%256 ✓} — see §PERF-SCALEBENCH-2 / §PERF-Q4-SWEEP for the numbers; Qwen-0.5B = Q8-only (dim 896 ⊥ K%256).
 
 ## §H — hardware & toolchain
 
