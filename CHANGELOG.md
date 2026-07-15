@@ -4,6 +4,18 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T649 — Forgetting Transformer (FoX) attention block (2026-07-15)
+- New `nn.FoXBlock`: causal softmax attention with a per-head, data-dependent forget
+  gate (Lin et al., arXiv:2503.02130) — a learned recency bias that replaces
+  positional encoding (no RoPE). Each head learns a forget gate `f_t = sigmoid(w_f.x_t
+  + b_f)`; its log-cumulative sum forms an additive decay bias `D_ij = c_i - c_j` on
+  the pre-softmax scores, so distant past is exponentially down-weighted. Built from
+  the existing differentiable primitives (sigmoid/log/cumsum/softmax) so the gate is
+  trainable. Distinct from the gated *linear* attention blocks (GLA/KDA): FoX biases
+  full quadratic softmax attention. Verified against the paper (R244); tests cover
+  the decay-bias math, causality, gradient flow, the forgetting property, and a short
+  training run.
+
 ### T649 — nGPT normalized-Transformer block (2026-07-15)
 - New `nn.NGPTBlock`: the normalized Transformer (Loshchilov et al., arXiv:2410.01131)
   that keeps every representation on the unit hypersphere instead of using LayerNorm.
