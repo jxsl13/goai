@@ -32,7 +32,7 @@ static cublasHandle_t gHandle = NULL;
 static float *gOne = NULL, *gZero = NULL; // device 1.0f/0.0f — cuBLAS DEVICE pointer mode (graph-capture-safe alpha/beta)
 static cudaStream_t gStream = NULL;
 static CUcontext gCtx = NULL; // runtime's primary context, retained for driver-API launches
-static CUfunction gGelu = NULL, gSilu = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gQgemv = NULL, gQgemv4 = NULL, gQgemv4k = NULL, gCvtF16 = NULL; // lazily nvrtc-compiled
+static CUfunction gGelu = NULL, gSilu = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gQgemv = NULL, gQgemv4 = NULL, gQgemv4k = NULL, gQgemv6k = NULL, gCvtF16 = NULL; // lazily nvrtc-compiled
 static CUfunction gRopeDpos = NULL, gAttnSoftmaxDpos = NULL, gAppendDpos = NULL; // device-position (graph-capturable) twins
 static CUfunction gGqaFlashPart = NULL, gGqaFlashMerge = NULL; // flash decode: GQA K/V-shared split-K partials + merge
 static CUfunction gGqaFlashPartF16 = NULL, gAppendDposF16 = NULL; // f16 KV-cache twins (u16 storage, f32 compute)
@@ -1183,6 +1183,80 @@ int cu_qmatmul_q4k(const void* dA, const void* dQ, void* dOut, int M, int K, int
         args[0] = &dA; args[1] = &dQ; args[2] = &dOut;
         args[3] = &M; args[4] = &K; args[5] = &N; args[6] = &beta;
         rc = (cuLaunchKernel(gQgemv4k, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_qmatmul_q6k: out[M,N] = a[M,K]·dequant(W), W = ggml Q6_K (§R99) stored per OUTPUT
+// row: K/256 super-blocks of 210 bytes (ql[128] low nibbles, qh[64] 2-bit highs 4/byte,
+// scales[16] int8 per 16-elem sub-block, f16 d at 208). Dequant y = d·sc·(q6−32), q6 =
+// ql-nibble | qh-2bits<<4, element quadrants l, l+32, l+64, l+96 per group of 128.
+// Warp-per-output GEMV like cu_qmatmul_q4k: lane g=lane>>4 picks the 128-group, each
+// lane covers two l positions × 4 quadrants = 8 elements/block. 0.8203 B/weight — the
+// native path for Q4_K_M's Q6_K minority (v/down on some layers + output head), vs
+// re-encoding them to Q8 (1.0625 B/w). K%256==0.
+int cu_qmatmul_q6k(const void* dA, const void* dQ, void* dOut, int M, int K, int N, float beta) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (!gQgemv6k && compile_kernel(
+                       "__device__ __forceinline__ float f16f(unsigned short h){\n"
+                       "  unsigned s = (h & 0x8000u) << 16;\n"
+                       "  float v = __uint_as_float((h & 0x7fffu) << 13) * __uint_as_float(0x77800000u);\n"
+                       "  return __uint_as_float(__float_as_uint(v) | s);\n"
+                       "}\n"
+                       "extern \"C\" __global__ void qmatmul_q6k(const float* a, const unsigned char* q, float* out, int M, int K, int N, float beta){\n"
+                       "  long warp = ((long)blockIdx.x*blockDim.x + threadIdx.x) >> 5;\n"
+                       "  int lane = threadIdx.x & 31;\n"
+                       "  if (warp >= (long)M*N) return;\n"
+                       "  int m = (int)(warp / N), n = (int)(warp % N);\n"
+                       "  const float* ar = a + (size_t)m*K;\n"
+                       "  int sbs = K >> 8;\n"
+                       "  const unsigned char* qr = q + (size_t)n*sbs*210;\n"
+                       "  float acc = 0.0f;\n"
+                       "  int g = lane >> 4, i = (lane & 15) * 2;\n"
+                       "  #pragma unroll 2\n"
+                       "  for (int w = 0; w < sbs; w++){\n"
+                       "    const unsigned char* blk = qr + (size_t)w*210;\n"
+                       "    const unsigned char* ql = blk + g*64;\n"
+                       "    const unsigned char* qh = blk + 128 + g*32;\n"
+                       "    const signed char* sc = (const signed char*)(blk + 192) + g*8;\n"
+                       "    float d = f16f(*(const unsigned short*)(blk + 208));\n"
+                       "    const float* ay = ar + w*256 + g*128;\n"
+                       "    int is = i >> 4;\n"                                        // i and i+1 share the sub-block
+                       "    float s0 = d*(float)sc[is],   s2 = d*(float)sc[is+2];\n"
+                       "    float s4 = d*(float)sc[is+4], s6 = d*(float)sc[is+6];\n"
+                       "    unsigned int b1 = *(const unsigned short*)(ql + i);\n"      // {ql[i], ql[i+1]} in one load
+                       "    unsigned int b2 = *(const unsigned short*)(ql + i + 32);\n"
+                       "    unsigned int hh = *(const unsigned short*)(qh + i);\n"
+                       "    float2 a1v = *(const float2*)(ay + i),      a2v = *(const float2*)(ay + i + 32);\n"
+                       "    float2 a3v = *(const float2*)(ay + i + 64), a4v = *(const float2*)(ay + i + 96);\n"
+                       "    #pragma unroll 2\n"
+                       "    for (int t = 0; t < 2; t++){\n"
+                       "      unsigned int lo = (b1 >> (8*t)) & 0xffu, hi = (b2 >> (8*t)) & 0xffu, h = (hh >> (8*t)) & 0xffu;\n"
+                       "      float q1 = (float)((int)((lo & 15u) | ((h & 3u) << 4)) - 32);\n"
+                       "      float q2 = (float)((int)((hi & 15u) | (((h >> 2) & 3u) << 4)) - 32);\n"
+                       "      float q3 = (float)((int)((lo >> 4) | (((h >> 4) & 3u) << 4)) - 32);\n"
+                       "      float q4 = (float)((int)((hi >> 4) | (((h >> 6) & 3u) << 4)) - 32);\n"
+                       "      float w1 = t ? a1v.y : a1v.x, w2 = t ? a2v.y : a2v.x;\n"
+                       "      float w3 = t ? a3v.y : a3v.x, w4 = t ? a4v.y : a4v.x;\n"
+                       "      acc += s0*q1*w1 + s2*q2*w2 + s4*q3*w3 + s6*q4*w4;\n"
+                       "    }\n"
+                       "  }\n"
+                       "  for (int o = 16; o > 0; o >>= 1){ acc += __shfl_down_sync(0xffffffff, acc, o); }\n"
+                       "  if (lane == 0){ out[warp] = beta*out[warp] + acc; }\n"
+                       "}\n",
+                       "qmatmul_q6k.cu", "qmatmul_q6k", &gQgemv6k) != 0) { rc = -2; goto done; }
+    {
+        long total = (long)M * N * 32;
+        int threads = 256, blocks = (int)((total + threads - 1) / threads); if (blocks < 1) blocks = 1;
+        void* args[7];
+        args[0] = &dA; args[1] = &dQ; args[2] = &dOut;
+        args[3] = &M; args[4] = &K; args[5] = &N; args[6] = &beta;
+        rc = (cuLaunchKernel(gQgemv6k, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 done:
     pthread_mutex_unlock(&gLock);

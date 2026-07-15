@@ -4,6 +4,17 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — native Q6_K GEMV: Q4_K_M files now load fully bit-native (worker linux-amd64, Tw54, 2026-07-15)
+- `cu_qmatmul_q6k` + `ResidentBQ6K`: warp-per-output GEMV over ggml's 210-byte Q6_K
+  super-blocks, golden vs the gguf dequant reference at maxRel 2.5e-6. `quantDirect`
+  now keeps a Q4_K_M file's Q6_K minority tensors (v/down on half the layers + the
+  output head) native instead of re-encoding to Q8 — zero requant loss, −23% VRAM on
+  those tensors (0.82 vs 1.06 B/w). Agreement gates unchanged (23/24 / 4/24 / 3/24).
+- Kernel lesson the A/B caught: the first version used per-byte ql/qh/scale loads and
+  was −6% despite reading 23% fewer bytes — GEMV cost is memory TRANSACTIONS, not
+  bytes. Widening to paired 16-bit loads + float2 activations made it speed-neutral
+  (same-tree A/B: 3B 92.0–92.8 vs 92.5–92.8, Mistral-7B 47.0 vs 47.4 tok/s).
+
 ### CUDA — f16 KV cache: half the KV VRAM, speed and quality measured flat (worker linux-amd64, Tw53, 2026-07-15)
 - `KVCacheF16` + `cu_append_dpos_f16` + `cu_gqa_flash_f16_dpos`: f16 (u16) K/V storage
   with f32 compute — tiles converted in shared memory, so the conversion is amortized
