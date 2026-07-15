@@ -43,8 +43,10 @@
 //     draft-model-free prompt-lookup (n-gram), Medusa multi-head drafting
 //     (trainable MedusaHeads over ForwardHidden + MedusaGenerate with typical
 //     acceptance; MedusaGenerateTree verifies a topK candidate tree in ONE
-//     masked forward; the GPU loop lives in llamagpu), and Jacobi parallel
-//     decoding (JacobiDecode / GPT.JacobiGenerate).
+//     masked forward; the GPU loop lives in llamagpu), EAGLE feature-level
+//     autoregressive drafting (EagleHead over ForwardHidden + lossless
+//     EagleGenerate), and Jacobi parallel decoding (JacobiDecode /
+//     GPT.JacobiGenerate).
 //   - Long-context inference: attention-sink streaming (StreamGenerate), bounded
 //     KV-cache eviction policies, SnapKV prompt compression, PyramidKV per-layer
 //     cache budgets, an 8-bit quantized KV-cache, and Self-Extend length
