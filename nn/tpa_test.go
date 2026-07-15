@@ -366,6 +366,170 @@ func TestTPATrainsE2E(t *testing.T) {
 	}
 }
 
+// tpaRow returns row t of x[T,d] as a fresh [1,d] tensor — one decode step's
+// input.
+func tpaRow(x *tensor.Tensor, t int) *tensor.Tensor {
+	d := x.Shape()[1]
+	r := tensor.New(x.Dtype(), tensor.Shape{1, d})
+	for j := range d {
+		r.SetF64(x.AtF64(t, j), 0, j)
+	}
+	return r
+}
+
+// §V16 DECODE≡FORWARD anchor: feeding tokens one at a time through DecodeStep
+// (growing the factor cache, RoPE at each token's absolute position) reproduces
+// a single causal TPA.Forward over the whole [T,d] prefix to 1e-10 — the exact
+// property a KV-cache must have. RoPE + asymmetric ranks so a wrong position
+// offset or a factor-cache/reconstruction bug would break the match. Also pins
+// (a) cache size = compact FACTORS, (R_k+R_v)·(heads+dh)·T floats, NOT the full
+// heads·dh·T keys/values, and (b) determinism across two identical decodes.
+func TestTPADecodeStepEqualsForward(t *testing.T) {
+	// A genuinely compressing config: factors (R_k+R_v)·(heads+dh)=3·10=30/token
+	// sit below full K/V 2·heads·dh=48/token — TPA's defining property.
+	const seq, d, heads, dh = 5, 8, 4, 6
+	const rq, rk, rv = 3, 2, 1
+	m, err := nn.NewTPA(tensor.F64, d, heads, dh, true, 41,
+		nn.WithTPARanks(rq, rk, rv), nn.WithTPARoPE(10000))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rng := rand.New(rand.NewPCG(43, 8))
+	x := randMat(rng, seq, d)
+
+	full, err := m.Forward(backend.NewContext(), x)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	decode := func() *tensor.Tensor {
+		ctx := backend.NewContext()
+		cache := m.NewCache()
+		out := tensor.New(tensor.F64, tensor.Shape{seq, d})
+		for tpos := range seq {
+			if got := cache.Len(); got != tpos {
+				t.Fatalf("cache.Len()=%d before step %d, want %d", got, tpos, tpos)
+			}
+			ot, err := m.DecodeStep(ctx, cache, tpaRow(x, tpos), tpos)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !ot.Shape().Equal(tensor.Shape{1, d}) {
+				t.Fatalf("step %d: out shape %v, want (1, %d)", tpos, ot.Shape(), d)
+			}
+			for j := range d {
+				out.SetF64(ot.AtF64(0, j), tpos, j)
+			}
+			// §V16(2) CACHE SIZE: the cache stores the compact FACTORS,
+			// (R_k+R_v)·(heads+dh) floats per position, NOT the full heads·dh K/V.
+			tpaFloats, _ := m.CacheFloatsPerToken()
+			pos := tpos + 1
+			if got := cache.Floats(); got != tpaFloats*pos {
+				t.Fatalf("cache.Floats()=%d at %d tokens, want %d (=%d/token)", got, pos, tpaFloats*pos, tpaFloats)
+			}
+			if cache.Floats() >= 2*heads*dh*pos {
+				t.Fatalf("cache stores %d floats ≥ full-K/V %d — factors not compact", cache.Floats(), 2*heads*dh*pos)
+			}
+			// factor tensors have exactly the rank·axis shapes, never heads·dh.
+			if cache.AK.Numel() != rk*heads*pos || cache.BK.Numel() != rk*dh*pos ||
+				cache.AV.Numel() != rv*heads*pos || cache.BV.Numel() != rv*dh*pos {
+				t.Fatalf("factor shapes wrong at %d tokens: AK=%v BK=%v AV=%v BV=%v",
+					pos, cache.AK.Shape(), cache.BK.Shape(), cache.AV.Shape(), cache.BV.Shape())
+			}
+		}
+		return out
+	}
+
+	got := decode()
+	tpaCmp(t, "decode vs forward", got, full, 1e-10)
+
+	// §V16(4) determinism: a second identical decode is bit-for-bit equal.
+	if again := decode(); !again.Shape().Equal(got.Shape()) {
+		t.Fatalf("determinism: shape drift %v vs %v", again.Shape(), got.Shape())
+	} else {
+		for i := range got.Numel() {
+			idx := tensor.Unravel(i, got.Shape())
+			if got.AtF64(idx...) != again.AtF64(idx...) {
+				t.Fatalf("non-deterministic decode at %v: %v vs %v", idx, got.AtF64(idx...), again.AtF64(idx...))
+			}
+		}
+	}
+}
+
+// §V16 RoPE-POSITION correctness, second angle: the RoPE-on decode differs from
+// an otherwise-identical RoPE-off decode (positions actually rotate the factors),
+// AND the position guard forbids decoding a token at anything but its true
+// absolute position (== current cache length) — so a caller cannot silently
+// rotate at the wrong position. The decode≡forward anchor (RoPE + causal, 1e-10)
+// is the primary positive proof that each step rotates at its own position.
+func TestTPADecodeStepRoPEPosition(t *testing.T) {
+	const seq, d, heads, dh = 4, 6, 2, 4
+	mk := func(rope bool) *nn.TPA {
+		opts := []nn.TPAOption{nn.WithTPARanks(2, 2, 2)}
+		if rope {
+			opts = append(opts, nn.WithTPARoPE(10000))
+		}
+		m, err := nn.NewTPA(tensor.F64, d, heads, dh, true, 51, opts...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return m
+	}
+	rng := rand.New(rand.NewPCG(53, 9))
+	x := randMat(rng, seq, d)
+
+	decode := func(m *nn.TPA) *tensor.Tensor {
+		ctx := backend.NewContext()
+		cache := m.NewCache()
+		out := tensor.New(tensor.F64, tensor.Shape{seq, d})
+		for tpos := range seq {
+			ot, err := m.DecodeStep(ctx, cache, tpaRow(x, tpos), tpos)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for j := range d {
+				out.SetF64(ot.AtF64(0, j), tpos, j)
+			}
+		}
+		return out
+	}
+	// Identical seed → identical weights; the RoPE flag is the only difference, so
+	// any divergence past position 0 (RoPE is identity at position 0) is purely the
+	// per-position rotation being applied.
+	withRoPE, without := decode(mk(true)), decode(mk(false))
+	var differs bool
+	for tpos := 1; tpos < seq; tpos++ {
+		for j := range d {
+			if math.Abs(withRoPE.AtF64(tpos, j)-without.AtF64(tpos, j)) > 1e-9 {
+				differs = true
+			}
+		}
+	}
+	if !differs {
+		t.Error("RoPE-on and RoPE-off decodes identical past position 0 — RoPE not applied")
+	}
+
+	// Position guard: a token may only be decoded at pos == current cache length.
+	m := mk(true)
+	ctx := backend.NewContext()
+	cache := m.NewCache()
+	if _, err := m.DecodeStep(ctx, cache, tpaRow(x, 0), 3); err == nil {
+		t.Error("DecodeStep at pos 3 with empty cache: want error")
+	}
+	if _, err := m.DecodeStep(ctx, cache, tpaRow(x, 0), -1); err == nil {
+		t.Error("DecodeStep at negative pos: want error")
+	}
+	if _, err := m.DecodeStep(ctx, cache, tensor.New(tensor.F64, tensor.Shape{2, d}), 0); err == nil {
+		t.Error("DecodeStep with 2-row input: want error")
+	}
+	if _, err := m.DecodeStep(ctx, cache, tpaRow(x, 0), 0); err != nil {
+		t.Fatalf("valid first step errored: %v", err)
+	}
+	if _, err := m.DecodeStep(ctx, cache, tpaRow(x, 1), 0); err == nil {
+		t.Error("DecodeStep at stale pos 0 with 1 token cached: want error")
+	}
+}
+
 // TPA (arXiv:2501.06425) factorizes each token's Q, K and V as small sums of
 // outer products, so a decode cache keeps only the compact K/V factors: here
 // an 8-head layer caches 288 floats per token versus 1024 for standard MHA —
@@ -381,4 +545,24 @@ func ExampleTPA() {
 	tpa, mha := m.CacheFloatsPerToken()
 	fmt.Printf("%v params=%d cache/token: TPA %d vs MHA %d\n", out.Shape(), len(m.Params()), tpa, mha)
 	// Output: (3, 512) params=7 cache/token: TPA 288 vs MHA 1024
+}
+
+// ExampleTPA_decode autoregressively decodes three tokens through a TPACache:
+// each DecodeStep appends only the compact K/V FACTORS (not full keys/values)
+// and attends the single query over the growing cache — so after 3 tokens the
+// cache holds CacheFloatsPerToken·3 floats, far below MHA's 2·heads·dh·3.
+func ExampleTPA_decode() {
+	m, _ := nn.NewTPA(tensor.F64, 32 /*d*/, 4 /*heads*/, 8 /*dh*/, true, 7,
+		nn.WithTPARanks(2, 2, 2), nn.WithTPARoPE(10000))
+	var cache *nn.TPACache = m.NewCache() // compact per-position K/V factors
+	ctx := backend.NewContext()
+	for pos := range 3 {
+		xt := tensor.New(tensor.F64, tensor.Shape{1, 32})
+		xt.SetF64(1, 0, pos) // arbitrary non-zero token embedding
+		out, _ := m.DecodeStep(ctx, cache, xt, pos)
+		_ = out // [1,32] next-layer output for this token
+	}
+	perTok, _ := m.CacheFloatsPerToken()
+	fmt.Printf("cached %d tokens, %d floats (=%d/token)\n", cache.Len(), cache.Floats(), perTok)
+	// Output: cached 3 tokens, 144 floats (=48/token)
 }

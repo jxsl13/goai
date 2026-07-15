@@ -147,28 +147,37 @@ func (m *TPA) exec(ctx *backend.Context, op backend.Op, attrs backend.Attrs, ins
 	return out[0], nil
 }
 
-// reconstruct projects x[T,d] to the rank-r head factors a=x·wa [T,r·heads]
-// and token factors b=x·wb [T,r·dh] (optionally RoPE-rotating b per position),
-// then contracts the outer-product sum (1/r)·Σ_r a_r⊗b_r to the head-concat
-// layout [T, heads·dh] that OpMHA expects (head h at columns h·dh..(h+1)·dh).
-func (m *TPA) reconstruct(ctx *backend.Context, x, wa, wb *tensor.Tensor, r int, applyRoPE bool) (*tensor.Tensor, error) {
-	t := x.Shape()[0]
-	a, err := m.exec(ctx, backend.OpMatMul, nil, x, wa) // [T, r·heads]
-	if err != nil {
-		return nil, err
+// project maps x[T,d] to the rank-r head factors a=x·wa [T,r·heads] and token
+// factors b=x·wb [T,r·dh], optionally RoPE-rotating b per position (starting at
+// posOffset — 0 for a full-sequence forward, the cache length for a decode step).
+// These compact factors are exactly what a TPACache stores.
+func (m *TPA) project(ctx *backend.Context, x, wa, wb *tensor.Tensor, r int, applyRoPE bool, posOffset int) (a, b *tensor.Tensor, err error) {
+	if a, err = m.exec(ctx, backend.OpMatMul, nil, x, wa); err != nil { // [T, r·heads]
+		return nil, nil, err
 	}
-	b, err := m.exec(ctx, backend.OpMatMul, nil, x, wb) // [T, r·dh]
-	if err != nil {
-		return nil, err
+	if b, err = m.exec(ctx, backend.OpMatMul, nil, x, wb); err != nil { // [T, r·dh]
+		return nil, nil, err
 	}
 	if applyRoPE {
-		// Rotate each rank's dh-slice at its row position: identical to rotating
-		// the reconstructed per-head rows, because RoPE acts on the dh axis only
-		// and so commutes with the outer-product sum (arXiv:2501.06425 §3.3).
-		if b, err = m.exec(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: m.ropeBase, Heads: r}, b); err != nil {
-			return nil, err
+		// Rotate each rank's dh-slice at its (posOffset-shifted) row position:
+		// identical to rotating the reconstructed per-head rows, because RoPE acts
+		// on the dh axis only and so commutes with the outer-product sum
+		// (arXiv:2501.06425 §3.3). Pre-rotating b here is what lets a decode cache
+		// keep the already-rotated b^K and reuse it with no re-rotation of the past.
+		if b, err = m.exec(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: m.ropeBase, Heads: r, PosOffset: posOffset}, b); err != nil {
+			return nil, nil, err
 		}
 	}
+	return a, b, nil
+}
+
+// contract folds the rank-r factors a[T,r·heads], b[T,r·dh] into the head-concat
+// layout [T, heads·dh] that OpMHA expects (head h at columns h·dh..(h+1)·dh):
+// the outer-product sum (1/r)·Σ_r a_r⊗b_r (paper eq. 6). This is the sole place
+// K/V are reconstructed from factors — the same code path for a full forward and
+// for a decode step's cached factors, so the two cannot drift apart.
+func (m *TPA) contract(ctx *backend.Context, a, b *tensor.Tensor, r int) (*tensor.Tensor, error) {
+	t := a.Shape()[0]
 	a3, err := m.exec(ctx, backend.OpReshape, backend.ReshapeAttrs{Shape: tensor.Shape{t, r, m.Heads}}, a)
 	if err != nil {
 		return nil, err
@@ -187,7 +196,18 @@ func (m *TPA) reconstruct(ctx *backend.Context, x, wa, wb *tensor.Tensor, r int,
 		return nil, err
 	}
 	// 1/r normalization (paper eq. 6) — a broadcast scalar multiply.
-	return m.exec(ctx, backend.OpMul, nil, flat, tensor.Full(x.Dtype(), tensor.Shape{1, 1}, 1/float64(r)))
+	return m.exec(ctx, backend.OpMul, nil, flat, tensor.Full(a.Dtype(), tensor.Shape{1, 1}, 1/float64(r)))
+}
+
+// reconstruct projects x[T,d] to the rank-r head/token factors (optionally
+// RoPE-rotating b per position) and contracts the outer-product sum
+// (1/r)·Σ_r a_r⊗b_r to the head-concat layout [T, heads·dh] that OpMHA expects.
+func (m *TPA) reconstruct(ctx *backend.Context, x, wa, wb *tensor.Tensor, r int, applyRoPE bool) (*tensor.Tensor, error) {
+	a, b, err := m.project(ctx, x, wa, wb, r, applyRoPE, 0)
+	if err != nil {
+		return nil, err
+	}
+	return m.contract(ctx, a, b, r)
 }
 
 // Forward computes TPA for x[T, d], returning [T, d]: factorize-and-reconstruct
@@ -233,4 +253,123 @@ func (m *TPA) Params() []*tensor.Tensor {
 // whenever (R_k+R_v)·(heads+dh) < 2·heads·dh.
 func (m *TPA) CacheFloatsPerToken() (tpa, mha int) {
 	return (m.RK + m.RV) * (m.Heads + m.Dh), 2 * m.Heads * m.Dh
+}
+
+// TPACache holds the compact per-position K/V FACTORS accumulated during
+// autoregressive TPA decoding — a^K[pos,R_k·heads], b^K[pos,R_k·dh] (already
+// RoPE-rotated at the position each token entered), a^V[pos,R_v·heads] and
+// b^V[pos,R_v·dh] — NOT the full per-head K/V. That is the whole point of TPA's
+// factorization: the cache grows by exactly CacheFloatsPerToken =
+// (R_k+R_v)·(heads+dh) floats per token instead of MHA's 2·heads·dh, and the
+// full keys/values are reconstructed on the fly each step (arXiv:2501.06425).
+// Every field is nil until the first DecodeStep. Build one with NewCache.
+type TPACache struct {
+	AK, BK *tensor.Tensor // key head/token factors; BK is pre-RoPE-rotated
+	AV, BV *tensor.Tensor // value head/token factors (no RoPE on values)
+}
+
+// NewCache returns an empty decode cache for this layer.
+func (m *TPA) NewCache() *TPACache { return &TPACache{} }
+
+// Len returns the number of tokens currently cached.
+func (c *TPACache) Len() int {
+	if c.AK == nil {
+		return 0
+	}
+	return c.AK.Shape()[0]
+}
+
+// Floats returns the total number of float elements the cache currently holds
+// across all four factor tensors — exactly CacheFloatsPerToken·Len() (the K/V
+// factors, never the full heads·dh keys/values).
+func (c *TPACache) Floats() int {
+	n := 0
+	for _, t := range []*tensor.Tensor{c.AK, c.BK, c.AV, c.BV} {
+		if t != nil {
+			n += t.Numel()
+		}
+	}
+	return n
+}
+
+// appendRows stacks the single new token's factor row(s) new[1,·] under the
+// accumulated cache prev[pos,·] → [pos+1,·]; prev==nil starts the cache.
+func (m *TPA) appendRows(ctx *backend.Context, prev, next *tensor.Tensor) (*tensor.Tensor, error) {
+	if prev == nil {
+		return next, nil
+	}
+	return m.exec(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 0}, prev, next)
+}
+
+// DecodeStep advances the TPA by one token using the factor cache and returns
+// this token's output x_out[1,d]. pos is the token's absolute position (==
+// cache.Len() before the call), the RoPE offset. It (1) projects x_t to the
+// query factors and reconstructs q_t[heads,dh]; (2) projects x_t to the new
+// token's K/V factors (b^K pre-rotated at pos) and APPENDS them to the cache;
+// (3) reconstructs the full K,V for all cached positions from the compact
+// factors; (4) runs single-query attention of q_t over the cached K,V (no
+// causal mask — the query is the last position); (5) applies W_O. Inference
+// only (no tape). Decoding a sequence one token at a time this way is
+// numerically identical to a single causal Forward over the whole prefix.
+//
+// Reconstructing K,V from the factors each step is the simplest correct form;
+// attending in factor space to avoid the reconstruction is a documented
+// follow-up.
+func (m *TPA) DecodeStep(ctx *backend.Context, cache *TPACache, xt *tensor.Tensor, pos int) (*tensor.Tensor, error) {
+	if xt.Ndim() != 2 || xt.Shape()[0] != 1 || xt.Shape()[1] != m.WAQ.Shape()[0] {
+		return nil, fmt.Errorf("nn: TPA DecodeStep expects x_t [1,%d], got %v", m.WAQ.Shape()[0], xt.Shape())
+	}
+	if pos < 0 {
+		return nil, fmt.Errorf("nn: TPA DecodeStep position %d must be ≥ 0", pos)
+	}
+	if pos != cache.Len() {
+		return nil, fmt.Errorf("nn: TPA DecodeStep position %d must equal cache length %d", pos, cache.Len())
+	}
+	// (1) query factors → q_t[1, heads·dh]; RoPE b^Q at this position.
+	aQ, bQ, err := m.project(ctx, xt, m.WAQ, m.WBQ, m.RQ, m.rope, pos)
+	if err != nil {
+		return nil, err
+	}
+	qt, err := m.contract(ctx, aQ, bQ, m.RQ)
+	if err != nil {
+		return nil, err
+	}
+	// (2) new-token K/V factors (b^K pre-rotated at pos, values un-rotated),
+	// appended to the growing cache — the only state kept between steps.
+	aKt, bKt, err := m.project(ctx, xt, m.WAK, m.WBK, m.RK, m.rope, pos)
+	if err != nil {
+		return nil, err
+	}
+	aVt, bVt, err := m.project(ctx, xt, m.WAV, m.WBV, m.RV, false, pos)
+	if err != nil {
+		return nil, err
+	}
+	if cache.AK, err = m.appendRows(ctx, cache.AK, aKt); err != nil {
+		return nil, err
+	}
+	if cache.BK, err = m.appendRows(ctx, cache.BK, bKt); err != nil {
+		return nil, err
+	}
+	if cache.AV, err = m.appendRows(ctx, cache.AV, aVt); err != nil {
+		return nil, err
+	}
+	if cache.BV, err = m.appendRows(ctx, cache.BV, bVt); err != nil {
+		return nil, err
+	}
+	// (3) reconstruct the full K,V[pos+1, heads·dh] from the cached factors.
+	k, err := m.contract(ctx, cache.AK, cache.BK, m.RK)
+	if err != nil {
+		return nil, err
+	}
+	v, err := m.contract(ctx, cache.AV, cache.BV, m.RV)
+	if err != nil {
+		return nil, err
+	}
+	// (4) single query attends over all cached keys → no causal mask.
+	attn, err := m.exec(ctx, backend.OpMHA, backend.AttnAttrs{Heads: m.Heads, Causal: false}, qt, k, v)
+	if err != nil {
+		return nil, err
+	}
+	// (5) output projection.
+	return m.exec(ctx, backend.OpMatMul, nil, attn, m.WO)
 }
