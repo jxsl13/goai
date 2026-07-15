@@ -245,7 +245,7 @@ func TestPublicAPIDocumentedWithExamples(t *testing.T) {
 		}
 		if d.IsDir() {
 			base := d.Name()
-			if base == ".git" || base == "testdata" || base == ".venv" || base == "docs" {
+			if base == ".git" || base == "testdata" || base == ".venv" || base == "docs" || base == ".claude" {
 				return filepath.SkipDir
 			}
 			return nil
@@ -495,7 +495,7 @@ func TestPackageDocsCarryLaymanAndFurtherReading(t *testing.T) {
 		}
 		if d.IsDir() {
 			base := d.Name()
-			if base == ".git" || base == "testdata" || base == ".venv" || base == "docs" {
+			if base == ".git" || base == "testdata" || base == ".venv" || base == "docs" || base == ".claude" {
 				return filepath.SkipDir
 			}
 			return nil
