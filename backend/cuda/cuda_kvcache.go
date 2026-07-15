@@ -79,6 +79,11 @@ func (c *KVCache) V() *DeviceF32 { return &DeviceF32{ptr: c.dV, rows: c.n, cols:
 // Len is the number of tokens currently cached.
 func (c *KVCache) Len() int { return c.n }
 
+// SetLen sets the logical length directly — used with AppendDpos, where the
+// device kernel writes at a device-side position and the host tracks length
+// separately (the fixed-size graph decode path).
+func (c *KVCache) SetLen(n int) { c.n = n }
+
 // Free releases the K/V buffers.
 func (c *KVCache) Free() {
 	if c.dK != nil {

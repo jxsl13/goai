@@ -32,6 +32,7 @@ static cublasHandle_t gHandle = NULL;
 static cudaStream_t gStream = NULL;
 static CUcontext gCtx = NULL; // runtime's primary context, retained for driver-API launches
 static CUfunction gGelu = NULL, gSilu = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gQgemv = NULL; // lazily nvrtc-compiled
+static CUfunction gRopeDpos = NULL, gAttnSoftmaxDpos = NULL, gAppendDpos = NULL; // device-position (graph-capturable) twins
 
 static float *gA = NULL, *gB = NULL, *gC = NULL;
 static size_t gACap = 0, gBCap = 0, gCCap = 0; // capacities in bytes
@@ -735,6 +736,124 @@ int cu_qmatmul_q8(const void* dA, const void* dQ, const void* dScales, void* dOu
         args[0] = &dA; args[1] = &dQ; args[2] = &dScales; args[3] = &dOut;
         args[4] = &M; args[5] = &K; args[6] = &N; args[7] = &nb; args[8] = &beta;
         rc = (cuLaunchKernel(gQgemv, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// ---- Device-position (graph-capturable) op twins. The decode graph must be
+// structurally constant across tokens, so the per-token position lives in a
+// device int (updated between graph replays via cu_set_i32, not a launch param).
+
+// cu_set_i32 writes one int to device buffer d (the shared decode position).
+int cu_set_i32(void* d, int val) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cudaMemcpyAsync(d, &val, sizeof(int), cudaMemcpyHostToDevice, gStream) != cudaSuccess) { rc = -3; goto done; }
+    rc = 0;
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_rope_f32_dpos: RoPE reading posOffset from device int *dPos (else identical
+// to cu_rope_f32) — so a captured decode graph rotates at the token's true
+// position without re-capture.
+int cu_rope_f32_dpos(void* x, const void* inv, int seq, int heads, int hd, const void* dPos, double posDiv) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (!gRopeDpos && compile_kernel(
+                          "extern \"C\" __global__ void rope_f32_dpos(float* x, const float* inv, int seq, int heads, int hd, const int* dPos, double posDiv){\n"
+                          "  int half = hd/2;\n"
+                          "  long total = (long)seq*heads*half;\n"
+                          "  long gid = (long)blockIdx.x*blockDim.x + threadIdx.x;\n"
+                          "  if (gid >= total) return;\n"
+                          "  int i = (int)(gid % half);\n"
+                          "  int h = (int)((gid / half) % heads);\n"
+                          "  int p = (int)(gid / ((long)half*heads));\n"
+                          "  double pos = (double)(*dPos + p) / posDiv;\n"
+                          "  double ang = pos * (double)inv[i];\n"
+                          "  double c = cos(ang), s = sin(ang);\n"
+                          "  float* xr = x + (size_t)p*heads*hd + (size_t)h*hd;\n"
+                          "  double qi = xr[i], qih = xr[i+half];\n"
+                          "  xr[i] = (float)(qi*c - qih*s);\n"
+                          "  xr[i+half] = (float)(qih*c + qi*s);\n"
+                          "}\n",
+                          "rope_dpos.cu", "rope_f32_dpos", &gRopeDpos) != 0) { rc = -2; goto done; }
+    {
+        long total = (long)seq * heads * (hd / 2);
+        int threads = 256, blocks = (int)((total + threads - 1) / threads); if (blocks < 1) blocks = 1;
+        void* args[7];
+        args[0] = &x; args[1] = &inv; args[2] = &seq; args[3] = &heads; args[4] = &hd; args[5] = &dPos; args[6] = &posDiv;
+        rc = (cuLaunchKernel(gRopeDpos, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_attn_softmax_dpos: fused scale+causal-mask+softmax with the mask offset read
+// from device int *dOff (else identical to cu_attn_softmax).
+int cu_attn_softmax_dpos(void* x, int rows, int cols, float scale, const void* dOff, int seqQ) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (!gAttnSoftmaxDpos && compile_kernel(
+                                "extern \"C\" __global__ void attn_softmax_dpos(float* x, int rows, int cols, float scale, const int* dOff, int seqQ){\n"
+                                "  int row=blockIdx.x; if(row>=rows) return;\n"
+                                "  int lim = (row % seqQ) + *dOff; if(lim>=cols) lim=cols-1;\n"
+                                "  extern __shared__ double sh[];\n"
+                                "  int t=threadIdx.x, nt=blockDim.x;\n"
+                                "  float* xr = x + (size_t)row*cols;\n"
+                                "  double m=-1e300;\n"
+                                "  for(int j=t;j<cols;j+=nt){ if(j<=lim){ double v=(double)xr[j]*scale; if(v>m)m=v; } }\n"
+                                "  sh[t]=m; __syncthreads();\n"
+                                "  for(int s=nt/2;s>0;s>>=1){ if(t<s && sh[t+s]>sh[t]) sh[t]=sh[t+s]; __syncthreads(); }\n"
+                                "  double rowmax=sh[0]; __syncthreads();\n"
+                                "  double local=0.0;\n"
+                                "  for(int j=t;j<cols;j+=nt){ if(j<=lim){ double e=exp((double)xr[j]*scale-rowmax); xr[j]=(float)e; local+=e; } else { xr[j]=0.0f; } }\n"
+                                "  sh[t]=local; __syncthreads();\n"
+                                "  for(int s=nt/2;s>0;s>>=1){ if(t<s) sh[t]+=sh[t+s]; __syncthreads(); }\n"
+                                "  double inv=1.0/sh[0];\n"
+                                "  for(int j=t;j<=lim;j+=nt){ xr[j]=(float)(xr[j]*inv); }\n"
+                                "}\n",
+                                "attn_softmax_dpos.cu", "attn_softmax_dpos", &gAttnSoftmaxDpos) != 0) { rc = -2; goto done; }
+    {
+        int threads = 256, blocks = rows; if (blocks < 1) blocks = 1;
+        size_t shmem = (size_t)threads * sizeof(double);
+        void* args[6];
+        args[0] = &x; args[1] = &rows; args[2] = &cols; args[3] = &scale; args[4] = &dOff; args[5] = &seqQ;
+        rc = (cuLaunchKernel(gAttnSoftmaxDpos, blocks, 1, 1, threads, 1, 1, shmem, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_append_dpos writes wkv floats from src into dst at row offset *dPos (device
+// int) — the KV-cache append with a device-side position (graph-capturable).
+int cu_append_dpos(void* dst, const void* src, const void* dPos, int wkv) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (!gAppendDpos && compile_kernel(
+                            "extern \"C\" __global__ void append_dpos(float* dst, const float* src, const int* dPos, int wkv){\n"
+                            "  int j = blockIdx.x*blockDim.x + threadIdx.x;\n"
+                            "  if (j >= wkv) return;\n"
+                            "  dst[(size_t)(*dPos)*wkv + j] = src[j];\n"
+                            "}\n",
+                            "append_dpos.cu", "append_dpos", &gAppendDpos) != 0) { rc = -2; goto done; }
+    {
+        int threads = 256, blocks = (wkv + threads - 1) / threads; if (blocks < 1) blocks = 1;
+        void* args[4];
+        args[0] = &dst; args[1] = &src; args[2] = &dPos; args[3] = &wkv;
+        rc = (cuLaunchKernel(gAppendDpos, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 done:
     pthread_mutex_unlock(&gLock);
