@@ -3,6 +3,7 @@
 package cuda_test
 
 import (
+	"runtime"
 	"testing"
 
 	"github.com/jxsl13/goai/backend/cuda"
@@ -32,6 +33,7 @@ type graphDecoder struct {
 	dgate, dup, scores     *cuda.DeviceF32
 	logits                 *cuda.DeviceF32
 	inv                    *cuda.DeviceF32 // persistent RoPE inv table (capture-safe, no per-call upload)
+	graph                  *cuda.CapturedGraph
 	heads, kv, dim, hidden int
 	ropeBase, eps          float64
 }
@@ -132,6 +134,87 @@ func (gd *graphDecoder) step(tb testing.TB, tok int32, pos int) *tensor.Tensor {
 	mustTB(tb, err)
 	return out
 }
+
+// capture records forwardBody into a CUDA graph; stepGraph replays it per token.
+func (gd *graphDecoder) capture(tb testing.TB) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	mustTB(tb, cuda.CaptureBegin())
+	gd.forwardBody(tb)
+	g, err := cuda.CaptureEnd()
+	mustTB(tb, err)
+	gd.graph = g
+}
+
+func (gd *graphDecoder) stepGraph(tb testing.TB, tok int32, pos int) *tensor.Tensor {
+	mustTB(tb, gd.pos.Set(pos))
+	mustTB(tb, gd.emb.EmbedInto([]int32{tok}, gd.dx))
+	mustTB(tb, gd.graph.Launch())
+	mustTB(tb, cuda.GraphSync())
+	out, err := gd.logits.ToHost()
+	mustTB(tb, err)
+	return out
+}
+
+// The CUDA-graph replay of the full decode must generate the SAME tokens as the
+// direct fixed-buffer decode — the capstone: launch-overhead-free decode.
+func TestCUDAGraphDecodeMatchesDirect(t *testing.T) {
+	m := loadTinyLlama(t)
+	prompt := []int32{1, 15043, 29892, 590, 1024, 338}
+	const gen = 6
+	run := func(useGraph bool) []int32 {
+		gd := buildGraphDecoder(t, m, 64)
+		defer gd.free()
+		var last *tensor.Tensor
+		for i, tk := range prompt {
+			last = gd.step(t, tk, i)
+		}
+		if useGraph {
+			gd.capture(t)
+		}
+		out := make([]int32, gen)
+		for i := 0; i < gen; i++ {
+			tok := int32(argmaxRow(last, 0))
+			out[i] = tok
+			if useGraph {
+				last = gd.stepGraph(t, tok, len(prompt)+i)
+			} else {
+				last = gd.step(t, tok, len(prompt)+i)
+			}
+		}
+		return out
+	}
+	directToks := run(false)
+	graphToks := run(true)
+	for i := range directToks {
+		if directToks[i] != graphToks[i] {
+			t.Fatalf("token %d: graph %d != direct %d (direct %v graph %v)", i, graphToks[i], directToks[i], directToks, graphToks)
+		}
+	}
+	t.Logf("GRAPH decode == direct decode: %v", graphToks)
+}
+
+// Graph-replay decode throughput — the capstone measurement.
+func benchGraphDecodeReplay(b *testing.B, prefill, decode int) {
+	m := loadTinyLlama(b)
+	gd := buildGraphDecoder(b, m, prefill+decode+2)
+	defer gd.free()
+	for p := 0; p < prefill; p++ {
+		gd.step(b, int32((p*131+1)%m.Config.Vocab), p)
+	}
+	gd.capture(b)
+	tok := int32(argmaxRow(gd.stepGraph(b, 0, prefill), 0))
+	b.ResetTimer()
+	for range b.N {
+		for d := 0; d < decode; d++ {
+			lg := gd.stepGraph(b, tok, prefill+1+d)
+			tok = int32(argmaxRow(lg, 0))
+		}
+	}
+	b.ReportMetric(float64(decode)*float64(b.N)/b.Elapsed().Seconds(), "tok/s")
+}
+
+func BenchmarkTinyLlamaDecodeGraph_p32(b *testing.B) { benchGraphDecodeReplay(b, 32, 64) }
 
 // The fixed-buffer / device-position / fixed-size-attention decode must generate
 // the SAME greedy tokens as the validated f32 KV-cache decode — proving the exact
