@@ -115,6 +115,7 @@ var typeExampleExempt = map[string]bool{
 	"nn.FoXOption":                  true, // functional-option type (shown via WithFoXEps)
 	"nn.HymbaOption":                true, // functional-option type (shown via WithHymbaMetaTokens)
 	"nn.GatedAttentionOption":       true, // functional-option type (shown via WithGatedAttentionHeadwiseGate)
+	"nn.BitLinearOption":            true, // functional-option type (shown via WithBitLinear8BitAct etc.)
 	"nn.MixtureOfRecursionsOption":  true, // functional-option type (shown via WithMoRCapacities)
 	"nn.RecursionBlock":             true, // interface; nn.Linear is the impl shown in ExampleMixtureOfRecursions
 	"nn.APOLLOOption":               true, // functional-option type (shown via WithAPOLLORank/WithAPOLLOMini)

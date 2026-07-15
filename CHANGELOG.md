@@ -4,6 +4,19 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### T655 — BitNet b1.58: ternary quantization-aware training (2026-07-15)
+- New `nn.BitLinear`: a drop-in linear layer that TRAINS with 1.58-bit ternary weights
+  (BitNet b1.58, Ma et al. 2024, arXiv:2402.17764). The forward pass uses ternary
+  weights γ·clamp(round(W/γ),−1,+1) with γ = mean(|W|) (absmean) and 8-bit per-token
+  activation quantization, while a full-precision "master" weight is kept and updated —
+  the straight-through estimator (reusing the existing OpStopGradient idiom, no new op)
+  passes gradients to the master as identity. Unlike the library's POST-training
+  quantizers (AWQ/GPTQ/HQQ/SmoothQuant, which compress an already-trained model), BitNet
+  trains the ternary model from scratch. Verified: the effective weight takes only the
+  three values {−γ,0,+γ}, the STE gradient matches its closed form, disabling
+  quantization reduces BitLinear exactly to `nn.Linear`, and a small ternary MLP trains
+  (loss 1.51→0.019). `BitNetBitsPerWeight()` reports log2(3)≈1.58.
+
 ### CUDA — Q4 sweep + fair Q4-vs-Q4 + first 7B: goai-Q4 beats llama.cpp-Q8 at every scale (worker linux-amd64, Tw40, 2026-07-15)
 - Extended the asymmetric-Q4 graph decode to every K%256-eligible model — Qwen2.5-1.5B/3B
   (QKV bias in-graph) and **Mistral-7B-Instruct-v0.2, the first production-size 7B on the
