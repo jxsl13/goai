@@ -771,6 +771,31 @@ hand-tuned implementation** on the same GPU + model — competitive. The remaini
 gap needs a better quantized kernel (Q4_K) or flash-style attention; prefill (less
 optimized) trails more because llama.cpp fuses + batches attention.
 
+### Unified llamagpu API vs the bespoke graph engine (worker linux-amd64)
+
+The bespoke engine above is a hand-tuned test harness. The public, backend-agnostic
+`llamagpu` decoder (one `Decoder` core shared by metal, vulkan and now CUDA — `Generate`,
+`Step`, and every sampler for free) drives the CUDA `Recorder` instead. What does that
+API uniformity cost in throughput? `TestCUDAUnifiedVsGraphDecodeThroughput` measures both
+on the **same** TinyLlama-1.1B Q8 weights in one quiet window:
+
+| CUDA decode path | tok/s | notes |
+|---|---:|---|
+| unified `llamagpu.NewQuantCUDA` (recorder, eager submit, no graph) | 44.4 | per-op launches + full-logit D2H + host argmax each token |
+| bespoke (fixed buffers + CUDA graph + on-device argmax) | 160.6 | one graph replay + device argmax per token |
+| **graph / unified** | **3.61×** | the launch-bound cost of the uniform API |
+
+The unified path is launch-bound — hundreds of un-collapsed kernel launches per token
+plus a per-token host round-trip (download the whole `[1, 32000]` logit vector, argmax on
+the CPU). The bespoke path collapses the launches into one replayed CUDA graph and picks
+the token on-device. This is consistent with the decode journey above: CUDA graph capture
+is the dominant decode lever (≈2×) and the per-token host round-trip is most of the rest.
+
+Takeaway: the uniform API buys correctness and the entire `Generate`/sampler surface for
+free at ≈0.28× of peak — a legitimate trade. Recovering peak means wiring graph capture
+into the shared `llamagpu` `Decoder` (a capture hook in `decoder.go`); the CUDA recorder
+already submits eagerly onto one stream, which is the capturable shape.
+
 ### T631 CPU-offload viability (ADR-0021 measurement gate, worker linux-amd64)
 
 To run a model that EXCEEDS device VRAM, T631 would offload the overflow layers to

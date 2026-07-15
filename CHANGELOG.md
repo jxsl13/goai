@@ -4,6 +4,19 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — unified llamagpu decode vs bespoke graph engine: throughput measured (worker linux-amd64, 2026-07-15)
+- `TestCUDAUnifiedVsGraphDecodeThroughput` measures both CUDA decode paths on the SAME
+  TinyLlama-1.1B Q8 weights in one quiet window: the unified `llamagpu.NewQuantCUDA`
+  path (recorder, eager per-op submit, no graph) at **44.4 tok/s** vs the bespoke engine
+  (fixed buffers + CUDA graph + on-device argmax) at **160.6 tok/s** — **graph is 3.61×**
+  the unified path.
+- The unified path is launch-bound: un-collapsed per-op kernel launches + a full-logit
+  `[1,V]` D2H + host argmax per token, vs one graph replay + device argmax. Confirms CUDA
+  graph capture is the dominant decode lever (~2×) and the per-token host round-trip is
+  most of the rest. The uniform public API (Generate + all samplers, free) costs ~0.28× of
+  peak — a legitimate trade; peak needs graph capture wired into the shared `Decoder`.
+  Documented in `docs/benchmarking.md`; worker sub-spec §PERF-UNIFIED.
+
 ### CUDA — quantized (Q8) inference through the unified llamagpu backend (adapter slice 2, worker linux-amd64, 2026-07-15)
 - `llamagpu.NewQuantCUDA(m *nlp.QuantLlama)` runs a quantized Llama on NVIDIA with every
   projection a resident Q8 weight, via the same batched `Decoder` core (Generate/Step +
