@@ -4,6 +4,15 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — unified public API validated on a real model (worker linux-amd64, 2026-07-15)
+- `TestCUDAUnifiedRealModelGenerate` drives real TinyLlama-1.1B (f32) + its SentencePiece
+  tokenizer through `llamagpu.NewCUDA` — the public backend-agnostic Decoder over the
+  cuda.Recorder — and asserts the greedy output is correct text: `"Paris, which is the
+  capital of France."` This exercises the whole f32 stack (embed, RMSNorm, fused-QKV
+  RoPEPair, GQA attention, SwiGLU, residuals, vocab head) at real 2048-dim / 22-layer
+  scale through the unified path (the earlier adapter tests used synthetic small models),
+  matching the bespoke demo — the public API a user calls is proven correct end-to-end.
+
 ### CUDA — unified llamagpu decode vs bespoke graph engine: throughput measured (worker linux-amd64, 2026-07-15)
 - `TestCUDAUnifiedVsGraphDecodeThroughput` measures both CUDA decode paths on the SAME
   TinyLlama-1.1B Q8 weights in one quiet window: the unified `llamagpu.NewQuantCUDA`
