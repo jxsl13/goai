@@ -144,6 +144,7 @@ var typeExampleExempt = map[string]bool{
 	"nn.SpinOption":                 true, // functional-option type (shown via WithSpinSeed)
 	"nn.MARSOption":                 true, // functional-option type (shown via WithMARSGamma etc.)
 	"nn.PSGDKronOption":             true, // functional-option type (shown via WithPSGDKron*)
+	"nn.SoftpickAttentionOption":    true, // functional-option type (shown via WithSoftpickCausal)
 	"autograd.CheckpointFunc":       true, // callback-signature type (shown via ExampleCheckpoint)
 	"nn.ScheduleFreeOption":         true, // functional-option type (shown via WithScheduleFree*)
 	"nn.DAdaptAdamOption":           true, // functional-option type (shown via WithDAdapt*)
