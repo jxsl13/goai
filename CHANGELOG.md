@@ -4,6 +4,15 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA/CPU hybrid split decode — T631 mechanism proof (worker linux-amd64, 2026-07-15)
+- `TestCUDAHybridSplitDecode`: proves a model can run SPLIT across GPU + CPU-SIMD.
+  The first N TinyLlama layers run device-resident on the RTX 3060, the rest are
+  OFFLOADED to the amd64 CPU backend, with a single GPU→host transfer of the hidden
+  state at the split. The hybrid predicts the SAME token as the all-GPU forward at
+  25% and 50% CPU offload — the mechanism T631 needs to run models that exceed VRAM.
+  Together with the cost measurement gates (f32 CPU ≈30×/layer, 1-2 layers viable),
+  T631 now has both the characterization and a validated mechanism. Worker sub-spec §PERF.
+
 ### CUDA inference — Qwen graph fast-path validated at both scales (worker linux-amd64/cuda, 2026-07-15)
 - `TestCUDAQwenFixedMatchesAlloc` now covers Qwen2.5-0.5B and 1.5B: both run on the
   full optimized decode (fixed buffers + device-pos + fixed-size attention + Q8 +
