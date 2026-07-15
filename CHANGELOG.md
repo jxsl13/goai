@@ -4,6 +4,31 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — unified serving path: batched f16 prefill seeds the Q4_K decoder, 19.4× prompt processing (worker linux-amd64, Tw47, 2026-07-15)
+- `seedForward` appends the f16 prefill's post-RoPE K/V rows into the Q4_K graph decoder's
+  KV caches (positions 0..P-1); greedy decode continues from position P. Replaces the
+  engine's token-by-token prompt processing: **533.5 ms → 27.5 ms (19.4×) at P=94** on
+  TinyLlama. The mechanism gate is a cache-content comparison — the f16-seeded K rows match
+  the decode path's own rows at rel L1 0.0087, i.e. exactly the f16-vs-Q4_K projection
+  precision delta, proving the handoff is position- and value-correct.
+- Test-design lessons recorded: literal-coherence gates fail on long greedy prose (a 1.1B
+  babbles identically in both paths); short-prompt speed gates mislead (P=6 shows 1.3×,
+  P=94 shows 19.4×); cache-content beats token-sequence comparison for handoff validation.
+
+### CUDA — f16 tensor-core prefill: 1.66× with argmax-identical output (worker linux-amd64, Tw44/Tw45, 2026-07-15)
+- Measured decision chain: (1) the Q4_K deinterleave experiment REGRESSED 4–8% (the ggml
+  144-byte block has perfect spatial locality) — lever (a3) closed with data; (2) a per-class
+  profile of the real TinyLlama prefill showed ffn-gemm 53.8% vs attention 13.8% — the
+  flash-attention hypothesis refuted (≤14% ceiling), and since the FFN GEMMs already run at
+  the cuBLAS-f32 ceiling, the prefill gap to llama.cpp is a PRECISION gap; (3) so the lever
+  built was `ResidentBF16` + `cu_matmul_f16w` (cublasGemmEx, f16 inputs / f32 accumulate,
+  Ampere tensor cores): **prefill 2476 → 4107 tok/s (1.66×), greedy argmax 128/128 identical
+  to the f32 path**. Gap to llama.cpp pp128 halves (0.26× → 0.49×). Decode stays on the
+  memory-bound Q4_K/Q8 GEMV path.
+- Trap documented: the cuBLAS handle runs in POINTER_MODE_DEVICE (graph-capture-safe), so
+  GemmEx alpha/beta must be resident device constants — host stack pointers yield SILENT
+  non-deterministic garbage with a success status; caught only by real-shape parity tests
+  (all prefill shapes + beta=1) against an f16-rounded host reference.
 ### T654 — Coconut: latent-space reasoning with a measurable value test (2026-07-15)
 - New `nlp.Coconut`: Chain of Continuous Thought (Hao et al. 2024, arXiv:2412.06769). The
   model reasons in LATENT space — the last hidden state is fed back as the next input

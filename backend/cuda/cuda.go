@@ -619,7 +619,7 @@ func GroupedQueryAttention(q, k, v *DeviceF32, qHeads, kvHeads int, causal bool)
 	if causal {
 		offset = 0
 	}
-	return gqaCore(q, k, v, qHeads, kvHeads, hd, offset)
+	return gqaCore(q, k, v, qHeads, kvHeads, hd, offset, false)
 }
 
 // GroupedQueryAttentionKV is the KV-cache decode form of GroupedQueryAttention:
@@ -644,20 +644,48 @@ func GroupedQueryAttentionKV(q, k, v *DeviceF32, qHeads, kvHeads int) (*DeviceF3
 	if k.cols != wkv || v.rows != seqKV || v.cols != wkv {
 		return nil, fmt.Errorf("cuda: GQA-KV k/v must be [%d,%d], got k%v v%v", seqKV, wkv, k.shape(), v.shape())
 	}
-	return gqaCore(q, k, v, qHeads, kvHeads, hd, seqKV-seqQ)
+	return gqaCore(q, k, v, qHeads, kvHeads, hd, seqKV-seqQ, false)
+}
+
+// GroupedQueryAttentionTF32 is GroupedQueryAttention with the batched QKᵀ and ·V GEMMs
+// on TF32 tensor cores (~1e-3 rel per op) — the opt-in PREFILL variant: attention is
+// 13.8% of prefill (PERF-PREFILL-PROFILE) and compute-bound there, while decode parity
+// paths keep strict f32 (the KV-attention gates assert 1e-4 abs).
+func GroupedQueryAttentionTF32(q, k, v *DeviceF32, qHeads, kvHeads int, causal bool) (*DeviceF32, error) {
+	if q.ptr == nil || k.ptr == nil || v.ptr == nil {
+		return nil, fmt.Errorf("cuda: GQA on a freed handle")
+	}
+	seq, wq := q.rows, q.cols
+	if qHeads <= 0 || kvHeads <= 0 || qHeads%kvHeads != 0 || wq%qHeads != 0 {
+		return nil, fmt.Errorf("cuda: GQA bad head config q=%d kv=%d width=%d", qHeads, kvHeads, wq)
+	}
+	hd := wq / qHeads
+	wkv := kvHeads * hd
+	if k.rows != seq || k.cols != wkv || v.rows != seq || v.cols != wkv {
+		return nil, fmt.Errorf("cuda: GQA k/v must be [%d,%d], got k%v v%v", seq, wkv, k.shape(), v.shape())
+	}
+	offset := seq
+	if causal {
+		offset = 0
+	}
+	return gqaCore(q, k, v, qHeads, kvHeads, hd, offset, true)
 }
 
 // gqaCore runs the batched QKᵀ → fused scale/causal-mask/softmax → ·V pipeline
 // for q [seqQ,·] against k/v [seqKV,·]. offset is passed to the mask: key j is
 // kept for query row i when j ≤ i+offset (offset≥seqKV disables masking).
-func gqaCore(q, k, v *DeviceF32, qHeads, kvHeads, hd, offset int) (*DeviceF32, error) {
+func gqaCore(q, k, v *DeviceF32, qHeads, kvHeads, hd, offset int, tf32 bool) (*DeviceF32, error) {
 	seqQ, seqKV, wq := q.rows, k.rows, q.cols
 	scores := C.cu_alloc_f32(C.int(qHeads * seqQ * seqKV))
 	if scores == nil {
 		return nil, fmt.Errorf("cuda: GQA scores alloc failed")
 	}
 	defer C.cu_free_f32(scores)
-	if rc := C.cu_gqa_scores(q.ptr, k.ptr, scores, C.int(seqQ), C.int(seqKV), C.int(qHeads), C.int(kvHeads), C.int(hd)); rc != 0 {
+	ctf := C.int(0)
+	if tf32 {
+		ctf = 1
+	}
+	if rc := C.cu_gqa_scores(q.ptr, k.ptr, scores, C.int(seqQ), C.int(seqKV), C.int(qHeads), C.int(kvHeads), C.int(hd), ctf); rc != 0 {
 		return nil, fmt.Errorf("cuda: GQA scores failed (code %d)", int(rc))
 	}
 	// One fused kernel: scale (1/√hd) + causal mask (offset) + stable softmax.
@@ -668,7 +696,7 @@ func gqaCore(q, k, v *DeviceF32, qHeads, kvHeads, hd, offset int) (*DeviceF32, e
 	if out == nil {
 		return nil, fmt.Errorf("cuda: GQA out alloc failed")
 	}
-	if rc := C.cu_gqa_out(scores, v.ptr, out, C.int(seqQ), C.int(seqKV), C.int(qHeads), C.int(kvHeads), C.int(hd)); rc != 0 {
+	if rc := C.cu_gqa_out(scores, v.ptr, out, C.int(seqQ), C.int(seqKV), C.int(qHeads), C.int(kvHeads), C.int(hd), ctf); rc != 0 {
 		C.cu_free_f32(out)
 		return nil, fmt.Errorf("cuda: GQA out failed (code %d)", int(rc))
 	}

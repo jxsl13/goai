@@ -64,6 +64,13 @@ int cu_qmatmul_q4(const void* dA, const void* dQ, const void* dScales, const voi
 // q[N, K/256 * 144] (144-byte blocks: f16 d + f16 dmin + 12B packed 6-bit scales/mins + 128B
 // nibbles), dequant y = d*sc6*nibble - dmin*min6 per 32-sub-block. K%256==0. DECODE-ONLY (GEMV).
 int cu_qmatmul_q4k(const void* dA, const void* dQ, void* dOut, int M, int K, int N, float beta);
+// cu_upload_f16: upload host f32, convert to a device f16 (u16) buffer of n elements
+// (the f32 staging buffer is freed). For resident prefill weights (tensor-core GEMM).
+void* cu_upload_f16(const float* src, long n);
+// cu_matmul_f16w: dC[M,N] (f32) = dA32[M,K] (f32, converted to f16 in a stream-ordered
+// scratch) x dW16[K,N] (resident f16), cublasGemmEx f16 inputs / f32 accumulate —
+// the Ampere tensor-core path (~2x the Sgemm rate). beta in {0,1} (1 = residual fuse).
+int cu_matmul_f16w(const void* dA32, const void* dW16, void* dC32, int M, int K, int N, float beta);
 // cu_copy_rows: device→device copy nElems floats from src to dst+dstOffset (KV-cache append).
 int cu_copy_rows(void* dst, const void* src, int dstOffset, int nElems);
 void* cu_upload_i32(const int* src, int n);
@@ -97,8 +104,8 @@ int cu_mha_out(const void* dScores, const void* dV, void* dOut, int seq, int hea
 // Pointer-array batched Sgemm; Q is [seqQ,WQ], K/V are [seqKV,WKV], scores are
 // [qHeads, seqQ, seqKV]. Full prefill passes seqQ==seqKV; a KV-cache decode step
 // passes seqQ new query rows against seqKV cached keys/values.
-int cu_gqa_scores(const void* dQ, const void* dK, void* dScores, int seqQ, int seqKV, int qHeads, int kvHeads, int hd);
-int cu_gqa_out(const void* dScores, const void* dV, void* dOut, int seqQ, int seqKV, int qHeads, int kvHeads, int hd);
+int cu_gqa_scores(const void* dQ, const void* dK, void* dScores, int seqQ, int seqKV, int qHeads, int kvHeads, int hd, int tf32);
+int cu_gqa_out(const void* dScores, const void* dV, void* dOut, int seqQ, int seqKV, int qHeads, int kvHeads, int hd, int tf32);
 
 // On-device elementwise op (§V14 Phase-2, breadth beyond matmul). The kernel is
 // compiled at runtime from CUDA-C source via nvrtc (no nvcc needed) and launched

@@ -190,7 +190,7 @@ func (rec *Recorder) MHA(q, k, v, o *DeviceF32, sq, sk, dm, heads, kvHeads, dk, 
 	if err := rec.ensureScores(heads * sq * sk); err != nil {
 		return err
 	}
-	if rc := C.cu_gqa_scores(q.ptr, k.ptr, rec.scores, C.int(sq), C.int(sk), C.int(heads), C.int(kvHeads), C.int(dk)); rc != 0 {
+	if rc := C.cu_gqa_scores(q.ptr, k.ptr, rec.scores, C.int(sq), C.int(sk), C.int(heads), C.int(kvHeads), C.int(dk), 0); rc != 0 {
 		return fmt.Errorf("cuda: rec MHA scores failed (code %d)", int(rc))
 	}
 	// Causal: query row i (global position sk-sq+i) attends to key j ≤ i+(sk-sq).
@@ -202,7 +202,7 @@ func (rec *Recorder) MHA(q, k, v, o *DeviceF32, sq, sk, dm, heads, kvHeads, dk, 
 	if rc := C.cu_attn_softmax(rec.scores, C.int(heads*sq), C.int(sk), C.float(scale), C.int(offset), C.int(sq)); rc != 0 {
 		return fmt.Errorf("cuda: rec MHA softmax failed (code %d)", int(rc))
 	}
-	if rc := C.cu_gqa_out(rec.scores, v.ptr, o.ptr, C.int(sq), C.int(sk), C.int(heads), C.int(kvHeads), C.int(dk)); rc != 0 {
+	if rc := C.cu_gqa_out(rec.scores, v.ptr, o.ptr, C.int(sq), C.int(sk), C.int(heads), C.int(kvHeads), C.int(dk), 0); rc != 0 {
 		return fmt.Errorf("cuda: rec MHA out failed (code %d)", int(rc))
 	}
 	return nil

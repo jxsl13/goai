@@ -265,13 +265,13 @@ func GroupedQueryAttentionKVDposInto(q, k, v *DeviceF32, qHeads, kvHeads int, of
 	seqQ, wq := q.rows, q.cols
 	hd := wq / qHeads
 	seqKV := k.rows
-	if rc := C.cu_gqa_scores(q.ptr, k.ptr, scores.ptr, C.int(seqQ), C.int(seqKV), C.int(qHeads), C.int(kvHeads), C.int(hd)); rc != 0 {
+	if rc := C.cu_gqa_scores(q.ptr, k.ptr, scores.ptr, C.int(seqQ), C.int(seqKV), C.int(qHeads), C.int(kvHeads), C.int(hd), 0); rc != 0 {
 		return fmt.Errorf("cuda: GQA-dpos-into scores failed (code %d)", int(rc))
 	}
 	if rc := C.cu_attn_softmax_dpos(scores.ptr, C.int(qHeads*seqQ), C.int(seqKV), C.float(1/math.Sqrt(float64(hd))), off.ptr, C.int(seqQ)); rc != 0 {
 		return fmt.Errorf("cuda: GQA-dpos-into softmax failed (code %d)", int(rc))
 	}
-	if rc := C.cu_gqa_out(scores.ptr, v.ptr, out.ptr, C.int(seqQ), C.int(seqKV), C.int(qHeads), C.int(kvHeads), C.int(hd)); rc != 0 {
+	if rc := C.cu_gqa_out(scores.ptr, v.ptr, out.ptr, C.int(seqQ), C.int(seqKV), C.int(qHeads), C.int(kvHeads), C.int(hd), 0); rc != 0 {
 		return fmt.Errorf("cuda: GQA-dpos-into out failed (code %d)", int(rc))
 	}
 	return nil
