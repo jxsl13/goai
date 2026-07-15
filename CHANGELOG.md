@@ -4,6 +4,16 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — general backend gains RMSNorm/LayerNorm/RoPE (worker linux-amd64, 2026-07-15)
+- Extends the general CUDA backend (after SiLU/GELU/Add/Mul/Softmax) with `OpRMSNorm`,
+  `OpLayerNorm` and `OpRoPE` on the GPU (F32). With `OpMatMul` these cover almost every op
+  in a transformer layer, so `backend.Execute(cudaCtx, …)` now runs a Llama/GPT block's
+  norm + projection + rotary + activation ops on-device generically (attention `OpMHA` is
+  the remaining piece). RoPE carries PI/YaRN scaling via `backend.RoPEFreqs`; XPos, non-2D
+  and non-F32 fall back to the reference, as do mismatched gamma/beta shapes — so the
+  kernels never change a result. Validated: `TestCUDAGeneralOps` now cross-checks all eight
+  ops against the reference within f32 tolerance.
+
 ### CUDA — fuller general backend: SiLU/GELU/Add/Mul/Softmax kernels (worker linux-amd64, 2026-07-15)
 - `backend.Get(CUDA)` previously implemented only `OpMatMul` as a GPU kernel — every other
   op fell back to the Pure-Go reference. It now also runs `OpSiLU`, `OpGELU`, `OpAdd`,

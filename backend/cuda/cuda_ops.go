@@ -113,6 +113,101 @@ func mulF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*
 	return refFallback(ctx, backend.OpMul, in, attrs)
 }
 
+func normEps(attrs backend.Attrs) float32 {
+	if na, ok := attrs.(backend.NormAttrs); ok {
+		return float32(na.WithDefaults().Eps)
+	}
+	return float32(backend.NormAttrs{}.WithDefaults().Eps)
+}
+
+// deviceNorm uploads x (+ gamma, and beta for LayerNorm), runs the device norm over the
+// last axis, and downloads. gamma/beta must be [d] where d is x's last dim.
+func deviceNorm(x, gamma, beta *tensor.Tensor, eps float32) (*tensor.Tensor, bool) {
+	xc := x.Contiguous()
+	nd := xc.Ndim()
+	if nd < 1 {
+		return nil, false
+	}
+	d := xc.Shape()[nd-1]
+	if d == 0 || gamma.Ndim() != 1 || gamma.Shape()[0] != d {
+		return nil, false
+	}
+	if beta != nil && (beta.Ndim() != 1 || beta.Shape()[0] != d) {
+		return nil, false
+	}
+	rows := xc.Numel() / d
+	xs := xc.Storage().F32()
+	gs := gamma.Cast(tensor.F32).Contiguous().Storage().F32()
+	dx := C.cu_upload_f32((*C.float)(&xs[0]), C.int(len(xs)))
+	if dx == nil {
+		return nil, false
+	}
+	defer C.cu_free_f32(dx)
+	dout := C.cu_alloc_f32(C.int(len(xs)))
+	if dout == nil {
+		return nil, false
+	}
+	defer C.cu_free_f32(dout)
+	dg := C.cu_upload_f32((*C.float)(&gs[0]), C.int(len(gs)))
+	if dg == nil {
+		return nil, false
+	}
+	defer C.cu_free_f32(dg)
+	if beta != nil {
+		bs := beta.Cast(tensor.F32).Contiguous().Storage().F32()
+		db := C.cu_upload_f32((*C.float)(&bs[0]), C.int(len(bs)))
+		if db == nil {
+			return nil, false
+		}
+		defer C.cu_free_f32(db)
+		if C.cu_layernorm_f32(dx, dout, dg, db, C.int(rows), C.int(d), C.float(eps)) != 0 {
+			return nil, false
+		}
+	} else if C.cu_rmsnorm_f32(dx, dout, dg, C.int(rows), C.int(d), C.float(eps)) != 0 {
+		return nil, false
+	}
+	out := tensor.New(tensor.F32, xc.Shape())
+	if C.cu_download_f32(dout, (*C.float)(&out.Storage().F32()[0]), C.int(len(xs))) != 0 {
+		return nil, false
+	}
+	return out, true
+}
+
+func rmsnormF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
+	if len(in) == 2 && in[0].Dtype() == tensor.F32 && in[1].Dtype() == tensor.F32 {
+		if out, ok := deviceNorm(in[0], in[1], nil, normEps(attrs)); ok {
+			return []*tensor.Tensor{out}, nil
+		}
+	}
+	return refFallback(ctx, backend.OpRMSNorm, in, attrs)
+}
+
+func layernormF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
+	if len(in) == 3 && in[0].Dtype() == tensor.F32 && in[1].Dtype() == tensor.F32 && in[2].Dtype() == tensor.F32 {
+		if out, ok := deviceNorm(in[0], in[1], in[2], normEps(attrs)); ok {
+			return []*tensor.Tensor{out}, nil
+		}
+	}
+	return refFallback(ctx, backend.OpLayerNorm, in, attrs)
+}
+
+// ropeF32 runs rotary embeddings on the GPU for the 2D non-XPos case (PI/YaRN scaling is
+// carried by backend.RoPEFreqs); XPos, non-2D and non-F32 fall back to the reference.
+func ropeF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
+	ra, ok := attrs.(backend.RoPEAttrs)
+	if len(in) == 1 && in[0].Dtype() == tensor.F32 && in[0].Ndim() == 2 && ok && !ra.XPos {
+		if d, err := UploadF32(in[0]); err == nil {
+			defer d.Free()
+			if d.RoPE(ra) == nil {
+				if out, e := d.ToHost(); e == nil {
+					return []*tensor.Tensor{out}, nil
+				}
+			}
+		}
+	}
+	return refFallback(ctx, backend.OpRoPE, in, attrs)
+}
+
 func softmaxF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
 	if len(in) == 1 && in[0].Dtype() == tensor.F32 && in[0].Ndim() >= 1 {
 		x := in[0].Contiguous()
