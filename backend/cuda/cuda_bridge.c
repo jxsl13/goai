@@ -31,7 +31,7 @@ static pthread_mutex_t gLock = PTHREAD_MUTEX_INITIALIZER;
 static cublasHandle_t gHandle = NULL;
 static cudaStream_t gStream = NULL;
 static CUcontext gCtx = NULL; // runtime's primary context, retained for driver-API launches
-static CUfunction gGelu = NULL, gSilu = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL; // lazily nvrtc-compiled
+static CUfunction gGelu = NULL, gSilu = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL; // lazily nvrtc-compiled
 
 static float *gA = NULL, *gB = NULL, *gC = NULL;
 static size_t gACap = 0, gBCap = 0, gCCap = 0; // capacities in bytes
@@ -288,6 +288,55 @@ int cu_softmax_f32(void* x, int rows, int cols) {
         args[1] = &rows;
         args[2] = &cols;
         rc = (cuLaunchKernel(gSoftmax, blocks, 1, 1, threads, 1, 1, shmem, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_attn_softmax: fused scale + causal-mask + stable softmax over attention
+// scores[heads·seqQ, seqKV] (one block per query row). Folds what were three
+// launches (cu_causal_scale_mh + cu_softmax_f32) into one on the attention hot
+// path. Row r belongs to query position i = r % seqQ within its head; key j is
+// masked when j > i + offset (offset = seqKV−seqQ for a KV window; offset ≥ seqKV
+// disables masking). Valid scores are ×scale then softmaxed (double sum, §V10);
+// masked entries become 0.
+int cu_attn_softmax(void* x, int rows, int cols, float scale, int offset, int seqQ) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (!gAttnSoftmax && compile_kernel(
+                             "extern \"C\" __global__ void attn_softmax(float* x, int rows, int cols, float scale, int offset, int seqQ){\n"
+                             "  int row=blockIdx.x; if(row>=rows) return;\n"
+                             "  int lim = (row % seqQ) + offset; if(lim>=cols) lim=cols-1;\n"
+                             "  extern __shared__ double sh[];\n"
+                             "  int t=threadIdx.x, nt=blockDim.x;\n"
+                             "  float* xr = x + (size_t)row*cols;\n"
+                             "  double m=-1e300;\n"
+                             "  for(int j=t;j<cols;j+=nt){ if(j<=lim){ double v=(double)xr[j]*scale; if(v>m)m=v; } }\n"
+                             "  sh[t]=m; __syncthreads();\n"
+                             "  for(int s=nt/2;s>0;s>>=1){ if(t<s && sh[t+s]>sh[t]) sh[t]=sh[t+s]; __syncthreads(); }\n"
+                             "  double rowmax=sh[0]; __syncthreads();\n"
+                             "  double local=0.0;\n"
+                             "  for(int j=t;j<cols;j+=nt){ if(j<=lim){ double e=exp((double)xr[j]*scale-rowmax); xr[j]=(float)e; local+=e; } else { xr[j]=0.0f; } }\n"
+                             "  sh[t]=local; __syncthreads();\n"
+                             "  for(int s=nt/2;s>0;s>>=1){ if(t<s) sh[t]+=sh[t+s]; __syncthreads(); }\n"
+                             "  double inv=1.0/sh[0];\n"
+                             "  for(int j=t;j<=lim;j+=nt){ xr[j]=(float)(xr[j]*inv); }\n"
+                             "}\n",
+                             "attn_softmax.cu", "attn_softmax", &gAttnSoftmax) != 0) { rc = -2; goto done; }
+    {
+        int threads = 256, blocks = rows; if (blocks < 1) blocks = 1;
+        size_t shmem = (size_t)threads * sizeof(double);
+        void* args[6];
+        args[0] = &x;
+        args[1] = &rows;
+        args[2] = &cols;
+        args[3] = &scale;
+        args[4] = &offset;
+        args[5] = &seqQ;
+        rc = (cuLaunchKernel(gAttnSoftmax, blocks, 1, 1, threads, 1, 1, shmem, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 done:
     pthread_mutex_unlock(&gLock);

@@ -54,6 +54,9 @@ int cu_matmul_f32_ddd_bt(const void* dA, const void* dB, void* dC, int M, int K,
 // scale+causal-mask; cu_mha_out = batched scores·V into [seqQ, heads*hd].
 int cu_mha_scores(const void* dQ, const void* dK, void* dScores, int seq, int heads, int hd);
 int cu_causal_scale_mh(void* x, int heads, int seqQ, int seqKV, float scale, int offset);
+// cu_attn_softmax: fused scale + causal-mask + softmax over scores[rows, cols]
+// (rows = heads·seqQ, cols = seqKV) — one launch replacing scale-mask + softmax.
+int cu_attn_softmax(void* x, int rows, int cols, float scale, int offset, int seqQ);
 int cu_mha_out(const void* dScores, const void* dV, void* dOut, int seq, int heads, int hd);
 
 // GQA: qHeads query heads share kvHeads kv heads (query h → kv head h/group).
