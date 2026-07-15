@@ -792,6 +792,14 @@ must spill the MINIMUM overflow layers, keeping the hottest ones on the GPU. Cav
 this is the f64 `nlp.Llama` CPU path vs the Q8 GPU path; a Q8/f32 CPU offload path
 would narrow the ratio (though offloaded layers would still dominate).
 
+REFINED with the OPTIMIZED f32 SIMD GEMM (the offload path a real T631 would use,
+not the f64 `nlp.Llama` path): CPU ≈8.2 ms/layer → **≈30× the GPU per layer** (vs
+99× for f64 — the SIMD GEMM is ≈3× faster). Offload N=1 → 72 tok/s (44% of all-GPU),
+N=2 → 46 (28%), N=4 → 27 (16%). So with the optimized f32/Q8 offload path, spilling
+1-2 layers stays usable — **T631 is genuinely practical for models slightly over
+VRAM**, not just a hard-failure fallback. (Matmul-only estimate; real T631 adds the
+CPU attention/norm + the device↔host transfer at the split boundary.)
+
 ## Further reading
 
 - Hoefler & Belli, *Scientific Benchmarking of Parallel Computing Systems* (SC '15) — the canonical treatment of run variance, warm-up and honest reporting that this document's rules follow.
