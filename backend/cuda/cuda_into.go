@@ -102,6 +102,45 @@ func (d *DeviceF32) Copy2D(dstOff, dstStride int, src *DeviceF32, srcOff, srcStr
 	return nil
 }
 
+// RoPEAtBand rotates `heads` heads (hd wide each) that start at float-element
+// column `off` inside rows of `stride` floats, in place, at position posOffset —
+// the strided-band RoPE the llamagpu recorder's RoPEAt needs for the fused-QKV
+// path (rotate the q or k band of a single [seq,stride] buffer without copying it
+// out). inv is a resident [hd/2] table from BuildRoPEInv. posDiv==0 ⇒ 1.
+func (d *DeviceF32) RoPEAtBand(inv *DeviceF32, off, heads, hd, posOffset int, posDiv float64, stride int) error {
+	if d.ptr == nil || inv.ptr == nil {
+		return fmt.Errorf("cuda: RoPEAtBand on a freed handle")
+	}
+	if heads < 1 || hd < 2 || stride < heads*hd {
+		return fmt.Errorf("cuda: RoPEAtBand bad geometry heads=%d hd=%d stride=%d", heads, hd, stride)
+	}
+	if off < 0 || off+heads*hd > stride {
+		return fmt.Errorf("cuda: RoPEAtBand band [%d,+%d) overflows stride %d", off, heads*hd, stride)
+	}
+	if posDiv == 0 {
+		posDiv = 1
+	}
+	if rc := C.cu_rope_f32_band(d.ptr, inv.ptr, C.int(d.rows), C.int(stride), C.int(off), C.int(heads), C.int(hd), C.int(posOffset), C.double(posDiv)); rc != 0 {
+		return fmt.Errorf("cuda: RoPEAtBand failed (code %d)", int(rc))
+	}
+	return nil
+}
+
+// RoPEPairBand rotates the q band (headsQ heads at column offQ) AND the k band
+// (headsK heads at offK) of a single fused [seq,stride] QKV buffer, in place — the
+// llamagpu recorder's RoPEPair. Both bands share the same inv table, head dim hd,
+// and position, so this is two RoPEAtBand launches with no host round-trip; the v
+// band (past offK+headsK·hd) is left untouched.
+func (d *DeviceF32) RoPEPairBand(inv *DeviceF32, stride, headsQ, offQ, headsK, offK, hd, posOffset int, posDiv float64) error {
+	if err := d.RoPEAtBand(inv, offQ, headsQ, hd, posOffset, posDiv, stride); err != nil {
+		return fmt.Errorf("cuda: RoPEPairBand q: %w", err)
+	}
+	if err := d.RoPEAtBand(inv, offK, headsK, hd, posOffset, posDiv, stride); err != nil {
+		return fmt.Errorf("cuda: RoPEPairBand k: %w", err)
+	}
+	return nil
+}
+
 // Zero sets the buffer to all zeros (on the stream).
 func (d *DeviceF32) Zero() error {
 	if rc := C.cu_zero_f32(d.ptr, C.int(d.rows*d.cols)); rc != 0 {

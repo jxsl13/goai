@@ -4,6 +4,17 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — strided-band RoPE (RoPEAt/RoPEPair) — final llamagpu-adapter recorder gap (worker linux-amd64, 2026-07-15)
+- `cu_rope_f32_band` kernel + `DeviceF32.RoPEAtBand` / `RoPEPairBand`: rotate the q
+  and k bands of a single fused `[seq, stride]` QKV buffer in place (HF rotate_half,
+  strided rows, column offset), no copy-out. Generalises `cu_rope_f32` with a row
+  stride + band offset — the §T613 fused-QKV path. Validated == host float64
+  reference to 1e-4, with the v band proven untouched (`TestCUDARoPEBand`).
+- This closes the LAST llamagpu `recorder` primitive missing on CUDA: RMSNorm,
+  LayerNorm, AddBias, MatMul(+Acc), MHA/GQA, Unary, Binary, QMatMulResident(Q8),
+  Blit, Copy2D, and now RoPEAt/RoPEPair are all covered. Next: the adapter itself
+  (`llamagpu/cuda.go` — NewCUDA + cudaBuf/cudaRec). Worker sub-spec §NEXT.
+
 ### CUDA — Blit + Copy2D strided-copy primitives (llamagpu adapter groundwork, worker linux-amd64, 2026-07-15)
 - `DeviceF32.Blit` (offset contiguous device copy) and `DeviceF32.Copy2D` (strided
   rows×rowFloats sub-matrix copy), both == host reference. The fused-QKV band-move

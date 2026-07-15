@@ -123,5 +123,9 @@ int cu_causal_scale_f32(void* x, int qRows, int kCols, float scale, int offset);
 // (HF rotate_half). inv is the resident [hd/2] frequency table and posDiv the
 // position divisor (both from backend.RoPEFreqs on the host).
 int cu_rope_f32(void* x, const void* inv, int seq, int heads, int hd, int posOffset, double posDiv);
+// cu_rope_f32_band: strided-band RoPE — rotate `heads` heads (hd wide) starting at
+// float-element column `off` within rows of `stride` floats, in place. Generalises
+// cu_rope_f32 for the fused-QKV path (q/k bands of one [seq,stride] buffer).
+int cu_rope_f32_band(void* x, const void* inv, int seq, int stride, int off, int heads, int hd, int posOffset, double posDiv);
 
 #endif
