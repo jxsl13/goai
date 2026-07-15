@@ -20,12 +20,14 @@ const (
 //
 // It accepts tokenizer.ggml.model == "t5" (ggml's UGM — a true Unigram tokenizer, the
 // exact match for the Viterbi decoding here) and "llama" (SentencePiece, which carries
-// the same per-token scores and ▁ meta-symbol). NOTE: for "llama"/SPM, llama.cpp runs
-// a greedy best-score-bigram MERGE rather than Viterbi; this loader always applies the
-// Viterbi 1-best over the same scores, which is the higher-likelihood segmentation but
-// can differ token-for-token from llama.cpp's SPM output (an explicit, documented
-// choice — §R88). Byte-level BPE models ("gpt2"/"bpe") are not handled here (they need
-// merge rules, not scores) and return an error.
+// the same per-token scores and ▁ meta-symbol). WARNING (§B59): for "llama"-family
+// vocabularies whose GGUF carries REAL SentencePiece scores, those scores are negative
+// merge ranks, not log-probabilities — Viterbi over them fragments the encoding and
+// degrades generation. Use SPMFromGGUF (llama.cpp merge semantics) for llama-family
+// models; this loader remains correct for true Unigram vocabularies and for llama-family
+// files with all-zero scores (where the tie-break reduces to longest-match). Byte-level
+// BPE models ("gpt2"/"bpe") are not handled here (they need merge rules, not scores)
+// and return an error.
 func UnigramFromGGUF(meta map[string]any) (*Unigram, error) {
 	model, _ := meta[ggufTokModel].(string)
 	switch model {

@@ -952,6 +952,50 @@ the final slice of GEMV bandwidth), not an architectural one. (llama.cpp prefill
 still scales harder — e.g. Qwen-3B 1098/3452 vs goai's fewer-but-larger cuBLAS launches —
 the documented flash/fused-attention **prefill** gap, a separate lever from decode.)
 
+## Q4 across scales: goai takes the Q8 lead, Q4_K stays ahead (worker linux-amd64)
+
+The asymmetric-Q4 decode path (PERF-Q4/PERF-Q4-DECODE: per-32-block f32 scale+min,
+warp-per-output GEMV, +23% over Q8 on TinyLlama) extended to every Q4-eligible model —
+including **Mistral-7B-Instruct-v0.2, the first production-size 7B on the engine** —
+plus the *fair* same-precision-class llama.cpp comparison (Q4_K_M files requantized
+locally with `llama-quantize --allow-requantize`, benched with `llama-bench -ngl 99`,
+same RTX 3060). Decode tg128-equivalent tok/s, greedy, coherence-gated:
+
+| model | goai Q8 | goai Q4 | Q4/Q8 | llama.cpp Q8 | llama.cpp Q4_K_M | goai-Q4 / llcpp-Q8 | goai-Q4 / llcpp-Q4_K_M |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| TinyLlama-1.1B | 199 | 243.6 | +23% | 244 | 328.0 | 1.00× | 0.74× |
+| Qwen2.5-1.5B | 140.5 | 167.9 | +20% | 166 | 214.9 | 1.01× | 0.78× |
+| Qwen2.5-3B | 77.8 | 96.9 | +25% | 87 | 121.9 | **1.11×** | 0.79× |
+| Mistral-7B | 37.4 | 47.0 | +26% | 41.6 | 59.1 | **1.13×** | 0.80× |
+
+(Qwen2.5-0.5B is Q4-ineligible: dim=896 fails the Q4 kernel's K%256 constraint — and is
+the least weight-bound model, where Q4 pays least.)
+
+Three results:
+
+1. **goai-Q4 ≥ llama.cpp-Q8 at every scale, and the lead GROWS with model size**
+   (1.00× → 1.13×): exactly the weight-bandwidth story — the bigger the model, the more
+   decode is weight-bound, the more halving weight bytes pays. The PERF-Q4-DECODE
+   prediction ("Q4 beats llama.cpp-Q8 on the larger weight-bound models") is confirmed
+   with measurements, not extrapolation.
+2. **Same-class Q4 comparison is honest and open**: llama.cpp's Q4_K_M stays
+   1.25–1.35× ahead of goai's asymmetric Q4 at similar weight bytes (7B: 4.07 GiB
+   Q4_K_M vs ≈3.9 GB asymmetric Q4) — the same kernel-quality margin (quant-GEMV +
+   attention fusion) seen in the Q8 sweep, now at Q4. Closing it needs a Q4_K-class
+   super-block scheme and/or fused attention, not more of the same GEMV.
+3. **A real 7B runs end-to-end on the 12 GB card**: Mistral-7B loads via `gguf.ReadRaw`
+   (per-tensor dequantize→requantize→upload — a fully materialized f32 7B would need
+   28 GB host RAM; the raw path peaks ≈6 GB), decodes coherently at both precisions,
+   Q8 37.4 / Q4 47.0 tok/s. Per-run quality gate: greedy answer to "The capital of
+   France is" must contain "Paris" — which caught a REAL bug: the §B59 tokenizer defect
+   (Viterbi over merge-rank scores fragmenting prompts) produced fluent-but-derailed
+   text at BOTH precisions and was invisible to every parity test. End-to-end
+   generation checks guard a failure class that logit-level comparisons cannot see.
+
+Repro: `TestCUDAMistral7BQ4QualityAndSpeed` / `TestCUDAQwenQ4QualityAndSpeed`
+(backend/cuda, `-tags cuda`, models under `models/`), llama.cpp side per
+`scripts/bench-llamacpp.sh` conventions (b10012 Vulkan).
+
 ## Further reading
 
 - Hoefler & Belli, *Scientific Benchmarking of Parallel Computing Systems* (SC '15) — the canonical treatment of run variance, warm-up and honest reporting that this document's rules follow.

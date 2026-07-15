@@ -16,6 +16,14 @@ choices below sit well under the ~10.7 GB free VRAM.
 | `tinyllama-1.1b-chat-q8_0.gguf` | llama | 22 | 32 / 4 (GQA) | 2048 | 2048 | ~4.4 GB | **runs directly** |
 | `qwen2.5-1.5b-instruct-q8_0.gguf` | qwen2 | 28 | 12 / 2 (GQA) | 1536 | 32768 | ~6 GB | needs QKV bias |
 | `qwen2.5-3b-instruct-q8_0.gguf` | qwen2 | 36 | 16 / 2 (GQA) | 2048 | 32768 | ~3.4 GB (Q8 resident) | needs QKV bias |
+| `mistral-7b-instruct-v0.2.Q8_0.gguf` | llama | 32 | 32 / 8 (GQA) | 4096 | 32768 | ~7.9 GB (Q8) / ~3.9 GB (Q4) resident | **runs via `gguf.ReadRaw`** (f32 would need 28 GB host RAM; source: `TheBloke/Mistral-7B-Instruct-v0.2-GGUF`) |
+
+The `*-q4_k_m.gguf` / `*.Q4_K_M.gguf` siblings are **local requants** of the Q8_0 files
+(`llama-quantize --allow-requantize … Q4_K_M`) used only as the llama.cpp side of the
+fair same-precision-class Q4 decode comparison (`docs/benchmarking.md`); goai loads the
+Q8_0 files and quantizes to its own resident Q8/Q4 at build time. NOTE: Mistral's
+tokenizer carries real SentencePiece scores — load it with `nlp.SPMFromGGUF`, not
+`UnigramFromGGUF` (§B59).
 
 All three parse **and dequantize** cleanly through goai's own `format/gguf`
 reader. **TinyLlama-1.1B** (arch=llama, GQA 32:4, no attention bias) is the first
