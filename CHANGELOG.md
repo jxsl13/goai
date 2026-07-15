@@ -4,6 +4,20 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — NVIDIA is now a first-class llamagpu backend (adapter slice 3, worker linux-amd64, 2026-07-15)
+- `llamagpu.NewCUDA(m *nlp.Llama)` wires the `cuda.Recorder` into the backend-agnostic
+  batched `Decoder` (via `cBuf`/`cRec` thin assertions, the same shape as the metal
+  and vulkan adapters). NVIDIA now gets `Generate`/`Step`/`StepN` and every sampler
+  for free — on par with metal + vulkan, from ONE decode core.
+- `cuda.NewDeviceBufferF32([]float32)` is the raw-slice `newBuffer` constructor;
+  `DeviceF32.UploadF32`/`DownloadF32` now accept `len ≤ capacity` (each step fills the
+  active prefix of a fixed-capacity scratch, matching metal/vulkan).
+- Validated end-to-end: `TestCUDAGenerateMatchesReference` and
+  `TestCUDAPrefillStepMatchesReference` confirm `llamagpu.NewCUDA(m).Generate` equals
+  `nlp.Llama.Generate` greedy **token-for-token** across two models (incl. a GQA
+  prefill+decode). f32 path; `NewQuantCUDA` (Q8) follows once the recorder's
+  QMatMulResident lands (slice 2). Additive, `cuda`-tagged; default build unaffected.
+
 ### CUDA — llamagpu adapter slice 1: cuda.Recorder (f32 decode recorder) (worker linux-amd64, 2026-07-15)
 - `cuda.Recorder` implements the backend-agnostic llamagpu `recorder` interface on
   NVIDIA for the f32 path: RMSNorm, LayerNorm, AddBias, MatMul, MatMulAcc (residual

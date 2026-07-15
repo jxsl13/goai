@@ -141,14 +141,32 @@ func (d *DeviceF32) RoPEPairBand(inv *DeviceF32, stride, headsQ, offQ, headsK, o
 	return nil
 }
 
+// NewDeviceBufferF32 allocates a device buffer holding data as a flat [1,len] buffer
+// — the llamagpu `newBuffer` constructor (weights, KV cache and scratch are resident
+// flat buffers; every op carries its own explicit dims, so the [1,len] shape is just
+// bookkeeping). Free/Release when done.
+func NewDeviceBufferF32(data []float32) (*DeviceF32, error) {
+	n := len(data)
+	if n == 0 {
+		return nil, fmt.Errorf("cuda: NewDeviceBufferF32 empty")
+	}
+	ptr := C.cu_upload_f32((*C.float)(&data[0]), C.int(n))
+	if ptr == nil {
+		return nil, fmt.Errorf("cuda: NewDeviceBufferF32 upload failed (%d floats)", n)
+	}
+	return &DeviceF32{ptr: ptr, rows: 1, cols: n}, nil
+}
+
 // UploadF32 overwrites this buffer's contents with host data (same element count),
 // keeping the device pointer valid — the llamagpu `buffer` interface upload.
 func (d *DeviceF32) UploadF32(data []float32) error {
 	if d.ptr == nil {
 		return fmt.Errorf("cuda: UploadF32 on a freed handle")
 	}
-	if len(data) != d.rows*d.cols {
-		return fmt.Errorf("cuda: UploadF32 %d floats into [%d,%d]", len(data), d.rows, d.cols)
+	// The buffer is a fixed-capacity scratch; each step fills only its active prefix
+	// (len(data) ≤ capacity), like the metal/vulkan buffers.
+	if len(data) > d.rows*d.cols {
+		return fmt.Errorf("cuda: UploadF32 %d floats exceeds [%d,%d] capacity", len(data), d.rows, d.cols)
 	}
 	if len(data) == 0 {
 		return nil
@@ -165,8 +183,8 @@ func (d *DeviceF32) DownloadF32(dst []float32) error {
 	if d.ptr == nil {
 		return fmt.Errorf("cuda: DownloadF32 on a freed handle")
 	}
-	if len(dst) != d.rows*d.cols {
-		return fmt.Errorf("cuda: DownloadF32 into %d floats from [%d,%d]", len(dst), d.rows, d.cols)
+	if len(dst) > d.rows*d.cols {
+		return fmt.Errorf("cuda: DownloadF32 into %d floats exceeds [%d,%d] capacity", len(dst), d.rows, d.cols)
 	}
 	if len(dst) == 0 {
 		return nil
