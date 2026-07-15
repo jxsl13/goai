@@ -51,7 +51,7 @@ func TestCUDAQwenGenerate(t *testing.T) {
 	}
 }
 
-func runQwen(t *testing.T, qwenPath string) {
+func runQwen(t *testing.T, qwenPath string) []int {
 	skipNoGPU(t)
 	if _, err := os.Stat(qwenPath); err != nil {
 		t.Skipf("model not present (%s)", qwenPath)
@@ -202,6 +202,7 @@ func runQwen(t *testing.T, qwenPath string) {
 	if len(gen) == 0 {
 		t.Fatal("generated nothing")
 	}
+	return gen
 }
 
 func itoa(i int) string {
