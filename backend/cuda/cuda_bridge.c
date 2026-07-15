@@ -441,6 +441,62 @@ int cu_available(void) {
     return (cudaGetDeviceCount(&n) == cudaSuccess && n > 0) ? 1 : 0;
 }
 
+// ---- CUDA graph capture (§PERF: decode is launch-bound; a captured graph replays
+// the whole per-token op sequence with ONE launch, eliminating per-op host cost).
+// The caller must LockOSThread across begin→ops→end so ThreadLocal capture records
+// every launch on gStream from the same thread (Go goroutines migrate threads).
+
+int cu_capture_begin(void) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (cudaStreamBeginCapture((cudaStream_t)gStream, cudaStreamCaptureModeThreadLocal) != cudaSuccess) { rc = -2; goto done; }
+    rc = 0;
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_capture_end ends capture on gStream and instantiates an executable graph,
+// returned as an opaque handle (NULL on failure). Free with cu_graph_free.
+void* cu_capture_end(void) {
+    cudaGraph_t graph = NULL;
+    cudaGraphExec_t exec = NULL;
+    pthread_mutex_lock(&gLock);
+    if (cudaStreamEndCapture((cudaStream_t)gStream, &graph) != cudaSuccess) { exec = NULL; goto done; }
+    if (cudaGraphInstantiate(&exec, graph, 0) != cudaSuccess) { exec = NULL; }
+done:
+    if (graph) cudaGraphDestroy(graph);
+    pthread_mutex_unlock(&gLock);
+    return (void*)exec;
+}
+
+int cu_graph_launch(void* exec) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (cudaGraphLaunch((cudaGraphExec_t)exec, (cudaStream_t)gStream) != cudaSuccess) { rc = -2; goto done; }
+    rc = 0;
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+int cu_graph_sync(void) {
+    pthread_mutex_lock(&gLock);
+    int rc = (cudaStreamSynchronize((cudaStream_t)gStream) == cudaSuccess) ? 0 : -1;
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+void cu_graph_free(void* exec) {
+    if (!exec) return;
+    pthread_mutex_lock(&gLock);
+    cudaGraphExecDestroy((cudaGraphExec_t)exec);
+    pthread_mutex_unlock(&gLock);
+}
+
 // ensure_devp grows a persistent device buffer (grow-only) used for the GQA
 // batched-gemm pointer arrays, so the attention path reuses one allocation
 // instead of a cudaMalloc+cudaFree per call (the decode hot path: 22 layers ×
