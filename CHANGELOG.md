@@ -4,6 +4,18 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — serving capstone: 100 ms end-to-end, graph-path Q4_K decode at 249 tok/s (worker linux-amd64, Tw49/Tw50, 2026-07-15)
+- `TestCUDAUnifiedServeDemo`: the complete serving story at full speed — tokenize →
+  batched f16 tensor-core prefill (seeding the decoder's KV caches) → CUDA-graph Q4_K
+  decode with on-device argmax → detokenize. TinyLlama answers "The capital of France
+  is" coherently in **100 ms total** (prefill 12.1 ms + 22 tokens at **249 tok/s** — the
+  graph-captured Q4_K decode now beats both the asym-Q4 record (243.6) and llama.cpp-Q8
+  (244): the first full-pipeline decode lead on TinyLlama). Regression floors encoded.
+- W8A8 int8 prefill: built, proven bit-exact (exact-integer probe), and REJECTED on the
+  A/B — 1.09× over f32 with 72–84% argmax agreement vs the f16 path's 1.65× at 100%.
+  Strictly dominated; lessons (host references must mirror kernel arithmetic exactly;
+  quant-GEMM epilogues pay only when fused) recorded in the worker spec.
+
 ### CUDA — unified serving generalized to Qwen2 (worker linux-amd64, Tw48, 2026-07-15)
 - `rawF16Prefill`: an arch-generic f16 tensor-core prefill builder straight from
   `gguf.ReadRaw` (metadata prefix + optional QKV bias — covers families
