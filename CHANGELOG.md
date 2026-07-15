@@ -4,6 +4,18 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — fuller general backend: SiLU/GELU/Add/Mul/Softmax kernels (worker linux-amd64, 2026-07-15)
+- `backend.Get(CUDA)` previously implemented only `OpMatMul` as a GPU kernel — every other
+  op fell back to the Pure-Go reference. It now also runs `OpSiLU`, `OpGELU`, `OpAdd`,
+  `OpMul` and `OpSoftmax` on the GPU (F32), so a caller using the generic `backend.Execute`
+  path gets device execution instead of a CPU fallback. Each is the naive synchronous shape
+  (upload → device kernel → download; the transfer-bound composability path, ADR-0021 — the
+  fast inference path stays the device-resident engine), reusing the existing `cu_*` kernels.
+- Any unsupported dtype (F64), broadcast shape or empty tensor cleanly falls through to the
+  reference, so registering these never changes a result. Validated: `TestCUDAGeneralOps`
+  cross-checks all five ops against the reference within f32 tolerance. Moves the CUDA
+  backend toward the full general op set metal/vulkan already expose.
+
 ### CUDA — Qwen2.5-3B on the optimized graph path + a VRAM leak fix (worker linux-amd64, 2026-07-15)
 - `TestCUDAQwenFixedMatchesAlloc` now also runs **Qwen2.5-3B** on the FULL optimized decode
   (fixed persistent buffers + device-position + fixed-size attention + Q8 + CUDA graph, with
