@@ -3,7 +3,68 @@ package backend
 import (
 	"fmt"
 	"testing"
+
+	"github.com/jxsl13/goai/tensor"
 )
+
+// proberBackend is a minimal Backend that also implements MemoryProber, for
+// testing ProbeBudgets.
+type proberBackend struct {
+	name  Name
+	avail int64
+	ok    bool
+}
+
+func (p *proberBackend) Name() Name                             { return p.name }
+func (p *proberBackend) Device() tensor.Device                  { return tensor.CPU() }
+func (p *proberBackend) Synchronize() error                     { return nil }
+func (p *proberBackend) Kernel(Op, tensor.Dtype) (Kernel, bool) { return nil, false }
+func (p *proberBackend) AvailableMemory() (int64, bool)         { return p.avail, p.ok }
+
+// TestProbeBudgets: only registered backends that implement MemoryProber and
+// report a known, positive amount contribute a budget; the rest are omitted.
+func TestProbeBudgets(t *testing.T) {
+	known := &proberBackend{name: "probe-known", avail: 8_000_000_000, ok: true}
+	unknown := &proberBackend{name: "probe-unknown", avail: 0, ok: false} // can't query
+	nonProber := &spyBackend{name: "probe-nonprober", kern: scaleKernel}  // no MemoryProber
+	Register(known)
+	Register(unknown)
+	Register(nonProber)
+
+	got := ProbeBudgets(known.Name(), unknown.Name(), nonProber.Name(), "probe-unregistered")
+	if len(got) != 1 {
+		t.Fatalf("ProbeBudgets returned %d budgets, want 1 (only the known prober): %v", len(got), got)
+	}
+	if got[known.Name()] != 8_000_000_000 {
+		t.Fatalf("known prober budget = %d, want 8e9", got[known.Name()])
+	}
+	if _, in := got[unknown.Name()]; in {
+		t.Fatal("unknown-amount prober should be omitted")
+	}
+	if _, in := got[nonProber.Name()]; in {
+		t.Fatal("non-prober backend should be omitted")
+	}
+}
+
+// TestProbeBudgetsFeedsPlan: the probe→plan pipeline — a probed budget drives
+// PlanOffload, so an 8-layer model that half-fits keeps 4 layers on the device.
+func TestProbeBudgetsFeedsPlan(t *testing.T) {
+	dev := &proberBackend{name: "probe-plan-dev", avail: 40, ok: true} // holds 4 layers of 10
+	Register(dev)
+	budgets := ProbeBudgets(dev.Name())
+	plan, err := PlanOffload(OffloadConfig{
+		LayerBytes: []int64{10, 10, 10, 10, 10, 10, 10, 10},
+		Budgets:    budgets,
+		Prefer:     []Name{dev.Name()},
+		Fallback:   CPU,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if countOn(plan.Layers, dev.Name()) != 4 || plan.OnFallback != 4 {
+		t.Fatalf("probe→plan: %d on device / %d spilled, want 4/4", countOn(plan.Layers, dev.Name()), plan.OnFallback)
+	}
+}
 
 // ExamplePlanOffload plans a 4-layer model onto a GPU whose memory budget holds
 // only two layers: the first two stay on the fast backend and the rest spill to

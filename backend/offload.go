@@ -44,6 +44,46 @@ type OffloadPlan struct {
 	OnFallback int
 }
 
+// MemoryProber is an OPTIONAL capability a Backend may implement to report the
+// device memory currently available to it, so PlanOffload's per-backend Budgets
+// can be measured rather than guessed (§T631). It is not part of the core
+// Backend interface: a backend that cannot query its device (the host/CPU and
+// reference backends, or a GPU backend on a platform without a memory-info API)
+// simply does not implement it, and ProbeBudgets omits it. GPU backends
+// (metal/cuda/vulkan) are the natural implementers.
+type MemoryProber interface {
+	// AvailableMemory reports the free device memory in bytes. ok is false when
+	// the amount is unknown/unqueryable, in which case the caller treats the
+	// backend as having no measured device budget (so its layers spill to the
+	// fallback rather than risk an out-of-memory placement).
+	AvailableMemory() (bytes int64, ok bool)
+}
+
+// ProbeBudgets builds the per-backend Budgets map for PlanOffload by querying
+// each named registered backend through the optional MemoryProber capability.
+// A name that is not registered, does not implement MemoryProber, or reports
+// ok=false (or a non-positive amount) is omitted — treated as having no device
+// budget, so PlanOffload spills its share to the fallback (§C24: functional,
+// never an out-of-memory failure). The returned map is safe to hand straight to
+// OffloadConfig.Budgets.
+func ProbeBudgets(names ...Name) map[Name]int64 {
+	budgets := make(map[Name]int64)
+	for _, name := range names {
+		b, ok := Get(name)
+		if !ok {
+			continue
+		}
+		mp, isProber := b.(MemoryProber)
+		if !isProber {
+			continue
+		}
+		if bytes, known := mp.AvailableMemory(); known && bytes > 0 {
+			budgets[name] = bytes
+		}
+	}
+	return budgets
+}
+
 // OffloadConfig parameterises PlanOffload.
 type OffloadConfig struct {
 	// LayerBytes is each layer's device-memory footprint (weights + activation

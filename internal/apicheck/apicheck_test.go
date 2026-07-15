@@ -86,6 +86,7 @@ var typeExampleExempt = map[string]bool{
 	"nlp.ChatRenderOption":          true, // functional-option type (shown via WithGenerationPrompt/WithoutBOS)
 	"nlp.RerankResult":              true, // plain result record returned by CosineRerank; shown in its examples
 	"backend.OffloadPlan":           true, // plain result record returned by PlanOffload; shown in ExamplePlanOffload
+	"backend.MemoryProber":          true, // optional device-memory capability interface (backend-author surface), consumed by ProbeBudgets
 	"vision.CNNOption":              true, // functional-option type (shown via WithChannels/WithKernel/WithDtype)
 	"vision.ViTOption":              true, // functional-option type (shown via WithViTDim/WithViTHeads etc.)
 	"nlp.Beam":                      true, // returned by BeamSearch, shown in ExampleBeamSearch
