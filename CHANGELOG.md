@@ -4,6 +4,20 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — llamagpu adapter slice 1: cuda.Recorder (f32 decode recorder) (worker linux-amd64, 2026-07-15)
+- `cuda.Recorder` implements the backend-agnostic llamagpu `recorder` interface on
+  NVIDIA for the f32 path: RMSNorm, LayerNorm, AddBias, MatMul, MatMulAcc (residual
+  epilogue), RoPE/RoPEAt/RoPEPair, Blit, Copy2D, MHA (GQA + causal), Unary
+  (SiLU/GELU), Binary (add/mul/fused-SwiGLU), Commit/Wait/Finish/Free. Unlike the
+  metal/vulkan command-buffer recorders it submits eagerly (every op enqueues on the
+  work stream as recorded) so Commit is a no-op and Wait/Finish sync the stream.
+- `DeviceF32` now satisfies the `buffer` interface (`UploadF32`/`DownloadF32`/
+  `Release`), backed by a new `cu_upload_into` H2D-into-existing-buffer copy.
+- Validated == host reference: `TestCUDARecorder` cross-checks MatMul, MatMulAcc,
+  Unary/SiLU (o≠x copy path), Binary add/mul/SwiGLU, and GQA-causal MHA. This is the
+  recorder half of the llamagpu CUDA adapter; QMatMulResident (Q8) is slice 2, the
+  `llamagpu/cuda.go` wiring + end-to-end decode is slice 3. Worker sub-spec §NEXT.
+
 ### CUDA — strided-band RoPE (RoPEAt/RoPEPair) — final llamagpu-adapter recorder gap (worker linux-amd64, 2026-07-15)
 - `cu_rope_f32_band` kernel + `DeviceF32.RoPEAtBand` / `RoPEPairBand`: rotate the q
   and k bands of a single fused `[seq, stride]` QKV buffer in place (HF rotate_half,

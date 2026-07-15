@@ -68,6 +68,8 @@ int cu_append_dpos(void* dst, const void* src, const void* dPos, int wkv);
 // out[i,:] = table[ids[i],:] — input embedding row gather (table [vocab,d] resident).
 int cu_embed_f32(const void* dTable, const void* dIds, void* dOut, int seq, int d);
 int cu_download_f32(const void* dsrc, float* dst, int n);
+// cu_upload_into: H2D copy n floats into an existing device buffer (pointer kept).
+int cu_upload_into(void* dst, const float* src, int n);
 int cu_matmul_f32_ddd(const void* dA, const void* dB, void* dC, int M, int K, int N);
 // dC = dA·dB + dC (beta=1): fuses the residual add into the projection matmul.
 int cu_matmul_f32_ddd_acc(const void* dA, const void* dB, void* dC, int M, int K, int N);

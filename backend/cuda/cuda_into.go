@@ -141,6 +141,45 @@ func (d *DeviceF32) RoPEPairBand(inv *DeviceF32, stride, headsQ, offQ, headsK, o
 	return nil
 }
 
+// UploadF32 overwrites this buffer's contents with host data (same element count),
+// keeping the device pointer valid — the llamagpu `buffer` interface upload.
+func (d *DeviceF32) UploadF32(data []float32) error {
+	if d.ptr == nil {
+		return fmt.Errorf("cuda: UploadF32 on a freed handle")
+	}
+	if len(data) != d.rows*d.cols {
+		return fmt.Errorf("cuda: UploadF32 %d floats into [%d,%d]", len(data), d.rows, d.cols)
+	}
+	if len(data) == 0 {
+		return nil
+	}
+	if rc := C.cu_upload_into(d.ptr, (*C.float)(&data[0]), C.int(len(data))); rc != 0 {
+		return fmt.Errorf("cuda: UploadF32 failed (code %d)", int(rc))
+	}
+	return nil
+}
+
+// DownloadF32 copies this buffer's contents into a host slice (same element count)
+// — the llamagpu `buffer` interface download.
+func (d *DeviceF32) DownloadF32(dst []float32) error {
+	if d.ptr == nil {
+		return fmt.Errorf("cuda: DownloadF32 on a freed handle")
+	}
+	if len(dst) != d.rows*d.cols {
+		return fmt.Errorf("cuda: DownloadF32 into %d floats from [%d,%d]", len(dst), d.rows, d.cols)
+	}
+	if len(dst) == 0 {
+		return nil
+	}
+	if rc := C.cu_download_f32(d.ptr, (*C.float)(&dst[0]), C.int(len(dst))); rc != 0 {
+		return fmt.Errorf("cuda: DownloadF32 failed (code %d)", int(rc))
+	}
+	return nil
+}
+
+// Release frees the buffer — the llamagpu `buffer` interface Release (alias for Free).
+func (d *DeviceF32) Release() { d.Free() }
+
 // Zero sets the buffer to all zeros (on the stream).
 func (d *DeviceF32) Zero() error {
 	if rc := C.cu_zero_f32(d.ptr, C.int(d.rows*d.cols)); rc != 0 {
