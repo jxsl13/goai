@@ -5,7 +5,6 @@ package cuda_test
 import (
 	"testing"
 
-	"github.com/jxsl13/goai/backend"
 	"github.com/jxsl13/goai/backend/cuda"
 	"github.com/jxsl13/goai/nlp"
 	"github.com/jxsl13/goai/tensor"
@@ -32,6 +31,7 @@ type graphDecoder struct {
 	dq, dk, dv, da         *cuda.DeviceF32
 	dgate, dup, scores     *cuda.DeviceF32
 	logits                 *cuda.DeviceF32
+	inv                    *cuda.DeviceF32 // persistent RoPE inv table (capture-safe, no per-call upload)
 	heads, kv, dim, hidden int
 	ropeBase, eps          float64
 }
@@ -62,6 +62,7 @@ func buildGraphDecoder(tb testing.TB, m *nlp.Llama, maxSeq int) *graphDecoder {
 	gd.dgate, gd.dup = buf(1, cfg.Hidden), buf(1, cfg.Hidden)
 	gd.scores = buf(1, cfg.Heads*maxSeq)
 	gd.logits = buf(1, cfg.Vocab)
+	gd.inv, _ = cuda.BuildRoPEInv(hd, cfg.RopeBase)
 	gd.layers = make([]*gdLayer, len(m.Blocks))
 	for i, blk := range m.Blocks {
 		ga, _ := cuda.NewResidentVec(cast(blk.AttnNorm.Gamma))
@@ -84,7 +85,7 @@ func (gd *graphDecoder) free() {
 	gd.norm.Free()
 	gd.out.Free()
 	gd.pos.Free()
-	for _, d := range []*cuda.DeviceF32{gd.dx, gd.dh, gd.dh2, gd.dq, gd.dk, gd.dv, gd.da, gd.dgate, gd.dup, gd.scores, gd.logits} {
+	for _, d := range []*cuda.DeviceF32{gd.dx, gd.dh, gd.dh2, gd.dq, gd.dk, gd.dv, gd.da, gd.dgate, gd.dup, gd.scores, gd.logits, gd.inv} {
 		d.Free()
 	}
 	for _, l := range gd.layers {
@@ -101,15 +102,13 @@ func (gd *graphDecoder) free() {
 // the token-dependent embed and the logit download). It runs on fixed buffers
 // with the position read from gd.pos.
 func (gd *graphDecoder) forwardBody(tb testing.TB) {
-	rq := backend.RoPEAttrs{Base: gd.ropeBase, Heads: gd.heads}
-	rk := backend.RoPEAttrs{Base: gd.ropeBase, Heads: gd.kv}
 	for _, l := range gd.layers {
 		mustTB(tb, gd.dx.RMSNormInto(l.gAttn, float32(gd.eps), gd.dh))
 		mustTB(tb, l.wq.MatMulInto(gd.dh, gd.dq))
 		mustTB(tb, l.wk.MatMulInto(gd.dh, gd.dk))
 		mustTB(tb, l.wv.MatMulInto(gd.dh, gd.dv))
-		mustTB(tb, gd.dq.RoPEDpos(rq, gd.pos))
-		mustTB(tb, gd.dk.RoPEDpos(rk, gd.pos))
+		mustTB(tb, gd.dq.RoPEDposInv(gd.heads, gd.inv, gd.pos, 0))
+		mustTB(tb, gd.dk.RoPEDposInv(gd.kv, gd.inv, gd.pos, 0))
 		mustTB(tb, l.cache.AppendDpos(gd.dk, gd.dv, gd.pos))
 		kF, vF := l.cache.FullView()
 		mustTB(tb, cuda.GroupedQueryAttentionKVDposInto(gd.dq, kF, vF, gd.heads, gd.kv, gd.pos, gd.scores, gd.da))

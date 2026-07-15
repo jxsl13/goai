@@ -78,6 +78,45 @@ func (d *DeviceF32) RoPEDpos(attrs backend.RoPEAttrs, pos *DevicePos) error {
 	return nil
 }
 
+// BuildRoPEInv precomputes and uploads the RoPE inverse-frequency table [hd/2]
+// for head dim hd and frequency base, ONCE (persistent). Pass it to RoPEDposInv so
+// the RoPE op does no per-call host upload — required for the op to be inside a
+// captured CUDA graph. Free when done.
+func BuildRoPEInv(hd int, base float64) (*DeviceF32, error) {
+	if base == 0 {
+		base = 10000
+	}
+	inv := make([]float32, hd/2)
+	for i := range inv {
+		inv[i] = float32(1.0 / math.Pow(base, float64(2*i)/float64(hd)))
+	}
+	p := C.cu_upload_f32((*C.float)(&inv[0]), C.int(len(inv)))
+	if p == nil {
+		return nil, fmt.Errorf("cuda: BuildRoPEInv upload failed")
+	}
+	return &DeviceF32{ptr: p, rows: 1, cols: hd / 2}, nil
+}
+
+// RoPEDposInv applies device-position RoPE using a pre-uploaded inv table (no
+// per-call upload) — the graph-capturable RoPE. heads treats d as [seq, heads·hd].
+func (d *DeviceF32) RoPEDposInv(heads int, inv *DeviceF32, pos *DevicePos, posScale float64) error {
+	if d.ptr == nil || inv.ptr == nil {
+		return fmt.Errorf("cuda: RoPEDposInv on a freed handle")
+	}
+	if heads < 1 {
+		heads = 1
+	}
+	hd := d.cols / heads
+	posDiv := posScale
+	if posDiv == 0 {
+		posDiv = 1
+	}
+	if rc := C.cu_rope_f32_dpos(d.ptr, inv.ptr, C.int(d.rows), C.int(heads), C.int(hd), pos.ptr, C.double(posDiv)); rc != 0 {
+		return fmt.Errorf("cuda: RoPEDposInv failed (code %d)", int(rc))
+	}
+	return nil
+}
+
 // AppendDpos writes one token's k and v ([1,wkv] each) into the cache at row
 // *pos — the graph-capturable KV append (does NOT advance c.n; the host tracks
 // length separately for the fixed-size graph).
