@@ -4,6 +4,15 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA inference — Qwen2.5 on the GPU (2nd model family, worker linux-amd64/cuda, 2026-07-15)
+- `TestCUDAQwenGenerate` runs Qwen2.5-0.5B (arch=qwen2, GQA 14:2) on the RTX 3060.
+  arch=qwen2 is rejected by `nlp.LlamaFromGGUF`, so the config/weights/biases are read
+  straight from the GGUF and made Q8-resident here. The distinctive Qwen bit — the
+  Q/K/V projection BIASES — is applied via the new `DeviceF32.AddBias`; RopeBase 1e6,
+  BPE tokenizer. Generates coherent text ("The capital of France is" → "Paris. ..."),
+  proving the CUDA engine generalizes beyond Llama and that AddBias is correct end to
+  end. Worker sub-spec §NEXT.
+
 ### CUDA primitives — LayerNorm + AddBias (worker linux-amd64/cuda, 2026-07-15)
 - `DeviceF32.LayerNormInto` (torch LayerNorm, f64 mean/var accumulation, == CPU ref
   2.9e-6) and `DeviceF32.AddBias` (row-broadcast bias, == ref exact) added to the
