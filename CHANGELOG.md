@@ -4,6 +4,14 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — lock the general-backend fallback contract (worker linux-amd64, 2026-07-15)
+- `TestCUDAGeneralFallbackContract` pins the invariant that registering a CUDA general
+  kernel NEVER changes a result vs Pure-Go: every case the device path can't serve —
+  F64 dtype, non-contiguous input, broadcast binary, XPos RoPE, ALiBi / sliding-window
+  MHA, mismatched norm-weight shapes — must fall back to the reference and produce the same
+  value (or the same error). All 12 probes pass, so the fallbacks are correct today; the
+  test guards against a future kernel change silently diverging on an edge case.
+
 ### CUDA — general backend runs a whole model forward: OpEmbed + full-model capstone (worker linux-amd64, 2026-07-15)
 - Adds `OpEmbed` (token-embedding row gather) to the general CUDA backend, completing the
   input path. `TestCUDAGeneralModelForward` then runs a whole small F32 model forward —
