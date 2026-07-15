@@ -1034,3 +1034,14 @@ the quantization error.
 - Hoefler & Belli, *Scientific Benchmarking of Parallel Computing Systems* (SC '15) — the canonical treatment of run variance, warm-up and honest reporting that this document's rules follow.
 - Georges, Buytaert & Eeckhout, *Statistically Rigorous Java Performance Evaluation* (OOPSLA '07) — why repeated runs with variance beat single numbers, in any language.
 - The Go blog, *Profiling Go Programs* and the `testing` package's benchmark docs — the mechanics behind every number here.
+
+## arm64 f32 GEMM fast path (GOEXPERIMENT=simd, ADR-0026)
+
+The `goai-cpu` MatMul numbers above are the DEFAULT build (bit-exact f64 accumulation,
+§V10). Building with `GOEXPERIMENT=simd` on darwin/arm64 activates a Plan9-NEON f32-native
+GEMM (ADR-0026): MatMul/1024 goes ≈67 → ≈795 GFLOP/s (13×), closing the gap to torch-cpu
+from ≈42× to ≈3.3×. The residual is Apple's AMX matrix coprocessor, which torch/numpy reach
+through Accelerate but pure-Go NEON cannot — a silicon limit, not a code limit. Run
+`GOEXPERIMENT=simd make bench-compare` to see it; the default `make bench-compare` uses the
+bit-exact scalar path. (T656.)
+ MHA and Conv2D were also routed through this f32-native GEMM (T657): MHA-forward ≈9.9→1.9 ms (torch-cpu gap 13×→2.6×), Conv2D/n8c64hw56 ≈57→281 GFLOP/s (gap 11×→2.2×) — same GOEXPERIMENT=simd gating.

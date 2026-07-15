@@ -3,6 +3,8 @@ package cpu
 import (
 	"fmt"
 	"math"
+	"runtime"
+	"sync/atomic"
 
 	"github.com/jxsl13/goai/backend"
 	"github.com/jxsl13/goai/tensor"
@@ -62,12 +64,159 @@ func mhaKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs
 	qc, kc, vc := q.Contiguous(), k.Contiguous(), v.Contiguous()
 	// Concrete typed instantiations (§T602): the previous per-element closure
 	// reads were 11% of the training profile; generics devirtualize them.
-	if q.Dtype() == tensor.F64 {
+	switch {
+	case q.Dtype() == tensor.F64:
 		mhaFwd(qc.Storage().F64(), kc.Storage().F64(), vc.Storage().F64(), out.Storage().F64(), geo)
-	} else {
+	case f32NativeKernels && sq >= mhaGemmMinSeq:
+		// Perf builds: route the two per-head matmuls (QKᵀ, A·V) through the
+		// f32-native SIMD gemmF32 (ADR-0021/0026 tolerance, not ulps-exact).
+		mhaFwdGemmF32(qc.Storage().F32(), kc.Storage().F32(), vc.Storage().F32(), out.Storage().F32(), geo)
+	default:
 		mhaFwd(qc.Storage().F32(), kc.Storage().F32(), vc.Storage().F32(), out.Storage().F32(), geo)
 	}
 	return []*tensor.Tensor{out}, nil
+}
+
+// mhaGemmMinSeq gates the gemm-routed attention path: below this query length
+// (decode/GEMV shapes) the Kᵀ/V packing traffic is the same order as the
+// matmuls themselves, so the scalar row kernel stays faster.
+const mhaGemmMinSeq = 16
+
+// mhaFwdGemmF32 is the gemm-routed f32 attention forward of the perf builds
+// (f32NativeKernels). Structure — TWO parallelWork barriers total (the first
+// per-head-sequential cut of this path spent >80% of its profile in pool
+// wake/park churn across ~50 barriers):
+//
+//  1. one pass packing every KV head's Kᵀ[dk,sk] and V[sk,dk];
+//  2. one pass over the heads·sq query rows, each worker running the WHOLE
+//     band-local pipeline on its contiguous row band: pack Q rows → S = Q·Kᵀ
+//     (gemmF32Rows, the f32-native SIMD band kernel) → stable softmax
+//     (scale/ALiBi/causal/window in f64, masked columns zeroed) → O = P·V
+//     (gemmF32Rows) → scatter into out. Rows are independent given the packs,
+//     so there is no cross-band dependency.
+//
+// The full [sq,sk] score rectangle is computed even under causal masking — the
+// SIMD gemm is far faster than a scalar triangle, masked entries are ignored
+// (scores) or zeroed (weights), and uniform per-row work keeps the static
+// chunking balanced.
+func mhaFwdGemmF32(q, k, v, out []float32, g mhaGeo) {
+	sq, sk, dk, kvDM := g.sq, g.sk, g.dk, g.kvDM
+	kvHeads := g.heads / g.rep
+	ktP, vhP := getF32Raw(kvHeads*dk*sk), getF32Raw(kvHeads*sk*dk) // fully overwritten
+	defer putF32(ktP)
+	defer putF32(vhP)
+	kt, vh := *ktP, *vhP
+	parallelWork(kvHeads*sk, 2*dk, func(lo, hi int) {
+		for t := lo; t < hi; t++ {
+			kv, j := t/sk, t%sk
+			base := j*kvDM + kv*dk
+			kr := k[base : base+dk : base+dk]
+			kth := kt[kv*dk*sk:]
+			for d, kvv := range kr {
+				kth[d*sk+j] = kvv
+			}
+			copy(vh[kv*sk*dk+j*dk:kv*sk*dk+(j+1)*dk], v[base:base+dk])
+		}
+	})
+	// Dynamic band scheduling (the NEON gemm entry's scheme): static equal
+	// chunks leave the wall clock to the slowest worker — the causal work
+	// (score-gemm columns and softmax exps) grows with the row index, and the
+	// M-series E-cores lag the P-cores. Each worker pulls (head, row-band)
+	// tasks off an atomic counter in DESCENDING-cost order (high row bands
+	// first), so the cheap bands fill the tail instead of straggling it.
+	rowWork := dk*sk + 4*sk + sk*dk
+	bands := (sq + mhaFwdBandRows - 1) / mhaFwdBandRows
+	nTasks := g.heads * bands
+	workers := max(runtime.GOMAXPROCS(0), 1)
+	var next atomic.Int64
+	parallelWork(workers, (g.heads*sq*rowWork+workers-1)/workers, func(_, _ int) {
+		for {
+			t := int(next.Add(1)) - 1
+			if t >= nTasks {
+				return
+			}
+			h, b := t%g.heads, bands-1-t/g.heads
+			i0 := b * mhaFwdBandRows
+			iN := min(mhaFwdBandRows, sq-i0)
+			mhaFwdGemmBand(q, kt, vh, out, g, h, i0, iN)
+		}
+	})
+}
+
+// mhaFwdBandRows is the row-band grain of the dynamic forward scheduler:
+// small enough for load balance across the causal exp gradient, big enough
+// that the two band gemms keep whole 4-row tiles busy.
+const mhaFwdBandRows = 32
+
+// mhaFwdGemmBand runs the forward pipeline for rows [i0,i0+iN) of head h.
+func mhaFwdGemmBand(q, kt, vh, out []float32, g mhaGeo, h, i0, iN int) {
+	sk, dk, dm := g.sk, g.dk, g.dm
+	kv := h / g.rep
+	kth := kt[kv*dk*sk : (kv+1)*dk*sk]
+	vhh := vh[kv*sk*dk : (kv+1)*sk*dk]
+	qOff := h * dk
+	qbP, sbP, obP := getF32Raw(iN*dk), getF32Raw(iN*sk), getF32Raw(iN*dk)
+	defer putF32(qbP)
+	defer putF32(sbP)
+	defer putF32(obP)
+	qb, sb, ob := *qbP, *sbP, *obP
+	for r := range iN {
+		copy(qb[r*dk:(r+1)*dk], q[(i0+r)*dm+qOff:(i0+r)*dm+qOff+dk])
+	}
+	// Causal: no row of this band attends beyond key g.off+i0+iN-1, so the
+	// score gemm skips the fully-masked column span (rounded up to whole
+	// 16-wide tiles). The skipped columns hold stale scratch — the softmax
+	// pass never reads past each row's jmax and zeroes them for the P·V gemm.
+	jHi := sk
+	if g.causal {
+		jHi = min((g.off+i0+iN+15)&^15, sk)
+	}
+	gemmF32RowsCols(qb, kth, sb, 0, iN, dk, sk, 0, jHi)
+	mhaSoftmaxBandF32(sb, g, h, i0, iN)
+	gemmF32Rows(sb, vhh, ob, 0, iN, sk, dk)
+	for r := range iN {
+		copy(out[(i0+r)*dm+qOff:(i0+r)*dm+qOff+dk], ob[r*dk:(r+1)*dk])
+	}
+}
+
+// mhaSoftmaxBandF32 turns rows [i0,i0+iN) of head h's raw QKᵀ products (sb,
+// band-local [iN,sk]) into softmax weights in place: scale (+ALiBi) and the
+// stable max-shift exp/sum run in f64, the normalized weight is narrowed to
+// f32 once, and every masked column is zeroed so a following full-rectangle
+// P·V gemm adds exactly 0 for it.
+func mhaSoftmaxBandF32(sb []float32, g mhaGeo, h, i0, iN int) {
+	sk := g.sk
+	rowP := getF64(sk)
+	defer putF64(rowP)
+	row := *rowP
+	for r := range iN {
+		i := i0 + r
+		jmin, jmax := g.bounds(i)
+		sr := sb[r*sk : (r+1)*sk : (r+1)*sk]
+		m := math.Inf(-1)
+		for j := jmin; j < jmax; j++ {
+			x := float64(sr[j]) * g.scale
+			if g.slopes != nil {
+				x += g.slopes[h] * float64(j-(g.off+i))
+			}
+			row[j] = x
+			if x > m {
+				m = x
+			}
+		}
+		var sum float64
+		for j := jmin; j < jmax; j++ {
+			e := math.Exp(row[j] - m)
+			row[j] = e
+			sum += e
+		}
+		inv := 1 / sum
+		clear(sr[:jmin])
+		for j := jmin; j < jmax; j++ {
+			sr[j] = float32(row[j] * inv)
+		}
+		clear(sr[jmax:])
+	}
 }
 
 // mhaGeo bundles the attention geometry and attributes shared by the typed cores.
@@ -281,14 +430,186 @@ func mhaBackwardKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backe
 	geo := mhaGeo{sq: seq, sk: seq, dm: dm, dk: dk, kvDM: kvDM, heads: heads, rep: rep,
 		off: 0, window: window, causal: causal, scale: scale, slopes: slopes}
 	qc, kc, vc, gc := q.Contiguous(), k.Contiguous(), v.Contiguous(), g.Contiguous()
-	if q.Dtype() == tensor.F64 {
+	switch {
+	case q.Dtype() == tensor.F64:
 		mhaBwd(qc.Storage().F64(), kc.Storage().F64(), vc.Storage().F64(), gc.Storage().F64(),
 			dQ.Storage().F64(), dK.Storage().F64(), dV.Storage().F64(), geo)
-	} else {
+	case f32NativeKernels && seq >= mhaGemmMinSeq:
+		// Perf builds: route the five per-head matmuls (S, dA, dQ, dV, dK)
+		// through the f32-native SIMD band kernel (ADR-0021/0026 tolerance).
+		mhaBwdGemmF32(qc.Storage().F32(), kc.Storage().F32(), vc.Storage().F32(), gc.Storage().F32(),
+			dQ.Storage().F32(), dK.Storage().F32(), dV.Storage().F32(), geo)
+	default:
 		mhaBwd(qc.Storage().F32(), kc.Storage().F32(), vc.Storage().F32(), gc.Storage().F32(),
 			dQ.Storage().F32(), dK.Storage().F32(), dV.Storage().F32(), geo)
 	}
 	return []*tensor.Tensor{dQ, dK, dV}, nil
+}
+
+// mhaBwdBandRows is the query-row band size of the gemm-routed backward: big
+// enough that the five band gemms amortize their transposes and packs, small
+// enough that heads·(seq/band) tasks fill every core at the training shapes.
+const mhaBwdBandRows = 128
+
+// mhaBwdGemmF32 is the gemm-routed f32 attention backward of the perf builds
+// (f32NativeKernels) — the same math as mhaBwdHead but with every matmul on
+// the f32-native SIMD band kernel, in THREE parallelWork barriers:
+//
+//  1. pack each KV head's Kᵀ[dk,sk], Vᵀ[dk,sk] and K[sk,dk];
+//  2. one pass over (head, query-row band) tasks. Per band: S = Q·Kᵀ →
+//     softmax → P; dA = dO·Vᵀ; dS = scale·P∘(dA − rowdot) (rowdot in f64);
+//     dQ_band = dS·K (disjoint dQ rows — written directly); and the band's
+//     dK/dV PARTIALS dSᵀ·Q_band / Pᵀ·dO_band into its own [sk,dk] slots
+//     (full rectangles; masked columns have P = dS = 0 so they add nothing);
+//  3. reduce each KV group's rep·bands partials (ascending head-band order)
+//     into dK/dV.
+//
+// The per-band f32 partials regroup the fold vs ref's ascending-i per-group
+// accumulation — inside the f32 tolerance this path is gated to (the f64
+// backward keeps the exact-order kernels above).
+func mhaBwdGemmF32(q, k, v, g, dQ, dK, dV []float32, geo mhaGeo) {
+	seq, dk, kvDM := geo.sq, geo.dk, geo.kvDM
+	rep, heads := geo.rep, geo.heads
+	kvHeads := heads / rep
+	// Packs, per KV head: Kᵀ[dk,seq] | Vᵀ[dk,seq] | K[sk,dk].
+	packP := getF32Raw(kvHeads * 3 * dk * seq)
+	defer putF32(packP)
+	pack := *packP
+	kvStride := 3 * dk * seq
+	parallelWork(kvHeads*seq, 3*dk, func(lo, hi int) {
+		for t := lo; t < hi; t++ {
+			kv, j := t/seq, t%seq
+			base := j*kvDM + kv*dk
+			kr := k[base : base+dk : base+dk]
+			vr := v[base : base+dk : base+dk]
+			kt := pack[kv*kvStride:]
+			vt := pack[kv*kvStride+dk*seq:]
+			for d := range dk {
+				kt[d*seq+j] = kr[d]
+				vt[d*seq+j] = vr[d]
+			}
+			copy(pack[kv*kvStride+2*dk*seq+j*dk:kv*kvStride+2*dk*seq+(j+1)*dk], kr)
+		}
+	})
+
+	bands := (seq + mhaBwdBandRows - 1) / mhaBwdBandRows
+	part := heads * bands * seq * dk
+	partP := getF32Raw(2 * part) // store-semantics gemm outputs: fully written
+	defer putF32(partP)
+	pk, pv := (*partP)[:part], (*partP)[part:]
+
+	// Dynamic (head, band) scheduling in descending-cost order — same
+	// rationale as the forward's.
+	nTasks := heads * bands
+	workers := max(runtime.GOMAXPROCS(0), 1)
+	var nextT atomic.Int64
+	parallelWork(workers, (nTasks*mhaBwdBandRows*seq*(5*dk+4)/2+workers-1)/workers, func(_, _ int) {
+		for {
+			t := int(nextT.Add(1)) - 1
+			if t >= nTasks {
+				return
+			}
+			h, b := t%heads, bands-1-t/heads
+			i0 := b * mhaBwdBandRows
+			iN := min(mhaBwdBandRows, seq-i0)
+			slot := (h*bands + b) * seq * dk
+			mhaBwdGemmBand(q, g, dQ, pack, pk[slot:slot+seq*dk], pv[slot:slot+seq*dk], geo, h, i0, iN)
+		}
+	})
+
+	// Reduce each KV group's rep·bands partials (ascending head, then band —
+	// a fixed fold order) into dK/dV. Row-parallel; disjoint outputs.
+	parallelWork(kvHeads*seq, rep*bands*dk, func(lo, hi int) {
+		for t := lo; t < hi; t++ {
+			kv, j := t/seq, t%seq
+			base := j*kvDM + kv*dk
+			ko := dK[base : base+dk : base+dk]
+			vo := dV[base : base+dk : base+dk]
+			for d := range dk {
+				var sk, sv float32
+				for hb := kv * rep * bands; hb < (kv+1)*rep*bands; hb++ {
+					off := hb*seq*dk + j*dk + d
+					sk += pk[off]
+					sv += pv[off]
+				}
+				ko[d] = sk
+				vo[d] = sv
+			}
+		}
+	})
+}
+
+// mhaBwdGemmBand runs the backward pipeline for query rows [i0,i0+iN) of head
+// h, writing that band's dQ rows and its dK/dV partials (partK/partV, [sk,dk]).
+func mhaBwdGemmBand(q, g, dQ, pack []float32, partK, partV []float32, geo mhaGeo, h, i0, iN int) {
+	seq, dk, dm := geo.sq, geo.dk, geo.dm
+	kv := h / geo.rep
+	kvStride := 3 * dk * seq
+	kt := pack[kv*kvStride : kv*kvStride+dk*seq]
+	vt := pack[kv*kvStride+dk*seq : kv*kvStride+2*dk*seq]
+	kh := pack[kv*kvStride+2*dk*seq : (kv+1)*kvStride]
+	qOff := h * dk
+
+	qbP, gbP := getF32Raw(iN*dk), getF32Raw(iN*dk)
+	sbP, daP := getF32Raw(iN*seq), getF32Raw(iN*seq)
+	ptP, dqbP := getF32Raw(2*seq*iN), getF32Raw(iN*dk)
+	defer putF32(qbP)
+	defer putF32(gbP)
+	defer putF32(sbP)
+	defer putF32(daP)
+	defer putF32(ptP)
+	defer putF32(dqbP)
+	qb, gb, sb, da, dqb := *qbP, *gbP, *sbP, *daP, *dqbP
+	pt, dat := (*ptP)[:seq*iN], (*ptP)[seq*iN:]
+
+	for r := range iN {
+		copy(qb[r*dk:(r+1)*dk], q[(i0+r)*dm+qOff:(i0+r)*dm+qOff+dk])
+		copy(gb[r*dk:(r+1)*dk], g[(i0+r)*dm+qOff:(i0+r)*dm+qOff+dk])
+	}
+	// P (softmax weights, masked columns zero) and dA = dO·Vᵀ. Causal: both
+	// gemms skip the band's fully-masked column span (see mhaFwdGemmBand).
+	jHi := seq
+	if geo.causal {
+		jHi = min((i0+iN+15)&^15, seq)
+	}
+	gemmF32RowsCols(qb, kt, sb, 0, iN, dk, seq, 0, jHi)
+	mhaSoftmaxBandF32(sb, geo, h, i0, iN)
+	gemmF32RowsCols(gb, vt, da, 0, iN, dk, seq, 0, jHi)
+	// dS = scale·P∘(dA − rowdot), rowdot = Σ_j P·dA in f64, on each row's live
+	// [jmin,jmax) span; the masked span is explicitly zeroed so the dSᵀ·Q
+	// partial gemm adds exactly 0 for it.
+	scale := geo.scale
+	for r := range iN {
+		jmin, jmax := geo.bounds(i0 + r)
+		pr := sb[r*seq : (r+1)*seq : (r+1)*seq]
+		dar := da[r*seq : (r+1)*seq : (r+1)*seq]
+		var dot float64
+		for j := jmin; j < jmax; j++ {
+			dot += float64(pr[j]) * float64(dar[j])
+		}
+		clear(dar[:jmin])
+		for j := jmin; j < jmax; j++ {
+			dar[j] = float32(scale * float64(pr[j]) * (float64(dar[j]) - dot))
+		}
+		clear(dar[jmax:])
+	}
+	// dQ band = dS·K → disjoint dQ rows.
+	gemmF32Rows(da, kh, dqb, 0, iN, seq, dk)
+	for r := range iN {
+		copy(dQ[(i0+r)*dm+qOff:(i0+r)*dm+qOff+dk], dqb[r*dk:(r+1)*dk])
+	}
+	// Band partials: dV += Pᵀ·dO, dK += dSᵀ·Q — as store-semantics gemms into
+	// this band's own slots, via the [seq,iN] transposes of P and dS.
+	for r := range iN {
+		pr := sb[r*seq : (r+1)*seq : (r+1)*seq]
+		dar := da[r*seq : (r+1)*seq : (r+1)*seq]
+		for j := range seq {
+			pt[j*iN+r] = pr[j]
+			dat[j*iN+r] = dar[j]
+		}
+	}
+	gemmF32Rows(pt, gb, partV, 0, seq, iN, dk)
+	gemmF32Rows(dat, qb, partK, 0, seq, iN, dk)
 }
 
 // mhaBwdScratch is the per-worker scratch of one backward head pass.

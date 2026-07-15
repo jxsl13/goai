@@ -51,6 +51,17 @@ func conv2dKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs
 	k := c * kh * kw
 	rows := n * ho * wo
 
+	// Perf builds (f32NativeKernels): route the f32 conv through the f32-native
+	// SIMD gemmF32 entry point (AVX/NEON) instead of the scalar f64 band kernel —
+	// same ADR-0021/0026 tolerance-for-speed trade as the matmul op. The default
+	// build keeps the bit-exact fused f64 path below.
+	if f32NativeKernels && x.Dtype() == tensor.F32 {
+		return conv2dF32Native(ctx, xc, wcont, bias, convGeo{
+			n: n, c: c, h: h, wd: wd, f: f, kh: kh, kw: kw,
+			s: s, p: p, ho: ho, wo: wo, k: k, rows: rows,
+		})
+	}
+
 	// im2col: cols[r, (c,ky,kx)] with zero padding materialized
 	colsP := getF64(rows * k)
 	defer putF64(colsP)
@@ -103,6 +114,65 @@ func conv2dKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs
 	return []*tensor.Tensor{out}, nil
 }
 
+// convGeo bundles the conv2d geometry shared by the kernel paths.
+type convGeo struct {
+	n, c, h, wd, f, kh, kw, s, p, ho, wo, k, rows int
+}
+
+// conv2dF32Native is the gemm-routed f32 conv of the perf builds: the same
+// fused ONE-parallelWork row-band pipeline as the f64 path below (im2col →
+// GEMM band → scatter, §T463's pool-churn lesson), but with an f32 column
+// matrix and the f32-native SIMD band kernel (NEON on arm64 / AVX on amd64 via
+// gemmF32Rows). Numerics: the im2col fill and weight transpose are exact
+// copies, so the only rounding change vs the default path is the gemm's f32
+// accumulation (K·u_f32-bounded, ADR-0021 tolerance) and the bias add in f32 —
+// both inside the gemmF32Tolerant parity budget.
+func conv2dF32Native(ctx *backend.Context, xc, wcont, bias *tensor.Tensor, g convGeo) ([]*tensor.Tensor, error) {
+	k, rows, f := g.k, g.rows, g.f
+	colsP := getF32(rows * k) // zeroed: padding taps stay 0
+	defer putF32(colsP)
+	cols := *colsP
+	wtP := getF32Raw(k * f) // fully overwritten by wtFill
+	defer putF32(wtP)
+	wt := *wtP
+	prodP := getF32Raw(rows * f) // store semantics: fully written by the gemm
+	defer putF32(prodP)
+	prod := *prodP
+
+	xs, ws := xc.Storage().F32(), wcont.Storage().F32()
+	wtFill(wt, ws, f, k)
+
+	out := tensor.NewOn(ctx.Device(), tensor.F32, tensor.Shape{g.n, f, g.ho, g.wo})
+	os := out.Storage().F32()
+	var bs []float32
+	if bias != nil {
+		bs = make([]float32, f)
+		for fi := range f {
+			bs[fi] = float32(bias.AtF64(fi))
+		}
+	}
+	hw := g.ho * g.wo
+	work := k + k*f + f // per-row: im2col fill + GEMM row + scatter
+	parallelWork(rows, work, func(lo, hi int) {
+		im2colFillBand(cols, xs, lo, hi, k, g.ho, g.wo, g.c, g.kh, g.kw, g.s, g.p, g.h, g.wd)
+		gemmF32Rows(cols, wt, prod, lo, hi, k, f)
+		for r := lo; r < hi; r++ {
+			ni, rem := r/hw, r%hw
+			pr := prod[r*f : r*f+f : r*f+f]
+			if bs != nil {
+				for fi, v := range pr {
+					os[(ni*f+fi)*hw+rem] = v + bs[fi]
+				}
+			} else {
+				for fi, v := range pr {
+					os[(ni*f+fi)*hw+rem] = v
+				}
+			}
+		}
+	})
+	return []*tensor.Tensor{out}, nil
+}
+
 // convScatterBand writes prod rows [lo,hi) — prod[(n,oy,ox), f] — into
 // out[n,f,ho,wo], adding the hoisted bias when present.
 func convScatterBand[T normFloat](prod []float64, os []T, bs []float64, lo, hi, f, hw int) {
@@ -127,10 +197,11 @@ func init() {
 }
 
 // im2colFillBand materializes im2col rows [lo,hi) (§T342) from a concrete []T
-// input slice into the f64 GEMM scratch — direct indexed reads instead of the old
-// per-element get closure. Padding taps stay 0 (adding 0·w is bit-safe). Runs
-// inside the fused conv row-band pass (no parallelWork of its own).
-func im2colFillBand[T normFloat](cols []float64, xs []T, lo, hi, k, ho, wo, c, kh, kw, s, p, h, wd int) {
+// input slice into the GEMM scratch (f64 on the default path, f32 on the
+// gemm-routed f32-native path — the copy is exact either way) — direct indexed
+// reads instead of the old per-element get closure. Padding taps stay 0
+// (adding 0·w is bit-safe).
+func im2colFillBand[D, T normFloat](cols []D, xs []T, lo, hi, k, ho, wo, c, kh, kw, s, p, h, wd int) {
 	for r := lo; r < hi; r++ {
 		ni := r / (ho * wo)
 		rem := r % (ho * wo)
@@ -143,7 +214,7 @@ func im2colFillBand[T normFloat](cols []float64, xs []T, lo, hi, k, ho, wo, c, k
 				for kx := 0; kx < kw; kx++ {
 					ix := ox*s + kx - p
 					if iy >= 0 && iy < h && ix >= 0 && ix < wd {
-						cols[base+kk] = float64(xs[((ni*c+ci)*h+iy)*wd+ix])
+						cols[base+kk] = D(xs[((ni*c+ci)*h+iy)*wd+ix])
 					}
 					kk++
 				}
@@ -153,11 +224,12 @@ func im2colFillBand[T normFloat](cols []float64, xs []T, lo, hi, k, ho, wo, c, k
 }
 
 // wtFill transposes the weights [F, C·KH·KW] into column order [C·KH·KW, F] over a
-// concrete []T slice (devirtualized, no get closure).
-func wtFill[T normFloat](wt []float64, ws []T, f, k int) {
+// concrete []T slice (devirtualized, no get closure). The destination is f64 on
+// the default path and f32 on the gemm-routed f32-native path (exact copy).
+func wtFill[D, T normFloat](wt []D, ws []T, f, k int) {
 	for fi := 0; fi < f; fi++ {
 		for kk := 0; kk < k; kk++ {
-			wt[kk*f+fi] = float64(ws[fi*k+kk])
+			wt[kk*f+fi] = D(ws[fi*k+kk])
 		}
 	}
 }

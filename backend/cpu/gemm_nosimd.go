@@ -8,21 +8,12 @@ package cpu
 // and the default pure-Go result is unchanged (§V3, §V11 tol 0). Contract for
 // both: C is ACCUMULATED into (+=), so callers pass a zeroed buffer for a plain
 // product and a live buffer to add onto (conv im2col scatter relies on this).
-
-// gemmF32 computes C[m,n] = A·B, f32. Default build: accumulate in an f64 scratch
-// (§V10) then narrow — bit-exact. The amd64+simd build overrides this with an
-// f32-native kernel that writes C directly (gemm_simd.go).
-func gemmF32(A, B, C []float32, m, k, n int) {
-	accP := getF64(m * n) // pooled zeroed f64 accumulation scratch (§V10, §T463)
-	acc := *accP
-	parallelWork(m, k*n, func(loRow, hiRow int) {
-		gemmF32Band(A, B, acc, loRow, hiRow, k, n)
-	})
-	for i := range C {
-		C[i] = float32(acc[i])
-	}
-	putF64(accP)
-}
+//
+// The gemmF32 entry point lives in gemm_f32default.go (default builds) /
+// gemm_simd.go (amd64+simd) / gemm_neon_arm64.go (arm64+simd); the band kernels
+// below stay in this file because the f64 path — and the f32 f64-accumulating
+// default — are shared by every non-amd64-simd build, including arm64+simd
+// (whose experiment only replaces the F32 matmul entry point, ADR-0026).
 
 // gemmF64Band computes rows [loRow,hiRow) of C with 4-row register blocking
 // (§T12b): each B row is loaded once and reused for four C rows, quartering

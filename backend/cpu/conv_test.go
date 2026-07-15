@@ -13,7 +13,9 @@ import (
 
 // §V3/§V11: im2col+GEMM conv is bit-identical to the reference across shapes,
 // strides, padding, bias, and both dtypes ((c,ky,kx) column order preserves the
-// accumulation order).
+// accumulation order). On the f32-native perf builds (gemmF32Tolerant) the f32
+// conv routes through the SIMD gemmF32 and is checked within the same ADR-0021
+// K-scaled tolerance as the matmul op instead; F64 stays bit-exact everywhere.
 func TestConvCrossReferenceExact(t *testing.T) {
 	cpu, _ := backend.Get(backend.CPU)
 	ref, _ := backend.Get(backend.Ref)
@@ -52,7 +54,7 @@ func TestConvCrossReferenceExact(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			assertEqualExact(t, gc[0], gr[0], "conv2d")
+			assertMatMul(t, gc[0], gr[0], "conv2d")
 		}
 	}
 }
