@@ -185,6 +185,14 @@ func mhaFwdGemmBand(q, kt, vh, out []float32, g mhaGeo, h, i0, iN int) {
 // f32 once, and every masked column is zeroed so a following full-rectangle
 // P·V gemm adds exactly 0 for it.
 func mhaSoftmaxBandF32(sb []float32, g mhaGeo, h, i0, iN int) {
+	if vexpNeon {
+		// arm64 perf build: f32-native band softmax with 4-wide NEON exp
+		// (vexp.go) — after the T657 gemm routing, scalar math.Exp was ~35%
+		// of the forward. Compile-time const: the default build (and amd64,
+		// whose softmax stays on this scalar body) is untouched.
+		mhaSoftmaxBandVexpF32(sb, g, h, i0, iN)
+		return
+	}
 	sk := g.sk
 	rowP := getF64(sk)
 	defer putF64(rowP)
