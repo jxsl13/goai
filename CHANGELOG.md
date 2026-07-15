@@ -4,6 +4,23 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — flash decode attention: GQA K/V sharing beats the cuBLAS chain at every depth (worker linux-amd64, Tw52, 2026-07-15)
+- `cu_gqa_flash_dpos` + `GroupedQueryAttentionKVDposFlashInto`: flash decoding for the
+  graph path — one block per (kv head, key chunk) stages K/V tiles into shared memory
+  once for ALL query heads of the GQA group (cutting K/V reads 8× on TinyLlama, the
+  duplication batched cuBLAS cannot avoid), split-K online-softmax partials + a small
+  merge kernel. Parity ≤1e-5 vs the chain (GQA/MQA/MHA, pos=0, 2048 depth,
+  hostile-magnitude logits), graph-capturable, quality gates unchanged (Mistral-7B
+  Q4_K 24/24 greedy agreement vs Q8).
+- Interleaved A/B (TinyLlama Q4_K graph): **+3.5% at 160 ctx (250→258), +26% deep in a
+  2048 cache (168→212 tok/s)** — the long-context fade is now −15% instead of −33%.
+  All graph decoders (Q8/Q4/Q4_K/Qwen/f32) switched to flash; the losing chain stays
+  behind `GOAI_CUDA_FUSED_ATTN=0` for A/B.
+- Measure-first record: two simpler one-block-per-q-head fusions were built and
+  REJECTED (fp64 output 74 tok/s @2k — GeForce fp64 is 1/64 rate; f32 rewrite 102 vs
+  chain 168: the chain was never launch-bound inside a captured graph). Both removed;
+  numbers in docs/benchmarking.md.
+
 ### CUDA — the decode scoreboard: goai leads llama.cpp-Q8 at every scale (worker linux-amd64, Tw51, 2026-07-15)
 - `TestCUDAQ4KGraphDecodeSweep`: Q4_K on the CUDA-graph path across all eligible models —
   TinyLlama 249.4, Qwen1.5B 174.4, Qwen3B 97.9, **Mistral-7B 49.5 tok/s**. Against

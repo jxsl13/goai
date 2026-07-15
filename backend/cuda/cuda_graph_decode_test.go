@@ -113,7 +113,7 @@ func (gd *graphDecoder) forwardBody(tb testing.TB) {
 		mustTB(tb, gd.dk.RoPEDposInv(gd.kv, gd.inv, gd.pos, 0))
 		mustTB(tb, l.cache.AppendDpos(gd.dk, gd.dv, gd.pos))
 		kF, vF := l.cache.FullView()
-		mustTB(tb, cuda.GroupedQueryAttentionKVDposInto(gd.dq, kF, vF, gd.heads, gd.kv, gd.pos, gd.scores, gd.da))
+		mustTB(tb, cuda.GroupedQueryAttentionKVDposFlashInto(gd.dq, kF, vF, gd.heads, gd.kv, gd.pos, gd.da))
 		mustTB(tb, l.wo.MatMulAccInto(gd.da, gd.dx))
 		mustTB(tb, gd.dx.RMSNormInto(l.gFFN, float32(gd.eps), gd.dh2))
 		mustTB(tb, l.wg.MatMulInto(gd.dh2, gd.dgate))

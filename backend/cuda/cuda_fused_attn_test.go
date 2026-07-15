@@ -14,12 +14,16 @@ import (
 	"github.com/jxsl13/goai/tensor"
 )
 
-// The fused decode-attention kernel (QKᵀ + scale/causal/softmax + ·V in one
-// launch, scores in shared memory) must match the 3-kernel dpos chain it
-// replaces across head configs, head dims, cache sizes and positions —
-// including the partial-warp tail (lim not a multiple of the warp count) and
-// the pos=0 single-key edge.
-func TestCUDAFusedGQADposParity(t *testing.T) {
+// The flash decode-attention kernel (GQA K/V-shared split-K online-softmax
+// partials + merge) must match the 3-kernel dpos chain it replaces across head
+// configs, head dims, cache sizes and positions — including the partial-warp
+// tail (lim not a multiple of the warp count) and the pos=0 single-key edge.
+//
+// (A simpler one-block-per-q-head fused kernel — v1 fp64 output 74 tok/s, v2
+// f32 warp-partitioned 102 — was BUILT, measured strictly dominated by both
+// the chain and flash at every context depth, and removed; see the Tw52 spec
+// entry for the record.)
+func TestCUDAFlashGQADposParity(t *testing.T) {
 	skipNoGPU(t)
 	cases := []struct {
 		qHeads, kvHeads, hd, seqKV, pos int
@@ -52,33 +56,77 @@ func TestCUDAFusedGQADposParity(t *testing.T) {
 			must(t, err)
 			defer ref.Free()
 
-			out, _ := cuda.UploadF32(bench.RandF32(tensor.Shape{1, wq}, 5)) // junk-filled: the kernel must overwrite every dim
-			defer out.Free()
-			must(t, cuda.GroupedQueryAttentionKVDposFusedInto(dq, dk, dv, c.qHeads, c.kvHeads, pos, out))
-
 			hr, _ := ref.ToHost()
-			hf, _ := out.ToHost()
-			if m := maxAbsDiff(hr, hf); m > 1e-5 {
-				t.Fatalf("fused != 3-kernel chain, maxAbs %.3e", m)
+			outFl, _ := cuda.UploadF32(bench.RandF32(tensor.Shape{1, wq}, 6)) // junk-filled: the kernel must overwrite every dim
+			defer outFl.Free()
+			must(t, cuda.GroupedQueryAttentionKVDposFlashInto(dq, dk, dv, c.qHeads, c.kvHeads, pos, outFl))
+			hl, _ := outFl.ToHost()
+			if m := maxAbsDiff(hr, hl); m > 1e-5 {
+				t.Fatalf("flash != 3-kernel chain, maxAbs %.3e", m)
 			}
 		})
 	}
 }
 
+// Hostile-magnitude inputs: the flash kernel's online softmax must stay finite
+// where naive exp would overflow f32 (logits ~ ±1e4·scale) — the running-max
+// subtraction, the m==-INF empty-state correction and the l==0 merge guard are
+// the failure spots. Parity vs the chain (whose softmax is double) must hold.
+func TestCUDAFlashGQAExtremeMagnitudes(t *testing.T) {
+	skipNoGPU(t)
+	const qHeads, kvHeads, hd, seqKV, p = 8, 2, 64, 257, 255 // odd sizes: partial tiles + partial warps
+	wq, wkv := qHeads*hd, kvHeads*hd
+	pos, err := cuda.NewDevicePos()
+	must(t, err)
+	defer pos.Free()
+	must(t, pos.Set(p))
+	for _, scale := range []float32{1e4, -1e4, 1e-30} { // huge, huge-negative, denormal-tiny
+		qd := make([]float32, wq)
+		rq := bench.RandF32(tensor.Shape{1, wq}, 7)
+		for i := range qd {
+			qd[i] = float32(rq.AtF64(0, i)) * scale
+		}
+		q := tensor.FromFloat32(tensor.Shape{1, wq}, qd)
+		k := bench.RandF32(tensor.Shape{seqKV, wkv}, 8)
+		v := bench.RandF32(tensor.Shape{seqKV, wkv}, 9)
+		dq, _ := cuda.UploadF32(q)
+		dk, _ := cuda.UploadF32(k)
+		dv, _ := cuda.UploadF32(v)
+		ref, err := cuda.GroupedQueryAttentionKVDpos(dq, dk, dv, qHeads, kvHeads, pos)
+		must(t, err)
+		out, _ := cuda.UploadF32(bench.RandF32(tensor.Shape{1, wq}, 10))
+		must(t, cuda.GroupedQueryAttentionKVDposFlashInto(dq, dk, dv, qHeads, kvHeads, pos, out))
+		hr, _ := ref.ToHost()
+		hf, _ := out.ToHost()
+		for i := 0; i < wq; i++ {
+			if x := hf.AtF64(0, i); x != x || x > 1e30 || x < -1e30 {
+				t.Fatalf("scale %g: non-finite output at %d: %g", scale, i, x)
+			}
+		}
+		if m := maxAbsDiff(hr, hf); m > 1e-4 { // wider bar: saturated softmax amplifies exp rounding
+			t.Fatalf("scale %g: flash != chain, maxAbs %.3e", scale, m)
+		}
+		dq.Free()
+		dk.Free()
+		dv.Free()
+		ref.Free()
+		out.Free()
+	}
+}
+
 // TestCUDAFusedAttnLongCtx measures graph decode throughput DEEP in the context
 // window (TinyLlama Q4_K, 2048-slot fixed cache, ~2000 tokens of state), where
-// the 3-kernel chain's [heads,seqKV] score round-trip through global memory
-// scales with seqKV but the fused kernel's shared-memory scores do not. A/B via
-// GOAI_CUDA_FUSED_ATTN=1 (fused) vs unset (chain) — the short-ctx (160) verdict
-// comes from the sweep A/B; this is the long-ctx leg.
+// the 3-kernel chain's per-q-head K/V re-reads and score round-trip scale with
+// seqKV but the flash kernel's GQA-shared tiles cut K/V traffic by the group
+// factor. A/B via GOAI_CUDA_FUSED_ATTN=0 (chain) vs unset (flash) — the
+// short-ctx (160) verdict comes from the sweep A/B; this is the long-ctx leg.
 //
-// MEASURED (RTX 3060, 2026-07-15): chain 168 tok/s, fused v1 (fp64 output) 74,
-// fused v2 (f32 + warp-partitioned output) 102 — the chain sits at the K/V
-// bandwidth limit (~90µs/layer incl. the 8× GQA duplication), the one-block-
-// per-q-head kernel is latency-bound. The lever that can beat the chain is
-// GQA K/V SHARING (stage K/V tiles in shared once per kv-head for all group
-// q-heads, online softmax, split-K + merge — flash decoding), which cuts K/V
-// traffic 8×; the chain structurally cannot do that.
+// MEASURED (RTX 3060, 2026-07-15, interleaved pairs): chain 168 tok/s — it
+// sits at the K/V bandwidth limit (~90µs/layer INCLUDING the 8× GQA
+// duplication), so one-block-per-q-head fusion lost (v1 fp64 output 74, v2
+// f32 warp-partitioned 102, both removed). FLASH (K/V staged in shared once
+// per kv-head for all group q-heads, split-K online softmax + merge) wins:
+// 212 tok/s = +26% over the chain here, +3.5% at ctx160.
 func TestCUDAFusedAttnLongCtx(t *testing.T) {
 	skipNoGPU(t)
 	const path = "../../models/tinyllama-1.1b-chat-q8_0.gguf"
@@ -111,9 +159,9 @@ func TestCUDAFusedAttnLongCtx(t *testing.T) {
 		tok = int32(gd.stepGraph(t, tok, depth+8+d))
 	}
 	tps := float64(steps) / time.Since(t0).Seconds()
-	mode := "3-kernel chain"
-	if os.Getenv("GOAI_CUDA_FUSED_ATTN") == "1" {
-		mode = "fused"
+	mode := "flash"
+	if os.Getenv("GOAI_CUDA_FUSED_ATTN") == "0" {
+		mode = "3-kernel chain"
 	}
 	t.Logf("TinyLlama-1.1B Q4_K GRAPH decode @ctx≈%d (%s): %.1f tok/s", depth+8+steps/2, mode, tps)
 }

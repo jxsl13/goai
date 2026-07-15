@@ -34,7 +34,7 @@ static cudaStream_t gStream = NULL;
 static CUcontext gCtx = NULL; // runtime's primary context, retained for driver-API launches
 static CUfunction gGelu = NULL, gSilu = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gQgemv = NULL, gQgemv4 = NULL, gQgemv4k = NULL, gCvtF16 = NULL; // lazily nvrtc-compiled
 static CUfunction gRopeDpos = NULL, gAttnSoftmaxDpos = NULL, gAppendDpos = NULL; // device-position (graph-capturable) twins
-static CUfunction gGqaFusedDpos = NULL; // fused decode attention (QKᵀ+softmax+·V, one launch)
+static CUfunction gGqaFlashPart = NULL, gGqaFlashMerge = NULL; // flash decode: GQA K/V-shared split-K partials + merge
 static CUfunction gArgmax = NULL, gLayerNorm = NULL, gAddBias = NULL; // greedy argmax; layernorm; broadcast bias-add
 static CUfunction gCopy2d = NULL; // strided 2D copy (fused-QKV band extraction, llamagpu adapter)
 static int ensure_init(void); // fwd decls (defined later)
@@ -1363,93 +1363,138 @@ done:
     return rc;
 }
 
-// cu_gqa_fused_dpos: the FUSED decode attention — QKᵀ, scale+causal-mask+softmax
-// and ·V in ONE kernel launch for the seqQ==1 (decode) case. Replaces the
-// cu_gqa_scores → cu_attn_softmax_dpos → cu_gqa_out chain (3 launches + a
-// [qHeads,seqKV] global score round-trip); scores live in shared memory.
-// One block per query head: warps partition keys (coalesced K reads, shuffle
-// dot-reduce), block softmax in double (mirrors cu_attn_softmax_dpos
-// arithmetic), then threads partition output dims (coalesced V reads). The
-// causal limit is read from device int *dOff (graph-capturable); keys
-// 0..*dOff inclusive contribute. Q is [1, qHeads·hd], K/V span the full
-// fixed cache [seqKV, kvHeads·hd], out is [1, qHeads·hd].
-int cu_gqa_fused_dpos(const void* dQ, const void* dK, const void* dV, void* dOut,
+// cu_gqa_flash_dpos: FLASH decode attention (seqQ==1) — the structural win over
+// the cuBLAS chain is GQA K/V SHARING: one block per (kv head, key chunk)
+// stages K/V tiles into shared memory ONCE and serves ALL `group` query heads
+// of that kv head (the chain reads K/V `group`× — 8× on TinyLlama). Online
+// softmax (Milakov-Gimelshein) with split-K partials (m, l, unnormalized acc)
+// written to a device scratch, then a small merge kernel combines the splitK
+// partials per query head. Two launches, no [heads,seqKV] score matrix, K/V
+// traffic cut by `group`. The causal limit comes from device int *dOff and the
+// chunking from the fixed cache size — both graph-capturable.
+int cu_gqa_flash_dpos(const void* dQ, const void* dK, const void* dV, void* dOut,
                       int seqKV, int qHeads, int kvHeads, int hd, float scale, const void* dOff) {
+    static void* sPart = NULL; // grow-only [qHeads*splitK*(hd+2)] f32 partials
+    static size_t cPart = 0;
     int rc = -1;
+    int group = qHeads / kvHeads;
+    if (hd > 128 || group > 8) return -4; // register/warp budget (all local models fit)
+    int splitK = seqKV / 32; // ≥64 keys per chunk after tiling; capture-constant
+    if (splitK < 1) splitK = 1;
+    if (splitK > 32) splitK = 32;
     pthread_mutex_lock(&gLock);
     if (ensure_init() != 0) { rc = -1; goto done; }
     if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
-    if (!gGqaFusedDpos && compile_kernel(
-                              "extern \"C\" __global__ void gqa_fused_dpos(const float* q, const float* k, const float* v, float* out,\n"
-                              "                                            int seqKV, int qHeads, int kvHeads, int hd, float scale, const int* dOff){\n"
-                              "  int h = blockIdx.x; if (h >= qHeads) return;\n"
-                              "  int kvh = h / (qHeads / kvHeads);\n"
-                              "  int WKV = kvHeads * hd;\n"
+    if (!gGqaFlashPart && compile_kernel(
+                              "extern \"C\" __global__ void gqa_flash_partial(const float* q, const float* k, const float* v, float* part,\n"
+                              "    int seqKV, int qHeads, int kvHeads, int hd, float scale, const int* dOff, int splitK){\n"
+                              "  int kvh = blockIdx.x / splitK, c = blockIdx.x % splitK;\n"
+                              "  int group = qHeads / kvHeads, WKV = kvHeads * hd;\n"
                               "  int lim = *dOff; if (lim >= seqKV) lim = seqKV - 1;\n"
+                              "  int total = lim + 1;\n"
+                              "  int chunk = (seqKV + splitK - 1) / splitK;\n"
+                              "  int begin = c * chunk, end = begin + chunk;\n"
+                              "  if (end > total) end = total;\n"
+                              "  int t = threadIdx.x, nt = blockDim.x, lane = t & 31, w = t >> 5;\n"
+                              "  int hp = hd + 1; // shared row padding against bank conflicts\n"
                               "  extern __shared__ float sh[];\n"
-                              "  float* shq = sh;                                   // [hd] the query head\n"
-                              "  float* shs = sh + hd;                              // [seqKV] scores then probabilities\n"
-                              "  double* red = (double*)(sh + ((hd + seqKV + 1) & ~1)); // [nt] reduction scratch (8B-aligned)\n"
-                              "  int t = threadIdx.x, nt = blockDim.x;\n"
-                              "  const float* qh = q + h * hd;\n"
-                              "  for (int d = t; d < hd; d += nt) shq[d] = qh[d];\n"
-                              "  __syncthreads();\n"
-                              "  int lane = t & 31, w = t >> 5, nw = nt >> 5;\n"
-                              "  for (int j = w; j <= lim; j += nw) {\n"
-                              "    const float* kr = k + (size_t)j * WKV + (size_t)kvh * hd;\n"
-                              "    float dot = 0.f;\n"
-                              "    for (int d = lane; d < hd; d += 32) dot += shq[d] * kr[d];\n"
-                              "    for (int s = 16; s > 0; s >>= 1) dot += __shfl_down_sync(0xffffffffu, dot, s);\n"
-                              "    if (lane == 0) shs[j] = dot;\n"
+                              "  float* shq = sh;               // [group*hd] the group's query heads\n"
+                              "  float* shk = shq + group * hd; // [32*hp] K tile\n"
+                              "  float* shv = shk + 32 * hp;    // [32*hp] V tile\n"
+                              "  for (int i = t; i < group * hd; i += nt) shq[i] = q[(size_t)kvh * group * hd + i];\n"
+                              "  float NEGINF = __int_as_float(0xff800000);\n"
+                              "  float m = NEGINF, l = 0.f, a0 = 0.f, a1 = 0.f, a2 = 0.f, a3 = 0.f;\n"
+                              "  for (int base = begin; base < end; base += 32) {\n"
+                              "    int nk = end - base; if (nk > 32) nk = 32;\n"
+                              "    __syncthreads();\n"
+                              "    for (int i = t; i < nk * hd; i += nt) {\n"
+                              "      int j = i / hd, d = i - j * hd;\n"
+                              "      size_t src = (size_t)(base + j) * WKV + (size_t)kvh * hd + d;\n"
+                              "      shk[j * hp + d] = k[src];\n"
+                              "      shv[j * hp + d] = v[src];\n"
+                              "    }\n"
+                              "    __syncthreads();\n"
+                              "    if (w < group) {\n"
+                              "      float s = NEGINF;\n"
+                              "      if (lane < nk) {\n"
+                              "        const float* kr = shk + lane * hp;\n"
+                              "        const float* qh = shq + w * hd;\n"
+                              "        float dot = 0.f;\n"
+                              "        for (int d = 0; d < hd; d++) dot += qh[d] * kr[d];\n"
+                              "        s = dot * scale;\n"
+                              "      }\n"
+                              "      float bm = s;\n"
+                              "      for (int o = 16; o > 0; o >>= 1) { float z = __shfl_down_sync(0xffffffffu, bm, o); if (z > bm) bm = z; }\n"
+                              "      bm = __shfl_sync(0xffffffffu, bm, 0);\n"
+                              "      float newm = m > bm ? m : bm;\n"
+                              "      float corr = __expf(m - newm); // m==-INF -> 0\n"
+                              "      float p = (lane < nk) ? __expf(s - newm) : 0.f;\n"
+                              "      float bl = p;\n"
+                              "      for (int o = 16; o > 0; o >>= 1) bl += __shfl_down_sync(0xffffffffu, bl, o);\n"
+                              "      bl = __shfl_sync(0xffffffffu, bl, 0);\n"
+                              "      l = l * corr + bl; m = newm;\n"
+                              "      a0 *= corr; a1 *= corr; a2 *= corr; a3 *= corr;\n"
+                              "      for (int j = 0; j < nk; j++) {\n"
+                              "        float pj = __shfl_sync(0xffffffffu, p, j);\n"
+                              "        const float* vr = shv + j * hp;\n"
+                              "        if (lane < hd)      a0 += pj * vr[lane];\n"
+                              "        if (lane + 32 < hd) a1 += pj * vr[lane + 32];\n"
+                              "        if (lane + 64 < hd) a2 += pj * vr[lane + 64];\n"
+                              "        if (lane + 96 < hd) a3 += pj * vr[lane + 96];\n"
+                              "      }\n"
+                              "    }\n"
                               "  }\n"
-                              "  __syncthreads();\n"
-                              "  double m = -1e300;\n"
-                              "  for (int j = t; j <= lim; j += nt) { double s = (double)shs[j] * scale; if (s > m) m = s; }\n"
-                              "  red[t] = m; __syncthreads();\n"
-                              "  for (int s = nt/2; s > 0; s >>= 1) { if (t < s && red[t+s] > red[t]) red[t] = red[t+s]; __syncthreads(); }\n"
-                              "  double rowmax = red[0]; __syncthreads();\n"
-                              "  double local = 0.0;\n"
-                              "  for (int j = t; j <= lim; j += nt) { double e = exp((double)shs[j]*scale - rowmax); shs[j] = (float)e; local += e; }\n"
-                              "  red[t] = local; __syncthreads();\n"
-                              "  for (int s = nt/2; s > 0; s >>= 1) { if (t < s) red[t] += red[t+s]; __syncthreads(); }\n"
-                              "  float inv = (float)(1.0 / red[0]);\n"
-                              "  float* accP = (float*)(red + nt);           // [nw*hd] per-warp output partials\n"
-                              "  __syncthreads();\n"
-                              "  // Output: warps partition keys (f32 register accumulators — GeForce fp64 is\n"
-                              "  // 1/64 rate; cublasSgemm accumulates f32 too), then a cross-warp reduce.\n"
-                              "  float acc0 = 0.f, acc1 = 0.f, acc2 = 0.f, acc3 = 0.f; // d = lane + {0,32,64,96} (hd <= 128)\n"
-                              "  for (int j = w; j <= lim; j += nw) {\n"
-                              "    float p = shs[j];\n"
-                              "    const float* vr = v + (size_t)j * WKV + (size_t)kvh * hd;\n"
-                              "    if (lane < hd)      acc0 += p * vr[lane];\n"
-                              "    if (lane + 32 < hd) acc1 += p * vr[lane + 32];\n"
-                              "    if (lane + 64 < hd) acc2 += p * vr[lane + 64];\n"
-                              "    if (lane + 96 < hd) acc3 += p * vr[lane + 96];\n"
-                              "  }\n"
-                              "  float* ap = accP + w * hd;\n"
-                              "  if (lane < hd)      ap[lane] = acc0;\n"
-                              "  if (lane + 32 < hd) ap[lane + 32] = acc1;\n"
-                              "  if (lane + 64 < hd) ap[lane + 64] = acc2;\n"
-                              "  if (lane + 96 < hd) ap[lane + 96] = acc3;\n"
-                              "  __syncthreads();\n"
-                              "  float* oh = out + h * hd;\n"
-                              "  for (int d = t; d < hd; d += nt) {\n"
-                              "    float s = 0.f;\n"
-                              "    for (int ww = 0; ww < nw; ww++) s += accP[ww * hd + d];\n"
-                              "    oh[d] = s * inv;\n"
+                              "  if (w < group) {\n"
+                              "    int qh = kvh * group + w;\n"
+                              "    float* o = part + (size_t)(qh * splitK + c) * (hd + 2);\n"
+                              "    if (lane == 0) { o[0] = m; o[1] = l; }\n"
+                              "    if (lane < hd)      o[2 + lane] = a0;\n"
+                              "    if (lane + 32 < hd) o[2 + lane + 32] = a1;\n"
+                              "    if (lane + 64 < hd) o[2 + lane + 64] = a2;\n"
+                              "    if (lane + 96 < hd) o[2 + lane + 96] = a3;\n"
                               "  }\n"
                               "}\n",
-                              "gqa_fused_dpos.cu", "gqa_fused_dpos", &gGqaFusedDpos) != 0) { rc = -2; goto done; }
+                              "gqa_flash_partial.cu", "gqa_flash_partial", &gGqaFlashPart) != 0) { rc = -2; goto done; }
+    if (!gGqaFlashMerge && compile_kernel(
+                               "extern \"C\" __global__ void gqa_flash_merge(const float* part, float* out, int qHeads, int hd, int splitK){\n"
+                               "  int qh = blockIdx.x; if (qh >= qHeads) return;\n"
+                               "  int t = threadIdx.x, nt = blockDim.x;\n"
+                               "  float NEGINF = __int_as_float(0xff800000);\n"
+                               "  float M = NEGINF;\n"
+                               "  for (int s = 0; s < splitK; s++) {\n"
+                               "    const float* p = part + (size_t)(qh * splitK + s) * (hd + 2);\n"
+                               "    if (p[1] > 0.f && p[0] > M) M = p[0];\n"
+                               "  }\n"
+                               "  float L = 0.f;\n"
+                               "  for (int s = 0; s < splitK; s++) {\n"
+                               "    const float* p = part + (size_t)(qh * splitK + s) * (hd + 2);\n"
+                               "    if (p[1] > 0.f) L += p[1] * __expf(p[0] - M);\n"
+                               "  }\n"
+                               "  float invL = 1.f / L;\n"
+                               "  for (int d = t; d < hd; d += nt) {\n"
+                               "    float a = 0.f;\n"
+                               "    for (int s = 0; s < splitK; s++) {\n"
+                               "      const float* p = part + (size_t)(qh * splitK + s) * (hd + 2);\n"
+                               "      if (p[1] > 0.f) a += __expf(p[0] - M) * p[2 + d];\n"
+                               "    }\n"
+                               "    out[qh * hd + d] = a * invL;\n"
+                               "  }\n"
+                               "}\n",
+                               "gqa_flash_merge.cu", "gqa_flash_merge", &gGqaFlashMerge) != 0) { rc = -2; goto done; }
+    if (ensure_devp(&sPart, &cPart, (size_t)qHeads * splitK * (hd + 2) * sizeof(float)) != 0) { rc = -9; goto done; }
     {
-        int threads = 256, blocks = qHeads;
-        if (hd > 128) { rc = -4; goto done; } // register accumulators cover d = lane + {0,32,64,96}
-        size_t shmem = (size_t)((hd + seqKV + 1) & ~1) * sizeof(float) + (size_t)threads * sizeof(double)
-                     + (size_t)(threads / 32) * hd * sizeof(float);
-        void* args[10];
-        args[0] = &dQ; args[1] = &dK; args[2] = &dV; args[3] = &dOut;
+        int threads = 256;
+        int blocks = kvHeads * splitK;
+        size_t shmem = ((size_t)group * hd + 2u * 32u * (hd + 1)) * sizeof(float);
+        void* args[11];
+        args[0] = &dQ; args[1] = &dK; args[2] = &dV; args[3] = &sPart;
         args[4] = &seqKV; args[5] = &qHeads; args[6] = &kvHeads; args[7] = &hd;
-        args[8] = &scale; args[9] = &dOff;
-        rc = (cuLaunchKernel(gGqaFusedDpos, blocks, 1, 1, threads, 1, 1, shmem, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+        args[8] = &scale; args[9] = &dOff; args[10] = &splitK;
+        if (cuLaunchKernel(gGqaFlashPart, blocks, 1, 1, threads, 1, 1, shmem, (CUstream)gStream, args, NULL) != CUDA_SUCCESS) { rc = -3; goto done; }
+        int mthreads = 128;
+        void* margs[5];
+        margs[0] = &sPart; margs[1] = &dOut; margs[2] = &qHeads; margs[3] = &hd; margs[4] = &splitK;
+        rc = (cuLaunchKernel(gGqaFlashMerge, qHeads, 1, 1, mthreads, 1, 1, 0, (CUstream)gStream, margs, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 done:
     pthread_mutex_unlock(&gLock);
