@@ -50,8 +50,22 @@ func MemInfo() (free, total uint64) {
 }
 
 func (Backend) Kernel(op backend.Op, dtype tensor.Dtype) (backend.Kernel, bool) {
-	if op == backend.OpMatMul && dtype == tensor.F32 {
+	if dtype != tensor.F32 {
+		return nil, false // F64 and other dtypes: Pure-Go (§I4)
+	}
+	switch op {
+	case backend.OpMatMul:
 		return matmulF32, true
+	case backend.OpSiLU:
+		return siluF32, true
+	case backend.OpGELU:
+		return geluF32, true
+	case backend.OpAdd:
+		return addF32, true
+	case backend.OpMul:
+		return mulF32, true
+	case backend.OpSoftmax:
+		return softmaxF32, true
 	}
 	return nil, false // everything else: fallback to Pure-Go (§I4)
 }
