@@ -4,6 +4,15 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA/CPU hybrid DECODE — T631 serving-path proof (worker linux-amd64, 2026-07-15)
+- `TestCUDAHybridDecode`: autoregressive generation split across GPU + CPU-SIMD with
+  DUAL KV-caches (device-side for the GPU layers, host-side for the CPU layers). 11 of
+  22 TinyLlama layers offloaded to the CPU backend, the hidden state crossing GPU→host
+  once per token at the split — generates the SAME 5/5 greedy tokens as the all-GPU
+  decode. This is the actual T631 serving path (per-token decode, not just one forward).
+  With the prior cost gates + prefill-split proof, T631 now has cost + prefill-mechanism
+  + decode-mechanism all validated. Worker sub-spec §PERF.
+
 ### CUDA/CPU hybrid split decode — T631 mechanism proof (worker linux-amd64, 2026-07-15)
 - `TestCUDAHybridSplitDecode`: proves a model can run SPLIT across GPU + CPU-SIMD.
   The first N TinyLlama layers run device-resident on the RTX 3060, the rest are
