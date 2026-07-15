@@ -457,3 +457,377 @@ func BenchmarkExpRow512(b *testing.B) {
 		benchExpRow(b, vexpF32)
 	})
 }
+
+// TestSiluF32Accuracy sweeps the vsilu pipeline (through the build-selected
+// vsiluF32 — NEON on arm64+simd, the scalar poly elsewhere) against the exact
+// f64 x·sigmoid(x) reference (ref's OpSiLU formula, §T665) — the
+// VERIFY-BEFORE-BENCH parity gate for the OpSiLU F32 fast path. Budget:
+// |got−ref| ≤ 1e-6 + 2e-4·|ref| (observed rel err ~1e-7 in the active
+// region) — an order under the ADR-0021 f32 tolerance (rtol 2e-3). Tails must
+// saturate: silu(x) → x exactly for large +x, → −0 for x ≤ −88 (the pdfMin
+// mask); silu(−Inf) = −Inf·0 = NaN and silu(+Inf) = +Inf exactly like the f64
+// reference; NaN propagates; ±0 keep their sign.
+func TestSiluF32Accuracy(t *testing.T) {
+	rng := rand.New(rand.NewPCG(43, 47))
+	siluRef := func(x float32) float64 {
+		xd := float64(x)
+		var s float64
+		if xd >= 0 {
+			s = 1 / (1 + math.Exp(-xd))
+		} else {
+			z := math.Exp(xd)
+			s = z / (1 + z)
+		}
+		return xd * s
+	}
+	check := func(xs []float32, label string) {
+		t.Helper()
+		got := make([]float32, len(xs))
+		vsiluF32(got, xs)
+		var maxAbs, maxRel float64
+		for i, x := range xs {
+			w := siluRef(x)
+			gv := float64(got[i])
+			abs := math.Abs(gv - w)
+			if abs > maxAbs {
+				maxAbs = abs
+			}
+			if math.Abs(w) > 1e-6 {
+				if rel := abs / math.Abs(w); rel > maxRel {
+					maxRel = rel
+				}
+			}
+			if abs > 1e-6+2e-4*math.Abs(w) {
+				t.Fatalf("%s: silu(%g) = %g, want %g (abs %.2e)", label, x, gv, w, abs)
+			}
+		}
+		t.Logf("%s: max abs err %.2e, max rel err %.2e (|ref|>1e-6) over %d points (vexpNeon=%v)",
+			label, maxAbs, maxRel, len(xs), vexpNeon)
+	}
+
+	// Dense uniform sweep of the task's accuracy domain [−40, 40].
+	n := 1 << 20
+	xs := make([]float32, n)
+	for i := range xs {
+		xs[i] = float32(-40 + 80*float64(i)/float64(n-1))
+	}
+	check(xs, "uniform[-40,40]")
+
+	// Random SwiGLU-typical pre-activations.
+	for i := range xs {
+		xs[i] = 8 * (rng.Float32() - 0.5)
+	}
+	check(xs, "random[-4,4]")
+
+	// Fine grid around 0 (poly center, sign handoff, silu(0)=0).
+	for i := range xs {
+		xs[i] = rng.Float32() - 0.5
+	}
+	check(xs, "center[-0.5,0.5]")
+
+	// Tail saturation: silu → x on the right, −0 on the left.
+	sat := []float32{40, 88, 100, 1e30}
+	out := make([]float32, len(sat))
+	vsiluF32(out, sat)
+	for i, x := range sat {
+		if out[i] != x {
+			t.Errorf("silu(%g) = %g, want exact x", x, out[i])
+		}
+	}
+	neg := []float32{-88, -100, -1e30, -1e38}
+	vsiluF32(out[:len(neg)], neg)
+	for i, x := range neg {
+		if out[i] != 0 || !math.Signbit(float64(out[i])) {
+			t.Errorf("silu(%g) = %g, want -0", x, out[i])
+		}
+	}
+
+	// Edge semantics mirror the f64 reference: silu(+Inf)=+Inf,
+	// silu(-Inf)=NaN (−Inf·0), NaN propagates, ±0 keep their sign.
+	edge := []float32{float32(math.Inf(1)), float32(math.Inf(-1)), float32(math.NaN()), 0, float32(math.Copysign(0, -1))}
+	eout := make([]float32, len(edge))
+	vsiluF32(eout, edge)
+	if !math.IsInf(float64(eout[0]), 1) {
+		t.Errorf("silu(+Inf) = %g, want +Inf", eout[0])
+	}
+	if !math.IsNaN(float64(eout[1])) {
+		t.Errorf("silu(-Inf) = %g, want NaN", eout[1])
+	}
+	if !math.IsNaN(float64(eout[2])) {
+		t.Errorf("silu(NaN) = %g, want NaN", eout[2])
+	}
+	if eout[3] != 0 || math.Signbit(float64(eout[3])) {
+		t.Errorf("silu(+0) = %g, want +0", eout[3])
+	}
+	if eout[4] != 0 || !math.Signbit(float64(eout[4])) {
+		t.Errorf("silu(-0) = %g, want -0", eout[4])
+	}
+}
+
+// TestSiluGradF32Accuracy sweeps the vsiluGrad pipeline (through the
+// build-selected vsiluGradF32) against the exact f64 SiLU derivative
+// g·σ(x)·(1+x·(1−σ(x))) — ref's siluBackwardKernel formula (§T362), the
+// VERIFY-BEFORE-BENCH parity gate for the OpSiLUBackward fast path. Budget:
+// |got−ref| ≤ 1e-6·|g| + 1e-7 + 2e-4·|ref| (the geluGrad envelope; observed
+// rel err ~1e-7 in the active region, the atol terms govern near the
+// derivative's zero crossing at x ≈ −1.278 and in the deep tails). Tails:
+// silu'(x) → 1 for large +x (dx = g exactly), → 0 for large −x; ±Inf give
+// NaN exactly like ref's f64 path (Inf·0 in the x·(1−σ) term); NaN propagates.
+func TestSiluGradF32Accuracy(t *testing.T) {
+	rng := rand.New(rand.NewPCG(53, 59))
+	gradRef := func(x, g float32) float64 {
+		xd, gd := float64(x), float64(g)
+		var s float64
+		if xd >= 0 {
+			s = 1 / (1 + math.Exp(-xd))
+		} else {
+			z := math.Exp(xd)
+			s = z / (1 + z)
+		}
+		return gd * s * (1 + xd*(1-s))
+	}
+	check := func(xs, gs []float32, label string) {
+		t.Helper()
+		got := make([]float32, len(xs))
+		vsiluGradF32(got, xs, gs)
+		var maxAbs, maxRel float64
+		for i, x := range xs {
+			w := gradRef(x, gs[i])
+			gv := float64(got[i])
+			abs := math.Abs(gv - w)
+			if abs > maxAbs {
+				maxAbs = abs
+			}
+			if math.Abs(w) > 1e-3 {
+				if rel := abs / math.Abs(w); rel > maxRel {
+					maxRel = rel
+				}
+			}
+			if abs > 1e-6*math.Abs(float64(gs[i]))+1e-7+2e-4*math.Abs(w) {
+				t.Fatalf("%s: siluGrad(%g)·%g = %g, want %g (abs %.2e)", label, x, gs[i], gv, w, abs)
+			}
+		}
+		t.Logf("%s: max abs err %.2e, max rel err %.2e (|ref|>1e-3) over %d points (vexpNeon=%v)",
+			label, maxAbs, maxRel, len(xs), vexpNeon)
+	}
+
+	// Dense uniform sweep of the task's accuracy domain [−40, 40], unit g.
+	n := 1 << 20
+	xs := make([]float32, n)
+	gs := make([]float32, n)
+	for i := range xs {
+		xs[i] = float32(-40 + 80*float64(i)/float64(n-1))
+		gs[i] = 1
+	}
+	check(xs, gs, "uniform[-40,40]·1")
+
+	// Random SwiGLU-typical pre-activations with random upstream gradients.
+	for i := range xs {
+		xs[i] = 8 * (rng.Float32() - 0.5)
+		gs[i] = 4 * (rng.Float32() - 0.5)
+	}
+	check(xs, gs, "random[-4,4]·[-2,2]")
+
+	// Fine grid around the derivative's zero crossing (x ≈ −1.278) and 0.
+	for i := range xs {
+		xs[i] = -2 + 2.5*rng.Float32()
+		gs[i] = 1
+	}
+	check(xs, gs, "crossing[-2,0.5]")
+
+	// Tail saturation: silu'(x) → 1 for large +x (dx = g exactly, z masked to
+	// a true 0), → 0 for large −x.
+	sat := []float32{88, 100, 1e30, 1e38}
+	twos := []float32{2, 2, 2, 2}
+	out := make([]float32, len(sat))
+	vsiluGradF32(out, sat, twos)
+	for i, x := range sat {
+		if out[i] != 2 {
+			t.Errorf("siluGrad(%g)·2 = %g, want exact 2", x, out[i])
+		}
+	}
+	neg := []float32{-88, -100, -1e30, -1e38}
+	vsiluGradF32(out, neg, twos)
+	for i, x := range neg {
+		if out[i] != 0 {
+			t.Errorf("siluGrad(%g)·2 = %g, want 0", x, out[i])
+		}
+	}
+
+	// Edge semantics mirror the f64 reference: ±Inf → NaN (the Inf·0 in
+	// x·(1−σ) / σ·x), NaN propagates, x=0 → 0.5·g (σ(0)=0.5).
+	edge := []float32{float32(math.Inf(1)), float32(math.Inf(-1)), float32(math.NaN()), 0}
+	eg := []float32{1, 1, 1, 2}
+	eout := make([]float32, len(edge))
+	vsiluGradF32(eout, edge, eg)
+	if !math.IsNaN(float64(eout[0])) {
+		t.Errorf("siluGrad(+Inf) = %g, want NaN (ref: 1+Inf·0)", eout[0])
+	}
+	if !math.IsNaN(float64(eout[1])) {
+		t.Errorf("siluGrad(-Inf) = %g, want NaN (ref: 0·-Inf)", eout[1])
+	}
+	if !math.IsNaN(float64(eout[2])) {
+		t.Errorf("siluGrad(NaN) = %g, want NaN", eout[2])
+	}
+	if math.Abs(float64(eout[3])-1) > 1e-6 {
+		t.Errorf("siluGrad(0)·2 = %g, want 1 (silu'(0)=0.5)", eout[3])
+	}
+
+	// ±40 tails against the f64 reference (the task's accuracy bracket edges).
+	brk := []float32{40, -40}
+	bg := []float32{1, 1}
+	bout := make([]float32, len(brk))
+	vsiluGradF32(bout, brk, bg)
+	for i, x := range brk {
+		w := gradRef(x, 1)
+		if math.Abs(float64(bout[i])-w) > 1e-6+2e-4*math.Abs(w) {
+			t.Errorf("siluGrad(%g) = %g, want %g", x, bout[i], w)
+		}
+	}
+}
+
+// TestSigmoidF32Accuracy sweeps the vsigmoid pipeline (through the
+// build-selected vsigmoidF32) against the exact f64 stable-split sigmoid
+// (ref's formula) — the parity gate for the OpSigmoid F32 fast path. Budget:
+// |got−ref| ≤ 1e-6 + 2e-4·|ref|. σ(−Inf) and the x ≤ −87.34 tail return the
+// exp underflow-clamp residue ~1.18e-38 instead of ref's exact 0 (no pdfMin
+// mask — see vexp.go) — inside the atol term; σ(+Inf) = 1 and NaN propagation
+// are exact.
+func TestSigmoidF32Accuracy(t *testing.T) {
+	rng := rand.New(rand.NewPCG(61, 67))
+	sigRef := func(x float32) float64 {
+		xd := float64(x)
+		if xd >= 0 {
+			return 1 / (1 + math.Exp(-xd))
+		}
+		z := math.Exp(xd)
+		return z / (1 + z)
+	}
+	check := func(xs []float32, label string) {
+		t.Helper()
+		got := make([]float32, len(xs))
+		vsigmoidF32(got, xs)
+		var maxAbs, maxRel float64
+		for i, x := range xs {
+			w := sigRef(x)
+			gv := float64(got[i])
+			abs := math.Abs(gv - w)
+			if abs > maxAbs {
+				maxAbs = abs
+			}
+			if math.Abs(w) > 1e-6 {
+				if rel := abs / math.Abs(w); rel > maxRel {
+					maxRel = rel
+				}
+			}
+			if abs > 1e-6+2e-4*math.Abs(w) {
+				t.Fatalf("%s: sigmoid(%g) = %g, want %g (abs %.2e)", label, x, gv, w, abs)
+			}
+		}
+		t.Logf("%s: max abs err %.2e, max rel err %.2e (|ref|>1e-6) over %d points (vexpNeon=%v)",
+			label, maxAbs, maxRel, len(xs), vexpNeon)
+	}
+
+	// Dense uniform sweep of the task's accuracy domain [−40, 40].
+	n := 1 << 20
+	xs := make([]float32, n)
+	for i := range xs {
+		xs[i] = float32(-40 + 80*float64(i)/float64(n-1))
+	}
+	check(xs, "uniform[-40,40]")
+
+	// Random gate-typical inputs and the poly center.
+	for i := range xs {
+		xs[i] = 16 * (rng.Float32() - 0.5)
+	}
+	check(xs, "random[-8,8]")
+	for i := range xs {
+		xs[i] = rng.Float32() - 0.5
+	}
+	check(xs, "center[-0.5,0.5]")
+
+	// Saturation and edges: σ(+Inf)=1 and σ(large +x)=1 exactly; σ(−Inf) and
+	// σ(deep −x) ≤ the clamp residue (~1.18e-38, an exact-enough 0); σ(±0)=0.5;
+	// NaN propagates.
+	sat := []float32{40, 100, 1e30, float32(math.Inf(1))}
+	out := make([]float32, len(sat))
+	vsigmoidF32(out, sat)
+	for i, x := range sat {
+		if out[i] != 1 {
+			t.Errorf("sigmoid(%g) = %g, want exact 1", x, out[i])
+		}
+	}
+	neg := []float32{-100, -1e30, float32(math.Inf(-1))}
+	vsigmoidF32(out[:len(neg)], neg)
+	for i, x := range neg {
+		if !(out[i] >= 0 && out[i] <= 1.3e-38) {
+			t.Errorf("sigmoid(%g) = %g, want ≤ 1.3e-38", x, out[i])
+		}
+	}
+	edge := []float32{float32(math.NaN()), 0, float32(math.Copysign(0, -1))}
+	eout := make([]float32, len(edge))
+	vsigmoidF32(eout, edge)
+	if !math.IsNaN(float64(eout[0])) {
+		t.Errorf("sigmoid(NaN) = %g, want NaN", eout[0])
+	}
+	if eout[1] != 0.5 || eout[2] != 0.5 {
+		t.Errorf("sigmoid(±0) = %g/%g, want 0.5", eout[1], eout[2])
+	}
+}
+
+// TestVsiluF32MatchesScalarTail / TestVsiluGradF32MatchesScalarTail /
+// TestVsigmoidF32MatchesScalarTail: the vector lanes and the scalar tail poly
+// agree to a few ulps, so a chunk's values don't jump at the len%4 boundary
+// (the parallel() chunking makes the lane/tail split position vary).
+func TestVsiluF32MatchesScalarTail(t *testing.T) {
+	rng := rand.New(rand.NewPCG(71, 73))
+	xs := make([]float32, 256)
+	for i := range xs {
+		xs[i] = 24 * (rng.Float32() - 0.5)
+	}
+	vec := make([]float32, len(xs))
+	vsiluF32(vec, xs)
+	for i, x := range xs {
+		s := siluF32(x)
+		diff := math.Abs(float64(vec[i]) - float64(s))
+		if diff > 1e-6+2e-6*math.Abs(float64(s)) {
+			t.Fatalf("lane %d: vsilu(%g) = %g vs scalar %g", i, x, vec[i], s)
+		}
+	}
+}
+
+func TestVsiluGradF32MatchesScalarTail(t *testing.T) {
+	rng := rand.New(rand.NewPCG(79, 83))
+	xs := make([]float32, 256)
+	gs := make([]float32, 256)
+	for i := range xs {
+		xs[i] = 24 * (rng.Float32() - 0.5)
+		gs[i] = 2 * (rng.Float32() - 0.5)
+	}
+	vec := make([]float32, len(xs))
+	vsiluGradF32(vec, xs, gs)
+	for i, x := range xs {
+		s := siluGradF32(x, gs[i])
+		diff := math.Abs(float64(vec[i]) - float64(s))
+		if diff > 1e-6+2e-6*math.Abs(float64(s)) {
+			t.Fatalf("lane %d: vsiluGrad(%g)·%g = %g vs scalar %g", i, x, gs[i], vec[i], s)
+		}
+	}
+}
+
+func TestVsigmoidF32MatchesScalarTail(t *testing.T) {
+	rng := rand.New(rand.NewPCG(89, 97))
+	xs := make([]float32, 256)
+	for i := range xs {
+		xs[i] = 24 * (rng.Float32() - 0.5)
+	}
+	vec := make([]float32, len(xs))
+	vsigmoidF32(vec, xs)
+	for i, x := range xs {
+		s := sigmoidF32(x)
+		diff := math.Abs(float64(vec[i]) - float64(s))
+		if diff > 1e-6+2e-6*math.Abs(float64(s)) {
+			t.Fatalf("lane %d: vsigmoid(%g) = %g vs scalar %g", i, x, vec[i], s)
+		}
+	}
+}

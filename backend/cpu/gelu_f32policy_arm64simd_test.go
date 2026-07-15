@@ -2,9 +2,10 @@
 
 package cpu_test
 
-// Experiment build (arm64): the cpu OpGELU F32 kernel runs the f32-native
-// NEON pipeline (AS-7.1.26 erf on the vexp exp primitive, vexp.go) → within
-// |err| ≤ 1e-6 + 2e-4·|ref| of the exact math.Erf reference
-// (TestGeluF32Accuracy), not bit-exact. F64 GELU and every other build stay
+// Experiment build (arm64): the cpu OpGELU / OpSigmoid / OpSiLU F32 kernels
+// run the f32-native NEON pipelines (AS-7.1.26 erf / stable-split sigmoid on
+// the vexp exp primitive, vexp.go) → within |err| ≤ 1e-6 + 2e-4·|ref| of the
+// exact f64 reference (TestGeluF32Accuracy / TestSigmoidF32Accuracy /
+// TestSiluF32Accuracy), not bit-exact. F64 and every other build stay
 // bit-exact.
 const geluF32Tolerant = true

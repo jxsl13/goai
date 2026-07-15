@@ -39,3 +39,25 @@ func vgeluGradF32(dst, x, g []float32) {
 		dst[i] = geluGradF32(v, g[i])
 	}
 }
+
+// vsiluF32 / vsiluGradF32 / vsigmoidF32 compute the SiLU / SiLU-backward /
+// sigmoid scalar polys — they exist only so the arm64-perf fast paths
+// type-check (dead code at run time here: vexpNeon is false, so the kernels
+// keep the exact scalar-f64 / ref paths bit-for-bit).
+func vsiluF32(dst, src []float32) {
+	for i, v := range src {
+		dst[i] = siluF32(v)
+	}
+}
+
+func vsiluGradF32(dst, x, g []float32) {
+	for i, v := range x {
+		dst[i] = siluGradF32(v, g[i])
+	}
+}
+
+func vsigmoidF32(dst, src []float32) {
+	for i, v := range src {
+		dst[i] = sigmoidF32(v)
+	}
+}

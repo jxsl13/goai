@@ -505,6 +505,15 @@ func sigmoidKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs
 		})
 	case tensor.F32:
 		d, o := xc.Storage().F32(), out.Storage().F32()
+		if vexpNeon {
+			// arm64 perf build: f32-native 4-wide NEON sigmoid — the same
+			// stable split evaluated on the vexp exp primitive (vexp.go,
+			// §T665). Compile-time const: every other build (default, amd64)
+			// keeps the f64 path below bit-for-bit; this path rides the
+			// ADR-0021 f32 tolerance.
+			parallel(len(o), func(lo, hi int) { vsigmoidF32(o[lo:hi], d[lo:hi]) })
+			break
+		}
 		parallel(len(o), func(lo, hi int) {
 			for i := lo; i < hi; i++ {
 				x := float64(d[i])
@@ -535,6 +544,15 @@ func siluKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) (
 		})
 	case tensor.F32:
 		d, o := xc.Storage().F32(), out.Storage().F32()
+		if vexpNeon {
+			// arm64 perf build: f32-native 4-wide NEON SiLU on the vexp exp
+			// primitive (vexp.go, §T665) — the SwiGLU FFN activation on every
+			// Llama/Qwen/Mistral layer was scalar f64 math.Exp here. Compile-
+			// time const: every other build (default, amd64) keeps the f64
+			// path below bit-for-bit; this path rides the ADR-0021 tolerance.
+			parallel(len(o), func(lo, hi int) { vsiluF32(o[lo:hi], d[lo:hi]) })
+			break
+		}
 		parallel(len(o), func(lo, hi int) {
 			for i := lo; i < hi; i++ {
 				x := float64(d[i])
@@ -545,6 +563,28 @@ func siluKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) (
 		return nil, fmt.Errorf("cpu: silu unsupported dtype %v", in[0].Dtype())
 	}
 	return []*tensor.Tensor{out}, nil
+}
+
+// siluBackwardKernelCPU is the arm64 perf-build F32 SiLU VJP (§T665): dx =
+// g·silu'(x) evaluated f32-native through the NEON vsiluGrad pipeline
+// (vexp.go / vexp_arm64.s) — one exp per element instead of the ref
+// fallback's serial scalar f64 sigmoid. Formula identical to ref's
+// siluBackwardKernel (§T362); only the evaluation is vectorized, riding the
+// ADR-0021 f32 tolerant-parity budget (TestSiluGradF32Accuracy). Registered
+// ONLY when vexpNeon and ONLY for F32 — the default build and amd64 keep the
+// untouched ref fallback bit-for-bit, and so does F64 on this build. A
+// mixed-dtype or mismatched-shape input pair is handed to the reference
+// kernel unchanged.
+func siluBackwardKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
+	if len(in) == 2 && in[0].Dtype() == tensor.F32 && in[1].Dtype() == tensor.F32 &&
+		in[1].Shape().Equal(in[0].Shape()) {
+		xc, gc := in[0].Contiguous(), in[1].Contiguous()
+		dx := tensor.NewOn(ctx.Device(), tensor.F32, in[0].Shape())
+		xs, gs, ds := xc.Storage().F32(), gc.Storage().F32(), dx.Storage().F32()
+		parallel(len(ds), func(lo, hi int) { vsiluGradF32(ds[lo:hi], xs[lo:hi], gs[lo:hi]) })
+		return []*tensor.Tensor{dx}, nil
+	}
+	return backend.Execute(ctx.WithBackend(backend.Reference()).WithRecorder(nil), backend.OpSiLUBackward, in, attrs)
 }
 
 func init() {
@@ -568,9 +608,11 @@ func init() {
 	reg(backend.OpSiLU, siluKernelCPU)
 
 	if vexpNeon {
-		// arm64 perf build only, F32 only (§T664): the NEON GELU VJP. vexpNeon
-		// is a compile-time const, so every other build registers nothing here
-		// and gelu_backward keeps its ref fallback bit-for-bit (as does F64).
+		// arm64 perf build only, F32 only (§T664/§T665): the NEON GELU and
+		// SiLU VJPs. vexpNeon is a compile-time const, so every other build
+		// registers nothing here and gelu_backward / silu_backward keep their
+		// ref fallbacks bit-for-bit (as does F64).
 		std.add(backend.OpGELUBackward, tensor.F32, geluBackwardKernelCPU)
+		std.add(backend.OpSiLUBackward, tensor.F32, siluBackwardKernelCPU)
 	}
 }

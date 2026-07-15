@@ -86,6 +86,39 @@ func BenchmarkGELUBackwardF32_256x2048_ref(b *testing.B) {
 		bench.RandF32(tensor.Shape{256, 2048}, 3), bench.RandF32(tensor.Shape{256, 2048}, 4))
 }
 
+// --- SiLU forward + backward (§T665 §V22 A/B): SwiGLU FFN shapes —
+// [256,1365] is the Llama Dim512 hidden (≈ 8·512/3, non-multiple-of-4 width
+// exercises the NEON tail), [256,2048] the round training shape. On the arm64
+// perf build _cpu runs the NEON vsilu/vsiluGrad kernels; the backward _ref
+// lane is the serial scalar baseline the cpu dispatch previously fell back to
+// (and still does on every other build — identical numbers there). ---
+
+func BenchmarkSiLUF32_256x1365_cpu(b *testing.B) {
+	benchOn(b, backend.CPU, backend.OpSiLU, bench.RandF32(tensor.Shape{256, 1365}, 3))
+}
+func BenchmarkSiLUF32_256x2048_cpu(b *testing.B) {
+	benchOn(b, backend.CPU, backend.OpSiLU, bench.RandF32(tensor.Shape{256, 2048}, 3))
+}
+func BenchmarkSiLUF32_1x2048_cpu(b *testing.B) { // decode-step shape (serial path)
+	benchOn(b, backend.CPU, backend.OpSiLU, bench.RandF32(tensor.Shape{1, 2048}, 3))
+}
+func BenchmarkSiLUBackwardF32_256x1365_cpu(b *testing.B) {
+	benchOn(b, backend.CPU, backend.OpSiLUBackward,
+		bench.RandF32(tensor.Shape{256, 1365}, 3), bench.RandF32(tensor.Shape{256, 1365}, 4))
+}
+func BenchmarkSiLUBackwardF32_256x1365_ref(b *testing.B) {
+	benchOn(b, backend.Ref, backend.OpSiLUBackward,
+		bench.RandF32(tensor.Shape{256, 1365}, 3), bench.RandF32(tensor.Shape{256, 1365}, 4))
+}
+func BenchmarkSiLUBackwardF32_256x2048_cpu(b *testing.B) {
+	benchOn(b, backend.CPU, backend.OpSiLUBackward,
+		bench.RandF32(tensor.Shape{256, 2048}, 3), bench.RandF32(tensor.Shape{256, 2048}, 4))
+}
+func BenchmarkSiLUBackwardF32_256x2048_ref(b *testing.B) {
+	benchOn(b, backend.Ref, backend.OpSiLUBackward,
+		bench.RandF32(tensor.Shape{256, 2048}, 3), bench.RandF32(tensor.Shape{256, 2048}, 4))
+}
+
 // --- Broadcast binary ops (materialization candidates) ---
 
 func BenchmarkAddBcastRowF32_128x2048_cpu(b *testing.B) { // [M,N] + [N]

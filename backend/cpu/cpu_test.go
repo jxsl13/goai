@@ -44,7 +44,7 @@ func TestCPUCrossReferenceExact(t *testing.T) {
 	ref, _ := backend.Get(backend.Ref)
 
 	binOps := []backend.Op{backend.OpAdd, backend.OpSub, backend.OpMul, backend.OpDiv}
-	unOps := []backend.Op{backend.OpNeg, backend.OpExp, backend.OpLog, backend.OpTanh, backend.OpReLU, backend.OpGELU, backend.OpSigmoid}
+	unOps := []backend.Op{backend.OpNeg, backend.OpExp, backend.OpLog, backend.OpTanh, backend.OpReLU, backend.OpGELU, backend.OpSigmoid, backend.OpSiLU}
 
 	for _, dtype := range []tensor.Dtype{tensor.F64, tensor.F32} {
 		mk := func(seed uint64) *tensor.Tensor {
@@ -67,11 +67,20 @@ func TestCPUCrossReferenceExact(t *testing.T) {
 			if op == backend.OpLog {
 				in = bpos
 			}
+			if op == backend.OpSiLU && dtype == tensor.F64 {
+				// Pre-existing ulp split: cpu evaluates x/(1+e^−x), ref
+				// x·σ(x) — identical after F32 rounding (asserted below) but
+				// not in F64, so only the F32 lane is cross-checked here.
+				continue
+			}
 			gc := run(t, cpu, op, in)
 			gr := run(t, ref, op, in)
-			if op == backend.OpGELU && dtype == tensor.F32 && geluF32Tolerant {
-				// arm64 perf build: F32 GELU is the f32-native NEON pipeline
-				// (vexp.go) — TestGeluF32Accuracy's budget, not bit-exact.
+			vexpVectorized := op == backend.OpGELU || op == backend.OpSigmoid || op == backend.OpSiLU
+			if vexpVectorized && dtype == tensor.F32 && geluF32Tolerant {
+				// arm64 perf build: F32 GELU/sigmoid/SiLU are the f32-native
+				// NEON pipelines (vexp.go) — the TestGeluF32Accuracy /
+				// TestSigmoidF32Accuracy / TestSiluF32Accuracy budget, not
+				// bit-exact.
 				assertCloseGelu(t, gc, gr, op.String()+"/"+dtype.String())
 				continue
 			}
@@ -80,9 +89,11 @@ func TestCPUCrossReferenceExact(t *testing.T) {
 	}
 }
 
-// assertCloseGelu: the F32 GELU budget on the arm64 perf build (geluF32Tolerant)
-// — |got−ref| ≤ 1e-6 + 2e-4·|ref|, the TestGeluF32Accuracy envelope, an order
-// inside the ADR-0021 f32 tolerance. NaN must agree exactly.
+// assertCloseGelu: the F32 vexp-pipeline budget on the arm64 perf build
+// (geluF32Tolerant) — |got−ref| ≤ 1e-6 + 2e-4·|ref|, the shared
+// TestGeluF32Accuracy / TestSiluF32Accuracy / TestSigmoidF32Accuracy
+// envelope, an order inside the ADR-0021 f32 tolerance. NaN must agree
+// exactly.
 func assertCloseGelu(t *testing.T, got, want *tensor.Tensor, label string) {
 	t.Helper()
 	if !got.Shape().Equal(want.Shape()) {
@@ -168,6 +179,61 @@ func TestCPUGeluBackwardCrossReference(t *testing.T) {
 	}
 }
 
+// §V3/§V11 CROSS for the SiLU VJP (§T665): on the default build (and amd64,
+// and F64 everywhere) the cpu backend registers no silu_backward kernel, so
+// dispatch falls back to ref — asserted BIT-EXACT here. On the arm64 perf
+// build the F32 kernel is the f32-native NEON vsiluGrad pipeline (vexp.go) —
+// asserted within the TestSiluGradF32Accuracy envelope (geluF32Tolerant gates
+// on exactly the vexpNeon build combination). The SwiGLU FFN training shape
+// [256,1365] (hidden ≈ 8·512/3 for Dim512) exceeds parThreshold, so the
+// parallel chunking (and its NEON lane/scalar-tail splits — 1365 is not a
+// multiple of 4) is exercised too.
+func TestCPUSiluBackwardCrossReference(t *testing.T) {
+	cpu := cpuBackend(t)
+	ref, _ := backend.Get(backend.Ref)
+	shape := tensor.Shape{256, 1365}
+	for _, dtype := range []tensor.Dtype{tensor.F64, tensor.F32} {
+		mk := func(seed uint64, scale float64) *tensor.Tensor {
+			var tt *tensor.Tensor
+			if dtype == tensor.F64 {
+				tt = bench.RandF64(shape, seed)
+				d := tt.Storage().F64()
+				for i := range d {
+					d[i] = scale * (d[i] - 0.5)
+				}
+			} else {
+				tt = bench.RandF32(shape, seed)
+				d := tt.Storage().F32()
+				for i := range d {
+					d[i] = float32(scale) * (d[i] - 0.5)
+				}
+			}
+			return tt
+		}
+		x := mk(31, 8) // pre-activations spanning SiLU's active region
+		g := mk(32, 4) // upstream gradients, both signs
+		gc, err := backend.Execute(backend.NewContext().WithBackend(cpu), backend.OpSiLUBackward, []*tensor.Tensor{x, g}, nil)
+		if err != nil {
+			t.Fatalf("cpu silu_backward/%v: %v", dtype, err)
+		}
+		gr, err := backend.Execute(backend.NewContext().WithBackend(ref), backend.OpSiLUBackward, []*tensor.Tensor{x, g}, nil)
+		if err != nil {
+			t.Fatalf("ref silu_backward/%v: %v", dtype, err)
+		}
+		if dtype == tensor.F32 && geluF32Tolerant {
+			c, r := gc[0].Storage().F32(), gr[0].Storage().F32()
+			for i := range c {
+				cf, rf := float64(c[i]), float64(r[i])
+				if math.Abs(cf-rf) > 1e-6+2e-4*math.Abs(rf) {
+					t.Fatalf("silu_backward/F32 [%d]: cpu %v vs ref %v", i, c[i], r[i])
+				}
+			}
+			continue
+		}
+		assertEqualExact(t, gc[0], gr[0], "silu_backward/"+dtype.String())
+	}
+}
+
 // Parallel path (n > parThreshold) must match the serial reference.
 func TestCPUParallelCorrect(t *testing.T) {
 	cpu := cpuBackend(t)
@@ -225,11 +291,11 @@ func TestCPUActivationEdge(t *testing.T) {
 			if math.IsNaN(cf) {
 				continue
 			}
-			if op == backend.OpGELU && geluF32Tolerant {
-				// arm64 perf build: finite F32 GELU values carry the NEON
-				// pipeline's budget; ±Inf still match exactly (|Inf−Inf|=NaN
-				// fails the bound only if they differ, which the IsInf check
-				// below rules out).
+			if (op == backend.OpGELU || op == backend.OpSiLU) && geluF32Tolerant {
+				// arm64 perf build: finite F32 GELU/SiLU values carry the
+				// NEON pipeline's budget; ±Inf still match exactly
+				// (|Inf−Inf|=NaN fails the bound only if they differ, which
+				// the IsInf check below rules out).
 				if math.IsInf(cf, 0) || math.IsInf(rf, 0) {
 					if cf != rf {
 						t.Errorf("%v[%d] in=%v: cpu=%v ref=%v", op, i, edge[i], c[i], r[i])

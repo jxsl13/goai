@@ -148,6 +148,83 @@ func geluGradF32(x, g float32) float32 {
 	return g * (phi + x*pdf)
 }
 
+// SiLU / sigmoid on the same leaf (§T665, the §C26 pattern's 4th application):
+// the LLAMA/Qwen/Mistral FFN activation silu(x) = x·σ(x) and the raw σ(x) are
+// one exp away from the vexp primitive. Both use the numerically stable split
+// the scalar sigmoidKernelCPU already uses, folded branch-free: with
+// z = e^(−|x|) (always ≤ 1, so only the exp LO clamp is live),
+//
+//	σ(x) = num/(1+z),  num = (x ≥ 0 ? 1 : z)
+//
+// — for x ≥ 0 that is 1/(1+e^(−x)), for x < 0 it is e^x/(1+e^x); no positive
+// magnitude is ever exponentiated. Then silu(x) = x·num/(1+z), and the SiLU
+// derivative σ(x)·(1+x·(1−σ(x))) folds to a single division: 1−σ(x) =
+// other/(1+z) with num·other = z in BOTH branches, so
+//
+//	silu'(x) = (num·(1+z) + x·z) / (1+z)²
+//
+// — algebraically identical to ref's s·(1+x·(1−s)) (§T362); only the
+// evaluation is f32/NEON, riding the ADR-0021 tolerant parity budget.
+//
+// The geluGradPdfMin mask (above) is reused on z for silu/silu' — expF32's
+// underflow clamp pins deep-negative z at ~1.18e-38 instead of 0, which a huge
+// |x| would resurrect through x·z (and x = ±Inf must give Inf·0 = NaN exactly
+// like ref's f64 path: silu(−Inf) = −Inf·σ(−Inf) = −Inf·0 = NaN). Zeroing
+// sub-clamp z restores exact ±Inf semantics; any true z that small contributes
+// ≤ |x|·1.3e-38 with |x| < 88 ≈ 0 anyway. NaN still propagates: the mask
+// zeroes z, but num = z = 0 (x ≥ 0 is false for NaN) meets x·num = NaN·0 =
+// NaN in the forward and x·z = NaN·0 = NaN in the derivative. Sigmoid has no
+// ·x product to rescue NaN, so it keeps z unmasked — NaN flows through the
+// poly into num/(1+z); the clamp residue σ(−Inf) ≈ 1.18e-38 (vs ref's exact 0)
+// is inside the tolerant budget.
+
+// siluF32 is the scalar instantiation of the vsilu pipeline — the tail lanes
+// (len%4) and the type-check fallback build use it. Same operations per
+// element as the NEON lanes (only FMA contraction may differ).
+func siluF32(x float32) float32 {
+	a := math.Float32frombits(math.Float32bits(x) &^ (1 << 31)) // |x|
+	z := expF32(-a)
+	if !(z > geluGradPdfMin) { // NaN-safe spelling, matches the NEON FCMGT+AND
+		z = 0
+	}
+	num := z
+	if x >= 0 {
+		num = 1
+	}
+	return x * num / (1 + z)
+}
+
+// siluGradF32 is the scalar instantiation of the vsiluGrad pipeline — the tail
+// lanes (len%4) and the type-check fallback build use it: dx = g·silu'(x) with
+// silu' in the single-division form above.
+func siluGradF32(x, g float32) float32 {
+	a := math.Float32frombits(math.Float32bits(x) &^ (1 << 31)) // |x|
+	z := expF32(-a)
+	if !(z > geluGradPdfMin) {
+		z = 0
+	}
+	num := z
+	if x >= 0 {
+		num = 1
+	}
+	den := 1 + z
+	d := (num*den + x*z) / (den * den)
+	return g * d
+}
+
+// sigmoidF32 is the scalar instantiation of the vsigmoid pipeline — the tail
+// lanes (len%4) and the type-check fallback build use it. No pdf mask (see
+// the section comment): NaN propagates through z itself.
+func sigmoidF32(x float32) float32 {
+	a := math.Float32frombits(math.Float32bits(x) &^ (1 << 31)) // |x|
+	z := expF32(-a)
+	num := z
+	if x >= 0 {
+		num = 1
+	}
+	return num / (1 + z)
+}
+
 // mhaSoftmaxBandVexpF32 is the arm64 perf-build body of mhaSoftmaxBandF32
 // (reached only when vexpNeon; see the gate there): the same scale (+ALiBi) →
 // max-shift exp → normalize pipeline, but f32-native end to end — no f64

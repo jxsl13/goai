@@ -57,3 +57,61 @@ func vgeluGradF32(dst, x, g []float32) {
 		dst[i] = geluGradF32(x[i], g[i])
 	}
 }
+
+// vsiluQuadsNeonF32 is the 4-wide NEON SiLU kernel (vexp_arm64.s):
+// dst[i] = silu(src[i]) = src[i]·σ(src[i]) for i in [0, 4·quads) — the stable
+// split sigmoid on the vexp exp primitive (numerics in vexp.go, §T665).
+//
+//go:noescape
+func vsiluQuadsNeonF32(dst, src *float32, quads int)
+
+// vsiluF32 computes dst[i] = silu(src[i]) f32-native: whole quads through the
+// NEON kernel, the len%4 tail through scalar siluF32 (same math per element).
+func vsiluF32(dst, src []float32) {
+	nv := len(src) &^ 3
+	if nv > 0 {
+		vsiluQuadsNeonF32(&dst[0], &src[0], nv>>2)
+	}
+	for i := nv; i < len(src); i++ {
+		dst[i] = siluF32(src[i])
+	}
+}
+
+// vsiluGradQuadsNeonF32 is the 4-wide NEON SiLU-backward kernel (vexp_arm64.s):
+// dst[i] = g[i]·silu'(x[i]) with silu'(x) = (num·(1+z)+x·z)/(1+z)², z=e^(−|x|)
+// (numerics in vexp.go, §T665).
+//
+//go:noescape
+func vsiluGradQuadsNeonF32(dst, x, grad *float32, quads int)
+
+// vsiluGradF32 computes dst[i] = g[i]·silu'(x[i]) f32-native: whole quads
+// through the NEON kernel, the len%4 tail through scalar siluGradF32 (same
+// math per element).
+func vsiluGradF32(dst, x, g []float32) {
+	nv := len(x) &^ 3
+	if nv > 0 {
+		vsiluGradQuadsNeonF32(&dst[0], &x[0], &g[0], nv>>2)
+	}
+	for i := nv; i < len(x); i++ {
+		dst[i] = siluGradF32(x[i], g[i])
+	}
+}
+
+// vsigmoidQuadsNeonF32 is the 4-wide NEON sigmoid kernel (vexp_arm64.s):
+// dst[i] = σ(src[i]) via the stable split on the vexp exp primitive
+// (numerics in vexp.go, §T665).
+//
+//go:noescape
+func vsigmoidQuadsNeonF32(dst, src *float32, quads int)
+
+// vsigmoidF32 computes dst[i] = σ(src[i]) f32-native: whole quads through the
+// NEON kernel, the len%4 tail through scalar sigmoidF32 (same math per element).
+func vsigmoidF32(dst, src []float32) {
+	nv := len(src) &^ 3
+	if nv > 0 {
+		vsigmoidQuadsNeonF32(&dst[0], &src[0], nv>>2)
+	}
+	for i := nv; i < len(src); i++ {
+		dst[i] = sigmoidF32(src[i])
+	}
+}

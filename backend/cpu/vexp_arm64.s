@@ -706,3 +706,443 @@ gradOdd:
 
 gradDone:
 	RET
+
+// func vsiluQuadsNeonF32(dst, src *float32, quads int)
+//
+// 4-wide f32 SiLU (vexp.go, §T665): dst[i] = x·σ(x) for x = src[i],
+// i in [0, 4*quads), via the branch-free stable split — z = exp(−|x|) through
+// the SAME Cephes exp reduction as the kernels above (lo clamp only: −|x| ≤ 0
+// never overflows 2^n), z masked to a true 0 at/below the underflow clamp
+// (FCMGT+AND on pdfMin, exactly the vgeluGrad trick — restores silu(−Inf) =
+// −Inf·0 = NaN), num = (x ≥ 0 ? 1 : z) selected with FCMGE-zero + BSL, then
+// out = x·num/(1+z). Constants are the geluConsts block above — the exp
+// registers (V12, V20/V21, V23..V31) are shared; the erf-only entries
+// (V13/V14, V16..V19, V22) are loaded but unused, and V15 (erf a1) is
+// overwritten once with pdfMin from the tail, so the mask constant stays
+// resident (unlike vgeluGrad there are registers to spare). Same
+// two-quads-per-pass structure (A: V0..V4, B: V6..V10); WORD encodings
+// objdump-verified like the kernels above.
+//
+// Register map: R0 src, R1 dst, R2 quads, R3 consts, R4 pairs, R5 odd;
+// A: V0 x, V1 z, V2 n/sel/num, V3 r/den, V4 poly/mask; B: V6..V10 mirrored.
+TEXT ·vsiluQuadsNeonF32(SB), NOSPLIT, $0-24
+	MOVD dst+0(FP), R1
+	MOVD src+8(FP), R0
+	MOVD quads+16(FP), R2
+	MOVD $geluConsts<>(SB), R3
+	VLD1.P 64(R3), [V12.S4, V13.S4, V14.S4, V15.S4]
+	VLD1.P 64(R3), [V16.S4, V17.S4, V18.S4, V19.S4]
+	VLD1.P 64(R3), [V20.S4, V21.S4, V22.S4, V23.S4]
+	VLD1.P 64(R3), [V24.S4, V25.S4, V26.S4, V27.S4]
+	VLD1.P 64(R3), [V28.S4, V29.S4, V30.S4, V31.S4]
+	VLD1   (R3), [V15.S4] // V15 = pdfMin (overwrites unused erf a1)
+	LSR $1, R2, R4 // pairs of quads
+	AND $1, R2, R5 // odd quad
+	CBZ R4, siluOdd
+
+siluLoop2:
+	VLD1.P 16(R0), [V0.S4]
+	VLD1.P 16(R0), [V6.S4]
+
+	// w = clamp(−|x|), both quads.
+	WORD $0x4EA0F801 // FABS V1.4S, V0.4S           (A: a = |x|)
+	WORD $0x4EA0F8C7 // FABS V7.4S, V6.4S           (B: a = |x|)
+	WORD $0x6EA0F821 // FNEG V1.4S, V1.4S           (A: w = −a)
+	WORD $0x6EA0F8E7 // FNEG V7.4S, V7.4S           (B: w = −a)
+	WORD $0x4E3FF421 // FMAX V1.4S, V1.4S, V31.4S   (A: clamp lo)
+	WORD $0x4E3FF4E7 // FMAX V7.4S, V7.4S, V31.4S   (B: clamp lo)
+
+	// z = exp(w) — the vexp reduction (identical to the kernels above).
+	WORD  $0x6E37DC22 // FMUL V2.4S, V1.4S, V23.4S  (A: z = w·log2e)
+	WORD  $0x6E37DCE8 // FMUL V8.4S, V7.4S, V23.4S  (B: z = w·log2e)
+	WORD  $0x4E218842 // FRINTN V2.4S, V2.4S        (A: n = rint(z))
+	WORD  $0x4E218908 // FRINTN V8.4S, V8.4S        (B: n = rint(z))
+	VFMLS V2.S4, V24.S4, V1.S4 // A: r -= n·ln2hi
+	VFMLS V8.S4, V24.S4, V7.S4 // B: r -= n·ln2hi
+	VFMLS V2.S4, V25.S4, V1.S4 // A: r -= n·ln2lo
+	VFMLS V8.S4, V25.S4, V7.S4 // B: r -= n·ln2lo
+	WORD  $0x4EBB1F63 // ORR V3 = p1                (A)
+	WORD  $0x4EBB1F69 // ORR V9 = p1                (B)
+	VFMLA V26.S4, V1.S4, V3.S4 // A: p = p1 + p0·r
+	VFMLA V26.S4, V7.S4, V9.S4 // B: p = p1 + p0·r
+	WORD  $0x4EBC1F84 // ORR V4 = p2                (A)
+	WORD  $0x4EBC1F8A // ORR V10 = p2               (B)
+	VFMLA V3.S4, V1.S4, V4.S4  // A: p = p2 + p·r
+	VFMLA V9.S4, V7.S4, V10.S4 // B: p = p2 + p·r
+	WORD  $0x4EBD1FA3 // ORR V3 = p3                (A)
+	WORD  $0x4EBD1FA9 // ORR V9 = p3                (B)
+	VFMLA V4.S4, V1.S4, V3.S4  // A: p = p3 + p·r
+	VFMLA V10.S4, V7.S4, V9.S4 // B: p = p3 + p·r
+	WORD  $0x4EBE1FC4 // ORR V4 = p4                (A)
+	WORD  $0x4EBE1FCA // ORR V10 = p4               (B)
+	VFMLA V3.S4, V1.S4, V4.S4  // A: p = p4 + p·r
+	VFMLA V9.S4, V7.S4, V10.S4 // B: p = p4 + p·r
+	WORD  $0x4EB51EA3 // ORR V3 = p5(=half)         (A)
+	WORD  $0x4EB51EA9 // ORR V9 = p5(=half)         (B)
+	VFMLA V4.S4, V1.S4, V3.S4  // A: p = p5 + p·r
+	VFMLA V10.S4, V7.S4, V9.S4 // B: p = p5 + p·r
+	WORD  $0x6E21DC24 // FMUL V4.4S, V1.4S, V1.4S   (A: r² = r·r)
+	WORD  $0x6E27DCEA // FMUL V10.4S, V7.4S, V7.4S  (B: r² = r·r)
+	WORD  $0x4E34D421 // FADD V1.4S, V1.4S, V20.4S  (A: q = 1 + r)
+	WORD  $0x4E34D4E7 // FADD V7.4S, V7.4S, V20.4S  (B: q = 1 + r)
+	VFMLA V3.S4, V4.S4, V1.S4  // A: z = q + p·r²
+	VFMLA V9.S4, V10.S4, V7.S4 // B: z = q + p·r²
+	WORD  $0x4EA1B842 // FCVTZS V2.4S, V2.4S        (A: ni = int(n))
+	WORD  $0x4EA1B908 // FCVTZS V8.4S, V8.4S        (B: ni = int(n))
+	VADD  V12.S4, V2.S4, V2.S4 // A: ni += 127
+	VADD  V12.S4, V8.S4, V8.S4 // B: ni += 127
+	VSHL  $23, V2.S4, V2.S4    // A: 2^n bits
+	VSHL  $23, V8.S4, V8.S4    // B: 2^n bits
+	WORD  $0x6E22DC21 // FMUL V1.4S, V1.4S, V2.4S   (A: z *= 2^n)
+	WORD  $0x6E28DCE7 // FMUL V7.4S, V7.4S, V8.4S   (B: z *= 2^n)
+
+	// SiLU tail: zero sub-pdfMin z, num = (x≥0 ? 1 : z), out = x·num/(1+z).
+	WORD $0x6EAFE424 // FCMGT V4.4S, V1.4S, V15.4S  (A: mask z > pdfMin)
+	WORD $0x6EAFE4EA // FCMGT V10.4S, V7.4S, V15.4S (B: mask z > pdfMin)
+	WORD $0x4E241C21 // AND V1.16B, V1.16B, V4.16B  (A: z &= mask)
+	WORD $0x4E2A1CE7 // AND V7.16B, V7.16B, V10.16B (B: z &= mask)
+	WORD $0x6EA0C802 // FCMGE V2.4S, V0.4S, #0.0    (A: sel = x ≥ 0)
+	WORD $0x6EA0C8C8 // FCMGE V8.4S, V6.4S, #0.0    (B: sel = x ≥ 0)
+	WORD $0x6E611E82 // BSL V2.16B, V20.16B, V1.16B (A: num = sel ? 1 : z)
+	WORD $0x6E671E88 // BSL V8.16B, V20.16B, V7.16B (B: num = sel ? 1 : z)
+	WORD $0x4E34D423 // FADD V3.4S, V1.4S, V20.4S   (A: den = 1 + z)
+	WORD $0x4E34D4E9 // FADD V9.4S, V7.4S, V20.4S   (B: den = 1 + z)
+	WORD $0x6E22DC00 // FMUL V0.4S, V0.4S, V2.4S    (A: x·num)
+	WORD $0x6E28DCC6 // FMUL V6.4S, V6.4S, V8.4S    (B: x·num)
+	WORD $0x6E23FC00 // FDIV V0.4S, V0.4S, V3.4S    (A: out = x·num/den)
+	WORD $0x6E29FCC6 // FDIV V6.4S, V6.4S, V9.4S    (B: out = x·num/den)
+
+	VST1.P [V0.S4], 16(R1)
+	VST1.P [V6.S4], 16(R1)
+
+	SUBS $1, R4, R4
+	BNE  siluLoop2
+
+siluOdd:
+	CBZ R5, siluDone
+
+	VLD1.P 16(R0), [V0.S4]
+	WORD   $0x4EA0F801 // FABS V1.4S, V0.4S         (a = |x|)
+	WORD   $0x6EA0F821 // FNEG V1.4S, V1.4S         (w = −a)
+	WORD   $0x4E3FF421 // FMAX V1.4S, V1.4S, V31.4S (clamp lo)
+	WORD   $0x6E37DC22 // FMUL V2.4S, V1.4S, V23.4S (z = w·log2e)
+	WORD   $0x4E218842 // FRINTN V2.4S, V2.4S       (n = rint(z))
+	VFMLS  V2.S4, V24.S4, V1.S4 // r -= n·ln2hi
+	VFMLS  V2.S4, V25.S4, V1.S4 // r -= n·ln2lo
+	WORD   $0x4EBB1F63 // ORR V3 = p1
+	VFMLA  V26.S4, V1.S4, V3.S4 // p = p1 + p0·r
+	WORD   $0x4EBC1F84 // ORR V4 = p2
+	VFMLA  V3.S4, V1.S4, V4.S4 // p = p2 + p·r
+	WORD   $0x4EBD1FA3 // ORR V3 = p3
+	VFMLA  V4.S4, V1.S4, V3.S4 // p = p3 + p·r
+	WORD   $0x4EBE1FC4 // ORR V4 = p4
+	VFMLA  V3.S4, V1.S4, V4.S4 // p = p4 + p·r
+	WORD   $0x4EB51EA3 // ORR V3 = p5(=half)
+	VFMLA  V4.S4, V1.S4, V3.S4 // p = p5 + p·r
+	WORD   $0x6E21DC24 // FMUL V4.4S, V1.4S, V1.4S  (r² = r·r)
+	WORD   $0x4E34D421 // FADD V1.4S, V1.4S, V20.4S (q = 1 + r)
+	VFMLA  V3.S4, V4.S4, V1.S4 // z = q + p·r²
+	WORD   $0x4EA1B842 // FCVTZS V2.4S, V2.4S       (ni = int(n))
+	VADD   V12.S4, V2.S4, V2.S4 // ni += 127
+	VSHL   $23, V2.S4, V2.S4    // 2^n bits
+	WORD   $0x6E22DC21 // FMUL V1.4S, V1.4S, V2.4S  (z *= 2^n)
+	WORD   $0x6EAFE424 // FCMGT V4.4S, V1.4S, V15.4S (mask z > pdfMin)
+	WORD   $0x4E241C21 // AND V1.16B, V1.16B, V4.16B (z &= mask)
+	WORD   $0x6EA0C802 // FCMGE V2.4S, V0.4S, #0.0   (sel = x ≥ 0)
+	WORD   $0x6E611E82 // BSL V2.16B, V20.16B, V1.16B (num = sel ? 1 : z)
+	WORD   $0x4E34D423 // FADD V3.4S, V1.4S, V20.4S  (den = 1 + z)
+	WORD   $0x6E22DC00 // FMUL V0.4S, V0.4S, V2.4S   (x·num)
+	WORD   $0x6E23FC00 // FDIV V0.4S, V0.4S, V3.4S   (out = x·num/den)
+	VST1.P [V0.S4], 16(R1)
+
+siluDone:
+	RET
+
+// func vsiluGradQuadsNeonF32(dst, x, grad *float32, quads int)
+//
+// 4-wide f32 SiLU BACKWARD (vexp.go, §T665): dst[i] = g[i]·silu'(x[i]),
+// silu'(x) = (num·(1+z) + x·z)/(1+z)², z = exp(−|x|), num = (x ≥ 0 ? 1 : z)
+// — the single-division fold of ref's σ(x)·(1+x·(1−σ(x))) (§T362; derivation
+// in vexp.go). Same pipeline as vsiluQuadsNeonF32 above (one exp, pdfMin
+// mask for exact ±Inf semantics, FCMGE-zero + BSL select), plus the g
+// multiply; g loads reuse V0/V6 after x dies. Constants: geluConsts as in
+// vsilu (V15 = pdfMin). Register map: R0 x, R1 dst, R6 g, R2 quads, R3
+// consts, R4 pairs, R5 odd; A: V0..V4, B: V6..V10.
+TEXT ·vsiluGradQuadsNeonF32(SB), NOSPLIT, $0-32
+	MOVD dst+0(FP), R1
+	MOVD x+8(FP), R0
+	MOVD grad+16(FP), R6
+	MOVD quads+24(FP), R2
+	MOVD $geluConsts<>(SB), R3
+	VLD1.P 64(R3), [V12.S4, V13.S4, V14.S4, V15.S4]
+	VLD1.P 64(R3), [V16.S4, V17.S4, V18.S4, V19.S4]
+	VLD1.P 64(R3), [V20.S4, V21.S4, V22.S4, V23.S4]
+	VLD1.P 64(R3), [V24.S4, V25.S4, V26.S4, V27.S4]
+	VLD1.P 64(R3), [V28.S4, V29.S4, V30.S4, V31.S4]
+	VLD1   (R3), [V15.S4] // V15 = pdfMin (overwrites unused erf a1)
+	LSR $1, R2, R4 // pairs of quads
+	AND $1, R2, R5 // odd quad
+	CBZ R4, siluGradOdd
+
+siluGradLoop2:
+	VLD1.P 16(R0), [V0.S4]
+	VLD1.P 16(R0), [V6.S4]
+
+	// w = clamp(−|x|), both quads.
+	WORD $0x4EA0F801 // FABS V1.4S, V0.4S           (A: a = |x|)
+	WORD $0x4EA0F8C7 // FABS V7.4S, V6.4S           (B: a = |x|)
+	WORD $0x6EA0F821 // FNEG V1.4S, V1.4S           (A: w = −a)
+	WORD $0x6EA0F8E7 // FNEG V7.4S, V7.4S           (B: w = −a)
+	WORD $0x4E3FF421 // FMAX V1.4S, V1.4S, V31.4S   (A: clamp lo)
+	WORD $0x4E3FF4E7 // FMAX V7.4S, V7.4S, V31.4S   (B: clamp lo)
+
+	// z = exp(w) — the vexp reduction (identical to the kernels above).
+	WORD  $0x6E37DC22 // FMUL V2.4S, V1.4S, V23.4S  (A: z = w·log2e)
+	WORD  $0x6E37DCE8 // FMUL V8.4S, V7.4S, V23.4S  (B: z = w·log2e)
+	WORD  $0x4E218842 // FRINTN V2.4S, V2.4S        (A: n = rint(z))
+	WORD  $0x4E218908 // FRINTN V8.4S, V8.4S        (B: n = rint(z))
+	VFMLS V2.S4, V24.S4, V1.S4 // A: r -= n·ln2hi
+	VFMLS V8.S4, V24.S4, V7.S4 // B: r -= n·ln2hi
+	VFMLS V2.S4, V25.S4, V1.S4 // A: r -= n·ln2lo
+	VFMLS V8.S4, V25.S4, V7.S4 // B: r -= n·ln2lo
+	WORD  $0x4EBB1F63 // ORR V3 = p1                (A)
+	WORD  $0x4EBB1F69 // ORR V9 = p1                (B)
+	VFMLA V26.S4, V1.S4, V3.S4 // A: p = p1 + p0·r
+	VFMLA V26.S4, V7.S4, V9.S4 // B: p = p1 + p0·r
+	WORD  $0x4EBC1F84 // ORR V4 = p2                (A)
+	WORD  $0x4EBC1F8A // ORR V10 = p2               (B)
+	VFMLA V3.S4, V1.S4, V4.S4  // A: p = p2 + p·r
+	VFMLA V9.S4, V7.S4, V10.S4 // B: p = p2 + p·r
+	WORD  $0x4EBD1FA3 // ORR V3 = p3                (A)
+	WORD  $0x4EBD1FA9 // ORR V9 = p3                (B)
+	VFMLA V4.S4, V1.S4, V3.S4  // A: p = p3 + p·r
+	VFMLA V10.S4, V7.S4, V9.S4 // B: p = p3 + p·r
+	WORD  $0x4EBE1FC4 // ORR V4 = p4                (A)
+	WORD  $0x4EBE1FCA // ORR V10 = p4               (B)
+	VFMLA V3.S4, V1.S4, V4.S4  // A: p = p4 + p·r
+	VFMLA V9.S4, V7.S4, V10.S4 // B: p = p4 + p·r
+	WORD  $0x4EB51EA3 // ORR V3 = p5(=half)         (A)
+	WORD  $0x4EB51EA9 // ORR V9 = p5(=half)         (B)
+	VFMLA V4.S4, V1.S4, V3.S4  // A: p = p5 + p·r
+	VFMLA V10.S4, V7.S4, V9.S4 // B: p = p5 + p·r
+	WORD  $0x6E21DC24 // FMUL V4.4S, V1.4S, V1.4S   (A: r² = r·r)
+	WORD  $0x6E27DCEA // FMUL V10.4S, V7.4S, V7.4S  (B: r² = r·r)
+	WORD  $0x4E34D421 // FADD V1.4S, V1.4S, V20.4S  (A: q = 1 + r)
+	WORD  $0x4E34D4E7 // FADD V7.4S, V7.4S, V20.4S  (B: q = 1 + r)
+	VFMLA V3.S4, V4.S4, V1.S4  // A: z = q + p·r²
+	VFMLA V9.S4, V10.S4, V7.S4 // B: z = q + p·r²
+	WORD  $0x4EA1B842 // FCVTZS V2.4S, V2.4S        (A: ni = int(n))
+	WORD  $0x4EA1B908 // FCVTZS V8.4S, V8.4S        (B: ni = int(n))
+	VADD  V12.S4, V2.S4, V2.S4 // A: ni += 127
+	VADD  V12.S4, V8.S4, V8.S4 // B: ni += 127
+	VSHL  $23, V2.S4, V2.S4    // A: 2^n bits
+	VSHL  $23, V8.S4, V8.S4    // B: 2^n bits
+	WORD  $0x6E22DC21 // FMUL V1.4S, V1.4S, V2.4S   (A: z *= 2^n)
+	WORD  $0x6E28DCE7 // FMUL V7.4S, V7.4S, V8.4S   (B: z *= 2^n)
+
+	// Grad tail: zero sub-pdfMin z, num = (x≥0 ? 1 : z), den = 1+z,
+	// d = (num·den + x·z)/den², out = g·d.
+	WORD  $0x6EAFE424 // FCMGT V4.4S, V1.4S, V15.4S  (A: mask z > pdfMin)
+	WORD  $0x6EAFE4EA // FCMGT V10.4S, V7.4S, V15.4S (B: mask z > pdfMin)
+	WORD  $0x4E241C21 // AND V1.16B, V1.16B, V4.16B  (A: z &= mask)
+	WORD  $0x4E2A1CE7 // AND V7.16B, V7.16B, V10.16B (B: z &= mask)
+	WORD  $0x6EA0C802 // FCMGE V2.4S, V0.4S, #0.0    (A: sel = x ≥ 0)
+	WORD  $0x6EA0C8C8 // FCMGE V8.4S, V6.4S, #0.0    (B: sel = x ≥ 0)
+	WORD  $0x6E611E82 // BSL V2.16B, V20.16B, V1.16B (A: num = sel ? 1 : z)
+	WORD  $0x6E671E88 // BSL V8.16B, V20.16B, V7.16B (B: num = sel ? 1 : z)
+	WORD  $0x4E34D423 // FADD V3.4S, V1.4S, V20.4S   (A: den = 1 + z)
+	WORD  $0x4E34D4E9 // FADD V9.4S, V7.4S, V20.4S   (B: den = 1 + z)
+	WORD  $0x6E23DC42 // FMUL V2.4S, V2.4S, V3.4S    (A: num·den)
+	WORD  $0x6E29DD08 // FMUL V8.4S, V8.4S, V9.4S    (B: num·den)
+	VFMLA V0.S4, V1.S4, V2.S4  // A: += x·z
+	VFMLA V6.S4, V7.S4, V8.S4  // B: += x·z
+	WORD  $0x6E23DC63 // FMUL V3.4S, V3.4S, V3.4S    (A: den²)
+	WORD  $0x6E29DD29 // FMUL V9.4S, V9.4S, V9.4S    (B: den²)
+	WORD  $0x6E23FC42 // FDIV V2.4S, V2.4S, V3.4S    (A: d = ·/den²)
+	WORD  $0x6E29FD08 // FDIV V8.4S, V8.4S, V9.4S    (B: d = ·/den²)
+	VLD1.P 16(R6), [V0.S4] // A: g (x dead)
+	VLD1.P 16(R6), [V6.S4] // B: g (x dead)
+	WORD  $0x6E22DC00 // FMUL V0.4S, V0.4S, V2.4S    (A: out = g·d)
+	WORD  $0x6E28DCC6 // FMUL V6.4S, V6.4S, V8.4S    (B: out = g·d)
+
+	VST1.P [V0.S4], 16(R1)
+	VST1.P [V6.S4], 16(R1)
+
+	SUBS $1, R4, R4
+	BNE  siluGradLoop2
+
+siluGradOdd:
+	CBZ R5, siluGradDone
+
+	VLD1.P 16(R0), [V0.S4]
+	WORD   $0x4EA0F801 // FABS V1.4S, V0.4S         (a = |x|)
+	WORD   $0x6EA0F821 // FNEG V1.4S, V1.4S         (w = −a)
+	WORD   $0x4E3FF421 // FMAX V1.4S, V1.4S, V31.4S (clamp lo)
+	WORD   $0x6E37DC22 // FMUL V2.4S, V1.4S, V23.4S (z = w·log2e)
+	WORD   $0x4E218842 // FRINTN V2.4S, V2.4S       (n = rint(z))
+	VFMLS  V2.S4, V24.S4, V1.S4 // r -= n·ln2hi
+	VFMLS  V2.S4, V25.S4, V1.S4 // r -= n·ln2lo
+	WORD   $0x4EBB1F63 // ORR V3 = p1
+	VFMLA  V26.S4, V1.S4, V3.S4 // p = p1 + p0·r
+	WORD   $0x4EBC1F84 // ORR V4 = p2
+	VFMLA  V3.S4, V1.S4, V4.S4 // p = p2 + p·r
+	WORD   $0x4EBD1FA3 // ORR V3 = p3
+	VFMLA  V4.S4, V1.S4, V3.S4 // p = p3 + p·r
+	WORD   $0x4EBE1FC4 // ORR V4 = p4
+	VFMLA  V3.S4, V1.S4, V4.S4 // p = p4 + p·r
+	WORD   $0x4EB51EA3 // ORR V3 = p5(=half)
+	VFMLA  V4.S4, V1.S4, V3.S4 // p = p5 + p·r
+	WORD   $0x6E21DC24 // FMUL V4.4S, V1.4S, V1.4S  (r² = r·r)
+	WORD   $0x4E34D421 // FADD V1.4S, V1.4S, V20.4S (q = 1 + r)
+	VFMLA  V3.S4, V4.S4, V1.S4 // z = q + p·r²
+	WORD   $0x4EA1B842 // FCVTZS V2.4S, V2.4S       (ni = int(n))
+	VADD   V12.S4, V2.S4, V2.S4 // ni += 127
+	VSHL   $23, V2.S4, V2.S4    // 2^n bits
+	WORD   $0x6E22DC21 // FMUL V1.4S, V1.4S, V2.4S  (z *= 2^n)
+	WORD   $0x6EAFE424 // FCMGT V4.4S, V1.4S, V15.4S (mask z > pdfMin)
+	WORD   $0x4E241C21 // AND V1.16B, V1.16B, V4.16B (z &= mask)
+	WORD   $0x6EA0C802 // FCMGE V2.4S, V0.4S, #0.0   (sel = x ≥ 0)
+	WORD   $0x6E611E82 // BSL V2.16B, V20.16B, V1.16B (num = sel ? 1 : z)
+	WORD   $0x4E34D423 // FADD V3.4S, V1.4S, V20.4S  (den = 1 + z)
+	WORD   $0x6E23DC42 // FMUL V2.4S, V2.4S, V3.4S   (num·den)
+	VFMLA  V0.S4, V1.S4, V2.S4 // += x·z
+	WORD   $0x6E23DC63 // FMUL V3.4S, V3.4S, V3.4S   (den²)
+	WORD   $0x6E23FC42 // FDIV V2.4S, V2.4S, V3.4S   (d = ·/den²)
+	VLD1.P 16(R6), [V0.S4]     // g (x dead)
+	WORD   $0x6E22DC00 // FMUL V0.4S, V0.4S, V2.4S   (out = g·d)
+	VST1.P [V0.S4], 16(R1)
+
+siluGradDone:
+	RET
+
+// func vsigmoidQuadsNeonF32(dst, src *float32, quads int)
+//
+// 4-wide f32 sigmoid (vexp.go, §T665): dst[i] = σ(src[i]) = num/(1+z),
+// z = exp(−|x|), num = (x ≥ 0 ? 1 : z) — the same branch-free stable split as
+// vsiluQuadsNeonF32 above, WITHOUT the ·x product and WITHOUT the pdfMin mask
+// (no x multiply rescues NaN here, so NaN must flow through z itself; the
+// underflow-clamp residue at deep-negative x is ≈1.18e-38 vs ref's exact 0 —
+// inside the tolerant budget; see vexp.go). Constants: geluConsts, exp
+// registers only. Register map as vsilu (V15 stays erf a1, unused).
+TEXT ·vsigmoidQuadsNeonF32(SB), NOSPLIT, $0-24
+	MOVD dst+0(FP), R1
+	MOVD src+8(FP), R0
+	MOVD quads+16(FP), R2
+	MOVD $geluConsts<>(SB), R3
+	VLD1.P 64(R3), [V12.S4, V13.S4, V14.S4, V15.S4]
+	VLD1.P 64(R3), [V16.S4, V17.S4, V18.S4, V19.S4]
+	VLD1.P 64(R3), [V20.S4, V21.S4, V22.S4, V23.S4]
+	VLD1.P 64(R3), [V24.S4, V25.S4, V26.S4, V27.S4]
+	VLD1   (R3), [V28.S4, V29.S4, V30.S4, V31.S4]
+	LSR $1, R2, R4 // pairs of quads
+	AND $1, R2, R5 // odd quad
+	CBZ R4, sigmoidOdd
+
+sigmoidLoop2:
+	VLD1.P 16(R0), [V0.S4]
+	VLD1.P 16(R0), [V6.S4]
+
+	// w = clamp(−|x|), both quads.
+	WORD $0x4EA0F801 // FABS V1.4S, V0.4S           (A: a = |x|)
+	WORD $0x4EA0F8C7 // FABS V7.4S, V6.4S           (B: a = |x|)
+	WORD $0x6EA0F821 // FNEG V1.4S, V1.4S           (A: w = −a)
+	WORD $0x6EA0F8E7 // FNEG V7.4S, V7.4S           (B: w = −a)
+	WORD $0x4E3FF421 // FMAX V1.4S, V1.4S, V31.4S   (A: clamp lo)
+	WORD $0x4E3FF4E7 // FMAX V7.4S, V7.4S, V31.4S   (B: clamp lo)
+
+	// z = exp(w) — the vexp reduction (identical to the kernels above).
+	WORD  $0x6E37DC22 // FMUL V2.4S, V1.4S, V23.4S  (A: z = w·log2e)
+	WORD  $0x6E37DCE8 // FMUL V8.4S, V7.4S, V23.4S  (B: z = w·log2e)
+	WORD  $0x4E218842 // FRINTN V2.4S, V2.4S        (A: n = rint(z))
+	WORD  $0x4E218908 // FRINTN V8.4S, V8.4S        (B: n = rint(z))
+	VFMLS V2.S4, V24.S4, V1.S4 // A: r -= n·ln2hi
+	VFMLS V8.S4, V24.S4, V7.S4 // B: r -= n·ln2hi
+	VFMLS V2.S4, V25.S4, V1.S4 // A: r -= n·ln2lo
+	VFMLS V8.S4, V25.S4, V7.S4 // B: r -= n·ln2lo
+	WORD  $0x4EBB1F63 // ORR V3 = p1                (A)
+	WORD  $0x4EBB1F69 // ORR V9 = p1                (B)
+	VFMLA V26.S4, V1.S4, V3.S4 // A: p = p1 + p0·r
+	VFMLA V26.S4, V7.S4, V9.S4 // B: p = p1 + p0·r
+	WORD  $0x4EBC1F84 // ORR V4 = p2                (A)
+	WORD  $0x4EBC1F8A // ORR V10 = p2               (B)
+	VFMLA V3.S4, V1.S4, V4.S4  // A: p = p2 + p·r
+	VFMLA V9.S4, V7.S4, V10.S4 // B: p = p2 + p·r
+	WORD  $0x4EBD1FA3 // ORR V3 = p3                (A)
+	WORD  $0x4EBD1FA9 // ORR V9 = p3                (B)
+	VFMLA V4.S4, V1.S4, V3.S4  // A: p = p3 + p·r
+	VFMLA V10.S4, V7.S4, V9.S4 // B: p = p3 + p·r
+	WORD  $0x4EBE1FC4 // ORR V4 = p4                (A)
+	WORD  $0x4EBE1FCA // ORR V10 = p4               (B)
+	VFMLA V3.S4, V1.S4, V4.S4  // A: p = p4 + p·r
+	VFMLA V9.S4, V7.S4, V10.S4 // B: p = p4 + p·r
+	WORD  $0x4EB51EA3 // ORR V3 = p5(=half)         (A)
+	WORD  $0x4EB51EA9 // ORR V9 = p5(=half)         (B)
+	VFMLA V4.S4, V1.S4, V3.S4  // A: p = p5 + p·r
+	VFMLA V10.S4, V7.S4, V9.S4 // B: p = p5 + p·r
+	WORD  $0x6E21DC24 // FMUL V4.4S, V1.4S, V1.4S   (A: r² = r·r)
+	WORD  $0x6E27DCEA // FMUL V10.4S, V7.4S, V7.4S  (B: r² = r·r)
+	WORD  $0x4E34D421 // FADD V1.4S, V1.4S, V20.4S  (A: q = 1 + r)
+	WORD  $0x4E34D4E7 // FADD V7.4S, V7.4S, V20.4S  (B: q = 1 + r)
+	VFMLA V3.S4, V4.S4, V1.S4  // A: z = q + p·r²
+	VFMLA V9.S4, V10.S4, V7.S4 // B: z = q + p·r²
+	WORD  $0x4EA1B842 // FCVTZS V2.4S, V2.4S        (A: ni = int(n))
+	WORD  $0x4EA1B908 // FCVTZS V8.4S, V8.4S        (B: ni = int(n))
+	VADD  V12.S4, V2.S4, V2.S4 // A: ni += 127
+	VADD  V12.S4, V8.S4, V8.S4 // B: ni += 127
+	VSHL  $23, V2.S4, V2.S4    // A: 2^n bits
+	VSHL  $23, V8.S4, V8.S4    // B: 2^n bits
+	WORD  $0x6E22DC21 // FMUL V1.4S, V1.4S, V2.4S   (A: z *= 2^n)
+	WORD  $0x6E28DCE7 // FMUL V7.4S, V7.4S, V8.4S   (B: z *= 2^n)
+
+	// Sigmoid tail: num = (x≥0 ? 1 : z), out = num/(1+z).
+	WORD $0x6EA0C802 // FCMGE V2.4S, V0.4S, #0.0    (A: sel = x ≥ 0)
+	WORD $0x6EA0C8C8 // FCMGE V8.4S, V6.4S, #0.0    (B: sel = x ≥ 0)
+	WORD $0x6E611E82 // BSL V2.16B, V20.16B, V1.16B (A: num = sel ? 1 : z)
+	WORD $0x6E671E88 // BSL V8.16B, V20.16B, V7.16B (B: num = sel ? 1 : z)
+	WORD $0x4E34D423 // FADD V3.4S, V1.4S, V20.4S   (A: den = 1 + z)
+	WORD $0x4E34D4E9 // FADD V9.4S, V7.4S, V20.4S   (B: den = 1 + z)
+	WORD $0x6E23FC40 // FDIV V0.4S, V2.4S, V3.4S    (A: out = num/den)
+	WORD $0x6E29FD06 // FDIV V6.4S, V8.4S, V9.4S    (B: out = num/den)
+
+	VST1.P [V0.S4], 16(R1)
+	VST1.P [V6.S4], 16(R1)
+
+	SUBS $1, R4, R4
+	BNE  sigmoidLoop2
+
+sigmoidOdd:
+	CBZ R5, sigmoidDone
+
+	VLD1.P 16(R0), [V0.S4]
+	WORD   $0x4EA0F801 // FABS V1.4S, V0.4S         (a = |x|)
+	WORD   $0x6EA0F821 // FNEG V1.4S, V1.4S         (w = −a)
+	WORD   $0x4E3FF421 // FMAX V1.4S, V1.4S, V31.4S (clamp lo)
+	WORD   $0x6E37DC22 // FMUL V2.4S, V1.4S, V23.4S (z = w·log2e)
+	WORD   $0x4E218842 // FRINTN V2.4S, V2.4S       (n = rint(z))
+	VFMLS  V2.S4, V24.S4, V1.S4 // r -= n·ln2hi
+	VFMLS  V2.S4, V25.S4, V1.S4 // r -= n·ln2lo
+	WORD   $0x4EBB1F63 // ORR V3 = p1
+	VFMLA  V26.S4, V1.S4, V3.S4 // p = p1 + p0·r
+	WORD   $0x4EBC1F84 // ORR V4 = p2
+	VFMLA  V3.S4, V1.S4, V4.S4 // p = p2 + p·r
+	WORD   $0x4EBD1FA3 // ORR V3 = p3
+	VFMLA  V4.S4, V1.S4, V3.S4 // p = p3 + p·r
+	WORD   $0x4EBE1FC4 // ORR V4 = p4
+	VFMLA  V3.S4, V1.S4, V4.S4 // p = p4 + p·r
+	WORD   $0x4EB51EA3 // ORR V3 = p5(=half)
+	VFMLA  V4.S4, V1.S4, V3.S4 // p = p5 + p·r
+	WORD   $0x6E21DC24 // FMUL V4.4S, V1.4S, V1.4S  (r² = r·r)
+	WORD   $0x4E34D421 // FADD V1.4S, V1.4S, V20.4S (q = 1 + r)
+	VFMLA  V3.S4, V4.S4, V1.S4 // z = q + p·r²
+	WORD   $0x4EA1B842 // FCVTZS V2.4S, V2.4S       (ni = int(n))
+	VADD   V12.S4, V2.S4, V2.S4 // ni += 127
+	VSHL   $23, V2.S4, V2.S4    // 2^n bits
+	WORD   $0x6E22DC21 // FMUL V1.4S, V1.4S, V2.4S  (z *= 2^n)
+	WORD   $0x6EA0C802 // FCMGE V2.4S, V0.4S, #0.0   (sel = x ≥ 0)
+	WORD   $0x6E611E82 // BSL V2.16B, V20.16B, V1.16B (num = sel ? 1 : z)
+	WORD   $0x4E34D423 // FADD V3.4S, V1.4S, V20.4S  (den = 1 + z)
+	WORD   $0x6E23FC40 // FDIV V0.4S, V2.4S, V3.4S   (out = num/den)
+	VST1.P [V0.S4], 16(R1)
+
+sigmoidDone:
+	RET
