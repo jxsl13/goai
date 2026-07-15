@@ -1171,6 +1171,21 @@ done:
     return rc;
 }
 
+// cu_upload_into: H2D copy of n floats into an EXISTING device buffer (dst keeps its
+// pointer, so references stay valid) — the buffer.UploadF32 the llamagpu recorder
+// needs to (re)fill a resident buffer. Synchronous (host src must stay live only
+// for the call).
+int cu_upload_into(void* dst, const float* src, int n) {
+    int rc = -6;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cudaMemcpyAsync(dst, src, (size_t)n * sizeof(float), cudaMemcpyHostToDevice, gStream) != cudaSuccess) { goto done; }
+    rc = (cudaStreamSynchronize(gStream) == cudaSuccess) ? 0 : -5;
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
 // cu_matmul_f32_ddd: dC = dA·dB, all resident, queued on the stream with NO sync —
 // a chain of these pipelines end to end; cu_download_f32 is the barrier.
 int cu_matmul_f32_ddd(const void* dA, const void* dB, void* dC, int M, int K, int N) {
