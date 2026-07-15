@@ -4,6 +4,14 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — MemInfo primitive + T631 VRAM-budget probe (worker linux-amd64, 2026-07-15)
+- `cuda.MemInfo()` (cudaMemGetInfo → free/total VRAM bytes), a generally-useful
+  budget primitive. `TestCUDAVRAMBudgetProbe` measures the actual resident-model
+  footprint: Q8 TinyLlama-1.1B = 1376 MiB (≈62.5 MiB/layer) on the 12 GB RTX 3060,
+  ≈9 GB usable for weights → all-GPU fits ~8-9B-param Q8 models; larger models must
+  offload the overflow to CPU-SIMD (T631). Completes the T631 groundwork (cost +
+  prefill + decode mechanism + VRAM budget). Worker sub-spec §PERF.
+
 ### CUDA/CPU hybrid DECODE — T631 serving-path proof (worker linux-amd64, 2026-07-15)
 - `TestCUDAHybridDecode`: autoregressive generation split across GPU + CPU-SIMD with
   DUAL KV-caches (device-side for the GPU layers, host-side for the CPU layers). 11 of

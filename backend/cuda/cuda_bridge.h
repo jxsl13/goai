@@ -8,6 +8,8 @@
 
 // cu_available returns 1 if at least one CUDA-capable GPU is present.
 int cu_available(void);
+// cu_mem_info: device free/total VRAM in bytes (VRAM-budget probe for T631 offload).
+int cu_mem_info(unsigned long long* freeB, unsigned long long* totalB);
 // CUDA graph capture: begin/end capture on the work stream, launch/sync/free the
 // instantiated graph. Caller must LockOSThread across begin→ops→end.
 int cu_capture_begin(void);

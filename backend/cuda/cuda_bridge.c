@@ -588,6 +588,21 @@ int cu_available(void) {
     return (cudaGetDeviceCount(&n) == cudaSuccess && n > 0) ? 1 : 0;
 }
 
+// cu_mem_info reports the device free/total VRAM in bytes (cudaMemGetInfo) — the
+// VRAM-budget probe for the T631 offload policy (how many resident layers fit).
+int cu_mem_info(unsigned long long* freeB, unsigned long long* totalB) {
+    size_t fr = 0, to = 0;
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() == 0 && cudaMemGetInfo(&fr, &to) == cudaSuccess) {
+        *freeB = (unsigned long long)fr;
+        *totalB = (unsigned long long)to;
+        rc = 0;
+    }
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
 // ---- CUDA graph capture (§PERF: decode is launch-bound; a captured graph replays
 // the whole per-token op sequence with ONE launch, eliminating per-op host cost).
 // The caller must LockOSThread across begin→ops→end so ThreadLocal capture records
