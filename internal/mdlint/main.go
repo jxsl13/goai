@@ -148,6 +148,13 @@ func Lint(file, src string) []finding {
 				if i+1 < len(lines) && isTableSeparator(strings.TrimSpace(lines[i+1])) {
 					tableWidth = cells
 					tableStart = n
+					// header/separator column-count must match: GFM renders a table
+					// whose delimiter row has a different column count than the header
+					// with dropped/blank columns. Report against the separator line.
+					if sep := tableCells(strings.TrimSpace(lines[i+1])); sep != cells {
+						out = append(out, finding{file, n + 1, "table-separator-mismatch",
+							fmt.Sprintf("delimiter row has %d columns, the header at line %d has %d", sep, n, cells)})
+					}
 				}
 			} else if cells != tableWidth && !isTableSeparator(trimmed) {
 				out = append(out, finding{file, n, "table-ragged",

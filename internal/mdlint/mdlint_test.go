@@ -47,6 +47,7 @@ func TestLintRules(t *testing.T) {
 	cases := []struct{ name, bad, good, rule string }{
 		{"fence", "```go\ncode\n", "```go\ncode\n```\n", "unclosed-fence"},
 		{"table", "| a | b |\n|---|---|\n| 1 |\n", "| a | b |\n|---|---|\n| 1 | 2 |\n", "table-ragged"},
+		{"table-sep", "| a | b | c |\n|---|---|\n| 1 | 2 | 3 |\n", "| a | b | c |\n|---|---|---|\n| 1 | 2 | 3 |\n", "table-separator-mismatch"},
 		{"heading", "# t\n\n### deep\n", "# t\n\n## deep\n", "heading-jump"},
 		{"html", "the <unk> token\n", "the `<unk>` token\n", "swallowed-html"},
 		{"backtick", "one ` dangling\n", "one `` pair\n", "odd-backticks"},
