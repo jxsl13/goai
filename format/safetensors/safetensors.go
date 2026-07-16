@@ -31,9 +31,34 @@ import (
 	"math"
 	"os"
 	"sort"
+	"unsafe"
 
 	"github.com/jxsl13/goai/tensor"
 )
+
+// nativeLittleEndian reports whether the host stores multi-byte scalars
+// little-endian. The safetensors data section is little-endian on disk, so on
+// such hosts (every platform GoAI targets) the raw bytes already match the
+// in-memory layout of an F32/F64/F16/BF16 tensor and loading a verbatim-bit
+// dtype is a single bulk copy rather than a per-element decode. Big-endian
+// hosts fall back to the element-wise path, so the result is identical either way.
+var nativeLittleEndian = func() bool {
+	var x uint16 = 1
+	return *(*byte)(unsafe.Pointer(&x)) == 1
+}()
+
+// rawCopyLE bulk-copies verbatim little-endian source bytes into the backing
+// store of a numeric destination slice, collapsing a per-element decode loop
+// into one memmove. elemSize is the byte width of one T. It is a no-op that
+// returns false on a big-endian host or an empty slice, signalling the caller
+// to fall back to the element-wise decode (correctness on any byte order).
+func rawCopyLE[T any](dst []T, src []byte, elemSize int) bool {
+	if !nativeLittleEndian || len(dst) == 0 {
+		return false
+	}
+	copy(unsafe.Slice((*byte)(unsafe.Pointer(&dst[0])), len(dst)*elemSize), src)
+	return true
+}
 
 // maxHeaderSize mirrors the reference implementation's 100 MB header cap.
 const maxHeaderSize = 100 * 1024 * 1024
@@ -303,18 +328,24 @@ func Load(r io.Reader) (map[string]*tensor.Tensor, map[string]string, error) {
 		switch e.Dtype {
 		case "F32":
 			dst := t.Storage().F32()
-			for i := range dst {
-				dst[i] = math.Float32frombits(binary.LittleEndian.Uint32(src[i*4:]))
+			if !rawCopyLE(dst, src, 4) {
+				for i := range dst {
+					dst[i] = math.Float32frombits(binary.LittleEndian.Uint32(src[i*4:]))
+				}
 			}
 		case "F64":
 			dst := t.Storage().F64()
-			for i := range dst {
-				dst[i] = math.Float64frombits(binary.LittleEndian.Uint64(src[i*8:]))
+			if !rawCopyLE(dst, src, 8) {
+				for i := range dst {
+					dst[i] = math.Float64frombits(binary.LittleEndian.Uint64(src[i*8:]))
+				}
 			}
 		case "F16", "BF16":
 			dst := t.Storage().U16() // raw 16-bit bits, verbatim
-			for i := range dst {
-				dst[i] = binary.LittleEndian.Uint16(src[i*2:])
+			if !rawCopyLE(dst, src, 2) {
+				for i := range dst {
+					dst[i] = binary.LittleEndian.Uint16(src[i*2:])
+				}
 			}
 		case "F8_E4M3": // §T577: FP8 and integer dtypes widen on load
 			dst := t.Storage().F32()

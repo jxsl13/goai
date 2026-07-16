@@ -23,6 +23,17 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   `[N][K]` + scales, so it gains `MatMulMMQDevice`/`MatMulMMQAccInto`: the prefill GEMM reads the SAME
   resident bytes the decode GEMV reads → **one weight, both paths, zero extra prefill VRAM** for a
   Q8-decode model (vs f16 prefill = a full 2× copy). Requires K%32/N%64 (clean error → f16 fallback).
+### safetensors — performance: bulk-copy load of verbatim-bit dtypes (T720, 2026-07-16)
+
+`Load` decoded every F32/F64/F16/BF16 element individually
+(`math.Float32frombits(binary.LittleEndian.Uint32(...))` per scalar) — a ~52M-iteration
+loop for a 200 MB model. On little-endian hosts (every platform GoAI targets) the on-disk
+bytes already match the tensor's in-memory layout, so a verbatim-bit dtype loads with a
+single bulk `copy`. Added a `nativeLittleEndian`-guarded fast path (`rawCopyLE`) with the
+element-wise decode kept as the big-endian fallback — bit-identical either way (round-trip
+and hostile tests unchanged). **200 MB load 96.9 → 46.4 ms (2.09×, 2165 → 4524 MB/s)**,
+closing the gap to the Rust `safetensors` (zero-copy mmap, 8993 MB/s) from ≈4× to ≈2×. The
+widening dtypes (FP8/int/bool) still decode element-wise — they genuinely convert.
 
 ### nlp — benchmark: GPT-2 BPE tokenization beats tiktoken's Rust (T719, 2026-07-16)
 
