@@ -55,7 +55,7 @@ type LlamaBlock struct {
 	AttnNorm       *nn.RMSNorm    // RMSNorm before attention
 	Wq, Wk, Wv, Wo *tensor.Tensor // attention projections (no bias); Wk/Wv are [dim, KVHeads·headDim]
 	Bq, Bk, Bv     *tensor.Tensor // optional q/k/v projection biases (Qwen2/Qwen2.5 family); nil for Llama/Mistral
-	QNorm, KNorm   *nn.RMSNorm    // optional per-head query/key RMSNorm applied before RoPE (Qwen3/OLMo2); nil otherwise
+	QNorm, KNorm   *nn.RMSNorm    // optional per-head query/key RMSNorm applied before RoPE (Qwen3); nil otherwise
 	FFNNorm        *nn.RMSNorm    // RMSNorm before the FFN
 	FFN            *nn.SwiGLU     // SwiGLU feed-forward
 }
@@ -240,7 +240,7 @@ func (m *Llama) hiddenFromEmbed(ctx *backend.Context, x *tensor.Tensor) (*tensor
 		if v, err = addBiasIf(ctx, v, b.Bv); err != nil {
 			return nil, err
 		}
-		// Qwen3/OLMo2 per-head QK-norm (before RoPE); nil for Llama/Qwen2.
+		// Qwen3 per-head QK-norm (before RoPE); nil for Llama/Qwen2.
 		if q, err = applyQKNorm(ctx, q, b.QNorm, cfg.Heads); err != nil {
 			return nil, err
 		}
@@ -306,7 +306,7 @@ func addBiasIf(ctx *backend.Context, x, bias *tensor.Tensor) (*tensor.Tensor, er
 }
 
 // applyQKNorm applies a per-head RMSNorm to a projected q or k tensor x [seq, heads·headDim]
-// when norm is non-nil (Qwen3/OLMo2 QK-norm), else returns x unchanged. The tensor is
+// when norm is non-nil (Qwen3 QK-norm; OLMo2 uses a separate full-width variant, see [OLMo2]), else returns x unchanged. The tensor is
 // reshaped to [seq·heads, headDim] so RMSNorm (last-axis) normalizes each head independently,
 // then reshaped back — matching HF's q_norm(q_proj(x).view(.., heads, headDim)). Both reshapes
 // are differentiable (OpReshape has a VJP), so QK-norm models remain trainable.

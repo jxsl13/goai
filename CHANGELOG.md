@@ -4,6 +4,20 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — feat: OLMo 2 support — 15th loadable architecture (T753, 2026-07-16)
+
+OLMo 2 (Allen AI, `Olmo2ForCausalLM`) as a self-contained `nlp.OLMo2` type — it is Llama-like
+(RMSNorm, RoPE, GQA, SwiGLU, no biases) but with two structural departures that make it a separate
+type rather than a Llama variant: (1) **post-norm** blocks — attention and the FFN read the raw
+residual stream (there is NO input layernorm), and the norm is applied to their OUTPUT before the
+residual add (`x = x + post_attention_layernorm(attn(x))`, likewise for the FFN); (2) **full-width
+QK-norm** — an RMSNorm over the WHOLE q/k projection (heads·head_dim, not per-head like Qwen3),
+applied before the head split and RoPE. Standard RMSNorm (not Gemma's (1+w)). `OLMo2FromHF` loads it;
+`Forward`/`DecodeStep`/`Generate` cover inference and generation. Forward parity vs a real
+transformers `Olmo2ForCausalLM`: max abs logit diff 3.9e-8; KV-decode matches Forward bit-for-bit
+(0.0); fine-tunes (loss 3.52 → 3.12). Brings the loadable, transformers-anchored set to fifteen.
+(Also corrects the `applyQKNorm` godoc, which had mislabeled OLMo2 as using the per-head path.)
+
 ### nlp — feat: IBM Granite support — 14th loadable architecture (T752, 2026-07-16)
 
 Granite (`GraniteForCausalLM`) is structurally a plain Llama with four config scalar multipliers:
