@@ -130,6 +130,16 @@ func nonzero(s uint64) uint64 {
 }
 
 // cartBuilder carries the immutable inputs while a tree is being grown.
+//
+// Split finding uses a presort/partition scheme (the classic CART speed-up,
+// sklearn's old PresortBestSplitter). Each feature is argsorted ONCE at fit time
+// into cols[f]; a node owns the contiguous range cols[f][start:end] and, on
+// splitting, each column is stably partitioned in place into left|right so both
+// children inherit already-sorted ranges. This turns the per-node cost from
+// O(d·n log n) (re-sorting every feature at every node) into O(d·n), and removes
+// the sort.Slice closure/reflection overhead — while producing bit-identical
+// splits, because thresholds only ever fall between DISTINCT adjacent values, so
+// the ordering of tied values never affects a split decision.
 type cartBuilder struct {
 	x          [][]float64
 	yi         []int     // class indices (classification)
@@ -138,6 +148,113 @@ type cartBuilder struct {
 	regression bool
 	cfg        cartConfig
 	rng        *lcg
+
+	// presort/partition scratch, allocated once per fit and reused everywhere.
+	cols     [][]int // cols[f][start:end] = current node's samples, sorted asc by feature f
+	part     []int   // scratch for the stable partition (len n)
+	goLeft   []bool  // per-sample split membership during a partition (len n)
+	totCnt   []int   // reused class-count buffer (len nClasses); classification only
+	leftCnt  []int   // reused running left-count buffer (len nClasses); classification only
+	allFeats []int   // reused ascending [0..d) for the all-features split path
+	featPool []int   // reused pool for feature subsampling (maxFeatures>0)
+	featSub  []int   // reused subsample result (maxFeatures>0)
+	sortBuf  []int   // reused per-feature sort scratch for the subsampled path
+}
+
+// subsampled reports whether per-split feature subsampling is active (the random
+// forest case). When it is, only maxFeatures≈√d of the d columns are examined at
+// each node, so the presort/partition scheme — which must keep ALL d columns
+// validly partitioned at every node — costs more than it saves. The builder
+// therefore falls back to the per-node sort-of-the-sampled-features path
+// (buildIdx/bestSplitIdx) for forests, and uses presort/partition only when all
+// features are considered (single trees, and every GBM weak learner).
+func (b *cartBuilder) subsampled(d int) bool {
+	return b.cfg.maxFeatures > 0 && b.cfg.maxFeatures < d
+}
+
+// initIdx allocates the reusable scratch the per-node (subsampled) split finder
+// needs: the class-count buffers and a single sort buffer reused across features.
+func (b *cartBuilder) initIdx(n int) {
+	if !b.regression {
+		b.totCnt = make([]int, b.nClasses)
+		b.leftCnt = make([]int, b.nClasses)
+	}
+	b.sortBuf = make([]int, n)
+}
+
+// initColumns argsorts every feature once and allocates the reusable scratch the
+// presort/partition split finder needs. Called once per Fit before build.
+func (b *cartBuilder) initColumns(n, d int) {
+	b.cols = make([][]int, d)
+	base := make([]int, n*d) // single backing allocation for all d columns
+	for f := 0; f < d; f++ {
+		col := base[f*n : f*n+n : f*n+n]
+		for i := range col {
+			col[i] = i
+		}
+		ff := f
+		// Order by feature value only. Tie order is irrelevant to split
+		// decisions (thresholds sit between distinct values), so an unstable
+		// sort is safe and reproduces the previous per-node sort's choices.
+		sort.Slice(col, func(a, c int) bool { return b.x[col[a]][ff] < b.x[col[c]][ff] })
+		b.cols[f] = col
+	}
+	b.part = make([]int, n)
+	b.goLeft = make([]bool, n)
+	if !b.regression {
+		b.totCnt = make([]int, b.nClasses)
+		b.leftCnt = make([]int, b.nClasses)
+	}
+	b.allFeats = make([]int, d)
+	for i := range b.allFeats {
+		b.allFeats[i] = i
+	}
+	if b.cfg.maxFeatures > 0 && b.cfg.maxFeatures < d {
+		b.featPool = make([]int, d)
+		b.featSub = make([]int, b.cfg.maxFeatures)
+	}
+}
+
+// partition splits the node range [start,end) of every feature column into
+// left|right in place (stable), by the chosen (feat, thr) test, and returns the
+// left/right boundary mid. After it returns, cols[f][start:mid] holds the left
+// child's samples sorted by f, and cols[f][mid:end] the right child's — for all
+// f — so recursion just re-uses the sub-ranges.
+func (b *cartBuilder) partition(start, end, feat int, thr float64) int {
+	d := len(b.cols)
+	col := b.cols[feat]
+	for p := start; p < end; p++ {
+		s := col[p]
+		b.goLeft[s] = b.x[s][feat] <= thr
+	}
+	mid := start
+	for f := 0; f < d; f++ {
+		cf := b.cols[f]
+		w := start
+		r := 0
+		for p := start; p < end; p++ {
+			s := cf[p]
+			if b.goLeft[s] {
+				cf[w] = s
+				w++
+			} else {
+				b.part[r] = s
+				r++
+			}
+		}
+		copy(cf[w:end], b.part[:r])
+		mid = w
+	}
+	return mid
+}
+
+// allIndices returns the slice [0, 1, …, n-1].
+func allIndices(n int) []int {
+	idx := make([]int, n)
+	for i := range idx {
+		idx[i] = i
+	}
+	return idx
 }
 
 // checkX validates X shape against the builder's feature count and returns d.
@@ -157,8 +274,49 @@ func validateXY(x [][]float64, n, ylen int) (int, error) {
 	return d, nil
 }
 
-// build grows the tree from the given sample indices at the given depth.
-func (b *cartBuilder) build(idx []int, depth int) *cartNode {
+// build grows the tree over the node's sample range cols[·][start:end] at the
+// given depth. The three column-order-independent aggregates (mean/majority/
+// impurity) read column 0's sub-range as the node's sample set.
+func (b *cartBuilder) build(start, end, depth int) *cartNode {
+	samples := b.cols[0][start:end]
+	n := end - start
+	node := &cartNode{leaf: true}
+	if b.regression {
+		node.value = b.mean(samples)
+	} else {
+		node.predClass = b.majority(samples)
+	}
+
+	// Stopping rules mirror scikit-learn's DepthFirstTreeBuilder (§C21).
+	pure := b.impurity(samples) <= 1e-12
+	if pure ||
+		(b.cfg.maxDepth >= 0 && depth >= b.cfg.maxDepth) ||
+		n < b.cfg.minSamplesSplit ||
+		n < 2*b.cfg.minSamplesLeaf {
+		return node
+	}
+
+	feat, thr, ok := b.bestSplit(start, end)
+	if !ok {
+		return node // no admissible split (e.g. constant features)
+	}
+
+	mid := b.partition(start, end, feat, thr)
+	node.leaf = false
+	node.feature = feat
+	node.threshold = thr
+	node.left = b.build(start, mid, depth+1)
+	node.right = b.build(mid, end, depth+1)
+	return node
+}
+
+// buildIdx is the per-node split-finding path used when feature subsampling is
+// active (random forests). It carries an explicit sample-index slice and sorts
+// only the sampled features at each node (cheaper than maintaining all d presort
+// columns when only √d are examined per split). Split decisions and the RNG
+// feature-subsample sequence are identical to the original builder, so forest
+// goldens stay bit-exact; only the sort/count buffers are now reused.
+func (b *cartBuilder) buildIdx(idx []int, depth int) *cartNode {
 	n := len(idx)
 	node := &cartNode{leaf: true}
 	if b.regression {
@@ -167,7 +325,6 @@ func (b *cartBuilder) build(idx []int, depth int) *cartNode {
 		node.predClass = b.majority(idx)
 	}
 
-	// Stopping rules mirror scikit-learn's DepthFirstTreeBuilder (§C21).
 	pure := b.impurity(idx) <= 1e-12
 	if pure ||
 		(b.cfg.maxDepth >= 0 && depth >= b.cfg.maxDepth) ||
@@ -176,9 +333,9 @@ func (b *cartBuilder) build(idx []int, depth int) *cartNode {
 		return node
 	}
 
-	feat, thr, ok := b.bestSplit(idx)
+	feat, thr, ok := b.bestSplitIdx(idx)
 	if !ok {
-		return node // no admissible split (e.g. constant features)
+		return node
 	}
 
 	left := make([]int, 0, n)
@@ -193,9 +350,36 @@ func (b *cartBuilder) build(idx []int, depth int) *cartNode {
 	node.leaf = false
 	node.feature = feat
 	node.threshold = thr
-	node.left = b.build(left, depth+1)
-	node.right = b.build(right, depth+1)
+	node.left = b.buildIdx(left, depth+1)
+	node.right = b.buildIdx(right, depth+1)
 	return node
+}
+
+// bestSplitIdx finds the best split over an explicit index slice, sorting each
+// sampled feature into the reused sortBuf. Same tie-breaks as bestSplit.
+func (b *cartBuilder) bestSplitIdx(idx []int) (feat int, thr float64, ok bool) {
+	d := len(b.x[0])
+	bestCost := math.Inf(1)
+	minLeaf := b.cfg.minSamplesLeaf
+	for _, f := range b.candidateFeatures(d) {
+		order := b.sortBuf[:len(idx)]
+		copy(order, idx)
+		ff := f
+		sort.Slice(order, func(a, c int) bool { return b.x[order[a]][ff] < b.x[order[c]][ff] })
+		cost, cut, found := b.sweep(order, f, minLeaf)
+		if found && cost < bestCost {
+			bestCost = cost
+			feat = f
+			a := b.x[order[cut-1]][f]
+			c := b.x[order[cut]][f]
+			thr = (a + c) / 2
+			if thr == c || math.IsInf(thr, 0) {
+				thr = a
+			}
+			ok = true
+		}
+	}
+	return feat, thr, ok
 }
 
 // candidateFeatures returns the feature indices considered at a split: all of
@@ -203,37 +387,48 @@ func (b *cartBuilder) build(idx []int, depth int) *cartNode {
 // still favours the lowest feature index among the sampled set).
 func (b *cartBuilder) candidateFeatures(d int) []int {
 	if b.cfg.maxFeatures <= 0 || b.cfg.maxFeatures >= d {
-		feats := make([]int, d)
-		for i := range feats {
-			feats[i] = i
+		if len(b.allFeats) != d {
+			b.allFeats = make([]int, d)
+			for i := range b.allFeats {
+				b.allFeats[i] = i
+			}
 		}
-		return feats
+		return b.allFeats // reused ascending [0..d)
 	}
-	// partial Fisher–Yates draw of maxFeatures distinct indices
-	pool := make([]int, d)
+	// partial Fisher–Yates draw of maxFeatures distinct indices. The RNG call
+	// sequence is identical to the original (same intn args in the same order),
+	// so forest goldens are unaffected; only the buffers are now reused.
+	m := b.cfg.maxFeatures
+	if len(b.featPool) != d {
+		b.featPool = make([]int, d)
+	}
+	if len(b.featSub) != m {
+		b.featSub = make([]int, m)
+	}
+	pool := b.featPool
 	for i := range pool {
 		pool[i] = i
 	}
-	m := b.cfg.maxFeatures
 	for i := 0; i < m; i++ {
 		j := i + b.rng.intn(d-i)
 		pool[i], pool[j] = pool[j], pool[i]
 	}
-	feats := append([]int(nil), pool[:m]...)
-	sort.Ints(feats)
-	return feats
+	copy(b.featSub, pool[:m])
+	sort.Ints(b.featSub)
+	return b.featSub
 }
 
 // bestSplit finds the (feature, threshold) minimising the weighted child
-// impurity. Ties break to the lowest feature index then lowest threshold — the
-// deterministic reduction of scikit-learn's tie-break on unique-optimum data.
-func (b *cartBuilder) bestSplit(idx []int) (feat int, thr float64, ok bool) {
+// impurity over the node range [start,end). Ties break to the lowest feature
+// index then lowest threshold — the deterministic reduction of scikit-learn's
+// tie-break on unique-optimum data. The per-feature order comes from the presort
+// (cols[f]); no per-node sort is performed.
+func (b *cartBuilder) bestSplit(start, end int) (feat int, thr float64, ok bool) {
 	d := len(b.x[0])
 	bestCost := math.Inf(1)
 	minLeaf := b.cfg.minSamplesLeaf
 	for _, f := range b.candidateFeatures(d) {
-		order := append([]int(nil), idx...)
-		sort.Slice(order, func(a, c int) bool { return b.x[order[a]][f] < b.x[order[c]][f] })
+		order := b.cols[f][start:end]
 		cost, cut, found := b.sweep(order, f, minLeaf)
 		if found && cost < bestCost {
 			bestCost = cost
@@ -284,12 +479,18 @@ func (b *cartBuilder) sweep(order []int, f, minLeaf int) (bestCost float64, cut 
 		}
 		return bestCost, cut, found
 	}
-	// classification
-	total := make([]int, b.nClasses)
+	// classification — reuse the builder's count buffers (no per-node alloc)
+	total := b.totCnt
+	for k := range total {
+		total[k] = 0
+	}
 	for _, i := range order {
 		total[b.yi[i]]++
 	}
-	left := make([]int, b.nClasses)
+	left := b.leftCnt
+	for k := range left {
+		left[k] = 0
+	}
 	for p := 1; p < n; p++ {
 		left[b.yi[order[p-1]]]++
 		if p < minLeaf || n-p < minLeaf {
@@ -375,7 +576,10 @@ func (b *cartBuilder) impurity(idx []int) float64 {
 		}
 		return v / float64(len(idx))
 	}
-	counts := make([]int, b.nClasses)
+	counts := b.totCnt
+	for k := range counts {
+		counts[k] = 0
+	}
 	for _, i := range idx {
 		counts[b.yi[i]]++
 	}
@@ -393,7 +597,10 @@ func (b *cartBuilder) mean(idx []int) float64 {
 // majority returns the argmax class index, ties broken to the lowest index
 // (matching numpy.argmax / scikit-learn).
 func (b *cartBuilder) majority(idx []int) int {
-	counts := make([]int, b.nClasses)
+	counts := b.totCnt
+	for k := range counts {
+		counts[k] = 0
+	}
 	for _, i := range idx {
 		counts[b.yi[i]]++
 	}
@@ -478,11 +685,13 @@ func (m *DecisionTreeClassifier) fitWithSeed(x [][]float64, y, classes []int, se
 		yi[i] = p
 	}
 	b := &cartBuilder{x: x, yi: yi, nClasses: len(classes), cfg: m.cfg, rng: &lcg{state: nonzero(seed)}}
-	idx := make([]int, len(x))
-	for i := range idx {
-		idx[i] = i
+	if b.subsampled(d) {
+		b.initIdx(len(x))
+		m.root = b.buildIdx(allIndices(len(x)), 0)
+	} else {
+		b.initColumns(len(x), d)
+		m.root = b.build(0, len(x), 0)
 	}
-	m.root = b.build(idx, 0)
 	m.classes = classes
 	m.nFeature = d
 	return nil
@@ -542,11 +751,13 @@ func (m *DecisionTreeRegressor) fitWithSeed(x [][]float64, y []float64, seed uin
 		return err
 	}
 	b := &cartBuilder{x: x, yf: y, regression: true, cfg: m.cfg, rng: &lcg{state: nonzero(seed)}}
-	idx := make([]int, len(x))
-	for i := range idx {
-		idx[i] = i
+	if b.subsampled(d) {
+		b.initIdx(len(x))
+		m.root = b.buildIdx(allIndices(len(x)), 0)
+	} else {
+		b.initColumns(len(x), d)
+		m.root = b.build(0, len(x), 0)
 	}
-	m.root = b.build(idx, 0)
 	m.nFeature = d
 	return nil
 }

@@ -265,7 +265,8 @@ func TestTreeImpurityFormulas(t *testing.T) {
 	if math.Abs(parent-25) > 1e-10 {
 		t.Errorf("parent variance = %.12f, want 25", parent)
 	}
-	feat, thr, ok := b.bestSplit([]int{0, 1, 2, 3})
+	b.initColumns(4, 1)
+	feat, thr, ok := b.bestSplit(0, 4)
 	if !ok || feat != 0 {
 		t.Fatalf("bestSplit feat=%d ok=%v, want feat 0", feat, ok)
 	}

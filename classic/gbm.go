@@ -199,6 +199,167 @@ func bestGBMSplit(x [][]float64, y []float64, idx []int, minLeaf int) (feat int,
 	return feat, thr, ok
 }
 
+// gbmBuilder is the fast, allocation-light weak-learner grower used by the
+// boosting Fit loops. It presorts every feature ONCE per Fit (the feature order
+// depends only on X, never on the per-round residual target) and reuses that
+// order across all M rounds, partitioning columns in place at each split — the
+// same presort/partition scheme as the CART builder. It produces bit-identical
+// trees to fitGBMTree (splits only fall between distinct adjacent values, so tie
+// order is irrelevant), but replaces the per-node sort.Slice with an O(d·m) copy
+// and O(d·m·depth) partition, and M presorts with one.
+type gbmBuilder struct {
+	x        [][]float64
+	y        []float64 // current round's target (set per round before fit)
+	n, d     int
+	maxDepth int
+	minLeaf  int
+	master   [][]int // presorted [0..n) by each feature (built once, immutable)
+	cols     [][]int // per-round working columns; cols[f][start:end] = node samples sorted by f
+	part     []int   // stable-partition scratch (len n)
+	goLeft   []bool  // per-sample split membership during a partition (len n)
+	inSet    []bool  // membership of a round's subsample (len n)
+}
+
+// newGBMBuilder argsorts every feature once and allocates the reusable scratch.
+func newGBMBuilder(x [][]float64, n, d, maxDepth, minLeaf int) *gbmBuilder {
+	b := &gbmBuilder{x: x, n: n, d: d, maxDepth: maxDepth, minLeaf: minLeaf}
+	b.master = make([][]int, d)
+	mbase := make([]int, n*d)
+	for f := 0; f < d; f++ {
+		col := mbase[f*n : f*n+n : f*n+n]
+		for i := range col {
+			col[i] = i
+		}
+		ff := f
+		sort.Slice(col, func(a, c int) bool { return x[col[a]][ff] < x[col[c]][ff] })
+		b.master[f] = col
+	}
+	cbase := make([]int, n*d)
+	b.cols = make([][]int, d)
+	for f := 0; f < d; f++ {
+		b.cols[f] = cbase[f*n : f*n+n : f*n+n]
+	}
+	b.part = make([]int, n)
+	b.goLeft = make([]bool, n)
+	b.inSet = make([]bool, n)
+	return b
+}
+
+// fit grows one weak-learner tree over the round's sample set idx using the
+// current b.y target. It seeds the working columns from the presorted master
+// (a copy when idx is the full sample, else an order-preserving filter).
+func (b *gbmBuilder) fit(idx []int) *gbmTree {
+	m := len(idx)
+	if m == b.n {
+		for f := 0; f < b.d; f++ {
+			copy(b.cols[f][:m], b.master[f])
+		}
+	} else {
+		for _, i := range idx {
+			b.inSet[i] = true
+		}
+		for f := 0; f < b.d; f++ {
+			mc := b.master[f]
+			w := 0
+			for _, s := range mc {
+				if b.inSet[s] {
+					b.cols[f][w] = s
+					w++
+				}
+			}
+		}
+		for _, i := range idx {
+			b.inSet[i] = false
+		}
+	}
+	return &gbmTree{root: b.buildNode(0, m, 0)}
+}
+
+func (b *gbmBuilder) buildNode(start, end, depth int) *gbmNode {
+	value := mean(b.y, b.cols[0][start:end])
+	if depth >= b.maxDepth || (end-start) < 2*b.minLeaf {
+		return &gbmNode{leaf: true, value: value}
+	}
+	feat, thr, ok := b.bestSplit(start, end)
+	if !ok {
+		return &gbmNode{leaf: true, value: value}
+	}
+	mid := b.partition(start, end, feat, thr)
+	return &gbmNode{
+		feature:   feat,
+		threshold: thr,
+		left:      b.buildNode(start, mid, depth+1),
+		right:     b.buildNode(mid, end, depth+1),
+	}
+}
+
+// bestSplit mirrors bestGBMSplit exactly (variance-reduction gain, features
+// ascending, first strictly-improving split, midpoint threshold between distinct
+// adjacent values) but reads the presorted column instead of sorting per node.
+func (b *gbmBuilder) bestSplit(start, end int) (feat int, thr float64, ok bool) {
+	n := end - start
+	col0 := b.cols[0]
+	var total float64
+	for p := start; p < end; p++ {
+		total += b.y[col0[p]]
+	}
+	bestGain := 0.0
+	for f := 0; f < b.d; f++ {
+		cf := b.cols[f]
+		var leftSum float64
+		for k := 0; k < n-1; k++ {
+			s := cf[start+k]
+			leftSum += b.y[s]
+			nl, nr := k+1, n-(k+1)
+			if nl < b.minLeaf || nr < b.minLeaf {
+				continue
+			}
+			vk, vn := b.x[s][f], b.x[cf[start+k+1]][f]
+			if vk == vn { // cannot split between equal values
+				continue
+			}
+			meanL := leftSum / float64(nl)
+			meanR := (total - leftSum) / float64(nr)
+			diff := meanL - meanR
+			gain := float64(nl) * float64(nr) / float64(n) * diff * diff
+			if gain > bestGain {
+				bestGain = gain
+				feat, thr, ok = f, (vk+vn)/2, true
+			}
+		}
+	}
+	return feat, thr, ok
+}
+
+// partition splits the node range of every feature column into left|right in
+// place (stable) by the chosen test, returning the boundary mid.
+func (b *gbmBuilder) partition(start, end, feat int, thr float64) int {
+	col := b.cols[feat]
+	for p := start; p < end; p++ {
+		s := col[p]
+		b.goLeft[s] = b.x[s][feat] <= thr
+	}
+	mid := start
+	for f := 0; f < b.d; f++ {
+		cf := b.cols[f]
+		w := start
+		r := 0
+		for p := start; p < end; p++ {
+			s := cf[p]
+			if b.goLeft[s] {
+				cf[w] = s
+				w++
+			} else {
+				b.part[r] = s
+				r++
+			}
+		}
+		copy(cf[w:end], b.part[:r])
+		mid = w
+	}
+	return mid
+}
+
 func (n *gbmNode) predict(row []float64) float64 {
 	for !n.leaf {
 		if row[n.feature] <= n.threshold {
@@ -304,7 +465,7 @@ func NewGradientBoostingRegressor(opts ...GBMOption) *GradientBoostingRegressor 
 // Fit trains the additive model on X[n][d] with continuous targets y[n]. It
 // returns an error on empty or ragged input or an out-of-range hyper-parameter.
 func (m *GradientBoostingRegressor) Fit(x [][]float64, y []float64) error {
-	n, _, err := validX(x, len(y))
+	n, d, err := validX(x, len(y))
 	if err != nil {
 		return err
 	}
@@ -327,12 +488,17 @@ func (m *GradientBoostingRegressor) Fit(x [][]float64, y []float64) error {
 
 	rng := rand.New(rand.NewSource(m.cfg.seed))
 	resid := make([]float64, n)
+	var gb *gbmBuilder
+	if m.cfg.nEstimators > 0 {
+		gb = newGBMBuilder(x, n, d, m.cfg.maxDepth, m.cfg.minSamplesLeaf)
+	}
 	for round := 0; round < m.cfg.nEstimators; round++ {
 		for i := 0; i < n; i++ {
 			resid[i] = y[i] - f[i] // negative gradient of ½(y−f)²
 		}
 		idx := subsampleIdx(n, m.cfg.subsample, rng)
-		tree := fitGBMTree(x, resid, idx, m.cfg.maxDepth, m.cfg.minSamplesLeaf)
+		gb.y = resid
+		tree := gb.fit(idx)
 		for i := 0; i < n; i++ {
 			f[i] += m.cfg.learningRate * tree.root.predict(x[i])
 		}
@@ -425,7 +591,7 @@ func NewGradientBoostingClassifier(opts ...GBMOption) *GradientBoostingClassifie
 // each 0 or 1. It errors on empty/ragged input, a bad label, a degenerate
 // single-class target (log-odds undefined), or an out-of-range hyper-parameter.
 func (m *GradientBoostingClassifier) Fit(x [][]float64, y []int) error {
-	n, _, err := validX(x, len(y))
+	n, d, err := validX(x, len(y))
 	if err != nil {
 		return err
 	}
@@ -460,12 +626,17 @@ func (m *GradientBoostingClassifier) Fit(x [][]float64, y []int) error {
 
 	rng := rand.New(rand.NewSource(m.cfg.seed))
 	resid := make([]float64, n)
+	var gb *gbmBuilder
+	if m.cfg.nEstimators > 0 {
+		gb = newGBMBuilder(x, n, d, m.cfg.maxDepth, m.cfg.minSamplesLeaf)
+	}
 	for round := 0; round < m.cfg.nEstimators; round++ {
 		for i := 0; i < n; i++ {
 			resid[i] = yf[i] - sigmoid(f[i]) // negative gradient of log loss
 		}
 		idx := subsampleIdx(n, m.cfg.subsample, rng)
-		tree := fitGBMTree(x, resid, idx, m.cfg.maxDepth, m.cfg.minSamplesLeaf)
+		gb.y = resid
+		tree := gb.fit(idx)
 		for i := 0; i < n; i++ {
 			f[i] += m.cfg.learningRate * tree.root.predict(x[i])
 		}

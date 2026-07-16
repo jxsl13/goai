@@ -23,6 +23,19 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   32 u16 qs words). Grid reconstructed the same way; kernel lane = qs word (8 elements each). Parity
   rel **9.8e-8**, bit-exact, first try. `quantDirect case 17` wired. The remaining grid i-quants
   (IQ3_XXS, IQ3_S, IQ1) are the same-mechanism follow-ups.
+### classic — performance: decision trees / GBM now beat sklearn (T715, 2026-07-16)
+
+The tree builders re-sorted every candidate feature at every node. Presorting each
+feature once per fit (with in-place partitioning so children inherit sorted ranges) and
+reusing that order across GBM's boosting rounds cut the work dramatically. A regression
+in RandomForest (whose per-node √d feature subsampling makes maintaining all columns
+wasteful) was caught and fixed by making the strategy conditional on subsampling.
+Result on the sklearn-comparison dataset: **DecisionTree 36.9→18.4 ms (now parity with
+sklearn), GradientBoosting 2458→137 ms (beats sklearn ~9×), RandomForest 665→653 ms (no
+regression)**. Goldens bit-identical. Combined with GaussianNB/kNN (already faster) and
+SVC (now at the libsvm floor), GoAI beats or matches sklearn on every classical method
+except RandomForest.
+
 ### classic — performance: SVC fit now matches libsvm (T713, 2026-07-16)
 
 A perf grind against the sklearn/libsvm incumbent. SVC's `Fit` was eagerly materializing
