@@ -7,6 +7,13 @@ import (
 	"github.com/jxsl13/goai/tensor"
 )
 
+// hgrnForgetFloor is the tiny ε the forget gate f is clamped to before log f in
+// the parallel form: with γ=0 a saturated forget gate underflows to exactly 0, so
+// log 0 = −∞ would make the causal decay matrix NaN (−∞−(−∞)); flooring keeps
+// log f finite while leaving the fully-forgotten contributions ≈0. A normal (non-
+// denormal) float64 so no backend flushes it; log(1e-300)≈−690.8.
+const hgrnForgetFloor = 1e-300
+
 // HGRN is the Hierarchically Gated Recurrent Unit — the recurrent cell of the
 // Hierarchically Gated Recurrent Network (Qin, Yang & Zhong 2023, "Hierarchically
 // Gated Recurrent Neural Network for Sequence Modeling", arXiv:2311.04823, EMNLP
@@ -175,7 +182,19 @@ func (m *HGRN) gates(ctx *backend.Context, x *tensor.Tensor) (logF, f, b *tensor
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	logF, err = m.exec(ctx, backend.OpLog, nil, f) // ≤ 0 since f ∈ (0,1)
+	// With γ=0 the forget gate f=σ(f̃) can UNDERFLOW to exactly 0 when f̃ is very
+	// negative, so log f = −∞ and the parallel form's D_{tj}=exp(cumlogF_t−cumlogF_j)
+	// hits −∞−(−∞)=NaN (the sequential scan, which uses f directly, stays finite —
+	// so the NaN also breaks the §V16 duality). Floor f at a tiny ε before the log so
+	// log f is a large-but-finite negative: the fully-forgotten contributions still
+	// exp() to ≈0 (matching the sequential path and f=0's limit) but never NaN, and
+	// the gradient through the log stays finite. Only the log input is floored; the f
+	// returned to the sequential path is exact, so the duality is preserved.
+	fFloored, err := m.exec(ctx, backend.OpClip, backend.ClipAttrs{Lo: hgrnForgetFloor, Hi: 1}, f)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	logF, err = m.exec(ctx, backend.OpLog, nil, fFloored) // ≤ 0 since f ∈ (0,1)
 	if err != nil {
 		return nil, nil, nil, err
 	}

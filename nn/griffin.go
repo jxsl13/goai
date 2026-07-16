@@ -15,6 +15,12 @@ import (
 // r_t ∈ (0,1) moves a_t across a wide memory-horizon range.
 const rgLRUC = 8.0
 
+// rgLRUVarFloor is the tiny ε the input-normalizer radicand 1−a² is clamped to
+// before √, so a saturated decay a=1 (recurrence gate underflowed to 0) does not
+// make √(1−a²)'s VJP g/(2·√·) divide by zero. Well below any 1−a² reached at
+// normal init, so it changes only the degenerate a→1 case.
+const rgLRUVarFloor = 1e-12
+
 // RGLRU is the Real-Gated Linear Recurrent Unit — the recurrent core of Hawk and
 // Griffin (De, Smith, Fernando, ... & De Freitas 2024, "Griffin: Mixing Gated
 // Linear Recurrences with Local Attention", arXiv:2402.19427, §2.4), a
@@ -180,6 +186,17 @@ func (m *RGLRU) gates(ctx *backend.Context, x *tensor.Tensor) (logA, a, b *tenso
 		return nil, nil, nil, err
 	}
 	oneMinus, err := m.exec(ctx, backend.OpSub, nil, scalarTensor(dt, 1), a2)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	// When the recurrence gate r saturates to exactly 0 (extreme-magnitude inputs
+	// drive W_a·x below the sigmoid's underflow threshold), a=exp(0)=1 so 1−a²=0 and
+	// √(1−a²)=0 — finite in the forward, but its VJP g/(2·√·) divides by zero and
+	// yields a NaN/Inf gradient. Floor the radicand at a tiny ε so the input
+	// normalizer's gradient stays finite; √ε≈0 keeps the forward at the a→1 limit
+	// (the input is fully attenuated), and the floor is far below any value reached
+	// at normal init, so the duality and gradcheck anchors are untouched.
+	oneMinus, err = m.exec(ctx, backend.OpClip, backend.ClipAttrs{Lo: rgLRUVarFloor, Hi: math.MaxFloat64}, oneMinus)
 	if err != nil {
 		return nil, nil, nil, err
 	}

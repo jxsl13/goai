@@ -31,6 +31,26 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 - IQ4_XS is a popular quality-4-bit i-quant; both now load bit-native instead of re-encode-to-Q8.
   `quantDirect` cases 20/23 wired. Next i-quants (IQ2_XXS/IQ2_XS/IQ3_*) use large E8-lattice/grid
   codebooks that will need a device-codebook upload mechanism — a separate follow-up.
+### nn — robustness class-audit: 2 NaN bugs fixed in the recurrent cells (T709, 2026-07-16)
+
+A degenerate-input hardening audit of the round-7/8 exp/softmax/log-space algorithm
+class (the 6 new attention variants + 3 recurrent cells) — the repo's "class-audit
+across siblings" pattern — found two real NaN bugs that the per-algorithm tests missed,
+both on saturated gates in the recurrent cells' log-space paths:
+
+- **HGRN** (`nn/hgrn.go`): with lower bound γ=0, a saturated forget gate underflows to
+  exactly 0, so `log f = −∞` and the parallel decay matrix computes `−∞ − (−∞) = NaN` —
+  poisoning the output and gradient and *silently breaking the parallel≡sequential
+  duality*. Fixed by flooring `f` before the `log` only (the sequential path is
+  untouched, so duality is preserved).
+- **RG-LRU** (`nn/griffin.go`): a saturated gate gives decay `a=1`, so the input
+  normalizer `√(1−a²)=√0` and the sqrt VJP divides by zero → NaN gradient. Fixed by
+  flooring the radicand.
+
+All six attention variants and mLSTM were already robust. A new `hostile_robustness_test.go`
+adds 9 degenerate-input tests (finite forward + finite gradients + duality-on-degenerate
+inputs) as a permanent hardening asset. The full nn suite — including every existing
+collapse/gradcheck/duality/value anchor — stays green.
 
 ### CUDA — native Q4_0 GEMV: legacy 4-bit round quant joins the native set (worker linux-amd64, Tw69, 2026-07-16)
 - `cu_qmatmul_q40` + `ResidentBQ40`: warp-per-output GEMV over ggml's legacy Q4_0 18-byte
