@@ -4,6 +4,26 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — int8 tensor-core MMQ prefill: cuBLAS-f16-competitive GEMM + resident-weight reuse (worker linux-amd64, Tw74/Tw75, 2026-07-16)
+- A from-scratch **int8 tensor-core GEMM** for prefill, compiled through the existing NVRTC path with
+  **inline PTX `mma.sync`** (no `mma.h`/`cuda_fp16.h` on sm_86 — reopens the tensor-core lever that was
+  assumed blocked). Built rung by rung, each correct (maxErr 0), to **21135 GOP/s @128×2048×2048 —
+  parity with cuBLAS f16-f16acc (21279)** and 2.1× f16-f32acc: naive 2300 → shared-tiled 3438 →
+  register-blocked 5744 → cp.async double-buffered 10962 → native `[N][K]` weight layout 19100 (kills
+  the B-read bank conflict) → 48B-padded conflict-free shared 21135.
+- **MMQ** (`cu_matmul_i8_mmq_r`): BK=32 == one Q8_0 block, so each K-step accumulates
+  `(float)d·aScale·wScale[block]` in f32 → the dequantized product in one pass. Per-row activation
+  scale (16575 GOP/s); device activation quantizer `cu_quant_rows_i8`. Accuracy 0.8–0.9% norm-rel-RMS
+  vs a true f32 GEMM (Q8_0-class).
+- **`ResidentMMQ`** — int8 MMQ prefill weight (int8 `[N][K]` + per-block scales), a drop-in for
+  `ResidentBF16` at ~half the weight VRAM (56%); validated on real Qwen2.5-0.5B weights (0.8% vs f16)
+  and end-to-end through decode (unified serve: coherent "Paris…", K-cache rel L1 0.0001; prefill
+  latency 1.22× f16 — the VRAM-for-speed trade that fits bigger models on a 12 GB card).
+- **The unification** — `ResidentBQ8` (the resident Q8 *decode* weight) stores byte-identical int8
+  `[N][K]` + scales, so it gains `MatMulMMQDevice`/`MatMulMMQAccInto`: the prefill GEMM reads the SAME
+  resident bytes the decode GEMV reads → **one weight, both paths, zero extra prefill VRAM** for a
+  Q8-decode model (vs f16 prefill = a full 2× copy). Requires K%32/N%64 (clean error → f16 fallback).
+
 ### classic — performance: ball-tree for kNN-predict and DBSCAN (T717, 2026-07-16)
 
 The last two classical methods trailing sklearn — kNN predict (112×) and DBSCAN (13×) —
