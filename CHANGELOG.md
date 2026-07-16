@@ -22,6 +22,16 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   so it is less latency-starved and has less headroom to reclaim by folding into the q launch.
 - Test-harness-only for now; productionizing into the llamagpu decoder + the qwen2 bias concat
   remain (Tw57 slice 2+).
+### nlp — capability: loaded HF models are fine-tunable (T735, 2026-07-16)
+
+The HF converters produce models that *run*; this proves they also *train*. Because
+`backend.Execute` records on the autograd tape whenever the context carries a recorder, running
+a loaded model's `Forward` through `tape.Context()` captures every op for backprop — so a
+`BertFromHF` model plus a classifier head fine-tunes under Adam with gradients flowing into the
+loaded weights. `TestBertFineTune` drives it end-to-end (loss 1.60 → 0.005 over 12 steps). GoAI
+can now adapt real Hugging Face checkpoints, not only run them. (T5's masked-attention op has no
+VJP, so T5 stays inference-only for now.)
+
 ### nlp — performance: T5 decoder KV-cache (T734, 2026-07-16)
 
 `T5Decoder.DecodeStep` + a `T5DecoderCache` make T5 generation incremental — the growing
