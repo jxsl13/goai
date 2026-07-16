@@ -4,6 +4,18 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — feat: Phi-3 support — 9th loadable architecture (T743, 2026-07-16)
+
+Microsoft Phi-3 (`Phi3ForCausalLM`) IS a Llama — RMSNorm, RoPE, GQA, SwiGLU, no biases — except it
+stores the attention and FFN input projections PACKED: one `qkv_proj` [heads·hd + 2·kv·hd, dim]
+instead of separate q/k/v, and one `gate_up_proj` [2·ffn, dim] instead of separate gate/up.
+`Phi3FromHF` unpacks those two tensors along their rows into the standard per-projection names and
+delegates to `LlamaFromHF`, so the loaded model is a plain `Llama` afterwards — inheriting
+`Generate`/`DecodeStep`, fine-tuning and LoRA for free, with no separate decode path to audit.
+Forward parity vs a real transformers `Phi3ForCausalLM`: max abs logit diff 2.2e-8, with a GQA
+golden (heads=4, kv=2) so the k/v split offsets are exercised. Loadable, transformers-anchored
+architectures now number nine (GPT-2, Llama, Qwen2, Phi-3, BERT, RoBERTa, DistilBERT, T5, Gemma).
+
 ### nlp — feat: Gemma (v1) support — 8th loadable architecture (T742, 2026-07-16)
 
 Gemma (Gemma Team 2024) as a self-contained `nlp.Gemma` type (`GemmaFromHF`), keeping `Llama`
