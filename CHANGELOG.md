@@ -78,10 +78,10 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   **opt-in** (`GOAI_CUDA_FFN_FUSE=1`). The remaining Tw55 lever is slice (b) —
   concurrent QKV streams in graph capture (QKV proj ≈11% of prefill), still open.
 
-### nn — topic-discovery round 7: 7 distinct architectures — KAN, Tokenformer, sigmoid / selective / multi-token / stick-breaking attention, CoPE (T686–T692, 2026-07-16)
+### nn — topic-discovery round 7: 8 distinct architectures — KAN, Tokenformer, sigmoid / selective / multi-token / stick-breaking attention, CoPE, PEER (T686–T693, 2026-07-16)
 
 A fresh sweep of *distinct layer/architecture types* (not the round-6 technique
-categories) found seven genuinely-novel gaps — proving the "frontier tapped" read
+categories) found eight genuinely-novel gaps — proving the "frontier tapped" read
 wrong a fourth time. Each was delegated to an isolated worktree, then independently
 re-verified on `main`, and carries a collapse/limit anchor + gradcheck + a
 learns-a-task value proof (~1e-10).
@@ -137,6 +137,15 @@ learns-a-task value proof (~1e-10).
   relative-position attention bit-exact; interpolation exact (`p=2.3 → 0.7·E[2]+0.3·E[3]`);
   gradcheck 2.55e-10 reaching the position tables; on a held-out "2nd-most-recent value,
   skipping noise" task CoPE generalizes to 86.3% vs an absolute-PE baseline's 64.9%.
+- **PEER — Mixture of a Million Experts** (`nn/peer.go`, He / DeepMind 2024,
+  arXiv:2407.04153). FFN replacement that retrieves a small top-k from a huge pool of
+  single-neuron experts via product-key memory (two √N sub-key sets, Cartesian top-k),
+  so expert count scales to millions at sublinear cost. Distinct from the block-expert
+  softmax MoE routers already in the repo. Anchors: product-key retrieval matches a
+  brute-force full-N top-k exactly; single-expert and dense (retrieve-all) collapses
+  @1e-10; gradcheck 9.21e-11 (gates + gathered experts get grad, un-retrieved rows get
+  exactly zero); Forward touches k experts not N (32× fewer), learns (MSE 13.94→0.16)
+  with experts specializing across tokens.
 
 ### nn/nlp — topic-discovery round 6: 18 new techniques across optimizers, attention, quant, sampling, MoE, distillation, embeddings, augmentation, RL (T668–T684, 2026-07-15/16)
 
