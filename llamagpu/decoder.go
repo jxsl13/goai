@@ -157,6 +157,7 @@ type block struct {
 	// nil = fall back to wq/wk/wv (quantized blocks whose projections mix quant types).
 	wqkv                linear
 	gAttn, gFFN, kC, vC buffer
+	bAttn, bFFN         buffer // LayerNorm betas (nil ⇒ RMSNorm, the Llama default)
 }
 
 // Decoder holds a Llama's weights + KV cache as device-resident buffers and runs one batched decode
@@ -164,12 +165,13 @@ type block struct {
 type Decoder struct {
 	ops                                           backendOps
 	d, h, kvH, dk, kvDim, half, hidden, v, maxLen int
-	rotaryDim                                     int // rotated channels/head; == dk for full RoPE (Llama), < dk for partial rotary (GPT-NeoX/Phi/StableLM)
+	rotaryDim                                     int  // rotated channels/head; == dk for full RoPE (Llama), < dk for partial rotary (GPT-NeoX/Phi/StableLM)
+	lnBias                                        bool // true ⇒ LayerNorm-with-bias norms (StableLM/Phi/StarCoder2); false ⇒ RMSNorm (Llama)
 	eps, posDiv, scale                            float32
 
 	blocks                                                []block
 	out                                                   linear
-	gFinal, dinv                                          *bufSlot
+	gFinal, bFinal, dinv                                  *bufSlot
 	dx, xn, xn2, q, k, v_, attn, ao, gate, up, mo, logits *bufSlot
 	qkv                                                   *bufSlot       // fused QKV output rows [·, d+2·kvDim] (§T613)
 	pending                                               recorder       // pre-encoded next-step command buffer (§T614)
@@ -217,6 +219,23 @@ func newDecoderCommon(cfg nlp.LlamaConfig, tokEmb *tensor.Tensor, ops backendOps
 // (RoPEPair) when rotaryDim == dk (Llama), else partial rotary (RoPEPartialPair — only the first
 // rotaryDim channels of each head rotate; GPT-NeoX/Phi/StableLM). inv (d.dinv) is sized to
 // rotaryDim/2 so the same buffer feeds both.
+// norm records the pre-sublayer normalization: LayerNorm-with-bias when lnBias (StableLM/Phi),
+// else RMSNorm (Llama). gamma is the weight; beta is the LayerNorm bias (ignored under RMSNorm).
+func (d *Decoder) norm(r recorder, x, gamma, beta, o buffer, rows int) error {
+	if d.lnBias {
+		return r.LayerNorm(x, gamma, beta, o, rows, d.d, d.eps)
+	}
+	return r.RMSNorm(x, gamma, o, rows, d.d, d.eps)
+}
+
+// bFinalBeta is the final-norm LayerNorm bias, or nil under RMSNorm (bFinal unset).
+func (d *Decoder) bFinalBeta() buffer {
+	if d.bFinal != nil {
+		return d.bFinal.b
+	}
+	return nil
+}
+
 func (d *Decoder) ropeQK(r recorder, qkv, inv buffer, seq, stride, pos int) error {
 	if d.rotaryDim < d.dk {
 		return r.RoPEPartialPair(qkv, inv, seq, stride, d.h, 0, d.kvH, d.d, d.dk, d.rotaryDim, pos, d.posDiv)
@@ -392,7 +411,7 @@ func (d *Decoder) encodeStep(pos int) (recorder, error) {
 		// bands rotate IN PLACE inside the combined row, k/v append to the cache straight
 		// from their bands, attention reads q at band offset 0), else the unfused three.
 		// Recording order is execution order: norm FIRST, then the projection branch.
-		e := r.RMSNorm(d.dx.b, b.gAttn, d.xn.b, 1, D, d.eps)
+		e := d.norm(r, d.dx.b, b.gAttn, b.bAttn, d.xn.b, 1)
 		qBuf := d.q.b
 		if e == nil && b.wqkv != nil {
 			qBuf = d.qkv.b
@@ -417,7 +436,7 @@ func (d *Decoder) encodeStep(pos int) (recorder, error) {
 			e,
 			r.MHA(qBuf, b.kC, b.vC, d.attn.b, 1, pos+1, D, H, KVH, dk, 1, 0, d.scale),
 			b.wo.recordAdd(r, d.attn.b, d.ao.b, d.dx.b, 1), // dx += attn·Wo (fused epilogue, §T613)
-			r.RMSNorm(d.dx.b, b.gFFN, d.xn2.b, 1, D, d.eps),
+			d.norm(r, d.dx.b, b.gFFN, b.bFFN, d.xn2.b, 1),
 			b.wG.record(r, d.xn2.b, d.gate.b, 1),
 			b.wU.record(r, d.xn2.b, d.up.b, 1),
 			r.Binary(d.gate.b, d.up.b, d.gate.b, binarySwiGLU),
@@ -429,7 +448,7 @@ func (d *Decoder) encodeStep(pos int) (recorder, error) {
 		}
 	}
 	if e := firstErr(
-		r.RMSNorm(d.dx.b, d.gFinal.b, d.xn.b, 1, D, d.eps),
+		d.norm(r, d.dx.b, d.gFinal.b, d.bFinalBeta(), d.xn.b, 1),
 		d.out.record(r, d.xn.b, d.logits.b, 1),
 	); e != nil {
 		r.Free()
@@ -535,7 +554,7 @@ func (d *Decoder) StepN(tokens []int, pos int) ([]float32, error) {
 		// width parameter acts as the row stride), then Copy2D extracts q contiguously
 		// and deposits the k/v bands directly as cache rows. Recording order = execution
 		// order: norm first, then the projection branch.
-		e := r.RMSNorm(d.dx.b, b.gAttn, d.xn.b, k, D, d.eps)
+		e := d.norm(r, d.dx.b, b.gAttn, b.bAttn, d.xn.b, k)
 		if e == nil && b.wqkv != nil {
 			e = firstErr(
 				b.wqkv.record(r, d.xn.b, d.qkv.b, k),
@@ -561,7 +580,7 @@ func (d *Decoder) StepN(tokens []int, pos int) ([]float32, error) {
 			// through absolute position pos+i — exactly the prefill/verify semantics.
 			r.MHA(d.q.b, b.kC, b.vC, d.attn.b, k, pos+k, D, H, KVH, dk, 1, 0, d.scale),
 			b.wo.recordAdd(r, d.attn.b, d.ao.b, d.dx.b, k), // dx += attn·Wo (fused epilogue, §T613)
-			r.RMSNorm(d.dx.b, b.gFFN, d.xn2.b, k, D, d.eps),
+			d.norm(r, d.dx.b, b.gFFN, b.bFFN, d.xn2.b, k),
 			b.wG.record(r, d.xn2.b, d.gate.b, k),
 			b.wU.record(r, d.xn2.b, d.up.b, k),
 			r.Binary(d.gate.b, d.up.b, d.gate.b, binarySwiGLU),
@@ -573,7 +592,7 @@ func (d *Decoder) StepN(tokens []int, pos int) ([]float32, error) {
 		}
 	}
 	if e := firstErr(
-		r.RMSNorm(d.dx.b, d.gFinal.b, d.xn.b, k, D, d.eps),
+		d.norm(r, d.dx.b, d.gFinal.b, d.bFinalBeta(), d.xn.b, k),
 		d.out.record(r, d.xn.b, d.logits.b, k),
 		r.Finish(),
 	); e != nil {
