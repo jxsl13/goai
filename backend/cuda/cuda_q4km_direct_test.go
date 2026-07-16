@@ -23,8 +23,16 @@ import (
 func quantDirect(qt gguf.QuantTensor) (qProj, error) {
 	n, k := qt.Shape[0], qt.Shape[1]
 	switch qt.GGType {
+	case 2: // Q4_0 — legacy 4-bit round quant (Tw69), native
+		return cuda.NewResidentBQ40FromBlocks(qt.Data, k, n)
+	case 10: // Q2_K — bulk tensors of a Q2_K/Q2_K_S mix (Tw68), native like the rest
+		return cuda.NewResidentBQ2KFromBlocks(qt.Data, k, n)
+	case 11: // Q3_K — bulk tensors of a Q3_K_M/_L/_S mix (Tw67), native like the rest
+		return cuda.NewResidentBQ3KFromBlocks(qt.Data, k, n)
 	case 12: // Q4_K
 		return cuda.NewResidentBQ4KFromBlocks(qt.Data, k, n)
+	case 13: // Q5_K — bulk tensors of a Q5_K_M/Q5_K_S mix (Tw66), native like Q4_K/Q6_K
+		return cuda.NewResidentBQ5KFromBlocks(qt.Data, k, n)
 	case 14: // Q6_K
 		if os.Getenv("GOAI_CUDA_Q6K") == "q8" { // A/B: the old dequant→Q8 detour
 			break
