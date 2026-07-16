@@ -176,7 +176,7 @@ type Decoder struct {
 
 	blocks                                                []block
 	out                                                   linear
-	gFinal, bFinal, dinv                                  *bufSlot
+	gFinal, bFinal, outBias, dinv                         *bufSlot
 	dx, xn, xn2, q, k, v_, attn, ao, gate, up, mo, logits *bufSlot
 	qkv                                                   *bufSlot       // fused QKV output rows [·, d+2·kvDim] (§T613)
 	pending                                               recorder       // pre-encoded next-step command buffer (§T614)
@@ -243,6 +243,16 @@ func (d *Decoder) recordOProj(r recorder, b block, rows int) error {
 	e := b.wo.recordAdd(r, d.attn.b, d.ao.b, d.dx.b, rows)
 	if b.oBias != nil {
 		e = firstErr(e, r.AddBias(d.dx.b, b.oBias, d.dx.b, rows, d.d))
+	}
+	return e
+}
+
+// recordLogits records the final projection to logits (xn·Out) plus the optional output bias
+// (Phi's biased untied lm_head; nil ⇒ no bias, as for Llama/StableLM/StarCoder2).
+func (d *Decoder) recordLogits(r recorder, rows int) error {
+	e := d.out.record(r, d.xn.b, d.logits.b, rows)
+	if d.outBias != nil {
+		e = firstErr(e, r.AddBias(d.logits.b, d.outBias.b, d.logits.b, rows, d.v))
 	}
 	return e
 }
@@ -667,7 +677,7 @@ func (d *Decoder) encodeStep(pos int) (recorder, error) {
 	}
 	if e := firstErr(
 		d.norm(r, d.dx.b, d.gFinal.b, d.bFinalBeta(), d.xn.b, 1),
-		d.out.record(r, d.xn.b, d.logits.b, 1),
+		d.recordLogits(r, 1),
 	); e != nil {
 		r.Free()
 		return nil, e
@@ -807,7 +817,7 @@ func (d *Decoder) StepN(tokens []int, pos int) ([]float32, error) {
 	}
 	if e := firstErr(
 		d.norm(r, d.dx.b, d.gFinal.b, d.bFinalBeta(), d.xn.b, k),
-		d.out.record(r, d.xn.b, d.logits.b, k),
+		d.recordLogits(r, k),
 		r.Finish(),
 	); e != nil {
 		r.Free()
