@@ -75,12 +75,12 @@ int cu_qmatmul_q4k_swiglu(const void* dA, const void* dQ, const void* dGate, voi
 // (136-byte super-blocks) — 4-bit quants over a nonlinear 16-value codebook. K%32 / K%256.
 int cu_qmatmul_iq4nl(const void* dA, const void* dQ, void* dOut, int M, int K, int N, float beta);
 int cu_qmatmul_iq4xs(const void* dA, const void* dQ, void* dOut, int M, int K, int N, float beta);
-// cu_qmatmul_mxfp4: out = a·dequant(W), W = ggml MXFP4 (OCP microscaling FP4, gpt-oss) —
-// 17-byte blocks (E8M0 scale byte + 16 nibbles), FP4 E2M1 codebook. K%32==0. DECODE GEMV.
-int cu_qmatmul_mxfp4(const void* dA, const void* dQ, void* dOut, int M, int K, int N, float beta);
-// cu_qmatmul_q40: out[M,N] = a·dequant(W), W = ggml Q4_0 18-byte blocks per output row
-// (f16 d + 16 nibble bytes, symmetric y = d·(nibble−8)). K%32==0. DECODE GEMV.
-int cu_qmatmul_q40(const void* dA, const void* dQ, void* dOut, int M, int K, int N, float beta);
+// cu_qmatmul_mxfp4: out = a·dequant(MXFP4, gpt-oss), REPACKED into dScale (nblk E8M0 bytes/row)
+// + dNib (nblk×16 nibble bytes/row, 16-aligned) for coalesced reads. K%32==0. DECODE GEMV.
+int cu_qmatmul_mxfp4(const void* dA, const void* dScale, const void* dNib, void* dOut, int M, int K, int N, float beta);
+// cu_qmatmul_q40: out[M,N] = a·dequant(Q4_0), REPACKED into dScale (nblk f16/row) + dNib
+// (nblk×16 nibble bytes/row, 16-aligned) for coalesced reads. y = d·(nibble−8). K%32==0. GEMV.
+int cu_qmatmul_q40(const void* dA, const void* dScale, const void* dNib, void* dOut, int M, int K, int N, float beta);
 // cu_qmatmul_q2k: out[M,N] = a·dequant(W), W = ggml Q2_K 84-byte super-blocks per output row
 // (asymmetric affine, 4-bit sub-scale+min nibbles, 2-bit quants). K%256==0. DECODE GEMV.
 int cu_qmatmul_q2k(const void* dA, const void* dQ, void* dOut, int M, int K, int N, float beta);

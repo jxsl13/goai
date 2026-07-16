@@ -4,6 +4,24 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — small-block quant GEMV ~2.4–2.9× faster: Q4_0 & MXFP4 now beat Q4_K decode (worker linux-amd64, Tw72, 2026-07-16)
+- The 32-element-block quants (Q4_0, MXFP4) decoded 2–2.7× SLOWER than Q4_K despite identical
+  bytes/weight — a transactions-not-bytes problem (§Tw54): 64 tiny 18/17-byte blocks per K=2048
+  do ~8× the memory transactions of Q4_K's 8 super-blocks, and the un-4-aligned block layout
+  forces 1-byte uncoalesced reads. Fixed by an **upload-time repack** in the resident ctor:
+  each row is split into a contiguous scale region (nblk f16 / E8M0 bytes) + a **16-aligned**
+  nibble region (nblk×16 bytes), so the GEMV processes 8 blocks/iteration with 4 lanes/block
+  doing **coalesced uint nibble reads + float4 activations** (8 iterations for K=2048, matching
+  Q4_K). Two further fixes mattered: scalar activation reads had to become `float4` (coalescing
+  the nibbles alone only got +8%), and the MXFP4 codebook LUT had to move to `__device__ const`
+  (L1-cached global) — inside-kernel `const` lands in per-thread local memory, and `__constant__`
+  *serializes* the divergent per-lane indices (75 µs!).
+- Measured (RTX 3060, K=N=2048 q/o-proj decode, ns/op): **Q4_0 29941 → 12634 (2.37×)**,
+  **MXFP4 38876 → 13286 (2.93×)** — both now *faster* than the Q4_K reference (14154). Parity
+  bit-exact (maxAbs ~6e-6, both beta variants). A Q4_0/MXFP4 GGUF (gpt-oss ships MXFP4) now
+  decodes at Q4_K-class speed. Q3_K (1.86× slow, byte-scattered super-block) and the IQ4
+  codebook-in-local-memory are the same-technique follow-ups.
+
 ### CUDA — native MXFP4 GEMV: the format gpt-oss ships in (worker linux-amd64, Tw71, 2026-07-16)
 - `cu_qmatmul_mxfp4` + `ResidentBMXFP4`: warp-per-output GEMV over ggml's MXFP4 (OCP
   Microscaling FP4) 17-byte, 32-element blocks (1 E8M0 scale byte + 16 nibbles). Each 4-bit
