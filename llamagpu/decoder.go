@@ -467,6 +467,75 @@ func newStableLMDecoder(m *nlp.StableLM, ops backendOps) (*Decoder, error) {
 	return d, nil
 }
 
+// newStarCoder2Decoder builds a device Decoder for an nlp.StarCoder2: LayerNorm-with-bias +
+// biased q/k/v/o projections + a biased 2-layer GELU MLP (c_fc → GELU → c_proj) + FULL rope +
+// GQA + untied head. Every one of those is a core generalization (lnBias, biased projections,
+// ffnGELU); rotary stays full (rotaryDim == dk). cuda-only.
+func newStarCoder2Decoder(m *nlp.StarCoder2, ops backendOps) (*Decoder, error) {
+	cfg := m.Config
+	kvH := cfg.KVHeads
+	if kvH <= 0 {
+		kvH = cfg.Heads
+	}
+	lc := nlp.LlamaConfig{
+		Vocab: cfg.Vocab, Ctx: cfg.Ctx, Dim: cfg.Dim, Heads: cfg.Heads, KVHeads: kvH,
+		Layers: cfg.Layers, Hidden: cfg.Hidden, Eps: cfg.Eps, RopeBase: cfg.RopeBase,
+	}
+	d, derr := newDecoderCommon(lc, m.TokEmb, ops)
+	if derr != nil {
+		return nil, derr
+	}
+	d.lnBias = true  // LayerNorm-with-bias
+	d.ffnGELU = true // 2-layer GELU MLP
+	// rotary stays full (rotaryDim == dk, the newDecoderCommon default) — no inv override.
+
+	var err error
+	mk := d.mkBuf(&err)
+	lin := func(w *tensor.Tensor) linear {
+		in, out := w.Shape()[0], w.Shape()[1]
+		return f32Linear{w: mk(flat2D(w)).b, k: in, n: out}
+	}
+	fused := func(wq, wk, wv *tensor.Tensor) linear {
+		in := wq.Shape()[0]
+		nq, nk, nv := wq.Shape()[1], wk.Shape()[1], wv.Shape()[1]
+		fq, fk, fv := flat2D(wq), flat2D(wk), flat2D(wv)
+		nt := nq + nk + nv
+		w := make([]float32, in*nt)
+		for i := range in {
+			row := w[i*nt : (i+1)*nt]
+			copy(row[:nq], fq[i*nq:(i+1)*nq])
+			copy(row[nq:nq+nk], fk[i*nk:(i+1)*nk])
+			copy(row[nq+nk:], fv[i*nv:(i+1)*nv])
+		}
+		return f32Linear{w: mk(w).b, k: in, n: nt}
+	}
+	fusedBias := func(bq, bk, bv *tensor.Tensor) buffer { // [Bq | Bk | Bv] = [D+2·kvDim]
+		fb := append(append(append([]float32{}, flat1D(bq)...), flat1D(bk)...), flat1D(bv)...)
+		return mk(fb).b
+	}
+	for _, b := range m.Blocks {
+		gb := block{
+			wqkv: fused(b.Wq, b.Wk, b.Wv), qkvBias: fusedBias(b.Bq, b.Bk, b.Bv),
+			wo: lin(b.Wo), oBias: mk(flat1D(b.Bo)).b,
+			gAttn: mk(flat1D(b.InputNorm.Gamma)).b, bAttn: mk(flat1D(b.InputNorm.Beta)).b,
+			gFFN: mk(flat1D(b.PostAttnNorm.Gamma)).b, bFFN: mk(flat1D(b.PostAttnNorm.Beta)).b,
+			wG: lin(b.Wfc), fcBias: mk(flat1D(b.Bfc)).b,
+			wD: lin(b.Wproj), projBias: mk(flat1D(b.Bproj)).b,
+			kC: mk(make([]float32, d.maxLen*d.kvDim)).b, vC: mk(make([]float32, d.maxLen*d.kvDim)).b,
+		}
+		d.blocks = append(d.blocks, gb)
+	}
+	d.gFinal = mk(flat1D(m.Norm.Gamma))
+	d.bFinal = mk(flat1D(m.Norm.Beta))
+	d.out = lin(m.Out)
+	d.allocScratch(mk)
+	if err != nil {
+		d.Release()
+		return nil, err
+	}
+	return d, nil
+}
+
 // newQuantDecoder uploads a quantized Llama: RMSNorm gains + KV caches as f32 device buffers, every
 // projection as a RESIDENT quantized weight consumed by the record-mode QMatMulResident (§T415) —
 // the 4-8× smaller weights of quantization combined with the batched-decode speedup.

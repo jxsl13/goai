@@ -57,3 +57,48 @@ func TestCUDAStableLMMatchesReference(t *testing.T) {
 	}
 	t.Logf("llamagpu NewStableLMCUDA.Generate == nlp.StableLM.Generate greedy: %d tokens (LayerNorm-bias + partial rotary)", len(gpuOut))
 }
+
+// The CUDA StarCoder2 decoder (LayerNorm-bias + biased q/k/v/o + biased GELU-MLP + full rope,
+// GQA) must greedy-generate token-for-token with the nlp.StarCoder2 reference — the second
+// new-architecture GPU decoder, exercising every core generalization except partial rotary.
+func TestCUDAStarCoder2MatchesReference(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("cuda: no CUDA-capable device")
+	}
+	ts, _, err := safetensors.LoadFile("../nlp/testdata/starcoder2_hf.safetensors")
+	if err != nil {
+		t.Skipf("starcoder2 testdata unavailable (run make golden): %v", err)
+	}
+	m, err := nlp.StarCoder2FromHF(ts, nlp.StarCoder2Config{
+		Heads: 4, KVHeads: 2, Eps: 1e-5, RopeBase: 10000, Ctx: 32,
+	})
+	if err != nil {
+		t.Fatalf("StarCoder2FromHF: %v", err)
+	}
+
+	dec, err := llamagpu.NewStarCoder2CUDA(m)
+	if err != nil {
+		t.Fatalf("NewStarCoder2CUDA: %v", err)
+	}
+	defer dec.Release()
+
+	prompt := []int{3, 7, 1, 9}
+	const maxNew = 12
+	gpuOut, err := dec.Generate(prompt, maxNew, nlp.Greedy())
+	if err != nil {
+		t.Fatalf("cuda generate: %v", err)
+	}
+	refOut, err := m.Generate(prompt, maxNew, nlp.Greedy(), nlp.WithBackend(backend.Reference()))
+	if err != nil {
+		t.Fatalf("ref generate: %v", err)
+	}
+	if len(gpuOut) != len(refOut) {
+		t.Fatalf("length: cuda %d vs ref %d", len(gpuOut), len(refOut))
+	}
+	for i := range gpuOut {
+		if gpuOut[i] != refOut[i] {
+			t.Fatalf("token[%d]: cuda %d vs ref %d\ncuda=%v\nref=%v", i, gpuOut[i], refOut[i], gpuOut, refOut)
+		}
+	}
+	t.Logf("llamagpu NewStarCoder2CUDA.Generate == nlp.StarCoder2.Generate greedy: %d tokens (biased proj + GELU-MLP)", len(gpuOut))
+}
