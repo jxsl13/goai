@@ -147,6 +147,37 @@ vector, a huge weight matrix). Rules, strongest first:
   in `__constant__` (it serializes per-lane divergent reads — 75 µs vs 28 µs) or
   in-kernel `const` for a big table (spills to per-thread *local* memory). Use
   `__device__ const` (L1-cached global) when you must.
+  - **The GATHER, not the bytes, dominates i-quant decode — grid → shared (Tw80).**
+    Codebook i-quant GEMV (IQ2/IQ3) ran 2–2.5× *slower* than Q4_K *despite fewer
+    bytes* → not bandwidth-bound. A stub-probe (remove the `grid[idx]` gather, keep
+    the byte reads) → 2.7× faster, pinning the cost on the **random per-lane grid
+    gather**, not the byte-assembled block reads — so the R1/Tw72 repack would have
+    been the *wrong* fix (measure-first caught it, again). FIX: load the small
+    codebook grid into **shared memory** once per block (cooperative load +
+    `__syncthreads`, placed *before* the early return so the sync can't deadlock),
+    then gather from shared. Measured **~1.5×** (not the stub's 2.7× — shared has
+    bank-conflicts on the random gather), bit-exact. Grids fit shared (IQ2 8–16 KB,
+    IQ3 4–8 KB); IQ1's 64 KB needs the sm_86 >48 KB opt-in (occupancy tradeoff to
+    measure, or pack the ternary grid to 2 bits → 4 KB and decode on lookup).
+    *Ceiling (measured):* ~1.5× is the practical ceiling for the shared approach. A
+    second stub (force all lanes to grid row 0 — a *broadcast*, conflict-free) hit
+    the gather-free floor (12157 vs 21574 ns), proving the residual cost is **shared
+    bank conflicts**. But row-stride padding to dodge them (stride-4 → coprime
+    stride-5) gave *nothing* (21414 ≈ 21574): each lane reads 8 grid floats (2 rows ×
+    4), so 32 lanes = 256 accesses into 32 banks = an ~8-way conflict floor that
+    padding can't move — only the broadcast special-case is free, and a random
+    codebook gather can't broadcast. Lesson: **for a random codebook lookup, the
+    per-lane-float-count ÷ 32 is a hard bank-conflict floor; padding only helps
+    when reads are *contiguous/strided*, not randomly gathered.**
+    - **Escape route — shrink the per-lane read (Tw80 follow-up for IQ1).** The floor
+      is *per-lane-floats ÷ 32*, so the only way under it for a random gather is to
+      read fewer bytes per lane. IQ1's grid is **ternary** `{−1,0,+1}`, so pack it to
+      **2 bits/entry** (2048×8 → 4 KB, also dodging IQ1's 64 KB occupancy wall) and
+      decode `code→{−1,0,+1}` in cheap ALU on lookup. Each lane then reads one
+      `uint16` (2 B) instead of 8 f32 (32 B) → the bank floor drops ~16× (256→16
+      accesses/warp), potentially *beating* the 1.5× the f32-grid path is stuck at.
+      Only works when the codebook is low-entropy enough to pack (ternary/2-bit);
+      IQ2/IQ3 store real f32 values and can't. Booked, measure-first, post-IQ1-merge.
 
 ---
 

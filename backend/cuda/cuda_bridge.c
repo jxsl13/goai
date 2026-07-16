@@ -1774,6 +1774,9 @@ int cu_qmatmul_iq2xxs(const void* dA, const void* dQ, const void* dGrid, void* d
                        "  return __uint_as_float(__float_as_uint(v) | s);\n"
                        "}\n"
                        "extern \"C\" __global__ void qmatmul_iq2xxs(const float* a, const unsigned char* q, const float* grid, float* out, int M, int K, int N, float beta){\n"
+                       "  extern __shared__ float sgrid[];\n"                                        // 256×8 grid in shared (Tw80)
+                       "  for (int ii = threadIdx.x; ii < 2048; ii += blockDim.x) sgrid[ii] = grid[ii];\n"
+                       "  __syncthreads();\n"
                        "  long warp = ((long)blockIdx.x*blockDim.x + threadIdx.x) >> 5;\n"
                        "  int lane = threadIdx.x & 31;\n"
                        "  if (warp >= (long)M*N) return;\n"
@@ -1793,7 +1796,7 @@ int cu_qmatmul_iq2xxs(const void* dA, const void* dQ, const void* dGrid, void* d
                        "    unsigned gi = (qs0 >> (8*gg)) & 0xFFu;\n"                    // grid index (0..255)
                        "    unsigned ksi = (qs1 >> (7*gg)) & 0x7Fu;\n"                   // ksigns index (0..127)
                        "    unsigned signs = ksi | ((unsigned)__popc(ksi) & 1u) << 7;\n" // ksigns[i] inline
-                       "    const float* gv = grid + (size_t)gi*8;\n"
+                       "    const float* gv = sgrid + (size_t)gi*8;\n"
                        "    const float* arb = ar + (size_t)w*256 + p*32 + gg*8;\n"
                        "    float4 al = *(const float4*)arb;\n"
                        "    float4 ah = *(const float4*)(arb + 4);\n"
@@ -1816,7 +1819,7 @@ int cu_qmatmul_iq2xxs(const void* dA, const void* dQ, const void* dGrid, void* d
         void* args[8];
         args[0] = &dA; args[1] = &dQ; args[2] = &dGrid; args[3] = &dOut;
         args[4] = &M; args[5] = &K; args[6] = &N; args[7] = &beta;
-        rc = (cuLaunchKernel(gQgemvI2xxs, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+        rc = (cuLaunchKernel(gQgemvI2xxs, blocks, 1, 1, threads, 1, 1, 8192, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 done:
     pthread_mutex_unlock(&gLock);
@@ -1843,6 +1846,9 @@ int cu_qmatmul_iq3xxs(const void* dA, const void* dQ, const void* dGrid, void* d
                        "  return __uint_as_float(__float_as_uint(v) | s);\n"
                        "}\n"
                        "extern \"C\" __global__ void qmatmul_iq3xxs(const float* a, const unsigned char* q, const float* grid, float* out, int M, int K, int N, float beta){\n"
+                       "  extern __shared__ float sgrid[];\n"                                        // 256×4 grid in shared (Tw80): the gather is the bottleneck, not the byte reads
+                       "  for (int ii = threadIdx.x; ii < 1024; ii += blockDim.x) sgrid[ii] = grid[ii];\n"
+                       "  __syncthreads();\n"
                        "  long warp = ((long)blockIdx.x*blockDim.x + threadIdx.x) >> 5;\n"
                        "  int lane = threadIdx.x & 31;\n"
                        "  if (warp >= (long)M*N) return;\n"
@@ -1862,8 +1868,8 @@ int cu_qmatmul_iq3xxs(const void* dA, const void* dQ, const void* dGrid, void* d
                        "    unsigned gb2 = blk[2 + g*8 + jj*2 + 1];\n"
                        "    unsigned ksi = (sg >> (7*jj)) & 0x7Fu;\n"                    // ksigns index (0..127)
                        "    unsigned signs = ksi | ((unsigned)__popc(ksi) & 1u) << 7;\n" // ksigns[i] inline (8th = parity)
-                       "    const float* gv1 = grid + (size_t)gb1*4;\n"
-                       "    const float* gv2 = grid + (size_t)gb2*4;\n"
+                       "    const float* gv1 = sgrid + (size_t)gb1*4;\n"
+                       "    const float* gv2 = sgrid + (size_t)gb2*4;\n"
                        "    const float* arb = ar + (size_t)w*256 + g*32 + jj*8;\n"
                        "    float4 al = *(const float4*)arb;\n"
                        "    float4 ah = *(const float4*)(arb + 4);\n"
@@ -1887,7 +1893,7 @@ int cu_qmatmul_iq3xxs(const void* dA, const void* dQ, const void* dGrid, void* d
         void* args[8];
         args[0] = &dA; args[1] = &dQ; args[2] = &dGrid; args[3] = &dOut;
         args[4] = &M; args[5] = &K; args[6] = &N; args[7] = &beta;
-        rc = (cuLaunchKernel(gQgemvI3xxs, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+        rc = (cuLaunchKernel(gQgemvI3xxs, blocks, 1, 1, threads, 1, 1, 4096, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 done:
     pthread_mutex_unlock(&gLock);
@@ -1911,6 +1917,9 @@ int cu_qmatmul_iq3s(const void* dA, const void* dQ, const void* dGrid, void* dOu
                        "  return __uint_as_float(__float_as_uint(v) | s);\n"
                        "}\n"
                        "extern \"C\" __global__ void qmatmul_iq3s(const float* a, const unsigned char* q, const float* grid, float* out, int M, int K, int N, float beta){\n"
+                       "  extern __shared__ float sgrid[];\n"                                        // 512×4 grid in shared (Tw80)
+                       "  for (int ii = threadIdx.x; ii < 2048; ii += blockDim.x) sgrid[ii] = grid[ii];\n"
+                       "  __syncthreads();\n"
                        "  long warp = ((long)blockIdx.x*blockDim.x + threadIdx.x) >> 5;\n"
                        "  int lane = threadIdx.x & 31;\n"
                        "  if (warp >= (long)M*N) return;\n"
@@ -1930,8 +1939,8 @@ int cu_qmatmul_iq3s(const void* dA, const void* dQ, const void* dGrid, void* dOu
                        "    unsigned u1 = blk[2+i1]     | ((qh >> (jj*2))   & 1u) << 8;\n" // 9-bit grid indices
                        "    unsigned u2 = blk[2+i1+1]   | ((qh >> (jj*2+1)) & 1u) << 8;\n"
                        "    unsigned sg = blk[74 + g*4 + jj];\n"                          // direct sign byte
-                       "    const float* gv1 = grid + (size_t)u1*4;\n"
-                       "    const float* gv2 = grid + (size_t)u2*4;\n"
+                       "    const float* gv1 = sgrid + (size_t)u1*4;\n"
+                       "    const float* gv2 = sgrid + (size_t)u2*4;\n"
                        "    const float* arb = ar + (size_t)w*256 + g*32 + jj*8;\n"
                        "    float4 al = *(const float4*)arb;\n"
                        "    float4 ah = *(const float4*)(arb + 4);\n"
@@ -1955,7 +1964,7 @@ int cu_qmatmul_iq3s(const void* dA, const void* dQ, const void* dGrid, void* dOu
         void* args[8];
         args[0] = &dA; args[1] = &dQ; args[2] = &dGrid; args[3] = &dOut;
         args[4] = &M; args[5] = &K; args[6] = &N; args[7] = &beta;
-        rc = (cuLaunchKernel(gQgemvI3s, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+        rc = (cuLaunchKernel(gQgemvI3s, blocks, 1, 1, threads, 1, 1, 8192, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 done:
     pthread_mutex_unlock(&gLock);
@@ -2107,6 +2116,9 @@ int cu_qmatmul_iq2xs(const void* dA, const void* dQ, const void* dGrid, void* dO
                        "  return __uint_as_float(__float_as_uint(v) | s);\n"
                        "}\n"
                        "extern \"C\" __global__ void qmatmul_iq2xs(const float* a, const unsigned char* q, const float* grid, float* out, int M, int K, int N, float beta){\n"
+                       "  extern __shared__ float sgrid[];\n"                                        // 512×8 grid in shared (Tw80)
+                       "  for (int ii = threadIdx.x; ii < 4096; ii += blockDim.x) sgrid[ii] = grid[ii];\n"
+                       "  __syncthreads();\n"
                        "  long warp = ((long)blockIdx.x*blockDim.x + threadIdx.x) >> 5;\n"
                        "  int lane = threadIdx.x & 31;\n"
                        "  if (warp >= (long)M*N) return;\n"
@@ -2127,7 +2139,7 @@ int cu_qmatmul_iq2xs(const void* dA, const void* dQ, const void* dGrid, void* dO
                        "    unsigned sc4 = (scb >> (4*(sub&1))) & 0xFu;\n"
                        "    float db = d * (0.5f + (float)sc4) * 0.25f;\n"
                        "    unsigned signs = ksi | ((unsigned)__popc(ksi) & 1u) << 7;\n"
-                       "    const float* gv = grid + (size_t)gi*8;\n"
+                       "    const float* gv = sgrid + (size_t)gi*8;\n"
                        "    const float* arb = ar + (size_t)w*256 + lane*8;\n"
                        "    float4 al = *(const float4*)arb;\n"
                        "    float4 ah = *(const float4*)(arb + 4);\n"
@@ -2150,7 +2162,7 @@ int cu_qmatmul_iq2xs(const void* dA, const void* dQ, const void* dGrid, void* dO
         void* args[8];
         args[0] = &dA; args[1] = &dQ; args[2] = &dGrid; args[3] = &dOut;
         args[4] = &M; args[5] = &K; args[6] = &N; args[7] = &beta;
-        rc = (cuLaunchKernel(gQgemvI2xs, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+        rc = (cuLaunchKernel(gQgemvI2xs, blocks, 1, 1, threads, 1, 1, 16384, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 done:
     pthread_mutex_unlock(&gLock);
