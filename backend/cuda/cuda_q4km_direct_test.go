@@ -33,6 +33,10 @@ func quantDirect(qt gguf.QuantTensor) (qProj, error) {
 		return cuda.NewResidentBIQ2XSFromBlocks(qt.Data, k, n)
 	case 16: // IQ2_XXS — grid-codebook i-quant (Tw73), native
 		return cuda.NewResidentBIQ2XXSFromBlocks(qt.Data, k, n)
+	case 18: // IQ3_XXS — 3.06-bit grid-codebook i-quant (Tw78), native
+		return cuda.NewResidentBIQ3XXSFromBlocks(qt.Data, k, n)
+	case 21: // IQ3_S — 3.44-bit grid-codebook i-quant (Tw78), native
+		return cuda.NewResidentBIQ3SFromBlocks(qt.Data, k, n)
 	case 39: // MXFP4 — OCP microscaling FP4 (gpt-oss) (Tw71), native
 		return cuda.NewResidentBMXFP4FromBlocks(qt.Data, k, n)
 	case 10: // Q2_K — bulk tensors of a Q2_K/Q2_K_S mix (Tw68), native like the rest

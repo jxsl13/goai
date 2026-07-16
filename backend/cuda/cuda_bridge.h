@@ -115,6 +115,10 @@ int cu_qmatmul_q5k(const void* dA, const void* dQ, void* dOut, int M, int K, int
 int cu_qmatmul_iq2xxs(const void* dA, const void* dQ, const void* dGrid, void* dOut, int M, int K, int N, float beta);
 // cu_qmatmul_iq2xs: IQ2_XS (74-byte super-blocks, 512×8 grid + explicit 4-bit scales). K%256==0.
 int cu_qmatmul_iq2xs(const void* dA, const void* dQ, const void* dGrid, void* dOut, int M, int K, int N, float beta);
+// cu_qmatmul_iq3xxs: IQ3_XXS (98-byte super-blocks, 256×4 grid + packed ksigns/scale). K%256==0.
+int cu_qmatmul_iq3xxs(const void* dA, const void* dQ, const void* dGrid, void* dOut, int M, int K, int N, float beta);
+// cu_qmatmul_iq3s: IQ3_S (110-byte super-blocks, 512×4 grid, 9-bit indices, direct signs). K%256==0.
+int cu_qmatmul_iq3s(const void* dA, const void* dQ, const void* dGrid, void* dOut, int M, int K, int N, float beta);
 // cu_qmatmul_q6k: out[M,N] = a·dequant(W), W = ggml Q6_K 210-byte super-blocks per output row.
 int cu_qmatmul_q6k(const void* dA, const void* dQ, void* dOut, int M, int K, int N, float beta);
 // cu_upload_f16: upload host f32, convert to a device f16 (u16) buffer of n elements
