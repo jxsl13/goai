@@ -4,6 +4,21 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — ldmatrix int8 GEMM (edges past cuBLAS f16) + honest prefill standing vs llama.cpp (worker linux-amd64, Tw76, 2026-07-16)
+- `cu_matmul_i8_mma_lm`: the int8 tensor-core GEMM with **hardware `ldmatrix` fragment loads** (A via
+  `ldmatrix.x4`, B via `ldmatrix.x2`) replacing the manual 4-int-load + byte-assembly. The layouts were
+  mapped empirically first (`cu_ldmatrix_probe{,2}` / `TestZZLdmatrix*`, no NVRTC precedent existed):
+  `ldmatrix.x4.b16` yields the m16n8k32.s8 A fragment directly (4 quadrants), and because the resident
+  weight is `[N][K]`, `ldmatrix.x2` yields the B fragment with **no transpose**. Correct (maxErr 0),
+  **22096 GOP/s @128×2048×2048 — 1.04× the manual kernel and now edges past cuBLAS f16-f16acc (21279)**.
+- A bigger register tile (128×64, 8 MMAs/warp) was tried and **regressed** (occupancy-bound, not
+  load-bound) — so `lm` is the practical int8-GEMM ceiling on the 3060; reaching the int8 2× peak (to
+  beat llama.cpp's MMQ prefill outright) needs a higher-occupancy CUTLASS-style rewrite, deferred.
+- `TestCUDATinyLlamaMMQThroughput`: honest e2e standing vs the incumbent (llama.cpp b10012 Vulkan,
+  RTX 3060: pp512 9552 / tg128 245.6 t/s). GoAI pp512 MMQ 3479 / f16 5125 t/s, tg128 ~226 — decode ≈
+  parity, but prefill is GEMM-bound and GoAI trails on prefill *speed* (the int8-GEMM 2× above is the
+  lever; the shipped MMQ arc's win is VRAM, not prefill speed).
+
 ### CUDA — int8 tensor-core MMQ prefill: cuBLAS-f16-competitive GEMM + resident-weight reuse (worker linux-amd64, Tw74/Tw75, 2026-07-16)
 - A from-scratch **int8 tensor-core GEMM** for prefill, compiled through the existing NVRTC path with
   **inline PTX `mma.sync`** (no `mma.h`/`cuda_fp16.h` on sm_86 — reopens the tensor-core lever that was
