@@ -164,6 +164,7 @@ type block struct {
 type Decoder struct {
 	ops                                           backendOps
 	d, h, kvH, dk, kvDim, half, hidden, v, maxLen int
+	rotaryDim                                     int // rotated channels/head; == dk for full RoPE (Llama), < dk for partial rotary (GPT-NeoX/Phi/StableLM)
 	eps, posDiv, scale                            float32
 
 	blocks                                                []block
@@ -200,6 +201,7 @@ func newDecoderCommon(cfg nlp.LlamaConfig, tokEmb *tensor.Tensor, ops backendOps
 	d.dk = d.d / d.h
 	d.kvDim = d.kvH * d.dk
 	d.half = d.dk / 2
+	d.rotaryDim = d.dk // full RoPE by default; partial-rotary constructors override before allocScratch
 	d.scale = float32(1.0 / math.Sqrt(float64(d.dk)))
 
 	invF64, posDiv64 := backend.RoPEFreqs(d.dk, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: d.h})
@@ -209,6 +211,17 @@ func newDecoderCommon(cfg nlp.LlamaConfig, tokEmb *tensor.Tensor, ops backendOps
 	}
 	d.posDiv = float32(posDiv64)
 	return d, nil
+}
+
+// ropeQK records RoPE over the q and k bands of the fused QKV buffer in one pass: full rotary
+// (RoPEPair) when rotaryDim == dk (Llama), else partial rotary (RoPEPartialPair — only the first
+// rotaryDim channels of each head rotate; GPT-NeoX/Phi/StableLM). inv (d.dinv) is sized to
+// rotaryDim/2 so the same buffer feeds both.
+func (d *Decoder) ropeQK(r recorder, qkv, inv buffer, seq, stride, pos int) error {
+	if d.rotaryDim < d.dk {
+		return r.RoPEPartialPair(qkv, inv, seq, stride, d.h, 0, d.kvH, d.d, d.dk, d.rotaryDim, pos, d.posDiv)
+	}
+	return r.RoPEPair(qkv, inv, seq, stride, d.h, 0, d.kvH, d.d, d.dk, d.half, pos, d.posDiv)
 }
 
 // allocScratch uploads the RoPE frequencies and allocates the per-step scratch buffers. They are
@@ -385,7 +398,7 @@ func (d *Decoder) encodeStep(pos int) (recorder, error) {
 			qBuf = d.qkv.b
 			e = firstErr(
 				b.wqkv.record(r, d.xn.b, d.qkv.b, 1),
-				r.RoPEPair(d.qkv.b, d.dinv.b, 1, D+2*kvDim, H, 0, KVH, D, dk, d.half, pos, d.posDiv), // q+k bands, ONE dispatch (§T613)
+				d.ropeQK(r, d.qkv.b, d.dinv.b, 1, D+2*kvDim, pos), // q+k bands, ONE dispatch (§T613); full ∨ partial rotary
 				r.Blit(d.qkv.b, D, b.kC, pos*kvDim, kvDim),
 				r.Blit(d.qkv.b, D+kvDim, b.vC, pos*kvDim, kvDim),
 			)
@@ -526,7 +539,7 @@ func (d *Decoder) StepN(tokens []int, pos int) ([]float32, error) {
 		if e == nil && b.wqkv != nil {
 			e = firstErr(
 				b.wqkv.record(r, d.xn.b, d.qkv.b, k),
-				r.RoPEPair(d.qkv.b, d.dinv.b, k, stride, H, 0, KVH, D, dk, d.half, pos, d.posDiv), // q+k bands, ONE dispatch (§T613)
+				d.ropeQK(r, d.qkv.b, d.dinv.b, k, stride, pos), // q+k bands, ONE dispatch (§T613); full ∨ partial rotary
 				r.Copy2D(d.qkv.b, 0, stride, d.q.b, 0, D, k, D),
 				r.Copy2D(d.qkv.b, D, stride, b.kC, pos*kvDim, kvDim, k, kvDim),
 				r.Copy2D(d.qkv.b, D+kvDim, stride, b.vC, pos*kvDim, kvDim, k, kvDim),
