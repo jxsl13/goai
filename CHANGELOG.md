@@ -4,6 +4,16 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — feat: KV-cached generation for Gemma and Gemma 2 (T748, 2026-07-16)
+
+`Gemma` and `Gemma2` gain `NewCache`/`DecodeStep`/`Generate`, completing generation for every
+loadable decoder family. Gemma's single-token decode reapplies the √dim embedding scale and runs
+the standard cached attention; Gemma 2's decode reproduces its four sandwich norms, the √dim scale,
+the final-logit soft-cap, and a single-query form of the soft-capped attention (score scale →
+attention-logit soft-cap → softmax over all cached keys, no causal mask — numerically identical to
+the full masked attention on the last query position). Both reproduce `Forward` bit-for-bit
+(decode-vs-Forward max abs diff 0.0 for each).
+
 ### nlp — feat: KV-cached generation for Mixtral (T747, 2026-07-16)
 
 `Mixtral` gains `NewCache`/`DecodeStep`/`Generate` — the same KV-cached autoregressive decode as
