@@ -4,6 +4,18 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — feat: Qwen3 support — 12th loadable architecture (T750, 2026-07-16)
+
+Qwen3 (`Qwen3ForCausalLM`) is Llama with **per-head QK-norm** — an RMSNorm applied to the queries
+and keys (over head_dim, per head) before RoPE — and no attention bias (Qwen3 dropped the q/k/v
+bias that Qwen2 added). Added optional `QNorm`/`KNorm` to `LlamaBlock` (nil for Llama/Qwen2),
+applied via a reshape to `[seq·heads, head_dim]` → RMSNorm → reshape back, in BOTH the
+full-sequence path and the KV-cached `DecodeStep`. `LlamaFromHF` loads `self_attn.{q,k}_norm.weight`
+when present, so Qwen3 loads through the existing converter. Forward parity vs a real transformers
+`Qwen3ForCausalLM`: max abs logit diff 3.9e-8, with a decoupled-head_dim + GQA golden; KV-decode
+matches Forward bit-for-bit (0.0); and it fine-tunes (loss 3.45 → 3.04, since `OpReshape` carries a
+VJP). This brings the loadable, transformers-anchored architecture set to twelve.
+
 ### nlp — test: prove Gemma 2 and Mixtral are trainable end-to-end (T749, 2026-07-16)
 
 Fine-tune probes confirming both new architectures backprop. Gemma 2's from-scratch soft-capped

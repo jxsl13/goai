@@ -3,6 +3,7 @@ package nlp
 import (
 	"fmt"
 
+	"github.com/jxsl13/goai/nn"
 	"github.com/jxsl13/goai/tensor"
 )
 
@@ -100,6 +101,13 @@ func LlamaFromHF(ts map[string]*tensor.Tensor, cfg LlamaConfig) (*Llama, error) 
 			}
 			return nil
 		}
+		// Optional Qwen3/OLMo2 per-head QK-norm gains.
+		qkNorm := func(name string) *nn.RMSNorm {
+			if t, ok := ts[p+name]; ok {
+				return rmsFromGGUF(t, cfg.Eps)
+			}
+			return nil
+		}
 		m.Blocks = append(m.Blocks, &LlamaBlock{
 			AttnNorm: rmsFromGGUF(an, cfg.Eps),
 			Wq:       transpose2D(wq),
@@ -109,6 +117,8 @@ func LlamaFromHF(ts map[string]*tensor.Tensor, cfg LlamaConfig) (*Llama, error) 
 			Bq:       bias("self_attn.q_proj.bias"),
 			Bk:       bias("self_attn.k_proj.bias"),
 			Bv:       bias("self_attn.v_proj.bias"),
+			QNorm:    qkNorm("self_attn.q_norm.weight"),
+			KNorm:    qkNorm("self_attn.k_norm.weight"),
 			FFNNorm:  rmsFromGGUF(fn, cfg.Eps),
 			FFN:      swiGLUFromGGUF(gate, up, down),
 		})

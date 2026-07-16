@@ -45,6 +45,7 @@ type LlamaBlock struct {
 	AttnNorm       *nn.RMSNorm    // RMSNorm before attention
 	Wq, Wk, Wv, Wo *tensor.Tensor // attention projections (no bias); Wk/Wv are [dim, KVHeads·headDim]
 	Bq, Bk, Bv     *tensor.Tensor // optional q/k/v projection biases (Qwen2/Qwen2.5 family); nil for Llama/Mistral
+	QNorm, KNorm   *nn.RMSNorm    // optional per-head query/key RMSNorm applied before RoPE (Qwen3/OLMo2); nil otherwise
 	FFNNorm        *nn.RMSNorm    // RMSNorm before the FFN
 	FFN            *nn.SwiGLU     // SwiGLU feed-forward
 }
@@ -192,6 +193,13 @@ func (m *Llama) hiddenFromEmbed(ctx *backend.Context, x *tensor.Tensor) (*tensor
 		if v, err = addBiasIf(ctx, v, b.Bv); err != nil {
 			return nil, err
 		}
+		// Qwen3/OLMo2 per-head QK-norm (before RoPE); nil for Llama/Qwen2.
+		if q, err = applyQKNorm(ctx, q, b.QNorm, cfg.Heads); err != nil {
+			return nil, err
+		}
+		if k, err = applyQKNorm(ctx, k, b.KNorm, kv); err != nil {
+			return nil, err
+		}
 		if q, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: rope.Base, Heads: cfg.Heads}, q); err != nil {
 			return nil, err
 		}
@@ -242,6 +250,27 @@ func addBiasIf(ctx *backend.Context, x, bias *tensor.Tensor) (*tensor.Tensor, er
 	return exec1(ctx, backend.OpAddBias, nil, x, bias)
 }
 
+// applyQKNorm applies a per-head RMSNorm to a projected q or k tensor x [seq, heads·headDim]
+// when norm is non-nil (Qwen3/OLMo2 QK-norm), else returns x unchanged. The tensor is
+// reshaped to [seq·heads, headDim] so RMSNorm (last-axis) normalizes each head independently,
+// then reshaped back — matching HF's q_norm(q_proj(x).view(.., heads, headDim)). Both reshapes
+// are differentiable (OpReshape has a VJP), so QK-norm models remain trainable.
+func applyQKNorm(ctx *backend.Context, x *tensor.Tensor, norm *nn.RMSNorm, heads int) (*tensor.Tensor, error) {
+	if norm == nil {
+		return x, nil
+	}
+	seq := x.Shape()[0]
+	hd := x.Shape()[1] / heads
+	r, err := exec1(ctx, backend.OpReshape, backend.ReshapeAttrs{Shape: tensor.Shape{seq * heads, hd}}, x)
+	if err != nil {
+		return nil, err
+	}
+	if r, err = norm.Forward(ctx, r); err != nil {
+		return nil, err
+	}
+	return exec1(ctx, backend.OpReshape, backend.ReshapeAttrs{Shape: tensor.Shape{seq, heads * hd}}, r)
+}
+
 // Params returns every trainable tensor for optimizers.
 func (m *Llama) Params() []*tensor.Tensor {
 	ps := []*tensor.Tensor{m.TokEmb}
@@ -250,6 +279,11 @@ func (m *Llama) Params() []*tensor.Tensor {
 		for _, bb := range []*tensor.Tensor{b.Bq, b.Bk, b.Bv} {
 			if bb != nil {
 				ps = append(ps, bb)
+			}
+		}
+		for _, n := range []*nn.RMSNorm{b.QNorm, b.KNorm} {
+			if n != nil {
+				ps = append(ps, n.Gamma)
 			}
 		}
 		ps = append(ps, b.FFN.Params()...)

@@ -85,6 +85,13 @@ func (m *Llama) DecodeStep(ctx *backend.Context, cache *LlamaCache, token, pos i
 		if v, err = addBiasIf(ctx, v, b.Bv); err != nil {
 			return nil, err
 		}
+		// Qwen3/OLMo2 per-head QK-norm (before RoPE), matching hiddenFromEmbed; nil otherwise.
+		if q, err = applyQKNorm(ctx, q, b.QNorm, cfg.Heads); err != nil {
+			return nil, err
+		}
+		if k, err = applyQKNorm(ctx, k, b.KNorm, kv); err != nil {
+			return nil, err
+		}
 		// RoPE the single token at its absolute position, then append k,v to the cache
 		if q, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: cfg.Heads, PosOffset: pos}, q); err != nil {
 			return nil, err
