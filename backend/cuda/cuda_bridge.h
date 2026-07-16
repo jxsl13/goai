@@ -129,6 +129,8 @@ int cu_matmul_i8_lt(const void* dA8, const void* dW8, void* dC32, int M, int K, 
 int cu_matmul_f16acc16(const void* dA32, const void* dW16, void* dC16, int M, int K, int N);
 // cu_ldmatrix_probe: empirically map ldmatrix.x4.b16 fragment layout (dOut = 128 u32).
 int cu_ldmatrix_probe(void* dOut);
+// cu_ldmatrix_probe2: map ldmatrix.x2.b16 for the B fragment (dOut = 64 u32).
+int cu_ldmatrix_probe2(void* dOut);
 int cu_download_u16(const void* dsrc, unsigned short* dst, int n);
 // cu_matmul_f16w_acc16: drop-in f32-output twin of cu_matmul_f16w with f16 accumulate (+convert).
 int cu_matmul_f16w_acc16(const void* dA32, const void* dW16, void* dC32, int M, int K, int N, float beta);

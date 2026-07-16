@@ -20,3 +20,15 @@ func ldmatrixProbe() []uint32 {
 	C.cu_download_f32(dOut, (*C.float)(unsafe.Pointer(&out[0])), C.int(128))
 	return out
 }
+
+// ldmatrixProbe2 returns the 64 u32 (32 lanes × 2 regs) ldmatrix.x2.b16 output.
+func ldmatrixProbe2() []uint32 {
+	dOut := C.cu_alloc_i8(C.int(64 * 4))
+	defer C.cu_free_f32(dOut)
+	if int(C.cu_ldmatrix_probe2(dOut)) != 0 {
+		return nil
+	}
+	out := make([]uint32, 64)
+	C.cu_download_f32(dOut, (*C.float)(unsafe.Pointer(&out[0])), C.int(64))
+	return out
+}

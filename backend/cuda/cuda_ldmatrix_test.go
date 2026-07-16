@@ -46,3 +46,39 @@ func itoaL(n int) string {
 	}
 	return string(b[i:])
 }
+
+// TestZZLdmatrixX2Layout maps ldmatrix.x2.b16 and checks it yields the mma.s8 B fragment
+// (rb0 = N-row gid / K-b16 {tid*2,tid*2+1} of matrix0; rb1 = same cols of matrix1) with NO transpose.
+func TestZZLdmatrixX2Layout(t *testing.T) {
+	if !Available() {
+		t.Skip("no gpu")
+	}
+	out := ldmatrixProbe2()
+	if out == nil {
+		t.Fatal("ldmatrixProbe2 failed")
+	}
+	dec := func(v uint16) (m, r, c int) { return int(v>>6) & 3, int(v>>3) & 7, int(v) & 7 }
+	ok := true
+	for lane := 0; lane < 32; lane++ {
+		gid, tid := lane>>2, lane&3
+		for reg := 0; reg < 2; reg++ {
+			v := out[lane*2+reg]
+			lo, hi := uint16(v&0xFFFF), uint16(v>>16)
+			m0, r0, c0 := dec(lo)
+			m1, r1, c1 := dec(hi)
+			// expected: matrix==reg, row==gid, cols == tid*2 (lo) and tid*2+1 (hi)
+			if m0 != reg || r0 != gid || c0 != tid*2 || m1 != reg || r1 != gid || c1 != tid*2+1 {
+				if lane < 8 {
+					t.Logf("lane %d reg %d: got [m%dr%dc%d|m%dr%dc%d], want matrix=%d row=%d cols=%d,%d",
+						lane, reg, m0, r0, c0, m1, r1, c1, reg, gid, tid*2, tid*2+1)
+				}
+				ok = false
+			}
+		}
+	}
+	if ok {
+		t.Log("ldmatrix.x2.b16 MATCHES the mma.s8 B fragment layout (reg=Khalf, row=gid, cols=tid*2,+1) — NO transpose needed for [N][K] weights")
+	} else {
+		t.Log("ldmatrix.x2 does NOT directly match B — .trans or a different tile arrangement needed (see logged lanes)")
+	}
+}

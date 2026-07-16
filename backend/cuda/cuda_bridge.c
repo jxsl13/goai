@@ -33,7 +33,7 @@ static cublasHandle_t gHandle = NULL;
 static float *gOne = NULL, *gZero = NULL; // device 1.0f/0.0f — cuBLAS DEVICE pointer mode (graph-capture-safe alpha/beta)
 static cudaStream_t gStream = NULL;
 static CUcontext gCtx = NULL; // runtime's primary context, retained for driver-API launches
-static CUfunction gGelu = NULL, gSilu = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gQgemv = NULL, gQgemv4 = NULL, gQgemv4k = NULL, gQgemv5k = NULL, gQgemv6k = NULL, gQgemv3k = NULL, gQgemv2k = NULL, gQgemv40 = NULL, gQgemvI4nl = NULL, gQgemvI4xs = NULL, gQgemvMxfp4 = NULL, gQgemvI2xxs = NULL, gQgemvI2xs = NULL, gI8Mma = NULL, gI8MmaT = NULL, gI8MmaRb = NULL, gI8MmaDb = NULL, gI8MmaWt = NULL, gI8MmaWp = NULL, gI8Mmq = NULL, gI8MmqR = NULL, gQrowsI8 = NULL, gLdmProbe = NULL, gCvtF16 = NULL, gCvtFrom16 = NULL; // lazily nvrtc-compiled
+static CUfunction gGelu = NULL, gSilu = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gQgemv = NULL, gQgemv4 = NULL, gQgemv4k = NULL, gQgemv5k = NULL, gQgemv6k = NULL, gQgemv3k = NULL, gQgemv2k = NULL, gQgemv40 = NULL, gQgemvI4nl = NULL, gQgemvI4xs = NULL, gQgemvMxfp4 = NULL, gQgemvI2xxs = NULL, gQgemvI2xs = NULL, gI8Mma = NULL, gI8MmaT = NULL, gI8MmaRb = NULL, gI8MmaDb = NULL, gI8MmaWt = NULL, gI8MmaWp = NULL, gI8Mmq = NULL, gI8MmqR = NULL, gQrowsI8 = NULL, gLdmProbe = NULL, gLdmProbe2 = NULL, gCvtF16 = NULL, gCvtFrom16 = NULL; // lazily nvrtc-compiled
 static CUfunction gRopeDpos = NULL, gAttnSoftmaxDpos = NULL, gAppendDpos = NULL; // device-position (graph-capturable) twins
 static CUfunction gGqaFlashPart = NULL, gGqaFlashMerge = NULL; // flash decode: GQA K/V-shared split-K partials + merge
 static CUfunction gGqaFlashPartF16 = NULL, gAppendDposF16 = NULL; // f16 KV-cache twins (u16 storage, f32 compute)
@@ -2761,6 +2761,40 @@ int cu_ldmatrix_probe(void* dOut) {
     {
         void* args[1]; args[0] = &dOut;
         rc = (cuLaunchKernel(gLdmProbe, 1, 1, 1, 32, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_ldmatrix_probe2: map ldmatrix.x2.b16 for the B fragment. Two 8x8 b16 matrices (matrix m at
+// sh[m*64], element (m,r,c)=(m<<6)|(r<<3)|c); for x2 lanes 0-15 provide addresses (lane L → matrix
+// L/8 row L%8). Dumps each lane's 2 regs. This confirms whether ldmatrix.x2 on the [N][K] weight
+// gives the mma.s8 B fragment (rb0=N-row gid/K0-15, rb1=N-row gid/K16-31) with NO transpose. dOut=64 u32.
+int cu_ldmatrix_probe2(void* dOut) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (!gLdmProbe2 && compile_kernel(
+            "extern \"C\" __global__ void ldmprobe2(unsigned* out){\n"
+            "  __shared__ unsigned short sh[128];\n"                  // 2 matrices x 64
+            "  int t = threadIdx.x;\n"
+            "  #pragma unroll\n"
+            "  for(int i=0;i<4;i++){ int idx=t*4+i; int m=idx>>6, rc=idx&63, r=rc>>3, c=rc&7; sh[idx]=(unsigned short)((m<<6)|(r<<3)|c); }\n"
+            "  __syncthreads();\n"
+            "  int matrix=t>>3, row=t&7;\n"                            // lanes 0-15 address the 2 matrices' rows
+            "  unsigned short* rp = &sh[(matrix&1)*64 + row*8];\n"
+            "  unsigned saddr;\n"
+            "  asm volatile(\"{ .reg .u64 s64; cvta.to.shared.u64 s64, %1; cvt.u32.u64 %0, s64; }\" : \"=r\"(saddr) : \"l\"(rp));\n"
+            "  unsigned r0,r1;\n"
+            "  asm volatile(\"ldmatrix.sync.aligned.m8n8.x2.shared.b16 {%0,%1}, [%2];\" : \"=r\"(r0),\"=r\"(r1) : \"r\"(saddr));\n"
+            "  out[t*2+0]=r0; out[t*2+1]=r1;\n"
+            "}\n",
+            "ldmprobe2.cu", "ldmprobe2", &gLdmProbe2) != 0) { rc = -2; goto done; }
+    {
+        void* args[1]; args[0] = &dOut;
+        rc = (cuLaunchKernel(gLdmProbe2, 1, 1, 1, 32, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 done:
     pthread_mutex_unlock(&gLock);
