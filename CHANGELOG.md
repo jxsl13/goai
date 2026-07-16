@@ -24,9 +24,13 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   (18-byte block → split scale + 16-aligned nibbles + float4) → **~15.3 µs** (≈2× the naive
   ~29 µs); **IQ4_XS** (256-element super-block, 136-byte blocks already 4-aligned so no repack
   needed) gets coalesced uint reads + float4 + the `__device__ const` codebook → **26.3 → 15.7 µs**
-  (1.67×). Both parity unchanged, both now Q4_K-class. So all four transaction-bound formats
-  (Q4_0, MXFP4, IQ4_NL, IQ4_XS) decode at ~Q4_K speed. Q3_K (byte-scattered super-block, needs a
-  repack) is the remaining same-technique follow-up.
+  (1.67×). Both parity unchanged, both now Q4_K-class.
+- **Q3_K** (110-byte super-block, not 4-aligned, with a per-lane aux/kmask scale splice) gets the
+  full treatment: the upload repack splits it into meta (16 **pre-decoded** 6-bit scales + f16 d),
+  qs (64 B), hmask (32 B) — eliminating the per-lane splice and enabling coalesced uint qs/hmask
+  reads → **26.4 → 16.7 µs** (1.58×). So **all five transaction-bound quant formats — Q4_0, MXFP4,
+  IQ4_NL, IQ4_XS, Q3_K — now decode at ~Q4_K-class speed** (12.6–16.7 µs vs the old 26–39 µs),
+  all parity bit-exact.
 
 ### CUDA — native MXFP4 GEMV: the format gpt-oss ships in (worker linux-amd64, Tw71, 2026-07-16)
 - `cu_qmatmul_mxfp4` + `ResidentBMXFP4`: warp-per-output GEMV over ggml's MXFP4 (OCP
