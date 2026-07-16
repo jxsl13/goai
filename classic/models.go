@@ -4,10 +4,8 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/jxsl13/goai/autograd"
 	"github.com/jxsl13/goai/backend"
 	"github.com/jxsl13/goai/internal/linalg"
-	"github.com/jxsl13/goai/nn"
 	"github.com/jxsl13/goai/tensor"
 )
 
@@ -84,68 +82,278 @@ func (m *LinearRegression) Predict(x [][]float64) []float64 {
 
 // --- softmax (multinomial logistic) regression ---
 
-// SoftmaxRegression fits multinomial logistic regression without penalty by
-// full-batch Adam on the fused CrossEntropy — the objective is strictly convex
-// (up to the softmax gauge), so it converges to the same optimum as sklearn's
-// LogisticRegression(penalty=None) and predicted probabilities agree.
+// SoftmaxRegression fits multinomial logistic regression without penalty by a
+// full multinomial NEWTON / IRLS solver (§B25) — the cross-entropy is strictly
+// convex (up to the softmax gauge), so the second-order method converges in a
+// handful of iterations to the same optimum as sklearn's
+// LogisticRegression(penalty=None) and predicted probabilities agree. Each
+// iteration forms the exact gradient g and block-structured Hessian
+// H[(a,c),(b,c')] = 1/n·Σ_i xa_i·xb_i·p_ic·(δ_cc' − p_ic') over the (d+1)·k
+// augmented weights (intercept as a trailing all-ones column), solves the
+// (small) damped system (H + εI)·Δ = g by Cholesky, and takes an Armijo
+// line-searched step W ← W − α·Δ. A tiny ridge εI only lifts the softmax gauge
+// null space (and any feature collinearity) to keep the system PD; it perturbs
+// the step, not the objective, so the fixed point g = 0 — hence the fitted
+// probabilities — is unbiased.
 type SoftmaxRegression struct {
 	W *tensor.Tensor // [d, k]
 	B *tensor.Tensor // [k]
 }
 
-// Fit trains for steps iterations with learning rate lr.
+// Fit trains multinomial logistic regression by Newton/IRLS. The signature is
+// API-stable; the parameters are reinterpreted for the second-order solver:
+// steps is the MAXIMUM number of Newton iterations (convergence on the gradient
+// norm / loss decrease stops earlier — typically in ~5–15), and lr is accepted
+// but unused for the step size (the solver uses a full damped Newton step with
+// Armijo backtracking, which is scale-free and robust); it is retained only for
+// backward compatibility.
 func (m *SoftmaxRegression) Fit(x [][]float64, y []int, k, steps int, lr float64) error {
+	_ = lr // reinterpreted: step size is chosen by Armijo line search, not lr.
 	n := len(x)
 	if n == 0 || len(y) != n {
 		return fmt.Errorf("classic: bad shapes")
 	}
+	if k < 1 {
+		return fmt.Errorf("classic: k=%d must be ≥1", k)
+	}
 	d := len(x[0])
-	xt := tensor.New(tensor.F64, tensor.Shape{n, d})
-	yt := tensor.New(tensor.F64, tensor.Shape{n})
+	for i := range x {
+		if len(x[i]) != d {
+			return fmt.Errorf("classic: ragged X")
+		}
+		if y[i] < 0 || y[i] >= k {
+			return fmt.Errorf("classic: label %d out of range [0,%d)", y[i], k)
+		}
+	}
+
+	// Augmented design: xa[i] = [x[i]..., 1] so the trailing weight row is the
+	// per-class intercept. The softmax has a gauge freedom (adding a per-sample
+	// constant to every logit leaves probabilities unchanged), so we fix the
+	// last class as the reference (weights ≡ 0) and fit only kEff = k−1 free
+	// classes. This removes the Hessian's null space (making it strictly PD) and
+	// halves its size, while the predicted probabilities are unchanged — the
+	// optimum over the probability simplex is unique regardless of gauge.
+	// Parameters are flattened feature-major as theta[a*kEff+c], c∈[0,kEff).
+	mAug := d + 1
+	kEff := k - 1
+	xa := make([][]float64, n)
 	for i := range n {
-		for j := range d {
-			xt.SetF64(x[i][j], i, j)
-		}
-		yt.SetF64(float64(y[i]), i)
+		row := make([]float64, mAug)
+		copy(row, x[i])
+		row[d] = 1
+		xa[i] = row
 	}
-	m.W = tensor.New(tensor.F64, tensor.Shape{d, k}) // zero init: convex problem
+	p := mAug * kEff
+	theta := make([]float64, p)
+
+	probs := make([][]float64, n)
+	for i := range probs {
+		probs[i] = make([]float64, k)
+	}
+	// forward computes softmax probabilities into probs and returns mean
+	// cross-entropy loss, both from the given weights. The reference class k−1
+	// carries logit 0; log-sum-exp keeps the exponentials bounded.
+	forward := func(th []float64) float64 {
+		var loss float64
+		for i := range n {
+			row, pr := xa[i], probs[i]
+			maxz := 0.0 // reference class logit is 0
+			for cc := range kEff {
+				var z float64
+				for a := range mAug {
+					z += th[a*kEff+cc] * row[a]
+				}
+				pr[cc] = z
+				if z > maxz {
+					maxz = z
+				}
+			}
+			pr[k-1] = 0
+			var s float64
+			for cc := range k {
+				e := math.Exp(pr[cc] - maxz)
+				pr[cc] = e
+				s += e
+			}
+			inv := 1 / s
+			for cc := range k {
+				pr[cc] *= inv
+			}
+			loss += -math.Log(pr[y[i]])
+		}
+		return loss / float64(n)
+	}
+
+	// Preallocate gradient, Hessian, and workspace once. The Hessian is stored
+	// flat (contiguous) with the [][]float64 view h sharing the same backing
+	// array so cholSolve can index it directly. Each class pair's contribution
+	// is first accumulated into a small mAug×mAug Gram block (L1-resident) and
+	// then scattered into H — far more cache-friendly than scattering per sample.
+	grad := make([]float64, p)
+	hf := make([]float64, p*p)
+	h := make([][]float64, p)
+	for i := range h {
+		h[i] = hf[i*p : (i+1)*p : (i+1)*p]
+	}
+	gram := make([]float64, mAug*mAug)
+	invN := 1 / float64(n)
+
+	const (
+		gTol    = 1e-11 // gradient inf-norm convergence
+		lossTol = 1e-13 // relative loss-decrease convergence
+	)
+	if steps < 1 {
+		steps = 1
+	}
+	loss := forward(theta)
+	for range steps {
+		// Gradient g[a*kEff+c] = 1/n·Σ_i xa_ia·(p_ic − y_ic), c∈[0,kEff).
+		for i := range grad {
+			grad[i] = 0
+		}
+		var gInf float64
+		for i := range n {
+			row, pr := xa[i], probs[i]
+			yi := y[i]
+			for c := range kEff {
+				g := pr[c]
+				if c == yi {
+					g -= 1
+				}
+				if g != 0 {
+					for a := range mAug {
+						grad[a*kEff+c] += g * row[a]
+					}
+				}
+			}
+		}
+		for i := range grad {
+			grad[i] *= invN
+			if v := math.Abs(grad[i]); v > gInf {
+				gInf = v
+			}
+		}
+		if gInf < gTol {
+			break
+		}
+
+		// Hessian: for each unique class pair (c1≤c2) accumulate the weighted
+		// Gram Σ_i wᵢ·xa_i·xa_iᵀ with wᵢ = p_i,c1·(δ − p_i,c2) into a small block,
+		// then scatter (with the class transpose) into the full symmetric H.
+		for i := range hf {
+			hf[i] = 0
+		}
+		for c1 := range kEff {
+			for c2 := c1; c2 < kEff; c2++ {
+				for gi := range gram {
+					gram[gi] = 0
+				}
+				for i := range n {
+					pr := probs[i]
+					w := -pr[c1] * pr[c2]
+					if c1 == c2 {
+						w += pr[c1]
+					}
+					if w == 0 {
+						continue
+					}
+					row := xa[i]
+					for a := range mAug {
+						wa := w * row[a]
+						if wa == 0 {
+							continue
+						}
+						base := a * mAug
+						for b := a; b < mAug; b++ {
+							gram[base+b] += wa * row[b]
+						}
+					}
+				}
+				// Scatter the symmetric Gram into blocks (c1,c2) and (c2,c1).
+				for a := range mAug {
+					ra := a * kEff
+					for b := range mAug {
+						lo, hi := a, b
+						if lo > hi {
+							lo, hi = hi, lo
+						}
+						g := gram[lo*mAug+hi] * invN
+						hf[(ra+c1)*p+b*kEff+c2] += g
+						if c1 != c2 {
+							hf[(ra+c2)*p+b*kEff+c1] += g
+						}
+					}
+				}
+			}
+		}
+
+		// Damped Newton solve (H + εI)·Δ = g, raising ε until PD.
+		var delta []float64
+		eps := 1e-8
+		prevEps := 0.0
+		for {
+			add := eps - prevEps
+			for r := range p {
+				h[r][r] += add
+			}
+			prevEps = eps
+			dsol, err := cholSolve(h, grad)
+			if err == nil {
+				delta = dsol
+				break
+			}
+			eps *= 10
+			if eps > 1e6 {
+				return fmt.Errorf("classic: softmax Hessian not solvable (ε=%g): %w", eps, err)
+			}
+		}
+
+		// Armijo backtracking on the full Newton step: W ← W − α·Δ.
+		var gd float64 // g·Δ ≥ 0 (descent amount)
+		for i := range delta {
+			gd += grad[i] * delta[i]
+		}
+		trial := make([]float64, p)
+		alpha := 1.0
+		var newLoss float64
+		accepted := false
+		for range 40 {
+			for i := range theta {
+				trial[i] = theta[i] - alpha*delta[i]
+			}
+			newLoss = forward(trial)
+			if newLoss <= loss-1e-4*alpha*gd {
+				accepted = true
+				break
+			}
+			alpha *= 0.5
+		}
+		if !accepted {
+			// No decrease found: at (or numerically at) the optimum.
+			forward(theta) // restore probs for the final weights
+			break
+		}
+		copy(theta, trial)
+		if loss-newLoss <= lossTol*(1+math.Abs(loss)) {
+			loss = newLoss
+			break
+		}
+		loss = newLoss
+	}
+
+	// Write fitted weights back into W[d,k] and B[k]. The reference class k−1
+	// keeps its zero weights (tensor.New zero-initialises), so its logit is 0
+	// exactly as during fitting — PredictProba's softmax over all k classes then
+	// reproduces the same probabilities.
+	m.W = tensor.New(tensor.F64, tensor.Shape{d, k})
 	m.B = tensor.New(tensor.F64, tensor.Shape{k})
-
-	oneStep := func(opt nn.Optimizer) error {
-		tape := autograd.NewTape()
-		ctx := tape.Context()
-		z, err := backend.Execute(ctx, backend.OpMatMul, []*tensor.Tensor{xt, m.W}, nil)
-		if err != nil {
-			return err
-		}
-		zb, err := backend.Execute(ctx, backend.OpAddBias, []*tensor.Tensor{z[0], m.B}, nil)
-		if err != nil {
-			return err
-		}
-		loss, err := backend.Execute(ctx, backend.OpCrossEntropy, []*tensor.Tensor{zb[0], yt}, nil)
-		if err != nil {
-			return err
-		}
-		if err := tape.Backward(loss[0]); err != nil {
-			return err
-		}
-		return opt.Step(tape.Grad)
-	}
-
-	// Adam approaches the optimum fast but oscillates near it under a constant
-	// LR; a plain full-batch GD polish converges monotonically on this smooth
-	// convex objective and lands on the unique optimum (§B25).
-	adam := nn.NewAdam([]*tensor.Tensor{m.W, m.B}, lr)
-	for range steps {
-		if err := oneStep(adam); err != nil {
-			return err
+	for a := range d {
+		for c := range kEff {
+			m.W.SetF64(theta[a*kEff+c], a, c)
 		}
 	}
-	gd := nn.NewSGD([]*tensor.Tensor{m.W, m.B}, lr*10, 0.9)
-	for range steps {
-		if err := oneStep(gd); err != nil {
-			return err
-		}
+	for c := range kEff {
+		m.B.SetF64(theta[d*kEff+c], c)
 	}
 	return nil
 }

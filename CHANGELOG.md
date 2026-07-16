@@ -24,6 +24,17 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   resident bytes the decode GEMV reads → **one weight, both paths, zero extra prefill VRAM** for a
   Q8-decode model (vs f16 prefill = a full 2× copy). Requires K%32/N%64 (clean error → f16 fallback).
 
+### classic — performance: softmax regression now uses Newton/IRLS (T718, 2026-07-16)
+
+SoftmaxRegression trained by gradient descent (352 ms for 200 steps) where sklearn uses a
+2nd-order solver (7.9 ms). Replaced it with a multinomial Newton/IRLS solver (reference-class
+parametrization for a PD Hessian, Cholesky solve, ridged Armijo step) — **352 → 17.7 ms
+(≈20×), now ≈2.5× of sklearn** (was 47×), converging in ≈9 iterations to the *same* optimum
+(accuracy and log-loss identical; the sklearn-parity golden tightened to 1.3e-9). The `Fit`
+signature is unchanged (`steps` becomes the max Newton iterations). With this, the classical
+package beats or matches sklearn on essentially every method; only the high-dimensional
+neighbor searches (kNN-predict, DBSCAN) still trail.
+
 ### classic — performance: ball-tree for kNN-predict and DBSCAN (T717, 2026-07-16)
 
 The last two classical methods trailing sklearn — kNN predict (112×) and DBSCAN (13×) —
