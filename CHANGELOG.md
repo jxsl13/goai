@@ -4,6 +4,16 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### backend/nlp — feat: masked-attention VJP makes T5 trainable (T740, 2026-07-16)
+
+`OpMHAMasked` (the free-additive-mask attention behind T5's relative-position bias) was
+inference-only — no VJP — so T5 could load and run but not fine-tune. Added `OpMHAMaskedBackward`
+(a from-scratch reference kernel computing dQ/dK/dV and dmask, supporting the shared and
+per-head mask, GQA, and the rectangular cross-attention shapes) and registered the VJP.
+Gradcheck: analytic vs central-difference to ~1e-10. End-to-end, a T5 encoder + head now
+fine-tunes (loss 1.40 → 0.013). This completes trainability to all six loadable architectures
+(GPT-2, Llama, BERT, RoBERTa, DistilBERT, T5). `T5.Params()` exposes the encoder's weights.
+
 ### CUDA — decode row-fusion now covers bias'd families (qwen2) (worker linux-amd64, Tw57 slice 2, 2026-07-16)
 - The Tw55(b)/Tw57 fused-QKV path previously excluded models with a QKV bias (qwen2) — the fusion
   weight path was guarded by `!hasBias`. Removed that guard: a bias'd family now fuses too.

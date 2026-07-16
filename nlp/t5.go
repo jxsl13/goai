@@ -144,3 +144,16 @@ func (m *T5) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor, error)
 	}
 	return m.FinalNorm.Forward(ctx, x)
 }
+
+// Params returns the encoder's trainable tensors — for fine-tuning the loaded
+// model (now that OpMHAMasked has a VJP, its relative-position attention trains).
+func (m *T5) Params() []*tensor.Tensor {
+	ps := []*tensor.Tensor{m.Shared, m.RelBias.Table, m.FinalNorm.Gamma}
+	for _, b := range m.Blocks {
+		ps = append(ps, b.AttnNorm.Gamma, b.Wq, b.Wk, b.Wv, b.Wo, b.FFNNorm.Gamma, b.Wi0, b.WOut)
+		if b.Wi1 != nil {
+			ps = append(ps, b.Wi1)
+		}
+	}
+	return ps
+}

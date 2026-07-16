@@ -23,6 +23,14 @@ func mhaVJP(ctx *backend.Context, in, _ []*tensor.Tensor, attrs backend.Attrs, g
 	return backend.Execute(ctx, backend.OpMHABackward, []*tensor.Tensor{in[0], in[1], in[2], g}, attrs)
 }
 
+// mhaMaskedVJP is the VJP of OpMHAMasked (Q,K,V,mask): it returns (dQ,dK,dV,dmask)
+// via OpMHAMaskedBackward, making masked attention — notably T5's relative-position
+// attention — trainable. A constant mask simply drops its gradient. Supports the
+// rectangular (cross-attention) and per-head shapes the forward supports.
+func mhaMaskedVJP(ctx *backend.Context, in, _ []*tensor.Tensor, attrs backend.Attrs, g *tensor.Tensor) ([]*tensor.Tensor, error) {
+	return backend.Execute(ctx, backend.OpMHAMaskedBackward, []*tensor.Tensor{in[0], in[1], in[2], in[3], g}, attrs)
+}
+
 // LayerNorm VJP (§T31, closes §B22). Standard result (Ba et al. 2016, §R35):
 // per last-axis row of size D, with x̂ = (x−μ)/σ, σ = √(var+eps), a = g⊙γ:
 //
@@ -32,6 +40,7 @@ func mhaVJP(ctx *backend.Context, in, _ []*tensor.Tensor, attrs backend.Attrs, g
 // Accumulation in f64 (§V10). Enables transformer training (§T32/§T34).
 func init() {
 	RegisterVJP(backend.OpMHA, mhaVJP)
+	RegisterVJP(backend.OpMHAMasked, mhaMaskedVJP)
 	// FlashAttention-2 (§R72) computes the SAME attention as OpMHA via online-softmax
 	// tiling, so its backward is the identical standard softmax-attention backward.
 	// mhaVJP reads heads/causal (ignoring the flash-only "block" attr).

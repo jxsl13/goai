@@ -153,6 +153,8 @@ const (
 
 	OpSiLUBackward // SiLU backward: (x,g)→dx = g·σ(x)·(1+x·(1−σ(x))); dispatched by silu's VJP so it runs on the active backend (§T362)
 
+	OpMHAMaskedBackward // masked-attention backward: (Q,K,V,mask,dO)→(dQ,dK,dV,dmask); dispatched by OpMHAMasked's VJP (§T730 — makes T5's relative-position attention trainable)
+
 	numOps
 )
 
@@ -245,6 +247,7 @@ var opName = [...]string{
 	OpCrossEntropyBackward: "crossentropy_backward",
 	OpEmbedBackward:        "embed_backward",
 	OpGELUBackward:         "gelu_backward",
+	OpMHAMaskedBackward:    "mha_masked_backward",
 	OpAddBiasBackward:      "addbias_backward",
 	OpSiLUBackward:         "silu_backward",
 }
