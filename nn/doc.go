@@ -51,9 +51,12 @@
 //     learnable, growable parameter tokens), PEER product-key retrieval over a
 //     million single-neuron experts, the extended recurrent cells xLSTM
 //     mLSTM (matrix memory), Griffin RG-LRU (real-gated linear recurrence), and
-//     HGRN (hierarchically gated RNN, depth-increasing forget floor), and the
+//     HGRN (hierarchically gated RNN, depth-increasing forget floor), the
 //     linear-complexity attention approximations Linformer (low-rank length
-//     projection) and Nyströmformer (landmark Nyström approximation).
+//     projection) and Nyströmformer (landmark Nyström approximation), the
+//     Set Transformer (permutation-invariant induced-point attention with PMA
+//     pooling), and the Modern Hopfield network (attention as associative-memory
+//     retrieval).
 //   - Diffusion & generative: DDPM/DDIM schedules and samplers, EDM (with
 //     preconditioning), and Flow Matching.
 //   - Self-supervised learning: Barlow Twins, DINO, SimSiam, SwAV, VICReg.

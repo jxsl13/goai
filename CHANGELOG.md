@@ -41,6 +41,18 @@ anchored.
 - **DBSCAN** (`classic/dbscan.go`, Ester et al. 1996) — density clustering with noise;
   labels match sklearn exactly (up to renumbering) across six datasets.
 
+### nn — round 13: Set Transformer + Modern Hopfield (T711, 2026-07-16)
+
+- **Set Transformer** (`nn/settransformer.go`, Lee et al. 2019, arXiv:1810.00825) —
+  permutation-invariant/equivariant set encoding via MAB/SAB/ISAB (induced-point,
+  O(n·m)) blocks and PMA pooling. Anchors: PMA/encoder output is permutation-*invariant*
+  and SAB is *equivariant* to 1e-10 (the defining property); gradcheck through inducing
+  points and seeds; a set-mean regression trains to ~0 while staying invariant.
+- **Modern Hopfield** (`nn/hopfield.go`, Ramsauer et al. 2020, arXiv:2008.02217) —
+  associative-memory retrieval `softmax(β·ξ·Yᵀ)·Y`. Anchors: one update *equals* softmax
+  attention to 1e-10; a high-β query near a stored pattern converges to it (metastable
+  blend at low β); noisy-retrieval accuracy 1.00/1.00/0.95 at rising noise.
+
 ### CUDA — small-block quant GEMV ~2.4–2.9× faster: Q4_0 & MXFP4 now beat Q4_K decode (worker linux-amd64, Tw72, 2026-07-16)
 - The 32-element-block quants (Q4_0, MXFP4) decoded 2–2.7× SLOWER than Q4_K despite identical
   bytes/weight — a transactions-not-bytes problem (§Tw54): 64 tiny 18/17-byte blocks per K=2048
