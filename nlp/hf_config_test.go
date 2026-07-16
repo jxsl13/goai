@@ -59,6 +59,25 @@ func TestGemmaConfigFromHF(t *testing.T) {
 	}
 }
 
+func TestOLMo2ConfigFromHF(t *testing.T) {
+	j := []byte(`{"model_type":"olmo2","num_attention_heads":32,"num_key_value_heads":8,
+		"rms_norm_eps":1e-6,"rope_theta":500000.0,"max_position_embeddings":4096}`)
+	cfg, err := nlp.OLMo2ConfigFromHF(j)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Heads != 32 || cfg.KVHeads != 8 || cfg.Eps != 1e-6 || cfg.RopeBase != 500000 || cfg.Ctx != 4096 {
+		t.Fatalf("wrong OLMo2 config: %+v", cfg)
+	}
+	def, err := nlp.OLMo2ConfigFromHF([]byte(`{"num_attention_heads":4}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if def.Eps != 1e-6 || def.KVHeads != 4 {
+		t.Fatalf("OLMo2 defaults wrong: %+v", def)
+	}
+}
+
 func TestGemma2ConfigFromHF(t *testing.T) {
 	j := []byte(`{"model_type":"gemma2","num_attention_heads":8,"num_key_value_heads":4,
 		"rms_norm_eps":1e-6,"rope_theta":10000.0,"max_position_embeddings":8192,

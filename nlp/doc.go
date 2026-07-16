@@ -29,19 +29,21 @@
 //     Transformer — a tokenizer-free model over raw bytes that entropy-patches the
 //     byte stream and runs a latent transformer over the patches.
 //   - Loading & adapting real Hugging Face checkpoints: converters that build the
-//     above models straight from a HF checkpoint — GPT2FromHF and LlamaFromHF
-//     (decoders); LlamaFromHF also loads Qwen2/Qwen2.5 (adds q/k/v projection
-//     bias) and, via Phi3FromHF, Microsoft Phi-3 (which stores its qkv / gate-up
-//     projections packed); GemmaFromHF (Gemma v1 — √dim embedding scale, (1+w)
-//     RMSNorm, GeGLU, decoupled head_dim); MixtralFromHF (the sparse top-2 Mixture
-//     -of-Experts); BertFromHF, RobertaFromHF, DistilBertFromHF (bidirectional
-//     encoders); T5FromHF + T5DecoderFromHF (the full seq2seq encoder–decoder with
-//     relative-position attention and KV-cached generation) — each anchored bit- or
-//     tolerance-exact against transformers. Weights load from safetensors or from
-//     .pt/.bin via the safe no-code-execution PyTorch loader (package format/pytorch);
-//     LlamaConfigFromHF (also Qwen2/Phi-3), GemmaConfigFromHF, MixtralConfigFromHF
-//     and BertConfigFromHF read the checkpoint's config.json so loading is
-//     config-driven. Because a loaded model's forward runs through the
+//     above models straight from a HF checkpoint — fifteen transformers-anchored
+//     architectures. Decoders through the Llama loader: LlamaFromHF (Llama/Mistral);
+//     Qwen2/Qwen2.5 (adds q/k/v bias); Qwen3 (per-head QK-norm, no bias); Phi3FromHF
+//     (packed qkv / gate-up); GraniteFromHF (four scalar multipliers). Decoders as
+//     dedicated types: GemmaFromHF (Gemma v1 — √dim scale, (1+w) RMSNorm, GeGLU);
+//     Gemma2FromHF (sandwich norms + logit soft-caps); OLMo2FromHF (post-norm blocks,
+//     full-width QK-norm); MixtralFromHF and Qwen3MoeFromHF (sparse top-k Mixture-of
+//     -Experts). Encoders: BertFromHF, RobertaFromHF, DistilBertFromHF; and T5FromHF +
+//     T5DecoderFromHF (the full seq2seq encoder–decoder). Each anchored bit- or
+//     tolerance-exact against transformers, and each decoder supports KV-cached
+//     generation. Weights load from safetensors or from .pt/.bin via the safe
+//     no-code-execution PyTorch loader (package format/pytorch); LlamaConfigFromHF
+//     (also Qwen2/Qwen3/Phi-3), GemmaConfigFromHF, Gemma2ConfigFromHF,
+//     MixtralConfigFromHF (also Qwen3-MoE), GraniteConfigFromHF and BertConfigFromHF
+//     read the checkpoint's config.json so loading is config-driven. Because a loaded model's forward runs through the
 //     autograd choke-point, it is not just runnable but trainable: fine-tune it
 //     directly, attach parameter-efficient LoRA adapters (ApplyLoRAGPT / ApplyLoRABert,
 //     base frozen), or wrap it in BertClassifier for sequence classification.

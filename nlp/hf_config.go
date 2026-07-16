@@ -220,6 +220,41 @@ func MixtralConfigFromHF(configJSON []byte) (MixtralConfig, error) {
 	}, nil
 }
 
+// OLMo2ConfigFromHF parses a Hugging Face OLMo 2 config.json into an [OLMo2Config]
+// for [OLMo2FromHF] — the non-tensor-derivable Heads, KVHeads, Eps, RopeBase, Ctx
+// (Dim, Vocab, Layers, Hidden, HeadDim are inferred from the weights). Missing
+// rms_norm_eps / rope_theta fall back to (1e-6, 10000).
+func OLMo2ConfigFromHF(configJSON []byte) (OLMo2Config, error) {
+	var j struct {
+		NumAttentionHeads int     `json:"num_attention_heads"`
+		NumKeyValueHeads  *int    `json:"num_key_value_heads"`
+		RMSNormEps        float64 `json:"rms_norm_eps"`
+		RopeTheta         float64 `json:"rope_theta"`
+		MaxPos            int     `json:"max_position_embeddings"`
+	}
+	if err := json.Unmarshal(configJSON, &j); err != nil {
+		return OLMo2Config{}, fmt.Errorf("nlp: parse OLMo2 config.json: %w", err)
+	}
+	if j.NumAttentionHeads <= 0 {
+		return OLMo2Config{}, fmt.Errorf("nlp: config.json missing num_attention_heads")
+	}
+	kv := j.NumAttentionHeads
+	if j.NumKeyValueHeads != nil {
+		kv = *j.NumKeyValueHeads
+	}
+	eps := j.RMSNormEps
+	if eps == 0 {
+		eps = 1e-6
+	}
+	return OLMo2Config{
+		Heads:    j.NumAttentionHeads,
+		KVHeads:  kv,
+		Eps:      eps,
+		RopeBase: j.RopeTheta,
+		Ctx:      j.MaxPos,
+	}, nil
+}
+
 // BertConfigFromHF parses a Hugging Face BERT/RoBERTa config.json into a
 // [BertConfig] for [BertFromHF] / [RobertaFromHF] — the non-tensor-derivable
 // Heads and Eps. Missing layer_norm_eps falls back to 1e-12.

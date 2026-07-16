@@ -4,6 +4,12 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — docs: refresh the loadable-architecture catalogue + OLMo2 config parser (T754, 2026-07-16)
+
+The package godoc (`doc.go`) now lists all fifteen transformers-anchored architectures accurately
+(it had drifted, missing Gemma2, Qwen3, Qwen3-MoE, Granite, OLMo2 and the dedicated-type
+distinction). Adds `OLMo2ConfigFromHF` so OLMo 2 is config-driven like the rest.
+
 ### nlp — feat: OLMo 2 support — 15th loadable architecture (T753, 2026-07-16)
 
 OLMo 2 (Allen AI, `Olmo2ForCausalLM`) as a self-contained `nlp.OLMo2` type — it is Llama-like
