@@ -79,6 +79,8 @@ func f16Round(v float32) float32 {
 // tolerance covers only summation order, never the f16 quantization itself.
 func TestCUDAF16MatMulParity(t *testing.T) {
 	skipNoGPU(t)
+	t.Setenv("GOAI_CUDA_F16ACC", "0") // this asserts f32-accumulate exactness (maxRel≤1e-4);
+	// f16-accumulate (default-on for GeForce) is validated separately at prefill-appropriate tolerance.
 	const K, N, M = 512, 48, 3
 	rng := rand.New(rand.NewSource(11))
 	w := tensor.New(tensor.F32, tensor.Shape{K, N})

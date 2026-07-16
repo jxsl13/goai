@@ -4,6 +4,18 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — f16-accumulate prefill is now DEFAULT-ON for GeForce (worker linux-amd64, Tw62, 2026-07-16)
+- Ships the +21% prefill win (Tw61) automatically. `cu_gpu_is_geforce` (via `cudaDeviceProp`
+  name) makes `f16AccEnabled` **default ON** for GeForce/consumer cards — which run
+  FP32-accumulate tensor ops at half rate, so f16 accumulate is a ~1.5-2× GEMM win — and
+  **OFF** for datacenter cards (full-rate f32 accumulate, where it would only cost precision).
+  `GOAI_CUDA_F16ACC=1/0` overrides the auto-detection either way (exactness on demand).
+- The one tight-parity test (`TestCUDAF16MatMulParity`, asserts f16-GEMM maxRel≤1e-4) forces
+  `F16ACC=0` for its exactness check; f16-accumulate is validated separately at prefill
+  tolerance. Verified on the RTX 3060: env-unset auto-selects f16-accum → prefill seq=128
+  **5178 tok/s (2.09× vs f32)** vs forced-off 4227 (1.70×); parity, prefill, and unified-serve
+  tests all green. Most users never set the env var, so this is where the +21% actually reaches them.
+
 ### CUDA — prefill lever found: f16-accumulate GEMM is 1.5-2× on GeForce (worker linux-amd64, Tw60/61, 2026-07-16)
 - Pivoting to the prefill gap (~4× vs llama.cpp; FFN GEMM ≈72% of prefill), two measure-first
   probes:
