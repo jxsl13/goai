@@ -1265,6 +1265,24 @@ current f32-multiply Q4_K decode GEMV is at its ceiling, but a dp4a rewrite has 
 ~1.5× to chase — the standing lever to beat the incumbent on decode.** The Tw55(b) fusion
 wins stand (they attacked occupancy at the starved small-N k/v shapes, an orthogonal lever).
 
+**Tw58 slice 1 — dp4a is flat, and it tells us *which* ALU dominates.** The natural read of
+the ~1.5× floor was "the f32 multiply is the cost → cut it with int8 `__dp4a`" (llama.cpp's
+MMVQ). Built exactly that: quantize the activation to int8 per 32-block (Q8_1-style,
+validated norm-rel-RMS **5.9e-3** vs the f32 kernel — the int8 activation is numerically
+fine) and run the nibble·activation products as `__dp4a` (real DP4A on sm_86, arch checked).
+The result was **flat** — dp4a vs f32: gate/up 192.5 vs 196.7, down 183.9 vs 189.4, q/o
+149.5 vs 166.8, head 225.5 vs 218.3 GB/s. Going full-f32→dp4a barely moved (196→192) while
+stubbing *all* compute jumped to 285, so **the multiply is not the bottleneck — the
+per-block scale-decode is** (the f16 d/dmin decode + 6-bit sub-scale/min unpack + the shfl
+broadcasts, done once per 32-elem sub-block). This matches Tw44's "residual gap = scale-
+decode ALU" and refines the floor probe (its 1.5× headroom is mostly scale-decode, not
+multiply). dp4a is discarded as a decode lever; the probe caught it before a multi-fire
+integration on a false premise. **The only remaining decode-GEMV idea is to cut the
+scale-decode ALU — e.g. store the 8 per-sub-block scales pre-dequantized as f32 (trading
++33% weight bytes for no in-kernel unpack); measure-first, and if flat the Q4_K decode
+kernel is definitively at its ceiling and the pivot is prefill (f16/tensor-core, the ~4×
+gap) or lower-bit quant.**
+
 Repro: `go test -tags cuda -run '^$' -bench BenchmarkGemvQ4K ./backend/cuda/`;
 `go test -tags cuda -run 'TestCUDA(QKV|GateUp)Fuse' ./backend/cuda/`.
 

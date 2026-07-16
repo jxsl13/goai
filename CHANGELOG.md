@@ -4,6 +4,23 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — dp4a built & rejected: the decode ALU is scale-decode-bound, not multiply-bound (worker linux-amd64, Tw58, 2026-07-16)
+- The memory-floor probe's ~1.5× headroom read naturally as "cut the f32 multiply with int8
+  `__dp4a`" (llama.cpp's MMVQ). Built it: quantize the activation to int8 per 32-block
+  (Q8_1-style; numerically fine — norm-rel-RMS **5.9e-3** vs the f32 kernel) and run the
+  nibble·activation products as real DP4A (sm_86, arch verified). **Speed was flat** — dp4a
+  vs f32: gate/up 192.5 vs 196.7, q/o 149.5 vs 166.8, head 225.5 vs 218.3 GB/s.
+- **Disambiguation (the real value):** full-f32→dp4a barely moved (196→192) while stubbing
+  *all* compute jumped to 285 GB/s ⇒ **the multiply is not the bottleneck — the per-block
+  scale-decode is** (f16 d/dmin decode + 6-bit sub-scale/min unpack + shfl broadcasts). dp4a
+  cut the wrong thing. This matches Tw44 and refines the floor-probe conclusion. The probe
+  caught it before a multi-fire dp4a integration built on a false premise — §V22 again.
+- Probe discarded (measured & rejected). The last decode-GEMV idea (**Tw59**): pre-dequantize
+  the 8 sub-block scales to f32 at load (trade +33% weight bytes for no in-kernel unpack),
+  measure-first. If that's flat too, the Q4_K decode kernel is definitively at its ceiling and
+  the pivot is prefill (the ~4× f16/tensor-core gap) or lower-bit quant. Full data in
+  `docs/benchmarking.md`.
+
 ### CUDA — split-K rejected: the Q4_K decode GEMV is ALU-bound at its ceiling (worker linux-amd64, Tw56, 2026-07-16)
 - Measure-first close-out of the last decode-GEMV lever. Prototyped a split-K Q4_K GEMV
   (S warps per output over a strided super-block partition + a shared-mem cross-warp reduce,
