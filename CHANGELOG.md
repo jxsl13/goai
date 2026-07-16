@@ -4,6 +4,24 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — native IQ4_NL + IQ4_XS GEMV: the i-quant (codebook) family opens (worker linux-amd64, Tw70, 2026-07-16)
+- `cu_qmatmul_iq4nl` / `cu_qmatmul_iq4xs` + `ResidentBIQ4NL` / `ResidentBIQ4XS`: warp-per-output
+  GEMV over ggml's IQ4_NL (18-byte, 32-elem blocks) and IQ4_XS (136-byte, 256-elem super-blocks
+  with signed 6-bit sub-scales). Unlike the affine K-quants, i-quants map each 4-bit index
+  through a fixed **nonlinear 16-value codebook** (`kvalues_iq4nl`, denser near zero) — the first
+  codebook quant on the CUDA path. The 16-entry codebook is small enough to inline as a kernel
+  `const` array (no device-codebook upload — that mechanism is only needed for the large
+  IQ2/IQ3 grids).
+- Golden vs the gguf dequant reference (`TestCUDAIQ4{NL,XS}MatMulParity`): rel error **1.2–1.5e-7**
+  (f32-epsilon), bit-exact. IQ4 has no gguf *encoder* (dequant/READ-only), so the tests build
+  valid blocks directly (any nibbles are valid codebook indices) and compare `gguf.Dequantize`
+  of the same bytes; parity is asserted relative to the output magnitude (the synthetic random
+  sub-scales inflate weights ~30×, so f32-accumulation abs error tracks that — a real indexing
+  bug would land ~O(1), not 1e-7).
+- IQ4_XS is a popular quality-4-bit i-quant; both now load bit-native instead of re-encode-to-Q8.
+  `quantDirect` cases 20/23 wired. Next i-quants (IQ2_XXS/IQ2_XS/IQ3_*) use large E8-lattice/grid
+  codebooks that will need a device-codebook upload mechanism — a separate follow-up.
+
 ### CUDA — native Q4_0 GEMV: legacy 4-bit round quant joins the native set (worker linux-amd64, Tw69, 2026-07-16)
 - `cu_qmatmul_q40` + `ResidentBQ40`: warp-per-output GEMV over ggml's legacy Q4_0 18-byte
   blocks (f16 d + 16 nibble bytes). Symmetric round quant, no min: `y = d·(nibble − 8)`, byte

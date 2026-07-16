@@ -25,6 +25,10 @@ func quantDirect(qt gguf.QuantTensor) (qProj, error) {
 	switch qt.GGType {
 	case 2: // Q4_0 — legacy 4-bit round quant (Tw69), native
 		return cuda.NewResidentBQ40FromBlocks(qt.Data, k, n)
+	case 20: // IQ4_NL — 4-bit nonlinear-codebook i-quant (Tw70), native
+		return cuda.NewResidentBIQ4NLFromBlocks(qt.Data, k, n)
+	case 23: // IQ4_XS — codebook + 6-bit sub-scales (Tw70), native
+		return cuda.NewResidentBIQ4XSFromBlocks(qt.Data, k, n)
 	case 10: // Q2_K — bulk tensors of a Q2_K/Q2_K_S mix (Tw68), native like the rest
 		return cuda.NewResidentBQ2KFromBlocks(qt.Data, k, n)
 	case 11: // Q3_K — bulk tensors of a Q3_K_M/_L/_S mix (Tw67), native like the rest
