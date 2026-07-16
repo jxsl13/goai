@@ -132,6 +132,53 @@ func Gemma2ConfigFromHF(configJSON []byte) (Gemma2Config, error) {
 	}, nil
 }
 
+// GraniteConfigFromHF parses a Hugging Face IBM Granite config.json into a
+// [LlamaConfig] for [GraniteFromHF] — the non-tensor-derivable Heads, KVHeads, Eps,
+// RopeBase, Ctx PLUS Granite's four scalar multipliers (embedding_multiplier,
+// attention_multiplier, residual_multiplier, logits_scaling). Dim, Vocab, Layers and
+// Hidden are inferred from the weights. Missing rms_norm_eps / rope_theta fall back to
+// the Llama defaults (1e-5, 10000). A Granite config.json always carries the four
+// multipliers; if any is absent it stays 0, which [LlamaConfig] treats as the identity
+// (so an absent multiplier degrades to plain-Llama behaviour rather than erroring).
+func GraniteConfigFromHF(configJSON []byte) (LlamaConfig, error) {
+	var j struct {
+		NumAttentionHeads int     `json:"num_attention_heads"`
+		NumKeyValueHeads  *int    `json:"num_key_value_heads"`
+		RMSNormEps        float64 `json:"rms_norm_eps"`
+		RopeTheta         float64 `json:"rope_theta"`
+		MaxPos            int     `json:"max_position_embeddings"`
+		EmbeddingMult     float64 `json:"embedding_multiplier"`
+		AttentionMult     float64 `json:"attention_multiplier"`
+		ResidualMult      float64 `json:"residual_multiplier"`
+		LogitsScaling     float64 `json:"logits_scaling"`
+	}
+	if err := json.Unmarshal(configJSON, &j); err != nil {
+		return LlamaConfig{}, fmt.Errorf("nlp: parse Granite config.json: %w", err)
+	}
+	if j.NumAttentionHeads <= 0 {
+		return LlamaConfig{}, fmt.Errorf("nlp: config.json missing num_attention_heads")
+	}
+	kv := j.NumAttentionHeads
+	if j.NumKeyValueHeads != nil {
+		kv = *j.NumKeyValueHeads
+	}
+	eps := j.RMSNormEps
+	if eps == 0 {
+		eps = 1e-5
+	}
+	return LlamaConfig{
+		Heads:         j.NumAttentionHeads,
+		KVHeads:       kv,
+		Eps:           eps,
+		RopeBase:      j.RopeTheta, // 0 → GraniteFromHF/LlamaFromHF defaults to 10000
+		Ctx:           j.MaxPos,
+		EmbeddingMult: j.EmbeddingMult, // 0 → identity (no embedding scaling)
+		AttentionMult: j.AttentionMult, // 0 → default 1/√headDim attention scale
+		ResidualMult:  j.ResidualMult,  // 0 → identity (unscaled residual adds)
+		LogitsScale:   j.LogitsScaling, // 0 → identity (unscaled logits)
+	}, nil
+}
+
 // MixtralConfigFromHF parses a Hugging Face Mixtral config.json into a
 // [MixtralConfig] for [MixtralFromHF] — Heads, KVHeads, TopK, Eps, RopeBase, Ctx
 // (Dim, Vocab, Layers, Hidden, Experts are inferred from the weights). Missing

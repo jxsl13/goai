@@ -2,6 +2,7 @@ package nlp
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/jxsl13/goai/backend"
 	"github.com/jxsl13/goai/nn"
@@ -38,6 +39,15 @@ type LlamaConfig struct {
 	Hidden   int     // SwiGLU inner width (Llama uses ≈ (2/3)·4·Dim rounded)
 	Eps      float64 // RMSNorm epsilon
 	RopeBase float64 // RoPE frequency base θ; 0 → 10000
+
+	// Optional IBM Granite scalar multipliers (transformers GraniteForCausalLM).
+	// Granite is structurally a plain Llama plus four learned-at-config scalars; each
+	// field is 0 ("unset") for Llama/Qwen2/Qwen3/Mistral, which makes every hook below a
+	// byte-identical no-op. A GraniteConfig sets non-zero values via [GraniteConfigFromHF].
+	EmbeddingMult float64 // inputs_embeds *= EmbeddingMult after lookup (Gemma-style, but a config scalar); 0 or 1 → identity
+	AttentionMult float64 // pre-softmax attention scale = AttentionMult (replaces the default 1/√headDim); 0 → default
+	ResidualMult  float64 // each residual add is x = residual + sublayer·ResidualMult (both attn and FFN); 0 or 1 → identity
+	LogitsScale   float64 // final logits are divided by LogitsScale; 0 or 1 → identity
 }
 
 // LlamaBlock is one pre-norm Llama transformer block.
@@ -154,7 +164,34 @@ func (m *Llama) ForwardFromEmbed(ctx *backend.Context, x *tensor.Tensor) (*tenso
 	if err != nil {
 		return nil, err
 	}
-	return exec1(ctx, backend.OpMatMul, nil, h, m.Out)
+	logits, err := exec1(ctx, backend.OpMatMul, nil, h, m.Out)
+	if err != nil {
+		return nil, err
+	}
+	// Granite: logits /= logits_scaling (no-op for Llama, LogitsScale 0).
+	return divLogits(ctx, logits, m.Config.LogitsScale)
+}
+
+// scaleScalar multiplies x by the scalar s via a rank-0 OpMul broadcast when s is a set,
+// non-identity Granite multiplier (s != 0 && s != 1); an unset (0) or identity (1) s
+// returns x unchanged, so the plain-Llama path (all Granite scalars 0) is byte-identical.
+// Used for Granite's embedding and residual multipliers.
+func scaleScalar(ctx *backend.Context, x *tensor.Tensor, s float64) (*tensor.Tensor, error) {
+	if s == 0 || s == 1 {
+		return x, nil
+	}
+	sc := tensor.New(tensor.F64, tensor.Shape{})
+	sc.Storage().F64()[0] = s
+	return exec1(ctx, backend.OpMul, nil, x, sc)
+}
+
+// divLogits divides logits by the Granite logits_scaling (multiply by 1/logitsScale),
+// a no-op when logitsScale is 0 (unset) or 1 (identity).
+func divLogits(ctx *backend.Context, logits *tensor.Tensor, logitsScale float64) (*tensor.Tensor, error) {
+	if logitsScale == 0 || logitsScale == 1 {
+		return logits, nil
+	}
+	return scaleScalar(ctx, logits, 1/logitsScale)
 }
 
 // hiddenFromEmbed is the shared block stack + final RMSNorm.
@@ -163,8 +200,18 @@ func (m *Llama) hiddenFromEmbed(ctx *backend.Context, x *tensor.Tensor) (*tensor
 	kv := cfg.kvHeads()
 	rope := backend.RoPEAttrs{Base: cfg.RopeBase}
 	attn := backend.AttnAttrs{Heads: cfg.Heads, KVHeads: kv, Causal: true}
+	// Granite: replace the default 1/√headDim pre-softmax scale with attention_multiplier.
+	// OpMHA builds in a 1/√headDim, and AttnAttrs.Scale is an EXTRA factor on top of it
+	// (as T5 uses it), so Scale = AttentionMult·√headDim leaves a net scale of AttentionMult.
+	if cfg.AttentionMult != 0 {
+		attn.Scale = cfg.AttentionMult * math.Sqrt(float64(cfg.Dim/cfg.Heads))
+	}
 
 	var err error
+	// Granite: inputs_embeds *= embedding_multiplier (no-op for Llama, EmbeddingMult 0).
+	if x, err = scaleScalar(ctx, x, cfg.EmbeddingMult); err != nil {
+		return nil, err
+	}
 	for _, b := range m.Blocks {
 		// attention sublayer: x += Wo·Attn(RoPE(Wq·x̄), RoPE(Wk·x̄), Wv·x̄), x̄=RMSNorm(x)
 		xb, err := b.AttnNorm.Forward(ctx, x)
@@ -214,6 +261,10 @@ func (m *Llama) hiddenFromEmbed(ctx *backend.Context, x *tensor.Tensor) (*tensor
 		if err != nil {
 			return nil, err
 		}
+		// Granite: x = x + o·residual_multiplier (no-op for Llama, ResidualMult 0).
+		if o, err = scaleScalar(ctx, o, cfg.ResidualMult); err != nil {
+			return nil, err
+		}
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, o); err != nil {
 			return nil, err
 		}
@@ -224,6 +275,10 @@ func (m *Llama) hiddenFromEmbed(ctx *backend.Context, x *tensor.Tensor) (*tensor
 		}
 		ff, err := b.FFN.Forward(ctx, xf)
 		if err != nil {
+			return nil, err
+		}
+		// Granite: x = x + ff·residual_multiplier (same scalar as the attention residual).
+		if ff, err = scaleScalar(ctx, ff, cfg.ResidualMult); err != nil {
 			return nil, err
 		}
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, ff); err != nil {

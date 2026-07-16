@@ -2,6 +2,7 @@ package nlp
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/jxsl13/goai/backend"
 	"github.com/jxsl13/goai/tensor"
@@ -56,6 +57,17 @@ func (m *Llama) DecodeStep(ctx *backend.Context, cache *LlamaCache, token, pos i
 	if err != nil {
 		return nil, err
 	}
+	// Granite: inputs_embeds *= embedding_multiplier, matching hiddenFromEmbed; no-op for
+	// Llama (EmbeddingMult 0). Without it a KV-cached Granite decode would diverge from Forward.
+	if x, err = scaleScalar(ctx, x, cfg.EmbeddingMult); err != nil {
+		return nil, err
+	}
+	// Granite: pre-softmax attention scale = attention_multiplier (√headDim cancels OpMHA's
+	// built-in 1/√headDim), matching hiddenFromEmbed; default 1/√headDim when AttentionMult 0.
+	attnScale := 0.0
+	if cfg.AttentionMult != 0 {
+		attnScale = cfg.AttentionMult * math.Sqrt(float64(cfg.Dim/cfg.Heads))
+	}
 	for l, b := range m.Blocks {
 		xb, err := b.AttnNorm.Forward(ctx, x)
 		if err != nil {
@@ -103,12 +115,16 @@ func (m *Llama) DecodeStep(ctx *backend.Context, cache *LlamaCache, token, pos i
 		vNew := concatRows(cache.V[l], v)
 		cache.K[l], cache.V[l] = kNew, vNew
 		// single query at the last position attends to all cached keys → no causal mask
-		a, err := exec1(ctx, backend.OpMHA, backend.AttnAttrs{Heads: cfg.Heads, KVHeads: kv, Causal: false}, q, kNew, vNew)
+		a, err := exec1(ctx, backend.OpMHA, backend.AttnAttrs{Heads: cfg.Heads, KVHeads: kv, Causal: false, Scale: attnScale}, q, kNew, vNew)
 		if err != nil {
 			return nil, err
 		}
 		o, err := project(ctx, a, b.Wo)
 		if err != nil {
+			return nil, err
+		}
+		// Granite: x = x + o·residual_multiplier, matching hiddenFromEmbed (no-op for Llama).
+		if o, err = scaleScalar(ctx, o, cfg.ResidualMult); err != nil {
 			return nil, err
 		}
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, o); err != nil {
@@ -122,6 +138,10 @@ func (m *Llama) DecodeStep(ctx *backend.Context, cache *LlamaCache, token, pos i
 		if err != nil {
 			return nil, err
 		}
+		// Granite: x = x + ff·residual_multiplier (same scalar as the attention residual).
+		if ff, err = scaleScalar(ctx, ff, cfg.ResidualMult); err != nil {
+			return nil, err
+		}
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, ff); err != nil {
 			return nil, err
 		}
@@ -129,7 +149,12 @@ func (m *Llama) DecodeStep(ctx *backend.Context, cache *LlamaCache, token, pos i
 	if x, err = m.Norm.Forward(ctx, x); err != nil {
 		return nil, err
 	}
-	return exec1(ctx, backend.OpMatMul, nil, x, m.Out)
+	logits, err := exec1(ctx, backend.OpMatMul, nil, x, m.Out)
+	if err != nil {
+		return nil, err
+	}
+	// Granite: logits /= logits_scaling, matching ForwardFromEmbed (no-op for Llama).
+	return divLogits(ctx, logits, cfg.LogitsScale)
 }
 
 // Generate autoregressively decodes up to maxNew tokens after prompt with the sampler

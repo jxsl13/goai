@@ -4,6 +4,20 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — feat: IBM Granite support — 14th loadable architecture (T752, 2026-07-16)
+
+Granite (`GraniteForCausalLM`) is structurally a plain Llama with four config scalar multipliers:
+`embedding_multiplier` (embeddings ×= after lookup), `attention_multiplier` (the pre-softmax
+attention scale, replacing 1/√head_dim — set as `AttnAttrs.Scale = mult·√head_dim` to cancel OpMHA's
+built-in factor, the T5 trick), `residual_multiplier` (each residual add scales the sublayer output),
+and `logits_scaling` (final logits divided). Added the four as optional `LlamaConfig` fields (0 →
+unset → identity, so Llama/Qwen2/Qwen3/Mistral are byte-identical no-ops), applied in
+`hiddenFromEmbed`/`ForwardFromEmbed` and threaded through `DecodeStep`. `GraniteFromHF` and
+`GraniteConfigFromHF` are the entry points. Forward parity vs a real transformers
+`GraniteForCausalLM`: max abs logit diff 3.3e-9; loading the same weights with identity scalars
+diverges by 2.0e-1 (proving the multipliers are exercised); KV-decode matches Forward bit-for-bit
+(0.0). Llama/Qwen2/Qwen3 parity unregressed. Fourteenth loadable architecture.
+
 ### nlp — feat: Qwen3-MoE support — 13th loadable architecture (T751, 2026-07-16)
 
 Qwen3-MoE (`Qwen3MoeForCausalLM`) is Mixtral with Qwen3 attention — it composes two pieces already
