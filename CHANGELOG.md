@@ -52,6 +52,13 @@ adds 9 degenerate-input tests (finite forward + finite gradients + duality-on-de
 inputs) as a permanent hardening asset. The full nn suite — including every existing
 collapse/gradcheck/duality/value anchor — stays green.
 
+The same audit was run over the `classic` package (trees/forest/GBM/SVM/OLS/PCA/softmax)
+against degenerate data — zero-variance/constant features, single-sample, single-class,
+rank-deficient/collinear inputs, base-rate 0/1. It found **zero** bugs: the package already
+guards every case (constant-column split skip, GBM base-rate clamp, SVC variance fallback,
+OLS Cholesky pivot rejection, PCA n<2 error). A `classic/hostile_robustness_test.go` pins
+those guards against future regression.
+
 ### CUDA — native Q4_0 GEMV: legacy 4-bit round quant joins the native set (worker linux-amd64, Tw69, 2026-07-16)
 - `cu_qmatmul_q40` + `ResidentBQ40`: warp-per-output GEMV over ggml's legacy Q4_0 18-byte
   blocks (f16 d + 16 nibble bytes). Symmetric round quant, no min: `y = d·(nibble − 8)`, byte
