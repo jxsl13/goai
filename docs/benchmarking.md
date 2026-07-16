@@ -1208,6 +1208,77 @@ only costs precision); a default-on with GPU-class detection is the follow-up.
 Repro: `go test -tags cuda -run '^$' -bench BenchmarkF16acc ./backend/cuda/`;
 `GOAI_CUDA_F16ACC=1 go test -tags cuda -run TestCUDAF16PrefillSpeedAndParity ./backend/cuda/`.
 
+Tw62 made this **default-on for GeForce** (`cu_gpu_is_geforce`, `cudaDeviceProp.name`);
+`GOAI_CUDA_F16ACC=1/0` still overrides. Env-unset now auto-selects f16-accum: prefill
+seq=128 **5178 tok/s (2.09×)** vs forced-off 4227 (1.70×). (PR #113.)
+
+## Prefill attention is O(seq²), but the lever is CLOSED — flash and f16-GEMM both rejected (worker linux-amd64, Tw63/64/65, measure-first)
+
+With the GEMM lever cashed (f16-accumulate, above), the next prefill bottleneck is the
+attention op itself. The recorder prefill path materializes the full `[heads,seq,seq]`
+scores buffer to global memory (`cu_gqa_scores` → `cu_attn_softmax` → `cu_gqa_out`, three
+launches) — O(seq²) work and bytes, while every GEMM is O(seq). So attention's *share* of
+prefill must rise with context. Measured before committing to a flash-prefill kernel
+(`TestCUDAPrefillAttnScaling`, real TinyLlama-1.1B, RTX 3060, per-op sync-bracketed so the
+share is the signal, not the inflated absolute ms):
+
+| seq | prefill | tok/s | attention | attn share |
+|---|---:|---:|---:|---:|
+| 128 | 51.8 ms | 2473 | 7.3 ms | 14.1% |
+| 256 | 102.1 ms | 2508 | 19.7 ms | 19.3% |
+| 512 | 230.1 ms | 2225 | 67.3 ms | **29.3%** |
+| 1024 | 581.9 ms | 1760 | 249.6 ms | **42.9%** |
+
+The curve is the decision: at chat-length prefills (512–1024 tokens) attention is 29–43% of
+the wall and climbing, and whole-prefill throughput *falls* (2473 → 1760 tok/s) precisely
+because the O(seq²) materialize-scores path outgrows the linear GEMMs. At seq=128 it is only
+14% — which is why the earlier SPEC EV note ("modest at short ctx") was right and also why it
+is now the top remaining lever once context grows.
+
+**Flash-prefill probe — built, measured, REJECTED (Tw64).** The obvious attack is a fused
+flash-attention-2 forward (online softmax, no `[heads,seq,seq]` materialization). Two versions
+were built and validated exact (parity to the per-head double-precision softmax reference at
+5e-3 over 8 configs incl. hd=128/GQA/causal+full), then A/B-timed against the materialized path
+(TinyLlama attn shape qHeads=32 kvHeads=4 hd=64):
+
+| seq | materialized | naive flash | Br×Bc-tiled flash |
+|---|---:|---:|---:|
+| 128 | 0.32 ms | 0.42 ms (0.77×) | 0.48 ms (0.67×) |
+| 512 | 2.70 ms | 6.17 ms (0.44×) | 6.62 ms (0.41×) |
+| 1024 | 8.74 ms | 23.4 ms (0.37×) | 24.9 ms (0.35×) |
+
+Both flash kernels are **~2.8× slower**, and Br×Bc tiling (K/V staged in shared, reused across
+a tile of query rows) did **not** help — proof that the bottleneck was never memory traffic.
+The materialized path runs QKᵀ and PV as cuBLAS-batched GEMMs at ~1 TFLOP/s (~8% of the 3060
+f32 peak); a hand scalar warp kernel (per-key serial dot products + shuffles) tops out ~2.8%.
+Even cuBLAS *f32* Sgemm (no tensor cores) beats a scalar flash ~3×; the attention is
+GEMM-compute-bound, not memory-bound, at seq≤1024/hd=64, so fusion saves nothing. **Verdict
+(twice confirmed):** a scalar online-softmax flash cannot beat cuBLAS-batched attention on this
+stack — beating a hand kernel would need tensor-core MMA (WMMA), which the NVRTC-without-`mma.h`
+build blocks (same wall as int8-via-cublas, Tw60).
+
+**The opposite direction — f16 tensor cores on the materialized GEMMs — also REJECTED (Tw65).**
+The materialized attention GEMMs (`cu_gqa_scores`, `cu_gqa_out`) run as f32 `cublasSgemm` (no
+tensor cores), so the natural idea was to convert them to f16 `cublasGemmEx` (the Tw61
+prefill-GEMM tensor-core path, not blocked). Measure-first probe (`BenchmarkAttn*`) at the
+actual attention shapes killed it — f16 tensor cores give no gain there:
+
+| shape | f32 Sgemm | f16 tensor-core |
+|---|---:|---:|
+| QKᵀ 512 (K=hd=64) | 2983 | 2975 GFLOP/s (tie) |
+| QKᵀ 1024 (K=hd=64) | 4391 | 4535 (+3%) |
+| PV 512 (N=hd=64) | 2280 | **2145 (−6%)** |
+| PV 1024 (N=hd=64) | 3608 | **3488 (−3%)** |
+
+The Tw61 win was on large-K FFN GEMMs (K=2048–5632); attention's tiny K=hd=64 (QKᵀ) and skinny
+N=hd=64 (PV) don't fill enough MMA tiles to amortize the f32→f16 conversion, and f16 even loses
+on the skinny PV. **Thread closed:** all three attack vectors on prefill attention are dead —
+hand scalar flash (2.8× slower), and f16 tensor-core GEMM (no gain) — leaving the materialized
+f32-Sgemm attention already at the practical floor on this hardware. The 43% @seq1024 attention
+share is largely irreducible with available tools, analogous to the Tw56–59 decode-GEMV Pareto
+ceiling. Repro: `go test -tags cuda -run '^$' -bench BenchmarkAttn ./backend/cuda/` and
+`go test -tags cuda -run TestCUDAPrefillAttnScaling ./backend/cuda/`.
+
 ## Q4_K decode-GEMV bandwidth: the small-N occupancy cliff (worker linux-amd64, Tw55(b) floor measurement)
 
 Before building Tw55 slice (b) ("concurrent QKV streams in graph capture") the §V22 rule

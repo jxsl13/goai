@@ -66,6 +66,12 @@ func matmulF16acc16(a, w, c unsafe.Pointer, m, k, n int) int {
 	return int(C.cu_matmul_f16acc16(a, w, c, C.int(m), C.int(k), C.int(n)))
 }
 
+// matmulF32ddd is the fully-resident f32 Sgemm baseline (no tensor cores) — the
+// current cu_gqa_scores/cu_gqa_out attention GEMM class, for the Tw65 f16-vs-f32 probe.
+func matmulF32ddd(a, b, c unsafe.Pointer, m, k, n int) int {
+	return int(C.cu_matmul_f32_ddd(a, b, c, C.int(m), C.int(k), C.int(n)))
+}
+
 func downloadF32(src unsafe.Pointer, dst []float32) {
 	if len(dst) > 0 {
 		C.cu_download_f32(src, (*C.float)(&dst[0]), C.int(len(dst)))
