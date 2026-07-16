@@ -122,6 +122,82 @@ func TestCUDAQKVFuseTokenParityQ8(t *testing.T) {
 	t.Logf("Q8 fused-QKV token-parity OK: %d tokens identical (no Q4_K downgrade)", len(plain))
 }
 
+// TestCUDAQKVFuseTokenParityQwen2 (Tw57 slice 2): a bias'd family (qwen2, which has a QKV bias)
+// must fuse token-for-token identically to the three separate GEMVs. The fused weight is bit-exact
+// per output row (as in the llama case); the qwen2 QKV bias is added post-GEMV to dq/dk/dv, which
+// are Views into the fused dqkv buffer, so the per-section AddBias hits the right slice. Guards the
+// removal of the old `!hasBias` fusion exclusion.
+func TestCUDAQKVFuseTokenParityQwen2(t *testing.T) {
+	skipNoGPU(t)
+	const path = "../../models/qwen2.5-1.5b-instruct-q8_0.gguf"
+	if _, err := os.Stat(path); err != nil {
+		t.Skipf("model not present (%s)", path)
+	}
+	f, err := os.Open(path)
+	must(t, err)
+	rf, err := gguf.ReadRaw(f)
+	f.Close()
+	must(t, err)
+
+	ids := []int{785, 6722, 315, 9625, 374} // arbitrary in-vocab qwen2 ids; parity is ids-independent
+	const gen, maxSeq = 24, 64
+
+	t.Setenv("GOAI_CUDA_FUSE_FMT", "q8")
+	t.Setenv("GOAI_CUDA_QKV_FUSE", "0")
+	plain, _ := runRawDecode(t, rf, "qwen2", ids, gen, maxSeq, fromF32(quantQ8))
+
+	t.Setenv("GOAI_CUDA_QKV_FUSE", "1")
+	fused, _ := runRawDecode(t, rf, "qwen2", ids, gen, maxSeq, fromF32(quantQ8))
+
+	if len(plain) != len(fused) {
+		t.Fatalf("length mismatch: %d vs %d", len(plain), len(fused))
+	}
+	for i := range plain {
+		if plain[i] != fused[i] {
+			t.Fatalf("token %d diverged: plain %d, fused %d (full: %v vs %v)", i, plain[i], fused[i], plain, fused)
+		}
+	}
+	t.Logf("qwen2 (bias'd) fused-QKV token-parity OK: %d tokens identical", len(plain))
+}
+
+// TestCUDAQKVFuseSpeedABQwen2 measures the fused-QKV decode gain on a bias'd family (qwen2, Tw57
+// slice 2). qwen2.5-1.5B has the same starved k/v projection (kv=2·hd=128 → N=256) as TinyLlama, so
+// the occupancy-cliff law predicts a similar Q8 gain (~+2.8%); the extra AddBias over the fused
+// buffer is one launch either way. Informational (t.Log), interleaved A,B per rep.
+func TestCUDAQKVFuseSpeedABQwen2(t *testing.T) {
+	skipNoGPU(t)
+	const path = "../../models/qwen2.5-1.5b-instruct-q8_0.gguf"
+	if _, err := os.Stat(path); err != nil {
+		t.Skipf("model not present (%s)", path)
+	}
+	if testing.Short() {
+		t.Skip("A/B decode measurement is slow; -short")
+	}
+	f, err := os.Open(path)
+	must(t, err)
+	rf, err := gguf.ReadRaw(f)
+	f.Close()
+	must(t, err)
+
+	ids := []int{785, 6722, 315, 9625, 374}
+	const gen, maxSeq, reps = 8, 64, 5
+
+	t.Setenv("GOAI_CUDA_FUSE_FMT", "q8")
+	var fusedSum, plainSum float64
+	for r := 0; r < reps; r++ {
+		t.Setenv("GOAI_CUDA_QKV_FUSE", "1")
+		_, ftps := runRawDecode(t, rf, "qwen2", ids, gen, maxSeq, fromF32(quantQ8))
+		t.Setenv("GOAI_CUDA_QKV_FUSE", "0")
+		_, ptps := runRawDecode(t, rf, "qwen2", ids, gen, maxSeq, fromF32(quantQ8))
+		fusedSum += ftps
+		plainSum += ptps
+		t.Logf("rep %d: fused %.1f tok/s  separate %.1f tok/s", r, ftps, ptps)
+	}
+	fused, plain := fusedSum/reps, plainSum/reps
+	t.Logf("qwen2 fused-QKV: fused %.1f vs separate %.1f tok/s (%+.1f%%, mean of %d interleaved reps)",
+		fused, plain, 100*(fused-plain)/plain, reps)
+}
+
 // TestCUDAQKVFuseSpeedABQ8 is the Q8 counterpart of TestCUDAQKVFuseSpeedAB (Tw57). Open
 // question the occupancy-cliff law raises: a Q8 k/v proj reads 2× the weight bytes of Q4_K
 // at the same N=256, so it is LESS latency-starved → the law (gain ∝ starvation) predicts a
@@ -192,6 +268,42 @@ func TestCUDAGateUpFuseTokenParity(t *testing.T) {
 		}
 	}
 	t.Logf("gate+up fuse: %d/%d tokens identical", len(fused), len(fused))
+}
+
+// TestCUDAGateUpFuseTokenParityQ8: the Q8 twin of TestCUDAGateUpFuseTokenParity — closes the
+// coverage gap opened when gate/up fusion was routed through the format-aware fuseRows dispatch
+// (Tw57 slice 1): with GOAI_CUDA_FUSE_FMT=q8 the fused ffn_gate|ffn_up is a Q8 GEMV + SwiGLU over
+// the halves, which must be token-for-token identical to the separate Q8 gate/up GEMVs.
+func TestCUDAGateUpFuseTokenParityQ8(t *testing.T) {
+	skipNoGPU(t)
+	const path = "../../models/tinyllama-1.1b-chat-q8_0.gguf"
+	if _, err := os.Stat(path); err != nil {
+		t.Skipf("model not present (%s)", path)
+	}
+	f, err := os.Open(path)
+	must(t, err)
+	rf, err := gguf.ReadRaw(f)
+	f.Close()
+	must(t, err)
+
+	ids := []int{1, 450, 7483, 310, 3444, 338}
+	const gen, maxSeq = 24, 64
+
+	t.Setenv("GOAI_CUDA_FUSE_FMT", "q8")
+	t.Setenv("GOAI_CUDA_GATEUP_FUSE", "0")
+	plain, _ := runRawDecode(t, rf, "llama", ids, gen, maxSeq, fromF32(quantQ8))
+	t.Setenv("GOAI_CUDA_GATEUP_FUSE", "1")
+	fused, _ := runRawDecode(t, rf, "llama", ids, gen, maxSeq, fromF32(quantQ8))
+
+	if len(plain) != len(fused) {
+		t.Fatalf("length mismatch: %d vs %d", len(plain), len(fused))
+	}
+	for i := range plain {
+		if plain[i] != fused[i] {
+			t.Fatalf("token %d diverged: plain %d, fused %d (full: %v vs %v)", i, plain[i], fused[i], plain, fused)
+		}
+	}
+	t.Logf("Q8 gate+up fuse: %d/%d tokens identical", len(fused), len(fused))
 }
 
 // TestCUDAGateUpFuseSpeedAB: the occupancy-cliff counterpart to the QKV A/B. gate/up are

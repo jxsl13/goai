@@ -273,7 +273,9 @@ func buildRawGraphDecoder(tb testing.TB, rf *gguf.RawFile, arch string, maxSeq i
 			wo: q(p + "attn_output.weight"), wd: q(p + "ffn_down.weight"),
 			cache: c, cacheF: cf,
 		}
-		if qkvFuse() && !hasBias { // fused QKV (Tw55(b)); format follows GOAI_CUDA_FUSE_FMT (Tw57); bias'd families (qwen2) stay separate for now
+		if qkvFuse() { // fused QKV (Tw55(b)); format follows GOAI_CUDA_FUSE_FMT (Tw57). Bias'd families
+			// (qwen2) fuse too (Tw57 slice 2): the bias is additive post-GEMV, and dq/dk/dv are Views into
+			// dqkv, so the per-section AddBias below writes the right slice of the fused buffer.
 			l.wqkv, err = fuseRows(deq(p+"attn_q.weight"), deq(p+"attn_k.weight"), deq(p+"attn_v.weight"))
 			mustTB(tb, err)
 		} else {
