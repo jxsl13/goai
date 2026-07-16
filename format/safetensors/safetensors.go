@@ -60,6 +60,19 @@ func rawCopyLE[T any](dst []T, src []byte, elemSize int) bool {
 	return true
 }
 
+// rawStoreLE is the write-side mirror of rawCopyLE: it bulk-copies the backing
+// bytes of a verbatim-bit numeric slice into a little-endian byte buffer,
+// collapsing a per-element PutUintN loop into one memmove. It returns false on
+// a big-endian host or an empty slice so the caller falls back to element-wise
+// encoding (identical bytes on any host).
+func rawStoreLE[T any](dst []byte, src []T, elemSize int) bool {
+	if !nativeLittleEndian || len(src) == 0 {
+		return false
+	}
+	copy(dst, unsafe.Slice((*byte)(unsafe.Pointer(&src[0])), len(src)*elemSize))
+	return true
+}
+
 // maxHeaderSize mirrors the reference implementation's 100 MB header cap.
 const maxHeaderSize = 100 * 1024 * 1024
 
@@ -173,8 +186,10 @@ func Save(w io.Writer, tensors map[string]*tensor.Tensor, meta map[string]string
 			for len(src) > 0 {
 				m := min(len(src), len(b)/4)
 				c := b[:4*m]
-				for i, v := range src[:m] {
-					binary.LittleEndian.PutUint32(c[i*4:], math.Float32bits(v))
+				if !rawStoreLE(c, src[:m], 4) {
+					for i, v := range src[:m] {
+						binary.LittleEndian.PutUint32(c[i*4:], math.Float32bits(v))
+					}
 				}
 				if _, err := w.Write(c); err != nil {
 					return err
@@ -186,8 +201,10 @@ func Save(w io.Writer, tensors map[string]*tensor.Tensor, meta map[string]string
 			for len(src) > 0 {
 				m := min(len(src), len(b)/8)
 				c := b[:8*m]
-				for i, v := range src[:m] {
-					binary.LittleEndian.PutUint64(c[i*8:], math.Float64bits(v))
+				if !rawStoreLE(c, src[:m], 8) {
+					for i, v := range src[:m] {
+						binary.LittleEndian.PutUint64(c[i*8:], math.Float64bits(v))
+					}
 				}
 				if _, err := w.Write(c); err != nil {
 					return err
@@ -200,8 +217,10 @@ func Save(w io.Writer, tensors map[string]*tensor.Tensor, meta map[string]string
 			for len(src) > 0 {
 				m := min(len(src), len(b)/2)
 				c := b[:2*m]
-				for i, bits := range src[:m] {
-					binary.LittleEndian.PutUint16(c[i*2:], bits)
+				if !rawStoreLE(c, src[:m], 2) {
+					for i, bits := range src[:m] {
+						binary.LittleEndian.PutUint16(c[i*2:], bits)
+					}
 				}
 				if _, err := w.Write(c); err != nil {
 					return err

@@ -23,6 +23,17 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   `[N][K]` + scales, so it gains `MatMulMMQDevice`/`MatMulMMQAccInto`: the prefill GEMM reads the SAME
   resident bytes the decode GEMV reads → **one weight, both paths, zero extra prefill VRAM** for a
   Q8-decode model (vs f16 prefill = a full 2× copy). Requires K%32/N%64 (clean error → f16 fallback).
+### npy + safetensors — performance: bulk-copy the writer and npy I/O (T721, 2026-07-16)
+
+Class-audit of the T720 per-element anti-pattern across the sibling I/O paths found the
+same scalar-at-a-time `PutUintN`/`UintN` loops in the safetensors *writer* and both npy
+read and write. Applied the same little-endian bulk-copy fast path (`rawStoreLE` for the
+write side, `rawCopyLE` for read), element-wise fallback kept for big-endian. §V22 A/B on
+npy (16.8 MB f32, cache-warm): **read 3221 → 15848 MB/s (4.9×), write 2444 → 8870 MB/s
+(3.6×)**; the safetensors writer shares the `rawStoreLE` path. Round-trip, hostile and fuzz
+tests unchanged and `-race` clean — the bytes are identical on any host. Verbatim-bit dtypes
+only (F32/F64/F16/BF16); GGUF's quant paths genuinely convert and are untouched.
+
 ### safetensors — performance: bulk-copy load of verbatim-bit dtypes (T720, 2026-07-16)
 
 `Load` decoded every F32/F64/F16/BF16 element individually

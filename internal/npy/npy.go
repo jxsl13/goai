@@ -13,9 +13,43 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"unsafe"
 
 	"github.com/jxsl13/goai/tensor"
 )
+
+// nativeLittleEndian reports whether the host stores multi-byte scalars
+// little-endian. The npy data section is little-endian on disk (this reader/
+// writer only handles '<' byte order), so on such hosts (every platform GoAI
+// targets) the raw bytes already match a tensor's in-memory F32/F64 layout and
+// the copy is one memmove instead of a per-element decode/encode loop. A
+// big-endian host falls back to the element-wise path, so bytes are identical.
+var nativeLittleEndian = func() bool {
+	var x uint16 = 1
+	return *(*byte)(unsafe.Pointer(&x)) == 1
+}()
+
+// rawCopyLE bulk-copies verbatim little-endian source bytes into the backing
+// store of a numeric slice (read side). Returns false on a big-endian host or
+// empty slice, so the caller decodes element-wise.
+func rawCopyLE[T any](dst []T, src []byte, elemSize int) bool {
+	if !nativeLittleEndian || len(dst) == 0 {
+		return false
+	}
+	copy(unsafe.Slice((*byte)(unsafe.Pointer(&dst[0])), len(dst)*elemSize), src)
+	return true
+}
+
+// rawStoreLE bulk-copies the backing bytes of a numeric slice into a
+// little-endian byte buffer (write side). Returns false on a big-endian host or
+// empty slice, so the caller encodes element-wise.
+func rawStoreLE[T any](dst []byte, src []T, elemSize int) bool {
+	if !nativeLittleEndian || len(src) == 0 {
+		return false
+	}
+	copy(dst, unsafe.Slice((*byte)(unsafe.Pointer(&src[0])), len(src)*elemSize))
+	return true
+}
 
 var magic = []byte{0x93, 'N', 'U', 'M', 'P', 'Y'}
 
@@ -103,8 +137,10 @@ func Read(r io.Reader) (*tensor.Tensor, error) {
 			if _, err := io.ReadFull(br, c); err != nil {
 				return nil, fmt.Errorf("npy: read data: %w", err)
 			}
-			for i := range m {
-				dst[i] = math.Float32frombits(binary.LittleEndian.Uint32(c[i*4:]))
+			if !rawCopyLE(dst[:m], c, 4) {
+				for i := range m {
+					dst[i] = math.Float32frombits(binary.LittleEndian.Uint32(c[i*4:]))
+				}
 			}
 			dst = dst[m:]
 		}
@@ -116,8 +152,10 @@ func Read(r io.Reader) (*tensor.Tensor, error) {
 			if _, err := io.ReadFull(br, c); err != nil {
 				return nil, fmt.Errorf("npy: read data: %w", err)
 			}
-			for i := range m {
-				dst[i] = math.Float64frombits(binary.LittleEndian.Uint64(c[i*8:]))
+			if !rawCopyLE(dst[:m], c, 8) {
+				for i := range m {
+					dst[i] = math.Float64frombits(binary.LittleEndian.Uint64(c[i*8:]))
+				}
 			}
 			dst = dst[m:]
 		}
@@ -265,8 +303,10 @@ func Write(w io.Writer, t *tensor.Tensor) error {
 		for len(src) > 0 {
 			m := min(len(src), len(b)/4)
 			c := b[:4*m]
-			for i, v := range src[:m] {
-				binary.LittleEndian.PutUint32(c[i*4:], math.Float32bits(v))
+			if !rawStoreLE(c, src[:m], 4) {
+				for i, v := range src[:m] {
+					binary.LittleEndian.PutUint32(c[i*4:], math.Float32bits(v))
+				}
 			}
 			if _, err := w.Write(c); err != nil {
 				return err
@@ -279,8 +319,10 @@ func Write(w io.Writer, t *tensor.Tensor) error {
 		for len(src) > 0 {
 			m := min(len(src), len(b)/8)
 			c := b[:8*m]
-			for i, v := range src[:m] {
-				binary.LittleEndian.PutUint64(c[i*8:], math.Float64bits(v))
+			if !rawStoreLE(c, src[:m], 8) {
+				for i, v := range src[:m] {
+					binary.LittleEndian.PutUint64(c[i*8:], math.Float64bits(v))
+				}
 			}
 			if _, err := w.Write(c); err != nil {
 				return err
