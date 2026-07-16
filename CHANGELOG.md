@@ -4,6 +4,17 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — test: prove Gemma 2 and Mixtral are trainable end-to-end (T749, 2026-07-16)
+
+Fine-tune probes confirming both new architectures backprop. Gemma 2's from-scratch soft-capped
+attention is trainable — every op on that path (`OpSlice`/`OpTranspose`/`OpSoftCap`/`OpSoftmax`/
+`OpConcat`, plus the sandwich norms and √dim scale) carries a VJP, so the loaded model fine-tunes
+(loss 3.48 → 3.17). Mixtral's sparse-MoE is trainable — gradients reach the router (via the soft
+gate) and the selected experts (loss 3.45 → 3.10); the top-k selection mask is a constant, but the
+gate weights and expert paths are differentiable. A missing VJP anywhere would have surfaced as a
+backward error. This completes the run → adapt → generate → fine-tune story for all eleven loadable
+architectures.
+
 ### nlp — feat: KV-cached generation for Gemma and Gemma 2 (T748, 2026-07-16)
 
 `Gemma` and `Gemma2` gain `NewCache`/`DecodeStep`/`Generate`, completing generation for every
