@@ -18,6 +18,21 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   RTX 3060: pp512 9552 / tg128 245.6 t/s). GoAI pp512 MMQ 3479 / f16 5125 t/s, tg128 ~226 — decode ≈
   parity, but prefill is GEMM-bound and GoAI trails on prefill *speed* (the int8-GEMM 2× above is the
   lever; the shipped MMQ arc's win is VRAM, not prefill speed).
+### pytorch — new: safe PyTorch checkpoint loader (no code execution) (T725, 2026-07-16)
+
+New package `format/pytorch` loads `torch.save` checkpoints (`.pt`/`.bin` — the dominant
+pre-safetensors model format) into GoAI tensors **without executing code**. A `.pt` is a ZIP
+of a Python pickle (structure) plus raw storages; `torch.load` runs that pickle on a full
+unpickler, a well-known arbitrary-code-execution vector. This loader interprets only the
+bounded opcode subset a state_dict emits (pickle protocols 2–5) and resolves `GLOBAL`/`REDUCE` against a strict
+whitelist (`torch._utils._rebuild_tensor_v2` and `_rebuild_parameter`, the typed storage
+classes, `OrderedDict`) — anything else errors. `Load`/`LoadFile` return `map[string]*tensor.Tensor` (nested modules
+flattened with `.`), the exact shape `nlp.GPT2FromHF`/`FromSafetensors` consume, so a HF `.bin`
+flows straight into a model. Dtypes map as in safetensors (F32/F64/F16/BF16 verbatim via the
+bulk-copy fast path; int/bool widen). Verified against a PyTorch 2.x golden across all dtypes,
+an end-to-end test (a PyTorch HF GPT-2 `.bin` loads straight into `nlp.GPT2FromHF` and runs a
+forward pass), a code-execution-rejection test, and a 24k-exec fuzz target for the safety guarantee.
+
 ### nlp — performance: F16/BF16 fast paths in the HF GPT-2 converter (T724, 2026-07-16)
 
 `GPT2FromHF` had typed (bulk) transpose/slice paths for F32/F64 but fell to per-element
