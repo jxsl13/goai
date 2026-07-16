@@ -89,6 +89,8 @@ var typeExampleExempt = map[string]bool{
 	"backend.MemoryProber":            true, // optional device-memory capability interface (backend-author surface), consumed by ProbeBudgets
 	"vision.CNNOption":                true, // functional-option type (shown via WithChannels/WithKernel/WithDtype)
 	"vision.ViTOption":                true, // functional-option type (shown via WithViTDim/WithViTHeads etc.)
+	"vision.MLPMixerOption":           true, // functional-option type (shown via WithMixerHidden/WithMixerLayers etc.)
+	"vision.SwinOption":               true, // functional-option type (shown via WithSwinMLPRatio/WithSwinChannels/WithSwinRelativeBias)
 	"nlp.Beam":                        true, // returned by BeamSearch, shown in ExampleBeamSearch
 	"nlp.Block":                       true, // internal transformer block (part of GPT)
 	"nlp.LlamaBlock":                  true, // internal transformer block (part of Llama, shown in ExampleLlama)

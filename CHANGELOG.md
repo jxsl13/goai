@@ -15,6 +15,27 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   tolerance. Verified on the RTX 3060: env-unset auto-selects f16-accum → prefill seq=128
   **5178 tok/s (2.09× vs f32)** vs forced-off 4227 (1.70×); parity, prefill, and unified-serve
   tests all green. Most users never set the env var, so this is where the +21% actually reaches them.
+### vision — topic-discovery round 10: mainstream vision architectures (T701–T702, 2026-07-16)
+
+The sweep moved to a new, non-colliding axis — the `vision` package — where two
+foundational architectures were still absent. Both compose on existing `nn.*` layers
+(no new kernel) and carry a "recovers a known model" collapse anchor.
+
+- **MLP-Mixer** (`vision/mlpmixer.go`, Tolstikhin et al. / Google 2021, arXiv:2105.01601).
+  An all-MLP vision model — no convolution, no attention — that alternates a token-mixing
+  MLP (across patches, via a transpose) and a channel-mixing MLP. Anchors: a hand-traced
+  forward matches @1e-10; zero-initialized residual branches make each layer the identity;
+  the transpose genuinely mixes across patches; gradcheck 4.15e-10; a global-arrangement
+  classification task trains to 100% (CE 1.173→0.000).
+- **Swin Transformer** (`vision/swin.go`, Liu et al. / Microsoft 2021, arXiv:2103.14030).
+  A hierarchical ViT with windowed self-attention (linear in image size), shifted windows
+  for cross-window connection, and patch merging for a feature pyramid. Window partition /
+  cyclic shift / patch merging are differentiable `OpEmbed` gathers; the per-head
+  relative-position bias uses the T5-bias gather trick. Anchors: a full-image window ≡ a
+  global ViT block (1.39e-17); the shifted-window mask zeroes cross-region attention
+  exactly; patch merging picks the right 2×2 neighbors; gradcheck 9.87e-10; a texture task
+  learns (1.22→0.0001). ConvNeXt was deferred — it needs 2D depthwise convolution, which
+  the backend does not yet provide.
 
 ### CUDA — prefill lever found: f16-accumulate GEMM is 1.5-2× on GeForce (worker linux-amd64, Tw60/61, 2026-07-16)
 - Pivoting to the prefill gap (~4× vs llama.cpp; FFN GEMM ≈72% of prefill), two measure-first
