@@ -23,6 +23,16 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   one quant of the attn-norm hidden, gate/up share one of the ffn-norm hidden (f16 weights fall
   back). End-to-end on TinyLlama, MMQ prefill 3552 -> 3793 t/s (+6.8%); combined with the ldmatrix
   loads it is 3479 -> 3793 (+9% e2e, MMQ prefill now 0.74x f16 vs 0.68x before), same accuracy.
+### nlp — new: parse HF config.json → model config (T728, 2026-07-16)
+
+The HF converters (`LlamaFromHF`, `BertFromHF`, `RobertaFromHF`) needed the caller to hand-set
+the hyperparameters that aren't derivable from the weight tensors (heads, KV heads, norm eps,
+rope theta). `LlamaConfigFromHF` and `BertConfigFromHF` parse a checkpoint's `config.json` into
+the right config, so loading a real model is now: parse config → load weights → build. Handles
+both the classic top-level `rope_theta` and transformers-5.x's nested `rope_parameters`.
+Anchored by a config-driven end-to-end test that parses the config and reproduces the
+transformers golden with no hand-set hyperparameters.
+
 ### nlp — new: BERT bidirectional encoder + BertFromHF (T727, 2026-07-16)
 
 GoAI had the BERT *surroundings* — WordPiece tokenizer, MLM masking, MeanPool, CosineRerank —
