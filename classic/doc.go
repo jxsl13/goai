@@ -1,6 +1,7 @@
 // Package classic implements the classical (pre-deep-learning) machine-learning
 // methods: ordinary least squares, softmax/logistic regression, k-means
-// clustering, and principal component analysis.
+// clustering, principal component analysis, and the tree-based tabular models
+// (decision tree, random forest, gradient boosting).
 //
 // # For AI practitioners
 //
@@ -14,6 +15,12 @@
 //     centers and hard labels.
 //   - [PCA (principal component analysis — finding the directions of largest variation)] — principal components via a symmetric-eigen (Jacobi) decomposition,
 //     exposing Components, ExplainedVariance (eigenvalues, descending) and Mean.
+//   - [DecisionTreeClassifier] / [DecisionTreeRegressor] — CART greedy binary
+//     splitting (Gini/entropy/MSE), the interpretable tabular baseline.
+//   - [RandomForestClassifier] / [RandomForestRegressor] — bagged trees with
+//     per-split feature subsampling, the strong low-tuning tabular default.
+//   - [GradientBoostingRegressor] / [GradientBoostingClassifier] — stagewise
+//     residual-fitting shallow trees (the core of XGBoost/LightGBM).
 //
 // Each is validated to reference tolerance against scikit-learn (§V1): OLS (ordinary least squares)
 // coefficients to ~1e-8, softmax probabilities to ~1e-5, k-means labels exactly,
