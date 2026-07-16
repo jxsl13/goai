@@ -73,6 +73,18 @@ func (m *Llama) DecodeStep(ctx *backend.Context, cache *LlamaCache, token, pos i
 		if err != nil {
 			return nil, err
 		}
+		// Qwen2-family q/k/v projection biases (added before RoPE, matching the full-sequence
+		// path in hiddenFromEmbed); nil for Llama/Mistral. Without this the KV-cached decode
+		// would silently drop the bias and diverge from Forward on a Qwen2 model.
+		if q, err = addBiasIf(ctx, q, b.Bq); err != nil {
+			return nil, err
+		}
+		if k, err = addBiasIf(ctx, k, b.Bk); err != nil {
+			return nil, err
+		}
+		if v, err = addBiasIf(ctx, v, b.Bv); err != nil {
+			return nil, err
+		}
 		// RoPE the single token at its absolute position, then append k,v to the cache
 		if q, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: cfg.Heads, PosOffset: pos}, q); err != nil {
 			return nil, err

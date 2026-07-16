@@ -44,6 +44,7 @@ type LlamaConfig struct {
 type LlamaBlock struct {
 	AttnNorm       *nn.RMSNorm    // RMSNorm before attention
 	Wq, Wk, Wv, Wo *tensor.Tensor // attention projections (no bias); Wk/Wv are [dim, KVHeads·headDim]
+	Bq, Bk, Bv     *tensor.Tensor // optional q/k/v projection biases (Qwen2/Qwen2.5 family); nil for Llama/Mistral
 	FFNNorm        *nn.RMSNorm    // RMSNorm before the FFN
 	FFN            *nn.SwiGLU     // SwiGLU feed-forward
 }
@@ -181,6 +182,16 @@ func (m *Llama) hiddenFromEmbed(ctx *backend.Context, x *tensor.Tensor) (*tensor
 		if err != nil {
 			return nil, err
 		}
+		// Qwen2-family q/k/v projection biases (added before RoPE); nil for Llama/Mistral.
+		if q, err = addBiasIf(ctx, q, b.Bq); err != nil {
+			return nil, err
+		}
+		if k, err = addBiasIf(ctx, k, b.Bk); err != nil {
+			return nil, err
+		}
+		if v, err = addBiasIf(ctx, v, b.Bv); err != nil {
+			return nil, err
+		}
 		if q, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: rope.Base, Heads: cfg.Heads}, q); err != nil {
 			return nil, err
 		}
@@ -222,11 +233,25 @@ func project(ctx *backend.Context, x, w *tensor.Tensor) (*tensor.Tensor, error) 
 	return exec1(ctx, backend.OpMatMul, nil, x, w)
 }
 
+// addBiasIf adds bias to x when bias is non-nil (Qwen2-family projections), else
+// returns x unchanged (the bias-free Llama/Mistral path).
+func addBiasIf(ctx *backend.Context, x, bias *tensor.Tensor) (*tensor.Tensor, error) {
+	if bias == nil {
+		return x, nil
+	}
+	return exec1(ctx, backend.OpAddBias, nil, x, bias)
+}
+
 // Params returns every trainable tensor for optimizers.
 func (m *Llama) Params() []*tensor.Tensor {
 	ps := []*tensor.Tensor{m.TokEmb}
 	for _, b := range m.Blocks {
 		ps = append(ps, b.AttnNorm.Gamma, b.Wq, b.Wk, b.Wv, b.Wo, b.FFNNorm.Gamma)
+		for _, bb := range []*tensor.Tensor{b.Bq, b.Bk, b.Bv} {
+			if bb != nil {
+				ps = append(ps, bb)
+			}
+		}
 		ps = append(ps, b.FFN.Params()...)
 	}
 	ps = append(ps, m.Norm.Gamma, m.Out)

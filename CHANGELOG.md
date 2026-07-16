@@ -14,6 +14,20 @@ Gradcheck: analytic vs central-difference to ~1e-10. End-to-end, a T5 encoder + 
 fine-tunes (loss 1.40 → 0.013). This completes trainability to all six loadable architectures
 (GPT-2, Llama, BERT, RoBERTa, DistilBERT, T5). `T5.Params()` exposes the encoder's weights.
 
+### nlp — feat: Qwen2 / Qwen2.5 support via optional q/k/v projection bias (T741, 2026-07-16)
+
+Qwen2 is Llama with a learned bias on the q/k/v projections (o_proj stays bias-free) — otherwise
+identical RMSNorm / RoPE / GQA / SwiGLU. Added optional `Bq/Bk/Bv` to `LlamaBlock` (nil for
+Llama/Mistral, applied before RoPE via `OpAddBias`) in BOTH the full-sequence path
+(`hiddenFromEmbed`) and the KV-cached decode path (`DecodeStep`, behind `Generate`) — so Qwen2
+generation matches `Forward` bit-for-bit rather than silently dropping the bias. `LlamaFromHF` now loads
+`self_attn.{q,k,v}_proj.bias` when present, and `Llama.Params()` exposes them for fine-tuning.
+Forward parity anchored against a real transformers `Qwen2ForCausalLM`: max abs logit diff
+2.9e-8 (§V16). Trainability verified end-to-end (`TestQwen2FineTune`): the bias path routes
+through `OpAddBias` (which has a VJP), so a loaded Qwen2 fine-tunes (loss decreases) and the
+q_proj bias receives a non-zero gradient — not just a loadable-but-frozen tensor. Replaces the T733 fail-loud guard (which rejected attention-bias checkpoints)
+with real support; the bias-free Llama/Mistral parity tests still pass unchanged.
+
 ### CUDA — decode row-fusion now covers bias'd families (qwen2) (worker linux-amd64, Tw57 slice 2, 2026-07-16)
 - The Tw55(b)/Tw57 fused-QKV path previously excluded models with a QKV bias (qwen2) — the fusion
   weight path was guarded by `!hasBias`. Removed that guard: a bias'd family now fuses too.

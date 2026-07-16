@@ -42,11 +42,6 @@ func LlamaFromHF(ts map[string]*tensor.Tensor, cfg LlamaConfig) (*Llama, error) 
 	if layers == 0 {
 		return nil, fmt.Errorf("nlp: HF Llama has no model.layers.*")
 	}
-	// Fail loud on attention bias: Qwen2/Qwen-family checkpoints add q/k/v_proj
-	// bias that this bias-free Llama would silently drop, giving wrong outputs.
-	if _, ok := ts["model.layers.0.self_attn.q_proj.bias"]; ok {
-		return nil, fmt.Errorf("nlp: checkpoint has attention bias (Qwen2-family?); LlamaFromHF supports bias-free Llama/Mistral only — loading it would silently drop the bias")
-	}
 	cfg.Layers = layers
 	if gate, ok := ts["model.layers.0.mlp.gate_proj.weight"]; ok {
 		cfg.Hidden = gate.Shape()[0]
@@ -98,12 +93,22 @@ func LlamaFromHF(ts map[string]*tensor.Tensor, cfg LlamaConfig) (*Llama, error) 
 		if err != nil {
 			return nil, err
 		}
+		// Optional Qwen2-family q/k/v projection biases (o_proj has none).
+		bias := func(name string) *tensor.Tensor {
+			if t, ok := ts[p+name]; ok {
+				return cloneF64(t)
+			}
+			return nil
+		}
 		m.Blocks = append(m.Blocks, &LlamaBlock{
 			AttnNorm: rmsFromGGUF(an, cfg.Eps),
 			Wq:       transpose2D(wq),
 			Wk:       transpose2D(wk),
 			Wv:       transpose2D(wv),
 			Wo:       transpose2D(wo),
+			Bq:       bias("self_attn.q_proj.bias"),
+			Bk:       bias("self_attn.k_proj.bias"),
+			Bv:       bias("self_attn.v_proj.bias"),
 			FFNNorm:  rmsFromGGUF(fn, cfg.Eps),
 			FFN:      swiGLUFromGGUF(gate, up, down),
 		})
