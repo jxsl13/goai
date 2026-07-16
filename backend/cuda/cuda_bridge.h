@@ -86,6 +86,9 @@ int cu_qmatmul_q4(const void* dA, const void* dQ, const void* dScales, const voi
 // q[N, K/256 * 144] (144-byte blocks: f16 d + f16 dmin + 12B packed 6-bit scales/mins + 128B
 // nibbles), dequant y = d*sc6*nibble - dmin*min6 per 32-sub-block. K%256==0. DECODE-ONLY (GEMV).
 int cu_qmatmul_q4k(const void* dA, const void* dQ, void* dOut, int M, int K, int N, float beta);
+// cu_qmatmul_q4k_pre: Q4_K with pre-decoded f32 sub-block scales (192-byte blocks: 64B scale
+// plane + 128B nibbles). Bit-exact vs cu_qmatmul_q4k, no in-kernel scale unpack (R5). K%256==0.
+int cu_qmatmul_q4k_pre(const void* dA, const void* dQ, void* dOut, int M, int K, int N, float beta);
 // SwiGLU-epilogue GEMV variants (Tw55): out = silu(gate) ⊙ (a·dequant(W)), gate in out's [M,N] layout.
 int cu_qmatmul_q8_swiglu(const void* dA, const void* dQ, const void* dScales, const void* dGate, void* dOut,
                          int M, int K, int N, int nb);
