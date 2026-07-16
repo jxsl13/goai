@@ -33,7 +33,7 @@ static cublasHandle_t gHandle = NULL;
 static float *gOne = NULL, *gZero = NULL; // device 1.0f/0.0f — cuBLAS DEVICE pointer mode (graph-capture-safe alpha/beta)
 static cudaStream_t gStream = NULL;
 static CUcontext gCtx = NULL; // runtime's primary context, retained for driver-API launches
-static CUfunction gGelu = NULL, gSilu = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gQgemv = NULL, gQgemv4 = NULL, gQgemv4k = NULL, gQgemv4kPre = NULL, gQgemv5k = NULL, gQgemv6k = NULL, gQgemv3k = NULL, gQgemv2k = NULL, gQgemv40 = NULL, gQgemvI4nl = NULL, gQgemvI4xs = NULL, gQgemvMxfp4 = NULL, gQgemvI2xxs = NULL, gQgemvI2xs = NULL, gQgemvI3xxs = NULL, gQgemvI3s = NULL, gI8Mma = NULL, gI8MmaT = NULL, gI8MmaRb = NULL, gI8MmaDb = NULL, gI8MmaWt = NULL, gI8MmaWp = NULL, gI8Mmq = NULL, gI8MmqR = NULL, gQrowsI8 = NULL, gLdmProbe = NULL, gLdmProbe2 = NULL, gI8MmaLm = NULL, gCvtF16 = NULL, gCvtFrom16 = NULL; // lazily nvrtc-compiled
+static CUfunction gGelu = NULL, gSilu = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gQgemv = NULL, gQgemv4 = NULL, gQgemv4k = NULL, gQgemv4kPre = NULL, gQgemv5k = NULL, gQgemv6k = NULL, gQgemv3k = NULL, gQgemv2k = NULL, gQgemv40 = NULL, gQgemvI4nl = NULL, gQgemvI4xs = NULL, gQgemvMxfp4 = NULL, gQgemvI2xxs = NULL, gQgemvI2xs = NULL, gQgemvI3xxs = NULL, gQgemvI3s = NULL, gQgemvI1s = NULL, gQgemvI1m = NULL, gI8Mma = NULL, gI8MmaT = NULL, gI8MmaRb = NULL, gI8MmaDb = NULL, gI8MmaWt = NULL, gI8MmaWp = NULL, gI8Mmq = NULL, gI8MmqR = NULL, gQrowsI8 = NULL, gLdmProbe = NULL, gLdmProbe2 = NULL, gI8MmaLm = NULL, gCvtF16 = NULL, gCvtFrom16 = NULL; // lazily nvrtc-compiled
 static CUfunction gRopeDpos = NULL, gAttnSoftmaxDpos = NULL, gAppendDpos = NULL; // device-position (graph-capturable) twins
 static CUfunction gGqaFlashPart = NULL, gGqaFlashMerge = NULL; // flash decode: GQA K/V-shared split-K partials + merge
 static CUfunction gGqaFlashPartF16 = NULL, gAppendDposF16 = NULL; // f16 KV-cache twins (u16 storage, f32 compute)
@@ -1961,6 +1961,134 @@ done:
     pthread_mutex_unlock(&gLock);
     return rc;
 }
+
+// cu_qmatmul_iq1s: out[M,N] = a[M,K]·dequant(W), W = ggml IQ1_S (§T554), the 1.56-bit TERNARY
+// i-quant. K/256 super-blocks of 50 bytes: f16 d + 32 qs + 8 qh u16. A shared 2048×8 {−1,0,+1}
+// grid (device dGrid) with a ±0.125 delta on every element and odd per-32 multipliers dl=d·(2s+1).
+// Each qh u16 covers 32 elements: bits 0..11 = four 3-bit grid-index-high triples, bits 12..14 = s,
+// bit 15 = delta sign. y[k]=dl·(grid[u][k]+δ), so out += dl·(Σ av·grid + δ·Σ av). Warp-per-output
+// GEMV: lane = (qh index g, sub-group j), 8 elements/lane. K%256==0.
+int cu_qmatmul_iq1s(const void* dA, const void* dQ, const void* dGrid, void* dOut, int M, int K, int N, float beta) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (!gQgemvI1s && compile_kernel(
+                       "__device__ __forceinline__ float f16f(unsigned short h){\n"
+                       "  unsigned s = (h & 0x8000u) << 16;\n"
+                       "  float v = __uint_as_float((h & 0x7fffu) << 13) * __uint_as_float(0x77800000u);\n"
+                       "  return __uint_as_float(__float_as_uint(v) | s);\n"
+                       "}\n"
+                       "extern \"C\" __global__ void qmatmul_iq1s(const float* a, const unsigned char* q, const float* grid, float* out, int M, int K, int N, float beta){\n"
+                       "  long warp = ((long)blockIdx.x*blockDim.x + threadIdx.x) >> 5;\n"
+                       "  int lane = threadIdx.x & 31;\n"
+                       "  if (warp >= (long)M*N) return;\n"
+                       "  int m = (int)(warp / N), n = (int)(warp % N);\n"
+                       "  const float* ar = a + (size_t)m*K;\n"
+                       "  int sbs = K >> 8;\n"
+                       "  const unsigned char* qr = q + (size_t)n*sbs*50;\n"
+                       "  int g = lane >> 2, jj = lane & 3;\n"                          // qh index (0..7), sub-group (0..3)
+                       "  float acc = 0.0f;\n"
+                       "  for (int w = 0; w < sbs; w++){\n"
+                       "    const unsigned char* blk = qr + (size_t)w*50;\n"
+                       "    float d = f16f((unsigned short)(blk[0] | (blk[1]<<8)));\n"
+                       "    unsigned qh = blk[34+g*2] | (blk[34+g*2+1]<<8);\n"
+                       "    float dl = d * (float)(2u*((qh>>12)&7u) + 1u);\n"
+                       "    float delta = (qh & 0x8000u) ? -0.125f : 0.125f;\n"
+                       "    unsigned u = blk[2 + g*4 + jj] | (((qh >> (3*jj)) & 7u) << 8);\n" // 11-bit grid index
+                       "    const float* gv = grid + (size_t)u*8;\n"
+                       "    const float* arb = ar + (size_t)w*256 + g*32 + jj*8;\n"
+                       "    float4 al = *(const float4*)arb;\n"
+                       "    float4 ah = *(const float4*)(arb + 4);\n"
+                       "    float4 gl = *(const float4*)gv;\n"
+                       "    float4 gh = *(const float4*)(gv + 4);\n"
+                       "    float sg = al.x*gl.x + al.y*gl.y + al.z*gl.z + al.w*gl.w + ah.x*gh.x + ah.y*gh.y + ah.z*gh.z + ah.w*gh.w;\n"
+                       "    float sa = (al.x+al.y)+(al.z+al.w) + (ah.x+ah.y)+(ah.z+ah.w);\n"
+                       "    acc += dl * (sg + delta*sa);\n"
+                       "  }\n"
+                       "  for (int o = 16; o > 0; o >>= 1){ acc += __shfl_down_sync(0xffffffff, acc, o); }\n"
+                       "  if (lane == 0){ out[warp] = beta*out[warp] + acc; }\n"
+                       "}\n",
+                       "qmatmul_iq1s.cu", "qmatmul_iq1s", &gQgemvI1s) != 0) { rc = -2; goto done; }
+    {
+        long total = (long)M * N * 32;
+        int threads = 256, blocks = (int)((total + threads - 1) / threads); if (blocks < 1) blocks = 1;
+        void* args[8];
+        args[0] = &dA; args[1] = &dQ; args[2] = &dGrid; args[3] = &dOut;
+        args[4] = &M; args[5] = &K; args[6] = &N; args[7] = &beta;
+        rc = (cuLaunchKernel(gQgemvI1s, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_qmatmul_iq1m: out[M,N] = a·dequant(W), W = ggml IQ1_M (§T554), the 1.75-bit ternary i-quant.
+// K/256 super-blocks of 56 bytes: 32 qs + 16 qh + 8 scale bytes (4 u16). SAME 2048×8 grid + ±0.125
+// delta as IQ1_S, but: (a) the f16 super-scale d is SPLIT across the top nibbles of the 4 scale words
+// (dbits = w0>>12 | (w1>>12)<<4 | (w2>>12)<<8 | (w3>>12)<<12); (b) per-2-grid-row 3-bit sub-scales
+// (dl=d·(2sc+1)); (c) each qh nibble carries a 3-bit grid-high triple + a delta sign. Warp-per-output
+// GEMV: lane = grid-row i (0..31), 8 elements/lane. K%256==0.
+int cu_qmatmul_iq1m(const void* dA, const void* dQ, const void* dGrid, void* dOut, int M, int K, int N, float beta) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (!gQgemvI1m && compile_kernel(
+                       "__device__ __forceinline__ float f16f(unsigned short h){\n"
+                       "  unsigned s = (h & 0x8000u) << 16;\n"
+                       "  float v = __uint_as_float((h & 0x7fffu) << 13) * __uint_as_float(0x77800000u);\n"
+                       "  return __uint_as_float(__float_as_uint(v) | s);\n"
+                       "}\n"
+                       "extern \"C\" __global__ void qmatmul_iq1m(const float* a, const unsigned char* q, const float* grid, float* out, int M, int K, int N, float beta){\n"
+                       "  long warp = ((long)blockIdx.x*blockDim.x + threadIdx.x) >> 5;\n"
+                       "  int lane = threadIdx.x & 31;\n"
+                       "  if (warp >= (long)M*N) return;\n"
+                       "  int m = (int)(warp / N), n = (int)(warp % N);\n"
+                       "  const float* ar = a + (size_t)m*K;\n"
+                       "  int sbs = K >> 8;\n"
+                       "  const unsigned char* qr = q + (size_t)n*sbs*56;\n"
+                       "  int i = lane;\n"                                              // grid-row (0..31)
+                       "  float acc = 0.0f;\n"
+                       "  for (int w = 0; w < sbs; w++){\n"
+                       "    const unsigned char* blk = qr + (size_t)w*56;\n"
+                       "    const unsigned char* sp = blk + 48;\n"
+                       "    unsigned sw0=sp[0]|(sp[1]<<8), sw1=sp[2]|(sp[3]<<8), sw2=sp[4]|(sp[5]<<8), sw3=sp[6]|(sp[7]<<8);\n"
+                       "    unsigned dbits = (sw0>>12) | ((sw1>>12)<<4) | ((sw2>>12)<<8) | ((sw3>>12)<<12);\n" // split f16 d
+                       "    float d = f16f((unsigned short)dbits);\n"
+                       "    unsigned swi = (i<8)?sw0:(i<16)?sw1:(i<24)?sw2:sw3;\n"
+                       "    unsigned sc = (swi >> (3*((i>>1)&3))) & 7u;\n"              // per-2 3-bit sub-scale
+                       "    float dl = d * (float)(2u*sc + 1u);\n"
+                       "    unsigned nib = (blk[32 + (i>>1)] >> (4*(i&1))) & 0xFu;\n"    // grid-high triple + delta sign
+                       "    unsigned u = blk[i] | ((nib & 7u) << 8);\n"
+                       "    float delta = (nib & 8u) ? -0.125f : 0.125f;\n"
+                       "    const float* gv = grid + (size_t)u*8;\n"
+                       "    const float* arb = ar + (size_t)w*256 + i*8;\n"
+                       "    float4 al = *(const float4*)arb;\n"
+                       "    float4 ah = *(const float4*)(arb + 4);\n"
+                       "    float4 gl = *(const float4*)gv;\n"
+                       "    float4 gh = *(const float4*)(gv + 4);\n"
+                       "    float sg = al.x*gl.x + al.y*gl.y + al.z*gl.z + al.w*gl.w + ah.x*gh.x + ah.y*gh.y + ah.z*gh.z + ah.w*gh.w;\n"
+                       "    float sa = (al.x+al.y)+(al.z+al.w) + (ah.x+ah.y)+(ah.z+ah.w);\n"
+                       "    acc += dl * (sg + delta*sa);\n"
+                       "  }\n"
+                       "  for (int o = 16; o > 0; o >>= 1){ acc += __shfl_down_sync(0xffffffff, acc, o); }\n"
+                       "  if (lane == 0){ out[warp] = beta*out[warp] + acc; }\n"
+                       "}\n",
+                       "qmatmul_iq1m.cu", "qmatmul_iq1m", &gQgemvI1m) != 0) { rc = -2; goto done; }
+    {
+        long total = (long)M * N * 32;
+        int threads = 256, blocks = (int)((total + threads - 1) / threads); if (blocks < 1) blocks = 1;
+        void* args[8];
+        args[0] = &dA; args[1] = &dQ; args[2] = &dGrid; args[3] = &dOut;
+        args[4] = &M; args[5] = &K; args[6] = &N; args[7] = &beta;
+        rc = (cuLaunchKernel(gQgemvI1m, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
 
 // cu_qmatmul_iq2xs: out[M,N] = a·dequant(W), W = ggml IQ2_XS (§T554) — the 2.31-bit sibling of
 // IQ2_XXS with a 512-entry grid and EXPLICIT per-16-element 4-bit scales. K/256 super-blocks of

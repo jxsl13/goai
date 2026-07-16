@@ -163,6 +163,29 @@ Forward parity anchored against a real transformers `Qwen2ForCausalLM`: max abs 
 through `OpAddBias` (which has a VJP), so a loaded Qwen2 fine-tunes (loss decreases) and the
 q_proj bias receives a non-zero gradient — not just a loadable-but-frozen tensor. Replaces the T733 fail-loud guard (which rejected attention-bias checkpoints)
 with real support; the bias-free Llama/Mistral parity tests still pass unchanged.
+### CUDA — native IQ1_S + IQ1_M decode GEMV; i-quant family complete (worker linux-amd64, Tw79, 2026-07-16)
+- New `cu_qmatmul_iq1s`/`cu_qmatmul_iq1m` + `ResidentBIQ1S`/`ResidentBIQ1M`: the two ~1.5-bit
+  **ternary** i-quants (extreme quant that lets bigger models fit a 12 GB card). With these, GoAI's
+  CUDA backend loads **every ggml quant format bit-native** — the whole i-quant family (IQ1/2/3/4)
+  plus Q2_K–Q6_K, Q4_0, Q8, MXFP4.
+- Both share a 2048×8 `{−1,0,+1}` grid with a ±0.125 delta on every element and odd multipliers
+  `dl = d·(2s+1)`; `y[k] = dl·(grid[u][k]+δ)`, so the GEMV factors to `dl·(Σ av·grid + δ·Σ av)`.
+  **IQ1_S** (1.56-bit, 50 B/block): `d` + qs + 8 qh u16 (each packs 4 grid-index triples + s +
+  delta-sign). **IQ1_M** (1.75-bit, 56 B/block): per-2 sub-scales + the ggml quirk that splits the
+  f16 super-scale across the top nibbles of the 4 scale words.
+- Grid reconstructed host-side via the public `gguf.Dequantize` (no gguf internals), uploaded once
+  to a shared device buffer (`sync.Once`), shared by both variants. Warp-per-output GEMV, `float4`
+  loads. Wired into `quantDirect` (ggml types 24/29) so IQ1 models route natively.
+- Validated: `TestCUDAIQ1SMatMulParity` **rel 1.35e-7** + `TestCUDAIQ1MMatMulParity` **rel 1.16e-7**
+  (GEMV vs `gguf.Dequantize` + host matmul, f32-accumulation-exact), both first try; IQ2/IQ3/IQ4
+  parity un-regressed.
+- **New public `NewResidentQuant(qt gguf.QuantTensor)` dispatcher + `ResidentQuant` interface**:
+  the one-call, library-facing form of the native-quant load path (previously only reachable from
+  the test-only `quantDirect`). Given any GGUF quant tensor it builds the right bit-native resident
+  (Q4_0, Q2_K–Q6_K, MXFP4, IQ1–IQ4); formats with no native kernel return an error so the caller can
+  dequantize + use `NewResidentBQ8`. `TestCUDANewResidentQuantDispatch` — dispatched Q4_K == the
+  direct constructor, unsupported type errors. This makes GoAI's full native-quant coverage usable
+  by consumers, not just tests.
 
 ### CUDA — decode row-fusion now covers bias'd families (qwen2) (worker linux-amd64, Tw57 slice 2, 2026-07-16)
 - The Tw55(b)/Tw57 fused-QKV path previously excluded models with a QKV bias (qwen2) — the fusion
