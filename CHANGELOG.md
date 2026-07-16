@@ -359,7 +359,7 @@ foundational architectures were still absent. Both compose on existing `nn.*` la
   exactly; patch merging picks the right 2×2 neighbors; gradcheck 9.87e-10; a texture task
   learns (1.22→0.0001).
 - **MAE — Masked Autoencoder** (`vision/mae.go`, He et al. / Meta 2021, arXiv:2111.06377).
-  Self-supervised vision pretraining: mask ~75% of patches, encode only the visible ~25%
+  Self-supervised vision pretraining: mask ≈75% of patches, encode only the visible ≈25%
   with a ViT, and reconstruct the masked pixels with a lightweight decoder. Anchors: the
   mask is a valid deterministic partition and the encoder genuinely runs on only the kept
   patches; the unshuffle restores patch order with a learned mask token at masked slots;
