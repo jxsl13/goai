@@ -15,7 +15,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   tolerance. Verified on the RTX 3060: env-unset auto-selects f16-accum → prefill seq=128
   **5178 tok/s (2.09× vs f32)** vs forced-off 4227 (1.70×); parity, prefill, and unified-serve
   tests all green. Most users never set the env var, so this is where the +21% actually reaches them.
-### vision — topic-discovery round 10: mainstream vision architectures (T701–T702, 2026-07-16)
+### vision — topic-discovery round 10: mainstream vision architectures (T701–T703, 2026-07-16)
 
 The sweep moved to a new, non-colliding axis — the `vision` package — where two
 foundational architectures were still absent. Both compose on existing `nn.*` layers
@@ -34,8 +34,17 @@ foundational architectures were still absent. Both compose on existing `nn.*` la
   relative-position bias uses the T5-bias gather trick. Anchors: a full-image window ≡ a
   global ViT block (1.39e-17); the shifted-window mask zeroes cross-region attention
   exactly; patch merging picks the right 2×2 neighbors; gradcheck 9.87e-10; a texture task
-  learns (1.22→0.0001). ConvNeXt was deferred — it needs 2D depthwise convolution, which
-  the backend does not yet provide.
+  learns (1.22→0.0001).
+- **MAE — Masked Autoencoder** (`vision/mae.go`, He et al. / Meta 2021, arXiv:2111.06377).
+  Self-supervised vision pretraining: mask ~75% of patches, encode only the visible ~25%
+  with a ViT, and reconstruct the masked pixels with a lightweight decoder. Anchors: the
+  mask is a valid deterministic partition and the encoder genuinely runs on only the kept
+  patches; the unshuffle restores patch order with a learned mask token at masked slots;
+  the loss is computed on masked patches only (a kept patch's target doesn't affect it);
+  gradcheck 4.70e-10; masked-reconstruction MSE drops ~5 orders (3.375→2e-5).
+
+  ConvNeXt / EfficientNet / MobileNet were deferred — they need 2D depthwise (grouped)
+  convolution, which the backend does not yet provide (only `OpConv1D` is depthwise).
 
 ### CUDA — prefill lever found: f16-accumulate GEMM is 1.5-2× on GeForce (worker linux-amd64, Tw60/61, 2026-07-16)
 - Pivoting to the prefill gap (~4× vs llama.cpp; FFN GEMM ≈72% of prefill), two measure-first

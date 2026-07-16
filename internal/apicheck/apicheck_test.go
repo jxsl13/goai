@@ -91,6 +91,7 @@ var typeExampleExempt = map[string]bool{
 	"vision.ViTOption":                true, // functional-option type (shown via WithViTDim/WithViTHeads etc.)
 	"vision.MLPMixerOption":           true, // functional-option type (shown via WithMixerHidden/WithMixerLayers etc.)
 	"vision.SwinOption":               true, // functional-option type (shown via WithSwinMLPRatio/WithSwinChannels/WithSwinRelativeBias)
+	"vision.MAEOption":                true, // functional-option type (shown via WithMAEMaskRatio/WithMAEDim etc.)
 	"nlp.Beam":                        true, // returned by BeamSearch, shown in ExampleBeamSearch
 	"nlp.Block":                       true, // internal transformer block (part of GPT)
 	"nlp.LlamaBlock":                  true, // internal transformer block (part of Llama, shown in ExampleLlama)
