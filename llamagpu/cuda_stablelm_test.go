@@ -192,3 +192,49 @@ func TestCUDAGPTNeoXMatchesReference(t *testing.T) {
 	}
 	t.Logf("llamagpu NewGPTNeoXCUDA.Generate == nlp.GPTNeoX.Generate greedy: %d tokens (two-norm parallel residual)", len(gpuOut))
 }
+
+// TestCUDAQwen2MatchesReference checks the Qwen2/Qwen2.5 GPU path (NewQwen2CUDA) generates
+// greedy-identical tokens to the reference nlp.Llama with q/k/v projection biases. Guards that
+// newDecoder now wires b.Bq/Bk/Bv into qkvBias — before this the biases were silently dropped.
+func TestCUDAQwen2MatchesReference(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("cuda: no CUDA-capable device")
+	}
+	ts, _, err := safetensors.LoadFile("../nlp/testdata/qwen2_hf.safetensors")
+	if err != nil {
+		t.Skipf("qwen2 testdata unavailable (run make golden): %v", err)
+	}
+	m, err := nlp.LlamaFromHF(ts, nlp.LlamaConfig{Heads: 2, KVHeads: 2, Eps: 1e-6, RopeBase: 10000, Ctx: 32})
+	if err != nil {
+		t.Fatalf("LlamaFromHF(qwen2): %v", err)
+	}
+	if m.Blocks[0].Bq == nil {
+		t.Fatal("qwen2 block 0 has no q_proj bias — golden or loader broke; test would be vacuous")
+	}
+
+	dec, err := llamagpu.NewQwen2CUDA(m)
+	if err != nil {
+		t.Fatalf("NewQwen2CUDA: %v", err)
+	}
+	defer dec.Release()
+
+	prompt := []int{3, 7, 1, 9}
+	const maxNew = 12
+	gpuOut, err := dec.Generate(prompt, maxNew, nlp.Greedy())
+	if err != nil {
+		t.Fatalf("cuda generate: %v", err)
+	}
+	refOut, err := m.Generate(prompt, maxNew, nlp.Greedy(), nlp.WithBackend(backend.Reference()))
+	if err != nil {
+		t.Fatalf("ref generate: %v", err)
+	}
+	if len(gpuOut) != len(refOut) {
+		t.Fatalf("length: cuda %d vs ref %d", len(gpuOut), len(refOut))
+	}
+	for i := range gpuOut {
+		if gpuOut[i] != refOut[i] {
+			t.Fatalf("token[%d]: cuda %d vs ref %d\ncuda=%v\nref=%v", i, gpuOut[i], refOut[i], gpuOut, refOut)
+		}
+	}
+	t.Logf("llamagpu NewQwen2CUDA.Generate == nlp.Llama(qwen2).Generate greedy: %d tokens (q/k/v bias path)", len(gpuOut))
+}

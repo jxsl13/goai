@@ -391,9 +391,19 @@ func newDecoder(m *nlp.Llama, ops backendOps) (*Decoder, error) {
 		}
 		return f32Linear{w: mk(w).b, k: in, n: nt}
 	}
+	// fused q/k/v bias [Bq | Bk | Bv] = [D+2·kvDim], for the Qwen2/Qwen2.5 family (q/k/v carry a
+	// projection bias, o_proj does not); nil for Llama/Mistral, which leaves recordQKVProj's
+	// AddBias unrecorded so those models stay byte-identical.
+	fusedBias := func(bq, bk, bv *tensor.Tensor) buffer {
+		if bq == nil && bk == nil && bv == nil {
+			return nil
+		}
+		fb := append(append(append([]float32{}, flat1D(bq)...), flat1D(bk)...), flat1D(bv)...)
+		return mk(fb).b
+	}
 	for _, b := range m.Blocks {
 		gb := block{
-			wqkv: fused(b.Wq, b.Wk, b.Wv), wo: lin(b.Wo),
+			wqkv: fused(b.Wq, b.Wk, b.Wv), qkvBias: fusedBias(b.Bq, b.Bk, b.Bv), wo: lin(b.Wo),
 			gAttn: mk(flat1D(b.AttnNorm.Gamma)).b, gFFN: mk(flat1D(b.FFNNorm.Gamma)).b,
 			wG: lin(b.FFN.Wgate), wU: lin(b.FFN.Wup), wD: lin(b.FFN.Wdown),
 			kC: mk(make([]float32, d.maxLen*d.kvDim)).b, vC: mk(make([]float32, d.maxLen*d.kvDim)).b,

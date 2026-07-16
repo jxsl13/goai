@@ -100,6 +100,13 @@ func NewCUDA(m *nlp.Llama) (*Decoder, error) {
 	})
 }
 
+// NewQwen2CUDA uploads a Qwen2 / Qwen2.5 model onto the batched Decoder core. Qwen2 shares
+// nlp.Llama (SwiGLU MLP, RMSNorm, GQA, full rope) and departs only in carrying q/k/v projection
+// biases (o_proj has none) — the newDecoder core adds them via qkvBias when b.Bq/Bk/Bv are set, so
+// this is exactly NewCUDA with a Qwen2-typed entry point. Load with nlp.LlamaFromHF; the biases are
+// picked up automatically from the checkpoint. (Qwen3's per-head QK-norm is a separate follow-up.)
+func NewQwen2CUDA(m *nlp.Llama) (*Decoder, error) { return NewCUDA(m) }
+
 // NewStableLMCUDA uploads an nlp.StableLM into CUDA device buffers and runs it through the same
 // batched Decoder core as NewCUDA — but with LayerNorm-with-bias norms and PARTIAL rotary (the
 // StableLM/Phi/StarCoder2-class departures from Llama). The first of the new-architecture GPU
