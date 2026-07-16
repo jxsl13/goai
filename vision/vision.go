@@ -11,6 +11,14 @@
 // auto-selection), and Params feeds any optimizer in nn, so the standard
 // tape → loss → Backward → Step loop trains it.
 //
+// Beyond the CNN, the package provides the patch-based transformer models — ViT
+// (Vision Transformer), SigLIP contrastive image-text, and the VLM
+// vision-language model — and, composed from the same nn building blocks:
+// MLPMixer (all-MLP token/channel mixing, arXiv:2105.01601), SwinTransformer
+// (hierarchical windowed + shifted-window attention with patch merging,
+// arXiv:2103.14030), and MAE (masked-autoencoder self-supervised pretraining —
+// mask ~75% of patches, reconstruct with a lightweight decoder, arXiv:2111.06377).
+//
 // # For the newcomer
 //
 // A convolutional network looks at an image through small sliding windows,
