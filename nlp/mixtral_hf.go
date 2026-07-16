@@ -17,7 +17,9 @@ import (
 // is `mlp.gate.weight` [E, dim].
 //
 // cfg supplies Heads, KVHeads, TopK, Eps, RopeBase, Ctx; Dim, Vocab, Layers,
-// Hidden and Experts are inferred.
+// Hidden and Experts are inferred. If the checkpoint carries per-head QK-norm gains
+// (`self_attn.{q,k}_norm.weight`, present in Qwen3-MoE, absent in plain Mixtral) they
+// load into each block's QNorm/KNorm; see [Qwen3MoeFromHF].
 func MixtralFromHF(ts map[string]*tensor.Tensor, cfg MixtralConfig) (*Mixtral, error) {
 	tok, ok := ts["model.embed_tokens.weight"]
 	if !ok {
@@ -84,12 +86,21 @@ func MixtralFromHF(ts map[string]*tensor.Tensor, cfg MixtralConfig) (*Mixtral, e
 		if err != nil {
 			return nil, err
 		}
+		// Optional Qwen3-MoE per-head QK-norm gains (absent in plain Mixtral → nil, no-op).
+		qkNorm := func(name string) *nn.RMSNorm {
+			if t, ok := ts[p+name]; ok {
+				return rmsFromGGUF(t, cfg.Eps)
+			}
+			return nil
+		}
 		m.Blocks = append(m.Blocks, &MixtralBlock{
 			AttnNorm: rmsFromGGUF(an, cfg.Eps),
 			Wq:       transpose2D(wq),
 			Wk:       transpose2D(wk),
 			Wv:       transpose2D(wv),
 			Wo:       transpose2D(wo),
+			QNorm:    qkNorm("self_attn.q_norm.weight"),
+			KNorm:    qkNorm("self_attn.k_norm.weight"),
 			FFNNorm:  rmsFromGGUF(fn, cfg.Eps),
 			MoE:      moe,
 		})

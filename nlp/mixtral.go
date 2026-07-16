@@ -40,9 +40,12 @@ type MixtralConfig struct {
 }
 
 // MixtralBlock is one pre-norm Mixtral block: Llama-style attention + a sparse-MoE FFN.
+// QNorm/KNorm are optional per-head query/key RMSNorms applied before RoPE — nil for
+// plain Mixtral, non-nil for Qwen3-MoE (see [Qwen3MoeFromHF]).
 type MixtralBlock struct {
 	AttnNorm       *nn.RMSNorm
 	Wq, Wk, Wv, Wo *tensor.Tensor
+	QNorm, KNorm   *nn.RMSNorm // optional per-head QK-norm before RoPE (Qwen3-MoE); nil otherwise
 	FFNNorm        *nn.RMSNorm
 	MoE            *nn.SparseMoE
 }
@@ -93,6 +96,13 @@ func (m *Mixtral) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor, e
 		if err != nil {
 			return nil, err
 		}
+		// Qwen3-MoE per-head QK-norm (before RoPE); nil for plain Mixtral (no-op).
+		if q, err = applyQKNorm(ctx, q, b.QNorm, cfg.Heads); err != nil {
+			return nil, err
+		}
+		if k, err = applyQKNorm(ctx, k, b.KNorm, kv); err != nil {
+			return nil, err
+		}
 		if q, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: cfg.Heads}, q); err != nil {
 			return nil, err
 		}
@@ -134,6 +144,11 @@ func (m *Mixtral) Params() []*tensor.Tensor {
 	ps := []*tensor.Tensor{m.TokEmb}
 	for _, b := range m.Blocks {
 		ps = append(ps, b.AttnNorm.Gamma, b.Wq, b.Wk, b.Wv, b.Wo, b.FFNNorm.Gamma, b.MoE.Router.W)
+		for _, n := range []*nn.RMSNorm{b.QNorm, b.KNorm} {
+			if n != nil {
+				ps = append(ps, n.Gamma)
+			}
+		}
 		for _, e := range b.MoE.Experts {
 			ps = append(ps, e.Wgate, e.Wup, e.Wdown)
 		}

@@ -4,6 +4,20 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — feat: Qwen3-MoE support — 13th loadable architecture (T751, 2026-07-16)
+
+Qwen3-MoE (`Qwen3MoeForCausalLM`) is Mixtral with Qwen3 attention — it composes two pieces already
+in the library: the sparse top-k Mixture-of-Experts FFN (byte-for-byte the Mixtral fused layout) and
+Qwen3's per-head QK-norm on the queries/keys before RoPE. `MixtralBlock` gains optional `QNorm`/
+`KNorm` (nil for plain Mixtral, applied via the shared `applyQKNorm` in both `Forward` and the
+KV-cached `DecodeStep`); `MixtralFromHF` loads `self_attn.{q,k}_norm.weight` when present; and
+`Qwen3MoeFromHF` is the documented entry point. Forward parity vs a real transformers
+`Qwen3MoeForCausalLM`: max abs logit diff 3.0e-8; KV-decode matches Forward bit-for-bit (0.0); and
+it fine-tunes (loss 3.48 → 3.09 — QK-norm reshapes and MoE router/experts all backprop). Plain
+Mixtral parity is unregressed (QK-norm nil → no-op). Second loadable MoE; brings the set to thirteen.
+Limitation: the MoE combine always renormalizes the top-k weights (matching `norm_topk_prob=True`,
+Qwen3-MoE's default); a `norm_topk_prob=False` checkpoint would not match.
+
 ### nlp — feat: Qwen3 support — 12th loadable architecture (T750, 2026-07-16)
 
 Qwen3 (`Qwen3ForCausalLM`) is Llama with **per-head QK-norm** — an RMSNorm applied to the queries
