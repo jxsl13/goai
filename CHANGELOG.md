@@ -4,6 +4,16 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — feat: StarCoder2 support — 20th loadable architecture (T760, 2026-07-16)
+
+StarCoder2 (BigCode, `Starcoder2ForCausalLM`) as a self-contained `nlp.StarCoder2` type:
+LayerNorm WITH bias (not RMSNorm), sequential two-norm residual, biased q/k/v/o attention, FULL
+rotary (not partial), GQA, and a biased 2-layer GELU MLP (`c_fc`→GELU→`c_proj`, not SwiGLU). Forward
+parity vs a real transformers `Starcoder2ForCausalLM`: max abs logit diff 2.5e-7 (exact OpGELU vs
+the golden's `gelu_pytorch_tanh`); KV-decode matches Forward bit-for-bit (0.0); fine-tunes (loss
+3.50 → 3.11). Twentieth loadable architecture — the transformers-anchored set now spans twenty
+families across dense/MoE decoders and encoders.
+
 ### nlp — feat: Phi (Phi-1 / Phi-1.5 / Phi-2) support — 19th loadable architecture (T759, 2026-07-16)
 
 The original Phi (`PhiForCausalLM`, distinct from Phi-3) as a self-contained `nlp.Phi` type: a
