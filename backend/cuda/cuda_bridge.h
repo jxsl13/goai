@@ -12,6 +12,24 @@ int cu_available(void);
 int cu_mem_info(unsigned long long* freeB, unsigned long long* totalB);
 // cu_gpu_is_geforce: 1 if device 0 is a GeForce/consumer card (half-rate f32-accum → f16-accum wins).
 int cu_gpu_is_geforce(void);
+// cu_matmul_i8_mma: dC[M,N](i32) = dA8[M,K]·dW8[K,N] via tiled mma.sync int8 tensor cores.
+int cu_matmul_i8_mma(const void* dA8, const void* dW8, void* dC32, int M, int K, int N);
+// cu_matmul_i8_mma_t: shared-tiled int8 mma GEMM (16x64 block, shared A/W staging). N%64==0.
+int cu_matmul_i8_mma_t(const void* dA8, const void* dW8, void* dC32, int M, int K, int N);
+// cu_matmul_i8_mma_rb: register-blocked int8 mma GEMM (64x64 block, 4 MMAs/warp). M%64,N%64,K%32==0.
+int cu_matmul_i8_mma_rb(const void* dA8, const void* dW8, void* dC32, int M, int K, int N);
+// cu_matmul_i8_mma_db: double-buffered cp.async int8 mma GEMM (64x64 block). M%64,N%64,K%32==0.
+int cu_matmul_i8_mma_db(const void* dA8, const void* dW8, void* dC32, int M, int K, int N);
+// cu_matmul_i8_mma_wt: like _db but W is [N][K] native layout -> contiguous B reads (no bank conflict). M%64,N%64,K%32==0.
+int cu_matmul_i8_mma_wt(const void* dA8, const void* dWt8, void* dC32, int M, int K, int N);
+// cu_matmul_i8_mma_wp: _wt with 48-byte padded shared stride (dissolves residual 2-way bank conflict). M%64,N%64,K%32==0.
+int cu_matmul_i8_mma_wp(const void* dA8, const void* dWt8, void* dC32, int M, int K, int N);
+// cu_matmul_i8_mmq: true per-32-block MMQ (int8 A/W + per-block f32 scales -> f32 C). M%64,N%64,K%32==0.
+int cu_matmul_i8_mmq(const void* dA8, const void* dWt8, const void* daSc, const void* dwSc, void* dCf, int M, int K, int N);
+// cu_matmul_i8_mmq_r: MMQ with per-ROW activation scale aSc[M] (hoisted from K-loop). M%64,N%64,K%32==0.
+int cu_matmul_i8_mmq_r(const void* dA8, const void* dWt8, const void* daSc, const void* dwSc, void* dCf, int M, int K, int N);
+// cu_quant_rows_i8: device per-row int8 quant of f32 activations (A8[M][K]+aSc[M]) for MMQ input.
+int cu_quant_rows_i8(const void* dAf, void* dA8, void* daSc, int M, int K);
 // CUDA graph capture: begin/end capture on the work stream, launch/sync/free the
 // instantiated graph. Caller must LockOSThread across begin→ops→end.
 int cu_capture_begin(void);
