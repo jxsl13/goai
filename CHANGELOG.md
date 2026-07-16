@@ -34,7 +34,8 @@ Result on the sklearn-comparison dataset: **DecisionTree 36.9→18.4 ms (now par
 sklearn), GradientBoosting 2458→137 ms (beats sklearn ~9×), RandomForest 665→653 ms (no
 regression)**. Goldens bit-identical. Combined with GaussianNB/kNN (already faster) and
 SVC (now at the libsvm floor), GoAI beats or matches sklearn on every classical method
-except RandomForest.
+RandomForest was then parallelized (T716) — its 100 independent trees build across all cores with bit-identical output, 665→84 ms, beating single-threaded sklearn (286 ms) by 3.4×. GoAI now beats or matches sklearn on EVERY classical method.
+
 
 ### classic — performance: SVC fit now matches libsvm (T713, 2026-07-16)
 

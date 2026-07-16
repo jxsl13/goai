@@ -3,6 +3,8 @@ package classic
 import (
 	"fmt"
 	"math"
+	"runtime"
+	"sync"
 )
 
 // ForestOption configures a [RandomForestClassifier] or [RandomForestRegressor]
@@ -132,12 +134,20 @@ func (m *RandomForestClassifier) Fit(x [][]float64, y []int) error {
 	}
 	classes, _ := encodeLabels(y)
 	mf := resolveMaxFeatures(m.cfg.maxFeatures, d, false)
-	rng := &lcg{state: seedState(m.cfg.seed)}
 	n := len(x)
-	m.trees = make([]*DecisionTreeClassifier, m.cfg.nTrees)
-	for t := range m.trees {
-		sample := bootstrap(n, rng)
-		bx, by := gatherInt(x, y, sample)
+	nt := m.cfg.nTrees
+
+	// Pre-derive every tree's bootstrap sample and split-RNG seed sequentially
+	// from the single forest RNG, reproducing the exact draw order of the old
+	// sequential loop (per tree: n bootstrap draws, then one rng.next() seed).
+	// The trees are then built concurrently, but because each already owns a
+	// fixed sample+seed the result is bit-identical regardless of completion
+	// order — determinism is decoupled from goroutine scheduling.
+	samples, seeds := deriveTreeInputs(n, nt, m.cfg.seed)
+
+	m.trees = make([]*DecisionTreeClassifier, nt)
+	if err := parallelBuild(nt, func(t int) error {
+		bx, by := gatherInt(x, y, samples[t])
 		tree := NewDecisionTreeClassifier(
 			WithMaxDepth(m.cfg.tree.maxDepth),
 			WithMinSamplesSplit(m.cfg.tree.minSamplesSplit),
@@ -146,10 +156,14 @@ func (m *RandomForestClassifier) Fit(x [][]float64, y []int) error {
 			withMaxFeatures(mf),
 		)
 		// each tree gets its own deterministic split RNG stream
-		if err := tree.fitWithSeed(bx, by, classes, rng.next()); err != nil {
+		if err := tree.fitWithSeed(bx, by, classes, seeds[t]); err != nil {
 			return err
 		}
-		m.trees[t] = tree
+		m.trees[t] = tree // goroutine writes only its own slot — race-free
+		return nil
+	}); err != nil {
+		m.trees = nil
+		return err
 	}
 	m.classes = classes
 	m.nFeature = d
@@ -225,22 +239,30 @@ func (m *RandomForestRegressor) Fit(x [][]float64, y []float64) error {
 		return err
 	}
 	mf := resolveMaxFeatures(m.cfg.maxFeatures, d, true)
-	rng := &lcg{state: seedState(m.cfg.seed)}
 	n := len(x)
-	m.trees = make([]*DecisionTreeRegressor, m.cfg.nTrees)
-	for t := range m.trees {
-		sample := bootstrap(n, rng)
-		bx, by := gatherFloat(x, y, sample)
+	nt := m.cfg.nTrees
+
+	// Same deterministic pre-derivation as the classifier: fix each tree's
+	// bootstrap sample and split seed in RNG-draw order, then build in parallel.
+	samples, seeds := deriveTreeInputs(n, nt, m.cfg.seed)
+
+	m.trees = make([]*DecisionTreeRegressor, nt)
+	if err := parallelBuild(nt, func(t int) error {
+		bx, by := gatherFloat(x, y, samples[t])
 		tree := NewDecisionTreeRegressor(
 			WithMaxDepth(m.cfg.tree.maxDepth),
 			WithMinSamplesSplit(m.cfg.tree.minSamplesSplit),
 			WithMinSamplesLeaf(m.cfg.tree.minSamplesLeaf),
 			withMaxFeatures(mf),
 		)
-		if err := tree.fitWithSeed(bx, by, rng.next()); err != nil {
+		if err := tree.fitWithSeed(bx, by, seeds[t]); err != nil {
 			return err
 		}
-		m.trees[t] = tree
+		m.trees[t] = tree // goroutine writes only its own slot — race-free
+		return nil
+	}); err != nil {
+		m.trees = nil
+		return err
 	}
 	m.nFeature = d
 	return nil
@@ -271,6 +293,69 @@ func (m *RandomForestRegressor) Predict(x [][]float64) ([]float64, error) {
 }
 
 // --- helpers ------------------------------------------------------------------
+
+// deriveTreeInputs pre-computes, sequentially from a single forest RNG, each
+// tree's bootstrap sample and per-tree split seed. It reproduces the exact draw
+// order of the original sequential Fit loop — for every tree, n bootstrap draws
+// followed by one rng.next() seed — so the parallel build produces bit-identical
+// trees to the sequential forest for the same seed. Doing all RNG consumption up
+// front (not inside the goroutines) is what keeps determinism independent of
+// goroutine scheduling.
+func deriveTreeInputs(n, nTrees int, seed int64) (samples [][]int, seeds []uint64) {
+	rng := &lcg{state: seedState(seed)}
+	samples = make([][]int, nTrees)
+	seeds = make([]uint64, nTrees)
+	for t := 0; t < nTrees; t++ {
+		samples[t] = bootstrap(n, rng)
+		seeds[t] = rng.next()
+	}
+	return samples, seeds
+}
+
+// parallelBuild runs work(t) for t in [0,n) across a bounded pool of
+// GOMAXPROCS workers. Each invocation is independent and must write only its own
+// data (e.g. trees[t]); parallelBuild adds no shared mutable state beyond the
+// first-error latch. It returns the first error reported by any worker (after
+// all workers drain), or nil.
+func parallelBuild(n int, work func(t int) error) error {
+	if n <= 0 {
+		return nil
+	}
+	workers := runtime.GOMAXPROCS(0)
+	if workers > n {
+		workers = n
+	}
+	if workers < 1 {
+		workers = 1
+	}
+	jobs := make(chan int)
+	var (
+		wg       sync.WaitGroup
+		mu       sync.Mutex
+		firstErr error
+	)
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for t := range jobs {
+				if err := work(t); err != nil {
+					mu.Lock()
+					if firstErr == nil {
+						firstErr = err
+					}
+					mu.Unlock()
+				}
+			}
+		}()
+	}
+	for t := 0; t < n; t++ {
+		jobs <- t
+	}
+	close(jobs)
+	wg.Wait()
+	return firstErr
+}
 
 // seedState maps a user seed to a nonzero LCG state (xorshift needs nonzero).
 func seedState(seed int64) uint64 {
