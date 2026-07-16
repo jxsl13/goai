@@ -59,6 +59,17 @@ func GPT2FromHF(ts map[string]*tensor.Tensor, heads int) (*GPT, error) {
 				dst[j*vocab+vv] = src[row+j]
 			}
 		}
+	case tensor.F16, tensor.BF16:
+		// A transpose only moves the raw 16-bit values, so U16 typed access is
+		// exact and skips the per-element dispatch (F16/BF16 HF checkpoints are
+		// common; this is a vocab×d ≈ 38M-element load-time loop for GPT-2).
+		src, dst := wtec.Storage().U16(), head.Storage().U16()
+		for vv := 0; vv < vocab; vv++ {
+			row := vv * d
+			for j := 0; j < d; j++ {
+				dst[j*vocab+vv] = src[row+j]
+			}
+		}
 	default:
 		for vv := 0; vv < vocab; vv++ {
 			for j := 0; j < d; j++ {
@@ -94,6 +105,11 @@ func GPT2FromHF(ts map[string]*tensor.Tensor, heads int) (*GPT, error) {
 			for i := 0; i < rows; i++ {
 				copy(dst[i*cw:i*cw+cw], src[i*w+lo:i*w+hi])
 			}
+		case tensor.F16, tensor.BF16:
+			src, dst := tc.Storage().U16(), o.Storage().U16()
+			for i := 0; i < rows; i++ {
+				copy(dst[i*cw:i*cw+cw], src[i*w+lo:i*w+hi])
+			}
 		default:
 			for i := 0; i < rows; i++ {
 				for j := lo; j < hi; j++ {
@@ -111,6 +127,8 @@ func GPT2FromHF(ts map[string]*tensor.Tensor, heads int) (*GPT, error) {
 			copy(o.Storage().F64(), tc.Storage().F64()[lo:hi])
 		case tensor.F32:
 			copy(o.Storage().F32(), tc.Storage().F32()[lo:hi])
+		case tensor.F16, tensor.BF16:
+			copy(o.Storage().U16(), tc.Storage().U16()[lo:hi])
 		default:
 			for j := lo; j < hi; j++ {
 				o.SetF64(tc.AtF64(j), j-lo)

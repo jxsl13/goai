@@ -18,6 +18,17 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   RTX 3060: pp512 9552 / tg128 245.6 t/s). GoAI pp512 MMQ 3479 / f16 5125 t/s, tg128 ~226 — decode ≈
   parity, but prefill is GEMM-bound and GoAI trails on prefill *speed* (the int8-GEMM 2× above is the
   lever; the shipped MMQ arc's win is VRAM, not prefill speed).
+### nlp — performance: F16/BF16 fast paths in the HF GPT-2 converter (T724, 2026-07-16)
+
+`GPT2FromHF` had typed (bulk) transpose/slice paths for F32/F64 but fell to per-element
+`AtF64`/`SetF64` for F16/BF16 — and F16/BF16 HF checkpoints are the common case. The tied-head
+transpose alone is a vocab×d ≈ 38M-element loop, so an F16 GPT-2 paid **~327 ms of
+per-element dispatch at load** (dwarfing even the safetensors read). Added U16 typed fast paths
+(a transpose only moves the raw 16-bit values, so it is bit-exact) to the head transpose, the
+c_attn column split, and the bias segment copy. **F16 head transpose 326.8 → 21.6 ms (15.1×)**;
+a new `TestGPT2FromHFF16` guards bit-identical conversion. Found by re-sweeping the safe zones
+for the per-element anti-pattern after the format-I/O campaign — the hot F32/F64 paths were
+already typed; F16/BF16 was the remaining gap.
 
 ### CUDA — int8 tensor-core MMQ prefill: cuBLAS-f16-competitive GEMM + resident-weight reuse (worker linux-amd64, Tw74/Tw75, 2026-07-16)
 - A from-scratch **int8 tensor-core GEMM** for prefill, compiled through the existing NVRTC path with

@@ -123,3 +123,56 @@ func TestGPT2FromHFMatchesManualAssembly(t *testing.T) {
 		t.Fatal("blockless map accepted")
 	}
 }
+
+// TestGPT2FromHFF16 guards the F16/BF16 typed fast paths in the converter
+// (head transpose, c_attn column split, bias segment): a 16-bit checkpoint must
+// convert bit-identically to the per-element reference. F16/BF16 HF checkpoints
+// are common, and the head transpose alone is a vocab×d ≈ 38M-element loop.
+func TestGPT2FromHFF16(t *testing.T) {
+	const vocab, ctxLen, d, heads, layers = 11, 12, 8, 2, 2
+	mk := func(seed int, shape ...int) *tensor.Tensor {
+		x := tensor.New(tensor.F16, tensor.Shape(shape))
+		for i := range x.Numel() {
+			// values exactly representable in F16 so the reference round-trip is clean
+			x.SetF64(float64((seed*7+i)%64)/8.0-4, tensor.Unravel(i, x.Shape())...)
+		}
+		return x
+	}
+	hf := map[string]*tensor.Tensor{
+		"wte.weight": mk(1, vocab, d), "wpe.weight": mk(2, ctxLen, d),
+		"ln_f.weight": mk(30, d), "ln_f.bias": mk(31, d),
+	}
+	for l := range layers {
+		p := fmt.Sprintf("h.%d.", l)
+		s := 100 * (l + 1)
+		hf[p+"ln_1.weight"], hf[p+"ln_1.bias"] = mk(s+1, d), mk(s+2, d)
+		hf[p+"attn.c_attn.weight"], hf[p+"attn.c_attn.bias"] = mk(s+3, d, 3*d), mk(s+4, 3*d)
+		hf[p+"attn.c_proj.weight"], hf[p+"attn.c_proj.bias"] = mk(s+5, d, d), mk(s+6, d)
+		hf[p+"ln_2.weight"], hf[p+"ln_2.bias"] = mk(s+7, d), mk(s+8, d)
+		hf[p+"mlp.c_fc.weight"], hf[p+"mlp.c_fc.bias"] = mk(s+9, d, 4*d), mk(s+10, 4*d)
+		hf[p+"mlp.c_proj.weight"], hf[p+"mlp.c_proj.bias"] = mk(s+11, 4*d, d), mk(s+12, d)
+	}
+	conv, err := nlp.GPT2FromHF(hf, heads)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// head[j,v] must equal wteᵀ (the transpose fast path)
+	wte := hf["wte.weight"]
+	for v := range vocab {
+		for j := range d {
+			if conv.Head.AtF64(j, v) != wte.AtF64(v, j) {
+				t.Fatalf("F16 head transpose wrong at (%d,%d): %v != %v", j, v, conv.Head.AtF64(j, v), wte.AtF64(v, j))
+			}
+		}
+	}
+	// wq must equal c_attn[:, 0:d] (the column-split fast path)
+	ca := hf["h.0.attn.c_attn.weight"]
+	wq := conv.Blocks[0].Attn.Wq
+	for i := range d {
+		for j := range d {
+			if wq.AtF64(i, j) != ca.AtF64(i, j) {
+				t.Fatalf("F16 c_attn wq split wrong at (%d,%d)", i, j)
+			}
+		}
+	}
+}
