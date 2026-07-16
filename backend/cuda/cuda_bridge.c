@@ -33,7 +33,7 @@ static cublasHandle_t gHandle = NULL;
 static float *gOne = NULL, *gZero = NULL; // device 1.0f/0.0f — cuBLAS DEVICE pointer mode (graph-capture-safe alpha/beta)
 static cudaStream_t gStream = NULL;
 static CUcontext gCtx = NULL; // runtime's primary context, retained for driver-API launches
-static CUfunction gGelu = NULL, gSilu = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gQgemv = NULL, gQgemv4 = NULL, gQgemv4k = NULL, gQgemv5k = NULL, gQgemv6k = NULL, gCvtF16 = NULL, gCvtFrom16 = NULL; // lazily nvrtc-compiled
+static CUfunction gGelu = NULL, gSilu = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gQgemv = NULL, gQgemv4 = NULL, gQgemv4k = NULL, gQgemv5k = NULL, gQgemv6k = NULL, gQgemv3k = NULL, gCvtF16 = NULL, gCvtFrom16 = NULL; // lazily nvrtc-compiled
 static CUfunction gRopeDpos = NULL, gAttnSoftmaxDpos = NULL, gAppendDpos = NULL; // device-position (graph-capturable) twins
 static CUfunction gGqaFlashPart = NULL, gGqaFlashMerge = NULL; // flash decode: GQA K/V-shared split-K partials + merge
 static CUfunction gGqaFlashPartF16 = NULL, gAppendDposF16 = NULL; // f16 KV-cache twins (u16 storage, f32 compute)
@@ -1311,6 +1311,88 @@ int cu_qmatmul_q5k(const void* dA, const void* dQ, void* dOut, int M, int K, int
         args[0] = &dA; args[1] = &dQ; args[2] = &dOut;
         args[3] = &M; args[4] = &K; args[5] = &N; args[6] = &beta;
         rc = (cuLaunchKernel(gQgemv5k, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_qmatmul_q3k: out[M,N] = a[M,K]·dequant(W), W = ggml Q3_K (§R103) stored per OUTPUT row:
+// K/256 super-blocks of 110 bytes (hmask[32] one high bit/quant, qs[64] two low bits/quant,
+// scales[12] = 16 six-bit scales via the aux/kmask splice, then f16 d LAST at offset 108).
+// SYMMETRIC (no min): y = d·(sc6−32)·(q3−4), q3 = 2 low bits | (high bit)<<2, computed as
+// d·(sc6−32)·(lowbits − (highbitSet ? 0 : 4)) (the inverted-hmask arithmetic). Warp-per-output
+// GEMV: lane owns 8 contiguous elements = half of one 16-element sub-block (is=lane>>1), so one
+// signed scale per lane. 0.4297 B/weight — the bulk tensors of Q3_K_M/_L/_S (fit big models in
+// limited VRAM). K%256==0.
+int cu_qmatmul_q3k(const void* dA, const void* dQ, void* dOut, int M, int K, int N, float beta) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (!gQgemv3k && compile_kernel(
+                       "__device__ __forceinline__ float f16f(unsigned short h){\n"
+                       "  unsigned s = (h & 0x8000u) << 16;\n"
+                       "  float v = __uint_as_float((h & 0x7fffu) << 13) * __uint_as_float(0x77800000u);\n"
+                       "  return __uint_as_float(__float_as_uint(v) | s);\n"
+                       "}\n"
+                       "extern \"C\" __global__ void qmatmul_q3k(const float* a, const unsigned char* q, float* out, int M, int K, int N, float beta){\n"
+                       "  long warp = ((long)blockIdx.x*blockDim.x + threadIdx.x) >> 5;\n"
+                       "  int lane = threadIdx.x & 31;\n"
+                       "  if (warp >= (long)M*N) return;\n"
+                       "  int m = (int)(warp / N), n = (int)(warp % N);\n"
+                       "  const float* ar = a + (size_t)m*K;\n"
+                       "  int sbs = K >> 8;\n"
+                       "  const unsigned char* qr = q + (size_t)n*sbs*110;\n"
+                       "  int is = lane >> 1, half = lane & 1, l0 = half*8;\n"     // sub-block, half, element offset
+                       "  int nb = is >> 3, jj = (is & 7) >> 1, gsel = is & 1, g = gsel*16;\n"
+                       "  int shift = 2*jj, hbit = nb*4 + jj;\n"
+                       "  int auxIdx = is >> 2, byteIdx = is & 3;\n"
+                       "  int yi = nb*128 + jj*32 + g + l0;\n"                      // K-offset within a super-block
+                       "  int qsoff = 32 + nb*32 + g + l0, hmoff = g + l0;\n"
+                       "  const unsigned km1 = 0x03030303u, km2 = 0x0f0f0f0fu;\n"
+                       "  float acc = 0.0f;\n"
+                       "  #pragma unroll 2\n"
+                       "  for (int w = 0; w < sbs; w++){\n"
+                       "    const unsigned char* blk = qr + (size_t)w*110;\n"
+                       "    float d = f16f((unsigned short)(blk[108] | (blk[109]<<8)));\n" // 110-byte block: blk not 4-aligned, read bytes
+                       "    const unsigned char* sp = blk + 96;\n"
+                       "    unsigned a0 = sp[0]|(sp[1]<<8)|(sp[2]<<16)|(sp[3]<<24);\n"
+                       "    unsigned a1 = sp[4]|(sp[5]<<8)|(sp[6]<<16)|(sp[7]<<24);\n"
+                       "    unsigned a2v = sp[8]|(sp[9]<<8)|(sp[10]<<16)|(sp[11]<<24), tmp = a2v;\n"
+                       "    unsigned A0 = (a0 & km2) | (((tmp>>0)&km1)<<4);\n"
+                       "    unsigned A1 = (a1 & km2) | (((tmp>>2)&km1)<<4);\n"
+                       "    unsigned A2 = ((a0>>4)&km2) | (((tmp>>4)&km1)<<4);\n"
+                       "    unsigned A3 = ((a1>>4)&km2) | (((tmp>>6)&km1)<<4);\n"
+                       "    unsigned aux = auxIdx==0?A0 : auxIdx==1?A1 : auxIdx==2?A2 : A3;\n"
+                       "    int sc = (int)((aux >> (byteIdx*8)) & 0x3Fu);\n"
+                       "    float dl = d * (float)(sc - 32);\n"
+                       "    const float* av = ar + (size_t)w*256 + yi;\n"
+                       "    float4 alo = *(const float4*)av;\n"
+                       "    float4 ahi = *(const float4*)(av + 4);\n"
+                       "    const unsigned char* qs = blk + qsoff;\n"
+                       "    const unsigned char* hm = blk + hmoff;\n"
+                       "    float av8[8] = { alo.x, alo.y, alo.z, alo.w, ahi.x, ahi.y, ahi.z, ahi.w };\n"
+                       "    float s = 0.0f;\n"
+                       "    #pragma unroll\n"
+                       "    for (int t = 0; t < 8; t++){\n"
+                       "      int lowb = (qs[t] >> shift) & 3;\n"
+                       "      int hset = (hm[t] >> hbit) & 1;\n"
+                       "      s += av8[t] * (float)(lowb - (hset ? 0 : 4));\n"
+                       "    }\n"
+                       "    acc += dl * s;\n"
+                       "  }\n"
+                       "  for (int o = 16; o > 0; o >>= 1){ acc += __shfl_down_sync(0xffffffff, acc, o); }\n"
+                       "  if (lane == 0){ out[warp] = beta*out[warp] + acc; }\n"
+                       "}\n",
+                       "qmatmul_q3k.cu", "qmatmul_q3k", &gQgemv3k) != 0) { rc = -2; goto done; }
+    {
+        long total = (long)M * N * 32;
+        int threads = 256, blocks = (int)((total + threads - 1) / threads); if (blocks < 1) blocks = 1;
+        void* args[7];
+        args[0] = &dA; args[1] = &dQ; args[2] = &dOut;
+        args[3] = &M; args[4] = &K; args[5] = &N; args[6] = &beta;
+        rc = (cuLaunchKernel(gQgemv3k, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 done:
     pthread_mutex_unlock(&gLock);

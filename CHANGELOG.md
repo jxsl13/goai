@@ -4,6 +4,21 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — native Q3_K GEMV: the full K-quant family now loads bit-native (worker linux-amd64, Tw67, 2026-07-16)
+- `cu_qmatmul_q3k` + `ResidentBQ3K`: warp-per-output GEMV over ggml's 110-byte Q3_K
+  super-blocks, golden vs the gguf dequant reference at maxRel **5.9e-6** (beta=0) / **7.9e-6**
+  (beta=1). Q3_K is the hardest K-quant layout — SYMMETRIC (signed 6-bit sub-scale `sc−32`,
+  no min), 16 sub-blocks of 16, and interleaved quant bits: 2 low bits from `qs` at shift `2j`,
+  1 high bit from the `hmask` plane at bit `nb·4+j`, decoded via the inverted-hmask arithmetic
+  `y = d·(sc−32)·(lowbits − (highbitSet?0:4))`, with the 16 six-bit scales unpacked from 12
+  bytes through the ggml aux/kmask splice. A lane owns 8 contiguous elements = half a sub-block
+  (one scale per lane). Kernel note: Q3_K blocks are 110 bytes (not 4-aligned), so the scale
+  words are assembled from byte reads — a misaligned u32 load faulted the first version.
+- Extends the CUDA K-quant family to Q3_K + Q4_K + Q5_K + Q6_K — every mainstream K-quant now
+  has a native bit-exact resident GEMV. The Q3_K bulk tensors of a Q3_K_M/_L/_S GGUF (used to
+  fit large models in limited VRAM — the RTX 3060's 12 GB niche) load bit-native at 0.43 B/w
+  instead of the loader's re-encode to Q8 (1.06 B/w). `quantDirect case 11` wired.
+
 ### CUDA — native Q5_K GEMV: the K-quant family is now complete (worker linux-amd64, Tw66, 2026-07-16)
 - `cu_qmatmul_q5k` + `ResidentBQ5K`: warp-per-output GEMV over ggml's 176-byte Q5_K
   super-blocks, golden vs the gguf dequant reference at maxRel **3.6e-6** (beta=0) and
