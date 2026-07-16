@@ -111,3 +111,24 @@ func TestCUDAResidentMMQParity(t *testing.T) {
 	}
 	t.Log("RESIDENT MMQ PREFILL WEIGHT CORRECT (int8, M-padding, ~Q8_0 accuracy, residual-fused AccInto)")
 }
+
+// TestCUDAResidentMMQRejectsBadDims documents the fallback contract: the tiled MMQ kernel needs
+// K%32==0 and N%64==0, so NewResidentMMQ returns a clean error (never crashes) on incompatible
+// weights — callers wire the f16 path for those projections instead.
+func TestCUDAResidentMMQRejectsBadDims(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("no gpu")
+	}
+	if _, err := cuda.NewResidentMMQ(tensor.New(tensor.F32, tensor.Shape{100, 128})); err == nil {
+		t.Error("expected error for K%32!=0 (K=100), got nil")
+	}
+	if _, err := cuda.NewResidentMMQ(tensor.New(tensor.F32, tensor.Shape{128, 100})); err == nil {
+		t.Error("expected error for N%64!=0 (N=100), got nil")
+	}
+	r, err := cuda.NewResidentMMQ(tensor.New(tensor.F32, tensor.Shape{128, 128}))
+	if err != nil {
+		t.Fatalf("valid dims [128,128] errored: %v", err)
+	}
+	r.Free()
+	t.Log("ResidentMMQ rejects K%32/N%64-incompatible dims with a clean error (callers fall back to f16)")
+}
