@@ -77,9 +77,21 @@ func iq1sGrid() (unsafe.Pointer, error) {
 				}
 			}
 		}
-		iq1GridDev = C.cu_upload_f32((*C.float)(&grid[0]), C.int(len(grid)))
+		// Tw80 escape route: the grid is TERNARY {−1,0,+1}, so pack it to 2 bits/entry
+		// (2048×8 → 4 KB). The kernel then reads ONE uint16/lane from shared (not 8 f32 from
+		// L2) and decodes code→{−1,0,+1} in ALU — the small per-lane read dodges the 8-way
+		// bank-conflict floor that caps the f32-grid path (perf-notes-cuda.md R6).
+		packed := make([]byte, 2048*2) // 2048 rows × one uint16 (8 × 2-bit codes)
+		for u := 0; u < 2048; u++ {
+			var p uint16
+			for k := 0; k < 8; k++ {
+				p |= uint16(grid[u*8+k]+1) << (2 * k) // −1→0, 0→1, +1→2
+			}
+			binary.LittleEndian.PutUint16(packed[u*2:], p)
+		}
+		iq1GridDev = C.cu_upload_i8((*C.schar)(unsafe.Pointer(&packed[0])), C.int(len(packed)))
 		if iq1GridDev == nil {
-			iq1GridErr = fmt.Errorf("cuda: IQ1_S grid upload failed")
+			iq1GridErr = fmt.Errorf("cuda: IQ1_S packed grid upload failed")
 		}
 	})
 	return iq1GridDev, iq1GridErr
