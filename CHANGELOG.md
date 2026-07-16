@@ -4,6 +4,16 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — native MXFP4 GEMV: the format gpt-oss ships in (worker linux-amd64, Tw71, 2026-07-16)
+- `cu_qmatmul_mxfp4` + `ResidentBMXFP4`: warp-per-output GEMV over ggml's MXFP4 (OCP
+  Microscaling FP4) 17-byte, 32-element blocks (1 E8M0 scale byte + 16 nibbles). Each 4-bit
+  nibble indexes the FP4 E2M1 codebook (`{0,±1,±2,±3,±4,±6,±8,±12}`, bit 3 = sign):
+  `y = e8m0(scale)·kv[nibble]`. Same inline-codebook approach as IQ4 but with a byte-exponent
+  block scale (E8M0 decode: `bits = e<2 ? 0x00200000<<e : (e−1)<<23`). Golden vs the gguf dequant
+  reference (`TestCUDAMXFP4MatMulParity`, MXFP4 has a real encoder): maxAbs **6.5e-6** — bit-exact.
+- **gpt-oss** and other recent OCP-microscaling models ship in MXFP4; it now loads bit-native on
+  the CUDA path. `quantDirect case 39` wired.
+
 ### CUDA — native IQ4_NL + IQ4_XS GEMV: the i-quant (codebook) family opens (worker linux-amd64, Tw70, 2026-07-16)
 - `cu_qmatmul_iq4nl` / `cu_qmatmul_iq4xs` + `ResidentBIQ4NL` / `ResidentBIQ4XS`: warp-per-output
   GEMV over ggml's IQ4_NL (18-byte, 32-elem blocks) and IQ4_XS (136-byte, 256-elem super-blocks
