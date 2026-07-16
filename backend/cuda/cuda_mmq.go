@@ -142,6 +142,75 @@ func (r *ResidentMMQ) MatMulAccInto(a, c *DeviceF32) error {
 	return nil
 }
 
+// QuantActs is a per-row int8-quantized activation matrix (int8 [mPad,K] + f32 scale [mPad]),
+// resident on the GPU. The point is to quantize ONCE and feed several ResidentMMQ projections that
+// share the same input — e.g. the q/k/v attention projections all consume the post-attn-norm hidden
+// state, and gate/up both consume the post-ffn-norm state. cu_quant_rows_i8 is a full pass over the
+// activations per call, so quantizing once instead of per-projection removes 2/3 of the attn-proj and
+// 1/2 of the ffn-proj activation-quant work in prefill.
+type QuantActs struct {
+	a8      unsafe.Pointer // device int8 [mPad,K]
+	sc      unsafe.Pointer // device f32  [mPad]
+	m, mPad int
+	k       int
+}
+
+// QuantizeActs quantizes a [M,K] f32 activation to per-row int8 (the cu_matmul_i8_mmq_r contract),
+// once, so multiple ResidentMMQ.MatMulPreQuant calls can reuse it. M is padded to 64 internally.
+func QuantizeActs(a *DeviceF32) (*QuantActs, error) {
+	if a.ptr == nil {
+		return nil, fmt.Errorf("cuda: QuantizeActs on a freed handle")
+	}
+	m, k := a.rows, a.cols
+	mPad := ((m + 63) / 64) * 64
+	a8 := C.cu_alloc_i8(C.int(mPad * k))
+	sc := C.cu_alloc_f32(C.int(mPad))
+	if a8 == nil || sc == nil {
+		C.cu_free_f32(unsafe.Pointer(a8))
+		C.cu_free_f32(sc)
+		return nil, fmt.Errorf("cuda: QuantizeActs alloc failed")
+	}
+	if rc := C.cu_quant_rows_i8(a.ptr, unsafe.Pointer(a8), unsafe.Pointer(sc), C.int(m), C.int(k)); rc != 0 {
+		C.cu_free_f32(unsafe.Pointer(a8))
+		C.cu_free_f32(sc)
+		return nil, fmt.Errorf("cuda: QuantizeActs quant failed (code %d)", int(rc))
+	}
+	return &QuantActs{a8: unsafe.Pointer(a8), sc: unsafe.Pointer(sc), m: m, mPad: mPad, k: k}, nil
+}
+
+// Free releases the quantized activation buffers.
+func (q *QuantActs) Free() {
+	if q.a8 != nil {
+		C.cu_free_f32(q.a8)
+		q.a8 = nil
+	}
+	if q.sc != nil {
+		C.cu_free_f32(q.sc)
+		q.sc = nil
+	}
+}
+
+// MatMulPreQuant computes qa·B via MMQ WITHOUT re-quantizing the activations — the shared-quant twin
+// of MatMulDevice for projections whose input was already quantized once (e.g. q/k/v sharing the
+// attn-norm hidden). Returns a new [M,N] f32 output.
+func (r *ResidentMMQ) MatMulPreQuant(qa *QuantActs) (*DeviceF32, error) {
+	if r.w8 == nil || qa.a8 == nil {
+		return nil, fmt.Errorf("cuda: MMQ MatMulPreQuant on a freed handle")
+	}
+	if qa.k != r.k {
+		return nil, fmt.Errorf("cuda: MMQ MatMulPreQuant inner dim mismatch a[.,%d]·B[%d,%d]", qa.k, r.k, r.n)
+	}
+	out := C.cu_alloc_f32(C.int(qa.mPad * r.n))
+	if out == nil {
+		return nil, fmt.Errorf("cuda: MMQ MatMulPreQuant output alloc failed")
+	}
+	if rc := C.cu_matmul_i8_mmq_r(qa.a8, r.w8, qa.sc, r.wSc, out, C.int(qa.mPad), C.int(r.k), C.int(r.n)); rc != 0 {
+		C.cu_free_f32(out)
+		return nil, fmt.Errorf("cuda: MMQ MatMulPreQuant matmul failed (code %d)", int(rc))
+	}
+	return &DeviceF32{ptr: out, rows: qa.m, cols: r.n}, nil
+}
+
 // Free releases the resident int8 weight + scales.
 func (r *ResidentMMQ) Free() {
 	if r.w8 != nil {
