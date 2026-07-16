@@ -120,6 +120,34 @@ func NewQwen3CUDA(m *nlp.Llama) (*Decoder, error) { return NewCUDA(m) }
 // which is parallel-residual with LayerNorm and partial rotary).
 func NewPhi3CUDA(m *nlp.Llama) (*Decoder, error) { return NewCUDA(m) }
 
+// NewCohereCUDA uploads an nlp.Cohere (Command-R) onto the batched Decoder core: one-norm parallel
+// residual, weight-only mean-centered LayerNorm, SwiGLU, GQA, full rope (its interleaved rotary is
+// pre-permuted into the q/k weights by CohereFromHF) and a logit_scale-folded tied lm_head — every
+// piece a reused generalization. cuda-only (parallel residual + LayerNorm are the Phi plumbing).
+func NewCohereCUDA(m *nlp.Cohere) (*Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newCohereDecoder(m, backendOps{
+		name:        string(backend.CUDA),
+		asyncEncode: false,
+		newBuffer: func(data []float32) (buffer, error) {
+			b, err := cuda.NewDeviceBufferF32(data)
+			if err != nil {
+				return nil, err
+			}
+			return cBuf{b}, nil
+		},
+		newRecorder: func() (recorder, error) {
+			r, err := cuda.NewRecorder()
+			if err != nil {
+				return nil, err
+			}
+			return cRec{r}, nil
+		},
+	})
+}
+
 // NewGraniteCUDA uploads an IBM Granite model onto the batched Decoder core. Granite is a plain
 // Llama plus four learned-at-config scalars — embedding_multiplier, attention_multiplier,
 // residual_multiplier and logits_scaling — which newDecoder folds into the upload (embedding gather

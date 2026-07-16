@@ -569,6 +569,88 @@ func newStableLMDecoder(m *nlp.StableLM, ops backendOps) (*Decoder, error) {
 	return d, nil
 }
 
+// newCohereDecoder builds a device Decoder for an nlp.Cohere (Command-R). Cohere composes existing
+// generalizations: ONE-norm parallel residual (parallelRes — input_layernorm feeds both attention
+// and FFN, summed onto x0, exactly like Phi), weight-only mean-centered LayerNorm (lnBias with a
+// zero β), SwiGLU, GQA and FULL rope. Its interleaved (GPT-J) rotary is already baked into a q/k
+// weight-row permutation by CohereFromHF, so standard split-half RoPE reproduces it. The only extra
+// is logit_scale: the tied lm_head's logits are multiplied by a constant, folded into the Out
+// upload. cuda-only (parallel-residual + LayerNorm reuse the Phi plumbing).
+func newCohereDecoder(m *nlp.Cohere, ops backendOps) (*Decoder, error) {
+	cfg := m.Config
+	kvH := cfg.KVHeads
+	if kvH <= 0 {
+		kvH = cfg.Heads
+	}
+	if cfg.HeadDim != 0 && cfg.HeadDim != cfg.Dim/cfg.Heads {
+		return nil, fmt.Errorf("llamagpu(%s): Cohere decoupled head_dim %d (≠ dim/heads %d) not supported on the GPU decoder yet", ops.name, cfg.HeadDim, cfg.Dim/cfg.Heads)
+	}
+	lc := nlp.LlamaConfig{
+		Vocab: cfg.Vocab, Ctx: cfg.Ctx, Dim: cfg.Dim, Heads: cfg.Heads, KVHeads: kvH,
+		Layers: cfg.Layers, Hidden: cfg.Hidden, Eps: cfg.Eps, RopeBase: cfg.RopeBase,
+	}
+	d, derr := newDecoderCommon(lc, m.TokEmb, ops)
+	if derr != nil {
+		return nil, derr
+	}
+	d.lnBias = true      // weight-only mean-centered LayerNorm (β is a zero vector)
+	d.parallelRes = true // one-norm parallel residual: input_layernorm feeds attn AND FFN
+
+	var err error
+	mk := d.mkBuf(&err)
+	lin := func(w *tensor.Tensor) linear {
+		in, out := w.Shape()[0], w.Shape()[1]
+		return f32Linear{w: mk(flat2D(w)).b, k: in, n: out}
+	}
+	fused := func(wq, wk, wv *tensor.Tensor) linear {
+		in := wq.Shape()[0]
+		nq, nk, nv := wq.Shape()[1], wk.Shape()[1], wv.Shape()[1]
+		fq, fk, fv := flat2D(wq), flat2D(wk), flat2D(wv)
+		nt := nq + nk + nv
+		w := make([]float32, in*nt)
+		for i := range in {
+			row := w[i*nt : (i+1)*nt]
+			copy(row[:nq], fq[i*nq:(i+1)*nq])
+			copy(row[nq:nq+nk], fk[i*nk:(i+1)*nk])
+			copy(row[nq+nk:], fv[i*nv:(i+1)*nv])
+		}
+		return f32Linear{w: mk(w).b, k: in, n: nt}
+	}
+	logitScale := float32(1)
+	if cfg.LogitScale != 0 && cfg.LogitScale != 1 {
+		logitScale = float32(cfg.LogitScale)
+	}
+	linS := func(w *tensor.Tensor, s float32) linear {
+		in, out := w.Shape()[0], w.Shape()[1]
+		f := flat2D(w)
+		if s != 1 {
+			for i := range f {
+				f[i] *= s
+			}
+		}
+		return f32Linear{w: mk(f).b, k: in, n: out}
+	}
+	for _, b := range m.Blocks {
+		gb := block{
+			wqkv: fused(b.Wq, b.Wk, b.Wv), wo: lin(b.Wo),
+			gAttn: mk(flat1D(b.InputNorm.Gamma)).b, bAttn: mk(flat1D(b.InputNorm.Beta)).b,
+			// gFFN/bFFN unused: parallel one-norm reuses the attn norm (d.xn) for the FFN.
+			wG: lin(b.FFN.Wgate), wU: lin(b.FFN.Wup), wD: lin(b.FFN.Wdown),
+			kC: mk(make([]float32, d.maxLen*d.kvDim)).b, vC: mk(make([]float32, d.maxLen*d.kvDim)).b,
+		}
+		d.blocks = append(d.blocks, gb)
+	}
+	d.gFinal = mk(flat1D(m.Norm.Gamma))
+	d.bFinal = mk(flat1D(m.Norm.Beta))
+	d.out = linS(m.Out, logitScale) // logit_scale folded into the tied lm_head
+	d.allocScratch(mk)
+	if err != nil {
+		d.Release()
+		return nil, err
+	}
+	return d, nil
+}
+
 // newStarCoder2Decoder builds a device Decoder for an nlp.StarCoder2: LayerNorm-with-bias +
 // biased q/k/v/o projections + a biased 2-layer GELU MLP (c_fc → GELU → c_proj) + FULL rope +
 // GQA + untied head. Every one of those is a core generalization (lnBias, biased projections,

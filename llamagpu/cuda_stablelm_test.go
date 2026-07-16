@@ -407,3 +407,49 @@ func TestCUDAGraniteMatchesReference(t *testing.T) {
 	}
 	t.Logf("llamagpu NewGraniteCUDA.Generate == nlp.Granite.Generate greedy: %d tokens (4 config scalars folded into upload)", len(gpuOut))
 }
+
+// TestCUDACohereMatchesReference checks the Cohere / Command-R GPU path (NewCohereCUDA) generates
+// greedy-identical tokens to the reference nlp.Cohere. Cohere reuses one-norm parallel residual
+// (parallelRes), weight-only LayerNorm (lnBias, β=0), SwiGLU and full rope, plus a logit_scale-
+// folded tied lm_head — a pure composition of existing generalizations, no new decoder machinery.
+func TestCUDACohereMatchesReference(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("cuda: no CUDA-capable device")
+	}
+	ts, _, err := safetensors.LoadFile("../nlp/testdata/cohere_hf.safetensors")
+	if err != nil {
+		t.Skipf("cohere testdata unavailable (run make golden): %v", err)
+	}
+	m, err := nlp.CohereFromHF(ts, nlp.CohereConfig{
+		Heads: 4, KVHeads: 2, Eps: 1e-5, RopeBase: 10000, LogitScale: 0.0625, Ctx: 32,
+	})
+	if err != nil {
+		t.Fatalf("CohereFromHF: %v", err)
+	}
+
+	dec, err := llamagpu.NewCohereCUDA(m)
+	if err != nil {
+		t.Fatalf("NewCohereCUDA: %v", err)
+	}
+	defer dec.Release()
+
+	prompt := []int{3, 7, 1, 9}
+	const maxNew = 12
+	gpuOut, err := dec.Generate(prompt, maxNew, nlp.Greedy())
+	if err != nil {
+		t.Fatalf("cuda generate: %v", err)
+	}
+	refOut, err := m.Generate(prompt, maxNew, nlp.Greedy(), nlp.WithBackend(backend.Reference()))
+	if err != nil {
+		t.Fatalf("ref generate: %v", err)
+	}
+	if len(gpuOut) != len(refOut) {
+		t.Fatalf("length: cuda %d vs ref %d", len(gpuOut), len(refOut))
+	}
+	for i := range gpuOut {
+		if gpuOut[i] != refOut[i] {
+			t.Fatalf("token[%d]: cuda %d vs ref %d\ncuda=%v\nref=%v", i, gpuOut[i], refOut[i], gpuOut, refOut)
+		}
+	}
+	t.Logf("llamagpu NewCohereCUDA.Generate == nlp.Cohere.Generate greedy: %d tokens (parallel residual + LayerNorm + logit_scale)", len(gpuOut))
+}
