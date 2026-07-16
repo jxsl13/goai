@@ -9,13 +9,27 @@ import "C"
 
 import (
 	"os"
+	"sync"
 	"unsafe"
 )
 
-// f16AccEnabled reports whether the prefill f16 GEMMs should use f16 ACCUMULATE (Tw61,
-// GOAI_CUDA_F16ACC=1) — ≈1.5-2× on GeForce at ~0.2-0.5% norm error. Opt-in while the
-// real-model quality gate runs; flipped to default once validated.
-func f16AccEnabled() bool { return os.Getenv("GOAI_CUDA_F16ACC") == "1" }
+// f16AccEnabled reports whether the prefill f16 GEMMs should use f16 ACCUMULATE (Tw61) —
+// ≈1.5-2× (+21% e2e) on GeForce, validated accurate on TinyLlama + Qwen 0.5/1.5/3B. It
+// DEFAULTS ON for GeForce/consumer cards (which run f32-accumulate at half rate) and OFF for
+// datacenter cards (full-rate f32-accumulate, where f16-accum would only cost precision).
+// GOAI_CUDA_F16ACC=1/0 overrides the auto-detection either way (exactness on demand).
+func f16AccEnabled() bool {
+	if v, ok := os.LookupEnv("GOAI_CUDA_F16ACC"); ok {
+		return v == "1"
+	}
+	f16AccOnce.Do(func() { f16AccAuto = C.cu_gpu_is_geforce() == 1 })
+	return f16AccAuto
+}
+
+var (
+	f16AccOnce sync.Once
+	f16AccAuto bool
+)
 
 // Internal wrappers for the Tw61 f16-accumulate prefill-GEMM probe (used by the internal benchmark).
 

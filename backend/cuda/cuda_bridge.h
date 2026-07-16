@@ -10,6 +10,8 @@
 int cu_available(void);
 // cu_mem_info: device free/total VRAM in bytes (VRAM-budget probe for T631 offload).
 int cu_mem_info(unsigned long long* freeB, unsigned long long* totalB);
+// cu_gpu_is_geforce: 1 if device 0 is a GeForce/consumer card (half-rate f32-accum → f16-accum wins).
+int cu_gpu_is_geforce(void);
 // CUDA graph capture: begin/end capture on the work stream, launch/sync/free the
 // instantiated graph. Caller must LockOSThread across begin→ops→end.
 int cu_capture_begin(void);

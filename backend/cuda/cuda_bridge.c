@@ -25,6 +25,7 @@
 #include <nvrtc.h>   // runtime CUDA-C→PTX compilation (no nvcc needed)
 #include <pthread.h>
 #include <stdlib.h>
+#include <string.h> // strstr — GPU-class name check (cu_gpu_is_geforce)
 #include <stdio.h>
 
 static pthread_mutex_t gLock = PTHREAD_MUTEX_INITIALIZER;
@@ -692,6 +693,24 @@ int cu_mem_info(unsigned long long* freeB, unsigned long long* totalB) {
         *freeB = (unsigned long long)fr;
         *totalB = (unsigned long long)to;
         rc = 0;
+    }
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_gpu_is_geforce: 1 if device 0 is a GeForce/consumer card (name contains "GeForce" or
+// "TITAN"), else 0. GeForce/GA10x run FP32-accumulate tensor ops at HALF rate, so f16
+// accumulate is a ~1.5-2× prefill win there (Tw61); datacenter cards (A100/A10/L4/T4/…) run
+// f32 accumulate at full rate, where f16 accumulate would only cost precision. The default
+// f16-accumulate gate keys on this; GOAI_CUDA_F16ACC overrides it either way.
+int cu_gpu_is_geforce(void) {
+    int rc = 0;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() == 0) {
+        struct cudaDeviceProp p;
+        if (cudaGetDeviceProperties(&p, 0) == cudaSuccess) {
+            rc = (strstr(p.name, "GeForce") != NULL || strstr(p.name, "TITAN") != NULL) ? 1 : 0;
+        }
     }
     pthread_mutex_unlock(&gLock);
     return rc;
