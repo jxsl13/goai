@@ -4,6 +4,20 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — feat: DeepSeek-V2 Multi-head Latent Attention — 25th loadable architecture (T767, 2026-07-16)
+
+DeepSeek-V2's MLA as a self-contained `nlp.DeepSeekV2` type (dense-FFN stage — the routed MoE is a
+follow-up). MLA is built from primitives because it needs two latent RMSNorms that the fused
+`nn.MLA`/`OpMLA` omit: the query path is `q_b(q_a_layernorm(q_a(h)))` (compress to q_lora_rank →
+RMSNorm → up), the KV path is `kv_b(kv_a_layernorm(kv_latent))` with a shared MQA-style rotary key
+`k_pe`; each head splits into a non-positional part and a decoupled-RoPE part, and the value width
+differs from the qk width (rectangular per-head attention, mirroring the Gemma2 from-primitives
+pattern). DeepSeek's RoPE is interleaved (view_as_complex); it's handled by de-interleaving the `pe`
+rows at load so GoAI's split-half `OpRoPE` reproduces it (the Cohere technique). Forward parity vs a
+real transformers `DeepseekV2ForCausalLM` (all-dense config): max abs logit diff 4.4e-8. A
+`SoftmaxScale` override is exposed for future YaRN-mscale checkpoints. Twenty-fifth architecture — a
+fifth distinct attention mechanism.
+
 ### nlp — feat: OLMoE support — 24th loadable architecture (T766, 2026-07-16)
 
 Allen AI OLMoE (`OlmoeForCausalLM`) as a self-contained `nlp.OLMoE` type: pre-norm sequential blocks
