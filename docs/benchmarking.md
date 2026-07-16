@@ -1167,6 +1167,47 @@ stays decode-only on 12 GB (f16 weights alone would need 14.5 GB).
 Repro: `TestCUDAUnifiedServePrefillHandoff` / `TestCUDAUnifiedServeQwen` (backend/cuda,
 `-tags cuda`).
 
+## Prefill f16-accumulate: +21% from a GeForce half-rate lever (worker linux-amd64, Tw60/61)
+
+The prefill gap to llama.cpp (≈4× at pp128) is a GEMM-throughput gap (FFN GEMM = ~54% of
+prefill, `TestCUDAPrefillProfile`). Two measure-first probes settled how to close it.
+
+**int8 via cublas — rejected (Tw60).** `cublasGemmEx` int8 (`CUDA_R_8I` / `COMPUTE_32I`) and
+`cublasLt` with heuristic algo selection both give only +5-8% over f16, capping at ~24 TOPS
+≈ 23% of the 3060's int8 peak while f16 already runs at ~88% of *its* peak. cublas cannot
+deliver an int8 2× on GA106 for prefill shapes — llama.cpp's int8 lead needs custom MMQ
+kernels (deferred). The cublasLt scaffolding was discarded.
+
+**f16 accumulate — the win (Tw61).** GeForce/GA10x runs FP32-accumulate tensor ops at *half*
+rate, so switching the prefill GEMM to `CUBLAS_COMPUTE_16F` (f16 accumulate) is a big win.
+Isolated GEMM (GFLOP/s, RTX 3060, M=128 prefill shapes):
+
+| shape | f32-acc | f16-acc | speedup |
+|---|---:|---:|---:|
+| qkv 2048×2048 | 9957 | 20690 | **2.06×** |
+| gate/up 2048×5632 | 17129 | 26543 | 1.55× |
+| down 5632×2048 | 15927 | 24725 | 1.55× |
+
+End-to-end on the real TinyLlama prefill (`TestCUDAF16PrefillSpeedAndParity`, f16 tensor-core
+path, `GOAI_CUDA_F16ACC` toggle):
+
+| seq | f16-acc off | f16-acc on | e2e |
+|---|---:|---:|---:|
+| 32 | 2264 tok/s (1.56×) | 2679 tok/s (1.84×) | +18% |
+| 128 | 4217 tok/s (1.69×) | **5114 tok/s (2.05×)** | **+21%** |
+
+(tok/s and the ×-factor vs the f32-Sgemm prefill.) Accuracy holds: the parity test passes with
+f16 accumulate, and the unified-serve handoff K-cache match is rel L1 **0.0088** vs the
+**0.0087** f32 baseline — f16 accumulation adds essentially no error beyond the f16-weight
+rounding the prefill already does (synthetic GEMM norm-rel-RMS 2-5e-3). Implementation:
+`cu_matmul_f16w_acc16` (f16-acc GEMM → f16 scratch → `cvt_f16_f32` back to f32, residual-add
+for beta=1), gated into `ResidentBF16` via `GOAI_CUDA_F16ACC=1`. **Opt-in** — the lever is
+GeForce-specific (datacenter GPUs run f32-accumulate at full rate, so f16-accumulate there
+only costs precision); a default-on with GPU-class detection is the follow-up.
+
+Repro: `go test -tags cuda -run '^$' -bench BenchmarkF16acc ./backend/cuda/`;
+`GOAI_CUDA_F16ACC=1 go test -tags cuda -run TestCUDAF16PrefillSpeedAndParity ./backend/cuda/`.
+
 ## Q4_K decode-GEMV bandwidth: the small-N occupancy cliff (worker linux-amd64, Tw55(b) floor measurement)
 
 Before building Tw55 slice (b) ("concurrent QKV streams in graph capture") the §V22 rule

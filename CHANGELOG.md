@@ -23,7 +23,13 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   vs f32), +18% @seq32 — the parity test **passes** with f16 accumulate, and the unified-serve
   handoff K-cache match is rel L1 0.0088 ≈ the 0.0087 f32 baseline (f16 accumulation adds
   essentially no error beyond the existing f16-weight rounding). **Shippable prefill win.**
-  Opt-in for now; can become the default after broader-model validation (Qwen/Mistral).
+  Opt-in for now; can become the default after broader-model validation.
+- **Broader-model validated.** `TestCUDAUnifiedServeQwen` passes with `GOAI_CUDA_F16ACC=1`
+  on Qwen2.5-0.5B/1.5B/3B (K-cache rel L1 0.0000 / 0.0023 / 0.0078, all generating coherent
+  text) — f16 accumulate holds across model families and sizes. Kept opt-in because the lever
+  is GeForce-specific (datacenter GPUs run f32-accumulate at full rate, where f16 accumulate
+  would only cost precision); a default-on gated by GPU-class detection is the follow-up.
+  Benchmark tables in `docs/benchmarking.md`.
 
 ### CUDA — decode-GEMV arc closed: the Q4_K GEMV is at a Pareto ceiling (worker linux-amd64, Tw59, 2026-07-16)
 - The last decode-GEMV idea: if the scale-decode is the ALU cost (Tw58), precompute it. Built
