@@ -22,6 +22,14 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   so it is less latency-starved and has less headroom to reclaim by folding into the q launch.
 - Test-harness-only for now; productionizing into the llamagpu decoder + the qwen2 bias concat
   remain (Tw57 slice 2+).
+### nlp — fix: LlamaFromHF fails loud on attention bias (T733, 2026-07-16)
+
+`LlamaFromHF` read only the projection weights and silently ignored any extra tensors — so a
+Qwen2/Qwen-family checkpoint (which adds q/k/v_proj bias) would load *without* those biases and
+produce wrong outputs with no warning. It now errors clearly when it sees `q_proj.bias`,
+pointing at the bias-free-Llama/Mistral limitation instead of mis-loading. A `-race` test covers
+the rejection.
+
 ### nlp — test: GPT-2 forward-parity anchor vs real transformers (T732, 2026-07-16)
 
 The GPT-2 converter's only anchor compared to GoAI's own manual assembly, not to a real

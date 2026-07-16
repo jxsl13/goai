@@ -98,3 +98,17 @@ func TestLlamaFromPyTorchBin(t *testing.T) {
 	}
 	t.Logf(".pt→Llama max abs diff vs transformers: %.3e", maxAbs)
 }
+
+// TestLlamaFromHFRejectsAttentionBias: a Qwen2-family checkpoint (attention bias)
+// must fail loud, not silently drop the bias.
+func TestLlamaFromHFRejectsAttentionBias(t *testing.T) {
+	ts, _, err := safetensors.LoadFile("testdata/llama_hf.safetensors")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// inject a q_proj bias to simulate a Qwen2-style checkpoint
+	ts["model.layers.0.self_attn.q_proj.bias"] = ts["model.layers.0.self_attn.q_proj.weight"]
+	if _, err := nlp.LlamaFromHF(ts, nlp.LlamaConfig{Heads: 2, KVHeads: 2, Eps: 1e-5, RopeBase: 10000, Ctx: 32}); err == nil {
+		t.Fatal("LlamaFromHF accepted a checkpoint with attention bias (would silently drop it)")
+	}
+}
