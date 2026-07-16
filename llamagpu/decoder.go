@@ -171,6 +171,7 @@ type Decoder struct {
 	rotaryDim                                     int  // rotated channels/head; == dk for full RoPE (Llama), < dk for partial rotary (GPT-NeoX/Phi/StableLM)
 	lnBias                                        bool // true ⇒ LayerNorm-with-bias norms (StableLM/Phi/StarCoder2); false ⇒ RMSNorm (Llama)
 	ffnGELU                                       bool // true ⇒ 2-layer GELU MLP (fc→GELU→proj: GPT-NeoX/Phi/StarCoder2); false ⇒ SwiGLU (Llama/StableLM)
+	parallelRes                                   bool // true ⇒ parallel residual: attn+FFN both read norm(x0), sum onto x (GPT-NeoX/Phi/Cohere); false ⇒ sequential (Llama)
 	eps, posDiv, scale                            float32
 
 	blocks                                                []block
@@ -246,9 +247,24 @@ func (d *Decoder) recordOProj(r recorder, b block, rows int) error {
 	return e
 }
 
-func (d *Decoder) recordFFN(r recorder, b block, rows int) error {
+// recordFFNSublayer records the FFN norm + the FFN with its residual-add epilogue. Sequential
+// (Llama/StableLM/StarCoder2): norm the post-attention residual, then FFN(that). PARALLEL residual
+// (Phi/Cohere one-norm): the FFN reuses the SAME normed input as attention (d.xn = norm(x0), which
+// survives attention since recordOProj writes dx, not xn) and adds onto the residual in parallel —
+// no second norm. Both leave dx += FFN(·).
+func (d *Decoder) recordFFNSublayer(r recorder, b block, rows int) error {
+	if d.parallelRes {
+		return d.recordFFN(r, b, d.xn.b, rows) // parallel: FFN(norm(x0)), same norm as attn
+	}
+	if e := d.norm(r, d.dx.b, b.gFFN, b.bFFN, d.xn2.b, rows); e != nil {
+		return e
+	}
+	return d.recordFFN(r, b, d.xn2.b, rows)
+}
+
+func (d *Decoder) recordFFN(r recorder, b block, in buffer, rows int) error {
 	if d.ffnGELU {
-		e := b.wG.record(r, d.xn2.b, d.gate.b, rows) // fc = xn2·Wfc
+		e := b.wG.record(r, in, d.gate.b, rows) // fc = in·Wfc
 		if b.fcBias != nil {
 			e = firstErr(e, r.AddBias(d.gate.b, b.fcBias, d.gate.b, rows, d.hidden))
 		}
@@ -262,8 +278,8 @@ func (d *Decoder) recordFFN(r recorder, b block, rows int) error {
 		return e
 	}
 	return firstErr(
-		b.wG.record(r, d.xn2.b, d.gate.b, rows),
-		b.wU.record(r, d.xn2.b, d.up.b, rows),
+		b.wG.record(r, in, d.gate.b, rows),
+		b.wU.record(r, in, d.up.b, rows),
 		r.Binary(d.gate.b, d.up.b, d.gate.b, binarySwiGLU),
 		b.wD.recordAdd(r, d.gate.b, d.mo.b, d.dx.b, rows), // dx += swiglu·Wdown
 	)
@@ -642,8 +658,7 @@ func (d *Decoder) encodeStep(pos int) (recorder, error) {
 			e,
 			r.MHA(qBuf, b.kC, b.vC, d.attn.b, 1, pos+1, D, H, KVH, dk, 1, 0, d.scale),
 			d.recordOProj(r, b, 1), // dx += attn·Wo (+ optional o-bias)
-			d.norm(r, d.dx.b, b.gFFN, b.bFFN, d.xn2.b, 1),
-			d.recordFFN(r, b, 1),
+			d.recordFFNSublayer(r, b, 1),
 		)
 		if e != nil {
 			r.Free()
@@ -783,8 +798,7 @@ func (d *Decoder) StepN(tokens []int, pos int) ([]float32, error) {
 			// through absolute position pos+i — exactly the prefill/verify semantics.
 			r.MHA(d.q.b, b.kC, b.vC, d.attn.b, k, pos+k, D, H, KVH, dk, 1, 0, d.scale),
 			d.recordOProj(r, b, k), // dx += attn·Wo (+ optional o-bias)
-			d.norm(r, d.dx.b, b.gFFN, b.bFFN, d.xn2.b, k),
-			d.recordFFN(r, b, k),
+			d.recordFFNSublayer(r, b, k),
 		)
 		if e != nil {
 			r.Free()
