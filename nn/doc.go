@@ -10,9 +10,11 @@
 // every algorithm carries its paper citation (§R) in its own doc comment:
 //
 //   - Core layers & init: Linear, Conv2D/MaxPool2D (NCHW, fused conv backward),
+//     Kolmogorov-Arnold (KAN) learnable-spline-edge layers,
 //     activations, LayerNorm/RMSNorm/GroupNorm,
 //     SwiGLU/GLU, dropout/droppath, spectral & weight norm, QK-norm, DyT,
-//     DeepNorm, sinusoidal and T5 relative position encodings, Xavier/Kaiming
+//     DeepNorm, sinusoidal, T5 relative, and contextual (CoPE, content-gated
+//     count) position encodings, Xavier/Kaiming
 //     init, and µP (Maximal Update Parametrization) scaling rules.
 //   - Losses & objectives: MSE, stable cross-entropy, focal, triplet, InfoNCE,
 //     multi-token prediction, Matryoshka representations, ColBERT MaxSim,
@@ -42,7 +44,13 @@
 //     Transformer (NGPTBlock, on-sphere weights), the Forgetting Transformer
 //     (FoXBlock, log-cumulative forget bias), Hymba (parallel attention∥SSM
 //     hybrid heads), and Mixture-of-Recursions (per-token adaptive recursion
-//     depth over a weight-shared block).
+//     depth over a weight-shared block); the softmax-alternative attentions
+//     (SigmoidAttention, SelectiveAttention context masking, MultiTokenAttention
+//     key-query convolution, StickBreakingAttention, and Aaren attention-as-RNN
+//     with O(1)-state streaming), Tokenformer/Pattention (attention over
+//     learnable, growable parameter tokens), PEER product-key retrieval over a
+//     million single-neuron experts, and the extended recurrent cells xLSTM
+//     mLSTM (matrix memory) and Griffin RG-LRU (real-gated linear recurrence).
 //   - Diffusion & generative: DDPM/DDIM schedules and samplers, EDM (with
 //     preconditioning), and Flow Matching.
 //   - Self-supervised learning: Barlow Twins, DINO, SimSiam, SwAV, VICReg.
