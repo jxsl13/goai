@@ -1215,15 +1215,35 @@ the QKV win. The difference is entirely the starvation of the folded shapes: QKV
 N=256 k/v rows from **17%** of peak, gate/up start at a healthy **55%**. So weight fusion
 pays in proportion to how latency-bound the small-N shapes are — and with the FFN shapes
 already ≥53%, fusion is near its ceiling. The corollary is decisive for Tw56: the remaining
-~73%-of-decode FFN bandwidth cannot be recovered by fusing; it needs a real GEMV
-memory-schedule change (split-K to put more warps in flight). The two fusions are
+~73%-of-decode FFN bandwidth cannot be recovered by fusing. The two fusions are
 independent GEMVs and compose with no negative interaction: the full stack (QKV + gate+up)
 measures **+5.8%** decode (271.1 vs 256.3 tok/s, `TestCUDAFusionStackSpeedAB`, 5 reps),
-slightly super-additive over the +3.7%/+1.1% parts. Caveat for the split-K idea: an earlier
-arc (Tw44) already rejected a deinterleaved Q4_K layout and judged the GEMV near its
-"sweet spot" with the residual gap being per-block scale-decode ALU, not memory — so
-whether split-K helps the FFN 5632/2048 shapes is a measure-first question (the fusion
-wins here came specifically from occupancy at the starved small-N shapes).
+slightly super-additive over the +3.7%/+1.1% parts.
+
+### Split-K rejected — the Q4_K decode GEMV is ALU-bound at its ceiling (Tw56, measure-first)
+
+The obvious remaining idea was split-K: give each output row S warps (each summing a
+strided subset of the super-blocks) + a shared-mem reduce, for S× the warps-in-flight, to
+hide DRAM latency. A prototype (parity-exact vs the one-warp kernel, maxRel 7.6e-5) was
+A/B'd on the isolated FFN shapes. It **regressed monotonically** — split-K is strictly
+worse at every S:
+
+| shape (K×N) | S=1 (baseline) | S=2 | S=4 | S=8 |
+|---|---:|---:|---:|---:|
+| 2048×5632 (gate/up) | **196.3** | 156.5 | 149.8 | 117.2 |
+| 5632×2048 (down) | **189.5** | 171.7 | 177.1 | 158.2 |
+| 2048×2048 (q/o) | **166.4** | — | 136.2 | — |
+
+(GB/s.) More warps-in-flight does not help → these shapes are **not latency-bound, they
+are ALU-bound**: the per-block Q4_K scale-decode is the limiter, so extra parallelism only
+adds reduction/scheduling overhead. This corroborates Tw44 (which rejected a deinterleaved
+layout and judged the residual gap vs Q8 to be scale-decode ALU) with a direct measurement,
+and the Tw55(b) gate+up fusion (only +1.1% from ~2× warps at N=5632) said the same. The
+probe was discarded (measured & rejected, like Tw44's deinterleave). **Conclusion: the
+Q4_K decode GEMV is at its ceiling; further decode gains must come from elsewhere (lower-bit
+quant, or the prefill f16/tensor-core path), not from GEMV parallelism.** The fusion wins
+stand because they attacked *occupancy at the starved small-N shapes* (k/v at 17%), a
+different lever from the ALU-bound FFN shapes.
 
 Repro: `go test -tags cuda -run '^$' -bench BenchmarkGemvQ4K ./backend/cuda/`;
 `go test -tags cuda -run 'TestCUDA(QKV|GateUp)Fuse' ./backend/cuda/`.

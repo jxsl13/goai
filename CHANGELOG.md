@@ -4,6 +4,21 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — split-K rejected: the Q4_K decode GEMV is ALU-bound at its ceiling (worker linux-amd64, Tw56, 2026-07-16)
+- Measure-first close-out of the last decode-GEMV lever. Prototyped a split-K Q4_K GEMV
+  (S warps per output over a strided super-block partition + a shared-mem cross-warp reduce,
+  parity-exact vs the one-warp kernel at maxRel 7.6e-5) and A/B'd it isolated on the FFN
+  shapes. It **regressed monotonically** — gate/up 196→156→150→117 GB/s at S=1/2/4/8, down
+  190→172→177→158, q/o 166→136 — so more warps-in-flight does not help.
+- **Verdict: the FFN GEMV shapes are ALU-bound, not latency-bound** (the per-block Q4_K
+  scale-decode is the limiter). This corroborates Tw44 (deinterleave rejected; residual gap
+  = scale-decode ALU) and the Tw55(b) gate+up fusion (+1.1% from ~2× warps) with a direct
+  measurement. The probe was discarded (measured & rejected, like Tw44's deinterleave); the
+  finding is in `docs/benchmarking.md`. **The Q4_K decode GEMV is at its ceiling** — further
+  decode gains must come from lower-bit quant or the prefill f16/tensor-core path, not GEMV
+  parallelism. The Tw55(b) fusion wins stand (they attacked occupancy at the starved
+  small-N k/v shapes, a different lever).
+
 ### CUDA — fused gate+up weight + the occupancy-cliff law confirmed (worker linux-amd64, Tw55(b) extension, 2026-07-16)
 - Applies the same weight-fusion mechanism to the FFN: `ffn_gate|ffn_up` concatenated into
   one N=2·hidden Q4_K GEMV (via the now-generic `fuseRowsQ4K` + `GOAI_CUDA_GATEUP_FUSE=1`),
