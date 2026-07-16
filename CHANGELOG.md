@@ -15,6 +15,11 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   win (bit-identical, no accuracy change). End-to-end it is modest — real TinyLlama MMQ prefill 3479
   -> 3552 t/s (+2.1%), since the mmq_r matmul is only one part of the prefill (device-quant per
   projection, attention, norms, launches dominate the rest).
+- **Shared activation quant** — new `QuantizeActs` + `ResidentMMQ.MatMulPreQuant`: quantize a hidden
+  state to int8 ONCE and feed several projections that share it (q/k/v share the attn-norm hidden;
+  gate/up share the ffn-norm hidden), instead of re-quantizing per projection. Bit-identical to
+  MatMulDevice; the q/k/v projection group runs 82 -> 64 us (**1.28x**) by dropping 2 of 3 redundant
+  activation-quant passes. (Harness wiring to seedForward is a follow-up.)
 
 ### CUDA — ldmatrix int8 GEMM (edges past cuBLAS f16) + honest prefill standing vs llama.cpp (worker linux-amd64, Tw76, 2026-07-16)
 - `cu_matmul_i8_mma_lm`: the int8 tensor-core GEMM with **hardware `ldmatrix` fragment loads** (A via
