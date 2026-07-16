@@ -7,7 +7,15 @@ package cuda
 */
 import "C"
 
-import "unsafe"
+import (
+	"os"
+	"unsafe"
+)
+
+// f16AccEnabled reports whether the prefill f16 GEMMs should use f16 ACCUMULATE (Tw61,
+// GOAI_CUDA_F16ACC=1) — ≈1.5-2× on GeForce at ~0.2-0.5% norm error. Opt-in while the
+// real-model quality gate runs; flipped to default once validated.
+func f16AccEnabled() bool { return os.Getenv("GOAI_CUDA_F16ACC") == "1" }
 
 // Internal wrappers for the Tw61 f16-accumulate prefill-GEMM probe (used by the internal benchmark).
 

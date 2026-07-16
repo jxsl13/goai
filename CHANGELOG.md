@@ -15,10 +15,15 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 - **f16 accumulate — the win (Tw61).** GeForce/GA106 runs FP32-accumulate tensor ops at *half*
   rate, so switching the prefill GEMM to `CUBLAS_COMPUTE_16F` (f16 accumulate) is **1.5-2×
   faster**: gate/up +55% (172→111 µs), down +55%, qkv **+108% (2.06×)**, bigM +75%. Accuracy
-  is small — f16-acc vs f32-acc norm-rel-RMS **2-5e-3** (0.2-0.5%, ~Q4_K-class). `cu_matmul_f16acc16`
-  + benchmark + synthetic-accuracy test built and validated (CGO0 green). Next: a real-model
-  prefill greedy-agreement gate, then wire into the `ResidentBF16` prefill path (opt-in/gated)
-  and measure e2e prefill tok/s — an estimated ~+40-60% prefill from a one-enum change.
+  is small — f16-acc vs f32-acc norm-rel-RMS **2-5e-3** (0.2-0.5%, ~Q4_K-class).
+- **Wired + validated end-to-end.** `cu_matmul_f16w_acc16` (f16-acc GEMM → f16 scratch →
+  convert back to f32, residual-add for beta=1) is gated into `ResidentBF16.MatMulDevice/
+  MatMulAccInto` via `GOAI_CUDA_F16ACC=1`. On the real TinyLlama prefill
+  (`TestCUDAF16PrefillSpeedAndParity`): **+21% e2e @seq128** (4217→5114 tok/s; 1.69×→**2.05×**
+  vs f32), +18% @seq32 — the parity test **passes** with f16 accumulate, and the unified-serve
+  handoff K-cache match is rel L1 0.0088 ≈ the 0.0087 f32 baseline (f16 accumulation adds
+  essentially no error beyond the existing f16-weight rounding). **Shippable prefill win.**
+  Opt-in for now; can become the default after broader-model validation (Qwen/Mistral).
 
 ### CUDA — decode-GEMV arc closed: the Q4_K GEMV is at a Pareto ceiling (worker linux-amd64, Tw59, 2026-07-16)
 - The last decode-GEMV idea: if the scale-decode is the ALU cost (Tw58), precompute it. Built

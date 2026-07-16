@@ -84,6 +84,8 @@ int cu_matmul_i8_lt(const void* dA8, const void* dW8, void* dC32, int M, int K, 
 // cu_matmul_f16acc16: f16 GEMM with f16 ACCUMULATE (COMPUTE_16F, ≈1.5-2× on GeForce), f16 out.
 int cu_matmul_f16acc16(const void* dA32, const void* dW16, void* dC16, int M, int K, int N);
 int cu_download_u16(const void* dsrc, unsigned short* dst, int n);
+// cu_matmul_f16w_acc16: drop-in f32-output twin of cu_matmul_f16w with f16 accumulate (+convert).
+int cu_matmul_f16w_acc16(const void* dA32, const void* dW16, void* dC32, int M, int K, int N, float beta);
 // cu_copy_rows: device→device copy nElems floats from src to dst+dstOffset (KV-cache append).
 int cu_copy_rows(void* dst, const void* src, int dstOffset, int nElems);
 void* cu_upload_i32(const int* src, int n);

@@ -55,7 +55,13 @@ func (r *ResidentBF16) MatMulDevice(a *DeviceF32) (*DeviceF32, error) {
 	if out == nil {
 		return nil, fmt.Errorf("cuda: f16 MatMulDevice output alloc failed")
 	}
-	if rc := C.cu_matmul_f16w(a.ptr, r.ptr, out, C.int(a.rows), C.int(r.k), C.int(r.n), C.float(0)); rc != 0 {
+	var rc C.int
+	if f16AccEnabled() {
+		rc = C.cu_matmul_f16w_acc16(a.ptr, r.ptr, out, C.int(a.rows), C.int(r.k), C.int(r.n), C.float(0))
+	} else {
+		rc = C.cu_matmul_f16w(a.ptr, r.ptr, out, C.int(a.rows), C.int(r.k), C.int(r.n), C.float(0))
+	}
+	if rc != 0 {
 		C.cu_free_f32(out)
 		return nil, fmt.Errorf("cuda: f16 matmul failed (code %d)", int(rc))
 	}
@@ -71,7 +77,13 @@ func (r *ResidentBF16) MatMulAccInto(a, c *DeviceF32) error {
 	if a.cols != r.k || c.rows != a.rows || c.cols != r.n {
 		return fmt.Errorf("cuda: f16 MatMulAccInto shape a[%d,%d]·B[%d,%d]→c[%d,%d]", a.rows, a.cols, r.k, r.n, c.rows, c.cols)
 	}
-	if rc := C.cu_matmul_f16w(a.ptr, r.ptr, c.ptr, C.int(a.rows), C.int(r.k), C.int(r.n), C.float(1)); rc != 0 {
+	var rc C.int
+	if f16AccEnabled() {
+		rc = C.cu_matmul_f16w_acc16(a.ptr, r.ptr, c.ptr, C.int(a.rows), C.int(r.k), C.int(r.n), C.float(1))
+	} else {
+		rc = C.cu_matmul_f16w(a.ptr, r.ptr, c.ptr, C.int(a.rows), C.int(r.k), C.int(r.n), C.float(1))
+	}
+	if rc != 0 {
 		return fmt.Errorf("cuda: f16 matmul-acc failed (code %d)", int(rc))
 	}
 	return nil
