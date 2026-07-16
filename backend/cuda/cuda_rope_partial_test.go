@@ -154,6 +154,83 @@ func TestCUDARoPEPartialBand(t *testing.T) {
 	}
 }
 
+// Recorder.RoPEPartialPair rotates the rotaryDim prefix of the q band and the k band of a
+// fused [seq,stride] QKV buffer in place — the fused-QKV partial-rope a graph-captured
+// GPT-NeoX/Phi/StableLM decoder records. The v band and all head tails stay untouched.
+func TestCUDARecRoPEPartialPair(t *testing.T) {
+	skipNoGPU(t)
+	rec, err := cuda.NewRecorder()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const (
+		seq, hd, rotaryDim = 2, 16, 8
+		headsQ, headsK     = 4, 2
+		offQ               = 0
+		offK               = headsQ * hd // 64
+		offV               = offK + headsK*hd
+		stride             = offV + headsK*hd // + a v band → 128
+		pos                = 9
+		base               = 10000.0
+		posDiv             = 1.0
+	)
+	x := bench.RandF32(tensor.Shape{seq, stride}, 31)
+	xf := append([]float32(nil), x.Storage().F32()...)
+
+	inv, err := cuda.BuildRoPEInv(rotaryDim, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer inv.Free()
+	d, err := cuda.UploadF32(x)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Free()
+	if err := rec.RoPEPartialPair(d, inv, seq, stride, headsQ, offQ, headsK, offK, hd, rotaryDim, pos, posDiv); err != nil {
+		t.Fatalf("RoPEPartialPair: %v", err)
+	}
+	if err := cuda.GraphSync(); err != nil {
+		t.Fatalf("GraphSync: %v", err)
+	}
+	got, err := d.ToHost()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Host oracle: rotate_half the rotaryDim prefix of each head in the q and k bands only.
+	half := rotaryDim / 2
+	freq := make([]float64, half)
+	for i := range freq {
+		freq[i] = 1.0 / math.Pow(base, float64(2*i)/float64(rotaryDim))
+	}
+	want := append([]float32(nil), xf...)
+	rotate := func(off, heads int) {
+		for s := 0; s < seq; s++ {
+			p := float64(pos+s) / posDiv
+			for h := 0; h < heads; h++ {
+				b := s*stride + off + h*hd
+				for i := 0; i < half; i++ {
+					ang := p * freq[i]
+					cs, sn := math.Cos(ang), math.Sin(ang)
+					qi, qih := float64(xf[b+i]), float64(xf[b+i+half])
+					want[b+i] = float32(qi*cs - qih*sn)
+					want[b+i+half] = float32(qih*cs + qi*sn)
+				}
+			}
+		}
+	}
+	rotate(offQ, headsQ)
+	rotate(offK, headsK)
+	for i := range got.Numel() {
+		idx := tensor.Unravel(i, got.Shape())
+		g, w := got.AtF64(idx...), float64(want[i])
+		if math.Abs(g-w) > 1e-3*math.Max(1, math.Abs(w)) {
+			t.Fatalf("rec RoPEPartialPair @%d: device %v host %v", i, g, w)
+		}
+	}
+}
+
 // The device-position partial rope (graph-capturable) must be BIT-IDENTICAL to the
 // host-posOffset partial rope at a matched position — same kernel, position from a
 // device int vs a launch param.
