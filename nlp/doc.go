@@ -29,17 +29,24 @@
 //     Transformer — a tokenizer-free model over raw bytes that entropy-patches the
 //     byte stream and runs a latent transformer over the patches.
 //   - Loading & adapting real Hugging Face checkpoints: converters that build the
-//     above models straight from a HF checkpoint — fifteen transformers-anchored
+//     above models straight from a HF checkpoint — twenty-three transformers-anchored
 //     architectures. Decoders through the Llama loader: LlamaFromHF (Llama/Mistral);
 //     Qwen2/Qwen2.5 (adds q/k/v bias); Qwen3 (per-head QK-norm, no bias); Phi3FromHF
 //     (packed qkv / gate-up); GraniteFromHF (four scalar multipliers). Decoders as
 //     dedicated types: GemmaFromHF (Gemma v1 — √dim scale, (1+w) RMSNorm, GeGLU);
 //     Gemma2FromHF (sandwich norms + logit soft-caps); OLMo2FromHF (post-norm blocks,
-//     full-width QK-norm); MixtralFromHF and Qwen3MoeFromHF (sparse top-k Mixture-of
-//     -Experts). Encoders: BertFromHF, RobertaFromHF, DistilBertFromHF; and T5FromHF +
-//     T5DecoderFromHF (the full seq2seq encoder–decoder). Each anchored bit- or
-//     tolerance-exact against transformers, and each decoder supports KV-cached
-//     generation. Weights load from safetensors or from .pt/.bin via the safe
+//     full-width QK-norm); CohereFromHF (parallel residual, LayerNorm, interleaved-RoPE
+//     via load permutation, logit scale); GPTNeoXFromHF (parallel residual, packed qkv,
+//     partial rotary, GELU MLP); StableLMFromHF (LayerNorm, partial rotary); PhiFromHF
+//     (Phi-1/2 — parallel residual, partial rotary, gelu_new); StarCoder2FromHF
+//     (LayerNorm, biased, GELU MLP); NemotronFromHF (LayerNorm1P, ReLU² MLP). Sparse
+//     Mixture-of-Experts: MixtralFromHF, Qwen3MoeFromHF, Qwen2MoeFromHF (adds a shared
+//     expert) and GraniteMoeFromHF — the KV-cached decode of every MoE evaluates only
+//     the routed top-k experts (SparseMoE.ForwardDecode). Encoders: BertFromHF,
+//     RobertaFromHF, DistilBertFromHF; and T5FromHF + T5DecoderFromHF (the full seq2seq
+//     encoder–decoder). Each anchored bit- or tolerance-exact against transformers, and
+//     each decoder supports KV-cached generation. GPT-NeoX/StableLM/Phi/Nemotron use the
+//     shared partial-rotary helper; Cohere the interleaved-RoPE load permutation. Weights load from safetensors or from .pt/.bin via the safe
 //     no-code-execution PyTorch loader (package format/pytorch); LlamaConfigFromHF
 //     (also Qwen2/Qwen3/Phi-3), GemmaConfigFromHF, Gemma2ConfigFromHF,
 //     MixtralConfigFromHF (also Qwen3-MoE), GraniteConfigFromHF and BertConfigFromHF

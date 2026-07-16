@@ -4,6 +4,13 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — docs: refresh the loadable-architecture catalogue to twenty-three (T765, 2026-07-16)
+
+The package godoc now lists all twenty-three transformers-anchored architectures — adding Cohere,
+GPT-NeoX, StableLM, Phi (1/2), StarCoder2, Nemotron, Qwen2-MoE and GraniteMoE, and noting the shared
+partial-rotary helper, the interleaved-RoPE load permutation, and that every MoE decode evaluates
+only the routed top-k experts.
+
 ### nlp — feat: GraniteMoE support — 23rd loadable architecture (T764, 2026-07-16)
 
 IBM GraniteMoE (`GraniteMoeForCausalLM`) as a self-contained `nlp.GraniteMoE` type: Granite's four
