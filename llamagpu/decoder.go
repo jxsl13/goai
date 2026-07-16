@@ -158,6 +158,9 @@ type block struct {
 	wqkv                linear
 	gAttn, gFFN, kC, vC buffer
 	bAttn, bFFN         buffer // LayerNorm betas (nil ⇒ RMSNorm, the Llama default)
+	// projection biases (nil ⇒ no bias): the fused-QKV bias [D+2·kvDim], the o-proj bias [D],
+	// and the GELU-MLP fc [hidden] / proj [D] biases — GPT-NeoX/Phi/StarCoder2 carry them.
+	qkvBias, oBias, fcBias, projBias buffer
 }
 
 // Decoder holds a Llama's weights + KV cache as device-resident buffers and runs one batched decode
@@ -223,13 +226,40 @@ func newDecoderCommon(cfg nlp.LlamaConfig, tokEmb *tensor.Tensor, ops backendOps
 // recordFFN records the feed-forward sublayer with the residual-add epilogue (dx += ffn(xn2)):
 // a 2-layer GELU MLP (fc → GELU → proj, GPT-NeoX/Phi/StarCoder2) when ffnGELU, else the SwiGLU
 // (silu(gate)·up → down, Llama/StableLM). wG/wU/wD are c_fc/·/c_proj or gate/up/down accordingly.
+// recordQKVProj records the fused QKV projection (xn·Wqkv) plus its optional bias — the bias is
+// added BEFORE RoPE, per the [q|k|v] band layout (GPT-NeoX/Phi/StarCoder2 have biased q/k/v).
+func (d *Decoder) recordQKVProj(r recorder, b block, rows int) error {
+	e := b.wqkv.record(r, d.xn.b, d.qkv.b, rows)
+	if b.qkvBias != nil {
+		e = firstErr(e, r.AddBias(d.qkv.b, b.qkvBias, d.qkv.b, rows, d.d+2*d.kvDim))
+	}
+	return e
+}
+
+// recordOProj records the attention output projection with its residual-add epilogue (dx +=
+// attn·Wo) plus the optional o-bias broadcast onto the residual stream.
+func (d *Decoder) recordOProj(r recorder, b block, rows int) error {
+	e := b.wo.recordAdd(r, d.attn.b, d.ao.b, d.dx.b, rows)
+	if b.oBias != nil {
+		e = firstErr(e, r.AddBias(d.dx.b, b.oBias, d.dx.b, rows, d.d))
+	}
+	return e
+}
+
 func (d *Decoder) recordFFN(r recorder, b block, rows int) error {
 	if d.ffnGELU {
-		return firstErr(
-			b.wG.record(r, d.xn2.b, d.gate.b, rows),           // fc = xn2·Wfc
+		e := b.wG.record(r, d.xn2.b, d.gate.b, rows) // fc = xn2·Wfc
+		if b.fcBias != nil {
+			e = firstErr(e, r.AddBias(d.gate.b, b.fcBias, d.gate.b, rows, d.hidden))
+		}
+		e = firstErr(e,
 			r.Unary(d.gate.b, d.gate.b, unaryGELU),            // GELU(fc)
 			b.wD.recordAdd(r, d.gate.b, d.mo.b, d.dx.b, rows), // dx += GELU(fc)·Wproj
 		)
+		if b.projBias != nil {
+			e = firstErr(e, r.AddBias(d.dx.b, b.projBias, d.dx.b, rows, d.d))
+		}
+		return e
 	}
 	return firstErr(
 		b.wG.record(r, d.xn2.b, d.gate.b, rows),
@@ -523,7 +553,7 @@ func (d *Decoder) encodeStep(pos int) (recorder, error) {
 		if e == nil && b.wqkv != nil {
 			qBuf = d.qkv.b
 			e = firstErr(
-				b.wqkv.record(r, d.xn.b, d.qkv.b, 1),
+				d.recordQKVProj(r, b, 1),
 				d.ropeQK(r, d.qkv.b, d.dinv.b, 1, D+2*kvDim, pos), // q+k bands, ONE dispatch (§T613); full ∨ partial rotary
 				r.Blit(d.qkv.b, D, b.kC, pos*kvDim, kvDim),
 				r.Blit(d.qkv.b, D+kvDim, b.vC, pos*kvDim, kvDim),
@@ -542,7 +572,7 @@ func (d *Decoder) encodeStep(pos int) (recorder, error) {
 		e = firstErr(
 			e,
 			r.MHA(qBuf, b.kC, b.vC, d.attn.b, 1, pos+1, D, H, KVH, dk, 1, 0, d.scale),
-			b.wo.recordAdd(r, d.attn.b, d.ao.b, d.dx.b, 1), // dx += attn·Wo (fused epilogue, §T613)
+			d.recordOProj(r, b, 1), // dx += attn·Wo (+ optional o-bias)
 			d.norm(r, d.dx.b, b.gFFN, b.bFFN, d.xn2.b, 1),
 			d.recordFFN(r, b, 1),
 		)
@@ -661,7 +691,7 @@ func (d *Decoder) StepN(tokens []int, pos int) ([]float32, error) {
 		e := d.norm(r, d.dx.b, b.gAttn, b.bAttn, d.xn.b, k)
 		if e == nil && b.wqkv != nil {
 			e = firstErr(
-				b.wqkv.record(r, d.xn.b, d.qkv.b, k),
+				d.recordQKVProj(r, b, k),
 				d.ropeQK(r, d.qkv.b, d.dinv.b, k, stride, pos), // q+k bands, ONE dispatch (§T613); full ∨ partial rotary
 				r.Copy2D(d.qkv.b, 0, stride, d.q.b, 0, D, k, D),
 				r.Copy2D(d.qkv.b, D, stride, b.kC, pos*kvDim, kvDim, k, kvDim),
@@ -683,7 +713,7 @@ func (d *Decoder) StepN(tokens []int, pos int) ([]float32, error) {
 			// sq=k vs sk=pos+k: the kernel's causal offset (sk-sq = pos) makes row i attend
 			// through absolute position pos+i — exactly the prefill/verify semantics.
 			r.MHA(d.q.b, b.kC, b.vC, d.attn.b, k, pos+k, D, H, KVH, dk, 1, 0, d.scale),
-			b.wo.recordAdd(r, d.attn.b, d.ao.b, d.dx.b, k), // dx += attn·Wo (fused epilogue, §T613)
+			d.recordOProj(r, b, k), // dx += attn·Wo (+ optional o-bias)
 			d.norm(r, d.dx.b, b.gFFN, b.bFFN, d.xn2.b, k),
 			d.recordFFN(r, b, k),
 		)
