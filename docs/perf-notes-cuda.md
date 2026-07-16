@@ -121,6 +121,25 @@ vector, a huge weight matrix). Rules, strongest first:
   real levers left are **lower-bit quant** (fewer bytes) or **pre-decoding scales
   at upload** (trade weight bytes for no in-kernel unpack). Confirmed 3× (Tw44,
   Tw56, Tw58).
+  - **Worked example — the pre-decode probe (`ResidentBQ4KPre`, R5 in action).** We
+    repacked Q4_K to carry the 8 sub-block scales as f32 (c1=d·sc6, c2=dmin·min6) so
+    the GEMV drops the `get_sm` unpack + f16 decode + 2 shfls entirely — **bit-exact**
+    (rel 0.00e+00), at the cost of +33% weight bytes. The A/B is a textbook R1-vs-R5
+    collision and the result maps *exactly* onto the theory: it **wins where the
+    shape is not bandwidth-bound** (k/v 2048×256 −16.7%, the occupancy-cliff-starved
+    shape from R3; down 5632×2048 −5.2%, large-K = the most scale-decode ALU) and
+    **loses where it is** (q/o 2048×2048 +2.0%, gate/up 2048×5632 +3.1% — the +33%
+    bytes dominates). Per-shape routing (pre for starved-N + large-K) nets ≈ −2.5% on
+    the *isolated GEMV subset*. **BUT the e2e decode A/B was only +0.3%** (253.4 vs
+    252.8 tok/s, TinyLlama-Q4_K_M, token-identical) — the k/v+down GEMVs are too small
+    a slice of the decode *step* (attention, RoPE, norms, KV append, sampling, launch
+    overhead) for their −5–17% to move the needle. **Two lessons:** (1) an ALU-relief
+    transform on a bandwidth-bound path only pays where bandwidth isn't the binder;
+    (2) *always close the loop with an END-TO-END A/B* — an isolated-kernel win is
+    diluted by everything else in the step, so a −2.5% GEMV subset became a +0.3%
+    (noise) decode. The pre-decode is kept **opt-in, not defaulted** — a rule-validating
+    probe, not a shipped speedup. This is the R5 mirror of Tw56/58: measure-first,
+    then measure *again* end-to-end.
 - **R6 — Codebook placement for i-quants.** Small (≤16-entry, IQ4/MXFP4) → inline
   as a kernel `const` array. Large grids (256×8, 512×4 — IQ2/IQ3) → upload once to
   a **shared device buffer** (reconstruct host-side via the public
@@ -236,3 +255,35 @@ assumption before applying them.
 profiler, and the transformation catalog (§2–§4) is the terrain we've actually
 walked. Nothing in the external literature contradicted a measured result; it
 only supplied the *names* and the *hardware reasons* for what the probes found.
+
+---
+
+## 8. Where GoAI actually loses vs llama.cpp — aim here, not at decode
+
+Optimization effort is only worth spending where there's a real gap. Measured
+standing on this box (RTX 3060) vs llama.cpp-Vulkan:
+
+- **Decode (token generation): ≈ parity / ahead.** GoAI ~253 tok/s (TinyLlama-Q4_K_M,
+  graph-captured) vs llama.cpp ~246. The decode path is graph-captured + on-device
+  argmax + native-quant GEMVs at their Pareto ceiling. **Do not grind decode** — it's
+  won. (The Q4_K pre-decode probe in §2/R5 re-taught this: a −16.7% isolated k/v GEMV
+  became +0.3% e2e because the GEMVs are a small slice of an already-tight step.)
+- **Prefill (prompt processing): 0.36–0.54× — THIS is the gap.** GoAI-f16 0.54×,
+  GoAI-MMQ int8 0.36× of llama.cpp-Vulkan. Prefill is GEMM-compute-bound (FFN GEMM
+  ~54% of the step, attention ~14%).
+
+So the "beat the incumbent" lever is **prefill GEMM throughput**. But note what's
+already been closed there (§3): the int8 tensor-core GEMM is at its hand-NVRTC ceiling
+(~22–23 TOPS, beats cuBLAS-f16 by ~7% but ~22% of int8 peak; the 2× needs CUTLASS-level
+ptxas tuning), warp-spec/big-tiles regress on sm_86 (R8), and flash-prefill + f16
+tensor-core attention both lost (R10). **The prefill gap is HW/tooling-limited**: closing
+it needs `mma.h`/WMMA (blocked on the NVRTC-without-mma.h wall) or a CUTLASS-class kernel
+— not another hand-NVRTC micro-opt. Until that wall moves, prefill is at its practical
+ceiling too.
+
+**Bottom line for future fires:** both the decode and prefill frontiers are
+characterized and at their hand-tool ceilings on this stack. New wins require either
+(a) a *capability* GoAI lacks (new quant format, longer-context path) rather than a
+speed micro-opt, or (b) a toolchain change (mma.h access, a newer Go with faster
+int-vector codegen for the amd64 SIMD side). Don't re-grind a characterized ceiling —
+§0 and §5 exist to stop exactly that.

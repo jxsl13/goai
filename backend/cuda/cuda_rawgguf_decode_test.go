@@ -66,6 +66,16 @@ func qkvFuse() bool { return os.Getenv("GOAI_CUDA_QKV_FUSE") == "1" }
 // the occupancy-cliff theory predicts only a small gain here. Opt-in; measured by A/B.
 func gateUpFuse() bool { return os.Getenv("GOAI_CUDA_GATEUP_FUSE") == "1" }
 
+// q4kPre selects the pre-decoded-scale Q4_K resident (perf-notes-cuda.md R5) for the projections
+// it wins on. Opt-in A/B; bit-exact so decode tokens are identical either way.
+func q4kPre() bool { return os.Getenv("GOAI_CUDA_Q4KPRE") == "1" }
+
+// q4kPreProj is true for the projections where the pre-decode's ALU relief beats its +33% bytes
+// (measured, docs/perf-notes-cuda.md): k/v (starved small-N, not BW-bound) and ffn_down (large-K).
+func q4kPreProj(n string) bool {
+	return strings.Contains(n, "attn_k.weight") || strings.Contains(n, "attn_v.weight") || strings.Contains(n, "ffn_down.weight")
+}
+
 // stackRows0 concatenates output-major [Ni,K] f32 weight tensors along axis 0 into one
 // [ΣNi,K] tensor (row-major, so a plain storage append). Feeding this to the Q4_K
 // encoder yields blocks whose first Nq rows are byte-identical to encoding wq alone —
@@ -191,6 +201,15 @@ func buildRawGraphDecoder(tb testing.TB, rf *gguf.RawFile, arch string, maxSeq i
 		qt, ok := rf.Tensors[n]
 		if !ok {
 			tb.Fatalf("missing tensor %s", n)
+		}
+		// Q4_K pre-decoded-scale routing (perf-notes-cuda.md R5): the pre-decode wins only where the
+		// shape is NOT bandwidth-bound — k/v (starved small-N) and ffn_down (large-K, most scale-decode
+		// ALU) — so route ONLY those to ResidentBQ4KPre; q/o/gate/up stay standard (their +33% bytes
+		// would lose). GGType 12 == Q4_K. Opt-in A/B (GOAI_CUDA_Q4KPRE=1). Bit-exact → token-identical.
+		if q4kPre() && qt.GGType == 12 && q4kPreProj(n) {
+			r, err := cuda.NewResidentBQ4KPreFromBlocks(qt.Data, qt.Shape[1], qt.Shape[0])
+			mustTB(tb, err)
+			return r
 		}
 		r, err := quant(qt)
 		mustTB(tb, err)
