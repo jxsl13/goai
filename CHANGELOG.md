@@ -23,6 +23,23 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   32 u16 qs words). Grid reconstructed the same way; kernel lane = qs word (8 elements each). Parity
   rel **9.8e-8**, bit-exact, first try. `quantDirect case 17` wired. The remaining grid i-quants
   (IQ3_XXS, IQ3_S, IQ1) are the same-mechanism follow-ups.
+### classic — round 13: k-NN, Naive Bayes, GMM, DBSCAN (T710, 2026-07-16)
+
+Four more foundational classical methods, completing the classic package's baseline set
+(now OLS/logistic/k-means/PCA + trees/forest/GBM/SVM + these). Pure Go, sklearn-golden
+anchored.
+
+- **k-NN** (`classic/knn.go`, Cover & Hart 1967) — classifier + regressor, Euclidean/
+  Manhattan, uniform/distance weights. Matches sklearn *exactly*; 1-NN recalls the
+  training set; k-sensitivity reproduced.
+- **Gaussian Naive Bayes** (`classic/naivebayes.go`) — per-class Gaussians with
+  sklearn-style variance smoothing; parameters and log-posterior match sklearn to
+  ~1e-14; closed-form hand-checked.
+- **GMM/EM** (`classic/gmm.go`, Dempster et al. 1977) — diagonal + full covariance;
+  log-likelihood matches sklearn to ~5e-14, is monotone non-decreasing, K=1 collapses to
+  a single Gaussian, and it recovers separated clusters at accuracy 1.000.
+- **DBSCAN** (`classic/dbscan.go`, Ester et al. 1996) — density clustering with noise;
+  labels match sklearn exactly (up to renumbering) across six datasets.
 
 ### CUDA — small-block quant GEMV ~2.4–2.9× faster: Q4_0 & MXFP4 now beat Q4_K decode (worker linux-amd64, Tw72, 2026-07-16)
 - The 32-element-block quants (Q4_0, MXFP4) decoded 2–2.7× SLOWER than Q4_K despite identical

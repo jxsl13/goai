@@ -1,7 +1,8 @@
 // Package classic implements the classical (pre-deep-learning) machine-learning
 // methods: ordinary least squares, softmax/logistic regression, k-means
 // clustering, principal component analysis, the tree-based tabular models
-// (decision tree, random forest, gradient boosting), and support vector machines.
+// (decision tree, random forest, gradient boosting), support vector machines,
+// k-nearest-neighbours, Gaussian Naive Bayes, Gaussian mixture models, and DBSCAN.
 //
 // # For AI practitioners
 //
@@ -23,6 +24,12 @@
 //     residual-fitting shallow trees (the core of XGBoost/LightGBM).
 //   - [SVC] — a binary support vector classifier (SMO on the soft-margin dual)
 //     with linear / RBF / polynomial kernels.
+//   - [KNNClassifier] / [KNNRegressor] — k-nearest-neighbours (Cover & Hart 1967),
+//     the lazy instance-based baseline.
+//   - [GaussianNB] — Gaussian Naive Bayes, the fast probabilistic baseline.
+//   - [GaussianMixture] — Gaussian mixture models via EM (soft clustering /
+//     density estimation, diagonal or full covariance).
+//   - [DBSCAN] — density-based clustering with noise (Ester et al. 1996), no K.
 //
 // Each is validated to reference tolerance against scikit-learn (§V1): OLS (ordinary least squares)
 // coefficients to ~1e-8, softmax probabilities to ~1e-5, k-means labels exactly,
