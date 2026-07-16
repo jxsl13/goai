@@ -51,6 +51,14 @@ learns-a-task value proof (~1e-10).
   `b→+∞` ⇒ `O=Σ v_j`; causal future-independence (<1e-12); gradcheck 1.6e-10; a
   causal char-LM learns (CE 3.236→0.734). Distinct from the existing Softpick
   (off-by-one softmax) — this one is genuinely unnormalized.
+- **Selective attention** (`nn/selective_attention.go`, Leviathan et al. / Google 2024,
+  arXiv:2410.02703). Tokens cause *other* tokens to be masked from future attention:
+  logits get a subtracted term `F` that is the causal cumulative sum (over queries) of
+  a non-negative selection derived from head 0's own logits — near-parameter-free.
+  Anchors: `WithSelectionDisabled` collapses to standard causal MHA bit-exact;
+  selection causality (`F[i]` depends only on queries `<i`); gradcheck 7.6e-10; on a
+  latest-value-recall-with-distractors task selective (0.0001) clearly beats the
+  selection-off baseline (0.117).
 
 ### nn/nlp — topic-discovery round 6: 18 new techniques across optimizers, attention, quant, sampling, MoE, distillation, embeddings, augmentation, RL (T668–T684, 2026-07-15/16)
 

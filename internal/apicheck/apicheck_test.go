@@ -109,6 +109,7 @@ var typeExampleExempt = map[string]bool{
 	"nn.KANOption":                  true, // functional-option type (shown via WithKANGridSize/SplineOrder/GridRange)
 	"nn.PattentionOption":           true, // functional-option type (shown via WithPattentionDtype/WithPattentionUncoupledNorm)
 	"nn.SigmoidAttentionOption":     true, // functional-option type (shown via WithSigmoidAttnCausal etc.)
+	"nn.SelectiveAttentionOption":   true, // functional-option type (shown via WithSelectionDisabled)
 	"nn.PrefOption":                 true, // functional-option type (shown via Beta/ReferencePoint)
 	"nn.GRPOOption":                 true, // functional-option type (shown via WithKLBeta)
 	"nn.GSPOOption":                 true, // functional-option type (shown via WithGSPOClipEpsilon)
