@@ -23,6 +23,35 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   **opt-in** (`GOAI_CUDA_FFN_FUSE=1`). The remaining Tw55 lever is slice (b) —
   concurrent QKV streams in graph capture (QKV proj ≈11% of prefill), still open.
 
+### nn — topic-discovery round 7: 3 distinct architectures (KAN, Tokenformer, sigmoid-attention) (T686–T688, 2026-07-16)
+
+A fresh sweep of *distinct layer/architecture types* (not the round-6 technique
+categories) found three genuinely-novel gaps — proving the "frontier tapped" read
+wrong a fourth time. Each was delegated to an isolated worktree, then independently
+re-verified on `main`, and carries a collapse/limit anchor + gradcheck + a
+learns-a-task value proof (~1e-10).
+
+- **KAN** (`nn/kan.go`, Liu et al. 2024, arXiv:2404.19756). Kolmogorov-Arnold layer:
+  learnable B-spline univariate functions on *edges* (Cox–de Boor basis) plus a SiLU
+  residual, instead of fixed activations on nodes. Anchors: `WScale=0` collapses to
+  `SiLU(x)·W` bit-exact; B-spline partition-of-unity @1e-10; gradcheck over all three
+  learnable tensors; a 1→1 KAN fits `sin(πx)` (MSE 0.275→1e-6). Fully composed from
+  existing ops — no new VJP.
+- **Tokenformer / Pattention** (`nn/tokenformer.go`, Wang et al. 2024, arXiv:2410.23168).
+  Projection as attention over *learnable parameter tokens*, so a model scales
+  incrementally by appending token pairs (`Grow`). The default normalization is the
+  paper's coupled Eq. 5 (`GELU(S·τ/√(ΣS²+ε))`, faithful); an uncoupled per-score
+  variant is opt-in via `WithPattentionUncoupledNorm`. Coupled-mode growth is
+  approximate/resume (bounded, → 0 as new-key scores → 0; bit-exact only at
+  zero-scored keys via frozen τ); the uncoupled variant is bit-exact. Gradcheck both
+  modes; fits `GELU(X·A)·B` (MSE 0.575→0.0019, near-lossless `Grow`, then →0.00018).
+- **Sigmoid attention** (`nn/sigmoid_attention.go`, Ramapuram et al. / Apple 2024,
+  arXiv:2409.04431). Element-wise `σ(QKᵀ/√d + b)` with no cross-key normalization,
+  `b = −log(n)` default. Anchors: single-key exact; `b→−∞` ⇒ `O=0` bit-exact and
+  `b→+∞` ⇒ `O=Σ v_j`; causal future-independence (<1e-12); gradcheck 1.6e-10; a
+  causal char-LM learns (CE 3.236→0.734). Distinct from the existing Softpick
+  (off-by-one softmax) — this one is genuinely unnormalized.
+
 ### nn/nlp — topic-discovery round 6: 18 new techniques across optimizers, attention, quant, sampling, MoE, distillation, embeddings, augmentation, RL (T668–T684, 2026-07-15/16)
 
 A systematic verify-first sweep per category (the earlier rounds were architecture-block-focused

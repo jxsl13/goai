@@ -106,6 +106,9 @@ var typeExampleExempt = map[string]bool{
 	"nn.Layer":                      true, // interface (Linear/Sequential are the impls)
 	"nn.Optimizer":                  true, // interface (SGD/Adam/Lion are the impls)
 	"nn.Activation":                 true, // built via ReLU()/GELU()/…, shown in ExampleSequential
+	"nn.KANOption":                  true, // functional-option type (shown via WithKANGridSize/SplineOrder/GridRange)
+	"nn.PattentionOption":           true, // functional-option type (shown via WithPattentionDtype/WithPattentionUncoupledNorm)
+	"nn.SigmoidAttentionOption":     true, // functional-option type (shown via WithSigmoidAttnCausal etc.)
 	"nn.PrefOption":                 true, // functional-option type (shown via Beta/ReferencePoint)
 	"nn.GRPOOption":                 true, // functional-option type (shown via WithKLBeta)
 	"nn.GSPOOption":                 true, // functional-option type (shown via WithGSPOClipEpsilon)
