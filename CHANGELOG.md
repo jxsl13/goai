@@ -24,6 +24,14 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   resident bytes the decode GEMV reads → **one weight, both paths, zero extra prefill VRAM** for a
   Q8-decode model (vs f16 prefill = a full 2× copy). Requires K%32/N%64 (clean error → f16 fallback).
 
+### nlp — benchmark: GPT-2 BPE tokenization beats tiktoken's Rust (T719, 2026-07-16)
+
+Measured GoAI's pure-Go GPT-2 BPE against tiktoken 0.13.0 (`gpt2` encoding) on the same
+1 MB text: **identical 216511-token output**, GoAI **≈23 MB/s vs tiktoken ≈20 MB/s** — i.e.
+the pure-Go tokenizer is ≈1.15× faster than the Rust incumbent, at exact token parity. Added
+`BenchmarkGPT2Encode` (nlp) as a permanent throughput regression guard. Tokenization joins
+the classical methods as a metric where GoAI beats its Python/Rust-stack incumbent outright.
+
 ### classic — performance: softmax regression now uses Newton/IRLS (T718, 2026-07-16)
 
 SoftmaxRegression trained by gradient descent (352 ms for 200 steps) where sklearn uses a
