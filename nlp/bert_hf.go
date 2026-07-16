@@ -142,3 +142,115 @@ func RobertaFromHF(ts map[string]*tensor.Tensor, cfg BertConfig) (*Bert, error) 
 	}
 	return BertFromHF(ts, cfg)
 }
+
+// DistilBertFromHF builds a [Bert] from a Hugging Face DistilBertModel
+// checkpoint. DistilBERT is the same post-LN bidirectional encoder as BERT but
+// with no segment (token-type) embedding and different tensor names
+// (transformer.layer.N.{attention.{q,k,v,out}_lin, sa_layer_norm, ffn.{lin1,lin2},
+// output_layer_norm}). cfg supplies Heads (and Eps, default 1e-12); dims are
+// inferred. The resulting model's SegEmb is nil, so pass segments=nil to Forward.
+func DistilBertFromHF(ts map[string]*tensor.Tensor, cfg BertConfig) (*Bert, error) {
+	get := func(name string) (*tensor.Tensor, error) {
+		if t, ok := ts[name]; ok {
+			return t, nil
+		}
+		return nil, fmt.Errorf("nlp: HF DistilBERT missing %s", name)
+	}
+	we, err := get("embeddings.word_embeddings.weight")
+	if err != nil {
+		return nil, err
+	}
+	pe, err := get("embeddings.position_embeddings.weight")
+	if err != nil {
+		return nil, err
+	}
+	if cfg.Heads <= 0 {
+		return nil, fmt.Errorf("nlp: DistilBertFromHF needs cfg.Heads")
+	}
+	if cfg.Eps == 0 {
+		cfg.Eps = 1e-12
+	}
+	cfg.Vocab, cfg.Dim = we.Shape()[0], we.Shape()[1]
+	cfg.MaxPos = pe.Shape()[0]
+	ln := func(prefix string) (*nn.LayerNorm, error) {
+		g, err := get(prefix + ".weight")
+		if err != nil {
+			return nil, err
+		}
+		b, err := get(prefix + ".bias")
+		if err != nil {
+			return nil, err
+		}
+		return &nn.LayerNorm{Gamma: cloneF64(g), Beta: cloneF64(b), Eps: cfg.Eps}, nil
+	}
+	embLN, err := ln("embeddings.LayerNorm")
+	if err != nil {
+		return nil, err
+	}
+	m := &Bert{Config: cfg, TokEmb: cloneF64(we), PosEmb: cloneF64(pe), SegEmb: nil, EmbLN: embLN}
+
+	layers := 0
+	for {
+		if _, ok := ts[fmt.Sprintf("transformer.layer.%d.attention.q_lin.weight", layers)]; !ok {
+			break
+		}
+		layers++
+	}
+	if layers == 0 {
+		return nil, fmt.Errorf("nlp: HF DistilBERT has no transformer.layer.*")
+	}
+	cfg.Layers = layers
+	m.Config = cfg
+	for l := range layers {
+		p := fmt.Sprintf("transformer.layer.%d.", l)
+		proj := func(name string) (w, b *tensor.Tensor, err error) {
+			if w, err = get(p + name + ".weight"); err != nil {
+				return
+			}
+			b, err = get(p + name + ".bias")
+			return
+		}
+		qw, qb, err := proj("attention.q_lin")
+		if err != nil {
+			return nil, err
+		}
+		kw, kb, err := proj("attention.k_lin")
+		if err != nil {
+			return nil, err
+		}
+		vw, vb, err := proj("attention.v_lin")
+		if err != nil {
+			return nil, err
+		}
+		ow, ob, err := proj("attention.out_lin")
+		if err != nil {
+			return nil, err
+		}
+		attn, err := NewMHA(cfg.Heads, transpose2D(qw), transpose2D(kw), transpose2D(vw), transpose2D(ow))
+		if err != nil {
+			return nil, err
+		}
+		attn.Bias = map[string]*tensor.Tensor{"q": cloneF64(qb), "k": cloneF64(kb), "v": cloneF64(vb), "o": cloneF64(ob)}
+		attnLN, err := ln(p + "sa_layer_norm")
+		if err != nil {
+			return nil, err
+		}
+		iw, ib, err := proj("ffn.lin1")
+		if err != nil {
+			return nil, err
+		}
+		dw, db, err := proj("ffn.lin2")
+		if err != nil {
+			return nil, err
+		}
+		ffnLN, err := ln(p + "output_layer_norm")
+		if err != nil {
+			return nil, err
+		}
+		m.Layers = append(m.Layers, &BertLayer{
+			Attn: attn, AttnLN: attnLN,
+			W1: transpose2D(iw), B1: cloneF64(ib), W2: transpose2D(dw), B2: cloneF64(db), FFNLN: ffnLN,
+		})
+	}
+	return m, nil
+}

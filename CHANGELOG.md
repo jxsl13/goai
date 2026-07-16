@@ -23,6 +23,16 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   one quant of the attn-norm hidden, gate/up share one of the ffn-norm hidden (f16 weights fall
   back). End-to-end on TinyLlama, MMQ prefill 3552 -> 3793 t/s (+6.8%); combined with the ldmatrix
   loads it is 3479 -> 3793 (+9% e2e, MMQ prefill now 0.74x f16 vs 0.68x before), same accuracy.
+### nlp — new: DistilBERT encoder support (T729, 2026-07-16)
+
+`DistilBertFromHF` loads a Hugging Face DistilBertModel — the same post-LN bidirectional
+encoder as BERT but with no segment (token-type) embedding and different tensor names
+(`transformer.layer.N.{attention.{q,k,v,out}_lin, sa_layer_norm, ffn.{lin1,lin2},
+output_layer_norm}`). The `Bert` segment embedding is now optional (`SegEmb == nil`), so the
+same model serves BERT, RoBERTa and DistilBERT. Anchored against transformers DistilBertModel:
+`last_hidden_state` matches to 5.2e-7. DistilBERT is one of the most-downloaded models, so this
+meaningfully widens real-checkpoint coverage. An end-to-end test also validates the marquee retrieval pipeline (BertFromHF → Forward → MeanPool) — the L2-normalized sentence embedding matches transformers+mean-pool to ~1e-8.
+
 ### nlp — new: parse HF config.json → model config (T728, 2026-07-16)
 
 The HF converters (`LlamaFromHF`, `BertFromHF`, `RobertaFromHF`) needed the caller to hand-set

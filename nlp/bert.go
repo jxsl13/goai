@@ -64,16 +64,12 @@ func (b *Bert) Embed(ctx *backend.Context, tokens, segments []int) (*tensor.Tens
 	}
 	tokIdx := tensor.New(b.TokEmb.Dtype(), tensor.Shape{seq})
 	posIdx := tensor.New(b.PosEmb.Dtype(), tensor.Shape{seq})
-	segIdx := tensor.New(b.SegEmb.Dtype(), tensor.Shape{seq})
 	for i, t := range tokens {
 		if t < 0 || t >= b.Config.Vocab {
 			return nil, fmt.Errorf("nlp: token %d outside vocab %d", t, b.Config.Vocab)
 		}
 		tokIdx.SetF64(float64(t), i)
 		posIdx.SetF64(float64(b.Config.PosOffset+i), i)
-		if segments != nil {
-			segIdx.SetF64(float64(segments[i]), i)
-		}
 	}
 	et, err := exec1(ctx, backend.OpEmbed, nil, b.TokEmb, tokIdx)
 	if err != nil {
@@ -83,16 +79,26 @@ func (b *Bert) Embed(ctx *backend.Context, tokens, segments []int) (*tensor.Tens
 	if err != nil {
 		return nil, err
 	}
-	es, err := exec1(ctx, backend.OpEmbed, nil, b.SegEmb, segIdx)
-	if err != nil {
-		return nil, err
-	}
 	x, err := exec1(ctx, backend.OpAdd, nil, et, ep)
 	if err != nil {
 		return nil, err
 	}
-	if x, err = exec1(ctx, backend.OpAdd, nil, x, es); err != nil {
-		return nil, err
+	// Segment (token-type) embedding is optional: BERT/RoBERTa have it, DistilBERT
+	// does not (SegEmb == nil).
+	if b.SegEmb != nil {
+		segIdx := tensor.New(b.SegEmb.Dtype(), tensor.Shape{seq})
+		if segments != nil {
+			for i := range tokens {
+				segIdx.SetF64(float64(segments[i]), i)
+			}
+		}
+		es, err := exec1(ctx, backend.OpEmbed, nil, b.SegEmb, segIdx)
+		if err != nil {
+			return nil, err
+		}
+		if x, err = exec1(ctx, backend.OpAdd, nil, x, es); err != nil {
+			return nil, err
+		}
 	}
 	return b.EmbLN.Forward(ctx, x)
 }
@@ -144,7 +150,10 @@ func (b *Bert) Forward(ctx *backend.Context, tokens, segments []int) (*tensor.Te
 
 // Params returns every trainable tensor for optimizers.
 func (b *Bert) Params() []*tensor.Tensor {
-	ps := []*tensor.Tensor{b.TokEmb, b.PosEmb, b.SegEmb, b.EmbLN.Gamma, b.EmbLN.Beta}
+	ps := []*tensor.Tensor{b.TokEmb, b.PosEmb, b.EmbLN.Gamma, b.EmbLN.Beta}
+	if b.SegEmb != nil {
+		ps = append(ps, b.SegEmb)
+	}
 	for _, l := range b.Layers {
 		ps = append(ps, l.Attn.Wq, l.Attn.Wk, l.Attn.Wv, l.Attn.Wo,
 			l.Attn.Bias["q"], l.Attn.Bias["k"], l.Attn.Bias["v"], l.Attn.Bias["o"],
