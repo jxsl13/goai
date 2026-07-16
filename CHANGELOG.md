@@ -4,6 +4,25 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — fused-QKV/gate-up is now format-aware, no Q8→Q4_K downgrade (worker linux-amd64, Tw57 slice 1, 2026-07-16)
+- The decode row-fusion (Tw55(b): `wq|wk|wv` → one GEMV; `ffn_gate|ffn_up` → one GEMV) was
+  hardwired to Q4_K. A Q8 decoder that opted into `GOAI_CUDA_QKV_FUSE`/`GOAI_CUDA_GATEUP_FUSE`
+  therefore had its fused QKV/gate-up **silently requantized down to Q4_K** — a precision
+  downgrade the separate-GEMV Q8 path never took.
+- New `fuseRowsQ8` (the Q8_0 twin of `fuseRowsQ4K`: row-stack → transpose → `NewResidentBQ8`) and a
+  `fuseRows` dispatch on `GOAI_CUDA_FUSE_FMT` (default `q4k`, behavior unchanged). Q8_0 quantizes
+  each output column's K in independent 32-blocks, so the fused weight's first `Nq` columns are
+  byte-identical to encoding `wq` alone — **bit-exact per output row**, only the launch is merged.
+- Validated: `TestCUDAQKVFuseTokenParityQ8` — 24/24 greedy tokens identical to three separate Q8
+  GEMVs on TinyLlama-Q8 (no Q4_K downgrade); default Q4_K fusion parity un-regressed (QKV 24/24,
+  gate+up 24/24).
+- **Q8 fused-QKV is also a decode win: +2.8%** (216.3 vs 210.3 tok/s, 5 interleaved reps,
+  TinyLlama-Q8, `TestCUDAQKVFuseSpeedABQ8`) — smaller than Q4_K's +3.7%, exactly as the
+  occupancy-cliff law predicts: a Q8 k/v proj reads 2× the weight bytes of Q4_K at the same N=256,
+  so it is less latency-starved and has less headroom to reclaim by folding into the q launch.
+- Test-harness-only for now; productionizing into the llamagpu decoder + the qwen2 bias concat
+  remain (Tw57 slice 2+).
+
 ### CUDA — MMQ prefill +14% via ldmatrix loads in the per-row kernel (worker linux-amd64, Tw77, 2026-07-16)
 - `cu_matmul_i8_mmq_r` (the per-row MMQ kernel behind `ResidentMMQ.MatMul*`) now loads its A/B
   fragments via hardware `ldmatrix.x4`/`x2` instead of the manual 4-int-load + byte-assembly. The

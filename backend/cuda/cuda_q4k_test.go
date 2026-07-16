@@ -24,6 +24,13 @@ func quantQ4K(w *tensor.Tensor) (qProj, error) {
 	return cuda.NewResidentBQ4KFromBlocks(blocks, k, n)
 }
 
+// quantQ8 encodes a [K,N] f32 weight into a GPU-resident Q8_0 projection — the Q8 twin of
+// quantQ4K. NewResidentBQ8 takes the in-major [K,N] orientation directly (no pre-encoded
+// block layer), so the wrapper is a straight upload.
+func quantQ8(w *tensor.Tensor) (qProj, error) {
+	return cuda.NewResidentBQ8(w)
+}
+
 // The Q4_K GEMV must reproduce the EXACT dequantization semantics of the format —
 // the reference is quantize→dequantize (gguf, validated against gguf-py) →f32 matmul,
 // so the only allowed deviation is f32 summation order (~1e-5), NOT the quant error.
