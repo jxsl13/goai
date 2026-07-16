@@ -85,6 +85,53 @@ func GemmaConfigFromHF(configJSON []byte) (GemmaConfig, error) {
 	}, nil
 }
 
+// Gemma2ConfigFromHF parses a Hugging Face Gemma 2 config.json into a
+// [Gemma2Config] for [Gemma2FromHF] — including the three Gemma 2 scalars
+// (query_pre_attn_scalar, attn_logit_softcapping, final_logit_softcapping) that a
+// bare GemmaConfig lacks. Dim, Vocab, Layers, FFN, HeadDim are inferred from the
+// weights. Missing rms_norm_eps / rope_theta fall back to the Gemma defaults
+// (1e-6, 10000); the soft-cap fields default to 0 (disabled) if absent.
+func Gemma2ConfigFromHF(configJSON []byte) (Gemma2Config, error) {
+	var j struct {
+		NumAttentionHeads  int      `json:"num_attention_heads"`
+		NumKeyValueHeads   *int     `json:"num_key_value_heads"`
+		RMSNormEps         float64  `json:"rms_norm_eps"`
+		RopeTheta          float64  `json:"rope_theta"`
+		MaxPos             int      `json:"max_position_embeddings"`
+		QueryPreAttnScalar *float64 `json:"query_pre_attn_scalar"`
+		AttnLogitSoftcap   float64  `json:"attn_logit_softcapping"`
+		FinalLogitSoftcap  float64  `json:"final_logit_softcapping"`
+	}
+	if err := json.Unmarshal(configJSON, &j); err != nil {
+		return Gemma2Config{}, fmt.Errorf("nlp: parse Gemma2 config.json: %w", err)
+	}
+	if j.NumAttentionHeads <= 0 {
+		return Gemma2Config{}, fmt.Errorf("nlp: config.json missing num_attention_heads")
+	}
+	kv := j.NumAttentionHeads
+	if j.NumKeyValueHeads != nil {
+		kv = *j.NumKeyValueHeads
+	}
+	eps := j.RMSNormEps
+	if eps == 0 {
+		eps = 1e-6
+	}
+	var qScalar float64
+	if j.QueryPreAttnScalar != nil {
+		qScalar = *j.QueryPreAttnScalar
+	}
+	return Gemma2Config{
+		Heads:              j.NumAttentionHeads,
+		KVHeads:            kv,
+		Eps:                eps,
+		RopeBase:           j.RopeTheta, // 0 → Gemma2FromHF defaults to 10000
+		Ctx:                j.MaxPos,
+		QueryPreAttnScalar: qScalar, // 0 → Gemma2 falls back to HeadDim
+		AttnLogitCap:       j.AttnLogitSoftcap,
+		FinalLogitCap:      j.FinalLogitSoftcap,
+	}, nil
+}
+
 // MixtralConfigFromHF parses a Hugging Face Mixtral config.json into a
 // [MixtralConfig] for [MixtralFromHF] — Heads, KVHeads, TopK, Eps, RopeBase, Ctx
 // (Dim, Vocab, Layers, Hidden, Experts are inferred from the weights). Missing

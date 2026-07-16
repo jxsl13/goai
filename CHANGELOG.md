@@ -4,6 +4,24 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — feat: Gemma 2 support — 11th loadable architecture (T745, 2026-07-16)
+
+Gemma 2 (`Gemma2ForCausalLM`, Gemma Team arXiv:2408.00118) as a self-contained `nlp.Gemma2` type
+(`Gemma2FromHF`), building on the Gemma v1 traits (√dim embedding scale, (1+w) RMSNorm, GeGLU,
+decoupled head_dim, tied head) and adding the four Gemma 2 details: (1) **sandwich norms** — four
+(1+w) RMSNorms per block (input / post-attention / pre-FFN / post-FFN); (2) **attention-logit
+soft-cap** — the pre-softmax scores pass through `c·tanh(x/c)` before the causal mask; (3)
+**final-logit soft-cap** on the output logits (both via the existing `OpSoftCap`); (4)
+**query_pre_attn_scalar** score scaling. Because `OpMHA` cannot splice a soft-cap between the score
+scaling and the mask, the attention is built from primitives at the nlp level (per-head
+matmul/transpose/softcap/softmax), mirroring the reference `mhaKernel` numerics exactly — no backend
+change. Forward parity vs a real transformers `Gemma2ForCausalLM`: max abs logit diff 1.1e-7 on a
+golden deliberately amplified so the score-cap bites (without the cap the diff is 7.1e-2 — proving
+the cap is genuinely exercised, not vacuous). Note for regeneration: the golden MUST use
+`attn_implementation="eager"`, as `sdpa` silently drops the attention-score soft-cap. This brings
+the loadable, transformers-anchored architecture set to eleven. `Gemma2ConfigFromHF` reads the
+checkpoint's config.json — including the three Gemma 2 scalars — so loading is config-driven.
+
 ### nlp — feat: config.json parsers for Gemma and Mixtral (T746, 2026-07-16)
 
 `GemmaConfigFromHF` and `MixtralConfigFromHF` parse a Hugging Face `config.json` into the

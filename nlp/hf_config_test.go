@@ -59,6 +59,30 @@ func TestGemmaConfigFromHF(t *testing.T) {
 	}
 }
 
+func TestGemma2ConfigFromHF(t *testing.T) {
+	j := []byte(`{"model_type":"gemma2","num_attention_heads":8,"num_key_value_heads":4,
+		"rms_norm_eps":1e-6,"rope_theta":10000.0,"max_position_embeddings":8192,
+		"query_pre_attn_scalar":256,"attn_logit_softcapping":50.0,"final_logit_softcapping":30.0}`)
+	cfg, err := nlp.Gemma2ConfigFromHF(j)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Heads != 8 || cfg.KVHeads != 4 || cfg.Eps != 1e-6 || cfg.RopeBase != 10000 || cfg.Ctx != 8192 {
+		t.Fatalf("wrong Gemma2 config: %+v", cfg)
+	}
+	if cfg.QueryPreAttnScalar != 256 || cfg.AttnLogitCap != 50.0 || cfg.FinalLogitCap != 30.0 {
+		t.Fatalf("wrong Gemma2 soft-cap scalars: %+v", cfg)
+	}
+	// Absent soft-caps default to 0 (disabled); missing eps falls back to 1e-6.
+	def, err := nlp.Gemma2ConfigFromHF([]byte(`{"num_attention_heads":2}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if def.AttnLogitCap != 0 || def.FinalLogitCap != 0 || def.Eps != 1e-6 {
+		t.Fatalf("Gemma2 defaults wrong: %+v", def)
+	}
+}
+
 func TestMixtralConfigFromHF(t *testing.T) {
 	j := []byte(`{"model_type":"mixtral","num_attention_heads":32,"num_key_value_heads":8,
 		"num_experts_per_tok":2,"num_local_experts":8,"rms_norm_eps":1e-5,
