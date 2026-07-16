@@ -4,6 +4,17 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — feat: partial-rotary (partial RoPE) primitive (T756, 2026-07-16)
+
+A reusable `partialRoPE` helper that rotates only the first `rotary_dim` channels of each head
+(split-half), leaving the tail unrotated — the "partial rotary" of GPT-NeoX / StableLM / Phi
+(`partial_rotary_factor` / `rotary_pct` < 1). Built from primitives (reshape / slice / OpRoPE /
+concat, all with VJPs, so it stays trainable) — no backend change. GPT-NeoX's rotary is split-half
+like GoAI's `OpRoPE`, so the rotated portion needs no interleave permutation. Verified exact against
+the GPT-NeoX convention (2.2e-16 vs an f64 reference; the transformers `GPTNeoXRotaryEmbedding`
+computes cos/sin in f32, so its own golden matches only to ~1e-7). A spike-before-deferring result
+that unblocks the partial-rotary families for a later fire.
+
 ### nlp — feat: Cohere Command-R support — 16th loadable architecture (T755, 2026-07-16)
 
 Cohere Command-R (`CohereForCausalLM`) as a self-contained `nlp.Cohere` type, with four departures
