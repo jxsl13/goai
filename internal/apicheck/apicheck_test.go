@@ -192,6 +192,9 @@ var typeExampleExempt = map[string]bool{
 	"format/gguf.QuantTensor":         true, // a still-quantized tensor from ReadRaw, shown in ExampleReadRaw
 	"rl.Env":                          true, // interface (Chain is the example impl)
 	"rl.Reinforce":                    true, // policy-gradient agent; convergence shown in rl tests
+	"rl.PPOOption":                    true, // functional-option type (shown via WithPPOClip/WithPPOEpochs etc.)
+	"rl.A2COption":                    true, // functional-option type (shown via WithA2CLambda/WithA2CEntropyCoef etc.)
+	"rl.TabularOption":                true, // functional-option type (shown via WithStateIndexFunc/WithNumStates/WithEpsilonDecay)
 }
 
 func moduleRoot(t *testing.T) string {

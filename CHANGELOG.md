@@ -60,6 +60,24 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   natively, alongside the existing Q4_K/Q6_K native cases — so a Q5_K_M file now loads fully
   bit-native. (End-to-end real-model agreement, like `TestCUDAQ4KMDirect`, awaits a Q5_K_M
   GGUF, which is a user-gated download; the primitive itself is bit-exact validated.)
+### rl — topic-discovery round 12: control-RL agents (T707–T708, 2026-07-16)
+
+Another unswept supported domain — the `rl` package had only REINFORCE and DQN. Added
+the foundational on-policy and tabular control-RL algorithms, each anchored on
+convergence-to-optimal on the Chain MDP plus the defining mechanism properties.
+
+- **PPO + A2C** (`rl/ppo.go`, `rl/a2c.go`, Schulman 2017 / Mnih 2016). Clipped
+  actor-critic and its unclipped baseline, reusing the package's existing `rl.GAE`.
+  Anchors: both converge to the optimal Chain return (PPO 0.879→1.000, A2C 0.763→1.000);
+  GAE λ=0/λ=1 reduce to TD(0)/Monte-Carlo; the clip bounds the surrogate and, with
+  clipping off for one epoch, PPO's gradient equals A2C's bit-exactly; PPO policy-loss
+  gradcheck 9.4e-12.
+- **Tabular Q-learning + SARSA** (`rl/tabular.go`, Watkins / Sutton-Barto). Classic
+  value-based TD control over a Q-table. Anchors: both learn the optimal Chain policy;
+  the learned Q matches the analytically-computed Q* (Bellman optimality); on a
+  Sutton-Barto cliff-walk, off-policy Q-learning takes the risky optimal edge while
+  on-policy SARSA takes the safe detour (the classic distinction); α=0 and γ=0 limits
+  hold. SAC/DDPG/TD3 were deferred — continuous control needs a continuous Env.
 
 ### CUDA — prefill attention is O(seq²), but the lever is closed: flash + f16-GEMM both rejected (worker linux-amd64, Tw63/64/65, 2026-07-16)
 - With the GEMM lever cashed (Tw61/62 f16-accumulate), the next prefill bottleneck is the
