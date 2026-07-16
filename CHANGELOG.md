@@ -4,6 +4,16 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — feat: StableLM support — 18th loadable architecture (T758, 2026-07-16)
+
+StableLM (`StableLmForCausalLM`) as a self-contained `nlp.StableLM` type: LayerNorm WITH bias (γ and
+β, not RMSNorm), sequential two-norm residual (like Llama), partial rotary via the T756 `partialRoPE`
+helper, and a SwiGLU FFN. Forward parity vs a real transformers `StableLmForCausalLM`: max abs logit
+diff 2.7e-8; KV-decode matches Forward bit-for-bit (0.0); fine-tunes (loss 3.49 → 3.13). The golden
+uses partial_rotary_factor=0.5 (rotary_ndims=2) rather than a 0.25 that would give an ODD
+rotary_ndims — a transformers `StableLmRotaryEmbedding` broadcasting quirk that real StableLM
+checkpoints (head_dim 64/80 → even) never hit. Eighteenth loadable architecture.
+
 ### nlp — feat: GPT-NeoX / Pythia support — 17th loadable architecture (T757, 2026-07-16)
 
 GPT-NeoX (`GPTNeoXForCausalLM`, and the Pythia suite) as a self-contained `nlp.GPTNeoX` type,
