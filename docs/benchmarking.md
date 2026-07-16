@@ -1081,6 +1081,14 @@ Vulkan baselines as recorded earlier on the same RTX 3060):
 (Refreshed after the Tw52 flash-attention switch — TinyLlama +3.6% at the sweep's short
 window; the flash win is far larger at long context, see the flash section below.)
 
+**Re-validated 2026-07-16 (post-Tw73, current main, llama.cpp b10012 Vulkan on the RTX 3060):**
+TinyLlama decode tg128 — goai Q4_K graph **258.5** tok/s vs llama.cpp Q8 **245.4** (**1.05×**, win
+holds) vs llama.cpp Q4_K_M **325.5** (0.79×, same-class ceiling). Within measurement noise of the
+table above — the Tw62–73 arc (quant coverage + small-block decode-speed + grid-codebook mechanism)
+added formats and sped up the transaction-bound quants without touching the Q4_K graph-decode path,
+so the core scoreboard is unchanged and current. (Reproduce: `scripts/bench-llamacpp.sh
+models/…q8_0.gguf` for the llama.cpp side, absolute model paths; `TestCUDAQ4KGraphDecodeSweep` for goai.)
+
 **goai now leads llama.cpp-Q8 at every scale, and the lead grows with model size**
 (1.02× → 1.19×) — the weight-bandwidth story playing out in goai's favor: the more
 weight-bound the model, the more the 0.5625 B/w Q4_K format and near-ceiling GEMV pay.
