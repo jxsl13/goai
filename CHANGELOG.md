@@ -4,6 +4,18 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — feat: GPT-NeoX / Pythia support — 17th loadable architecture (T757, 2026-07-16)
+
+GPT-NeoX (`GPTNeoXForCausalLM`, and the Pythia suite) as a self-contained `nlp.GPTNeoX` type,
+composing the now-complete primitive set: **parallel residual** with TWO separate LayerNorms
+(`input_layernorm`→attention, `post_attention_layernorm`→MLP, both reading the same residual and
+summed onto it); **LayerNorm with bias** (not RMSNorm); **partial rotary** via the T756 `partialRoPE`
+helper (split-half, rotaryDim = head_dim·rotary_pct); a **GELU MLP with bias**; and a **packed
+`query_key_value`** projection split per the per-head-interleaved layout (`splitNeoXQKV`: for head h
+the block is `[q|k|v]` of head_dim each — a naive all-q/all-k/all-v split would scramble the heads).
+Forward parity vs a real transformers `GPTNeoXForCausalLM`: max abs logit diff 2.7e-8; KV-decode
+matches Forward bit-for-bit (0.0); fine-tunes (loss 3.43 → 3.10). Seventeenth loadable architecture.
+
 ### nlp — feat: partial-rotary (partial RoPE) primitive (T756, 2026-07-16)
 
 A reusable `partialRoPE` helper that rotates only the first `rotary_dim` channels of each head
