@@ -4,6 +4,22 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — decode row-fusion now covers bias'd families (qwen2) (worker linux-amd64, Tw57 slice 2, 2026-07-16)
+- The Tw55(b)/Tw57 fused-QKV path previously excluded models with a QKV bias (qwen2) — the fusion
+  weight path was guarded by `!hasBias`. Removed that guard: a bias'd family now fuses too.
+- Correct by construction: the QKV bias is **additive post-GEMV**, and `dq`/`dk`/`dv` are `View`s
+  into the fused `dqkv` buffer, so the existing per-section `AddBias` writes the right slice of the
+  fused output. No new kernel — one extra `AddBias` launch either way.
+- Validated: `TestCUDAQKVFuseTokenParityQwen2` — 24/24 greedy tokens identical to the separate
+  bias'd GEMVs on Qwen2.5-1.5B-Q8; llama Q4_K/Q8 fusion parity un-regressed (24/24 each).
+- Also closes a coverage gap from slice 1 (gate/up was routed through the format-aware `fuseRows`
+  but only QKV had a Q8 test): new `TestCUDAGateUpFuseTokenParityQ8` — 24/24 identical. Fusion is
+  now validated across {QKV, gate/up} × {Q4_K, Q8} + qwen2 bias'd QKV.
+- Speed (`TestCUDAQKVFuseSpeedABQwen2`, 5 interleaved reps, Qwen2.5-1.5B-Q8): **+2.3% decode**
+  (143.7 vs 140.4 tok/s). Right in the predicted ballpark — Qwen2.5-1.5B has the same starved k/v
+  projection (N=256) as TinyLlama, a touch under the llama-Q8 +2.8% since the bias'd family carries
+  an extra `AddBias` and the k/v proj is a smaller fraction of the larger 1.5B step.
+
 ### CUDA — fused-QKV/gate-up is now format-aware, no Q8→Q4_K downgrade (worker linux-amd64, Tw57 slice 1, 2026-07-16)
 - The decode row-fusion (Tw55(b): `wq|wk|wv` → one GEMV; `ffn_gate|ffn_up` → one GEMV) was
   hardwired to Q4_K. A Q8 decoder that opted into `GOAI_CUDA_QKV_FUSE`/`GOAI_CUDA_GATEUP_FUSE`
