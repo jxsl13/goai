@@ -167,6 +167,7 @@ type Decoder struct {
 	d, h, kvH, dk, kvDim, half, hidden, v, maxLen int
 	rotaryDim                                     int  // rotated channels/head; == dk for full RoPE (Llama), < dk for partial rotary (GPT-NeoX/Phi/StableLM)
 	lnBias                                        bool // true ⇒ LayerNorm-with-bias norms (StableLM/Phi/StarCoder2); false ⇒ RMSNorm (Llama)
+	ffnGELU                                       bool // true ⇒ 2-layer GELU MLP (fc→GELU→proj: GPT-NeoX/Phi/StarCoder2); false ⇒ SwiGLU (Llama/StableLM)
 	eps, posDiv, scale                            float32
 
 	blocks                                                []block
@@ -219,6 +220,25 @@ func newDecoderCommon(cfg nlp.LlamaConfig, tokEmb *tensor.Tensor, ops backendOps
 // (RoPEPair) when rotaryDim == dk (Llama), else partial rotary (RoPEPartialPair — only the first
 // rotaryDim channels of each head rotate; GPT-NeoX/Phi/StableLM). inv (d.dinv) is sized to
 // rotaryDim/2 so the same buffer feeds both.
+// recordFFN records the feed-forward sublayer with the residual-add epilogue (dx += ffn(xn2)):
+// a 2-layer GELU MLP (fc → GELU → proj, GPT-NeoX/Phi/StarCoder2) when ffnGELU, else the SwiGLU
+// (silu(gate)·up → down, Llama/StableLM). wG/wU/wD are c_fc/·/c_proj or gate/up/down accordingly.
+func (d *Decoder) recordFFN(r recorder, b block, rows int) error {
+	if d.ffnGELU {
+		return firstErr(
+			b.wG.record(r, d.xn2.b, d.gate.b, rows),           // fc = xn2·Wfc
+			r.Unary(d.gate.b, d.gate.b, unaryGELU),            // GELU(fc)
+			b.wD.recordAdd(r, d.gate.b, d.mo.b, d.dx.b, rows), // dx += GELU(fc)·Wproj
+		)
+	}
+	return firstErr(
+		b.wG.record(r, d.xn2.b, d.gate.b, rows),
+		b.wU.record(r, d.xn2.b, d.up.b, rows),
+		r.Binary(d.gate.b, d.up.b, d.gate.b, binarySwiGLU),
+		b.wD.recordAdd(r, d.gate.b, d.mo.b, d.dx.b, rows), // dx += swiglu·Wdown
+	)
+}
+
 // norm records the pre-sublayer normalization: LayerNorm-with-bias when lnBias (StableLM/Phi),
 // else RMSNorm (Llama). gamma is the weight; beta is the LayerNorm bias (ignored under RMSNorm).
 func (d *Decoder) norm(r recorder, x, gamma, beta, o buffer, rows int) error {
@@ -524,10 +544,7 @@ func (d *Decoder) encodeStep(pos int) (recorder, error) {
 			r.MHA(qBuf, b.kC, b.vC, d.attn.b, 1, pos+1, D, H, KVH, dk, 1, 0, d.scale),
 			b.wo.recordAdd(r, d.attn.b, d.ao.b, d.dx.b, 1), // dx += attn·Wo (fused epilogue, §T613)
 			d.norm(r, d.dx.b, b.gFFN, b.bFFN, d.xn2.b, 1),
-			b.wG.record(r, d.xn2.b, d.gate.b, 1),
-			b.wU.record(r, d.xn2.b, d.up.b, 1),
-			r.Binary(d.gate.b, d.up.b, d.gate.b, binarySwiGLU),
-			b.wD.recordAdd(r, d.gate.b, d.mo.b, d.dx.b, 1), // dx += swiglu·Wdown (fused epilogue)
+			d.recordFFN(r, b, 1),
 		)
 		if e != nil {
 			r.Free()
@@ -668,10 +685,7 @@ func (d *Decoder) StepN(tokens []int, pos int) ([]float32, error) {
 			r.MHA(d.q.b, b.kC, b.vC, d.attn.b, k, pos+k, D, H, KVH, dk, 1, 0, d.scale),
 			b.wo.recordAdd(r, d.attn.b, d.ao.b, d.dx.b, k), // dx += attn·Wo (fused epilogue, §T613)
 			d.norm(r, d.dx.b, b.gFFN, b.bFFN, d.xn2.b, k),
-			b.wG.record(r, d.xn2.b, d.gate.b, k),
-			b.wU.record(r, d.xn2.b, d.up.b, k),
-			r.Binary(d.gate.b, d.up.b, d.gate.b, binarySwiGLU),
-			b.wD.recordAdd(r, d.gate.b, d.mo.b, d.dx.b, k), // dx += swiglu·Wdown (fused epilogue)
+			d.recordFFN(r, b, k),
 		)
 		if e != nil {
 			r.Free()
