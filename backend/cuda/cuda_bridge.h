@@ -228,6 +228,9 @@ int cu_rope_f32(void* x, const void* inv, int seq, int heads, int hd, int posOff
 // head are rotated (rotate_half), the rest pass through. inv is the resident [rotaryDim/2]
 // frequency table. cu_rope_f32 is the rotaryDim==hd case (GPT-NeoX/Phi/StableLM partial rotary).
 int cu_rope_partial(void* x, const void* inv, int seq, int heads, int hd, int rotaryDim, int posOffset, double posDiv);
+// cu_rope_partial_dpos: device-position twin of cu_rope_partial — partial rotary reading the
+// posOffset from device int *dPos (graph-capturable decode of partial-rotary architectures).
+int cu_rope_partial_dpos(void* x, const void* inv, int seq, int heads, int hd, int rotaryDim, const void* dPos, double posDiv);
 // cu_rope_f32_band: strided-band RoPE — rotate `heads` heads (hd wide) starting at
 // float-element column `off` within rows of `stride` floats, in place. Generalises
 // cu_rope_f32 for the fused-QKV path (q/k bands of one [seq,stride] buffer).

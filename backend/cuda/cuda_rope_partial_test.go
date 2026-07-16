@@ -104,3 +104,52 @@ func TestCUDARoPEPartial(t *testing.T) {
 		}
 	})
 }
+
+// The device-position partial rope (graph-capturable) must be BIT-IDENTICAL to the
+// host-posOffset partial rope at a matched position — same kernel, position from a
+// device int vs a launch param.
+func TestCUDARoPEPartialDpos(t *testing.T) {
+	skipNoGPU(t)
+	pos, err := cuda.NewDevicePos()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pos.Free()
+	for _, c := range []struct {
+		seq, heads, hd, rotaryDim, at int
+		attrs                         backend.RoPEAttrs
+	}{
+		{1, 4, 64, 32, 137, backend.RoPEAttrs{Heads: 4}},             // decode step at pos 137
+		{1, 8, 128, 16, 0, backend.RoPEAttrs{Heads: 8}},              // pos 0
+		{4, 2, 32, 24, 40, backend.RoPEAttrs{Heads: 2, PosScale: 2}}, // multi-row + PI
+	} {
+		width := c.heads * c.hd
+		x := bench.RandF32(tensor.Shape{c.seq, width}, 11)
+
+		dh, _ := cuda.UploadF32(x)
+		attrsH := c.attrs
+		attrsH.PosOffset = c.at
+		if err := dh.RoPEPartial(attrsH, c.rotaryDim); err != nil {
+			t.Fatalf("RoPEPartial: %v", err)
+		}
+		wantT, _ := dh.ToHost()
+		dh.Free()
+
+		dd, _ := cuda.UploadF32(x)
+		if err := pos.Set(c.at); err != nil {
+			t.Fatalf("pos.Set: %v", err)
+		}
+		if err := dd.RoPEPartialDpos(c.attrs, c.rotaryDim, pos); err != nil {
+			t.Fatalf("RoPEPartialDpos: %v", err)
+		}
+		gotT, _ := dd.ToHost()
+		dd.Free()
+
+		for i := range gotT.Numel() {
+			idx := tensor.Unravel(i, gotT.Shape())
+			if g, w := gotT.AtF64(idx...), wantT.AtF64(idx...); g != w {
+				t.Fatalf("dpos != host-offset @%d (rotaryDim=%d at=%d): dpos %v host %v", i, c.rotaryDim, c.at, g, w)
+			}
+		}
+	}
+}
