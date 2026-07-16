@@ -4,6 +4,18 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — feat: Qwen2-MoE support — 21st loadable architecture, shared-expert MoE (T761, 2026-07-16)
+
+Qwen2-MoE (`Qwen2MoeForCausalLM`) as a self-contained `nlp.Qwen2MoE` type: Qwen2 attention (q/k/v
+bias) plus a sparse top-k MoE (reusing the Mixtral fused-expert loader) AND a **shared expert** — a
+SwiGLU applied to every token, scaled by `sigmoid(x·shared_expert_gate)` and added to the sparse
+output. The gate `[seq,1]` broadcasts over the hidden dim via `OpMul`. Forward parity vs a real
+transformers `Qwen2MoeForCausalLM`: max abs logit diff 2.4e-8; the shared expert is non-vacuous
+(zeroing it moves logits 2.3e-3 off the golden, ~10⁵× the with-shared residual, out of the parity
+gate); KV-decode matches Forward bit-for-bit (0.0); fine-tunes (loss 3.46 → 3.09). Third loadable
+MoE; twenty-first architecture. (Like Qwen3-MoE, the combine renormalizes the top-k weights, matching
+`norm_topk_prob=True`.)
+
 ### nlp — feat: StarCoder2 support — 20th loadable architecture (T760, 2026-07-16)
 
 StarCoder2 (BigCode, `Starcoder2ForCausalLM`) as a self-contained `nlp.StarCoder2` type:
