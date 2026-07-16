@@ -1400,6 +1400,56 @@ done:
     return rc;
 }
 
+// cu_matmul_f16acc16: like cu_matmul_f16w but with f16 ACCUMULATE (CUBLAS_COMPUTE_16F) — on
+// GeForce/GA106 the f32-accumulate tensor path runs at HALF rate, so f16 accumulate ≈1.5-2×
+// (the prefill lever, Tw61). f16 accumulator, f32 output C. APPROXIMATE: f16 accumulation
+// over K loses precision → gate on accuracy.
+int cu_matmul_f16acc16(const void* dA32, const void* dW16, void* dC16, int M, int K, int N) {
+    int rc = -2;
+    void* a16 = NULL;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (cudaMallocAsync(&a16, (size_t)M * K * sizeof(unsigned short), gStream) != cudaSuccess) { rc = -5; goto done; }
+    if (launch_cvt_f16(dA32, a16, (long)M * K) != 0) { rc = -6; goto done; }
+    {
+        static const unsigned short h1 = 0x3C00, h0 = 0x0000; // f16 alpha=1/beta=0 (COMPUTE_16F scale type)
+        cublasStatus_t st = cublasSetPointerMode(gHandle, CUBLAS_POINTER_MODE_HOST);
+        if (st == CUBLAS_STATUS_SUCCESS)
+            st = cublasGemmEx(gHandle, CUBLAS_OP_N, CUBLAS_OP_N, N, M, K,
+                              &h1, dW16, CUDA_R_16F, N, a16, CUDA_R_16F, K,
+                              &h0, dC16, CUDA_R_16F, N, CUBLAS_COMPUTE_16F, CUBLAS_GEMM_DEFAULT);
+        cublasSetPointerMode(gHandle, CUBLAS_POINTER_MODE_DEVICE); // restore for the decode graph path
+        if (st != CUBLAS_STATUS_SUCCESS) { rc = -(4000 + (int)st); goto done; }
+    }
+    rc = 0;
+done:
+    if (a16) cudaFreeAsync(a16, gStream);
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_download_u16: copy n u16 (f16) elements device→host (for validating f16-output GEMMs).
+int cu_download_u16(const void* dsrc, unsigned short* dst, int n) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() == 0 && cuCtxSetCurrent(gCtx) == CUDA_SUCCESS)
+        rc = (cudaMemcpy(dst, dsrc, (size_t)n * sizeof(unsigned short), cudaMemcpyDeviceToHost) == cudaSuccess) ? 0 : -2;
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_alloc_i8: uninitialized device buffer of n bytes.
+void* cu_alloc_i8(int n) {
+    void* d = NULL;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() == 0 && cuCtxSetCurrent(gCtx) == CUDA_SUCCESS) {
+        if (cudaMalloc(&d, (size_t)n) != cudaSuccess) d = NULL;
+    }
+    pthread_mutex_unlock(&gLock);
+    return d;
+}
+
 // ---- Device-position (graph-capturable) op twins. The decode graph must be
 // structurally constant across tokens, so the per-token position lives in a
 // device int (updated between graph replays via cu_set_i32, not a launch param).

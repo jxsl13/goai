@@ -78,6 +78,12 @@ void* cu_upload_f16(const float* src, long n);
 // scratch) x dW16[K,N] (resident f16), cublasGemmEx f16 inputs / f32 accumulate —
 // the Ampere tensor-core path (~2x the Sgemm rate). beta in {0,1} (1 = residual fuse).
 int cu_matmul_f16w(const void* dA32, const void* dW16, void* dC32, int M, int K, int N, float beta);
+// cu_matmul_i8_lt: int8 tensor-core GEMM (cublasLt, COMPUTE_32I) — the Tw61 prefill lever probe.
+void* cu_alloc_i8(int n);
+int cu_matmul_i8_lt(const void* dA8, const void* dW8, void* dC32, int M, int K, int N);
+// cu_matmul_f16acc16: f16 GEMM with f16 ACCUMULATE (COMPUTE_16F, ≈1.5-2× on GeForce), f16 out.
+int cu_matmul_f16acc16(const void* dA32, const void* dW16, void* dC16, int M, int K, int N);
+int cu_download_u16(const void* dsrc, unsigned short* dst, int n);
 // cu_copy_rows: device→device copy nElems floats from src to dst+dstOffset (KV-cache append).
 int cu_copy_rows(void* dst, const void* src, int dstOffset, int nElems);
 void* cu_upload_i32(const int* src, int n);

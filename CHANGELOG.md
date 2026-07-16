@@ -4,6 +4,22 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — prefill lever found: f16-accumulate GEMM is 1.5-2× on GeForce (worker linux-amd64, Tw60/61, 2026-07-16)
+- Pivoting to the prefill gap (~4× vs llama.cpp; FFN GEMM ≈72% of prefill), two measure-first
+  probes:
+- **int8 via cublas — rejected (Tw60).** `cublasGemmEx` int8 (`COMPUTE_32I`) gives only +5-8%
+  over f16; `cublasLt` with heuristic algo selection is the same (+32% qkv, −9% gate/up). Both
+  cap int8 at ~24 TOPS ≈ 23% of the 3060's int8 peak, while f16 already runs at ~88% of *its*
+  peak. cublas can't deliver int8 2× on GA106 for prefill shapes — llama.cpp's int8 lead needs
+  custom MMQ kernels (deferred). The cublasLt scaffolding was discarded.
+- **f16 accumulate — the win (Tw61).** GeForce/GA106 runs FP32-accumulate tensor ops at *half*
+  rate, so switching the prefill GEMM to `CUBLAS_COMPUTE_16F` (f16 accumulate) is **1.5-2×
+  faster**: gate/up +55% (172→111 µs), down +55%, qkv **+108% (2.06×)**, bigM +75%. Accuracy
+  is small — f16-acc vs f32-acc norm-rel-RMS **2-5e-3** (0.2-0.5%, ~Q4_K-class). `cu_matmul_f16acc16`
+  + benchmark + synthetic-accuracy test built and validated (CGO0 green). Next: a real-model
+  prefill greedy-agreement gate, then wire into the `ResidentBF16` prefill path (opt-in/gated)
+  and measure e2e prefill tok/s — an estimated ~+40-60% prefill from a one-enum change.
+
 ### CUDA — decode-GEMV arc closed: the Q4_K GEMV is at a Pareto ceiling (worker linux-amd64, Tw59, 2026-07-16)
 - The last decode-GEMV idea: if the scale-decode is the ALU cost (Tw58), precompute it. Built
   a pre-dequantized-scale layout (192-byte blocks: 128 nibbles + 8 f32 `d·sc` + 8 f32
