@@ -330,6 +330,93 @@ func newDecoder(m *nlp.Llama, ops backendOps) (*Decoder, error) {
 	return d, nil
 }
 
+// newStableLMDecoder builds a device Decoder for an nlp.StableLM: the Llama-shaped SwiGLU/GQA
+// core, but with LayerNorm-with-bias (lnBias) and PARTIAL rotary (rotaryDim < dk). StableLM has
+// no attention bias and its rotary is split-half (matches OpRoPE), so weights upload directly —
+// only the norms carry a bias and the rope is partial. Currently cuda-only (metal/vulkan
+// RoPEPartialPair are unimplemented). §T757-class new-architecture GPU decode.
+func newStableLMDecoder(m *nlp.StableLM, ops backendOps) (*Decoder, error) {
+	cfg := m.Config
+	// StableLMConfig's kvHeads()/headDim()/rotaryDim() are unexported, so replicate here.
+	kvH := cfg.KVHeads
+	if kvH <= 0 {
+		kvH = cfg.Heads
+	}
+	headDim := cfg.HeadDim
+	if headDim <= 0 {
+		headDim = cfg.Dim / cfg.Heads
+	}
+	rotaryDim := cfg.RotaryDim
+	if rotaryDim <= 0 {
+		pct := cfg.RotaryPct
+		if pct == 0 {
+			pct = 0.25
+		}
+		rotaryDim = int(float64(headDim) * pct)
+	}
+	lc := nlp.LlamaConfig{
+		Vocab: cfg.Vocab, Ctx: cfg.Ctx, Dim: cfg.Dim, Heads: cfg.Heads, KVHeads: kvH,
+		Layers: cfg.Layers, Hidden: cfg.Hidden, Eps: cfg.Eps, RopeBase: cfg.RopeBase,
+	}
+	d, derr := newDecoderCommon(lc, m.TokEmb, ops)
+	if derr != nil {
+		return nil, derr
+	}
+	// LayerNorm-bias + partial rotary: rebuild the inverse-frequency table over rotaryDim
+	// (newDecoderCommon sized it to dk for full rope).
+	d.lnBias = true
+	d.rotaryDim = rotaryDim
+	if d.rotaryDim <= 0 || d.rotaryDim > d.dk || d.rotaryDim%2 != 0 {
+		return nil, fmt.Errorf("llamagpu(%s): StableLM rotaryDim %d invalid for headDim %d", ops.name, d.rotaryDim, d.dk)
+	}
+	invF64, posDiv64 := backend.RoPEFreqs(d.rotaryDim, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: d.h})
+	d.invHost = make([]float32, d.rotaryDim/2)
+	for i := range d.invHost {
+		d.invHost[i] = float32(invF64[i])
+	}
+	d.posDiv = float32(posDiv64)
+
+	var err error
+	mk := d.mkBuf(&err)
+	lin := func(w *tensor.Tensor) linear {
+		in, out := w.Shape()[0], w.Shape()[1]
+		return f32Linear{w: mk(flat2D(w)).b, k: in, n: out}
+	}
+	fused := func(wq, wk, wv *tensor.Tensor) linear {
+		in := wq.Shape()[0]
+		nq, nk, nv := wq.Shape()[1], wk.Shape()[1], wv.Shape()[1]
+		fq, fk, fv := flat2D(wq), flat2D(wk), flat2D(wv)
+		nt := nq + nk + nv
+		w := make([]float32, in*nt)
+		for i := range in {
+			row := w[i*nt : (i+1)*nt]
+			copy(row[:nq], fq[i*nq:(i+1)*nq])
+			copy(row[nq:nq+nk], fk[i*nk:(i+1)*nk])
+			copy(row[nq+nk:], fv[i*nv:(i+1)*nv])
+		}
+		return f32Linear{w: mk(w).b, k: in, n: nt}
+	}
+	for _, b := range m.Blocks {
+		gb := block{
+			wqkv: fused(b.Wq, b.Wk, b.Wv), wo: lin(b.Wo),
+			gAttn: mk(flat1D(b.InputNorm.Gamma)).b, bAttn: mk(flat1D(b.InputNorm.Beta)).b,
+			gFFN: mk(flat1D(b.PostAttnNorm.Gamma)).b, bFFN: mk(flat1D(b.PostAttnNorm.Beta)).b,
+			wG: lin(b.FFN.Wgate), wU: lin(b.FFN.Wup), wD: lin(b.FFN.Wdown),
+			kC: mk(make([]float32, d.maxLen*d.kvDim)).b, vC: mk(make([]float32, d.maxLen*d.kvDim)).b,
+		}
+		d.blocks = append(d.blocks, gb)
+	}
+	d.gFinal = mk(flat1D(m.Norm.Gamma))
+	d.bFinal = mk(flat1D(m.Norm.Beta))
+	d.out = lin(m.Out)
+	d.allocScratch(mk)
+	if err != nil {
+		d.Release()
+		return nil, err
+	}
+	return d, nil
+}
+
 // newQuantDecoder uploads a quantized Llama: RMSNorm gains + KV caches as f32 device buffers, every
 // projection as a RESIDENT quantized weight consumed by the record-mode QMatMulResident (§T415) —
 // the 4-8× smaller weights of quantization combined with the batched-decode speedup.

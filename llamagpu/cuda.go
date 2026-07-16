@@ -100,6 +100,34 @@ func NewCUDA(m *nlp.Llama) (*Decoder, error) {
 	})
 }
 
+// NewStableLMCUDA uploads an nlp.StableLM into CUDA device buffers and runs it through the same
+// batched Decoder core as NewCUDA — but with LayerNorm-with-bias norms and PARTIAL rotary (the
+// StableLM/Phi/StarCoder2-class departures from Llama). The first of the new-architecture GPU
+// graph decoders enabled by the cu_rope_partial* kernels. cuda-only for now.
+func NewStableLMCUDA(m *nlp.StableLM) (*Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newStableLMDecoder(m, backendOps{
+		name:        string(backend.CUDA),
+		asyncEncode: false,
+		newBuffer: func(data []float32) (buffer, error) {
+			b, err := cuda.NewDeviceBufferF32(data)
+			if err != nil {
+				return nil, err
+			}
+			return cBuf{b}, nil
+		},
+		newRecorder: func() (recorder, error) {
+			r, err := cuda.NewRecorder()
+			if err != nil {
+				return nil, err
+			}
+			return cRec{r}, nil
+		},
+	})
+}
+
 // cudaUploadQWeight makes a ggml quantized [Out,In] weight resident on the GPU as Q8.
 // The CUDA backend has ONE quant kernel (Q8 GEMV), so — unlike metal/vulkan, which keep
 // each native ggml type and dequantize in-kernel — any source type (Q4_K, Q6_K, …) is
