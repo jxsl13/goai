@@ -4,6 +4,18 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### classic — performance: ball-tree for kNN-predict and DBSCAN (T717, 2026-07-16)
+
+The last two classical methods trailing sklearn — kNN predict (112×) and DBSCAN (13×) —
+both did brute-force O(n²) neighbor search. A new unexported ball-tree (built at fit,
+queried at predict) replaces it, with conservative pruning so results are bit-identical
+to brute force (a `TestBallTreeEquivalence` cross-checks tree vs brute on tie-dense data).
+Result: **kNN predict 1783→114 ms (15.6×), DBSCAN 153→80 ms (1.9×)**. Both still trail
+sklearn's optimized C trees (7.2× / 6.8×) because at d=20 the curse of dimensionality
+weakens ball pruning — a further push would need SIMD distances or approximate NN.
+Alongside the fit wins, GoAI now also beats sklearn on predict (Tree/Forest/SVC) and on
+KMeans (29×) and GMM (1.6×) clustering.
+
 ### CUDA — native IQ2_XXS GEMV: the grid-codebook i-quant mechanism (worker linux-amd64, Tw73, 2026-07-16)
 - `cu_qmatmul_iq2xxs` + `ResidentBIQ2XXS`: the first i-quant with a **grid codebook** (an
   E8-lattice-derived 256×8 table) rather than a scalar codebook. Per 66-byte super-block: f16 d +

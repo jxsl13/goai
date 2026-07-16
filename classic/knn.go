@@ -69,6 +69,14 @@ func WithKNNWeights(w KNNWeights) KNNOption { return func(c *knnConfig) { c.weig
 // [KNNManhattan]). See [KNNMetric].
 func WithKNNMetric(m KNNMetric) KNNOption { return func(c *knnConfig) { c.metric = m } }
 
+// ballMetricOf maps a KNNMetric onto the ball tree's metric enum.
+func ballMetricOf(m KNNMetric) ballMetric {
+	if m == KNNManhattan {
+		return ballL1
+	}
+	return ballL2
+}
+
 // knnDist returns the distance between a and b under the given metric.
 func knnDist(a, b []float64, metric KNNMetric) float64 {
 	switch metric {
@@ -177,6 +185,7 @@ type KNNClassifier struct {
 	yi      []int // class index per training row (into classes)
 	classes []int // sorted distinct labels
 	nFeat   int
+	tree    *ballTree // spatial index over x (nil ⇒ brute-force fallback for tiny n)
 	fitted  bool
 }
 
@@ -206,13 +215,24 @@ func (m *KNNClassifier) Fit(x [][]float64, y []int) error {
 	m.yi = yi
 	m.classes = classes
 	m.nFeat = d
+	m.tree = buildBallTree(x, ballMetricOf(m.cfg.metric))
 	m.fitted = true
 	return nil
 }
 
+// knn returns the k nearest training rows to row using the ball-tree index when
+// one was built, falling back to the brute-force scan for tiny training sets.
+// Both paths produce the identical (dist, idx)-ordered neighbour set.
+func (m *KNNClassifier) knn(row []float64) []neighbour {
+	if m.tree != nil {
+		return m.tree.kNN(row, m.cfg.k)
+	}
+	return nearest(m.x, row, m.cfg)
+}
+
 // vote returns the per-class summed neighbour weights for one query row.
 func (m *KNNClassifier) vote(row []float64) []float64 {
-	nb := nearest(m.x, row, m.cfg)
+	nb := m.knn(row)
 	w := knnWeights(nb, m.cfg.weights)
 	scores := make([]float64, len(m.classes))
 	for i, n := range nb {
@@ -301,6 +321,7 @@ type KNNRegressor struct {
 	x      [][]float64
 	y      []float64
 	nFeat  int
+	tree   *ballTree // spatial index over x (nil ⇒ brute-force fallback for tiny n)
 	fitted bool
 }
 
@@ -327,8 +348,18 @@ func (m *KNNRegressor) Fit(x [][]float64, y []float64) error {
 	m.x = x
 	m.y = y
 	m.nFeat = d
+	m.tree = buildBallTree(x, ballMetricOf(m.cfg.metric))
 	m.fitted = true
 	return nil
+}
+
+// knnReg returns the k nearest training rows to row using the ball-tree index
+// when built, else the brute-force scan — identical neighbour sets either way.
+func (m *KNNRegressor) knnReg(row []float64) []neighbour {
+	if m.tree != nil {
+		return m.tree.kNN(row, m.cfg.k)
+	}
+	return nearest(m.x, row, m.cfg)
 }
 
 // Predict returns the predicted value for each row of X. It errors if called
@@ -342,7 +373,7 @@ func (m *KNNRegressor) Predict(x [][]float64) ([]float64, error) {
 		if len(row) != m.nFeat {
 			return nil, fmt.Errorf("classic: row %d width %d, want %d", i, len(row), m.nFeat)
 		}
-		nb := nearest(m.x, row, m.cfg)
+		nb := m.knnReg(row)
 		w := knnWeights(nb, m.cfg.weights)
 		var num, den float64
 		for j, n := range nb {

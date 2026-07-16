@@ -49,6 +49,14 @@ func defaultDBSCANConfig() dbscanConfig {
 	return dbscanConfig{eps: 0.5, minSamples: 5, metric: DBSCANEuclidean}
 }
 
+// ballMetricOfDBSCAN maps a DBSCANMetric onto the ball tree's metric enum.
+func ballMetricOfDBSCAN(m DBSCANMetric) ballMetric {
+	if m == DBSCANManhattan {
+		return ballL1
+	}
+	return ballL2
+}
+
 // WithDBSCANEps sets the neighborhood radius eps (default 0.5): two samples are
 // neighbors when their distance is ≤ eps. It is the most important knob — larger
 // eps merges points into fewer, bigger clusters. eps must be > 0.
@@ -138,15 +146,23 @@ func (m *DBSCAN) Fit(x [][]float64) ([]int, error) {
 		}
 	}
 
-	// Precompute eps-neighborhoods (self included) and core flags.
+	// Precompute eps-neighborhoods (self included) and core flags. A ball-tree
+	// radius query replaces the brute-force O(n²) scan; it returns the identical
+	// neighbour set (ascending index order, self included) so labels are
+	// unchanged. For tiny n the tree is not built and we fall back to the scan.
 	eps2 := m.cfg.eps * m.cfg.eps
+	tree := buildBallTree(x, ballMetricOfDBSCAN(m.cfg.metric))
 	neighbors := make([][]int, n)
 	m.core = make([]bool, n)
 	for i := range n {
 		var nb []int
-		for j := range n {
-			if m.dist(x[i], x[j], eps2) {
-				nb = append(nb, j)
+		if tree != nil {
+			nb = tree.radius(x[i], m.cfg.eps, nil) // nil ⇒ a fresh slice per query
+		} else {
+			for j := range n {
+				if m.dist(x[i], x[j], eps2) {
+					nb = append(nb, j)
+				}
 			}
 		}
 		neighbors[i] = nb
