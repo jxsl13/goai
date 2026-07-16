@@ -131,10 +131,10 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   **opt-in** (`GOAI_CUDA_FFN_FUSE=1`). The remaining Tw55 lever is slice (b) —
   concurrent QKV streams in graph capture (QKV proj ≈11% of prefill), still open.
 
-### nn — topic-discovery round 7: 3 distinct architectures (KAN, Tokenformer, sigmoid-attention) (T686–T688, 2026-07-16)
+### nn — topic-discovery round 7: 8 distinct architectures — KAN, Tokenformer, sigmoid / selective / multi-token / stick-breaking attention, CoPE, PEER (T686–T693, 2026-07-16)
 
 A fresh sweep of *distinct layer/architecture types* (not the round-6 technique
-categories) found three genuinely-novel gaps — proving the "frontier tapped" read
+categories) found eight genuinely-novel gaps — proving the "frontier tapped" read
 wrong a fourth time. Each was delegated to an isolated worktree, then independently
 re-verified on `main`, and carries a collapse/limit anchor + gradcheck + a
 learns-a-task value proof (~1e-10).
@@ -167,6 +167,38 @@ learns-a-task value proof (~1e-10).
   selection causality (`F[i]` depends only on queries `<i`); gradcheck 7.6e-10; on a
   latest-value-recall-with-distractors task selective (0.0001) clearly beats the
   selection-off baseline (0.117).
+- **Multi-Token Attention** (`nn/multi_token_attention.go`, Golovneva et al. / Meta
+  2025, arXiv:2504.00927). Convolutions over the attention-logit plane (key-query) and
+  across heads, so a weight conditions on multiple tokens jointly — single query·key
+  dot products can't localize a token *conjunction*. Reuses the existing `OpConv2D`.
+  Anchors: delta-kernel init collapses to standard MHA bit-exact; causal conv doesn't
+  leak future keys (<1e-12); gradcheck through both conv kernels; on the two-token
+  retrieval toy MTA reaches acc 1.000 while standard attention plateaus at 0.560.
+- **Stick-breaking attention** (`nn/stickbreaking_attention.go`, Tan et al. 2024,
+  arXiv:2410.17980). Softmax replaced by a stick-breaking allocation over keys from
+  most-recent backward (`A_ij = σ(z_ij)·∏_{k>j}(1−σ(z_ik))`), giving inherent recency
+  and length-generalization with no position encoding; weights sum to ≤ 1 (the
+  remainder is a valid "attend to nothing"). Computed in log-space for stability.
+  Anchors: single-key/2-key closed form; row-sum ≤ 1; log-space matches the direct
+  product to 1.11e-16; causal; gradcheck 2.4e-10; on a recency-average task it
+  length-generalizes (len6→len16 nearly flat) and beats an order-blind softpick
+  baseline ~25× at length 16.
+- **CoPE** (`nn/cope.go`, Golovneva et al. / Meta 2024, arXiv:2405.18719). Contextual
+  Position Encoding — position is a content-gated cumulative count (σ-gates reverse-
+  cumsummed over keys) rather than a token index, with fractional positions
+  interpolated into a learned table. Anchors: `WithCoPEGatesOne` collapses to standard
+  relative-position attention bit-exact; interpolation exact (`p=2.3 → 0.7·E[2]+0.3·E[3]`);
+  gradcheck 2.55e-10 reaching the position tables; on a held-out "2nd-most-recent value,
+  skipping noise" task CoPE generalizes to 86.3% vs an absolute-PE baseline's 64.9%.
+- **PEER — Mixture of a Million Experts** (`nn/peer.go`, He / DeepMind 2024,
+  arXiv:2407.04153). FFN replacement that retrieves a small top-k from a huge pool of
+  single-neuron experts via product-key memory (two √N sub-key sets, Cartesian top-k),
+  so expert count scales to millions at sublinear cost. Distinct from the block-expert
+  softmax MoE routers already in the repo. Anchors: product-key retrieval matches a
+  brute-force full-N top-k exactly; single-expert and dense (retrieve-all) collapses
+  @1e-10; gradcheck 9.21e-11 (gates + gathered experts get grad, un-retrieved rows get
+  exactly zero); Forward touches k experts not N (32× fewer), learns (MSE 13.94→0.16)
+  with experts specializing across tokens.
 
 ### nn/nlp — topic-discovery round 6: 18 new techniques across optimizers, attention, quant, sampling, MoE, distillation, embeddings, augmentation, RL (T668–T684, 2026-07-15/16)
 
