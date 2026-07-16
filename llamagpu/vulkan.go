@@ -41,6 +41,9 @@ func (v vRec) RoPEAt(q, inv, o buffer, off, seq, width, heads, hd, half, pos int
 func (v vRec) RoPEPair(qkv, inv buffer, seq, stride, headsQ, offQ, headsK, offK, hd, half, pos int, posDiv float32) error {
 	return v.r.RoPEPair(vb(qkv), vb(inv), seq, stride, headsQ, offQ, headsK, offK, hd, half, pos, posDiv)
 }
+func (vRec) RoPEPartialPair(qkv, inv buffer, seq, stride, headsQ, offQ, headsK, offK, hd, rotaryDim, pos int, posDiv float32) error {
+	return fmt.Errorf("llamagpu(vulkan): partial-rotary RoPE not implemented (partial-rotary decoders are cuda-only for now)")
+}
 func (v vRec) Blit(src buffer, srcOff int, dst buffer, dstOff, n int) error {
 	return v.r.Blit(vb(src), srcOff, vb(dst), dstOff, n)
 }

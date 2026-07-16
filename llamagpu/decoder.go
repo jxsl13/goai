@@ -117,6 +117,11 @@ type recorder interface {
 	// RoPEPair rotates the q band (headsQ heads at offQ) AND the k band (headsK at offK) of
 	// a fused QKV buffer in ONE dispatch (§T613), rows `stride` floats wide, in place.
 	RoPEPair(qkv, inv buffer, seq, stride, headsQ, offQ, headsK, offK, hd, half, pos int, posDiv float32) error
+	// RoPEPartialPair is the partial-rotary sibling of RoPEPair: only the first rotaryDim
+	// channels of each head in the q and k bands rotate (GPT-NeoX/Phi/StableLM partial
+	// rotary). inv must be the [rotaryDim/2] frequency table. Implemented on cuda; metal and
+	// vulkan return an unsupported error until a partial-rotary decoder targets them.
+	RoPEPartialPair(qkv, inv buffer, seq, stride, headsQ, offQ, headsK, offK, hd, rotaryDim, pos int, posDiv float32) error
 	Blit(src buffer, srcOff int, dst buffer, dstOff, n int) error
 	// Copy2D moves a strided rows×rowFloats sub-matrix (the fused-QKV band extraction, §T613):
 	// row r copies from src[srcOff+r·srcStride:] to dst[dstOff+r·dstStride:].
@@ -152,6 +157,10 @@ type block struct {
 	// nil = fall back to wq/wk/wv (quantized blocks whose projections mix quant types).
 	wqkv                linear
 	gAttn, gFFN, kC, vC buffer
+	bAttn, bFFN         buffer // LayerNorm betas (nil ⇒ RMSNorm, the Llama default)
+	// projection biases (nil ⇒ no bias): the fused-QKV bias [D+2·kvDim], the o-proj bias [D],
+	// and the GELU-MLP fc [hidden] / proj [D] biases — GPT-NeoX/Phi/StarCoder2 carry them.
+	qkvBias, oBias, fcBias, projBias buffer
 }
 
 // Decoder holds a Llama's weights + KV cache as device-resident buffers and runs one batched decode
@@ -159,11 +168,15 @@ type block struct {
 type Decoder struct {
 	ops                                           backendOps
 	d, h, kvH, dk, kvDim, half, hidden, v, maxLen int
+	rotaryDim                                     int  // rotated channels/head; == dk for full RoPE (Llama), < dk for partial rotary (GPT-NeoX/Phi/StableLM)
+	lnBias                                        bool // true ⇒ LayerNorm-with-bias norms (StableLM/Phi/StarCoder2); false ⇒ RMSNorm (Llama)
+	ffnGELU                                       bool // true ⇒ 2-layer GELU MLP (fc→GELU→proj: GPT-NeoX/Phi/StarCoder2); false ⇒ SwiGLU (Llama/StableLM)
+	parallelRes                                   bool // true ⇒ parallel residual: attn+FFN both read norm(x0), sum onto x (GPT-NeoX/Phi/Cohere); false ⇒ sequential (Llama)
 	eps, posDiv, scale                            float32
 
 	blocks                                                []block
 	out                                                   linear
-	gFinal, dinv                                          *bufSlot
+	gFinal, bFinal, outBias, dinv                         *bufSlot
 	dx, xn, xn2, q, k, v_, attn, ao, gate, up, mo, logits *bufSlot
 	qkv                                                   *bufSlot       // fused QKV output rows [·, d+2·kvDim] (§T613)
 	pending                                               recorder       // pre-encoded next-step command buffer (§T614)
@@ -195,6 +208,7 @@ func newDecoderCommon(cfg nlp.LlamaConfig, tokEmb *tensor.Tensor, ops backendOps
 	d.dk = d.d / d.h
 	d.kvDim = d.kvH * d.dk
 	d.half = d.dk / 2
+	d.rotaryDim = d.dk // full RoPE by default; partial-rotary constructors override before allocScratch
 	d.scale = float32(1.0 / math.Sqrt(float64(d.dk)))
 
 	invF64, posDiv64 := backend.RoPEFreqs(d.dk, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: d.h})
@@ -204,6 +218,105 @@ func newDecoderCommon(cfg nlp.LlamaConfig, tokEmb *tensor.Tensor, ops backendOps
 	}
 	d.posDiv = float32(posDiv64)
 	return d, nil
+}
+
+// ropeQK records RoPE over the q and k bands of the fused QKV buffer in one pass: full rotary
+// (RoPEPair) when rotaryDim == dk (Llama), else partial rotary (RoPEPartialPair — only the first
+// rotaryDim channels of each head rotate; GPT-NeoX/Phi/StableLM). inv (d.dinv) is sized to
+// rotaryDim/2 so the same buffer feeds both.
+// recordFFN records the feed-forward sublayer with the residual-add epilogue (dx += ffn(xn2)):
+// a 2-layer GELU MLP (fc → GELU → proj, GPT-NeoX/Phi/StarCoder2) when ffnGELU, else the SwiGLU
+// (silu(gate)·up → down, Llama/StableLM). wG/wU/wD are c_fc/·/c_proj or gate/up/down accordingly.
+// recordQKVProj records the fused QKV projection (xn·Wqkv) plus its optional bias — the bias is
+// added BEFORE RoPE, per the [q|k|v] band layout (GPT-NeoX/Phi/StarCoder2 have biased q/k/v).
+func (d *Decoder) recordQKVProj(r recorder, b block, rows int) error {
+	e := b.wqkv.record(r, d.xn.b, d.qkv.b, rows)
+	if b.qkvBias != nil {
+		e = firstErr(e, r.AddBias(d.qkv.b, b.qkvBias, d.qkv.b, rows, d.d+2*d.kvDim))
+	}
+	return e
+}
+
+// recordOProj records the attention output projection with its residual-add epilogue (dx +=
+// attn·Wo) plus the optional o-bias broadcast onto the residual stream.
+func (d *Decoder) recordOProj(r recorder, b block, rows int) error {
+	e := b.wo.recordAdd(r, d.attn.b, d.ao.b, d.dx.b, rows)
+	if b.oBias != nil {
+		e = firstErr(e, r.AddBias(d.dx.b, b.oBias, d.dx.b, rows, d.d))
+	}
+	return e
+}
+
+// recordLogits records the final projection to logits (xn·Out) plus the optional output bias
+// (Phi's biased untied lm_head; nil ⇒ no bias, as for Llama/StableLM/StarCoder2).
+func (d *Decoder) recordLogits(r recorder, rows int) error {
+	e := d.out.record(r, d.xn.b, d.logits.b, rows)
+	if d.outBias != nil {
+		e = firstErr(e, r.AddBias(d.logits.b, d.outBias.b, d.logits.b, rows, d.v))
+	}
+	return e
+}
+
+// recordFFNSublayer records the FFN norm + the FFN with its residual-add epilogue. Sequential
+// (Llama/StableLM/StarCoder2): norm the post-attention residual, then FFN(that). PARALLEL residual
+// (Phi/Cohere one-norm): the FFN reuses the SAME normed input as attention (d.xn = norm(x0), which
+// survives attention since recordOProj writes dx, not xn) and adds onto the residual in parallel —
+// no second norm. Both leave dx += FFN(·).
+func (d *Decoder) recordFFNSublayer(r recorder, b block, rows int) error {
+	if d.parallelRes {
+		return d.recordFFN(r, b, d.xn.b, rows) // parallel: FFN(norm(x0)), same norm as attn
+	}
+	if e := d.norm(r, d.dx.b, b.gFFN, b.bFFN, d.xn2.b, rows); e != nil {
+		return e
+	}
+	return d.recordFFN(r, b, d.xn2.b, rows)
+}
+
+func (d *Decoder) recordFFN(r recorder, b block, in buffer, rows int) error {
+	if d.ffnGELU {
+		e := b.wG.record(r, in, d.gate.b, rows) // fc = in·Wfc
+		if b.fcBias != nil {
+			e = firstErr(e, r.AddBias(d.gate.b, b.fcBias, d.gate.b, rows, d.hidden))
+		}
+		e = firstErr(e,
+			r.Unary(d.gate.b, d.gate.b, unaryGELU),            // GELU(fc)
+			b.wD.recordAdd(r, d.gate.b, d.mo.b, d.dx.b, rows), // dx += GELU(fc)·Wproj
+		)
+		if b.projBias != nil {
+			e = firstErr(e, r.AddBias(d.dx.b, b.projBias, d.dx.b, rows, d.d))
+		}
+		return e
+	}
+	return firstErr(
+		b.wG.record(r, in, d.gate.b, rows),
+		b.wU.record(r, in, d.up.b, rows),
+		r.Binary(d.gate.b, d.up.b, d.gate.b, binarySwiGLU),
+		b.wD.recordAdd(r, d.gate.b, d.mo.b, d.dx.b, rows), // dx += swiglu·Wdown
+	)
+}
+
+// norm records the pre-sublayer normalization: LayerNorm-with-bias when lnBias (StableLM/Phi),
+// else RMSNorm (Llama). gamma is the weight; beta is the LayerNorm bias (ignored under RMSNorm).
+func (d *Decoder) norm(r recorder, x, gamma, beta, o buffer, rows int) error {
+	if d.lnBias {
+		return r.LayerNorm(x, gamma, beta, o, rows, d.d, d.eps)
+	}
+	return r.RMSNorm(x, gamma, o, rows, d.d, d.eps)
+}
+
+// bFinalBeta is the final-norm LayerNorm bias, or nil under RMSNorm (bFinal unset).
+func (d *Decoder) bFinalBeta() buffer {
+	if d.bFinal != nil {
+		return d.bFinal.b
+	}
+	return nil
+}
+
+func (d *Decoder) ropeQK(r recorder, qkv, inv buffer, seq, stride, pos int) error {
+	if d.rotaryDim < d.dk {
+		return r.RoPEPartialPair(qkv, inv, seq, stride, d.h, 0, d.kvH, d.d, d.dk, d.rotaryDim, pos, d.posDiv)
+	}
+	return r.RoPEPair(qkv, inv, seq, stride, d.h, 0, d.kvH, d.d, d.dk, d.half, pos, d.posDiv)
 }
 
 // allocScratch uploads the RoPE frequencies and allocates the per-step scratch buffers. They are
@@ -284,6 +397,162 @@ func newDecoder(m *nlp.Llama, ops backendOps) (*Decoder, error) {
 		d.blocks = append(d.blocks, gb)
 	}
 	d.gFinal = mk(flat1D(m.Norm.Gamma))
+	d.out = lin(m.Out)
+	d.allocScratch(mk)
+	if err != nil {
+		d.Release()
+		return nil, err
+	}
+	return d, nil
+}
+
+// newStableLMDecoder builds a device Decoder for an nlp.StableLM: the Llama-shaped SwiGLU/GQA
+// core, but with LayerNorm-with-bias (lnBias) and PARTIAL rotary (rotaryDim < dk). StableLM has
+// no attention bias and its rotary is split-half (matches OpRoPE), so weights upload directly —
+// only the norms carry a bias and the rope is partial. Currently cuda-only (metal/vulkan
+// RoPEPartialPair are unimplemented). §T757-class new-architecture GPU decode.
+func newStableLMDecoder(m *nlp.StableLM, ops backendOps) (*Decoder, error) {
+	cfg := m.Config
+	// StableLMConfig's kvHeads()/headDim()/rotaryDim() are unexported, so replicate here.
+	kvH := cfg.KVHeads
+	if kvH <= 0 {
+		kvH = cfg.Heads
+	}
+	headDim := cfg.HeadDim
+	if headDim <= 0 {
+		headDim = cfg.Dim / cfg.Heads
+	}
+	rotaryDim := cfg.RotaryDim
+	if rotaryDim <= 0 {
+		pct := cfg.RotaryPct
+		if pct == 0 {
+			pct = 0.25
+		}
+		rotaryDim = int(float64(headDim) * pct)
+	}
+	lc := nlp.LlamaConfig{
+		Vocab: cfg.Vocab, Ctx: cfg.Ctx, Dim: cfg.Dim, Heads: cfg.Heads, KVHeads: kvH,
+		Layers: cfg.Layers, Hidden: cfg.Hidden, Eps: cfg.Eps, RopeBase: cfg.RopeBase,
+	}
+	d, derr := newDecoderCommon(lc, m.TokEmb, ops)
+	if derr != nil {
+		return nil, derr
+	}
+	// LayerNorm-bias + partial rotary: rebuild the inverse-frequency table over rotaryDim
+	// (newDecoderCommon sized it to dk for full rope).
+	d.lnBias = true
+	d.rotaryDim = rotaryDim
+	if d.rotaryDim <= 0 || d.rotaryDim > d.dk || d.rotaryDim%2 != 0 {
+		return nil, fmt.Errorf("llamagpu(%s): StableLM rotaryDim %d invalid for headDim %d", ops.name, d.rotaryDim, d.dk)
+	}
+	invF64, posDiv64 := backend.RoPEFreqs(d.rotaryDim, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: d.h})
+	d.invHost = make([]float32, d.rotaryDim/2)
+	for i := range d.invHost {
+		d.invHost[i] = float32(invF64[i])
+	}
+	d.posDiv = float32(posDiv64)
+
+	var err error
+	mk := d.mkBuf(&err)
+	lin := func(w *tensor.Tensor) linear {
+		in, out := w.Shape()[0], w.Shape()[1]
+		return f32Linear{w: mk(flat2D(w)).b, k: in, n: out}
+	}
+	fused := func(wq, wk, wv *tensor.Tensor) linear {
+		in := wq.Shape()[0]
+		nq, nk, nv := wq.Shape()[1], wk.Shape()[1], wv.Shape()[1]
+		fq, fk, fv := flat2D(wq), flat2D(wk), flat2D(wv)
+		nt := nq + nk + nv
+		w := make([]float32, in*nt)
+		for i := range in {
+			row := w[i*nt : (i+1)*nt]
+			copy(row[:nq], fq[i*nq:(i+1)*nq])
+			copy(row[nq:nq+nk], fk[i*nk:(i+1)*nk])
+			copy(row[nq+nk:], fv[i*nv:(i+1)*nv])
+		}
+		return f32Linear{w: mk(w).b, k: in, n: nt}
+	}
+	for _, b := range m.Blocks {
+		gb := block{
+			wqkv: fused(b.Wq, b.Wk, b.Wv), wo: lin(b.Wo),
+			gAttn: mk(flat1D(b.InputNorm.Gamma)).b, bAttn: mk(flat1D(b.InputNorm.Beta)).b,
+			gFFN: mk(flat1D(b.PostAttnNorm.Gamma)).b, bFFN: mk(flat1D(b.PostAttnNorm.Beta)).b,
+			wG: lin(b.FFN.Wgate), wU: lin(b.FFN.Wup), wD: lin(b.FFN.Wdown),
+			kC: mk(make([]float32, d.maxLen*d.kvDim)).b, vC: mk(make([]float32, d.maxLen*d.kvDim)).b,
+		}
+		d.blocks = append(d.blocks, gb)
+	}
+	d.gFinal = mk(flat1D(m.Norm.Gamma))
+	d.bFinal = mk(flat1D(m.Norm.Beta))
+	d.out = lin(m.Out)
+	d.allocScratch(mk)
+	if err != nil {
+		d.Release()
+		return nil, err
+	}
+	return d, nil
+}
+
+// newStarCoder2Decoder builds a device Decoder for an nlp.StarCoder2: LayerNorm-with-bias +
+// biased q/k/v/o projections + a biased 2-layer GELU MLP (c_fc → GELU → c_proj) + FULL rope +
+// GQA + untied head. Every one of those is a core generalization (lnBias, biased projections,
+// ffnGELU); rotary stays full (rotaryDim == dk). cuda-only.
+func newStarCoder2Decoder(m *nlp.StarCoder2, ops backendOps) (*Decoder, error) {
+	cfg := m.Config
+	kvH := cfg.KVHeads
+	if kvH <= 0 {
+		kvH = cfg.Heads
+	}
+	lc := nlp.LlamaConfig{
+		Vocab: cfg.Vocab, Ctx: cfg.Ctx, Dim: cfg.Dim, Heads: cfg.Heads, KVHeads: kvH,
+		Layers: cfg.Layers, Hidden: cfg.Hidden, Eps: cfg.Eps, RopeBase: cfg.RopeBase,
+	}
+	d, derr := newDecoderCommon(lc, m.TokEmb, ops)
+	if derr != nil {
+		return nil, derr
+	}
+	d.lnBias = true  // LayerNorm-with-bias
+	d.ffnGELU = true // 2-layer GELU MLP
+	// rotary stays full (rotaryDim == dk, the newDecoderCommon default) — no inv override.
+
+	var err error
+	mk := d.mkBuf(&err)
+	lin := func(w *tensor.Tensor) linear {
+		in, out := w.Shape()[0], w.Shape()[1]
+		return f32Linear{w: mk(flat2D(w)).b, k: in, n: out}
+	}
+	fused := func(wq, wk, wv *tensor.Tensor) linear {
+		in := wq.Shape()[0]
+		nq, nk, nv := wq.Shape()[1], wk.Shape()[1], wv.Shape()[1]
+		fq, fk, fv := flat2D(wq), flat2D(wk), flat2D(wv)
+		nt := nq + nk + nv
+		w := make([]float32, in*nt)
+		for i := range in {
+			row := w[i*nt : (i+1)*nt]
+			copy(row[:nq], fq[i*nq:(i+1)*nq])
+			copy(row[nq:nq+nk], fk[i*nk:(i+1)*nk])
+			copy(row[nq+nk:], fv[i*nv:(i+1)*nv])
+		}
+		return f32Linear{w: mk(w).b, k: in, n: nt}
+	}
+	fusedBias := func(bq, bk, bv *tensor.Tensor) buffer { // [Bq | Bk | Bv] = [D+2·kvDim]
+		fb := append(append(append([]float32{}, flat1D(bq)...), flat1D(bk)...), flat1D(bv)...)
+		return mk(fb).b
+	}
+	for _, b := range m.Blocks {
+		gb := block{
+			wqkv: fused(b.Wq, b.Wk, b.Wv), qkvBias: fusedBias(b.Bq, b.Bk, b.Bv),
+			wo: lin(b.Wo), oBias: mk(flat1D(b.Bo)).b,
+			gAttn: mk(flat1D(b.InputNorm.Gamma)).b, bAttn: mk(flat1D(b.InputNorm.Beta)).b,
+			gFFN: mk(flat1D(b.PostAttnNorm.Gamma)).b, bFFN: mk(flat1D(b.PostAttnNorm.Beta)).b,
+			wG: lin(b.Wfc), fcBias: mk(flat1D(b.Bfc)).b,
+			wD: lin(b.Wproj), projBias: mk(flat1D(b.Bproj)).b,
+			kC: mk(make([]float32, d.maxLen*d.kvDim)).b, vC: mk(make([]float32, d.maxLen*d.kvDim)).b,
+		}
+		d.blocks = append(d.blocks, gb)
+	}
+	d.gFinal = mk(flat1D(m.Norm.Gamma))
+	d.bFinal = mk(flat1D(m.Norm.Beta))
 	d.out = lin(m.Out)
 	d.allocScratch(mk)
 	if err != nil {
@@ -374,13 +643,13 @@ func (d *Decoder) encodeStep(pos int) (recorder, error) {
 		// bands rotate IN PLACE inside the combined row, k/v append to the cache straight
 		// from their bands, attention reads q at band offset 0), else the unfused three.
 		// Recording order is execution order: norm FIRST, then the projection branch.
-		e := r.RMSNorm(d.dx.b, b.gAttn, d.xn.b, 1, D, d.eps)
+		e := d.norm(r, d.dx.b, b.gAttn, b.bAttn, d.xn.b, 1)
 		qBuf := d.q.b
 		if e == nil && b.wqkv != nil {
 			qBuf = d.qkv.b
 			e = firstErr(
-				b.wqkv.record(r, d.xn.b, d.qkv.b, 1),
-				r.RoPEPair(d.qkv.b, d.dinv.b, 1, D+2*kvDim, H, 0, KVH, D, dk, d.half, pos, d.posDiv), // q+k bands, ONE dispatch (§T613)
+				d.recordQKVProj(r, b, 1),
+				d.ropeQK(r, d.qkv.b, d.dinv.b, 1, D+2*kvDim, pos), // q+k bands, ONE dispatch (§T613); full ∨ partial rotary
 				r.Blit(d.qkv.b, D, b.kC, pos*kvDim, kvDim),
 				r.Blit(d.qkv.b, D+kvDim, b.vC, pos*kvDim, kvDim),
 			)
@@ -398,12 +667,8 @@ func (d *Decoder) encodeStep(pos int) (recorder, error) {
 		e = firstErr(
 			e,
 			r.MHA(qBuf, b.kC, b.vC, d.attn.b, 1, pos+1, D, H, KVH, dk, 1, 0, d.scale),
-			b.wo.recordAdd(r, d.attn.b, d.ao.b, d.dx.b, 1), // dx += attn·Wo (fused epilogue, §T613)
-			r.RMSNorm(d.dx.b, b.gFFN, d.xn2.b, 1, D, d.eps),
-			b.wG.record(r, d.xn2.b, d.gate.b, 1),
-			b.wU.record(r, d.xn2.b, d.up.b, 1),
-			r.Binary(d.gate.b, d.up.b, d.gate.b, binarySwiGLU),
-			b.wD.recordAdd(r, d.gate.b, d.mo.b, d.dx.b, 1), // dx += swiglu·Wdown (fused epilogue)
+			d.recordOProj(r, b, 1), // dx += attn·Wo (+ optional o-bias)
+			d.recordFFNSublayer(r, b, 1),
 		)
 		if e != nil {
 			r.Free()
@@ -411,8 +676,8 @@ func (d *Decoder) encodeStep(pos int) (recorder, error) {
 		}
 	}
 	if e := firstErr(
-		r.RMSNorm(d.dx.b, d.gFinal.b, d.xn.b, 1, D, d.eps),
-		d.out.record(r, d.xn.b, d.logits.b, 1),
+		d.norm(r, d.dx.b, d.gFinal.b, d.bFinalBeta(), d.xn.b, 1),
+		d.recordLogits(r, 1),
 	); e != nil {
 		r.Free()
 		return nil, e
@@ -517,11 +782,11 @@ func (d *Decoder) StepN(tokens []int, pos int) ([]float32, error) {
 		// width parameter acts as the row stride), then Copy2D extracts q contiguously
 		// and deposits the k/v bands directly as cache rows. Recording order = execution
 		// order: norm first, then the projection branch.
-		e := r.RMSNorm(d.dx.b, b.gAttn, d.xn.b, k, D, d.eps)
+		e := d.norm(r, d.dx.b, b.gAttn, b.bAttn, d.xn.b, k)
 		if e == nil && b.wqkv != nil {
 			e = firstErr(
-				b.wqkv.record(r, d.xn.b, d.qkv.b, k),
-				r.RoPEPair(d.qkv.b, d.dinv.b, k, stride, H, 0, KVH, D, dk, d.half, pos, d.posDiv), // q+k bands, ONE dispatch (§T613)
+				d.recordQKVProj(r, b, k),
+				d.ropeQK(r, d.qkv.b, d.dinv.b, k, stride, pos), // q+k bands, ONE dispatch (§T613); full ∨ partial rotary
 				r.Copy2D(d.qkv.b, 0, stride, d.q.b, 0, D, k, D),
 				r.Copy2D(d.qkv.b, D, stride, b.kC, pos*kvDim, kvDim, k, kvDim),
 				r.Copy2D(d.qkv.b, D+kvDim, stride, b.vC, pos*kvDim, kvDim, k, kvDim),
@@ -542,12 +807,8 @@ func (d *Decoder) StepN(tokens []int, pos int) ([]float32, error) {
 			// sq=k vs sk=pos+k: the kernel's causal offset (sk-sq = pos) makes row i attend
 			// through absolute position pos+i — exactly the prefill/verify semantics.
 			r.MHA(d.q.b, b.kC, b.vC, d.attn.b, k, pos+k, D, H, KVH, dk, 1, 0, d.scale),
-			b.wo.recordAdd(r, d.attn.b, d.ao.b, d.dx.b, k), // dx += attn·Wo (fused epilogue, §T613)
-			r.RMSNorm(d.dx.b, b.gFFN, d.xn2.b, k, D, d.eps),
-			b.wG.record(r, d.xn2.b, d.gate.b, k),
-			b.wU.record(r, d.xn2.b, d.up.b, k),
-			r.Binary(d.gate.b, d.up.b, d.gate.b, binarySwiGLU),
-			b.wD.recordAdd(r, d.gate.b, d.mo.b, d.dx.b, k), // dx += swiglu·Wdown (fused epilogue)
+			d.recordOProj(r, b, k), // dx += attn·Wo (+ optional o-bias)
+			d.recordFFNSublayer(r, b, k),
 		)
 		if e != nil {
 			r.Free()
@@ -555,8 +816,8 @@ func (d *Decoder) StepN(tokens []int, pos int) ([]float32, error) {
 		}
 	}
 	if e := firstErr(
-		r.RMSNorm(d.dx.b, d.gFinal.b, d.xn.b, k, D, d.eps),
-		d.out.record(r, d.xn.b, d.logits.b, k),
+		d.norm(r, d.dx.b, d.gFinal.b, d.bFinalBeta(), d.xn.b, k),
+		d.recordLogits(r, k),
 		r.Finish(),
 	); e != nil {
 		r.Free()

@@ -46,6 +46,9 @@ func (c cRec) RoPEAt(q, inv, o buffer, off, seq, width, heads, hd, half, pos int
 func (c cRec) RoPEPair(qkv, inv buffer, seq, stride, headsQ, offQ, headsK, offK, hd, half, pos int, posDiv float32) error {
 	return c.r.RoPEPair(cb(qkv), cb(inv), seq, stride, headsQ, offQ, headsK, offK, hd, half, pos, posDiv)
 }
+func (c cRec) RoPEPartialPair(qkv, inv buffer, seq, stride, headsQ, offQ, headsK, offK, hd, rotaryDim, pos int, posDiv float32) error {
+	return c.r.RoPEPartialPair(cb(qkv), cb(inv), seq, stride, headsQ, offQ, headsK, offK, hd, rotaryDim, pos, posDiv)
+}
 func (c cRec) Blit(src buffer, srcOff int, dst buffer, dstOff, n int) error {
 	return c.r.Blit(cb(src), srcOff, cb(dst), dstOff, n)
 }
@@ -80,6 +83,61 @@ func NewCUDA(m *nlp.Llama) (*Decoder, error) {
 	return newDecoder(m, backendOps{
 		name:        string(backend.CUDA),
 		asyncEncode: false, // one shared work stream — pre-encoding a second recorder would interleave
+		newBuffer: func(data []float32) (buffer, error) {
+			b, err := cuda.NewDeviceBufferF32(data)
+			if err != nil {
+				return nil, err
+			}
+			return cBuf{b}, nil
+		},
+		newRecorder: func() (recorder, error) {
+			r, err := cuda.NewRecorder()
+			if err != nil {
+				return nil, err
+			}
+			return cRec{r}, nil
+		},
+	})
+}
+
+// NewStableLMCUDA uploads an nlp.StableLM into CUDA device buffers and runs it through the same
+// batched Decoder core as NewCUDA — but with LayerNorm-with-bias norms and PARTIAL rotary (the
+// StableLM/Phi/StarCoder2-class departures from Llama). The first of the new-architecture GPU
+// graph decoders enabled by the cu_rope_partial* kernels. cuda-only for now.
+func NewStableLMCUDA(m *nlp.StableLM) (*Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newStableLMDecoder(m, backendOps{
+		name:        string(backend.CUDA),
+		asyncEncode: false,
+		newBuffer: func(data []float32) (buffer, error) {
+			b, err := cuda.NewDeviceBufferF32(data)
+			if err != nil {
+				return nil, err
+			}
+			return cBuf{b}, nil
+		},
+		newRecorder: func() (recorder, error) {
+			r, err := cuda.NewRecorder()
+			if err != nil {
+				return nil, err
+			}
+			return cRec{r}, nil
+		},
+	})
+}
+
+// NewStarCoder2CUDA uploads an nlp.StarCoder2 onto the batched Decoder core: LayerNorm-with-bias,
+// biased q/k/v/o projections, a biased 2-layer GELU MLP, full rope and GQA. The second new-arch GPU
+// graph decoder, exercising every Decoder-core generalization except partial rotary. cuda-only.
+func NewStarCoder2CUDA(m *nlp.StarCoder2) (*Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newStarCoder2Decoder(m, backendOps{
+		name:        string(backend.CUDA),
+		asyncEncode: false,
 		newBuffer: func(data []float32) (buffer, error) {
 			b, err := cuda.NewDeviceBufferF32(data)
 			if err != nil {

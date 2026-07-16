@@ -138,6 +138,23 @@ func (rec *Recorder) RoPEPair(qkv, inv *DeviceF32, seq, stride, headsQ, offQ, he
 	return nil
 }
 
+// RoPEPartialPair is the partial-rotary sibling of [Recorder.RoPEPair]: it rotates ONLY the
+// first rotaryDim channels of each head in the q band (headsQ heads at offQ) and the k band
+// (headsK at offK) of a fused [seq,stride] QKV buffer in place, leaving the head tails and
+// the v band untouched — the fused-QKV RoPE for GPT-NeoX/Phi/StableLM. inv is [rotaryDim/2].
+func (rec *Recorder) RoPEPartialPair(qkv, inv *DeviceF32, seq, stride, headsQ, offQ, headsK, offK, hd, rotaryDim, pos int, posDiv float32) error {
+	if qkv.ptr == nil || inv.ptr == nil {
+		return fmt.Errorf("cuda: rec RoPEPartialPair on a freed handle")
+	}
+	if rc := C.cu_rope_partial_band(qkv.ptr, inv.ptr, C.int(seq), C.int(stride), C.int(offQ), C.int(headsQ), C.int(hd), C.int(rotaryDim), C.int(pos), C.double(posDiv)); rc != 0 {
+		return fmt.Errorf("cuda: rec RoPEPartialPair q failed (code %d)", int(rc))
+	}
+	if rc := C.cu_rope_partial_band(qkv.ptr, inv.ptr, C.int(seq), C.int(stride), C.int(offK), C.int(headsK), C.int(hd), C.int(rotaryDim), C.int(pos), C.double(posDiv)); rc != 0 {
+		return fmt.Errorf("cuda: rec RoPEPartialPair k failed (code %d)", int(rc))
+	}
+	return nil
+}
+
 func (rec *Recorder) Blit(src *DeviceF32, srcOff int, dst *DeviceF32, dstOff, n int) error {
 	if src.ptr == nil || dst.ptr == nil {
 		return fmt.Errorf("cuda: rec Blit on a freed handle")
