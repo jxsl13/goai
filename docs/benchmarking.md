@@ -1217,7 +1217,13 @@ pays in proportion to how latency-bound the small-N shapes are — and with the 
 already ≥53%, fusion is near its ceiling. The corollary is decisive for Tw56: the remaining
 ~73%-of-decode FFN bandwidth cannot be recovered by fusing; it needs a real GEMV
 memory-schedule change (split-K to put more warps in flight). The two fusions are
-independent GEMVs and compose (combined ≈ additive, ~+4.8%).
+independent GEMVs and compose with no negative interaction: the full stack (QKV + gate+up)
+measures **+5.8%** decode (271.1 vs 256.3 tok/s, `TestCUDAFusionStackSpeedAB`, 5 reps),
+slightly super-additive over the +3.7%/+1.1% parts. Caveat for the split-K idea: an earlier
+arc (Tw44) already rejected a deinterleaved Q4_K layout and judged the GEMV near its
+"sweet spot" with the residual gap being per-block scale-decode ALU, not memory — so
+whether split-K helps the FFN 5632/2048 shapes is a measure-first question (the fusion
+wins here came specifically from occupancy at the starved small-N shapes).
 
 Repro: `go test -tags cuda -run '^$' -bench BenchmarkGemvQ4K ./backend/cuda/`;
 `go test -tags cuda -run 'TestCUDA(QKV|GateUp)Fuse' ./backend/cuda/`.

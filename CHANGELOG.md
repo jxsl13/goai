@@ -15,7 +15,9 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   lever: fusion is nearly tapped out (the FFN shapes aren't starved), so the big remaining
   decode win (Tw56: gate/up/down = ~73% of decode at ~53% peak) must come from a real GEMV
   memory-schedule rewrite (split-K), not more fusion. The two fusions are independent GEMVs
-  and compose (both opt-in; combined ≈ additive ~+4.8%).
+  and compose with no negative interaction — the full stack (QKV + gate+up, both opt-in)
+  measures **+5.8%** decode (271.1 vs 256.3 tok/s, `TestCUDAFusionStackSpeedAB`, 5 reps),
+  slightly super-additive over the +3.7%/+1.1% parts.
 
 ### CUDA — fused-QKV weight: +3.7% decode, bit-exact (worker linux-amd64, Tw55(b) build, 2026-07-16)
 - The re-specced slice (b), now built and measured. `fuseQKVQ4K` concatenates the
