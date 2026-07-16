@@ -15,14 +15,23 @@ import (
 	"github.com/jxsl13/goai/tensor"
 )
 
-// rawF16Layer is the f16 tensor-core PREFILL twin of rawLayer: projections resident in
-// f16, optional qwen2 QKV bias, built straight from a gguf.RawFile (so it covers model
+// prefillWeight is the shared interface of the two resident prefill weight types — f16
+// (cuda.ResidentBF16) and int8 MMQ (cuda.ResidentMMQ) — so the same prefill harness runs on
+// either. Both expose the projection GEMM (MatMulDevice) and its residual-fused twin.
+type prefillWeight interface {
+	MatMulDevice(*cuda.DeviceF32) (*cuda.DeviceF32, error)
+	MatMulAccInto(a, c *cuda.DeviceF32) error
+	Free()
+}
+
+// rawF16Layer is the tensor-core PREFILL twin of rawLayer: projections resident (f16 or int8
+// MMQ), optional qwen2 QKV bias, built straight from a gguf.RawFile (so it covers model
 // families nlp.LlamaFromGGUF rejects).
 type rawF16Layer struct {
 	gAttn, gFFN    *cuda.ResidentVec
 	bq, bk, bv     *cuda.ResidentVec // qwen2 QKV bias; nil for the llama family
-	wq, wk, wv, wo *cuda.ResidentBF16
-	wg, wu, wd     *cuda.ResidentBF16
+	wq, wk, wv, wo prefillWeight
+	wg, wu, wd     prefillWeight
 	heads, kv      int
 	ropeBase, eps  float64
 }
@@ -30,12 +39,18 @@ type rawF16Layer struct {
 type rawF16Prefill struct {
 	emb    *cuda.ResidentB
 	norm   *cuda.ResidentVec
-	out    *cuda.ResidentBF16
+	out    prefillWeight
 	layers []*rawF16Layer
 	eps    float64
 }
 
 func buildRawF16Prefill(tb testing.TB, rf *gguf.RawFile, arch string) *rawF16Prefill {
+	return buildRawPrefill(tb, rf, arch, false)
+}
+
+// buildRawPrefill builds the prefill stack with either f16 (mmq=false) or int8 MMQ (mmq=true)
+// resident projection weights — the two share the prefillWeight interface and the same forward.
+func buildRawPrefill(tb testing.TB, rf *gguf.RawFile, arch string, mmq bool) *rawF16Prefill {
 	deq := func(n string) *tensor.Tensor {
 		qt, ok := rf.Tensors[n]
 		if !ok {
@@ -45,8 +60,14 @@ func buildRawF16Prefill(tb testing.TB, rf *gguf.RawFile, arch string) *rawF16Pre
 		mustTB(tb, err)
 		return t
 	}
-	f16 := func(n string) *cuda.ResidentBF16 {
-		r, err := cuda.NewResidentBF16(transpose2D(deq(n)))
+	f16 := func(n string) prefillWeight {
+		w := transpose2D(deq(n))
+		if mmq {
+			r, err := cuda.NewResidentMMQ(w)
+			mustTB(tb, err)
+			return r
+		}
+		r, err := cuda.NewResidentBF16(w)
 		mustTB(tb, err)
 		return r
 	}
@@ -97,7 +118,7 @@ func (p *rawF16Prefill) free() {
 				b.Free()
 			}
 		}
-		for _, w := range []*cuda.ResidentBF16{l.wq, l.wk, l.wv, l.wo, l.wg, l.wu, l.wd} {
+		for _, w := range []prefillWeight{l.wq, l.wk, l.wv, l.wo, l.wg, l.wu, l.wd} {
 			w.Free()
 		}
 	}
