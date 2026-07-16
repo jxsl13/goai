@@ -27,16 +27,17 @@ type T5 struct {
 
 // T5Config fixes the encoder geometry.
 type T5Config struct {
-	Vocab       int
-	Dim         int     // d_model
-	Heads       int     // num_heads
-	HeadDim     int     // d_kv (heads*HeadDim need NOT equal Dim)
-	Layers      int     // num_layers
-	FFN         int     // d_ff
-	NumBuckets  int     // relative_attention_num_buckets (default 32)
-	MaxDistance int     // relative_attention_max_distance (default 128)
-	Eps         float64 // layer_norm_epsilon (default 1e-6)
-	Gated       bool    // T5 v1.1 gated-GELU FFN vs v1.0 ReLU
+	Vocab        int
+	Dim          int     // d_model
+	Heads        int     // num_heads
+	HeadDim      int     // d_kv (heads*HeadDim need NOT equal Dim)
+	Layers       int     // num_layers
+	FFN          int     // d_ff
+	NumBuckets   int     // relative_attention_num_buckets (default 32)
+	MaxDistance  int     // relative_attention_max_distance (default 128)
+	Eps          float64 // layer_norm_epsilon (default 1e-6)
+	Gated        bool    // T5 v1.1 gated-GELU FFN vs v1.0 ReLU
+	UntiedLMHead bool    // decoder LM head is not tied to the embedding (skips the d_model^-0.5 rescale)
 }
 
 // T5Block is one encoder block (pre-LN residual, no bias anywhere).

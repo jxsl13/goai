@@ -22,6 +22,17 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   so it is less latency-starved and has less headroom to reclaim by folding into the q launch.
 - Test-harness-only for now; productionizing into the llamagpu decoder + the qwen2 bias concat
   remain (Tw57 slice 2+).
+### nlp — new: T5 decoder → full seq2seq (T731, 2026-07-16)
+
+`T5Decoder` + `T5DecoderFromHF` complete T5 to a full sequence-to-sequence model (the encoder
+landed in T730). Each decoder block is causal self-attention with a (unidirectional) relative
+bias, cross-attention over the encoder output, and an FFN — assembled on the per-head masked
+attention kernel: the self-attention mask is the relative bias with −Inf on future keys, and
+the cross-attention is the same fused op on the encoder's key/value length (the rectangular
+shapes the kernel already supported). Pair `T5FromHF` (encoder) and `T5DecoderFromHF` (decoder)
+on one checkpoint: `enc.Forward(input)` then `dec.Decode(encoderOut, decoderTokens)`. Anchored
+against transformers T5Model (encoder+decoder): the decoder `last_hidden_state` matches to
+**4.6e-7**. A tied `LMHead` + `Logits` map decoder states to vocabulary logits (matching T5ForConditionalGeneration to 6e-7), so GoAI can now run real T5 checkpoints end-to-end for translation / summarization — `T5Decoder.Generate` does autoregressive seq2seq decoding with the full sampler suite (greedy/top-k/top-p/…).
 
 ### CUDA — MMQ prefill +14% via ldmatrix loads in the per-row kernel (worker linux-amd64, Tw77, 2026-07-16)
 - `cu_matmul_i8_mmq_r` (the per-row MMQ kernel behind `ResidentMMQ.MatMul*`) now loads its A/B
