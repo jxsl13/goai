@@ -190,7 +190,7 @@ Tw51|x|Q4_K GRAPH decode scoreboard: 249.4/174.4/97.9/49.5 tok/s — goai > llam
 Tw52|x|FLASH decode attention (GQA K/V-shared split-K + merge): +3.5% @ctx160, +26% @ctx2004 (168→212); 2 simpler fusions built+rejected (74/102 — graph replay amortizes launches); all graph decoders switched|PERF-FLASH-ATTN
 Tw53|x|f16 KV cache (u16 store, f32 compute): quality+speed FLAT (≤1% @ctx2004 — GQA sharing already killed the K/V bandwidth term), KV VRAM −50% → OPT-IN GOAI_CUDA_KV=f16; prefill profile parks flash-prefill (attn 13.8% ≤14% ceiling)|PERF-F16-KV
 Tw54|x|native Q6_K GEMV in direct Q4_K_M load: golden 2.5e-6, agreement unchanged, speed FLAT after the transactions-not-bytes fix (byte loads were −6%!); zero requant loss, minority VRAM −23%|PERF-Q6K-NATIVE
-Tw55| |decode fusion stack (from gap research): (a) SiLU/mul fused into the up-GEMV epilogue (kills the SwiGLU launch + a hidden-vector round-trip; ≠ the Tw39 wide-matmul rejection), (b) concurrent QKV streams in graph capture; A/B each rung per §V22|PERF-FUSION-STACK
+Tw55|~|decode fusion stack: (a) DONE+MEASURED — SwiGLU fused into up-GEMV epilogue, token-parity EXACT (24/24) but −0.9% decode @1.1B (SwiGLU ≈1.8% of step per PERF-PREFILL-PROFILE → can't pay; lane-0 epilogue serializes); PARKED opt-in (GOAI_CUDA_FFN_FUSE=1), chain stays default; kernel+parity test kept. (b) OPEN — concurrent QKV streams in graph capture (QKV proj ≈11% of prefill = the real remaining lever). A/B each rung per §V22|PERF-FUSION-STACK
 
 ## §NEXT — open levers
 

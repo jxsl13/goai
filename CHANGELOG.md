@@ -4,6 +4,25 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — SwiGLU-in-up-GEMV-epilogue fusion: parity-exact, measured neutral, parked opt-in (worker linux-amd64, Tw55 slice (a), 2026-07-16)
+- `cu_qmatmul_q8_swiglu` / `cu_qmatmul_q4k_swiglu`: the up-projection GEMV gains an
+  optional `gate` pointer; lane 0's epilogue computes `out = silu(gate)·(a·W)` with the
+  **exact** arithmetic of the standalone swiglu kernel (numerically-stable two-branch
+  `expf` sigmoid), replacing one SwiGLU launch + a hidden-vector round-trip.
+- **Token-parity exact** (`TestCUDAFFNFuseTokenParity`): 24/24 greedy TinyLlama-Q4_K
+  decode tokens identical, fused vs the 3-op chain — no tolerance, only the multiply
+  moves. The diff touches only the `if (gate)` branch, so every `gate==NULL` path is
+  byte-unaffected (full CUDA suite 11/11 green).
+- **§V22 verdict — does NOT pay:** interleaved A,B,A,B (`TestCUDAFFNFuseSpeedAB`, 5 reps)
+  = fused **252.9** vs chain **255.3** tok/s (**−0.9%**) @TinyLlama-1.1B decode. Consistent
+  with the engine's own PERF-PREFILL-PROFILE (SwiGLU ≈1.8% of the step): folding away a
+  <2% launch can't beat the chain, and the lane-0 epilogue serializes the activation
+  across warps. Same class of honest park as the Tw39 wide-matmul rejection.
+- **Disposition:** kernel + parity test kept (a correctness asset for any future
+  launch-bound regime); the raw-decode default flipped to the faster chain, fusion is
+  **opt-in** (`GOAI_CUDA_FFN_FUSE=1`). The remaining Tw55 lever is slice (b) —
+  concurrent QKV streams in graph capture (QKV proj ≈11% of prefill), still open.
+
 ### CUDA — native Q6_K GEMV: Q4_K_M files now load fully bit-native (worker linux-amd64, Tw54, 2026-07-15)
 - `cu_qmatmul_q6k` + `ResidentBQ6K`: warp-per-output GEMV over ggml's 210-byte Q6_K
   super-blocks, golden vs the gguf dequant reference at maxRel 2.5e-6. `quantDirect`

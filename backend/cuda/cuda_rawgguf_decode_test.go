@@ -217,9 +217,14 @@ func (gd *rawGraphDecoder) forwardBody(tb testing.TB) {
 		mustTB(tb, l.wo.QMatMulAccInto(gd.da, gd.dx))
 		mustTB(tb, gd.dx.RMSNormInto(l.gFFN, float32(gd.eps), gd.dh2))
 		mustTB(tb, l.wg.QMatMulInto(gd.dh2, gd.dgate))
-		if f, ok := l.wu.(swigluProj); ok && os.Getenv("GOAI_CUDA_FFN_FUSE") != "0" {
+		if f, ok := l.wu.(swigluProj); ok && os.Getenv("GOAI_CUDA_FFN_FUSE") == "1" {
 			// Tw55 fusion: SwiGLU in the up-GEMV epilogue — no separate SwiGLU
-			// launch, no dgate round-trip between kernels.
+			// launch, no dgate round-trip between kernels. OPT-IN (default off):
+			// token-parity-exact (TestCUDAFFNFuseTokenParity) but measured −0.9%
+			// decode @TinyLlama-1.1B (TestCUDAFFNFuseSpeedAB) — the SwiGLU launch
+			// is only ~1.8% of the step (PERF-PREFILL-PROFILE), so folding it away
+			// can't beat the chain, and the lane-0 epilogue serializes the activation.
+			// Kept for correctness + a launch-bound regime; the chain stays default.
 			mustTB(tb, f.QMatMulSwiGLUInto(gd.dh2, gd.dgate, gd.dup))
 			mustTB(tb, l.wd.QMatMulAccInto(gd.dup, gd.dx))
 		} else {
