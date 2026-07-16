@@ -4,6 +4,22 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — feat: Gemma (v1) support — 8th loadable architecture (T742, 2026-07-16)
+
+Gemma (Gemma Team 2024) as a self-contained `nlp.Gemma` type (`GemmaFromHF`), keeping `Llama`
+pristine. It reuses GoAI's primitives and captures Gemma's four faithful departures from Llama:
+(1) token embeddings scaled by √dim at runtime — a rank-0 `OpMul` broadcast on the residual
+stream only, since the tied LM head deliberately uses the *unscaled* embedding; (2) RMSNorm's
+`(1+weight)` convention folded into the gains at load (γ ← γ+1) so the shared `nn.RMSNorm` applies
+it directly; (3) a GeGLU FFN via the existing `nn.GLU` (GELU gate); (4) `head_dim` decoupled from
+`dim/heads` — no code change needed, the shape-driven MHA/RoPE ops infer it (verified against a
+golden with head_dim=12, heads=2, hidden=16 → a 24×16 q_proj). Forward parity vs a real
+transformers `GemmaForCausalLM` (which uses `gelu_pytorch_tanh`): max abs logit diff 2.5e-8 —
+the exact-vs-tanh GELU difference is negligible at this scale. Trainable end-to-end
+(`TestGemmaFineTune`): gradients flow through the embedding scale, (1+w) norm, GeGLU and tied head.
+This brings the loadable, transformers-anchored architecture set to eight (GPT-2, Llama, Qwen2,
+BERT, RoBERTa, DistilBERT, T5, Gemma).
+
 ### backend/nlp — feat: masked-attention VJP makes T5 trainable (T740, 2026-07-16)
 
 `OpMHAMasked` (the free-additive-mask attention behind T5's relative-position bias) was
