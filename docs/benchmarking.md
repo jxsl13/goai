@@ -1239,11 +1239,31 @@ are ALU-bound**: the per-block Q4_K scale-decode is the limiter, so extra parall
 adds reduction/scheduling overhead. This corroborates Tw44 (which rejected a deinterleaved
 layout and judged the residual gap vs Q8 to be scale-decode ALU) with a direct measurement,
 and the Tw55(b) gate+up fusion (only +1.1% from ~2× warps at N=5632) said the same. The
-probe was discarded (measured & rejected, like Tw44's deinterleave). **Conclusion: the
-Q4_K decode GEMV is at its ceiling; further decode gains must come from elsewhere (lower-bit
-quant, or the prefill f16/tensor-core path), not from GEMV parallelism.** The fusion wins
-stand because they attacked *occupancy at the starved small-N shapes* (k/v at 17%), a
-different lever from the ALU-bound FFN shapes.
+probe was discarded (measured & rejected, like Tw44's deinterleave).
+
+**How much ALU headroom? A memory-only floor probe.** To size the win available from cutting
+the dequant ALU, a second probe ran the Q4_K GEMV with *every memory load intact* (the 128 B
+nibbles, the f16 d/dmin, the packed scales, the activation float4s) but the dequant/multiply
+replaced by a trivial accumulation. Its bandwidth is the floor — what the kernel would reach
+if the ALU were free:
+
+| shape (K×N) | real GB/s | memory floor GB/s | ALU cost |
+|---|---:|---:|---:|
+| 2048×5632 (gate/up) | 196.5 | 291.7 | **1.48×** |
+| 5632×2048 (down) | 189.3 | 290.8 | 1.54× |
+| 2048×2048 (q/o) | 166.7 | 285.1 | **1.71×** |
+| 2048×32000 (head) | 219.0 | 329.8 | 1.51× |
+
+The floor is 79-92% of the 360 GB/s peak, so the access pattern is efficient; the real kernel
+runs **~1.5× slower purely on dequant ALU**. That headroom is exactly what an **int8/dp4a**
+quantized-multiply path targets (llama.cpp's MMVQ quantizes the activation to Q8_1 and does
+the nibble·activation products with `__dp4a`, 4 int8 MACs/instruction). ~1.5× is enough to
+close/beat llama.cpp-Q4_K_M's ~1.25-1.35× decode lead — so the dp4a rewrite is **warranted**
+and booked as **Tw58** (a quality tradeoff: the activation quantization makes it approximate,
+validated to a tolerance + a real-model agreement gate, not bit-exact). **Conclusion: the
+current f32-multiply Q4_K decode GEMV is at its ceiling, but a dp4a rewrite has a measured
+~1.5× to chase — the standing lever to beat the incumbent on decode.** The Tw55(b) fusion
+wins stand (they attacked occupancy at the starved small-N k/v shapes, an orthogonal lever).
 
 Repro: `go test -tags cuda -run '^$' -bench BenchmarkGemvQ4K ./backend/cuda/`;
 `go test -tags cuda -run 'TestCUDA(QKV|GateUp)Fuse' ./backend/cuda/`.

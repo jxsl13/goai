@@ -14,10 +14,16 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   scale-decode is the limiter). This corroborates Tw44 (deinterleave rejected; residual gap
   = scale-decode ALU) and the Tw55(b) gate+up fusion (+1.1% from ~2× warps) with a direct
   measurement. The probe was discarded (measured & rejected, like Tw44's deinterleave); the
-  finding is in `docs/benchmarking.md`. **The Q4_K decode GEMV is at its ceiling** — further
-  decode gains must come from lower-bit quant or the prefill f16/tensor-core path, not GEMV
-  parallelism. The Tw55(b) fusion wins stand (they attacked occupancy at the starved
-  small-N k/v shapes, a different lever).
+  finding is in `docs/benchmarking.md`. The Tw55(b) fusion wins stand (they attacked
+  occupancy at the starved small-N k/v shapes, a different lever).
+- **Memory-floor probe sizes the real lever.** A second probe ran the GEMV with every load
+  intact but the dequant/multiply stubbed — the ALU-free floor is 285-330 GB/s (79-92% of
+  peak) vs the real 167-219, so the kernel runs **~1.5× slower purely on dequant ALU**
+  (gate/up 1.48×, q/o 1.71×). That headroom is precisely what an **int8/dp4a** quantized-
+  multiply path recovers (llama.cpp's MMVQ). ~1.5× is enough to close/beat llcpp-Q4_K_M's
+  ~1.25-1.35× decode lead, so the dp4a rewrite is **warranted** — booked as **Tw58** (an
+  approximate path: the activation is quantized, so it's validated to a tolerance + a
+  real-model agreement gate, not bit-exact). Probe discarded; the table is in the docs.
 
 ### CUDA — fused gate+up weight + the occupancy-cliff law confirmed (worker linux-amd64, Tw55(b) extension, 2026-07-16)
 - Applies the same weight-fusion mechanism to the FFN: `ffn_gate|ffn_up` concatenated into
