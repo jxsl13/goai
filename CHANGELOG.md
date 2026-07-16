@@ -78,7 +78,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   **opt-in** (`GOAI_CUDA_FFN_FUSE=1`). The remaining Tw55 lever is slice (b) —
   concurrent QKV streams in graph capture (QKV proj ≈11% of prefill), still open.
 
-### nn — topic-discovery round 7: 5 distinct architectures (KAN, Tokenformer, sigmoid / selective / multi-token attention) (T686–T690, 2026-07-16)
+### nn — topic-discovery round 7: distinct architectures — KAN, Tokenformer, sigmoid / selective / multi-token / stick-breaking attention (T686–T691, 2026-07-16)
 
 A fresh sweep of *distinct layer/architecture types* (not the round-6 technique
 categories) found five genuinely-novel gaps — proving the "frontier tapped" read
@@ -121,6 +121,15 @@ learns-a-task value proof (~1e-10).
   Anchors: delta-kernel init collapses to standard MHA bit-exact; causal conv doesn't
   leak future keys (<1e-12); gradcheck through both conv kernels; on the two-token
   retrieval toy MTA reaches acc 1.000 while standard attention plateaus at 0.560.
+- **Stick-breaking attention** (`nn/stickbreaking_attention.go`, Tan et al. 2024,
+  arXiv:2410.17980). Softmax replaced by a stick-breaking allocation over keys from
+  most-recent backward (`A_ij = σ(z_ij)·∏_{k>j}(1−σ(z_ik))`), giving inherent recency
+  and length-generalization with no position encoding; weights sum to ≤ 1 (the
+  remainder is a valid "attend to nothing"). Computed in log-space for stability.
+  Anchors: single-key/2-key closed form; row-sum ≤ 1; log-space matches the direct
+  product to 1.11e-16; causal; gradcheck 2.4e-10; on a recency-average task it
+  length-generalizes (len6→len16 nearly flat) and beats an order-blind softpick
+  baseline ~25× at length 16.
 
 ### nn/nlp — topic-discovery round 6: 18 new techniques across optimizers, attention, quant, sampling, MoE, distillation, embeddings, augmentation, RL (T668–T684, 2026-07-15/16)
 

@@ -47,133 +47,134 @@ var methodExampleExempt = map[string]bool{
 }
 
 var typeExampleExempt = map[string]bool{
-	"backend.Op":                    true, // opcode enum; shown via ops/nn examples, not per-op
-	"llamagpu.Stepper":              true, // parameter-constraint interface (Decoder/GPTDecoder); shown via ExampleSpeculativeGenerate
-	"llamagpu.HiddenStepper":        true, // parameter-constraint interface (Decoder/GPTDecoder + StepHidden); consumed by MedusaGenerate
-	"backend.Attrs":                 true, // internal op-parameter bag
-	"backend.Kernel":                true, // function type (backend author surface)
-	"backend.Backend":               true, // backend-author interface, not user-called
-	"backend.Recorder":              true, // autograd-integration interface
-	"backend.QuantMatMuler":         true, // optional accelerator capability; shown via nn.QuantLinear
-	"backend.ResidentWeight":        true, // resident-weight handle interface; shown via nn.QuantLinear
-	"backend.ResidentQuantMatMuler": true, // optional resident-upload capability; shown via nn.QuantLinear
-	"backend.Context":               true, // plumbing; used implicitly by every op example
-	"tensor.Dtype":                  true, // scalar enum
-	"tensor.DeviceKind":             true, // device enum
-	"tensor.Device":                 true, // interface; construction is internal
-	"tensor.Shape":                  true, // used throughout every tensor example
-	"tensor.Pool":                   true, // allocator internals
-	"tensor.Allocator":              true, // interface; construction is internal
-	"tensor.Storage":                true, // interface (type-erased backing store)
-	"tensor.PoolOption":             true, // functional-option type (shown via its setters)
-	"tensor.Strides":                true, // []int stride vector, used implicitly everywhere
-	"autograd.Op":                   true, // re-export alias
-	"autograd.VJP":                  true, // VJP-rule function type (backend/kernel-author surface)
-	"autograd.VJPMulti":             true, // multi-output VJP-rule function type (backend/kernel-author surface)
-	"autograd.Variable":             true, // internal tape graph node; users work with Tensor+Tape
-	"nlp.NextLogits":                true, // callback function type (shown in BeamSearch example)
-	"nlp.JacobiStep":                true, // callback function type (shown in ExampleJacobiDecode)
-	"nlp.SamplerOption":             true, // functional-option type (shown via WithTemperature etc.)
-	"nlp.GenerateOption":            true, // functional-option type (shown via WithBackend, §T361)
-	"nlp.MirostatOption":            true, // functional-option type (shown via WithMirostatTau etc.)
-	"nlp.UnigramOption":             true, // functional-option type (shown via WithUnigram* setters)
-	"nlp.BPEOption":                 true, // functional-option type (shown via WithBPEUnkID)
-	"nlp.WatermarkOption":           true, // functional-option type (shown via WithWatermarkGamma etc.)
-	"nlp.WordPieceOption":           true, // functional-option type (shown via WithWordPieceUnk etc.)
-	"nlp.MedusaHeadsOption":         true, // functional-option type (shown via WithMedusaHeadsDtype)
-	"nlp.EagleHeadOption":           true, // functional-option type (shown via WithEagleFFNMult)
-	"nlp.CoconutOption":             true, // functional-option type (shown via WithCoconutMarkers/WithCoconutPause)
-	"nlp.ChatRenderOption":          true, // functional-option type (shown via WithGenerationPrompt/WithoutBOS)
-	"nlp.RerankResult":              true, // plain result record returned by CosineRerank; shown in its examples
-	"backend.OffloadPlan":           true, // plain result record returned by PlanOffload; shown in ExamplePlanOffload
-	"backend.MemoryProber":          true, // optional device-memory capability interface (backend-author surface), consumed by ProbeBudgets
-	"vision.CNNOption":              true, // functional-option type (shown via WithChannels/WithKernel/WithDtype)
-	"vision.ViTOption":              true, // functional-option type (shown via WithViTDim/WithViTHeads etc.)
-	"nlp.Beam":                      true, // returned by BeamSearch, shown in ExampleBeamSearch
-	"nlp.Block":                     true, // internal transformer block (part of GPT)
-	"nlp.LlamaBlock":                true, // internal transformer block (part of Llama, shown in ExampleLlama)
-	"nlp.QuantBlock":                true, // quantized transformer block (part of QuantLlama, shown in ExampleQuantLlama)
-	"nn.QuantSwiGLU":                true, // quantized FFN sublayer (part of QuantLlama, shown in ExampleQuantLlama)
-	"nlp.GPTConfig":                 true, // config struct
-	"nlp.GPT":                       true, // needs safetensors weight fixtures; covered by GPT tests
-	"nlp.KVCache":                   true, // decode state; needs a full model, covered by decode tests
-	"nlp.CLABlock":                  true, // internal cross-layer-attention block (part of CLA, shown in ExampleCLA)
-	"nlp.CLACache":                  true, // CLA decode state (Layers/Share slots), covered by CLA decode tests
-	"nlp.LlamaCache":                true, // Llama decode state; needs a full model, covered by llama_decode tests
-	"nlp.StreamCache":               true, // StreamingLLM decode state; needs a full model, covered by streaming tests
-	"nlp.Tokenizer":                 true, // needs a GPT-2 vocab fixture; covered by tokenizer tests
-	"nlp.MHA":                       true, // needs four projection matrices; used within GPT/decode
-	"nn.Layer":                      true, // interface (Linear/Sequential are the impls)
-	"nn.Optimizer":                  true, // interface (SGD/Adam/Lion are the impls)
-	"nn.Activation":                 true, // built via ReLU()/GELU()/…, shown in ExampleSequential
-	"nn.KANOption":                  true, // functional-option type (shown via WithKANGridSize/SplineOrder/GridRange)
-	"nn.PattentionOption":           true, // functional-option type (shown via WithPattentionDtype/WithPattentionUncoupledNorm)
-	"nn.SigmoidAttentionOption":     true, // functional-option type (shown via WithSigmoidAttnCausal etc.)
-	"nn.SelectiveAttentionOption":   true, // functional-option type (shown via WithSelectionDisabled)
-	"nn.MultiTokenAttentionOption":  true, // functional-option type (shown via WithMTAKeyQueryKernel/WithMTAHeadKernel/WithMTABidirectional)
-	"nn.PrefOption":                 true, // functional-option type (shown via Beta/ReferencePoint)
-	"nn.GRPOOption":                 true, // functional-option type (shown via WithKLBeta)
-	"nn.GSPOOption":                 true, // functional-option type (shown via WithGSPOClipEpsilon)
-	"nn.LionOption":                 true, // functional-option type (shown via WithLionBetas)
-	"nn.LAMBOption":                 true, // functional-option type (shown via WithLAMBBetas)
-	"nn.AdapterOption":              true, // functional-option type (shown via AdapterActivation)
-	"nn.SpectralNormOption":         true, // functional-option type (shown via WithSpectralNormIters)
-	"nn.GrokfastOption":             true, // functional-option type (shown via WithGrokfastLambda/Alpha)
-	"nn.GrokfastMAOption":           true, // functional-option type (shown via WithGrokfastMA*)
-	"nn.NGPTOption":                 true, // functional-option type (shown via WithNGPTCausal/WithNGPTEps)
-	"nn.FoXOption":                  true, // functional-option type (shown via WithFoXEps)
-	"nn.HymbaOption":                true, // functional-option type (shown via WithHymbaMetaTokens)
-	"nn.GatedAttentionOption":       true, // functional-option type (shown via WithGatedAttentionHeadwiseGate)
-	"nn.BitLinearOption":            true, // functional-option type (shown via WithBitLinear8BitAct etc.)
-	"nn.MixtureOfRecursionsOption":  true, // functional-option type (shown via WithMoRCapacities)
-	"nn.RecursionBlock":             true, // interface; nn.Linear is the impl shown in ExampleMixtureOfRecursions
-	"nn.APOLLOOption":               true, // functional-option type (shown via WithAPOLLORank/WithAPOLLOMini)
-	"nn.TitansOption":               true, // functional-option type (shown via WithTitansLinearMemory/WithTitansPersistentTokens)
-	"nn.ShampooOption":              true, // functional-option type (shown via WithShampooEps)
-	"nn.GPTQOption":                 true, // functional-option type (shown via WithGPTQDamp)
-	"nn.SparseGPTOption":            true, // functional-option type (shown via WithSparseGPTDamp/Block)
-	"nn.HQQOption":                  true, // functional-option type (shown via WithHQQLpNorm/Iters)
-	"nn.AWQOption":                  true, // functional-option type (shown via WithAWQAlpha/Grid)
-	"nn.SOAPOption":                 true, // functional-option type (shown via WithSOAPBetas/Eps/Freq)
-	"nn.MoDSelection":               true, // opaque routing handle from MixtureOfDepths.Route (shown via ExampleMixtureOfDepths)
-	"nn.MuonOption":                 true, // functional-option type (shown via WithMuonMomentum)
-	"nn.HyperConnectionOption":      true, // functional-option type (shown via WithSinkhornIters)
-	"nn.HCMode":                     true, // enum (HCNone/HCDoublyStochastic, shown in ExampleHyperConnection)
-	"nn.AdafactorOption":            true, // functional-option type (shown via WithAdafactor*)
-	"nn.GaLoreOption":               true, // functional-option type (shown via WithGaLore*)
-	"nn.SophiaOption":               true, // functional-option type (shown via WithSophia*)
-	"nn.AdEMAMixOption":             true, // functional-option type (shown via WithAdEMAMix*)
-	"nn.CautiousAdamWOption":        true, // functional-option type (shown via WithCautious*)
-	"nn.SAMOption":                  true, // functional-option type (shown via WithSAM*)
-	"nn.ReMoEOption":                true, // functional-option type (shown via WithReMoELambda/WithReMoEAdaptRate)
-	"nn.MiniLMOption":               true, // functional-option type (shown via WithMiniLMRelations)
-	"nn.AQLMOption":                 true, // functional-option type (shown via WithAQLMCodebooks etc. in ExampleEncodeAQLM)
-	"nn.SpinOption":                 true, // functional-option type (shown via WithSpinSeed)
-	"nn.MARSOption":                 true, // functional-option type (shown via WithMARSGamma etc.)
-	"nn.PSGDKronOption":             true, // functional-option type (shown via WithPSGDKron*)
-	"nn.SoftpickAttentionOption":    true, // functional-option type (shown via WithSoftpickCausal)
-	"nn.MixupOption":                true, // functional-option type (shown via WithMixupLambda in ExampleMixup)
-	"nn.CutMixOption":               true, // functional-option type (shown via WithCutMixLambda)
-	"nn.QGaLoreOption":              true, // functional-option type (shown via WithQGaLore*)
-	"nn.SimCSEOption":               true, // functional-option type (shown via WithSimCSETemperature etc.)
-	"nn.Matryoshka2DOption":         true, // functional-option type (shown via WithMatryoshka2DLayerWeights/DimWeights)
-	"nn.DAPOOption":                 true, // functional-option type (shown via WithDAPOClipHigh)
-	"nn.CoordTable":                 true, // plain result record returned by CoordCheck.Run; shown in ExampleCoordCheck
-	"autograd.CheckpointFunc":       true, // callback-signature type (shown via ExampleCheckpoint)
-	"nn.ScheduleFreeOption":         true, // functional-option type (shown via WithScheduleFree*)
-	"nn.DAdaptAdamOption":           true, // functional-option type (shown via WithDAdapt*)
-	"nn.ProdigyOption":              true, // functional-option type (shown via WithProdigy*)
-	"nn.AdamMiniOption":             true, // functional-option type (shown via WithAdamMini*)
-	"nn.TPAOption":                  true, // functional-option type (shown via WithTPARanks/WithTPARoPE)
-	"nn.LookaheadOption":            true, // functional-option type (shown via WithLookahead*)
-	"nn.LossScaler":                 true, // mixed-precision helper; shown in the AMP training tests
-	"nn.MixedPrecision":             true, // mixed-precision helper; shown in the AMP training tests
-	"format/gguf.QuantType":         true, // enum; shown via QMatMul usage
-	"format/gguf.File":              true, // returned by ReadFile, shown in ExampleReadFile
-	"format/gguf.RawFile":           true, // returned by ReadRaw, shown in ExampleReadRaw
-	"format/gguf.QuantTensor":       true, // a still-quantized tensor from ReadRaw, shown in ExampleReadRaw
-	"rl.Env":                        true, // interface (Chain is the example impl)
-	"rl.Reinforce":                  true, // policy-gradient agent; convergence shown in rl tests
+	"backend.Op":                      true, // opcode enum; shown via ops/nn examples, not per-op
+	"llamagpu.Stepper":                true, // parameter-constraint interface (Decoder/GPTDecoder); shown via ExampleSpeculativeGenerate
+	"llamagpu.HiddenStepper":          true, // parameter-constraint interface (Decoder/GPTDecoder + StepHidden); consumed by MedusaGenerate
+	"backend.Attrs":                   true, // internal op-parameter bag
+	"backend.Kernel":                  true, // function type (backend author surface)
+	"backend.Backend":                 true, // backend-author interface, not user-called
+	"backend.Recorder":                true, // autograd-integration interface
+	"backend.QuantMatMuler":           true, // optional accelerator capability; shown via nn.QuantLinear
+	"backend.ResidentWeight":          true, // resident-weight handle interface; shown via nn.QuantLinear
+	"backend.ResidentQuantMatMuler":   true, // optional resident-upload capability; shown via nn.QuantLinear
+	"backend.Context":                 true, // plumbing; used implicitly by every op example
+	"tensor.Dtype":                    true, // scalar enum
+	"tensor.DeviceKind":               true, // device enum
+	"tensor.Device":                   true, // interface; construction is internal
+	"tensor.Shape":                    true, // used throughout every tensor example
+	"tensor.Pool":                     true, // allocator internals
+	"tensor.Allocator":                true, // interface; construction is internal
+	"tensor.Storage":                  true, // interface (type-erased backing store)
+	"tensor.PoolOption":               true, // functional-option type (shown via its setters)
+	"tensor.Strides":                  true, // []int stride vector, used implicitly everywhere
+	"autograd.Op":                     true, // re-export alias
+	"autograd.VJP":                    true, // VJP-rule function type (backend/kernel-author surface)
+	"autograd.VJPMulti":               true, // multi-output VJP-rule function type (backend/kernel-author surface)
+	"autograd.Variable":               true, // internal tape graph node; users work with Tensor+Tape
+	"nlp.NextLogits":                  true, // callback function type (shown in BeamSearch example)
+	"nlp.JacobiStep":                  true, // callback function type (shown in ExampleJacobiDecode)
+	"nlp.SamplerOption":               true, // functional-option type (shown via WithTemperature etc.)
+	"nlp.GenerateOption":              true, // functional-option type (shown via WithBackend, §T361)
+	"nlp.MirostatOption":              true, // functional-option type (shown via WithMirostatTau etc.)
+	"nlp.UnigramOption":               true, // functional-option type (shown via WithUnigram* setters)
+	"nlp.BPEOption":                   true, // functional-option type (shown via WithBPEUnkID)
+	"nlp.WatermarkOption":             true, // functional-option type (shown via WithWatermarkGamma etc.)
+	"nlp.WordPieceOption":             true, // functional-option type (shown via WithWordPieceUnk etc.)
+	"nlp.MedusaHeadsOption":           true, // functional-option type (shown via WithMedusaHeadsDtype)
+	"nlp.EagleHeadOption":             true, // functional-option type (shown via WithEagleFFNMult)
+	"nlp.CoconutOption":               true, // functional-option type (shown via WithCoconutMarkers/WithCoconutPause)
+	"nlp.ChatRenderOption":            true, // functional-option type (shown via WithGenerationPrompt/WithoutBOS)
+	"nlp.RerankResult":                true, // plain result record returned by CosineRerank; shown in its examples
+	"backend.OffloadPlan":             true, // plain result record returned by PlanOffload; shown in ExamplePlanOffload
+	"backend.MemoryProber":            true, // optional device-memory capability interface (backend-author surface), consumed by ProbeBudgets
+	"vision.CNNOption":                true, // functional-option type (shown via WithChannels/WithKernel/WithDtype)
+	"vision.ViTOption":                true, // functional-option type (shown via WithViTDim/WithViTHeads etc.)
+	"nlp.Beam":                        true, // returned by BeamSearch, shown in ExampleBeamSearch
+	"nlp.Block":                       true, // internal transformer block (part of GPT)
+	"nlp.LlamaBlock":                  true, // internal transformer block (part of Llama, shown in ExampleLlama)
+	"nlp.QuantBlock":                  true, // quantized transformer block (part of QuantLlama, shown in ExampleQuantLlama)
+	"nn.QuantSwiGLU":                  true, // quantized FFN sublayer (part of QuantLlama, shown in ExampleQuantLlama)
+	"nlp.GPTConfig":                   true, // config struct
+	"nlp.GPT":                         true, // needs safetensors weight fixtures; covered by GPT tests
+	"nlp.KVCache":                     true, // decode state; needs a full model, covered by decode tests
+	"nlp.CLABlock":                    true, // internal cross-layer-attention block (part of CLA, shown in ExampleCLA)
+	"nlp.CLACache":                    true, // CLA decode state (Layers/Share slots), covered by CLA decode tests
+	"nlp.LlamaCache":                  true, // Llama decode state; needs a full model, covered by llama_decode tests
+	"nlp.StreamCache":                 true, // StreamingLLM decode state; needs a full model, covered by streaming tests
+	"nlp.Tokenizer":                   true, // needs a GPT-2 vocab fixture; covered by tokenizer tests
+	"nlp.MHA":                         true, // needs four projection matrices; used within GPT/decode
+	"nn.Layer":                        true, // interface (Linear/Sequential are the impls)
+	"nn.Optimizer":                    true, // interface (SGD/Adam/Lion are the impls)
+	"nn.Activation":                   true, // built via ReLU()/GELU()/…, shown in ExampleSequential
+	"nn.KANOption":                    true, // functional-option type (shown via WithKANGridSize/SplineOrder/GridRange)
+	"nn.PattentionOption":             true, // functional-option type (shown via WithPattentionDtype/WithPattentionUncoupledNorm)
+	"nn.SigmoidAttentionOption":       true, // functional-option type (shown via WithSigmoidAttnCausal etc.)
+	"nn.SelectiveAttentionOption":     true, // functional-option type (shown via WithSelectionDisabled)
+	"nn.MultiTokenAttentionOption":    true, // functional-option type (shown via WithMTAKeyQueryKernel/WithMTAHeadKernel/WithMTABidirectional)
+	"nn.StickBreakingAttentionOption": true, // functional-option type (shown via WithStickBreakingBias)
+	"nn.PrefOption":                   true, // functional-option type (shown via Beta/ReferencePoint)
+	"nn.GRPOOption":                   true, // functional-option type (shown via WithKLBeta)
+	"nn.GSPOOption":                   true, // functional-option type (shown via WithGSPOClipEpsilon)
+	"nn.LionOption":                   true, // functional-option type (shown via WithLionBetas)
+	"nn.LAMBOption":                   true, // functional-option type (shown via WithLAMBBetas)
+	"nn.AdapterOption":                true, // functional-option type (shown via AdapterActivation)
+	"nn.SpectralNormOption":           true, // functional-option type (shown via WithSpectralNormIters)
+	"nn.GrokfastOption":               true, // functional-option type (shown via WithGrokfastLambda/Alpha)
+	"nn.GrokfastMAOption":             true, // functional-option type (shown via WithGrokfastMA*)
+	"nn.NGPTOption":                   true, // functional-option type (shown via WithNGPTCausal/WithNGPTEps)
+	"nn.FoXOption":                    true, // functional-option type (shown via WithFoXEps)
+	"nn.HymbaOption":                  true, // functional-option type (shown via WithHymbaMetaTokens)
+	"nn.GatedAttentionOption":         true, // functional-option type (shown via WithGatedAttentionHeadwiseGate)
+	"nn.BitLinearOption":              true, // functional-option type (shown via WithBitLinear8BitAct etc.)
+	"nn.MixtureOfRecursionsOption":    true, // functional-option type (shown via WithMoRCapacities)
+	"nn.RecursionBlock":               true, // interface; nn.Linear is the impl shown in ExampleMixtureOfRecursions
+	"nn.APOLLOOption":                 true, // functional-option type (shown via WithAPOLLORank/WithAPOLLOMini)
+	"nn.TitansOption":                 true, // functional-option type (shown via WithTitansLinearMemory/WithTitansPersistentTokens)
+	"nn.ShampooOption":                true, // functional-option type (shown via WithShampooEps)
+	"nn.GPTQOption":                   true, // functional-option type (shown via WithGPTQDamp)
+	"nn.SparseGPTOption":              true, // functional-option type (shown via WithSparseGPTDamp/Block)
+	"nn.HQQOption":                    true, // functional-option type (shown via WithHQQLpNorm/Iters)
+	"nn.AWQOption":                    true, // functional-option type (shown via WithAWQAlpha/Grid)
+	"nn.SOAPOption":                   true, // functional-option type (shown via WithSOAPBetas/Eps/Freq)
+	"nn.MoDSelection":                 true, // opaque routing handle from MixtureOfDepths.Route (shown via ExampleMixtureOfDepths)
+	"nn.MuonOption":                   true, // functional-option type (shown via WithMuonMomentum)
+	"nn.HyperConnectionOption":        true, // functional-option type (shown via WithSinkhornIters)
+	"nn.HCMode":                       true, // enum (HCNone/HCDoublyStochastic, shown in ExampleHyperConnection)
+	"nn.AdafactorOption":              true, // functional-option type (shown via WithAdafactor*)
+	"nn.GaLoreOption":                 true, // functional-option type (shown via WithGaLore*)
+	"nn.SophiaOption":                 true, // functional-option type (shown via WithSophia*)
+	"nn.AdEMAMixOption":               true, // functional-option type (shown via WithAdEMAMix*)
+	"nn.CautiousAdamWOption":          true, // functional-option type (shown via WithCautious*)
+	"nn.SAMOption":                    true, // functional-option type (shown via WithSAM*)
+	"nn.ReMoEOption":                  true, // functional-option type (shown via WithReMoELambda/WithReMoEAdaptRate)
+	"nn.MiniLMOption":                 true, // functional-option type (shown via WithMiniLMRelations)
+	"nn.AQLMOption":                   true, // functional-option type (shown via WithAQLMCodebooks etc. in ExampleEncodeAQLM)
+	"nn.SpinOption":                   true, // functional-option type (shown via WithSpinSeed)
+	"nn.MARSOption":                   true, // functional-option type (shown via WithMARSGamma etc.)
+	"nn.PSGDKronOption":               true, // functional-option type (shown via WithPSGDKron*)
+	"nn.SoftpickAttentionOption":      true, // functional-option type (shown via WithSoftpickCausal)
+	"nn.MixupOption":                  true, // functional-option type (shown via WithMixupLambda in ExampleMixup)
+	"nn.CutMixOption":                 true, // functional-option type (shown via WithCutMixLambda)
+	"nn.QGaLoreOption":                true, // functional-option type (shown via WithQGaLore*)
+	"nn.SimCSEOption":                 true, // functional-option type (shown via WithSimCSETemperature etc.)
+	"nn.Matryoshka2DOption":           true, // functional-option type (shown via WithMatryoshka2DLayerWeights/DimWeights)
+	"nn.DAPOOption":                   true, // functional-option type (shown via WithDAPOClipHigh)
+	"nn.CoordTable":                   true, // plain result record returned by CoordCheck.Run; shown in ExampleCoordCheck
+	"autograd.CheckpointFunc":         true, // callback-signature type (shown via ExampleCheckpoint)
+	"nn.ScheduleFreeOption":           true, // functional-option type (shown via WithScheduleFree*)
+	"nn.DAdaptAdamOption":             true, // functional-option type (shown via WithDAdapt*)
+	"nn.ProdigyOption":                true, // functional-option type (shown via WithProdigy*)
+	"nn.AdamMiniOption":               true, // functional-option type (shown via WithAdamMini*)
+	"nn.TPAOption":                    true, // functional-option type (shown via WithTPARanks/WithTPARoPE)
+	"nn.LookaheadOption":              true, // functional-option type (shown via WithLookahead*)
+	"nn.LossScaler":                   true, // mixed-precision helper; shown in the AMP training tests
+	"nn.MixedPrecision":               true, // mixed-precision helper; shown in the AMP training tests
+	"format/gguf.QuantType":           true, // enum; shown via QMatMul usage
+	"format/gguf.File":                true, // returned by ReadFile, shown in ExampleReadFile
+	"format/gguf.RawFile":             true, // returned by ReadRaw, shown in ExampleReadRaw
+	"format/gguf.QuantTensor":         true, // a still-quantized tensor from ReadRaw, shown in ExampleReadRaw
+	"rl.Env":                          true, // interface (Chain is the example impl)
+	"rl.Reinforce":                    true, // policy-gradient agent; convergence shown in rl tests
 }
 
 func moduleRoot(t *testing.T) string {
