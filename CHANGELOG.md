@@ -4,6 +4,17 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — feat: Falcon support — 27th loadable architecture (T770, 2026-07-16)
+
+Falcon (`FalconForCausalLM`) as a self-contained `nlp.Falcon` type: single-norm parallel residual
+(one `input_layernorm` feeds both attention and MLP, like Cohere), **multi-query attention** (all
+query heads share one key and one value head), LayerNorm with bias, RoPE, a bias-free GELU MLP, and
+an untied LM head. The crux is Falcon's fused `query_key_value` MQA layout — a contiguous split of
+q = rows [0, heads·hd), k = rows [heads·hd, (heads+1)·hd) (one head), v = the last head-width
+(`KVHeads=1`), NOT a naive all-q/all-k/all-v third-split. Forward parity vs a real transformers
+`FalconForCausalLM`: max abs logit diff 5.1e-8; fine-tunes (loss 3.47 → 2.63). Twenty-seventh
+architecture.
+
 ### nlp — feat: MPT support — 26th loadable architecture, first ALiBi model (T769, 2026-07-16)
 
 MosaicML MPT (`MptForCausalLM`) as a self-contained `nlp.MPT` type — the first ALiBi-position model:
