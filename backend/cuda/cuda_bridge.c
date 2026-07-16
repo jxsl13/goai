@@ -33,7 +33,7 @@ static cublasHandle_t gHandle = NULL;
 static float *gOne = NULL, *gZero = NULL; // device 1.0f/0.0f — cuBLAS DEVICE pointer mode (graph-capture-safe alpha/beta)
 static cudaStream_t gStream = NULL;
 static CUcontext gCtx = NULL; // runtime's primary context, retained for driver-API launches
-static CUfunction gGelu = NULL, gSilu = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gQgemv = NULL, gQgemv4 = NULL, gQgemv4k = NULL, gQgemv5k = NULL, gQgemv6k = NULL, gQgemv3k = NULL, gQgemv2k = NULL, gQgemv40 = NULL, gQgemvI4nl = NULL, gQgemvI4xs = NULL, gQgemvMxfp4 = NULL, gQgemvI2xxs = NULL, gQgemvI2xs = NULL, gI8Mma = NULL, gI8MmaT = NULL, gI8MmaRb = NULL, gI8MmaDb = NULL, gI8MmaWt = NULL, gI8MmaWp = NULL, gI8Mmq = NULL, gI8MmqR = NULL, gQrowsI8 = NULL, gLdmProbe = NULL, gLdmProbe2 = NULL, gCvtF16 = NULL, gCvtFrom16 = NULL; // lazily nvrtc-compiled
+static CUfunction gGelu = NULL, gSilu = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gQgemv = NULL, gQgemv4 = NULL, gQgemv4k = NULL, gQgemv5k = NULL, gQgemv6k = NULL, gQgemv3k = NULL, gQgemv2k = NULL, gQgemv40 = NULL, gQgemvI4nl = NULL, gQgemvI4xs = NULL, gQgemvMxfp4 = NULL, gQgemvI2xxs = NULL, gQgemvI2xs = NULL, gI8Mma = NULL, gI8MmaT = NULL, gI8MmaRb = NULL, gI8MmaDb = NULL, gI8MmaWt = NULL, gI8MmaWp = NULL, gI8Mmq = NULL, gI8MmqR = NULL, gQrowsI8 = NULL, gLdmProbe = NULL, gLdmProbe2 = NULL, gI8MmaLm = NULL, gCvtF16 = NULL, gCvtFrom16 = NULL; // lazily nvrtc-compiled
 static CUfunction gRopeDpos = NULL, gAttnSoftmaxDpos = NULL, gAppendDpos = NULL; // device-position (graph-capturable) twins
 static CUfunction gGqaFlashPart = NULL, gGqaFlashMerge = NULL; // flash decode: GQA K/V-shared split-K partials + merge
 static CUfunction gGqaFlashPartF16 = NULL, gAppendDposF16 = NULL; // f16 KV-cache twins (u16 storage, f32 compute)
@@ -2515,6 +2515,86 @@ int cu_matmul_i8_mma_wp(const void* dA8, const void* dWt8, void* dC32, int M, in
         long blocks = (long)(M/64) * nblk;
         void* args[6]; args[0] = &dA8; args[1] = &dWt8; args[2] = &dC32; args[3] = &M; args[4] = &K; args[5] = &N;
         rc = (cuLaunchKernel(gI8MmaWp, (unsigned)blocks, 1, 1, 256, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_matmul_i8_mma_lm: the _wp GEMM with LDMATRIX fragment loads. Same 64x64 / cp.async double-buffer
+// / [N][K] / 48-pad scaffold, but the A fragment is loaded via ldmatrix.x4 (4 quadrants) and B via
+// ldmatrix.x2 (2 K-halves) instead of the manual 4-int-load + byte-assembly — one hardware-swizzled
+// load per fragment. Layouts proven by cu_ldmatrix_probe{,2}. M%64,N%64,K%32==0.
+int cu_matmul_i8_mma_lm(const void* dA8, const void* dWt8, void* dC32, int M, int K, int N) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (!gI8MmaLm && compile_kernel(
+            "__device__ __forceinline__ void ld16l(signed char* sdst, const signed char* gsrc){\n"
+            "  asm volatile(\"{ .reg .u64 s; cvta.to.shared.u64 s, %0; cp.async.cg.shared.global [s], [%1], 16; }\" :: \"l\"((void*)sdst), \"l\"((const void*)gsrc));\n"
+            "}\n"
+            "__device__ __forceinline__ unsigned smem32(const void* p){ unsigned a; asm(\"{ .reg .u64 s; cvta.to.shared.u64 s, %1; cvt.u32.u64 %0, s; }\" : \"=r\"(a) : \"l\"(p)); return a; }\n"
+            "__device__ __forceinline__ void loadkl(signed char* sA, signed char* sWt, const signed char* A, const signed char* W, int t, int rowBase, int colBase, int kt, int K){\n"
+            "  if (t < 128){ int r=t>>1, h=t&1; size_t g=(size_t)(rowBase+r)*K + kt + h*16; ld16l(sA + r*48 + h*16, A+g); }\n"
+            "  else { int ci=t-128, r=ci>>1, h=ci&1; size_t g=(size_t)(colBase+r)*K + kt + h*16; ld16l(sWt + r*48 + h*16, W+g); }\n"
+            "  asm volatile(\"cp.async.commit_group;\");\n"
+            "}\n"
+            "extern \"C\" __global__ void i8mmalm(const signed char* A, const signed char* W, int* C, int M, int K, int N){\n"
+            "  __shared__ __align__(16) signed char sA[2][64*48];\n"
+            "  __shared__ __align__(16) signed char sWt[2][64*48];\n"
+            "  int t = threadIdx.x, warp = t >> 5, lane = t & 31;\n"
+            "  int nblk = N >> 6;\n"
+            "  int rowBase = (blockIdx.x / nblk)*64, colBase = (blockIdx.x % nblk)*64;\n"
+            "  int wr = warp >> 2, wc = warp & 3;\n"
+            "  int Mb = wr*32, Nb = wc*16;\n"
+            "  int gid = lane >> 2, tid = lane & 3;\n"
+            "  int acc[4][4]; for(int i=0;i<4;i++){acc[i][0]=acc[i][1]=acc[i][2]=acc[i][3]=0;}\n"
+            "  int buf = 0;\n"
+            "  loadkl(sA[0], sWt[0], A, W, t, rowBase, colBase, 0, K);\n"
+            "  for (int kt = 0; kt < K; kt += 32){\n"
+            "    if (kt + 32 < K){ loadkl(sA[buf^1], sWt[buf^1], A, W, t, rowBase, colBase, kt+32, K); asm volatile(\"cp.async.wait_group 1;\"); }\n"
+            "    else { asm volatile(\"cp.async.wait_group 0;\"); }\n"
+            "    __syncthreads();\n"
+            "    signed char* pA = sA[buf]; signed char* pWt = sWt[buf];\n"
+            "    unsigned ra[2][4];\n"
+            "    #pragma unroll\n"
+            "    for(int mi=0;mi<2;mi++){ int q=lane>>3, rit=(q&1)*8+(lane&7), ks=(q>>1)*16;\n"
+            "      unsigned ad=smem32(pA + (size_t)(Mb+mi*16+rit)*48 + ks);\n"
+            "      asm volatile(\"ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%0,%1,%2,%3}, [%4];\" : \"=r\"(ra[mi][0]),\"=r\"(ra[mi][1]),\"=r\"(ra[mi][2]),\"=r\"(ra[mi][3]) : \"r\"(ad));\n"
+            "    }\n"
+            "    unsigned rb[2][2];\n"
+            "    #pragma unroll\n"
+            "    for(int ni=0;ni<2;ni++){ int q=(lane>>3)&1, ncol=Nb+ni*8+(lane&7), ks=q*16;\n"
+            "      unsigned ad=smem32(pWt + (size_t)ncol*48 + ks);\n"
+            "      asm volatile(\"ldmatrix.sync.aligned.m8n8.x2.shared.b16 {%0,%1}, [%2];\" : \"=r\"(rb[ni][0]),\"=r\"(rb[ni][1]) : \"r\"(ad));\n"
+            "    }\n"
+            "    #pragma unroll\n"
+            "    for(int mi=0;mi<2;mi++)\n"
+            "      #pragma unroll\n"
+            "      for(int ni=0;ni<2;ni++){ int* d=acc[mi*2+ni];\n"
+            "        asm volatile(\"mma.sync.aligned.m16n8k32.row.col.s32.s8.s8.s32 {%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9}, {%0,%1,%2,%3};\"\n"
+            "          : \"+r\"(d[0]),\"+r\"(d[1]),\"+r\"(d[2]),\"+r\"(d[3])\n"
+            "          : \"r\"(ra[mi][0]),\"r\"(ra[mi][1]),\"r\"(ra[mi][2]),\"r\"(ra[mi][3]),\"r\"(rb[ni][0]),\"r\"(rb[ni][1]));\n"
+            "      }\n"
+            "    __syncthreads();\n"
+            "    buf ^= 1;\n"
+            "  }\n"
+            "  #pragma unroll\n"
+            "  for(int mi=0;mi<2;mi++)\n"
+            "    #pragma unroll\n"
+            "    for(int ni=0;ni<2;ni++){ int* d=acc[mi*2+ni];\n"
+            "      int oc=colBase+Nb+ni*8+tid*2; int r0=rowBase+Mb+mi*16+gid, r1=r0+8;\n"
+            "      C[(size_t)r0*N+oc]=d[0]; C[(size_t)r0*N+oc+1]=d[1];\n"
+            "      C[(size_t)r1*N+oc]=d[2]; C[(size_t)r1*N+oc+1]=d[3];\n"
+            "    }\n"
+            "}\n",
+            "i8mmalm.cu", "i8mmalm", &gI8MmaLm) != 0) { rc = -2; goto done; }
+    {
+        int nblk = N >> 6;
+        long blocks = (long)(M/64) * nblk;
+        void* args[6]; args[0] = &dA8; args[1] = &dWt8; args[2] = &dC32; args[3] = &M; args[4] = &K; args[5] = &N;
+        rc = (cuLaunchKernel(gI8MmaLm, (unsigned)blocks, 1, 1, 256, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 done:
     pthread_mutex_unlock(&gLock);

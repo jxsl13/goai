@@ -24,6 +24,8 @@ int cu_matmul_i8_mma_db(const void* dA8, const void* dW8, void* dC32, int M, int
 int cu_matmul_i8_mma_wt(const void* dA8, const void* dWt8, void* dC32, int M, int K, int N);
 // cu_matmul_i8_mma_wp: _wt with 48-byte padded shared stride (dissolves residual 2-way bank conflict). M%64,N%64,K%32==0.
 int cu_matmul_i8_mma_wp(const void* dA8, const void* dWt8, void* dC32, int M, int K, int N);
+// cu_matmul_i8_mma_lm: _wp with ldmatrix.x4/x2 fragment loads. M%64,N%64,K%32==0.
+int cu_matmul_i8_mma_lm(const void* dA8, const void* dWt8, void* dC32, int M, int K, int N);
 // cu_matmul_i8_mmq: true per-32-block MMQ (int8 A/W + per-block f32 scales -> f32 C). M%64,N%64,K%32==0.
 int cu_matmul_i8_mmq(const void* dA8, const void* dWt8, const void* daSc, const void* dwSc, void* dCf, int M, int K, int N);
 // cu_matmul_i8_mmq_r: MMQ with per-ROW activation scale aSc[M] (hoisted from K-loop). M%64,N%64,K%32==0.

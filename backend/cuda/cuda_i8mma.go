@@ -216,3 +216,23 @@ func mmqPrefill(af []float32, wt8 []int8, wSc []float32, m, k, n int) []float32 
 	C.cu_download_f32(dC, (*C.float)(unsafe.Pointer(&out[0])), C.int(m*n))
 	return out
 }
+
+func i8mmalmRaw(dA, dWt, dC unsafe.Pointer, m, k, n int) {
+	C.cu_matmul_i8_mma_lm(dA, dWt, dC, C.int(m), C.int(k), C.int(n))
+}
+
+// i8MMALM — ldmatrix-load variant of i8MMAWP. W is [N][K] row-major. M%64,N%64,K%32==0.
+func i8MMALM(a, wt []int8, m, k, n int) []int32 {
+	dA := C.cu_upload_i8((*C.schar)(unsafe.Pointer(&a[0])), C.int(len(a)))
+	dW := C.cu_upload_i8((*C.schar)(unsafe.Pointer(&wt[0])), C.int(len(wt)))
+	dC := C.cu_alloc_i8(C.int(m * n * 4))
+	defer C.cu_free_f32(dA)
+	defer C.cu_free_f32(dW)
+	defer C.cu_free_f32(dC)
+	if int(C.cu_matmul_i8_mma_lm(dA, dW, dC, C.int(m), C.int(k), C.int(n))) != 0 {
+		return nil
+	}
+	out := make([]int32, m*n)
+	C.cu_download_f32(dC, (*C.float)(unsafe.Pointer(&out[0])), C.int(m*n))
+	return out
+}
