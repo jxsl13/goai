@@ -4,6 +4,21 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — native Q2_K GEMV: ALL FIVE K-quants (Q2–Q6) now load bit-native (worker linux-amd64, Tw68, 2026-07-16)
+- `cu_qmatmul_q2k` + `ResidentBQ2K`: warp-per-output GEMV over ggml's 84-byte Q2_K
+  super-blocks. Q2_K is asymmetric affine like Q4_K but the coarsest — 2-bit quants, plain
+  4-bit scale/min nibbles (no `get_scale_min_k4` packing): `y = d·sc4·q2 − dmin·min4`. Same
+  element order + lane mapping as the Q3_K GEMV (`is=lane>>1` owns 8 contiguous elems = half a
+  16-sub-block), minus the hmask/splice: per lane `acc += dl·Σaᵢqᵢ − ml·Σaᵢ`. Golden vs the
+  gguf dequant reference: **maxAbs 9.9e-6** (beta=0), 1.9e-5 (beta=1) — bit-exact. (The parity
+  test asserts on absolute error, not relative: Q2_K is coarse enough that a near-zero output
+  element makes the relative metric spike to ~1e-3 while the absolute error stays at the
+  f32-epsilon floor — abs error is the honest bit-exactness measure for near-zero values.)
+- Completes the **entire CUDA K-quant family — Q2_K + Q3_K + Q4_K + Q5_K + Q6_K** all have a
+  native bit-exact resident GEMV. A Q2_K/Q2_K_S GGUF (the smallest quant, used to squeeze 70B+
+  models into tight VRAM) loads bit-native at 0.33 B/w instead of re-encode-to-Q8 (1.06 B/w).
+  `quantDirect case 10` wired.
+
 ### CUDA — native Q3_K GEMV: the full K-quant family now loads bit-native (worker linux-amd64, Tw67, 2026-07-16)
 - `cu_qmatmul_q3k` + `ResidentBQ3K`: warp-per-output GEMV over ggml's 110-byte Q3_K
   super-blocks, golden vs the gguf dequant reference at maxRel **5.9e-6** (beta=0) / **7.9e-6**

@@ -23,6 +23,8 @@ import (
 func quantDirect(qt gguf.QuantTensor) (qProj, error) {
 	n, k := qt.Shape[0], qt.Shape[1]
 	switch qt.GGType {
+	case 10: // Q2_K — bulk tensors of a Q2_K/Q2_K_S mix (Tw68), native like the rest
+		return cuda.NewResidentBQ2KFromBlocks(qt.Data, k, n)
 	case 11: // Q3_K — bulk tensors of a Q3_K_M/_L/_S mix (Tw67), native like the rest
 		return cuda.NewResidentBQ3KFromBlocks(qt.Data, k, n)
 	case 12: // Q4_K
