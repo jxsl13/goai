@@ -126,6 +126,37 @@ transformers `Olmo2ForCausalLM`: max abs logit diff 3.9e-8; KV-decode matches Fo
 - Validates a generic rule (now in the playbook): *shrink the per-lane read to escape the
   bank-conflict floor — works for low-entropy codebooks (ternary/2-bit) that IQ2/IQ3's real-f32
   grids can't use.*
+### cuda — perf: default (f32) decode attention 1.16–1.52× via 16-row shared tile (Tw84, 2026-07-16)
+
+The DEFAULT decode path (f32 KV cache → `gqa_flash_partial`) was occupancy-bound at 128–178 GB/s —
+the same 32-row K+V shared tile (~33KB) that pinned ~1 block/SM in the f16 case, but here the tile is
+genuinely f32 so the u16/`cvt` tricks don't apply. The one lever that does: halve the tile to **16
+rows** (~20KB → 2 blocks/SM). Bit-exact (`gqa_flash_partial` numerics unchanged — just 16-key
+sub-chunks). Measured (RTX 3060): gqa8/ctx2048 128→149 GB/s (1.16×), gqa8/ctx4096 146→169,
+**mha/ctx2048 178→271 (1.52×)**, gqa8/ctx8192 160→183. 8-row was tried and regressed (quarter-warp
+scores + 4× syncs). Unlike Tw82/83 (the opt-in `GOAI_CUDA_KV=f16` path), this lands on *every* default
+decode.
+
+### cuda — perf: decode attention 2.3× via hardware f16 convert + u16 shared tile (Tw82+Tw83, 2026-07-16)
+
+Tw83: the f16 flash-decode kernel's `h2f` (f16→f32) was a manual software conversion — multiple
+branches plus a data-dependent `while` loop for subnormals — invoked `group·hd` times per key in
+both the QKᵀ dot and the PV accumulate, the dominant cost once occupancy was fixed. Replaced it
+with the single hardware instruction (inline PTX `cvt.f32.f16`). Bit-exact (the hardware cvt is
+the same IEEE conversion the manual code reimplemented). Measured gqa8/ctx2048 142→81 µs (1.75×).
+Combined with Tw82: **186→81 µs = 2.3×, 45→103 GB/s** — f16-KV decode is now faster than f32-KV
+(as it should be at half the bytes), no longer an anomaly. See below for Tw82.
+
+### cuda — perf: decode attention 1.31× via u16 shared K/V tile (Tw82, 2026-07-16)
+
+Measure-first found decode flash-attention (`gqa_flash_partial_f16`, seqQ==1 vs the full KV
+cache) sat at 35–50% of the RTX 3060's ~360 GB/s roofline — occupancy-bound, not
+bandwidth-bound (achieved GB/s *rose* with more KV bytes; the f16-KV path was no faster than
+f32). Root cause: the 32-row K+V shared tile was ~33KB (converted f16→f32 on load), pinning
+~1 block/SM on the 48KB budget. Fix: stage K/V in shared as raw `u16` (already f16 in the
+cache), halving the tile to ~16.5KB → 2 blocks/SM, converting to f32 at read-time (free on a
+latency-bound kernel). Bit-exact (`TestCUDAF16KVFlashParity`). Measured gqa8/ctx2048
+186→142 µs (1.31×, 45→59 GB/s). New `BenchmarkFlashDecode{F32,F16}` guards the kernel.
 
 ### nlp — feat: IBM Granite support — 14th loadable architecture (T752, 2026-07-16)
 

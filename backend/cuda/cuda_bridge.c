@@ -3370,13 +3370,13 @@ int cu_gqa_flash_dpos(const void* dQ, const void* dK, const void* dV, void* dOut
                               "  int hp = hd + 1; // shared row padding against bank conflicts\n"
                               "  extern __shared__ float sh[];\n"
                               "  float* shq = sh;               // [group*hd] the group's query heads\n"
-                              "  float* shk = shq + group * hd; // [32*hp] K tile\n"
-                              "  float* shv = shk + 32 * hp;    // [32*hp] V tile\n"
+                              "  float* shk = shq + group * hd; // [16*hp] K tile (Tw84 half-tile → 2 blocks/SM)\n"
+                              "  float* shv = shk + 16 * hp;    // [16*hp] V tile\n"
                               "  for (int i = t; i < group * hd; i += nt) shq[i] = q[(size_t)kvh * group * hd + i];\n"
                               "  float NEGINF = __int_as_float(0xff800000);\n"
                               "  float m = NEGINF, l = 0.f, a0 = 0.f, a1 = 0.f, a2 = 0.f, a3 = 0.f;\n"
-                              "  for (int base = begin; base < end; base += 32) {\n"
-                              "    int nk = end - base; if (nk > 32) nk = 32;\n"
+                              "  for (int base = begin; base < end; base += 16) {\n"
+                              "    int nk = end - base; if (nk > 16) nk = 16;\n"
                               "    __syncthreads();\n"
                               "    for (int i = t; i < nk * hd; i += nt) {\n"
                               "      int j = i / hd, d = i - j * hd;\n"
@@ -3456,7 +3456,7 @@ int cu_gqa_flash_dpos(const void* dQ, const void* dK, const void* dV, void* dOut
     {
         int threads = 256;
         int blocks = kvHeads * splitK;
-        size_t shmem = ((size_t)group * hd + 2u * 32u * (hd + 1)) * sizeof(float);
+        size_t shmem = ((size_t)group * hd + 2u * 16u * (hd + 1)) * sizeof(float);
         void* args[11];
         args[0] = &dQ; args[1] = &dK; args[2] = &dV; args[3] = &sPart;
         args[4] = &seqKV; args[5] = &qHeads; args[6] = &kvHeads; args[7] = &hd;
@@ -3493,18 +3493,9 @@ int cu_gqa_flash_f16_dpos(const void* dQ, const void* dK16, const void* dV16, vo
     if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
     if (!gGqaFlashPartF16 && compile_kernel(
                                  "__device__ __forceinline__ float h2f(unsigned short h){\n"
-                                 "  unsigned int sign = ((unsigned int)h & 0x8000u) << 16;\n"
-                                 "  unsigned int em = h & 0x7fffu;\n"
-                                 "  unsigned int f;\n"
-                                 "  if (em >= 0x7c00u) f = sign | 0x7f800000u | ((em & 0x3ffu) << 13);\n"
-                                 "  else if (em >= 0x0400u) f = sign | ((em + 0x1c000u) << 13);\n"
-                                 "  else if (em == 0u) f = sign;\n"
-                                 "  else {\n"
-                                 "    int e = 113; unsigned int m = em;\n"
-                                 "    while (!(m & 0x400u)) { m <<= 1; e--; }\n"
-                                 "    f = sign | ((unsigned int)e << 23) | ((m & 0x3ffu) << 13);\n"
-                                 "  }\n"
-                                 "  return __uint_as_float(f);\n"
+                                 "  float f;\n"
+                                 "  asm(\"cvt.f32.f16 %0, %1;\" : \"=f\"(f) : \"h\"(h));\n"
+                                 "  return f;\n"
                                  "}\n"
                                  "extern \"C\" __global__ void gqa_flash_partial_f16(const float* q, const unsigned short* k, const unsigned short* v, float* part,\n"
                                  "    int seqKV, int qHeads, int kvHeads, int hd, float scale, const int* dOff, int splitK){\n"
@@ -3519,8 +3510,8 @@ int cu_gqa_flash_f16_dpos(const void* dQ, const void* dK16, const void* dV16, vo
                                  "  int hp = hd + 1;\n"
                                  "  extern __shared__ float sh[];\n"
                                  "  float* shq = sh;\n"
-                                 "  float* shk = shq + group * hd;\n"
-                                 "  float* shv = shk + 32 * hp;\n"
+                                 "  unsigned short* shk = (unsigned short*)(shq + group * hd);\n"
+                                 "  unsigned short* shv = shk + 32 * hp;\n"
                                  "  for (int i = t; i < group * hd; i += nt) shq[i] = q[(size_t)kvh * group * hd + i];\n"
                                  "  float NEGINF = __int_as_float(0xff800000);\n"
                                  "  float m = NEGINF, l = 0.f, a0 = 0.f, a1 = 0.f, a2 = 0.f, a3 = 0.f;\n"
@@ -3530,17 +3521,17 @@ int cu_gqa_flash_f16_dpos(const void* dQ, const void* dK16, const void* dV16, vo
                                  "    for (int i = t; i < nk * hd; i += nt) {\n"
                                  "      int j = i / hd, d = i - j * hd;\n"
                                  "      size_t src = (size_t)(base + j) * WKV + (size_t)kvh * hd + d;\n"
-                                 "      shk[j * hp + d] = h2f(k[src]);\n"
-                                 "      shv[j * hp + d] = h2f(v[src]);\n"
+                                 "      shk[j * hp + d] = k[src];\n"
+                                 "      shv[j * hp + d] = v[src];\n"
                                  "    }\n"
                                  "    __syncthreads();\n"
                                  "    if (w < group) {\n"
                                  "      float s = NEGINF;\n"
                                  "      if (lane < nk) {\n"
-                                 "        const float* kr = shk + lane * hp;\n"
+                                 "        const unsigned short* kr = shk + lane * hp;\n"
                                  "        const float* qh = shq + w * hd;\n"
                                  "        float dot = 0.f;\n"
-                                 "        for (int d = 0; d < hd; d++) dot += qh[d] * kr[d];\n"
+                                 "        for (int d = 0; d < hd; d++) dot += qh[d] * h2f(kr[d]);\n"
                                  "        s = dot * scale;\n"
                                  "      }\n"
                                  "      float bm = s;\n"
@@ -3556,11 +3547,11 @@ int cu_gqa_flash_f16_dpos(const void* dQ, const void* dK16, const void* dV16, vo
                                  "      a0 *= corr; a1 *= corr; a2 *= corr; a3 *= corr;\n"
                                  "      for (int j = 0; j < nk; j++) {\n"
                                  "        float pj = __shfl_sync(0xffffffffu, p, j);\n"
-                                 "        const float* vr = shv + j * hp;\n"
-                                 "        if (lane < hd)      a0 += pj * vr[lane];\n"
-                                 "        if (lane + 32 < hd) a1 += pj * vr[lane + 32];\n"
-                                 "        if (lane + 64 < hd) a2 += pj * vr[lane + 64];\n"
-                                 "        if (lane + 96 < hd) a3 += pj * vr[lane + 96];\n"
+                                 "        const unsigned short* vr = shv + j * hp;\n"
+                                 "        if (lane < hd)      a0 += pj * h2f(vr[lane]);\n"
+                                 "        if (lane + 32 < hd) a1 += pj * h2f(vr[lane + 32]);\n"
+                                 "        if (lane + 64 < hd) a2 += pj * h2f(vr[lane + 64]);\n"
+                                 "        if (lane + 96 < hd) a3 += pj * h2f(vr[lane + 96]);\n"
                                  "      }\n"
                                  "    }\n"
                                  "  }\n"
@@ -3605,7 +3596,7 @@ int cu_gqa_flash_f16_dpos(const void* dQ, const void* dK16, const void* dV16, vo
     {
         int threads = 256;
         int blocks = kvHeads * splitK;
-        size_t shmem = ((size_t)group * hd + 2u * 32u * (hd + 1)) * sizeof(float);
+        size_t shmem = (size_t)group * hd * sizeof(float) + 2u * 32u * (hd + 1) * sizeof(unsigned short);
         void* args[11];
         args[0] = &dQ; args[1] = &dK16; args[2] = &dV16; args[3] = &sPart;
         args[4] = &seqKV; args[5] = &qHeads; args[6] = &kvHeads; args[7] = &hd;
