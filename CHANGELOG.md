@@ -22,6 +22,15 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   so it is less latency-starved and has less headroom to reclaim by folding into the q launch.
 - Test-harness-only for now; productionizing into the llamagpu decoder + the qwen2 bias concat
   remain (Tw57 slice 2+).
+### nlp — test: GPT-2 forward-parity anchor vs real transformers (T732, 2026-07-16)
+
+The GPT-2 converter's only anchor compared to GoAI's own manual assembly, not to a real
+reference — the one architecture in the HF-loading set without a transformers anchor. Added
+`TestGPT2FromHFMatchesTransformers`: a transformers `GPT2LMHeadModel`'s weights loaded through
+`GPT2FromHF` reproduce its logits to **2.7e-7** (the exact-vs-`gelu_new` GELU difference is
+negligible at this scale). Every loadable architecture — GPT-2, Llama, BERT, RoBERTa,
+DistilBERT, T5 — is now anchored against a real transformers reference.
+
 ### nlp — new: T5 decoder → full seq2seq (T731, 2026-07-16)
 
 `T5Decoder` + `T5DecoderFromHF` complete T5 to a full sequence-to-sequence model (the encoder
