@@ -23,6 +23,20 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   one quant of the attn-norm hidden, gate/up share one of the ffn-norm hidden (f16 weights fall
   back). End-to-end on TinyLlama, MMQ prefill 3552 -> 3793 t/s (+6.8%); combined with the ldmatrix
   loads it is 3479 -> 3793 (+9% e2e, MMQ prefill now 0.74x f16 vs 0.68x before), same accuracy.
+### nlp — new: T5 encoder + T5FromHF (T730, 2026-07-16)
+
+New `T5` is the encoder of the T5 text-to-text transformer — GoAI's first model with
+relative-position attention (no absolute/rope position), RMSNorm ("T5 layer norm"), no bias in
+any projection, gated-GELU FFN (v1.1) or ReLU (v1.0), and — unlike standard attention — no
+1/√d score scaling. `T5FromHF` loads a Hugging Face T5EncoderModel. Two enabling pieces: the
+reference `mha_masked` kernel now accepts a per-head `[heads,q,k]` additive mask (backward
+compatible with the shared `[q,k]` mask; the existing consumers are unchanged), which carries
+T5's per-head relative bias; and the unscaled attention is expressed by setting the kernel's
+`Scale` to √d_kv so its built-in 1/√d_kv cancels. Anchored against transformers T5EncoderModel:
+`last_hidden_state` matches to 3e-4 (the residual is the exact-vs-tanh GELU variant — GoAI uses
+exact GELU where T5 uses `gelu_new`; a `gelu_new` op would tighten it further). The v1.0 ReLU variant (t5-small/t5-base) matches to 4e-7 — confirming the gated residual is purely the GELU variant, not a structural error. The T5 decoder
+(cross-attention — the kernel already supports the rectangular shapes) is a follow-up.
+
 ### nlp — new: DistilBERT encoder support (T729, 2026-07-16)
 
 `DistilBertFromHF` loads a Hugging Face DistilBertModel — the same post-LN bidirectional

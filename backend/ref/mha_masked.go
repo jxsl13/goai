@@ -20,19 +20,27 @@ func mhaMaskedKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.At
 		return nil, fmt.Errorf("ref: mha_masked wants (Q,K,V,mask), got %d inputs", len(in))
 	}
 	q, k, v, mask := in[0], in[1], in[2], in[3]
-	if q.Ndim() != 2 || k.Ndim() != 2 || v.Ndim() != 2 || mask.Ndim() != 2 {
-		return nil, fmt.Errorf("ref: mha_masked needs rank-2 Q,K,V,mask")
+	if q.Ndim() != 2 || k.Ndim() != 2 || v.Ndim() != 2 {
+		return nil, fmt.Errorf("ref: mha_masked needs rank-2 Q,K,V")
 	}
 	sq, dm := q.Shape()[0], q.Shape()[1]
 	sk := k.Shape()[0]
-	if mask.Shape()[0] != sq || mask.Shape()[1] != sk {
-		return nil, fmt.Errorf("ref: mha_masked mask must be [%d,%d], got %v", sq, sk, mask.Shape())
-	}
 	pa, _ := attrs.(backend.AttnAttrs)
 	pa = pa.WithDefaults()
 	heads := pa.Heads
 	if heads <= 0 || dm%heads != 0 {
 		return nil, fmt.Errorf("ref: mha_masked dmodel %d not divisible by heads %d", dm, heads)
+	}
+	// The mask is either [sq,sk] (shared across heads, e.g. Self-Extend/Medusa) or
+	// [heads,sq,sk] (per-head additive bias, e.g. T5 relative position). §T730.
+	perHeadMask := mask.Ndim() == 3
+	switch {
+	case mask.Ndim() == 2 && (mask.Shape()[0] != sq || mask.Shape()[1] != sk):
+		return nil, fmt.Errorf("ref: mha_masked mask must be [%d,%d], got %v", sq, sk, mask.Shape())
+	case perHeadMask && (mask.Shape()[0] != heads || mask.Shape()[1] != sq || mask.Shape()[2] != sk):
+		return nil, fmt.Errorf("ref: mha_masked per-head mask must be [%d,%d,%d], got %v", heads, sq, sk, mask.Shape())
+	case mask.Ndim() != 2 && mask.Ndim() != 3:
+		return nil, fmt.Errorf("ref: mha_masked mask must be rank 2 or 3, got %d", mask.Ndim())
 	}
 	dk := dm / heads
 	kvHeads := pa.KVHeads
@@ -63,7 +71,11 @@ func mhaMaskedKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.At
 							kvOff := (h / rep) * dk
 							for i := range sq {
 								qrow := qs[i*dm+qOff : i*dm+qOff+dk]
-								mrow := ms[i*sk : i*sk+sk]
+								mOff := i * sk
+								if perHeadMask {
+									mOff = (h*sq + i) * sk
+								}
+								mrow := ms[mOff : mOff+sk]
 								m := math.Inf(-1)
 								for j, mv := range mrow {
 									if math.IsInf(mv, -1) {
@@ -119,7 +131,12 @@ func mhaMaskedKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.At
 		for i := range sq {
 			m := math.Inf(-1)
 			for j := range sk {
-				mv := mask.AtF64(i, j)
+				var mv float64
+				if perHeadMask {
+					mv = mask.AtF64(h, i, j)
+				} else {
+					mv = mask.AtF64(i, j)
+				}
 				if math.IsInf(mv, -1) {
 					row[j] = math.Inf(-1)
 					continue
