@@ -33,7 +33,7 @@ static cublasHandle_t gHandle = NULL;
 static float *gOne = NULL, *gZero = NULL; // device 1.0f/0.0f — cuBLAS DEVICE pointer mode (graph-capture-safe alpha/beta)
 static cudaStream_t gStream = NULL;
 static CUcontext gCtx = NULL; // runtime's primary context, retained for driver-API launches
-static CUfunction gGelu = NULL, gSilu = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gQgemv = NULL, gQgemv4 = NULL, gQgemv4k = NULL, gQgemv5k = NULL, gQgemv6k = NULL, gQgemv3k = NULL, gQgemv2k = NULL, gCvtF16 = NULL, gCvtFrom16 = NULL; // lazily nvrtc-compiled
+static CUfunction gGelu = NULL, gSilu = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gQgemv = NULL, gQgemv4 = NULL, gQgemv4k = NULL, gQgemv5k = NULL, gQgemv6k = NULL, gQgemv3k = NULL, gQgemv2k = NULL, gQgemv40 = NULL, gCvtF16 = NULL, gCvtFrom16 = NULL; // lazily nvrtc-compiled
 static CUfunction gRopeDpos = NULL, gAttnSoftmaxDpos = NULL, gAppendDpos = NULL; // device-position (graph-capturable) twins
 static CUfunction gGqaFlashPart = NULL, gGqaFlashMerge = NULL; // flash decode: GQA K/V-shared split-K partials + merge
 static CUfunction gGqaFlashPartF16 = NULL, gAppendDposF16 = NULL; // f16 KV-cache twins (u16 storage, f32 compute)
@@ -1462,6 +1462,58 @@ int cu_qmatmul_q2k(const void* dA, const void* dQ, void* dOut, int M, int K, int
         args[0] = &dA; args[1] = &dQ; args[2] = &dOut;
         args[3] = &M; args[4] = &K; args[5] = &N; args[6] = &beta;
         rc = (cuLaunchKernel(gQgemv2k, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_qmatmul_q40: out[M,N] = a[M,K]·dequant(W), W = ggml Q4_0 (legacy) stored per OUTPUT row:
+// K/32 blocks of 18 bytes (f16 d, then 16 nibble bytes). SYMMETRIC round quant, no min:
+// y = d·(nibble − 8), where byte i holds element i (low nibble) and i+16 (high nibble).
+// Warp-per-output GEMV: lane l owns element l of each 32-element block (l<16 → low nibble of
+// qs[l], l≥16 → high nibble of qs[l−16]). 18-byte blocks are NOT 4-aligned, so d is byte-read.
+// 0.5625 B/weight. K%32==0.
+int cu_qmatmul_q40(const void* dA, const void* dQ, void* dOut, int M, int K, int N, float beta) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (!gQgemv40 && compile_kernel(
+                       "__device__ __forceinline__ float f16f(unsigned short h){\n"
+                       "  unsigned s = (h & 0x8000u) << 16;\n"
+                       "  float v = __uint_as_float((h & 0x7fffu) << 13) * __uint_as_float(0x77800000u);\n"
+                       "  return __uint_as_float(__float_as_uint(v) | s);\n"
+                       "}\n"
+                       "extern \"C\" __global__ void qmatmul_q40(const float* a, const unsigned char* q, float* out, int M, int K, int N, float beta){\n"
+                       "  long warp = ((long)blockIdx.x*blockDim.x + threadIdx.x) >> 5;\n"
+                       "  int lane = threadIdx.x & 31;\n"
+                       "  if (warp >= (long)M*N) return;\n"
+                       "  int m = (int)(warp / N), n = (int)(warp % N);\n"
+                       "  const float* ar = a + (size_t)m*K;\n"
+                       "  int nblk = K >> 5;\n"
+                       "  const unsigned char* qr = q + (size_t)n*nblk*18;\n"
+                       "  int bi = lane & 15, hi = lane >> 4;\n"     // byte index within qs, and low(0)/high(1) nibble
+                       "  float acc = 0.0f;\n"
+                       "  #pragma unroll 4\n"
+                       "  for (int b = 0; b < nblk; b++){\n"
+                       "    const unsigned char* blk = qr + (size_t)b*18;\n"
+                       "    float d = f16f((unsigned short)(blk[0] | (blk[1]<<8)));\n"
+                       "    unsigned qb = blk[2 + bi];\n"
+                       "    int nib = hi ? (qb >> 4) : (qb & 0xF);\n"
+                       "    acc += ar[b*32 + lane] * d * (float)(nib - 8);\n"
+                       "  }\n"
+                       "  for (int o = 16; o > 0; o >>= 1){ acc += __shfl_down_sync(0xffffffff, acc, o); }\n"
+                       "  if (lane == 0){ out[warp] = beta*out[warp] + acc; }\n"
+                       "}\n",
+                       "qmatmul_q40.cu", "qmatmul_q40", &gQgemv40) != 0) { rc = -2; goto done; }
+    {
+        long total = (long)M * N * 32;
+        int threads = 256, blocks = (int)((total + threads - 1) / threads); if (blocks < 1) blocks = 1;
+        void* args[7];
+        args[0] = &dA; args[1] = &dQ; args[2] = &dOut;
+        args[3] = &M; args[4] = &K; args[5] = &N; args[6] = &beta;
+        rc = (cuLaunchKernel(gQgemv40, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 done:
     pthread_mutex_unlock(&gLock);

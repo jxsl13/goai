@@ -71,6 +71,9 @@ int cu_qmatmul_q8_swiglu(const void* dA, const void* dQ, const void* dScales, co
                          int M, int K, int N, int nb);
 int cu_qmatmul_q4k_swiglu(const void* dA, const void* dQ, const void* dGate, void* dOut,
                           int M, int K, int N);
+// cu_qmatmul_q40: out[M,N] = a·dequant(W), W = ggml Q4_0 18-byte blocks per output row
+// (f16 d + 16 nibble bytes, symmetric y = d·(nibble−8)). K%32==0. DECODE GEMV.
+int cu_qmatmul_q40(const void* dA, const void* dQ, void* dOut, int M, int K, int N, float beta);
 // cu_qmatmul_q2k: out[M,N] = a·dequant(W), W = ggml Q2_K 84-byte super-blocks per output row
 // (asymmetric affine, 4-bit sub-scale+min nibbles, 2-bit quants). K%256==0. DECODE GEMV.
 int cu_qmatmul_q2k(const void* dA, const void* dQ, void* dOut, int M, int K, int N, float beta);

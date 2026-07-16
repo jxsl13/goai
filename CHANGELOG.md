@@ -4,6 +4,16 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — native Q4_0 GEMV: legacy 4-bit round quant joins the native set (worker linux-amd64, Tw69, 2026-07-16)
+- `cu_qmatmul_q40` + `ResidentBQ40`: warp-per-output GEMV over ggml's legacy Q4_0 18-byte
+  blocks (f16 d + 16 nibble bytes). Symmetric round quant, no min: `y = d·(nibble − 8)`, byte
+  i holds element i (low nibble) and i+16 (high nibble). Lane l owns element l of each
+  32-element block. Golden vs the gguf dequant reference: **maxAbs 6.7e-6** (beta=0) / 7.2e-6
+  (beta=1) — bit-exact. 18-byte blocks aren't 4-aligned, so `d` is byte-read (the Q3_K lesson).
+- Rounds out the CUDA native-quant set to Q4_0 + Q2_K + Q3_K + Q4_K + Q5_K + Q6_K + Q8 — every
+  mainstream GGUF quant except the codebook IQ-quants now has a native bit-exact resident GEMV.
+  A Q4_0 GGUF loads bit-native at 0.5625 B/w instead of re-encode-to-Q8. `quantDirect case 2` wired.
+
 ### CUDA — native Q2_K GEMV: ALL FIVE K-quants (Q2–Q6) now load bit-native (worker linux-amd64, Tw68, 2026-07-16)
 - `cu_qmatmul_q2k` + `ResidentBQ2K`: warp-per-output GEMV over ggml's 84-byte Q2_K
   super-blocks. Q2_K is asymmetric affine like Q4_K but the coarsest — 2-bit quants, plain
