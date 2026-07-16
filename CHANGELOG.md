@@ -59,6 +59,23 @@ with real support; the bias-free Llama/Mistral parity tests still pass unchanged
   (143.7 vs 140.4 tok/s). Right in the predicted ballpark — Qwen2.5-1.5B has the same starved k/v
   projection (N=256) as TinyLlama, a touch under the llama-Q8 +2.8% since the bias'd family carries
   an extra `AddBias` and the k/v proj is a smaller fraction of the larger 1.5B step.
+### CUDA — native IQ3 (IQ3_XXS + IQ3_S) decode GEMV (worker linux-amd64, Tw78, 2026-07-16)
+- New `cu_qmatmul_iq3xxs`/`cu_qmatmul_iq3s` + `ResidentBIQ3XXS`/`ResidentBIQ3S`: the two 3-bit
+  grid-codebook i-quants, extending the IQ2/IQ4 family. IQ3-quantized models (a format llama.cpp
+  covers but GoAI's CUDA backend didn't) now load and decode **bit-native** on the GPU — closes a
+  real capability gap.
+- **IQ3_XXS** (3.06-bit): 98-byte super-block = f16 d + 64 grid-index bytes + 8 uint32 sign/scale
+  words; 256×4 grid, 4×7-bit `ksigns` indices + a 4-bit scale (`db = d·(0.5+s)·0.5`), 8th sign =
+  index parity.
+- **IQ3_S** (3.44-bit): 110-byte super-block = f16 d + 64 qs + 8 qh + 32 signs + 4 scale bytes;
+  512×4 grid, 9-bit indices (qs byte + a qh high bit), **direct** sign bytes, explicit per-32 4-bit
+  sub-scales (`db = d·(1+2s)`).
+- Both reuse the Tw73 device-codebook mechanism verbatim — each grid is reconstructed host-side
+  through the public `gguf.Dequantize` (no gguf internals) and uploaded once to a shared device
+  buffer. Warp-per-output GEMV, lane = (word/group, sub-group), 8 elements/lane, `float4` loads.
+- Validated: `TestCUDAIQ3XXSMatMulParity` (**rel 4.86e-8**) + `TestCUDAIQ3SMatMulParity`
+  (**rel 8.78e-8**) — GEMV vs `gguf.Dequantize` + host matmul, f32-accumulation-exact, both first
+  try; IQ2/IQ4 parity un-regressed.
 
 ### CUDA — fused-QKV/gate-up is now format-aware, no Q8→Q4_K downgrade (worker linux-amd64, Tw57 slice 1, 2026-07-16)
 - The decode row-fusion (Tw55(b): `wq|wk|wv` → one GEMV; `ffn_gate|ffn_up` → one GEMV) was
