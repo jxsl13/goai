@@ -19,7 +19,15 @@ import (
 // tracks f16 within the int8 quantization budget while using ~half the weight VRAM.
 func TestCUDAResidentMMQvsF16RealWeights(t *testing.T) {
 	skipNoGPU(t)
-	const path = "../../models/qwen2.5-0.5b-instruct-q8_0.gguf"
+	for _, tc := range []struct{ path, label string }{
+		{"../../models/qwen2.5-0.5b-instruct-q8_0.gguf", "Qwen2.5-0.5B"},
+		{"../../models/qwen2.5-1.5b-instruct-q8_0.gguf", "Qwen2.5-1.5B"}, // larger dims + GQA
+	} {
+		t.Run(tc.label, func(t *testing.T) { mmqVsF16RealWeights(t, tc.path) })
+	}
+}
+
+func mmqVsF16RealWeights(t *testing.T, path string) {
 	if _, err := os.Stat(path); err != nil {
 		t.Skipf("model not present (%s)", path)
 	}
