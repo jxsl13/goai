@@ -112,7 +112,8 @@ func (m *Mixtral) DecodeStep(ctx *backend.Context, cache *MixtralCache, token, p
 		if err != nil {
 			return nil, err
 		}
-		ff, _, err := b.MoE.Forward(ctx, xf)
+		// Sparse decode: evaluate only the top-k routed experts, not all E (identical output).
+		ff, _, err := b.MoE.ForwardDecode(ctx, xf)
 		if err != nil {
 			return nil, err
 		}

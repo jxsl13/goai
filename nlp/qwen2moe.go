@@ -140,7 +140,7 @@ func (m *Qwen2MoE) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor, 
 		if err != nil {
 			return nil, err
 		}
-		ff, err := m.ffn(ctx, b, xf)
+		ff, err := m.ffn(ctx, b, xf, false)
 		if err != nil {
 			return nil, err
 		}
@@ -165,8 +165,16 @@ func (m *Qwen2MoE) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor, 
 // The [seq,1] gate broadcasts across the hidden dim through OpMul (row-broadcast is a
 // backend fast path with a matching VJP, §V2), so both the sparse and shared paths stay
 // differentiable — the shared expert, its gate, and every routed expert receive gradients.
-func (m *Qwen2MoE) ffn(ctx *backend.Context, b *Qwen2MoeBlock, xf *tensor.Tensor) (*tensor.Tensor, error) {
-	sparse, _, err := b.MoE.Forward(ctx, xf)
+func (m *Qwen2MoE) ffn(ctx *backend.Context, b *Qwen2MoeBlock, xf *tensor.Tensor, decode bool) (*tensor.Tensor, error) {
+	// The shared expert always runs on every token; only the ROUTED experts differ between
+	// dense (training/prefill) and sparse-decode (evaluate just the top-k) — identical output.
+	var sparse *tensor.Tensor
+	var err error
+	if decode {
+		sparse, _, err = b.MoE.ForwardDecode(ctx, xf)
+	} else {
+		sparse, _, err = b.MoE.Forward(ctx, xf)
+	}
 	if err != nil {
 		return nil, err
 	}

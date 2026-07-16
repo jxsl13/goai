@@ -4,6 +4,18 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nn/nlp — perf: sparse MoE decode — 4–8× faster, numerically identical (T762, 2026-07-16)
+
+`SparseMoE.Forward` evaluated ALL E experts even at decode, where each token routes to only top-k —
+wasting `(E−k)/E` of the expert-FFN GEMVs that are the weight-bandwidth decode floor. New
+`SparseMoE.ForwardDecode` evaluates only the experts a token actually selects (the union across the
+batch), combining with the same renormalized top-k weights, so the output is bit-identical to the
+dense path (verified < 1e-12 across single/multi-token and unbiased/balanced routers). The KV-cached
+decode of Mixtral, Qwen3-MoE and Qwen2-MoE now uses it (dense stays for training / batched prefill).
+Measured single-token decode speedup (§V22): **4.0×** for a Mixtral-like 8-expert/top-2 layer, **7.8×**
+for a Qwen-MoE-like 64-expert/top-8 layer — the expected ~E/k. Decode-vs-Forward parity for all three
+MoE architectures remains exactly 0.0.
+
 ### nlp — feat: Nemotron support — 22nd loadable architecture (T763, 2026-07-16)
 
 NVIDIA Nemotron (`NemotronForCausalLM`) as a self-contained `nlp.Nemotron` type: **LayerNorm1P** (a

@@ -269,6 +269,81 @@ func (m *SparseMoE) Forward(ctx *backend.Context, x *tensor.Tensor) (y, gateLogi
 	return comb[0], logits, nil
 }
 
+// ForwardDecode is the inference-only sparse counterpart of [SparseMoE.Forward]: it
+// evaluates ONLY the top-k experts each token actually routes to, instead of the dense
+// all-E evaluation Forward does. At decode (one token, top-k of E experts) that skips the
+// (E−k)/E of the expert FFN GEMVs Forward wastes — a 4× saving for Mixtral (k=2, E=8) and
+// far more for many-expert MoEs (Qwen2/Qwen3-MoE) — where the expert FFNs are the
+// weight-bandwidth decode floor. The result is NUMERICALLY IDENTICAL to Forward: the
+// combine weights are the same renormalized top-k softmax (raw-logit softmax over the
+// selected set, exactly what OpMoECombine produces from Forward's masked gates), and the
+// unselected experts contribute zero in Forward anyway.
+//
+// It records NO gradient and does NOT touch the load-balancer accumulator (decode is
+// inference-neutral). Use it in the KV-cached decode path; keep [SparseMoE.Forward] for
+// training and batched prefill (where most/all experts are active across the batch, so the
+// dense evaluation wastes nothing and stays on the autograd tape).
+func (m *SparseMoE) ForwardDecode(ctx *backend.Context, x *tensor.Tensor) (y, gateLogits *tensor.Tensor, err error) {
+	logits, err := m.Router.Forward(ctx, x)
+	if err != nil {
+		return nil, nil, err
+	}
+	tks, e := logits.Shape()[0], logits.Shape()[1]
+
+	// Per-token top-k routing + renormalized weights, and the union of experts any token
+	// selected. TopKGating(Biased)'s weights ARE the renormalized combine weights (raw-logit
+	// softmax over the selected set) — identical to Forward's masked-then-OpMoECombine path.
+	weight := tensor.New(x.Dtype(), tensor.Shape{tks, e}) // 0 for unselected
+	ws := weight.Storage().F64()
+	used := make([]bool, e)
+	row := make([]float64, e)
+	for t := range tks {
+		for i := range e {
+			row[i] = logits.AtF64(t, i)
+		}
+		var selected []int
+		var weights []float64
+		if m.balancer != nil {
+			selected, weights = TopKGatingBiased(row, m.balancer.Bias, m.TopK)
+		} else {
+			selected, weights = TopKGating(row, m.TopK)
+		}
+		for j, i := range selected {
+			ws[t*e+i] = weights[j]
+			used[i] = true
+		}
+	}
+
+	// Evaluate ONLY the used experts and accumulate y = Σ_i weight[:,i] ⊙ expert_i(x).
+	for i := range e {
+		if !used[i] {
+			continue
+		}
+		out, err := m.Experts[i].Forward(ctx, x) // [tks, dim]
+		if err != nil {
+			return nil, nil, err
+		}
+		wcol, err := weight.Slice(1, i, i+1) // [tks, 1] column of expert i's weights
+		if err != nil {
+			return nil, nil, err
+		}
+		term, err := backend.Execute(ctx, backend.OpMul, []*tensor.Tensor{out, wcol.Contiguous()}, nil)
+		if err != nil {
+			return nil, nil, err
+		}
+		if y == nil {
+			y = term[0]
+		} else {
+			sum, err := backend.Execute(ctx, backend.OpAdd, []*tensor.Tensor{y, term[0]}, nil)
+			if err != nil {
+				return nil, nil, err
+			}
+			y = sum[0]
+		}
+	}
+	return y, logits, nil
+}
+
 // UpdateLoadBias performs one gradient-free load-balancing step (§R242) and
 // returns the per-expert routed-token counts it acted on. Call it once per batch,
 // AFTER the Forward calls whose routing should be balanced: each Forward has

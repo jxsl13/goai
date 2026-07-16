@@ -103,7 +103,7 @@ func (m *Qwen2MoE) DecodeStep(ctx *backend.Context, cache *Qwen2MoeCache, token,
 		if err != nil {
 			return nil, err
 		}
-		ff, err := m.ffn(ctx, b, xf)
+		ff, err := m.ffn(ctx, b, xf, true)
 		if err != nil {
 			return nil, err
 		}
