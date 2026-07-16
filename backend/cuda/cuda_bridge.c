@@ -33,7 +33,7 @@ static cublasHandle_t gHandle = NULL;
 static float *gOne = NULL, *gZero = NULL; // device 1.0f/0.0f — cuBLAS DEVICE pointer mode (graph-capture-safe alpha/beta)
 static cudaStream_t gStream = NULL;
 static CUcontext gCtx = NULL; // runtime's primary context, retained for driver-API launches
-static CUfunction gGelu = NULL, gSilu = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gQgemv = NULL, gQgemv4 = NULL, gQgemv4k = NULL, gQgemv5k = NULL, gQgemv6k = NULL, gQgemv3k = NULL, gQgemv2k = NULL, gQgemv40 = NULL, gQgemvI4nl = NULL, gQgemvI4xs = NULL, gQgemvMxfp4 = NULL, gCvtF16 = NULL, gCvtFrom16 = NULL; // lazily nvrtc-compiled
+static CUfunction gGelu = NULL, gSilu = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gQgemv = NULL, gQgemv4 = NULL, gQgemv4k = NULL, gQgemv5k = NULL, gQgemv6k = NULL, gQgemv3k = NULL, gQgemv2k = NULL, gQgemv40 = NULL, gQgemvI4nl = NULL, gQgemvI4xs = NULL, gQgemvMxfp4 = NULL, gQgemvI2xxs = NULL, gQgemvI2xs = NULL, gCvtF16 = NULL, gCvtFrom16 = NULL; // lazily nvrtc-compiled
 static CUfunction gRopeDpos = NULL, gAttnSoftmaxDpos = NULL, gAppendDpos = NULL; // device-position (graph-capturable) twins
 static CUfunction gGqaFlashPart = NULL, gGqaFlashMerge = NULL; // flash decode: GQA K/V-shared split-K partials + merge
 static CUfunction gGqaFlashPartF16 = NULL, gAppendDposF16 = NULL; // f16 KV-cache twins (u16 storage, f32 compute)
@@ -1697,6 +1697,141 @@ int cu_qmatmul_mxfp4(const void* dA, const void* dScale, const void* dNib, void*
         args[0] = &dA; args[1] = &dScale; args[2] = &dNib; args[3] = &dOut;
         args[4] = &M; args[5] = &K; args[6] = &N; args[7] = &beta;
         rc = (cuLaunchKernel(gQgemvMxfp4, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_qmatmul_iq2xxs: out[M,N] = a[M,K]·dequant(W), W = ggml IQ2_XXS (§T554), the first i-quant
+// with a GRID codebook. K/256 super-blocks of 66 bytes: f16 d + 8 (qs0,qs1) u32 pairs; each pair
+// decodes 32 values as 4 groups of 8 — qs0's 4 bytes index the 256×8 grid (device buffer dGrid,
+// reconstructed host-side via gguf.Dequantize and shared across all IQ2_XXS weights), qs1 bits
+// 7g..7g+6 index the 128-entry ksigns table (computed inline: ksigns[i] = i | (popcount(i)&1)<<7),
+// bits 28..31 the 4-bit scale s (db = d·(0.5+s)·0.25). Warp-per-output GEMV: lane = (pair, group),
+// 8 elements/lane. 66-byte blocks not 4-aligned → qs bytes assembled. K%256==0.
+int cu_qmatmul_iq2xxs(const void* dA, const void* dQ, const void* dGrid, void* dOut, int M, int K, int N, float beta) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (!gQgemvI2xxs && compile_kernel(
+                       "__device__ __forceinline__ float f16f(unsigned short h){\n"
+                       "  unsigned s = (h & 0x8000u) << 16;\n"
+                       "  float v = __uint_as_float((h & 0x7fffu) << 13) * __uint_as_float(0x77800000u);\n"
+                       "  return __uint_as_float(__float_as_uint(v) | s);\n"
+                       "}\n"
+                       "extern \"C\" __global__ void qmatmul_iq2xxs(const float* a, const unsigned char* q, const float* grid, float* out, int M, int K, int N, float beta){\n"
+                       "  long warp = ((long)blockIdx.x*blockDim.x + threadIdx.x) >> 5;\n"
+                       "  int lane = threadIdx.x & 31;\n"
+                       "  if (warp >= (long)M*N) return;\n"
+                       "  int m = (int)(warp / N), n = (int)(warp % N);\n"
+                       "  const float* ar = a + (size_t)m*K;\n"
+                       "  int sbs = K >> 8;\n"
+                       "  const unsigned char* qr = q + (size_t)n*sbs*66;\n"
+                       "  int p = lane >> 2, gg = lane & 3;\n"       // qs pair (0..7), group within pair (0..3)
+                       "  float acc = 0.0f;\n"
+                       "  for (int w = 0; w < sbs; w++){\n"
+                       "    const unsigned char* blk = qr + (size_t)w*66;\n"
+                       "    float d = f16f((unsigned short)(blk[0] | (blk[1]<<8)));\n"
+                       "    const unsigned char* pp = blk + 2 + p*8;\n"                 // this lane's (qs0,qs1) pair
+                       "    unsigned qs0 = pp[0]|(pp[1]<<8)|(pp[2]<<16)|(pp[3]<<24);\n"
+                       "    unsigned qs1 = pp[4]|(pp[5]<<8)|(pp[6]<<16)|(pp[7]<<24);\n"
+                       "    float db = d * (0.5f + (float)(qs1>>28)) * 0.25f;\n"
+                       "    unsigned gi = (qs0 >> (8*gg)) & 0xFFu;\n"                    // grid index (0..255)
+                       "    unsigned ksi = (qs1 >> (7*gg)) & 0x7Fu;\n"                   // ksigns index (0..127)
+                       "    unsigned signs = ksi | ((unsigned)__popc(ksi) & 1u) << 7;\n" // ksigns[i] inline
+                       "    const float* gv = grid + (size_t)gi*8;\n"
+                       "    const float* arb = ar + (size_t)w*256 + p*32 + gg*8;\n"
+                       "    float4 al = *(const float4*)arb;\n"
+                       "    float4 ah = *(const float4*)(arb + 4);\n"
+                       "    float av[8] = { al.x, al.y, al.z, al.w, ah.x, ah.y, ah.z, ah.w };\n"
+                       "    float s = 0.0f;\n"
+                       "    #pragma unroll\n"
+                       "    for (int k = 0; k < 8; k++){\n"
+                       "      float g = ((signs >> k) & 1u) ? -gv[k] : gv[k];\n"
+                       "      s += av[k] * g;\n"
+                       "    }\n"
+                       "    acc += db * s;\n"
+                       "  }\n"
+                       "  for (int o = 16; o > 0; o >>= 1){ acc += __shfl_down_sync(0xffffffff, acc, o); }\n"
+                       "  if (lane == 0){ out[warp] = beta*out[warp] + acc; }\n"
+                       "}\n",
+                       "qmatmul_iq2xxs.cu", "qmatmul_iq2xxs", &gQgemvI2xxs) != 0) { rc = -2; goto done; }
+    {
+        long total = (long)M * N * 32;
+        int threads = 256, blocks = (int)((total + threads - 1) / threads); if (blocks < 1) blocks = 1;
+        void* args[8];
+        args[0] = &dA; args[1] = &dQ; args[2] = &dGrid; args[3] = &dOut;
+        args[4] = &M; args[5] = &K; args[6] = &N; args[7] = &beta;
+        rc = (cuLaunchKernel(gQgemvI2xxs, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_qmatmul_iq2xs: out[M,N] = a·dequant(W), W = ggml IQ2_XS (§T554) — the 2.31-bit sibling of
+// IQ2_XXS with a 512-entry grid and EXPLICIT per-16-element 4-bit scales. K/256 super-blocks of
+// 74 bytes: f16 d + 32 u16 qs (low 9 bits = grid index into the 512×8 dGrid, high 7 = ksigns
+// index) + 8 bytes = 16 four-bit scales. Effective scale db = d·(0.5+sc4)·0.25. Warp-per-output:
+// lane = qs word (0..31), each decodes 8 elements. K%256==0.
+int cu_qmatmul_iq2xs(const void* dA, const void* dQ, const void* dGrid, void* dOut, int M, int K, int N, float beta) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (!gQgemvI2xs && compile_kernel(
+                       "__device__ __forceinline__ float f16f(unsigned short h){\n"
+                       "  unsigned s = (h & 0x8000u) << 16;\n"
+                       "  float v = __uint_as_float((h & 0x7fffu) << 13) * __uint_as_float(0x77800000u);\n"
+                       "  return __uint_as_float(__float_as_uint(v) | s);\n"
+                       "}\n"
+                       "extern \"C\" __global__ void qmatmul_iq2xs(const float* a, const unsigned char* q, const float* grid, float* out, int M, int K, int N, float beta){\n"
+                       "  long warp = ((long)blockIdx.x*blockDim.x + threadIdx.x) >> 5;\n"
+                       "  int lane = threadIdx.x & 31;\n"
+                       "  if (warp >= (long)M*N) return;\n"
+                       "  int m = (int)(warp / N), n = (int)(warp % N);\n"
+                       "  const float* ar = a + (size_t)m*K;\n"
+                       "  int sbs = K >> 8;\n"
+                       "  const unsigned char* qr = q + (size_t)n*sbs*74;\n"
+                       "  float acc = 0.0f;\n"
+                       "  for (int w = 0; w < sbs; w++){\n"
+                       "    const unsigned char* blk = qr + (size_t)w*74;\n"
+                       "    float d = f16f((unsigned short)(blk[0] | (blk[1]<<8)));\n"
+                       "    const unsigned char* qp = blk + 2 + lane*2;\n"
+                       "    unsigned qw = qp[0] | (qp[1]<<8);\n"                    // this lane's u16 qs word
+                       "    unsigned gi = qw & 0x1FFu;\n"                           // 9-bit grid index (0..511)
+                       "    unsigned ksi = qw >> 9;\n"                             // 7-bit ksigns index
+                       "    int sub = lane >> 1;\n"                                // 16-element sub-block (0..15)
+                       "    unsigned scb = blk[66 + (sub>>1)];\n"
+                       "    unsigned sc4 = (scb >> (4*(sub&1))) & 0xFu;\n"
+                       "    float db = d * (0.5f + (float)sc4) * 0.25f;\n"
+                       "    unsigned signs = ksi | ((unsigned)__popc(ksi) & 1u) << 7;\n"
+                       "    const float* gv = grid + (size_t)gi*8;\n"
+                       "    const float* arb = ar + (size_t)w*256 + lane*8;\n"
+                       "    float4 al = *(const float4*)arb;\n"
+                       "    float4 ah = *(const float4*)(arb + 4);\n"
+                       "    float av[8] = { al.x, al.y, al.z, al.w, ah.x, ah.y, ah.z, ah.w };\n"
+                       "    float s = 0.0f;\n"
+                       "    #pragma unroll\n"
+                       "    for (int k = 0; k < 8; k++){\n"
+                       "      float g = ((signs >> k) & 1u) ? -gv[k] : gv[k];\n"
+                       "      s += av[k] * g;\n"
+                       "    }\n"
+                       "    acc += db * s;\n"
+                       "  }\n"
+                       "  for (int o = 16; o > 0; o >>= 1){ acc += __shfl_down_sync(0xffffffff, acc, o); }\n"
+                       "  if (lane == 0){ out[warp] = beta*out[warp] + acc; }\n"
+                       "}\n",
+                       "qmatmul_iq2xs.cu", "qmatmul_iq2xs", &gQgemvI2xs) != 0) { rc = -2; goto done; }
+    {
+        long total = (long)M * N * 32;
+        int threads = 256, blocks = (int)((total + threads - 1) / threads); if (blocks < 1) blocks = 1;
+        void* args[8];
+        args[0] = &dA; args[1] = &dQ; args[2] = &dGrid; args[3] = &dOut;
+        args[4] = &M; args[5] = &K; args[6] = &N; args[7] = &beta;
+        rc = (cuLaunchKernel(gQgemvI2xs, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 done:
     pthread_mutex_unlock(&gLock);

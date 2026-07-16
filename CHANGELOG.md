@@ -4,6 +4,26 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — native IQ2_XXS GEMV: the grid-codebook i-quant mechanism (worker linux-amd64, Tw73, 2026-07-16)
+- `cu_qmatmul_iq2xxs` + `ResidentBIQ2XXS`: the first i-quant with a **grid codebook** (an
+  E8-lattice-derived 256×8 table) rather than a scalar codebook. Per 66-byte super-block: f16 d +
+  8 (qs0,qs1) u32 pairs; each pair decodes 32 values as 4 groups of 8 — qs0 bytes index the 256×8
+  grid, qs1 bits index a 128-entry ksigns sign table + a 4-bit scale (`db = d·(0.5+s)·0.25`).
+- The enabling piece is a **device-codebook mechanism with no shared-package change**: the 256×8
+  grid is reconstructed **host-side through the public `gguf.Dequantize`** (decoding crafted blocks
+  with ksigns index 0 and a known scale, so `grid[idx][k] = dequant / db`), then uploaded once to a
+  shared device buffer (`sync.Once`). `ksigns` is computed inline in the kernel
+  (`ksigns[i] = i | (popcount(i)&1)<<7`) — no sign table upload. Warp-per-output GEMV, lane =
+  (pair, group), 8 elements/lane, float4 activations.
+- Golden vs the gguf dequant reference (`TestCUDAIQ2XXSMatMulParity`): rel error **1.35e-7**
+  (f32-epsilon), bit-exact. IQ2_XXS is 2.06 bits/weight — the smallest i-quant, for running very
+  large models (70B+) on tight VRAM. `quantDirect case 16` wired.
+- **IQ2_XS** (`cu_qmatmul_iq2xs` + `ResidentBIQ2XS`) follows the same mechanism — the 2.31-bit
+  sibling with a **512-entry** grid and explicit per-16-element 4-bit scales (74-byte super-block,
+  32 u16 qs words). Grid reconstructed the same way; kernel lane = qs word (8 elements each). Parity
+  rel **9.8e-8**, bit-exact, first try. `quantDirect case 17` wired. The remaining grid i-quants
+  (IQ3_XXS, IQ3_S, IQ1) are the same-mechanism follow-ups.
+
 ### CUDA — small-block quant GEMV ~2.4–2.9× faster: Q4_0 & MXFP4 now beat Q4_K decode (worker linux-amd64, Tw72, 2026-07-16)
 - The 32-element-block quants (Q4_0, MXFP4) decoded 2–2.7× SLOWER than Q4_K despite identical
   bytes/weight — a transactions-not-bytes problem (§Tw54): 64 tiny 18/17-byte blocks per K=2048
