@@ -4,6 +4,18 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — MMQ prefill +14% via ldmatrix loads in the per-row kernel (worker linux-amd64, Tw77, 2026-07-16)
+- `cu_matmul_i8_mmq_r` (the per-row MMQ kernel behind `ResidentMMQ.MatMul*`) now loads its A/B
+  fragments via hardware `ldmatrix.x4`/`x2` instead of the manual 4-int-load + byte-assembly. The
+  fragment values are bit-identical (validated: kernel-vs-ref rel 1.25e-7, ResidentMMQ parity 0.88%
+  RMS, AccInto exact), so behaviour is unchanged — only faster.
+- **GEMM throughput 16575 -> ~18970 GOP/s @128x2048x2048 (+14.4%)**: a bigger gain than the raw
+  GEMM saw from ldmatrix (+4%) because the per-block scale epilogue's ALU work was competing with the
+  manual byte-assembly loads; offloading the loads to `ldmatrix` frees the ALU for the scales. A free
+  win (bit-identical, no accuracy change). End-to-end it is modest — real TinyLlama MMQ prefill 3479
+  -> 3552 t/s (+2.1%), since the mmq_r matmul is only one part of the prefill (device-quant per
+  projection, attention, norms, launches dominate the rest).
+
 ### CUDA — ldmatrix int8 GEMM (edges past cuBLAS f16) + honest prefill standing vs llama.cpp (worker linux-amd64, Tw76, 2026-07-16)
 - `cu_matmul_i8_mma_lm`: the int8 tensor-core GEMM with **hardware `ldmatrix` fragment loads** (A via
   `ldmatrix.x4`, B via `ldmatrix.x2`) replacing the manual 4-int-load + byte-assembly. The layouts were
