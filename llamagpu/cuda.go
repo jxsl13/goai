@@ -46,6 +46,9 @@ func (c cRec) RoPEAt(q, inv, o buffer, off, seq, width, heads, hd, half, pos int
 func (c cRec) RoPEPair(qkv, inv buffer, seq, stride, headsQ, offQ, headsK, offK, hd, half, pos int, posDiv float32) error {
 	return c.r.RoPEPair(cb(qkv), cb(inv), seq, stride, headsQ, offQ, headsK, offK, hd, half, pos, posDiv)
 }
+func (c cRec) RoPEPartialPair(qkv, inv buffer, seq, stride, headsQ, offQ, headsK, offK, hd, rotaryDim, pos int, posDiv float32) error {
+	return c.r.RoPEPartialPair(cb(qkv), cb(inv), seq, stride, headsQ, offQ, headsK, offK, hd, rotaryDim, pos, posDiv)
+}
 func (c cRec) Blit(src buffer, srcOff int, dst buffer, dstOff, n int) error {
 	return c.r.Blit(cb(src), srcOff, cb(dst), dstOff, n)
 }

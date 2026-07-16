@@ -117,6 +117,11 @@ type recorder interface {
 	// RoPEPair rotates the q band (headsQ heads at offQ) AND the k band (headsK at offK) of
 	// a fused QKV buffer in ONE dispatch (§T613), rows `stride` floats wide, in place.
 	RoPEPair(qkv, inv buffer, seq, stride, headsQ, offQ, headsK, offK, hd, half, pos int, posDiv float32) error
+	// RoPEPartialPair is the partial-rotary sibling of RoPEPair: only the first rotaryDim
+	// channels of each head in the q and k bands rotate (GPT-NeoX/Phi/StableLM partial
+	// rotary). inv must be the [rotaryDim/2] frequency table. Implemented on cuda; metal and
+	// vulkan return an unsupported error until a partial-rotary decoder targets them.
+	RoPEPartialPair(qkv, inv buffer, seq, stride, headsQ, offQ, headsK, offK, hd, rotaryDim, pos int, posDiv float32) error
 	Blit(src buffer, srcOff int, dst buffer, dstOff, n int) error
 	// Copy2D moves a strided rows×rowFloats sub-matrix (the fused-QKV band extraction, §T613):
 	// row r copies from src[srcOff+r·srcStride:] to dst[dstOff+r·dstStride:].
