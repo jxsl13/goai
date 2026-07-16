@@ -116,6 +116,17 @@ transformers `Olmo2ForCausalLM`: max abs logit diff 3.9e-8; KV-decode matches Fo
 - Validates a generic rule (now in the playbook): *shrink the per-lane read to escape the
   bank-conflict floor — works for low-entropy codebooks (ternary/2-bit) that IQ2/IQ3's real-f32
   grids can't use.*
+### cuda — perf: default (f32) decode attention 1.16–1.52× via 16-row shared tile (Tw84, 2026-07-16)
+
+The DEFAULT decode path (f32 KV cache → `gqa_flash_partial`) was occupancy-bound at 128–178 GB/s —
+the same 32-row K+V shared tile (~33KB) that pinned ~1 block/SM in the f16 case, but here the tile is
+genuinely f32 so the u16/`cvt` tricks don't apply. The one lever that does: halve the tile to **16
+rows** (~20KB → 2 blocks/SM). Bit-exact (`gqa_flash_partial` numerics unchanged — just 16-key
+sub-chunks). Measured (RTX 3060): gqa8/ctx2048 128→149 GB/s (1.16×), gqa8/ctx4096 146→169,
+**mha/ctx2048 178→271 (1.52×)**, gqa8/ctx8192 160→183. 8-row was tried and regressed (quarter-warp
+scores + 4× syncs). Unlike Tw82/83 (the opt-in `GOAI_CUDA_KV=f16` path), this lands on *every* default
+decode.
+
 ### cuda — perf: decode attention 2.3× via hardware f16 convert + u16 shared tile (Tw82+Tw83, 2026-07-16)
 
 Tw83: the f16 flash-decode kernel's `h2f` (f16→f32) was a manual software conversion — multiple

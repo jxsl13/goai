@@ -34,6 +34,16 @@ import (
 // (hardware cvt == the IEEE conversion the manual code reimplemented). gqa8/ctx2048 142→81 us
 // (1.75x). COMBINED Tw82+Tw83: 186→81 us = 2.3x, 45→103 GB/s; f16 decode now FASTER than f32
 // (81 vs 130 us) as it should be. Both BIT-EXACT (TestCUDAF16KVFlashParity).
+// Tw84 FIX (the DEFAULT f32-KV flash, gqa_flash_partial): the u16/cvt tricks don't apply to a
+// genuinely-f32 tile, but the occupancy lever does — halve the 32-row K+V shared tile to 16 rows
+// (~20KB → 2 blocks/SM; 8-row was tried and REGRESSED — quarter-warp scores + 4x syncs). BIT-EXACT.
+// Measured: gqa8/ctx2048 128→149 GB/s (1.16x), gqa8/ctx4096 146→169, mha/ctx2048 178→271 (1.52x),
+// gqa8/ctx8192 160→183. The MHA win is biggest (more blocks amortize the doubled occupancy). This
+// is the DEFAULT decode path (f32 KV), so it lands on every default decode, not just GOAI_CUDA_KV=f16.
+// E2E CAVEAT (measured, BenchmarkTinyLlamaDecodeCtx_1024): TinyLlama Q8 decode 172.4→170.3 tok/s =
+// NO e2e gain — small-model Q8 decode is WEIGHT-bandwidth-bound (~1GB/token weight read dominates;
+// attention ~2% of the step at ctx1024), so the 1.16× attention dilutes to ≈0. These kernel wins
+// matter e2e only where attention is a big fraction: long ctx, MHA/large-hd, big models, f16-KV mode.
 // NOTE: the flash path guards group = qHeads/kvHeads > 8 with code -4 (register/warp
 // budget); pure MQA / kvHeads<=hd/16 route through the non-flash attention path instead.
 //

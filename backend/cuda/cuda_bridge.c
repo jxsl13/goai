@@ -3370,13 +3370,13 @@ int cu_gqa_flash_dpos(const void* dQ, const void* dK, const void* dV, void* dOut
                               "  int hp = hd + 1; // shared row padding against bank conflicts\n"
                               "  extern __shared__ float sh[];\n"
                               "  float* shq = sh;               // [group*hd] the group's query heads\n"
-                              "  float* shk = shq + group * hd; // [32*hp] K tile\n"
-                              "  float* shv = shk + 32 * hp;    // [32*hp] V tile\n"
+                              "  float* shk = shq + group * hd; // [16*hp] K tile (Tw84 half-tile → 2 blocks/SM)\n"
+                              "  float* shv = shk + 16 * hp;    // [16*hp] V tile\n"
                               "  for (int i = t; i < group * hd; i += nt) shq[i] = q[(size_t)kvh * group * hd + i];\n"
                               "  float NEGINF = __int_as_float(0xff800000);\n"
                               "  float m = NEGINF, l = 0.f, a0 = 0.f, a1 = 0.f, a2 = 0.f, a3 = 0.f;\n"
-                              "  for (int base = begin; base < end; base += 32) {\n"
-                              "    int nk = end - base; if (nk > 32) nk = 32;\n"
+                              "  for (int base = begin; base < end; base += 16) {\n"
+                              "    int nk = end - base; if (nk > 16) nk = 16;\n"
                               "    __syncthreads();\n"
                               "    for (int i = t; i < nk * hd; i += nt) {\n"
                               "      int j = i / hd, d = i - j * hd;\n"
@@ -3456,7 +3456,7 @@ int cu_gqa_flash_dpos(const void* dQ, const void* dK, const void* dV, void* dOut
     {
         int threads = 256;
         int blocks = kvHeads * splitK;
-        size_t shmem = ((size_t)group * hd + 2u * 32u * (hd + 1)) * sizeof(float);
+        size_t shmem = ((size_t)group * hd + 2u * 16u * (hd + 1)) * sizeof(float);
         void* args[11];
         args[0] = &dQ; args[1] = &dK; args[2] = &dV; args[3] = &sPart;
         args[4] = &seqKV; args[5] = &qHeads; args[6] = &kvHeads; args[7] = &hd;
