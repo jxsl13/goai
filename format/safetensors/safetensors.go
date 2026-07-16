@@ -73,6 +73,37 @@ func rawStoreLE[T any](dst []byte, src []T, elemSize int) bool {
 	return true
 }
 
+// verbatimStorageBytes returns the raw backing bytes of t's storage for the
+// verbatim-bit dtypes (F32/F64/F16/BF16), whose on-disk little-endian layout
+// equals their in-memory layout, so the data section streams straight in with
+// no decode. It returns nil for the widening dtypes (FP8/int/bool), which must
+// decode element-wise, and a non-nil empty slice for a zero-element tensor. The
+// returned slice aliases the tensor's storage, so it is only safe to fill while
+// t is being constructed (as Load does).
+func verbatimStorageBytes(t *tensor.Tensor, dtype string) []byte {
+	switch dtype {
+	case "F32":
+		s := t.Storage().F32()
+		if len(s) == 0 {
+			return []byte{}
+		}
+		return unsafe.Slice((*byte)(unsafe.Pointer(&s[0])), len(s)*4)
+	case "F64":
+		s := t.Storage().F64()
+		if len(s) == 0 {
+			return []byte{}
+		}
+		return unsafe.Slice((*byte)(unsafe.Pointer(&s[0])), len(s)*8)
+	case "F16", "BF16":
+		s := t.Storage().U16()
+		if len(s) == 0 {
+			return []byte{}
+		}
+		return unsafe.Slice((*byte)(unsafe.Pointer(&s[0])), len(s)*2)
+	}
+	return nil
+}
+
 // maxHeaderSize mirrors the reference implementation's 100 MB header cap.
 const maxHeaderSize = 100 * 1024 * 1024
 
@@ -271,13 +302,12 @@ func Load(r io.Reader) (map[string]*tensor.Tensor, map[string]string, error) {
 		delete(raw, "__metadata__")
 	}
 
-	data, err := io.ReadAll(r)
-	if err != nil {
-		return nil, nil, fmt.Errorf("safetensors: read data: %w", err)
-	}
-
 	// Parse entries and validate strictly: sizes match shape·dtype, and the
-	// offsets tile the data section exactly (no gaps, no overlaps).
+	// offsets tile the data section exactly (no gaps, no overlaps). The data
+	// section is then STREAMED — each tensor is read straight from r into its
+	// storage in offset order, so a verbatim-bit tensor never lands in an
+	// intermediate buffer (no io.ReadAll copy; §T723). Validation is done from
+	// the header offsets alone (below), so it does not need the data materialized.
 	type namedEntry struct {
 		name string
 		e    entry
@@ -302,6 +332,7 @@ func Load(r io.Reader) (map[string]*tensor.Tensor, map[string]string, error) {
 
 	out := make(map[string]*tensor.Tensor, len(entries))
 	cursor := 0
+	var buf []byte // reused scratch for the decode fallback (widening / big-endian)
 	for _, ne := range entries {
 		e := ne.e
 		dt, err := dtypeOf(e.Dtype)
@@ -336,14 +367,28 @@ func Load(r io.Reader) (map[string]*tensor.Tensor, map[string]string, error) {
 		if end-begin != want {
 			return nil, nil, fmt.Errorf("safetensors: tensor %q: %d bytes ≠ shape %v × %s", ne.name, end-begin, shape, e.Dtype)
 		}
-		if end > len(data) {
-			return nil, nil, fmt.Errorf("safetensors: tensor %q: offsets [%d,%d) beyond data %d", ne.name, begin, end, len(data))
-		}
 		t := tensor.New(dt.out, shape)
-		// src is exactly this tensor's byte span: hoisting it out of the loops
-		// drops the begin+i*k index arithmetic and lets the compiler prove the
-		// per-element accesses in range (docs/perf-notes-lowlevel.md).
-		src := data[begin:end:end]
+		// Fast path: a verbatim-bit dtype on a little-endian host streams straight
+		// into the tensor's storage — one copy from r, no decode, no intermediate
+		// buffer. A short stream is caught here as io.ErrUnexpectedEOF (this is the
+		// streaming replacement for the old end>len(data) bounds check).
+		if bv := verbatimStorageBytes(t, e.Dtype); bv != nil && nativeLittleEndian {
+			if _, err := io.ReadFull(r, bv); err != nil {
+				return nil, nil, fmt.Errorf("safetensors: tensor %q: read data: %w", ne.name, err)
+			}
+			out[ne.name] = t
+			cursor = end
+			continue
+		}
+		// Fallback: read this tensor's bytes into reusable scratch, then decode —
+		// the widening dtypes (FP8/int/bool), or verbatim bits on a big-endian host.
+		if cap(buf) < want {
+			buf = make([]byte, want)
+		}
+		src := buf[:want]
+		if _, err := io.ReadFull(r, src); err != nil {
+			return nil, nil, fmt.Errorf("safetensors: tensor %q: read data: %w", ne.name, err)
+		}
 		switch e.Dtype {
 		case "F32":
 			dst := t.Storage().F32()
@@ -427,8 +472,12 @@ func Load(r io.Reader) (map[string]*tensor.Tensor, map[string]string, error) {
 		out[ne.name] = t
 		cursor = end
 	}
-	if cursor != len(data) {
-		return nil, nil, fmt.Errorf("safetensors: %d trailing data bytes not covered by offsets", len(data)-cursor)
+	// No bytes may follow the last tensor: the offsets must tile the data section
+	// exactly. Probe for a trailing byte (streaming replacement for the old
+	// cursor!=len(data) check).
+	var probe [1]byte
+	if n, _ := io.ReadFull(r, probe[:]); n > 0 {
+		return nil, nil, fmt.Errorf("safetensors: trailing data after last tensor at offset %d", cursor)
 	}
 	return out, meta, nil
 }

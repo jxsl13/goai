@@ -23,6 +23,21 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   `[N][K]` + scales, so it gains `MatMulMMQDevice`/`MatMulMMQAccInto`: the prefill GEMM reads the SAME
   resident bytes the decode GEMV reads → **one weight, both paths, zero extra prefill VRAM** for a
   Q8-decode model (vs f16 prefill = a full 2× copy). Requires K%32/N%64 (clean error → f16 fallback).
+### safetensors — performance: single-copy streaming load, parity with Rust (T723, 2026-07-16)
+
+T720 bulk-copied the decode but `Load` still did two passes over the data: `io.ReadAll` into
+an intermediate buffer, then a copy into each tensor. Replaced it with a streaming load —
+after validating the offset tiling from the header alone, each tensor is read straight from
+`r` into its storage in offset order (verbatim-bit dtypes stream directly into the backing
+bytes; widening dtypes read into reusable scratch then decode). One copy from the source, no
+intermediate. **200 MB load 42.7 → 20.7 ms (2.06×, 4913 → 10153 MB/s)** — now at parity with
+the Rust `safetensors` (measured 10282 MB/s materializing the same file; both are one-copy
+and memcpy-bandwidth-bound, so parity is the ceiling). A prior note called safetensors
+"zero-copy, unbeatable" — that was wrong: `load_file` also copies into an owned buffer.
+Validation is unchanged (all strict offset/gap/overlap/size/trailing checks preserved; a
+short stream is now caught as `io.ErrUnexpectedEOF`); the suite is `-race` clean and
+FuzzLoad (5M execs) + FuzzRoundTrip (6M) pass.
+
 ### npy (public) — performance: bulk-copy the public Save/Load path too (T722, 2026-07-16)
 
 Completeness audit of T721 caught that `format/npy` (the public npy package) is a *separate*
