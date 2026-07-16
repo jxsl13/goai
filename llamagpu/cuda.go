@@ -182,6 +182,35 @@ func NewPhiCUDA(m *nlp.Phi) (*Decoder, error) {
 	})
 }
 
+// NewGPTNeoXCUDA uploads an nlp.GPTNeoX onto the batched Decoder core: TWO-norm parallel residual
+// (input_layernorm → attn and post_attention_layernorm → mlp, both over the raw residual),
+// LayerNorm-with-bias, biased q/k/v/dense projections, a biased GELU MLP, (partial or full) rotary
+// and an untied unbiased lm_head. The fourth new-arch GPU graph decoder — the two-norm sibling of
+// Phi's one-norm parallel residual. cuda-only.
+func NewGPTNeoXCUDA(m *nlp.GPTNeoX) (*Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newGPTNeoXDecoder(m, backendOps{
+		name:        string(backend.CUDA),
+		asyncEncode: false,
+		newBuffer: func(data []float32) (buffer, error) {
+			b, err := cuda.NewDeviceBufferF32(data)
+			if err != nil {
+				return nil, err
+			}
+			return cBuf{b}, nil
+		},
+		newRecorder: func() (recorder, error) {
+			r, err := cuda.NewRecorder()
+			if err != nil {
+				return nil, err
+			}
+			return cRec{r}, nil
+		},
+	})
+}
+
 // cudaUploadQWeight makes a ggml quantized [Out,In] weight resident on the GPU as Q8.
 // The CUDA backend has ONE quant kernel (Q8 GEMV), so — unlike metal/vulkan, which keep
 // each native ggml type and dequantize in-kernel — any source type (Q4_K, Q6_K, …) is

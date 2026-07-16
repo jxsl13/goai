@@ -147,3 +147,48 @@ func TestCUDAPhiMatchesReference(t *testing.T) {
 	}
 	t.Logf("llamagpu NewPhiCUDA.Generate == nlp.Phi.Generate greedy: %d tokens (all six generalizations)", len(gpuOut))
 }
+
+// TestCUDAGPTNeoXMatchesReference checks the two-norm parallel-residual GPU decoder
+// (NewGPTNeoXCUDA) generates greedy-identical tokens to the reference nlp.GPTNeoX. Exercises
+// parallelTwoNorm: separate input/post-attention LayerNorms, both taken over the raw residual x0.
+func TestCUDAGPTNeoXMatchesReference(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("cuda: no CUDA-capable device")
+	}
+	ts, _, err := safetensors.LoadFile("../nlp/testdata/gptneox_hf.safetensors")
+	if err != nil {
+		t.Skipf("gptneox testdata unavailable (run make golden): %v", err)
+	}
+	m, err := nlp.GPTNeoXFromHF(ts, nlp.GPTNeoXConfig{
+		Heads: 4, Eps: 1e-5, RopeBase: 10000, RotaryPct: 0.5, Ctx: 32,
+	})
+	if err != nil {
+		t.Fatalf("GPTNeoXFromHF: %v", err)
+	}
+
+	dec, err := llamagpu.NewGPTNeoXCUDA(m)
+	if err != nil {
+		t.Fatalf("NewGPTNeoXCUDA: %v", err)
+	}
+	defer dec.Release()
+
+	prompt := []int{3, 7, 1, 9}
+	const maxNew = 12
+	gpuOut, err := dec.Generate(prompt, maxNew, nlp.Greedy())
+	if err != nil {
+		t.Fatalf("cuda generate: %v", err)
+	}
+	refOut, err := m.Generate(prompt, maxNew, nlp.Greedy(), nlp.WithBackend(backend.Reference()))
+	if err != nil {
+		t.Fatalf("ref generate: %v", err)
+	}
+	if len(gpuOut) != len(refOut) {
+		t.Fatalf("length: cuda %d vs ref %d", len(gpuOut), len(refOut))
+	}
+	for i := range gpuOut {
+		if gpuOut[i] != refOut[i] {
+			t.Fatalf("token[%d]: cuda %d vs ref %d\ncuda=%v\nref=%v", i, gpuOut[i], refOut[i], gpuOut, refOut)
+		}
+	}
+	t.Logf("llamagpu NewGPTNeoXCUDA.Generate == nlp.GPTNeoX.Generate greedy: %d tokens (two-norm parallel residual)", len(gpuOut))
+}
