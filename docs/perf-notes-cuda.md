@@ -30,6 +30,18 @@ Reinforced 13× in our logs, every time it was skipped it cost a wasted build:
 - **Non-wins are reverted (§C3) and recorded as a rejection with data.** A logged
   rejection ("dp4a flat because the multiply isn't the bottleneck") is worth as
   much as a win — it closes a lever permanently.
+- **Compare ns/op, NOT GB/s, when the variants read different byte counts (§Tw86).**
+  A predecoded Q4_K GEMV shows *higher* GB/s than the plain kernel yet is *slower* in
+  wall-time — its +33% scale-plane bytes inflate the rate. GB/s is bytes÷time; if the
+  bytes differ, only the raw ns/op tells you which is faster. (This misread nearly
+  booked a wrong "make predecode default" task — the wall-time A/B showed predecode
+  loses on the BW-bound q/o & gate/up projections, wins only on k/v & down = the
+  existing selective route.)
+- **An isolated-kernel win must be re-measured END-TO-END before you claim it (§Tw84).**
+  The decode e2e floor is the weight read; attention/norms/rope/sampling are single-digit-%
+  slices at typical sizes, so a 1.16–2.3× on them can dilute to ~0 e2e. Measure the full
+  decode step, not just the kernel — the honest number is often "kernel win, e2e-neutral,
+  matters only at <regime>". See §8.
 
 ---
 
@@ -177,7 +189,30 @@ vector, a huge weight matrix). Rules, strongest first:
       `uint16` (2 B) instead of 8 f32 (32 B) → the bank floor drops ~16× (256→16
       accesses/warp), potentially *beating* the 1.5× the f32-grid path is stuck at.
       Only works when the codebook is low-entropy enough to pack (ternary/2-bit);
-      IQ2/IQ3 store real f32 values and can't. Booked, measure-first, post-IQ1-merge.
+      IQ2/IQ3 store real f32 values and can't. SHIPPED (§Tw80, #128): IQ1 decode
+      22007→14642 ns @2048² (1.5×) / 55451→31360 (1.77×), now ≈ Q4_K, bit-exact.
+- **R12 — Decode attention is ALSO memory-bound (batch=1 flash); its occupancy is
+  gated by the K/V SHARED-TILE size (§Tw81–84).** The single-query flash kernel
+  (`gqa_flash_partial`) sat at 35–50% of peak — occupancy-bound, not BW-bound (achieved
+  GB/s *rose* with more KV bytes; halving bytes via f16-KV did NOT speed it up). Root
+  cause: a 32-row K+V shared tile (~33 KB) pins ~1 block/SM on the 48 KB budget. Levers,
+  all bit-exact: **f16-KV path** — stage K/V in shared as raw `u16` (they're already f16
+  in the cache) instead of converting to f32 → tile halves to ~16 KB → 2 blocks/SM
+  (186→142 µs, 1.31×). **f32 path** — can't use u16, so use a **16-row tile** (2
+  blocks/SM; 8-row REGRESSED — quarter-warp scores + 4× syncs beat the extra occupancy)
+  → gqa8/2048 1.16×, MHA/2048 **1.52×** (MHA gains most: more blocks amortize the doubled
+  occupancy). Caveat: these are KERNEL wins that DILUTE e2e for weight-bound small-model
+  decode (R-note in §8) — they matter at long ctx / MHA / MoE / the f16-KV VRAM mode.
+- **R13 — Audit hand-written NVRTC convert helpers for their hardware-instruction
+  equivalent (§Tw83).** A kernel's manual software f16→f32 (`h2f`: sign/exp/mantissa
+  reconstruct with a data-dependent subnormal `while`-loop) called `group·hd`× per key
+  was the *dominant* cost once occupancy was fixed. Replacing the whole body with one
+  inline-PTX instruction — `asm("cvt.f32.f16 %0,%1;":"=f"(f):"h"(h))` — gave **1.75×**
+  (142→81 µs), bit-exact (the hardware cvt *is* the IEEE conversion the manual code
+  reimplemented; no `cuda_fp16.h` needed). Rule: a hand-rolled convert only matters on a
+  *per-element* hot path in a *compute/latency-bound* kernel — audit those (`cvt.f32.f16`,
+  `cvt.rn.f16.f32`), skip the BW-bound per-block ones (the quant GEMVs' branchless `f16f`
+  is already ~4 instrs and BW-bound → swapping it gave ~0 wall-time).
 
 ---
 
@@ -296,9 +331,21 @@ standing on this box (RTX 3060) vs llama.cpp-Vulkan:
 
 - **Decode (token generation): ≈ parity / ahead.** GoAI ~253 tok/s (TinyLlama-Q4_K_M,
   graph-captured) vs llama.cpp ~246. The decode path is graph-captured + on-device
-  argmax + native-quant GEMVs at their Pareto ceiling. **Do not grind decode** — it's
-  won. (The Q4_K pre-decode probe in §2/R5 re-taught this: a −16.7% isolated k/v GEMV
-  became +0.3% e2e because the GEMVs are a small slice of an already-tight step.)
+  argmax + native-quant GEMVs at their Pareto ceiling. **Do not grind decode** (for
+  DENSE models) — it's won. (The Q4_K pre-decode probe in §2/R5 re-taught this: a −16.7%
+  isolated k/v GEMV became +0.3% e2e because the GEMVs are a small slice of an
+  already-tight step. Re-confirmed §Tw84: decode ATTENTION sped 1.16–2.3× at the kernel
+  but moved TinyLlama-Q8 decode 172→170 tok/s = within noise — attention is ~2% of a
+  weight-bound decode step. The decode e2e floor is the WEIGHT READ; anything that isn't
+  the weight read dilutes.)
+- **MoE decode: NOT won — a 4–15× lever (§Tw / T762).** `nn/moe.go` `SparseMoE.Forward`
+  runs DENSE expert evaluation (all E experts, then masks) even at decode. Mixtral
+  (top-2/8) does 4× the necessary FFN GEMV; many-expert Qwen-MoE far more. Since the
+  expert FFN GEMVs ARE the weight-bound decode floor, dense MoE decode is ~4–15× slower
+  than a sparse top-k gather. This is the single biggest decode lever for MoE models (=
+  how a 12 GB card fits big capability). It's an nn-layer algorithmic change (all
+  backends), tracked as main-agent task T762; the CUDA angle if reassigned = a
+  gather/scatter expert-GEMV. Do NOT conclude "decode is won" for MoE architectures.
 - **Prefill (prompt processing): 0.36–0.54× — THIS is the gap.** GoAI-f16 0.54×,
   GoAI-MMQ int8 0.36× of llama.cpp-Vulkan. Prefill is GEMM-compute-bound (FFN GEMM
   ~54% of the step, attention ~14%).
