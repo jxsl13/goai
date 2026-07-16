@@ -1,7 +1,7 @@
 // Package classic implements the classical (pre-deep-learning) machine-learning
 // methods: ordinary least squares, softmax/logistic regression, k-means
-// clustering, principal component analysis, and the tree-based tabular models
-// (decision tree, random forest, gradient boosting).
+// clustering, principal component analysis, the tree-based tabular models
+// (decision tree, random forest, gradient boosting), and support vector machines.
 //
 // # For AI practitioners
 //
@@ -21,6 +21,8 @@
 //     per-split feature subsampling, the strong low-tuning tabular default.
 //   - [GradientBoostingRegressor] / [GradientBoostingClassifier] — stagewise
 //     residual-fitting shallow trees (the core of XGBoost/LightGBM).
+//   - [SVC] — a binary support vector classifier (SMO on the soft-margin dual)
+//     with linear / RBF / polynomial kernels.
 //
 // Each is validated to reference tolerance against scikit-learn (§V1): OLS (ordinary least squares)
 // coefficients to ~1e-8, softmax probabilities to ~1e-5, k-means labels exactly,

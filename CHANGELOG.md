@@ -54,6 +54,12 @@ scripts in testdata) plus algorithmic-property tests.
   rate 0 collapses to the mean/base-rate; on nonlinear data it beats a stump and OLS
   (R² 0.850 vs 0.744). Its options are `WithGBM*`-prefixed to coexist with the tree/
   forest options in the same package.
+- **SVM** (`classic/svm.go`, Cortes & Vapnik 1995; Platt SMO 1998). A binary support
+  vector classifier solving the soft-margin dual via SMO, with linear / RBF / polynomial
+  kernels. Anchors: predictions and support-vector counts match sklearn exactly
+  (decision function within 2e-3); a linear SVC separates separable data with the support
+  vectors on the margin; the dual stays KKT-feasible; RBF beats linear on concentric
+  circles (1.000 vs 0.675, matching sklearn). Options are `WithSVM*`-prefixed.
 
 ### CUDA — f16-accumulate prefill is now DEFAULT-ON for GeForce (worker linux-amd64, Tw62, 2026-07-16)
 - Ships the +21% prefill win (Tw61) automatically. `cu_gpu_is_geforce` (via `cudaDeviceProp`

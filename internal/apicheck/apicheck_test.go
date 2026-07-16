@@ -96,6 +96,8 @@ var typeExampleExempt = map[string]bool{
 	"classic.Criterion":               true, // impurity enum (Gini/Entropy/MSE); shown via the tree examples
 	"classic.TreeOption":              true, // functional-option type (shown via WithMaxDepth/WithCriterion etc.)
 	"classic.ForestOption":            true, // functional-option type (shown via WithNumTrees/WithSeed/WithMaxFeatures etc.)
+	"classic.SVMOption":               true, // functional-option type (shown via WithSVMC/WithSVMKernel etc. in ExampleSVC)
+	"classic.SVMKernel":               true, // kernel enum (SVMKernelLinear/RBF/Poly, shown in ExampleSVC)
 	"nlp.Beam":                        true, // returned by BeamSearch, shown in ExampleBeamSearch
 	"nlp.Block":                       true, // internal transformer block (part of GPT)
 	"nlp.LlamaBlock":                  true, // internal transformer block (part of Llama, shown in ExampleLlama)
