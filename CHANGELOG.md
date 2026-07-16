@@ -41,6 +41,16 @@ anchored.
 - **DBSCAN** (`classic/dbscan.go`, Ester et al. 1996) — density clustering with noise;
   labels match sklearn exactly (up to renumbering) across six datasets.
 
+### nn — round 14: Memorizing Transformer (T712, 2026-07-16)
+
+- **Memorizing Transformer** (`nn/memorizing_attention.go`, Wu et al. / Google 2022,
+  arXiv:2203.08913) — attention over a non-differentiable external memory of past (k,v)
+  pairs retrieved by exact top-K k-NN, blended with local windowed attention by a learned
+  gate. Anchors: an empty memory collapses to plain local attention (1e-10); retrieval
+  matches brute-force; the memory is detached (no gradient to past segments); on a
+  long-context recall task the memory branch scores 100% where local-only scores 0%.
+  (Round 14 also adds continuous-control RL — DDPG/SAC — in a separate change.)
+
 ### nn — round 13: Set Transformer + Modern Hopfield (T711, 2026-07-16)
 
 - **Set Transformer** (`nn/settransformer.go`, Lee et al. 2019, arXiv:1810.00825) —

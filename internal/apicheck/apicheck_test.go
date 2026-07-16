@@ -138,6 +138,8 @@ var typeExampleExempt = map[string]bool{
 	"nn.SetTransformerOption":         true, // functional-option type (shown via WithSetTransformerFeedForward)
 	"nn.SetTransformerEncoderOption":  true, // functional-option type (shown via WithSetTransformerDepth/Inducing/Seeds)
 	"nn.HopfieldOption":               true, // functional-option type (shown via WithHopfieldBeta/Steps/Patterns)
+	"nn.MemorizingAttentionOption":    true, // functional-option type (shown via WithMemorizingTopK/MemorySize/LocalWindow)
+	"nn.MemMemory":                    true, // external (K,V) memory bank of MemorizingAttention (no standalone ctor; exercised via ExampleMemorizingAttention)
 	"nn.LinformerAttentionOption":     true, // functional-option type (shown via WithLinformerHeads/WithLinformerShareKV/WithLinformerSeed)
 	"nn.NystromAttentionOption":       true, // functional-option type (shown via WithNystromHeads/WithNystromPinvIters/WithNystromSeed)
 	"nn.PrefOption":                   true, // functional-option type (shown via Beta/ReferencePoint)
