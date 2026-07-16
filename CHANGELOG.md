@@ -4,6 +4,59 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — decode-GEMV arc closed: the Q4_K GEMV is at a Pareto ceiling (worker linux-amd64, Tw59, 2026-07-16)
+- The last decode-GEMV idea: if the scale-decode is the ALU cost (Tw58), precompute it. Built
+  a pre-dequantized-scale layout (192-byte blocks: 128 nibbles + 8 f32 `d·sc` + 8 f32
+  `dmin·m`), re-encoded on-device so it is **bit-exact** (maxAbs 0 vs the ggml kernel). The
+  kernel's bandwidth leapt to **256-305 GB/s** (from 197, near the 285 memory floor),
+  *confirming* the scale-decode was the ALU limiter — but the **+33% weight bytes** (0.75 vs
+  0.5625 B/w) tax the wall-clock: µs/op gate/up +2.5%, down +7.5%, q/o +5%, head −5% (only the
+  vocab head wins). Net loss on the FFN shapes. Discarded.
+- **Arc conclusion (four convergent probes — split-K, dp4a, memory-floor, PDS):** the ggml
+  Q4_K decode GEMV sits at a genuine **Pareto ceiling** — its 144-byte ALU-vs-bytes balance is
+  near-optimal on GA106. Removing any one cost adds another. Further decode wins need a
+  different axis (lower-bit quant), but the far higher-value lever is now **prefill** (the ~4×
+  gap to llama.cpp; int8 tensor cores / MMQ). The worker pivots to prefill next. Full data and
+  the four-probe story are in `docs/benchmarking.md`.
+
+### CUDA — dp4a built & rejected: the decode ALU is scale-decode-bound, not multiply-bound (worker linux-amd64, Tw58, 2026-07-16)
+- The memory-floor probe's ~1.5× headroom read naturally as "cut the f32 multiply with int8
+  `__dp4a`" (llama.cpp's MMVQ). Built it: quantize the activation to int8 per 32-block
+  (Q8_1-style; numerically fine — norm-rel-RMS **5.9e-3** vs the f32 kernel) and run the
+  nibble·activation products as real DP4A (sm_86, arch verified). **Speed was flat** — dp4a
+  vs f32: gate/up 192.5 vs 196.7, q/o 149.5 vs 166.8, head 225.5 vs 218.3 GB/s.
+- **Disambiguation (the real value):** full-f32→dp4a barely moved (196→192) while stubbing
+  *all* compute jumped to 285 GB/s ⇒ **the multiply is not the bottleneck — the per-block
+  scale-decode is** (f16 d/dmin decode + 6-bit sub-scale/min unpack + shfl broadcasts). dp4a
+  cut the wrong thing. This matches Tw44 and refines the floor-probe conclusion. The probe
+  caught it before a multi-fire dp4a integration built on a false premise — §V22 again.
+- Probe discarded (measured & rejected). The last decode-GEMV idea (**Tw59**): pre-dequantize
+  the 8 sub-block scales to f32 at load (trade +33% weight bytes for no in-kernel unpack),
+  measure-first. If that's flat too, the Q4_K decode kernel is definitively at its ceiling and
+  the pivot is prefill (the ~4× f16/tensor-core gap) or lower-bit quant. Full data in
+  `docs/benchmarking.md`.
+
+### CUDA — split-K rejected: the Q4_K decode GEMV is ALU-bound at its ceiling (worker linux-amd64, Tw56, 2026-07-16)
+- Measure-first close-out of the last decode-GEMV lever. Prototyped a split-K Q4_K GEMV
+  (S warps per output over a strided super-block partition + a shared-mem cross-warp reduce,
+  parity-exact vs the one-warp kernel at maxRel 7.6e-5) and A/B'd it isolated on the FFN
+  shapes. It **regressed monotonically** — gate/up 196→156→150→117 GB/s at S=1/2/4/8, down
+  190→172→177→158, q/o 166→136 — so more warps-in-flight does not help.
+- **Verdict: the FFN GEMV shapes are ALU-bound, not latency-bound** (the per-block Q4_K
+  scale-decode is the limiter). This corroborates Tw44 (deinterleave rejected; residual gap
+  = scale-decode ALU) and the Tw55(b) gate+up fusion (+1.1% from ~2× warps) with a direct
+  measurement. The probe was discarded (measured & rejected, like Tw44's deinterleave); the
+  finding is in `docs/benchmarking.md`. The Tw55(b) fusion wins stand (they attacked
+  occupancy at the starved small-N k/v shapes, a different lever).
+- **Memory-floor probe sizes the real lever.** A second probe ran the GEMV with every load
+  intact but the dequant/multiply stubbed — the ALU-free floor is 285-330 GB/s (79-92% of
+  peak) vs the real 167-219, so the kernel runs **~1.5× slower purely on dequant ALU**
+  (gate/up 1.48×, q/o 1.71×). That headroom is precisely what an **int8/dp4a** quantized-
+  multiply path recovers (llama.cpp's MMVQ). ~1.5× is enough to close/beat llcpp-Q4_K_M's
+  ~1.25-1.35× decode lead, so the dp4a rewrite is **warranted** — booked as **Tw58** (an
+  approximate path: the activation is quantized, so it's validated to a tolerance + a
+  real-model agreement gate, not bit-exact). Probe discarded; the table is in the docs.
+
 ### CUDA — fused gate+up weight + the occupancy-cliff law confirmed (worker linux-amd64, Tw55(b) extension, 2026-07-16)
 - Applies the same weight-fusion mechanism to the FFN: `ffn_gate|ffn_up` concatenated into
   one N=2·hidden Q4_K GEMV (via the now-generic `fuseRowsQ4K` + `GOAI_CUDA_GATEUP_FUSE=1`),

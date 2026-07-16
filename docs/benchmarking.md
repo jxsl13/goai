@@ -1215,15 +1215,91 @@ the QKV win. The difference is entirely the starvation of the folded shapes: QKV
 N=256 k/v rows from **17%** of peak, gate/up start at a healthy **55%**. So weight fusion
 pays in proportion to how latency-bound the small-N shapes are — and with the FFN shapes
 already ≥53%, fusion is near its ceiling. The corollary is decisive for Tw56: the remaining
-~73%-of-decode FFN bandwidth cannot be recovered by fusing; it needs a real GEMV
-memory-schedule change (split-K to put more warps in flight). The two fusions are
+~73%-of-decode FFN bandwidth cannot be recovered by fusing. The two fusions are
 independent GEMVs and compose with no negative interaction: the full stack (QKV + gate+up)
 measures **+5.8%** decode (271.1 vs 256.3 tok/s, `TestCUDAFusionStackSpeedAB`, 5 reps),
-slightly super-additive over the +3.7%/+1.1% parts. Caveat for the split-K idea: an earlier
-arc (Tw44) already rejected a deinterleaved Q4_K layout and judged the GEMV near its
-"sweet spot" with the residual gap being per-block scale-decode ALU, not memory — so
-whether split-K helps the FFN 5632/2048 shapes is a measure-first question (the fusion
-wins here came specifically from occupancy at the starved small-N shapes).
+slightly super-additive over the +3.7%/+1.1% parts.
+
+### Split-K rejected — the Q4_K decode GEMV is ALU-bound at its ceiling (Tw56, measure-first)
+
+The obvious remaining idea was split-K: give each output row S warps (each summing a
+strided subset of the super-blocks) + a shared-mem reduce, for S× the warps-in-flight, to
+hide DRAM latency. A prototype (parity-exact vs the one-warp kernel, maxRel 7.6e-5) was
+A/B'd on the isolated FFN shapes. It **regressed monotonically** — split-K is strictly
+worse at every S:
+
+| shape (K×N) | S=1 (baseline) | S=2 | S=4 | S=8 |
+|---|---:|---:|---:|---:|
+| 2048×5632 (gate/up) | **196.3** | 156.5 | 149.8 | 117.2 |
+| 5632×2048 (down) | **189.5** | 171.7 | 177.1 | 158.2 |
+| 2048×2048 (q/o) | **166.4** | — | 136.2 | — |
+
+(GB/s.) More warps-in-flight does not help → these shapes are **not latency-bound, they
+are ALU-bound**: the per-block Q4_K scale-decode is the limiter, so extra parallelism only
+adds reduction/scheduling overhead. This corroborates Tw44 (which rejected a deinterleaved
+layout and judged the residual gap vs Q8 to be scale-decode ALU) with a direct measurement,
+and the Tw55(b) gate+up fusion (only +1.1% from ~2× warps at N=5632) said the same. The
+probe was discarded (measured & rejected, like Tw44's deinterleave).
+
+**How much ALU headroom? A memory-only floor probe.** To size the win available from cutting
+the dequant ALU, a second probe ran the Q4_K GEMV with *every memory load intact* (the 128 B
+nibbles, the f16 d/dmin, the packed scales, the activation float4s) but the dequant/multiply
+replaced by a trivial accumulation. Its bandwidth is the floor — what the kernel would reach
+if the ALU were free:
+
+| shape (K×N) | real GB/s | memory floor GB/s | ALU cost |
+|---|---:|---:|---:|
+| 2048×5632 (gate/up) | 196.5 | 291.7 | **1.48×** |
+| 5632×2048 (down) | 189.3 | 290.8 | 1.54× |
+| 2048×2048 (q/o) | 166.7 | 285.1 | **1.71×** |
+| 2048×32000 (head) | 219.0 | 329.8 | 1.51× |
+
+The floor is 79-92% of the 360 GB/s peak, so the access pattern is efficient; the real kernel
+runs **~1.5× slower purely on dequant ALU**. That headroom is exactly what an **int8/dp4a**
+quantized-multiply path targets (llama.cpp's MMVQ quantizes the activation to Q8_1 and does
+the nibble·activation products with `__dp4a`, 4 int8 MACs/instruction). ~1.5× is enough to
+close/beat llama.cpp-Q4_K_M's ~1.25-1.35× decode lead — so the dp4a rewrite is **warranted**
+and booked as **Tw58** (a quality tradeoff: the activation quantization makes it approximate,
+validated to a tolerance + a real-model agreement gate, not bit-exact). **Conclusion: the
+current f32-multiply Q4_K decode GEMV is at its ceiling, but a dp4a rewrite has a measured
+~1.5× to chase — the standing lever to beat the incumbent on decode.** The Tw55(b) fusion
+wins stand (they attacked occupancy at the starved small-N k/v shapes, an orthogonal lever).
+
+**Tw58 slice 1 — dp4a is flat, and it tells us *which* ALU dominates.** The natural read of
+the ~1.5× floor was "the f32 multiply is the cost → cut it with int8 `__dp4a`" (llama.cpp's
+MMVQ). Built exactly that: quantize the activation to int8 per 32-block (Q8_1-style,
+validated norm-rel-RMS **5.9e-3** vs the f32 kernel — the int8 activation is numerically
+fine) and run the nibble·activation products as `__dp4a` (real DP4A on sm_86, arch checked).
+The result was **flat** — dp4a vs f32: gate/up 192.5 vs 196.7, down 183.9 vs 189.4, q/o
+149.5 vs 166.8, head 225.5 vs 218.3 GB/s. Going full-f32→dp4a barely moved (196→192) while
+stubbing *all* compute jumped to 285, so **the multiply is not the bottleneck — the
+per-block scale-decode is** (the f16 d/dmin decode + 6-bit sub-scale/min unpack + the shfl
+broadcasts, done once per 32-elem sub-block). This matches Tw44's "residual gap = scale-
+decode ALU" and refines the floor probe (its 1.5× headroom is mostly scale-decode, not
+multiply). dp4a is discarded as a decode lever; the probe caught it before a multi-fire
+integration on a false premise. **The only remaining decode-GEMV idea is to cut the
+scale-decode ALU — e.g. store the 8 per-sub-block scales pre-dequantized as f32 (trading
++33% weight bytes for no in-kernel unpack); measure-first, and if flat the Q4_K decode
+kernel is definitively at its ceiling and the pivot is prefill (f16/tensor-core, the ~4×
+gap) or lower-bit quant.**
+
+**Tw59 — remove the scale-decode ALU directly, and hit the Pareto wall.** If the scale-decode
+is the bottleneck, precompute it: re-encode Q4_K into a 192-byte block (128 nibble bytes +
+8 f32 `d·sc` + 8 f32 `dmin·m`) so the GEMV *loads* the sub-block scales instead of decoding
+them (no f16 decode / 6-bit unpack / shfl). Built it (device re-encode, so it is **bit-exact**
+— maxAbs 0 vs the ggml kernel). The kernel's bandwidth leapt to **256-305 GB/s** (vs 197 —
+near the 285 memory floor), *confirming* the scale-decode was the ALU limiter. But the +33%
+weight bytes (0.75 vs 0.5625 B/w) tax the wall-clock: PDS vs Q4_K µs/op — gate/up 33.7 vs 32.9
+(+2.5%), down 36.6 vs 34.0 (+7.5%), q/o 14.9 vs 14.2 (+5%), head **161 vs 170 (−5%)**. Only the
+vocab head (biggest, most bandwidth-favorable) wins; the FFN shapes lose — the extra bytes
+outweigh the ALU saved. Discarded (measured & rejected).
+
+**Conclusion of the decode-GEMV arc (four convergent probes).** The ggml Q4_K decode GEMV sits
+at a genuine **Pareto ceiling**: split-K can't add useful parallelism (not latency-bound); dp4a
+can't help (the multiply isn't the cost); the scale-decode *is* the ALU cost, but removing it
+costs bandwidth that cancels the gain. Its 144-byte ALU-vs-bytes balance is near-optimal on
+GA106. Further decode wins must come from a different axis — lower-bit quant (fewer bytes) or,
+far higher-value, the **prefill** path (the ~4× gap to llama.cpp; int8 tensor cores / MMQ).
 
 Repro: `go test -tags cuda -run '^$' -bench BenchmarkGemvQ4K ./backend/cuda/`;
 `go test -tags cuda -run 'TestCUDA(QKV|GateUp)Fuse' ./backend/cuda/`.
