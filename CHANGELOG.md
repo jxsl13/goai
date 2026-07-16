@@ -83,7 +83,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   ~1.25-1.35× decode lead, so the dp4a rewrite is **warranted** — booked as **Tw58** (an
   approximate path: the activation is quantized, so it's validated to a tolerance + a
   real-model agreement gate, not bit-exact). Probe discarded; the table is in the docs.
-### nn — topic-discovery round 8: distinct recurrent / sequence-mixing architectures (T694–T696, 2026-07-16)
+### nn — topic-discovery round 8: distinct recurrent / sequence-mixing architectures (T694–T698, 2026-07-16)
 
 A further sweep on a new sub-axis — *recurrent / sequence-mixing* cells — found more
 genuinely-novel gaps (xLSTM, Griffin RG-LRU, Aaren, HGRN all absent), so "frontier
@@ -115,6 +115,15 @@ gold-standard **parallel ≡ recurrent duality** (@1e-10) plus a collapse to a k
   @2e-16; stable where a naive `Σeˢ` overflows; gradcheck 2.3e-10; a fixed-size state
   holds across 400 streamed tokens and matches full attention; a char-LM learns
   (CE 3.184→0.669).
+- **HGRN — Hierarchically Gated RNN** (`nn/hgrn.go`, Qin, Yang, Zhong / EMNLP 2023,
+  arXiv:2311.04823). A gated linear recurrence whose distinctive idea is a forget-gate
+  *lower bound* `γ` that rises with layer depth (`f_t = γ + (1−γ)·σ(f̃_t)`), so shallow
+  layers model local structure and deep layers retain long-range — unlike Griffin
+  RG-LRU, which has no such floor. Anchors: parallel ≡ sequential @1e-10; `γ=0`
+  collapses to a no-floor gated recurrence and `γ→1` freezes the state; the depth
+  hierarchy `HGRNLayerBounds(K)` is strictly increasing in `[0,1)`; gradcheck ≤1e-4; on
+  a long-range retention task a high-`γ` cell (MSE 0.339) retains what a `γ=0` cell
+  (0.999) forgets.
 
 ### CUDA — fused gate+up weight + the occupancy-cliff law confirmed (worker linux-amd64, Tw55(b) extension, 2026-07-16)
 - Applies the same weight-fusion mechanism to the FFN: `ffn_gate|ffn_up` concatenated into
