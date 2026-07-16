@@ -235,5 +235,8 @@ int cu_rope_partial_dpos(void* x, const void* inv, int seq, int heads, int hd, i
 // float-element column `off` within rows of `stride` floats, in place. Generalises
 // cu_rope_f32 for the fused-QKV path (q/k bands of one [seq,stride] buffer).
 int cu_rope_f32_band(void* x, const void* inv, int seq, int stride, int off, int heads, int hd, int posOffset, double posDiv);
+// cu_rope_partial_band: cu_rope_f32_band with only the first rotaryDim channels of each head
+// rotated (partial rotary; the fused-QKV band path for GPT-NeoX/Phi/StableLM). inv=[rotaryDim/2].
+int cu_rope_partial_band(void* x, const void* inv, int seq, int stride, int off, int heads, int hd, int rotaryDim, int posOffset, double posDiv);
 
 #endif

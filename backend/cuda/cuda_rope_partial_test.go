@@ -105,6 +105,55 @@ func TestCUDARoPEPartial(t *testing.T) {
 	})
 }
 
+// RoPEPartialBand rotates only the first rotaryDim channels of `heads` heads at a column
+// offset inside a wider [seq,stride] buffer (the fused-QKV band), leaving everything else —
+// the head tails AND the rest of the row — untouched. Checked vs a direct host oracle.
+func TestCUDARoPEPartialBand(t *testing.T) {
+	skipNoGPU(t)
+	for _, c := range []struct {
+		seq, stride, off, heads, hd, rotaryDim int
+		attrs                                  backend.RoPEAttrs
+	}{
+		{4, 96, 0, 2, 32, 16, backend.RoPEAttrs{Heads: 2}},                // band at column 0, stride 96 > band 64
+		{2, 160, 64, 4, 16, 8, backend.RoPEAttrs{Heads: 4, PosOffset: 5}}, // band at offset 64 (q/k band of a fused QKV)
+	} {
+		x := bench.RandF32(tensor.Shape{c.seq, c.stride}, 21)
+		xf := append([]float32(nil), x.Storage().F32()...) // original, before the in-place rotation
+
+		dx, _ := cuda.UploadF32(x)
+		if err := dx.RoPEPartialBand(c.attrs, c.rotaryDim, c.off, c.heads, c.hd); err != nil {
+			t.Fatalf("RoPEPartialBand: %v", err)
+		}
+		got, _ := dx.ToHost()
+		dx.Free()
+
+		// Host oracle: rotate_half the rotaryDim prefix of each head in the band; everything else = original.
+		inv, posDiv := backend.RoPEFreqs(c.rotaryDim, c.attrs)
+		half := c.rotaryDim / 2
+		want := append([]float32(nil), xf...)
+		for s := 0; s < c.seq; s++ {
+			pos := float64(c.attrs.PosOffset+s) / posDiv
+			for h := 0; h < c.heads; h++ {
+				base := s*c.stride + c.off + h*c.hd
+				for i := 0; i < half; i++ {
+					ang := pos * inv[i]
+					cs, sn := math.Cos(ang), math.Sin(ang)
+					qi, qih := float64(xf[base+i]), float64(xf[base+i+half])
+					want[base+i] = float32(qi*cs - qih*sn)
+					want[base+i+half] = float32(qih*cs + qi*sn)
+				}
+			}
+		}
+		for i := range got.Numel() {
+			idx := tensor.Unravel(i, got.Shape())
+			g, w := got.AtF64(idx...), float64(want[i])
+			if math.Abs(g-w) > 1e-3*math.Max(1, math.Abs(w)) {
+				t.Fatalf("band rope @%d (off=%d rotaryDim=%d): device %v host %v", i, c.off, c.rotaryDim, g, w)
+			}
+		}
+	}
+}
+
 // The device-position partial rope (graph-capturable) must be BIT-IDENTICAL to the
 // host-posOffset partial rope at a matched position — same kernel, position from a
 // device int vs a launch param.

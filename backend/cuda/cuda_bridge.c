@@ -709,6 +709,48 @@ done:
     return rc;
 }
 
+// cu_rope_partial_band: PARTIAL strided-band RoPE — cu_rope_f32_band with only the first
+// rotaryDim channels of each head rotated (half=rotaryDim/2), the rest passing through. The
+// fused-QKV band path (§T613) for the partial-rotary architectures (GPT-NeoX/Phi/StableLM):
+// rotate the q/k bands of a single [seq,stride] buffer in place, partial-rotary, no copy-out.
+static CUfunction gRopePartialBand = NULL;
+int cu_rope_partial_band(void* x, const void* inv, int seq, int stride, int off, int heads, int hd, int rotaryDim, int posOffset, double posDiv) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (!gRopePartialBand && compile_kernel(
+                      "extern \"C\" __global__ void rope_partial_band(float* x, const float* inv, int seq, int stride, int off, int heads, int hd, int rotaryDim, int posOffset, double posDiv){\n"
+                      "  int half = rotaryDim/2;\n"
+                      "  long total = (long)seq*heads*half;\n"
+                      "  long gid = (long)blockIdx.x*blockDim.x + threadIdx.x;\n"
+                      "  if (gid >= total) return;\n"
+                      "  int i = (int)(gid % half);\n"
+                      "  int h = (int)((gid / half) % heads);\n"
+                      "  int p = (int)(gid / ((long)half*heads));\n"
+                      "  double pos = (double)(posOffset + p) / posDiv;\n"
+                      "  double ang = pos * (double)inv[i];\n"
+                      "  double c = cos(ang), s = sin(ang);\n"
+                      "  float* xr = x + (size_t)p*stride + off + (size_t)h*hd;\n"
+                      "  double qi = xr[i], qih = xr[i+half];\n"
+                      "  xr[i] = (float)(qi*c - qih*s);\n"
+                      "  xr[i+half] = (float)(qih*c + qi*s);\n"
+                      "}\n",
+                      "rope_partial_band.cu", "rope_partial_band", &gRopePartialBand) != 0) { rc = -2; goto done; }
+    {
+        long total = (long)seq * heads * (rotaryDim / 2);
+        int threads = 256, blocks = (int)((total + threads - 1) / threads);
+        if (blocks < 1) blocks = 1;
+        void* args[10];
+        args[0] = &x; args[1] = &inv; args[2] = &seq; args[3] = &stride; args[4] = &off;
+        args[5] = &heads; args[6] = &hd; args[7] = &rotaryDim; args[8] = &posOffset; args[9] = &posDiv;
+        rc = (cuLaunchKernel(gRopePartialBand, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
 // ensure_cap grows *buf to at least need bytes (grow-only; reuses on repeat).
 static int ensure_cap(float **buf, size_t *cap, size_t need) {
     if (*cap >= need) return 0;

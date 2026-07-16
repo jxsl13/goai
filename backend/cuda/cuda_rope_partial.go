@@ -101,3 +101,38 @@ func (d *DeviceF32) RoPEPartialDpos(attrs backend.RoPEAttrs, rotaryDim int, pos 
 	}
 	return nil
 }
+
+// RoPEPartialBand applies partial rotary in place to a strided BAND of this [rows, stride]
+// buffer: `heads` heads (hd wide each) starting at float-element column off, with only the
+// first rotaryDim channels of each head rotated. It is [DeviceF32.RoPEPartial] generalised
+// with a row stride + column offset — the fused-QKV band path (§T613) for the partial-rotary
+// architectures, rotating the q or k band of a single [rows, stride] QKV buffer without a
+// copy-out. stride is this buffer's cols; off+heads*hd must fit within it.
+func (d *DeviceF32) RoPEPartialBand(attrs backend.RoPEAttrs, rotaryDim, off, heads, hd int) error {
+	if d.ptr == nil {
+		return fmt.Errorf("cuda: RoPEPartialBand on a freed handle")
+	}
+	if heads <= 0 || hd <= 0 {
+		return fmt.Errorf("cuda: RoPEPartialBand needs heads>0, hd>0, got %d,%d", heads, hd)
+	}
+	if off < 0 || off+heads*hd > d.cols {
+		return fmt.Errorf("cuda: RoPEPartialBand band [%d,%d) exceeds stride %d", off, off+heads*hd, d.cols)
+	}
+	if rotaryDim <= 0 || rotaryDim > hd || rotaryDim%2 != 0 {
+		return fmt.Errorf("cuda: RoPEPartialBand rotaryDim %d must be even, in (0,%d]", rotaryDim, hd)
+	}
+	inv, posDiv := backend.RoPEFreqs(rotaryDim, attrs)
+	inv32 := make([]float32, len(inv))
+	for i, v := range inv {
+		inv32[i] = float32(v)
+	}
+	invPtr := C.cu_upload_f32((*C.float)(&inv32[0]), C.int(len(inv32)))
+	if invPtr == nil {
+		return fmt.Errorf("cuda: RoPEPartialBand frequency upload failed")
+	}
+	defer C.cu_free_f32(invPtr)
+	if rc := C.cu_rope_partial_band(d.ptr, invPtr, C.int(d.rows), C.int(d.cols), C.int(off), C.int(heads), C.int(hd), C.int(rotaryDim), C.int(attrs.PosOffset), C.double(posDiv)); rc != 0 {
+		return fmt.Errorf("cuda: rope_partial_band failed (code %d)", int(rc))
+	}
+	return nil
+}
