@@ -22,6 +22,15 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   so it is less latency-starved and has less headroom to reclaim by folding into the q launch.
 - Test-harness-only for now; productionizing into the llamagpu decoder + the qwen2 bias concat
   remain (Tw57 slice 2+).
+### nlp — new: BertClassifier — ready-made sequence classification (T737, 2026-07-16)
+
+`BertClassifier` packages the common "fine-tune a loaded HF encoder for classification" task:
+mean-pool a [Bert] (or RoBERTa/DistilBERT) encoder's output and apply a linear head, producing
+class logits. `Logits` runs on the passed context, so a recording tape context trains through
+the encoder + head and a plain context is inference — the same object serves both. Build one
+over a `BertFromHF` model, optionally attach `ApplyLoRABert` adapters, and train. Anchored by a
+test that learns to separate two examples with a frozen encoder (LoRA) — loss 2.20 → 0.037.
+
 ### nlp — capability: LoRA (PEFT) fine-tuning of loaded HF models (T736, 2026-07-16)
 
 `ApplyLoRABert` attaches rank-r LoRA adapters to every attention projection of a loaded [Bert]
