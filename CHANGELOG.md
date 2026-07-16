@@ -30,6 +30,28 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   is GeForce-specific (datacenter GPUs run f32-accumulate at full rate, where f16 accumulate
   would only cost precision); a default-on gated by GPU-class detection is the follow-up.
   Benchmark tables in `docs/benchmarking.md`.
+### nn — topic-discovery round 9: efficient-attention approximations (T699+, 2026-07-16)
+
+The sweep continued onto efficient-attention approximations — foundational
+linear/sub-quadratic attentions that were still absent — each with a clean
+"recovers full attention at full rank/landmarks" collapse anchor.
+
+- **Linformer** (`nn/linformer.go`, Wang et al. / Facebook AI 2020, arXiv:2006.04768).
+  Linear-complexity attention that projects the key/value *sequence length* from L to a
+  fixed k≪L with learned matrices (`K̄=E·K, V̄=F·V`), making the score matrix `[L,k]`
+  instead of `[L,L]`. Non-causal by construction. Anchors: at k=L with identity
+  projections it equals standard bidirectional attention (1.11e-16); gradcheck through
+  the projections 3.35e-10; approximation error shrinks to 0 as k→L; a bidirectional
+  majority task learns (CE 2.014→0.640).
+- **Nyströmformer** (`nn/nystromformer.go`, Xiong et al. 2021, arXiv:2102.03902).
+  O(L) attention via the Nyström method: m landmark points (segment-means) reduce the
+  L×L softmax to three `[L,m]/[m,m]/[m,L]` blocks combined through an iterative
+  Moore-Penrose pseudo-inverse (differentiable via the unrolled iteration). Non-causal.
+  Anchors: at m=L with identity landmarks it recovers full attention (→1.9e-15 as the
+  pinv iterations increase); the iterative inverse satisfies `AZA≈A`/`ZAZ≈Z`; gradcheck
+  4.2e-10; approximation improves with m; a copy-position task learns (1.599→0.0035).
+  The gradcheck surfaced that the key bias is an exact null direction of softmax
+  attention (∂O/∂b_k = 0), now asserted rather than mis-flagged.
 
 ### CUDA — decode-GEMV arc closed: the Q4_K GEMV is at a Pareto ceiling (worker linux-amd64, Tw59, 2026-07-16)
 - The last decode-GEMV idea: if the scale-decode is the ALU cost (Tw58), precompute it. Built

@@ -118,6 +118,8 @@ var typeExampleExempt = map[string]bool{
 	"nn.RGLRUOption":                  true, // functional-option type (shown via WithRGLRUSeed)
 	"nn.AarenOption":                  true, // functional-option type (shown via WithAarenHeads/WithAarenSeed/WithAarenBidirectional)
 	"nn.HGRNOption":                   true, // functional-option type (shown via WithHGRNLowerBound/WithHGRNOutputGate/WithHGRNSeed)
+	"nn.LinformerAttentionOption":     true, // functional-option type (shown via WithLinformerHeads/WithLinformerShareKV/WithLinformerSeed)
+	"nn.NystromAttentionOption":       true, // functional-option type (shown via WithNystromHeads/WithNystromPinvIters/WithNystromSeed)
 	"nn.PrefOption":                   true, // functional-option type (shown via Beta/ReferencePoint)
 	"nn.GRPOOption":                   true, // functional-option type (shown via WithKLBeta)
 	"nn.GSPOOption":                   true, // functional-option type (shown via WithGSPOClipEpsilon)
