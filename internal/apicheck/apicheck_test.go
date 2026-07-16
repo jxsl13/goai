@@ -208,6 +208,9 @@ var typeExampleExempt = map[string]bool{
 	"rl.PPOOption":                    true, // functional-option type (shown via WithPPOClip/WithPPOEpochs etc.)
 	"rl.A2COption":                    true, // functional-option type (shown via WithA2CLambda/WithA2CEntropyCoef etc.)
 	"rl.TabularOption":                true, // functional-option type (shown via WithStateIndexFunc/WithNumStates/WithEpsilonDecay)
+	"rl.ContinuousEnv":                true, // interface (PointMass is the example impl)
+	"rl.DDPGOption":                   true, // functional-option type (shown via WithDDPGHidden/WithDDPGActorLR etc.)
+	"rl.SACOption":                    true, // functional-option type (shown via WithSACHidden/WithSACLR etc.)
 }
 
 func moduleRoot(t *testing.T) string {

@@ -59,7 +59,12 @@ anchored.
   gate. Anchors: an empty memory collapses to plain local attention (1e-10); retrieval
   matches brute-force; the memory is detached (no gradient to past segments); on a
   long-context recall task the memory branch scores 100% where local-only scores 0%.
-  (Round 14 also adds continuous-control RL — DDPG/SAC — in a separate change.)
+- **Continuous-control RL** (`rl/continuous.go`, `rl/ddpg.go`, `rl/sac.go`, Lillicrap
+  2016 / Haarnoja 2018) — a continuous-action `Env` interface + a PointMass benchmark
+  env + DDPG and SAC agents (the previously-blocked continuous-control class). Both
+  converge well past a random policy; SAC's squashed-Gaussian log-prob is hand-checked;
+  target soft-update, clipped double-Q, and the replay buffer are all verified;
+  critic gradcheck to ~1e-8.
 
 ### nn — round 13: Set Transformer + Modern Hopfield (T711, 2026-07-16)
 
