@@ -113,6 +113,13 @@ func NewQwen2CUDA(m *nlp.Llama) (*Decoder, error) { return NewCUDA(m) }
 // Load with nlp.LlamaFromHF; the QK-norm gains are picked up automatically from the checkpoint.
 func NewQwen3CUDA(m *nlp.Llama) (*Decoder, error) { return NewCUDA(m) }
 
+// NewPhi3CUDA uploads a Phi-3 model onto the batched Decoder core. Phi-3 is structurally a plain
+// Llama (RMSNorm, SwiGLU, GQA, full rope, no biases) — nlp.Phi3FromHF just unpacks its row-packed
+// qkv_proj / gate_up_proj into the standard projections and returns an *nlp.Llama — so this is
+// NewCUDA with a Phi-3-typed entry point. Distinct from NewPhiCUDA (the older Phi-1/1.5/2 family,
+// which is parallel-residual with LayerNorm and partial rotary).
+func NewPhi3CUDA(m *nlp.Llama) (*Decoder, error) { return NewCUDA(m) }
+
 // NewStableLMCUDA uploads an nlp.StableLM into CUDA device buffers and runs it through the same
 // batched Decoder core as NewCUDA — but with LayerNorm-with-bias norms and PARTIAL rotary (the
 // StableLM/Phi/StarCoder2-class departures from Llama). The first of the new-architecture GPU

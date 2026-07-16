@@ -315,3 +315,47 @@ func TestCUDAQwen3MatchesReference(t *testing.T) {
 	}
 	t.Logf("llamagpu NewQwen3CUDA matches reference nlp.Llama(qwen3) logits within %g across 8 autoregressive steps + exact first-token argmax (per-head QK-norm)", tol)
 }
+
+// TestCUDAPhi3MatchesReference checks the Phi-3 GPU path (NewPhi3CUDA) generates greedy-identical
+// tokens to the reference. Phi-3 is a plain Llama once nlp.Phi3FromHF unpacks its row-packed
+// qkv_proj / gate_up_proj, so this guards that the fused-weight split flows through the standard
+// decoder unchanged (exact tokens — no QK-norm, so no argmax amplification).
+func TestCUDAPhi3MatchesReference(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("cuda: no CUDA-capable device")
+	}
+	ts, _, err := safetensors.LoadFile("../nlp/testdata/phi3_hf.safetensors")
+	if err != nil {
+		t.Skipf("phi3 testdata unavailable (run make golden): %v", err)
+	}
+	m, err := nlp.Phi3FromHF(ts, nlp.LlamaConfig{Heads: 4, KVHeads: 2, Eps: 1e-5, RopeBase: 10000, Ctx: 32})
+	if err != nil {
+		t.Fatalf("Phi3FromHF: %v", err)
+	}
+
+	dec, err := llamagpu.NewPhi3CUDA(m)
+	if err != nil {
+		t.Fatalf("NewPhi3CUDA: %v", err)
+	}
+	defer dec.Release()
+
+	prompt := []int{3, 7, 1, 9}
+	const maxNew = 12
+	gpuOut, err := dec.Generate(prompt, maxNew, nlp.Greedy())
+	if err != nil {
+		t.Fatalf("cuda generate: %v", err)
+	}
+	refOut, err := m.Generate(prompt, maxNew, nlp.Greedy(), nlp.WithBackend(backend.Reference()))
+	if err != nil {
+		t.Fatalf("ref generate: %v", err)
+	}
+	if len(gpuOut) != len(refOut) {
+		t.Fatalf("length: cuda %d vs ref %d", len(gpuOut), len(refOut))
+	}
+	for i := range gpuOut {
+		if gpuOut[i] != refOut[i] {
+			t.Fatalf("token[%d]: cuda %d vs ref %d\ncuda=%v\nref=%v", i, gpuOut[i], refOut[i], gpuOut, refOut)
+		}
+	}
+	t.Logf("llamagpu NewPhi3CUDA.Generate == nlp.Phi3.Generate greedy: %d tokens (fused-weight split → plain Llama path)", len(gpuOut))
+}
