@@ -224,6 +224,13 @@ int cu_causal_scale_f32(void* x, int qRows, int kCols, float scale, int offset);
 // (HF rotate_half). inv is the resident [hd/2] frequency table and posDiv the
 // position divisor (both from backend.RoPEFreqs on the host).
 int cu_rope_f32(void* x, const void* inv, int seq, int heads, int hd, int posOffset, double posDiv);
+// cu_rope_partial applies PARTIAL rotary in-place: only the first rotaryDim channels of each
+// head are rotated (rotate_half), the rest pass through. inv is the resident [rotaryDim/2]
+// frequency table. cu_rope_f32 is the rotaryDim==hd case (GPT-NeoX/Phi/StableLM partial rotary).
+int cu_rope_partial(void* x, const void* inv, int seq, int heads, int hd, int rotaryDim, int posOffset, double posDiv);
+// cu_rope_partial_dpos: device-position twin of cu_rope_partial — partial rotary reading the
+// posOffset from device int *dPos (graph-capturable decode of partial-rotary architectures).
+int cu_rope_partial_dpos(void* x, const void* inv, int seq, int heads, int hd, int rotaryDim, const void* dPos, double posDiv);
 // cu_rope_f32_band: strided-band RoPE — rotate `heads` heads (hd wide) starting at
 // float-element column `off` within rows of `stride` floats, in place. Generalises
 // cu_rope_f32 for the fused-QKV path (q/k bands of one [seq,stride] buffer).
