@@ -190,8 +190,24 @@ Tw51|x|Q4_K GRAPH decode scoreboard: 249.4/174.4/97.9/49.5 tok/s — goai > llam
 Tw52|x|FLASH decode attention (GQA K/V-shared split-K + merge): +3.5% @ctx160, +26% @ctx2004 (168→212); 2 simpler fusions built+rejected (74/102 — graph replay amortizes launches); all graph decoders switched|PERF-FLASH-ATTN
 Tw53|x|f16 KV cache (u16 store, f32 compute): quality+speed FLAT (≤1% @ctx2004 — GQA sharing already killed the K/V bandwidth term), KV VRAM −50% → OPT-IN GOAI_CUDA_KV=f16; prefill profile parks flash-prefill (attn 13.8% ≤14% ceiling)|PERF-F16-KV
 Tw54|x|native Q6_K GEMV in direct Q4_K_M load: golden 2.5e-6, agreement unchanged, speed FLAT after the transactions-not-bytes fix (byte loads were −6%!); zero requant loss, minority VRAM −23%|PERF-Q6K-NATIVE
+Tw55|~|decode fusion stack: (a) DONE+MEASURED — SwiGLU fused into up-GEMV epilogue, token-parity EXACT (24/24) but −0.9% decode @1.1B (SwiGLU ≈1.8% of step per PERF-PREFILL-PROFILE → can't pay; lane-0 epilogue serializes); PARKED opt-in (GOAI_CUDA_FFN_FUSE=1), chain stays default; kernel+parity test kept. (b) OPEN — concurrent QKV streams in graph capture (QKV proj ≈11% of prefill = the real remaining lever). A/B each rung per §V22|PERF-FUSION-STACK
 
 ## §NEXT — open levers
+
+**GAP RESEARCH 2026-07-15 (research-lite, 3 angles + synth, all confirmed with primary
+sources): the remaining single-GPU decode lever class is llama.cpp's 2025 FUSION STACK
+(github.com/ggml-org/llama.cpp/discussions/17621): GEMV+gated-act epilogue fusion,
+RMSNorm+MUL+ADD fusion, concurrent Q/K/V streams — each <10%, cumulative +17-43% on
+RTX 4090/5090. REPO CROSS-CHECK: epilogue fusion = REAL GAP (we run gate-GEMV, up-GEMV,
+separate SwiGLU kernel; NOT the Tw39 rejection — that combined the two GEMVs, this
+fuses the activation into the GEMV epilogue); concurrent QKV streams = REAL GAP (we run
+the 3 projections sequentially; K/V GEMVs are small under GQA); residual-add fusion =
+ALREADY HAVE (QMatMulAccInto beta=1); TopK-MoE fusion = N/A (no MoE on the CUDA path);
+vLLM-V1/SGLang CPU-overhead levers = N/A (graph replay is already ~zero host overhead);
+KV-quant-for-speed = externally CONFIRMED DEAD (matches Tw53); Marlin W4A16 = PARKED
+(GEMV-parity at batch 1, pays at batch 16+ only). Booked as Tw55.**
+
+
 
 **STATE 2026-07-15 (post-Tw53): the decode-attention arc is CLOSED — Tw52 flash
 (+3.5%/+26%), Tw53 f16 KV (flat speed, −50% KV VRAM, opt-in). (b2) flash-PREFILL

@@ -54,6 +54,21 @@ func (r *ResidentBQ4K) QMatMulInto(a, out *DeviceF32) error {
 	return r.qmatmul(a, out, 0)
 }
 
+// QMatMulSwiGLUInto computes out = silu(gate) ⊙ (a·dequant(W)) — see
+// ResidentBQ8.QMatMulSwiGLUInto (Tw55 epilogue fusion).
+func (r *ResidentBQ4K) QMatMulSwiGLUInto(a, gate, out *DeviceF32) error {
+	if r.q == nil || a.ptr == nil || gate.ptr == nil || out.ptr == nil {
+		return fmt.Errorf("cuda: Q4_K QMatMulSwiGLUInto on a freed handle")
+	}
+	if a.cols != r.k || out.rows != a.rows || out.cols != r.n || gate.rows != out.rows || gate.cols != out.cols {
+		return fmt.Errorf("cuda: Q4_K QMatMulSwiGLUInto shape a[%d,%d]·B[%d,%d] gate[%d,%d]→out[%d,%d]", a.rows, a.cols, r.k, r.n, gate.rows, gate.cols, out.rows, out.cols)
+	}
+	if rc := C.cu_qmatmul_q4k_swiglu(a.ptr, r.q, gate.ptr, out.ptr, C.int(a.rows), C.int(r.k), C.int(r.n)); rc != 0 {
+		return fmt.Errorf("cuda: Q4_K swiglu matmul failed (code %d)", int(rc))
+	}
+	return nil
+}
+
 // QMatMulAccInto computes c += a·dequant(W) in place (beta=1) — fuses a transformer
 // residual add into the projection (the o and down projections).
 func (r *ResidentBQ4K) QMatMulAccInto(a, c *DeviceF32) error {
