@@ -33,7 +33,7 @@ static cublasHandle_t gHandle = NULL;
 static float *gOne = NULL, *gZero = NULL; // device 1.0f/0.0f — cuBLAS DEVICE pointer mode (graph-capture-safe alpha/beta)
 static cudaStream_t gStream = NULL;
 static CUcontext gCtx = NULL; // runtime's primary context, retained for driver-API launches
-static CUfunction gGelu = NULL, gSilu = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gQgemv = NULL, gQgemv4 = NULL, gQgemv4k = NULL, gQgemv4kPre = NULL, gQgemv5k = NULL, gQgemv6k = NULL, gQgemv3k = NULL, gQgemv2k = NULL, gQgemv40 = NULL, gQgemvI4nl = NULL, gQgemvI4xs = NULL, gQgemvMxfp4 = NULL, gQgemvI2xxs = NULL, gQgemvI2xs = NULL, gQgemvI3xxs = NULL, gQgemvI3s = NULL, gQgemvI1s = NULL, gQgemvI1m = NULL, gI8Mma = NULL, gI8MmaT = NULL, gI8MmaRb = NULL, gI8MmaDb = NULL, gI8MmaWt = NULL, gI8MmaWp = NULL, gI8Mmq = NULL, gI8MmqR = NULL, gQrowsI8 = NULL, gLdmProbe = NULL, gLdmProbe2 = NULL, gI8MmaLm = NULL, gCvtF16 = NULL, gCvtFrom16 = NULL; // lazily nvrtc-compiled
+static CUfunction gGelu = NULL, gSilu = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gRopePartial = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gQgemv = NULL, gQgemv4 = NULL, gQgemv4k = NULL, gQgemv4kPre = NULL, gQgemv5k = NULL, gQgemv6k = NULL, gQgemv3k = NULL, gQgemv2k = NULL, gQgemv40 = NULL, gQgemvI4nl = NULL, gQgemvI4xs = NULL, gQgemvMxfp4 = NULL, gQgemvI2xxs = NULL, gQgemvI2xs = NULL, gQgemvI3xxs = NULL, gQgemvI3s = NULL, gQgemvI1s = NULL, gQgemvI1m = NULL, gI8Mma = NULL, gI8MmaT = NULL, gI8MmaRb = NULL, gI8MmaDb = NULL, gI8MmaWt = NULL, gI8MmaWp = NULL, gI8Mmq = NULL, gI8MmqR = NULL, gQrowsI8 = NULL, gLdmProbe = NULL, gLdmProbe2 = NULL, gI8MmaLm = NULL, gCvtF16 = NULL, gCvtFrom16 = NULL; // lazily nvrtc-compiled
 static CUfunction gRopeDpos = NULL, gAttnSoftmaxDpos = NULL, gAppendDpos = NULL; // device-position (graph-capturable) twins
 static CUfunction gGqaFlashPart = NULL, gGqaFlashMerge = NULL; // flash decode: GQA K/V-shared split-K partials + merge
 static CUfunction gGqaFlashPartF16 = NULL, gAppendDposF16 = NULL; // f16 KV-cache twins (u16 storage, f32 compute)
@@ -611,6 +611,48 @@ int cu_rope_f32(void* x, const void* inv, int seq, int heads, int hd, int posOff
         args[5] = &posOffset;
         args[6] = &posDiv;
         rc = (cuLaunchKernel(gRope, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_rope_partial: PARTIAL rotary — rotates ONLY the first rotaryDim channels of each head
+// (rotate_half within the rotaryDim block: pair (i, i+rotaryDim/2)), leaving [rotaryDim, hd)
+// unchanged. GPT-NeoX/Phi/StableLM "partial rotary" (partial_rotary_factor<1). cu_rope_f32 is
+// the rotaryDim==hd special case. inv = resident [rotaryDim/2] freq table (from RoPEFreqs on
+// rotaryDim, so PI/YaRN scaling matches backend/ref). Angles in double.
+int cu_rope_partial(void* x, const void* inv, int seq, int heads, int hd, int rotaryDim, int posOffset, double posDiv) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (!gRopePartial && compile_kernel(
+                      "extern \"C\" __global__ void rope_partial(float* x, const float* inv, int seq, int heads, int hd, int rotaryDim, int posOffset, double posDiv){\n"
+                      "  int half = rotaryDim/2;\n"
+                      "  long total = (long)seq*heads*half;\n"
+                      "  long gid = (long)blockIdx.x*blockDim.x + threadIdx.x;\n"
+                      "  if (gid >= total) return;\n"
+                      "  int i = (int)(gid % half);\n"
+                      "  int h = (int)((gid / half) % heads);\n"
+                      "  int p = (int)(gid / ((long)half*heads));\n"
+                      "  double pos = (double)(posOffset + p) / posDiv;\n"
+                      "  double ang = pos * (double)inv[i];\n"
+                      "  double c = cos(ang), s = sin(ang);\n"
+                      "  float* xr = x + (size_t)p*heads*hd + (size_t)h*hd;\n"
+                      "  double qi = xr[i], qih = xr[i+half];\n"
+                      "  xr[i] = (float)(qi*c - qih*s);\n"
+                      "  xr[i+half] = (float)(qih*c + qi*s);\n"
+                      "}\n",
+                      "rope_partial.cu", "rope_partial", &gRopePartial) != 0) { rc = -2; goto done; }
+    {
+        long total = (long)seq * heads * (rotaryDim / 2);
+        int threads = 256, blocks = (int)((total + threads - 1) / threads);
+        if (blocks < 1) blocks = 1;
+        void* args[8];
+        args[0] = &x; args[1] = &inv; args[2] = &seq; args[3] = &heads;
+        args[4] = &hd; args[5] = &rotaryDim; args[6] = &posOffset; args[7] = &posDiv;
+        rc = (cuLaunchKernel(gRopePartial, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 done:
     pthread_mutex_unlock(&gLock);
