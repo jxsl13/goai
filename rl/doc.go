@@ -1,5 +1,6 @@
 // Package rl provides the reinforcement-learning building blocks: episodic
-// environments, return/advantage estimation, and two canonical agents.
+// environments, return/advantage estimation, and the canonical agents (REINFORCE,
+// DQN, PPO, A2C, and tabular Q-learning/SARSA).
 //
 // # For AI practitioners
 //
@@ -17,6 +18,12 @@
 //     cross-episode EMA baseline.
 //   - [DQN (deep Q-network)] — a minimal deep Q-learner (Mnih et al. 2015): replay buffer, target
 //     network, ε-greedy decay, and the replaced-entry MSE update.
+//   - [PPO] — Proximal Policy Optimization (Schulman et al. 2017): a clipped
+//     actor-critic agent with GAE advantages, the standard deep-RL workhorse.
+//   - [A2C] — the unclipped advantage-actor-critic baseline (Mnih et al. 2016).
+//   - [QLearning] / [SARSA] — the classic tabular TD-control algorithms (Watkins
+//     1989; Rummery & Niranjan 1994): off-policy vs on-policy value iteration over
+//     a Q-table.
 //
 // This is the same policy-optimization machinery that underlies RLHF for language
 // models: PPO (proximal policy optimization) with GAE advantages is the standard RLHF optimizer, and the
