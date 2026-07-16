@@ -49,8 +49,11 @@
 //     key-query convolution, StickBreakingAttention, and Aaren attention-as-RNN
 //     with O(1)-state streaming), Tokenformer/Pattention (attention over
 //     learnable, growable parameter tokens), PEER product-key retrieval over a
-//     million single-neuron experts, and the extended recurrent cells xLSTM
-//     mLSTM (matrix memory) and Griffin RG-LRU (real-gated linear recurrence).
+//     million single-neuron experts, the extended recurrent cells xLSTM
+//     mLSTM (matrix memory), Griffin RG-LRU (real-gated linear recurrence), and
+//     HGRN (hierarchically gated RNN, depth-increasing forget floor), and the
+//     linear-complexity attention approximations Linformer (low-rank length
+//     projection) and Nyströmformer (landmark Nyström approximation).
 //   - Diffusion & generative: DDPM/DDIM schedules and samplers, EDM (with
 //     preconditioning), and Flow Matching.
 //   - Self-supervised learning: Barlow Twins, DINO, SimSiam, SwAV, VICReg.
