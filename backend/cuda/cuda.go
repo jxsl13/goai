@@ -240,6 +240,28 @@ func (r *ResidentVec) Free() {
 type DeviceF32 struct {
 	ptr        unsafe.Pointer
 	rows, cols int
+	nonOwning  bool // a View aliasing another buffer's memory; Free() releases nothing
+}
+
+// View returns a non-owning DeviceF32 aliasing a [rows,cols] window of d starting at
+// element offset off (row-major). It shares d's device memory — no copy — so a fused
+// projection output (e.g. a combined QKV GEMV) can be sliced into dq/dk/dv addressable
+// handles. Free() on a view releases nothing; the caller must keep the backing buffer
+// d alive for the view's lifetime and not write past the window. off+rows*cols must fit
+// within d.
+func (d *DeviceF32) View(off, rows, cols int) (*DeviceF32, error) {
+	if d.ptr == nil {
+		return nil, fmt.Errorf("cuda: View on a freed handle")
+	}
+	if off < 0 || rows < 0 || cols < 0 || off+rows*cols > d.rows*d.cols {
+		return nil, fmt.Errorf("cuda: View(off=%d,%dx%d) out of bounds for [%d,%d]", off, rows, cols, d.rows, d.cols)
+	}
+	return &DeviceF32{
+		ptr:       unsafe.Pointer(uintptr(d.ptr) + uintptr(off)*4), // f32 = 4 bytes; device ptr, not GC-managed
+		rows:      rows,
+		cols:      cols,
+		nonOwning: true,
+	}, nil
 }
 
 // UploadF32 copies a rank-2 f32 tensor to the GPU as the start of an on-device
@@ -719,10 +741,14 @@ func (d *DeviceF32) Clone() (*DeviceF32, error) {
 	return &DeviceF32{ptr: p, rows: d.rows, cols: d.cols}, nil
 }
 
-// Free releases the device buffer. Safe to call more than once.
+// Free releases the device buffer. Safe to call more than once. A View (nonOwning)
+// releases nothing — it only aliases another buffer's memory — but still clears its
+// own pointer so later use is caught.
 func (d *DeviceF32) Free() {
 	if d.ptr != nil {
-		C.cu_free_f32(d.ptr)
+		if !d.nonOwning {
+			C.cu_free_f32(d.ptr)
+		}
 		d.ptr = nil
 	}
 }

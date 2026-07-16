@@ -4,6 +4,26 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — fused-QKV weight: +3.7% decode, bit-exact (worker linux-amd64, Tw55(b) build, 2026-07-16)
+- The re-specced slice (b), now built and measured. `fuseQKVQ4K` concatenates the
+  dequantized wq|wk|wv rows and requantizes **once** into a single Q4_K weight; the raw
+  decoder issues **one** N=(heads+2·kv)·hd GEMV instead of three. Because the first Nq
+  stacked rows encode byte-identically to wq alone, each output row is computed from
+  identical weight bytes — **token-parity is exact by construction** and verified 24/24
+  (`TestCUDAQKVFuseTokenParity`, fused vs separate, greedy TinyLlama-Q4_K).
+- **§V22 A/B — it pays** (unlike slice (a)): interleaved A,B,A,B × 5 reps
+  (`TestCUDAQKVFuseSpeedAB`) = fused **265.4** vs separate **256.0** tok/s (**+3.7%**)
+  @TinyLlama-1.1B decode. The floor measurement predicted this: folding the GQA k/v
+  projections (N=256, a starved **17%** of peak) into the q launch lifts them into the
+  q proj's ~46% occupancy regime — a real bandwidth-efficiency win, not launch-count.
+- New reusable primitive `(*DeviceF32).View(off, rows, cols)`: a **zero-copy, non-owning**
+  alias into a device buffer (Free releases nothing), so the fused output slices into
+  dq/dk/dv addressable handles without a copy. `Free()` gained a `nonOwning` guard.
+- **Opt-in** (`GOAI_CUDA_QKV_FUSE=1`), currently the **Q4_K + no-bias (llama)** path only
+  — forcing it on a Q8 decoder would silently downgrade QKV to Q4_K. Follow-up booked:
+  make the fusion format-aware (Q8 too) + apply the concatenated qwen2 bias + wire into
+  the production `llamagpu` decoder (this win lives in the raw-decode harness for now).
+
 ### CUDA — decode-GEMV bandwidth floor: refutes concurrent-QKV-streams, re-specs slice (b) as fused-QKV weight (worker linux-amd64, Tw55(b) measurement, 2026-07-16)
 - `BenchmarkGemvQ4K_2048x256` added (GQA k/v shape) completes the decode-GEMV bandwidth
   table on the RTX 3060 (peak ≈360 GB/s): k/v N=256 = **17%** of peak, q/o N=2048 = 46%,

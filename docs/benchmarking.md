@@ -1193,14 +1193,23 @@ starved N=256 K/V rows stay at 17%. The real lever the data points to is **occup
 weight fusion**: concatenate wq|wk|wv into one N=2560 GEMV. That lifts the 17%-efficient
 K/V rows into the ~46%+ regime and reads the shared activation once. Per-layer arithmetic:
 q(14154)+k(4851)+v(4851) = 23856 ns → one N=2560 GEMV ≈ 17.7 µs at Q's 46%, saving
-~6.2 µs/layer × 22 layers ≈ **~4% decode** (a conservative estimate — N=2560 > 2048 runs
-slightly hotter than 46%). Booked as the re-specified Tw55(b): fused-QKV weight (stack the
-dequantized rows, requantize once, one resident buffer), sliced back into dq/dk/dv via
-zero-copy device views. Same finding sizes the FFN opportunity: gate/up/down are ~73% of
-decode time at only ~53% of peak — the larger, harder lever (a genuine memory-schedule
-rewrite, e.g. split-K), tracked separately.
+~6.2 µs/layer × 22 layers ≈ ~4% decode.
 
-Repro: `go test -tags cuda -run '^$' -bench BenchmarkGemvQ4K ./backend/cuda/`.
+**Built and measured — it pays.** `fuseQKVQ4K` stacks the dequantized wq|wk|wv rows,
+requantizes once into a single Q4_K weight, and the raw decoder issues one
+N=(heads+2·kv)·hd GEMV; dq/dk/dv are zero-copy `(*DeviceF32).View`s into the combined
+output. Because the first Nq stacked rows encode byte-identically to wq alone, the fused
+GEMV is bit-exact per row — `TestCUDAQKVFuseTokenParity` confirms 24/24 tokens identical.
+The interleaved A/B (`TestCUDAQKVFuseSpeedAB`, 5 reps) lands at fused **265.4** vs separate
+**256.0 tok/s = +3.7%** @TinyLlama-1.1B — close to the estimate, and a genuine win where
+the Tw55(a) SwiGLU-epilogue fusion was −0.9%. Opt-in via `GOAI_CUDA_QKV_FUSE=1` (Q4_K +
+no-bias path for now; generalization to Q8 / qwen2 bias / the production `llamagpu` decoder
+is booked as Tw57). Same finding sizes the bigger FFN opportunity: gate/up/down are ~73%
+of decode time at only ~53% of peak — the larger, harder lever (a genuine memory-schedule
+rewrite, e.g. split-K), tracked as Tw56.
+
+Repro: `go test -tags cuda -run '^$' -bench BenchmarkGemvQ4K ./backend/cuda/`;
+`go test -tags cuda -run 'TestCUDAQKVFuse' ./backend/cuda/`.
 
 ## Further reading
 

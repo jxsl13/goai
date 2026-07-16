@@ -42,6 +42,7 @@ type rawLayer struct {
 	gAttn, gFFN    *cuda.ResidentVec
 	bq, bk, bv     *cuda.ResidentVec // QKV bias (qwen2); nil for the llama family
 	wq, wk, wv, wo qProj
+	wqkv           qProj // fused Q4_K wq|wk|wv (Tw55(b), GOAI_CUDA_QKV_FUSE=1); nil unless fusing
 	wg, wu, wd     qProj
 	cache          *cuda.KVCache    // f32 cache (chain + flash paths)
 	cacheF         *cuda.KVCacheF16 // f16 cache (GOAI_CUDA_KV=f16, flash-only)
@@ -50,6 +51,47 @@ type rawLayer struct {
 // kvF16 selects the f16 KV cache (half the K/V bytes — the flash kernel's
 // bandwidth currency). Opt-in while the A/B runs; flipped by measurement.
 func kvF16() bool { return os.Getenv("GOAI_CUDA_KV") == "f16" }
+
+// qkvFuse selects the fused-QKV weight path (Tw55(b)): wq|wk|wv concatenated into ONE
+// N=(heads+2·kv)·hd Q4_K GEMV instead of three. The floor measurement
+// (docs/benchmarking.md) found the GEMV latency-bound at small N — the GQA k/v
+// projection (N=256) runs at only 17% of peak vs the q proj's 46% — so folding the
+// starved k/v rows into the q launch lifts their occupancy. Opt-in while the A/B runs.
+func qkvFuse() bool { return os.Getenv("GOAI_CUDA_QKV_FUSE") == "1" }
+
+// stackRows0 concatenates output-major [Ni,K] f32 weight tensors along axis 0 into one
+// [ΣNi,K] tensor (row-major, so a plain storage append). Feeding this to the Q4_K
+// encoder yields blocks whose first Nq rows are byte-identical to encoding wq alone —
+// the fused GEMV is therefore bit-exact per output row vs the three separate GEMVs.
+func stackRows0(ts ...*tensor.Tensor) *tensor.Tensor {
+	k := ts[0].Shape()[1]
+	ntot := 0
+	for _, t := range ts {
+		ntot += t.Shape()[0]
+	}
+	out := tensor.New(tensor.F32, tensor.Shape{ntot, k})
+	of := out.Storage().F32()
+	off := 0
+	for _, t := range ts {
+		s := t.Contiguous().Storage().F32()
+		copy(of[off:off+len(s)], s)
+		off += len(s)
+	}
+	return out
+}
+
+// fuseQKVQ4K builds one fused Q4_K projection over the stacked [Nq+Nk+Nv,K] weight.
+// Only the Q4_K format is fused (the format the A/B and parity tests exercise); the
+// caller falls back to three separate projections otherwise.
+func fuseQKVQ4K(wq, wk, wv *tensor.Tensor) (qProj, error) {
+	stacked := stackRows0(wq, wk, wv)
+	n, k := stacked.Shape()[0], stacked.Shape()[1]
+	blocks, err := gguf.Quantize(stacked, gguf.Q4_K)
+	if err != nil {
+		return nil, err
+	}
+	return cuda.NewResidentBQ4KFromBlocks(blocks, k, n)
+}
 
 // swigluProj is the optional SwiGLU-epilogue capability of a quantized projection
 // (Tw55): out = silu(gate) ⊙ (a·W) in one GEMV launch. Q8 and Q4_K implement it —
@@ -70,6 +112,7 @@ type rawGraphDecoder struct {
 	pos                *cuda.DevicePos
 	inv                *cuda.DeviceF32
 	dx, dh, dh2        *cuda.DeviceF32
+	dqkv               *cuda.DeviceF32 // fused QKV output buffer (Tw55(b)); dq/dk/dv are Views into it
 	dq, dk, dv, da     *cuda.DeviceF32
 	dgate, dup, scores *cuda.DeviceF32
 	logits             *cuda.DeviceF32
@@ -154,8 +197,21 @@ func buildRawGraphDecoder(tb testing.TB, rf *gguf.RawFile, arch string, maxSeq i
 	gd.inv, err = cuda.BuildRoPEInv(hd, gd.ropeBase)
 	mustTB(tb, err)
 	gd.dx, gd.dh, gd.dh2 = buf(1, dim), buf(1, dim), buf(1, dim)
-	gd.dq, gd.da = buf(1, wq), buf(1, wq)
-	gd.dk, gd.dv = buf(1, wkv), buf(1, wkv)
+	gd.da = buf(1, wq)
+	if qkvFuse() {
+		// One contiguous QKV buffer; dq/dk/dv are zero-copy Views into it so the
+		// fused N=wq+2·wkv GEMV writes all three in a single launch (Tw55(b)).
+		gd.dqkv = buf(1, wq+2*wkv)
+		gd.dq, err = gd.dqkv.View(0, 1, wq)
+		mustTB(tb, err)
+		gd.dk, err = gd.dqkv.View(wq, 1, wkv)
+		mustTB(tb, err)
+		gd.dv, err = gd.dqkv.View(wq+wkv, 1, wkv)
+		mustTB(tb, err)
+	} else {
+		gd.dq = buf(1, wq)
+		gd.dk, gd.dv = buf(1, wkv), buf(1, wkv)
+	}
 	gd.dgate, gd.dup = buf(1, hidden), buf(1, hidden)
 	gd.scores = buf(1, heads*maxSeq)
 	gd.logits = buf(1, rf.Tensors["output.weight"].Shape[0])
@@ -174,14 +230,20 @@ func buildRawGraphDecoder(tb testing.TB, rf *gguf.RawFile, arch string, maxSeq i
 			mustTB(tb, c.ZeroCache())
 			c.SetLen(maxSeq)
 		}
+		_, hasBias := rf.Tensors[p+"attn_q.bias"]
 		l := &rawLayer{
 			gAttn: vec(p + "attn_norm.weight"), gFFN: vec(p + "ffn_norm.weight"),
-			wq: q(p + "attn_q.weight"), wk: q(p + "attn_k.weight"),
-			wv: q(p + "attn_v.weight"), wo: q(p + "attn_output.weight"),
+			wo: q(p + "attn_output.weight"),
 			wg: q(p + "ffn_gate.weight"), wu: q(p + "ffn_up.weight"), wd: q(p + "ffn_down.weight"),
 			cache: c, cacheF: cf,
 		}
-		if _, ok := rf.Tensors[p+"attn_q.bias"]; ok { // qwen2 QKV bias
+		if qkvFuse() && !hasBias { // fused Q4_K QKV (Tw55(b)); bias'd families (qwen2) stay separate for now
+			l.wqkv, err = fuseQKVQ4K(deq(p+"attn_q.weight"), deq(p+"attn_k.weight"), deq(p+"attn_v.weight"))
+			mustTB(tb, err)
+		} else {
+			l.wq, l.wk, l.wv = q(p+"attn_q.weight"), q(p+"attn_k.weight"), q(p+"attn_v.weight")
+		}
+		if hasBias { // qwen2 QKV bias
 			l.bq, l.bk, l.bv = vec(p+"attn_q.bias"), vec(p+"attn_k.bias"), vec(p+"attn_v.bias")
 		}
 		gd.layers[i] = l
@@ -192,9 +254,13 @@ func buildRawGraphDecoder(tb testing.TB, rf *gguf.RawFile, arch string, maxSeq i
 func (gd *rawGraphDecoder) forwardBody(tb testing.TB) {
 	for _, l := range gd.layers {
 		mustTB(tb, gd.dx.RMSNormInto(l.gAttn, float32(gd.eps), gd.dh))
-		mustTB(tb, l.wq.QMatMulInto(gd.dh, gd.dq))
-		mustTB(tb, l.wk.QMatMulInto(gd.dh, gd.dk))
-		mustTB(tb, l.wv.QMatMulInto(gd.dh, gd.dv))
+		if l.wqkv != nil { // Tw55(b) fused: one N=(heads+2·kv)·hd GEMV; dq/dk/dv View into dqkv
+			mustTB(tb, l.wqkv.QMatMulInto(gd.dh, gd.dqkv))
+		} else {
+			mustTB(tb, l.wq.QMatMulInto(gd.dh, gd.dq))
+			mustTB(tb, l.wk.QMatMulInto(gd.dh, gd.dk))
+			mustTB(tb, l.wv.QMatMulInto(gd.dh, gd.dv))
+		}
 		if l.bq != nil {
 			mustTB(tb, gd.dq.AddBias(l.bq))
 			mustTB(tb, gd.dk.AddBias(l.bk))
@@ -270,8 +336,12 @@ func (gd *rawGraphDecoder) free() {
 	if gd.graph != nil {
 		gd.graph.Free()
 	}
-	for _, d := range []*cuda.DeviceF32{gd.dx, gd.dh, gd.dh2, gd.dq, gd.dk, gd.dv, gd.da, gd.dgate, gd.dup, gd.scores, gd.logits, gd.inv} {
-		d.Free()
+	// dqkv (fused) owns the QKV memory; dq/dk/dv are Views into it (Free is a no-op).
+	// When not fusing, dqkv is nil and dq/dk/dv own separate buffers.
+	for _, d := range []*cuda.DeviceF32{gd.dx, gd.dh, gd.dh2, gd.dqkv, gd.dq, gd.dk, gd.dv, gd.da, gd.dgate, gd.dup, gd.scores, gd.logits, gd.inv} {
+		if d != nil {
+			d.Free()
+		}
 	}
 	for _, l := range gd.layers {
 		l.gAttn.Free()
@@ -287,8 +357,10 @@ func (gd *rawGraphDecoder) free() {
 				b.Free()
 			}
 		}
-		for _, w := range []qProj{l.wq, l.wk, l.wv, l.wo, l.wg, l.wu, l.wd} {
-			w.Free()
+		for _, w := range []qProj{l.wq, l.wk, l.wv, l.wqkv, l.wo, l.wg, l.wu, l.wd} {
+			if w != nil {
+				w.Free()
+			}
 		}
 	}
 }
