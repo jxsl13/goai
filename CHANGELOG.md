@@ -4,6 +4,21 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — decode-GEMV arc closed: the Q4_K GEMV is at a Pareto ceiling (worker linux-amd64, Tw59, 2026-07-16)
+- The last decode-GEMV idea: if the scale-decode is the ALU cost (Tw58), precompute it. Built
+  a pre-dequantized-scale layout (192-byte blocks: 128 nibbles + 8 f32 `d·sc` + 8 f32
+  `dmin·m`), re-encoded on-device so it is **bit-exact** (maxAbs 0 vs the ggml kernel). The
+  kernel's bandwidth leapt to **256-305 GB/s** (from 197, near the 285 memory floor),
+  *confirming* the scale-decode was the ALU limiter — but the **+33% weight bytes** (0.75 vs
+  0.5625 B/w) tax the wall-clock: µs/op gate/up +2.5%, down +7.5%, q/o +5%, head −5% (only the
+  vocab head wins). Net loss on the FFN shapes. Discarded.
+- **Arc conclusion (four convergent probes — split-K, dp4a, memory-floor, PDS):** the ggml
+  Q4_K decode GEMV sits at a genuine **Pareto ceiling** — its 144-byte ALU-vs-bytes balance is
+  near-optimal on GA106. Removing any one cost adds another. Further decode wins need a
+  different axis (lower-bit quant), but the far higher-value lever is now **prefill** (the ~4×
+  gap to llama.cpp; int8 tensor cores / MMQ). The worker pivots to prefill next. Full data and
+  the four-probe story are in `docs/benchmarking.md`.
+
 ### CUDA — dp4a built & rejected: the decode ALU is scale-decode-bound, not multiply-bound (worker linux-amd64, Tw58, 2026-07-16)
 - The memory-floor probe's ~1.5× headroom read naturally as "cut the f32 multiply with int8
   `__dp4a`" (llama.cpp's MMVQ). Built it: quantize the activation to int8 per 32-block

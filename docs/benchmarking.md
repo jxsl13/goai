@@ -1283,6 +1283,24 @@ scale-decode ALU — e.g. store the 8 per-sub-block scales pre-dequantized as f3
 kernel is definitively at its ceiling and the pivot is prefill (f16/tensor-core, the ~4×
 gap) or lower-bit quant.**
 
+**Tw59 — remove the scale-decode ALU directly, and hit the Pareto wall.** If the scale-decode
+is the bottleneck, precompute it: re-encode Q4_K into a 192-byte block (128 nibble bytes +
+8 f32 `d·sc` + 8 f32 `dmin·m`) so the GEMV *loads* the sub-block scales instead of decoding
+them (no f16 decode / 6-bit unpack / shfl). Built it (device re-encode, so it is **bit-exact**
+— maxAbs 0 vs the ggml kernel). The kernel's bandwidth leapt to **256-305 GB/s** (vs 197 —
+near the 285 memory floor), *confirming* the scale-decode was the ALU limiter. But the +33%
+weight bytes (0.75 vs 0.5625 B/w) tax the wall-clock: PDS vs Q4_K µs/op — gate/up 33.7 vs 32.9
+(+2.5%), down 36.6 vs 34.0 (+7.5%), q/o 14.9 vs 14.2 (+5%), head **161 vs 170 (−5%)**. Only the
+vocab head (biggest, most bandwidth-favorable) wins; the FFN shapes lose — the extra bytes
+outweigh the ALU saved. Discarded (measured & rejected).
+
+**Conclusion of the decode-GEMV arc (four convergent probes).** The ggml Q4_K decode GEMV sits
+at a genuine **Pareto ceiling**: split-K can't add useful parallelism (not latency-bound); dp4a
+can't help (the multiply isn't the cost); the scale-decode *is* the ALU cost, but removing it
+costs bandwidth that cancels the gain. Its 144-byte ALU-vs-bytes balance is near-optimal on
+GA106. Further decode wins must come from a different axis — lower-bit quant (fewer bytes) or,
+far higher-value, the **prefill** path (the ~4× gap to llama.cpp; int8 tensor cores / MMQ).
+
 Repro: `go test -tags cuda -run '^$' -bench BenchmarkGemvQ4K ./backend/cuda/`;
 `go test -tags cuda -run 'TestCUDA(QKV|GateUp)Fuse' ./backend/cuda/`.
 
