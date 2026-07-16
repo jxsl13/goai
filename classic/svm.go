@@ -3,7 +3,6 @@ package classic
 import (
 	"fmt"
 	"math"
-	"math/rand"
 )
 
 // SVMKernel selects the kernel function K(x,z) an [SVC] uses to measure
@@ -91,12 +90,15 @@ func WithSVMCoef0(c float64) SVMOption { return func(cfg *svmConfig) { cfg.coef0
 // as in libsvm/sklearn).
 func WithSVMTol(tol float64) SVMOption { return func(cfg *svmConfig) { cfg.tol = tol } }
 
-// WithSVMMaxIter caps the number of SMO outer passes (default 5000). Each pass
-// sweeps the training set; the solver stops early once no KKT violator remains.
+// WithSVMMaxIter caps the SMO work (default 5000). The solver stops early once
+// no KKT violator remains beyond the tolerance; the cap is a safety limit on
+// the number of working-set steps (scaled up with n internally so it never
+// under-runs convergence on larger problems).
 func WithSVMMaxIter(n int) SVMOption { return func(cfg *svmConfig) { cfg.maxIter = n } }
 
-// WithSVMSeed sets the seed for the (deterministic) tie-breaking order in which
-// SMO scans candidate pairs (default 0). Fixing it makes fits reproducible.
+// WithSVMSeed is retained for API compatibility (default 0). The second-order
+// working-set selection is fully deterministic, so fits are reproducible
+// regardless of the seed.
 func WithSVMSeed(s int64) SVMOption { return func(cfg *svmConfig) { cfg.seed = s } }
 
 // SVC is a binary Support Vector Classifier. It solves the soft-margin dual
@@ -104,13 +106,16 @@ func WithSVMSeed(s int64) SVMOption { return func(cfg *svmConfig) { cfg.seed = s
 //	maximize   Σ αᵢ − ½ ΣᵢΣⱼ αᵢαⱼ yᵢyⱼ K(xᵢ,xⱼ)
 //	subject to 0 ≤ αᵢ ≤ C   and   Σᵢ αᵢyᵢ = 0
 //
-// by Platt's Sequential Minimal Optimization (SMO) — the same method
-// libsvm/scikit-learn use (Platt, "Sequential Minimal Optimization: A Fast
-// Algorithm for Training Support Vector Machines", MSR-TR-98-14, 1998). SMO
-// repeatedly picks a pair (i,j), solves the two-variable sub-problem
-// analytically with the box/equality clipping, and updates the bias b. Because
-// the dual is convex it converges to the global optimum, so predictions agree
-// with libsvm/sklearn (§V golden parity).
+// by Sequential Minimal Optimization (SMO) with the second-order
+// working-set selection libsvm/scikit-learn use (Platt, "Sequential Minimal
+// Optimization", MSR-TR-98-14, 1998; Fan, Chen & Lin, "Working Set Selection
+// Using Second Order Information for Training SVM", JMLR 2005). Each step picks
+// the maximal-violating pair (i,j) from a maintained gradient, solves the
+// two-variable sub-problem analytically with box/equality clipping, and only
+// the two selected kernel columns are (lazily, cached) evaluated — so a step is
+// O(n) and the full O(n²) Gram matrix is never materialized. Because the dual
+// is convex it converges to the global optimum, so predictions agree with
+// libsvm/sklearn (§V golden parity).
 //
 // The prediction rule is the sign of the decision function
 //
@@ -252,20 +257,13 @@ func (m *SVC) Fit(x [][]float64, y []float64) error {
 		}
 	}
 
-	// precompute the Gram matrix (test-scale n; O(n²d) is fine)
-	gram := make([][]float64, n)
-	for i := range gram {
-		gram[i] = make([]float64, n)
-	}
-	for i := range n {
-		for j := i; j < n; j++ {
-			k := m.kernel(x[i], x[j])
-			gram[i][j] = k
-			gram[j][i] = k
-		}
-	}
-
-	alpha, b := m.smo(gram, yi, n)
+	// SMO with a lazy, bounded kernel-column cache (libsvm-style). Instead of
+	// materializing the full O(n²) Gram matrix up front — the bulk of which is
+	// never touched — kernel columns K(:,i) are computed on demand and cached,
+	// so the solver only pays for the columns of the indices it actually selects
+	// into a working set (≈ the support vectors + KKT violators).
+	cache := newKernelCache(m, x, n)
+	alpha, b := m.smo(cache, yi, n)
 
 	// keep support vectors (αᵢ > 0) in original index order
 	m.sv = m.sv[:0]
@@ -289,28 +287,147 @@ func (m *SVC) Fit(x [][]float64, y []float64) error {
 	return nil
 }
 
-// smo runs Platt's SMO and returns the dual variables α and the bias b such
-// that f(x)=Σ αᵢyᵢK(xᵢ,x)+b. It maintains an error cache Eᵢ=f(xᵢ)−yᵢ that is
-// updated incrementally after every accepted step.
-func (m *SVC) smo(gram [][]float64, y []float64, n int) ([]float64, float64) {
+// kernelCache lazily computes and caches kernel columns K(:,i) for the SMO
+// solver. Only the columns of indices the solver actually selects into a
+// working set are ever materialized, so a well-separated problem pays for a
+// small fraction of the full O(n²) Gram matrix. The cache is bounded (FIFO
+// eviction past a memory budget) and single-threaded, so it needs no locking.
+type kernelCache struct {
+	m     *SVC
+	x     [][]float64
+	n     int
+	diag  []float64 // K(xᵢ,xᵢ), precomputed (the QP curvature diagonal)
+	cols  map[int][]float64
+	order []int // FIFO insertion order for eviction
+	cap   int   // max cached columns (0 ⇒ unbounded)
+}
+
+func newKernelCache(m *SVC, x [][]float64, n int) *kernelCache {
+	kc := &kernelCache{m: m, x: x, n: n, cols: make(map[int][]float64), diag: make([]float64, n)}
+	for i := range n {
+		kc.diag[i] = m.kernel(x[i], x[i])
+	}
+	// Bound the cache to ~64 MB of columns (each column is 8n bytes). This
+	// comfortably holds every column a well-separated fit touches while
+	// capping worst-case memory; a miss merely recomputes, never wrong.
+	const budgetBytes = 64 << 20
+	c := budgetBytes / (8 * n)
+	if c < 256 {
+		c = 256
+	}
+	if c > n {
+		c = n
+	}
+	kc.cap = c
+	return kc
+}
+
+// column returns K(:,i): K(xᵢ,xₜ) for every t, computing and caching on a miss.
+func (kc *kernelCache) column(i int) []float64 {
+	if col, ok := kc.cols[i]; ok {
+		return col
+	}
+	col := make([]float64, kc.n)
+	xi := kc.x[i]
+	for t := range kc.n {
+		col[t] = kc.m.kernel(xi, kc.x[t])
+	}
+	if kc.cap > 0 && len(kc.cols) >= kc.cap {
+		evict := kc.order[0]
+		kc.order = kc.order[1:]
+		delete(kc.cols, evict)
+	}
+	kc.cols[i] = col
+	kc.order = append(kc.order, i)
+	return col
+}
+
+// smo solves the soft-margin dual by libsvm-style SMO and returns the dual
+// variables α together with the threshold ρ such that the decision function is
+// f(x)=Σ αᵢyᵢK(xᵢ,x) − ρ (Fit exposes intercept = −ρ).
+//
+// It maintains the gradient of the dual objective through the error vector
+// eᵢ = u(xᵢ) − yᵢ where u(x)=Σⱼ αⱼyⱼK(xⱼ,x). Because −yᵢGᵢ = b − eᵢ for a common
+// b, the maximal-violating pair (Fan et al.'s second-order working-set
+// selection, JMLR 2005 — the rule libsvm uses) reduces to ranking eᵢ over the
+// up/low index sets, so each step is O(n) and touches only two kernel columns.
+// The dual is convex, so this reaches the same global optimum as libsvm/sklearn
+// (§V golden parity), just via a different iteration order.
+func (m *SVC) smo(kc *kernelCache, y []float64, n int) ([]float64, float64) {
 	C := m.cfg.c
 	tol := m.cfg.tol
 	alpha := make([]float64, n)
-	b := 0.0
-	// f(x)=Σαy K + b, initially 0 ⇒ E_i = -y_i
-	errc := make([]float64, n)
+	// e_i = u(x_i) − y_i; with α = 0, u ≡ 0 ⇒ e_i = −y_i.
+	e := make([]float64, n)
 	for i := range n {
-		errc[i] = -y[i]
+		e[i] = -y[i]
 	}
-	rng := rand.New(rand.NewSource(m.cfg.seed))
+	const tau = 1e-12
 
-	takeStep := func(i1, i2 int) bool {
-		if i1 == i2 {
-			return false
+	// The working set is chosen from two index sets:
+	//   I_up  : (y=+1 ∧ α<C) ∨ (y=−1 ∧ α>0)
+	//   I_low : (y=+1 ∧ α>0) ∨ (y=−1 ∧ α<C)
+	// i = argmin_{I_up} e (the maximal violator), j = the I_low index giving the
+	// greatest objective decrease. Stop when max_{I_low} e − min_{I_up} e < tol.
+	maxSteps := m.cfg.maxIter
+	if lim := 100 * n; maxSteps < lim {
+		maxSteps = lim // WSS steps are single pairs, not sweeps; ensure room to converge
+	}
+
+	for step := 0; step < maxSteps; step++ {
+		// pass 1: select i over I_up and track the I_low maximum for stopping
+		iUp := -1
+		eUpMin := math.Inf(1)
+		eLowMax := math.Inf(-1)
+		for t := range n {
+			at := alpha[t]
+			if (y[t] > 0 && at < C) || (y[t] < 0 && at > 0) { // I_up
+				if e[t] <= eUpMin {
+					eUpMin = e[t]
+					iUp = t
+				}
+			}
+			if (y[t] > 0 && at > 0) || (y[t] < 0 && at < C) { // I_low
+				if e[t] > eLowMax {
+					eLowMax = e[t]
+				}
+			}
 		}
-		a1, a2 := alpha[i1], alpha[i2]
-		y1, y2 := y[i1], y[i2]
-		E1, E2 := errc[i1], errc[i2]
+		if iUp < 0 || eLowMax-eUpMin < tol {
+			break // KKT satisfied to tolerance
+		}
+
+		// pass 2: second-order selection of j over I_low
+		i := iUp
+		Ki := kc.column(i)
+		Kii := kc.diag[i]
+		jLow := -1
+		objMin := math.Inf(1)
+		for t := range n {
+			at := alpha[t]
+			if (y[t] > 0 && at > 0) || (y[t] < 0 && at < C) { // I_low
+				gradDiff := e[t] - eUpMin
+				if gradDiff > 0 {
+					eta := Kii + kc.diag[t] - 2*Ki[t]
+					if eta <= 0 {
+						eta = tau
+					}
+					obj := -(gradDiff * gradDiff) / eta
+					if obj <= objMin {
+						objMin = obj
+						jLow = t
+					}
+				}
+			}
+		}
+		if jLow < 0 {
+			break
+		}
+		j := jLow
+
+		// two-variable analytic sub-problem on (i, j)
+		a1, a2 := alpha[i], alpha[j]
+		y1, y2 := y[i], y[j]
 		s := y1 * y2
 		var L, H float64
 		if y1 != y2 {
@@ -321,40 +438,23 @@ func (m *SVC) smo(gram [][]float64, y []float64, n int) ([]float64, float64) {
 			H = math.Min(C, a2+a1)
 		}
 		if L >= H {
-			return false
+			continue
 		}
-		k11, k12, k22 := gram[i1][i1], gram[i1][i2], gram[i2][i2]
-		eta := k11 + k22 - 2*k12
-		var a2new float64
-		if eta > 0 {
-			a2new = a2 + y2*(E1-E2)/eta
-			if a2new < L {
-				a2new = L
-			} else if a2new > H {
-				a2new = H
-			}
-		} else {
-			// non-positive curvature: evaluate the objective at both ends
-			f1 := y1*(E1+b) - a1*k11 - s*a2*k12
-			f2 := y2*(E2+b) - s*a1*k12 - a2*k22
-			L1 := a1 + s*(a2-L)
-			H1 := a1 + s*(a2-H)
-			lObj := L1*f1 + L*f2 + 0.5*L1*L1*k11 + 0.5*L*L*k22 + s*L*L1*k12
-			hObj := H1*f1 + H*f2 + 0.5*H1*H1*k11 + 0.5*H*H*k22 + s*H*H1*k12
-			switch {
-			case lObj < hObj-1e-12:
-				a2new = L
-			case lObj > hObj+1e-12:
-				a2new = H
-			default:
-				a2new = a2
-			}
+		eta := Kii + kc.diag[j] - 2*Ki[j]
+		if eta <= 0 {
+			eta = tau
+		}
+		a2new := a2 + y2*(e[i]-e[j])/eta
+		if a2new < L {
+			a2new = L
+		} else if a2new > H {
+			a2new = H
 		}
 		if math.Abs(a2new-a2) < 1e-12*(a2new+a2+1e-12) {
-			return false
+			continue
 		}
 		a1new := a1 + s*(a2-a2new)
-		// guard tiny negative from round-off
+		// guard tiny box violations from round-off
 		if a1new < 0 {
 			a2new += s * a1new
 			a1new = 0
@@ -363,106 +463,53 @@ func (m *SVC) smo(gram [][]float64, y []float64, n int) ([]float64, float64) {
 			a1new = C
 		}
 
-		// bias update
-		b1 := E1 + y1*(a1new-a1)*k11 + y2*(a2new-a2)*k12 + b
-		b2 := E2 + y1*(a1new-a1)*k12 + y2*(a2new-a2)*k22 + b
-		var bnew float64
-		switch {
-		case a1new > 0 && a1new < C:
-			bnew = b1
-		case a2new > 0 && a2new < C:
-			bnew = b2
-		default:
-			bnew = (b1 + b2) / 2
-		}
-		deltaB := bnew - b
-
-		// error-cache update: ΔE_i = y1·Δα1·K(i1,i)+y2·Δα2·K(i2,i) − Δb
+		// incremental gradient update: e_t += y1·Δα1·K(i,t) + y2·Δα2·K(j,t)
 		d1 := y1 * (a1new - a1)
 		d2 := y2 * (a2new - a2)
-		for i := range n {
-			errc[i] += d1*gram[i1][i] + d2*gram[i2][i] - deltaB
+		Kj := kc.column(j)
+		for t := range n {
+			e[t] += d1*Ki[t] + d2*Kj[t]
 		}
-		alpha[i1] = a1new
-		alpha[i2] = a2new
-		b = bnew
-		return true
+		alpha[i] = a1new
+		alpha[j] = a2new
 	}
 
-	examine := func(i2 int) bool {
-		y2 := y[i2]
-		a2 := alpha[i2]
-		E2 := errc[i2]
-		r2 := E2 * y2
-		if !((r2 < -tol && a2 < C) || (r2 > tol && a2 > 0)) {
-			return false // satisfies KKT within tol
-		}
-		// collect non-bound indices
-		nonBound := make([]int, 0, n)
-		for i := range n {
-			if alpha[i] > 0 && alpha[i] < C {
-				nonBound = append(nonBound, i)
-			}
-		}
-		// second-choice heuristic: maximize |E1 − E2|
-		if len(nonBound) > 1 {
-			best, bestDelta := -1, -1.0
-			for _, i1 := range nonBound {
-				delta := math.Abs(errc[i1] - E2)
-				if delta > bestDelta {
-					bestDelta, best = delta, i1
-				}
-			}
-			if best >= 0 && takeStep(best, i2) {
-				return true
-			}
-		}
-		// then all non-bound, in a deterministic random order
-		for _, i1 := range perm(rng, nonBound) {
-			if takeStep(i1, i2) {
-				return true
-			}
-		}
-		// then the whole set, random order
-		for _, i1 := range rng.Perm(n) {
-			if takeStep(i1, i2) {
-				return true
-			}
-		}
-		return false
-	}
-
-	numChanged := 0
-	examineAll := true
-	for pass := 0; (numChanged > 0 || examineAll) && pass < m.cfg.maxIter; pass++ {
-		numChanged = 0
-		if examineAll {
-			for i := range n {
-				if examine(i) {
-					numChanged++
-				}
-			}
-		} else {
-			for i := range n {
-				if alpha[i] > 0 && alpha[i] < C && examine(i) {
-					numChanged++
-				}
-			}
-		}
-		if examineAll {
-			examineAll = false
-		} else if numChanged == 0 {
-			examineAll = true
-		}
-	}
-	return alpha, b
+	return alpha, m.calcRho(alpha, e, y, n)
 }
 
-// perm returns a deterministic random permutation of idx (copy; idx untouched).
-func perm(rng *rand.Rand, idx []int) []int {
-	out := append([]int(nil), idx...)
-	rng.Shuffle(len(out), func(i, j int) { out[i], out[j] = out[j], out[i] })
-	return out
+// calcRho recovers the decision threshold ρ from the converged dual, averaging
+// the gradient over free support vectors (0 < αᵢ < C) and falling back to the
+// midpoint of the bounding KKT gap when there are none (libsvm's rule). Note
+// eᵢ = u(xᵢ) − yᵢ = yᵢGᵢ, the per-sample gradient libsvm's calc_rho uses.
+func (m *SVC) calcRho(alpha, e, y []float64, n int) float64 {
+	C := m.cfg.c
+	ub, lb := math.Inf(1), math.Inf(-1)
+	var sumFree float64
+	nFree := 0
+	for i := range n {
+		yG := e[i]
+		switch {
+		case alpha[i] >= C: // upper bound
+			if y[i] < 0 {
+				ub = math.Min(ub, yG)
+			} else {
+				lb = math.Max(lb, yG)
+			}
+		case alpha[i] <= 0: // lower bound
+			if y[i] > 0 {
+				ub = math.Min(ub, yG)
+			} else {
+				lb = math.Max(lb, yG)
+			}
+		default: // free
+			nFree++
+			sumFree += yG
+		}
+	}
+	if nFree > 0 {
+		return sumFree / float64(nFree)
+	}
+	return (ub + lb) / 2
 }
 
 // twoLabels reports the two distinct label values (neg=smaller, pos=larger) and

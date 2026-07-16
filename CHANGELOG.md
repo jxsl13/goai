@@ -23,6 +23,16 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   32 u16 qs words). Grid reconstructed the same way; kernel lane = qs word (8 elements each). Parity
   rel **9.8e-8**, bit-exact, first try. `quantDirect case 17` wired. The remaining grid i-quants
   (IQ3_XXS, IQ3_S, IQ1) are the same-mechanism follow-ups.
+### classic — performance: SVC fit now matches libsvm (T713, 2026-07-16)
+
+A perf grind against the sklearn/libsvm incumbent. SVC's `Fit` was eagerly materializing
+the full n² Gram matrix (≈the whole fit time at n=4000), making it **38× slower than
+libsvm**. Replaced with the libsvm approach — a lazy bounded kernel-column cache (the
+full Gram is never allocated), an incremental gradient, and second-order working-set
+selection. Result: **217 ms → 7.3 ms at n=4000 (30×), now ~1.3× of libsvm** (was 38×).
+Correctness *tightened* — the solver is now libsvm's exact algorithm, so every SVC
+golden/property test stays green (predictions 100% match, SV counts exact).
+
 ### classic — round 13: k-NN, Naive Bayes, GMM, DBSCAN (T710, 2026-07-16)
 
 Four more foundational classical methods, completing the classic package's baseline set
