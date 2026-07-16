@@ -1,0 +1,195 @@
+package nlp
+
+import (
+	"fmt"
+	"math"
+
+	"github.com/jxsl13/goai/backend"
+	"github.com/jxsl13/goai/nn"
+	"github.com/jxsl13/goai/tensor"
+)
+
+// GraniteMoE is IBM's Granite sparse-Mixture-of-Experts decoder (transformers'
+// GraniteMoeForCausalLM). It is the MoE sibling of the dense [Llama]-plus-Granite-scalars
+// path (see [GraniteFromHF]): the attention is plain Llama-style — RMSNorm, RoPE,
+// grouped-query attention, no biases, no QK-norm — and each block's feed-forward is a
+// sparse top-k MoE (a router picks the top-k of N SwiGLU experts and mixes their outputs
+// with the renormalized router weights, nn.SparseMoE), exactly like [Mixtral]. On top of
+// that structure Granite layers four learned-at-config scalar multipliers:
+//
+//   - embedding_multiplier: inputs_embeds *= EmbeddingMult after the token lookup,
+//   - attention_multiplier: the pre-softmax attention scale is AttentionMult
+//     (replacing the default 1/√headDim),
+//   - residual_multiplier: every residual add scales the sublayer output — BOTH the
+//     attention output AND the MoE-FFN output — by ResidualMult, and
+//   - logits_scaling: the final logits are divided by LogitsScale.
+//
+// Real GraniteMoE checkpoints set these ≠ 1; each is composed with the sparse MoE below.
+// Load a Hugging Face checkpoint with [GraniteMoeFromHF].
+type GraniteMoE struct {
+	Config GraniteMoeConfig
+	TokEmb *tensor.Tensor // [vocab, dim] token embedding
+	Blocks []*GraniteMoeBlock
+	Norm   *nn.RMSNorm    // final pre-logits RMSNorm
+	Out    *tensor.Tensor // [dim, vocab] output projection (untied)
+}
+
+// GraniteMoeConfig fixes the model geometry. Dim, Vocab, Layers, Hidden and Experts are
+// inferred from the checkpoint by [GraniteMoeFromHF]; the rest come from config.json,
+// including Granite's four scalar multipliers.
+type GraniteMoeConfig struct {
+	Vocab    int
+	Ctx      int
+	Dim      int
+	Heads    int
+	KVHeads  int // GQA; 0 → Heads
+	Layers   int
+	Hidden   int     // per-expert SwiGLU inner width (intermediate_size)
+	Experts  int     // number of experts (num_local_experts)
+	TopK     int     // experts per token (num_experts_per_tok); 0 → 2
+	Eps      float64 // RMSNorm epsilon
+	RopeBase float64 // RoPE θ; 0 → 10000
+
+	// Granite scalar multipliers (transformers GraniteMoeConfig). Real checkpoints set
+	// these ≠ 1; a 0 ("unset") or identity (1) makes the corresponding hook a byte-exact
+	// no-op, so a plain-Mixtral-style config degrades gracefully.
+	EmbeddingMult float64 // inputs_embeds *= EmbeddingMult after lookup; 0 or 1 → identity
+	AttentionMult float64 // pre-softmax attention scale = AttentionMult (replaces 1/√headDim); 0 → default
+	ResidualMult  float64 // each residual add is x = residual + sublayer·ResidualMult (attn AND MoE); 0 or 1 → identity
+	LogitsScale   float64 // final logits are divided by LogitsScale; 0 or 1 → identity
+}
+
+// GraniteMoeBlock is one pre-norm GraniteMoE block: Llama-style attention (no bias, no
+// QK-norm) followed by a sparse-MoE FFN. The Granite scalars live in the enclosing
+// [GraniteMoeConfig] and are applied by Forward/DecodeStep, not stored per-block.
+type GraniteMoeBlock struct {
+	AttnNorm       *nn.RMSNorm
+	Wq, Wk, Wv, Wo *tensor.Tensor
+	FFNNorm        *nn.RMSNorm
+	MoE            *nn.SparseMoE
+}
+
+func (c GraniteMoeConfig) kvHeads() int {
+	if c.KVHeads <= 0 {
+		return c.Heads
+	}
+	return c.KVHeads
+}
+
+// attnScale returns the AttnAttrs.Scale for the Granite attention_multiplier. OpMHA
+// builds in a 1/√headDim, and AttnAttrs.Scale is an EXTRA factor on top of it, so
+// Scale = AttentionMult·√headDim leaves a net pre-softmax scale of AttentionMult
+// (matching transformers' GraniteMoeAttention scaling = attention_multiplier). A 0
+// AttentionMult leaves Scale 0, i.e. the default 1/√headDim.
+func (c GraniteMoeConfig) attnScale() float64 {
+	if c.AttentionMult == 0 {
+		return 0
+	}
+	return c.AttentionMult * math.Sqrt(float64(c.Dim/c.Heads))
+}
+
+// Forward computes logits [seq, vocab] for the prompt tokens, applying the four Granite
+// scalar multipliers around a Mixtral-style attention + sparse-MoE stack.
+func (m *GraniteMoE) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor, error) {
+	seq := len(tokens)
+	if seq == 0 || seq > m.Config.Ctx {
+		return nil, fmt.Errorf("nlp: GraniteMoE prompt length %d outside (0,%d]", seq, m.Config.Ctx)
+	}
+	idx := tensor.New(m.TokEmb.Dtype(), tensor.Shape{seq})
+	for i, t := range tokens {
+		if t < 0 || t >= m.Config.Vocab {
+			return nil, fmt.Errorf("nlp: token %d outside vocab %d", t, m.Config.Vocab)
+		}
+		idx.SetF64(float64(t), i)
+	}
+	x, err := exec1(ctx, backend.OpEmbed, nil, m.TokEmb, idx)
+	if err != nil {
+		return nil, err
+	}
+	// Granite: inputs_embeds *= embedding_multiplier.
+	if x, err = scaleScalar(ctx, x, m.Config.EmbeddingMult); err != nil {
+		return nil, err
+	}
+
+	cfg := m.Config
+	kv := cfg.kvHeads()
+	attn := backend.AttnAttrs{Heads: cfg.Heads, KVHeads: kv, Causal: true, Scale: cfg.attnScale()}
+	for _, b := range m.Blocks {
+		// attention sublayer (Llama-style, bias-free, no QK-norm)
+		xb, err := b.AttnNorm.Forward(ctx, x)
+		if err != nil {
+			return nil, err
+		}
+		q, err := exec1(ctx, backend.OpMatMul, nil, xb, b.Wq)
+		if err != nil {
+			return nil, err
+		}
+		k, err := exec1(ctx, backend.OpMatMul, nil, xb, b.Wk)
+		if err != nil {
+			return nil, err
+		}
+		v, err := exec1(ctx, backend.OpMatMul, nil, xb, b.Wv)
+		if err != nil {
+			return nil, err
+		}
+		if q, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: cfg.Heads}, q); err != nil {
+			return nil, err
+		}
+		if k, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: kv}, k); err != nil {
+			return nil, err
+		}
+		a, err := exec1(ctx, backend.OpMHA, attn, q, k, v)
+		if err != nil {
+			return nil, err
+		}
+		o, err := exec1(ctx, backend.OpMatMul, nil, a, b.Wo)
+		if err != nil {
+			return nil, err
+		}
+		// Granite: x = x + o·residual_multiplier.
+		if o, err = scaleScalar(ctx, o, cfg.ResidualMult); err != nil {
+			return nil, err
+		}
+		if x, err = exec1(ctx, backend.OpAdd, nil, x, o); err != nil {
+			return nil, err
+		}
+		// sparse-MoE FFN sublayer
+		xf, err := b.FFNNorm.Forward(ctx, x)
+		if err != nil {
+			return nil, err
+		}
+		ff, _, err := b.MoE.Forward(ctx, xf)
+		if err != nil {
+			return nil, err
+		}
+		// Granite: x = x + ff·residual_multiplier (same scalar as the attention residual).
+		if ff, err = scaleScalar(ctx, ff, cfg.ResidualMult); err != nil {
+			return nil, err
+		}
+		if x, err = exec1(ctx, backend.OpAdd, nil, x, ff); err != nil {
+			return nil, err
+		}
+	}
+	if x, err = m.Norm.Forward(ctx, x); err != nil {
+		return nil, err
+	}
+	logits, err := exec1(ctx, backend.OpMatMul, nil, x, m.Out)
+	if err != nil {
+		return nil, err
+	}
+	// Granite: logits /= logits_scaling.
+	return divLogits(ctx, logits, cfg.LogitsScale)
+}
+
+// Params returns every trainable tensor for optimizers (router + all experts included).
+func (m *GraniteMoE) Params() []*tensor.Tensor {
+	ps := []*tensor.Tensor{m.TokEmb}
+	for _, b := range m.Blocks {
+		ps = append(ps, b.AttnNorm.Gamma, b.Wq, b.Wk, b.Wv, b.Wo, b.FFNNorm.Gamma, b.MoE.Router.W)
+		for _, e := range b.MoE.Experts {
+			ps = append(ps, e.Wgate, e.Wup, e.Wdown)
+		}
+	}
+	ps = append(ps, m.Norm.Gamma, m.Out)
+	return ps
+}

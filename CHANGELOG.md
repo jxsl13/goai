@@ -4,6 +4,17 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — feat: GraniteMoE support — 23rd loadable architecture (T764, 2026-07-16)
+
+IBM GraniteMoE (`GraniteMoeForCausalLM`) as a self-contained `nlp.GraniteMoE` type: Granite's four
+scalar multipliers (embedding / attention / residual / logits) applied over a Mixtral-style sparse
+top-k MoE FFN (router `block_sparse_moe.router.weight`, fused `experts.gate_up_proj`/`down_proj`
+loaded via the shared `mixtralMoE` path; no shared expert in the base variant). Its decode uses the
+new sparse `ForwardDecode`. Forward parity vs a real transformers `GraniteMoeForCausalLM`: max abs
+logit diff 3.9e-9; the scalars are exercised (identity scalars diverge 2.0e-1); KV-decode matches
+Forward bit-for-bit (0.0); trains and generates; `GraniteMoeConfigFromHF` parses the four
+multipliers. Fourth loadable MoE; twenty-third architecture.
+
 ### nn/nlp — perf: sparse MoE decode — 4–8× faster, numerically identical (T762, 2026-07-16)
 
 `SparseMoE.Forward` evaluated ALL E experts even at decode, where each token routes to only top-k —
