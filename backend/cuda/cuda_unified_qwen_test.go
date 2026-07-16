@@ -124,8 +124,64 @@ func (p *rawF16Prefill) free() {
 	}
 }
 
-// seedForward runs one f16 prefill layer and appends the post-RoPE K/V rows into the
-// decode cache — the arch-generic (llama + qwen2) form of the Tw47 handoff.
+// triProject projects one input through 3 weights that share it (q/k/v). For int8 MMQ weights it
+// quantizes the input ONCE (QuantizeActs) and reuses it via MatMulPreQuant — dropping 2 of 3
+// redundant activation-quant passes; f16 (or mixed) weights fall back to per-weight MatMulDevice.
+func triProject(w0, w1, w2 prefillWeight, dh *cuda.DeviceF32) (d0, d1, d2 *cuda.DeviceF32, err error) {
+	m0, ok0 := w0.(*cuda.ResidentMMQ)
+	m1, ok1 := w1.(*cuda.ResidentMMQ)
+	m2, ok2 := w2.(*cuda.ResidentMMQ)
+	if ok0 && ok1 && ok2 {
+		qh, e := cuda.QuantizeActs(dh)
+		if e != nil {
+			return nil, nil, nil, e
+		}
+		defer qh.Free()
+		if d0, err = m0.MatMulPreQuant(qh); err != nil {
+			return
+		}
+		if d1, err = m1.MatMulPreQuant(qh); err != nil {
+			return
+		}
+		d2, err = m2.MatMulPreQuant(qh)
+		return
+	}
+	if d0, err = w0.MatMulDevice(dh); err != nil {
+		return
+	}
+	if d1, err = w1.MatMulDevice(dh); err != nil {
+		return
+	}
+	d2, err = w2.MatMulDevice(dh)
+	return
+}
+
+// biProject is triProject for 2 weights sharing an input (gate/up).
+func biProject(w0, w1 prefillWeight, dh *cuda.DeviceF32) (d0, d1 *cuda.DeviceF32, err error) {
+	m0, ok0 := w0.(*cuda.ResidentMMQ)
+	m1, ok1 := w1.(*cuda.ResidentMMQ)
+	if ok0 && ok1 {
+		qh, e := cuda.QuantizeActs(dh)
+		if e != nil {
+			return nil, nil, e
+		}
+		defer qh.Free()
+		if d0, err = m0.MatMulPreQuant(qh); err != nil {
+			return
+		}
+		d1, err = m1.MatMulPreQuant(qh)
+		return
+	}
+	if d0, err = w0.MatMulDevice(dh); err != nil {
+		return
+	}
+	d1, err = w1.MatMulDevice(dh)
+	return
+}
+
+// seedForward runs one prefill layer and appends the post-RoPE K/V rows into the decode cache —
+// the arch-generic (llama + qwen2) form of the Tw47 handoff. q/k/v and gate/up share one activation
+// quant each when the weights are int8 MMQ (see triProject/biProject).
 func (l *rawF16Layer) seedForward(dx *cuda.DeviceF32, cache *cuda.KVCache) (*cuda.DeviceF32, error) {
 	rq := backend.RoPEAttrs{Base: l.ropeBase, Heads: l.heads}
 	rk := backend.RoPEAttrs{Base: l.ropeBase, Heads: l.kv}
@@ -133,12 +189,10 @@ func (l *rawF16Layer) seedForward(dx *cuda.DeviceF32, cache *cuda.KVCache) (*cud
 	if err != nil {
 		return nil, err
 	}
-	dq, err := l.wq.MatMulDevice(dh)
+	dq, dk, dv, err := triProject(l.wq, l.wk, l.wv, dh)
 	if err != nil {
 		return nil, err
 	}
-	dk, _ := l.wk.MatMulDevice(dh)
-	dv, _ := l.wv.MatMulDevice(dh)
 	dh.Free()
 	if l.bq != nil {
 		if err := dq.AddBias(l.bq); err != nil {
@@ -168,8 +222,10 @@ func (l *rawF16Layer) seedForward(dx *cuda.DeviceF32, cache *cuda.KVCache) (*cud
 	}
 	da.Free()
 	dh2, _ := dx.RMSNormTo(l.gFFN, float32(l.eps))
-	dgate, _ := l.wg.MatMulDevice(dh2)
-	dup, _ := l.wu.MatMulDevice(dh2)
+	dgate, dup, err := biProject(l.wg, l.wu, dh2)
+	if err != nil {
+		return nil, err
+	}
 	dh2.Free()
 	dgate.SwiGLU(dup)
 	dup.Free()

@@ -19,7 +19,10 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   state to int8 ONCE and feed several projections that share it (q/k/v share the attn-norm hidden;
   gate/up share the ffn-norm hidden), instead of re-quantizing per projection. Bit-identical to
   MatMulDevice; the q/k/v projection group runs 82 -> 64 us (**1.28x**) by dropping 2 of 3 redundant
-  activation-quant passes. (Harness wiring to seedForward is a follow-up.)
+  activation-quant passes. Wired into the prefill seedForward (triProject/biProject): q/k/v share
+  one quant of the attn-norm hidden, gate/up share one of the ffn-norm hidden (f16 weights fall
+  back). End-to-end on TinyLlama, MMQ prefill 3552 -> 3793 t/s (+6.8%); combined with the ldmatrix
+  loads it is 3479 -> 3793 (+9% e2e, MMQ prefill now 0.74x f16 vs 0.68x before), same accuracy.
 
 ### CUDA — ldmatrix int8 GEMM (edges past cuBLAS f16) + honest prefill standing vs llama.cpp (worker linux-amd64, Tw76, 2026-07-16)
 - `cu_matmul_i8_mma_lm`: the int8 tensor-core GEMM with **hardware `ldmatrix` fragment loads** (A via
