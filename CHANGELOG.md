@@ -4,6 +4,16 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — feat: MPT support — 26th loadable architecture, first ALiBi model (T769, 2026-07-16)
+
+MosaicML MPT (`MptForCausalLM`) as a self-contained `nlp.MPT` type — the first ALiBi-position model:
+attention uses the static per-head linear-distance bias via `OpMHA`'s `ALiBi` attribute instead of
+RoPE (GoAI's `ALiBiSlopes` match MPT's `2^(-8(h+1)/n)` for power-of-two head counts; the two
+libraries' bias forms differ by a per-query-row constant that softmax is invariant to). Weight-only
+LayerNorm (β=0), packed `Wqkv` split all-q/all-k/all-v (Phi-3 layout), a bias-free GELU MLP, sequential
+residual, tied LM head. Forward parity vs a real transformers `MptForCausalLM`: max abs logit diff
+7.0e-8. Twenty-sixth architecture; ALiBi is a distinct position mechanism (no rotary).
+
 ### nlp — feat: DeepSeek-V2 sparse MoE completes the flagship (T768, 2026-07-16)
 
 Completes DeepSeek-V2 (T767 added the MLA) with its Mixture-of-Experts FFN. Each block is dense
