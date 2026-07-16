@@ -167,9 +167,9 @@ func iq3sGrid() (unsafe.Pointer, error) {
 			binary.LittleEndian.PutUint16(blk[0:], 0x3C00) // d = 1.0
 			for pos := 0; pos < 64; pos++ {
 				idx := b*64 + pos
-				blk[2+pos] = byte(idx & 0xFF)                 // qs low 8 bits
-				g, p := pos>>3, pos&7                          // qh byte g, bit p
-				blk[66+g] |= byte((idx>>8)&1) << p             // qh high bit
+				blk[2+pos] = byte(idx & 0xFF)      // qs low 8 bits
+				g, p := pos>>3, pos&7              // qh byte g, bit p
+				blk[66+g] |= byte((idx>>8)&1) << p // qh high bit
 			}
 			// signs (blk[74:106]) and scales (blk[106:110]) left 0 → all positive, db = 1.0
 		}
