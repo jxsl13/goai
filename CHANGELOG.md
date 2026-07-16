@@ -4,6 +4,15 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — feat: OLMoE support — 24th loadable architecture (T766, 2026-07-16)
+
+Allen AI OLMoE (`OlmoeForCausalLM`) as a self-contained `nlp.OLMoE` type: pre-norm sequential blocks
+with **full-width QK-norm** (an RMSNorm over the whole q/k projection before RoPE, like OLMo2 — not
+per-head like Qwen3) and a Mixtral-style sparse top-k MoE FFN (no shared expert), its decode using
+the sparse `ForwardDecode`. Forward parity vs a real transformers `OlmoeForCausalLM`: max abs logit
+diff 5.2e-8; KV-decode matches Forward bit-for-bit (0.0); fine-tunes (loss 3.46 → 3.10). Fifth
+loadable MoE; twenty-fourth architecture.
+
 ### nlp — docs: refresh the loadable-architecture catalogue to twenty-three (T765, 2026-07-16)
 
 The package godoc now lists all twenty-three transformers-anchored architectures — adding Cohere,
