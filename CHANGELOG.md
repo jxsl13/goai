@@ -4,6 +4,16 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — feat: Nemotron support — 22nd loadable architecture (T763, 2026-07-16)
+
+NVIDIA Nemotron (`NemotronForCausalLM`) as a self-contained `nlp.Nemotron` type: **LayerNorm1P** (a
+mean-centered LayerNorm whose gain is `1 + weight` — the +1 is folded into γ at load, like Gemma's
+(1+w) RMSNorm, and its bias β is loaded), a **ReLU² MLP** (`down_proj(relu(up_proj(x))²)` — no gate,
+no bias), partial rotary via `partialRoPE`, sequential residual, and no attention bias. Forward
+parity vs a real transformers `NemotronForCausalLM`: max abs logit diff 8.4e-8 (dropping the +1 fold
+diverges to 2.5e-1, confirming it is load-bearing); KV-decode matches Forward bit-for-bit (0.0);
+fine-tunes (loss 3.45 → 2.14). Twenty-second loadable architecture.
+
 ### nlp — feat: Qwen2-MoE support — 21st loadable architecture, shared-expert MoE (T761, 2026-07-16)
 
 Qwen2-MoE (`Qwen2MoeForCausalLM`) as a self-contained `nlp.Qwen2MoE` type: Qwen2 attention (q/k/v
