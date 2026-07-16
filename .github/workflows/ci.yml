@@ -24,6 +24,7 @@ on:
     paths-ignore:
       - "*.md"
       - "docs/**"
+      - ".claude/**"
   pull_request:
   workflow_dispatch:
 

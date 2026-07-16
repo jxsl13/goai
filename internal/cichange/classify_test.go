@@ -67,6 +67,8 @@ func TestClassify(t *testing.T) {
 			map[string]string{"README.md": "b"}, DocsOnly},
 		{"docs dir", map[string]string{"docs/a.md": "a", "x.go": goBase},
 			map[string]string{"docs/a.md": "b"}, DocsOnly},
+		{".claude nested (skills/workflows/memory — no Go, no CI impact)", map[string]string{".claude/memory/a.md": "a", "x.go": goBase},
+			map[string]string{".claude/memory/a.md": "b"}, DocsOnly},
 		{"comment-only go edit", map[string]string{"x.go": goBase},
 			map[string]string{"x.go": "package p\n\n// Add returns the sum of two ints (better doc).\nfunc Add(a, b int) int { return a + b }\n"}, DocsOnly},
 		{"comment whitespace", map[string]string{"x.go": goBase},
