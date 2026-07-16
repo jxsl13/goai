@@ -56,7 +56,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   ~1.25-1.35× decode lead, so the dp4a rewrite is **warranted** — booked as **Tw58** (an
   approximate path: the activation is quantized, so it's validated to a tolerance + a
   real-model agreement gate, not bit-exact). Probe discarded; the table is in the docs.
-### nn — topic-discovery round 8: distinct recurrent / sequence-mixing architectures (T694+, 2026-07-16)
+### nn — topic-discovery round 8: distinct recurrent / sequence-mixing architectures (T694–T696, 2026-07-16)
 
 A further sweep on a new sub-axis — *recurrent / sequence-mixing* cells — found more
 genuinely-novel gaps (xLSTM, Griffin RG-LRU, Aaren, HGRN all absent), so "frontier
@@ -80,6 +80,14 @@ gold-standard **parallel ≡ recurrent duality** (@1e-10) plus a collapse to a k
   (MSE 0.125) solves what an ungated fixed-decay EMA (0.968) cannot. The full Griffin
   block (conv + local attention + MLP around this core) composes existing layers and is
   documented as out of scope.
+- **Aaren — Attention as an RNN** (`nn/aaren.go`, Feng … Bengio, Ahmed / 2024,
+  arXiv:2405.13956). Softmax attention reformulated as a running-max-stabilized
+  associative scan over `(m, n, d)` triples, giving an O(1)-state streaming form that is
+  *numerically identical* to standard attention (not an approximation). Anchors: the
+  parallel form equals `softmax(QKᵀ/√d)·V` bit-exact; parallel ≡ recurrent streaming
+  @2e-16; stable where a naive `Σeˢ` overflows; gradcheck 2.3e-10; a fixed-size state
+  holds across 400 streamed tokens and matches full attention; a char-LM learns
+  (CE 3.184→0.669).
 
 ### CUDA — fused gate+up weight + the occupancy-cliff law confirmed (worker linux-amd64, Tw55(b) extension, 2026-07-16)
 - Applies the same weight-fusion mechanism to the FFN: `ffn_gate|ffn_up` concatenated into

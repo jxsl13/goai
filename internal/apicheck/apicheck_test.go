@@ -116,6 +116,7 @@ var typeExampleExempt = map[string]bool{
 	"nn.PEEROption":                   true, // functional-option type (shown via WithPEERSubKeyTopK/WithPEERHeads/WithPEERQueryDim)
 	"nn.MLSTMOption":                  true, // functional-option type (shown via WithMLSTMHeads/WithMLSTMExpForget)
 	"nn.RGLRUOption":                  true, // functional-option type (shown via WithRGLRUSeed)
+	"nn.AarenOption":                  true, // functional-option type (shown via WithAarenHeads/WithAarenSeed/WithAarenBidirectional)
 	"nn.PrefOption":                   true, // functional-option type (shown via Beta/ReferencePoint)
 	"nn.GRPOOption":                   true, // functional-option type (shown via WithKLBeta)
 	"nn.GSPOOption":                   true, // functional-option type (shown via WithGSPOClipEpsilon)
