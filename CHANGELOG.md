@@ -4,6 +4,16 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — feat: Phi (Phi-1 / Phi-1.5 / Phi-2) support — 19th loadable architecture (T759, 2026-07-16)
+
+The original Phi (`PhiForCausalLM`, distinct from Phi-3) as a self-contained `nlp.Phi` type: a
+single-norm parallel residual (one `input_layernorm` feeds BOTH attention and the MLP, outputs
+summed onto the residual, like Cohere), LayerNorm WITH bias, separate biased q/k/v/dense
+projections, partial rotary via `partialRoPE`, a biased `gelu_new` MLP, and a biased untied LM head.
+Forward parity vs a real transformers `PhiForCausalLM`: max abs logit diff 1.7e-6 (the golden uses
+Phi's real `gelu_new` tanh activation vs GoAI's exact-erf OpGELU); KV-decode matches Forward
+bit-for-bit (0.0); fine-tunes (loss 3.52 → 2.66). Nineteenth loadable architecture.
+
 ### nlp — feat: StableLM support — 18th loadable architecture (T758, 2026-07-16)
 
 StableLM (`StableLmForCausalLM`) as a self-contained `nlp.StableLM` type: LayerNorm WITH bias (γ and
