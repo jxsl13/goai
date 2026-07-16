@@ -4,6 +4,19 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — feat: DeepSeek-V2 sparse MoE completes the flagship (T768, 2026-07-16)
+
+Completes DeepSeek-V2 (T767 added the MLA) with its Mixture-of-Experts FFN. Each block is dense
+SwiGLU for the first `first_k_dense_replace` layers and MoE after: a shared expert (always active)
+plus routed top-k experts (fused `experts.gate_up_proj`/`down_proj`, unfused at load). Correctness
+finding: transformers' `DeepseekV2TopkRouter` does NOT renormalize the top-k gate weights — it uses
+the raw softmax scores × `routed_scaling_factor` — so `nn.SparseMoE`'s renormalizing combine cannot
+match; the un-normalized mixture is computed from primitives (`nn.DeepSeekMoE` serving as the weight
+container). Forward parity vs a real transformers `DeepseekV2ForCausalLM` (MoE config): max abs logit
+diff 3.4e-8 (the dense-MLA test still 4.4e-8); the shared expert is non-vacuous (dropping it moves
+logits 1.3e-2); the first-dense / later-MoE layer split is exercised. DeepSeek-V2 is now fully
+loadable — MLA + sparse MoE.
+
 ### nlp — feat: DeepSeek-V2 Multi-head Latent Attention — 25th loadable architecture (T767, 2026-07-16)
 
 DeepSeek-V2's MLA as a self-contained `nlp.DeepSeekV2` type (dense-FFN stage — the routed MoE is a

@@ -10,10 +10,12 @@ import (
 )
 
 // DeepSeekV2 is the DeepSeek-V2 decoder-only transformer (DeepSeek-AI, arXiv:2405.04434),
-// built here in its dense-FFN configuration (first_k_dense_replace = num_layers, so EVERY
-// layer uses a standard SwiGLU MLP) to ISOLATE the architecture's true novelty: Multi-head
-// Latent Attention (MLA). The mixture-of-experts FFN is deliberately excluded from this
-// stage.
+// combining its two novelties: Multi-head Latent Attention (MLA) and the DeepSeekMoE sparse
+// FFN with shared experts (Dai et al. 2024, arXiv:2401.06066). Per config.first_k_dense_replace
+// the FIRST FirstKDense layers keep a dense SwiGLU MLP while every LATER layer's FFN is a
+// DeepSeekMoE — shared experts every token traverses plus a top-k-routed sparse expert bank.
+// Setting FirstKDense ≥ Layers (or NRoutedExperts = 0) recovers the fully-dense MLA-only
+// variant used to first verify the attention in isolation.
 //
 // MLA replaces the usual per-head K/V projections with a LOW-RANK LATENT compression plus
 // a decoupled rotary key, matching transformers' DeepseekV2Attention.forward exactly:
@@ -71,11 +73,39 @@ type DeepSeekV2Config struct {
 	// DeepseekV2Attention default (self.scaling = qk_head_dim**-0.5). A YaRN mscale factor,
 	// if any, would be folded in here.
 	SoftmaxScale float64
+
+	// --- DeepSeekMoE (sparse-FFN) geometry ---------------------------------------
+	// DeepSeek-V2 replaces the FIRST FirstKDense decoder layers' FFN with a dense SwiGLU
+	// (config.first_k_dense_replace) and makes every LATER layer a DeepSeekMoE — shared
+	// experts every token traverses plus a top-k-routed sparse expert bank. When
+	// FirstKDense ≥ Layers (or NRoutedExperts == 0) the model is fully dense (the MLA-only
+	// variant [DeepSeekV2FromHF] built before this) and the fields below are unused.
+
+	// FirstKDense is config.first_k_dense_replace: layers with index < FirstKDense use a
+	// dense SwiGLU MLP; the rest use a DeepSeekMoE. 0 → all-MoE, ≥ Layers → all-dense.
+	FirstKDense int
+	// NRoutedExperts is config.n_routed_experts: the size of each MoE layer's routed bank.
+	NRoutedExperts int
+	// NSharedExperts is config.n_shared_experts: the count of always-active shared experts,
+	// realized as a SINGLE SwiGLU of width NSharedExperts·MoEHidden (transformers fuses them).
+	NSharedExperts int
+	// TopK is config.num_experts_per_tok: routed experts each token is dispatched to.
+	TopK int
+	// MoEHidden is config.moe_intermediate_size: the SwiGLU inner width of ONE routed expert.
+	MoEHidden int
+	// RoutedScale is config.routed_scaling_factor: the routed mixture is scaled by it before
+	// the shared-expert sum. ≤ 0 → 1.0. DeepSeek-V2 does NOT renormalize the top-k gate
+	// weights (transformers' DeepseekV2TopkRouter multiplies the raw softmax scores of the
+	// selected experts by this factor — no denominator), which is why the MoE mixture is
+	// computed from primitives here rather than through nn.SparseMoE's renormalizing combine.
+	RoutedScale float64
 }
 
-// DeepSeekV2Block is one MLA + SwiGLU block. The two latent RMSNorms (QANorm, KvANorm) are
-// the MLA-specific detail; the SwiGLU FFN and the two block RMSNorms (InputNorm,
-// PostAttnNorm) are the standard Llama-style pre-norm sublayers.
+// DeepSeekV2Block is one MLA + FFN block. The two latent RMSNorms (QANorm, KvANorm) are the
+// MLA-specific detail; the two block RMSNorms (InputNorm, PostAttnNorm) are the standard
+// Llama-style pre-norm sublayers. The FFN sublayer is EITHER a dense SwiGLU (Dense, for the
+// first FirstKDense layers) OR a sparse DeepSeekMoE (MoE, for the rest) — exactly one is
+// non-nil, chosen per layer index at load by [DeepSeekV2FromHF].
 type DeepSeekV2Block struct {
 	InputNorm    *nn.RMSNorm    // input_layernorm (pre-attention)
 	WqA          *tensor.Tensor // q_a_proj [dim, QLoraRank]
@@ -86,7 +116,13 @@ type DeepSeekV2Block struct {
 	WkvB         *tensor.Tensor // kv_b_proj [KVLoraRank, heads·(QKNope+VHead)]
 	Wo           *tensor.Tensor // o_proj [heads·VHead, dim]
 	PostAttnNorm *nn.RMSNorm    // post_attention_layernorm (pre-FFN)
-	FFN          *nn.SwiGLU     // standard SwiGLU MLP
+	// Dense is the standard SwiGLU MLP used by layers with index < FirstKDense; nil on MoE
+	// layers.
+	Dense *nn.SwiGLU
+	// MoE is the sparse DeepSeekMoE (shared experts + top-k routed bank) used by layers with
+	// index ≥ FirstKDense; nil on dense layers. Its routing is evaluated by [DeepSeekV2.moeFFN]
+	// (raw-softmax top-k, no renormalization) rather than nn.DeepSeekMoE.Forward — see moeFFN.
+	MoE *nn.DeepSeekMoE
 }
 
 // softmaxScale returns the pre-softmax score multiplier, defaulting to 1/√(QKNope+QKRope).
@@ -127,12 +163,17 @@ func (m *DeepSeekV2) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, a); err != nil {
 			return nil, err
 		}
-		// FFN sublayer: post_attention_layernorm → SwiGLU → add residual.
+		// FFN sublayer: post_attention_layernorm → (dense SwiGLU | DeepSeekMoE) → add residual.
 		xf, err := b.PostAttnNorm.Forward(ctx, x)
 		if err != nil {
 			return nil, err
 		}
-		ff, err := b.FFN.Forward(ctx, xf)
+		var ff *tensor.Tensor
+		if b.MoE != nil {
+			ff, err = m.moeFFN(ctx, b.MoE, xf)
+		} else {
+			ff, err = b.Dense.Forward(ctx, xf)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -286,13 +327,120 @@ func (m *DeepSeekV2) mlaAttention(ctx *backend.Context, b *DeepSeekV2Block, xb *
 	return exec1(ctx, backend.OpMatMul, nil, concat, b.Wo)
 }
 
+// routedScale returns the routed-mixture scaling factor, defaulting to 1.0.
+func (c DeepSeekV2Config) routedScale() float64 {
+	if c.RoutedScale > 0 {
+		return c.RoutedScale
+	}
+	return 1.0
+}
+
+// moeFFN evaluates one DeepSeekMoE FFN sublayer, matching transformers'
+// DeepseekV2Moe.forward EXACTLY:
+//
+//	y = Σ_{i∈topk} scores_i·RoutedScale · Expert_i(x)  +  SharedExpert(x)
+//
+// where scores = softmax(x·gateᵀ) over ALL NRoutedExperts and topk is the greedy top-k of
+// those scores. DeepSeek-V2 does NOT renormalize the selected gate weights (it multiplies
+// the raw softmax scores by RoutedScale — no per-token denominator), which is precisely why
+// the mixture is computed from primitives here instead of via nn.DeepSeekMoE.Forward: that
+// path routes through OpMoECombine, whose Mixtral-style w/Σw renormalization would divide
+// each weight by the top-k sum and diverge from DeepSeek's un-normalized gating. The layer's
+// weights are still HELD in an nn.DeepSeekMoE (Routed.Router, Routed.Experts, Shared); only
+// the combine differs. Every routed expert is evaluated densely (the ≤k-of-E masking is a
+// compute optimization, numerically identical since unselected weights are zero).
+func (m *DeepSeekV2) moeFFN(ctx *backend.Context, moe *nn.DeepSeekMoE, x *tensor.Tensor) (*tensor.Tensor, error) {
+	logits, err := moe.Routed.Router.Forward(ctx, x) // [seq, E] router scores (no bias)
+	if err != nil {
+		return nil, err
+	}
+	scores, err := exec1(ctx, backend.OpSoftmax, nil, logits) // softmax over all E experts
+	if err != nil {
+		return nil, err
+	}
+	seq, e := scores.Shape()[0], scores.Shape()[1]
+	topK := moe.Routed.TopK
+	scale := m.Config.routedScale()
+
+	// Per-token greedy top-k over the softmax scores; weight = raw score · RoutedScale for the
+	// selected experts, 0 otherwise (NO renormalization — DeepSeek-V2's gating).
+	weight := tensor.New(tensor.F64, tensor.Shape{seq, e})
+	ws := weight.Storage().F64()
+	for t := range seq {
+		for _, i := range topKIndices(scores, t, e, topK) {
+			ws[t*e+i] = scores.AtF64(t, i) * scale
+		}
+	}
+
+	// Routed mixture: Σ_i weight[:,i] ⊙ Expert_i(x), evaluated densely over all E experts.
+	var y *tensor.Tensor
+	for i := range e {
+		out, err := moe.Routed.Experts[i].Forward(ctx, x) // [seq, dim]
+		if err != nil {
+			return nil, err
+		}
+		wcol, err := weight.Slice(1, i, i+1) // [seq, 1] broadcast column
+		if err != nil {
+			return nil, err
+		}
+		term, err := exec1(ctx, backend.OpMul, nil, out, wcol.Contiguous())
+		if err != nil {
+			return nil, err
+		}
+		if y == nil {
+			y = term
+		} else if y, err = exec1(ctx, backend.OpAdd, nil, y, term); err != nil {
+			return nil, err
+		}
+	}
+
+	// Shared experts every token traverses unconditionally.
+	for _, s := range moe.Shared {
+		sh, err := s.Forward(ctx, x)
+		if err != nil {
+			return nil, err
+		}
+		if y, err = exec1(ctx, backend.OpAdd, nil, y, sh); err != nil {
+			return nil, err
+		}
+	}
+	return y, nil
+}
+
+// topKIndices returns the indices of the k largest values in row t of the [seq,e] score
+// tensor (descending; ties broken by lower index — immaterial for distinct float scores).
+// A tiny partial selection sort over e experts, k ≪ e in practice.
+func topKIndices(scores *tensor.Tensor, t, e, k int) []int {
+	if k > e {
+		k = e
+	}
+	idx := make([]int, e)
+	for i := range idx {
+		idx[i] = i
+	}
+	for a := 0; a < k; a++ {
+		best := a
+		for b := a + 1; b < e; b++ {
+			if scores.AtF64(t, idx[b]) > scores.AtF64(t, idx[best]) {
+				best = b
+			}
+		}
+		idx[a], idx[best] = idx[best], idx[a]
+	}
+	return idx[:k]
+}
+
 // Params returns every trainable tensor for optimizers.
 func (m *DeepSeekV2) Params() []*tensor.Tensor {
 	ps := []*tensor.Tensor{m.TokEmb, m.FinalNorm.Gamma, m.LmHead}
 	for _, b := range m.Blocks {
 		ps = append(ps, b.InputNorm.Gamma, b.WqA, b.QANorm.Gamma, b.WqB,
 			b.WkvA, b.KvANorm.Gamma, b.WkvB, b.Wo, b.PostAttnNorm.Gamma)
-		ps = append(ps, b.FFN.Params()...)
+		if b.MoE != nil {
+			ps = append(ps, b.MoE.Params()...)
+		} else {
+			ps = append(ps, b.Dense.Params()...)
+		}
 	}
 	return ps
 }

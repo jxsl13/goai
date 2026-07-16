@@ -3,16 +3,20 @@ package nlp
 import (
 	"fmt"
 
+	"github.com/jxsl13/goai/nn"
 	"github.com/jxsl13/goai/tensor"
 )
 
 // DeepSeekV2FromHF builds a [DeepSeekV2] from a Hugging Face DeepseekV2ForCausalLM tensor
-// map (the dense-FFN variant — first_k_dense_replace = num_layers, so every layer's MLP is
-// a plain SwiGLU). The MLA geometry that is not derivable from the tensors (Heads,
-// QLoraRank, KVLoraRank, QKNope, QKRope, VHead, Eps, RopeBase, Ctx, SoftmaxScale) comes
-// from config.json and is passed in cfg; Vocab, Dim, Layers and FFN are inferred from the
-// tensors. HF stores each projection as torch [out, in]; GoAI wants [in, out], so every
-// weight is transposed.
+// map, in either FFN configuration: the first cfg.FirstKDense layers load a dense SwiGLU
+// (mlp.gate_proj/up_proj/down_proj) and every later layer loads a DeepSeekMoE (see
+// [loadDeepSeekMoE]). With FirstKDense ≥ num_layers (or NRoutedExperts = 0) every layer is
+// dense — the MLA-only variant. The MLA geometry that is not derivable from the tensors
+// (Heads, QLoraRank, KVLoraRank, QKNope, QKRope, VHead, Eps, RopeBase, Ctx, SoftmaxScale)
+// and the MoE geometry (FirstKDense, NRoutedExperts, NSharedExperts, TopK, MoEHidden,
+// RoutedScale) come from config.json and are passed in cfg; Vocab, Dim, Layers and the
+// dense FFN width are inferred from the tensors. HF stores each projection as torch
+// [out, in]; GoAI wants [in, out], so every weight is transposed.
 //
 // DeepSeek-V2 rotates its decoupled q_pe/k_pe with the interleaved (view_as_complex)
 // convention. To reproduce that with GoAI's split-half OpRoPE, the pe rows of q_b_proj (per
@@ -95,17 +99,27 @@ func DeepSeekV2FromHF(ts map[string]*tensor.Tensor, cfg DeepSeekV2Config) (*Deep
 		if err != nil {
 			return nil, err
 		}
-		gate, err := g("mlp.gate_proj.weight")
-		if err != nil {
-			return nil, err
-		}
-		up, err := g("mlp.up_proj.weight")
-		if err != nil {
-			return nil, err
-		}
-		down, err := g("mlp.down_proj.weight")
-		if err != nil {
-			return nil, err
+		// FFN sublayer: dense SwiGLU for the first FirstKDense layers, else a DeepSeekMoE.
+		var dense *nn.SwiGLU
+		var moe *nn.DeepSeekMoE
+		if l < cfg.FirstKDense || cfg.NRoutedExperts <= 0 {
+			gate, err := g("mlp.gate_proj.weight")
+			if err != nil {
+				return nil, err
+			}
+			up, err := g("mlp.up_proj.weight")
+			if err != nil {
+				return nil, err
+			}
+			down, err := g("mlp.down_proj.weight")
+			if err != nil {
+				return nil, err
+			}
+			dense = swiGLUFromGGUF(gate, up, down)
+		} else {
+			if moe, err = loadDeepSeekMoE(ts, p+"mlp.", cfg); err != nil {
+				return nil, err
+			}
 		}
 		// De-interleave the pe channels so split-half OpRoPE reproduces DeepSeek's
 		// interleaved rotary. q_b_proj: heads blocks of [QKNope | QKRope]; permute the
@@ -124,7 +138,8 @@ func DeepSeekV2FromHF(ts map[string]*tensor.Tensor, cfg DeepSeekV2Config) (*Deep
 			WkvB:         transpose2D(wkvB),
 			Wo:           transpose2D(wo),
 			PostAttnNorm: rmsFromGGUF(postAttn, cfg.Eps),
-			FFN:          swiGLUFromGGUF(gate, up, down),
+			Dense:        dense,
+			MoE:          moe,
 		})
 	}
 	norm, ok := ts["model.norm.weight"]
@@ -138,6 +153,108 @@ func DeepSeekV2FromHF(ts map[string]*tensor.Tensor, cfg DeepSeekV2Config) (*Deep
 	}
 	m.LmHead = transpose2D(head) // [vocab,dim] → [dim,vocab]
 	return m, nil
+}
+
+// loadDeepSeekMoE builds an [nn.DeepSeekMoE] from a HF DeepseekV2Moe layer's tensors under
+// prefix (e.g. "model.layers.1.mlp."). It captures transformers 5.x's FUSED expert layout:
+//
+//   - Routed experts: mlp.experts.gate_up_proj [E, 2·MoEHidden, dim] and
+//     mlp.experts.down_proj [E, dim, MoEHidden] — a single 3-D tensor for the whole bank,
+//     NOT per-expert mlp.experts.J.{gate,up,down}_proj. Expert j's gate_up_proj[j] rows split
+//     [0:MoEHidden]=gate_proj, [MoEHidden:2·MoEHidden]=up_proj (matching torch's
+//     linear(x, gate_up_proj[j]).chunk(2)); each expert becomes one nn.SwiGLU.
+//   - Shared experts: mlp.shared_experts.{gate,up,down}_proj.weight — a SINGLE SwiGLU of
+//     width NSharedExperts·MoEHidden (transformers fuses the n_shared experts into one MLP).
+//   - Router: mlp.gate.weight [E, dim], no bias.
+//
+// The weights are held in an nn.DeepSeekMoE; the mixture itself is combined by
+// [DeepSeekV2.moeFFN] (raw-softmax top-k, no renormalization) rather than the type's own
+// renormalizing Forward — see moeFFN for why.
+func loadDeepSeekMoE(ts map[string]*tensor.Tensor, prefix string, cfg DeepSeekV2Config) (*nn.DeepSeekMoE, error) {
+	if cfg.TopK <= 0 || cfg.TopK > cfg.NRoutedExperts || cfg.MoEHidden <= 0 {
+		return nil, fmt.Errorf("nlp: DeepSeekV2 MoE needs 0 < TopK ≤ NRoutedExperts and MoEHidden > 0 (got %d, %d, %d)", cfg.TopK, cfg.NRoutedExperts, cfg.MoEHidden)
+	}
+	get := func(name string) (*tensor.Tensor, error) {
+		t, ok := ts[prefix+name]
+		if !ok {
+			return nil, fmt.Errorf("nlp: HF DeepSeekV2 MoE missing %s%s", prefix, name)
+		}
+		return t, nil
+	}
+	// Router: gate.weight [E, dim] → GoAI Linear.W [dim, E], no bias.
+	gate, err := get("gate.weight")
+	if err != nil {
+		return nil, err
+	}
+
+	// Routed experts: unfuse the 3-D gate_up_proj / down_proj into E per-expert SwiGLUs.
+	gateUp, err := get("experts.gate_up_proj") // [E, 2·MoEHidden, dim]
+	if err != nil {
+		return nil, err
+	}
+	down, err := get("experts.down_proj") // [E, dim, MoEHidden]
+	if err != nil {
+		return nil, err
+	}
+	e, inter := cfg.NRoutedExperts, cfg.MoEHidden
+	if gateUp.Ndim() != 3 || gateUp.Shape()[0] != e || gateUp.Shape()[1] != 2*inter {
+		return nil, fmt.Errorf("nlp: experts.gate_up_proj shape %v != [%d,%d,dim]", gateUp.Shape(), e, 2*inter)
+	}
+	if down.Ndim() != 3 || down.Shape()[0] != e || down.Shape()[2] != inter {
+		return nil, fmt.Errorf("nlp: experts.down_proj shape %v != [%d,dim,%d]", down.Shape(), e, inter)
+	}
+	experts := make([]*nn.SwiGLU, e)
+	for j := range e {
+		gu, err := slice3D(gateUp, j) // [2·MoEHidden, dim] (torch [out,in])
+		if err != nil {
+			return nil, err
+		}
+		gj, err := gu.Slice(0, 0, inter) // gate_proj rows
+		if err != nil {
+			return nil, err
+		}
+		uj, err := gu.Slice(0, inter, 2*inter) // up_proj rows
+		if err != nil {
+			return nil, err
+		}
+		dj, err := slice3D(down, j) // [dim, MoEHidden] (torch [out,in])
+		if err != nil {
+			return nil, err
+		}
+		experts[j] = swiGLUFromGGUF(gj, uj, dj) // transposes each into GoAI [in,out]
+	}
+
+	// Shared experts: one fused SwiGLU of width NSharedExperts·MoEHidden.
+	sg, err := get("shared_experts.gate_proj.weight")
+	if err != nil {
+		return nil, err
+	}
+	su, err := get("shared_experts.up_proj.weight")
+	if err != nil {
+		return nil, err
+	}
+	sd, err := get("shared_experts.down_proj.weight")
+	if err != nil {
+		return nil, err
+	}
+
+	return &nn.DeepSeekMoE{
+		Shared: []*nn.SwiGLU{swiGLUFromGGUF(sg, su, sd)},
+		Routed: &nn.SparseMoE{
+			Router:  &nn.Linear{W: transpose2D(gate)}, // no bias (DeepseekV2TopkRouter)
+			Experts: experts,
+			TopK:    cfg.TopK,
+		},
+	}, nil
+}
+
+// slice3D extracts index j along axis 0 of a 3-D tensor as a contiguous 2-D [d1,d2] tensor.
+func slice3D(t *tensor.Tensor, j int) (*tensor.Tensor, error) {
+	v, err := t.Slice(0, j, j+1) // [1, d1, d2]
+	if err != nil {
+		return nil, err
+	}
+	return v.Contiguous().Reshape(tensor.Shape{t.Shape()[1], t.Shape()[2]})
 }
 
 // deinterleaveRoPE reorders the ROWS of a torch [out, in] projection weight so that GoAI's
