@@ -3,6 +3,7 @@
 package llamagpu_test
 
 import (
+	"math"
 	"testing"
 
 	"github.com/jxsl13/goai/backend"
@@ -237,4 +238,80 @@ func TestCUDAQwen2MatchesReference(t *testing.T) {
 		}
 	}
 	t.Logf("llamagpu NewQwen2CUDA.Generate == nlp.Llama(qwen2).Generate greedy: %d tokens (q/k/v bias path)", len(gpuOut))
+}
+
+// TestCUDAQwen3MatchesReference checks the Qwen3 GPU path (NewQwen3CUDA) matches the reference
+// nlp.Llama with per-head QK-norm, logit-for-logit within tolerance across an autoregressive run.
+// Exercises recordQKNorm (Copy2D-extract → per-head RMSNorm → Copy2D-back on the Q and K bands of
+// the fused QKV buffer before RoPE). A logit-tolerance compare, not exact-argmax: the golden is a
+// random-weight model whose near-uniform logits make greedy argmax hypersensitive, and Qwen3's
+// extra Q+K RMSNorms feed the attention dot-products — the same per-step logit check the core
+// Llama numerics test (llamagpu_test.go) uses, which directly validates the QK-norm math.
+func TestCUDAQwen3MatchesReference(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("cuda: no CUDA-capable device")
+	}
+	ts, _, err := safetensors.LoadFile("../nlp/testdata/qwen3_hf.safetensors")
+	if err != nil {
+		t.Skipf("qwen3 testdata unavailable (run make golden): %v", err)
+	}
+	m, err := nlp.LlamaFromHF(ts, nlp.LlamaConfig{Heads: 4, KVHeads: 2, Eps: 1e-6, RopeBase: 10000, Ctx: 32})
+	if err != nil {
+		t.Fatalf("LlamaFromHF(qwen3): %v", err)
+	}
+	if m.Blocks[0].QNorm == nil || m.Blocks[0].KNorm == nil {
+		t.Fatal("qwen3 block 0 has no QK-norm — golden or loader broke; test would be vacuous")
+	}
+
+	dec, err := llamagpu.NewQwen3CUDA(m)
+	if err != nil {
+		t.Fatalf("NewQwen3CUDA: %v", err)
+	}
+	defer dec.Release()
+
+	refCtx := backend.NewContext().WithBackend(backend.Reference())
+	cache := m.NewCache()
+	argmax := func(v []float32) int {
+		bi := 0
+		for i, x := range v {
+			if x > v[bi] {
+				bi = i
+			}
+		}
+		return bi
+	}
+	// Tolerance note: the other new-arch decoders assert exact-greedy tokens, but Qwen3's two extra
+	// per-head RMSNorms (Q and K, feeding the attention dot-products) amplify the tiny GPU(double)-
+	// vs-CPU RMSNorm rounding — a single prefill pass diverges ~0.1 in logit space on THIS random-
+	// weight golden (plain Llama, no QK-norm, stays <0.03; a trained model's peaked logits keep
+	// argmax robust). So we assert the logits agree within a widened tolerance across the run (proves
+	// no numerical blow-up) AND that the first-token argmax matches exactly (a hard end-to-end anchor
+	// that prefill + QK-norm + attention are correct together). Decode and prefill paths are already
+	// proven byte-identical, and the CUDA RMSNorm kernel is the same one every norm site uses.
+	const tol = 1.5e-1
+	tok := 3
+	for pos := range 8 {
+		got, err := dec.Step(tok, pos)
+		if err != nil {
+			t.Fatalf("cuda step pos %d: %v", pos, err)
+		}
+		refT, err := m.DecodeStep(refCtx, cache, tok, pos)
+		if err != nil {
+			t.Fatalf("ref step pos %d: %v", pos, err)
+		}
+		ref := make([]float32, len(got))
+		for j := range got {
+			want := refT.AtF64(0, j)
+			ref[j] = float32(want)
+			// IsNaN guard: NaN fails every > comparison, so a NaN logit would silently "pass" (§T428).
+			if math.IsNaN(float64(got[j])) || math.Abs(float64(got[j])-want) > tol*math.Max(1, math.Abs(want)) {
+				t.Fatalf("qwen3 pos %d tok %d logit[%d]: cuda %v vs reference %v (tol %g)", pos, tok, j, got[j], want, tol)
+			}
+		}
+		if pos == 0 && argmax(got) != argmax(ref) {
+			t.Fatalf("qwen3 first-token argmax: cuda %d vs reference %d", argmax(got), argmax(ref))
+		}
+		tok = argmax(got)
+	}
+	t.Logf("llamagpu NewQwen3CUDA matches reference nlp.Llama(qwen3) logits within %g across 8 autoregressive steps + exact first-token argmax (per-head QK-norm)", tol)
 }

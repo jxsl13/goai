@@ -161,6 +161,7 @@ type block struct {
 	// projection biases (nil ⇒ no bias): the fused-QKV bias [D+2·kvDim], the o-proj bias [D],
 	// and the GELU-MLP fc [hidden] / proj [D] biases — GPT-NeoX/Phi/StarCoder2 carry them.
 	qkvBias, oBias, fcBias, projBias buffer
+	qN, kN                           buffer // per-head query/key RMSNorm gains [dk] (Qwen3); nil ⇒ no QK-norm
 }
 
 // Decoder holds a Llama's weights + KV cache as device-resident buffers and runs one batched decode
@@ -173,6 +174,7 @@ type Decoder struct {
 	ffnGELU                                       bool // true ⇒ 2-layer GELU MLP (fc→GELU→proj: GPT-NeoX/Phi/StarCoder2); false ⇒ SwiGLU (Llama/StableLM)
 	parallelRes                                   bool // true ⇒ parallel residual: attn+FFN both read norm(x0), sum onto x (GPT-NeoX/Phi/Cohere); false ⇒ sequential (Llama)
 	parallelTwoNorm                               bool // parallel residual with SEPARATE attn/FFN norms both over x0 (GPT-NeoX); needs the FFN norm computed pre-attn-add
+	qkNorm                                        bool // true ⇒ per-head RMSNorm on Q and K before RoPE (Qwen3); false otherwise
 	eps, posDiv, scale                            float32
 
 	blocks                                                []block
@@ -235,6 +237,25 @@ func (d *Decoder) recordQKVProj(r recorder, b block, rows int) error {
 	if b.qkvBias != nil {
 		e = firstErr(e, r.AddBias(d.qkv.b, b.qkvBias, d.qkv.b, rows, d.d+2*d.kvDim))
 	}
+	return e
+}
+
+// recordQKNorm records Qwen3's per-head RMSNorm on the Q and K bands of the fused QKV buffer,
+// applied BEFORE RoPE. Each head's dk channels are normed independently with a shared gain — the
+// reference reshapes [seq, heads·dk] → [seq·heads, dk], RMSNorms, reshapes back. The heads of one
+// token are contiguous but tokens are stride-separated inside qkv, so we Copy2D the band out to a
+// packed [seq, band] scratch (reusing d.q / d.k, unused in the fused path until after RoPE),
+// RMSNorm it as seq·heads rows of dk, and Copy2D it back. No-op when qkNorm is unset.
+func (d *Decoder) recordQKNorm(r recorder, b block, seq, stride int) error {
+	if !d.qkNorm {
+		return nil
+	}
+	e := r.Copy2D(d.qkv.b, 0, stride, d.q.b, 0, d.d, seq, d.d) // extract Q band [seq, D]
+	e = firstErr(e, r.RMSNorm(d.q.b, b.qN, d.q.b, seq*d.h, d.dk, d.eps))
+	e = firstErr(e, r.Copy2D(d.q.b, 0, d.d, d.qkv.b, 0, stride, seq, d.d)) // write Q band back
+	e = firstErr(e, r.Copy2D(d.qkv.b, d.d, stride, d.k.b, 0, d.kvDim, seq, d.kvDim))
+	e = firstErr(e, r.RMSNorm(d.k.b, b.kN, d.k.b, seq*d.kvH, d.dk, d.eps))
+	e = firstErr(e, r.Copy2D(d.k.b, 0, d.kvDim, d.qkv.b, d.d, stride, seq, d.kvDim))
 	return e
 }
 
@@ -401,10 +422,20 @@ func newDecoder(m *nlp.Llama, ops backendOps) (*Decoder, error) {
 		fb := append(append(append([]float32{}, flat1D(bq)...), flat1D(bk)...), flat1D(bv)...)
 		return mk(fb).b
 	}
+	// per-head query/key RMSNorm gain [dk] (Qwen3); nil for Llama/Qwen2. Presence flips d.qkNorm,
+	// which arms recordQKNorm between the QKV projection and RoPE.
+	qkGain := func(n *nn.RMSNorm) buffer {
+		if n == nil {
+			return nil
+		}
+		d.qkNorm = true
+		return mk(flat1D(n.Gamma)).b
+	}
 	for _, b := range m.Blocks {
 		gb := block{
 			wqkv: fused(b.Wq, b.Wk, b.Wv), qkvBias: fusedBias(b.Bq, b.Bk, b.Bv), wo: lin(b.Wo),
 			gAttn: mk(flat1D(b.AttnNorm.Gamma)).b, gFFN: mk(flat1D(b.FFNNorm.Gamma)).b,
+			qN: qkGain(b.QNorm), kN: qkGain(b.KNorm),
 			wG: lin(b.FFN.Wgate), wU: lin(b.FFN.Wup), wD: lin(b.FFN.Wdown),
 			kC: mk(make([]float32, d.maxLen*d.kvDim)).b, vC: mk(make([]float32, d.maxLen*d.kvDim)).b,
 		}
@@ -849,6 +880,7 @@ func (d *Decoder) encodeStep(pos int) (recorder, error) {
 			qBuf = d.qkv.b
 			e = firstErr(
 				d.recordQKVProj(r, b, 1),
+				d.recordQKNorm(r, b, 1, D+2*kvDim),                // per-head QK-norm (Qwen3); no-op otherwise
 				d.ropeQK(r, d.qkv.b, d.dinv.b, 1, D+2*kvDim, pos), // q+k bands, ONE dispatch (§T613); full ∨ partial rotary
 				r.Blit(d.qkv.b, D, b.kC, pos*kvDim, kvDim),
 				r.Blit(d.qkv.b, D+kvDim, b.vC, pos*kvDim, kvDim),
@@ -989,6 +1021,7 @@ func (d *Decoder) StepN(tokens []int, pos int) ([]float32, error) {
 		if e == nil && b.wqkv != nil {
 			e = firstErr(
 				d.recordQKVProj(r, b, k),
+				d.recordQKNorm(r, b, k, stride),                // per-head QK-norm (Qwen3); no-op otherwise
 				d.ropeQK(r, d.qkv.b, d.dinv.b, k, stride, pos), // q+k bands, ONE dispatch (§T613); full ∨ partial rotary
 				r.Copy2D(d.qkv.b, 0, stride, d.q.b, 0, D, k, D),
 				r.Copy2D(d.qkv.b, D, stride, b.kC, pos*kvDim, kvDim, k, kvDim),
