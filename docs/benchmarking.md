@@ -1167,6 +1167,67 @@ stays decode-only on 12 GB (f16 weights alone would need 14.5 GB).
 Repro: `TestCUDAUnifiedServePrefillHandoff` / `TestCUDAUnifiedServeQwen` (backend/cuda,
 `-tags cuda`).
 
+## Q4_K decode-GEMV bandwidth: the small-N occupancy cliff (worker linux-amd64, Tw55(b) floor measurement)
+
+Before building Tw55 slice (b) ("concurrent QKV streams in graph capture") the §V22 rule
+demands measuring the floor. `BenchmarkGemvQ4K_*` (synthetic weights, warm, RTX 3060,
+peak DRAM ≈ 360 GB/s) times the warp-per-output Q4_K GEMV at every decode shape and
+reports achieved weight-read bandwidth:
+
+| shape (K×N) | role | ns/op | GB/s | % of 360 GB/s peak |
+|---|---|---:|---:|---:|
+| 2048×256 | GQA **k/v** proj | 4851 | 60.8 | **17%** |
+| 2048×2048 | **q / o** proj | 14154 | 166.7 | 46% |
+| 2048×5632 | ffn gate / up | 33000 | 196.6 | 55% |
+| 5632×2048 | ffn down | 34266 | 189.3 | 53% |
+| 2048×32000 | vocab head | 169105 | 218.0 | 61% |
+
+Efficiency scales monotonically with N — the kernel is **latency-bound, not
+bandwidth-saturated, at small N**: one warp per output row, so N=256 launches only ~256
+warps for 28 SMs and cannot hide DRAM latency, while N=32000 saturates and reaches 61%.
+
+**This refutes the booked mechanism.** Concurrent QKV streams cannot help: (1) the Q GEMV
+(N=2048, ~46%) already oversubscribes the GPU, so K/V have no idle SMs to overlap into,
+and (2) overlapping three kernels leaves each still reading at its own efficiency — the
+starved N=256 K/V rows stay at 17%. The real lever the data points to is **occupancy via
+weight fusion**: concatenate wq|wk|wv into one N=2560 GEMV. That lifts the 17%-efficient
+K/V rows into the ~46%+ regime and reads the shared activation once. Per-layer arithmetic:
+q(14154)+k(4851)+v(4851) = 23856 ns → one N=2560 GEMV ≈ 17.7 µs at Q's 46%, saving
+~6.2 µs/layer × 22 layers ≈ ~4% decode.
+
+**Built and measured — it pays.** `fuseQKVQ4K` stacks the dequantized wq|wk|wv rows,
+requantizes once into a single Q4_K weight, and the raw decoder issues one
+N=(heads+2·kv)·hd GEMV; dq/dk/dv are zero-copy `(*DeviceF32).View`s into the combined
+output. Because the first Nq stacked rows encode byte-identically to wq alone, the fused
+GEMV is bit-exact per row — `TestCUDAQKVFuseTokenParity` confirms 24/24 tokens identical.
+The interleaved A/B (`TestCUDAQKVFuseSpeedAB`, 5 reps) lands at fused **265.4** vs separate
+**256.0 tok/s = +3.7%** @TinyLlama-1.1B — close to the estimate, and a genuine win where
+the Tw55(a) SwiGLU-epilogue fusion was −0.9%. Opt-in via `GOAI_CUDA_QKV_FUSE=1` (Q4_K +
+no-bias path for now; generalization to Q8 / qwen2 bias / the production `llamagpu` decoder
+is booked as Tw57). Same finding sizes the bigger FFN opportunity: gate/up/down are ~73%
+of decode time at only ~53% of peak — the larger, harder lever (a genuine memory-schedule
+rewrite, e.g. split-K), tracked as Tw56.
+
+**The occupancy-cliff law (confirmed by A/B).** Applying the *identical* fusion to the FFN
+gate+up (`GOAI_CUDA_GATEUP_FUSE=1`: `ffn_gate|ffn_up` → one N=2·hidden GEMV, then SwiGLU
+over the halves; parity 24/24) gives only **+1.1%** (258.3 vs 255.6 tok/s) — a quarter of
+the QKV win. The difference is entirely the starvation of the folded shapes: QKV lifts the
+N=256 k/v rows from **17%** of peak, gate/up start at a healthy **55%**. So weight fusion
+pays in proportion to how latency-bound the small-N shapes are — and with the FFN shapes
+already ≥53%, fusion is near its ceiling. The corollary is decisive for Tw56: the remaining
+~73%-of-decode FFN bandwidth cannot be recovered by fusing; it needs a real GEMV
+memory-schedule change (split-K to put more warps in flight). The two fusions are
+independent GEMVs and compose with no negative interaction: the full stack (QKV + gate+up)
+measures **+5.8%** decode (271.1 vs 256.3 tok/s, `TestCUDAFusionStackSpeedAB`, 5 reps),
+slightly super-additive over the +3.7%/+1.1% parts. Caveat for the split-K idea: an earlier
+arc (Tw44) already rejected a deinterleaved Q4_K layout and judged the GEMV near its
+"sweet spot" with the residual gap being per-block scale-decode ALU, not memory — so
+whether split-K helps the FFN 5632/2048 shapes is a measure-first question (the fusion
+wins here came specifically from occupancy at the starved small-N shapes).
+
+Repro: `go test -tags cuda -run '^$' -bench BenchmarkGemvQ4K ./backend/cuda/`;
+`go test -tags cuda -run 'TestCUDA(QKV|GateUp)Fuse' ./backend/cuda/`.
+
 ## Further reading
 
 - Hoefler & Belli, *Scientific Benchmarking of Parallel Computing Systems* (SC '15) — the canonical treatment of run variance, warm-up and honest reporting that this document's rules follow.

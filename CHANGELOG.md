@@ -4,6 +4,61 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — fused gate+up weight + the occupancy-cliff law confirmed (worker linux-amd64, Tw55(b) extension, 2026-07-16)
+- Applies the same weight-fusion mechanism to the FFN: `ffn_gate|ffn_up` concatenated into
+  one N=2·hidden Q4_K GEMV (via the now-generic `fuseRowsQ4K` + `GOAI_CUDA_GATEUP_FUSE=1`),
+  then SwiGLU over the two `View` halves. Token-parity exact (`TestCUDAGateUpFuseTokenParity`,
+  24/24) and **+1.1% decode** (`TestCUDAGateUpFuseSpeedAB`, 258.3 vs 255.6 tok/s, 5 reps).
+- **The occupancy-cliff law, confirmed by A/B.** Fusion gain scales with how latency-bound
+  (starved) the folded shapes are: QKV folds the N=256 k/v rows (17% of peak) → **+3.7%**;
+  gate/up are already healthy (N=5632, 55%) → only **+1.1%**. This is decisive for the next
+  lever: fusion is nearly tapped out (the FFN shapes aren't starved), so the big remaining
+  decode win (Tw56: gate/up/down = ~73% of decode at ~53% peak) must come from a real GEMV
+  memory-schedule rewrite (split-K), not more fusion. The two fusions are independent GEMVs
+  and compose with no negative interaction — the full stack (QKV + gate+up, both opt-in)
+  measures **+5.8%** decode (271.1 vs 256.3 tok/s, `TestCUDAFusionStackSpeedAB`, 5 reps),
+  slightly super-additive over the +3.7%/+1.1% parts.
+
+### CUDA — fused-QKV weight: +3.7% decode, bit-exact (worker linux-amd64, Tw55(b) build, 2026-07-16)
+- The re-specced slice (b), now built and measured. `fuseQKVQ4K` concatenates the
+  dequantized wq|wk|wv rows and requantizes **once** into a single Q4_K weight; the raw
+  decoder issues **one** N=(heads+2·kv)·hd GEMV instead of three. Because the first Nq
+  stacked rows encode byte-identically to wq alone, each output row is computed from
+  identical weight bytes — **token-parity is exact by construction** and verified 24/24
+  (`TestCUDAQKVFuseTokenParity`, fused vs separate, greedy TinyLlama-Q4_K).
+- **§V22 A/B — it pays** (unlike slice (a)): interleaved A,B,A,B × 5 reps
+  (`TestCUDAQKVFuseSpeedAB`) = fused **265.4** vs separate **256.0** tok/s (**+3.7%**)
+  @TinyLlama-1.1B decode. The floor measurement predicted this: folding the GQA k/v
+  projections (N=256, a starved **17%** of peak) into the q launch lifts them into the
+  q proj's ~46% occupancy regime — a real bandwidth-efficiency win, not launch-count.
+- New reusable primitive `(*DeviceF32).View(off, rows, cols)`: a **zero-copy, non-owning**
+  alias into a device buffer (Free releases nothing), so the fused output slices into
+  dq/dk/dv addressable handles without a copy. `Free()` gained a `nonOwning` guard.
+- **Opt-in** (`GOAI_CUDA_QKV_FUSE=1`), currently the **Q4_K + no-bias (llama)** path only
+  — forcing it on a Q8 decoder would silently downgrade QKV to Q4_K. Follow-up booked:
+  make the fusion format-aware (Q8 too) + apply the concatenated qwen2 bias + wire into
+  the production `llamagpu` decoder (this win lives in the raw-decode harness for now).
+
+### CUDA — decode-GEMV bandwidth floor: refutes concurrent-QKV-streams, re-specs slice (b) as fused-QKV weight (worker linux-amd64, Tw55(b) measurement, 2026-07-16)
+- `BenchmarkGemvQ4K_2048x256` added (GQA k/v shape) completes the decode-GEMV bandwidth
+  table on the RTX 3060 (peak ≈360 GB/s): k/v N=256 = **17%** of peak, q/o N=2048 = 46%,
+  gate/up N=5632 = 55%, down N=2048 = 53%, vocab head N=32000 = 61%. The warp-per-output
+  kernel is **latency-bound at small N** (one warp/row → too few warps to hide DRAM
+  latency); efficiency scales monotonically with N.
+- **§V22 floor measurement refutes the booked mechanism.** "Concurrent QKV streams in
+  graph capture" cannot pay: the Q GEMV (N=2048) already oversubscribes the GPU so K/V
+  have no idle SMs to overlap into, and overlapping leaves the starved N=256 K/V rows at
+  17%. The data-correct lever is **occupancy via weight fusion** — concatenate wq|wk|wv
+  into one N=2560 GEMV, lifting the 17%-efficient K/V rows into the ~46%+ regime for an
+  estimated ~4% decode win. Slice (b) re-specified accordingly (design recorded in SPEC +
+  docs/benchmarking.md); the build (a zero-copy `DeviceF32` view + a stack-and-requant
+  fused-load path) is the next fire.
+- Same measurement books **Tw56**: the FFN gate/up/down GEMVs are ~73% of decode time at
+  only ~53% of peak — the largest decode bandwidth deficit and the standing llama.cpp-Q4_K_M
+  gap, needing a genuine memory-schedule rewrite (split-K / deinterleaved layout), tracked
+  separately. Measurement prevented a wrong build (concurrent streams) and quantified the
+  real target — the pattern §V22 exists for.
+
 ### CUDA — SwiGLU-in-up-GEMV-epilogue fusion: parity-exact, measured neutral, parked opt-in (worker linux-amd64, Tw55 slice (a), 2026-07-16)
 - `cu_qmatmul_q8_swiglu` / `cu_qmatmul_q4k_swiglu`: the up-projection GEMV gains an
   optional `gate` pointer; lane 0's epilogue computes `out = silu(gate)·(a·W)` with the

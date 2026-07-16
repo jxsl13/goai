@@ -129,6 +129,7 @@ func benchQ4K(b *testing.B, k, n int) {
 	b.ReportMetric(float64(k)*float64(n)*0.5625/(b.Elapsed().Seconds()/float64(b.N))/1e9, "GB/s")
 }
 
+func BenchmarkGemvQ4K_2048x256(b *testing.B)   { benchQ4K(b, 2048, 256) }   // GQA k/v proj (small-N)
 func BenchmarkGemvQ4K_2048(b *testing.B)       { benchQ4K(b, 2048, 2048) }  // q/o proj
 func BenchmarkGemvQ4K_2048x5632(b *testing.B)  { benchQ4K(b, 2048, 5632) }  // gate/up
 func BenchmarkGemvQ4K_5632x2048(b *testing.B)  { benchQ4K(b, 5632, 2048) }  // down
