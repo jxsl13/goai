@@ -176,6 +176,7 @@ type Decoder struct {
 	parallelTwoNorm                               bool // parallel residual with SEPARATE attn/FFN norms both over x0 (GPT-NeoX); needs the FFN norm computed pre-attn-add
 	qkNorm                                        bool // true ⇒ per-head RMSNorm on Q and K before RoPE (Qwen3); false otherwise
 	eps, posDiv, scale                            float32
+	embMult                                       float32 // gathered embeddings ×= embMult (IBM Granite EmbeddingMult); 1 for everything else
 
 	blocks                                                []block
 	out                                                   linear
@@ -200,7 +201,7 @@ func newDecoderCommon(cfg nlp.LlamaConfig, tokEmb *tensor.Tensor, ops backendOps
 		ops: ops,
 		d:   cfg.Dim, h: cfg.Heads, kvH: cfg.KVHeads, hidden: cfg.Hidden, v: cfg.Vocab,
 		maxLen: cfg.Ctx, eps: float32(cfg.Eps), table: tokEmb,
-		pendingPos: -1,
+		pendingPos: -1, embMult: 1,
 	}
 	if d.kvH <= 0 {
 		d.kvH = d.h
@@ -395,6 +396,36 @@ func newDecoder(m *nlp.Llama, ops backendOps) (*Decoder, error) {
 		in, out := w.Shape()[0], w.Shape()[1]
 		return f32Linear{w: mk(flat2D(w)).b, k: in, n: out}
 	}
+	// IBM Granite config scalars (all identity when 0 or 1, so no-ops for Llama/Qwen/Mistral). Each
+	// folds into the upload rather than a runtime op: AttentionMult overrides the pre-softmax scale,
+	// EmbeddingMult scales gathered embeddings (d.embMult), ResidualMult scales each sublayer output
+	// (baked into Wo and Wdown, since their matmul IS the residual-add epilogue — Granite carries no
+	// projection bias, so nothing else in the add needs scaling), and LogitsScale divides the logits
+	// (baked as 1/LogitsScale into the untied lm_head). Separate uploads, so tied embed/lm_head is fine.
+	if cfg.AttentionMult != 0 {
+		d.scale = float32(cfg.AttentionMult)
+	}
+	if cfg.EmbeddingMult != 0 && cfg.EmbeddingMult != 1 {
+		d.embMult = float32(cfg.EmbeddingMult)
+	}
+	resMult := float32(1)
+	if cfg.ResidualMult != 0 && cfg.ResidualMult != 1 {
+		resMult = float32(cfg.ResidualMult)
+	}
+	outScale := float32(1)
+	if cfg.LogitsScale != 0 && cfg.LogitsScale != 1 {
+		outScale = float32(1 / cfg.LogitsScale)
+	}
+	linS := func(w *tensor.Tensor, s float32) linear { // f32 weight with every element pre-scaled by s
+		in, out := w.Shape()[0], w.Shape()[1]
+		f := flat2D(w)
+		if s != 1 {
+			for i := range f {
+				f[i] *= s
+			}
+		}
+		return f32Linear{w: mk(f).b, k: in, n: out}
+	}
 	// fused QKV weight (§T613): weights are [in,out] with out along the row, so the fusion
 	// concatenates the three output bands PER INPUT ROW — one [in, D+2·kvDim] matrix whose
 	// product row is [q | k | v]. The separate wq/wk/wv uploads are dropped (no dup storage).
@@ -433,16 +464,16 @@ func newDecoder(m *nlp.Llama, ops backendOps) (*Decoder, error) {
 	}
 	for _, b := range m.Blocks {
 		gb := block{
-			wqkv: fused(b.Wq, b.Wk, b.Wv), qkvBias: fusedBias(b.Bq, b.Bk, b.Bv), wo: lin(b.Wo),
+			wqkv: fused(b.Wq, b.Wk, b.Wv), qkvBias: fusedBias(b.Bq, b.Bk, b.Bv), wo: linS(b.Wo, resMult),
 			gAttn: mk(flat1D(b.AttnNorm.Gamma)).b, gFFN: mk(flat1D(b.FFNNorm.Gamma)).b,
 			qN: qkGain(b.QNorm), kN: qkGain(b.KNorm),
-			wG: lin(b.FFN.Wgate), wU: lin(b.FFN.Wup), wD: lin(b.FFN.Wdown),
+			wG: lin(b.FFN.Wgate), wU: lin(b.FFN.Wup), wD: linS(b.FFN.Wdown, resMult),
 			kC: mk(make([]float32, d.maxLen*d.kvDim)).b, vC: mk(make([]float32, d.maxLen*d.kvDim)).b,
 		}
 		d.blocks = append(d.blocks, gb)
 	}
 	d.gFinal = mk(flat1D(m.Norm.Gamma))
-	d.out = lin(m.Out)
+	d.out = linS(m.Out, outScale) // LogitsScale folded into the lm_head (1/LogitsScale)
 	d.allocScratch(mk)
 	if err != nil {
 		d.Release()
@@ -939,7 +970,7 @@ func (d *Decoder) Step(token, pos int) ([]float32, error) {
 		return nil, fmt.Errorf("llamagpu(%s): token %d out of vocab %d", d.ops.name, token, d.v)
 	}
 	// the token's embedding must be resident BEFORE commit — the recorded chain reads d.dx.
-	if err := d.dx.b.UploadF32(embedRow(d.table, token, d.d)); err != nil {
+	if err := d.dx.b.UploadF32(d.gatherEmbed(token)); err != nil {
 		return nil, err
 	}
 	var r recorder
@@ -998,7 +1029,7 @@ func (d *Decoder) StepN(tokens []int, pos int) ([]float32, error) {
 		if tok < 0 || tok >= d.v {
 			return nil, fmt.Errorf("llamagpu(%s): token %d out of vocab %d", d.ops.name, tok, d.v)
 		}
-		copy(host[i*d.d:(i+1)*d.d], embedRow(d.table, tok, d.d))
+		copy(host[i*d.d:(i+1)*d.d], d.gatherEmbed(tok))
 	}
 	if err := d.dx.b.UploadF32(host); err != nil {
 		return nil, err
@@ -1161,4 +1192,16 @@ func embedRow(table *tensor.Tensor, row, cols int) []float32 {
 		o[j] = float32(table.AtF64(row, j))
 	}
 	return o
+}
+
+// gatherEmbed reads a token's embedding row and applies the Granite EmbeddingMult (embMult == 1
+// for every non-Granite model, so this is embedRow verbatim then).
+func (d *Decoder) gatherEmbed(token int) []float32 {
+	e := embedRow(d.table, token, d.d)
+	if d.embMult != 1 {
+		for i := range e {
+			e[i] *= d.embMult
+		}
+	}
+	return e
 }

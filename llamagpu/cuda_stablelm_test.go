@@ -359,3 +359,51 @@ func TestCUDAPhi3MatchesReference(t *testing.T) {
 	}
 	t.Logf("llamagpu NewPhi3CUDA.Generate == nlp.Phi3.Generate greedy: %d tokens (fused-weight split → plain Llama path)", len(gpuOut))
 }
+
+// TestCUDAGraniteMatchesReference checks the IBM Granite GPU path (NewGraniteCUDA) generates
+// greedy-identical tokens to the reference. Granite is a plain Llama plus four config scalars
+// (embedding/attention/residual multipliers + logits scaling); this guards that newDecoder folds
+// all four into the upload (gather scale, softmax scale, Wo/Wdown pre-scale, lm_head 1/scale)
+// correctly — the scalars here are deliberately non-identity (12, 0.5, 0.22, 8).
+func TestCUDAGraniteMatchesReference(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("cuda: no CUDA-capable device")
+	}
+	ts, _, err := safetensors.LoadFile("../nlp/testdata/granite_hf.safetensors")
+	if err != nil {
+		t.Skipf("granite testdata unavailable (run make golden): %v", err)
+	}
+	m, err := nlp.GraniteFromHF(ts, nlp.LlamaConfig{
+		Heads: 4, KVHeads: 2, Eps: 1e-6, RopeBase: 10000, Ctx: 32,
+		EmbeddingMult: 12, AttentionMult: 0.5, ResidualMult: 0.22, LogitsScale: 8,
+	})
+	if err != nil {
+		t.Fatalf("GraniteFromHF: %v", err)
+	}
+
+	dec, err := llamagpu.NewGraniteCUDA(m)
+	if err != nil {
+		t.Fatalf("NewGraniteCUDA: %v", err)
+	}
+	defer dec.Release()
+
+	prompt := []int{3, 7, 1, 9}
+	const maxNew = 12
+	gpuOut, err := dec.Generate(prompt, maxNew, nlp.Greedy())
+	if err != nil {
+		t.Fatalf("cuda generate: %v", err)
+	}
+	refOut, err := m.Generate(prompt, maxNew, nlp.Greedy(), nlp.WithBackend(backend.Reference()))
+	if err != nil {
+		t.Fatalf("ref generate: %v", err)
+	}
+	if len(gpuOut) != len(refOut) {
+		t.Fatalf("length: cuda %d vs ref %d", len(gpuOut), len(refOut))
+	}
+	for i := range gpuOut {
+		if gpuOut[i] != refOut[i] {
+			t.Fatalf("token[%d]: cuda %d vs ref %d\ncuda=%v\nref=%v", i, gpuOut[i], refOut[i], gpuOut, refOut)
+		}
+	}
+	t.Logf("llamagpu NewGraniteCUDA.Generate == nlp.Granite.Generate greedy: %d tokens (4 config scalars folded into upload)", len(gpuOut))
+}

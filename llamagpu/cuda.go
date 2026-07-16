@@ -120,6 +120,13 @@ func NewQwen3CUDA(m *nlp.Llama) (*Decoder, error) { return NewCUDA(m) }
 // which is parallel-residual with LayerNorm and partial rotary).
 func NewPhi3CUDA(m *nlp.Llama) (*Decoder, error) { return NewCUDA(m) }
 
+// NewGraniteCUDA uploads an IBM Granite model onto the batched Decoder core. Granite is a plain
+// Llama plus four learned-at-config scalars — embedding_multiplier, attention_multiplier,
+// residual_multiplier and logits_scaling — which newDecoder folds into the upload (embedding gather
+// scale, softmax scale override, Wo/Wdown pre-scale, and 1/logits_scaling into the lm_head), so this
+// is NewCUDA with a Granite-typed entry point. Load with nlp.GraniteFromHF.
+func NewGraniteCUDA(m *nlp.Llama) (*Decoder, error) { return NewCUDA(m) }
+
 // NewStableLMCUDA uploads an nlp.StableLM into CUDA device buffers and runs it through the same
 // batched Decoder core as NewCUDA — but with LayerNorm-with-bias norms and PARTIAL rotary (the
 // StableLM/Phi/StarCoder2-class departures from Llama). The first of the new-architecture GPU
