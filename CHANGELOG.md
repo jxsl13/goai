@@ -23,6 +23,17 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   one quant of the attn-norm hidden, gate/up share one of the ffn-norm hidden (f16 weights fall
   back). End-to-end on TinyLlama, MMQ prefill 3552 -> 3793 t/s (+6.8%); combined with the ldmatrix
   loads it is 3479 -> 3793 (+9% e2e, MMQ prefill now 0.74x f16 vs 0.68x before), same accuracy.
+### nlp — new: BERT bidirectional encoder + BertFromHF (T727, 2026-07-16)
+
+GoAI had the BERT *surroundings* — WordPiece tokenizer, MLM masking, MeanPool, CosineRerank —
+but no encoder to produce the embeddings they consume. New `Bert` is a post-LN bidirectional
+transformer encoder (the encoder counterpart of the decoder `GPT`): summed token+position+
+segment embeddings with a LayerNorm, then layers of biased bidirectional self-attention and a
+GELU FFN, each followed by a LayerNorm over its residual. `BertFromHF(ts, cfg)` loads a Hugging
+Face BertModel checkpoint (via `safetensors.Load` / `pytorch.Load`), inferring dimensions from
+the tensors. Anchored by a forward-parity test against transformers `BertModel`: the
+`last_hidden_state` matches to **3.4e-7**. With this, GoAI can load real BERT / sentence-
+transformer checkpoints and run the full embedding/retrieval pipeline. `RobertaFromHF` covers the RoBERTa family too (identical encoder, position ids offset by padding_idx+1) — also transformers-parity (3.7e-7).
 
 ### CUDA — ldmatrix int8 GEMM (edges past cuBLAS f16) + honest prefill standing vs llama.cpp (worker linux-amd64, Tw76, 2026-07-16)
 - `cu_matmul_i8_mma_lm`: the int8 tensor-core GEMM with **hardware `ldmatrix` fragment loads** (A via
