@@ -205,7 +205,15 @@ func (a RoPEAttrs) WithDefaults() RoPEAttrs {
 
 // AXPYAttrs parameterises the scaled vector add y += α·x (OpAXPY).
 type AXPYAttrs struct {
-	Alpha float64 // scale applied to x before the add; 0 → 1
+	// Alpha is the scale applied to x before the add. Its zero value means
+	// "unset" and is defaulted to 1 (a caller who forgot to set Alpha still gets
+	// a plain add). FOOTGUN: therefore a *computed* Alpha that happens to be 0
+	// does NOT give y += 0·x — it silently becomes y += 1·x. If you need a scale
+	// that can legitimately be 0 (e.g. a weight from a loop that may be zero),
+	// do NOT use OpAXPY; use OpMul against a scalar/broadcast constant, which
+	// zeroes both the value and (via its VJP) the gradient. Cf. CPOAttrs.Alpha,
+	// which uses <0→1 precisely because 0 is meaningful there.
+	Alpha float64
 }
 
 func (AXPYAttrs) opAttrs() {}

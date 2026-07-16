@@ -85,6 +85,8 @@ var typeExampleExempt = map[string]bool{
 	"nlp.CoconutOption":             true, // functional-option type (shown via WithCoconutMarkers/WithCoconutPause)
 	"nlp.ChatRenderOption":          true, // functional-option type (shown via WithGenerationPrompt/WithoutBOS)
 	"nlp.RerankResult":              true, // plain result record returned by CosineRerank; shown in its examples
+	"backend.OffloadPlan":           true, // plain result record returned by PlanOffload; shown in ExamplePlanOffload
+	"backend.MemoryProber":          true, // optional device-memory capability interface (backend-author surface), consumed by ProbeBudgets
 	"vision.CNNOption":              true, // functional-option type (shown via WithChannels/WithKernel/WithDtype)
 	"vision.ViTOption":              true, // functional-option type (shown via WithViTDim/WithViTHeads etc.)
 	"nlp.Beam":                      true, // returned by BeamSearch, shown in ExampleBeamSearch
@@ -138,8 +140,26 @@ var typeExampleExempt = map[string]bool{
 	"nn.AdEMAMixOption":             true, // functional-option type (shown via WithAdEMAMix*)
 	"nn.CautiousAdamWOption":        true, // functional-option type (shown via WithCautious*)
 	"nn.SAMOption":                  true, // functional-option type (shown via WithSAM*)
+	"nn.ReMoEOption":                true, // functional-option type (shown via WithReMoELambda/WithReMoEAdaptRate)
+	"nn.MiniLMOption":               true, // functional-option type (shown via WithMiniLMRelations)
+	"nn.AQLMOption":                 true, // functional-option type (shown via WithAQLMCodebooks etc. in ExampleEncodeAQLM)
+	"nn.SpinOption":                 true, // functional-option type (shown via WithSpinSeed)
+	"nn.MARSOption":                 true, // functional-option type (shown via WithMARSGamma etc.)
+	"nn.PSGDKronOption":             true, // functional-option type (shown via WithPSGDKron*)
+	"nn.SoftpickAttentionOption":    true, // functional-option type (shown via WithSoftpickCausal)
+	"nn.MixupOption":                true, // functional-option type (shown via WithMixupLambda in ExampleMixup)
+	"nn.CutMixOption":               true, // functional-option type (shown via WithCutMixLambda)
+	"nn.QGaLoreOption":              true, // functional-option type (shown via WithQGaLore*)
+	"nn.SimCSEOption":               true, // functional-option type (shown via WithSimCSETemperature etc.)
+	"nn.Matryoshka2DOption":         true, // functional-option type (shown via WithMatryoshka2DLayerWeights/DimWeights)
+	"nn.DAPOOption":                 true, // functional-option type (shown via WithDAPOClipHigh)
+	"nn.CoordTable":                 true, // plain result record returned by CoordCheck.Run; shown in ExampleCoordCheck
 	"autograd.CheckpointFunc":       true, // callback-signature type (shown via ExampleCheckpoint)
 	"nn.ScheduleFreeOption":         true, // functional-option type (shown via WithScheduleFree*)
+	"nn.DAdaptAdamOption":           true, // functional-option type (shown via WithDAdapt*)
+	"nn.ProdigyOption":              true, // functional-option type (shown via WithProdigy*)
+	"nn.AdamMiniOption":             true, // functional-option type (shown via WithAdamMini*)
+	"nn.TPAOption":                  true, // functional-option type (shown via WithTPARanks/WithTPARoPE)
 	"nn.LookaheadOption":            true, // functional-option type (shown via WithLookahead*)
 	"nn.LossScaler":                 true, // mixed-precision helper; shown in the AMP training tests
 	"nn.MixedPrecision":             true, // mixed-precision helper; shown in the AMP training tests
@@ -232,7 +252,7 @@ func TestPublicAPIDocumentedWithExamples(t *testing.T) {
 		}
 		if d.IsDir() {
 			base := d.Name()
-			if base == ".git" || base == "testdata" || base == ".venv" || base == "docs" {
+			if base == ".git" || base == "testdata" || base == ".venv" || base == "docs" || base == ".claude" {
 				return filepath.SkipDir
 			}
 			return nil
@@ -482,7 +502,7 @@ func TestPackageDocsCarryLaymanAndFurtherReading(t *testing.T) {
 		}
 		if d.IsDir() {
 			base := d.Name()
-			if base == ".git" || base == "testdata" || base == ".venv" || base == "docs" {
+			if base == ".git" || base == "testdata" || base == ".venv" || base == "docs" || base == ".claude" {
 				return filepath.SkipDir
 			}
 			return nil
@@ -504,8 +524,10 @@ func TestPackageDocsCarryLaymanAndFurtherReading(t *testing.T) {
 	}
 	sort.Strings(dirs)
 	for _, rel := range dirs {
-		if rel == "." || strings.HasPrefix(rel, "internal") || implPkg(rel) {
-			continue
+		if rel == "." || strings.HasPrefix(rel, "internal") ||
+			strings.Contains(rel, "/internal/") || strings.HasSuffix(rel, "/internal") ||
+			implPkg(rel) {
+			continue // internal packages (incl. nested, e.g. backend/cpu/internal/accel) are not user-facing
 		}
 		pkgs, perr := parser.ParseDir(fset, filepath.Join(root, rel), nil, parser.ParseComments)
 		if perr != nil {

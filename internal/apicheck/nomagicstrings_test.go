@@ -43,7 +43,7 @@ func TestNoMagicBackendNameStrings(t *testing.T) {
 		}
 		if d.IsDir() {
 			switch d.Name() {
-			case ".git", "testdata", ".venv", "docs":
+			case ".git", "testdata", ".venv", "docs", ".claude":
 				return filepath.SkipDir
 			}
 			return nil

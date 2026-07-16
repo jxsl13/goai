@@ -572,6 +572,42 @@ Snapshot (M2 Pro, 2026-07-12, tokens/s, higher is better):
 
 Both GPU backends win ≈20× (forward) / ≈13× (training) over the Pure-Go cpu backend.
 
+### The f32-native CPU SIMD campaign, end-to-end (§T656–§T663, 2026-07-15)
+
+The per-op tables record each rung of the "be better than pytorch" CPU grind — the NEON GEMM
+(§T656), MHA/Conv routing (§T657), Apple AMX (§T658, ADR-0027), the NEON `exp` for the MHA
+softmax (§T660) and the standalone `OpSoftmax` (§T661), the `cblas_sgemv` m=2 decode path
+(§T662), and the NEON `erf`-GELU (§T663). Measured **end-to-end on the real f32 GPT forward**
+(`BenchmarkGPTForward/cpu`, same vocab-4096/512-dim/8-head/6-layer/256-token model, f32 weights,
+M2 Pro), the whole campaign compounds:
+
+| CPU f32 GPT forward | tok/s | ms/forward |
+|---------------------|------:|-----------:|
+| f32 scalar (no `GOEXPERIMENT=simd`) | ≈1250 | ≈205 |
+| + AMX GEMM + vexp MHA/softmax (§T656–T661) | ≈11050 | ≈23.1 |
+| + NEON erf-GELU (§T663) | **≈13600** | **≈18.9** |
+
+The **training step** (forward+backward) got its own profile-driven rung (§T664): `gelu_backward`
+(18.9% of the step) and `crossentropy` fwd+bwd (10.7%) were **silent reference-backend fallbacks**
+(serial scalar `math.Erf`/`math.Exp`) — NEON cpu kernels reusing the same vexp/vgelu leaves made
+them 45× / 25× / 32× in isolation, and the whole training step **1.48×** (1325 → 1930 tok/s,
+193 → 130 ms). After it, an op-profile shows matmul at 81% — the training step is now
+matmul-bound at the AMX ceiling, the same floor the forward reached.
+
+| CPU f32 GPT training step | tok/s | ms/step |
+|---------------------------|------:|--------:|
+| before §T664 (gelu_bwd + CE on ref) | ≈1325 | ≈193 |
+| + NEON gelu_backward + crossentropy (§T664) | **≈1930** | **≈130** |
+
+**≈10.9×** on the whole forward — the per-op wins (AMX matmul, vexp attention/softmax, vexp
+GELU) stack into an order-of-magnitude real-workload speedup. A profile-driven progression: once
+the AMX/vexp rungs landed, a `GOAI_TIME_OPS` op-profile showed matmul at 54% (Apple's AMX
+ceiling), then GELU at 13.6% as the next non-ceiling elementwise cost (scalar `math.Erf`) — its
+vectorization (§T663) alone bought the last 1.21×. This confirms the f32-native fast paths are on
+the inference critical path (f32 models route matmul→AMX, MHA/softmax/GELU→NEON), not dormant —
+f64 is only the gradcheck/reference regime. The fast path is opt-in, so `make bench-compare` must
+run with `GOEXPERIMENT=simd` to see it; the default build stays bit-exact.
+
 **BUT autoregressive DECODE is the opposite (§T360).** `BenchmarkGPTDecode` times one-token-per-step
 generation with a KV cache — the real inference workload. Each step's ops are tiny (seq=1), so the
 per-op GPU dispatch / `waitUntilCompleted` round-trip (≈200 µs, and a decode step is ≈95 ops)
@@ -1090,7 +1126,7 @@ storage, f32 compute — `KVCacheF16` + `cu_gqa_flash_f16_dpos`, round-to-neares
 tiles converted in shared so conversion is amortized over the GQA group). MEASURED
 FLAT: interleaved A/B at ctx≈2004 gives f16 209.9–210.3 vs f32 211.8–212.9 tok/s (≤1%,
 noise). The traffic model says why: after the 8× GQA sharing, K/V global reads are only
-~11µs of the flash kernel's ~34µs/layer at 2k — the rest is compute and tile staging,
+≈11µs of the flash kernel's ≈34µs/layer at 2k — the rest is compute and tile staging,
 so halving the bytes moves ~2%. The hypothesis "attention is K/V-read-bound" died with
 the very kernel that made it true before.
 

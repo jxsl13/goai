@@ -11,8 +11,8 @@ import (
 
 // Sampler turns a logit vector into a token id. Pipeline (matching HuggingFace
 // generation): repetition penalties (via SampleWithHistory) → temperature scaling
-// → top-k mask → softmax → top-p (nucleus) mask → min-p mask → epsilon/eta mask →
-// multinomial sample. Temperature ≤ 0 selects greedy (argmax), which ignores the
+// → top-nσ logit mask → top-k mask → softmax → top-p (nucleus) mask → min-p mask
+// → epsilon/eta mask → multinomial sample. Temperature ≤ 0 selects greedy (argmax), which ignores the
 // truncation filters and RNG — but not the penalties, which act on the logits
 // before the greedy/temperature split.
 //
@@ -32,6 +32,7 @@ type Sampler struct {
 	Epsilon     float64 // epsilon sampling: keep tokens with prob ≥ Epsilon; 0 = off
 	Eta         float64 // eta sampling: keep tokens with prob ≥ min(Eta, √Eta·exp(−H)); 0 = off
 	Typical     float64 // locally typical: keep tokens whose surprisal is nearest the entropy until cum-prob ≥ τ; 0/≥1 = off
+	TopNSigma   float64 // top-nσ: keep tokens with logit ≥ max − n·σ (Tang et al. 2024, see sample_topnsigma.go); ≤0 = off
 
 	// Repetition penalties (applied by SampleWithHistory over the recent history).
 	RepeatPenalty   float64 // CTRL (Keskar et al. 2019): divide positive logits of seen tokens by this, multiply negative; 0/1 = off, typical 1.1–1.3
@@ -755,8 +756,8 @@ func (s *Sampler) SampleWithHistory(logits []float64, history []int) int {
 }
 
 // Dist returns the probability distribution this sampler draws from for the given
-// logits: temperature scaling, then top-k, top-p (nucleus) and min-p filtering,
-// renormalized to sum 1. For greedy sampling (Temperature ≤ 0) it is a one-hot
+// logits: temperature scaling, then top-nσ, top-k, top-p (nucleus) and min-p
+// filtering, renormalized to sum 1. For greedy sampling (Temperature ≤ 0) it is a one-hot
 // vector at the arg-max. Speculative decoding (§R53) uses it to obtain the target
 // and draft distributions p and q that the accept/reject rule compares.
 func (s *Sampler) Dist(logits []float64) []float64 {
@@ -771,6 +772,16 @@ func (s *Sampler) Dist(logits []float64) []float64 {
 	z := make([]float64, n)
 	for i, v := range logits {
 		z[i] = v / s.Temperature
+	}
+
+	// top-nσ (Tang et al. 2024 arXiv:2411.07641, see sample_topnsigma.go): mask
+	// logits below max − n·σ to −inf, at the LOGIT stage before any other filter.
+	// It must precede top-k's −inf masking so σ is computed over the full finite
+	// vocabulary; and because max and σ scale by 1/T together, the kept set on z
+	// equals the kept set on the raw logits — temperature moves no token across
+	// the threshold (the paper's defining temperature-invariance property).
+	if s.TopNSigma > 0 {
+		topNSigmaMask(z, s.TopNSigma)
 	}
 
 	// top-k: keep the k highest logits, mask the rest to −inf. Instead of a full

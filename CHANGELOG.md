@@ -23,6 +23,73 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   **opt-in** (`GOAI_CUDA_FFN_FUSE=1`). The remaining Tw55 lever is slice (b) —
   concurrent QKV streams in graph capture (QKV proj ≈11% of prefill), still open.
 
+### nn/nlp — topic-discovery round 6: 18 new techniques across optimizers, attention, quant, sampling, MoE, distillation, embeddings, augmentation, RL (T668–T684, 2026-07-15/16)
+
+A systematic verify-first sweep per category (the earlier rounds were architecture-block-focused
+and had wrongly concluded the frontier exhausted) surfaced real gaps; each was built additively,
+with a measurable-value test and a collapse/equivalence/gradcheck anchor (~1e-10), and independently
+re-verified on `main`.
+
+- **Optimizers (5).** Learning-rate-free **Prodigy** and **D-Adaptation** (untuned reach the loss of
+  a tuned Adam while Adam at the same nominal LR stalls); **Adam-mini** (~50% less optimizer state
+  via one second-moment scalar per parameter block); **MARS** (variance-reduced AdamW, γ=0 ≡ AdamW);
+  **PSGD-Kron** (diagonal Kronecker-preconditioned SGD, beats a tuned Adam on an ill-conditioned
+  problem). Each collapses bit-identically to its baseline at the disabling setting.
+- **Attention (3).** **TPA** (Tensor Product Attention — per-token rank-R Q/K/V factorization,
+  ~72% KV-cache compression, plus an incremental decode cache of factors); **Softpick /
+  softmax-off-by-one** ("attend to nothing", built as a composed layer with no backend change);
+  **Lightning-attention** was correctly found *already present* (RetentionChunkwise) and not
+  duplicated.
+- **Quantization (3).** **AQLM** (additive multi-codebook 2–3-bit weight quantization, rate-distortion
+  faithful); **SpinQuant** (rotation-based outlier removal with a learnable orthogonal via QR, ~31×
+  lower quantization MSE on outlier-heavy activations); **Q-GaLore** (GaLore with INT8 log-magnitude
+  quantized optimizer state, ~7.8× less state, bit-identical to GaLore at full precision).
+- **Sampling / MoE / distillation.** **top-nσ** (temperature-stable logit truncation); **ReMoE**
+  (fully-differentiable ReLU-routed mixture-of-experts, no auxiliary load-balancing loss); **MiniLM**
+  deep self-attention distillation (v1 + v2, width-independent teacher→student transfer).
+- **Embeddings / augmentation / RL.** **SimCSE** (dropout-as-augmentation contrastive sentence
+  embeddings); **2D-Matryoshka** (nested representations across both dims and layers); **Mixup +
+  CutMix** (input-mixing data augmentation with mixed-label loss); **DAPO** (the DeepSeek-R1-era
+  GRPO improvement — decoupled clip-higher + token-level loss + dynamic sampling, collapses to
+  GRPO at ε_low=ε_high).
+
+### backend — configurable per-op / per-layer backend routing (T630, C23, 2026-07-16)
+
+`Context.WithOpBackend(op, name)` / `WithLayerBackend(name, ops…)` route a chosen op (or a group)
+to a chosen backend; off by default (an empty override is a nil-map lookup, byte-for-byte
+unchanged). It exists for low-VRAM offload and heterogeneous speculative decoding, not as a default
+speedup (a split on a device that fits the whole model is a transfer-bound loss). The scheduling
+policy for the former, `backend.PlanOffload`, also landed: it packs the hottest layers onto the GPU
+up to its memory budget and spills the rest to the CPU, always yielding a runnable plan for an
+oversized model (llama.cpp-style partial offload) rather than an out-of-memory failure.
+
+### CPU (Apple Silicon / arm64) — the "be better than pytorch" f32 campaign: matched, then beaten (T656–T666, 2026-07-15)
+
+The pure-Go CPU backend's f32 hot paths went from ≈42× behind torch-cpu to matching or beating
+it, and the real f32 GPT forward is **≈10.9×** faster end-to-end. All of this rides the opt-in
+`GOEXPERIMENT=simd` fast path; the default `CGO_ENABLED=0` build stays byte-for-byte bit-exact.
+
+- **F32 GEMM → Apple AMX (T656/T658, ADR-0027).** A hand-written Plan9 NEON GEMM (61 → ≈795
+  GFLOP/s, 13×) closed most of the gap; the residual was Apple's AMX matrix coprocessor. We now
+  reach AMX two ways and dispatch per-shape to the faster: Accelerate `cblas_sgemm` via cgo
+  (2506 GFLOP/s @1024³ = **matches torch-cpu's 2584**) and a hand-written **pure-Go** raw-AMX
+  Plan9-asm kernel (no cgo) that **beats Accelerate by 6–31% on >L2 shapes**. `CGO_ENABLED=0`
+  falls back to the raw-AMX kernel (≈2100 GFLOP/s, pure Go) then NEON. A `cblas_sgemv` path fills
+  an m=2 decode hole (1.6×, T662).
+- **One NEON transcendental leaf, every activation (T660–T666).** A single verified NEON `exp`
+  kernel (Cephes reduction) now serves the whole library's f32 transcendentals — softmax and
+  fused MHA (T660), the standalone `OpSoftmax` (T661), GELU forward (5.1×, T663) and its backward
+  plus cross-entropy (45× / 25× / 32× — both had been silently falling back to the reference
+  backend, T664), SiLU forward+backward and sigmoid for the Llama/Qwen/Mistral SwiGLU path (T665),
+  and the standalone `OpExp`/`OpTanh`/`OpLog` (T666, `OpLog` via a new Cephes NEON log). Every
+  kernel is accuracy-checked against the f64 reference (≤≈3e-5 rel err, far inside the tolerant
+  f32 budget) and, for the gradients, passes the autograd gradcheck.
+- **End-to-end, profile-driven.** After each rung, a `GOAI_TIME_OPS` op-profile of the real
+  workload picked the next target. The f32 GPT forward reached ≈13,600 tok/s (from ≈1,250 scalar,
+  ≈10.9×) and the training step ≈1,930 tok/s (1.48×); both are now **matmul-bound at the AMX
+  ceiling** — every compute-bound op is vectorized, the remainder is bandwidth-bound. Numbers and
+  method are in `docs/benchmarking.md`.
+
 ### CUDA — native Q6_K GEMV: Q4_K_M files now load fully bit-native (worker linux-amd64, Tw54, 2026-07-15)
 - `cu_qmatmul_q6k` + `ResidentBQ6K`: warp-per-output GEMV over ggml's 210-byte Q6_K
   super-blocks, golden vs the gguf dequant reference at maxRel 2.5e-6. `quantDirect`

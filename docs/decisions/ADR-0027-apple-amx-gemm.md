@@ -93,3 +93,15 @@ default non-simd build is untouched and bit-exact.
 **Headline: the torch gap is closed — 2584 ≈ matched at 1024³ via Accelerate (3.25× → ≈1.0×),
 and the pure-Go raw-AMX kernel BEATS Accelerate by 5–31% across the >L2 shapes (as the
 arXiv:2606.25426 result predicted), while pushing the no-cgo build from 795 to ≈2100 GFLOP/s.**
+
+## Errata (T662, 2026-07-15)
+
+The "decode GEMV (m<4) stays scalar at ≈17 GFLOP/s" note above describes the `CGO_ENABLED=0`
+fallback ONLY. In the cgo build the live `gemmF32` dispatch already routes every m<4 shape to
+Accelerate `cblas_sgemm` (m=1 k=n=2048 measured at ≈40 GFLOP/s — the "40" was already live), so
+the m=1 decode path was never scalar there. A follow-up grind (T662) added `cblas_sgemv` (BLAS2)
+and found the actual gap was at **m=2**, where `cblas_sgemm` has a hole (≈27.6 GFLOP/s) that the
+matrix-vector primitive fills: m=2 2048³ sgemv 33.7–38.7 vs sgemm 20.5–27.6 = **1.4–1.6×**
+(2-token speculative/batched decode). `gemmF32` now routes m ∈ {1,2} to per-row `cblas_sgemv`
+(m=1 a wash but the semantically-correct BLAS2 primitive; m=3 keeps sgemm). The scalar ≈17
+GFLOP/s path remains only where cgo is unavailable.

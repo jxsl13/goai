@@ -20,3 +20,66 @@ func vexpF32(p []float32, m float32) float32 {
 	}
 	return sum
 }
+
+// vgeluF32 computes dst[i] = gelu(src[i]) via the scalar poly — exists only so
+// the OpGELU F32 fast path type-checks (dead code at run time here: vexpNeon
+// is false, so geluKernelCPU keeps the exact f64 math.Erf path).
+func vgeluF32(dst, src []float32) {
+	for i, v := range src {
+		dst[i] = geluF32(v)
+	}
+}
+
+// vgeluGradF32 computes dst[i] = g[i]·gelu'(x[i]) via the scalar poly — exists
+// only so the OpGELUBackward F32 fast path type-checks (dead code at run time
+// here: vexpNeon is false, so the kernel is never registered and gelu-backward
+// keeps the exact ref f64 path).
+func vgeluGradF32(dst, x, g []float32) {
+	for i, v := range x {
+		dst[i] = geluGradF32(v, g[i])
+	}
+}
+
+// vsiluF32 / vsiluGradF32 / vsigmoidF32 compute the SiLU / SiLU-backward /
+// sigmoid scalar polys — they exist only so the arm64-perf fast paths
+// type-check (dead code at run time here: vexpNeon is false, so the kernels
+// keep the exact scalar-f64 / ref paths bit-for-bit).
+func vsiluF32(dst, src []float32) {
+	for i, v := range src {
+		dst[i] = siluF32(v)
+	}
+}
+
+func vsiluGradF32(dst, x, g []float32) {
+	for i, v := range x {
+		dst[i] = siluGradF32(v, g[i])
+	}
+}
+
+func vsigmoidF32(dst, src []float32) {
+	for i, v := range src {
+		dst[i] = sigmoidF32(v)
+	}
+}
+
+// vexpFullF32 / vtanhF32 / vlogF32 compute the standalone-unary scalar polys
+// (§T666) — they exist only so the arm64-perf fast paths type-check (dead code
+// at run time here: vexpNeon is false, so expKernelCPU / tanhKernelCPU /
+// logKernelCPU keep the exact scalar-f64 math.Exp/Tanh/Log paths bit-for-bit).
+func vexpFullF32(dst, src []float32) {
+	for i, v := range src {
+		dst[i] = expFullF32(v)
+	}
+}
+
+func vtanhF32(dst, src []float32) {
+	for i, v := range src {
+		dst[i] = tanhF32(v)
+	}
+}
+
+func vlogF32(dst, src []float32) {
+	for i, v := range src {
+		dst[i] = logF32(v)
+	}
+}
