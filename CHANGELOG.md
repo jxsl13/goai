@@ -23,6 +23,16 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   `[N][K]` + scales, so it gains `MatMulMMQDevice`/`MatMulMMQAccInto`: the prefill GEMM reads the SAME
   resident bytes the decode GEMV reads → **one weight, both paths, zero extra prefill VRAM** for a
   Q8-decode model (vs f16 prefill = a full 2× copy). Requires K%32/N%64 (clean error → f16 fallback).
+### npy (public) — performance: bulk-copy the public Save/Load path too (T722, 2026-07-16)
+
+Completeness audit of T721 caught that `format/npy` (the public npy package) is a *separate*
+sibling from `internal/npy` with its own per-element decode/encode loops — the T721 fix had
+only reached the internal one. Applied the same little-endian bulk-copy fast path to the
+public `Save`/`Load` (F32/F64/F16), element-wise fallback kept. §V22 A/B (16.8 MB f32):
+**read 3186 → 15080 MB/s (4.7×), write 2467 → 7651 MB/s (3.1×)**. Round-trip, hostile and
+npz tests unchanged, `-race` clean. The lesson: a sibling audit must include *packages* with
+duplicated logic, not just call sites within one package.
+
 ### npy + safetensors — performance: bulk-copy the writer and npy I/O (T721, 2026-07-16)
 
 Class-audit of the T720 per-element anti-pattern across the sibling I/O paths found the

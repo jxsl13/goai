@@ -21,9 +21,41 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"unsafe"
 
 	"github.com/jxsl13/goai/tensor"
 )
+
+// nativeLittleEndian reports whether the host stores multi-byte scalars
+// little-endian. The npy data section is little-endian on disk (this package
+// only handles '<' byte order), so on such hosts (every platform GoAI targets)
+// the raw bytes already match a tensor's in-memory F32/F64/F16 layout and the
+// copy is one memmove instead of a per-element decode/encode loop. Big-endian
+// hosts fall back to the element-wise path, so the bytes are identical either way.
+var nativeLittleEndian = func() bool {
+	var x uint16 = 1
+	return *(*byte)(unsafe.Pointer(&x)) == 1
+}()
+
+// rawCopyLE bulk-copies verbatim little-endian source bytes into a numeric
+// slice's backing store (read side); rawStoreLE is the write-side mirror. Both
+// return false on a big-endian host or empty slice so the caller falls back to
+// the element-wise path.
+func rawCopyLE[T any](dst []T, src []byte, elemSize int) bool {
+	if !nativeLittleEndian || len(dst) == 0 {
+		return false
+	}
+	copy(unsafe.Slice((*byte)(unsafe.Pointer(&dst[0])), len(dst)*elemSize), src)
+	return true
+}
+
+func rawStoreLE[T any](dst []byte, src []T, elemSize int) bool {
+	if !nativeLittleEndian || len(src) == 0 {
+		return false
+	}
+	copy(dst, unsafe.Slice((*byte)(unsafe.Pointer(&src[0])), len(src)*elemSize))
+	return true
+}
 
 const (
 	maxHeaderLen = 1 << 20 // reject absurd header lengths (fuzz safety)
@@ -131,8 +163,10 @@ func writeData(w io.Writer, t *tensor.Tensor) error {
 		for len(src) > 0 {
 			m := min(len(src), len(b)/4)
 			c := b[:4*m]
-			for i, v := range src[:m] {
-				binary.LittleEndian.PutUint32(c[i*4:], math.Float32bits(v))
+			if !rawStoreLE(c, src[:m], 4) {
+				for i, v := range src[:m] {
+					binary.LittleEndian.PutUint32(c[i*4:], math.Float32bits(v))
+				}
 			}
 			if _, err := w.Write(c); err != nil {
 				return err
@@ -144,8 +178,10 @@ func writeData(w io.Writer, t *tensor.Tensor) error {
 		for len(src) > 0 {
 			m := min(len(src), len(b)/8)
 			c := b[:8*m]
-			for i, v := range src[:m] {
-				binary.LittleEndian.PutUint64(c[i*8:], math.Float64bits(v))
+			if !rawStoreLE(c, src[:m], 8) {
+				for i, v := range src[:m] {
+					binary.LittleEndian.PutUint64(c[i*8:], math.Float64bits(v))
+				}
 			}
 			if _, err := w.Write(c); err != nil {
 				return err
@@ -157,8 +193,10 @@ func writeData(w io.Writer, t *tensor.Tensor) error {
 		for len(src) > 0 {
 			m := min(len(src), len(b)/2)
 			c := b[:2*m]
-			for i, bits := range src[:m] {
-				binary.LittleEndian.PutUint16(c[i*2:], bits)
+			if !rawStoreLE(c, src[:m], 2) {
+				for i, bits := range src[:m] {
+					binary.LittleEndian.PutUint16(c[i*2:], bits)
+				}
 			}
 			if _, err := w.Write(c); err != nil {
 				return err
@@ -267,8 +305,10 @@ func readData(r io.Reader, out *tensor.Tensor, numel int) error {
 			if _, err := io.ReadFull(r, c); err != nil {
 				return fmt.Errorf("npy: reading data: %w", err)
 			}
-			for i := range m {
-				s[i] = math.Float32frombits(binary.LittleEndian.Uint32(c[i*4:]))
+			if !rawCopyLE(s[:m], c, 4) {
+				for i := range m {
+					s[i] = math.Float32frombits(binary.LittleEndian.Uint32(c[i*4:]))
+				}
 			}
 			s = s[m:]
 		}
@@ -280,8 +320,10 @@ func readData(r io.Reader, out *tensor.Tensor, numel int) error {
 			if _, err := io.ReadFull(r, c); err != nil {
 				return fmt.Errorf("npy: reading data: %w", err)
 			}
-			for i := range m {
-				s[i] = math.Float64frombits(binary.LittleEndian.Uint64(c[i*8:]))
+			if !rawCopyLE(s[:m], c, 8) {
+				for i := range m {
+					s[i] = math.Float64frombits(binary.LittleEndian.Uint64(c[i*8:]))
+				}
 			}
 			s = s[m:]
 		}
@@ -293,8 +335,10 @@ func readData(r io.Reader, out *tensor.Tensor, numel int) error {
 			if _, err := io.ReadFull(r, c); err != nil {
 				return fmt.Errorf("npy: reading data: %w", err)
 			}
-			for i := range m {
-				s[i] = binary.LittleEndian.Uint16(c[i*2:])
+			if !rawCopyLE(s[:m], c, 2) {
+				for i := range m {
+					s[i] = binary.LittleEndian.Uint16(c[i*2:])
+				}
 			}
 			s = s[m:]
 		}
