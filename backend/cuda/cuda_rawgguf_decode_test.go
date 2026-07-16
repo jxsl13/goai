@@ -100,6 +100,27 @@ func fuseRowsQ4K(ts ...*tensor.Tensor) (qProj, error) {
 	return cuda.NewResidentBQ4KFromBlocks(blocks, k, n)
 }
 
+// fuseRowsQ8 is the Q8_0 twin of fuseRowsQ4K: it row-stacks the weights ([ΣN,K]), transposes
+// to the in-major [K,ΣN] that NewResidentBQ8 wants, and uploads one fused Q8 projection.
+// Q8_0 quantizes each output column's K in independent 32-blocks, so the fused weight's first
+// Nq columns are byte-identical to encoding wq alone — bit-exact per output row, only the GEMV
+// launch is merged, exactly like the Q4_K case.
+func fuseRowsQ8(ts ...*tensor.Tensor) (qProj, error) {
+	return cuda.NewResidentBQ8(transpose2D(stackRows0(ts...)))
+}
+
+// fuseRows dispatches row-fusion to the decoder's quant format (Tw57): GOAI_CUDA_FUSE_FMT=q8
+// fuses as Q8_0, else Q4_K (default, unchanged behavior). Without this a Q8 decoder silently
+// requantized its fused QKV/gate-up down to Q4_K — a precision downgrade the separate-GEMV path
+// never took. The two knobs (GOAI_CUDA_FUSE_FMT + the model's quant closure) must agree; the
+// parity tests pin that.
+func fuseRows(ts ...*tensor.Tensor) (qProj, error) {
+	if os.Getenv("GOAI_CUDA_FUSE_FMT") == "q8" {
+		return fuseRowsQ8(ts...)
+	}
+	return fuseRowsQ4K(ts...)
+}
+
 // swigluProj is the optional SwiGLU-epilogue capability of a quantized projection
 // (Tw55): out = silu(gate) ⊙ (a·W) in one GEMV launch. Q8 and Q4_K implement it —
 // the formats gate/up tensors actually use; others fall back to the 3-op chain.
@@ -252,14 +273,14 @@ func buildRawGraphDecoder(tb testing.TB, rf *gguf.RawFile, arch string, maxSeq i
 			wo: q(p + "attn_output.weight"), wd: q(p + "ffn_down.weight"),
 			cache: c, cacheF: cf,
 		}
-		if qkvFuse() && !hasBias { // fused Q4_K QKV (Tw55(b)); bias'd families (qwen2) stay separate for now
-			l.wqkv, err = fuseRowsQ4K(deq(p+"attn_q.weight"), deq(p+"attn_k.weight"), deq(p+"attn_v.weight"))
+		if qkvFuse() && !hasBias { // fused QKV (Tw55(b)); format follows GOAI_CUDA_FUSE_FMT (Tw57); bias'd families (qwen2) stay separate for now
+			l.wqkv, err = fuseRows(deq(p+"attn_q.weight"), deq(p+"attn_k.weight"), deq(p+"attn_v.weight"))
 			mustTB(tb, err)
 		} else {
 			l.wq, l.wk, l.wv = q(p+"attn_q.weight"), q(p+"attn_k.weight"), q(p+"attn_v.weight")
 		}
-		if gateUpFuse() { // fused gate+up Q4_K (one N=2·hidden GEMV, then SwiGLU over the halves)
-			l.wgu, err = fuseRowsQ4K(deq(p+"ffn_gate.weight"), deq(p+"ffn_up.weight"))
+		if gateUpFuse() { // fused gate+up (one N=2·hidden GEMV, then SwiGLU over the halves); format per GOAI_CUDA_FUSE_FMT
+			l.wgu, err = fuseRows(deq(p+"ffn_gate.weight"), deq(p+"ffn_up.weight"))
 			mustTB(tb, err)
 		} else {
 			l.wg, l.wu = q(p+"ffn_gate.weight"), q(p+"ffn_up.weight")
