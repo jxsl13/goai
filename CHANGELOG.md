@@ -4,6 +4,23 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — native Q5_K GEMV: the K-quant family is now complete (worker linux-amd64, Tw66, 2026-07-16)
+- `cu_qmatmul_q5k` + `ResidentBQ5K`: warp-per-output GEMV over ggml's 176-byte Q5_K
+  super-blocks, golden vs the gguf dequant reference at maxRel **3.6e-6** (beta=0) and
+  **7.6e-6** (beta=1) — bit-exact but for f32 summation order. Q5_K is Q4_K's asymmetric
+  affine quant (identical `get_scale_min_k4` 6-bit scale+min packing, same per-sub-block
+  min folding) plus a `qh` high-bit plane, so the kernel is the proven Q4_K GEMV with one
+  change: each lane reads its 4 `qh` bytes and, per pair `p`, uses bit `2p` for the low
+  nibble and `2p+1` for the high nibble → `q5 = nibble | (highbit<<4)`.
+- Completes the CUDA K-quant family (Q4_K + **Q5_K** + Q6_K). The bulk tensors of a
+  Q5_K_M / Q5_K_S GGUF — the second-most-common download after Q4_K_M — now have a native
+  bit-exact resident path (0.6875 B/w) instead of the loader's re-encode to Q8 (1.0625 B/w):
+  zero requant loss and −35% VRAM on those tensors. Sibling Q4_K/Q6_K parity unchanged.
+- Wired the direct loader (`quantDirect`, `case 13`) to route Q5_K tensors to `ResidentBQ5K`
+  natively, alongside the existing Q4_K/Q6_K native cases — so a Q5_K_M file now loads fully
+  bit-native. (End-to-end real-model agreement, like `TestCUDAQ4KMDirect`, awaits a Q5_K_M
+  GGUF, which is a user-gated download; the primitive itself is bit-exact validated.)
+
 ### CUDA — prefill attention is O(seq²), but the lever is closed: flash + f16-GEMM both rejected (worker linux-amd64, Tw63/64/65, 2026-07-16)
 - With the GEMM lever cashed (Tw61/62 f16-accumulate), the next prefill bottleneck is the
   attention op itself: the recorder prefill path materializes the full `[heads,seq,seq]` scores

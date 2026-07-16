@@ -25,6 +25,8 @@ func quantDirect(qt gguf.QuantTensor) (qProj, error) {
 	switch qt.GGType {
 	case 12: // Q4_K
 		return cuda.NewResidentBQ4KFromBlocks(qt.Data, k, n)
+	case 13: // Q5_K — bulk tensors of a Q5_K_M/Q5_K_S mix (Tw66), native like Q4_K/Q6_K
+		return cuda.NewResidentBQ5KFromBlocks(qt.Data, k, n)
 	case 14: // Q6_K
 		if os.Getenv("GOAI_CUDA_Q6K") == "q8" { // A/B: the old dequant→Q8 detour
 			break

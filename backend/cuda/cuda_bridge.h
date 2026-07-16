@@ -71,6 +71,9 @@ int cu_qmatmul_q8_swiglu(const void* dA, const void* dQ, const void* dScales, co
                          int M, int K, int N, int nb);
 int cu_qmatmul_q4k_swiglu(const void* dA, const void* dQ, const void* dGate, void* dOut,
                           int M, int K, int N);
+// cu_qmatmul_q5k: out[M,N] = a·dequant(W), W = ggml Q5_K 176-byte super-blocks per output row
+// (Q4_K's 6-bit scale/min packing + a qh high-bit plane → 5-bit quants). K%256==0. DECODE GEMV.
+int cu_qmatmul_q5k(const void* dA, const void* dQ, void* dOut, int M, int K, int N, float beta);
 // cu_qmatmul_q6k: out[M,N] = a·dequant(W), W = ggml Q6_K 210-byte super-blocks per output row.
 int cu_qmatmul_q6k(const void* dA, const void* dQ, void* dOut, int M, int K, int N, float beta);
 // cu_upload_f16: upload host f32, convert to a device f16 (u16) buffer of n elements
