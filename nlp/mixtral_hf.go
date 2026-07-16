@@ -128,7 +128,6 @@ func mixtralMoE(ts map[string]*tensor.Tensor, p string, cfg MixtralConfig) (*nn.
 		return nil, fmt.Errorf("nlp: Mixtral fused experts must be 3-D, got %v / %v", gu.Shape(), dn.Shape())
 	}
 	ffn := gu.Shape()[1] / 2 // [E, 2·ffn, dim]
-	cfg.Hidden = ffn
 
 	moe := nn.NewSparseMoE(tensor.F64, cfg.Dim, ffn, experts, cfg.TopK, 0)
 	moe.Router.W = transpose2D(gate) // [E,dim] → [dim,E]

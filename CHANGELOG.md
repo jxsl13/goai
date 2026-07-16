@@ -4,6 +4,14 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — feat: KV-cached generation for Mixtral (T747, 2026-07-16)
+
+`Mixtral` gains `NewCache`/`DecodeStep`/`Generate` — the same KV-cached autoregressive decode as
+`Llama`, but the FFN sublayer routes through the sparse top-2 MoE. The decode reproduces `Forward`
+bit-for-bit (decode-vs-Forward max abs diff 0.0), proving the expert routing is identical in prefill
+and single-token decode. Greedy `Generate` matches argmax-ing a full `Forward` at each step. Also
+drops a dead `cfg.Hidden` write in the Mixtral loader.
+
 ### nlp — feat: Gemma 2 support — 11th loadable architecture (T745, 2026-07-16)
 
 Gemma 2 (`Gemma2ForCausalLM`, Gemma Team arXiv:2408.00118) as a self-contained `nlp.Gemma2` type
