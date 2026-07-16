@@ -22,6 +22,16 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   so it is less latency-starved and has less headroom to reclaim by folding into the q launch.
 - Test-harness-only for now; productionizing into the llamagpu decoder + the qwen2 bias concat
   remain (Tw57 slice 2+).
+### nlp — capability: LoRA (PEFT) fine-tuning of loaded HF models (T736, 2026-07-16)
+
+`ApplyLoRABert` attaches rank-r LoRA adapters to every attention projection of a loaded [Bert]
+(or RoBERTa/DistilBERT, which share the type), mirroring the existing `ApplyLoRAGPT`. This is
+the practical way to adapt a real checkpoint: freeze the base (don't pass its params to the
+optimizer), train only the returned adapters plus a task head. `TestBertLoRAFineTune` proves it
+— the loss drops 1.60 → 0.0014 while the base weights stay **bit-identical** (verified). Together
+with T735 (full fine-tuning), GoAI covers the whole adapt-real-models workflow: load → run →
+generate → full fine-tune → parameter-efficient LoRA.
+
 ### nlp — capability: loaded HF models are fine-tunable (T735, 2026-07-16)
 
 The HF converters produce models that *run*; this proves they also *train*. Because
