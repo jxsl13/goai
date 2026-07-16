@@ -18,6 +18,18 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   RTX 3060: pp512 9552 / tg128 245.6 t/s). GoAI pp512 MMQ 3479 / f16 5125 t/s, tg128 ~226 — decode ≈
   parity, but prefill is GEMM-bound and GoAI trails on prefill *speed* (the int8-GEMM 2× above is the
   lever; the shipped MMQ arc's win is VRAM, not prefill speed).
+### nlp — new: LlamaFromHF, build a Llama from a Hugging Face checkpoint (T726, 2026-07-16)
+
+Llama had only `LlamaFromGGUF`, so a real HF Llama checkpoint (safetensors or `.bin`, loadable
+via `safetensors.Load` / the new `pytorch.Load`) could not be turned into a `nlp.Llama` — only
+GGUF-sourced ones worked. New `LlamaFromHF(ts, cfg)` maps the HF parameter names
+(`model.embed_tokens`, `model.layers.N.self_attn.{q,k,v,o}_proj`, `mlp.{gate,up,down}_proj`,
+the layernorms, `lm_head`) into a Llama, inferring dims from the tensors. GoAI's rotary
+embedding pairs element *i* with *i*+headDim/2 — the same split-half convention as HF's
+`rotate_half` — so the q/k projections need **no** row permutation (unlike the GGUF path, which
+llama.cpp pre-permutes; the §R93 concern was resolved empirically). Anchored by a forward-parity
+test against transformers' `LlamaForCausalLM`: **MHA and GQA logits match to ~1e-8**. A companion test loads the same model from a PyTorch `.pt` via the safe loader (T725) and hits the same parity — the full untrusted-checkpoint → running-Llama pipeline.
+
 ### pytorch — new: safe PyTorch checkpoint loader (no code execution) (T725, 2026-07-16)
 
 New package `format/pytorch` loads `torch.save` checkpoints (`.pt`/`.bin` — the dominant
