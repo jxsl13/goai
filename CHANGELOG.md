@@ -4,6 +4,19 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — feat: Mixtral (sparse MoE) support — 10th loadable architecture, first MoE (T744, 2026-07-16)
+
+Mixtral (`MixtralForCausalLM`, Jiang et al. 2024) is Llama attention — RMSNorm, RoPE, GQA, no
+biases — with each block's dense FFN replaced by a top-2 sparse Mixture-of-Experts. `MixtralFromHF`
+loads the router (`mlp.gate.weight` [E, dim]) and unpacks the FUSED expert tensors
+(`mlp.experts.gate_up_proj` [E, 2·ffn, dim], `mlp.experts.down_proj` [E, dim, ffn]) — per-expert
+gate/up packed exactly like Phi-3 — into the existing `nn.SparseMoE` (whose renormalized top-k
+softmax routing is mathematically identical to Mixtral's softmax-all-then-renormalize). New
+`nlp.Mixtral` type; `Params()` exposes the router and every expert for fine-tuning. Forward parity
+vs a real transformers `MixtralForCausalLM`: max abs logit diff 2.7e-8, with a GQA + 4-expert /
+top-2 golden so the routing and k/v splits are exercised. This is the first loadable MoE — a new
+capability class — bringing the transformers-anchored architecture set to ten.
+
 ### nlp — feat: Phi-3 support — 9th loadable architecture (T743, 2026-07-16)
 
 Microsoft Phi-3 (`Phi3ForCausalLM`) IS a Llama — RMSNorm, RoPE, GQA, SwiGLU, no biases — except it
