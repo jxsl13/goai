@@ -24,8 +24,12 @@ import (
 // pinned near 1 block/SM and memory latency isn't hidden → ~2x headroom. Corroborated by
 // the f16-KV path being NO faster (halving bytes doesn't help a non-BW-bound kernel). The
 // occupancy pin: even at the max supported group=8 the shared is ~37KB (33KB K/V tile +
-// group*hd*4 query) → 1 block/SM on the 48KB budget. Fix: shrink the K/V shared tile so
-// >=2 blocks/SM resident → hides latency → toward roofline (Tw82).
+// group*hd*4 query) → 1 block/SM on the 48KB budget.
+// Tw82 FIX (applied): the f16 kernel now stages K/V in shared as raw u16 (already f16 in
+// the cache) instead of converting to f32 — the K/V tile halves 33KB→16.5KB (~20KB total)
+// → 2 blocks/SM → latency hidden. Converts move to read-time (free on a latency-bound
+// kernel). BIT-EXACT (TestCUDAF16KVFlashParity). MEASURED: gqa8/ctx2048 186→142 us (1.31x,
+// 45→59 GB/s). Still ~50% of peak (2 not 4 blocks/SM), but a real production-path win.
 // NOTE: the flash path guards group = qHeads/kvHeads > 8 with code -4 (register/warp
 // budget); pure MQA / kvHeads<=hd/16 route through the non-flash attention path instead.
 //

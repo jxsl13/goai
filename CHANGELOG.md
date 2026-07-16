@@ -116,6 +116,16 @@ transformers `Olmo2ForCausalLM`: max abs logit diff 3.9e-8; KV-decode matches Fo
 - Validates a generic rule (now in the playbook): *shrink the per-lane read to escape the
   bank-conflict floor — works for low-entropy codebooks (ternary/2-bit) that IQ2/IQ3's real-f32
   grids can't use.*
+### cuda — perf: decode attention 1.31× via u16 shared K/V tile (Tw82, 2026-07-16)
+
+Measure-first found decode flash-attention (`gqa_flash_partial_f16`, seqQ==1 vs the full KV
+cache) sat at 35–50% of the RTX 3060's ~360 GB/s roofline — occupancy-bound, not
+bandwidth-bound (achieved GB/s *rose* with more KV bytes; the f16-KV path was no faster than
+f32). Root cause: the 32-row K+V shared tile was ~33KB (converted f16→f32 on load), pinning
+~1 block/SM on the 48KB budget. Fix: stage K/V in shared as raw `u16` (already f16 in the
+cache), halving the tile to ~16.5KB → 2 blocks/SM, converting to f32 at read-time (free on a
+latency-bound kernel). Bit-exact (`TestCUDAF16KVFlashParity`). Measured gqa8/ctx2048
+186→142 µs (1.31×, 45→59 GB/s). New `BenchmarkFlashDecode{F32,F16}` guards the kernel.
 
 ### nlp — feat: IBM Granite support — 14th loadable architecture (T752, 2026-07-16)
 
