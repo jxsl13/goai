@@ -49,6 +49,19 @@ applied before the head split and RoPE. Standard RMSNorm (not Gemma's (1+w)). `O
 transformers `Olmo2ForCausalLM`: max abs logit diff 3.9e-8; KV-decode matches Forward bit-for-bit
 (0.0); fine-tunes (loss 3.52 → 3.12). Brings the loadable, transformers-anchored set to fifteen.
 (Also corrects the `applyQKNorm` godoc, which had mislabeled OLMo2 as using the per-head path.)
+### CUDA — IQ1 decode GEMV ~1.5–1.8× via 2-bit-packed grid in shared memory (worker linux-amd64, Tw80, 2026-07-16)
+- IQ1_S/M decode was ~1.56× **slower** than Q4_K despite fewer bytes — the random codebook **grid
+  gather** (like IQ2/IQ3) is the bottleneck. Grid-in-shared caps at ~1.5× for the f32-grid path
+  because each lane reads 8 f32 (32 B) → an ~8-way shared bank-conflict floor (256 accesses / 32
+  banks). **Escape route:** IQ1's grid is **ternary** `{−1,0,+1}`, so pack it to **2 bits/entry**
+  (2048×8 → 4 KB), gather **one uint16 (2 B) per lane** from shared, and decode `code→{−1,0,+1}` in
+  ALU. The tiny per-lane read drops the bank floor ~16× → beats the f32-grid ceiling.
+- **Bit-exact** (`TestCUDAIQ1{S,M}MatMulParity` pass). Measured on RTX 3060: 2048² 22007 → **14642 ns
+  (1.5×, now ≈ Q4_K's 14142)**, 5632×2048 55451 → **31360 ns (1.77×)**. Also dodges IQ1's 64 KB f32
+  grid, which wouldn't fit shared without an occupancy-killing opt-in.
+- Validates a generic rule (now in the playbook): *shrink the per-lane read to escape the
+  bank-conflict floor — works for low-entropy codebooks (ternary/2-bit) that IQ2/IQ3's real-f32
+  grids can't use.*
 
 ### nlp — feat: IBM Granite support — 14th loadable architecture (T752, 2026-07-16)
 

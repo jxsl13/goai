@@ -1989,6 +1989,10 @@ int cu_qmatmul_iq1s(const void* dA, const void* dQ, const void* dGrid, void* dOu
                        "  return __uint_as_float(__float_as_uint(v) | s);\n"
                        "}\n"
                        "extern \"C\" __global__ void qmatmul_iq1s(const float* a, const unsigned char* q, const float* grid, float* out, int M, int K, int N, float beta){\n"
+                       "  extern __shared__ unsigned short sgrid[];\n"                                    // 2048-uint16 packed ternary grid (4KB, Tw80 escape route)
+                       "  const unsigned short* pg = (const unsigned short*)grid;\n"
+                       "  for (int ii = threadIdx.x; ii < 2048; ii += blockDim.x) sgrid[ii] = pg[ii];\n"
+                       "  __syncthreads();\n"
                        "  long warp = ((long)blockIdx.x*blockDim.x + threadIdx.x) >> 5;\n"
                        "  int lane = threadIdx.x & 31;\n"
                        "  if (warp >= (long)M*N) return;\n"
@@ -2005,13 +2009,12 @@ int cu_qmatmul_iq1s(const void* dA, const void* dQ, const void* dGrid, void* dOu
                        "    float dl = d * (float)(2u*((qh>>12)&7u) + 1u);\n"
                        "    float delta = (qh & 0x8000u) ? -0.125f : 0.125f;\n"
                        "    unsigned u = blk[2 + g*4 + jj] | (((qh >> (3*jj)) & 7u) << 8);\n" // 11-bit grid index
-                       "    const float* gv = grid + (size_t)u*8;\n"
+                       "    unsigned pk = sgrid[u];\n"                                          // 8 × 2-bit ternary codes from shared (2B read)
                        "    const float* arb = ar + (size_t)w*256 + g*32 + jj*8;\n"
                        "    float4 al = *(const float4*)arb;\n"
                        "    float4 ah = *(const float4*)(arb + 4);\n"
-                       "    float4 gl = *(const float4*)gv;\n"
-                       "    float4 gh = *(const float4*)(gv + 4);\n"
-                       "    float sg = al.x*gl.x + al.y*gl.y + al.z*gl.z + al.w*gl.w + ah.x*gh.x + ah.y*gh.y + ah.z*gh.z + ah.w*gh.w;\n"
+                       "    float sg = al.x*((float)(pk&3u)-1) + al.y*((float)((pk>>2)&3u)-1) + al.z*((float)((pk>>4)&3u)-1) + al.w*((float)((pk>>6)&3u)-1)\n"
+                       "             + ah.x*((float)((pk>>8)&3u)-1) + ah.y*((float)((pk>>10)&3u)-1) + ah.z*((float)((pk>>12)&3u)-1) + ah.w*((float)((pk>>14)&3u)-1);\n"
                        "    float sa = (al.x+al.y)+(al.z+al.w) + (ah.x+ah.y)+(ah.z+ah.w);\n"
                        "    acc += dl * (sg + delta*sa);\n"
                        "  }\n"
@@ -2025,7 +2028,7 @@ int cu_qmatmul_iq1s(const void* dA, const void* dQ, const void* dGrid, void* dOu
         void* args[8];
         args[0] = &dA; args[1] = &dQ; args[2] = &dGrid; args[3] = &dOut;
         args[4] = &M; args[5] = &K; args[6] = &N; args[7] = &beta;
-        rc = (cuLaunchKernel(gQgemvI1s, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+        rc = (cuLaunchKernel(gQgemvI1s, blocks, 1, 1, threads, 1, 1, 4096, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 done:
     pthread_mutex_unlock(&gLock);
@@ -2050,6 +2053,10 @@ int cu_qmatmul_iq1m(const void* dA, const void* dQ, const void* dGrid, void* dOu
                        "  return __uint_as_float(__float_as_uint(v) | s);\n"
                        "}\n"
                        "extern \"C\" __global__ void qmatmul_iq1m(const float* a, const unsigned char* q, const float* grid, float* out, int M, int K, int N, float beta){\n"
+                       "  extern __shared__ unsigned short sgrid[];\n"                                    // 2048-uint16 packed ternary grid (4KB, Tw80)
+                       "  const unsigned short* pg = (const unsigned short*)grid;\n"
+                       "  for (int ii = threadIdx.x; ii < 2048; ii += blockDim.x) sgrid[ii] = pg[ii];\n"
+                       "  __syncthreads();\n"
                        "  long warp = ((long)blockIdx.x*blockDim.x + threadIdx.x) >> 5;\n"
                        "  int lane = threadIdx.x & 31;\n"
                        "  if (warp >= (long)M*N) return;\n"
@@ -2071,13 +2078,12 @@ int cu_qmatmul_iq1m(const void* dA, const void* dQ, const void* dGrid, void* dOu
                        "    unsigned nib = (blk[32 + (i>>1)] >> (4*(i&1))) & 0xFu;\n"    // grid-high triple + delta sign
                        "    unsigned u = blk[i] | ((nib & 7u) << 8);\n"
                        "    float delta = (nib & 8u) ? -0.125f : 0.125f;\n"
-                       "    const float* gv = grid + (size_t)u*8;\n"
+                       "    unsigned pk = sgrid[u];\n"                                          // 8 × 2-bit ternary codes from shared (2B read)
                        "    const float* arb = ar + (size_t)w*256 + i*8;\n"
                        "    float4 al = *(const float4*)arb;\n"
                        "    float4 ah = *(const float4*)(arb + 4);\n"
-                       "    float4 gl = *(const float4*)gv;\n"
-                       "    float4 gh = *(const float4*)(gv + 4);\n"
-                       "    float sg = al.x*gl.x + al.y*gl.y + al.z*gl.z + al.w*gl.w + ah.x*gh.x + ah.y*gh.y + ah.z*gh.z + ah.w*gh.w;\n"
+                       "    float sg = al.x*((float)(pk&3u)-1) + al.y*((float)((pk>>2)&3u)-1) + al.z*((float)((pk>>4)&3u)-1) + al.w*((float)((pk>>6)&3u)-1)\n"
+                       "             + ah.x*((float)((pk>>8)&3u)-1) + ah.y*((float)((pk>>10)&3u)-1) + ah.z*((float)((pk>>12)&3u)-1) + ah.w*((float)((pk>>14)&3u)-1);\n"
                        "    float sa = (al.x+al.y)+(al.z+al.w) + (ah.x+ah.y)+(ah.z+ah.w);\n"
                        "    acc += dl * (sg + delta*sa);\n"
                        "  }\n"
@@ -2091,7 +2097,7 @@ int cu_qmatmul_iq1m(const void* dA, const void* dQ, const void* dGrid, void* dOu
         void* args[8];
         args[0] = &dA; args[1] = &dQ; args[2] = &dGrid; args[3] = &dOut;
         args[4] = &M; args[5] = &K; args[6] = &N; args[7] = &beta;
-        rc = (cuLaunchKernel(gQgemvI1m, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+        rc = (cuLaunchKernel(gQgemvI1m, blocks, 1, 1, threads, 1, 1, 4096, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 done:
     pthread_mutex_unlock(&gLock);
