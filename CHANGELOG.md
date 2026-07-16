@@ -4,6 +4,14 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — feat: config.json parsers for Gemma and Mixtral (T746, 2026-07-16)
+
+`GemmaConfigFromHF` and `MixtralConfigFromHF` parse a Hugging Face `config.json` into the
+non-tensor-derivable hyperparameters, so the new loaders are usable straight from a checkpoint's
+config without hand-setting Heads/KVHeads/Eps/RopeBase (mirroring the existing
+`LlamaConfigFromHF`, which already covers Qwen2 and Phi-3 since they reuse `LlamaConfig`). Gemma's
+RMSNorm-eps default is 1e-6 (not Llama's 1e-5); Mixtral parses `num_experts_per_tok` (default 2).
+
 ### nlp — feat: Mixtral (sparse MoE) support — 10th loadable architecture, first MoE (T744, 2026-07-16)
 
 Mixtral (`MixtralForCausalLM`, Jiang et al. 2024) is Llama attention — RMSNorm, RoPE, GQA, no
