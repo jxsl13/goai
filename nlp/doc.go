@@ -28,6 +28,18 @@
 //     across its layers to shrink the decode KV cache, and BLT, the Byte Latent
 //     Transformer — a tokenizer-free model over raw bytes that entropy-patches the
 //     byte stream and runs a latent transformer over the patches.
+//   - Loading & adapting real Hugging Face checkpoints: converters that build the
+//     above models straight from a HF checkpoint — GPT2FromHF and LlamaFromHF
+//     (decoders); BertFromHF, RobertaFromHF, DistilBertFromHF (bidirectional
+//     encoders); T5FromHF + T5DecoderFromHF (the full seq2seq encoder–decoder with
+//     relative-position attention and KV-cached generation) — each anchored bit- or
+//     tolerance-exact against transformers. Weights load from safetensors or from
+//     .pt/.bin via the safe no-code-execution PyTorch loader (package format/pytorch);
+//     LlamaConfigFromHF / BertConfigFromHF read the checkpoint's config.json so
+//     loading is config-driven. Because a loaded model's forward runs through the
+//     autograd choke-point, it is not just runnable but trainable: fine-tune it
+//     directly, attach parameter-efficient LoRA adapters (ApplyLoRAGPT / ApplyLoRABert,
+//     base frozen), or wrap it in BertClassifier for sequence classification.
 //   - Sampling: a Sampler implementing the standard HuggingFace pipeline
 //     (temperature → top-k → top-p nucleus → min-p → epsilon/eta → locally-typical →
 //     multinomial), Mirostat adaptive sampling, and repetition / frequency / presence
