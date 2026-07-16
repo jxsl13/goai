@@ -4,6 +4,19 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### CUDA — fused gate+up weight + the occupancy-cliff law confirmed (worker linux-amd64, Tw55(b) extension, 2026-07-16)
+- Applies the same weight-fusion mechanism to the FFN: `ffn_gate|ffn_up` concatenated into
+  one N=2·hidden Q4_K GEMV (via the now-generic `fuseRowsQ4K` + `GOAI_CUDA_GATEUP_FUSE=1`),
+  then SwiGLU over the two `View` halves. Token-parity exact (`TestCUDAGateUpFuseTokenParity`,
+  24/24) and **+1.1% decode** (`TestCUDAGateUpFuseSpeedAB`, 258.3 vs 255.6 tok/s, 5 reps).
+- **The occupancy-cliff law, confirmed by A/B.** Fusion gain scales with how latency-bound
+  (starved) the folded shapes are: QKV folds the N=256 k/v rows (17% of peak) → **+3.7%**;
+  gate/up are already healthy (N=5632, 55%) → only **+1.1%**. This is decisive for the next
+  lever: fusion is nearly tapped out (the FFN shapes aren't starved), so the big remaining
+  decode win (Tw56: gate/up/down = ~73% of decode at ~53% peak) must come from a real GEMV
+  memory-schedule rewrite (split-K), not more fusion. The two fusions are independent GEMVs
+  and compose (both opt-in; combined ≈ additive ~+4.8%).
+
 ### CUDA — fused-QKV weight: +3.7% decode, bit-exact (worker linux-amd64, Tw55(b) build, 2026-07-16)
 - The re-specced slice (b), now built and measured. `fuseQKVQ4K` concatenates the
   dequantized wq|wk|wv rows and requantizes **once** into a single Q4_K weight; the raw

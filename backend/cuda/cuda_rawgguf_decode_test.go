@@ -44,6 +44,7 @@ type rawLayer struct {
 	wq, wk, wv, wo qProj
 	wqkv           qProj // fused Q4_K wq|wk|wv (Tw55(b), GOAI_CUDA_QKV_FUSE=1); nil unless fusing
 	wg, wu, wd     qProj
+	wgu            qProj            // fused Q4_K ffn_gate|ffn_up (GOAI_CUDA_GATEUP_FUSE=1); nil unless fusing
 	cache          *cuda.KVCache    // f32 cache (chain + flash paths)
 	cacheF         *cuda.KVCacheF16 // f16 cache (GOAI_CUDA_KV=f16, flash-only)
 }
@@ -58,6 +59,12 @@ func kvF16() bool { return os.Getenv("GOAI_CUDA_KV") == "f16" }
 // projection (N=256) runs at only 17% of peak vs the q proj's 46% — so folding the
 // starved k/v rows into the q launch lifts their occupancy. Opt-in while the A/B runs.
 func qkvFuse() bool { return os.Getenv("GOAI_CUDA_QKV_FUSE") == "1" }
+
+// gateUpFuse selects the fused gate+up weight path: ffn_gate|ffn_up concatenated into ONE
+// N=2·hidden Q4_K GEMV, then SwiGLU over the two halves. A scientific counterpart to the
+// QKV fusion — gate/up are NOT starved (N=5632 = 55% of peak, vs the k/v N=256 = 17%), so
+// the occupancy-cliff theory predicts only a small gain here. Opt-in; measured by A/B.
+func gateUpFuse() bool { return os.Getenv("GOAI_CUDA_GATEUP_FUSE") == "1" }
 
 // stackRows0 concatenates output-major [Ni,K] f32 weight tensors along axis 0 into one
 // [ΣNi,K] tensor (row-major, so a plain storage append). Feeding this to the Q4_K
@@ -80,11 +87,11 @@ func stackRows0(ts ...*tensor.Tensor) *tensor.Tensor {
 	return out
 }
 
-// fuseQKVQ4K builds one fused Q4_K projection over the stacked [Nq+Nk+Nv,K] weight.
-// Only the Q4_K format is fused (the format the A/B and parity tests exercise); the
-// caller falls back to three separate projections otherwise.
-func fuseQKVQ4K(wq, wk, wv *tensor.Tensor) (qProj, error) {
-	stacked := stackRows0(wq, wk, wv)
+// fuseRowsQ4K builds one fused Q4_K projection over the row-stacked weights (QKV or
+// gate+up). Only the Q4_K format is fused (the format the A/B and parity tests exercise);
+// the caller falls back to separate projections otherwise.
+func fuseRowsQ4K(ts ...*tensor.Tensor) (qProj, error) {
+	stacked := stackRows0(ts...)
 	n, k := stacked.Shape()[0], stacked.Shape()[1]
 	blocks, err := gguf.Quantize(stacked, gguf.Q4_K)
 	if err != nil {
@@ -113,6 +120,7 @@ type rawGraphDecoder struct {
 	inv                *cuda.DeviceF32
 	dx, dh, dh2        *cuda.DeviceF32
 	dqkv               *cuda.DeviceF32 // fused QKV output buffer (Tw55(b)); dq/dk/dv are Views into it
+	dgu                *cuda.DeviceF32 // fused gate+up output buffer; dgate/dup are Views into it
 	dq, dk, dv, da     *cuda.DeviceF32
 	dgate, dup, scores *cuda.DeviceF32
 	logits             *cuda.DeviceF32
@@ -212,7 +220,15 @@ func buildRawGraphDecoder(tb testing.TB, rf *gguf.RawFile, arch string, maxSeq i
 		gd.dq = buf(1, wq)
 		gd.dk, gd.dv = buf(1, wkv), buf(1, wkv)
 	}
-	gd.dgate, gd.dup = buf(1, hidden), buf(1, hidden)
+	if gateUpFuse() {
+		gd.dgu = buf(1, 2*hidden)
+		gd.dgate, err = gd.dgu.View(0, 1, hidden)
+		mustTB(tb, err)
+		gd.dup, err = gd.dgu.View(hidden, 1, hidden)
+		mustTB(tb, err)
+	} else {
+		gd.dgate, gd.dup = buf(1, hidden), buf(1, hidden)
+	}
 	gd.scores = buf(1, heads*maxSeq)
 	gd.logits = buf(1, rf.Tensors["output.weight"].Shape[0])
 	gd.layers = make([]*rawLayer, nL)
@@ -233,15 +249,20 @@ func buildRawGraphDecoder(tb testing.TB, rf *gguf.RawFile, arch string, maxSeq i
 		_, hasBias := rf.Tensors[p+"attn_q.bias"]
 		l := &rawLayer{
 			gAttn: vec(p + "attn_norm.weight"), gFFN: vec(p + "ffn_norm.weight"),
-			wo: q(p + "attn_output.weight"),
-			wg: q(p + "ffn_gate.weight"), wu: q(p + "ffn_up.weight"), wd: q(p + "ffn_down.weight"),
+			wo: q(p + "attn_output.weight"), wd: q(p + "ffn_down.weight"),
 			cache: c, cacheF: cf,
 		}
 		if qkvFuse() && !hasBias { // fused Q4_K QKV (Tw55(b)); bias'd families (qwen2) stay separate for now
-			l.wqkv, err = fuseQKVQ4K(deq(p+"attn_q.weight"), deq(p+"attn_k.weight"), deq(p+"attn_v.weight"))
+			l.wqkv, err = fuseRowsQ4K(deq(p+"attn_q.weight"), deq(p+"attn_k.weight"), deq(p+"attn_v.weight"))
 			mustTB(tb, err)
 		} else {
 			l.wq, l.wk, l.wv = q(p+"attn_q.weight"), q(p+"attn_k.weight"), q(p+"attn_v.weight")
+		}
+		if gateUpFuse() { // fused gate+up Q4_K (one N=2·hidden GEMV, then SwiGLU over the halves)
+			l.wgu, err = fuseRowsQ4K(deq(p+"ffn_gate.weight"), deq(p+"ffn_up.weight"))
+			mustTB(tb, err)
+		} else {
+			l.wg, l.wu = q(p+"ffn_gate.weight"), q(p+"ffn_up.weight")
 		}
 		if hasBias { // qwen2 QKV bias
 			l.bq, l.bk, l.bv = vec(p+"attn_q.bias"), vec(p+"attn_k.bias"), vec(p+"attn_v.bias")
@@ -282,6 +303,12 @@ func (gd *rawGraphDecoder) forwardBody(tb testing.TB) {
 		}
 		mustTB(tb, l.wo.QMatMulAccInto(gd.da, gd.dx))
 		mustTB(tb, gd.dx.RMSNormInto(l.gFFN, float32(gd.eps), gd.dh2))
+		if l.wgu != nil { // fused gate+up: one N=2·hidden GEMV → [gate|up], then SwiGLU over the halves
+			mustTB(tb, l.wgu.QMatMulInto(gd.dh2, gd.dgu))
+			mustTB(tb, gd.dgate.SwiGLU(gd.dup))
+			mustTB(tb, l.wd.QMatMulAccInto(gd.dgate, gd.dx))
+			continue
+		}
 		mustTB(tb, l.wg.QMatMulInto(gd.dh2, gd.dgate))
 		if f, ok := l.wu.(swigluProj); ok && os.Getenv("GOAI_CUDA_FFN_FUSE") == "1" {
 			// Tw55 fusion: SwiGLU in the up-GEMV epilogue — no separate SwiGLU
@@ -338,7 +365,7 @@ func (gd *rawGraphDecoder) free() {
 	}
 	// dqkv (fused) owns the QKV memory; dq/dk/dv are Views into it (Free is a no-op).
 	// When not fusing, dqkv is nil and dq/dk/dv own separate buffers.
-	for _, d := range []*cuda.DeviceF32{gd.dx, gd.dh, gd.dh2, gd.dqkv, gd.dq, gd.dk, gd.dv, gd.da, gd.dgate, gd.dup, gd.scores, gd.logits, gd.inv} {
+	for _, d := range []*cuda.DeviceF32{gd.dx, gd.dh, gd.dh2, gd.dqkv, gd.dgu, gd.dq, gd.dk, gd.dv, gd.da, gd.dgate, gd.dup, gd.scores, gd.logits, gd.inv} {
 		if d != nil {
 			d.Free()
 		}
@@ -357,7 +384,7 @@ func (gd *rawGraphDecoder) free() {
 				b.Free()
 			}
 		}
-		for _, w := range []qProj{l.wq, l.wk, l.wv, l.wqkv, l.wo, l.wg, l.wu, l.wd} {
+		for _, w := range []qProj{l.wq, l.wk, l.wv, l.wqkv, l.wo, l.wg, l.wu, l.wgu, l.wd} {
 			if w != nil {
 				w.Free()
 			}

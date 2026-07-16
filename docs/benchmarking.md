@@ -1208,8 +1208,19 @@ is booked as Tw57). Same finding sizes the bigger FFN opportunity: gate/up/down 
 of decode time at only ~53% of peak — the larger, harder lever (a genuine memory-schedule
 rewrite, e.g. split-K), tracked as Tw56.
 
+**The occupancy-cliff law (confirmed by A/B).** Applying the *identical* fusion to the FFN
+gate+up (`GOAI_CUDA_GATEUP_FUSE=1`: `ffn_gate|ffn_up` → one N=2·hidden GEMV, then SwiGLU
+over the halves; parity 24/24) gives only **+1.1%** (258.3 vs 255.6 tok/s) — a quarter of
+the QKV win. The difference is entirely the starvation of the folded shapes: QKV lifts the
+N=256 k/v rows from **17%** of peak, gate/up start at a healthy **55%**. So weight fusion
+pays in proportion to how latency-bound the small-N shapes are — and with the FFN shapes
+already ≥53%, fusion is near its ceiling. The corollary is decisive for Tw56: the remaining
+~73%-of-decode FFN bandwidth cannot be recovered by fusing; it needs a real GEMV
+memory-schedule change (split-K to put more warps in flight). The two fusions are
+independent GEMVs and compose (combined ≈ additive, ~+4.8%).
+
 Repro: `go test -tags cuda -run '^$' -bench BenchmarkGemvQ4K ./backend/cuda/`;
-`go test -tags cuda -run 'TestCUDAQKVFuse' ./backend/cuda/`.
+`go test -tags cuda -run 'TestCUDA(QKV|GateUp)Fuse' ./backend/cuda/`.
 
 ## Further reading
 
