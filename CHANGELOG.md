@@ -83,6 +83,38 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   ~1.25-1.35× decode lead, so the dp4a rewrite is **warranted** — booked as **Tw58** (an
   approximate path: the activation is quantized, so it's validated to a tolerance + a
   real-model agreement gate, not bit-exact). Probe discarded; the table is in the docs.
+### nn — topic-discovery round 8: distinct recurrent / sequence-mixing architectures (T694–T696, 2026-07-16)
+
+A further sweep on a new sub-axis — *recurrent / sequence-mixing* cells — found more
+genuinely-novel gaps (xLSTM, Griffin RG-LRU, Aaren, HGRN all absent), so "frontier
+tapped" would have been wrong a fifth time. Each composes on the repo's existing
+gated-linear-attention / retention machinery (no new kernel) and is anchored by the
+gold-standard **parallel ≡ recurrent duality** (@1e-10) plus a collapse to a known form.
+
+- **xLSTM mLSTM** (`nn/xlstm.go`, Beck … Hochreiter / NeurIPS 2024, arXiv:2405.04517).
+  The matrix-memory, fully-parallelizable LSTM-revival cell: `C_t = f_t·C_{t-1} +
+  i_t·v_t k_tᵀ` with an exponential input gate and App.-A log-domain stabilization.
+  Anchors: parallel training form ≡ sequential recurrence @1e-10; with gates ≡ 1 it
+  collapses to causal linear attention @1e-10; the stabilized form stays finite where
+  the naive exp-gate form overflows (ĩ=800 → Inf); gradcheck ≤1e-4; a delayed-copy task
+  routes through the matrix memory and trains to near-zero loss (both gate variants).
+- **Griffin RG-LRU / Hawk** (`nn/griffin.go`, De … Smith / Google DeepMind 2024,
+  arXiv:2402.19427). The real-gated diagonal linear recurrence core: `h_t = a_t·h_{t-1}
+  + √(1−a_t²)·(i_t·x_t)` with input-dependent gates and a log-space decay `a_t`.
+  Anchors: parallel (cumulative-log-gate) form ≡ sequential scan @1e-10; with gates
+  frozen it collapses to a fixed-decay EMA @1e-10; gate bounds `a_t∈(0,1)` hold at
+  extreme parameters; gradcheck ≤1e-4; on a selective-copy task the gated recurrence
+  (MSE 0.125) solves what an ungated fixed-decay EMA (0.968) cannot. The full Griffin
+  block (conv + local attention + MLP around this core) composes existing layers and is
+  documented as out of scope.
+- **Aaren — Attention as an RNN** (`nn/aaren.go`, Feng … Bengio, Ahmed / 2024,
+  arXiv:2405.13956). Softmax attention reformulated as a running-max-stabilized
+  associative scan over `(m, n, d)` triples, giving an O(1)-state streaming form that is
+  *numerically identical* to standard attention (not an approximation). Anchors: the
+  parallel form equals `softmax(QKᵀ/√d)·V` bit-exact; parallel ≡ recurrent streaming
+  @2e-16; stable where a naive `Σeˢ` overflows; gradcheck 2.3e-10; a fixed-size state
+  holds across 400 streamed tokens and matches full attention; a char-LM learns
+  (CE 3.184→0.669).
 
 ### CUDA — fused gate+up weight + the occupancy-cliff law confirmed (worker linux-amd64, Tw55(b) extension, 2026-07-16)
 - Applies the same weight-fusion mechanism to the FFN: `ffn_gate|ffn_up` concatenated into
@@ -93,7 +125,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   (starved) the folded shapes are: QKV folds the N=256 k/v rows (17% of peak) → **+3.7%**;
   gate/up are already healthy (N=5632, 55%) → only **+1.1%**. This is decisive for the next
   lever: fusion is nearly tapped out (the FFN shapes aren't starved), so the big remaining
-  decode win (Tw56: gate/up/down = ~73% of decode at ~53% peak) must come from a real GEMV
+  decode win (Tw56: gate/up/down = ≈73% of decode at ≈53% peak) must come from a real GEMV
   memory-schedule rewrite (split-K), not more fusion. The two fusions are independent GEMVs
   and compose with no negative interaction — the full stack (QKV + gate+up, both opt-in)
   measures **+5.8%** decode (271.1 vs 256.3 tok/s, `TestCUDAFusionStackSpeedAB`, 5 reps),
