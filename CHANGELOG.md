@@ -116,6 +116,16 @@ transformers `Olmo2ForCausalLM`: max abs logit diff 3.9e-8; KV-decode matches Fo
 - Validates a generic rule (now in the playbook): *shrink the per-lane read to escape the
   bank-conflict floor — works for low-entropy codebooks (ternary/2-bit) that IQ2/IQ3's real-f32
   grids can't use.*
+### cuda — perf: decode attention 2.3× via hardware f16 convert + u16 shared tile (Tw82+Tw83, 2026-07-16)
+
+Tw83: the f16 flash-decode kernel's `h2f` (f16→f32) was a manual software conversion — multiple
+branches plus a data-dependent `while` loop for subnormals — invoked `group·hd` times per key in
+both the QKᵀ dot and the PV accumulate, the dominant cost once occupancy was fixed. Replaced it
+with the single hardware instruction (inline PTX `cvt.f32.f16`). Bit-exact (the hardware cvt is
+the same IEEE conversion the manual code reimplemented). Measured gqa8/ctx2048 142→81 µs (1.75×).
+Combined with Tw82: **186→81 µs = 2.3×, 45→103 GB/s** — f16-KV decode is now faster than f32-KV
+(as it should be at half the bytes), no longer an anomaly. See below for Tw82.
+
 ### cuda — perf: decode attention 1.31× via u16 shared K/V tile (Tw82, 2026-07-16)
 
 Measure-first found decode flash-attention (`gqa_flash_partial_f16`, seqQ==1 vs the full KV

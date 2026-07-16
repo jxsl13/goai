@@ -25,11 +25,15 @@ import (
 // the f16-KV path being NO faster (halving bytes doesn't help a non-BW-bound kernel). The
 // occupancy pin: even at the max supported group=8 the shared is ~37KB (33KB K/V tile +
 // group*hd*4 query) → 1 block/SM on the 48KB budget.
-// Tw82 FIX (applied): the f16 kernel now stages K/V in shared as raw u16 (already f16 in
-// the cache) instead of converting to f32 — the K/V tile halves 33KB→16.5KB (~20KB total)
-// → 2 blocks/SM → latency hidden. Converts move to read-time (free on a latency-bound
-// kernel). BIT-EXACT (TestCUDAF16KVFlashParity). MEASURED: gqa8/ctx2048 186→142 us (1.31x,
-// 45→59 GB/s). Still ~50% of peak (2 not 4 blocks/SM), but a real production-path win.
+// Tw82 FIX: the f16 kernel now stages K/V in shared as raw u16 (already f16 in the cache)
+// instead of converting to f32 — the K/V tile halves 33KB→16.5KB (~20KB total) → 2 blocks/SM
+// → latency hidden. Converts move to read-time. gqa8/ctx2048 186→142 us (1.31x).
+// Tw83 FIX: the kernel's h2f was a MANUAL software f16→f32 (multi-branch + a divergent
+// subnormal while-loop), called group*hd times per key in the dot + PV — the dominant residual
+// cost. Replaced with the single hardware instruction (inline PTX `cvt.f32.f16`). BIT-EXACT
+// (hardware cvt == the IEEE conversion the manual code reimplemented). gqa8/ctx2048 142→81 us
+// (1.75x). COMBINED Tw82+Tw83: 186→81 us = 2.3x, 45→103 GB/s; f16 decode now FASTER than f32
+// (81 vs 130 us) as it should be. Both BIT-EXACT (TestCUDAF16KVFlashParity).
 // NOTE: the flash path guards group = qHeads/kvHeads > 8 with code -4 (register/warp
 // budget); pure MQA / kvHeads<=hd/16 route through the non-flash attention path instead.
 //
