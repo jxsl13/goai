@@ -33,6 +33,27 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   f32-Sgemm attention at the practical floor — the 43% @seq1024 share is irreducible with
   available tools, analogous to the Tw56–59 decode-GEMV Pareto ceiling. `docs/benchmarking.md`
   A/B tables added.
+### classic — topic-discovery round 11: tree-based tabular ML (T704–T705, 2026-07-16)
+
+The sweep moved to another unswept domain — the `classic` package (classical,
+pre-deep-learning ML), which had only OLS / logistic regression / k-means / PCA and was
+missing the dominant tabular methods. These are non-differentiable, so correctness is
+anchored on scikit-learn goldens (sklearn 1.9.0, regenerable via the `gen_*.py`
+scripts in testdata) plus algorithmic-property tests.
+
+- **Decision Tree + Random Forest** (`classic/tree.go`, `classic/forest.go`, Breiman
+  CART 1984 / Random Forests 2001). CART with Gini/entropy/MSE splits; RF adds bootstrap
+  bagging and per-split feature subsampling. Anchors: the Gini classifier matches sklearn
+  *exactly* (regressor to 1e-9); an unconstrained tree perfectly fits training data;
+  impurity formulas hand-checked; the forest beats a single tree (test accuracy
+  0.62→0.78, regression MSE 4.55→1.77). -race clean.
+- **Gradient Boosting** (`classic/gbm.go`, Friedman 2001). Staged residual-fitting with
+  shallow regression trees — a squared-loss regressor and a binary logistic classifier.
+  Anchors: matches sklearn within tolerance (regressor R² 0.849 vs 0.851; classifier
+  100% label agreement); training loss decreases monotonically across rounds; learning
+  rate 0 collapses to the mean/base-rate; on nonlinear data it beats a stump and OLS
+  (R² 0.850 vs 0.744). Its options are `WithGBM*`-prefixed to coexist with the tree/
+  forest options in the same package.
 
 ### CUDA — f16-accumulate prefill is now DEFAULT-ON for GeForce (worker linux-amd64, Tw62, 2026-07-16)
 - Ships the +21% prefill win (Tw61) automatically. `cu_gpu_is_geforce` (via `cudaDeviceProp`
