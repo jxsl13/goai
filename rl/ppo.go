@@ -353,6 +353,13 @@ func rlScale(ctx *backend.Context, x *tensor.Tensor, c float64) (*tensor.Tensor,
 // rlNegEntropy returns the scalar mean_b Σ_a p_a·log p_a over the softmax policy
 // rows — i.e. the NEGATIVE mean policy entropy (−H). Adding entropyCoef·(−H) to a
 // minimized loss therefore MAXIMIZES entropy (the exploration bonus). Differentiable.
+//
+// The log-probability is the STABLE log-softmax (logits − max − log Σ exp) rather
+// than log(softmax(logits)): for a near-deterministic policy a non-max softmax
+// entry underflows to exactly 0, and log(0) = −∞ would make the 0·log0 entropy
+// term 0·(−∞) = NaN (both the value and, via 1/p in log's VJP, the gradient). The
+// stable log-softmax is always finite for finite logits, so the underflowed entry
+// contributes p·logp = 0·(finite) = 0 — the correct x·log x → 0 limit (§B).
 func rlNegEntropy(ctx *backend.Context, logits *tensor.Tensor) (*tensor.Tensor, error) {
 	ex := func(op backend.Op, attrs backend.Attrs, ins ...*tensor.Tensor) (*tensor.Tensor, error) {
 		out, err := backend.Execute(ctx, op, ins, attrs)
@@ -365,7 +372,30 @@ func rlNegEntropy(ctx *backend.Context, logits *tensor.Tensor) (*tensor.Tensor, 
 	if err != nil {
 		return nil, err
 	}
-	lg, err := ex(backend.OpLog, nil, sm)
+	// Stable log-softmax = z − log Σ exp(z), z = logits − rowmax (all finite for
+	// finite logits), avoiding the log(0) = −∞ of log(softmax).
+	lastAxis := backend.ReduceAttrs{Axes: []int{1}, KeepDims: true}
+	mx, err := ex(backend.OpMax, lastAxis, logits)
+	if err != nil {
+		return nil, err
+	}
+	z, err := ex(backend.OpSub, nil, logits, mx)
+	if err != nil {
+		return nil, err
+	}
+	e, err := ex(backend.OpExp, nil, z)
+	if err != nil {
+		return nil, err
+	}
+	sums, err := ex(backend.OpSum, lastAxis, e)
+	if err != nil {
+		return nil, err
+	}
+	lse, err := ex(backend.OpLog, nil, sums)
+	if err != nil {
+		return nil, err
+	}
+	lg, err := ex(backend.OpSub, nil, z, lse)
 	if err != nil {
 		return nil, err
 	}

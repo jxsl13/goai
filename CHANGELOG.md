@@ -87,6 +87,14 @@ guards every case (constant-column split skip, GBM base-rate clamp, SVC variance
 OLS Cholesky pivot rejection, PCA n<2 error). A `classic/hostile_robustness_test.go` pins
 those guards against future regression.
 
+A final pass over the `rl` and `vision` packages found **one** more bug: PPO/A2C's entropy
+bonus (`rl/ppo.go`) computed `softmax·log(softmax)`, which goes NaN (`0·log 0`) once the
+policy sharpens toward deterministic — i.e. exactly as training *succeeds*. Fixed with a
+numerically-stable log-softmax. Vision (MLP-Mixer/Swin/MAE) had zero bugs (Swin keeps every
+softmax row partly unmasked; MAE rejects edge mask ratios at construction). New
+`rl/` and `vision/hostile_robustness_test.go` pin these. Across all four algorithmic
+classes the robustness pass fixed 3 real NaN bugs and left permanent regression guards.
+
 ### CUDA — native Q4_0 GEMV: legacy 4-bit round quant joins the native set (worker linux-amd64, Tw69, 2026-07-16)
 - `cu_qmatmul_q40` + `ResidentBQ40`: warp-per-output GEMV over ggml's legacy Q4_0 18-byte
   blocks (f16 d + 16 nibble bytes). Symmetric round quant, no min: `y = d·(nibble − 8)`, byte
