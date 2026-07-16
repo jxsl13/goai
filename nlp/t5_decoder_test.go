@@ -146,3 +146,47 @@ func TestT5Generate(t *testing.T) {
 	}
 	t.Logf("greedy generated %d tokens: %v", len(out), out)
 }
+
+// TestT5DecodeStepMatchesDecode is the correctness gate for the KV-cache: the
+// incremental DecodeStep, run position by position, must reproduce the non-cached
+// Decode's hidden states exactly (this is what makes the O(n) path safe).
+func TestT5DecodeStepMatchesDecode(t *testing.T) {
+	ts, _, err := safetensors.LoadFile("testdata/t5full_hf.safetensors")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := nlp.T5Config{Heads: 2, HeadDim: 8, Eps: 1e-6}
+	enc, _ := nlp.T5FromHF(ts, cfg)
+	dec, err := nlp.T5DecoderFromHF(ts, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := backend.NewContext()
+	encOut, err := enc.Forward(ctx, []int{3, 7, 1, 9, 4, 2, 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tokens := []int{0, 5, 8, 2, 6}
+	full, err := dec.Decode(ctx, encOut, tokens)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache := dec.NewCache()
+	dim := full.Shape()[1]
+	var maxAbs float64
+	for pos, tok := range tokens {
+		h, err := dec.DecodeStep(ctx, cache, encOut, tok, pos)
+		if err != nil {
+			t.Fatalf("step %d: %v", pos, err)
+		}
+		for j := 0; j < dim; j++ {
+			if d := math.Abs(h.AtF64(0, j) - full.AtF64(pos, j)); d > maxAbs {
+				maxAbs = d
+			}
+		}
+	}
+	t.Logf("KV-cache vs full decode max abs diff: %.3e", maxAbs)
+	if maxAbs > 1e-9 {
+		t.Fatalf("KV-cache diverges from full decode: %.3e", maxAbs)
+	}
+}

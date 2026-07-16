@@ -326,14 +326,15 @@ func T5DecoderFromHF(ts map[string]*tensor.Tensor, cfg T5Config) (*T5Decoder, er
 // Generate performs autoregressive seq2seq decoding: starting from startToken
 // (T5's decoder start id is the pad token 0), it repeatedly decodes the sequence
 // so far against encoderOut, samples the next token from the final-position
-// logits with s, and stops at eosToken (T5: 1) or after maxNew tokens. It returns
-// the generated tokens (excluding startToken). This is the straightforward
-// O(n²) loop (re-decoding the prefix each step); use [Greedy] for argmax.
+// logits with s, and stops at eosToken (T5: 1) or after maxNew tokens. It returns the generated
+// tokens (excluding startToken) and uses the KV-cache ([DecodeStep]) so each step
+// is O(sequence) rather than re-decoding the whole prefix; use [Greedy] for argmax.
 func (d *T5Decoder) Generate(ctx *backend.Context, encoderOut *tensor.Tensor, maxNew, startToken, eosToken int, s TokenSampler) ([]int, error) {
 	gen := []int{startToken}
 	vocab := d.Config.Vocab
-	for step := 0; step < maxNew; step++ {
-		hidden, err := d.Decode(ctx, encoderOut, gen)
+	cache := d.NewCache()
+	for pos := 0; pos < maxNew; pos++ {
+		hidden, err := d.DecodeStep(ctx, cache, encoderOut, gen[pos], pos)
 		if err != nil {
 			return nil, err
 		}
@@ -341,10 +342,9 @@ func (d *T5Decoder) Generate(ctx *backend.Context, encoderOut *tensor.Tensor, ma
 		if err != nil {
 			return nil, err
 		}
-		last := len(gen) - 1
 		row := make([]float64, vocab)
 		for vtok := 0; vtok < vocab; vtok++ {
-			row[vtok] = logits.AtF64(last, vtok)
+			row[vtok] = logits.AtF64(0, vtok)
 		}
 		next := s.SampleWithHistory(row, gen)
 		if next == eosToken {
@@ -353,4 +353,158 @@ func (d *T5Decoder) Generate(ctx *backend.Context, encoderOut *tensor.Tensor, ma
 		gen = append(gen, next)
 	}
 	return gen[1:], nil
+}
+
+// T5DecoderCache holds the incremental-decoding state for [T5Decoder.DecodeStep]:
+// the growing self-attention key/value per block, and the fixed cross-attention
+// key/value (the encoder is projected once). Create one per generated sequence.
+type T5DecoderCache struct {
+	selfK, selfV   []*tensor.Tensor // per block, grown one row per step
+	crossK, crossV []*tensor.Tensor // per block, computed once from the encoder
+}
+
+// NewT5DecoderCache allocates a cache sized for the decoder's blocks.
+func (d *T5Decoder) NewCache() *T5DecoderCache {
+	n := len(d.Blocks)
+	return &T5DecoderCache{
+		selfK: make([]*tensor.Tensor, n), selfV: make([]*tensor.Tensor, n),
+		crossK: make([]*tensor.Tensor, n), crossV: make([]*tensor.Tensor, n),
+	}
+}
+
+// relBiasRow builds the [heads, 1, pos+1] additive bias for a single query at
+// absolute position pos attending to keys 0..pos (all past, so no causal mask).
+func (d *T5Decoder) relBiasRow(ctx *backend.Context, pos int) (*tensor.Tensor, error) {
+	full, err := d.RelBias.Bias(ctx, pos+1, pos+1) // [pos+1, pos+1, heads]
+	if err != nil {
+		return nil, err
+	}
+	fs := full.Contiguous().Storage().F64()
+	heads, kk := d.Config.Heads, pos+1
+	out := tensor.New(tensor.F64, tensor.Shape{heads, 1, kk})
+	os := out.Storage().F64()
+	for h := 0; h < heads; h++ {
+		for k := 0; k < kk; k++ {
+			os[h*kk+k] = fs[(pos*kk+k)*heads+h] // full[pos][k][h]
+		}
+	}
+	return out, nil
+}
+
+// DecodeStep decodes a single token at absolute position pos against encoderOut,
+// using and updating cache, returning that step's hidden state [1, dim]. It is
+// the O(n)-per-step incremental form of [T5Decoder.Decode].
+func (d *T5Decoder) DecodeStep(ctx *backend.Context, cache *T5DecoderCache, encoderOut *tensor.Tensor, token, pos int) (*tensor.Tensor, error) {
+	if token < 0 || token >= d.Config.Vocab {
+		return nil, fmt.Errorf("nlp: token %d outside vocab %d", token, d.Config.Vocab)
+	}
+	idx := tensor.New(d.Shared.Dtype(), tensor.Shape{1})
+	idx.SetF64(float64(token), 0)
+	x, err := exec1(ctx, backend.OpEmbed, nil, d.Shared, idx)
+	if err != nil {
+		return nil, err
+	}
+	selfMask, err := d.relBiasRow(ctx, pos)
+	if err != nil {
+		return nil, err
+	}
+	eseq := encoderOut.Shape()[0]
+	crossMask := tensor.New(tensor.F64, tensor.Shape{1, eseq})
+	attrs := backend.AttnAttrs{Heads: d.Config.Heads, Scale: math.Sqrt(float64(d.Config.HeadDim))}
+	for l, b := range d.Blocks {
+		// causal self-attention with the growing K/V cache
+		h, err := b.SelfNorm.Forward(ctx, x)
+		if err != nil {
+			return nil, err
+		}
+		q, err := exec1(ctx, backend.OpMatMul, nil, h, b.SWq)
+		if err != nil {
+			return nil, err
+		}
+		kt, err := exec1(ctx, backend.OpMatMul, nil, h, b.SWk)
+		if err != nil {
+			return nil, err
+		}
+		vt, err := exec1(ctx, backend.OpMatMul, nil, h, b.SWv)
+		if err != nil {
+			return nil, err
+		}
+		if cache.selfK[l] == nil {
+			cache.selfK[l], cache.selfV[l] = kt, vt
+		} else {
+			cache.selfK[l] = concatRows(cache.selfK[l], kt)
+			cache.selfV[l] = concatRows(cache.selfV[l], vt)
+		}
+		attn, err := exec1(ctx, backend.OpMHAMasked, attrs, q, cache.selfK[l], cache.selfV[l], selfMask)
+		if err != nil {
+			return nil, err
+		}
+		if attn, err = exec1(ctx, backend.OpMatMul, nil, attn, b.SWo); err != nil {
+			return nil, err
+		}
+		if x, err = exec1(ctx, backend.OpAdd, nil, x, attn); err != nil {
+			return nil, err
+		}
+		// cross-attention; project the (fixed) encoder K/V once
+		if h, err = b.CrossNorm.Forward(ctx, x); err != nil {
+			return nil, err
+		}
+		if cache.crossK[l] == nil {
+			if cache.crossK[l], err = exec1(ctx, backend.OpMatMul, nil, encoderOut, b.CWk); err != nil {
+				return nil, err
+			}
+			if cache.crossV[l], err = exec1(ctx, backend.OpMatMul, nil, encoderOut, b.CWv); err != nil {
+				return nil, err
+			}
+		}
+		cq, err := exec1(ctx, backend.OpMatMul, nil, h, b.CWq)
+		if err != nil {
+			return nil, err
+		}
+		cattn, err := exec1(ctx, backend.OpMHAMasked, attrs, cq, cache.crossK[l], cache.crossV[l], crossMask)
+		if err != nil {
+			return nil, err
+		}
+		if cattn, err = exec1(ctx, backend.OpMatMul, nil, cattn, b.CWo); err != nil {
+			return nil, err
+		}
+		if x, err = exec1(ctx, backend.OpAdd, nil, x, cattn); err != nil {
+			return nil, err
+		}
+		// FFN
+		if h, err = b.FFNNorm.Forward(ctx, x); err != nil {
+			return nil, err
+		}
+		var ff *tensor.Tensor
+		if b.Wi1 != nil {
+			g, err := exec1(ctx, backend.OpMatMul, nil, h, b.Wi0)
+			if err != nil {
+				return nil, err
+			}
+			if g, err = exec1(ctx, backend.OpGELU, nil, g); err != nil {
+				return nil, err
+			}
+			u, err := exec1(ctx, backend.OpMatMul, nil, h, b.Wi1)
+			if err != nil {
+				return nil, err
+			}
+			if ff, err = exec1(ctx, backend.OpMul, nil, g, u); err != nil {
+				return nil, err
+			}
+		} else {
+			if ff, err = exec1(ctx, backend.OpMatMul, nil, h, b.Wi0); err != nil {
+				return nil, err
+			}
+			if ff, err = exec1(ctx, backend.OpReLU, nil, ff); err != nil {
+				return nil, err
+			}
+		}
+		if ff, err = exec1(ctx, backend.OpMatMul, nil, ff, b.WOut); err != nil {
+			return nil, err
+		}
+		if x, err = exec1(ctx, backend.OpAdd, nil, x, ff); err != nil {
+			return nil, err
+		}
+	}
+	return d.FinalNorm.Forward(ctx, x)
 }

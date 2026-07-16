@@ -22,6 +22,15 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   so it is less latency-starved and has less headroom to reclaim by folding into the q launch.
 - Test-harness-only for now; productionizing into the llamagpu decoder + the qwen2 bias concat
   remain (Tw57 slice 2+).
+### nlp — performance: T5 decoder KV-cache (T734, 2026-07-16)
+
+`T5Decoder.DecodeStep` + a `T5DecoderCache` make T5 generation incremental — the growing
+self-attention key/value are cached and the encoder cross-attention key/value are projected once
+— so each step is O(sequence) instead of re-decoding the whole prefix (generation O(n³)→O(n²)).
+`Generate` now uses it. The subtle part (a query at absolute position *p* attending to keys 0..*p*
+with the correct relative-position bias) is gated by a **bit-identical** correctness test: cached
+`DecodeStep` reproduces the non-cached `Decode` to 0.0, and greedy output is unchanged.
+
 ### nlp — fix: LlamaFromHF fails loud on attention bias (T733, 2026-07-16)
 
 `LlamaFromHF` read only the projection weights and silently ignored any extra tensors — so a
