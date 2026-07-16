@@ -4,6 +4,21 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — feat: Cohere Command-R support — 16th loadable architecture (T755, 2026-07-16)
+
+Cohere Command-R (`CohereForCausalLM`) as a self-contained `nlp.Cohere` type, with four departures
+from Llama: (1) **parallel residual** — each block reads the stream through ONE `input_layernorm`
+that feeds BOTH attention and the FFN, and their outputs are summed onto the residual
+(`x = x + attn(norm(x)) + ffn(norm(x))`, no post-norm, no separate FFN norm); (2) mean-centered
+**LayerNorm** (weight-only, β=0) instead of RMSNorm; (3) **interleaved RoPE** (GPT-J style) — handled
+without a backend change by permuting the q/k projection rows from interleaved to split-half layout
+at load (`permuteInterleaveToSplit`, the inverse of llama.cpp's §R93 GGUF permute), so GoAI's
+split-half `OpRoPE` reproduces Cohere's rotary; (4) `logit_scale` (final logits ×= a constant), tied
+embeddings. Forward parity vs a real transformers `CohereForCausalLM`: max abs logit diff 2.2e-9
+(the permutation direction was right first try); KV-decode matches Forward bit-for-bit (0.0); and it
+fine-tunes. Sixteenth loadable architecture — the interleaved-RoPE-via-load-permutation technique
+also unblocks the other GPT-J-style-rotary families for later.
+
 ### nlp — docs: refresh the loadable-architecture catalogue + OLMo2 config parser (T754, 2026-07-16)
 
 The package godoc (`doc.go`) now lists all fifteen transformers-anchored architectures accurately
