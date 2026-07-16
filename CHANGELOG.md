@@ -4,6 +4,17 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — feat: KV-cached generation for DeepSeek-V2, MPT and Falcon (T771, 2026-07-16)
+
+Completes generation for the three newest architectures with `NewCache`/`DecodeStep`/`Generate`, each
+reproducing `Forward` bit-for-bit (decode-vs-Forward max abs diff 0.0 for MPT, Falcon,
+DeepSeek-V2-dense and DeepSeek-V2-MoE). Notable: MPT's ALiBi decode needs no explicit position — the
+reference kernel derives the query position from the query/key length gap, so a single query over
+the cached keys gets the right per-head distance bias automatically; DeepSeek-V2's MLA decode caches
+the reconstructed per-head key/value (a latent-compressed cache would be a future memory
+optimization); Falcon's MQA decode caches a single k/v head. Every loadable decoder now supports
+KV-cached generation.
+
 ### nlp — feat: Falcon support — 27th loadable architecture (T770, 2026-07-16)
 
 Falcon (`FalconForCausalLM`) as a self-contained `nlp.Falcon` type: single-norm parallel residual
