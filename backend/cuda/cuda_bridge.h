@@ -73,20 +73,20 @@ int cu_qmatmul_q4k_swiglu(const void* dA, const void* dQ, const void* dGate, voi
                           int M, int K, int N);
 // cu_qmatmul_iq4nl / iq4xs: out = a·dequant(W), W = ggml IQ4_NL (18-byte blocks) / IQ4_XS
 // (136-byte super-blocks) — 4-bit quants over a nonlinear 16-value codebook. K%32 / K%256.
-int cu_qmatmul_iq4nl(const void* dA, const void* dQ, void* dOut, int M, int K, int N, float beta);
+int cu_qmatmul_iq4nl(const void* dA, const void* dScale, const void* dNib, void* dOut, int M, int K, int N, float beta);
 int cu_qmatmul_iq4xs(const void* dA, const void* dQ, void* dOut, int M, int K, int N, float beta);
-// cu_qmatmul_mxfp4: out = a·dequant(W), W = ggml MXFP4 (OCP microscaling FP4, gpt-oss) —
-// 17-byte blocks (E8M0 scale byte + 16 nibbles), FP4 E2M1 codebook. K%32==0. DECODE GEMV.
-int cu_qmatmul_mxfp4(const void* dA, const void* dQ, void* dOut, int M, int K, int N, float beta);
-// cu_qmatmul_q40: out[M,N] = a·dequant(W), W = ggml Q4_0 18-byte blocks per output row
-// (f16 d + 16 nibble bytes, symmetric y = d·(nibble−8)). K%32==0. DECODE GEMV.
-int cu_qmatmul_q40(const void* dA, const void* dQ, void* dOut, int M, int K, int N, float beta);
+// cu_qmatmul_mxfp4: out = a·dequant(MXFP4, gpt-oss), REPACKED into dScale (nblk E8M0 bytes/row)
+// + dNib (nblk×16 nibble bytes/row, 16-aligned) for coalesced reads. K%32==0. DECODE GEMV.
+int cu_qmatmul_mxfp4(const void* dA, const void* dScale, const void* dNib, void* dOut, int M, int K, int N, float beta);
+// cu_qmatmul_q40: out[M,N] = a·dequant(Q4_0), REPACKED into dScale (nblk f16/row) + dNib
+// (nblk×16 nibble bytes/row, 16-aligned) for coalesced reads. y = d·(nibble−8). K%32==0. GEMV.
+int cu_qmatmul_q40(const void* dA, const void* dScale, const void* dNib, void* dOut, int M, int K, int N, float beta);
 // cu_qmatmul_q2k: out[M,N] = a·dequant(W), W = ggml Q2_K 84-byte super-blocks per output row
 // (asymmetric affine, 4-bit sub-scale+min nibbles, 2-bit quants). K%256==0. DECODE GEMV.
 int cu_qmatmul_q2k(const void* dA, const void* dQ, void* dOut, int M, int K, int N, float beta);
 // cu_qmatmul_q3k: out[M,N] = a·dequant(W), W = ggml Q3_K 110-byte super-blocks per output row
 // (symmetric, signed 6-bit sub-scales, 3-bit quants via qs low-2 + hmask high-1). K%256==0. GEMV.
-int cu_qmatmul_q3k(const void* dA, const void* dQ, void* dOut, int M, int K, int N, float beta);
+int cu_qmatmul_q3k(const void* dA, const void* dMeta, const void* dQs, const void* dHm, void* dOut, int M, int K, int N, float beta);
 // cu_qmatmul_q5k: out[M,N] = a·dequant(W), W = ggml Q5_K 176-byte super-blocks per output row
 // (Q4_K's 6-bit scale/min packing + a qh high-bit plane → 5-bit quants). K%256==0. DECODE GEMV.
 int cu_qmatmul_q5k(const void* dA, const void* dQ, void* dOut, int M, int K, int N, float beta);
