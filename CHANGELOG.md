@@ -78,10 +78,10 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
   **opt-in** (`GOAI_CUDA_FFN_FUSE=1`). The remaining Tw55 lever is slice (b) —
   concurrent QKV streams in graph capture (QKV proj ≈11% of prefill), still open.
 
-### nn — topic-discovery round 7: distinct architectures — KAN, Tokenformer, sigmoid / selective / multi-token / stick-breaking attention (T686–T691, 2026-07-16)
+### nn — topic-discovery round 7: 7 distinct architectures — KAN, Tokenformer, sigmoid / selective / multi-token / stick-breaking attention, CoPE (T686–T692, 2026-07-16)
 
 A fresh sweep of *distinct layer/architecture types* (not the round-6 technique
-categories) found five genuinely-novel gaps — proving the "frontier tapped" read
+categories) found seven genuinely-novel gaps — proving the "frontier tapped" read
 wrong a fourth time. Each was delegated to an isolated worktree, then independently
 re-verified on `main`, and carries a collapse/limit anchor + gradcheck + a
 learns-a-task value proof (~1e-10).
@@ -130,6 +130,13 @@ learns-a-task value proof (~1e-10).
   product to 1.11e-16; causal; gradcheck 2.4e-10; on a recency-average task it
   length-generalizes (len6→len16 nearly flat) and beats an order-blind softpick
   baseline ~25× at length 16.
+- **CoPE** (`nn/cope.go`, Golovneva et al. / Meta 2024, arXiv:2405.18719). Contextual
+  Position Encoding — position is a content-gated cumulative count (σ-gates reverse-
+  cumsummed over keys) rather than a token index, with fractional positions
+  interpolated into a learned table. Anchors: `WithCoPEGatesOne` collapses to standard
+  relative-position attention bit-exact; interpolation exact (`p=2.3 → 0.7·E[2]+0.3·E[3]`);
+  gradcheck 2.55e-10 reaching the position tables; on a held-out "2nd-most-recent value,
+  skipping noise" task CoPE generalizes to 86.3% vs an absolute-PE baseline's 64.9%.
 
 ### nn/nlp — topic-discovery round 6: 18 new techniques across optimizers, attention, quant, sampling, MoE, distillation, embeddings, augmentation, RL (T668–T684, 2026-07-15/16)
 

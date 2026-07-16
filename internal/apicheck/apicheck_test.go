@@ -112,6 +112,7 @@ var typeExampleExempt = map[string]bool{
 	"nn.SelectiveAttentionOption":     true, // functional-option type (shown via WithSelectionDisabled)
 	"nn.MultiTokenAttentionOption":    true, // functional-option type (shown via WithMTAKeyQueryKernel/WithMTAHeadKernel/WithMTABidirectional)
 	"nn.StickBreakingAttentionOption": true, // functional-option type (shown via WithStickBreakingBias)
+	"nn.CoPEAttentionOption":          true, // functional-option type (shown via WithCoPEMaxPos/WithCoPEGatesOne)
 	"nn.PrefOption":                   true, // functional-option type (shown via Beta/ReferencePoint)
 	"nn.GRPOOption":                   true, // functional-option type (shown via WithKLBeta)
 	"nn.GSPOOption":                   true, // functional-option type (shown via WithGSPOClipEpsilon)
