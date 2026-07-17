@@ -1450,6 +1450,15 @@ paths differ by ~1 ulp under FMA fusion — bit-parity gates must share the kern
 §B65 (race builds contract floating point differently — near-bit parity gates need a race-tagged
 tolerance).
 
+The arc was closed by a measure-first op-fusion spike (T800): instrumenting `backend.Execute`
+on the decode path showed 66 ops/token with non-kernel dispatch overhead at **2.2% of
+wall-clock** (0.18–0.23µs/op), and every fusible elementwise/norm op combined (silu, rope,
+rmsnorm, add, mul) at 4.9% of kernel time — matmul (79.4%) and attention (15.6%) dominate.
+Extrapolated value of all three candidate fusion families (SiLU⊙Mul, fused residual adds,
+norm-into-matmul) is ~1.8% of decode time, below run-to-run bench noise, so elementwise op
+fusion was **rejected on measurement** rather than built. The data instead points any future
+CPU decode work at the GEMV kernel itself (the `[1,dim]` f64 matmul is ~66% of everything).
+
 ## Further reading
 
 - Hoefler & Belli, *Scientific Benchmarking of Parallel Computing Systems* (SC '15) — the canonical treatment of run variance, warm-up and honest reporting that this document's rules follow.

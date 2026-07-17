@@ -4,6 +4,16 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### perf — op-fusion spike: measured STOP verdict (T800, 2026-07-17)
+
+A measure-first spike instrumented `backend.Execute` on the CPU decode path before building
+any fused kernels: 66 ops/token, non-kernel dispatch overhead 2.2% of wall-clock, all fusible
+elementwise/norm kernels combined 4.9% of kernel time (matmul 79.4% + attention 15.6% dominate).
+Extrapolated value of every candidate fusion family is ~1.8% of decode time — under bench
+noise — so elementwise op fusion is rejected on measurement, not built. No product code
+changed; the numbers and the pointer at the real remaining frontier (the GEMV kernel itself)
+are recorded in docs/benchmarking.md.
+
 ### nlp — quantized GGUF decode for Phi-3 (T799, 2026-07-17)
 
 `QuantPhi3FromGGUF` decodes llama.cpp-quantized Phi-3/Phi-3.5/Phi-4 checkpoints directly
