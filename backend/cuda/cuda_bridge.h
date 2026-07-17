@@ -102,6 +102,9 @@ int cu_qmatmul_q4k_swiglu(const void* dA, const void* dQ, const void* dGate, voi
 // (136-byte super-blocks) — 4-bit quants over a nonlinear 16-value codebook. K%32 / K%256.
 int cu_qmatmul_iq4nl(const void* dA, const void* dScale, const void* dNib, void* dOut, int M, int K, int N, float beta);
 int cu_qmatmul_iq4xs(const void* dA, const void* dQ, void* dOut, int M, int K, int N, float beta);
+// cu_qmatmul_iq4xs_mt: weight-read-once M-tiled GEMM for M>1 — IQ4_XS twin of cu_qmatmul_q4k_mt.
+// Bit-identical arithmetic to cu_qmatmul_iq4xs. K%256==0.
+int cu_qmatmul_iq4xs_mt(const void* dA, const void* dQ, void* dOut, int M, int K, int N, float beta);
 // cu_qmatmul_mxfp4: out = a·dequant(MXFP4, gpt-oss), REPACKED into dScale (nblk E8M0 bytes/row)
 // + dNib (nblk×16 nibble bytes/row, 16-aligned) for coalesced reads. K%32==0. DECODE GEMV.
 int cu_qmatmul_mxfp4(const void* dA, const void* dScale, const void* dNib, void* dOut, int M, int K, int N, float beta);
