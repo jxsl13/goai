@@ -108,3 +108,35 @@ func TestCUDAGraniteQ8CloseToF32(t *testing.T) {
 	}
 	t.Logf("NewGraniteQ8CUDA tracks f32 CUDA decode: min cosine %.6f (Llama-core + scaled Wo/Wdown Q8)", minCos)
 }
+
+// TestCUDACohereQ8CloseToF32 validates that the mkLinS fix fully quantizes Cohere Q8: Cohere folds a
+// logit_scale (0.0625) into the tied lm_head via linS — which was f32-only before, leaving the lm_head
+// f32 under the Q8 hook. Now linS = d.mkLinS (Q8 under hook), so the scaled lm_head goes Q8 too.
+func TestCUDACohereQ8CloseToF32(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("cuda: no CUDA-capable device")
+	}
+	ts, _, err := safetensors.LoadFile("../nlp/testdata/cohere_hf.safetensors")
+	if err != nil {
+		t.Skipf("cohere testdata unavailable: %v", err)
+	}
+	m, err := nlp.CohereFromHF(ts, nlp.CohereConfig{Heads: 4, KVHeads: 2, Eps: 1e-5, RopeBase: 10000, LogitScale: 0.0625, Ctx: 32})
+	if err != nil {
+		t.Fatalf("CohereFromHF: %v", err)
+	}
+	f32Dec, err := llamagpu.NewCohereCUDA(m)
+	if err != nil {
+		t.Fatalf("NewCohereCUDA: %v", err)
+	}
+	defer f32Dec.Release()
+	q8Dec, err := llamagpu.NewCohereQ8CUDA(m)
+	if err != nil {
+		t.Fatalf("NewCohereQ8CUDA: %v", err)
+	}
+	defer q8Dec.Release()
+	minCos := cosStep(t, f32Dec, q8Dec, []int{3, 7, 1, 9, 4})
+	if minCos < 0.999 {
+		t.Fatalf("Cohere Q8 min cosine %.5f < 0.999 vs f32", minCos)
+	}
+	t.Logf("NewCohereQ8CUDA tracks f32 CUDA decode: min cosine %.6f (logit-scaled lm_head now Q8 via mkLinS)", minCos)
+}
