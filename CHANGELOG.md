@@ -4,6 +4,14 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — the GGUF quickstart pipeline as a runnable example (T820, 2026-07-17)
+
+`ExampleLlamaFromGGUF_pipeline` is the README front-page flow as a self-contained,
+deterministic test: one GGUF carries both the weights and the tokenizer, and a single load
+call each yields a model and a tokenizer that tokenize → generate → decode end to end. The
+file is built in memory (no external .gguf needed), but the load→run path is exactly a real
+download's, so the most-read code in the repo can no longer silently drift out of correctness.
+
 ### perf — quantized decode benchmark + the measured CPU gap (T819, 2026-07-17)
 
 `BenchmarkQuantLlamaGenerate500` gives Q8_0 quantized decode a permanent §V22 baseline next
