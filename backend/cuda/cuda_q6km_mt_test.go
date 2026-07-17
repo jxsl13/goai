@@ -67,6 +67,56 @@ func TestCUDAQ6KMatMulMTParity(t *testing.T) {
 		t.Fatalf("Q6_K M-tiled kernel diverges from the GEMV: max abs %.3g", maxAbs)
 	}
 
+	// The MT entry shape-routes (K>N → shared-staged kernel, N>=K → unstaged): the shape above
+	// exercises the staged branch; also pin the unstaged branch (N>K) to the per-row GEMV.
+	t.Run("wideN", func(t *testing.T) {
+		const K2, N2, M2 = 256, 300, 13
+		w2 := tensor.New(tensor.F32, tensor.Shape{K2, N2})
+		w2f := w2.Storage().F32()
+		for i := range w2f {
+			w2f[i] = float32(rng.NormFloat64())
+		}
+		a2 := make([]float32, M2*K2)
+		for i := range a2 {
+			a2[i] = float32(rng.NormFloat64())
+		}
+		rq2, err := quantQ6K(w2)
+		must(t, err)
+		defer rq2.Free()
+		da2, err := cuda.NewDeviceF32(M2, K2)
+		must(t, err)
+		defer da2.Free()
+		must(t, da2.UploadF32(a2))
+		dout2, err := cuda.NewDeviceF32(M2, N2)
+		must(t, err)
+		defer dout2.Free()
+		must(t, rq2.QMatMulInto(da2, dout2))
+		got2, err := dout2.ToHost()
+		must(t, err)
+		gd2, err := cuda.NewDeviceF32(1, K2)
+		must(t, err)
+		defer gd2.Free()
+		gout2, err := cuda.NewDeviceF32(1, N2)
+		must(t, err)
+		defer gout2.Free()
+		var maxAbs2 float64
+		for m := 0; m < M2; m++ {
+			must(t, gd2.UploadF32(a2[m*K2:(m+1)*K2]))
+			must(t, rq2.QMatMulInto(gd2, gout2))
+			gv, err := gout2.ToHost()
+			must(t, err)
+			for n := 0; n < N2; n++ {
+				if d := math.Abs(got2.AtF64(m, n) - gv.AtF64(0, n)); d > maxAbs2 {
+					maxAbs2 = d
+				}
+			}
+		}
+		t.Logf("Q6_K M-tiled wide-N (N>K) vs per-row GEMV: max abs diff %.3g", maxAbs2)
+		if maxAbs2 > 1e-3 {
+			t.Fatalf("wide-N MT branch diverges from the GEMV: max abs %.3g", maxAbs2)
+		}
+	})
+
 	// beta=1 residual fuse across the batch
 	must(t, rq.QMatMulAccInto(da, dout))
 	got2, err := dout.ToHost()
