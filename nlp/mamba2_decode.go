@@ -201,6 +201,207 @@ func mixer2Step(mx *Mamba2Mixer, ls *Mamba2LayerState, u *tensor.Tensor) (*tenso
 	return out, nil
 }
 
+// mixer2Prefill absorbs a whole prompt into one [Mamba2Mixer]'s recurrent
+// state in a single pass. It is the multi-token twin of [mixer2Step] and the
+// state-capturing sibling of the mixer's forward: the same host-f64 pipeline —
+// in_proj split [z|xBC|dt], causal depthwise conv + SiLU, per-head SSD scan +
+// D skip, gated RMSNorm, out_proj — run over all T rows at once, except that
+// the per-head scan writes its running hidden state into ls.H (forward's
+// nn.SSDRecurrent computes the same scan but discards the final state) and the
+// last d_conv−1 pre-conv xBC rows land in ls.ConvBuf. The scan replays
+// mixer2Step's per-t update in the identical order (state update i over N
+// ascending, j over head_dim ascending, then the output pass; heads are
+// independent, so the head-outer/t-inner nesting rounds identically to
+// t-outer/head-inner), so both the returned [T, d_model] rows and the captured
+// state are bit-identical to T successive mixer2Steps. ls must be fresh: the
+// full-sequence conv's left zero-padding assumes the sequence starts here.
+func mixer2Prefill(mx *Mamba2Mixer, ls *Mamba2LayerState, u *tensor.Tensor) (*tensor.Tensor, error) {
+	K, D := mx.DConv, mx.ConvDim
+	if len(ls.ConvBuf) != (K-1)*D || len(ls.H) != mx.NumHeads*mx.N*mx.HeadDim {
+		return nil, fmt.Errorf("nlp: Mamba2 decode state sized for a different model (conv %d, h %d)", len(ls.ConvBuf), len(ls.H))
+	}
+	seq := u.Shape()[0]
+	if u.Shape()[1] != mx.DModel {
+		return nil, fmt.Errorf("nlp: Mamba2 mixer got width %d, want d_model %d", u.Shape()[1], mx.DModel)
+	}
+	uu := rows2D(u) // [seq][d_model]
+
+	inW := mx.InProj.Storage().F64() // [projection_size, d_model]
+	projSize := mx.Intermediate + D + mx.NumHeads
+
+	// 1. in_proj (no bias) → split [gate | xBC | dt], exactly like forward.
+	z := make([][]float64, seq)   // gate [seq][intermediate]
+	xBC := make([][]float64, seq) // conv input [seq][conv_dim]
+	dt := make([][]float64, seq)  // Δ pre-activation [seq][num_heads]
+	for t := range seq {
+		proj := make([]float64, projSize)
+		for o := range projSize {
+			var s float64
+			base := o * mx.DModel
+			for i := range mx.DModel {
+				s += uu[t][i] * inW[base+i]
+			}
+			proj[o] = s
+		}
+		z[t] = proj[:mx.Intermediate]
+		xBC[t] = proj[mx.Intermediate : mx.Intermediate+D]
+		dt[t] = proj[mx.Intermediate+D:]
+	}
+
+	// 2. causal depthwise conv1d + bias, then SiLU — forward's loop verbatim
+	// (skipping src<0 ≡ mixer2Step's zero ConvBuf terms on a fresh state).
+	convW := mx.ConvW.Storage().F64() // [conv_dim, d_conv]
+	convB := mx.ConvB.Storage().F64() // [conv_dim]
+	xc := make([][]float64, seq)
+	for t := range seq {
+		xc[t] = make([]float64, D)
+	}
+	for c := range D {
+		wbase := c * K
+		for t := range seq {
+			acc := convB[c]
+			for k := range K {
+				src := t - (K - 1) + k
+				if src >= 0 {
+					acc += convW[wbase+k] * xBC[src][c]
+				}
+			}
+			xc[t][c] = silu(acc)
+		}
+	}
+
+	// Capture the conv-window tail: the last d_conv−1 PRE-conv xBC rows, oldest
+	// first; pre-sequence slots keep the fresh state's zeros.
+	for i := range K - 1 {
+		if t := seq - (K - 1) + i; t >= 0 {
+			copy(ls.ConvBuf[i*D:(i+1)*D], xBC[t])
+		}
+	}
+
+	// 3–4. Per-head SSD scan against the persistent state ls.H — mixer2Step's
+	// per-t loop replayed for t = 0..seq−1 (each head's state depends only on
+	// its own past, so head-outer nesting is bit-identical).
+	gN := mx.NGroups * mx.N
+	headsPerGroup := mx.NumHeads / mx.NGroups
+	dSkip := mx.D.Storage().F64()
+	dtBias := mx.DtBias.Storage().F64()
+	y := make([][]float64, seq)
+	for t := range seq {
+		y[t] = make([]float64, mx.Intermediate)
+	}
+	for h := range mx.NumHeads {
+		g := h / headsPerGroup
+		Dh := dSkip[h]
+		hOff := h * mx.HeadDim
+		bOff := mx.Intermediate + g*mx.N      // B lives at [intermediate : intermediate+gN] of xc
+		cOff := mx.Intermediate + gN + g*mx.N // C lives after B
+		hst := ls.H[h*mx.N*mx.HeadDim:]       // this head's [N, head_dim] state
+
+		for t := range seq {
+			delta := softplus(dt[t][h] + dtBias[h])
+			at := math.Exp(delta * ls.a[h])
+			for i := range mx.N {
+				bi := xc[t][bOff+i]
+				for j := range mx.HeadDim {
+					hst[i*mx.HeadDim+j] = at*hst[i*mx.HeadDim+j] + bi*(xc[t][hOff+j]*delta)
+				}
+			}
+			for j := range mx.HeadDim {
+				var s float64
+				for i := range mx.N {
+					s += xc[t][cOff+i] * hst[i*mx.HeadDim+j]
+				}
+				y[t][hOff+j] = s + Dh*xc[t][hOff+j]
+			}
+		}
+	}
+
+	// 5. Gated RMSNorm over the full intermediate width: norm(y · SiLU(z)).
+	normW := mx.NormW.Storage().F64()
+	for t := range seq {
+		var variance float64
+		gated := make([]float64, mx.Intermediate)
+		for o := range mx.Intermediate {
+			gated[o] = y[t][o] * silu(z[t][o])
+			variance += gated[o] * gated[o]
+		}
+		variance /= float64(mx.Intermediate)
+		inv := 1.0 / math.Sqrt(variance+mx.Eps)
+		for o := range mx.Intermediate {
+			y[t][o] = normW[o] * gated[o] * inv
+		}
+	}
+
+	// 6. out_proj (no bias): [intermediate] → [d_model].
+	outW := mx.OutProj.Storage().F64() // [d_model, intermediate]
+	out := tensor.New(tensor.F64, tensor.Shape{seq, mx.DModel})
+	os := out.Storage().F64()
+	for t := range seq {
+		for i := range mx.DModel {
+			var s float64
+			base := i * mx.Intermediate
+			for o := range mx.Intermediate {
+				s += y[t][o] * outW[base+o]
+			}
+			os[t*mx.DModel+i] = s
+		}
+	}
+	return out, nil
+}
+
+// Prefill absorbs the whole prompt into the decode state in ONE pass per layer
+// and returns the full logits [seq, vocab] (row seq−1 is the next-token
+// distribution Generate samples from). It is the batched replacement for
+// feeding the prompt token-by-token through [Mamba2.DecodeStep]: each layer's
+// mixer runs its full-sequence pipeline once ([mixer2Prefill]) while the SSD
+// scan deposits the final per-head hidden state and the conv-window tail into
+// the state, bit-identical to seq DecodeSteps. st must be fresh (from
+// [Mamba2.NewDecodeState]); Prefill errors on a state that already absorbed
+// tokens, because the full-sequence conv's left zero-padding assumes positions
+// 0..seq−1. Inference-only, like DecodeStep.
+func (m *Mamba2) Prefill(ctx *backend.Context, st *Mamba2DecodeState, tokens []int) (*tensor.Tensor, error) {
+	if len(st.Layers) != len(m.Layers) {
+		return nil, fmt.Errorf("nlp: Mamba2 decode state has %d layers, model has %d", len(st.Layers), len(m.Layers))
+	}
+	if len(tokens) == 0 {
+		return nil, fmt.Errorf("nlp: Mamba2 prompt is empty")
+	}
+	for l := range st.Layers {
+		if !allZeroF64(st.Layers[l].ConvBuf) || !allZeroF64(st.Layers[l].H) {
+			return nil, fmt.Errorf("nlp: Prefill needs a fresh decode state (layer %d already absorbed tokens)", l)
+		}
+	}
+	seq := len(tokens)
+	idx := tensor.New(m.Embed.Dtype(), tensor.Shape{seq})
+	for i, t := range tokens {
+		if t < 0 || t >= m.Config.Vocab {
+			return nil, fmt.Errorf("nlp: token %d outside vocab %d", t, m.Config.Vocab)
+		}
+		idx.SetF64(float64(t), i)
+	}
+	h, err := exec1(ctx, backend.OpEmbed, nil, m.Embed, idx)
+	if err != nil {
+		return nil, err
+	}
+	for l := range m.Layers {
+		n, err := m.Layers[l].Norm.Forward(ctx, h)
+		if err != nil {
+			return nil, err
+		}
+		mix, err := mixer2Prefill(m.Layers[l].Mixer, &st.Layers[l], n)
+		if err != nil {
+			return nil, err
+		}
+		if h, err = exec1(ctx, backend.OpAdd, nil, h, mix); err != nil {
+			return nil, err
+		}
+	}
+	if h, err = m.Norm.Forward(ctx, h); err != nil {
+		return nil, err
+	}
+	return exec1(ctx, backend.OpMatMul, nil, h, m.Head)
+}
+
 // DecodeStep advances the model one token in recurrent mode and returns the
 // next-token logits [1, vocab]. The graph is the single-token twin of
 // [Mamba2.Forward]: embed → per layer (pre-RMSNorm → mixer2Step → residual
@@ -237,13 +438,13 @@ func (m *Mamba2) DecodeStep(ctx *backend.Context, st *Mamba2DecodeState, token i
 }
 
 // Generate autoregressively decodes up to maxNew tokens after prompt with the
-// sampler s, running the O(1) recurrent state (one DecodeStep per token, no
-// KV-cache). Prefill IS decoding here: each prompt token is stepped through the
-// recurrence and the state absorbs it. Returns prompt+generated. With a greedy
-// sampler the output is identical to argmax-ing a full Forward at each step.
-// Unlike the attention decoders there is no context-length ceiling — the state
-// is constant-size at any sequence length. The decode runs on backend.Default()
-// unless WithBackend overrides it (§T361).
+// sampler s, running the O(1) recurrent state (one batched [Mamba2.Prefill]
+// over the prompt, then one DecodeStep per new token, no KV-cache). Returns
+// prompt+generated. With a greedy sampler the output is identical to
+// argmax-ing a full Forward at each step. Unlike the attention decoders there
+// is no context-length ceiling — the state is constant-size at any sequence
+// length. The decode runs on backend.Default() unless WithBackend overrides it
+// (§T361).
 func (m *Mamba2) Generate(prompt []int, maxNew int, s TokenSampler, opts ...GenerateOption) ([]int, error) {
 	var gc genConfig
 	for _, o := range opts {
@@ -259,13 +460,15 @@ func (m *Mamba2) Generate(prompt []int, maxNew int, s TokenSampler, opts ...Gene
 	st := m.NewDecodeState()
 	out := append([]int(nil), prompt...)
 
-	var logits *tensor.Tensor
-	for _, tok := range prompt {
-		l, err := m.DecodeStep(ctx, st, tok)
-		if err != nil {
-			return nil, err
-		}
-		logits = l
+	// Batched prefill: one full-sequence pass absorbs the prompt into the
+	// recurrent state (bit-identical to stepping it) and yields its logits.
+	full, err := m.Prefill(ctx, st, prompt)
+	if err != nil {
+		return nil, err
+	}
+	logits, err := full.Slice(0, full.Shape()[0]-1, full.Shape()[0])
+	if err != nil {
+		return nil, err
 	}
 	for range maxNew {
 		next := s.SampleWithHistory(rowLogits(logits), out)

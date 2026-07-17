@@ -4,6 +4,17 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — perf: batched prefill for the recurrent families (T792, 2026-07-17)
+
+Mamba, Mamba-2, Jamba and RWKV now prefill their prompts in one batched pass: the projections, conv
+and norms (the dispatch bulk) run as full-sequence backend ops, with only the inherently sequential
+scan replayed on host in the decode step's exact loop order — capturing the end-of-prompt decode
+state (SSM hidden + conv-window tail; WKV shift/num/den/max; Jamba's hybrid also batch-appends its
+attention layers' KV via the T788 pattern). State and continuation parity are BIT-EQUAL
+(`math.Float64bits` comparison) for all four, including a short-prompt partial-conv-window case and
+RWKV's chunked mid-state prefill (its prefill works from any state). Measured (§V22): Mamba 64-token
+prompt 39.2 → 21.8 ms (**1.8×**). With this, every one of the 31 architectures prefills batched.
+
 ### nlp — feat: GGUF loading for Gemma (T791, 2026-07-17)
 
 `GemmaFromGGUF`/`GemmaToGGUF` load llama.cpp Gemma checkpoints, with all four conventions verified

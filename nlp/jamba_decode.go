@@ -202,6 +202,228 @@ func jambaMixerStep(ctx *backend.Context, jm *JambaMixer, ls *MambaLayerState, u
 	return mb.OutProj.Forward(ctx, y)
 }
 
+// jambaMixerPrefill absorbs a whole prompt into one [JambaMixer]'s recurrent
+// state in a single batched pass — [mixerPrefill] with Jamba's dt/b/c RMSNorms
+// inserted exactly where [JambaMixer.Forward] applies them. The projections,
+// the causal conv and the norms (all row-independent backend ops, the
+// per-token dispatch bulk of a stepwise prefill) run ONCE over the full
+// [T, ·] sequence; only the cheap O(T·d·N) S6 recurrence runs as a host loop,
+// replaying [jambaMixerStep]'s per-(d,n) f64 update for every t. Both the
+// returned [T, dim] rows and the captured state (final ls.H + the last
+// d_conv−1 pre-conv rows in ls.ConvBuf) are bit-identical to T successive
+// jambaMixerSteps. ls must be fresh: the batched conv's left zero-padding
+// assumes the sequence starts here.
+func jambaMixerPrefill(ctx *backend.Context, jm *JambaMixer, ls *MambaLayerState, u *tensor.Tensor) (*tensor.Tensor, error) {
+	mb := jm.Block
+	K, D, N := mb.DConv, mb.DInner, mb.N
+	if len(ls.ConvBuf) != (K-1)*D || len(ls.H) != D*N {
+		return nil, fmt.Errorf("nlp: Jamba decode state sized for a different model (conv %d, h %d)", len(ls.ConvBuf), len(ls.H))
+	}
+	T := u.Shape()[0]
+	xin, err := mb.InX.Forward(ctx, u)
+	if err != nil {
+		return nil, err
+	}
+	z, err := mb.InZ.Forward(ctx, u)
+	if err != nil {
+		return nil, err
+	}
+	// Full-sequence causal depthwise conv + SiLU — Forward's exact op pair.
+	xc, err := exec1(ctx, backend.OpConv1D, nil, xin, mb.ConvW, mb.ConvB)
+	if err != nil {
+		return nil, err
+	}
+	if xc, err = exec1(ctx, backend.OpSiLU, nil, xc); err != nil {
+		return nil, err
+	}
+	// Input-dependent Δ, B, C — each RMSNormed before use (Jamba's addition),
+	// in the same spots JambaMixer.Forward applies the norms; one dispatch each.
+	dtLow, err := mb.DtLow.Forward(ctx, xc)
+	if err != nil {
+		return nil, err
+	}
+	if dtLow, err = jm.DtNorm.Forward(ctx, dtLow); err != nil {
+		return nil, err
+	}
+	dtPre, err := mb.DtProj.Forward(ctx, dtLow)
+	if err != nil {
+		return nil, err
+	}
+	delta, err := exec1(ctx, backend.OpSoftplus, nil, dtPre)
+	if err != nil {
+		return nil, err
+	}
+	bMat, err := mb.BProj.Forward(ctx, xc)
+	if err != nil {
+		return nil, err
+	}
+	if bMat, err = jm.BNorm.Forward(ctx, bMat); err != nil {
+		return nil, err
+	}
+	cMat, err := mb.CProj.Forward(ctx, xc)
+	if err != nil {
+		return nil, err
+	}
+	if cMat, err = jm.CNorm.Forward(ctx, cMat); err != nil {
+		return nil, err
+	}
+
+	// Host S6 scan over the precomputed rows — jambaMixerStep's loop, verbatim,
+	// for each t in order; ls.H ends as the post-prompt hidden state.
+	uuA, ddA, bbA, ccA := rows2D(xc), rows2D(delta), rows2D(bMat), rows2D(cMat)
+	y := tensor.New(xc.Dtype(), tensor.Shape{T, D})
+	for t := range T {
+		uu, dd, bb, cc := uuA[t], ddA[t], bbA[t], ccA[t]
+		for d := range D {
+			dt := dd[d]
+			ut := uu[d]
+			base := d * N
+			var yv float64
+			for s := range N {
+				abar := math.Exp(dt * ls.a[base+s])
+				hv := abar*ls.H[base+s] + dt*bb[s]*ut
+				ls.H[base+s] = hv
+				yv += cc[s] * hv
+			}
+			yv += mb.Dskip.AtF64(d) * ut
+			y.SetF64(yv, t, d)
+		}
+	}
+
+	// Capture the conv-window tail: the last d_conv−1 PRE-conv rows of xin,
+	// oldest first; pre-sequence slots keep the fresh state's zeros.
+	xinRows := rows2D(xin)
+	for i := range K - 1 {
+		if t := T - (K - 1) + i; t >= 0 {
+			copy(ls.ConvBuf[i*D:(i+1)*D], xinRows[t])
+		}
+	}
+
+	// Gate y ⊙ SiLU(z), then down-project — batched over all rows.
+	gate, err := exec1(ctx, backend.OpSiLU, nil, z)
+	if err != nil {
+		return nil, err
+	}
+	if y, err = exec1(ctx, backend.OpMul, nil, y, gate); err != nil {
+		return nil, err
+	}
+	return mb.OutProj.Forward(ctx, y)
+}
+
+// Prefill runs the hybrid stack ONCE over the whole prompt, seeding EVERY
+// layer's state in batched mode, and returns the full logits [seq, vocab]
+// (row seq−1 is the next-token distribution Generate samples from). It is the
+// batched replacement for feeding the prompt token-by-token through
+// [Jamba.DecodeStep], with each layer kind absorbing the prompt its own way:
+//
+//   - ATTENTION layers capture the whole prompt's un-rotated k/v rows in one
+//     multi-row cache append (Jamba's attention is NoPE, so the captured rows
+//     carry no position and are exactly what DecodeStep would have appended)
+//     and mix via one causal full-sequence OpMHA.
+//   - MAMBA layers run the batched-projection + host-scan prefill
+//     ([jambaMixerPrefill]), leaving the conv window and SSM hidden state
+//     bit-identical to seq stepwise updates.
+//   - The FFNs (sparse MoE with raw top-k routing, or dense SwiGLU) are
+//     row-independent and run batched over all prompt rows, exactly as
+//     [Jamba.Forward] does.
+//
+// The residual stream flows batched through everything, so the whole prefill
+// is one full-sequence pass. st must be fresh (from [Jamba.NewDecodeState]);
+// Prefill errors on a state that already absorbed tokens. Inference-only,
+// like DecodeStep.
+func (m *Jamba) Prefill(ctx *backend.Context, st *JambaDecodeState, tokens []int) (*tensor.Tensor, error) {
+	if len(st.Mamba) != len(m.Layers) || len(st.K) != len(m.Layers) {
+		return nil, fmt.Errorf("nlp: Jamba decode state has %d/%d layers, model has %d", len(st.Mamba), len(st.K), len(m.Layers))
+	}
+	if len(tokens) == 0 {
+		return nil, fmt.Errorf("nlp: Jamba prompt is empty")
+	}
+	if n := st.Len(); n != 0 {
+		return nil, fmt.Errorf("nlp: Prefill needs a fresh decode state, got %d cached tokens", n)
+	}
+	for l := range st.Mamba {
+		if ls := st.Mamba[l]; ls != nil && (!allZeroF64(ls.ConvBuf) || !allZeroF64(ls.H)) {
+			return nil, fmt.Errorf("nlp: Prefill needs a fresh decode state (layer %d already absorbed tokens)", l)
+		}
+	}
+	seq := len(tokens)
+	idx := tensor.New(m.TokEmb.Dtype(), tensor.Shape{seq})
+	for i, t := range tokens {
+		if t < 0 || t >= m.Config.Vocab {
+			return nil, fmt.Errorf("nlp: token %d outside vocab %d", t, m.Config.Vocab)
+		}
+		idx.SetF64(float64(t), i)
+	}
+	x, err := exec1(ctx, backend.OpEmbed, nil, m.TokEmb, idx)
+	if err != nil {
+		return nil, err
+	}
+
+	cfg := m.Config
+	attn := backend.AttnAttrs{Heads: cfg.Heads, KVHeads: cfg.kvHeads(), Causal: true}
+	for l, layer := range m.Layers {
+		// mixer sublayer (attention KV-capture or Mamba recurrence)
+		xb, err := layer.InputNorm.Forward(ctx, x)
+		if err != nil {
+			return nil, err
+		}
+		var mix *tensor.Tensor
+		if layer.Attn != nil {
+			// NoPE grouped-query causal attention over the whole prompt; the
+			// un-rotated k/v land in the cache in ONE multi-row append.
+			q, err := exec1(ctx, backend.OpMatMul, nil, xb, layer.Attn.Wq)
+			if err != nil {
+				return nil, err
+			}
+			k, err := exec1(ctx, backend.OpMatMul, nil, xb, layer.Attn.Wk)
+			if err != nil {
+				return nil, err
+			}
+			v, err := exec1(ctx, backend.OpMatMul, nil, xb, layer.Attn.Wv)
+			if err != nil {
+				return nil, err
+			}
+			kNew, vNew := st.bufs.appendKV(st.K, st.V, l, k, v)
+			st.K[l], st.V[l] = kNew, vNew
+			a, err := exec1(ctx, backend.OpMHA, attn, q, kNew, vNew)
+			if err != nil {
+				return nil, err
+			}
+			if mix, err = exec1(ctx, backend.OpMatMul, nil, a, layer.Attn.Wo); err != nil {
+				return nil, err
+			}
+		} else {
+			if mix, err = jambaMixerPrefill(ctx, layer.Mamba, st.Mamba[l], xb); err != nil {
+				return nil, err
+			}
+		}
+		if x, err = exec1(ctx, backend.OpAdd, nil, x, mix); err != nil {
+			return nil, err
+		}
+		// FFN sublayer (stateless: sparse MoE or dense SwiGLU), batched.
+		xf, err := layer.PreFFNorm.Forward(ctx, x)
+		if err != nil {
+			return nil, err
+		}
+		var ff *tensor.Tensor
+		if layer.MoE != nil {
+			ff, err = layer.MoE.Forward(ctx, xf)
+		} else {
+			ff, err = layer.Dense.Forward(ctx, xf)
+		}
+		if err != nil {
+			return nil, err
+		}
+		if x, err = exec1(ctx, backend.OpAdd, nil, x, ff); err != nil {
+			return nil, err
+		}
+	}
+	if x, err = m.Norm.Forward(ctx, x); err != nil {
+		return nil, err
+	}
+	return exec1(ctx, backend.OpMatMul, nil, x, m.Out)
+}
+
 // DecodeStep advances the model one token and returns the next-token logits
 // [1, vocab]. The graph is the single-token twin of [Jamba.Forward] with each
 // layer stepping its own state kind:
@@ -293,14 +515,14 @@ func (m *Jamba) DecodeStep(ctx *backend.Context, st *JambaDecodeState, token int
 }
 
 // Generate autoregressively decodes up to maxNew tokens after prompt with the
-// sampler s, running the hybrid state (one DecodeStep per token). Prefill IS
-// decoding here: each prompt token is stepped through and the state absorbs
-// it. Returns prompt+generated. With a greedy sampler the output is identical
-// to argmax-ing a full Forward at each step. Jamba's attention is NoPE and its
-// position sense lives in the Mamba recurrences, so there is no context-length
-// ceiling; memory grows only through the attention layers' KV rows (one per
-// token per attention layer). The decode runs on backend.Default() unless
-// WithBackend overrides it (§T361).
+// sampler s, running the hybrid state (one batched [Jamba.Prefill] over the
+// prompt, then one DecodeStep per new token). Returns prompt+generated. With
+// a greedy sampler the output is identical to argmax-ing a full Forward at
+// each step. Jamba's attention is NoPE and its position sense lives in the
+// Mamba recurrences, so there is no context-length ceiling; memory grows only
+// through the attention layers' KV rows (one per token per attention layer).
+// The decode runs on backend.Default() unless WithBackend overrides it
+// (§T361).
 func (m *Jamba) Generate(prompt []int, maxNew int, s TokenSampler, opts ...GenerateOption) ([]int, error) {
 	var gc genConfig
 	for _, o := range opts {
@@ -316,13 +538,15 @@ func (m *Jamba) Generate(prompt []int, maxNew int, s TokenSampler, opts ...Gener
 	st := m.NewDecodeState()
 	out := append([]int(nil), prompt...)
 
-	var logits *tensor.Tensor
-	for _, tok := range prompt {
-		l, err := m.DecodeStep(ctx, st, tok)
-		if err != nil {
-			return nil, err
-		}
-		logits = l
+	// Batched prefill: one full-sequence pass seeds every layer's state
+	// (bit-identical to stepping the prompt) and yields its logits.
+	full, err := m.Prefill(ctx, st, prompt)
+	if err != nil {
+		return nil, err
+	}
+	logits, err := full.Slice(0, full.Shape()[0]-1, full.Shape()[0])
+	if err != nil {
+		return nil, err
 	}
 	for range maxNew {
 		next := s.SampleWithHistory(rowLogits(logits), out)
