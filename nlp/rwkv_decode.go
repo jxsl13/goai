@@ -45,11 +45,7 @@ func (m *RWKV) embedOne(token int) (*tensor.Tensor, error) {
 		return nil, fmt.Errorf("nlp: token %d outside vocab %d", token, m.Config.Vocab)
 	}
 	d := m.Config.Dim
-	x := tensor.New(m.Embed.Dtype(), tensor.Shape{1, d})
-	for j := range d {
-		x.SetF64(m.Embed.AtF64(token, j), 0, j)
-	}
-	return x, nil
+	return embedRow(m.Embed, token, d), nil
 }
 
 // DecodeStep advances the model one token in recurrent mode and returns the

@@ -35,11 +35,7 @@ func (m *StableLM) embedOne(token int) (*tensor.Tensor, error) {
 		return nil, fmt.Errorf("nlp: token %d outside vocab %d", token, m.Config.Vocab)
 	}
 	d := m.Config.Dim
-	x := tensor.New(m.TokEmb.Dtype(), tensor.Shape{1, d})
-	for j := range d {
-		x.SetF64(m.TokEmb.AtF64(token, j), 0, j)
-	}
-	return x, nil
+	return embedRow(m.TokEmb, token, d), nil
 }
 
 // DecodeStep advances the StableLM by one token using the KV-cache and returns the

@@ -37,10 +37,7 @@ func (m *GraniteMoE) embedOne(ctx *backend.Context, token int) (*tensor.Tensor, 
 		return nil, fmt.Errorf("nlp: token %d outside vocab %d", token, m.Config.Vocab)
 	}
 	d := m.Config.Dim
-	x := tensor.New(m.TokEmb.Dtype(), tensor.Shape{1, d})
-	for j := range d {
-		x.SetF64(m.TokEmb.AtF64(token, j), 0, j)
-	}
+	x := embedRow(m.TokEmb, token, d)
 	// Granite: inputs_embeds *= embedding_multiplier (identical to Forward).
 	return scaleScalar(ctx, x, m.Config.EmbeddingMult)
 }

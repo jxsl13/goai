@@ -39,10 +39,7 @@ func (m *Gemma) embedOne(ctx *backend.Context, token int) (*tensor.Tensor, error
 		return nil, fmt.Errorf("nlp: token %d outside vocab %d", token, m.Config.Vocab)
 	}
 	d := m.Config.Dim
-	x := tensor.New(m.TokEmb.Dtype(), tensor.Shape{1, d})
-	for j := range d {
-		x.SetF64(m.TokEmb.AtF64(token, j), 0, j)
-	}
+	x := embedRow(m.TokEmb, token, d)
 	scale := tensor.New(tensor.F64, tensor.Shape{})
 	scale.Storage().F64()[0] = math.Sqrt(float64(d))
 	return exec1(ctx, backend.OpMul, nil, x, scale)
@@ -123,7 +120,7 @@ func (m *Gemma) DecodeStep(ctx *backend.Context, cache *GemmaCache, token, pos i
 		return nil, err
 	}
 	// Tied LM head: logits = hidden · embedᵀ (unscaled table).
-	return exec1(ctx, backend.OpMatMul, nil, x, transpose2D(m.TokEmb))
+	return exec1(ctx, backend.OpMatMul, nil, x, m.tiedHead())
 }
 
 // Generate autoregressively decodes up to maxNew tokens after prompt with the sampler

@@ -40,7 +40,23 @@ type Gemma2 struct {
 	TokEmb    *tensor.Tensor // [vocab, dim] tied token embedding
 	Blocks    []*Gemma2Block
 	FinalNorm *nn.RMSNorm
+
+	outT *tensor.Tensor // cached [dim, vocab] tied-head transpose (see tiedHead)
 }
+
+// tiedHead returns the cached [dim, vocab] tied-head transpose (computed once) — the
+// per-call transpose cost ~220ms at Llama-scale dims (§V22). Call
+// [Gemma2.RefreshTiedHead] after mutating TokEmb in place (fine-tuning).
+func (m *Gemma2) tiedHead() *tensor.Tensor {
+	if m.outT == nil {
+		m.outT = transpose2D(m.TokEmb)
+	}
+	return m.outT
+}
+
+// RefreshTiedHead drops the cached tied-head transpose so the next Forward/DecodeStep
+// recomputes it from the current TokEmb values.
+func (m *Gemma2) RefreshTiedHead() { m.outT = nil }
 
 // Gemma2Config fixes the model geometry. Dim, Vocab, Layers, FFN and HeadDim are
 // inferred from the checkpoint by [Gemma2FromHF]; the remaining fields come from
@@ -161,7 +177,7 @@ func (m *Gemma2) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor, er
 		return nil, err
 	}
 	// Tied LM head: logits = hidden · embedᵀ.
-	logits, err := exec1(ctx, backend.OpMatMul, nil, x, transpose2D(m.TokEmb))
+	logits, err := exec1(ctx, backend.OpMatMul, nil, x, m.tiedHead())
 	if err != nil {
 		return nil, err
 	}

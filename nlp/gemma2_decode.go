@@ -39,10 +39,7 @@ func (m *Gemma2) embedOne(ctx *backend.Context, token int) (*tensor.Tensor, erro
 		return nil, fmt.Errorf("nlp: token %d outside vocab %d", token, m.Config.Vocab)
 	}
 	d := m.Config.Dim
-	x := tensor.New(m.TokEmb.Dtype(), tensor.Shape{1, d})
-	for j := range d {
-		x.SetF64(m.TokEmb.AtF64(token, j), 0, j)
-	}
+	x := embedRow(m.TokEmb, token, d)
 	scale := tensor.New(tensor.F64, tensor.Shape{})
 	scale.Storage().F64()[0] = math.Sqrt(float64(d))
 	return exec1(ctx, backend.OpMul, nil, x, scale)
@@ -104,7 +101,7 @@ func (m *Gemma2) DecodeStep(ctx *backend.Context, cache *Gemma2Cache, token, pos
 		return nil, err
 	}
 	// Tied LM head: logits = hidden · embedᵀ (unscaled table).
-	logits, err := exec1(ctx, backend.OpMatMul, nil, x, transpose2D(m.TokEmb))
+	logits, err := exec1(ctx, backend.OpMatMul, nil, x, m.tiedHead())
 	if err != nil {
 		return nil, err
 	}

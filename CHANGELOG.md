@@ -4,6 +4,23 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — perf: decode hot-path sweep — cached tied head + typed single-token embed (T778, 2026-07-17)
+
+Two per-token fixed costs eliminated from the KV-cached decode paths (§V22, measured at Llama-scale
+dims — vocab 32000, dim 2048):
+
+- **Gemma/Gemma2 re-transposed the whole [vocab, dim] embedding table on EVERY Forward and every
+  decode step** for the tied LM head — measured at ~221 ms per call. The transpose is now computed
+  once and cached (`tiedHead`), with an explicit `RefreshTiedHead()` for callers that mutate the
+  embedding in place (fine-tuning). The other tied-head models (MPT, Mamba, Jamba) already cached at
+  load.
+- **Every DecodeStep embedded the token with a per-element AtF64/SetF64 loop** (the §base-perf
+  anti-pattern) — replaced by a shared `embedRow` typed row-copy: 14.4µs → 1.9µs per token (7.4×) at
+  dim 2048, across all 18 decode paths.
+
+All decode-vs-Forward parities remain exact (the changes are value-identical); permanent benchmarks
+in `decode_perf_test.go` document the evidence.
+
 ### nlp — feat: O(1) stateful generation for RWKV (T777, 2026-07-17)
 
 `RWKV` gains `NewDecodeState`/`DecodeStep`/`Generate` built on `nn.RWKVBlock.Step` — decoding with a
