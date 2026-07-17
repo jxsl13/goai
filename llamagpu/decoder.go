@@ -54,13 +54,14 @@ import (
 // unarySiLU/binaryAdd/binaryMul are the shared kernel selectors (identical on both backends —
 // they must match shaders/unary.comp / metal_bridge.m's unary switch and the binary op tables).
 const (
-	unarySiLU    = 6
-	unaryGELU    = 9
-	unaryReLU2   = 10 // squared ReLU (Nemotron); cuda-only
-	unarySigmoid = 11 // plain sigmoid (Qwen2-MoE shared-expert gate); cuda-only
-	binaryAdd    = 0
-	binaryMul    = 2
-	binarySwiGLU = 6 // fused silu(a)·b — one dispatch instead of SiLU+Mul (§T613)
+	unarySiLU     = 6
+	unaryGELU     = 9
+	unaryReLU2    = 10 // squared ReLU (Nemotron); cuda-only
+	unarySigmoid  = 11 // plain sigmoid (Qwen2-MoE shared-expert gate); cuda-only
+	unarySoftplus = 12 // softplus (Mamba Δ); cuda-only
+	binaryAdd     = 0
+	binaryMul     = 2
+	binarySwiGLU  = 6 // fused silu(a)·b — one dispatch instead of SiLU+Mul (§T613)
 )
 
 // buffer is a device-resident f32 buffer (metal.DeviceBuffer / vulkan.DeviceBuffer).

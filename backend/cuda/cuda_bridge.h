@@ -208,6 +208,7 @@ int cu_conv1d_step(const void* x, const void* w, const void* b, void* state, voi
 int cu_relu2_f32(void* d, int n); // squared ReLU (Nemotron relu2): relu(x)² in-place
 int cu_silu_f32(void* d, int n);
 int cu_sigmoid_f32(void* d, int n); // plain sigmoid (Qwen2-MoE shared-expert gate)
+int cu_softplus_f32(void* d, int n); // softplus (Mamba Δ)
 int cu_add_f32(void* dst, const void* src, int n);
 int cu_mul_f32(void* dst, const void* src, int n);
 // gate[i] = SiLU(gate[i])*up[i], fused (SwiGLU) in one pass.

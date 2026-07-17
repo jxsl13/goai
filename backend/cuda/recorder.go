@@ -40,13 +40,14 @@ func NewRecorder() (*Recorder, error) {
 // llamagpu unary/binary op selectors (must match llamagpu/decoder.go's constants,
 // which in turn match the metal/vulkan kernel switch tables).
 const (
-	recUnarySiLU    = 6
-	recUnaryGELU    = 9
-	recUnaryReLU2   = 10 // squared ReLU (Nemotron); cuda-only
-	recUnarySigmoid = 11 // plain sigmoid (Qwen2-MoE shared-expert gate); cuda-only
-	recBinaryAdd    = 0
-	recBinaryMul    = 2
-	recBinarySwiGLU = 6
+	recUnarySiLU     = 6
+	recUnaryGELU     = 9
+	recUnaryReLU2    = 10 // squared ReLU (Nemotron); cuda-only
+	recUnarySigmoid  = 11 // plain sigmoid (Qwen2-MoE shared-expert gate); cuda-only
+	recUnarySoftplus = 12 // softplus (Mamba Δ); cuda-only
+	recBinaryAdd     = 0
+	recBinaryMul     = 2
+	recBinarySwiGLU  = 6
 )
 
 func (rec *Recorder) RMSNorm(x, g, o *DeviceF32, rows, dim int, eps float32) error {
@@ -385,6 +386,8 @@ func (rec *Recorder) Unary(x, o *DeviceF32, op int) error {
 		rc = C.cu_relu2_f32(o.ptr, C.int(n))
 	case recUnarySigmoid:
 		rc = C.cu_sigmoid_f32(o.ptr, C.int(n))
+	case recUnarySoftplus:
+		rc = C.cu_softplus_f32(o.ptr, C.int(n))
 	default:
 		return fmt.Errorf("cuda: rec Unary op %d unsupported", op)
 	}
