@@ -122,3 +122,21 @@ func TestCUDALlamaQ4KGenerateReuseSafe(t *testing.T) {
 	}
 	t.Logf("NewLlamaQ4KCUDA Generate is reuse-safe + deterministic: %v", first)
 }
+
+// BenchmarkLlamaDecodeStepQ4K quantifies Q4_K decode against the Q8/f32 baselines (realLlama, Dim=2048/8L,
+// K%256-aligned). Measured RTX 3060: f32 5882 µs → Q8 2278 µs (2.58×) → Q4_K 1885 µs/token (3.12× vs f32,
+// 1.21× vs Q8). The modest speed gain over Q8 — despite 2× less weight bandwidth — is because the
+// non-weight decode cost (attention, activations, launches) doesn't shrink and Q4_K's affine super-block
+// dequant is heavier per byte. Q4_K's PRIMARY win is memory (2× smaller than Q8), letting bigger models fit
+// the 12 GB 3060; the decode speedup is a bonus. Run: go test -tags 'cuda cgo' -run x -bench DecodeStepQ4K ./llamagpu/
+func BenchmarkLlamaDecodeStepQ4K(b *testing.B) {
+	if !cuda.Available() {
+		b.Skip("cuda: no CUDA-capable device")
+	}
+	dec, err := llamagpu.NewLlamaQ4KCUDA(realLlama(b))
+	if err != nil {
+		b.Fatalf("NewLlamaQ4KCUDA: %v", err)
+	}
+	defer dec.Release()
+	benchLlamaStep(b, dec)
+}
