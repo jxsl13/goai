@@ -985,6 +985,11 @@ int cu_rope_f32(void* x, const void* inv, int seq, int heads, int hd, int posOff
     if (ensure_init() != 0) { rc = -1; goto done; }
     if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
     if (!gRope && compile_kernel(
+                      // GA106 runs FP64 at 1/64 the FP32 rate, so double cos/sin dominated this kernel
+                      // (2.5 ms of a 53 ms prefill). The angle + range reduction stay in cheap double
+                      // ALU (a handful of ops, keeps reduction error ~1e-16·|ang|), then the
+                      // transcendentals run as one FP32 sincosf on the reduced angle in [-pi, pi]
+                      // (~1e-7 rel — far inside every RoPE tolerance gate).
                       "extern \"C\" __global__ void rope_f32(float* x, const float* inv, int seq, int heads, int hd, int posOffset, double posDiv){\n"
                       "  int half = hd/2;\n"
                       "  long total = (long)seq*heads*half;\n"
@@ -995,11 +1000,15 @@ int cu_rope_f32(void* x, const void* inv, int seq, int heads, int hd, int posOff
                       "  int p = (int)(gid / ((long)half*heads));\n"
                       "  double pos = (double)(posOffset + p) / posDiv;\n"
                       "  double ang = pos * (double)inv[i];\n"
-                      "  double c = cos(ang), s = sin(ang);\n"
+                      "  const double TWO_PI = 6.283185307179586476925286766559;\n"
+                      "  double k = floor(ang / TWO_PI + 0.5);\n"
+                      "  float r = (float)(ang - k * TWO_PI);\n"
+                      "  float c, s;\n"
+                      "  sincosf(r, &s, &c);\n"
                       "  float* xr = x + (size_t)p*heads*hd + (size_t)h*hd;\n"
-                      "  double qi = xr[i], qih = xr[i+half];\n"
-                      "  xr[i] = (float)(qi*c - qih*s);\n"
-                      "  xr[i+half] = (float)(qih*c + qi*s);\n"
+                      "  float qi = xr[i], qih = xr[i+half];\n"
+                      "  xr[i] = qi*c - qih*s;\n"
+                      "  xr[i+half] = qih*c + qi*s;\n"
                       "}\n",
                       "rope.cu", "rope_f32", &gRope) != 0) { rc = -2; goto done; }
     {
@@ -1042,11 +1051,15 @@ int cu_rope_partial(void* x, const void* inv, int seq, int heads, int hd, int ro
                       "  int p = (int)(gid / ((long)half*heads));\n"
                       "  double pos = (double)(posOffset + p) / posDiv;\n"
                       "  double ang = pos * (double)inv[i];\n"
-                      "  double c = cos(ang), s = sin(ang);\n"
+                      "  const double TWO_PI = 6.283185307179586476925286766559;\n"
+                      "  double k2 = floor(ang / TWO_PI + 0.5);\n"
+                      "  float r = (float)(ang - k2 * TWO_PI);\n"
+                      "  float c, s;\n"
+                      "  sincosf(r, &s, &c);\n"
                       "  float* xr = x + (size_t)p*heads*hd + (size_t)h*hd;\n"
-                      "  double qi = xr[i], qih = xr[i+half];\n"
-                      "  xr[i] = (float)(qi*c - qih*s);\n"
-                      "  xr[i+half] = (float)(qih*c + qi*s);\n"
+                      "  float qi = xr[i], qih = xr[i+half];\n"
+                      "  xr[i] = qi*c - qih*s;\n"
+                      "  xr[i+half] = qih*c + qi*s;\n"
                       "}\n",
                       "rope_partial.cu", "rope_partial", &gRopePartial) != 0) { rc = -2; goto done; }
     {
@@ -1085,11 +1098,15 @@ int cu_rope_f32_band(void* x, const void* inv, int seq, int stride, int off, int
                       "  int p = (int)(gid / ((long)half*heads));\n"
                       "  double pos = (double)(posOffset + p) / posDiv;\n"
                       "  double ang = pos * (double)inv[i];\n"
-                      "  double c = cos(ang), s = sin(ang);\n"
+                      "  const double TWO_PI = 6.283185307179586476925286766559;\n"
+                      "  double k2 = floor(ang / TWO_PI + 0.5);\n"
+                      "  float r = (float)(ang - k2 * TWO_PI);\n"
+                      "  float c, s;\n"
+                      "  sincosf(r, &s, &c);\n"
                       "  float* xr = x + (size_t)p*stride + off + (size_t)h*hd;\n"
-                      "  double qi = xr[i], qih = xr[i+half];\n"
-                      "  xr[i] = (float)(qi*c - qih*s);\n"
-                      "  xr[i+half] = (float)(qih*c + qi*s);\n"
+                      "  float qi = xr[i], qih = xr[i+half];\n"
+                      "  xr[i] = qi*c - qih*s;\n"
+                      "  xr[i+half] = qih*c + qi*s;\n"
                       "}\n",
                       "rope_band.cu", "rope_band", &gRopeBand) != 0) { rc = -2; goto done; }
     {
@@ -1134,11 +1151,15 @@ int cu_rope_partial_band(void* x, const void* inv, int seq, int stride, int off,
                       "  int p = (int)(gid / ((long)half*heads));\n"
                       "  double pos = (double)(posOffset + p) / posDiv;\n"
                       "  double ang = pos * (double)inv[i];\n"
-                      "  double c = cos(ang), s = sin(ang);\n"
+                      "  const double TWO_PI = 6.283185307179586476925286766559;\n"
+                      "  double k2 = floor(ang / TWO_PI + 0.5);\n"
+                      "  float r = (float)(ang - k2 * TWO_PI);\n"
+                      "  float c, s;\n"
+                      "  sincosf(r, &s, &c);\n"
                       "  float* xr = x + (size_t)p*stride + off + (size_t)h*hd;\n"
-                      "  double qi = xr[i], qih = xr[i+half];\n"
-                      "  xr[i] = (float)(qi*c - qih*s);\n"
-                      "  xr[i+half] = (float)(qih*c + qi*s);\n"
+                      "  float qi = xr[i], qih = xr[i+half];\n"
+                      "  xr[i] = qi*c - qih*s;\n"
+                      "  xr[i+half] = qih*c + qi*s;\n"
                       "}\n",
                       "rope_partial_band.cu", "rope_partial_band", &gRopePartialBand) != 0) { rc = -2; goto done; }
     {
@@ -5005,11 +5026,15 @@ int cu_rope_f32_dpos(void* x, const void* inv, int seq, int heads, int hd, const
                           "  int p = (int)(gid / ((long)half*heads));\n"
                           "  double pos = (double)(*dPos + p) / posDiv;\n"
                           "  double ang = pos * (double)inv[i];\n"
-                          "  double c = cos(ang), s = sin(ang);\n"
+                          "  const double TWO_PI = 6.283185307179586476925286766559;\n"
+                      "  double k2 = floor(ang / TWO_PI + 0.5);\n"
+                      "  float r = (float)(ang - k2 * TWO_PI);\n"
+                      "  float c, s;\n"
+                      "  sincosf(r, &s, &c);\n"
                           "  float* xr = x + (size_t)p*heads*hd + (size_t)h*hd;\n"
-                          "  double qi = xr[i], qih = xr[i+half];\n"
-                          "  xr[i] = (float)(qi*c - qih*s);\n"
-                          "  xr[i+half] = (float)(qih*c + qi*s);\n"
+                          "  float qi = xr[i], qih = xr[i+half];\n"
+                          "  xr[i] = qi*c - qih*s;\n"
+                          "  xr[i+half] = qih*c + qi*s;\n"
                           "}\n",
                           "rope_dpos.cu", "rope_f32_dpos", &gRopeDpos) != 0) { rc = -2; goto done; }
     {
@@ -5043,11 +5068,15 @@ int cu_rope_partial_dpos(void* x, const void* inv, int seq, int heads, int hd, i
                           "  int p = (int)(gid / ((long)half*heads));\n"
                           "  double pos = (double)(*dPos + p) / posDiv;\n"
                           "  double ang = pos * (double)inv[i];\n"
-                          "  double c = cos(ang), s = sin(ang);\n"
+                          "  const double TWO_PI = 6.283185307179586476925286766559;\n"
+                      "  double k2 = floor(ang / TWO_PI + 0.5);\n"
+                      "  float r = (float)(ang - k2 * TWO_PI);\n"
+                      "  float c, s;\n"
+                      "  sincosf(r, &s, &c);\n"
                           "  float* xr = x + (size_t)p*heads*hd + (size_t)h*hd;\n"
-                          "  double qi = xr[i], qih = xr[i+half];\n"
-                          "  xr[i] = (float)(qi*c - qih*s);\n"
-                          "  xr[i+half] = (float)(qih*c + qi*s);\n"
+                          "  float qi = xr[i], qih = xr[i+half];\n"
+                          "  xr[i] = qi*c - qih*s;\n"
+                          "  xr[i+half] = qih*c + qi*s;\n"
                           "}\n",
                           "rope_partial_dpos.cu", "rope_partial_dpos", &gRopePartialDpos) != 0) { rc = -2; goto done; }
     {

@@ -11,6 +11,7 @@ import "C"
 import (
 	"fmt"
 	"math"
+	"sync"
 	"unsafe"
 
 	"github.com/jxsl13/goai/backend"
@@ -514,15 +515,41 @@ func (d *DeviceF32) RoPE(attrs backend.RoPEAttrs) error {
 	for i, v := range inv {
 		inv32[i] = float32(v)
 	}
-	invPtr := C.cu_upload_f32((*C.float)(&inv32[0]), C.int(len(inv32)))
-	if invPtr == nil {
-		return fmt.Errorf("cuda: RoPE frequency upload failed")
+	invPtr, err := ropeInvCached(inv32)
+	if err != nil {
+		return err
 	}
-	defer C.cu_free_f32(invPtr)
 	if rc := C.cu_rope_f32(d.ptr, invPtr, C.int(d.rows), C.int(heads), C.int(hd), C.int(attrs.PosOffset), C.double(posDiv)); rc != 0 {
 		return fmt.Errorf("cuda: rope failed (code %d)", int(rc))
 	}
 	return nil
+}
+
+// ropeInvCache holds resident device copies of RoPE inverse-frequency tables, keyed by the
+// table CONTENT (so any attrs combination that yields the same freqs shares one buffer, and
+// differing ones never collide). Before this cache, every DeviceF32.RoPE call did a device
+// alloc + H2D upload + free of the (typically 32-float) table — 2 calls × n_layers per prefill
+// pass, ≈3 ms of pure per-call overhead at seq=128 on TinyLlama (5.8% of the whole prefill,
+// PERF-PREFILL-PROFILE). Tables are tiny (hd/2 floats) and few (one per rope config in the
+// process), so entries are never evicted.
+var ropeInvCache sync.Map // string(table bytes) → unsafe.Pointer (device f32 buffer)
+
+func ropeInvCached(inv32 []float32) (unsafe.Pointer, error) {
+	key := unsafe.String((*byte)(unsafe.Pointer(&inv32[0])), len(inv32)*4)
+	if p, ok := ropeInvCache.Load(key); ok {
+		return p.(unsafe.Pointer), nil
+	}
+	p := C.cu_upload_f32((*C.float)(&inv32[0]), C.int(len(inv32)))
+	if p == nil {
+		return nil, fmt.Errorf("cuda: RoPE frequency upload failed")
+	}
+	// Copy the key out of the transient slice before storing (unsafe.String aliases inv32).
+	stable := string(append([]byte(nil), key...))
+	if prev, loaded := ropeInvCache.LoadOrStore(stable, unsafe.Pointer(p)); loaded {
+		C.cu_free_f32(p) // lost a benign race; reuse the winner
+		return prev.(unsafe.Pointer), nil
+	}
+	return unsafe.Pointer(p), nil
 }
 
 // MatMul computes d·b for two resident activations (d[M,K]·b[K,N] → [M,N]),
