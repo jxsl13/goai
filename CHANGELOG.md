@@ -4,6 +4,17 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — GGUF loading for StableLM and OLMo 2 (T805, 2026-07-17)
+
+`StableLMFromGGUF` and `OLMo2FromGGUF` (+ `*ToGGUF` inverses), conventions verified against
+llama.cpp source; float GGUF coverage reaches twelve architectures. StableLM: pure rename,
+NEOX partial rotary with `rope.dimension_count` carrying the rotated CHANNEL COUNT (not the
+fraction), sequential-residual form selected by `ffn_norm` presence, 12B per-head q/k-norm
+variant rejected. OLMo 2: pure rename — the converter permutes q/k for first-generation
+"olmo" but NOT for "olmo2" (adjacent converter classes, easy to conflate); post-norm tensors
+land as `post_attention_norm` and `post_ffw_norm` (note the ffw contraction); full-width
+QK-norms under `attn_{q,k}_norm`. Parity vs HF-loaded models ~1e-10.
+
 ### nlp — GGUF loading for MPT and Falcon (T804, 2026-07-17)
 
 `MPTFromGGUF` and `FalconFromGGUF` (+ `*ToGGUF` inverses), conventions verified against
