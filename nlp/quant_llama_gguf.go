@@ -5,6 +5,7 @@ import (
 
 	"github.com/jxsl13/goai/format/gguf"
 	"github.com/jxsl13/goai/nn"
+	"github.com/jxsl13/goai/tensor"
 )
 
 // quantMatMulSupported reports whether a ggml type code is a block-quantized format that
@@ -26,7 +27,18 @@ func quantMatMulSupported(gg uint32) bool {
 // output.weight ties the LM head to token_embd (which must itself be quantized). Follows the
 // ggml/llama.cpp convention (§R93), the quantized twin of LlamaFromGGUF.
 func QuantLlamaFromGGUF(meta map[string]any, tensors map[string]gguf.QuantTensor) (*QuantLlama, error) {
-	cfg, err := llamaCfgFromGGUFMeta("llama", meta)
+	return quantLlamaArchFromGGUF("llama", meta, tensors)
+}
+
+// quantLlamaArchFromGGUF is the shared llama-family quantized-GGUF loader behind
+// [QuantLlamaFromGGUF], [QuantQwen2FromGGUF] and [QuantQwen3FromGGUF] — the quantized twin of
+// llamaArchFromGGUF. The arch string selects the metadata key prefix; the block structure and
+// tensor names are identical across the family, plus optional per-block tensors — attn_{q,k,v}.bias
+// (Qwen2 family) and attn_{q,k}_norm.weight (Qwen3 per-head QK-norm) — dequantized to f32 when
+// present (real quantized GGUFs store these 1-D tensors as F32; llama.cpp never block-quantizes
+// them), nil (a forward no-op) otherwise.
+func quantLlamaArchFromGGUF(arch string, meta map[string]any, tensors map[string]gguf.QuantTensor) (*QuantLlama, error) {
+	cfg, err := llamaCfgFromGGUFMeta(arch, meta)
 	if err != nil {
 		return nil, err
 	}
@@ -59,6 +71,19 @@ func QuantLlamaFromGGUF(meta map[string]any, tensors map[string]gguf.QuantTensor
 		return &nn.RMSNorm{Gamma: g, Eps: cfg.Eps}, nil
 	}
 
+	// dequantize an OPTIONAL small 1-D tensor (Qwen bias / QK-norm gain) to f32; absent → nil.
+	optF32 := func(name string) (*tensor.Tensor, error) {
+		qt, ok := tensors[name]
+		if !ok {
+			return nil, nil
+		}
+		t, err := qt.Dequantize()
+		if err != nil {
+			return nil, fmt.Errorf("nlp: GGUF %s: %w", name, err)
+		}
+		return t, nil
+	}
+
 	tok, ok := tensors["token_embd.weight"]
 	if !ok {
 		return nil, fmt.Errorf("nlp: GGUF missing token_embd.weight")
@@ -87,6 +112,26 @@ func QuantLlamaFromGGUF(meta map[string]any, tensors map[string]gguf.QuantTensor
 		}
 		if qb.Wo, err = mkQ(p + "attn_output.weight"); err != nil {
 			return nil, err
+		}
+		// Optional Qwen2-family q/k/v biases (1-D f32, stored unpermuted like the weights; §R93).
+		if qb.Bq, err = optF32(p + "attn_q.bias"); err != nil {
+			return nil, err
+		}
+		if qb.Bk, err = optF32(p + "attn_k.bias"); err != nil {
+			return nil, err
+		}
+		if qb.Bv, err = optF32(p + "attn_v.bias"); err != nil {
+			return nil, err
+		}
+		// Optional Qwen3 per-head QK-norm gains ([headDim] each, f32).
+		for name, dst := range map[string]**nn.RMSNorm{"attn_q_norm.weight": &qb.QNorm, "attn_k_norm.weight": &qb.KNorm} {
+			g, err := optF32(p + name)
+			if err != nil {
+				return nil, err
+			}
+			if g != nil {
+				*dst = &nn.RMSNorm{Gamma: g, Eps: cfg.Eps}
+			}
 		}
 		if qb.FFNNorm, err = mkNorm(p + "ffn_norm.weight"); err != nil {
 			return nil, err

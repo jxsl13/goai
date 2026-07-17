@@ -4,6 +4,19 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — feat: quantized GGUF decode for Qwen2/Qwen3 (T797, 2026-07-17)
+
+`QuantQwen2FromGGUF`/`QuantQwen3FromGGUF` decode quantized llama.cpp Qwen checkpoints directly from
+ggml Q-blocks — the real community use case. `QuantBlock` gains optional f32 q/k/v biases (Qwen2)
+and per-head QK-norms (Qwen3), applied at exactly the float pipeline's positions (after the
+quantized projections, before RoPE) in BOTH Forward and the KV-cached DecodeStep; nil → no ops, so
+plain quant-llama stays byte-identical (its exact-equality gate is unchanged and green). Fixtures
+follow the real llama.cpp convention (Q8_0 projections, F32 1-D tensors, asserted in-test):
+GGUF-loaded vs directly-quantized is EXACTLY equal; vs the float pipeline on the same quantized
+weights cosine 1.000000; decode matches Forward within the existing quant gates. (The tiny HF
+goldens are below the 32-element quant-block floor, so the quantized fixtures use block-compatible
+geometry, tied to the goldens through the float-pipeline tests.)
+
 ### docs — README: front-page billing for the architecture campaign (T796, 2026-07-17)
 
 The README's "What works today" section now leads with the thirty-one loadable architectures, the
