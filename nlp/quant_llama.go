@@ -26,10 +26,16 @@ type QuantLlama struct {
 }
 
 // QuantBlock is a QuantLlama transformer block: float RMSNorm gains, quantized attention
-// projections and a quantized SwiGLU FFN.
+// projections and a quantized SwiGLU FFN. The optional Qwen extensions mirror LlamaBlock:
+// q/k/v projection biases (Qwen2/Qwen2.5) and per-head QK-norm gains (Qwen3) stay in f32 —
+// they are tiny 1-D tensors that real quantized GGUFs also keep unquantized (llama.cpp only
+// block-quantizes 2-D matrices). All are nil for plain Llama/Mistral, which keeps the
+// forward byte-identical to the pre-Qwen quantized path.
 type QuantBlock struct {
 	AttnNorm       *nn.RMSNorm     // RMSNorm before attention (f32 gain)
-	Wq, Wk, Wv, Wo *nn.QuantLinear // quantized attention projections (no bias)
+	Wq, Wk, Wv, Wo *nn.QuantLinear // quantized attention projections
+	Bq, Bk, Bv     *tensor.Tensor  // optional f32 q/k/v projection biases (Qwen2 family); nil otherwise
+	QNorm, KNorm   *nn.RMSNorm     // optional per-head q/k RMSNorm before RoPE (Qwen3, f32 gains); nil otherwise
 	FFNNorm        *nn.RMSNorm     // RMSNorm before the FFN (f32 gain)
 	FFN            *nn.QuantSwiGLU // quantized SwiGLU feed-forward
 }
@@ -51,6 +57,14 @@ func QuantizeLlama(m *Llama, qt gguf.QuantType) (*QuantLlama, error) {
 	q := &QuantLlama{Config: m.Config, TokEmb: f32Clone(m.TokEmb), Norm: f32RMSNorm(m.Norm)}
 	for _, b := range m.Blocks {
 		qb := &QuantBlock{AttnNorm: f32RMSNorm(b.AttnNorm), FFNNorm: f32RMSNorm(b.FFNNorm)}
+		// Optional Qwen extensions ride along in f32 (tiny, precision-sensitive — never quantized).
+		qb.Bq, qb.Bk, qb.Bv = f32CloneIf(b.Bq), f32CloneIf(b.Bk), f32CloneIf(b.Bv)
+		if b.QNorm != nil {
+			qb.QNorm = f32RMSNorm(b.QNorm)
+		}
+		if b.KNorm != nil {
+			qb.KNorm = f32RMSNorm(b.KNorm)
+		}
 		var err error
 		if qb.Wq, err = mkQ(b.Wq); err != nil {
 			return nil, fmt.Errorf("nlp: QuantizeLlama Wq: %w", err)
@@ -126,6 +140,11 @@ func (m *QuantLlama) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor
 		if err != nil {
 			return nil, err
 		}
+		// Qwen2-family q/k/v biases then Qwen3 per-head QK-norm, both BEFORE RoPE — the same
+		// order and position as Llama.hiddenFromEmbedCapture; nil fields are byte-identical no-ops.
+		if q, k, v, err = applyQwenAttnExtras(ctx, b, q, k, v, cfg.Heads, kv); err != nil {
+			return nil, err
+		}
 		if q, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: cfg.Heads}, q); err != nil {
 			return nil, err
 		}
@@ -185,6 +204,39 @@ func (m *QuantLlama) Close() error {
 		note(m.Out.Close())
 	}
 	return first
+}
+
+// applyQwenAttnExtras applies a QuantBlock's optional Qwen attention pieces to the projected
+// q/k/v: the Qwen2-family biases (addBiasIf) then the Qwen3 per-head QK-norm (applyQKNorm),
+// both before RoPE — exactly where and in the order Llama.hiddenFromEmbedCapture applies them,
+// so the quantized forward/decode of a Qwen model matches the float pipeline's math. Every nil
+// field short-circuits to the input tensor (no ops recorded), keeping a plain quantized Llama
+// byte-identical to the pre-Qwen path.
+func applyQwenAttnExtras(ctx *backend.Context, b *QuantBlock, q, k, v *tensor.Tensor, heads, kvHeads int) (_, _, _ *tensor.Tensor, err error) {
+	if q, err = addBiasIf(ctx, q, b.Bq); err != nil {
+		return nil, nil, nil, err
+	}
+	if k, err = addBiasIf(ctx, k, b.Bk); err != nil {
+		return nil, nil, nil, err
+	}
+	if v, err = addBiasIf(ctx, v, b.Bv); err != nil {
+		return nil, nil, nil, err
+	}
+	if q, err = applyQKNorm(ctx, q, b.QNorm, heads); err != nil {
+		return nil, nil, nil, err
+	}
+	if k, err = applyQKNorm(ctx, k, b.KNorm, kvHeads); err != nil {
+		return nil, nil, nil, err
+	}
+	return q, k, v, nil
+}
+
+// f32CloneIf is f32Clone tolerating nil (absent optional tensors stay nil).
+func f32CloneIf(t *tensor.Tensor) *tensor.Tensor {
+	if t == nil {
+		return nil
+	}
+	return f32Clone(t)
 }
 
 // f32Clone copies a tensor into a fresh F32 tensor of the same shape (quantized inference runs

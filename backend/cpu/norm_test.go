@@ -55,12 +55,19 @@ func TestNormKernelsMatchRefWithinUlps(t *testing.T) {
 
 // assertCloseUlps compares within a tight relative tolerance (f64: ~4 ulps;
 // f32 tensors were computed in f64 and rounded, so 1e-6 relative).
+// ulpsRTolF64 is the f64 relative tolerance for cpu-vs-ref kernel parity. The
+// default expects near-bit agreement (both sides accumulate in f64 in the same
+// order). Under the race detector the compiler's floating-point contraction
+// (FMA fusion) differs between builds, which can shift results by a few extra
+// ULPs — a build-tagged override (ulps_race_test.go) widens this accordingly.
+var ulpsRTolF64 = 1e-15
+
 func assertCloseUlps(t *testing.T, got, want *tensor.Tensor, label string) {
 	t.Helper()
 	if !got.Shape().Equal(want.Shape()) {
 		t.Fatalf("%s: shape %v != %v", label, got.Shape(), want.Shape())
 	}
-	rtol := 1e-15
+	rtol := ulpsRTolF64
 	if got.Dtype() == tensor.F32 {
 		// ref accumulates cross-row sums THROUGH an F32 tensor (one rounding per
 		// row); the cpu kernels sum in f64. The gap grows ~rows·2⁻²⁴, so the f32

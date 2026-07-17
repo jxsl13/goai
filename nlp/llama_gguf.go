@@ -31,15 +31,49 @@ const (
 // embedding and RMSNorm gains are copied as-is. An absent output.weight ties the LM
 // head to token_embd.
 //
-// NOTE (§R93): the HF→GGUF conversion permutes the attn_q/attn_k rows into GGUF's
-// split-half rotary pairing, and a loader reading GGUF must NOT re-permute — which is
-// exactly what this loader does (it copies q/k as stored). GoAI's RoPE is the matching
-// split-half convention, so the layout is consistent with upstream GGUF files; model
-// weights round-trip exactly through LlamaToGGUF→LlamaFromGGUF (§V15). Exact bit-parity
-// against a real llama.cpp-produced file is not verified on this host (llama.cpp is not
-// installed, §B23).
+// NOTE (§B67, supersedes the original §R93 reading): llama.cpp's converter PERMUTES the
+// attn_q/attn_k rows of the llama arch (conversion/llama.py LlamaModel, undo_permute=True:
+// per head, split-half row i↔interleaved row 2i pairing) because ggml's NORM rope rotates
+// CONSECUTIVE value pairs — so an on-disk llama/mistral GGUF carries the INTERLEAVED
+// layout. GoAI's OpRoPE is the split-half convention (matching raw HF weights), so this
+// loader UN-permutes q/k at load via [ropeUnpermuteRows] — the same verified transform the
+// Mixtral (arch "llama" with experts) and Granite loaders apply — and likewise the optional
+// q/k BIASES via [ropeUnpermuteVec], since the converter permutes q_proj.bias/k_proj.bias
+// identically (bias-carrying llama-arch files: the LLaMAfied-Qwen lineage). [LlamaToGGUF]
+// writes the permuted on-disk form, so GoAI round-trips stay exact AND the files match
+// llama.cpp's convention. The original §R93 note claimed the stored layout already matched GoAI's rope
+// and was masked by GoAI-only round-trip fixtures (§B67); the decisive fixture now applies
+// llama.cpp's permute independently in the test and demands HF-golden logit parity.
+// Qwen2/Qwen3 ride [llamaArchFromGGUF] directly: those archs are NEOX/no-permute on disk.
 func LlamaFromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor) (*Llama, error) {
-	return llamaArchFromGGUF("llama", meta, tensors)
+	cfg, err := llamaCfgFromGGUFMeta("llama", meta)
+	if err != nil {
+		return nil, err
+	}
+	ts := make(map[string]*tensor.Tensor, len(tensors))
+	for k, v := range tensors {
+		ts[k] = v
+	}
+	for l := range cfg.Layers {
+		p := fmt.Sprintf("blk.%d.", l)
+		if wq, ok := ts[p+"attn_q.weight"]; ok && wq.Ndim() == 2 {
+			ts[p+"attn_q.weight"] = ropeUnpermuteRows(wq, cfg.Heads)
+		}
+		if wk, ok := ts[p+"attn_k.weight"]; ok && wk.Ndim() == 2 {
+			ts[p+"attn_k.weight"] = ropeUnpermuteRows(wk, cfg.kvHeads())
+		}
+		// llama.cpp's converter permutes q_proj.bias/k_proj.bias exactly like the
+		// weights (modify_tensors matches both name endings), so bias-carrying
+		// llama-arch files — the LLaMAfied-Qwen lineage behind ggml's optional
+		// bq/bk/bv tensors — need the same un-permute; v stays raw (§B67 follow-up).
+		if bq, ok := ts[p+"attn_q.bias"]; ok && bq.Ndim() == 1 {
+			ts[p+"attn_q.bias"] = ropeUnpermuteVec(bq, cfg.Heads)
+		}
+		if bk, ok := ts[p+"attn_k.bias"]; ok && bk.Ndim() == 1 {
+			ts[p+"attn_k.bias"] = ropeUnpermuteVec(bk, cfg.kvHeads())
+		}
+	}
+	return llamaArchFromGGUF("llama", meta, ts)
 }
 
 // llamaArchFromGGUF is the shared llama-family GGUF loader behind [LlamaFromGGUF],
@@ -78,8 +112,9 @@ func llamaArchFromGGUF(arch string, meta map[string]any, tensors map[string]*ten
 				return nil, err
 			}
 		}
-		// Optional Qwen2-family q/k/v biases (1-D, copied as-is — no transpose, and
-		// unpermuted just like the weights; §R93).
+		// Optional q/k/v biases (1-D, copied as-is — no transpose). Qwen2/Qwen3 store
+		// them unpermuted on disk (§R93); for the llama arch [LlamaFromGGUF] has
+		// already un-permuted q/k before delegating here (§B67 follow-up).
 		bias := func(name string) *tensor.Tensor {
 			if t, ok := tensors[p+name]; ok {
 				return cloneF64(t)
@@ -123,9 +158,33 @@ func llamaArchFromGGUF(arch string, meta map[string]any, tensors map[string]*ten
 
 // LlamaToGGUF is the inverse of LlamaFromGGUF: it serializes a Llama into the GGUF
 // metadata + tensor maps (ggml/llama.cpp names and layout), transposing every
-// projection back into torch [out, in]. Pass the result to gguf.Write via a gguf.File.
+// projection back into torch [out, in] and PERMUTING the attn_q/attn_k rows — weights
+// AND optional biases — into the llama arch's on-disk interleaved rotary layout (§B67 —
+// llama.cpp's converter permute, applied via [permuteSplitToInterleave] /
+// [ropePermuteVec]), so the produced file follows the same convention as a real
+// llama.cpp conversion. Pass the result to gguf.Write.
 func LlamaToGGUF(m *Llama) (map[string]any, map[string]*tensor.Tensor) {
-	return llamaArchToGGUF("llama", m)
+	meta, ts := llamaArchToGGUF("llama", m)
+	c := m.Config
+	for l := range c.Layers {
+		p := fmt.Sprintf("blk.%d.", l)
+		if wq, ok := ts[p+"attn_q.weight"]; ok {
+			ts[p+"attn_q.weight"] = permuteSplitToInterleave(wq, c.Heads, wq.Shape()[0]/c.Heads)
+		}
+		if wk, ok := ts[p+"attn_k.weight"]; ok {
+			ts[p+"attn_k.weight"] = permuteSplitToInterleave(wk, c.kvHeads(), wk.Shape()[0]/c.kvHeads())
+		}
+		// q/k biases ride the same converter permute as the weights (v stays raw) —
+		// llama.cpp reads a llama-arch file's bq/bk in the interleaved rotary order,
+		// so an unpermuted bias would pair wrong channels there (§B67 follow-up).
+		if bq, ok := ts[p+"attn_q.bias"]; ok {
+			ts[p+"attn_q.bias"] = ropePermuteVec(bq, c.Heads)
+		}
+		if bk, ok := ts[p+"attn_k.bias"]; ok {
+			ts[p+"attn_k.bias"] = ropePermuteVec(bk, c.kvHeads())
+		}
+	}
+	return meta, ts
 }
 
 // llamaArchToGGUF is the shared llama-family GGUF serializer behind [LlamaToGGUF],
@@ -163,7 +222,7 @@ func llamaArchToGGUF(arch string, m *Llama) (map[string]any, map[string]*tensor.
 		ts[p+"ffn_up.weight"] = transpose2D(b.FFN.Wup)
 		ts[p+"ffn_down.weight"] = transpose2D(b.FFN.Wdown)
 		if b.Bq != nil {
-			ts[p+"attn_q.bias"] = cloneF64(b.Bq) // 1-D, stored as-is
+			ts[p+"attn_q.bias"] = cloneF64(b.Bq) // 1-D; [LlamaToGGUF] re-permutes q/k for the llama arch
 		}
 		if b.Bk != nil {
 			ts[p+"attn_k.bias"] = cloneF64(b.Bk)

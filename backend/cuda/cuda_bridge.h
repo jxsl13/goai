@@ -86,6 +86,10 @@ int cu_qmatmul_q4(const void* dA, const void* dQ, const void* dScales, const voi
 // q[N, K/256 * 144] (144-byte blocks: f16 d + f16 dmin + 12B packed 6-bit scales/mins + 128B
 // nibbles), dequant y = d*sc6*nibble - dmin*min6 per 32-sub-block. K%256==0. DECODE-ONLY (GEMV).
 int cu_qmatmul_q4k(const void* dA, const void* dQ, void* dOut, int M, int K, int N, float beta);
+// cu_qmatmul_q4k_mt: weight-read-once M-tiled GEMM for M>1 — one warp owns a column and an
+// MT-row tile, decoding each Q4_K sub-block ONCE and reusing it across rows (weight BW M/MT×
+// lower than the per-(m,n) GEMV). Bit-identical arithmetic to cu_qmatmul_q4k. K%256==0.
+int cu_qmatmul_q4k_mt(const void* dA, const void* dQ, void* dOut, int M, int K, int N, float beta);
 // cu_qmatmul_q4k_pre: Q4_K with pre-decoded f32 sub-block scales (192-byte blocks: 64B scale
 // plane + 128B nibbles). Bit-exact vs cu_qmatmul_q4k, no in-kernel scale unpack (R5). K%256==0.
 int cu_qmatmul_q4k_pre(const void* dA, const void* dQ, void* dOut, int M, int K, int N, float beta);
@@ -98,36 +102,63 @@ int cu_qmatmul_q4k_swiglu(const void* dA, const void* dQ, const void* dGate, voi
 // (136-byte super-blocks) — 4-bit quants over a nonlinear 16-value codebook. K%32 / K%256.
 int cu_qmatmul_iq4nl(const void* dA, const void* dScale, const void* dNib, void* dOut, int M, int K, int N, float beta);
 int cu_qmatmul_iq4xs(const void* dA, const void* dQ, void* dOut, int M, int K, int N, float beta);
+// cu_qmatmul_iq4xs_mt: weight-read-once M-tiled GEMM for M>1 — IQ4_XS twin of cu_qmatmul_q4k_mt.
+// Bit-identical arithmetic to cu_qmatmul_iq4xs. K%256==0.
+int cu_qmatmul_iq4xs_mt(const void* dA, const void* dQ, void* dOut, int M, int K, int N, float beta);
 // cu_qmatmul_mxfp4: out = a·dequant(MXFP4, gpt-oss), REPACKED into dScale (nblk E8M0 bytes/row)
 // + dNib (nblk×16 nibble bytes/row, 16-aligned) for coalesced reads. K%32==0. DECODE GEMV.
 int cu_qmatmul_mxfp4(const void* dA, const void* dScale, const void* dNib, void* dOut, int M, int K, int N, float beta);
+// cu_qmatmul_mxfp4_mt: weight-read-once M-tiled GEMM for M>1 — MXFP4 (gpt-oss) twin of the M-tile
+// (each block's scale + FP4 codebook values decoded once per warp, reused across the row tile). K%32==0.
+int cu_qmatmul_mxfp4_mt(const void* dA, const void* dScale, const void* dNib, void* dOut, int M, int K, int N, float beta);
 // cu_qmatmul_q40: out[M,N] = a·dequant(Q4_0), REPACKED into dScale (nblk f16/row) + dNib
 // (nblk×16 nibble bytes/row, 16-aligned) for coalesced reads. y = d·(nibble−8). K%32==0. GEMV.
 int cu_qmatmul_q40(const void* dA, const void* dScale, const void* dNib, void* dOut, int M, int K, int N, float beta);
 // cu_qmatmul_q2k: out[M,N] = a·dequant(W), W = ggml Q2_K 84-byte super-blocks per output row
 // (asymmetric affine, 4-bit sub-scale+min nibbles, 2-bit quants). K%256==0. DECODE GEMV.
 int cu_qmatmul_q2k(const void* dA, const void* dQ, void* dOut, int M, int K, int N, float beta);
+// cu_qmatmul_q2k_mt: weight-read-once M-tiled GEMM for M>1 — Q2_K twin of cu_qmatmul_q4k_mt.
+// Bit-identical arithmetic to cu_qmatmul_q2k. K%256==0.
+int cu_qmatmul_q2k_mt(const void* dA, const void* dQ, void* dOut, int M, int K, int N, float beta);
 // cu_qmatmul_q3k: out[M,N] = a·dequant(W), W = ggml Q3_K 110-byte super-blocks per output row
 // (symmetric, signed 6-bit sub-scales, 3-bit quants via qs low-2 + hmask high-1). K%256==0. GEMV.
 int cu_qmatmul_q3k(const void* dA, const void* dMeta, const void* dQs, const void* dHm, void* dOut, int M, int K, int N, float beta);
+// cu_qmatmul_q3k_mt: weight-read-once M-tiled GEMM for M>1 — Q3_K twin of cu_qmatmul_q4k_mt.
+// Bit-identical arithmetic to cu_qmatmul_q3k. K%256==0.
+int cu_qmatmul_q3k_mt(const void* dA, const void* dMeta, const void* dQs, const void* dHm, void* dOut, int M, int K, int N, float beta);
 // cu_qmatmul_q5k: out[M,N] = a·dequant(W), W = ggml Q5_K 176-byte super-blocks per output row
 // (Q4_K's 6-bit scale/min packing + a qh high-bit plane → 5-bit quants). K%256==0. DECODE GEMV.
 int cu_qmatmul_q5k(const void* dA, const void* dQ, void* dOut, int M, int K, int N, float beta);
+// cu_qmatmul_q5k_mt: weight-read-once M-tiled GEMM for M>1 — Q5_K twin of cu_qmatmul_q4k_mt.
+// Bit-identical arithmetic to cu_qmatmul_q5k. K%256==0.
+int cu_qmatmul_q5k_mt(const void* dA, const void* dQ, void* dOut, int M, int K, int N, float beta);
 // cu_qmatmul_iq2xxs: out = a·dequant(W), W = ggml IQ2_XXS (66-byte super-blocks) — the first
 // GRID-codebook i-quant. dGrid = the shared 256×8 float grid (device buffer). K%256==0. GEMV.
 int cu_qmatmul_iq2xxs(const void* dA, const void* dQ, const void* dGrid, void* dOut, int M, int K, int N, float beta);
+// cu_qmatmul_iq2xxs_mt: weight-read-once M-tiled GEMM for M>1 — IQ2_XXS twin of cu_qmatmul_q4k_mt
+// (grid decoded once per warp, reused across the row tile). Bit-identical arithmetic. K%256==0.
+int cu_qmatmul_iq2xxs_mt(const void* dA, const void* dQ, const void* dGrid, void* dOut, int M, int K, int N, float beta);
 // cu_qmatmul_iq2xs: IQ2_XS (74-byte super-blocks, 512×8 grid + explicit 4-bit scales). K%256==0.
 int cu_qmatmul_iq2xs(const void* dA, const void* dQ, const void* dGrid, void* dOut, int M, int K, int N, float beta);
 // cu_qmatmul_iq3xxs: IQ3_XXS (98-byte super-blocks, 256×4 grid + packed ksigns/scale). K%256==0.
 int cu_qmatmul_iq3xxs(const void* dA, const void* dQ, const void* dGrid, void* dOut, int M, int K, int N, float beta);
+// cu_qmatmul_iq3xxs_mt: weight-read-once M-tiled GEMM for M>1 — IQ3_XXS twin of cu_qmatmul_q4k_mt
+// (grid decoded once per warp, reused across the row tile). Bit-identical arithmetic. K%256==0.
+int cu_qmatmul_iq3xxs_mt(const void* dA, const void* dQ, const void* dGrid, void* dOut, int M, int K, int N, float beta);
 // cu_qmatmul_iq3s: IQ3_S (110-byte super-blocks, 512×4 grid, 9-bit indices, direct signs). K%256==0.
 int cu_qmatmul_iq3s(const void* dA, const void* dQ, const void* dGrid, void* dOut, int M, int K, int N, float beta);
+// cu_qmatmul_iq3s_mt: weight-read-once M-tiled GEMM for M>1 — IQ3_S twin of cu_qmatmul_q4k_mt
+// (grid decoded once per warp, reused across the row tile). Bit-identical arithmetic. K%256==0.
+int cu_qmatmul_iq3s_mt(const void* dA, const void* dQ, const void* dGrid, void* dOut, int M, int K, int N, float beta);
 // cu_qmatmul_iq1s: IQ1_S (50-byte super-blocks, 2048×8 ternary grid + ±δ + odd multipliers). K%256==0.
 int cu_qmatmul_iq1s(const void* dA, const void* dQ, const void* dGrid, void* dOut, int M, int K, int N, float beta);
 // cu_qmatmul_iq1m: IQ1_M (56-byte super-blocks, same 2048×8 grid, split-f16 super-scale + sub-scales). K%256==0.
 int cu_qmatmul_iq1m(const void* dA, const void* dQ, const void* dGrid, void* dOut, int M, int K, int N, float beta);
 // cu_qmatmul_q6k: out[M,N] = a·dequant(W), W = ggml Q6_K 210-byte super-blocks per output row.
 int cu_qmatmul_q6k(const void* dA, const void* dQ, void* dOut, int M, int K, int N, float beta);
+// cu_qmatmul_q6k_mt: weight-read-once M-tiled GEMM for M>1 — Q6_K twin of cu_qmatmul_q4k_mt,
+// decodes each Q6_K sub-block once per warp and reuses across an MT-row tile. Bit-identical. K%256==0.
+int cu_qmatmul_q6k_mt(const void* dA, const void* dQ, void* dOut, int M, int K, int N, float beta);
 // cu_upload_f16: upload host f32, convert to a device f16 (u16) buffer of n elements
 // (the f32 staging buffer is freed). For resident prefill weights (tensor-core GEMM).
 void* cu_upload_f16(const float* src, long n);
@@ -185,6 +216,7 @@ int cu_causal_scale_mh(void* x, int heads, int seqQ, int seqKV, float scale, int
 int cu_attn_softmax(void* x, int rows, int cols, float scale, int offset, int seqQ);
 int cu_attn_softmax_cap(void* x, int rows, int cols, float scale, int offset, int seqQ, float cap); // Gemma2 attn-logit soft-cap
 int cu_attn_softmax_alibi(void* x, int rows, int cols, float scale, int offset, int seqQ, const void* slopes); // MPT ALiBi position bias
+int cu_attn_softmax_bias(void* x, int rows, int cols, float scale, int offset, int seqQ, const void* bias); // T5 per-head relative-position bias [heads,seqQ,seqKV]
 int cu_mha_out(const void* dScores, const void* dV, void* dOut, int seq, int heads, int hd);
 
 // GQA: qHeads query heads share kvHeads kv heads (query h → kv head h/group).
@@ -208,6 +240,7 @@ int cu_ssd_step(const void* x, const void* delta, const void* A, const void* B, 
 int cu_conv1d_step(const void* x, const void* w, const void* b, void* state, void* out, int D, int K); // Mamba causal depthwise conv decode step
 int cu_wkv_step(const void* k, const void* v, const void* w, const void* u, void* aa, void* bb, void* pp, void* out, int D); // RWKV-4 WKV recurrence decode step
 int cu_relu2_f32(void* d, int n); // squared ReLU (Nemotron relu2): relu(x)² in-place
+int cu_relu_f32(void* d, int n); // plain ReLU (T5 v1.0 FFN): max(x,0) in-place
 int cu_silu_f32(void* d, int n);
 int cu_sigmoid_f32(void* d, int n); // plain sigmoid (Qwen2-MoE shared-expert gate)
 int cu_softplus_f32(void* d, int n); // softplus (Mamba Δ)

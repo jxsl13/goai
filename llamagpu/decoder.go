@@ -59,6 +59,7 @@ const (
 	unaryReLU2    = 10 // squared ReLU (Nemotron); cuda-only
 	unarySigmoid  = 11 // plain sigmoid (Qwen2-MoE shared-expert gate); cuda-only
 	unarySoftplus = 12 // softplus (Mamba Δ); cuda-only
+	unaryReLU     = 13 // plain ReLU max(x,0) (T5 v1.0 FFN); cuda-only
 	binaryAdd     = 0
 	binaryMul     = 2
 	binarySwiGLU  = 6 // fused silu(a)·b — one dispatch instead of SiLU+Mul (§T613)
@@ -149,6 +150,10 @@ type recorder interface {
 	// MHAALiBi is MHA with an ALiBi position bias (MPT): slopeₕ·(j−qabs) added to each scaled score
 	// before the mask+softmax; slopes holds `heads` per-head slopes. cuda-only (metal/vulkan stub).
 	MHAALiBi(q, k, v, o, slopes buffer, sq, sk, dm, heads, kvHeads, dk, causal, window int, scale float32) error
+	// MHABias is MHA with a PRECOMPUTED per-head additive bias [heads,sq,sk] added to the scaled scores
+	// before softmax — the T5 relative-position bias (a learned table, not ALiBi's slope). No RoPE;
+	// causal==0 unmasks all keys (T5's bidirectional encoder). cuda-only (metal/vulkan stub).
+	MHABias(q, k, v, o, bias buffer, sq, sk, dm, heads, kvHeads, dk, causal, window int, scale float32) error
 	// MoEGate writes Mixtral top-k renormalized routing weights [rows·e] from router logits [rows·e].
 	// RowAxpy accumulates dst[r,:] += arow[r]·src[r,:] (the MoE weighted combine). Both cuda-only.
 	MoEGate(logits, weights buffer, rows, e, k, raw int, scale float32) error
@@ -977,6 +982,37 @@ func (d *Decoder) f32Lin(mk func([]float32) *bufSlot) func(*tensor.Tensor) linea
 	}
 }
 
+// mkLinS is mkLin for a weight pre-scaled by s (a per-element scalar folded into the upload — Granite's
+// ResidualMult / logit-scale, Cohere's logit_scale). Q8_0 when ops.quantizeF32 is set (the scaled weight
+// is quantized POST-scale), else f32 — byte-identical to the old inline f32-only linS when the hook is nil.
+// Fixes a latent partial-Q8 bug: the per-arch f32-only linS left scaled lm_head / Wo / Wdown weights f32
+// even under a NewXQ8CUDA hook.
+func (d *Decoder) mkLinS(mk func([]float32) *bufSlot, ops backendOps, errp *error) func(*tensor.Tensor, float32) linear {
+	return func(w *tensor.Tensor, s float32) linear {
+		in, out := w.Shape()[0], w.Shape()[1]
+		f := flat2D(w)
+		if s != 1 {
+			for i := range f {
+				f[i] *= s
+			}
+		}
+		if ops.quantizeF32 == nil {
+			return f32Linear{w: mk(f).b, k: in, n: out}
+		}
+		t := tensor.New(tensor.F32, tensor.Shape{in, out})
+		copy(t.Storage().F32(), f)
+		qw, qe := ops.quantizeF32(t)
+		if qe != nil {
+			if *errp == nil {
+				*errp = qe
+			}
+			return f32Linear{k: in, n: out}
+		}
+		d.qweights = append(d.qweights, qw)
+		return quantLinear{w: qw}
+	}
+}
+
 // mkFused is mkLin for the fused QKV weight (§T613): the three [in,out] projections concatenated per
 // input row into one [in, nq+nk+nv] matrix, then Q8_0-quantized whole (or f32). cu_qmatmul_q8 is a GEMM
 // (rows>1), so batched-prefill StepN works; qkv bias / QK-norm / RoPE stay f32 and apply after.
@@ -1238,16 +1274,7 @@ func newCohereDecoder(m *nlp.Cohere, ops backendOps) (*Decoder, error) {
 	if cfg.LogitScale != 0 && cfg.LogitScale != 1 {
 		logitScale = float32(cfg.LogitScale)
 	}
-	linS := func(w *tensor.Tensor, s float32) linear {
-		in, out := w.Shape()[0], w.Shape()[1]
-		f := flat2D(w)
-		if s != 1 {
-			for i := range f {
-				f[i] *= s
-			}
-		}
-		return f32Linear{w: mk(f).b, k: in, n: out}
-	}
+	linS := d.mkLinS(mk, ops, &err)
 	for _, b := range m.Blocks {
 		gb := block{
 			wqkv: fused(b.Wq, b.Wk, b.Wv), wo: lin(b.Wo),
@@ -1413,7 +1440,12 @@ func newGemmaDecoder(m *nlp.Gemma, ops backendOps) (*Decoder, error) {
 			outW[i*vocab+j] = float32(m.TokEmb.AtF64(j, i))
 		}
 	}
-	d.out = f32Linear{w: mk(outW).b, k: dim, n: vocab}
+	// Route the tied lm_head through the same quantize-aware builder so the Q8 constructors quantize it too
+	// — Gemma's vocab is huge (256k), so an f32 lm_head would dominate decode bandwidth and dilute Q8. The
+	// f32 path is byte-identical (mkLin with no hook == the old f32Linear{mk(outW)}).
+	outT := tensor.New(tensor.F32, tensor.Shape{dim, vocab})
+	copy(outT.Storage().F32(), outW)
+	d.out = lin(outT)
 	d.allocScratch(mk)
 	if err != nil {
 		d.Release()
@@ -2105,7 +2137,12 @@ func newGemma2Decoder(m *nlp.Gemma2, ops backendOps) (*Decoder, error) {
 			outW[i*vocab+j] = float32(m.TokEmb.AtF64(j, i))
 		}
 	}
-	d.out = f32Linear{w: mk(outW).b, k: dim, n: vocab}
+	// Route the tied lm_head through the same quantize-aware builder so the Q8 constructors quantize it too
+	// — Gemma's vocab is huge (256k), so an f32 lm_head would dominate decode bandwidth and dilute Q8. The
+	// f32 path is byte-identical (mkLin with no hook == the old f32Linear{mk(outW)}).
+	outT := tensor.New(tensor.F32, tensor.Shape{dim, vocab})
+	copy(outT.Storage().F32(), outW)
+	d.out = lin(outT)
 	d.allocScratch(mk)
 	if err != nil {
 		d.Release()
@@ -2356,16 +2393,7 @@ func newGraniteMoEDecoder(m *nlp.GraniteMoE, ops backendOps) (*Decoder, error) {
 	var err error
 	mk := d.mkBuf(&err)
 	lin := d.mkLin(mk, ops, &err)
-	linS := func(w *tensor.Tensor, s float32) linear { // weight pre-scaled by s (ResidualMult fold)
-		in, out := w.Shape()[0], w.Shape()[1]
-		f := flat2D(w)
-		if s != 1 {
-			for i := range f {
-				f[i] *= s
-			}
-		}
-		return f32Linear{w: mk(f).b, k: in, n: out}
-	}
+	linS := d.mkLinS(mk, ops, &err) // ResidualMult / logit-scale fold — quantize-aware (Q8 under the hook)
 	fused := d.mkFused(mk, ops, &err)
 	for _, b := range m.Blocks {
 		experts := make([]moeFFN, len(b.MoE.Experts))

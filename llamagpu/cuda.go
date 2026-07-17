@@ -64,6 +64,9 @@ func (c cRec) MHACap(q, k, v, o buffer, sq, sk, dm, heads, kvHeads, dk, causal, 
 func (c cRec) MHAALiBi(q, k, v, o, slopes buffer, sq, sk, dm, heads, kvHeads, dk, causal, window int, scale float32) error {
 	return c.r.MHAALiBi(cb(q), cb(k), cb(v), cb(o), cb(slopes), sq, sk, dm, heads, kvHeads, dk, causal, window, scale)
 }
+func (c cRec) MHABias(q, k, v, o, bias buffer, sq, sk, dm, heads, kvHeads, dk, causal, window int, scale float32) error {
+	return c.r.MHABias(cb(q), cb(k), cb(v), cb(o), cb(bias), sq, sk, dm, heads, kvHeads, dk, causal, window, scale)
+}
 func (c cRec) MoEGate(logits, weights buffer, rows, e, k, raw int, scale float32) error {
 	return c.r.MoEGate(cb(logits), cb(weights), rows, e, k, raw, scale)
 }
@@ -200,6 +203,20 @@ func NewGemma2Q8CUDA(m *nlp.Gemma2) (*Decoder, error) {
 	}
 	return newGemma2Decoder(m, cudaQ8Ops())
 }
+
+// NewGemmaQ8CUDA is NewGemmaCUDA (Gemma v1) with all projections + the tied lm_head quantized to resident
+// Q8_0. Gemma's √dim embed scaling and GeGLU are unchanged; the lm_head goes Q8 too (huge 256k vocab).
+func NewGemmaQ8CUDA(m *nlp.Gemma) (*Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newGemmaDecoder(m, cudaQ8Ops())
+}
+
+// NewGraniteQ8CUDA is the Q8 entry point for IBM Granite (dense) — Granite maps to nlp.Llama (Llama core +
+// embMult/attn-scale/residual-mult/logit-scale config scalars, all folded into the upload), so this is
+// NewLlamaQ8CUDA with a Granite-typed signature. The scaled Wo/Wdown are quantized post-scale.
+func NewGraniteQ8CUDA(m *nlp.Llama) (*Decoder, error) { return NewLlamaQ8CUDA(m) }
 func NewCohereQ8CUDA(m *nlp.Cohere) (*Decoder, error) {
 	if !cuda.Available() {
 		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
@@ -713,6 +730,124 @@ func NewRWKVQ8CUDA(m *nlp.RWKV) (*Decoder, error) {
 			return cuda.NewResidentBQ8(w)
 		},
 	})
+}
+
+// NewBertCUDA uploads an nlp.Bert bidirectional encoder onto the GPU — the first non-decoder GPU
+// model in llamagpu. It runs one bidirectional forward (post-LN, learned absolute positions, no
+// causal mask, no KV cache) returning the [seq, dim] hidden states, reusing the existing recorder
+// ops (MHA with causal=0, LayerNorm, GELU MLP) with no new kernel. cuda-only.
+func NewBertCUDA(m *nlp.Bert) (*GPUBert, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newBertEncoder(m, backendOps{
+		name:        string(backend.CUDA),
+		asyncEncode: false,
+		newBuffer: func(data []float32) (buffer, error) {
+			b, err := cuda.NewDeviceBufferF32(data)
+			if err != nil {
+				return nil, err
+			}
+			return cBuf{b}, nil
+		},
+		newRecorder: func() (recorder, error) {
+			r, err := cuda.NewRecorder()
+			if err != nil {
+				return nil, err
+			}
+			return cRec{r}, nil
+		},
+	})
+}
+
+// NewBertQ8CUDA is NewBertCUDA with the attention (q/k/v/o) and FFN (w1/w2) projections quantized to
+// resident Q8_0. BERT encodes the whole sequence at once (M=seq>1), so each Q8 projection runs on the
+// int8 tensor-core MMQ GEMM (QMatMulResident's m>1 path) — faster than the f32 cuBLAS GEMM and 4× less
+// weight memory. Biases and LayerNorm stay f32. Works for RoBERTa/DistilBERT too (all *nlp.Bert). cuda-only.
+func NewBertQ8CUDA(m *nlp.Bert) (*GPUBert, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newBertEncoder(m, cudaQ8Ops())
+}
+
+// NewT5CUDA uploads an nlp.T5 bidirectional encoder onto the GPU. T5 is the second non-decoder GPU
+// model: PRE-LN residuals, RMSNorm (T5LayerNorm), a learned per-head RELATIVE-position bias added to
+// the scores (via cu_attn_softmax_bias / MHABias), NO 1/√d scaling, NO absolute/rotary position, a
+// gated-GELU (v1.1) or ReLU (v1.0) FFN and no projection biases. Returns [seq, dim] hidden states.
+// cuda-only (MHABias is cuda-only).
+func NewT5CUDA(m *nlp.T5) (*GPUT5, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newT5Encoder(m, backendOps{
+		name:        string(backend.CUDA),
+		asyncEncode: false,
+		newBuffer: func(data []float32) (buffer, error) {
+			b, err := cuda.NewDeviceBufferF32(data)
+			if err != nil {
+				return nil, err
+			}
+			return cBuf{b}, nil
+		},
+		newRecorder: func() (recorder, error) {
+			r, err := cuda.NewRecorder()
+			if err != nil {
+				return nil, err
+			}
+			return cRec{r}, nil
+		},
+	})
+}
+
+// NewT5Q8CUDA is NewT5CUDA with the attention (q/k/v/o) and FFN (wi0/wi1/wOut) projections quantized to
+// resident Q8_0. T5 encodes the whole sequence at once (M=seq>1), so each Q8 projection runs on the int8
+// tensor-core MMQ GEMM (QMatMulResident's m>1 path) — faster than the f32 cuBLAS GEMM and 4× less weight
+// memory. RMSNorm and the relative-position bias stay f32. Covers T5 v1.0 (ReLU) and v1.1 (GeGLU). cuda-only.
+func NewT5Q8CUDA(m *nlp.T5) (*GPUT5, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newT5Encoder(m, cudaQ8Ops())
+}
+
+// NewT5DecoderCUDA uploads an nlp.T5Decoder onto the GPU — the seq2seq (encoder-decoder) decoder, the
+// first encoder-decoder GPU model. Each block runs causal self-attention with the T5 relpos bias
+// (MHABias over a growing KV cache), cross-attention over the encoder output (plain MHA), and a
+// gated-GELU/ReLU FFN, all PRE-LN/RMSNorm/unscaled. Pair with NewT5CUDA (the encoder). cuda-only.
+func NewT5DecoderCUDA(m *nlp.T5Decoder) (*GPUT5Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newT5Decoder(m, backendOps{
+		name:        string(backend.CUDA),
+		asyncEncode: false,
+		newBuffer: func(data []float32) (buffer, error) {
+			b, err := cuda.NewDeviceBufferF32(data)
+			if err != nil {
+				return nil, err
+			}
+			return cBuf{b}, nil
+		},
+		newRecorder: func() (recorder, error) {
+			r, err := cuda.NewRecorder()
+			if err != nil {
+				return nil, err
+			}
+			return cRec{r}, nil
+		},
+	})
+}
+
+// NewT5DecoderQ8CUDA is NewT5DecoderCUDA with the self/cross-attention (q/k/v/o), FFN (wi0/wi1/wOut) and
+// lm_head projections quantized to resident Q8_0 — the seq2seq generation decode-bandwidth win. Autoregressive
+// decode is M=1 (Q8 GEMV); the cross K/V projections run once over the encoder output (M=eseq>1 → int8
+// tensor-core MMQ). RMSNorm and the relpos bias stay f32. Pair with NewT5Q8CUDA (the Q8 encoder). cuda-only.
+func NewT5DecoderQ8CUDA(m *nlp.T5Decoder) (*GPUT5Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newT5Decoder(m, cudaQ8Ops())
 }
 
 // NewMixtralCUDA uploads an nlp.Mixtral (sparse Mixture-of-Experts) onto the batched Decoder core.
