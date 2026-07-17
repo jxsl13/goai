@@ -46,6 +46,11 @@ func TestChatTemplateGoldenRenders(t *testing.T) {
 		// "<|endoftext|>" after the (non-last) assistant turn.
 		"olmo2": "<|endoftext|><|system|>\nYou are helpful.\n<|user|>\nHi!\n" +
 			"<|assistant|>\nHello!<|endoftext|>\n<|user|>\nBye?\n<|assistant|>\n",
+		// Rendered by deepseek-ai/DeepSeek-V2-Lite-Chat's tokenizer.apply_chat_template
+		// (transformers 5.14.1, add_generation_prompt=true) — byte-exact. Vicuna-style;
+		// the special tokens use the fullwidth vertical bar (U+FF5C) and ▁ (U+2581).
+		"deepseek": "<｜begin▁of▁sentence｜>You are helpful.\n\nUser: Hi!\n\n" +
+			"Assistant: Hello!<｜end▁of▁sentence｜>User: Bye?\n\nAssistant:",
 	}
 	for family, want := range goldens {
 		tpl, err := nlp.NewChatTemplate(family)

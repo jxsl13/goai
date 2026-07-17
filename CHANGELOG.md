@@ -4,6 +4,18 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — DeepSeek chat template (T823, 2026-07-17)
+
+`NewChatTemplate("deepseek")` renders the DeepSeek-V2/V3 Vicuna-style chat format
+(`<｜begin▁of▁sentence｜>`, bare system content, `User: `/`Assistant: ` prefixes, the
+`<｜end▁of▁sentence｜>` eos after assistant turns, `Assistant:` as the generation prompt) —
+completing usability for the DeepSeek-V2 models GoAI loads (DeepSeekV2FromGGUF). The special
+tokens carry the fullwidth vertical bar (U+FF5C) and SentencePiece ▁ (U+2581) exactly as on
+disk. Byte-exact against `deepseek-ai/DeepSeek-V2-Lite-Chat`'s `apply_chat_template`
+(transformers 5.14.1). Explicit family only (Vicuna-style `User:`/`Assistant:` prefixes are
+shared across model families with subtle variations — auto-detect would risk mis-prompting).
+Native chat-template families now number eight.
+
 ### nlp — OLMo 2 chat template (T822, 2026-07-17)
 
 `NewChatTemplate("olmo2")` renders allenai's OLMo-2 Instruct format, completing usability

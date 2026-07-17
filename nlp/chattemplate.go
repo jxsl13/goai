@@ -24,7 +24,7 @@ type ChatMessage struct {
 // Supported families (the names NewChatTemplate accepts): "chatml" (Qwen2/2.5 class),
 // "llama3" (Meta-Llama-3-Instruct), "gemma" (gemma-it), "mistral"
 // (Mistral-7B-Instruct-v0.3 class), "phi3" (Phi-3-instruct), "granite"
-// (IBM Granite 3.x instruct), "olmo2" (allenai OLMo-2 Instruct).
+// (IBM Granite 3.x instruct), "olmo2" (allenai OLMo-2 Instruct), "deepseek" (DeepSeek-V2/V3 chat).
 //
 // Family quirks are preserved faithfully: llama3/gemma trim message content; gemma and
 // mistral reject non-alternating user/assistant turns and have no system role — a
@@ -65,10 +65,10 @@ func WithoutBOS() ChatRenderOption {
 // "llama3", "gemma", "mistral", "phi3" or "granite".
 func NewChatTemplate(family string) (*ChatTemplate, error) {
 	switch family {
-	case "chatml", "llama3", "gemma", "mistral", "phi3", "granite", "olmo2":
+	case "chatml", "llama3", "gemma", "mistral", "phi3", "granite", "olmo2", "deepseek":
 		return &ChatTemplate{family: family}, nil
 	}
-	return nil, fmt.Errorf("nlp: NewChatTemplate: unknown family %q (want chatml, llama3, gemma, mistral, phi3, granite or olmo2)", family)
+	return nil, fmt.Errorf("nlp: NewChatTemplate: unknown family %q (want chatml, llama3, gemma, mistral, phi3, granite, olmo2 or deepseek)", family)
 }
 
 // DetectChatTemplate maps Jinja template source (the GGUF "tokenizer.chat_template"
@@ -164,6 +164,8 @@ func (t *ChatTemplate) Render(messages []ChatMessage, opts ...ChatRenderOption) 
 		return renderTurnStyle(messages, cfg, "", "<|start_of_role|>", "<|end_of_role|>", "<|end_of_text|>\n", nil, false), nil
 	case "olmo2":
 		return renderOLMo2(messages, cfg), nil
+	case "deepseek":
+		return renderDeepSeek(messages, cfg), nil
 	}
 	return "", fmt.Errorf("nlp: ChatTemplate.Render: unknown family %q", t.family)
 }
@@ -259,6 +261,35 @@ func renderOLMo2(messages []ChatMessage, cfg chatRenderCfg) string {
 	}
 	if cfg.generationPrompt {
 		sb.WriteString("<|assistant|>\n")
+	}
+	return sb.String()
+}
+
+// renderDeepSeek renders the DeepSeek-V2/V3 chat template (Vicuna-style): the bos
+// string "<｜begin▁of▁sentence｜>" (suppressible with WithoutBOS), a leading system
+// message as bare content + "\n\n", each user turn as "User: {content}\n\n" and each
+// assistant turn as "Assistant: {content}" closed with the eos "<｜end▁of▁sentence｜>";
+// the generation prompt is "Assistant:". The special-token names use the fullwidth
+// vertical bar (U+FF5C) and SentencePiece underscore (U+2581), exactly as on disk.
+// Verified byte-exact against deepseek-ai/DeepSeek-V2-Lite-Chat's
+// tokenizer.apply_chat_template (transformers 5.14.1).
+func renderDeepSeek(messages []ChatMessage, cfg chatRenderCfg) string {
+	var sb strings.Builder
+	if !cfg.withoutBOS {
+		sb.WriteString("<｜begin▁of▁sentence｜>")
+	}
+	for _, m := range messages {
+		switch m.Role {
+		case "system":
+			sb.WriteString(m.Content + "\n\n")
+		case "user":
+			sb.WriteString("User: " + m.Content + "\n\n")
+		case "assistant":
+			sb.WriteString("Assistant: " + m.Content + "<｜end▁of▁sentence｜>")
+		}
+	}
+	if cfg.generationPrompt {
+		sb.WriteString("Assistant:")
 	}
 	return sb.String()
 }
