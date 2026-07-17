@@ -560,6 +560,33 @@ func NewGPTNeoXCUDA(m *nlp.GPTNeoX) (*Decoder, error) {
 	})
 }
 
+// NewGPTCUDA uploads an nlp.GPT (GPT-2-style: learned positional embeddings, LayerNorm, GELU MLP)
+// into CUDA device buffers for batched decoding — the NVIDIA variant of NewGPT/NewGPTVulkan (§T422).
+// Closes the last backend gap for the GPT-2 decoder, which previously ran only on metal and vulkan.
+func NewGPTCUDA(m *nlp.GPT) (*GPTDecoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newGPTDecoder(m, backendOps{
+		name:        string(backend.CUDA),
+		asyncEncode: false,
+		newBuffer: func(data []float32) (buffer, error) {
+			b, err := cuda.NewDeviceBufferF32(data)
+			if err != nil {
+				return nil, err
+			}
+			return cBuf{b}, nil
+		},
+		newRecorder: func() (recorder, error) {
+			r, err := cuda.NewRecorder()
+			if err != nil {
+				return nil, err
+			}
+			return cRec{r}, nil
+		},
+	})
+}
+
 // cudaUploadQWeight makes a ggml quantized [Out,In] weight resident on the GPU as Q8.
 // The CUDA backend has ONE quant kernel (Q8 GEMV), so — unlike metal/vulkan, which keep
 // each native ggml type and dequantize in-kernel — any source type (Q4_K, Q6_K, …) is
