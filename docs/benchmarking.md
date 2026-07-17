@@ -797,6 +797,18 @@ fusion is the Tw55 "concurrent-projections" gap; at 11.1% of prefill it is worth
 Landing it e2e = a fused-QKV resident f16 weight + column-split of the output, wired into the
 unified-serve prefill (follow-up). gate/up fusion is now a recorded non-lever — do not build it.
 
+**Landed + a main regression found while landing it.** The fused-QKV projection
+(`ResidentBF16QKV.MatMulQKV`, parity-gated) is wired into the f16 prefill and the
+unified-serve seed forward: e2e prefill seq=128 **5170 → 5259 tok/s (+1.7%)**, seq=32
+2655 → 2732 (+2.9%). While validating, `TestCUDAUnifiedServePrefillHandoff` failed at
+rel L1 **1.4017** — bisected (4 runs) to main commit **ac4709b** ("nlp: fix LlamaFromGGUF
+missing llama-arch q/k un-permute, B67"), NOT the fusion (identical failure with the unfused
+code; parent commit passes). Root cause: the B67 fix moved `LlamaFromGGUF` (the f16 stack's
+weight source) to the correct un-permuted q/k convention, but the bespoke Q4_K raw-GGUF graph
+decoder still carries the pre-B67 convention — each path is self-consistent, the K-cache
+handoff between them now compares different channel orders. Fix owed: apply the B67 q/k
+un-permute to the cuda raw-GGUF decoder (next task); the handoff gate then re-closes.
+
 ## CUDA GPU inference vs llama.cpp (worker: linux/amd64 + RTX 3060, §PERF)
 
 The `-tags cuda` backend runs a full TinyLlama-1.1B decoder resident on an NVIDIA
