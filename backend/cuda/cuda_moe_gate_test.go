@@ -78,7 +78,7 @@ func TestCUDAMoEGate(t *testing.T) {
 		if err != nil {
 			t.Fatalf("case %d alloc weights: %v", ci, err)
 		}
-		if err := rec.MoEGate(dlog, dw, c.rows, c.e, c.k); err != nil {
+		if err := rec.MoEGate(dlog, dw, c.rows, c.e, c.k, 0, 1); err != nil {
 			t.Fatalf("case %d MoEGate: %v", ci, err)
 		}
 		if err := rec.Wait(); err != nil {

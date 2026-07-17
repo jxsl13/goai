@@ -62,7 +62,7 @@ func (mRec) MHACap(q, k, v, o buffer, sq, sk, dm, heads, kvHeads, dk, causal, wi
 func (mRec) MHAALiBi(q, k, v, o, slopes buffer, sq, sk, dm, heads, kvHeads, dk, causal, window int, scale float32) error {
 	return fmt.Errorf("llamagpu(metal): ALiBi attention not implemented (ALiBi decoders are cuda-only for now)")
 }
-func (mRec) MoEGate(logits, weights buffer, rows, e, k int) error {
+func (mRec) MoEGate(logits, weights buffer, rows, e, k, raw int, scale float32) error {
 	return fmt.Errorf("llamagpu(metal): MoE routing not implemented (sparse-MoE decoders are cuda-only for now)")
 }
 func (mRec) RowAxpy(dst, src, arow buffer, rows, cols int) error {

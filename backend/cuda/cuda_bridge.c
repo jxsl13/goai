@@ -247,13 +247,15 @@ done:
 // select the top-K, and write weights[E] = softmax over the SELECTED logits (exp(l)/Σ_topk exp) for
 // the K chosen experts and 0 for the rest — the renormalized combine weights. One block per row,
 // single-threaded (E and K are small). weights must be a separate [rows·E] buffer from logits.
-int cu_moe_gate(const void* logits, void* weights, int rows, int E, int K) {
+int cu_moe_gate(const void* logits, void* weights, int rows, int E, int K, int raw, float scale) {
     int rc = -1;
     pthread_mutex_lock(&gLock);
     if (ensure_init() != 0) { rc = -1; goto done; }
     if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    // renorm (raw==0, Mixtral): weight[sel] = softmax over the SELECTED top-k logits, sums to 1.
+    // raw (raw==1, DeepSeek-V2): weight[sel] = softmax over ALL E logits · scale, NOT renormalized.
     if (!gMoeGate && compile_kernel(
-                      "extern \"C\" __global__ void moe_gate(const float* logits, float* weights, int rows, int E, int K){\n"
+                      "extern \"C\" __global__ void moe_gate(const float* logits, float* weights, int rows, int E, int K, int raw, float scale){\n"
                       "  int r=blockIdx.x; if(r>=rows) return; if(threadIdx.x!=0) return;\n"
                       "  const float* lg = logits + (size_t)r*E;\n"
                       "  float* w = weights + (size_t)r*E;\n"
@@ -264,15 +266,15 @@ int cu_moe_gate(const void* logits, void* weights, int rows, int E, int K) {
                       "    for(int e=0;e<E;e++){ if(w[e]==0.0f && (double)lg[e]>bv){ bv=(double)lg[e]; best=e; } }\n"
                       "    if(best>=0) w[best]=-1.0f;\n"
                       "  }\n"
-                      "  double mx=-1e300;\n"
-                      "  for(int e=0;e<E;e++){ if(w[e]==-1.0f && (double)lg[e]>mx) mx=(double)lg[e]; }\n"
+                      "  double mx=-1e300;\n"                // max over ALL (raw) or SELECTED (renorm)
+                      "  for(int e=0;e<E;e++){ if((raw || w[e]==-1.0f) && (double)lg[e]>mx) mx=(double)lg[e]; }\n"
                       "  double s=0.0;\n"
-                      "  for(int e=0;e<E;e++){ if(w[e]==-1.0f) s+=exp((double)lg[e]-mx); }\n"
-                      "  for(int e=0;e<E;e++){ w[e] = (w[e]==-1.0f) ? (float)(exp((double)lg[e]-mx)/s) : 0.0f; }\n"
+                      "  for(int e=0;e<E;e++){ if(raw || w[e]==-1.0f) s+=exp((double)lg[e]-mx); }\n"
+                      "  for(int e=0;e<E;e++){ w[e] = (w[e]==-1.0f) ? (float)(exp((double)lg[e]-mx)/s*(raw?(double)scale:1.0)) : 0.0f; }\n"
                       "}\n",
                       "moe_gate.cu", "moe_gate", &gMoeGate) != 0) { rc = -2; goto done; }
     {
-        void* args[5]; args[0]=&logits; args[1]=&weights; args[2]=&rows; args[3]=&E; args[4]=&K;
+        void* args[7]; args[0]=&logits; args[1]=&weights; args[2]=&rows; args[3]=&E; args[4]=&K; args[5]=&raw; args[6]=&scale;
         rc = (cuLaunchKernel(gMoeGate, rows<1?1:rows, 1, 1, 32, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 done:

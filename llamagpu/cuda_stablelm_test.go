@@ -1041,3 +1041,67 @@ func TestCUDADeepSeekV2MatchesReference(t *testing.T) {
 	}
 	t.Logf("llamagpu NewDeepSeekV2CUDA matches reference DecodeStep across an autoregressive run (dense MLA)")
 }
+
+// TestCUDADeepSeekV2MoEMatchesReference checks the FULL DeepSeek-V2 GPU path (MLA + DeepSeekMoE):
+// per-block dense/MoE dispatch, raw-softmax·routedScale top-k gating (NO renormalization) and the
+// ungated shared expert. The golden has first_k_dense_replace=1 (layer 0 dense, layer 1 MoE), so it
+// exercises both FFN paths + the MLA attention together.
+func TestCUDADeepSeekV2MoEMatchesReference(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("cuda: no CUDA-capable device")
+	}
+	ts, _, err := safetensors.LoadFile("../nlp/testdata/deepseekv2moe_hf.safetensors")
+	if err != nil {
+		t.Skipf("deepseekv2moe testdata unavailable (run make golden): %v", err)
+	}
+	m, err := nlp.DeepSeekV2FromHF(ts, nlp.DeepSeekV2Config{
+		Heads: 4, QLoraRank: 24, KVLoraRank: 16,
+		QKNope: 16, QKRope: 8, VHead: 16,
+		Eps: 1e-6, RopeBase: 10000, Ctx: 32,
+		FirstKDense: 1, NRoutedExperts: 4, NSharedExperts: 1,
+		TopK: 2, MoEHidden: 32, RoutedScale: 1.0,
+	})
+	if err != nil {
+		t.Fatalf("DeepSeekV2FromHF (MoE): %v", err)
+	}
+	if m.Blocks[0].Dense == nil || m.Blocks[1].MoE == nil {
+		t.Fatal("expected layer 0 dense, layer 1 MoE — test would not cover both paths")
+	}
+
+	dec, err := llamagpu.NewDeepSeekV2CUDA(m)
+	if err != nil {
+		t.Fatalf("NewDeepSeekV2CUDA: %v", err)
+	}
+	defer dec.Release()
+
+	refCtx := backend.NewContext().WithBackend(backend.Reference())
+	cache := m.NewCache()
+	argmax := func(v []float32) int {
+		bi := 0
+		for i, x := range v {
+			if x > v[bi] {
+				bi = i
+			}
+		}
+		return bi
+	}
+	tok := 3
+	for pos := range 6 {
+		got, err := dec.Step(tok, pos)
+		if err != nil {
+			t.Fatalf("cuda step pos %d: %v", pos, err)
+		}
+		refT, err := m.DecodeStep(refCtx, cache, tok, pos)
+		if err != nil {
+			t.Fatalf("ref step pos %d: %v", pos, err)
+		}
+		for j := range got {
+			want := refT.AtF64(0, j)
+			if math.IsNaN(float64(got[j])) || math.Abs(float64(got[j])-want) > 3e-2*math.Max(1, math.Abs(want)) {
+				t.Fatalf("deepseekv2moe pos %d tok %d logit[%d]: cuda %v vs reference %v", pos, tok, j, got[j], want)
+			}
+		}
+		tok = argmax(got)
+	}
+	t.Logf("llamagpu NewDeepSeekV2CUDA (MLA + DeepSeekMoE) matches reference DecodeStep across an autoregressive run")
+}

@@ -64,8 +64,8 @@ func (c cRec) MHACap(q, k, v, o buffer, sq, sk, dm, heads, kvHeads, dk, causal, 
 func (c cRec) MHAALiBi(q, k, v, o, slopes buffer, sq, sk, dm, heads, kvHeads, dk, causal, window int, scale float32) error {
 	return c.r.MHAALiBi(cb(q), cb(k), cb(v), cb(o), cb(slopes), sq, sk, dm, heads, kvHeads, dk, causal, window, scale)
 }
-func (c cRec) MoEGate(logits, weights buffer, rows, e, k int) error {
-	return c.r.MoEGate(cb(logits), cb(weights), rows, e, k)
+func (c cRec) MoEGate(logits, weights buffer, rows, e, k, raw int, scale float32) error {
+	return c.r.MoEGate(cb(logits), cb(weights), rows, e, k, raw, scale)
 }
 func (c cRec) RowAxpy(dst, src, arow buffer, rows, cols int) error {
 	return c.r.RowAxpy(cb(dst), cb(src), cb(arow), rows, cols)

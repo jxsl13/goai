@@ -150,7 +150,7 @@ type recorder interface {
 	MHAALiBi(q, k, v, o, slopes buffer, sq, sk, dm, heads, kvHeads, dk, causal, window int, scale float32) error
 	// MoEGate writes Mixtral top-k renormalized routing weights [rows·e] from router logits [rows·e].
 	// RowAxpy accumulates dst[r,:] += arow[r]·src[r,:] (the MoE weighted combine). Both cuda-only.
-	MoEGate(logits, weights buffer, rows, e, k int) error
+	MoEGate(logits, weights buffer, rows, e, k, raw int, scale float32) error
 	RowAxpy(dst, src, arow buffer, rows, cols int) error
 	// MHARect is multi-head attention with a rectangular head shape: query/key share head width dqk,
 	// value has a different head width dv (o is heads·dv wide). The DeepSeek-V2 MLA shape. cuda-only.
@@ -224,6 +224,8 @@ type Decoder struct {
 	aliBiSlopes                                   buffer  // non-nil ⇒ per-head ALiBi slopes [heads]; attention runs via MHAALiBi (MPT)
 	moe                                           bool    // true ⇒ the FFN sublayer is a sparse Mixture-of-Experts (Mixtral): route → experts → combine
 	nExperts, topK                                int     // MoE expert count and experts-per-token (when moe)
+	moeRaw                                        bool    // true ⇒ DeepSeek-V2 raw-softmax·routedScale gating (no top-k renormalization); false ⇒ Mixtral renorm
+	routedScale                                   float32 // DeepSeek-V2 routed-expert weight multiplier (routed_scaling_factor); 1 otherwise
 	mla                                           bool    // true ⇒ DeepSeek-V2 Multi-head Latent Attention (rectangular, low-rank latent KV, decoupled RoPE)
 	qkNope, qkRope, vHead, qkHead                 int     // MLA per-head dims: nope/rope query-key parts, value width, qkHead=qkNope+qkRope
 	qLoRA, kvLoRA                                 int     // MLA query/kv latent compression ranks (q_lora_rank / kv_lora_rank)
@@ -404,8 +406,9 @@ func (d *Decoder) recordLogits(r recorder, rows int) error {
 // survives attention since recordOProj writes dx, not xn) and adds onto the residual in parallel —
 // no second norm. Both leave dx += FFN(·).
 func (d *Decoder) recordFFNSublayer(r recorder, b block, rows int) error {
-	if d.moe {
-		// sparse MoE (Mixtral): pre-norm the input, then route → per-expert SwiGLU → weighted combine.
+	if b.moeRouter != nil {
+		// sparse MoE — per BLOCK (DeepSeek-V2 mixes dense and MoE layers): pre-norm, then route →
+		// per-expert SwiGLU → weighted combine (+ optional shared expert).
 		if e := d.norm(r, d.dx.b, b.gFFN, b.bFFN, d.xn2.b, rows); e != nil {
 			return e
 		}
@@ -434,7 +437,7 @@ func (d *Decoder) recordFFNSublayer(r recorder, b block, rows int) error {
 // the routing weights are computed on-device, not by host control flow.
 func (d *Decoder) recordMoE(r recorder, b block, in buffer, rows int) error {
 	e := b.moeRouter.record(r, in, d.moeGate.b, rows) // [rows, nExperts] router logits
-	e = firstErr(e, r.MoEGate(d.moeGate.b, d.moeW.b, rows, d.nExperts, d.topK))
+	e = firstErr(e, r.MoEGate(d.moeGate.b, d.moeW.b, rows, d.nExperts, d.topK, boolToInt(d.moeRaw), d.routedScale))
 	for ex := range b.moeExperts {
 		xp := b.moeExperts[ex]
 		e = firstErr(e,
@@ -446,18 +449,25 @@ func (d *Decoder) recordMoE(r recorder, b block, in buffer, rows int) error {
 			r.RowAxpy(d.dx.b, d.mo.b, d.moeCol.b, rows, d.d),              // dx += w_ex · expert_ex
 		)
 	}
-	if b.moeSharedGate != nil {
-		// Qwen2-MoE shared expert: dx += sigmoid(in·gate) · SwiGLU_shared(in), run on every token.
+	if b.moeShared.wG != nil {
+		// Shared expert run on every token. Qwen2-MoE gates it by sigmoid(in·gate); DeepSeek-V2 runs
+		// it unconditionally (no gate), so its SwiGLU accumulates straight onto the residual.
 		s := b.moeShared
 		e = firstErr(e,
-			b.moeSharedGate.record(r, in, d.moeCol.b, rows), // gate logit [rows,1] → moeCol
-			r.Unary(d.moeCol.b, d.moeCol.b, unarySigmoid),   // sigmoid gate [rows]
 			s.wG.record(r, in, d.gate.b, rows),
 			s.wU.record(r, in, d.up.b, rows),
 			r.Binary(d.gate.b, d.up.b, d.gate.b, binarySwiGLU), // shared SwiGLU → gate
-			s.wD.record(r, d.gate.b, d.mo.b, rows),             // shared output → mo
-			r.RowAxpy(d.dx.b, d.mo.b, d.moeCol.b, rows, d.d),   // dx += gate · shared_out
 		)
+		if b.moeSharedGate != nil { // Qwen2-MoE: sigmoid-gated combine
+			e = firstErr(e,
+				s.wD.record(r, d.gate.b, d.mo.b, rows),
+				b.moeSharedGate.record(r, in, d.moeCol.b, rows),
+				r.Unary(d.moeCol.b, d.moeCol.b, unarySigmoid),
+				r.RowAxpy(d.dx.b, d.mo.b, d.moeCol.b, rows, d.d), // dx += sigmoid(gate)·shared_out
+			)
+		} else { // DeepSeek-V2: ungated — dx += shared·Wdown directly
+			e = firstErr(e, s.wD.recordAdd(r, d.gate.b, d.mo.b, d.dx.b, rows))
+		}
 	}
 	return e
 }
@@ -1073,19 +1083,44 @@ func newGemmaDecoder(m *nlp.Gemma, ops backendOps) (*Decoder, error) {
 	return d, nil
 }
 
-// newDeepSeekV2Decoder builds a device Decoder for a DENSE (MLA-only) nlp.DeepSeekV2 — a stack of
-// Multi-head Latent Attention + SwiGLU blocks (the sparse-MoE variant is a follow-up). MLA is the
-// only new machinery (recordMLAAttention + the rectangular MHARect); the FFN is the standard
-// sequential SwiGLU sublayer. cuda-only (MHARect is cuda-only). Requires every block to be dense
-// (Dense != nil, MoE == nil) — i.e. first_k_dense_replace ≥ layers or num_routed_experts == 0.
+// newDeepSeekV2Decoder builds a device Decoder for an nlp.DeepSeekV2 — a stack of Multi-head Latent
+// Attention blocks, each with a dense SwiGLU or a DeepSeekMoE sparse FFN (first_k_dense_replace
+// split). MLA is the
+// only new attention machinery (recordMLAAttention + rectangular MHARect); the FFN is a per-block
+// dense SwiGLU or the DeepSeekMoE sparse FFN (raw-softmax·routedScale top-k routed experts + an
+// ungated shared expert), dispatched by b.moeRouter. cuda-only (MHARect is cuda-only).
 func newDeepSeekV2Decoder(m *nlp.DeepSeekV2, ops backendOps) (*Decoder, error) {
 	cfg := m.Config
-	if len(m.Blocks) == 0 || m.Blocks[0].Dense == nil {
-		return nil, fmt.Errorf("llamagpu(%s): DeepSeek-V2 MoE blocks not supported yet (dense-only)", ops.name)
+	if len(m.Blocks) == 0 {
+		return nil, fmt.Errorf("llamagpu(%s): DeepSeek-V2 has no blocks", ops.name)
 	}
 	qkHead := cfg.QKNope + cfg.QKRope
 	kvHead := cfg.QKNope + cfg.VHead
-	hidden := m.Blocks[0].Dense.Wgate.Shape()[1]
+	// hidden must cover the widest SwiGLU across every block (dense, routed-expert, shared) since the
+	// gate/up scratch is shared; nExperts/topK/routedScale come from the first MoE block if any.
+	hidden, nExperts, topK, hasMoE := 0, 0, 0, false
+	wider := func(sw *nn.SwiGLU) {
+		if sw != nil {
+			if h := sw.Wgate.Shape()[1]; h > hidden {
+				hidden = h
+			}
+		}
+	}
+	for _, b := range m.Blocks {
+		wider(b.Dense)
+		if b.MoE != nil {
+			hasMoE = true
+			for _, e := range b.MoE.Routed.Experts {
+				wider(e)
+			}
+			for _, s := range b.MoE.Shared {
+				wider(s)
+			}
+			if nExperts == 0 {
+				nExperts, topK = len(b.MoE.Routed.Experts), b.MoE.Routed.TopK
+			}
+		}
+	}
 	lc := nlp.LlamaConfig{
 		Vocab: cfg.Vocab, Ctx: cfg.Ctx, Dim: cfg.Dim, Heads: cfg.Heads, KVHeads: cfg.Heads,
 		Layers: cfg.Layers, Hidden: hidden, Eps: cfg.Eps, RopeBase: cfg.RopeBase,
@@ -1095,6 +1130,14 @@ func newDeepSeekV2Decoder(m *nlp.DeepSeekV2, ops backendOps) (*Decoder, error) {
 		return nil, derr
 	}
 	d.mla = true
+	if hasMoE {
+		d.moe, d.moeRaw = true, true // DeepSeek-V2 raw-softmax·routedScale gating
+		d.nExperts, d.topK = nExperts, topK
+		d.routedScale = 1
+		if cfg.RoutedScale > 0 {
+			d.routedScale = float32(cfg.RoutedScale)
+		}
+	}
 	d.qkNope, d.qkRope, d.vHead, d.qkHead = cfg.QKNope, cfg.QKRope, cfg.VHead, qkHead
 	d.qLoRA, d.kvLoRA = cfg.QLoraRank, cfg.KVLoraRank
 	scale := cfg.SoftmaxScale
@@ -1131,9 +1174,21 @@ func newDeepSeekV2Decoder(m *nlp.DeepSeekV2, ops backendOps) (*Decoder, error) {
 			wqA: lin(b.WqA), wqB: lin(b.WqB), wkvA: lin(b.WkvA), wkvB: lin(b.WkvB), wo: lin(b.Wo),
 			gAttn: mk(flat1D(b.InputNorm.Gamma)).b, gFFN: mk(flat1D(b.PostAttnNorm.Gamma)).b,
 			gQA: mk(flat1D(b.QANorm.Gamma)).b, gKvA: mk(flat1D(b.KvANorm.Gamma)).b,
-			wG: lin(b.Dense.Wgate), wU: lin(b.Dense.Wup), wD: lin(b.Dense.Wdown),
 			// MLA cache: K is heads·qkHead wide, V is heads·VHead wide (rectangular).
 			kC: mk(make([]float32, c*cfg.Heads*qkHead)).b, vC: mk(make([]float32, c*cfg.Heads*cfg.VHead)).b,
+		}
+		if b.Dense != nil { // dense SwiGLU FFN
+			gb.wG, gb.wU, gb.wD = lin(b.Dense.Wgate), lin(b.Dense.Wup), lin(b.Dense.Wdown)
+		} else { // DeepSeekMoE: routed top-k experts + ungated shared expert(s)
+			experts := make([]moeFFN, len(b.MoE.Routed.Experts))
+			for i, ex := range b.MoE.Routed.Experts {
+				experts[i] = moeFFN{wG: lin(ex.Wgate), wU: lin(ex.Wup), wD: lin(ex.Wdown)}
+			}
+			gb.moeRouter, gb.moeExperts = lin(b.MoE.Routed.Router.W), experts
+			if len(b.MoE.Shared) > 0 { // realized as a single fused SwiGLU; ungated (moeSharedGate nil)
+				s := b.MoE.Shared[0]
+				gb.moeShared = moeFFN{wG: lin(s.Wgate), wU: lin(s.Wup), wD: lin(s.Wdown)}
+			}
 		}
 		d.blocks = append(d.blocks, gb)
 	}
@@ -2409,6 +2464,13 @@ func (d *Decoder) Release() {
 		}
 	}
 	d.qweights = nil
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 func firstErr(errs ...error) error {
