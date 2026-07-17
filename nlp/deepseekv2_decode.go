@@ -16,6 +16,7 @@ import (
 // only the MLA sublayer; the FFN (dense SwiGLU or sparse DeepSeekMoE) is stateless.
 type DeepSeekV2Cache struct {
 	K, V [][]*tensor.Tensor // [block][head]; nil until the first token
+	bufs []kvBufs           // per-block backing row buffers behind the K, V views (amortized-O(1) append)
 }
 
 // NewCache returns an empty KV-cache sized for this model's blocks and heads.
@@ -164,8 +165,10 @@ func (m *DeepSeekV2) DecodeStep(ctx *backend.Context, cache *DeepSeekV2Cache, to
 
 			// Append this token's reconstructed per-head key/value to the cache, then attend
 			// the single query against ALL cached keys/values.
-			kCache := concatRows(cache.K[l][h], keyH)
-			vCache := concatRows(cache.V[l][h], valueH)
+			if len(cache.bufs) <= l {
+				cache.bufs = growSlice(cache.bufs, max(l+1, len(cache.K)))
+			}
+			kCache, vCache := cache.bufs[l].appendKV(cache.K[l], cache.V[l], h, keyH, valueH)
 			cache.K[l][h], cache.V[l][h] = kCache, vCache
 
 			// scores = queryH·kCacheᵀ  [1, tokens]

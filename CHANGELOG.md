@@ -4,6 +4,20 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — perf: amortized KV-cache growth — O(T²) → O(T) (T779, 2026-07-17)
+
+Every `DecodeStep` grew its KV-cache with `concatRows`, which reallocates and copies the ENTIRE
+cache per layer per token — O(T²) copy traffic over a decode. A new `rowBuf` (backing [cap, width]
+tensor + doubling growth) writes each new row in place and returns a contiguous zero-copy prefix
+view — verified at the tensor level (`Slice(0,0,n)` of an offset-0 contiguous tensor IS contiguous,
+so `Contiguous()` no-ops) and by a kernel audit (all index by shape-derived geometry, never backing
+capacity). All 18 KV decode paths switched (the public cache `K, V` fields keep holding the current
+views — API unchanged); foreign views (struct-literal caches, streaming eviction) are adopted safely,
+and exotic dtypes fall back to `concatRows` exactly. Measured (§V22, M2 Pro): cache-growth loop at
+width 2048 / T=512 **68.6ms → 0.47ms (147×)**; end-to-end 500-token Generate on a small Llama **1.17×**
+(compute-dominated at that size — the win grows with width·layers·T). Every decode-vs-Forward parity
+remains exact.
+
 ### nlp — perf: decode hot-path sweep — cached tied head + typed single-token embed (T778, 2026-07-17)
 
 Two per-token fixed costs eliminated from the KV-cached decode paths (§V22, measured at Llama-scale

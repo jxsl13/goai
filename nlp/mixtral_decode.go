@@ -14,6 +14,7 @@ import (
 // attention sublayer; the sparse-MoE FFN is stateless and re-routes each token afresh.
 type MixtralCache struct {
 	K, V []*tensor.Tensor // per block; nil until the first token
+	bufs kvBufs           // backing row buffers behind the K, V views (amortized-O(1) append)
 }
 
 // NewCache returns an empty KV-cache sized for this model's blocks.
@@ -88,8 +89,7 @@ func (m *Mixtral) DecodeStep(ctx *backend.Context, cache *MixtralCache, token, p
 		if k, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: kv, PosOffset: pos}, k); err != nil {
 			return nil, err
 		}
-		kNew := concatRows(cache.K[l], k)
-		vNew := concatRows(cache.V[l], v)
+		kNew, vNew := cache.bufs.appendKV(cache.K, cache.V, l, k, v)
 		cache.K[l], cache.V[l] = kNew, vNew
 		// single query at the last position attends to all cached keys → no causal mask
 		a, err := exec1(ctx, backend.OpMHA, backend.AttnAttrs{Heads: cfg.Heads, KVHeads: kv, Causal: false}, q, kNew, vNew)

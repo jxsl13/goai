@@ -13,6 +13,7 @@ import (
 // (applied at the position each token entered the cache).
 type GPTNeoXCache struct {
 	K, V []*tensor.Tensor // per block; nil until the first token
+	bufs kvBufs           // backing row buffers behind the K, V views (amortized-O(1) append)
 }
 
 // NewCache returns an empty KV-cache sized for this model's blocks.
@@ -80,8 +81,7 @@ func (m *GPTNeoX) DecodeStep(ctx *backend.Context, cache *GPTNeoXCache, token, p
 		if k, err = partialRoPE(ctx, k, kv, rot, rope); err != nil {
 			return nil, err
 		}
-		kNew := concatRows(cache.K[l], k)
-		vNew := concatRows(cache.V[l], v)
+		kNew, vNew := cache.bufs.appendKV(cache.K, cache.V, l, k, v)
 		cache.K[l], cache.V[l] = kNew, vNew
 		// single query attends to all cached keys → no causal mask
 		a, err := exec1(ctx, backend.OpMHA, backend.AttnAttrs{Heads: cfg.Heads, KVHeads: kv, Causal: false}, q, kNew, vNew)

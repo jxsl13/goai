@@ -11,9 +11,13 @@ import (
 // LlamaCache holds the per-layer key/value tensors accumulated during autoregressive
 // Llama decoding, so each new token attends to the cached past instead of recomputing
 // attention over the whole prefix. The cached keys already carry their RoPE rotation
-// (applied at the position each token entered the cache).
+// (applied at the position each token entered the cache). K[l] and V[l] are
+// contiguous [t, width] views over internal amortized-growth row buffers
+// (rowBuf), refreshed each DecodeStep — appends cost O(1) per token instead of
+// the old concatRows O(t) reallocate-and-copy.
 type LlamaCache struct {
 	K, V []*tensor.Tensor // per block; nil until the first token
+	bufs kvBufs           // backing row buffers behind the K, V views
 }
 
 // NewCache returns an empty KV-cache sized for this model's blocks.
@@ -107,8 +111,7 @@ func (m *Llama) DecodeStep(ctx *backend.Context, cache *LlamaCache, token, pos i
 		if k, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: kv, PosOffset: pos}, k); err != nil {
 			return nil, err
 		}
-		kNew := concatRows(cache.K[l], k)
-		vNew := concatRows(cache.V[l], v)
+		kNew, vNew := cache.bufs.appendKV(cache.K, cache.V, l, k, v)
 		cache.K[l], cache.V[l] = kNew, vNew
 		// single query at the last position attends to all cached keys → no causal mask
 		a, err := exec1(ctx, backend.OpMHA, backend.AttnAttrs{Heads: cfg.Heads, KVHeads: kv, Causal: false, Scale: attnScale}, q, kNew, vNew)

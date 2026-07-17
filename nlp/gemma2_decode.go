@@ -15,6 +15,7 @@ import (
 // attention sublayer; the sandwich-normed GeGLU FFN is stateless.
 type Gemma2Cache struct {
 	K, V []*tensor.Tensor // per block; nil until the first token
+	bufs kvBufs           // backing row buffers behind the K, V views (amortized-O(1) append)
 }
 
 // NewCache returns an empty KV-cache sized for this model's blocks.
@@ -147,8 +148,7 @@ func (m *Gemma2) cappedDecodeAttention(ctx *backend.Context, b *Gemma2Block, xb 
 	if k, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: kv, PosOffset: pos}, k); err != nil {
 		return nil, err
 	}
-	kNew := concatRows(cache.K[l], k)
-	vNew := concatRows(cache.V[l], v)
+	kNew, vNew := cache.bufs.appendKV(cache.K, cache.V, l, k, v)
 	cache.K[l], cache.V[l] = kNew, vNew
 
 	// Pre-softmax score scale as a rank-0 scalar (broadcast over [1,sk]).
