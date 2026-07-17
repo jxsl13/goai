@@ -4,6 +4,23 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — quantized GGUF decode for Cohere and Mamba (T829, 2026-07-18)
+
+`QuantCohere` and `QuantMamba` (+ `Quant*FromGGUF`) bring quantized decode to sixteen
+families and close two structural firsts. Cohere is the first NORM-rope quant loader
+outside the llama lineage: the on-disk HF-interleaved q/k rows are permuted to split-half
+losslessly on the Q-block bytes — and the needed interleave-to-split map turns out to be
+EXACTLY the existing `ropeUnpermutePerm` (llama.cpp's NORM-rope storage IS the GPT-J
+interleave), proven by byte-equality against `QuantizeCohere` on the float model's own
+permuted rows. Mamba is the first recurrent quant twin: the four big SSM projections
+quantize (packed `ssm_in`/`ssm_x` row-split losslessly), while conv1d, the Δ bias, A, D,
+and the norms stay f32 with the scan running exactly as the float path — and the O(1)
+recurrent decode is bit-exact at every step. A deliberate representation choice: QuantMamba
+stores A = −exp(A_log) directly (the on-disk form; ln∘exp does not round-trip through f32,
+A itself does), which is what makes the byte anchor exact. All gates at full strength on
+both (byte/logit-exact anchors incl. fused forms, cosine 1.000000, control-anchored
+vs-original, mirrored reject sets).
+
 ### nlp — quantized GGUF decode for StableLM and OLMo 2 (T828, 2026-07-18)
 
 `QuantStableLM` and `QuantOLMo2` (+ `Quant*FromGGUF`) bring quantized decode to fourteen

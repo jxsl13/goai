@@ -3,7 +3,7 @@
 GoAI loads [llama.cpp](https://github.com/ggml-org/llama.cpp) GGUF checkpoints —
 the single-file format the local-inference ecosystem distributes models in —
 straight into runnable, trainable GoAI models. Nineteen architectures load in
-full precision; fourteen families additionally decode
+full precision; sixteen families additionally decode
 **directly from the quantized ggml blocks**, never materializing full-precision
 weights.
 
@@ -61,7 +61,7 @@ for some archs and *split-half* pairs (`ROPE_TYPE_NEOX`) for others; GoAI's
 | `mamba` | `MambaFromGGUF` | SSM: `A_log`→−exp(A_log); conv1d squeezed `[d_inner,1,k]→[d_inner,k]`; `ssm_a`/`ssm_d` carry no `.weight` suffix; packed `ssm_in`/`ssm_x` |
 | `jamba` | `JambaFromGGUF` | hybrid: mixer interleave in the per-layer `head_count_kv` vector (0=Mamba); NoPE attention; dedicated `ssm_{dt,b,c}_norm`; fused-expert MoE |
 
-## Quantized decode (14 families)
+## Quantized decode (16 families)
 
 `QuantLlamaFromGGUF` (llama), `QuantQwen2FromGGUF`, `QuantQwen3FromGGUF`,
 `QuantPhi3FromGGUF`, `QuantGemmaFromGGUF`, `QuantMixtralFromGGUF`, `QuantGraniteFromGGUF` (the
@@ -71,7 +71,12 @@ applied on the quantized forward) `QuantStarCoder2FromGGUF`, `QuantGPTNeoXFromGG
 `QuantOLMo2FromGGUF` (the LayerNorm/dedicated-type quant twins: biased
 projections as Q-block matmuls plus f32 bias adds, parallel residuals, ALiBi,
 pre-folded LayerNorm1P, partial rotary, OLMo 2 post-norm with full-width
-QK-norms, every fused qkv unpacked losslessly on the quantized bytes) decode
+QK-norms, every fused qkv unpacked losslessly on the quantized bytes),
+`QuantCohereFromGGUF` (the first NORM-rope quant loader outside the llama
+lineage — the interleave-to-split row permute applied losslessly on the
+Q-blocks) and `QuantMambaFromGGUF` (the first recurrent quant twin: the four
+big SSM projections quantize, the conv/scan/state stay f32, O(1) decode
+bit-exact) decode
 straight from ggml Q-blocks (Q8_0, Q4_0, and the K-quants) with no dequantize
 step: each projection is a `nn.QuantLinear` over the raw block bytes, and only
 the small precision-sensitive pieces (norm gains, the embedding lookup table,
