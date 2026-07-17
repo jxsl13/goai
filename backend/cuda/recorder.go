@@ -45,6 +45,7 @@ const (
 	recUnaryReLU2    = 10 // squared ReLU (Nemotron); cuda-only
 	recUnarySigmoid  = 11 // plain sigmoid (Qwen2-MoE shared-expert gate); cuda-only
 	recUnarySoftplus = 12 // softplus (Mamba Δ); cuda-only
+	recUnaryReLU     = 13 // plain ReLU max(x,0) (T5 v1.0 FFN); cuda-only
 	recBinaryAdd     = 0
 	recBinaryMul     = 2
 	recBinarySwiGLU  = 6
@@ -336,6 +337,36 @@ func (rec *Recorder) MHAALiBi(q, k, v, o, slopes *DeviceF32, sq, sk, dm, heads, 
 	return nil
 }
 
+// MHABias is MHA with a PRECOMPUTED per-head additive bias added to the scaled scores before the
+// mask+softmax — the T5 relative-position bias, a learned [heads,sq,sk] table (laid out identically
+// to the scores buffer). Unlike ALiBi's computed slope it is an arbitrary per-(head,i,j) value. No
+// RoPE (T5 has no rotary/absolute position). causal==0 (T5's bidirectional encoder) unmasks all keys.
+func (rec *Recorder) MHABias(q, k, v, o, bias *DeviceF32, sq, sk, dm, heads, kvHeads, dk, causal, window int, scale float32) error {
+	if q.ptr == nil || k.ptr == nil || v.ptr == nil || o.ptr == nil || bias.ptr == nil {
+		return fmt.Errorf("cuda: rec MHABias on a freed handle")
+	}
+	if window > 0 && window < sk {
+		return fmt.Errorf("cuda: rec MHABias sliding-window (window=%d < sk=%d) not supported", window, sk)
+	}
+	if err := rec.ensureScores(heads * sq * sk); err != nil {
+		return err
+	}
+	if rc := C.cu_gqa_scores(q.ptr, k.ptr, rec.scores, C.int(sq), C.int(sk), C.int(heads), C.int(kvHeads), C.int(dk), 0); rc != 0 {
+		return fmt.Errorf("cuda: rec MHABias scores failed (code %d)", int(rc))
+	}
+	offset := sk - sq
+	if causal == 0 {
+		offset = sk
+	}
+	if rc := C.cu_attn_softmax_bias(rec.scores, C.int(heads*sq), C.int(sk), C.float(scale), C.int(offset), C.int(sq), bias.ptr); rc != 0 {
+		return fmt.Errorf("cuda: rec MHABias softmax failed (code %d)", int(rc))
+	}
+	if rc := C.cu_gqa_out(rec.scores, v.ptr, o.ptr, C.int(sq), C.int(sk), C.int(heads), C.int(kvHeads), C.int(dk), 0); rc != 0 {
+		return fmt.Errorf("cuda: rec MHABias out failed (code %d)", int(rc))
+	}
+	return nil
+}
+
 // MHARect is multi-head attention with RECTANGULAR head dims: the query/key share a head width dqk
 // (so the scores are Q·Kᵀ over dqk) but the value has a DIFFERENT head width dv, so the output rows
 // are heads·dv wide. This is the shape DeepSeek-V2 MLA needs — query/key are concat(nope, pe) of
@@ -412,6 +443,8 @@ func (rec *Recorder) Unary(x, o *DeviceF32, op int) error {
 		rc = C.cu_gelu_f32(o.ptr, C.int(n))
 	case recUnaryReLU2:
 		rc = C.cu_relu2_f32(o.ptr, C.int(n))
+	case recUnaryReLU:
+		rc = C.cu_relu_f32(o.ptr, C.int(n))
 	case recUnarySigmoid:
 		rc = C.cu_sigmoid_f32(o.ptr, C.int(n))
 	case recUnarySoftplus:

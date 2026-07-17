@@ -62,6 +62,9 @@ func (mRec) MHACap(q, k, v, o buffer, sq, sk, dm, heads, kvHeads, dk, causal, wi
 func (mRec) MHAALiBi(q, k, v, o, slopes buffer, sq, sk, dm, heads, kvHeads, dk, causal, window int, scale float32) error {
 	return fmt.Errorf("llamagpu(metal): ALiBi attention not implemented (ALiBi decoders are cuda-only for now)")
 }
+func (mRec) MHABias(q, k, v, o, bias buffer, sq, sk, dm, heads, kvHeads, dk, causal, window int, scale float32) error {
+	return fmt.Errorf("llamagpu(metal): per-head bias attention not implemented (T5 encoder is cuda-only for now)")
+}
 func (mRec) MoEGate(logits, weights buffer, rows, e, k, raw int, scale float32) error {
 	return fmt.Errorf("llamagpu(metal): MoE routing not implemented (sparse-MoE decoders are cuda-only for now)")
 }
