@@ -4,6 +4,18 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — quantized GGUF decode for GPT-NeoX and Falcon (T826, 2026-07-17)
+
+`QuantGPTNeoX` and `QuantFalcon` (+ `Quant*FromGGUF`) bring quantized decode to ten
+families — the parallel-residual pair, reusing T825's LayerNorm quant-twin helpers.
+GPT-NeoX: dual-norm parallel residual, biased projections, genuine partial rotary
+(RotaryDim exercised in-fixture), the converter's de-interleaved `attn_qkv` unpacked as
+lossless quantized thirds (weights) + f32 bias slices; untied head required. Falcon:
+single-norm-two-readers parallel residual, MQA (`head_count_kv` must be 1), the jploski
+fused qkv sliced at the `[q; hd; hd]` MQA bands, 40B dual-norm rejected, tied head from a
+quantized `token_embd`. Gates on both: byte/logit-EXACT vs the `QuantizeX` twins (fused
+forms included), cosine 1.000000 vs the float pipeline, decode-vs-Forward bit-exact.
+
 ### nlp — quantized GGUF decode for StarCoder2 (T825, 2026-07-17)
 
 `QuantStarCoder2` + `QuantStarCoder2FromGGUF` decode llama.cpp-quantized StarCoder2
