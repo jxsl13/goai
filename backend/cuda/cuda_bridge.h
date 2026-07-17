@@ -142,6 +142,9 @@ int cu_qmatmul_iq2xxs_mt(const void* dA, const void* dQ, const void* dGrid, void
 int cu_qmatmul_iq2xs(const void* dA, const void* dQ, const void* dGrid, void* dOut, int M, int K, int N, float beta);
 // cu_qmatmul_iq3xxs: IQ3_XXS (98-byte super-blocks, 256×4 grid + packed ksigns/scale). K%256==0.
 int cu_qmatmul_iq3xxs(const void* dA, const void* dQ, const void* dGrid, void* dOut, int M, int K, int N, float beta);
+// cu_qmatmul_iq3xxs_mt: weight-read-once M-tiled GEMM for M>1 — IQ3_XXS twin of cu_qmatmul_q4k_mt
+// (grid decoded once per warp, reused across the row tile). Bit-identical arithmetic. K%256==0.
+int cu_qmatmul_iq3xxs_mt(const void* dA, const void* dQ, const void* dGrid, void* dOut, int M, int K, int N, float beta);
 // cu_qmatmul_iq3s: IQ3_S (110-byte super-blocks, 512×4 grid, 9-bit indices, direct signs). K%256==0.
 int cu_qmatmul_iq3s(const void* dA, const void* dQ, const void* dGrid, void* dOut, int M, int K, int N, float beta);
 // cu_qmatmul_iq3s_mt: weight-read-once M-tiled GEMM for M>1 — IQ3_S twin of cu_qmatmul_q4k_mt
