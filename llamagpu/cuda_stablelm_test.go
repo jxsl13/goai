@@ -936,3 +936,50 @@ func TestCUDAGraniteMoEMatchesReference(t *testing.T) {
 	}
 	t.Logf("llamagpu NewGraniteMoECUDA.Generate == nlp.GraniteMoE.Generate greedy: %d tokens (sparse MoE + 4 Granite scalars)", len(gpuOut))
 }
+
+// TestCUDAQwen2MoEMatchesReference checks the Qwen2-MoE GPU path (NewQwen2MoECUDA): a routed sparse
+// MoE PLUS a sigmoid-gated shared expert, with Qwen2 q/k/v attention biases. No QK-norm, so it is
+// greedy-exact — it verifies the shared-expert tail of recordMoE (sigmoid gate via cu_sigmoid_f32 +
+// SwiGLU + RowAxpy onto dx) composes with the routed combine.
+func TestCUDAQwen2MoEMatchesReference(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("cuda: no CUDA-capable device")
+	}
+	ts, _, err := safetensors.LoadFile("../nlp/testdata/qwen2moe_hf.safetensors")
+	if err != nil {
+		t.Skipf("qwen2moe testdata unavailable (run make golden): %v", err)
+	}
+	m, err := nlp.Qwen2MoeFromHF(ts, nlp.Qwen2MoeConfig{Heads: 4, KVHeads: 2, TopK: 2, Eps: 1e-6, RopeBase: 10000, Ctx: 32})
+	if err != nil {
+		t.Fatalf("Qwen2MoeFromHF: %v", err)
+	}
+	if m.Blocks[0].Shared == nil || m.Blocks[0].SharedGate == nil {
+		t.Fatal("qwen2moe block 0 has no shared expert — golden or loader broke; test would not cover it")
+	}
+
+	dec, err := llamagpu.NewQwen2MoECUDA(m)
+	if err != nil {
+		t.Fatalf("NewQwen2MoECUDA: %v", err)
+	}
+	defer dec.Release()
+
+	prompt := []int{3, 7, 1, 9}
+	const maxNew = 12
+	gpuOut, err := dec.Generate(prompt, maxNew, nlp.Greedy())
+	if err != nil {
+		t.Fatalf("cuda generate: %v", err)
+	}
+	refOut, err := m.Generate(prompt, maxNew, nlp.Greedy(), nlp.WithBackend(backend.Reference()))
+	if err != nil {
+		t.Fatalf("ref generate: %v", err)
+	}
+	if len(gpuOut) != len(refOut) {
+		t.Fatalf("length: cuda %d vs ref %d", len(gpuOut), len(refOut))
+	}
+	for i := range gpuOut {
+		if gpuOut[i] != refOut[i] {
+			t.Fatalf("token[%d]: cuda %d vs ref %d\ncuda=%v\nref=%v", i, gpuOut[i], refOut[i], gpuOut, refOut)
+		}
+	}
+	t.Logf("llamagpu NewQwen2MoECUDA.Generate == nlp.Qwen2MoE.Generate greedy: %d tokens (routed MoE + sigmoid-gated shared expert)", len(gpuOut))
+}

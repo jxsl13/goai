@@ -45,6 +45,7 @@ const (
 	unarySiLU    = 6
 	unaryGELU    = 9
 	unaryReLU2   = 10 // squared ReLU (Nemotron); cuda-only
+	unarySigmoid = 11 // plain sigmoid (Qwen2-MoE shared-expert gate); cuda-only
 	binaryAdd    = 0
 	binaryMul    = 2
 	binarySwiGLU = 6 // fused silu(a)·b — one dispatch instead of SiLU+Mul (§T613)
@@ -180,6 +181,8 @@ type block struct {
 	gAttn2, gFFN2                    buffer   // sandwich-norm OUTPUT gains (Gemma2 post_attention/post_feedforward); nil otherwise
 	moeRouter                        linear   // sparse-MoE gate: dim → nExperts logits (Mixtral); nil unless d.moe
 	moeExperts                       []moeFFN // the per-expert SwiGLU FFNs (Mixtral); len == d.nExperts
+	moeShared                        moeFFN   // Qwen2-MoE shared expert (SwiGLU on every token); zero-value when absent
+	moeSharedGate                    linear   // Qwen2-MoE shared-expert gate: dim → 1 logit, sigmoid-scaled; nil when absent
 }
 
 // Decoder holds a Llama's weights + KV cache as device-resident buffers and runs one batched decode
@@ -419,6 +422,19 @@ func (d *Decoder) recordMoE(r recorder, b block, in buffer, rows int) error {
 			xp.wD.record(r, d.gate.b, d.mo.b, rows),                       // expert output → mo (non-accumulating)
 			r.Copy2D(d.moeW.b, ex, d.nExperts, d.moeCol.b, 0, 1, rows, 1), // extract weight column [rows]
 			r.RowAxpy(d.dx.b, d.mo.b, d.moeCol.b, rows, d.d),              // dx += w_ex · expert_ex
+		)
+	}
+	if b.moeSharedGate != nil {
+		// Qwen2-MoE shared expert: dx += sigmoid(in·gate) · SwiGLU_shared(in), run on every token.
+		s := b.moeShared
+		e = firstErr(e,
+			b.moeSharedGate.record(r, in, d.moeCol.b, rows), // gate logit [rows,1] → moeCol
+			r.Unary(d.moeCol.b, d.moeCol.b, unarySigmoid),   // sigmoid gate [rows]
+			s.wG.record(r, in, d.gate.b, rows),
+			s.wU.record(r, in, d.up.b, rows),
+			r.Binary(d.gate.b, d.up.b, d.gate.b, binarySwiGLU), // shared SwiGLU → gate
+			s.wD.record(r, d.gate.b, d.mo.b, rows),             // shared output → mo
+			r.RowAxpy(d.dx.b, d.mo.b, d.moeCol.b, rows, d.d),   // dx += gate · shared_out
 		)
 	}
 	return e
@@ -1375,6 +1391,89 @@ func newMixtralDecoder(m *nlp.Mixtral, ops backendOps) (*Decoder, error) {
 			qN: qkGain(b.QNorm), kN: qkGain(b.KNorm),
 			moeRouter: lin(b.MoE.Router.W), moeExperts: experts,
 			kC: mk(make([]float32, d.maxLen*d.kvDim)).b, vC: mk(make([]float32, d.maxLen*d.kvDim)).b,
+		}
+		d.blocks = append(d.blocks, gb)
+	}
+	d.gFinal = mk(flat1D(m.Norm.Gamma))
+	d.out = lin(m.Out)
+	d.allocScratch(mk)
+	if err != nil {
+		d.Release()
+		return nil, err
+	}
+	return d, nil
+}
+
+// newQwen2MoEDecoder builds a device Decoder for an nlp.Qwen2MoE. Qwen2-MoE is a routed sparse MoE
+// PLUS a shared expert: the FFN output is sparse_moe(x) + sigmoid(x·gate)·shared_expert(x), a single
+// SwiGLU run on every token and scaled by a per-token sigmoid gate (recordMoE's shared-expert tail).
+// Attention is the Llama core with Qwen2's q/k/v projection biases (o_proj bias-free). cuda-only.
+func newQwen2MoEDecoder(m *nlp.Qwen2MoE, ops backendOps) (*Decoder, error) {
+	cfg := m.Config
+	kvH := cfg.KVHeads
+	if kvH <= 0 {
+		kvH = cfg.Heads
+	}
+	if len(m.Blocks) == 0 || m.Blocks[0].MoE == nil || len(m.Blocks[0].MoE.Experts) == 0 {
+		return nil, fmt.Errorf("llamagpu(%s): Qwen2MoE has no MoE experts", ops.name)
+	}
+	b0 := m.Blocks[0]
+	nExperts := len(b0.MoE.Experts)
+	topK := b0.MoE.TopK
+	if topK <= 0 {
+		topK = 2
+	}
+	hidden := b0.MoE.Experts[0].Wgate.Shape()[1]
+	lc := nlp.LlamaConfig{
+		Vocab: cfg.Vocab, Ctx: cfg.Ctx, Dim: cfg.Dim, Heads: cfg.Heads, KVHeads: kvH,
+		Layers: cfg.Layers, Hidden: hidden, Eps: cfg.Eps, RopeBase: cfg.RopeBase,
+	}
+	d, derr := newDecoderCommon(lc, m.TokEmb, ops)
+	if derr != nil {
+		return nil, derr
+	}
+	d.moe = true
+	d.nExperts = nExperts
+	d.topK = topK
+
+	var err error
+	mk := d.mkBuf(&err)
+	lin := func(w *tensor.Tensor) linear {
+		in, out := w.Shape()[0], w.Shape()[1]
+		return f32Linear{w: mk(flat2D(w)).b, k: in, n: out}
+	}
+	fused := func(wq, wk, wv *tensor.Tensor) linear {
+		in := wq.Shape()[0]
+		nq, nk, nv := wq.Shape()[1], wk.Shape()[1], wv.Shape()[1]
+		fq, fk, fv := flat2D(wq), flat2D(wk), flat2D(wv)
+		nt := nq + nk + nv
+		w := make([]float32, in*nt)
+		for i := range in {
+			row := w[i*nt : (i+1)*nt]
+			copy(row[:nq], fq[i*nq:(i+1)*nq])
+			copy(row[nq:nq+nk], fk[i*nk:(i+1)*nk])
+			copy(row[nq+nk:], fv[i*nv:(i+1)*nv])
+		}
+		return f32Linear{w: mk(w).b, k: in, n: nt}
+	}
+	fusedBias := func(bq, bk, bv *tensor.Tensor) buffer {
+		if bq == nil && bk == nil && bv == nil {
+			return nil
+		}
+		return mk(append(append(append([]float32{}, flat1D(bq)...), flat1D(bk)...), flat1D(bv)...)).b
+	}
+	for _, b := range m.Blocks {
+		experts := make([]moeFFN, len(b.MoE.Experts))
+		for i, ex := range b.MoE.Experts {
+			experts[i] = moeFFN{wG: lin(ex.Wgate), wU: lin(ex.Wup), wD: lin(ex.Wdown)}
+		}
+		gb := block{
+			wqkv: fused(b.Wq, b.Wk, b.Wv), qkvBias: fusedBias(b.Bq, b.Bk, b.Bv), wo: lin(b.Wo),
+			gAttn: mk(flat1D(b.AttnNorm.Gamma)).b, gFFN: mk(flat1D(b.FFNNorm.Gamma)).b,
+			moeRouter: lin(b.MoE.Router.W), moeExperts: experts,
+			moeShared:     moeFFN{wG: lin(b.Shared.Wgate), wU: lin(b.Shared.Wup), wD: lin(b.Shared.Wdown)},
+			moeSharedGate: lin(b.SharedGate),
+			kC:            mk(make([]float32, d.maxLen*d.kvDim)).b, vC: mk(make([]float32, d.maxLen*d.kvDim)).b,
 		}
 		d.blocks = append(d.blocks, gb)
 	}

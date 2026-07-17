@@ -242,6 +242,33 @@ func NewGraniteMoECUDA(m *nlp.GraniteMoE) (*Decoder, error) {
 	})
 }
 
+// NewQwen2MoECUDA uploads an nlp.Qwen2MoE onto the batched Decoder core: a routed sparse MoE PLUS a
+// shared expert (a SwiGLU run on every token, sigmoid-gated), with Qwen2 q/k/v projection biases on
+// the attention. cuda-only.
+func NewQwen2MoECUDA(m *nlp.Qwen2MoE) (*Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newQwen2MoEDecoder(m, backendOps{
+		name:        string(backend.CUDA),
+		asyncEncode: false,
+		newBuffer: func(data []float32) (buffer, error) {
+			b, err := cuda.NewDeviceBufferF32(data)
+			if err != nil {
+				return nil, err
+			}
+			return cBuf{b}, nil
+		},
+		newRecorder: func() (recorder, error) {
+			r, err := cuda.NewRecorder()
+			if err != nil {
+				return nil, err
+			}
+			return cRec{r}, nil
+		},
+	})
+}
+
 // NewOLMoECUDA uploads an nlp.OLMoE (Allen AI sparse-MoE) onto the batched Decoder core: pre-norm
 // Llama attention with FULL-WIDTH q/k RMSNorm and a sparse Mixture-of-Experts FFN, untied lm_head.
 // cuda-only.

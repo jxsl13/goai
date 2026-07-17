@@ -42,7 +42,8 @@ func NewRecorder() (*Recorder, error) {
 const (
 	recUnarySiLU    = 6
 	recUnaryGELU    = 9
-	recUnaryReLU2   = 10 // squared ReLU (Nemotron); cuda-only, so no metal/vulkan mapping needed
+	recUnaryReLU2   = 10 // squared ReLU (Nemotron); cuda-only
+	recUnarySigmoid = 11 // plain sigmoid (Qwen2-MoE shared-expert gate); cuda-only
 	recBinaryAdd    = 0
 	recBinaryMul    = 2
 	recBinarySwiGLU = 6
@@ -325,6 +326,8 @@ func (rec *Recorder) Unary(x, o *DeviceF32, op int) error {
 		rc = C.cu_gelu_f32(o.ptr, C.int(n))
 	case recUnaryReLU2:
 		rc = C.cu_relu2_f32(o.ptr, C.int(n))
+	case recUnarySigmoid:
+		rc = C.cu_sigmoid_f32(o.ptr, C.int(n))
 	default:
 		return fmt.Errorf("cuda: rec Unary op %d unsupported", op)
 	}
