@@ -4,6 +4,22 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — J-space decomposition + the layer-by-position visualization (T813+T814, 2026-07-17)
+
+The jacobian-lens port is complete. T813: `JSpaceDecompose` — greedy nonnegative matching
+pursuit over the linearized J-lens vocabulary directions with the random-direction
+occupancy control (deterministic seed). Tier-2 by necessity: the reference repository
+ships NO decomposition code (verified by exhaustive grep), so the §R250 recipe is anchored
+by properties — planted 3-sparse combos recovered to 1e-12 with occupancy exactly 3,
+isotropic noise at mean occupancy 0.20, and monotone reconstruction on the
+reference-fitted golden lens. T814: `JLensHTML` — one fully self-contained page (CSS-grid
+layer-by-position slice, escaped top-1 tokens + rank superscripts, click-to-pin rank
+line-charts in inline SVG + log-scale rank heatmap, optional occupancy badges; hand-rolled
+vanilla JS). Zero-external-request is test-asserted aggressively (the page contains no
+`//` at all — SVG via innerHTML, block comments only — and no src/href/url()/CDN
+strings); byte-deterministic rendering; runnable example generates the page for the T812
+golden model over a Generate() continuation.
+
 ### nlp — J-lens transported readout, anchored on the reference implementation (T812, 2026-07-17)
 
 `JLens.Apply` / `ApplyAt` / `Slice` implement the §R250 readout `W_U norm(J_l h)` behind a

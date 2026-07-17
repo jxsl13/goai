@@ -4,9 +4,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/jxsl13/goai/backend"
 	_ "github.com/jxsl13/goai/backend/ref"
+	"github.com/jxsl13/goai/format/npy"
+	"github.com/jxsl13/goai/format/safetensors"
 	"github.com/jxsl13/goai/nlp"
 	"github.com/jxsl13/goai/tensor"
 )
@@ -140,4 +143,76 @@ func ExampleJLens_Slice() {
 	// rows: 3 positions: 5
 	// bottom row is the final layer: true
 	// bottom row agrees with the model: true
+}
+
+// ExampleJLensHTML renders the self-contained slice page (§T814) for the
+// §T812 golden model — the tiny HF Llama with the ACTUAL reference-fitted
+// lens artifact — on the reference probe prompt, with the §T813 J-space
+// occupancy overlay. The page is a single file with zero external requests:
+// grid, pin charts (inline SVG) and rank heatmap are all hand-rolled inline.
+func ExampleJLensHTML() {
+	ts, _, err := safetensors.LoadFile("testdata/jlens_hf.safetensors")
+	if err != nil {
+		panic(err)
+	}
+	model, err := nlp.LlamaFromHF(ts, nlp.LlamaConfig{
+		Heads: 4, KVHeads: 2, Eps: 1e-5, RopeBase: 10000, Ctx: 64,
+	})
+	if err != nil {
+		panic(err)
+	}
+	// The Anthropic reference-implementation .pt lens artifact, directly.
+	lens, err := nlp.JLensFromPT("testdata/jlens_ref.pt")
+	if err != nil {
+		panic(err)
+	}
+	raw, err := npy.LoadFile("testdata/jlens_probe.npy")
+	if err != nil {
+		panic(err)
+	}
+	shape := raw.Shape()
+	probe := make([]int, shape[len(shape)-1])
+	for i := range probe {
+		if len(shape) == 2 {
+			probe[i] = int(raw.AtF64(0, i))
+		} else {
+			probe[i] = int(raw.AtF64(i))
+		}
+	}
+
+	// Generate-integrated tap: greedily extend the probe with the model's own
+	// continuation and render the slice over prompt+continuation — the page's
+	// bottom row then shows exactly the outputs that produced the new tokens.
+	seq, err := model.Generate(probe, 4, nlp.Greedy())
+	if err != nil {
+		panic(err)
+	}
+
+	page, err := nlp.JLensHTML(model, lens, seq,
+		nlp.WithJLensHTMLTitle("J-lens golden probe"),
+		nlp.WithJLensHTMLOccupancy(8))
+	if err != nil {
+		panic(err)
+	}
+	dir, err := os.MkdirTemp("", "jlens-viz")
+	if err != nil {
+		panic(err)
+	}
+	defer os.RemoveAll(dir)
+	if err := os.WriteFile(filepath.Join(dir, "slice.html"), []byte(page), 0o644); err != nil {
+		panic(err)
+	}
+
+	// Stable summary (the page embeds only integers, greedy decode is
+	// deterministic — byte-identical runs).
+	fmt.Println("prompt:", len(probe), "generated:", len(seq)-len(probe))
+	fmt.Println("layer rows:", strings.Count(page, `class="jlv-rowhead"`), "positions:", len(seq))
+	fmt.Println("occupancy badges:", strings.Count(page, `class="jlv-occ"`) == 4*len(seq))
+	external := strings.Contains(page, "http") || strings.Contains(page, "src=") || strings.Contains(page, "href=")
+	fmt.Println("external refs:", external)
+	// Output:
+	// prompt: 12 generated: 4
+	// layer rows: 4 positions: 16
+	// occupancy badges: true
+	// external refs: false
 }
