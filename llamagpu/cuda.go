@@ -61,6 +61,9 @@ func (c cRec) MHA(q, k, v, o buffer, sq, sk, dm, heads, kvHeads, dk, causal, win
 func (c cRec) MHACap(q, k, v, o buffer, sq, sk, dm, heads, kvHeads, dk, causal, window int, scale, cap float32) error {
 	return c.r.MHACap(cb(q), cb(k), cb(v), cb(o), sq, sk, dm, heads, kvHeads, dk, causal, window, scale, cap)
 }
+func (c cRec) MHAALiBi(q, k, v, o, slopes buffer, sq, sk, dm, heads, kvHeads, dk, causal, window int, scale float32) error {
+	return c.r.MHAALiBi(cb(q), cb(k), cb(v), cb(o), cb(slopes), sq, sk, dm, heads, kvHeads, dk, causal, window, scale)
+}
 func (c cRec) Unary(x, o buffer, op int) error { return c.r.Unary(cb(x), cb(o), op) }
 func (c cRec) Binary(a, b, o buffer, op int) error {
 	return c.r.Binary(cb(a), cb(b), cb(o), op)
@@ -186,6 +189,34 @@ func NewOLMo2CUDA(m *nlp.OLMo2) (*Decoder, error) {
 		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
 	}
 	return newOLMo2Decoder(m, backendOps{
+		name:        string(backend.CUDA),
+		asyncEncode: false,
+		newBuffer: func(data []float32) (buffer, error) {
+			b, err := cuda.NewDeviceBufferF32(data)
+			if err != nil {
+				return nil, err
+			}
+			return cBuf{b}, nil
+		},
+		newRecorder: func() (recorder, error) {
+			r, err := cuda.NewRecorder()
+			if err != nil {
+				return nil, err
+			}
+			return cRec{r}, nil
+		},
+	})
+}
+
+// NewMPTCUDA uploads an nlp.MPT (MosaicML) onto the batched Decoder core: the first ALiBi decoder —
+// position enters solely through a per-head linear bias on the attention scores (no RoPE), with
+// weight-only LayerNorm, standard MHA, a bias-free 2-layer GELU MLP and a tied lm_head. cuda-only
+// (the ALiBi attention kernel is cuda-only).
+func NewMPTCUDA(m *nlp.MPT) (*Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newMPTDecoder(m, backendOps{
 		name:        string(backend.CUDA),
 		asyncEncode: false,
 		newBuffer: func(data []float32) (buffer, error) {

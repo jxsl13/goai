@@ -59,6 +59,9 @@ func (m mRec) MHA(q, k, v, o buffer, sq, sk, dm, heads, kvHeads, dk, causal, win
 func (mRec) MHACap(q, k, v, o buffer, sq, sk, dm, heads, kvHeads, dk, causal, window int, scale, cap float32) error {
 	return fmt.Errorf("llamagpu(metal): attention-logit soft-cap not implemented (Gemma-2-class softcap decoders are cuda-only for now)")
 }
+func (mRec) MHAALiBi(q, k, v, o, slopes buffer, sq, sk, dm, heads, kvHeads, dk, causal, window int, scale float32) error {
+	return fmt.Errorf("llamagpu(metal): ALiBi attention not implemented (ALiBi decoders are cuda-only for now)")
+}
 func (m mRec) Unary(x, o buffer, op int) error { return m.r.Unary(mb(x), mb(o), op) }
 func (m mRec) Binary(a, b, o buffer, op int) error {
 	return m.r.Binary(mb(a), mb(b), mb(o), op)

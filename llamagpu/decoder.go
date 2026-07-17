@@ -132,6 +132,9 @@ type recorder interface {
 	// mask+softmax). Implemented on cuda; metal/vulkan return unsupported until a softcap decoder
 	// targets them (the RoPEPartialPair pattern).
 	MHACap(q, k, v, o buffer, sq, sk, dm, heads, kvHeads, dk, causal, window int, scale, cap float32) error
+	// MHAALiBi is MHA with an ALiBi position bias (MPT): slopeₕ·(j−qabs) added to each scaled score
+	// before the mask+softmax; slopes holds `heads` per-head slopes. cuda-only (metal/vulkan stub).
+	MHAALiBi(q, k, v, o, slopes buffer, sq, sk, dm, heads, kvHeads, dk, causal, window int, scale float32) error
 	Unary(x, o buffer, op int) error
 	Binary(a, b, o buffer, op int) error
 	QMatMulResident(x buffer, w qweight, o buffer, m int) error
@@ -188,6 +191,8 @@ type Decoder struct {
 	postNorm                                      bool    // true ⇒ post-norm blocks (OLMo2): sublayer reads the raw residual, its OUTPUT is normed before the add
 	sandwich                                      bool    // true ⇒ sandwich norms (Gemma2): pre-norm the input (gAttn/gFFN) AND post-norm the output (gAttn2/gFFN2)
 	attnCap                                       float32 // >0 ⇒ Gemma2 attention-logit soft-cap magnitude (via MHACap); 0 ⇒ plain MHA
+	noRope                                        bool    // true ⇒ no rotary position embedding (MPT: position enters via ALiBi only)
+	aliBiSlopes                                   buffer  // non-nil ⇒ per-head ALiBi slopes [heads]; attention runs via MHAALiBi (MPT)
 	eps, posDiv, scale                            float32
 	embMult                                       float32 // gathered embeddings ×= embMult (IBM Granite EmbeddingMult); 1 for everything else
 
@@ -298,6 +303,9 @@ func (d *Decoder) recordQKNorm(r recorder, b block, seq, stride int) error {
 // attn·Wo) plus the optional o-bias broadcast onto the residual stream.
 // recordMHA runs the attention core, dispatching to the soft-capped kernel (Gemma2) when attnCap>0.
 func (d *Decoder) recordMHA(r recorder, q, kC, vC, o buffer, sq, sk int) error {
+	if d.aliBiSlopes != nil {
+		return r.MHAALiBi(q, kC, vC, o, d.aliBiSlopes, sq, sk, d.qDim, d.h, d.kvH, d.dk, 1, 0, d.scale)
+	}
 	if d.attnCap > 0 {
 		return r.MHACap(q, kC, vC, o, sq, sk, d.qDim, d.h, d.kvH, d.dk, 1, 0, d.scale, d.attnCap)
 	}
@@ -430,6 +438,9 @@ func (d *Decoder) bFinalBeta() buffer {
 }
 
 func (d *Decoder) ropeQK(r recorder, qkv, inv buffer, seq, stride, pos int) error {
+	if d.noRope { // MPT: position enters through the ALiBi attention bias, not rotary
+		return nil
+	}
 	if d.rotaryDim < d.dk {
 		return r.RoPEPartialPair(qkv, inv, seq, stride, d.h, 0, d.kvH, d.d, d.dk, d.rotaryDim, pos, d.posDiv)
 	}
@@ -1166,6 +1177,73 @@ func newGemma2Decoder(m *nlp.Gemma2, ops backendOps) (*Decoder, error) {
 		}
 	}
 	d.out = f32Linear{w: mk(outW).b, k: dim, n: vocab}
+	d.allocScratch(mk)
+	if err != nil {
+		d.Release()
+		return nil, err
+	}
+	return d, nil
+}
+
+// newMPTDecoder builds a device Decoder for an nlp.MPT (MosaicML). MPT is the first ALiBi decoder:
+// position enters ONLY through a per-head linear bias on the attention scores (no RoPE, no positional
+// embedding), so newMPTDecoder sets noRope and uploads the backend.ALiBiSlopes so recordMHA routes
+// attention through MHAALiBi. Otherwise it is a sequential-residual block with weight-only LayerNorm
+// (lnBias, β=0), standard MHA (no GQA), a bias-free 2-layer GELU MLP (ffnGELU) and a tied lm_head.
+// cuda-only (the ALiBi attention kernel is cuda-only).
+func newMPTDecoder(m *nlp.MPT, ops backendOps) (*Decoder, error) {
+	cfg := m.Config
+	lc := nlp.LlamaConfig{
+		Vocab: cfg.Vocab, Ctx: cfg.Ctx, Dim: cfg.Dim, Heads: cfg.Heads, KVHeads: cfg.Heads,
+		Layers: cfg.Layers, Hidden: cfg.Hidden, Eps: cfg.Eps, RopeBase: 10000,
+	}
+	d, derr := newDecoderCommon(lc, m.TokEmb, ops)
+	if derr != nil {
+		return nil, derr
+	}
+	d.lnBias = true  // weight-only LayerNorm (β = 0)
+	d.ffnGELU = true // bias-free 2-layer GELU MLP
+	d.noRope = true  // ALiBi, no rotary
+
+	var err error
+	mk := d.mkBuf(&err)
+	slopes := make([]float32, d.h)
+	for i, s := range backend.ALiBiSlopes(d.h) {
+		slopes[i] = float32(s)
+	}
+	d.aliBiSlopes = mk(slopes).b
+
+	lin := func(w *tensor.Tensor) linear {
+		in, out := w.Shape()[0], w.Shape()[1]
+		return f32Linear{w: mk(flat2D(w)).b, k: in, n: out}
+	}
+	fused := func(wq, wk, wv *tensor.Tensor) linear {
+		in := wq.Shape()[0]
+		nq, nk, nv := wq.Shape()[1], wk.Shape()[1], wv.Shape()[1]
+		fq, fk, fv := flat2D(wq), flat2D(wk), flat2D(wv)
+		nt := nq + nk + nv
+		w := make([]float32, in*nt)
+		for i := range in {
+			row := w[i*nt : (i+1)*nt]
+			copy(row[:nq], fq[i*nq:(i+1)*nq])
+			copy(row[nq:nq+nk], fk[i*nk:(i+1)*nk])
+			copy(row[nq+nk:], fv[i*nv:(i+1)*nv])
+		}
+		return f32Linear{w: mk(w).b, k: in, n: nt}
+	}
+	for _, b := range m.Blocks {
+		gb := block{
+			wqkv: fused(b.Wq, b.Wk, b.Wv), wo: lin(b.Wo),
+			gAttn: mk(flat1D(b.Norm1.Gamma)).b, bAttn: mk(flat1D(b.Norm1.Beta)).b,
+			gFFN: mk(flat1D(b.Norm2.Gamma)).b, bFFN: mk(flat1D(b.Norm2.Beta)).b,
+			wG: lin(b.Wup), wD: lin(b.Wdown),
+			kC: mk(make([]float32, d.maxLen*d.kvDim)).b, vC: mk(make([]float32, d.maxLen*d.kvDim)).b,
+		}
+		d.blocks = append(d.blocks, gb)
+	}
+	d.gFinal = mk(flat1D(m.FinalNorm.Gamma))
+	d.bFinal = mk(flat1D(m.FinalNorm.Beta))
+	d.out = lin(m.Out) // tied wteᵀ, provided [dim, vocab] by the loader
 	d.allocScratch(mk)
 	if err != nil {
 		d.Release()

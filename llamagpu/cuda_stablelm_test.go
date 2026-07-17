@@ -678,3 +678,47 @@ func TestCUDAGemma2MatchesReference(t *testing.T) {
 	}
 	t.Logf("llamagpu NewGemma2CUDA.Generate == nlp.Gemma2.Generate greedy: %d tokens (sandwich norms + attn softcap + query scalar)", len(gpuOut))
 }
+
+// TestCUDAMPTMatchesReference checks the MPT GPU path (NewMPTCUDA) generates greedy-identical
+// tokens to the reference. MPT is the first ALiBi decoder: no RoPE, position entering only through
+// the per-head linear attention bias (MHAALiBi → cu_attn_softmax_alibi). Also weight-only LayerNorm,
+// standard MHA, a bias-free 2-layer GELU MLP and a tied lm_head.
+func TestCUDAMPTMatchesReference(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("cuda: no CUDA-capable device")
+	}
+	ts, _, err := safetensors.LoadFile("../nlp/testdata/mpt_hf.safetensors")
+	if err != nil {
+		t.Skipf("mpt testdata unavailable (run make golden): %v", err)
+	}
+	m, err := nlp.MPTFromHF(ts, nlp.MPTConfig{Heads: 4, Eps: 1e-5, Ctx: 32})
+	if err != nil {
+		t.Fatalf("MPTFromHF: %v", err)
+	}
+
+	dec, err := llamagpu.NewMPTCUDA(m)
+	if err != nil {
+		t.Fatalf("NewMPTCUDA: %v", err)
+	}
+	defer dec.Release()
+
+	prompt := []int{3, 7, 1, 9}
+	const maxNew = 12
+	gpuOut, err := dec.Generate(prompt, maxNew, nlp.Greedy())
+	if err != nil {
+		t.Fatalf("cuda generate: %v", err)
+	}
+	refOut, err := m.Generate(prompt, maxNew, nlp.Greedy(), nlp.WithBackend(backend.Reference()))
+	if err != nil {
+		t.Fatalf("ref generate: %v", err)
+	}
+	if len(gpuOut) != len(refOut) {
+		t.Fatalf("length: cuda %d vs ref %d", len(gpuOut), len(refOut))
+	}
+	for i := range gpuOut {
+		if gpuOut[i] != refOut[i] {
+			t.Fatalf("token[%d]: cuda %d vs ref %d\ncuda=%v\nref=%v", i, gpuOut[i], refOut[i], gpuOut, refOut)
+		}
+	}
+	t.Logf("llamagpu NewMPTCUDA.Generate == nlp.MPT.Generate greedy: %d tokens (ALiBi + weight-only LayerNorm + GELU-MLP)", len(gpuOut))
+}
