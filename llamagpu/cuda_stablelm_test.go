@@ -1105,3 +1105,48 @@ func TestCUDADeepSeekV2MoEMatchesReference(t *testing.T) {
 	}
 	t.Logf("llamagpu NewDeepSeekV2CUDA (MLA + DeepSeekMoE) matches reference DecodeStep across an autoregressive run")
 }
+
+// TestCUDADeepSeekV2PrefillMatchesReference exercises the MLA StepN PREFILL path (multiple new
+// tokens at once, rows>1) — distinct from the per-token Step decode the other MLA tests cover. It
+// checks the last prefilled token's logits match the reference Forward, verifying the rectangular
+// KV-cache assembly and decoupled RoPE are correct for a batched prefill, not just single-token decode.
+func TestCUDADeepSeekV2PrefillMatchesReference(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("cuda: no CUDA-capable device")
+	}
+	ts, _, err := safetensors.LoadFile("../nlp/testdata/deepseekv2_hf.safetensors")
+	if err != nil {
+		t.Skipf("deepseekv2 testdata unavailable (run make golden): %v", err)
+	}
+	m, err := nlp.DeepSeekV2FromHF(ts, nlp.DeepSeekV2Config{
+		Heads: 4, QLoraRank: 24, KVLoraRank: 16, QKNope: 16, QKRope: 8, VHead: 16,
+		Eps: 1e-6, RopeBase: 10000, Ctx: 32,
+	})
+	if err != nil {
+		t.Fatalf("DeepSeekV2FromHF: %v", err)
+	}
+	dec, err := llamagpu.NewDeepSeekV2CUDA(m)
+	if err != nil {
+		t.Fatalf("NewDeepSeekV2CUDA: %v", err)
+	}
+	defer dec.Release()
+
+	prompt := []int{3, 7, 1, 9, 4}
+	got, err := dec.StepN(prompt, 0) // prefill all tokens in one recorded step → [len, vocab]
+	if err != nil {
+		t.Fatalf("StepN: %v", err)
+	}
+	refT, err := m.Forward(backend.NewContext().WithBackend(backend.Reference()), prompt)
+	if err != nil {
+		t.Fatalf("ref forward: %v", err)
+	}
+	rows, cols := refT.Shape()[0], refT.Shape()[1]
+	last := (rows - 1) * cols
+	for j := 0; j < cols; j++ {
+		want := refT.AtF64(rows-1, j)
+		if math.IsNaN(float64(got[last+j])) || math.Abs(float64(got[last+j])-want) > 3e-2*math.Max(1, math.Abs(want)) {
+			t.Fatalf("deepseekv2 prefill logit[%d]: cuda %v vs reference %v", j, got[last+j], want)
+		}
+	}
+	t.Logf("llamagpu NewDeepSeekV2CUDA StepN prefill (%d tokens) matches reference Forward last-token logits (MLA batched-prefill path)", len(prompt))
+}
