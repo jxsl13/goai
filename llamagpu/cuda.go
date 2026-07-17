@@ -715,6 +715,45 @@ func NewRWKVQ8CUDA(m *nlp.RWKV) (*Decoder, error) {
 	})
 }
 
+// NewBertCUDA uploads an nlp.Bert bidirectional encoder onto the GPU — the first non-decoder GPU
+// model in llamagpu. It runs one bidirectional forward (post-LN, learned absolute positions, no
+// causal mask, no KV cache) returning the [seq, dim] hidden states, reusing the existing recorder
+// ops (MHA with causal=0, LayerNorm, GELU MLP) with no new kernel. cuda-only.
+func NewBertCUDA(m *nlp.Bert) (*GPUBert, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newBertEncoder(m, backendOps{
+		name:        string(backend.CUDA),
+		asyncEncode: false,
+		newBuffer: func(data []float32) (buffer, error) {
+			b, err := cuda.NewDeviceBufferF32(data)
+			if err != nil {
+				return nil, err
+			}
+			return cBuf{b}, nil
+		},
+		newRecorder: func() (recorder, error) {
+			r, err := cuda.NewRecorder()
+			if err != nil {
+				return nil, err
+			}
+			return cRec{r}, nil
+		},
+	})
+}
+
+// NewBertQ8CUDA is NewBertCUDA with the attention (q/k/v/o) and FFN (w1/w2) projections quantized to
+// resident Q8_0. BERT encodes the whole sequence at once (M=seq>1), so each Q8 projection runs on the
+// int8 tensor-core MMQ GEMM (QMatMulResident's m>1 path) — faster than the f32 cuBLAS GEMM and 4× less
+// weight memory. Biases and LayerNorm stay f32. Works for RoBERTa/DistilBERT too (all *nlp.Bert). cuda-only.
+func NewBertQ8CUDA(m *nlp.Bert) (*GPUBert, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newBertEncoder(m, cudaQ8Ops())
+}
+
 // NewMixtralCUDA uploads an nlp.Mixtral (sparse Mixture-of-Experts) onto the batched Decoder core.
 // Attention is the plain Llama core (+ optional Qwen3-MoE QK-norm); the FFN is a sparse MoE routed
 // per token — the routing weights are computed on-device (cu_moe_gate) so the whole step stays a
