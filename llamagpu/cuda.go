@@ -93,7 +93,14 @@ func (c cRec) Binary(a, b, o buffer, op int) error {
 	return c.r.Binary(cb(a), cb(b), cb(o), op)
 }
 func (c cRec) QMatMulResident(x buffer, w qweight, o buffer, m int) error {
-	return c.r.QMatMulResident(cb(x), w.(*cuda.ResidentBQ8), cb(o), m)
+	switch rw := w.(type) {
+	case *cuda.ResidentBQ8:
+		return c.r.QMatMulResident(cb(x), rw, cb(o), m) // Q8: GEMV decode + int8-tensor-core MMQ prefill
+	case *cuda.ResidentBQ4K:
+		return c.r.QMatMulResidentQ4K(cb(x), rw, cb(o), m) // Q4_K: aggressive-quant decode GEMV
+	default:
+		return fmt.Errorf("llamagpu: cuda QMatMulResident: unsupported resident weight %T", w)
+	}
 }
 func (c cRec) Commit() error { return c.r.Commit() }
 func (c cRec) Wait() error   { return c.r.Wait() }
@@ -159,6 +166,63 @@ func NewLlamaQ8CUDA(m *nlp.Llama) (*Decoder, error) {
 		quantizeF32: func(w *tensor.Tensor) (qweight, error) {
 			return cuda.NewResidentBQ8(w)
 		},
+	})
+}
+
+// cudaQ4KResident quantizes a host f32 weight [K,N] to a resident Q4_K (ggml 4-bit k-quant, 256-element
+// affine super-blocks) device weight — the aggressive-quant option. It transposes [K,N]→[N,K] (Q4_K blocks
+// are per output row), quantizes with the tested gguf.Quantize(Q4_K), and uploads via NewResidentBQ4KFromBlocks.
+// Q4_K is 2× smaller than Q8 (a 13B model fits the 12GB 3060 at Q4_K but not Q8) and matches ggml Q4_K_M
+// accuracy — but decode-only (no int-tensor-core prefill), so prefill is slower than Q8. K must be a mult of 256.
+func cudaQ4KResident(w *tensor.Tensor) (qweight, error) {
+	kk, nn := w.Shape()[0], w.Shape()[1]
+	if kk%256 != 0 {
+		return nil, fmt.Errorf("llamagpu: Q4_K needs K%%256==0, got K=%d (weight %dx%d)", kk, kk, nn)
+	}
+	bf := w.Cast(tensor.F32).Contiguous().Storage().F32() // [K,N] row-major: bf[r*nn+col]
+	wt := make([]float32, nn*kk)                          // [N,K]
+	for col := 0; col < nn; col++ {
+		base := col * kk
+		for r := 0; r < kk; r++ {
+			wt[base+r] = bf[r*nn+col]
+		}
+	}
+	t := tensor.New(tensor.F32, tensor.Shape{nn, kk})
+	copy(t.Storage().F32(), wt)
+	blocks, err := gguf.Quantize(t, gguf.Q4_K)
+	if err != nil {
+		return nil, err
+	}
+	return cuda.NewResidentBQ4KFromBlocks(blocks, kk, nn)
+}
+
+// NewLlamaQ4KCUDA is NewCUDA with every projection quantized to resident Q4_K (4-bit k-quant) — 2× smaller
+// than Q8, matching ggml Q4_K_M accuracy, with a direct f32 path (no ggml file needed). It lets the 12GB
+// 3060 run models that don't fit at Q8. Decode is a Q4_K GEMV (weight-bandwidth win over Q8); prefill has no
+// int-tensor-core GEMM so is slower than Q8's MMQ — prefer Q8 when prefill throughput dominates. Reaches the
+// Qwen2/Qwen3 variants nlp.QuantLlama can't. K%256==0 required (typical transformer dims satisfy it). cuda-only.
+func NewLlamaQ4KCUDA(m *nlp.Llama) (*Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newDecoder(m, backendOps{
+		name:        string(backend.CUDA),
+		asyncEncode: false,
+		newBuffer: func(data []float32) (buffer, error) {
+			b, err := cuda.NewDeviceBufferF32(data)
+			if err != nil {
+				return nil, err
+			}
+			return cBuf{b}, nil
+		},
+		newRecorder: func() (recorder, error) {
+			r, err := cuda.NewRecorder()
+			if err != nil {
+				return nil, err
+			}
+			return cRec{r}, nil
+		},
+		quantizeF32: cudaQ4KResident,
 	})
 }
 

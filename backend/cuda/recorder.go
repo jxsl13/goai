@@ -512,6 +512,22 @@ func (rec *Recorder) QMatMulResident(x *DeviceF32, w *ResidentBQ8, o *DeviceF32,
 	return nil
 }
 
+// QMatMulResidentQ4K records o[m, w.n] = x[m, w.k]·dequant(w) for a resident Q4_K (4-bit k-quant
+// super-block) weight — the aggressive-quant decode path. Q4_K is 2× smaller than Q8 (enables models that
+// don't fit at Q8, matching the ggml Q4_K_M accuracy) but has NO int-tensor-core prefill GEMM, so this is
+// the DECODE-oriented GEMV for all m (M>1 prefill re-reads the weight; use Q8 when prefill throughput matters).
+func (rec *Recorder) QMatMulResidentQ4K(x *DeviceF32, w *ResidentBQ4K, o *DeviceF32, m int) error {
+	if x.ptr == nil || w.q == nil || o.ptr == nil {
+		return fmt.Errorf("cuda: rec QMatMulResidentQ4K on a freed handle")
+	}
+	// Explicit m / w.k / w.n (like the Q8 recorder path) — the llamagpu scratch buffers are flat, so their
+	// DeviceF32 rows/cols don't carry the logical [m,k]; QMatMulInto's shape check would reject them.
+	if rc := C.cu_qmatmul_q4k(x.ptr, w.q, o.ptr, C.int(m), C.int(w.k), C.int(w.n), C.float(0)); rc != 0 {
+		return fmt.Errorf("cuda: rec QMatMulResidentQ4K failed (code %d)", int(rc))
+	}
+	return nil
+}
+
 // q8PrefillMMQ computes o[m,N] = x[m,K]·dequant(w) via the per-row-scale int8 MMQ GEMM, reusing the
 // resident Q8 weight (w.q/w.scales) directly as the MMQ weight. M is padded to 64 (pad rows produce
 // ignored outputs — the GEMM is row-independent), the activation is int8-quantized per row, and the
