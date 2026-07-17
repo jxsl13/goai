@@ -183,7 +183,9 @@ make bench-compare  # cross-backend benchmark harness
 Requires Go 1.26+. No C toolchain needed for the default build. Architecture
 and task history live in [`SPEC.md`](SPEC.md) (caveman-encoded, see
 [`FORMAT.md`](FORMAT.md)); design rationale in [`docs/`](docs/); performance
-numbers and measurement policy in [`docs/benchmarking.md`](docs/benchmarking.md).
+numbers and measurement policy in [`docs/benchmarking.md`](docs/benchmarking.md);
+the GGUF architecture matrix and its convention-verification methodology in
+[`docs/gguf.md`](docs/gguf.md).
 
 ## License
 

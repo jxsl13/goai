@@ -4,6 +4,15 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### docs — GGUF reference: the architecture matrix + verification methodology (2026-07-17)
+
+New `docs/gguf.md` consolidates the whole GGUF surface into one reference: the 19 float
+loaders and 6 quantized-decode families with their source-verified load-critical
+conventions in a single table, the row-granularity principle behind lossless quantized
+unpacking, and — the durable part — the §B67/§B68 methodology (independent test-side
+fixtures; nonzero convention-critical tensors; post-bug class audits) that keeps the
+mappings honest. Linked from the README.
+
 ### nlp — GGUF loading for Mamba and Jamba, the recurrent tier (T816, 2026-07-17)
 
 `MambaFromGGUF` and `JambaFromGGUF` (+ `*ToGGUF` inverses); float GGUF coverage reaches
