@@ -4,6 +4,18 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — feat: RWKV support — 30th loadable architecture, WKV linear-attention recurrence (T774, 2026-07-16)
+
+RWKV-4 (`RwkvForCausalLM`, Peng et al. 2023) as a self-contained `nlp.RWKV` type — a third recurrent
+family after the Mamba SSMs, wiring an HF RWKV checkpoint into the existing `nn.RWKVBlock` (WKV
+time-mixing + squared-ReLU channel-mixing on `OpWKV`) with zero block-level adaptation. The loader
+maps the token-shift time-mix coefficients, the WKV decay/bonus (`time_decay`/`time_first` loaded
+verbatim — nn's subtract carries the sign), the block-0 `pre_ln`, and the two per-block LayerNorms.
+Forward parity vs a real transformers `RwkvForCausalLM`: max abs logit diff 6.1e-7. Thirtieth
+architecture — the library now spans attention transformers, state-space models, and linear-attention
+recurrence. (Limitation: HF's `rescale_every` weight rescaling for very deep checkpoints is not
+modeled — a no-op for configs with fewer than `rescale_every` layers.)
+
 ### nlp — feat: Mamba-2 support — 29th loadable architecture, completes the SSM pair (T773, 2026-07-16)
 
 Mamba-2 (`Mamba2ForCausalLM`, Dao & Gu 2024) as a self-contained `nlp.Mamba2` type — assembled from
