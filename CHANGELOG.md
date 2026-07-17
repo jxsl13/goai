@@ -4,6 +4,15 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### spec — RWKV GGUF loading: investigated, not feasible (T832, 2026-07-18)
+
+GoAI's RWKV is RWKV-4 (§R188: the channel-wise scalar WKV recurrence). llama.cpp implements
+only the rwkv6/rwkv7 architectures — RWKV-4 was never in llama.cpp (its ecosystem was .pth /
+rwkv.cpp with a different format), so no llama.cpp GGUF for RWKV-4 exists to load and the
+axis is closed as infeasible rather than pending. An RWKV-6/7 GGUF loader would first
+require implementing RWKV-6/7 as new model architectures (matrix-valued state, a different
+mechanism than RWKV-4's scalar channels) — recorded as user-gated new-model scope.
+
 ### nlp — quantized GGUF decode for Cohere and Mamba (T829, 2026-07-18)
 
 `QuantCohere` and `QuantMamba` (+ `Quant*FromGGUF`) bring quantized decode to sixteen
