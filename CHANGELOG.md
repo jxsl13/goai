@@ -4,6 +4,18 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — GGUF loading for Cohere Command-R and Nemotron (T807, 2026-07-17)
+
+`CohereFromGGUF` and `NemotronFromGGUF` (+ `*ToGGUF` inverses); float GGUF coverage
+reaches fifteen architectures. Cohere: the converter never permutes — the GGUF carries
+HF's INTERLEAVED q/k rows and command-r sits in the NORM rope case, so the loader applies
+the same `permuteInterleaveToSplit` transform as the HF path (round-trip re-interleaves
+element-exactly); `logit_scale` metadata honored (0 → 1); tied head enforced (a stray
+`output.weight` is rejected). Nemotron: the GGUF stores the PRE-FOLDED (1+γ) LayerNorm1P
+gains — the converter adds 1 so the ggml engine needs no change — hence the loader copies
+γ directly and the round-trip test pins "no double fold"; NEOX partial rotary via
+rope.dimension_count; untied head; norm biases required. Parity 9.3e-12 / 3.0e-10.
+
 ### nlp — GGUF loading for DeepSeek-V2 (T806, 2026-07-17)
 
 `DeepSeekV2FromGGUF` (+ `ToGGUF`) loads llama.cpp deepseek2 checkpoints — the densest
