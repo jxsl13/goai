@@ -4,6 +4,16 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — docs: runnable examples for every architecture family (T784, 2026-07-17)
+
+Ten runnable `Example` functions (with deterministic `// Output:`) covering each loadable
+architecture family and its signature workflow: the Llama-loader family and config-driven loading,
+Gemma 2's capped attention, Mixtral's MoE generation, DeepSeek-V2's absorbed-latent generation,
+Mamba's O(1) SSM decode, RWKV's WKV recurrence, Jamba's hybrid dual-cache decode, MPT's ALiBi, and
+Granite's scalar multipliers — every config copied verbatim from the family's parity test, every
+output captured from real runs on the committed tiny goldens (documented as meaningless-but-
+deterministic API demos). Fulfils the §C10 runnable-example mandate for the architecture campaign.
+
 ### nlp — perf: absorbed-MLA latent KV-cache for DeepSeek-V2 — 6.7× less cache memory (T783, 2026-07-17)
 
 MLA's signature memory win, implemented via weight absorption: `DecodeStepLatent`/`GenerateLatent`
