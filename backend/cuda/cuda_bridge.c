@@ -3440,6 +3440,11 @@ done:
 // scale db and the 8 SIGNED grid values (two 9-bit grid lookups gv1/gv2 with the direct sign byte) are
 // decoded ONCE and reused across an MT=8 row tile. Arithmetic LIFTED VERBATIM from qmatmul_iq3s → bit-
 // identical per row. K%256==0.
+// NO shared-staged deep-K variant (unlike Q3-Q6_K/IQ4_XS): measured NEUTRAL on RTX 3060 —
+// 5632×2048 M64 1407865 → 1390371 ns (~1%, noise). The dGrid decode dominates the loop and the
+// grid already occupies 8 KB shared; adding the 8 KB activation tile (16 KB dynamic/block) buys
+// barriers without a measurable win. Applies predictively to the dGrid siblings (IQ2_XXS,
+// IQ3_XXS): do not build without new evidence (bench: BenchmarkIQ3SM64_5632x2048).
 int cu_qmatmul_iq3s_mt(const void* dA, const void* dQ, const void* dGrid, void* dOut, int M, int K, int N, float beta) {
     int rc = -1;
     pthread_mutex_lock(&gLock);

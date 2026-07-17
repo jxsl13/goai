@@ -135,3 +135,4 @@ func benchIQ3SM(b *testing.B, m, k, n int) {
 func BenchmarkIQ3SM16_2048(b *testing.B)      { benchIQ3SM(b, 16, 2048, 2048) }
 func BenchmarkIQ3SM32_2048(b *testing.B)      { benchIQ3SM(b, 32, 2048, 2048) }
 func BenchmarkIQ3SM64_2048x5632(b *testing.B) { benchIQ3SM(b, 64, 2048, 5632) }
+func BenchmarkIQ3SM64_5632x2048(b *testing.B) { benchIQ3SM(b, 64, 5632, 2048) } // ffn_down (deep-K), M=64
