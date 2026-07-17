@@ -4,6 +4,12 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### docs — README GGUF passage brought current (2026-07-18)
+
+The front-page GGUF sentence now states the real totals — twenty float architectures and
+eighteen quantized-decode families — and points at `docs/gguf.md` for the matrix instead of
+carrying a stale six-name list.
+
 ### nlp — quantized GGUF decode for Jamba, the hybrid capstone (T831, 2026-07-18)
 
 `QuantJamba` + `QuantJambaFromGGUF` close the quant campaign's hybrid capstone at eighteen
