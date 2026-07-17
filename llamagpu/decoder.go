@@ -1701,7 +1701,7 @@ func newJambaDecoder(m *nlp.Jamba, ops backendOps) (*Decoder, error) {
 	}
 	d.gFinal = mk(flat1D(m.Norm.Gamma))
 	d.out = lin(m.Out) // untied lm_head [dim, vocab]
-	d.allocScratch(mk)  // attention + FFN + (d.moe) MoE scratch, all maxLen-sized
+	d.allocScratch(mk) // attention + FFN + (d.moe) MoE scratch, all maxLen-sized
 	// Mamba-mixer intermediates (rows==1): the only scratch allocScratch doesn't cover.
 	dI, N, dtR := d.dInner, d.mambaN, d.dtRank
 	d.mbXin, d.mbZ, d.mbXc = mk(make([]float32, dI)), mk(make([]float32, dI)), mk(make([]float32, dI))
