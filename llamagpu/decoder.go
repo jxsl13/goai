@@ -223,6 +223,8 @@ type block struct {
 	mInX, mInZ, mDtLow, mDtProj, mBProj, mCProj, mOutProj linear   // Mamba block projections; nil unless d.mamba
 	mConvW, mConvB, mA, mDskip, mDtBias                   buffer   // Mamba conv filters+bias, A=−exp(A_log) [dInner,N], D skip [dInner], Δ bias [dInner]
 	mConvState, mSsmState                                 buffer   // per-block Mamba decode state: conv window [dInner,dConv-1], ssm state [dInner,N]
+	mDtNorm, mBNorm, mCNorm                               buffer   // Jamba mixer RMSNorm gains on Δ_low [dtRank] / B [N] / C [N]; nil for plain Mamba (recordMambaBlock applies them only when set)
+	jMamba                                                bool     // Jamba: this layer's mixer is Mamba (else NoPE attention); only meaningful when d.jamba
 	m2InProj, m2OutProj                                   linear   // Mamba-2 fused in_proj [d,projSize] / out_proj [inter,d]; nil unless d.mamba2
 	m2ConvW, m2ConvB, m2A, m2DtBias, m2Dskip, m2NormW     buffer   // Mamba-2 conv filters+bias [convDim,·], A/Δbias/D [numHeads], gated-RMSNorm gain [inter]
 	m2ConvState, m2SsdState                               buffer   // Mamba-2 state: conv window [convDim,dConv-1], SSD state [numHeads·N·headDim]
@@ -266,6 +268,7 @@ type Decoder struct {
 	m2H, m2P, m2G, m2N, m2Conv, m2Inter, m2CD     int     // Mamba-2 dims: num_heads, head_dim, n_groups, state_size, conv kernel, intermediate, conv_dim
 	rwkv                                          bool    // true ⇒ RWKV-4 blocks (WKV time-mix + gated squared-ReLU channel-mix; no attention/KV cache; O(1) recurrent)
 	rwHidden                                      int     // RWKV channel-mix hidden width (CWk: Dim→Hidden, CWv: Hidden→Dim)
+	jamba                                         bool    // true ⇒ Jamba hybrid stack: each layer is Mamba-mixer (jMamba) OR NoPE GQA attention, then a per-block MoE/dense FFN; sequential like Mamba
 	qkNope, qkRope, vHead, qkHead                 int     // MLA per-head dims: nope/rope query-key parts, value width, qkHead=qkNope+qkRope
 	qLoRA, kvLoRA                                 int     // MLA query/kv latent compression ranks (q_lora_rank / kv_lora_rank)
 	mlaScale, mlaPosDiv                           float32 // MLA pre-softmax scale (1/√qkHead default) and the QKRope rope posDiv
@@ -575,6 +578,14 @@ func (d *Decoder) recordMLAAttention(r recorder, b block, pos, rows int) error {
 // softplus. A = −exp(A_log) is precomputed on the host (b.mA).
 func (d *Decoder) recordMambaBlock(r recorder, b block) error {
 	dI, N, K := d.dInner, d.mambaN, d.dConv
+	// Jamba inserts an RMSNorm on Δ_low/B/C between the x_proj split and the scan; plain Mamba passes
+	// nil gains, so jnorm is a no-op there (keeps this one recorder path serving both).
+	jnorm := func(buf, g buffer, w int) error {
+		if g == nil {
+			return nil
+		}
+		return r.RMSNorm(buf, g, buf, 1, w, d.eps)
+	}
 	// pre-norm → xn = RMSNorm(dx); the up-projection splits into the x branch and the z gate.
 	e := d.norm(r, d.dx.b, b.gAttn, nil, d.xn.b, 1) // RMSNorm (lnBias false for Mamba)
 	e = firstErr(e,
@@ -583,14 +594,17 @@ func (d *Decoder) recordMambaBlock(r recorder, b block) error {
 		// local mixing: one causal depthwise-conv step (state carried), then SiLU.
 		r.Conv1DStep(d.mbXin.b, b.mConvW, b.mConvB, b.mConvState, d.mbXc.b, dI, K),
 		r.Unary(d.mbXc.b, d.mbXc.b, unarySiLU),
-		// input-dependent Δ = softplus(dt_proj(dt_low_proj(xc)) + dt_bias).
+		// input-dependent Δ = softplus(dt_proj(RMSNorm?(dt_low_proj(xc))) + dt_bias).
 		b.mDtLow.record(r, d.mbXc.b, d.mbDtLow.b, 1),     // Δ_low [dtRank]
+		jnorm(d.mbDtLow.b, b.mDtNorm, d.dtRank),          // Jamba DtNorm
 		b.mDtProj.record(r, d.mbDtLow.b, d.mbDelta.b, 1), // → [dInner]
 		r.AddBias(d.mbDelta.b, b.mDtBias, d.mbDelta.b, 1, dI),
 		r.Unary(d.mbDelta.b, d.mbDelta.b, unarySoftplus),
-		// input-dependent SSM params B, C.
+		// input-dependent SSM params B, C (Jamba RMSNorms each).
 		b.mBProj.record(r, d.mbXc.b, d.mbB.b, 1), // B [N]
+		jnorm(d.mbB.b, b.mBNorm, N),              // Jamba BNorm
 		b.mCProj.record(r, d.mbXc.b, d.mbC.b, 1), // C [N]
+		jnorm(d.mbC.b, b.mCNorm, N),              // Jamba CNorm
 		// selective scan: one recurrent timestep (state carried), y[dInner].
 		r.SSMStep(d.mbXc.b, d.mbDelta.b, b.mA, d.mbB.b, d.mbC.b, b.mDskip, b.mSsmState, d.mbY.b, dI, N),
 		// gate y ⊙ SiLU(z), then down-project onto the residual: dx += y·OutProj.
@@ -607,6 +621,9 @@ func (d *Decoder) resetMambaState() error {
 	zc := make([]float32, d.dInner*(d.dConv-1))
 	zs := make([]float32, d.dInner*d.mambaN)
 	for _, b := range d.blocks {
+		if b.mConvState == nil { // Jamba: attention layers have no conv/SSM state
+			continue
+		}
 		if e := b.mConvState.UploadF32(zc); e != nil {
 			return e
 		}
@@ -615,6 +632,24 @@ func (d *Decoder) resetMambaState() error {
 		}
 	}
 	return nil
+}
+
+// recordJambaAttn records ONE Jamba attention mixer for a single decode token (rows==1), leaving
+// dx += attn(RMSNorm(dx)). It is Llama-style grouped-query causal attention over the block's growing
+// KV cache, but NoPE (no rotary): Jamba's Mamba layers carry position, so q/k are NEVER rotated —
+// the only departure from the standard attention sublayer. Bias-free q/k/v/o.
+func (d *Decoder) recordJambaAttn(r recorder, b block, pos int) error {
+	kvDim := d.kvDim
+	return firstErr(
+		d.recordAttnNorm(r, b, 1),        // xn = RMSNorm(dx) (input_layernorm)
+		b.wq.record(r, d.xn.b, d.q.b, 1), // q/k/v = xn·Wq/Wk/Wv — NoPE, so no RoPE between here and the cache
+		b.wk.record(r, d.xn.b, d.k.b, 1),
+		b.wv.record(r, d.xn.b, d.v_.b, 1),
+		r.Blit(d.k.b, 0, b.kC, pos*kvDim, kvDim), // append this token's K/V rows to the cache
+		r.Blit(d.v_.b, 0, b.vC, pos*kvDim, kvDim),
+		d.recordMHA(r, d.q.b, b.kC, b.vC, d.attn.b, 1, pos+1),
+		d.recordOProj(r, b, 1), // dx += attn·Wo
+	)
 }
 
 // allocMambaScratch allocates the rows==1 Mamba decode scratch. Mamba has no attention or KV cache,
@@ -1553,6 +1588,125 @@ func newMambaDecoder(m *nlp.Mamba, ops backendOps) (*Decoder, error) {
 	d.gFinal = mk(flat1D(m.Norm.Gamma))
 	d.out = lin(m.Head) // tied head [d_model, vocab]: logits = hidden · Embedᵀ
 	d.allocMambaScratch(mk)
+	if err != nil {
+		d.Release()
+		return nil, err
+	}
+	return d, nil
+}
+
+// newJambaDecoder builds a device Decoder for an nlp.Jamba — the hybrid stack that interleaves Mamba
+// selective-scan mixers with NoPE grouped-query attention, and per layer runs either a sparse-MoE or a
+// dense SwiGLU FFN. Each layer is pre-norm(input_layernorm) → mixer → pre-norm(pre_ff_layernorm) → FFN,
+// residual-added. Because some layers are Mamba (state carried across tokens), the whole model decodes
+// sequentially like Mamba (rows==1 Step; StepN loops Step). Attention layers keep a growing KV cache;
+// Mamba layers keep conv/SSM state. The MoE router uses raw (non-renormalized) softmax weights.
+func newJambaDecoder(m *nlp.Jamba, ops backendOps) (*Decoder, error) {
+	cfg := m.Config
+	if len(m.Layers) == 0 {
+		return nil, fmt.Errorf("llamagpu(%s): Jamba has no layers", ops.name)
+	}
+	// Infer the shared dims from whichever layers carry them: a Mamba layer fixes the SSM geometry,
+	// any FFN fixes the hidden width, a MoE layer fixes the expert count.
+	var mix0 *nn.MambaBlock
+	var hidden, nExperts int
+	for _, ly := range m.Layers {
+		if ly.Mamba != nil && mix0 == nil {
+			mix0 = ly.Mamba.Block
+		}
+		if ly.Dense != nil && hidden == 0 {
+			hidden = ly.Dense.Wgate.Shape()[1]
+		}
+		if ly.MoE != nil {
+			if hidden == 0 {
+				hidden = ly.MoE.Experts[0].Wgate.Shape()[1]
+			}
+			if nExperts == 0 {
+				nExperts = len(ly.MoE.Experts)
+			}
+		}
+	}
+	if mix0 == nil {
+		return nil, fmt.Errorf("llamagpu(%s): Jamba has no Mamba layer", ops.name)
+	}
+	kvH := cfg.KVHeads
+	if kvH <= 0 {
+		kvH = cfg.Heads
+	}
+	topK := cfg.TopK
+	if topK <= 0 {
+		topK = 2
+	}
+	lc := nlp.LlamaConfig{
+		Vocab: cfg.Vocab, Ctx: 1 << 16, Dim: cfg.Dim, Heads: cfg.Heads, KVHeads: kvH,
+		Layers: cfg.Layers, Hidden: hidden, Eps: cfg.Eps,
+	}
+	d, derr := newDecoderCommon(lc, m.TokEmb, ops)
+	if derr != nil {
+		return nil, derr
+	}
+	d.jamba = true
+	d.noRope = true // NoPE attention; also skips the (unused) RoPE-frequency upload in allocScratch
+	d.dInner, d.mambaN, d.dConv, d.dtRank = mix0.DInner, mix0.N, mix0.DConv, mix0.DtRank
+	if nExperts > 0 {
+		d.moe, d.moeRaw = true, true // Jamba routes raw softmax weights (no top-k renormalization)
+		d.nExperts, d.topK, d.routedScale = nExperts, topK, 1
+	}
+
+	var err error
+	mk := d.mkBuf(&err)
+	lin := func(w *tensor.Tensor) linear {
+		in, out := w.Shape()[0], w.Shape()[1]
+		return f32Linear{w: mk(flat2D(w)).b, k: in, n: out}
+	}
+	for _, ly := range m.Layers {
+		gb := block{
+			gAttn: mk(flat1D(ly.InputNorm.Gamma)).b, // input_layernorm (mixer pre-norm)
+			gFFN:  mk(flat1D(ly.PreFFNorm.Gamma)).b, // pre_ff_layernorm (FFN pre-norm)
+		}
+		if ly.Mamba != nil { // Mamba mixer: the Mamba projections + Jamba's dt/b/c RMSNorms + carried state
+			jm := ly.Mamba
+			mx := jm.Block
+			alog := flat2D(mx.ALog)
+			A := make([]float32, len(alog))
+			for i, v := range alog {
+				A[i] = float32(-math.Exp(float64(v)))
+			}
+			gb.jMamba = true
+			gb.mInX, gb.mInZ = lin(mx.InX.W), lin(mx.InZ.W)
+			gb.mDtLow, gb.mDtProj = lin(mx.DtLow.W), lin(mx.DtProj.W)
+			gb.mBProj, gb.mCProj = lin(mx.BProj.W), lin(mx.CProj.W)
+			gb.mOutProj = lin(mx.OutProj.W)
+			gb.mConvW, gb.mConvB = mk(flat2D(mx.ConvW)).b, mk(flat1D(mx.ConvB)).b
+			gb.mA, gb.mDskip, gb.mDtBias = mk(A).b, mk(flat1D(mx.Dskip)).b, mk(flat1D(mx.DtProj.B)).b
+			gb.mConvState = mk(make([]float32, d.dInner*(d.dConv-1))).b
+			gb.mSsmState = mk(make([]float32, d.dInner*d.mambaN)).b
+			gb.mDtNorm, gb.mBNorm, gb.mCNorm = mk(flat1D(jm.DtNorm.Gamma)).b, mk(flat1D(jm.BNorm.Gamma)).b, mk(flat1D(jm.CNorm.Gamma)).b
+		} else { // NoPE grouped-query attention: bias-free q/k/v/o + a growing KV cache
+			at := ly.Attn
+			gb.wq, gb.wk, gb.wv, gb.wo = lin(at.Wq), lin(at.Wk), lin(at.Wv), lin(at.Wo)
+			gb.kC = mk(make([]float32, d.maxLen*d.kvDim)).b
+			gb.vC = mk(make([]float32, d.maxLen*d.kvDim)).b
+		}
+		if ly.MoE != nil { // sparse MoE FFN (raw-softmax top-k, no shared expert)
+			experts := make([]moeFFN, len(ly.MoE.Experts))
+			for i, ex := range ly.MoE.Experts {
+				experts[i] = moeFFN{wG: lin(ex.Wgate), wU: lin(ex.Wup), wD: lin(ex.Wdown)}
+			}
+			gb.moeRouter, gb.moeExperts = lin(ly.MoE.Router), experts
+		} else { // dense SwiGLU FFN
+			gb.wG, gb.wU, gb.wD = lin(ly.Dense.Wgate), lin(ly.Dense.Wup), lin(ly.Dense.Wdown)
+		}
+		d.blocks = append(d.blocks, gb)
+	}
+	d.gFinal = mk(flat1D(m.Norm.Gamma))
+	d.out = lin(m.Out) // untied lm_head [dim, vocab]
+	d.allocScratch(mk)  // attention + FFN + (d.moe) MoE scratch, all maxLen-sized
+	// Mamba-mixer intermediates (rows==1): the only scratch allocScratch doesn't cover.
+	dI, N, dtR := d.dInner, d.mambaN, d.dtRank
+	d.mbXin, d.mbZ, d.mbXc = mk(make([]float32, dI)), mk(make([]float32, dI)), mk(make([]float32, dI))
+	d.mbDtLow, d.mbDelta = mk(make([]float32, dtR)), mk(make([]float32, dI))
+	d.mbB, d.mbC, d.mbY = mk(make([]float32, N)), mk(make([]float32, N)), mk(make([]float32, dI))
 	if err != nil {
 		d.Release()
 		return nil, err
@@ -2764,6 +2918,19 @@ func (d *Decoder) encodeStep(pos int) (recorder, error) {
 			}
 			continue
 		}
+		if d.jamba { // hybrid: per-block mixer (Mamba OR NoPE attention), then a per-block MoE/dense FFN
+			var e error
+			if b.jMamba {
+				e = d.recordMambaBlock(r, b) // Mamba mixer w/ Jamba dt/b/c norms → dx += mixer(inputNorm(dx))
+			} else {
+				e = d.recordJambaAttn(r, b, pos) // NoPE GQA attention → dx += attn(inputNorm(dx))
+			}
+			if e = firstErr(e, d.recordFFNSublayer(r, b, 1)); e != nil { // MoE (raw softmax) or dense SwiGLU
+				r.Free()
+				return nil, e
+			}
+			continue
+		}
 		if d.mla { // DeepSeek-V2 Multi-head Latent Attention (rectangular, low-rank latent KV)
 			if e := firstErr(d.recordMLAAttention(r, b, pos, 1), d.recordFFNSublayer(r, b, 1)); e != nil {
 				r.Free()
@@ -2857,6 +3024,11 @@ func (d *Decoder) Step(token, pos int) ([]float32, error) {
 				return nil, err
 			}
 		}
+		if d.jamba { // reset the Mamba-layer conv/SSM state (attention layers' KV cache overwrites from row 0)
+			if err := d.resetMambaState(); err != nil {
+				return nil, err
+			}
+		}
 	}
 	// the token's embedding must be resident BEFORE commit — the recorded chain reads d.dx.
 	if err := d.dx.b.UploadF32(d.gatherEmbed(token)); err != nil {
@@ -2912,8 +3084,8 @@ func (d *Decoder) StepN(tokens []int, pos int) ([]float32, error) {
 	if pos < 0 || pos+k > d.maxLen {
 		return nil, fmt.Errorf("llamagpu(%s): StepN [%d,%d) out of [0,%d)", d.ops.name, pos, pos+k, d.maxLen)
 	}
-	if d.mamba || d.mamba2 || d.rwkv {
-		// Mamba/Mamba-2/RWKV's recurrence is inherently sequential (each token's state update reads the
+	if d.mamba || d.mamba2 || d.rwkv || d.jamba {
+		// Mamba/Mamba-2/RWKV/Jamba's recurrence is inherently sequential (each token's state update reads the
 		// previous token's), so there is no batched prefill — process the prompt token by token through
 		// Step, which carries the recurrent state and resets it at pos==0. Returns [k, vocab].
 		out := make([]float32, k*d.v)

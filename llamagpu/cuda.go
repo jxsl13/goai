@@ -399,6 +399,35 @@ func NewMambaQ8CUDA(m *nlp.Mamba) (*Decoder, error) {
 	})
 }
 
+// NewJambaCUDA uploads an nlp.Jamba (hybrid Mamba + NoPE-attention + MoE/dense) onto the batched
+// Decoder core. Each layer is a Mamba selective-scan mixer OR grouped-query causal attention (no rotary
+// — the Mamba layers carry position), followed by a sparse-MoE or dense SwiGLU FFN. Attention layers
+// keep a growing KV cache; Mamba layers carry conv/SSM state across Step, so the whole model decodes
+// sequentially (rows==1 Step; StepN loops Step). cuda-only.
+func NewJambaCUDA(m *nlp.Jamba) (*Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newJambaDecoder(m, backendOps{
+		name:        string(backend.CUDA),
+		asyncEncode: false,
+		newBuffer: func(data []float32) (buffer, error) {
+			b, err := cuda.NewDeviceBufferF32(data)
+			if err != nil {
+				return nil, err
+			}
+			return cBuf{b}, nil
+		},
+		newRecorder: func() (recorder, error) {
+			r, err := cuda.NewRecorder()
+			if err != nil {
+				return nil, err
+			}
+			return cRec{r}, nil
+		},
+	})
+}
+
 // NewMamba2CUDA uploads an nlp.Mamba2 onto the batched Decoder core — the state-space-duality sibling
 // of Mamba. Each layer is an SSD mixer (scalar per-head decay, B/C shared across a group, gated
 // RMSNorm); decode is a linear-time recurrence recorded from cu_ssd_step + the shared conv1d/softplus
