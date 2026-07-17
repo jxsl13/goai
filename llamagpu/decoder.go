@@ -178,7 +178,9 @@ type Decoder struct {
 	ffnGEGLU                                      bool // true ⇒ GeGLU MLP: down(GELU(gate)⊙up) — Gemma's GELU-gated variant of SwiGLU
 	parallelRes                                   bool // true ⇒ parallel residual: attn+FFN both read norm(x0), sum onto x (GPT-NeoX/Phi/Cohere); false ⇒ sequential (Llama)
 	parallelTwoNorm                               bool // parallel residual with SEPARATE attn/FFN norms both over x0 (GPT-NeoX); needs the FFN norm computed pre-attn-add
-	qkNorm                                        bool // true ⇒ per-head RMSNorm on Q and K before RoPE (Qwen3); false otherwise
+	qkNorm                                        bool // true ⇒ RMSNorm on Q and K before RoPE (Qwen3 per-head, OLMo2 full-width); false otherwise
+	qkNormFull                                    bool // with qkNorm: true ⇒ one RMSNorm over the whole q/k projection (OLMo2), false ⇒ per-head (Qwen3)
+	postNorm                                      bool // true ⇒ post-norm blocks (OLMo2): sublayer reads the raw residual, its OUTPUT is normed before the add
 	eps, posDiv, scale                            float32
 	embMult                                       float32 // gathered embeddings ×= embMult (IBM Granite EmbeddingMult); 1 for everything else
 
@@ -238,6 +240,20 @@ func newDecoderCommon(cfg nlp.LlamaConfig, tokEmb *tensor.Tensor, ops backendOps
 // (silu(gate)·up → down, Llama/StableLM). wG/wU/wD are c_fc/·/c_proj or gate/up/down accordingly.
 // recordQKVProj records the fused QKV projection (xn·Wqkv) plus its optional bias — the bias is
 // added BEFORE RoPE, per the [q|k|v] band layout (GPT-NeoX/Phi/StarCoder2 have biased q/k/v).
+// recordAttnNorm produces the attention sublayer's input in d.xn. Pre-norm (Llama & most): xn =
+// norm(x0) (plus norm2(x0)→xn2 for two-norm parallel). Post-norm (OLMo2): attention reads the RAW
+// residual, so xn is just a copy of x0 and the norm happens later on the attention output.
+func (d *Decoder) recordAttnNorm(r recorder, b block, rows int) error {
+	if d.postNorm {
+		return r.Blit(d.dx.b, 0, d.xn.b, 0, rows*d.d)
+	}
+	e := d.norm(r, d.dx.b, b.gAttn, b.bAttn, d.xn.b, rows)
+	if d.parallelTwoNorm { // norm2(x0) BEFORE the attn add, for the FFN branch
+		e = firstErr(e, d.norm(r, d.dx.b, b.gFFN, b.bFFN, d.xn2.b, rows))
+	}
+	return e
+}
+
 func (d *Decoder) recordQKVProj(r recorder, b block, rows int) error {
 	e := b.wqkv.record(r, d.xn.b, d.qkv.b, rows)
 	if b.qkvBias != nil {
@@ -256,11 +272,17 @@ func (d *Decoder) recordQKNorm(r recorder, b block, seq, stride int) error {
 	if !d.qkNorm {
 		return nil
 	}
+	// rows×dim for the RMSNorm: OLMo2 norms the WHOLE q/k projection as one vector (rows=seq,
+	// dim=qDim/kvDim, gain [qDim]/[kvDim]); Qwen3 norms each head (rows=seq·heads, dim=dk, gain [dk]).
+	qRows, qCols, kRows, kCols := seq*d.h, d.dk, seq*d.kvH, d.dk
+	if d.qkNormFull {
+		qRows, qCols, kRows, kCols = seq, d.qDim, seq, d.kvDim
+	}
 	e := r.Copy2D(d.qkv.b, 0, stride, d.q.b, 0, d.qDim, seq, d.qDim) // extract Q band [seq, qDim]
-	e = firstErr(e, r.RMSNorm(d.q.b, b.qN, d.q.b, seq*d.h, d.dk, d.eps))
+	e = firstErr(e, r.RMSNorm(d.q.b, b.qN, d.q.b, qRows, qCols, d.eps))
 	e = firstErr(e, r.Copy2D(d.q.b, 0, d.qDim, d.qkv.b, 0, stride, seq, d.qDim)) // write Q band back
 	e = firstErr(e, r.Copy2D(d.qkv.b, d.qDim, stride, d.k.b, 0, d.kvDim, seq, d.kvDim))
-	e = firstErr(e, r.RMSNorm(d.k.b, b.kN, d.k.b, seq*d.kvH, d.dk, d.eps))
+	e = firstErr(e, r.RMSNorm(d.k.b, b.kN, d.k.b, kRows, kCols, d.eps))
 	e = firstErr(e, r.Copy2D(d.k.b, 0, d.kvDim, d.qkv.b, d.qDim, stride, seq, d.kvDim))
 	return e
 }
@@ -268,11 +290,32 @@ func (d *Decoder) recordQKNorm(r recorder, b block, seq, stride int) error {
 // recordOProj records the attention output projection with its residual-add epilogue (dx +=
 // attn·Wo) plus the optional o-bias broadcast onto the residual stream.
 func (d *Decoder) recordOProj(r recorder, b block, rows int) error {
+	if d.postNorm {
+		// OLMo2 post-norm: ao = attn·Wo, then post_attention_layernorm(ao), then dx += ao.
+		return firstErr(
+			b.wo.record(r, d.attn.b, d.ao.b, rows),
+			d.norm(r, d.ao.b, b.gAttn, b.bAttn, d.ao.b, rows),
+			r.Binary(d.dx.b, d.ao.b, d.dx.b, binaryAdd),
+		)
+	}
 	e := b.wo.recordAdd(r, d.attn.b, d.ao.b, d.dx.b, rows)
 	if b.oBias != nil {
 		e = firstErr(e, r.AddBias(d.dx.b, b.oBias, d.dx.b, rows, d.d))
 	}
 	return e
+}
+
+// recordDownProj records the FFN down-projection's residual epilogue: dx += act·Wdown, either fused
+// (pre-norm) or, for OLMo2 post-norm, as mo = act·Wdown → post_feedforward_layernorm(mo) → dx += mo.
+func (d *Decoder) recordDownProj(r recorder, b block, rows int) error {
+	if d.postNorm {
+		return firstErr(
+			b.wD.record(r, d.gate.b, d.mo.b, rows),
+			d.norm(r, d.mo.b, b.gFFN, b.bFFN, d.mo.b, rows),
+			r.Binary(d.dx.b, d.mo.b, d.dx.b, binaryAdd),
+		)
+	}
+	return b.wD.recordAdd(r, d.gate.b, d.mo.b, d.dx.b, rows)
 }
 
 // recordLogits records the final projection to logits (xn·Out) plus the optional output bias
@@ -291,6 +334,9 @@ func (d *Decoder) recordLogits(r recorder, rows int) error {
 // survives attention since recordOProj writes dx, not xn) and adds onto the residual in parallel —
 // no second norm. Both leave dx += FFN(·).
 func (d *Decoder) recordFFNSublayer(r recorder, b block, rows int) error {
+	if d.postNorm {
+		return d.recordFFN(r, b, d.dx.b, rows) // post-norm: FFN reads the raw residual; recordDownProj norms its output
+	}
 	if d.parallelRes {
 		return d.recordFFN(r, b, d.xn.b, rows) // parallel: FFN(norm(x0)), same norm as attn
 	}
@@ -314,8 +360,8 @@ func (d *Decoder) recordFFN(r recorder, b block, in buffer, rows int) error {
 			e = firstErr(e, r.AddBias(d.gate.b, b.fcBias, d.gate.b, rows, d.hidden))
 		}
 		e = firstErr(e,
-			r.Unary(d.gate.b, d.gate.b, act),                  // act(fc)
-			b.wD.recordAdd(r, d.gate.b, d.mo.b, d.dx.b, rows), // dx += act(fc)·Wproj
+			r.Unary(d.gate.b, d.gate.b, act), // act(fc)
+			d.recordDownProj(r, b, rows),     // dx += act(fc)·Wproj
 		)
 		if b.projBias != nil {
 			e = firstErr(e, r.AddBias(d.dx.b, b.projBias, d.dx.b, rows, d.d))
@@ -326,18 +372,18 @@ func (d *Decoder) recordFFN(r recorder, b block, in buffer, rows int) error {
 		// GeGLU (Gemma): down(GELU(gate)⊙up). Same 3-matrix gated shape as SwiGLU, but the gate
 		// activation is GELU and the elementwise product is a separate mul (no fused silu·b op).
 		return firstErr(
-			b.wG.record(r, in, d.gate.b, rows),                // gate = in·Wgate
-			b.wU.record(r, in, d.up.b, rows),                  // up = in·Wup
-			r.Unary(d.gate.b, d.gate.b, unaryGELU),            // GELU(gate)
-			r.Binary(d.gate.b, d.up.b, d.gate.b, binaryMul),   // GELU(gate)⊙up
-			b.wD.recordAdd(r, d.gate.b, d.mo.b, d.dx.b, rows), // dx += (·)·Wdown
+			b.wG.record(r, in, d.gate.b, rows),              // gate = in·Wgate
+			b.wU.record(r, in, d.up.b, rows),                // up = in·Wup
+			r.Unary(d.gate.b, d.gate.b, unaryGELU),          // GELU(gate)
+			r.Binary(d.gate.b, d.up.b, d.gate.b, binaryMul), // GELU(gate)⊙up
+			d.recordDownProj(r, b, rows),                    // dx += (·)·Wdown
 		)
 	}
 	return firstErr(
 		b.wG.record(r, in, d.gate.b, rows),
 		b.wU.record(r, in, d.up.b, rows),
 		r.Binary(d.gate.b, d.up.b, d.gate.b, binarySwiGLU),
-		b.wD.recordAdd(r, d.gate.b, d.mo.b, d.dx.b, rows), // dx += swiglu·Wdown
+		d.recordDownProj(r, b, rows), // dx += swiglu·Wdown
 	)
 }
 
@@ -856,6 +902,85 @@ func newGemmaDecoder(m *nlp.Gemma, ops backendOps) (*Decoder, error) {
 	return d, nil
 }
 
+// newOLMo2Decoder builds a device Decoder for an nlp.OLMo2 (Allen AI). OLMo2 shares Llama's SwiGLU/
+// GQA/RoPE core but reshuffles the residual structure in two ways, both new gated generalizations:
+//   - POST-NORM (postNorm): there is no input_layernorm; each sublayer reads the RAW residual and
+//     its OUTPUT is normed (post_attention_layernorm / post_feedforward_layernorm) before the add.
+//   - FULL-WIDTH QK-norm (qkNorm+qkNormFull): an RMSNorm over the ENTIRE q_proj / k_proj output
+//     (not per-head like Qwen3), applied before RoPE.
+//
+// The lm_head is untied. cuda-only.
+func newOLMo2Decoder(m *nlp.OLMo2, ops backendOps) (*Decoder, error) {
+	cfg := m.Config
+	kvH := cfg.KVHeads
+	if kvH <= 0 {
+		kvH = cfg.Heads
+	}
+	lc := nlp.LlamaConfig{
+		Vocab: cfg.Vocab, Ctx: cfg.Ctx, Dim: cfg.Dim, Heads: cfg.Heads, KVHeads: kvH,
+		Layers: cfg.Layers, Hidden: cfg.Hidden, Eps: cfg.Eps, RopeBase: cfg.RopeBase,
+	}
+	d, derr := newDecoderCommon(lc, m.TokEmb, ops)
+	if derr != nil {
+		return nil, derr
+	}
+	d.postNorm = true   // sublayer output is normed before the residual add
+	d.qkNorm = true     // RMSNorm on the q/k projections before RoPE...
+	d.qkNormFull = true // ...over the full width, not per head
+	// decoupled head_dim (read back from q_proj; harmless when head_dim == dim/heads)
+	if qOut := m.Blocks[0].Wq.Shape()[1]; qOut%cfg.Heads == 0 && qOut/cfg.Heads != d.dk {
+		hd := qOut / cfg.Heads
+		d.dk, d.qDim, d.kvDim, d.half, d.rotaryDim = hd, d.h*hd, d.kvH*hd, hd/2, hd
+		d.scale = float32(1.0 / math.Sqrt(float64(hd)))
+		invF64, posDiv64 := backend.RoPEFreqs(hd, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: d.h})
+		d.invHost = make([]float32, hd/2)
+		for i := range d.invHost {
+			d.invHost[i] = float32(invF64[i])
+		}
+		d.posDiv = float32(posDiv64)
+	}
+
+	var err error
+	mk := d.mkBuf(&err)
+	lin := func(w *tensor.Tensor) linear {
+		in, out := w.Shape()[0], w.Shape()[1]
+		return f32Linear{w: mk(flat2D(w)).b, k: in, n: out}
+	}
+	fused := func(wq, wk, wv *tensor.Tensor) linear {
+		in := wq.Shape()[0]
+		nq, nk, nv := wq.Shape()[1], wk.Shape()[1], wv.Shape()[1]
+		fq, fk, fv := flat2D(wq), flat2D(wk), flat2D(wv)
+		nt := nq + nk + nv
+		w := make([]float32, in*nt)
+		for i := range in {
+			row := w[i*nt : (i+1)*nt]
+			copy(row[:nq], fq[i*nq:(i+1)*nq])
+			copy(row[nq:nq+nk], fk[i*nk:(i+1)*nk])
+			copy(row[nq+nk:], fv[i*nv:(i+1)*nv])
+		}
+		return f32Linear{w: mk(w).b, k: in, n: nt}
+	}
+	for _, b := range m.Blocks {
+		gb := block{
+			wqkv: fused(b.Wq, b.Wk, b.Wv), wo: lin(b.Wo),
+			// post-norm: gAttn = post_attention_layernorm (on the attn output), gFFN = post_feedforward_layernorm.
+			gAttn: mk(flat1D(b.PostAttnNorm.Gamma)).b, gFFN: mk(flat1D(b.PostFFNNorm.Gamma)).b,
+			qN: mk(flat1D(b.QNorm.Gamma)).b, kN: mk(flat1D(b.KNorm.Gamma)).b, // full-width [qDim]/[kvDim]
+			wG: lin(b.FFN.Wgate), wU: lin(b.FFN.Wup), wD: lin(b.FFN.Wdown),
+			kC: mk(make([]float32, d.maxLen*d.kvDim)).b, vC: mk(make([]float32, d.maxLen*d.kvDim)).b,
+		}
+		d.blocks = append(d.blocks, gb)
+	}
+	d.gFinal = mk(flat1D(m.Norm.Gamma))
+	d.out = lin(m.Out)
+	d.allocScratch(mk)
+	if err != nil {
+		d.Release()
+		return nil, err
+	}
+	return d, nil
+}
+
 // newStarCoder2Decoder builds a device Decoder for an nlp.StarCoder2: LayerNorm-with-bias +
 // biased q/k/v/o projections + a biased 2-layer GELU MLP (c_fc → GELU → c_proj) + FULL rope +
 // GQA + untied head. Every one of those is a core generalization (lnBias, biased projections,
@@ -1189,10 +1314,7 @@ func (d *Decoder) encodeStep(pos int) (recorder, error) {
 		// bands rotate IN PLACE inside the combined row, k/v append to the cache straight
 		// from their bands, attention reads q at band offset 0), else the unfused three.
 		// Recording order is execution order: norm FIRST, then the projection branch.
-		e := d.norm(r, d.dx.b, b.gAttn, b.bAttn, d.xn.b, 1)
-		if d.parallelTwoNorm { // norm2(x0) BEFORE the attn add, for the FFN branch
-			e = firstErr(e, d.norm(r, d.dx.b, b.gFFN, b.bFFN, d.xn2.b, 1))
-		}
+		e := d.recordAttnNorm(r, b, 1)
 		qBuf := d.q.b
 		if e == nil && b.wqkv != nil {
 			qBuf = d.qkv.b
@@ -1332,10 +1454,7 @@ func (d *Decoder) StepN(tokens []int, pos int) ([]float32, error) {
 		// width parameter acts as the row stride), then Copy2D extracts q contiguously
 		// and deposits the k/v bands directly as cache rows. Recording order = execution
 		// order: norm first, then the projection branch.
-		e := d.norm(r, d.dx.b, b.gAttn, b.bAttn, d.xn.b, k)
-		if d.parallelTwoNorm { // norm2(x0) BEFORE the attn add, for the FFN branch
-			e = firstErr(e, d.norm(r, d.dx.b, b.gFFN, b.bFFN, d.xn2.b, k))
-		}
+		e := d.recordAttnNorm(r, b, k)
 		if e == nil && b.wqkv != nil {
 			e = firstErr(
 				d.recordQKVProj(r, b, k),

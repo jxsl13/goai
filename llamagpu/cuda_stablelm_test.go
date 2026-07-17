@@ -542,3 +542,47 @@ func TestCUDAGemmaMatchesReference(t *testing.T) {
 	}
 	t.Logf("llamagpu NewGemmaCUDA.Generate == nlp.Gemma.Generate greedy: %d tokens (GeGLU + √dim embed + tied head)", len(gpuOut))
 }
+
+// TestCUDAOLMo2MatchesReference checks the OLMo2 GPU path (NewOLMo2CUDA) generates greedy-identical
+// tokens to the reference. Exercises the two new gated generalizations: post-norm blocks (postNorm
+// — sublayer output normed before the residual add, no input norm) and full-width QK-norm
+// (qkNormFull — one RMSNorm over the whole q/k projection, distinct from Qwen3's per-head).
+func TestCUDAOLMo2MatchesReference(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("cuda: no CUDA-capable device")
+	}
+	ts, _, err := safetensors.LoadFile("../nlp/testdata/olmo2_hf.safetensors")
+	if err != nil {
+		t.Skipf("olmo2 testdata unavailable (run make golden): %v", err)
+	}
+	m, err := nlp.OLMo2FromHF(ts, nlp.OLMo2Config{Heads: 4, KVHeads: 2, Eps: 1e-6, RopeBase: 10000, Ctx: 32})
+	if err != nil {
+		t.Fatalf("OLMo2FromHF: %v", err)
+	}
+
+	dec, err := llamagpu.NewOLMo2CUDA(m)
+	if err != nil {
+		t.Fatalf("NewOLMo2CUDA: %v", err)
+	}
+	defer dec.Release()
+
+	prompt := []int{3, 7, 1, 9}
+	const maxNew = 12
+	gpuOut, err := dec.Generate(prompt, maxNew, nlp.Greedy())
+	if err != nil {
+		t.Fatalf("cuda generate: %v", err)
+	}
+	refOut, err := m.Generate(prompt, maxNew, nlp.Greedy(), nlp.WithBackend(backend.Reference()))
+	if err != nil {
+		t.Fatalf("ref generate: %v", err)
+	}
+	if len(gpuOut) != len(refOut) {
+		t.Fatalf("length: cuda %d vs ref %d", len(gpuOut), len(refOut))
+	}
+	for i := range gpuOut {
+		if gpuOut[i] != refOut[i] {
+			t.Fatalf("token[%d]: cuda %d vs ref %d\ncuda=%v\nref=%v", i, gpuOut[i], refOut[i], gpuOut, refOut)
+		}
+	}
+	t.Logf("llamagpu NewOLMo2CUDA.Generate == nlp.OLMo2.Generate greedy: %d tokens (post-norm + full-width QK-norm)", len(gpuOut))
+}
