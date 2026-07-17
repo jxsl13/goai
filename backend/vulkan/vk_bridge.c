@@ -24,6 +24,7 @@ static int              gInitTried = 0;
 static int              gInitOK    = 0;
 static int              gAtomicFloat = 0; // VK_EXT_shader_atomic_float enabled? (§T90)
 static int              gCoopMat = 0;     // VK_KHR_cooperative_matrix enabled? (Tw-COOPMAT)
+typedef struct { VkBuffer buf; VkDeviceMemory mem; } ResidentBuf;
 
 // find_compute_queue returns the index of a queue family with COMPUTE, or -1.
 static int find_compute_queue(VkPhysicalDevice pd) {
@@ -628,6 +629,30 @@ int vk_coopmat_gemm_f16(const uint32_t* spv, int spvLen,
                        (uint32_t)N / 64u, (uint32_t)M / 16u, 1u);
 }
 
+// vk_coopmat_gemm_f16_res: the resident-buffer twin of vk_coopmat_gemm_f16 — A/B/C live in
+// pre-uploaded device buffers (vk_devbuf_upload handles), so a timed loop measures the KERNEL
+// rate, not the ~25 MB/call host round-trip the pooled path pays. C stays on device; read it
+// back with vk_devbuf_download.
+int vk_coopmat_gemm_f16_res(const uint32_t* spv, int spvLen,
+                            void* ah, void* bh, void* ch,
+                            int M, int K, int N) {
+    if (!gCoopMat) return -9;
+    ResidentBuf* ra = (ResidentBuf*)ah;
+    ResidentBuf* rb = (ResidentBuf*)bh;
+    ResidentBuf* rc = (ResidentBuf*)ch;
+    VkDeviceSize lens[3] = {
+        (VkDeviceSize)M * K * 2,
+        (VkDeviceSize)K * N * 2,
+        (VkDeviceSize)M * N * sizeof(float),
+    };
+    void* data[3] = { NULL, NULL, NULL };
+    int up[3] = {0, 0, 0}, down[3] = {0, 0, 0};
+    int32_t pc[3] = { M, K, N };
+    VkBuffer preBuf[3] = { ra->buf, rb->buf, rc->buf };
+    return vk_dispatch_pre(spv, spvLen, 3, lens, data, up, down, pc, sizeof(pc),
+                           (uint32_t)N / 64u, (uint32_t)M / 16u, 1u, preBuf);
+}
+
 int vk_matmul_f32(const uint32_t* spv, int spvLen,
                   const float* A, const float* B, float* C,
                   int M, int K, int N, int transA, int transB) {
@@ -1156,7 +1181,7 @@ int vk_qmatmul_q3k(const uint32_t* spv, int spvLen,
 // Device-resident quantized weights (§T156): a persistent VkBuffer holding a weight blob, reused
 // across matmuls (uploaded once) instead of re-created per call. The handle bundles the buffer and
 // its memory. wBytes must be a multiple of 4 (the shaders read the weight as a uint word array).
-typedef struct { VkBuffer buf; VkDeviceMemory mem; } ResidentBuf;
+// (typedef hoisted above vk_coopmat_gemm_f16_res, which references it)
 
 void* vk_qweight_upload(const unsigned char* W, int wBytes) {
     pthread_mutex_lock(&gLock);

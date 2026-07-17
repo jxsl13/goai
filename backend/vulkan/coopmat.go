@@ -49,3 +49,64 @@ func CoopmatGemmF16(aHalf, bHalf []uint16, c []float32, m, k, n int) error {
 	}
 	return nil
 }
+
+// CoopmatResident holds device-resident A/B/C buffers for the kernel-rate benchmark path:
+// upload once, dispatch many, download C on demand — isolates the tensor-core kernel from
+// the ~25 MB/call host round-trip the pooled path pays.
+type CoopmatResident struct {
+	ah, bh, ch unsafe.Pointer
+	m, k, n    int
+}
+
+// NewCoopmatResident uploads A[M,K]f16 and B[K,N]f16 and allocates a resident C[M,N]f32.
+func NewCoopmatResident(aHalf, bHalf []uint16, m, k, n int) (*CoopmatResident, error) {
+	if !HasCoopMat() {
+		return nil, fmt.Errorf("vulkan: cooperative matrix not available")
+	}
+	if m%16 != 0 || k%16 != 0 || n%64 != 0 {
+		return nil, fmt.Errorf("vulkan: coopmat probe needs M%%16==0, K%%16==0, N%%64==0")
+	}
+	r := &CoopmatResident{m: m, k: k, n: n}
+	r.ah = unsafe.Pointer(C.vk_devbuf_upload(unsafe.Pointer(&aHalf[0]), C.int(m*k*2)))
+	r.bh = unsafe.Pointer(C.vk_devbuf_upload(unsafe.Pointer(&bHalf[0]), C.int(k*n*2)))
+	zero := make([]float32, m*n)
+	r.ch = unsafe.Pointer(C.vk_devbuf_upload(unsafe.Pointer(&zero[0]), C.int(m*n*4)))
+	if r.ah == nil || r.bh == nil || r.ch == nil {
+		r.Free()
+		return nil, fmt.Errorf("vulkan: coopmat resident upload failed")
+	}
+	return r, nil
+}
+
+// Gemm dispatches one resident GEMM (device buffers only — no host transfer).
+func (r *CoopmatResident) Gemm() error {
+	rc := C.vk_coopmat_gemm_f16_res(
+		(*C.uint32_t)(unsafe.Pointer(&coopmatGemmSpv[0])), C.int(len(coopmatGemmSpv)),
+		r.ah, r.bh, r.ch, C.int(r.m), C.int(r.k), C.int(r.n),
+	)
+	if rc != 0 {
+		return fmt.Errorf("vulkan: resident coopmat gemm failed (code %d)", int(rc))
+	}
+	return nil
+}
+
+// ReadC downloads the resident C into dst (len M*N).
+func (r *CoopmatResident) ReadC(dst []float32) error {
+	if len(dst) != r.m*r.n {
+		return fmt.Errorf("vulkan: ReadC needs len %d", r.m*r.n)
+	}
+	if C.vk_devbuf_download(r.ch, unsafe.Pointer(&dst[0]), C.int(r.m*r.n*4)) != 0 {
+		return fmt.Errorf("vulkan: ReadC download failed")
+	}
+	return nil
+}
+
+// Free releases the resident buffers.
+func (r *CoopmatResident) Free() {
+	for _, h := range []unsafe.Pointer{r.ah, r.bh, r.ch} {
+		if h != nil {
+			C.vk_devbuf_free(h)
+		}
+	}
+	r.ah, r.bh, r.ch = nil, nil, nil
+}

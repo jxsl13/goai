@@ -107,6 +107,45 @@ func benchCoopmat(b *testing.B, m, k, n int) {
 	b.ReportMetric(2.0*float64(m)*float64(n)*float64(k)/(b.Elapsed().Seconds()/float64(b.N))/1e9, "GFLOP/s")
 }
 
+// benchCoopmatRes measures the KERNEL rate: A/B/C device-resident, no per-call host transfer.
+func benchCoopmatRes(b *testing.B, m, k, n int) {
+	if !Available() {
+		b.Skip("no vulkan device")
+	}
+	if !HasCoopMat() {
+		b.Skip("device lacks VK_KHR_cooperative_matrix")
+	}
+	rng := rand.New(rand.NewSource(11))
+	ah := make([]uint16, m*k)
+	bh := make([]uint16, k*n)
+	for i := range ah {
+		ah[i] = f32ToHalf(float32(rng.NormFloat64()) * 0.25)
+	}
+	for i := range bh {
+		bh[i] = f32ToHalf(float32(rng.NormFloat64()) * 0.25)
+	}
+	r, err := NewCoopmatResident(ah, bh, m, k, n)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer r.Free()
+	if err := r.Gemm(); err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for range b.N {
+		if err := r.Gemm(); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.StopTimer()
+	b.ReportMetric(2.0*float64(m)*float64(n)*float64(k)/(b.Elapsed().Seconds()/float64(b.N))/1e9, "GFLOP/s")
+}
+
+func BenchmarkCoopmatRes_qkv(b *testing.B)    { benchCoopmatRes(b, 128, 2048, 2048) }
+func BenchmarkCoopmatRes_gateup(b *testing.B) { benchCoopmatRes(b, 128, 2048, 5632) }
+func BenchmarkCoopmatRes_down(b *testing.B)   { benchCoopmatRes(b, 128, 5632, 2048) }
+
 func BenchmarkCoopmat_qkv(b *testing.B)    { benchCoopmat(b, 128, 2048, 2048) }
 func BenchmarkCoopmat_gateup(b *testing.B) { benchCoopmat(b, 128, 2048, 5632) }
 func BenchmarkCoopmat_down(b *testing.B)   { benchCoopmat(b, 128, 5632, 2048) }
