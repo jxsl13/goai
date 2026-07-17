@@ -34,6 +34,13 @@ func TestChatTemplateGoldenRenders(t *testing.T) {
 		"mistral": "<s>[INST] Hi! [/INST] Hello!</s>[INST] Bye? [/INST]",
 		"phi3": "<|system|>\nYou are helpful.<|end|>\n<|user|>\nHi!<|end|>\n<|assistant|>\nHello!<|end|>\n" +
 			"<|user|>\nBye?<|end|>\n<|assistant|>\n",
+		// Rendered by ibm-granite/granite-3.0-2b-instruct's tokenizer.apply_chat_template
+		// (transformers 5.14.1, add_generation_prompt=true) — byte-exact.
+		"granite": "<|start_of_role|>system<|end_of_role|>You are helpful.<|end_of_text|>\n" +
+			"<|start_of_role|>user<|end_of_role|>Hi!<|end_of_text|>\n" +
+			"<|start_of_role|>assistant<|end_of_role|>Hello!<|end_of_text|>\n" +
+			"<|start_of_role|>user<|end_of_role|>Bye?<|end_of_text|>\n" +
+			"<|start_of_role|>assistant<|end_of_role|>",
 	}
 	for family, want := range goldens {
 		tpl, err := nlp.NewChatTemplate(family)
@@ -137,6 +144,7 @@ func TestDetectChatTemplate(t *testing.T) {
 		"gemma":   `{{ '<start_of_turn>' + role + '\n' + message['content'] | trim + '<end_of_turn>\n' }}`,
 		"phi3":    `{% elif message['role'] == 'user' %}{{'<|user|>' + '\n' + message['content'] + '<|end|>' + '\n'}}`,
 		"mistral": `{% if message['role'] == 'user' %}{{ '[INST] ' + message['content'] + ' [/INST]' }}`,
+		"granite": `{%- elif message['role'] == 'user' %}{{- '<|start_of_role|>user<|end_of_role|>' + message['content'] + '<|end_of_text|>\n' }}`,
 	}
 	for want, jinja := range jinjas {
 		tpl, err := nlp.DetectChatTemplate(jinja)

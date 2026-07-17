@@ -23,7 +23,8 @@ type ChatMessage struct {
 //
 // Supported families (the names NewChatTemplate accepts): "chatml" (Qwen2/2.5 class),
 // "llama3" (Meta-Llama-3-Instruct), "gemma" (gemma-it), "mistral"
-// (Mistral-7B-Instruct-v0.3 class), "phi3" (Phi-3-instruct).
+// (Mistral-7B-Instruct-v0.3 class), "phi3" (Phi-3-instruct), "granite"
+// (IBM Granite 3.x instruct).
 //
 // Family quirks are preserved faithfully: llama3/gemma trim message content; gemma and
 // mistral reject non-alternating user/assistant turns and have no system role — a
@@ -61,13 +62,13 @@ func WithoutBOS() ChatRenderOption {
 }
 
 // NewChatTemplate returns the native renderer for a known family name: "chatml",
-// "llama3", "gemma", "mistral" or "phi3".
+// "llama3", "gemma", "mistral", "phi3" or "granite".
 func NewChatTemplate(family string) (*ChatTemplate, error) {
 	switch family {
-	case "chatml", "llama3", "gemma", "mistral", "phi3":
+	case "chatml", "llama3", "gemma", "mistral", "phi3", "granite":
 		return &ChatTemplate{family: family}, nil
 	}
-	return nil, fmt.Errorf("nlp: NewChatTemplate: unknown family %q (want chatml, llama3, gemma, mistral or phi3)", family)
+	return nil, fmt.Errorf("nlp: NewChatTemplate: unknown family %q (want chatml, llama3, gemma, mistral, phi3 or granite)", family)
 }
 
 // DetectChatTemplate maps Jinja template source (the GGUF "tokenizer.chat_template"
@@ -86,6 +87,8 @@ func DetectChatTemplate(jinja string) (*ChatTemplate, error) {
 		return &ChatTemplate{family: "phi3"}, nil
 	case strings.Contains(jinja, "[INST]"):
 		return &ChatTemplate{family: "mistral"}, nil
+	case strings.Contains(jinja, "<|start_of_role|>"):
+		return &ChatTemplate{family: "granite"}, nil
 	}
 	return nil, fmt.Errorf("nlp: DetectChatTemplate: unrecognized chat template; raw jinja: %s", jinja)
 }
@@ -153,6 +156,12 @@ func (t *ChatTemplate) Render(messages []ChatMessage, opts ...ChatRenderOption) 
 			map[string]string{"assistant": "model"}, true), nil
 	case "mistral":
 		return renderMistral(messages, cfg)
+	case "granite":
+		// IBM Granite 3.x instruct: <|start_of_role|>{role}<|end_of_role|>{content}<|end_of_text|>\n
+		// per message (system role kept, no folding, no BOS in the template render), and the
+		// generation prompt is the assistant role opener. Verified byte-exact against
+		// ibm-granite/granite-3.0-2b-instruct's tokenizer.apply_chat_template.
+		return renderTurnStyle(messages, cfg, "", "<|start_of_role|>", "<|end_of_role|>", "<|end_of_text|>\n", nil, false), nil
 	}
 	return "", fmt.Errorf("nlp: ChatTemplate.Render: unknown family %q", t.family)
 }

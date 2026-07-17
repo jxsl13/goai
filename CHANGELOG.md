@@ -4,6 +4,16 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — Granite chat template (T821, 2026-07-17)
+
+`NewChatTemplate("granite")` / `DetectChatTemplate` now render and auto-detect IBM Granite
+3.x instruct's format (`<|start_of_role|>{role}<|end_of_role|>{content}<|end_of_text|>` per
+turn, assistant opener as the generation prompt) — completing the usability of the Granite
+models GoAI already loads (GraniteFromGGUF / QuantGranite). The golden is byte-exact against
+`ibm-granite/granite-3.0-2b-instruct`'s `tokenizer.apply_chat_template` (transformers 5.14.1),
+generated from the real template independently of the Go renderer (the §B67 lesson applied to
+templates); a GGUF carrying the granite jinja auto-selects it via the `<|start_of_role|>` marker.
+
 ### docs — interpretability reference: the Jacobian lens (2026-07-17)
 
 New `docs/interpretability.md` consolidates the J-lens feature (T810–T818) into one
