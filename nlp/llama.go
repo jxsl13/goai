@@ -172,6 +172,23 @@ func (m *Llama) ForwardFromEmbed(ctx *backend.Context, x *tensor.Tensor) (*tenso
 	return divLogits(ctx, logits, m.Config.LogitsScale)
 }
 
+// Unembed maps residual-stream rows h [n, dim] to logits [n, vocab] through the
+// model's final RMSNorm, output projection and (Granite) logits scaling — the
+// [LensReadoutModel] seam (§T812): Unembed applied to the pre-final-norm
+// residual reproduces Forward's logits exactly, and the J-lens borrows it to
+// decode transported activations with the model's own head.
+func (m *Llama) Unembed(ctx *backend.Context, h *tensor.Tensor) (*tensor.Tensor, error) {
+	x, err := m.Norm.Forward(ctx, h)
+	if err != nil {
+		return nil, err
+	}
+	logits, err := exec1(ctx, backend.OpMatMul, nil, x, m.Out)
+	if err != nil {
+		return nil, err
+	}
+	return divLogits(ctx, logits, m.Config.LogitsScale)
+}
+
 // scaleScalar multiplies x by the scalar s via a rank-0 OpMul broadcast when s is a set,
 // non-identity Granite multiplier (s != 0 && s != 1); an unset (0) or identity (1) s
 // returns x unchanged, so the plain-Llama path (all Granite scalars 0) is byte-identical.
@@ -209,6 +226,32 @@ func (m *Llama) hiddenFromEmbed(ctx *backend.Context, x *tensor.Tensor) (*tensor
 // plain forward: no extra ops are recorded, so tape/training semantics of
 // hiddenFromEmbed are byte-identical to before this hook existed.
 func (m *Llama) hiddenFromEmbedCapture(ctx *backend.Context, x *tensor.Tensor, capture func(layer int, k, v *tensor.Tensor)) (*tensor.Tensor, error) {
+	return m.hiddenFromEmbedTaps(ctx, x, capture, nil)
+}
+
+// ForwardResiduals is Forward's residual-stream observer (§T810, the J-lens
+// foundation §R250): it runs the full block stack and hands every residual-stream
+// snapshot h_l [seq, dim] to capture — layer 0 is the post-embedding block input
+// h_0, layer l ∈ 1..Layers the residual AFTER block l (PRE final norm), so a
+// non-nil capture fires Layers+1 times in order. The returned tensor is the
+// post-final-RMSNorm hidden states, identical to ForwardHidden. The tensors handed
+// to capture are the LIVE ones the ongoing forward consumes: observers must not
+// mutate them (a test-only injector may, on an eager backend, at its own risk).
+// A nil capture records exactly the same ops as ForwardHidden — byte-identical,
+// same discipline as the KV tap above.
+func (m *Llama) ForwardResiduals(ctx *backend.Context, tokens []int, capture ResidualCapture) (*tensor.Tensor, error) {
+	x, err := m.Embed(ctx, tokens)
+	if err != nil {
+		return nil, err
+	}
+	return m.hiddenFromEmbedTaps(ctx, x, nil, capture)
+}
+
+// hiddenFromEmbedTaps is the single block-stack implementation behind
+// hiddenFromEmbed (both taps nil), hiddenFromEmbedCapture (KV tap) and
+// ForwardResiduals (residual tap). Both taps are pure observers: nil taps make
+// this byte-identical to the historical hiddenFromEmbed (no extra ops recorded).
+func (m *Llama) hiddenFromEmbedTaps(ctx *backend.Context, x *tensor.Tensor, capture func(layer int, k, v *tensor.Tensor), resid ResidualCapture) (*tensor.Tensor, error) {
 	cfg := m.Config
 	kv := cfg.kvHeads()
 	rope := backend.RoPEAttrs{Base: cfg.RopeBase}
@@ -224,6 +267,9 @@ func (m *Llama) hiddenFromEmbedCapture(ctx *backend.Context, x *tensor.Tensor, c
 	// Granite: inputs_embeds *= embedding_multiplier (no-op for Llama, EmbeddingMult 0).
 	if x, err = scaleScalar(ctx, x, cfg.EmbeddingMult); err != nil {
 		return nil, err
+	}
+	if resid != nil {
+		resid(0, x) // h_0: the post-embedding (post-Granite-scale) input to block 0
 	}
 	for l, b := range m.Blocks {
 		// attention sublayer: x += Wo·Attn(RoPE(Wq·x̄), RoPE(Wk·x̄), Wv·x̄), x̄=RMSNorm(x)
@@ -299,6 +345,9 @@ func (m *Llama) hiddenFromEmbedCapture(ctx *backend.Context, x *tensor.Tensor, c
 		}
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, ff); err != nil {
 			return nil, err
+		}
+		if resid != nil {
+			resid(l+1, x) // h_{l+1}: the residual stream after block l
 		}
 	}
 	if x, err = m.Norm.Forward(ctx, x); err != nil {

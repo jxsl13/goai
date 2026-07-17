@@ -274,6 +274,20 @@ func NewGemma2Q8CUDA(m *nlp.Gemma2) (*Decoder, error) {
 	}
 	return newGemma2Decoder(m, cudaQ8Ops())
 }
+
+// NewGemmaQ8CUDA is NewGemmaCUDA (Gemma v1) with all projections + the tied lm_head quantized to resident
+// Q8_0. Gemma's √dim embed scaling and GeGLU are unchanged; the lm_head goes Q8 too (huge 256k vocab).
+func NewGemmaQ8CUDA(m *nlp.Gemma) (*Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newGemmaDecoder(m, cudaQ8Ops())
+}
+
+// NewGraniteQ8CUDA is the Q8 entry point for IBM Granite (dense) — Granite maps to nlp.Llama (Llama core +
+// embMult/attn-scale/residual-mult/logit-scale config scalars, all folded into the upload), so this is
+// NewLlamaQ8CUDA with a Granite-typed signature. The scaled Wo/Wdown are quantized post-scale.
+func NewGraniteQ8CUDA(m *nlp.Llama) (*Decoder, error) { return NewLlamaQ8CUDA(m) }
 func NewCohereQ8CUDA(m *nlp.Cohere) (*Decoder, error) {
 	if !cuda.Available() {
 		return nil, fmt.Errorf("llamagpu: no CUDA GPU")

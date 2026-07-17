@@ -271,6 +271,47 @@ func gatherRows(t *tensor.Tensor, heads int, srcPos func(hd, q int) int) *tensor
 	return out
 }
 
+// ropePermuteVec / ropeUnpermuteVec are the 1-D (bias) twins of [ropePermuteRows] /
+// [ropeUnpermuteRows]: llama.cpp's converter applies LlamaModel.permute to
+// q_proj.bias and k_proj.bias exactly as to the weights (conversion/llama.py
+// modify_tensors matches name.endswith(("q_proj.weight", "q_proj.bias"))), so a
+// bias-carrying llama-arch file stores its q/k biases in the same interleaved rotary
+// row order as the projections (§B67 follow-up).
+func ropePermuteVec(t *tensor.Tensor, heads int) *tensor.Tensor {
+	return gatherVec(t, heads, func(hd, q int) int {
+		i, j := q/2, q%2
+		return j*(hd/2) + i
+	})
+}
+
+func ropeUnpermuteVec(t *tensor.Tensor, heads int) *tensor.Tensor {
+	return gatherVec(t, heads, func(hd, q int) int {
+		j, i := q/(hd/2), q%(hd/2)
+		return 2*i + j
+	})
+}
+
+// gatherVec is [gatherRows] for a 1-D per-head vector: dst element h·hd + q is copied
+// from src element h·hd + srcPos(hd, q). Returns a fresh F64 tensor; the per-head
+// width hd must be even.
+func gatherVec(t *tensor.Tensor, heads int, srcPos func(hd, q int) int) *tensor.Tensor {
+	n := t.Shape()[0]
+	hd := n / heads
+	if heads <= 0 || n%heads != 0 || hd%2 != 0 {
+		panic(fmt.Sprintf("nlp: rope vec permute needs length %d divisible by heads %d with even head_dim", n, heads))
+	}
+	src := cloneF64(t).Storage().F64()
+	out := tensor.New(tensor.F64, tensor.Shape{n})
+	dst := out.Storage().F64()
+	for h := range heads {
+		base := h * hd
+		for q := range hd {
+			dst[base+q] = src[base+srcPos(hd, q)]
+		}
+	}
+	return out
+}
+
 // stack3D stacks E equal-shape [r, c] tensors into a fresh F64 [E, r, c] tensor —
 // the inverse of sub3D, mirroring the converter's torch.stack(dim=0).
 func stack3D(parts []*tensor.Tensor) *tensor.Tensor {

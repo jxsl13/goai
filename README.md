@@ -95,8 +95,13 @@ for step := 0; step < 150; step++ {
 - **Train end-to-end**: full backward validated against real torch gradients at
   f64 rtol ~1e-9, checkpoint (safetensors / .pt via a safe no-code-execution
   loader / GGUF round-trips — GGUF also loads llama.cpp community files for
-  Llama, Qwen2/2.5, Qwen3, Gemma, Phi-3 and Mixtral, with each converter's
-  layout conventions verified against llama.cpp source), tokenize (BPE
+  Llama, Qwen2/2.5, Qwen3, Gemma, Phi-3, Mixtral, StarCoder2 and
+  GPT-NeoX/Pythia, with each converter's layout conventions verified against
+  llama.cpp source, and **decodes quantized checkpoints of Llama, Qwen2, Qwen3,
+  Phi-3, Gemma and Mixtral directly from the ggml Q-blocks** — packed
+  projections, the llama-arch q/k row interleave, and fused MoE expert tensors
+  are all unpacked losslessly on the quantized bytes, never dequantized and
+  requantized), tokenize (BPE
   bit-exact vs tiktoken, SentencePiece-Unigram, WordPiece), and generate.
 - **Structured generation**: GBNF (llama.cpp’s grammar notation) grammar-constrained decoding compiled to a
   pushdown automaton (nested JSON a regex guide structurally cannot enforce),

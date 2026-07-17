@@ -108,8 +108,10 @@ func TestQuantPhi3FromGGUF(t *testing.T) {
 // yields logits EXACTLY equal to the packed load (both equal the direct quantization).
 func TestQuantPhi3FromGGUFSplitTensors(t *testing.T) {
 	m := newPhi3StyleLlama(t)
-	meta, _ := nlp.Phi3ToGGUF(m)   // phi3 metadata …
-	_, split := nlp.LlamaToGGUF(m) // … over the split (llama-layout) tensor set
+	meta, _ := nlp.Phi3ToGGUF(m) // phi3 metadata …
+	// … over the split tensor set in phi3's NEOX/no-permute layout (re-grouped
+	// packed rows — NOT LlamaToGGUF, whose llama-arch q/k are permuted, §B67).
+	split := phi3SplitTensors(t, m)
 	qm := map[string]gguf.QuantType{}
 	for name, tt := range split {
 		if tt.Ndim() == 2 && name != "token_embd.weight" {
