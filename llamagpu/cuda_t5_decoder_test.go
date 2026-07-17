@@ -145,3 +145,78 @@ func TestCUDAT5Generate(t *testing.T) {
 	}
 	t.Logf("llamagpu GPUT5Decoder.Generate matches reference greedy T5Decoder.Generate: %v", gotTokens)
 }
+
+// TestCUDAT5DecoderQ8CloseToF32 validates Q8 on the seq2seq decoder (NewT5DecoderQ8CUDA): self/cross
+// attention, FFN and lm_head projections go resident Q8_0. Autoregressive decode is M=1 (Q8 GEMV); the
+// cross K/V projections run once over the encoder output (M=eseq>1 → int8 tensor-core MMQ). Compared to
+// the f32 GPU decoder by per-position logit cosine over a fixed encoder context.
+func TestCUDAT5DecoderQ8CloseToF32(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("cuda: no CUDA-capable device")
+	}
+	ts, _, err := safetensors.LoadFile("../nlp/testdata/t5lm_hf.safetensors")
+	if err != nil {
+		t.Skipf("t5lm testdata unavailable (run make golden): %v", err)
+	}
+	cfg := nlp.T5Config{Heads: 2, HeadDim: 8, Eps: 1e-6}
+	enc, err := nlp.T5FromHF(ts, cfg)
+	if err != nil {
+		t.Fatalf("T5FromHF: %v", err)
+	}
+	dec, err := nlp.T5DecoderFromHF(ts, cfg)
+	if err != nil {
+		t.Fatalf("T5DecoderFromHF: %v", err)
+	}
+	encOut, err := enc.Forward(backend.NewContext().WithBackend(backend.Reference()), []int{3, 7, 1, 9, 4, 2, 8})
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	eseq, dim := encOut.Shape()[0], encOut.Shape()[1]
+	encFlat := make([]float32, eseq*dim)
+	for i := 0; i < eseq; i++ {
+		for j := 0; j < dim; j++ {
+			encFlat[i*dim+j] = float32(encOut.AtF64(i, j))
+		}
+	}
+	f32Dec, err := llamagpu.NewT5DecoderCUDA(dec)
+	if err != nil {
+		t.Fatalf("NewT5DecoderCUDA: %v", err)
+	}
+	defer f32Dec.Release()
+	q8Dec, err := llamagpu.NewT5DecoderQ8CUDA(dec)
+	if err != nil {
+		t.Fatalf("NewT5DecoderQ8CUDA: %v", err)
+	}
+	defer q8Dec.Release()
+
+	decTokens := []int{0, 5, 8, 2, 6}
+	fGot, err := f32Dec.Decode(encFlat, eseq, decTokens)
+	if err != nil {
+		t.Fatalf("f32 Decode: %v", err)
+	}
+	qGot, err := q8Dec.Decode(encFlat, eseq, decTokens)
+	if err != nil {
+		t.Fatalf("q8 Decode: %v", err)
+	}
+	vocab := len(fGot) / len(decTokens)
+	minCos := 1.0
+	for i := range decTokens {
+		var dot, nf, nq float64
+		for j := 0; j < vocab; j++ {
+			f, q := float64(fGot[i*vocab+j]), float64(qGot[i*vocab+j])
+			if math.IsNaN(q) || math.IsInf(q, 0) {
+				t.Fatalf("q8 pos %d logit %d non-finite", i, j)
+			}
+			dot += f * q
+			nf += f * f
+			nq += q * q
+		}
+		if cos := dot / (math.Sqrt(nf)*math.Sqrt(nq) + 1e-30); cos < minCos {
+			minCos = cos
+		}
+	}
+	if minCos < 0.999 {
+		t.Fatalf("T5 decoder Q8 min per-position logit cosine %.5f < 0.999 vs f32", minCos)
+	}
+	t.Logf("NewT5DecoderQ8CUDA tracks f32 seq2seq decode: min per-position cosine %.6f", minCos)
+}

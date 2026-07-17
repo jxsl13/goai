@@ -26,6 +26,7 @@ type GPUT5Decoder struct {
 	lmHead                          linear // [dim, vocab]
 	blocks                          []t5DecBlock
 	all                             []buffer
+	qweights                        []qweight // resident Q8 projection weights (NewT5DecoderQ8CUDA); closed in Release
 }
 
 type t5DecBlock struct {
@@ -70,9 +71,26 @@ func newT5Decoder(m *nlp.T5Decoder, ops backendOps) (*GPUT5Decoder, error) {
 		d.all = append(d.all, b)
 		return b
 	}
+	// lin: resident Q8_0 when ops.quantizeF32 is set (NewT5DecoderQ8CUDA), else f32. The self/cross
+	// attention, FFN and lm_head projections go Q8; RMSNorm and the relpos bias stay f32. Autoregressive
+	// decode is M=1 (Q8 GEMV, a weight-bandwidth win); the cross K/V projections run once over the encoder
+	// output (M=eseq>1, so the int8 tensor-core MMQ path).
 	lin := func(w *tensor.Tensor) linear {
 		in, out := w.Shape()[0], w.Shape()[1]
-		return f32Linear{w: mk(flat2D(w)), k: in, n: out}
+		if ops.quantizeF32 == nil {
+			return f32Linear{w: mk(flat2D(w)), k: in, n: out}
+		}
+		t := tensor.New(tensor.F32, tensor.Shape{in, out})
+		copy(t.Storage().F32(), flat2D(w))
+		qw, qe := ops.quantizeF32(t)
+		if qe != nil {
+			if err == nil {
+				err = qe
+			}
+			return f32Linear{k: in, n: out}
+		}
+		d.qweights = append(d.qweights, qw)
+		return quantLinear{w: qw}
 	}
 	for _, b := range m.Blocks {
 		gb := t5DecBlock{
@@ -328,4 +346,10 @@ func (d *GPUT5Decoder) Release() {
 		}
 	}
 	d.all = nil
+	for _, w := range d.qweights {
+		if w != nil {
+			w.Close()
+		}
+	}
+	d.qweights = nil
 }

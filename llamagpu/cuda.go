@@ -825,6 +825,17 @@ func NewT5DecoderCUDA(m *nlp.T5Decoder) (*GPUT5Decoder, error) {
 	})
 }
 
+// NewT5DecoderQ8CUDA is NewT5DecoderCUDA with the self/cross-attention (q/k/v/o), FFN (wi0/wi1/wOut) and
+// lm_head projections quantized to resident Q8_0 — the seq2seq generation decode-bandwidth win. Autoregressive
+// decode is M=1 (Q8 GEMV); the cross K/V projections run once over the encoder output (M=eseq>1 → int8
+// tensor-core MMQ). RMSNorm and the relpos bias stay f32. Pair with NewT5Q8CUDA (the Q8 encoder). cuda-only.
+func NewT5DecoderQ8CUDA(m *nlp.T5Decoder) (*GPUT5Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newT5Decoder(m, cudaQ8Ops())
+}
+
 // NewMixtralCUDA uploads an nlp.Mixtral (sparse Mixture-of-Experts) onto the batched Decoder core.
 // Attention is the plain Llama core (+ optional Qwen3-MoE QK-norm); the FFN is a sparse MoE routed
 // per token — the routing weights are computed on-device (cu_moe_gate) so the whole step stays a
