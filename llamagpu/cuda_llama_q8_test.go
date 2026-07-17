@@ -144,11 +144,10 @@ func benchLlamaPrefill(b *testing.B, dec *llamagpu.Decoder) {
 	}
 }
 
-// BenchmarkLlamaPrefillF32 / _Q8 measure batched prefill (StepN, M=32). NOTE: unlike decode, Q8 prefill
-// is currently SLOWER than f32 — QMatMulResident is a GEMV that re-reads the weight per output row (M×
-// the weight bandwidth), while f32 uses cuBLAS (weight reused once). The fix is to route M>1 to the
-// existing int8 tensor-core MMQ path (cu_matmul_i8_mmq, which ResidentBQ8's q+scales already fit); these
-// benchmarks are the before/after gauge for that work. Decode (M=1) is unaffected and remains ~2.58×.
+// BenchmarkLlamaPrefillF32 / _Q8 measure batched prefill (StepN, M=32). Q8 prefill now routes the
+// aligned M>1 projections through the int8 tensor-core MMQ GEMM (QMatMulResident, q8PrefillMMQ), so it
+// is FASTER than f32 (~1.27× on the 3060) — up from ~4× SLOWER when it used the decode GEMV (which
+// re-read the weight M×). Decode (M=1) keeps the GEMV and remains ~2.58×.
 func BenchmarkLlamaPrefillF32(b *testing.B) {
 	if !cuda.Available() {
 		b.Skip("cuda: no CUDA-capable device")
