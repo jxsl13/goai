@@ -108,3 +108,50 @@ func TestCUDAMoEGate(t *testing.T) {
 	}
 	t.Logf("cu_moe_gate matches the Mixtral top-k renormalized combine weights across %d shapes", len(cases))
 }
+
+// TestCUDARowAxpy checks cu_row_axpy (Recorder.RowAxpy): dst[r,:] += arow[r]·src[r,:] — the MoE
+// weighted-combine primitive. Covers the decode case (1 row) and a multi-row batch.
+func TestCUDARowAxpy(t *testing.T) {
+	skipNoGPU(t)
+	rec, err := cuda.NewRecorder()
+	if err != nil {
+		t.Fatalf("NewRecorder: %v", err)
+	}
+	defer rec.Free()
+
+	cases := []struct {
+		rows, cols int
+		dst0, src  []float32
+		arow       []float32
+	}{
+		{1, 4, []float32{1, 2, 3, 4}, []float32{10, 20, 30, 40}, []float32{0.5}},
+		{3, 2, []float32{0, 0, 1, 1, 2, 2}, []float32{1, 2, 3, 4, 5, 6}, []float32{2, 0, -1}},
+	}
+	for ci, c := range cases {
+		dd, _ := cuda.NewDeviceBufferF32(c.dst0)
+		ds, _ := cuda.NewDeviceBufferF32(c.src)
+		da, _ := cuda.NewDeviceBufferF32(c.arow)
+		if err := rec.RowAxpy(dd, ds, da, c.rows, c.cols); err != nil {
+			t.Fatalf("case %d RowAxpy: %v", ci, err)
+		}
+		if err := rec.Wait(); err != nil {
+			t.Fatalf("case %d wait: %v", ci, err)
+		}
+		got := make([]float32, c.rows*c.cols)
+		if err := dd.DownloadF32(got); err != nil {
+			t.Fatalf("case %d download: %v", ci, err)
+		}
+		dd.Free()
+		ds.Free()
+		da.Free()
+		for r := 0; r < c.rows; r++ {
+			for j := 0; j < c.cols; j++ {
+				want := c.dst0[r*c.cols+j] + c.arow[r]*c.src[r*c.cols+j]
+				if g := got[r*c.cols+j]; math.Abs(float64(g-want)) > 1e-6 {
+					t.Fatalf("case %d [%d,%d]: gpu %v vs ref %v", ci, r, j, g, want)
+				}
+			}
+		}
+	}
+	t.Logf("cu_row_axpy matches dst += diag(arow)·src across %d shapes", len(cases))
+}

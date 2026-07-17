@@ -239,6 +239,18 @@ func (rec *Recorder) MoEGate(logits, weights *DeviceF32, rows, e, k int) error {
 	return nil
 }
 
+// RowAxpy accumulates dst += diag(arow)·src: dst[r,:] += arow[r]·src[r,:], the MoE combine that
+// scales an expert's [rows,cols] output by each token's routing weight (arow is a [rows] vector).
+func (rec *Recorder) RowAxpy(dst, src, arow *DeviceF32, rows, cols int) error {
+	if dst.ptr == nil || src.ptr == nil || arow.ptr == nil {
+		return fmt.Errorf("cuda: rec RowAxpy on a freed handle")
+	}
+	if rc := C.cu_row_axpy(dst.ptr, src.ptr, arow.ptr, C.int(rows), C.int(cols)); rc != 0 {
+		return fmt.Errorf("cuda: rec RowAxpy failed (code %d)", int(rc))
+	}
+	return nil
+}
+
 // MHAALiBi is MHA with an ALiBi position bias (MPT): each scaled score gets slopeₕ·(j−qabs) added
 // before the mask+softmax, where slopes is a device array of `heads` per-head slopes. No RoPE.
 func (rec *Recorder) MHAALiBi(q, k, v, o, slopes *DeviceF32, sq, sk, dm, heads, kvHeads, dk, causal, window int, scale float32) error {

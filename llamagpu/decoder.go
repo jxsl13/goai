@@ -135,6 +135,10 @@ type recorder interface {
 	// MHAALiBi is MHA with an ALiBi position bias (MPT): slopeₕ·(j−qabs) added to each scaled score
 	// before the mask+softmax; slopes holds `heads` per-head slopes. cuda-only (metal/vulkan stub).
 	MHAALiBi(q, k, v, o, slopes buffer, sq, sk, dm, heads, kvHeads, dk, causal, window int, scale float32) error
+	// MoEGate writes Mixtral top-k renormalized routing weights [rows·e] from router logits [rows·e].
+	// RowAxpy accumulates dst[r,:] += arow[r]·src[r,:] (the MoE weighted combine). Both cuda-only.
+	MoEGate(logits, weights buffer, rows, e, k int) error
+	RowAxpy(dst, src, arow buffer, rows, cols int) error
 	Unary(x, o buffer, op int) error
 	Binary(a, b, o buffer, op int) error
 	QMatMulResident(x buffer, w qweight, o buffer, m int) error
