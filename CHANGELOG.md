@@ -4,6 +4,12 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### docs — README: front-page billing for the architecture campaign (T796, 2026-07-17)
+
+The README's "What works today" section now leads with the thirty-one loadable architectures, the
+transformers-anchored parity story, the architecture-native serving mechanics, and the six-family
+GGUF coverage — replacing the pre-campaign "GPT and Llama" description.
+
 ### nlp — feat: GGUF loading for Phi-3 and Mixtral (T795, 2026-07-17)
 
 `Phi3FromGGUF` and `MixtralFromGGUF` (+`ToGGUF` round-trips) complete the GGUF axis for the

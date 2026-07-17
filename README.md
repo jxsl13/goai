@@ -80,10 +80,24 @@ for step := 0; step < 150; step++ {
 
 ## What works today
 
-- **Transformer LLMs end-to-end**: GPT and Llama (GQA (grouped-query attention: several query heads share one key/value head, shrinking the cache)/SwiGLU (the gated feed-forward activation modern llamas use)/RoPE (rotary position embeddings — positions encoded as rotations)) — build,
-  train (full backward validated against real torch gradients at f64 rtol
-  ~1e-9), checkpoint (safetensors/GGUF round-trips), tokenize (BPE bit-exact
-  vs tiktoken, SentencePiece-Unigram, WordPiece), and generate.
+- **Thirty-one loadable LLM architectures, transformers-anchored**: load real
+  Hugging Face checkpoints of Llama/Mistral, Qwen2/2.5, Qwen3, Phi-1/2/3,
+  Gemma/Gemma 2, Cohere Command-R, OLMo 2, GPT-NeoX/Pythia, StableLM,
+  StarCoder2, Granite, Nemotron, MPT (ALiBi), Falcon (MQA), the MoE family
+  (Mixtral, Qwen2/Qwen3-MoE, GraniteMoE, OLMoE), DeepSeek-V2 (Multi-head
+  Latent Attention + MoE), the state-space models Mamba/Mamba-2, RWKV, the
+  Jamba hybrid, plus BERT/RoBERTa/DistilBERT/T5 — every one anchored bit- or
+  tolerance-exact (~1e-8) against the transformers reference, fine-tunable
+  (LoRA included), and generating with architecture-native serving: batched
+  prompt Prefill (bit-identical to stepwise), amortized KV caches, sparse
+  top-k MoE decode, O(1) recurrent state, and DeepSeek's absorbed-latent cache
+  (6.7× less KV memory).
+- **Train end-to-end**: full backward validated against real torch gradients at
+  f64 rtol ~1e-9, checkpoint (safetensors / .pt via a safe no-code-execution
+  loader / GGUF round-trips — GGUF also loads llama.cpp community files for
+  Llama, Qwen2/2.5, Qwen3, Gemma, Phi-3 and Mixtral, with each converter's
+  layout conventions verified against llama.cpp source), tokenize (BPE
+  bit-exact vs tiktoken, SentencePiece-Unigram, WordPiece), and generate.
 - **Structured generation**: GBNF (llama.cpp’s grammar notation) grammar-constrained decoding compiled to a
   pushdown automaton (nested JSON a regex guide structurally cannot enforce),
   a JSON-Schema→grammar compiler, regex/FSM (finite-state machine) guiding, and chat templates for
