@@ -33,7 +33,7 @@ static cublasHandle_t gHandle = NULL;
 static float *gOne = NULL, *gZero = NULL; // device 1.0f/0.0f — cuBLAS DEVICE pointer mode (graph-capture-safe alpha/beta)
 static cudaStream_t gStream = NULL;
 static CUcontext gCtx = NULL; // runtime's primary context, retained for driver-API launches
-static CUfunction gGelu = NULL, gRelu2 = NULL, gRelu = NULL, gMoeGate = NULL, gRowAxpy = NULL, gSsmStep = NULL, gSsdStep = NULL, gConv1dStep = NULL, gWkvStep = NULL, gSilu = NULL, gSigmoid = NULL, gSoftplus = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gRopePartial = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gAttnSoftmaxCap = NULL, gAttnSoftmaxAlibi = NULL, gAttnSoftmaxBias = NULL, gQgemv = NULL, gQgemv4 = NULL, gQgemv4k = NULL, gQgemv4kMT = NULL, gQgemv4kMTS = NULL, gQgemv4kPre = NULL, gQgemv5k = NULL, gQgemv5kMT = NULL, gQgemv5kMTS = NULL, gQgemv6k = NULL, gQgemv6kMT = NULL, gQgemv6kMTS = NULL, gQgemv3k = NULL, gQgemv3kMT = NULL, gQgemv2k = NULL, gQgemv2kMT = NULL, gQgemv40 = NULL, gQgemvI4nl = NULL, gQgemvI4xs = NULL, gQgemvI4xsMT = NULL, gQgemvMxfp4 = NULL, gQgemvMxfp4MT = NULL, gQgemvI2xxs = NULL, gQgemvI2xxsMT = NULL, gQgemvI2xs = NULL, gQgemvI3xxs = NULL, gQgemvI3xxsMT = NULL, gQgemvI3s = NULL, gQgemvI3sMT = NULL, gQgemvI1s = NULL, gQgemvI1m = NULL, gI8Mma = NULL, gI8MmaT = NULL, gI8MmaRb = NULL, gI8MmaDb = NULL, gI8MmaWt = NULL, gI8MmaWp = NULL, gI8Mmq = NULL, gI8MmqR = NULL, gQrowsI8 = NULL, gLdmProbe = NULL, gLdmProbe2 = NULL, gI8MmaLm = NULL, gCvtF16 = NULL, gCvtFrom16 = NULL; // lazily nvrtc-compiled
+static CUfunction gGelu = NULL, gRelu2 = NULL, gRelu = NULL, gMoeGate = NULL, gRowAxpy = NULL, gSsmStep = NULL, gSsdStep = NULL, gConv1dStep = NULL, gWkvStep = NULL, gSilu = NULL, gSigmoid = NULL, gSoftplus = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gRopePartial = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gAttnSoftmaxCap = NULL, gAttnSoftmaxAlibi = NULL, gAttnSoftmaxBias = NULL, gQgemv = NULL, gQgemv4 = NULL, gQgemv4k = NULL, gQgemv4kMT = NULL, gQgemv4kMTS = NULL, gQgemv4kPre = NULL, gQgemv5k = NULL, gQgemv5kMT = NULL, gQgemv5kMTS = NULL, gQgemv6k = NULL, gQgemv6kMT = NULL, gQgemv6kMTS = NULL, gQgemv3k = NULL, gQgemv3kMT = NULL, gQgemv3kMTS = NULL, gQgemv2k = NULL, gQgemv2kMT = NULL, gQgemv40 = NULL, gQgemvI4nl = NULL, gQgemvI4xs = NULL, gQgemvI4xsMT = NULL, gQgemvMxfp4 = NULL, gQgemvMxfp4MT = NULL, gQgemvI2xxs = NULL, gQgemvI2xxsMT = NULL, gQgemvI2xs = NULL, gQgemvI3xxs = NULL, gQgemvI3xxsMT = NULL, gQgemvI3s = NULL, gQgemvI3sMT = NULL, gQgemvI1s = NULL, gQgemvI1m = NULL, gI8Mma = NULL, gI8MmaT = NULL, gI8MmaRb = NULL, gI8MmaDb = NULL, gI8MmaWt = NULL, gI8MmaWp = NULL, gI8Mmq = NULL, gI8MmqR = NULL, gQrowsI8 = NULL, gLdmProbe = NULL, gLdmProbe2 = NULL, gI8MmaLm = NULL, gCvtF16 = NULL, gCvtFrom16 = NULL; // lazily nvrtc-compiled
 static CUfunction gRopeDpos = NULL, gRopePartialDpos = NULL, gAttnSoftmaxDpos = NULL, gAppendDpos = NULL; // device-position (graph-capturable) twins
 static CUfunction gGqaFlashPart = NULL, gGqaFlashMerge = NULL; // flash decode: GQA K/V-shared split-K partials + merge
 static CUfunction gGqaFlashPartF16 = NULL, gAppendDposF16 = NULL; // f16 KV-cache twins (u16 storage, f32 compute)
@@ -2283,11 +2283,96 @@ done:
 // meta/qs/hmask layout). Each lane owns 8 contiguous elements; the scale dl and the 8 decoded q3 values
 // (2 low bits | high bit, minus the inverted-hmask offset) are hoisted ONCE per warp and reused across
 // an MT=8 row tile. Arithmetic LIFTED VERBATIM from qmatmul_q3k → bit-identical per row. K%256==0.
+// Shape routing (A/B-measured on Q4_K/Q5_K/Q6_K, confirmed here): deep columns (K > N,
+// ffn_down) take the shared-staged variant qmatmul_q3k_mts (activation row tile shared across
+// the block's 8 column warps); wide-N shapes keep the unstaged kernel (the per-sub-block
+// barrier costs latency hiding in the weight-BW-bound regime).
 int cu_qmatmul_q3k_mt(const void* dA, const void* dMeta, const void* dQs, const void* dHm, void* dOut, int M, int K, int N, float beta) {
     int rc = -1;
     pthread_mutex_lock(&gLock);
     if (ensure_init() != 0) { rc = -1; goto done; }
     if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (K > N) {
+        if (!gQgemv3kMTS && compile_kernel(
+                       "__device__ __forceinline__ float f16f(unsigned short h){\n"
+                       "  unsigned s = (h & 0x8000u) << 16;\n"
+                       "  float v = __uint_as_float((h & 0x7fffu) << 13) * __uint_as_float(0x77800000u);\n"
+                       "  return __uint_as_float(__float_as_uint(v) | s);\n"
+                       "}\n"
+                       "extern \"C\" __global__ void qmatmul_q3k_mts(const float* a, const unsigned char* meta, const unsigned char* qsb, const unsigned char* hmb, float* out, int M, int K, int N, float beta){\n"
+                       "  __shared__ float at[8*256];\n"                       // row tile: 8 rows × one 256-float sub-block (8 KB)
+                       "  int warp = threadIdx.x >> 5, lane = threadIdx.x & 31;\n"
+                       "  int ncb = (N + 7) >> 3;\n"
+                       "  int mt0 = (blockIdx.x / ncb) * 8;\n"
+                       "  int n = (blockIdx.x % ncb) * 8 + warp;\n"
+                       "  int sbs = K >> 8;\n"
+                       "  int is = lane >> 1, half = lane & 1, l0 = half*8;\n"
+                       "  int nb = is >> 3, jj = (is & 7) >> 1, gsel = is & 1, g = gsel*16;\n"
+                       "  int shift = 2*jj, hbit = nb*4 + jj;\n"
+                       "  int yi = nb*128 + jj*32 + g + l0;\n"
+                       "  int qsrel = nb*32 + g + l0, hmrel = g + l0;\n"
+                       "  float acc[8];\n"
+                       "  #pragma unroll\n"
+                       "  for (int j=0;j<8;j++) acc[j]=0.0f;\n"
+                       "  int rows = M - mt0; if (rows > 8) rows = 8;\n"
+                       "  for (int w = 0; w < sbs; w++){\n"
+                       "    __syncthreads();\n"                                // previous tile fully consumed before overwrite
+                       "    for (int t = threadIdx.x; t < (rows<<8); t += 256){\n"
+                       "      at[t] = a[(size_t)(mt0 + (t>>8))*K + w*256 + (t&255)];\n"
+                       "    }\n"
+                       "    __syncthreads();\n"
+                       "    if (n < N){\n"
+                       "    size_t sb = (size_t)(n*sbs + w);\n"                       // weight decode — ONCE per warp
+                       "    const unsigned char* mp = meta + sb*18;\n"
+                       "    float dl = f16f((unsigned short)(mp[16] | (mp[17]<<8))) * (float)((int)mp[is] - 32);\n"
+                       "    const unsigned char* qp = qsb + sb*64 + qsrel;\n"
+                       "    const unsigned char* hp = hmb + sb*32 + hmrel;\n"
+                       "    unsigned qw0 = *(const unsigned int*)qp, qw1 = *(const unsigned int*)(qp+4);\n"
+                       "    unsigned hw0 = *(const unsigned int*)hp, hw1 = *(const unsigned int*)(hp+4);\n"
+                       "    float qv[8];\n"                                           // decoded q3 values, reused across rows
+                       "    #pragma unroll\n"
+                       "    for (int t = 0; t < 8; t++){\n"
+                       "      unsigned qb = (t<4) ? ((qw0>>(t*8))&0xFFu) : ((qw1>>((t-4)*8))&0xFFu);\n"
+                       "      unsigned hb = (t<4) ? ((hw0>>(t*8))&0xFFu) : ((hw1>>((t-4)*8))&0xFFu);\n"
+                       "      int lowb = (qb >> shift) & 3;\n"
+                       "      int hset = (hb >> hbit) & 1;\n"
+                       "      qv[t] = (float)(lowb - (hset ? 0 : 4));\n"
+                       "    }\n"
+                       "    #pragma unroll\n"
+                       "    for (int j=0;j<8;j++){\n"
+                       "      int m = mt0 + j; if (m >= M) break;\n"
+                       "      const float* av = at + (j<<8) + yi;\n"
+                       "      float4 alo = *(const float4*)av;\n"
+                       "      float4 ahi = *(const float4*)(av + 4);\n"
+                       "      float av8[8] = { alo.x, alo.y, alo.z, alo.w, ahi.x, ahi.y, ahi.z, ahi.w };\n"
+                       "      float s = 0.0f;\n"
+                       "      #pragma unroll\n"
+                       "      for (int t = 0; t < 8; t++){ s += av8[t] * qv[t]; }\n"
+                       "      acc[j] += dl * s;\n"
+                       "    }\n"
+                       "    }\n"
+                       "  }\n"
+                       "  if (n >= N) return;\n"
+                       "  #pragma unroll\n"
+                       "  for (int j=0;j<8;j++){\n"
+                       "    float a2 = acc[j];\n"
+                       "    for (int o = 16; o > 0; o >>= 1) a2 += __shfl_down_sync(0xffffffff, a2, o);\n"
+                       "    int m = mt0 + j;\n"
+                       "    if (lane == 0 && m < M){ out[(size_t)m*N+n] = beta*out[(size_t)m*N+n] + a2; }\n"
+                       "  }\n"
+                       "}\n",
+                       "qmatmul_q3k_mts.cu", "qmatmul_q3k_mts", &gQgemv3kMTS) != 0) { rc = -2; goto done; }
+        {
+            int nmt = (M + 8 - 1) / 8;
+            int ncb = (N + 7) / 8;
+            int threads = 256, blocks = ncb * nmt; if (blocks < 1) blocks = 1;
+            void* args[9];
+            args[0] = &dA; args[1] = &dMeta; args[2] = &dQs; args[3] = &dHm; args[4] = &dOut;
+            args[5] = &M; args[6] = &K; args[7] = &N; args[8] = &beta;
+            rc = (cuLaunchKernel(gQgemv3kMTS, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+        }
+        goto done;
+    }
     if (!gQgemv3kMT && compile_kernel(
                        "__device__ __forceinline__ float f16f(unsigned short h){\n"
                        "  unsigned s = (h & 0x8000u) << 16;\n"
