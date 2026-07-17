@@ -240,6 +240,19 @@ func (rec *Recorder) MoEGate(logits, weights *DeviceF32, rows, e, k, raw int, sc
 	return nil
 }
 
+// Conv1DStep advances one decode step of Mamba's causal depthwise conv: reads this channel's state
+// (its last K-1 inputs) plus the new x, writes out[D], and shifts the new input into the state. x/b/
+// out are [D], w is [D,K], state is [D,K-1] (starts zeroed for the causal left-pad).
+func (rec *Recorder) Conv1DStep(x, w, b, state, out *DeviceF32, d, k int) error {
+	if x.ptr == nil || w.ptr == nil || b.ptr == nil || state.ptr == nil || out.ptr == nil {
+		return fmt.Errorf("cuda: rec Conv1DStep on a freed handle")
+	}
+	if rc := C.cu_conv1d_step(x.ptr, w.ptr, b.ptr, state.ptr, out.ptr, C.int(d), C.int(k)); rc != 0 {
+		return fmt.Errorf("cuda: rec Conv1DStep failed (code %d)", int(rc))
+	}
+	return nil
+}
+
 // SSMStep advances one timestep of the Mamba selective-scan recurrence for decode: updates the
 // per-channel state h[D,N] in place and writes y[D]. u/delta/dskip/y are [D]; A is [D,N]; B/C are
 // [N] (this token's input-dependent matrices, shared across channels). The state persists across

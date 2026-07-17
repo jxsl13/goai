@@ -65,7 +65,7 @@ func TestCUDASSMStep(t *testing.T) {
 
 	da, _ := cuda.NewDeviceBufferF32(aD)
 	ddk, _ := cuda.NewDeviceBufferF32(dskip)
-	dh, _ := cuda.NewDeviceF32(D, N) // state, zeroed
+	dh, _ := cuda.NewDeviceBufferF32(make([]float32, D*N)) // state, explicitly zeroed
 	du, _ := cuda.NewDeviceF32(1, D)
 	ddelta, _ := cuda.NewDeviceF32(1, D)
 	db, _ := cuda.NewDeviceF32(1, N)
