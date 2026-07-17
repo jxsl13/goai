@@ -284,7 +284,7 @@ a closed lever:
   (`grid[idx][k] = dequant/db`). Uploaded once behind `sync.Once`. Used for every
   i-quant grid (IQ2/IQ3).
 - **Validate a new kernel by parity vs `gguf.Dequantize` + a host matmul**, rel
-  tolerance ~1e-5 (only f32 summation-order deviation allowed, ~1e-7 typical;
+  tolerance ≈1e-5 (only f32 summation-order deviation allowed, ≈1e-7 typical;
   assert *relative to output magnitude* since random scales inflate weights).
 - **CI/throughput A/B evidence lives in `docs/benchmarking.md`; every rule here
   traces to a §Tw row in `SPEC-worker-linux-amd64-cuda.md`.**
@@ -348,11 +348,11 @@ standing on this box (RTX 3060) vs llama.cpp-Vulkan:
   gather/scatter expert-GEMV. Do NOT conclude "decode is won" for MoE architectures.
 - **Prefill (prompt processing): 0.36–0.54× — THIS is the gap.** GoAI-f16 0.54×,
   GoAI-MMQ int8 0.36× of llama.cpp-Vulkan. Prefill is GEMM-compute-bound (FFN GEMM
-  ~54% of the step, attention ~14%).
+  ≈54% of the step, attention ≈14%).
 
 So the "beat the incumbent" lever is **prefill GEMM throughput**. But note what's
 already been closed there (§3): the int8 tensor-core GEMM is at its hand-NVRTC ceiling
-(~22–23 TOPS, beats cuBLAS-f16 by ~7% but ~22% of int8 peak; the 2× needs CUTLASS-level
+(≈22–23 TOPS, beats cuBLAS-f16 by ≈7% but ≈22% of int8 peak; the 2× needs CUTLASS-level
 ptxas tuning), warp-spec/big-tiles regress on sm_86 (R8), and flash-prefill + f16
 tensor-core attention both lost (R10). **The prefill gap is HW/tooling-limited**: closing
 it needs `mma.h`/WMMA (blocked on the NVRTC-without-mma.h wall) or a CUTLASS-class kernel

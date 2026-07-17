@@ -49,42 +49,11 @@ const (
 // gemma.rope.freq_base is optional (the converter does not emit it; llama.cpp and this
 // loader both default to 10000).
 func GemmaFromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor) (*Gemma, error) {
-	const arch = "gemma"
-	if a, _ := meta[ggufArch].(string); a != arch {
-		return nil, fmt.Errorf("nlp: GGUF general.architecture=%q, want %q", a, arch)
-	}
-	key := func(suffix string) string { return arch + "." + suffix }
-	dim, err := metaInt(meta, key(ggufEmbLen))
+	cfg, err := gemmaCfgFromGGUFMeta(meta)
 	if err != nil {
 		return nil, err
 	}
-	layers, err := metaInt(meta, key(ggufBlockCnt))
-	if err != nil {
-		return nil, err
-	}
-	ffn, err := metaInt(meta, key(ggufFFLen))
-	if err != nil {
-		return nil, err
-	}
-	heads, err := metaInt(meta, key(ggufHeadCnt))
-	if err != nil {
-		return nil, err
-	}
-	cfg := GemmaConfig{
-		Dim: dim, Layers: layers, FFN: ffn, Heads: heads, KVHeads: heads,
-		Eps:      metaFloat(meta, key(ggufRMSEps), 1e-6),
-		RopeBase: metaFloat(meta, key(ggufRopeFreq), 10000),
-		Ctx:      dim, // provisional; overwritten from context_length below
-	}
-	if kv, e := metaInt(meta, key(ggufHeadKV)); e == nil {
-		cfg.KVHeads = kv
-	}
-	if c, e := metaInt(meta, key(ggufCtxLen)); e == nil {
-		cfg.Ctx = c
-	}
-	if hd, e := metaInt(meta, key(ggufKeyLen)); e == nil {
-		cfg.HeadDim = hd
-	}
+	layers, heads := cfg.Layers, cfg.Heads
 
 	tok, ok := tensors["token_embd.weight"]
 	if !ok {
@@ -136,6 +105,51 @@ func GemmaFromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor) (*Gem
 	}
 	m.FinalNorm = rmsFromGGUF(on, cfg.Eps)
 	return m, nil
+}
+
+// gemmaCfgFromGGUFMeta parses the gemma.* metadata keys of a GGUF file whose
+// general.architecture is "gemma" into a GemmaConfig — the metadata half shared by
+// [GemmaFromGGUF] (dequantized tensors) and [QuantGemmaFromGGUF] (still-quantized
+// tensors). Vocab and the shape-derived HeadDim fallback are left at zero: they come
+// from the tensor maps, which only the callers hold.
+func gemmaCfgFromGGUFMeta(meta map[string]any) (GemmaConfig, error) {
+	const arch = "gemma"
+	if a, _ := meta[ggufArch].(string); a != arch {
+		return GemmaConfig{}, fmt.Errorf("nlp: GGUF general.architecture=%q, want %q", a, arch)
+	}
+	key := func(suffix string) string { return arch + "." + suffix }
+	dim, err := metaInt(meta, key(ggufEmbLen))
+	if err != nil {
+		return GemmaConfig{}, err
+	}
+	layers, err := metaInt(meta, key(ggufBlockCnt))
+	if err != nil {
+		return GemmaConfig{}, err
+	}
+	ffn, err := metaInt(meta, key(ggufFFLen))
+	if err != nil {
+		return GemmaConfig{}, err
+	}
+	heads, err := metaInt(meta, key(ggufHeadCnt))
+	if err != nil {
+		return GemmaConfig{}, err
+	}
+	cfg := GemmaConfig{
+		Dim: dim, Layers: layers, FFN: ffn, Heads: heads, KVHeads: heads,
+		Eps:      metaFloat(meta, key(ggufRMSEps), 1e-6),
+		RopeBase: metaFloat(meta, key(ggufRopeFreq), 10000),
+		Ctx:      dim, // provisional; overwritten from context_length below
+	}
+	if kv, e := metaInt(meta, key(ggufHeadKV)); e == nil {
+		cfg.KVHeads = kv
+	}
+	if c, e := metaInt(meta, key(ggufCtxLen)); e == nil {
+		cfg.Ctx = c
+	}
+	if hd, e := metaInt(meta, key(ggufKeyLen)); e == nil {
+		cfg.HeadDim = hd
+	}
+	return cfg, nil
 }
 
 // GemmaToGGUF is the inverse of [GemmaFromGGUF]: it serializes a Gemma (v1) into GGUF

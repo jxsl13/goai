@@ -4,6 +4,301 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — J-lens transported readout, anchored on the reference implementation (T812, 2026-07-17)
+
+`JLens.Apply` / `ApplyAt` / `Slice` implement the §R250 readout `W_U norm(J_l h)` behind a
+small `LensReadoutModel` seam on Llama and GPT. Tier-1 anchors run the ACTUAL Anthropic
+jacobian-lens reference in the venv on a tiny deterministic model (scripts/golden_jlens.py;
+112KB of goldens): fit-parity 1.85e-07, readout-parity 1.79e-08, and import of the real
+`.pt` artifact (4.7e-04, the fp16 storage floor) — which corrected the T811 naming
+assumption (int-keyed `{"J": {layer: fp16}}`, block-output layer indexing, no identity
+stored; the safe pytorch loader now stringifies int dict keys). One §R250 semantic
+correction discovered against the reference: the estimator masks INVALID positions — the
+final position (no next-token target) always, plus `skip_first` leading attention-sink
+positions from both the target sum and the source divisor; `FitJLens` now matches exactly
+(`WithJLensSkipFirst`). Tier-2 think-about-X gate on a trained lag-2-permutation GPT: the
+J-lens ranks the held future token at mean rank 1.17 (29/30 probes ≤ 2) where the plain
+logit lens sits at 6.07 of vocab 12 — the paper's global-workspace behavior reproduced in
+miniature.
+
+### nlp — J-lens foundation: residual capture + VJP-fitted expected Jacobians (T810+T811, 2026-07-17)
+
+The first two J-space tasks (§R250, Anthropic jacobian-lens port) land. T810: per-layer
+residual-stream capture on Llama and GPT (`ForwardResiduals`; Layers+1 taps, nil hook
+byte-identical — verified on output bits AND tape length). T811: the `JLens` type with the
+exact §R250 estimator — row-by-row VJP accumulation of J_l = E[∂h_L,t'/∂h_l,t] (cotangents
+summed over targets, averaged over sources; unit cotangents seeded via the inner-product
+trick), `Merge` for disjoint corpus slices, safetensors save/load, and reference-`.pt`
+import (mapping documented as an assumption for T812's golden verification). Fit-bounding
+via functional options. Self-consistency gates: last-layer identity EXACT, central
+finite-difference 1.14e-9, merge-vs-full-fit 4.4e-16, round-trip bit-exact.
+
+### spec — J-lens / J-space interpretability planned (R250, T810-T815, 2026-07-17)
+
+Per user green-light, the complete port of Anthropic's jacobian-lens reference
+implementation (Apache-2.0) enters the spec: residual-capture hooks, VJP-fitted expected
+Jacobians with merge and .pt-lens import, the transported readout with reference-anchored
+goldens (B67-lesson independent fixtures) plus the think-about-X property test, sparse
+nonnegative J-space decomposition with occupancy control, a zero-dep self-contained HTML
+layer-by-position visualization, and the paper's replication prompt sets.
+
+### nlp — B67-class audit of all 17 GGUF loaders; FIX: llama-arch q/k BIAS permute (B68, T809, 2026-07-17)
+
+A systematic audit classified every GGUF loader's parity fixtures as independent-transform
+vs symmetric-round-trip-only. Result: 15 loaders (plus the quant twins, transitively) already
+anchor their convention-critical transforms independently; the audit found ONE real bug:
+llama.cpp's converter permutes `q_proj.bias`/`k_proj.bias` exactly like the weights (the
+optional bias tensors exist for the LLaMAfied-Qwen lineage), and all three llama-arch paths
+missed it — `LlamaFromGGUF` and `QuantLlamaFromGGUF` loaded biases raw (wrong
+bias-to-channel pairing, divergence O(bias) = 1.05e-01 on a nonzero-bias fixture) and
+`LlamaToGGUF` wrote internally inconsistent files. DOUBLE masking: symmetric round-trips
+(B67) plus the qwen2 golden's all-zero biases — a zero vector is permute-invariant and can
+never gate a layout convention. Fixed with 1-D twins of the verified row transforms
+(`ropeUnpermuteVec`/`ropePermuteVec`) on all three paths; three new decisive gates
+(independent test-side bias permute: parity 1.27e-11; write-side element-equality; quantized
+exact-equality). Qwen2/Qwen3 biases stay unpermuted on disk — pinned by their existing
+independent fixtures.
+
+### nlp — B67 follow-up: phi3 split-tensor fixtures rebuilt convention-faithfully (2026-07-17)
+
+The two phi3 split-tensor tests fabricated their fixtures via `LlamaToGGUF`, which since
+B67 correctly writes the llama arch's PERMUTED rotary rows — but phi3 is NEOX/no-permute,
+so those fixtures became layout-invalid (caught by the full suite, exactly as the B67
+gates are meant to). They now build the split form the way llama.cpp's fallback does:
+by re-grouping `Phi3ToGGUF`'s packed rows.
+
+### nlp — FIX: LlamaFromGGUF now un-permutes the llama arch's q/k rows (B67, 2026-07-17)
+
+Real llama.cpp llama/mistral GGUF files store attn_q/attn_k in ggml's INTERLEAVED rotary
+row layout (the converter's permute for NORM-type rope); GoAI's RoPE is split-half, and
+`LlamaFromGGUF` copied the rows as stored — wrong attention pairing for every real
+community file, masked because all fixtures round-tripped GoAI's own serializer (the old
+§R93 note even asserted no re-permute was needed, while the Mixtral and Granite loaders —
+same on-disk lineage — correctly un-permuted). Found by cross-loader contradiction during
+T808. Fixes: `LlamaFromGGUF` un-permutes via `ropeUnpermuteRows`; `QuantLlamaFromGGUF`
+un-permutes the Q-block rows losslessly via `quantPermuteRows`; `LlamaToGGUF` now WRITES
+the permuted on-disk convention. Decisive gates added: a fixture built from the raw HF
+golden with an INDEPENDENTLY implemented llama.cpp permute must reproduce transformers
+logits (1.9e-08/3.8e-08, float and GQA), the write layout must equal that independent
+permute element-for-element, and the quantized load must exactly equal QuantizeLlama.
+Qwen2/Qwen3/Gemma/Phi-3 GGUF paths are NEOX/no-permute and were always correct.
+
+### nlp — GGUF loading for Gemma 2 and Granite (T808, 2026-07-17)
+
+`Gemma2FromGGUF` and `GraniteFromGGUF` (+ `*ToGGUF`); float GGUF coverage reaches
+seventeen architectures. Gemma 2: the converter pre-folds +1 into all four sandwich norms
+(as gemma-1); HF's pre_feedforward_layernorm lands under plain `ffn_norm` while the post
+norms are `post_attention_norm`/`post_ffw_norm`; soft-cap keys default to 50/30 when
+ABSENT (0 disables — llama.cpp semantics mirrored); the 27B query-scale special case is
+derived from block_count exactly as llama.cpp does; sliding-window handled by clamping
+Ctx to the window so every accepted prompt is bit-equal to llama.cpp's graph. Granite:
+inherits the llama converter's q/k PERMUTE (undone at load via ropeUnpermuteRows, proven
+against an independently implemented permute); the four scalar keys map onto LlamaConfig
+with llama.cpp's 0-defaults, `logit_scale` required. Parity 1.6e-10 / 1.1e-12.
+
+### nlp — GGUF loading for Cohere Command-R and Nemotron (T807, 2026-07-17)
+
+`CohereFromGGUF` and `NemotronFromGGUF` (+ `*ToGGUF` inverses); float GGUF coverage
+reaches fifteen architectures. Cohere: the converter never permutes — the GGUF carries
+HF's INTERLEAVED q/k rows and command-r sits in the NORM rope case, so the loader applies
+the same `permuteInterleaveToSplit` transform as the HF path (round-trip re-interleaves
+element-exactly); `logit_scale` metadata honored (0 → 1); tied head enforced (a stray
+`output.weight` is rejected). Nemotron: the GGUF stores the PRE-FOLDED (1+γ) LayerNorm1P
+gains — the converter adds 1 so the ggml engine needs no change — hence the loader copies
+γ directly and the round-trip test pins "no double fold"; NEOX partial rotary via
+rope.dimension_count; untied head; norm biases required. Parity 9.3e-12 / 3.0e-10.
+
+### nlp — GGUF loading for DeepSeek-V2 (T806, 2026-07-17)
+
+`DeepSeekV2FromGGUF` (+ `ToGGUF`) loads llama.cpp deepseek2 checkpoints — the densest
+convention set yet, all verified in llama.cpp source: kv_b is SPLIT ON DISK (the converter
+yields per-head `attn_k_b` pre-TRANSPOSED for the absorption matmul plus `attn_v_b`; the
+unsplit `attn_kv_b` is a legacy form — the loader accepts either, rejects both-present);
+`head_count_kv` is 1 on disk ("MLA converts into MQA") while the split tensors carry all
+heads; `attention.key_length`/`value_length` are the MQA CACHE widths, with the true head
+dims under `*_mla` keys; NORM-type rope on consecutive pairs → the pe rows of `attn_q_b`
+and `attn_kv_a_mqa` are de-interleaved at load exactly like the HF path; MoE with
+`leading_dense_block_count`, fused 3-D expert banks and the FUSED shared expert. V2-Lite
+files (null q_lora_rank → plain attn_q) are rejected with a precise error — GoAI's type is
+fixed to the q-LoRA path. Includes a latent-decode parity gate proving the absorbed cache
+math survives a GGUF load. Float GGUF coverage: thirteen architectures.
+
+### nlp — GGUF loading for StableLM and OLMo 2 (T805, 2026-07-17)
+
+`StableLMFromGGUF` and `OLMo2FromGGUF` (+ `*ToGGUF` inverses), conventions verified against
+llama.cpp source; float GGUF coverage reaches twelve architectures. StableLM: pure rename,
+NEOX partial rotary with `rope.dimension_count` carrying the rotated CHANNEL COUNT (not the
+fraction), sequential-residual form selected by `ffn_norm` presence, 12B per-head q/k-norm
+variant rejected. OLMo 2: pure rename — the converter permutes q/k for first-generation
+"olmo" but NOT for "olmo2" (adjacent converter classes, easy to conflate); post-norm tensors
+land as `post_attention_norm` and `post_ffw_norm` (note the ffw contraction); full-width
+QK-norms under `attn_{q,k}_norm`. Parity vs HF-loaded models ~1e-10.
+
+### nlp — GGUF loading for MPT and Falcon (T804, 2026-07-17)
+
+`MPTFromGGUF` and `FalconFromGGUF` (+ `*ToGGUF` inverses), conventions verified against
+llama.cpp source. MPT: the converter is a pure rename — on-disk `attn_qkv` keeps HF's
+`[all-q; all-k; all-v]` chunk order (no de-interleave, unlike GPT-NeoX); ALiBi is gated on
+`mpt.attention.max_alibi_bias` (0.0 = learned-pos variant, rejected); `clamp_kqv`, biases,
+qk_ln and AWQ-scale variants rejected rather than silently mis-loaded. Falcon: the
+"jploski" fused-qkv transform is the identity for the MQA n_head_kv=1 form GoAI models
+(asserted literally in the fixture); head_count_kv must resolve to 1; the 40B dual-norm
+marker `attn_norm_2` is rejected; NEOX full rotary. Parity vs HF-loaded models 8.3e-11 /
+4.3e-11. Float GGUF coverage: ten architectures.
+
+### docs — GGUF coverage consolidated in package doc and README (2026-07-17)
+
+The nlp package doc and the README front page now state the full current GGUF matrix:
+eight float loaders (adds StarCoder2, GPT-NeoX) and six quantized direct-from-Q-block
+decode families (adds Mixtral), with the lossless quantized-byte unpacking called out.
+
+### nlp — GGUF loading for StarCoder2 and GPT-NeoX (T803, 2026-07-17)
+
+`StarCoder2FromGGUF` and `GPTNeoXFromGGUF` (+ `*ToGGUF` inverses) load llama.cpp GGUF
+checkpoints, conventions verified against llama.cpp source. The decisive finding: the
+GPT-NeoX converter DE-INTERLEAVES the packed qkv on export — on disk `attn_qkv.weight` is
+`[all-q; all-k; all-v]`, each section head-contiguous, so the loader slices plain thirds
+(the HF-path `splitNeoXQKV` would scramble every head). StarCoder2: split biased q/k/v,
+NEOX rope no-permute, LayerNorm γ+β pairs under the layer_norm_epsilon key, optional tied
+head, fused-qkv form also accepted. GPT-NeoX partial rotary via `rope.dimension_count`;
+`use_parallel_residual=false` rejected. Parity vs the HF-loaded models ~1.5e-10 / 7.5e-11.
+
+### nlp — quantized GGUF decode for Mixtral, sparse MoE (T802, 2026-07-17)
+
+`QuantMixtral` + `QuantMixtralFromGGUF` decode llama.cpp-quantized Mixtral checkpoints
+directly from the ggml Q-blocks with sparse top-k MoE decode (only the routed experts run).
+Two new lossless quantized-byte primitives extend the T799 row-granularity argument:
+`quantPermuteRows` undoes the llama-arch q/k row interleave on the quantized bytes, and
+`quantSliceExpert` un-fuses the 3-D `ffn_*_exps` expert tensors — both proven byte-equal to
+quantizing the float model's already-split/unpermuted weights, with element-exact logits.
+The router stays f32 (llama.cpp itself never quantizes ffn_gate_inp; top-k tie-breaks are
+precision-sensitive). Forward and DecodeStep share one sparse kernel sequence, making
+decode-vs-Forward bit-identical (§B64 avoided by construction). Quantized GGUF decode now
+covers Llama, Qwen2, Qwen3, Phi-3, Gemma and Mixtral.
+
+### docs — nlp: quantized-GGUF catalogue current through T801 (2026-07-17)
+
+The package doc now lists all five quantized direct-from-Q-block loaders (Llama, Qwen2,
+Qwen3, Phi-3 with lossless row-slice unpacking, Gemma with its dedicated quantized twin).
+
+### ci — vulkan/windows lane: unreachable SDK-skip guard fixed (B66, 2026-07-17)
+
+The "compile the vulkan-tagged tree" step runs under `bash -e -o pipefail`, so
+`SDK=$(ls ... | head -1)` aborted the step with ls's exit code when no Vulkan SDK was on
+the runner — before the intended "skip: no SDK" guard could run. Latent while the
+best-effort choco install kept succeeding; surfaced as a false-red on a pure-Go nlp commit.
+`|| true` inside the substitution makes the skip path reachable (reproduced + verified
+locally under the same shell flags).
+
+### nlp — quantized GGUF decode for Gemma (T801, 2026-07-17)
+
+`QuantGemma` + `QuantGemmaFromGGUF` decode llama.cpp-quantized Gemma checkpoints directly
+from the ggml Q-blocks — the quantized twin of the dedicated float Gemma type, mirroring its
+math exactly: the √dim embedding normalizer at runtime (f32, residual stream only), (1+γ)
+RMSNorm via the pre-folded on-disk gains (copied, never re-folded), GeGLU, and the tied head
+serving logits from the SAME quantized token_embd bytes that feed the dequantized f32 lookup
+table. Anchored by an exact-equality gate (GGUF-load vs quantizing the float model directly:
+byte-equal Q-blocks, element-exact logits), cosine 1.000000 vs the float pipeline on the same
+bytes, and decode-vs-Forward within the standing quant gate. Quantized GGUF decode now covers
+Llama, Qwen2, Qwen3, Phi-3 and Gemma.
+
+### perf — op-fusion spike: measured STOP verdict (T800, 2026-07-17)
+
+A measure-first spike instrumented `backend.Execute` on the CPU decode path before building
+any fused kernels: 66 ops/token, non-kernel dispatch overhead 2.2% of wall-clock, all fusible
+elementwise/norm kernels combined 4.9% of kernel time (matmul 79.4% + attention 15.6% dominate).
+Extrapolated value of every candidate fusion family is ~1.8% of decode time — under bench
+noise — so elementwise op fusion is rejected on measurement, not built. No product code
+changed; the numbers and the pointer at the real remaining frontier (the GEMV kernel itself)
+are recorded in docs/benchmarking.md.
+
+### nlp — quantized GGUF decode for Phi-3 (T799, 2026-07-17)
+
+`QuantPhi3FromGGUF` decodes llama.cpp-quantized Phi-3/Phi-3.5/Phi-4 checkpoints directly
+from the ggml Q-blocks. The packed `attn_qkv` / `ffn_up` projections are unpacked by
+`quantSliceRows` WITHOUT dequantizing: ggml block quantization is row-granular (blocks
+never span rows — the same invariant `gguf.QMatMul` enforces), so a row-range slice is an
+exact byte-range copy, proven bit-identical to quantizing the pre-split float weights
+(byte- and logit-level exact-equality gates; cosine 1.000000 vs the float pipeline on the
+same bytes). Split-tensor files pass through unchanged; decode-vs-Forward within the
+standing quant gate.
+
+### docs — nlp: GGUF catalogue brought current (T795/T797 follow-up, 2026-07-17)
+
+The package doc's loader catalogue now lists all six float GGUF loaders (adds Gemma,
+Phi-3, Mixtral) and the quantized Qwen2/Qwen3 direct-from-Q-block decoders next to
+QuantLlamaFromGGUF.
+
+### docs — benchmarking: the CPU serving arc, consolidated (T798, 2026-07-17)
+
+`docs/benchmarking.md` gains a section consolidating the T762/T777–T793 serving campaign: the
+measured table (sparse MoE 4–8×, tied-head cache, embedRow 7.4×, rowBuf 147×, O(1) recurrent decode,
+absorbed-MLA 6.7× memory, batched prefill everywhere, the 1.68× pool fix), the profile-driven method
+notes, and the two durable correctness lessons (§B64 FMA kernel-sequence sharing, §B65 race-tagged
+tolerances).
+
+### nlp — feat: quantized GGUF decode for Qwen2/Qwen3 (T797, 2026-07-17)
+
+`QuantQwen2FromGGUF`/`QuantQwen3FromGGUF` decode quantized llama.cpp Qwen checkpoints directly from
+ggml Q-blocks — the real community use case. `QuantBlock` gains optional f32 q/k/v biases (Qwen2)
+and per-head QK-norms (Qwen3), applied at exactly the float pipeline's positions (after the
+quantized projections, before RoPE) in BOTH Forward and the KV-cached DecodeStep; nil → no ops, so
+plain quant-llama stays byte-identical (its exact-equality gate is unchanged and green). Fixtures
+follow the real llama.cpp convention (Q8_0 projections, F32 1-D tensors, asserted in-test):
+GGUF-loaded vs directly-quantized is EXACTLY equal; vs the float pipeline on the same quantized
+weights cosine 1.000000; decode matches Forward within the existing quant gates. (The tiny HF
+goldens are below the 32-element quant-block floor, so the quantized fixtures use block-compatible
+geometry, tied to the goldens through the float-pipeline tests.)
+
+### docs — README: front-page billing for the architecture campaign (T796, 2026-07-17)
+
+The README's "What works today" section now leads with the thirty-one loadable architectures, the
+transformers-anchored parity story, the architecture-native serving mechanics, and the six-family
+GGUF coverage — replacing the pre-campaign "GPT and Llama" description.
+
+### nlp — feat: GGUF loading for Phi-3 and Mixtral (T795, 2026-07-17)
+
+`Phi3FromGGUF` and `MixtralFromGGUF` (+`ToGGUF` round-trips) complete the GGUF axis for the
+high-download community families. Conventions verified verbatim from llama.cpp master: **Phi-3**
+(arch `phi3`) stores the projections PACKED — one `attn_qkv` tensor (rows [q;k;v]) and a combined
+`ffn_up` (rows [gate;up], no FFN_GATE tensor at all) — with NEOX rope and no permute; the loader
+unpacks both (accepting split-tensor files too) and delegates to the shared llama-family internals,
+yielding a plain `Llama` like `Phi3FromHF`. **Mixtral** ships under the `llama` arch (distinguished
+by `expert_count` metadata) with fused 3-D expert tensors (`ffn_gate/up/down_exps`) and — because it
+rides the llama converter — PERMUTED q/k, which the loader un-permutes back to the split-half layout
+(proven bit-identical by structural round-trip checks). Parities vs the HF path: 1.35e-10 / 1.0e-10
+(the f32-metadata eps floor; weights bit-identical). Also fixes `MixtralFromHF` to actually infer
+`Config.Hidden`/`Experts` as its docs claimed. GGUF now covers Llama, Qwen2/2.5, Qwen3, Gemma,
+Phi-3 and Mixtral.
+
+### backend/cpu — fix: race-build ULP tolerance for kernel-parity tests (T794, 2026-07-17)
+
+`TestRoPEKernelsMatchRefWithinUlps` failed under the race detector on darwin/arm64: race builds apply
+different floating-point contraction (FMA fusion) than normal builds, so mathematically-identical cpu
+and ref kernels drift a few ULPs apart — up to ~2.6e-14 relative on the rope-bwd/xpos cases, where
+xpos's exponential position scaling compounds the differences — past the strict 1e-15 f64 gate. A
+race-build-tagged override (`//go:build race`) widens the f64 parity tolerance to 1e-13 for race runs
+only; normal builds keep the near-bit gate. A build-mode artifact, not a kernel bug (isolated by
+stashing during the T793 verification); recorded as §B65.
+
+### backend/cpu — perf: latency-aware worker pool + GEMV column-split — 1.68× decode (T793, 2026-07-17)
+
+A CPU profile showed single-token decode dominated by pool synchronization (54% `pthread_cond_signal`
++ 17% wait, compute ~8%): the only decode-path pool dispatcher was the MHA kernel, whose ~2µs chunks
+paid ~100µs cold-wake costs (the T617 threshold was calibrated on a warm pool), and the m=1 GEMVs —
+the actual compute bulk — didn't parallelize at all (the row-band split degenerates at one row). Two
+changes: (1) `gemvF64Cols` parallelizes single-row f64 matmuls over output columns with the identical
+ascending-k accumulation (bit-exact vs ref); (2) the worker pool gets per-worker mailboxes, steal
+sweeps with caller-help (nested-call deadlock-free by construction), and a **dense/sparse regime
+switch** — bounded spin-wait latency machinery engages only for decode-shaped streams (total work
+< 2^18 and <40µs serial glue since the last barrier); everything else behaves exactly like the old
+pool. Measured: `BenchmarkLlamaGenerate500RowBuf` 627 → ~370-400ms (**1.6-1.7×**), pthread share
+54%→8%; no-regression evidence: prompt prefill ±1%, MoE sparse decode −20% (faster), Adam/SGD train
+steps −12% (faster), GEMM/norm/softmax grind set within ±1.5% noise. Disclosed residual: one
+boundary-shape elementwise bench (exactly 2^18 units) +17%. (A pre-existing, unrelated finding while
+verifying: `TestRoPEKernelsMatchRefWithinUlps` fails under `-race` on arm64 — race-mode FP-fusion
+differences push rope-bwd/xpos 3.3e-14 past its 1.3e-14 gate; tracked, not caused by this change.)
+
 ### nlp — perf: batched prefill for the recurrent families (T792, 2026-07-17)
 
 Mamba, Mamba-2, Jamba and RWKV now prefill their prompts in one batched pass: the projections, conv

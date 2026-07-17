@@ -105,6 +105,10 @@ func MixtralFromHF(ts map[string]*tensor.Tensor, cfg MixtralConfig) (*Mixtral, e
 			MoE:      moe,
 		})
 	}
+	// Infer the MoE geometry into the config (as documented on MixtralConfig):
+	// Experts from the router width, Hidden from an expert's [dim, ffn] gate.
+	m.Config.Experts = len(m.Blocks[0].MoE.Experts)
+	m.Config.Hidden = m.Blocks[0].MoE.Experts[0].Wgate.Shape()[1]
 	norm, ok := ts["model.norm.weight"]
 	if !ok {
 		return nil, fmt.Errorf("nlp: HF Mixtral missing model.norm.weight")

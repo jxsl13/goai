@@ -222,8 +222,49 @@ func (g *GPT) ForwardHidden(ctx *backend.Context, tokens []int) (*tensor.Tensor,
 
 // hiddenFromEmbed is the shared block stack + final LayerNorm.
 func (g *GPT) hiddenFromEmbed(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, error) {
+	return g.hiddenFromEmbedCapture(ctx, x, nil)
+}
+
+// ForwardResiduals is Forward's residual-stream observer (§T810, the J-lens
+// foundation §R250): it runs the full block stack and hands every residual-stream
+// snapshot h_l [seq, dim] to capture — layer 0 is the post-embedding block input
+// h_0 (token+position embedding), layer l ∈ 1..Layers the residual AFTER block l
+// (PRE final LayerNorm), so a non-nil capture fires Layers+1 times in order. The
+// returned tensor is the post-LNf hidden states, identical to ForwardHidden. The
+// tensors handed to capture are the LIVE ones the ongoing forward consumes:
+// observers must not mutate them (a test-only injector may, on an eager backend,
+// at its own risk). A nil capture records exactly the same ops as ForwardHidden —
+// byte-identical, same discipline as Llama's KV tap (§T810).
+func (g *GPT) ForwardResiduals(ctx *backend.Context, tokens []int, capture ResidualCapture) (*tensor.Tensor, error) {
+	x, err := g.Embed(ctx, tokens)
+	if err != nil {
+		return nil, err
+	}
+	return g.hiddenFromEmbedCapture(ctx, x, capture)
+}
+
+// Unembed maps residual-stream rows h [n, dim] to logits [n, vocab] through the
+// model's final LayerNorm and LM head — the [LensReadoutModel] seam (§T812):
+// Unembed applied to the pre-LNf residual reproduces Forward's logits exactly,
+// and the J-lens borrows it to decode transported activations with the model's
+// own head.
+func (g *GPT) Unembed(ctx *backend.Context, h *tensor.Tensor) (*tensor.Tensor, error) {
+	x, err := g.LNf.Forward(ctx, h)
+	if err != nil {
+		return nil, err
+	}
+	return exec1(ctx, backend.OpMatMul, nil, x, g.Head)
+}
+
+// hiddenFromEmbedCapture is hiddenFromEmbed with an optional residual-stream tap
+// (the GPT sibling of Llama.hiddenFromEmbedTaps). The tap is a pure observer: a
+// nil capture is byte-identical to the historical hiddenFromEmbed.
+func (g *GPT) hiddenFromEmbedCapture(ctx *backend.Context, x *tensor.Tensor, capture ResidualCapture) (*tensor.Tensor, error) {
 	var err error
-	for _, b := range g.Blocks {
+	if capture != nil {
+		capture(0, x) // h_0: the post-embedding input to block 0
+	}
+	for l, b := range g.Blocks {
 		// attention sublayer: x += Attn(LN1(x))
 		h, err := b.LN1.Forward(ctx, x)
 		if err != nil {
@@ -256,6 +297,9 @@ func (g *GPT) hiddenFromEmbed(ctx *backend.Context, x *tensor.Tensor) (*tensor.T
 		}
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, h); err != nil {
 			return nil, err
+		}
+		if capture != nil {
+			capture(l+1, x) // h_{l+1}: the residual stream after block l
 		}
 	}
 	if x, err = g.LNf.Forward(ctx, x); err != nil {

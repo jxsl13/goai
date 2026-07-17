@@ -59,6 +59,12 @@ func (m *QuantLlama) DecodeStep(ctx *backend.Context, cache *LlamaCache, token, 
 		if err != nil {
 			return nil, err
 		}
+		// Qwen2 biases + Qwen3 QK-norm before RoPE, matching Forward (and Llama.DecodeStep);
+		// nil fields are no-ops. Without this a KV-cached quantized decode of a Qwen model
+		// would silently drop the extras and diverge from Forward.
+		if q, k, v, err = applyQwenAttnExtras(ctx, b, q, k, v, cfg.Heads, kv); err != nil {
+			return nil, err
+		}
 		if q, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: cfg.Heads, PosOffset: pos}, q); err != nil {
 			return nil, err
 		}

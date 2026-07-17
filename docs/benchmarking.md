@@ -781,6 +781,22 @@ side with `scripts/bench-llamacpp.sh`; the goai side with
 | prefill pp32 (f32) | 3298 tok/s | 1330 tok/s | 0.40× |
 | prefill pp128 (f32) | 8389 tok/s | 2353 tok/s | 0.28× |
 
+**REFRESH 2026-07-17** (llama.cpp b10012 Vulkan, 3 reps; goai at the cuda-q4k-mt
+branch head, 5x — same machine, sequential runs so the GPU is never shared). This
+HISTORICAL section's Q8/f32 numbers re-validated today: llama.cpp Q8 tg128 244.5 ±
+0.4 / pp32 3311 / pp128 8501; Q4_K_M tg128 325.5 ± 0.5 / pp128 7618; goai Q8-graph
+decode **207.6** (was 164.7) and f32 prefill pp32 1330 / pp128 2190 (unchanged).
+
+NOTE these are NOT goai's best current numbers — the authoritative decode state is
+the Q4_K graph scoreboard below (TinyLlama **258.5 tok/s = 1.06× ahead of
+llama.cpp-Q8**, 0.79× of their Q4_K_M; the lead grows with model size to 1.19× at
+7B), and prompt processing via the unified f16 batched prefill runs TinyLlama P=94
+in 27.5 ms ≈ **3,420 tok/s** (vs 2190 for this section's f32 token-loop path) —
+still 0.40× of llama.cpp's pp128 8501. Remaining frontiers, per the records below:
+the same-class Q4_K_M decode gap (their iterative encoder + fused attention margin)
+and the prefill GEMM gap (custom MMQ int8 kernels — cublas int8 rejected at +5-8%,
+Tw60; f16-acc already captured, Tw61).
+
 **Decode optimization journey** (26 → 164.7 tok/s = 6.3×, every step correctness-
 gated token-for-token vs the CPU reference; each bottleneck diagnosed by
 measurement, not assumption):
@@ -1423,6 +1439,41 @@ far higher-value, the **prefill** path (the ~4× gap to llama.cpp; int8 tensor c
 
 Repro: `go test -tags cuda -run '^$' -bench BenchmarkGemvQ4K ./backend/cuda/`;
 `go test -tags cuda -run 'TestCUDA(QKV|GateUp)Fuse' ./backend/cuda/`.
+
+## CPU serving arc: decode + prefill across all 31 architectures (T762, T777–T793)
+
+The 2026-07-16/17 serving campaign took the per-token CPU decode path and the prompt-processing
+path through a measured, value-exact optimization arc. Every change was §V22 A/B-measured on
+Apple M2 Pro, and every one preserves outputs exactly (bit-identical or machine-epsilon parity
+gates — never a quality trade). Permanent benchmarks live next to each change.
+
+| Change | Measured effect | Parity gate |
+| --- | --- | --- |
+| Sparse MoE decode (T762): evaluate only the routed top-k experts | 4.0× (8-expert/top-2), 7.8× (64-expert/top-8) per token | < 1e-12 vs dense |
+| Tied-head cache (T778): stop re-transposing [vocab, dim] per call (Gemma/Gemma2) | ~221 ms/call eliminated at 32000×2048 | exact |
+| `embedRow` (T778): typed row-copy replaces per-element embed loop, 18 decode paths | 14.4 → 1.9 µs/token (7.4×) | exact |
+| `rowBuf` KV cache (T779): O(T²) concat-grow → amortized O(T) zero-copy views | 68.6 → 0.47 ms growth loop @ width 2048/T=512 (147×); 1.17× e2e small | exact |
+| O(1) recurrent decode (T777/780/781/782): RWKV/Mamba/Mamba-2/Jamba constant-size state | full re-forward per token → constant step | exactly 0.0 |
+| Absorbed-MLA latent cache (T783, DeepSeek-V2) | 6.7× less KV memory (≈71× at 236B geometry), 0.85× step time | 6.2e-17 |
+| Batched prefill, all 31 architectures (T785–788, 792) | Llama-family 6.7×, MoE 2.2×, Mamba 1.8× prompt processing | bit-identical caches/state |
+| Latency-aware CPU pool + GEMV column-split (T793) | 1.68× e2e decode (627 → ~370-400 ms / 500 tokens); pthread share 54% → 8% | bit-exact GEMV; batch/train benches unregressed (train −12%, faster) |
+
+Method notes: targets were found by profiling (`-cpuprofile` on the decode benchmarks), not
+guessing — the T793 pool fix came from a profile showing 76% of samples in pool wake/sleep; the
+post-fix re-profile confirmed convergence (compute is the top app frame, `madvise` fell 10% → 2.2%).
+Two durable correctness lessons from the arc are recorded in the spec: §B64 (dense-vs-sparse MoE
+paths differ by ~1 ulp under FMA fusion — bit-parity gates must share the kernel sequence) and
+§B65 (race builds contract floating point differently — near-bit parity gates need a race-tagged
+tolerance).
+
+The arc was closed by a measure-first op-fusion spike (T800): instrumenting `backend.Execute`
+on the decode path showed 66 ops/token with non-kernel dispatch overhead at **2.2% of
+wall-clock** (0.18–0.23µs/op), and every fusible elementwise/norm op combined (silu, rope,
+rmsnorm, add, mul) at 4.9% of kernel time — matmul (79.4%) and attention (15.6%) dominate.
+Extrapolated value of all three candidate fusion families (SiLU⊙Mul, fused residual adds,
+norm-into-matmul) is ~1.8% of decode time, below run-to-run bench noise, so elementwise op
+fusion was **rejected on measurement** rather than built. The data instead points any future
+CPU decode work at the GEMV kernel itself (the `[1,dim]` f64 matmul is ~66% of everything).
 
 ## Further reading
 

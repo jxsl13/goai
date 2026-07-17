@@ -8,6 +8,7 @@ import (
 	"math"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"unsafe"
 
@@ -481,7 +482,11 @@ func intTuple(v any) ([]int, error) {
 	return out, nil
 }
 
-// setItems assigns key/value pairs into a target dict (string keys only).
+// setItems assigns key/value pairs into a target dict. String keys are taken
+// verbatim; integer keys (torch.save of a dict keyed by layer index, e.g. the
+// jacobian-lens artifact's {"J": {0: T, 1: T, …}}) are stringified with
+// strconv, so a nested int-keyed dict flattens to "J.0", "J.1", … exactly like
+// a string-keyed one. Any other key type is rejected.
 func setItems(target any, items []any) error {
 	m, ok := target.(map[string]any)
 	if !ok {
@@ -491,11 +496,14 @@ func setItems(target any, items []any) error {
 		return fmt.Errorf("pytorch: odd SETITEMS")
 	}
 	for i := 0; i < len(items); i += 2 {
-		k, ok := items[i].(string)
-		if !ok {
-			return fmt.Errorf("pytorch: non-string dict key")
+		switch k := items[i].(type) {
+		case string:
+			m[k] = items[i+1]
+		case int:
+			m[strconv.Itoa(k)] = items[i+1]
+		default:
+			return fmt.Errorf("pytorch: unsupported dict key type %T", items[i])
 		}
-		m[k] = items[i+1]
 	}
 	return nil
 }
