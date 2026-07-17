@@ -4,6 +4,17 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — feat: hybrid stateful decode for Jamba (T781, 2026-07-17)
+
+`Jamba` gains `NewDecodeState`/`DecodeStep`/`Generate` with the architecture-appropriate hybrid state:
+attention layers keep an amortized-O(T) KV-cache (rowBuf views; the attention is NoPE, so the single
+query attends all cached keys with no position argument anywhere), while Mamba layers keep the O(1)
+conv-window + SSM hidden state (the T780 step, with Jamba's dt/B/C RMSNorms inserted exactly where
+the mixer applies them); MoE (raw un-renormalized top-k, per-token) and dense FFNs are stateless.
+decode-vs-Forward parity is exactly 0.0 across all four layer-type combinations, and a test documents
+the hybrid memory profile: Mamba-layer state constant across steps, attention KV growing one row per
+token.
+
 ### nlp — feat: O(1) stateful decode for Mamba (T780, 2026-07-17)
 
 `Mamba` gains `NewDecodeState`/`DecodeStep`/`Generate` — the selective-scan recurrence stepped with a
