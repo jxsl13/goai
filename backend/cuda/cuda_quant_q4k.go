@@ -104,3 +104,10 @@ func (r *ResidentBQ4K) Free() {
 		r.q = nil
 	}
 }
+
+// Close frees the resident weight, satisfying the llamagpu qweight interface (so a Q4_K resident can be
+// carried by a quantLinear alongside Q8, dispatched by the recorder's QMatMulResidentQ4K).
+func (r *ResidentBQ4K) Close() error {
+	r.Free()
+	return nil
+}
