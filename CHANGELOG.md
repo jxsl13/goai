@@ -4,6 +4,21 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — quantized GGUF decode for StableLM and OLMo 2 (T828, 2026-07-18)
+
+`QuantStableLM` and `QuantOLMo2` (+ `Quant*FromGGUF`) bring quantized decode to fourteen
+families. StableLM: bias-free projections with f32 LayerNorm pairs and genuine partial
+rotary through the same `partialRoPE` helper as the float path. OLMo 2: the post-norm
+structure preserved exactly (sublayer outputs normed before the residual add, no input
+norm) with full-width f32 QK-norms before the head split. Notable honest-measurement gate:
+on OLMo 2's post-norm architecture, Q8_0 weight rounding ALONE moves the tiny fixture to
+cosine 0.9963 vs the original — proven by a float-kernels control that lands on the
+identical value — so the vs-original gate is control-anchored rather than a bare 0.999
+(the vs-float-pipeline gate holds at 1.000000, and the exact byte/logit anchors and
+bit-exact decode hold as everywhere). A fixture subtlety worth recording: GGUF stores eps
+as F32, so fixtures must use F32-representable eps values (0x1p-17) or the byte-exact
+anchors break on one f32 rounding across the norms.
+
 ### nlp — quantized GGUF decode for MPT and Nemotron (T827, 2026-07-17)
 
 `QuantMPT` and `QuantNemotron` (+ `Quant*FromGGUF`) bring quantized decode to twelve

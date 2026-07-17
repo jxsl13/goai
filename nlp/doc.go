@@ -77,10 +77,12 @@
 //     QuantGraniteFromGGUF (the quantized twin of the scalar-multiplier Granite
 //     type, riding the same lossless q/k row un-permute) and
 //     QuantStarCoder2FromGGUF, QuantGPTNeoXFromGGUF, QuantFalconFromGGUF,
-//     QuantMPTFromGGUF and QuantNemotronFromGGUF (the LayerNorm-family quant
-//     twins — biased projections as Q-block matmuls plus f32 bias adds,
-//     parallel residuals, ALiBi, pre-folded LayerNorm1P, and every fused-qkv
-//     form unpacked losslessly on the quantized bytes)); LlamaConfigFromHF
+//     QuantMPTFromGGUF, QuantNemotronFromGGUF, QuantStableLMFromGGUF and
+//     QuantOLMo2FromGGUF (the LayerNorm/dedicated-type quant twins — biased
+//     projections as Q-block matmuls plus f32 bias adds, parallel residuals,
+//     ALiBi, pre-folded LayerNorm1P, partial rotary, OLMo 2 post-norm with
+//     full-width QK-norms, and every fused-qkv form unpacked losslessly on the
+//     quantized bytes)); LlamaConfigFromHF
 //     (also Qwen2/Qwen3/Phi-3), GemmaConfigFromHF, Gemma2ConfigFromHF,
 //     MixtralConfigFromHF (also Qwen3-MoE), GraniteConfigFromHF and BertConfigFromHF
 //     read the checkpoint's config.json so loading is config-driven. Because a loaded model's forward runs through the
