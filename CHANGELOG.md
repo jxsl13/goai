@@ -4,6 +4,19 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — GGUF loading for Gemma 2 and Granite (T808, 2026-07-17)
+
+`Gemma2FromGGUF` and `GraniteFromGGUF` (+ `*ToGGUF`); float GGUF coverage reaches
+seventeen architectures. Gemma 2: the converter pre-folds +1 into all four sandwich norms
+(as gemma-1); HF's pre_feedforward_layernorm lands under plain `ffn_norm` while the post
+norms are `post_attention_norm`/`post_ffw_norm`; soft-cap keys default to 50/30 when
+ABSENT (0 disables — llama.cpp semantics mirrored); the 27B query-scale special case is
+derived from block_count exactly as llama.cpp does; sliding-window handled by clamping
+Ctx to the window so every accepted prompt is bit-equal to llama.cpp's graph. Granite:
+inherits the llama converter's q/k PERMUTE (undone at load via ropeUnpermuteRows, proven
+against an independently implemented permute); the four scalar keys map onto LlamaConfig
+with llama.cpp's 0-defaults, `logit_scale` required. Parity 1.6e-10 / 1.1e-12.
+
 ### nlp — GGUF loading for Cohere Command-R and Nemotron (T807, 2026-07-17)
 
 `CohereFromGGUF` and `NemotronFromGGUF` (+ `*ToGGUF` inverses); float GGUF coverage

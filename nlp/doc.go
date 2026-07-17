@@ -62,7 +62,7 @@
 //     (LlamaFromGGUF, Qwen2FromGGUF, Qwen3FromGGUF, GemmaFromGGUF, Phi3FromGGUF,
 //     MixtralFromGGUF, StarCoder2FromGGUF, GPTNeoXFromGGUF, MPTFromGGUF,
 //     FalconFromGGUF, StableLMFromGGUF, OLMo2FromGGUF, DeepSeekV2FromGGUF,
-//     CohereFromGGUF, NemotronFromGGUF — each verified
+//     CohereFromGGUF, NemotronFromGGUF, Gemma2FromGGUF, GraniteFromGGUF — each verified
 //     against that converter's layout conventions in llama.cpp source — plus
 //     quantized decode straight from the ggml Q-blocks, no dequantized copy of
 //     the weights ever materialized: QuantLlamaFromGGUF, QuantQwen2FromGGUF,
