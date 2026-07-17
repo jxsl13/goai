@@ -1236,6 +1236,32 @@ Tw62 made this **default-on for GeForce** (`cu_gpu_is_geforce`, `cudaDeviceProp.
 `GOAI_CUDA_F16ACC=1/0` still overrides. Env-unset now auto-selects f16-accum: prefill
 seq=128 **5178 tok/s (2.09×)** vs forced-off 4227 (1.70×). (PR #113.)
 
+### Quantized M-tiled GEMM does NOT belong on the prefill path — measured, decisive (worker linux-amd64, measure-first)
+
+After the M-tiled weight-read-once quantized prefill kernels landed (PR #151, 1.3–2.9× vs the
+per-row GEMV at M=8–64), the obvious question was whether keeping weights quantized on the
+prefill path (Q4_K = 0.5625 B/weight, no dequant) could beat the f16 tensor-core GEMM
+(2 B/weight but Ampere tensor cores) at real prefill batch sizes. **A/B at matched M=128 and
+identical [M,K,N] shapes** (RTX 3060, 100×; Q4_K `benchQ4KM` vs `benchF16acc` a16):
+
+| shape | Q4_K M-tiled | f16-acc tensor-core | f16 / Q4_K |
+|---|---:|---:|---:|
+| gate/up 2048×5632 | 1617 GFLOP/s | 26513 | **16.4×** |
+| down 5632×2048 | 1427 | 24094 | **16.9×** |
+| qkv 2048×2048 | 1451 | 20059 | **13.8×** |
+
+Decisive: f16 tensor-core prefill beats quantized M-tiled by **14–17×** at M=128. Why —
+at M=128 the Q4_K kernel reads weights at only **3.1–3.6 effective wGB/s** (far below the
+3060's ≈360 GB/s), i.e. it is **no longer weight-bandwidth-bound**; it sits at its scalar-FMA
+compute ceiling (~1500 GFLOP/s, essentially flat from M=64), which is an order of magnitude
+under the tensor-core rate. The weight-BW advantage that makes quantized GEMV win at decode
+(M=1) and small batch (M=8–64) has fully evaporated by M=128.
+
+Conclusion (prevents a wrong build): the M-tiled quantized kernels are correctly scoped to the
+**M=8–64 decode-batch / speculative regime**, NOT prefill. The prefill path must stay f16
+tensor-core (or the toolchain-blocked int8 MMQ). Do not wire quantized M-tiled GEMM into e2e
+prefill. Permanent A/B benches: `BenchmarkQ4KM128_*` (matches `BenchmarkF16acc_*`).
+
 ## Prefill attention is O(seq²), but the lever is CLOSED — flash and f16-GEMM both rejected (worker linux-amd64, Tw63/64/65, measure-first)
 
 With the GEMM lever cashed (f16-accumulate, above), the next prefill bottleneck is the
@@ -1273,7 +1299,7 @@ were built and validated exact (parity to the per-head double-precision softmax 
 
 Both flash kernels are **~2.8× slower**, and Br×Bc tiling (K/V staged in shared, reused across
 a tile of query rows) did **not** help — proof that the bottleneck was never memory traffic.
-The materialized path runs QKᵀ and PV as cuBLAS-batched GEMMs at ~1 TFLOP/s (~8% of the 3060
+The materialized path runs QKᵀ and PV as cuBLAS-batched GEMMs at ≈1 TFLOP/s (≈8% of the 3060
 f32 peak); a hand scalar warp kernel (per-key serial dot products + shuffles) tops out ~2.8%.
 Even cuBLAS *f32* Sgemm (no tensor cores) beats a scalar flash ~3×; the attention is
 GEMM-compute-bound, not memory-bound, at seq≤1024/hd=64, so fusion saves nothing. **Verdict
@@ -1329,7 +1355,7 @@ starved N=256 K/V rows stay at 17%. The real lever the data points to is **occup
 weight fusion**: concatenate wq|wk|wv into one N=2560 GEMV. That lifts the 17%-efficient
 K/V rows into the ~46%+ regime and reads the shared activation once. Per-layer arithmetic:
 q(14154)+k(4851)+v(4851) = 23856 ns → one N=2560 GEMV ≈ 17.7 µs at Q's 46%, saving
-~6.2 µs/layer × 22 layers ≈ ~4% decode.
+≈6.2 µs/layer × 22 layers ≈ 4% decode.
 
 **Built and measured — it pays.** `fuseQKVQ4K` stacks the dequantized wq|wk|wv rows,
 requantizes once into a single Q4_K weight, and the raw decoder issues one

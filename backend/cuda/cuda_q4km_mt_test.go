@@ -198,3 +198,9 @@ func BenchmarkQ4KM16_2048(b *testing.B)      { benchQ4KM(b, 16, 2048, 2048) } //
 func BenchmarkQ4KM32_2048(b *testing.B)      { benchQ4KM(b, 32, 2048, 2048) } // q/o proj, M=32
 func BenchmarkQ4KM64_2048x5632(b *testing.B) { benchQ4KM(b, 64, 2048, 5632) } // gate/up, M=64
 func BenchmarkQ4KM64_5632x2048(b *testing.B) { benchQ4KM(b, 64, 5632, 2048) } // down, M=64
+
+// M=128 = a real prefill batch; matches the BenchmarkF16acc_* shapes for the prefill A/B
+// (quantized weight-read-once GEMM vs f16 tensor-core GEMM at identical [M,K,N]).
+func BenchmarkQ4KM128_2048x5632(b *testing.B) { benchQ4KM(b, 128, 2048, 5632) } // gate/up, M=128
+func BenchmarkQ4KM128_5632x2048(b *testing.B) { benchQ4KM(b, 128, 5632, 2048) } // down, M=128
+func BenchmarkQ4KM128_2048x2048(b *testing.B) { benchQ4KM(b, 128, 2048, 2048) } // qkv, M=128
