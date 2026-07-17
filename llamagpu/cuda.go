@@ -243,6 +243,12 @@ func NewMixtralCUDA(m *nlp.Mixtral) (*Decoder, error) {
 	})
 }
 
+// NewQwen3MoECUDA uploads a Qwen3-MoE model onto the batched Decoder core. Qwen3-MoE loads as an
+// nlp.Mixtral whose blocks additionally carry per-head q/k RMSNorm gains (the same optional QK-norm
+// newMixtralDecoder already wires), so this is exactly NewMixtralCUDA with a Qwen3-MoE entry point.
+// Load with nlp.Qwen3MoeFromHF.
+func NewQwen3MoECUDA(m *nlp.Mixtral) (*Decoder, error) { return NewMixtralCUDA(m) }
+
 // NewMPTCUDA uploads an nlp.MPT (MosaicML) onto the batched Decoder core: the first ALiBi decoder —
 // position enters solely through a per-head linear bias on the attention scores (no RoPE), with
 // weight-only LayerNorm, standard MHA, a bias-free 2-layer GELU MLP and a tied lm_head. cuda-only
