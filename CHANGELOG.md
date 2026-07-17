@@ -4,6 +4,18 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — GGUF loading for MPT and Falcon (T804, 2026-07-17)
+
+`MPTFromGGUF` and `FalconFromGGUF` (+ `*ToGGUF` inverses), conventions verified against
+llama.cpp source. MPT: the converter is a pure rename — on-disk `attn_qkv` keeps HF's
+`[all-q; all-k; all-v]` chunk order (no de-interleave, unlike GPT-NeoX); ALiBi is gated on
+`mpt.attention.max_alibi_bias` (0.0 = learned-pos variant, rejected); `clamp_kqv`, biases,
+qk_ln and AWQ-scale variants rejected rather than silently mis-loaded. Falcon: the
+"jploski" fused-qkv transform is the identity for the MQA n_head_kv=1 form GoAI models
+(asserted literally in the fixture); head_count_kv must resolve to 1; the 40B dual-norm
+marker `attn_norm_2` is rejected; NEOX full rotary. Parity vs HF-loaded models 8.3e-11 /
+4.3e-11. Float GGUF coverage: ten architectures.
+
 ### docs — GGUF coverage consolidated in package doc and README (2026-07-17)
 
 The nlp package doc and the README front page now state the full current GGUF matrix:
