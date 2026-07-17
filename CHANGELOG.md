@@ -4,6 +4,18 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — quantized GGUF decode for Gemma (T801, 2026-07-17)
+
+`QuantGemma` + `QuantGemmaFromGGUF` decode llama.cpp-quantized Gemma checkpoints directly
+from the ggml Q-blocks — the quantized twin of the dedicated float Gemma type, mirroring its
+math exactly: the √dim embedding normalizer at runtime (f32, residual stream only), (1+γ)
+RMSNorm via the pre-folded on-disk gains (copied, never re-folded), GeGLU, and the tied head
+serving logits from the SAME quantized token_embd bytes that feed the dequantized f32 lookup
+table. Anchored by an exact-equality gate (GGUF-load vs quantizing the float model directly:
+byte-equal Q-blocks, element-exact logits), cosine 1.000000 vs the float pipeline on the same
+bytes, and decode-vs-Forward within the standing quant gate. Quantized GGUF decode now covers
+Llama, Qwen2, Qwen3, Phi-3 and Gemma.
+
 ### perf — op-fusion spike: measured STOP verdict (T800, 2026-07-17)
 
 A measure-first spike instrumented `backend.Execute` on the CPU decode path before building
