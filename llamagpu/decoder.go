@@ -1418,7 +1418,12 @@ func newGemmaDecoder(m *nlp.Gemma, ops backendOps) (*Decoder, error) {
 			outW[i*vocab+j] = float32(m.TokEmb.AtF64(j, i))
 		}
 	}
-	d.out = f32Linear{w: mk(outW).b, k: dim, n: vocab}
+	// Route the tied lm_head through the same quantize-aware builder so the Q8 constructors quantize it too
+	// — Gemma's vocab is huge (256k), so an f32 lm_head would dominate decode bandwidth and dilute Q8. The
+	// f32 path is byte-identical (mkLin with no hook == the old f32Linear{mk(outW)}).
+	outT := tensor.New(tensor.F32, tensor.Shape{dim, vocab})
+	copy(outT.Storage().F32(), outW)
+	d.out = lin(outT)
 	d.allocScratch(mk)
 	if err != nil {
 		d.Release()
@@ -2110,7 +2115,12 @@ func newGemma2Decoder(m *nlp.Gemma2, ops backendOps) (*Decoder, error) {
 			outW[i*vocab+j] = float32(m.TokEmb.AtF64(j, i))
 		}
 	}
-	d.out = f32Linear{w: mk(outW).b, k: dim, n: vocab}
+	// Route the tied lm_head through the same quantize-aware builder so the Q8 constructors quantize it too
+	// — Gemma's vocab is huge (256k), so an f32 lm_head would dominate decode bandwidth and dilute Q8. The
+	// f32 path is byte-identical (mkLin with no hook == the old f32Linear{mk(outW)}).
+	outT := tensor.New(tensor.F32, tensor.Shape{dim, vocab})
+	copy(outT.Storage().F32(), outW)
+	d.out = lin(outT)
 	d.allocScratch(mk)
 	if err != nil {
 		d.Release()
