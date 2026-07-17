@@ -453,3 +453,49 @@ func TestCUDACohereMatchesReference(t *testing.T) {
 	}
 	t.Logf("llamagpu NewCohereCUDA.Generate == nlp.Cohere.Generate greedy: %d tokens (parallel residual + LayerNorm + logit_scale)", len(gpuOut))
 }
+
+// TestCUDANemotronMatchesReference checks the Nemotron GPU path (NewNemotronCUDA) generates
+// greedy-identical tokens to the reference. Exercises the new squared-ReLU MLP (ffnReLU2 →
+// cu_relu2_f32) alongside LayerNorm1P (lnBias) and partial rotary — the relu² activation is the
+// first genuinely new decode primitive since the partial-rope kernels.
+func TestCUDANemotronMatchesReference(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("cuda: no CUDA-capable device")
+	}
+	ts, _, err := safetensors.LoadFile("../nlp/testdata/nemotron_hf.safetensors")
+	if err != nil {
+		t.Skipf("nemotron testdata unavailable (run make golden): %v", err)
+	}
+	m, err := nlp.NemotronFromHF(ts, nlp.NemotronConfig{
+		Heads: 4, KVHeads: 4, Eps: 1e-5, RopeBase: 10000, RotaryPct: 0.5, Ctx: 32,
+	})
+	if err != nil {
+		t.Fatalf("NemotronFromHF: %v", err)
+	}
+
+	dec, err := llamagpu.NewNemotronCUDA(m)
+	if err != nil {
+		t.Fatalf("NewNemotronCUDA: %v", err)
+	}
+	defer dec.Release()
+
+	prompt := []int{3, 7, 1, 9}
+	const maxNew = 12
+	gpuOut, err := dec.Generate(prompt, maxNew, nlp.Greedy())
+	if err != nil {
+		t.Fatalf("cuda generate: %v", err)
+	}
+	refOut, err := m.Generate(prompt, maxNew, nlp.Greedy(), nlp.WithBackend(backend.Reference()))
+	if err != nil {
+		t.Fatalf("ref generate: %v", err)
+	}
+	if len(gpuOut) != len(refOut) {
+		t.Fatalf("length: cuda %d vs ref %d", len(gpuOut), len(refOut))
+	}
+	for i := range gpuOut {
+		if gpuOut[i] != refOut[i] {
+			t.Fatalf("token[%d]: cuda %d vs ref %d\ncuda=%v\nref=%v", i, gpuOut[i], refOut[i], gpuOut, refOut)
+		}
+	}
+	t.Logf("llamagpu NewNemotronCUDA.Generate == nlp.Nemotron.Generate greedy: %d tokens (squared-ReLU MLP + LayerNorm1P + partial rotary)", len(gpuOut))
+}

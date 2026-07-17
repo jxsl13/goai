@@ -120,6 +120,34 @@ func NewQwen3CUDA(m *nlp.Llama) (*Decoder, error) { return NewCUDA(m) }
 // which is parallel-residual with LayerNorm and partial rotary).
 func NewPhi3CUDA(m *nlp.Llama) (*Decoder, error) { return NewCUDA(m) }
 
+// NewNemotronCUDA uploads an nlp.Nemotron onto the batched Decoder core: sequential two-norm
+// residual with LayerNorm1P (mean-centered LayerNorm, γ=w+1/β folded at load), a squared-ReLU
+// 2-layer MLP (down(relu²(up(x)))) and partial rotary. The relu² activation is a new cuda unary
+// (cu_relu2_f32); everything else is reused plumbing. cuda-only.
+func NewNemotronCUDA(m *nlp.Nemotron) (*Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newNemotronDecoder(m, backendOps{
+		name:        string(backend.CUDA),
+		asyncEncode: false,
+		newBuffer: func(data []float32) (buffer, error) {
+			b, err := cuda.NewDeviceBufferF32(data)
+			if err != nil {
+				return nil, err
+			}
+			return cBuf{b}, nil
+		},
+		newRecorder: func() (recorder, error) {
+			r, err := cuda.NewRecorder()
+			if err != nil {
+				return nil, err
+			}
+			return cRec{r}, nil
+		},
+	})
+}
+
 // NewCohereCUDA uploads an nlp.Cohere (Command-R) onto the batched Decoder core: one-norm parallel
 // residual, weight-only mean-centered LayerNorm, SwiGLU, GQA, full rope (its interleaved rotary is
 // pre-permuted into the q/k weights by CohereFromHF) and a logit_scale-folded tied lm_head — every

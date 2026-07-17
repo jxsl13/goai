@@ -44,6 +44,7 @@ import (
 const (
 	unarySiLU    = 6
 	unaryGELU    = 9
+	unaryReLU2   = 10 // squared ReLU (Nemotron); cuda-only
 	binaryAdd    = 0
 	binaryMul    = 2
 	binarySwiGLU = 6 // fused silu(a)·b — one dispatch instead of SiLU+Mul (§T613)
@@ -172,6 +173,7 @@ type Decoder struct {
 	rotaryDim                                     int  // rotated channels/head; == dk for full RoPE (Llama), < dk for partial rotary (GPT-NeoX/Phi/StableLM)
 	lnBias                                        bool // true ⇒ LayerNorm-with-bias norms (StableLM/Phi/StarCoder2); false ⇒ RMSNorm (Llama)
 	ffnGELU                                       bool // true ⇒ 2-layer GELU MLP (fc→GELU→proj: GPT-NeoX/Phi/StarCoder2); false ⇒ SwiGLU (Llama/StableLM)
+	ffnReLU2                                      bool // true ⇒ 2-layer squared-ReLU MLP (fc→relu²→proj: Nemotron); mutually exclusive with ffnGELU
 	parallelRes                                   bool // true ⇒ parallel residual: attn+FFN both read norm(x0), sum onto x (GPT-NeoX/Phi/Cohere); false ⇒ sequential (Llama)
 	parallelTwoNorm                               bool // parallel residual with SEPARATE attn/FFN norms both over x0 (GPT-NeoX); needs the FFN norm computed pre-attn-add
 	qkNorm                                        bool // true ⇒ per-head RMSNorm on Q and K before RoPE (Qwen3); false otherwise
@@ -299,14 +301,18 @@ func (d *Decoder) recordFFNSublayer(r recorder, b block, rows int) error {
 }
 
 func (d *Decoder) recordFFN(r recorder, b block, in buffer, rows int) error {
-	if d.ffnGELU {
+	if d.ffnGELU || d.ffnReLU2 {
+		act := unaryGELU // 2-layer MLP activation: GELU (GPT-NeoX/Phi/StarCoder2) or squared ReLU (Nemotron)
+		if d.ffnReLU2 {
+			act = unaryReLU2
+		}
 		e := b.wG.record(r, in, d.gate.b, rows) // fc = in·Wfc
 		if b.fcBias != nil {
 			e = firstErr(e, r.AddBias(d.gate.b, b.fcBias, d.gate.b, rows, d.hidden))
 		}
 		e = firstErr(e,
-			r.Unary(d.gate.b, d.gate.b, unaryGELU),            // GELU(fc)
-			b.wD.recordAdd(r, d.gate.b, d.mo.b, d.dx.b, rows), // dx += GELU(fc)·Wproj
+			r.Unary(d.gate.b, d.gate.b, act),                  // act(fc)
+			b.wD.recordAdd(r, d.gate.b, d.mo.b, d.dx.b, rows), // dx += act(fc)·Wproj
 		)
 		if b.projBias != nil {
 			e = firstErr(e, r.AddBias(d.dx.b, b.projBias, d.dx.b, rows, d.d))
@@ -643,6 +649,95 @@ func newCohereDecoder(m *nlp.Cohere, ops backendOps) (*Decoder, error) {
 	d.gFinal = mk(flat1D(m.Norm.Gamma))
 	d.bFinal = mk(flat1D(m.Norm.Beta))
 	d.out = linS(m.Out, logitScale) // logit_scale folded into the tied lm_head
+	d.allocScratch(mk)
+	if err != nil {
+		d.Release()
+		return nil, err
+	}
+	return d, nil
+}
+
+// newNemotronDecoder builds a device Decoder for an nlp.Nemotron. Nemotron is a SEQUENTIAL
+// two-norm decoder (input_layernorm feeds attention, post_attention_layernorm feeds the MLP, each
+// on its own residual add) with three departures from Llama, all reusing existing plumbing:
+// LayerNorm1P (an ordinary mean-centered LayerNorm — lnBias — whose γ=w+1 and β are folded in by
+// NemotronFromHF), a squared-ReLU 2-layer MLP (ffnReLU2: down(relu²(up(x))), no gate, no bias), and
+// PARTIAL rotary. cuda-only (partial rotary + the relu² unary are cuda-only).
+func newNemotronDecoder(m *nlp.Nemotron, ops backendOps) (*Decoder, error) {
+	cfg := m.Config
+	kvH := cfg.KVHeads
+	if kvH <= 0 {
+		kvH = cfg.Heads
+	}
+	headDim := cfg.HeadDim
+	if headDim <= 0 {
+		headDim = cfg.Dim / cfg.Heads
+	}
+	if headDim != cfg.Dim/cfg.Heads {
+		return nil, fmt.Errorf("llamagpu(%s): Nemotron decoupled head_dim %d (≠ dim/heads %d) not supported on the GPU decoder yet", ops.name, headDim, cfg.Dim/cfg.Heads)
+	}
+	rotaryDim := cfg.RotaryDim
+	if rotaryDim <= 0 {
+		pct := cfg.RotaryPct
+		if pct == 0 {
+			pct = 0.5
+		}
+		rotaryDim = int(float64(headDim) * pct)
+	}
+	lc := nlp.LlamaConfig{
+		Vocab: cfg.Vocab, Ctx: cfg.Ctx, Dim: cfg.Dim, Heads: cfg.Heads, KVHeads: kvH,
+		Layers: cfg.Layers, Hidden: cfg.Hidden, Eps: cfg.Eps, RopeBase: cfg.RopeBase,
+	}
+	d, derr := newDecoderCommon(lc, m.TokEmb, ops)
+	if derr != nil {
+		return nil, derr
+	}
+	d.lnBias = true   // LayerNorm1P = mean-centered LayerNorm with a bias
+	d.ffnReLU2 = true // squared-ReLU 2-layer MLP
+	d.rotaryDim = rotaryDim
+	if d.rotaryDim <= 0 || d.rotaryDim > d.dk || d.rotaryDim%2 != 0 {
+		return nil, fmt.Errorf("llamagpu(%s): Nemotron rotaryDim %d invalid for headDim %d", ops.name, d.rotaryDim, d.dk)
+	}
+	invF64, posDiv64 := backend.RoPEFreqs(d.rotaryDim, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: d.h})
+	d.invHost = make([]float32, d.rotaryDim/2)
+	for i := range d.invHost {
+		d.invHost[i] = float32(invF64[i])
+	}
+	d.posDiv = float32(posDiv64)
+
+	var err error
+	mk := d.mkBuf(&err)
+	lin := func(w *tensor.Tensor) linear {
+		in, out := w.Shape()[0], w.Shape()[1]
+		return f32Linear{w: mk(flat2D(w)).b, k: in, n: out}
+	}
+	fused := func(wq, wk, wv *tensor.Tensor) linear {
+		in := wq.Shape()[0]
+		nq, nk, nv := wq.Shape()[1], wk.Shape()[1], wv.Shape()[1]
+		fq, fk, fv := flat2D(wq), flat2D(wk), flat2D(wv)
+		nt := nq + nk + nv
+		w := make([]float32, in*nt)
+		for i := range in {
+			row := w[i*nt : (i+1)*nt]
+			copy(row[:nq], fq[i*nq:(i+1)*nq])
+			copy(row[nq:nq+nk], fk[i*nk:(i+1)*nk])
+			copy(row[nq+nk:], fv[i*nv:(i+1)*nv])
+		}
+		return f32Linear{w: mk(w).b, k: in, n: nt}
+	}
+	for _, b := range m.Blocks {
+		gb := block{
+			wqkv: fused(b.Wq, b.Wk, b.Wv), wo: lin(b.Wo),
+			gAttn: mk(flat1D(b.InputNorm.Gamma)).b, bAttn: mk(flat1D(b.InputNorm.Beta)).b,
+			gFFN: mk(flat1D(b.PostAttnNorm.Gamma)).b, bFFN: mk(flat1D(b.PostAttnNorm.Beta)).b,
+			wG: lin(b.Wup), wD: lin(b.Wdown), // 2-layer relu² MLP: wG = up (fc), wD = down (proj); no gate
+			kC: mk(make([]float32, d.maxLen*d.kvDim)).b, vC: mk(make([]float32, d.maxLen*d.kvDim)).b,
+		}
+		d.blocks = append(d.blocks, gb)
+	}
+	d.gFinal = mk(flat1D(m.Norm.Gamma))
+	d.bFinal = mk(flat1D(m.Norm.Beta))
+	d.out = lin(m.Out)
 	d.allocScratch(mk)
 	if err != nil {
 		d.Release()
