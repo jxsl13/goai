@@ -4,6 +4,17 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### perf — quantized decode benchmark + the measured CPU gap (T819, 2026-07-17)
+
+`BenchmarkQuantLlamaGenerate500` gives Q8_0 quantized decode a permanent §V22 baseline next
+to the float one. It surfaces a real gap: quantized CPU decode is ≈8.8× slower than float
+(≈3075 vs ≈348 ms / 500 tokens) because `nn.QuantLinear.Forward` → `format/gguf.QMatMul`
+dequantizes the ggml blocks on the fly every step. Quantized decode delivers its weight-memory
+savings, but the CPU decode-time regression is real; the fix is a block-native quantized GEMV
+in `format/gguf` / the CPU backend (flagged there — that is the parallel worker's edit zone),
+and the benchmark is the baseline it must beat. Documented in docs/benchmarking.md; GPU
+quantized decode is already block-native.
+
 ### nlp — J-lens works on GGUF-loaded models: the "download a model, see its thoughts" pipeline (T818, 2026-07-17)
 
 A test and runnable example demonstrate that a model loaded from GGUF is a normal `*Llama`

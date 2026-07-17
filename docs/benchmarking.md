@@ -1475,6 +1475,25 @@ norm-into-matmul) is ~1.8% of decode time, below run-to-run bench noise, so elem
 fusion was **rejected on measurement** rather than built. The data instead points any future
 CPU decode work at the GEMV kernel itself (the `[1,dim]` f64 matmul is ~66% of everything).
 
+### Quantized decode vs float (T819, a measured gap, not yet closed)
+
+`BenchmarkQuantLlamaGenerate500` puts a permanent number on Q8_0 quantized decode over the
+same geometry as the float benchmark (dim 256, 4 layers). Measured on the M2 Pro:
+
+| decode, 500 tokens | ns/op |
+|---|---|
+| float `BenchmarkLlamaGenerate500RowBuf` | ≈348 ms |
+| Q8_0 `BenchmarkQuantLlamaGenerate500` | ≈3075 ms (**8.8× slower**) |
+
+The gap is entirely the CPU quantized matmul: `nn.QuantLinear.Forward` dispatches to
+`format/gguf`'s `QMatMul`, which dequantizes the ggml blocks on the fly for every
+projection at every step. Quantized decode's *purpose* is weight-memory savings (4–8× less),
+which it delivers — but the CPU decode-time regression is real, and the fix is a
+block-native quantized GEMV kernel (dequantize into the dot product, SIMD over the block
+layout) in `format/gguf` / the CPU backend, not in `nlp`. Flagged there; the benchmark here
+is the baseline any such kernel must beat. On GPU the quantized decoders already run
+block-native (see the `llamagpu` numbers above), so this gap is CPU-specific.
+
 ## Further reading
 
 - Hoefler & Belli, *Scientific Benchmarking of Parallel Computing Systems* (SC '15) — the canonical treatment of run variance, warm-up and honest reporting that this document's rules follow.
