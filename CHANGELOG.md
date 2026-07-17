@@ -4,6 +4,59 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — consolidate the quantized q/k un-permute (2026-07-17)
+
+`QuantLlamaFromGGUF` had an inline q/k un-permute closure byte-identical to the
+`unpermuteQuantRows` helper `QuantGraniteFromGGUF` uses; both now call the shared helper, so
+this correctness-critical row transform has ONE implementation across the quantized
+llama-family loaders — removing exactly the kind of drift between sibling paths that §B67/§B68
+were about. Verified by the unchanged exact-equality gates on both paths.
+
+### nlp — the GGUF quickstart pipeline as a runnable example (T820, 2026-07-17)
+
+`ExampleLlamaFromGGUF_pipeline` is the README front-page flow as a self-contained,
+deterministic test: one GGUF carries both the weights and the tokenizer, and a single load
+call each yields a model and a tokenizer that tokenize → generate → decode end to end. The
+file is built in memory (no external .gguf needed), but the load→run path is exactly a real
+download's, so the most-read code in the repo can no longer silently drift out of correctness.
+
+### perf — quantized decode benchmark + the measured CPU gap (T819, 2026-07-17)
+
+`BenchmarkQuantLlamaGenerate500` gives Q8_0 quantized decode a permanent §V22 baseline next
+to the float one. It surfaces a real gap: quantized CPU decode is ≈8.8× slower than float
+(≈3075 vs ≈348 ms / 500 tokens) because `nn.QuantLinear.Forward` → `format/gguf.QMatMul`
+dequantizes the ggml blocks on the fly every step. Quantized decode delivers its weight-memory
+savings, but the CPU decode-time regression is real; the fix is a block-native quantized GEMV
+in `format/gguf` / the CPU backend (flagged there — that is the parallel worker's edit zone),
+and the benchmark is the baseline it must beat. Documented in docs/benchmarking.md; GPU
+quantized decode is already block-native.
+
+### nlp — J-lens works on GGUF-loaded models: the "download a model, see its thoughts" pipeline (T818, 2026-07-17)
+
+A test and runnable example demonstrate that a model loaded from GGUF is a normal `*Llama`
+and therefore J-lens-ready out of the box: `FitJLens` fitted on a GGUF-round-tripped model
+matches the fit on the original to 9e-7 (the F32 weight-storage floor), and `JLensHTML`
+renders the self-contained layer-by-position thought-process view on it. This ties GGUF
+loading and the jacobian-lens interpretability port into one end-to-end capability.
+
+### nlp — quantized GGUF decode for Granite (T817, 2026-07-17)
+
+`QuantGraniteFromGGUF` decodes llama.cpp-quantized IBM Granite checkpoints straight from
+the ggml Q-blocks — the quantized twin of the scalar-multiplier Granite type. To support
+it, `QuantLlama.Forward`/`DecodeStep` now apply the four Granite scalars (embedding /
+attention / residual multipliers and the logits divisor) at the same points as
+`Llama.Forward`; they are 0/1 short-circuit no-ops for every other quantized family, so
+those paths stay byte-identical (verified: the entire existing quant suite passes
+unchanged). The q/k rows are un-permuted losslessly on the Q-blocks (`quantPermuteRows`,
+§B67/T802). Gates: the GGUF load exactly equals `QuantizeLlama` on the scalar-configured
+model (byte/logit), cosine 0.999967 vs the float pipeline, decode-vs-Forward bit-exact.
+
+### fix — scaleScalar now matches the activation dtype (2026-07-17)
+
+`scaleScalar` built an f64 scalar, which `OpMul` rejected against QuantLlama's f32 residual
+stream; it now builds the scalar in `x.Dtype()` (a no-op for the f64 decoders). Surfaced by
+the first quantized model to use a Granite scalar.
+
 ### docs — GGUF reference: the architecture matrix + verification methodology (2026-07-17)
 
 New `docs/gguf.md` consolidates the whole GGUF surface into one reference: the 19 float

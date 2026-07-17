@@ -2,6 +2,7 @@ package nlp
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/jxsl13/goai/backend"
 	"github.com/jxsl13/goai/tensor"
@@ -42,6 +43,15 @@ func (m *QuantLlama) DecodeStep(ctx *backend.Context, cache *LlamaCache, token, 
 	if err != nil {
 		return nil, err
 	}
+	// Granite scalars, matching QuantLlama.Forward (and Llama.DecodeStep); no-ops
+	// for non-Granite models, so a KV-cached decode stays byte-identical there.
+	if x, err = scaleScalar(ctx, x, cfg.EmbeddingMult); err != nil {
+		return nil, err
+	}
+	attn := backend.AttnAttrs{Heads: cfg.Heads, KVHeads: kv, Causal: false}
+	if cfg.AttentionMult != 0 {
+		attn.Scale = cfg.AttentionMult * math.Sqrt(float64(cfg.Dim/cfg.Heads))
+	}
 	for l, b := range m.Blocks {
 		xb, err := b.AttnNorm.Forward(ctx, x)
 		if err != nil {
@@ -73,12 +83,15 @@ func (m *QuantLlama) DecodeStep(ctx *backend.Context, cache *LlamaCache, token, 
 		}
 		kNew, vNew := cache.bufs.appendKV(cache.K, cache.V, l, k, v)
 		cache.K[l], cache.V[l] = kNew, vNew
-		a, err := exec1(ctx, backend.OpMHA, backend.AttnAttrs{Heads: cfg.Heads, KVHeads: kv, Causal: false}, q, kNew, vNew)
+		a, err := exec1(ctx, backend.OpMHA, attn, q, kNew, vNew)
 		if err != nil {
 			return nil, err
 		}
 		o, err := b.Wo.Forward(ctx, a)
 		if err != nil {
+			return nil, err
+		}
+		if o, err = scaleScalar(ctx, o, cfg.ResidualMult); err != nil {
 			return nil, err
 		}
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, o); err != nil {
@@ -92,6 +105,9 @@ func (m *QuantLlama) DecodeStep(ctx *backend.Context, cache *LlamaCache, token, 
 		if err != nil {
 			return nil, err
 		}
+		if ff, err = scaleScalar(ctx, ff, cfg.ResidualMult); err != nil {
+			return nil, err
+		}
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, ff); err != nil {
 			return nil, err
 		}
@@ -99,7 +115,11 @@ func (m *QuantLlama) DecodeStep(ctx *backend.Context, cache *LlamaCache, token, 
 	if x, err = m.Norm.Forward(ctx, x); err != nil {
 		return nil, err
 	}
-	return m.Out.Forward(ctx, x)
+	logits, err := m.Out.Forward(ctx, x)
+	if err != nil {
+		return nil, err
+	}
+	return divLogits(ctx, logits, cfg.LogitsScale)
 }
 
 // Generate autoregressively decodes up to maxNew tokens after the prompt on the quantized model,

@@ -197,8 +197,11 @@ func scaleScalar(ctx *backend.Context, x *tensor.Tensor, s float64) (*tensor.Ten
 	if s == 0 || s == 1 {
 		return x, nil
 	}
-	sc := tensor.New(tensor.F64, tensor.Shape{})
-	sc.Storage().F64()[0] = s
+	// The scalar must match x's dtype: the f64 decoders run an f64 residual stream,
+	// but QuantLlama runs f32 (its embedding table is f32), and OpMul rejects a dtype
+	// mismatch. SetF64 casts into the storage dtype, so f64 paths are unchanged.
+	sc := tensor.New(x.Dtype(), tensor.Shape{})
+	sc.SetF64(s)
 	return exec1(ctx, backend.OpMul, nil, x, sc)
 }
 

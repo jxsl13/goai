@@ -2,6 +2,7 @@ package nlp
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/jxsl13/goai/backend"
 	"github.com/jxsl13/goai/format/gguf"
@@ -121,8 +122,19 @@ func (m *QuantLlama) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor
 	if err != nil {
 		return nil, err
 	}
+	// Granite scalars (no-ops for Llama/Qwen/Phi/Gemma where they are 0/1, so this
+	// path stays byte-identical for every non-Granite quantized model): the
+	// inputs_embeds multiplier, the attention_multiplier replacing 1/√headDim, the
+	// residual_multiplier on each sublayer output, and the final logits divisor —
+	// applied at the same points and in the same order as Llama.Forward.
+	if x, err = scaleScalar(ctx, x, cfg.EmbeddingMult); err != nil {
+		return nil, err
+	}
 	kv := cfg.kvHeads()
 	attn := backend.AttnAttrs{Heads: cfg.Heads, KVHeads: kv, Causal: true}
+	if cfg.AttentionMult != 0 {
+		attn.Scale = cfg.AttentionMult * math.Sqrt(float64(cfg.Dim/cfg.Heads))
+	}
 	for _, b := range m.Blocks {
 		xb, err := b.AttnNorm.Forward(ctx, x)
 		if err != nil {
@@ -159,6 +171,9 @@ func (m *QuantLlama) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor
 		if err != nil {
 			return nil, err
 		}
+		if o, err = scaleScalar(ctx, o, cfg.ResidualMult); err != nil {
+			return nil, err
+		}
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, o); err != nil {
 			return nil, err
 		}
@@ -170,6 +185,9 @@ func (m *QuantLlama) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor
 		if err != nil {
 			return nil, err
 		}
+		if ff, err = scaleScalar(ctx, ff, cfg.ResidualMult); err != nil {
+			return nil, err
+		}
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, ff); err != nil {
 			return nil, err
 		}
@@ -177,7 +195,11 @@ func (m *QuantLlama) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor
 	if x, err = m.Norm.Forward(ctx, x); err != nil {
 		return nil, err
 	}
-	return m.Out.Forward(ctx, x)
+	logits, err := m.Out.Forward(ctx, x)
+	if err != nil {
+		return nil, err
+	}
+	return divLogits(ctx, logits, cfg.LogitsScale)
 }
 
 // Close frees every device-resident weight buffer held by the model's quantized projections
