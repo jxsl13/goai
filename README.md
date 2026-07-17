@@ -131,7 +131,8 @@ for step := 0; step < 150; step++ {
   self-contained interactive HTML view of which concepts every layer holds at
   every position during generation — including concepts the model never writes
   down (the paper's global-workspace effect, reproduced end-to-end on a GoAI
-  model in the test suite).
+  model in the test suite). Method, API and validation:
+  [`docs/interpretability.md`](docs/interpretability.md).
 - **Training toolbox** (`nn`): optimizers from SGD to Muon/SOAP/Sophia/
   Schedule-Free with composable wrappers (SAM, Lookahead, GaLore, …), the PEFT (parameter-efficient fine-tuning)
   family (LoRA (low-rank adapters: train tiny add-on matrices instead of the full model)/DoRA/PiSSA/VeRA/IA³/prefix/prompt, QLoRA end-to-end),

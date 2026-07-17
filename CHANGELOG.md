@@ -4,6 +4,15 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### docs — interpretability reference: the Jacobian lens (2026-07-17)
+
+New `docs/interpretability.md` consolidates the J-lens feature (T810–T818) into one
+reference: the method (`J_l = E[∂h_L/∂h_l]`, the transported readout, the J-space) with
+the two reference-verified §R250 corrections, the full fit/persist/read/decompose/visualize
+API, the "on a downloaded model" pipeline, and the honest validation scope (tier-1 fit and
+readout parity, tier-2 decomposition, the scale caveat). Every documented symbol checked
+against the code. Linked from the README.
+
 ### nlp — consolidate the quantized q/k un-permute (2026-07-17)
 
 `QuantLlamaFromGGUF` had an inline q/k un-permute closure byte-identical to the
