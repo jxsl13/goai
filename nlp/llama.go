@@ -196,6 +196,19 @@ func divLogits(ctx *backend.Context, logits *tensor.Tensor, logitsScale float64)
 
 // hiddenFromEmbed is the shared block stack + final RMSNorm.
 func (m *Llama) hiddenFromEmbed(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, error) {
+	return m.hiddenFromEmbedCapture(ctx, x, nil)
+}
+
+// hiddenFromEmbedCapture is hiddenFromEmbed with an optional per-layer KV tap.
+// When capture is non-nil it is invoked once per block with the layer index and
+// that block's post-bias, post-QK-norm, POST-RoPE k and v [seq, kvWidth] — exactly
+// the rows a KV-cache decode appends per token (DecodeStep), which is what lets
+// Prefill seed a cache from ONE batched pass over the prompt. The tensors handed
+// to capture are the same ones the ongoing forward consumes (callers must not
+// mutate them; the cache copies rows into its own buffers). A nil capture is the
+// plain forward: no extra ops are recorded, so tape/training semantics of
+// hiddenFromEmbed are byte-identical to before this hook existed.
+func (m *Llama) hiddenFromEmbedCapture(ctx *backend.Context, x *tensor.Tensor, capture func(layer int, k, v *tensor.Tensor)) (*tensor.Tensor, error) {
 	cfg := m.Config
 	kv := cfg.kvHeads()
 	rope := backend.RoPEAttrs{Base: cfg.RopeBase}
@@ -212,7 +225,7 @@ func (m *Llama) hiddenFromEmbed(ctx *backend.Context, x *tensor.Tensor) (*tensor
 	if x, err = scaleScalar(ctx, x, cfg.EmbeddingMult); err != nil {
 		return nil, err
 	}
-	for _, b := range m.Blocks {
+	for l, b := range m.Blocks {
 		// attention sublayer: x += Wo·Attn(RoPE(Wq·x̄), RoPE(Wk·x̄), Wv·x̄), x̄=RMSNorm(x)
 		xb, err := b.AttnNorm.Forward(ctx, x)
 		if err != nil {
@@ -252,6 +265,9 @@ func (m *Llama) hiddenFromEmbed(ctx *backend.Context, x *tensor.Tensor) (*tensor
 		}
 		if k, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: rope.Base, Heads: kv}, k); err != nil {
 			return nil, err
+		}
+		if capture != nil {
+			capture(l, k, v)
 		}
 		a, err := exec1(ctx, backend.OpMHA, attn, q, k, v)
 		if err != nil {

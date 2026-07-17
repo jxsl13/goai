@@ -4,6 +4,18 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — perf: batched prefill for the Llama family — 6.7× faster prompt processing (T785, 2026-07-17)
+
+`Llama.Generate` fed each prompt token one-by-one through `DecodeStep` (T dispatch-heavy
+single-token passes). A new `Prefill` runs the block stack ONCE over the whole prompt and seeds the
+KV-cache from that pass, via a capture hook (`hiddenFromEmbedCapture`) that taps each layer's
+post-RoPE/bias/QK-norm k and v — `hiddenFromEmbed` stays a nil-capture wrapper, so Forward, training
+and tape semantics are byte-identical. The prefilled cache is BIT-IDENTICAL to the step-by-step one
+(zero-tolerance test, on plain Llama and a variant exercising Qwen2 biases + Qwen3 QK-norm + all
+four Granite scalars), and every existing generate/decode/parity test passes unchanged. Measured
+(§V22): 128-token prompt prefill 117.1 ms → 17.5 ms (**6.7×**). Benefits Llama, Qwen2/2.5, Qwen3,
+Granite, and Phi-3 (all route through Llama.Generate).
+
 ### nlp — docs: runnable examples for every architecture family (T784, 2026-07-17)
 
 Ten runnable `Example` functions (with deterministic `// Output:`) covering each loadable
