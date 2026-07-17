@@ -61,9 +61,13 @@
 //     common quantized community checkpoints — from llama.cpp GGUF files
 //     (LlamaFromGGUF, Qwen2FromGGUF, Qwen3FromGGUF, GemmaFromGGUF, Phi3FromGGUF,
 //     MixtralFromGGUF — each verified against that converter's layout conventions
-//     in llama.cpp source — plus QuantQwen2FromGGUF / QuantQwen3FromGGUF, which
-//     decode quantized Qwen checkpoints directly from the ggml Q-blocks the way
-//     QuantLlamaFromGGUF does for Llama); LlamaConfigFromHF
+//     in llama.cpp source — plus quantized decode straight from the ggml
+//     Q-blocks, no dequantized copy of the weights ever materialized:
+//     QuantLlamaFromGGUF, QuantQwen2FromGGUF, QuantQwen3FromGGUF,
+//     QuantPhi3FromGGUF (unpacks the packed qkv/gate-up projections by
+//     lossless quantized row-slicing) and QuantGemmaFromGGUF (a dedicated
+//     quantized twin of the Gemma type — √dim scale, pre-folded (1+γ) norms,
+//     tied head served from the same Q-block bytes)); LlamaConfigFromHF
 //     (also Qwen2/Qwen3/Phi-3), GemmaConfigFromHF, Gemma2ConfigFromHF,
 //     MixtralConfigFromHF (also Qwen3-MoE), GraniteConfigFromHF and BertConfigFromHF
 //     read the checkpoint's config.json so loading is config-driven. Because a loaded model's forward runs through the

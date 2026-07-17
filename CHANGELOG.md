@@ -4,6 +4,11 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### docs — nlp: quantized-GGUF catalogue current through T801 (2026-07-17)
+
+The package doc now lists all five quantized direct-from-Q-block loaders (Llama, Qwen2,
+Qwen3, Phi-3 with lossless row-slice unpacking, Gemma with its dedicated quantized twin).
+
 ### ci — vulkan/windows lane: unreachable SDK-skip guard fixed (B66, 2026-07-17)
 
 The "compile the vulkan-tagged tree" step runs under `bash -e -o pipefail`, so
