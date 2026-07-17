@@ -127,6 +127,175 @@ func NewCUDA(m *nlp.Llama) (*Decoder, error) {
 	})
 }
 
+// NewLlamaQ8CUDA is NewCUDA with every projection (fused QKV, o_proj, gate/up/down, lm_head) quantized
+// to resident Q8_0 — a direct f32→Q8 decode path that needs NO ggml QuantLlama conversion. Transformer
+// decode is weight-bandwidth-bound, so streaming ~4× smaller Q8 projections speeds it up substantially.
+// Unlike nlp.QuantLlama (Llama-only), this reaches the Qwen2 (qkv-bias) and Qwen3 (QK-norm) variants —
+// biases and QK-norm gains stay f32 and apply after the Q8 matmul. Q8 is not bit-exact (cosine-validated).
+func NewLlamaQ8CUDA(m *nlp.Llama) (*Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newDecoder(m, backendOps{
+		name:        string(backend.CUDA),
+		asyncEncode: false,
+		newBuffer: func(data []float32) (buffer, error) {
+			b, err := cuda.NewDeviceBufferF32(data)
+			if err != nil {
+				return nil, err
+			}
+			return cBuf{b}, nil
+		},
+		newRecorder: func() (recorder, error) {
+			r, err := cuda.NewRecorder()
+			if err != nil {
+				return nil, err
+			}
+			return cRec{r}, nil
+		},
+		quantizeF32: func(w *tensor.Tensor) (qweight, error) {
+			return cuda.NewResidentBQ8(w)
+		},
+	})
+}
+
+// NewQwen2Q8CUDA / NewQwen3Q8CUDA / NewPhi3Q8CUDA are NewLlamaQ8CUDA typed entry points for the Llama
+// variants that nlp.QuantLlama cannot represent (Qwen2 qkv-bias, Qwen3 QK-norm) or that only had an f32
+// GPU path (Phi-3). They give those models their first quantized decode. Load with nlp.LlamaFromHF /
+// Phi3FromHF; biases and QK-norm gains are picked up and kept f32.
+func NewQwen2Q8CUDA(m *nlp.Llama) (*Decoder, error) { return NewLlamaQ8CUDA(m) }
+func NewQwen3Q8CUDA(m *nlp.Llama) (*Decoder, error) { return NewLlamaQ8CUDA(m) }
+func NewPhi3Q8CUDA(m *nlp.Llama) (*Decoder, error)  { return NewLlamaQ8CUDA(m) }
+
+// cudaQ8Ops is the cuda backendOps with resident-Q8_0 quantization enabled (ops.quantizeF32 set) —
+// shared by the dense-transformer NewXQ8CUDA entry points below. Each routes its arch's f32 checkpoint
+// through the same weight-bandwidth lever (~2-3× faster decode): mkLin/mkFused quantize every projection
+// and fused QKV; biases, QK-norm, ALiBi and RoPE stay f32. Q8 is not bit-exact (cosine-validated). These
+// reach arches with NO prior quant path (nlp.QuantLlama is Llama-only).
+func cudaQ8Ops() backendOps {
+	return backendOps{
+		name:        string(backend.CUDA),
+		asyncEncode: false,
+		newBuffer: func(data []float32) (buffer, error) {
+			b, err := cuda.NewDeviceBufferF32(data)
+			if err != nil {
+				return nil, err
+			}
+			return cBuf{b}, nil
+		},
+		newRecorder: func() (recorder, error) {
+			r, err := cuda.NewRecorder()
+			if err != nil {
+				return nil, err
+			}
+			return cRec{r}, nil
+		},
+		quantizeF32: func(w *tensor.Tensor) (qweight, error) { return cuda.NewResidentBQ8(w) },
+	}
+}
+
+func NewGemma2Q8CUDA(m *nlp.Gemma2) (*Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newGemma2Decoder(m, cudaQ8Ops())
+}
+func NewCohereQ8CUDA(m *nlp.Cohere) (*Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newCohereDecoder(m, cudaQ8Ops())
+}
+func NewNemotronQ8CUDA(m *nlp.Nemotron) (*Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newNemotronDecoder(m, cudaQ8Ops())
+}
+func NewOLMo2Q8CUDA(m *nlp.OLMo2) (*Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newOLMo2Decoder(m, cudaQ8Ops())
+}
+func NewFalconQ8CUDA(m *nlp.Falcon) (*Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newFalconDecoder(m, cudaQ8Ops())
+}
+func NewStableLMQ8CUDA(m *nlp.StableLM) (*Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newStableLMDecoder(m, cudaQ8Ops())
+}
+func NewStarCoder2Q8CUDA(m *nlp.StarCoder2) (*Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newStarCoder2Decoder(m, cudaQ8Ops())
+}
+func NewMPTQ8CUDA(m *nlp.MPT) (*Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newMPTDecoder(m, cudaQ8Ops())
+}
+func NewGPTNeoXQ8CUDA(m *nlp.GPTNeoX) (*Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newGPTNeoXDecoder(m, cudaQ8Ops())
+}
+func NewPhiQ8CUDA(m *nlp.Phi) (*Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newPhiDecoder(m, cudaQ8Ops())
+}
+
+// The MoE Q8 entry points quantize the (bandwidth-dominant) expert gate/up/down matrices and attention
+// projections to resident Q8_0 while the top-k ROUTER stays f32 (d.f32Lin) — Q8 rounding in the router
+// logits could flip expert selection. Sparse-MoE decode streams many expert matrices per token, so this
+// is the largest Q8 decode win. Qwen3-MoE loads as an nlp.Mixtral, so NewQwen3MoEQ8CUDA == NewMixtralQ8CUDA.
+func NewMixtralQ8CUDA(m *nlp.Mixtral) (*Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newMixtralDecoder(m, cudaQ8Ops())
+}
+func NewQwen3MoEQ8CUDA(m *nlp.Mixtral) (*Decoder, error) { return NewMixtralQ8CUDA(m) }
+func NewQwen2MoEQ8CUDA(m *nlp.Qwen2MoE) (*Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newQwen2MoEDecoder(m, cudaQ8Ops())
+}
+func NewGraniteMoEQ8CUDA(m *nlp.GraniteMoE) (*Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newGraniteMoEDecoder(m, cudaQ8Ops())
+}
+func NewOLMoEQ8CUDA(m *nlp.OLMoE) (*Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newOLMoEDecoder(m, cudaQ8Ops())
+}
+
+// NewDeepSeekV2Q8CUDA quantizes the flagship MLA + DeepSeekMoE decoder — the last Q8 gap. The low-rank
+// MLA projections (q_a/q_b/kv_a/kv_b, o_proj), the routed + shared expert matrices all go resident Q8_0;
+// the latent RMSNorms, decoupled RoPE and the top-k router stay f32 (the router carved out, as for the
+// other MoE arches). Completes Q8 decode across the entire f32 transformer catalogue.
+func NewDeepSeekV2Q8CUDA(m *nlp.DeepSeekV2) (*Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newDeepSeekV2Decoder(m, cudaQ8Ops())
+}
+
 // NewQwen2CUDA uploads a Qwen2 / Qwen2.5 model onto the batched Decoder core. Qwen2 shares
 // nlp.Llama (SwiGLU MLP, RMSNorm, GQA, full rope) and departs only in carrying q/k/v projection
 // biases (o_proj has none) — the newDecoder core adds them via qkvBias when b.Bq/Bk/Bv are set, so

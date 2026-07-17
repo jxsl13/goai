@@ -462,8 +462,49 @@ func (rec *Recorder) QMatMulResident(x *DeviceF32, w *ResidentBQ8, o *DeviceF32,
 	if x.ptr == nil || w.q == nil || w.scales == nil || o.ptr == nil {
 		return fmt.Errorf("cuda: rec QMatMulResident on a freed handle")
 	}
+	// PREFILL (M>1): cu_qmatmul_q8 is a GEMV — one warp per output element re-reads the whole [N,K] weight
+	// for EVERY output row, so it streams the weight M× (M× the dominant weight bandwidth). When the int8
+	// tensor-core MMQ GEMM applies (N%64==0, K%32==0), route there: it reads the weight ONCE across all M
+	// rows. ResidentBQ8's q + scales ARE already the MMQ weight format (int8 [N,K] + per-32-block f32
+	// amax/127 scales), so no requantization — only the activation is quantized per row. Decode (M=1) keeps
+	// the GEMV (optimal — MMQ would pad M to 64). Any error falls back to the always-correct GEMV.
+	if m >= 8 && w.n%64 == 0 && w.k%32 == 0 {
+		if err := rec.q8PrefillMMQ(x, w, o, m); err == nil {
+			return nil
+		}
+	}
 	if rc := C.cu_qmatmul_q8(x.ptr, w.q, w.scales, o.ptr, C.int(m), C.int(w.k), C.int(w.n), C.int(w.nb), C.float(0)); rc != 0 {
 		return fmt.Errorf("cuda: rec QMatMulResident failed (code %d)", int(rc))
+	}
+	return nil
+}
+
+// q8PrefillMMQ computes o[m,N] = x[m,K]·dequant(w) via the per-row-scale int8 MMQ GEMM, reusing the
+// resident Q8 weight (w.q/w.scales) directly as the MMQ weight. M is padded to 64 (pad rows produce
+// ignored outputs — the GEMM is row-independent), the activation is int8-quantized per row, and the
+// first m rows of the [mPad,N] result are copied out. Mirrors ResidentMMQ.MatMulDevice's plumbing.
+func (rec *Recorder) q8PrefillMMQ(x *DeviceF32, w *ResidentBQ8, o *DeviceF32, m int) error {
+	mPad := ((m + 63) / 64) * 64
+	dA8 := C.cu_alloc_i8(C.int(mPad * w.k))
+	dAs := C.cu_alloc_f32(C.int(mPad))
+	dC := C.cu_alloc_f32(C.int(mPad * w.n))
+	if dA8 == nil || dAs == nil || dC == nil {
+		C.cu_free_f32(unsafe.Pointer(dA8))
+		C.cu_free_f32(dAs)
+		C.cu_free_f32(dC)
+		return fmt.Errorf("cuda: q8 MMQ scratch alloc failed")
+	}
+	defer C.cu_free_f32(unsafe.Pointer(dA8))
+	defer C.cu_free_f32(dAs)
+	defer C.cu_free_f32(dC)
+	if rc := C.cu_quant_rows_i8(x.ptr, unsafe.Pointer(dA8), unsafe.Pointer(dAs), C.int(m), C.int(w.k)); rc != 0 {
+		return fmt.Errorf("cuda: q8 MMQ activation quant failed (code %d)", int(rc))
+	}
+	if rc := C.cu_matmul_i8_mmq_r(unsafe.Pointer(dA8), w.q, unsafe.Pointer(dAs), w.scales, dC, C.int(mPad), C.int(w.k), C.int(w.n)); rc != 0 {
+		return fmt.Errorf("cuda: q8 MMQ matmul failed (code %d)", int(rc))
+	}
+	if rc := C.cu_blit(o.ptr, C.int(0), dC, C.int(0), C.int(m*w.n)); rc != 0 {
+		return fmt.Errorf("cuda: q8 MMQ result copy failed (code %d)", int(rc))
 	}
 	return nil
 }
