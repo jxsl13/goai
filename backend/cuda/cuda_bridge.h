@@ -108,6 +108,9 @@ int cu_qmatmul_iq4xs_mt(const void* dA, const void* dQ, void* dOut, int M, int K
 // cu_qmatmul_mxfp4: out = a·dequant(MXFP4, gpt-oss), REPACKED into dScale (nblk E8M0 bytes/row)
 // + dNib (nblk×16 nibble bytes/row, 16-aligned) for coalesced reads. K%32==0. DECODE GEMV.
 int cu_qmatmul_mxfp4(const void* dA, const void* dScale, const void* dNib, void* dOut, int M, int K, int N, float beta);
+// cu_qmatmul_mxfp4_mt: weight-read-once M-tiled GEMM for M>1 — MXFP4 (gpt-oss) twin of the M-tile
+// (each block's scale + FP4 codebook values decoded once per warp, reused across the row tile). K%32==0.
+int cu_qmatmul_mxfp4_mt(const void* dA, const void* dScale, const void* dNib, void* dOut, int M, int K, int N, float beta);
 // cu_qmatmul_q40: out[M,N] = a·dequant(Q4_0), REPACKED into dScale (nblk f16/row) + dNib
 // (nblk×16 nibble bytes/row, 16-aligned) for coalesced reads. y = d·(nibble−8). K%32==0. GEMV.
 int cu_qmatmul_q40(const void* dA, const void* dScale, const void* dNib, void* dOut, int M, int K, int N, float beta);
