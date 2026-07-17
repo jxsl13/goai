@@ -226,6 +226,19 @@ func (rec *Recorder) MHA(q, k, v, o *DeviceF32, sq, sk, dm, heads, kvHeads, dk, 
 	return nil
 }
 
+// MoEGate writes Mixtral-style top-k routing weights: for each of `rows` tokens, given `e` raw router
+// logits, weights[e] = softmax over the top-`k` logits (0 for unselected experts) — the renormalized
+// combine weights. logits and weights are [rows·e] device buffers and must be distinct.
+func (rec *Recorder) MoEGate(logits, weights *DeviceF32, rows, e, k int) error {
+	if logits.ptr == nil || weights.ptr == nil {
+		return fmt.Errorf("cuda: rec MoEGate on a freed handle")
+	}
+	if rc := C.cu_moe_gate(logits.ptr, weights.ptr, C.int(rows), C.int(e), C.int(k)); rc != 0 {
+		return fmt.Errorf("cuda: rec MoEGate failed (code %d)", int(rc))
+	}
+	return nil
+}
+
 // MHAALiBi is MHA with an ALiBi position bias (MPT): each scaled score gets slopeₕ·(j−qabs) added
 // before the mask+softmax, where slopes is a device array of `heads` per-head slopes. No RoPE.
 func (rec *Recorder) MHAALiBi(q, k, v, o, slopes *DeviceF32, sq, sk, dm, heads, kvHeads, dk, causal, window int, scale float32) error {

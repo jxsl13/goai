@@ -201,6 +201,7 @@ int cu_gqa_out(const void* dScores, const void* dV, void* dOut, int seqQ, int se
 // cu_silu_f32 applies SiLU (x·sigmoid(x)) in-place; cu_add_f32 does dst += src
 // (residual). All operate on n floats, in-place, on the stream; return 0 on ok.
 int cu_gelu_f32(void* d, int n);
+int cu_moe_gate(const void* logits, void* weights, int rows, int E, int K); // Mixtral top-k routing weights
 int cu_relu2_f32(void* d, int n); // squared ReLU (Nemotron relu2): relu(x)² in-place
 int cu_silu_f32(void* d, int n);
 int cu_add_f32(void* dst, const void* src, int n);
