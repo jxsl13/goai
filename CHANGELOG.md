@@ -4,6 +4,18 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — J-lens foundation: residual capture + VJP-fitted expected Jacobians (T810+T811, 2026-07-17)
+
+The first two J-space tasks (§R250, Anthropic jacobian-lens port) land. T810: per-layer
+residual-stream capture on Llama and GPT (`ForwardResiduals`; Layers+1 taps, nil hook
+byte-identical — verified on output bits AND tape length). T811: the `JLens` type with the
+exact §R250 estimator — row-by-row VJP accumulation of J_l = E[∂h_L,t'/∂h_l,t] (cotangents
+summed over targets, averaged over sources; unit cotangents seeded via the inner-product
+trick), `Merge` for disjoint corpus slices, safetensors save/load, and reference-`.pt`
+import (mapping documented as an assumption for T812's golden verification). Fit-bounding
+via functional options. Self-consistency gates: last-layer identity EXACT, central
+finite-difference 1.14e-9, merge-vs-full-fit 4.4e-16, round-trip bit-exact.
+
 ### spec — J-lens / J-space interpretability planned (R250, T810-T815, 2026-07-17)
 
 Per user green-light, the complete port of Anthropic's jacobian-lens reference
