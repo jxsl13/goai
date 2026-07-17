@@ -31,7 +31,8 @@ func QuantLlamaFromGGUF(meta map[string]any, tensors map[string]gguf.QuantTensor
 }
 
 // quantLlamaArchFromGGUF is the shared llama-family quantized-GGUF loader behind
-// [QuantLlamaFromGGUF], [QuantQwen2FromGGUF] and [QuantQwen3FromGGUF] — the quantized twin of
+// [QuantLlamaFromGGUF], [QuantQwen2FromGGUF], [QuantQwen3FromGGUF] and (after its row-slice
+// unpacking) [QuantPhi3FromGGUF] — the quantized twin of
 // llamaArchFromGGUF. The arch string selects the metadata key prefix; the block structure and
 // tensor names are identical across the family, plus optional per-block tensors — attn_{q,k,v}.bias
 // (Qwen2 family) and attn_{q,k}_norm.weight (Qwen3 per-head QK-norm) — dequantized to f32 when

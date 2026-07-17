@@ -4,6 +4,17 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — quantized GGUF decode for Phi-3 (T799, 2026-07-17)
+
+`QuantPhi3FromGGUF` decodes llama.cpp-quantized Phi-3/Phi-3.5/Phi-4 checkpoints directly
+from the ggml Q-blocks. The packed `attn_qkv` / `ffn_up` projections are unpacked by
+`quantSliceRows` WITHOUT dequantizing: ggml block quantization is row-granular (blocks
+never span rows — the same invariant `gguf.QMatMul` enforces), so a row-range slice is an
+exact byte-range copy, proven bit-identical to quantizing the pre-split float weights
+(byte- and logit-level exact-equality gates; cosine 1.000000 vs the float pipeline on the
+same bytes). Split-tensor files pass through unchanged; decode-vs-Forward within the
+standing quant gate.
+
 ### docs — nlp: GGUF catalogue brought current (T795/T797 follow-up, 2026-07-17)
 
 The package doc's loader catalogue now lists all six float GGUF loaders (adds Gemma,
