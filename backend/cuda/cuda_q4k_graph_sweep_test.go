@@ -19,6 +19,9 @@ import (
 // authoritative tok/s per model for docs/benchmarking.md, against the recorded
 // llama.cpp Vulkan Q8 / Q4_K_M baselines.
 func TestCUDAQ4KGraphDecodeSweep(t *testing.T) {
+	if testing.Short() {
+		t.Skip("model-loading integration test; -short = kernel-level gate")
+	}
 	skipNoGPU(t)
 	for _, tc := range []struct {
 		path, arch, label string

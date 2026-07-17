@@ -130,6 +130,9 @@ func TestCUDAF16MatMulParity(t *testing.T) {
 // layer stack. Correctness gate: greedy argmax at every position must match the f32
 // path (f16 weight rounding shifts logits ~1e-3 — argmax on real text prompts holds).
 func TestCUDAF16PrefillSpeedAndParity(t *testing.T) {
+	if testing.Short() {
+		t.Skip("model-loading integration test; -short = kernel-level gate")
+	}
 	skipNoGPU(t)
 	if _, err := os.Stat(tinyLlamaPath); err != nil {
 		t.Skipf("model not present (%s)", tinyLlamaPath)

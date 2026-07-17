@@ -29,6 +29,9 @@ func renderPieces(s string) string {
 }
 
 func TestCUDATinyLlamaGenerate(t *testing.T) {
+	if testing.Short() {
+		t.Skip("model-loading integration test; -short = kernel-level gate")
+	}
 	skipNoGPU(t)
 	if _, err := os.Stat(tinyLlamaPath); err != nil {
 		t.Skipf("model not present (%s)", tinyLlamaPath)
@@ -85,6 +88,9 @@ func TestCUDATinyLlamaGenerate(t *testing.T) {
 // (see above), sampling produces varied, non-repeating text. The decode runs on
 // the optimized Q8 GPU path; only the per-token draw is host-side.
 func TestCUDATinyLlamaGenerateSampled(t *testing.T) {
+	if testing.Short() {
+		t.Skip("model-loading integration test; -short = kernel-level gate")
+	}
 	skipNoGPU(t)
 	if _, err := os.Stat(tinyLlamaPath); err != nil {
 		t.Skipf("model not present (%s)", tinyLlamaPath)

@@ -71,6 +71,9 @@ func quantDirect(qt gguf.QuantTensor) (qProj, error) {
 // (agreement is the primary signal — a single diverged token can be the answer word
 // itself, as the first Mistral run showed: 23/24 with exactly "Paris" swapped).
 func TestCUDAQ4KMDirect(t *testing.T) {
+	if testing.Short() {
+		t.Skip("model-loading integration test; -short = kernel-level gate")
+	}
 	skipNoGPU(t)
 	for _, tc := range []struct {
 		label, arch, q8Path, kmPath string

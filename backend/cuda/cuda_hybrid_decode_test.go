@@ -48,6 +48,9 @@ func concatRows(a, b *tensor.Tensor) *tensor.Tensor {
 // proving the split works across tokens with caches on both sides (the actual T631
 // serving path for models that exceed VRAM).
 func TestCUDAHybridDecode(t *testing.T) {
+	if testing.Short() {
+		t.Skip("model-loading integration test; -short = kernel-level gate")
+	}
 	skipNoGPU(t)
 	if _, err := os.Stat(tinyLlamaPath); err != nil {
 		t.Skipf("model not present (%s)", tinyLlamaPath)

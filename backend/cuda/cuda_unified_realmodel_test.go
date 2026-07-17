@@ -21,6 +21,9 @@ import (
 // adapter tests used synthetic small models; this proves the public API is correct on a real model
 // with a real tokenizer, the way a user calls it.
 func TestCUDAUnifiedRealModelGenerate(t *testing.T) {
+	if testing.Short() {
+		t.Skip("model-loading integration test; -short = kernel-level gate")
+	}
 	skipNoGPU(t)
 	if _, err := os.Stat(tinyLlamaPath); err != nil {
 		t.Skipf("model not present (%s)", tinyLlamaPath)

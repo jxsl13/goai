@@ -23,6 +23,9 @@ import (
 // tok/s on TinyLlama — both far under the measured 4184/199, so only a real
 // regression trips them).
 func TestCUDAUnifiedServeDemo(t *testing.T) {
+	if testing.Short() {
+		t.Skip("model-loading integration test; -short = kernel-level gate")
+	}
 	skipNoGPU(t)
 	if _, err := os.Stat(tinyLlamaPath); err != nil {
 		t.Skipf("model not present (%s)", tinyLlamaPath)

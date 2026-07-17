@@ -159,6 +159,9 @@ func (gd *graphDecoder) stepGraph(tb testing.TB, tok int32, pos int) *tensor.Ten
 // The CUDA-graph replay of the full decode must generate the SAME tokens as the
 // direct fixed-buffer decode — the capstone: launch-overhead-free decode.
 func TestCUDAGraphDecodeMatchesDirect(t *testing.T) {
+	if testing.Short() {
+		t.Skip("model-loading integration test; -short = kernel-level gate")
+	}
 	m := loadTinyLlama(t)
 	prompt := []int32{1, 15043, 29892, 590, 1024, 338}
 	const gen = 6
@@ -220,6 +223,9 @@ func BenchmarkTinyLlamaDecodeGraph_p32(b *testing.B) { benchGraphDecodeReplay(b,
 // the SAME greedy tokens as the validated f32 KV-cache decode — proving the exact
 // op sequence a graph will capture is correct.
 func TestCUDAGraphDecoderMatchesF32(t *testing.T) {
+	if testing.Short() {
+		t.Skip("model-loading integration test; -short = kernel-level gate")
+	}
 	m := loadTinyLlama(t)
 	gd := buildGraphDecoder(t, m, 64)
 	defer gd.free()

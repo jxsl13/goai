@@ -77,6 +77,9 @@ func (l *resLayer) forward(dx *cuda.DeviceF32) (*cuda.DeviceF32, error) {
 // SAME token (greedy argmax) at every position as nlp.Llama on the CPU. This is
 // the real-model inference validation the CUDA arc was built for.
 func TestCUDATinyLlamaFullForwardMatchesCPU(t *testing.T) {
+	if testing.Short() {
+		t.Skip("model-loading integration test; -short = kernel-level gate")
+	}
 	skipNoGPU(t)
 	if _, err := os.Stat(tinyLlamaPath); err != nil {
 		t.Skipf("model not present (%s)", tinyLlamaPath)

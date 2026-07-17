@@ -44,6 +44,9 @@ func cpuBlock(t *testing.T, ctx *backend.Context, x *tensor.Tensor, b *nlp.Llama
 // hybrid must predict the SAME token as the all-GPU forward — proving a model can be
 // split across GPU + CPU (the mechanism T631 needs for >VRAM models).
 func TestCUDAHybridSplitDecode(t *testing.T) {
+	if testing.Short() {
+		t.Skip("model-loading integration test; -short = kernel-level gate")
+	}
 	skipNoGPU(t)
 	if _, err := os.Stat(tinyLlamaPath); err != nil {
 		t.Skipf("model not present (%s)", tinyLlamaPath)

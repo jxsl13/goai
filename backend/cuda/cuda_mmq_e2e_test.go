@@ -18,6 +18,9 @@ import (
 // dequantized Qwen projection matrices, runs both on identical activations, and checks that MMQ
 // tracks f16 within the int8 quantization budget while using ~half the weight VRAM.
 func TestCUDAResidentMMQvsF16RealWeights(t *testing.T) {
+	if testing.Short() {
+		t.Skip("model-loading integration test; -short = kernel-level gate")
+	}
 	skipNoGPU(t)
 	for _, tc := range []struct{ path, label string }{
 		{"../../models/qwen2.5-0.5b-instruct-q8_0.gguf", "Qwen2.5-0.5B"},

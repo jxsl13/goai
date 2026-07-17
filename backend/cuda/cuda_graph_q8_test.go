@@ -135,6 +135,9 @@ func (gd *q8GraphDecoder) step(tb testing.TB, tok int32, pos int) *tensor.Tensor
 
 // Q8 fixed-buffer decode must generate the same greedy tokens as the f32 decode.
 func TestCUDAQ8GraphDecoderMatchesF32(t *testing.T) {
+	if testing.Short() {
+		t.Skip("model-loading integration test; -short = kernel-level gate")
+	}
 	m := loadTinyLlama(t)
 	gd := buildQ8GraphDecoder(t, m, 64)
 	defer gd.free()

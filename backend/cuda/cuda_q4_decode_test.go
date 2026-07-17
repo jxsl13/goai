@@ -140,6 +140,9 @@ func (gd *q4GraphDecoder) step(tb testing.TB, tok int32, pos int) *tensor.Tensor
 // the Q8 path — and (b) be faster than Q8 (fewer weight bytes). Answers the two questions that
 // decide whether Q4 lets goai beat llama.cpp: quality and speed.
 func TestCUDAQ4QualityAndSpeed(t *testing.T) {
+	if testing.Short() {
+		t.Skip("model-loading integration test; -short = kernel-level gate")
+	}
 	skipNoGPU(t)
 	if _, err := os.Stat(tinyLlamaPath); err != nil {
 		t.Skipf("model not present (%s)", tinyLlamaPath)

@@ -159,6 +159,9 @@ func (rl *residentLlamaQ8) newCaches(maxSeq int) []*cuda.KVCache {
 // ~0.4%/matmul, but the top logit is usually well separated); the per-position
 // logit L1 error quantifies the accuracy cost of quantization end-to-end.
 func TestCUDATinyLlamaQ8DecodeVsF32(t *testing.T) {
+	if testing.Short() {
+		t.Skip("model-loading integration test; -short = kernel-level gate")
+	}
 	m := loadTinyLlama(t)
 	q8 := buildResidentLlamaQ8(t, m)
 	defer q8.free()

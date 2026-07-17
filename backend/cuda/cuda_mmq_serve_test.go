@@ -20,6 +20,9 @@ import (
 // (2) the continuation staying coherent ("Paris") — the end-to-end proof that the int8 prefill
 // weight is a valid drop-in through decode, at ~half the prefill weight VRAM.
 func TestCUDAUnifiedServeMMQ(t *testing.T) {
+	if testing.Short() {
+		t.Skip("model-loading integration test; -short = kernel-level gate")
+	}
 	skipNoGPU(t)
 	const path = "../../models/qwen2.5-0.5b-instruct-q8_0.gguf" // dim 896 -> Q8 decode
 	if _, err := os.Stat(path); err != nil {

@@ -116,6 +116,9 @@ func argmaxRow(t *tensor.Tensor, r int) int {
 // the whole growing sequence from scratch each step. If the cache, its RoPE
 // PosOffset, or the seqQ×seqKV attention were wrong, the two would diverge.
 func TestCUDATinyLlamaKVCacheMatchesReforward(t *testing.T) {
+	if testing.Short() {
+		t.Skip("model-loading integration test; -short = kernel-level gate")
+	}
 	m := loadTinyLlama(t)
 	rl := buildResidentLlama(t, m)
 	defer rl.free()

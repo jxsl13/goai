@@ -21,6 +21,9 @@ import (
 // offload trade-off (how many layers can spill before the CPU dominates) is known
 // BEFORE building the routing/transfer plumbing.
 func TestT631OffloadViabilityProbe(t *testing.T) {
+	if testing.Short() {
+		t.Skip("model-loading integration test; -short = kernel-level gate")
+	}
 	skipNoGPU(t)
 	f, err := gguf.ReadFile(tinyLlamaPath)
 	if err != nil {
