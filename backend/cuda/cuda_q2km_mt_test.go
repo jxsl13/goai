@@ -118,3 +118,4 @@ func benchQ2KM(b *testing.B, m, k, n int) {
 func BenchmarkQ2KM16_2048(b *testing.B)      { benchQ2KM(b, 16, 2048, 2048) }
 func BenchmarkQ2KM32_2048(b *testing.B)      { benchQ2KM(b, 32, 2048, 2048) }
 func BenchmarkQ2KM64_2048x5632(b *testing.B) { benchQ2KM(b, 64, 2048, 5632) }
+func BenchmarkQ2KM64_5632x2048(b *testing.B) { benchQ2KM(b, 64, 5632, 2048) } // ffn_down (deep-K), M=64

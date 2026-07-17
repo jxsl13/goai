@@ -2520,6 +2520,10 @@ done:
 // the K-quant family). Each lane owns 8 contiguous elements; the affine scale/min (dl, ml) and the 8
 // decoded 2-bit q2 values are hoisted ONCE per warp and reused across an MT=8 row tile. Arithmetic
 // LIFTED VERBATIM from qmatmul_q2k (acc += dl·Σaᵢqᵢ − ml·Σaᵢ) → bit-identical per row. K%256==0.
+// NO shared-staged deep-K variant (unlike Q3/Q4/Q5/Q6): measured as a LOSS on RTX 3060 —
+// 5632×2048 M64 1189905 → 1259995 ns (−6%). Q2_K's 2-bit decode is so cheap that the per-sub-block
+// barrier costs more latency hiding than the 8× activation-reread cut saves. Do not rebuild
+// without new evidence (bench: BenchmarkQ2KM64_5632x2048).
 int cu_qmatmul_q2k_mt(const void* dA, const void* dQ, void* dOut, int M, int K, int N, float beta) {
     int rc = -1;
     pthread_mutex_lock(&gLock);
