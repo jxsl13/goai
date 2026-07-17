@@ -4,6 +4,15 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — feat: O(1) stateful generation for RWKV (T777, 2026-07-17)
+
+`RWKV` gains `NewDecodeState`/`DecodeStep`/`Generate` built on `nn.RWKVBlock.Step` — decoding with a
+CONSTANT-size per-layer state (token-shift rows + the WKV num/den/max accumulator) instead of a
+KV-cache that grows with every token: the recurrent architecture's signature advantage. The decode
+replays the WKV kernel's operation order verbatim, so decode-vs-Forward parity is exactly 0.0; a
+test asserts the state size after 7 steps equals the size after 3 (O(1), unlike a KV-cache's 3→7
+rows). Every recurrent-capable loadable model now generates.
+
 ### nlp — docs: refresh the loadable-architecture catalogue to thirty-one (T776, 2026-07-17)
 
 The package godoc now lists all thirty-one architectures — adding MPT, Falcon, DeepSeek-V2, Mamba,
