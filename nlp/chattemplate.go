@@ -24,7 +24,7 @@ type ChatMessage struct {
 // Supported families (the names NewChatTemplate accepts): "chatml" (Qwen2/2.5 class),
 // "llama3" (Meta-Llama-3-Instruct), "gemma" (gemma-it), "mistral"
 // (Mistral-7B-Instruct-v0.3 class), "phi3" (Phi-3-instruct), "granite"
-// (IBM Granite 3.x instruct).
+// (IBM Granite 3.x instruct), "olmo2" (allenai OLMo-2 Instruct).
 //
 // Family quirks are preserved faithfully: llama3/gemma trim message content; gemma and
 // mistral reject non-alternating user/assistant turns and have no system role — a
@@ -65,10 +65,10 @@ func WithoutBOS() ChatRenderOption {
 // "llama3", "gemma", "mistral", "phi3" or "granite".
 func NewChatTemplate(family string) (*ChatTemplate, error) {
 	switch family {
-	case "chatml", "llama3", "gemma", "mistral", "phi3", "granite":
+	case "chatml", "llama3", "gemma", "mistral", "phi3", "granite", "olmo2":
 		return &ChatTemplate{family: family}, nil
 	}
-	return nil, fmt.Errorf("nlp: NewChatTemplate: unknown family %q (want chatml, llama3, gemma, mistral, phi3 or granite)", family)
+	return nil, fmt.Errorf("nlp: NewChatTemplate: unknown family %q (want chatml, llama3, gemma, mistral, phi3, granite or olmo2)", family)
 }
 
 // DetectChatTemplate maps Jinja template source (the GGUF "tokenizer.chat_template"
@@ -162,6 +162,8 @@ func (t *ChatTemplate) Render(messages []ChatMessage, opts ...ChatRenderOption) 
 		// generation prompt is the assistant role opener. Verified byte-exact against
 		// ibm-granite/granite-3.0-2b-instruct's tokenizer.apply_chat_template.
 		return renderTurnStyle(messages, cfg, "", "<|start_of_role|>", "<|end_of_role|>", "<|end_of_text|>\n", nil, false), nil
+	case "olmo2":
+		return renderOLMo2(messages, cfg), nil
 	}
 	return "", fmt.Errorf("nlp: ChatTemplate.Render: unknown family %q", t.family)
 }
@@ -228,6 +230,37 @@ func renderMistral(messages []ChatMessage, cfg chatRenderCfg) (string, error) {
 		}
 	}
 	return sb.String(), nil
+}
+
+// renderOLMo2 renders the allenai OLMo-2 Instruct template: the bos string
+// "<|endoftext|>" (suppressible with WithoutBOS), then per turn "<|role|>\n" +
+// content, closed with "\n" for system/user but with the eos "<|endoftext|>"
+// for assistant turns — and the LAST assistant turn drops the trailing newline
+// (the template's loop.last branch). The generation prompt is "<|assistant|>\n".
+// Verified byte-exact against allenai/OLMo-2-1124-7B-Instruct's
+// tokenizer.apply_chat_template (transformers 5.14.1).
+func renderOLMo2(messages []ChatMessage, cfg chatRenderCfg) string {
+	var sb strings.Builder
+	if !cfg.withoutBOS {
+		sb.WriteString("<|endoftext|>")
+	}
+	for i, m := range messages {
+		switch m.Role {
+		case "system":
+			sb.WriteString("<|system|>\n" + m.Content + "\n")
+		case "user":
+			sb.WriteString("<|user|>\n" + m.Content + "\n")
+		case "assistant":
+			sb.WriteString("<|assistant|>\n" + m.Content + "<|endoftext|>")
+			if i != len(messages)-1 { // the last assistant turn omits the trailing newline
+				sb.WriteString("\n")
+			}
+		}
+	}
+	if cfg.generationPrompt {
+		sb.WriteString("<|assistant|>\n")
+	}
+	return sb.String()
 }
 
 // foldSystem merges a leading system message into the first user turn

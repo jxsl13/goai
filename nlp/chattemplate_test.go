@@ -41,6 +41,11 @@ func TestChatTemplateGoldenRenders(t *testing.T) {
 			"<|start_of_role|>assistant<|end_of_role|>Hello!<|end_of_text|>\n" +
 			"<|start_of_role|>user<|end_of_role|>Bye?<|end_of_text|>\n" +
 			"<|start_of_role|>assistant<|end_of_role|>",
+		// Rendered by allenai/OLMo-2-1124-7B-Instruct's tokenizer.apply_chat_template
+		// (transformers 5.14.1, add_generation_prompt=true) — byte-exact. Note the eos
+		// "<|endoftext|>" after the (non-last) assistant turn.
+		"olmo2": "<|endoftext|><|system|>\nYou are helpful.\n<|user|>\nHi!\n" +
+			"<|assistant|>\nHello!<|endoftext|>\n<|user|>\nBye?\n<|assistant|>\n",
 	}
 	for family, want := range goldens {
 		tpl, err := nlp.NewChatTemplate(family)
@@ -175,5 +180,33 @@ func TestChatTemplateFromGGUF(t *testing.T) {
 	}
 	if _, err := nlp.ChatTemplateFromGGUF(map[string]any{"tokenizer.chat_template": 7}); err == nil {
 		t.Error("non-string value must error")
+	}
+}
+
+// §V16 tier-1: OLMo-2's last-assistant edge case — the reference template's
+// loop.last branch drops the trailing newline after a conversation-final
+// assistant turn (all other assistant turns close with "<|endoftext|>\n").
+// Byte-exact against allenai/OLMo-2-1124-7B-Instruct.
+func TestChatTemplateOLMo2LastAssistant(t *testing.T) {
+	tpl, err := nlp.NewChatTemplate("olmo2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	msgs := []nlp.ChatMessage{
+		{Role: "user", Content: "Hi!"},
+		{Role: "assistant", Content: "Hello!"},
+	}
+	got, err := tpl.Render(msgs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "<|endoftext|><|user|>\nHi!\n<|assistant|>\nHello!<|endoftext|>"
+	if got != want {
+		t.Errorf("olmo2 last-assistant mismatch:\ngot:  %q\nwant: %q", got, want)
+	}
+	// WithoutBOS drops the leading eos-as-bos string.
+	got2, _ := tpl.Render(msgs, nlp.WithoutBOS())
+	if want2 := "<|user|>\nHi!\n<|assistant|>\nHello!<|endoftext|>"; got2 != want2 {
+		t.Errorf("olmo2 WithoutBOS mismatch:\ngot:  %q\nwant: %q", got2, want2)
 	}
 }
