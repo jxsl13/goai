@@ -128,3 +128,47 @@ func BenchmarkLlamaDecodeStepQ8(b *testing.B) {
 	defer dec.Release()
 	benchLlamaStep(b, dec)
 }
+
+// benchLlamaPrefill times a batched-prefill StepN over a 32-token prompt — the M>1 regime.
+func benchLlamaPrefill(b *testing.B, dec *llamagpu.Decoder) {
+	b.Helper()
+	prompt := make([]int, 32)
+	for i := range prompt {
+		prompt[i] = (i*7 + 1) % 32000
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := dec.StepN(prompt, 0); err != nil {
+			b.Fatalf("StepN: %v", err)
+		}
+	}
+}
+
+// BenchmarkLlamaPrefillF32 / _Q8 measure batched prefill (StepN, M=32). NOTE: unlike decode, Q8 prefill
+// is currently SLOWER than f32 — QMatMulResident is a GEMV that re-reads the weight per output row (M×
+// the weight bandwidth), while f32 uses cuBLAS (weight reused once). The fix is to route M>1 to the
+// existing int8 tensor-core MMQ path (cu_matmul_i8_mmq, which ResidentBQ8's q+scales already fit); these
+// benchmarks are the before/after gauge for that work. Decode (M=1) is unaffected and remains ~2.58×.
+func BenchmarkLlamaPrefillF32(b *testing.B) {
+	if !cuda.Available() {
+		b.Skip("cuda: no CUDA-capable device")
+	}
+	dec, err := llamagpu.NewCUDA(realLlama(b))
+	if err != nil {
+		b.Fatalf("NewCUDA: %v", err)
+	}
+	defer dec.Release()
+	benchLlamaPrefill(b, dec)
+}
+
+func BenchmarkLlamaPrefillQ8(b *testing.B) {
+	if !cuda.Available() {
+		b.Skip("cuda: no CUDA-capable device")
+	}
+	dec, err := llamagpu.NewLlamaQ8CUDA(realLlama(b))
+	if err != nil {
+		b.Fatalf("NewLlamaQ8CUDA: %v", err)
+	}
+	defer dec.Release()
+	benchLlamaPrefill(b, dec)
+}
