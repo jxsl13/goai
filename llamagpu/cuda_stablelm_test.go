@@ -722,3 +722,49 @@ func TestCUDAMPTMatchesReference(t *testing.T) {
 	}
 	t.Logf("llamagpu NewMPTCUDA.Generate == nlp.MPT.Generate greedy: %d tokens (ALiBi + weight-only LayerNorm + GELU-MLP)", len(gpuOut))
 }
+
+// TestCUDAMixtralMatchesReference checks the Mixtral GPU path (NewMixtralCUDA) generates greedy-
+// identical tokens to the reference nlp.Mixtral — the FIRST sparse Mixture-of-Experts GPU decoder.
+// Exercises the on-device routing (cu_moe_gate) + per-expert SwiGLU + weighted combine (cu_row_axpy)
+// inside the pre-recorded batched command buffer, with the attention/norm stack reusing the dense core.
+func TestCUDAMixtralMatchesReference(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("cuda: no CUDA-capable device")
+	}
+	ts, _, err := safetensors.LoadFile("../nlp/testdata/mixtral_hf.safetensors")
+	if err != nil {
+		t.Skipf("mixtral testdata unavailable (run make golden): %v", err)
+	}
+	m, err := nlp.MixtralFromHF(ts, nlp.MixtralConfig{
+		Heads: 4, KVHeads: 2, TopK: 2, Eps: 1e-5, RopeBase: 10000, Ctx: 32,
+	})
+	if err != nil {
+		t.Fatalf("MixtralFromHF: %v", err)
+	}
+
+	dec, err := llamagpu.NewMixtralCUDA(m)
+	if err != nil {
+		t.Fatalf("NewMixtralCUDA: %v", err)
+	}
+	defer dec.Release()
+
+	prompt := []int{3, 7, 1, 9}
+	const maxNew = 12
+	gpuOut, err := dec.Generate(prompt, maxNew, nlp.Greedy())
+	if err != nil {
+		t.Fatalf("cuda generate: %v", err)
+	}
+	refOut, err := m.Generate(prompt, maxNew, nlp.Greedy(), nlp.WithBackend(backend.Reference()))
+	if err != nil {
+		t.Fatalf("ref generate: %v", err)
+	}
+	if len(gpuOut) != len(refOut) {
+		t.Fatalf("length: cuda %d vs ref %d", len(gpuOut), len(refOut))
+	}
+	for i := range gpuOut {
+		if gpuOut[i] != refOut[i] {
+			t.Fatalf("token[%d]: cuda %d vs ref %d\ncuda=%v\nref=%v", i, gpuOut[i], refOut[i], gpuOut, refOut)
+		}
+	}
+	t.Logf("llamagpu NewMixtralCUDA.Generate == nlp.Mixtral.Generate greedy: %d tokens (sparse MoE: route → experts → combine)", len(gpuOut))
+}

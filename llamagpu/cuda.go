@@ -214,6 +214,35 @@ func NewOLMo2CUDA(m *nlp.OLMo2) (*Decoder, error) {
 	})
 }
 
+// NewMixtralCUDA uploads an nlp.Mixtral (sparse Mixture-of-Experts) onto the batched Decoder core.
+// Attention is the plain Llama core (+ optional Qwen3-MoE QK-norm); the FFN is a sparse MoE routed
+// per token — the routing weights are computed on-device (cu_moe_gate) so the whole step stays a
+// pre-recorded batched command buffer. Dense expert eval (correct); sparse top-k gather is a
+// follow-up. cuda-only.
+func NewMixtralCUDA(m *nlp.Mixtral) (*Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newMixtralDecoder(m, backendOps{
+		name:        string(backend.CUDA),
+		asyncEncode: false,
+		newBuffer: func(data []float32) (buffer, error) {
+			b, err := cuda.NewDeviceBufferF32(data)
+			if err != nil {
+				return nil, err
+			}
+			return cBuf{b}, nil
+		},
+		newRecorder: func() (recorder, error) {
+			r, err := cuda.NewRecorder()
+			if err != nil {
+				return nil, err
+			}
+			return cRec{r}, nil
+		},
+	})
+}
+
 // NewMPTCUDA uploads an nlp.MPT (MosaicML) onto the batched Decoder core: the first ALiBi decoder —
 // position enters solely through a per-head linear bias on the attention scores (no RoPE), with
 // weight-only LayerNorm, standard MHA, a bias-free 2-layer GELU MLP and a tied lm_head. cuda-only
