@@ -4,6 +4,20 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — GGUF loading for Mamba and Jamba, the recurrent tier (T816, 2026-07-17)
+
+`MambaFromGGUF` and `JambaFromGGUF` (+ `*ToGGUF` inverses); float GGUF coverage reaches
+nineteen architectures — the first state-space models on the axis. Conventions verified
+against llama.cpp source and anchored with §B67-independent fixtures (§B68-nonzero conv
+biases): the converter transforms `A_log → −exp(A_log)` and squeezes conv1d `[d_inner,1,k]
+→ [d_inner,k]`, `ssm_a`/`ssm_d` carry no `.weight` suffix, and the packed `ssm_in`/`ssm_x`
+split at d_inner / (dt_rank,d_state). Jamba's mixer interleave is the PER-LAYER
+`head_count_kv` vector (0 = Mamba, KVHeads = attention); attention is NoPE (no permute); the
+dedicated `ssm_{dt,b,c}_norm` weights load per Mamba layer; MoE layers (router presence)
+carry fused 3-D expert banks split from HF's `gate_up_proj`, dense layers plain SwiGLU.
+Parity vs the HF-loaded models: Mamba 3.1e-11 (map) / 1.0e-9 (bytes), Jamba 1.4e-11 / 3.1e-10;
+decode-vs-Forward bit-exact on both (SSM + hybrid KV/SSM state survives the load).
+
 ### nlp — jacobian-lens replication prompt sets + attribution; J-lens documented (T815, 2026-07-17)
 
 The 17 experiment-replication and lens-evaluation prompt sets from the reference
