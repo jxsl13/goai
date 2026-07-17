@@ -172,6 +172,23 @@ func (m *Llama) ForwardFromEmbed(ctx *backend.Context, x *tensor.Tensor) (*tenso
 	return divLogits(ctx, logits, m.Config.LogitsScale)
 }
 
+// Unembed maps residual-stream rows h [n, dim] to logits [n, vocab] through the
+// model's final RMSNorm, output projection and (Granite) logits scaling — the
+// [LensReadoutModel] seam (§T812): Unembed applied to the pre-final-norm
+// residual reproduces Forward's logits exactly, and the J-lens borrows it to
+// decode transported activations with the model's own head.
+func (m *Llama) Unembed(ctx *backend.Context, h *tensor.Tensor) (*tensor.Tensor, error) {
+	x, err := m.Norm.Forward(ctx, h)
+	if err != nil {
+		return nil, err
+	}
+	logits, err := exec1(ctx, backend.OpMatMul, nil, x, m.Out)
+	if err != nil {
+		return nil, err
+	}
+	return divLogits(ctx, logits, m.Config.LogitsScale)
+}
+
 // scaleScalar multiplies x by the scalar s via a rank-0 OpMul broadcast when s is a set,
 // non-identity Granite multiplier (s != 0 && s != 1); an unset (0) or identity (1) s
 // returns x unchanged, so the plain-Llama path (all Granite scalars 0) is byte-identical.

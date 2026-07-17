@@ -33,22 +33,25 @@ type ResidualModel interface {
 // a Global Workspace in Language Models"; ref-impl github.com/anthropics/
 // jacobian-lens, §R250): one matrix per residual-stream layer,
 //
-//	J_l = E[ ∂h_L(t') / ∂h_l(t) ],   summed over targets t' ≥ t,
-//	                                 averaged over sources t and sequences,
+//	J_l = E[ ∂h_L(t') / ∂h_l(t) ],   summed over valid targets t' ≥ t,
+//	                                 averaged over valid sources t and sequences,
 //
 // where h_L is the FINAL residual stream (after the last block, before the
-// final norm) and h_l the stream at layer l (index 0 = post-embedding). J_l
-// transports a layer-l activation into the final-layer basis, where the
-// model's own final norm + unembedding read it out as ranked vocabulary
-// (the transported logit lens, §T812). By construction J[Layers] is the
-// identity. Fit with [FitJLens], combine disjoint fits with [Merge], persist
-// with [Save]/[LoadJLens], or import a reference-implementation artifact with
-// [JLensFromPT].
+// final norm), h_l the stream at layer l (index 0 = post-embedding), and the
+// valid positions exclude the final position and an optional attention-sink
+// prefix (see [FitJLens]). J_l transports a layer-l activation into the
+// final-layer basis, where the model's own final norm + unembedding read it
+// out as ranked vocabulary (the transported logit lens [JLens.Apply], §T812).
+// By construction J[Layers] is the identity. Fit with [FitJLens], combine
+// disjoint fits with [Merge], persist with [Save]/[LoadJLens], or import a
+// reference-implementation artifact with [JLensFromPT].
 type JLens struct {
 	// J holds Layers+1 matrices, J[l] of shape [dim, dim] (f64), with
 	// J[l][a][b] = E[∂h_L[a]/∂h_l[b]] — rows index the output (final-layer)
 	// basis, columns the layer-l basis, so the transported readout is the
-	// ordinary matrix-vector product J[l]·h.
+	// ordinary matrix-vector product J[l]·h. An entry may be nil for a layer
+	// the lens was not fitted at (a [JLensFromPT] import has J[0] == nil:
+	// the reference format never fits the post-embedding stream).
 	J []*tensor.Tensor
 
 	Dim    int     // residual-stream width
@@ -61,6 +64,7 @@ type JLens struct {
 type fitJLensOpts struct {
 	maxSequences     int
 	maxTargetsPerSeq int
+	skipFirst        int
 }
 
 // FitJLensOption configures FitJLens.
@@ -74,12 +78,24 @@ func WithJLensMaxSequences(n int) FitJLensOption {
 }
 
 // WithJLensMaxTargetsPerSeq caps the number of target positions t' per sequence
-// (0 = all). When capped, targets are an evenly spaced deterministic subset
-// (always including the first and last position), which approximates the
-// full target sum at proportionally reduced cost — the backward count per
-// sequence is targets·dim, so this is the dominant cost knob.
+// (0 = all). When capped, targets are an evenly spaced deterministic subset of
+// the valid positions (always including the first and last valid one), which
+// approximates the full target sum at proportionally reduced cost — the
+// backward count per sequence is targets·dim, so this is the dominant cost
+// knob. (The reference implementation instead batches all targets into one
+// cotangent; the estimator is identical when uncapped, by linearity.)
 func WithJLensMaxTargetsPerSeq(n int) FitJLensOption {
 	return func(o *fitJLensOpts) { o.maxTargetsPerSeq = n }
+}
+
+// WithJLensSkipFirst excludes the first n positions of every sequence from the
+// Jacobian average (both as targets and as sources), mirroring the reference
+// implementation's skip_first: early positions act as attention sinks and have
+// atypical residual statistics. The reference default is 16 (tuned for real
+// models on 128-token web text); GoAI defaults to 0 so tiny-model fits keep
+// every usable position — pass 16 to reproduce a reference fit exactly.
+func WithJLensSkipFirst(n int) FitJLensOption {
+	return func(o *fitJLensOpts) { o.skipFirst = n }
 }
 
 // FitJLens fits a Jacobian lens to model on a token corpus (§T811, §R250).
@@ -90,8 +106,17 @@ func WithJLensMaxTargetsPerSeq(n int) FitJLensOption {
 // of the final residual h_L and reading the tape gradient at each captured
 // h_l gives row j of ∂h_L(t')/∂h_l(t) for ALL source positions t ≤ t' at
 // once. Contributions are summed over targets t' ≥ t, averaged over source
-// positions within a sequence, then averaged over sequences — exactly the
-// §R250 estimator, with no finite-difference or sampling approximation.
+// positions within a sequence, then averaged over sequences — the §R250
+// estimator, with no finite-difference or sampling approximation.
+//
+// Position mask (reference-implementation parity, pinned by the §T812 golden
+// fixtures): both the target sum and the source average run over the VALID
+// positions only — the final position is always excluded (it has no
+// next-token target), and [WithJLensSkipFirst] drops leading attention-sink
+// positions exactly like the reference's skip_first. A sequence with no valid
+// positions (len ≤ skipFirst+1) is an error; the reference logs and skips
+// such prompts instead — GoAI is explicit so a silently empty fit cannot
+// happen.
 //
 // Cost: the exact version performs targets·dim backward passes per sequence
 // (each a full tape walk), which is affordable for the tiny models this is
@@ -106,6 +131,9 @@ func FitJLens(model ResidualModel, corpus [][]int, opts ...FitJLensOption) (*JLe
 	var o fitJLensOpts
 	for _, opt := range opts {
 		opt(&o)
+	}
+	if o.skipFirst < 0 {
+		return nil, fmt.Errorf("nlp: FitJLens: negative skipFirst %d", o.skipFirst)
 	}
 	if len(corpus) == 0 {
 		return nil, fmt.Errorf("nlp: FitJLens: empty corpus")
@@ -122,8 +150,8 @@ func FitJLens(model ResidualModel, corpus [][]int, opts ...FitJLensOption) (*JLe
 		nSeq   float64
 	)
 	for si, tokens := range seqs {
-		if len(tokens) == 0 {
-			return nil, fmt.Errorf("nlp: FitJLens: corpus sequence %d is empty", si)
+		if len(tokens) <= o.skipFirst+1 {
+			return nil, fmt.Errorf("nlp: FitJLens: corpus sequence %d too short (%d tokens, need > skipFirst+1 = %d)", si, len(tokens), o.skipFirst+1)
 		}
 		tape := autograd.NewTape()
 		ctx := tape.Context()
@@ -154,12 +182,21 @@ func FitJLens(model ResidualModel, corpus [][]int, opts ...FitJLensOption) (*JLe
 			return nil, fmt.Errorf("nlp: FitJLens: sequence %d geometry [%d layers, dim %d] != [%d, %d]", si, L, d, layers, dim)
 		}
 
-		// Per-sequence accumulator: sum over targets t' ≥ t of the exact VJP rows.
+		// Valid positions (reference mask): skipFirst … seq-2 inclusive. The
+		// same set serves as targets AND as the source-average support.
+		valid := make([]int, 0, seq-1-o.skipFirst)
+		for p := o.skipFirst; p < seq-1; p++ {
+			valid = append(valid, p)
+		}
+
+		// Per-sequence accumulator: sum over valid targets t' ≥ t of the exact
+		// VJP rows, read at valid source positions t.
 		seqAcc := make([][]float64, L+1)
 		for l := range seqAcc {
 			seqAcc[l] = make([]float64, d*d)
 		}
-		for _, tp := range jlensTargets(seq, o.maxTargetsPerSeq) {
+		for _, ti := range jlensTargets(len(valid), o.maxTargetsPerSeq) {
+			tp := valid[ti]
 			for j := 0; j < d; j++ {
 				// Cotangent c = e_{t',j}: Backward(h_L ⊙ c) seeds grad(h_L) = c.
 				c := tensor.New(tensor.F64, tensor.Shape{seq, d})
@@ -177,10 +214,13 @@ func FitJLens(model ResidualModel, corpus [][]int, opts ...FitJLensOption) (*JLe
 						continue // unreachable layer: zero contribution
 					}
 					g := G.Storage().F64()
-					// Row j of ∂h_L(t')/∂h_l(t) for every source t ≤ t'
+					// Row j of ∂h_L(t')/∂h_l(t) for every valid source t ≤ t'
 					// (rows t > t' are exactly zero under causal attention).
 					row := seqAcc[l][j*d : (j+1)*d]
-					for t := 0; t <= tp; t++ {
+					for _, t := range valid {
+						if t > tp {
+							break
+						}
 						gt := g[t*d : (t+1)*d]
 						for i, v := range gt {
 							row[i] += v
@@ -189,8 +229,8 @@ func FitJLens(model ResidualModel, corpus [][]int, opts ...FitJLensOption) (*JLe
 				}
 			}
 		}
-		// Average over source positions, then accumulate the per-sequence mean.
-		inv := 1 / float64(seq)
+		// Average over valid source positions, then accumulate the per-sequence mean.
+		inv := 1 / float64(len(valid))
 		for l := range seqAcc {
 			for i, v := range seqAcc[l] {
 				acc[l][i] += v * inv
@@ -211,24 +251,24 @@ func FitJLens(model ResidualModel, corpus [][]int, opts ...FitJLensOption) (*JLe
 	return jl, nil
 }
 
-// jlensTargets returns the target positions t' for a sequence of length seq:
-// all positions when max ≤ 0 or seq ≤ max, else an evenly spaced deterministic
-// subset including position 0 and seq-1.
-func jlensTargets(seq, max int) []int {
-	if max <= 0 || seq <= max {
-		ts := make([]int, seq)
+// jlensTargets returns the indices (into the valid-position list of length n)
+// to use as targets: all of them when max ≤ 0 or n ≤ max, else an evenly
+// spaced deterministic subset including the first and last index.
+func jlensTargets(n, max int) []int {
+	if max <= 0 || n <= max {
+		ts := make([]int, n)
 		for i := range ts {
 			ts[i] = i
 		}
 		return ts
 	}
 	if max == 1 {
-		return []int{seq - 1}
+		return []int{n - 1}
 	}
 	ts := make([]int, 0, max)
 	prev := -1
 	for k := 0; k < max; k++ {
-		t := k * (seq - 1) / (max - 1)
+		t := k * (n - 1) / (max - 1)
 		if t != prev {
 			ts = append(ts, t)
 			prev = t
@@ -263,6 +303,12 @@ func (jl *JLens) Merge(other *JLens, weight float64) error {
 	}
 	total := jl.Weight + weight
 	for l := range jl.J {
+		if jl.J[l] == nil && other.J[l] == nil {
+			continue // layer unfitted in both (e.g. J[0] of imported lenses)
+		}
+		if jl.J[l] == nil || other.J[l] == nil {
+			return fmt.Errorf("nlp: JLens.Merge: layer %d fitted in only one lens", l)
+		}
 		a, b := jl.J[l].Storage().F64(), other.J[l].Storage().F64()
 		for i := range a {
 			a[i] = (jl.Weight*a[i] + weight*b[i]) / total
@@ -274,10 +320,15 @@ func (jl *JLens) Merge(other *JLens, weight float64) error {
 
 // Save writes the lens to a GoAI-native safetensors file: one f64 tensor per
 // layer named "jlens.layer.N" plus metadata (format, dim, layers, arch,
-// weight). LoadJLens round-trips it bit-exactly.
+// weight). LoadJLens round-trips it bit-exactly. A lens with unfitted (nil)
+// layers — a [JLensFromPT] import — cannot be saved in the GoAI-native
+// format, which requires every layer; keep the original .pt artifact instead.
 func (jl *JLens) Save(path string) error {
 	ts := make(map[string]*tensor.Tensor, len(jl.J))
 	for l, t := range jl.J {
+		if t == nil {
+			return fmt.Errorf("nlp: JLens.Save: layer %d unfitted (imported reference lens?) — the native format requires every layer", l)
+		}
 		ts[fmt.Sprintf("jlens.layer.%d", l)] = t
 	}
 	meta := map[string]string{
@@ -325,21 +376,39 @@ func LoadJLens(path string) (*JLens, error) {
 	return jl, nil
 }
 
-// JLensFromPT imports a reference-implementation lens artifact (a torch.save
-// .pt file, loaded through the safe format/pytorch unpickler) so
-// Anthropic/Neuronpedia-fitted lenses are directly usable (§T811, §R250).
+// JLensFromPT imports a reference-implementation lens artifact (a
+// JacobianLens.save torch .pt file, loaded through the safe format/pytorch
+// unpickler) so Anthropic/Neuronpedia-fitted lenses are directly usable
+// (§T811, §R250).
 //
-// NAMING ASSUMPTION (documented, to be pinned by the §T812 golden fixtures):
-// the ref-impl artifact is assumed to serialize the per-layer Jacobians as a
-// dict/list whose flattened keys carry the layer index as their final
-// '.'-separated component — e.g. "jacobians.0", "jacobians.1", … — each a
-// square [dim, dim] matrix. The importer therefore collects EVERY square
-// tensor whose key ends in an integer, requires them to form a contiguous
-// 0..N index run of one consistent dim, and ignores everything else
-// (unembedding refs, model metadata). Matrices are taken VERBATIM (no
-// transpose); if the reference stores J^T, the §T812 golden verification
-// will flip this mapping. Arch is left "" and Weight set to 1 (the artifact
-// carries no fit-mass information this importer understands yet).
+// ACTUAL ARTIFACT FORMAT (pinned by the §T812 golden fixture
+// testdata/jlens_ref.pt, correcting the preliminary §T811 naming assumption):
+// the reference saves
+//
+//	{"J": {layer: Tensor[d, d], …}, "n_prompts": int,
+//	 "source_layers": [ints], "d_model": int}
+//
+// with INTEGER dict keys in "J" (flattened to "J.0", "J.1", … by the loader)
+// and fp16 matrices by default. Orientation is row-major J[out, in] with the
+// readout J·h — identical to GoAI's convention, taken verbatim (no
+// transpose; the reference's own tiny-model test pins J_l = I + W for a
+// last-block h + W·h, which the golden fixture reconfirms).
+//
+// LAYER INDEXING: the reference indexes by BLOCK OUTPUT — its layer l is the
+// residual after block l, i.e. GoAI layer l+1 (GoAI layer 0 is the
+// post-embedding stream, which the reference never fits). Its default fit
+// covers source layers 0..L-2 against target layer L-1 (the last block), so
+// an artifact holding K contiguous matrices maps to a GoAI lens with
+// Layers = K+1 where J[0] is nil (unfitted in the reference format — Apply
+// rejects it), J[l] for l ∈ 1..K is the artifact's J_{l-1}, and J[Layers] is
+// the identity (synthesized; exact by definition, the target layer's Jacobian
+// to itself).
+//
+// n_prompts and source_layers are non-tensor pickle values the safe loader
+// does not surface: Weight is set to 1, so callers merging imported lenses
+// must supply real weights themselves, and non-contiguous source_layers
+// selections (a non-default reference fit) are rejected via the contiguity
+// check rather than silently misaligned.
 func JLensFromPT(path string) (*JLens, error) {
 	ts, err := pytorch.LoadFile(path)
 	if err != nil {
@@ -353,12 +422,13 @@ func JLensFromPT(path string) (*JLens, error) {
 }
 
 // jlensLayerKey extracts a trailing integer layer index from a flattened
-// state-dict key ("jacobians.3" → 3, "3" → 3).
+// artifact key ("J.3" → 3, "3" → 3).
 var jlensLayerKey = regexp.MustCompile(`(?:^|\.)(\d+)$`)
 
 // jlensFromTensors assembles a JLens from a loaded .pt tensor map under the
-// JLensFromPT naming assumption (see there). Split out for unit-testing the
-// mapping without a torch fixture.
+// JLensFromPT format (see there): square [d,d] tensors with trailing integer
+// indices are the reference's block-output-indexed Jacobians; everything else
+// is ignored. Split out for unit-testing the mapping without a torch fixture.
 func jlensFromTensors(ts map[string]*tensor.Tensor) (*JLens, error) {
 	byIdx := map[int]*tensor.Tensor{}
 	dim := 0
@@ -386,7 +456,7 @@ func jlensFromTensors(ts map[string]*tensor.Tensor) (*JLens, error) {
 		byIdx[idx] = t
 	}
 	if len(byIdx) == 0 {
-		return nil, fmt.Errorf("no square integer-indexed Jacobian tensors found (naming assumption: keys like \"jacobians.N\")")
+		return nil, fmt.Errorf("no square integer-indexed Jacobian tensors found (reference format: {\"J\": {0: …, 1: …}} → keys \"J.N\")")
 	}
 	idxs := make([]int, 0, len(byIdx))
 	for i := range byIdx {
@@ -395,10 +465,14 @@ func jlensFromTensors(ts map[string]*tensor.Tensor) (*JLens, error) {
 	sort.Ints(idxs)
 	for k, i := range idxs {
 		if i != k {
-			return nil, fmt.Errorf("layer indices %v not a contiguous 0..N run", idxs)
+			return nil, fmt.Errorf("layer indices %v not a contiguous 0..N run (non-default source_layers fit?)", idxs)
 		}
 	}
-	jl := &JLens{Dim: dim, Layers: len(idxs) - 1, Weight: 1}
+	// K reference matrices at block outputs 0..K-1, target = block K → GoAI
+	// Layers = K+1: J[0] unfitted (nil), J[l] = ref J_{l-1}, J[Layers] = I.
+	k := len(idxs)
+	jl := &JLens{Dim: dim, Layers: k + 1, Weight: 1}
+	jl.J = make([]*tensor.Tensor, k+2)
 	for _, i := range idxs {
 		t := byIdx[i]
 		if t.Dtype() != tensor.F64 {
@@ -409,7 +483,12 @@ func jlensFromTensors(ts map[string]*tensor.Tensor) (*JLens, error) {
 			}
 			t = f
 		}
-		jl.J = append(jl.J, t)
+		jl.J[i+1] = t
 	}
+	eye := tensor.New(tensor.F64, tensor.Shape{dim, dim})
+	for i := 0; i < dim; i++ {
+		eye.SetF64(1, i, i)
+	}
+	jl.J[k+1] = eye
 	return jl, nil
 }

@@ -243,6 +243,19 @@ func (g *GPT) ForwardResiduals(ctx *backend.Context, tokens []int, capture Resid
 	return g.hiddenFromEmbedCapture(ctx, x, capture)
 }
 
+// Unembed maps residual-stream rows h [n, dim] to logits [n, vocab] through the
+// model's final LayerNorm and LM head — the [LensReadoutModel] seam (§T812):
+// Unembed applied to the pre-LNf residual reproduces Forward's logits exactly,
+// and the J-lens borrows it to decode transported activations with the model's
+// own head.
+func (g *GPT) Unembed(ctx *backend.Context, h *tensor.Tensor) (*tensor.Tensor, error) {
+	x, err := g.LNf.Forward(ctx, h)
+	if err != nil {
+		return nil, err
+	}
+	return exec1(ctx, backend.OpMatMul, nil, x, g.Head)
+}
+
 // hiddenFromEmbedCapture is hiddenFromEmbed with an optional residual-stream tap
 // (the GPT sibling of Llama.hiddenFromEmbedTaps). The tap is a pure observer: a
 // nil capture is byte-identical to the historical hiddenFromEmbed.

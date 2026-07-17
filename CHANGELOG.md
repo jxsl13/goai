@@ -4,6 +4,23 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — J-lens transported readout, anchored on the reference implementation (T812, 2026-07-17)
+
+`JLens.Apply` / `ApplyAt` / `Slice` implement the §R250 readout `W_U norm(J_l h)` behind a
+small `LensReadoutModel` seam on Llama and GPT. Tier-1 anchors run the ACTUAL Anthropic
+jacobian-lens reference in the venv on a tiny deterministic model (scripts/golden_jlens.py;
+112KB of goldens): fit-parity 1.85e-07, readout-parity 1.79e-08, and import of the real
+`.pt` artifact (4.7e-04, the fp16 storage floor) — which corrected the T811 naming
+assumption (int-keyed `{"J": {layer: fp16}}`, block-output layer indexing, no identity
+stored; the safe pytorch loader now stringifies int dict keys). One §R250 semantic
+correction discovered against the reference: the estimator masks INVALID positions — the
+final position (no next-token target) always, plus `skip_first` leading attention-sink
+positions from both the target sum and the source divisor; `FitJLens` now matches exactly
+(`WithJLensSkipFirst`). Tier-2 think-about-X gate on a trained lag-2-permutation GPT: the
+J-lens ranks the held future token at mean rank 1.17 (29/30 probes ≤ 2) where the plain
+logit lens sits at 6.07 of vocab 12 — the paper's global-workspace behavior reproduced in
+miniature.
+
 ### nlp — J-lens foundation: residual capture + VJP-fitted expected Jacobians (T810+T811, 2026-07-17)
 
 The first two J-space tasks (§R250, Anthropic jacobian-lens port) land. T810: per-layer

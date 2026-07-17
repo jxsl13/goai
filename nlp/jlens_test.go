@@ -198,12 +198,14 @@ func checkIdentity(t *testing.T, j *tensor.Tensor, tol float64) {
 	}
 }
 
-// §T811 self-consistency (b): finite differences. On a single-token sequence the
-// fitted J_l is exactly ∂h_L(0)/∂h_l(0), so injecting ±ε·d into h_l via the
-// capture hook and central-differencing h_L must match J_l·d to O(ε²).
+// §T811 self-consistency (b): finite differences. On a two-token sequence the
+// only valid position is 0 (the final position is masked out, §T812 reference
+// parity), so the fitted J_l is exactly ∂h_L(0)/∂h_l(0): injecting ±ε·d into
+// h_l at position 0 via the capture hook and central-differencing h_L must
+// match J_l·d to O(ε²).
 func TestJLensFiniteDifference(t *testing.T) {
 	model := jlensGPT(t, 16, 8, 8, 2, 2)
-	tokens := []int{3}
+	tokens := []int{3, 5}
 	jl, err := nlp.FitJLens(model, [][]int{tokens})
 	if err != nil {
 		t.Fatal(err)
@@ -322,12 +324,14 @@ func TestJLensSaveLoadRoundTrip(t *testing.T) {
 }
 
 // FitJLens option knobs: MaxSequences caps the fit mass; MaxTargetsPerSeq bounds
-// the backward count. Under target capping the last-layer matrix stays exactly
-// diagonal (the h_L self-Jacobian rows are one-hot) with a uniform
-// |targets|/seq diagonal — the documented truncation of the target sum.
+// the backward count; SkipFirst shrinks the valid-position mask (§T812 reference
+// parity: valid = skipFirst..seq-2). Under target capping the last-layer matrix
+// stays exactly diagonal (the h_L self-Jacobian rows are one-hot) with a uniform
+// |targets|/|valid| diagonal — the documented truncation of the target sum.
 func TestJLensFitOptions(t *testing.T) {
 	model := jlensGPT(t, 16, 8, 8, 2, 2)
 	corpus := [][]int{{1, 2, 3, 4, 5}, {6, 7, 8, 9, 10}}
+	// seq 5 → valid {0,1,2,3} (final position masked), targets capped to {0,3}.
 	jl, err := nlp.FitJLens(model, corpus,
 		nlp.WithJLensMaxSequences(1), nlp.WithJLensMaxTargetsPerSeq(2))
 	if err != nil {
@@ -336,16 +340,37 @@ func TestJLensFitOptions(t *testing.T) {
 	if jl.Weight != 1 {
 		t.Fatalf("weight %g, want 1 (MaxSequences)", jl.Weight)
 	}
-	last := jl.J[jl.Layers]
-	diag := last.AtF64(0, 0)
-	if math.Abs(diag-2.0/5.0) > 1e-15 {
-		t.Fatalf("capped diagonal %g, want |targets|/seq = 0.4", diag)
+	checkUniformDiag(t, jl.J[jl.Layers], jl.Dim, 2.0/4.0)
+
+	// SkipFirst drops leading positions from targets AND sources: seq 5,
+	// skipFirst 1 → valid {1,2,3}, targets capped to {1,3} → diag 2/3.
+	jl, err = nlp.FitJLens(model, corpus, nlp.WithJLensMaxSequences(1),
+		nlp.WithJLensMaxTargetsPerSeq(2), nlp.WithJLensSkipFirst(1))
+	if err != nil {
+		t.Fatal(err)
 	}
-	for a := range jl.Dim {
-		for b := range jl.Dim {
-			got := last.AtF64(a, b)
-			if a == b && got != diag {
-				t.Fatalf("diagonal not uniform: [%d,%d] = %g vs %g", a, b, got, diag)
+	checkUniformDiag(t, jl.J[jl.Layers], jl.Dim, 2.0/3.0)
+
+	// A sequence with no valid positions (len ≤ skipFirst+1) is an explicit
+	// error, not a silent skip (deviation from the reference's log-and-skip,
+	// documented on FitJLens).
+	if _, err := nlp.FitJLens(model, [][]int{{1}}); err == nil {
+		t.Fatal("single-token sequence must error: no valid (non-final) position")
+	}
+	if _, err := nlp.FitJLens(model, corpus, nlp.WithJLensSkipFirst(4)); err == nil {
+		t.Fatal("skipFirst == seq-1 must error: no valid position left")
+	}
+}
+
+// checkUniformDiag asserts m is exactly diag(want) — the shape of a truncated
+// last-layer self-Jacobian.
+func checkUniformDiag(t *testing.T, m *tensor.Tensor, dim int, want float64) {
+	t.Helper()
+	for a := range dim {
+		for b := range dim {
+			got := m.AtF64(a, b)
+			if a == b && math.Abs(got-want) > 1e-15 {
+				t.Fatalf("diagonal [%d,%d] = %g, want %g", a, b, got, want)
 			}
 			if a != b && got != 0 {
 				t.Fatalf("off-diagonal [%d,%d] = %g, want exact 0", a, b, got)
