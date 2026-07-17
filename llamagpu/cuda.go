@@ -100,6 +100,89 @@ func NewCUDA(m *nlp.Llama) (*Decoder, error) {
 	})
 }
 
+// NewQwen2CUDA uploads a Qwen2 / Qwen2.5 model onto the batched Decoder core. Qwen2 shares
+// nlp.Llama (SwiGLU MLP, RMSNorm, GQA, full rope) and departs only in carrying q/k/v projection
+// biases (o_proj has none) — the newDecoder core adds them via qkvBias when b.Bq/Bk/Bv are set, so
+// this is exactly NewCUDA with a Qwen2-typed entry point. Load with nlp.LlamaFromHF; the biases are
+// picked up automatically from the checkpoint. (Qwen3's per-head QK-norm is a separate follow-up.)
+func NewQwen2CUDA(m *nlp.Llama) (*Decoder, error) { return NewCUDA(m) }
+
+// NewQwen3CUDA uploads a Qwen3 model onto the batched Decoder core. Qwen3 shares nlp.Llama and adds
+// per-head RMSNorm on Q and K before RoPE (b.QNorm/b.KNorm), which newDecoder wires into recordQKNorm
+// — it drops Qwen2's q/k/v projection bias, so this is again NewCUDA with a Qwen3-typed entry point.
+// Load with nlp.LlamaFromHF; the QK-norm gains are picked up automatically from the checkpoint.
+func NewQwen3CUDA(m *nlp.Llama) (*Decoder, error) { return NewCUDA(m) }
+
+// NewPhi3CUDA uploads a Phi-3 model onto the batched Decoder core. Phi-3 is structurally a plain
+// Llama (RMSNorm, SwiGLU, GQA, full rope, no biases) — nlp.Phi3FromHF just unpacks its row-packed
+// qkv_proj / gate_up_proj into the standard projections and returns an *nlp.Llama — so this is
+// NewCUDA with a Phi-3-typed entry point. Distinct from NewPhiCUDA (the older Phi-1/1.5/2 family,
+// which is parallel-residual with LayerNorm and partial rotary).
+func NewPhi3CUDA(m *nlp.Llama) (*Decoder, error) { return NewCUDA(m) }
+
+// NewNemotronCUDA uploads an nlp.Nemotron onto the batched Decoder core: sequential two-norm
+// residual with LayerNorm1P (mean-centered LayerNorm, γ=w+1/β folded at load), a squared-ReLU
+// 2-layer MLP (down(relu²(up(x)))) and partial rotary. The relu² activation is a new cuda unary
+// (cu_relu2_f32); everything else is reused plumbing. cuda-only.
+func NewNemotronCUDA(m *nlp.Nemotron) (*Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newNemotronDecoder(m, backendOps{
+		name:        string(backend.CUDA),
+		asyncEncode: false,
+		newBuffer: func(data []float32) (buffer, error) {
+			b, err := cuda.NewDeviceBufferF32(data)
+			if err != nil {
+				return nil, err
+			}
+			return cBuf{b}, nil
+		},
+		newRecorder: func() (recorder, error) {
+			r, err := cuda.NewRecorder()
+			if err != nil {
+				return nil, err
+			}
+			return cRec{r}, nil
+		},
+	})
+}
+
+// NewCohereCUDA uploads an nlp.Cohere (Command-R) onto the batched Decoder core: one-norm parallel
+// residual, weight-only mean-centered LayerNorm, SwiGLU, GQA, full rope (its interleaved rotary is
+// pre-permuted into the q/k weights by CohereFromHF) and a logit_scale-folded tied lm_head — every
+// piece a reused generalization. cuda-only (parallel residual + LayerNorm are the Phi plumbing).
+func NewCohereCUDA(m *nlp.Cohere) (*Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newCohereDecoder(m, backendOps{
+		name:        string(backend.CUDA),
+		asyncEncode: false,
+		newBuffer: func(data []float32) (buffer, error) {
+			b, err := cuda.NewDeviceBufferF32(data)
+			if err != nil {
+				return nil, err
+			}
+			return cBuf{b}, nil
+		},
+		newRecorder: func() (recorder, error) {
+			r, err := cuda.NewRecorder()
+			if err != nil {
+				return nil, err
+			}
+			return cRec{r}, nil
+		},
+	})
+}
+
+// NewGraniteCUDA uploads an IBM Granite model onto the batched Decoder core. Granite is a plain
+// Llama plus four learned-at-config scalars — embedding_multiplier, attention_multiplier,
+// residual_multiplier and logits_scaling — which newDecoder folds into the upload (embedding gather
+// scale, softmax scale override, Wo/Wdown pre-scale, and 1/logits_scaling into the lm_head), so this
+// is NewCUDA with a Granite-typed entry point. Load with nlp.GraniteFromHF.
+func NewGraniteCUDA(m *nlp.Llama) (*Decoder, error) { return NewCUDA(m) }
+
 // NewStableLMCUDA uploads an nlp.StableLM into CUDA device buffers and runs it through the same
 // batched Decoder core as NewCUDA — but with LayerNorm-with-bias norms and PARTIAL rotary (the
 // StableLM/Phi/StarCoder2-class departures from Llama). The first of the new-architecture GPU

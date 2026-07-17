@@ -44,6 +44,7 @@ import (
 const (
 	unarySiLU    = 6
 	unaryGELU    = 9
+	unaryReLU2   = 10 // squared ReLU (Nemotron); cuda-only
 	binaryAdd    = 0
 	binaryMul    = 2
 	binarySwiGLU = 6 // fused silu(a)·b — one dispatch instead of SiLU+Mul (§T613)
@@ -161,6 +162,7 @@ type block struct {
 	// projection biases (nil ⇒ no bias): the fused-QKV bias [D+2·kvDim], the o-proj bias [D],
 	// and the GELU-MLP fc [hidden] / proj [D] biases — GPT-NeoX/Phi/StarCoder2 carry them.
 	qkvBias, oBias, fcBias, projBias buffer
+	qN, kN                           buffer // per-head query/key RMSNorm gains [dk] (Qwen3); nil ⇒ no QK-norm
 }
 
 // Decoder holds a Llama's weights + KV cache as device-resident buffers and runs one batched decode
@@ -171,9 +173,12 @@ type Decoder struct {
 	rotaryDim                                     int  // rotated channels/head; == dk for full RoPE (Llama), < dk for partial rotary (GPT-NeoX/Phi/StableLM)
 	lnBias                                        bool // true ⇒ LayerNorm-with-bias norms (StableLM/Phi/StarCoder2); false ⇒ RMSNorm (Llama)
 	ffnGELU                                       bool // true ⇒ 2-layer GELU MLP (fc→GELU→proj: GPT-NeoX/Phi/StarCoder2); false ⇒ SwiGLU (Llama/StableLM)
+	ffnReLU2                                      bool // true ⇒ 2-layer squared-ReLU MLP (fc→relu²→proj: Nemotron); mutually exclusive with ffnGELU
 	parallelRes                                   bool // true ⇒ parallel residual: attn+FFN both read norm(x0), sum onto x (GPT-NeoX/Phi/Cohere); false ⇒ sequential (Llama)
 	parallelTwoNorm                               bool // parallel residual with SEPARATE attn/FFN norms both over x0 (GPT-NeoX); needs the FFN norm computed pre-attn-add
+	qkNorm                                        bool // true ⇒ per-head RMSNorm on Q and K before RoPE (Qwen3); false otherwise
 	eps, posDiv, scale                            float32
+	embMult                                       float32 // gathered embeddings ×= embMult (IBM Granite EmbeddingMult); 1 for everything else
 
 	blocks                                                []block
 	out                                                   linear
@@ -198,7 +203,7 @@ func newDecoderCommon(cfg nlp.LlamaConfig, tokEmb *tensor.Tensor, ops backendOps
 		ops: ops,
 		d:   cfg.Dim, h: cfg.Heads, kvH: cfg.KVHeads, hidden: cfg.Hidden, v: cfg.Vocab,
 		maxLen: cfg.Ctx, eps: float32(cfg.Eps), table: tokEmb,
-		pendingPos: -1,
+		pendingPos: -1, embMult: 1,
 	}
 	if d.kvH <= 0 {
 		d.kvH = d.h
@@ -235,6 +240,25 @@ func (d *Decoder) recordQKVProj(r recorder, b block, rows int) error {
 	if b.qkvBias != nil {
 		e = firstErr(e, r.AddBias(d.qkv.b, b.qkvBias, d.qkv.b, rows, d.d+2*d.kvDim))
 	}
+	return e
+}
+
+// recordQKNorm records Qwen3's per-head RMSNorm on the Q and K bands of the fused QKV buffer,
+// applied BEFORE RoPE. Each head's dk channels are normed independently with a shared gain — the
+// reference reshapes [seq, heads·dk] → [seq·heads, dk], RMSNorms, reshapes back. The heads of one
+// token are contiguous but tokens are stride-separated inside qkv, so we Copy2D the band out to a
+// packed [seq, band] scratch (reusing d.q / d.k, unused in the fused path until after RoPE),
+// RMSNorm it as seq·heads rows of dk, and Copy2D it back. No-op when qkNorm is unset.
+func (d *Decoder) recordQKNorm(r recorder, b block, seq, stride int) error {
+	if !d.qkNorm {
+		return nil
+	}
+	e := r.Copy2D(d.qkv.b, 0, stride, d.q.b, 0, d.d, seq, d.d) // extract Q band [seq, D]
+	e = firstErr(e, r.RMSNorm(d.q.b, b.qN, d.q.b, seq*d.h, d.dk, d.eps))
+	e = firstErr(e, r.Copy2D(d.q.b, 0, d.d, d.qkv.b, 0, stride, seq, d.d)) // write Q band back
+	e = firstErr(e, r.Copy2D(d.qkv.b, d.d, stride, d.k.b, 0, d.kvDim, seq, d.kvDim))
+	e = firstErr(e, r.RMSNorm(d.k.b, b.kN, d.k.b, seq*d.kvH, d.dk, d.eps))
+	e = firstErr(e, r.Copy2D(d.k.b, 0, d.kvDim, d.qkv.b, d.d, stride, seq, d.kvDim))
 	return e
 }
 
@@ -277,14 +301,18 @@ func (d *Decoder) recordFFNSublayer(r recorder, b block, rows int) error {
 }
 
 func (d *Decoder) recordFFN(r recorder, b block, in buffer, rows int) error {
-	if d.ffnGELU {
+	if d.ffnGELU || d.ffnReLU2 {
+		act := unaryGELU // 2-layer MLP activation: GELU (GPT-NeoX/Phi/StarCoder2) or squared ReLU (Nemotron)
+		if d.ffnReLU2 {
+			act = unaryReLU2
+		}
 		e := b.wG.record(r, in, d.gate.b, rows) // fc = in·Wfc
 		if b.fcBias != nil {
 			e = firstErr(e, r.AddBias(d.gate.b, b.fcBias, d.gate.b, rows, d.hidden))
 		}
 		e = firstErr(e,
-			r.Unary(d.gate.b, d.gate.b, unaryGELU),            // GELU(fc)
-			b.wD.recordAdd(r, d.gate.b, d.mo.b, d.dx.b, rows), // dx += GELU(fc)·Wproj
+			r.Unary(d.gate.b, d.gate.b, act),                  // act(fc)
+			b.wD.recordAdd(r, d.gate.b, d.mo.b, d.dx.b, rows), // dx += act(fc)·Wproj
 		)
 		if b.projBias != nil {
 			e = firstErr(e, r.AddBias(d.dx.b, b.projBias, d.dx.b, rows, d.d))
@@ -374,6 +402,36 @@ func newDecoder(m *nlp.Llama, ops backendOps) (*Decoder, error) {
 		in, out := w.Shape()[0], w.Shape()[1]
 		return f32Linear{w: mk(flat2D(w)).b, k: in, n: out}
 	}
+	// IBM Granite config scalars (all identity when 0 or 1, so no-ops for Llama/Qwen/Mistral). Each
+	// folds into the upload rather than a runtime op: AttentionMult overrides the pre-softmax scale,
+	// EmbeddingMult scales gathered embeddings (d.embMult), ResidualMult scales each sublayer output
+	// (baked into Wo and Wdown, since their matmul IS the residual-add epilogue — Granite carries no
+	// projection bias, so nothing else in the add needs scaling), and LogitsScale divides the logits
+	// (baked as 1/LogitsScale into the untied lm_head). Separate uploads, so tied embed/lm_head is fine.
+	if cfg.AttentionMult != 0 {
+		d.scale = float32(cfg.AttentionMult)
+	}
+	if cfg.EmbeddingMult != 0 && cfg.EmbeddingMult != 1 {
+		d.embMult = float32(cfg.EmbeddingMult)
+	}
+	resMult := float32(1)
+	if cfg.ResidualMult != 0 && cfg.ResidualMult != 1 {
+		resMult = float32(cfg.ResidualMult)
+	}
+	outScale := float32(1)
+	if cfg.LogitsScale != 0 && cfg.LogitsScale != 1 {
+		outScale = float32(1 / cfg.LogitsScale)
+	}
+	linS := func(w *tensor.Tensor, s float32) linear { // f32 weight with every element pre-scaled by s
+		in, out := w.Shape()[0], w.Shape()[1]
+		f := flat2D(w)
+		if s != 1 {
+			for i := range f {
+				f[i] *= s
+			}
+		}
+		return f32Linear{w: mk(f).b, k: in, n: out}
+	}
 	// fused QKV weight (§T613): weights are [in,out] with out along the row, so the fusion
 	// concatenates the three output bands PER INPUT ROW — one [in, D+2·kvDim] matrix whose
 	// product row is [q | k | v]. The separate wq/wk/wv uploads are dropped (no dup storage).
@@ -391,17 +449,37 @@ func newDecoder(m *nlp.Llama, ops backendOps) (*Decoder, error) {
 		}
 		return f32Linear{w: mk(w).b, k: in, n: nt}
 	}
+	// fused q/k/v bias [Bq | Bk | Bv] = [D+2·kvDim], for the Qwen2/Qwen2.5 family (q/k/v carry a
+	// projection bias, o_proj does not); nil for Llama/Mistral, which leaves recordQKVProj's
+	// AddBias unrecorded so those models stay byte-identical.
+	fusedBias := func(bq, bk, bv *tensor.Tensor) buffer {
+		if bq == nil && bk == nil && bv == nil {
+			return nil
+		}
+		fb := append(append(append([]float32{}, flat1D(bq)...), flat1D(bk)...), flat1D(bv)...)
+		return mk(fb).b
+	}
+	// per-head query/key RMSNorm gain [dk] (Qwen3); nil for Llama/Qwen2. Presence flips d.qkNorm,
+	// which arms recordQKNorm between the QKV projection and RoPE.
+	qkGain := func(n *nn.RMSNorm) buffer {
+		if n == nil {
+			return nil
+		}
+		d.qkNorm = true
+		return mk(flat1D(n.Gamma)).b
+	}
 	for _, b := range m.Blocks {
 		gb := block{
-			wqkv: fused(b.Wq, b.Wk, b.Wv), wo: lin(b.Wo),
+			wqkv: fused(b.Wq, b.Wk, b.Wv), qkvBias: fusedBias(b.Bq, b.Bk, b.Bv), wo: linS(b.Wo, resMult),
 			gAttn: mk(flat1D(b.AttnNorm.Gamma)).b, gFFN: mk(flat1D(b.FFNNorm.Gamma)).b,
-			wG: lin(b.FFN.Wgate), wU: lin(b.FFN.Wup), wD: lin(b.FFN.Wdown),
+			qN: qkGain(b.QNorm), kN: qkGain(b.KNorm),
+			wG: lin(b.FFN.Wgate), wU: lin(b.FFN.Wup), wD: linS(b.FFN.Wdown, resMult),
 			kC: mk(make([]float32, d.maxLen*d.kvDim)).b, vC: mk(make([]float32, d.maxLen*d.kvDim)).b,
 		}
 		d.blocks = append(d.blocks, gb)
 	}
 	d.gFinal = mk(flat1D(m.Norm.Gamma))
-	d.out = lin(m.Out)
+	d.out = linS(m.Out, outScale) // LogitsScale folded into the lm_head (1/LogitsScale)
 	d.allocScratch(mk)
 	if err != nil {
 		d.Release()
@@ -482,6 +560,177 @@ func newStableLMDecoder(m *nlp.StableLM, ops backendOps) (*Decoder, error) {
 			gAttn: mk(flat1D(b.InputNorm.Gamma)).b, bAttn: mk(flat1D(b.InputNorm.Beta)).b,
 			gFFN: mk(flat1D(b.PostAttnNorm.Gamma)).b, bFFN: mk(flat1D(b.PostAttnNorm.Beta)).b,
 			wG: lin(b.FFN.Wgate), wU: lin(b.FFN.Wup), wD: lin(b.FFN.Wdown),
+			kC: mk(make([]float32, d.maxLen*d.kvDim)).b, vC: mk(make([]float32, d.maxLen*d.kvDim)).b,
+		}
+		d.blocks = append(d.blocks, gb)
+	}
+	d.gFinal = mk(flat1D(m.Norm.Gamma))
+	d.bFinal = mk(flat1D(m.Norm.Beta))
+	d.out = lin(m.Out)
+	d.allocScratch(mk)
+	if err != nil {
+		d.Release()
+		return nil, err
+	}
+	return d, nil
+}
+
+// newCohereDecoder builds a device Decoder for an nlp.Cohere (Command-R). Cohere composes existing
+// generalizations: ONE-norm parallel residual (parallelRes — input_layernorm feeds both attention
+// and FFN, summed onto x0, exactly like Phi), weight-only mean-centered LayerNorm (lnBias with a
+// zero β), SwiGLU, GQA and FULL rope. Its interleaved (GPT-J) rotary is already baked into a q/k
+// weight-row permutation by CohereFromHF, so standard split-half RoPE reproduces it. The only extra
+// is logit_scale: the tied lm_head's logits are multiplied by a constant, folded into the Out
+// upload. cuda-only (parallel-residual + LayerNorm reuse the Phi plumbing).
+func newCohereDecoder(m *nlp.Cohere, ops backendOps) (*Decoder, error) {
+	cfg := m.Config
+	kvH := cfg.KVHeads
+	if kvH <= 0 {
+		kvH = cfg.Heads
+	}
+	if cfg.HeadDim != 0 && cfg.HeadDim != cfg.Dim/cfg.Heads {
+		return nil, fmt.Errorf("llamagpu(%s): Cohere decoupled head_dim %d (≠ dim/heads %d) not supported on the GPU decoder yet", ops.name, cfg.HeadDim, cfg.Dim/cfg.Heads)
+	}
+	lc := nlp.LlamaConfig{
+		Vocab: cfg.Vocab, Ctx: cfg.Ctx, Dim: cfg.Dim, Heads: cfg.Heads, KVHeads: kvH,
+		Layers: cfg.Layers, Hidden: cfg.Hidden, Eps: cfg.Eps, RopeBase: cfg.RopeBase,
+	}
+	d, derr := newDecoderCommon(lc, m.TokEmb, ops)
+	if derr != nil {
+		return nil, derr
+	}
+	d.lnBias = true      // weight-only mean-centered LayerNorm (β is a zero vector)
+	d.parallelRes = true // one-norm parallel residual: input_layernorm feeds attn AND FFN
+
+	var err error
+	mk := d.mkBuf(&err)
+	lin := func(w *tensor.Tensor) linear {
+		in, out := w.Shape()[0], w.Shape()[1]
+		return f32Linear{w: mk(flat2D(w)).b, k: in, n: out}
+	}
+	fused := func(wq, wk, wv *tensor.Tensor) linear {
+		in := wq.Shape()[0]
+		nq, nk, nv := wq.Shape()[1], wk.Shape()[1], wv.Shape()[1]
+		fq, fk, fv := flat2D(wq), flat2D(wk), flat2D(wv)
+		nt := nq + nk + nv
+		w := make([]float32, in*nt)
+		for i := range in {
+			row := w[i*nt : (i+1)*nt]
+			copy(row[:nq], fq[i*nq:(i+1)*nq])
+			copy(row[nq:nq+nk], fk[i*nk:(i+1)*nk])
+			copy(row[nq+nk:], fv[i*nv:(i+1)*nv])
+		}
+		return f32Linear{w: mk(w).b, k: in, n: nt}
+	}
+	logitScale := float32(1)
+	if cfg.LogitScale != 0 && cfg.LogitScale != 1 {
+		logitScale = float32(cfg.LogitScale)
+	}
+	linS := func(w *tensor.Tensor, s float32) linear {
+		in, out := w.Shape()[0], w.Shape()[1]
+		f := flat2D(w)
+		if s != 1 {
+			for i := range f {
+				f[i] *= s
+			}
+		}
+		return f32Linear{w: mk(f).b, k: in, n: out}
+	}
+	for _, b := range m.Blocks {
+		gb := block{
+			wqkv: fused(b.Wq, b.Wk, b.Wv), wo: lin(b.Wo),
+			gAttn: mk(flat1D(b.InputNorm.Gamma)).b, bAttn: mk(flat1D(b.InputNorm.Beta)).b,
+			// gFFN/bFFN unused: parallel one-norm reuses the attn norm (d.xn) for the FFN.
+			wG: lin(b.FFN.Wgate), wU: lin(b.FFN.Wup), wD: lin(b.FFN.Wdown),
+			kC: mk(make([]float32, d.maxLen*d.kvDim)).b, vC: mk(make([]float32, d.maxLen*d.kvDim)).b,
+		}
+		d.blocks = append(d.blocks, gb)
+	}
+	d.gFinal = mk(flat1D(m.Norm.Gamma))
+	d.bFinal = mk(flat1D(m.Norm.Beta))
+	d.out = linS(m.Out, logitScale) // logit_scale folded into the tied lm_head
+	d.allocScratch(mk)
+	if err != nil {
+		d.Release()
+		return nil, err
+	}
+	return d, nil
+}
+
+// newNemotronDecoder builds a device Decoder for an nlp.Nemotron. Nemotron is a SEQUENTIAL
+// two-norm decoder (input_layernorm feeds attention, post_attention_layernorm feeds the MLP, each
+// on its own residual add) with three departures from Llama, all reusing existing plumbing:
+// LayerNorm1P (an ordinary mean-centered LayerNorm — lnBias — whose γ=w+1 and β are folded in by
+// NemotronFromHF), a squared-ReLU 2-layer MLP (ffnReLU2: down(relu²(up(x))), no gate, no bias), and
+// PARTIAL rotary. cuda-only (partial rotary + the relu² unary are cuda-only).
+func newNemotronDecoder(m *nlp.Nemotron, ops backendOps) (*Decoder, error) {
+	cfg := m.Config
+	kvH := cfg.KVHeads
+	if kvH <= 0 {
+		kvH = cfg.Heads
+	}
+	headDim := cfg.HeadDim
+	if headDim <= 0 {
+		headDim = cfg.Dim / cfg.Heads
+	}
+	if headDim != cfg.Dim/cfg.Heads {
+		return nil, fmt.Errorf("llamagpu(%s): Nemotron decoupled head_dim %d (≠ dim/heads %d) not supported on the GPU decoder yet", ops.name, headDim, cfg.Dim/cfg.Heads)
+	}
+	rotaryDim := cfg.RotaryDim
+	if rotaryDim <= 0 {
+		pct := cfg.RotaryPct
+		if pct == 0 {
+			pct = 0.5
+		}
+		rotaryDim = int(float64(headDim) * pct)
+	}
+	lc := nlp.LlamaConfig{
+		Vocab: cfg.Vocab, Ctx: cfg.Ctx, Dim: cfg.Dim, Heads: cfg.Heads, KVHeads: kvH,
+		Layers: cfg.Layers, Hidden: cfg.Hidden, Eps: cfg.Eps, RopeBase: cfg.RopeBase,
+	}
+	d, derr := newDecoderCommon(lc, m.TokEmb, ops)
+	if derr != nil {
+		return nil, derr
+	}
+	d.lnBias = true   // LayerNorm1P = mean-centered LayerNorm with a bias
+	d.ffnReLU2 = true // squared-ReLU 2-layer MLP
+	d.rotaryDim = rotaryDim
+	if d.rotaryDim <= 0 || d.rotaryDim > d.dk || d.rotaryDim%2 != 0 {
+		return nil, fmt.Errorf("llamagpu(%s): Nemotron rotaryDim %d invalid for headDim %d", ops.name, d.rotaryDim, d.dk)
+	}
+	invF64, posDiv64 := backend.RoPEFreqs(d.rotaryDim, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: d.h})
+	d.invHost = make([]float32, d.rotaryDim/2)
+	for i := range d.invHost {
+		d.invHost[i] = float32(invF64[i])
+	}
+	d.posDiv = float32(posDiv64)
+
+	var err error
+	mk := d.mkBuf(&err)
+	lin := func(w *tensor.Tensor) linear {
+		in, out := w.Shape()[0], w.Shape()[1]
+		return f32Linear{w: mk(flat2D(w)).b, k: in, n: out}
+	}
+	fused := func(wq, wk, wv *tensor.Tensor) linear {
+		in := wq.Shape()[0]
+		nq, nk, nv := wq.Shape()[1], wk.Shape()[1], wv.Shape()[1]
+		fq, fk, fv := flat2D(wq), flat2D(wk), flat2D(wv)
+		nt := nq + nk + nv
+		w := make([]float32, in*nt)
+		for i := range in {
+			row := w[i*nt : (i+1)*nt]
+			copy(row[:nq], fq[i*nq:(i+1)*nq])
+			copy(row[nq:nq+nk], fk[i*nk:(i+1)*nk])
+			copy(row[nq+nk:], fv[i*nv:(i+1)*nv])
+		}
+		return f32Linear{w: mk(w).b, k: in, n: nt}
+	}
+	for _, b := range m.Blocks {
+		gb := block{
+			wqkv: fused(b.Wq, b.Wk, b.Wv), wo: lin(b.Wo),
+			gAttn: mk(flat1D(b.InputNorm.Gamma)).b, bAttn: mk(flat1D(b.InputNorm.Beta)).b,
+			gFFN: mk(flat1D(b.PostAttnNorm.Gamma)).b, bFFN: mk(flat1D(b.PostAttnNorm.Beta)).b,
+			wG: lin(b.Wup), wD: lin(b.Wdown), // 2-layer relu² MLP: wG = up (fc), wD = down (proj); no gate
 			kC: mk(make([]float32, d.maxLen*d.kvDim)).b, vC: mk(make([]float32, d.maxLen*d.kvDim)).b,
 		}
 		d.blocks = append(d.blocks, gb)
@@ -839,6 +1088,7 @@ func (d *Decoder) encodeStep(pos int) (recorder, error) {
 			qBuf = d.qkv.b
 			e = firstErr(
 				d.recordQKVProj(r, b, 1),
+				d.recordQKNorm(r, b, 1, D+2*kvDim),                // per-head QK-norm (Qwen3); no-op otherwise
 				d.ropeQK(r, d.qkv.b, d.dinv.b, 1, D+2*kvDim, pos), // q+k bands, ONE dispatch (§T613); full ∨ partial rotary
 				r.Blit(d.qkv.b, D, b.kC, pos*kvDim, kvDim),
 				r.Blit(d.qkv.b, D+kvDim, b.vC, pos*kvDim, kvDim),
@@ -897,7 +1147,7 @@ func (d *Decoder) Step(token, pos int) ([]float32, error) {
 		return nil, fmt.Errorf("llamagpu(%s): token %d out of vocab %d", d.ops.name, token, d.v)
 	}
 	// the token's embedding must be resident BEFORE commit — the recorded chain reads d.dx.
-	if err := d.dx.b.UploadF32(embedRow(d.table, token, d.d)); err != nil {
+	if err := d.dx.b.UploadF32(d.gatherEmbed(token)); err != nil {
 		return nil, err
 	}
 	var r recorder
@@ -956,7 +1206,7 @@ func (d *Decoder) StepN(tokens []int, pos int) ([]float32, error) {
 		if tok < 0 || tok >= d.v {
 			return nil, fmt.Errorf("llamagpu(%s): token %d out of vocab %d", d.ops.name, tok, d.v)
 		}
-		copy(host[i*d.d:(i+1)*d.d], embedRow(d.table, tok, d.d))
+		copy(host[i*d.d:(i+1)*d.d], d.gatherEmbed(tok))
 	}
 	if err := d.dx.b.UploadF32(host); err != nil {
 		return nil, err
@@ -979,6 +1229,7 @@ func (d *Decoder) StepN(tokens []int, pos int) ([]float32, error) {
 		if e == nil && b.wqkv != nil {
 			e = firstErr(
 				d.recordQKVProj(r, b, k),
+				d.recordQKNorm(r, b, k, stride),                // per-head QK-norm (Qwen3); no-op otherwise
 				d.ropeQK(r, d.qkv.b, d.dinv.b, k, stride, pos), // q+k bands, ONE dispatch (§T613); full ∨ partial rotary
 				r.Copy2D(d.qkv.b, 0, stride, d.q.b, 0, D, k, D),
 				r.Copy2D(d.qkv.b, D, stride, b.kC, pos*kvDim, kvDim, k, kvDim),
@@ -1118,4 +1369,16 @@ func embedRow(table *tensor.Tensor, row, cols int) []float32 {
 		o[j] = float32(table.AtF64(row, j))
 	}
 	return o
+}
+
+// gatherEmbed reads a token's embedding row and applies the Granite EmbeddingMult (embMult == 1
+// for every non-Granite model, so this is embedRow verbatim then).
+func (d *Decoder) gatherEmbed(token int) []float32 {
+	e := embedRow(d.table, token, d.d)
+	if d.embMult != 1 {
+		for i := range e {
+			e[i] *= d.embMult
+		}
+	}
+	return e
 }
