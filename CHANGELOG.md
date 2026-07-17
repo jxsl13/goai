@@ -4,6 +4,17 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — GGUF loading for StarCoder2 and GPT-NeoX (T803, 2026-07-17)
+
+`StarCoder2FromGGUF` and `GPTNeoXFromGGUF` (+ `*ToGGUF` inverses) load llama.cpp GGUF
+checkpoints, conventions verified against llama.cpp source. The decisive finding: the
+GPT-NeoX converter DE-INTERLEAVES the packed qkv on export — on disk `attn_qkv.weight` is
+`[all-q; all-k; all-v]`, each section head-contiguous, so the loader slices plain thirds
+(the HF-path `splitNeoXQKV` would scramble every head). StarCoder2: split biased q/k/v,
+NEOX rope no-permute, LayerNorm γ+β pairs under the layer_norm_epsilon key, optional tied
+head, fused-qkv form also accepted. GPT-NeoX partial rotary via `rope.dimension_count`;
+`use_parallel_residual=false` rejected. Parity vs the HF-loaded models ~1.5e-10 / 7.5e-11.
+
 ### nlp — quantized GGUF decode for Mixtral, sparse MoE (T802, 2026-07-17)
 
 `QuantMixtral` + `QuantMixtralFromGGUF` decode llama.cpp-quantized Mixtral checkpoints
