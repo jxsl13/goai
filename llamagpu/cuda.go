@@ -368,6 +368,37 @@ func NewMambaCUDA(m *nlp.Mamba) (*Decoder, error) {
 	})
 }
 
+// NewMambaQ8CUDA is NewMambaCUDA with the projection weights quantized to resident Q8_0. Mamba decode
+// is weight-bandwidth-bound (~230 MB of f32 weights streamed per token), so the Q8_0 GEMVs cut the
+// dominant cost ~4× at the price of Q8 rounding (not bit-exact — validated to a tolerance, not parity).
+// The tiny per-channel state (A, dt_bias, conv, dskip, norms) stays f32. cuda-only.
+func NewMambaQ8CUDA(m *nlp.Mamba) (*Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newMambaDecoder(m, backendOps{
+		name:        string(backend.CUDA),
+		asyncEncode: false,
+		newBuffer: func(data []float32) (buffer, error) {
+			b, err := cuda.NewDeviceBufferF32(data)
+			if err != nil {
+				return nil, err
+			}
+			return cBuf{b}, nil
+		},
+		newRecorder: func() (recorder, error) {
+			r, err := cuda.NewRecorder()
+			if err != nil {
+				return nil, err
+			}
+			return cRec{r}, nil
+		},
+		quantizeF32: func(w *tensor.Tensor) (qweight, error) {
+			return cuda.NewResidentBQ8(w)
+		},
+	})
+}
+
 // NewMamba2CUDA uploads an nlp.Mamba2 onto the batched Decoder core — the state-space-duality sibling
 // of Mamba. Each layer is an SSD mixer (scalar per-head decay, B/C shared across a group, gated
 // RMSNorm); decode is a linear-time recurrence recorded from cu_ssd_step + the shared conv1d/softplus
@@ -396,6 +427,37 @@ func NewMamba2CUDA(m *nlp.Mamba2) (*Decoder, error) {
 	})
 }
 
+// NewMamba2Q8CUDA is NewMamba2CUDA with the in/out projections and LM head quantized to resident Q8_0 —
+// the same weight-bandwidth lever as NewMambaQ8CUDA. Mamba-2's InProj/OutProj are stored [out,in] (torch
+// layout), so newMamba2Decoder transposes each to [in,out] before quantizing (NewResidentBQ8 materializes
+// the transposed view). The SSD recurrence (per-head decay, conv, gated RMSNorm) stays f32. cuda-only.
+func NewMamba2Q8CUDA(m *nlp.Mamba2) (*Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newMamba2Decoder(m, backendOps{
+		name:        string(backend.CUDA),
+		asyncEncode: false,
+		newBuffer: func(data []float32) (buffer, error) {
+			b, err := cuda.NewDeviceBufferF32(data)
+			if err != nil {
+				return nil, err
+			}
+			return cBuf{b}, nil
+		},
+		newRecorder: func() (recorder, error) {
+			r, err := cuda.NewRecorder()
+			if err != nil {
+				return nil, err
+			}
+			return cRec{r}, nil
+		},
+		quantizeF32: func(w *tensor.Tensor) (qweight, error) {
+			return cuda.NewResidentBQ8(w)
+		},
+	})
+}
+
 // NewRWKVCUDA uploads an nlp.RWKV onto the batched Decoder core — GoAI's third recurrent family. Each
 // layer is a WKV time-mix (recorded from cu_wkv_step) + a gated squared-ReLU channel-mix; decode is
 // O(1) recurrent with no attention and no KV cache, carrying per-block token-shift + WKV state across
@@ -420,6 +482,37 @@ func NewRWKVCUDA(m *nlp.RWKV) (*Decoder, error) {
 				return nil, err
 			}
 			return cRec{r}, nil
+		},
+	})
+}
+
+// NewRWKVQ8CUDA is NewRWKVCUDA with the time-mix (Wr/Wk/Wv/Wo) and channel-mix (CWr/CWk/CWv) GEMVs plus
+// the LM head quantized to resident Q8_0 — the same weight-bandwidth lever as NewMambaQ8CUDA. RWKV decode
+// streams these projection weights per token; Q8_0 cuts that ~4× at the price of Q8 rounding (validated to
+// a cosine tolerance, not parity). The tiny per-channel mix params (μ/decay/bonus) and LayerNorms stay f32.
+func NewRWKVQ8CUDA(m *nlp.RWKV) (*Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newRWKVDecoder(m, backendOps{
+		name:        string(backend.CUDA),
+		asyncEncode: false,
+		newBuffer: func(data []float32) (buffer, error) {
+			b, err := cuda.NewDeviceBufferF32(data)
+			if err != nil {
+				return nil, err
+			}
+			return cBuf{b}, nil
+		},
+		newRecorder: func() (recorder, error) {
+			r, err := cuda.NewRecorder()
+			if err != nil {
+				return nil, err
+			}
+			return cRec{r}, nil
+		},
+		quantizeF32: func(w *tensor.Tensor) (qweight, error) {
+			return cuda.NewResidentBQ8(w)
 		},
 	})
 }

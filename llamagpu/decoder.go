@@ -187,6 +187,11 @@ type backendOps struct {
 	newBuffer     func([]float32) (buffer, error)
 	newRecorder   func() (recorder, error)
 	uploadQWeight func(weight []byte, qt uint32, n, k int) (qweight, error) // resident quantized upload
+	// quantizeF32 quantizes a host f32 weight [in,out] to a resident Q8_0 device weight in one call
+	// (no pre-quantized ggml bytes needed). Set only by the cuda Q8 recurrent-decode constructors —
+	// nil elsewhere, so the caller keeps the f32 path. Lets a decoder trade the f32 weight's bandwidth
+	// (the bottleneck for the weight-bound recurrent decode) for a ~4× smaller Q8 GEMV.
+	quantizeF32 func(w *tensor.Tensor) (qweight, error)
 	// asyncEncode: the backend can encode a second recorder while one executes (§T614).
 	// Metal command buffers are independent objects → true; the vulkan bridge keeps ONE
 	// global recording context → false (pre-encoding there would clobber the in-flight one).
@@ -1505,8 +1510,23 @@ func newMambaDecoder(m *nlp.Mamba, ops backendOps) (*Decoder, error) {
 
 	var err error
 	mk := d.mkBuf(&err)
+	// lin builds a projection: the f32 default, or (Q8 mode) a resident Q8_0 GEMV. Mamba decode is
+	// weight-bandwidth-bound (~230 MB of f32 weights streamed per token), so quantizing the projections
+	// to Q8_0 cuts that ~4× — the dominant decode lever. Only the matmul weights go Q8; the tiny
+	// per-channel buffers (A, dt_bias, conv, dskip, norms) stay f32 (not GEMVs, negligible bandwidth).
 	lin := func(w *tensor.Tensor) linear {
 		in, out := w.Shape()[0], w.Shape()[1]
+		if ops.quantizeF32 != nil {
+			qw, qe := ops.quantizeF32(w)
+			if qe != nil {
+				if err == nil {
+					err = qe
+				}
+				return f32Linear{k: in, n: out} // err set → constructor bails before use
+			}
+			d.qweights = append(d.qweights, qw)
+			return quantLinear{w: qw}
+		}
 		return f32Linear{w: mk(flat2D(w)).b, k: in, n: out}
 	}
 	for _, ly := range m.Layers {
@@ -1568,6 +1588,24 @@ func newMamba2Decoder(m *nlp.Mamba2, ops backendOps) (*Decoder, error) {
 	// linT uploads a torch [out,in] weight transposed to the [in,out] the recorder matmul expects.
 	linT := func(w *tensor.Tensor) linear {
 		out, in := w.Shape()[0], w.Shape()[1]
+		if ops.quantizeF32 != nil { // Q8 mode: transpose the [out,in] weight to [in,out], then quantize (§ weight-bandwidth lever)
+			wT, te := w.Transpose(0, 1) // zero-copy view; NewResidentBQ8 materializes it via Contiguous()
+			if te != nil {
+				if err == nil {
+					err = te
+				}
+				return f32Linear{k: in, n: out}
+			}
+			qw, qe := ops.quantizeF32(wT)
+			if qe != nil {
+				if err == nil {
+					err = qe
+				}
+				return f32Linear{k: in, n: out}
+			}
+			d.qweights = append(d.qweights, qw)
+			return quantLinear{w: qw}
+		}
 		f := make([]float32, in*out)
 		for o := 0; o < out; o++ {
 			for i := 0; i < in; i++ {
@@ -1596,7 +1634,18 @@ func newMamba2Decoder(m *nlp.Mamba2, ops backendOps) (*Decoder, error) {
 	}
 	d.gFinal = mk(flat1D(m.Norm.Gamma))
 	// tied head: m.Head is already [d_model, vocab] = Embedᵀ, my [in=d_model, out=vocab] orientation.
-	d.out = f32Linear{w: mk(flat2D(m.Head)).b, k: cfg.DModel, n: cfg.Vocab}
+	if ops.quantizeF32 != nil {
+		if qw, qe := ops.quantizeF32(m.Head); qe != nil {
+			if err == nil {
+				err = qe
+			}
+		} else {
+			d.qweights = append(d.qweights, qw)
+			d.out = quantLinear{w: qw}
+		}
+	} else {
+		d.out = f32Linear{w: mk(flat2D(m.Head)).b, k: cfg.DModel, n: cfg.Vocab}
+	}
 	d.allocMamba2Scratch(mk)
 	if err != nil {
 		d.Release()
@@ -1632,6 +1681,17 @@ func newRWKVDecoder(m *nlp.RWKV, ops backendOps) (*Decoder, error) {
 	mk := d.mkBuf(&err)
 	lin := func(w *tensor.Tensor) linear { // nn.Linear.W is already [in,out] (transposed at HF load)
 		in, out := w.Shape()[0], w.Shape()[1]
+		if ops.quantizeF32 != nil { // Q8 mode: same weight-bandwidth lever as Mamba (time-mix/channel-mix GEMVs)
+			qw, qe := ops.quantizeF32(w)
+			if qe != nil {
+				if err == nil {
+					err = qe
+				}
+				return f32Linear{k: in, n: out}
+			}
+			d.qweights = append(d.qweights, qw)
+			return quantLinear{w: qw}
+		}
 		return f32Linear{w: mk(flat2D(w)).b, k: in, n: out}
 	}
 	// mu uploads the interpolator and its 1−μ complement (token-shift compose needs both).
