@@ -216,6 +216,22 @@ Tw84|~|DEFAULT (f32-KV) DECODE ATTENTION 1.16-1.52x — the PRODUCTION path (def
 
 ## §NEXT — open levers
 
+**Tw-COOPMAT (booked 2026-07-18, research-lite CONFIRMED 3/3 + host probes): the prefill
+toolchain wall MOVES via Vulkan.** How llama.cpp actually gets its pp lead on this GPU:
+ggml-vulkan runs tensor cores FROM GLSL — VK_KHR_cooperative_matrix (mul_mm.comp COOPMAT) and
+on NVIDIA VK_NV_cooperative_matrix2 (mul_mm_cm2.comp, coopMatLoadTensorNV with dequant-decode
+callbacks = dequant-on-the-fly inside the tile, BM/BN=64 BK=16-32), plus an int8 DP4A MMQ
+path (VK_KHR_shader_integer_dot_product + runtime q8_1 activation quant, PR #12135). ALL
+CUDA-free (glslc -> SPIR-V). HOST PROBES PASS: the RTX 3060 exposes KHR_cooperative_matrix
+rev2 + NV_cooperative_matrix2 + integer_dot_product (driver 610.43), and our glslc
+(shaderc 2026.2) compiles both a coopMatMulAdd f16 shader and a dotPacked4x8AccSatEXT shader
+clean. => Arc: implement a coopmat GEMM (then dequant-in-tile, then DP4A MMQ) in OUR vulkan
+backend and route prefill through it; beats the cuBLAS-f16 CUDA ceiling (5600 tok/s pp128 vs
+llama.cpp 8474) without nvcc. The crashed session's vulkan-sdk/matmul.comp scratch was this
+same trail. Sources: ggml/src/ggml-vulkan/vulkan-shaders/{mul_mm.comp,mul_mm_cm2.comp,
+dequant_funcs_cm2.glsl,mul_mmq.comp}, PRs #10206/#10721/#12135/#10713.
+
+
 **GAP RESEARCH 2026-07-15 (research-lite, 3 angles + synth, all confirmed with primary
 sources): the remaining single-GPU decode lever class is llama.cpp's 2025 FUSION STACK
 (github.com/ggml-org/llama.cpp/discussions/17621): GEMV+gated-act epilogue fusion,
