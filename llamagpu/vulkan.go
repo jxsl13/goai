@@ -59,11 +59,14 @@ func (vRec) MHACap(q, k, va, o buffer, sq, sk, dm, heads, kvHeads, dk, causal, w
 func (vRec) MHAALiBi(q, k, va, o, slopes buffer, sq, sk, dm, heads, kvHeads, dk, causal, window int, scale float32) error {
 	return fmt.Errorf("llamagpu(vulkan): ALiBi attention not implemented (ALiBi decoders are cuda-only for now)")
 }
-func (vRec) MoEGate(logits, weights buffer, rows, e, k int) error {
+func (vRec) MoEGate(logits, weights buffer, rows, e, k, raw int, scale float32) error {
 	return fmt.Errorf("llamagpu(vulkan): MoE routing not implemented (sparse-MoE decoders are cuda-only for now)")
 }
 func (vRec) RowAxpy(dst, src, arow buffer, rows, cols int) error {
 	return fmt.Errorf("llamagpu(vulkan): MoE combine not implemented (sparse-MoE decoders are cuda-only for now)")
+}
+func (vRec) MHARect(q, k, va, o buffer, sq, sk, heads, kvHeads, dqk, dv, causal, window int, scale float32) error {
+	return fmt.Errorf("llamagpu(vulkan): rectangular MHA not implemented (MLA decoders are cuda-only for now)")
 }
 func (v vRec) Unary(x, o buffer, op int) error { return v.r.Unary(vb(x), vb(o), op) }
 func (v vRec) Binary(a, b, o buffer, op int) error {

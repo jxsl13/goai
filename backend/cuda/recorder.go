@@ -230,11 +230,11 @@ func (rec *Recorder) MHA(q, k, v, o *DeviceF32, sq, sk, dm, heads, kvHeads, dk, 
 // MoEGate writes Mixtral-style top-k routing weights: for each of `rows` tokens, given `e` raw router
 // logits, weights[e] = softmax over the top-`k` logits (0 for unselected experts) — the renormalized
 // combine weights. logits and weights are [rows·e] device buffers and must be distinct.
-func (rec *Recorder) MoEGate(logits, weights *DeviceF32, rows, e, k int) error {
+func (rec *Recorder) MoEGate(logits, weights *DeviceF32, rows, e, k, raw int, scale float32) error {
 	if logits.ptr == nil || weights.ptr == nil {
 		return fmt.Errorf("cuda: rec MoEGate on a freed handle")
 	}
-	if rc := C.cu_moe_gate(logits.ptr, weights.ptr, C.int(rows), C.int(e), C.int(k)); rc != 0 {
+	if rc := C.cu_moe_gate(logits.ptr, weights.ptr, C.int(rows), C.int(e), C.int(k), C.int(raw), C.float(scale)); rc != 0 {
 		return fmt.Errorf("cuda: rec MoEGate failed (code %d)", int(rc))
 	}
 	return nil
@@ -276,6 +276,36 @@ func (rec *Recorder) MHAALiBi(q, k, v, o, slopes *DeviceF32, sq, sk, dm, heads, 
 	}
 	if rc := C.cu_gqa_out(rec.scores, v.ptr, o.ptr, C.int(sq), C.int(sk), C.int(heads), C.int(kvHeads), C.int(dk), 0); rc != 0 {
 		return fmt.Errorf("cuda: rec MHAALiBi out failed (code %d)", int(rc))
+	}
+	return nil
+}
+
+// MHARect is multi-head attention with RECTANGULAR head dims: the query/key share a head width dqk
+// (so the scores are Q·Kᵀ over dqk) but the value has a DIFFERENT head width dv, so the output rows
+// are heads·dv wide. This is the shape DeepSeek-V2 MLA needs — query/key are concat(nope, pe) of
+// width QKNope+QKRope while the value is VHead-wide. No soft-cap; standard scale + causal mask.
+func (rec *Recorder) MHARect(q, k, v, o *DeviceF32, sq, sk, heads, kvHeads, dqk, dv, causal, window int, scale float32) error {
+	if q.ptr == nil || k.ptr == nil || v.ptr == nil || o.ptr == nil {
+		return fmt.Errorf("cuda: rec MHARect on a freed handle")
+	}
+	if window > 0 && window < sk {
+		return fmt.Errorf("cuda: rec MHARect sliding-window (window=%d < sk=%d) not supported", window, sk)
+	}
+	if err := rec.ensureScores(heads * sq * sk); err != nil {
+		return err
+	}
+	if rc := C.cu_gqa_scores(q.ptr, k.ptr, rec.scores, C.int(sq), C.int(sk), C.int(heads), C.int(kvHeads), C.int(dqk), 0); rc != 0 {
+		return fmt.Errorf("cuda: rec MHARect scores failed (code %d)", int(rc))
+	}
+	offset := sk - sq
+	if causal == 0 {
+		offset = sk
+	}
+	if rc := C.cu_attn_softmax(rec.scores, C.int(heads*sq), C.int(sk), C.float(scale), C.int(offset), C.int(sq)); rc != 0 {
+		return fmt.Errorf("cuda: rec MHARect softmax failed (code %d)", int(rc))
+	}
+	if rc := C.cu_gqa_out(rec.scores, v.ptr, o.ptr, C.int(sq), C.int(sk), C.int(heads), C.int(kvHeads), C.int(dv), 0); rc != 0 {
+		return fmt.Errorf("cuda: rec MHARect out failed (code %d)", int(rc))
 	}
 	return nil
 }

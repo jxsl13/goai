@@ -983,3 +983,217 @@ func TestCUDAQwen2MoEMatchesReference(t *testing.T) {
 	}
 	t.Logf("llamagpu NewQwen2MoECUDA.Generate == nlp.Qwen2MoE.Generate greedy: %d tokens (routed MoE + sigmoid-gated shared expert)", len(gpuOut))
 }
+
+// TestCUDADeepSeekV2MatchesReference checks the dense MLA GPU path (NewDeepSeekV2CUDA) matches the
+// reference nlp.DeepSeekV2 DecodeStep across an autoregressive run — the hardest attention: low-rank
+// latent KV compression, decoupled RoPE, and rectangular query/key (QKNope+QKRope) vs value (VHead).
+func TestCUDADeepSeekV2MatchesReference(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("cuda: no CUDA-capable device")
+	}
+	ts, _, err := safetensors.LoadFile("../nlp/testdata/deepseekv2_hf.safetensors")
+	if err != nil {
+		t.Skipf("deepseekv2 testdata unavailable (run make golden): %v", err)
+	}
+	m, err := nlp.DeepSeekV2FromHF(ts, nlp.DeepSeekV2Config{
+		Heads: 4, QLoraRank: 24, KVLoraRank: 16,
+		QKNope: 16, QKRope: 8, VHead: 16,
+		Eps: 1e-6, RopeBase: 10000, Ctx: 32,
+	})
+	if err != nil {
+		t.Fatalf("DeepSeekV2FromHF: %v", err)
+	}
+
+	dec, err := llamagpu.NewDeepSeekV2CUDA(m)
+	if err != nil {
+		t.Fatalf("NewDeepSeekV2CUDA: %v", err)
+	}
+	defer dec.Release()
+
+	refCtx := backend.NewContext().WithBackend(backend.Reference())
+	cache := m.NewCache()
+	argmax := func(v []float32) int {
+		bi := 0
+		for i, x := range v {
+			if x > v[bi] {
+				bi = i
+			}
+		}
+		return bi
+	}
+	tok := 3
+	for pos := range 6 {
+		got, err := dec.Step(tok, pos)
+		if err != nil {
+			t.Fatalf("cuda step pos %d: %v", pos, err)
+		}
+		refT, err := m.DecodeStep(refCtx, cache, tok, pos)
+		if err != nil {
+			t.Fatalf("ref step pos %d: %v", pos, err)
+		}
+		for j := range got {
+			want := refT.AtF64(0, j)
+			if math.IsNaN(float64(got[j])) || math.Abs(float64(got[j])-want) > 3e-2*math.Max(1, math.Abs(want)) {
+				t.Fatalf("deepseekv2 pos %d tok %d logit[%d]: cuda %v vs reference %v", pos, tok, j, got[j], want)
+			}
+		}
+		tok = argmax(got)
+	}
+	t.Logf("llamagpu NewDeepSeekV2CUDA matches reference DecodeStep across an autoregressive run (dense MLA)")
+}
+
+// TestCUDADeepSeekV2MoEMatchesReference checks the FULL DeepSeek-V2 GPU path (MLA + DeepSeekMoE):
+// per-block dense/MoE dispatch, raw-softmax·routedScale top-k gating (NO renormalization) and the
+// ungated shared expert. The golden has first_k_dense_replace=1 (layer 0 dense, layer 1 MoE), so it
+// exercises both FFN paths + the MLA attention together.
+func TestCUDADeepSeekV2MoEMatchesReference(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("cuda: no CUDA-capable device")
+	}
+	ts, _, err := safetensors.LoadFile("../nlp/testdata/deepseekv2moe_hf.safetensors")
+	if err != nil {
+		t.Skipf("deepseekv2moe testdata unavailable (run make golden): %v", err)
+	}
+	m, err := nlp.DeepSeekV2FromHF(ts, nlp.DeepSeekV2Config{
+		Heads: 4, QLoraRank: 24, KVLoraRank: 16,
+		QKNope: 16, QKRope: 8, VHead: 16,
+		Eps: 1e-6, RopeBase: 10000, Ctx: 32,
+		FirstKDense: 1, NRoutedExperts: 4, NSharedExperts: 1,
+		TopK: 2, MoEHidden: 32, RoutedScale: 1.0,
+	})
+	if err != nil {
+		t.Fatalf("DeepSeekV2FromHF (MoE): %v", err)
+	}
+	if m.Blocks[0].Dense == nil || m.Blocks[1].MoE == nil {
+		t.Fatal("expected layer 0 dense, layer 1 MoE — test would not cover both paths")
+	}
+
+	dec, err := llamagpu.NewDeepSeekV2CUDA(m)
+	if err != nil {
+		t.Fatalf("NewDeepSeekV2CUDA: %v", err)
+	}
+	defer dec.Release()
+
+	refCtx := backend.NewContext().WithBackend(backend.Reference())
+	cache := m.NewCache()
+	argmax := func(v []float32) int {
+		bi := 0
+		for i, x := range v {
+			if x > v[bi] {
+				bi = i
+			}
+		}
+		return bi
+	}
+	tok := 3
+	for pos := range 6 {
+		got, err := dec.Step(tok, pos)
+		if err != nil {
+			t.Fatalf("cuda step pos %d: %v", pos, err)
+		}
+		refT, err := m.DecodeStep(refCtx, cache, tok, pos)
+		if err != nil {
+			t.Fatalf("ref step pos %d: %v", pos, err)
+		}
+		for j := range got {
+			want := refT.AtF64(0, j)
+			if math.IsNaN(float64(got[j])) || math.Abs(float64(got[j])-want) > 3e-2*math.Max(1, math.Abs(want)) {
+				t.Fatalf("deepseekv2moe pos %d tok %d logit[%d]: cuda %v vs reference %v", pos, tok, j, got[j], want)
+			}
+		}
+		tok = argmax(got)
+	}
+	t.Logf("llamagpu NewDeepSeekV2CUDA (MLA + DeepSeekMoE) matches reference DecodeStep across an autoregressive run")
+}
+
+// TestCUDADeepSeekV2PrefillMatchesReference exercises the MLA StepN PREFILL path (multiple new
+// tokens at once, rows>1) — distinct from the per-token Step decode the other MLA tests cover. It
+// checks the last prefilled token's logits match the reference Forward, verifying the rectangular
+// KV-cache assembly and decoupled RoPE are correct for a batched prefill, not just single-token decode.
+func TestCUDADeepSeekV2PrefillMatchesReference(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("cuda: no CUDA-capable device")
+	}
+	ts, _, err := safetensors.LoadFile("../nlp/testdata/deepseekv2_hf.safetensors")
+	if err != nil {
+		t.Skipf("deepseekv2 testdata unavailable (run make golden): %v", err)
+	}
+	m, err := nlp.DeepSeekV2FromHF(ts, nlp.DeepSeekV2Config{
+		Heads: 4, QLoraRank: 24, KVLoraRank: 16, QKNope: 16, QKRope: 8, VHead: 16,
+		Eps: 1e-6, RopeBase: 10000, Ctx: 32,
+	})
+	if err != nil {
+		t.Fatalf("DeepSeekV2FromHF: %v", err)
+	}
+	dec, err := llamagpu.NewDeepSeekV2CUDA(m)
+	if err != nil {
+		t.Fatalf("NewDeepSeekV2CUDA: %v", err)
+	}
+	defer dec.Release()
+
+	prompt := []int{3, 7, 1, 9, 4}
+	got, err := dec.StepN(prompt, 0) // prefill all tokens in one recorded step → [len, vocab]
+	if err != nil {
+		t.Fatalf("StepN: %v", err)
+	}
+	refT, err := m.Forward(backend.NewContext().WithBackend(backend.Reference()), prompt)
+	if err != nil {
+		t.Fatalf("ref forward: %v", err)
+	}
+	rows, cols := refT.Shape()[0], refT.Shape()[1]
+	last := (rows - 1) * cols
+	for j := 0; j < cols; j++ {
+		want := refT.AtF64(rows-1, j)
+		if math.IsNaN(float64(got[last+j])) || math.Abs(float64(got[last+j])-want) > 3e-2*math.Max(1, math.Abs(want)) {
+			t.Fatalf("deepseekv2 prefill logit[%d]: cuda %v vs reference %v", j, got[last+j], want)
+		}
+	}
+	t.Logf("llamagpu NewDeepSeekV2CUDA StepN prefill (%d tokens) matches reference Forward last-token logits (MLA batched-prefill path)", len(prompt))
+}
+
+// TestCUDADeepSeekV2MoEPrefillMatchesReference exercises the StepN prefill path for the FULL
+// DeepSeek-V2 (MLA + DeepSeekMoE together): batched prefill through both a dense layer and a MoE
+// layer, whose routing weights are computed per prefilled token. Verifies the last token's logits
+// match the reference Forward — the combination the per-token Step MoE test doesn't cover.
+func TestCUDADeepSeekV2MoEPrefillMatchesReference(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("cuda: no CUDA-capable device")
+	}
+	ts, _, err := safetensors.LoadFile("../nlp/testdata/deepseekv2moe_hf.safetensors")
+	if err != nil {
+		t.Skipf("deepseekv2moe testdata unavailable (run make golden): %v", err)
+	}
+	m, err := nlp.DeepSeekV2FromHF(ts, nlp.DeepSeekV2Config{
+		Heads: 4, QLoraRank: 24, KVLoraRank: 16, QKNope: 16, QKRope: 8, VHead: 16,
+		Eps: 1e-6, RopeBase: 10000, Ctx: 32,
+		FirstKDense: 1, NRoutedExperts: 4, NSharedExperts: 1,
+		TopK: 2, MoEHidden: 32, RoutedScale: 1.0,
+	})
+	if err != nil {
+		t.Fatalf("DeepSeekV2FromHF (MoE): %v", err)
+	}
+	dec, err := llamagpu.NewDeepSeekV2CUDA(m)
+	if err != nil {
+		t.Fatalf("NewDeepSeekV2CUDA: %v", err)
+	}
+	defer dec.Release()
+
+	prompt := []int{3, 7, 1, 9, 4}
+	got, err := dec.StepN(prompt, 0)
+	if err != nil {
+		t.Fatalf("StepN: %v", err)
+	}
+	refT, err := m.Forward(backend.NewContext().WithBackend(backend.Reference()), prompt)
+	if err != nil {
+		t.Fatalf("ref forward: %v", err)
+	}
+	rows, cols := refT.Shape()[0], refT.Shape()[1]
+	last := (rows - 1) * cols
+	for j := 0; j < cols; j++ {
+		want := refT.AtF64(rows-1, j)
+		if math.IsNaN(float64(got[last+j])) || math.Abs(float64(got[last+j])-want) > 3e-2*math.Max(1, math.Abs(want)) {
+			t.Fatalf("deepseekv2moe prefill logit[%d]: cuda %v vs reference %v", j, got[last+j], want)
+		}
+	}
+	t.Logf("llamagpu NewDeepSeekV2CUDA (MLA + MoE) StepN prefill matches reference Forward (batched MLA+MoE prefill)")
+}
