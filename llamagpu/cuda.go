@@ -685,6 +685,17 @@ func NewJambaCUDA(m *nlp.Jamba) (*Decoder, error) {
 	})
 }
 
+// NewJambaQ8CUDA is NewJambaCUDA with the projection weights quantized to resident Q8_0 — the hybrid's
+// Mamba mixers, NoPE-attention q/k/v/o, MoE expert gate/up/down, dense SwiGLU and lm_head all go Q8 via
+// the shared mkLin, while the MoE top-k router stays f32 (d.f32Lin) so routing is exact. Jamba decodes
+// rows==1 (Step), so this is a decode-bandwidth win (the GEMV path); StepN loops Step. cuda-only.
+func NewJambaQ8CUDA(m *nlp.Jamba) (*Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newJambaDecoder(m, cudaQ8Ops())
+}
+
 // NewMamba2CUDA uploads an nlp.Mamba2 onto the batched Decoder core — the state-space-duality sibling
 // of Mamba. Each layer is an SSD mixer (scalar per-head decay, B/C shared across a group, gated
 // RMSNorm); decode is a linear-time recurrence recorded from cu_ssd_step + the shared conv1d/softplus

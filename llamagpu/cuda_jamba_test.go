@@ -143,3 +143,62 @@ func TestCUDAJambaGenerateReuseSafe(t *testing.T) {
 	}
 	t.Logf("NewJambaCUDA Generate is reuse-safe: %v (identical across reuse + fresh decoder)", first)
 }
+
+// TestCUDAJambaQ8CloseToF32 validates Q8 on the hybrid decoder (NewJambaQ8CUDA): Mamba mixer projections,
+// NoPE-attention q/k/v/o, MoE experts, dense SwiGLU and lm_head all go Q8_0 (shared mkLin); the MoE
+// top-k router stays f32 (d.f32Lin). Parity is directional cosine vs the f32 CUDA decode at every
+// position — held through the hybrid's carried state; the high cosine confirms the router carve-out kept
+// expert selection identical.
+func TestCUDAJambaQ8CloseToF32(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("cuda: no CUDA-capable device")
+	}
+	ts, _, err := safetensors.LoadFile("../nlp/testdata/jamba_hf.safetensors")
+	if err != nil {
+		t.Skipf("jamba testdata unavailable (run make golden): %v", err)
+	}
+	m, err := nlp.JambaFromHF(ts, nlp.JambaConfig{Heads: 4, TopK: 2, Eps: 1e-6})
+	if err != nil {
+		t.Fatalf("JambaFromHF: %v", err)
+	}
+	f32Dec, err := llamagpu.NewJambaCUDA(m)
+	if err != nil {
+		t.Fatalf("NewJambaCUDA: %v", err)
+	}
+	defer f32Dec.Release()
+	q8Dec, err := llamagpu.NewJambaQ8CUDA(m)
+	if err != nil {
+		t.Fatalf("NewJambaQ8CUDA: %v", err)
+	}
+	defer q8Dec.Release()
+
+	prompt := []int{3, 7, 1, 9, 4, 2, 8}
+	minCos := 1.0
+	for pos, tok := range prompt {
+		fRow, err := f32Dec.Step(tok, pos)
+		if err != nil {
+			t.Fatalf("f32 Step pos %d: %v", pos, err)
+		}
+		qRow, err := q8Dec.Step(tok, pos)
+		if err != nil {
+			t.Fatalf("q8 Step pos %d: %v", pos, err)
+		}
+		var dot, nf, nq float64
+		for j := range fRow {
+			f, q := float64(fRow[j]), float64(qRow[j])
+			if math.IsNaN(q) || math.IsInf(q, 0) {
+				t.Fatalf("q8 pos %d logit[%d] non-finite", pos, j)
+			}
+			dot += f * q
+			nf += f * f
+			nq += q * q
+		}
+		if cos := dot / (math.Sqrt(nf)*math.Sqrt(nq) + 1e-30); cos < minCos {
+			minCos = cos
+		}
+	}
+	if minCos < 0.999 {
+		t.Fatalf("Jamba Q8 min cosine %.5f < 0.999 vs f32", minCos)
+	}
+	t.Logf("NewJambaQ8CUDA tracks f32 CUDA decode: min cosine %.6f (Q8 across Mamba+attention+MoE, f32 router)", minCos)
+}
