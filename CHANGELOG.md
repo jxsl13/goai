@@ -4,6 +4,15 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### spec — J-lens / J-space interpretability planned (R250, T810-T815, 2026-07-17)
+
+Per user green-light, the complete port of Anthropic's jacobian-lens reference
+implementation (Apache-2.0) enters the spec: residual-capture hooks, VJP-fitted expected
+Jacobians with merge and .pt-lens import, the transported readout with reference-anchored
+goldens (B67-lesson independent fixtures) plus the think-about-X property test, sparse
+nonnegative J-space decomposition with occupancy control, a zero-dep self-contained HTML
+layer-by-position visualization, and the paper's replication prompt sets.
+
 ### nlp — B67-class audit of all 17 GGUF loaders; FIX: llama-arch q/k BIAS permute (B68, T809, 2026-07-17)
 
 A systematic audit classified every GGUF loader's parity fixtures as independent-transform
