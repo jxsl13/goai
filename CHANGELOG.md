@@ -4,6 +4,14 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — B67 follow-up: phi3 split-tensor fixtures rebuilt convention-faithfully (2026-07-17)
+
+The two phi3 split-tensor tests fabricated their fixtures via `LlamaToGGUF`, which since
+B67 correctly writes the llama arch's PERMUTED rotary rows — but phi3 is NEOX/no-permute,
+so those fixtures became layout-invalid (caught by the full suite, exactly as the B67
+gates are meant to). They now build the split form the way llama.cpp's fallback does:
+by re-grouping `Phi3ToGGUF`'s packed rows.
+
 ### nlp — FIX: LlamaFromGGUF now un-permutes the llama arch's q/k rows (B67, 2026-07-17)
 
 Real llama.cpp llama/mistral GGUF files store attn_q/attn_k in ggml's INTERLEAVED rotary

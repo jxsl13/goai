@@ -14,6 +14,50 @@ import (
 // phi3 model (conversion/phi.py Phi3MiniModel.set_gguf_parameters): the llama.*
 // key suffixes under the phi3 prefix, plus rope.dimension_count (= head_dim for
 // partial_rotary_factor 1.0).
+// phi3SplitTensors builds the SPLIT-tensor phi3 file form (llama.cpp's
+// create_tensor_qkv fallback: separate attn_q/k/v and ffn_gate/ffn_up) by
+// row-slicing [Phi3ToGGUF]'s packed attn_qkv [q;k;v] and ffn_up [gate;up] —
+// the phi3 arch is NEOX/no-permute, so its split form is exactly the packed
+// rows re-grouped, NEVER the llama arch's permuted layout (§B67: LlamaToGGUF
+// now writes llama's interleaved rotary rows and must not fabricate phi3
+// fixtures).
+func phi3SplitTensors(t *testing.T, m *nlp.Llama) map[string]*tensor.Tensor {
+	t.Helper()
+	_, ts := nlp.Phi3ToGGUF(m)
+	c := m.Config
+	hd := c.Dim / c.Heads
+	kv := c.KVHeads
+	if kv <= 0 {
+		kv = c.Heads
+	}
+	qSize, kvSize := c.Heads*hd, kv*hd
+	rowSlice := func(w *tensor.Tensor, r0, r1 int) *tensor.Tensor {
+		cols := w.Shape()[1]
+		out := tensor.New(tensor.F64, tensor.Shape{r1 - r0, cols})
+		for i := r0; i < r1; i++ {
+			for j := range cols {
+				out.SetF64(w.AtF64(i, j), i-r0, j)
+			}
+		}
+		return out
+	}
+	for l := 0; ; l++ {
+		p := fmt.Sprintf("blk.%d.", l)
+		qkv, ok := ts[p+"attn_qkv.weight"]
+		if !ok {
+			break
+		}
+		delete(ts, p+"attn_qkv.weight")
+		ts[p+"attn_q.weight"] = rowSlice(qkv, 0, qSize)
+		ts[p+"attn_k.weight"] = rowSlice(qkv, qSize, qSize+kvSize)
+		ts[p+"attn_v.weight"] = rowSlice(qkv, qSize+kvSize, qSize+2*kvSize)
+		gu := ts[p+"ffn_up.weight"]
+		ts[p+"ffn_gate.weight"] = rowSlice(gu, 0, c.Hidden)
+		ts[p+"ffn_up.weight"] = rowSlice(gu, c.Hidden, 2*c.Hidden)
+	}
+	return ts
+}
+
 func phi3GGUFMeta(cfg nlp.LlamaConfig, dim, layers, hidden int) map[string]any {
 	return map[string]any{
 		"general.architecture":                  "phi3",
@@ -168,9 +212,11 @@ func TestPhi3FromGGUFSplitTensors(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := hf.Config
-	// Serialize split (the llama-family layout) but under phi3 metadata: an
-	// already split file must pass through the unpacker untouched.
-	_, split := nlp.LlamaToGGUF(hf)
+	// Serialize split (llama.cpp's create_tensor_qkv fallback form) under phi3
+	// metadata: an already split file must pass through the unpacker untouched.
+	// Built by re-grouping Phi3ToGGUF's packed rows — NOT via LlamaToGGUF, whose
+	// llama-arch output is rotary-permuted (§B67) while phi3 is NEOX/no-permute.
+	split := phi3SplitTensors(t, hf)
 	f := ggufByteTrip(t, phi3GGUFMeta(cfg, c.Dim, c.Layers, c.Hidden), split)
 	m, err := nlp.Phi3FromGGUF(f.Metadata, f.Tensors)
 	if err != nil {
