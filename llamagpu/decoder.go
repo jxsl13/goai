@@ -166,6 +166,10 @@ type recorder interface {
 	// and B/C shared across a group (g=h/(H/G)); updates the per-head state[H,N,P] in place and writes
 	// y[H·P]. x/y are [H·headDim]=intermediate; delta/a/dskip are [H]; b/c are [G·N]. cuda-only.
 	SSDStep(x, delta, a, b, c, dskip, state, y buffer, heads, headDim, groups, n int) error
+	// WKVStep advances ONE RWKV-4 WKV recurrence timestep: k/v/w/u/out are [d] (w = per-channel decay
+	// exp(WLog), u = current-token bonus); the running state aa/bb/pp [d] is updated in place (fresh
+	// sequence: aa=bb=0, pp=−1e38). No KV cache — RWKV's O(1) recurrent inference. cuda-only.
+	WKVStep(k, v, w, u, aa, bb, pp, out buffer, d int) error
 	Unary(x, o buffer, op int) error
 	Binary(a, b, o buffer, op int) error
 	QMatMulResident(x buffer, w qweight, o buffer, m int) error
@@ -217,6 +221,13 @@ type block struct {
 	m2InProj, m2OutProj                                   linear   // Mamba-2 fused in_proj [d,projSize] / out_proj [inter,d]; nil unless d.mamba2
 	m2ConvW, m2ConvB, m2A, m2DtBias, m2Dskip, m2NormW     buffer   // Mamba-2 conv filters+bias [convDim,·], A/Δbias/D [numHeads], gated-RMSNorm gain [inter]
 	m2ConvState, m2SsdState                               buffer   // Mamba-2 state: conv window [convDim,dConv-1], SSD state [numHeads·N·headDim]
+	// RWKV-4 (nil unless d.rwkv): time-mix reuses wq/wk/wv/wo = Wr/Wk/Wv/Wo, channel-mix reuses
+	// wG/wD = CWk/CWv; LN1 = gAttn/bAttn, LN2 = gFFN/bFFN. rwCWr is the channel-mix receptance.
+	rwCWr                                linear // channel-mix receptance CWr [Dim,Dim]
+	rwMuR, rwMuK, rwMuV, rwCMuR, rwCMuK  buffer // token-shift interpolators μ [Dim]
+	rwOmR, rwOmK, rwOmV, rwOmCR, rwOmCK  buffer // (1−μ) precomputed [Dim]
+	rwW, rwU                             buffer // WKV per-channel decay w=exp(WLog) [Dim], bonus u [Dim]
+	rwPrevTM, rwPrevCM, rwAA, rwBB, rwPP buffer // per-block RWKV recurrent state [Dim] (token-shift + WKV aa/bb/pp)
 }
 
 // Decoder holds a Llama's weights + KV cache as device-resident buffers and runs one batched decode
@@ -248,27 +259,31 @@ type Decoder struct {
 	dInner, mambaN, dConv, dtRank                 int     // Mamba block dims: inner width (e·d), SSM state size, conv kernel, Δ low-rank
 	mamba2                                        bool    // true ⇒ Mamba-2 SSD blocks (scalar-per-head decay, grouped B/C, fused in_proj, gated RMSNorm)
 	m2H, m2P, m2G, m2N, m2Conv, m2Inter, m2CD     int     // Mamba-2 dims: num_heads, head_dim, n_groups, state_size, conv kernel, intermediate, conv_dim
+	rwkv                                          bool    // true ⇒ RWKV-4 blocks (WKV time-mix + gated squared-ReLU channel-mix; no attention/KV cache; O(1) recurrent)
+	rwHidden                                      int     // RWKV channel-mix hidden width (CWk: Dim→Hidden, CWv: Hidden→Dim)
 	qkNope, qkRope, vHead, qkHead                 int     // MLA per-head dims: nope/rope query-key parts, value width, qkHead=qkNope+qkRope
 	qLoRA, kvLoRA                                 int     // MLA query/kv latent compression ranks (q_lora_rank / kv_lora_rank)
 	mlaScale, mlaPosDiv                           float32 // MLA pre-softmax scale (1/√qkHead default) and the QKRope rope posDiv
 	eps, posDiv, scale                            float32
 	embMult                                       float32 // gathered embeddings ×= embMult (IBM Granite EmbeddingMult); 1 for everything else
 
-	blocks                                                  []block
-	out                                                     linear
-	gFinal, bFinal, outBias, dinv                           *bufSlot
-	dx, xn, xn2, q, k, v_, attn, ao, gate, up, mo, logits   *bufSlot
-	moeGate, moeW, moeCol                                   *bufSlot       // sparse-MoE scratch: router logits [·,E], routing weights [·,E], one weight column [·]
-	mlaCQ, mlaQ, mlaComp, mlaLatent, mlaKV, mlaAttn, mlaInv *bufSlot       // MLA scratch: compressed query, fused Q, kv_a out, normed kv latent, kv_b out, attn out, QKRope freqs
-	mbXin, mbZ, mbXc, mbDtLow, mbDelta, mbB, mbC, mbY       *bufSlot       // Mamba scratch (rows=1): in_x, gate branch, conv+SiLU out, Δ_low, Δ, B, C, scan out
-	m2Proj, m2Z, m2XBC, m2Dt, m2Xc, m2X, m2B, m2C, m2Y      *bufSlot       // Mamba-2 scratch (rows=1): in_proj out, gate z, conv input xBC, Δ pre-act, conv+SiLU out, value x, B, C, SSD out
-	qkv                                                     *bufSlot       // fused QKV output rows [·, d+2·kvDim] (§T613)
-	pending                                                 recorder       // pre-encoded next-step command buffer (§T614)
-	pendingPos                                              int            // position pending encodes; -1 = none
-	table                                                   *tensor.Tensor // token embedding, host-side gather source
-	invHost                                                 []float32      // RoPE inverse freqs (uploaded by allocScratch)
-	all                                                     []buffer
-	qweights                                                []qweight // resident quantized weights (quant decoder)
+	blocks                                                         []block
+	out                                                            linear
+	gFinal, bFinal, outBias, dinv                                  *bufSlot
+	dx, xn, xn2, q, k, v_, attn, ao, gate, up, mo, logits          *bufSlot
+	moeGate, moeW, moeCol                                          *bufSlot       // sparse-MoE scratch: router logits [·,E], routing weights [·,E], one weight column [·]
+	mlaCQ, mlaQ, mlaComp, mlaLatent, mlaKV, mlaAttn, mlaInv        *bufSlot       // MLA scratch: compressed query, fused Q, kv_a out, normed kv latent, kv_b out, attn out, QKRope freqs
+	mbXin, mbZ, mbXc, mbDtLow, mbDelta, mbB, mbC, mbY              *bufSlot       // Mamba scratch (rows=1): in_x, gate branch, conv+SiLU out, Δ_low, Δ, B, C, scan out
+	m2Proj, m2Z, m2XBC, m2Dt, m2Xc, m2X, m2B, m2C, m2Y             *bufSlot       // Mamba-2 scratch (rows=1): in_proj out, gate z, conv input xBC, Δ pre-act, conv+SiLU out, value x, B, C, SSD out
+	rwPreLNg, rwPreLNb                                             *bufSlot       // RWKV ln0 (pre-block-0 LayerNorm) γ/β
+	rwMix, rwR, rwK, rwV, rwWkv, rwO, rwT1, rwT2, rwCr, rwCk, rwCv *bufSlot       // RWKV scratch (rows=1): token-shift mix, r/k/v, WKV out, time-mix out, 2 mix temps, chan-mix cr, ck [Hidden], cv
+	qkv                                                            *bufSlot       // fused QKV output rows [·, d+2·kvDim] (§T613)
+	pending                                                        recorder       // pre-encoded next-step command buffer (§T614)
+	pendingPos                                                     int            // position pending encodes; -1 = none
+	table                                                          *tensor.Tensor // token embedding, host-side gather source
+	invHost                                                        []float32      // RoPE inverse freqs (uploaded by allocScratch)
+	all                                                            []buffer
+	qweights                                                       []qweight // resident quantized weights (quant decoder)
 }
 
 // bufSlot wraps a buffer so the struct fields read naturally while sharing the release list.
@@ -688,6 +703,98 @@ func (d *Decoder) allocMamba2Scratch(mk func(data []float32) *bufSlot) {
 	d.m2B = mk(make([]float32, gN))
 	d.m2C = mk(make([]float32, gN))
 	d.m2Y = mk(make([]float32, I))
+}
+
+// rwMix records the RWKV token-shift interpolation μ⊙x + (1−μ)⊙shift into out (rows==1). The
+// reference forms it as shift + μ⊙(x−shift); with only add/mul recorder ops we use the algebraically
+// identical μ⊙x + (1−μ)⊙shift, so mu and its precomputed complement omu are both uploaded.
+func (d *Decoder) rwMixInto(r recorder, x, shift, mu, omu, out buffer) error {
+	return firstErr(
+		r.Binary(x, mu, d.rwT1.b, binaryMul),      // μ⊙x
+		r.Binary(shift, omu, d.rwT2.b, binaryMul), // (1−μ)⊙shift
+		r.Binary(d.rwT1.b, d.rwT2.b, out, binaryAdd),
+	)
+}
+
+// recordRWKVBlock records ONE RWKV-4 block for a single decode token (rows==1), updating dx in place
+// through both residuals. It mirrors nn.RWKVBlock.Step: a WKV TIME-MIX sublayer (LN1 → token-shift →
+// r/k/v projections → the stabilized WKV recurrence via cu_wkv_step → receptance gate σ(r)⊙wkv →
+// output projection → residual) and a gated squared-ReLU CHANNEL-MIX (LN2 → token-shift → σ(CWr·)
+// gate over relu(CWk·)²·CWv → residual). No attention, no KV cache — the per-block token-shift and
+// WKV states (rwPrevTM/rwPrevCM/rwAA/rwBB/rwPP) carry the whole history in O(1). Time-mix uses
+// wq/wk/wv/wo as Wr/Wk/Wv/Wo; channel-mix uses wG/wD as CWk/CWv.
+func (d *Decoder) recordRWKVBlock(r recorder, b block) error {
+	// TIME-MIX: xn = LN1(dx); r=σ(Wr·mix_r), k=Wk·mix_k, v=Wv·mix_v.
+	e := r.LayerNorm(d.dx.b, b.gAttn, b.bAttn, d.xn.b, 1, d.d, d.eps)
+	e = firstErr(e,
+		d.rwMixInto(r, d.xn.b, b.rwPrevTM, b.rwMuR, b.rwOmR, d.rwMix.b),
+		b.wq.record(r, d.rwMix.b, d.rwR.b, 1),
+		r.Unary(d.rwR.b, d.rwR.b, unarySigmoid),
+		d.rwMixInto(r, d.xn.b, b.rwPrevTM, b.rwMuK, b.rwOmK, d.rwMix.b),
+		b.wk.record(r, d.rwMix.b, d.rwK.b, 1),
+		d.rwMixInto(r, d.xn.b, b.rwPrevTM, b.rwMuV, b.rwOmV, d.rwMix.b),
+		b.wv.record(r, d.rwMix.b, d.rwV.b, 1),
+		// WKV recurrence (state carried), then receptance gate and output projection onto the residual.
+		r.WKVStep(d.rwK.b, d.rwV.b, b.rwW, b.rwU, b.rwAA, b.rwBB, b.rwPP, d.rwWkv.b, d.d),
+		r.Binary(d.rwWkv.b, d.rwR.b, d.rwWkv.b, binaryMul), // σ(r)⊙wkv (o==a: Binary clobbers b, not a)
+		b.wo.record(r, d.rwWkv.b, d.rwO.b, 1),
+		r.Binary(d.dx.b, d.rwO.b, d.dx.b, binaryAdd), // residual
+		r.Blit(d.xn.b, 0, b.rwPrevTM, 0, d.d),        // prevTM ← xn (token-shift state)
+	)
+	// CHANNEL-MIX: yn = LN2(dx); cr=σ(CWr·mix_r); ck=relu(CWk·mix_k)²; cv=CWv·ck; dx += cr⊙cv.
+	e = firstErr(e,
+		r.LayerNorm(d.dx.b, b.gFFN, b.bFFN, d.xn.b, 1, d.d, d.eps),
+		d.rwMixInto(r, d.xn.b, b.rwPrevCM, b.rwCMuR, b.rwOmCR, d.rwMix.b),
+		b.rwCWr.record(r, d.rwMix.b, d.rwCr.b, 1),
+		r.Unary(d.rwCr.b, d.rwCr.b, unarySigmoid),
+		d.rwMixInto(r, d.xn.b, b.rwPrevCM, b.rwCMuK, b.rwOmCK, d.rwMix.b),
+		b.wG.record(r, d.rwMix.b, d.rwCk.b, 1),            // CWk: Dim→Hidden
+		r.Unary(d.rwCk.b, d.rwCk.b, unaryReLU2),           // relu(·)²
+		b.wD.record(r, d.rwCk.b, d.rwCv.b, 1),             // CWv: Hidden→Dim
+		r.Binary(d.rwCv.b, d.rwCr.b, d.rwCv.b, binaryMul), // σ(CWr)⊙cv (o==a: Binary clobbers b, not a)
+		r.Binary(d.dx.b, d.rwCv.b, d.dx.b, binaryAdd),     // residual
+		r.Blit(d.xn.b, 0, b.rwPrevCM, 0, d.d),             // prevCM ← yn
+	)
+	return e
+}
+
+// resetRWKVState zeroes every block's token-shift + WKV state for a fresh sequence (pos==0): prevTM/
+// prevCM/aa/bb start at 0 and pp at −1e38 (the pre-first-token WKV running-max, matching OpWKV).
+func (d *Decoder) resetRWKVState() error {
+	zero := make([]float32, d.d)
+	ninf := make([]float32, d.d)
+	for i := range ninf {
+		ninf[i] = -1e38
+	}
+	for _, b := range d.blocks {
+		for _, st := range []buffer{b.rwPrevTM, b.rwPrevCM, b.rwAA, b.rwBB} {
+			if e := st.UploadF32(zero); e != nil {
+				return e
+			}
+		}
+		if e := b.rwPP.UploadF32(ninf); e != nil {
+			return e
+		}
+	}
+	return nil
+}
+
+// allocRWKVScratch allocates the rows==1 RWKV decode scratch (no attention/KV buffers).
+func (d *Decoder) allocRWKVScratch(mk func(data []float32) *bufSlot) {
+	d.dx = mk(make([]float32, d.d))
+	d.xn = mk(make([]float32, d.d))
+	d.logits = mk(make([]float32, d.v))
+	d.rwMix = mk(make([]float32, d.d))
+	d.rwR = mk(make([]float32, d.d))
+	d.rwK = mk(make([]float32, d.d))
+	d.rwV = mk(make([]float32, d.d))
+	d.rwWkv = mk(make([]float32, d.d))
+	d.rwO = mk(make([]float32, d.d))
+	d.rwT1 = mk(make([]float32, d.d))
+	d.rwT2 = mk(make([]float32, d.d))
+	d.rwCr = mk(make([]float32, d.d))
+	d.rwCk = mk(make([]float32, d.rwHidden))
+	d.rwCv = mk(make([]float32, d.d))
 }
 
 func (d *Decoder) recordFFN(r recorder, b block, in buffer, rows int) error {
@@ -1491,6 +1598,81 @@ func newMamba2Decoder(m *nlp.Mamba2, ops backendOps) (*Decoder, error) {
 	// tied head: m.Head is already [d_model, vocab] = Embedᵀ, my [in=d_model, out=vocab] orientation.
 	d.out = f32Linear{w: mk(flat2D(m.Head)).b, k: cfg.DModel, n: cfg.Vocab}
 	d.allocMamba2Scratch(mk)
+	if err != nil {
+		d.Release()
+		return nil, err
+	}
+	return d, nil
+}
+
+// newRWKVDecoder builds a device Decoder for an nlp.RWKV — GoAI's third recurrent family (after the
+// Mamba SSMs). Each layer is an nn.RWKVBlock: a WKV time-mixing sublayer (token-shift → r/k/v → the
+// stabilized WKV recurrence via cu_wkv_step → receptance gate → output proj) and a gated squared-ReLU
+// channel-mixing sublayer, each with its own LayerNorm + residual. No attention, no KV cache, no
+// positional encoding — decode is O(1) recurrent, reusing the rows==1 sequential Step/StepN plumbing.
+// An extra ln0 LayerNorm transforms the embedding before block 0; the head is UNTIED. cuda-only.
+func newRWKVDecoder(m *nlp.RWKV, ops backendOps) (*Decoder, error) {
+	cfg := m.Config
+	if len(m.Blocks) == 0 {
+		return nil, fmt.Errorf("llamagpu(%s): RWKV has no blocks", ops.name)
+	}
+	lc := nlp.LlamaConfig{
+		Vocab: cfg.Vocab, Ctx: 1 << 20, Dim: cfg.Dim, Heads: 1, KVHeads: 1,
+		Layers: cfg.Layers, Hidden: cfg.Hidden, Eps: cfg.Eps,
+	}
+	d, derr := newDecoderCommon(lc, m.Embed, ops)
+	if derr != nil {
+		return nil, derr
+	}
+	d.rwkv = true
+	d.lnBias = true // final norm (ln_out) is a full LayerNorm
+	d.rwHidden = cfg.Hidden
+
+	var err error
+	mk := d.mkBuf(&err)
+	lin := func(w *tensor.Tensor) linear { // nn.Linear.W is already [in,out] (transposed at HF load)
+		in, out := w.Shape()[0], w.Shape()[1]
+		return f32Linear{w: mk(flat2D(w)).b, k: in, n: out}
+	}
+	// mu uploads the interpolator and its 1−μ complement (token-shift compose needs both).
+	comp := func(mu *tensor.Tensor) buffer {
+		v := flat1D(mu)
+		o := make([]float32, len(v))
+		for i, x := range v {
+			o[i] = 1 - x
+		}
+		return mk(o).b
+	}
+	expv := func(t *tensor.Tensor) buffer { // per-channel decay w = exp(WLog)
+		v := flat1D(t)
+		o := make([]float32, len(v))
+		for i, x := range v {
+			o[i] = float32(math.Exp(float64(x)))
+		}
+		return mk(o).b
+	}
+	zeros := func() buffer { return mk(make([]float32, d.d)).b }
+	for _, bl := range m.Blocks {
+		gb := block{
+			gAttn: mk(flat1D(bl.LN1.Gamma)).b, bAttn: mk(flat1D(bl.LN1.Beta)).b, // LN1
+			gFFN: mk(flat1D(bl.LN2.Gamma)).b, bFFN: mk(flat1D(bl.LN2.Beta)).b, // LN2
+			wq: lin(bl.Wr.W), wk: lin(bl.Wk.W), wv: lin(bl.Wv.W), wo: lin(bl.Wo.W), // time-mix Wr/Wk/Wv/Wo
+			wG: lin(bl.CWk.W), wD: lin(bl.CWv.W), rwCWr: lin(bl.CWr.W), // channel-mix CWk/CWv/CWr
+			rwMuR: mk(flat1D(bl.MuR)).b, rwMuK: mk(flat1D(bl.MuK)).b, rwMuV: mk(flat1D(bl.MuV)).b,
+			rwCMuR: mk(flat1D(bl.CMuR)).b, rwCMuK: mk(flat1D(bl.CMuK)).b,
+			rwOmR: comp(bl.MuR), rwOmK: comp(bl.MuK), rwOmV: comp(bl.MuV),
+			rwOmCR: comp(bl.CMuR), rwOmCK: comp(bl.CMuK),
+			rwW: expv(bl.WLog), rwU: mk(flat1D(bl.U)).b,
+			rwPrevTM: zeros(), rwPrevCM: zeros(), rwAA: zeros(), rwBB: zeros(), rwPP: zeros(),
+		}
+		d.blocks = append(d.blocks, gb)
+	}
+	d.rwPreLNg = mk(flat1D(m.PreLN.Gamma)) // ln0 (before block 0)
+	d.rwPreLNb = mk(flat1D(m.PreLN.Beta))
+	d.gFinal = mk(flat1D(m.LNOut.Gamma)) // final LayerNorm ln_out
+	d.bFinal = mk(flat1D(m.LNOut.Beta))
+	d.out = lin(m.Head) // untied head [dim, vocab]
+	d.allocRWKVScratch(mk)
 	if err != nil {
 		d.Release()
 		return nil, err
@@ -2494,7 +2676,20 @@ func (d *Decoder) encodeStep(pos int) (recorder, error) {
 		return nil, err
 	}
 	D, H, KVH, dk, kvDim := d.qDim, d.h, d.kvH, d.dk, d.kvDim // D = attention Q/O width (h·dk); = d.d unless head_dim decoupled
+	if d.rwkv {                                               // RWKV: an extra LayerNorm (ln0) transforms the embedding once before block 0
+		if e := r.LayerNorm(d.dx.b, d.rwPreLNg.b, d.rwPreLNb.b, d.dx.b, 1, d.d, d.eps); e != nil {
+			r.Free()
+			return nil, e
+		}
+	}
 	for _, b := range d.blocks {
+		if d.rwkv { // RWKV-4 block: WKV time-mix + gated squared-ReLU channel-mix, no attention/KV cache
+			if e := d.recordRWKVBlock(r, b); e != nil {
+				r.Free()
+				return nil, e
+			}
+			continue
+		}
 		if d.mamba { // Mamba selective-scan block: no attention/FFN split — the mixer is the whole layer
 			if e := d.recordMambaBlock(r, b); e != nil {
 				r.Free()
@@ -2597,6 +2792,11 @@ func (d *Decoder) Step(token, pos int) ([]float32, error) {
 				return nil, err
 			}
 		}
+		if d.rwkv {
+			if err := d.resetRWKVState(); err != nil {
+				return nil, err
+			}
+		}
 	}
 	// the token's embedding must be resident BEFORE commit — the recorded chain reads d.dx.
 	if err := d.dx.b.UploadF32(d.gatherEmbed(token)); err != nil {
@@ -2621,7 +2821,7 @@ func (d *Decoder) Step(token, pos int) ([]float32, error) {
 	// single global recording context cannot hold a second open recorder. Disabled for Mamba:
 	// its blocks mutate resident conv/SSM state, so a pre-encoded pos+1 must not be recorded
 	// until pos's state writes are committed.
-	if d.ops.asyncEncode && !d.mamba && !d.mamba2 && pos+1 < d.maxLen {
+	if d.ops.asyncEncode && !d.mamba && !d.mamba2 && !d.rwkv && pos+1 < d.maxLen {
 		if nr, err := d.encodeStep(pos + 1); err == nil {
 			d.pending, d.pendingPos = nr, pos+1
 		}
@@ -2652,10 +2852,10 @@ func (d *Decoder) StepN(tokens []int, pos int) ([]float32, error) {
 	if pos < 0 || pos+k > d.maxLen {
 		return nil, fmt.Errorf("llamagpu(%s): StepN [%d,%d) out of [0,%d)", d.ops.name, pos, pos+k, d.maxLen)
 	}
-	if d.mamba || d.mamba2 {
-		// Mamba/Mamba-2's recurrence is inherently sequential (each token's state update reads the
+	if d.mamba || d.mamba2 || d.rwkv {
+		// Mamba/Mamba-2/RWKV's recurrence is inherently sequential (each token's state update reads the
 		// previous token's), so there is no batched prefill — process the prompt token by token through
-		// Step, which carries the conv/SSM state and resets it at pos==0. Returns [k, vocab].
+		// Step, which carries the recurrent state and resets it at pos==0. Returns [k, vocab].
 		out := make([]float32, k*d.v)
 		for i, tok := range tokens {
 			row, err := d.Step(tok, pos+i)

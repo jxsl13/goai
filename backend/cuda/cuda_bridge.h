@@ -206,6 +206,7 @@ int cu_row_axpy(void* dst, const void* src, const void* arow, int rows, int cols
 int cu_ssm_step(const void* u, const void* delta, const void* A, const void* B, const void* C, const void* dskip, void* h, void* y, int D, int N); // Mamba selective-scan decode step
 int cu_ssd_step(const void* x, const void* delta, const void* A, const void* B, const void* C, const void* dskip, void* state, void* y, int H, int P, int G, int N); // Mamba-2 SSD (scalar-decay, grouped B/C) decode step
 int cu_conv1d_step(const void* x, const void* w, const void* b, void* state, void* out, int D, int K); // Mamba causal depthwise conv decode step
+int cu_wkv_step(const void* k, const void* v, const void* w, const void* u, void* aa, void* bb, void* pp, void* out, int D); // RWKV-4 WKV recurrence decode step
 int cu_relu2_f32(void* d, int n); // squared ReLU (Nemotron relu2): relu(x)² in-place
 int cu_silu_f32(void* d, int n);
 int cu_sigmoid_f32(void* d, int n); // plain sigmoid (Qwen2-MoE shared-expert gate)

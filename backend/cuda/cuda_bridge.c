@@ -33,7 +33,7 @@ static cublasHandle_t gHandle = NULL;
 static float *gOne = NULL, *gZero = NULL; // device 1.0f/0.0f — cuBLAS DEVICE pointer mode (graph-capture-safe alpha/beta)
 static cudaStream_t gStream = NULL;
 static CUcontext gCtx = NULL; // runtime's primary context, retained for driver-API launches
-static CUfunction gGelu = NULL, gRelu2 = NULL, gMoeGate = NULL, gRowAxpy = NULL, gSsmStep = NULL, gSsdStep = NULL, gConv1dStep = NULL, gSilu = NULL, gSigmoid = NULL, gSoftplus = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gRopePartial = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gAttnSoftmaxCap = NULL, gAttnSoftmaxAlibi = NULL, gQgemv = NULL, gQgemv4 = NULL, gQgemv4k = NULL, gQgemv4kPre = NULL, gQgemv5k = NULL, gQgemv6k = NULL, gQgemv3k = NULL, gQgemv2k = NULL, gQgemv40 = NULL, gQgemvI4nl = NULL, gQgemvI4xs = NULL, gQgemvMxfp4 = NULL, gQgemvI2xxs = NULL, gQgemvI2xs = NULL, gQgemvI3xxs = NULL, gQgemvI3s = NULL, gQgemvI1s = NULL, gQgemvI1m = NULL, gI8Mma = NULL, gI8MmaT = NULL, gI8MmaRb = NULL, gI8MmaDb = NULL, gI8MmaWt = NULL, gI8MmaWp = NULL, gI8Mmq = NULL, gI8MmqR = NULL, gQrowsI8 = NULL, gLdmProbe = NULL, gLdmProbe2 = NULL, gI8MmaLm = NULL, gCvtF16 = NULL, gCvtFrom16 = NULL; // lazily nvrtc-compiled
+static CUfunction gGelu = NULL, gRelu2 = NULL, gMoeGate = NULL, gRowAxpy = NULL, gSsmStep = NULL, gSsdStep = NULL, gConv1dStep = NULL, gWkvStep = NULL, gSilu = NULL, gSigmoid = NULL, gSoftplus = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gRopePartial = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gAttnSoftmaxCap = NULL, gAttnSoftmaxAlibi = NULL, gQgemv = NULL, gQgemv4 = NULL, gQgemv4k = NULL, gQgemv4kPre = NULL, gQgemv5k = NULL, gQgemv6k = NULL, gQgemv3k = NULL, gQgemv2k = NULL, gQgemv40 = NULL, gQgemvI4nl = NULL, gQgemvI4xs = NULL, gQgemvMxfp4 = NULL, gQgemvI2xxs = NULL, gQgemvI2xs = NULL, gQgemvI3xxs = NULL, gQgemvI3s = NULL, gQgemvI1s = NULL, gQgemvI1m = NULL, gI8Mma = NULL, gI8MmaT = NULL, gI8MmaRb = NULL, gI8MmaDb = NULL, gI8MmaWt = NULL, gI8MmaWp = NULL, gI8Mmq = NULL, gI8MmqR = NULL, gQrowsI8 = NULL, gLdmProbe = NULL, gLdmProbe2 = NULL, gI8MmaLm = NULL, gCvtF16 = NULL, gCvtFrom16 = NULL; // lazily nvrtc-compiled
 static CUfunction gRopeDpos = NULL, gRopePartialDpos = NULL, gAttnSoftmaxDpos = NULL, gAppendDpos = NULL; // device-position (graph-capturable) twins
 static CUfunction gGqaFlashPart = NULL, gGqaFlashMerge = NULL; // flash decode: GQA K/V-shared split-K partials + merge
 static CUfunction gGqaFlashPartF16 = NULL, gAppendDposF16 = NULL; // f16 KV-cache twins (u16 storage, f32 compute)
@@ -382,6 +382,41 @@ int cu_ssd_step(const void* x, const void* delta, const void* A, const void* B, 
         int HP = H*P, threads = 256, blocks = (HP + threads - 1) / threads; if (blocks < 1) blocks = 1;
         void* args[12]; args[0]=&x; args[1]=&delta; args[2]=&A; args[3]=&B; args[4]=&C; args[5]=&dskip; args[6]=&state; args[7]=&y; args[8]=&H; args[9]=&P; args[10]=&G; args[11]=&N;
         rc = (cuLaunchKernel(gSsdStep, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_wkv_step: one timestep of the RWKV-4 WKV recurrence for DECODE — the stabilized (max-tracked)
+// linear-attention scan (Peng et al. 2023, matching backend/ref wkvKernel one token at a time). Per
+// channel c, running state aa/bb/pp (numerator/denominator/max-exponent) starts aa=bb=0, pp=−1e38:
+//   ww=u[c]+k[c]; q=max(pp,ww); e1=exp(pp−q),e2=exp(ww−q); out[c]=(e1·aa+e2·v[c])/(e1·bb+e2);
+//   q=max(pp−w[c],k[c]); e1=exp(pp−w[c]−q),e2=exp(k[c]−q); aa=e1·aa+e2·v[c]; bb=e1·bb+e2; pp=q
+// w is the per-channel decay (= exp(WLog)); u the current-token bonus. State persists across calls
+// (no KV cache — RWKV's O(1) recurrent inference). f64 accumulation. One thread per channel.
+int cu_wkv_step(const void* k, const void* v, const void* w, const void* u,
+                void* aa, void* bb, void* pp, void* out, int D) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (!gWkvStep && compile_kernel(
+                      "extern \"C\" __global__ void wkv_step(const float* k, const float* v, const float* w, const float* u, float* aa, float* bb, float* pp, float* out, int D){\n"
+                      "  int c = blockIdx.x*blockDim.x + threadIdx.x; if(c>=D) return;\n"
+                      "  double kk=(double)k[c], vv=(double)v[c], wc=(double)w[c], uc=(double)u[c];\n"
+                      "  double a=(double)aa[c], b=(double)bb[c], p=(double)pp[c];\n"
+                      "  double ww=uc+kk; double q=fmax(p,ww);\n"
+                      "  double e1=exp(p-q), e2=exp(ww-q);\n"
+                      "  out[c]=(float)((e1*a+e2*vv)/(e1*b+e2));\n"
+                      "  q=fmax(p-wc,kk); e1=exp(p-wc-q); e2=exp(kk-q);\n"
+                      "  aa[c]=(float)(e1*a+e2*vv); bb[c]=(float)(e1*b+e2); pp[c]=(float)q;\n"
+                      "}\n",
+                      "wkv_step.cu", "wkv_step", &gWkvStep) != 0) { rc = -2; goto done; }
+    {
+        int threads = 256, blocks = (D + threads - 1) / threads; if (blocks < 1) blocks = 1;
+        void* args[9]; args[0]=&k; args[1]=&v; args[2]=&w; args[3]=&u; args[4]=&aa; args[5]=&bb; args[6]=&pp; args[7]=&out; args[8]=&D;
+        rc = (cuLaunchKernel(gWkvStep, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 done:
     pthread_mutex_unlock(&gLock);

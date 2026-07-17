@@ -254,6 +254,20 @@ func (rec *Recorder) Conv1DStep(x, w, b, state, out *DeviceF32, d, k int) error 
 	return nil
 }
 
+// WKVStep advances one timestep of the RWKV-4 WKV recurrence for decode: the stabilized linear-
+// attention scan. k/v/w/u/out are [D] (w = per-channel decay exp(WLog), u = current-token bonus);
+// the running state aa/bb/pp [D] (numerator/denominator/max-exponent) is updated in place and must
+// start aa=bb=0, pp=−1e38 for a fresh sequence. No KV cache — RWKV's O(1) recurrent inference.
+func (rec *Recorder) WKVStep(k, v, w, u, aa, bb, pp, out *DeviceF32, d int) error {
+	if k.ptr == nil || v.ptr == nil || w.ptr == nil || u.ptr == nil || aa.ptr == nil || bb.ptr == nil || pp.ptr == nil || out.ptr == nil {
+		return fmt.Errorf("cuda: rec WKVStep on a freed handle")
+	}
+	if rc := C.cu_wkv_step(k.ptr, v.ptr, w.ptr, u.ptr, aa.ptr, bb.ptr, pp.ptr, out.ptr, C.int(d)); rc != 0 {
+		return fmt.Errorf("cuda: rec WKVStep failed (code %d)", int(rc))
+	}
+	return nil
+}
+
 // SSMStep advances one timestep of the Mamba selective-scan recurrence for decode: updates the
 // per-channel state h[D,N] in place and writes y[D]. u/delta/dskip/y are [D]; A is [D,N]; B/C are
 // [N] (this token's input-dependent matrices, shared across channels). The state persists across

@@ -77,6 +77,9 @@ func (vRec) Conv1DStep(x, w, b, state, out buffer, d, k int) error {
 func (vRec) SSDStep(x, delta, a, b, c, dskip, state, y buffer, heads, headDim, groups, n int) error {
 	return fmt.Errorf("llamagpu(vulkan): SSD step not implemented (Mamba-2 decoders are cuda-only for now)")
 }
+func (vRec) WKVStep(k, v, w, u, aa, bb, pp, out buffer, d int) error {
+	return fmt.Errorf("llamagpu(vulkan): WKV step not implemented (RWKV decoders are cuda-only for now)")
+}
 func (v vRec) Unary(x, o buffer, op int) error { return v.r.Unary(vb(x), vb(o), op) }
 func (v vRec) Binary(a, b, o buffer, op int) error {
 	return v.r.Binary(vb(a), vb(b), vb(o), op)

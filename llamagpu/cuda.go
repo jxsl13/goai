@@ -82,6 +82,9 @@ func (c cRec) Conv1DStep(x, w, b, state, out buffer, d, k int) error {
 func (c cRec) SSDStep(x, delta, a, b, cc, dskip, state, y buffer, heads, headDim, groups, n int) error {
 	return c.r.SSDStep(cb(x), cb(delta), cb(a), cb(b), cb(cc), cb(dskip), cb(state), cb(y), heads, headDim, groups, n)
 }
+func (c cRec) WKVStep(k, v, w, u, aa, bb, pp, out buffer, d int) error {
+	return c.r.WKVStep(cb(k), cb(v), cb(w), cb(u), cb(aa), cb(bb), cb(pp), cb(out), d)
+}
 func (c cRec) Unary(x, o buffer, op int) error { return c.r.Unary(cb(x), cb(o), op) }
 func (c cRec) Binary(a, b, o buffer, op int) error {
 	return c.r.Binary(cb(a), cb(b), cb(o), op)
@@ -374,6 +377,34 @@ func NewMamba2CUDA(m *nlp.Mamba2) (*Decoder, error) {
 		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
 	}
 	return newMamba2Decoder(m, backendOps{
+		name:        string(backend.CUDA),
+		asyncEncode: false,
+		newBuffer: func(data []float32) (buffer, error) {
+			b, err := cuda.NewDeviceBufferF32(data)
+			if err != nil {
+				return nil, err
+			}
+			return cBuf{b}, nil
+		},
+		newRecorder: func() (recorder, error) {
+			r, err := cuda.NewRecorder()
+			if err != nil {
+				return nil, err
+			}
+			return cRec{r}, nil
+		},
+	})
+}
+
+// NewRWKVCUDA uploads an nlp.RWKV onto the batched Decoder core — GoAI's third recurrent family. Each
+// layer is a WKV time-mix (recorded from cu_wkv_step) + a gated squared-ReLU channel-mix; decode is
+// O(1) recurrent with no attention and no KV cache, carrying per-block token-shift + WKV state across
+// Step calls. cuda-only.
+func NewRWKVCUDA(m *nlp.RWKV) (*Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newRWKVDecoder(m, backendOps{
 		name:        string(backend.CUDA),
 		asyncEncode: false,
 		newBuffer: func(data []float32) (buffer, error) {
