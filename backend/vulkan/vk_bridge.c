@@ -69,6 +69,72 @@ static int has_device_ext(VkPhysicalDevice pd, const char* name) {
     return found;
 }
 
+// device_score ranks a physical device for compute: discrete GPU > integrated > virtual/CPU/other.
+// -1 means unusable (no compute queue). Used to prefer the fastest GPU on a multi-GPU host (e.g. an
+// NVIDIA dGPU over an AMD iGPU) — §V4.
+static int device_score(VkPhysicalDevice pd) {
+    if (find_compute_queue(pd) < 0) return -1;
+    VkPhysicalDeviceProperties props;
+    vkGetPhysicalDeviceProperties(pd, &props);
+    switch (props.deviceType) {
+        case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:   return 3;
+        case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU: return 2;
+        case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU:    return 1;
+        default:                                     return 0; // CPU / other
+    }
+}
+
+// attempt_device creates the logical device on `pd`; on success sets gPhys/gQueueFamily/gDevice/gQueue
+// (+gAtomicFloat) and returns 0, else -1. Extracted so ensure_init can try candidates best-first and
+// fall back if a driver rejects device creation.
+static int attempt_device(VkPhysicalDevice pd) {
+    int qf = find_compute_queue(pd);
+    if (qf < 0) return -1;
+
+    float prio = 1.0f;
+    VkDeviceQueueCreateInfo qci = {0};
+    qci.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+    qci.queueFamilyIndex = (uint32_t)qf;
+    qci.queueCount = 1;
+    qci.pQueuePriorities = &prio;
+
+    // Portability (MoltenVK) needs VK_KHR_portability_subset at device creation; absent elsewhere.
+    const char* devExts[2];
+    uint32_t nDevExts = 0;
+    if (has_device_ext(pd, "VK_KHR_portability_subset")) {
+        devExts[nDevExts++] = "VK_KHR_portability_subset";
+    }
+    // VK_EXT_shader_atomic_float: float atomicAdd for the MHA-backward dK/dV accumulation (§T90).
+    VkPhysicalDeviceShaderAtomicFloatFeaturesEXT atomicFeat = {0};
+    atomicFeat.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT;
+    void* pNext = NULL;
+    int atomic = 0;
+    if (has_device_ext(pd, "VK_EXT_shader_atomic_float")) {
+        devExts[nDevExts++] = "VK_EXT_shader_atomic_float";
+        atomicFeat.shaderBufferFloat32Atomics = VK_TRUE;
+        atomicFeat.shaderBufferFloat32AtomicAdd = VK_TRUE;
+        pNext = &atomicFeat;
+        atomic = 1;
+    }
+
+    VkDeviceCreateInfo dci = {0};
+    dci.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+    dci.pNext = pNext;
+    dci.queueCreateInfoCount = 1;
+    dci.pQueueCreateInfos = &qci;
+    dci.enabledExtensionCount = nDevExts;
+    dci.ppEnabledExtensionNames = nDevExts ? devExts : NULL;
+    VkDevice dev = NULL;
+    if (vkCreateDevice(pd, &dci, NULL, &dev) != VK_SUCCESS) return -1;
+
+    gPhys = pd;
+    gQueueFamily = (uint32_t)qf;
+    gDevice = dev;
+    gAtomicFloat = atomic;
+    vkGetDeviceQueue(gDevice, gQueueFamily, 0, &gQueue);
+    return 0;
+}
+
 static int ensure_init(void) {
     if (gInitTried) return gInitOK ? 0 : -1;
     gInitTried = 1;
@@ -100,54 +166,20 @@ static int ensure_init(void) {
     VkPhysicalDevice* devs = malloc(nd * sizeof(*devs));
     vkEnumeratePhysicalDevices(gInstance, &nd, devs);
 
-    int qf = -1;
-    for (uint32_t i = 0; i < nd; ++i) {
-        int q = find_compute_queue(devs[i]);
-        if (q >= 0) { gPhys = devs[i]; qf = q; break; }
+    // Try compute-capable devices BEST-FIRST (discrete GPU > integrated > virtual > CPU) and use the
+    // first whose logical device creates. On a multi-GPU host this picks the fastest GPU (e.g. an
+    // NVIDIA RTX 3060 over an AMD Renoir iGPU) instead of whatever enumerates first, and it falls back
+    // if a driver rejects device creation — previously a create failure on device 0 aborted init and
+    // left the machine reporting "no compute device" despite a working GPU. §V4.
+    int ok = -1;
+    for (int rank = 3; rank >= 0 && ok < 0; --rank) {
+        for (uint32_t i = 0; i < nd; ++i) {
+            if (device_score(devs[i]) != rank) continue;
+            if (attempt_device(devs[i]) == 0) { ok = 0; break; }
+        }
     }
     free(devs);
-    if (qf < 0) return -1;
-    gQueueFamily = (uint32_t)qf;
-
-    float prio = 1.0f;
-    VkDeviceQueueCreateInfo qci = {0};
-    qci.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-    qci.queueFamilyIndex = gQueueFamily;
-    qci.queueCount = 1;
-    qci.pQueuePriorities = &prio;
-
-    // A portability physical device (MoltenVK) requires enabling
-    // VK_KHR_portability_subset at logical-device creation. Absent elsewhere.
-    const char* devExts[2];
-    uint32_t nDevExts = 0;
-    if (has_device_ext(gPhys, "VK_KHR_portability_subset")) {
-        devExts[nDevExts++] = "VK_KHR_portability_subset";
-    }
-    // VK_EXT_shader_atomic_float enables float atomicAdd in storage buffers — the
-    // MHA-backward kernel accumulates the shared dK/dV atomically (§T90). Enabled
-    // only when the device exposes it; gAtomicFloat records the result so that
-    // kernel can fall back to the reference where it is unavailable (§I4).
-    VkPhysicalDeviceShaderAtomicFloatFeaturesEXT atomicFeat = {0};
-    atomicFeat.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT;
-    void* pNext = NULL;
-    if (has_device_ext(gPhys, "VK_EXT_shader_atomic_float")) {
-        devExts[nDevExts++] = "VK_EXT_shader_atomic_float";
-        atomicFeat.shaderBufferFloat32Atomics = VK_TRUE;
-        atomicFeat.shaderBufferFloat32AtomicAdd = VK_TRUE;
-        pNext = &atomicFeat;
-        gAtomicFloat = 1;
-    }
-
-    VkDeviceCreateInfo dci = {0};
-    dci.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-    dci.pNext = pNext;
-    dci.queueCreateInfoCount = 1;
-    dci.pQueueCreateInfos = &qci;
-    dci.enabledExtensionCount = nDevExts;
-    dci.ppEnabledExtensionNames = nDevExts ? devExts : NULL;
-    if (vkCreateDevice(gPhys, &dci, NULL, &gDevice) != VK_SUCCESS) return -1;
-
-    vkGetDeviceQueue(gDevice, gQueueFamily, 0, &gQueue);
+    if (ok < 0) return -1;
     gInitOK = 1;
     return 0;
 }
