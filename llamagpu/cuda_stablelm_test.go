@@ -889,3 +889,50 @@ func TestCUDAOLMoEMatchesReference(t *testing.T) {
 	}
 	t.Logf("llamagpu NewOLMoECUDA matches reference nlp.OLMoE logits within %g across 8 autoregressive steps (sparse MoE + full-width QK-norm)", tol)
 }
+
+// TestCUDAGraniteMoEMatchesReference checks the GraniteMoE GPU path (NewGraniteMoECUDA): a sparse
+// MoE wrapped in the four Granite config scalars (deliberately non-identity: 12, 0.5, 0.22, 8). No
+// QK-norm, so this is greedy-exact — it verifies the scalar folds compose with the MoE combine
+// (ResidualMult baked into Wo AND every expert's Wdown, EmbeddingMult/AttentionMult/LogitsScale).
+func TestCUDAGraniteMoEMatchesReference(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("cuda: no CUDA-capable device")
+	}
+	ts, _, err := safetensors.LoadFile("../nlp/testdata/granitemoe_hf.safetensors")
+	if err != nil {
+		t.Skipf("granitemoe testdata unavailable (run make golden): %v", err)
+	}
+	m, err := nlp.GraniteMoeFromHF(ts, nlp.GraniteMoeConfig{
+		Heads: 4, KVHeads: 2, TopK: 2, Eps: 1e-6, RopeBase: 10000, Ctx: 32,
+		EmbeddingMult: 12, AttentionMult: 0.5, ResidualMult: 0.22, LogitsScale: 8,
+	})
+	if err != nil {
+		t.Fatalf("GraniteMoeFromHF: %v", err)
+	}
+
+	dec, err := llamagpu.NewGraniteMoECUDA(m)
+	if err != nil {
+		t.Fatalf("NewGraniteMoECUDA: %v", err)
+	}
+	defer dec.Release()
+
+	prompt := []int{3, 7, 1, 9}
+	const maxNew = 12
+	gpuOut, err := dec.Generate(prompt, maxNew, nlp.Greedy())
+	if err != nil {
+		t.Fatalf("cuda generate: %v", err)
+	}
+	refOut, err := m.Generate(prompt, maxNew, nlp.Greedy(), nlp.WithBackend(backend.Reference()))
+	if err != nil {
+		t.Fatalf("ref generate: %v", err)
+	}
+	if len(gpuOut) != len(refOut) {
+		t.Fatalf("length: cuda %d vs ref %d", len(gpuOut), len(refOut))
+	}
+	for i := range gpuOut {
+		if gpuOut[i] != refOut[i] {
+			t.Fatalf("token[%d]: cuda %d vs ref %d\ncuda=%v\nref=%v", i, gpuOut[i], refOut[i], gpuOut, refOut)
+		}
+	}
+	t.Logf("llamagpu NewGraniteMoECUDA.Generate == nlp.GraniteMoE.Generate greedy: %d tokens (sparse MoE + 4 Granite scalars)", len(gpuOut))
+}

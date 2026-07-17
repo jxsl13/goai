@@ -214,6 +214,34 @@ func NewOLMo2CUDA(m *nlp.OLMo2) (*Decoder, error) {
 	})
 }
 
+// NewGraniteMoECUDA uploads an nlp.GraniteMoE onto the batched Decoder core: the MoE sibling of
+// dense Granite — a plain Llama attention core + sparse Mixture-of-Experts FFN, wrapped in the four
+// Granite config scalars (embedding/attention/residual multipliers folded into the upload, logits
+// scaling into the lm_head). cuda-only.
+func NewGraniteMoECUDA(m *nlp.GraniteMoE) (*Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newGraniteMoEDecoder(m, backendOps{
+		name:        string(backend.CUDA),
+		asyncEncode: false,
+		newBuffer: func(data []float32) (buffer, error) {
+			b, err := cuda.NewDeviceBufferF32(data)
+			if err != nil {
+				return nil, err
+			}
+			return cBuf{b}, nil
+		},
+		newRecorder: func() (recorder, error) {
+			r, err := cuda.NewRecorder()
+			if err != nil {
+				return nil, err
+			}
+			return cRec{r}, nil
+		},
+	})
+}
+
 // NewOLMoECUDA uploads an nlp.OLMoE (Allen AI sparse-MoE) onto the batched Decoder core: pre-norm
 // Llama attention with FULL-WIDTH q/k RMSNorm and a sparse Mixture-of-Experts FFN, untied lm_head.
 // cuda-only.

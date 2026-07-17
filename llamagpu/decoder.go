@@ -1388,6 +1388,107 @@ func newMixtralDecoder(m *nlp.Mixtral, ops backendOps) (*Decoder, error) {
 	return d, nil
 }
 
+// newGraniteMoEDecoder builds a device Decoder for an nlp.GraniteMoE — the MoE sibling of dense
+// Granite: a plain Llama attention core + a sparse Mixture-of-Experts FFN, wrapped in the four
+// Granite config scalars (all identity when 0/1, so this is newMixtralDecoder + the load-time folds
+// from newDecoder's Granite handling). AttentionMult overrides the softmax scale; EmbeddingMult
+// scales the gathered embedding; ResidualMult is baked into Wo AND every expert's Wdown (their
+// matmul feeds the residual); LogitsScale is baked as 1/scale into the untied lm_head. cuda-only.
+func newGraniteMoEDecoder(m *nlp.GraniteMoE, ops backendOps) (*Decoder, error) {
+	cfg := m.Config
+	kvH := cfg.KVHeads
+	if kvH <= 0 {
+		kvH = cfg.Heads
+	}
+	if len(m.Blocks) == 0 || m.Blocks[0].MoE == nil || len(m.Blocks[0].MoE.Experts) == 0 {
+		return nil, fmt.Errorf("llamagpu(%s): GraniteMoE has no MoE experts", ops.name)
+	}
+	b0 := m.Blocks[0]
+	nExperts := len(b0.MoE.Experts)
+	topK := b0.MoE.TopK
+	if topK <= 0 {
+		topK = 2
+	}
+	hidden := b0.MoE.Experts[0].Wgate.Shape()[1]
+	lc := nlp.LlamaConfig{
+		Vocab: cfg.Vocab, Ctx: cfg.Ctx, Dim: cfg.Dim, Heads: cfg.Heads, KVHeads: kvH,
+		Layers: cfg.Layers, Hidden: hidden, Eps: cfg.Eps, RopeBase: cfg.RopeBase,
+	}
+	d, derr := newDecoderCommon(lc, m.TokEmb, ops)
+	if derr != nil {
+		return nil, derr
+	}
+	d.moe = true
+	d.nExperts = nExperts
+	d.topK = topK
+	if cfg.AttentionMult != 0 {
+		d.scale = float32(cfg.AttentionMult)
+	}
+	if cfg.EmbeddingMult != 0 && cfg.EmbeddingMult != 1 {
+		d.embMult = float32(cfg.EmbeddingMult)
+	}
+	resMult := float32(1)
+	if cfg.ResidualMult != 0 && cfg.ResidualMult != 1 {
+		resMult = float32(cfg.ResidualMult)
+	}
+	outScale := float32(1)
+	if cfg.LogitsScale != 0 && cfg.LogitsScale != 1 {
+		outScale = float32(1 / cfg.LogitsScale)
+	}
+
+	var err error
+	mk := d.mkBuf(&err)
+	lin := func(w *tensor.Tensor) linear {
+		in, out := w.Shape()[0], w.Shape()[1]
+		return f32Linear{w: mk(flat2D(w)).b, k: in, n: out}
+	}
+	linS := func(w *tensor.Tensor, s float32) linear { // weight pre-scaled by s (ResidualMult fold)
+		in, out := w.Shape()[0], w.Shape()[1]
+		f := flat2D(w)
+		if s != 1 {
+			for i := range f {
+				f[i] *= s
+			}
+		}
+		return f32Linear{w: mk(f).b, k: in, n: out}
+	}
+	fused := func(wq, wk, wv *tensor.Tensor) linear {
+		in := wq.Shape()[0]
+		nq, nk, nv := wq.Shape()[1], wk.Shape()[1], wv.Shape()[1]
+		fq, fk, fv := flat2D(wq), flat2D(wk), flat2D(wv)
+		nt := nq + nk + nv
+		w := make([]float32, in*nt)
+		for i := range in {
+			row := w[i*nt : (i+1)*nt]
+			copy(row[:nq], fq[i*nq:(i+1)*nq])
+			copy(row[nq:nq+nk], fk[i*nk:(i+1)*nk])
+			copy(row[nq+nk:], fv[i*nv:(i+1)*nv])
+		}
+		return f32Linear{w: mk(w).b, k: in, n: nt}
+	}
+	for _, b := range m.Blocks {
+		experts := make([]moeFFN, len(b.MoE.Experts))
+		for i, ex := range b.MoE.Experts {
+			experts[i] = moeFFN{wG: lin(ex.Wgate), wU: lin(ex.Wup), wD: linS(ex.Wdown, resMult)}
+		}
+		gb := block{
+			wqkv: fused(b.Wq, b.Wk, b.Wv), wo: linS(b.Wo, resMult),
+			gAttn: mk(flat1D(b.AttnNorm.Gamma)).b, gFFN: mk(flat1D(b.FFNNorm.Gamma)).b,
+			moeRouter: lin(b.MoE.Router.W), moeExperts: experts,
+			kC: mk(make([]float32, d.maxLen*d.kvDim)).b, vC: mk(make([]float32, d.maxLen*d.kvDim)).b,
+		}
+		d.blocks = append(d.blocks, gb)
+	}
+	d.gFinal = mk(flat1D(m.Norm.Gamma))
+	d.out = linS(m.Out, outScale)
+	d.allocScratch(mk)
+	if err != nil {
+		d.Release()
+		return nil, err
+	}
+	return d, nil
+}
+
 // newOLMoEDecoder builds a device Decoder for an nlp.OLMoE (Allen AI sparse-MoE). OLMoE is the
 // pre-norm sparse-MoE composition: the plain Llama attention core with FULL-WIDTH q/k RMSNorm
 // (qkNorm+qkNormFull, one RMSNorm over the whole q/k projection — same as OLMo2) plus a sparse
