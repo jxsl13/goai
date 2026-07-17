@@ -68,6 +68,12 @@ func (vRec) RowAxpy(dst, src, arow buffer, rows, cols int) error {
 func (vRec) MHARect(q, k, va, o buffer, sq, sk, heads, kvHeads, dqk, dv, causal, window int, scale float32) error {
 	return fmt.Errorf("llamagpu(vulkan): rectangular MHA not implemented (MLA decoders are cuda-only for now)")
 }
+func (vRec) SSMStep(u, delta, a, b, c, dskip, h, y buffer, d, n int) error {
+	return fmt.Errorf("llamagpu(vulkan): SSM step not implemented (Mamba decoders are cuda-only for now)")
+}
+func (vRec) Conv1DStep(x, w, b, state, out buffer, d, k int) error {
+	return fmt.Errorf("llamagpu(vulkan): conv1d step not implemented (Mamba decoders are cuda-only for now)")
+}
 func (v vRec) Unary(x, o buffer, op int) error { return v.r.Unary(vb(x), vb(o), op) }
 func (v vRec) Binary(a, b, o buffer, op int) error {
 	return v.r.Binary(vb(a), vb(b), vb(o), op)
