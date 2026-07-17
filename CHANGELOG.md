@@ -4,6 +4,14 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### docs — benchmarking: the CPU serving arc, consolidated (T798, 2026-07-17)
+
+`docs/benchmarking.md` gains a section consolidating the T762/T777–T793 serving campaign: the
+measured table (sparse MoE 4–8×, tied-head cache, embedRow 7.4×, rowBuf 147×, O(1) recurrent decode,
+absorbed-MLA 6.7× memory, batched prefill everywhere, the 1.68× pool fix), the profile-driven method
+notes, and the two durable correctness lessons (§B64 FMA kernel-sequence sharing, §B65 race-tagged
+tolerances).
+
 ### nlp — feat: quantized GGUF decode for Qwen2/Qwen3 (T797, 2026-07-17)
 
 `QuantQwen2FromGGUF`/`QuantQwen3FromGGUF` decode quantized llama.cpp Qwen checkpoints directly from
