@@ -4,6 +4,17 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — feat: O(1) stateful decode for Mamba-2 — every architecture now decodes natively (T782, 2026-07-17)
+
+`Mamba2` gains `NewDecodeState`/`DecodeStep`/`Generate`: the SSD recurrence stepped with a
+constant-size per-layer state (a (d_conv−1)-row conv window over the fused xBC channels and a
+per-head [N, head_dim] SSD state), replaying the Forward mixer's host-f64 loop order verbatim —
+decode-vs-Forward parity exactly 0.0, O(1) state proven. This completes the decode arc: all
+thirty-one loadable architectures now generate with their architecture-native mechanism —
+amortized-O(T) KV caches for attention transformers, sparse top-k evaluation for MoEs, O(1)
+constant-size state for the recurrent families (RWKV, Mamba, Mamba-2), and Jamba's hybrid of
+KV + SSM state.
+
 ### nlp — feat: hybrid stateful decode for Jamba (T781, 2026-07-17)
 
 `Jamba` gains `NewDecodeState`/`DecodeStep`/`Generate` with the architecture-appropriate hybrid state:
