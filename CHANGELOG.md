@@ -4,6 +4,17 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — feat: GGUF loading for Gemma (T791, 2026-07-17)
+
+`GemmaFromGGUF`/`GemmaToGGUF` load llama.cpp Gemma checkpoints, with all four conventions verified
+against llama.cpp master source: NO q/k permute (Gemma is `LLAMA_ROPE_TYPE_NEOX`, like qwen); norm
+gains stored PRE-FOLDED (+1 applied by the converter, so the loader copies them unchanged — GoAI's
+in-memory (1+w) convention coincides with GGUF's on-disk one); embeddings stored unscaled (√dim is
+runtime on both sides); `attention.key_length/value_length` carry the decoupled head_dim, and there
+is no output tensor (tied head). Parity through real GGUF bytes vs the HF path: 8.3e-14; round-trip
+1.2e-13. The GGUF axis now covers Llama, Qwen2/2.5, Qwen3 and Gemma — the most-downloaded community
+checkpoint families.
+
 ### nlp — docs: serving-mechanics and GGUF coverage in the package godoc (T790, 2026-07-17)
 
 The package godoc now documents the architecture-native serving story (batched Prefill, amortized
