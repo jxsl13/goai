@@ -128,6 +128,10 @@ type recorder interface {
 	// row r copies from src[srcOff+r·srcStride:] to dst[dstOff+r·dstStride:].
 	Copy2D(src buffer, srcOff, srcStride int, dst buffer, dstOff, dstStride, rows, rowFloats int) error
 	MHA(q, k, v, o buffer, sq, sk, dm, heads, kvHeads, dk, causal, window int, scale float32) error
+	// MHACap is MHA with a Gemma-2 attention-logit soft-cap (cap·tanh(score·scale/cap) before the
+	// mask+softmax). Implemented on cuda; metal/vulkan return unsupported until a softcap decoder
+	// targets them (the RoPEPartialPair pattern).
+	MHACap(q, k, v, o buffer, sq, sk, dm, heads, kvHeads, dk, causal, window int, scale, cap float32) error
 	Unary(x, o buffer, op int) error
 	Binary(a, b, o buffer, op int) error
 	QMatMulResident(x buffer, w qweight, o buffer, m int) error
@@ -163,6 +167,7 @@ type block struct {
 	// and the GELU-MLP fc [hidden] / proj [D] biases — GPT-NeoX/Phi/StarCoder2 carry them.
 	qkvBias, oBias, fcBias, projBias buffer
 	qN, kN                           buffer // per-head query/key RMSNorm gains [dk] (Qwen3); nil ⇒ no QK-norm
+	gAttn2, gFFN2                    buffer // sandwich-norm OUTPUT gains (Gemma2 post_attention/post_feedforward); nil otherwise
 }
 
 // Decoder holds a Llama's weights + KV cache as device-resident buffers and runs one batched decode
@@ -170,17 +175,19 @@ type block struct {
 type Decoder struct {
 	ops                                           backendOps
 	d, h, kvH, dk, kvDim, half, hidden, v, maxLen int
-	qDim                                          int  // attention Q/O width = h·dk; == d (model dim) unless head_dim is decoupled (Gemma)
-	rotaryDim                                     int  // rotated channels/head; == dk for full RoPE (Llama), < dk for partial rotary (GPT-NeoX/Phi/StableLM)
-	lnBias                                        bool // true ⇒ LayerNorm-with-bias norms (StableLM/Phi/StarCoder2); false ⇒ RMSNorm (Llama)
-	ffnGELU                                       bool // true ⇒ 2-layer GELU MLP (fc→GELU→proj: GPT-NeoX/Phi/StarCoder2); false ⇒ SwiGLU (Llama/StableLM)
-	ffnReLU2                                      bool // true ⇒ 2-layer squared-ReLU MLP (fc→relu²→proj: Nemotron); mutually exclusive with ffnGELU
-	ffnGEGLU                                      bool // true ⇒ GeGLU MLP: down(GELU(gate)⊙up) — Gemma's GELU-gated variant of SwiGLU
-	parallelRes                                   bool // true ⇒ parallel residual: attn+FFN both read norm(x0), sum onto x (GPT-NeoX/Phi/Cohere); false ⇒ sequential (Llama)
-	parallelTwoNorm                               bool // parallel residual with SEPARATE attn/FFN norms both over x0 (GPT-NeoX); needs the FFN norm computed pre-attn-add
-	qkNorm                                        bool // true ⇒ RMSNorm on Q and K before RoPE (Qwen3 per-head, OLMo2 full-width); false otherwise
-	qkNormFull                                    bool // with qkNorm: true ⇒ one RMSNorm over the whole q/k projection (OLMo2), false ⇒ per-head (Qwen3)
-	postNorm                                      bool // true ⇒ post-norm blocks (OLMo2): sublayer reads the raw residual, its OUTPUT is normed before the add
+	qDim                                          int     // attention Q/O width = h·dk; == d (model dim) unless head_dim is decoupled (Gemma)
+	rotaryDim                                     int     // rotated channels/head; == dk for full RoPE (Llama), < dk for partial rotary (GPT-NeoX/Phi/StableLM)
+	lnBias                                        bool    // true ⇒ LayerNorm-with-bias norms (StableLM/Phi/StarCoder2); false ⇒ RMSNorm (Llama)
+	ffnGELU                                       bool    // true ⇒ 2-layer GELU MLP (fc→GELU→proj: GPT-NeoX/Phi/StarCoder2); false ⇒ SwiGLU (Llama/StableLM)
+	ffnReLU2                                      bool    // true ⇒ 2-layer squared-ReLU MLP (fc→relu²→proj: Nemotron); mutually exclusive with ffnGELU
+	ffnGEGLU                                      bool    // true ⇒ GeGLU MLP: down(GELU(gate)⊙up) — Gemma's GELU-gated variant of SwiGLU
+	parallelRes                                   bool    // true ⇒ parallel residual: attn+FFN both read norm(x0), sum onto x (GPT-NeoX/Phi/Cohere); false ⇒ sequential (Llama)
+	parallelTwoNorm                               bool    // parallel residual with SEPARATE attn/FFN norms both over x0 (GPT-NeoX); needs the FFN norm computed pre-attn-add
+	qkNorm                                        bool    // true ⇒ RMSNorm on Q and K before RoPE (Qwen3 per-head, OLMo2 full-width); false otherwise
+	qkNormFull                                    bool    // with qkNorm: true ⇒ one RMSNorm over the whole q/k projection (OLMo2), false ⇒ per-head (Qwen3)
+	postNorm                                      bool    // true ⇒ post-norm blocks (OLMo2): sublayer reads the raw residual, its OUTPUT is normed before the add
+	sandwich                                      bool    // true ⇒ sandwich norms (Gemma2): pre-norm the input (gAttn/gFFN) AND post-norm the output (gAttn2/gFFN2)
+	attnCap                                       float32 // >0 ⇒ Gemma2 attention-logit soft-cap magnitude (via MHACap); 0 ⇒ plain MHA
 	eps, posDiv, scale                            float32
 	embMult                                       float32 // gathered embeddings ×= embMult (IBM Granite EmbeddingMult); 1 for everything else
 
@@ -289,12 +296,26 @@ func (d *Decoder) recordQKNorm(r recorder, b block, seq, stride int) error {
 
 // recordOProj records the attention output projection with its residual-add epilogue (dx +=
 // attn·Wo) plus the optional o-bias broadcast onto the residual stream.
+// recordMHA runs the attention core, dispatching to the soft-capped kernel (Gemma2) when attnCap>0.
+func (d *Decoder) recordMHA(r recorder, q, kC, vC, o buffer, sq, sk int) error {
+	if d.attnCap > 0 {
+		return r.MHACap(q, kC, vC, o, sq, sk, d.qDim, d.h, d.kvH, d.dk, 1, 0, d.scale, d.attnCap)
+	}
+	return r.MHA(q, kC, vC, o, sq, sk, d.qDim, d.h, d.kvH, d.dk, 1, 0, d.scale)
+}
+
 func (d *Decoder) recordOProj(r recorder, b block, rows int) error {
-	if d.postNorm {
-		// OLMo2 post-norm: ao = attn·Wo, then post_attention_layernorm(ao), then dx += ao.
+	if d.postNorm || d.sandwich {
+		// Output-normed residual: ao = attn·Wo → norm(ao) → dx += ao. OLMo2 post-norm reuses gAttn;
+		// Gemma2 sandwich has a SEPARATE post_attention_layernorm gain (gAttn2), the input already
+		// having been pre-normed with gAttn.
+		g, bta := b.gAttn, b.bAttn
+		if d.sandwich {
+			g, bta = b.gAttn2, nil
+		}
 		return firstErr(
 			b.wo.record(r, d.attn.b, d.ao.b, rows),
-			d.norm(r, d.ao.b, b.gAttn, b.bAttn, d.ao.b, rows),
+			d.norm(r, d.ao.b, g, bta, d.ao.b, rows),
 			r.Binary(d.dx.b, d.ao.b, d.dx.b, binaryAdd),
 		)
 	}
@@ -308,10 +329,14 @@ func (d *Decoder) recordOProj(r recorder, b block, rows int) error {
 // recordDownProj records the FFN down-projection's residual epilogue: dx += act·Wdown, either fused
 // (pre-norm) or, for OLMo2 post-norm, as mo = act·Wdown → post_feedforward_layernorm(mo) → dx += mo.
 func (d *Decoder) recordDownProj(r recorder, b block, rows int) error {
-	if d.postNorm {
+	if d.postNorm || d.sandwich {
+		g, bta := b.gFFN, b.bFFN
+		if d.sandwich {
+			g, bta = b.gFFN2, nil // Gemma2 post_feedforward_layernorm (input pre-normed with gFFN)
+		}
 		return firstErr(
 			b.wD.record(r, d.gate.b, d.mo.b, rows),
-			d.norm(r, d.mo.b, b.gFFN, b.bFFN, d.mo.b, rows),
+			d.norm(r, d.mo.b, g, bta, d.mo.b, rows),
 			r.Binary(d.dx.b, d.mo.b, d.dx.b, binaryAdd),
 		)
 	}
@@ -1046,6 +1071,109 @@ func newOLMo2Decoder(m *nlp.OLMo2, ops backendOps) (*Decoder, error) {
 	return d, nil
 }
 
+// newGemma2Decoder builds a device Decoder for an nlp.Gemma2. Gemma2 extends Gemma with three more
+// departures, all reusing the generalizations added for its siblings:
+//   - SANDWICH norms (sandwich): each sublayer is pre-normed AND its output post-normed — four
+//     (1+w) RMSNorms per block (input/post_attention, pre_feedforward/post_feedforward).
+//   - attention-logit SOFT-CAP (attnCap → MHACap): scaled scores pass through cap·tanh(·/cap)
+//     before the mask+softmax.
+//   - query_pre_attn_scalar: the pre-softmax scale is 1/√scalar (not 1/√head_dim in general).
+//
+// Plus Gemma's √dim embedding normalizer, (1+w) RMSNorm, GeGLU, decoupled head_dim and tied lm_head.
+// The final-logit soft-cap is a MONOTONIC map, so it never changes the greedy argmax and is omitted
+// (greedy generation is identical with or without it). cuda-only (the soft-cap kernel is cuda-only).
+func newGemma2Decoder(m *nlp.Gemma2, ops backendOps) (*Decoder, error) {
+	cfg := m.Config
+	kvH := cfg.KVHeads
+	if kvH <= 0 {
+		kvH = cfg.Heads
+	}
+	headDim := cfg.HeadDim
+	if headDim <= 0 {
+		headDim = cfg.Dim / cfg.Heads
+	}
+	if qOut := m.Blocks[0].Wq.Shape()[1]; qOut%cfg.Heads == 0 {
+		headDim = qOut / cfg.Heads
+	}
+	lc := nlp.LlamaConfig{
+		Vocab: cfg.Vocab, Ctx: cfg.Ctx, Dim: cfg.Dim, Heads: cfg.Heads, KVHeads: kvH,
+		Layers: cfg.Layers, Hidden: cfg.FFN, Eps: cfg.Eps, RopeBase: cfg.RopeBase,
+	}
+	d, derr := newDecoderCommon(lc, m.TokEmb, ops)
+	if derr != nil {
+		return nil, derr
+	}
+	d.ffnGEGLU = true
+	d.sandwich = true
+	d.embMult = float32(math.Sqrt(float64(cfg.Dim)))
+	if cfg.AttnLogitCap > 0 {
+		d.attnCap = float32(cfg.AttnLogitCap)
+	}
+	// decoupled head_dim geometry override (as Gemma)
+	if headDim != d.dk {
+		d.dk, d.qDim, d.kvDim, d.half, d.rotaryDim = headDim, d.h*headDim, d.kvH*headDim, headDim/2, headDim
+		invF64, posDiv64 := backend.RoPEFreqs(headDim, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: d.h})
+		d.invHost = make([]float32, headDim/2)
+		for i := range d.invHost {
+			d.invHost[i] = float32(invF64[i])
+		}
+		d.posDiv = float32(posDiv64)
+	}
+	// query_pre_attn_scalar sets the pre-softmax scale to 1/√scalar (0 → head_dim = standard).
+	qpa := cfg.QueryPreAttnScalar
+	if qpa == 0 {
+		qpa = float64(headDim)
+	}
+	d.scale = float32(1.0 / math.Sqrt(qpa))
+
+	var err error
+	mk := d.mkBuf(&err)
+	fused := func(wq, wk, wv *tensor.Tensor) linear {
+		in := wq.Shape()[0]
+		nq, nk, nv := wq.Shape()[1], wk.Shape()[1], wv.Shape()[1]
+		fq, fk, fv := flat2D(wq), flat2D(wk), flat2D(wv)
+		nt := nq + nk + nv
+		w := make([]float32, in*nt)
+		for i := range in {
+			row := w[i*nt : (i+1)*nt]
+			copy(row[:nq], fq[i*nq:(i+1)*nq])
+			copy(row[nq:nq+nk], fk[i*nk:(i+1)*nk])
+			copy(row[nq+nk:], fv[i*nv:(i+1)*nv])
+		}
+		return f32Linear{w: mk(w).b, k: in, n: nt}
+	}
+	lin := func(w *tensor.Tensor) linear {
+		in, out := w.Shape()[0], w.Shape()[1]
+		return f32Linear{w: mk(flat2D(w)).b, k: in, n: out}
+	}
+	for _, b := range m.Blocks {
+		gb := block{
+			wqkv: fused(b.Wq, b.Wk, b.Wv), wo: lin(b.Wo),
+			gAttn: mk(flat1D(b.InputNorm.Gamma)).b, gAttn2: mk(flat1D(b.PostAttnNorm.Gamma)).b,
+			gFFN: mk(flat1D(b.PreFFNNorm.Gamma)).b, gFFN2: mk(flat1D(b.PostFFNNorm.Gamma)).b,
+			wG: lin(b.FFN.Wgate), wU: lin(b.FFN.Wup), wD: lin(b.FFN.Wdown),
+			kC: mk(make([]float32, d.maxLen*d.kvDim)).b, vC: mk(make([]float32, d.maxLen*d.kvDim)).b,
+		}
+		d.blocks = append(d.blocks, gb)
+	}
+	d.gFinal = mk(flat1D(m.FinalNorm.Gamma))
+	// tied lm_head: Out = TokEmbᵀ [dim, vocab]
+	vocab, dim := m.TokEmb.Shape()[0], m.TokEmb.Shape()[1]
+	outW := make([]float32, dim*vocab)
+	for j := range vocab {
+		for i := range dim {
+			outW[i*vocab+j] = float32(m.TokEmb.AtF64(j, i))
+		}
+	}
+	d.out = f32Linear{w: mk(outW).b, k: dim, n: vocab}
+	d.allocScratch(mk)
+	if err != nil {
+		d.Release()
+		return nil, err
+	}
+	return d, nil
+}
+
 // newStarCoder2Decoder builds a device Decoder for an nlp.StarCoder2: LayerNorm-with-bias +
 // biased q/k/v/o projections + a biased 2-layer GELU MLP (c_fc → GELU → c_proj) + FULL rope +
 // GQA + untied head. Every one of those is a core generalization (lnBias, biased projections,
@@ -1403,7 +1531,7 @@ func (d *Decoder) encodeStep(pos int) (recorder, error) {
 		}
 		e = firstErr(
 			e,
-			r.MHA(qBuf, b.kC, b.vC, d.attn.b, 1, pos+1, D, H, KVH, dk, 1, 0, d.scale),
+			d.recordMHA(r, qBuf, b.kC, b.vC, d.attn.b, 1, pos+1),
 			d.recordOProj(r, b, 1), // dx += attn·Wo (+ optional o-bias)
 			d.recordFFNSublayer(r, b, 1),
 		)
@@ -1544,7 +1672,7 @@ func (d *Decoder) StepN(tokens []int, pos int) ([]float32, error) {
 			e,
 			// sq=k vs sk=pos+k: the kernel's causal offset (sk-sq = pos) makes row i attend
 			// through absolute position pos+i — exactly the prefill/verify semantics.
-			r.MHA(d.q.b, b.kC, b.vC, d.attn.b, k, pos+k, D, H, KVH, dk, 1, 0, d.scale),
+			d.recordMHA(r, d.q.b, b.kC, b.vC, d.attn.b, k, pos+k),
 			d.recordOProj(r, b, k), // dx += attn·Wo (+ optional o-bias)
 			d.recordFFNSublayer(r, b, k),
 		)

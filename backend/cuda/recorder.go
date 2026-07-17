@@ -226,6 +226,34 @@ func (rec *Recorder) MHA(q, k, v, o *DeviceF32, sq, sk, dm, heads, kvHeads, dk, 
 	return nil
 }
 
+// MHACap is MHA with Gemma 2's attention-logit soft-cap: the scaled scores are passed through
+// cap·tanh(·/cap) before the causal mask and softmax. cap must be > 0.
+func (rec *Recorder) MHACap(q, k, v, o *DeviceF32, sq, sk, dm, heads, kvHeads, dk, causal, window int, scale, cap float32) error {
+	if q.ptr == nil || k.ptr == nil || v.ptr == nil || o.ptr == nil {
+		return fmt.Errorf("cuda: rec MHACap on a freed handle")
+	}
+	if window > 0 && window < sk {
+		return fmt.Errorf("cuda: rec MHACap sliding-window (window=%d < sk=%d) not supported", window, sk)
+	}
+	if err := rec.ensureScores(heads * sq * sk); err != nil {
+		return err
+	}
+	if rc := C.cu_gqa_scores(q.ptr, k.ptr, rec.scores, C.int(sq), C.int(sk), C.int(heads), C.int(kvHeads), C.int(dk), 0); rc != 0 {
+		return fmt.Errorf("cuda: rec MHACap scores failed (code %d)", int(rc))
+	}
+	offset := sk - sq
+	if causal == 0 {
+		offset = sk
+	}
+	if rc := C.cu_attn_softmax_cap(rec.scores, C.int(heads*sq), C.int(sk), C.float(scale), C.int(offset), C.int(sq), C.float(cap)); rc != 0 {
+		return fmt.Errorf("cuda: rec MHACap softmax failed (code %d)", int(rc))
+	}
+	if rc := C.cu_gqa_out(rec.scores, v.ptr, o.ptr, C.int(sq), C.int(sk), C.int(heads), C.int(kvHeads), C.int(dk), 0); rc != 0 {
+		return fmt.Errorf("cuda: rec MHACap out failed (code %d)", int(rc))
+	}
+	return nil
+}
+
 func (rec *Recorder) Unary(x, o *DeviceF32, op int) error {
 	if x.ptr == nil || o.ptr == nil {
 		return fmt.Errorf("cuda: rec Unary on a freed handle")

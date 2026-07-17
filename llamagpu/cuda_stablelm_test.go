@@ -630,3 +630,51 @@ func TestCUDAFalconMatchesReference(t *testing.T) {
 	}
 	t.Logf("llamagpu NewFalconCUDA.Generate == nlp.Falcon.Generate greedy: %d tokens (parallel residual + MQA + GELU-MLP)", len(gpuOut))
 }
+
+// TestCUDAGemma2MatchesReference checks the Gemma2 GPU path (NewGemma2CUDA) generates greedy-
+// identical tokens to the reference. Exercises the sandwich norms (pre + post per sublayer), the
+// attention-logit soft-cap (MHACap → cu_attn_softmax_cap) and query_pre_attn_scalar, on top of
+// Gemma's GeGLU / √dim-embed / (1+w)-RMSNorm / decoupled-head_dim / tied-head. The final-logit
+// soft-cap is monotonic, so omitting it leaves the greedy tokens unchanged.
+func TestCUDAGemma2MatchesReference(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("cuda: no CUDA-capable device")
+	}
+	ts, _, err := safetensors.LoadFile("../nlp/testdata/gemma2_hf.safetensors")
+	if err != nil {
+		t.Skipf("gemma2 testdata unavailable (run make golden): %v", err)
+	}
+	m, err := nlp.Gemma2FromHF(ts, nlp.Gemma2Config{
+		Heads: 2, KVHeads: 1, Eps: 1e-6, RopeBase: 10000, Ctx: 32,
+		QueryPreAttnScalar: 8, AttnLogitCap: 1.0, FinalLogitCap: 2.0,
+	})
+	if err != nil {
+		t.Fatalf("Gemma2FromHF: %v", err)
+	}
+
+	dec, err := llamagpu.NewGemma2CUDA(m)
+	if err != nil {
+		t.Fatalf("NewGemma2CUDA: %v", err)
+	}
+	defer dec.Release()
+
+	prompt := []int{3, 7, 1, 9}
+	const maxNew = 12
+	gpuOut, err := dec.Generate(prompt, maxNew, nlp.Greedy())
+	if err != nil {
+		t.Fatalf("cuda generate: %v", err)
+	}
+	refOut, err := m.Generate(prompt, maxNew, nlp.Greedy(), nlp.WithBackend(backend.Reference()))
+	if err != nil {
+		t.Fatalf("ref generate: %v", err)
+	}
+	if len(gpuOut) != len(refOut) {
+		t.Fatalf("length: cuda %d vs ref %d", len(gpuOut), len(refOut))
+	}
+	for i := range gpuOut {
+		if gpuOut[i] != refOut[i] {
+			t.Fatalf("token[%d]: cuda %d vs ref %d\ncuda=%v\nref=%v", i, gpuOut[i], refOut[i], gpuOut, refOut)
+		}
+	}
+	t.Logf("llamagpu NewGemma2CUDA.Generate == nlp.Gemma2.Generate greedy: %d tokens (sandwich norms + attn softcap + query scalar)", len(gpuOut))
+}
