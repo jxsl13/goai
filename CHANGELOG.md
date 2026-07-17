@@ -4,6 +4,24 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — quantized GGUF decode for Granite (T817, 2026-07-17)
+
+`QuantGraniteFromGGUF` decodes llama.cpp-quantized IBM Granite checkpoints straight from
+the ggml Q-blocks — the quantized twin of the scalar-multiplier Granite type. To support
+it, `QuantLlama.Forward`/`DecodeStep` now apply the four Granite scalars (embedding /
+attention / residual multipliers and the logits divisor) at the same points as
+`Llama.Forward`; they are 0/1 short-circuit no-ops for every other quantized family, so
+those paths stay byte-identical (verified: the entire existing quant suite passes
+unchanged). The q/k rows are un-permuted losslessly on the Q-blocks (`quantPermuteRows`,
+§B67/T802). Gates: the GGUF load exactly equals `QuantizeLlama` on the scalar-configured
+model (byte/logit), cosine 0.999967 vs the float pipeline, decode-vs-Forward bit-exact.
+
+### fix — scaleScalar now matches the activation dtype (2026-07-17)
+
+`scaleScalar` built an f64 scalar, which `OpMul` rejected against QuantLlama's f32 residual
+stream; it now builds the scalar in `x.Dtype()` (a no-op for the f64 decoders). Surfaced by
+the first quantized model to use a Granite scalar.
+
 ### docs — GGUF reference: the architecture matrix + verification methodology (2026-07-17)
 
 New `docs/gguf.md` consolidates the whole GGUF surface into one reference: the 19 float
