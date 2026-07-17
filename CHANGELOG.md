@@ -4,6 +4,18 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — feat: Mamba-2 support — 29th loadable architecture, completes the SSM pair (T773, 2026-07-16)
+
+Mamba-2 (`Mamba2ForCausalLM`, Dao & Gu 2024) as a self-contained `nlp.Mamba2` type — assembled from
+`nn.SSDRecurrent` (the state-space-duality scan) + `OpConv1D` + primitives, completing the state-space
+generation pair (Mamba-1 shipped as `nlp.Mamba`). The mixer splits `in_proj` into `[z_gate | xBC | dt]`,
+runs a depthwise conv + SiLU on `xBC`, splits into `[x | B | C]`, then a grouped multi-head SSD scan:
+per head `Δ = softplus(dt + dt_bias)`, decay `exp(Δ·A)` with `A = −exp(A_log)` per-head scalar, grouped
+B/C (head → group via `n_groups`), and the `D` skip added on the UN-Δ-scaled x (a subtle load-bearing
+ordering). A gated RMSNorm `norm(y·SiLU(z))` and `out_proj` finish it. Forward parity vs a real
+transformers `Mamba2ForCausalLM`: max abs logit diff 4.0e-7. Twenty-ninth architecture; the library now
+covers both Mamba generations.
+
 ### nlp — feat: Mamba support — 28th loadable architecture, first state-space model (T772, 2026-07-16)
 
 Mamba (`MambaForCausalLM`, Gu & Dao 2023) as a self-contained `nlp.Mamba` type — GoAI's FIRST
