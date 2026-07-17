@@ -132,6 +132,9 @@ int cu_qmatmul_q5k_mt(const void* dA, const void* dQ, void* dOut, int M, int K, 
 // cu_qmatmul_iq2xxs: out = a·dequant(W), W = ggml IQ2_XXS (66-byte super-blocks) — the first
 // GRID-codebook i-quant. dGrid = the shared 256×8 float grid (device buffer). K%256==0. GEMV.
 int cu_qmatmul_iq2xxs(const void* dA, const void* dQ, const void* dGrid, void* dOut, int M, int K, int N, float beta);
+// cu_qmatmul_iq2xxs_mt: weight-read-once M-tiled GEMM for M>1 — IQ2_XXS twin of cu_qmatmul_q4k_mt
+// (grid decoded once per warp, reused across the row tile). Bit-identical arithmetic. K%256==0.
+int cu_qmatmul_iq2xxs_mt(const void* dA, const void* dQ, const void* dGrid, void* dOut, int M, int K, int N, float beta);
 // cu_qmatmul_iq2xs: IQ2_XS (74-byte super-blocks, 512×8 grid + explicit 4-bit scales). K%256==0.
 int cu_qmatmul_iq2xs(const void* dA, const void* dQ, const void* dGrid, void* dOut, int M, int K, int N, float beta);
 // cu_qmatmul_iq3xxs: IQ3_XXS (98-byte super-blocks, 256×4 grid + packed ksigns/scale). K%256==0.
