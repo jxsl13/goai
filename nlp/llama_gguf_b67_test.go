@@ -58,6 +58,19 @@ func b67Fixture(t *testing.T, hf map[string]*tensor.Tensor, heads, kv, layers in
 		ts[b+"attn_q.weight"] = llamaCppPermute(t, g("self_attn.q_proj.weight"), heads)
 		ts[b+"attn_k.weight"] = llamaCppPermute(t, g("self_attn.k_proj.weight"), kv)
 		ts[b+"attn_v.weight"] = g("self_attn.v_proj.weight")
+		// Bias-carrying llama-arch checkpoints (the LLaMAfied-Qwen lineage llama.cpp's
+		// optional bq/bk/bv tensors exist for): conversion/llama.py permutes
+		// q_proj.bias / k_proj.bias EXACTLY like the weights — modify_tensors matches
+		// name.endswith(("q_proj.weight", "q_proj.bias")) — while v_proj.bias stays raw.
+		if bq, ok := hf["model.layers."+strconv.Itoa(l)+".self_attn.q_proj.bias"]; ok {
+			ts[b+"attn_q.bias"] = llamaCppPermuteVec(t, bq, heads)
+		}
+		if bk, ok := hf["model.layers."+strconv.Itoa(l)+".self_attn.k_proj.bias"]; ok {
+			ts[b+"attn_k.bias"] = llamaCppPermuteVec(t, bk, kv)
+		}
+		if bv, ok := hf["model.layers."+strconv.Itoa(l)+".self_attn.v_proj.bias"]; ok {
+			ts[b+"attn_v.bias"] = bv
+		}
 		ts[b+"attn_output.weight"] = g("self_attn.o_proj.weight")
 		ts[b+"attn_norm.weight"] = g("input_layernorm.weight")
 		ts[b+"ffn_norm.weight"] = g("post_attention_layernorm.weight")

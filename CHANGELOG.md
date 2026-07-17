@@ -4,6 +4,23 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — B67-class audit of all 17 GGUF loaders; FIX: llama-arch q/k BIAS permute (B68, T809, 2026-07-17)
+
+A systematic audit classified every GGUF loader's parity fixtures as independent-transform
+vs symmetric-round-trip-only. Result: 15 loaders (plus the quant twins, transitively) already
+anchor their convention-critical transforms independently; the audit found ONE real bug:
+llama.cpp's converter permutes `q_proj.bias`/`k_proj.bias` exactly like the weights (the
+optional bias tensors exist for the LLaMAfied-Qwen lineage), and all three llama-arch paths
+missed it — `LlamaFromGGUF` and `QuantLlamaFromGGUF` loaded biases raw (wrong
+bias-to-channel pairing, divergence O(bias) = 1.05e-01 on a nonzero-bias fixture) and
+`LlamaToGGUF` wrote internally inconsistent files. DOUBLE masking: symmetric round-trips
+(B67) plus the qwen2 golden's all-zero biases — a zero vector is permute-invariant and can
+never gate a layout convention. Fixed with 1-D twins of the verified row transforms
+(`ropeUnpermuteVec`/`ropePermuteVec`) on all three paths; three new decisive gates
+(independent test-side bias permute: parity 1.27e-11; write-side element-equality; quantized
+exact-equality). Qwen2/Qwen3 biases stay unpermuted on disk — pinned by their existing
+independent fixtures.
+
 ### nlp — B67 follow-up: phi3 split-tensor fixtures rebuilt convention-faithfully (2026-07-17)
 
 The two phi3 split-tensor tests fabricated their fixtures via `LlamaToGGUF`, which since
