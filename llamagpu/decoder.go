@@ -4,6 +4,18 @@
 // (D=512, GQA 8:2, 6 layers): 24× faster than nlp.Llama.DecodeStep on Metal and 21× on Vulkan,
 // with token-for-token identical greedy output (§T404/§T409).
 //
+// Architecture coverage (CUDA): the same batched Decoder core drives 20 model families beyond Llama,
+// each a New*CUDA constructor + greedy parity test, built from one composable set of gated
+// generalizations (norm type/placement — pre / one-norm-parallel / two-norm-parallel / post-norm /
+// sandwich; RMSNorm / LayerNorm±bias / (1+w); MLP — SwiGLU / GELU / squared-ReLU / GeGLU; position —
+// full RoPE / partial RoPE / ALiBi; attention width — MHA / GQA / MQA / decoupled-head_dim; per-head
+// & full-width QK-norm; attention soft-cap; config scalars; logit scale; √dim embed; biased
+// projections/lm_head). Dense: StableLM, StarCoder2, Phi, GPT-NeoX, Qwen2, Qwen3, Phi-3, Granite,
+// Cohere, Nemotron, Gemma, OLMo2, Falcon, Gemma2, MPT. Sparse Mixture-of-Experts (route → experts →
+// combine, all in the pre-recorded command buffer via on-device routing): Mixtral, Qwen3-MoE, OLMoE,
+// GraniteMoE, Qwen2-MoE (shared expert). These New*CUDA constructors are cuda-only where partial
+// rotary / soft-cap / ALiBi / MoE kernels are involved; metal/vulkan return the corresponding stubs.
+//
 // Build [New] (Metal, darwin+cgo) or [NewVulkan] (vulkan build tag) from any *nlp.Llama — including
 // one loaded via nlp.LlamaFromGGUF — then call [Decoder.Generate] with any nlp.TokenSampler
 // (nlp.Sampler or nlp.Mirostat), or drive
