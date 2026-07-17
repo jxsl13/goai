@@ -4,6 +4,17 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — feat: O(1) stateful decode for Mamba (T780, 2026-07-17)
+
+`Mamba` gains `NewDecodeState`/`DecodeStep`/`Generate` — the selective-scan recurrence stepped with a
+CONSTANT-size per-layer state: a (d_conv−1)-row conv window and the SSM hidden state h[d_inner, N],
+instead of a full re-forward per generated token. The step is a hybrid for exact parity: every
+row-independent op (projections, norms, SiLU, softplus, the conv via the real `OpConv1D` on the
+shifted window, the tied head) runs through the backend kernels, while only the persistent SSM state
+replays `backend/ref/ssm.go`'s loop order in host f64 — decode-vs-Forward parity is exactly 0.0, and
+the state provably does not grow (O(1) test). The recurrent decode advantage now covers Mamba as
+well as RWKV.
+
 ### nlp — perf: amortized KV-cache growth — O(T²) → O(T) (T779, 2026-07-17)
 
 Every `DecodeStep` grew its KV-cache with `concatRows`, which reallocates and copies the ENTIRE
