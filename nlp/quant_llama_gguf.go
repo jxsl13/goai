@@ -26,37 +26,11 @@ func quantMatMulSupported(gg uint32) bool {
 // output.weight ties the LM head to token_embd (which must itself be quantized). Follows the
 // ggml/llama.cpp convention (§R93), the quantized twin of LlamaFromGGUF.
 func QuantLlamaFromGGUF(meta map[string]any, tensors map[string]gguf.QuantTensor) (*QuantLlama, error) {
-	if arch, _ := meta[ggufArch].(string); arch != "llama" {
-		return nil, fmt.Errorf("nlp: GGUF general.architecture=%q, want \"llama\"", arch)
-	}
-	dim, err := metaInt(meta, ggufEmbLen)
+	cfg, err := llamaCfgFromGGUFMeta("llama", meta)
 	if err != nil {
 		return nil, err
 	}
-	layers, err := metaInt(meta, ggufBlockCnt)
-	if err != nil {
-		return nil, err
-	}
-	hidden, err := metaInt(meta, ggufFFLen)
-	if err != nil {
-		return nil, err
-	}
-	heads, err := metaInt(meta, ggufHeadCnt)
-	if err != nil {
-		return nil, err
-	}
-	kv := heads
-	if k, e := metaInt(meta, ggufHeadKV); e == nil {
-		kv = k
-	}
-	cfg := LlamaConfig{
-		Dim: dim, Layers: layers, Hidden: hidden, Heads: heads, KVHeads: kv,
-		Eps: metaFloat(meta, ggufRMSEps, 1e-5), RopeBase: metaFloat(meta, ggufRopeFreq, 10000),
-		Ctx: dim,
-	}
-	if c, e := metaInt(meta, ggufCtxLen); e == nil {
-		cfg.Ctx = c
-	}
+	layers := cfg.Layers
 
 	// wrap a GGUF projection (quantized [out, in]) as a QuantLinear — no transpose, no requant.
 	mkQ := func(name string) (*nn.QuantLinear, error) {

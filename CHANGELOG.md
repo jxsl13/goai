@@ -4,6 +4,19 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — feat: GGUF loading for Qwen2/Qwen2.5 and Qwen3 (T789, 2026-07-17)
+
+`Qwen2FromGGUF`/`Qwen3FromGGUF` (+`ToGGUF` for round-trips) load llama.cpp checkpoints of the most
+common quantized community models, as thin wrappers over the generalized llama-family GGUF
+internals (arch-prefixed metadata keys; the shared loader now picks up optional `attn_{q,k,v}.bias`
+and `attn_{q,k}_norm.weight`). Key convention finding, verified against llama.cpp master: unlike
+llama (whose converter permutes q/k into interleaved-pair layout, `LLAMA_ROPE_TYPE_NORM`), the
+qwen2/qwen3 converters are a pure name-map — NO permute, `LLAMA_ROPE_TYPE_NEOX` — so the qwen
+loaders transpose and never permute, matching real llama.cpp files by construction. Parity vs the
+same weights through the HF path: ~1e-12 (the f32 storage of eps/rope_base in GGUF metadata; the
+weights are bit-identical), with round-trip tests and Qwen3's decoupled head_dim exercised.
+`QuantLlamaFromGGUF` deduplicated onto the shared config reader (−25 lines, byte-identical).
+
 ### nlp — perf: batched prefill complete — every KV architecture, including DeepSeek-V2's dual caches (T788, 2026-07-17)
 
 The final batch: OLMo2, OLMoE, MPT, Falcon, and DeepSeek-V2 with BOTH its prefills — `Prefill` for

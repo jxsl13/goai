@@ -7,18 +7,20 @@ import (
 	"github.com/jxsl13/goai/tensor"
 )
 
-// GGUF LLM / attention / rope metadata keys (the ggml/llama.cpp convention, §R93). The
-// "llama." prefix is general.architecture; this loader targets the llama architecture.
+// GGUF LLM / attention / rope metadata keys (the ggml/llama.cpp convention, §R93).
+// Every LLM key is prefixed with the general.architecture string — the same suffix set
+// serves "llama.embedding_length", "qwen2.embedding_length", "qwen3.embedding_length", …
+// so the llama-family loaders share these suffixes via llamaArchFromGGUF.
 const (
 	ggufArch     = "general.architecture"
-	ggufEmbLen   = "llama.embedding_length"
-	ggufBlockCnt = "llama.block_count"
-	ggufFFLen    = "llama.feed_forward_length"
-	ggufHeadCnt  = "llama.attention.head_count"
-	ggufHeadKV   = "llama.attention.head_count_kv"
-	ggufRMSEps   = "llama.attention.layer_norm_rms_epsilon"
-	ggufCtxLen   = "llama.context_length"
-	ggufRopeFreq = "llama.rope.freq_base"
+	ggufEmbLen   = "embedding_length"
+	ggufBlockCnt = "block_count"
+	ggufFFLen    = "feed_forward_length"
+	ggufHeadCnt  = "attention.head_count"
+	ggufHeadKV   = "attention.head_count_kv"
+	ggufRMSEps   = "attention.layer_norm_rms_epsilon"
+	ggufCtxLen   = "context_length"
+	ggufRopeFreq = "rope.freq_base"
 )
 
 // LlamaFromGGUF builds a Llama from the metadata and (dequantized) tensor maps of a
@@ -37,37 +39,20 @@ const (
 // against a real llama.cpp-produced file is not verified on this host (llama.cpp is not
 // installed, §B23).
 func LlamaFromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor) (*Llama, error) {
-	if arch, _ := meta[ggufArch].(string); arch != "llama" {
-		return nil, fmt.Errorf("nlp: GGUF general.architecture=%q, want \"llama\"", arch)
-	}
-	dim, err := metaInt(meta, ggufEmbLen)
+	return llamaArchFromGGUF("llama", meta, tensors)
+}
+
+// llamaArchFromGGUF is the shared llama-family GGUF loader behind [LlamaFromGGUF],
+// [Qwen2FromGGUF] and [Qwen3FromGGUF]: identical block structure and tensor names, only
+// the general.architecture string (= the metadata key prefix) differs, plus optional
+// per-block tensors — attn_{q,k,v}.bias (Qwen2 family) and attn_{q,k}_norm.weight
+// (Qwen3 per-head QK-norm) — loaded when present, nil (a Forward no-op) otherwise.
+func llamaArchFromGGUF(arch string, meta map[string]any, tensors map[string]*tensor.Tensor) (*Llama, error) {
+	cfg, err := llamaCfgFromGGUFMeta(arch, meta)
 	if err != nil {
 		return nil, err
 	}
-	layers, err := metaInt(meta, ggufBlockCnt)
-	if err != nil {
-		return nil, err
-	}
-	hidden, err := metaInt(meta, ggufFFLen)
-	if err != nil {
-		return nil, err
-	}
-	heads, err := metaInt(meta, ggufHeadCnt)
-	if err != nil {
-		return nil, err
-	}
-	kv := heads
-	if k, e := metaInt(meta, ggufHeadKV); e == nil {
-		kv = k
-	}
-	cfg := LlamaConfig{
-		Dim: dim, Layers: layers, Hidden: hidden, Heads: heads, KVHeads: kv,
-		Eps: metaFloat(meta, ggufRMSEps, 1e-5), RopeBase: metaFloat(meta, ggufRopeFreq, 10000),
-		Ctx: dim, // provisional; overwritten from context_length below
-	}
-	if c, e := metaInt(meta, ggufCtxLen); e == nil {
-		cfg.Ctx = c
-	}
+	layers := cfg.Layers
 
 	tok, ok := tensors["token_embd.weight"]
 	if !ok {
@@ -93,12 +78,32 @@ func LlamaFromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor) (*Lla
 				return nil, err
 			}
 		}
+		// Optional Qwen2-family q/k/v biases (1-D, copied as-is — no transpose, and
+		// unpermuted just like the weights; §R93).
+		bias := func(name string) *tensor.Tensor {
+			if t, ok := tensors[p+name]; ok {
+				return cloneF64(t)
+			}
+			return nil
+		}
+		// Optional Qwen3 per-head QK-norm gains ([headDim] each).
+		qkNorm := func(name string) *nn.RMSNorm {
+			if t, ok := tensors[p+name]; ok {
+				return rmsFromGGUF(t, cfg.Eps)
+			}
+			return nil
+		}
 		m.Blocks = append(m.Blocks, &LlamaBlock{
 			AttnNorm: rmsFromGGUF(w[0], cfg.Eps),
 			Wq:       transpose2D(w[1]), // GGUF [out,in] → GoAI [in,out]
 			Wk:       transpose2D(w[2]),
 			Wv:       transpose2D(w[3]),
 			Wo:       transpose2D(w[4]),
+			Bq:       bias("attn_q.bias"),
+			Bk:       bias("attn_k.bias"),
+			Bv:       bias("attn_v.bias"),
+			QNorm:    qkNorm("attn_q_norm.weight"),
+			KNorm:    qkNorm("attn_k_norm.weight"),
 			FFNNorm:  rmsFromGGUF(w[5], cfg.Eps),
 			FFN:      swiGLUFromGGUF(w[6], w[7], w[8]),
 		})
@@ -120,17 +125,26 @@ func LlamaFromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor) (*Lla
 // metadata + tensor maps (ggml/llama.cpp names and layout), transposing every
 // projection back into torch [out, in]. Pass the result to gguf.Write via a gguf.File.
 func LlamaToGGUF(m *Llama) (map[string]any, map[string]*tensor.Tensor) {
+	return llamaArchToGGUF("llama", m)
+}
+
+// llamaArchToGGUF is the shared llama-family GGUF serializer behind [LlamaToGGUF],
+// [Qwen2ToGGUF] and [Qwen3ToGGUF]: the arch string becomes general.architecture and the
+// metadata key prefix; optional block tensors (Qwen2 q/k/v biases, Qwen3 QK-norm gains)
+// are emitted only when non-nil, so each architecture writes exactly its tensor set.
+func llamaArchToGGUF(arch string, m *Llama) (map[string]any, map[string]*tensor.Tensor) {
 	c := m.Config
+	key := func(suffix string) string { return arch + "." + suffix }
 	meta := map[string]any{
-		ggufArch:     "llama",
-		ggufEmbLen:   uint32(c.Dim),
-		ggufBlockCnt: uint32(c.Layers),
-		ggufFFLen:    uint32(c.Hidden),
-		ggufHeadCnt:  uint32(c.Heads),
-		ggufHeadKV:   uint32(c.kvHeads()),
-		ggufCtxLen:   uint32(c.Ctx),
-		ggufRMSEps:   float32(c.Eps),
-		ggufRopeFreq: float32(ropeBaseOr(c.RopeBase)),
+		ggufArch:          arch,
+		key(ggufEmbLen):   uint32(c.Dim),
+		key(ggufBlockCnt): uint32(c.Layers),
+		key(ggufFFLen):    uint32(c.Hidden),
+		key(ggufHeadCnt):  uint32(c.Heads),
+		key(ggufHeadKV):   uint32(c.kvHeads()),
+		key(ggufCtxLen):   uint32(c.Ctx),
+		key(ggufRMSEps):   float32(c.Eps),
+		key(ggufRopeFreq): float32(ropeBaseOr(c.RopeBase)),
 	}
 	ts := map[string]*tensor.Tensor{
 		"token_embd.weight":  cloneF64(m.TokEmb),
@@ -148,8 +162,63 @@ func LlamaToGGUF(m *Llama) (map[string]any, map[string]*tensor.Tensor) {
 		ts[p+"ffn_gate.weight"] = transpose2D(b.FFN.Wgate)
 		ts[p+"ffn_up.weight"] = transpose2D(b.FFN.Wup)
 		ts[p+"ffn_down.weight"] = transpose2D(b.FFN.Wdown)
+		if b.Bq != nil {
+			ts[p+"attn_q.bias"] = cloneF64(b.Bq) // 1-D, stored as-is
+		}
+		if b.Bk != nil {
+			ts[p+"attn_k.bias"] = cloneF64(b.Bk)
+		}
+		if b.Bv != nil {
+			ts[p+"attn_v.bias"] = cloneF64(b.Bv)
+		}
+		if b.QNorm != nil {
+			ts[p+"attn_q_norm.weight"] = cloneF64(b.QNorm.Gamma)
+		}
+		if b.KNorm != nil {
+			ts[p+"attn_k_norm.weight"] = cloneF64(b.KNorm.Gamma)
+		}
 	}
 	return meta, ts
+}
+
+// llamaCfgFromGGUFMeta checks general.architecture against arch and reads the
+// llama-family LlamaConfig from the arch-prefixed GGUF metadata keys
+// ("<arch>.embedding_length", …). Vocab is left 0 — callers take it from the
+// token_embd.weight shape. Shared by llamaArchFromGGUF and [QuantLlamaFromGGUF].
+func llamaCfgFromGGUFMeta(arch string, meta map[string]any) (LlamaConfig, error) {
+	if a, _ := meta[ggufArch].(string); a != arch {
+		return LlamaConfig{}, fmt.Errorf("nlp: GGUF general.architecture=%q, want %q", a, arch)
+	}
+	key := func(suffix string) string { return arch + "." + suffix }
+	dim, err := metaInt(meta, key(ggufEmbLen))
+	if err != nil {
+		return LlamaConfig{}, err
+	}
+	layers, err := metaInt(meta, key(ggufBlockCnt))
+	if err != nil {
+		return LlamaConfig{}, err
+	}
+	hidden, err := metaInt(meta, key(ggufFFLen))
+	if err != nil {
+		return LlamaConfig{}, err
+	}
+	heads, err := metaInt(meta, key(ggufHeadCnt))
+	if err != nil {
+		return LlamaConfig{}, err
+	}
+	kv := heads
+	if k, e := metaInt(meta, key(ggufHeadKV)); e == nil {
+		kv = k
+	}
+	cfg := LlamaConfig{
+		Dim: dim, Layers: layers, Hidden: hidden, Heads: heads, KVHeads: kv,
+		Eps: metaFloat(meta, key(ggufRMSEps), 1e-5), RopeBase: metaFloat(meta, key(ggufRopeFreq), 10000),
+		Ctx: dim, // provisional; overwritten from context_length below
+	}
+	if c, e := metaInt(meta, key(ggufCtxLen)); e == nil {
+		cfg.Ctx = c
+	}
+	return cfg, nil
 }
 
 func ropeBaseOr(b float64) float64 {
