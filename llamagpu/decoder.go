@@ -966,6 +966,17 @@ func (d *Decoder) mkLin(mk func([]float32) *bufSlot, ops backendOps, errp *error
 	}
 }
 
+// f32Lin is the always-f32 projection builder, ignoring any Q8 hook. Used for weights whose
+// quantization would be incorrect even under a NewXQ8CUDA path — notably the MoE router: Q8 rounding in
+// the [dim,E] router logits could flip a top-k expert selection and change the output discontinuously,
+// so routing stays exact while the (bandwidth-dominant) expert matrices go Q8.
+func (d *Decoder) f32Lin(mk func([]float32) *bufSlot) func(*tensor.Tensor) linear {
+	return func(w *tensor.Tensor) linear {
+		in, out := w.Shape()[0], w.Shape()[1]
+		return f32Linear{w: mk(flat2D(w)).b, k: in, n: out}
+	}
+}
+
 // mkFused is mkLin for the fused QKV weight (§T613): the three [in,out] projections concatenated per
 // input row into one [in, nq+nk+nv] matrix, then Q8_0-quantized whole (or f32). cu_qmatmul_q8 is a GEMM
 // (rows>1), so batched-prefill StepN works; qkv bias / QK-norm / RoPE stay f32 and apply after.
@@ -2212,7 +2223,7 @@ func newMixtralDecoder(m *nlp.Mixtral, ops backendOps) (*Decoder, error) {
 			wqkv: fused(b.Wq, b.Wk, b.Wv), wo: lin(b.Wo),
 			gAttn: mk(flat1D(b.AttnNorm.Gamma)).b, gFFN: mk(flat1D(b.FFNNorm.Gamma)).b,
 			qN: qkGain(b.QNorm), kN: qkGain(b.KNorm),
-			moeRouter: lin(b.MoE.Router.W), moeExperts: experts,
+			moeRouter: d.f32Lin(mk)(b.MoE.Router.W), moeExperts: experts, // router stays f32 (routing is selection-sensitive)
 			kC: mk(make([]float32, d.maxLen*d.kvDim)).b, vC: mk(make([]float32, d.maxLen*d.kvDim)).b,
 		}
 		d.blocks = append(d.blocks, gb)
@@ -2277,7 +2288,7 @@ func newQwen2MoEDecoder(m *nlp.Qwen2MoE, ops backendOps) (*Decoder, error) {
 		gb := block{
 			wqkv: fused(b.Wq, b.Wk, b.Wv), qkvBias: fusedBias(b.Bq, b.Bk, b.Bv), wo: lin(b.Wo),
 			gAttn: mk(flat1D(b.AttnNorm.Gamma)).b, gFFN: mk(flat1D(b.FFNNorm.Gamma)).b,
-			moeRouter: lin(b.MoE.Router.W), moeExperts: experts,
+			moeRouter: d.f32Lin(mk)(b.MoE.Router.W), moeExperts: experts, // router stays f32 (routing is selection-sensitive)
 			moeShared:     moeFFN{wG: lin(b.Shared.Wgate), wU: lin(b.Shared.Wup), wD: lin(b.Shared.Wdown)},
 			moeSharedGate: lin(b.SharedGate),
 			kC:            mk(make([]float32, d.maxLen*d.kvDim)).b, vC: mk(make([]float32, d.maxLen*d.kvDim)).b,
@@ -2364,7 +2375,7 @@ func newGraniteMoEDecoder(m *nlp.GraniteMoE, ops backendOps) (*Decoder, error) {
 		gb := block{
 			wqkv: fused(b.Wq, b.Wk, b.Wv), wo: linS(b.Wo, resMult),
 			gAttn: mk(flat1D(b.AttnNorm.Gamma)).b, gFFN: mk(flat1D(b.FFNNorm.Gamma)).b,
-			moeRouter: lin(b.MoE.Router.W), moeExperts: experts,
+			moeRouter: d.f32Lin(mk)(b.MoE.Router.W), moeExperts: experts, // router stays f32 (routing is selection-sensitive)
 			kC: mk(make([]float32, d.maxLen*d.kvDim)).b, vC: mk(make([]float32, d.maxLen*d.kvDim)).b,
 		}
 		d.blocks = append(d.blocks, gb)
@@ -2429,7 +2440,7 @@ func newOLMoEDecoder(m *nlp.OLMoE, ops backendOps) (*Decoder, error) {
 			wqkv: fused(b.Wq, b.Wk, b.Wv), wo: lin(b.Wo),
 			gAttn: mk(flat1D(b.AttnNorm.Gamma)).b, gFFN: mk(flat1D(b.FFNNorm.Gamma)).b,
 			qN: mk(flat1D(b.QNorm.Gamma)).b, kN: mk(flat1D(b.KNorm.Gamma)).b, // full-width [qDim]/[kvDim]
-			moeRouter: lin(b.MoE.Router.W), moeExperts: experts,
+			moeRouter: d.f32Lin(mk)(b.MoE.Router.W), moeExperts: experts, // router stays f32 (routing is selection-sensitive)
 			kC: mk(make([]float32, d.maxLen*d.kvDim)).b, vC: mk(make([]float32, d.maxLen*d.kvDim)).b,
 		}
 		d.blocks = append(d.blocks, gb)

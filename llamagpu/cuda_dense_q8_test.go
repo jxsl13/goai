@@ -110,3 +110,38 @@ func TestCUDAStarCoder2Q8CloseToF32(t *testing.T) {
 	}
 	t.Logf("NewStarCoder2Q8CUDA tracks f32 CUDA decode: min cosine %.6f (shared Q8 fused-QKV composes with f32 projection bias)", minCos)
 }
+
+// TestCUDAMixtralQ8CloseToF32 validates the sparse-MoE Q8 path (NewMixtralQ8CUDA). Every expert's
+// gate/up/down and the attention projections go resident Q8_0, but the top-k ROUTER stays f32 — so the
+// expert SELECTION is identical to the f32 decode and only the selected experts' arithmetic rounds. This
+// is the strongest router-carve-out check: had the router been quantized, a flipped top-k pick would
+// collapse the cosine. Sparse MoE holds the most weight per token, so it is the biggest Q8 decode win.
+func TestCUDAMixtralQ8CloseToF32(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("cuda: no CUDA-capable device")
+	}
+	ts, _, err := safetensors.LoadFile("../nlp/testdata/mixtral_hf.safetensors")
+	if err != nil {
+		t.Skipf("mixtral testdata unavailable (run make golden): %v", err)
+	}
+	m, err := nlp.MixtralFromHF(ts, nlp.MixtralConfig{Heads: 4, KVHeads: 2, TopK: 2, Eps: 1e-5, RopeBase: 10000, Ctx: 32})
+	if err != nil {
+		t.Fatalf("MixtralFromHF: %v", err)
+	}
+	f32Dec, err := llamagpu.NewMixtralCUDA(m)
+	if err != nil {
+		t.Fatalf("NewMixtralCUDA: %v", err)
+	}
+	defer f32Dec.Release()
+	q8Dec, err := llamagpu.NewMixtralQ8CUDA(m)
+	if err != nil {
+		t.Fatalf("NewMixtralQ8CUDA: %v", err)
+	}
+	defer q8Dec.Release()
+
+	minCos := minCosStep(t, f32Dec, q8Dec, []int{3, 7, 1, 9, 4})
+	if minCos < 0.999 {
+		t.Fatalf("Mixtral Q8 min cosine %.5f < 0.999 vs f32 — router carve-out may have failed (flipped expert selection)", minCos)
+	}
+	t.Logf("NewMixtralQ8CUDA tracks f32 CUDA decode: min cosine %.6f (Q8 experts + attention, f32 router preserves top-k selection)", minCos)
+}
