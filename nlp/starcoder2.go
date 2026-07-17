@@ -113,16 +113,33 @@ func (m *StarCoder2) embed(ctx *backend.Context, tokens []int) (*tensor.Tensor, 
 // hidden runs the sequential-residual block stack and the final LayerNorm on an embedding x
 // [seq, dim], returning the pre-logits hidden states [seq, dim].
 func (m *StarCoder2) hidden(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, error) {
+	return m.hiddenCapture(ctx, x, nil)
+}
+
+// hiddenCapture is hidden with an optional per-layer KV tap. When capture is
+// non-nil it is invoked once per block with the layer index and that block's
+// post-bias, post-RoPE k and post-bias v [seq, kvWidth] — exactly the rows a
+// KV-cache decode appends per token ([StarCoder2.DecodeStep]), which is what
+// lets [StarCoder2.Prefill] seed a cache from ONE batched pass over the prompt.
+// The tensors handed to capture are the same ones the ongoing forward consumes
+// (callers must not mutate them; the cache copies rows into its own buffers).
+// A nil capture is the plain forward: no extra ops are recorded, so the
+// semantics of hidden are byte-identical to before this hook existed.
+func (m *StarCoder2) hiddenCapture(ctx *backend.Context, x *tensor.Tensor, capture func(layer int, k, v *tensor.Tensor)) (*tensor.Tensor, error) {
 	cfg := m.Config
 	attn := backend.AttnAttrs{Heads: cfg.Heads, KVHeads: cfg.kvHeads(), Causal: true}
-	for _, b := range m.Blocks {
+	for l, b := range m.Blocks {
 		// Sequential residual (Llama-style): input_layernorm → attention → add; then
 		// post_attention_layernorm → MLP → add.
 		xn, err := b.InputNorm.Forward(ctx, x)
 		if err != nil {
 			return nil, err
 		}
-		a, err := m.attention(ctx, b, xn, attn, 0)
+		var tap func(k, v *tensor.Tensor)
+		if capture != nil {
+			tap = func(k, v *tensor.Tensor) { capture(l, k, v) }
+		}
+		a, err := m.attention(ctx, b, xn, attn, 0, tap)
 		if err != nil {
 			return nil, err
 		}
@@ -147,7 +164,9 @@ func (m *StarCoder2) hidden(ctx *backend.Context, x *tensor.Tensor) (*tensor.Ten
 // attention computes StarCoder2's multi-head attention over the normalized input xn [seq,
 // dim]: project the biased q/k/v, apply FULL split-half RoPE at position offset pos, then
 // standard causal GQA via OpMHA and the biased o_proj. Mirrors Starcoder2Attention.forward.
-func (m *StarCoder2) attention(ctx *backend.Context, b *StarCoder2Block, xn *tensor.Tensor, attn backend.AttnAttrs, pos int) (*tensor.Tensor, error) {
+// A non-nil capture receives the post-RoPE k and post-bias v right before OpMHA (the
+// Prefill KV tap, see [StarCoder2.hiddenCapture]); nil is the plain forward.
+func (m *StarCoder2) attention(ctx *backend.Context, b *StarCoder2Block, xn *tensor.Tensor, attn backend.AttnAttrs, pos int, capture func(k, v *tensor.Tensor)) (*tensor.Tensor, error) {
 	cfg := m.Config
 	kv := cfg.kvHeads()
 	q, err := projBias(ctx, xn, b.Wq, b.Bq)
@@ -167,6 +186,9 @@ func (m *StarCoder2) attention(ctx *backend.Context, b *StarCoder2Block, xn *ten
 	}
 	if k, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: kv, PosOffset: pos}, k); err != nil {
 		return nil, err
+	}
+	if capture != nil {
+		capture(k, v)
 	}
 	a, err := exec1(ctx, backend.OpMHA, attn, q, k, v)
 	if err != nil {

@@ -137,16 +137,33 @@ func (m *GPTNeoX) embed(ctx *backend.Context, tokens []int) (*tensor.Tensor, err
 // hidden runs the parallel-residual block stack and the final LayerNorm on an embedding x
 // [seq, dim], returning the pre-logits hidden states [seq, dim].
 func (m *GPTNeoX) hidden(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, error) {
+	return m.hiddenCapture(ctx, x, nil)
+}
+
+// hiddenCapture is hidden with an optional per-layer KV tap. When capture is
+// non-nil it is invoked once per block with the layer index and that block's
+// post-bias, post-partial-RoPE k and post-bias v [seq, kvWidth] — exactly the
+// rows a KV-cache decode appends per token ([GPTNeoX.DecodeStep]), which is
+// what lets [GPTNeoX.Prefill] seed a cache from ONE batched pass over the
+// prompt. The tensors handed to capture are the same ones the ongoing forward
+// consumes (callers must not mutate them; the cache copies rows into its own
+// buffers). A nil capture is the plain forward: no extra ops are recorded, so
+// the semantics of hidden are byte-identical to before this hook existed.
+func (m *GPTNeoX) hiddenCapture(ctx *backend.Context, x *tensor.Tensor, capture func(layer int, k, v *tensor.Tensor)) (*tensor.Tensor, error) {
 	cfg := m.Config
 	attn := backend.AttnAttrs{Heads: cfg.Heads, KVHeads: cfg.kvHeads(), Causal: true}
-	for _, b := range m.Blocks {
+	for l, b := range m.Blocks {
 		// Parallel residual: input_layernorm feeds attention, post_attention_layernorm feeds
 		// the MLP, and both outputs are summed onto the SAME raw residual x.
 		an, err := b.InputNorm.Forward(ctx, x)
 		if err != nil {
 			return nil, err
 		}
-		a, err := m.attention(ctx, b, an, attn, 0)
+		var tap func(k, v *tensor.Tensor)
+		if capture != nil {
+			tap = func(k, v *tensor.Tensor) { capture(l, k, v) }
+		}
+		a, err := m.attention(ctx, b, an, attn, 0, tap)
 		if err != nil {
 			return nil, err
 		}
@@ -171,8 +188,10 @@ func (m *GPTNeoX) hidden(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor
 // attention computes GPT-NeoX multi-head attention over the normalized input xn [seq, dim]:
 // project the (already de-interleaved) q/k/v with their biases, apply the PARTIAL split-half
 // RoPE at position offset pos, then standard causal MHA and the biased output dense. Mirrors
-// GPTNeoXAttention.forward.
-func (m *GPTNeoX) attention(ctx *backend.Context, b *GPTNeoXBlock, xn *tensor.Tensor, attn backend.AttnAttrs, pos int) (*tensor.Tensor, error) {
+// GPTNeoXAttention.forward. A non-nil capture receives the post-partial-RoPE k and post-bias
+// v right before OpMHA (the Prefill KV tap, see [GPTNeoX.hiddenCapture]); nil is the plain
+// forward.
+func (m *GPTNeoX) attention(ctx *backend.Context, b *GPTNeoXBlock, xn *tensor.Tensor, attn backend.AttnAttrs, pos int, capture func(k, v *tensor.Tensor)) (*tensor.Tensor, error) {
 	cfg := m.Config
 	kv := cfg.kvHeads()
 	rot := cfg.rotaryDim()
@@ -194,6 +213,9 @@ func (m *GPTNeoX) attention(ctx *backend.Context, b *GPTNeoXBlock, xn *tensor.Te
 	}
 	if k, err = partialRoPE(ctx, k, kv, rot, rope); err != nil {
 		return nil, err
+	}
+	if capture != nil {
+		capture(k, v)
 	}
 	a, err := exec1(ctx, backend.OpMHA, attn, q, k, v)
 	if err != nil {

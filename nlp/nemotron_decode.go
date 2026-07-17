@@ -115,8 +115,57 @@ func (m *Nemotron) DecodeStep(ctx *backend.Context, cache *NemotronCache, token,
 	return exec1(ctx, backend.OpMatMul, nil, x, m.Out)
 }
 
+// Prefill runs the transformer ONCE over the whole prompt, seeds the KV-cache with
+// every prompt token's key/value rows, and returns the full logits [seq, vocab]
+// (row seq−1 is the next-token distribution Generate samples from). It is the
+// batched replacement for feeding the prompt token-by-token through
+// [Nemotron.DecodeStep]: one full-sequence pass through the sequential-residual
+// block stack (LayerNorm1P norms, ReLU² MLP) instead of seq single-token dispatch
+// rounds, with a bit-identical cache — the captured k/v are the same
+// post-partial-RoPE rows DecodeStep would have appended (the full-sequence partial
+// RoPE rotates row p for position p, exactly DecodeStep's PosOffset=p, and the
+// unrotated tail channels pass through untouched on both paths), so decoding may
+// continue from the seeded cache as if the prompt had been stepped through one
+// token at a time.
+//
+// For readers new to LLM inference: generation has two phases. "Prefill" processes
+// the whole prompt at once — every token is known up front, so the model can attend
+// over the full sequence in a handful of large batched kernels and store each
+// layer's keys/values in the cache. "Decode" then produces one token at a time,
+// where each new token only needs its own small computation plus the cached past.
+// Batching the prefill is the standard first optimization of every serving stack.
+//
+// cache must be empty (a fresh [Nemotron.NewCache]); Prefill errors on a non-empty
+// cache because the full-sequence RoPE and causal mask assume positions 0..seq−1.
+// Inference-only, like DecodeStep: run it on a plain backend.NewContext.
+func (m *Nemotron) Prefill(ctx *backend.Context, cache *NemotronCache, tokens []int) (*tensor.Tensor, error) {
+	if n := cache.Len(); n != 0 {
+		return nil, fmt.Errorf("nlp: Prefill needs an empty cache, got %d cached tokens", n)
+	}
+	if len(cache.K) < len(m.Blocks) {
+		cache.K = growSlice(cache.K, len(m.Blocks))
+	}
+	if len(cache.V) < len(m.Blocks) {
+		cache.V = growSlice(cache.V, len(m.Blocks))
+	}
+	x, err := m.embed(ctx, tokens)
+	if err != nil {
+		return nil, err
+	}
+	h, err := m.hiddenCapture(ctx, x, func(l int, k, v *tensor.Tensor) {
+		// One multi-row Append per layer: the whole prompt's [seq, kvWidth] k/v
+		// land in the cache's row buffers in a single typed block copy.
+		cache.K[l], cache.V[l] = cache.bufs.appendKV(cache.K, cache.V, l, k, v)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return exec1(ctx, backend.OpMatMul, nil, h, m.Out)
+}
+
 // Generate autoregressively decodes up to maxNew tokens after prompt with the sampler s,
-// using the KV-cache (one forward per new token). Returns prompt+generated. With a greedy
+// using the KV-cache (one batched [Nemotron.Prefill] over the prompt, then one
+// [Nemotron.DecodeStep] per new token). Returns prompt+generated. With a greedy
 // sampler the output is identical to argmax-ing a full Forward at each step. The decode runs
 // on backend.Default() unless WithBackend overrides it.
 func (m *Nemotron) Generate(prompt []int, maxNew int, s TokenSampler, opts ...GenerateOption) ([]int, error) {
@@ -134,16 +183,17 @@ func (m *Nemotron) Generate(prompt []int, maxNew int, s TokenSampler, opts ...Ge
 	cache := m.NewCache()
 	out := append([]int(nil), prompt...)
 
-	var logits *tensor.Tensor
-	pos := 0
-	for _, tok := range prompt {
-		l, err := m.DecodeStep(ctx, cache, tok, pos)
-		if err != nil {
-			return nil, err
-		}
-		logits = l
-		pos++
+	// Batched prefill: one full-sequence pass seeds the cache and yields the
+	// prompt's logits, replacing len(prompt) single-token DecodeStep rounds.
+	full, err := m.Prefill(ctx, cache, prompt)
+	if err != nil {
+		return nil, err
 	}
+	logits, err := full.Slice(0, full.Shape()[0]-1, full.Shape()[0])
+	if err != nil {
+		return nil, err
+	}
+	pos := len(prompt)
 	for range maxNew {
 		if pos >= m.Config.Ctx {
 			break

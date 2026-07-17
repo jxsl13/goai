@@ -4,6 +4,16 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — perf: batched prefill for six more architectures (T787, 2026-07-17)
+
+Extends the batched prefill to Cohere, GPT-NeoX, StableLM, StarCoder2, Nemotron and Phi — each
+Prefill seeds the KV-cache from one block-stack pass, bit-identical to step-by-step DecodeStep
+(zero-tolerance tests on the six real-transformers goldens, all first-run). The partial-rotary
+models (GPT-NeoX, StableLM, Nemotron, Phi) confirmed the T785 position identity for `partialRoPE`
+too: the full-sequence call (row p) and the decode call (PosOffset=p) hit the identical kernel
+formula, and the pass-through tail channels are pure copies on both paths. Seventeen of the
+twenty-two KV architectures now prefill batched.
+
 ### nlp — perf: batched prefill for the MoE and Gemma families (T786, 2026-07-17)
 
 Extends the T785 batched prefill to five dedicated-type architectures: Mixtral (serving Qwen3-MoE

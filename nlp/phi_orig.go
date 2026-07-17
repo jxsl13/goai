@@ -155,16 +155,33 @@ func (m *Phi) embed(ctx *backend.Context, tokens []int) (*tensor.Tensor, error) 
 // hidden runs the single-norm parallel-residual block stack and the final LayerNorm on an
 // embedding x [seq, dim], returning the pre-logits hidden states [seq, dim].
 func (m *Phi) hidden(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, error) {
+	return m.hiddenCapture(ctx, x, nil)
+}
+
+// hiddenCapture is hidden with an optional per-layer KV tap. When capture is
+// non-nil it is invoked once per block with the layer index and that block's
+// post-bias, post-partial-RoPE k and post-bias v [seq, kvWidth] — exactly the
+// rows a KV-cache decode appends per token ([Phi.DecodeStep]), which is what
+// lets [Phi.Prefill] seed a cache from ONE batched pass over the prompt. The
+// tensors handed to capture are the same ones the ongoing forward consumes
+// (callers must not mutate them; the cache copies rows into its own buffers).
+// A nil capture is the plain forward: no extra ops are recorded, so the
+// semantics of hidden are byte-identical to before this hook existed.
+func (m *Phi) hiddenCapture(ctx *backend.Context, x *tensor.Tensor, capture func(layer int, k, v *tensor.Tensor)) (*tensor.Tensor, error) {
 	cfg := m.Config
 	attn := backend.AttnAttrs{Heads: cfg.Heads, KVHeads: cfg.kvHeads(), Causal: true}
-	for _, b := range m.Blocks {
+	for l, b := range m.Blocks {
 		// Parallel residual: ONE input_layernorm feeds both sublayers; their outputs are summed
 		// onto the raw residual. xn = input_layernorm(x); x = attention(xn) + mlp(xn) + x.
 		xn, err := b.InputNorm.Forward(ctx, x)
 		if err != nil {
 			return nil, err
 		}
-		a, err := m.attention(ctx, b, xn, attn, 0)
+		var tap func(k, v *tensor.Tensor)
+		if capture != nil {
+			tap = func(k, v *tensor.Tensor) { capture(l, k, v) }
+		}
+		a, err := m.attention(ctx, b, xn, attn, 0, tap)
 		if err != nil {
 			return nil, err
 		}
@@ -185,8 +202,10 @@ func (m *Phi) hidden(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, er
 // attention computes Phi's multi-head attention over the normalized input xn [seq, dim]:
 // project the biased q/k/v, apply the PARTIAL split-half RoPE at position offset pos, then
 // standard causal MHA and the biased output dense. Mirrors PhiAttention.forward for the
-// default config (no QK-norm).
-func (m *Phi) attention(ctx *backend.Context, b *PhiBlock, xn *tensor.Tensor, attn backend.AttnAttrs, pos int) (*tensor.Tensor, error) {
+// default config (no QK-norm). A non-nil capture receives the post-partial-RoPE k and
+// post-bias v right before OpMHA (the Prefill KV tap, see [Phi.hiddenCapture]); nil is the
+// plain forward.
+func (m *Phi) attention(ctx *backend.Context, b *PhiBlock, xn *tensor.Tensor, attn backend.AttnAttrs, pos int, capture func(k, v *tensor.Tensor)) (*tensor.Tensor, error) {
 	cfg := m.Config
 	kv := cfg.kvHeads()
 	rot := cfg.rotaryDim()
@@ -208,6 +227,9 @@ func (m *Phi) attention(ctx *backend.Context, b *PhiBlock, xn *tensor.Tensor, at
 	}
 	if k, err = partialRoPE(ctx, k, kv, rot, rope); err != nil {
 		return nil, err
+	}
+	if capture != nil {
+		capture(k, v)
 	}
 	a, err := exec1(ctx, backend.OpMHA, attn, q, k, v)
 	if err != nil {

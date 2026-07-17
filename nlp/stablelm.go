@@ -133,17 +133,34 @@ func (m *StableLM) embed(ctx *backend.Context, tokens []int) (*tensor.Tensor, er
 // hidden runs the sequential-residual block stack and the final LayerNorm on an embedding x
 // [seq, dim], returning the pre-logits hidden states [seq, dim].
 func (m *StableLM) hidden(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, error) {
+	return m.hiddenCapture(ctx, x, nil)
+}
+
+// hiddenCapture is hidden with an optional per-layer KV tap. When capture is
+// non-nil it is invoked once per block with the layer index and that block's
+// post-partial-RoPE k and raw post-projection v [seq, kvWidth] — exactly the
+// rows a KV-cache decode appends per token ([StableLM.DecodeStep]), which is
+// what lets [StableLM.Prefill] seed a cache from ONE batched pass over the
+// prompt. The tensors handed to capture are the same ones the ongoing forward
+// consumes (callers must not mutate them; the cache copies rows into its own
+// buffers). A nil capture is the plain forward: no extra ops are recorded, so
+// the semantics of hidden are byte-identical to before this hook existed.
+func (m *StableLM) hiddenCapture(ctx *backend.Context, x *tensor.Tensor, capture func(layer int, k, v *tensor.Tensor)) (*tensor.Tensor, error) {
 	cfg := m.Config
 	kv := cfg.kvHeads()
 	attn := backend.AttnAttrs{Heads: cfg.Heads, KVHeads: kv, Causal: true}
-	for _, b := range m.Blocks {
+	for l, b := range m.Blocks {
 		// Sequential residual (Llama-style): input_layernorm → attention → add; then
 		// post_attention_layernorm → FFN → add.
 		xn, err := b.InputNorm.Forward(ctx, x)
 		if err != nil {
 			return nil, err
 		}
-		a, err := m.attention(ctx, b, xn, attn)
+		var tap func(k, v *tensor.Tensor)
+		if capture != nil {
+			tap = func(k, v *tensor.Tensor) { capture(l, k, v) }
+		}
+		a, err := m.attention(ctx, b, xn, attn, tap)
 		if err != nil {
 			return nil, err
 		}
@@ -168,8 +185,10 @@ func (m *StableLM) hidden(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tenso
 // attention computes StableLM's multi-head attention over the normalized input xn [seq,
 // dim]: project q/k/v, apply PARTIAL split-half RoPE (only the first rotaryDim channels of
 // each head rotate), then standard causal GQA via OpMHA and the o_proj. Mirrors
-// StableLmAttention.forward for the default config (no qkv bias, no QK-norm).
-func (m *StableLM) attention(ctx *backend.Context, b *StableLMBlock, xn *tensor.Tensor, attn backend.AttnAttrs) (*tensor.Tensor, error) {
+// StableLmAttention.forward for the default config (no qkv bias, no QK-norm). A non-nil
+// capture receives the post-partial-RoPE k and raw v right before OpMHA (the Prefill KV
+// tap, see [StableLM.hiddenCapture]); nil is the plain forward.
+func (m *StableLM) attention(ctx *backend.Context, b *StableLMBlock, xn *tensor.Tensor, attn backend.AttnAttrs, capture func(k, v *tensor.Tensor)) (*tensor.Tensor, error) {
 	cfg := m.Config
 	kv := cfg.kvHeads()
 	rot := cfg.rotaryDim()
@@ -190,6 +209,9 @@ func (m *StableLM) attention(ctx *backend.Context, b *StableLMBlock, xn *tensor.
 	}
 	if k, err = partialRoPE(ctx, k, kv, rot, backend.RoPEAttrs{Base: cfg.RopeBase}); err != nil {
 		return nil, err
+	}
+	if capture != nil {
+		capture(k, v)
 	}
 	a, err := exec1(ctx, backend.OpMHA, attn, q, k, v)
 	if err != nil {
