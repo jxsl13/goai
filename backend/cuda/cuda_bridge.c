@@ -33,7 +33,7 @@ static cublasHandle_t gHandle = NULL;
 static float *gOne = NULL, *gZero = NULL; // device 1.0f/0.0f — cuBLAS DEVICE pointer mode (graph-capture-safe alpha/beta)
 static cudaStream_t gStream = NULL;
 static CUcontext gCtx = NULL; // runtime's primary context, retained for driver-API launches
-static CUfunction gGelu = NULL, gRelu2 = NULL, gMoeGate = NULL, gRowAxpy = NULL, gSilu = NULL, gSigmoid = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gRopePartial = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gAttnSoftmaxCap = NULL, gAttnSoftmaxAlibi = NULL, gQgemv = NULL, gQgemv4 = NULL, gQgemv4k = NULL, gQgemv4kPre = NULL, gQgemv5k = NULL, gQgemv6k = NULL, gQgemv3k = NULL, gQgemv2k = NULL, gQgemv40 = NULL, gQgemvI4nl = NULL, gQgemvI4xs = NULL, gQgemvMxfp4 = NULL, gQgemvI2xxs = NULL, gQgemvI2xs = NULL, gQgemvI3xxs = NULL, gQgemvI3s = NULL, gQgemvI1s = NULL, gQgemvI1m = NULL, gI8Mma = NULL, gI8MmaT = NULL, gI8MmaRb = NULL, gI8MmaDb = NULL, gI8MmaWt = NULL, gI8MmaWp = NULL, gI8Mmq = NULL, gI8MmqR = NULL, gQrowsI8 = NULL, gLdmProbe = NULL, gLdmProbe2 = NULL, gI8MmaLm = NULL, gCvtF16 = NULL, gCvtFrom16 = NULL; // lazily nvrtc-compiled
+static CUfunction gGelu = NULL, gRelu2 = NULL, gMoeGate = NULL, gRowAxpy = NULL, gSsmStep = NULL, gConv1dStep = NULL, gSilu = NULL, gSigmoid = NULL, gSoftplus = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gRopePartial = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gAttnSoftmaxCap = NULL, gAttnSoftmaxAlibi = NULL, gQgemv = NULL, gQgemv4 = NULL, gQgemv4k = NULL, gQgemv4kPre = NULL, gQgemv5k = NULL, gQgemv6k = NULL, gQgemv3k = NULL, gQgemv2k = NULL, gQgemv40 = NULL, gQgemvI4nl = NULL, gQgemvI4xs = NULL, gQgemvMxfp4 = NULL, gQgemvI2xxs = NULL, gQgemvI2xs = NULL, gQgemvI3xxs = NULL, gQgemvI3s = NULL, gQgemvI1s = NULL, gQgemvI1m = NULL, gI8Mma = NULL, gI8MmaT = NULL, gI8MmaRb = NULL, gI8MmaDb = NULL, gI8MmaWt = NULL, gI8MmaWp = NULL, gI8Mmq = NULL, gI8MmqR = NULL, gQrowsI8 = NULL, gLdmProbe = NULL, gLdmProbe2 = NULL, gI8MmaLm = NULL, gCvtF16 = NULL, gCvtFrom16 = NULL; // lazily nvrtc-compiled
 static CUfunction gRopeDpos = NULL, gRopePartialDpos = NULL, gAttnSoftmaxDpos = NULL, gAppendDpos = NULL; // device-position (graph-capturable) twins
 static CUfunction gGqaFlashPart = NULL, gGqaFlashMerge = NULL; // flash decode: GQA K/V-shared split-K partials + merge
 static CUfunction gGqaFlashPartF16 = NULL, gAppendDposF16 = NULL; // f16 KV-cache twins (u16 storage, f32 compute)
@@ -282,6 +282,70 @@ done:
     return rc;
 }
 
+// cu_ssm_step: one timestep of the Mamba selective-scan (S6) recurrence for DECODE — advances the
+// per-channel state h[D,N] and emits y[D], matching backend/ref selectiveScanKernel one step at a
+// time (zero-order-hold Ā=exp(Δ·A), simplified B̄=Δ·B; f64 accumulation):
+//   h[d,n] = exp(Δ[d]·A[d,n])·h[d,n] + Δ[d]·B[n]·u[d];  y[d] = Σ_n C[d? or shared]·h[d,n] + Dskip[d]·u[d]
+// B,C are [N] (shared across the D channels) for this token; h is updated in place. One thread per d.
+int cu_ssm_step(const void* u, const void* delta, const void* A, const void* B, const void* C,
+                const void* dskip, void* h, void* y, int D, int N) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (!gSsmStep && compile_kernel(
+                      "extern \"C\" __global__ void ssm_step(const float* u, const float* delta, const float* A, const float* B, const float* C, const float* dskip, float* h, float* y, int D, int N){\n"
+                      "  int d = blockIdx.x*blockDim.x + threadIdx.x; if(d>=D) return;\n"
+                      "  double dl=(double)delta[d], ud=(double)u[d], acc=0.0;\n"
+                      "  const float* ad = A + (size_t)d*N; float* hd = h + (size_t)d*N;\n"
+                      "  for(int n=0;n<N;n++){\n"
+                      "    double dA = exp(dl*(double)ad[n]);\n"
+                      "    double hv = dA*(double)hd[n] + dl*(double)B[n]*ud;\n"
+                      "    hd[n] = (float)hv; acc += (double)C[n]*hv;\n"
+                      "  }\n"
+                      "  y[d] = (float)(acc + (double)dskip[d]*ud);\n"
+                      "}\n",
+                      "ssm_step.cu", "ssm_step", &gSsmStep) != 0) { rc = -2; goto done; }
+    {
+        int threads = 256, blocks = (D + threads - 1) / threads; if (blocks < 1) blocks = 1;
+        void* args[10]; args[0]=&u; args[1]=&delta; args[2]=&A; args[3]=&B; args[4]=&C; args[5]=&dskip; args[6]=&h; args[7]=&y; args[8]=&D; args[9]=&N;
+        rc = (cuLaunchKernel(gSsmStep, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_conv1d_step: one decode step of Mamba's causal depthwise conv (backend/ref conv1dKernel:
+// out[t,c] = Σ_k w[c,k]·x[t−(K−1)+k,c] + b[c]). state[D,K-1] holds this channel's last K−1 inputs
+// (oldest first). out[c] = Σ_{k<K-1} w[c,k]·state[c,k] + w[c,K-1]·x[c] + b[c]; then state shifts left
+// and appends x (state[c,K-2]=x[c]). state starts zeroed (the causal left-pad). One thread per channel.
+int cu_conv1d_step(const void* x, const void* w, const void* b, void* state, void* out, int D, int K) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (!gConv1dStep && compile_kernel(
+                      "extern \"C\" __global__ void conv1d_step(const float* x, const float* w, const float* b, float* state, float* out, int D, int K){\n"
+                      "  int c = blockIdx.x*blockDim.x + threadIdx.x; if(c>=D) return;\n"
+                      "  int S = K-1; const float* wc = w + (size_t)c*K; float* sc = state + (size_t)c*S;\n"
+                      "  double acc = (double)b[c] + (double)wc[K-1]*(double)x[c];\n"
+                      "  for(int k=0;k<S;k++) acc += (double)wc[k]*(double)sc[k];\n"
+                      "  out[c] = (float)acc;\n"
+                      "  for(int k=0;k<S-1;k++) sc[k]=sc[k+1];\n"  // shift the window left...
+                      "  if(S>0) sc[S-1]=x[c];\n"                  // ...and append the new input
+                      "}\n",
+                      "conv1d_step.cu", "conv1d_step", &gConv1dStep) != 0) { rc = -2; goto done; }
+    {
+        int threads = 256, blocks = (D + threads - 1) / threads; if (blocks < 1) blocks = 1;
+        void* args[7]; args[0]=&x; args[1]=&w; args[2]=&b; args[3]=&state; args[4]=&out; args[5]=&D; args[6]=&K;
+        rc = (cuLaunchKernel(gConv1dStep, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
 int cu_gelu_f32(void* d, int n) {
     int rc = -1;
     pthread_mutex_lock(&gLock);
@@ -313,6 +377,24 @@ int cu_relu2_f32(void* d, int n) {
                       "}\n",
                       "relu2.cu", "relu2_f32", &gRelu2) != 0) { rc = -2; goto done; }
     rc = launch_unary(gRelu2, d, n);
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+int cu_softplus_f32(void* d, int n) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    // softplus log(1+e^x), stable as max(x,0)+log(1+e^-|x|) (matches backend/ref); Mamba's Δ>0.
+    if (!gSoftplus && compile_kernel(
+                      "extern \"C\" __global__ void softplus_f32(float* x, int n){\n"
+                      "  int i = blockIdx.x*blockDim.x + threadIdx.x;\n"
+                      "  if (i < n){ float v = x[i]; x[i] = fmaxf(v,0.0f) + log1pf(expf(-fabsf(v))); }\n"
+                      "}\n",
+                      "softplus.cu", "softplus_f32", &gSoftplus) != 0) { rc = -2; goto done; }
+    rc = launch_unary(gSoftplus, d, n);
 done:
     pthread_mutex_unlock(&gLock);
     return rc;

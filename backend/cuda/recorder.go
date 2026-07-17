@@ -40,13 +40,14 @@ func NewRecorder() (*Recorder, error) {
 // llamagpu unary/binary op selectors (must match llamagpu/decoder.go's constants,
 // which in turn match the metal/vulkan kernel switch tables).
 const (
-	recUnarySiLU    = 6
-	recUnaryGELU    = 9
-	recUnaryReLU2   = 10 // squared ReLU (Nemotron); cuda-only
-	recUnarySigmoid = 11 // plain sigmoid (Qwen2-MoE shared-expert gate); cuda-only
-	recBinaryAdd    = 0
-	recBinaryMul    = 2
-	recBinarySwiGLU = 6
+	recUnarySiLU     = 6
+	recUnaryGELU     = 9
+	recUnaryReLU2    = 10 // squared ReLU (Nemotron); cuda-only
+	recUnarySigmoid  = 11 // plain sigmoid (Qwen2-MoE shared-expert gate); cuda-only
+	recUnarySoftplus = 12 // softplus (Mamba Δ); cuda-only
+	recBinaryAdd     = 0
+	recBinaryMul     = 2
+	recBinarySwiGLU  = 6
 )
 
 func (rec *Recorder) RMSNorm(x, g, o *DeviceF32, rows, dim int, eps float32) error {
@@ -240,6 +241,33 @@ func (rec *Recorder) MoEGate(logits, weights *DeviceF32, rows, e, k, raw int, sc
 	return nil
 }
 
+// Conv1DStep advances one decode step of Mamba's causal depthwise conv: reads this channel's state
+// (its last K-1 inputs) plus the new x, writes out[D], and shifts the new input into the state. x/b/
+// out are [D], w is [D,K], state is [D,K-1] (starts zeroed for the causal left-pad).
+func (rec *Recorder) Conv1DStep(x, w, b, state, out *DeviceF32, d, k int) error {
+	if x.ptr == nil || w.ptr == nil || b.ptr == nil || state.ptr == nil || out.ptr == nil {
+		return fmt.Errorf("cuda: rec Conv1DStep on a freed handle")
+	}
+	if rc := C.cu_conv1d_step(x.ptr, w.ptr, b.ptr, state.ptr, out.ptr, C.int(d), C.int(k)); rc != 0 {
+		return fmt.Errorf("cuda: rec Conv1DStep failed (code %d)", int(rc))
+	}
+	return nil
+}
+
+// SSMStep advances one timestep of the Mamba selective-scan recurrence for decode: updates the
+// per-channel state h[D,N] in place and writes y[D]. u/delta/dskip/y are [D]; A is [D,N]; B/C are
+// [N] (this token's input-dependent matrices, shared across channels). The state persists across
+// calls (the caller keeps h between steps).
+func (rec *Recorder) SSMStep(u, delta, a, b, c, dskip, h, y *DeviceF32, d, n int) error {
+	if u.ptr == nil || delta.ptr == nil || a.ptr == nil || b.ptr == nil || c.ptr == nil || dskip.ptr == nil || h.ptr == nil || y.ptr == nil {
+		return fmt.Errorf("cuda: rec SSMStep on a freed handle")
+	}
+	if rc := C.cu_ssm_step(u.ptr, delta.ptr, a.ptr, b.ptr, c.ptr, dskip.ptr, h.ptr, y.ptr, C.int(d), C.int(n)); rc != 0 {
+		return fmt.Errorf("cuda: rec SSMStep failed (code %d)", int(rc))
+	}
+	return nil
+}
+
 // RowAxpy accumulates dst += diag(arow)·src: dst[r,:] += arow[r]·src[r,:], the MoE combine that
 // scales an expert's [rows,cols] output by each token's routing weight (arow is a [rows] vector).
 func (rec *Recorder) RowAxpy(dst, src, arow *DeviceF32, rows, cols int) error {
@@ -358,6 +386,8 @@ func (rec *Recorder) Unary(x, o *DeviceF32, op int) error {
 		rc = C.cu_relu2_f32(o.ptr, C.int(n))
 	case recUnarySigmoid:
 		rc = C.cu_sigmoid_f32(o.ptr, C.int(n))
+	case recUnarySoftplus:
+		rc = C.cu_softplus_f32(o.ptr, C.int(n))
 	default:
 		return fmt.Errorf("cuda: rec Unary op %d unsupported", op)
 	}

@@ -54,13 +54,14 @@ import (
 // unarySiLU/binaryAdd/binaryMul are the shared kernel selectors (identical on both backends —
 // they must match shaders/unary.comp / metal_bridge.m's unary switch and the binary op tables).
 const (
-	unarySiLU    = 6
-	unaryGELU    = 9
-	unaryReLU2   = 10 // squared ReLU (Nemotron); cuda-only
-	unarySigmoid = 11 // plain sigmoid (Qwen2-MoE shared-expert gate); cuda-only
-	binaryAdd    = 0
-	binaryMul    = 2
-	binarySwiGLU = 6 // fused silu(a)·b — one dispatch instead of SiLU+Mul (§T613)
+	unarySiLU     = 6
+	unaryGELU     = 9
+	unaryReLU2    = 10 // squared ReLU (Nemotron); cuda-only
+	unarySigmoid  = 11 // plain sigmoid (Qwen2-MoE shared-expert gate); cuda-only
+	unarySoftplus = 12 // softplus (Mamba Δ); cuda-only
+	binaryAdd     = 0
+	binaryMul     = 2
+	binarySwiGLU  = 6 // fused silu(a)·b — one dispatch instead of SiLU+Mul (§T613)
 )
 
 // buffer is a device-resident f32 buffer (metal.DeviceBuffer / vulkan.DeviceBuffer).
@@ -155,6 +156,12 @@ type recorder interface {
 	// MHARect is multi-head attention with a rectangular head shape: query/key share head width dqk,
 	// value has a different head width dv (o is heads·dv wide). The DeepSeek-V2 MLA shape. cuda-only.
 	MHARect(q, k, v, o buffer, sq, sk, heads, kvHeads, dqk, dv, causal, window int, scale float32) error
+	// SSMStep advances ONE Mamba selective-scan timestep (decode): given u/Δ/A/B/C[d,·] and the skip
+	// D[d], it updates the [d,n] recurrent state h IN PLACE and writes y[d]. Conv1DStep advances one
+	// causal depthwise-conv step: out[c]=Σ_k w[c,k]·window[c,k]+b[c], then shifts the [d,k-1] state and
+	// appends x. Both carry per-block state across calls (no KV cache) — the GPU Mamba block. cuda-only.
+	SSMStep(u, delta, a, b, c, dskip, h, y buffer, d, n int) error
+	Conv1DStep(x, w, b, state, out buffer, d, k int) error
 	Unary(x, o buffer, op int) error
 	Binary(a, b, o buffer, op int) error
 	QMatMulResident(x buffer, w qweight, o buffer, m int) error
@@ -191,15 +198,18 @@ type block struct {
 	bAttn, bFFN         buffer // LayerNorm betas (nil ⇒ RMSNorm, the Llama default)
 	// projection biases (nil ⇒ no bias): the fused-QKV bias [D+2·kvDim], the o-proj bias [D],
 	// and the GELU-MLP fc [hidden] / proj [D] biases — GPT-NeoX/Phi/StarCoder2 carry them.
-	qkvBias, oBias, fcBias, projBias buffer
-	qN, kN                           buffer   // per-head query/key RMSNorm gains [dk] (Qwen3); nil ⇒ no QK-norm
-	gAttn2, gFFN2                    buffer   // sandwich-norm OUTPUT gains (Gemma2 post_attention/post_feedforward); nil otherwise
-	moeRouter                        linear   // sparse-MoE gate: dim → nExperts logits (Mixtral); nil unless d.moe
-	moeExperts                       []moeFFN // the per-expert SwiGLU FFNs (Mixtral); len == d.nExperts
-	moeShared                        moeFFN   // Qwen2-MoE shared expert (SwiGLU on every token); zero-value when absent
-	moeSharedGate                    linear   // Qwen2-MoE shared-expert gate: dim → 1 logit, sigmoid-scaled; nil when absent
-	wqA, wqB, wkvA, wkvB             linear   // DeepSeek-V2 MLA low-rank projections (q_a/q_b/kv_a/kv_b); nil unless d.mla
-	gQA, gKvA                        buffer   // MLA latent RMSNorm gains (q_a_layernorm / kv_a_layernorm)
+	qkvBias, oBias, fcBias, projBias                      buffer
+	qN, kN                                                buffer   // per-head query/key RMSNorm gains [dk] (Qwen3); nil ⇒ no QK-norm
+	gAttn2, gFFN2                                         buffer   // sandwich-norm OUTPUT gains (Gemma2 post_attention/post_feedforward); nil otherwise
+	moeRouter                                             linear   // sparse-MoE gate: dim → nExperts logits (Mixtral); nil unless d.moe
+	moeExperts                                            []moeFFN // the per-expert SwiGLU FFNs (Mixtral); len == d.nExperts
+	moeShared                                             moeFFN   // Qwen2-MoE shared expert (SwiGLU on every token); zero-value when absent
+	moeSharedGate                                         linear   // Qwen2-MoE shared-expert gate: dim → 1 logit, sigmoid-scaled; nil when absent
+	wqA, wqB, wkvA, wkvB                                  linear   // DeepSeek-V2 MLA low-rank projections (q_a/q_b/kv_a/kv_b); nil unless d.mla
+	gQA, gKvA                                             buffer   // MLA latent RMSNorm gains (q_a_layernorm / kv_a_layernorm)
+	mInX, mInZ, mDtLow, mDtProj, mBProj, mCProj, mOutProj linear   // Mamba block projections; nil unless d.mamba
+	mConvW, mConvB, mA, mDskip, mDtBias                   buffer   // Mamba conv filters+bias, A=−exp(A_log) [dInner,N], D skip [dInner], Δ bias [dInner]
+	mConvState, mSsmState                                 buffer   // per-block Mamba decode state: conv window [dInner,dConv-1], ssm state [dInner,N]
 }
 
 // Decoder holds a Llama's weights + KV cache as device-resident buffers and runs one batched decode
@@ -227,6 +237,8 @@ type Decoder struct {
 	moeRaw                                        bool    // true ⇒ DeepSeek-V2 raw-softmax·routedScale gating (no top-k renormalization); false ⇒ Mixtral renorm
 	routedScale                                   float32 // DeepSeek-V2 routed-expert weight multiplier (routed_scaling_factor); 1 otherwise
 	mla                                           bool    // true ⇒ DeepSeek-V2 Multi-head Latent Attention (rectangular, low-rank latent KV, decoupled RoPE)
+	mamba                                         bool    // true ⇒ Mamba selective-state-space blocks (no attention, no KV cache; linear-time recurrent decode)
+	dInner, mambaN, dConv, dtRank                 int     // Mamba block dims: inner width (e·d), SSM state size, conv kernel, Δ low-rank
 	qkNope, qkRope, vHead, qkHead                 int     // MLA per-head dims: nope/rope query-key parts, value width, qkHead=qkNope+qkRope
 	qLoRA, kvLoRA                                 int     // MLA query/kv latent compression ranks (q_lora_rank / kv_lora_rank)
 	mlaScale, mlaPosDiv                           float32 // MLA pre-softmax scale (1/√qkHead default) and the QKRope rope posDiv
@@ -239,6 +251,7 @@ type Decoder struct {
 	dx, xn, xn2, q, k, v_, attn, ao, gate, up, mo, logits   *bufSlot
 	moeGate, moeW, moeCol                                   *bufSlot       // sparse-MoE scratch: router logits [·,E], routing weights [·,E], one weight column [·]
 	mlaCQ, mlaQ, mlaComp, mlaLatent, mlaKV, mlaAttn, mlaInv *bufSlot       // MLA scratch: compressed query, fused Q, kv_a out, normed kv latent, kv_b out, attn out, QKRope freqs
+	mbXin, mbZ, mbXc, mbDtLow, mbDelta, mbB, mbC, mbY       *bufSlot       // Mamba scratch (rows=1): in_x, gate branch, conv+SiLU out, Δ_low, Δ, B, C, scan out
 	qkv                                                     *bufSlot       // fused QKV output rows [·, d+2·kvDim] (§T613)
 	pending                                                 recorder       // pre-encoded next-step command buffer (§T614)
 	pendingPos                                              int            // position pending encodes; -1 = none
@@ -520,6 +533,78 @@ func (d *Decoder) recordMLAAttention(r recorder, b block, pos, rows int) error {
 		r.MHARect(d.mlaQ.b, b.kC, b.vC, d.mlaAttn.b, rows, pos+rows, H, H, qkH, vH, 1, 0, d.mlaScale),
 		b.wo.recordAdd(r, d.mlaAttn.b, d.mo.b, d.dx.b, rows), // dx += attn·Wo
 	)
+}
+
+// recordMambaBlock records ONE Mamba selective-state-space block for a single decode token
+// (rows==1), leaving dx += mixer(RMSNorm(dx)). It mirrors nn.MambaBlock.Forward exactly, but the
+// full-sequence OpConv1D/OpSSM are replaced by their per-timestep decode kernels (Conv1DStep,
+// SSMStep) that carry the block's conv-window and SSM state across Step calls — no attention, no KV
+// cache, O(1) work per token. The per-token recurrence is why Mamba records rows==1 only (StepN
+// loops it): each token's state update depends on the previous token's. Only DtProj and the conv
+// carry a bias (the HF checkpoint's other projections are bias-free); the Δ bias lands inside
+// softplus. A = −exp(A_log) is precomputed on the host (b.mA).
+func (d *Decoder) recordMambaBlock(r recorder, b block) error {
+	dI, N, K := d.dInner, d.mambaN, d.dConv
+	// pre-norm → xn = RMSNorm(dx); the up-projection splits into the x branch and the z gate.
+	e := d.norm(r, d.dx.b, b.gAttn, nil, d.xn.b, 1) // RMSNorm (lnBias false for Mamba)
+	e = firstErr(e,
+		b.mInX.record(r, d.xn.b, d.mbXin.b, 1), // xin = xn·InX  [dInner]
+		b.mInZ.record(r, d.xn.b, d.mbZ.b, 1),   // z   = xn·InZ  [dInner]
+		// local mixing: one causal depthwise-conv step (state carried), then SiLU.
+		r.Conv1DStep(d.mbXin.b, b.mConvW, b.mConvB, b.mConvState, d.mbXc.b, dI, K),
+		r.Unary(d.mbXc.b, d.mbXc.b, unarySiLU),
+		// input-dependent Δ = softplus(dt_proj(dt_low_proj(xc)) + dt_bias).
+		b.mDtLow.record(r, d.mbXc.b, d.mbDtLow.b, 1),     // Δ_low [dtRank]
+		b.mDtProj.record(r, d.mbDtLow.b, d.mbDelta.b, 1), // → [dInner]
+		r.AddBias(d.mbDelta.b, b.mDtBias, d.mbDelta.b, 1, dI),
+		r.Unary(d.mbDelta.b, d.mbDelta.b, unarySoftplus),
+		// input-dependent SSM params B, C.
+		b.mBProj.record(r, d.mbXc.b, d.mbB.b, 1), // B [N]
+		b.mCProj.record(r, d.mbXc.b, d.mbC.b, 1), // C [N]
+		// selective scan: one recurrent timestep (state carried), y[dInner].
+		r.SSMStep(d.mbXc.b, d.mbDelta.b, b.mA, d.mbB.b, d.mbC.b, b.mDskip, b.mSsmState, d.mbY.b, dI, N),
+		// gate y ⊙ SiLU(z), then down-project onto the residual: dx += y·OutProj.
+		r.Unary(d.mbZ.b, d.mbZ.b, unarySiLU),
+		r.Binary(d.mbY.b, d.mbZ.b, d.mbY.b, binaryMul),
+		b.mOutProj.recordAdd(r, d.mbY.b, d.mo.b, d.dx.b, 1),
+	)
+	return e
+}
+
+// resetMambaState zeroes every block's conv-window and SSM state — called at the start of a fresh
+// sequence (pos==0), since the recurrence carries state across Step calls with no KV cache to reset.
+func (d *Decoder) resetMambaState() error {
+	zc := make([]float32, d.dInner*(d.dConv-1))
+	zs := make([]float32, d.dInner*d.mambaN)
+	for _, b := range d.blocks {
+		if e := b.mConvState.UploadF32(zc); e != nil {
+			return e
+		}
+		if e := b.mSsmState.UploadF32(zs); e != nil {
+			return e
+		}
+	}
+	return nil
+}
+
+// allocMambaScratch allocates the rows==1 Mamba decode scratch. Mamba has no attention or KV cache,
+// so it skips the q/k/v/attn/qkv/gate/up buffers allocScratch would make; it keeps only the residual
+// (dx), the pre-norm output (xn), the down-projection scratch (mo), the logits, and the per-block
+// intermediates. Everything is one row wide — the sequential recurrence never batches.
+func (d *Decoder) allocMambaScratch(mk func(data []float32) *bufSlot) {
+	dI, N, dtR := d.dInner, d.mambaN, d.dtRank
+	d.dx = mk(make([]float32, d.d))
+	d.xn = mk(make([]float32, d.d))
+	d.mo = mk(make([]float32, d.d))
+	d.logits = mk(make([]float32, d.v))
+	d.mbXin = mk(make([]float32, dI))
+	d.mbZ = mk(make([]float32, dI))
+	d.mbXc = mk(make([]float32, dI))
+	d.mbDtLow = mk(make([]float32, dtR))
+	d.mbDelta = mk(make([]float32, dI))
+	d.mbB = mk(make([]float32, N))
+	d.mbC = mk(make([]float32, N))
+	d.mbY = mk(make([]float32, dI))
 }
 
 func (d *Decoder) recordFFN(r recorder, b block, in buffer, rows int) error {
@@ -1195,6 +1280,69 @@ func newDeepSeekV2Decoder(m *nlp.DeepSeekV2, ops backendOps) (*Decoder, error) {
 	d.gFinal = mk(flat1D(m.FinalNorm.Gamma))
 	d.out = lin(m.LmHead)
 	d.allocScratch(mk) // standard scratch (dx/xn/xn2/gate/up/mo/logits reused; Llama-shaped q/qkv unused)
+	if err != nil {
+		d.Release()
+		return nil, err
+	}
+	return d, nil
+}
+
+// newMambaDecoder builds a device Decoder for an nlp.Mamba — the FIRST non-transformer GPU decoder.
+// Each layer is a pre-RMSNorm + selective-state-space mixer (nn.MambaBlock): no attention, no KV
+// cache, no FFN. Decode is a linear-time recurrence, so the block records the per-timestep conv/SSM
+// decode kernels (Conv1DStep/SSMStep, cuda-only) carrying per-block state across Step calls. Only
+// DtProj and the conv carry a bias (the HF checkpoint is otherwise bias-free); A = −exp(A_log) is
+// precomputed on the host. The LM head is tied (logits = hidden · Embedᵀ). cuda-only.
+func newMambaDecoder(m *nlp.Mamba, ops backendOps) (*Decoder, error) {
+	cfg := m.Config
+	if len(m.Layers) == 0 {
+		return nil, fmt.Errorf("llamagpu(%s): Mamba has no layers", ops.name)
+	}
+	mix0 := m.Layers[0].Mixer
+	// Mamba has no attention: Heads=1 satisfies newDecoderCommon's geometry (all attention/KV scratch
+	// is skipped by allocMambaScratch). Hidden is unused (no FFN). Ctx is a pos bound only — the
+	// recurrence has no cache, so allocMambaScratch never scales with it; pick a generous limit.
+	lc := nlp.LlamaConfig{
+		Vocab: cfg.Vocab, Ctx: 1 << 20, Dim: cfg.DModel, Heads: 1, KVHeads: 1,
+		Layers: cfg.Layers, Hidden: 1, Eps: cfg.Eps,
+	}
+	d, derr := newDecoderCommon(lc, m.Embed, ops)
+	if derr != nil {
+		return nil, derr
+	}
+	d.mamba = true
+	d.dInner, d.mambaN, d.dConv, d.dtRank = mix0.DInner, mix0.N, mix0.DConv, mix0.DtRank
+
+	var err error
+	mk := d.mkBuf(&err)
+	lin := func(w *tensor.Tensor) linear {
+		in, out := w.Shape()[0], w.Shape()[1]
+		return f32Linear{w: mk(flat2D(w)).b, k: in, n: out}
+	}
+	for _, ly := range m.Layers {
+		mx := ly.Mixer
+		// A = −exp(A_log), precomputed on the host (ALog is [dInner, N], row-major — the SSMStep layout).
+		alog := flat2D(mx.ALog)
+		A := make([]float32, len(alog))
+		for i, v := range alog {
+			A[i] = float32(-math.Exp(float64(v)))
+		}
+		gb := block{
+			gAttn: mk(flat1D(ly.Norm.Gamma)).b, // pre-mixer RMSNorm γ (stored in gAttn; recordMambaBlock norms dx→xn)
+			mInX:  lin(mx.InX.W), mInZ: lin(mx.InZ.W),
+			mDtLow: lin(mx.DtLow.W), mDtProj: lin(mx.DtProj.W),
+			mBProj: lin(mx.BProj.W), mCProj: lin(mx.CProj.W),
+			mOutProj: lin(mx.OutProj.W),
+			mConvW:   mk(flat2D(mx.ConvW)).b, mConvB: mk(flat1D(mx.ConvB)).b,
+			mA: mk(A).b, mDskip: mk(flat1D(mx.Dskip)).b, mDtBias: mk(flat1D(mx.DtProj.B)).b,
+			mConvState: mk(make([]float32, d.dInner*(d.dConv-1))).b,
+			mSsmState:  mk(make([]float32, d.dInner*d.mambaN)).b,
+		}
+		d.blocks = append(d.blocks, gb)
+	}
+	d.gFinal = mk(flat1D(m.Norm.Gamma))
+	d.out = lin(m.Head) // tied head [d_model, vocab]: logits = hidden · Embedᵀ
+	d.allocMambaScratch(mk)
 	if err != nil {
 		d.Release()
 		return nil, err
@@ -2199,6 +2347,13 @@ func (d *Decoder) encodeStep(pos int) (recorder, error) {
 	}
 	D, H, KVH, dk, kvDim := d.qDim, d.h, d.kvH, d.dk, d.kvDim // D = attention Q/O width (h·dk); = d.d unless head_dim decoupled
 	for _, b := range d.blocks {
+		if d.mamba { // Mamba selective-scan block: no attention/FFN split — the mixer is the whole layer
+			if e := d.recordMambaBlock(r, b); e != nil {
+				r.Free()
+				return nil, e
+			}
+			continue
+		}
 		if d.mla { // DeepSeek-V2 Multi-head Latent Attention (rectangular, low-rank latent KV)
 			if e := firstErr(d.recordMLAAttention(r, b, pos, 1), d.recordFFNSublayer(r, b, 1)); e != nil {
 				r.Free()
@@ -2274,6 +2429,13 @@ func (d *Decoder) Step(token, pos int) ([]float32, error) {
 	if token < 0 || token >= d.v {
 		return nil, fmt.Errorf("llamagpu(%s): token %d out of vocab %d", d.ops.name, token, d.v)
 	}
+	// Mamba carries per-block conv/SSM state across Step calls with no KV cache; a fresh sequence
+	// (pos==0) must start from zeroed state.
+	if d.mamba && pos == 0 {
+		if err := d.resetMambaState(); err != nil {
+			return nil, err
+		}
+	}
 	// the token's embedding must be resident BEFORE commit — the recorded chain reads d.dx.
 	if err := d.dx.b.UploadF32(d.gatherEmbed(token)); err != nil {
 		return nil, err
@@ -2294,8 +2456,10 @@ func (d *Decoder) Step(token, pos int) ([]float32, error) {
 	}
 	// encode-overlap (§T614): pre-encode pos+1 while the GPU executes pos. Failure is not
 	// fatal — the next Step simply encodes fresh. Gated on asyncEncode: the vulkan bridge's
-	// single global recording context cannot hold a second open recorder.
-	if d.ops.asyncEncode && pos+1 < d.maxLen {
+	// single global recording context cannot hold a second open recorder. Disabled for Mamba:
+	// its blocks mutate resident conv/SSM state, so a pre-encoded pos+1 must not be recorded
+	// until pos's state writes are committed.
+	if d.ops.asyncEncode && !d.mamba && pos+1 < d.maxLen {
 		if nr, err := d.encodeStep(pos + 1); err == nil {
 			d.pending, d.pendingPos = nr, pos+1
 		}
@@ -2325,6 +2489,20 @@ func (d *Decoder) StepN(tokens []int, pos int) ([]float32, error) {
 	}
 	if pos < 0 || pos+k > d.maxLen {
 		return nil, fmt.Errorf("llamagpu(%s): StepN [%d,%d) out of [0,%d)", d.ops.name, pos, pos+k, d.maxLen)
+	}
+	if d.mamba {
+		// Mamba's recurrence is inherently sequential (each token's state update reads the previous
+		// token's), so there is no batched prefill — process the prompt token by token through Step,
+		// which carries the conv/SSM state and resets it at pos==0. Returns [k, vocab].
+		out := make([]float32, k*d.v)
+		for i, tok := range tokens {
+			row, err := d.Step(tok, pos+i)
+			if err != nil {
+				return nil, err
+			}
+			copy(out[i*d.v:(i+1)*d.v], row)
+		}
+		return out, nil
 	}
 	// a batched step rewrites the cache and scratch — any single-step encode pre-staged for
 	// the old position is now invalid (§T614).

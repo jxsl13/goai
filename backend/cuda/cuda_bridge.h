@@ -203,9 +203,12 @@ int cu_gqa_out(const void* dScores, const void* dV, void* dOut, int seqQ, int se
 int cu_gelu_f32(void* d, int n);
 int cu_moe_gate(const void* logits, void* weights, int rows, int E, int K, int raw, float scale); // top-k routing (raw=DeepSeek softmax·scale, else renorm)
 int cu_row_axpy(void* dst, const void* src, const void* arow, int rows, int cols); // per-row scalar AXPY (MoE combine)
+int cu_ssm_step(const void* u, const void* delta, const void* A, const void* B, const void* C, const void* dskip, void* h, void* y, int D, int N); // Mamba selective-scan decode step
+int cu_conv1d_step(const void* x, const void* w, const void* b, void* state, void* out, int D, int K); // Mamba causal depthwise conv decode step
 int cu_relu2_f32(void* d, int n); // squared ReLU (Nemotron relu2): relu(x)² in-place
 int cu_silu_f32(void* d, int n);
 int cu_sigmoid_f32(void* d, int n); // plain sigmoid (Qwen2-MoE shared-expert gate)
+int cu_softplus_f32(void* d, int n); // softplus (Mamba Δ)
 int cu_add_f32(void* dst, const void* src, int n);
 int cu_mul_f32(void* dst, const void* src, int n);
 // gate[i] = SiLU(gate[i])*up[i], fused (SwiGLU) in one pass.
