@@ -944,6 +944,61 @@ func (d *Decoder) mkBuf(err *error) func(data []float32) *bufSlot {
 	}
 }
 
+// mkLin is the shared quantize-aware projection builder for the per-arch constructors: resident Q8_0
+// when the backend set ops.quantizeF32 (a NewXQ8CUDA entry point), else the f32 weight — byte-identical
+// to the old inline `lin` closures when the hook is nil, so every existing f32 constructor is unchanged.
+// One helper lets an arch gain Q8 decode by adding a hook-setting constructor, no per-arch code change.
+func (d *Decoder) mkLin(mk func([]float32) *bufSlot, ops backendOps, errp *error) func(*tensor.Tensor) linear {
+	return func(w *tensor.Tensor) linear {
+		in, out := w.Shape()[0], w.Shape()[1]
+		if ops.quantizeF32 == nil {
+			return f32Linear{w: mk(flat2D(w)).b, k: in, n: out}
+		}
+		qw, qe := ops.quantizeF32(w)
+		if qe != nil {
+			if *errp == nil {
+				*errp = qe
+			}
+			return f32Linear{k: in, n: out}
+		}
+		d.qweights = append(d.qweights, qw)
+		return quantLinear{w: qw}
+	}
+}
+
+// mkFused is mkLin for the fused QKV weight (§T613): the three [in,out] projections concatenated per
+// input row into one [in, nq+nk+nv] matrix, then Q8_0-quantized whole (or f32). cu_qmatmul_q8 is a GEMM
+// (rows>1), so batched-prefill StepN works; qkv bias / QK-norm / RoPE stay f32 and apply after.
+func (d *Decoder) mkFused(mk func([]float32) *bufSlot, ops backendOps, errp *error) func(wq, wk, wv *tensor.Tensor) linear {
+	return func(wq, wk, wv *tensor.Tensor) linear {
+		in := wq.Shape()[0]
+		nq, nk, nv := wq.Shape()[1], wk.Shape()[1], wv.Shape()[1]
+		fq, fk, fv := flat2D(wq), flat2D(wk), flat2D(wv)
+		nt := nq + nk + nv
+		w := make([]float32, in*nt)
+		for i := range in {
+			row := w[i*nt : (i+1)*nt]
+			copy(row[:nq], fq[i*nq:(i+1)*nq])
+			copy(row[nq:nq+nk], fk[i*nk:(i+1)*nk])
+			copy(row[nq+nk:], fv[i*nv:(i+1)*nv])
+		}
+		if ops.quantizeF32 == nil {
+			return f32Linear{w: mk(w).b, k: in, n: nt}
+		}
+		t := tensor.New(tensor.F32, tensor.Shape{in, nt})
+		copy(t.Storage().F32(), w)
+		qw, qe := ops.quantizeF32(t)
+		if qe != nil {
+			if *errp == nil {
+				*errp = qe
+			}
+			return f32Linear{k: in, n: nt}
+		}
+		d.qweights = append(d.qweights, qw)
+		return quantLinear{w: qw}
+	}
+}
+
 // newDecoder uploads m's f32 weights via ops into device buffers and prepares a KV cache up to Ctx.
 func newDecoder(m *nlp.Llama, ops backendOps) (*Decoder, error) {
 	cfg := m.Config
@@ -1114,24 +1169,8 @@ func newStableLMDecoder(m *nlp.StableLM, ops backendOps) (*Decoder, error) {
 
 	var err error
 	mk := d.mkBuf(&err)
-	lin := func(w *tensor.Tensor) linear {
-		in, out := w.Shape()[0], w.Shape()[1]
-		return f32Linear{w: mk(flat2D(w)).b, k: in, n: out}
-	}
-	fused := func(wq, wk, wv *tensor.Tensor) linear {
-		in := wq.Shape()[0]
-		nq, nk, nv := wq.Shape()[1], wk.Shape()[1], wv.Shape()[1]
-		fq, fk, fv := flat2D(wq), flat2D(wk), flat2D(wv)
-		nt := nq + nk + nv
-		w := make([]float32, in*nt)
-		for i := range in {
-			row := w[i*nt : (i+1)*nt]
-			copy(row[:nq], fq[i*nq:(i+1)*nq])
-			copy(row[nq:nq+nk], fk[i*nk:(i+1)*nk])
-			copy(row[nq+nk:], fv[i*nv:(i+1)*nv])
-		}
-		return f32Linear{w: mk(w).b, k: in, n: nt}
-	}
+	lin := d.mkLin(mk, ops, &err)
+	fused := d.mkFused(mk, ops, &err)
 	for _, b := range m.Blocks {
 		gb := block{
 			wqkv: fused(b.Wq, b.Wk, b.Wv), wo: lin(b.Wo),
@@ -1182,24 +1221,8 @@ func newCohereDecoder(m *nlp.Cohere, ops backendOps) (*Decoder, error) {
 
 	var err error
 	mk := d.mkBuf(&err)
-	lin := func(w *tensor.Tensor) linear {
-		in, out := w.Shape()[0], w.Shape()[1]
-		return f32Linear{w: mk(flat2D(w)).b, k: in, n: out}
-	}
-	fused := func(wq, wk, wv *tensor.Tensor) linear {
-		in := wq.Shape()[0]
-		nq, nk, nv := wq.Shape()[1], wk.Shape()[1], wv.Shape()[1]
-		fq, fk, fv := flat2D(wq), flat2D(wk), flat2D(wv)
-		nt := nq + nk + nv
-		w := make([]float32, in*nt)
-		for i := range in {
-			row := w[i*nt : (i+1)*nt]
-			copy(row[:nq], fq[i*nq:(i+1)*nq])
-			copy(row[nq:nq+nk], fk[i*nk:(i+1)*nk])
-			copy(row[nq+nk:], fv[i*nv:(i+1)*nv])
-		}
-		return f32Linear{w: mk(w).b, k: in, n: nt}
-	}
+	lin := d.mkLin(mk, ops, &err)
+	fused := d.mkFused(mk, ops, &err)
 	logitScale := float32(1)
 	if cfg.LogitScale != 0 && cfg.LogitScale != 1 {
 		logitScale = float32(cfg.LogitScale)
@@ -1285,24 +1308,8 @@ func newNemotronDecoder(m *nlp.Nemotron, ops backendOps) (*Decoder, error) {
 
 	var err error
 	mk := d.mkBuf(&err)
-	lin := func(w *tensor.Tensor) linear {
-		in, out := w.Shape()[0], w.Shape()[1]
-		return f32Linear{w: mk(flat2D(w)).b, k: in, n: out}
-	}
-	fused := func(wq, wk, wv *tensor.Tensor) linear {
-		in := wq.Shape()[0]
-		nq, nk, nv := wq.Shape()[1], wk.Shape()[1], wv.Shape()[1]
-		fq, fk, fv := flat2D(wq), flat2D(wk), flat2D(wv)
-		nt := nq + nk + nv
-		w := make([]float32, in*nt)
-		for i := range in {
-			row := w[i*nt : (i+1)*nt]
-			copy(row[:nq], fq[i*nq:(i+1)*nq])
-			copy(row[nq:nq+nk], fk[i*nk:(i+1)*nk])
-			copy(row[nq+nk:], fv[i*nv:(i+1)*nv])
-		}
-		return f32Linear{w: mk(w).b, k: in, n: nt}
-	}
+	lin := d.mkLin(mk, ops, &err)
+	fused := d.mkFused(mk, ops, &err)
 	for _, b := range m.Blocks {
 		gb := block{
 			wqkv: fused(b.Wq, b.Wk, b.Wv), wo: lin(b.Wo),
@@ -1375,24 +1382,8 @@ func newGemmaDecoder(m *nlp.Gemma, ops backendOps) (*Decoder, error) {
 
 	var err error
 	mk := d.mkBuf(&err)
-	lin := func(w *tensor.Tensor) linear {
-		in, out := w.Shape()[0], w.Shape()[1]
-		return f32Linear{w: mk(flat2D(w)).b, k: in, n: out}
-	}
-	fused := func(wq, wk, wv *tensor.Tensor) linear {
-		in := wq.Shape()[0]
-		nq, nk, nv := wq.Shape()[1], wk.Shape()[1], wv.Shape()[1]
-		fq, fk, fv := flat2D(wq), flat2D(wk), flat2D(wv)
-		nt := nq + nk + nv
-		w := make([]float32, in*nt)
-		for i := range in {
-			row := w[i*nt : (i+1)*nt]
-			copy(row[:nq], fq[i*nq:(i+1)*nq])
-			copy(row[nq:nq+nk], fk[i*nk:(i+1)*nk])
-			copy(row[nq+nk:], fv[i*nv:(i+1)*nv])
-		}
-		return f32Linear{w: mk(w).b, k: in, n: nt}
-	}
+	lin := d.mkLin(mk, ops, &err)
+	fused := d.mkFused(mk, ops, &err)
 	for _, b := range m.Blocks {
 		gb := block{
 			wqkv: fused(b.Wq, b.Wk, b.Wv), wo: lin(b.Wo),
@@ -1488,10 +1479,7 @@ func newDeepSeekV2Decoder(m *nlp.DeepSeekV2, ops backendOps) (*Decoder, error) {
 
 	var err error
 	mk := d.mkBuf(&err)
-	lin := func(w *tensor.Tensor) linear {
-		in, out := w.Shape()[0], w.Shape()[1]
-		return f32Linear{w: mk(flat2D(w)).b, k: in, n: out}
-	}
+	lin := d.mkLin(mk, ops, &err)
 	// MLA scratch + the QKRope frequency table.
 	c := d.maxLen
 	mlaInv := make([]float32, cfg.QKRope/2)
@@ -1942,24 +1930,8 @@ func newFalconDecoder(m *nlp.Falcon, ops backendOps) (*Decoder, error) {
 
 	var err error
 	mk := d.mkBuf(&err)
-	lin := func(w *tensor.Tensor) linear {
-		in, out := w.Shape()[0], w.Shape()[1]
-		return f32Linear{w: mk(flat2D(w)).b, k: in, n: out}
-	}
-	fused := func(wq, wk, wv *tensor.Tensor) linear {
-		in := wq.Shape()[0]
-		nq, nk, nv := wq.Shape()[1], wk.Shape()[1], wv.Shape()[1]
-		fq, fk, fv := flat2D(wq), flat2D(wk), flat2D(wv)
-		nt := nq + nk + nv
-		w := make([]float32, in*nt)
-		for i := range in {
-			row := w[i*nt : (i+1)*nt]
-			copy(row[:nq], fq[i*nq:(i+1)*nq])
-			copy(row[nq:nq+nk], fk[i*nk:(i+1)*nk])
-			copy(row[nq+nk:], fv[i*nv:(i+1)*nv])
-		}
-		return f32Linear{w: mk(w).b, k: in, n: nt}
-	}
+	lin := d.mkLin(mk, ops, &err)
+	fused := d.mkFused(mk, ops, &err)
 	for _, b := range m.Blocks {
 		gb := block{
 			wqkv: fused(b.Wq, b.Wk, b.Wv), wo: lin(b.Wo),
@@ -2021,24 +1993,8 @@ func newOLMo2Decoder(m *nlp.OLMo2, ops backendOps) (*Decoder, error) {
 
 	var err error
 	mk := d.mkBuf(&err)
-	lin := func(w *tensor.Tensor) linear {
-		in, out := w.Shape()[0], w.Shape()[1]
-		return f32Linear{w: mk(flat2D(w)).b, k: in, n: out}
-	}
-	fused := func(wq, wk, wv *tensor.Tensor) linear {
-		in := wq.Shape()[0]
-		nq, nk, nv := wq.Shape()[1], wk.Shape()[1], wv.Shape()[1]
-		fq, fk, fv := flat2D(wq), flat2D(wk), flat2D(wv)
-		nt := nq + nk + nv
-		w := make([]float32, in*nt)
-		for i := range in {
-			row := w[i*nt : (i+1)*nt]
-			copy(row[:nq], fq[i*nq:(i+1)*nq])
-			copy(row[nq:nq+nk], fk[i*nk:(i+1)*nk])
-			copy(row[nq+nk:], fv[i*nv:(i+1)*nv])
-		}
-		return f32Linear{w: mk(w).b, k: in, n: nt}
-	}
+	lin := d.mkLin(mk, ops, &err)
+	fused := d.mkFused(mk, ops, &err)
 	for _, b := range m.Blocks {
 		gb := block{
 			wqkv: fused(b.Wq, b.Wk, b.Wv), wo: lin(b.Wo),
@@ -2117,24 +2073,8 @@ func newGemma2Decoder(m *nlp.Gemma2, ops backendOps) (*Decoder, error) {
 
 	var err error
 	mk := d.mkBuf(&err)
-	fused := func(wq, wk, wv *tensor.Tensor) linear {
-		in := wq.Shape()[0]
-		nq, nk, nv := wq.Shape()[1], wk.Shape()[1], wv.Shape()[1]
-		fq, fk, fv := flat2D(wq), flat2D(wk), flat2D(wv)
-		nt := nq + nk + nv
-		w := make([]float32, in*nt)
-		for i := range in {
-			row := w[i*nt : (i+1)*nt]
-			copy(row[:nq], fq[i*nq:(i+1)*nq])
-			copy(row[nq:nq+nk], fk[i*nk:(i+1)*nk])
-			copy(row[nq+nk:], fv[i*nv:(i+1)*nv])
-		}
-		return f32Linear{w: mk(w).b, k: in, n: nt}
-	}
-	lin := func(w *tensor.Tensor) linear {
-		in, out := w.Shape()[0], w.Shape()[1]
-		return f32Linear{w: mk(flat2D(w)).b, k: in, n: out}
-	}
+	fused := d.mkFused(mk, ops, &err)
+	lin := d.mkLin(mk, ops, &err)
 	for _, b := range m.Blocks {
 		gb := block{
 			wqkv: fused(b.Wq, b.Wk, b.Wv), wo: lin(b.Wo),
@@ -2191,24 +2131,8 @@ func newMPTDecoder(m *nlp.MPT, ops backendOps) (*Decoder, error) {
 	}
 	d.aliBiSlopes = mk(slopes).b
 
-	lin := func(w *tensor.Tensor) linear {
-		in, out := w.Shape()[0], w.Shape()[1]
-		return f32Linear{w: mk(flat2D(w)).b, k: in, n: out}
-	}
-	fused := func(wq, wk, wv *tensor.Tensor) linear {
-		in := wq.Shape()[0]
-		nq, nk, nv := wq.Shape()[1], wk.Shape()[1], wv.Shape()[1]
-		fq, fk, fv := flat2D(wq), flat2D(wk), flat2D(wv)
-		nt := nq + nk + nv
-		w := make([]float32, in*nt)
-		for i := range in {
-			row := w[i*nt : (i+1)*nt]
-			copy(row[:nq], fq[i*nq:(i+1)*nq])
-			copy(row[nq:nq+nk], fk[i*nk:(i+1)*nk])
-			copy(row[nq+nk:], fv[i*nv:(i+1)*nv])
-		}
-		return f32Linear{w: mk(w).b, k: in, n: nt}
-	}
+	lin := d.mkLin(mk, ops, &err)
+	fused := d.mkFused(mk, ops, &err)
 	for _, b := range m.Blocks {
 		gb := block{
 			wqkv: fused(b.Wq, b.Wk, b.Wv), wo: lin(b.Wo),
@@ -2270,24 +2194,8 @@ func newMixtralDecoder(m *nlp.Mixtral, ops backendOps) (*Decoder, error) {
 
 	var err error
 	mk := d.mkBuf(&err)
-	lin := func(w *tensor.Tensor) linear {
-		in, out := w.Shape()[0], w.Shape()[1]
-		return f32Linear{w: mk(flat2D(w)).b, k: in, n: out}
-	}
-	fused := func(wq, wk, wv *tensor.Tensor) linear {
-		in := wq.Shape()[0]
-		nq, nk, nv := wq.Shape()[1], wk.Shape()[1], wv.Shape()[1]
-		fq, fk, fv := flat2D(wq), flat2D(wk), flat2D(wv)
-		nt := nq + nk + nv
-		w := make([]float32, in*nt)
-		for i := range in {
-			row := w[i*nt : (i+1)*nt]
-			copy(row[:nq], fq[i*nq:(i+1)*nq])
-			copy(row[nq:nq+nk], fk[i*nk:(i+1)*nk])
-			copy(row[nq+nk:], fv[i*nv:(i+1)*nv])
-		}
-		return f32Linear{w: mk(w).b, k: in, n: nt}
-	}
+	lin := d.mkLin(mk, ops, &err)
+	fused := d.mkFused(mk, ops, &err)
 	qkGain := func(n *nn.RMSNorm) buffer { // optional per-head QK-norm (Qwen3-MoE); nil for Mixtral
 		if n == nil {
 			return nil
@@ -2353,24 +2261,8 @@ func newQwen2MoEDecoder(m *nlp.Qwen2MoE, ops backendOps) (*Decoder, error) {
 
 	var err error
 	mk := d.mkBuf(&err)
-	lin := func(w *tensor.Tensor) linear {
-		in, out := w.Shape()[0], w.Shape()[1]
-		return f32Linear{w: mk(flat2D(w)).b, k: in, n: out}
-	}
-	fused := func(wq, wk, wv *tensor.Tensor) linear {
-		in := wq.Shape()[0]
-		nq, nk, nv := wq.Shape()[1], wk.Shape()[1], wv.Shape()[1]
-		fq, fk, fv := flat2D(wq), flat2D(wk), flat2D(wv)
-		nt := nq + nk + nv
-		w := make([]float32, in*nt)
-		for i := range in {
-			row := w[i*nt : (i+1)*nt]
-			copy(row[:nq], fq[i*nq:(i+1)*nq])
-			copy(row[nq:nq+nk], fk[i*nk:(i+1)*nk])
-			copy(row[nq+nk:], fv[i*nv:(i+1)*nv])
-		}
-		return f32Linear{w: mk(w).b, k: in, n: nt}
-	}
+	lin := d.mkLin(mk, ops, &err)
+	fused := d.mkFused(mk, ops, &err)
 	fusedBias := func(bq, bk, bv *tensor.Tensor) buffer {
 		if bq == nil && bk == nil && bv == nil {
 			return nil
@@ -2452,10 +2344,7 @@ func newGraniteMoEDecoder(m *nlp.GraniteMoE, ops backendOps) (*Decoder, error) {
 
 	var err error
 	mk := d.mkBuf(&err)
-	lin := func(w *tensor.Tensor) linear {
-		in, out := w.Shape()[0], w.Shape()[1]
-		return f32Linear{w: mk(flat2D(w)).b, k: in, n: out}
-	}
+	lin := d.mkLin(mk, ops, &err)
 	linS := func(w *tensor.Tensor, s float32) linear { // weight pre-scaled by s (ResidualMult fold)
 		in, out := w.Shape()[0], w.Shape()[1]
 		f := flat2D(w)
@@ -2466,20 +2355,7 @@ func newGraniteMoEDecoder(m *nlp.GraniteMoE, ops backendOps) (*Decoder, error) {
 		}
 		return f32Linear{w: mk(f).b, k: in, n: out}
 	}
-	fused := func(wq, wk, wv *tensor.Tensor) linear {
-		in := wq.Shape()[0]
-		nq, nk, nv := wq.Shape()[1], wk.Shape()[1], wv.Shape()[1]
-		fq, fk, fv := flat2D(wq), flat2D(wk), flat2D(wv)
-		nt := nq + nk + nv
-		w := make([]float32, in*nt)
-		for i := range in {
-			row := w[i*nt : (i+1)*nt]
-			copy(row[:nq], fq[i*nq:(i+1)*nq])
-			copy(row[nq:nq+nk], fk[i*nk:(i+1)*nk])
-			copy(row[nq+nk:], fv[i*nv:(i+1)*nv])
-		}
-		return f32Linear{w: mk(w).b, k: in, n: nt}
-	}
+	fused := d.mkFused(mk, ops, &err)
 	for _, b := range m.Blocks {
 		experts := make([]moeFFN, len(b.MoE.Experts))
 		for i, ex := range b.MoE.Experts {
@@ -2542,24 +2418,8 @@ func newOLMoEDecoder(m *nlp.OLMoE, ops backendOps) (*Decoder, error) {
 
 	var err error
 	mk := d.mkBuf(&err)
-	lin := func(w *tensor.Tensor) linear {
-		in, out := w.Shape()[0], w.Shape()[1]
-		return f32Linear{w: mk(flat2D(w)).b, k: in, n: out}
-	}
-	fused := func(wq, wk, wv *tensor.Tensor) linear {
-		in := wq.Shape()[0]
-		nq, nk, nv := wq.Shape()[1], wk.Shape()[1], wv.Shape()[1]
-		fq, fk, fv := flat2D(wq), flat2D(wk), flat2D(wv)
-		nt := nq + nk + nv
-		w := make([]float32, in*nt)
-		for i := range in {
-			row := w[i*nt : (i+1)*nt]
-			copy(row[:nq], fq[i*nq:(i+1)*nq])
-			copy(row[nq:nq+nk], fk[i*nk:(i+1)*nk])
-			copy(row[nq+nk:], fv[i*nv:(i+1)*nv])
-		}
-		return f32Linear{w: mk(w).b, k: in, n: nt}
-	}
+	lin := d.mkLin(mk, ops, &err)
+	fused := d.mkFused(mk, ops, &err)
 	for _, b := range m.Blocks {
 		experts := make([]moeFFN, len(b.MoE.Experts))
 		for i, ex := range b.MoE.Experts {
@@ -2608,24 +2468,8 @@ func newStarCoder2Decoder(m *nlp.StarCoder2, ops backendOps) (*Decoder, error) {
 
 	var err error
 	mk := d.mkBuf(&err)
-	lin := func(w *tensor.Tensor) linear {
-		in, out := w.Shape()[0], w.Shape()[1]
-		return f32Linear{w: mk(flat2D(w)).b, k: in, n: out}
-	}
-	fused := func(wq, wk, wv *tensor.Tensor) linear {
-		in := wq.Shape()[0]
-		nq, nk, nv := wq.Shape()[1], wk.Shape()[1], wv.Shape()[1]
-		fq, fk, fv := flat2D(wq), flat2D(wk), flat2D(wv)
-		nt := nq + nk + nv
-		w := make([]float32, in*nt)
-		for i := range in {
-			row := w[i*nt : (i+1)*nt]
-			copy(row[:nq], fq[i*nq:(i+1)*nq])
-			copy(row[nq:nq+nk], fk[i*nk:(i+1)*nk])
-			copy(row[nq+nk:], fv[i*nv:(i+1)*nv])
-		}
-		return f32Linear{w: mk(w).b, k: in, n: nt}
-	}
+	lin := d.mkLin(mk, ops, &err)
+	fused := d.mkFused(mk, ops, &err)
 	fusedBias := func(bq, bk, bv *tensor.Tensor) buffer { // [Bq | Bk | Bv] = [D+2·kvDim]
 		fb := append(append(append([]float32{}, flat1D(bq)...), flat1D(bk)...), flat1D(bv)...)
 		return mk(fb).b
@@ -2700,24 +2544,8 @@ func newPhiDecoder(m *nlp.Phi, ops backendOps) (*Decoder, error) {
 
 	var err error
 	mk := d.mkBuf(&err)
-	lin := func(w *tensor.Tensor) linear {
-		in, out := w.Shape()[0], w.Shape()[1]
-		return f32Linear{w: mk(flat2D(w)).b, k: in, n: out}
-	}
-	fused := func(wq, wk, wv *tensor.Tensor) linear {
-		in := wq.Shape()[0]
-		nq, nk, nv := wq.Shape()[1], wk.Shape()[1], wv.Shape()[1]
-		fq, fk, fv := flat2D(wq), flat2D(wk), flat2D(wv)
-		nt := nq + nk + nv
-		w := make([]float32, in*nt)
-		for i := range in {
-			row := w[i*nt : (i+1)*nt]
-			copy(row[:nq], fq[i*nq:(i+1)*nq])
-			copy(row[nq:nq+nk], fk[i*nk:(i+1)*nk])
-			copy(row[nq+nk:], fv[i*nv:(i+1)*nv])
-		}
-		return f32Linear{w: mk(w).b, k: in, n: nt}
-	}
+	lin := d.mkLin(mk, ops, &err)
+	fused := d.mkFused(mk, ops, &err)
 	fusedBias := func(bq, bk, bv *tensor.Tensor) buffer {
 		fb := append(append(append([]float32{}, flat1D(bq)...), flat1D(bk)...), flat1D(bv)...)
 		return mk(fb).b
@@ -2791,24 +2619,8 @@ func newGPTNeoXDecoder(m *nlp.GPTNeoX, ops backendOps) (*Decoder, error) {
 
 	var err error
 	mk := d.mkBuf(&err)
-	lin := func(w *tensor.Tensor) linear {
-		in, out := w.Shape()[0], w.Shape()[1]
-		return f32Linear{w: mk(flat2D(w)).b, k: in, n: out}
-	}
-	fused := func(wq, wk, wv *tensor.Tensor) linear {
-		in := wq.Shape()[0]
-		nq, nk, nv := wq.Shape()[1], wk.Shape()[1], wv.Shape()[1]
-		fq, fk, fv := flat2D(wq), flat2D(wk), flat2D(wv)
-		nt := nq + nk + nv
-		w := make([]float32, in*nt)
-		for i := range in {
-			row := w[i*nt : (i+1)*nt]
-			copy(row[:nq], fq[i*nq:(i+1)*nq])
-			copy(row[nq:nq+nk], fk[i*nk:(i+1)*nk])
-			copy(row[nq+nk:], fv[i*nv:(i+1)*nv])
-		}
-		return f32Linear{w: mk(w).b, k: in, n: nt}
-	}
+	lin := d.mkLin(mk, ops, &err)
+	fused := d.mkFused(mk, ops, &err)
 	fusedBias := func(bq, bk, bv *tensor.Tensor) buffer {
 		fb := append(append(append([]float32{}, flat1D(bq)...), flat1D(bk)...), flat1D(bv)...)
 		return mk(fb).b
