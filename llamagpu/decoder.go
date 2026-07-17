@@ -954,9 +954,31 @@ func newDecoder(m *nlp.Llama, ops backendOps) (*Decoder, error) {
 
 	var err error
 	mk := d.mkBuf(&err)
-	lin := func(w *tensor.Tensor) linear { // f32 [in,out] device weight
+	// qOrF32 is the projection core: resident Q8_0 when the backend set ops.quantizeF32 (the
+	// NewLlamaQ8CUDA / NewQwen2Q8CUDA / NewQwen3Q8CUDA / NewPhi3Q8CUDA family), else the f32 weight.
+	// EVERY projection — fused QKV, o_proj, gate/up/down, lm_head — flows through it, so an f32
+	// checkpoint gets a direct Q8 decode path (~4× less projection weight bandwidth) without a ggml
+	// conversion — and it reaches the Qwen2 (qkv-bias) / Qwen3 (QK-norm) variants that nlp.QuantLlama
+	// (Llama-only) cannot represent. Biases and QK-norm gains stay f32 and apply after the Q8 matmul.
+	qOrF32 := func(f []float32, in, out int) linear {
+		if ops.quantizeF32 == nil {
+			return f32Linear{w: mk(f).b, k: in, n: out}
+		}
+		t := tensor.New(tensor.F32, tensor.Shape{in, out})
+		copy(t.Storage().F32(), f)
+		qw, qe := ops.quantizeF32(t)
+		if qe != nil {
+			if err == nil {
+				err = qe
+			}
+			return f32Linear{k: in, n: out}
+		}
+		d.qweights = append(d.qweights, qw)
+		return quantLinear{w: qw}
+	}
+	lin := func(w *tensor.Tensor) linear { // Q8_0 (quantized build) or f32 [in,out] device weight
 		in, out := w.Shape()[0], w.Shape()[1]
-		return f32Linear{w: mk(flat2D(w)).b, k: in, n: out}
+		return qOrF32(flat2D(w), in, out)
 	}
 	// IBM Granite config scalars (all identity when 0 or 1, so no-ops for Llama/Qwen/Mistral). Each
 	// folds into the upload rather than a runtime op: AttentionMult overrides the pre-softmax scale,
@@ -978,7 +1000,7 @@ func newDecoder(m *nlp.Llama, ops backendOps) (*Decoder, error) {
 	if cfg.LogitsScale != 0 && cfg.LogitsScale != 1 {
 		outScale = float32(1 / cfg.LogitsScale)
 	}
-	linS := func(w *tensor.Tensor, s float32) linear { // f32 weight with every element pre-scaled by s
+	linS := func(w *tensor.Tensor, s float32) linear { // weight with every element pre-scaled by s (then Q8 ∨ f32)
 		in, out := w.Shape()[0], w.Shape()[1]
 		f := flat2D(w)
 		if s != 1 {
@@ -986,7 +1008,7 @@ func newDecoder(m *nlp.Llama, ops backendOps) (*Decoder, error) {
 				f[i] *= s
 			}
 		}
-		return f32Linear{w: mk(f).b, k: in, n: out}
+		return qOrF32(f, in, out)
 	}
 	// fused QKV weight (§T613): weights are [in,out] with out along the row, so the fusion
 	// concatenates the three output bands PER INPUT ROW — one [in, D+2·kvDim] matrix whose
@@ -1003,7 +1025,7 @@ func newDecoder(m *nlp.Llama, ops backendOps) (*Decoder, error) {
 			copy(row[nq:nq+nk], fk[i*nk:(i+1)*nk])
 			copy(row[nq+nk:], fv[i*nv:(i+1)*nv])
 		}
-		return f32Linear{w: mk(w).b, k: in, n: nt}
+		return qOrF32(w, in, nt)
 	}
 	// fused q/k/v bias [Bq | Bk | Bv] = [D+2·kvDim], for the Qwen2/Qwen2.5 family (q/k/v carry a
 	// projection bias, o_proj does not); nil for Llama/Mistral, which leaves recordQKVProj's

@@ -127,6 +127,46 @@ func NewCUDA(m *nlp.Llama) (*Decoder, error) {
 	})
 }
 
+// NewLlamaQ8CUDA is NewCUDA with every projection (fused QKV, o_proj, gate/up/down, lm_head) quantized
+// to resident Q8_0 — a direct f32→Q8 decode path that needs NO ggml QuantLlama conversion. Transformer
+// decode is weight-bandwidth-bound, so streaming ~4× smaller Q8 projections speeds it up substantially.
+// Unlike nlp.QuantLlama (Llama-only), this reaches the Qwen2 (qkv-bias) and Qwen3 (QK-norm) variants —
+// biases and QK-norm gains stay f32 and apply after the Q8 matmul. Q8 is not bit-exact (cosine-validated).
+func NewLlamaQ8CUDA(m *nlp.Llama) (*Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newDecoder(m, backendOps{
+		name:        string(backend.CUDA),
+		asyncEncode: false,
+		newBuffer: func(data []float32) (buffer, error) {
+			b, err := cuda.NewDeviceBufferF32(data)
+			if err != nil {
+				return nil, err
+			}
+			return cBuf{b}, nil
+		},
+		newRecorder: func() (recorder, error) {
+			r, err := cuda.NewRecorder()
+			if err != nil {
+				return nil, err
+			}
+			return cRec{r}, nil
+		},
+		quantizeF32: func(w *tensor.Tensor) (qweight, error) {
+			return cuda.NewResidentBQ8(w)
+		},
+	})
+}
+
+// NewQwen2Q8CUDA / NewQwen3Q8CUDA / NewPhi3Q8CUDA are NewLlamaQ8CUDA typed entry points for the Llama
+// variants that nlp.QuantLlama cannot represent (Qwen2 qkv-bias, Qwen3 QK-norm) or that only had an f32
+// GPU path (Phi-3). They give those models their first quantized decode. Load with nlp.LlamaFromHF /
+// Phi3FromHF; biases and QK-norm gains are picked up and kept f32.
+func NewQwen2Q8CUDA(m *nlp.Llama) (*Decoder, error) { return NewLlamaQ8CUDA(m) }
+func NewQwen3Q8CUDA(m *nlp.Llama) (*Decoder, error) { return NewLlamaQ8CUDA(m) }
+func NewPhi3Q8CUDA(m *nlp.Llama) (*Decoder, error)  { return NewLlamaQ8CUDA(m) }
+
 // NewQwen2CUDA uploads a Qwen2 / Qwen2.5 model onto the batched Decoder core. Qwen2 shares
 // nlp.Llama (SwiGLU MLP, RMSNorm, GQA, full rope) and departs only in carrying q/k/v projection
 // biases (o_proj has none) — the newDecoder core adds them via qkvBias when b.Bq/Bk/Bv are set, so
