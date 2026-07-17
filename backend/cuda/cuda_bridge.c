@@ -33,7 +33,7 @@ static cublasHandle_t gHandle = NULL;
 static float *gOne = NULL, *gZero = NULL; // device 1.0f/0.0f — cuBLAS DEVICE pointer mode (graph-capture-safe alpha/beta)
 static cudaStream_t gStream = NULL;
 static CUcontext gCtx = NULL; // runtime's primary context, retained for driver-API launches
-static CUfunction gGelu = NULL, gRelu2 = NULL, gMoeGate = NULL, gRowAxpy = NULL, gSilu = NULL, gSigmoid = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gRopePartial = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gAttnSoftmaxCap = NULL, gAttnSoftmaxAlibi = NULL, gQgemv = NULL, gQgemv4 = NULL, gQgemv4k = NULL, gQgemv4kPre = NULL, gQgemv5k = NULL, gQgemv6k = NULL, gQgemv3k = NULL, gQgemv2k = NULL, gQgemv40 = NULL, gQgemvI4nl = NULL, gQgemvI4xs = NULL, gQgemvMxfp4 = NULL, gQgemvI2xxs = NULL, gQgemvI2xs = NULL, gQgemvI3xxs = NULL, gQgemvI3s = NULL, gQgemvI1s = NULL, gQgemvI1m = NULL, gI8Mma = NULL, gI8MmaT = NULL, gI8MmaRb = NULL, gI8MmaDb = NULL, gI8MmaWt = NULL, gI8MmaWp = NULL, gI8Mmq = NULL, gI8MmqR = NULL, gQrowsI8 = NULL, gLdmProbe = NULL, gLdmProbe2 = NULL, gI8MmaLm = NULL, gCvtF16 = NULL, gCvtFrom16 = NULL; // lazily nvrtc-compiled
+static CUfunction gGelu = NULL, gRelu2 = NULL, gMoeGate = NULL, gRowAxpy = NULL, gSsmStep = NULL, gSilu = NULL, gSigmoid = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gRopePartial = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gAttnSoftmaxCap = NULL, gAttnSoftmaxAlibi = NULL, gQgemv = NULL, gQgemv4 = NULL, gQgemv4k = NULL, gQgemv4kPre = NULL, gQgemv5k = NULL, gQgemv6k = NULL, gQgemv3k = NULL, gQgemv2k = NULL, gQgemv40 = NULL, gQgemvI4nl = NULL, gQgemvI4xs = NULL, gQgemvMxfp4 = NULL, gQgemvI2xxs = NULL, gQgemvI2xs = NULL, gQgemvI3xxs = NULL, gQgemvI3s = NULL, gQgemvI1s = NULL, gQgemvI1m = NULL, gI8Mma = NULL, gI8MmaT = NULL, gI8MmaRb = NULL, gI8MmaDb = NULL, gI8MmaWt = NULL, gI8MmaWp = NULL, gI8Mmq = NULL, gI8MmqR = NULL, gQrowsI8 = NULL, gLdmProbe = NULL, gLdmProbe2 = NULL, gI8MmaLm = NULL, gCvtF16 = NULL, gCvtFrom16 = NULL; // lazily nvrtc-compiled
 static CUfunction gRopeDpos = NULL, gRopePartialDpos = NULL, gAttnSoftmaxDpos = NULL, gAppendDpos = NULL; // device-position (graph-capturable) twins
 static CUfunction gGqaFlashPart = NULL, gGqaFlashMerge = NULL; // flash decode: GQA K/V-shared split-K partials + merge
 static CUfunction gGqaFlashPartF16 = NULL, gAppendDposF16 = NULL; // f16 KV-cache twins (u16 storage, f32 compute)
@@ -276,6 +276,40 @@ int cu_moe_gate(const void* logits, void* weights, int rows, int E, int K, int r
     {
         void* args[7]; args[0]=&logits; args[1]=&weights; args[2]=&rows; args[3]=&E; args[4]=&K; args[5]=&raw; args[6]=&scale;
         rc = (cuLaunchKernel(gMoeGate, rows<1?1:rows, 1, 1, 32, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_ssm_step: one timestep of the Mamba selective-scan (S6) recurrence for DECODE — advances the
+// per-channel state h[D,N] and emits y[D], matching backend/ref selectiveScanKernel one step at a
+// time (zero-order-hold Ā=exp(Δ·A), simplified B̄=Δ·B; f64 accumulation):
+//   h[d,n] = exp(Δ[d]·A[d,n])·h[d,n] + Δ[d]·B[n]·u[d];  y[d] = Σ_n C[d? or shared]·h[d,n] + Dskip[d]·u[d]
+// B,C are [N] (shared across the D channels) for this token; h is updated in place. One thread per d.
+int cu_ssm_step(const void* u, const void* delta, const void* A, const void* B, const void* C,
+                const void* dskip, void* h, void* y, int D, int N) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (!gSsmStep && compile_kernel(
+                      "extern \"C\" __global__ void ssm_step(const float* u, const float* delta, const float* A, const float* B, const float* C, const float* dskip, float* h, float* y, int D, int N){\n"
+                      "  int d = blockIdx.x*blockDim.x + threadIdx.x; if(d>=D) return;\n"
+                      "  double dl=(double)delta[d], ud=(double)u[d], acc=0.0;\n"
+                      "  const float* ad = A + (size_t)d*N; float* hd = h + (size_t)d*N;\n"
+                      "  for(int n=0;n<N;n++){\n"
+                      "    double dA = exp(dl*(double)ad[n]);\n"
+                      "    double hv = dA*(double)hd[n] + dl*(double)B[n]*ud;\n"
+                      "    hd[n] = (float)hv; acc += (double)C[n]*hv;\n"
+                      "  }\n"
+                      "  y[d] = (float)(acc + (double)dskip[d]*ud);\n"
+                      "}\n",
+                      "ssm_step.cu", "ssm_step", &gSsmStep) != 0) { rc = -2; goto done; }
+    {
+        int threads = 256, blocks = (D + threads - 1) / threads; if (blocks < 1) blocks = 1;
+        void* args[10]; args[0]=&u; args[1]=&delta; args[2]=&A; args[3]=&B; args[4]=&C; args[5]=&dskip; args[6]=&h; args[7]=&y; args[8]=&D; args[9]=&N;
+        rc = (cuLaunchKernel(gSsmStep, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 done:
     pthread_mutex_unlock(&gLock);

@@ -240,6 +240,20 @@ func (rec *Recorder) MoEGate(logits, weights *DeviceF32, rows, e, k, raw int, sc
 	return nil
 }
 
+// SSMStep advances one timestep of the Mamba selective-scan recurrence for decode: updates the
+// per-channel state h[D,N] in place and writes y[D]. u/delta/dskip/y are [D]; A is [D,N]; B/C are
+// [N] (this token's input-dependent matrices, shared across channels). The state persists across
+// calls (the caller keeps h between steps).
+func (rec *Recorder) SSMStep(u, delta, a, b, c, dskip, h, y *DeviceF32, d, n int) error {
+	if u.ptr == nil || delta.ptr == nil || a.ptr == nil || b.ptr == nil || c.ptr == nil || dskip.ptr == nil || h.ptr == nil || y.ptr == nil {
+		return fmt.Errorf("cuda: rec SSMStep on a freed handle")
+	}
+	if rc := C.cu_ssm_step(u.ptr, delta.ptr, a.ptr, b.ptr, c.ptr, dskip.ptr, h.ptr, y.ptr, C.int(d), C.int(n)); rc != 0 {
+		return fmt.Errorf("cuda: rec SSMStep failed (code %d)", int(rc))
+	}
+	return nil
+}
+
 // RowAxpy accumulates dst += diag(arow)·src: dst[r,:] += arow[r]·src[r,:], the MoE combine that
 // scales an expert's [rows,cols] output by each token's routing weight (arow is a [rows] vector).
 func (rec *Recorder) RowAxpy(dst, src, arow *DeviceF32, rows, cols int) error {
