@@ -1676,10 +1676,7 @@ func newJambaDecoder(m *nlp.Jamba, ops backendOps) (*Decoder, error) {
 
 	var err error
 	mk := d.mkBuf(&err)
-	lin := func(w *tensor.Tensor) linear {
-		in, out := w.Shape()[0], w.Shape()[1]
-		return f32Linear{w: mk(flat2D(w)).b, k: in, n: out}
-	}
+	lin := d.mkLin(mk, ops, &err) // Q8_0 when ops.quantizeF32 set (NewJambaQ8CUDA), else f32
 	for _, ly := range m.Layers {
 		gb := block{
 			gAttn: mk(flat1D(ly.InputNorm.Gamma)).b, // input_layernorm (mixer pre-norm)
@@ -1714,7 +1711,7 @@ func newJambaDecoder(m *nlp.Jamba, ops backendOps) (*Decoder, error) {
 			for i, ex := range ly.MoE.Experts {
 				experts[i] = moeFFN{wG: lin(ex.Wgate), wU: lin(ex.Wup), wD: lin(ex.Wdown)}
 			}
-			gb.moeRouter, gb.moeExperts = lin(ly.MoE.Router), experts
+			gb.moeRouter, gb.moeExperts = d.f32Lin(mk)(ly.MoE.Router), experts // router stays f32 (routing is selection-sensitive)
 		} else { // dense SwiGLU FFN
 			gb.wG, gb.wU, gb.wD = lin(ly.Dense.Wgate), lin(ly.Dense.Wup), lin(ly.Dense.Wdown)
 		}
