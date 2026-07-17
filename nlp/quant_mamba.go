@@ -137,50 +137,74 @@ func QuantizeMamba(m *Mamba, qt gguf.QuantType) (*QuantMamba, error) {
 		}
 	}
 	for l := range m.Layers {
-		mb := m.Layers[l].Mixer
-		for _, p := range []struct {
-			name string
-			lin  *nn.Linear
-		}{
-			{"in_proj (x)", mb.InX}, {"in_proj (z)", mb.InZ}, {"x_proj (Δ)", mb.DtLow},
-			{"x_proj (B)", mb.BProj}, {"x_proj (C)", mb.CProj}, {"out_proj", mb.OutProj},
-		} {
-			if p.lin.B != nil {
-				return nil, fmt.Errorf("nlp: QuantizeMamba layer %d: %s carries a bias; the quantized twin represents the checkpoint form (only dt_proj is biased)", l, p.name)
-			}
-		}
-		qm := &QuantMambaMixer{
-			ConvW: f32Clone(mb.ConvW), ConvB: f32Clone(mb.ConvB),
-			DtBias: f32CloneIf(mb.DtProj.B),
-			A:      negExpF32(mb.ALog),
-			Dskip:  f32Clone(mb.Dskip),
-			DModel: mb.DModel, DInner: mb.DInner, DConv: mb.DConv, N: mb.N, DtRank: mb.DtRank,
-		}
-		var err error
-		if qm.InX, err = mkQ(mb.InX.W); err != nil {
-			return nil, fmt.Errorf("nlp: QuantizeMamba layer %d ssm_in (x): %w", l, err)
-		}
-		if qm.InZ, err = mkQ(mb.InZ.W); err != nil {
-			return nil, fmt.Errorf("nlp: QuantizeMamba layer %d ssm_in (z): %w", l, err)
-		}
-		if qm.DtLow, err = mkQ(mb.DtLow.W); err != nil {
-			return nil, fmt.Errorf("nlp: QuantizeMamba layer %d ssm_x (Δ): %w", l, err)
-		}
-		if qm.BProj, err = mkQ(mb.BProj.W); err != nil {
-			return nil, fmt.Errorf("nlp: QuantizeMamba layer %d ssm_x (B): %w", l, err)
-		}
-		if qm.CProj, err = mkQ(mb.CProj.W); err != nil {
-			return nil, fmt.Errorf("nlp: QuantizeMamba layer %d ssm_x (C): %w", l, err)
-		}
-		if qm.DtProj, err = mkQ(mb.DtProj.W); err != nil {
-			return nil, fmt.Errorf("nlp: QuantizeMamba layer %d ssm_dt: %w", l, err)
-		}
-		if qm.OutProj, err = mkQ(mb.OutProj.W); err != nil {
-			return nil, fmt.Errorf("nlp: QuantizeMamba layer %d ssm_out: %w", l, err)
+		qm, err := quantizeSSMMixer(m.Layers[l].Mixer, qt)
+		if err != nil {
+			return nil, fmt.Errorf("nlp: QuantizeMamba layer %d: %w", l, err)
 		}
 		q.Layers = append(q.Layers, QuantMambaLayer{Norm: f32RMSNorm(m.Layers[l].Norm), Mixer: qm})
 	}
 	return q, nil
+}
+
+// quantizeSSMMixer builds the quantized twin of one float [nn.MambaBlock]: the seven
+// projection matrices (InX/InZ, DtLow/BProj/CProj, DtProj, OutProj) quantized to qt,
+// everything small kept f32 (conv kernel + bias, Δ bias, D skip) and A stored DIRECTLY
+// as −exp(A_log) — the on-disk ssm_a convention, computed with the converter's exact
+// f64→f32 rounding ([negExpF32]) so the result is byte-comparable to a GGUF-loaded
+// mixer. The block must be in the checkpoint form (bias-free in/x/out projections,
+// only dt_proj biased); the training-only biased form is rejected. Shared by
+// [QuantizeMamba] and [QuantizeJamba] (whose mixer adds the dt/b/c norm gains on
+// top), exactly as the float loaders share the SSM mixer helper.
+func quantizeSSMMixer(mb *nn.MambaBlock, qt gguf.QuantType) (*QuantMambaMixer, error) {
+	mkQ := func(w *tensor.Tensor) (*nn.QuantLinear, error) {
+		in, out := w.Shape()[0], w.Shape()[1] // GoAI [in, out]
+		bytes, err := gguf.Quantize(transpose2D(w), qt)
+		if err != nil {
+			return nil, err
+		}
+		return &nn.QuantLinear{Weight: bytes, QT: qt, In: in, Out: out}, nil
+	}
+	for _, p := range []struct {
+		name string
+		lin  *nn.Linear
+	}{
+		{"in_proj (x)", mb.InX}, {"in_proj (z)", mb.InZ}, {"x_proj (Δ)", mb.DtLow},
+		{"x_proj (B)", mb.BProj}, {"x_proj (C)", mb.CProj}, {"out_proj", mb.OutProj},
+	} {
+		if p.lin.B != nil {
+			return nil, fmt.Errorf("%s carries a bias; the quantized twin represents the checkpoint form (only dt_proj is biased)", p.name)
+		}
+	}
+	qm := &QuantMambaMixer{
+		ConvW: f32Clone(mb.ConvW), ConvB: f32Clone(mb.ConvB),
+		DtBias: f32CloneIf(mb.DtProj.B),
+		A:      negExpF32(mb.ALog),
+		Dskip:  f32Clone(mb.Dskip),
+		DModel: mb.DModel, DInner: mb.DInner, DConv: mb.DConv, N: mb.N, DtRank: mb.DtRank,
+	}
+	var err error
+	if qm.InX, err = mkQ(mb.InX.W); err != nil {
+		return nil, fmt.Errorf("ssm_in (x): %w", err)
+	}
+	if qm.InZ, err = mkQ(mb.InZ.W); err != nil {
+		return nil, fmt.Errorf("ssm_in (z): %w", err)
+	}
+	if qm.DtLow, err = mkQ(mb.DtLow.W); err != nil {
+		return nil, fmt.Errorf("ssm_x (Δ): %w", err)
+	}
+	if qm.BProj, err = mkQ(mb.BProj.W); err != nil {
+		return nil, fmt.Errorf("ssm_x (B): %w", err)
+	}
+	if qm.CProj, err = mkQ(mb.CProj.W); err != nil {
+		return nil, fmt.Errorf("ssm_x (C): %w", err)
+	}
+	if qm.DtProj, err = mkQ(mb.DtProj.W); err != nil {
+		return nil, fmt.Errorf("ssm_dt: %w", err)
+	}
+	if qm.OutProj, err = mkQ(mb.OutProj.W); err != nil {
+		return nil, fmt.Errorf("ssm_out: %w", err)
+	}
+	return qm, nil
 }
 
 // negExpF32 computes −exp(aLog) elementwise into a fresh F32 tensor — the same

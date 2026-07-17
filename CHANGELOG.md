@@ -4,6 +4,21 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — quantized GGUF decode for Jamba, the hybrid capstone (T831, 2026-07-18)
+
+`QuantJamba` + `QuantJambaFromGGUF` close the quant campaign's hybrid capstone at eighteen
+families: all four layer flavors (attention/Mamba mixer × dense/MoE FFN) quantize with the
+composed patterns — bias-free NoPE attention, the T829 SSM mixer plus Jamba's f32 dt/b/c
+norms, and per-expert QuantSwiGLUs under an f32 router. One deliberate design trade,
+documented on the type: the MoE decode uses DENSE dispatch mirroring the float `JambaMoE`
+kernel sequence (not QuantMixtral's sparse union), trading the k/E FFN saving for a
+BIT-exact hybrid KV+SSM decode anchor across all four flavors. The T829 quant-mamba files
+gained behavior-preserving extractions (`quantizeSSMMixer`/`quantSSMMixerFromGGUF`) so the
+byte-exactness-critical mixer path has one implementation shared by Mamba and Jamba —
+verified by the unchanged T829 gates. Exact anchor: byte-equal Q-blocks across every
+projection in all four flavors, f32-identical small tensors, logits exactly equal; cosine
+1.000000; the control-anchored vs-original at 0.999999 equals pure weight rounding.
+
 ### nlp — Mamba-2 GGUF loading, float + quantized (T830, 2026-07-18)
 
 `Mamba2FromGGUF`/`Mamba2ToGGUF` (float GGUF architecture twenty) and

@@ -3,7 +3,7 @@
 GoAI loads [llama.cpp](https://github.com/ggml-org/llama.cpp) GGUF checkpoints —
 the single-file format the local-inference ecosystem distributes models in —
 straight into runnable, trainable GoAI models. Twenty architectures load in
-full precision; seventeen families additionally decode
+full precision; eighteen families additionally decode
 **directly from the quantized ggml blocks**, never materializing full-precision
 weights.
 
@@ -62,7 +62,7 @@ for some archs and *split-half* pairs (`ROPE_TYPE_NEOX`) for others; GoAI's
 | `mamba2` | `Mamba2FromGGUF` | in_proj stays PACKED (the runtime view-splits the product); `ssm.time_step_rank` = n_head; per-head `ssm_a` −exp'd + unsqueezed; `ssm_norm` stored per-group (GoAI keeps transformers full-width semantics — identical at n_groups=1, documented); dt is bias-only |
 | `jamba` | `JambaFromGGUF` | hybrid: mixer interleave in the per-layer `head_count_kv` vector (0=Mamba); NoPE attention; dedicated `ssm_{dt,b,c}_norm`; fused-expert MoE |
 
-## Quantized decode (17 families)
+## Quantized decode (18 families)
 
 `QuantLlamaFromGGUF` (llama), `QuantQwen2FromGGUF`, `QuantQwen3FromGGUF`,
 `QuantPhi3FromGGUF`, `QuantGemmaFromGGUF`, `QuantMixtralFromGGUF`, `QuantGraniteFromGGUF` (the
@@ -75,9 +75,11 @@ pre-folded LayerNorm1P, partial rotary, OLMo 2 post-norm with full-width
 QK-norms, every fused qkv unpacked losslessly on the quantized bytes),
 `QuantCohereFromGGUF` (the first NORM-rope quant loader outside the llama
 lineage — the interleave-to-split row permute applied losslessly on the
-Q-blocks) `QuantMambaFromGGUF` and `QuantMamba2FromGGUF` (the recurrent quant twins:
-the big SSM projections quantize — mamba2 wraps its packed in_proj whole —
-while conv/scan/state stay f32, O(1) decode bit-exact) decode
+Q-blocks) `QuantMambaFromGGUF`, `QuantMamba2FromGGUF` and `QuantJambaFromGGUF` (the
+recurrent and hybrid quant twins: the big SSM projections quantize — mamba2
+wraps its packed in_proj whole — while conv/scan/state stay f32; Jamba
+combines quantized NoPE attention, SSM mixers and MoE experts across its
+four layer flavors with the hybrid KV+SSM decode bit-exact) decode
 straight from ggml Q-blocks (Q8_0, Q4_0, and the K-quants) with no dequantize
 step: each projection is a `nn.QuantLinear` over the raw block bytes, and only
 the small precision-sensitive pieces (norm gains, the embedding lookup table,
