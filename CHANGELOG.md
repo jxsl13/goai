@@ -4,6 +4,14 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — J-lens works on GGUF-loaded models: the "download a model, see its thoughts" pipeline (T818, 2026-07-17)
+
+A test and runnable example demonstrate that a model loaded from GGUF is a normal `*Llama`
+and therefore J-lens-ready out of the box: `FitJLens` fitted on a GGUF-round-tripped model
+matches the fit on the original to 9e-7 (the F32 weight-storage floor), and `JLensHTML`
+renders the self-contained layer-by-position thought-process view on it. This ties GGUF
+loading and the jacobian-lens interpretability port into one end-to-end capability.
+
 ### nlp — quantized GGUF decode for Granite (T817, 2026-07-17)
 
 `QuantGraniteFromGGUF` decodes llama.cpp-quantized IBM Granite checkpoints straight from
