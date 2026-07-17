@@ -237,6 +237,14 @@ func (r *ResidentBIQ3S) qmatmul(a, out *DeviceF32, beta float32) error {
 	if err != nil {
 		return err
 	}
+	// M>1 (prefill/batch): route to the weight-read-once M-tiled GEMM (bit-identical) so column
+	// n's IQ3_S block is grid-decoded once, not re-read per row. M==1 decode stays on the GEMV.
+	if a.rows >= 8 {
+		if rc := C.cu_qmatmul_iq3s_mt(a.ptr, r.q, grid, out.ptr, C.int(a.rows), C.int(r.k), C.int(r.n), C.float(beta)); rc != 0 {
+			return fmt.Errorf("cuda: IQ3_S m-tiled matmul failed (code %d)", int(rc))
+		}
+		return nil
+	}
 	if rc := C.cu_qmatmul_iq3s(a.ptr, r.q, grid, out.ptr, C.int(a.rows), C.int(r.k), C.int(r.n), C.float(beta)); rc != 0 {
 		return fmt.Errorf("cuda: IQ3_S matmul failed (code %d)", int(rc))
 	}
