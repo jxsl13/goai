@@ -185,6 +185,7 @@ int cu_causal_scale_mh(void* x, int heads, int seqQ, int seqKV, float scale, int
 int cu_attn_softmax(void* x, int rows, int cols, float scale, int offset, int seqQ);
 int cu_attn_softmax_cap(void* x, int rows, int cols, float scale, int offset, int seqQ, float cap); // Gemma2 attn-logit soft-cap
 int cu_attn_softmax_alibi(void* x, int rows, int cols, float scale, int offset, int seqQ, const void* slopes); // MPT ALiBi position bias
+int cu_attn_softmax_bias(void* x, int rows, int cols, float scale, int offset, int seqQ, const void* bias); // T5 per-head relative-position bias [heads,seqQ,seqKV]
 int cu_mha_out(const void* dScores, const void* dV, void* dOut, int seq, int heads, int hd);
 
 // GQA: qHeads query heads share kvHeads kv heads (query h → kv head h/group).
