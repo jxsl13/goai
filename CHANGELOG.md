@@ -4,6 +4,19 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — quantized GGUF decode for MPT and Nemotron (T827, 2026-07-17)
+
+`QuantMPT` and `QuantNemotron` (+ `Quant*FromGGUF`) bring quantized decode to twelve
+families. MPT: ALiBi-only attention (no rope; position recovered from the cache gap on
+decode), the no-bias convention preserved (γ-only norms, bare QuantLinears), fused
+`attn_qkv` as plain HF-order thirds (deliberately NOT the GPT-NeoX de-interleave), tied
+head from the same quantized `token_embd` bytes, and the float loader's full 21-gate reject
+set shared via the common cfg parser. Nemotron: the pre-folded (1+γ) LayerNorm1P gains
+copied without re-folding, ReLU² gateless MLP, genuine partial rotary (RotaryDim <
+headDim in-fixture), untied head required. Gates on both: byte/logit-EXACT vs the
+`QuantizeX` twins (packed forms included), cosine 1.000000 vs the float pipeline,
+decode-vs-Forward bit-exact.
+
 ### nlp — quantized GGUF decode for GPT-NeoX and Falcon (T826, 2026-07-17)
 
 `QuantGPTNeoX` and `QuantFalcon` (+ `Quant*FromGGUF`) bring quantized decode to ten
