@@ -148,6 +148,33 @@ func NewNemotronCUDA(m *nlp.Nemotron) (*Decoder, error) {
 	})
 }
 
+// NewGemmaCUDA uploads an nlp.Gemma (Gemma v1) onto the batched Decoder core: RMSNorm (with the
+// (1+w) gain folded at load), RoPE, GQA, a √dim embedding normalizer (d.embMult), a GeGLU FFN and
+// a tied lm_head — every departure a reused generalization or a load-time fold. cuda-only.
+func NewGemmaCUDA(m *nlp.Gemma) (*Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newGemmaDecoder(m, backendOps{
+		name:        string(backend.CUDA),
+		asyncEncode: false,
+		newBuffer: func(data []float32) (buffer, error) {
+			b, err := cuda.NewDeviceBufferF32(data)
+			if err != nil {
+				return nil, err
+			}
+			return cBuf{b}, nil
+		},
+		newRecorder: func() (recorder, error) {
+			r, err := cuda.NewRecorder()
+			if err != nil {
+				return nil, err
+			}
+			return cRec{r}, nil
+		},
+	})
+}
+
 // NewCohereCUDA uploads an nlp.Cohere (Command-R) onto the batched Decoder core: one-norm parallel
 // residual, weight-only mean-centered LayerNorm, SwiGLU, GQA, full rope (its interleaved rotary is
 // pre-permuted into the q/k weights by CohereFromHF) and a logit_scale-folded tied lm_head — every

@@ -170,10 +170,12 @@ type block struct {
 type Decoder struct {
 	ops                                           backendOps
 	d, h, kvH, dk, kvDim, half, hidden, v, maxLen int
+	qDim                                          int  // attention Q/O width = h·dk; == d (model dim) unless head_dim is decoupled (Gemma)
 	rotaryDim                                     int  // rotated channels/head; == dk for full RoPE (Llama), < dk for partial rotary (GPT-NeoX/Phi/StableLM)
 	lnBias                                        bool // true ⇒ LayerNorm-with-bias norms (StableLM/Phi/StarCoder2); false ⇒ RMSNorm (Llama)
 	ffnGELU                                       bool // true ⇒ 2-layer GELU MLP (fc→GELU→proj: GPT-NeoX/Phi/StarCoder2); false ⇒ SwiGLU (Llama/StableLM)
 	ffnReLU2                                      bool // true ⇒ 2-layer squared-ReLU MLP (fc→relu²→proj: Nemotron); mutually exclusive with ffnGELU
+	ffnGEGLU                                      bool // true ⇒ GeGLU MLP: down(GELU(gate)⊙up) — Gemma's GELU-gated variant of SwiGLU
 	parallelRes                                   bool // true ⇒ parallel residual: attn+FFN both read norm(x0), sum onto x (GPT-NeoX/Phi/Cohere); false ⇒ sequential (Llama)
 	parallelTwoNorm                               bool // parallel residual with SEPARATE attn/FFN norms both over x0 (GPT-NeoX); needs the FFN norm computed pre-attn-add
 	qkNorm                                        bool // true ⇒ per-head RMSNorm on Q and K before RoPE (Qwen3); false otherwise
@@ -212,6 +214,7 @@ func newDecoderCommon(cfg nlp.LlamaConfig, tokEmb *tensor.Tensor, ops backendOps
 		return nil, fmt.Errorf("llamagpu(%s): dim %d not divisible by heads %d", ops.name, d.d, d.h)
 	}
 	d.dk = d.d / d.h
+	d.qDim = d.h * d.dk // = d.d for standard models; decoupled-head_dim constructors (Gemma) override
 	d.kvDim = d.kvH * d.dk
 	d.half = d.dk / 2
 	d.rotaryDim = d.dk // full RoPE by default; partial-rotary constructors override before allocScratch
@@ -238,7 +241,7 @@ func newDecoderCommon(cfg nlp.LlamaConfig, tokEmb *tensor.Tensor, ops backendOps
 func (d *Decoder) recordQKVProj(r recorder, b block, rows int) error {
 	e := b.wqkv.record(r, d.xn.b, d.qkv.b, rows)
 	if b.qkvBias != nil {
-		e = firstErr(e, r.AddBias(d.qkv.b, b.qkvBias, d.qkv.b, rows, d.d+2*d.kvDim))
+		e = firstErr(e, r.AddBias(d.qkv.b, b.qkvBias, d.qkv.b, rows, d.qDim+2*d.kvDim))
 	}
 	return e
 }
@@ -253,12 +256,12 @@ func (d *Decoder) recordQKNorm(r recorder, b block, seq, stride int) error {
 	if !d.qkNorm {
 		return nil
 	}
-	e := r.Copy2D(d.qkv.b, 0, stride, d.q.b, 0, d.d, seq, d.d) // extract Q band [seq, D]
+	e := r.Copy2D(d.qkv.b, 0, stride, d.q.b, 0, d.qDim, seq, d.qDim) // extract Q band [seq, qDim]
 	e = firstErr(e, r.RMSNorm(d.q.b, b.qN, d.q.b, seq*d.h, d.dk, d.eps))
-	e = firstErr(e, r.Copy2D(d.q.b, 0, d.d, d.qkv.b, 0, stride, seq, d.d)) // write Q band back
-	e = firstErr(e, r.Copy2D(d.qkv.b, d.d, stride, d.k.b, 0, d.kvDim, seq, d.kvDim))
+	e = firstErr(e, r.Copy2D(d.q.b, 0, d.qDim, d.qkv.b, 0, stride, seq, d.qDim)) // write Q band back
+	e = firstErr(e, r.Copy2D(d.qkv.b, d.qDim, stride, d.k.b, 0, d.kvDim, seq, d.kvDim))
 	e = firstErr(e, r.RMSNorm(d.k.b, b.kN, d.k.b, seq*d.kvH, d.dk, d.eps))
-	e = firstErr(e, r.Copy2D(d.k.b, 0, d.kvDim, d.qkv.b, d.d, stride, seq, d.kvDim))
+	e = firstErr(e, r.Copy2D(d.k.b, 0, d.kvDim, d.qkv.b, d.qDim, stride, seq, d.kvDim))
 	return e
 }
 
@@ -319,6 +322,17 @@ func (d *Decoder) recordFFN(r recorder, b block, in buffer, rows int) error {
 		}
 		return e
 	}
+	if d.ffnGEGLU {
+		// GeGLU (Gemma): down(GELU(gate)⊙up). Same 3-matrix gated shape as SwiGLU, but the gate
+		// activation is GELU and the elementwise product is a separate mul (no fused silu·b op).
+		return firstErr(
+			b.wG.record(r, in, d.gate.b, rows),                // gate = in·Wgate
+			b.wU.record(r, in, d.up.b, rows),                  // up = in·Wup
+			r.Unary(d.gate.b, d.gate.b, unaryGELU),            // GELU(gate)
+			r.Binary(d.gate.b, d.up.b, d.gate.b, binaryMul),   // GELU(gate)⊙up
+			b.wD.recordAdd(r, d.gate.b, d.mo.b, d.dx.b, rows), // dx += (·)·Wdown
+		)
+	}
 	return firstErr(
 		b.wG.record(r, in, d.gate.b, rows),
 		b.wU.record(r, in, d.up.b, rows),
@@ -360,11 +374,11 @@ func (d *Decoder) allocScratch(mk func(data []float32) *bufSlot) {
 	d.dx = mk(make([]float32, c*d.d))
 	d.xn = mk(make([]float32, c*d.d))
 	d.xn2 = mk(make([]float32, c*d.d))
-	d.q = mk(make([]float32, c*d.d))
+	d.q = mk(make([]float32, c*d.qDim))
 	d.k = mk(make([]float32, c*d.kvDim))
 	d.v_ = mk(make([]float32, c*d.kvDim))
-	d.qkv = mk(make([]float32, c*(d.d+2*d.kvDim)))
-	d.attn = mk(make([]float32, c*d.d))
+	d.qkv = mk(make([]float32, c*(d.qDim+2*d.kvDim)))
+	d.attn = mk(make([]float32, c*d.qDim))
 	d.ao = mk(make([]float32, c*d.d))
 	d.gate = mk(make([]float32, c*d.hidden))
 	d.up = mk(make([]float32, c*d.hidden))
@@ -746,6 +760,102 @@ func newNemotronDecoder(m *nlp.Nemotron, ops backendOps) (*Decoder, error) {
 	return d, nil
 }
 
+// newGemmaDecoder builds a device Decoder for an nlp.Gemma (Gemma v1). Gemma is close to Llama —
+// pre-norm RMSNorm, RoPE, GQA — with three departures, all reusing existing plumbing: the token
+// embeddings are scaled by √dim right after lookup (d.embMult), RMSNorm uses (1+w) as the gain
+// (folded in at load, so nn.RMSNorm applies directly), and the FFN is GeGLU rather than SwiGLU
+// (ffnGEGLU — GELU gate + a plain elementwise product). The lm_head is tied to the embedding
+// (Out = TokEmbᵀ). cuda-only for consistency with the rest of the new-arch family.
+func newGemmaDecoder(m *nlp.Gemma, ops backendOps) (*Decoder, error) {
+	cfg := m.Config
+	kvH := cfg.KVHeads
+	if kvH <= 0 {
+		kvH = cfg.Heads
+	}
+	headDim := cfg.HeadDim
+	if headDim <= 0 {
+		headDim = cfg.Dim / cfg.Heads
+	}
+	// Gemma infers head_dim from q_proj (heads·head_dim rows) and it is DECOUPLED (head_dim need not
+	// equal dim/heads), so read it back from the loaded weights rather than trusting the config —
+	// GemmaFromHF may have left cfg.HeadDim at 0.
+	if qOut := m.Blocks[0].Wq.Shape()[1]; qOut%cfg.Heads == 0 {
+		headDim = qOut / cfg.Heads
+	}
+	lc := nlp.LlamaConfig{
+		Vocab: cfg.Vocab, Ctx: cfg.Ctx, Dim: cfg.Dim, Heads: cfg.Heads, KVHeads: kvH,
+		Layers: cfg.Layers, Hidden: cfg.FFN, Eps: cfg.Eps, RopeBase: cfg.RopeBase,
+	}
+	d, derr := newDecoderCommon(lc, m.TokEmb, ops)
+	if derr != nil {
+		return nil, derr
+	}
+	d.ffnGEGLU = true                                // GELU-gated FFN
+	d.embMult = float32(math.Sqrt(float64(cfg.Dim))) // Gemma's √dim embedding normalizer
+	// Decoupled head_dim: override the geometry newDecoderCommon derived as dim/heads. qDim (the
+	// attention Q/O width) becomes h·head_dim, which for Gemma differs from the model dim d.
+	if headDim != d.dk {
+		d.dk = headDim
+		d.qDim = d.h * headDim
+		d.kvDim = d.kvH * headDim
+		d.half = headDim / 2
+		d.rotaryDim = headDim
+		d.scale = float32(1.0 / math.Sqrt(float64(headDim)))
+		invF64, posDiv64 := backend.RoPEFreqs(headDim, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: d.h})
+		d.invHost = make([]float32, headDim/2)
+		for i := range d.invHost {
+			d.invHost[i] = float32(invF64[i])
+		}
+		d.posDiv = float32(posDiv64)
+	}
+
+	var err error
+	mk := d.mkBuf(&err)
+	lin := func(w *tensor.Tensor) linear {
+		in, out := w.Shape()[0], w.Shape()[1]
+		return f32Linear{w: mk(flat2D(w)).b, k: in, n: out}
+	}
+	fused := func(wq, wk, wv *tensor.Tensor) linear {
+		in := wq.Shape()[0]
+		nq, nk, nv := wq.Shape()[1], wk.Shape()[1], wv.Shape()[1]
+		fq, fk, fv := flat2D(wq), flat2D(wk), flat2D(wv)
+		nt := nq + nk + nv
+		w := make([]float32, in*nt)
+		for i := range in {
+			row := w[i*nt : (i+1)*nt]
+			copy(row[:nq], fq[i*nq:(i+1)*nq])
+			copy(row[nq:nq+nk], fk[i*nk:(i+1)*nk])
+			copy(row[nq+nk:], fv[i*nv:(i+1)*nv])
+		}
+		return f32Linear{w: mk(w).b, k: in, n: nt}
+	}
+	for _, b := range m.Blocks {
+		gb := block{
+			wqkv: fused(b.Wq, b.Wk, b.Wv), wo: lin(b.Wo),
+			gAttn: mk(flat1D(b.AttnNorm.Gamma)).b, gFFN: mk(flat1D(b.FFNNorm.Gamma)).b,
+			wG: lin(b.FFN.Wgate), wU: lin(b.FFN.Wup), wD: lin(b.FFN.Wdown),
+			kC: mk(make([]float32, d.maxLen*d.kvDim)).b, vC: mk(make([]float32, d.maxLen*d.kvDim)).b,
+		}
+		d.blocks = append(d.blocks, gb)
+	}
+	d.gFinal = mk(flat1D(m.FinalNorm.Gamma))
+	// Tied lm_head: Out = TokEmbᵀ. TokEmb is [vocab, dim]; the projection wants [dim, vocab].
+	vocab, dim := m.TokEmb.Shape()[0], m.TokEmb.Shape()[1]
+	outW := make([]float32, dim*vocab)
+	for j := range vocab {
+		for i := range dim {
+			outW[i*vocab+j] = float32(m.TokEmb.AtF64(j, i))
+		}
+	}
+	d.out = f32Linear{w: mk(outW).b, k: dim, n: vocab}
+	d.allocScratch(mk)
+	if err != nil {
+		d.Release()
+		return nil, err
+	}
+	return d, nil
+}
+
 // newStarCoder2Decoder builds a device Decoder for an nlp.StarCoder2: LayerNorm-with-bias +
 // biased q/k/v/o projections + a biased 2-layer GELU MLP (c_fc → GELU → c_proj) + FULL rope +
 // GQA + untied head. Every one of those is a core generalization (lnBias, biased projections,
@@ -1073,7 +1183,7 @@ func (d *Decoder) encodeStep(pos int) (recorder, error) {
 	if err != nil {
 		return nil, err
 	}
-	D, H, KVH, dk, kvDim := d.d, d.h, d.kvH, d.dk, d.kvDim
+	D, H, KVH, dk, kvDim := d.qDim, d.h, d.kvH, d.dk, d.kvDim // D = attention Q/O width (h·dk); = d.d unless head_dim decoupled
 	for _, b := range d.blocks {
 		// attention projections: fused single QKV matmul when available (§T613 — the q/k
 		// bands rotate IN PLACE inside the combined row, k/v append to the cache straight
@@ -1215,7 +1325,7 @@ func (d *Decoder) StepN(tokens []int, pos int) ([]float32, error) {
 	if err != nil {
 		return nil, err
 	}
-	D, H, KVH, dk, kvDim := d.d, d.h, d.kvH, d.dk, d.kvDim
+	D, H, KVH, dk, kvDim := d.qDim, d.h, d.kvH, d.dk, d.kvDim // D = attention Q/O width (h·dk); = d.d unless head_dim decoupled
 	stride := D + 2*kvDim
 	for _, b := range d.blocks {
 		// fused QKV (§T613): one [k,stride] matmul; q/k bands rotate in place (RoPEAt's
