@@ -4,6 +4,18 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — feat: Jamba support — 31st loadable architecture, the hybrid capstone (T775, 2026-07-17)
+
+AI21 Jamba (`JambaForCausalLM`) as a self-contained `nlp.Jamba` type — the hybrid that interleaves
+everything the library has built: per layer, the mixer is EITHER **NoPE attention** (Llama-style GQA
+with no rotary at all — Jamba's Mamba layers carry position) OR a **Mamba selective-scan mixer**
+augmented with Jamba's RMSNorms on the dt/B/C projections; and the FFN is EITHER a **sparse MoE**
+(un-normalized top-k gating — raw softmax scores, like DeepSeek, computed from primitives) OR a
+**dense SwiGLU**, per the config's periodic layer pattern. The loader is key-driven, so any
+period/offset pattern loads. Forward parity vs a real transformers `JambaForCausalLM` (a golden
+exercising all four layer-type combinations): max abs logit diff 4.8e-8. Thirty-first architecture —
+attention, state-space, and MoE unified in one model.
+
 ### nlp — feat: RWKV support — 30th loadable architecture, WKV linear-attention recurrence (T774, 2026-07-16)
 
 RWKV-4 (`RwkvForCausalLM`, Peng et al. 2023) as a self-contained `nlp.RWKV` type — a third recurrent
