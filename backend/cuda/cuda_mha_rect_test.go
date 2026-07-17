@@ -12,11 +12,14 @@ import (
 // refMHARect computes causal multi-head attention with rectangular head dims (q/k width dqk, v width
 // dv, no GQA) on the host, for validating cu MHARect. Q [sq, heads·dqk], K [sk, heads·dqk],
 // V [sk, heads·dv] → out [sq, heads·dv]. Query i attends to keys j ≤ i.
-func refMHARect(q, k, v []float32, sq, sk, heads, dqk, dv int, scale float64) []float32 {
+func refMHARect(q, k, v []float32, sq, sk, heads, dqk, dv int, scale float64, causal bool) []float32 {
 	out := make([]float32, sq*heads*dv)
 	for h := 0; h < heads; h++ {
 		for i := 0; i < sq; i++ {
-			lim := i // causal (sq == sk)
+			lim := sk - 1 // non-causal: attend to every key
+			if causal {
+				lim = i + (sk - sq) // query i (abs sk-sq+i) attends to keys ≤ its position
+			}
 			sc := make([]float64, lim+1)
 			mx := math.Inf(-1)
 			for j := 0; j <= lim; j++ {
@@ -65,10 +68,14 @@ func TestCUDAMHARect(t *testing.T) {
 		}
 		return x
 	}
-	cases := []struct{ sq, heads, dqk, dv int }{
-		{5, 2, 6, 4}, // dv < dqk (MLA: VHead < QKNope+QKRope)
-		{4, 3, 4, 8}, // dv > dqk
-		{6, 1, 8, 8}, // square (degenerate == plain MHA)
+	cases := []struct {
+		sq, heads, dqk, dv int
+		causal             bool
+	}{
+		{5, 2, 6, 4, true},  // dv < dqk (MLA: VHead < QKNope+QKRope)
+		{4, 3, 4, 8, true},  // dv > dqk
+		{6, 1, 8, 8, true},  // square (degenerate == plain MHA)
+		{5, 2, 6, 4, false}, // non-causal (offset=sk branch): every query sees every key
 	}
 	for ci, c := range cases {
 		sk := c.sq
@@ -76,12 +83,16 @@ func TestCUDAMHARect(t *testing.T) {
 		k := gen(sk*c.heads*c.dqk, 2)
 		v := gen(sk*c.heads*c.dv, 3)
 		scale := 1.0 / math.Sqrt(float64(c.dqk))
+		causalFlag := 0
+		if c.causal {
+			causalFlag = 1
+		}
 
 		dq, _ := cuda.NewDeviceBufferF32(q)
 		dk, _ := cuda.NewDeviceBufferF32(k)
 		dv, _ := cuda.NewDeviceBufferF32(v)
 		do, _ := cuda.NewDeviceF32(c.sq, c.heads*c.dv)
-		if err := rec.MHARect(dq, dk, dv, do, c.sq, sk, c.heads, c.heads, c.dqk, c.dv, 1, 0, float32(scale)); err != nil {
+		if err := rec.MHARect(dq, dk, dv, do, c.sq, sk, c.heads, c.heads, c.dqk, c.dv, causalFlag, 0, float32(scale)); err != nil {
 			t.Fatalf("case %d MHARect: %v", ci, err)
 		}
 		if err := rec.Wait(); err != nil {
@@ -96,7 +107,7 @@ func TestCUDAMHARect(t *testing.T) {
 		dv.Free()
 		do.Free()
 
-		want := refMHARect(q, k, v, c.sq, sk, c.heads, c.dqk, c.dv, scale)
+		want := refMHARect(q, k, v, c.sq, sk, c.heads, c.dqk, c.dv, scale, c.causal)
 		for idx := range want {
 			if math.IsNaN(float64(got[idx])) || math.Abs(float64(got[idx]-want[idx])) > 1e-4 {
 				t.Fatalf("case %d (sq=%d heads=%d dqk=%d dv=%d) [%d]: gpu %v vs ref %v",
