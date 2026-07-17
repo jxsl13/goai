@@ -1388,6 +1388,87 @@ func newMixtralDecoder(m *nlp.Mixtral, ops backendOps) (*Decoder, error) {
 	return d, nil
 }
 
+// newOLMoEDecoder builds a device Decoder for an nlp.OLMoE (Allen AI sparse-MoE). OLMoE is the
+// pre-norm sparse-MoE composition: the plain Llama attention core with FULL-WIDTH q/k RMSNorm
+// (qkNorm+qkNormFull, one RMSNorm over the whole q/k projection — same as OLMo2) plus a sparse
+// Mixture-of-Experts FFN (recordMoE) and an untied lm_head. cuda-only (MoE + full-width QK-norm).
+func newOLMoEDecoder(m *nlp.OLMoE, ops backendOps) (*Decoder, error) {
+	cfg := m.Config
+	kvH := cfg.KVHeads
+	if kvH <= 0 {
+		kvH = cfg.Heads
+	}
+	if len(m.Blocks) == 0 || m.Blocks[0].MoE == nil || len(m.Blocks[0].MoE.Experts) == 0 {
+		return nil, fmt.Errorf("llamagpu(%s): OLMoE has no MoE experts", ops.name)
+	}
+	b0 := m.Blocks[0]
+	nExperts := len(b0.MoE.Experts)
+	topK := b0.MoE.TopK
+	if topK <= 0 {
+		topK = 2
+	}
+	hidden := cfg.Hidden
+	if hidden <= 0 {
+		hidden = b0.MoE.Experts[0].Wgate.Shape()[1]
+	}
+	lc := nlp.LlamaConfig{
+		Vocab: cfg.Vocab, Ctx: cfg.Ctx, Dim: cfg.Dim, Heads: cfg.Heads, KVHeads: kvH,
+		Layers: cfg.Layers, Hidden: hidden, Eps: cfg.Eps, RopeBase: cfg.RopeBase,
+	}
+	d, derr := newDecoderCommon(lc, m.TokEmb, ops)
+	if derr != nil {
+		return nil, derr
+	}
+	d.moe = true
+	d.nExperts = nExperts
+	d.topK = topK
+	d.qkNorm = true     // full-width q/k RMSNorm before RoPE...
+	d.qkNormFull = true // ...over the whole projection (OLMo2/OLMoE)
+
+	var err error
+	mk := d.mkBuf(&err)
+	lin := func(w *tensor.Tensor) linear {
+		in, out := w.Shape()[0], w.Shape()[1]
+		return f32Linear{w: mk(flat2D(w)).b, k: in, n: out}
+	}
+	fused := func(wq, wk, wv *tensor.Tensor) linear {
+		in := wq.Shape()[0]
+		nq, nk, nv := wq.Shape()[1], wk.Shape()[1], wv.Shape()[1]
+		fq, fk, fv := flat2D(wq), flat2D(wk), flat2D(wv)
+		nt := nq + nk + nv
+		w := make([]float32, in*nt)
+		for i := range in {
+			row := w[i*nt : (i+1)*nt]
+			copy(row[:nq], fq[i*nq:(i+1)*nq])
+			copy(row[nq:nq+nk], fk[i*nk:(i+1)*nk])
+			copy(row[nq+nk:], fv[i*nv:(i+1)*nv])
+		}
+		return f32Linear{w: mk(w).b, k: in, n: nt}
+	}
+	for _, b := range m.Blocks {
+		experts := make([]moeFFN, len(b.MoE.Experts))
+		for i, ex := range b.MoE.Experts {
+			experts[i] = moeFFN{wG: lin(ex.Wgate), wU: lin(ex.Wup), wD: lin(ex.Wdown)}
+		}
+		gb := block{
+			wqkv: fused(b.Wq, b.Wk, b.Wv), wo: lin(b.Wo),
+			gAttn: mk(flat1D(b.AttnNorm.Gamma)).b, gFFN: mk(flat1D(b.FFNNorm.Gamma)).b,
+			qN: mk(flat1D(b.QNorm.Gamma)).b, kN: mk(flat1D(b.KNorm.Gamma)).b, // full-width [qDim]/[kvDim]
+			moeRouter: lin(b.MoE.Router.W), moeExperts: experts,
+			kC: mk(make([]float32, d.maxLen*d.kvDim)).b, vC: mk(make([]float32, d.maxLen*d.kvDim)).b,
+		}
+		d.blocks = append(d.blocks, gb)
+	}
+	d.gFinal = mk(flat1D(m.Norm.Gamma))
+	d.out = lin(m.Out)
+	d.allocScratch(mk)
+	if err != nil {
+		d.Release()
+		return nil, err
+	}
+	return d, nil
+}
+
 // newStarCoder2Decoder builds a device Decoder for an nlp.StarCoder2: LayerNorm-with-bias +
 // biased q/k/v/o projections + a biased 2-layer GELU MLP (c_fc → GELU → c_proj) + FULL rope +
 // GQA + untied head. Every one of those is a core generalization (lnBias, biased projections,

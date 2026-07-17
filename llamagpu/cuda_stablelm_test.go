@@ -833,3 +833,59 @@ func TestCUDAQwen3MoEMatchesReference(t *testing.T) {
 	}
 	t.Logf("llamagpu NewQwen3MoECUDA matches reference nlp.Qwen3Moe logits within %g across 8 autoregressive steps (sparse MoE + per-head QK-norm)", tol)
 }
+
+// TestCUDAOLMoEMatchesReference checks the OLMoE GPU path (NewOLMoECUDA): pre-norm attention with
+// full-width QK-norm + a sparse MoE FFN. Like the other full-width-QK-norm arch it uses the per-step
+// logit-tolerance compare (QK-norm amplifies RMSNorm rounding, compounded by the MoE sum, on the
+// random-weight golden); the MoE combine itself is exact (Mixtral matches greedy token-for-token).
+func TestCUDAOLMoEMatchesReference(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("cuda: no CUDA-capable device")
+	}
+	ts, _, err := safetensors.LoadFile("../nlp/testdata/olmoe_hf.safetensors")
+	if err != nil {
+		t.Skipf("olmoe testdata unavailable (run make golden): %v", err)
+	}
+	m, err := nlp.OLMoEFromHF(ts, nlp.OLMoEConfig{Heads: 4, KVHeads: 2, TopK: 2, Eps: 1e-6, RopeBase: 10000, Ctx: 32})
+	if err != nil {
+		t.Fatalf("OLMoEFromHF: %v", err)
+	}
+
+	dec, err := llamagpu.NewOLMoECUDA(m)
+	if err != nil {
+		t.Fatalf("NewOLMoECUDA: %v", err)
+	}
+	defer dec.Release()
+
+	refCtx := backend.NewContext().WithBackend(backend.Reference())
+	cache := m.NewCache()
+	argmax := func(v []float32) int {
+		bi := 0
+		for i, x := range v {
+			if x > v[bi] {
+				bi = i
+			}
+		}
+		return bi
+	}
+	const tol = 2.5e-1
+	tok := 3
+	for pos := range 8 {
+		got, err := dec.Step(tok, pos)
+		if err != nil {
+			t.Fatalf("cuda step pos %d: %v", pos, err)
+		}
+		refT, err := m.DecodeStep(refCtx, cache, tok, pos)
+		if err != nil {
+			t.Fatalf("ref step pos %d: %v", pos, err)
+		}
+		for j := range got {
+			want := refT.AtF64(0, j)
+			if math.IsNaN(float64(got[j])) || math.Abs(float64(got[j])-want) > tol*math.Max(1, math.Abs(want)) {
+				t.Fatalf("olmoe pos %d tok %d logit[%d]: cuda %v vs reference %v (tol %g)", pos, tok, j, got[j], want, tol)
+			}
+		}
+		tok = argmax(got)
+	}
+	t.Logf("llamagpu NewOLMoECUDA matches reference nlp.OLMoE logits within %g across 8 autoregressive steps (sparse MoE + full-width QK-norm)", tol)
+}

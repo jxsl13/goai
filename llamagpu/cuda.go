@@ -214,6 +214,33 @@ func NewOLMo2CUDA(m *nlp.OLMo2) (*Decoder, error) {
 	})
 }
 
+// NewOLMoECUDA uploads an nlp.OLMoE (Allen AI sparse-MoE) onto the batched Decoder core: pre-norm
+// Llama attention with FULL-WIDTH q/k RMSNorm and a sparse Mixture-of-Experts FFN, untied lm_head.
+// cuda-only.
+func NewOLMoECUDA(m *nlp.OLMoE) (*Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newOLMoEDecoder(m, backendOps{
+		name:        string(backend.CUDA),
+		asyncEncode: false,
+		newBuffer: func(data []float32) (buffer, error) {
+			b, err := cuda.NewDeviceBufferF32(data)
+			if err != nil {
+				return nil, err
+			}
+			return cBuf{b}, nil
+		},
+		newRecorder: func() (recorder, error) {
+			r, err := cuda.NewRecorder()
+			if err != nil {
+				return nil, err
+			}
+			return cRec{r}, nil
+		},
+	})
+}
+
 // NewMixtralCUDA uploads an nlp.Mixtral (sparse Mixture-of-Experts) onto the batched Decoder core.
 // Attention is the plain Llama core (+ optional Qwen3-MoE QK-norm); the FFN is a sparse MoE routed
 // per token — the routing weights are computed on-device (cu_moe_gate) so the whole step stays a
