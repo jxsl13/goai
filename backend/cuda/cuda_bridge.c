@@ -33,7 +33,7 @@ static cublasHandle_t gHandle = NULL;
 static float *gOne = NULL, *gZero = NULL; // device 1.0f/0.0f — cuBLAS DEVICE pointer mode (graph-capture-safe alpha/beta)
 static cudaStream_t gStream = NULL;
 static CUcontext gCtx = NULL; // runtime's primary context, retained for driver-API launches
-static CUfunction gGelu = NULL, gRelu2 = NULL, gSilu = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gRopePartial = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gAttnSoftmaxCap = NULL, gAttnSoftmaxAlibi = NULL, gQgemv = NULL, gQgemv4 = NULL, gQgemv4k = NULL, gQgemv4kPre = NULL, gQgemv5k = NULL, gQgemv6k = NULL, gQgemv3k = NULL, gQgemv2k = NULL, gQgemv40 = NULL, gQgemvI4nl = NULL, gQgemvI4xs = NULL, gQgemvMxfp4 = NULL, gQgemvI2xxs = NULL, gQgemvI2xs = NULL, gQgemvI3xxs = NULL, gQgemvI3s = NULL, gQgemvI1s = NULL, gQgemvI1m = NULL, gI8Mma = NULL, gI8MmaT = NULL, gI8MmaRb = NULL, gI8MmaDb = NULL, gI8MmaWt = NULL, gI8MmaWp = NULL, gI8Mmq = NULL, gI8MmqR = NULL, gQrowsI8 = NULL, gLdmProbe = NULL, gLdmProbe2 = NULL, gI8MmaLm = NULL, gCvtF16 = NULL, gCvtFrom16 = NULL; // lazily nvrtc-compiled
+static CUfunction gGelu = NULL, gRelu2 = NULL, gMoeGate = NULL, gRowAxpy = NULL, gSilu = NULL, gSigmoid = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gRopePartial = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gAttnSoftmaxCap = NULL, gAttnSoftmaxAlibi = NULL, gQgemv = NULL, gQgemv4 = NULL, gQgemv4k = NULL, gQgemv4kPre = NULL, gQgemv5k = NULL, gQgemv6k = NULL, gQgemv3k = NULL, gQgemv2k = NULL, gQgemv40 = NULL, gQgemvI4nl = NULL, gQgemvI4xs = NULL, gQgemvMxfp4 = NULL, gQgemvI2xxs = NULL, gQgemvI2xs = NULL, gQgemvI3xxs = NULL, gQgemvI3s = NULL, gQgemvI1s = NULL, gQgemvI1m = NULL, gI8Mma = NULL, gI8MmaT = NULL, gI8MmaRb = NULL, gI8MmaDb = NULL, gI8MmaWt = NULL, gI8MmaWp = NULL, gI8Mmq = NULL, gI8MmqR = NULL, gQrowsI8 = NULL, gLdmProbe = NULL, gLdmProbe2 = NULL, gI8MmaLm = NULL, gCvtF16 = NULL, gCvtFrom16 = NULL; // lazily nvrtc-compiled
 static CUfunction gRopeDpos = NULL, gRopePartialDpos = NULL, gAttnSoftmaxDpos = NULL, gAppendDpos = NULL; // device-position (graph-capturable) twins
 static CUfunction gGqaFlashPart = NULL, gGqaFlashMerge = NULL; // flash decode: GQA K/V-shared split-K partials + merge
 static CUfunction gGqaFlashPartF16 = NULL, gAppendDposF16 = NULL; // f16 KV-cache twins (u16 storage, f32 compute)
@@ -219,6 +219,67 @@ static int launch_unary(CUfunction fn, void* d, int n) {
     return (cuLaunchKernel(fn, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
 }
 
+// cu_row_axpy: dst[r,c] += arow[r]·src[r,c] — a per-ROW scalar AXPY. The MoE combine: scale an
+// expert's [rows, cols] output by that token's routing weight (arow, one scalar per row) and
+// accumulate into the running mixture output. arow is a [rows] device vector.
+int cu_row_axpy(void* dst, const void* src, const void* arow, int rows, int cols) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (!gRowAxpy && compile_kernel(
+                      "extern \"C\" __global__ void row_axpy(float* dst, const float* src, const float* arow, int rows, int cols){\n"
+                      "  int i = blockIdx.x*blockDim.x + threadIdx.x; long n=(long)rows*cols;\n"
+                      "  if (i < n){ dst[i] += arow[i/cols] * src[i]; }\n"
+                      "}\n",
+                      "row_axpy.cu", "row_axpy", &gRowAxpy) != 0) { rc = -2; goto done; }
+    {
+        long n = (long)rows * cols; int threads = 256; int blocks = (int)((n + threads - 1) / threads); if (blocks < 1) blocks = 1;
+        void* args[5]; args[0]=&dst; args[1]=&src; args[2]=&arow; args[3]=&rows; args[4]=&cols;
+        rc = (cuLaunchKernel(gRowAxpy, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_moe_gate: Mixtral-style top-k routing. For each of `rows` tokens, given E raw router logits,
+// select the top-K, and write weights[E] = softmax over the SELECTED logits (exp(l)/Σ_topk exp) for
+// the K chosen experts and 0 for the rest — the renormalized combine weights. One block per row,
+// single-threaded (E and K are small). weights must be a separate [rows·E] buffer from logits.
+int cu_moe_gate(const void* logits, void* weights, int rows, int E, int K) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (!gMoeGate && compile_kernel(
+                      "extern \"C\" __global__ void moe_gate(const float* logits, float* weights, int rows, int E, int K){\n"
+                      "  int r=blockIdx.x; if(r>=rows) return; if(threadIdx.x!=0) return;\n"
+                      "  const float* lg = logits + (size_t)r*E;\n"
+                      "  float* w = weights + (size_t)r*E;\n"
+                      "  for(int e=0;e<E;e++) w[e]=0.0f;\n"
+                      "  int kk = K<E ? K : E;\n"
+                      "  for(int p=0;p<kk;p++){\n"           // K passes: mark the p-th largest with -1
+                      "    int best=-1; double bv=-1e300;\n"
+                      "    for(int e=0;e<E;e++){ if(w[e]==0.0f && (double)lg[e]>bv){ bv=(double)lg[e]; best=e; } }\n"
+                      "    if(best>=0) w[best]=-1.0f;\n"
+                      "  }\n"
+                      "  double mx=-1e300;\n"
+                      "  for(int e=0;e<E;e++){ if(w[e]==-1.0f && (double)lg[e]>mx) mx=(double)lg[e]; }\n"
+                      "  double s=0.0;\n"
+                      "  for(int e=0;e<E;e++){ if(w[e]==-1.0f) s+=exp((double)lg[e]-mx); }\n"
+                      "  for(int e=0;e<E;e++){ w[e] = (w[e]==-1.0f) ? (float)(exp((double)lg[e]-mx)/s) : 0.0f; }\n"
+                      "}\n",
+                      "moe_gate.cu", "moe_gate", &gMoeGate) != 0) { rc = -2; goto done; }
+    {
+        void* args[5]; args[0]=&logits; args[1]=&weights; args[2]=&rows; args[3]=&E; args[4]=&K;
+        rc = (cuLaunchKernel(gMoeGate, rows<1?1:rows, 1, 1, 32, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
 int cu_gelu_f32(void* d, int n) {
     int rc = -1;
     pthread_mutex_lock(&gLock);
@@ -250,6 +311,25 @@ int cu_relu2_f32(void* d, int n) {
                       "}\n",
                       "relu2.cu", "relu2_f32", &gRelu2) != 0) { rc = -2; goto done; }
     rc = launch_unary(gRelu2, d, n);
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+int cu_sigmoid_f32(void* d, int n) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    // sigmoid(x) = 1/(1+e^-x), stable branch at 0 — matches backend/ref (Qwen2-MoE shared-expert gate).
+    if (!gSigmoid && compile_kernel(
+                      "extern \"C\" __global__ void sigmoid_f32(float* x, int n){\n"
+                      "  int i = blockIdx.x*blockDim.x + threadIdx.x;\n"
+                      "  if (i < n){ float v = x[i];\n"
+                      "    x[i] = v>=0.0f ? 1.0f/(1.0f+expf(-v)) : expf(v)/(1.0f+expf(v)); }\n"
+                      "}\n",
+                      "sigmoid.cu", "sigmoid_f32", &gSigmoid) != 0) { rc = -2; goto done; }
+    rc = launch_unary(gSigmoid, d, n);
 done:
     pthread_mutex_unlock(&gLock);
     return rc;

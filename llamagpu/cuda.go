@@ -64,6 +64,12 @@ func (c cRec) MHACap(q, k, v, o buffer, sq, sk, dm, heads, kvHeads, dk, causal, 
 func (c cRec) MHAALiBi(q, k, v, o, slopes buffer, sq, sk, dm, heads, kvHeads, dk, causal, window int, scale float32) error {
 	return c.r.MHAALiBi(cb(q), cb(k), cb(v), cb(o), cb(slopes), sq, sk, dm, heads, kvHeads, dk, causal, window, scale)
 }
+func (c cRec) MoEGate(logits, weights buffer, rows, e, k int) error {
+	return c.r.MoEGate(cb(logits), cb(weights), rows, e, k)
+}
+func (c cRec) RowAxpy(dst, src, arow buffer, rows, cols int) error {
+	return c.r.RowAxpy(cb(dst), cb(src), cb(arow), rows, cols)
+}
 func (c cRec) Unary(x, o buffer, op int) error { return c.r.Unary(cb(x), cb(o), op) }
 func (c cRec) Binary(a, b, o buffer, op int) error {
 	return c.r.Binary(cb(a), cb(b), cb(o), op)
@@ -207,6 +213,123 @@ func NewOLMo2CUDA(m *nlp.OLMo2) (*Decoder, error) {
 		},
 	})
 }
+
+// NewGraniteMoECUDA uploads an nlp.GraniteMoE onto the batched Decoder core: the MoE sibling of
+// dense Granite — a plain Llama attention core + sparse Mixture-of-Experts FFN, wrapped in the four
+// Granite config scalars (embedding/attention/residual multipliers folded into the upload, logits
+// scaling into the lm_head). cuda-only.
+func NewGraniteMoECUDA(m *nlp.GraniteMoE) (*Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newGraniteMoEDecoder(m, backendOps{
+		name:        string(backend.CUDA),
+		asyncEncode: false,
+		newBuffer: func(data []float32) (buffer, error) {
+			b, err := cuda.NewDeviceBufferF32(data)
+			if err != nil {
+				return nil, err
+			}
+			return cBuf{b}, nil
+		},
+		newRecorder: func() (recorder, error) {
+			r, err := cuda.NewRecorder()
+			if err != nil {
+				return nil, err
+			}
+			return cRec{r}, nil
+		},
+	})
+}
+
+// NewQwen2MoECUDA uploads an nlp.Qwen2MoE onto the batched Decoder core: a routed sparse MoE PLUS a
+// shared expert (a SwiGLU run on every token, sigmoid-gated), with Qwen2 q/k/v projection biases on
+// the attention. cuda-only.
+func NewQwen2MoECUDA(m *nlp.Qwen2MoE) (*Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newQwen2MoEDecoder(m, backendOps{
+		name:        string(backend.CUDA),
+		asyncEncode: false,
+		newBuffer: func(data []float32) (buffer, error) {
+			b, err := cuda.NewDeviceBufferF32(data)
+			if err != nil {
+				return nil, err
+			}
+			return cBuf{b}, nil
+		},
+		newRecorder: func() (recorder, error) {
+			r, err := cuda.NewRecorder()
+			if err != nil {
+				return nil, err
+			}
+			return cRec{r}, nil
+		},
+	})
+}
+
+// NewOLMoECUDA uploads an nlp.OLMoE (Allen AI sparse-MoE) onto the batched Decoder core: pre-norm
+// Llama attention with FULL-WIDTH q/k RMSNorm and a sparse Mixture-of-Experts FFN, untied lm_head.
+// cuda-only.
+func NewOLMoECUDA(m *nlp.OLMoE) (*Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newOLMoEDecoder(m, backendOps{
+		name:        string(backend.CUDA),
+		asyncEncode: false,
+		newBuffer: func(data []float32) (buffer, error) {
+			b, err := cuda.NewDeviceBufferF32(data)
+			if err != nil {
+				return nil, err
+			}
+			return cBuf{b}, nil
+		},
+		newRecorder: func() (recorder, error) {
+			r, err := cuda.NewRecorder()
+			if err != nil {
+				return nil, err
+			}
+			return cRec{r}, nil
+		},
+	})
+}
+
+// NewMixtralCUDA uploads an nlp.Mixtral (sparse Mixture-of-Experts) onto the batched Decoder core.
+// Attention is the plain Llama core (+ optional Qwen3-MoE QK-norm); the FFN is a sparse MoE routed
+// per token — the routing weights are computed on-device (cu_moe_gate) so the whole step stays a
+// pre-recorded batched command buffer. Dense expert eval (correct); sparse top-k gather is a
+// follow-up. cuda-only.
+func NewMixtralCUDA(m *nlp.Mixtral) (*Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newMixtralDecoder(m, backendOps{
+		name:        string(backend.CUDA),
+		asyncEncode: false,
+		newBuffer: func(data []float32) (buffer, error) {
+			b, err := cuda.NewDeviceBufferF32(data)
+			if err != nil {
+				return nil, err
+			}
+			return cBuf{b}, nil
+		},
+		newRecorder: func() (recorder, error) {
+			r, err := cuda.NewRecorder()
+			if err != nil {
+				return nil, err
+			}
+			return cRec{r}, nil
+		},
+	})
+}
+
+// NewQwen3MoECUDA uploads a Qwen3-MoE model onto the batched Decoder core. Qwen3-MoE loads as an
+// nlp.Mixtral whose blocks additionally carry per-head q/k RMSNorm gains (the same optional QK-norm
+// newMixtralDecoder already wires), so this is exactly NewMixtralCUDA with a Qwen3-MoE entry point.
+// Load with nlp.Qwen3MoeFromHF.
+func NewQwen3MoECUDA(m *nlp.Mixtral) (*Decoder, error) { return NewMixtralCUDA(m) }
 
 // NewMPTCUDA uploads an nlp.MPT (MosaicML) onto the batched Decoder core: the first ALiBi decoder —
 // position enters solely through a per-head linear bias on the attention scores (no RoPE), with

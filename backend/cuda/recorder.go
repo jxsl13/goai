@@ -42,7 +42,8 @@ func NewRecorder() (*Recorder, error) {
 const (
 	recUnarySiLU    = 6
 	recUnaryGELU    = 9
-	recUnaryReLU2   = 10 // squared ReLU (Nemotron); cuda-only, so no metal/vulkan mapping needed
+	recUnaryReLU2   = 10 // squared ReLU (Nemotron); cuda-only
+	recUnarySigmoid = 11 // plain sigmoid (Qwen2-MoE shared-expert gate); cuda-only
 	recBinaryAdd    = 0
 	recBinaryMul    = 2
 	recBinarySwiGLU = 6
@@ -226,6 +227,31 @@ func (rec *Recorder) MHA(q, k, v, o *DeviceF32, sq, sk, dm, heads, kvHeads, dk, 
 	return nil
 }
 
+// MoEGate writes Mixtral-style top-k routing weights: for each of `rows` tokens, given `e` raw router
+// logits, weights[e] = softmax over the top-`k` logits (0 for unselected experts) — the renormalized
+// combine weights. logits and weights are [rows·e] device buffers and must be distinct.
+func (rec *Recorder) MoEGate(logits, weights *DeviceF32, rows, e, k int) error {
+	if logits.ptr == nil || weights.ptr == nil {
+		return fmt.Errorf("cuda: rec MoEGate on a freed handle")
+	}
+	if rc := C.cu_moe_gate(logits.ptr, weights.ptr, C.int(rows), C.int(e), C.int(k)); rc != 0 {
+		return fmt.Errorf("cuda: rec MoEGate failed (code %d)", int(rc))
+	}
+	return nil
+}
+
+// RowAxpy accumulates dst += diag(arow)·src: dst[r,:] += arow[r]·src[r,:], the MoE combine that
+// scales an expert's [rows,cols] output by each token's routing weight (arow is a [rows] vector).
+func (rec *Recorder) RowAxpy(dst, src, arow *DeviceF32, rows, cols int) error {
+	if dst.ptr == nil || src.ptr == nil || arow.ptr == nil {
+		return fmt.Errorf("cuda: rec RowAxpy on a freed handle")
+	}
+	if rc := C.cu_row_axpy(dst.ptr, src.ptr, arow.ptr, C.int(rows), C.int(cols)); rc != 0 {
+		return fmt.Errorf("cuda: rec RowAxpy failed (code %d)", int(rc))
+	}
+	return nil
+}
+
 // MHAALiBi is MHA with an ALiBi position bias (MPT): each scaled score gets slopeₕ·(j−qabs) added
 // before the mask+softmax, where slopes is a device array of `heads` per-head slopes. No RoPE.
 func (rec *Recorder) MHAALiBi(q, k, v, o, slopes *DeviceF32, sq, sk, dm, heads, kvHeads, dk, causal, window int, scale float32) error {
@@ -300,6 +326,8 @@ func (rec *Recorder) Unary(x, o *DeviceF32, op int) error {
 		rc = C.cu_gelu_f32(o.ptr, C.int(n))
 	case recUnaryReLU2:
 		rc = C.cu_relu2_f32(o.ptr, C.int(n))
+	case recUnarySigmoid:
+		rc = C.cu_sigmoid_f32(o.ptr, C.int(n))
 	default:
 		return fmt.Errorf("cuda: rec Unary op %d unsupported", op)
 	}

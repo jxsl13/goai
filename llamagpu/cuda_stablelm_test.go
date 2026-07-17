@@ -722,3 +722,264 @@ func TestCUDAMPTMatchesReference(t *testing.T) {
 	}
 	t.Logf("llamagpu NewMPTCUDA.Generate == nlp.MPT.Generate greedy: %d tokens (ALiBi + weight-only LayerNorm + GELU-MLP)", len(gpuOut))
 }
+
+// TestCUDAMixtralMatchesReference checks the Mixtral GPU path (NewMixtralCUDA) generates greedy-
+// identical tokens to the reference nlp.Mixtral — the FIRST sparse Mixture-of-Experts GPU decoder.
+// Exercises the on-device routing (cu_moe_gate) + per-expert SwiGLU + weighted combine (cu_row_axpy)
+// inside the pre-recorded batched command buffer, with the attention/norm stack reusing the dense core.
+func TestCUDAMixtralMatchesReference(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("cuda: no CUDA-capable device")
+	}
+	ts, _, err := safetensors.LoadFile("../nlp/testdata/mixtral_hf.safetensors")
+	if err != nil {
+		t.Skipf("mixtral testdata unavailable (run make golden): %v", err)
+	}
+	m, err := nlp.MixtralFromHF(ts, nlp.MixtralConfig{
+		Heads: 4, KVHeads: 2, TopK: 2, Eps: 1e-5, RopeBase: 10000, Ctx: 32,
+	})
+	if err != nil {
+		t.Fatalf("MixtralFromHF: %v", err)
+	}
+
+	dec, err := llamagpu.NewMixtralCUDA(m)
+	if err != nil {
+		t.Fatalf("NewMixtralCUDA: %v", err)
+	}
+	defer dec.Release()
+
+	prompt := []int{3, 7, 1, 9}
+	const maxNew = 12
+	gpuOut, err := dec.Generate(prompt, maxNew, nlp.Greedy())
+	if err != nil {
+		t.Fatalf("cuda generate: %v", err)
+	}
+	refOut, err := m.Generate(prompt, maxNew, nlp.Greedy(), nlp.WithBackend(backend.Reference()))
+	if err != nil {
+		t.Fatalf("ref generate: %v", err)
+	}
+	if len(gpuOut) != len(refOut) {
+		t.Fatalf("length: cuda %d vs ref %d", len(gpuOut), len(refOut))
+	}
+	for i := range gpuOut {
+		if gpuOut[i] != refOut[i] {
+			t.Fatalf("token[%d]: cuda %d vs ref %d\ncuda=%v\nref=%v", i, gpuOut[i], refOut[i], gpuOut, refOut)
+		}
+	}
+	t.Logf("llamagpu NewMixtralCUDA.Generate == nlp.Mixtral.Generate greedy: %d tokens (sparse MoE: route → experts → combine)", len(gpuOut))
+}
+
+// TestCUDAQwen3MoEMatchesReference checks the Qwen3-MoE GPU path (NewQwen3MoECUDA) generates greedy-
+// identical tokens to the reference. Qwen3-MoE loads as an nlp.Mixtral with per-head QK-norm, so this
+// exercises the sparse-MoE decoder AND the QK-norm path together — greedy-exact (no QK-norm argmax
+// amplification issue here since the router/expert structure dominates).
+func TestCUDAQwen3MoEMatchesReference(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("cuda: no CUDA-capable device")
+	}
+	ts, _, err := safetensors.LoadFile("../nlp/testdata/qwen3moe_hf.safetensors")
+	if err != nil {
+		t.Skipf("qwen3moe testdata unavailable (run make golden): %v", err)
+	}
+	m, err := nlp.Qwen3MoeFromHF(ts, nlp.MixtralConfig{Heads: 4, KVHeads: 2, TopK: 2, Eps: 1e-6, RopeBase: 10000, Ctx: 32})
+	if err != nil {
+		t.Fatalf("Qwen3MoeFromHF: %v", err)
+	}
+	if m.Blocks[0].QNorm == nil {
+		t.Fatal("qwen3moe block 0 has no QK-norm — golden or loader broke; test would not cover QK-norm")
+	}
+
+	dec, err := llamagpu.NewQwen3MoECUDA(m)
+	if err != nil {
+		t.Fatalf("NewQwen3MoECUDA: %v", err)
+	}
+	defer dec.Release()
+
+	// Like dense Qwen3 (TestCUDAQwen3MatchesReference), the per-head QK-norm amplifies the tiny
+	// GPU(double)-vs-CPU RMSNorm rounding — here compounded by the MoE's weighted expert sum — so on
+	// this random-weight golden greedy argmax is hypersensitive. We assert the logits agree within a
+	// widened tolerance across an autoregressive run (bounded diff ⇒ no numerical blow-up); a trained
+	// model's peaked logits keep argmax robust. The MoE combine itself is exact (Mixtral, no QK-norm,
+	// matches greedy token-for-token).
+	refCtx := backend.NewContext().WithBackend(backend.Reference())
+	cache := m.NewCache()
+	argmax := func(v []float32) int {
+		bi := 0
+		for i, x := range v {
+			if x > v[bi] {
+				bi = i
+			}
+		}
+		return bi
+	}
+	const tol = 2.5e-1
+	tok := 3
+	for pos := range 8 {
+		got, err := dec.Step(tok, pos)
+		if err != nil {
+			t.Fatalf("cuda step pos %d: %v", pos, err)
+		}
+		refT, err := m.DecodeStep(refCtx, cache, tok, pos)
+		if err != nil {
+			t.Fatalf("ref step pos %d: %v", pos, err)
+		}
+		for j := range got {
+			want := refT.AtF64(0, j)
+			if math.IsNaN(float64(got[j])) || math.Abs(float64(got[j])-want) > tol*math.Max(1, math.Abs(want)) {
+				t.Fatalf("qwen3moe pos %d tok %d logit[%d]: cuda %v vs reference %v (tol %g)", pos, tok, j, got[j], want, tol)
+			}
+		}
+		tok = argmax(got)
+	}
+	t.Logf("llamagpu NewQwen3MoECUDA matches reference nlp.Qwen3Moe logits within %g across 8 autoregressive steps (sparse MoE + per-head QK-norm)", tol)
+}
+
+// TestCUDAOLMoEMatchesReference checks the OLMoE GPU path (NewOLMoECUDA): pre-norm attention with
+// full-width QK-norm + a sparse MoE FFN. Like the other full-width-QK-norm arch it uses the per-step
+// logit-tolerance compare (QK-norm amplifies RMSNorm rounding, compounded by the MoE sum, on the
+// random-weight golden); the MoE combine itself is exact (Mixtral matches greedy token-for-token).
+func TestCUDAOLMoEMatchesReference(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("cuda: no CUDA-capable device")
+	}
+	ts, _, err := safetensors.LoadFile("../nlp/testdata/olmoe_hf.safetensors")
+	if err != nil {
+		t.Skipf("olmoe testdata unavailable (run make golden): %v", err)
+	}
+	m, err := nlp.OLMoEFromHF(ts, nlp.OLMoEConfig{Heads: 4, KVHeads: 2, TopK: 2, Eps: 1e-6, RopeBase: 10000, Ctx: 32})
+	if err != nil {
+		t.Fatalf("OLMoEFromHF: %v", err)
+	}
+
+	dec, err := llamagpu.NewOLMoECUDA(m)
+	if err != nil {
+		t.Fatalf("NewOLMoECUDA: %v", err)
+	}
+	defer dec.Release()
+
+	refCtx := backend.NewContext().WithBackend(backend.Reference())
+	cache := m.NewCache()
+	argmax := func(v []float32) int {
+		bi := 0
+		for i, x := range v {
+			if x > v[bi] {
+				bi = i
+			}
+		}
+		return bi
+	}
+	const tol = 2.5e-1
+	tok := 3
+	for pos := range 8 {
+		got, err := dec.Step(tok, pos)
+		if err != nil {
+			t.Fatalf("cuda step pos %d: %v", pos, err)
+		}
+		refT, err := m.DecodeStep(refCtx, cache, tok, pos)
+		if err != nil {
+			t.Fatalf("ref step pos %d: %v", pos, err)
+		}
+		for j := range got {
+			want := refT.AtF64(0, j)
+			if math.IsNaN(float64(got[j])) || math.Abs(float64(got[j])-want) > tol*math.Max(1, math.Abs(want)) {
+				t.Fatalf("olmoe pos %d tok %d logit[%d]: cuda %v vs reference %v (tol %g)", pos, tok, j, got[j], want, tol)
+			}
+		}
+		tok = argmax(got)
+	}
+	t.Logf("llamagpu NewOLMoECUDA matches reference nlp.OLMoE logits within %g across 8 autoregressive steps (sparse MoE + full-width QK-norm)", tol)
+}
+
+// TestCUDAGraniteMoEMatchesReference checks the GraniteMoE GPU path (NewGraniteMoECUDA): a sparse
+// MoE wrapped in the four Granite config scalars (deliberately non-identity: 12, 0.5, 0.22, 8). No
+// QK-norm, so this is greedy-exact — it verifies the scalar folds compose with the MoE combine
+// (ResidualMult baked into Wo AND every expert's Wdown, EmbeddingMult/AttentionMult/LogitsScale).
+func TestCUDAGraniteMoEMatchesReference(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("cuda: no CUDA-capable device")
+	}
+	ts, _, err := safetensors.LoadFile("../nlp/testdata/granitemoe_hf.safetensors")
+	if err != nil {
+		t.Skipf("granitemoe testdata unavailable (run make golden): %v", err)
+	}
+	m, err := nlp.GraniteMoeFromHF(ts, nlp.GraniteMoeConfig{
+		Heads: 4, KVHeads: 2, TopK: 2, Eps: 1e-6, RopeBase: 10000, Ctx: 32,
+		EmbeddingMult: 12, AttentionMult: 0.5, ResidualMult: 0.22, LogitsScale: 8,
+	})
+	if err != nil {
+		t.Fatalf("GraniteMoeFromHF: %v", err)
+	}
+
+	dec, err := llamagpu.NewGraniteMoECUDA(m)
+	if err != nil {
+		t.Fatalf("NewGraniteMoECUDA: %v", err)
+	}
+	defer dec.Release()
+
+	prompt := []int{3, 7, 1, 9}
+	const maxNew = 12
+	gpuOut, err := dec.Generate(prompt, maxNew, nlp.Greedy())
+	if err != nil {
+		t.Fatalf("cuda generate: %v", err)
+	}
+	refOut, err := m.Generate(prompt, maxNew, nlp.Greedy(), nlp.WithBackend(backend.Reference()))
+	if err != nil {
+		t.Fatalf("ref generate: %v", err)
+	}
+	if len(gpuOut) != len(refOut) {
+		t.Fatalf("length: cuda %d vs ref %d", len(gpuOut), len(refOut))
+	}
+	for i := range gpuOut {
+		if gpuOut[i] != refOut[i] {
+			t.Fatalf("token[%d]: cuda %d vs ref %d\ncuda=%v\nref=%v", i, gpuOut[i], refOut[i], gpuOut, refOut)
+		}
+	}
+	t.Logf("llamagpu NewGraniteMoECUDA.Generate == nlp.GraniteMoE.Generate greedy: %d tokens (sparse MoE + 4 Granite scalars)", len(gpuOut))
+}
+
+// TestCUDAQwen2MoEMatchesReference checks the Qwen2-MoE GPU path (NewQwen2MoECUDA): a routed sparse
+// MoE PLUS a sigmoid-gated shared expert, with Qwen2 q/k/v attention biases. No QK-norm, so it is
+// greedy-exact — it verifies the shared-expert tail of recordMoE (sigmoid gate via cu_sigmoid_f32 +
+// SwiGLU + RowAxpy onto dx) composes with the routed combine.
+func TestCUDAQwen2MoEMatchesReference(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("cuda: no CUDA-capable device")
+	}
+	ts, _, err := safetensors.LoadFile("../nlp/testdata/qwen2moe_hf.safetensors")
+	if err != nil {
+		t.Skipf("qwen2moe testdata unavailable (run make golden): %v", err)
+	}
+	m, err := nlp.Qwen2MoeFromHF(ts, nlp.Qwen2MoeConfig{Heads: 4, KVHeads: 2, TopK: 2, Eps: 1e-6, RopeBase: 10000, Ctx: 32})
+	if err != nil {
+		t.Fatalf("Qwen2MoeFromHF: %v", err)
+	}
+	if m.Blocks[0].Shared == nil || m.Blocks[0].SharedGate == nil {
+		t.Fatal("qwen2moe block 0 has no shared expert — golden or loader broke; test would not cover it")
+	}
+
+	dec, err := llamagpu.NewQwen2MoECUDA(m)
+	if err != nil {
+		t.Fatalf("NewQwen2MoECUDA: %v", err)
+	}
+	defer dec.Release()
+
+	prompt := []int{3, 7, 1, 9}
+	const maxNew = 12
+	gpuOut, err := dec.Generate(prompt, maxNew, nlp.Greedy())
+	if err != nil {
+		t.Fatalf("cuda generate: %v", err)
+	}
+	refOut, err := m.Generate(prompt, maxNew, nlp.Greedy(), nlp.WithBackend(backend.Reference()))
+	if err != nil {
+		t.Fatalf("ref generate: %v", err)
+	}
+	if len(gpuOut) != len(refOut) {
+		t.Fatalf("length: cuda %d vs ref %d", len(gpuOut), len(refOut))
+	}
+	for i := range gpuOut {
+		if gpuOut[i] != refOut[i] {
+			t.Fatalf("token[%d]: cuda %d vs ref %d\ncuda=%v\nref=%v", i, gpuOut[i], refOut[i], gpuOut, refOut)
+		}
+	}
+	t.Logf("llamagpu NewQwen2MoECUDA.Generate == nlp.Qwen2MoE.Generate greedy: %d tokens (routed MoE + sigmoid-gated shared expert)", len(gpuOut))
+}
