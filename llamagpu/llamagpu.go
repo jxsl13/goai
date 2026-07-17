@@ -77,6 +77,9 @@ func (mRec) SSMStep(u, delta, a, b, c, dskip, h, y buffer, d, n int) error {
 func (mRec) Conv1DStep(x, w, b, state, out buffer, d, k int) error {
 	return fmt.Errorf("llamagpu(metal): conv1d step not implemented (Mamba decoders are cuda-only for now)")
 }
+func (mRec) SSDStep(x, delta, a, b, c, dskip, state, y buffer, heads, headDim, groups, n int) error {
+	return fmt.Errorf("llamagpu(metal): SSD step not implemented (Mamba-2 decoders are cuda-only for now)")
+}
 func (m mRec) Unary(x, o buffer, op int) error { return m.r.Unary(mb(x), mb(o), op) }
 func (m mRec) Binary(a, b, o buffer, op int) error {
 	return m.r.Binary(mb(a), mb(b), mb(o), op)
