@@ -786,6 +786,17 @@ func NewT5CUDA(m *nlp.T5) (*GPUT5, error) {
 	})
 }
 
+// NewT5Q8CUDA is NewT5CUDA with the attention (q/k/v/o) and FFN (wi0/wi1/wOut) projections quantized to
+// resident Q8_0. T5 encodes the whole sequence at once (M=seq>1), so each Q8 projection runs on the int8
+// tensor-core MMQ GEMM (QMatMulResident's m>1 path) — faster than the f32 cuBLAS GEMM and 4× less weight
+// memory. RMSNorm and the relative-position bias stay f32. Covers T5 v1.0 (ReLU) and v1.1 (GeGLU). cuda-only.
+func NewT5Q8CUDA(m *nlp.T5) (*GPUT5, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newT5Encoder(m, cudaQ8Ops())
+}
+
 // NewT5DecoderCUDA uploads an nlp.T5Decoder onto the GPU — the seq2seq (encoder-decoder) decoder, the
 // first encoder-decoder GPU model. Each block runs causal self-attention with the T5 relpos bias
 // (MHABias over a growing KV cache), cross-attention over the encoder output (plain MHA), and a

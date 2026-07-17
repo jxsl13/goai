@@ -27,6 +27,7 @@ type GPUT5 struct {
 	finalNorm                buffer
 	blocks                   []t5Block
 	all                      []buffer
+	qweights                 []qweight // resident Q8 projection weights (NewT5Q8CUDA); closed in Release
 }
 
 type t5Block struct {
@@ -62,9 +63,25 @@ func newT5Encoder(m *nlp.T5, ops backendOps) (*GPUT5, error) {
 		e.all = append(e.all, b)
 		return b
 	}
+	// lin: resident Q8_0 when ops.quantizeF32 is set (NewT5Q8CUDA), else f32. T5 encodes the whole
+	// sequence at once (M=seq>1), so a Q8 projection runs on the int8 tensor-core MMQ GEMM. RMSNorm and
+	// the relative-position bias stay f32.
 	lin := func(w *tensor.Tensor) linear {
 		in, out := w.Shape()[0], w.Shape()[1]
-		return f32Linear{w: mk(flat2D(w)), k: in, n: out}
+		if ops.quantizeF32 == nil {
+			return f32Linear{w: mk(flat2D(w)), k: in, n: out}
+		}
+		t := tensor.New(tensor.F32, tensor.Shape{in, out})
+		copy(t.Storage().F32(), flat2D(w))
+		qw, qe := ops.quantizeF32(t)
+		if qe != nil {
+			if err == nil {
+				err = qe
+			}
+			return f32Linear{k: in, n: out}
+		}
+		e.qweights = append(e.qweights, qw)
+		return quantLinear{w: qw}
 	}
 	for _, b := range m.Blocks {
 		gb := t5Block{
@@ -229,4 +246,10 @@ func (e *GPUT5) Release() {
 		}
 	}
 	e.all = nil
+	for _, w := range e.qweights {
+		if w != nil {
+			w.Close()
+		}
+	}
+	e.qweights = nil
 }
