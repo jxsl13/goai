@@ -106,24 +106,59 @@ func (m *OLMoE) embed(ctx *backend.Context, tokens []int) (*tensor.Tensor, error
 // hidden runs the pre-norm sparse-MoE block stack and the final RMSNorm on an embedding x
 // [seq, dim], returning the pre-logits hidden states [seq, dim].
 func (m *OLMoE) hidden(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, error) {
+	return m.hiddenCapture(ctx, x, nil, false)
+}
+
+// hiddenCapture is hidden with an optional per-layer KV tap. When capture is
+// non-nil it is invoked once per block with the layer index and that block's
+// post-k_norm, POST-RoPE k and raw v [seq, kvWidth] — exactly the rows
+// [OLMoE.DecodeStep] appends per token, which is what lets [OLMoE.Prefill] seed
+// a cache from ONE batched pass over the prompt. The tensors handed to capture
+// are the same ones the ongoing forward consumes (callers must not mutate them;
+// the cache copies rows into its own buffers). A nil capture with
+// sparseFFN=false is the plain forward: no extra ops are recorded, so
+// tape/training semantics of hidden are byte-identical to before this hook
+// existed.
+//
+// sparseFFN selects the MoE evaluation path: false is the dense b.MoE.Forward
+// (training/tape; every expert evaluated), true is the same inference-only
+// multi-row b.MoE.ForwardDecode DecodeStep uses. The two are mathematically
+// identical (same renormalized top-k routing), but NOT bit-identical: the dense
+// OpMoECombine kernel accumulates acc += (w/denom)·e in one fused expression,
+// which Go may compile to an FMA (spec-sanctioned fusion, arm64 FMADD), while
+// the sparse path rounds the product through a stored OpMul tensor before the
+// OpAdd — a ~1-ulp divergence (§B64, first seen on Mixtral). Prefill therefore
+// passes sparseFFN=true so its residual stream (and thus every later layer's
+// cached k/v) matches DecodeStep exactly, bit for bit.
+func (m *OLMoE) hiddenCapture(ctx *backend.Context, x *tensor.Tensor, capture func(layer int, k, v *tensor.Tensor), sparseFFN bool) (*tensor.Tensor, error) {
 	cfg := m.Config
 	kv := cfg.kvHeads()
 	attn := backend.AttnAttrs{Heads: cfg.Heads, KVHeads: kv, Causal: true}
-	for _, b := range m.Blocks {
+	for l, b := range m.Blocks {
 		// Attention sublayer (pre-norm): x = x + attn(input_layernorm(x)).
-		a, err := m.attention(ctx, b, x, attn)
+		var tap func(k, v *tensor.Tensor)
+		if capture != nil {
+			tap = func(k, v *tensor.Tensor) { capture(l, k, v) }
+		}
+		a, err := m.attention(ctx, b, x, attn, tap)
 		if err != nil {
 			return nil, err
 		}
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, a); err != nil {
 			return nil, err
 		}
-		// sparse-MoE FFN sublayer (pre-norm): x = x + moe(post_attention_layernorm(x)).
+		// sparse-MoE FFN sublayer (pre-norm): x = x + moe(post_attention_layernorm(x))
+		// (dense for training, ForwardDecode for prefill — see the sparseFFN contract above).
 		xf, err := b.FFNNorm.Forward(ctx, x)
 		if err != nil {
 			return nil, err
 		}
-		ff, _, err := b.MoE.Forward(ctx, xf)
+		var ff *tensor.Tensor
+		if sparseFFN {
+			ff, _, err = b.MoE.ForwardDecode(ctx, xf)
+		} else {
+			ff, _, err = b.MoE.Forward(ctx, xf)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -137,8 +172,9 @@ func (m *OLMoE) hidden(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, 
 // attention computes OLMoE's multi-head attention over the pre-normed residual: normalize
 // x with input_layernorm, project q/k/v, apply the full-width q_norm/k_norm to the WHOLE
 // q/k projections (before the head split), RoPE, then standard causal GQA via OpMHA and
-// the o_proj. Mirrors OlmoeAttention.forward exactly.
-func (m *OLMoE) attention(ctx *backend.Context, b *OLMoEBlock, x *tensor.Tensor, attn backend.AttnAttrs) (*tensor.Tensor, error) {
+// the o_proj. Mirrors OlmoeAttention.forward exactly. capture, when non-nil, receives the
+// post-k_norm POST-RoPE k and the raw v — the per-token cache rows — for [OLMoE.Prefill].
+func (m *OLMoE) attention(ctx *backend.Context, b *OLMoEBlock, x *tensor.Tensor, attn backend.AttnAttrs, capture func(k, v *tensor.Tensor)) (*tensor.Tensor, error) {
 	cfg := m.Config
 	kv := cfg.kvHeads()
 	xb, err := b.AttnNorm.Forward(ctx, x)
@@ -170,6 +206,9 @@ func (m *OLMoE) attention(ctx *backend.Context, b *OLMoEBlock, x *tensor.Tensor,
 	}
 	if k, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: kv}, k); err != nil {
 		return nil, err
+	}
+	if capture != nil {
+		capture(k, v)
 	}
 	a, err := exec1(ctx, backend.OpMHA, attn, q, k, v)
 	if err != nil {

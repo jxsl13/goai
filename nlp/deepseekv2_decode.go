@@ -232,8 +232,50 @@ func (m *DeepSeekV2) DecodeStep(ctx *backend.Context, cache *DeepSeekV2Cache, to
 	return exec1(ctx, backend.OpMatMul, nil, x, m.LmHead)
 }
 
+// Prefill runs the transformer ONCE over the whole prompt, seeds the RECONSTRUCTED
+// per-head KV-cache with every prompt token's key/value rows, and returns the full
+// logits [seq, vocab] (row seq−1 is the next-token distribution Generate samples
+// from). It is the batched replacement for feeding the prompt token-by-token through
+// [DeepSeekV2.DecodeStep]: one full-sequence pass through the block stack instead of
+// seq single-token dispatch rounds, with a bit-identical cache — the captured
+// per-head keys concat(k_nope, k_pe_rotated) and values are the exact tensors
+// DecodeStep would have appended (the full-sequence decoupled RoPE rotates row p for
+// position p, exactly DecodeStep's PosOffset=p, and the shared k_pe enters every
+// head's key identically). The FFN sublayers run the SAME per-layer path as
+// DecodeStep — dense SwiGLU or [DeepSeekV2.moeFFN] — which is row-independent, so the
+// batched pass reproduces the stepped residual stream bit for bit.
+//
+// For readers new to LLM inference: generation has two phases. "Prefill" processes
+// the whole prompt at once — every token is known up front, so the model can attend
+// over the full sequence in a handful of large batched kernels and store each
+// layer's keys/values in the cache. "Decode" then produces one token at a time,
+// where each new token only needs its own small computation plus the cached past.
+// Batching the prefill is the standard first optimization of every serving stack.
+//
+// cache must be empty (a fresh [DeepSeekV2.NewCache]); Prefill errors on a non-empty
+// cache because the full-sequence RoPE and causal mask assume positions 0..seq−1.
+// Inference-only, like DecodeStep: run it on a plain backend.NewContext.
+func (m *DeepSeekV2) Prefill(ctx *backend.Context, cache *DeepSeekV2Cache, tokens []int) (*tensor.Tensor, error) {
+	if n := cache.Len(); n != 0 {
+		return nil, fmt.Errorf("nlp: Prefill needs an empty cache, got %d cached tokens", n)
+	}
+	if len(cache.bufs) < len(m.Blocks) {
+		cache.bufs = growSlice(cache.bufs, len(m.Blocks))
+	}
+	return m.forwardWith(ctx, tokens, func(l int, b *DeepSeekV2Block, xb *tensor.Tensor, seq int) (*tensor.Tensor, error) {
+		return m.mlaAttention(ctx, b, xb, seq, func(h int, keyH, valueH *tensor.Tensor) {
+			// One multi-row Append per layer per head: the whole prompt's per-head
+			// [seq, qkHead]/[seq, VHead] rows land in the cache's row buffers in a
+			// single typed block copy each.
+			kCache, vCache := cache.bufs[l].appendKV(cache.K[l], cache.V[l], h, keyH, valueH)
+			cache.K[l][h], cache.V[l][h] = kCache, vCache
+		})
+	})
+}
+
 // Generate autoregressively decodes up to maxNew tokens after prompt with the sampler s,
-// using the KV-cache (one forward per new token). Returns prompt+generated. With a greedy
+// using the KV-cache (one batched [DeepSeekV2.Prefill] over the prompt, then one
+// [DeepSeekV2.DecodeStep] per new token). Returns prompt+generated. With a greedy
 // sampler the output is identical to argmax-ing a full Forward at each step. The decode runs
 // on backend.Default() unless WithBackend overrides it.
 func (m *DeepSeekV2) Generate(prompt []int, maxNew int, s TokenSampler, opts ...GenerateOption) ([]int, error) {
@@ -251,16 +293,17 @@ func (m *DeepSeekV2) Generate(prompt []int, maxNew int, s TokenSampler, opts ...
 	cache := m.NewCache()
 	out := append([]int(nil), prompt...)
 
-	var logits *tensor.Tensor
-	pos := 0
-	for _, tok := range prompt {
-		l, err := m.DecodeStep(ctx, cache, tok, pos)
-		if err != nil {
-			return nil, err
-		}
-		logits = l
-		pos++
+	// Batched prefill: one full-sequence pass seeds the cache and yields the
+	// prompt's logits, replacing len(prompt) single-token DecodeStep rounds.
+	full, err := m.Prefill(ctx, cache, prompt)
+	if err != nil {
+		return nil, err
 	}
+	logits, err := full.Slice(0, full.Shape()[0]-1, full.Shape()[0])
+	if err != nil {
+		return nil, err
+	}
+	pos := len(prompt)
 	for range maxNew {
 		if pos >= m.Config.Ctx {
 			break

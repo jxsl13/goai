@@ -135,6 +135,20 @@ func (c DeepSeekV2Config) softmaxScale() float64 {
 
 // Forward computes logits [seq, vocab] for the prompt tokens.
 func (m *DeepSeekV2) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor, error) {
+	return m.forwardWith(ctx, tokens, func(l int, b *DeepSeekV2Block, xb *tensor.Tensor, seq int) (*tensor.Tensor, error) {
+		return m.mlaAttention(ctx, b, xb, seq, nil)
+	})
+}
+
+// forwardWith is the shared full-sequence block-stack walker behind [DeepSeekV2.Forward],
+// [DeepSeekV2.Prefill] and [DeepSeekV2.PrefillLatent]: embed the tokens, then per block run
+// input_layernorm → attnFn → residual add → post_attention_layernorm → (dense SwiGLU |
+// DeepSeekMoE) → residual add, and finish with the final norm and the untied LM head. Only
+// the attention sublayer is pluggable — Forward and Prefill pass the reconstructed
+// [DeepSeekV2.mlaAttention] (without/with a KV tap) while PrefillLatent passes the batched
+// ABSORBED attention — because everything else (the FFN in particular, see [DeepSeekV2.moeFFN])
+// is already the identical code on the full-sequence and the per-token decode paths.
+func (m *DeepSeekV2) forwardWith(ctx *backend.Context, tokens []int, attnFn func(l int, b *DeepSeekV2Block, xb *tensor.Tensor, seq int) (*tensor.Tensor, error)) (*tensor.Tensor, error) {
 	seq := len(tokens)
 	if seq == 0 || seq > m.Config.Ctx {
 		return nil, fmt.Errorf("nlp: DeepSeekV2 prompt length %d outside (0,%d]", seq, m.Config.Ctx)
@@ -150,13 +164,13 @@ func (m *DeepSeekV2) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor
 	if err != nil {
 		return nil, err
 	}
-	for _, b := range m.Blocks {
-		// Attention sublayer: input_layernorm → MLA → add residual.
+	for l, b := range m.Blocks {
+		// Attention sublayer: input_layernorm → MLA (reconstructed or absorbed) → add residual.
 		xb, err := b.InputNorm.Forward(ctx, x)
 		if err != nil {
 			return nil, err
 		}
-		a, err := m.mlaAttention(ctx, b, xb, seq)
+		a, err := attnFn(l, b, xb, seq)
 		if err != nil {
 			return nil, err
 		}
@@ -194,7 +208,14 @@ func (m *DeepSeekV2) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor
 // attention (query/key width QKNope+QKRope, value width VHead). The pe channels of WqB and
 // WkvA were de-interleaved at load, so a split-half OpRoPE on the QKRope slice reproduces
 // DeepSeek's interleaved rotary.
-func (m *DeepSeekV2) mlaAttention(ctx *backend.Context, b *DeepSeekV2Block, xb *tensor.Tensor, seq int) (*tensor.Tensor, error) {
+//
+// capture, when non-nil, is invoked once per head with the head index and that head's
+// RECONSTRUCTED key concat(k_nope, k_pe_rotated) [seq, QKNope+QKRope] and value
+// [seq, VHead] — exactly the per-head tensors [DeepSeekV2.DecodeStep] appends per token —
+// which is what lets [DeepSeekV2.Prefill] seed a [DeepSeekV2Cache] from ONE batched pass.
+// The tensors handed to capture are the same ones the ongoing forward consumes (callers
+// must not mutate them; the cache copies rows into its own buffers).
+func (m *DeepSeekV2) mlaAttention(ctx *backend.Context, b *DeepSeekV2Block, xb *tensor.Tensor, seq int, capture func(head int, keyH, valueH *tensor.Tensor)) (*tensor.Tensor, error) {
 	cfg := m.Config
 	qkHead := cfg.QKNope + cfg.QKRope // per-head query/key width (rectangular vs value)
 	kvHead := cfg.QKNope + cfg.VHead  // per-head kv_b output width (k_nope + value)
@@ -292,6 +313,9 @@ func (m *DeepSeekV2) mlaAttention(ctx *backend.Context, b *DeepSeekV2Block, xb *
 		keyH, err := exec1(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 1}, kNope, kPeRot) // [seq, qkHead]
 		if err != nil {
 			return nil, err
+		}
+		if capture != nil {
+			capture(h, keyH, valueH)
 		}
 
 		// scores = queryH·keyHᵀ  [seq,seq]

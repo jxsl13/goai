@@ -105,13 +105,30 @@ func (m *OLMo2) embed(ctx *backend.Context, tokens []int) (*tensor.Tensor, error
 // hidden runs the post-norm block stack and the final RMSNorm on an embedding x
 // [seq, dim], returning the pre-logits hidden states [seq, dim].
 func (m *OLMo2) hidden(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, error) {
+	return m.hiddenCapture(ctx, x, nil)
+}
+
+// hiddenCapture is hidden with an optional per-layer KV tap. When capture is
+// non-nil it is invoked once per block with the layer index and that block's
+// post-k_norm, POST-RoPE k and raw v [seq, kvWidth] — exactly the rows
+// [OLMo2.DecodeStep] appends per token, which is what lets [OLMo2.Prefill] seed
+// a cache from ONE batched pass over the prompt. The tensors handed to capture
+// are the same ones the ongoing forward consumes (callers must not mutate
+// them; the cache copies rows into its own buffers). A nil capture is the
+// plain forward: no extra ops are recorded, so tape/training semantics of
+// hidden are byte-identical to before this hook existed.
+func (m *OLMo2) hiddenCapture(ctx *backend.Context, x *tensor.Tensor, capture func(layer int, k, v *tensor.Tensor)) (*tensor.Tensor, error) {
 	cfg := m.Config
 	kv := cfg.kvHeads()
 	attn := backend.AttnAttrs{Heads: cfg.Heads, KVHeads: kv, Causal: true}
-	for _, b := range m.Blocks {
+	for l, b := range m.Blocks {
 		// Attention sublayer (post-norm): a = post_attention_layernorm(attn(x)); x = x + a.
 		// Attention reads the RAW residual x — there is no input_layernorm.
-		a, err := m.attention(ctx, b, x, attn)
+		var tap func(k, v *tensor.Tensor)
+		if capture != nil {
+			tap = func(k, v *tensor.Tensor) { capture(l, k, v) }
+		}
+		a, err := m.attention(ctx, b, x, attn, tap)
 		if err != nil {
 			return nil, err
 		}
@@ -139,8 +156,9 @@ func (m *OLMo2) hidden(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, 
 // attention computes OLMo 2's multi-head attention over the raw residual x [seq, dim]:
 // project q/k/v, apply the full-width q_norm/k_norm to the WHOLE q/k projections (before
 // the head split), RoPE, then standard causal GQA via OpMHA and the o_proj. Mirrors
-// Olmo2Attention.forward exactly.
-func (m *OLMo2) attention(ctx *backend.Context, b *OLMo2Block, x *tensor.Tensor, attn backend.AttnAttrs) (*tensor.Tensor, error) {
+// Olmo2Attention.forward exactly. capture, when non-nil, receives the post-k_norm
+// POST-RoPE k and the raw v — the per-token cache rows — for [OLMo2.Prefill].
+func (m *OLMo2) attention(ctx *backend.Context, b *OLMo2Block, x *tensor.Tensor, attn backend.AttnAttrs, capture func(k, v *tensor.Tensor)) (*tensor.Tensor, error) {
 	cfg := m.Config
 	kv := cfg.kvHeads()
 	q, err := project(ctx, x, b.Wq)
@@ -168,6 +186,9 @@ func (m *OLMo2) attention(ctx *backend.Context, b *OLMo2Block, x *tensor.Tensor,
 	}
 	if k, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: kv}, k); err != nil {
 		return nil, err
+	}
+	if capture != nil {
+		capture(k, v)
 	}
 	a, err := exec1(ctx, backend.OpMHA, attn, q, k, v)
 	if err != nil {

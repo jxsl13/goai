@@ -99,16 +99,35 @@ func (m *MPT) embed(ctx *backend.Context, tokens []int) (*tensor.Tensor, error) 
 // hidden runs the sequential-residual block stack and the final LayerNorm on an embedding x
 // [seq, dim], returning the pre-logits hidden states [seq, dim].
 func (m *MPT) hidden(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, error) {
+	return m.hiddenCapture(ctx, x, nil)
+}
+
+// hiddenCapture is hidden with an optional per-layer KV tap. When capture is
+// non-nil it is invoked once per block with the layer index and that block's raw
+// post-projection k and v [seq, dim] — exactly the rows [MPT.DecodeStep] appends
+// per token, which is what lets [MPT.Prefill] seed a cache from ONE batched pass
+// over the prompt. MPT is an ALiBi model: there is no RoPE, so the cached rows
+// are position-independent — position enters solely through the per-head
+// linear-distance bias OpMHA adds at attention time. The tensors handed to
+// capture are the same ones the ongoing forward consumes (callers must not
+// mutate them; the cache copies rows into its own buffers). A nil capture is the
+// plain forward: no extra ops are recorded, so tape/training semantics of hidden
+// are byte-identical to before this hook existed.
+func (m *MPT) hiddenCapture(ctx *backend.Context, x *tensor.Tensor, capture func(layer int, k, v *tensor.Tensor)) (*tensor.Tensor, error) {
 	cfg := m.Config
 	attn := backend.AttnAttrs{Heads: cfg.Heads, Causal: true, ALiBi: true}
-	for _, b := range m.Blocks {
+	for l, b := range m.Blocks {
 		// Sequential residual: attention over norm_1(x) folds back onto x, then the MLP over
 		// norm_2(x) folds onto the updated x.
 		an, err := b.Norm1.Forward(ctx, x)
 		if err != nil {
 			return nil, err
 		}
-		a, err := m.attention(ctx, b, an, attn)
+		var tap func(k, v *tensor.Tensor)
+		if capture != nil {
+			tap = func(k, v *tensor.Tensor) { capture(l, k, v) }
+		}
+		a, err := m.attention(ctx, b, an, attn, tap)
 		if err != nil {
 			return nil, err
 		}
@@ -132,8 +151,9 @@ func (m *MPT) hidden(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, er
 
 // attention computes MPT multi-head attention over the normalized input xn [seq, dim]:
 // project the bias-free q/k/v, run causal MHA with the per-head ALiBi bias (no RoPE), then the
-// bias-free out_proj. Mirrors MptAttention.forward.
-func (m *MPT) attention(ctx *backend.Context, b *MPTBlock, xn *tensor.Tensor, attn backend.AttnAttrs) (*tensor.Tensor, error) {
+// bias-free out_proj. Mirrors MptAttention.forward. capture, when non-nil, receives the raw
+// post-projection k and v — the per-token cache rows (no rotation) — for [MPT.Prefill].
+func (m *MPT) attention(ctx *backend.Context, b *MPTBlock, xn *tensor.Tensor, attn backend.AttnAttrs, capture func(k, v *tensor.Tensor)) (*tensor.Tensor, error) {
 	q, err := project(ctx, xn, b.Wq)
 	if err != nil {
 		return nil, err
@@ -145,6 +165,9 @@ func (m *MPT) attention(ctx *backend.Context, b *MPTBlock, xn *tensor.Tensor, at
 	v, err := project(ctx, xn, b.Wv)
 	if err != nil {
 		return nil, err
+	}
+	if capture != nil {
+		capture(k, v)
 	}
 	a, err := exec1(ctx, backend.OpMHA, attn, q, k, v)
 	if err != nil {

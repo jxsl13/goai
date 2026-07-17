@@ -129,16 +129,33 @@ func (m *Falcon) embed(ctx *backend.Context, tokens []int) (*tensor.Tensor, erro
 // hidden runs the single-norm parallel-residual block stack and the final LayerNorm on
 // an embedding x [seq, dim], returning the pre-logits hidden states [seq, dim].
 func (m *Falcon) hidden(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, error) {
+	return m.hiddenCapture(ctx, x, nil)
+}
+
+// hiddenCapture is hidden with an optional per-layer KV tap. When capture is
+// non-nil it is invoked once per block with the layer index and that block's
+// POST-RoPE single-head k and raw single-head v [seq, headDim] (Falcon is MQA:
+// KVHeads=1) — exactly the rows [Falcon.DecodeStep] appends per token, which is
+// what lets [Falcon.Prefill] seed a cache from ONE batched pass over the prompt.
+// The tensors handed to capture are the same ones the ongoing forward consumes
+// (callers must not mutate them; the cache copies rows into its own buffers). A
+// nil capture is the plain forward: no extra ops are recorded, so tape/training
+// semantics of hidden are byte-identical to before this hook existed.
+func (m *Falcon) hiddenCapture(ctx *backend.Context, x *tensor.Tensor, capture func(layer int, k, v *tensor.Tensor)) (*tensor.Tensor, error) {
 	cfg := m.Config
 	attn := backend.AttnAttrs{Heads: cfg.Heads, KVHeads: cfg.kvHeads(), Causal: true}
-	for _, b := range m.Blocks {
+	for l, b := range m.Blocks {
 		// Single-norm parallel residual: ONE norm feeds both sublayers; their outputs are
 		// summed onto the raw residual. xn = input_layernorm(x); x = x + attn(xn) + mlp(xn).
 		xn, err := b.InputNorm.Forward(ctx, x)
 		if err != nil {
 			return nil, err
 		}
-		a, err := m.attention(ctx, b, xn, attn)
+		var tap func(k, v *tensor.Tensor)
+		if capture != nil {
+			tap = func(k, v *tensor.Tensor) { capture(l, k, v) }
+		}
+		a, err := m.attention(ctx, b, xn, attn, tap)
 		if err != nil {
 			return nil, err
 		}
@@ -160,7 +177,9 @@ func (m *Falcon) hidden(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor,
 // [seq, dim]: project the (already de-fused) q/k/v — k and v have ONE head each — apply
 // standard split-half full RoPE, then causal MQA via OpMHA (KVHeads=1) and the bias-free
 // output dense. Mirrors FalconAttention.forward (alibi=False branch, no QK-norm).
-func (m *Falcon) attention(ctx *backend.Context, b *FalconBlock, xn *tensor.Tensor, attn backend.AttnAttrs) (*tensor.Tensor, error) {
+// capture, when non-nil, receives the POST-RoPE single-head k and the raw single-head
+// v — the per-token cache rows — for [Falcon.Prefill].
+func (m *Falcon) attention(ctx *backend.Context, b *FalconBlock, xn *tensor.Tensor, attn backend.AttnAttrs, capture func(k, v *tensor.Tensor)) (*tensor.Tensor, error) {
 	cfg := m.Config
 	kv := cfg.kvHeads()
 	q, err := project(ctx, xn, b.Wq)
@@ -180,6 +199,9 @@ func (m *Falcon) attention(ctx *backend.Context, b *FalconBlock, xn *tensor.Tens
 	}
 	if k, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.ropeBase(), Heads: kv}, k); err != nil {
 		return nil, err
+	}
+	if capture != nil {
+		capture(k, v)
 	}
 	a, err := exec1(ctx, backend.OpMHA, attn, q, k, v)
 	if err != nil {

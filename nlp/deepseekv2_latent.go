@@ -2,6 +2,7 @@ package nlp
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/jxsl13/goai/backend"
 	"github.com/jxsl13/goai/tensor"
@@ -286,11 +287,195 @@ func (m *DeepSeekV2) DecodeStepLatent(ctx *backend.Context, cache *DeepSeekV2Lat
 	return exec1(ctx, backend.OpMatMul, nil, x, m.LmHead)
 }
 
+// PrefillLatent runs the transformer ONCE over the whole prompt, seeds the absorbed-MLA
+// LATENT cache with every prompt token's normalized kv latent c_KV and shared post-RoPE
+// k_pe rows, and returns the full logits [seq, vocab] (row seq−1 is the next-token
+// distribution GenerateLatent samples from). It is the batched replacement for feeding
+// the prompt token-by-token through [DeepSeekV2.DecodeStepLatent]: one full-sequence
+// pass instead of seq single-token dispatch rounds, with a bit-identical cache AND a
+// bit-identical residual stream.
+//
+// The cached rows themselves are computed BEFORE attention (c_KV and k_pe depend only on
+// the residual stream entering the block), so the crux of bit-parity is the residual
+// stream: DecodeStepLatent's attention is the ABSORBED reassociation of MLA — scores via
+// (q_nope·W_Kᵀ)·c_KVᵀ, outputs via (w·CKV)·W_V — which rounds differently (~1e-16) from
+// the reconstructed [DeepSeekV2.mlaAttention]. PrefillLatent therefore runs the SAME
+// absorbed kernel sequence, batched over all rows with a causal mask: per head
+//
+//	q_lat  = q_nope · wkTₕ                     [seq,KVLoraRank]  (absorb W_K into the query)
+//	scores = (q_lat·CKVᵀ + q_pe·KPEᵀ) · scale  [seq,seq]         (+ causal −∞ mask, j>i)
+//	w      = softmax(scores)
+//	c_att  = w · CKV                           [seq,KVLoraRank]  (attention in latent space)
+//	out_h  = c_att · wvₕ                       [seq,VHead]       (absorb W_V into the output)
+//
+// Row i's scores/weights/output over keys j≤i accumulate in the same order as the decode
+// step at pos=i (masked j>i terms contribute exact zeros), so every later layer's cached
+// latents — and the final logits — match DecodeStepLatent bit for bit. The FFN sublayers
+// (dense SwiGLU or [DeepSeekV2.moeFFN]) are row-independent and shared with the decode path.
+//
+// cache must be empty (a fresh [DeepSeekV2.NewLatentCache], which also carries the
+// absorbed wkT/wv weight blocks); PrefillLatent errors on a non-empty cache because the
+// full-sequence RoPE and causal mask assume positions 0..seq−1. Inference-only, like
+// DecodeStepLatent: run it on a plain backend.NewContext.
+func (m *DeepSeekV2) PrefillLatent(ctx *backend.Context, cache *DeepSeekV2LatentCache, tokens []int) (*tensor.Tensor, error) {
+	if n := cache.Len(); n != 0 {
+		return nil, fmt.Errorf("nlp: PrefillLatent needs an empty cache, got %d cached tokens", n)
+	}
+	if len(cache.CKV) < len(m.Blocks) {
+		cache.CKV = growSlice(cache.CKV, len(m.Blocks))
+	}
+	if len(cache.KPE) < len(m.Blocks) {
+		cache.KPE = growSlice(cache.KPE, len(m.Blocks))
+	}
+	cfg := m.Config
+	qkHead := cfg.QKNope + cfg.QKRope // per-head query width (nope + rotary)
+	rope := backend.RoPEAttrs{Base: cfg.RopeBase, Heads: 1}
+
+	// Pre-softmax score scale (rank-0 scalar broadcast over [seq,seq]).
+	scaleT := tensor.New(tensor.F64, tensor.Shape{})
+	scaleT.Storage().F64()[0] = cfg.softmaxScale()
+
+	// Causal additive mask: 0 for j≤i, −∞ for j>i (built once, shared by all blocks).
+	var mask *tensor.Tensor
+
+	return m.forwardWith(ctx, tokens, func(l int, b *DeepSeekV2Block, xb *tensor.Tensor, seq int) (*tensor.Tensor, error) {
+		if mask == nil {
+			mask = tensor.New(tensor.F64, tensor.Shape{seq, seq})
+			ms := mask.Storage().F64()
+			for i := range seq {
+				for j := i + 1; j < seq; j++ {
+					ms[i*seq+j] = math.Inf(-1)
+				}
+			}
+		}
+		// Query path: q = q_b_proj(q_a_layernorm(q_a_proj(h))).
+		cQ, err := exec1(ctx, backend.OpMatMul, nil, xb, b.WqA)
+		if err != nil {
+			return nil, err
+		}
+		if cQ, err = b.QANorm.Forward(ctx, cQ); err != nil {
+			return nil, err
+		}
+		q, err := exec1(ctx, backend.OpMatMul, nil, cQ, b.WqB) // [seq, heads·qkHead]
+		if err != nil {
+			return nil, err
+		}
+
+		// KV path: compressed = kv_a_proj_with_mqa(h) → [kv_latent | k_pe]. ONLY the
+		// normalized latent and the rotated shared key are cached — kv_b_proj is never
+		// applied (its absorbed blocks wkT/wv act on queries and outputs instead).
+		compressed, err := exec1(ctx, backend.OpMatMul, nil, xb, b.WkvA)
+		if err != nil {
+			return nil, err
+		}
+		kvLatent, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: 0, End: cfg.KVLoraRank}, compressed)
+		if err != nil {
+			return nil, err
+		}
+		kPe, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: cfg.KVLoraRank, End: cfg.KVLoraRank + cfg.QKRope}, compressed)
+		if err != nil {
+			return nil, err
+		}
+		cKV, err := b.KvANorm.Forward(ctx, kvLatent) // [seq, KVLoraRank]
+		if err != nil {
+			return nil, err
+		}
+		// Full-sequence decoupled RoPE rotates row p for position p — exactly
+		// DecodeStepLatent's PosOffset=p on the shared one-head k_pe.
+		kPeRot, err := exec1(ctx, backend.OpRoPE, rope, kPe) // [seq, QKRope]
+		if err != nil {
+			return nil, err
+		}
+
+		// One multi-row Append per layer: the whole prompt's latents and rotary keys
+		// land in the cache's row buffers in a single typed block copy each.
+		ckvAll, kpeAll := cache.bufs.appendKV(cache.CKV, cache.KPE, l, cKV, kPeRot)
+		cache.CKV[l], cache.KPE[l] = ckvAll, kpeAll
+
+		// Transposed caches for the score matmuls, built ONCE per block (not per head).
+		ckvT, err := exec1(ctx, backend.OpTranspose, nil, ckvAll) // [KVLoraRank, seq]
+		if err != nil {
+			return nil, err
+		}
+		kpeT, err := exec1(ctx, backend.OpTranspose, nil, kpeAll) // [QKRope, seq]
+		if err != nil {
+			return nil, err
+		}
+
+		heads := make([]*tensor.Tensor, cfg.Heads)
+		for h := range cfg.Heads {
+			qh, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: h * qkHead, End: (h + 1) * qkHead}, q)
+			if err != nil {
+				return nil, err
+			}
+			qNope, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: 0, End: cfg.QKNope}, qh)
+			if err != nil {
+				return nil, err
+			}
+			qPe, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: cfg.QKNope, End: qkHead}, qh)
+			if err != nil {
+				return nil, err
+			}
+			qPeRot, err := exec1(ctx, backend.OpRoPE, rope, qPe)
+			if err != nil {
+				return nil, err
+			}
+
+			// Absorb W_K into the query: q_lat = q_nope · (W_K,h)ᵀ.
+			qLat, err := exec1(ctx, backend.OpMatMul, nil, qNope, cache.wkT[l][h]) // [seq, KVLoraRank]
+			if err != nil {
+				return nil, err
+			}
+			// Content scores against the latent cache; rope scores against the shared
+			// rotary cache — the same two skinny matmuls as DecodeStepLatent, batched.
+			scoreC, err := exec1(ctx, backend.OpMatMul, nil, qLat, ckvT) // [seq, seq]
+			if err != nil {
+				return nil, err
+			}
+			scoreP, err := exec1(ctx, backend.OpMatMul, nil, qPeRot, kpeT) // [seq, seq]
+			if err != nil {
+				return nil, err
+			}
+			scores, err := exec1(ctx, backend.OpAdd, nil, scoreC, scoreP)
+			if err != nil {
+				return nil, err
+			}
+			if scores, err = exec1(ctx, backend.OpMul, nil, scores, scaleT); err != nil {
+				return nil, err
+			}
+			if scores, err = exec1(ctx, backend.OpAdd, nil, scores, mask); err != nil {
+				return nil, err
+			}
+			probs, err := exec1(ctx, backend.OpSoftmax, nil, scores)
+			if err != nil {
+				return nil, err
+			}
+			// Attention in latent space, then absorb W_V into the output.
+			ctxLat, err := exec1(ctx, backend.OpMatMul, nil, probs, ckvAll) // [seq, KVLoraRank]
+			if err != nil {
+				return nil, err
+			}
+			oh, err := exec1(ctx, backend.OpMatMul, nil, ctxLat, cache.wv[l][h]) // [seq, VHead]
+			if err != nil {
+				return nil, err
+			}
+			heads[h] = oh
+		}
+		// Concatenate head outputs → [seq, heads·VHead], then o_proj.
+		concat, err := exec1(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 1}, heads...)
+		if err != nil {
+			return nil, err
+		}
+		return exec1(ctx, backend.OpMatMul, nil, concat, b.Wo)
+	})
+}
+
 // GenerateLatent autoregressively decodes up to maxNew tokens after prompt with the sampler
 // s, using the absorbed-MLA latent KV-cache — the same decoding as [DeepSeekV2.Generate]
 // but holding (KVLoraRank+QKRope) instead of Heads·(QKNope+QKRope+VHead) values per token
-// per layer. Returns prompt+generated. The decode runs on backend.Default() unless
-// WithBackend overrides it.
+// per layer (one batched [DeepSeekV2.PrefillLatent] over the prompt, then one
+// [DeepSeekV2.DecodeStepLatent] per new token). Returns prompt+generated. The decode runs
+// on backend.Default() unless WithBackend overrides it.
 func (m *DeepSeekV2) GenerateLatent(prompt []int, maxNew int, s TokenSampler, opts ...GenerateOption) ([]int, error) {
 	var gc genConfig
 	for _, o := range opts {
@@ -306,16 +491,17 @@ func (m *DeepSeekV2) GenerateLatent(prompt []int, maxNew int, s TokenSampler, op
 	cache := m.NewLatentCache()
 	out := append([]int(nil), prompt...)
 
-	var logits *tensor.Tensor
-	pos := 0
-	for _, tok := range prompt {
-		l, err := m.DecodeStepLatent(ctx, cache, tok, pos)
-		if err != nil {
-			return nil, err
-		}
-		logits = l
-		pos++
+	// Batched prefill: one full-sequence absorbed pass seeds the latent cache and
+	// yields the prompt's logits, replacing len(prompt) single-token step rounds.
+	full, err := m.PrefillLatent(ctx, cache, prompt)
+	if err != nil {
+		return nil, err
 	}
+	logits, err := full.Slice(0, full.Shape()[0]-1, full.Shape()[0])
+	if err != nil {
+		return nil, err
+	}
+	pos := len(prompt)
 	for range maxNew {
 		if pos >= m.Config.Ctx {
 			break

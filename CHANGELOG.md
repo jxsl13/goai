@@ -4,6 +4,19 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — perf: batched prefill complete — every KV architecture, including DeepSeek-V2's dual caches (T788, 2026-07-17)
+
+The final batch: OLMo2, OLMoE, MPT, Falcon, and DeepSeek-V2 with BOTH its prefills — `Prefill` for
+the reconstructed per-head cache and `PrefillLatent` for the absorbed-latent cache (a batched
+absorbed attention computing `(q_nope·wkTₕ)·CKVᵀ + q_pe·KPEᵀ` with a causal mask, the same
+reassociated kernel sequence as `DecodeStepLatent`). All six parity gates bit-identical first-run
+(zero tolerance, incl. dense+MoE goldens for DeepSeek). The §B64 FMA lesson applied where it arises:
+OLMoE's prefill runs the sparse multi-row MoE path; DeepSeek's MoE does not need it (its un-normalized
+`moeFFN` is the same row-independent function on both paths). MPT's ALiBi needed no position handling
+at all (the kernel's relative-distance bias is row-invariant under softmax). **Batched prompt
+processing now covers all 22 KV architectures**, alongside the recurrent families' O(1) stepping —
+the prompt half and the decode half of the serving story are both done.
+
 ### nlp — perf: batched prefill for six more architectures (T787, 2026-07-17)
 
 Extends the batched prefill to Cohere, GPT-NeoX, StableLM, StarCoder2, Nemotron and Phi — each
