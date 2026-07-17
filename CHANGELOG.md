@@ -4,6 +4,20 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — Mamba-2 GGUF loading, float + quantized (T830, 2026-07-18)
+
+`Mamba2FromGGUF`/`Mamba2ToGGUF` (float GGUF architecture twenty) and
+`QuantMamba2`/`QuantMamba2FromGGUF` (quant family seventeen), conventions verified in
+llama.cpp source: the monolithic `in_proj` stays PACKED on disk (the runtime view-splits
+the product, so the quant twin wraps it as ONE QuantLinear); `ssm.time_step_rank` carries
+n_head; the per-head `ssm_a` is −exp'd AND unsqueezed to [n_head,1]; `ssm_dt` is bias-only;
+and the gated `ssm_norm` is stored per-group — where llama.cpp normalizes per group while
+transformers (which GoAI matches bit-for-bit) normalizes full-width, identical at
+n_groups=1 (all official releases), honestly documented. §B68 sharpened again: the golden's
+constant norm gains and zero conv biases are invariant under the unsqueeze/group-reshape,
+so the fixture replaces them with name-seeded values. Float parity 1.45e-10, quant anchors
+byte/logit-exact, O(1) decode bit-exact on both paths.
+
 ### spec — RWKV GGUF loading: investigated, not feasible (T832, 2026-07-18)
 
 GoAI's RWKV is RWKV-4 (§R188: the channel-wise scalar WKV recurrence). llama.cpp implements

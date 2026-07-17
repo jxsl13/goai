@@ -63,7 +63,7 @@
 //     MixtralFromGGUF, StarCoder2FromGGUF, GPTNeoXFromGGUF, MPTFromGGUF,
 //     FalconFromGGUF, StableLMFromGGUF, OLMo2FromGGUF, DeepSeekV2FromGGUF,
 //     CohereFromGGUF, NemotronFromGGUF, Gemma2FromGGUF, GraniteFromGGUF,
-//     MambaFromGGUF, JambaFromGGUF — each verified
+//     MambaFromGGUF, Mamba2FromGGUF, JambaFromGGUF — each verified
 //     against that converter's layout conventions in llama.cpp source — plus
 //     quantized decode straight from the ggml Q-blocks, no dequantized copy of
 //     the weights ever materialized: QuantLlamaFromGGUF, QuantQwen2FromGGUF,
@@ -78,7 +78,7 @@
 //     type, riding the same lossless q/k row un-permute) and
 //     QuantStarCoder2FromGGUF, QuantGPTNeoXFromGGUF, QuantFalconFromGGUF,
 //     QuantMPTFromGGUF, QuantNemotronFromGGUF, QuantStableLMFromGGUF,
-//     QuantOLMo2FromGGUF, QuantCohereFromGGUF and QuantMambaFromGGUF (the LayerNorm/dedicated-type quant twins — biased
+//     QuantOLMo2FromGGUF, QuantCohereFromGGUF, QuantMambaFromGGUF and QuantMamba2FromGGUF (the LayerNorm/dedicated-type quant twins — biased
 //     projections as Q-block matmuls plus f32 bias adds, parallel residuals,
 //     ALiBi, pre-folded LayerNorm1P, partial rotary, OLMo 2 post-norm with
 //     full-width QK-norms, and every fused-qkv form unpacked losslessly on the
