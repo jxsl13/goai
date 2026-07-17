@@ -23,12 +23,10 @@ func (l *resLayerF16) seedForward(dx *cuda.DeviceF32, cache *cuda.KVCache) (*cud
 	if err != nil {
 		return nil, err
 	}
-	dq, err := l.wq.MatMulDevice(dh)
+	dq, dk, dv, err := l.qkv.MatMulQKV(dh)
 	if err != nil {
 		return nil, err
 	}
-	dk, _ := l.wk.MatMulDevice(dh)
-	dv, _ := l.wv.MatMulDevice(dh)
 	dh.Free()
 	dq.RoPE(rq)
 	dk.RoPE(rk)
