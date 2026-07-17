@@ -187,9 +187,57 @@ func rawMetaFloat(meta map[string]any, k string, def float64) float64 {
 	return def
 }
 
+// unpermuteRawQK reorders a raw llama-arch attn_q/attn_k QuantTensor from GGUF's on-disk
+// interleaved rotary row layout back to the HF split-half order GoAI's RoPE expects — the
+// B67 fix (ac4709b applied it to nlp.LlamaFromGGUF; this is the raw-decoder twin). A row of
+// the [out,in] quant tensor is a fixed-size stripe of blocks, so the un-permute is a lossless
+// byte-range reorder: dst row h·hd+q ← src row h·hd+(2i+j), j=q/(hd/2), i=q%(hd/2).
+func unpermuteRawQK(tb testing.TB, qt gguf.QuantTensor, heads int) gguf.QuantTensor {
+	rows := qt.Shape[0]
+	hd := rows / heads
+	if heads <= 0 || rows%heads != 0 || hd%2 != 0 || len(qt.Data)%rows != 0 {
+		tb.Fatalf("unpermuteRawQK: bad geometry rows=%d heads=%d dataBytes=%d", rows, heads, len(qt.Data))
+	}
+	rowBytes := len(qt.Data) / rows
+	out := make([]byte, len(qt.Data))
+	for h := 0; h < heads; h++ {
+		for q := 0; q < hd; q++ {
+			j, i := q/(hd/2), q%(hd/2)
+			src, dst := h*hd+2*i+j, h*hd+q
+			copy(out[dst*rowBytes:(dst+1)*rowBytes], qt.Data[src*rowBytes:(src+1)*rowBytes])
+		}
+	}
+	qt.Data = out
+	return qt
+}
+
 func buildRawGraphDecoder(tb testing.TB, rf *gguf.RawFile, arch string, maxSeq int, quant func(gguf.QuantTensor) (qProj, error)) *rawGraphDecoder {
+	// B67: llama-arch GGUFs store attn_q/attn_k rows in the interleaved rotary layout; GoAI's
+	// split-half RoPE needs them un-permuted (same transform nlp.LlamaFromGGUF applies since
+	// ac4709b — without this the decoder is self-consistent but semantically off-convention,
+	// and the f16-seeded serve handoff comparison breaks at rel L1 1.4). qwen2 etc. are
+	// NEOX/no-permute on disk and pass through untouched. rf is never mutated (shared by A/Bs).
+	tensors := rf.Tensors
+	if arch == "llama" {
+		heads := rawMetaInt(tb, rf.Metadata, arch+".attention.head_count")
+		kvh := rawMetaInt(tb, rf.Metadata, arch+".attention.head_count_kv")
+		nL := rawMetaInt(tb, rf.Metadata, arch+".block_count")
+		tensors = make(map[string]gguf.QuantTensor, len(rf.Tensors))
+		for k, v := range rf.Tensors {
+			tensors[k] = v
+		}
+		for i := 0; i < nL; i++ {
+			p := "blk." + itoa(i) + "."
+			if qt, ok := tensors[p+"attn_q.weight"]; ok && len(qt.Shape) == 2 {
+				tensors[p+"attn_q.weight"] = unpermuteRawQK(tb, qt, heads)
+			}
+			if qt, ok := tensors[p+"attn_k.weight"]; ok && len(qt.Shape) == 2 {
+				tensors[p+"attn_k.weight"] = unpermuteRawQK(tb, qt, kvh)
+			}
+		}
+	}
 	deq := func(n string) *tensor.Tensor {
-		qt, ok := rf.Tensors[n]
+		qt, ok := tensors[n]
 		if !ok {
 			tb.Fatalf("missing tensor %s", n)
 		}
@@ -198,7 +246,7 @@ func buildRawGraphDecoder(tb testing.TB, rf *gguf.RawFile, arch string, maxSeq i
 		return t
 	}
 	q := func(n string) qProj { // quantizers receive the RAW QuantTensor ([out,in] blocks)
-		qt, ok := rf.Tensors[n]
+		qt, ok := tensors[n]
 		if !ok {
 			tb.Fatalf("missing tensor %s", n)
 		}
