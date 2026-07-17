@@ -4,6 +4,12 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### docs — nlp: GGUF catalogue brought current (T795/T797 follow-up, 2026-07-17)
+
+The package doc's loader catalogue now lists all six float GGUF loaders (adds Gemma,
+Phi-3, Mixtral) and the quantized Qwen2/Qwen3 direct-from-Q-block decoders next to
+QuantLlamaFromGGUF.
+
 ### docs — benchmarking: the CPU serving arc, consolidated (T798, 2026-07-17)
 
 `docs/benchmarking.md` gains a section consolidating the T762/T777–T793 serving campaign: the

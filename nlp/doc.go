@@ -59,7 +59,11 @@
 //     (6.7× less KV memory). Weights load from safetensors, from .pt/.bin via the safe
 //     no-code-execution PyTorch loader (package format/pytorch), or — for the most
 //     common quantized community checkpoints — from llama.cpp GGUF files
-//     (LlamaFromGGUF, Qwen2FromGGUF, Qwen3FromGGUF); LlamaConfigFromHF
+//     (LlamaFromGGUF, Qwen2FromGGUF, Qwen3FromGGUF, GemmaFromGGUF, Phi3FromGGUF,
+//     MixtralFromGGUF — each verified against that converter's layout conventions
+//     in llama.cpp source — plus QuantQwen2FromGGUF / QuantQwen3FromGGUF, which
+//     decode quantized Qwen checkpoints directly from the ggml Q-blocks the way
+//     QuantLlamaFromGGUF does for Llama); LlamaConfigFromHF
 //     (also Qwen2/Qwen3/Phi-3), GemmaConfigFromHF, Gemma2ConfigFromHF,
 //     MixtralConfigFromHF (also Qwen3-MoE), GraniteConfigFromHF and BertConfigFromHF
 //     read the checkpoint's config.json so loading is config-driven. Because a loaded model's forward runs through the
