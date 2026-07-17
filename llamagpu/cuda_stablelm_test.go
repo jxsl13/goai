@@ -1150,3 +1150,50 @@ func TestCUDADeepSeekV2PrefillMatchesReference(t *testing.T) {
 	}
 	t.Logf("llamagpu NewDeepSeekV2CUDA StepN prefill (%d tokens) matches reference Forward last-token logits (MLA batched-prefill path)", len(prompt))
 }
+
+// TestCUDADeepSeekV2MoEPrefillMatchesReference exercises the StepN prefill path for the FULL
+// DeepSeek-V2 (MLA + DeepSeekMoE together): batched prefill through both a dense layer and a MoE
+// layer, whose routing weights are computed per prefilled token. Verifies the last token's logits
+// match the reference Forward — the combination the per-token Step MoE test doesn't cover.
+func TestCUDADeepSeekV2MoEPrefillMatchesReference(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("cuda: no CUDA-capable device")
+	}
+	ts, _, err := safetensors.LoadFile("../nlp/testdata/deepseekv2moe_hf.safetensors")
+	if err != nil {
+		t.Skipf("deepseekv2moe testdata unavailable (run make golden): %v", err)
+	}
+	m, err := nlp.DeepSeekV2FromHF(ts, nlp.DeepSeekV2Config{
+		Heads: 4, QLoraRank: 24, KVLoraRank: 16, QKNope: 16, QKRope: 8, VHead: 16,
+		Eps: 1e-6, RopeBase: 10000, Ctx: 32,
+		FirstKDense: 1, NRoutedExperts: 4, NSharedExperts: 1,
+		TopK: 2, MoEHidden: 32, RoutedScale: 1.0,
+	})
+	if err != nil {
+		t.Fatalf("DeepSeekV2FromHF (MoE): %v", err)
+	}
+	dec, err := llamagpu.NewDeepSeekV2CUDA(m)
+	if err != nil {
+		t.Fatalf("NewDeepSeekV2CUDA: %v", err)
+	}
+	defer dec.Release()
+
+	prompt := []int{3, 7, 1, 9, 4}
+	got, err := dec.StepN(prompt, 0)
+	if err != nil {
+		t.Fatalf("StepN: %v", err)
+	}
+	refT, err := m.Forward(backend.NewContext().WithBackend(backend.Reference()), prompt)
+	if err != nil {
+		t.Fatalf("ref forward: %v", err)
+	}
+	rows, cols := refT.Shape()[0], refT.Shape()[1]
+	last := (rows - 1) * cols
+	for j := 0; j < cols; j++ {
+		want := refT.AtF64(rows-1, j)
+		if math.IsNaN(float64(got[last+j])) || math.Abs(float64(got[last+j])-want) > 3e-2*math.Max(1, math.Abs(want)) {
+			t.Fatalf("deepseekv2moe prefill logit[%d]: cuda %v vs reference %v", j, got[last+j], want)
+		}
+	}
+	t.Logf("llamagpu NewDeepSeekV2CUDA (MLA + MoE) StepN prefill matches reference Forward (batched MLA+MoE prefill)")
+}
