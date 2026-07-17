@@ -41,29 +41,15 @@ func QuantLlamaFromGGUF(meta map[string]any, tensors map[string]gguf.QuantTensor
 	for k, v := range tensors {
 		ts[k] = v
 	}
-	unpermute := func(name string, heads int) error {
-		qt, ok := ts[name]
-		if !ok || len(qt.Shape) != 2 {
-			return nil
-		}
-		rows := qt.Shape[0]
-		perm, err := ropeUnpermutePerm(rows, heads)
-		if err != nil {
-			return fmt.Errorf("nlp: GGUF %s: %w", name, err)
-		}
-		out, err := quantPermuteRows(qt, perm)
-		if err != nil {
-			return fmt.Errorf("nlp: GGUF %s: %w", name, err)
-		}
-		ts[name] = out
-		return nil
-	}
+	// Un-permute the llama-arch q/k rows in place via the shared helper (also used by
+	// [QuantGraniteFromGGUF]) so this correctness-critical transform has ONE
+	// implementation across the quantized loaders — the drift §B67 warns against.
 	for l := range cfg.Layers {
 		p := fmt.Sprintf("blk.%d.", l)
-		if err := unpermute(p+"attn_q.weight", cfg.Heads); err != nil {
+		if err := unpermuteQuantRows(ts, p+"attn_q.weight", cfg.Heads); err != nil {
 			return nil, err
 		}
-		if err := unpermute(p+"attn_k.weight", cfg.kvHeads()); err != nil {
+		if err := unpermuteQuantRows(ts, p+"attn_k.weight", cfg.kvHeads()); err != nil {
 			return nil, err
 		}
 	}

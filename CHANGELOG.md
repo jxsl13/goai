@@ -4,6 +4,14 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — consolidate the quantized q/k un-permute (2026-07-17)
+
+`QuantLlamaFromGGUF` had an inline q/k un-permute closure byte-identical to the
+`unpermuteQuantRows` helper `QuantGraniteFromGGUF` uses; both now call the shared helper, so
+this correctness-critical row transform has ONE implementation across the quantized
+llama-family loaders — removing exactly the kind of drift between sibling paths that §B67/§B68
+were about. Verified by the unchanged exact-equality gates on both paths.
+
 ### nlp — the GGUF quickstart pipeline as a runnable example (T820, 2026-07-17)
 
 `ExampleLlamaFromGGUF_pipeline` is the README front-page flow as a self-contained,
