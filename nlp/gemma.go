@@ -83,6 +83,21 @@ func (c GemmaConfig) kvHeads() int {
 
 // Forward computes logits [seq, vocab] for the prompt tokens.
 func (m *Gemma) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor, error) {
+	return m.forwardCapture(ctx, tokens, nil)
+}
+
+// forwardCapture is Forward with an optional per-layer KV tap. When capture is
+// non-nil it is invoked once per block with the layer index and that block's
+// POST-RoPE k and raw v [seq, kvWidth] — exactly the rows [Gemma.DecodeStep]
+// appends per token, which is what lets [Gemma.Prefill] seed a cache from ONE
+// batched pass over the prompt. The √dim embedding "normalizer" is applied
+// before the blocks exactly as in DecodeStep's embedOne, so the residual stream
+// feeding each projection is identical. The tensors handed to capture are the
+// same ones the ongoing forward consumes (callers must not mutate them; the
+// cache copies rows into its own buffers). A nil capture is the plain forward:
+// no extra ops are recorded, so tape/training semantics of Forward are
+// byte-identical to before this hook existed.
+func (m *Gemma) forwardCapture(ctx *backend.Context, tokens []int, capture func(layer int, k, v *tensor.Tensor)) (*tensor.Tensor, error) {
 	seq := len(tokens)
 	if seq == 0 || seq > m.Config.Ctx {
 		return nil, fmt.Errorf("nlp: Gemma prompt length %d outside (0,%d]", seq, m.Config.Ctx)
@@ -110,7 +125,7 @@ func (m *Gemma) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor, err
 	cfg := m.Config
 	kv := cfg.kvHeads()
 	attn := backend.AttnAttrs{Heads: cfg.Heads, KVHeads: kv, Causal: true}
-	for _, b := range m.Blocks {
+	for l, b := range m.Blocks {
 		// attention sublayer
 		xb, err := b.AttnNorm.Forward(ctx, x)
 		if err != nil {
@@ -133,6 +148,9 @@ func (m *Gemma) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor, err
 		}
 		if k, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: kv}, k); err != nil {
 			return nil, err
+		}
+		if capture != nil {
+			capture(l, k, v)
 		}
 		a, err := exec1(ctx, backend.OpMHA, attn, q, k, v)
 		if err != nil {

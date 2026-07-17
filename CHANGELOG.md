@@ -4,6 +4,19 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — perf: batched prefill for the MoE and Gemma families (T786, 2026-07-17)
+
+Extends the T785 batched prefill to five dedicated-type architectures: Mixtral (serving Qwen3-MoE
+too), Qwen2-MoE, GraniteMoE, Gemma, and Gemma2 (whose capture taps the post-RoPE full-width k and
+raw v inside the capped attention). Each Prefill seeds the KV-cache from ONE block-stack pass and is
+bit-identical to step-by-step DecodeStep (zero-tolerance tests on six goldens). Measured (§V22):
+Mixtral 128-token prompt 189.9 → 86.3 ms (2.2×; the MoE expert GEMMs were already batch-efficient —
+the win is batched attention plus one routing pass instead of 128). Correctness finding recorded as
+§B64: dense `OpMoECombine` and the sparse decode path differ by ~1 ulp because Go fuses the dense
+kernel's `acc += (w/denom)·e` into an FMA — "mathematically identical" is not "bit-identical", so
+the MoE prefills run DecodeStep's exact sparse kernel sequence (a `sparseFFN` flag; `Forward`'s
+dense/tape path is untouched).
+
 ### nlp — perf: batched prefill for the Llama family — 6.7× faster prompt processing (T785, 2026-07-17)
 
 `Llama.Generate` fed each prompt token one-by-one through `DecodeStep` (T dispatch-heavy

@@ -59,6 +59,31 @@ func (c MixtralConfig) kvHeads() int {
 
 // Forward computes logits [seq, vocab] for the prompt tokens.
 func (m *Mixtral) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor, error) {
+	return m.forwardCapture(ctx, tokens, nil, false)
+}
+
+// forwardCapture is Forward with an optional per-layer KV tap. When capture is
+// non-nil it is invoked once per block with the layer index and that block's
+// post-QK-norm, POST-RoPE k and raw v [seq, kvWidth] — exactly the rows
+// [Mixtral.DecodeStep] appends per token, which is what lets [Mixtral.Prefill]
+// seed a cache from ONE batched pass over the prompt. The tensors handed to
+// capture are the same ones the ongoing forward consumes (callers must not
+// mutate them; the cache copies rows into its own buffers). A nil capture with
+// sparseFFN=false is the plain forward: no extra ops are recorded, so
+// tape/training semantics of Forward are byte-identical to before this hook
+// existed.
+//
+// sparseFFN selects the MoE evaluation path: false is the dense b.MoE.Forward
+// (training/tape; every expert evaluated), true is the same inference-only
+// multi-row b.MoE.ForwardDecode DecodeStep uses. The two are mathematically
+// identical (same renormalized top-k routing), but NOT bit-identical: the dense
+// OpMoECombine kernel accumulates acc += (w/denom)·e in one fused expression,
+// which Go may compile to an FMA (spec-sanctioned fusion, arm64 FMADD), while
+// the sparse path rounds the product through a stored OpMul tensor before the
+// OpAdd — a ~1-ulp divergence. Prefill therefore passes sparseFFN=true so its
+// residual stream (and thus every later layer's cached k/v) matches DecodeStep
+// exactly, bit for bit.
+func (m *Mixtral) forwardCapture(ctx *backend.Context, tokens []int, capture func(layer int, k, v *tensor.Tensor), sparseFFN bool) (*tensor.Tensor, error) {
 	seq := len(tokens)
 	if seq == 0 || seq > m.Config.Ctx {
 		return nil, fmt.Errorf("nlp: Mixtral prompt length %d outside (0,%d]", seq, m.Config.Ctx)
@@ -78,7 +103,7 @@ func (m *Mixtral) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor, e
 	cfg := m.Config
 	kv := cfg.kvHeads()
 	attn := backend.AttnAttrs{Heads: cfg.Heads, KVHeads: kv, Causal: true}
-	for _, b := range m.Blocks {
+	for l, b := range m.Blocks {
 		// attention sublayer (identical to Llama)
 		xb, err := b.AttnNorm.Forward(ctx, x)
 		if err != nil {
@@ -109,6 +134,9 @@ func (m *Mixtral) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor, e
 		if k, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: kv}, k); err != nil {
 			return nil, err
 		}
+		if capture != nil {
+			capture(l, k, v)
+		}
 		a, err := exec1(ctx, backend.OpMHA, attn, q, k, v)
 		if err != nil {
 			return nil, err
@@ -120,12 +148,18 @@ func (m *Mixtral) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor, e
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, o); err != nil {
 			return nil, err
 		}
-		// sparse-MoE FFN sublayer
+		// sparse-MoE FFN sublayer (dense for training, ForwardDecode for prefill —
+		// see the sparseFFN contract in the method comment)
 		xf, err := b.FFNNorm.Forward(ctx, x)
 		if err != nil {
 			return nil, err
 		}
-		ff, _, err := b.MoE.Forward(ctx, xf)
+		var ff *tensor.Tensor
+		if sparseFFN {
+			ff, _, err = b.MoE.ForwardDecode(ctx, xf)
+		} else {
+			ff, _, err = b.MoE.Forward(ctx, xf)
+		}
 		if err != nil {
 			return nil, err
 		}

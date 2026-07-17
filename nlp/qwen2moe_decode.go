@@ -113,8 +113,49 @@ func (m *Qwen2MoE) DecodeStep(ctx *backend.Context, cache *Qwen2MoeCache, token,
 	return exec1(ctx, backend.OpMatMul, nil, x, m.Out)
 }
 
+// Prefill runs the transformer ONCE over the whole prompt, seeds the KV-cache with
+// every prompt token's key/value rows, and returns the full logits [seq, vocab]
+// (row seq−1 is the next-token distribution Generate samples from). It is the
+// batched replacement for feeding the prompt token-by-token through
+// [Qwen2MoE.DecodeStep]: one full-sequence pass through the block stack instead of
+// seq single-token dispatch rounds, with a bit-identical cache — the captured k/v
+// are the same post-bias, post-RoPE rows DecodeStep would have appended
+// (full-sequence RoPE rotates row p for position p, exactly DecodeStep's
+// PosOffset=p). The MoE-plus-shared-expert FFN runs the SAME sparse
+// ffn(decode=true) path as DecodeStep, batched over all prompt rows (the dense
+// combine kernel's fused multiply-add rounds ~1 ulp differently, so sharing the
+// decode kernel sequence is what keeps the cache bit-identical).
+//
+// For readers new to LLM inference: generation has two phases. "Prefill" processes
+// the whole prompt at once — every token is known up front, so the model can attend
+// over the full sequence in a handful of large batched kernels and store each
+// layer's keys/values in the cache. "Decode" then produces one token at a time,
+// where each new token only needs its own small computation plus the cached past.
+// Batching the prefill is the standard first optimization of every serving stack.
+//
+// cache must be empty (a fresh [Qwen2MoE.NewCache]); Prefill errors on a non-empty
+// cache because the full-sequence RoPE and causal mask assume positions 0..seq−1.
+// Inference-only, like DecodeStep: run it on a plain backend.NewContext.
+func (m *Qwen2MoE) Prefill(ctx *backend.Context, cache *Qwen2MoeCache, tokens []int) (*tensor.Tensor, error) {
+	if n := cache.Len(); n != 0 {
+		return nil, fmt.Errorf("nlp: Prefill needs an empty cache, got %d cached tokens", n)
+	}
+	if len(cache.K) < len(m.Blocks) {
+		cache.K = growSlice(cache.K, len(m.Blocks))
+	}
+	if len(cache.V) < len(m.Blocks) {
+		cache.V = growSlice(cache.V, len(m.Blocks))
+	}
+	return m.forwardCapture(ctx, tokens, func(l int, k, v *tensor.Tensor) {
+		// One multi-row Append per layer: the whole prompt's [seq, kvWidth] k/v
+		// land in the cache's row buffers in a single typed block copy.
+		cache.K[l], cache.V[l] = cache.bufs.appendKV(cache.K, cache.V, l, k, v)
+	}, true) // sparseFFN: DecodeStep's exact MoE kernel sequence (bit-parity)
+}
+
 // Generate autoregressively decodes up to maxNew tokens after prompt with the sampler s,
-// using the KV-cache (one forward per new token). Returns prompt+generated. With a greedy
+// using the KV-cache (one batched [Qwen2MoE.Prefill] over the prompt, then one
+// [Qwen2MoE.DecodeStep] per new token). Returns prompt+generated. With a greedy
 // sampler the output matches argmax-ing a full Forward at each step. The decode runs on
 // backend.Default() unless WithBackend overrides it.
 func (m *Qwen2MoE) Generate(prompt []int, maxNew int, s TokenSampler, opts ...GenerateOption) ([]int, error) {
@@ -132,16 +173,17 @@ func (m *Qwen2MoE) Generate(prompt []int, maxNew int, s TokenSampler, opts ...Ge
 		return nil, fmt.Errorf("nlp: Generate needs a non-empty prompt")
 	}
 
-	var logits *tensor.Tensor
-	pos := 0
-	for _, tok := range prompt {
-		l, err := m.DecodeStep(ctx, cache, tok, pos)
-		if err != nil {
-			return nil, err
-		}
-		logits = l
-		pos++
+	// Batched prefill: one full-sequence pass seeds the cache and yields the
+	// prompt's logits, replacing len(prompt) single-token DecodeStep rounds.
+	full, err := m.Prefill(ctx, cache, prompt)
+	if err != nil {
+		return nil, err
 	}
+	logits, err := full.Slice(0, full.Shape()[0]-1, full.Shape()[0])
+	if err != nil {
+		return nil, err
+	}
+	pos := len(prompt)
 	for range maxNew {
 		if pos >= m.Config.Ctx {
 			break

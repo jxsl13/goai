@@ -115,6 +115,21 @@ func (c Gemma2Config) queryScale() float64 {
 
 // Forward computes logits [seq, vocab] for the prompt tokens.
 func (m *Gemma2) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor, error) {
+	return m.forwardCapture(ctx, tokens, nil)
+}
+
+// forwardCapture is Forward with an optional per-layer KV tap. When capture is
+// non-nil it is invoked once per block with the layer index and that block's
+// full-width POST-RoPE k and raw post-projection v [seq, kvHeads·headDim] —
+// exactly the rows [Gemma2.DecodeStep]'s cappedDecodeAttention appends per token
+// (k rotated, v unrotated, both BEFORE the per-head slicing of the soft-capped
+// attention), which is what lets [Gemma2.Prefill] seed a cache from ONE batched
+// pass over the prompt. The tensors handed to capture are the same ones the
+// ongoing forward consumes (callers must not mutate them; the cache copies rows
+// into its own buffers). A nil capture is the plain forward: no extra ops are
+// recorded, so tape/training semantics of Forward are byte-identical to before
+// this hook existed.
+func (m *Gemma2) forwardCapture(ctx *backend.Context, tokens []int, capture func(layer int, k, v *tensor.Tensor)) (*tensor.Tensor, error) {
 	seq := len(tokens)
 	if seq == 0 || seq > m.Config.Ctx {
 		return nil, fmt.Errorf("nlp: Gemma2 prompt length %d outside (0,%d]", seq, m.Config.Ctx)
@@ -139,14 +154,18 @@ func (m *Gemma2) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor, er
 		return nil, err
 	}
 
-	for _, b := range m.Blocks {
+	for l, b := range m.Blocks {
 		// Attention sublayer: input_layernorm → capped attention →
 		// post_attention_layernorm → add residual.
 		xb, err := b.InputNorm.Forward(ctx, x)
 		if err != nil {
 			return nil, err
 		}
-		a, err := m.cappedAttention(ctx, b, xb, seq)
+		var kvTap func(k, v *tensor.Tensor)
+		if capture != nil {
+			kvTap = func(k, v *tensor.Tensor) { capture(l, k, v) }
+		}
+		a, err := m.cappedAttention(ctx, b, xb, seq, kvTap)
 		if err != nil {
 			return nil, err
 		}
@@ -199,7 +218,12 @@ func (m *Gemma2) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor, er
 // scores·scale → softcap → +mask → softmax). GQA is handled by mapping query head h to
 // KV head h/(heads/kv_heads). Sliding-window attention is intentionally not applied
 // (no-op for prompts within the window).
-func (m *Gemma2) cappedAttention(ctx *backend.Context, b *Gemma2Block, xb *tensor.Tensor, seq int) (*tensor.Tensor, error) {
+//
+// capture, when non-nil, receives the full-width POST-RoPE k and the raw
+// (unrotated) v [seq, kvHeads·headDim] right before the per-head slicing —
+// exactly what cappedDecodeAttention appends to the KV-cache per token — so
+// Prefill can seed a cache during a batched pass. nil is the plain attention.
+func (m *Gemma2) cappedAttention(ctx *backend.Context, b *Gemma2Block, xb *tensor.Tensor, seq int, capture func(k, v *tensor.Tensor)) (*tensor.Tensor, error) {
 	cfg := m.Config
 	kv := cfg.kvHeads()
 	hd := cfg.HeadDim
@@ -222,6 +246,9 @@ func (m *Gemma2) cappedAttention(ctx *backend.Context, b *Gemma2Block, xb *tenso
 	}
 	if k, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: kv}, k); err != nil {
 		return nil, err
+	}
+	if capture != nil {
+		capture(k, v)
 	}
 
 	// Pre-softmax score scale as a rank-0 scalar (broadcast over [seq,seq]).

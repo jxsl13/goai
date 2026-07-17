@@ -81,6 +81,31 @@ func (c Qwen2MoeConfig) kvHeads() int {
 
 // Forward computes logits [seq, vocab] for the prompt tokens.
 func (m *Qwen2MoE) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor, error) {
+	return m.forwardCapture(ctx, tokens, nil, false)
+}
+
+// forwardCapture is Forward with an optional per-layer KV tap. When capture is
+// non-nil it is invoked once per block with the layer index and that block's
+// post-bias, POST-RoPE k and post-bias v [seq, kvWidth] — exactly the rows
+// [Qwen2MoE.DecodeStep] appends per token, which is what lets [Qwen2MoE.Prefill]
+// seed a cache from ONE batched pass over the prompt. The tensors handed to
+// capture are the same ones the ongoing forward consumes (callers must not
+// mutate them; the cache copies rows into its own buffers). A nil capture with
+// sparseFFN=false is the plain forward: no extra ops are recorded, so
+// tape/training semantics of Forward are byte-identical to before this hook
+// existed.
+//
+// sparseFFN is forwarded to [Qwen2MoE.ffn]'s decode flag and selects the ROUTED
+// experts' evaluation path: false is the dense MoE.Forward (training/tape),
+// true is the same inference-only multi-row MoE.ForwardDecode DecodeStep uses
+// (the shared expert runs identically either way). Mathematically identical,
+// but NOT bit-identical: the dense OpMoECombine kernel accumulates
+// acc += (w/denom)·e in one fused expression, which Go may compile to an FMA
+// (spec-sanctioned fusion, arm64 FMADD), while the sparse path rounds the
+// product through a stored OpMul tensor before the OpAdd — a ~1-ulp divergence.
+// Prefill therefore passes sparseFFN=true so its residual stream (and thus
+// every later layer's cached k/v) matches DecodeStep exactly, bit for bit.
+func (m *Qwen2MoE) forwardCapture(ctx *backend.Context, tokens []int, capture func(layer int, k, v *tensor.Tensor), sparseFFN bool) (*tensor.Tensor, error) {
 	seq := len(tokens)
 	if seq == 0 || seq > m.Config.Ctx {
 		return nil, fmt.Errorf("nlp: Qwen2MoE prompt length %d outside (0,%d]", seq, m.Config.Ctx)
@@ -100,7 +125,7 @@ func (m *Qwen2MoE) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor, 
 	cfg := m.Config
 	kv := cfg.kvHeads()
 	attn := backend.AttnAttrs{Heads: cfg.Heads, KVHeads: kv, Causal: true}
-	for _, b := range m.Blocks {
+	for l, b := range m.Blocks {
 		// attention sublayer (Qwen2: biased q/k/v, bias-free o_proj)
 		xb, err := b.AttnNorm.Forward(ctx, x)
 		if err != nil {
@@ -124,6 +149,9 @@ func (m *Qwen2MoE) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor, 
 		if k, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: kv}, k); err != nil {
 			return nil, err
 		}
+		if capture != nil {
+			capture(l, k, v)
+		}
 		a, err := exec1(ctx, backend.OpMHA, attn, q, k, v)
 		if err != nil {
 			return nil, err
@@ -140,7 +168,7 @@ func (m *Qwen2MoE) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor, 
 		if err != nil {
 			return nil, err
 		}
-		ff, err := m.ffn(ctx, b, xf, false)
+		ff, err := m.ffn(ctx, b, xf, sparseFFN)
 		if err != nil {
 			return nil, err
 		}
