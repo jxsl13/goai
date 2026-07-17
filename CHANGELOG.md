@@ -4,6 +4,16 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### backend/cpu — fix: race-build ULP tolerance for kernel-parity tests (T794, 2026-07-17)
+
+`TestRoPEKernelsMatchRefWithinUlps` failed under the race detector on darwin/arm64: race builds apply
+different floating-point contraction (FMA fusion) than normal builds, so mathematically-identical cpu
+and ref kernels drift a few ULPs apart — up to ~2.6e-14 relative on the rope-bwd/xpos cases, where
+xpos's exponential position scaling compounds the differences — past the strict 1e-15 f64 gate. A
+race-build-tagged override (`//go:build race`) widens the f64 parity tolerance to 1e-13 for race runs
+only; normal builds keep the near-bit gate. A build-mode artifact, not a kernel bug (isolated by
+stashing during the T793 verification); recorded as §B65.
+
 ### backend/cpu — perf: latency-aware worker pool + GEMV column-split — 1.68× decode (T793, 2026-07-17)
 
 A CPU profile showed single-token decode dominated by pool synchronization (54% `pthread_cond_signal`
