@@ -4,6 +4,12 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### docs — GGUF coverage consolidated in package doc and README (2026-07-17)
+
+The nlp package doc and the README front page now state the full current GGUF matrix:
+eight float loaders (adds StarCoder2, GPT-NeoX) and six quantized direct-from-Q-block
+decode families (adds Mixtral), with the lossless quantized-byte unpacking called out.
+
 ### nlp — GGUF loading for StarCoder2 and GPT-NeoX (T803, 2026-07-17)
 
 `StarCoder2FromGGUF` and `GPTNeoXFromGGUF` (+ `*ToGGUF` inverses) load llama.cpp GGUF
