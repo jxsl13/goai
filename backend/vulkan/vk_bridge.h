@@ -15,6 +15,13 @@ int vk_available(void);
 // vk_matmul_f32 computes C[M,N] = opA(A)·opB(B), row-major float32, via the SPIR-V module
 // in `spv`. transA: A is stored [K,M] and read transposed (opA=Aᵀ); transB: B stored [N,K].
 // Returns 0 on success, nonzero on failure (see vk_bridge.c for codes).
+int vk_coopmat(void);
+int vk_coopmat_gemm_f16_res(const uint32_t* spv, int spvLen,
+                            void* ah, void* bh, void* ch,
+                            int M, int K, int N);
+int vk_coopmat_gemm_f16(const uint32_t* spv, int spvLen,
+                        const void* Ah, const void* Bh, float* C,
+                        int M, int K, int N);
 int vk_matmul_f32(const uint32_t* spv, int spvLen,
                   const float* A, const float* B, float* C,
                   int M, int K, int N, int transA, int transB);

@@ -1,0 +1,52 @@
+#version 450
+// coopmat_gemm.comp — Tw-COOPMAT probe 1: f16×f16→f32 GEMM on VK_KHR_cooperative_matrix
+// (tensor cores driven from GLSL, the mechanism behind llama.cpp-Vulkan's prefill lead;
+// see ggml mul_mm.comp COOPMAT path). One subgroup (32 lanes) per workgroup computes a
+// 16(M)×64(N) C tile as four 16×16 accumulators; the K loop loads one A fragment and four
+// B fragments per 16-step directly from global memory (no shared-memory staging yet — this
+// probe establishes the pipeline + a first rate; tiling to llama.cpp's BM/BN=64 shape is
+// the next slice). Requires M%16==0, N%64==0, K%16==0 (probe constraint, host-checked).
+#extension GL_KHR_cooperative_matrix : require
+#extension GL_KHR_memory_scope_semantics : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+
+layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+
+layout(binding = 0) readonly  buffer A { float16_t a[]; };  // [M,K] row-major f16
+layout(binding = 1) readonly  buffer B { float16_t b[]; };  // [K,N] row-major f16
+layout(binding = 2) writeonly buffer C { float c[]; };      // [M,N] row-major f32
+
+layout(push_constant) uniform Push { int M; int K; int N; } pc;
+
+void main() {
+    // Workgroup (gx, gy) → C tile at rows [gy*16, gy*16+16), cols [gx*64, gx*64+64).
+    uint tileRow = gl_WorkGroupID.y * 16u;
+    uint tileCol = gl_WorkGroupID.x * 64u;
+
+    coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> acc0 =
+        coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>(0.0);
+    coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> acc1 = acc0;
+    coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> acc2 = acc0;
+    coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> acc3 = acc0;
+
+    coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> ma;
+    coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB> mb;
+
+    uint K = uint(pc.K), N = uint(pc.N);
+    for (uint k = 0u; k < K; k += 16u) {
+        coopMatLoad(ma, a, tileRow * K + k, K, gl_CooperativeMatrixLayoutRowMajor);
+        coopMatLoad(mb, b, k * N + tileCol, N, gl_CooperativeMatrixLayoutRowMajor);
+        acc0 = coopMatMulAdd(ma, mb, acc0);
+        coopMatLoad(mb, b, k * N + tileCol + 16u, N, gl_CooperativeMatrixLayoutRowMajor);
+        acc1 = coopMatMulAdd(ma, mb, acc1);
+        coopMatLoad(mb, b, k * N + tileCol + 32u, N, gl_CooperativeMatrixLayoutRowMajor);
+        acc2 = coopMatMulAdd(ma, mb, acc2);
+        coopMatLoad(mb, b, k * N + tileCol + 48u, N, gl_CooperativeMatrixLayoutRowMajor);
+        acc3 = coopMatMulAdd(ma, mb, acc3);
+    }
+
+    coopMatStore(acc0, c, tileRow * N + tileCol, N, gl_CooperativeMatrixLayoutRowMajor);
+    coopMatStore(acc1, c, tileRow * N + tileCol + 16u, N, gl_CooperativeMatrixLayoutRowMajor);
+    coopMatStore(acc2, c, tileRow * N + tileCol + 32u, N, gl_CooperativeMatrixLayoutRowMajor);
+    coopMatStore(acc3, c, tileRow * N + tileCol + 48u, N, gl_CooperativeMatrixLayoutRowMajor);
+}

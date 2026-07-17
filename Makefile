@@ -57,6 +57,7 @@ cuda-test:
 ## regenerate it here after editing matmul.comp (§T43).
 vulkan-spv:
 	glslc backend/vulkan/shaders/matmul.comp -o backend/vulkan/shaders/matmul.spv
+	glslc --target-env=vulkan1.3 backend/vulkan/shaders/coopmat_gemm.comp -o backend/vulkan/shaders/coopmat_gemm.spv
 	glslc backend/vulkan/shaders/matmul_strided.comp -o backend/vulkan/shaders/matmul_strided.spv
 	glslc backend/vulkan/shaders/softmax_causal.comp -o backend/vulkan/shaders/softmax_causal.spv
 	glslc backend/vulkan/shaders/crossentropy.comp -o backend/vulkan/shaders/crossentropy.spv
