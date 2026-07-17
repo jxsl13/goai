@@ -4,6 +4,22 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — FIX: LlamaFromGGUF now un-permutes the llama arch's q/k rows (B67, 2026-07-17)
+
+Real llama.cpp llama/mistral GGUF files store attn_q/attn_k in ggml's INTERLEAVED rotary
+row layout (the converter's permute for NORM-type rope); GoAI's RoPE is split-half, and
+`LlamaFromGGUF` copied the rows as stored — wrong attention pairing for every real
+community file, masked because all fixtures round-tripped GoAI's own serializer (the old
+§R93 note even asserted no re-permute was needed, while the Mixtral and Granite loaders —
+same on-disk lineage — correctly un-permuted). Found by cross-loader contradiction during
+T808. Fixes: `LlamaFromGGUF` un-permutes via `ropeUnpermuteRows`; `QuantLlamaFromGGUF`
+un-permutes the Q-block rows losslessly via `quantPermuteRows`; `LlamaToGGUF` now WRITES
+the permuted on-disk convention. Decisive gates added: a fixture built from the raw HF
+golden with an INDEPENDENTLY implemented llama.cpp permute must reproduce transformers
+logits (1.9e-08/3.8e-08, float and GQA), the write layout must equal that independent
+permute element-for-element, and the quantized load must exactly equal QuantizeLlama.
+Qwen2/Qwen3/Gemma/Phi-3 GGUF paths are NEOX/no-permute and were always correct.
+
 ### nlp — GGUF loading for Gemma 2 and Granite (T808, 2026-07-17)
 
 `Gemma2FromGGUF` and `GraniteFromGGUF` (+ `*ToGGUF`); float GGUF coverage reaches

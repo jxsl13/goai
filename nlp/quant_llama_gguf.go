@@ -24,10 +24,47 @@ func quantMatMulSupported(gg uint32) bool {
 // block layout QuantLinear expects, so each projection's bytes are wrapped directly — NO
 // transpose, NO re-quantization. Only the small, precision-sensitive pieces are dequantized to
 // f32: the RMSNorm gains and the token embedding (its lookup needs a float table). An absent
-// output.weight ties the LM head to token_embd (which must itself be quantized). Follows the
-// ggml/llama.cpp convention (§R93), the quantized twin of LlamaFromGGUF.
+// output.weight ties the LM head to token_embd (which must itself be quantized). The quantized
+// twin of [LlamaFromGGUF] — including the §B67 un-permute: the llama arch stores attn_q/attn_k
+// in ggml's interleaved rotary row layout (the converter's permute), so the Q-block rows are
+// reordered back into GoAI's split-half layout via [quantPermuteRows]/[ropeUnpermutePerm] —
+// a lossless byte-range row permutation (T802), never a dequantize→requantize round-trip.
 func QuantLlamaFromGGUF(meta map[string]any, tensors map[string]gguf.QuantTensor) (*QuantLlama, error) {
-	return quantLlamaArchFromGGUF("llama", meta, tensors)
+	cfg, err := llamaCfgFromGGUFMeta("llama", meta)
+	if err != nil {
+		return nil, err
+	}
+	ts := make(map[string]gguf.QuantTensor, len(tensors))
+	for k, v := range tensors {
+		ts[k] = v
+	}
+	unpermute := func(name string, heads int) error {
+		qt, ok := ts[name]
+		if !ok || len(qt.Shape) != 2 {
+			return nil
+		}
+		rows := qt.Shape[0]
+		perm, err := ropeUnpermutePerm(rows, heads)
+		if err != nil {
+			return fmt.Errorf("nlp: GGUF %s: %w", name, err)
+		}
+		out, err := quantPermuteRows(qt, perm)
+		if err != nil {
+			return fmt.Errorf("nlp: GGUF %s: %w", name, err)
+		}
+		ts[name] = out
+		return nil
+	}
+	for l := range cfg.Layers {
+		p := fmt.Sprintf("blk.%d.", l)
+		if err := unpermute(p+"attn_q.weight", cfg.Heads); err != nil {
+			return nil, err
+		}
+		if err := unpermute(p+"attn_k.weight", cfg.kvHeads()); err != nil {
+			return nil, err
+		}
+	}
+	return quantLlamaArchFromGGUF("llama", meta, ts)
 }
 
 // quantLlamaArchFromGGUF is the shared llama-family quantized-GGUF loader behind
