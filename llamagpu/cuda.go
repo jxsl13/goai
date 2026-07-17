@@ -786,6 +786,34 @@ func NewT5CUDA(m *nlp.T5) (*GPUT5, error) {
 	})
 }
 
+// NewT5DecoderCUDA uploads an nlp.T5Decoder onto the GPU — the seq2seq (encoder-decoder) decoder, the
+// first encoder-decoder GPU model. Each block runs causal self-attention with the T5 relpos bias
+// (MHABias over a growing KV cache), cross-attention over the encoder output (plain MHA), and a
+// gated-GELU/ReLU FFN, all PRE-LN/RMSNorm/unscaled. Pair with NewT5CUDA (the encoder). cuda-only.
+func NewT5DecoderCUDA(m *nlp.T5Decoder) (*GPUT5Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newT5Decoder(m, backendOps{
+		name:        string(backend.CUDA),
+		asyncEncode: false,
+		newBuffer: func(data []float32) (buffer, error) {
+			b, err := cuda.NewDeviceBufferF32(data)
+			if err != nil {
+				return nil, err
+			}
+			return cBuf{b}, nil
+		},
+		newRecorder: func() (recorder, error) {
+			r, err := cuda.NewRecorder()
+			if err != nil {
+				return nil, err
+			}
+			return cRec{r}, nil
+		},
+	})
+}
+
 // NewMixtralCUDA uploads an nlp.Mixtral (sparse Mixture-of-Experts) onto the batched Decoder core.
 // Attention is the plain Llama core (+ optional Qwen3-MoE QK-norm); the FFN is a sparse MoE routed
 // per token — the routing weights are computed on-device (cu_moe_gate) so the whole step stays a
