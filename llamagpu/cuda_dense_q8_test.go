@@ -145,3 +145,43 @@ func TestCUDAMixtralQ8CloseToF32(t *testing.T) {
 	}
 	t.Logf("NewMixtralQ8CUDA tracks f32 CUDA decode: min cosine %.6f (Q8 experts + attention, f32 router preserves top-k selection)", minCos)
 }
+
+// TestCUDADeepSeekV2Q8CloseToF32 validates Q8 on the flagship MLA + DeepSeekMoE decoder (the last Q8
+// gap). The low-rank MLA projections (q_a/q_b/kv_a/kv_b, o_proj) and the routed + shared expert matrices
+// go Q8_0; the latent RMSNorms, decoupled RoPE and the top-k router stay f32. Uses the MoE fixture so the
+// router carve-out is exercised — a quantized router would flip expert selection and collapse the cosine.
+func TestCUDADeepSeekV2Q8CloseToF32(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("cuda: no CUDA-capable device")
+	}
+	ts, _, err := safetensors.LoadFile("../nlp/testdata/deepseekv2moe_hf.safetensors")
+	if err != nil {
+		t.Skipf("deepseekv2moe testdata unavailable (run make golden): %v", err)
+	}
+	m, err := nlp.DeepSeekV2FromHF(ts, nlp.DeepSeekV2Config{
+		Heads: 4, QLoraRank: 24, KVLoraRank: 16,
+		QKNope: 16, QKRope: 8, VHead: 16,
+		Eps: 1e-6, RopeBase: 10000, Ctx: 32,
+		FirstKDense: 1, NRoutedExperts: 4, NSharedExperts: 1,
+		TopK: 2, MoEHidden: 32, RoutedScale: 1.0,
+	})
+	if err != nil {
+		t.Fatalf("DeepSeekV2FromHF: %v", err)
+	}
+	f32Dec, err := llamagpu.NewDeepSeekV2CUDA(m)
+	if err != nil {
+		t.Fatalf("NewDeepSeekV2CUDA: %v", err)
+	}
+	defer f32Dec.Release()
+	q8Dec, err := llamagpu.NewDeepSeekV2Q8CUDA(m)
+	if err != nil {
+		t.Fatalf("NewDeepSeekV2Q8CUDA: %v", err)
+	}
+	defer q8Dec.Release()
+
+	minCos := minCosStep(t, f32Dec, q8Dec, []int{3, 7, 1, 9, 4})
+	if minCos < 0.999 {
+		t.Fatalf("DeepSeek-V2 Q8 min cosine %.5f < 0.999 vs f32 (MLA/expert Q8 or router carve-out failed)", minCos)
+	}
+	t.Logf("NewDeepSeekV2Q8CUDA tracks f32 CUDA decode: min cosine %.6f (MLA low-rank + MoE experts Q8, f32 router — Q8 catalogue complete)", minCos)
+}

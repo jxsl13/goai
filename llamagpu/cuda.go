@@ -285,6 +285,17 @@ func NewOLMoEQ8CUDA(m *nlp.OLMoE) (*Decoder, error) {
 	return newOLMoEDecoder(m, cudaQ8Ops())
 }
 
+// NewDeepSeekV2Q8CUDA quantizes the flagship MLA + DeepSeekMoE decoder — the last Q8 gap. The low-rank
+// MLA projections (q_a/q_b/kv_a/kv_b, o_proj), the routed + shared expert matrices all go resident Q8_0;
+// the latent RMSNorms, decoupled RoPE and the top-k router stay f32 (the router carved out, as for the
+// other MoE arches). Completes Q8 decode across the entire f32 transformer catalogue.
+func NewDeepSeekV2Q8CUDA(m *nlp.DeepSeekV2) (*Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newDeepSeekV2Decoder(m, cudaQ8Ops())
+}
+
 // NewQwen2CUDA uploads a Qwen2 / Qwen2.5 model onto the batched Decoder core. Qwen2 shares
 // nlp.Llama (SwiGLU MLP, RMSNorm, GQA, full rope) and departs only in carrying q/k/v projection
 // biases (o_proj has none) — the newDecoder core adds them via qkvBias when b.Bq/Bk/Bv are set, so

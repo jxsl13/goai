@@ -1520,8 +1520,8 @@ func newDeepSeekV2Decoder(m *nlp.DeepSeekV2, ops backendOps) (*Decoder, error) {
 			for i, ex := range b.MoE.Routed.Experts {
 				experts[i] = moeFFN{wG: lin(ex.Wgate), wU: lin(ex.Wup), wD: lin(ex.Wdown)}
 			}
-			gb.moeRouter, gb.moeExperts = lin(b.MoE.Routed.Router.W), experts
-			if len(b.MoE.Shared) > 0 { // realized as a single fused SwiGLU; ungated (moeSharedGate nil)
+			gb.moeRouter, gb.moeExperts = d.f32Lin(mk)(b.MoE.Routed.Router.W), experts // router stays f32 (routing is selection-sensitive)
+			if len(b.MoE.Shared) > 0 {                                                 // realized as a single fused SwiGLU; ungated (moeSharedGate nil)
 				s := b.MoE.Shared[0]
 				gb.moeShared = moeFFN{wG: lin(s.Wgate), wU: lin(s.Wup), wD: lin(s.Wdown)}
 			}
