@@ -4,6 +4,21 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — GGUF loading for DeepSeek-V2 (T806, 2026-07-17)
+
+`DeepSeekV2FromGGUF` (+ `ToGGUF`) loads llama.cpp deepseek2 checkpoints — the densest
+convention set yet, all verified in llama.cpp source: kv_b is SPLIT ON DISK (the converter
+yields per-head `attn_k_b` pre-TRANSPOSED for the absorption matmul plus `attn_v_b`; the
+unsplit `attn_kv_b` is a legacy form — the loader accepts either, rejects both-present);
+`head_count_kv` is 1 on disk ("MLA converts into MQA") while the split tensors carry all
+heads; `attention.key_length`/`value_length` are the MQA CACHE widths, with the true head
+dims under `*_mla` keys; NORM-type rope on consecutive pairs → the pe rows of `attn_q_b`
+and `attn_kv_a_mqa` are de-interleaved at load exactly like the HF path; MoE with
+`leading_dense_block_count`, fused 3-D expert banks and the FUSED shared expert. V2-Lite
+files (null q_lora_rank → plain attn_q) are rejected with a precise error — GoAI's type is
+fixed to the q-LoRA path. Includes a latent-decode parity gate proving the absorbed cache
+math survives a GGUF load. Float GGUF coverage: thirteen architectures.
+
 ### nlp — GGUF loading for StableLM and OLMo 2 (T805, 2026-07-17)
 
 `StableLMFromGGUF` and `OLMo2FromGGUF` (+ `*ToGGUF` inverses), conventions verified against
