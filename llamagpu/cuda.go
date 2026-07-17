@@ -79,6 +79,9 @@ func (c cRec) SSMStep(u, delta, a, b, cc, dskip, h, y buffer, d, n int) error {
 func (c cRec) Conv1DStep(x, w, b, state, out buffer, d, k int) error {
 	return c.r.Conv1DStep(cb(x), cb(w), cb(b), cb(state), cb(out), d, k)
 }
+func (c cRec) SSDStep(x, delta, a, b, cc, dskip, state, y buffer, heads, headDim, groups, n int) error {
+	return c.r.SSDStep(cb(x), cb(delta), cb(a), cb(b), cb(cc), cb(dskip), cb(state), cb(y), heads, headDim, groups, n)
+}
 func (c cRec) Unary(x, o buffer, op int) error { return c.r.Unary(cb(x), cb(o), op) }
 func (c cRec) Binary(a, b, o buffer, op int) error {
 	return c.r.Binary(cb(a), cb(b), cb(o), op)
@@ -343,6 +346,34 @@ func NewMambaCUDA(m *nlp.Mamba) (*Decoder, error) {
 		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
 	}
 	return newMambaDecoder(m, backendOps{
+		name:        string(backend.CUDA),
+		asyncEncode: false,
+		newBuffer: func(data []float32) (buffer, error) {
+			b, err := cuda.NewDeviceBufferF32(data)
+			if err != nil {
+				return nil, err
+			}
+			return cBuf{b}, nil
+		},
+		newRecorder: func() (recorder, error) {
+			r, err := cuda.NewRecorder()
+			if err != nil {
+				return nil, err
+			}
+			return cRec{r}, nil
+		},
+	})
+}
+
+// NewMamba2CUDA uploads an nlp.Mamba2 onto the batched Decoder core — the state-space-duality sibling
+// of Mamba. Each layer is an SSD mixer (scalar per-head decay, B/C shared across a group, gated
+// RMSNorm); decode is a linear-time recurrence recorded from cu_ssd_step + the shared conv1d/softplus
+// primitives, carrying per-block conv/SSD state across Step calls. cuda-only.
+func NewMamba2CUDA(m *nlp.Mamba2) (*Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newMamba2Decoder(m, backendOps{
 		name:        string(backend.CUDA),
 		asyncEncode: false,
 		newBuffer: func(data []float32) (buffer, error) {
