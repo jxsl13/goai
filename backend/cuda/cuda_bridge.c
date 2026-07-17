@@ -33,7 +33,7 @@ static cublasHandle_t gHandle = NULL;
 static float *gOne = NULL, *gZero = NULL; // device 1.0f/0.0f — cuBLAS DEVICE pointer mode (graph-capture-safe alpha/beta)
 static cudaStream_t gStream = NULL;
 static CUcontext gCtx = NULL; // runtime's primary context, retained for driver-API launches
-static CUfunction gGelu = NULL, gRelu2 = NULL, gRelu = NULL, gMoeGate = NULL, gRowAxpy = NULL, gSsmStep = NULL, gSsdStep = NULL, gConv1dStep = NULL, gWkvStep = NULL, gSilu = NULL, gSigmoid = NULL, gSoftplus = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gRopePartial = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gAttnSoftmaxCap = NULL, gAttnSoftmaxAlibi = NULL, gAttnSoftmaxBias = NULL, gQgemv = NULL, gQgemv4 = NULL, gQgemv4k = NULL, gQgemv4kMT = NULL, gQgemv4kPre = NULL, gQgemv5k = NULL, gQgemv5kMT = NULL, gQgemv6k = NULL, gQgemv6kMT = NULL, gQgemv3k = NULL, gQgemv3kMT = NULL, gQgemv2k = NULL, gQgemv40 = NULL, gQgemvI4nl = NULL, gQgemvI4xs = NULL, gQgemvMxfp4 = NULL, gQgemvI2xxs = NULL, gQgemvI2xs = NULL, gQgemvI3xxs = NULL, gQgemvI3s = NULL, gQgemvI1s = NULL, gQgemvI1m = NULL, gI8Mma = NULL, gI8MmaT = NULL, gI8MmaRb = NULL, gI8MmaDb = NULL, gI8MmaWt = NULL, gI8MmaWp = NULL, gI8Mmq = NULL, gI8MmqR = NULL, gQrowsI8 = NULL, gLdmProbe = NULL, gLdmProbe2 = NULL, gI8MmaLm = NULL, gCvtF16 = NULL, gCvtFrom16 = NULL; // lazily nvrtc-compiled
+static CUfunction gGelu = NULL, gRelu2 = NULL, gRelu = NULL, gMoeGate = NULL, gRowAxpy = NULL, gSsmStep = NULL, gSsdStep = NULL, gConv1dStep = NULL, gWkvStep = NULL, gSilu = NULL, gSigmoid = NULL, gSoftplus = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gRopePartial = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gAttnSoftmaxCap = NULL, gAttnSoftmaxAlibi = NULL, gAttnSoftmaxBias = NULL, gQgemv = NULL, gQgemv4 = NULL, gQgemv4k = NULL, gQgemv4kMT = NULL, gQgemv4kPre = NULL, gQgemv5k = NULL, gQgemv5kMT = NULL, gQgemv6k = NULL, gQgemv6kMT = NULL, gQgemv3k = NULL, gQgemv3kMT = NULL, gQgemv2k = NULL, gQgemv2kMT = NULL, gQgemv40 = NULL, gQgemvI4nl = NULL, gQgemvI4xs = NULL, gQgemvMxfp4 = NULL, gQgemvI2xxs = NULL, gQgemvI2xs = NULL, gQgemvI3xxs = NULL, gQgemvI3s = NULL, gQgemvI1s = NULL, gQgemvI1m = NULL, gI8Mma = NULL, gI8MmaT = NULL, gI8MmaRb = NULL, gI8MmaDb = NULL, gI8MmaWt = NULL, gI8MmaWp = NULL, gI8Mmq = NULL, gI8MmqR = NULL, gQrowsI8 = NULL, gLdmProbe = NULL, gLdmProbe2 = NULL, gI8MmaLm = NULL, gCvtF16 = NULL, gCvtFrom16 = NULL; // lazily nvrtc-compiled
 static CUfunction gRopeDpos = NULL, gRopePartialDpos = NULL, gAttnSoftmaxDpos = NULL, gAppendDpos = NULL; // device-position (graph-capturable) twins
 static CUfunction gGqaFlashPart = NULL, gGqaFlashMerge = NULL; // flash decode: GQA K/V-shared split-K partials + merge
 static CUfunction gGqaFlashPartF16 = NULL, gAppendDposF16 = NULL; // f16 KV-cache twins (u16 storage, f32 compute)
@@ -2250,6 +2250,83 @@ int cu_qmatmul_q2k(const void* dA, const void* dQ, void* dOut, int M, int K, int
         args[0] = &dA; args[1] = &dQ; args[2] = &dOut;
         args[3] = &M; args[4] = &K; args[5] = &N; args[6] = &beta;
         rc = (cuLaunchKernel(gQgemv2k, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_qmatmul_q2k_mt: weight-read-once M-tiled GEMM for M>1 — Q2_K twin of cu_qmatmul_q4k_mt (completes
+// the K-quant family). Each lane owns 8 contiguous elements; the affine scale/min (dl, ml) and the 8
+// decoded 2-bit q2 values are hoisted ONCE per warp and reused across an MT=8 row tile. Arithmetic
+// LIFTED VERBATIM from qmatmul_q2k (acc += dl·Σaᵢqᵢ − ml·Σaᵢ) → bit-identical per row. K%256==0.
+int cu_qmatmul_q2k_mt(const void* dA, const void* dQ, void* dOut, int M, int K, int N, float beta) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (!gQgemv2kMT && compile_kernel(
+                       "__device__ __forceinline__ float f16f(unsigned short h){\n"
+                       "  unsigned s = (h & 0x8000u) << 16;\n"
+                       "  float v = __uint_as_float((h & 0x7fffu) << 13) * __uint_as_float(0x77800000u);\n"
+                       "  return __uint_as_float(__float_as_uint(v) | s);\n"
+                       "}\n"
+                       "extern \"C\" __global__ void qmatmul_q2k_mt(const float* a, const unsigned char* q, float* out, int M, int K, int N, float beta){\n"
+                       "  long widx = ((long)blockIdx.x*blockDim.x + threadIdx.x) >> 5;\n"
+                       "  int lane = threadIdx.x & 31;\n"
+                       "  int nmt = (M + 8 - 1) / 8;\n"
+                       "  if (widx >= (long)N*nmt) return;\n"
+                       "  int n = (int)(widx % N), mt0 = (int)(widx / N) * 8;\n"
+                       "  int sbs = K >> 8;\n"
+                       "  const unsigned char* qr = q + (size_t)n*sbs*84;\n"
+                       "  int is = lane >> 1, half = lane & 1, l0 = half*8;\n"
+                       "  int nb = is >> 3, jj = (is & 7) >> 1, gsel = is & 1, g = gsel*16;\n"
+                       "  int shift = 2*jj;\n"
+                       "  int yi = nb*128 + jj*32 + g + l0;\n"
+                       "  int qsoff = 16 + nb*32 + g + l0;\n"
+                       "  float acc[8];\n"
+                       "  #pragma unroll\n"
+                       "  for (int j=0;j<8;j++) acc[j]=0.0f;\n"
+                       "  for (int w = 0; w < sbs; w++){\n"
+                       "    const unsigned char* blk = qr + (size_t)w*84;\n"          // weight decode — ONCE per warp
+                       "    float d = f16f((unsigned short)(blk[80] | (blk[81]<<8)));\n"
+                       "    float dmin = f16f((unsigned short)(blk[82] | (blk[83]<<8)));\n"
+                       "    unsigned sc = blk[is];\n"
+                       "    float dl = d * (float)(sc & 0xF), ml = dmin * (float)(sc >> 4);\n"
+                       "    const unsigned char* qs = blk + qsoff;\n"
+                       "    float qv[8];\n"                                           // decoded q2 values, reused across rows
+                       "    #pragma unroll\n"
+                       "    for (int t = 0; t < 8; t++){ qv[t] = (float)((qs[t] >> shift) & 3); }\n"
+                       "    #pragma unroll\n"
+                       "    for (int j=0;j<8;j++){\n"
+                       "      int m = mt0 + j; if (m >= M) break;\n"
+                       "      const float* av = a + (size_t)m*K + (size_t)w*256 + yi;\n"
+                       "      float4 alo = *(const float4*)av;\n"
+                       "      float4 ahi = *(const float4*)(av + 4);\n"
+                       "      float av8[8] = { alo.x, alo.y, alo.z, alo.w, ahi.x, ahi.y, ahi.z, ahi.w };\n"
+                       "      float sq = 0.0f, sa = 0.0f;\n"
+                       "      #pragma unroll\n"
+                       "      for (int t = 0; t < 8; t++){ sq += av8[t] * qv[t]; sa += av8[t]; }\n"
+                       "      acc[j] += dl*sq - ml*sa;\n"
+                       "    }\n"
+                       "  }\n"
+                       "  #pragma unroll\n"
+                       "  for (int j=0;j<8;j++){\n"
+                       "    float a2 = acc[j];\n"
+                       "    for (int o = 16; o > 0; o >>= 1) a2 += __shfl_down_sync(0xffffffff, a2, o);\n"
+                       "    int m = mt0 + j;\n"
+                       "    if (lane == 0 && m < M){ out[(size_t)m*N+n] = beta*out[(size_t)m*N+n] + a2; }\n"
+                       "  }\n"
+                       "}\n",
+                       "qmatmul_q2k_mt.cu", "qmatmul_q2k_mt", &gQgemv2kMT) != 0) { rc = -2; goto done; }
+    {
+        int nmt = (M + 8 - 1) / 8;
+        long total = (long)N * nmt * 32;
+        int threads = 256, blocks = (int)((total + threads - 1) / threads); if (blocks < 1) blocks = 1;
+        void* args[7];
+        args[0] = &dA; args[1] = &dQ; args[2] = &dOut;
+        args[3] = &M; args[4] = &K; args[5] = &N; args[6] = &beta;
+        rc = (cuLaunchKernel(gQgemv2kMT, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 done:
     pthread_mutex_unlock(&gLock);
