@@ -33,7 +33,7 @@ static cublasHandle_t gHandle = NULL;
 static float *gOne = NULL, *gZero = NULL; // device 1.0f/0.0f — cuBLAS DEVICE pointer mode (graph-capture-safe alpha/beta)
 static cudaStream_t gStream = NULL;
 static CUcontext gCtx = NULL; // runtime's primary context, retained for driver-API launches
-static CUfunction gGelu = NULL, gRelu2 = NULL, gMoeGate = NULL, gRowAxpy = NULL, gSsmStep = NULL, gConv1dStep = NULL, gSilu = NULL, gSigmoid = NULL, gSoftplus = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gRopePartial = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gAttnSoftmaxCap = NULL, gAttnSoftmaxAlibi = NULL, gQgemv = NULL, gQgemv4 = NULL, gQgemv4k = NULL, gQgemv4kPre = NULL, gQgemv5k = NULL, gQgemv6k = NULL, gQgemv3k = NULL, gQgemv2k = NULL, gQgemv40 = NULL, gQgemvI4nl = NULL, gQgemvI4xs = NULL, gQgemvMxfp4 = NULL, gQgemvI2xxs = NULL, gQgemvI2xs = NULL, gQgemvI3xxs = NULL, gQgemvI3s = NULL, gQgemvI1s = NULL, gQgemvI1m = NULL, gI8Mma = NULL, gI8MmaT = NULL, gI8MmaRb = NULL, gI8MmaDb = NULL, gI8MmaWt = NULL, gI8MmaWp = NULL, gI8Mmq = NULL, gI8MmqR = NULL, gQrowsI8 = NULL, gLdmProbe = NULL, gLdmProbe2 = NULL, gI8MmaLm = NULL, gCvtF16 = NULL, gCvtFrom16 = NULL; // lazily nvrtc-compiled
+static CUfunction gGelu = NULL, gRelu2 = NULL, gMoeGate = NULL, gRowAxpy = NULL, gSsmStep = NULL, gSsdStep = NULL, gConv1dStep = NULL, gSilu = NULL, gSigmoid = NULL, gSoftplus = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gRopePartial = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gAttnSoftmaxCap = NULL, gAttnSoftmaxAlibi = NULL, gQgemv = NULL, gQgemv4 = NULL, gQgemv4k = NULL, gQgemv4kPre = NULL, gQgemv5k = NULL, gQgemv6k = NULL, gQgemv3k = NULL, gQgemv2k = NULL, gQgemv40 = NULL, gQgemvI4nl = NULL, gQgemvI4xs = NULL, gQgemvMxfp4 = NULL, gQgemvI2xxs = NULL, gQgemvI2xs = NULL, gQgemvI3xxs = NULL, gQgemvI3s = NULL, gQgemvI1s = NULL, gQgemvI1m = NULL, gI8Mma = NULL, gI8MmaT = NULL, gI8MmaRb = NULL, gI8MmaDb = NULL, gI8MmaWt = NULL, gI8MmaWp = NULL, gI8Mmq = NULL, gI8MmqR = NULL, gQrowsI8 = NULL, gLdmProbe = NULL, gLdmProbe2 = NULL, gI8MmaLm = NULL, gCvtF16 = NULL, gCvtFrom16 = NULL; // lazily nvrtc-compiled
 static CUfunction gRopeDpos = NULL, gRopePartialDpos = NULL, gAttnSoftmaxDpos = NULL, gAppendDpos = NULL; // device-position (graph-capturable) twins
 static CUfunction gGqaFlashPart = NULL, gGqaFlashMerge = NULL; // flash decode: GQA K/V-shared split-K partials + merge
 static CUfunction gGqaFlashPartF16 = NULL, gAppendDposF16 = NULL; // f16 KV-cache twins (u16 storage, f32 compute)
@@ -340,6 +340,48 @@ int cu_conv1d_step(const void* x, const void* w, const void* b, void* state, voi
         int threads = 256, blocks = (D + threads - 1) / threads; if (blocks < 1) blocks = 1;
         void* args[7]; args[0]=&x; args[1]=&w; args[2]=&b; args[3]=&state; args[4]=&out; args[5]=&D; args[6]=&K;
         rc = (cuLaunchKernel(gConv1dStep, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_ssd_step: one timestep of the Mamba-2 SSD (state-space-duality) scan for DECODE. Where Mamba-1
+// (cu_ssm_step) has a per-channel state-matrix decay, Mamba-2 restricts A to a SCALAR per head and
+// shares B/C across a GROUP of heads. Per head h (group g = h/(H/G)): a = exp(Δ[h]·A[h]) (with A[h] =
+// −exp(A_log)); the head's value is Δ-scaled; state[N,P] (P = head_dim):
+//   state[i,j] = a·state[i,j] + B[g,i]·(Δ[h]·x[h,j]);  y[h,j] = Σ_i C[g,i]·state[i,j] + Dskip[h]·x[h,j]
+// matching nn.SSDRecurrent applied per head + the D·x skip (f64 accumulation). x/y are [H·P] =
+// intermediate; B,C are [G·N]; delta,A,Dskip are [H]; state is [H·N·P] (per head [N,P], i outer,
+// stride P between successive n). One thread per (h,j) — H·P threads.
+int cu_ssd_step(const void* x, const void* delta, const void* A, const void* B, const void* C,
+                const void* dskip, void* state, void* y, int H, int P, int G, int N) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (!gSsdStep && compile_kernel(
+                      "extern \"C\" __global__ void ssd_step(const float* x, const float* delta, const float* A, const float* B, const float* C, const float* dskip, float* state, float* y, int H, int P, int G, int N){\n"
+                      "  int idx = blockIdx.x*blockDim.x + threadIdx.x; int HP = H*P; if(idx>=HP) return;\n"
+                      "  int h = idx / P; int g = h / (H / G);\n"
+                      "  double dl = (double)delta[h];\n"
+                      "  double a = exp(dl * (double)A[h]);\n"
+                      "  double xv = (double)x[idx];\n"
+                      "  double xin = dl * xv;\n"
+                      "  const float* Bg = B + (size_t)g*N; const float* Cg = C + (size_t)g*N;\n"
+                      "  float* st = state + (size_t)h*N*P + (idx % P);\n"  // state[h][i][j], stride P over i
+                      "  double acc = 0.0;\n"
+                      "  for(int i=0;i<N;i++){\n"
+                      "    double s = a*(double)st[(size_t)i*P] + (double)Bg[i]*xin;\n"
+                      "    st[(size_t)i*P] = (float)s; acc += (double)Cg[i]*s;\n"
+                      "  }\n"
+                      "  y[idx] = (float)(acc + (double)dskip[h]*xv);\n"
+                      "}\n",
+                      "ssd_step.cu", "ssd_step", &gSsdStep) != 0) { rc = -2; goto done; }
+    {
+        int HP = H*P, threads = 256, blocks = (HP + threads - 1) / threads; if (blocks < 1) blocks = 1;
+        void* args[12]; args[0]=&x; args[1]=&delta; args[2]=&A; args[3]=&B; args[4]=&C; args[5]=&dskip; args[6]=&state; args[7]=&y; args[8]=&H; args[9]=&P; args[10]=&G; args[11]=&N;
+        rc = (cuLaunchKernel(gSsdStep, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 done:
     pthread_mutex_unlock(&gLock);

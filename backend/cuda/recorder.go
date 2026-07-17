@@ -268,6 +268,20 @@ func (rec *Recorder) SSMStep(u, delta, a, b, c, dskip, h, y *DeviceF32, d, n int
 	return nil
 }
 
+// SSDStep advances one timestep of the Mamba-2 SSD scan for decode: H heads with a SCALAR per-head
+// decay a = exp(Δ[h]·A[h]) and B/C shared across a group (g = h/(H/G)). It updates the per-head state
+// state[H,N,P] in place and writes y[H·P]. x/y/dskip are per head·head_dim or per head; A/delta/dskip
+// are [H]; B/C are [G·N]. The state persists across calls (the caller keeps it between steps).
+func (rec *Recorder) SSDStep(x, delta, a, b, c, dskip, state, y *DeviceF32, heads, headDim, groups, n int) error {
+	if x.ptr == nil || delta.ptr == nil || a.ptr == nil || b.ptr == nil || c.ptr == nil || dskip.ptr == nil || state.ptr == nil || y.ptr == nil {
+		return fmt.Errorf("cuda: rec SSDStep on a freed handle")
+	}
+	if rc := C.cu_ssd_step(x.ptr, delta.ptr, a.ptr, b.ptr, c.ptr, dskip.ptr, state.ptr, y.ptr, C.int(heads), C.int(headDim), C.int(groups), C.int(n)); rc != 0 {
+		return fmt.Errorf("cuda: rec SSDStep failed (code %d)", int(rc))
+	}
+	return nil
+}
+
 // RowAxpy accumulates dst += diag(arow)·src: dst[r,:] += arow[r]·src[r,:], the MoE combine that
 // scales an expert's [rows,cols] output by each token's routing weight (arow is a [rows] vector).
 func (rec *Recorder) RowAxpy(dst, src, arow *DeviceF32, rows, cols int) error {

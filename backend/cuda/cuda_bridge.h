@@ -204,6 +204,7 @@ int cu_gelu_f32(void* d, int n);
 int cu_moe_gate(const void* logits, void* weights, int rows, int E, int K, int raw, float scale); // top-k routing (raw=DeepSeek softmax·scale, else renorm)
 int cu_row_axpy(void* dst, const void* src, const void* arow, int rows, int cols); // per-row scalar AXPY (MoE combine)
 int cu_ssm_step(const void* u, const void* delta, const void* A, const void* B, const void* C, const void* dskip, void* h, void* y, int D, int N); // Mamba selective-scan decode step
+int cu_ssd_step(const void* x, const void* delta, const void* A, const void* B, const void* C, const void* dskip, void* state, void* y, int H, int P, int G, int N); // Mamba-2 SSD (scalar-decay, grouped B/C) decode step
 int cu_conv1d_step(const void* x, const void* w, const void* b, void* state, void* out, int D, int K); // Mamba causal depthwise conv decode step
 int cu_relu2_f32(void* d, int n); // squared ReLU (Nemotron relu2): relu(x)² in-place
 int cu_silu_f32(void* d, int n);
