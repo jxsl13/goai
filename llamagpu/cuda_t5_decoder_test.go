@@ -86,3 +86,62 @@ func TestCUDAT5DecoderMatchesReference(t *testing.T) {
 	}
 	t.Logf("llamagpu NewT5DecoderCUDA matches reference T5Decoder.DecodeStep logits across %d positions (self-attn+relpos, cross-attn, gated FFN); seq2seq GPU decoder — nlp catalogue complete", len(decTokens))
 }
+
+// TestCUDAT5Generate checks the GPU seq2seq generation loop: greedy autoregressive Generate must
+// produce the SAME tokens as the reference nlp.T5Decoder.Generate with a greedy sampler, fed the same
+// encoder output — validating the argmax-feedback decode loop and EOS handling.
+func TestCUDAT5Generate(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("cuda: no CUDA-capable device")
+	}
+	ts, _, err := safetensors.LoadFile("../nlp/testdata/t5lm_hf.safetensors")
+	if err != nil {
+		t.Skipf("t5lm testdata unavailable: %v", err)
+	}
+	cfg := nlp.T5Config{Heads: 2, HeadDim: 8, Eps: 1e-6}
+	enc, err := nlp.T5FromHF(ts, cfg)
+	if err != nil {
+		t.Fatalf("T5FromHF: %v", err)
+	}
+	dec, err := nlp.T5DecoderFromHF(ts, cfg)
+	if err != nil {
+		t.Fatalf("T5DecoderFromHF: %v", err)
+	}
+	ctx := backend.NewContext().WithBackend(backend.Reference())
+	encOut, err := enc.Forward(ctx, []int{3, 7, 1, 9, 4, 2, 8})
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	eseq, dim := encOut.Shape()[0], encOut.Shape()[1]
+	encFlat := make([]float32, eseq*dim)
+	for i := 0; i < eseq; i++ {
+		for j := 0; j < dim; j++ {
+			encFlat[i*dim+j] = float32(encOut.AtF64(i, j))
+		}
+	}
+
+	const maxNew, start, eos = 6, 0, 1
+	refTokens, err := dec.Generate(ctx, encOut, maxNew, start, eos, nlp.Greedy())
+	if err != nil {
+		t.Fatalf("ref Generate: %v", err)
+	}
+
+	gdec, err := llamagpu.NewT5DecoderCUDA(dec)
+	if err != nil {
+		t.Fatalf("NewT5DecoderCUDA: %v", err)
+	}
+	defer gdec.Release()
+	gotTokens, err := gdec.Generate(encFlat, eseq, maxNew, start, eos)
+	if err != nil {
+		t.Fatalf("cuda Generate: %v", err)
+	}
+	if len(gotTokens) != len(refTokens) {
+		t.Fatalf("token count %d != reference %d (%v vs %v)", len(gotTokens), len(refTokens), gotTokens, refTokens)
+	}
+	for i := range refTokens {
+		if gotTokens[i] != refTokens[i] {
+			t.Fatalf("token %d: cuda %d vs reference %d (%v vs %v)", i, gotTokens[i], refTokens[i], gotTokens, refTokens)
+		}
+	}
+	t.Logf("llamagpu GPUT5Decoder.Generate matches reference greedy T5Decoder.Generate: %v", gotTokens)
+}

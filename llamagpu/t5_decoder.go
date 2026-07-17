@@ -117,15 +117,21 @@ func (d *GPUT5Decoder) selfBiasRow(pos int) ([]float32, error) {
 	return out, nil
 }
 
-// Decode runs the decoder over decTokens attending to the encoder output encOut ([eseq, dim] flattened
-// row-major), returning the per-step logits [len(decTokens), vocab] flattened row-major. It mirrors
-// nlp.T5Decoder.DecodeStep across the sequence: per token a causal self-attention over the growing KV
-// cache (with the T5 relpos bias), a cross-attention over the once-projected encoder K/V, and a FFN.
-func (d *GPUT5Decoder) Decode(encOut []float32, eseq int, decTokens []int) ([]float32, error) {
-	dlen := len(decTokens)
-	if dlen == 0 {
-		return nil, fmt.Errorf("llamagpu(%s): T5 decode needs ≥1 token", d.ops.name)
-	}
+// t5DecSession is one incremental-decoding run: a recorder, the resident encoder output + once-
+// projected cross K/V, a growing self-KV cache (sized to maxSteps) and the per-step scratch. Both
+// Decode (fixed tokens) and Generate (argmax feedback) drive it via step(token, pos).
+type t5DecSession struct {
+	d                                                  *GPUT5Decoder
+	r                                                  recorder
+	eseq                                               int
+	scratch                                            []buffer
+	crossK, crossV                                     []buffer
+	selfK, selfV                                       []buffer
+	x, hn, q, kt, vt, attn, ao, g, u, ff, dbias, logit buffer
+}
+
+// newSession allocates a decode session for up to maxSteps tokens and projects the fixed encoder K/V.
+func (d *GPUT5Decoder) newSession(encOut []float32, eseq, maxSteps int) (*t5DecSession, error) {
 	if len(encOut) != eseq*d.dim {
 		return nil, fmt.Errorf("llamagpu(%s): encOut %d != eseq·dim %d", d.ops.name, len(encOut), eseq*d.dim)
 	}
@@ -133,10 +139,8 @@ func (d *GPUT5Decoder) Decode(encOut []float32, eseq int, decTokens []int) ([]fl
 	if err != nil {
 		return nil, err
 	}
-	defer r.Free()
-
+	s := &t5DecSession{d: d, r: r, eseq: eseq}
 	var se error
-	var scratch []buffer
 	sb := func(n int) buffer {
 		if se != nil {
 			return nil
@@ -146,123 +150,174 @@ func (d *GPUT5Decoder) Decode(encOut []float32, eseq int, decTokens []int) ([]fl
 			se = e2
 			return nil
 		}
-		scratch = append(scratch, b)
+		s.scratch = append(s.scratch, b)
 		return b
 	}
-	// resident encoder output + per-block cross K/V (projected once) and self K/V cache (grown to dlen).
 	enc := sb(eseq * d.dim)
 	nb := len(d.blocks)
-	crossK := make([]buffer, nb)
-	crossV := make([]buffer, nb)
-	selfK := make([]buffer, nb)
-	selfV := make([]buffer, nb)
+	s.crossK, s.crossV = make([]buffer, nb), make([]buffer, nb)
+	s.selfK, s.selfV = make([]buffer, nb), make([]buffer, nb)
 	for l := 0; l < nb; l++ {
-		crossK[l] = sb(eseq * d.attWidth)
-		crossV[l] = sb(eseq * d.attWidth)
-		selfK[l] = sb(dlen * d.attWidth)
-		selfV[l] = sb(dlen * d.attWidth)
+		s.crossK[l], s.crossV[l] = sb(eseq*d.attWidth), sb(eseq*d.attWidth)
+		s.selfK[l], s.selfV[l] = sb(maxSteps*d.attWidth), sb(maxSteps*d.attWidth)
 	}
-	x := sb(d.dim)
-	hn := sb(d.dim)
-	q := sb(d.attWidth)
-	kt := sb(d.attWidth)
-	vt := sb(d.attWidth)
-	attn := sb(d.attWidth)
-	ao := sb(d.dim)
-	g := sb(d.ffn)
-	u := sb(d.ffn)
-	ff := sb(d.dim)
-	dbias := sb(d.heads * dlen) // max bias row [heads·(pos+1)] ≤ heads·dlen
-	logit := sb(d.vocab)
-	freeScratch := func() {
-		for _, b := range scratch {
-			if b != nil {
-				b.Release()
-			}
-		}
-	}
+	s.x, s.hn = sb(d.dim), sb(d.dim)
+	s.q, s.kt, s.vt, s.attn = sb(d.attWidth), sb(d.attWidth), sb(d.attWidth), sb(d.attWidth)
+	s.ao, s.ff = sb(d.dim), sb(d.dim)
+	s.g, s.u = sb(d.ffn), sb(d.ffn)
+	s.dbias = sb(d.heads * maxSteps)
+	s.logit = sb(d.vocab)
 	if se != nil {
-		freeScratch()
+		s.free()
 		return nil, se
 	}
-	defer freeScratch()
-
 	if err := enc.UploadF32(encOut); err != nil {
+		s.free()
 		return nil, err
 	}
-	// Project the fixed encoder K/V once per block.
 	for l, b := range d.blocks {
-		if err := firstErr(b.cWk.record(r, enc, crossK[l], eseq), b.cWv.record(r, enc, crossV[l], eseq)); err != nil {
+		if err := firstErr(b.cWk.record(r, enc, s.crossK[l], eseq), b.cWv.record(r, enc, s.crossV[l], eseq)); err != nil {
+			s.free()
 			return nil, err
 		}
 	}
+	return s, nil
+}
 
-	out := make([]float32, dlen*d.vocab)
-	for i, tok := range decTokens {
-		if tok < 0 || tok >= d.vocab {
-			return nil, fmt.Errorf("llamagpu(%s): token %d outside vocab %d", d.ops.name, tok, d.vocab)
+func (s *t5DecSession) free() {
+	for _, b := range s.scratch {
+		if b != nil {
+			b.Release()
 		}
-		emb := make([]float32, d.dim)
-		for j := 0; j < d.dim; j++ {
-			emb[j] = float32(d.shared.AtF64(tok, j))
+	}
+	if s.r != nil {
+		s.r.Free()
+	}
+}
+
+// step decodes one token at absolute position pos, updating the KV cache, and returns that step's
+// logits [vocab]. It mirrors nlp.T5Decoder.DecodeStep: causal self-attn (relpos bias, growing cache)
+// → cross-attn (fixed encoder K/V) → gated/ReLU FFN, all PRE-LN, then the final norm + LM head.
+func (s *t5DecSession) step(token, pos int) ([]float32, error) {
+	d, r := s.d, s.r
+	if token < 0 || token >= d.vocab {
+		return nil, fmt.Errorf("llamagpu(%s): token %d outside vocab %d", d.ops.name, token, d.vocab)
+	}
+	emb := make([]float32, d.dim)
+	for j := 0; j < d.dim; j++ {
+		emb[j] = float32(d.shared.AtF64(token, j))
+	}
+	biasRow, err := d.selfBiasRow(pos)
+	if err != nil {
+		return nil, err
+	}
+	if err := firstErr(s.x.UploadF32(emb), s.dbias.UploadF32(biasRow)); err != nil {
+		return nil, err
+	}
+	for l, b := range d.blocks {
+		err = firstErr(
+			// causal self-attention over the growing KV cache (write row pos, attend 0..pos).
+			r.RMSNorm(s.x, b.selfNorm, s.hn, 1, d.dim, d.eps),
+			b.sWq.record(r, s.hn, s.q, 1), b.sWk.record(r, s.hn, s.kt, 1), b.sWv.record(r, s.hn, s.vt, 1),
+			r.Blit(s.kt, 0, s.selfK[l], pos*d.attWidth, d.attWidth),
+			r.Blit(s.vt, 0, s.selfV[l], pos*d.attWidth, d.attWidth),
+			r.MHABias(s.q, s.selfK[l], s.selfV[l], s.attn, s.dbias, 1, pos+1, d.attWidth, d.heads, d.heads, d.headDim, 0, 0, 1),
+			b.sWo.record(r, s.attn, s.ao, 1),
+			r.Binary(s.x, s.ao, s.x, binaryAdd),
+			// cross-attention over the fixed encoder K/V (no bias, no mask).
+			r.RMSNorm(s.x, b.crossNorm, s.hn, 1, d.dim, d.eps),
+			b.cWq.record(r, s.hn, s.q, 1),
+			r.MHA(s.q, s.crossK[l], s.crossV[l], s.attn, 1, s.eseq, d.attWidth, d.heads, d.heads, d.headDim, 0, 0, 1),
+			b.cWo.record(r, s.attn, s.ao, 1),
+			r.Binary(s.x, s.ao, s.x, binaryAdd),
+			// PRE-LN FFN.
+			r.RMSNorm(s.x, b.ffnNorm, s.hn, 1, d.dim, d.eps),
+		)
+		if b.gated {
+			err = firstErr(err,
+				b.wi0.record(r, s.hn, s.g, 1), r.Unary(s.g, s.g, unaryGELU),
+				b.wi1.record(r, s.hn, s.u, 1),
+				r.Binary(s.g, s.u, s.g, binaryMul),
+				b.wOut.record(r, s.g, s.ff, 1),
+			)
+		} else {
+			err = firstErr(err,
+				b.wi0.record(r, s.hn, s.g, 1), r.Unary(s.g, s.g, unaryReLU),
+				b.wOut.record(r, s.g, s.ff, 1),
+			)
 		}
-		biasRow, err := d.selfBiasRow(i)
+		err = firstErr(err, r.Binary(s.x, s.ff, s.x, binaryAdd))
 		if err != nil {
 			return nil, err
 		}
-		if err := firstErr(x.UploadF32(emb), dbias.UploadF32(biasRow)); err != nil {
-			return nil, err
-		}
-		for l, b := range d.blocks {
-			// causal self-attention over the growing KV cache (write row i, attend 0..i).
-			err = firstErr(
-				r.RMSNorm(x, b.selfNorm, hn, 1, d.dim, d.eps),
-				b.sWq.record(r, hn, q, 1), b.sWk.record(r, hn, kt, 1), b.sWv.record(r, hn, vt, 1),
-				r.Blit(kt, 0, selfK[l], i*d.attWidth, d.attWidth),
-				r.Blit(vt, 0, selfV[l], i*d.attWidth, d.attWidth),
-				r.MHABias(q, selfK[l], selfV[l], attn, dbias, 1, i+1, d.attWidth, d.heads, d.heads, d.headDim, 0, 0, 1),
-				b.sWo.record(r, attn, ao, 1),
-				r.Binary(x, ao, x, binaryAdd),
-				// cross-attention over the fixed encoder K/V (no bias, no mask).
-				r.RMSNorm(x, b.crossNorm, hn, 1, d.dim, d.eps),
-				b.cWq.record(r, hn, q, 1),
-				r.MHA(q, crossK[l], crossV[l], attn, 1, eseq, d.attWidth, d.heads, d.heads, d.headDim, 0, 0, 1),
-				b.cWo.record(r, attn, ao, 1),
-				r.Binary(x, ao, x, binaryAdd),
-				// PRE-LN FFN.
-				r.RMSNorm(x, b.ffnNorm, hn, 1, d.dim, d.eps),
-			)
-			if b.gated {
-				err = firstErr(err,
-					b.wi0.record(r, hn, g, 1), r.Unary(g, g, unaryGELU),
-					b.wi1.record(r, hn, u, 1),
-					r.Binary(g, u, g, binaryMul),
-					b.wOut.record(r, g, ff, 1),
-				)
-			} else {
-				err = firstErr(err,
-					b.wi0.record(r, hn, g, 1), r.Unary(g, g, unaryReLU),
-					b.wOut.record(r, g, ff, 1),
-				)
-			}
-			err = firstErr(err, r.Binary(x, ff, x, binaryAdd))
-			if err != nil {
-				return nil, err
-			}
-		}
-		// final norm + LM head, then read this step's logits back.
-		if err := firstErr(
-			r.RMSNorm(x, d.finalNorm, hn, 1, d.dim, d.eps),
-			d.lmHead.record(r, hn, logit, 1),
-			r.Commit(), r.Wait(),
-		); err != nil {
-			return nil, err
-		}
-		if err := logit.DownloadF32(out[i*d.vocab : (i+1)*d.vocab]); err != nil {
-			return nil, err
-		}
+	}
+	out := make([]float32, d.vocab)
+	if err := firstErr(
+		r.RMSNorm(s.x, d.finalNorm, s.hn, 1, d.dim, d.eps),
+		d.lmHead.record(r, s.hn, s.logit, 1),
+		r.Commit(), r.Wait(),
+	); err != nil {
+		return nil, err
+	}
+	if err := s.logit.DownloadF32(out); err != nil {
+		return nil, err
 	}
 	return out, nil
+}
+
+// Decode runs the decoder over decTokens attending to the encoder output encOut ([eseq, dim] flattened
+// row-major), returning the per-step logits [len(decTokens), vocab] flattened row-major.
+func (d *GPUT5Decoder) Decode(encOut []float32, eseq int, decTokens []int) ([]float32, error) {
+	dlen := len(decTokens)
+	if dlen == 0 {
+		return nil, fmt.Errorf("llamagpu(%s): T5 decode needs ≥1 token", d.ops.name)
+	}
+	s, err := d.newSession(encOut, eseq, dlen)
+	if err != nil {
+		return nil, err
+	}
+	defer s.free()
+	out := make([]float32, dlen*d.vocab)
+	for i, tok := range decTokens {
+		logits, err := s.step(tok, i)
+		if err != nil {
+			return nil, err
+		}
+		copy(out[i*d.vocab:(i+1)*d.vocab], logits)
+	}
+	return out, nil
+}
+
+// Generate greedily decodes up to maxNew tokens starting from startToken, attending to encOut, and
+// returns the generated tokens (excluding startToken, stopping at eosToken). Greedy argmax — the
+// seq2seq translation/summarization use case; sampled generation is a follow-up.
+func (d *GPUT5Decoder) Generate(encOut []float32, eseq, maxNew, startToken, eosToken int) ([]int, error) {
+	if maxNew <= 0 {
+		return nil, fmt.Errorf("llamagpu(%s): maxNew must be > 0", d.ops.name)
+	}
+	s, err := d.newSession(encOut, eseq, maxNew)
+	if err != nil {
+		return nil, err
+	}
+	defer s.free()
+	gen := []int{startToken}
+	for pos := 0; pos < maxNew; pos++ {
+		logits, err := s.step(gen[pos], pos)
+		if err != nil {
+			return nil, err
+		}
+		next, best := 0, logits[0]
+		for v := 1; v < d.vocab; v++ {
+			if logits[v] > best {
+				next, best = v, logits[v]
+			}
+		}
+		if next == eosToken {
+			break
+		}
+		gen = append(gen, next)
+	}
+	return gen[1:], nil
 }
 
 // Release frees every device buffer held by the decoder.
