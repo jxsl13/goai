@@ -234,7 +234,9 @@ jobs:
         shell: bash
         run: |
           if [ "$RUNNER_OS" = "Windows" ]; then
-            SDK=$(ls -d /c/VulkanSDK/* 2>/dev/null | head -1)
+            # `|| true`: under `bash -e -o pipefail`, ls exiting 2 on a missing
+            # SDK dir would abort the whole step before the skip-guard below runs.
+            SDK=$(ls -d /c/VulkanSDK/* 2>/dev/null | head -1 || true)
             if [ -z "$SDK" ]; then
               echo "skip: no Vulkan SDK headers on this runner — build skipped, rc=0"; exit 0
             fi

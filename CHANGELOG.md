@@ -4,6 +4,15 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### ci — vulkan/windows lane: unreachable SDK-skip guard fixed (B66, 2026-07-17)
+
+The "compile the vulkan-tagged tree" step runs under `bash -e -o pipefail`, so
+`SDK=$(ls ... | head -1)` aborted the step with ls's exit code when no Vulkan SDK was on
+the runner — before the intended "skip: no SDK" guard could run. Latent while the
+best-effort choco install kept succeeding; surfaced as a false-red on a pure-Go nlp commit.
+`|| true` inside the substitution makes the skip path reachable (reproduced + verified
+locally under the same shell flags).
+
 ### nlp — quantized GGUF decode for Gemma (T801, 2026-07-17)
 
 `QuantGemma` + `QuantGemmaFromGGUF` decode llama.cpp-quantized Gemma checkpoints directly
