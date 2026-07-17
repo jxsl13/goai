@@ -114,6 +114,9 @@ int cu_qmatmul_q2k(const void* dA, const void* dQ, void* dOut, int M, int K, int
 // cu_qmatmul_q3k: out[M,N] = a·dequant(W), W = ggml Q3_K 110-byte super-blocks per output row
 // (symmetric, signed 6-bit sub-scales, 3-bit quants via qs low-2 + hmask high-1). K%256==0. GEMV.
 int cu_qmatmul_q3k(const void* dA, const void* dMeta, const void* dQs, const void* dHm, void* dOut, int M, int K, int N, float beta);
+// cu_qmatmul_q3k_mt: weight-read-once M-tiled GEMM for M>1 — Q3_K twin of cu_qmatmul_q4k_mt.
+// Bit-identical arithmetic to cu_qmatmul_q3k. K%256==0.
+int cu_qmatmul_q3k_mt(const void* dA, const void* dMeta, const void* dQs, const void* dHm, void* dOut, int M, int K, int N, float beta);
 // cu_qmatmul_q5k: out[M,N] = a·dequant(W), W = ggml Q5_K 176-byte super-blocks per output row
 // (Q4_K's 6-bit scale/min packing + a qh high-bit plane → 5-bit quants). K%256==0. DECODE GEMV.
 int cu_qmatmul_q5k(const void* dA, const void* dQ, void* dOut, int M, int K, int N, float beta);
