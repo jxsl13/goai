@@ -103,6 +103,17 @@
 //     cache budgets, an 8-bit quantized KV-cache, and Self-Extend length
 //     extrapolation (Llama.SelfExtendForward / SelfExtendGenerate — grouped
 //     attention, no fine-tuning; generation stays coherent at 4× training length).
+//   - Interpretability — the J-lens (Anthropic's Jacobian lens, §R250): FitJLens
+//     fits per-layer expected Jacobians J_l = E[∂h_L/∂h_l] through the autograd
+//     tape (reference-anchored against Anthropic's jacobian-lens implementation),
+//     JLens.Apply reads any layer's residual through the model's own unembedding
+//     after Jacobian transport ("what is the model holding here?"), JLensFromPT
+//     imports reference/Neuronpedia-fitted .pt lens artifacts, JSpaceDecompose
+//     expresses an activation as a sparse nonnegative combination of J-lens
+//     vocabulary directions (the paper's J-space, with a random-direction
+//     occupancy control), and JLensHTML renders the whole thing as one
+//     self-contained interactive layer×position page — the "thought process"
+//     view: which concepts each layer holds at each position while generating.
 //   - Training objectives & data: BERT masked-LM (language model), T5 span corruption, UL2
 //     mixture-of-denoisers, Fill-in-the-Middle transformation, and sequence packing.
 //

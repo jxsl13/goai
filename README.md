@@ -123,6 +123,15 @@ for step := 0; step < 150; step++ {
   forward), Jacobi decoding, Self-Extend (4× the training length, no
   fine-tuning). Numbers and method: [`docs/benchmarking.md`](docs/benchmarking.md),
   [`docs/inference.md`](docs/inference.md).
+- **Interpretability — see what a model is "thinking"**: a pure-Go port of
+  Anthropic's **Jacobian lens / J-space** (2026): fit per-layer expected
+  Jacobians on any GoAI decoder (validated against Anthropic's reference
+  implementation to ~1e-7), import reference-fitted `.pt` lenses, decompose
+  activations into the sparse verbalizable J-space, and render a
+  self-contained interactive HTML view of which concepts every layer holds at
+  every position during generation — including concepts the model never writes
+  down (the paper's global-workspace effect, reproduced end-to-end on a GoAI
+  model in the test suite).
 - **Training toolbox** (`nn`): optimizers from SGD to Muon/SOAP/Sophia/
   Schedule-Free with composable wrappers (SAM, Lookahead, GaLore, …), the PEFT (parameter-efficient fine-tuning)
   family (LoRA (low-rank adapters: train tiny add-on matrices instead of the full model)/DoRA/PiSSA/VeRA/IA³/prefix/prompt, QLoRA end-to-end),

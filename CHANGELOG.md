@@ -4,6 +4,14 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — jacobian-lens replication prompt sets + attribution; J-lens documented (T815, 2026-07-17)
+
+The 17 experiment-replication and lens-evaluation prompt sets from the reference
+repository land in `nlp/testdata/jlens_prompts/` (Apache-2.0, redistributed unmodified
+with a NOTICE; integrity pinned by test), completing the jacobian-lens port. The package
+doc and README now describe the interpretability surface: fit, reference-`.pt` import,
+transported readout, J-space decomposition, and the self-contained thought-process view.
+
 ### nlp — J-space decomposition + the layer-by-position visualization (T813+T814, 2026-07-17)
 
 The jacobian-lens port is complete. T813: `JSpaceDecompose` — greedy nonnegative matching
