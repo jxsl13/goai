@@ -45,6 +45,7 @@ const (
 	recUnaryReLU2    = 10 // squared ReLU (Nemotron); cuda-only
 	recUnarySigmoid  = 11 // plain sigmoid (Qwen2-MoE shared-expert gate); cuda-only
 	recUnarySoftplus = 12 // softplus (Mamba Δ); cuda-only
+	recUnaryReLU     = 13 // plain ReLU max(x,0) (T5 v1.0 FFN); cuda-only
 	recBinaryAdd     = 0
 	recBinaryMul     = 2
 	recBinarySwiGLU  = 6
@@ -442,6 +443,8 @@ func (rec *Recorder) Unary(x, o *DeviceF32, op int) error {
 		rc = C.cu_gelu_f32(o.ptr, C.int(n))
 	case recUnaryReLU2:
 		rc = C.cu_relu2_f32(o.ptr, C.int(n))
+	case recUnaryReLU:
+		rc = C.cu_relu_f32(o.ptr, C.int(n))
 	case recUnarySigmoid:
 		rc = C.cu_sigmoid_f32(o.ptr, C.int(n))
 	case recUnarySoftplus:

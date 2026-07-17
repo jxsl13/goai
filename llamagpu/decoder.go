@@ -59,6 +59,7 @@ const (
 	unaryReLU2    = 10 // squared ReLU (Nemotron); cuda-only
 	unarySigmoid  = 11 // plain sigmoid (Qwen2-MoE shared-expert gate); cuda-only
 	unarySoftplus = 12 // softplus (Mamba Δ); cuda-only
+	unaryReLU     = 13 // plain ReLU max(x,0) (T5 v1.0 FFN); cuda-only
 	binaryAdd     = 0
 	binaryMul     = 2
 	binarySwiGLU  = 6 // fused silu(a)·b — one dispatch instead of SiLU+Mul (§T613)
@@ -149,6 +150,10 @@ type recorder interface {
 	// MHAALiBi is MHA with an ALiBi position bias (MPT): slopeₕ·(j−qabs) added to each scaled score
 	// before the mask+softmax; slopes holds `heads` per-head slopes. cuda-only (metal/vulkan stub).
 	MHAALiBi(q, k, v, o, slopes buffer, sq, sk, dm, heads, kvHeads, dk, causal, window int, scale float32) error
+	// MHABias is MHA with a PRECOMPUTED per-head additive bias [heads,sq,sk] added to the scaled scores
+	// before softmax — the T5 relative-position bias (a learned table, not ALiBi's slope). No RoPE;
+	// causal==0 unmasks all keys (T5's bidirectional encoder). cuda-only (metal/vulkan stub).
+	MHABias(q, k, v, o, bias buffer, sq, sk, dm, heads, kvHeads, dk, causal, window int, scale float32) error
 	// MoEGate writes Mixtral top-k renormalized routing weights [rows·e] from router logits [rows·e].
 	// RowAxpy accumulates dst[r,:] += arow[r]·src[r,:] (the MoE weighted combine). Both cuda-only.
 	MoEGate(logits, weights buffer, rows, e, k, raw int, scale float32) error

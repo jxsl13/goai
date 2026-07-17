@@ -209,6 +209,7 @@ int cu_ssd_step(const void* x, const void* delta, const void* A, const void* B, 
 int cu_conv1d_step(const void* x, const void* w, const void* b, void* state, void* out, int D, int K); // Mamba causal depthwise conv decode step
 int cu_wkv_step(const void* k, const void* v, const void* w, const void* u, void* aa, void* bb, void* pp, void* out, int D); // RWKV-4 WKV recurrence decode step
 int cu_relu2_f32(void* d, int n); // squared ReLU (Nemotron relu2): relu(x)² in-place
+int cu_relu_f32(void* d, int n); // plain ReLU (T5 v1.0 FFN): max(x,0) in-place
 int cu_silu_f32(void* d, int n);
 int cu_sigmoid_f32(void* d, int n); // plain sigmoid (Qwen2-MoE shared-expert gate)
 int cu_softplus_f32(void* d, int n); // softplus (Mamba Δ)

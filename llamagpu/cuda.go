@@ -64,6 +64,9 @@ func (c cRec) MHACap(q, k, v, o buffer, sq, sk, dm, heads, kvHeads, dk, causal, 
 func (c cRec) MHAALiBi(q, k, v, o, slopes buffer, sq, sk, dm, heads, kvHeads, dk, causal, window int, scale float32) error {
 	return c.r.MHAALiBi(cb(q), cb(k), cb(v), cb(o), cb(slopes), sq, sk, dm, heads, kvHeads, dk, causal, window, scale)
 }
+func (c cRec) MHABias(q, k, v, o, bias buffer, sq, sk, dm, heads, kvHeads, dk, causal, window int, scale float32) error {
+	return c.r.MHABias(cb(q), cb(k), cb(v), cb(o), cb(bias), sq, sk, dm, heads, kvHeads, dk, causal, window, scale)
+}
 func (c cRec) MoEGate(logits, weights buffer, rows, e, k, raw int, scale float32) error {
 	return c.r.MoEGate(cb(logits), cb(weights), rows, e, k, raw, scale)
 }
@@ -752,6 +755,35 @@ func NewBertQ8CUDA(m *nlp.Bert) (*GPUBert, error) {
 		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
 	}
 	return newBertEncoder(m, cudaQ8Ops())
+}
+
+// NewT5CUDA uploads an nlp.T5 bidirectional encoder onto the GPU. T5 is the second non-decoder GPU
+// model: PRE-LN residuals, RMSNorm (T5LayerNorm), a learned per-head RELATIVE-position bias added to
+// the scores (via cu_attn_softmax_bias / MHABias), NO 1/√d scaling, NO absolute/rotary position, a
+// gated-GELU (v1.1) or ReLU (v1.0) FFN and no projection biases. Returns [seq, dim] hidden states.
+// cuda-only (MHABias is cuda-only).
+func NewT5CUDA(m *nlp.T5) (*GPUT5, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newT5Encoder(m, backendOps{
+		name:        string(backend.CUDA),
+		asyncEncode: false,
+		newBuffer: func(data []float32) (buffer, error) {
+			b, err := cuda.NewDeviceBufferF32(data)
+			if err != nil {
+				return nil, err
+			}
+			return cBuf{b}, nil
+		},
+		newRecorder: func() (recorder, error) {
+			r, err := cuda.NewRecorder()
+			if err != nil {
+				return nil, err
+			}
+			return cRec{r}, nil
+		},
+	})
 }
 
 // NewMixtralCUDA uploads an nlp.Mixtral (sparse Mixture-of-Experts) onto the batched Decoder core.
