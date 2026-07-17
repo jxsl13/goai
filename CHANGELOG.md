@@ -4,6 +4,12 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — docs: refresh the loadable-architecture catalogue to thirty-one (T776, 2026-07-17)
+
+The package godoc now lists all thirty-one architectures — adding MPT, Falcon, DeepSeek-V2, Mamba,
+Mamba-2, RWKV and Jamba — organized by model class: attention transformers (dense, MoE, MLA, ALiBi,
+MQA), recurrent non-transformers (selective-scan SSMs, WKV linear attention), and the Jamba hybrid.
+
 ### nlp — feat: Jamba support — 31st loadable architecture, the hybrid capstone (T775, 2026-07-17)
 
 AI21 Jamba (`JambaForCausalLM`) as a self-contained `nlp.Jamba` type — the hybrid that interleaves
