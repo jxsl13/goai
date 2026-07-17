@@ -4,6 +4,19 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — quantized GGUF decode for Mixtral, sparse MoE (T802, 2026-07-17)
+
+`QuantMixtral` + `QuantMixtralFromGGUF` decode llama.cpp-quantized Mixtral checkpoints
+directly from the ggml Q-blocks with sparse top-k MoE decode (only the routed experts run).
+Two new lossless quantized-byte primitives extend the T799 row-granularity argument:
+`quantPermuteRows` undoes the llama-arch q/k row interleave on the quantized bytes, and
+`quantSliceExpert` un-fuses the 3-D `ffn_*_exps` expert tensors — both proven byte-equal to
+quantizing the float model's already-split/unpermuted weights, with element-exact logits.
+The router stays f32 (llama.cpp itself never quantizes ffn_gate_inp; top-k tie-breaks are
+precision-sensitive). Forward and DecodeStep share one sparse kernel sequence, making
+decode-vs-Forward bit-identical (§B64 avoided by construction). Quantized GGUF decode now
+covers Llama, Qwen2, Qwen3, Phi-3, Gemma and Mixtral.
+
 ### docs — nlp: quantized-GGUF catalogue current through T801 (2026-07-17)
 
 The package doc now lists all five quantized direct-from-Q-block loaders (Llama, Qwen2,
