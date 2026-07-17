@@ -983,3 +983,61 @@ func TestCUDAQwen2MoEMatchesReference(t *testing.T) {
 	}
 	t.Logf("llamagpu NewQwen2MoECUDA.Generate == nlp.Qwen2MoE.Generate greedy: %d tokens (routed MoE + sigmoid-gated shared expert)", len(gpuOut))
 }
+
+// TestCUDADeepSeekV2MatchesReference checks the dense MLA GPU path (NewDeepSeekV2CUDA) matches the
+// reference nlp.DeepSeekV2 DecodeStep across an autoregressive run — the hardest attention: low-rank
+// latent KV compression, decoupled RoPE, and rectangular query/key (QKNope+QKRope) vs value (VHead).
+func TestCUDADeepSeekV2MatchesReference(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("cuda: no CUDA-capable device")
+	}
+	ts, _, err := safetensors.LoadFile("../nlp/testdata/deepseekv2_hf.safetensors")
+	if err != nil {
+		t.Skipf("deepseekv2 testdata unavailable (run make golden): %v", err)
+	}
+	m, err := nlp.DeepSeekV2FromHF(ts, nlp.DeepSeekV2Config{
+		Heads: 4, QLoraRank: 24, KVLoraRank: 16,
+		QKNope: 16, QKRope: 8, VHead: 16,
+		Eps: 1e-6, RopeBase: 10000, Ctx: 32,
+	})
+	if err != nil {
+		t.Fatalf("DeepSeekV2FromHF: %v", err)
+	}
+
+	dec, err := llamagpu.NewDeepSeekV2CUDA(m)
+	if err != nil {
+		t.Fatalf("NewDeepSeekV2CUDA: %v", err)
+	}
+	defer dec.Release()
+
+	refCtx := backend.NewContext().WithBackend(backend.Reference())
+	cache := m.NewCache()
+	argmax := func(v []float32) int {
+		bi := 0
+		for i, x := range v {
+			if x > v[bi] {
+				bi = i
+			}
+		}
+		return bi
+	}
+	tok := 3
+	for pos := range 6 {
+		got, err := dec.Step(tok, pos)
+		if err != nil {
+			t.Fatalf("cuda step pos %d: %v", pos, err)
+		}
+		refT, err := m.DecodeStep(refCtx, cache, tok, pos)
+		if err != nil {
+			t.Fatalf("ref step pos %d: %v", pos, err)
+		}
+		for j := range got {
+			want := refT.AtF64(0, j)
+			if math.IsNaN(float64(got[j])) || math.Abs(float64(got[j])-want) > 3e-2*math.Max(1, math.Abs(want)) {
+				t.Fatalf("deepseekv2 pos %d tok %d logit[%d]: cuda %v vs reference %v", pos, tok, j, got[j], want)
+			}
+		}
+		tok = argmax(got)
+	}
+	t.Logf("llamagpu NewDeepSeekV2CUDA matches reference DecodeStep across an autoregressive run (dense MLA)")
+}
