@@ -2,8 +2,8 @@
 
 GoAI loads [llama.cpp](https://github.com/ggml-org/llama.cpp) GGUF checkpoints —
 the single-file format the local-inference ecosystem distributes models in —
-straight into runnable, trainable GoAI models. Nineteen architectures load in
-full precision; fourteen families additionally decode
+straight into runnable, trainable GoAI models. Twenty architectures load in
+full precision; eighteen families additionally decode
 **directly from the quantized ggml blocks**, never materializing full-precision
 weights.
 
@@ -31,7 +31,7 @@ raw, err := gguf.ReadRaw(r) // tensors kept in their ggml Q-block bytes
 qmodel, err := nlp.QuantLlamaFromGGUF(raw.Metadata, raw.Tensors)
 ```
 
-## Float loaders (19 architectures)
+## Float loaders (20 architectures)
 
 Each loader has a matching `*ToGGUF` inverse (used for round-trip tests and for
 writing GoAI models out in llama.cpp's convention). "Permute" refers to the
@@ -59,9 +59,10 @@ for some archs and *split-half* pairs (`ROPE_TYPE_NEOX`) for others; GoAI's
 | `nemotron` | `NemotronFromGGUF` | (1+γ) LayerNorm1P pre-folded on disk; NEOX partial rotary; untied head |
 | `granite` | `GraniteFromGGUF` | inherits the llama converter's q/k permute → un-permuted; four scalar multiplier keys; `logit_scale` required |
 | `mamba` | `MambaFromGGUF` | SSM: `A_log`→−exp(A_log); conv1d squeezed `[d_inner,1,k]→[d_inner,k]`; `ssm_a`/`ssm_d` carry no `.weight` suffix; packed `ssm_in`/`ssm_x` |
+| `mamba2` | `Mamba2FromGGUF` | in_proj stays PACKED (the runtime view-splits the product); `ssm.time_step_rank` = n_head; per-head `ssm_a` −exp'd + unsqueezed; `ssm_norm` stored per-group (GoAI keeps transformers full-width semantics — identical at n_groups=1, documented); dt is bias-only |
 | `jamba` | `JambaFromGGUF` | hybrid: mixer interleave in the per-layer `head_count_kv` vector (0=Mamba); NoPE attention; dedicated `ssm_{dt,b,c}_norm`; fused-expert MoE |
 
-## Quantized decode (14 families)
+## Quantized decode (18 families)
 
 `QuantLlamaFromGGUF` (llama), `QuantQwen2FromGGUF`, `QuantQwen3FromGGUF`,
 `QuantPhi3FromGGUF`, `QuantGemmaFromGGUF`, `QuantMixtralFromGGUF`, `QuantGraniteFromGGUF` (the
@@ -71,7 +72,14 @@ applied on the quantized forward) `QuantStarCoder2FromGGUF`, `QuantGPTNeoXFromGG
 `QuantOLMo2FromGGUF` (the LayerNorm/dedicated-type quant twins: biased
 projections as Q-block matmuls plus f32 bias adds, parallel residuals, ALiBi,
 pre-folded LayerNorm1P, partial rotary, OLMo 2 post-norm with full-width
-QK-norms, every fused qkv unpacked losslessly on the quantized bytes) decode
+QK-norms, every fused qkv unpacked losslessly on the quantized bytes),
+`QuantCohereFromGGUF` (the first NORM-rope quant loader outside the llama
+lineage — the interleave-to-split row permute applied losslessly on the
+Q-blocks) `QuantMambaFromGGUF`, `QuantMamba2FromGGUF` and `QuantJambaFromGGUF` (the
+recurrent and hybrid quant twins: the big SSM projections quantize — mamba2
+wraps its packed in_proj whole — while conv/scan/state stay f32; Jamba
+combines quantized NoPE attention, SSM mixers and MoE experts across its
+four layer flavors with the hybrid KV+SSM decode bit-exact) decode
 straight from ggml Q-blocks (Q8_0, Q4_0, and the K-quants) with no dequantize
 step: each projection is a `nn.QuantLinear` over the raw block bytes, and only
 the small precision-sensitive pieces (norm gains, the embedding lookup table,

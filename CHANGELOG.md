@@ -4,6 +4,67 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### docs — README GGUF passage brought current (2026-07-18)
+
+The front-page GGUF sentence now states the real totals — twenty float architectures and
+eighteen quantized-decode families — and points at `docs/gguf.md` for the matrix instead of
+carrying a stale six-name list.
+
+### nlp — quantized GGUF decode for Jamba, the hybrid capstone (T831, 2026-07-18)
+
+`QuantJamba` + `QuantJambaFromGGUF` close the quant campaign's hybrid capstone at eighteen
+families: all four layer flavors (attention/Mamba mixer × dense/MoE FFN) quantize with the
+composed patterns — bias-free NoPE attention, the T829 SSM mixer plus Jamba's f32 dt/b/c
+norms, and per-expert QuantSwiGLUs under an f32 router. One deliberate design trade,
+documented on the type: the MoE decode uses DENSE dispatch mirroring the float `JambaMoE`
+kernel sequence (not QuantMixtral's sparse union), trading the k/E FFN saving for a
+BIT-exact hybrid KV+SSM decode anchor across all four flavors. The T829 quant-mamba files
+gained behavior-preserving extractions (`quantizeSSMMixer`/`quantSSMMixerFromGGUF`) so the
+byte-exactness-critical mixer path has one implementation shared by Mamba and Jamba —
+verified by the unchanged T829 gates. Exact anchor: byte-equal Q-blocks across every
+projection in all four flavors, f32-identical small tensors, logits exactly equal; cosine
+1.000000; the control-anchored vs-original at 0.999999 equals pure weight rounding.
+
+### nlp — Mamba-2 GGUF loading, float + quantized (T830, 2026-07-18)
+
+`Mamba2FromGGUF`/`Mamba2ToGGUF` (float GGUF architecture twenty) and
+`QuantMamba2`/`QuantMamba2FromGGUF` (quant family seventeen), conventions verified in
+llama.cpp source: the monolithic `in_proj` stays PACKED on disk (the runtime view-splits
+the product, so the quant twin wraps it as ONE QuantLinear); `ssm.time_step_rank` carries
+n_head; the per-head `ssm_a` is −exp'd AND unsqueezed to [n_head,1]; `ssm_dt` is bias-only;
+and the gated `ssm_norm` is stored per-group — where llama.cpp normalizes per group while
+transformers (which GoAI matches bit-for-bit) normalizes full-width, identical at
+n_groups=1 (all official releases), honestly documented. §B68 sharpened again: the golden's
+constant norm gains and zero conv biases are invariant under the unsqueeze/group-reshape,
+so the fixture replaces them with name-seeded values. Float parity 1.45e-10, quant anchors
+byte/logit-exact, O(1) decode bit-exact on both paths.
+
+### spec — RWKV GGUF loading: investigated, not feasible (T832, 2026-07-18)
+
+GoAI's RWKV is RWKV-4 (§R188: the channel-wise scalar WKV recurrence). llama.cpp implements
+only the rwkv6/rwkv7 architectures — RWKV-4 was never in llama.cpp (its ecosystem was .pth /
+rwkv.cpp with a different format), so no llama.cpp GGUF for RWKV-4 exists to load and the
+axis is closed as infeasible rather than pending. An RWKV-6/7 GGUF loader would first
+require implementing RWKV-6/7 as new model architectures (matrix-valued state, a different
+mechanism than RWKV-4's scalar channels) — recorded as user-gated new-model scope.
+
+### nlp — quantized GGUF decode for Cohere and Mamba (T829, 2026-07-18)
+
+`QuantCohere` and `QuantMamba` (+ `Quant*FromGGUF`) bring quantized decode to sixteen
+families and close two structural firsts. Cohere is the first NORM-rope quant loader
+outside the llama lineage: the on-disk HF-interleaved q/k rows are permuted to split-half
+losslessly on the Q-block bytes — and the needed interleave-to-split map turns out to be
+EXACTLY the existing `ropeUnpermutePerm` (llama.cpp's NORM-rope storage IS the GPT-J
+interleave), proven by byte-equality against `QuantizeCohere` on the float model's own
+permuted rows. Mamba is the first recurrent quant twin: the four big SSM projections
+quantize (packed `ssm_in`/`ssm_x` row-split losslessly), while conv1d, the Δ bias, A, D,
+and the norms stay f32 with the scan running exactly as the float path — and the O(1)
+recurrent decode is bit-exact at every step. A deliberate representation choice: QuantMamba
+stores A = −exp(A_log) directly (the on-disk form; ln∘exp does not round-trip through f32,
+A itself does), which is what makes the byte anchor exact. All gates at full strength on
+both (byte/logit-exact anchors incl. fused forms, cosine 1.000000, control-anchored
+vs-original, mirrored reject sets).
+
 ### nlp — quantized GGUF decode for StableLM and OLMo 2 (T828, 2026-07-18)
 
 `QuantStableLM` and `QuantOLMo2` (+ `Quant*FromGGUF`) bring quantized decode to fourteen

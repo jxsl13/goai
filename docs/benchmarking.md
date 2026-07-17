@@ -774,6 +774,11 @@ TinyLlama-1.1B, sequential runs so the GPU is never shared), ranked by gap:
 | prefill pp32 | 2655 (f16-acc) | 3297 | 3338 | 0.80× |
 | decode tg128 | 256.9 (Q4_K graph) | 244.0 | 326.2 | 1.05× vs Q8 / 0.79× vs Q4_K_M |
 
+**UPDATE (same night, after the fused-QKV #157 + RoPE #159 landings):** prefill pp128
+**5170 → 5600 tok/s (+8.3%, now 0.66×)**, pp32 2655 → 2905 (+9.4%, 0.88×). Post-landing
+profile (51.1 ms): ffn-gemm 55.5%, attention 14.2%, qkv 11.4% (f32-harness, unfused), o 7.2%,
+rope now 2.5% (was 5.8%). The remaining ladder is GEMM-bound as characterized.
+
 Decode already **leads** llama.cpp-Q8 (1.05×); the biggest gap is **prefill pp128 (0.61×)**.
 Prefill profile (`TestCUDAPrefillProfile`, seq=128, 52.9 ms): **GEMM 71.6%** (ffn 53.5% +
 qkv 11.1% + o 7.0%), attention 13.7%, rope 5.8%, rmsnorm 3.1%, swiglu 1.7%. The ffn/o/down
