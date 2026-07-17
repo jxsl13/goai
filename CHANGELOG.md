@@ -4,6 +4,21 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — feat: GGUF loading for Phi-3 and Mixtral (T795, 2026-07-17)
+
+`Phi3FromGGUF` and `MixtralFromGGUF` (+`ToGGUF` round-trips) complete the GGUF axis for the
+high-download community families. Conventions verified verbatim from llama.cpp master: **Phi-3**
+(arch `phi3`) stores the projections PACKED — one `attn_qkv` tensor (rows [q;k;v]) and a combined
+`ffn_up` (rows [gate;up], no FFN_GATE tensor at all) — with NEOX rope and no permute; the loader
+unpacks both (accepting split-tensor files too) and delegates to the shared llama-family internals,
+yielding a plain `Llama` like `Phi3FromHF`. **Mixtral** ships under the `llama` arch (distinguished
+by `expert_count` metadata) with fused 3-D expert tensors (`ffn_gate/up/down_exps`) and — because it
+rides the llama converter — PERMUTED q/k, which the loader un-permutes back to the split-half layout
+(proven bit-identical by structural round-trip checks). Parities vs the HF path: 1.35e-10 / 1.0e-10
+(the f32-metadata eps floor; weights bit-identical). Also fixes `MixtralFromHF` to actually infer
+`Config.Hidden`/`Experts` as its docs claimed. GGUF now covers Llama, Qwen2/2.5, Qwen3, Gemma,
+Phi-3 and Mixtral.
+
 ### backend/cpu — fix: race-build ULP tolerance for kernel-parity tests (T794, 2026-07-17)
 
 `TestRoPEKernelsMatchRefWithinUlps` failed under the race detector on darwin/arm64: race builds apply
