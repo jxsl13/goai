@@ -781,6 +781,22 @@ side with `scripts/bench-llamacpp.sh`; the goai side with
 | prefill pp32 (f32) | 3298 tok/s | 1330 tok/s | 0.40× |
 | prefill pp128 (f32) | 8389 tok/s | 2353 tok/s | 0.28× |
 
+**REFRESH 2026-07-17** (llama.cpp b10012 Vulkan, 3 reps; goai at the cuda-q4k-mt
+branch head, 5x — same machine, sequential runs so the GPU is never shared). This
+HISTORICAL section's Q8/f32 numbers re-validated today: llama.cpp Q8 tg128 244.5 ±
+0.4 / pp32 3311 / pp128 8501; Q4_K_M tg128 325.5 ± 0.5 / pp128 7618; goai Q8-graph
+decode **207.6** (was 164.7) and f32 prefill pp32 1330 / pp128 2190 (unchanged).
+
+NOTE these are NOT goai's best current numbers — the authoritative decode state is
+the Q4_K graph scoreboard below (TinyLlama **258.5 tok/s = 1.06× ahead of
+llama.cpp-Q8**, 0.79× of their Q4_K_M; the lead grows with model size to 1.19× at
+7B), and prompt processing via the unified f16 batched prefill runs TinyLlama P=94
+in 27.5 ms ≈ **3,420 tok/s** (vs 2190 for this section's f32 token-loop path) —
+still 0.40× of llama.cpp's pp128 8501. Remaining frontiers, per the records below:
+the same-class Q4_K_M decode gap (their iterative encoder + fused attention margin)
+and the prefill GEMM gap (custom MMQ int8 kernels — cublas int8 rejected at +5-8%,
+Tw60; f16-acc already captured, Tw61).
+
 **Decode optimization journey** (26 → 164.7 tok/s = 6.3×, every step correctness-
 gated token-for-token vs the CPU reference; each bottleneck diagnosed by
 measurement, not assumption):

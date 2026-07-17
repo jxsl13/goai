@@ -33,7 +33,7 @@ static cublasHandle_t gHandle = NULL;
 static float *gOne = NULL, *gZero = NULL; // device 1.0f/0.0f — cuBLAS DEVICE pointer mode (graph-capture-safe alpha/beta)
 static cudaStream_t gStream = NULL;
 static CUcontext gCtx = NULL; // runtime's primary context, retained for driver-API launches
-static CUfunction gGelu = NULL, gRelu2 = NULL, gRelu = NULL, gMoeGate = NULL, gRowAxpy = NULL, gSsmStep = NULL, gSsdStep = NULL, gConv1dStep = NULL, gWkvStep = NULL, gSilu = NULL, gSigmoid = NULL, gSoftplus = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gRopePartial = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gAttnSoftmaxCap = NULL, gAttnSoftmaxAlibi = NULL, gAttnSoftmaxBias = NULL, gQgemv = NULL, gQgemv4 = NULL, gQgemv4k = NULL, gQgemv4kPre = NULL, gQgemv5k = NULL, gQgemv6k = NULL, gQgemv3k = NULL, gQgemv2k = NULL, gQgemv40 = NULL, gQgemvI4nl = NULL, gQgemvI4xs = NULL, gQgemvMxfp4 = NULL, gQgemvI2xxs = NULL, gQgemvI2xs = NULL, gQgemvI3xxs = NULL, gQgemvI3s = NULL, gQgemvI1s = NULL, gQgemvI1m = NULL, gI8Mma = NULL, gI8MmaT = NULL, gI8MmaRb = NULL, gI8MmaDb = NULL, gI8MmaWt = NULL, gI8MmaWp = NULL, gI8Mmq = NULL, gI8MmqR = NULL, gQrowsI8 = NULL, gLdmProbe = NULL, gLdmProbe2 = NULL, gI8MmaLm = NULL, gCvtF16 = NULL, gCvtFrom16 = NULL; // lazily nvrtc-compiled
+static CUfunction gGelu = NULL, gRelu2 = NULL, gRelu = NULL, gMoeGate = NULL, gRowAxpy = NULL, gSsmStep = NULL, gSsdStep = NULL, gConv1dStep = NULL, gWkvStep = NULL, gSilu = NULL, gSigmoid = NULL, gSoftplus = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gRopePartial = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gAttnSoftmaxCap = NULL, gAttnSoftmaxAlibi = NULL, gAttnSoftmaxBias = NULL, gQgemv = NULL, gQgemv4 = NULL, gQgemv4k = NULL, gQgemv4kMT = NULL, gQgemv4kMTS = NULL, gQgemv4kPre = NULL, gQgemv5k = NULL, gQgemv5kMT = NULL, gQgemv5kMTS = NULL, gQgemv6k = NULL, gQgemv6kMT = NULL, gQgemv6kMTS = NULL, gQgemv3k = NULL, gQgemv3kMT = NULL, gQgemv3kMTS = NULL, gQgemv2k = NULL, gQgemv2kMT = NULL, gQgemv40 = NULL, gQgemvI4nl = NULL, gQgemvI4xs = NULL, gQgemvI4xsMT = NULL, gQgemvI4xsMTS = NULL, gQgemvMxfp4 = NULL, gQgemvMxfp4MT = NULL, gQgemvI2xxs = NULL, gQgemvI2xxsMT = NULL, gQgemvI2xs = NULL, gQgemvI3xxs = NULL, gQgemvI3xxsMT = NULL, gQgemvI3s = NULL, gQgemvI3sMT = NULL, gQgemvI1s = NULL, gQgemvI1m = NULL, gI8Mma = NULL, gI8MmaT = NULL, gI8MmaRb = NULL, gI8MmaDb = NULL, gI8MmaWt = NULL, gI8MmaWp = NULL, gI8Mmq = NULL, gI8MmqR = NULL, gQrowsI8 = NULL, gLdmProbe = NULL, gLdmProbe2 = NULL, gI8MmaLm = NULL, gCvtF16 = NULL, gCvtFrom16 = NULL; // lazily nvrtc-compiled
 static CUfunction gRopeDpos = NULL, gRopePartialDpos = NULL, gAttnSoftmaxDpos = NULL, gAppendDpos = NULL; // device-position (graph-capturable) twins
 static CUfunction gGqaFlashPart = NULL, gGqaFlashMerge = NULL; // flash decode: GQA K/V-shared split-K partials + merge
 static CUfunction gGqaFlashPartF16 = NULL, gAppendDposF16 = NULL; // f16 KV-cache twins (u16 storage, f32 compute)
@@ -1721,6 +1721,174 @@ int cu_qmatmul_q4k(const void* dA, const void* dQ, void* dOut, int M, int K, int
     return q4k_gemv_launch(dA, dQ, dOut, M, K, N, beta, NULL);
 }
 
+// cu_qmatmul_q4k_mt: weight-read-once GEMM for M>1 (prefill/batch). The GEMV above launches
+// one warp per (m,n) output, so the Q4_K weight block for column n is re-fetched M times —
+// pure waste in the weight-BW-bound regime. Here one warp owns column n and an MT-row tile:
+// the per-sub-block Q4_K decode (nibble load, f16 d/dmin, 6-bit get_sm, the two shfls) happens
+// ONCE per warp and is reused across all MT rows. Weight BW drops M/MT×; the arithmetic is
+// LIFTED VERBATIM from qmatmul_q4k so it is bit-identical per row (parity structural, not
+// tested-into). MT=8: acc[8] fits in registers.
+// Shape routing (A/B-measured, RTX 3060): for DEEP columns (K > N, the down-projection)
+// the staged variant qmatmul_q4k_mts additionally shares the activation row tile across the
+// block's 8 column warps via shared memory (8× cut in activation L1/L2 traffic) — +33% on
+// 5632×2048 M64. For wide-N (N ≥ K) the per-sub-block barrier costs the latency hiding the
+// weight-BW-bound regime needs (−17% on 2048×5632), so those shapes keep the unstaged kernel.
+#define Q4K_MT 8
+int cu_qmatmul_q4k_mt(const void* dA, const void* dQ, void* dOut, int M, int K, int N, float beta) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (K > N) {
+        // Staged variant: 8 warps of a block share one row tile + 8 adjacent columns; each
+        // 256-float sub-block of the tile's rows is cooperatively loaded to shared once per
+        // block and reused by all 8 column warps. Warps whose column n >= N still run the
+        // w-loop for barrier validity (no early return before __syncthreads). Arithmetic is
+        // IDENTICAL to qmatmul_q4k_mt below — bit-identical per row.
+        if (!gQgemv4kMTS && compile_kernel(
+                       "__device__ __forceinline__ float f16f(unsigned short h){\n"
+                       "  unsigned s = (h & 0x8000u) << 16;\n"
+                       "  float v = __uint_as_float((h & 0x7fffu) << 13) * __uint_as_float(0x77800000u);\n"
+                       "  return __uint_as_float(__float_as_uint(v) | s);\n"
+                       "}\n"
+                       "__device__ __forceinline__ void get_sm(int j, const unsigned char* q, float* sc, float* mn){\n"
+                       "  if (j<4){ *sc=(float)(q[j]&63); *mn=(float)(q[j+4]&63); }\n"
+                       "  else { *sc=(float)((q[j+4]&0xF)|((q[j-4]>>6)<<4)); *mn=(float)((q[j+4]>>4)|((q[j]>>6)<<4)); }\n"
+                       "}\n"
+                       "extern \"C\" __global__ void qmatmul_q4k_mts(const float* a, const unsigned char* q, float* out, int M, int K, int N, float beta){\n"
+                       "  __shared__ float at[8*256];\n"                       // row tile: 8 rows × one 256-float sub-block (8 KB)
+                       "  int warp = threadIdx.x >> 5, lane = threadIdx.x & 31;\n"
+                       "  int ncb = (N + 7) >> 3;\n"                           // ceil(N/8) column blocks
+                       "  int mt0 = (blockIdx.x / ncb) * 8;\n"
+                       "  int n = (blockIdx.x % ncb) * 8 + warp;\n"
+                       "  int sbs = K >> 8;\n"
+                       "  const unsigned char* qr = q + (size_t)(n < N ? n : 0)*sbs*144;\n"
+                       "  float acc[8];\n"
+                       "  #pragma unroll\n"
+                       "  for (int j=0;j<8;j++) acc[j]=0.0f;\n"
+                       "  int p = lane >> 3, i0 = (lane & 7) * 4;\n"
+                       "  int rows = M - mt0; if (rows > 8) rows = 8;\n"
+                       "  for (int w = 0; w < sbs; w++){\n"
+                       "    __syncthreads();\n"                                // previous tile fully consumed before overwrite
+                       "    for (int t = threadIdx.x; t < (rows<<8); t += 256){\n"
+                       "      at[t] = a[(size_t)(mt0 + (t>>8))*K + w*256 + (t&255)];\n"
+                       "    }\n"
+                       "    __syncthreads();\n"
+                       "    if (n < N){\n"
+                       "    const unsigned char* blk = qr + (size_t)w*144;\n"
+                       "    unsigned int qw = *(const unsigned int*)(blk + 16 + lane*4);\n"   // weight decode — ONCE per warp
+                       "    float d = f16f(*(const unsigned short*)blk);\n"
+                       "    float dmin = f16f(*(const unsigned short*)(blk+2));\n"
+                       "    float sc, mn; get_sm(lane & 7, blk+4, &sc, &mn);\n"
+                       "    float c1 = d*sc, c2 = dmin*mn;\n"
+                       "    float dl = __shfl_sync(0xffffffff, c1, 2*p),   o1 = __shfl_sync(0xffffffff, c2, 2*p);\n"
+                       "    float dh = __shfl_sync(0xffffffff, c1, 2*p+1), o2 = __shfl_sync(0xffffffff, c2, 2*p+1);\n"
+                       "    float q0=(float)(qw&0xFu),  q1=(float)((qw>>8)&0xFu),  q2=(float)((qw>>16)&0xFu), q3=(float)((qw>>24)&0xFu);\n"
+                       "    float q4=(float)((qw>>4)&0xFu), q5=(float)((qw>>12)&0xFu), q6=(float)((qw>>20)&0xFu), q7=(float)((qw>>28)&0xFu);\n"
+                       "    int kb = p*64 + i0;\n"                             // offset inside the staged sub-block
+                       "    #pragma unroll\n"
+                       "    for (int j=0;j<8;j++){\n"
+                       "      int m = mt0 + j; if (m >= M) break;\n"
+                       "      const float* ar = at + (j<<8);\n"
+                       "      float4 al = *(const float4*)(ar + kb);\n"
+                       "      float4 ah = *(const float4*)(ar + kb + 32);\n"
+                       "      float sql = al.x*q0 + al.y*q1 + al.z*q2 + al.w*q3;\n"
+                       "      float sqh = ah.x*q4 + ah.y*q5 + ah.z*q6 + ah.w*q7;\n"
+                       "      float sal = (al.x+al.y)+(al.z+al.w), sah = (ah.x+ah.y)+(ah.z+ah.w);\n"
+                       "      acc[j] += dl*sql - o1*sal + dh*sqh - o2*sah;\n"
+                       "    }\n"
+                       "    }\n"
+                       "  }\n"
+                       "  if (n >= N) return;\n"
+                       "  #pragma unroll\n"
+                       "  for (int j=0;j<8;j++){\n"
+                       "    float a2 = acc[j];\n"
+                       "    for (int o = 16; o > 0; o >>= 1) a2 += __shfl_down_sync(0xffffffff, a2, o);\n"
+                       "    int m = mt0 + j;\n"
+                       "    if (lane == 0 && m < M){ out[(size_t)m*N+n] = beta*out[(size_t)m*N+n] + a2; }\n"
+                       "  }\n"
+                       "}\n",
+                       "qmatmul_q4k_mts.cu", "qmatmul_q4k_mts", &gQgemv4kMTS) != 0) { rc = -2; goto done; }
+        {
+            int nmt = (M + Q4K_MT - 1) / Q4K_MT;
+            int ncb = (N + 7) / 8;                    // 8 column warps per block share one staged row tile
+            int threads = 256, blocks = ncb * nmt; if (blocks < 1) blocks = 1;
+            void* args[7];
+            args[0] = &dA; args[1] = &dQ; args[2] = &dOut;
+            args[3] = &M; args[4] = &K; args[5] = &N; args[6] = &beta;
+            rc = (cuLaunchKernel(gQgemv4kMTS, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+        }
+        goto done;
+    }
+    if (!gQgemv4kMT && compile_kernel(
+                       "__device__ __forceinline__ float f16f(unsigned short h){\n"
+                       "  unsigned s = (h & 0x8000u) << 16;\n"
+                       "  float v = __uint_as_float((h & 0x7fffu) << 13) * __uint_as_float(0x77800000u);\n"
+                       "  return __uint_as_float(__float_as_uint(v) | s);\n"
+                       "}\n"
+                       "__device__ __forceinline__ void get_sm(int j, const unsigned char* q, float* sc, float* mn){\n"
+                       "  if (j<4){ *sc=(float)(q[j]&63); *mn=(float)(q[j+4]&63); }\n"
+                       "  else { *sc=(float)((q[j+4]&0xF)|((q[j-4]>>6)<<4)); *mn=(float)((q[j+4]>>4)|((q[j]>>6)<<4)); }\n"
+                       "}\n"
+                       "extern \"C\" __global__ void qmatmul_q4k_mt(const float* a, const unsigned char* q, float* out, int M, int K, int N, float beta){\n"
+                       "  long widx = ((long)blockIdx.x*blockDim.x + threadIdx.x) >> 5;\n"
+                       "  int lane = threadIdx.x & 31;\n"
+                       "  int nmt = (M + 8 - 1) / 8;\n"                        // ceil(M/MT)
+                       "  if (widx >= (long)N*nmt) return;\n"
+                       "  int n = (int)(widx % N), mt0 = (int)(widx / N) * 8;\n"
+                       "  int sbs = K >> 8;\n"
+                       "  const unsigned char* qr = q + (size_t)n*sbs*144;\n"
+                       "  float acc[8];\n"
+                       "  #pragma unroll\n"
+                       "  for (int j=0;j<8;j++) acc[j]=0.0f;\n"
+                       "  int p = lane >> 3, i0 = (lane & 7) * 4;\n"
+                       "  for (int w = 0; w < sbs; w++){\n"
+                       "    const unsigned char* blk = qr + (size_t)w*144;\n"
+                       "    unsigned int qw = *(const unsigned int*)(blk + 16 + lane*4);\n"   // weight decode — ONCE per warp
+                       "    float d = f16f(*(const unsigned short*)blk);\n"
+                       "    float dmin = f16f(*(const unsigned short*)(blk+2));\n"
+                       "    float sc, mn; get_sm(lane & 7, blk+4, &sc, &mn);\n"
+                       "    float c1 = d*sc, c2 = dmin*mn;\n"
+                       "    float dl = __shfl_sync(0xffffffff, c1, 2*p),   o1 = __shfl_sync(0xffffffff, c2, 2*p);\n"
+                       "    float dh = __shfl_sync(0xffffffff, c1, 2*p+1), o2 = __shfl_sync(0xffffffff, c2, 2*p+1);\n"
+                       "    float q0=(float)(qw&0xFu),  q1=(float)((qw>>8)&0xFu),  q2=(float)((qw>>16)&0xFu), q3=(float)((qw>>24)&0xFu);\n"
+                       "    float q4=(float)((qw>>4)&0xFu), q5=(float)((qw>>12)&0xFu), q6=(float)((qw>>20)&0xFu), q7=(float)((qw>>28)&0xFu);\n"
+                       "    int kb = w*256 + p*64 + i0;\n"
+                       "    #pragma unroll\n"
+                       "    for (int j=0;j<8;j++){\n"
+                       "      int m = mt0 + j; if (m >= M) break;\n"
+                       "      const float* ar = a + (size_t)m*K;\n"
+                       "      float4 al = *(const float4*)(ar + kb);\n"
+                       "      float4 ah = *(const float4*)(ar + kb + 32);\n"
+                       "      float sql = al.x*q0 + al.y*q1 + al.z*q2 + al.w*q3;\n"
+                       "      float sqh = ah.x*q4 + ah.y*q5 + ah.z*q6 + ah.w*q7;\n"
+                       "      float sal = (al.x+al.y)+(al.z+al.w), sah = (ah.x+ah.y)+(ah.z+ah.w);\n"
+                       "      acc[j] += dl*sql - o1*sal + dh*sqh - o2*sah;\n"
+                       "    }\n"
+                       "  }\n"
+                       "  #pragma unroll\n"
+                       "  for (int j=0;j<8;j++){\n"
+                       "    float a2 = acc[j];\n"
+                       "    for (int o = 16; o > 0; o >>= 1) a2 += __shfl_down_sync(0xffffffff, a2, o);\n"
+                       "    int m = mt0 + j;\n"
+                       "    if (lane == 0 && m < M){ out[(size_t)m*N+n] = beta*out[(size_t)m*N+n] + a2; }\n"
+                       "  }\n"
+                       "}\n",
+                       "qmatmul_q4k_mt.cu", "qmatmul_q4k_mt", &gQgemv4kMT) != 0) { rc = -2; goto done; }
+    {
+        int nmt = (M + Q4K_MT - 1) / Q4K_MT;
+        long total = (long)N * nmt * 32;
+        int threads = 256, blocks = (int)((total + threads - 1) / threads); if (blocks < 1) blocks = 1;
+        void* args[7];
+        args[0] = &dA; args[1] = &dQ; args[2] = &dOut;
+        args[3] = &M; args[4] = &K; args[5] = &N; args[6] = &beta;
+        rc = (cuLaunchKernel(gQgemv4kMT, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
 // cu_qmatmul_q4k_swiglu: out = silu(gate) ⊙ (a·dequant(W)) — see cu_qmatmul_q8_swiglu.
 int cu_qmatmul_q4k_swiglu(const void* dA, const void* dQ, const void* dGate, void* dOut,
                           int M, int K, int N) {
@@ -1857,6 +2025,182 @@ done:
     return rc;
 }
 
+// cu_qmatmul_q5k_mt: weight-read-once M-tiled GEMM for M>1 — Q5_K twin of cu_qmatmul_q4k_mt.
+// Q5_K = Q4_K + a 5th bit (qh), so the decode (get_sm scales, f16 d/dmin, nibble|highbit<<4 unpack
+// for the 8 low+high values) is hoisted ONCE per warp and reused across an MT=8 row tile. The
+// per-(m,n) arithmetic is LIFTED VERBATIM from qmatmul_q5k → bit-identical per row. K%256==0.
+// Shape routing (A/B-measured on Q4_K/Q6_K, confirmed here): deep columns (K > N, ffn_down)
+// take the shared-staged variant qmatmul_q5k_mts (activation row tile shared across the
+// block's 8 column warps); wide-N shapes keep the unstaged kernel (the per-sub-block barrier
+// costs latency hiding in the weight-BW-bound regime).
+int cu_qmatmul_q5k_mt(const void* dA, const void* dQ, void* dOut, int M, int K, int N, float beta) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (K > N) {
+        if (!gQgemv5kMTS && compile_kernel(
+                       "__device__ __forceinline__ float f16f(unsigned short h){\n"
+                       "  unsigned s = (h & 0x8000u) << 16;\n"
+                       "  float v = __uint_as_float((h & 0x7fffu) << 13) * __uint_as_float(0x77800000u);\n"
+                       "  return __uint_as_float(__float_as_uint(v) | s);\n"
+                       "}\n"
+                       "__device__ __forceinline__ void get_sm(int j, const unsigned char* q, float* sc, float* mn){\n"
+                       "  if (j<4){ *sc=(float)(q[j]&63); *mn=(float)(q[j+4]&63); }\n"
+                       "  else { *sc=(float)((q[j+4]&0xF)|((q[j-4]>>6)<<4)); *mn=(float)((q[j+4]>>4)|((q[j]>>6)<<4)); }\n"
+                       "}\n"
+                       "extern \"C\" __global__ void qmatmul_q5k_mts(const float* a, const unsigned char* q, float* out, int M, int K, int N, float beta){\n"
+                       "  __shared__ float at[8*256];\n"                       // row tile: 8 rows × one 256-float sub-block (8 KB)
+                       "  int warp = threadIdx.x >> 5, lane = threadIdx.x & 31;\n"
+                       "  int ncb = (N + 7) >> 3;\n"
+                       "  int mt0 = (blockIdx.x / ncb) * 8;\n"
+                       "  int n = (blockIdx.x % ncb) * 8 + warp;\n"
+                       "  int sbs = K >> 8;\n"
+                       "  const unsigned char* qr = q + (size_t)(n < N ? n : 0)*sbs*176;\n"
+                       "  float acc[8];\n"
+                       "  #pragma unroll\n"
+                       "  for (int j=0;j<8;j++) acc[j]=0.0f;\n"
+                       "  int p = lane >> 3, i0 = (lane & 7) * 4;\n"
+                       "  int slo = 2*p, shi = 2*p + 1;\n"
+                       "  int rows = M - mt0; if (rows > 8) rows = 8;\n"
+                       "  for (int w = 0; w < sbs; w++){\n"
+                       "    __syncthreads();\n"                                // previous tile fully consumed before overwrite
+                       "    for (int t = threadIdx.x; t < (rows<<8); t += 256){\n"
+                       "      at[t] = a[(size_t)(mt0 + (t>>8))*K + w*256 + (t&255)];\n"
+                       "    }\n"
+                       "    __syncthreads();\n"
+                       "    if (n < N){\n"
+                       "    const unsigned char* blk = qr + (size_t)w*176;\n"          // weight decode — ONCE per warp
+                       "    unsigned int qw  = *(const unsigned int*)(blk + 48 + lane*4);\n"
+                       "    unsigned int qhw = *(const unsigned int*)(blk + 16 + i0);\n"
+                       "    float d = f16f(*(const unsigned short*)blk);\n"
+                       "    float dmin = f16f(*(const unsigned short*)(blk+2));\n"
+                       "    float sc, mn; get_sm(lane & 7, blk+4, &sc, &mn);\n"
+                       "    float c1 = d*sc, c2 = dmin*mn;\n"
+                       "    float dl = __shfl_sync(0xffffffff, c1, 2*p),   o1 = __shfl_sync(0xffffffff, c2, 2*p);\n"
+                       "    float dh = __shfl_sync(0xffffffff, c1, 2*p+1), o2 = __shfl_sync(0xffffffff, c2, 2*p+1);\n"
+                       "    unsigned qb0=qhw&0xFFu, qb1=(qhw>>8)&0xFFu, qb2=(qhw>>16)&0xFFu, qb3=(qhw>>24)&0xFFu;\n"
+                       "    float lo0=(float)((qw&0xFu)      |(((qb0>>slo)&1u)<<4));\n"
+                       "    float lo1=(float)(((qw>>8)&0xFu) |(((qb1>>slo)&1u)<<4));\n"
+                       "    float lo2=(float)(((qw>>16)&0xFu)|(((qb2>>slo)&1u)<<4));\n"
+                       "    float lo3=(float)(((qw>>24)&0xFu)|(((qb3>>slo)&1u)<<4));\n"
+                       "    float hi0=(float)(((qw>>4)&0xFu) |(((qb0>>shi)&1u)<<4));\n"
+                       "    float hi1=(float)(((qw>>12)&0xFu)|(((qb1>>shi)&1u)<<4));\n"
+                       "    float hi2=(float)(((qw>>20)&0xFu)|(((qb2>>shi)&1u)<<4));\n"
+                       "    float hi3=(float)(((qw>>28)&0xFu)|(((qb3>>shi)&1u)<<4));\n"
+                       "    int kb = p*64 + i0;\n"                             // offset inside the staged sub-block
+                       "    #pragma unroll\n"
+                       "    for (int j=0;j<8;j++){\n"
+                       "      int m = mt0 + j; if (m >= M) break;\n"
+                       "      const float* ar = at + (j<<8);\n"
+                       "      float4 al = *(const float4*)(ar + kb);\n"
+                       "      float4 ah = *(const float4*)(ar + kb + 32);\n"
+                       "      float sql = al.x*lo0 + al.y*lo1 + al.z*lo2 + al.w*lo3;\n"
+                       "      float sqh = ah.x*hi0 + ah.y*hi1 + ah.z*hi2 + ah.w*hi3;\n"
+                       "      float sal = (al.x+al.y)+(al.z+al.w), sah = (ah.x+ah.y)+(ah.z+ah.w);\n"
+                       "      acc[j] += dl*sql - o1*sal + dh*sqh - o2*sah;\n"
+                       "    }\n"
+                       "    }\n"
+                       "  }\n"
+                       "  if (n >= N) return;\n"
+                       "  #pragma unroll\n"
+                       "  for (int j=0;j<8;j++){\n"
+                       "    float a2 = acc[j];\n"
+                       "    for (int o = 16; o > 0; o >>= 1) a2 += __shfl_down_sync(0xffffffff, a2, o);\n"
+                       "    int m = mt0 + j;\n"
+                       "    if (lane == 0 && m < M){ out[(size_t)m*N+n] = beta*out[(size_t)m*N+n] + a2; }\n"
+                       "  }\n"
+                       "}\n",
+                       "qmatmul_q5k_mts.cu", "qmatmul_q5k_mts", &gQgemv5kMTS) != 0) { rc = -2; goto done; }
+        {
+            int nmt = (M + 8 - 1) / 8;
+            int ncb = (N + 7) / 8;
+            int threads = 256, blocks = ncb * nmt; if (blocks < 1) blocks = 1;
+            void* args[7];
+            args[0] = &dA; args[1] = &dQ; args[2] = &dOut;
+            args[3] = &M; args[4] = &K; args[5] = &N; args[6] = &beta;
+            rc = (cuLaunchKernel(gQgemv5kMTS, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+        }
+        goto done;
+    }
+    if (!gQgemv5kMT && compile_kernel(
+                       "__device__ __forceinline__ float f16f(unsigned short h){\n"
+                       "  unsigned s = (h & 0x8000u) << 16;\n"
+                       "  float v = __uint_as_float((h & 0x7fffu) << 13) * __uint_as_float(0x77800000u);\n"
+                       "  return __uint_as_float(__float_as_uint(v) | s);\n"
+                       "}\n"
+                       "__device__ __forceinline__ void get_sm(int j, const unsigned char* q, float* sc, float* mn){\n"
+                       "  if (j<4){ *sc=(float)(q[j]&63); *mn=(float)(q[j+4]&63); }\n"
+                       "  else { *sc=(float)((q[j+4]&0xF)|((q[j-4]>>6)<<4)); *mn=(float)((q[j+4]>>4)|((q[j]>>6)<<4)); }\n"
+                       "}\n"
+                       "extern \"C\" __global__ void qmatmul_q5k_mt(const float* a, const unsigned char* q, float* out, int M, int K, int N, float beta){\n"
+                       "  long widx = ((long)blockIdx.x*blockDim.x + threadIdx.x) >> 5;\n"
+                       "  int lane = threadIdx.x & 31;\n"
+                       "  int nmt = (M + 8 - 1) / 8;\n"
+                       "  if (widx >= (long)N*nmt) return;\n"
+                       "  int n = (int)(widx % N), mt0 = (int)(widx / N) * 8;\n"
+                       "  int sbs = K >> 8;\n"
+                       "  const unsigned char* qr = q + (size_t)n*sbs*176;\n"
+                       "  float acc[8];\n"
+                       "  #pragma unroll\n"
+                       "  for (int j=0;j<8;j++) acc[j]=0.0f;\n"
+                       "  int p = lane >> 3, i0 = (lane & 7) * 4;\n"
+                       "  int slo = 2*p, shi = 2*p + 1;\n"
+                       "  for (int w = 0; w < sbs; w++){\n"
+                       "    const unsigned char* blk = qr + (size_t)w*176;\n"          // weight decode — ONCE per warp
+                       "    unsigned int qw  = *(const unsigned int*)(blk + 48 + lane*4);\n"
+                       "    unsigned int qhw = *(const unsigned int*)(blk + 16 + i0);\n"
+                       "    float d = f16f(*(const unsigned short*)blk);\n"
+                       "    float dmin = f16f(*(const unsigned short*)(blk+2));\n"
+                       "    float sc, mn; get_sm(lane & 7, blk+4, &sc, &mn);\n"
+                       "    float c1 = d*sc, c2 = dmin*mn;\n"
+                       "    float dl = __shfl_sync(0xffffffff, c1, 2*p),   o1 = __shfl_sync(0xffffffff, c2, 2*p);\n"
+                       "    float dh = __shfl_sync(0xffffffff, c1, 2*p+1), o2 = __shfl_sync(0xffffffff, c2, 2*p+1);\n"
+                       "    unsigned qb0=qhw&0xFFu, qb1=(qhw>>8)&0xFFu, qb2=(qhw>>16)&0xFFu, qb3=(qhw>>24)&0xFFu;\n"
+                       "    float lo0=(float)((qw&0xFu)      |(((qb0>>slo)&1u)<<4));\n"
+                       "    float lo1=(float)(((qw>>8)&0xFu) |(((qb1>>slo)&1u)<<4));\n"
+                       "    float lo2=(float)(((qw>>16)&0xFu)|(((qb2>>slo)&1u)<<4));\n"
+                       "    float lo3=(float)(((qw>>24)&0xFu)|(((qb3>>slo)&1u)<<4));\n"
+                       "    float hi0=(float)(((qw>>4)&0xFu) |(((qb0>>shi)&1u)<<4));\n"
+                       "    float hi1=(float)(((qw>>12)&0xFu)|(((qb1>>shi)&1u)<<4));\n"
+                       "    float hi2=(float)(((qw>>20)&0xFu)|(((qb2>>shi)&1u)<<4));\n"
+                       "    float hi3=(float)(((qw>>28)&0xFu)|(((qb3>>shi)&1u)<<4));\n"
+                       "    int kb = w*256 + p*64 + i0;\n"
+                       "    #pragma unroll\n"
+                       "    for (int j=0;j<8;j++){\n"
+                       "      int m = mt0 + j; if (m >= M) break;\n"
+                       "      const float* ar = a + (size_t)m*K;\n"
+                       "      float4 al = *(const float4*)(ar + kb);\n"
+                       "      float4 ah = *(const float4*)(ar + kb + 32);\n"
+                       "      float sql = al.x*lo0 + al.y*lo1 + al.z*lo2 + al.w*lo3;\n"
+                       "      float sqh = ah.x*hi0 + ah.y*hi1 + ah.z*hi2 + ah.w*hi3;\n"
+                       "      float sal = (al.x+al.y)+(al.z+al.w), sah = (ah.x+ah.y)+(ah.z+ah.w);\n"
+                       "      acc[j] += dl*sql - o1*sal + dh*sqh - o2*sah;\n"
+                       "    }\n"
+                       "  }\n"
+                       "  #pragma unroll\n"
+                       "  for (int j=0;j<8;j++){\n"
+                       "    float a2 = acc[j];\n"
+                       "    for (int o = 16; o > 0; o >>= 1) a2 += __shfl_down_sync(0xffffffff, a2, o);\n"
+                       "    int m = mt0 + j;\n"
+                       "    if (lane == 0 && m < M){ out[(size_t)m*N+n] = beta*out[(size_t)m*N+n] + a2; }\n"
+                       "  }\n"
+                       "}\n",
+                       "qmatmul_q5k_mt.cu", "qmatmul_q5k_mt", &gQgemv5kMT) != 0) { rc = -2; goto done; }
+    {
+        int nmt = (M + 8 - 1) / 8;
+        long total = (long)N * nmt * 32;
+        int threads = 256, blocks = (int)((total + threads - 1) / threads); if (blocks < 1) blocks = 1;
+        void* args[7];
+        args[0] = &dA; args[1] = &dQ; args[2] = &dOut;
+        args[3] = &M; args[4] = &K; args[5] = &N; args[6] = &beta;
+        rc = (cuLaunchKernel(gQgemv5kMT, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
 // cu_qmatmul_q3k: out[M,N] = a[M,K]·dequant(W), W = ggml Q3_K (§R103) stored per OUTPUT row:
 // K/256 super-blocks of 110 bytes (hmask[32] one high bit/quant, qs[64] two low bits/quant,
 // scales[12] = 16 six-bit scales via the aux/kmask splice, then f16 d LAST at offset 108).
@@ -1935,6 +2279,174 @@ done:
     return rc;
 }
 
+// cu_qmatmul_q3k_mt: weight-read-once M-tiled GEMM for M>1 — Q3_K twin of cu_qmatmul_q4k_mt (repacked
+// meta/qs/hmask layout). Each lane owns 8 contiguous elements; the scale dl and the 8 decoded q3 values
+// (2 low bits | high bit, minus the inverted-hmask offset) are hoisted ONCE per warp and reused across
+// an MT=8 row tile. Arithmetic LIFTED VERBATIM from qmatmul_q3k → bit-identical per row. K%256==0.
+// Shape routing (A/B-measured on Q4_K/Q5_K/Q6_K, confirmed here): deep columns (K > N,
+// ffn_down) take the shared-staged variant qmatmul_q3k_mts (activation row tile shared across
+// the block's 8 column warps); wide-N shapes keep the unstaged kernel (the per-sub-block
+// barrier costs latency hiding in the weight-BW-bound regime).
+int cu_qmatmul_q3k_mt(const void* dA, const void* dMeta, const void* dQs, const void* dHm, void* dOut, int M, int K, int N, float beta) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (K > N) {
+        if (!gQgemv3kMTS && compile_kernel(
+                       "__device__ __forceinline__ float f16f(unsigned short h){\n"
+                       "  unsigned s = (h & 0x8000u) << 16;\n"
+                       "  float v = __uint_as_float((h & 0x7fffu) << 13) * __uint_as_float(0x77800000u);\n"
+                       "  return __uint_as_float(__float_as_uint(v) | s);\n"
+                       "}\n"
+                       "extern \"C\" __global__ void qmatmul_q3k_mts(const float* a, const unsigned char* meta, const unsigned char* qsb, const unsigned char* hmb, float* out, int M, int K, int N, float beta){\n"
+                       "  __shared__ float at[8*256];\n"                       // row tile: 8 rows × one 256-float sub-block (8 KB)
+                       "  int warp = threadIdx.x >> 5, lane = threadIdx.x & 31;\n"
+                       "  int ncb = (N + 7) >> 3;\n"
+                       "  int mt0 = (blockIdx.x / ncb) * 8;\n"
+                       "  int n = (blockIdx.x % ncb) * 8 + warp;\n"
+                       "  int sbs = K >> 8;\n"
+                       "  int is = lane >> 1, half = lane & 1, l0 = half*8;\n"
+                       "  int nb = is >> 3, jj = (is & 7) >> 1, gsel = is & 1, g = gsel*16;\n"
+                       "  int shift = 2*jj, hbit = nb*4 + jj;\n"
+                       "  int yi = nb*128 + jj*32 + g + l0;\n"
+                       "  int qsrel = nb*32 + g + l0, hmrel = g + l0;\n"
+                       "  float acc[8];\n"
+                       "  #pragma unroll\n"
+                       "  for (int j=0;j<8;j++) acc[j]=0.0f;\n"
+                       "  int rows = M - mt0; if (rows > 8) rows = 8;\n"
+                       "  for (int w = 0; w < sbs; w++){\n"
+                       "    __syncthreads();\n"                                // previous tile fully consumed before overwrite
+                       "    for (int t = threadIdx.x; t < (rows<<8); t += 256){\n"
+                       "      at[t] = a[(size_t)(mt0 + (t>>8))*K + w*256 + (t&255)];\n"
+                       "    }\n"
+                       "    __syncthreads();\n"
+                       "    if (n < N){\n"
+                       "    size_t sb = (size_t)(n*sbs + w);\n"                       // weight decode — ONCE per warp
+                       "    const unsigned char* mp = meta + sb*18;\n"
+                       "    float dl = f16f((unsigned short)(mp[16] | (mp[17]<<8))) * (float)((int)mp[is] - 32);\n"
+                       "    const unsigned char* qp = qsb + sb*64 + qsrel;\n"
+                       "    const unsigned char* hp = hmb + sb*32 + hmrel;\n"
+                       "    unsigned qw0 = *(const unsigned int*)qp, qw1 = *(const unsigned int*)(qp+4);\n"
+                       "    unsigned hw0 = *(const unsigned int*)hp, hw1 = *(const unsigned int*)(hp+4);\n"
+                       "    float qv[8];\n"                                           // decoded q3 values, reused across rows
+                       "    #pragma unroll\n"
+                       "    for (int t = 0; t < 8; t++){\n"
+                       "      unsigned qb = (t<4) ? ((qw0>>(t*8))&0xFFu) : ((qw1>>((t-4)*8))&0xFFu);\n"
+                       "      unsigned hb = (t<4) ? ((hw0>>(t*8))&0xFFu) : ((hw1>>((t-4)*8))&0xFFu);\n"
+                       "      int lowb = (qb >> shift) & 3;\n"
+                       "      int hset = (hb >> hbit) & 1;\n"
+                       "      qv[t] = (float)(lowb - (hset ? 0 : 4));\n"
+                       "    }\n"
+                       "    #pragma unroll\n"
+                       "    for (int j=0;j<8;j++){\n"
+                       "      int m = mt0 + j; if (m >= M) break;\n"
+                       "      const float* av = at + (j<<8) + yi;\n"
+                       "      float4 alo = *(const float4*)av;\n"
+                       "      float4 ahi = *(const float4*)(av + 4);\n"
+                       "      float av8[8] = { alo.x, alo.y, alo.z, alo.w, ahi.x, ahi.y, ahi.z, ahi.w };\n"
+                       "      float s = 0.0f;\n"
+                       "      #pragma unroll\n"
+                       "      for (int t = 0; t < 8; t++){ s += av8[t] * qv[t]; }\n"
+                       "      acc[j] += dl * s;\n"
+                       "    }\n"
+                       "    }\n"
+                       "  }\n"
+                       "  if (n >= N) return;\n"
+                       "  #pragma unroll\n"
+                       "  for (int j=0;j<8;j++){\n"
+                       "    float a2 = acc[j];\n"
+                       "    for (int o = 16; o > 0; o >>= 1) a2 += __shfl_down_sync(0xffffffff, a2, o);\n"
+                       "    int m = mt0 + j;\n"
+                       "    if (lane == 0 && m < M){ out[(size_t)m*N+n] = beta*out[(size_t)m*N+n] + a2; }\n"
+                       "  }\n"
+                       "}\n",
+                       "qmatmul_q3k_mts.cu", "qmatmul_q3k_mts", &gQgemv3kMTS) != 0) { rc = -2; goto done; }
+        {
+            int nmt = (M + 8 - 1) / 8;
+            int ncb = (N + 7) / 8;
+            int threads = 256, blocks = ncb * nmt; if (blocks < 1) blocks = 1;
+            void* args[9];
+            args[0] = &dA; args[1] = &dMeta; args[2] = &dQs; args[3] = &dHm; args[4] = &dOut;
+            args[5] = &M; args[6] = &K; args[7] = &N; args[8] = &beta;
+            rc = (cuLaunchKernel(gQgemv3kMTS, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+        }
+        goto done;
+    }
+    if (!gQgemv3kMT && compile_kernel(
+                       "__device__ __forceinline__ float f16f(unsigned short h){\n"
+                       "  unsigned s = (h & 0x8000u) << 16;\n"
+                       "  float v = __uint_as_float((h & 0x7fffu) << 13) * __uint_as_float(0x77800000u);\n"
+                       "  return __uint_as_float(__float_as_uint(v) | s);\n"
+                       "}\n"
+                       "extern \"C\" __global__ void qmatmul_q3k_mt(const float* a, const unsigned char* meta, const unsigned char* qsb, const unsigned char* hmb, float* out, int M, int K, int N, float beta){\n"
+                       "  long widx = ((long)blockIdx.x*blockDim.x + threadIdx.x) >> 5;\n"
+                       "  int lane = threadIdx.x & 31;\n"
+                       "  int nmt = (M + 8 - 1) / 8;\n"
+                       "  if (widx >= (long)N*nmt) return;\n"
+                       "  int n = (int)(widx % N), mt0 = (int)(widx / N) * 8;\n"
+                       "  int sbs = K >> 8;\n"
+                       "  int is = lane >> 1, half = lane & 1, l0 = half*8;\n"
+                       "  int nb = is >> 3, jj = (is & 7) >> 1, gsel = is & 1, g = gsel*16;\n"
+                       "  int shift = 2*jj, hbit = nb*4 + jj;\n"
+                       "  int yi = nb*128 + jj*32 + g + l0;\n"
+                       "  int qsrel = nb*32 + g + l0, hmrel = g + l0;\n"
+                       "  float acc[8];\n"
+                       "  #pragma unroll\n"
+                       "  for (int j=0;j<8;j++) acc[j]=0.0f;\n"
+                       "  for (int w = 0; w < sbs; w++){\n"
+                       "    size_t sb = (size_t)(n*sbs + w);\n"                       // weight decode — ONCE per warp
+                       "    const unsigned char* mp = meta + sb*18;\n"
+                       "    float dl = f16f((unsigned short)(mp[16] | (mp[17]<<8))) * (float)((int)mp[is] - 32);\n"
+                       "    const unsigned char* qp = qsb + sb*64 + qsrel;\n"
+                       "    const unsigned char* hp = hmb + sb*32 + hmrel;\n"
+                       "    unsigned qw0 = *(const unsigned int*)qp, qw1 = *(const unsigned int*)(qp+4);\n"
+                       "    unsigned hw0 = *(const unsigned int*)hp, hw1 = *(const unsigned int*)(hp+4);\n"
+                       "    float qv[8];\n"                                           // decoded q3 values, reused across rows
+                       "    #pragma unroll\n"
+                       "    for (int t = 0; t < 8; t++){\n"
+                       "      unsigned qb = (t<4) ? ((qw0>>(t*8))&0xFFu) : ((qw1>>((t-4)*8))&0xFFu);\n"
+                       "      unsigned hb = (t<4) ? ((hw0>>(t*8))&0xFFu) : ((hw1>>((t-4)*8))&0xFFu);\n"
+                       "      int lowb = (qb >> shift) & 3;\n"
+                       "      int hset = (hb >> hbit) & 1;\n"
+                       "      qv[t] = (float)(lowb - (hset ? 0 : 4));\n"
+                       "    }\n"
+                       "    #pragma unroll\n"
+                       "    for (int j=0;j<8;j++){\n"
+                       "      int m = mt0 + j; if (m >= M) break;\n"
+                       "      const float* av = a + (size_t)m*K + (size_t)w*256 + yi;\n"
+                       "      float4 alo = *(const float4*)av;\n"
+                       "      float4 ahi = *(const float4*)(av + 4);\n"
+                       "      float av8[8] = { alo.x, alo.y, alo.z, alo.w, ahi.x, ahi.y, ahi.z, ahi.w };\n"
+                       "      float s = 0.0f;\n"
+                       "      #pragma unroll\n"
+                       "      for (int t = 0; t < 8; t++){ s += av8[t] * qv[t]; }\n"
+                       "      acc[j] += dl * s;\n"
+                       "    }\n"
+                       "  }\n"
+                       "  #pragma unroll\n"
+                       "  for (int j=0;j<8;j++){\n"
+                       "    float a2 = acc[j];\n"
+                       "    for (int o = 16; o > 0; o >>= 1) a2 += __shfl_down_sync(0xffffffff, a2, o);\n"
+                       "    int m = mt0 + j;\n"
+                       "    if (lane == 0 && m < M){ out[(size_t)m*N+n] = beta*out[(size_t)m*N+n] + a2; }\n"
+                       "  }\n"
+                       "}\n",
+                       "qmatmul_q3k_mt.cu", "qmatmul_q3k_mt", &gQgemv3kMT) != 0) { rc = -2; goto done; }
+    {
+        int nmt = (M + 8 - 1) / 8;
+        long total = (long)N * nmt * 32;
+        int threads = 256, blocks = (int)((total + threads - 1) / threads); if (blocks < 1) blocks = 1;
+        void* args[9];
+        args[0] = &dA; args[1] = &dMeta; args[2] = &dQs; args[3] = &dHm; args[4] = &dOut;
+        args[5] = &M; args[6] = &K; args[7] = &N; args[8] = &beta;
+        rc = (cuLaunchKernel(gQgemv3kMT, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
 // cu_qmatmul_q2k: out[M,N] = a[M,K]·dequant(W), W = ggml Q2_K (§R104) stored per OUTPUT row:
 // K/256 super-blocks of 84 bytes (scales[16]: low nibble = 4-bit scale, high nibble = 4-bit
 // min; qs[64] two-bit quants; f16 d at 80, f16 dmin at 82). ASYMMETRIC AFFINE like Q4_K but
@@ -1998,6 +2510,87 @@ int cu_qmatmul_q2k(const void* dA, const void* dQ, void* dOut, int M, int K, int
         args[0] = &dA; args[1] = &dQ; args[2] = &dOut;
         args[3] = &M; args[4] = &K; args[5] = &N; args[6] = &beta;
         rc = (cuLaunchKernel(gQgemv2k, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_qmatmul_q2k_mt: weight-read-once M-tiled GEMM for M>1 — Q2_K twin of cu_qmatmul_q4k_mt (completes
+// the K-quant family). Each lane owns 8 contiguous elements; the affine scale/min (dl, ml) and the 8
+// decoded 2-bit q2 values are hoisted ONCE per warp and reused across an MT=8 row tile. Arithmetic
+// LIFTED VERBATIM from qmatmul_q2k (acc += dl·Σaᵢqᵢ − ml·Σaᵢ) → bit-identical per row. K%256==0.
+// NO shared-staged deep-K variant (unlike Q3/Q4/Q5/Q6): measured as a LOSS on RTX 3060 —
+// 5632×2048 M64 1189905 → 1259995 ns (−6%). Q2_K's 2-bit decode is so cheap that the per-sub-block
+// barrier costs more latency hiding than the 8× activation-reread cut saves. Do not rebuild
+// without new evidence (bench: BenchmarkQ2KM64_5632x2048).
+int cu_qmatmul_q2k_mt(const void* dA, const void* dQ, void* dOut, int M, int K, int N, float beta) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (!gQgemv2kMT && compile_kernel(
+                       "__device__ __forceinline__ float f16f(unsigned short h){\n"
+                       "  unsigned s = (h & 0x8000u) << 16;\n"
+                       "  float v = __uint_as_float((h & 0x7fffu) << 13) * __uint_as_float(0x77800000u);\n"
+                       "  return __uint_as_float(__float_as_uint(v) | s);\n"
+                       "}\n"
+                       "extern \"C\" __global__ void qmatmul_q2k_mt(const float* a, const unsigned char* q, float* out, int M, int K, int N, float beta){\n"
+                       "  long widx = ((long)blockIdx.x*blockDim.x + threadIdx.x) >> 5;\n"
+                       "  int lane = threadIdx.x & 31;\n"
+                       "  int nmt = (M + 8 - 1) / 8;\n"
+                       "  if (widx >= (long)N*nmt) return;\n"
+                       "  int n = (int)(widx % N), mt0 = (int)(widx / N) * 8;\n"
+                       "  int sbs = K >> 8;\n"
+                       "  const unsigned char* qr = q + (size_t)n*sbs*84;\n"
+                       "  int is = lane >> 1, half = lane & 1, l0 = half*8;\n"
+                       "  int nb = is >> 3, jj = (is & 7) >> 1, gsel = is & 1, g = gsel*16;\n"
+                       "  int shift = 2*jj;\n"
+                       "  int yi = nb*128 + jj*32 + g + l0;\n"
+                       "  int qsoff = 16 + nb*32 + g + l0;\n"
+                       "  float acc[8];\n"
+                       "  #pragma unroll\n"
+                       "  for (int j=0;j<8;j++) acc[j]=0.0f;\n"
+                       "  for (int w = 0; w < sbs; w++){\n"
+                       "    const unsigned char* blk = qr + (size_t)w*84;\n"          // weight decode — ONCE per warp
+                       "    float d = f16f((unsigned short)(blk[80] | (blk[81]<<8)));\n"
+                       "    float dmin = f16f((unsigned short)(blk[82] | (blk[83]<<8)));\n"
+                       "    unsigned sc = blk[is];\n"
+                       "    float dl = d * (float)(sc & 0xF), ml = dmin * (float)(sc >> 4);\n"
+                       "    const unsigned char* qs = blk + qsoff;\n"
+                       "    float qv[8];\n"                                           // decoded q2 values, reused across rows
+                       "    #pragma unroll\n"
+                       "    for (int t = 0; t < 8; t++){ qv[t] = (float)((qs[t] >> shift) & 3); }\n"
+                       "    #pragma unroll\n"
+                       "    for (int j=0;j<8;j++){\n"
+                       "      int m = mt0 + j; if (m >= M) break;\n"
+                       "      const float* av = a + (size_t)m*K + (size_t)w*256 + yi;\n"
+                       "      float4 alo = *(const float4*)av;\n"
+                       "      float4 ahi = *(const float4*)(av + 4);\n"
+                       "      float av8[8] = { alo.x, alo.y, alo.z, alo.w, ahi.x, ahi.y, ahi.z, ahi.w };\n"
+                       "      float sq = 0.0f, sa = 0.0f;\n"
+                       "      #pragma unroll\n"
+                       "      for (int t = 0; t < 8; t++){ sq += av8[t] * qv[t]; sa += av8[t]; }\n"
+                       "      acc[j] += dl*sq - ml*sa;\n"
+                       "    }\n"
+                       "  }\n"
+                       "  #pragma unroll\n"
+                       "  for (int j=0;j<8;j++){\n"
+                       "    float a2 = acc[j];\n"
+                       "    for (int o = 16; o > 0; o >>= 1) a2 += __shfl_down_sync(0xffffffff, a2, o);\n"
+                       "    int m = mt0 + j;\n"
+                       "    if (lane == 0 && m < M){ out[(size_t)m*N+n] = beta*out[(size_t)m*N+n] + a2; }\n"
+                       "  }\n"
+                       "}\n",
+                       "qmatmul_q2k_mt.cu", "qmatmul_q2k_mt", &gQgemv2kMT) != 0) { rc = -2; goto done; }
+    {
+        int nmt = (M + 8 - 1) / 8;
+        long total = (long)N * nmt * 32;
+        int threads = 256, blocks = (int)((total + threads - 1) / threads); if (blocks < 1) blocks = 1;
+        void* args[7];
+        args[0] = &dA; args[1] = &dQ; args[2] = &dOut;
+        args[3] = &M; args[4] = &K; args[5] = &N; args[6] = &beta;
+        rc = (cuLaunchKernel(gQgemv2kMT, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 done:
     pthread_mutex_unlock(&gLock);
@@ -2189,6 +2782,156 @@ done:
     return rc;
 }
 
+// cu_qmatmul_iq4xs_mt: weight-read-once M-tiled GEMM for M>1 — first of the i-quant family (the 2-4 bit
+// codebook quants the 12GB 3060 leans on to fit big models). Each warp owns column n's sub-block g; the
+// sub-scale ds and the 8 IQ4 codebook-decoded values (iq4kv[nibble]) are hoisted ONCE per warp and reused
+// across an MT=8 row tile. Arithmetic LIFTED VERBATIM from qmatmul_iq4xs → bit-identical per row. K%256==0.
+// Shape routing (A/B-measured on the K-quants, confirmed here): deep columns (K > N, ffn_down)
+// take the shared-staged variant qmatmul_iq4xs_mts (activation row tile shared across the
+// block's 8 column warps); wide-N shapes keep the unstaged kernel (the per-sub-block barrier
+// costs latency hiding in the weight-BW-bound regime).
+int cu_qmatmul_iq4xs_mt(const void* dA, const void* dQ, void* dOut, int M, int K, int N, float beta) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (K > N) {
+        if (!gQgemvI4xsMTS && compile_kernel(
+                       "__device__ __forceinline__ float f16f(unsigned short h){\n"
+                       "  unsigned s = (h & 0x8000u) << 16;\n"
+                       "  float v = __uint_as_float((h & 0x7fffu) << 13) * __uint_as_float(0x77800000u);\n"
+                       "  return __uint_as_float(__float_as_uint(v) | s);\n"
+                       "}\n"
+                       IQ4_KVDECL
+                       "extern \"C\" __global__ void qmatmul_iq4xs_mts(const float* a, const unsigned char* q, float* out, int M, int K, int N, float beta){\n"
+                       "  __shared__ float at[8*256];\n"                       // row tile: 8 rows × one 256-float sub-block (8 KB)
+                       "  int warp = threadIdx.x >> 5, lane = threadIdx.x & 31;\n"
+                       "  int ncb = (N + 7) >> 3;\n"
+                       "  int mt0 = (blockIdx.x / ncb) * 8;\n"
+                       "  int n = (blockIdx.x % ncb) * 8 + warp;\n"
+                       "  int sbs = K >> 8;\n"
+                       "  const unsigned char* qr = q + (size_t)(n < N ? n : 0)*sbs*136;\n"
+                       "  int g = lane >> 2, sub = lane & 3;\n"
+                       "  float acc[8];\n"
+                       "  #pragma unroll\n"
+                       "  for (int j=0;j<8;j++) acc[j]=0.0f;\n"
+                       "  int rows = M - mt0; if (rows > 8) rows = 8;\n"
+                       "  for (int w = 0; w < sbs; w++){\n"
+                       "    __syncthreads();\n"                                // previous tile fully consumed before overwrite
+                       "    for (int t = threadIdx.x; t < (rows<<8); t += 256){\n"
+                       "      at[t] = a[(size_t)(mt0 + (t>>8))*K + w*256 + (t&255)];\n"
+                       "    }\n"
+                       "    __syncthreads();\n"
+                       "    if (n < N){\n"
+                       "    const unsigned char* blk = qr + (size_t)w*136;\n"        // weight decode — ONCE per warp
+                       "    float d = f16f((unsigned short)(blk[0] | (blk[1]<<8)));\n"
+                       "    unsigned sch = (unsigned)(blk[2] | (blk[3]<<8));\n"
+                       "    const unsigned char* scl = blk + 4;\n"
+                       "    int sl = (scl[g>>1] >> (4*(g&1))) & 0xF;\n"
+                       "    int sh = (sch >> (2*g)) & 3;\n"
+                       "    float ds = d * (float)((sl | (sh<<4)) - 32);\n"
+                       "    unsigned qw = *(const unsigned int*)(blk + 8 + g*16 + sub*4);\n"
+                       "    unsigned b0=qw&0xFFu, b1=(qw>>8)&0xFFu, b2=(qw>>16)&0xFFu, b3=(qw>>24)&0xFFu;\n"
+                       "    float kl0=iq4kv[b0&0xF], kl1=iq4kv[b1&0xF], kl2=iq4kv[b2&0xF], kl3=iq4kv[b3&0xF];\n"  // codebook, reused across rows
+                       "    float kh0=iq4kv[b0>>4], kh1=iq4kv[b1>>4], kh2=iq4kv[b2>>4], kh3=iq4kv[b3>>4];\n"
+                       "    #pragma unroll\n"
+                       "    for (int j=0;j<8;j++){\n"
+                       "      int m = mt0 + j; if (m >= M) break;\n"
+                       "      const float* arb = at + (j<<8) + g*32 + sub*4;\n"
+                       "      float4 al = *(const float4*)arb;\n"
+                       "      float4 ah = *(const float4*)(arb + 16);\n"
+                       "      float sl4 = al.x*kl0 + al.y*kl1 + al.z*kl2 + al.w*kl3;\n"
+                       "      float sh4 = ah.x*kh0 + ah.y*kh1 + ah.z*kh2 + ah.w*kh3;\n"
+                       "      acc[j] += ds * (sl4 + sh4);\n"
+                       "    }\n"
+                       "    }\n"
+                       "  }\n"
+                       "  if (n >= N) return;\n"
+                       "  #pragma unroll\n"
+                       "  for (int j=0;j<8;j++){\n"
+                       "    float a2 = acc[j];\n"
+                       "    for (int o = 16; o > 0; o >>= 1) a2 += __shfl_down_sync(0xffffffff, a2, o);\n"
+                       "    int m = mt0 + j;\n"
+                       "    if (lane == 0 && m < M){ out[(size_t)m*N+n] = beta*out[(size_t)m*N+n] + a2; }\n"
+                       "  }\n"
+                       "}\n",
+                       "qmatmul_iq4xs_mts.cu", "qmatmul_iq4xs_mts", &gQgemvI4xsMTS) != 0) { rc = -2; goto done; }
+        {
+            int nmt = (M + 8 - 1) / 8;
+            int ncb = (N + 7) / 8;
+            int threads = 256, blocks = ncb * nmt; if (blocks < 1) blocks = 1;
+            void* args[7];
+            args[0] = &dA; args[1] = &dQ; args[2] = &dOut;
+            args[3] = &M; args[4] = &K; args[5] = &N; args[6] = &beta;
+            rc = (cuLaunchKernel(gQgemvI4xsMTS, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+        }
+        goto done;
+    }
+    if (!gQgemvI4xsMT && compile_kernel(
+                       "__device__ __forceinline__ float f16f(unsigned short h){\n"
+                       "  unsigned s = (h & 0x8000u) << 16;\n"
+                       "  float v = __uint_as_float((h & 0x7fffu) << 13) * __uint_as_float(0x77800000u);\n"
+                       "  return __uint_as_float(__float_as_uint(v) | s);\n"
+                       "}\n"
+                       IQ4_KVDECL
+                       "extern \"C\" __global__ void qmatmul_iq4xs_mt(const float* a, const unsigned char* q, float* out, int M, int K, int N, float beta){\n"
+                       "  long widx = ((long)blockIdx.x*blockDim.x + threadIdx.x) >> 5;\n"
+                       "  int lane = threadIdx.x & 31;\n"
+                       "  int nmt = (M + 8 - 1) / 8;\n"
+                       "  if (widx >= (long)N*nmt) return;\n"
+                       "  int n = (int)(widx % N), mt0 = (int)(widx / N) * 8;\n"
+                       "  int sbs = K >> 8;\n"
+                       "  const unsigned char* qr = q + (size_t)n*sbs*136;\n"
+                       "  int g = lane >> 2, sub = lane & 3;\n"
+                       "  float acc[8];\n"
+                       "  #pragma unroll\n"
+                       "  for (int j=0;j<8;j++) acc[j]=0.0f;\n"
+                       "  for (int w = 0; w < sbs; w++){\n"
+                       "    const unsigned char* blk = qr + (size_t)w*136;\n"        // weight decode — ONCE per warp
+                       "    float d = f16f((unsigned short)(blk[0] | (blk[1]<<8)));\n"
+                       "    unsigned sch = (unsigned)(blk[2] | (blk[3]<<8));\n"
+                       "    const unsigned char* scl = blk + 4;\n"
+                       "    int sl = (scl[g>>1] >> (4*(g&1))) & 0xF;\n"
+                       "    int sh = (sch >> (2*g)) & 3;\n"
+                       "    float ds = d * (float)((sl | (sh<<4)) - 32);\n"
+                       "    unsigned qw = *(const unsigned int*)(blk + 8 + g*16 + sub*4);\n"
+                       "    unsigned b0=qw&0xFFu, b1=(qw>>8)&0xFFu, b2=(qw>>16)&0xFFu, b3=(qw>>24)&0xFFu;\n"
+                       "    float kl0=iq4kv[b0&0xF], kl1=iq4kv[b1&0xF], kl2=iq4kv[b2&0xF], kl3=iq4kv[b3&0xF];\n"  // codebook, reused across rows
+                       "    float kh0=iq4kv[b0>>4], kh1=iq4kv[b1>>4], kh2=iq4kv[b2>>4], kh3=iq4kv[b3>>4];\n"
+                       "    #pragma unroll\n"
+                       "    for (int j=0;j<8;j++){\n"
+                       "      int m = mt0 + j; if (m >= M) break;\n"
+                       "      const float* arb = a + (size_t)m*K + (size_t)w*256 + g*32 + sub*4;\n"
+                       "      float4 al = *(const float4*)arb;\n"
+                       "      float4 ah = *(const float4*)(arb + 16);\n"
+                       "      float sl4 = al.x*kl0 + al.y*kl1 + al.z*kl2 + al.w*kl3;\n"
+                       "      float sh4 = ah.x*kh0 + ah.y*kh1 + ah.z*kh2 + ah.w*kh3;\n"
+                       "      acc[j] += ds * (sl4 + sh4);\n"
+                       "    }\n"
+                       "  }\n"
+                       "  #pragma unroll\n"
+                       "  for (int j=0;j<8;j++){\n"
+                       "    float a2 = acc[j];\n"
+                       "    for (int o = 16; o > 0; o >>= 1) a2 += __shfl_down_sync(0xffffffff, a2, o);\n"
+                       "    int m = mt0 + j;\n"
+                       "    if (lane == 0 && m < M){ out[(size_t)m*N+n] = beta*out[(size_t)m*N+n] + a2; }\n"
+                       "  }\n"
+                       "}\n",
+                       "qmatmul_iq4xs_mt.cu", "qmatmul_iq4xs_mt", &gQgemvI4xsMT) != 0) { rc = -2; goto done; }
+    {
+        int nmt = (M + 8 - 1) / 8;
+        long total = (long)N * nmt * 32;
+        int threads = 256, blocks = (int)((total + threads - 1) / threads); if (blocks < 1) blocks = 1;
+        void* args[7];
+        args[0] = &dA; args[1] = &dQ; args[2] = &dOut;
+        args[3] = &M; args[4] = &K; args[5] = &N; args[6] = &beta;
+        rc = (cuLaunchKernel(gQgemvI4xsMT, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
 // cu_qmatmul_mxfp4: out[M,N] = a[M,K]·dequant(MXFP4, the OCP Microscaling FP4 that gpt-oss ships
 // in). REPACKED at upload like Q4_0 into dScale (nblk E8M0 scale bytes/row) + dNib (nblk×16 nibble
 // bytes/row, 16-aligned) so a warp processes 8 blocks/iteration, 4 lanes/block, with coalesced uint
@@ -2237,6 +2980,74 @@ int cu_qmatmul_mxfp4(const void* dA, const void* dScale, const void* dNib, void*
         args[0] = &dA; args[1] = &dScale; args[2] = &dNib; args[3] = &dOut;
         args[4] = &M; args[5] = &K; args[6] = &N; args[7] = &beta;
         rc = (cuLaunchKernel(gQgemvMxfp4, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_qmatmul_mxfp4_mt: weight-read-once M-tiled GEMM for M>1 — MXFP4 (gpt-oss) twin of the M-tile.
+// The GEMV runs one warp per (m,n), re-reading each block's E8M0 scale + FP4 nibbles M times; here one
+// warp owns column n and an MT=8 row tile, decoding each block's scale d and the 8 FP4-codebook values
+// (mxfp4kv[nibble]) ONCE per warp and reusing them across the rows. Arithmetic LIFTED VERBATIM from
+// qmatmul_mxfp4 → bit-identical per row. K%32==0.
+int cu_qmatmul_mxfp4_mt(const void* dA, const void* dScale, const void* dNib, void* dOut, int M, int K, int N, float beta) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (!gQgemvMxfp4MT && compile_kernel(
+                       "__device__ const float mxfp4kv[16] = {0.f,1.f,2.f,3.f,4.f,6.f,8.f,12.f,0.f,-1.f,-2.f,-3.f,-4.f,-6.f,-8.f,-12.f};\n"
+                       "extern \"C\" __global__ void qmatmul_mxfp4_mt(const float* a, const unsigned char* sc, const unsigned char* nb, float* out, int M, int K, int N, float beta){\n"
+                       "  long widx = ((long)blockIdx.x*blockDim.x + threadIdx.x) >> 5;\n"
+                       "  int lane = threadIdx.x & 31;\n"
+                       "  int nmt = (M + 8 - 1) / 8;\n"
+                       "  if (widx >= (long)N*nmt) return;\n"
+                       "  int n = (int)(widx % N), mt0 = (int)(widx / N) * 8;\n"
+                       "  int nblk = K >> 5;\n"
+                       "  int g = lane >> 2, sub = lane & 3;\n"
+                       "  float acc[8];\n"
+                       "  #pragma unroll\n"
+                       "  for (int j=0;j<8;j++) acc[j]=0.0f;\n"
+                       "  for (int bb = 0; bb < nblk; bb += 8){\n"
+                       "    int b = bb + g;\n"
+                       "    if (b < nblk){\n"
+                       "      unsigned e = sc[(size_t)(n*nblk + b)];\n"                // weight decode — ONCE per warp
+                       "      unsigned bits = (e < 2) ? (0x00200000u << e) : ((e-1) << 23);\n"
+                       "      float d = __uint_as_float(bits);\n"
+                       "      unsigned qw = *(const unsigned int*)(nb + (size_t)(n*nblk + b)*16 + sub*4);\n"
+                       "      unsigned b0=qw&0xFFu, b1=(qw>>8)&0xFFu, b2=(qw>>16)&0xFFu, b3=(qw>>24)&0xFFu;\n"
+                       "      float kl0=mxfp4kv[b0&0xF], kl1=mxfp4kv[b1&0xF], kl2=mxfp4kv[b2&0xF], kl3=mxfp4kv[b3&0xF];\n"  // codebook, reused across rows
+                       "      float kh0=mxfp4kv[b0>>4], kh1=mxfp4kv[b1>>4], kh2=mxfp4kv[b2>>4], kh3=mxfp4kv[b3>>4];\n"
+                       "      #pragma unroll\n"
+                       "      for (int j=0;j<8;j++){\n"
+                       "        int mm = mt0 + j; if (mm >= M) break;\n"
+                       "        const float* arb = a + (size_t)mm*K + (size_t)b*32 + sub*4;\n"
+                       "        float4 al = *(const float4*)arb;\n"
+                       "        float4 ah = *(const float4*)(arb + 16);\n"
+                       "        float sl = al.x*kl0 + al.y*kl1 + al.z*kl2 + al.w*kl3;\n"
+                       "        float sh = ah.x*kh0 + ah.y*kh1 + ah.z*kh2 + ah.w*kh3;\n"
+                       "        acc[j] += d * (sl + sh);\n"
+                       "      }\n"
+                       "    }\n"
+                       "  }\n"
+                       "  #pragma unroll\n"
+                       "  for (int j=0;j<8;j++){\n"
+                       "    float a2 = acc[j];\n"
+                       "    for (int o = 16; o > 0; o >>= 1) a2 += __shfl_down_sync(0xffffffff, a2, o);\n"
+                       "    int mm = mt0 + j;\n"
+                       "    if (lane == 0 && mm < M){ out[(size_t)mm*N+n] = beta*out[(size_t)mm*N+n] + a2; }\n"
+                       "  }\n"
+                       "}\n",
+                       "qmatmul_mxfp4_mt.cu", "qmatmul_mxfp4_mt", &gQgemvMxfp4MT) != 0) { rc = -2; goto done; }
+    {
+        int nmt = (M + 8 - 1) / 8;
+        long total = (long)N * nmt * 32;
+        int threads = 256, blocks = (int)((total + threads - 1) / threads); if (blocks < 1) blocks = 1;
+        void* args[8];
+        args[0] = &dA; args[1] = &dScale; args[2] = &dNib; args[3] = &dOut;
+        args[4] = &M; args[5] = &K; args[6] = &N; args[7] = &beta;
+        rc = (cuLaunchKernel(gQgemvMxfp4MT, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 done:
     pthread_mutex_unlock(&gLock);
@@ -2308,6 +3119,87 @@ int cu_qmatmul_iq2xxs(const void* dA, const void* dQ, const void* dGrid, void* d
         args[0] = &dA; args[1] = &dQ; args[2] = &dGrid; args[3] = &dOut;
         args[4] = &M; args[5] = &K; args[6] = &N; args[7] = &beta;
         rc = (cuLaunchKernel(gQgemvI2xxs, blocks, 1, 1, threads, 1, 1, 8192, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_qmatmul_iq2xxs_mt: weight-read-once M-tiled GEMM for M>1 — dGrid variant of the M-tile (first of
+// the codebook-GRID i-quants: IQ2_XXS is 2.06 bpw, the how-a-70B-fits format). The 256×8 grid loads to
+// shared once per block (as in the GEMV); then per warp per sub-block the scale db and the 8 SIGNED grid
+// values (grid[gi]·ksign) are decoded ONCE and reused across an MT=8 row tile. Arithmetic LIFTED VERBATIM
+// from qmatmul_iq2xxs → bit-identical per row. K%256==0.
+int cu_qmatmul_iq2xxs_mt(const void* dA, const void* dQ, const void* dGrid, void* dOut, int M, int K, int N, float beta) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (!gQgemvI2xxsMT && compile_kernel(
+                       "__device__ __forceinline__ float f16f(unsigned short h){\n"
+                       "  unsigned s = (h & 0x8000u) << 16;\n"
+                       "  float v = __uint_as_float((h & 0x7fffu) << 13) * __uint_as_float(0x77800000u);\n"
+                       "  return __uint_as_float(__float_as_uint(v) | s);\n"
+                       "}\n"
+                       "extern \"C\" __global__ void qmatmul_iq2xxs_mt(const float* a, const unsigned char* q, const float* grid, float* out, int M, int K, int N, float beta){\n"
+                       "  extern __shared__ float sgrid[];\n"
+                       "  for (int ii = threadIdx.x; ii < 2048; ii += blockDim.x) sgrid[ii] = grid[ii];\n"
+                       "  __syncthreads();\n"
+                       "  long widx = ((long)blockIdx.x*blockDim.x + threadIdx.x) >> 5;\n"
+                       "  int lane = threadIdx.x & 31;\n"
+                       "  int nmt = (M + 8 - 1) / 8;\n"
+                       "  if (widx >= (long)N*nmt) return;\n"
+                       "  int n = (int)(widx % N), mt0 = (int)(widx / N) * 8;\n"
+                       "  int sbs = K >> 8;\n"
+                       "  const unsigned char* qr = q + (size_t)n*sbs*66;\n"
+                       "  int p = lane >> 2, gg = lane & 3;\n"
+                       "  float acc[8];\n"
+                       "  #pragma unroll\n"
+                       "  for (int j=0;j<8;j++) acc[j]=0.0f;\n"
+                       "  for (int w = 0; w < sbs; w++){\n"
+                       "    const unsigned char* blk = qr + (size_t)w*66;\n"          // weight decode — ONCE per warp
+                       "    float d = f16f((unsigned short)(blk[0] | (blk[1]<<8)));\n"
+                       "    const unsigned char* pp = blk + 2 + p*8;\n"
+                       "    unsigned qs0 = pp[0]|(pp[1]<<8)|(pp[2]<<16)|(pp[3]<<24);\n"
+                       "    unsigned qs1 = pp[4]|(pp[5]<<8)|(pp[6]<<16)|(pp[7]<<24);\n"
+                       "    float db = d * (0.5f + (float)(qs1>>28)) * 0.25f;\n"
+                       "    unsigned gi = (qs0 >> (8*gg)) & 0xFFu;\n"
+                       "    unsigned ksi = (qs1 >> (7*gg)) & 0x7Fu;\n"
+                       "    unsigned signs = ksi | ((unsigned)__popc(ksi) & 1u) << 7;\n"
+                       "    const float* gv = sgrid + (size_t)gi*8;\n"
+                       "    float gsv[8];\n"                                          // signed grid values, reused across rows
+                       "    #pragma unroll\n"
+                       "    for (int k = 0; k < 8; k++){ gsv[k] = ((signs >> k) & 1u) ? -gv[k] : gv[k]; }\n"
+                       "    #pragma unroll\n"
+                       "    for (int j=0;j<8;j++){\n"
+                       "      int mm = mt0 + j; if (mm >= M) break;\n"
+                       "      const float* arb = a + (size_t)mm*K + (size_t)w*256 + p*32 + gg*8;\n"
+                       "      float4 al = *(const float4*)arb;\n"
+                       "      float4 ah = *(const float4*)(arb + 4);\n"
+                       "      float av[8] = { al.x, al.y, al.z, al.w, ah.x, ah.y, ah.z, ah.w };\n"
+                       "      float s = 0.0f;\n"
+                       "      #pragma unroll\n"
+                       "      for (int k = 0; k < 8; k++){ s += av[k] * gsv[k]; }\n"
+                       "      acc[j] += db * s;\n"
+                       "    }\n"
+                       "  }\n"
+                       "  #pragma unroll\n"
+                       "  for (int j=0;j<8;j++){\n"
+                       "    float a2 = acc[j];\n"
+                       "    for (int o = 16; o > 0; o >>= 1) a2 += __shfl_down_sync(0xffffffff, a2, o);\n"
+                       "    int mm = mt0 + j;\n"
+                       "    if (lane == 0 && mm < M){ out[(size_t)mm*N+n] = beta*out[(size_t)mm*N+n] + a2; }\n"
+                       "  }\n"
+                       "}\n",
+                       "qmatmul_iq2xxs_mt.cu", "qmatmul_iq2xxs_mt", &gQgemvI2xxsMT) != 0) { rc = -2; goto done; }
+    {
+        int nmt = (M + 8 - 1) / 8;
+        long total = (long)N * nmt * 32;
+        int threads = 256, blocks = (int)((total + threads - 1) / threads); if (blocks < 1) blocks = 1;
+        void* args[8];
+        args[0] = &dA; args[1] = &dQ; args[2] = &dGrid; args[3] = &dOut;
+        args[4] = &M; args[5] = &K; args[6] = &N; args[7] = &beta;
+        rc = (cuLaunchKernel(gQgemvI2xxsMT, blocks, 1, 1, threads, 1, 1, 8192, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 done:
     pthread_mutex_unlock(&gLock);
@@ -2388,6 +3280,90 @@ done:
     return rc;
 }
 
+// cu_qmatmul_iq3xxs_mt: weight-read-once M-tiled GEMM for M>1 — IQ3_XXS dGrid twin (3.06 bpw, the
+// IQ3_S sibling). The 256×4 grid loads to shared once per block; then per warp per sub-block the scale
+// db and the 8 SIGNED grid values (two grid lookups gv1/gv2 with inline ksigns) are decoded ONCE and
+// reused across an MT=8 row tile. Arithmetic LIFTED VERBATIM from qmatmul_iq3xxs → bit-identical. K%256==0.
+int cu_qmatmul_iq3xxs_mt(const void* dA, const void* dQ, const void* dGrid, void* dOut, int M, int K, int N, float beta) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (!gQgemvI3xxsMT && compile_kernel(
+                       "__device__ __forceinline__ float f16f(unsigned short h){\n"
+                       "  unsigned s = (h & 0x8000u) << 16;\n"
+                       "  float v = __uint_as_float((h & 0x7fffu) << 13) * __uint_as_float(0x77800000u);\n"
+                       "  return __uint_as_float(__float_as_uint(v) | s);\n"
+                       "}\n"
+                       "extern \"C\" __global__ void qmatmul_iq3xxs_mt(const float* a, const unsigned char* q, const float* grid, float* out, int M, int K, int N, float beta){\n"
+                       "  extern __shared__ float sgrid[];\n"
+                       "  for (int ii = threadIdx.x; ii < 1024; ii += blockDim.x) sgrid[ii] = grid[ii];\n"
+                       "  __syncthreads();\n"
+                       "  long widx = ((long)blockIdx.x*blockDim.x + threadIdx.x) >> 5;\n"
+                       "  int lane = threadIdx.x & 31;\n"
+                       "  int nmt = (M + 8 - 1) / 8;\n"
+                       "  if (widx >= (long)N*nmt) return;\n"
+                       "  int n = (int)(widx % N), mt0 = (int)(widx / N) * 8;\n"
+                       "  int sbs = K >> 8;\n"
+                       "  const unsigned char* qr = q + (size_t)n*sbs*98;\n"
+                       "  int g = lane >> 2, jj = lane & 3;\n"
+                       "  float acc[8];\n"
+                       "  #pragma unroll\n"
+                       "  for (int j=0;j<8;j++) acc[j]=0.0f;\n"
+                       "  for (int w = 0; w < sbs; w++){\n"
+                       "    const unsigned char* blk = qr + (size_t)w*98;\n"           // weight decode — ONCE per warp
+                       "    float d = f16f((unsigned short)(blk[0] | (blk[1]<<8)));\n"
+                       "    const unsigned char* sp = blk + 66 + g*4;\n"
+                       "    unsigned sg = sp[0]|(sp[1]<<8)|(sp[2]<<16)|(sp[3]<<24);\n"
+                       "    float db = d * (0.5f + (float)(sg>>28)) * 0.5f;\n"
+                       "    unsigned gb1 = blk[2 + g*8 + jj*2];\n"
+                       "    unsigned gb2 = blk[2 + g*8 + jj*2 + 1];\n"
+                       "    unsigned ksi = (sg >> (7*jj)) & 0x7Fu;\n"
+                       "    unsigned signs = ksi | ((unsigned)__popc(ksi) & 1u) << 7;\n"
+                       "    const float* gv1 = sgrid + (size_t)gb1*4;\n"
+                       "    const float* gv2 = sgrid + (size_t)gb2*4;\n"
+                       "    float gs1[4], gs2[4];\n"                                   // signed grid values, reused across rows
+                       "    #pragma unroll\n"
+                       "    for (int k = 0; k < 4; k++){\n"
+                       "      gs1[k] = ((signs >> k) & 1u) ? -gv1[k] : gv1[k];\n"
+                       "      gs2[k] = ((signs >> (k+4)) & 1u) ? -gv2[k] : gv2[k];\n"
+                       "    }\n"
+                       "    #pragma unroll\n"
+                       "    for (int j=0;j<8;j++){\n"
+                       "      int mm = mt0 + j; if (mm >= M) break;\n"
+                       "      const float* arb = a + (size_t)mm*K + (size_t)w*256 + g*32 + jj*8;\n"
+                       "      float4 al = *(const float4*)arb;\n"
+                       "      float4 ah = *(const float4*)(arb + 4);\n"
+                       "      float av[8] = { al.x, al.y, al.z, al.w, ah.x, ah.y, ah.z, ah.w };\n"
+                       "      float s = 0.0f;\n"
+                       "      #pragma unroll\n"
+                       "      for (int k = 0; k < 4; k++){ s += av[k]*gs1[k] + av[k+4]*gs2[k]; }\n"
+                       "      acc[j] += db * s;\n"
+                       "    }\n"
+                       "  }\n"
+                       "  #pragma unroll\n"
+                       "  for (int j=0;j<8;j++){\n"
+                       "    float a2 = acc[j];\n"
+                       "    for (int o = 16; o > 0; o >>= 1) a2 += __shfl_down_sync(0xffffffff, a2, o);\n"
+                       "    int mm = mt0 + j;\n"
+                       "    if (lane == 0 && mm < M){ out[(size_t)mm*N+n] = beta*out[(size_t)mm*N+n] + a2; }\n"
+                       "  }\n"
+                       "}\n",
+                       "qmatmul_iq3xxs_mt.cu", "qmatmul_iq3xxs_mt", &gQgemvI3xxsMT) != 0) { rc = -2; goto done; }
+    {
+        int nmt = (M + 8 - 1) / 8;
+        long total = (long)N * nmt * 32;
+        int threads = 256, blocks = (int)((total + threads - 1) / threads); if (blocks < 1) blocks = 1;
+        void* args[8];
+        args[0] = &dA; args[1] = &dQ; args[2] = &dGrid; args[3] = &dOut;
+        args[4] = &M; args[5] = &K; args[6] = &N; args[7] = &beta;
+        rc = (cuLaunchKernel(gQgemvI3xxsMT, blocks, 1, 1, threads, 1, 1, 4096, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
 // cu_qmatmul_iq3s: out[M,N] = a[M,K]·dequant(W), W = ggml IQ3_S (§T554), the 3.44-bit i-quant.
 // K/256 super-blocks of 110 bytes: f16 d + 64 qs + 8 qh + 32 signs + 4 scale bytes. A 512×4 grid
 // (device dGrid), 9-bit grid indices (qs byte + a qh high bit), DIRECT sign bytes (no ksigns), and
@@ -2453,6 +3429,96 @@ int cu_qmatmul_iq3s(const void* dA, const void* dQ, const void* dGrid, void* dOu
         args[0] = &dA; args[1] = &dQ; args[2] = &dGrid; args[3] = &dOut;
         args[4] = &M; args[5] = &K; args[6] = &N; args[7] = &beta;
         rc = (cuLaunchKernel(gQgemvI3s, blocks, 1, 1, threads, 1, 1, 8192, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_qmatmul_iq3s_mt: weight-read-once M-tiled GEMM for M>1 — IQ3_S dGrid twin (3.44 bpw, a common
+// good-quality 70B tier). The 512×4 grid loads to shared once per block; then per warp per sub-block the
+// scale db and the 8 SIGNED grid values (two 9-bit grid lookups gv1/gv2 with the direct sign byte) are
+// decoded ONCE and reused across an MT=8 row tile. Arithmetic LIFTED VERBATIM from qmatmul_iq3s → bit-
+// identical per row. K%256==0.
+// NO shared-staged deep-K variant (unlike Q3-Q6_K/IQ4_XS): measured NEUTRAL on RTX 3060 —
+// 5632×2048 M64 1407865 → 1390371 ns (~1%, noise). The dGrid decode dominates the loop and the
+// grid already occupies 8 KB shared; adding the 8 KB activation tile (16 KB dynamic/block) buys
+// barriers without a measurable win. Applies predictively to the dGrid siblings (IQ2_XXS,
+// IQ3_XXS): do not build without new evidence (bench: BenchmarkIQ3SM64_5632x2048).
+int cu_qmatmul_iq3s_mt(const void* dA, const void* dQ, const void* dGrid, void* dOut, int M, int K, int N, float beta) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (!gQgemvI3sMT && compile_kernel(
+                       "__device__ __forceinline__ float f16f(unsigned short h){\n"
+                       "  unsigned s = (h & 0x8000u) << 16;\n"
+                       "  float v = __uint_as_float((h & 0x7fffu) << 13) * __uint_as_float(0x77800000u);\n"
+                       "  return __uint_as_float(__float_as_uint(v) | s);\n"
+                       "}\n"
+                       "extern \"C\" __global__ void qmatmul_iq3s_mt(const float* a, const unsigned char* q, const float* grid, float* out, int M, int K, int N, float beta){\n"
+                       "  extern __shared__ float sgrid[];\n"
+                       "  for (int ii = threadIdx.x; ii < 2048; ii += blockDim.x) sgrid[ii] = grid[ii];\n"
+                       "  __syncthreads();\n"
+                       "  long widx = ((long)blockIdx.x*blockDim.x + threadIdx.x) >> 5;\n"
+                       "  int lane = threadIdx.x & 31;\n"
+                       "  int nmt = (M + 8 - 1) / 8;\n"
+                       "  if (widx >= (long)N*nmt) return;\n"
+                       "  int n = (int)(widx % N), mt0 = (int)(widx / N) * 8;\n"
+                       "  int sbs = K >> 8;\n"
+                       "  const unsigned char* qr = q + (size_t)n*sbs*110;\n"
+                       "  int g = lane >> 2, jj = lane & 3;\n"
+                       "  float acc[8];\n"
+                       "  #pragma unroll\n"
+                       "  for (int j=0;j<8;j++) acc[j]=0.0f;\n"
+                       "  for (int w = 0; w < sbs; w++){\n"
+                       "    const unsigned char* blk = qr + (size_t)w*110;\n"          // weight decode — ONCE per warp
+                       "    float d = f16f((unsigned short)(blk[0] | (blk[1]<<8)));\n"
+                       "    unsigned sc = (blk[106 + (g>>1)] >> (4*(g&1))) & 0x0Fu;\n"
+                       "    float db = d * (1.0f + 2.0f*(float)sc);\n"
+                       "    unsigned qh = blk[66 + g];\n"
+                       "    unsigned i1 = g*8 + jj*2;\n"
+                       "    unsigned u1 = blk[2+i1]     | ((qh >> (jj*2))   & 1u) << 8;\n"
+                       "    unsigned u2 = blk[2+i1+1]   | ((qh >> (jj*2+1)) & 1u) << 8;\n"
+                       "    unsigned sg = blk[74 + g*4 + jj];\n"
+                       "    const float* gv1 = sgrid + (size_t)u1*4;\n"
+                       "    const float* gv2 = sgrid + (size_t)u2*4;\n"
+                       "    float gs1[4], gs2[4];\n"                                   // signed grid values, reused across rows
+                       "    #pragma unroll\n"
+                       "    for (int k = 0; k < 4; k++){\n"
+                       "      gs1[k] = ((sg >> k) & 1u) ? -gv1[k] : gv1[k];\n"
+                       "      gs2[k] = ((sg >> (k+4)) & 1u) ? -gv2[k] : gv2[k];\n"
+                       "    }\n"
+                       "    #pragma unroll\n"
+                       "    for (int j=0;j<8;j++){\n"
+                       "      int mm = mt0 + j; if (mm >= M) break;\n"
+                       "      const float* arb = a + (size_t)mm*K + (size_t)w*256 + g*32 + jj*8;\n"
+                       "      float4 al = *(const float4*)arb;\n"
+                       "      float4 ah = *(const float4*)(arb + 4);\n"
+                       "      float av[8] = { al.x, al.y, al.z, al.w, ah.x, ah.y, ah.z, ah.w };\n"
+                       "      float s = 0.0f;\n"
+                       "      #pragma unroll\n"
+                       "      for (int k = 0; k < 4; k++){ s += av[k]*gs1[k] + av[k+4]*gs2[k]; }\n"
+                       "      acc[j] += db * s;\n"
+                       "    }\n"
+                       "  }\n"
+                       "  #pragma unroll\n"
+                       "  for (int j=0;j<8;j++){\n"
+                       "    float a2 = acc[j];\n"
+                       "    for (int o = 16; o > 0; o >>= 1) a2 += __shfl_down_sync(0xffffffff, a2, o);\n"
+                       "    int mm = mt0 + j;\n"
+                       "    if (lane == 0 && mm < M){ out[(size_t)mm*N+n] = beta*out[(size_t)mm*N+n] + a2; }\n"
+                       "  }\n"
+                       "}\n",
+                       "qmatmul_iq3s_mt.cu", "qmatmul_iq3s_mt", &gQgemvI3sMT) != 0) { rc = -2; goto done; }
+    {
+        int nmt = (M + 8 - 1) / 8;
+        long total = (long)N * nmt * 32;
+        int threads = 256, blocks = (int)((total + threads - 1) / threads); if (blocks < 1) blocks = 1;
+        void* args[8];
+        args[0] = &dA; args[1] = &dQ; args[2] = &dGrid; args[3] = &dOut;
+        args[4] = &M; args[5] = &K; args[6] = &N; args[7] = &beta;
+        rc = (cuLaunchKernel(gQgemvI3sMT, blocks, 1, 1, threads, 1, 1, 8192, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 done:
     pthread_mutex_unlock(&gLock);
@@ -2731,6 +3797,181 @@ int cu_qmatmul_q6k(const void* dA, const void* dQ, void* dOut, int M, int K, int
         args[0] = &dA; args[1] = &dQ; args[2] = &dOut;
         args[3] = &M; args[4] = &K; args[5] = &N; args[6] = &beta;
         rc = (cuLaunchKernel(gQgemv6k, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_qmatmul_q6k_mt: weight-read-once M-tiled GEMM for M>1 (prefill/batch) — the Q6_K twin of
+// cu_qmatmul_q4k_mt. The per-(m,n) GEMV above re-fetches column n's Q6_K block M times; here one
+// warp owns column n and an MT=8 row tile, so the per-sub-block decode (ql/qh loads, int8 scales,
+// f16 d, the q6=nibble|high<<4 unpack for both t) happens ONCE and is reused across MT rows.
+// Weight BW drops M/MT×. Arithmetic LIFTED VERBATIM from qmatmul_q6k → bit-identical per row.
+// Shape routing (A/B-measured on Q4_K, confirmed here): deep columns (K > N — ffn_down, the
+// Q6_K tensor in Q4_K_M models) take the shared-staged variant qmatmul_q6k_mts, which shares
+// the activation row tile across the block's 8 column warps; wide-N shapes keep the unstaged
+// kernel (the per-sub-block barrier costs latency hiding in the weight-BW-bound regime).
+int cu_qmatmul_q6k_mt(const void* dA, const void* dQ, void* dOut, int M, int K, int N, float beta) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (K > N) {
+        if (!gQgemv6kMTS && compile_kernel(
+                       "__device__ __forceinline__ float f16f(unsigned short h){\n"
+                       "  unsigned s = (h & 0x8000u) << 16;\n"
+                       "  float v = __uint_as_float((h & 0x7fffu) << 13) * __uint_as_float(0x77800000u);\n"
+                       "  return __uint_as_float(__float_as_uint(v) | s);\n"
+                       "}\n"
+                       "extern \"C\" __global__ void qmatmul_q6k_mts(const float* a, const unsigned char* q, float* out, int M, int K, int N, float beta){\n"
+                       "  __shared__ float at[8*256];\n"                       // row tile: 8 rows × one 256-float sub-block (8 KB)
+                       "  int warp = threadIdx.x >> 5, lane = threadIdx.x & 31;\n"
+                       "  int ncb = (N + 7) >> 3;\n"
+                       "  int mt0 = (blockIdx.x / ncb) * 8;\n"
+                       "  int n = (blockIdx.x % ncb) * 8 + warp;\n"
+                       "  int sbs = K >> 8;\n"
+                       "  const unsigned char* qr = q + (size_t)(n < N ? n : 0)*sbs*210;\n"
+                       "  float acc[8];\n"
+                       "  #pragma unroll\n"
+                       "  for (int j=0;j<8;j++) acc[j]=0.0f;\n"
+                       "  int g = lane >> 4, i = (lane & 15) * 2;\n"
+                       "  int rows = M - mt0; if (rows > 8) rows = 8;\n"
+                       "  for (int w = 0; w < sbs; w++){\n"
+                       "    __syncthreads();\n"                                // previous tile fully consumed before overwrite
+                       "    for (int t = threadIdx.x; t < (rows<<8); t += 256){\n"
+                       "      at[t] = a[(size_t)(mt0 + (t>>8))*K + w*256 + (t&255)];\n"
+                       "    }\n"
+                       "    __syncthreads();\n"
+                       "    if (n < N){\n"
+                       "    const unsigned char* blk = qr + (size_t)w*210;\n"          // weight decode — ONCE per warp
+                       "    const unsigned char* ql = blk + g*64;\n"
+                       "    const unsigned char* qh = blk + 128 + g*32;\n"
+                       "    const signed char* sc = (const signed char*)(blk + 192) + g*8;\n"
+                       "    float d = f16f(*(const unsigned short*)(blk + 208));\n"
+                       "    int is = i >> 4;\n"
+                       "    float s0 = d*(float)sc[is],   s2 = d*(float)sc[is+2];\n"
+                       "    float s4 = d*(float)sc[is+4], s6 = d*(float)sc[is+6];\n"
+                       "    unsigned int b1 = *(const unsigned short*)(ql + i);\n"
+                       "    unsigned int b2 = *(const unsigned short*)(ql + i + 32);\n"
+                       "    unsigned int hh = *(const unsigned short*)(qh + i);\n"
+                       "    float qq1[2], qq2[2], qq3[2], qq4[2];\n"                    // decoded q6 values, reused across rows
+                       "    #pragma unroll\n"
+                       "    for (int t = 0; t < 2; t++){\n"
+                       "      unsigned int lo = (b1 >> (8*t)) & 0xffu, hi = (b2 >> (8*t)) & 0xffu, h = (hh >> (8*t)) & 0xffu;\n"
+                       "      qq1[t] = (float)((int)((lo & 15u) | ((h & 3u) << 4)) - 32);\n"
+                       "      qq2[t] = (float)((int)((hi & 15u) | (((h >> 2) & 3u) << 4)) - 32);\n"
+                       "      qq3[t] = (float)((int)((lo >> 4) | (((h >> 4) & 3u) << 4)) - 32);\n"
+                       "      qq4[t] = (float)((int)((hi >> 4) | (((h >> 6) & 3u) << 4)) - 32);\n"
+                       "    }\n"
+                       "    int base = g*128;\n"                               // offset inside the staged sub-block
+                       "    #pragma unroll\n"
+                       "    for (int j=0;j<8;j++){\n"
+                       "      int m = mt0 + j; if (m >= M) break;\n"
+                       "      const float* ay = at + (j<<8) + base;\n"
+                       "      float2 a1v = *(const float2*)(ay + i),      a2v = *(const float2*)(ay + i + 32);\n"
+                       "      float2 a3v = *(const float2*)(ay + i + 64), a4v = *(const float2*)(ay + i + 96);\n"
+                       "      #pragma unroll\n"
+                       "      for (int t = 0; t < 2; t++){\n"
+                       "        float w1 = t ? a1v.y : a1v.x, w2 = t ? a2v.y : a2v.x;\n"
+                       "        float w3 = t ? a3v.y : a3v.x, w4 = t ? a4v.y : a4v.x;\n"
+                       "        acc[j] += s0*qq1[t]*w1 + s2*qq2[t]*w2 + s4*qq3[t]*w3 + s6*qq4[t]*w4;\n"
+                       "      }\n"
+                       "    }\n"
+                       "    }\n"
+                       "  }\n"
+                       "  if (n >= N) return;\n"
+                       "  #pragma unroll\n"
+                       "  for (int j=0;j<8;j++){\n"
+                       "    float a2 = acc[j];\n"
+                       "    for (int o = 16; o > 0; o >>= 1) a2 += __shfl_down_sync(0xffffffff, a2, o);\n"
+                       "    int m = mt0 + j;\n"
+                       "    if (lane == 0 && m < M){ out[(size_t)m*N+n] = beta*out[(size_t)m*N+n] + a2; }\n"
+                       "  }\n"
+                       "}\n",
+                       "qmatmul_q6k_mts.cu", "qmatmul_q6k_mts", &gQgemv6kMTS) != 0) { rc = -2; goto done; }
+        {
+            int nmt = (M + 8 - 1) / 8;
+            int ncb = (N + 7) / 8;
+            int threads = 256, blocks = ncb * nmt; if (blocks < 1) blocks = 1;
+            void* args[7];
+            args[0] = &dA; args[1] = &dQ; args[2] = &dOut;
+            args[3] = &M; args[4] = &K; args[5] = &N; args[6] = &beta;
+            rc = (cuLaunchKernel(gQgemv6kMTS, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+        }
+        goto done;
+    }
+    if (!gQgemv6kMT && compile_kernel(
+                       "__device__ __forceinline__ float f16f(unsigned short h){\n"
+                       "  unsigned s = (h & 0x8000u) << 16;\n"
+                       "  float v = __uint_as_float((h & 0x7fffu) << 13) * __uint_as_float(0x77800000u);\n"
+                       "  return __uint_as_float(__float_as_uint(v) | s);\n"
+                       "}\n"
+                       "extern \"C\" __global__ void qmatmul_q6k_mt(const float* a, const unsigned char* q, float* out, int M, int K, int N, float beta){\n"
+                       "  long widx = ((long)blockIdx.x*blockDim.x + threadIdx.x) >> 5;\n"
+                       "  int lane = threadIdx.x & 31;\n"
+                       "  int nmt = (M + 8 - 1) / 8;\n"
+                       "  if (widx >= (long)N*nmt) return;\n"
+                       "  int n = (int)(widx % N), mt0 = (int)(widx / N) * 8;\n"
+                       "  int sbs = K >> 8;\n"
+                       "  const unsigned char* qr = q + (size_t)n*sbs*210;\n"
+                       "  float acc[8];\n"
+                       "  #pragma unroll\n"
+                       "  for (int j=0;j<8;j++) acc[j]=0.0f;\n"
+                       "  int g = lane >> 4, i = (lane & 15) * 2;\n"
+                       "  for (int w = 0; w < sbs; w++){\n"
+                       "    const unsigned char* blk = qr + (size_t)w*210;\n"          // weight decode — ONCE per warp
+                       "    const unsigned char* ql = blk + g*64;\n"
+                       "    const unsigned char* qh = blk + 128 + g*32;\n"
+                       "    const signed char* sc = (const signed char*)(blk + 192) + g*8;\n"
+                       "    float d = f16f(*(const unsigned short*)(blk + 208));\n"
+                       "    int is = i >> 4;\n"
+                       "    float s0 = d*(float)sc[is],   s2 = d*(float)sc[is+2];\n"
+                       "    float s4 = d*(float)sc[is+4], s6 = d*(float)sc[is+6];\n"
+                       "    unsigned int b1 = *(const unsigned short*)(ql + i);\n"
+                       "    unsigned int b2 = *(const unsigned short*)(ql + i + 32);\n"
+                       "    unsigned int hh = *(const unsigned short*)(qh + i);\n"
+                       "    float qq1[2], qq2[2], qq3[2], qq4[2];\n"                    // decoded q6 values, reused across rows
+                       "    #pragma unroll\n"
+                       "    for (int t = 0; t < 2; t++){\n"
+                       "      unsigned int lo = (b1 >> (8*t)) & 0xffu, hi = (b2 >> (8*t)) & 0xffu, h = (hh >> (8*t)) & 0xffu;\n"
+                       "      qq1[t] = (float)((int)((lo & 15u) | ((h & 3u) << 4)) - 32);\n"
+                       "      qq2[t] = (float)((int)((hi & 15u) | (((h >> 2) & 3u) << 4)) - 32);\n"
+                       "      qq3[t] = (float)((int)((lo >> 4) | (((h >> 4) & 3u) << 4)) - 32);\n"
+                       "      qq4[t] = (float)((int)((hi >> 4) | (((h >> 6) & 3u) << 4)) - 32);\n"
+                       "    }\n"
+                       "    int base = w*256 + g*128;\n"
+                       "    #pragma unroll\n"
+                       "    for (int j=0;j<8;j++){\n"
+                       "      int m = mt0 + j; if (m >= M) break;\n"
+                       "      const float* ay = a + (size_t)m*K + base;\n"
+                       "      float2 a1v = *(const float2*)(ay + i),      a2v = *(const float2*)(ay + i + 32);\n"
+                       "      float2 a3v = *(const float2*)(ay + i + 64), a4v = *(const float2*)(ay + i + 96);\n"
+                       "      #pragma unroll\n"
+                       "      for (int t = 0; t < 2; t++){\n"
+                       "        float w1 = t ? a1v.y : a1v.x, w2 = t ? a2v.y : a2v.x;\n"
+                       "        float w3 = t ? a3v.y : a3v.x, w4 = t ? a4v.y : a4v.x;\n"
+                       "        acc[j] += s0*qq1[t]*w1 + s2*qq2[t]*w2 + s4*qq3[t]*w3 + s6*qq4[t]*w4;\n"
+                       "      }\n"
+                       "    }\n"
+                       "  }\n"
+                       "  #pragma unroll\n"
+                       "  for (int j=0;j<8;j++){\n"
+                       "    float a2 = acc[j];\n"
+                       "    for (int o = 16; o > 0; o >>= 1) a2 += __shfl_down_sync(0xffffffff, a2, o);\n"
+                       "    int m = mt0 + j;\n"
+                       "    if (lane == 0 && m < M){ out[(size_t)m*N+n] = beta*out[(size_t)m*N+n] + a2; }\n"
+                       "  }\n"
+                       "}\n",
+                       "qmatmul_q6k_mt.cu", "qmatmul_q6k_mt", &gQgemv6kMT) != 0) { rc = -2; goto done; }
+    {
+        int nmt = (M + 8 - 1) / 8;
+        long total = (long)N * nmt * 32;
+        int threads = 256, blocks = (int)((total + threads - 1) / threads); if (blocks < 1) blocks = 1;
+        void* args[7];
+        args[0] = &dA; args[1] = &dQ; args[2] = &dOut;
+        args[3] = &M; args[4] = &K; args[5] = &N; args[6] = &beta;
+        rc = (cuLaunchKernel(gQgemv6kMT, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 done:
     pthread_mutex_unlock(&gLock);
