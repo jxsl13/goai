@@ -4,6 +4,24 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### backend/cpu — perf: latency-aware worker pool + GEMV column-split — 1.68× decode (T793, 2026-07-17)
+
+A CPU profile showed single-token decode dominated by pool synchronization (54% `pthread_cond_signal`
++ 17% wait, compute ~8%): the only decode-path pool dispatcher was the MHA kernel, whose ~2µs chunks
+paid ~100µs cold-wake costs (the T617 threshold was calibrated on a warm pool), and the m=1 GEMVs —
+the actual compute bulk — didn't parallelize at all (the row-band split degenerates at one row). Two
+changes: (1) `gemvF64Cols` parallelizes single-row f64 matmuls over output columns with the identical
+ascending-k accumulation (bit-exact vs ref); (2) the worker pool gets per-worker mailboxes, steal
+sweeps with caller-help (nested-call deadlock-free by construction), and a **dense/sparse regime
+switch** — bounded spin-wait latency machinery engages only for decode-shaped streams (total work
+< 2^18 and <40µs serial glue since the last barrier); everything else behaves exactly like the old
+pool. Measured: `BenchmarkLlamaGenerate500RowBuf` 627 → ~370-400ms (**1.6-1.7×**), pthread share
+54%→8%; no-regression evidence: prompt prefill ±1%, MoE sparse decode −20% (faster), Adam/SGD train
+steps −12% (faster), GEMM/norm/softmax grind set within ±1.5% noise. Disclosed residual: one
+boundary-shape elementwise bench (exactly 2^18 units) +17%. (A pre-existing, unrelated finding while
+verifying: `TestRoPEKernelsMatchRefWithinUlps` fails under `-race` on arm64 — race-mode FP-fusion
+differences push rope-bwd/xpos 3.3e-14 past its 1.3e-14 gate; tracked, not caused by this change.)
+
 ### nlp — perf: batched prefill for the recurrent families (T792, 2026-07-17)
 
 Mamba, Mamba-2, Jamba and RWKV now prefill their prompts in one batched pass: the projections, conv

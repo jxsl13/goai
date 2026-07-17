@@ -54,6 +54,19 @@ func matmulKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([
 	switch a.Dtype() {
 	case tensor.F64:
 		A, B, C := ac.Storage().F64(), bc.Storage().F64(), out.Storage().F64()
+		if m == 1 {
+			// Single-row (GEMV, the decode shape): the row-band split above
+			// degenerates to ONE chunk — the whole product ran serial on the
+			// caller while the §V22 decode profile showed it as the dominant
+			// cost. Split over COLUMN ranges of C instead: each worker owns a
+			// disjoint j-range, and every C[j] still accumulates its k products
+			// in one ascending-p pass, so the result stays bit-identical to the
+			// band kernel and ref (§V3, §V11 tol 0).
+			parallelWork(n, k, func(loCol, hiCol int) {
+				gemvF64Cols(A, B, C, k, n, loCol, hiCol)
+			})
+			return []*tensor.Tensor{out}, nil
+		}
 		parallelWork(m, k*n, func(loRow, hiRow int) {
 			gemmF64Band(A, B, C, loRow, hiRow, k, n)
 		})
@@ -65,6 +78,24 @@ func matmulKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([
 		return nil, fmt.Errorf("cpu: unsupported dtype %v", a.Dtype())
 	}
 	return []*tensor.Tensor{out}, nil
+}
+
+// gemvF64Cols computes C[0, lo:hi] of the single-row product C[1,n] =
+// A[1,k]·B[k,n]: for each owned column j the k contributions accumulate in
+// ascending-p order — exactly the order gemmF64Band's remainder-row loop uses —
+// so a column-split GEMV is bit-identical to the serial band (§V3). The p-outer
+// / j-inner loop keeps B access contiguous (an axpy over the owned segment of
+// each B row); C starts zeroed by the tensor allocation, matching the band
+// kernel's += contract.
+func gemvF64Cols(A, B, C []float64, k, n, lo, hi int) {
+	c := C[lo:hi:hi]
+	for p := range k {
+		ap := A[p]
+		bp := B[p*n+lo : p*n+hi : p*n+hi]
+		for j, bv := range bp {
+			c[j] += ap * bv
+		}
+	}
 }
 
 func init() {
