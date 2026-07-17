@@ -241,6 +241,9 @@ func (l *rawF16Layer) seedForward(dx *cuda.DeviceF32, cache *cuda.KVCache) (*cud
 // mirror Tw47: speed ≥2× over token-by-token prompt processing, and the seeded K rows
 // match the decode path's own within the projection-precision budget.
 func TestCUDAUnifiedServeQwen(t *testing.T) {
+	if testing.Short() {
+		t.Skip("model-loading integration test; -short = kernel-level gate")
+	}
 	skipNoGPU(t)
 	for _, tc := range []struct{ path, label string }{
 		{"../../models/qwen2.5-0.5b-instruct-q8_0.gguf", "Qwen2.5-0.5B"}, // dim 896: Q4_K-ineligible → Q8 decode

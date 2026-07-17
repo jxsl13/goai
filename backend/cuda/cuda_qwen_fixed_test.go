@@ -203,6 +203,9 @@ func (q *qwenFixed) free() {
 // as the simple alloc-path Qwen — proving the whole optimized stack is correct for
 // a 2nd architecture, and measuring Qwen at full speed.
 func TestCUDAQwenFixedMatchesAlloc(t *testing.T) {
+	if testing.Short() {
+		t.Skip("model-loading integration test; -short = kernel-level gate")
+	}
 	for _, path := range []string{
 		qwenPath,
 		"../../models/qwen2.5-1.5b-instruct-q8_0.gguf",

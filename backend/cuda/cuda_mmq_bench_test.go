@@ -17,6 +17,9 @@ import (
 // (llama.cpp b10012 Vulkan on the RTX 3060: pp512 9552 t/s, tg128 245.6 t/s). Informational
 // (t.Logf), not a hard gate — it establishes standing.
 func TestCUDATinyLlamaMMQThroughput(t *testing.T) {
+	if testing.Short() {
+		t.Skip("model-loading integration test; -short = kernel-level gate")
+	}
 	skipNoGPU(t)
 	const path = "../../models/tinyllama-1.1b-chat-q8_0.gguf"
 	if _, err := os.Stat(path); err != nil {

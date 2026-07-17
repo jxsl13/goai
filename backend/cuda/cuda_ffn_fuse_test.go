@@ -55,6 +55,9 @@ func TestCUDAFFNFuseSpeedAB(t *testing.T) {
 // difference is where the multiply happens — same values, same order, no
 // tolerance needed. 24 greedy TinyLlama-Q4_K tokens, fused vs GOAI_CUDA_FFN_FUSE=0.
 func TestCUDAFFNFuseTokenParity(t *testing.T) {
+	if testing.Short() {
+		t.Skip("model-loading integration test; -short = kernel-level gate")
+	}
 	skipNoGPU(t)
 	const path = "../../models/tinyllama-1.1b-chat-q8_0.gguf"
 	if _, err := os.Stat(path); err != nil {

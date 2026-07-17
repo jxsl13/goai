@@ -20,6 +20,9 @@ import (
 // the fused-attention prefill lever: build flash-prefill only where the curve says it
 // pays. Reports attention ms + share + whole-prefill tok/s at each seq.
 func TestCUDAPrefillAttnScaling(t *testing.T) {
+	if testing.Short() {
+		t.Skip("model-loading integration test; -short = kernel-level gate")
+	}
 	skipNoGPU(t)
 	if _, err := os.Stat(tinyLlamaPath); err != nil {
 		t.Skipf("model not present (%s)", tinyLlamaPath)

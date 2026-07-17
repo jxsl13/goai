@@ -467,6 +467,9 @@ func runRawDecode(t *testing.T, rf *gguf.RawFile, arch string, ids []int, gen, m
 // this test proves the engine runs a real 7B on 12 GB VRAM at both precisions, that Q4
 // stays coherent, and measures the Q8→Q4 speedup at scale.
 func TestCUDAMistral7BQ4QualityAndSpeed(t *testing.T) {
+	if testing.Short() {
+		t.Skip("model-loading integration test; -short = kernel-level gate")
+	}
 	skipNoGPU(t)
 	if _, err := os.Stat(mistral7BPath); err != nil {
 		t.Skipf("model not present (%s)", mistral7BPath)
@@ -497,6 +500,9 @@ func TestCUDAMistral7BQ4QualityAndSpeed(t *testing.T) {
 // Q4 kernel's K%256 constraint (and is the least weight-bound model, where Q4 matters
 // least).
 func TestCUDAQwenQ4QualityAndSpeed(t *testing.T) {
+	if testing.Short() {
+		t.Skip("model-loading integration test; -short = kernel-level gate")
+	}
 	skipNoGPU(t)
 	for _, tc := range []struct{ path, label string }{
 		{"../../models/qwen2.5-1.5b-instruct-q8_0.gguf", "Qwen2.5-1.5B"},

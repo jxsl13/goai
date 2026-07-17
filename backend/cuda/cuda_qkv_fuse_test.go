@@ -16,6 +16,9 @@ import (
 // row is computed from identical weight bytes; only the launch is merged. 24 greedy
 // TinyLlama-Q4_K tokens, fused vs GOAI_CUDA_QKV_FUSE unset.
 func TestCUDAQKVFuseTokenParity(t *testing.T) {
+	if testing.Short() {
+		t.Skip("model-loading integration test; -short = kernel-level gate")
+	}
 	skipNoGPU(t)
 	const path = "../../models/tinyllama-1.1b-chat-q8_0.gguf"
 	if _, err := os.Stat(path); err != nil {
@@ -90,6 +93,9 @@ func TestCUDAQKVFuseSpeedAB(t *testing.T) {
 // unchanged by the row-stack). GUARDS the format downgrade: before the format-aware dispatch,
 // fusing a Q8 run silently requantized QKV to Q4_K, which would diverge here.
 func TestCUDAQKVFuseTokenParityQ8(t *testing.T) {
+	if testing.Short() {
+		t.Skip("model-loading integration test; -short = kernel-level gate")
+	}
 	skipNoGPU(t)
 	const path = "../../models/tinyllama-1.1b-chat-q8_0.gguf"
 	if _, err := os.Stat(path); err != nil {
@@ -128,6 +134,9 @@ func TestCUDAQKVFuseTokenParityQ8(t *testing.T) {
 // are Views into the fused dqkv buffer, so the per-section AddBias hits the right slice. Guards the
 // removal of the old `!hasBias` fusion exclusion.
 func TestCUDAQKVFuseTokenParityQwen2(t *testing.T) {
+	if testing.Short() {
+		t.Skip("model-loading integration test; -short = kernel-level gate")
+	}
 	skipNoGPU(t)
 	const path = "../../models/qwen2.5-1.5b-instruct-q8_0.gguf"
 	if _, err := os.Stat(path); err != nil {
@@ -240,6 +249,9 @@ func TestCUDAQKVFuseSpeedABQ8(t *testing.T) {
 // GEMV, then SwiGLU over the halves) must be token-for-token identical to the separate
 // gate/up GEMVs — bit-exact by construction (same per-row weight bytes).
 func TestCUDAGateUpFuseTokenParity(t *testing.T) {
+	if testing.Short() {
+		t.Skip("model-loading integration test; -short = kernel-level gate")
+	}
 	skipNoGPU(t)
 	const path = "../../models/tinyllama-1.1b-chat-q8_0.gguf"
 	if _, err := os.Stat(path); err != nil {
@@ -275,6 +287,9 @@ func TestCUDAGateUpFuseTokenParity(t *testing.T) {
 // (Tw57 slice 1): with GOAI_CUDA_FUSE_FMT=q8 the fused ffn_gate|ffn_up is a Q8 GEMV + SwiGLU over
 // the halves, which must be token-for-token identical to the separate Q8 gate/up GEMVs.
 func TestCUDAGateUpFuseTokenParityQ8(t *testing.T) {
+	if testing.Short() {
+		t.Skip("model-loading integration test; -short = kernel-level gate")
+	}
 	skipNoGPU(t)
 	const path = "../../models/tinyllama-1.1b-chat-q8_0.gguf"
 	if _, err := os.Stat(path); err != nil {

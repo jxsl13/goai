@@ -35,6 +35,9 @@ func argmaxF32(v []float32) int {
 // Same box, same window, same weights → the ratio is the honest cost of API uniformity vs the
 // hand-tuned graph, and tells us whether wiring graph capture into the unified path is worth it.
 func TestCUDAUnifiedVsGraphDecodeThroughput(t *testing.T) {
+	if testing.Short() {
+		t.Skip("model-loading integration test; -short = kernel-level gate")
+	}
 	skipNoGPU(t)
 	m := loadTinyLlama(t)
 	const prefill, decode = 32, 64

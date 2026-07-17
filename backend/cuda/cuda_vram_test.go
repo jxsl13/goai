@@ -15,6 +15,9 @@ import (
 // TinyLlama-1.1B resident model and reads free VRAM before/after via cudaMemGetInfo,
 // then extrapolates the all-GPU model-size ceiling on this 12 GB card.
 func TestCUDAVRAMBudgetProbe(t *testing.T) {
+	if testing.Short() {
+		t.Skip("model-loading integration test; -short = kernel-level gate")
+	}
 	skipNoGPU(t)
 	f, err := gguf.ReadFile(tinyLlamaPath)
 	if err != nil {

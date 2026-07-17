@@ -26,6 +26,9 @@ const tinyLlamaPath = "../../models/tinyllama-1.1b-chat-q8_0.gguf"
 // backend (the nlp reference: RMSNorm + projections + RoPE + OpMHA + Wo +
 // residual, then SwiGLU FFN + residual). Skips if the model file isn't present.
 func TestCUDATinyLlamaBlockMatchesCPU(t *testing.T) {
+	if testing.Short() {
+		t.Skip("model-loading integration test; -short = kernel-level gate")
+	}
 	skipNoGPU(t)
 	if _, err := os.Stat(tinyLlamaPath); err != nil {
 		t.Skipf("model not present (%s) — fetch per models/README.md", tinyLlamaPath)

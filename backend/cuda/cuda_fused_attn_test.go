@@ -128,6 +128,9 @@ func TestCUDAFlashGQAExtremeMagnitudes(t *testing.T) {
 // per kv-head for all group q-heads, split-K online softmax + merge) wins:
 // 212 tok/s = +26% over the chain here, +3.5% at ctx160.
 func TestCUDAFusedAttnLongCtx(t *testing.T) {
+	if testing.Short() {
+		t.Skip("model-loading integration test; -short = kernel-level gate")
+	}
 	skipNoGPU(t)
 	const path = "../../models/tinyllama-1.1b-chat-q8_0.gguf"
 	if _, err := os.Stat(path); err != nil {

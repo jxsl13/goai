@@ -46,6 +46,9 @@ type qwenLayer struct {
 // DeviceF32.AddBias. Demonstrates additional model families + the AddBias
 // primitive, and that the engine generalizes across Qwen scales (0.5B → 3B).
 func TestCUDAQwenGenerate(t *testing.T) {
+	if testing.Short() {
+		t.Skip("model-loading integration test; -short = kernel-level gate")
+	}
 	for _, path := range []string{
 		qwenPath,
 		"../../models/qwen2.5-1.5b-instruct-q8_0.gguf",

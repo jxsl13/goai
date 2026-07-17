@@ -20,6 +20,9 @@ import (
 // arc (lever b) starts from measured shares, not the assumption that attention dominates
 // (§V22: the bottleneck is backend-specific; §T402: never trust standalone op timing).
 func TestCUDAPrefillProfile(t *testing.T) {
+	if testing.Short() {
+		t.Skip("model-loading integration test; -short = kernel-level gate")
+	}
 	skipNoGPU(t)
 	if _, err := os.Stat(tinyLlamaPath); err != nil {
 		t.Skipf("model not present (%s)", tinyLlamaPath)

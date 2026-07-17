@@ -67,6 +67,9 @@ func (l *resLayerF16) seedForward(dx *cuda.DeviceF32, cache *cuda.KVCache) (*cud
 // match the pure-decode-path continuation closely (precision mix: f16 prefill K/V vs
 // the decode path's Q4_K-projected K/V — small divergence allowed, like Q4-vs-Q8).
 func TestCUDAUnifiedServePrefillHandoff(t *testing.T) {
+	if testing.Short() {
+		t.Skip("model-loading integration test; -short = kernel-level gate")
+	}
 	skipNoGPU(t)
 	if _, err := os.Stat(tinyLlamaPath); err != nil {
 		t.Skipf("model not present (%s)", tinyLlamaPath)
