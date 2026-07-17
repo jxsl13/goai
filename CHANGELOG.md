@@ -4,6 +4,31 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — quantized GGUF decode for GPT-NeoX and Falcon (T826, 2026-07-17)
+
+`QuantGPTNeoX` and `QuantFalcon` (+ `Quant*FromGGUF`) bring quantized decode to ten
+families — the parallel-residual pair, reusing T825's LayerNorm quant-twin helpers.
+GPT-NeoX: dual-norm parallel residual, biased projections, genuine partial rotary
+(RotaryDim exercised in-fixture), the converter's de-interleaved `attn_qkv` unpacked as
+lossless quantized thirds (weights) + f32 bias slices; untied head required. Falcon:
+single-norm-two-readers parallel residual, MQA (`head_count_kv` must be 1), the jploski
+fused qkv sliced at the `[q; hd; hd]` MQA bands, 40B dual-norm rejected, tied head from a
+quantized `token_embd`. Gates on both: byte/logit-EXACT vs the `QuantizeX` twins (fused
+forms included), cosine 1.000000 vs the float pipeline, decode-vs-Forward bit-exact.
+
+### nlp — quantized GGUF decode for StarCoder2 (T825, 2026-07-17)
+
+`QuantStarCoder2` + `QuantStarCoder2FromGGUF` decode llama.cpp-quantized StarCoder2
+checkpoints straight from the ggml Q-blocks — the eighth quant family and the first
+LayerNorm-family quant twin: every projection is biased, running as a Q-block matmul
+followed by a separate f32 bias add in the float forward's exact order, with full
+LayerNorm γ+β pairs kept f32 (new shared helpers `quantProjBias`/`f32LayerNorm` for the
+LayerNorm quant twins to come). Packed `attn_qkv` unpacks via the lossless quantized
+row-slice (weights) + f32 bias slice; tied head follows the QuantLlama convention.
+Gates: GGUF load byte/logit-EXACT vs `QuantizeStarCoder2` (packed form too), cosine
+1.000000 vs the float pipeline / 0.999935 vs the original, decode-vs-Forward bit-exact,
+§B68-nonzero biases asserted in-fixture.
+
 ### nlp — Zephyr chat template (T824, 2026-07-17)
 
 `NewChatTemplate("zephyr")` renders the Zephyr / StableLM-2-Zephyr class format — uniform

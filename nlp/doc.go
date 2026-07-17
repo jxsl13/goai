@@ -75,7 +75,11 @@
 //     interleave and the fused 3-D expert tensors are undone losslessly on the
 //     quantized bytes), and
 //     QuantGraniteFromGGUF (the quantized twin of the scalar-multiplier Granite
-//     type, riding the same lossless q/k row un-permute)); LlamaConfigFromHF
+//     type, riding the same lossless q/k row un-permute) and
+//     QuantStarCoder2FromGGUF, QuantGPTNeoXFromGGUF and QuantFalconFromGGUF (the
+//     LayerNorm-family quant twins — biased projections as Q-block matmuls plus
+//     f32 bias adds, parallel-residual structures, and the fused-qkv forms
+//     unpacked losslessly on the quantized bytes)); LlamaConfigFromHF
 //     (also Qwen2/Qwen3/Phi-3), GemmaConfigFromHF, Gemma2ConfigFromHF,
 //     MixtralConfigFromHF (also Qwen3-MoE), GraniteConfigFromHF and BertConfigFromHF
 //     read the checkpoint's config.json so loading is config-driven. Because a loaded model's forward runs through the
