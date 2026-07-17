@@ -4,6 +4,18 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — perf: absorbed-MLA latent KV-cache for DeepSeek-V2 — 6.7× less cache memory (T783, 2026-07-17)
+
+MLA's signature memory win, implemented via weight absorption: `DecodeStepLatent`/`GenerateLatent`
+cache only the compressed latent per token (`kv_a_layernorm(kv_latent)` [KVLoraRank] + the shared
+post-RoPE `k_pe` [QKRope] — 24 values at golden dims vs the reconstructed path's 160; ~71× at real
+DeepSeek-V2 236B geometry). No O(T²) re-expansion: the K-half of `kv_b_proj` is absorbed into the
+query (`q_lat = q_nope·WkvB_Kᵀ`, scores = `q_lat·CKVᵀ + q_pe·KPEᵀ`), and the V-half into the output
+(`out = (w·CKV)·WkvB_V`) — `kv_b_proj` never touches cached tokens. Parity vs Forward AND vs the
+reconstructed decode: 6.2e-17 (machine epsilon) on both the dense and MoE goldens; the memory ratio
+(§V22, gated ≥6×) and per-step time (0.85× — the latent matmuls are narrower, so it is also
+slightly faster) are asserted in tests. The reconstructed `DecodeStep` remains available.
+
 ### nlp — feat: O(1) stateful decode for Mamba-2 — every architecture now decodes natively (T782, 2026-07-17)
 
 `Mamba2` gains `NewDecodeState`/`DecodeStep`/`Generate`: the SSD recurrence stepped with a
