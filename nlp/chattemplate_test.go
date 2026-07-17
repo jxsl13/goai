@@ -51,6 +51,10 @@ func TestChatTemplateGoldenRenders(t *testing.T) {
 		// the special tokens use the fullwidth vertical bar (U+FF5C) and ▁ (U+2581).
 		"deepseek": "<｜begin▁of▁sentence｜>You are helpful.\n\nUser: Hi!\n\n" +
 			"Assistant: Hello!<｜end▁of▁sentence｜>User: Bye?\n\nAssistant:",
+		// Rendered by HuggingFaceH4/zephyr-7b-beta's tokenizer.apply_chat_template
+		// (transformers 5.14.1, add_generation_prompt=true) — byte-exact.
+		"zephyr": "<|system|>\nYou are helpful.</s>\n<|user|>\nHi!</s>\n" +
+			"<|assistant|>\nHello!</s>\n<|user|>\nBye?</s>\n<|assistant|>\n",
 	}
 	for family, want := range goldens {
 		tpl, err := nlp.NewChatTemplate(family)

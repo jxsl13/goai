@@ -24,7 +24,7 @@ type ChatMessage struct {
 // Supported families (the names NewChatTemplate accepts): "chatml" (Qwen2/2.5 class),
 // "llama3" (Meta-Llama-3-Instruct), "gemma" (gemma-it), "mistral"
 // (Mistral-7B-Instruct-v0.3 class), "phi3" (Phi-3-instruct), "granite"
-// (IBM Granite 3.x instruct), "olmo2" (allenai OLMo-2 Instruct), "deepseek" (DeepSeek-V2/V3 chat).
+// (IBM Granite 3.x instruct), "olmo2" (allenai OLMo-2 Instruct), "deepseek" (DeepSeek-V2/V3 chat), "zephyr" (Zephyr / StableLM-2-Zephyr class).
 //
 // Family quirks are preserved faithfully: llama3/gemma trim message content; gemma and
 // mistral reject non-alternating user/assistant turns and have no system role — a
@@ -62,13 +62,16 @@ func WithoutBOS() ChatRenderOption {
 }
 
 // NewChatTemplate returns the native renderer for a known family name: "chatml",
-// "llama3", "gemma", "mistral", "phi3" or "granite".
+// "llama3", "gemma", "mistral", "phi3", "granite", "olmo2", "deepseek" or "zephyr".
+// olmo2/deepseek/zephyr are explicit-only (no [DetectChatTemplate] entry): their
+// distinguishing tokens are shared with other families or live in jinja variables,
+// so auto-detection could silently mis-prompt — name the family instead.
 func NewChatTemplate(family string) (*ChatTemplate, error) {
 	switch family {
-	case "chatml", "llama3", "gemma", "mistral", "phi3", "granite", "olmo2", "deepseek":
+	case "chatml", "llama3", "gemma", "mistral", "phi3", "granite", "olmo2", "deepseek", "zephyr":
 		return &ChatTemplate{family: family}, nil
 	}
-	return nil, fmt.Errorf("nlp: NewChatTemplate: unknown family %q (want chatml, llama3, gemma, mistral, phi3, granite, olmo2 or deepseek)", family)
+	return nil, fmt.Errorf("nlp: NewChatTemplate: unknown family %q (want chatml, llama3, gemma, mistral, phi3, granite, olmo2, deepseek or zephyr)", family)
 }
 
 // DetectChatTemplate maps Jinja template source (the GGUF "tokenizer.chat_template"
@@ -166,6 +169,13 @@ func (t *ChatTemplate) Render(messages []ChatMessage, opts ...ChatRenderOption) 
 		return renderOLMo2(messages, cfg), nil
 	case "deepseek":
 		return renderDeepSeek(messages, cfg), nil
+	case "zephyr":
+		// HuggingFaceH4 Zephyr (and StableLM-2-Zephyr class): uniform
+		// <|role|>\n{content}</s>\n turns, generation prompt <|assistant|>\n —
+		// phi3's shape with the </s> eos close and none of phi3's no-gen EOS quirk.
+		// Verified byte-exact against HuggingFaceH4/zephyr-7b-beta's
+		// tokenizer.apply_chat_template.
+		return renderTurnStyle(messages, cfg, "", "<|", "|>\n", "</s>\n", nil, false), nil
 	}
 	return "", fmt.Errorf("nlp: ChatTemplate.Render: unknown family %q", t.family)
 }

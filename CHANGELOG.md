@@ -4,6 +4,17 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — Zephyr chat template (T824, 2026-07-17)
+
+`NewChatTemplate("zephyr")` renders the Zephyr / StableLM-2-Zephyr class format — uniform
+`<|role|>\n{content}</s>\n` turns with `<|assistant|>\n` as the generation prompt (phi3's
+shape with the `</s>` eos close and none of phi3's no-generation EOS quirk), mapping onto
+the shared renderTurnStyle helper. Byte-exact against `HuggingFaceH4/zephyr-7b-beta`'s
+`apply_chat_template` (transformers 5.14.1). Explicit-only, like olmo2/deepseek: the eos
+lives in a jinja variable and the role tokens are shared, so no safe auto-detect marker
+exists — the honest-detection rule is now documented on NewChatTemplate. Nine native
+chat-template families.
+
 ### nlp — DeepSeek chat template (T823, 2026-07-17)
 
 `NewChatTemplate("deepseek")` renders the DeepSeek-V2/V3 Vicuna-style chat format
