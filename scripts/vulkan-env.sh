@@ -15,7 +15,7 @@
 #   Description: Vulkan headers (local, header-only) + system loader
 #   Version: 1.3.280
 #   Cflags: -I$HOME/.local/share/goai-vulkan-sdk/Vulkan-Headers-1.3.280/include
-#   Libs: -lvulkan
+#   Libs: -L$HOME/.local/share/goai-vulkan-sdk/lib -lvulkan
 #   EOF
 #
 # Device pick: vk_bridge.c ranks discrete > integrated, so the RTX 3060 wins over the

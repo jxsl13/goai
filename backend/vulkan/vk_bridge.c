@@ -23,6 +23,7 @@ static uint32_t         gQueueFamily = 0;
 static int              gInitTried = 0;
 static int              gInitOK    = 0;
 static int              gAtomicFloat = 0; // VK_EXT_shader_atomic_float enabled? (§T90)
+static int              gCoopMat = 0;     // VK_KHR_cooperative_matrix enabled? (Tw-COOPMAT)
 
 // find_compute_queue returns the index of a queue family with COMPUTE, or -1.
 static int find_compute_queue(VkPhysicalDevice pd) {
@@ -99,7 +100,7 @@ static int attempt_device(VkPhysicalDevice pd) {
     qci.pQueuePriorities = &prio;
 
     // Portability (MoltenVK) needs VK_KHR_portability_subset at device creation; absent elsewhere.
-    const char* devExts[2];
+    const char* devExts[3];
     uint32_t nDevExts = 0;
     if (has_device_ext(pd, "VK_KHR_portability_subset")) {
         devExts[nDevExts++] = "VK_KHR_portability_subset";
@@ -116,6 +117,31 @@ static int attempt_device(VkPhysicalDevice pd) {
         pNext = &atomicFeat;
         atomic = 1;
     }
+    // VK_KHR_cooperative_matrix (Tw-COOPMAT): tensor-core GEMM from GLSL. Needs the
+    // core-1.2 shaderFloat16 + storageBuffer16BitAccess + Vulkan memory model features;
+    // gated on device support so MoltenVK/older stacks keep the exact previous path.
+    VkPhysicalDeviceCooperativeMatrixFeaturesKHR coopFeat = {0};
+    VkPhysicalDeviceVulkan11Features v11 = {0};
+    VkPhysicalDeviceVulkan12Features v12 = {0};
+    int coop = 0;
+    VkPhysicalDeviceProperties pdProps;
+    vkGetPhysicalDeviceProperties(pd, &pdProps);
+    if (pdProps.apiVersion >= VK_API_VERSION_1_2 && has_device_ext(pd, "VK_KHR_cooperative_matrix")) {
+        devExts[nDevExts++] = "VK_KHR_cooperative_matrix";
+        coopFeat.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR;
+        coopFeat.cooperativeMatrix = VK_TRUE;
+        v11.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
+        v11.storageBuffer16BitAccess = VK_TRUE;
+        v12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+        v12.shaderFloat16 = VK_TRUE;
+        v12.vulkanMemoryModel = VK_TRUE;
+        v12.vulkanMemoryModelDeviceScope = VK_TRUE;
+        coopFeat.pNext = pNext;
+        v11.pNext = &coopFeat;
+        v12.pNext = &v11;
+        pNext = &v12;
+        coop = 1;
+    }
 
     VkDeviceCreateInfo dci = {0};
     dci.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -131,6 +157,7 @@ static int attempt_device(VkPhysicalDevice pd) {
     gQueueFamily = (uint32_t)qf;
     gDevice = dev;
     gAtomicFloat = atomic;
+    gCoopMat = coop;
     vkGetDeviceQueue(gDevice, gQueueFamily, 0, &gQueue);
     return 0;
 }
@@ -142,7 +169,15 @@ static int ensure_init(void) {
     VkApplicationInfo app = {0};
     app.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
     app.pApplicationName = "goai";
-    app.apiVersion = VK_API_VERSION_1_1;
+    // Request up to Vulkan 1.3 when the loader supports it (VK_KHR_cooperative_matrix's
+    // GLSL side needs the core-1.2 Vulkan memory model); older loaders (MoltenVK) keep 1.1.
+    uint32_t instVer = VK_API_VERSION_1_1;
+    {
+        uint32_t v = 0;
+        if (vkEnumerateInstanceVersion(&v) == VK_SUCCESS && v >= VK_API_VERSION_1_3) instVer = VK_API_VERSION_1_3;
+        else if (v >= VK_API_VERSION_1_2) instVer = VK_API_VERSION_1_2;
+    }
+    app.apiVersion = instVer;
 
     // Portability drivers (MoltenVK on macOS) are hidden unless the instance
     // opts in via VK_KHR_portability_enumeration + the ENUMERATE_PORTABILITY
@@ -570,6 +605,28 @@ static int vk_dispatch(const uint32_t* spv, int spvLen,
 }
 
 // ---- op wrappers (build buffer arrays + push block, then vk_dispatch) ------
+
+// vk_coopmat reports whether the active device enabled VK_KHR_cooperative_matrix.
+int vk_coopmat(void) { return ensure_init() == 0 && gCoopMat ? 1 : 0; }
+
+// vk_coopmat_gemm_f16: Tw-COOPMAT probe — C[M,N]f32 = A[M,K]f16 · B[K,N]f16 on the
+// cooperative-matrix (tensor-core) pipeline. Host must guarantee M%16==0, N%64==0,
+// K%16==0 and vk_coopmat()==1. Each workgroup = one subgroup computing a 16×64 C tile.
+int vk_coopmat_gemm_f16(const uint32_t* spv, int spvLen,
+                        const void* Ah, const void* Bh, float* C,
+                        int M, int K, int N) {
+    if (!gCoopMat) return -9;
+    VkDeviceSize lens[3] = {
+        (VkDeviceSize)M * K * 2,
+        (VkDeviceSize)K * N * 2,
+        (VkDeviceSize)M * N * sizeof(float),
+    };
+    void* data[3] = { (void*)Ah, (void*)Bh, C };
+    int up[3] = {1, 1, 0}, down[3] = {0, 0, 1};
+    int32_t pc[3] = { M, K, N };
+    return vk_dispatch(spv, spvLen, 3, lens, data, up, down, pc, sizeof(pc),
+                       (uint32_t)N / 64u, (uint32_t)M / 16u, 1u);
+}
 
 int vk_matmul_f32(const uint32_t* spv, int spvLen,
                   const float* A, const float* B, float* C,
