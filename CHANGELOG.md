@@ -4,6 +4,19 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — feat: Mamba support — 28th loadable architecture, first state-space model (T772, 2026-07-16)
+
+Mamba (`MambaForCausalLM`, Gu & Dao 2023) as a self-contained `nlp.Mamba` type — GoAI's FIRST
+non-transformer, non-attention architecture. It wires a Hugging Face Mamba checkpoint into the
+existing `nn.MambaBlock` (the selective-scan mixer built on `OpConv1D`/`OpSoftplus`/`OpSSM`): each
+layer is `x = x + mixer(RMSNorm(x))` with no attention or FFN, then a final RMSNorm and a tied head.
+The loader splits `in_proj` into the x-branch and z-gate, `x_proj` into (Δ_low, B, C), and maps
+`dt_proj` (with bias), `A_log`, `D`, `conv1d`, `out_proj`; the SSM math (ZOH discretization,
+A=−exp(A_log), the D skip, the SiLU-z gate, cross-correlation conv) already matched the reference
+kernels with only the standard [out,in]→[in,out] transposes. Forward parity vs a real transformers
+`MambaForCausalLM`: max abs logit diff 1.9e-7. Twenty-eighth architecture — the library now spans
+both attention transformers (dense/MoE/MLA/ALiBi) and state-space models.
+
 ### nlp — feat: KV-cached generation for DeepSeek-V2, MPT and Falcon (T771, 2026-07-16)
 
 Completes generation for the three newest architectures with `NewCache`/`DecodeStep`/`Generate`, each
