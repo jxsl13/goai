@@ -153,3 +153,66 @@ func TestCUDADistilBertMatchesReference(t *testing.T) {
 	}
 	bertVariantParity(t, m, []int{1, 5, 8, 3, 9, 2, 7})
 }
+
+// TestCUDABertQ8CloseToF32 validates Q8 on the BERT encoder (NewBertQ8CUDA): the attention q/k/v/o and
+// FFN w1/w2 projections go resident Q8_0, and because BERT encodes the whole sequence at once (M=seq>1)
+// they run on the int8 tensor-core MMQ GEMM. Q8 is not bit-exact, so the [seq,dim] hidden states are
+// compared to the f32 encoder by per-token cosine similarity (biases/LayerNorm stay f32).
+func TestCUDABertQ8CloseToF32(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("cuda: no CUDA-capable device")
+	}
+	ts, _, err := safetensors.LoadFile("../nlp/testdata/bert_hf.safetensors")
+	if err != nil {
+		t.Skipf("bert testdata unavailable (run make golden): %v", err)
+	}
+	m, err := nlp.BertFromHF(ts, nlp.BertConfig{Heads: 2, Eps: 1e-12})
+	if err != nil {
+		t.Fatalf("BertFromHF: %v", err)
+	}
+	f32Enc, err := llamagpu.NewBertCUDA(m)
+	if err != nil {
+		t.Fatalf("NewBertCUDA: %v", err)
+	}
+	defer f32Enc.Release()
+	q8Enc, err := llamagpu.NewBertQ8CUDA(m)
+	if err != nil {
+		t.Fatalf("NewBertQ8CUDA: %v", err)
+	}
+	defer q8Enc.Release()
+
+	tokens := []int{1, 5, 8, 3, 9, 2, 7}
+	segments := []int{0, 0, 0, 1, 1, 1, 1}
+	fOut, err := f32Enc.Forward(tokens, segments)
+	if err != nil {
+		t.Fatalf("f32 Forward: %v", err)
+	}
+	qOut, err := q8Enc.Forward(tokens, segments)
+	if err != nil {
+		t.Fatalf("q8 Forward: %v", err)
+	}
+	if len(qOut) != len(fOut) {
+		t.Fatalf("q8 %d values vs f32 %d", len(qOut), len(fOut))
+	}
+	dim := len(fOut) / len(tokens)
+	minCos := 1.0
+	for i := range tokens {
+		var dot, nf, nq float64
+		for j := 0; j < dim; j++ {
+			f, q := float64(fOut[i*dim+j]), float64(qOut[i*dim+j])
+			if math.IsNaN(q) || math.IsInf(q, 0) {
+				t.Fatalf("q8 token %d dim %d non-finite", i, j)
+			}
+			dot += f * q
+			nf += f * f
+			nq += q * q
+		}
+		if cos := dot / (math.Sqrt(nf)*math.Sqrt(nq) + 1e-30); cos < minCos {
+			minCos = cos
+		}
+	}
+	if minCos < 0.999 {
+		t.Fatalf("BERT Q8 min per-token cosine %.5f < 0.999 vs f32", minCos)
+	}
+	t.Logf("NewBertQ8CUDA tracks f32 encoder: min per-token cosine %.6f (Q8 attention+FFN projections via int8 tensor-core MMQ)", minCos)
+}

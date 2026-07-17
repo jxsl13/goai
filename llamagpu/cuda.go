@@ -743,6 +743,17 @@ func NewBertCUDA(m *nlp.Bert) (*GPUBert, error) {
 	})
 }
 
+// NewBertQ8CUDA is NewBertCUDA with the attention (q/k/v/o) and FFN (w1/w2) projections quantized to
+// resident Q8_0. BERT encodes the whole sequence at once (M=seq>1), so each Q8 projection runs on the
+// int8 tensor-core MMQ GEMM (QMatMulResident's m>1 path) — faster than the f32 cuBLAS GEMM and 4× less
+// weight memory. Biases and LayerNorm stay f32. Works for RoBERTa/DistilBERT too (all *nlp.Bert). cuda-only.
+func NewBertQ8CUDA(m *nlp.Bert) (*GPUBert, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newBertEncoder(m, cudaQ8Ops())
+}
+
 // NewMixtralCUDA uploads an nlp.Mixtral (sparse Mixture-of-Experts) onto the batched Decoder core.
 // Attention is the plain Llama core (+ optional Qwen3-MoE QK-norm); the FFN is a sparse MoE routed
 // per token — the routing weights are computed on-device (cu_moe_gate) so the whole step stays a

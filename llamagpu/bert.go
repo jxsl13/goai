@@ -25,6 +25,7 @@ type GPUBert struct {
 	embLNg, embLNb         buffer
 	blocks                 []bertBlock
 	all                    []buffer
+	qweights               []qweight // resident Q8 projection weights (NewBertQ8CUDA); closed in Release
 }
 
 type bertBlock struct {
@@ -68,9 +69,25 @@ func newBertEncoder(m *nlp.Bert, ops backendOps) (*GPUBert, error) {
 		e.all = append(e.all, b)
 		return b
 	}
+	// lin builds a projection: resident Q8_0 when ops.quantizeF32 is set (NewBertQ8CUDA), else f32.
+	// BERT encodes the whole sequence at once (M=seq>1), so a Q8 projection runs on the int8 tensor-core
+	// MMQ GEMM (QMatMulResident's m>1 path) — a compute+memory win. Biases/LayerNorm stay f32.
 	lin := func(w *tensor.Tensor) linear {
 		in, out := w.Shape()[0], w.Shape()[1]
-		return f32Linear{w: mk(flat2D(w)), k: in, n: out}
+		if ops.quantizeF32 == nil {
+			return f32Linear{w: mk(flat2D(w)), k: in, n: out}
+		}
+		t := tensor.New(tensor.F32, tensor.Shape{in, out})
+		copy(t.Storage().F32(), flat2D(w))
+		qw, qe := ops.quantizeF32(t)
+		if qe != nil {
+			if err == nil {
+				err = qe
+			}
+			return f32Linear{k: in, n: out}
+		}
+		e.qweights = append(e.qweights, qw)
+		return quantLinear{w: qw}
 	}
 	e.embLNg = mk(flat1D(m.EmbLN.Gamma))
 	e.embLNb = mk(flat1D(m.EmbLN.Beta))
@@ -224,4 +241,10 @@ func (e *GPUBert) Release() {
 		}
 	}
 	e.all = nil
+	for _, w := range e.qweights {
+		if w != nil {
+			w.Close()
+		}
+	}
+	e.qweights = nil
 }
