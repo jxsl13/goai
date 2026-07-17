@@ -51,8 +51,15 @@
 //     mixers with MoE/dense FFNs). Encoders: BertFromHF, RobertaFromHF,
 //     DistilBertFromHF; and T5FromHF + T5DecoderFromHF (the full seq2seq
 //     encoder–decoder). Each anchored bit- or tolerance-exact against transformers,
-//     and each decoder supports KV-cached generation. Weights load from safetensors or from .pt/.bin via the safe
-//     no-code-execution PyTorch loader (package format/pytorch); LlamaConfigFromHF
+//     and each decoder supports generation with its architecture-native serving
+//     mechanics: batched Prefill (one block-stack pass seeds the KV-cache,
+//     bit-identical to stepwise decode), amortized-O(T) KV-cache growth, sparse
+//     top-k MoE decode, O(1) constant-size state for the recurrent families,
+//     Jamba's hybrid KV+SSM state, and DeepSeek-V2's absorbed-latent cache
+//     (6.7× less KV memory). Weights load from safetensors, from .pt/.bin via the safe
+//     no-code-execution PyTorch loader (package format/pytorch), or — for the most
+//     common quantized community checkpoints — from llama.cpp GGUF files
+//     (LlamaFromGGUF, Qwen2FromGGUF, Qwen3FromGGUF); LlamaConfigFromHF
 //     (also Qwen2/Qwen3/Phi-3), GemmaConfigFromHF, Gemma2ConfigFromHF,
 //     MixtralConfigFromHF (also Qwen3-MoE), GraniteConfigFromHF and BertConfigFromHF
 //     read the checkpoint's config.json so loading is config-driven. Because a loaded model's forward runs through the

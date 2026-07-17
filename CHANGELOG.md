@@ -4,6 +4,12 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — docs: serving-mechanics and GGUF coverage in the package godoc (T790, 2026-07-17)
+
+The package godoc now documents the architecture-native serving story (batched Prefill, amortized
+KV growth, sparse MoE decode, O(1) recurrent state, the Jamba hybrid, DeepSeek's absorbed-latent
+cache) and the GGUF loading path for Llama/Qwen2/Qwen3.
+
 ### nlp — feat: GGUF loading for Qwen2/Qwen2.5 and Qwen3 (T789, 2026-07-17)
 
 `Qwen2FromGGUF`/`Qwen3FromGGUF` (+`ToGGUF` for round-trips) load llama.cpp checkpoints of the most
