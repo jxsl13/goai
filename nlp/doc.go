@@ -78,7 +78,9 @@
 //     type, riding the same lossless q/k row un-permute) and
 //     QuantStarCoder2FromGGUF, QuantGPTNeoXFromGGUF, QuantFalconFromGGUF,
 //     QuantMPTFromGGUF, QuantNemotronFromGGUF, QuantStableLMFromGGUF,
-//     QuantOLMo2FromGGUF, QuantCohereFromGGUF, QuantMambaFromGGUF and QuantMamba2FromGGUF (the LayerNorm/dedicated-type quant twins — biased
+//     QuantOLMo2FromGGUF, QuantCohereFromGGUF, QuantMambaFromGGUF,
+//     QuantMamba2FromGGUF and QuantJambaFromGGUF (the LayerNorm/dedicated-type
+//     and recurrent/hybrid quant twins — biased
 //     projections as Q-block matmuls plus f32 bias adds, parallel residuals,
 //     ALiBi, pre-folded LayerNorm1P, partial rotary, OLMo 2 post-norm with
 //     full-width QK-norms, and every fused-qkv form unpacked losslessly on the
