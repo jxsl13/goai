@@ -71,3 +71,54 @@ func TestCUDALlamaQ4KCloseToF32(t *testing.T) {
 	}
 	t.Logf("NewLlamaQ4KCUDA tracks f32 CUDA decode: min cosine %.6f over %d positions (4-bit k-quant, 2× smaller than Q8; random-weight worst case)", minCos, len(prompt))
 }
+
+// TestCUDALlamaQ4KGenerateReuseSafe checks end-to-end Q4_K generation is deterministic and reuse-safe:
+// a reused decoder's greedy Generate must equal a fresh one's (Q4_K weights are resident + immutable, KV
+// cache reset by StepN(_,0)). Also exercises the NewQwen3Q4KCUDA typed entry point (== NewLlamaQ4KCUDA).
+func TestCUDALlamaQ4KGenerateReuseSafe(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("cuda: no CUDA-capable device")
+	}
+	cfg := nlp.LlamaConfig{Vocab: 512, Ctx: 40, Dim: 256, Heads: 8, KVHeads: 2, Layers: 2, Hidden: 768, Eps: 1e-5, RopeBase: 10000}
+	m, err := nlp.NewLlama(cfg, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dec, err := llamagpu.NewQwen3Q4KCUDA(m) // typed alias for NewLlamaQ4KCUDA
+	if err != nil {
+		t.Fatalf("NewQwen3Q4KCUDA: %v", err)
+	}
+	defer dec.Release()
+	fresh, err := llamagpu.NewLlamaQ4KCUDA(m)
+	if err != nil {
+		t.Fatalf("NewLlamaQ4KCUDA: %v", err)
+	}
+	defer fresh.Release()
+
+	prompt := []int{5, 2, 9, 1}
+	const maxNew = 6
+	first, err := dec.Generate(prompt, maxNew, nlp.Greedy())
+	if err != nil {
+		t.Fatalf("Generate #1: %v", err)
+	}
+	reused, err := dec.Generate(prompt, maxNew, nlp.Greedy())
+	if err != nil {
+		t.Fatalf("Generate #2 (reuse): %v", err)
+	}
+	freshOut, err := fresh.Generate(prompt, maxNew, nlp.Greedy())
+	if err != nil {
+		t.Fatalf("Generate (fresh): %v", err)
+	}
+	if len(first) != len(prompt)+maxNew {
+		t.Fatalf("Generate returned %d tokens, want %d", len(first), len(prompt)+maxNew)
+	}
+	for i := range first {
+		if reused[i] != first[i] {
+			t.Fatalf("Q4_K reuse diverged at token %d: %d vs %d", i, reused[i], first[i])
+		}
+		if freshOut[i] != first[i] {
+			t.Fatalf("Q4_K fresh decoder disagrees at token %d: %d vs %d", i, freshOut[i], first[i])
+		}
+	}
+	t.Logf("NewLlamaQ4KCUDA Generate is reuse-safe + deterministic: %v", first)
+}

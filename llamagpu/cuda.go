@@ -226,6 +226,13 @@ func NewLlamaQ4KCUDA(m *nlp.Llama) (*Decoder, error) {
 	})
 }
 
+// NewQwen2Q4KCUDA / NewQwen3Q4KCUDA / NewPhi3Q4KCUDA are NewLlamaQ4KCUDA typed entry points for the popular
+// Llama variants (Qwen2/2.5 qkv-bias, Qwen3 QK-norm, Phi-3) — their 4-bit path so a bigger model fits the
+// 12GB 3060. Load with nlp.LlamaFromHF / Phi3FromHF; biases/QK-norm stay f32.
+func NewQwen2Q4KCUDA(m *nlp.Llama) (*Decoder, error) { return NewLlamaQ4KCUDA(m) }
+func NewQwen3Q4KCUDA(m *nlp.Llama) (*Decoder, error) { return NewLlamaQ4KCUDA(m) }
+func NewPhi3Q4KCUDA(m *nlp.Llama) (*Decoder, error)  { return NewLlamaQ4KCUDA(m) }
+
 // NewQwen2Q8CUDA / NewQwen3Q8CUDA / NewPhi3Q8CUDA are NewLlamaQ8CUDA typed entry points for the Llama
 // variants that nlp.QuantLlama cannot represent (Qwen2 qkv-bias, Qwen3 QK-norm) or that only had an f32
 // GPU path (Phi-3). They give those models their first quantized decode. Load with nlp.LlamaFromHF /
