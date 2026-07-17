@@ -148,6 +148,33 @@ func NewNemotronCUDA(m *nlp.Nemotron) (*Decoder, error) {
 	})
 }
 
+// NewFalconCUDA uploads an nlp.Falcon (falcon-7b class) onto the batched Decoder core: single-norm
+// parallel residual, LayerNorm-with-bias, a 2-layer GELU MLP, multi-query attention (one KV head)
+// and full rope — every departure a reused generalization. cuda-only.
+func NewFalconCUDA(m *nlp.Falcon) (*Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newFalconDecoder(m, backendOps{
+		name:        string(backend.CUDA),
+		asyncEncode: false,
+		newBuffer: func(data []float32) (buffer, error) {
+			b, err := cuda.NewDeviceBufferF32(data)
+			if err != nil {
+				return nil, err
+			}
+			return cBuf{b}, nil
+		},
+		newRecorder: func() (recorder, error) {
+			r, err := cuda.NewRecorder()
+			if err != nil {
+				return nil, err
+			}
+			return cRec{r}, nil
+		},
+	})
+}
+
 // NewOLMo2CUDA uploads an nlp.OLMo2 (Allen AI) onto the batched Decoder core: post-norm blocks
 // (each sublayer reads the raw residual, its output normed before the add), a full-width RMSNorm on
 // the q/k projections before RoPE, SwiGLU, GQA, full rope and an untied lm_head. cuda-only.

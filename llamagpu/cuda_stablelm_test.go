@@ -586,3 +586,47 @@ func TestCUDAOLMo2MatchesReference(t *testing.T) {
 	}
 	t.Logf("llamagpu NewOLMo2CUDA.Generate == nlp.OLMo2.Generate greedy: %d tokens (post-norm + full-width QK-norm)", len(gpuOut))
 }
+
+// TestCUDAFalconMatchesReference checks the Falcon GPU path (NewFalconCUDA) generates greedy-
+// identical tokens to the reference. Falcon is a pure composition of existing generalizations:
+// single-norm parallel residual, LayerNorm-with-bias, a 2-layer GELU MLP and multi-query attention
+// (kvH=1) — no new decoder machinery, exercising the MQA path (one KV head) end to end.
+func TestCUDAFalconMatchesReference(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("cuda: no CUDA-capable device")
+	}
+	ts, _, err := safetensors.LoadFile("../nlp/testdata/falcon_hf.safetensors")
+	if err != nil {
+		t.Skipf("falcon testdata unavailable (run make golden): %v", err)
+	}
+	m, err := nlp.FalconFromHF(ts, nlp.FalconConfig{Heads: 4, Eps: 1e-5, RopeBase: 10000, Ctx: 32})
+	if err != nil {
+		t.Fatalf("FalconFromHF: %v", err)
+	}
+
+	dec, err := llamagpu.NewFalconCUDA(m)
+	if err != nil {
+		t.Fatalf("NewFalconCUDA: %v", err)
+	}
+	defer dec.Release()
+
+	prompt := []int{3, 7, 1, 9}
+	const maxNew = 12
+	gpuOut, err := dec.Generate(prompt, maxNew, nlp.Greedy())
+	if err != nil {
+		t.Fatalf("cuda generate: %v", err)
+	}
+	refOut, err := m.Generate(prompt, maxNew, nlp.Greedy(), nlp.WithBackend(backend.Reference()))
+	if err != nil {
+		t.Fatalf("ref generate: %v", err)
+	}
+	if len(gpuOut) != len(refOut) {
+		t.Fatalf("length: cuda %d vs ref %d", len(gpuOut), len(refOut))
+	}
+	for i := range gpuOut {
+		if gpuOut[i] != refOut[i] {
+			t.Fatalf("token[%d]: cuda %d vs ref %d\ncuda=%v\nref=%v", i, gpuOut[i], refOut[i], gpuOut, refOut)
+		}
+	}
+	t.Logf("llamagpu NewFalconCUDA.Generate == nlp.Falcon.Generate greedy: %d tokens (parallel residual + MQA + GELU-MLP)", len(gpuOut))
+}

@@ -902,6 +902,71 @@ func newGemmaDecoder(m *nlp.Gemma, ops backendOps) (*Decoder, error) {
 	return d, nil
 }
 
+// newFalconDecoder builds a device Decoder for an nlp.Falcon (falcon-7b class: parallel_attn=True,
+// multi_query=True, new_decoder_architecture=False). Every departure is an existing generalization:
+// SINGLE-NORM parallel residual (parallelRes — one input_layernorm feeds attention AND the MLP, both
+// summed onto x0, like Cohere), full LayerNorm WITH bias (lnBias), a 2-layer GELU MLP (ffnGELU), and
+// multi-query attention (MQA = GQA with one KV head, kvH=1, from the fused query_key_value split).
+// Full split-half rope, no linear biases, untied lm_head. cuda-only (parallel residual + LayerNorm).
+func newFalconDecoder(m *nlp.Falcon, ops backendOps) (*Decoder, error) {
+	cfg := m.Config
+	kvH := cfg.KVHeads
+	if kvH <= 0 {
+		kvH = 1 // Falcon MQA
+	}
+	lc := nlp.LlamaConfig{
+		Vocab: cfg.Vocab, Ctx: cfg.Ctx, Dim: cfg.Dim, Heads: cfg.Heads, KVHeads: kvH,
+		Layers: cfg.Layers, Hidden: cfg.Hidden, Eps: cfg.Eps, RopeBase: cfg.RopeBase,
+	}
+	d, derr := newDecoderCommon(lc, m.TokEmb, ops)
+	if derr != nil {
+		return nil, derr
+	}
+	d.lnBias = true      // LayerNorm with bias
+	d.ffnGELU = true     // 2-layer GELU MLP
+	d.parallelRes = true // one-norm parallel residual: input_layernorm feeds attn AND MLP
+
+	var err error
+	mk := d.mkBuf(&err)
+	lin := func(w *tensor.Tensor) linear {
+		in, out := w.Shape()[0], w.Shape()[1]
+		return f32Linear{w: mk(flat2D(w)).b, k: in, n: out}
+	}
+	fused := func(wq, wk, wv *tensor.Tensor) linear {
+		in := wq.Shape()[0]
+		nq, nk, nv := wq.Shape()[1], wk.Shape()[1], wv.Shape()[1]
+		fq, fk, fv := flat2D(wq), flat2D(wk), flat2D(wv)
+		nt := nq + nk + nv
+		w := make([]float32, in*nt)
+		for i := range in {
+			row := w[i*nt : (i+1)*nt]
+			copy(row[:nq], fq[i*nq:(i+1)*nq])
+			copy(row[nq:nq+nk], fk[i*nk:(i+1)*nk])
+			copy(row[nq+nk:], fv[i*nv:(i+1)*nv])
+		}
+		return f32Linear{w: mk(w).b, k: in, n: nt}
+	}
+	for _, b := range m.Blocks {
+		gb := block{
+			wqkv: fused(b.Wq, b.Wk, b.Wv), wo: lin(b.Wo),
+			gAttn: mk(flat1D(b.InputNorm.Gamma)).b, bAttn: mk(flat1D(b.InputNorm.Beta)).b,
+			// gFFN/bFFN unused: parallel one-norm reuses the attn norm (d.xn) for the MLP.
+			wG: lin(b.Wh), wD: lin(b.Wout), // 2-layer GELU MLP: wG = dense_h_to_4h, wD = dense_4h_to_h
+			kC: mk(make([]float32, d.maxLen*d.kvDim)).b, vC: mk(make([]float32, d.maxLen*d.kvDim)).b,
+		}
+		d.blocks = append(d.blocks, gb)
+	}
+	d.gFinal = mk(flat1D(m.FinalNorm.Gamma))
+	d.bFinal = mk(flat1D(m.FinalNorm.Beta))
+	d.out = lin(m.Out)
+	d.allocScratch(mk)
+	if err != nil {
+		d.Release()
+		return nil, err
+	}
+	return d, nil
+}
+
 // newOLMo2Decoder builds a device Decoder for an nlp.OLMo2 (Allen AI). OLMo2 shares Llama's SwiGLU/
 // GQA/RoPE core but reshuffles the residual structure in two ways, both new gated generalizations:
 //   - POST-NORM (postNorm): there is no input_layernorm; each sublayer reads the RAW residual and
