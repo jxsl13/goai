@@ -53,6 +53,12 @@ func (v vRec) Copy2D(src buffer, srcOff, srcStride int, dst buffer, dstOff, dstS
 func (v vRec) MHA(q, k, va, o buffer, sq, sk, dm, heads, kvHeads, dk, causal, window int, scale float32) error {
 	return v.r.MHA(vb(q), vb(k), vb(va), vb(o), sq, sk, dm, heads, kvHeads, dk, causal, window, scale)
 }
+func (vRec) MHACap(q, k, va, o buffer, sq, sk, dm, heads, kvHeads, dk, causal, window int, scale, cap float32) error {
+	return fmt.Errorf("llamagpu(vulkan): attention-logit soft-cap not implemented (Gemma-2-class softcap decoders are cuda-only for now)")
+}
+func (vRec) MHAALiBi(q, k, va, o, slopes buffer, sq, sk, dm, heads, kvHeads, dk, causal, window int, scale float32) error {
+	return fmt.Errorf("llamagpu(vulkan): ALiBi attention not implemented (ALiBi decoders are cuda-only for now)")
+}
 func (v vRec) Unary(x, o buffer, op int) error { return v.r.Unary(vb(x), vb(o), op) }
 func (v vRec) Binary(a, b, o buffer, op int) error {
 	return v.r.Binary(vb(a), vb(b), vb(o), op)

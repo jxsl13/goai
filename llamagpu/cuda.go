@@ -58,6 +58,12 @@ func (c cRec) Copy2D(src buffer, srcOff, srcStride int, dst buffer, dstOff, dstS
 func (c cRec) MHA(q, k, v, o buffer, sq, sk, dm, heads, kvHeads, dk, causal, window int, scale float32) error {
 	return c.r.MHA(cb(q), cb(k), cb(v), cb(o), sq, sk, dm, heads, kvHeads, dk, causal, window, scale)
 }
+func (c cRec) MHACap(q, k, v, o buffer, sq, sk, dm, heads, kvHeads, dk, causal, window int, scale, cap float32) error {
+	return c.r.MHACap(cb(q), cb(k), cb(v), cb(o), sq, sk, dm, heads, kvHeads, dk, causal, window, scale, cap)
+}
+func (c cRec) MHAALiBi(q, k, v, o, slopes buffer, sq, sk, dm, heads, kvHeads, dk, causal, window int, scale float32) error {
+	return c.r.MHAALiBi(cb(q), cb(k), cb(v), cb(o), cb(slopes), sq, sk, dm, heads, kvHeads, dk, causal, window, scale)
+}
 func (c cRec) Unary(x, o buffer, op int) error { return c.r.Unary(cb(x), cb(o), op) }
 func (c cRec) Binary(a, b, o buffer, op int) error {
 	return c.r.Binary(cb(a), cb(b), cb(o), op)
@@ -129,6 +135,143 @@ func NewNemotronCUDA(m *nlp.Nemotron) (*Decoder, error) {
 		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
 	}
 	return newNemotronDecoder(m, backendOps{
+		name:        string(backend.CUDA),
+		asyncEncode: false,
+		newBuffer: func(data []float32) (buffer, error) {
+			b, err := cuda.NewDeviceBufferF32(data)
+			if err != nil {
+				return nil, err
+			}
+			return cBuf{b}, nil
+		},
+		newRecorder: func() (recorder, error) {
+			r, err := cuda.NewRecorder()
+			if err != nil {
+				return nil, err
+			}
+			return cRec{r}, nil
+		},
+	})
+}
+
+// NewFalconCUDA uploads an nlp.Falcon (falcon-7b class) onto the batched Decoder core: single-norm
+// parallel residual, LayerNorm-with-bias, a 2-layer GELU MLP, multi-query attention (one KV head)
+// and full rope — every departure a reused generalization. cuda-only.
+func NewFalconCUDA(m *nlp.Falcon) (*Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newFalconDecoder(m, backendOps{
+		name:        string(backend.CUDA),
+		asyncEncode: false,
+		newBuffer: func(data []float32) (buffer, error) {
+			b, err := cuda.NewDeviceBufferF32(data)
+			if err != nil {
+				return nil, err
+			}
+			return cBuf{b}, nil
+		},
+		newRecorder: func() (recorder, error) {
+			r, err := cuda.NewRecorder()
+			if err != nil {
+				return nil, err
+			}
+			return cRec{r}, nil
+		},
+	})
+}
+
+// NewOLMo2CUDA uploads an nlp.OLMo2 (Allen AI) onto the batched Decoder core: post-norm blocks
+// (each sublayer reads the raw residual, its output normed before the add), a full-width RMSNorm on
+// the q/k projections before RoPE, SwiGLU, GQA, full rope and an untied lm_head. cuda-only.
+func NewOLMo2CUDA(m *nlp.OLMo2) (*Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newOLMo2Decoder(m, backendOps{
+		name:        string(backend.CUDA),
+		asyncEncode: false,
+		newBuffer: func(data []float32) (buffer, error) {
+			b, err := cuda.NewDeviceBufferF32(data)
+			if err != nil {
+				return nil, err
+			}
+			return cBuf{b}, nil
+		},
+		newRecorder: func() (recorder, error) {
+			r, err := cuda.NewRecorder()
+			if err != nil {
+				return nil, err
+			}
+			return cRec{r}, nil
+		},
+	})
+}
+
+// NewMPTCUDA uploads an nlp.MPT (MosaicML) onto the batched Decoder core: the first ALiBi decoder —
+// position enters solely through a per-head linear bias on the attention scores (no RoPE), with
+// weight-only LayerNorm, standard MHA, a bias-free 2-layer GELU MLP and a tied lm_head. cuda-only
+// (the ALiBi attention kernel is cuda-only).
+func NewMPTCUDA(m *nlp.MPT) (*Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newMPTDecoder(m, backendOps{
+		name:        string(backend.CUDA),
+		asyncEncode: false,
+		newBuffer: func(data []float32) (buffer, error) {
+			b, err := cuda.NewDeviceBufferF32(data)
+			if err != nil {
+				return nil, err
+			}
+			return cBuf{b}, nil
+		},
+		newRecorder: func() (recorder, error) {
+			r, err := cuda.NewRecorder()
+			if err != nil {
+				return nil, err
+			}
+			return cRec{r}, nil
+		},
+	})
+}
+
+// NewGemma2CUDA uploads an nlp.Gemma2 onto the batched Decoder core: Gemma's √dim embed / (1+w)
+// RMSNorm / GeGLU / decoupled head_dim / tied lm_head, plus sandwich norms (pre + post per sublayer),
+// an attention-logit soft-cap (via MHACap) and query_pre_attn_scalar. The final-logit soft-cap is
+// monotonic (greedy-invariant) and omitted. cuda-only (the soft-cap kernel is cuda-only).
+func NewGemma2CUDA(m *nlp.Gemma2) (*Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newGemma2Decoder(m, backendOps{
+		name:        string(backend.CUDA),
+		asyncEncode: false,
+		newBuffer: func(data []float32) (buffer, error) {
+			b, err := cuda.NewDeviceBufferF32(data)
+			if err != nil {
+				return nil, err
+			}
+			return cBuf{b}, nil
+		},
+		newRecorder: func() (recorder, error) {
+			r, err := cuda.NewRecorder()
+			if err != nil {
+				return nil, err
+			}
+			return cRec{r}, nil
+		},
+	})
+}
+
+// NewGemmaCUDA uploads an nlp.Gemma (Gemma v1) onto the batched Decoder core: RMSNorm (with the
+// (1+w) gain folded at load), RoPE, GQA, a √dim embedding normalizer (d.embMult), a GeGLU FFN and
+// a tied lm_head — every departure a reused generalization or a load-time fold. cuda-only.
+func NewGemmaCUDA(m *nlp.Gemma) (*Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newGemmaDecoder(m, backendOps{
 		name:        string(backend.CUDA),
 		asyncEncode: false,
 		newBuffer: func(data []float32) (buffer, error) {

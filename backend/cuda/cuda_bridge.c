@@ -33,7 +33,7 @@ static cublasHandle_t gHandle = NULL;
 static float *gOne = NULL, *gZero = NULL; // device 1.0f/0.0f — cuBLAS DEVICE pointer mode (graph-capture-safe alpha/beta)
 static cudaStream_t gStream = NULL;
 static CUcontext gCtx = NULL; // runtime's primary context, retained for driver-API launches
-static CUfunction gGelu = NULL, gRelu2 = NULL, gSilu = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gRopePartial = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gQgemv = NULL, gQgemv4 = NULL, gQgemv4k = NULL, gQgemv4kPre = NULL, gQgemv5k = NULL, gQgemv6k = NULL, gQgemv3k = NULL, gQgemv2k = NULL, gQgemv40 = NULL, gQgemvI4nl = NULL, gQgemvI4xs = NULL, gQgemvMxfp4 = NULL, gQgemvI2xxs = NULL, gQgemvI2xs = NULL, gQgemvI3xxs = NULL, gQgemvI3s = NULL, gQgemvI1s = NULL, gQgemvI1m = NULL, gI8Mma = NULL, gI8MmaT = NULL, gI8MmaRb = NULL, gI8MmaDb = NULL, gI8MmaWt = NULL, gI8MmaWp = NULL, gI8Mmq = NULL, gI8MmqR = NULL, gQrowsI8 = NULL, gLdmProbe = NULL, gLdmProbe2 = NULL, gI8MmaLm = NULL, gCvtF16 = NULL, gCvtFrom16 = NULL; // lazily nvrtc-compiled
+static CUfunction gGelu = NULL, gRelu2 = NULL, gSilu = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gRopePartial = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gAttnSoftmaxCap = NULL, gAttnSoftmaxAlibi = NULL, gQgemv = NULL, gQgemv4 = NULL, gQgemv4k = NULL, gQgemv4kPre = NULL, gQgemv5k = NULL, gQgemv6k = NULL, gQgemv3k = NULL, gQgemv2k = NULL, gQgemv40 = NULL, gQgemvI4nl = NULL, gQgemvI4xs = NULL, gQgemvMxfp4 = NULL, gQgemvI2xxs = NULL, gQgemvI2xs = NULL, gQgemvI3xxs = NULL, gQgemvI3s = NULL, gQgemvI1s = NULL, gQgemvI1m = NULL, gI8Mma = NULL, gI8MmaT = NULL, gI8MmaRb = NULL, gI8MmaDb = NULL, gI8MmaWt = NULL, gI8MmaWp = NULL, gI8Mmq = NULL, gI8MmqR = NULL, gQrowsI8 = NULL, gLdmProbe = NULL, gLdmProbe2 = NULL, gI8MmaLm = NULL, gCvtF16 = NULL, gCvtFrom16 = NULL; // lazily nvrtc-compiled
 static CUfunction gRopeDpos = NULL, gRopePartialDpos = NULL, gAttnSoftmaxDpos = NULL, gAppendDpos = NULL; // device-position (graph-capturable) twins
 static CUfunction gGqaFlashPart = NULL, gGqaFlashMerge = NULL; // flash decode: GQA K/V-shared split-K partials + merge
 static CUfunction gGqaFlashPartF16 = NULL, gAppendDposF16 = NULL; // f16 KV-cache twins (u16 storage, f32 compute)
@@ -511,6 +511,90 @@ done:
 // masked when j > i + offset (offset = seqKV−seqQ for a KV window; offset ≥ seqKV
 // disables masking). Valid scores are ×scale then softmaxed (double sum, §V10);
 // masked entries become 0.
+// cu_attn_softmax_cap: like cu_attn_softmax but applies Gemma 2's attention-logit soft-cap
+// s = cap·tanh(score·scale / cap) to each SCALED score BEFORE the mask + softmax (matching HF
+// Gemma2Attention: scores·scale → softcap → +mask → softmax). cap must be > 0.
+int cu_attn_softmax_cap(void* x, int rows, int cols, float scale, int offset, int seqQ, float cap) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (!gAttnSoftmaxCap && compile_kernel(
+                             "extern \"C\" __global__ void attn_softmax_cap(float* x, int rows, int cols, float scale, int offset, int seqQ, float cap){\n"
+                             "  int row=blockIdx.x; if(row>=rows) return;\n"
+                             "  int lim = (row % seqQ) + offset; if(lim>=cols) lim=cols-1;\n"
+                             "  extern __shared__ double sh[];\n"
+                             "  int t=threadIdx.x, nt=blockDim.x; double dc=(double)cap;\n"
+                             "  float* xr = x + (size_t)row*cols;\n"
+                             "  double m=-1e300;\n"
+                             "  for(int j=t;j<cols;j+=nt){ if(j<=lim){ double v=dc*tanh((double)xr[j]*scale/dc); if(v>m)m=v; } }\n"
+                             "  sh[t]=m; __syncthreads();\n"
+                             "  for(int s=nt/2;s>0;s>>=1){ if(t<s && sh[t+s]>sh[t]) sh[t]=sh[t+s]; __syncthreads(); }\n"
+                             "  double rowmax=sh[0]; __syncthreads();\n"
+                             "  double local=0.0;\n"
+                             "  for(int j=t;j<cols;j+=nt){ if(j<=lim){ double cs=dc*tanh((double)xr[j]*scale/dc); double e=exp(cs-rowmax); xr[j]=(float)e; local+=e; } else { xr[j]=0.0f; } }\n"
+                             "  sh[t]=local; __syncthreads();\n"
+                             "  for(int s=nt/2;s>0;s>>=1){ if(t<s) sh[t]+=sh[t+s]; __syncthreads(); }\n"
+                             "  double inv=1.0/sh[0];\n"
+                             "  for(int j=t;j<=lim;j+=nt){ xr[j]=(float)(xr[j]*inv); }\n"
+                             "}\n",
+                             "attn_softmax_cap.cu", "attn_softmax_cap", &gAttnSoftmaxCap) != 0) { rc = -2; goto done; }
+    {
+        int threads = 256, blocks = rows; if (blocks < 1) blocks = 1;
+        size_t shmem = (size_t)threads * sizeof(double);
+        void* args[7];
+        args[0] = &x; args[1] = &rows; args[2] = &cols; args[3] = &scale;
+        args[4] = &offset; args[5] = &seqQ; args[6] = &cap;
+        rc = (cuLaunchKernel(gAttnSoftmaxCap, blocks, 1, 1, threads, 1, 1, shmem, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_attn_softmax_alibi: like cu_attn_softmax but adds an ALiBi position bias slopeₕ·(j − qabs) to
+// each SCALED score before the mask+softmax (Press et al. 2021). Row r is query qi=r%seqQ in head
+// h=r/seqQ; its absolute position qabs = offset+qi is also the causal limit. slopes is a device
+// array of `heads` per-head slopes (backend.ALiBiSlopes). No RoPE is used with this path.
+int cu_attn_softmax_alibi(void* x, int rows, int cols, float scale, int offset, int seqQ, const void* slopes) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (!gAttnSoftmaxAlibi && compile_kernel(
+                             "extern \"C\" __global__ void attn_softmax_alibi(float* x, int rows, int cols, float scale, int offset, int seqQ, const float* slopes){\n"
+                             "  int row=blockIdx.x; if(row>=rows) return;\n"
+                             "  int qi=row%seqQ; int qabs=offset+qi; int lim=qabs; if(lim>=cols) lim=cols-1;\n"
+                             "  double sl=(double)slopes[row/seqQ];\n"
+                             "  extern __shared__ double sh[];\n"
+                             "  int t=threadIdx.x, nt=blockDim.x;\n"
+                             "  float* xr = x + (size_t)row*cols;\n"
+                             "  double m=-1e300;\n"
+                             "  for(int j=t;j<cols;j+=nt){ if(j<=lim){ double v=(double)xr[j]*scale + sl*(double)(j-qabs); if(v>m)m=v; } }\n"
+                             "  sh[t]=m; __syncthreads();\n"
+                             "  for(int s=nt/2;s>0;s>>=1){ if(t<s && sh[t+s]>sh[t]) sh[t]=sh[t+s]; __syncthreads(); }\n"
+                             "  double rowmax=sh[0]; __syncthreads();\n"
+                             "  double local=0.0;\n"
+                             "  for(int j=t;j<cols;j+=nt){ if(j<=lim){ double v=(double)xr[j]*scale + sl*(double)(j-qabs); double e=exp(v-rowmax); xr[j]=(float)e; local+=e; } else { xr[j]=0.0f; } }\n"
+                             "  sh[t]=local; __syncthreads();\n"
+                             "  for(int s=nt/2;s>0;s>>=1){ if(t<s) sh[t]+=sh[t+s]; __syncthreads(); }\n"
+                             "  double inv=1.0/sh[0];\n"
+                             "  for(int j=t;j<=lim;j+=nt){ xr[j]=(float)(xr[j]*inv); }\n"
+                             "}\n",
+                             "attn_softmax_alibi.cu", "attn_softmax_alibi", &gAttnSoftmaxAlibi) != 0) { rc = -2; goto done; }
+    {
+        int threads = 256, blocks = rows; if (blocks < 1) blocks = 1;
+        size_t shmem = (size_t)threads * sizeof(double);
+        void* args[7];
+        args[0] = &x; args[1] = &rows; args[2] = &cols; args[3] = &scale;
+        args[4] = &offset; args[5] = &seqQ; args[6] = &slopes;
+        rc = (cuLaunchKernel(gAttnSoftmaxAlibi, blocks, 1, 1, threads, 1, 1, shmem, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
 int cu_attn_softmax(void* x, int rows, int cols, float scale, int offset, int seqQ) {
     int rc = -1;
     pthread_mutex_lock(&gLock);
