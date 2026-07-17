@@ -152,6 +152,9 @@ type recorder interface {
 	// RowAxpy accumulates dst[r,:] += arow[r]·src[r,:] (the MoE weighted combine). Both cuda-only.
 	MoEGate(logits, weights buffer, rows, e, k int) error
 	RowAxpy(dst, src, arow buffer, rows, cols int) error
+	// MHARect is multi-head attention with a rectangular head shape: query/key share head width dqk,
+	// value has a different head width dv (o is heads·dv wide). The DeepSeek-V2 MLA shape. cuda-only.
+	MHARect(q, k, v, o buffer, sq, sk, heads, kvHeads, dqk, dv, causal, window int, scale float32) error
 	Unary(x, o buffer, op int) error
 	Binary(a, b, o buffer, op int) error
 	QMatMulResident(x buffer, w qweight, o buffer, m int) error
