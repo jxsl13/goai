@@ -237,11 +237,12 @@ func f16PrefillAB(t *testing.T, rl *residentLlama, rl16 *residentLlamaF16, vocab
 // residentLlamaF16 mirrors residentLlama with all projection weights in f16 (embeddings,
 // norms and the head stay f32 — the head's [dim,vocab] GEMM is also swapped to f16).
 type resLayerF16 struct {
-	gAttn, gFFN    *cuda.ResidentVec
-	wq, wk, wv, wo *cuda.ResidentBF16
-	wg, wu, wd     *cuda.ResidentBF16
-	heads, kv      int
-	ropeBase, eps  float64
+	gAttn, gFFN   *cuda.ResidentVec
+	qkv           *cuda.ResidentBF16QKV // fused wq|wk|wv — 1.19x vs three separate GEMMs (BenchmarkQKVProj)
+	wo            *cuda.ResidentBF16
+	wg, wu, wd    *cuda.ResidentBF16
+	heads, kv     int
+	ropeBase, eps float64
 }
 
 type residentLlamaF16 struct {
@@ -272,9 +273,11 @@ func buildResidentLlamaF16(tb testing.TB, m *nlp.Llama) *residentLlamaF16 {
 	for i, blk := range m.Blocks {
 		ga, _ := cuda.NewResidentVec(cast(blk.AttnNorm.Gamma))
 		gf, _ := cuda.NewResidentVec(cast(blk.FFNNorm.Gamma))
+		qkv, err := cuda.NewResidentBF16QKV(cast(blk.Wq), cast(blk.Wk), cast(blk.Wv))
+		mustTB(tb, err)
 		rl.layers[i] = &resLayerF16{
 			gAttn: ga, gFFN: gf,
-			wq: mk(blk.Wq), wk: mk(blk.Wk), wv: mk(blk.Wv), wo: mk(blk.Wo),
+			qkv: qkv, wo: mk(blk.Wo),
 			wg: mk(blk.FFN.Wgate), wu: mk(blk.FFN.Wup), wd: mk(blk.FFN.Wdown),
 			heads: cfg.Heads, kv: kv, ropeBase: cfg.RopeBase, eps: cfg.Eps,
 		}
@@ -289,7 +292,8 @@ func (rl *residentLlamaF16) free() {
 	for _, l := range rl.layers {
 		l.gAttn.Free()
 		l.gFFN.Free()
-		for _, w := range []*cuda.ResidentBF16{l.wq, l.wk, l.wv, l.wo, l.wg, l.wu, l.wd} {
+		l.qkv.Free()
+		for _, w := range []*cuda.ResidentBF16{l.wo, l.wg, l.wu, l.wd} {
 			w.Free()
 		}
 	}
@@ -304,12 +308,10 @@ func (l *resLayerF16) forward(dx *cuda.DeviceF32) (*cuda.DeviceF32, error) {
 	if err != nil {
 		return nil, err
 	}
-	dq, err := l.wq.MatMulDevice(dh)
+	dq, dk, dv, err := l.qkv.MatMulQKV(dh)
 	if err != nil {
 		return nil, err
 	}
-	dk, _ := l.wk.MatMulDevice(dh)
-	dv, _ := l.wv.MatMulDevice(dh)
 	dh.Free()
 	dq.RoPE(rq)
 	dk.RoPE(rk)

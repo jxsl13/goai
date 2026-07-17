@@ -763,6 +763,52 @@ compress from 165µs to 60µs per row (2.8×) and reconstruct from 43µs to 23µ
 rotation is 119× faster (`BenchmarkRotationHadamard` 2.5µs vs `BenchmarkRotationDense` 294µs); the
 QJL sketch was then also moved to its fast-JL (Hadamard) form: the full chain is now Append 165→9.9µs (16.6×) and reconstruct 43→3.0µs (14.3×) vs the original dense implementation, both stages O(d log m), with unbiasedness re-verified.
 
+## Perf-gap analysis 2026-07-17: benchmark-driven, biggest gap = prefill (worker linux-amd64)
+
+Full head-to-head refresh (llama.cpp b10012 Vulkan 3 reps; goai best paths; RTX 3060,
+TinyLlama-1.1B, sequential runs so the GPU is never shared), ranked by gap:
+
+| metric | goai (best path) | llama.cpp Q8 | llama.cpp Q4_K_M | goai / best-llcpp |
+|---|---:|---:|---:|---:|
+| **prefill pp128** | **5170** (f16-acc) | 8474 | 7633 | **0.61×** ← biggest |
+| prefill pp32 | 2655 (f16-acc) | 3297 | 3338 | 0.80× |
+| decode tg128 | 256.9 (Q4_K graph) | 244.0 | 326.2 | 1.05× vs Q8 / 0.79× vs Q4_K_M |
+
+Decode already **leads** llama.cpp-Q8 (1.05×); the biggest gap is **prefill pp128 (0.61×)**.
+Prefill profile (`TestCUDAPrefillProfile`, seq=128, 52.9 ms): **GEMM 71.6%** (ffn 53.5% +
+qkv 11.1% + o 7.0%), attention 13.7%, rope 5.8%, rmsnorm 3.1%, swiglu 1.7%. The ffn/o/down
+GEMMs run cuBLAS f16-acc at ≈26.5 TFLOP/s (≈51% of the 3060's f16 peak) — near the cuBLAS
+ceiling; the fundamental prefill lever (int8 MMQ, 2× tensor FLOPs) stays toolchain-blocked
+(nvrtc has no `mma.h`; cuBLAS int8 measured weak on GA106, Tw60).
+
+**Actionable GEMM-fusion lever, measure-first (`BenchmarkF16Proj_*`, M=128):** the qkv and
+gate/up projections run as separate cuBLAS calls. Fusing each into one wider GEMM (same total
+FLOPs):
+
+| group | separate | fused | fused / separate |
+|---|---:|---:|---:|
+| qkv {2048,256,256} → 2560 | 92.1 µs (14577 GFLOP/s) | 66.1 µs (20307) | **1.39× faster** |
+| gate/up {5632,5632} → 11264 | 222.1 µs (26584) | 237.3 µs (24889) | 1.07× **slower** |
+
+Decisive split: **fuse QKV** (the tiny N=256 k/v projections waste tensor cores as separate
+GEMMs; fused into N=2560 they ride along at full utilization — 1.39×), but **NOT gate/up**
+(both already large and well-utilized; fusing the wider N picks a worse cuBLAS tile). QKV
+fusion is the Tw55 "concurrent-projections" gap; at 11.1% of prefill it is worth ≈+3% e2e.
+Landing it e2e = a fused-QKV resident f16 weight + column-split of the output, wired into the
+unified-serve prefill (follow-up). gate/up fusion is now a recorded non-lever — do not build it.
+
+**Landed + a main regression found while landing it.** The fused-QKV projection
+(`ResidentBF16QKV.MatMulQKV`, parity-gated) is wired into the f16 prefill and the
+unified-serve seed forward: e2e prefill seq=128 **5170 → 5259 tok/s (+1.7%)**, seq=32
+2655 → 2732 (+2.9%). While validating, `TestCUDAUnifiedServePrefillHandoff` failed at
+rel L1 **1.4017** — bisected (4 runs) to main commit **ac4709b** ("nlp: fix LlamaFromGGUF
+missing llama-arch q/k un-permute, B67"), NOT the fusion (identical failure with the unfused
+code; parent commit passes). Root cause: the B67 fix moved `LlamaFromGGUF` (the f16 stack's
+weight source) to the correct un-permuted q/k convention, but the bespoke Q4_K raw-GGUF graph
+decoder still carries the pre-B67 convention — each path is self-consistent, the K-cache
+handoff between them now compares different channel orders. Fix owed: apply the B67 q/k
+un-permute to the cuda raw-GGUF decoder (next task); the handoff gate then re-closes.
+
 ## CUDA GPU inference vs llama.cpp (worker: linux/amd64 + RTX 3060, §PERF)
 
 The `-tags cuda` backend runs a full TinyLlama-1.1B decoder resident on an NVIDIA

@@ -5,6 +5,7 @@ package cuda
 import (
 	"math"
 	"testing"
+	"unsafe"
 )
 
 // f16-accumulate accuracy vs f32-accumulate (the current prefill quality baseline). Both use
@@ -110,6 +111,77 @@ func benchF16acc(b *testing.B, m, k, n int, acc16 bool) {
 	b.StopTimer()
 	b.ReportMetric(2.0*float64(m)*float64(n)*float64(k)/(b.Elapsed().Seconds()/float64(b.N))/1e9, "GFLOP/s")
 }
+
+// benchProjGroup times a projection group as either N separate f16-acc GEMMs (one per output
+// width in `ns`) or ONE fused GEMM over their summed width — the same total FLOPs either way,
+// so wall-time directly measures the launch-overhead + tensor-core-utilization win of fusion.
+// TinyLlama prefill M=128, K=2048: qkv = {2048,256,256}, gate/up = {5632,5632}.
+func benchProjGroup(b *testing.B, m, k int, ns []int, fused bool) {
+	total := 0
+	for _, n := range ns {
+		total += n
+	}
+	aF := make([]float32, m*k)
+	for i := range aF {
+		aF[i] = 0.01 * float32(i%17)
+	}
+	da := f32Upload(aF)
+	if da == nil {
+		b.Fatal("upload a failed")
+	}
+	defer devFree(da)
+	// One resident f16 weight and one output per widths entry (separate) or the summed width (fused).
+	widths := ns
+	if fused {
+		widths = []int{total}
+	}
+	dws := make([]unsafe.Pointer, len(widths))
+	dcs := make([]unsafe.Pointer, len(widths))
+	for i, n := range widths {
+		wF := make([]float32, n*k)
+		for j := range wF {
+			wF[j] = 0.01 * float32(j%19)
+		}
+		dws[i] = f16Upload(wF)
+		dcs[i] = devAllocBytes(m * n * 2)
+		if dws[i] == nil || dcs[i] == nil {
+			b.Fatal("upload/alloc failed")
+		}
+	}
+	defer func() {
+		for i := range widths {
+			devFree(dws[i])
+			devFree(dcs[i])
+		}
+	}()
+	run := func() {
+		for i, n := range widths {
+			if matmulF16acc16(da, dws[i], dcs[i], m, k, n) != 0 {
+				b.Fatal("gemm failed")
+			}
+		}
+	}
+	run()
+	devSync()
+	b.ResetTimer()
+	for range b.N {
+		run()
+	}
+	devSync()
+	b.StopTimer()
+	b.ReportMetric(2.0*float64(m)*float64(total)*float64(k)/(b.Elapsed().Seconds()/float64(b.N))/1e9, "GFLOP/s")
+}
+
+func BenchmarkF16Proj_qkv_sep(b *testing.B) {
+	benchProjGroup(b, 128, 2048, []int{2048, 256, 256}, false)
+}
+func BenchmarkF16Proj_qkv_fused(b *testing.B) {
+	benchProjGroup(b, 128, 2048, []int{2048, 256, 256}, true)
+}
+func BenchmarkF16Proj_gateup_sep(b *testing.B) {
+	benchProjGroup(b, 128, 2048, []int{5632, 5632}, false)
+}
+func BenchmarkF16Proj_gateup_fu(b *testing.B) { benchProjGroup(b, 128, 2048, []int{5632, 5632}, true) }
 
 func BenchmarkF16acc_gateup_a32(b *testing.B) { benchF16acc(b, 128, 2048, 5632, false) }
 func BenchmarkF16acc_gateup_a16(b *testing.B) { benchF16acc(b, 128, 2048, 5632, true) }
