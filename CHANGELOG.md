@@ -4,6 +4,32 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### ci — compile the vulkan test corpus; document why the cuda one cannot be (T865, ADR-0029)
+
+A sweep measured 117 test funcs in `llamagpu` against **32** reachable by CI. `go vet ./...`
+skips both tagged corpora (wrong tags), `go build -tags vulkan ./...` skips `_test.go` by
+design, and the vulkan lane's test step targets a different package. So 85 test funcs —
+every cuda architecture `MatchesReference`, every Q8 `CloseToF32` — were neither run,
+compiled, nor vet-checked, and could rot behind a green pipeline.
+
+The obvious remedy is two `go vet -tags` lines. Only one of them is real, and finding out
+which mattered more than the fix. **`go vet -tags cuda ./llamagpu/` succeeds on darwin and
+verifies nothing**: those files are `(linux || windows)`-constrained, so the command
+compiles an empty set. Confirmed the only way such a claim can be — by injecting a syntax
+error into `cuda_bert_test.go` and watching the check pass anyway. On ubuntu the same
+command would compile them and then demand CUDA toolkit headers no runner has, failing for
+a reason unrelated to the change under test, on a lane a parallel worker shares.
+
+So: the vulkan check is added to the lane that provisions the SDK, verified non-vacuous by
+the same fault-injection method. The cuda side is declined and written down as a boundary
+(ADR-0029) — syntax rot IS caught by the tree-wide gofmt step, which parses regardless of
+build tags; type and API rot is not, and cannot be without a toolchain.
+
+Worth stating plainly because the sweep claimed otherwise: this would NOT have caught the
+inverted-NaN-guard bug found alongside it. Compiling a test is not running it, and no
+vetting detects an assertion that cannot fail. Conflating the two would trade a known gap
+for a false sense of coverage, which is worse — it stops people looking.
+
 ### nlp — measure the HF parity tolerance rather than leaving it folklore (T864, 2026-07-18)
 
 The §V16 HF-parity gate is hardcoded as `2e-3` in 32 test files. T862 flagged that real

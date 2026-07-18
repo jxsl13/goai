@@ -154,6 +154,16 @@ jobs:
           ./.venv/bin/python -c "import numpy; print('numpy', numpy.__version__)"
       - name: compile everything incl. tests via go vet (§V23)
         run: go vet ./...
+      # NOTE on the cuda test corpus, deliberately NOT added here. llamagpu's 56
+      # cuda test files are `//go:build cuda && cgo && (linux || windows)` and
+      # import backend/cuda, so compiling them on this ubuntu lane would require the
+      # CUDA toolkit headers, which the runner does not have — the step would fail
+      # for a reason unrelated to the change under test. (Running `go vet -tags
+      # cuda` on darwin instead only LOOKS clean: the OS constraint excludes every
+      # one of those files, so it compiles nothing. Verified by injecting a syntax
+      # error and watching it pass.) Syntax rot in those files IS caught, by the
+      # tree-wide gofmt step above, which parses regardless of build tags; type and
+      # API rot is not, and cannot be without a toolchain. See ADR-0029.
       - name: race-detector tests for the affected packages (§T587)
         run: |
           BASE="${{ github.event.pull_request.base.sha || github.event.before }}"
@@ -260,6 +270,13 @@ jobs:
             export CGO_CFLAGS="-I$SDK/Include" CGO_LDFLAGS="-L$SDK/Lib"
           fi
           go build -tags vulkan ./...
+          # `go build` skips _test.go entirely, so llamagpu's vulkan-tagged test
+          # files were compiled by nothing — they could rot indefinitely while this
+          # lane stayed green. `go vet` does compile them. Verified non-vacuous by
+          # injecting a syntax error and confirming it is caught (unlike the cuda
+          # corpus, whose OS constraint makes the same check compile nothing — see
+          # the note in the cgo lane and ADR-0029).
+          go vet -tags vulkan ./llamagpu/
       - name: run backend/vulkan tests — only if this change touches it AND an ICD is present (§T600)
         shell: bash
         run: |
