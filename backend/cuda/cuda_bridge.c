@@ -298,16 +298,16 @@ donepd:
 // sequence) with `group` warps — each tile of K/V is staged into shared memory ONCE and reused by
 // all `group` query heads of that kv head (the naive B2 kernel re-reads each kv head group×; on
 // TinyLlama group=8, so ~8× the L2 traffic, and decode attention measured at 45% of the batched
-// step at b512). Online-softmax flash form, hd==64, blockSize is the tile so paged blocks load
-// contiguously. group ≤ 8 (8 warps/block). GQA K/V sharing mirrors gqa_flash_partial without the
-// split-K (batch×kvHeads blocks already saturate the SMs).
+// step at b512). Online-softmax flash form, hd==64, 32-key shared tiles (full-warp QK; a tile may
+// span two paged blocks, resolved per token via the block table). group ≤ 8 (8 warps/block). GQA
+// K/V sharing mirrors gqa_flash_partial without the split-K (batch×kvHeads blocks saturate the SMs).
 int cu_paged_decode_attn_gqa(const void* dQ, const void* dPoolK, const void* dPoolV,
                              const void* dBlockTables, const void* dSeqLens, void* dO,
                              int batch, int qHeads, int kvHeads, int hd, int blockSize, int maxBlocks,
                              float scale) {
     int rc = -1;
     int group = qHeads / kvHeads;
-    if (hd != 64 || group > 8 || blockSize > 16) return -4; // warp budget + 16-token shared tile
+    if (hd != 64 || group > 8 || blockSize > 16) return -4; // warp budget; paged blocks ≤16 tok (32-key tile may span 2)
     pthread_mutex_lock(&gLock);
     if (ensure_init() != 0) { rc = -1; goto donepg; }
     if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto donepg; }
@@ -322,18 +322,19 @@ int cu_paged_decode_attn_gqa(const void* dQ, const void* dPoolK, const void* dPo
         "  int hp = hd + 1;\n"
         "  extern __shared__ float sh[];\n"
         "  float* shq = sh;                 // [group*hd] the group's query heads\n"
-        "  float* shk = shq + group*hd;     // [16*hp] K tile\n"
-        "  float* shv = shk + 16*hp;        // [16*hp] V tile\n"
+        "  float* shk = shq + group*hd;     // [32*hp] K tile (32 keys → full-warp QK)\n"
+        "  float* shv = shk + 32*hp;        // [32*hp] V tile\n"
         "  for (int i = t; i < group*hd; i += nt) shq[i] = Q[(size_t)seq*qHeads*hd + (size_t)kvh*group*hd + i];\n"
         "  float NEGINF = __int_as_float(0xff800000);\n"
         "  float m = NEGINF, l = 0.f, a0 = 0.f, a1 = 0.f;\n"
-        "  for (int base = 0; base < n; base += 16){\n"
-        "    int nk = n - base; if (nk > 16) nk = 16;\n"
-        "    size_t physBase = (size_t)bt[base / blockSize]*blockSize; // base aligned to blockSize(=16)\n"
+        "  for (int base = 0; base < n; base += 32){\n"
+        "    int nk = n - base; if (nk > 32) nk = 32;\n"
         "    __syncthreads();\n"
         "    for (int i = t; i < nk*hd; i += nt){\n"
         "      int j = i / hd, d = i - j*hd;\n"
-        "      size_t src = (physBase + j)*WKV + (size_t)kvh*hd + d;\n"
+        "      int tok = base + j;\n"
+        "      size_t phys = (size_t)bt[tok / blockSize]*blockSize + (tok % blockSize); // per-token: a 32-tile may cross 2 paged blocks\n"
+        "      size_t src = phys*WKV + (size_t)kvh*hd + d;\n"
         "      shk[j*hp + d] = poolK[src];\n"
         "      shv[j*hp + d] = poolV[src];\n"
         "    }\n"
@@ -377,7 +378,7 @@ int cu_paged_decode_attn_gqa(const void* dQ, const void* dPoolK, const void* dPo
         void* args[13] = { (void*)&dQ, (void*)&dPoolK, (void*)&dPoolV, (void*)&dBlockTables,
                            (void*)&dSeqLens, &dO, &batch, &qHeads, &kvHeads, &hd, &blockSize,
                            &maxBlocks, &scale };
-        size_t shmem = ((size_t)group*hd + 2u*16u*(hd+1)) * sizeof(float);
+        size_t shmem = ((size_t)group*hd + 2u*32u*(hd+1)) * sizeof(float);
         rc = (cuLaunchKernel(gPagedDecodeGqa, (unsigned)kvHeads, (unsigned)batch, 1, 256, 1, 1,
                              (unsigned)shmem, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
