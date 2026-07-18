@@ -1124,16 +1124,30 @@ def write_safetensors_sample(root):
 
 
 def write_npy_samples(root):
-    """Emit real numpy .npy files to validate the Pure-Go reader (§T10)."""
-    dest = os.path.join(root, "..", "internal", "npy", "testdata")
+    """Emit real numpy .npy files to validate the Pure-Go reader (§T10).
+
+    These are the §V16 foreign-convention anchors for format/npy: written by the
+    reference numpy, not by our writer, so a symmetric round-trip cannot hide a
+    header or byte-order error (§B67).
+
+    The values below reproduce the committed fixtures BYTE-FOR-BYTE (verified
+    against numpy 2.5.1), so regenerating is a no-op unless numpy itself changes
+    what it emits — which is exactly the drift this generator exists to surface.
+    Do not "tidy" the values: format/npy/npy_test.go asserts them literally.
+
+    Historical note worth keeping: this function used to write into
+    internal/npy/testdata. That package has ZERO importers, while format/npy has
+    35 — so the only reproducible numpy-produced fixtures in the tree were feeding
+    a package nothing used, and the live reader's fixtures had no generator at
+    all. It now targets the live package.
+    """
+    dest = os.path.join(root, "..", "format", "npy", "testdata")
     os.makedirs(dest, exist_ok=True)
     a64 = np.array([[1.5, -2.0, 3.25], [4.0, 5.5, -6.75]], dtype=np.float64)
-    a32 = np.arange(12, dtype=np.float32).reshape(3, 4) * 0.5
-    v = np.array([1.0, 2.0, 3.0], dtype=np.float64)  # 1-D shape (3,)
-    np.save(os.path.join(dest, "mat_f64.npy"), a64)
-    np.save(os.path.join(dest, "mat_f32.npy"), a32)
-    np.save(os.path.join(dest, "vec_f64.npy"), v)
-    print("wrote", os.path.relpath(dest, os.path.join(root, "..")), "*.npy")
+    a32 = np.array([0.5, 1.5, 2.5, -3.5], dtype=np.float32)
+    np.save(os.path.join(dest, "ref_f64.npy"), a64)
+    np.save(os.path.join(dest, "ref_f32.npy"), a32)
+    print("wrote", os.path.relpath(dest, os.path.join(root, "..")), "ref_*.npy")
 
 
 def build_grpo(root):

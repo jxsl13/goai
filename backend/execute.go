@@ -29,6 +29,20 @@ func Execute(ctx *Context, op Op, inputs []*tensor.Tensor, attrs Attrs) ([]*tens
 	if ctx == nil {
 		ctx = NewContext()
 	}
+	// Attrs type gate (§B): a MISMATCHED Attrs must not reach a kernel. Kernels read
+	// their parameters with `pa, _ := attrs.(backend.FooAttrs)` and drop the ok — which
+	// is right for nil (parameterless ops pass nil and the zero value feeds WithDefaults)
+	// but turns a wrong type into the ZERO value, i.e. a wrong answer reported as
+	// success. Execute is public, so this is reachable from outside the package.
+	// Checked once here rather than in ~90 kernels, so it cannot be forgotten by the
+	// next one. nil short-circuits before any work, keeping the common parameterless
+	// call free.
+	if attrs != nil {
+		if err := checkAttrs(op, attrs); err != nil {
+			return nil, err
+		}
+	}
+
 	dtype := tensor.Invalid
 	if len(inputs) > 0 {
 		dtype = inputs[0].Dtype()

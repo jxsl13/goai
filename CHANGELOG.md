@@ -4,6 +4,110 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### ci — actually run the numpy cross-checks (T851, 2026-07-18)
+
+`format/npy` and `format/npz` carry §V16 cross-checks that verify a file GoAI WRITES is
+readable by the reference numpy. They locate python at `../../.venv/bin/python` and
+`t.Skip` when it is absent — and CI installed no Python at all, so they had never run
+there. A green pipeline said nothing about the write direction. (The read direction was
+always covered, by committed reference fixtures.)
+
+The cgo+race lane now builds a numpy venv before the test steps. It is deliberately
+`continue-on-error`: if PyPI is unreachable the venv is simply absent and those tests skip
+exactly as they did before, so this can never redden a lane for a reason unrelated to the
+change under test. Strictly better than the previous state, never worse.
+
+### testdata — point the numpy fixture generator at the package that is actually used (T850, 2026-07-18)
+
+`make golden` regenerated `internal/npy/testdata`. That package has ZERO importers, while
+`format/npy` — the live reader, imported by 35 files — had no fixture generator at all. So
+the only reproducible numpy-produced .npy fixtures in the tree were feeding dead code, and
+the §V16 foreign-convention anchors for the reader people actually use could not be
+regenerated or extended.
+
+`write_npy_samples` now targets `format/npy/testdata` and emits the two fixtures the live
+tests assert. Verified byte-for-byte identical to the committed files against numpy 2.5.1,
+so this changes no fixture content — it only makes drift detectable, which is the whole
+point of a reference-produced anchor (§B67: a symmetric round-trip cannot catch a header or
+byte-order error).
+
+Note the dead `internal/npy` package (a 347-line duplicate .npy implementation, plus tests)
+is left in place rather than removed as part of a generator fix; its committed fixtures are
+untouched so it still builds and passes.
+
+### backend — reject mismatched Attrs instead of silently answering wrong (B69/T849, 2026-07-18)
+
+Fixes a reachable silent-wrong-answer bug. `backend.Execute` is public, and kernels read
+their parameters with the documented `pa, _ := attrs.(backend.SomeAttrs)` idiom. Discarding
+the `ok` is correct for a nil Attrs — that is the convention for parameterless ops and for
+ops whose defaults suffice — but it was also silently swallowing a type MISMATCH. So
+`Execute(ctx, OpSum, in, ConcatAttrs{Axis: 1})` handed OpSum's kernel the ZERO
+`ReduceAttrs`, which means "reduce every axis", returning the scalar `28` with `err == nil`
+where the caller asked for the per-axis sums `[6 22]`. A second failure mode: `OpSlice` with
+the same wrong type errored only by luck, blaming the range
+(`slice range [0,0) invalid`) instead of naming the cause.
+
+`Execute` now screens a non-nil Attrs against a per-op table before kernel resolution,
+erroring with the op, the type passed and the type expected. Nil stays legal, gated
+explicitly across both parameterless ops and ops relying on defaults. The table expresses
+parameterless ops (the zero value), multi-type ops, and a deliberate waiver for a future
+outlier — the waiver is unused today and exists so the first op that needs it does not tempt
+someone into deleting the check.
+
+The mapping going stale is the real long-term risk, so the guard never reads it. It
+recovers each op's reference kernel, resolves the exact function via its program counter,
+walks the ref package AST to collect the `attrs.(...)` assertions the kernel actually
+performs — following the attrs parameter into package-level helpers, which is required
+since pooling asserts `PoolAttrs` inside `poolDims` rather than in the kernel — then probes
+Execute's public behaviour with a deliberately wrong Attrs and demands the two agree. 90
+subtests, with a floor assertion so the sweep cannot go vacuous. Verified to actually fail
+three ways (missing entry, stale type, and the helper-following maxpool case) and restored
+green after each.
+
+Measured overhead is ~2 ns on the parameterised path and nothing measurable on the nil path.
+No caller anywhere in the tree passed a mismatched type, so the fix is purely additive. The
+`Attrs` godoc previously described the bug as intended behaviour ("zero value when nil or
+mismatched") and now explains why discarding `ok` is safe only because Execute pre-screens.
+
+### nn — LR scheduler objects (T848, 2026-07-18)
+
+Bound, checkpointable scheduler objects: `StepLR`, `ExponentialLR`,
+`CosineAnnealingLR` (with warmup), `LambdaLR` over any `lr(step)` function, and the
+metric-driven `ReduceLROnPlateau` — the one schedule no closed form can express, and the
+reason an object API is needed at all. `LambdaLR` is the anti-duplication seam: the
+existing pure `WarmupCosine`/`WSD`/`InverseSqrt`/`OneCycleLR` schedules drive the object
+API instead of being reimplemented behind it.
+
+No optimizer file was touched. LR turned out to be an exported field on 21 of the 25
+`Step`-implementing optimizers, so `BindLR` resolves a rate through four rules — the opt-in
+`LRSetter` interface, `ParamGroups` fan-out, reflection on the exported `LR` field, and
+recursion into an exported `Base` optimizer — reaching all 25 rather than the handful the
+task scoped. `ParamGroups` composition preserves per-group ratios (verified 10× preserved).
+
+Because most binding happens by reflection rather than through a compiler-checked
+interface, a new or renamed optimizer would not fail to build — it would just never be
+schedulable, and a scheduler that silently never moves the learning rate is
+indistinguishable from a working one in a green suite. `BindLR` therefore errors on an
+unreachable optimizer rather than no-opping (pinned by a test), and a new AST-walking guard
+fails when any type defining `Step` is unaccounted for, or when the accounting lists a type
+that no longer exists. The guard was verified to actually fail by removing an entry and
+confirming red before restoring it.
+
+Both scheduler types checkpoint completely (not T842's partial opt-in) — a schedule is a
+handful of numbers and the failure mode is severe. `ReduceLROnPlateau` derives its rate from
+a reduction count, which makes resume exact. Checkpoints store the schedule kind and bound-
+rate count, so a cosine state cannot load into a StepLR and a 1-rate state cannot load into
+a 2-group scheduler. What is deliberately NOT stored is the schedule shape (`total`,
+`gamma`, `warmup` are constructor args), so a resuming process must rebuild with the same
+values; the godoc says so.
+
+Gates are exact against hand-computed trajectories (1e-15 for the staircases, 1e-12 for
+cosine), each with a discriminator: plateau patience 2 fires at exactly step 4 while
+patience 5 on the identical stream never fires; a resume without loading state diverges at
+the interruption point. End to end, a 300-step stochastic regression reaches final loss
+0.00106 scheduled versus 0.0104 constant — 9.8× better — and the test fails below 2×, so a
+task that converges anyway could not pass it.
+
 ### nn — truncated-normal / orthogonal init and AvgPool2D (T847, 2026-07-18)
 
 `TruncNormal` matches torch's `_no_grad_trunc_normal_` inverse-CDF method (not rejection
