@@ -163,6 +163,15 @@ func llamaArchFromGGUF(arch string, meta map[string]any, tensors map[string]*ten
 // llama.cpp's converter permute, applied via [permuteSplitToInterleave] /
 // [ropePermuteVec]), so the produced file follows the same convention as a real
 // llama.cpp conversion. Pass the result to gguf.Write.
+//
+// The emitted metadata carries every MODEL-side key llama.cpp's loader requires;
+// to produce a file real llama.cpp will load, the caller must additionally add
+// the tokenizer block — tokenizer.ggml.model, tokenizer.ggml.tokens (whose
+// length MUST equal the model's Vocab) and, for BPE, tokenizer.ggml.merges —
+// since the vocab is the caller's data. The full recipe, the required-key table
+// and the live verification harness (a GoAI-written file loads, generates, and
+// greedy-matches GoAI token-for-token in a real llama.cpp build) are documented
+// in docs/gguf.md "Exporting to llama.cpp" / scripts/interop_llamacpp.sh.
 func LlamaToGGUF(m *Llama) (map[string]any, map[string]*tensor.Tensor) {
 	meta, ts := llamaArchToGGUF("llama", m)
 	c := m.Config

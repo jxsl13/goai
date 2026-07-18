@@ -4,6 +4,21 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — GoAI→llama.cpp export interop verified at the strongest level (T834, closes §B23, 2026-07-18)
+
+A GoAI-written GGUF now demonstrably loads and generates in REAL llama.cpp (CPU build,
+commit 86a9c79), with the F32 greedy completion BYTE-IDENTICAL to GoAI's own `Generate`
+token-for-token, and prompt tokenization matching (`llama-tokenize` ids == `BPEFromGGUF`).
+A `WriteQuantized` Q8_0 file also loads and generates; its greedy path diverges at one
+near-tie argmax because llama.cpp computes in int8 quantized arithmetic while GoAI's float
+loader dequantizes — a principled, documented difference, not a format defect. Findings:
+`llamaArchToGGUF` already emits every model-side key llama.cpp requires and the
+`format/gguf` writer needed zero fixes; the only gap was the undocumented caller-side
+tokenizer contract (tokens/merges/model required; `len(tokens)` BECOMES `n_vocab`), now
+documented on `LlamaToGGUF` and pinned by a CI-time required-key test. The live harness is
+`scripts/interop_llamacpp.sh` (clones+builds llama.cpp, gates levels A/B/C); the interop
+section in docs/gguf.md carries the key tables with source citations.
+
 ### nlp — quantized GGUF decode for DeepSeek-V2, the MLA capstone (T833, 2026-07-18)
 
 `QuantDeepSeekV2` + `QuantDeepSeekV2FromGGUF` close the quant campaign at NINETEEN of

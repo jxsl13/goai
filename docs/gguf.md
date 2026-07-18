@@ -103,6 +103,79 @@ manipulation, provably identical to quantizing the transformed float weights:
 None of these ever dequantize-and-requantize (which would compound quantization
 error); each is proven byte-equal to the direct quantization in the test suite.
 
+## Exporting to llama.cpp (verified interop)
+
+The `*ToGGUF` writers don't just serve GoAI round-trips: a GoAI-written GGUF
+**loads and generates in real llama.cpp**, and for a float file llama.cpp's
+greedy completion is **byte-identical to GoAI's own `Generate`** on the same
+file. Verified against llama.cpp commit `86a9c79` (2026-07-17, CPU build) with
+`scripts/interop_llamacpp.sh`:
+
+- **Level A** — `llama-cli` loads a `LlamaToGGUF` + `gguf.Write` F32 file and
+  generates from it.
+- **Level B** — a `gguf.WriteQuantized` Q8_0 file (2-D tensors quantized, 1-D
+  norm gains F32) also loads and generates.
+- **Level C** — on the F32 file, llama.cpp's greedy completion (`llama-simple`,
+  no BOS, no chat template) matches GoAI's `Generate` **token-for-token over 9
+  tokens**, and `llama-tokenize` agrees with `BPEFromGGUF` on the prompt ids.
+
+Q8_0 greedy parity is *not* claimed: llama.cpp computes directly in quantized
+arithmetic (Q8_0 dot products over int8 blocks) while GoAI's float loader
+dequantizes to f64, so near-tie argmaxes can diverge (observed at generated
+token 6 on the tiny fixture). That is an arithmetic-path difference on
+identical bytes, not a format defect — GoAI's `QuantLlamaFromGGUF` exists
+precisely to run the quantized arithmetic natively.
+
+### What the file must contain
+
+`LlamaToGGUF` (and the other `*ToGGUF` writers) emit every **model-side** key
+llama.cpp requires — verified against its loader source, where a missing
+required key is a `throw`:
+
+| Key | llama.cpp source (commit `86a9c79`) | GoAI writer |
+|---|---|---|
+| `general.architecture` | `llama_model_loader` / `load_hparams` — required | ✓ written |
+| `llama.context_length` | `llama_model_base::load_hparams` (`src/llama-model.cpp`) — required | ✓ |
+| `llama.embedding_length` | same — required | ✓ |
+| `llama.block_count` | same — required | ✓ |
+| `llama.attention.layer_norm_rms_epsilon` | `llama_model_llama::load_arch_hparams` (`src/models/llama.cpp`) — required | ✓ |
+| `llama.feed_forward_length`, `llama.attention.head_count` | optional in `load_hparams` but default 0 breaks tensor creation | ✓ |
+| `llama.attention.head_count_kv` | optional, defaults to `head_count` — GQA-critical | ✓ |
+| `llama.rope.freq_base` | optional, defaults 10000 — semantics-critical | ✓ |
+
+What `LlamaToGGUF` deliberately does **not** write is the tokenizer block —
+that is the *caller's* data (a model struct carries no vocab). llama.cpp
+refuses to load **any** model file without it (`src/llama-vocab.cpp`
+`llama_vocab::impl::load`), so an exporter must add:
+
+| Key | Requirement |
+|---|---|
+| `tokenizer.ggml.model` | **required** (`get_key` throws); `"gpt2"` selects byte-level BPE |
+| `tokenizer.ggml.tokens` | **required** ("cannot find tokenizer vocab"); `len(tokens)` becomes `n_vocab` and **must equal the model's `Vocab`** — token_embd is created as `{n_embd, n_vocab}` |
+| `tokenizer.ggml.merges` | **required for BPE** ("cannot find tokenizer merges") |
+| `tokenizer.ggml.pre` | optional — absent warns and falls back to `"default"`; write `"gpt-2"` for a GPT-2-regex vocab |
+| `tokenizer.ggml.bos_token_id` / `eos_token_id` | optional (BPE defaults both to 11) — set them explicitly |
+| `tokenizer.ggml.add_bos_token` | optional — set `false` to keep llama.cpp's prompt identical to a plain `BPEFromGGUF` `Encode` |
+
+A byte-level BPE vocab should contain all 256 GPT-2 byte tokens
+(`bytes_to_unicode` form) so any input tokenizes in both engines. The exact
+recipe — `LlamaToGGUF` output + the table above — is executable in
+`scripts/interop_llamacpp_spike.go.txt`, and
+`TestLlamaCppInteropRequiredMetadata` (`nlp/llamacpp_interop_test.go`) pins the
+full key set through a `gguf.Write` → `gguf.Read` cycle on every CI run.
+
+### Running the live verification
+
+```sh
+scripts/interop_llamacpp.sh            # clones + builds llama.cpp (CPU) into /tmp, then round-trips
+LLAMACPP_SRC=~/src/llama.cpp scripts/interop_llamacpp.sh   # reuse a checkout
+```
+
+Not part of CI (network + C++ toolchain); run it after touching the GGUF
+writers or the `*ToGGUF` serializers. Note that modern `llama-cli` is a chat
+UI — the script uses `-no-cnv -st` for level A and `llama-simple` (raw
+completion, no chat template) for the byte-parity check.
+
 ## The verification methodology: why round-trips are not enough
 
 Two hard-won lessons (SPEC §B67, §B68) govern every loader's tests, after a real
