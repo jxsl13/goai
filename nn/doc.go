@@ -15,7 +15,12 @@
 //     SwiGLU/GLU, dropout/droppath, spectral & weight norm, QK-norm, DyT,
 //     DeepNorm, sinusoidal, T5 relative, and contextual (CoPE, content-gated
 //     count) position encodings, Xavier/Kaiming
-//     init, and µP (Maximal Update Parametrization) scaling rules.
+//     init, and µP (Maximal Update Parametrization) scaling rules. Layers that
+//     behave differently at inference (dropout, droppath) implement the opt-in
+//     Mode interface; SetTrain walks a model built from Sequential (or anything
+//     implementing Composite) and switches all of them at once. Embedding wraps
+//     the backend lookup op, with an optional padding-idx row whose gradient is
+//     zeroed by installing its PadGradHook.
 //   - Losses & objectives: MSE, stable cross-entropy, focal, triplet, InfoNCE,
 //     multi-token prediction, Matryoshka representations, ColBERT MaxSim,
 //     Plackett-Luce/ListMLE ranking, and the R-Drop / SimCTG regularizers.
