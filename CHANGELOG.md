@@ -4,6 +4,29 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — measure the HF parity tolerance rather than leaving it folklore (T864, 2026-07-18)
+
+The §V16 HF-parity gate is hardcoded as `2e-3` in 32 test files. T862 flagged that real
+agreement is orders of magnitude tighter, so the actual margins were measured across the
+whole suite: worst observed **9.96e-07**, typical **1e-8 to 1e-7** — roughly 2000x headroom
+at the worst case and ~50000x typically.
+
+**Deliberately NOT tightened**, and the reasoning is recorded so the next person does not
+have to re-derive it:
+
+  - The slack is intentional and documented (`gemma_hf_test.go:20` — "leaves headroom for
+    larger-activation models"), not an oversight.
+  - All 32 gates run in CI on ubuntu, macOS and windows, and the amd64 SIMD kernels are a
+    parallel worker's zone. The margins above are arm64 measurements; a gate tightened on
+    them could redden a lane on hardware that cannot be tested from here, for everyone.
+  - The concrete case tightening would buy — dropping `q_proj.bias` moves the logits only
+    1.5e-4, under the gate — is ALREADY covered by T862's structural elementwise assertions
+    on the loaded tensors, which is the stronger mechanism anyway.
+
+So the gate stays. What changes is that its value is now evidence-backed rather than
+folklore, and the blocker on revisiting it (cross-platform measurement, especially the amd64
+SIMD path) is written down.
+
 ### nlp — close the remaining float/quant loader asymmetries (B77/T863, 2026-07-18)
 
 The seven pairs T861's class audit recorded are now closed: Cohere (an algorithmically
