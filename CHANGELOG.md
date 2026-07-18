@@ -4,6 +4,31 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — BeamSearch returned a 2-token EOS hypothesis for any real eos id (B71/T854, 2026-07-18)
+
+`BeamSearch` tested EVERY expansion candidate for completion rather than only the
+top-`width` frontier. Because each step expands every live beam over the whole vocabulary,
+an eos-terminated candidate always exists — however improbable — so one entered `done` per
+beam per step, `len(done) >= width` tripped on the FIRST step, and the function returned a
+two-token `[start, eos]` hypothesis.
+
+Reproduced with eos at logit -100 (p ≈ e^-110) against a token at logit 10: width 1 with
+eos disabled correctly returned 11 tokens, while the same call with a real eos id returned
+`[0 3]` as the BEST beam. That means beam search was unusable with any real model, i.e. in
+every realistic use — and it failed invisibly, returning sorted, length-penalized,
+plausibly-shaped beams with no error.
+
+The fix stops the candidate walk once the frontier is full, so only a candidate that
+outranks the entire frontier may complete. The stop is load-bearing rather than an
+optimization, and the comment says so.
+
+Why it survived: `beam_test.go` passes `eos=-1` at five of its six call sites, and the
+sixth uses `width=1` — the degenerate case. The asymmetry that flagged it is that the
+sibling `DiverseBeamSearch` validates its width/maxNew while `BeamSearch` validates
+neither. The new regression pins BOTH directions: an improbable EOS must be ignored AND a
+likely EOS must still stop promptly — the second matters because a "fix" that merely
+stopped completing on EOS would satisfy the first. Verified red before the fix.
+
 ### format/pytorch — harden the pickle reader (B70/T853, 2026-07-18)
 
 A discovery sweep found that this repo's §B67/§B68 parser hardening reached `npy`,

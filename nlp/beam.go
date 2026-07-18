@@ -61,12 +61,24 @@ func BeamSearch(next NextLogits, start []int, width, maxNew, eos int, alpha floa
 		// (length penalty is applied only at completion, matching GNMT/HF).
 		sort.SliceStable(cand, func(i, j int) bool { return cand[i].score > cand[j].score })
 
+		// Walk candidates best-first and STOP once the frontier is full.
+		//
+		// The stop is load-bearing, not an optimization (§B71). Scanning every
+		// candidate would complete any hypothesis whose last token is eos no
+		// matter how improbable — and one exists for every live beam at every
+		// step, since the expansion covers the whole vocabulary. `done` would
+		// then reach `width` on the very first step and beam search would return
+		// a 2-token EOS hypothesis for any model with a real eos id. Only a
+		// candidate that outranks the entire frontier may complete.
 		var nextLive []node
 		for _, h := range cand {
+			if len(nextLive) >= width {
+				break
+			}
 			complete := (eos >= 0 && h.toks[len(h.toks)-1] == eos) || h.newLen >= maxNew
 			if complete {
 				done = append(done, Beam{h.toks, h.score / lenPenalty(h.newLen)})
-			} else if len(nextLive) < width {
+			} else {
 				nextLive = append(nextLive, h)
 			}
 		}
