@@ -4,6 +4,21 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — document the chat-template mis-detection hazard (T859, 2026-07-18)
+
+`DetectChatTemplate` matches marker substrings in the Jinja source and returns a
+hand-written Go renderer for that family; the Jinja itself is never interpreted.
+Non-detection was already handled well — it errors and includes the raw Jinja so callers
+can fall back. Mis-detection was not documented at all: a fine-tune shipping a customized
+variant of a known family still matches that family, its customizations are silently
+ignored, and the result is a plausible well-formed prompt that differs from what the model
+was tuned on, with no error.
+
+Interpreting Jinja properly is the only complete fix and is out of scope for a
+zero-dependency library, so this documents the limit and points callers at
+`ChatTemplate.Family` to verify, rather than pretending a successful detection implies an
+exact match. No behaviour change.
+
 ### nlp — streaming and self-extend silently dropped every per-architecture hook (B75/T858, 2026-07-18)
 
 `StreamStep` and `SelfExtendForward` each reimplemented the Llama block body and dropped
