@@ -19,6 +19,7 @@ type hfUnigramJSON struct {
 		UnkID *int                `json:"unk_id"`
 		Vocab [][]json.RawMessage `json:"vocab"` // each entry: [ "piece", score ]
 	} `json:"model"`
+	AddedTokens []addedToken `json:"added_tokens"`
 }
 
 // UnigramFromJSON builds a SentencePiece Unigram tokenizer from HuggingFace
@@ -51,7 +52,12 @@ func UnigramFromJSON(data []byte, opts ...UnigramOption) (*Unigram, error) {
 	if tj.Model.UnkID != nil {
 		opts = append([]UnigramOption{WithUnigramUnkID(*tj.Model.UnkID)}, opts...)
 	}
-	return NewUnigram(vocab, opts...)
+	u, err := NewUnigram(vocab, opts...)
+	if err != nil {
+		return nil, err
+	}
+	u.AddSpecialTokens(addedTokenSpecials(tj.AddedTokens))
+	return u, nil
 }
 
 // ToJSON serializes the tokenizer to the minimal HuggingFace tokenizer.json Unigram form

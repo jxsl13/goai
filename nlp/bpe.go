@@ -15,8 +15,9 @@ import (
 // invariant (§V15), guaranteed by construction. Algorithm: BPE (Sennrich et al.
 // 2016, §R33), byte-level variant.
 type Tokenizer struct {
-	ranks   map[string]int // token bytes → id / merge rank
-	decoder map[int]string // id → token bytes
+	ranks    map[string]int // token bytes → id / merge rank
+	decoder  map[int]string // id → token bytes
+	specials specialSet     // markers parsed only by EncodeSpecial (§B60)
 }
 
 // LoadGPT2 reads a tiktoken-exported rank file (base64(bytes) rank per line).

@@ -21,10 +21,7 @@ type hfWordPieceJSON struct {
 		ContinuingSubwordPrefix string         `json:"continuing_subword_prefix"`
 		MaxInputCharsPerWord    int            `json:"max_input_chars_per_word"`
 	} `json:"model"`
-	AddedTokens []struct {
-		ID      int    `json:"id"`
-		Content string `json:"content"`
-	} `json:"added_tokens"`
+	AddedTokens []addedToken `json:"added_tokens"`
 }
 
 // WordPieceFromJSON builds a WordPiece tokenizer from HuggingFace tokenizer.json bytes. It errors
@@ -83,7 +80,12 @@ func WordPieceFromJSON(data []byte, opts ...WordPieceOption) (*WordPiece, error)
 			parsed = append(parsed, WithWordPieceUnk(id))
 		}
 	}
-	return NewWordPiece(vocab, append(parsed, opts...)...)
+	w, err := NewWordPiece(vocab, append(parsed, opts...)...)
+	if err != nil {
+		return nil, err
+	}
+	w.AddSpecialTokens(addedTokenSpecials(tj.AddedTokens))
+	return w, nil
 }
 
 // ToJSON serializes the tokenizer to the minimal HuggingFace tokenizer.json WordPiece form, so

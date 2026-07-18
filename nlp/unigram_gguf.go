@@ -67,7 +67,18 @@ func UnigramFromGGUF(meta map[string]any) (*Unigram, error) {
 	if unk, ok := ggufTokenID(meta[ggufTokUnkID]); ok {
 		opts = append(opts, WithUnigramUnkID(unk))
 	}
-	return NewUnigram(vocab, opts...)
+	u, err := NewUnigram(vocab, opts...)
+	if err != nil {
+		return nil, err
+	}
+	// Control / user-defined / unknown tokens become the EncodeSpecial marker set (§B60).
+	// Plain Encode is unaffected: it still treats every marker as literal text.
+	texts := make([]string, len(vocab))
+	for i, p := range vocab {
+		texts[i] = p.Piece
+	}
+	u.AddSpecialTokens(ggufSpecials(meta, texts))
+	return u, nil
 }
 
 // toks32 reads a GGUF score (a float32 per spec, but tolerate float64) as float64.

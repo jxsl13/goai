@@ -46,6 +46,7 @@ type BPETokenizer struct {
 	u2b       map[rune]byte
 	unkID     int
 	hasUnk    bool
+	specials  specialSet // markers parsed only by EncodeSpecial (§B60)
 }
 
 // NewBPE builds a byte-level BPE tokenizer from a vocabulary (byte-mapped token strings
@@ -195,5 +196,12 @@ func BPEFromGGUF(meta map[string]any) (*BPETokenizer, error) {
 	if unk, ok := ggufTokenID(meta[ggufTokUnkID]); ok {
 		opts = append(opts, WithBPEUnkID(unk))
 	}
-	return NewBPE(vocab, merges, opts...)
+	t, err := NewBPE(vocab, merges, opts...)
+	if err != nil {
+		return nil, err
+	}
+	// Control / user-defined / unknown tokens become the EncodeSpecial marker set (§B60).
+	// Plain Encode is unaffected: it still treats every marker as literal text.
+	t.AddSpecialTokens(ggufSpecials(meta, vocab))
+	return t, nil
 }

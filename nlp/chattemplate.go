@@ -2,6 +2,7 @@ package nlp
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -112,6 +113,50 @@ func ChatTemplateFromGGUF(metadata map[string]any) (*ChatTemplate, error) {
 
 // Family returns the template family name ("chatml", "llama3", ...).
 func (t *ChatTemplate) Family() string { return t.family }
+
+// SpecialTokens returns the control markers this family's [ChatTemplate.Render] can emit
+// — "<|im_start|>", "<|eot_id|>", "[INST]" and so on — in descending length order so
+// longest-match wins where markers share a prefix.
+//
+// Reach for this when you must tokenize rendered output with a tokenizer that carries no
+// special-token metadata of its own (a tiktoken rank file, a hand-built vocab); pass it
+// and the tokenizer to [RegisterChatSpecials], which resolves each marker against the
+// tokenizer's vocabulary. GGUF and tokenizer.json loaders already source their markers
+// from file metadata, which is authoritative — prefer that over this list.
+//
+// This is a HARDCODED per-family list, and that is its limitation: it mirrors the markers
+// the renderers in this file write, so a family whose real vocabulary names them
+// differently (or adds tool-call markers this package does not render) is not covered.
+// It is a fallback for the metadata-free case, not a vocabulary.
+//
+// Knowing a marker does not make it parsed. Only EncodeSpecial matches these; plain
+// Encode still treats them as literal text, which is what keeps untrusted message
+// content from forging conversation structure.
+func (t *ChatTemplate) SpecialTokens() []string {
+	var markers []string
+	switch t.family {
+	case "chatml":
+		markers = []string{"<|im_start|>", "<|im_end|>"}
+	case "llama3":
+		markers = []string{"<|begin_of_text|>", "<|start_header_id|>", "<|end_header_id|>", "<|eot_id|>"}
+	case "gemma":
+		markers = []string{"<bos>", "<start_of_turn>", "<end_of_turn>"}
+	case "mistral":
+		markers = []string{"<s>", "</s>", "[INST]", "[/INST]"}
+	case "phi3":
+		markers = []string{"<|system|>", "<|user|>", "<|assistant|>", "<|end|>", "<|endoftext|>"}
+	case "granite":
+		markers = []string{"<|start_of_role|>", "<|end_of_role|>", "<|end_of_text|>"}
+	case "olmo2":
+		markers = []string{"<|system|>", "<|user|>", "<|assistant|>", "<|endoftext|>"}
+	case "deepseek":
+		markers = []string{"<｜begin▁of▁sentence｜>", "<｜end▁of▁sentence｜>"}
+	case "zephyr":
+		markers = []string{"<|system|>", "<|user|>", "<|assistant|>", "</s>"}
+	}
+	sort.SliceStable(markers, func(i, j int) bool { return len(markers[i]) > len(markers[j]) })
+	return markers
+}
 
 // Render formats the conversation exactly as the family's reference template would.
 // Roles must be "system", "user" or "assistant"; families without a system role

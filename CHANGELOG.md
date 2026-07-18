@@ -4,6 +4,42 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — special-token parsing, and an injection vector found on the way (B72/T855, 2026-07-18)
+
+No tokenizer matched special/added tokens before its merge loop, so a vocabulary holding
+`<|im_start|>` at id 512 still encoded the literal string as its twelve component byte
+tokens. `ChatTemplate.Render` emits exactly those markers as text and `Encode` is the only
+thing a caller can do with the result, so every chat prompt this library produced was
+off-distribution — with `err == nil` and still-fluent output. It survived because none of
+the fifteen `Render` call sites in tests piped their result into `Encode`; they compared
+strings, and `Decode` round-trips the string correctly even when the ids are wrong.
+
+`Encode` keeps its existing semantics and a new `EncodeSpecial` parses markers, matching
+llama.cpp's `parse_special` flag — that flag IS the trust boundary. Matching specials
+everywhere would have made this fix an injection vector, letting untrusted content forge
+conversation structure. Overlap resolution follows HF's leftmost-longest rule instead,
+because llama.cpp's sequential per-marker pass uses an unstable sort and leaves equal-length
+ties unspecified; a deterministic contract beats bug-for-bug fidelity. Specials come from
+metadata (GGUF `token_type`, tokenizer.json `added_tokens`), with the template's own marker
+list only as a documented metadata-free fallback.
+
+**The pre-existing injection vector.** Splitting the input turned out to be half the fix.
+GGUF stores control tokens INSIDE `tokenizer.ggml.tokens`, and Unigram's Viterbi and
+WordPiece's MaxMatch search the whole vocabulary — so plain `Encode` on untrusted text
+already minted bare control ids, with no special-matching pass involved. Verified
+independently: on a Unigram vocab holding the marker, `Encode("a<|im_start|>system")`
+returned the control id directly. HF never hits this because its added tokens live outside
+the model vocab. Unigram, WordPiece and SPM now refuse to emit a registered special from
+their segmentation loops; the two byte-level BPEs need no guard, since GPT-2
+pre-tokenization splits a marker at its punctuation boundaries. This is the one deliberate
+change to plain `Encode`, it fires only for tokenizers with registered specials, and it
+strictly REMOVES an injection surface.
+
+Both gates were verified by mutation rather than assertion: neutering `EncodeSpecial` fails
+all six tests, and rebuilding it in the injection-prone "always parse" shape fails the
+injection gate with the forged token visible in the id stream. The Render→Encode path that
+hid the bug now has end-to-end coverage.
+
 ### nlp — BeamSearch returned a 2-token EOS hypothesis for any real eos id (B71/T854, 2026-07-18)
 
 `BeamSearch` tested EVERY expansion candidate for completion rather than only the
