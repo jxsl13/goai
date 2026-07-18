@@ -103,6 +103,11 @@ func benchBatchedGraph(b *testing.B, batch, seqLen, layers int, mode string) {
 	rq := backend.RoPEAttrs{Base: 10000, Heads: bgQHeads, PosOffset: seqLen}
 	rk := backend.RoPEAttrs{Base: 10000, Heads: bgKVHeads, PosOffset: seqLen}
 
+	// skipAttn isolates attention's true share of the captured step: feed dq straight into wo
+	// (same [batch,qHeads*hd] shape), so full-step minus this baseline = attention cost.
+	skipAttn := mode == "graph-noattn"
+	gqaAttn := mode == "graph-gqa" // use the GQA K/V-shared paged decode kernel
+
 	// step runs one full batched decode forward. When view != nil it uses the pre-uploaded
 	// block table (view mode / graph mode); otherwise it re-uploads per layer (eager mode).
 	step := func(view *cuda.PagedBatchView) {
@@ -120,7 +125,11 @@ func benchBatchedGraph(b *testing.B, batch, seqLen, layers int, mode string) {
 			dv.Free()
 			var da *cuda.DeviceF32
 			var err error
-			if view != nil {
+			if skipAttn {
+				da = dq // alias: skip attention, reuse dq as its output
+			} else if gqaAttn {
+				da, err = pool.BatchedDecodeAttnViewGQA(dq, view, bgQHeads, bgKVHeads)
+			} else if view != nil {
 				da, err = pool.BatchedDecodeAttnView(dq, view, bgQHeads, bgKVHeads)
 			} else {
 				da, err = pool.BatchedDecodeAttn(dq, seqs, bgQHeads, bgKVHeads)
@@ -128,7 +137,9 @@ func benchBatchedGraph(b *testing.B, batch, seqLen, layers int, mode string) {
 			if err != nil {
 				b.Fatal(err)
 			}
-			dq.Free()
+			if !skipAttn {
+				dq.Free()
+			}
 			l.wo.MatMulAccInto(da, x)
 			da.Free()
 			dh2, _ := x.RMSNormTo(l.gFFN, 1e-5)
@@ -167,7 +178,7 @@ func benchBatchedGraph(b *testing.B, batch, seqLen, layers int, mode string) {
 		}
 		cuda.GraphSync()
 		b.StopTimer()
-	case "graph":
+	case "graph", "graph-noattn", "graph-gqa":
 		view, err := pool.UploadBatchView(seqs)
 		if err != nil {
 			b.Fatal(err)
@@ -208,3 +219,15 @@ func BenchmarkBatchedGraph_b256_graph(b *testing.B) { benchBatchedGraph(b, 256, 
 func BenchmarkBatchedGraph_b384_graph(b *testing.B) { benchBatchedGraph(b, 384, 128, 22, "graph") }
 
 func BenchmarkBatchedGraph_b512_graph(b *testing.B) { benchBatchedGraph(b, 512, 128, 22, "graph") }
+
+// full vs noattn at b512: the delta is attention's true contribution to the captured step.
+func BenchmarkBatchedGraph_b512_noattn(b *testing.B) {
+	benchBatchedGraph(b, 512, 128, 22, "graph-noattn")
+}
+
+// GQA K/V-shared attention in the full captured step at b512 — the e2e payoff of cutting the
+// naive kernel's group× redundant K/V reads (attention was ~45% of the step).
+func BenchmarkBatchedGraph_b512_gqa(b *testing.B) { benchBatchedGraph(b, 512, 128, 22, "graph-gqa") }
+
+func BenchmarkBatchedGraph_b768_gqa(b *testing.B) { benchBatchedGraph(b, 768, 128, 22, "graph-gqa") }
+func BenchmarkBatchedGraph_b256_gqa(b *testing.B) { benchBatchedGraph(b, 256, 128, 22, "graph-gqa") }
