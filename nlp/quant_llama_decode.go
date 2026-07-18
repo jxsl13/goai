@@ -125,7 +125,15 @@ func (m *QuantLlama) DecodeStep(ctx *backend.Context, cache *LlamaCache, token, 
 // Generate autoregressively decodes up to maxNew tokens after the prompt on the quantized model,
 // using the KV-cache (each step is one token, not a full re-forward), and returns prompt+new. The
 // sampler s selects each token (Greedy() for deterministic argmax). Stops at the context limit.
-func (m *QuantLlama) Generate(prompt []int, maxNew int, s TokenSampler) ([]int, error) {
+//
+// Pass [WithEOS] to also stop on a stop token (the token is included in the result); without it the
+// loop runs the full maxNew steps exactly as it always has. [WithBackend] is accepted but ignored on
+// the quantized path — see its documentation.
+func (m *QuantLlama) Generate(prompt []int, maxNew int, s TokenSampler, opts ...GenerateOption) ([]int, error) {
+	var gc genConfig
+	for _, o := range opts {
+		o(&gc)
+	}
 	if len(prompt) == 0 {
 		return nil, fmt.Errorf("nlp: Generate needs a non-empty prompt")
 	}
@@ -148,6 +156,9 @@ func (m *QuantLlama) Generate(prompt []int, maxNew int, s TokenSampler) ([]int, 
 		}
 		next := s.SampleWithHistory(rowLogits(logits), out)
 		out = append(out, next)
+		if gc.stopEOS(next, s) {
+			break
+		}
 		l, err := m.DecodeStep(ctx, cache, next, pos)
 		if err != nil {
 			return nil, err

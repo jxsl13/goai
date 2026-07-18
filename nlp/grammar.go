@@ -193,6 +193,10 @@ func (g *GrammarGuide) MaskLogits(state int, logits []float64, eosID int) (eosAl
 // the current automaton state, lets inner pick, and advances by the picked token. eosID
 // (−1 for none) is only ever allowed in accepting states. The wrapper is stateful: use a
 // fresh Sampler per generated sequence.
+//
+// As with RegexGuide.Sampler, pass [WithEOS] to Generate to have eosID end the loop
+// (the sampler implements [StopTokener]); without it the loop runs the full maxNew
+// and EOSEmitted ([EOSReporter]) reports the post-EOS filler tail (§B76).
 func (g *GrammarGuide) Sampler(inner TokenSampler, eosID int) TokenSampler {
 	return &guidedSampler{g: g, inner: inner, eos: eosID, state: g.Start()}
 }

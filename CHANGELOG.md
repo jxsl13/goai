@@ -4,6 +4,39 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — EOS stopping across every Generate loop (T860, 2026-07-18)
+
+No architecture's `Generate` stopped on EOS; `T5Decoder` was the only decoder in the package
+that did. Every other loop ran a bare `for range maxNew`. That was not merely missing
+ergonomics — it made a shipped feature wrong: `guided.go` freezes its FSM on EOS but
+signalled nothing, so a guided generation emitted EOS and then kept emitting filler from the
+frozen accepting state, returning `maxNew` tokens with `err == nil`. Callers could not fix
+it themselves either, since `TokenSampler` sees logits, not the decision to stop.
+
+Wired through the existing `genConfig`/`GenerateOption` seam rather than by editing forty
+loops — copy-pasted stop logic is precisely the drift that caused §B75 earlier today. All 41
+decode loops turned out to be textually identical at the decision point, so each takes one
+uniform insert calling a single shared `stopEOS`. The 16 `Quant*` variants gained
+`opts ...GenerateOption`; verified source-compatible, including the `backend/cuda` callers.
+
+`WithEOS` is opt-in and supports multiple ids. The stop token IS included in the output,
+matching HF and llama.cpp and this repo's own `BeamSearch` — and it keeps the stop
+observable, since the last token distinguishes "ended on EOS" from "ran out of budget". The
+one inconsistency is called out rather than papered over: `T5Decoder.Generate` predates this
+and excludes its eos, and changing it would break its callers.
+
+The guided fix serves both kinds of caller: the guide implements a stop-token interface so
+`WithEOS()` with no arguments picks up its own eos id, and an EOS-reporter interface so a
+caller who does NOT opt in still gets the old behaviour but can now DETECT the filler tail
+instead of it being silent.
+
+Stop-strings straddling token boundaries are deliberately NOT implemented — the loops carry
+`[]int` with no detokenizer in scope, so neither the match nor the trim is expressible at
+token level. Documented with the caller-side workaround rather than half-built.
+
+The default-unchanged gate passes in BOTH the old and new states, which is what makes it a
+regression test rather than a restatement of the new behaviour.
+
 ### nlp — document the chat-template mis-detection hazard (T859, 2026-07-18)
 
 `DetectChatTemplate` matches marker substrings in the Jinja source and returns a

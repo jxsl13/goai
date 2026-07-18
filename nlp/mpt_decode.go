@@ -199,6 +199,9 @@ func (m *MPT) Generate(prompt []int, maxNew int, s TokenSampler, opts ...Generat
 		}
 		next := s.SampleWithHistory(rowLogits(logits), out)
 		out = append(out, next)
+		if gc.stopEOS(next, s) {
+			break
+		}
 		l, err := m.DecodeStep(ctx, cache, next, pos)
 		if err != nil {
 			return nil, err

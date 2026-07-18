@@ -327,7 +327,11 @@ func (m *QuantGPTNeoX) DecodeStep(ctx *backend.Context, cache *GPTNeoXCache, tok
 // re-forward), and returns prompt+new. The sampler s selects each token (Greedy() for
 // deterministic argmax). Stops at the context limit. The same shape as
 // [QuantStarCoder2.Generate].
-func (m *QuantGPTNeoX) Generate(prompt []int, maxNew int, s TokenSampler) ([]int, error) {
+func (m *QuantGPTNeoX) Generate(prompt []int, maxNew int, s TokenSampler, opts ...GenerateOption) ([]int, error) {
+	var gc genConfig
+	for _, o := range opts {
+		o(&gc)
+	}
 	if len(prompt) == 0 {
 		return nil, fmt.Errorf("nlp: Generate needs a non-empty prompt")
 	}
@@ -350,6 +354,9 @@ func (m *QuantGPTNeoX) Generate(prompt []int, maxNew int, s TokenSampler) ([]int
 		}
 		next := s.SampleWithHistory(rowLogits(logits), out)
 		out = append(out, next)
+		if gc.stopEOS(next, s) {
+			break
+		}
 		l, err := m.DecodeStep(ctx, cache, next, pos)
 		if err != nil {
 			return nil, err

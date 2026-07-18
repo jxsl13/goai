@@ -282,6 +282,10 @@ func (m *Llama) Prefill(ctx *backend.Context, cache *LlamaCache, tokens []int) (
 // [Llama.DecodeStep] per new token). Returns prompt+generated. With a
 // greedy sampler the output is identical to argmax-ing a full Forward at each step.
 // The decode runs on backend.Default() unless WithBackend overrides it (§T361).
+//
+// Pass [WithEOS] to stop early on a stop token, which is INCLUDED in the returned
+// slice. Without it the loop runs the full maxNew steps whatever it draws — the
+// long-standing behaviour, deliberately preserved.
 func (m *Llama) Generate(prompt []int, maxNew int, s TokenSampler, opts ...GenerateOption) ([]int, error) {
 	var gc genConfig
 	for _, o := range opts {
@@ -314,6 +318,9 @@ func (m *Llama) Generate(prompt []int, maxNew int, s TokenSampler, opts ...Gener
 		}
 		next := s.SampleWithHistory(rowLogits(logits), out)
 		out = append(out, next)
+		if gc.stopEOS(next, s) {
+			break
+		}
 		l, err := m.DecodeStep(ctx, cache, next, pos)
 		if err != nil {
 			return nil, err

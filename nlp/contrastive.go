@@ -77,7 +77,14 @@ func ContrastiveLogits(expert, amateur []float64, alpha, beta float64) []float64
 // amateur next-token distributions and draws from them with sampler s (Greedy for
 // argmax CD). Both models decode with their own KV-cache. With beta=0 the amateur
 // is ignored, so the result is exactly the expert's own decoding.
-func ContrastiveDecode(expert, amateur *GPT, prompt []int, maxNew int, alpha, beta float64, s TokenSampler) ([]int, error) {
+//
+// Pass [WithEOS] to stop early on a stop token; without it the loop runs the full
+// maxNew steps, unchanged from before the option existed.
+func ContrastiveDecode(expert, amateur *GPT, prompt []int, maxNew int, alpha, beta float64, s TokenSampler, opts ...GenerateOption) ([]int, error) {
+	var gc genConfig
+	for _, o := range opts {
+		o(&gc)
+	}
 	ctx := backend.NewContext()
 	ec := expert.NewCache()
 	ac := amateur.NewCache()
@@ -104,6 +111,9 @@ func ContrastiveDecode(expert, amateur *GPT, prompt []int, maxNew int, alpha, be
 		scores := ContrastiveLogits(rowLogits(eLog), rowLogits(aLog), alpha, beta)
 		next := s.SampleWithHistory(scores, out)
 		out = append(out, next)
+		if gc.stopEOS(next, s) {
+			break
+		}
 		el, err := expert.DecodeStep(ctx, ec, next, pos)
 		if err != nil {
 			return nil, err

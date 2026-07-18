@@ -492,7 +492,11 @@ func (m *QuantMamba) DecodeStep(ctx *backend.Context, st *MambaDecodeState, toke
 // no KV-cache) and returns prompt+new. The sampler s selects each token
 // (Greedy() for deterministic argmax). Unlike the attention twins there is no
 // context-length ceiling — the state is constant-size at any sequence length.
-func (m *QuantMamba) Generate(prompt []int, maxNew int, s TokenSampler) ([]int, error) {
+func (m *QuantMamba) Generate(prompt []int, maxNew int, s TokenSampler, opts ...GenerateOption) ([]int, error) {
+	var gc genConfig
+	for _, o := range opts {
+		o(&gc)
+	}
 	if len(prompt) == 0 {
 		return nil, fmt.Errorf("nlp: Generate needs a non-empty prompt")
 	}
@@ -510,6 +514,9 @@ func (m *QuantMamba) Generate(prompt []int, maxNew int, s TokenSampler) ([]int, 
 	for range maxNew {
 		next := s.SampleWithHistory(rowLogits(logits), out)
 		out = append(out, next)
+		if gc.stopEOS(next, s) {
+			break
+		}
 		l, err := m.DecodeStep(ctx, st, next)
 		if err != nil {
 			return nil, err

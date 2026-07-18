@@ -285,6 +285,9 @@ func (m *Gemma2) Generate(prompt []int, maxNew int, s TokenSampler, opts ...Gene
 		}
 		next := s.SampleWithHistory(rowLogits(logits), out)
 		out = append(out, next)
+		if gc.stopEOS(next, s) {
+			break
+		}
 		l, err := m.DecodeStep(ctx, cache, next, pos)
 		if err != nil {
 			return nil, err

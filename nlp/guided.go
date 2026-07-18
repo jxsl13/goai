@@ -128,6 +128,12 @@ func (g *RegexGuide) MaskLogits(state int, logits []float64, eosID int) (eosAllo
 // eosID (−1 for none) is only ever allowed in accepting states; picking it stops
 // advancing. The wrapper is stateful: use a fresh Sampler per generated sequence,
 // and choose a pattern that always has a continuation (a dead end masks everything).
+//
+// Pass [WithEOS] to the Generate call to have eosID actually END the loop: the
+// returned sampler implements [StopTokener], so Generate honours it without the id
+// being repeated. WITHOUT that option the loop still runs the full maxNew steps,
+// and every token after the EOS comes from the frozen accepting state — call
+// EOSEmitted ([EOSReporter]) on the sampler afterwards to detect that tail (§B76).
 func (g *RegexGuide) Sampler(inner TokenSampler, eosID int) TokenSampler {
 	return &guidedSampler{g: g, inner: inner, eos: eosID, state: g.Start()}
 }
@@ -144,7 +150,26 @@ type guidedSampler struct {
 	g          tokenGuide
 	inner      TokenSampler
 	eos, state int
+	drewEOS    bool // sticky: set the first time eos is drawn
 }
+
+// StopTokens reports the guide's eos id (none when it was built with eos < 0),
+// implementing [StopTokener]. A Generate loop armed with [WithEOS] therefore stops
+// on this sampler's own eos without the caller repeating the id — which is what
+// keeps a guide that has reached an accepting state from drawing EOS and then
+// emitting filler from the frozen FSM state for the rest of maxNew (§B76).
+func (s *guidedSampler) StopTokens() []int {
+	if s.eos < 0 {
+		return nil
+	}
+	return []int{s.eos}
+}
+
+// EOSEmitted reports whether this sampler has drawn its eos id, implementing
+// [EOSReporter]. It stays true once set. A caller that does NOT pass [WithEOS] —
+// and so still receives the full maxNew tokens — can check it after Generate to
+// detect that the tail is post-EOS filler rather than guided output.
+func (s *guidedSampler) EOSEmitted() bool { return s.drewEOS }
 
 func (s *guidedSampler) masked(logits []float64) []float64 {
 	out := append([]float64(nil), logits...)
@@ -155,7 +180,12 @@ func (s *guidedSampler) masked(logits []float64) []float64 {
 func (s *guidedSampler) advance(tok int) {
 	if tok != s.eos {
 		s.state = s.g.Advance(s.state, tok)
+		return
 	}
+	// EOS: the FSM state deliberately stops advancing (it is only reachable from an
+	// accepting state). Record it, so the freeze is reportable via EOSEmitted and
+	// stoppable via StopTokens instead of silently producing filler (§B76).
+	s.drewEOS = true
 }
 
 func (s *guidedSampler) Sample(logits []float64) int {
