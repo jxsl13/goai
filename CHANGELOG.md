@@ -4,6 +4,40 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### backend — reject mismatched Attrs instead of silently answering wrong (B69/T849, 2026-07-18)
+
+Fixes a reachable silent-wrong-answer bug. `backend.Execute` is public, and kernels read
+their parameters with the documented `pa, _ := attrs.(backend.SomeAttrs)` idiom. Discarding
+the `ok` is correct for a nil Attrs — that is the convention for parameterless ops and for
+ops whose defaults suffice — but it was also silently swallowing a type MISMATCH. So
+`Execute(ctx, OpSum, in, ConcatAttrs{Axis: 1})` handed OpSum's kernel the ZERO
+`ReduceAttrs`, which means "reduce every axis", returning the scalar `28` with `err == nil`
+where the caller asked for the per-axis sums `[6 22]`. A second failure mode: `OpSlice` with
+the same wrong type errored only by luck, blaming the range
+(`slice range [0,0) invalid`) instead of naming the cause.
+
+`Execute` now screens a non-nil Attrs against a per-op table before kernel resolution,
+erroring with the op, the type passed and the type expected. Nil stays legal, gated
+explicitly across both parameterless ops and ops relying on defaults. The table expresses
+parameterless ops (the zero value), multi-type ops, and a deliberate waiver for a future
+outlier — the waiver is unused today and exists so the first op that needs it does not tempt
+someone into deleting the check.
+
+The mapping going stale is the real long-term risk, so the guard never reads it. It
+recovers each op's reference kernel, resolves the exact function via its program counter,
+walks the ref package AST to collect the `attrs.(...)` assertions the kernel actually
+performs — following the attrs parameter into package-level helpers, which is required
+since pooling asserts `PoolAttrs` inside `poolDims` rather than in the kernel — then probes
+Execute's public behaviour with a deliberately wrong Attrs and demands the two agree. 90
+subtests, with a floor assertion so the sweep cannot go vacuous. Verified to actually fail
+three ways (missing entry, stale type, and the helper-following maxpool case) and restored
+green after each.
+
+Measured overhead is ~2 ns on the parameterised path and nothing measurable on the nil path.
+No caller anywhere in the tree passed a mismatched type, so the fix is purely additive. The
+`Attrs` godoc previously described the bug as intended behaviour ("zero value when nil or
+mismatched") and now explains why discarding `ok` is safe only because Execute pre-screens.
+
 ### nn — LR scheduler objects (T848, 2026-07-18)
 
 Bound, checkpointable scheduler objects: `StepLR`, `ExponentialLR`,
