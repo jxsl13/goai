@@ -20,6 +20,9 @@ __pycache__/
 .venv/
 .venv-cuda/
 
+# graphify code knowledge graph (local, rebuildable: .venv/bin/graphify update . --no-cluster)
+graphify-out/
+
 # Editor/OS
 .DS_Store
 .idea/
