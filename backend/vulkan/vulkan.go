@@ -1706,8 +1706,8 @@ func crossentropyF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.At
 		return refFallback()
 	}
 	pa, _ := attrs.(backend.CrossEntropyAttrs)
-	if pa.LabelSmoothing != 0 || pa.ZLoss != 0 {
-		return refFallback()
+	if !pa.IsBasic() {
+		return refFallback() // smoothed / z-loss / masked / non-mean forms stay on the reference
 	}
 	b, c := z.Shape()[0], z.Shape()[1]
 	if tg.Shape()[0] != b {
@@ -1793,6 +1793,11 @@ func crossentropyBackwardF32(ctx *backend.Context, in []*tensor.Tensor, attrs ba
 		return refFallback()
 	}
 	pa, _ := attrs.(backend.CrossEntropyAttrs)
+	if !pa.IsUnmaskedMean() {
+		// Folds LabelSmoothing/ZLoss in, but masked rows and non-mean reductions change
+		// both the row set and the divisor → reference (§I4).
+		return refFallback()
+	}
 	zc := z.Contiguous()
 	tf := make([]float32, b) // targets → f32 (indices), independent of tg's dtype
 	for i := range tf {
