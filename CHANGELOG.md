@@ -4,6 +4,21 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — quantized GGUF decode for DeepSeek-V2, the MLA capstone (T833, 2026-07-18)
+
+`QuantDeepSeekV2` + `QuantDeepSeekV2FromGGUF` close the quant campaign at NINETEEN of
+twenty loadable architectures (the twentieth, RWKV-4, has no llama.cpp counterpart —
+T832). The design findings: the split-form `attn_k_b`'s quantized bytes ARE the absorbed
+operator (stored per-head pre-transposed), so split files run the absorbed-latent decode
+FULLY QUANTIZED with the MLA cache-memory win and a bit-exact decode anchor; legacy fused
+files run the reconstructed path (deriving absorbed operators would need an in-block
+transpose, lossy on Q-blocks) — exactly llama.cpp's own dispatch. The NORM-rope pe-row
+de-interleave moves whole rows, hence lossless via `quantPermuteRows`. The quantize-set
+mirrors llama-quant.cpp (norms AND the router stay F32). Both kv_b forms anchor
+byte/logit-exact vs `QuantizeDeepSeekV2`; cross-form cosine 1.000000; decode bit-exact on
+both; the k-quant block-size constraint on `attn_k_b` documented (matches llama.cpp
+recipes).
+
 ### docs — README GGUF passage brought current (2026-07-18)
 
 The front-page GGUF sentence now states the real totals — twenty float architectures and
