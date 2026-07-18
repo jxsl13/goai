@@ -4,6 +4,24 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### testdata — point the numpy fixture generator at the package that is actually used (T850, 2026-07-18)
+
+`make golden` regenerated `internal/npy/testdata`. That package has ZERO importers, while
+`format/npy` — the live reader, imported by 35 files — had no fixture generator at all. So
+the only reproducible numpy-produced .npy fixtures in the tree were feeding dead code, and
+the §V16 foreign-convention anchors for the reader people actually use could not be
+regenerated or extended.
+
+`write_npy_samples` now targets `format/npy/testdata` and emits the two fixtures the live
+tests assert. Verified byte-for-byte identical to the committed files against numpy 2.5.1,
+so this changes no fixture content — it only makes drift detectable, which is the whole
+point of a reference-produced anchor (§B67: a symmetric round-trip cannot catch a header or
+byte-order error).
+
+Note the dead `internal/npy` package (a 347-line duplicate .npy implementation, plus tests)
+is left in place rather than removed as part of a generator fix; its committed fixtures are
+untouched so it still builds and passes.
+
 ### backend — reject mismatched Attrs instead of silently answering wrong (B69/T849, 2026-07-18)
 
 Fixes a reachable silent-wrong-answer bug. `backend.Execute` is public, and kernels read
