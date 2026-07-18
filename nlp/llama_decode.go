@@ -15,9 +15,16 @@ import (
 // contiguous [t, width] views over internal amortized-growth row buffers
 // (rowBuf), refreshed each DecodeStep — appends cost O(1) per token instead of
 // the old concatRows O(t) reallocate-and-copy.
+//
+// It also tracks where the stream has got to, which [LlamaCache.NextPos] reports and
+// [Llama.DecodeStep] checks its pos argument against. Because the cached keys are stored
+// POST-RoPE — already rotated to the position they entered at — that position axis is
+// fixed once a row is written, and the contract at the top of kvcache.go explains why
+// every later token has to stay on it.
 type LlamaCache struct {
 	K, V []*tensor.Tensor // per block; nil until the first token
 	bufs kvBufs           // backing row buffers behind the K, V views
+	pos  kvPos            // where the cached rows sit on the stream's position axis
 }
 
 // NewCache returns an empty KV-cache sized for this model's blocks.
@@ -25,7 +32,9 @@ func (m *Llama) NewCache() *LlamaCache {
 	return &LlamaCache{K: make([]*tensor.Tensor, len(m.Blocks)), V: make([]*tensor.Tensor, len(m.Blocks))}
 }
 
-// Len returns the number of tokens currently cached.
+// Len returns the number of tokens currently cached, which for this cache — appended to
+// but never evicted from — is also the number of tokens the stream has consumed. Use
+// [LlamaCache.NextPos] when what you want is the next token's position.
 func (c *LlamaCache) Len() int {
 	if len(c.K) == 0 || c.K[0] == nil {
 		return 0
@@ -182,10 +191,18 @@ func (m *Llama) blockStack(ctx *backend.Context, x *tensor.Tensor, attend attend
 }
 
 // DecodeStep advances the Llama by one token using the KV-cache and returns the
-// next-token logits [1,vocab]. pos is the token's absolute position (== cache length
-// before the call), used as the RoPE offset. The token's rotated k,v are appended to
-// the cache and the single query attends to all cached keys. Inference-only (no tape);
-// it produces the same logits as a full Forward over the prefix.
+// next-token logits [1,vocab]. The token's rotated k,v are appended to the cache and the
+// single query attends to all cached keys. Inference-only (no tape); it produces the
+// same logits as a full Forward over the prefix.
+//
+// pos is the token's TRUE position in the stream and is used as the RoPE offset. It must
+// equal [LlamaCache.NextPos] — pass that rather than a separately maintained counter. An
+// ordinary loop still counts 0, 1, 2, …, and [Llama.Prefill] over an n-token prompt
+// leaves the next position at n. A pos that does not continue the cache is REJECTED:
+// RoPE encodes distance as the difference between the query's rotation and each cached
+// key's, so a wrong pos does not fail, it silently rotates the query to the wrong angle
+// and returns perfectly ordinary-looking logits (§V29). The reasoning behind the
+// convention is in the position contract at the top of kvcache.go.
 //
 // The block body it runs is [Llama.blockStack] — shared with StreamingLLM and
 // Self-Extend decoding — so every per-architecture hook (Qwen2 biases, Qwen3 QK-norm,
@@ -194,6 +211,9 @@ func (m *Llama) blockStack(ctx *backend.Context, x *tensor.Tensor, attend attend
 func (m *Llama) DecodeStep(ctx *backend.Context, cache *LlamaCache, token, pos int) (*tensor.Tensor, error) {
 	if pos < 0 || pos >= m.Config.Ctx {
 		return nil, fmt.Errorf("nlp: position %d outside context %d", pos, m.Config.Ctx)
+	}
+	if err := cache.pos.admit(cache.Len(), pos, "LlamaCache"); err != nil {
+		return nil, err
 	}
 	cfg := m.Config
 	kv := cfg.kvHeads()
@@ -245,10 +265,17 @@ func (m *Llama) DecodeStep(ctx *backend.Context, cache *LlamaCache, token, pos i
 // cache must be empty (a fresh [Llama.NewCache]); Prefill errors on a non-empty
 // cache because the full-sequence RoPE and causal mask assume positions 0..seq−1.
 // Inference-only, like DecodeStep: run it on a plain backend.NewContext.
+//
+// Because those positions are fixed at 0..seq−1, Prefill also ANCHORS the cache's
+// position axis at 0, leaving [LlamaCache.NextPos] at len(tokens) — the position the
+// first generated token must be given.
 func (m *Llama) Prefill(ctx *backend.Context, cache *LlamaCache, tokens []int) (*tensor.Tensor, error) {
 	if n := cache.Len(); n != 0 {
 		return nil, fmt.Errorf("nlp: Prefill needs an empty cache, got %d cached tokens", n)
 	}
+	// The full-sequence RoPE below rotates row p for position p, so the stream starts at
+	// 0 regardless of anything a previous, now-emptied use of this cache anchored.
+	cache.pos.reset()
 	if len(cache.K) < len(m.Blocks) {
 		cache.K = growSlice(cache.K, len(m.Blocks))
 	}

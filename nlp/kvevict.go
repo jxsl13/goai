@@ -143,6 +143,25 @@ func GatherRows(t *tensor.Tensor, idx []int) *tensor.Tensor {
 // The clamp only ever ADDS retention, so every window that already bounded the
 // cache (sink+recent ≥ 1) evicts exactly as before. To intentionally drop cached
 // context, rebuild the cache rather than asking this policy for an empty window.
+//
+// POSITIONS ARE NOT RENUMBERED, and callers need not adjust anything. Eviction frees
+// rows; it does not rewind the stream. The tokens that survive keep the positions they
+// were encoded at, the next token keeps the position it would have had anyway, and
+// [KVCache.NextPos] goes on reporting it — so a decode loop that was passing the true
+// position before an eviction is still correct after one, with no bookkeeping of its
+// own. What changes is only that NextPos and [KVCache.Len] stop being equal, and a
+// caller who reaches for Len as the position now gets an ERROR out of
+// [GPT.DecodeStep] rather than logits computed at a position the stream already used.
+//
+// Renumbering is not an option here even though the StreamingLLM paper calls for it
+// (positions reassigned by position-within-cache): these rows are cached AFTER the
+// position embedding has been folded in, so re-labelling them would not re-encode them.
+// llama.cpp renumbers precisely because it can fix the rows to match, re-rotating
+// cached keys with a K-shift pass; it has no such repair for learned-absolute-position
+// models and, tellingly, leaves context shifting off by default for them. Bounded-cache
+// decoding through this cache therefore saves memory but not positional room, and still
+// ends at the model's Ctx. [Llama.StreamStep] is the path that streams without that
+// limit, by caching keys BEFORE the rotation so it can re-apply it every step.
 func (c *KVCache) EvictStreaming(sink, recent int) {
 	if sink < 0 {
 		sink = 0
@@ -161,4 +180,7 @@ func (c *KVCache) EvictStreaming(sink, recent int) {
 			c.V[l] = GatherRows(c.V[l], keep)
 		}
 	}
+	// The evicted rows' positions stay consumed, so NextPos keeps counting the stream
+	// rather than the surviving rows.
+	c.pos.drop(n - len(keep))
 }

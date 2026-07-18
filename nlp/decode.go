@@ -10,8 +10,14 @@ import (
 // KVCache holds the per-layer key/value tensors accumulated during
 // autoregressive decoding (§T35), so each new token attends to cached past
 // keys/values instead of recomputing attention over the whole prefix.
+//
+// It also remembers where it sits on its stream's position axis, which is what makes
+// [KVCache.NextPos] answerable after [KVCache.EvictStreaming] has dropped rows. See the
+// position contract at the top of kvcache.go: the pos passed to [GPT.DecodeStep] is the
+// token's true position in the stream, never its row index here.
 type KVCache struct {
 	K, V []*tensor.Tensor // per block; nil until the first token
+	pos  kvPos            // where the retained rows sit on the stream's position axis
 }
 
 // NewCache returns an empty cache sized for this model's blocks.
@@ -20,6 +26,10 @@ func (g *GPT) NewCache() *KVCache {
 }
 
 // Len returns the number of tokens currently cached.
+//
+// After eviction this is a memory measurement, not a position: it counts the rows the
+// cache still HOLDS, while [KVCache.NextPos] reports where the stream has got to. The
+// two agree only while nothing has been evicted.
 func (c *KVCache) Len() int {
 	if len(c.K) == 0 || c.K[0] == nil {
 		return 0
@@ -140,9 +150,27 @@ func (g *GPT) embedAt(token, pos int) (*tensor.Tensor, error) {
 }
 
 // DecodeStep advances the model by one token using the KV-cache and returns the
-// next-token logits [1,vocab]. pos is the token's absolute position (== cache
-// length before the call). Inference-only (no tape).
+// next-token logits [1,vocab]. Inference-only (no tape).
+//
+// pos is the token's TRUE position in the stream — the number of tokens decoded before
+// it — and it must equal [KVCache.NextPos], which is the value to pass. On a plain
+// append-only cache that is simply the cache length, so an ordinary decode loop counts
+// 0, 1, 2, … as before. It stops being the cache length after [KVCache.EvictStreaming],
+// which frees rows without rewinding the stream; pos keeps counting the stream, and a
+// pos that disagrees with the cache is REJECTED rather than decoded, because the logits
+// it would produce look entirely normal while encoding the wrong position (§V29). The
+// full reasoning, including why a learned absolute position embedding needs the same
+// answer RoPE does, is in the position contract at the top of kvcache.go.
+//
+// GPT reads pos straight out of its learned PosEmb table, so it is bounded by Ctx: a
+// bounded-cache stream on this architecture ends when the stream reaches the trained
+// context length, no matter how few rows the cache holds. That limit is real rather than
+// a missing feature — see [Llama.StreamStep] for the cache layout that streams without
+// one.
 func (g *GPT) DecodeStep(ctx *backend.Context, cache *KVCache, token, pos int) (*tensor.Tensor, error) {
+	if err := cache.pos.admit(cache.Len(), pos, "KVCache"); err != nil {
+		return nil, err
+	}
 	x, err := g.embedAt(token, pos)
 	if err != nil {
 		return nil, err

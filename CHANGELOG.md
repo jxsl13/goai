@@ -4,6 +4,47 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — the KV-cache position contract was an identity, not a definition (B79/T867, 2026-07-18)
+
+No `DecodeStep` validated `pos` against the cache. All 20 `Len()` call sites were the
+`Prefill` empty-cache guard; zero decode paths read it. So a second `DecodeStep(..., tok, 0)`
+on a reused cache RoPEd for position 0 while the row landed at index 1, and returned
+plausible logits with `err == nil` — measured divergence 0.204 on the RoPE path and 1.416
+for a GPT reading position from cache length after eviction.
+
+The root cause was the godoc: *"the token's absolute position (== cache length before the
+call)"* stated an identity as though it were a definition. The two coincide only for an
+append-only cache, and eviction breaks them apart without the doc saying which half wins.
+
+**`pos` is the TRUE sequence position, never the cache index** — and both consumers agree,
+which was not obvious going in. RoPE bakes rotation into each key as it enters the cache; a
+learned absolute PE is summed into the embedding before the key exists. Both freeze position
+at insert time and neither can re-derive it, so a new token is comparable to the cached rows
+only if it lands on the same axis. This matches llama.cpp, where every KV cell carries its
+own position and the causal mask compares positions rather than indices, and where a batch
+that does not continue the cache is rejected outright.
+
+One deliberate divergence from llama.cpp: it renumbers on eviction, but only because a
+deferred K-shift re-rotates the cached keys. GoAI has no K-shift, so it must not renumber.
+Notably upstream has no correct answer for the learned-absolute-PE case either — it rewrites
+cell positions and skips re-rotation, leaving the summed embedding stale and silent, which
+is why context-shift ships off by default there. Keeping the true axis and hard-erroring is
+the version of that decision that cannot go quiet.
+
+The tracker DERIVES the position rather than counting it: nothing bumps a counter on append,
+so every writer stays in sync without knowing it exists — which closes the very failure class
+the fix addresses. `EvictStreaming` records the drop, so eviction needs no caller adjustment
+at all; the convention it used to require silently is now automatic, and a caller reaching
+for `Len()` gets a hard error. Functional diff is 7 lines across the three existing files.
+
+The coherence gate is an exact identity, not a "no error" check: on a 1-layer GPT a cached
+row is a pure function of (token, position), so evict-then-step must equal a cache
+independently primed with the surviving tokens at their true positions — asserted to 1e-12,
+and it also measures the renumbered convention and fails if that yields the same logits, so
+the identity cannot pass vacuously. The trained-model StreamingLLM run (300 greedy tokens,
+eviction every step) is numerically unchanged: 1.033/1.070/1.062 bits before,
+1.032/1.071/1.062 after.
+
 ### ci — provision the CUDA toolkit and compile+link the cuda tree (T866, ADR-0029 update)
 
 ADR-0029, written hours earlier, declined a cuda compile check on the grounds that "no
