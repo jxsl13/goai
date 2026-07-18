@@ -214,6 +214,22 @@ Tw82|~|DECODE ATTENTION 1.31× (the Tw81 fix, production f16 path). gqa_flash_pa
 Tw83|~|DECODE ATTENTION +1.75x MORE (2.3x total w/ Tw82) — the f16 flash kernel's h2f was a MANUAL software f16->f32 (sign/exp/mantissa reconstruct with a DIVERGENT subnormal while-loop), called group*hd times per key in BOTH the QKt dot and the PV accumulate = the dominant residual cost once Tw82 fixed occupancy. FIX: replace the whole h2f body with the single hardware instr via inline PTX cvt.f32.f16 (asm "cvt.f32.f16 %0,%1;":"=f"(f):"h"(h)). BIT-EXACT (hardware cvt IS the IEEE conversion the manual code reimplemented; TestCUDAF16KVFlashParity all pass). MEASURED (3060): gqa8/ctx2048 142->81 us (1.75x), 59->103 GB/s; COMBINED Tw82+Tw83 186->81 us = 2.3x. f16-KV decode now FASTER than f32-KV (81 vs 130us) — the earlier 'f16 slower despite half the bytes' anomaly was ENTIRELY the manual h2f. LESSON: audit hand-written NVRTC helpers for hardware-instr equivalents (cvt.f32.f16, cvt.rn.f16.f32) — no cuda_fp16.h needed, inline PTX works. FOLLOW-UP: f32->f16 store path (f2h at cuda_bridge.c:2257,3613) same manual pattern but cold (once/token/row) — lower leverage.|PERF-ATTN
 Tw84|~|DEFAULT (f32-KV) DECODE ATTENTION 1.16-1.52x — the PRODUCTION path (default KVCache -> gqa_flash_partial, the Q8 graph decoder's attention) was STILL occupancy-bound at 128-178 GB/s after Tw82/83 (those only touched the opt-in f16 kernel). The u16/cvt tricks DON'T apply (genuinely f32 tile), but the Tw82 occupancy lever does: halve the 32-row K+V shared tile to 16 ROWS (~33KB->~20KB -> 2 blocks/SM). BIT-EXACT (numerics unchanged, just 16-key sub-chunks; Flash/GQA parity pass). MEASURED (3060): gqa8/ctx2048 128->149 GB/s (1.16x), gqa8/ctx4096 146->169, mha/ctx2048 178->271 (1.52x - biggest, more blocks amortize doubled occupancy), gqa8/ctx8192 160->183. 8-ROW TESTED + REJECTED (107 vs 149 @2048, 122 vs 183 @8192 - quarter-warp scores + 4x syncs outweigh 3-4 blocks/SM); 16-row = the occupancy-vs-warp-util sweet spot. Lands on EVERY default decode (unlike Tw82/83's opt-in f16). BUNDLED into the decode-attn branch (cuda-flash-decode-probe) -> one PR covers both f32-default (1.16-1.52x) + f16-KV (2.3x) flash paths. E2E MEASURED (BenchmarkTinyLlamaDecodeCtx_1024): 172.4->170.3 tok/s = NO e2e gain — TinyLlama Q8 decode is WEIGHT-BW-bound (~1GB/token weight read; attention ~2% of step at ctx1024), the 1.16x dilutes to ~0 (Q4_K-predecode lesson AGAIN). Kernel win is real+bit-exact+free but e2e matters ONLY where attention dominates (long ctx / MHA / big-hd / big models / f16-KV VRAM mode). Ship HONESTLY, not as a small-model t/s headline.|PERF-ATTN
 
+## §GOAL — beat ALL professional incumbents, target = cuBLAS parity (user directive 2026-07-18)
+
+The performance bar is NOT llama.cpp. User directive: "wir wollen an cuBLAS drankommen, da
+llama.cpp scheinbar noch nicht gut genug ist" + "es gibt bessere Konkurrenten zu llama.cpp,
+die professionell eingesetzt werden. vergleiche auch mit diesen. wir wollen besser als alle
+drei sein." So the standing targets, in order of ceiling:
+1. **cuBLAS-f16 GEMM = 26.5 TFLOP/s** (the RTX 3060 tensor-core kernel ceiling; our CUDA side
+   already hits it — it's the number every engine below bottoms out at). Coopmat GEMM must
+   reach it (currently 9.7 TFLOP/s f16-acc; B-streaming-bound, see Tw-COOPMAT below).
+2. **The pro serving engines: vLLM, TensorRT-LLM, SGLang** (+ HF TGI) — not just llama.cpp.
+   Benchmark against these on the SAME 3060 where installable (§RUN6 host-constraint caveat:
+   no nvcc/system-CUDA/TensorRT SDK — research-lite is scoping which ship runnable pip wheels).
+   Beat all of them on tokens/s (decode) and prompt-processing (prefill) at single-GPU scale.
+The decode side already LEADS llama.cpp-Q8 (1.05-1.19x); prefill (0.66x) is the frontier the
+Tw-COOPMAT arc attacks.
+
 ## §NEXT — open levers
 
 **Tw-COOPMAT (booked 2026-07-18, research-lite CONFIRMED 3/3 + host probes): the prefill
