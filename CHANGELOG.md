@@ -4,6 +4,45 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — §B68 golden-fixture class audit: 15 mutations, all now caught (T862, 2026-07-18)
+
+The §B68 rule (a golden must carry nonzero, non-constant values in every convention-critical
+tensor) had been applied to additive biases but never swept across siblings. Six fixtures
+were passing vacuously: Qwen3/OLMo2 `q_norm`/`k_norm` (QK-norm is the DEFINING feature of
+those architectures and had NO discriminating coverage on the load path), Mamba/Mamba-2
+`mixer.D` and RWKV `time_first` (all-ones, so `y += D ⊙ x` was indistinguishable from
+`y += x` — the multiplicative analogue of the additive rule), and the Qwen2 q/k/v biases
+(all exactly zero).
+
+Provenance had been lost — the ~30 HF fixtures had no generator at all. Rather than
+hand-editing bytes, the transformers configs were reverse-engineered and verified to
+reproduce the committed logits BIT-EXACTLY (max abs diff 0.0) before anything was
+regenerated; that equality is what licensed the change. The new generator is wired into
+`gen.py` and verified idempotent — all 12 regenerated fixtures come back byte-identical.
+
+All 15 mutations that these fixtures exist to catch now go GREEN → RED: q_norm↔k_norm
+swaps, gain channel-reversal, post-norm swaps, hardcoded `D=1`, head-index reversal, and
+four bias variants. Independently re-verified here for the Qwen3 swap.
+
+**One gap is NOT closable by fixture values, and is documented rather than papered over.**
+Non-zero Qwen2 biases are necessary but insufficient: dropping `v_proj.bias` moves the
+logits 5.5e-2 (28× the gate), but `q_proj.bias` only 1.5e-4 and `k_proj.bias` 7.0e-5,
+because q/k perturbations reach the logits only through attention SCORES, where softmax's
+invariance to a per-row constant shift cancels most of the effect. The effect is linear in
+amplitude, so clearing the gate would need biases many times larger than the projections
+they bias — an unphysical golden. Structural elementwise assertions on the loaded tensors
+cover it instead, with the measurements recorded in-comment.
+
+**A second instance of the same gap, one level up.** The `mambaB68Fixture` helper — written
+to close §B68 — patched conv1d biases with a LAYER-INDEPENDENT formula, so blk.0 and blk.1
+received byte-identical vectors and a cross-layer swap stayed invisible. Both Mamba helpers
+are now guards (asserting non-constant and no sibling aliasing) rather than patchers. Also
+caught during generation: byte-sum seeds are permutation-invariant and aliased two distinct
+tensors, hence FNV-1a.
+
+No loader bug was found: every transformers-anchored golden still agrees at ~4e-8. The
+QK-norm, bias, `D` and `time_first` handling were all correct — merely untested.
+
 ### nlp — GGUF loader hardening and zero-value traps (B76/T861, 2026-07-18)
 
 **Panics and a silent wrong load on malformed metadata.** `gatherRows` computed

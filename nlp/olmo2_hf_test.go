@@ -1,6 +1,7 @@
 package nlp_test
 
 import (
+	"fmt"
 	"math"
 	"testing"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/jxsl13/goai/format/npy"
 	"github.com/jxsl13/goai/format/safetensors"
 	"github.com/jxsl13/goai/nlp"
+	"github.com/jxsl13/goai/nn"
 	"github.com/jxsl13/goai/tensor"
 )
 
@@ -40,6 +42,31 @@ func TestOLMo2FromHF(t *testing.T) {
 	model := olmo2HF(t)
 	if model.Config.HeadDim != 4 {
 		t.Fatalf("head_dim not inferred: got %d want 4", model.Config.HeadDim)
+	}
+	// §B68: every OLMo 2-specific norm must come from its own HF name. The golden's
+	// gains are non-constant and distinct per role and per layer, so the two
+	// same-shape post-norms (whose GGUF names contract to post_attention_norm /
+	// post_ffw_norm) can no longer be swapped silently, and the QK-norm gains can no
+	// longer be ignored or channel-permuted.
+	ts, _, err := safetensors.LoadFile("testdata/olmo2_hf.safetensors")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for l, b := range model.Blocks {
+		for _, c := range []struct {
+			hf  string
+			got *nn.RMSNorm
+		}{
+			{"self_attn.q_norm", b.QNorm}, {"self_attn.k_norm", b.KNorm},
+			{"post_attention_layernorm", b.PostAttnNorm},
+			{"post_feedforward_layernorm", b.PostFFNNorm},
+		} {
+			name := fmt.Sprintf("model.layers.%d.%s.weight", l, c.hf)
+			if c.got == nil {
+				t.Fatalf("%s: not loaded", name)
+			}
+			assertLoadedVec(t, name, c.got.Gamma, ts[name])
+		}
 	}
 	golden, err := npy.LoadFile("testdata/olmo2_hf_logits.npy")
 	if err != nil {

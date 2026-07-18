@@ -3,7 +3,6 @@ package nlp_test
 import (
 	"fmt"
 	"math"
-	"strings"
 	"testing"
 
 	"github.com/jxsl13/goai/backend"
@@ -12,56 +11,27 @@ import (
 	"github.com/jxsl13/goai/tensor"
 )
 
-// mamba2B68Fixture loads the raw HF Mamba-2 golden and replaces every
-// convention-critical tensor that the golden leaves zero or constant with
-// deterministic non-trivial values (§B68: a zero vector is invariant under
-// every load transform, and a CONSTANT vector is invariant under the mamba2
-// converter's reshapes — [n_head]→[n_head,1] and the ssm_norm group regroup —
-// so neither could ever gate a dropped, mis-mapped or mis-reshaped tensor).
-// In the golden that means the all-zero conv1d biases, the all-ones D skips
-// and the all-ones norm gains (mixer gated norm, per-layer norms, norm_f).
-// Both the FromHF reference and the GGUF fixture are built from this SAME
-// modified map, so HF-path correctness still transfers. Seeds derive from the
-// tensor name bytes, so sibling layers get distinct values (a cross-layer swap
-// must show).
+// mamba2B68Fixture loads the HF Mamba-2 golden and asserts that every
+// convention-critical tensor is non-vacuous (§B68, via assertB68): a zero vector is
+// invariant under every load transform, and a CONSTANT vector is invariant under the
+// mamba2 converter's reshapes — [n_head]→[n_head,1] and the ssm_norm group regroup —
+// so neither could ever gate a dropped, mis-mapped or mis-reshaped tensor. That means
+// the conv1d biases (once all-zero), the per-head D skips (once all-ones, i.e.
+// indistinguishable from no skip) and the norm gains (mixer gated norm, per-layer
+// norms, norm_f). Both the FromHF reference and the GGUF fixture are built from this
+// SAME map, so HF-path correctness transfers.
+//
+// This used to synthesize those values in memory. They now live in the committed
+// golden — written by testdata/gen.py's build_hf_b68, which also re-derives the
+// transformers logits from them, so the same non-vacuous values gate the
+// transformers-anchored TestMamba2FromHF and these GoAI-vs-GoAI parity tests alike.
 func mamba2B68Fixture(t *testing.T) map[string]*tensor.Tensor {
 	t.Helper()
 	ts, _, err := safetensors.LoadFile("testdata/mamba2_hf.safetensors")
 	if err != nil {
 		t.Fatalf("load weights (run make golden): %v", err)
 	}
-	seedOf := func(name string) float64 {
-		var s float64
-		for _, b := range []byte(name) {
-			s += float64(b)
-		}
-		return s
-	}
-	for name, w := range ts {
-		seed := seedOf(name)
-		switch {
-		case strings.HasSuffix(name, ".conv1d.bias"): // all-zero in the golden
-			nz := tensor.New(tensor.F64, w.Shape().Clone())
-			for i := range w.Shape()[0] {
-				nz.SetF64(0.05*math.Sin(seed+float64(i)+0.5)+0.01, i)
-			}
-			ts[name] = nz
-		case strings.HasSuffix(name, ".mixer.D"): // all-ones in the golden
-			nz := tensor.New(tensor.F64, w.Shape().Clone())
-			for i := range w.Shape()[0] {
-				nz.SetF64(0.8+0.2*math.Sin(seed+1.7*float64(i)), i)
-			}
-			ts[name] = nz
-		case strings.HasSuffix(name, ".norm.weight"), strings.HasSuffix(name, ".norm_f.weight"):
-			// all-ones gains: the mixer gated norm is the group-reshape-critical
-			// one; the per-layer norms and norm_f gate cross-layer mapping.
-			nz := tensor.New(tensor.F64, w.Shape().Clone())
-			for i := range w.Shape()[0] {
-				nz.SetF64(1+0.25*math.Sin(seed+2.3*float64(i)), i)
-			}
-			ts[name] = nz
-		}
-	}
+	assertB68(t, ts, ".mixer.conv1d.bias", ".mixer.D", ".norm.weight", ".norm_f.weight")
 	return ts
 }
 

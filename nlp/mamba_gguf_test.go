@@ -3,6 +3,8 @@ package nlp_test
 import (
 	"fmt"
 	"math"
+	"sort"
+	"strings"
 	"testing"
 
 	"github.com/jxsl13/goai/backend"
@@ -11,26 +13,76 @@ import (
 	"github.com/jxsl13/goai/tensor"
 )
 
-// mambaB68Fixture loads the raw HF Mamba golden and replaces its ALL-ZERO
-// conv1d biases with deterministic non-zero values (§B68: a zero vector is
-// invariant under every load transform, so it can never gate a dropped or
-// mis-mapped bias). Both the FromHF reference and the GGUF fixture are built
-// from this SAME modified map, so HF-path correctness still transfers.
+// assertB68 fails unless every tensor whose name ends in one of the given suffixes
+// is NON-CONSTANT and DISTINCT from its same-suffix siblings (§B68).
+//
+// A constant tensor is invariant under every reshape, broadcast and permute a loader
+// can get wrong — and an all-ones MULTIPLICATIVE term (Mamba's D, RWKV's time_first)
+// makes `y += D ⊙ x` indistinguishable from `y += x`, so a channel mis-index or a
+// hardcoded 1 passes. Two sibling layers holding the same vector make a cross-layer
+// swap invisible the same way. Either shape of vacuity silently turns the parity
+// tests below into tests of nothing.
+//
+// The committed goldens now carry such values by construction — testdata/gen.py's
+// build_hf_b68 writes them and re-derives the transformers logits — so this is a
+// GUARD, not a fixup: it fires if a regeneration ever reverts them to the vacuous
+// defaults a fresh random init produces.
+func assertB68(t *testing.T, ts map[string]*tensor.Tensor, suffixes ...string) {
+	t.Helper()
+	for _, suffix := range suffixes {
+		var names []string
+		for name := range ts {
+			if strings.HasSuffix(name, suffix) {
+				names = append(names, name)
+			}
+		}
+		if len(names) == 0 {
+			t.Fatalf("§B68: fixture has no tensor ending in %q", suffix)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			w := ts[name]
+			first := w.AtF64(tensor.Unravel(0, w.Shape())...)
+			constant := true
+			for i := 1; i < w.Numel(); i++ {
+				if w.AtF64(tensor.Unravel(i, w.Shape())...) != first {
+					constant = false
+					break
+				}
+			}
+			if constant {
+				t.Fatalf("§B68: %s is the constant %g — it cannot gate a dropped, mis-indexed or mis-reshaped tensor (regenerate: make golden)", name, first)
+			}
+		}
+		for i, a := range names {
+			for _, b := range names[i+1:] {
+				if tensorsElemEqual(ts[a], ts[b]) {
+					t.Fatalf("§B68: %s and %s hold identical values — a cross-layer swap would be invisible", a, b)
+				}
+			}
+		}
+	}
+}
+
+// mambaB68Fixture loads the HF Mamba golden and asserts that the tensors whose
+// convention this file's parity tests exist to pin are non-vacuous (§B68): the
+// conv1d biases (once all-zero in the golden), the D skips (once all-ONE, which
+// reads exactly like no skip at all) and the norm gains. Both the FromHF reference
+// and the GGUF fixture are built from this SAME map, so HF-path correctness — which
+// the transformers-anchored TestMambaFromHF now checks against non-vacuous values —
+// transfers to the GGUF path.
+//
+// This used to PATCH the conv1d biases in memory instead. That both masked the
+// committed fixture and used a layer-independent formula, so blk.0 and blk.1 got
+// byte-identical biases and a cross-layer swap stayed invisible — the §B68 gap it
+// was written to close, reintroduced one level up.
 func mambaB68Fixture(t *testing.T) map[string]*tensor.Tensor {
 	t.Helper()
 	ts, _, err := safetensors.LoadFile("testdata/mamba_hf.safetensors")
 	if err != nil {
 		t.Fatalf("load weights (run make golden): %v", err)
 	}
-	for name, w := range ts {
-		if len(name) > 12 && name[len(name)-12:] == ".conv1d.bias" {
-			nz := tensor.New(tensor.F64, w.Shape().Clone())
-			for i := range w.Shape()[0] {
-				nz.SetF64(0.05*math.Sin(float64(i)+0.5)+0.01, i)
-			}
-			ts[name] = nz
-		}
-	}
+	assertB68(t, ts, ".mixer.conv1d.bias", ".mixer.D", ".norm.weight")
 	return ts
 }
 

@@ -1,6 +1,7 @@
 package nlp_test
 
 import (
+	"fmt"
 	"math"
 	"testing"
 
@@ -100,6 +101,38 @@ func TestLlamaFromPyTorchBin(t *testing.T) {
 	t.Logf(".pt→Llama max abs diff vs transformers: %.3e", maxAbs)
 }
 
+// assertLoadedVec pins a loaded vector to the RAW fixture bytes, elementwise (§B68).
+//
+// A golden-logit gate can only catch a load-mapping error that MOVES the logits, and
+// some provably do not move them enough. A q- or k-side perturbation reaches the
+// logits only through the attention SCORES, where softmax's invariance to a per-row
+// constant shift cancels most of it. Measured on testdata/qwen2_hf.safetensors with
+// its §B68 non-zero biases: dropping v_proj.bias moves the logits 5.5e-2, but
+// dropping q_proj.bias moves them 1.5e-4 and k_proj.bias 7.0e-5 — both far under the
+// 2e-3 f32 gate, so BOTH stay invisible however non-vacuous the fixture is. Raising
+// the fixture's bias amplitude does not rescue it: the effect is linear in the bias
+// (measured 0.05→0.9 amplitude, 18x, moved a q/k swap 2.1e-4→3.7e-3, 17.6x), so
+// clearing the gate with margin needs biases many times the projection they bias —
+// an unphysical golden that would gate nothing else honestly. Structural equality is
+// the right instrument for that class; the logits golden keeps gating the rest.
+func assertLoadedVec(t *testing.T, what string, got, want *tensor.Tensor) {
+	t.Helper()
+	if want == nil {
+		t.Fatalf("%s: missing from the fixture", what)
+	}
+	if got == nil {
+		t.Fatalf("%s: not loaded (nil) — dropped by the converter?", what)
+	}
+	if got.Numel() != want.Numel() {
+		t.Fatalf("%s: loaded %d elements, fixture has %d", what, got.Numel(), want.Numel())
+	}
+	for i := range want.Numel() {
+		if g, w := got.AtF64(i), want.AtF64(i); g != w {
+			t.Fatalf("%s: element %d is %g, fixture has %g — dropped, swapped with a sibling, or mis-indexed", what, i, g, w)
+		}
+	}
+}
+
 // TestQwen2FromHF anchors Qwen2 support (Llama + q/k/v projection bias) against a
 // real transformers Qwen2ForCausalLM — the bias LlamaFromHF now loads and applies.
 func TestQwen2FromHF(t *testing.T) {
@@ -110,6 +143,18 @@ func TestQwen2FromHF(t *testing.T) {
 	model, err := nlp.LlamaFromHF(ts, nlp.LlamaConfig{Heads: 2, KVHeads: 2, Eps: 1e-6, RopeBase: 10000, Ctx: 32})
 	if err != nil {
 		t.Fatalf("LlamaFromHF (Qwen2): %v", err)
+	}
+	// §B68: each bias must come from ITS OWN HF name. The golden's three biases are
+	// non-zero and mutually distinct, so this catches a drop, a Bq↔Bk swap or a
+	// channel mis-index — none of which the logit gate below can see (assertLoadedVec).
+	for l, b := range model.Blocks {
+		for _, c := range []struct {
+			hf  string
+			got *tensor.Tensor
+		}{{"q_proj", b.Bq}, {"k_proj", b.Bk}, {"v_proj", b.Bv}} {
+			name := fmt.Sprintf("model.layers.%d.self_attn.%s.bias", l, c.hf)
+			assertLoadedVec(t, name, c.got, ts[name])
+		}
 	}
 	golden, err := npy.LoadFile("testdata/qwen2_hf_logits.npy")
 	if err != nil {

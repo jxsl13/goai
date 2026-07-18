@@ -176,7 +176,7 @@ func ExampleRWKV_Generate() {
 		panic(err)
 	}
 	fmt.Println(out)
-	// Output: [3 7 1 20 31 11]
+	// Output: [3 7 1 16 4 23]
 }
 
 // Jamba is the hybrid family: the stack interleaves Mamba (SSM) mixer layers

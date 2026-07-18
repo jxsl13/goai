@@ -1,6 +1,7 @@
 package nlp_test
 
 import (
+	"fmt"
 	"math"
 	"testing"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/jxsl13/goai/format/npy"
 	"github.com/jxsl13/goai/format/safetensors"
 	"github.com/jxsl13/goai/nlp"
+	"github.com/jxsl13/goai/nn"
 	"github.com/jxsl13/goai/tensor"
 )
 
@@ -27,6 +29,24 @@ func TestQwen3FromHF(t *testing.T) {
 	}
 	if model.Blocks[0].QNorm == nil || model.Blocks[0].KNorm == nil {
 		t.Fatal("Qwen3 QK-norm not loaded")
+	}
+	// §B68: QK-norm is THE defining Qwen3 feature, so its gains must come from their
+	// own HF names. The golden's gains are non-constant and distinct per role and per
+	// layer, so a q_norm↔k_norm swap or a cross-layer mix fails here exactly. The
+	// logit gate below also sees a swap (1.1e-2, 5.4x the 2e-3 gate) — but only
+	// because the fixture's gains are spread wide; this assertion does not depend on
+	// that margin.
+	for l, b := range model.Blocks {
+		for _, c := range []struct {
+			hf  string
+			got *nn.RMSNorm
+		}{{"q_norm", b.QNorm}, {"k_norm", b.KNorm}} {
+			name := fmt.Sprintf("model.layers.%d.self_attn.%s.weight", l, c.hf)
+			if c.got == nil {
+				t.Fatalf("%s: not loaded", name)
+			}
+			assertLoadedVec(t, name, c.got.Gamma, ts[name])
+		}
 	}
 	golden, err := npy.LoadFile("testdata/qwen3_hf_logits.npy")
 	if err != nil {
