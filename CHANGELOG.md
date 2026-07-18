@@ -4,6 +4,45 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nn — LR scheduler objects (T848, 2026-07-18)
+
+Bound, checkpointable scheduler objects: `StepLR`, `ExponentialLR`,
+`CosineAnnealingLR` (with warmup), `LambdaLR` over any `lr(step)` function, and the
+metric-driven `ReduceLROnPlateau` — the one schedule no closed form can express, and the
+reason an object API is needed at all. `LambdaLR` is the anti-duplication seam: the
+existing pure `WarmupCosine`/`WSD`/`InverseSqrt`/`OneCycleLR` schedules drive the object
+API instead of being reimplemented behind it.
+
+No optimizer file was touched. LR turned out to be an exported field on 21 of the 25
+`Step`-implementing optimizers, so `BindLR` resolves a rate through four rules — the opt-in
+`LRSetter` interface, `ParamGroups` fan-out, reflection on the exported `LR` field, and
+recursion into an exported `Base` optimizer — reaching all 25 rather than the handful the
+task scoped. `ParamGroups` composition preserves per-group ratios (verified 10× preserved).
+
+Because most binding happens by reflection rather than through a compiler-checked
+interface, a new or renamed optimizer would not fail to build — it would just never be
+schedulable, and a scheduler that silently never moves the learning rate is
+indistinguishable from a working one in a green suite. `BindLR` therefore errors on an
+unreachable optimizer rather than no-opping (pinned by a test), and a new AST-walking guard
+fails when any type defining `Step` is unaccounted for, or when the accounting lists a type
+that no longer exists. The guard was verified to actually fail by removing an entry and
+confirming red before restoring it.
+
+Both scheduler types checkpoint completely (not T842's partial opt-in) — a schedule is a
+handful of numbers and the failure mode is severe. `ReduceLROnPlateau` derives its rate from
+a reduction count, which makes resume exact. Checkpoints store the schedule kind and bound-
+rate count, so a cosine state cannot load into a StepLR and a 1-rate state cannot load into
+a 2-group scheduler. What is deliberately NOT stored is the schedule shape (`total`,
+`gamma`, `warmup` are constructor args), so a resuming process must rebuild with the same
+values; the godoc says so.
+
+Gates are exact against hand-computed trajectories (1e-15 for the staircases, 1e-12 for
+cosine), each with a discriminator: plateau patience 2 fires at exactly step 4 while
+patience 5 on the identical stream never fires; a resume without loading state diverges at
+the interruption point. End to end, a 300-step stochastic regression reaches final loss
+0.00106 scheduled versus 0.0104 constant — 9.8× better — and the test fails below 2×, so a
+task that converges anyway could not pass it.
+
 ### nn — truncated-normal / orthogonal init and AvgPool2D (T847, 2026-07-18)
 
 `TruncNormal` matches torch's `_no_grad_trunc_normal_` inverse-CDF method (not rejection

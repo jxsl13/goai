@@ -31,6 +31,11 @@
 //     (Lookahead, SAM sharpness-aware steps, cautious masking, Grokfast EMA (exponential moving average)
 //     filtering, GaLore and APOLLO memory-efficient low-rank gradient projection), LR (learning rate) schedules (OneCycle, inverse-sqrt, WSD),
 //     gradient clipping and accumulation, and mixed-precision (AMP) helpers.
+//     LR schedules also come as bound, checkpointable scheduler OBJECTS — StepLR,
+//     ExponentialLR, CosineAnnealingLR (with warmup), LambdaLR over any lr(step)
+//     function, and the metric-driven ReduceLROnPlateau that no closed form can
+//     express — which write the rate into the optimizer (every ParamGroups group
+//     included) and round-trip through SaveSchedulerState.
 //     Per-group hyperparameters come from ParamGroups, a fan-out wrapper over
 //     disjoint parameter subsets (validated disjoint, optionally validated
 //     exhaustive) that expresses the standard "no weight decay on biases and
