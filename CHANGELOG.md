@@ -4,6 +4,23 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### format — sharded safetensors writing, HF-consumer-verified (T836, 2026-07-18)
+
+`safetensors.SaveSharded` completes the sharded pair: GoAI checkpoints now export in the
+exact multi-file form the HF ecosystem emits and expects, with every contract detail cited
+from huggingface_hub's real splitter — decimal 5GB default (not GiB), the greedy packing
+with the oversized-tensor own-shard branch (pinned by test), the 5-digit `model-0000N-of-M`
+naming format string, the single-shard plain-file no-index fallback, `total_size` as tensor
+DATA bytes, per-shard identical metadata, and the stale-checkpoint cleanup hub itself
+performs (without which a shrunk save leaves a stale index that would silently shadow).
+The index bytes reproduce transformers' `json.dumps(indent=2, sort_keys=True)+"\n"`
+byte-for-byte. Packing is sorted-name (deterministic, T721 discipline) — a documented,
+harmless divergence from HF's insertion order. Gates: round-trip at 1/2/7-shard budgets
+across four dtypes; two-save byte-determinism; hostile/degenerate rejects; and the LIVE
+real-consumer pass — the venv's safetensors/torch load a GoAI 4-shard export bit-exactly
+with the index byte-identical to the transformers emitter (`scripts/verify_sharded_export.py`,
+env-gated in Go, run live on main).
+
 ### format — sharded safetensors checkpoint loading (T835, 2026-07-18)
 
 `safetensors.LoadSharded` loads real multi-file Hugging Face checkpoints

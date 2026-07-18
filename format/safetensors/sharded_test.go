@@ -329,3 +329,36 @@ func ExampleLoadSharded() {
 	fmt.Println(names, tensors["head"].AtF64(1))
 	// Output: [embed head] 4
 }
+
+// SaveSharded is the write direction: it splits a checkpoint into numbered
+// shard files plus the index, exactly as Hugging Face tools do, and
+// LoadSharded (or any HF loader) reads it back.
+func ExampleSaveSharded() {
+	dir, _ := os.MkdirTemp("", "sharded")
+	defer os.RemoveAll(dir)
+
+	weights := map[string]*tensor.Tensor{
+		"embed": tensor.FromFloat64(tensor.Shape{2}, []float64{1, 2}),
+		"head":  tensor.FromFloat64(tensor.Shape{2}, []float64{3, 4}),
+	}
+	// A 16-byte budget forces one tensor per shard (the default is HF's 5 GB).
+	if err := safetensors.SaveSharded(dir, weights, map[string]string{"format": "pt"},
+		safetensors.WithMaxShardSize(16)); err != nil {
+		panic(err)
+	}
+
+	files, _ := os.ReadDir(dir)
+	for _, f := range files {
+		fmt.Println(f.Name())
+	}
+	tensors, _, err := safetensors.LoadSharded(filepath.Join(dir, "model.safetensors.index.json"))
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(tensors["head"].AtF64(1))
+	// Output:
+	// model-00001-of-00002.safetensors
+	// model-00002-of-00002.safetensors
+	// model.safetensors.index.json
+	// 4
+}

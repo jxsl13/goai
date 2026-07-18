@@ -23,6 +23,16 @@
 // Supported dtypes are f32 and f64; shapes are arbitrary. Higher layers build on
 // this: nlp.FromSafetensors loads a GPT straight from a checkpoint's tensor map.
 //
+// Checkpoints above Hugging Face's ~5 GB shard budget ship as several numbered
+// files plus a model.safetensors.index.json table of contents; the package
+// covers both directions of that form too. [LoadSharded] reads such a
+// checkpoint through its index and returns the same map [LoadFile] would have
+// for a single file, and [SaveSharded] writes one, splitting exactly as
+// huggingface_hub's split_torch_state_dict_into_shards does (same 5 GB decimal
+// default, same shard naming, same index shape, same plain-single-file
+// fallback when everything fits in one shard) — so a GoAI export is
+// indistinguishable from one written by transformers save_pretrained.
+//
 // # For everyone else
 //
 // A trained model is just a big pile of numbers ("weights"). Those numbers have to
