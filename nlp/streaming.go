@@ -118,10 +118,15 @@ func (m *Llama) StreamStep(ctx *backend.Context, cache *StreamCache, token, sink
 // output is an approximation of full attention, not an equal of it.
 //
 // Note that this runs one extra [Llama.StreamStep] after the final sampled token (whose
-// logits are discarded), so a stream of n tokens costs n+1 steps.
-func (m *Llama) StreamGenerate(prompt []int, maxNew, sinks, window int, s TokenSampler) ([]int, error) {
+// logits are discarded), so a stream of n tokens costs n+1 steps. Stopping early on
+// [WithEOS] skips that trailing step, since nothing consumes its logits.
+func (m *Llama) StreamGenerate(prompt []int, maxNew, sinks, window int, s TokenSampler, opts ...GenerateOption) ([]int, error) {
 	if len(prompt) == 0 {
 		return nil, fmt.Errorf("nlp: StreamGenerate needs a non-empty prompt")
+	}
+	var gc genConfig
+	for _, o := range opts {
+		o(&gc)
 	}
 	ctx := backend.NewContext()
 	cache := m.NewStreamCache()
@@ -137,6 +142,9 @@ func (m *Llama) StreamGenerate(prompt []int, maxNew, sinks, window int, s TokenS
 	for range maxNew {
 		next := s.SampleWithHistory(rowLogits(logits), out)
 		out = append(out, next)
+		if gc.stopEOS(next, s) {
+			break
+		}
 		if logits, err = m.StreamStep(ctx, cache, next, sinks, window); err != nil {
 			return nil, err
 		}

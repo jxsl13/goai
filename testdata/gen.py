@@ -1445,6 +1445,233 @@ def build_moecombine(root):
     print("wrote nn/testdata/moecombine.json")
 
 
+# ---------------------------------------------------------------------------
+# §B68 non-vacuous HF goldens — nlp/testdata/<arch>_hf.{safetensors,_logits.npy}
+# ---------------------------------------------------------------------------
+
+
+def _b68_seed(name):
+    """Per-tensor phase in [0, 2π), from an FNV-1a hash of the tensor NAME.
+
+    Sibling layers (…layers.0.… vs …layers.1.…) and sibling roles (q_norm vs
+    k_norm, conv1d.bias vs D) therefore receive DIFFERENT values, so a
+    cross-layer or cross-role swap in a loader moves the logits.
+
+    FNV-1a rather than the byte-sum seedOf the Go-side §B68 fixtures use
+    (nlp/mamba2_gguf_test.go): a byte sum is PERMUTATION-INVARIANT over the
+    name, and the collision guard below caught it aliasing
+    rwkv.blocks.0.ln2.bias with rwkv.blocks.1.ln1.bias ("0"+"2" == "1"+"1") —
+    which would have made that very cross-layer swap invisible again."""
+    h = 2166136261
+    for b in name.encode():
+        h = ((h ^ b) * 16777619) & 0xFFFFFFFF
+    return (h % 1000003) / 1000003.0 * 2.0 * math.pi
+
+
+def _b68_fill(name, n, base, amp, step):
+    """Deterministic non-constant vector: base + amp*sin(seed + step*i).
+
+    Non-constant is the point (§B68): a CONSTANT tensor is invariant under
+    every reshape/broadcast/permute a loader can get wrong, and a ZERO tensor
+    is additionally invariant under being dropped entirely."""
+    return np.array([base + amp * math.sin(_b68_seed(name) + step * i)
+                     for i in range(n)], dtype=np.float32)
+
+
+# Patch kinds. Ranges are chosen to stay numerically tame (norm gains straddle
+# 1, the multiplicative skips stay positive) while being far enough from the
+# vacuous default that a dropped or mis-indexed term moves the logits by O(1).
+_B68_KINDS = {
+    "gain":       (1.00, 0.25, 2.3),   # RMS/LayerNorm gamma — golden default 1
+    "qk_gain":    (1.00, 0.60, 2.3),   # QK-norm gamma — see below
+    "ln_bias":    (0.02, 0.05, 1.3),   # LayerNorm beta      — golden default 0
+    "bias":       (0.01, 0.05, 1.0),   # additive projection bias — default 0
+    "skip":       (0.80, 0.20, 1.7),   # multiplicative skip D — default 1
+    "time_first": (0.50, 1.00, 1.9),   # RWKV WKV bonus u     — default 1
+}
+
+# Why qk_gain is spread WIDER than a plain gain: q/k-side perturbations only
+# reach the logits through the attention SCORES, and softmax is invariant to a
+# per-row constant shift, so much of a q-side change cancels. Measured on the
+# qwen3 golden, a q_norm↔k_norm swap moves the logits by 4.2e-3 at ±0.25 (a
+# thin 2.1x over the test's 2e-3 gate) but 1.1e-2 at ±0.60 (5.4x). Same reason
+# the Qwen2 q/k projection biases below cannot be gated by logits at any sane
+# amplitude — see the structural assertion in nlp/llama_hf_test.go.
+
+# Per-architecture: the tensor-name suffixes whose committed value is vacuous
+# (all-zero or all-constant) yet convention-critical, i.e. some load transform
+# — a drop, a q/k swap, a per-head vs full-width read, a channel mis-index —
+# is invisible while they stay that way.
+_B68_PATCH = {
+    "qwen2": [
+        (".self_attn.q_proj.bias", "bias"),
+        (".self_attn.k_proj.bias", "bias"),
+        (".self_attn.v_proj.bias", "bias"),
+        (".input_layernorm.weight", "gain"),
+        (".post_attention_layernorm.weight", "gain"),
+        ("model.norm.weight", "gain"),
+    ],
+    "qwen3": [
+        (".self_attn.q_norm.weight", "qk_gain"),  # per-head QK-norm: THE Qwen3 feature
+        (".self_attn.k_norm.weight", "qk_gain"),
+        (".input_layernorm.weight", "gain"),
+        (".post_attention_layernorm.weight", "gain"),
+        ("model.norm.weight", "gain"),
+    ],
+    "olmo2": [
+        (".self_attn.q_norm.weight", "qk_gain"),  # full-width QK-norm
+        (".self_attn.k_norm.weight", "qk_gain"),
+        (".post_attention_layernorm.weight", "gain"),
+        (".post_feedforward_layernorm.weight", "gain"),
+        ("model.norm.weight", "gain"),
+    ],
+    "mamba": [
+        (".mixer.D", "skip"),                   # y += D ⊙ x — D≡1 reads as y += x
+        (".mixer.conv1d.bias", "bias"),
+        (".norm.weight", "gain"),
+        ("backbone.norm_f.weight", "gain"),
+    ],
+    "mamba2": [
+        (".mixer.D", "skip"),                   # per-HEAD skip: broadcast-critical
+        (".mixer.conv1d.bias", "bias"),
+        (".norm.weight", "gain"),               # covers .mixer.norm too (gated norm)
+        ("backbone.norm_f.weight", "gain"),
+    ],
+    "rwkv": [
+        (".attention.time_first", "time_first"),
+        (".ln1.weight", "gain"), (".ln1.bias", "ln_bias"),
+        (".ln2.weight", "gain"), (".ln2.bias", "ln_bias"),
+        (".pre_ln.weight", "gain"), (".pre_ln.bias", "ln_bias"),
+        ("rwkv.ln_out.weight", "gain"), ("rwkv.ln_out.bias", "ln_bias"),
+    ],
+}
+
+# The prompt every nlp/*_hf_test.go golden test feeds the model.
+_B68_TOKENS = [3, 7, 1, 9, 4, 2, 8]
+
+
+def _b68_configs():
+    """Reference configs, reverse-engineered from the committed fixtures and
+    VERIFIED: with the committed weights each one reproduces the committed
+    *_hf_logits.npy BIT-FOR-BYTE (max abs diff exactly 0.0 under transformers
+    5.14.1 / torch 2.12.1). That equality is what licenses regenerating the
+    goldens here — the generator is a faithful stand-in for whatever ad-hoc
+    script originally produced them, which was never committed."""
+    from transformers.models.mamba import MambaConfig, MambaForCausalLM
+    from transformers.models.mamba2 import Mamba2Config, Mamba2ForCausalLM
+    from transformers.models.olmo2 import Olmo2Config, Olmo2ForCausalLM
+    from transformers.models.qwen2 import Qwen2Config, Qwen2ForCausalLM
+    from transformers.models.qwen3 import Qwen3Config, Qwen3ForCausalLM
+    from transformers.models.rwkv import RwkvConfig, RwkvForCausalLM
+
+    return {
+        "qwen2": (Qwen2ForCausalLM, Qwen2Config(
+            vocab_size=32, hidden_size=16, intermediate_size=32, num_hidden_layers=2,
+            num_attention_heads=2, num_key_value_heads=2, max_position_embeddings=32,
+            rms_norm_eps=1e-6, rope_theta=10000.0, tie_word_embeddings=False)),
+        "qwen3": (Qwen3ForCausalLM, Qwen3Config(
+            vocab_size=32, hidden_size=16, intermediate_size=32, num_hidden_layers=2,
+            num_attention_heads=4, num_key_value_heads=2, head_dim=6,
+            max_position_embeddings=32, rms_norm_eps=1e-6, rope_theta=10000.0,
+            tie_word_embeddings=False, attention_bias=False)),
+        "olmo2": (Olmo2ForCausalLM, Olmo2Config(
+            vocab_size=32, hidden_size=16, intermediate_size=32, num_hidden_layers=2,
+            num_attention_heads=4, num_key_value_heads=2, max_position_embeddings=32,
+            rms_norm_eps=1e-6, rope_theta=10000.0, tie_word_embeddings=False)),
+        "mamba": (MambaForCausalLM, MambaConfig(
+            vocab_size=32, hidden_size=16, state_size=8, num_hidden_layers=2,
+            conv_kernel=4, expand=2, time_step_rank=4, layer_norm_epsilon=1e-5,
+            use_mambapy=False)),
+        "mamba2": (Mamba2ForCausalLM, Mamba2Config(
+            vocab_size=32, hidden_size=32, state_size=8, num_hidden_layers=2,
+            conv_kernel=4, expand=1, n_groups=2, num_heads=4, head_dim=8,
+            layer_norm_epsilon=1e-5)),
+        "rwkv": (RwkvForCausalLM, RwkvConfig(
+            vocab_size=32, hidden_size=32, num_hidden_layers=2, intermediate_size=64,
+            layer_norm_epsilon=1e-5, rescale_every=0)),
+    }
+
+
+def build_hf_b68(root):
+    """Make the nlp HF goldens DISCRIMINATING, then re-derive their logits (§B68).
+
+    The committed fixtures leave every convention-critical *gain*, *skip* and
+    *bias* tensor at its vacuous default — norm gammas all 1, Qwen2's q/k/v
+    projection biases all 0, Mamba's D and RWKV's time_first all 1. A zero
+    vector is invariant under being dropped or permuted; an all-ones
+    multiplicative skip makes `y += D ⊙ x` indistinguishable from `y += x`;
+    an all-ones gamma makes the input_layernorm→attn_norm /
+    post_attention_layernorm→ffn_norm mapping (and q_norm↔k_norm) unobservable.
+    Such a golden passes with the code under test deleted.
+
+    This rewrites ONLY those tensors — every projection/embedding weight is
+    carried through byte-identically — and then recomputes *_hf_logits.npy with
+    the real transformers model, so the goldens stay §V16 foreign-convention
+    anchors rather than GoAI-vs-GoAI tautologies.
+
+    Idempotent: the fills are pure functions of the tensor name, so re-running
+    reproduces the committed bytes. The base (non-patched) weights come from
+    the committed file — their original RNG stream was never committed, so
+    preserving them is the only way to keep the unrelated goldens stable."""
+    try:
+        import torch
+        from safetensors.numpy import load_file, save_file
+    except ImportError:
+        print("torch/safetensors/transformers missing — skipping nlp HF §B68 goldens")
+        return
+    try:
+        cfgs = _b68_configs()
+    except ImportError:
+        print("transformers missing — skipping nlp HF §B68 goldens")
+        return
+
+    dest = os.path.join(root, "..", "nlp", "testdata")
+    for arch, rules in sorted(_B68_PATCH.items()):
+        path = os.path.join(dest, arch + "_hf.safetensors")
+        if not os.path.exists(path):
+            print("missing", path, "— skipping")
+            continue
+        sd = load_file(path)
+        patched = {}
+        for name, w in sd.items():
+            for suffix, kind in rules:
+                if not name.endswith(suffix):
+                    continue
+                base, amp, step = _B68_KINDS[kind]
+                v = _b68_fill(name, int(np.prod(w.shape)), base, amp, step)
+                sd[name] = v.reshape(w.shape).astype(w.dtype)
+                patched[name] = sd[name]
+                break
+        if not patched:
+            raise SystemExit(f"{arch}: no tensor matched the §B68 patch rules")
+
+        # A patched tensor that is constant, zero, or equal to a sibling would
+        # reintroduce exactly the invariance this exists to destroy.
+        for name, v in patched.items():
+            flat = v.reshape(-1)
+            if flat.min() == flat.max():
+                raise SystemExit(f"{arch}/{name}: patched value is constant")
+            if not np.abs(flat).max() > 0:
+                raise SystemExit(f"{arch}/{name}: patched value is all-zero")
+        names = sorted(patched)
+        for i, a in enumerate(names):
+            for b in names[i + 1:]:
+                if patched[a].shape == patched[b].shape and np.array_equal(patched[a], patched[b]):
+                    raise SystemExit(f"{arch}: {a} and {b} got identical values")
+
+        save_file(sd, path)
+        cls, cfg = cfgs[arch]
+        model = cls(cfg)
+        model.load_state_dict({k: torch.tensor(v) for k, v in sd.items()}, strict=True)
+        model.eval()
+        with torch.no_grad():
+            logits = model(torch.tensor([_B68_TOKENS])).logits[0]
+        out = os.path.join(dest, arch + "_hf_logits.npy")
+        np.save(out, logits.numpy().astype(np.float32))
+        print(f"wrote nlp/testdata/{arch}_hf.safetensors (+{len(patched)} §B68 tensors) "
+              f"and {arch}_hf_logits.npy")
+
+
 def build_yarn(root):
     """YaRN NTK-by-parts RoPE golden — independent numpy from the paper formula
     (Peng et al. 2023 arXiv:2309.00071 §3.2, §R66). Params chosen so the ramp band
@@ -1547,6 +1774,7 @@ def main():
     build_distill(root)
     build_llama(root)
     build_llama2(root)
+    build_hf_b68(root)
     build_yarn(root)
     build_tokenizer(root)
 

@@ -4,6 +4,121 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — §B68 golden-fixture class audit: 15 mutations, all now caught (T862, 2026-07-18)
+
+The §B68 rule (a golden must carry nonzero, non-constant values in every convention-critical
+tensor) had been applied to additive biases but never swept across siblings. Six fixtures
+were passing vacuously: Qwen3/OLMo2 `q_norm`/`k_norm` (QK-norm is the DEFINING feature of
+those architectures and had NO discriminating coverage on the load path), Mamba/Mamba-2
+`mixer.D` and RWKV `time_first` (all-ones, so `y += D ⊙ x` was indistinguishable from
+`y += x` — the multiplicative analogue of the additive rule), and the Qwen2 q/k/v biases
+(all exactly zero).
+
+Provenance had been lost — the ~30 HF fixtures had no generator at all. Rather than
+hand-editing bytes, the transformers configs were reverse-engineered and verified to
+reproduce the committed logits BIT-EXACTLY (max abs diff 0.0) before anything was
+regenerated; that equality is what licensed the change. The new generator is wired into
+`gen.py` and verified idempotent — all 12 regenerated fixtures come back byte-identical.
+
+All 15 mutations that these fixtures exist to catch now go GREEN → RED: q_norm↔k_norm
+swaps, gain channel-reversal, post-norm swaps, hardcoded `D=1`, head-index reversal, and
+four bias variants. Independently re-verified here for the Qwen3 swap.
+
+**One gap is NOT closable by fixture values, and is documented rather than papered over.**
+Non-zero Qwen2 biases are necessary but insufficient: dropping `v_proj.bias` moves the
+logits 5.5e-2 (28× the gate), but `q_proj.bias` only 1.5e-4 and `k_proj.bias` 7.0e-5,
+because q/k perturbations reach the logits only through attention SCORES, where softmax's
+invariance to a per-row constant shift cancels most of the effect. The effect is linear in
+amplitude, so clearing the gate would need biases many times larger than the projections
+they bias — an unphysical golden. Structural elementwise assertions on the loaded tensors
+cover it instead, with the measurements recorded in-comment.
+
+**A second instance of the same gap, one level up.** The `mambaB68Fixture` helper — written
+to close §B68 — patched conv1d biases with a LAYER-INDEPENDENT formula, so blk.0 and blk.1
+received byte-identical vectors and a cross-layer swap stayed invisible. Both Mamba helpers
+are now guards (asserting non-constant and no sibling aliasing) rather than patchers. Also
+caught during generation: byte-sum seeds are permutation-invariant and aliased two distinct
+tensors, hence FNV-1a.
+
+No loader bug was found: every transformers-anchored golden still agrees at ~4e-8. The
+QK-norm, bias, `D` and `time_first` handling were all correct — merely untested.
+
+### nlp — GGUF loader hardening and zero-value traps (B76/T861, 2026-07-18)
+
+**Panics and a silent wrong load on malformed metadata.** `gatherRows` computed
+`rows / heads` BEFORE checking `heads <= 0`, so `head_count = 0` was an integer
+divide-by-zero panic reachable from `LlamaFromGGUF`, `MixtralFromGGUF` and
+`GraniteFromGGUF` on any untrusted file. Hardened at the shared choke point
+`llamaCfgFromGGUFMeta`, which all ten llama-family entry points read their geometry
+through, so one fix covers the family; absent keys keep their documented fallbacks and only
+a PRESENT non-positive value errors, leaving round-trips unaffected. `LlamaFromGGUF` also
+gained a per-tensor geometry check, since a tensor's row count is separately
+attacker-controlled and a validated config does not imply it.
+
+Beyond the reported panics, the hardening exposed a worse one: zero and negative
+`embedding_length`, `block_count`, `feed_forward_length` and `context_length` all loaded
+with `err == nil` — the wrong-but-nil-error class §V29 calls the harder one to trace. Now
+rejected.
+
+**Float/quant asymmetry.** The float DeepSeek path permuted RoPE rows with no shape
+validation, silently permuting only a prefix when the geometry did not match, while its
+quantized twin pinned it with an explicit error. The float path now routes through the SAME
+validator rather than a second independently-worded check, which would drift.
+
+**Zero-value traps.** `EvictStreaming(0,0)` emptied the whole cache while its doc called it
+a no-op — clamped per-argument to the documented meaning, since the signature returns no
+error and rejecting would break the API. `WithWordPieceContinuation("")` made every piece a
+continuation — now ignored, matching its sibling option and what the JSON loader already
+assumed.
+
+**Two findings deliberately NOT actioned, both worth recording.** The over-long-prompt
+finding was STALE: verified empirically, a 10-token prompt against Ctx=8 already returns a
+clean error, because the guard lives in `Embed`, which `Prefill` calls first — all 18
+attention architectures are guarded identically and the 4 recurrent ones have no Ctx at all.
+And `CFGDecode` with γ=0 is SPEC-pinned (§T440 specifies it equals generating from the
+negative prompt) and pinned by a test, so it is documented as a hazard rather than rejected;
+γ<0, which is incoherent and unspecified, now errors. Changing γ=0 needs a spec amendment.
+
+**The asymmetry is systemic.** A class audit found 8 float/quant loader pairs with the same
+shape: Cohere is an algorithmically exact replica of the DeepSeek bug; gptneox and
+starcoder2 slice a bias at validated weight offsets with no length check (short bias =
+panic); gemma and gemma2 divide by `heads` bare where the quant twin guards first — and
+those two have their own config parsers, so the shared-parser fix does not reach them. Only
+DeepSeek is fixed here; the rest are recorded for follow-up.
+
+### nlp — EOS stopping across every Generate loop (T860, 2026-07-18)
+
+No architecture's `Generate` stopped on EOS; `T5Decoder` was the only decoder in the package
+that did. Every other loop ran a bare `for range maxNew`. That was not merely missing
+ergonomics — it made a shipped feature wrong: `guided.go` freezes its FSM on EOS but
+signalled nothing, so a guided generation emitted EOS and then kept emitting filler from the
+frozen accepting state, returning `maxNew` tokens with `err == nil`. Callers could not fix
+it themselves either, since `TokenSampler` sees logits, not the decision to stop.
+
+Wired through the existing `genConfig`/`GenerateOption` seam rather than by editing forty
+loops — copy-pasted stop logic is precisely the drift that caused §B75 earlier today. All 41
+decode loops turned out to be textually identical at the decision point, so each takes one
+uniform insert calling a single shared `stopEOS`. The 16 `Quant*` variants gained
+`opts ...GenerateOption`; verified source-compatible, including the `backend/cuda` callers.
+
+`WithEOS` is opt-in and supports multiple ids. The stop token IS included in the output,
+matching HF and llama.cpp and this repo's own `BeamSearch` — and it keeps the stop
+observable, since the last token distinguishes "ended on EOS" from "ran out of budget". The
+one inconsistency is called out rather than papered over: `T5Decoder.Generate` predates this
+and excludes its eos, and changing it would break its callers.
+
+The guided fix serves both kinds of caller: the guide implements a stop-token interface so
+`WithEOS()` with no arguments picks up its own eos id, and an EOS-reporter interface so a
+caller who does NOT opt in still gets the old behaviour but can now DETECT the filler tail
+instead of it being silent.
+
+Stop-strings straddling token boundaries are deliberately NOT implemented — the loops carry
+`[]int` with no detokenizer in scope, so neither the match nor the trim is expressible at
+token level. Documented with the caller-side workaround rather than half-built.
+
+The default-unchanged gate passes in BOTH the old and new states, which is what makes it a
+regression test rather than a restatement of the new behaviour.
+
 ### nlp — document the chat-template mis-detection hazard (T859, 2026-07-18)
 
 `DetectChatTemplate` matches marker substrings in the Jinja source and returns a

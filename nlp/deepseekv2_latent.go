@@ -508,6 +508,9 @@ func (m *DeepSeekV2) GenerateLatent(prompt []int, maxNew int, s TokenSampler, op
 		}
 		next := s.SampleWithHistory(rowLogits(logits), out)
 		out = append(out, next)
+		if gc.stopEOS(next, s) {
+			break
+		}
 		l, err := m.DecodeStepLatent(ctx, cache, next, pos)
 		if err != nil {
 			return nil, err

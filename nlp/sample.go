@@ -1076,18 +1076,117 @@ func rowLogits(t *tensor.Tensor) []float64 {
 // GenerateOption configures a Generate call (functional options, §C12).
 type GenerateOption func(*genConfig)
 
-type genConfig struct{ be backend.Backend }
+type genConfig struct {
+	be backend.Backend
+
+	// eos holds the stop ids passed to WithEOS. eosOn records that WithEOS was
+	// called AT ALL, and that — not a non-empty eos — is what arms stopping: the
+	// zero-argument form WithEOS() arms sampler-declared stops (StopTokener) with
+	// no explicit ids of its own. eosOn false is the default and means the loop
+	// runs the full maxNew steps, whatever it draws (§B76).
+	eos   []int
+	eosOn bool
+}
 
 // WithBackend runs the decode loop on the given backend instead of the default.
 // Single-token decode is dispatch-latency-bound, so for SMALL models the CPU is
 // faster than the GPU (measured ~2.7× at dim 512), while large models still favour
 // the GPU — the caller, who knows the model size and hardware, chooses (§T361).
+//
+// SCOPE: honoured by the float decode loops. The Quant* loops accept GenerateOption
+// so [WithEOS] reaches them, but they IGNORE this one and always decode on
+// backend.Default() — their kernels are not exercised on non-default backends, so
+// routing them there is not claimed rather than silently half-supported (§B76).
 func WithBackend(be backend.Backend) GenerateOption { return func(c *genConfig) { c.be = be } }
+
+// WithEOS stops a Generate loop early when it draws one of the given stop-token
+// ids. Pass every id the model may end on — many checkpoints ship two or more
+// (a base </s> plus a chat <|im_end|>, say) and any of them ends the sequence.
+//
+// The stop token IS INCLUDED in the returned slice: a model that draws its first
+// EOS as the k-th generated token returns prompt+k tokens, the last of which is
+// that EOS. This matches HuggingFace `generate()` (whose returned ids carry the
+// eos_token_id — the reason callers pass skip_special_tokens=True when decoding)
+// and llama.cpp (which appends the token, then breaks), as well as this package's
+// own [BeamSearch], whose completed hypotheses end in eos. It also leaves the stop
+// observable: `out[len(out)-1]` tells the caller whether the loop ended on EOS or
+// ran out of budget, which an excluding contract would erase. Note that
+// [T5Decoder.Generate] predates this and EXCLUDES its eosToken; it is unchanged.
+//
+// EOS stopping is strictly opt-in and DOES NOT CHANGE DEFAULT BEHAVIOUR. Without
+// this option every loop keeps drawing until maxNew or the context limit, exactly
+// as before — existing callers get byte-identical output.
+//
+// Calling WithEOS with no arguments arms stopping for sampler-declared stop ids
+// only: if the sampler implements [StopTokener] — as the guided samplers from
+// [RegexGuide.Sampler] and [GrammarGuide.Sampler] do, reporting the eosID they
+// were built with — its ids stop the loop too, unioned with any passed here. That
+// is the fix for a guided FSM that reaches an accepting state, draws EOS and then
+// emits filler from the frozen state for the rest of maxNew (§B76).
+//
+// NOT COVERED: stop STRINGS that straddle token boundaries. A stop string can end
+// mid-token, and the decode loops carry []int with no detokenizer in scope, so
+// neither the match nor the trim can be expressed here; there is deliberately no
+// half-implementation. Callers needing that must detokenize the returned tokens
+// and trim the text themselves.
+func WithEOS(ids ...int) GenerateOption {
+	return func(c *genConfig) {
+		c.eosOn = true
+		c.eos = append(c.eos, ids...)
+	}
+}
+
+// StopTokener is implemented by a TokenSampler that carries stop-token ids of its
+// own, so a Generate loop armed by [WithEOS] can honour them without the caller
+// repeating ids the sampler already knows. The guided samplers implement it.
+type StopTokener interface {
+	// StopTokens returns the ids that end generation, or nil for none.
+	StopTokens() []int
+}
+
+// EOSReporter is implemented by a TokenSampler that records whether it has drawn a
+// stop token. It makes an unstopped loop's overrun DETECTABLE after the fact even
+// when the caller did not pass [WithEOS] — check it on the sampler once Generate
+// returns to find out whether the tail of the output is post-EOS filler.
+type EOSReporter interface {
+	// EOSEmitted reports whether this sampler has drawn a stop token.
+	EOSEmitted() bool
+}
+
+// stopEOS reports whether tok ends the decode loop. It is the single stop decision
+// every Generate loop in the package calls, so the contract cannot drift between
+// ~40 architectures (§B75 is what copy-pasted per-loop logic costs). Disarmed —
+// the default — it is a predictable-branch no-op on the per-token path.
+//
+// The scan is linear because the id sets are tiny (models ship 1-3 eos ids); a map
+// would cost more to build per call than it saves per step.
+func (c *genConfig) stopEOS(tok int, s TokenSampler) bool {
+	if !c.eosOn {
+		return false
+	}
+	for _, id := range c.eos {
+		if tok == id {
+			return true
+		}
+	}
+	if st, ok := s.(StopTokener); ok {
+		for _, id := range st.StopTokens() {
+			if tok == id {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 // Generate autoregressively produces up to maxNew tokens after the prompt,
 // using the KV-cache. Returns prompt + generated tokens. Stops at the context
 // limit. By default the decode runs on backend.Default(); WithBackend overrides it
 // (single-token decode is often faster on the CPU for small models, §T361).
+//
+// Pass [WithEOS] to stop early on a stop token, which is INCLUDED in the returned
+// slice. Without it the loop runs the full maxNew steps whatever it draws — the
+// long-standing behaviour, deliberately preserved.
 func (g *GPT) Generate(prompt []int, maxNew int, s TokenSampler, opts ...GenerateOption) ([]int, error) {
 	var gc genConfig
 	for _, o := range opts {
@@ -1116,6 +1215,9 @@ func (g *GPT) Generate(prompt []int, maxNew int, s TokenSampler, opts ...Generat
 		}
 		next := s.SampleWithHistory(rowLogits(logits), out)
 		out = append(out, next)
+		if gc.stopEOS(next, s) {
+			break
+		}
 		l, err := g.DecodeStep(ctx, cache, next, pos)
 		if err != nil {
 			return nil, err

@@ -129,9 +129,29 @@ func GatherRows(t *tensor.Tensor, idx []int) *tensor.Tensor {
 // window in place (Xiao et al. 2023, §R73). Uniform across layers — the retained
 // token positions are the same for every block — so a single index list applies
 // to all. A no-op while the cache still fits in sink+recent.
+//
+// ZERO VALUE / boundary behavior: a window of zero or less — EvictStreaming(0, 0),
+// or any negative argument that clamps to it — is a NO-OP, not an instruction to
+// empty the cache. This is a deliberate clamp to the documented meaning above.
+// Before it, the two-zero call fell through to a keep-list of no indices and
+// DESTROYED every cached key and value: Go's zero value for a bounding window
+// landed on "discard everything the model has seen", and a caller who computed
+// recent = budget − used and got −1 back hit the same total wipe. A window that
+// retains nothing is never a meaningful eviction policy, so it is read as "no
+// bound requested" rather than executed.
+//
+// The clamp only ever ADDS retention, so every window that already bounded the
+// cache (sink+recent ≥ 1) evicts exactly as before. To intentionally drop cached
+// context, rebuild the cache rather than asking this policy for an empty window.
 func (c *KVCache) EvictStreaming(sink, recent int) {
+	if sink < 0 {
+		sink = 0
+	}
+	if recent < 0 {
+		recent = 0
+	}
 	n := c.Len()
-	if n == 0 || sink+recent >= n {
+	if n == 0 || sink+recent <= 0 || sink+recent >= n {
 		return
 	}
 	keep := StreamingKeep(n, sink, recent)

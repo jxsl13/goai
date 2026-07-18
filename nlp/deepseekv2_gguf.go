@@ -189,8 +189,14 @@ func DeepSeekV2FromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor) 
 		}
 		// De-interleave the pe rows (interleaved on disk, LLAMA_ROPE_TYPE_NORM) into
 		// split-half order for GoAI's OpRoPE — the same permutation as DeepSeekV2FromHF.
-		qbPerm := deinterleaveRoPE(wqB, cfg.Heads, cfg.QKNope+cfg.QKRope, cfg.QKNope, cfg.QKRope)
-		kvaPerm := deinterleaveRoPE(wkvA, 1, cfg.KVLoraRank+cfg.QKRope, cfg.KVLoraRank, cfg.QKRope)
+		qbPerm, err := deinterleaveRoPEChecked(p+"attn_q_b.weight", wqB, cfg.Heads, cfg.QKNope+cfg.QKRope, cfg.QKNope, cfg.QKRope)
+		if err != nil {
+			return nil, err
+		}
+		kvaPerm, err := deinterleaveRoPEChecked(p+"attn_kv_a_mqa.weight", wkvA, 1, cfg.KVLoraRank+cfg.QKRope, cfg.KVLoraRank, cfg.QKRope)
+		if err != nil {
+			return nil, err
+		}
 
 		m.Blocks = append(m.Blocks, &DeepSeekV2Block{
 			InputNorm:    rmsFromGGUF(attnNorm, cfg.Eps),
@@ -587,4 +593,32 @@ func interleaveRoPE(w *tensor.Tensor, heads, block, peOffset, ropeDim int) *tens
 		}
 	}
 	return res
+}
+
+// deinterleaveRoPEChecked is [deinterleaveRoPE] with the row geometry PINNED first,
+// so a malformed file is a clean error instead of a silently mis-permuted model.
+//
+// deinterleaveRoPE walks `heads` blocks of `block` rows and rewrites each block's pe
+// span. It never inspects the tensor it was handed: when heads×block is SMALLER than
+// the actual row count it permutes only a prefix and returns a tensor that looks
+// perfectly well-formed — the model then loads with err == nil and computes wrong
+// attention, the wrong-but-nil-error failure §V29 calls out as the harder one to
+// trace. The quantized twin never had this hole (QuantDeepSeekV2FromGGUF pins the
+// [out, in] shape and routes through deepseekV2DeinterleavePerm's explicit error), so
+// this reuses that SAME predicate rather than restating it: the float and quantized
+// loaders now accept and reject exactly the same set of files, which is the property
+// worth having — a second, independently-worded check would drift.
+//
+// Failure modes: a non-2-D tensor, a row count that is not heads×block, a
+// non-positive heads or block, or a pe span that does not fit an even rotary width
+// inside the block. Valid files are unaffected — the predicate passes whenever the
+// on-disk geometry matches the config the same file declares.
+func deinterleaveRoPEChecked(name string, w *tensor.Tensor, heads, block, peOffset, ropeDim int) (*tensor.Tensor, error) {
+	if w.Ndim() != 2 {
+		return nil, fmt.Errorf("nlp: GGUF %s is %d-D, want a 2-D [out, in] projection", name, w.Ndim())
+	}
+	if _, err := deepseekV2DeinterleavePerm(w.Shape()[0], heads, block, peOffset, ropeDim); err != nil {
+		return nil, fmt.Errorf("nlp: GGUF %s: %w", name, err)
+	}
+	return deinterleaveRoPE(w, heads, block, peOffset, ropeDim), nil
 }

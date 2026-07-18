@@ -553,7 +553,11 @@ func (m *QuantDeepSeekV2) DecodeStep(ctx *backend.Context, cache *QuantDeepSeekV
 // token), returning prompt+generated. With a greedy sampler the output is
 // identical to argmax-ing a full Forward at each step (the decode is bit-exact
 // against Forward). Runs on backend.Default().
-func (m *QuantDeepSeekV2) Generate(prompt []int, maxNew int, s TokenSampler) ([]int, error) {
+func (m *QuantDeepSeekV2) Generate(prompt []int, maxNew int, s TokenSampler, opts ...GenerateOption) ([]int, error) {
+	var gc genConfig
+	for _, o := range opts {
+		o(&gc)
+	}
 	if len(prompt) == 0 {
 		return nil, fmt.Errorf("nlp: Generate needs a non-empty prompt")
 	}
@@ -575,6 +579,9 @@ func (m *QuantDeepSeekV2) Generate(prompt []int, maxNew int, s TokenSampler) ([]
 		}
 		next := s.SampleWithHistory(rowLogits(logits), out)
 		out = append(out, next)
+		if gc.stopEOS(next, s) {
+			break
+		}
 		l, err := m.DecodeStep(ctx, cache, next, pos)
 		if err != nil {
 			return nil, err

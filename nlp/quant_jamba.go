@@ -668,7 +668,11 @@ func (m *QuantJamba) DecodeStep(ctx *backend.Context, st *JambaDecodeState, toke
 // deterministic argmax). Jamba's attention is NoPE and its position sense lives in
 // the Mamba recurrences, so there is no context-length ceiling; memory grows only
 // through the attention layers' KV rows.
-func (m *QuantJamba) Generate(prompt []int, maxNew int, s TokenSampler) ([]int, error) {
+func (m *QuantJamba) Generate(prompt []int, maxNew int, s TokenSampler, opts ...GenerateOption) ([]int, error) {
+	var gc genConfig
+	for _, o := range opts {
+		o(&gc)
+	}
 	if len(prompt) == 0 {
 		return nil, fmt.Errorf("nlp: Generate needs a non-empty prompt")
 	}
@@ -686,6 +690,9 @@ func (m *QuantJamba) Generate(prompt []int, maxNew int, s TokenSampler) ([]int, 
 	for range maxNew {
 		next := s.SampleWithHistory(rowLogits(logits), out)
 		out = append(out, next)
+		if gc.stopEOS(next, s) {
+			break
+		}
 		l, err := m.DecodeStep(ctx, st, next)
 		if err != nil {
 			return nil, err

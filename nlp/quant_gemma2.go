@@ -526,7 +526,11 @@ func (m *QuantGemma2) cappedDecodeAttention(ctx *backend.Context, b *QuantGemma2
 // quantized model, using the KV-cache (each step is one token, not a full re-forward),
 // and returns prompt+new. The sampler s selects each token (Greedy() for deterministic
 // argmax). Stops at the context limit. The same shape as [QuantGemma.Generate].
-func (m *QuantGemma2) Generate(prompt []int, maxNew int, s TokenSampler) ([]int, error) {
+func (m *QuantGemma2) Generate(prompt []int, maxNew int, s TokenSampler, opts ...GenerateOption) ([]int, error) {
+	var gc genConfig
+	for _, o := range opts {
+		o(&gc)
+	}
 	if len(prompt) == 0 {
 		return nil, fmt.Errorf("nlp: Generate needs a non-empty prompt")
 	}
@@ -549,6 +553,9 @@ func (m *QuantGemma2) Generate(prompt []int, maxNew int, s TokenSampler) ([]int,
 		}
 		next := s.SampleWithHistory(rowLogits(logits), out)
 		out = append(out, next)
+		if gc.stopEOS(next, s) {
+			break
+		}
 		l, err := m.DecodeStep(ctx, cache, next, pos)
 		if err != nil {
 			return nil, err
