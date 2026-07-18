@@ -559,6 +559,90 @@ func benchCoopmatF16Acc(b *testing.B, m, k, n int) {
 	b.ReportMetric(2.0*float64(m)*float64(n)*float64(k)/(b.Elapsed().Seconds()/float64(b.N))/1e9, "GFLOP/s")
 }
 
+func TestVulkanCoopmatV4Accuracy(t *testing.T) {
+	if !Available() || !HasCoopMat() {
+		t.Skip("no vulkan coopmat")
+	}
+	const M, K, N = 64, 512, 128
+	rng := rand.New(rand.NewSource(7))
+	af := make([]float32, M*K)
+	bf := make([]float32, K*N)
+	ah := make([]uint16, M*K)
+	bh := make([]uint16, K*N)
+	for i := range af {
+		af[i] = float32(rng.NormFloat64()) * 0.1
+		ah[i] = f32ToHalf(af[i])
+	}
+	for i := range bf {
+		bf[i] = float32(rng.NormFloat64()) * 0.1
+		bh[i] = f32ToHalf(bf[i])
+	}
+	r, err := NewCoopmatResident(ah, bh, M, K, N)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Free()
+	if err := r.GemmV4(); err != nil {
+		t.Fatal(err)
+	}
+	c := make([]float32, M*N)
+	if err := r.ReadC(c); err != nil {
+		t.Fatal(err)
+	}
+	var num, den float64
+	for m := 0; m < M; m++ {
+		for n := 0; n < N; n++ {
+			var ref float64
+			for k := 0; k < K; k++ {
+				ref += float64(af[m*K+k]) * float64(bf[k*N+n])
+			}
+			d := float64(c[m*N+n]) - ref
+			num += d * d
+			den += ref * ref
+		}
+	}
+	relRMS := math.Sqrt(num / den)
+	t.Logf("v4 (64x64 f16-acc) vs f64 ref: norm-rel-RMS %.3e", relRMS)
+	if relRMS > 2e-2 {
+		t.Fatalf("v4 too far off: %.3e", relRMS)
+	}
+}
+
+func benchCoopmatV4(b *testing.B, m, k, n int) {
+	if !Available() || !HasCoopMat() {
+		b.Skip("no vulkan coopmat")
+	}
+	rng := rand.New(rand.NewSource(11))
+	ah := make([]uint16, m*k)
+	bh := make([]uint16, k*n)
+	for i := range ah {
+		ah[i] = f32ToHalf(float32(rng.NormFloat64()) * 0.1)
+	}
+	for i := range bh {
+		bh[i] = f32ToHalf(float32(rng.NormFloat64()) * 0.1)
+	}
+	r, err := NewCoopmatResident(ah, bh, m, k, n)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer r.Free()
+	if err := r.GemmV4(); err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for range b.N {
+		if err := r.GemmV4(); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.StopTimer()
+	b.ReportMetric(2.0*float64(m)*float64(n)*float64(k)/(b.Elapsed().Seconds()/float64(b.N))/1e9, "GFLOP/s")
+}
+
+func BenchmarkCoopmatV4_qkv(b *testing.B)    { benchCoopmatV4(b, 128, 2048, 2048) }
+func BenchmarkCoopmatV4_gateup(b *testing.B) { benchCoopmatV4(b, 128, 2048, 5632) }
+func BenchmarkCoopmatV4_down(b *testing.B)   { benchCoopmatV4(b, 128, 5632, 2048) }
+
 func BenchmarkCoopmatF16Acc_qkv(b *testing.B)    { benchCoopmatF16Acc(b, 128, 2048, 2048) }
 func BenchmarkCoopmatF16Acc_gateup(b *testing.B) { benchCoopmatF16Acc(b, 128, 2048, 5632) }
 func BenchmarkCoopmatF16Acc_down(b *testing.B)   { benchCoopmatF16Acc(b, 128, 5632, 2048) }
