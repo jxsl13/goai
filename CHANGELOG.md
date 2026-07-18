@@ -4,6 +4,26 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — recorded negative verdict: sampler full-vocab materialisation is noise (T846, 2026-07-18)
+
+`TokenSampler.Sample` takes a `[]float64`, so every decode step materialises the entire
+vocabulary as a host slice before choosing one token — a 2 MB allocation per token at
+Gemma's 256k vocabulary, discarded immediately. A discovery sweep flagged this as an M–L
+serving-hot-path win. Measured, it is not a win at all.
+
+`rowLogits` already has typed fast paths, so the cost is allocation and memory traffic
+rather than per-element dispatch — confirmed by the F64 arm running level with the F32 one,
+meaning nothing is saved by skipping the widening conversion. Against a real decode step the
+ratio is ~0.02% at the 1000-entry benchmark vocabulary (1.4 µs vs 6.1 ms/token) and ~0.1%
+at Gemma scale, because a forward pass through the model dwarfs one linear pass over its
+output row. No change shipped, per §C3.
+
+The four benchmarks are kept in `nlp/sample_perf_test.go` so the verdict stays
+re-checkable rather than taken on faith, with the reasoning in the file's godoc. The
+conclusion for future work: the `[]float64` signature is not worth breaking for performance.
+If it changes, it should change for API reasons — a streaming or device-resident sampler
+that never needs the full row — not this one.
+
 ### nn — train/eval mode propagation and Embedding layer (T845, 2026-07-18)
 
 Closes a long-standing API footgun. `Dropout.Training` defaults true and was reachable
