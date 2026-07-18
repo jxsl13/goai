@@ -728,6 +728,20 @@ int vk_coopmat(void) { return ensure_init() == 0 && gCoopMat ? 1 : 0; }
 // vk_coopmat2 reports whether VK_NV_cooperative_matrix2 tensor addressing is enabled.
 int vk_coopmat2(void) { return ensure_init() == 0 && gCoopMat2 ? 1 : 0; }
 
+// vk_coopmat_gemm_f16_res_v4: 64x64 tile with f16 accumulators (B-reuse + full tensor rate).
+int vk_coopmat_gemm_f16_res_v4(const uint32_t* spv, int spvLen,
+                               void* ah, void* bh, void* ch, int M, int K, int N) {
+    if (!gCoopMat) return -9;
+    ResidentBuf* ra = (ResidentBuf*)ah; ResidentBuf* rb = (ResidentBuf*)bh; ResidentBuf* rc = (ResidentBuf*)ch;
+    VkDeviceSize lens[3] = { (VkDeviceSize)M*K*2, (VkDeviceSize)K*N*2, (VkDeviceSize)M*N*sizeof(float) };
+    void* data[3] = { NULL, NULL, NULL };
+    int up[3] = {0,0,0}, down[3] = {0,0,0};
+    int32_t pc[3] = { M, K, N };
+    VkBuffer preBuf[3] = { ra->buf, rb->buf, rc->buf };
+    return vk_dispatch_pre(spv, spvLen, 3, lens, data, up, down, pc, sizeof(pc),
+                           (uint32_t)N/64u, (uint32_t)M/64u, 1u, preBuf);
+}
+
 // vk_coopmat_gemm_f16_res_f16acc: v2 geometry with f16 ACCUMULATORS (cuBLAS-parity lever).
 int vk_coopmat_gemm_f16_res_f16acc(const uint32_t* spv, int spvLen,
                                    void* ah, void* bh, void* ch,

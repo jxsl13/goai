@@ -37,6 +37,9 @@ var coopmatGemmCm2Spv []byte
 //go:embed shaders/coopmat_gemm_f16acc.spv
 var coopmatGemmF16AccSpv []byte
 
+//go:embed shaders/coopmat_gemm_v4.spv
+var coopmatGemmV4Spv []byte
+
 // HasCoopMat reports whether the active device enabled VK_KHR_cooperative_matrix
 // (NVIDIA/AMD/Intel current drivers; false on MoltenVK and pre-1.2 stacks).
 func HasCoopMat() bool { return C.vk_coopmat() == 1 }
@@ -165,6 +168,20 @@ func (r *CoopmatResident) GemmF16Acc() error {
 	)
 	if rc != 0 {
 		return fmt.Errorf("vulkan: f16acc gemm failed (code %d)", int(rc))
+	}
+	return nil
+}
+
+// GemmV4 dispatches the 64x64 f16-accumulator kernel (B-reuse + full tensor rate). M%64==0.
+func (r *CoopmatResident) GemmV4() error {
+	if r.m%64 != 0 {
+		return fmt.Errorf("vulkan: coopmat v4 needs M%%64==0 (got %d)", r.m)
+	}
+	rc := C.vk_coopmat_gemm_f16_res_v4(
+		(*C.uint32_t)(unsafe.Pointer(&coopmatGemmV4Spv[0])), C.int(len(coopmatGemmV4Spv)),
+		r.ah, r.bh, r.ch, C.int(r.m), C.int(r.k), C.int(r.n))
+	if rc != 0 {
+		return fmt.Errorf("vulkan: v4 gemm failed (code %d)", int(rc))
 	}
 	return nil
 }
