@@ -24,6 +24,7 @@ static int              gInitTried = 0;
 static int              gInitOK    = 0;
 static int              gAtomicFloat = 0; // VK_EXT_shader_atomic_float enabled? (§T90)
 static int              gCoopMat = 0;     // VK_KHR_cooperative_matrix enabled? (Tw-COOPMAT)
+static int              gCoopMat2 = 0;    // VK_NV_cooperative_matrix2 (tensor addressing) enabled?
 typedef struct { VkBuffer buf; VkDeviceMemory mem; } ResidentBuf;
 
 // find_compute_queue returns the index of a queue family with COMPUTE, or -1.
@@ -101,7 +102,7 @@ static int attempt_device(VkPhysicalDevice pd) {
     qci.pQueuePriorities = &prio;
 
     // Portability (MoltenVK) needs VK_KHR_portability_subset at device creation; absent elsewhere.
-    const char* devExts[3];
+    const char* devExts[4];
     uint32_t nDevExts = 0;
     if (has_device_ext(pd, "VK_KHR_portability_subset")) {
         devExts[nDevExts++] = "VK_KHR_portability_subset";
@@ -143,6 +144,31 @@ static int attempt_device(VkPhysicalDevice pd) {
         pNext = &v12;
         coop = 1;
     }
+    // VK_NV_cooperative_matrix2 (tensor addressing / coopMatLoadTensorNV — the NVIDIA fast
+    // path llama.cpp's mul_mm_cm2 uses). Compile-guarded: distro headers older than 1.4.30x
+    // lack the struct; runtime-guarded on the device extension; only device-reported
+    // features are enabled (vkGetPhysicalDeviceFeatures2).
+    int coop2 = 0;
+#ifdef VK_NV_cooperative_matrix2
+    VkPhysicalDeviceCooperativeMatrix2FeaturesNV cm2Have = {0};
+    VkPhysicalDeviceCooperativeMatrix2FeaturesNV cm2Feat = {0};
+    if (coop && has_device_ext(pd, "VK_NV_cooperative_matrix2")) {
+        cm2Have.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_2_FEATURES_NV;
+        VkPhysicalDeviceFeatures2 f2 = {0};
+        f2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+        f2.pNext = &cm2Have;
+        vkGetPhysicalDeviceFeatures2(pd, &f2);
+        if (cm2Have.cooperativeMatrixTensorAddressing) {
+            devExts[nDevExts++] = "VK_NV_cooperative_matrix2";
+            cm2Feat.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_2_FEATURES_NV;
+            cm2Feat.cooperativeMatrixTensorAddressing = VK_TRUE;
+            cm2Feat.cooperativeMatrixFlexibleDimensions = cm2Have.cooperativeMatrixFlexibleDimensions;
+            cm2Feat.pNext = pNext;
+            pNext = &cm2Feat;
+            coop2 = 1;
+        }
+    }
+#endif
 
     VkDeviceCreateInfo dci = {0};
     dci.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -159,6 +185,7 @@ static int attempt_device(VkPhysicalDevice pd) {
     gDevice = dev;
     gAtomicFloat = atomic;
     gCoopMat = coop;
+    gCoopMat2 = coop2;
     vkGetDeviceQueue(gDevice, gQueueFamily, 0, &gQueue);
     return 0;
 }
@@ -697,6 +724,51 @@ static int vk_dispatch(const uint32_t* spv, int spvLen,
 
 // vk_coopmat reports whether the active device enabled VK_KHR_cooperative_matrix.
 int vk_coopmat(void) { return ensure_init() == 0 && gCoopMat ? 1 : 0; }
+
+// vk_coopmat2 reports whether VK_NV_cooperative_matrix2 tensor addressing is enabled.
+int vk_coopmat2(void) { return ensure_init() == 0 && gCoopMat2 ? 1 : 0; }
+
+// vk_coopmat_gemm_f16_res_f16acc: v2 geometry with f16 ACCUMULATORS (cuBLAS-parity lever).
+int vk_coopmat_gemm_f16_res_f16acc(const uint32_t* spv, int spvLen,
+                                   void* ah, void* bh, void* ch,
+                                   int M, int K, int N) {
+    if (!gCoopMat) return -9;
+    ResidentBuf* ra = (ResidentBuf*)ah;
+    ResidentBuf* rb = (ResidentBuf*)bh;
+    ResidentBuf* rc = (ResidentBuf*)ch;
+    VkDeviceSize lens[3] = {
+        (VkDeviceSize)M * K * 2,
+        (VkDeviceSize)K * N * 2,
+        (VkDeviceSize)M * N * sizeof(float),
+    };
+    void* data[3] = { NULL, NULL, NULL };
+    int up[3] = {0, 0, 0}, down[3] = {0, 0, 0};
+    int32_t pc[3] = { M, K, N };
+    VkBuffer preBuf[3] = { ra->buf, rb->buf, rc->buf };
+    return vk_dispatch_pre(spv, spvLen, 3, lens, data, up, down, pc, sizeof(pc),
+                           (uint32_t)N / 64u, (uint32_t)M / 32u, 1u, preBuf);
+}
+
+// vk_coopmat_gemm_f16_res_cm2: v2 geometry (32x64/subgroup) with coopMatLoadTensorNV loads.
+int vk_coopmat_gemm_f16_res_cm2(const uint32_t* spv, int spvLen,
+                                void* ah, void* bh, void* ch,
+                                int M, int K, int N) {
+    if (!gCoopMat2) return -9;
+    ResidentBuf* ra = (ResidentBuf*)ah;
+    ResidentBuf* rb = (ResidentBuf*)bh;
+    ResidentBuf* rc = (ResidentBuf*)ch;
+    VkDeviceSize lens[3] = {
+        (VkDeviceSize)M * K * 2,
+        (VkDeviceSize)K * N * 2,
+        (VkDeviceSize)M * N * sizeof(float),
+    };
+    void* data[3] = { NULL, NULL, NULL };
+    int up[3] = {0, 0, 0}, down[3] = {0, 0, 0};
+    int32_t pc[3] = { M, K, N };
+    VkBuffer preBuf[3] = { ra->buf, rb->buf, rc->buf };
+    return vk_dispatch_pre(spv, spvLen, 3, lens, data, up, down, pc, sizeof(pc),
+                           (uint32_t)N / 64u, (uint32_t)M / 32u, 1u, preBuf);
+}
 
 // vk_coopmat_gemm_f16: Tw-COOPMAT probe — C[M,N]f32 = A[M,K]f16 · B[K,N]f16 on the
 // cooperative-matrix (tensor-core) pipeline. Host must guarantee M%16==0, N%64==0,

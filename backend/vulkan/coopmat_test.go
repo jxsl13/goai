@@ -389,6 +389,184 @@ func benchCoopmatV3(b *testing.B, m, k, n int) {
 	b.ReportMetric(2.0*float64(m)*float64(n)*float64(k)/(b.Elapsed().Seconds()/float64(b.N))/1e9, "GFLOP/s")
 }
 
+func TestVulkanCoopmatCm2Parity(t *testing.T) {
+	if !Available() {
+		t.Skip("no vulkan device")
+	}
+	if !HasCoopMat2() {
+		t.Skip("device lacks NV_cooperative_matrix2")
+	}
+	const M, K, N = 64, 96, 128
+	rng := rand.New(rand.NewSource(13))
+	ah := make([]uint16, M*K)
+	bh := make([]uint16, K*N)
+	for i := range ah {
+		ah[i] = f32ToHalf(float32(rng.NormFloat64()) * 0.25)
+	}
+	for i := range bh {
+		bh[i] = f32ToHalf(float32(rng.NormFloat64()) * 0.25)
+	}
+	r, err := NewCoopmatResident(ah, bh, M, K, N)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Free()
+	if err := r.Gemm(); err != nil {
+		t.Fatal(err)
+	}
+	v1 := make([]float32, M*N)
+	if err := r.ReadC(v1); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.GemmCm2(); err != nil {
+		t.Fatal(err)
+	}
+	c2 := make([]float32, M*N)
+	if err := r.ReadC(c2); err != nil {
+		t.Fatal(err)
+	}
+	var maxAbs float64
+	for i := range v1 {
+		if d := math.Abs(float64(v1[i]) - float64(c2[i])); d > maxAbs {
+			maxAbs = d
+		}
+	}
+	t.Logf("cm2 vs v1 coopmat: max abs diff %.3g", maxAbs)
+	if maxAbs > 1e-4 {
+		t.Fatalf("cm2 diverges: max abs %.3g", maxAbs)
+	}
+}
+
+func benchCoopmatCm2(b *testing.B, m, k, n int) {
+	if !Available() {
+		b.Skip("no vulkan device")
+	}
+	if !HasCoopMat2() {
+		b.Skip("device lacks NV_cooperative_matrix2")
+	}
+	rng := rand.New(rand.NewSource(11))
+	ah := make([]uint16, m*k)
+	bh := make([]uint16, k*n)
+	for i := range ah {
+		ah[i] = f32ToHalf(float32(rng.NormFloat64()) * 0.25)
+	}
+	for i := range bh {
+		bh[i] = f32ToHalf(float32(rng.NormFloat64()) * 0.25)
+	}
+	r, err := NewCoopmatResident(ah, bh, m, k, n)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer r.Free()
+	if err := r.GemmCm2(); err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for range b.N {
+		if err := r.GemmCm2(); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.StopTimer()
+	b.ReportMetric(2.0*float64(m)*float64(n)*float64(k)/(b.Elapsed().Seconds()/float64(b.N))/1e9, "GFLOP/s")
+}
+
+// f16-accumulate correctness: over K the f16 accumulator loses precision, but this is the
+// accepted prefill tradeoff (same as the CUDA CUBLAS_COMPUTE_16F path). Gate at 2e-2 rel.
+func TestVulkanCoopmatF16AccAccuracy(t *testing.T) {
+	if !Available() {
+		t.Skip("no vulkan device")
+	}
+	if !HasCoopMat() {
+		t.Skip("device lacks VK_KHR_cooperative_matrix")
+	}
+	const M, K, N = 32, 512, 128
+	rng := rand.New(rand.NewSource(7))
+	af := make([]float32, M*K)
+	bf := make([]float32, K*N)
+	ah := make([]uint16, M*K)
+	bh := make([]uint16, K*N)
+	for i := range af {
+		af[i] = float32(rng.NormFloat64()) * 0.1
+		ah[i] = f32ToHalf(af[i])
+	}
+	for i := range bf {
+		bf[i] = float32(rng.NormFloat64()) * 0.1
+		bh[i] = f32ToHalf(bf[i])
+	}
+	r, err := NewCoopmatResident(ah, bh, M, K, N)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Free()
+	if err := r.GemmF16Acc(); err != nil {
+		t.Fatal(err)
+	}
+	c := make([]float32, M*N)
+	if err := r.ReadC(c); err != nil {
+		t.Fatal(err)
+	}
+	var num, den float64
+	for m := 0; m < M; m++ {
+		for n := 0; n < N; n++ {
+			var ref float64
+			for k := 0; k < K; k++ {
+				ref += float64(af[m*K+k]) * float64(bf[k*N+n])
+			}
+			d := float64(c[m*N+n]) - ref
+			num += d * d
+			den += ref * ref
+		}
+	}
+	relRMS := math.Sqrt(num / den)
+	t.Logf("f16-acc coopmat vs f64 ref: norm-rel-RMS %.3e", relRMS)
+	if relRMS > 2e-2 {
+		t.Fatalf("f16-acc coopmat too far off: norm-rel-RMS %.3e", relRMS)
+	}
+}
+
+func benchCoopmatF16Acc(b *testing.B, m, k, n int) {
+	if !Available() {
+		b.Skip("no vulkan device")
+	}
+	if !HasCoopMat() {
+		b.Skip("device lacks VK_KHR_cooperative_matrix")
+	}
+	rng := rand.New(rand.NewSource(11))
+	ah := make([]uint16, m*k)
+	bh := make([]uint16, k*n)
+	for i := range ah {
+		ah[i] = f32ToHalf(float32(rng.NormFloat64()) * 0.1)
+	}
+	for i := range bh {
+		bh[i] = f32ToHalf(float32(rng.NormFloat64()) * 0.1)
+	}
+	r, err := NewCoopmatResident(ah, bh, m, k, n)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer r.Free()
+	if err := r.GemmF16Acc(); err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for range b.N {
+		if err := r.GemmF16Acc(); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.StopTimer()
+	b.ReportMetric(2.0*float64(m)*float64(n)*float64(k)/(b.Elapsed().Seconds()/float64(b.N))/1e9, "GFLOP/s")
+}
+
+func BenchmarkCoopmatF16Acc_qkv(b *testing.B)    { benchCoopmatF16Acc(b, 128, 2048, 2048) }
+func BenchmarkCoopmatF16Acc_gateup(b *testing.B) { benchCoopmatF16Acc(b, 128, 2048, 5632) }
+func BenchmarkCoopmatF16Acc_down(b *testing.B)   { benchCoopmatF16Acc(b, 128, 5632, 2048) }
+
+func BenchmarkCoopmatCm2_qkv(b *testing.B)    { benchCoopmatCm2(b, 128, 2048, 2048) }
+func BenchmarkCoopmatCm2_gateup(b *testing.B) { benchCoopmatCm2(b, 128, 2048, 5632) }
+func BenchmarkCoopmatCm2_down(b *testing.B)   { benchCoopmatCm2(b, 128, 5632, 2048) }
+
 func BenchmarkCoopmatV3_qkv(b *testing.B)    { benchCoopmatV3(b, 128, 2048, 2048) }
 func BenchmarkCoopmatV3_gateup(b *testing.B) { benchCoopmatV3(b, 128, 2048, 5632) }
 func BenchmarkCoopmatV3_down(b *testing.B)   { benchCoopmatV3(b, 128, 5632, 2048) }

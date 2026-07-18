@@ -1,0 +1,69 @@
+#version 450
+// coopmat_gemm_cm2.comp — v2 geometry (32M×64N per subgroup, 8 accumulators) with the
+// NV_cooperative_matrix2 tensor-addressing loads (coopMatLoadTensorNV over tensorLayoutNV),
+// the load pipeline llama.cpp's NVIDIA fast path (mul_mm_cm2.comp) uses. Same fragment math
+// as v1/v2 → bit-identical; measures whether cm2 loads beat plain coopMatLoad from VRAM.
+// M%32==0, N%64==0, K%16==0.
+#extension GL_KHR_cooperative_matrix : require
+#extension GL_NV_cooperative_matrix2 : require
+#extension GL_KHR_memory_scope_semantics : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+
+layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+
+layout(binding = 0) readonly  buffer A { float16_t a[]; };
+layout(binding = 1) readonly  buffer B { float16_t b[]; };
+layout(binding = 2) writeonly buffer C { float c[]; };
+
+layout(push_constant) uniform Push { int M; int K; int N; } pc;
+
+void main() {
+    uint tileRow = gl_WorkGroupID.y * 32u;
+    uint tileCol = gl_WorkGroupID.x * 64u;
+    uint M = uint(pc.M), K = uint(pc.K), N = uint(pc.N);
+
+    tensorLayoutNV<2> tlA = createTensorLayoutNV(2);
+    tlA = setTensorLayoutDimensionNV(tlA, M, K);
+    tensorLayoutNV<2> tlB = createTensorLayoutNV(2);
+    tlB = setTensorLayoutDimensionNV(tlB, K, N);
+
+    coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> acc00 =
+        coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>(0.0);
+    coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> acc01 = acc00;
+    coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> acc02 = acc00;
+    coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> acc03 = acc00;
+    coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> acc10 = acc00;
+    coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> acc11 = acc00;
+    coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> acc12 = acc00;
+    coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> acc13 = acc00;
+
+    coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> ma0;
+    coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> ma1;
+    coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB> mb;
+
+    for (uint k = 0u; k < K; k += 16u) {
+        coopMatLoadTensorNV(ma0, a, 0, sliceTensorLayoutNV(tlA, tileRow, 16, k, 16));
+        coopMatLoadTensorNV(ma1, a, 0, sliceTensorLayoutNV(tlA, tileRow + 16u, 16, k, 16));
+        coopMatLoadTensorNV(mb, b, 0, sliceTensorLayoutNV(tlB, k, 16, tileCol, 16));
+        acc00 = coopMatMulAdd(ma0, mb, acc00);
+        acc10 = coopMatMulAdd(ma1, mb, acc10);
+        coopMatLoadTensorNV(mb, b, 0, sliceTensorLayoutNV(tlB, k, 16, tileCol + 16u, 16));
+        acc01 = coopMatMulAdd(ma0, mb, acc01);
+        acc11 = coopMatMulAdd(ma1, mb, acc11);
+        coopMatLoadTensorNV(mb, b, 0, sliceTensorLayoutNV(tlB, k, 16, tileCol + 32u, 16));
+        acc02 = coopMatMulAdd(ma0, mb, acc02);
+        acc12 = coopMatMulAdd(ma1, mb, acc12);
+        coopMatLoadTensorNV(mb, b, 0, sliceTensorLayoutNV(tlB, k, 16, tileCol + 48u, 16));
+        acc03 = coopMatMulAdd(ma0, mb, acc03);
+        acc13 = coopMatMulAdd(ma1, mb, acc13);
+    }
+
+    coopMatStore(acc00, c, tileRow * N + tileCol, N, gl_CooperativeMatrixLayoutRowMajor);
+    coopMatStore(acc01, c, tileRow * N + tileCol + 16u, N, gl_CooperativeMatrixLayoutRowMajor);
+    coopMatStore(acc02, c, tileRow * N + tileCol + 32u, N, gl_CooperativeMatrixLayoutRowMajor);
+    coopMatStore(acc03, c, tileRow * N + tileCol + 48u, N, gl_CooperativeMatrixLayoutRowMajor);
+    coopMatStore(acc10, c, (tileRow + 16u) * N + tileCol, N, gl_CooperativeMatrixLayoutRowMajor);
+    coopMatStore(acc11, c, (tileRow + 16u) * N + tileCol + 16u, N, gl_CooperativeMatrixLayoutRowMajor);
+    coopMatStore(acc12, c, (tileRow + 16u) * N + tileCol + 32u, N, gl_CooperativeMatrixLayoutRowMajor);
+    coopMatStore(acc13, c, (tileRow + 16u) * N + tileCol + 48u, N, gl_CooperativeMatrixLayoutRowMajor);
+}

@@ -61,6 +61,8 @@ vulkan-spv:
 	glslc --target-env=vulkan1.3 backend/vulkan/shaders/coopmat_gemm_tiled.comp -o backend/vulkan/shaders/coopmat_gemm_tiled.spv
 	glslc --target-env=vulkan1.3 backend/vulkan/shaders/coopmat_gemm_v2.comp -o backend/vulkan/shaders/coopmat_gemm_v2.spv
 	glslc --target-env=vulkan1.3 backend/vulkan/shaders/coopmat_gemm_v3.comp -o backend/vulkan/shaders/coopmat_gemm_v3.spv
+	glslc --target-env=vulkan1.3 backend/vulkan/shaders/coopmat_gemm_cm2.comp -o backend/vulkan/shaders/coopmat_gemm_cm2.spv
+	glslc --target-env=vulkan1.3 backend/vulkan/shaders/coopmat_gemm_f16acc.comp -o backend/vulkan/shaders/coopmat_gemm_f16acc.spv
 	glslc backend/vulkan/shaders/matmul_strided.comp -o backend/vulkan/shaders/matmul_strided.spv
 	glslc backend/vulkan/shaders/softmax_causal.comp -o backend/vulkan/shaders/softmax_causal.spv
 	glslc backend/vulkan/shaders/crossentropy.comp -o backend/vulkan/shaders/crossentropy.spv
