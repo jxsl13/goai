@@ -4,6 +4,23 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### format — sharded safetensors checkpoint loading (T835, 2026-07-18)
+
+`safetensors.LoadSharded` loads real multi-file Hugging Face checkpoints
+(`model-0000N-of-M.safetensors` + `model.safetensors.index.json`) — the form practically
+every LLM checkpoint above ~5 GB ships in, which the 31 HF loaders previously could not
+consume without manual merging. The index contract was verified against the real emitter
+(transformers 5.14 `save_pretrained` → `split_torch_state_dict_into_shards`), including
+the finding that the transformers loader itself reads only `weight_map` and never
+validates `total_size` — mirrored and documented. The weight_map is treated as EXACT
+(missing-from-shard, unmapped-tensor, and cross-shard-duplicate all error), and the T720
+hostile-input discipline applies: path separators in shard names rejected (shards resolve
+only inside the index's directory), duplicate JSON keys rejected, the index size-capped.
+Golden gate: the sharded load equals the single-file export tensor-for-tensor (a real
+5-shard transformers export in testdata); plus hostile-case tests, a fuzz seed, and an
+nlp end-to-end smoke (`LlamaFromHF` over a LoadSharded map). Callers are indifferent —
+the return shape matches `LoadFile`.
+
 ### nlp — GoAI→llama.cpp export interop verified at the strongest level (T834, closes §B23, 2026-07-18)
 
 A GoAI-written GGUF now demonstrably loads and generates in REAL llama.cpp (CPU build,

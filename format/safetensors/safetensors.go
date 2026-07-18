@@ -482,7 +482,11 @@ func Load(r io.Reader) (map[string]*tensor.Tensor, map[string]string, error) {
 	return out, meta, nil
 }
 
-// LoadFile reads a .safetensors file.
+// LoadFile reads a single .safetensors file. Sharded checkpoints — a
+// model.safetensors.index.json plus model-00001-of-000NN.safetensors pieces,
+// which is how Hugging Face ships every checkpoint above its ~5 GB shard
+// limit — go through [LoadSharded] instead; LoadFile deliberately does not
+// sniff for an index (explicitness over magic).
 func LoadFile(path string) (map[string]*tensor.Tensor, map[string]string, error) {
 	f, err := os.Open(path)
 	if err != nil {

@@ -240,3 +240,31 @@ func FuzzRoundTrip16(f *testing.F) {
 		}
 	})
 }
+
+// FuzzParseIndex: no hostile sharded-checkpoint index JSON may panic the
+// parser; malformed input must error, and a nil error guarantees a non-empty
+// weight_map whose shard names passed validation-worthy string decoding
+// (the same never-panic discipline as FuzzLoad).
+func FuzzParseIndex(f *testing.F) {
+	if raw, err := os.ReadFile("testdata/sharded/model.safetensors.index.json"); err == nil {
+		f.Add(raw)
+	}
+	f.Add([]byte(`{"weight_map":{"a":"m-00001-of-00001.safetensors"}}`))
+	f.Add([]byte(`{"metadata":{"total_size":16},"weight_map":{"a":"s","b":"s"}}`))
+	f.Add([]byte(`{"weight_map":{}}`))
+	f.Add([]byte(`{`))
+	f.Add([]byte(`[]`))
+	f.Add([]byte{})
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Fatalf("parseIndex panicked on %d bytes: %v", len(data), r)
+			}
+		}()
+		wm, err := parseIndex(data)
+		if err == nil && len(wm) == 0 {
+			t.Fatal("nil error but empty weight_map")
+		}
+	})
+}
