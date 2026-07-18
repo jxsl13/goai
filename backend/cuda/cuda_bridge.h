@@ -67,6 +67,10 @@ int cu_matmul_f32_bres(const float* A, const void* dB, float* C, int M, int K, i
 // cu_download_f32 copies n floats device→host. cu_matmul_f32_ddd computes
 // dC[M,N] = dA[M,K]·dB[K,N] with every operand resident (no H2D/D2H).
 void* cu_alloc_f32(int n);
+// cu_wmma_gemm: nvcc-compiled WMMA tensor-core GEMM, C[M,N]f32 = A[M,K]f16·B[K,N]f16 (M,N,K %16==0).
+int cu_wmma_gemm(const void* fatbin, int fatlen, const void* dA, const void* dB, void* dC, int M, int K, int N);
+// cu_wmma_attn: fused prefill attention (softmax(scale·QKᵀ+causal)·V) on tensor cores. hd==64, seq%16==0.
+int cu_wmma_attn(const void* fatbin, int fatlen, const void* dQ, const void* dK, const void* dV, void* dO, int heads, int seq, int hd, float scale);
 void* cu_clone_f32(const void* src, int n);
 int cu_zero_f32(void* d, int n); // zero n floats on the stream
 // cu_blit: contiguous device→device copy of n floats, src[srcOff:]→dst[dstOff:].

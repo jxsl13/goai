@@ -210,6 +210,64 @@ static int compile_kernel(const char* src, const char* name, const char* entry, 
     return 0;
 }
 
+// load_module_kernel loads a PRECOMPILED cubin/fatbin image (nvcc output — the mma.h/WMMA
+// kernels nvrtc cannot build) via the driver and returns the named entry. gCtx must be current.
+static int load_module_kernel(const void* image, const char* entry, CUfunction* out) {
+    CUmodule mod;
+    if (cuModuleLoadDataEx(&mod, image, 0, NULL, NULL) != CUDA_SUCCESS) return -6;
+    if (cuModuleGetFunction(out, mod, entry) != CUDA_SUCCESS) return -7;
+    return 0;
+}
+
+static CUfunction gWmmaGemm = NULL; // nvcc-compiled WMMA GEMM (Tw-FLASHATTN slice 1)
+static CUfunction gWmmaAttn = NULL; // nvcc-compiled fused prefill attention (slice 2)
+
+// cu_wmma_gemm: C[M,N]f32 = A[M,K]f16 · B[K,N]f16 on tensor cores via an nvcc-compiled WMMA
+// kernel loaded from `fatbin`. M,N,K must be multiples of 16. Pipeline proof for nvcc kernels.
+int cu_wmma_gemm(const void* fatbin, int fatlen, const void* dA, const void* dB, void* dC,
+                 int M, int K, int N) {
+    (void)fatlen;
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (!gWmmaGemm && load_module_kernel(fatbin, "wmma_gemm", &gWmmaGemm) != 0) { rc = -2; goto done; }
+    {
+        void* args[6] = { (void*)&dA, (void*)&dB, &dC, &M, &N, &K };
+        unsigned tilesN = (unsigned)((N + 15) / 16);
+        unsigned tilesM = (unsigned)((M + 15) / 16);
+        unsigned by = 4; // 4 M-tile warps per block
+        unsigned gx = tilesN, gy = (tilesM + by - 1) / by;
+        rc = (cuLaunchKernel(gWmmaGemm, gx, gy, 1, 32, by, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_wmma_attn: fused prefill attention on tensor cores. O[heads,seq,hd] = softmax(scale·Q·Kᵀ
+// + causal)·V, computed in one nvcc-compiled kernel (no intermediate global scores). hd==64,
+// seq%16==0. One warp per (head, 16-query tile); shared = 16·seq floats for the score stage.
+int cu_wmma_attn(const void* fatbin, int fatlen, const void* dQ, const void* dK, const void* dV,
+                 void* dO, int heads, int seq, int hd, float scale) {
+    (void)fatlen;
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (!gWmmaAttn && load_module_kernel(fatbin, "wmma_attn", &gWmmaAttn) != 0) { rc = -2; goto done; }
+    {
+        unsigned shbytes = (unsigned)(16 * seq * (int)sizeof(float));
+        cuFuncSetAttribute(gWmmaAttn, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, shbytes);
+        void* args[8] = { (void*)&dQ, (void*)&dK, (void*)&dV, &dO, &heads, &seq, &hd, &scale };
+        unsigned gx = (unsigned)(seq / 16), gy = (unsigned)heads;
+        rc = (cuLaunchKernel(gWmmaAttn, gx, gy, 1, 32, 1, 1, shbytes, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
 // launch_unary runs an in-place elementwise kernel (float* x, int n) on gStream.
 static int launch_unary(CUfunction fn, void* d, int n) {
     int threads = 256, blocks = (n + threads - 1) / threads;
