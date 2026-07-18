@@ -60,7 +60,17 @@ func (t *Tape) Len() int { return len(t.nodes) }
 // seeding ∂out/∂out = 1 (ones of out's shape, ADR-0006). Backward ops run in a
 // non-recording context — the tape does not grow. It is an error if a needed op
 // has no registered VJP.
-func (t *Tape) Backward(out *tensor.Tensor) error { return t.backward(out, 1) }
+//
+// Each call REPLACES the tape's gradient map: gradients from a previous
+// Backward/BackwardScaled/BackwardGrad on the same tape are discarded, not
+// added to. To accumulate gradients across several backward passes (micro-
+// batching), sum the per-call [Tape.Grad] results into your own buffers —
+// [github.com/jxsl13/goai/nn.GradAccumulator] does exactly that.
+//
+// Backward is BackwardGrad with a ones cotangent.
+func (t *Tape) Backward(out *tensor.Tensor) error {
+	return t.BackwardGrad(out, scaledLike(out, 1))
+}
 
 // BackwardScaled is Backward with the output cotangent seeded to `scale` instead
 // of 1 — the loss-scaling primitive for mixed-precision training (Micikevicius
@@ -68,11 +78,40 @@ func (t *Tape) Backward(out *tensor.Tensor) error { return t.backward(out, 1) }
 // of the fp16 underflow range. Callers unscale by 1/scale before the optimizer
 // step (see nn.MixedPrecision). Mathematically identical to scaling the loss.
 func (t *Tape) BackwardScaled(out *tensor.Tensor, scale float64) error {
-	return t.backward(out, scale)
+	return t.BackwardGrad(out, scaledLike(out, scale))
 }
 
-func (t *Tape) backward(out *tensor.Tensor, seed float64) error {
-	t.grads = map[*tensor.Tensor]*tensor.Tensor{out: scaledLike(out, seed)}
+// BackwardGrad computes gradients of out with an explicit output cotangent —
+// the general vector-Jacobian-product (VJP) primitive. Where [Tape.Backward]
+// answers "how does each input move the (scalar) loss?", BackwardGrad answers
+// "how does each input move the specific output direction c?": for a forward
+// map y = f(x) it computes ∂(c·y)/∂x = Jᶠ(x)ᵀ·c, pulling a covector c in
+// OUTPUT space back to gradients in every INPUT space. It is the tape
+// counterpart of PyTorch's y.backward(gradient=c) and the function JAX's
+// vjp returns.
+//
+// For the newcomer: Backward asks the tape "what nudges reduce this one final
+// number?". Sometimes the final result is not one number but many (say, a
+// whole row of activations), and you care about a particular weighted
+// combination of them. The cotangent c holds those weights: BackwardGrad(y, c)
+// gives exactly the gradients Backward would give for the single number
+// sum(y⊙c), without your having to build that product into the graph.
+//
+// The cotangent must match out's dtype and shape. As with Backward, the call
+// replaces the tape's gradient map, and the seeded cotangent itself becomes
+// Grad(out) (the tensor is referenced, not copied — do not mutate it until
+// the gradients have been consumed).
+func (t *Tape) BackwardGrad(out *tensor.Tensor, cotangent *tensor.Tensor) error {
+	if cotangent == nil {
+		return fmt.Errorf("autograd: BackwardGrad: nil cotangent")
+	}
+	if cotangent.Dtype() != out.Dtype() {
+		return fmt.Errorf("autograd: BackwardGrad: cotangent dtype %v != output dtype %v", cotangent.Dtype(), out.Dtype())
+	}
+	if !cotangent.Shape().Equal(out.Shape()) {
+		return fmt.Errorf("autograd: BackwardGrad: cotangent shape %v != output shape %v", cotangent.Shape(), out.Shape())
+	}
+	t.grads = map[*tensor.Tensor]*tensor.Tensor{out: cotangent}
 	return t.runBackward()
 }
 
@@ -163,6 +202,13 @@ func (t *Tape) accumulateGrads(n node, gins []*tensor.Tensor) error {
 
 // Grad returns the gradient of the last Backward target w.r.t. x, or nil if x
 // was not reached.
+//
+// Gradients are keyed by *tensor.Tensor POINTER identity (ADR-0006): x must be
+// the very Tensor value that participated in the taped forward, not a copy.
+// In particular, a view (reshape/slice/transpose result) and its base share
+// storage but are distinct pointers — the tape does NOT unify them, so a
+// gradient stored for a view is not visible through the base tensor (and vice
+// versa); query the exact tensor you fed to the recorded op.
 func (t *Tape) Grad(x *tensor.Tensor) *tensor.Tensor { return t.grads[x] }
 
 // accumulate adds g into the stored gradient of x (sum at fan-out points).

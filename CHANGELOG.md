@@ -4,6 +4,23 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### autograd — explicit-cotangent backward + the jlens migration + six doc fixes (T838, 2026-07-18)
+
+`Tape.BackwardGrad(out, cotangent)` is the general VJP primitive (torch's
+`y.backward(gradient=c)`), seeding the existing `runBackward` seam; `Backward` and
+`BackwardScaled` are now thin wrappers over the same path, so the entire existing autograd
+suite regresses the refactor. Anchors: torch parity on a composite graph with a random
+cotangent (venv golden, ≤1e-12), the LINEARITY property `BackwardGrad(y,c) ≡
+Backward(sum(y⊙c))` — the identity `FitJLens` previously assumed in a comment, now a tested
+invariant — and finite-difference validation. `FitJLens` drops the `m = h_L ⊙ c` OpMul
+workaround and calls BackwardGrad directly; the T812 reference-parity gate holds at the
+IDENTICAL 1.852e-07, proving the migration behavior-preserving against the actual Anthropic
+reference. Plus six doc fixes from the discovery sweep: the stale safetensors dtype claim
+(F16/BF16 are supported), the stale OpMHAMasked "no VJP" comment (T730 added one), and the
+previously-undocumented tape lifecycle, grads-map replacement semantics (with a
+GradAccumulator cross-reference), pointer-keyed Grad/view non-unification, and the in-place
+mutation hazard.
+
 ### nlp — quantized GGUF decode for Gemma 2: the matrix closes at 20 of 20 (T837, 2026-07-18)
 
 `QuantGemma2` + `QuantGemma2FromGGUF` complete the quantized matrix — every float-GGUF

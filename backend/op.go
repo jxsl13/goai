@@ -57,7 +57,7 @@ const (
 	// fused attention (heads split/concat/mask internal → one differentiable op)
 	OpMHA         // multi-head scaled dot-product attention: (Q,K,V)[seq,dmodel]→[seq,dmodel]
 	OpMHABackward // SDPA backward: (Q,K,V,dO)→(dQ,dK,dV); dispatched by mha's VJP so it runs on the active backend
-	OpMHAMasked   // attention with a free additive mask input (Q,K,V,mask[sq,sk]); inference-only, no VJP (§T507 — tree/grouped attention)
+	OpMHAMasked   // attention with a free additive mask input (Q,K,V,mask[sq,sk]); trainable — VJP via OpMHAMaskedBackward (§T507 — tree/grouped attention; §T730)
 	OpMHASelect   // attention over two score sources with a per-pair selector (Q1,K1,Q2,K2,V,sel[sq,sk]: 0→source 1, 1→source 2, −Inf→excluded), ONE softmax; inference-only, no VJP (§T512 — Self-Extend merged neighbor/grouped scores)
 
 	OpEmbed // row gather: (table[n,d], idx[m]) → out[m,d]; grad scatter-adds to table

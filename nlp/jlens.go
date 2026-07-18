@@ -123,10 +123,10 @@ func WithJLensSkipFirst(n int) FitJLensOption {
 // verified on (dim ≤ 64, layers ≤ 4, seq ≤ 32) and boundable via
 // [WithJLensMaxSequences] / [WithJLensMaxTargetsPerSeq] for anything larger.
 //
-// The cotangent seed uses the tape's ones-seeded Backward with the
-// inner-product trick: recording m = h_L ⊙ c for a one-hot c makes
-// Backward(m)'s gradient at h_L exactly c, i.e. an arbitrary-cotangent VJP
-// on a scalar-loss tape API.
+// Each VJP is seeded directly with autograd's explicit-cotangent primitive:
+// [autograd.Tape.BackwardGrad] with the one-hot cotangent c = e_{t',j} at
+// h_L, so the gradient read at each captured h_l is the exact Jacobian row —
+// no auxiliary ops are recorded on the tape.
 func FitJLens(model ResidualModel, corpus [][]int, opts ...FitJLensOption) (*JLens, error) {
 	var o fitJLensOpts
 	for _, opt := range opts {
@@ -198,14 +198,10 @@ func FitJLens(model ResidualModel, corpus [][]int, opts ...FitJLensOption) (*JLe
 		for _, ti := range jlensTargets(len(valid), o.maxTargetsPerSeq) {
 			tp := valid[ti]
 			for j := 0; j < d; j++ {
-				// Cotangent c = e_{t',j}: Backward(h_L ⊙ c) seeds grad(h_L) = c.
+				// Cotangent c = e_{t',j}, seeded directly at h_L (explicit VJP).
 				c := tensor.New(tensor.F64, tensor.Shape{seq, d})
 				c.SetF64(1, tp, j)
-				m, err := exec1(ctx, backend.OpMul, nil, hL, c)
-				if err != nil {
-					return nil, fmt.Errorf("nlp: FitJLens: cotangent mul: %w", err)
-				}
-				if err := tape.Backward(m); err != nil {
+				if err := tape.BackwardGrad(hL, c); err != nil {
 					return nil, fmt.Errorf("nlp: FitJLens: backward (seq %d, target %d, dir %d): %w", si, tp, j, err)
 				}
 				for l := 0; l <= L; l++ {

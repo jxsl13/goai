@@ -20,7 +20,11 @@
 // malformed-input fuzzing (§V15) guarantee that Save∘Load is the identity and that
 // no hostile byte stream can panic (every error is returned, never thrown).
 //
-// Supported dtypes are f32 and f64; shapes are arbitrary. Higher layers build on
+// Read and write support f32, f64, f16 and bf16 — the 16-bit floats pass
+// through as their raw bits, round-tripping bit-exactly with no widening.
+// Loading additionally accepts the remaining dtypes of the official spec
+// (FP8, bool, and the integer families) by widening them to f32/f64 (§T577);
+// shapes are arbitrary. Higher layers build on
 // this: nlp.FromSafetensors loads a GPT straight from a checkpoint's tensor map.
 //
 // Checkpoints above Hugging Face's ~5 GB shard budget ship as several numbered
