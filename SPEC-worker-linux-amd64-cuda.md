@@ -273,6 +273,18 @@ SOTA, up to 24x vs HF; don't cite 18x.)
 Execution order: A2-e2e -> A1 (fp16 e2e) -> A3, in parallel B1->B2 when a serving arc opens.
 The nvcc unlock carries BOTH fronts (fused-attn/epilogue kernels AND paged/ragged attention).
 
+**PIVOT (2026-07-18, data-driven): FRONT A prefill is near its CUDA ceiling — go FRONT B.**
+A2 landed e2e (pp128 5578->6807, +22%, gap to vLLM 0.52->0.63x, #171). Re-profiled WITH fused
+attention (46.6ms, was 52.9): ffn-gemm 61.1% + qkv 12.6 + o 8.0 + head 4.7 = **86% cuBLAS
+GEMM**; attention now 5.5% (was 14). A1 measured only ≈6%; A3 (rmsnorm 3.5 + rope 2.8 + swiglu
+1.9) ≈8%. So the whole remaining CUDA-prefill upside is ≈14% (6807 -> ≈7800), and vLLM's
+1.58x lead is NOT closable on the CUDA side — both run the SAME cuBLAS-f16 GEMM at M=128; vLLM's
+extra comes from bigger effective batch (chunked prefill), not a faster kernel. DECISION: stop
+grinding prefill; the biggest "beat all three" lever is FRONT B serving throughput (18x-class
+CAPABILITY gap, where a from-scratch engine wins because it's a missing feature not a kernel
+race). Start B1 (paged KV pool + block tables) -> B2 (paged/ragged batched decode kernel,
+nvcc-buildable) -> B3 (continuous-batch scheduler). A3 is a fill-in only.
+
 ## §NEXT — open levers
 
 **Tw-COOPMAT (booked 2026-07-18, research-lite CONFIRMED 3/3 + host probes): the prefill

@@ -76,7 +76,12 @@ func TestCUDAPrefillProfile(t *testing.T) {
 			})
 			tick("attention", func() error {
 				var e error
-				da, e = cuda.GroupedQueryAttention(dq, dk, dv, l.heads, l.kv, true)
+				// §ROADMAP A2: profile the shipped fused tensor-core attention.
+				if dq.Cols()/l.heads == 64 && dq.Rows()%16 == 0 {
+					da, e = cuda.GroupedQueryAttentionWMMA(dq, dk, dv, l.heads, l.kv)
+				} else {
+					da, e = cuda.GroupedQueryAttention(dq, dk, dv, l.heads, l.kv, true)
+				}
 				return e
 			})
 			dq.Free()
