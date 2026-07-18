@@ -238,19 +238,19 @@ static int mem_type(uint32_t bits, VkMemoryPropertyFlags want) {
     return -1;
 }
 
-// make_buffer creates a host-visible|coherent storage buffer of `size` bytes.
-static int make_buffer(VkDeviceSize size, VkBuffer* buf, VkDeviceMemory* mem) {
+// make_buffer_flags creates a storage buffer with the given usage and memory properties.
+static int make_buffer_flags(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags props,
+                             VkBuffer* buf, VkDeviceMemory* mem) {
     VkBufferCreateInfo bci = {0};
     bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     bci.size = size;
-    bci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+    bci.usage = usage;
     bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     if (vkCreateBuffer(gDevice, &bci, NULL, buf) != VK_SUCCESS) return -1;
 
     VkMemoryRequirements req;
     vkGetBufferMemoryRequirements(gDevice, *buf, &req);
-    int mt = mem_type(req.memoryTypeBits,
-                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    int mt = mem_type(req.memoryTypeBits, props);
     if (mt < 0) return -1;
 
     VkMemoryAllocateInfo mai = {0};
@@ -260,6 +260,96 @@ static int make_buffer(VkDeviceSize size, VkBuffer* buf, VkDeviceMemory* mem) {
     if (vkAllocateMemory(gDevice, &mai, NULL, mem) != VK_SUCCESS) return -1;
     if (vkBindBufferMemory(gDevice, *buf, *mem, 0) != VK_SUCCESS) return -1;
     return 0;
+}
+
+// make_buffer creates a host-visible|coherent storage buffer of `size` bytes.
+static int make_buffer(VkDeviceSize size, VkBuffer* buf, VkDeviceMemory* mem) {
+    return make_buffer_flags(size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                             buf, mem);
+}
+
+// make_buffer_local creates a DEVICE_LOCAL storage buffer that can also be a transfer
+// src/dst (staged uploads/readbacks). On a discrete GPU this lands in VRAM (§B: the
+// host-visible-only allocation capped every shader access at PCIe-BAR bandwidth, an
+// invisible tax on UMA/MoltenVK where the backend grew up). Falls back to whatever
+// memory type matches if a pure DEVICE_LOCAL heap is absent (UMA: LOCAL|HOST_VISIBLE).
+static int make_buffer_local(VkDeviceSize size, VkBuffer* buf, VkDeviceMemory* mem) {
+    return make_buffer_flags(size,
+                             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                             buf, mem);
+}
+
+static VkCommandPool   gCmdPool = VK_NULL_HANDLE;
+static VkCommandBuffer gCmd     = VK_NULL_HANDLE;
+static void upload(VkDeviceMemory mem, const void* src, size_t n);
+static void download(VkDeviceMemory mem, void* dst, size_t n);
+static int ensure_cmd(void);
+
+// staged_copy_to/from move bytes between host memory and a DEVICE_LOCAL buffer through a
+// transient host-visible staging buffer + vkCmdCopyBuffer (one-time submit, queue-waited —
+// matches the backend's synchronous model). Caller holds gLock.
+static int staged_copy_to(VkBuffer dst, const void* src, VkDeviceSize n) {
+    VkBuffer sb = VK_NULL_HANDLE; VkDeviceMemory sm = VK_NULL_HANDLE;
+    int rc = -1;
+    if (make_buffer_flags(n, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                          &sb, &sm) != 0) goto done;
+    upload(sm, src, (size_t)n);
+    if (ensure_cmd() != 0) goto done;
+    vkResetCommandBuffer(gCmd, 0);
+    {
+        VkCommandBufferBeginInfo bi = {0};
+        bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        vkBeginCommandBuffer(gCmd, &bi);
+        VkBufferCopy cp = {0, 0, n};
+        vkCmdCopyBuffer(gCmd, sb, dst, 1, &cp);
+        vkEndCommandBuffer(gCmd);
+        VkSubmitInfo si = {0};
+        si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        si.commandBufferCount = 1;
+        si.pCommandBuffers = &gCmd;
+        if (vkQueueSubmit(gQueue, 1, &si, VK_NULL_HANDLE) != VK_SUCCESS) goto done;
+        vkQueueWaitIdle(gQueue);
+    }
+    rc = 0;
+done:
+    if (sb) vkDestroyBuffer(gDevice, sb, NULL);
+    if (sm) vkFreeMemory(gDevice, sm, NULL);
+    return rc;
+}
+
+static int staged_copy_from(VkBuffer src, void* dst, VkDeviceSize n) {
+    VkBuffer sb = VK_NULL_HANDLE; VkDeviceMemory sm = VK_NULL_HANDLE;
+    int rc = -1;
+    if (make_buffer_flags(n, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                          &sb, &sm) != 0) goto done;
+    if (ensure_cmd() != 0) goto done;
+    vkResetCommandBuffer(gCmd, 0);
+    {
+        VkCommandBufferBeginInfo bi = {0};
+        bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        vkBeginCommandBuffer(gCmd, &bi);
+        VkBufferCopy cp = {0, 0, n};
+        vkCmdCopyBuffer(gCmd, src, sb, 1, &cp);
+        vkEndCommandBuffer(gCmd);
+        VkSubmitInfo si = {0};
+        si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        si.commandBufferCount = 1;
+        si.pCommandBuffers = &gCmd;
+        if (vkQueueSubmit(gQueue, 1, &si, VK_NULL_HANDLE) != VK_SUCCESS) goto done;
+        vkQueueWaitIdle(gQueue);
+    }
+    download(sm, dst, (size_t)n);
+    rc = 0;
+done:
+    if (sb) vkDestroyBuffer(gDevice, sb, NULL);
+    if (sm) vkFreeMemory(gDevice, sm, NULL);
+    return rc;
 }
 
 static void upload(VkDeviceMemory mem, const void* src, size_t n) {
@@ -346,8 +436,6 @@ static void pool_release(int idx, VkBuffer buf, VkDeviceMemory mem) {
 // replaces a vkCreateCommandPool/vkAllocateCommandBuffers/destroy round trip
 // per dispatch. Valid because dispatches are serialized (gLock) and each call
 // waits the queue idle before returning.
-static VkCommandPool   gCmdPool = VK_NULL_HANDLE;
-static VkCommandBuffer gCmd     = VK_NULL_HANDLE;
 
 static int ensure_cmd(void) {
     if (gCmd) return 0;
@@ -1247,13 +1335,18 @@ void* vk_devbuf_upload(const void* data, int nbytes) {
         d->buf = VK_NULL_HANDLE;
         d->mem = VK_NULL_HANDLE;
         d->nbytes = (VkDeviceSize)nbytes;
-        if (make_buffer((VkDeviceSize)nbytes, &d->buf, &d->mem) != 0) {
+        if (make_buffer_local((VkDeviceSize)nbytes, &d->buf, &d->mem) != 0) {
             if (d->buf) vkDestroyBuffer(gDevice, d->buf, NULL);
             if (d->mem) vkFreeMemory(gDevice, d->mem, NULL);
             free(d);
             d = NULL;
         } else if (data) {
-            upload(d->mem, data, (size_t)nbytes);
+            if (staged_copy_to(d->buf, data, (VkDeviceSize)nbytes) != 0) {
+                vkDestroyBuffer(gDevice, d->buf, NULL);
+                vkFreeMemory(gDevice, d->mem, NULL);
+                free(d);
+                d = NULL;
+            }
         }
     }
     pthread_mutex_unlock(&gLock);
@@ -1264,16 +1357,20 @@ int vk_devbuf_download(void* handle, void* dst, int nbytes) {
     if (!handle || nbytes <= 0) return -2;
     DevBuf* d = (DevBuf*)handle;
     if ((VkDeviceSize)nbytes > d->nbytes) return -3;
-    download(d->mem, dst, (size_t)nbytes);
-    return 0;
+    pthread_mutex_lock(&gLock);
+    int rc = staged_copy_from(d->buf, dst, (VkDeviceSize)nbytes);
+    pthread_mutex_unlock(&gLock);
+    return rc;
 }
 
 int vk_devbuf_upload_into(void* handle, const void* src, int nbytes) {
     if (!handle || nbytes <= 0) return -2;
     DevBuf* d = (DevBuf*)handle;
     if ((VkDeviceSize)nbytes > d->nbytes) return -3;
-    upload(d->mem, src, (size_t)nbytes);
-    return 0;
+    pthread_mutex_lock(&gLock);
+    int rc = staged_copy_to(d->buf, src, (VkDeviceSize)nbytes);
+    pthread_mutex_unlock(&gLock);
+    return rc;
 }
 
 void vk_devbuf_free(void* handle) {
