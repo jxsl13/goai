@@ -4,6 +4,24 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### llamagpu — weight-flatten 5.9× and a corrected diagnosis (T843, 2026-07-18)
+
+The tied-lm_head and weight-upload paths flattened tensors with per-element `AtF64` loops
+(~524M calls at Gemma scale). Rewritten as cache-blocked 2D tile walks over bulk typed
+slices, writing straight into the destination storage — which also drops a 2 GB intermediate
+alloc+copy at Gemma scale. Measured (permanent §V22 benchmark, independently reproduced):
+head flatten [32000,2048] **230 ms → 39 ms (5.9×, 1.1 → 6.8 GB/s)**; per-token `embedRow`
+**3.3–4.2×** — the only piece on the decode hot path. Bit-identical to the old loops, proven
+against verbatim copies of them across 8 shapes × 4 dtypes plus strided views.
+
+The DIAGNOSIS WAS WRONG and that is the durable lesson: the sweep (and the repo's own
+per-element-`AtF64` heuristic) blamed interface dispatch, but a dispatch-free pure-Go control
+measured only ~24% of the cost. The transpose's 1 MB write stride — one TLB entry per element
+— was the real dominant term. Removing the dispatch alone yielded a disappointing 1.2×; cache
+tiling produced the rest (~1.3× dispatch, ~4.4× tiling). A naive "remove AtF64" fix would have
+been near-worthless churn. Remaining headroom (6.8 GB/s vs DRAM) is deliberately left: this is
+a once-per-model-load cost.
+
 ### nn — optimizer state checkpointing: interrupted runs can resume (T842, 2026-07-18)
 
 Until now an interrupted training run could not be resumed correctly: every optimizer's

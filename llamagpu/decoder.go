@@ -1434,17 +1434,11 @@ func newGemmaDecoder(m *nlp.Gemma, ops backendOps) (*Decoder, error) {
 	d.gFinal = mk(flat1D(m.FinalNorm.Gamma))
 	// Tied lm_head: Out = TokEmbᵀ. TokEmb is [vocab, dim]; the projection wants [dim, vocab].
 	vocab, dim := m.TokEmb.Shape()[0], m.TokEmb.Shape()[1]
-	outW := make([]float32, dim*vocab)
-	for j := range vocab {
-		for i := range dim {
-			outW[i*vocab+j] = float32(m.TokEmb.AtF64(j, i))
-		}
-	}
 	// Route the tied lm_head through the same quantize-aware builder so the Q8 constructors quantize it too
 	// — Gemma's vocab is huge (256k), so an f32 lm_head would dominate decode bandwidth and dilute Q8. The
 	// f32 path is byte-identical (mkLin with no hook == the old f32Linear{mk(outW)}).
 	outT := tensor.New(tensor.F32, tensor.Shape{dim, vocab})
-	copy(outT.Storage().F32(), outW)
+	flat2DTInto(outT.Storage().F32()[:dim*vocab], m.TokEmb)
 	d.out = lin(outT)
 	d.allocScratch(mk)
 	if err != nil {
@@ -1810,13 +1804,7 @@ func newMamba2Decoder(m *nlp.Mamba2, ops backendOps) (*Decoder, error) {
 			d.qweights = append(d.qweights, qw)
 			return quantLinear{w: qw}
 		}
-		f := make([]float32, in*out)
-		for o := 0; o < out; o++ {
-			for i := 0; i < in; i++ {
-				f[i*out+o] = float32(w.AtF64(o, i))
-			}
-		}
-		return f32Linear{w: mk(f).b, k: in, n: out}
+		return f32Linear{w: mk(flat2DT(w)).b, k: in, n: out}
 	}
 	for _, ly := range m.Layers {
 		mx := ly.Mixer
@@ -2128,17 +2116,11 @@ func newGemma2Decoder(m *nlp.Gemma2, ops backendOps) (*Decoder, error) {
 	d.gFinal = mk(flat1D(m.FinalNorm.Gamma))
 	// tied lm_head: Out = TokEmbᵀ [dim, vocab]
 	vocab, dim := m.TokEmb.Shape()[0], m.TokEmb.Shape()[1]
-	outW := make([]float32, dim*vocab)
-	for j := range vocab {
-		for i := range dim {
-			outW[i*vocab+j] = float32(m.TokEmb.AtF64(j, i))
-		}
-	}
 	// Route the tied lm_head through the same quantize-aware builder so the Q8 constructors quantize it too
 	// — Gemma's vocab is huge (256k), so an f32 lm_head would dominate decode bandwidth and dilute Q8. The
 	// f32 path is byte-identical (mkLin with no hook == the old f32Linear{mk(outW)}).
 	outT := tensor.New(tensor.F32, tensor.Shape{dim, vocab})
-	copy(outT.Storage().F32(), outW)
+	flat2DTInto(outT.Storage().F32()[:dim*vocab], m.TokEmb)
 	d.out = lin(outT)
 	d.allocScratch(mk)
 	if err != nil {
@@ -3124,31 +3106,114 @@ func firstErr(errs ...error) error {
 	return nil
 }
 
+// rowBlock is the number of source rows converted at a time by forEachRowBlockF32; colTile is the
+// column tile flat2DT transposes within such a block. Together they make the transpose a classic
+// cache-blocked 2D tile walk: both the contiguous reads and the strided writes stay inside a
+// cache-resident working set instead of touching a fresh line (and TLB entry) per element. The
+// pair was picked by measurement on a [32000, 2048] lm_head — see the §V22 benchmarks in
+// flatten_test.go, where tiling is worth ~1.8× on top of the bulk-slice conversion alone.
+const (
+	rowBlock = 256
+	colTile  = 64
+)
+
+// forEachRowBlockF32 walks t (rank-2, any dtype, any strides) in blocks of at most rowBlock rows,
+// calling fn with the block's first row index and its values converted to float32 in contiguous
+// row-major order (len(blk) == (j1-j0)·cols).
+//
+// This is the bulk-slice idiom the base-perf sweep established: one dtype decision per BLOCK via
+// tensor.Cast's typed fast paths, instead of one AtF64 interface dispatch per ELEMENT. It is
+// numerically identical to float32(t.AtF64(j, i)) for every dtype — Cast's F64→F32, F16→F32 and
+// BF16→F32 paths reproduce the widen-then-narrow composition exactly — so callers stay
+// bit-identical to the per-element loops they replace.
+func forEachRowBlockF32(t *tensor.Tensor, fn func(j0 int, blk []float32)) {
+	rows, cols := t.Shape()[0], t.Shape()[1]
+	for j0 := 0; j0 < rows; j0 += rowBlock {
+		j1 := min(j0+rowBlock, rows)
+		blk, err := t.Slice(0, j0, j1)
+		if err != nil { // unreachable for in-range slices; degrade to the per-element read
+			scratch := make([]float32, (j1-j0)*cols)
+			for j := j0; j < j1; j++ {
+				for i := range cols {
+					scratch[(j-j0)*cols+i] = float32(t.AtF64(j, i))
+				}
+			}
+			fn(j0, scratch)
+			continue
+		}
+		if blk.Dtype() == tensor.F32 && blk.IsContiguous() {
+			// Already the target layout and dtype: hand out the storage window itself, no
+			// conversion and no allocation. This is the f32-weight upload path.
+			off := blk.Offset()
+			fn(j0, blk.Storage().F32()[off:off+(j1-j0)*cols])
+			continue
+		}
+		fn(j0, blk.Cast(tensor.F32).Storage().F32()[:(j1-j0)*cols])
+	}
+}
+
+// flat2DT flattens the TRANSPOSE of a rank-2 tensor into a row-major float32 slice:
+// out[i·rows+j] == float32(t.AtF64(j, i)) for t of shape [rows, cols], i.e. the [cols, rows]
+// layout the device matmuls expect from a torch-style [out, in] weight or a tied lm_head.
+//
+// Used for weight upload at model-build time, where the tensor can be huge — Gemma's tied lm_head
+// is [256000, 2048] = 524M elements — so this runs as a blocked bulk-slice transpose rather than
+// per-element reads.
+func flat2DT(t *tensor.Tensor) []float32 {
+	o := make([]float32, t.Shape()[0]*t.Shape()[1])
+	flat2DTInto(o, t)
+	return o
+}
+
+// flat2DTInto is flat2DT writing into a caller-provided destination of exactly rows·cols floats.
+// It lets a caller that already owns the target buffer — e.g. the tied-lm_head constructors, which
+// need the result inside a [dim, vocab] tensor — skip an intermediate slice, which at Gemma's
+// 256k vocab is a 2 GB allocation and a 2 GB copy saved.
+func flat2DTInto(o []float32, t *tensor.Tensor) {
+	rows, cols := t.Shape()[0], t.Shape()[1]
+	forEachRowBlockF32(t, func(j0 int, blk []float32) {
+		j1 := j0 + len(blk)/cols
+		for i0 := 0; i0 < cols; i0 += colTile {
+			i1 := min(i0+colTile, cols)
+			for j := j0; j < j1; j++ {
+				row := blk[(j-j0)*cols+i0 : (j-j0)*cols+i1]
+				for i, v := range row {
+					o[(i0+i)*rows+j] = v
+				}
+			}
+		}
+	})
+}
+
+// flat2D flattens a rank-2 tensor into a row-major float32 slice (no transpose):
+// out[i·cols+j] == float32(t.AtF64(i, j)).
 func flat2D(t *tensor.Tensor) []float32 {
 	r, c := t.Shape()[0], t.Shape()[1]
 	o := make([]float32, r*c)
-	for i := range r {
-		for j := range c {
-			o[i*c+j] = float32(t.AtF64(i, j))
-		}
-	}
+	forEachRowBlockF32(t, func(j0 int, blk []float32) { copy(o[j0*c:], blk) })
 	return o
 }
 
+// flat1D flattens a rank-1 tensor (a norm γ, a bias) into a float32 slice.
 func flat1D(t *tensor.Tensor) []float32 {
 	n := t.Shape()[0]
 	o := make([]float32, n)
-	for i := range n {
-		o[i] = float32(t.AtF64(i))
-	}
+	copy(o, t.Cast(tensor.F32).Storage().F32()[:n])
 	return o
 }
 
+// embedRow reads one row of an embedding table as float32. It is on the per-token decode path, so
+// it takes the bulk-slice route too: one row view, one typed conversion, no per-element dispatch.
 func embedRow(table *tensor.Tensor, row, cols int) []float32 {
 	o := make([]float32, cols)
-	for j := range cols {
-		o[j] = float32(table.AtF64(row, j))
+	r, err := table.Slice(0, row, row+1)
+	if err != nil {
+		for j := range cols {
+			o[j] = float32(table.AtF64(row, j))
+		}
+		return o
 	}
+	copy(o, r.Cast(tensor.F32).Storage().F32()[:cols])
 	return o
 }
 
