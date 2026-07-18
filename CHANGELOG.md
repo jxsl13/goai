@@ -4,6 +4,41 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — streaming and self-extend silently dropped every per-architecture hook (B75/T858, 2026-07-18)
+
+`StreamStep` and `SelfExtendForward` each reimplemented the Llama block body and dropped
+ALL SIX per-architecture hooks the normal decode path applies: Granite's EmbeddingMult,
+AttentionMult, ResidualMult and LogitsScale, Qwen2's q/k/v biases, and Qwen3's QK-norm. The
+omission was total, not partial. Reachability is direct: `Qwen2FromGGUF`, `Qwen3FromGGUF`
+and `GraniteFromGGUF` all return `*Llama`, and `StreamGenerate` is a method on `*Llama` —
+so streaming a Qwen2, Qwen3 or Granite model produced different logits than the
+non-streaming path on the same model and prompt, with no error. Measured divergence reached
+1.2 in a logit and flipped actual emitted tokens, not just floats.
+
+The root cause is duplicated decode logic that drifted, so the fix unifies rather than
+copies: a shared block stack with a pluggable attention core — genuinely the only thing
+that differed — now backs `DecodeStep`, `StreamStep` and `SelfExtendForward`. That takes
+the block body from four copies to two, and routing `DecodeStep` through it too means the
+shared code is covered by the whole existing decode suite rather than only by new tests.
+The remaining copy (`hiddenFromEmbedTaps`, which carries the KV/residual capture taps) is
+documented as a known limit and pinned by the parity tests rather than by construction.
+
+The equivalence test is the real deliverable, since it is what would have caught this: it
+asserts streaming and non-streaming agree token-for-token across Qwen2-, Qwen3- and
+Granite-shaped configs with NONZERO values for every feature (§B68 — a zero bias is
+invisible). Four of five subtests fail against the old code while the `llama_plain` control
+passes in both, so the failures are provably the dropped features and not a broken harness.
+
+`SelfExtendGenerate` also capped at `Config.Ctx`, silently returning zero tokens for a
+request past the limit while its godoc promised generation "far beyond its training
+length". The cap was enforced at two levels, and grouping only reaches ~G·Ctx, so the raw
+cap is replaced by the grouped bound and an over-long request now errors with the numbers
+instead of returning nothing. G=1 reduces exactly to the old threshold.
+
+`Gemma2FromHF` additionally now clamps Ctx to the sliding window as the GGUF loader
+already did; Gemma2 implements full attention only, so past token 4096 every SWA layer was
+attending the full prefix.
+
 ### nlp — MinP>1 emitted a fixed token forever; U+2581 corrupted special tokens (B73/B74/T857, 2026-07-18)
 
 **B73.** `MinP > 1` made `thresh = MinP·pmax` exceed `pmax`, so every token including the

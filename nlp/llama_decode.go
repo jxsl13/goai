@@ -42,31 +42,76 @@ func (m *Llama) embedOne(token int) (*tensor.Tensor, error) {
 	return embedRow(m.TokEmb, token, d), nil
 }
 
-// DecodeStep advances the Llama by one token using the KV-cache and returns the
-// next-token logits [1,vocab]. pos is the token's absolute position (== cache length
-// before the call), used as the RoPE offset. The token's rotated k,v are appended to
-// the cache and the single query attends to all cached keys. Inference-only (no tape);
-// it produces the same logits as a full Forward over the prefix.
-func (m *Llama) DecodeStep(ctx *backend.Context, cache *LlamaCache, token, pos int) (*tensor.Tensor, error) {
-	if pos < 0 || pos >= m.Config.Ctx {
-		return nil, fmt.Errorf("nlp: position %d outside context %d", pos, m.Config.Ctx)
+// attnScale returns the value every Llama decode path must put in AttnAttrs.Scale.
+// OpMHA (and OpMHASelect) build in a 1/√headDim and treat Scale as an EXTRA factor on
+// top of it, so Granite's attention_multiplier — which REPLACES 1/√headDim rather than
+// compounding with it — is passed as AttentionMult·√headDim, leaving a net pre-softmax
+// scale of exactly AttentionMult. An unset AttentionMult (0, the Llama/Qwen/Mistral
+// case) returns 0, which AttnAttrs.WithDefaults reads as 1 and leaves the kernel's own
+// 1/√headDim untouched.
+func (c LlamaConfig) attnScale() float64 {
+	if c.AttentionMult == 0 {
+		return 0
 	}
+	return c.AttentionMult * math.Sqrt(float64(c.Dim/c.Heads))
+}
+
+// attendFunc is the attention core of ONE block: given the block index and that block's
+// post-bias, post-QK-norm, PRE-RoPE q, k and v, it applies whatever positional rotation,
+// caching and masking its decode strategy uses and returns the attention output
+// [rows, Heads·headDim] that feeds Wo.
+//
+// This is the ONLY thing that differs between GoAI's Llama decode strategies. The
+// KV-cached [Llama.DecodeStep] rotates one token at its absolute position and appends
+// it to a growing cache; StreamingLLM's [Llama.StreamStep] keeps a bounded pre-RoPE
+// cache and re-rotates it at cache-relative positions; Self-Extend's
+// [Llama.SelfExtendForward] builds two differently-rotated score sources and merges
+// them under one softmax. Everything AROUND the attention — the norms, the projections,
+// the per-architecture hooks, the SwiGLU — is identical in all three, and lives once in
+// [Llama.blockStack].
+//
+// An attendFunc that runs OpMHA/OpMHASelect MUST pass [LlamaConfig.attnScale] as
+// AttnAttrs.Scale. That is the one per-architecture feature this seam cannot apply on
+// the caller's behalf, because it is a property of the attention kernel invocation
+// rather than of the surrounding block.
+type attendFunc func(block int, q, k, v *tensor.Tensor) (*tensor.Tensor, error)
+
+// blockStack runs the Llama block stack over an embedded input x [rows, Dim] with a
+// pluggable attention core, returning the PRE-final-norm residual stream. Callers
+// finish with [Llama.Unembed] (final RMSNorm + output projection + Granite logits
+// scaling) to turn it into logits.
+//
+// It is the single home of the per-architecture decode features, so a new decode
+// strategy inherits all of them by supplying only an attendFunc:
+//
+//   - Granite embedding_multiplier, applied to the embedded input;
+//   - Qwen2-family q/k/v projection biases, added before RoPE;
+//   - Qwen3 per-head QK-norm, applied before RoPE;
+//   - Granite residual_multiplier, applied to BOTH residual adds.
+//
+// For readers new to the codebase: GoAI models four architectures with one struct.
+// A plain Llama leaves every optional field above nil or zero, which makes each hook a
+// byte-identical no-op, and Qwen2/Qwen3/Granite switch them on. That is convenient
+// until a decode path forgets one — and because a dropped hook produces *plausible*
+// logits rather than an error, nothing fails loudly. Both alternative decode paths had
+// in fact drifted this way: [Llama.StreamStep] and [Llama.SelfExtendForward] were each
+// copied from the decode body before these hooks existed and never picked any of them
+// up, so streaming a Qwen2, Qwen3 or Granite model silently produced different text
+// than [Llama.Generate] on the same prompt. Route new decode paths through here rather
+// than copying the block body; TestStreamGenerateMatchesGenerate and
+// TestSelfExtendForwardArchParity fail if a path drifts again.
+//
+// Known limit: the full-sequence forward (hiddenFromEmbedTaps in llama.go) still has
+// its own copy of this block body, because it additionally carries the KV-capture and
+// residual-capture taps. The two are pinned against each other by the parity tests
+// above, not by construction.
+func (m *Llama) blockStack(ctx *backend.Context, x *tensor.Tensor, attend attendFunc) (*tensor.Tensor, error) {
 	cfg := m.Config
 	kv := cfg.kvHeads()
-	x, err := m.embedOne(token)
-	if err != nil {
-		return nil, err
-	}
-	// Granite: inputs_embeds *= embedding_multiplier, matching hiddenFromEmbed; no-op for
-	// Llama (EmbeddingMult 0). Without it a KV-cached Granite decode would diverge from Forward.
+	var err error
+	// Granite: inputs_embeds *= embedding_multiplier (no-op for Llama, EmbeddingMult 0).
 	if x, err = scaleScalar(ctx, x, cfg.EmbeddingMult); err != nil {
 		return nil, err
-	}
-	// Granite: pre-softmax attention scale = attention_multiplier (√headDim cancels OpMHA's
-	// built-in 1/√headDim), matching hiddenFromEmbed; default 1/√headDim when AttentionMult 0.
-	attnScale := 0.0
-	if cfg.AttentionMult != 0 {
-		attnScale = cfg.AttentionMult * math.Sqrt(float64(cfg.Dim/cfg.Heads))
 	}
 	for l, b := range m.Blocks {
 		xb, err := b.AttnNorm.Forward(ctx, x)
@@ -85,9 +130,7 @@ func (m *Llama) DecodeStep(ctx *backend.Context, cache *LlamaCache, token, pos i
 		if err != nil {
 			return nil, err
 		}
-		// Qwen2-family q/k/v projection biases (added before RoPE, matching the full-sequence
-		// path in hiddenFromEmbed); nil for Llama/Mistral. Without this the KV-cached decode
-		// would silently drop the bias and diverge from Forward on a Qwen2 model.
+		// Qwen2-family q/k/v projection biases (added before RoPE); nil for Llama/Mistral.
 		if q, err = addBiasIf(ctx, q, b.Bq); err != nil {
 			return nil, err
 		}
@@ -97,24 +140,14 @@ func (m *Llama) DecodeStep(ctx *backend.Context, cache *LlamaCache, token, pos i
 		if v, err = addBiasIf(ctx, v, b.Bv); err != nil {
 			return nil, err
 		}
-		// Qwen3 per-head QK-norm (before RoPE), matching hiddenFromEmbed; nil otherwise.
+		// Qwen3 per-head QK-norm (before RoPE); nil for Llama/Qwen2.
 		if q, err = applyQKNorm(ctx, q, b.QNorm, cfg.Heads); err != nil {
 			return nil, err
 		}
 		if k, err = applyQKNorm(ctx, k, b.KNorm, kv); err != nil {
 			return nil, err
 		}
-		// RoPE the single token at its absolute position, then append k,v to the cache
-		if q, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: cfg.Heads, PosOffset: pos}, q); err != nil {
-			return nil, err
-		}
-		if k, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: kv, PosOffset: pos}, k); err != nil {
-			return nil, err
-		}
-		kNew, vNew := cache.bufs.appendKV(cache.K, cache.V, l, k, v)
-		cache.K[l], cache.V[l] = kNew, vNew
-		// single query at the last position attends to all cached keys → no causal mask
-		a, err := exec1(ctx, backend.OpMHA, backend.AttnAttrs{Heads: cfg.Heads, KVHeads: kv, Causal: false, Scale: attnScale}, q, kNew, vNew)
+		a, err := attend(l, q, k, v)
 		if err != nil {
 			return nil, err
 		}
@@ -122,7 +155,7 @@ func (m *Llama) DecodeStep(ctx *backend.Context, cache *LlamaCache, token, pos i
 		if err != nil {
 			return nil, err
 		}
-		// Granite: x = x + o·residual_multiplier, matching hiddenFromEmbed (no-op for Llama).
+		// Granite: x = x + o·residual_multiplier (no-op for Llama, ResidualMult 0).
 		if o, err = scaleScalar(ctx, o, cfg.ResidualMult); err != nil {
 			return nil, err
 		}
@@ -145,15 +178,49 @@ func (m *Llama) DecodeStep(ctx *backend.Context, cache *LlamaCache, token, pos i
 			return nil, err
 		}
 	}
-	if x, err = m.Norm.Forward(ctx, x); err != nil {
-		return nil, err
+	return x, nil
+}
+
+// DecodeStep advances the Llama by one token using the KV-cache and returns the
+// next-token logits [1,vocab]. pos is the token's absolute position (== cache length
+// before the call), used as the RoPE offset. The token's rotated k,v are appended to
+// the cache and the single query attends to all cached keys. Inference-only (no tape);
+// it produces the same logits as a full Forward over the prefix.
+//
+// The block body it runs is [Llama.blockStack] — shared with StreamingLLM and
+// Self-Extend decoding — so every per-architecture hook (Qwen2 biases, Qwen3 QK-norm,
+// the Granite scalars) is applied here by construction rather than by remembering to
+// copy it.
+func (m *Llama) DecodeStep(ctx *backend.Context, cache *LlamaCache, token, pos int) (*tensor.Tensor, error) {
+	if pos < 0 || pos >= m.Config.Ctx {
+		return nil, fmt.Errorf("nlp: position %d outside context %d", pos, m.Config.Ctx)
 	}
-	logits, err := exec1(ctx, backend.OpMatMul, nil, x, m.Out)
+	cfg := m.Config
+	kv := cfg.kvHeads()
+	x, err := m.embedOne(token)
 	if err != nil {
 		return nil, err
 	}
-	// Granite: logits /= logits_scaling, matching ForwardFromEmbed (no-op for Llama).
-	return divLogits(ctx, logits, cfg.LogitsScale)
+	attn := backend.AttnAttrs{Heads: cfg.Heads, KVHeads: kv, Causal: false, Scale: cfg.attnScale()}
+	h, err := m.blockStack(ctx, x, func(l int, q, k, v *tensor.Tensor) (*tensor.Tensor, error) {
+		// RoPE the single token at its absolute position, then append k,v to the cache.
+		q, err := exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: cfg.Heads, PosOffset: pos}, q)
+		if err != nil {
+			return nil, err
+		}
+		if k, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: kv, PosOffset: pos}, k); err != nil {
+			return nil, err
+		}
+		kNew, vNew := cache.bufs.appendKV(cache.K, cache.V, l, k, v)
+		cache.K[l], cache.V[l] = kNew, vNew
+		// single query at the last position attends to all cached keys → no causal mask
+		return exec1(ctx, backend.OpMHA, attn, q, kNew, vNew)
+	})
+	if err != nil {
+		return nil, err
+	}
+	// Final RMSNorm + output projection + the Granite logits scaling.
+	return m.Unembed(ctx, h)
 }
 
 // Prefill runs the transformer ONCE over the whole prompt, seeds the KV-cache with

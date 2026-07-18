@@ -136,6 +136,41 @@ func selfExtendPos(seq, window, group int) (qpos, kpos []int) {
 	return qpos, kpos
 }
 
+// selfExtendMaxRelPos returns the largest effective relative position a Self-Extend
+// pass over seq tokens produces. SelfExtendRelPos is non-decreasing in the key distance
+// for a fixed query (TestSelfExtendMonotonic) and non-decreasing in the query index, so
+// the maximum is always the furthest pair — the last query attending to the first key.
+// This is the quantity that has to stay inside the model's pretrained range: Self-Extend
+// buys length by keeping RELATIVE positions small, not by enlarging the trained window.
+func selfExtendMaxRelPos(seq, window, group int) int {
+	if seq <= 1 {
+		return 0
+	}
+	return SelfExtendRelPos(seq-1, 0, window, group)
+}
+
+// embedTokensUnbounded gathers the token embeddings without [Llama.Embed]'s
+// seq ≤ Config.Ctx guard. Self-Extend exists precisely to run past Config.Ctx, so that
+// guard would refuse the sequences this file is written for; the bound is re-imposed in
+// its correct, grouped form by [Llama.SelfExtendForward] (see selfExtendMaxRelPos).
+// Per-token vocabulary validation is kept — an out-of-range token id would otherwise
+// index out of the embedding table. Apart from the context check this must stay
+// behaviourally identical to [Llama.Embed].
+func (m *Llama) embedTokensUnbounded(ctx *backend.Context, tokens []int) (*tensor.Tensor, error) {
+	seq := len(tokens)
+	if seq == 0 {
+		return nil, fmt.Errorf("nlp: empty prompt")
+	}
+	idx := tensor.New(m.TokEmb.Dtype(), tensor.Shape{seq})
+	for i, t := range tokens {
+		if t < 0 || t >= m.Config.Vocab {
+			return nil, fmt.Errorf("nlp: token %d outside vocab %d", t, m.Config.Vocab)
+		}
+		idx.SetF64(float64(t), i)
+	}
+	return exec1(ctx, backend.OpEmbed, nil, m.TokEmb, idx)
+}
+
 // SelfExtendForward runs the Llama forward with Self-Extend grouped attention
 // (§T513): every block's attention merges TWO score sources under ONE softmax
 // via OpMHASelect — source 1 is the ordinary RoPE path (true positions, used for
@@ -144,17 +179,33 @@ func selfExtendPos(seq, window, group int) (qpos, kpos []int) {
 // distant relative positions compress into the trained range (SelfExtendRelPos).
 // group=1 makes both sources identical and collapses onto Forward. Analysis-scale
 // and inference-only (OpMHASelect has no VJP); returns logits [seq, vocab].
+//
+// Only the dual-source attention above is Self-Extend-specific: the surrounding block
+// runs through the shared [Llama.blockStack], so a Qwen2's projection biases, a Qwen3's
+// QK-norm and Granite's four scalars are applied exactly as Forward applies them. (They
+// were NOT, before this path was routed through the shared stack — it carried its own
+// copy of the block body and dropped every one of those hooks, which the group=1
+// collapse identity could not detect on a plain Llama. TestSelfExtendForwardArchParity
+// is the gate.)
+//
+// Length: unlike Forward this accepts sequences LONGER than Config.Ctx — that is the
+// entire point — but not unboundedly so. Grouping compresses distant pairs by a factor
+// of G, so it errors when even the compressed positions would leave the trained range
+// (see selfExtendMaxRelPos), rather than returning quietly wrong logits. Cost is
+// O(seq²) memory for the selector matrix and O(seq²) attention per call.
 func (m *Llama) SelfExtendForward(ctx *backend.Context, tokens []int, window, group int) (*tensor.Tensor, error) {
 	if group < 1 {
 		group = 1
 	}
 	cfg := m.Config
-	kv := cfg.KVHeads
-	if kv == 0 {
-		kv = cfg.Heads
-	}
+	kv := cfg.kvHeads()
 	base := cfg.RopeBase
 	seq := len(tokens)
+	if maxRel := selfExtendMaxRelPos(seq, window, group); maxRel >= cfg.Ctx {
+		return nil, fmt.Errorf("nlp: Self-Extend over %d tokens needs effective relative positions up to %d, "+
+			"outside the model's trained context %d — raise group (currently %d) or shorten the sequence",
+			seq, maxRel, cfg.Ctx, group)
+	}
 	qpos, kpos := selfExtendPos(seq, window, group)
 	sel := tensor.New(tensor.F64, tensor.Shape{seq, seq})
 	neg := math.Inf(-1)
@@ -168,29 +219,15 @@ func (m *Llama) SelfExtendForward(ctx *backend.Context, tokens []int, window, gr
 			}
 		}
 	}
-	attn := backend.AttnAttrs{Heads: cfg.Heads, KVHeads: kv} // sel expresses causality
+	// sel expresses causality; Scale carries Granite's attention_multiplier (OpMHASelect
+	// applies AttnAttrs.Scale on top of its own 1/√headDim, exactly like OpMHA).
+	attn := backend.AttnAttrs{Heads: cfg.Heads, KVHeads: kv, Scale: cfg.attnScale()}
 
-	x, err := m.Embed(ctx, tokens)
+	x, err := m.embedTokensUnbounded(ctx, tokens)
 	if err != nil {
 		return nil, err
 	}
-	for _, b := range m.Blocks {
-		xb, err := b.AttnNorm.Forward(ctx, x)
-		if err != nil {
-			return nil, err
-		}
-		q, err := project(ctx, xb, b.Wq)
-		if err != nil {
-			return nil, err
-		}
-		k, err := project(ctx, xb, b.Wk)
-		if err != nil {
-			return nil, err
-		}
-		v, err := project(ctx, xb, b.Wv)
-		if err != nil {
-			return nil, err
-		}
+	h, err := m.blockStack(ctx, x, func(_ int, q, k, v *tensor.Tensor) (*tensor.Tensor, error) {
 		qn, err := exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: base, Heads: cfg.Heads}, q)
 		if err != nil {
 			return nil, err
@@ -201,33 +238,13 @@ func (m *Llama) SelfExtendForward(ctx *backend.Context, tokens []int, window, gr
 		}
 		qg := hostRoPE(q, qpos, cfg.Heads, base)
 		kg := hostRoPE(k, kpos, kv, base)
-		a, err := exec1(ctx, backend.OpMHASelect, attn, qn, kn, qg, kg, v, sel)
-		if err != nil {
-			return nil, err
-		}
-		o, err := project(ctx, a, b.Wo)
-		if err != nil {
-			return nil, err
-		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, o); err != nil {
-			return nil, err
-		}
-		xf, err := b.FFNNorm.Forward(ctx, x)
-		if err != nil {
-			return nil, err
-		}
-		ff, err := b.FFN.Forward(ctx, xf)
-		if err != nil {
-			return nil, err
-		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, ff); err != nil {
-			return nil, err
-		}
-	}
-	if x, err = m.Norm.Forward(ctx, x); err != nil {
+		return exec1(ctx, backend.OpMHASelect, attn, qn, kn, qg, kg, v, sel)
+	})
+	if err != nil {
 		return nil, err
 	}
-	return exec1(ctx, backend.OpMatMul, nil, x, m.Out)
+	// Final RMSNorm + output projection + the Granite logits scaling.
+	return m.Unembed(ctx, h)
 }
 
 // SelfExtendGenerate greedily generates maxNew tokens with Self-Extend grouped
@@ -239,15 +256,37 @@ func (m *Llama) SelfExtendForward(ctx *backend.Context, tokens []int, window, gr
 // source). Analysis-scale: O(seq²) attention per step, no KV cache (OpMHASelect
 // is inference-only and served by the reference kernel). group=1 degenerates to
 // plain greedy generation.
+//
+// How far "beyond its training length" actually goes: a group size of G compresses
+// distant relative positions by G, so the reachable length is roughly G·Config.Ctx,
+// not infinity. A request that cannot fit even after compression is rejected UP FRONT
+// with an error naming the numbers, before any O(n²) work is spent. It previously
+// stopped at Config.Ctx instead — silently, returning fewer tokens than asked for with
+// a nil error, which contradicted the promise two paragraphs up and made the whole
+// grouped mechanism unreachable. Callers that want as much as will fit should compute
+// the bound rather than over-ask: the constraint is
+// SelfExtendRelPos(len(prompt)+maxNew−1, 0, window, group) < Config.Ctx.
 func (m *Llama) SelfExtendGenerate(ctx *backend.Context, prompt []int, maxNew, window, group int) ([]int, error) {
 	if len(prompt) == 0 {
 		return nil, fmt.Errorf("nlp: SelfExtendGenerate needs a non-empty prompt")
 	}
+	if maxNew < 0 {
+		return nil, fmt.Errorf("nlp: SelfExtendGenerate needs maxNew≥0, got %d", maxNew)
+	}
+	if group < 1 { // normalized the same way SelfExtendForward normalizes it
+		group = 1
+	}
+	// Check the FINAL length, not each step's: fail before the work, not two thirds
+	// through it. SelfExtendForward re-checks per call, so this is a courtesy, not the
+	// safety net.
+	final := len(prompt) + maxNew
+	if maxRel := selfExtendMaxRelPos(final, window, group); maxRel >= m.Config.Ctx {
+		return nil, fmt.Errorf("nlp: Self-Extend generation to %d tokens (%d prompt + %d new) needs effective "+
+			"relative positions up to %d, outside the model's trained context %d — raise group (currently %d) "+
+			"or lower maxNew", final, len(prompt), maxNew, maxRel, m.Config.Ctx, group)
+	}
 	out := append([]int(nil), prompt...)
 	for range maxNew {
-		if len(out) >= m.Config.Ctx {
-			break
-		}
 		logits, err := m.SelfExtendForward(ctx, out, window, group)
 		if err != nil {
 			return nil, err

@@ -58,6 +58,18 @@ func keepSinkRecent(t *tensor.Tensor, sinks, window int) *tensor.Tensor {
 // evicting the middle. Keys/values are cached pre-RoPE; each step re-applies RoPE using
 // positions within the current cache (0..cacheLen−1), so relative distances stay bounded
 // by sinks+window and generation never runs out of positional range. Inference-only.
+//
+// Only the attention core above is specific to streaming: the surrounding block runs
+// through the shared [Llama.blockStack], so a Qwen2's projection biases, a Qwen3's
+// QK-norm and Granite's four scalars are applied exactly as [Llama.DecodeStep] and
+// Forward apply them. (They were NOT, before this path was routed through the shared
+// stack — this function carried its own copy of the block body, written before those
+// hooks existed, so streaming a Qwen2/Qwen3/Granite model silently produced different
+// logits than the non-streaming path. TestStreamGenerateMatchesGenerate is the gate.)
+//
+// The cached k,v are post-bias and post-QK-norm but pre-RoPE, which is the correct
+// place to bound them: both hooks are position-independent, so applying them once
+// before caching is identical to re-applying them to the whole cache every step.
 func (m *Llama) StreamStep(ctx *backend.Context, cache *StreamCache, token, sinks, window int) (*tensor.Tensor, error) {
 	if sinks < 0 || window < 1 {
 		return nil, fmt.Errorf("nlp: StreamStep needs sinks≥0 and window≥1, got %d/%d", sinks, window)
@@ -68,23 +80,8 @@ func (m *Llama) StreamStep(ctx *backend.Context, cache *StreamCache, token, sink
 	if err != nil {
 		return nil, err
 	}
-	for l, b := range m.Blocks {
-		xb, err := b.AttnNorm.Forward(ctx, x)
-		if err != nil {
-			return nil, err
-		}
-		q, err := project(ctx, xb, b.Wq)
-		if err != nil {
-			return nil, err
-		}
-		k, err := project(ctx, xb, b.Wk)
-		if err != nil {
-			return nil, err
-		}
-		v, err := project(ctx, xb, b.Wv)
-		if err != nil {
-			return nil, err
-		}
+	attn := backend.AttnAttrs{Heads: cfg.Heads, KVHeads: kv, Causal: false, Scale: cfg.attnScale()}
+	h, err := m.blockStack(ctx, x, func(l int, q, k, v *tensor.Tensor) (*tensor.Tensor, error) {
 		// append the RAW (pre-RoPE) k,v and bound the cache to sinks + recent window
 		cache.K[l] = keepSinkRecent(concatRows(cache.K[l], k), sinks, window)
 		cache.V[l] = keepSinkRecent(concatRows(cache.V[l], v), sinks, window)
@@ -98,39 +95,30 @@ func (m *Llama) StreamStep(ctx *backend.Context, cache *StreamCache, token, sink
 		if err != nil {
 			return nil, err
 		}
-		a, err := exec1(ctx, backend.OpMHA, backend.AttnAttrs{Heads: cfg.Heads, KVHeads: kv, Causal: false}, qr, kr, cache.V[l])
-		if err != nil {
-			return nil, err
-		}
-		o, err := project(ctx, a, b.Wo)
-		if err != nil {
-			return nil, err
-		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, o); err != nil {
-			return nil, err
-		}
-		xf, err := b.FFNNorm.Forward(ctx, x)
-		if err != nil {
-			return nil, err
-		}
-		ff, err := b.FFN.Forward(ctx, xf)
-		if err != nil {
-			return nil, err
-		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, ff); err != nil {
-			return nil, err
-		}
-	}
-	if x, err = m.Norm.Forward(ctx, x); err != nil {
+		return exec1(ctx, backend.OpMHA, attn, qr, kr, cache.V[l])
+	})
+	if err != nil {
 		return nil, err
 	}
-	return exec1(ctx, backend.OpMatMul, nil, x, m.Out)
+	// Final RMSNorm + output projection + the Granite logits scaling.
+	return m.Unembed(ctx, h)
 }
 
 // StreamGenerate decodes up to maxNew tokens after prompt with StreamingLLM's bounded
 // cache (sinks attention-sink tokens + a rolling window), so it runs at constant memory
 // regardless of how long the stream grows. Unlike KV-cache Generate it is not bounded by
 // the model's context length. Returns prompt+generated.
+//
+// Relationship to [Llama.Generate]: while the budget covers the whole sequence
+// (sinks+window ≥ len(prompt)+maxNew) no eviction happens and this returns the SAME
+// tokens as Generate for the same model, prompt and greedy sampler — the two are one
+// forward pass expressed over two cache layouts, and TestStreamGenerateMatchesGenerate
+// holds them to it on Qwen2-, Qwen3- and Granite-shaped models. Past the budget the two
+// legitimately diverge: evicting the middle of the cache is the whole point, and the
+// output is an approximation of full attention, not an equal of it.
+//
+// Note that this runs one extra [Llama.StreamStep] after the final sampled token (whose
+// logits are discarded), so a stream of n tokens costs n+1 steps.
 func (m *Llama) StreamGenerate(prompt []int, maxNew, sinks, window int, s TokenSampler) ([]int, error) {
 	if len(prompt) == 0 {
 		return nil, fmt.Errorf("nlp: StreamGenerate needs a non-empty prompt")

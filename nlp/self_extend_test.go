@@ -3,6 +3,7 @@ package nlp_test
 import (
 	"fmt"
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/jxsl13/goai/backend"
@@ -134,5 +135,86 @@ func TestSelfExtendForwardCollapsesToForward(t *testing.T) {
 		if d := math.Abs(se.AtF64(idx...) - plain.AtF64(idx...)); d > 1e-9 {
 			t.Fatalf("group=1 diverges at %v by %g", idx, d)
 		}
+	}
+}
+
+// TestSelfExtendForwardArchParity is the Self-Extend half of the decode-path
+// equivalence gate (§V16 tier-1), the sibling of TestStreamGenerateMatchesGenerate.
+// SelfExtendForward is a third implementation of the Llama forward pass, and it had
+// drifted the same way StreamStep did: it applied neither the Qwen2 q/k/v biases, nor
+// the Qwen3 QK-norm, nor any of the four Granite scalars. With group=1 both of its
+// score sources collapse onto ordinary RoPE, so it must reproduce Forward EXACTLY for
+// every architecture — the collapse identity is what makes the drift detectable.
+//
+// TestSelfExtendForwardCollapsesToForward above pins the same identity for a plain
+// Llama; it passed throughout the drift precisely because a plain Llama has none of
+// these features. That is the failure mode this test exists to close.
+func TestSelfExtendForwardArchParity(t *testing.T) {
+	tokens := []int{1, 5, 9, 2, 7, 3, 10, 4}
+	for _, tc := range archParityModels(t) {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := backend.NewContext()
+			plain, err := tc.m.Forward(ctx, tokens)
+			if err != nil {
+				t.Fatal(err)
+			}
+			se, err := tc.m.SelfExtendForward(ctx, tokens, 4, 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for i := range plain.Numel() {
+				idx := tensor.Unravel(i, plain.Shape())
+				got, want := se.AtF64(idx...), plain.AtF64(idx...)
+				if d := math.Abs(got - want); d > 1e-9*math.Max(1, math.Abs(want)) {
+					t.Fatalf("group=1 SelfExtendForward %.12g vs Forward %.12g at %v (Δ%.3g)\n"+
+						"the Self-Extend path is dropping an architecture feature Forward applies",
+						got, want, idx, d)
+				}
+			}
+		})
+	}
+}
+
+// §V16 tier-1 (the point of Self-Extend): SelfExtendGenerate must generate PAST
+// Config.Ctx — that is the entire reason grouped attention exists. It used to stop
+// silently at Ctx (returning fewer tokens than asked for, with a nil error), which
+// contradicted its own godoc; the real limit is the GROUPED one, so a group of G buys
+// roughly G× the context. Here Ctx=16 and group=4, so ~50 tokens are well within reach
+// while being 3× past the unextended limit.
+func TestSelfExtendGenerateBeyondCtx(t *testing.T) {
+	cfg := nlp.LlamaConfig{Vocab: 17, Ctx: 16, Dim: 16, Heads: 2, KVHeads: 1, Layers: 2, Hidden: 40, Eps: 1e-5}
+	m, err := nlp.NewLlama(cfg, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt := []int{1, 5, 9, 2}
+	const maxNew = 40 // 44 total, 2.75× Config.Ctx
+	out, err := m.SelfExtendGenerate(backend.NewContext(), prompt, maxNew, 4, 4)
+	if err != nil {
+		t.Fatalf("SelfExtendGenerate past Ctx: %v", err)
+	}
+	if len(out) != len(prompt)+maxNew {
+		t.Fatalf("SelfExtendGenerate produced %d tokens, want %d — it stopped short of the "+
+			"request instead of generating beyond Config.Ctx=%d", len(out), len(prompt)+maxNew, cfg.Ctx)
+	}
+}
+
+// §V16 tier-1 (fail loudly, never silently short): grouping extends the reachable
+// length but does NOT make it unbounded — the largest relative position the grouped
+// source produces still has to land inside the pretrained range. A request that cannot
+// fit must ERROR, not quietly return fewer tokens than asked for (the old behaviour).
+func TestSelfExtendGenerateRejectsUnreachableLength(t *testing.T) {
+	cfg := nlp.LlamaConfig{Vocab: 17, Ctx: 16, Dim: 16, Heads: 2, KVHeads: 1, Layers: 2, Hidden: 40, Eps: 1e-5}
+	m, err := nlp.NewLlama(cfg, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// group=1 buys nothing, so 4+40 tokens cannot fit a Ctx of 16.
+	out, err := m.SelfExtendGenerate(backend.NewContext(), []int{1, 5, 9, 2}, 40, 4, 1)
+	if err == nil {
+		t.Fatalf("an unreachable length must error, got %d tokens and nil error", len(out))
+	}
+	if !strings.Contains(err.Error(), "Self-Extend") {
+		t.Fatalf("error should name the constraint it enforces, got: %v", err)
 	}
 }
