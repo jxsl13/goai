@@ -4,6 +4,19 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### ci — actually run the numpy cross-checks (T851, 2026-07-18)
+
+`format/npy` and `format/npz` carry §V16 cross-checks that verify a file GoAI WRITES is
+readable by the reference numpy. They locate python at `../../.venv/bin/python` and
+`t.Skip` when it is absent — and CI installed no Python at all, so they had never run
+there. A green pipeline said nothing about the write direction. (The read direction was
+always covered, by committed reference fixtures.)
+
+The cgo+race lane now builds a numpy venv before the test steps. It is deliberately
+`continue-on-error`: if PyPI is unreachable the venv is simply absent and those tests skip
+exactly as they did before, so this can never redden a lane for a reason unrelated to the
+change under test. Strictly better than the previous state, never worse.
+
 ### testdata — point the numpy fixture generator at the package that is actually used (T850, 2026-07-18)
 
 `make golden` regenerated `internal/npy/testdata`. That package has ZERO importers, while
