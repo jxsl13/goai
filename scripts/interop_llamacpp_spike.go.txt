@@ -1,0 +1,138 @@
+// Interop spike for scripts/interop_llamacpp.sh (kept as .go.txt so it is not
+// part of the goai module build; the script copies it into a temp module with a
+// `replace` directive pointing at this repo).
+//
+// It builds a tiny-but-legal GoAI Llama, serializes it via LlamaToGGUF +
+// gguf.Write/WriteQuantized with the tokenizer metadata llama.cpp requires
+// (see docs/gguf.md "Exporting to llama.cpp"), and records GoAI's own greedy
+// generation for the byte-parity comparison against llama-simple:
+//
+//	<outdir>/tiny-f32.gguf          F32 export (gguf.WriteFile)
+//	<outdir>/tiny-q8_0.gguf         Q8_0 export (gguf.WriteQuantized, 2-D tensors)
+//	<outdir>/goai-f32.bytes         decoded prompt+9 greedy tokens, F32 file
+//	<outdir>/goai-q8_0.bytes        same, Q8_0 file (GoAI dequantizes on read)
+//	<outdir>/goai-prompt-ids.txt    space-separated prompt token ids
+package main
+
+import (
+	"fmt"
+	"os"
+	"strings"
+
+	_ "github.com/jxsl13/goai/backend/ref" // CPU reference backend
+	"github.com/jxsl13/goai/format/gguf"
+	"github.com/jxsl13/goai/nlp"
+)
+
+// gpt2ByteTokens returns the 256 GPT-2 byte-level base tokens in byte order:
+// the unicode-mapped form every real BPE GGUF vocab contains (bytes_to_unicode).
+func gpt2ByteTokens() []string {
+	printable := func(b int) bool {
+		return (b >= '!' && b <= '~') || (b >= 0xA1 && b <= 0xAC) || (b >= 0xAE && b <= 0xFF)
+	}
+	out := make([]string, 256)
+	n := 0
+	for b := 0; b < 256; b++ {
+		r := rune(b)
+		if !printable(b) {
+			r = rune(256 + n)
+			n++
+		}
+		out[b] = string(r)
+	}
+	return out
+}
+
+func check(err error) {
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "interop spike:", err)
+		os.Exit(1)
+	}
+}
+
+func main() {
+	if len(os.Args) != 2 {
+		fmt.Fprintln(os.Stderr, "usage: spike <outdir>")
+		os.Exit(2)
+	}
+	outdir := os.Args[1]
+
+	// Vocab: all 256 byte tokens (so any byte tokenizes in both engines) plus
+	// the merge chain for "hello". llama.cpp's model loader takes n_vocab from
+	// len(tokenizer.ggml.tokens), so it MUST equal the model's Vocab.
+	toks := gpt2ByteTokens()
+	toks = append(toks, "he", "hel", "hell", "hello")
+	merges := []string{"h e", "he l", "hel l", "hell o"}
+
+	cfg := nlp.LlamaConfig{
+		Vocab: len(toks), Ctx: 64, Dim: 32, Heads: 4, KVHeads: 2, Layers: 2,
+		Hidden: 64, Eps: 1e-5, RopeBase: 10000,
+	}
+	model, err := nlp.NewLlama(cfg, 7)
+	check(err)
+
+	meta, tensors := nlp.LlamaToGGUF(model)
+
+	// Tokenizer metadata: the required + recommended set from docs/gguf.md
+	// ("Exporting to llama.cpp") — caller data, deliberately not synthesized
+	// by LlamaToGGUF.
+	tokAny := make([]any, len(toks))
+	for i, t := range toks {
+		tokAny[i] = t
+	}
+	mergeAny := make([]any, len(merges))
+	for i, m := range merges {
+		mergeAny[i] = m
+	}
+	meta["tokenizer.ggml.model"] = "gpt2"    // required: selects LLAMA_VOCAB_TYPE_BPE
+	meta["tokenizer.ggml.tokens"] = tokAny   // required: the vocab list
+	meta["tokenizer.ggml.merges"] = mergeAny // required for BPE
+	meta["tokenizer.ggml.pre"] = "gpt-2"     // recommended: silences the warn+default
+	meta["tokenizer.ggml.bos_token_id"] = uint32(0)
+	meta["tokenizer.ggml.eos_token_id"] = uint32(0)
+	meta["tokenizer.ggml.add_bos_token"] = false // keep both engines' prompts identical
+	meta["general.name"] = "goai-tiny-interop"
+
+	f := &gguf.File{Version: 3, Metadata: meta, Tensors: tensors}
+	check(gguf.WriteFile(outdir+"/tiny-f32.gguf", f))
+
+	// Q8_0 variant: quantize every 2-D projection + embedding, keep 1-D norms F32.
+	quant := map[string]gguf.QuantType{}
+	for name, t := range tensors {
+		if t.Ndim() == 2 {
+			quant[name] = gguf.Q8_0
+		}
+	}
+	qf, err := os.Create(outdir + "/tiny-q8_0.gguf")
+	check(err)
+	check(gguf.WriteQuantized(qf, f, quant))
+	check(qf.Close())
+
+	// GoAI's side of the parity check: re-read each file (the exact consumer
+	// path), encode → greedy generate 9 tokens → decode, dump the raw bytes.
+	gen := func(path string) (string, []int) {
+		rf, err := os.Open(path)
+		check(err)
+		defer rf.Close()
+		parsed, err := gguf.Read(rf)
+		check(err)
+		lm, err := nlp.LlamaFromGGUF(parsed.Metadata, parsed.Tensors)
+		check(err)
+		tok, err := nlp.BPEFromGGUF(parsed.Metadata)
+		check(err)
+		prompt := tok.Encode("hello")
+		out, err := lm.Generate(prompt, 9, nlp.Greedy())
+		check(err)
+		return tok.Decode(out), prompt
+	}
+	f32Text, prompt := gen(outdir + "/tiny-f32.gguf")
+	q8Text, _ := gen(outdir + "/tiny-q8_0.gguf")
+	check(os.WriteFile(outdir+"/goai-f32.bytes", []byte(f32Text), 0o644))
+	check(os.WriteFile(outdir+"/goai-q8_0.bytes", []byte(q8Text), 0o644))
+	ids := make([]string, len(prompt))
+	for i, id := range prompt {
+		ids[i] = fmt.Sprint(id)
+	}
+	check(os.WriteFile(outdir+"/goai-prompt-ids.txt", []byte(strings.Join(ids, " ")), 0o644))
+	fmt.Printf("goai prompt ids: %v\ngoai f32 text: %q\ngoai q8_0 text: %q\n", prompt, f32Text, q8Text)
+}
