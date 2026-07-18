@@ -4,6 +4,24 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nn — runnable examples for everything shipped today (T852, 2026-07-18)
+
+Twelve new godoc Examples so today's four commits stop adding to the package's
+documentation debt, plus a godoc comment on `PlateauMode.String`. Types without a runnable
+Example drop 157 → 137 and methods 69 → 40; nothing from today's work remains in any
+apicheck class. The seven functional-option types are allowlisted rather than given filler
+examples, since each is already exercised through its `With*` setters in a parent example.
+
+The examples are written to fail if the feature were removed, which is the only kind worth
+shipping. `ExampleEmbedding_padGradHook` installs the hook and runs the same batch twice,
+printing the padding row's gradient as 2.0 without it and 0.0 with — so it cannot be
+misread as automatic, which matters because `PadIdx` is inert unless the caller installs
+the hook. `ExampleStatefulParamGroups` separates a warm resume from a cold one with a
+gradient spike (-0.0738 vs -0.0997), showing the momentum a weights-only restore throws
+away. `ExampleLRScheduler_state` contrasts resuming with and without scheduler state
+(step 25 lr 0.0250 vs step 0 lr 0.1000). `ExampleSetTrain` prints zeroed-vs-unchanged
+counts for a doubly-nested dropout in both modes.
+
 ### ci — actually run the numpy cross-checks (T851, 2026-07-18)
 
 `format/npy` and `format/npz` carry §V16 cross-checks that verify a file GoAI WRITES is

@@ -1,6 +1,7 @@
 package nn_test
 
 import (
+	"fmt"
 	"math"
 	"path/filepath"
 	"testing"
@@ -816,4 +817,268 @@ func TestBindLRReachesThroughWrappers(t *testing.T) {
 	if inner.LR == 0.2 {
 		t.Fatal("the wrapped optimizer's LR was never written")
 	}
+}
+
+// A cosine schedule with warmup driving a real training loop: build the
+// optimizer, wrap it in a scheduler, and call sched.Step once per opt.Step. The
+// rate ramps up over the warmup, then anneals smoothly to the floor.
+func ExampleLRScheduler() {
+	w := tensor.New(tensor.F64, tensor.Shape{2, 2})
+	opt := nn.NewAdamW([]*tensor.Tensor{w}, 1e-3, 0.1)
+
+	sched, err := nn.NewCosineAnnealingLR(opt, 20,
+		nn.WithCosineWarmup(4),   // linear ramp for the first 4 steps
+		nn.WithCosineMinLR(1e-4), // anneal down to this floor, not to zero
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	// Any step-driven schedule satisfies nn.Scheduler, so a training loop can
+	// hold the interface and stay agnostic about which schedule it was handed.
+	var s nn.Scheduler = sched
+
+	grad := func(p *tensor.Tensor) *tensor.Tensor { return tensor.New(p.Dtype(), p.Shape()) }
+	fmt.Println("schedule:", sched.Kind())
+	for step := range 21 {
+		if step%4 == 0 {
+			fmt.Printf("step %2d  lr %.5f\n", s.CurrentStep(), s.LRs()[0])
+		}
+		if err := opt.Step(grad); err != nil {
+			panic(err)
+		}
+		s.Step() // after opt.Step, once per optimizer step
+	}
+
+	// Output:
+	// schedule: cosine
+	// step  0  lr 0.00025
+	// step  4  lr 0.00100
+	// step  8  lr 0.00087
+	// step 12  lr 0.00055
+	// step 16  lr 0.00023
+	// step 20  lr 0.00010
+}
+
+// Checkpointing a schedule. Resuming without the scheduler state rewinds the
+// step counter to 0, which re-runs the warmup and restarts the decay from the
+// peak — mid-run, on a partly converged model. State/LoadState (or their file
+// forms nn.SaveSchedulerState / nn.LoadSchedulerState) are what prevent that.
+func ExampleLRScheduler_state() {
+	build := func() *nn.LRScheduler {
+		w := tensor.New(tensor.F64, tensor.Shape{2, 2})
+		s, err := nn.NewStepLR(nn.NewAdamW([]*tensor.Tensor{w}, 0.1, 0),
+			10, nn.WithStepLRGamma(0.5))
+		if err != nil {
+			panic(err)
+		}
+		return s
+	}
+
+	// 25 steps in: the staircase has dropped twice (0.1 → 0.05 → 0.025).
+	run := build()
+	for range 25 {
+		run.Step()
+	}
+	var ckpt nn.SchedulerState = run
+	saved := ckpt.State()
+	fmt.Printf("crashed at step %d, lr %.4f\n", run.CurrentStep(), run.LRs()[0])
+
+	// A resume that forgets the scheduler is back at the top of the staircase.
+	fresh := build()
+	fmt.Printf("resume without state: step %d, lr %.4f\n", fresh.CurrentStep(), fresh.LRs()[0])
+
+	// A resume that loads it continues where the run left off.
+	restored := build()
+	if err := restored.LoadState(saved); err != nil {
+		panic(err)
+	}
+	fmt.Printf("resume with    state: step %d, lr %.4f\n", restored.CurrentStep(), restored.LRs()[0])
+
+	// Output:
+	// crashed at step 25, lr 0.0250
+	// resume without state: step 0, lr 0.1000
+	// resume with    state: step 25, lr 0.0250
+}
+
+// A metric-driven schedule: feed it a validation loss once per evaluation and it
+// cuts the rate when the loss stops improving. Reach for it when the run length
+// is not known up front, so a cosine `total` would be a guess.
+func ExampleReduceLROnPlateau() {
+	w := tensor.New(tensor.F64, tensor.Shape{2, 2})
+	opt := nn.NewAdamW([]*tensor.Tensor{w}, 0.1, 0)
+
+	sched, err := nn.NewReduceLROnPlateau(opt,
+		nn.WithPlateauFactor(0.5), // halve, rather than the default ×0.1
+		nn.WithPlateauPatience(2), // tolerate 2 flat evaluations, fire on the 3rd
+		nn.WithPlateauMinLR(0.02), // never go below this
+	)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println("watching a metric to", nn.PlateauMin.String())
+
+	// A validation loss that improves, then flattens for good.
+	losses := []float64{1.00, 0.80, 0.65, 0.64, 0.64, 0.64, 0.64, 0.64, 0.64, 0.64, 0.64}
+	for i, loss := range losses {
+		cut := sched.Step(loss)
+		mark := ""
+		if cut {
+			mark = "  <- reduction fired"
+		}
+		fmt.Printf("eval %2d  loss %.2f  bad %d  lr %.4f%s\n",
+			i, loss, sched.BadSteps(), sched.LRs()[0], mark)
+	}
+	fmt.Printf("best %.2f after %d reduction(s)\n", sched.Best(), sched.Reductions())
+
+	// Output:
+	// watching a metric to min
+	// eval  0  loss 1.00  bad 0  lr 0.1000
+	// eval  1  loss 0.80  bad 0  lr 0.1000
+	// eval  2  loss 0.65  bad 0  lr 0.1000
+	// eval  3  loss 0.64  bad 0  lr 0.1000
+	// eval  4  loss 0.64  bad 1  lr 0.1000
+	// eval  5  loss 0.64  bad 2  lr 0.1000
+	// eval  6  loss 0.64  bad 0  lr 0.0500  <- reduction fired
+	// eval  7  loss 0.64  bad 1  lr 0.0500
+	// eval  8  loss 0.64  bad 2  lr 0.0500
+	// eval  9  loss 0.64  bad 0  lr 0.0250  <- reduction fired
+	// eval 10  loss 0.64  bad 1  lr 0.0250
+	// best 0.64 after 2 reduction(s)
+}
+
+// Resuming a plateau schedule. Its state is the part that CANNOT be recomputed
+// from a step number — the best metric seen, the bad-step run and the reductions
+// already earned — so a resume that drops it jumps the rate back to the base.
+func ExampleReduceLROnPlateau_state() {
+	build := func() *nn.ReduceLROnPlateau {
+		w := tensor.New(tensor.F64, tensor.Shape{2, 2})
+		p, err := nn.NewReduceLROnPlateau(nn.NewAdamW([]*tensor.Tensor{w}, 0.1, 0),
+			nn.WithPlateauFactor(0.5), nn.WithPlateauPatience(1))
+		if err != nil {
+			panic(err)
+		}
+		return p
+	}
+
+	run := build()
+	for _, loss := range []float64{1.0, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5} {
+		run.Step(loss)
+	}
+	saved := run.State()
+	fmt.Printf("crashed:              lr %.4f, %d reduction(s), best %.2f\n",
+		run.LRs()[0], run.Reductions(), run.Best())
+
+	fresh := build()
+	fmt.Printf("resume without state: lr %.4f, %d reduction(s)\n",
+		fresh.LRs()[0], fresh.Reductions())
+
+	restored := build()
+	if err := restored.LoadState(saved); err != nil {
+		panic(err)
+	}
+	fmt.Printf("resume with    state: lr %.4f, %d reduction(s), best %.2f\n",
+		restored.LRs()[0], restored.Reductions(), restored.Best())
+
+	// Output:
+	// crashed:              lr 0.0250, 2 reduction(s), best 0.50
+	// resume without state: lr 0.1000, 0 reduction(s)
+	// resume with    state: lr 0.0250, 2 reduction(s), best 0.50
+}
+
+// Driving learning rates by hand. BindLR resolves one handle per independently
+// scheduled rate — with parameter groups that is one per group, each with its
+// own base — so you can apply a custom rule without writing a Scheduler.
+func ExampleLRHandle() {
+	params := []*tensor.Tensor{
+		tensor.New(tensor.F64, tensor.Shape{4, 3}), // weight
+		tensor.New(tensor.F64, tensor.Shape{3}),    // bias
+	}
+	noDecay, decay := nn.SplitParams(params, nn.IsBiasOrNorm)
+	opt, err := nn.NewParamGroups([]nn.ParamGroup{
+		{Opt: nn.NewAdamW(decay, 1e-3, 0.1)},
+		{Opt: nn.NewAdamW(noDecay, 5e-4, 0)}, // deliberately a different base
+	}, nn.WithParamGroupsExpected(params))
+	if err != nil {
+		panic(err)
+	}
+
+	handles, err := nn.BindLR(opt)
+	if err != nil {
+		panic(err) // an unschedulable optimizer is an error, never a silent no-op
+	}
+	for _, h := range handles {
+		fmt.Printf("%s = %g\n", h.Path(), h.Get())
+	}
+
+	// A hand-rolled warmup: scale every rate by the same factor, which preserves
+	// the 2:1 ratio the two groups were configured with.
+	for _, h := range handles {
+		h.Set(h.Get() * 0.25)
+	}
+	fmt.Println("after warmup scale:", handles[0].Get(), handles[1].Get())
+
+	// Output:
+	// group0.*nn.Adam.LR = 0.001
+	// group1.*nn.Adam.LR = 0.0005
+	// after warmup scale: 0.00025 0.000125
+}
+
+// scaledSGD is a toy optimizer that keeps its rate somewhere reflection cannot
+// find it (no exported LR field), and implements nn.LRSetter to stay
+// schedulable. This is the whole reason the interface exists.
+type scaledSGD struct {
+	params []*tensor.Tensor
+	lr     float64
+}
+
+func (o *scaledSGD) Step(grad nn.GradFn) error {
+	for _, p := range o.params {
+		g := grad(p)
+		if g == nil {
+			continue
+		}
+		for i := range p.Numel() {
+			ix := tensor.Unravel(i, p.Shape())
+			p.SetF64(p.AtF64(ix...)-o.lr*g.AtF64(ix...), ix...)
+		}
+	}
+	return nil
+}
+
+func (o *scaledSGD) Params() []*tensor.Tensor { return o.params }
+
+// LearningRate and SetLearningRate are named that way, rather than LR/SetLR,
+// because an LR method would collide with the LR FIELD the built-in optimizers
+// already have — which would make the interface unimplementable by exactly the
+// types that matter.
+func (o *scaledSGD) LearningRate() float64      { return o.lr }
+func (o *scaledSGD) SetLearningRate(lr float64) { o.lr = lr }
+
+// An optimizer from outside this package becomes schedulable by implementing
+// nn.LRSetter — two methods, no changes anywhere else.
+func ExampleLRSetter() {
+	w := tensor.New(tensor.F64, tensor.Shape{2})
+	var opt nn.Optimizer = &scaledSGD{params: []*tensor.Tensor{w}, lr: 1.0}
+
+	// BindLR always prefers LRSetter over its reflection fallbacks.
+	handles, err := nn.BindLR(opt)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println("resolved:", handles[0].Path())
+
+	sched, err := nn.NewStepLR(opt, 2, nn.WithStepLRGamma(0.5))
+	if err != nil {
+		panic(err)
+	}
+	for range 6 {
+		fmt.Printf("%.3f ", opt.(*scaledSGD).LearningRate())
+		sched.Step()
+	}
+	fmt.Println()
+
+	// Output:
+	// resolved: *nn_test.scaledSGD(LRSetter)
+	// 1.000 1.000 0.500 0.500 0.250 0.250
 }

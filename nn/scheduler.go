@@ -528,6 +528,9 @@ const (
 	PlateauMax
 )
 
+// String renders the mode as the lowercase word torch uses for the same
+// parameter ("min" or "max"), so a logged schedule reads the same in both
+// ecosystems.
 func (m PlateauMode) String() string {
 	if m == PlateauMax {
 		return "max"

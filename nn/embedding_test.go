@@ -1,6 +1,7 @@
 package nn_test
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -242,4 +243,80 @@ func TestEmbeddingGradCheck(t *testing.T) {
 	if err := autograd.GradCheck(f, []*tensor.Tensor{emb.W}); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// The first layer of essentially every language model: integer token ids in,
+// learned dense vectors out. Lookup takes plain []int and builds the index
+// tensor for you; Forward is the form that takes the index tensor directly, so
+// the layer drops into the hand-rolled lookups already in nlp/.
+func ExampleEmbedding() {
+	emb := nn.NewEmbedding(tensor.F64, 8, 4, 42) // vocab 8, dim 4, fixed seed
+
+	out, err := emb.Lookup(backend.NewContext(), []int{3, 1, 3})
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println("shape:", out.Shape()) // one row per id
+
+	// A repeated id yields the same row — it is a gather, not a computation.
+	same := true
+	for j := range 4 {
+		if out.AtF64(0, j) != out.AtF64(2, j) {
+			same = false
+		}
+	}
+	fmt.Println("row for id 3 repeats:", same)
+	fmt.Printf("first vector: %.4f\n", out.AtF64(0, 0))
+
+	// Output:
+	// shape: (3, 4)
+	// row for id 3 repeats: true
+	// first vector: 0.2852
+}
+
+// Freezing the padding row. PadIdx on its own does NOTHING but zero-initialise
+// that row — the row still trains like any other. Zeroing its gradient is a HOOK
+// you install on the tape, and this is what installing it looks like.
+func ExampleEmbedding_padGradHook() {
+	const vocab, dim, pad = 4, 3, 0
+
+	// A batch where the padding id appears twice, so the padding row genuinely
+	// accumulates gradient and the hook has something to suppress.
+	batch := []int{pad, 2, pad, 3}
+
+	padRowGrad := func(installHook bool) float64 {
+		emb := nn.NewEmbeddingPadded(tensor.F64, vocab, dim, pad, 7)
+		tape := autograd.NewTape()
+		if installHook {
+			tape.RegisterGradHook(emb.W, emb.PadGradHook()) // <- the one line
+		}
+		out, err := emb.Lookup(tape.Context(), batch)
+		if err != nil {
+			panic(err)
+		}
+		loss, err := backend.Execute(tape.Context(), backend.OpSum, []*tensor.Tensor{out}, nil)
+		if err != nil {
+			panic(err)
+		}
+		if err := tape.Backward(loss[0]); err != nil {
+			panic(err)
+		}
+		return tape.Grad(emb.W).AtF64(pad, 0)
+	}
+
+	fmt.Printf("pad-row gradient without the hook: %.1f\n", padRowGrad(false))
+	fmt.Printf("pad-row gradient with    the hook: %.1f\n", padRowGrad(true))
+
+	// ZeroPadRow is the manual alternative if you cannot install a hook: call it
+	// after each optimizer step. It repairs the weights but not the optimizer's
+	// momentum for that row, so the hook stays the faithful option.
+	emb := nn.NewEmbeddingPadded(tensor.F64, vocab, dim, pad, 7)
+	emb.W.SetF64(1.5, pad, 0) // pretend an optimizer step moved the padding row
+	emb.ZeroPadRow()
+	fmt.Println("after ZeroPadRow:", emb.W.AtF64(pad, 0))
+
+	// Output:
+	// pad-row gradient without the hook: 2.0
+	// pad-row gradient with    the hook: 0.0
+	// after ZeroPadRow: 0
 }

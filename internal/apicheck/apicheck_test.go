@@ -197,6 +197,14 @@ var typeExampleExempt = map[string]bool{
 	"nn.AdamMiniOption":               true, // functional-option type (shown via WithAdamMini*)
 	"nn.TPAOption":                    true, // functional-option type (shown via WithTPARanks/WithTPARoPE)
 	"nn.LookaheadOption":              true, // functional-option type (shown via WithLookahead*)
+	"nn.CEOption":                     true, // functional-option type (shown via the cross-entropy With* setters)
+	"nn.TruncNormalOption":            true, // functional-option type (shown via WithTruncMean/WithTruncStd/WithTruncBounds)
+	"nn.OrthogonalOption":             true, // functional-option type (shown via WithOrthogonalGain)
+	"nn.ParamGroupsOption":            true, // functional-option type (shown via WithParamGroupsExpected in ExampleParamGroups)
+	"nn.StepLROption":                 true, // functional-option type (shown via WithStepLRGamma in ExampleLRScheduler_state)
+	"nn.CosineOption":                 true, // functional-option type (shown via WithCosineWarmup/WithCosineMinLR in ExampleLRScheduler)
+	"nn.PlateauOption":                true, // functional-option type (shown via WithPlateauFactor/Patience/MinLR in ExampleReduceLROnPlateau)
+	"nn.PlateauMode":                  true, // metric-direction enum (PlateauMin/PlateauMax, shown in ExampleReduceLROnPlateau)
 	"nn.LossScaler":                   true, // mixed-precision helper; shown in the AMP training tests
 	"nn.MixedPrecision":               true, // mixed-precision helper; shown in the AMP training tests
 	"format/gguf.QuantType":           true, // enum; shown via QMatMul usage

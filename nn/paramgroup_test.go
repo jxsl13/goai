@@ -591,3 +591,122 @@ func ExampleParamGroups() {
 	// decayed: 2 undecayed: 2
 	// covered: 4
 }
+
+// Reaching through to a single group mid-run: the decayed matrices get their
+// rate cut while the bias/norm group is left alone. This is what Group is for —
+// ParamGroups never rebinds an optimizer, so retuning means asking a group for
+// its optimizer and writing the field.
+func ExampleParamGroups_group() {
+	params := []*tensor.Tensor{
+		tensor.New(tensor.F64, tensor.Shape{4, 3}), // weight
+		tensor.New(tensor.F64, tensor.Shape{3}),    // bias
+	}
+	noDecay, decay := nn.SplitParams(params, nn.IsBiasOrNorm)
+
+	opt, err := nn.NewParamGroups([]nn.ParamGroup{
+		{Opt: nn.NewAdamW(decay, 1e-3, 0.1)},
+		{Opt: nn.NewAdamW(noDecay, 1e-3, 0)},
+	}, nn.WithParamGroupsExpected(params))
+	if err != nil {
+		panic(err)
+	}
+
+	// Halve only the matrix group's rate — e.g. a hand-rolled warmup that must
+	// not touch the (already tiny) bias group.
+	if a, ok := opt.Group(0).Opt.(*nn.Adam); ok {
+		a.LR /= 2
+	}
+
+	for i := range opt.Len() {
+		a := opt.Group(i).Opt.(*nn.Adam)
+		fmt.Printf("group %d: %d param(s), lr=%g, wd=%g\n", i, len(opt.Group(i).Params), a.LR, a.WeightDecay)
+	}
+
+	// Output:
+	// group 0: 1 param(s), lr=0.0005, wd=0.1
+	// group 1: 1 param(s), lr=0.001, wd=0
+}
+
+// Checkpointing a grouped optimizer. StatefulParamGroups is the variant that
+// VERIFIES every sub-optimizer can be checkpointed at construction, so a resume
+// cannot silently drop one group's momentum — the reason plain ParamGroups
+// deliberately does not implement nn.StatefulOptimizer.
+func ExampleStatefulParamGroups() {
+	build := func() (*nn.StatefulParamGroups, []*tensor.Tensor) {
+		params := []*tensor.Tensor{
+			tensor.New(tensor.F64, tensor.Shape{2, 2}),
+			tensor.New(tensor.F64, tensor.Shape{2}),
+		}
+		noDecay, decay := nn.SplitParams(params, nn.IsBiasOrNorm)
+		pg, err := nn.NewStatefulParamGroups([]nn.ParamGroup{
+			{Opt: nn.NewAdamW(decay, 0.1, 0.01)},
+			{Opt: nn.NewAdamW(noDecay, 0.1, 0)},
+		}, nn.WithParamGroupsExpected(params))
+		if err != nil {
+			panic(err)
+		}
+		return pg, params
+	}
+
+	// A constant gradient everywhere, at a magnitude we control per step.
+	var mag float64
+	grad := func(p *tensor.Tensor) *tensor.Tensor {
+		g := tensor.New(p.Dtype(), p.Shape())
+		for i := range g.Numel() {
+			g.SetF64(mag, tensor.Unravel(i, g.Shape())...)
+		}
+		return g
+	}
+
+	// Run A: three steps on a calm gradient, then snapshot. It IS a
+	// StatefulOptimizer, so the whole grouping round-trips as one map
+	// (nn.SaveOptimizerState writes exactly this to disk next to the weights).
+	warm, wp := build()
+	mag = 1
+	for range 3 {
+		if err := warm.Step(grad); err != nil {
+			panic(err)
+		}
+	}
+	var so nn.StatefulOptimizer = warm
+	ckpt := so.State()
+
+	// Run B: two fresh groupings. Both get the weights back (that is the MODEL
+	// checkpoint's job), but only one gets the optimizer state back.
+	resumed, rp := build()
+	cold, cp := build()
+	for i := range wp {
+		for j := range wp[i].Numel() {
+			ix := tensor.Unravel(j, wp[i].Shape())
+			rp[i].SetF64(wp[i].AtF64(ix...), ix...)
+			cp[i].SetF64(wp[i].AtF64(ix...), ix...)
+		}
+	}
+	if err := resumed.LoadState(ckpt); err != nil {
+		panic(err)
+	}
+
+	// Now a gradient SPIKE. Adam divides by its running gradient magnitude, so
+	// the warm and resumed runs — which remember three calm steps — read the
+	// spike as an outlier and DAMP it. The cold run has no history, so the spike
+	// is the whole world to it and it takes the full ±lr step. That gap is the
+	// momentum a resume without the optimizer checkpoint silently throws away.
+	mag = 8
+	delta := func(pg *nn.StatefulParamGroups, p *tensor.Tensor) float64 {
+		before := p.AtF64(0, 0)
+		if err := pg.Step(grad); err != nil {
+			panic(err)
+		}
+		return p.AtF64(0, 0) - before
+	}
+	fmt.Println("groups checkpointed:", ckpt["group_count"].AtF64(0))
+	fmt.Printf("warm    step 4: %.4f\n", delta(warm, wp[0]))
+	fmt.Printf("resumed step 4: %.4f\n", delta(resumed, rp[0]))
+	fmt.Printf("cold    step 1: %.4f\n", delta(cold, cp[0]))
+
+	// Output:
+	// groups checkpointed: 2
+	// warm    step 4: -0.0738
+	// resumed step 4: -0.0738
+	// cold    step 1: -0.0997
+}

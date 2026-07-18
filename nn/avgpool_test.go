@@ -1,6 +1,7 @@
 package nn_test
 
 import (
+	"fmt"
 	"math"
 	"testing"
 
@@ -165,7 +166,7 @@ func TestAvgPool2DBatchAndChannelsIndependent(t *testing.T) {
 // Every backend must agree bit-for-bit with the cpu path (§V3/§V11 tol 0).
 func TestAvgPool2DBackendParity(t *testing.T) {
 	ctxs := avgPoolContexts(t)
-	cpu, ok := ctxs[string(backend.CPU)]
+	cpu, ok := ctxs["cpu"]
 	if !ok {
 		t.Skip("no cpu backend to use as reference")
 	}
@@ -176,7 +177,7 @@ func TestAvgPool2DBackendParity(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, ctx := range ctxs {
-		if name == string(backend.CPU) {
+		if name == "cpu" {
 			continue
 		}
 		t.Run(name, func(t *testing.T) {
@@ -229,3 +230,37 @@ func TestAvgPool2DValidation(t *testing.T) {
 
 // AvgPool2D satisfies the nn.Layer interface.
 var _ nn.Layer = (*nn.AvgPool2D)(nil)
+
+// Window-mean downsampling over NCHW. Reach for AvgPool2D over MaxPool2D when
+// every input in the window should influence the output — it keeps gradients
+// flowing to all k² taps instead of routing them to a single argmax, which is
+// why it is the standard head pooling in ResNet-style classifiers.
+func ExampleAvgPool2D() {
+	pool := &nn.AvgPool2D{Kernel: 2} // Stride 0 → Kernel: non-overlapping windows
+
+	// One 4×4 feature map. The top-left window averages to 3.5, and the bottom
+	// row is deliberately spiky so the contrast with max-pooling is visible.
+	x := tensor.FromFloat64(tensor.Shape{1, 1, 4, 4}, []float64{
+		1, 2, 3, 4,
+		5, 6, 7, 8,
+		9, 0, 0, 0,
+		0, 0, 0, 16,
+	})
+	y, err := pool.Forward(backend.NewContext(), x)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println("shape:", y.Shape()) // (in − Kernel)/Stride + 1 per spatial dim
+	for i := range 2 {
+		fmt.Printf("%.2f %.2f\n", y.AtF64(0, 0, i, 0), y.AtF64(0, 0, i, 1))
+	}
+
+	// The lone 16 is diluted to its window mean of 4 — averaging, not detecting.
+	fmt.Println("params:", pool.Params())
+
+	// Output:
+	// shape: (1, 1, 2, 2)
+	// 3.50 5.50
+	// 2.25 4.00
+	// params: []
+}
