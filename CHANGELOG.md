@@ -4,6 +4,77 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — streaming and self-extend silently dropped every per-architecture hook (B75/T858, 2026-07-18)
+
+`StreamStep` and `SelfExtendForward` each reimplemented the Llama block body and dropped
+ALL SIX per-architecture hooks the normal decode path applies: Granite's EmbeddingMult,
+AttentionMult, ResidualMult and LogitsScale, Qwen2's q/k/v biases, and Qwen3's QK-norm. The
+omission was total, not partial. Reachability is direct: `Qwen2FromGGUF`, `Qwen3FromGGUF`
+and `GraniteFromGGUF` all return `*Llama`, and `StreamGenerate` is a method on `*Llama` —
+so streaming a Qwen2, Qwen3 or Granite model produced different logits than the
+non-streaming path on the same model and prompt, with no error. Measured divergence reached
+1.2 in a logit and flipped actual emitted tokens, not just floats.
+
+The root cause is duplicated decode logic that drifted, so the fix unifies rather than
+copies: a shared block stack with a pluggable attention core — genuinely the only thing
+that differed — now backs `DecodeStep`, `StreamStep` and `SelfExtendForward`. That takes
+the block body from four copies to two, and routing `DecodeStep` through it too means the
+shared code is covered by the whole existing decode suite rather than only by new tests.
+The remaining copy (`hiddenFromEmbedTaps`, which carries the KV/residual capture taps) is
+documented as a known limit and pinned by the parity tests rather than by construction.
+
+The equivalence test is the real deliverable, since it is what would have caught this: it
+asserts streaming and non-streaming agree token-for-token across Qwen2-, Qwen3- and
+Granite-shaped configs with NONZERO values for every feature (§B68 — a zero bias is
+invisible). Four of five subtests fail against the old code while the `llama_plain` control
+passes in both, so the failures are provably the dropped features and not a broken harness.
+
+`SelfExtendGenerate` also capped at `Config.Ctx`, silently returning zero tokens for a
+request past the limit while its godoc promised generation "far beyond its training
+length". The cap was enforced at two levels, and grouping only reaches ~G·Ctx, so the raw
+cap is replaced by the grouped bound and an over-long request now errors with the numbers
+instead of returning nothing. G=1 reduces exactly to the old threshold.
+
+`Gemma2FromHF` additionally now clamps Ctx to the sliding window as the GGUF loader
+already did; Gemma2 implements full attention only, so past token 4096 every SWA layer was
+attending the full prefix.
+
+### nlp — MinP>1 emitted a fixed token forever; U+2581 corrupted special tokens (B73/B74/T857, 2026-07-18)
+
+**B73.** `MinP > 1` made `thresh = MinP·pmax` exceed `pmax`, so every token including the
+arg-max was zeroed, `ksum` stayed 0, and the normalize produced an all-NaN distribution.
+`Sample`'s `u <= cum` is never true against NaN, so it fell through to `len(probs)-1` and
+emitted the LAST vocabulary id on every step, deterministically. `WithMinP(5)` — confusing
+min-p with a percentage — was silently accepted. The sibling `truncateAbove` already
+guarded both cases, so min-p now delegates to a shared core rather than hand-rolling the
+loop, and both guards live in one place. The comment claiming "the top token always
+survives" was false as written and is corrected.
+
+Out-of-range knob values are now REJECTED at construction rather than clamped: every such
+value is a typo no correct program wants, and clamping substitutes a setting nobody asked
+for. This matches the 29 existing constructor panics in `nn`/`nlp` (e.g. `cutmix` alpha).
+Documented special values (`TopP==1`, `Typical==1`, `Temperature<=0`) stay legal and are
+pinned by a test. A zero-value `Sampler` no longer nil-derefs: `rng` initialises lazily
+rather than panicking, since a sampler that samples beats one that crashes, and a fixed
+seed would make every struct-literal sampler in a process share a stream.
+
+**B74.** SentencePiece is lossy for a literal `▁` by design — the `nmt_nfkc` normalizer
+maps U+2581 to a space outright, and HF and llama.cpp both do the same unconditional
+replace on decode. So no escape was invented; inventing one would make GoAI disagree with
+all three about what `"a▁b"` tokenizes to. The loss is now DETECTABLE via
+`ContainsSpaceMeta`, and the `Unigram` doc's insufficient losslessness condition is
+corrected to require both vocabulary coverage and no literal `▁`.
+
+The genuinely fixable half was worse than reported: the blanket `▁`→space replacement ran
+over the JOINED pieces, so it corrupted special tokens themselves —
+`Decode(EncodeSpecial("<｜begin▁of▁sentence｜>"))` returned `"<｜begin of sentence｜>"`.
+`Decode` now switches per piece on token kind, a faithful port of llama.cpp's
+`token_to_piece`: BYTE raw, UNKNOWN/CONTROL/USER_DEFINED verbatim, NORMAL unescaped.
+
+Also routed the three remaining direct `s.rng` reads (`speculative.go`, `promptlookup.go`,
+`xtc.go`) through the lazy accessor, so a struct-literal `Sampler` is safe on every path,
+not just the ones the fix originally covered.
+
 ### nlp — the Granite quant test could not see a dropped LogitsScale (T856, 2026-07-18)
 
 `TestQuantGraniteCosineVsFloat` gated on cosine similarity alone while its doc comment

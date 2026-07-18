@@ -103,7 +103,7 @@ func PromptLookupDecode(model *GPT, prompt []int, maxNew, maxNgram, draftLen int
 			}
 			qs[i] = q
 		}
-		acc := SpeculativeRun(ps, qs, toks, s.rng)
+		acc := SpeculativeRun(ps, qs, toks, s.source())
 		stats.Proposed += k
 		stats.Accepted += len(acc) - 1 // last token is the residual/bonus, not a draft accept
 		for _, t := range acc {

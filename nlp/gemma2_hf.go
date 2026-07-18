@@ -121,5 +121,20 @@ func Gemma2FromHF(ts map[string]*tensor.Tensor, cfg Gemma2Config) (*Gemma2, erro
 		return nil, fmt.Errorf("nlp: HF Gemma2 missing model.norm.weight")
 	}
 	m.FinalNorm = gemmaRMS(norm, cfg.Eps)
+	// Sliding-window clamp, mirroring [Gemma2FromGGUF] (which sets
+	// Ctx = min(context_length, sliding_window)). Real Gemma 2 alternates sliding-window
+	// and full-attention layers; GoAI's Gemma2 implements FULL attention only, and the
+	// two graphs coincide exactly only while seq ≤ window. Without this clamp an
+	// HF-loaded model would accept prompts past the window and every SWA layer would
+	// silently attend the whole prefix — wrong logits, plausible text, no error.
+	//
+	// The asymmetry to keep in mind when editing either loader: the GGUF path reads the
+	// window from gemma2.attention.sliding_window and falls back to 4096, while
+	// Gemma2Config carries no window field, so the HF path can only apply the same 4096
+	// default. Every released Gemma 2 uses 4096; a checkpoint that does not would need
+	// the field added to Gemma2Config and both loaders updated together.
+	if gemma2DefaultSWA > 0 && gemma2DefaultSWA < m.Config.Ctx {
+		m.Config.Ctx = gemma2DefaultSWA
+	}
 	return m, nil
 }

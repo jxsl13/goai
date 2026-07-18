@@ -1,6 +1,7 @@
 package nlp
 
 import (
+	"fmt"
 	"math"
 	"math/rand/v2"
 	"slices"
@@ -23,7 +24,35 @@ import (
 // adaptive threshold that tightens when the model is confident. epsilon and eta
 // sampling follow Hewitt et al. 2022 (§R91): an absolute floor, and an
 // entropy-adaptive floor min(ε, √ε·exp(−H)). Kept probabilities are renormalized
-// before sampling, and the arg-max token always survives every filter.
+// before sampling.
+//
+// Every filter here EXCEPT locally-typical keeps the arg-max, so the distribution is
+// never left empty: top-nσ, top-k and top-p keep it structurally, and the probability
+// floors (min-p, epsilon, eta) are exempted from their own threshold in
+// truncateAboveKeeping — enforced there rather than assumed, because min-p once
+// skipped that guard and normalized an all-zero vector into NaN (§B73). Typical is the
+// deliberate exception: trimming the too-predictable is the point of the method, so at
+// a small τ it CAN zero the most probable token. It still always keeps at least one.
+//
+// # Building one
+//
+// [NewSampler] is the intended constructor: it seeds the RNG reproducibly and
+// validates every knob, rejecting out-of-range values loudly (see [SamplerOption]).
+// Because all knobs are exported fields, a struct literal also compiles:
+//
+//	s := &nlp.Sampler{Temperature: 0.8, TopK: 40, TopP: 0.9}
+//
+// That is supported, with two caveats worth knowing. Its RNG is seeded lazily from
+// the process-global source on the first draw, so the sampler is random but NOT
+// reproducible — pass a seed to [NewSampler] if you need a repeatable run. And no
+// option ran, so nothing validated the fields; a value outside a knob's domain is
+// simply used as given. The truncation filters are individually total (no field
+// value can produce a NaN distribution), but they cannot tell you that MinP: 5 was
+// meant to be 0.05.
+//
+// Note the zero value samples GREEDILY: Temperature defaults to 0 in a struct
+// literal, and Temperature ≤ 0 short-circuits to the arg-max, ignoring TopK/TopP/
+// MinP entirely. [NewSampler] defaults Temperature to 1 for that reason.
 type Sampler struct {
 	Temperature float64 // softmax temperature; <1 sharper, >1 flatter (default 1)
 	TopK        int     // keep the K highest-prob tokens; 0 = off
@@ -31,7 +60,7 @@ type Sampler struct {
 	MinP        float64 // keep tokens with prob ≥ MinP·maxProb; 0 = off
 	Epsilon     float64 // epsilon sampling: keep tokens with prob ≥ Epsilon; 0 = off
 	Eta         float64 // eta sampling: keep tokens with prob ≥ min(Eta, √Eta·exp(−H)); 0 = off
-	Typical     float64 // locally typical: keep tokens whose surprisal is nearest the entropy until cum-prob ≥ τ; 0/≥1 = off
+	Typical     float64 // locally typical: keep tokens whose surprisal is nearest the entropy until cum-prob ≥ τ; 0/1 = off
 	TopNSigma   float64 // top-nσ: keep tokens with logit ≥ max − n·σ (Tang et al. 2024, see sample_topnsigma.go); ≤0 = off
 
 	// Repetition penalties (applied by SampleWithHistory over the recent history).
@@ -76,7 +105,39 @@ var (
 )
 
 // SamplerOption configures a Sampler via the functional-options idiom (§C12).
+//
+// Out-of-range values are REJECTED, not clamped: an option given a value outside its
+// knob's domain panics from NewSampler with a message naming the knob and the value.
+// The rationale is that every such value is a typo no correct program can want —
+// WithMinP(5) is min-p confused with a percentage, WithTopK(-5) is not a token count
+// — and the alternatives are both worse. Clamping silently substitutes a setting the
+// caller never asked for; leaving it alone is how WithMinP(5) came to emit the last
+// vocabulary id on every step in the first place (§B73). Panicking fires at
+// construction, once, on the first run, before a single token is generated.
+//
+// Documented SPECIAL VALUES are not out of range and never panic: 0 disables every
+// truncation filter, TopP == 1 and Typical == 1 are the "keep everything" idiom, and
+// Temperature ≤ 0 selects greedy decoding. Only genuinely undefined values — a
+// probability above 1 or below 0, NaN, a negative count — are rejected.
 type SamplerOption func(*Sampler)
+
+// unitRange panics unless v is a probability in [0,1]. Written as a negated
+// conjunction so NaN, which compares false against everything, is rejected too.
+func unitRange(knob string, v float64) float64 {
+	if !(v >= 0 && v <= 1) {
+		panic(fmt.Sprintf("nlp: %s(%v) out of range [0,1] — sampler probabilities are "+
+			"fractions, not percentages (min-p 0.05, not 5; top-p 0.9, not 90)", knob, v))
+	}
+	return v
+}
+
+// nonNegative panics unless v is a usable token count (0 = disabled).
+func nonNegative(knob string, v int) int {
+	if v < 0 {
+		panic(fmt.Sprintf("nlp: %s(%d) is negative — pass a token count, or 0 to disable", knob, v))
+	}
+	return v
+}
 
 // WithTemperature sets the softmax temperature — the single knob that trades safety
 // for creativity.
@@ -87,10 +148,18 @@ type SamplerOption func(*Sampler)
 //
 // Professional: logits are divided by t before the softmax, so t scales the entropy of
 // the sampled distribution. Boundary behavior — as t→0⁺ the distribution collapses onto
-// the argmax (this implementation treats t ≤ 0 as an explicit greedy short-circuit, a
-// SPECIAL VALUE: no RNG draw, TopK/TopP/MinP ignored); as t grows the distribution
-// flattens toward uniform and coherence degrades, with runaway incoherence typically past
-// t≈1.5. t = 1 leaves the model's own trained distribution unchanged.
+// the argmax; as t grows the distribution flattens toward uniform and coherence degrades,
+// with runaway incoherence typically past t≈1.5. t = 1 leaves the model's own trained
+// distribution unchanged.
+//
+// SPECIAL VALUE: t ≤ 0 is an explicit greedy short-circuit — no RNG draw, and every
+// truncation knob is IGNORED. This is the one knob whose out-of-range values are kept
+// rather than rejected (t = −0.5 means greedy, not an error), because greedy is the
+// mathematical limit of t → 0⁺ and callers rely on it. The cost is that a sampler
+// configured `WithTemperature(0), WithTopK(40), WithMinP(0.05)` silently discards the
+// truncation: it is greedy, and the two filters do nothing. If you want truncated
+// sampling, t must be > 0. Repetition penalties still apply either way — they act on
+// the logits before the greedy/temperature split.
 //
 // Default 1 (research-grounded): 1 is the identity — it reproduces the distribution the
 // model was trained to emit under maximum-likelihood, so out of the box the sampler adds
@@ -117,7 +186,12 @@ func WithTemperature(t float64) SamplerOption { return func(s *Sampler) { s.Temp
 // default (llama.cpp ships top_k=40 but the nucleus/min-p line of work — Holtzman 2019,
 // Nguyen 2024 — shows shape-adaptive cutoffs dominate a fixed count, so GoAI keeps it off
 // and lets WithMinP carry the truncation). Set k≈40 only to emulate the classic pipeline.
-func WithTopK(k int) SamplerOption { return func(s *Sampler) { s.TopK = k } }
+//
+// PANICS on a negative k (not a token count under any reading; see [SamplerOption]).
+// k ≥ the vocabulary size is legal and simply keeps everything.
+func WithTopK(k int) SamplerOption {
+	return func(s *Sampler) { s.TopK = nonNegative("WithTopK", k) }
+}
 
 // WithTopP keeps the smallest set of most-probable tokens whose probabilities sum to at
 // least p (nucleus sampling), zeroing the rest.
@@ -128,14 +202,19 @@ func WithTopK(k int) SamplerOption { return func(s *Sampler) { s.TopK = k } }
 //
 // Professional: nucleus sampling (Holtzman et al. 2019 arXiv:1904.09751, §R34). The cutoff is
 // distribution-adaptive, unlike top-k. Boundary behavior — as p → 0⁺ only the single most
-// probable token survives (greedy-like); p ≥ 1 keeps everything (disabled). SPECIAL VALUES:
-// 0 or ≥1 disable the filter.
+// probable token survives (greedy-like); p = 1 keeps everything (disabled). SPECIAL VALUES:
+// 0 or 1 disable the filter.
+//
+// PANICS on p outside [0,1] — WithTopP(90) is p expressed as a percentage, which would
+// otherwise silently disable nucleus sampling altogether (see [SamplerOption]).
 //
 // Default 0 = DISABLED, research-grounded: GoAI's zero-config default truncates via min-p
 // (WithMinP), which Nguyen et al. 2024 (§R63) show is more robust than nucleus at higher
 // temperatures; enable nucleus explicitly at p≈0.9–0.95 (Holtzman's reported sweet spot,
 // also Hugging Face's default when nucleus is used) to match the conventional pipeline.
-func WithTopP(p float64) SamplerOption { return func(s *Sampler) { s.TopP = p } }
+func WithTopP(p float64) SamplerOption {
+	return func(s *Sampler) { s.TopP = unitRange("WithTopP", p) }
+}
 
 // WithMinP keeps tokens whose probability is at least p times the single most probable
 // token's probability, zeroing the rest.
@@ -147,14 +226,25 @@ func WithTopP(p float64) SamplerOption { return func(s *Sampler) { s.TopP = p } 
 // Professional: min-p sampling (Nguyen et al. 2024, "Turning Up the Heat", §R63). The
 // relative cutoff p·maxProb makes it more temperature-robust than nucleus: raising
 // temperature flattens the distribution but the cutoff tracks the peak, so quality holds
-// at higher t. Boundary behavior — as p → 0⁺ nothing is filtered; as p → 1 only tokens
-// essentially tied with the top token survive (greedy-like). SPECIAL VALUE: 0 disables it.
+// at higher t. Boundary behavior — as p → 0⁺ nothing is filtered; at p = 1 the cutoff
+// equals the peak itself, so only tokens exactly tied with the top token survive
+// (greedy, or a uniform draw among the tied leaders on a flat distribution). The
+// arg-max is exempt from the cutoff and therefore survives at EVERY p, which is what
+// keeps the distribution normalizable. SPECIAL VALUE: 0 disables it.
+//
+// PANICS on p outside [0,1]. min-p is a FRACTION of the top token's probability, so
+// WithMinP(5) is the percentage mistake, not a stricter filter; before §B73 it drove the
+// threshold above the peak, zeroed every token including the arg-max, and normalized an
+// all-zero vector into NaN — after which the sampler emitted the last vocabulary id, in
+// silence, on every step. See [SamplerOption].
 //
 // Default 0 = DISABLED (a bare NewSampler samples untruncated at t=1); the RECOMMENDED
 // enabled value is 0.05–0.1 — Nguyen et al. 2024 report 0.05–0.1 as the quality sweet spot
 // across tasks, and llama.cpp defaults min_p to 0.05. This is GoAI's suggested single
 // truncation knob: NewSampler(seed, WithMinP(0.05)) is a strong general-purpose setup.
-func WithMinP(p float64) SamplerOption { return func(s *Sampler) { s.MinP = p } }
+func WithMinP(p float64) SamplerOption {
+	return func(s *Sampler) { s.MinP = unitRange("WithMinP", p) }
+}
 
 // WithEpsilon enables epsilon sampling (Hewitt et al. 2022, §R91).
 //
@@ -167,7 +257,12 @@ func WithMinP(p float64) SamplerOption { return func(s *Sampler) { s.MinP = p } 
 //
 // Default 0 = DISABLED, research-grounded: epsilon/eta are specialist desmoothing filters,
 // off by default; Hewitt et al. 2022 suggest eps≈3e-4–2e-3 when enabled.
-func WithEpsilon(eps float64) SamplerOption { return func(s *Sampler) { s.Epsilon = eps } }
+//
+// PANICS on eps outside [0,1] (a probability floor above 1 is unsatisfiable; see
+// [SamplerOption]). An eps above the peak leaves only the arg-max, which is exempt.
+func WithEpsilon(eps float64) SamplerOption {
+	return func(s *Sampler) { s.Epsilon = unitRange("WithEpsilon", eps) }
+}
 
 // WithEta enables eta sampling (Hewitt et al. 2022, §R91).
 //
@@ -181,7 +276,11 @@ func WithEpsilon(eps float64) SamplerOption { return func(s *Sampler) { s.Epsilo
 //
 // Default 0 = DISABLED, research-grounded: off by default; Hewitt et al. 2022 report
 // eps≈9e-4 as a good working value (their desmoothing framework, §R91).
-func WithEta(eps float64) SamplerOption { return func(s *Sampler) { s.Eta = eps } }
+//
+// PANICS on eps outside [0,1] (see [SamplerOption]).
+func WithEta(eps float64) SamplerOption {
+	return func(s *Sampler) { s.Eta = unitRange("WithEta", eps) }
+}
 
 // WithTypical enables locally typical sampling (Meister, Pimentel, Wiher & Cotterell 2023,
 // §R154).
@@ -193,11 +292,16 @@ func WithEta(eps float64) SamplerOption { return func(s *Sampler) { s.Eta = eps 
 // to the distribution's entropy H(p) until their cumulative probability reaches τ, trimming
 // both the too-predictable and the too-surprising. Boundary behavior — small τ keeps only a
 // few most-typical tokens (conservative); τ near 1 keeps almost everything. SPECIAL VALUES:
-// 0 or ≥1 disable it.
+// 0 or 1 disable it.
 //
 // Default 0 = DISABLED, research-grounded: off by default; Meister et al. 2023 use τ≈0.9–0.95
 // (also Hugging Face's TypicalLogitsWarper default 0.9).
-func WithTypical(tau float64) SamplerOption { return func(s *Sampler) { s.Typical = tau } }
+//
+// PANICS on τ outside [0,1] (see [SamplerOption]); τ = 1 stays the documented
+// "keep everything" idiom.
+func WithTypical(tau float64) SamplerOption {
+	return func(s *Sampler) { s.Typical = unitRange("WithTypical", tau) }
+}
 
 // WithRepeatPenalty enables the CTRL repetition penalty (Keskar et al. 2019, §R57).
 //
@@ -346,8 +450,9 @@ func WithDRYBreakers(ids ...int) SamplerOption {
 //
 // Default 0 = DISABLED, research-grounded: off by default; the community-typical firing
 // probability when enabled is 0.5 (koboldcpp/llama.cpp xtc_probability).
+// PANICS on a probability outside [0,1] (see [SamplerOption]).
 func WithXTC(probability float64) SamplerOption {
-	return func(s *Sampler) { s.XTCProbability = probability }
+	return func(s *Sampler) { s.XTCProbability = unitRange("WithXTC", probability) }
 }
 
 // WithXTCThreshold sets the probability a token needs to count as a "top choice" for XTC.
@@ -362,13 +467,25 @@ func WithXTC(probability float64) SamplerOption {
 //
 // Default 0 (with XTC off); the recommended enabled value is 0.1 (koboldcpp/llama.cpp
 // xtc_threshold) — research-grounded as the reference default.
+//
+// PANICS on t outside [0,1] (see [SamplerOption]); t > 0.5 remains the documented
+// self-disabling range, not an error.
 func WithXTCThreshold(t float64) SamplerOption {
-	return func(s *Sampler) { s.XTCThreshold = t }
+	return func(s *Sampler) { s.XTCThreshold = unitRange("WithXTCThreshold", t) }
 }
 
 // NewSampler builds a deterministic sampler seeded by seed. Defaults: temperature
 // 1, no top-k / top-p / min-p — configure with the options, e.g.
 // NewSampler(seed, WithTemperature(0.8), WithTopP(0.95)).
+//
+// The same seed always yields the same token sequence for the same logits, which is
+// what makes generations reproducible; build a Sampler as a struct literal instead
+// and you get a lazily seeded, non-reproducible RNG (see [Sampler]).
+//
+// It PANICS if any option carries an out-of-range value — WithMinP(5), WithTopP(90),
+// WithTopK(-5). That is deliberate: those are typos, and the failure they used to
+// cause was silent (§B73). [SamplerOption] documents the policy and the special
+// values that are explicitly NOT errors.
 func NewSampler(seed uint64, opts ...SamplerOption) *Sampler {
 	s := &Sampler{Temperature: 1, rng: rand.New(rand.NewPCG(seed, 0x5a3d))}
 	for _, o := range opts {
@@ -698,13 +815,19 @@ func typicalTruncate(probs []float64, tau float64) {
 }
 
 // Sample returns a token id for the given logits.
+//
+// Temperature ≤ 0 short-circuits to the arg-max without drawing from the RNG;
+// otherwise the id is drawn from [Sampler.Dist] (after XTC, which acts on the draw
+// only). A [Sampler] built as a struct literal rather than by [NewSampler] gets its
+// RNG seeded lazily here — see the Sampler type doc for what that costs you.
 func (s *Sampler) Sample(logits []float64) int {
 	if s.Temperature <= 0 {
 		return argmax(logits) // greedy: deterministic, no rng draw
 	}
+	rng := s.source() // materialize BEFORE applyXTC, which draws from it too
 	probs := s.Dist(logits)
 	s.applyXTC(probs) // §T574: after truncation, before the draw; Dist stays pure
-	u := s.rng.Float64()
+	u := rng.Float64()
 	var cum float64
 	for i, p := range probs {
 		cum += p
@@ -712,7 +835,32 @@ func (s *Sampler) Sample(logits []float64) int {
 			return i
 		}
 	}
-	return len(probs) - 1
+	// Fall-through. For a well-formed distribution this is reachable only by
+	// floating-point rounding — the accumulated cum can land a few ulps below a u
+	// very close to 1 — so the answer is the last token whose cumulative interval
+	// really does contain 1: the last one with NON-ZERO probability. Returning a bare
+	// len(probs)−1 instead would emit the last vocabulary id, which after any
+	// truncation filter is almost always a masked, zero-probability token (§B73).
+	for i := len(probs) - 1; i >= 0; i-- {
+		if probs[i] > 0 {
+			return i
+		}
+	}
+	return argmax(probs) // degenerate input (empty or no positive mass)
+}
+
+// source returns the sampler's RNG, seeding it on first use when the Sampler was
+// built as a struct literal instead of by NewSampler/Greedy (rng is unexported, so a
+// literal leaves it nil and every knob-setting field is exported, which invites
+// exactly that). Lazy seeding is preferred over panicking: a nil RNG is not a caller
+// error the caller can even see, and a Sampler that samples is strictly more useful
+// than one that crashes. The seed is drawn from the process-global source, so such a
+// sampler is random-but-unreproducible; NewSampler(seed, …) is the reproducible path.
+func (s *Sampler) source() *rand.Rand {
+	if s.rng == nil {
+		s.rng = rand.New(rand.NewPCG(rand.Uint64(), rand.Uint64()))
+	}
+	return s.rng
 }
 
 // penalize returns the logits with the repetition penalties applied over the recent
@@ -825,26 +973,14 @@ func (s *Sampler) Dist(logits []float64) []float64 {
 	}
 
 	// min-p: keep tokens with prob ≥ MinP·max-prob (Nguyen et al. 2024, §R63), an
-	// adaptive threshold — the top token always survives — then renormalize.
-	if s.MinP > 0 {
-		var pmax float64
-		for _, p := range probs {
-			if p > pmax {
-				pmax = p
-			}
-		}
-		thresh := s.MinP * pmax
-		var ksum float64
-		for i := range probs {
-			if probs[i] < thresh {
-				probs[i] = 0
-			} else {
-				ksum += probs[i]
-			}
-		}
-		for i := range probs {
-			probs[i] /= ksum
-		}
+	// adaptive threshold. It is truncateAbove with a peak-relative floor, so it
+	// inherits the same min_tokens_to_keep=1 guard: at MinP ≤ 1 the threshold is at
+	// most the peak and the arg-max clears it on its own, while at MinP > 1 the
+	// explicit guard is what keeps the distribution a valid one-hot instead of an
+	// all-zero vector normalized into NaN (§B73).
+	if s.MinP > 0 && len(probs) > 0 { // len guard: probs[top] on an empty vocab
+		top := argmax(probs)
+		truncateAboveKeeping(probs, s.MinP*probs[top], top)
 	}
 
 	// locally typical sampling (Meister et al. 2023): keep the smallest set of tokens
@@ -876,7 +1012,28 @@ func (s *Sampler) Dist(logits []float64) []float64 {
 // truncateAbove zeroes every probability below thresh, always keeping the arg-max so
 // at least one token survives (min_tokens_to_keep=1), then renormalizes.
 func truncateAbove(probs []float64, thresh float64) {
-	top := argmax(probs)
+	truncateAboveKeeping(probs, thresh, argmax(probs))
+}
+
+// truncateAboveKeeping is truncateAbove with the survivor index supplied by the
+// caller, for filters that already had to locate the peak (min-p). It is the single
+// place the two guards every probability-floor filter needs actually live:
+//
+//   - i != top — the arg-max is exempt from the floor, so at least one token always
+//     survives however aggressive the threshold is (transformers' min_tokens_to_keep=1).
+//     A threshold above the peak — MinP > 1, Epsilon > maxProb — would otherwise zero
+//     the entire vector.
+//   - ksum == 0 — never divide by a zero normalizer. Unreachable while top survives
+//     with probs[top] > 0, and cheap insurance for an already-degenerate input (an
+//     all-zero or NaN-laden distribution handed in by an earlier filter).
+//
+// Skipping either one produces silent wrongness rather than a crash: probs becomes
+// all-NaN, every `u <= cum` comparison in Sample is false against NaN, and the draw
+// falls through to a fixed token id on every step (§B73).
+func truncateAboveKeeping(probs []float64, thresh float64, top int) {
+	if top < 0 || top >= len(probs) {
+		return
+	}
 	var ksum float64
 	for i := range probs {
 		if probs[i] < thresh && i != top {
