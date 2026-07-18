@@ -9,12 +9,13 @@
 // a loss, Backward, then optimizer.Step(tape.Grad). The catalogue, grouped —
 // every algorithm carries its paper citation (§R) in its own doc comment:
 //
-//   - Core layers & init: Linear, Conv2D/MaxPool2D (NCHW, fused conv backward),
+//   - Core layers & init: Linear, Conv2D/MaxPool2D/AvgPool2D (NCHW, fused conv backward),
 //     Kolmogorov-Arnold (KAN) learnable-spline-edge layers,
 //     activations, LayerNorm/RMSNorm/GroupNorm,
 //     SwiGLU/GLU, dropout/droppath, spectral & weight norm, QK-norm, DyT,
 //     DeepNorm, sinusoidal, T5 relative, and contextual (CoPE, content-gated
-//     count) position encodings, Xavier/Kaiming
+//     count) position encodings, Xavier/Kaiming/truncated-normal (inverse-CDF,
+//     the ViT/DeiT default)/orthogonal (Householder-QR, Saxe et al.)
 //     init, and µP (Maximal Update Parametrization) scaling rules. Layers that
 //     behave differently at inference (dropout, droppath) implement the opt-in
 //     Mode interface; SetTrain walks a model built from Sequential (or anything

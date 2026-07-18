@@ -4,6 +4,37 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nn — truncated-normal / orthogonal init and AvgPool2D (T847, 2026-07-18)
+
+`TruncNormal` matches torch's `_no_grad_trunc_normal_` inverse-CDF method (not rejection
+sampling) — the ViT/DeiT default — and the godoc says so, including the consequence that
+the two methods share a distribution but not a sample sequence, so element-wise agreement
+with torch under a shared seed should not be expected. It is gated distributionally against
+analytic truncated-normal moments, with the reference itself first sanity-checked against
+the known ±2σ values. `Orthogonal` reuses the existing backward-stable Householder
+`linalg.QR` rather than adding a second QR, follows torch's non-square handling, and
+deviates from torch in one documented place: torch's `sign(0) = 0` would zero a Q column
+and silently break orthogonality, so zero maps to +1, making the `WᵀW ≈ I` guarantee
+unconditional (measured max deviation 8.88e-16 across square, tall, wide and conv-4D).
+
+Both initializers ship with a discriminator proving the gate can fail: an untruncated
+normal misses the containment window 935/20000 times and reports std 1.0053 against the
+truncated 0.8796; a random-normal matrix fails the orthogonality gate by ~13 orders of
+magnitude.
+
+`AvgPool2D` mirrors `MaxPool2D`. `backend.PoolAttrs` has no padding field, so rather than
+accept-and-ignore a `count_include_pad` or `padding` option — the exact footgun class this
+codebase has been closing — those options are omitted outright and the floor-mode
+consequence is documented: ragged edges are dropped and an input smaller than the kernel is
+an error, not a zero-padded window. A test pins that behaviour so it is a tripwire if
+padding is ever added to the backend op.
+
+Also adds a root-package `TestAvgPool2DAcceleratedBackends`. Package `nn` deliberately does
+not blank-import the accelerated backends (it would drag cgo into every nn test binary), so
+a plain `go test ./nn/` registers only cpu and ref and leaves the GPU kernels unexercised
+however green it looks. The root package already registers metal and vulkan, so the same
+assertion lives there too; verified identical on cpu, metal, ref and vulkan.
+
 ### nlp — recorded negative verdict: sampler full-vocab materialisation is noise (T846, 2026-07-18)
 
 `TokenSampler.Sample` takes a `[]float64`, so every decode step materialises the entire
