@@ -9,6 +9,7 @@ import "C"
 
 import (
 	"fmt"
+	"math"
 )
 
 // §ROADMAP FRONT B / B1 — paged KV cache (the PagedAttention SOSP'23 storage design), the
@@ -172,4 +173,65 @@ func (s *SeqKV) Release() {
 	}
 	s.table = nil
 	s.n = 0
+}
+
+// BatchedDecodeAttn runs single-query decode attention for a batch of sequences over this pool:
+// q is [batch, qHeads·hd] (one query token per sequence, row i for seqs[i]), returning
+// o[batch, qHeads·hd]. Each sequence attends over its own paged K/V via its block table — the
+// batched, paged decode kernel (FRONT B / B2) that makes continuous batching possible. hd==64.
+func (p *PagedKVPool) BatchedDecodeAttn(q *DeviceF32, seqs []*SeqKV, qHeads, kvHeads int) (*DeviceF32, error) {
+	batch := len(seqs)
+	if batch == 0 {
+		return nil, fmt.Errorf("cuda: BatchedDecodeAttn empty batch")
+	}
+	if q.rows != batch {
+		return nil, fmt.Errorf("cuda: BatchedDecodeAttn q rows %d != batch %d", q.rows, batch)
+	}
+	if qHeads <= 0 || kvHeads <= 0 || qHeads%kvHeads != 0 || q.cols%qHeads != 0 {
+		return nil, fmt.Errorf("cuda: BatchedDecodeAttn bad head config q=%d kv=%d width=%d", qHeads, kvHeads, q.cols)
+	}
+	hd := q.cols / qHeads
+	if hd != 64 {
+		return nil, fmt.Errorf("cuda: BatchedDecodeAttn requires hd==64 (got %d)", hd)
+	}
+	if kvHeads*hd != p.wkv {
+		return nil, fmt.Errorf("cuda: BatchedDecodeAttn kvHeads*hd=%d != pool wkv=%d", kvHeads*hd, p.wkv)
+	}
+	maxBlocks := 0
+	for _, s := range seqs {
+		if s.pool != p {
+			return nil, fmt.Errorf("cuda: BatchedDecodeAttn sequence not from this pool")
+		}
+		if len(s.table) > maxBlocks {
+			maxBlocks = len(s.table)
+		}
+	}
+	if maxBlocks == 0 {
+		return nil, fmt.Errorf("cuda: BatchedDecodeAttn all sequences empty")
+	}
+	bt := make([]int32, batch*maxBlocks)
+	sl := make([]int32, batch)
+	for i, s := range seqs {
+		copy(bt[i*maxBlocks:], s.table)
+		sl[i] = int32(s.n)
+	}
+	dbt := C.cu_upload_i32((*C.int)(&bt[0]), C.int(len(bt)))
+	dsl := C.cu_upload_i32((*C.int)(&sl[0]), C.int(len(sl)))
+	out := C.cu_alloc_f32(C.int(batch * q.cols))
+	if dbt == nil || dsl == nil || out == nil {
+		freeIf(dbt)
+		freeIf(dsl)
+		freeIf(out)
+		return nil, fmt.Errorf("cuda: BatchedDecodeAttn device alloc failed")
+	}
+	defer C.cu_free_f32(dbt)
+	defer C.cu_free_f32(dsl)
+	scale := float32(1.0 / math.Sqrt(float64(hd)))
+	rc := C.cu_paged_decode_attn(q.ptr, p.k.ptr, p.v.ptr, dbt, dsl, out,
+		C.int(batch), C.int(qHeads), C.int(kvHeads), C.int(hd), C.int(p.blockSize), C.int(maxBlocks), C.float(scale))
+	if rc != 0 {
+		C.cu_free_f32(out)
+		return nil, fmt.Errorf("cuda: BatchedDecodeAttn failed (code %d)", int(rc))
+	}
+	return &DeviceF32{ptr: out, rows: batch, cols: q.cols}, nil
 }

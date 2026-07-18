@@ -220,9 +220,64 @@ static int load_module_kernel(const void* image, const char* entry, CUfunction* 
 }
 
 static CUfunction gWmmaGemm = NULL; // nvcc-compiled WMMA GEMM (Tw-FLASHATTN slice 1)
+static CUfunction gPagedDecode = NULL; // paged batched decode attention (FRONT B / B2)
 static CUfunction gWmmaAttn = NULL; // nvcc-compiled fused prefill attention (slice 2)
 static CUfunction gWmmaAttnGqa = NULL; // GQA/strided fused prefill attention (§ROADMAP A2)
 static int launch_cvt_f16(const void* src, void* dst, long n); // fwd decl (defined below)
+
+// cu_paged_decode_attn: FRONT B / B2 — batched single-query decode attention over a PAGED KV
+// pool. One warp per (sequence, q-head); K/V for logical token j come from
+// pool[blockTable[j/blockSize]*blockSize + j%blockSize]. Online-softmax flash form, hd==64
+// (each lane owns dims lane and lane+32). Q,O:[batch,qHeads*hd] f32; poolK/V:[*,kvHeads*hd] f32;
+// blockTables:int32[batch*maxBlocks]; seqLens:int32[batch]. GQA via q-head->kv-head grouping.
+int cu_paged_decode_attn(const void* dQ, const void* dPoolK, const void* dPoolV,
+                         const void* dBlockTables, const void* dSeqLens, void* dO,
+                         int batch, int qHeads, int kvHeads, int hd, int blockSize, int maxBlocks,
+                         float scale) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto donepd; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto donepd; }
+    if (!gPagedDecode && compile_kernel(
+        "extern \"C\" __global__ void paged_decode(const float* Q, const float* poolK, const float* poolV,\n"
+        "    const int* blockTables, const int* seqLens, float* O,\n"
+        "    int batch, int qHeads, int kvHeads, int hd, int blockSize, int maxBlocks, float scale){\n"
+        "  int h = blockIdx.x, seq = blockIdx.y;\n"
+        "  int group = qHeads / kvHeads, kvh = h / group, WKV = kvHeads * hd;\n"
+        "  int n = seqLens[seq]; int lane = threadIdx.x;\n"
+        "  const float* q = Q + (size_t)seq*qHeads*hd + (size_t)h*hd;\n"
+        "  float q0 = q[lane], q1 = q[lane+32];\n"
+        "  const int* bt = blockTables + (size_t)seq*maxBlocks;\n"
+        "  float NEGINF = __int_as_float(0xff800000);\n"
+        "  float m = NEGINF, l = 0.f, a0 = 0.f, a1 = 0.f;\n"
+        "  for (int j = 0; j < n; j++){\n"
+        "    int phys = bt[j / blockSize] * blockSize + (j % blockSize);\n"
+        "    const float* kj = poolK + (size_t)phys*WKV + (size_t)kvh*hd;\n"
+        "    float d = q0*kj[lane] + q1*kj[lane+32];\n"
+        "    for (int o=16;o>0;o>>=1) d += __shfl_down_sync(0xffffffffu, d, o);\n"
+        "    d = __shfl_sync(0xffffffffu, d, 0) * scale;\n"
+        "    float newm = m > d ? m : d;\n"
+        "    float corr = __expf(m - newm), p = __expf(d - newm);\n"
+        "    l = l*corr + p; m = newm;\n"
+        "    const float* vj = poolV + (size_t)phys*WKV + (size_t)kvh*hd;\n"
+        "    a0 = a0*corr + p*vj[lane]; a1 = a1*corr + p*vj[lane+32];\n"
+        "  }\n"
+        "  float inv = (l > 0.f) ? 1.f/l : 0.f;\n"
+        "  float* o = O + (size_t)seq*qHeads*hd + (size_t)h*hd;\n"
+        "  o[lane] = a0*inv; o[lane+32] = a1*inv;\n"
+        "}\n",
+        "paged_decode.cu", "paged_decode", &gPagedDecode) != 0) { rc = -2; goto donepd; }
+    {
+        void* args[13] = { (void*)&dQ, (void*)&dPoolK, (void*)&dPoolV, (void*)&dBlockTables,
+                           (void*)&dSeqLens, &dO, &batch, &qHeads, &kvHeads, &hd, &blockSize,
+                           &maxBlocks, &scale };
+        rc = (cuLaunchKernel(gPagedDecode, (unsigned)qHeads, (unsigned)batch, 1, 32, 1, 1, 0,
+                             (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+donepd:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
 
 // cu_wmma_gemm: C[M,N]f32 = A[M,K]f16 · B[K,N]f16 on tensor cores via an nvcc-compiled WMMA
 // kernel loaded from `fatbin`. M,N,K must be multiples of 16. Pipeline proof for nvcc kernels.
