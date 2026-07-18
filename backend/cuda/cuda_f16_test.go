@@ -315,7 +315,14 @@ func (l *resLayerF16) forward(dx *cuda.DeviceF32) (*cuda.DeviceF32, error) {
 	dh.Free()
 	dq.RoPE(rq)
 	dk.RoPE(rk)
-	da, err := cuda.GroupedQueryAttentionTF32(dq, dk, dv, l.heads, l.kv, true)
+	// §ROADMAP A2: fused tensor-core attention (nvcc mma.h) — 2.69x the cuBLAS-batched path.
+	// hd==64 & seq%16==0 hold for the prefill shapes; fall back otherwise.
+	var da *cuda.DeviceF32
+	if dq.Cols()/l.heads == 64 && dq.Rows()%16 == 0 {
+		da, err = cuda.GroupedQueryAttentionWMMA(dq, dk, dv, l.heads, l.kv)
+	} else {
+		da, err = cuda.GroupedQueryAttentionTF32(dq, dk, dv, l.heads, l.kv, true)
+	}
 	if err != nil {
 		return nil, err
 	}
