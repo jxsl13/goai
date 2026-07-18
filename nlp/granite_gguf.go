@@ -127,6 +127,19 @@ func GraniteFromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor) (*L
 		if !ok {
 			return nil, fmt.Errorf("nlp: GGUF missing %sattn_k.weight", p)
 		}
+		// The row counts below are pinned to the config, but a row count says nothing
+		// about RANK: a rank-1 tensor whose length happens to equal dim passed both
+		// checks and then PANICKED inside gatherRows, whose 2-D test is an internal
+		// invariant rather than an error path (§V29 wants a clean error). [ropeRowGeom]
+		// adds that rank test and routes the per-head geometry through
+		// ropeUnpermutePerm — the same predicate the quantized twin's
+		// unpermuteQuantRows gates on.
+		if err := ropeRowGeom(p+"attn_q.weight", wq, cfg.Heads); err != nil {
+			return nil, err
+		}
+		if err := ropeRowGeom(p+"attn_k.weight", wk, cfg.kvHeads()); err != nil {
+			return nil, err
+		}
 		if got := wq.Shape()[0]; got != cfg.Dim {
 			return nil, fmt.Errorf("nlp: Granite GGUF %sattn_q.weight rows %d != dim %d", p, got, cfg.Dim)
 		}

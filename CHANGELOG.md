@@ -4,6 +4,38 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — close the remaining float/quant loader asymmetries (B77/T863, 2026-07-18)
+
+The seven pairs T861's class audit recorded are now closed: Cohere (an algorithmically
+exact replica of the DeepSeek bug, with the same three holes), gptneox and starcoder2
+(slicing a bias at validated WEIGHT offsets — a short bias really did panic with
+`slice bounds out of range [:48] with capacity 47`), gemma and gemma2 (their own config
+parsers, which T861's shared-parser fix genuinely did not reach), and granite. 35 hostile
+subtests, all verified to fail before the fix.
+
+Every fix SHARES the predicate its quantized twin already used rather than restating it.
+One judgement worth recording: an initial rank check was deliberately DROPPED from the
+gptneox/starcoder2 guard because the quant twins do not have one, and keeping it would have
+made the float path stricter than the quant path — reopening the same asymmetry from the
+other side.
+
+**B77 — a guard written as a condition is not a guard.** The llama rope validation read
+`if wq, ok := ts[...]; ok && wq.Ndim() == 2`. That looks defensive and behaves as the
+opposite: a rank-1 tensor makes the condition false, skips the geometry check meant to
+reject it, and falls through to `transpose2D`, panicking with `index out of range [1] with
+length 1`. Reproduced here before fixing. The rank test now lives inside the body, so it
+runs on the inputs it exists to reject rather than only on the ones that were already fine.
+
+Also recorded, not fixed: the same shape holds in **18 of 19** float/quant pairs — quant
+guards rank in 19/19, float in exactly 1 (mamba2), and ten pairs have no float rank
+checking at all. The real fix is at `llamaArchFromGGUF` plus `transpose2D`/`sliceRows`, with
+roughly 30 call sites of blast radius, so it is filed separately with the confirmed
+evidence rather than bolted on here.
+
+One not-a-bug from the same pass: `head_count=3` on gemma is legitimate. Gemma decouples
+head_dim from Dim/Heads, so 3x8=24 is self-consistent geometry and must load; the test case
+was changed to a count that genuinely does not divide.
+
 ### nlp — §B68 golden-fixture class audit: 15 mutations, all now caught (T862, 2026-07-18)
 
 The §B68 rule (a golden must carry nonzero, non-constant values in every convention-critical

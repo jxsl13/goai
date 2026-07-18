@@ -99,8 +99,13 @@ func QuantGemma2FromGGUF(meta map[string]any, tensors map[string]gguf.QuantTenso
 		return nil, fmt.Errorf("nlp: GGUF token_embd.weight: %w", err)
 	}
 	if cfg.HeadDim == 0 { // no attention.key_length key: derive from the attn_q row count
-		if aq, ok := tensors["blk.0.attn_q.weight"]; ok && len(aq.Shape) == 2 && cfg.Heads > 0 {
-			cfg.HeadDim = aq.Shape[0] / cfg.Heads
+		// Same fallback arithmetic as the float twin ([gemmaHeadDimFromRows]), so the
+		// two paths accept and reject the same files; only the rank test differs in
+		// idiom (len(Shape) here, Ndim there).
+		if aq, ok := tensors["blk.0.attn_q.weight"]; ok && len(aq.Shape) == 2 {
+			if cfg.HeadDim, err = gemmaHeadDimFromRows("blk.0.attn_q.weight", aq.Shape[0], cfg.Heads); err != nil {
+				return nil, err
+			}
 		}
 	}
 	// GGUF has no query_pre_attn_scalar key; mirror llama.cpp's block_count-keyed

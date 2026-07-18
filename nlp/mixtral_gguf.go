@@ -250,6 +250,52 @@ func ropeUnpermuteRows(t *tensor.Tensor, heads int) *tensor.Tensor {
 	})
 }
 
+// ropeRowGeom pins a projection weight's geometry BEFORE any of the float loaders'
+// RoPE row permutes touch it, so a malformed file is a clean error instead of a panic
+// or a silently mis-permuted model (§V29).
+//
+// The permutes it guards — [ropeUnpermuteRows] (llama/granite) and
+// [permuteInterleaveToSplit] (command-r) — never inspect the tensor they are handed.
+// Three things go wrong when the row count disagrees with the head count, all reachable
+// from an untrusted file because the tensor's rows are attacker-controlled SEPARATELY
+// from the metadata that declares them:
+//
+//   - a NON-2-D tensor dies reading Shape()[1] (or trips gatherRows' internal
+//     2-D panic, which is deliberately not an error path);
+//   - TOO FEW rows index out of range;
+//   - TOO MANY rows permute only a prefix and leave the tail unwritten — the model
+//     then loads with err == nil and computes wrong attention, the wrong-but-nil-error
+//     failure §V29 calls out as the harder one to trace.
+//
+// The predicate is not restated here: it is [ropeUnpermutePerm], the SAME function
+// every quantized twin already gates on (quant_mixtral_gguf.go's mkQPermuted,
+// quant_granite_gguf.go's unpermuteQuantRows, quant_cohere_gguf.go's mkQPermuted), so
+// the float and quantized loaders accept and reject exactly the same set of files.
+// That equality is the property worth having — a second, independently-worded check
+// would drift. Callers that additionally know the EXPECTED row count keep their own
+// explicit check on top; this one is the floor.
+func ropeRowGeom(name string, w *tensor.Tensor, heads int) error {
+	if w.Ndim() != 2 {
+		return fmt.Errorf("nlp: GGUF %s is %d-D, want a 2-D [out, in] projection", name, w.Ndim())
+	}
+	if _, err := ropeUnpermutePerm(w.Shape()[0], heads); err != nil {
+		return fmt.Errorf("nlp: GGUF %s: %w", name, err)
+	}
+	return nil
+}
+
+// ropeVecGeom is [ropeRowGeom] for the 1-D q/k BIAS the llama lineage permutes with
+// [ropeUnpermuteVec] — same predicate, rank 1 instead of rank 2.
+func ropeVecGeom(name string, v *tensor.Tensor, heads int) error {
+	if v.Ndim() != 1 {
+		return fmt.Errorf("nlp: GGUF %s is %d-D, want a 1-D bias", name, v.Ndim())
+	}
+	if _, err := ropeUnpermutePerm(v.Shape()[0], heads); err != nil {
+		return fmt.Errorf("nlp: GGUF %s: %w", name, err)
+	}
+	return nil
+}
+
 // gatherRows reorders the rows of a [heads·hd, cols] tensor per head: dst row
 // h·hd + q is copied from src row h·hd + srcPos(hd, q). Returns a fresh F64
 // tensor; the per-head row width hd must be even.

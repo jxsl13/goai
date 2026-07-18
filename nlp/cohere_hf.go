@@ -110,15 +110,26 @@ func CohereFromHF(ts map[string]*tensor.Tensor, cfg CohereConfig) (*Cohere, erro
 		if err != nil {
 			return nil, err
 		}
+		// q/k rows are permuted interleaved→split-half so GoAI's split-half OpRoPE
+		// reproduces Cohere's interleaved rotary; v/o are untouched. head_dim was
+		// inferred from LAYER 0's q_proj, so every later layer's rows still have to be
+		// pinned against it — that is exactly the gap permuteInterleaveToSplitChecked
+		// closes.
+		qPerm, err := permuteInterleaveToSplitChecked(p+"self_attn.q_proj.weight", wq, cfg.Heads, cfg.HeadDim)
+		if err != nil {
+			return nil, err
+		}
+		kPerm, err := permuteInterleaveToSplitChecked(p+"self_attn.k_proj.weight", wk, kv, cfg.HeadDim)
+		if err != nil {
+			return nil, err
+		}
 		m.Blocks = append(m.Blocks, &CohereBlock{
 			InputNorm: layerNormFromHF(inNorm, cfg.Eps),
-			// q/k rows are permuted interleaved→split-half so GoAI's split-half OpRoPE
-			// reproduces Cohere's interleaved rotary; v/o are untouched.
-			Wq:  transpose2D(permuteInterleaveToSplit(wq, cfg.Heads, cfg.HeadDim)),
-			Wk:  transpose2D(permuteInterleaveToSplit(wk, kv, cfg.HeadDim)),
-			Wv:  transpose2D(wv),
-			Wo:  transpose2D(wo),
-			FFN: swiGLUFromGGUF(gate, up, down),
+			Wq:        transpose2D(qPerm),
+			Wk:        transpose2D(kPerm),
+			Wv:        transpose2D(wv),
+			Wo:        transpose2D(wo),
+			FFN:       swiGLUFromGGUF(gate, up, down),
 		})
 	}
 	norm, ok := ts["model.norm.weight"]
@@ -158,6 +169,39 @@ func permuteInterleaveToSplit(w *tensor.Tensor, heads, headDim int) *tensor.Tens
 		}
 	}
 	return res
+}
+
+// permuteInterleaveToSplitChecked is [permuteInterleaveToSplit] with the row geometry
+// PINNED first, so a malformed file is a clean error instead of a silently mis-permuted
+// model. It is the exact command-r analogue of deepseekv2_gguf.go's
+// deinterleaveRoPEChecked (T861/§B76) — the same class of bug, closed the same way.
+//
+// permuteInterleaveToSplit walks heads×headDim rows and never inspects the tensor it
+// was handed, so all three disagreements between the declared and the actual geometry
+// were reachable from an untrusted file:
+//
+//   - a rank-1 (or rank-3) tensor died reading Shape()[1];
+//   - FEWER rows than heads·headDim indexed out of range;
+//   - MORE rows permuted only the prefix and left the tail at its ZERO initial value —
+//     the result is a perfectly well-formed tensor, so the model loaded with err == nil
+//     and computed wrong attention (§V29's wrong-but-nil-error class).
+//
+// The quantized twin never had any of the three: [QuantCohereFromGGUF]'s mkQPermuted
+// pins len(Shape) == 2 and routes the row count through [ropeUnpermutePerm]. This
+// reuses that same predicate via [ropeRowGeom] rather than restating it, and adds the
+// one thing the row-map check cannot express — that the rows are exactly heads·headDim
+// for the headDim the CONFIG declares, which is what the fused-qkv branch of
+// [CohereFromGGUF] already pins for its own slices. Valid files are unaffected:
+// command-r's q_proj is square (create_tensor_qkv(n_embd, n_embd, gqa, gqa)), so
+// heads·headDim is the row count every conforming file carries.
+func permuteInterleaveToSplitChecked(name string, w *tensor.Tensor, heads, headDim int) (*tensor.Tensor, error) {
+	if err := ropeRowGeom(name, w, heads); err != nil {
+		return nil, err
+	}
+	if got := w.Shape()[0]; got != heads*headDim {
+		return nil, fmt.Errorf("nlp: %s has %d rows, want heads·head_dim = %d·%d = %d", name, got, heads, headDim, heads*headDim)
+	}
+	return permuteInterleaveToSplit(w, heads, headDim), nil
 }
 
 // layerNormFromHF wraps a Cohere weight-only LayerNorm gain tensor as an [nn.LayerNorm]
