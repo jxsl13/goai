@@ -31,6 +31,12 @@ var coopmatGemmV2Spv []byte
 //go:embed shaders/coopmat_gemm_v3.spv
 var coopmatGemmV3Spv []byte
 
+//go:embed shaders/coopmat_gemm_cm2.spv
+var coopmatGemmCm2Spv []byte
+
+//go:embed shaders/coopmat_gemm_f16acc.spv
+var coopmatGemmF16AccSpv []byte
+
 // HasCoopMat reports whether the active device enabled VK_KHR_cooperative_matrix
 // (NVIDIA/AMD/Intel current drivers; false on MoltenVK and pre-1.2 stacks).
 func HasCoopMat() bool { return C.vk_coopmat() == 1 }
@@ -143,6 +149,44 @@ func (r *CoopmatResident) GemmV3() error {
 	)
 	if rc != 0 {
 		return fmt.Errorf("vulkan: coopmat v3 gemm failed (code %d)", int(rc))
+	}
+	return nil
+}
+
+// GemmF16Acc dispatches the v2-geometry kernel with f16 ACCUMULATORS — the cuBLAS-parity
+// lever (full tensor rate on GeForce vs half rate for f32 accumulate). Needs M%32==0.
+func (r *CoopmatResident) GemmF16Acc() error {
+	if r.m%32 != 0 {
+		return fmt.Errorf("vulkan: coopmat f16acc needs M%%32==0 (got %d)", r.m)
+	}
+	rc := C.vk_coopmat_gemm_f16_res_f16acc(
+		(*C.uint32_t)(unsafe.Pointer(&coopmatGemmF16AccSpv[0])), C.int(len(coopmatGemmF16AccSpv)),
+		r.ah, r.bh, r.ch, C.int(r.m), C.int(r.k), C.int(r.n),
+	)
+	if rc != 0 {
+		return fmt.Errorf("vulkan: f16acc gemm failed (code %d)", int(rc))
+	}
+	return nil
+}
+
+// HasCoopMat2 reports whether NV_cooperative_matrix2 tensor addressing is enabled.
+func HasCoopMat2() bool { return C.vk_coopmat2() == 1 }
+
+// GemmCm2 dispatches the v2-geometry kernel with coopMatLoadTensorNV loads (NV fast path).
+// Needs M%32==0 and HasCoopMat2().
+func (r *CoopmatResident) GemmCm2() error {
+	if !HasCoopMat2() {
+		return fmt.Errorf("vulkan: NV_cooperative_matrix2 not available")
+	}
+	if r.m%32 != 0 {
+		return fmt.Errorf("vulkan: coopmat cm2 needs M%%32==0 (got %d)", r.m)
+	}
+	rc := C.vk_coopmat_gemm_f16_res_cm2(
+		(*C.uint32_t)(unsafe.Pointer(&coopmatGemmCm2Spv[0])), C.int(len(coopmatGemmCm2Spv)),
+		r.ah, r.bh, r.ch, C.int(r.m), C.int(r.k), C.int(r.n),
+	)
+	if rc != 0 {
+		return fmt.Errorf("vulkan: cm2 gemm failed (code %d)", int(rc))
 	}
 	return nil
 }
