@@ -4282,6 +4282,31 @@ done:
     return rc;
 }
 
+// cu_gemm_f16_pure: dC16[M,N] (f16) = dA16[M,K] (f16) · dW16[K,N] (f16), f16 accumulate, NO
+// per-call conversions or scratch allocs (all operands already f16 device-resident). Isolates
+// the §ROADMAP A1 lever: the delta vs cu_matmul_f16w_acc16 is the f32<->f16 convert + malloc
+// cost every projection GEMM currently pays.
+int cu_gemm_f16_pure(const void* dA16, const void* dW16, void* dC16, int M, int K, int N) {
+    int rc = -2;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto donep; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto donep; }
+    {
+        static const unsigned short h1 = 0x3C00, h0 = 0x0000;
+        cublasStatus_t st = cublasSetPointerMode(gHandle, CUBLAS_POINTER_MODE_HOST);
+        if (st == CUBLAS_STATUS_SUCCESS)
+            st = cublasGemmEx(gHandle, CUBLAS_OP_N, CUBLAS_OP_N, N, M, K,
+                              &h1, dW16, CUDA_R_16F, N, dA16, CUDA_R_16F, K,
+                              &h0, dC16, CUDA_R_16F, N, CUBLAS_COMPUTE_16F, CUBLAS_GEMM_DEFAULT);
+        cublasSetPointerMode(gHandle, CUBLAS_POINTER_MODE_DEVICE);
+        if (st != CUBLAS_STATUS_SUCCESS) { rc = -(4000 + (int)st); goto donep; }
+    }
+    rc = 0;
+donep:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
 // cu_matmul_i8_mma: dC[M,N] (int32) = dA8[M,K] (int8 row-major) · dW8[K,N] (int8 row-major), via
 // TILED tensor-core mma.sync.m16n8k32.s8 (inline PTX, no headers). One warp per 16×8 output tile,
 // K looped in 32-wide MMA steps accumulating int32. The int8 tensor-core path llama.cpp's prefill

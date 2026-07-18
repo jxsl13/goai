@@ -191,3 +191,45 @@ func BenchmarkF16acc_qkv_a32(b *testing.B)    { benchF16acc(b, 128, 2048, 2048, 
 func BenchmarkF16acc_qkv_a16(b *testing.B)    { benchF16acc(b, 128, 2048, 2048, true) }
 func BenchmarkF16acc_bigM_a32(b *testing.B)   { benchF16acc(b, 2048, 4096, 4096, false) }
 func BenchmarkF16acc_bigM_a16(b *testing.B)   { benchF16acc(b, 2048, 4096, 4096, true) }
+
+// §ROADMAP A1: isolate the per-GEMM f32<->f16 conversion + malloc cost. acc16 = current path
+// (f32 a -> convert -> GEMM -> convert -> f32 c); pure = f16 a/c resident, GEMM only.
+func benchF16convOverhead(b *testing.B, m, k, n int, pure bool) {
+	aF := make([]float32, m*k)
+	for i := range aF {
+		aF[i] = 0.01 * float32(i%17)
+	}
+	wF := make([]float32, n*k)
+	for i := range wF {
+		wF[i] = 0.01 * float32(i%19)
+	}
+	da32 := f32Upload(aF)
+	da16 := f16Upload(aF)
+	dw := f16Upload(wF)
+	dc32 := devAllocBytes(m * n * 4)
+	dc16 := devAllocBytes(m * n * 2)
+	defer devFree(da32)
+	defer devFree(da16)
+	defer devFree(dw)
+	defer devFree(dc32)
+	defer devFree(dc16)
+	run := func() int {
+		if pure {
+			return matmulF16pure(da16, dw, dc16, m, k, n)
+		}
+		return matmulF16acc16(da32, dw, dc32, m, k, n)
+	}
+	run()
+	devSync()
+	b.ResetTimer()
+	for range b.N {
+		run()
+	}
+	devSync()
+	b.StopTimer()
+}
+
+func BenchmarkF16conv_acc16_gateup(b *testing.B) { benchF16convOverhead(b, 128, 2048, 5632, false) }
+func BenchmarkF16conv_pure_gateup(b *testing.B)  { benchF16convOverhead(b, 128, 2048, 5632, true) }
+func BenchmarkF16conv_acc16_qkv(b *testing.B)    { benchF16convOverhead(b, 128, 2048, 2048, false) }
+func BenchmarkF16conv_pure_qkv(b *testing.B)     { benchF16convOverhead(b, 128, 2048, 2048, true) }
