@@ -95,7 +95,7 @@ Nothing blocks it. The build needs no GPU and no driver:
   precisely so CUDA software can be built on machines with no driver.
 
 So a `cuda-compile` lane installs the dev subset (`cuda-cudart-dev`, `libcublas-dev`,
-`cuda-nvrtc-dev` — not the ~3 GB full toolkit) from NVIDIA's own apt repo, and runs
+`cuda-nvrtc-dev`, `cuda-nvcc` for its crt/ headers — not the ~3 GB full toolkit) from NVIDIA's own apt repo, and runs
 `go vet -tags cuda` over `backend/cuda` and `llamagpu`, then `go test -c -o /dev/null` to
 LINK the test binaries. The link step matters: `vet` typechecks but does not resolve extern
 symbols or validate `LDFLAGS`.

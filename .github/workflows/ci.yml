@@ -253,9 +253,14 @@ jobs:
           wget -q "https://developer.download.nvidia.com/compute/cuda/repos/${distro}/x86_64/cuda-keyring_1.1-1_all.deb"
           sudo dpkg -i cuda-keyring_1.1-1_all.deb
           sudo apt-get update -qq
+          # cuda-nvcc is required for its HEADERS, not the compiler: cuda_runtime.h
+          # line 82 includes crt/host_config.h, and the whole include/crt/ tree
+          # ships in the nvcc package. Installing cudart-dev alone fails with
+          # "fatal error: crt/host_config.h: No such file or directory" — nvcc
+          # itself is still never invoked (kernels build at runtime via nvrtc).
           sudo apt-get install -y --no-install-recommends \
-            cuda-cudart-dev-12-6 libcublas-dev-12-6 cuda-nvrtc-dev-12-6
-          ls /usr/local/cuda-12.6/include/cuda_runtime.h
+            cuda-cudart-dev-12-6 libcublas-dev-12-6 cuda-nvrtc-dev-12-6 cuda-nvcc-12-6
+          ls /usr/local/cuda-12.6/include/cuda_runtime.h /usr/local/cuda-12.6/include/crt/host_config.h
       - name: compile+link the cuda-tagged tree (typecheck, then link the test binaries)
         env:
           CGO_CFLAGS: -I/usr/local/cuda-12.6/include
