@@ -103,3 +103,10 @@ func WMMAAttn(q, k, v, o []float32, heads, seq, hd int, scale float32) error {
 	}
 	return nil
 }
+
+// wmmaAttnPtr is the raw-pointer form of WMMAAttn for internal resident-buffer benchmarks
+// (cgo cannot be used directly in _test.go). dq/dk/dv are f16 device buffers, do is f32.
+func wmmaAttnPtr(dq, dk, dv, do unsafe.Pointer, heads, seq, hd int, scale float32) int {
+	return int(C.cu_wmma_attn(unsafe.Pointer(&wmmaAttnFatbin[0]), C.int(len(wmmaAttnFatbin)),
+		dq, dk, dv, do, C.int(heads), C.int(seq), C.int(hd), C.float(scale)))
+}
