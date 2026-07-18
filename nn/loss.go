@@ -26,11 +26,71 @@ func MSE(ctx *backend.Context, pred, target *tensor.Tensor) (*tensor.Tensor, err
 	return out[0], nil
 }
 
+// CEOption configures CrossEntropy via the functional-options idiom: the required
+// tensors stay positional and every loss variant is opt-in, so existing two-argument
+// calls keep their exact previous behaviour (hard labels, mean over the whole batch).
+type CEOption func(*backend.CrossEntropyAttrs)
+
+// WithIgnoreIndex masks out every row whose target equals idx: it contributes nothing to
+// the loss and receives exactly zero gradient, and (under the default mean reduction) it
+// is excluded from the divisor. This is torch's `ignore_index`, and idx=-100 is the
+// convention every instruction-tuning and masked-LM pipeline uses to mask prompt or pad
+// positions — without it those workflows cannot be expressed at all.
+//
+// The masking composes with WithLabelSmoothing exactly as torch does: smoothing applies
+// only to the surviving rows, and the mean divides by the surviving-row count.
+//
+// A batch in which EVERY row is ignored follows torch: NaN under Reduction mean (0/0),
+// 0 under sum, all-zeros under none — and zero gradients in all three cases.
+func WithIgnoreIndex(idx int) CEOption {
+	return func(a *backend.CrossEntropyAttrs) {
+		a.IgnoreIndex, a.HasIgnoreIndex = idx, true
+	}
+}
+
+// WithReduction selects how the per-row losses collapse: backend.ReductionMean (the
+// default and the historical behaviour), backend.ReductionSum, or backend.ReductionNone,
+// which returns a [batch] tensor of per-row losses with 0 in every ignored slot. Per-row
+// losses are what you need to weight examples, or to reduce over a custom mask yourself.
+func WithReduction(r backend.Reduction) CEOption {
+	return func(a *backend.CrossEntropyAttrs) { a.Reduction = r }
+}
+
+// WithLabelSmoothing sets ε∈[0,1) for label smoothing (Szegedy et al. 2016; Vaswani et al.
+// 2017 §5.4) — the option form of CrossEntropySmooth, so smoothing can be combined with
+// masking and a reduction in one call.
+func WithLabelSmoothing(epsilon float64) CEOption {
+	return func(a *backend.CrossEntropyAttrs) { a.LabelSmoothing = epsilon }
+}
+
+// WithZLoss sets the PaLM z-loss coefficient (§R113) — the option form of
+// CrossEntropyZLoss, combinable with masking and a reduction.
+func WithZLoss(coeff float64) CEOption {
+	return func(a *backend.CrossEntropyAttrs) { a.ZLoss = coeff }
+}
+
 // CrossEntropy is the fused, numerically stable softmax cross-entropy over
-// logits[batch,classes] with class-index targets[batch] (ADR-0007). Mean over
-// the batch; targets are non-differentiable.
-func CrossEntropy(ctx *backend.Context, logits, targets *tensor.Tensor) (*tensor.Tensor, error) {
-	out, err := backend.Execute(ctx, backend.OpCrossEntropy, []*tensor.Tensor{logits, targets}, nil)
+// logits[batch,classes] with class-index targets[batch] (ADR-0007). With no options it is
+// the mean over the batch with hard labels, exactly as before; targets are
+// non-differentiable throughout.
+//
+// Options cover torch's cross_entropy surface — WithIgnoreIndex to mask prompt/pad rows,
+// WithReduction for mean|sum|none, plus WithLabelSmoothing and WithZLoss:
+//
+//	loss, err := nn.CrossEntropy(ctx, logits, targets,
+//	    nn.WithIgnoreIndex(-100), nn.WithReduction(backend.ReductionSum))
+//
+// Output shape is a scalar for mean and sum, and [batch] for ReductionNone.
+func CrossEntropy(ctx *backend.Context, logits, targets *tensor.Tensor, opts ...CEOption) (*tensor.Tensor, error) {
+	var attrs backend.Attrs // nil for the zero-option case: byte-identical to the old call
+	if len(opts) > 0 {
+		var a backend.CrossEntropyAttrs
+		for _, o := range opts {
+			o(&a)
+		}
+		attrs = a
+	}
+	out, err := backend.Execute(ctx, backend.OpCrossEntropy, []*tensor.Tensor{logits, targets}, attrs)
 	if err != nil {
 		return nil, err
 	}

@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"fmt"
 	"math"
 
 	"github.com/jxsl13/goai/tensor"
@@ -226,14 +227,84 @@ func (a AXPYAttrs) WithDefaults() AXPYAttrs {
 	return a
 }
 
+// Reduction selects how a per-row loss is collapsed into the op's output. Its zero
+// value is ReductionMean, which is what every loss in this package did before the
+// field existed — so an unset Reduction never changes existing behaviour.
+//
+// The names mirror torch's `reduction=` string argument (torch is definitional here,
+// §V16): "mean", "sum", "none".
+type Reduction uint8
+
+const (
+	// ReductionMean averages the per-row losses (the zero value, and the historical
+	// behaviour of every loss op). When rows are masked out via CrossEntropyAttrs'
+	// IgnoreIndex the divisor is the NON-IGNORED row count, not the batch size —
+	// so an all-ignored batch yields 0/0 = NaN, exactly as torch does.
+	ReductionMean Reduction = iota
+	// ReductionSum adds the per-row losses. An all-ignored batch yields 0.
+	ReductionSum
+	// ReductionNone skips the reduction entirely: the op returns a [batch] tensor of
+	// per-row losses, with exactly 0 at every ignored row (torch's convention — the
+	// ignored slots are kept in place rather than filtered out, so the result stays
+	// aligned with the input batch).
+	ReductionNone
+)
+
+// String renders the reduction with torch's spelling ("mean", "sum", "none").
+func (r Reduction) String() string {
+	switch r {
+	case ReductionMean:
+		return "mean"
+	case ReductionSum:
+		return "sum"
+	case ReductionNone:
+		return "none"
+	}
+	return fmt.Sprintf("Reduction(%d)", uint8(r))
+}
+
 // CrossEntropyAttrs parameterises softmax cross-entropy (OpCrossEntropy). Its zero
-// value (no label smoothing, no z-loss) is the default, so no defaulting is needed.
+// value (no label smoothing, no z-loss, no ignored rows, mean reduction) is the
+// default, so no defaulting is needed.
+//
+// IgnoreIndex/HasIgnoreIndex express torch's `ignore_index` (the -100 convention used
+// by every instruction-tuning and masked-LM pipeline to mask prompt or pad positions).
+// The flag is a separate bool rather than a magic sentinel value because 0 — and every
+// other integer — is a legitimate class index someone may want to mask; and rather than
+// a *int because Attrs are copied by value across the backend boundary (and into the
+// op recorder), where a shared pointer would alias. Zero value = feature off, which is
+// what keeps every existing caller byte-identical.
+//
+// Semantics when HasIgnoreIndex is set: a row whose target equals IgnoreIndex contributes
+// EXACTLY nothing to the loss and receives EXACTLY zero gradient. Label smoothing applies
+// only to the surviving rows, and ReductionMean divides by the surviving-row count — the
+// intersection where hand-rolled implementations typically drift from torch.
 type CrossEntropyAttrs struct {
-	LabelSmoothing float64 // ε in (0,1) mixing the target with the uniform distribution; 0 → hard targets
-	ZLoss          float64 // z-loss coefficient: adds coeff·(logsumexp(logits))² per token (PaLM, §R113); 0 → off
+	LabelSmoothing float64   // ε in (0,1) mixing the target with the uniform distribution; 0 → hard targets
+	ZLoss          float64   // z-loss coefficient: adds coeff·(logsumexp(logits))² per token (PaLM, §R113); 0 → off
+	IgnoreIndex    int       // target class to mask out; only consulted when HasIgnoreIndex (torch's ignore_index, conventionally -100)
+	HasIgnoreIndex bool      // false (zero value) → no row is ignored
+	Reduction      Reduction // how per-row losses collapse; zero value ReductionMean = historical behaviour
 }
 
 func (CrossEntropyAttrs) opAttrs() {}
+
+// IsBasic reports whether every optional cross-entropy feature is off — plain hard-label
+// mean cross-entropy over the whole batch. GPU kernels that implement ONLY that form
+// (the metal/vulkan fused forward) gate on this instead of hand-listing fields, so
+// adding a field to CrossEntropyAttrs cannot silently escape the fallback and produce a
+// wrong GPU answer. The guard is pinned by the table-driven fallback invariant test.
+func (a CrossEntropyAttrs) IsBasic() bool {
+	return a == CrossEntropyAttrs{}
+}
+
+// IsUnmaskedMean reports whether no row is masked and the reduction is the historical
+// mean. GPU kernels that DO implement label smoothing and z-loss (the metal/vulkan fused
+// backward) gate on this: they handle every pre-existing field but neither of the row-set
+// changing ones, which alter the per-row skip and the mean divisor.
+func (a CrossEntropyAttrs) IsUnmaskedMean() bool {
+	return !a.HasIgnoreIndex && a.Reduction == ReductionMean
+}
 
 // ZLossAttrs parameterises the standalone log-Z regularizer (OpZLoss): loss = Coeff·mean over rows
 // of (logsumexp(logits))². Its zero value (Coeff 0) yields a zero loss, so no defaulting is needed.
