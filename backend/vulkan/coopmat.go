@@ -28,6 +28,9 @@ var coopmatGemmTiledSpv []byte
 //go:embed shaders/coopmat_gemm_v2.spv
 var coopmatGemmV2Spv []byte
 
+//go:embed shaders/coopmat_gemm_v3.spv
+var coopmatGemmV3Spv []byte
+
 // HasCoopMat reports whether the active device enabled VK_KHR_cooperative_matrix
 // (NVIDIA/AMD/Intel current drivers; false on MoltenVK and pre-1.2 stacks).
 func HasCoopMat() bool { return C.vk_coopmat() == 1 }
@@ -124,6 +127,22 @@ func (r *CoopmatResident) GemmV2() error {
 	)
 	if rc != 0 {
 		return fmt.Errorf("vulkan: coopmat v2 gemm failed (code %d)", int(rc))
+	}
+	return nil
+}
+
+// GemmV3 dispatches the 64x64-per-subgroup variant (16 accumulators, 4x A and B reuse).
+// Needs M%64==0.
+func (r *CoopmatResident) GemmV3() error {
+	if r.m%64 != 0 {
+		return fmt.Errorf("vulkan: coopmat v3 needs M%%64==0 (got %d)", r.m)
+	}
+	rc := C.vk_coopmat_gemm_f16_res_v3(
+		(*C.uint32_t)(unsafe.Pointer(&coopmatGemmV3Spv[0])), C.int(len(coopmatGemmV3Spv)),
+		r.ah, r.bh, r.ch, C.int(r.m), C.int(r.k), C.int(r.n),
+	)
+	if rc != 0 {
+		return fmt.Errorf("vulkan: coopmat v3 gemm failed (code %d)", int(rc))
 	}
 	return nil
 }

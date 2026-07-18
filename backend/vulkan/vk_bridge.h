@@ -19,6 +19,9 @@ int vk_coopmat(void);
 int vk_coopmat_gemm_f16_res_tiled(const uint32_t* spv, int spvLen,
                                   void* ah, void* bh, void* ch,
                                   int M, int K, int N);
+int vk_coopmat_gemm_f16_res_v3(const uint32_t* spv, int spvLen,
+                               void* ah, void* bh, void* ch,
+                               int M, int K, int N);
 int vk_coopmat_gemm_f16_res_v2(const uint32_t* spv, int spvLen,
                                void* ah, void* bh, void* ch,
                                int M, int K, int N);
