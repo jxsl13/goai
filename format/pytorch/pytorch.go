@@ -94,6 +94,24 @@ func (u *unpickler) pop() (any, error) {
 	return v, nil
 }
 
+// peek returns the top of the stack WITHOUT removing it, erroring when the
+// stack is empty.
+//
+// The memo-storing and in-place-mutating opcodes (MEMOIZE, BINPUT,
+// LONG_BINPUT, SETITEMS) inspect the top of the stack rather than popping it.
+// They previously indexed u.st[len(u.st)-1] directly, so a hostile data.pkl
+// that reached one of them on an empty stack — e.g. the four bytes
+// {0x80, 2, 'q', 0, '.'} inside an otherwise valid zip — crashed the process
+// with "index out of range [-1]". Routing every peek through this helper makes
+// a malformed checkpoint an error value, matching the checked pop used by the
+// popping opcodes.
+func (u *unpickler) peek() (any, error) {
+	if len(u.st) == 0 {
+		return nil, fmt.Errorf("pytorch: pickle stack underflow")
+	}
+	return u.st[len(u.st)-1], nil
+}
+
 // popMark pops back to (and removes) the topmost mark, returning the items above
 // it in order.
 func (u *unpickler) popMark() ([]any, error) {
@@ -162,7 +180,11 @@ func (u *unpickler) run() (any, error) {
 				return nil, err
 			}
 		case 0x94: // MEMOIZE (proto 4): store top at the next memo index
-			u.memo[len(u.memo)] = u.st[len(u.st)-1]
+			v, err := u.peek()
+			if err != nil {
+				return nil, fmt.Errorf("pytorch: MEMOIZE underflow")
+			}
+			u.memo[len(u.memo)] = v
 		case 0x8d: // BINUNICODE8 (proto 4): 8-byte length + utf8
 			ln, err := u.read(8)
 			if err != nil {
@@ -262,13 +284,21 @@ func (u *unpickler) run() (any, error) {
 			if err != nil {
 				return nil, err
 			}
-			u.memo[int(i)] = u.st[len(u.st)-1]
+			v, err := u.peek()
+			if err != nil {
+				return nil, fmt.Errorf("pytorch: BINPUT underflow")
+			}
+			u.memo[int(i)] = v
 		case 'r': // LONG_BINPUT
 			b, err := u.read(4)
 			if err != nil {
 				return nil, err
 			}
-			u.memo[int(binary.LittleEndian.Uint32(b))] = u.st[len(u.st)-1]
+			v, err := u.peek()
+			if err != nil {
+				return nil, fmt.Errorf("pytorch: LONG_BINPUT underflow")
+			}
+			u.memo[int(binary.LittleEndian.Uint32(b))] = v
 		case 'h': // BINGET
 			i, err := u.byte()
 			if err != nil {
@@ -347,7 +377,11 @@ func (u *unpickler) run() (any, error) {
 			if err != nil {
 				return nil, err
 			}
-			if err := setItems(u.st[len(u.st)-1], items); err != nil {
+			target, err := u.peek()
+			if err != nil {
+				return nil, fmt.Errorf("pytorch: SETITEMS underflow")
+			}
+			if err := setItems(target, items); err != nil {
 				return nil, err
 			}
 		case 's': // SETITEM
@@ -356,7 +390,14 @@ func (u *unpickler) run() (any, error) {
 			if e1 != nil || e2 != nil {
 				return nil, fmt.Errorf("pytorch: SETITEM underflow")
 			}
-			if err := setItems(u.st[len(u.st)-1], []any{key, val}); err != nil {
+			// The two pops above are guarded, but the TARGET is peeked, and the
+			// pops themselves can empty the stack: {0x80,2,'K',1,'K',2,'s','.'}
+			// pops key and value cleanly and then peeks an empty stack.
+			target, e3 := u.peek()
+			if e3 != nil {
+				return nil, fmt.Errorf("pytorch: SETITEM underflow")
+			}
+			if err := setItems(target, []any{key, val}); err != nil {
 				return nil, err
 			}
 		case 'e': // APPENDS (list) — drop (used for empty backward_hooks)
@@ -521,12 +562,36 @@ func contiguousStride(shape []int) []int {
 	return s
 }
 
-func numelOf(shape []int) int {
+// maxElems caps a single tensor's element count, mirroring npy.maxElems. It
+// bounds the allocation a hostile shape can request before any storage is
+// touched.
+const maxElems = 1 << 30
+
+// numelOf returns the product of shape's dimensions, rejecting negative dims
+// and any product that would exceed maxElems.
+//
+// The guard divides BEFORE multiplying, mirroring the overflow-safe product in
+// format/npy (see npy.go, "Overflow-safe product") — safetensors and gguf use
+// the same idiom, so the four readers stay one discoverable family. A
+// post-multiply `n > maxElems` check is not equivalent: it wraps. Shape
+// (2^62, 4) is exactly 2^64 ≡ 0, and shape (2^62+1, 4) is 2^64+4 ≡ 4, so a
+// crafted checkpoint passed both the "exceeds storage" and "blob too short"
+// checks in materialize and Load returned a nil error with a tensor
+// advertising a nonsense shape over near-empty storage — a silent wrong result
+// whose panic surfaces far from the load site. A negative dim wrapped the other
+// way and sliced the storage blob with a negative bound.
+func numelOf(shape []int) (int, error) {
 	n := 1
 	for _, d := range shape {
+		if d < 0 {
+			return 0, fmt.Errorf("pytorch: negative dimension in shape %v", shape)
+		}
+		if d != 0 && n > maxElems/d {
+			return 0, fmt.Errorf("pytorch: tensor too large (shape %v exceeds %d elements)", shape, maxElems)
+		}
 		n *= d
 	}
-	return n
+	return n, nil
 }
 
 // flatten walks the (possibly nested) state_dict, joining nested keys with '.'
@@ -563,7 +628,10 @@ func flatten(prefix string, v any, out map[string]tensorSpec) error {
 // materialize reads a tensor spec's storage blob and builds the GoAI tensor.
 func materialize(spec tensorSpec, blob []byte) (*tensor.Tensor, error) {
 	shape := spec.shape
-	n := numelOf(shape)
+	n, err := numelOf(shape)
+	if err != nil {
+		return nil, err
+	}
 	// Only plain contiguous, offset-0 views are supported; anything else is a
 	// non-trivial alias we refuse rather than mis-read.
 	if spec.offset != 0 {

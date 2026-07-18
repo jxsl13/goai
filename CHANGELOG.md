@@ -4,6 +4,40 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### format/pytorch — harden the pickle reader (B70/T853, 2026-07-18)
+
+A discovery sweep found that this repo's §B67/§B68 parser hardening reached `npy`,
+`safetensors` and `gguf` but never `format/pytorch` — the one reader parsing an
+adversarial-by-design format. Two live bugs, both reproduced before fixing.
+
+**Silent wrong tensor.** `numelOf` multiplied shape dims with no overflow guard and no
+negative-dim check, and `materialize` then validated against the WRAPPED product. A crafted
+shape returned `err == nil` and a tensor reporting a nonsense shape over zero-length
+storage; access panicked far from the load site. `format/npy` already had the
+division-before-multiply guard and even documented this exact attack, so the fix mirrors it
+and names npy in the godoc to keep the family discoverable. The sharpest test case is
+`(2^62+1, 4)`, where both dims are positive and the product wraps to exactly 4 — fitting
+the declared storage perfectly, so it defeats every downstream check rather than tripping
+one incidentally.
+
+**Panic on a hostile file.** Five opcodes indexed the stack top without an emptiness check
+while every other opcode used the checked pop. Note these are only reachable through a
+VALID zip containing a hostile `data.pkl` — raw bytes are rejected by the container first,
+so a test using bare payloads would pass while proving nothing.
+
+Worth recording: the task brief (written from the sweep, and from a reproduction I ran
+myself) asserted SETITEM was already guarded and should not be touched. That was half
+right. Its two pops are guarded — its target is peeked unguarded, and the pops can empty
+the stack first. `{0x80, 2, 'K', 1, 'K', 2, 's', '.'}` panicked on main. Both SETITEM paths
+are now covered.
+
+**Recurrence closed.** The existing `FuzzLoad` fuzzes the whole ZIP container, so mutations
+die in zip/CRC validation and the unpickler was effectively unreachable — measured at 966k
+execs with 6 interesting inputs. The new `FuzzPickle` takes raw `data.pkl` bytes and builds
+the zip inside the fuzz function: 5.77M execs, 104 interesting. Seeded with all six
+crashers plus the overflow pickle, with a committed corpus. All five real torch-written
+fixtures still load with their value assertions intact.
+
 ### nn — runnable examples for everything shipped today (T852, 2026-07-18)
 
 Twelve new godoc Examples so today's four commits stop adding to the package's
