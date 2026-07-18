@@ -22,6 +22,9 @@ import (
 //go:embed shaders/coopmat_gemm.spv
 var coopmatGemmSpv []byte
 
+//go:embed shaders/coopmat_gemm_tiled.spv
+var coopmatGemmTiledSpv []byte
+
 // HasCoopMat reports whether the active device enabled VK_KHR_cooperative_matrix
 // (NVIDIA/AMD/Intel current drivers; false on MoltenVK and pre-1.2 stacks).
 func HasCoopMat() bool { return C.vk_coopmat() == 1 }
@@ -86,6 +89,22 @@ func (r *CoopmatResident) Gemm() error {
 	)
 	if rc != 0 {
 		return fmt.Errorf("vulkan: resident coopmat gemm failed (code %d)", int(rc))
+	}
+	return nil
+}
+
+// GemmTiled dispatches the slice-4 tiled kernel (BM=BN=64, shared-staged, 4x B reuse).
+// Needs M%64==0 in addition to the probe constraints.
+func (r *CoopmatResident) GemmTiled() error {
+	if r.m%64 != 0 {
+		return fmt.Errorf("vulkan: tiled coopmat needs M%%64==0 (got %d)", r.m)
+	}
+	rc := C.vk_coopmat_gemm_f16_res_tiled(
+		(*C.uint32_t)(unsafe.Pointer(&coopmatGemmTiledSpv[0])), C.int(len(coopmatGemmTiledSpv)),
+		r.ah, r.bh, r.ch, C.int(r.m), C.int(r.k), C.int(r.n),
+	)
+	if rc != 0 {
+		return fmt.Errorf("vulkan: tiled coopmat gemm failed (code %d)", int(rc))
 	}
 	return nil
 }
