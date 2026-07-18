@@ -4,6 +4,27 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nn — optimizer state checkpointing: interrupted runs can resume (T842, 2026-07-18)
+
+Until now an interrupted training run could not be resumed correctly: every optimizer's
+moments and step count were unexported and unserializable, so a restart silently began from
+a cold optimizer. The measured cost of that, per the new control column, is 184%–4731% of
+one full step of divergence depending on the optimizer. `StatefulOptimizer` (an OPT-IN
+interface — `Optimizer` is unchanged, so the 18 unwired optimizers still compile) exposes
+`State()`/`LoadState()`, with `SaveOptimizerState`/`LoadOptimizerState` writing safetensors
+so an optimizer checkpoint sits beside the model checkpoint. Scalars like Adam's step count
+ride as 1-element tensors in the same map — `t` drives the 1−βᵗ bias correction, so losing
+it makes the first resumed steps far too large. State is keyed by parameter INDEX because a
+rebuilt model has different pointers; loads validate param count and per-parameter shape
+atomically (a failed load leaves the optimizer untouched). Resume is BIT-EXACT (tolerance 0)
+for all seven wired configurations. Coverage is honest and test-locked: 5 of 23 optimizers
+wired (SGD, Adam/AdamW, Lion, Adafactor, Muon), the rest named explicitly in the godoc.
+
+Also pinned: the VACUOUS PROBE. Verifying resume with a constant gradient cannot fail —
+Adam's m/v ratio is scale-invariant there, so an entirely un-checkpointed restart still
+matches to 3.3e-16. That trap is now an asserted test with a pointer to the docs, and the
+real resume tests fail if their control drift ever reaches zero.
+
 ### nn/backend — CrossEntropy ignore_index + reduction (T841, 2026-07-18)
 
 `CrossEntropyAttrs` gains `IgnoreIndex`/`HasIgnoreIndex` and `Reduction` (mean|sum|none),
