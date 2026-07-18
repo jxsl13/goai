@@ -19,10 +19,7 @@ type hfTokJSON struct {
 		Vocab  map[string]int  `json:"vocab"`  // byte-mapped token → id
 		Merges json.RawMessage `json:"merges"` // ["l r", …] or [["l","r"], …]
 	} `json:"model"`
-	AddedTokens []struct {
-		ID      int    `json:"id"`
-		Content string `json:"content"`
-	} `json:"added_tokens"`
+	AddedTokens []addedToken `json:"added_tokens"`
 }
 
 // parseMerges accepts both tokenizer.json merge encodings: a list of "left right" strings
@@ -95,7 +92,36 @@ func BPEFromJSON(data []byte, opts ...BPEOption) (*BPETokenizer, error) {
 	if err != nil {
 		return nil, err
 	}
-	return NewBPE(vocab, merges, opts...)
+	t, err := NewBPE(vocab, merges, opts...)
+	if err != nil {
+		return nil, err
+	}
+	t.AddSpecialTokens(addedTokenSpecials(tj.AddedTokens))
+	return t, nil
+}
+
+// addedTokenSpecials turns a tokenizer.json added_tokens list into the EncodeSpecial
+// marker set (§B60). ALL added tokens are taken, not only those flagged "special":
+// HuggingFace's AddedVocabulary pre-splits on every added token, and its
+// encode_special_tokens flag filters only the special-flagged subset. Plain Encode is
+// unaffected either way — it treats every marker as literal text.
+func addedTokenSpecials(added []addedToken) map[string]int {
+	out := make(map[string]int, len(added))
+	for _, a := range added {
+		if a.Content != "" && a.ID >= 0 {
+			out[a.Content] = a.ID
+		}
+	}
+	return out
+}
+
+// addedToken is one tokenizer.json added_tokens entry. Special records HF's "special"
+// flag; it is retained for provenance (BOS/EOS/PAD vs. an ordinary added word) even
+// though the pre-split takes both kinds.
+type addedToken struct {
+	ID      int    `json:"id"`
+	Content string `json:"content"`
+	Special bool   `json:"special"`
 }
 
 // ToJSON serializes the tokenizer to the minimal HuggingFace tokenizer.json BPE form

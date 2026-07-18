@@ -26,6 +26,8 @@ type SPM struct {
 	unkID  int            // id emitted when even byte fallback fails
 	dummy  bool           // prepend a ▁ (add_dummy_prefix)
 	byteID [256]int       // id of the <0xNN> byte piece, −1 when absent
+
+	specials specialSet // markers parsed only by EncodeSpecial (§B60)
 }
 
 // SPMOption configures an SPM tokenizer (functional-options idiom, §C12).
@@ -104,7 +106,15 @@ func (s *SPM) Encode(text string) []int {
 	for {
 		best, bestScore := -1, 0.0
 		for i := 0; i+1 < len(syms); i++ {
-			id, ok := s.id[syms[i]+syms[i+1]]
+			merged := syms[i] + syms[i+1]
+			// Registered special markers are never produced by ordinary merging (§B60):
+			// a vocabulary holding the intermediates could otherwise build a control
+			// token out of untrusted literal text. EncodeSpecial is the only path that
+			// emits them.
+			id, ok := s.id[merged]
+			if ok && s.specials.blocked(merged) {
+				continue
+			}
 			if ok && (best < 0 || s.pieces[id].Score > bestScore) {
 				best, bestScore = i, s.pieces[id].Score
 			}
@@ -117,7 +127,9 @@ func (s *SPM) Encode(text string) []int {
 	}
 	var ids []int
 	for _, sym := range syms {
-		if id, ok := s.id[sym]; ok {
+		// blocked() again for the degenerate case of a single-character marker, which
+		// merging never had to build (§B60); it falls through to byte fallback.
+		if id, ok := s.id[sym]; ok && !s.specials.blocked(sym) {
 			ids = append(ids, id)
 			continue
 		}
@@ -197,5 +209,16 @@ func SPMFromGGUF(meta map[string]any) (*SPM, error) {
 	if unk, ok := ggufTokenID(meta[ggufTokUnkID]); ok {
 		opts = append(opts, WithSPMUnkID(unk))
 	}
-	return NewSPM(vocab, opts...)
+	s, err := NewSPM(vocab, opts...)
+	if err != nil {
+		return nil, err
+	}
+	// Control / user-defined / unknown tokens become the EncodeSpecial marker set (§B60).
+	// Plain Encode is unaffected: it still treats every marker as literal text.
+	texts := make([]string, len(vocab))
+	for i, p := range vocab {
+		texts[i] = p.Piece
+	}
+	s.AddSpecialTokens(ggufSpecials(meta, texts))
+	return s, nil
 }

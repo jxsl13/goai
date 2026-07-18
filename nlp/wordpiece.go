@@ -25,6 +25,8 @@ type WordPiece struct {
 	unkID        int            // id emitted for an unmatchable / too-long word
 	continuation string         // continuation-piece prefix ("##")
 	maxChars     int            // words longer than this (in runes) → unk
+
+	specials specialSet // markers parsed only by EncodeSpecial (§B60)
 }
 
 // WordPieceOption configures a WordPiece tokenizer (functional-options idiom, §C12).
@@ -120,7 +122,11 @@ func (w *WordPiece) encodeWord(word string) []int {
 			if start > 0 {
 				sub = w.continuation + sub
 			}
-			if id, ok := w.id[sub]; ok {
+			// Registered special markers are never produced by ordinary segmentation
+			// (§B60): MaxMatch searches the whole vocabulary, so without this the literal
+			// text "[MASK]" in untrusted input would match the real mask id.
+			// EncodeSpecial is the only path that emits them.
+			if id, ok := w.id[sub]; ok && !w.specials.blocked(sub) {
 				matchedID, matchedLen = id, end-start
 				break
 			}

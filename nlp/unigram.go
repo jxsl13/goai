@@ -49,6 +49,8 @@ type Unigram struct {
 	minScore float64        // min piece score (base of the unk penalty)
 	maxRunes int            // longest piece in runes (bounds the DP inner loop)
 	dummy    bool           // prepend a ▁ (add_dummy_prefix)
+
+	specials specialSet // markers parsed only by EncodeSpecial (§B60)
 }
 
 // UnigramOption configures a Unigram tokenizer (functional-options idiom, §C12).
@@ -134,8 +136,17 @@ func (u *Unigram) Encode(text string) []int {
 	for i := 1; i <= n; i++ {
 		lo := max(0, i-u.maxRunes)
 		for j := lo; j < i; j++ {
-			id, ok := u.id[string(runes[j:i])]
+			piece := string(runes[j:i])
+			id, ok := u.id[piece]
 			if !ok {
+				continue
+			}
+			// Registered special markers are never produced by ordinary segmentation
+			// (§B60): Viterbi searches the whole vocabulary, and GGUF keeps control
+			// tokens in it, so without this the literal text "<|im_start|>" in untrusted
+			// input would segment straight to the control id. EncodeSpecial is the only
+			// path that emits them.
+			if u.specials.blocked(piece) {
 				continue
 			}
 			if sc := best[j] + u.pieces[id].Score; sc > best[i] {

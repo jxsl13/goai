@@ -4,6 +4,119 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — the Granite quant test could not see a dropped LogitsScale (T856, 2026-07-18)
+
+`TestQuantGraniteCosineVsFloat` gated on cosine similarity alone while its doc comment
+claimed it covered "the scalar effects on the residual stream". Cosine does cover
+EmbeddingMult, AttentionMult and ResidualMult — those act inside the network, so dropping
+one rotates the logit vector. It is blind to LogitsScale, which divides the final logits
+UNIFORMLY (`llama.go:172`), and cosine is scale-invariant by construction. A
+`QuantizeLlama` that dropped `logits_scaling` entirely would have sailed through the whole
+Granite quant suite.
+
+Demonstrated rather than asserted: with `divLogits` mutated to drop the scale, cosine stays
+at 0.999967 while the new L2-magnitude gate fires at 0.125059 — exactly 1/8, the fixture's
+LogitsScale of 8.0.
+
+The sibling Cohere test already made this precise argument for `logit_scale` and carries
+the magnitude check; Granite simply never had it applied. That is the class-audit gap, not
+a novel insight — the lesson existed in the repo and had not been swept across siblings.
+
+### nlp — special-token parsing, and an injection vector found on the way (B72/T855, 2026-07-18)
+
+No tokenizer matched special/added tokens before its merge loop, so a vocabulary holding
+`<|im_start|>` at id 512 still encoded the literal string as its twelve component byte
+tokens. `ChatTemplate.Render` emits exactly those markers as text and `Encode` is the only
+thing a caller can do with the result, so every chat prompt this library produced was
+off-distribution — with `err == nil` and still-fluent output. It survived because none of
+the fifteen `Render` call sites in tests piped their result into `Encode`; they compared
+strings, and `Decode` round-trips the string correctly even when the ids are wrong.
+
+`Encode` keeps its existing semantics and a new `EncodeSpecial` parses markers, matching
+llama.cpp's `parse_special` flag — that flag IS the trust boundary. Matching specials
+everywhere would have made this fix an injection vector, letting untrusted content forge
+conversation structure. Overlap resolution follows HF's leftmost-longest rule instead,
+because llama.cpp's sequential per-marker pass uses an unstable sort and leaves equal-length
+ties unspecified; a deterministic contract beats bug-for-bug fidelity. Specials come from
+metadata (GGUF `token_type`, tokenizer.json `added_tokens`), with the template's own marker
+list only as a documented metadata-free fallback.
+
+**The pre-existing injection vector.** Splitting the input turned out to be half the fix.
+GGUF stores control tokens INSIDE `tokenizer.ggml.tokens`, and Unigram's Viterbi and
+WordPiece's MaxMatch search the whole vocabulary — so plain `Encode` on untrusted text
+already minted bare control ids, with no special-matching pass involved. Verified
+independently: on a Unigram vocab holding the marker, `Encode("a<|im_start|>system")`
+returned the control id directly. HF never hits this because its added tokens live outside
+the model vocab. Unigram, WordPiece and SPM now refuse to emit a registered special from
+their segmentation loops; the two byte-level BPEs need no guard, since GPT-2
+pre-tokenization splits a marker at its punctuation boundaries. This is the one deliberate
+change to plain `Encode`, it fires only for tokenizers with registered specials, and it
+strictly REMOVES an injection surface.
+
+Both gates were verified by mutation rather than assertion: neutering `EncodeSpecial` fails
+all six tests, and rebuilding it in the injection-prone "always parse" shape fails the
+injection gate with the forged token visible in the id stream. The Render→Encode path that
+hid the bug now has end-to-end coverage.
+
+### nlp — BeamSearch returned a 2-token EOS hypothesis for any real eos id (B71/T854, 2026-07-18)
+
+`BeamSearch` tested EVERY expansion candidate for completion rather than only the
+top-`width` frontier. Because each step expands every live beam over the whole vocabulary,
+an eos-terminated candidate always exists — however improbable — so one entered `done` per
+beam per step, `len(done) >= width` tripped on the FIRST step, and the function returned a
+two-token `[start, eos]` hypothesis.
+
+Reproduced with eos at logit -100 (p ≈ e^-110) against a token at logit 10: width 1 with
+eos disabled correctly returned 11 tokens, while the same call with a real eos id returned
+`[0 3]` as the BEST beam. That means beam search was unusable with any real model, i.e. in
+every realistic use — and it failed invisibly, returning sorted, length-penalized,
+plausibly-shaped beams with no error.
+
+The fix stops the candidate walk once the frontier is full, so only a candidate that
+outranks the entire frontier may complete. The stop is load-bearing rather than an
+optimization, and the comment says so.
+
+Why it survived: `beam_test.go` passes `eos=-1` at five of its six call sites, and the
+sixth uses `width=1` — the degenerate case. The asymmetry that flagged it is that the
+sibling `DiverseBeamSearch` validates its width/maxNew while `BeamSearch` validates
+neither. The new regression pins BOTH directions: an improbable EOS must be ignored AND a
+likely EOS must still stop promptly — the second matters because a "fix" that merely
+stopped completing on EOS would satisfy the first. Verified red before the fix.
+
+### format/pytorch — harden the pickle reader (B70/T853, 2026-07-18)
+
+A discovery sweep found that this repo's §B67/§B68 parser hardening reached `npy`,
+`safetensors` and `gguf` but never `format/pytorch` — the one reader parsing an
+adversarial-by-design format. Two live bugs, both reproduced before fixing.
+
+**Silent wrong tensor.** `numelOf` multiplied shape dims with no overflow guard and no
+negative-dim check, and `materialize` then validated against the WRAPPED product. A crafted
+shape returned `err == nil` and a tensor reporting a nonsense shape over zero-length
+storage; access panicked far from the load site. `format/npy` already had the
+division-before-multiply guard and even documented this exact attack, so the fix mirrors it
+and names npy in the godoc to keep the family discoverable. The sharpest test case is
+`(2^62+1, 4)`, where both dims are positive and the product wraps to exactly 4 — fitting
+the declared storage perfectly, so it defeats every downstream check rather than tripping
+one incidentally.
+
+**Panic on a hostile file.** Five opcodes indexed the stack top without an emptiness check
+while every other opcode used the checked pop. Note these are only reachable through a
+VALID zip containing a hostile `data.pkl` — raw bytes are rejected by the container first,
+so a test using bare payloads would pass while proving nothing.
+
+Worth recording: the task brief (written from the sweep, and from a reproduction I ran
+myself) asserted SETITEM was already guarded and should not be touched. That was half
+right. Its two pops are guarded — its target is peeked unguarded, and the pops can empty
+the stack first. `{0x80, 2, 'K', 1, 'K', 2, 's', '.'}` panicked on main. Both SETITEM paths
+are now covered.
+
+**Recurrence closed.** The existing `FuzzLoad` fuzzes the whole ZIP container, so mutations
+die in zip/CRC validation and the unpickler was effectively unreachable — measured at 966k
+execs with 6 interesting inputs. The new `FuzzPickle` takes raw `data.pkl` bytes and builds
+the zip inside the fuzz function: 5.77M execs, 104 interesting. Seeded with all six
+crashers plus the overflow pickle, with a committed corpus. All five real torch-written
+fixtures still load with their value assertions intact.
+
 ### nn — runnable examples for everything shipped today (T852, 2026-07-18)
 
 Twelve new godoc Examples so today's four commits stop adding to the package's

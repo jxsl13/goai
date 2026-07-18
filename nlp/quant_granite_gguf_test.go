@@ -88,8 +88,15 @@ func TestQuantGraniteFromGGUF(t *testing.T) {
 }
 
 // TestQuantGraniteCosineVsFloat pins that the quantized granite is a near-lossless
-// (Q8_0) copy of the float granite — including the scalar effects on the residual
-// stream, which a dropped scalar would blow past the 0.999 cosine gate.
+// (Q8_0) copy of the float granite.
+//
+// Cosine covers EmbeddingMult, AttentionMult and ResidualMult: those act inside the
+// network, so dropping one rotates the logit vector and blows the 0.999 gate. It is
+// blind to LogitsScale, which divides the final logits UNIFORMLY (llama.go:172) —
+// and cosine is scale-invariant, so a QuantizeLlama that dropped logits_scaling
+// entirely would sail through. That is why the L2-magnitude assertion below is a
+// separate gate and not decoration; the sibling Cohere test (§B68) already made
+// exactly this argument for logit_scale, and Granite simply never had it applied.
 func TestQuantGraniteCosineVsFloat(t *testing.T) {
 	g := newQuantGraniteModel(t)
 	q, err := nlp.QuantizeLlama(g, gguf.Q8_0)
@@ -120,6 +127,18 @@ func TestQuantGraniteCosineVsFloat(t *testing.T) {
 	t.Logf("QuantGranite vs float cosine: %.6f", cos)
 	if cos < 0.999 {
 		t.Errorf("QuantGranite cosine %.6f < 0.999", cos)
+	}
+
+	// The scale gate cosine cannot provide. LogitsScale is 8.0 in this fixture, so
+	// dropping it would inflate every logit 8x while leaving the direction — and
+	// therefore the cosine — untouched.
+	magF, magQ := sqrtPos(nf), sqrtPos(nq)
+	ratio := magQ / magF
+	t.Logf("QuantGranite vs float L2 magnitude ratio: %.6f", ratio)
+	if ratio < 0.99 || ratio > 1.01 {
+		t.Errorf("L2 magnitude ratio %.6f outside [0.99, 1.01] — the quantized model's "+
+			"logits-scaling diverged from the float model's (LogitsScale=8.0); cosine "+
+			"cannot see this because the scale is uniform", ratio)
 	}
 }
 

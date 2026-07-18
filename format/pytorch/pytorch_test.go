@@ -160,3 +160,50 @@ func TestLoadProtocols(t *testing.T) {
 		}
 	}
 }
+
+// FuzzPickle fuzzes the RESTRICTED UNPICKLER, which FuzzLoad cannot reach.
+//
+// FuzzLoad mutates the whole ZIP container, so a mutated byte almost always
+// breaks the local header, central directory or CRC and Load bails out in
+// archive/zip long before any pickle opcode is interpreted — 2.25M execs found
+// nothing while hand-written pickles crashed the interpreter instantly. This
+// target takes RAW data.pkl bytes and builds a fresh, valid zip around them
+// inside the fuzz function, so every mutation lands on pickle bytes and the
+// interpreter is actually explored. Storage blobs are supplied so tensor
+// materialization is reachable too.
+//
+// Invariant: no input may panic. Any error is acceptable.
+func FuzzPickle(f *testing.F) {
+	f.Add([]byte{0x80, 2, '}', '.'})
+	f.Add([]byte{0x80, 4, 0x94, '.'})                // MEMOIZE empty-stack peek
+	f.Add([]byte{0x80, 2, 'q', 0, '.'})              // BINPUT empty-stack peek
+	f.Add([]byte{0x80, 2, 'r', 0, 0, 0, 0, '.'})     // LONG_BINPUT empty-stack peek
+	f.Add([]byte{0x80, 2, '(', 'u', '.'})            // SETITEMS empty-stack peek
+	f.Add([]byte{0x80, 2, 's', '.'})                 // SETITEM pop underflow
+	f.Add([]byte{0x80, 2, 'K', 1, 'K', 2, 's', '.'}) // SETITEM empty-stack target
+	// Shape-product overflow: (2^62, 4) wraps to exactly 2^64 ≡ 0.
+	f.Add(hostileShapePickle([]int64{1 << 62, 4}, []int64{4, 1}, 4))
+
+	f.Fuzz(func(t *testing.T, pkl []byte) {
+		var buf bytes.Buffer
+		zw := zip.NewWriter(&buf)
+		for name, data := range map[string][]byte{
+			"archive/data.pkl": pkl,
+			"archive/data/0":   make([]byte, 64),
+			"archive/data/1":   make([]byte, 64),
+		} {
+			w, err := zw.CreateHeader(&zip.FileHeader{Name: name, Method: zip.Store})
+			if err != nil {
+				t.Skip()
+			}
+			if _, err := w.Write(data); err != nil {
+				t.Skip()
+			}
+		}
+		if err := zw.Close(); err != nil {
+			t.Skip()
+		}
+		b := buf.Bytes()
+		_, _ = pytorch.Load(bytes.NewReader(b), int64(len(b)))
+	})
+}
