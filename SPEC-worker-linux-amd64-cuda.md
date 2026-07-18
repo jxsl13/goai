@@ -241,6 +241,38 @@ drei sein." So the standing targets, in order of ceiling:
 The decode side already LEADS llama.cpp-Q8 (1.05-1.19x); prefill (0.66x) is the frontier the
 Tw-COOPMAT arc attacks.
 
+### §ROADMAP — beat-vLLM plan (research-lite 2x adversarial-verified, cited; 2026-07-18)
+
+MEASURED 3-way (RTX 3060, TinyLlama-1.1B): decode batch=1 goai 257 > llcpp 244 > vLLM 103
+(WE WIN); prefill pp128 vLLM 10729 > llcpp 8474 > goai 5600; batched-serving vLLM dominates
+(a CAPABILITY goai lacks). Two fronts, different physics — prefill is COMPUTE-bound, decode
+MEMORY-bound (confirmed):
+
+**FRONT A — prefill (compute-bound), ranked levers (all buildable on CUDA now that nvcc works):**
+A1. fp16 tensor-core GEMM + **fp16 activations END-TO-END** (kill the per-GEMM f32<->f16
+    conversions ResidentBF16 does each call) — THE #1 research lever; our GEMM already hits
+    cuBLAS 26.5 TFLOP/s so the conversion overhead is the waste.
+A2. fused FlashAttention — DONE (#168, mma.h kernel, 3.0x the cuBLAS-batched path). NEXT: wire
+    e2e into the resident prefill forward, measure pp128.
+A3. fused epilogues: SwiGLU into the FFN GEMM epilogue; RMSNorm+RoPE+residual folded in.
+A4. piecewise CUDA-graph for prefill (SGLang does; lower leverage — prefill kernels are long).
+A5. chunked prefill (scheduling, not raw throughput).
+REFUTED as levers: full-prefill-graph-capture, megakernels (those are decode-phase).
+
+**FRONT B — serving throughput (the missing capability), minimal build order (PagedAttention
+SOSP'23 / RadixAttention / FlashInfer, all cited):**
+B1. paged KV-cache pool + block tables (16-token blocks, logical->physical).
+B2. paged+ragged batched decode kernel (block-sparse/BSR, ragged qo_indptr) — needs mma.h /
+    custom kernel = nvcc, now available.
+B3. iteration-level continuous-batch scheduler (admit/evict per decode step).
+B4. chunked prefill (interleave prefill/decode).
+B5. RadixAttention prefix caching + copy-on-write.
+(NOTE: the "18x" throughput figure is NOT a primary-source constant — papers state 2-4x vs
+SOTA, up to 24x vs HF; don't cite 18x.)
+
+Execution order: A2-e2e -> A1 (fp16 e2e) -> A3, in parallel B1->B2 when a serving arc opens.
+The nvcc unlock carries BOTH fronts (fused-attn/epilogue kernels AND paged/ragged attention).
+
 ## §NEXT — open levers
 
 **Tw-COOPMAT (booked 2026-07-18, research-lite CONFIRMED 3/3 + host probes): the prefill
