@@ -52,6 +52,14 @@ metal-bench:
 cuda-test:
 	$(GO) test -tags cuda ./backend/cuda/
 
+## cuda-cubin: nvcc-compile the .cu tensor-core kernels (mma.h/WMMA — nvrtc cannot) to
+## committed fatbins, loaded at runtime via cuModuleLoadDataEx. Needs nvcc + a supported host
+## compiler: source scripts/cuda-nvcc-env.sh (pip nvidia-cuda-nvcc-cu13 + brew gcc@14). sm_86
+## SASS + PTX fallback. Regenerate after editing a kernel; the fatbin is a build artifact like
+## the vulkan .spv. (Tw-FLASHATTN.)
+cuda-cubin:
+	@. scripts/cuda-nvcc-env.sh && nvcc_86 --fatbin -gencode arch=compute_86,code=sm_86 -gencode arch=compute_86,code=compute_86 backend/cuda/kernels/wmma_gemm.cu -o backend/cuda/kernels/wmma_gemm.fatbin
+
 ## vulkan-spv: compile the compute shader to SPIR-V (needs glslc from the Vulkan
 ## SDK / shaderc). The committed .spv is a build artifact embedded by vulkan.go;
 ## regenerate it here after editing matmul.comp (§T43).

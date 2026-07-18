@@ -210,6 +210,40 @@ static int compile_kernel(const char* src, const char* name, const char* entry, 
     return 0;
 }
 
+// load_module_kernel loads a PRECOMPILED cubin/fatbin image (nvcc output — the mma.h/WMMA
+// kernels nvrtc cannot build) via the driver and returns the named entry. gCtx must be current.
+static int load_module_kernel(const void* image, const char* entry, CUfunction* out) {
+    CUmodule mod;
+    if (cuModuleLoadDataEx(&mod, image, 0, NULL, NULL) != CUDA_SUCCESS) return -6;
+    if (cuModuleGetFunction(out, mod, entry) != CUDA_SUCCESS) return -7;
+    return 0;
+}
+
+static CUfunction gWmmaGemm = NULL; // nvcc-compiled WMMA GEMM (Tw-FLASHATTN slice 1)
+
+// cu_wmma_gemm: C[M,N]f32 = A[M,K]f16 · B[K,N]f16 on tensor cores via an nvcc-compiled WMMA
+// kernel loaded from `fatbin`. M,N,K must be multiples of 16. Pipeline proof for nvcc kernels.
+int cu_wmma_gemm(const void* fatbin, int fatlen, const void* dA, const void* dB, void* dC,
+                 int M, int K, int N) {
+    (void)fatlen;
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (!gWmmaGemm && load_module_kernel(fatbin, "wmma_gemm", &gWmmaGemm) != 0) { rc = -2; goto done; }
+    {
+        void* args[6] = { (void*)&dA, (void*)&dB, &dC, &M, &N, &K };
+        unsigned tilesN = (unsigned)((N + 15) / 16);
+        unsigned tilesM = (unsigned)((M + 15) / 16);
+        unsigned by = 4; // 4 M-tile warps per block
+        unsigned gx = tilesN, gy = (tilesM + by - 1) / by;
+        rc = (cuLaunchKernel(gWmmaGemm, gx, gy, 1, 32, by, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
 // launch_unary runs an in-place elementwise kernel (float* x, int n) on gStream.
 static int launch_unary(CUfunction fn, void* d, int n) {
     int threads = 256, blocks = (n + threads - 1) / threads;
