@@ -163,7 +163,8 @@ jobs:
       # one of those files, so it compiles nothing. Verified by injecting a syntax
       # error and watching it pass.) Syntax rot in those files IS caught, by the
       # tree-wide gofmt step above, which parses regardless of build tags; type and
-      # API rot is not, and cannot be without a toolchain. See ADR-0029.
+      # API rot is covered by the dedicated cuda-compile lane below (T866, ADR-0029),
+      # which provisions the toolkit; running the corpus still needs real silicon.
       - name: race-detector tests for the affected packages (§T587)
         run: |
           BASE="${{ github.event.pull_request.base.sha || github.event.before }}"
@@ -208,6 +209,64 @@ jobs:
         run: |
           BASE="${{ github.event.pull_request.base.sha || github.event.before }}"
           go run ./internal/cichange -run "$BASE" HEAD -- -short -count=1 -timeout 20m
+
+  # §T866 / ADR-0029 — the cuda axis. Closes the type/API-rot gap that ADR-0029
+  # first recorded as unclosable: 56 llamagpu cuda test files plus backend/cuda
+  # itself were never compiled by CI, because `go vet ./...` has the wrong tags and
+  # the runners had no CUDA headers.
+  #
+  # No GPU is needed and none is used. The kernels are compiled at RUNTIME via
+  # nvrtc (backend/cuda/cuda.go:341) and the WMMA .cu files ship as a committed
+  # fatbin, so nothing here invokes nvcc — headers and link stubs are enough to
+  # typecheck and link the whole tagged tree. `-lcuda` resolves against the driver
+  # STUB the toolkit ships in lib64/stubs, which exists precisely so CUDA software
+  # can be built on machines with no driver.
+  #
+  # This lane can therefore catch a signature drift, a renamed symbol or a bad cgo
+  # binding. It CANNOT catch a wrong number — executing the cuda corpus needs real
+  # silicon, which remains out of scope (ADR-0029's third row).
+  cuda-compile:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    name: cuda compile+link / ubuntu
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.x"
+          cache: false
+      - uses: ./.github/actions/go-build-cache
+        with:
+          lane: cuda-compile
+      # NVIDIA's own apt repo, no third-party action — this repo does not take
+      # dependencies it does not have to (§C1), and a build-time supply chain is
+      # still a supply chain. Only the dev subset is installed (headers + import
+      # libs + nvrtc), not the ~3 GB full toolkit: nvcc is not needed, per above.
+      - name: install the CUDA dev subset (headers + link libs; no driver, no GPU)
+        run: |
+          set -euxo pipefail
+          . /etc/os-release
+          distro="ubuntu${VERSION_ID//./}"
+          wget -q "https://developer.download.nvidia.com/compute/cuda/repos/${distro}/x86_64/cuda-keyring_1.1-1_all.deb"
+          sudo dpkg -i cuda-keyring_1.1-1_all.deb
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            cuda-cudart-dev-12-6 libcublas-dev-12-6 cuda-nvrtc-dev-12-6
+          ls /usr/local/cuda-12.6/include/cuda_runtime.h
+      - name: compile+link the cuda-tagged tree (typecheck, then link the test binaries)
+        env:
+          CGO_CFLAGS: -I/usr/local/cuda-12.6/include
+          CGO_LDFLAGS: -L/usr/local/cuda-12.6/lib64 -L/usr/local/cuda-12.6/lib64/stubs
+        run: |
+          set -euxo pipefail
+          go vet -tags cuda ./backend/cuda/ ./llamagpu/
+          # -c links the test binary without running it: proves the LDFLAGS and every
+          # extern symbol actually resolve, which vet alone does not.
+          go test -c -tags cuda -o /dev/null ./llamagpu/
+          go test -c -tags cuda -o /dev/null ./backend/cuda/
 
   # §T604 capability matrix, vulkan axis: the tagged backend compiles on every
   # OS and its tests EXECUTE wherever an ICD is installable — Mesa lavapipe on

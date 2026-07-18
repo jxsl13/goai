@@ -4,6 +4,34 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### ci — provision the CUDA toolkit and compile+link the cuda tree (T866, ADR-0029 update)
+
+ADR-0029, written hours earlier, declined a cuda compile check on the grounds that "no
+runner has the CUDA toolkit" — treating a runner *configuration* as a fixed constraint. It
+isn't one. A new `cuda-compile` lane installs the toolkit and closes the gap.
+
+No GPU and no driver are involved. Kernels are compiled at RUNTIME via nvrtc
+(`backend/cuda/cuda.go:341`) and the WMMA `.cu` files ship as a committed fatbin, so nvcc is
+never invoked by the Go build — headers and import libraries suffice. `-lcuda` resolves
+against the driver STUB the toolkit ships in `lib64/stubs`, which exists precisely so CUDA
+software can be built on driverless machines. Only the dev subset is installed
+(`cuda-cudart-dev`, `libcublas-dev`, `cuda-nvrtc-dev`), not the ~3 GB full toolkit, from
+NVIDIA's own apt repo rather than a third-party action — this repo takes no dependency it
+does not have to, and a build-time supply chain is still a supply chain.
+
+The lane runs `go vet -tags cuda` over `backend/cuda` and `llamagpu`, then
+`go test -c -o /dev/null` to LINK both test binaries. The link step is the part `vet` cannot
+do: it resolves every extern symbol and validates the cgo `LDFLAGS`.
+
+Boundary after this change: syntax rot caught (tree-wide gofmt), type/API/cgo-binding/link
+rot now caught, and logic inside a test body still NOT caught — executing the corpus needs
+real NVIDIA silicon. The inverted-NaN-guard bug found in the same sweep would still slip
+through, because compiling a test is not running it.
+
+The ADR is amended rather than rewritten, so the original reasoning and its wrong premise
+both stay on the record: it verified its check rigorously via fault injection, but never
+challenged the assumption forcing the check.
+
 ### ci — compile the vulkan test corpus; document why the cuda one cannot be (T865, ADR-0029)
 
 A sweep measured 117 test funcs in `llamagpu` against **32** reachable by CI. `go vet ./...`

@@ -1,6 +1,7 @@
 # ADR-0029 — the build-tagged test corpora have a verification boundary, and it is where the toolchain ends
 
-- Status: Accepted (T865; vulkan half implemented, cuda half explicitly declined)
+- Status: Accepted, then **partially superseded the same day** — see "Update (T866)" below.
+  The reasoning stands; one of its premises turned out to be wrong.
 - Date: 2026-07-18
 - Task: §T865 — from the `llamagpu` discovery sweep, which measured 117 test funcs in the
   package against 32 reachable by CI
@@ -76,3 +77,49 @@ coverage — which is strictly worse, because it stops people looking.
   runs against an empty set is indistinguishable from a passing check.** Any build-tagged or
   conditionally-scoped verification must be proven non-vacuous — inject a fault and confirm
   it is caught — before it is trusted or cited as coverage.
+
+## Update (T866) — the cuda row was closable after all
+
+The decision above declined the cuda check on the grounds that "no runner has the CUDA
+toolkit". That is a statement about the runner as configured, not about what is possible —
+and treating a *configuration* as a *law of nature* is how a deferred gap becomes a
+permanent one. The user asked the obvious question the ADR failed to ask itself: why not
+install it?
+
+Nothing blocks it. The build needs no GPU and no driver:
+
+- Kernels are compiled at RUNTIME via nvrtc (`backend/cuda/cuda.go:341`), and the WMMA `.cu`
+  files ship as a committed fatbin, so **nvcc is never invoked** by the Go build. Only
+  headers and import libraries are required.
+- `-lcuda` resolves against the driver STUB the toolkit ships in `lib64/stubs`, which exists
+  precisely so CUDA software can be built on machines with no driver.
+
+So a `cuda-compile` lane installs the dev subset (`cuda-cudart-dev`, `libcublas-dev`,
+`cuda-nvrtc-dev` — not the ~3 GB full toolkit) from NVIDIA's own apt repo, and runs
+`go vet -tags cuda` over `backend/cuda` and `llamagpu`, then `go test -c -o /dev/null` to
+LINK the test binaries. The link step matters: `vet` typechecks but does not resolve extern
+symbols or validate `LDFLAGS`.
+
+NVIDIA's apt repo is used directly rather than a third-party setup-cuda action: this repo
+takes no dependencies it does not have to (§C1), and a build-time supply chain is still a
+supply chain.
+
+### What the revised boundary is
+
+| Rot class | Before T866 | After T866 |
+| --- | --- | --- |
+| Syntax | caught (tree-wide gofmt) | caught |
+| Type / API / cgo bindings / link symbols | **not caught** | **caught** |
+| Logic inside a test body (a wrong number) | not caught | **still not caught** |
+
+The third row is unchanged and is the honest residual: executing the cuda corpus needs real
+NVIDIA silicon. The §B78 inverted-NaN-guard bug still would not be caught by this lane —
+compiling a test is not running it. That caveat from the original decision survives intact;
+only the middle row moved.
+
+### The lesson worth keeping
+
+The original ADR verified its *check* rigorously (fault injection proved the darwin cuda vet
+vacuous) but did not challenge its *premise*. "The runner doesn't have it" invited "then add
+it", and nobody asked until prompted. Verifying that a check works is not the same as
+verifying that the constraint forcing the check was real.
