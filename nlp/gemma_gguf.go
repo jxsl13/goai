@@ -84,7 +84,9 @@ func GemmaFromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor) (*Gem
 			}
 		}
 		if m.Config.HeadDim == 0 { // no attention.key_length key: derive from the q width
-			m.Config.HeadDim = w[1].Shape()[0] / heads
+			if m.Config.HeadDim, err = gemmaHeadDimFromQ(p+"attn_q.weight", w[1], heads); err != nil {
+				return nil, err
+			}
 		}
 		m.Blocks = append(m.Blocks, &GemmaBlock{
 			// Norm gains are pre-folded on disk (converter's +1): copy, don't re-fold.
@@ -112,25 +114,39 @@ func GemmaFromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor) (*Gem
 // [GemmaFromGGUF] (dequantized tensors) and [QuantGemmaFromGGUF] (still-quantized
 // tensors). Vocab and the shape-derived HeadDim fallback are left at zero: they come
 // from the tensor maps, which only the callers hold.
+//
+// Every structural count is validated POSITIVE through [metaPositiveInt] — the same
+// predicate llamaCfgFromGGUFMeta uses (T861/§B76). Gemma needs its own call because it
+// parses its own metadata: the llama-family choke point never sees a gemma file, so the
+// class fix there did NOT reach this architecture. Validating here covers BOTH twins,
+// which is the point of doing it in the shared parser rather than in one loader.
+//
+// A head_count of 0 was the sharp edge: it divided straight through to
+// `attn_q rows / heads` in [GemmaFromGGUF]'s key_length fallback, an integer
+// divide-by-zero PANIC (the quantized twin guarded `cfg.Heads > 0` and merely left
+// HeadDim at 0 — an err == nil model, §V29's harder-to-trace class). An ABSENT key
+// still keeps its documented fallback; only a PRESENT non-positive value errors, so
+// round-trips are untouched.
 func gemmaCfgFromGGUFMeta(meta map[string]any) (GemmaConfig, error) {
 	const arch = "gemma"
 	if a, _ := meta[ggufArch].(string); a != arch {
 		return GemmaConfig{}, fmt.Errorf("nlp: GGUF general.architecture=%q, want %q", a, arch)
 	}
 	key := func(suffix string) string { return arch + "." + suffix }
-	dim, err := metaInt(meta, key(ggufEmbLen))
+	positive := func(suffix string) (int, error) { return metaPositiveInt(meta, key(suffix)) }
+	dim, err := positive(ggufEmbLen)
 	if err != nil {
 		return GemmaConfig{}, err
 	}
-	layers, err := metaInt(meta, key(ggufBlockCnt))
+	layers, err := positive(ggufBlockCnt)
 	if err != nil {
 		return GemmaConfig{}, err
 	}
-	ffn, err := metaInt(meta, key(ggufFFLen))
+	ffn, err := positive(ggufFFLen)
 	if err != nil {
 		return GemmaConfig{}, err
 	}
-	heads, err := metaInt(meta, key(ggufHeadCnt))
+	heads, err := positive(ggufHeadCnt)
 	if err != nil {
 		return GemmaConfig{}, err
 	}
@@ -138,18 +154,53 @@ func gemmaCfgFromGGUFMeta(meta map[string]any) (GemmaConfig, error) {
 		Dim: dim, Layers: layers, FFN: ffn, Heads: heads, KVHeads: heads,
 		Eps:      metaFloat(meta, key(ggufRMSEps), 1e-6),
 		RopeBase: metaFloat(meta, key(ggufRopeFreq), 10000),
-		Ctx:      dim, // provisional; overwritten from context_length below
 	}
-	if kv, e := metaInt(meta, key(ggufHeadKV)); e == nil {
-		cfg.KVHeads = kv
+	// Absent ⇒ the documented fallback (kv = heads, ctx = dim, head_dim from the q
+	// width); present-and-non-positive ⇒ a malformed geometry, not a fallback request.
+	if cfg.KVHeads, err = metaOptionalPositiveInt(meta, key(ggufHeadKV), heads); err != nil {
+		return GemmaConfig{}, err
 	}
-	if c, e := metaInt(meta, key(ggufCtxLen)); e == nil {
-		cfg.Ctx = c
+	if cfg.Ctx, err = metaOptionalPositiveInt(meta, key(ggufCtxLen), dim); err != nil {
+		return GemmaConfig{}, err
 	}
-	if hd, e := metaInt(meta, key(ggufKeyLen)); e == nil {
-		cfg.HeadDim = hd
+	if cfg.HeadDim, err = metaOptionalPositiveInt(meta, key(ggufKeyLen), 0); err != nil {
+		return GemmaConfig{}, err
 	}
 	return cfg, nil
+}
+
+// gemmaHeadDimFromRows derives Gemma's decoupled per-head width from an attn_q row
+// count — the fallback taken when a file carries no attention.key_length, shared by
+// [GemmaFromGGUF], [Gemma2FromGGUF] and both their quantized twins so all four accept
+// and reject the same files.
+//
+// The bare `rows / heads` this replaces had two §V29 holes, both reachable from an
+// untrusted file: heads = 0 PANICKED with an integer divide-by-zero on the float path,
+// and a row count that is not a multiple of heads truncated to a head width the tensor
+// does not actually have — loading with err == nil and mis-shaping every head. The
+// rank test is here too because the row count alone is meaningless on a non-2-D tensor,
+// which the float path would then hand to transpose2D (Shape()[1], another panic) while
+// the quantized twin's `len(aq.Shape) == 2` already skipped it.
+func gemmaHeadDimFromRows(name string, rows, heads int) (int, error) {
+	if heads <= 0 || rows <= 0 || rows%heads != 0 {
+		return 0, fmt.Errorf("nlp: GGUF %s has %d rows, want a positive multiple of head_count %d (the attention.key_length fallback)", name, rows, heads)
+	}
+	return rows / heads, nil
+}
+
+// gemmaHeadDimFromQ is [gemmaHeadDimFromRows] for the float loaders, which hold a
+// *tensor.Tensor rather than the quantized twins' gguf.QuantTensor and so must state
+// the rank test in their own idiom (Ndim, not len(Shape)). The arithmetic — the part
+// that can drift — stays in the one shared function.
+//
+// The rank test is not optional on this path: [GemmaFromGGUF] and [Gemma2FromGGUF]
+// hand the very same tensor to transpose2D immediately afterwards, which reads
+// Shape()[1] and panics on a rank-1 tensor.
+func gemmaHeadDimFromQ(name string, w *tensor.Tensor, heads int) (int, error) {
+	if w.Ndim() != 2 {
+		return 0, fmt.Errorf("nlp: GGUF %s is %d-D, want a 2-D [out, in] projection", name, w.Ndim())
+	}
+	return gemmaHeadDimFromRows(name, w.Shape()[0], heads)
 }
 
 // GemmaToGGUF is the inverse of [GemmaFromGGUF]: it serializes a Gemma (v1) into GGUF

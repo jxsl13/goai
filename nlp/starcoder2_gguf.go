@@ -99,6 +99,11 @@ func StarCoder2FromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor) 
 			if err != nil {
 				return nil, err
 			}
+			// The bias is sliced at the offsets the WEIGHT check above produced, so
+			// its own length has to be pinned to them first (the quant twin's guard).
+			if err := fusedBiasLen(p+"attn_qkv.bias", qkvB, qSize+2*kvSize); err != nil {
+				return nil, err
+			}
 			wq, wk, wv = sliceRows(qkv, 0, qSize), sliceRows(qkv, qSize, qSize+kvSize), sliceRows(qkv, qSize+kvSize, qSize+2*kvSize)
 			bq, bk, bv = slice1D(qkvB, 0, qSize), slice1D(qkvB, qSize, qSize+kvSize), slice1D(qkvB, qSize+kvSize, qSize+2*kvSize)
 		} else {
@@ -264,8 +269,33 @@ func layerNormFromGGUF(ts map[string]*tensor.Tensor, prefix string, eps float64)
 	return &nn.LayerNorm{Gamma: cloneF64(g), Beta: cloneF64(b), Eps: eps}, nil
 }
 
+// fusedBiasLen pins a fused blk.N.attn_qkv.bias to the row count its attn_qkv.weight
+// was just validated against, BEFORE [slice1D] cuts it at those same offsets (§V29).
+//
+// The float loaders that accept llama.cpp's fused-qkv layout ([StarCoder2FromGGUF] and
+// [GPTNeoXFromGGUF]) check the WEIGHT's rows and then slice the BIAS at the offsets
+// that check produced — but the bias is a separate tensor with its own, separately
+// attacker-controlled length. slice1D does a raw `src[a:b]` with no bounds test of its
+// own, so a SHORT bias was an index-out-of-range panic and a LONG one loaded silently
+// truncated (err == nil, wrong model). Both quantized twins already gate on exactly
+// this Numel() comparison (quant_starcoder2_gguf.go, quant_gptneox_gguf.go); it lives
+// here so the two float loaders share the one predicate rather than restating it.
+//
+// Length, not rank, is the test — deliberately: it is what the quantized twins check,
+// and it is sufficient, because slice1D reads the flat backing store whose extent is
+// exactly Numel(). Matching them keeps the float and quantized paths accepting the
+// same set of files.
+func fusedBiasLen(name string, b *tensor.Tensor, want int) error {
+	if got := b.Numel(); got != want {
+		return fmt.Errorf("nlp: GGUF %s has %d elements, want the %d rows of the fused attn_qkv.weight", name, got, want)
+	}
+	return nil
+}
+
 // slice1D returns elements [a,b) of a 1-D tensor as a fresh F64 tensor, widening
 // from any dtype — the 1-D counterpart of sliceRows, used to unpack fused qkv biases.
+// Callers MUST pin the length first ([fusedBiasLen]): the `src[a:b]` below has no
+// bounds test of its own.
 func slice1D(t *tensor.Tensor, a, b int) *tensor.Tensor {
 	src := cloneF64(t).Storage().F64()
 	out := tensor.New(tensor.F64, tensor.Shape{b - a})

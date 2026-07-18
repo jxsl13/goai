@@ -136,7 +136,9 @@ func Gemma2FromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor) (*Ge
 			}
 		}
 		if m.Config.HeadDim == 0 { // no attention.key_length key: derive from the q width
-			m.Config.HeadDim = w[1].Shape()[0] / heads
+			if m.Config.HeadDim, err = gemmaHeadDimFromQ(p+"attn_q.weight", w[1], heads); err != nil {
+				return nil, err
+			}
 		}
 		m.Blocks = append(m.Blocks, &Gemma2Block{
 			// All four sandwich-norm gains are pre-folded on disk (converter's +1):
@@ -184,19 +186,20 @@ func gemma2CfgFromGGUFMeta(meta map[string]any) (Gemma2Config, error) {
 		return Gemma2Config{}, fmt.Errorf("nlp: GGUF general.architecture=%q, want %q", a, arch)
 	}
 	key := func(suffix string) string { return arch + "." + suffix }
-	dim, err := metaInt(meta, key(ggufEmbLen))
+	positive := func(suffix string) (int, error) { return metaPositiveInt(meta, key(suffix)) }
+	dim, err := positive(ggufEmbLen)
 	if err != nil {
 		return Gemma2Config{}, err
 	}
-	layers, err := metaInt(meta, key(ggufBlockCnt))
+	layers, err := positive(ggufBlockCnt)
 	if err != nil {
 		return Gemma2Config{}, err
 	}
-	ffn, err := metaInt(meta, key(ggufFFLen))
+	ffn, err := positive(ggufFFLen)
 	if err != nil {
 		return Gemma2Config{}, err
 	}
-	heads, err := metaInt(meta, key(ggufHeadCnt))
+	heads, err := positive(ggufHeadCnt)
 	if err != nil {
 		return Gemma2Config{}, err
 	}
@@ -206,16 +209,18 @@ func gemma2CfgFromGGUFMeta(meta map[string]any) (Gemma2Config, error) {
 		RopeBase:      metaFloat(meta, key(ggufRopeFreq), 10000), // converter writes no freq_base; llama.cpp default
 		AttnLogitCap:  metaFloat(meta, key(ggufAttnSoftcap), gemma2DefaultAttnCap),
 		FinalLogitCap: metaFloat(meta, key(ggufFinalSoftcap), gemma2DefaultFinalCap),
-		Ctx:           dim, // provisional; overwritten from context_length below
 	}
-	if kv, e := metaInt(meta, key(ggufHeadKV)); e == nil {
-		cfg.KVHeads = kv
+	// Absent ⇒ the documented fallback; present-and-non-positive ⇒ malformed.
+	if cfg.KVHeads, err = metaOptionalPositiveInt(meta, key(ggufHeadKV), heads); err != nil {
+		return Gemma2Config{}, err
 	}
-	if c, e := metaInt(meta, key(ggufCtxLen)); e == nil {
-		cfg.Ctx = c
+	if cfg.Ctx, err = metaOptionalPositiveInt(meta, key(ggufCtxLen), dim); err != nil {
+		return Gemma2Config{}, err
 	}
-	if hd, e := metaInt(meta, key(ggufKeyLen)); e == nil {
-		cfg.HeadDim = hd
+	if cfg.HeadDim, err = metaOptionalPositiveInt(meta, key(ggufKeyLen), 0); err != nil {
+		return Gemma2Config{}, err
+	}
+	if hd := cfg.HeadDim; hd > 0 {
 		if vl, e := metaInt(meta, key(ggufValLen)); e == nil && vl != hd {
 			return Gemma2Config{}, fmt.Errorf("nlp: Gemma2 GGUF attention.value_length %d != key_length %d (GoAI's Gemma2 has a single per-head width)", vl, hd)
 		}

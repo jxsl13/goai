@@ -154,16 +154,26 @@ func CohereFromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor) (*Co
 		if err != nil {
 			return nil, err
 		}
+		// The GGUF keeps the HF interleaved row layout (NORM rope on unpermuted rows);
+		// permute interleaved→split-half so GoAI's split-half OpRoPE reproduces it.
+		// v/o are untouched. The SPLIT branch above only proves the tensors are
+		// PRESENT, so the geometry the fused branch pins for its own slices is pinned
+		// here for both — the same thing the quantized twin's mkQPermuted does.
+		qPerm, err := permuteInterleaveToSplitChecked(p+"attn_q.weight", wq, cfg.Heads, cfg.HeadDim)
+		if err != nil {
+			return nil, err
+		}
+		kPerm, err := permuteInterleaveToSplitChecked(p+"attn_k.weight", wk, cfg.kvHeads(), cfg.HeadDim)
+		if err != nil {
+			return nil, err
+		}
 		m.Blocks = append(m.Blocks, &CohereBlock{
 			InputNorm: layerNormFromHF(inNorm, cfg.Eps), // weight-only LLM_NORM: γ with a zero β
-			// The GGUF keeps the HF interleaved row layout (NORM rope on unpermuted
-			// rows); permute interleaved→split-half so GoAI's split-half OpRoPE
-			// reproduces it. v/o are untouched.
-			Wq:  transpose2D(permuteInterleaveToSplit(wq, cfg.Heads, cfg.HeadDim)),
-			Wk:  transpose2D(permuteInterleaveToSplit(wk, cfg.kvHeads(), cfg.HeadDim)),
-			Wv:  transpose2D(wv),
-			Wo:  transpose2D(wo),
-			FFN: swiGLUFromGGUF(gate, up, down),
+			Wq:        transpose2D(qPerm),
+			Wk:        transpose2D(kPerm),
+			Wv:        transpose2D(wv),
+			Wo:        transpose2D(wo),
+			FFN:       swiGLUFromGGUF(gate, up, down),
 		})
 	}
 	norm, ok := tensors["output_norm.weight"]

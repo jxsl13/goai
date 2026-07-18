@@ -59,24 +59,33 @@ func LlamaFromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor) (*Lla
 	// per-head width (RoPE rotates channel pairs). That row count is separately
 	// attacker-controlled — a validated config does not imply it — so it is checked
 	// here: without this the mismatch reached gatherRows and PANICKED, where §V29
-	// requires a clean error. Mirrors the shape pinning the quantized twin already
-	// performs before its own permute (ropeUnpermutePerm, quant_mixtral_gguf.go).
-	ropeGeom := func(name string, rows, heads int) error {
-		if heads <= 0 || rows%heads != 0 || (rows/heads)%2 != 0 {
-			return fmt.Errorf("nlp: GGUF %s has %d rows, want %d heads × an even head_dim", name, rows, heads)
-		}
-		return nil
-	}
+	// requires a clean error. [ropeRowGeom] / [ropeVecGeom] route that check through
+	// ropeUnpermutePerm, the same predicate the quantized twins gate on.
 	for l := range cfg.Layers {
 		p := fmt.Sprintf("blk.%d.", l)
-		if wq, ok := ts[p+"attn_q.weight"]; ok && wq.Ndim() == 2 {
-			if err := ropeGeom(p+"attn_q.weight", wq.Shape()[0], cfg.Heads); err != nil {
+		// The rank test is INSIDE the body, not part of the presence condition.
+		// Written as `ok && wq.Ndim() == 2` it read like a guard but behaved as the
+		// opposite: a rank-1 tensor made the condition false, skipped the very
+		// validation meant to reject it, and fell through to transpose2D, which
+		// panicked with `index out of range [1] with length 1`. A guard expressed
+		// as a condition is not a guard — it only runs on the inputs that were
+		// already fine (§B77).
+		if wq, ok := ts[p+"attn_q.weight"]; ok {
+			if wq.Ndim() != 2 {
+				return nil, fmt.Errorf("nlp: %sattn_q.weight has rank %d, want a 2-D [rows, dim] tensor",
+					p, wq.Ndim())
+			}
+			if err := ropeRowGeom(p+"attn_q.weight", wq, cfg.Heads); err != nil {
 				return nil, err
 			}
 			ts[p+"attn_q.weight"] = ropeUnpermuteRows(wq, cfg.Heads)
 		}
-		if wk, ok := ts[p+"attn_k.weight"]; ok && wk.Ndim() == 2 {
-			if err := ropeGeom(p+"attn_k.weight", wk.Shape()[0], cfg.kvHeads()); err != nil {
+		if wk, ok := ts[p+"attn_k.weight"]; ok {
+			if wk.Ndim() != 2 {
+				return nil, fmt.Errorf("nlp: %sattn_k.weight has rank %d, want a 2-D [rows, dim] tensor",
+					p, wk.Ndim())
+			}
+			if err := ropeRowGeom(p+"attn_k.weight", wk, cfg.kvHeads()); err != nil {
 				return nil, err
 			}
 			ts[p+"attn_k.weight"] = ropeUnpermuteRows(wk, cfg.kvHeads())
@@ -86,13 +95,13 @@ func LlamaFromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor) (*Lla
 		// llama-arch files — the LLaMAfied-Qwen lineage behind ggml's optional
 		// bq/bk/bv tensors — need the same un-permute; v stays raw (§B67 follow-up).
 		if bq, ok := ts[p+"attn_q.bias"]; ok && bq.Ndim() == 1 {
-			if err := ropeGeom(p+"attn_q.bias", bq.Shape()[0], cfg.Heads); err != nil {
+			if err := ropeVecGeom(p+"attn_q.bias", bq, cfg.Heads); err != nil {
 				return nil, err
 			}
 			ts[p+"attn_q.bias"] = ropeUnpermuteVec(bq, cfg.Heads)
 		}
 		if bk, ok := ts[p+"attn_k.bias"]; ok && bk.Ndim() == 1 {
-			if err := ropeGeom(p+"attn_k.bias", bk.Shape()[0], cfg.kvHeads()); err != nil {
+			if err := ropeVecGeom(p+"attn_k.bias", bk, cfg.kvHeads()); err != nil {
 				return nil, err
 			}
 			ts[p+"attn_k.bias"] = ropeUnpermuteVec(bk, cfg.kvHeads())
@@ -306,16 +315,7 @@ func llamaCfgFromGGUFMeta(arch string, meta map[string]any) (LlamaConfig, error)
 	key := func(suffix string) string { return arch + "." + suffix }
 	// positive reads the count at suffix and rejects a non-positive value: every
 	// llama-family structural count is a dimension, and no dimension is ever ≤ 0.
-	positive := func(suffix string) (int, error) {
-		n, err := metaInt(meta, key(suffix))
-		if err != nil {
-			return 0, err
-		}
-		if n <= 0 {
-			return 0, fmt.Errorf("nlp: GGUF %s = %d, want a positive count", key(suffix), n)
-		}
-		return n, nil
-	}
+	positive := func(suffix string) (int, error) { return metaPositiveInt(meta, key(suffix)) }
 	dim, err := positive(ggufEmbLen)
 	if err != nil {
 		return LlamaConfig{}, err
@@ -334,25 +334,17 @@ func llamaCfgFromGGUFMeta(arch string, meta map[string]any) (LlamaConfig, error)
 	}
 	// head_count_kv is optional (absent ⇒ multi-head, kv = heads), but a PRESENT
 	// value of 0 or less is a malformed geometry, not a request for the fallback.
-	kv := heads
-	if _, present := meta[key(ggufHeadKV)]; present {
-		k, err := positive(ggufHeadKV)
-		if err != nil {
-			return LlamaConfig{}, err
-		}
-		kv = k
+	kv, err := metaOptionalPositiveInt(meta, key(ggufHeadKV), heads)
+	if err != nil {
+		return LlamaConfig{}, err
 	}
 	cfg := LlamaConfig{
 		Dim: dim, Layers: layers, Hidden: hidden, Heads: heads, KVHeads: kv,
 		Eps: metaFloat(meta, key(ggufRMSEps), 1e-5), RopeBase: metaFloat(meta, key(ggufRopeFreq), 10000),
 		Ctx: dim, // provisional; overwritten from context_length below
 	}
-	if _, present := meta[key(ggufCtxLen)]; present {
-		c, err := positive(ggufCtxLen)
-		if err != nil {
-			return LlamaConfig{}, err
-		}
-		cfg.Ctx = c
+	if cfg.Ctx, err = metaOptionalPositiveInt(meta, key(ggufCtxLen), dim); err != nil {
+		return LlamaConfig{}, err
 	}
 	return cfg, nil
 }
@@ -381,6 +373,41 @@ func metaInt(meta map[string]any, key string) (int, error) {
 	default:
 		return 0, fmt.Errorf("nlp: GGUF %s is %T, want an integer", key, n)
 	}
+}
+
+// metaPositiveInt reads the structural count at key and rejects a non-positive value.
+// Every GGUF count this package reads is a DIMENSION — an embedding width, a block or
+// head count, a context length — and no dimension is ever ≤ 0, so a zero or negative
+// one is a malformed file, not a configuration (§V29: a clean error, never a panic and
+// never a wrong-but-nil-error model).
+//
+// Extracted from [llamaCfgFromGGUFMeta]'s own validation (T861/§B76) so the
+// architectures with their OWN metadata parsers — gemmaCfgFromGGUFMeta and
+// gemma2CfgFromGGUFMeta, which the llama-family choke point does NOT reach — share one
+// predicate and one wording instead of drifting apart. A head_count of 0 reaching a
+// bare `rows / heads` is an integer-divide-by-zero PANIC; a negative one silently
+// yields a negative head width and loads with err == nil.
+func metaPositiveInt(meta map[string]any, key string) (int, error) {
+	n, err := metaInt(meta, key)
+	if err != nil {
+		return 0, err
+	}
+	if n <= 0 {
+		return 0, fmt.Errorf("nlp: GGUF %s = %d, want a positive count", key, n)
+	}
+	return n, nil
+}
+
+// metaOptionalPositiveInt is [metaPositiveInt] for a key that carries a documented
+// FALLBACK: an ABSENT key yields def with no error, while a key that is PRESENT and
+// non-positive (or not an integer at all) is rejected. That asymmetry is the property
+// round-trips depend on — head_count_kv absent means "multi-head, kv = heads" and
+// context_length absent means "embedding_length", but neither ever means 0.
+func metaOptionalPositiveInt(meta map[string]any, key string, def int) (int, error) {
+	if _, present := meta[key]; !present {
+		return def, nil
+	}
+	return metaPositiveInt(meta, key)
 }
 
 // metaFloat reads a GGUF metadata value as a float64, returning def when absent.

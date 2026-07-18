@@ -102,6 +102,12 @@ func GPTNeoXFromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor) (*G
 		if err != nil {
 			return nil, err
 		}
+		// The bias is sliced at the offsets the WEIGHT check above produced, so its own
+		// length has to be pinned to them first — [fusedBiasLen], the guard
+		// QuantGPTNeoXFromGGUF already applies (a short bias panicked in slice1D).
+		if err := fusedBiasLen(p+"attn_qkv.bias", qkvB, 3*dim); err != nil {
+			return nil, err
+		}
 		// On-disk layout is [all-q; all-k; all-v], head-contiguous (the converter has
 		// already de-interleaved HF's per-head packing) — plain thirds, no splitNeoXQKV.
 		wq, wk, wv := sliceRows(qkv, 0, dim), sliceRows(qkv, dim, 2*dim), sliceRows(qkv, 2*dim, 3*dim)
