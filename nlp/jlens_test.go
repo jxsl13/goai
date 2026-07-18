@@ -1,6 +1,7 @@
 package nlp_test
 
 import (
+	"fmt"
 	"math"
 	"path/filepath"
 	"testing"
@@ -376,5 +377,71 @@ func checkUniformDiag(t *testing.T, m *tensor.Tensor, dim int, want float64) {
 				t.Fatalf("off-diagonal [%d,%d] = %g, want exact 0", a, b, got)
 			}
 		}
+	}
+}
+
+// Migration gate: FitJLens now seeds each per-target VJP with
+// autograd.Tape.BackwardGrad(h_L, c) instead of the pre-migration workaround
+// of recording m = h_L ⊙ c and calling Backward(m). The two seedings must be
+// BIT-IDENTICAL at every captured residual (the Mul VJP turns Backward(m)'s
+// ones seed into exactly c, since 1·x == x in IEEE 754), and the fit's
+// accumulation code is untouched — so grad bit-identity here certifies the
+// whole fit is bit-identical to the pre-migration one.
+func TestFitJLensExplicitCotangentBitIdentity(t *testing.T) {
+	tokens := []int{1, 5, 3, 7, 2, 4}
+	models := map[string]nlp.ResidualModel{
+		"gpt":   jlensGPT(t, 16, 8, 8, 2, 2),
+		"llama": jlensLlama(t, 2),
+	}
+	forward := func(m nlp.ResidualModel) (*autograd.Tape, *backend.Context, []*tensor.Tensor) {
+		tape := autograd.NewTape()
+		ctx := tape.Context()
+		var resids []*tensor.Tensor
+		if _, err := m.ForwardResiduals(ctx, tokens, func(_ int, h *tensor.Tensor) {
+			resids = append(resids, h)
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return tape, ctx, resids
+	}
+	for name, m := range models {
+		t.Run(name, func(t *testing.T) {
+			// Two independent forwards (deterministic weights → bit-identical
+			// activations): one seeded via BackwardGrad, one via the old
+			// inner-product workaround.
+			tapeNew, _, residsNew := forward(m)
+			tapeOld, ctxOld, residsOld := forward(m)
+			hLNew := residsNew[len(residsNew)-1]
+			hLOld := residsOld[len(residsOld)-1]
+			seq, d := hLNew.Shape()[0], hLNew.Shape()[1]
+
+			for _, tc := range []struct{ tp, j int }{{1, 0}, {3, 5}, {seq - 2, d - 1}} {
+				c := tensor.New(tensor.F64, tensor.Shape{seq, d})
+				c.SetF64(1, tc.tp, tc.j)
+				if err := tapeNew.BackwardGrad(hLNew, c); err != nil {
+					t.Fatal(err)
+				}
+				// Pre-migration path, including its tape-growing Mul record.
+				m2, err := backend.Execute(ctxOld, backend.OpMul, []*tensor.Tensor{hLOld, c}, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := tapeOld.Backward(m2[0]); err != nil {
+					t.Fatal(err)
+				}
+				for l := range residsNew {
+					gNew := tapeNew.Grad(residsNew[l])
+					gOld := tapeOld.Grad(residsOld[l])
+					if (gNew == nil) != (gOld == nil) {
+						t.Fatalf("layer %d target (%d,%d): reachability differs (new nil=%v, old nil=%v)",
+							l, tc.tp, tc.j, gNew == nil, gOld == nil)
+					}
+					if gNew == nil {
+						continue
+					}
+					bitEqualF64(t, fmt.Sprintf("layer %d target (%d,%d)", l, tc.tp, tc.j), gNew, gOld)
+				}
+			}
+		})
 	}
 }

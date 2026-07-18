@@ -7,10 +7,25 @@
 // differentiable op registers a vector-Jacobian-product (VJP (vector-Jacobian product — the per-operation backward rule)) rule, validated by
 // central finite-difference gradient checking (§V2). A [Tape] records the forward
 // ops executed through its Context; Backward walks them in reverse, seeding the
-// output cotangent (1 by default, or an arbitrary scale via BackwardScaled — the
-// loss-scaling hook for mixed-precision, §T41) and accumulating gradients at
-// fan-out points. Gradients are plain tensors retrieved with Grad, ready for any
-// optimizer in package nn.
+// output cotangent (1 by default, an arbitrary scale via BackwardScaled — the
+// loss-scaling hook for mixed-precision, §T41 — or an arbitrary cotangent tensor
+// via [Tape.BackwardGrad], the general VJP primitive) and accumulating gradients
+// at fan-out points. Gradients are plain tensors retrieved with Grad, ready for
+// any optimizer in package nn.
+//
+// Lifecycle: the idiom is a FRESH tape per training step — construct a Tape,
+// run the step's forward through tape.Context(), call Backward, read Grad,
+// then drop the tape. A tape only ever appends recorded ops; reusing one
+// across steps replays every earlier step's ops on each Backward (correct but
+// increasingly wasteful) and pins their activations in memory. Each
+// Backward/BackwardScaled/BackwardGrad call REPLACES the tape's gradient map
+// rather than adding to it; to accumulate across passes (micro-batching), sum
+// the Grad results externally — [github.com/jxsl13/goai/nn.GradAccumulator] is
+// the ready-made helper. Gradients are keyed by tensor pointer, and a view is
+// a different pointer from its base (see [Tape.Grad]). Because Backward
+// re-reads taped tensors (inputs and outputs) to evaluate VJP rules, mutating
+// any of them in place between the forward pass and Backward silently corrupts
+// the resulting gradients.
 //
 // VJP coverage spans the full op surface: elementwise/broadcast/reduce/reshape,
 // einsum, the fused transformer ops (attention, norms, RoPE, cross-entropy),
