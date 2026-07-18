@@ -137,6 +137,21 @@ jobs:
           if [ -n "$out" ]; then
             echo "gofmt needed on:" && echo "$out" && exit 1
           fi
+      # The npy/npz cross-checks locate python at ../../.venv/bin/python and
+      # t.Skip when it is absent — so before this step they had NEVER run in CI,
+      # and a green pipeline said nothing about whether a file GoAI writes is
+      # readable by the reference numpy (the write direction; the read direction
+      # is covered by committed fixtures). See §V16.
+      #
+      # Deliberately non-fatal: if PyPI is unreachable the venv is simply absent
+      # and those tests skip exactly as they did before, so this step can never
+      # redden a lane for a reason unrelated to the change under test. It is
+      # strictly better than the previous state and never worse.
+      - name: numpy venv for the .npy/.npz cross-checks (best-effort, never fatal)
+        continue-on-error: true
+        run: |
+          python3 -m venv .venv && ./.venv/bin/pip install --quiet --disable-pip-version-check numpy
+          ./.venv/bin/python -c "import numpy; print('numpy', numpy.__version__)"
       - name: compile everything incl. tests via go vet (§V23)
         run: go vet ./...
       - name: race-detector tests for the affected packages (§T587)

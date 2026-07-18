@@ -3,6 +3,7 @@ package backend
 import (
 	"fmt"
 	"math"
+	"reflect"
 
 	"github.com/jxsl13/goai/tensor"
 )
@@ -16,16 +17,27 @@ import (
 // checked struct literal instead of stringly-typed keys, and a kernel reads its
 // parameters by type-asserting to its op's struct —
 //
-//	p, _ := attrs.(backend.AttnAttrs) // zero value when nil or mismatched
+//	p, _ := attrs.(backend.AttnAttrs) // zero value when attrs is nil
 //	p = p.WithDefaults()              // fill non-zero defaults (heads=1, scale=1…)
 //
 // so a wrong field name or type is a compile error, and each struct's fields are
 // the op's self-documenting, godoc-rendered contract.
 //
+// Discarding the `ok` above is correct ONLY because Execute has already rejected a
+// mismatched type (see opAttrsSpec and checkAttrs below). Left unchecked it is a
+// silent-wrong-answer bug: Execute is public, so `Execute(ctx, OpSum, in,
+// ConcatAttrs{Axis: 1})` used to hand OpSum's kernel the ZERO ReduceAttrs — which
+// means "reduce every axis" — and return a scalar with err == nil instead of the
+// per-axis sums the caller asked for. A nil Attrs stays legal (it is the convention
+// for parameterless ops and for ops whose defaults suffice); only a NON-nil value of
+// the wrong concrete type is refused.
+//
 // To add parameters for a new op: declare a `FooAttrs` struct here, give it the
 // unexported opAttrs() marker method so it satisfies Attrs, and (if any default is
 // non-zero) a WithDefaults method that fills them. Kernel and VJP share that one
-// WithDefaults so their defaults can never drift apart.
+// WithDefaults so their defaults can never drift apart. Then register the op in
+// opAttrsSpec — the guard test derives the truth from the reference kernels and
+// fails if you forget.
 type Attrs interface{ opAttrs() }
 
 // ReduceAll is the ArgMaxAttrs.Axis sentinel meaning "flatten every axis and
@@ -568,4 +580,155 @@ func (a MoEBalanceAttrs) WithDefaults() MoEBalanceAttrs {
 		a.Alpha = 0.01
 	}
 	return a
+}
+
+// NumOps is one past the highest defined Op — the length of every per-op table in
+// this package. Exported so external tests can sweep every op without guessing at
+// the enum's end (Op.String falls back to "op(?)" for an op whose name entry was
+// forgotten, which would silently truncate such a sweep).
+const NumOps = int(numOps)
+
+// attrsSpec is the Attrs contract of one op: which concrete Attrs types its kernels
+// accept. The zero value — no types, not any — means "this op takes no parameters",
+// so only a nil Attrs is legal for it.
+type attrsSpec struct {
+	// types lists the accepted concrete Attrs types. Ops that legitimately accept
+	// more than one (none do today) list them all; the check passes on any match.
+	types []reflect.Type
+	// any waives the check for an op whose kernels genuinely inspect the dynamic
+	// type themselves. It is the deliberate escape hatch that keeps the check
+	// strict everywhere else instead of being weakened globally for one outlier.
+	// Nothing uses it today; it exists so that the first op that needs it does not
+	// tempt someone into deleting the check.
+	any bool
+}
+
+// attrsOf builds an attrsSpec from sample values, so the table below reads as the
+// Attrs structs themselves rather than as reflect boilerplate.
+func attrsOf(samples ...Attrs) attrsSpec {
+	ts := make([]reflect.Type, len(samples))
+	for i, s := range samples {
+		ts[i] = reflect.TypeOf(s)
+	}
+	return attrsSpec{types: ts}
+}
+
+// opAttrsSpec maps each op to the Attrs type its kernels assert. Execute consults it
+// to turn a mismatched Attrs from a silent wrong answer into an error naming the op,
+// the type passed, and the type expected.
+//
+// Entries omitted here are parameterless ops (add, matmul, softmax, embed…): they
+// accept a nil Attrs and nothing else.
+//
+// KEEPING THIS HONEST is the whole problem — a table like this rots the moment
+// someone adds an op and forgets it, and a stale entry would restore exactly the
+// silent wrongness it exists to prevent. So it is not trusted: TestOpAttrsSpecMatchesKernels
+// (backend/attrs_guard_test.go) recovers each op's reference kernel, walks the AST of
+// the function that kernel actually is — following the attrs parameter through helper
+// calls — and collects the `attrs.(backend.XAttrs)` assertions it really performs. A
+// new parameterised op that is missing here, an entry naming a type its kernel does
+// not assert, and an entry for an op whose kernel takes no parameters at all are each
+// a test failure with the correct line to write.
+var opAttrsSpec = [numOps]attrsSpec{
+	// reductions
+	OpSum:    attrsOf(ReduceAttrs{}),
+	OpMean:   attrsOf(ReduceAttrs{}),
+	OpMax:    attrsOf(ReduceAttrs{}),
+	OpMin:    attrsOf(ReduceAttrs{}),
+	OpProd:   attrsOf(ReduceAttrs{}),
+	OpArgMax: attrsOf(ArgMaxAttrs{}),
+
+	// blas
+	OpAXPY: attrsOf(AXPYAttrs{}),
+
+	// nn
+	OpCrossEntropy:         attrsOf(CrossEntropyAttrs{}),
+	OpCrossEntropyBackward: attrsOf(CrossEntropyAttrs{}),
+	OpLayerNorm:            attrsOf(NormAttrs{}),
+	OpLayerNormBackward:    attrsOf(NormAttrs{}),
+	OpRMSNorm:              attrsOf(NormAttrs{}),
+	OpRMSNormBackward:      attrsOf(NormAttrs{}),
+	OpRoPE:                 attrsOf(RoPEAttrs{}),
+	OpRoPEBackward:         attrsOf(RoPEAttrs{}),
+
+	// cv
+	OpConv2D:         attrsOf(ConvAttrs{}),
+	OpConv2DBackward: attrsOf(ConvAttrs{}),
+	OpMaxPool2D:      attrsOf(PoolAttrs{}),
+	OpAvgPool2D:      attrsOf(PoolAttrs{}),
+
+	// attention (AttnAttrs is shared by the whole family — see its godoc)
+	OpMHA:               attrsOf(AttnAttrs{}),
+	OpMHABackward:       attrsOf(AttnAttrs{}),
+	OpMHAMasked:         attrsOf(AttnAttrs{}),
+	OpMHAMaskedBackward: attrsOf(AttnAttrs{}),
+	OpMHASelect:         attrsOf(AttnAttrs{}),
+	OpFlashAttn:         attrsOf(AttnAttrs{}),
+	OpMLA:               attrsOf(MLAAttrs{}),
+	OpRetention:         attrsOf(RetentionAttrs{}),
+	OpRetentionBackward: attrsOf(RetentionAttrs{}),
+
+	// losses / alignment
+	OpDPO:     attrsOf(DPOAttrs{}),
+	OpIPO:     attrsOf(IPOAttrs{}),
+	OpKTO:     attrsOf(KTOAttrs{}),
+	OpCPO:     attrsOf(CPOAttrs{}),
+	OpSimPO:   attrsOf(SimPOAttrs{}),
+	OpORPO:    attrsOf(ORPOAttrs{}),
+	OpPPOClip: attrsOf(PPOClipAttrs{}),
+	OpGRPO:    attrsOf(GRPOAttrs{}),
+	OpGSPO:    attrsOf(GSPOAttrs{}),
+	OpDistill: attrsOf(DistillAttrs{}),
+	OpZLoss:   attrsOf(ZLossAttrs{}),
+
+	// moe
+	OpMoEBalance: attrsOf(MoEBalanceAttrs{}),
+
+	// shape / elementwise
+	OpConcat:    attrsOf(ConcatAttrs{}),
+	OpSlice:     attrsOf(SliceAttrs{}),
+	OpReshape:   attrsOf(ReshapeAttrs{}),
+	OpBroadcast: attrsOf(BroadcastAttrs{}),
+	OpCumsum:    attrsOf(CumsumAttrs{}),
+	OpClip:      attrsOf(ClipAttrs{}),
+	OpSoftCap:   attrsOf(SoftCapAttrs{}),
+	OpEinsum:    attrsOf(EinsumAttrs{}),
+}
+
+// checkAttrs rejects a non-nil Attrs whose concrete type is not the one op's kernels
+// assert. It is the guard behind the `pa, _ := attrs.(backend.FooAttrs)` idiom every
+// kernel uses: that discarded `ok` makes a mismatch indistinguishable from the zero
+// value, which is a WRONG ANSWER rather than a crash — OpSum handed a ConcatAttrs
+// used to reduce every axis and report success. Callers who pass the right type (and
+// callers who pass nil, still legal and still the documented default) never see this.
+//
+// Returns nil for an out-of-range op: that is not this check's failure to report, and
+// kernel resolution in Execute names it accurately a few lines later.
+func checkAttrs(op Op, attrs Attrs) error {
+	if attrs == nil {
+		// A nil Attrs is legal for EVERY op (Execute short-circuits before calling
+		// this; repeated here so the function is correct in isolation).
+		return nil
+	}
+	if op < 0 || int(op) >= len(opAttrsSpec) {
+		return nil
+	}
+	spec := opAttrsSpec[op]
+	if spec.any {
+		return nil
+	}
+	got := reflect.TypeOf(attrs)
+	for _, want := range spec.types {
+		if got == want {
+			return nil
+		}
+	}
+	if len(spec.types) == 0 {
+		return fmt.Errorf("backend: op %v takes no parameters, but Attrs of type %s was passed "+
+			"(pass a nil Attrs)", op, got)
+	}
+	if len(spec.types) == 1 {
+		return fmt.Errorf("backend: op %v wants Attrs of type %s, got %s", op, spec.types[0], got)
+	}
+	return fmt.Errorf("backend: op %v wants Attrs of one of %v, got %s", op, spec.types, got)
 }

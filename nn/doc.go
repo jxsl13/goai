@@ -9,13 +9,19 @@
 // a loss, Backward, then optimizer.Step(tape.Grad). The catalogue, grouped —
 // every algorithm carries its paper citation (§R) in its own doc comment:
 //
-//   - Core layers & init: Linear, Conv2D/MaxPool2D (NCHW, fused conv backward),
+//   - Core layers & init: Linear, Conv2D/MaxPool2D/AvgPool2D (NCHW, fused conv backward),
 //     Kolmogorov-Arnold (KAN) learnable-spline-edge layers,
 //     activations, LayerNorm/RMSNorm/GroupNorm,
 //     SwiGLU/GLU, dropout/droppath, spectral & weight norm, QK-norm, DyT,
 //     DeepNorm, sinusoidal, T5 relative, and contextual (CoPE, content-gated
-//     count) position encodings, Xavier/Kaiming
-//     init, and µP (Maximal Update Parametrization) scaling rules.
+//     count) position encodings, Xavier/Kaiming/truncated-normal (inverse-CDF,
+//     the ViT/DeiT default)/orthogonal (Householder-QR, Saxe et al.)
+//     init, and µP (Maximal Update Parametrization) scaling rules. Layers that
+//     behave differently at inference (dropout, droppath) implement the opt-in
+//     Mode interface; SetTrain walks a model built from Sequential (or anything
+//     implementing Composite) and switches all of them at once. Embedding wraps
+//     the backend lookup op, with an optional padding-idx row whose gradient is
+//     zeroed by installing its PadGradHook.
 //   - Losses & objectives: MSE, stable cross-entropy, focal, triplet, InfoNCE,
 //     multi-token prediction, Matryoshka representations, ColBERT MaxSim,
 //     Plackett-Luce/ListMLE ranking, and the R-Drop / SimCTG regularizers.
@@ -25,6 +31,11 @@
 //     (Lookahead, SAM sharpness-aware steps, cautious masking, Grokfast EMA (exponential moving average)
 //     filtering, GaLore and APOLLO memory-efficient low-rank gradient projection), LR (learning rate) schedules (OneCycle, inverse-sqrt, WSD),
 //     gradient clipping and accumulation, and mixed-precision (AMP) helpers.
+//     LR schedules also come as bound, checkpointable scheduler OBJECTS — StepLR,
+//     ExponentialLR, CosineAnnealingLR (with warmup), LambdaLR over any lr(step)
+//     function, and the metric-driven ReduceLROnPlateau that no closed form can
+//     express — which write the rate into the optimizer (every ParamGroups group
+//     included) and round-trip through SaveSchedulerState.
 //     Per-group hyperparameters come from ParamGroups, a fan-out wrapper over
 //     disjoint parameter subsets (validated disjoint, optionally validated
 //     exhaustive) that expresses the standard "no weight decay on biases and

@@ -22,6 +22,14 @@ import (
 // value PER SAMPLE (broadcast over every other dimension) — the whole branch output
 // for a sample is dropped together, not element-wise.
 //
+// MODE DEFAULTS TO TRAINING, AND NOTHING SWITCHES IT FOR YOU. A freshly built
+// DropPath has Training == true, so running inference without switching modes
+// keeps dropping whole residual branches — silently, with no error. Before
+// predicting, call [DropPath.Eval] on the layer, or [SetTrain](model, false) /
+// [Sequential.Eval] on the model containing it, which propagate to every nested
+// mode-dependent layer; [DropPath.Train] (or SetTrain(model, true)) resumes
+// training. See [Mode] and [SetTrain].
+//
 // No learnable parameters; the per-sample mask is multiplied in through the recording
 // context, so autograd differentiates it via the Mul VJP (gradient flows only through
 // kept, up-scaled samples).
