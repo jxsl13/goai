@@ -134,18 +134,6 @@ var (
 	cvPool = []float64{1, 7, 3, 12, 5, 2, 9, 4, 14, 6, 11, 8, 10, 15, 13, 16}
 )
 
-// scalarLoss runs fwd and reduces to a scalar via Sum if needed.
-func scalarLoss(ctx *backend.Context, c gradCase, xs []*tensor.Tensor) (*tensor.Tensor, error) {
-	out, err := c.fwd(ctx, xs)
-	if err != nil {
-		return nil, err
-	}
-	if out.Numel() == 1 && out.Ndim() == 0 {
-		return out, nil
-	}
-	return exec(ctx, backend.OpSum, nil, out)
-}
-
 func buildInputs(c gradCase) []*tensor.Tensor {
 	xs := make([]*tensor.Tensor, len(c.inputs))
 	for i, d := range c.inputs {
@@ -154,53 +142,16 @@ func buildInputs(c gradCase) []*tensor.Tensor {
 	return xs
 }
 
+// TestGradCheckAllOps drives the §V2 sweep through the EXPORTED
+// autograd.GradCheck (whose defaults — eps 1e-6, rtol 1e-5 — are exactly the
+// bounds this suite has always held; spec acceptance is 1e-4). Every case is
+// closed by GradCheck's internal Sum, so the Sum VJP participates everywhere,
+// and the sweep doubles as the export's regression across the full op surface.
 func TestGradCheckAllOps(t *testing.T) {
-	const h = 1e-6
-	const rtol = 1e-5 // spec bound is 1e-4 (§V2); we hold a stricter line
-
 	for _, c := range cases() {
 		t.Run(c.name, func(t *testing.T) {
-			// analytic
-			tape := autograd.NewTape()
-			ctx := tape.Context()
-			xs := buildInputs(c)
-			loss, err := scalarLoss(ctx, c, xs)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := tape.Backward(loss); err != nil {
-				t.Fatal(err)
-			}
-
-			// numeric: perturb every element of every input
-			eval := func(data [][]float64) float64 {
-				exs := make([]*tensor.Tensor, len(data))
-				for i, d := range data {
-					exs[i] = tensor.FromFloat64(c.shapes[i], d)
-				}
-				out, err := scalarLoss(backend.NewContext(), c, exs)
-				if err != nil {
-					t.Fatal(err)
-				}
-				return out.AtF64()
-			}
-			for i := range c.inputs {
-				grad := tape.Grad(xs[i])
-				if grad == nil {
-					t.Fatalf("input %d: nil grad", i)
-				}
-				for j := range c.inputs[i] {
-					plus := cloneAll(c.inputs)
-					minus := cloneAll(c.inputs)
-					plus[i][j] += h
-					minus[i][j] -= h
-					numeric := (eval(plus) - eval(minus)) / (2 * h)
-					idx := tensor.Unravel(j, c.shapes[i])
-					analytic := grad.AtF64(idx...)
-					if math.Abs(numeric-analytic) > rtol*math.Max(1, math.Abs(numeric)) {
-						t.Errorf("input %d elem %d: numeric %.10g vs analytic %.10g", i, j, numeric, analytic)
-					}
-				}
+			if err := autograd.GradCheck(c.fwd, buildInputs(c)); err != nil {
+				t.Error(err)
 			}
 		})
 	}

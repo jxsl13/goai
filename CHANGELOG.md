@@ -4,6 +4,22 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### autograd — anomaly detection + exported GradCheck (T839, 2026-07-18)
+
+Two debugging surfaces from the discovery sweep. `NewTape(WithAnomalyDetection())` scans
+every recorded op's outputs and every VJP's produced gradients for NaN/±Inf; errors name
+the op, tape index, input slot, and first offending element, and — the part that carries
+the debugging value — distinguish a VJP that CREATED a non-finite value from finite inputs
+(sqrt-at-0 style) from one that merely PROPAGATED an upstream one. Since Record cannot
+error, forward hits are stored on the tape (exposed via `Tape.Err()` and returned by every
+Backward variant before doing work — never silently swallowed); checkpoint recompute
+sub-tapes inherit the mode; f16/bf16 scan via raw exponent-bit masks. Off-mode overhead
+measured at +0.1% (noise); on-mode +11.6%, paid only while hunting. `autograd.GradCheck`
+exports the §V2 finite-difference harness for custom-VJP authors (f64-only, enforced with
+an explanation) — validated by registering a deliberately wrong VJP exactly as an
+out-of-tree kernel would and demanding a precise rejection — and the internal 30-op §V2
+harness now drives through the exported API, so it regresses itself.
+
 ### autograd — explicit-cotangent backward + the jlens migration + six doc fixes (T838, 2026-07-18)
 
 `Tape.BackwardGrad(out, cotangent)` is the general VJP primitive (torch's

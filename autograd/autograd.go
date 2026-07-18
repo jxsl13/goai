@@ -30,16 +30,24 @@ type Tape struct {
 	grads   map[*tensor.Tensor]*tensor.Tensor
 	backend backend.Backend  // backend for forward (via Context) + backward (exec)
 	exec    *backend.Context // non-recording context for backward computation
+
+	anomaly    bool  // anomaly-detection mode (anomaly.go); off by default
+	anomalyErr error // first forward-pass anomaly; surfaced by Err and Backward*
 }
 
-// NewTape returns an empty tape executing on the default backend.
-func NewTape() *Tape { return NewTapeOn(backend.Default()) }
+// NewTape returns an empty tape executing on the default backend. Options
+// (e.g. [WithAnomalyDetection]) configure the tape.
+func NewTape(opts ...TapeOption) *Tape { return NewTapeOn(backend.Default(), opts...) }
 
 // NewTapeOn returns a tape whose forward AND backward ops dispatch to b (§T30:
 // pass the metal/CUDA backend to run the heavy GEMMs of training on the GPU;
 // ops b lacks fall back to the reference/cpu backend via Execute, §I4).
-func NewTapeOn(b backend.Backend) *Tape {
-	return &Tape{backend: b, exec: backend.NewContext().WithBackend(b)}
+func NewTapeOn(b backend.Backend, opts ...TapeOption) *Tape {
+	t := &Tape{backend: b, exec: backend.NewContext().WithBackend(b)}
+	for _, opt := range opts {
+		opt(t)
+	}
+	return t
 }
 
 // Context returns a recording context on the tape's backend: ops executed
@@ -49,8 +57,14 @@ func (t *Tape) Context() *backend.Context {
 }
 
 // Record implements backend.Recorder; Execute calls it after each forward op.
+// In anomaly mode ([WithAnomalyDetection]) it additionally scans the op's
+// outputs for NaN/±Inf; a hit is stored (first wins) because Recorder cannot
+// return an error — see [Tape.Err] and anomaly.go.
 func (t *Tape) Record(op backend.Op, inputs, outputs []*tensor.Tensor, attrs backend.Attrs) {
 	t.nodes = append(t.nodes, node{op: op, inputs: inputs, outputs: outputs, attrs: attrs})
+	if t.anomaly && t.anomalyErr == nil {
+		t.anomalyErr = t.checkForward(len(t.nodes)-1, op, inputs, outputs)
+	}
 }
 
 // Len returns the number of recorded ops (test/introspection).
@@ -111,6 +125,9 @@ func (t *Tape) BackwardGrad(out *tensor.Tensor, cotangent *tensor.Tensor) error 
 	if !cotangent.Shape().Equal(out.Shape()) {
 		return fmt.Errorf("autograd: BackwardGrad: cotangent shape %v != output shape %v", cotangent.Shape(), out.Shape())
 	}
+	if t.anomalyErr != nil {
+		return t.anomalyErr // a forward-pass anomaly must never be silently swallowed
+	}
 	t.grads = map[*tensor.Tensor]*tensor.Tensor{out: cotangent}
 	return t.runBackward()
 }
@@ -131,7 +148,7 @@ func (t *Tape) runBackward() error {
 		// Multi-output ops (e.g. QR → Q,R) route through the multi-output VJP,
 		// which receives every output's cotangent (zero where unused).
 		if len(n.outputs) > 1 {
-			if err := t.backwardMulti(n); err != nil {
+			if err := t.backwardMulti(i, n); err != nil {
 				return err
 			}
 			continue
@@ -148,6 +165,11 @@ func (t *Tape) runBackward() error {
 		if err != nil {
 			return fmt.Errorf("autograd: VJP %v: %w", n.op, err)
 		}
+		if t.anomaly {
+			if err := t.checkBackward(i, n, []*tensor.Tensor{gout}, gins); err != nil {
+				return err
+			}
+		}
 		if err := t.accumulateGrads(n, gins); err != nil {
 			return err
 		}
@@ -157,8 +179,8 @@ func (t *Tape) runBackward() error {
 
 // backwardMulti applies a multi-output op's VJP, gathering every output cotangent
 // (a zero tensor where the output did not reach the loss). Skipped when no output
-// influences the loss.
-func (t *Tape) backwardMulti(n node) error {
+// influences the loss. i is the node's tape index (anomaly reporting).
+func (t *Tape) backwardMulti(i int, n node) error {
 	gouts := make([]*tensor.Tensor, len(n.outputs))
 	any := false
 	for j, o := range n.outputs {
@@ -179,6 +201,11 @@ func (t *Tape) backwardMulti(n node) error {
 	gins, err := rule(t.exec, n.inputs, n.outputs, n.attrs, gouts)
 	if err != nil {
 		return fmt.Errorf("autograd: multi-output VJP %v: %w", n.op, err)
+	}
+	if t.anomaly {
+		if err := t.checkBackward(i, n, gouts, gins); err != nil {
+			return err
+		}
 	}
 	return t.accumulateGrads(n, gins)
 }

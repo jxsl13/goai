@@ -35,6 +35,16 @@
 // checkpointing: a subgraph runs forward without recording and is recomputed
 // during Backward, trading compute for activation memory.
 //
+// Two diagnostic tools ship with the tape. [WithAnomalyDetection] (the
+// torch.autograd.set_detect_anomaly counterpart) makes the tape scan every
+// forward output and every backward gradient for NaN/±Inf as it is produced,
+// reporting the op, tape index and element where numbers first went bad — and,
+// on the backward pass, whether that op's VJP CREATED the value or merely
+// PROPAGATED upstream damage (see anomaly.go; free when off). [GradCheck] (the
+// torch.autograd.gradcheck counterpart) verifies a hand-derived VJP against
+// central finite differences of its forward — the tool to run after every
+// [RegisterVJP]; the package's own §V2 op sweep runs through it.
+//
 // # For the newcomer
 //
 // Training a neural network means nudging its numbers (weights) in the direction
@@ -46,6 +56,12 @@
 // subtract a little of each gradient from each weight (a "gradient-descent step")
 // and the network gets a bit better. You never write the calculus yourself; the
 // tape does it. See the runnable examples below.
+//
+// When something goes wrong there are two helpers: anomaly detection
+// ([WithAnomalyDetection]) catches the exact operation where a computation
+// first produced NaN or infinity instead of letting the poison spread, and
+// [GradCheck] double-checks any custom gradient rule against the "nudge an
+// input, watch the output" ground truth.
 //
 // Further reading: Baydin et al. 2018, "Automatic Differentiation in Machine Learning: a Survey" (JMLR), and Griewank & Walther, "Evaluating Derivatives" (SIAM 2008), the definitive treatments of reverse-mode AD (automatic differentiation) that this tape implements.
 //

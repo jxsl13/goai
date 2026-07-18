@@ -69,6 +69,7 @@ func (t *Tape) backwardCheckpoint(n node) error {
 		return nil
 	}
 	sub := NewTapeOn(t.backend)
+	sub.anomaly = t.anomaly // anomaly mode covers the rematerialized segment too (anomaly.go)
 	subOuts, err := n.ckpt.fn(sub.Context(), n.ckpt.inputs)
 	if err != nil {
 		return fmt.Errorf("autograd: checkpoint recompute: %w", err)
@@ -76,6 +77,11 @@ func (t *Tape) backwardCheckpoint(n node) error {
 	if len(subOuts) != len(n.outputs) {
 		return fmt.Errorf("autograd: checkpoint recompute produced %d outputs, first forward gave %d",
 			len(subOuts), len(n.outputs))
+	}
+	if sub.anomalyErr != nil {
+		// The recomputation is the first RECORDED run of the segment, so this is
+		// where a forward anomaly inside a checkpoint surfaces (anomaly.go).
+		return fmt.Errorf("autograd: checkpoint segment: %w", sub.anomalyErr)
 	}
 	// Seed the sub-tape with the parent's cotangents on the matching (positional) outputs.
 	sub.grads = make(map[*tensor.Tensor]*tensor.Tensor, len(subOuts))
