@@ -4,6 +4,19 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — quantized GGUF decode for Gemma 2: the matrix closes at 20 of 20 (T837, 2026-07-18)
+
+`QuantGemma2` + `QuantGemma2FromGGUF` complete the quantized matrix — every float-GGUF
+architecture now has its quant twin. The soft-caps replicate exactly: `OpSoftCap` is
+activation-level with an F32 kernel, so the quant path runs the identical primitive at the
+identical points (attention scores pre-mask, final logits), and a dedicated probe proves
+the caps GATE — with non-default fixture caps, dropping the final cap shifts logits by
+7.36 and the attention cap by 1.64, far beyond every tolerance, while cap-on logits stay
+strictly inside the tanh bound. The gates land at the campaign's strongest profile:
+byte-equal Q-blocks AND bit-equal logits vs `QuantizeGemma2` (enabled by F32-exact eps and
+caps), cosine 1.000000 vs the float pipeline, control-anchored vs-original (0.999940 =
+pure Q8_0 rounding), decode-vs-Forward asserted bit-exact with `!=` rather than tolerance.
+
 ### format — sharded safetensors writing, HF-consumer-verified (T836, 2026-07-18)
 
 `safetensors.SaveSharded` completes the sharded pair: GoAI checkpoints now export in the

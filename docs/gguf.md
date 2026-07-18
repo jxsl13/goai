@@ -3,7 +3,7 @@
 GoAI loads [llama.cpp](https://github.com/ggml-org/llama.cpp) GGUF checkpoints —
 the single-file format the local-inference ecosystem distributes models in —
 straight into runnable, trainable GoAI models. Twenty architectures load in
-full precision; nineteen families additionally decode
+full precision; twenty families additionally decode
 **directly from the quantized ggml blocks**, never materializing full-precision
 weights.
 
@@ -62,7 +62,7 @@ for some archs and *split-half* pairs (`ROPE_TYPE_NEOX`) for others; GoAI's
 | `mamba2` | `Mamba2FromGGUF` | in_proj stays PACKED (the runtime view-splits the product); `ssm.time_step_rank` = n_head; per-head `ssm_a` −exp'd + unsqueezed; `ssm_norm` stored per-group (GoAI keeps transformers full-width semantics — identical at n_groups=1, documented); dt is bias-only |
 | `jamba` | `JambaFromGGUF` | hybrid: mixer interleave in the per-layer `head_count_kv` vector (0=Mamba); NoPE attention; dedicated `ssm_{dt,b,c}_norm`; fused-expert MoE |
 
-## Quantized decode (19 families)
+## Quantized decode (20 families — the full float matrix)
 
 `QuantLlamaFromGGUF` (llama), `QuantQwen2FromGGUF`, `QuantQwen3FromGGUF`,
 `QuantPhi3FromGGUF`, `QuantGemmaFromGGUF`, `QuantMixtralFromGGUF`, `QuantGraniteFromGGUF` (the
@@ -79,7 +79,10 @@ Q-blocks) `QuantMambaFromGGUF`, `QuantMamba2FromGGUF` and `QuantJambaFromGGUF` (
 recurrent and hybrid quant twins: the big SSM projections quantize — mamba2
 wraps its packed in_proj whole — while conv/scan/state stay f32; Jamba
 combines quantized NoPE attention, SSM mixers and MoE experts across its
-four layer flavors with the hybrid KV+SSM decode bit-exact) and
+four layer flavors with the hybrid KV+SSM decode bit-exact),
+`QuantGemma2FromGGUF` (sandwich norms, the tanh soft-caps replicated via the
+same OpSoftCap primitive on the f32 stream — a dropped cap fails the gates by
+construction) and
 `QuantDeepSeekV2FromGGUF` (the MLA capstone: the split `attn_k_b` Q-blocks ARE
 the absorbed operator, so the latent decode runs fully quantized with the MLA
 cache-memory win and a bit-exact anchor; the pe-row de-interleave is a lossless

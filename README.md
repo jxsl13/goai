@@ -98,7 +98,7 @@ for step := 0; step < 150; step++ {
   **twenty architectures** (the Llama/Qwen/Gemma/Phi families through Mixtral,
   DeepSeek-V2, Command-R, Granite, and the Mamba/Mamba-2/Jamba state-space
   tier), each converter's layout conventions verified against llama.cpp source,
-  and **decodes quantized checkpoints of nineteen of them directly from the
+  and **decodes quantized checkpoints of ALL TWENTY directly from the
   ggml Q-blocks** — packed projections, rotary row interleaves, and fused MoE
   expert tensors all unpacked losslessly on the quantized bytes, never
   dequantized and requantized; the full matrix and its verification
