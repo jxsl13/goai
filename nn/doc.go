@@ -20,9 +20,10 @@
 //     multi-token prediction, Matryoshka representations, ColBERT MaxSim,
 //     Plackett-Luce/ListMLE ranking, and the R-Drop / SimCTG regularizers.
 //   - Optimizers: SGD, Adam/AdamW, Adafactor, LAMB, Muon, Shampoo, SOAP, Sophia,
-//     AdEMAMix, Schedule-Free — plus wrappers composing with any of them
+//     AdEMAMix, Schedule-Free, Lion, Prodigy, D-Adapt-Adam, Adam-mini, MARS,
+//     PSGD-Kron, Q-GaLore and Grokfast-MA — plus wrappers composing with any of them
 //     (Lookahead, SAM sharpness-aware steps, cautious masking, Grokfast EMA (exponential moving average)
-//     filtering, GaLore and APOLLO memory-efficient low-rank gradient projection), LR (learning rate) schedules (OneCycle),
+//     filtering, GaLore and APOLLO memory-efficient low-rank gradient projection), LR (learning rate) schedules (OneCycle, inverse-sqrt, WSD),
 //     gradient clipping and accumulation, and mixed-precision (AMP) helpers.
 //   - Parameter-efficient fine-tuning: LoRA, DoRA, PiSSA, VeRA, (IA)³,
 //     bottleneck adapters, prefix tuning, prompt tuning, and NEFTune noise.
@@ -60,8 +61,10 @@
 //   - Diffusion & generative: DDPM/DDIM schedules and samplers, EDM (with
 //     preconditioning), and Flow Matching.
 //   - Self-supervised learning: Barlow Twins, DINO, SimSiam, SwAV, VICReg.
-//   - Alignment & distillation: Bradley-Terry reward models, GRPO, RLOO, RSO,
-//     SLiC-HF, and generalized knowledge distillation (GKD) — fed from model
+//   - Alignment & distillation: the preference-loss family (DPO and its IPO,
+//     KTO, CPO, SimPO, ORPO variants), Bradley-Terry reward models, the policy
+//     methods PPO, GRPO/Dr.GRPO/DAPO/GSPO, RLOO, RSO, SLiC-HF, and generalized
+//     knowledge distillation (GKD) — fed from model
 //     logits via TokenLogProbs / SequenceLogProbs, the differentiable bridge
 //     every preference/RL loss consumes.
 //   - Continual learning & model merging: EWC (elastic weight consolidation), MAS, SI penalties; TIES/DARE

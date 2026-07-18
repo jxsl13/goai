@@ -2,15 +2,16 @@
 //
 // # For the AI professional
 //
-// It defines the Backend and Kernel interfaces plus the registry and runtime
-// feature detection. The Pure-Go reference backend (subpackage ref) is the source
+// It defines the Backend interface and the Kernel func type plus the registry
+// and runtime feature detection. The Pure-Go reference backend (subpackage ref) is the source
 // of numeric truth (§V9); accel backends are validated against it, never vice
 // versa. The Backend interface fixes an execution/sync model so a later async GPU
 // backend does not break API stability (§V14).
 //
-// Backend selection is automatic (§T46): build-tagged accel backends (cpu-SIMD,
-// metal, cuda, vulkan) self-register in init() ONLY when their device is present,
-// so registration doubles as detection. Default returns the highest-preference
+// Backend selection is automatic (§T46): the pure-Go cpu backend has no build
+// tag and ALWAYS self-registers in init() (it needs no device); the device-backed
+// accel backends (metal, cuda, vulkan) are build-tagged and self-register only
+// when their device is present, so for those registration doubles as detection. Default returns the highest-preference
 // registered backend along a descending-performance order — cuda > metal >
 // vulkan > cpu — with the reference as the guaranteed final fallback (validated
 // vs ONNX (the Open Neural Network Exchange format) Runtime EP priority, PyTorch cuda>mps>cpu, ggml's scored registry §R46,

@@ -4,6 +4,18 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### docs — backend/nn package-doc corrections from the discovery sweep (2026-07-18)
+
+`backend/doc.go` claimed all accel backends including cpu are "build-tagged" and register
+"ONLY when their device is present" — false for cpu, which has no build tag and always
+registers (it needs no device); only metal/cuda/vulkan are device-gated. Fixed there and at
+the repeat in `registry.go`. `Kernel` was described as an interface; it is a func type.
+`nn/doc.go`'s catalogue had fallen behind the code: eight shipped optimizers (Lion,
+Prodigy, D-Adapt-Adam, Adam-mini, MARS, PSGD-Kron, Q-GaLore, Grokfast-MA), two LR schedules
+(inverse-sqrt, WSD), and the entire preference-loss family (DPO/IPO/KTO/CPO/SimPO/ORPO plus
+PPO and the GRPO variants) were absent from a list that reads exhaustive. Every added symbol
+was verified present in the code before being named.
+
 ### autograd — per-tensor gradient hooks (T840, 2026-07-18)
 
 `Tape.RegisterGradHook(x, fn)` observes or replaces one tensor's gradient mid-backward
