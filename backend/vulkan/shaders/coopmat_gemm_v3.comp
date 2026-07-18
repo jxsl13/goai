@@ -1,0 +1,51 @@
+#version 450
+// coopmat_gemm_v3.comp — 64(M)×64(N) per subgroup: 16 accumulators, 4 A × 4 B fragments per
+// 16-wide K step. Vs v2 (32×64): halves BOTH A- and B-side global traffic per FLOP (4× reuse
+// each way) at 16 f32 accumulators of register pressure (~128 regs/lane) — measure-first
+// against v2's 6.1-8.1 TFLOP/s. M%64==0, N%64==0, K%16==0.
+// MEASURED RESULT (RTX 3060, M=128): 1.8-3.9 TFLOP/s — SLOWER than v2. 16 f32 accumulators
+// (~128 regs/lane) crush occupancy, and M=128 yields only 2 row-tiles of workgroups. v2
+// (32×64) is the sweet spot at prefill batch sizes; kept as the measured register-ceiling
+// record (do not widen tiles further without new evidence — the next lever is
+// VK_NV_cooperative_matrix2, not geometry).
+#extension GL_KHR_cooperative_matrix : require
+#extension GL_KHR_memory_scope_semantics : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+
+layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+
+layout(binding = 0) readonly  buffer A { float16_t a[]; };
+layout(binding = 1) readonly  buffer B { float16_t b[]; };
+layout(binding = 2) writeonly buffer C { float c[]; };
+
+layout(push_constant) uniform Push { int M; int K; int N; } pc;
+
+void main() {
+    uint tileRow = gl_WorkGroupID.y * 64u;
+    uint tileCol = gl_WorkGroupID.x * 64u;
+    uint K = uint(pc.K), N = uint(pc.N);
+
+    coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> acc[16];
+    for (int i = 0; i < 16; i++) acc[i] = coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>(0.0);
+
+    coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> ma[4];
+    coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB> mb;
+
+    for (uint k = 0u; k < K; k += 16u) {
+        for (uint r = 0u; r < 4u; r++) {
+            coopMatLoad(ma[r], a, (tileRow + r * 16u) * K + k, K, gl_CooperativeMatrixLayoutRowMajor);
+        }
+        for (uint ccol = 0u; ccol < 4u; ccol++) {
+            coopMatLoad(mb, b, k * N + tileCol + ccol * 16u, N, gl_CooperativeMatrixLayoutRowMajor);
+            for (uint r = 0u; r < 4u; r++) {
+                acc[r * 4u + ccol] = coopMatMulAdd(ma[r], mb, acc[r * 4u + ccol]);
+            }
+        }
+    }
+
+    for (uint r = 0u; r < 4u; r++) {
+        for (uint ccol = 0u; ccol < 4u; ccol++) {
+            coopMatStore(acc[r * 4u + ccol], c, (tileRow + r * 16u) * N + tileCol + ccol * 16u, N, gl_CooperativeMatrixLayoutRowMajor);
+        }
+    }
+}
