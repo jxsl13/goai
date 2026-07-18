@@ -14,9 +14,11 @@ import (
 // §ROADMAP FRONT B — kill the per-step overhead on the batched decode forward. B4's eager cut
 // (4245 tok/s at batch=64, 0.91× vLLM) re-uploaded + device-synced each sequence's block table
 // ONCE PER LAYER (22 full host↔device round-trips per step). This bench compares three modes:
-//   eager — B4's BatchedDecodeAttn (per-layer upload + sync)
-//   view  — UploadBatchView once per step + BatchedDecodeAttnView (no per-layer sync)
-//   graph — the view path captured as a CUDA graph and replayed (launch-overhead-free)
+//
+//	eager — B4's BatchedDecodeAttn (per-layer upload + sync)
+//	view  — UploadBatchView once per step + BatchedDecodeAttnView (no per-layer sync)
+//	graph — the view path captured as a CUDA graph and replayed (launch-overhead-free)
+//
 // The lever to push batch=64 aggregate throughput PAST vLLM's ~4655.
 const (
 	bgDim, bgQHeads, bgKVHeads, bgHD, bgHidden = 2048, 32, 4, 64, 5632
