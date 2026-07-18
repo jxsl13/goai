@@ -52,20 +52,9 @@ func TestCUDAT5MatchesReference(t *testing.T) {
 			if err != nil {
 				t.Fatalf("cuda Forward: %v", err)
 			}
-			if len(got) != seq*dim {
-				t.Fatalf("got %d values, want seq·dim %d", len(got), seq*dim)
-			}
-			var maxAbs float64
-			for i := 0; i < seq; i++ {
-				for j := 0; j < dim; j++ {
-					d := math.Abs(float64(got[i*dim+j]) - refT.AtF64(i, j))
-					if math.IsNaN(float64(got[i*dim+j])) || d > maxAbs {
-						maxAbs = d
-					}
-				}
-			}
-			if maxAbs > 2e-3 {
-				t.Fatalf("%s: GPU T5 diverges from reference: max abs %.3e", c.name, maxAbs)
+			maxAbs, err := encoderMaxAbs(got, seq, dim, 2e-3, refT.AtF64)
+			if err != nil {
+				t.Fatalf("%s: GPU T5 diverges from reference: %v", c.name, err)
 			}
 			t.Logf("llamagpu NewT5CUDA (%s) matches reference nlp.T5.Forward (max abs %.2e); relpos-bias GPU encoder", c.name, maxAbs)
 		})

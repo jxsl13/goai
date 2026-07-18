@@ -49,23 +49,11 @@ func TestCUDABertMatchesReference(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cuda Forward: %v", err)
 	}
-	if len(got) != seq*dim {
-		t.Fatalf("got %d values, want seq·dim %d", len(got), seq*dim)
-	}
-	var maxAbs float64
-	for i := 0; i < seq; i++ {
-		for j := 0; j < dim; j++ {
-			want := refT.AtF64(i, j)
-			d := math.Abs(float64(got[i*dim+j]) - want)
-			if math.IsNaN(float64(got[i*dim+j])) || d > maxAbs {
-				maxAbs = d
-			}
-		}
+	maxAbs, err := encoderMaxAbs(got, seq, dim, 2e-3, refT.AtF64)
+	if err != nil {
+		t.Fatalf("BERT hidden states diverge from reference: %v", err)
 	}
 	t.Logf("GPU BERT max abs hidden-state diff vs reference: %.3e", maxAbs)
-	if maxAbs > 2e-3 {
-		t.Fatalf("BERT hidden states diverge from reference: max abs %.3e", maxAbs)
-	}
 
 	// Single-sentence path (segments nil) must also match.
 	refT2, _ := m.Forward(backend.NewContext().WithBackend(backend.Reference()), tokens, nil)
@@ -73,16 +61,9 @@ func TestCUDABertMatchesReference(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cuda Forward (nil segments): %v", err)
 	}
-	var max2 float64
-	for i := 0; i < seq; i++ {
-		for j := 0; j < dim; j++ {
-			if d := math.Abs(float64(got2[i*dim+j]) - refT2.AtF64(i, j)); d > max2 {
-				max2 = d
-			}
-		}
-	}
-	if max2 > 2e-3 {
-		t.Fatalf("BERT (nil segments) diverges: max abs %.3e", max2)
+	max2, err := encoderMaxAbs(got2, seq, dim, 2e-3, refT2.AtF64)
+	if err != nil {
+		t.Fatalf("BERT (nil segments) diverges: %v", err)
 	}
 	t.Logf("llamagpu NewBertCUDA matches reference nlp.Bert.Forward (2-segment %.2e, single-sentence %.2e); first non-decoder GPU model", maxAbs, max2)
 }
@@ -105,17 +86,9 @@ func bertVariantParity(t *testing.T, m *nlp.Bert, tokens []int) {
 	if err != nil {
 		t.Fatalf("cuda Forward: %v", err)
 	}
-	var maxAbs float64
-	for i := 0; i < seq; i++ {
-		for j := 0; j < dim; j++ {
-			d := math.Abs(float64(got[i*dim+j]) - refT.AtF64(i, j))
-			if math.IsNaN(float64(got[i*dim+j])) || d > maxAbs {
-				maxAbs = d
-			}
-		}
-	}
-	if maxAbs > 2e-3 {
-		t.Fatalf("GPU hidden states diverge from reference: max abs %.3e", maxAbs)
+	maxAbs, err := encoderMaxAbs(got, seq, dim, 2e-3, refT.AtF64)
+	if err != nil {
+		t.Fatalf("GPU hidden states diverge from reference: %v", err)
 	}
 	t.Logf("GPU encoder matches reference (max abs %.2e)", maxAbs)
 }

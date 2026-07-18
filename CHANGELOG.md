@@ -4,6 +4,51 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### llamagpu — an assertion that could not fail, a decoder that skipped the model (B78/T868, 2026-07-18)
+
+**B78 — the inverted NaN guard.** Four encoder equivalence tests assigned where they should
+have failed:
+
+```go
+if math.IsNaN(...) || d > maxAbs { maxAbs = d }   // maxAbs becomes NaN
+if maxAbs > 2e-3 { t.Fatalf(...) }                 // NaN > 2e-3 is FALSE
+```
+
+An all-NaN GPU output PASSED, and the NaN was STICKY — once `maxAbs` is NaN every later
+`d > maxAbs` is false too, so a subsequent 996-magnitude divergence was equally invisible.
+Verified by transcribing both forms and running them. `TestCUDABertMatchesReference`,
+`TestCUDARobertaMatchesReference`, `TestCUDADistilBertMatchesReference` and
+`TestCUDAT5MatchesReference` could not detect the failure mode they exist for. The correct
+form was already in the same package (`llamagpu_test.go:63-65`, §T428) and used by 29 of 32
+`IsNaN` sites — sibling asymmetry again. A nil-segments loop with no NaN check at all was
+picked up alongside.
+
+**B78b — `newDecoder` accepted a model with zero blocks.** Ten sibling constructors guard
+this; the most-used one — behind `New`, `NewCUDA`, `NewVulkan`, the Q8/Q4_K constructors and
+the Qwen2/Qwen3/Phi3/Granite paths — did not. Reproduced on metal: a Llama with `Layers=4`
+and `Blocks=nil` constructed, `Step` returned plausible logits and `Generate` returned a full
+sequence, every call `err == nil`, with the entire transformer stack skipped. `cfg.Layers`
+was never reconciled against `len(m.Blocks)` either; both are now errors. Verified no caller
+builds an empty model: no `nlp.Llama{...}` literal exists in the repo and every producer
+derives blocks from `cfg.Layers`.
+
+**B78c — BERT segment ids were unvalidated**, so the GPU panicked where the CPU reference
+returns a clean error, on the two paths a test compares directly. The bound was already
+plumbed and dead: `typeVocab` was assigned and never read.
+
+The NaN fix is a test-only change, so it ships with `TestEncoderMaxAbsRejectsNaN`, which runs
+the OLD and NEW forms side by side — the before/after stays executable rather than resting on
+a claim.
+
+Recorded, not fixed: the agent found that adding any small metal test before
+`TestNEFTuneOnTrainedGPT` reproducibly raises its cross-entropy ~0.10 past a 1.3 threshold
+(isolated runs span 1.169-1.276 — the gate has less margin than the test's own variance). It
+dropped its own metal test rather than widen someone else's quality gate. Confirmed here that
+this never reaches CI: the test is `-short`-skipped and CI runs `-short`. The underlying
+question — whether preceding GPU work degrades a SEEDED run benignly (kernel selection) or
+through pooled buffers handed back unzeroed, which would be a real correctness bug — is filed
+separately with the data.
+
 ### nlp — the KV-cache position contract was an identity, not a definition (B79/T867, 2026-07-18)
 
 No `DecodeStep` validated `pos` against the cache. All 20 `Len()` call sites were the

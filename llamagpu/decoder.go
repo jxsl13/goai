@@ -1049,6 +1049,23 @@ func (d *Decoder) mkFused(mk func([]float32) *bufSlot, ops backendOps, errp *err
 // newDecoder uploads m's f32 weights via ops into device buffers and prepares a KV cache up to Ctx.
 func newDecoder(m *nlp.Llama, ops backendOps) (*Decoder, error) {
 	cfg := m.Config
+	// A blockless model is an ERROR, never a legitimate degenerate case. The upload loop below is
+	// `for _, b := range m.Blocks`, so with no blocks it simply never runs and Step falls through
+	// embedding → final norm → lm_head: plausible logits, a full Generate sequence, err == nil
+	// everywhere, and the entire transformer stack silently skipped — the confident wrong answer
+	// §V29 forbids. Same guard as newDeepSeekV2Decoder / newMambaDecoder / newRWKVDecoder and the
+	// MoE builders; newDecoder (behind New, NewCUDA, NewVulkan, NewLlamaQ8CUDA, NewLlamaQ4KCUDA and
+	// the Qwen2/Qwen3/Phi3/Granite constructors) was the only sibling missing it.
+	if len(m.Blocks) == 0 {
+		return nil, fmt.Errorf("llamagpu(%s): Llama has no blocks", ops.name)
+	}
+	// The same silence one step milder: a config claiming more (or fewer) layers than the checkpoint
+	// carries decodes the blocks it has and says nothing about the ones it does not. Nothing here
+	// reads cfg.Layers, so a config that leaves it unset (0) is not a claim and stays accepted —
+	// only an explicit disagreement is rejected.
+	if cfg.Layers > 0 && cfg.Layers != len(m.Blocks) {
+		return nil, fmt.Errorf("llamagpu(%s): config claims %d layers but model has %d blocks", ops.name, cfg.Layers, len(m.Blocks))
+	}
 	d, derr := newDecoderCommon(cfg, m.TokEmb, ops)
 	if derr != nil {
 		return nil, derr

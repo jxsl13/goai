@@ -123,6 +123,14 @@ func (e *GPUBert) summedEmbedding(tokens, segments []int) ([]float32, error) {
 		if segments != nil {
 			seg = segments[i]
 		}
+		// Bound the segment (token-type) id the same way the token is bounded one line above:
+		// unchecked, it indexes segEmb below and panics inside the tensor, where the CPU reference
+		// nlp.Bert.Embed returns a clean "ref: embed index %d out of range" for the identical input
+		// (§V29 — a malformed input is an error, not a panic). Only models that carry a segment
+		// table have a bound: DistilBERT has segEmb nil and typeVocab 0, and never reads seg.
+		if e.segEmb != nil && (seg < 0 || seg >= e.typeVocab) {
+			return nil, fmt.Errorf("llamagpu(%s): segment id %d outside token-type vocab %d", e.ops.name, seg, e.typeVocab)
+		}
 		row := out[i*e.dim : (i+1)*e.dim]
 		for j := 0; j < e.dim; j++ {
 			v := e.tokEmb.AtF64(tok, j) + e.posEmb.AtF64(pos, j)
