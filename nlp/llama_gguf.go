@@ -54,12 +54,31 @@ func LlamaFromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor) (*Lla
 	for k, v := range tensors {
 		ts[k] = v
 	}
+	// The rope permutes below slice each head's rows out of the tensor, so the
+	// tensor's OWN row count has to agree with the head count and leave an even
+	// per-head width (RoPE rotates channel pairs). That row count is separately
+	// attacker-controlled — a validated config does not imply it — so it is checked
+	// here: without this the mismatch reached gatherRows and PANICKED, where §V29
+	// requires a clean error. Mirrors the shape pinning the quantized twin already
+	// performs before its own permute (ropeUnpermutePerm, quant_mixtral_gguf.go).
+	ropeGeom := func(name string, rows, heads int) error {
+		if heads <= 0 || rows%heads != 0 || (rows/heads)%2 != 0 {
+			return fmt.Errorf("nlp: GGUF %s has %d rows, want %d heads × an even head_dim", name, rows, heads)
+		}
+		return nil
+	}
 	for l := range cfg.Layers {
 		p := fmt.Sprintf("blk.%d.", l)
 		if wq, ok := ts[p+"attn_q.weight"]; ok && wq.Ndim() == 2 {
+			if err := ropeGeom(p+"attn_q.weight", wq.Shape()[0], cfg.Heads); err != nil {
+				return nil, err
+			}
 			ts[p+"attn_q.weight"] = ropeUnpermuteRows(wq, cfg.Heads)
 		}
 		if wk, ok := ts[p+"attn_k.weight"]; ok && wk.Ndim() == 2 {
+			if err := ropeGeom(p+"attn_k.weight", wk.Shape()[0], cfg.kvHeads()); err != nil {
+				return nil, err
+			}
 			ts[p+"attn_k.weight"] = ropeUnpermuteRows(wk, cfg.kvHeads())
 		}
 		// llama.cpp's converter permutes q_proj.bias/k_proj.bias exactly like the
@@ -67,9 +86,15 @@ func LlamaFromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor) (*Lla
 		// llama-arch files — the LLaMAfied-Qwen lineage behind ggml's optional
 		// bq/bk/bv tensors — need the same un-permute; v stays raw (§B67 follow-up).
 		if bq, ok := ts[p+"attn_q.bias"]; ok && bq.Ndim() == 1 {
+			if err := ropeGeom(p+"attn_q.bias", bq.Shape()[0], cfg.Heads); err != nil {
+				return nil, err
+			}
 			ts[p+"attn_q.bias"] = ropeUnpermuteVec(bq, cfg.Heads)
 		}
 		if bk, ok := ts[p+"attn_k.bias"]; ok && bk.Ndim() == 1 {
+			if err := ropeGeom(p+"attn_k.bias", bk.Shape()[0], cfg.kvHeads()); err != nil {
+				return nil, err
+			}
 			ts[p+"attn_k.bias"] = ropeUnpermuteVec(bk, cfg.kvHeads())
 		}
 	}
@@ -253,29 +278,68 @@ func llamaArchToGGUF(arch string, m *Llama) (map[string]any, map[string]*tensor.
 // llama-family LlamaConfig from the arch-prefixed GGUF metadata keys
 // ("<arch>.embedding_length", …). Vocab is left 0 — callers take it from the
 // token_embd.weight shape. Shared by llamaArchFromGGUF and [QuantLlamaFromGGUF].
+//
+// Every structural count is validated to be POSITIVE before it is returned (§V29:
+// a malformed file yields a clean error, never a panic and never a wrong-but-
+// nil-error model). This is the single choke point every llama-family loader —
+// [LlamaFromGGUF], [MixtralFromGGUF], [GraniteFromGGUF], Qwen2/Qwen3 and the
+// quantized twins — reads its geometry through, so validating here closes the
+// class rather than one caller.
+//
+// Failure modes this rejects, all reachable from an UNTRUSTED file because the
+// counts are attacker-controlled metadata (§B70's lesson from format/pytorch):
+//   - head_count = 0 divided straight through to `rows / heads` in gatherRows,
+//     an integer-divide-by-zero PANIC before that function's own heads<=0 guard
+//     on the following line could fire;
+//   - a negative or zero embedding_length / block_count / feed_forward_length
+//     produced a model that loaded with err == nil and only misbehaved later,
+//     which is the harder bug to trace back to its cause.
+//
+// A metadata key that is ABSENT keeps its documented default (head_count_kv falls
+// back to head_count, context_length to embedding_length); only a key that is
+// PRESENT and non-positive is an error. Valid files are unaffected — llamaArchToGGUF
+// writes the resolved kvHeads(), never a 0 placeholder.
 func llamaCfgFromGGUFMeta(arch string, meta map[string]any) (LlamaConfig, error) {
 	if a, _ := meta[ggufArch].(string); a != arch {
 		return LlamaConfig{}, fmt.Errorf("nlp: GGUF general.architecture=%q, want %q", a, arch)
 	}
 	key := func(suffix string) string { return arch + "." + suffix }
-	dim, err := metaInt(meta, key(ggufEmbLen))
+	// positive reads the count at suffix and rejects a non-positive value: every
+	// llama-family structural count is a dimension, and no dimension is ever ≤ 0.
+	positive := func(suffix string) (int, error) {
+		n, err := metaInt(meta, key(suffix))
+		if err != nil {
+			return 0, err
+		}
+		if n <= 0 {
+			return 0, fmt.Errorf("nlp: GGUF %s = %d, want a positive count", key(suffix), n)
+		}
+		return n, nil
+	}
+	dim, err := positive(ggufEmbLen)
 	if err != nil {
 		return LlamaConfig{}, err
 	}
-	layers, err := metaInt(meta, key(ggufBlockCnt))
+	layers, err := positive(ggufBlockCnt)
 	if err != nil {
 		return LlamaConfig{}, err
 	}
-	hidden, err := metaInt(meta, key(ggufFFLen))
+	hidden, err := positive(ggufFFLen)
 	if err != nil {
 		return LlamaConfig{}, err
 	}
-	heads, err := metaInt(meta, key(ggufHeadCnt))
+	heads, err := positive(ggufHeadCnt)
 	if err != nil {
 		return LlamaConfig{}, err
 	}
+	// head_count_kv is optional (absent ⇒ multi-head, kv = heads), but a PRESENT
+	// value of 0 or less is a malformed geometry, not a request for the fallback.
 	kv := heads
-	if k, e := metaInt(meta, key(ggufHeadKV)); e == nil {
+	if _, present := meta[key(ggufHeadKV)]; present {
+		k, err := positive(ggufHeadKV)
+		if err != nil {
+			return LlamaConfig{}, err
+		}
 		kv = k
 	}
 	cfg := LlamaConfig{
@@ -283,7 +347,11 @@ func llamaCfgFromGGUFMeta(arch string, meta map[string]any) (LlamaConfig, error)
 		Eps: metaFloat(meta, key(ggufRMSEps), 1e-5), RopeBase: metaFloat(meta, key(ggufRopeFreq), 10000),
 		Ctx: dim, // provisional; overwritten from context_length below
 	}
-	if c, e := metaInt(meta, key(ggufCtxLen)); e == nil {
+	if _, present := meta[key(ggufCtxLen)]; present {
+		c, err := positive(ggufCtxLen)
+		if err != nil {
+			return LlamaConfig{}, err
+		}
 		cfg.Ctx = c
 	}
 	return cfg, nil

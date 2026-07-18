@@ -26,6 +26,13 @@ import (
 // conditional and unconditional are the two raw next-token logit vectors (same
 // length). The returned scores are in log-probability space (a valid logit vector for
 // a Sampler, which re-normalizes with softmax — argmax = greedy CFG).
+//
+// Note the neutral γ is 1, not 0: at γ = 0 the formula returns the UNCONDITIONAL
+// distribution unchanged, so a γ that a caller forgot to set (Go's zero value)
+// silently discards the conditional branch — and when that branch is a negative
+// prompt, decodes from precisely the text the caller wanted avoided. This is a pure
+// function of its arguments and does not police them; [CFGDecode] documents the
+// operating range and rejects a negative γ.
 func GuidedLogits(conditional, unconditional []float64, gamma float64) []float64 {
 	n := len(conditional)
 	if len(unconditional) != n {
@@ -52,9 +59,30 @@ func GuidedLogits(conditional, unconditional []float64, gamma float64) []float64
 // unconditional stream needs at least one token to condition its first logits
 // on — typically a BOS token or a minimal neutral prefix). Generation stops at
 // the context limit of the longer stream.
+//
+// CHOOSING γ — read this before passing a computed value:
+//
+//   - γ = 1 is the neutral setting (plain conditional decoding). It is NOT Go's
+//     zero value, so a γ left unset by a caller does not mean "no guidance".
+//   - γ = 0 decodes purely from negPrompt: the extrapolation collapses to the
+//     unconditional branch and prompt has NO influence at all. With a negative
+//     prompt that is the exact inversion of the caller's intent — the output is
+//     steered by the text you asked to steer AWAY from. It is nonetheless a
+//     deliberate, spec-pinned operating point (§T440's γ=0 ⇒ Generate(negPrompt)
+//     equivalence), so it is accepted rather than rejected; pass it only when you
+//     mean it, and never as an uninitialized default.
+//   - 0 < γ < 1 interpolates between the unconditional and conditional branches
+//     (weaker-than-normal prompt adherence). Coherent, and accepted.
+//   - γ < 0 is REJECTED. It inverts the guidance vector itself, pushing away from
+//     prompt and toward negPrompt simultaneously; no reading of the CFG rule makes
+//     that a thing to ask for, and it is far more likely to be a sign error in a
+//     computed schedule than an intent.
 func CFGDecode(model *GPT, prompt, negPrompt []int, maxNew int, gamma float64, s TokenSampler) ([]int, error) {
 	if len(prompt) == 0 || len(negPrompt) == 0 {
 		return nil, fmt.Errorf("nlp: CFGDecode needs non-empty prompt and negPrompt")
+	}
+	if gamma < 0 {
+		return nil, fmt.Errorf("nlp: CFGDecode gamma %g is negative — guidance would push away from the prompt AND toward negPrompt; use gamma >= 0 (1 = plain conditional decoding)", gamma)
 	}
 	ctx := backend.NewContext()
 	cc := model.NewCache()

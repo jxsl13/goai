@@ -253,12 +253,26 @@ func ropeUnpermuteRows(t *tensor.Tensor, heads int) *tensor.Tensor {
 // gatherRows reorders the rows of a [heads·hd, cols] tensor per head: dst row
 // h·hd + q is copied from src row h·hd + srcPos(hd, q). Returns a fresh F64
 // tensor; the per-head row width hd must be even.
+//
+// The geometry check is an INTERNAL invariant, so it panics rather than returning
+// an error: every caller reaching this point has already validated heads against
+// the tensor's row count, so a violation here is a GoAI bug, not a bad input file.
+// Untrusted metadata is rejected upstream with a clean error instead — see the
+// positive-count validation in llamaCfgFromGGUFMeta and the per-tensor ropeGeom
+// check in [LlamaFromGGUF] (§V29).
+//
+// heads is tested BEFORE the division that derives hd: the old order computed
+// `rows / heads` first, so a head_count of 0 from a malformed GGUF crashed with an
+// integer divide-by-zero one line before its own heads<=0 guard could report it.
 func gatherRows(t *tensor.Tensor, heads int, srcPos func(hd, q int) int) *tensor.Tensor {
+	if t.Ndim() != 2 {
+		panic(fmt.Sprintf("nlp: rope row permute needs a 2-D tensor, got %d-D", t.Ndim()))
+	}
 	rows, cols := t.Shape()[0], t.Shape()[1]
-	hd := rows / heads
-	if heads <= 0 || rows%heads != 0 || hd%2 != 0 {
+	if heads <= 0 || rows%heads != 0 || (rows/heads)%2 != 0 {
 		panic(fmt.Sprintf("nlp: rope row permute needs rows %d divisible by heads %d with even head_dim", rows, heads))
 	}
+	hd := rows / heads
 	src := cloneF64(t).Storage().F64()
 	out := tensor.New(tensor.F64, tensor.Shape{rows, cols})
 	dst := out.Storage().F64()
@@ -294,12 +308,19 @@ func ropeUnpermuteVec(t *tensor.Tensor, heads int) *tensor.Tensor {
 // gatherVec is [gatherRows] for a 1-D per-head vector: dst element h·hd + q is copied
 // from src element h·hd + srcPos(hd, q). Returns a fresh F64 tensor; the per-head
 // width hd must be even.
+//
+// Like [gatherRows] this panic is an internal invariant (callers validate first), and
+// heads is likewise tested BEFORE the division that derives hd — a head_count of 0
+// otherwise divided by zero one line ahead of the guard meant to catch it.
 func gatherVec(t *tensor.Tensor, heads int, srcPos func(hd, q int) int) *tensor.Tensor {
+	if t.Ndim() != 1 {
+		panic(fmt.Sprintf("nlp: rope vec permute needs a 1-D tensor, got %d-D", t.Ndim()))
+	}
 	n := t.Shape()[0]
-	hd := n / heads
-	if heads <= 0 || n%heads != 0 || hd%2 != 0 {
+	if heads <= 0 || n%heads != 0 || (n/heads)%2 != 0 {
 		panic(fmt.Sprintf("nlp: rope vec permute needs length %d divisible by heads %d with even head_dim", n, heads))
 	}
+	hd := n / heads
 	src := cloneF64(t).Storage().F64()
 	out := tensor.New(tensor.F64, tensor.Shape{n})
 	dst := out.Storage().F64()

@@ -4,6 +4,49 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — GGUF loader hardening and zero-value traps (B76/T861, 2026-07-18)
+
+**Panics and a silent wrong load on malformed metadata.** `gatherRows` computed
+`rows / heads` BEFORE checking `heads <= 0`, so `head_count = 0` was an integer
+divide-by-zero panic reachable from `LlamaFromGGUF`, `MixtralFromGGUF` and
+`GraniteFromGGUF` on any untrusted file. Hardened at the shared choke point
+`llamaCfgFromGGUFMeta`, which all ten llama-family entry points read their geometry
+through, so one fix covers the family; absent keys keep their documented fallbacks and only
+a PRESENT non-positive value errors, leaving round-trips unaffected. `LlamaFromGGUF` also
+gained a per-tensor geometry check, since a tensor's row count is separately
+attacker-controlled and a validated config does not imply it.
+
+Beyond the reported panics, the hardening exposed a worse one: zero and negative
+`embedding_length`, `block_count`, `feed_forward_length` and `context_length` all loaded
+with `err == nil` — the wrong-but-nil-error class §V29 calls the harder one to trace. Now
+rejected.
+
+**Float/quant asymmetry.** The float DeepSeek path permuted RoPE rows with no shape
+validation, silently permuting only a prefix when the geometry did not match, while its
+quantized twin pinned it with an explicit error. The float path now routes through the SAME
+validator rather than a second independently-worded check, which would drift.
+
+**Zero-value traps.** `EvictStreaming(0,0)` emptied the whole cache while its doc called it
+a no-op — clamped per-argument to the documented meaning, since the signature returns no
+error and rejecting would break the API. `WithWordPieceContinuation("")` made every piece a
+continuation — now ignored, matching its sibling option and what the JSON loader already
+assumed.
+
+**Two findings deliberately NOT actioned, both worth recording.** The over-long-prompt
+finding was STALE: verified empirically, a 10-token prompt against Ctx=8 already returns a
+clean error, because the guard lives in `Embed`, which `Prefill` calls first — all 18
+attention architectures are guarded identically and the 4 recurrent ones have no Ctx at all.
+And `CFGDecode` with γ=0 is SPEC-pinned (§T440 specifies it equals generating from the
+negative prompt) and pinned by a test, so it is documented as a hazard rather than rejected;
+γ<0, which is incoherent and unspecified, now errors. Changing γ=0 needs a spec amendment.
+
+**The asymmetry is systemic.** A class audit found 8 float/quant loader pairs with the same
+shape: Cohere is an algorithmically exact replica of the DeepSeek bug; gptneox and
+starcoder2 slice a bias at validated weight offsets with no length check (short bias =
+panic); gemma and gemma2 divide by `heads` bare where the quant twin guards first — and
+those two have their own config parsers, so the shared-parser fix does not reach them. Only
+DeepSeek is fixed here; the rest are recorded for follow-up.
+
 ### nlp — EOS stopping across every Generate loop (T860, 2026-07-18)
 
 No architecture's `Generate` stopped on EOS; `T5Decoder` was the only decoder in the package

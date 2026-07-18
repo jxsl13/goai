@@ -47,8 +47,24 @@ func WithWordPieceUnk(id int) WordPieceOption { return func(w *WordPiece) { w.un
 // In plain terms: the little marker glued to the front of mid-word pieces ("play", "##ing").
 // Boundary behavior — must match the marker your vocabulary was built with, or nothing
 // tokenizes. Default "##" (research-grounded: the BERT/WordPiece continuation prefix).
+//
+// SPECIAL VALUE: the empty string is IGNORED (keeps the current value), matching
+// [WithWordPieceMaxChars]'s treatment of a non-positive cap. The marker is what
+// separates a mid-word piece from a word-initial one, so an empty one cannot carry
+// that meaning: strings.HasPrefix(piece, "") is true for EVERY piece, which made
+// [WordPiece.Decode] treat the whole sequence as one continued word and emit it with
+// no spaces at all, while Tokenize looked mid-word pieces up unprefixed and collided
+// them with the word-initial entries. Since no vocabulary can be built around an
+// empty marker, Go's zero-value string is read as "not configured" rather than
+// applied. A non-empty prefix is stored verbatim, so every working configuration is
+// unaffected.
 func WithWordPieceContinuation(p string) WordPieceOption {
-	return func(w *WordPiece) { w.continuation = p }
+	return func(w *WordPiece) {
+		if p == "" {
+			return
+		}
+		w.continuation = p
+	}
 }
 
 // WithWordPieceMaxChars caps the length (in runes) of a single word; longer words are emitted
