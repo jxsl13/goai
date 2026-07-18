@@ -60,3 +60,46 @@ func freeIf(p unsafe.Pointer) {
 		C.cu_free_f32(p)
 	}
 }
+
+//go:embed kernels/wmma_attn.fatbin
+var wmmaAttnFatbin []byte
+
+// WMMAAttn computes fused causal prefill attention O[heads,seq,hd] = softmax(scale·Q·Kᵀ +
+// causal)·V on tensor cores in one nvcc-compiled kernel. Q,K,V,O are f32 host slices laid out
+// [heads,seq,hd] row-major; hd must be 64 and seq a multiple of 16. Inputs round to f16.
+func WMMAAttn(q, k, v, o []float32, heads, seq, hd int, scale float32) error {
+	if hd != 64 {
+		return fmt.Errorf("cuda: WMMAAttn currently requires hd==64 (got %d)", hd)
+	}
+	if seq%16 != 0 {
+		return fmt.Errorf("cuda: WMMAAttn needs seq %% 16 == 0 (got %d)", seq)
+	}
+	n := heads * seq * hd
+	if len(q) != n || len(k) != n || len(v) != n || len(o) != n {
+		return fmt.Errorf("cuda: WMMAAttn buffer sizes must all be heads*seq*hd=%d", n)
+	}
+	dq := C.cu_upload_f16((*C.float)(&q[0]), C.long(n))
+	dk := C.cu_upload_f16((*C.float)(&k[0]), C.long(n))
+	dv := C.cu_upload_f16((*C.float)(&v[0]), C.long(n))
+	do := C.cu_alloc_f32(C.int(n))
+	if dq == nil || dk == nil || dv == nil || do == nil {
+		freeIf(dq)
+		freeIf(dk)
+		freeIf(dv)
+		freeIf(do)
+		return fmt.Errorf("cuda: WMMAAttn device alloc failed")
+	}
+	defer C.cu_free_f32(dq)
+	defer C.cu_free_f32(dk)
+	defer C.cu_free_f32(dv)
+	defer C.cu_free_f32(do)
+	rc := C.cu_wmma_attn(unsafe.Pointer(&wmmaAttnFatbin[0]), C.int(len(wmmaAttnFatbin)),
+		dq, dk, dv, do, C.int(heads), C.int(seq), C.int(hd), C.float(scale))
+	if rc != 0 {
+		return fmt.Errorf("cuda: WMMAAttn failed (code %d)", int(rc))
+	}
+	if C.cu_download_f32(do, (*C.float)(&o[0]), C.int(n)) != 0 {
+		return fmt.Errorf("cuda: WMMAAttn download failed")
+	}
+	return nil
+}

@@ -220,6 +220,7 @@ static int load_module_kernel(const void* image, const char* entry, CUfunction* 
 }
 
 static CUfunction gWmmaGemm = NULL; // nvcc-compiled WMMA GEMM (Tw-FLASHATTN slice 1)
+static CUfunction gWmmaAttn = NULL; // nvcc-compiled fused prefill attention (slice 2)
 
 // cu_wmma_gemm: C[M,N]f32 = A[M,K]f16 · B[K,N]f16 on tensor cores via an nvcc-compiled WMMA
 // kernel loaded from `fatbin`. M,N,K must be multiples of 16. Pipeline proof for nvcc kernels.
@@ -238,6 +239,29 @@ int cu_wmma_gemm(const void* fatbin, int fatlen, const void* dA, const void* dB,
         unsigned by = 4; // 4 M-tile warps per block
         unsigned gx = tilesN, gy = (tilesM + by - 1) / by;
         rc = (cuLaunchKernel(gWmmaGemm, gx, gy, 1, 32, by, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_wmma_attn: fused prefill attention on tensor cores. O[heads,seq,hd] = softmax(scale·Q·Kᵀ
+// + causal)·V, computed in one nvcc-compiled kernel (no intermediate global scores). hd==64,
+// seq%16==0. One warp per (head, 16-query tile); shared = 16·seq floats for the score stage.
+int cu_wmma_attn(const void* fatbin, int fatlen, const void* dQ, const void* dK, const void* dV,
+                 void* dO, int heads, int seq, int hd, float scale) {
+    (void)fatlen;
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (!gWmmaAttn && load_module_kernel(fatbin, "wmma_attn", &gWmmaAttn) != 0) { rc = -2; goto done; }
+    {
+        unsigned shbytes = (unsigned)(16 * seq * (int)sizeof(float));
+        cuFuncSetAttribute(gWmmaAttn, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, shbytes);
+        void* args[8] = { (void*)&dQ, (void*)&dK, (void*)&dV, &dO, &heads, &seq, &hd, &scale };
+        unsigned gx = (unsigned)(seq / 16), gy = (unsigned)heads;
+        rc = (cuLaunchKernel(gWmmaAttn, gx, gy, 1, 32, 1, 1, shbytes, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 done:
     pthread_mutex_unlock(&gLock);

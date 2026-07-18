@@ -59,6 +59,7 @@ cuda-test:
 ## the vulkan .spv. (Tw-FLASHATTN.)
 cuda-cubin:
 	@. scripts/cuda-nvcc-env.sh && nvcc_86 --fatbin -gencode arch=compute_86,code=sm_86 -gencode arch=compute_86,code=compute_86 backend/cuda/kernels/wmma_gemm.cu -o backend/cuda/kernels/wmma_gemm.fatbin
+	@. scripts/cuda-nvcc-env.sh && nvcc_86 --fatbin -gencode arch=compute_86,code=sm_86 -gencode arch=compute_86,code=compute_86 backend/cuda/kernels/wmma_attn.cu -o backend/cuda/kernels/wmma_attn.fatbin
 
 ## vulkan-spv: compile the compute shader to SPIR-V (needs glslc from the Vulkan
 ## SDK / shaderc). The committed .spv is a build artifact embedded by vulkan.go;
