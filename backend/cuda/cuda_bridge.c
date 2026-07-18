@@ -221,6 +221,8 @@ static int load_module_kernel(const void* image, const char* entry, CUfunction* 
 
 static CUfunction gWmmaGemm = NULL; // nvcc-compiled WMMA GEMM (Tw-FLASHATTN slice 1)
 static CUfunction gWmmaAttn = NULL; // nvcc-compiled fused prefill attention (slice 2)
+static CUfunction gWmmaAttnGqa = NULL; // GQA/strided fused prefill attention (§ROADMAP A2)
+static int launch_cvt_f16(const void* src, void* dst, long n); // fwd decl (defined below)
 
 // cu_wmma_gemm: C[M,N]f32 = A[M,K]f16 · B[K,N]f16 on tensor cores via an nvcc-compiled WMMA
 // kernel loaded from `fatbin`. M,N,K must be multiples of 16. Pipeline proof for nvcc kernels.
@@ -264,6 +266,41 @@ int cu_wmma_attn(const void* fatbin, int fatlen, const void* dQ, const void* dK,
         rc = (cuLaunchKernel(gWmmaAttn, gx, gy, 1, 32, 1, 1, shbytes, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_wmma_attn_gqa: fused prefill attention taking f32 DEVICE buffers in the shipped
+// [seq, heads·hd] layout with GQA (query head h -> kv head h/(qHeads/kvHeads)) — the drop-in
+// for GroupedQueryAttention on the prefill forward. Converts Q/K/V to f16 scratch internally,
+// writes f32 O. hd==64, seq%16==0. Causal.
+int cu_wmma_attn_gqa(const void* fatbin, int fatlen, const void* dQ32, const void* dK32,
+                     const void* dV32, void* dO32, int seq, int qHeads, int kvHeads, int hd,
+                     float scale) {
+    (void)fatlen;
+    int rc = -1;
+    void *q16 = NULL, *k16 = NULL, *v16 = NULL;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done2; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done2; }
+    if (!gWmmaAttnGqa && load_module_kernel(fatbin, "wmma_attn_gqa", &gWmmaAttnGqa) != 0) { rc = -2; goto done2; }
+    {
+        long nq = (long)seq * qHeads * hd, nkv = (long)seq * kvHeads * hd;
+        if (cudaMallocAsync(&q16, nq * 2, gStream) != cudaSuccess) { rc = -4; goto done2; }
+        if (cudaMallocAsync(&k16, nkv * 2, gStream) != cudaSuccess) { rc = -4; goto done2; }
+        if (cudaMallocAsync(&v16, nkv * 2, gStream) != cudaSuccess) { rc = -4; goto done2; }
+        if (launch_cvt_f16(dQ32, q16, nq) != 0 || launch_cvt_f16(dK32, k16, nkv) != 0 ||
+            launch_cvt_f16(dV32, v16, nkv) != 0) { rc = -5; goto done2; }
+        unsigned shbytes = (unsigned)(16 * seq * (int)sizeof(float));
+        cuFuncSetAttribute(gWmmaAttnGqa, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, shbytes);
+        void* args[9] = { &q16, &k16, &v16, &dO32, &seq, &qHeads, &kvHeads, &hd, &scale };
+        unsigned gx = (unsigned)(seq / 16), gy = (unsigned)qHeads;
+        rc = (cuLaunchKernel(gWmmaAttnGqa, gx, gy, 1, 32, 1, 1, shbytes, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done2:
+    if (q16) cudaFreeAsync(q16, gStream);
+    if (k16) cudaFreeAsync(k16, gStream);
+    if (v16) cudaFreeAsync(v16, gStream);
     pthread_mutex_unlock(&gLock);
     return rc;
 }
