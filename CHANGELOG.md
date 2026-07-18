@@ -56,8 +56,8 @@ section in docs/gguf.md carries the key tables with source citations.
 ### nlp — quantized GGUF decode for DeepSeek-V2, the MLA capstone (T833, 2026-07-18)
 
 `QuantDeepSeekV2` + `QuantDeepSeekV2FromGGUF` close the quant campaign at NINETEEN of
-twenty loadable architectures (the twentieth, RWKV-4, has no llama.cpp counterpart —
-T832). The design findings: the split-form `attn_k_b`'s quantized bytes ARE the absorbed
+twenty loadable architectures (correction: the missing twentieth is Gemma 2 — RWKV-4 was
+never among the twenty float-GGUF archs; its quant twin lands as T837). The design findings: the split-form `attn_k_b`'s quantized bytes ARE the absorbed
 operator (stored per-head pre-transposed), so split files run the absorbed-latent decode
 FULLY QUANTIZED with the MLA cache-memory win and a bit-exact decode anchor; legacy fused
 files run the reconstructed path (deriving absorbed operators would need an in-block
