@@ -142,6 +142,93 @@ func benchCoopmatRes(b *testing.B, m, k, n int) {
 	b.ReportMetric(2.0*float64(m)*float64(n)*float64(k)/(b.Elapsed().Seconds()/float64(b.N))/1e9, "GFLOP/s")
 }
 
+// Tiled kernel must match the naive probe (same math, different staging).
+func TestVulkanCoopmatTiledParity(t *testing.T) {
+	if !Available() {
+		t.Skip("no vulkan device")
+	}
+	if !HasCoopMat() {
+		t.Skip("device lacks VK_KHR_cooperative_matrix")
+	}
+	const M, K, N = 64, 96, 128
+	rng := rand.New(rand.NewSource(13))
+	ah := make([]uint16, M*K)
+	bh := make([]uint16, K*N)
+	for i := range ah {
+		ah[i] = f32ToHalf(float32(rng.NormFloat64()) * 0.25)
+	}
+	for i := range bh {
+		bh[i] = f32ToHalf(float32(rng.NormFloat64()) * 0.25)
+	}
+	r, err := NewCoopmatResident(ah, bh, M, K, N)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Free()
+	if err := r.Gemm(); err != nil {
+		t.Fatal(err)
+	}
+	naive := make([]float32, M*N)
+	if err := r.ReadC(naive); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.GemmTiled(); err != nil {
+		t.Fatal(err)
+	}
+	tiled := make([]float32, M*N)
+	if err := r.ReadC(tiled); err != nil {
+		t.Fatal(err)
+	}
+	var maxAbs float64
+	for i := range naive {
+		if d := math.Abs(float64(naive[i]) - float64(tiled[i])); d > maxAbs {
+			maxAbs = d
+		}
+	}
+	t.Logf("tiled vs naive coopmat: max abs diff %.3g", maxAbs)
+	if maxAbs > 1e-4 {
+		t.Fatalf("tiled kernel diverges from naive: max abs %.3g (same fragment math -> near-exact)", maxAbs)
+	}
+}
+
+func benchCoopmatTiled(b *testing.B, m, k, n int) {
+	if !Available() {
+		b.Skip("no vulkan device")
+	}
+	if !HasCoopMat() {
+		b.Skip("device lacks VK_KHR_cooperative_matrix")
+	}
+	rng := rand.New(rand.NewSource(11))
+	ah := make([]uint16, m*k)
+	bh := make([]uint16, k*n)
+	for i := range ah {
+		ah[i] = f32ToHalf(float32(rng.NormFloat64()) * 0.25)
+	}
+	for i := range bh {
+		bh[i] = f32ToHalf(float32(rng.NormFloat64()) * 0.25)
+	}
+	r, err := NewCoopmatResident(ah, bh, m, k, n)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer r.Free()
+	if err := r.GemmTiled(); err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for range b.N {
+		if err := r.GemmTiled(); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.StopTimer()
+	b.ReportMetric(2.0*float64(m)*float64(n)*float64(k)/(b.Elapsed().Seconds()/float64(b.N))/1e9, "GFLOP/s")
+}
+
+func BenchmarkCoopmatTiled_qkv(b *testing.B)    { benchCoopmatTiled(b, 128, 2048, 2048) }
+func BenchmarkCoopmatTiled_gateup(b *testing.B) { benchCoopmatTiled(b, 128, 2048, 5632) }
+func BenchmarkCoopmatTiled_down(b *testing.B)   { benchCoopmatTiled(b, 128, 5632, 2048) }
+
 func BenchmarkCoopmatRes_qkv(b *testing.B)    { benchCoopmatRes(b, 128, 2048, 2048) }
 func BenchmarkCoopmatRes_gateup(b *testing.B) { benchCoopmatRes(b, 128, 2048, 5632) }
 func BenchmarkCoopmatRes_down(b *testing.B)   { benchCoopmatRes(b, 128, 5632, 2048) }
