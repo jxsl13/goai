@@ -87,3 +87,56 @@ func TestSPMByteFallback(t *testing.T) {
 		t.Fatalf("byte round trip: got %q, want %q", got, "€")
 	}
 }
+
+// §B74 tier-1: the SPM twin of the Unigram case — a control token whose NAME contains
+// U+2581 decodes verbatim, while a literal U+2581 in ordinary text stays lossy and
+// detectable. SPM's Decode also expands <0xNN> byte pieces, and those bytes mean
+// themselves: llama.cpp unescapes whitespace for NORMAL tokens only, never for BYTE or
+// CONTROL/USER_DEFINED ones.
+func TestSPMSpaceMetaHandling(t *testing.T) {
+	const bos = "<｜begin▁of▁sentence｜>"
+	vocab := []nlp.UnigramPiece{{"<unk>", -20}, {"▁", -3}, {bos, -1}}
+	seen := map[string]bool{"<unk>": true, "▁": true, bos: true}
+	for _, r := range bos + "ab" {
+		if !seen[string(r)] {
+			seen[string(r)] = true
+			vocab = append(vocab, nlp.UnigramPiece{Piece: string(r), Score: -8})
+		}
+	}
+	s, err := nlp.NewSPM(vocab)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.AddSpecialTokens(map[string]int{bos: 2})
+
+	t.Run("marker decodes verbatim", func(t *testing.T) {
+		ids := s.EncodeSpecial(bos)
+		if len(ids) != 1 || ids[0] != 2 {
+			t.Fatalf("EncodeSpecial(%q) = %v, want [2]", bos, ids)
+		}
+		if got := s.Decode(ids); got != bos {
+			t.Errorf("Decode(%v) = %q, want %q verbatim — U+2581 in a control token's "+
+				"NAME must not be unescaped", ids, got, bos)
+		}
+	})
+
+	t.Run("literal U+2581 is lossy but detectable", func(t *testing.T) {
+		if !nlp.ContainsSpaceMeta("a▁b") {
+			t.Fatal(`ContainsSpaceMeta("a▁b") = false — the lossy input went unreported`)
+		}
+		if nlp.ContainsSpaceMeta("a b") {
+			t.Error(`ContainsSpaceMeta("a b") = true, want false`)
+		}
+		if got := s.Decode(s.Encode("a▁b")); got != "a b" {
+			t.Errorf(`round-trip "a▁b" → %q, want "a b" (the documented lossy result)`, got)
+		}
+	})
+
+	t.Run("ordinary text still round-trips", func(t *testing.T) {
+		for _, in := range []string{"ab", "a b", "b a"} {
+			if got := s.Decode(s.Encode(in)); got != in {
+				t.Errorf("round-trip %q → %q", in, got)
+			}
+		}
+	})
+}

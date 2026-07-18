@@ -7,8 +7,49 @@ import (
 )
 
 // spaceMeta is SentencePiece's whitespace meta-symbol ▁ (U+2581, LOWER ONE EIGHTH
-// BLOCK): spaces are escaped to it so segmentation and detokenization are lossless.
+// BLOCK): spaces are escaped to it so segmentation carries word boundaries and
+// detokenization can put them back. The escaping has no INVERSE, so it is lossless
+// only for input that contains no literal ▁ — see [ContainsSpaceMeta].
 const spaceMeta = "▁"
+
+// SpaceMeta is SentencePiece's whitespace meta-symbol ▁ (U+2581, LOWER ONE EIGHTH
+// BLOCK) — the character [Unigram] and [SPM] substitute for a space before
+// segmenting, and map back to a space when decoding.
+//
+// In plain terms: SentencePiece has no concept of "words separated by spaces". It
+// rewrites every space as this little block character and treats it as an ordinary
+// part of the following word, which is why tokens print as "▁hello". You mostly only
+// need the constant to check whether your own text already contains one — see
+// [ContainsSpaceMeta].
+const SpaceMeta = spaceMeta
+
+// ContainsSpaceMeta reports whether text contains a literal ▁ (U+2581), the one class
+// of input the SentencePiece tokenizers ([Unigram], [SPM]) cannot round-trip.
+//
+// In plain terms: ▁ is the stand-in for a space, so a ▁ you typed yourself is
+// indistinguishable from a space you typed — encoding "a▁b" and "a b" gives the same
+// token ids, and both decode to "a b". Nothing errors; the character is just quietly
+// gone. Call this before encoding if that would matter.
+//
+// Professional: ▁ is SentencePiece's escape character and the escaping has no inverse,
+// in the reference implementation as much as here (its default nmt_nfkc normalizer
+// maps U+2581 to U+0020 outright, and byte fallback never fires because ▁ is always in
+// the vocabulary). The published guarantee, Decode(Encode(Normalize(t))) == Normalize(t),
+// holds only because Normalize is itself where the information is lost — the stronger
+// claim, Decode(Encode(t)) == t, is false for this input. GoAI does not invent an escape
+// that would disagree with SentencePiece, HuggingFace and llama.cpp about what "a▁b"
+// tokenizes to; it makes the case checkable instead:
+//
+//	if nlp.ContainsSpaceMeta(text) {
+//		// this text will come back with its ▁ turned into spaces
+//	}
+//
+// Two things this deliberately does NOT flag, because neither is lossy: a ▁ inside a
+// registered special marker's name (DeepSeek's "<｜begin▁of▁sentence｜>"), which
+// EncodeSpecial emits as one id and Decode returns verbatim; and the ▁ that appears in
+// the PIECES of an ordinary encoding, which is just the escaped form of your spaces.
+// It answers a question about the INPUT text only.
+func ContainsSpaceMeta(text string) bool { return strings.Contains(text, spaceMeta) }
 
 // unkPenalty is SentencePiece's kUnkPenalty: an unmatched character costs
 // min(scores)−unkPenalty, so the Viterbi path only falls back to <unk> when no real
@@ -38,10 +79,30 @@ type UnigramPiece struct {
 // with backpointers to recover the pieces. A position no piece covers takes a single
 // character as <unk> at score min(scores)−kUnkPenalty (kUnkPenalty=10), so the DP is
 // always feasible. Whitespace is escaped to ▁ and a leading ▁ is prepended
-// (add_dummy_prefix) before segmentation; Decode concatenates the pieces and maps ▁
-// back to spaces, dropping the dummy — lossless when the vocabulary covers every
-// character. Input is assumed already Unicode-normalized (SentencePiece applies NFKC
+// (add_dummy_prefix) before segmentation; Decode maps ▁ back to spaces and drops the
+// dummy. Input is assumed already Unicode-normalized (SentencePiece applies NFKC
 // upstream; this tokenizer segments the string it is given).
+//
+// # Round-tripping is conditional, and one condition cannot be lifted
+//
+// Decode(Encode(text)) == text needs the vocabulary to cover every character of text
+// (else <unk> is emitted and the character is gone) AND text to contain no literal ▁
+// (U+2581). The second condition is inherited from SentencePiece and is NOT fixable
+// here: ▁ is the escape character, so escaping "a b" and passing through "a▁b" both
+// yield "▁a▁b" and the same ids. The reference implementation goes further and maps a
+// literal U+2581 to a space outright — its default nmt_nfkc normalizer lists 0x2581
+// among the "code points considered as whitespace" (builder.cc) — and its Decode is an
+// unconditional replace of ▁ with " ". Byte fallback never rescues it either, because
+// ▁ is always in the vocabulary and so never unknown. No escape is specified by
+// SentencePiece, HuggingFace tokenizers, or llama.cpp, and inventing one here would
+// make GoAI disagree with all three about what "a▁b" tokenizes to — a worse failure
+// than the one it fixes. So the loss stays, and [ContainsSpaceMeta] makes it
+// DETECTABLE instead of silent.
+//
+// The lossy case is narrower than it looks, because it applies to ORDINARY text only.
+// A ▁ inside a special marker's name — DeepSeek's "<｜begin▁of▁sentence｜>" — is
+// handled: register it with [Unigram.AddSpecialTokens], and [Unigram.EncodeSpecial]
+// emits its id as a unit while [Unigram.Decode] returns its name verbatim.
 type Unigram struct {
 	id       map[string]int // piece → id
 	pieces   []UnigramPiece // id → piece+score
@@ -120,6 +181,13 @@ func (u *Unigram) preprocess(text string) string {
 }
 
 // Encode segments text into token ids by the 1-best Viterbi over the unigram LM.
+//
+// It treats text as LITERAL and never emits a registered special marker's id, so it is
+// the right entry point for untrusted input (§B60); [Unigram.EncodeSpecial] is the one
+// that parses markers. Spaces are escaped to ▁ first — which means a literal ▁ already
+// in text is indistinguishable from a space and will decode back as one, silently.
+// [ContainsSpaceMeta] detects that input; the [Unigram] type doc explains why no
+// escape is possible.
 func (u *Unigram) Encode(text string) []int {
 	runes := []rune(u.preprocess(text))
 	n := len(runes)
@@ -170,17 +238,43 @@ func (u *Unigram) Encode(text string) []int {
 	return ids
 }
 
-// Decode reconstructs text from token ids: concatenate the pieces, map ▁ back to
-// spaces, and drop the leading dummy space. Lossless when the vocabulary covered
-// every input character (no <unk> was emitted).
+// Decode reconstructs text from token ids: map each piece's ▁ back to spaces,
+// concatenate, and drop the leading dummy space.
+//
+// Registered special markers (see [Unigram.AddSpecialTokens]) are emitted VERBATIM,
+// with no ▁→space mapping. That distinction is not cosmetic: DeepSeek's control
+// tokens are literally named "<｜begin▁of▁sentence｜>", where the U+2581 belongs to
+// the marker's NAME rather than standing in for a space. Unescaping it would hand
+// back "<｜begin of sentence｜>" — a corrupted marker — for a perfectly correct token
+// id (§B74).
+//
+// This mirrors llama.cpp's token_to_piece, which switches on the token's ATTRIBUTE
+// rather than post-processing one joined string: UNKNOWN, CONTROL and USER_DEFINED are
+// copied straight out, and only NORMAL tokens get llama_unescape_whitespace. Those are
+// the same three GGUF token types this package registers as markers (see ggufSpecials),
+// so the two agree token for token.
+//
+// Losslessness — Decode(Encode(text)) == text — requires BOTH of:
+//
+//   - the vocabulary covers every character of text (no <unk> was emitted), and
+//   - text contains no literal ▁ (U+2581). Encode escapes " " to ▁ but has no
+//     inverse escape, exactly as SentencePiece itself has none, so a literal ▁ in
+//     the input is indistinguishable from a space by the time segmentation runs and
+//     comes back as a space. [ContainsSpaceMeta] tests for this up front.
 func (u *Unigram) Decode(ids []int) string {
 	var b strings.Builder
 	for _, id := range ids {
-		if id >= 0 && id < len(u.pieces) {
-			b.WriteString(u.pieces[id].Piece)
+		if id < 0 || id >= len(u.pieces) {
+			continue
 		}
+		p := u.pieces[id].Piece
+		if u.specials.blocked(p) {
+			b.WriteString(p) // control/user-defined marker: ▁ is part of its name
+			continue
+		}
+		b.WriteString(strings.ReplaceAll(p, spaceMeta, " "))
 	}
-	s := strings.ReplaceAll(b.String(), spaceMeta, " ")
+	s := b.String()
 	if u.dummy {
 		s = strings.TrimPrefix(s, " ")
 	}

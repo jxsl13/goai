@@ -91,6 +91,13 @@ func NewSPM(vocab []UnigramPiece, opts ...SPMOption) (*SPM, error) {
 // (llama.cpp llm_tokenizer_spm semantics; ties break to the leftmost pair). The
 // rescan-per-merge loop is O(n²) in the text length — encoding is prompt-sized, not
 // corpus-sized, so clarity wins over a mergeable-pair heap.
+//
+// It treats text as LITERAL and never emits a registered special marker's id, so it is
+// the right entry point for untrusted input (§B60); [SPM.EncodeSpecial] is the one that
+// parses markers. Spaces are escaped to ▁ first — which means a literal ▁ already in
+// text is indistinguishable from a space and will decode back as one, silently.
+// [ContainsSpaceMeta] detects that input; SentencePiece specifies no escape for it and
+// neither does GoAI (see [ContainsSpaceMeta] for why inventing one would be worse).
 func (s *SPM) Encode(text string) []int {
 	str := strings.ReplaceAll(text, " ", spaceMeta)
 	if s.dummy {
@@ -144,9 +151,25 @@ func (s *SPM) Encode(text string) []int {
 	return ids
 }
 
-// Decode reconstructs text from token ids: concatenate the pieces (expanding <0xNN>
-// byte pieces to their raw byte), map ▁ back to spaces, and drop the leading dummy
-// space. Lossless when the input was encoded by this vocabulary.
+// Decode reconstructs text from token ids and drops the leading dummy space. Each
+// piece is expanded by its KIND, matching llama.cpp's token_to_piece, which switches
+// on the token ATTRIBUTE (BYTE / UNKNOWN+CONTROL+USER_DEFINED / NORMAL) rather than
+// post-processing one concatenated string:
+//
+//   - <0xNN> byte pieces → the raw byte, never whitespace-unescaped (a byte-fallback
+//     run reconstructs arbitrary UTF-8, and its bytes mean themselves);
+//   - registered special markers (see [SPM.AddSpecialTokens]) → VERBATIM. DeepSeek's
+//     control tokens are named "<｜begin▁of▁sentence｜>", where U+2581 is part of the
+//     NAME; unescaping it would return a corrupted "<｜begin of sentence｜>" for a
+//     perfectly correct token id (§B74);
+//   - everything else (NORMAL pieces) → ▁ mapped back to spaces.
+//
+// Losslessness — Decode(Encode(text)) == text — requires BOTH that the vocabulary can
+// represent every character (the <0xNN> byte pieces normally guarantee this) and that
+// text contains no literal ▁ (U+2581): Encode escapes " " to ▁ with no inverse
+// escape, exactly as SentencePiece itself has none, so a literal ▁ arrives at
+// segmentation indistinguishable from a space and returns as one. [ContainsSpaceMeta]
+// tests for this up front.
 func (s *SPM) Decode(ids []int) string {
 	var b strings.Builder
 	for _, id := range ids {
@@ -156,12 +179,16 @@ func (s *SPM) Decode(ids []int) string {
 		p := s.pieces[id].Piece
 		var v int
 		if n, _ := fmt.Sscanf(p, "<0x%02X>", &v); n == 1 && len(p) == 6 {
-			b.WriteByte(byte(v))
+			b.WriteByte(byte(v)) // BYTE: raw, no unescaping
 			continue
 		}
-		b.WriteString(p)
+		if s.specials.blocked(p) {
+			b.WriteString(p) // CONTROL / USER_DEFINED: ▁ is part of its name
+			continue
+		}
+		b.WriteString(strings.ReplaceAll(p, spaceMeta, " "))
 	}
-	out := strings.ReplaceAll(b.String(), spaceMeta, " ")
+	out := b.String()
 	if s.dummy {
 		out = strings.TrimPrefix(out, " ")
 	}

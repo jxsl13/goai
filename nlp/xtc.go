@@ -26,7 +26,7 @@ func (s *Sampler) applyXTC(probs []float64) {
 	if s.XTCProbability <= 0 || s.XTCThreshold <= 0 {
 		return
 	}
-	if s.rng.Float64() >= s.XTCProbability {
+	if s.source().Float64() >= s.XTCProbability {
 		return // this draw is left untouched
 	}
 	// find the qualifiers and the least probable among them.

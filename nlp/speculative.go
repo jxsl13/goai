@@ -180,7 +180,7 @@ func SpeculativeDecode(target, draft *GPT, prompt []int, maxNew, lookahead int, 
 				return nil, stats, err
 			}
 			q := s.Dist(rowAt(lg, len(cur)-1))
-			tok := sampleDist(q, s.rng)
+			tok := sampleDist(q, s.source())
 			qs = append(qs, q)
 			toks = append(toks, tok)
 			cur = append(cur, tok)
@@ -196,7 +196,7 @@ func SpeculativeDecode(target, draft *GPT, prompt []int, maxNew, lookahead int, 
 			ps = append(ps, s.Dist(rowAt(lg, len(out)-1+i)))
 		}
 		// 3. modified rejection sampling → 1..k+1 tokens, target-distributed.
-		acc := SpeculativeRun(ps, qs, toks, s.rng)
+		acc := SpeculativeRun(ps, qs, toks, s.source())
 		stats.Proposed += k
 		stats.Accepted += len(acc) - 1 // last token is residual/bonus, not a draft accept
 		for _, t := range acc {
