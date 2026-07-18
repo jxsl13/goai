@@ -4,6 +4,23 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### autograd — per-tensor gradient hooks (T840, 2026-07-18)
+
+`Tape.RegisterGradHook(x, fn)` observes or replaces one tensor's gradient mid-backward
+(torch's `tensor.register_hook`), completing the discovery sweep's queued candidates. The
+firing point falls out of the tape-walk finality guarantee: consumers sit later on the tape
+and are therefore processed EARLIER in the reverse walk, so when a node is reached its
+outputs' cotangents are final — hooks fire there, before the node's VJP consumes them, so a
+replacement propagates upstream (torch-consistent). Two corollaries are pinned by test: a
+fan-out tensor gets ONE call with the SUMMED cotangent (never one per consumer), and a
+replacement affects upstream gradients only. Leaf hooks fire at walk end in registration
+order; multiple hooks compose in registration order; anomaly mode attributes a
+NaN-manufacturing hook to that hook rather than a neighbouring op; checkpoint segment
+inputs/outputs are hookable while rematerialized internals are not (documented). Anchored
+tier-1 against torch on a fan-out graph with both a mid-tensor scaling hook and a leaf
+clipping hook (≤1e-12), plus observe-only bit-identity, composition, validation, and a
+runnable per-tensor-clipping example.
+
 ### autograd — anomaly detection + exported GradCheck (T839, 2026-07-18)
 
 Two debugging surfaces from the discovery sweep. `NewTape(WithAnomalyDetection())` scans
