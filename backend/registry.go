@@ -81,9 +81,10 @@ func Reference() Backend {
 }
 
 // Available lists the names of all registered backends (feature detection).
-// Sorted for determinism. Build-tagged accel backends self-register in init()
-// only when their device is present, so this reflects what can actually run on
-// this machine (§I4, §V4).
+// Sorted for determinism. The pure-Go cpu backend always registers; the
+// device-backed accel backends (metal, cuda, vulkan) are build-tagged and
+// self-register only when their device is present, so this reflects what can
+// actually run on this machine (§I4, §V4).
 func Available() []Name {
 	regMu.RLock()
 	defer regMu.RUnlock()

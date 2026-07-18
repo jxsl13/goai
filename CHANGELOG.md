@@ -4,6 +4,42 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nn/backend — CrossEntropy ignore_index + reduction (T841, 2026-07-18)
+
+`CrossEntropyAttrs` gains `IgnoreIndex`/`HasIgnoreIndex` and `Reduction` (mean|sum|none),
+unblocking the workflow the library is built for: every instruction-tune masks prompt tokens
+and every padded batch masks pads with -100, and neither could be expressed. Zero values
+preserve today's behavior exactly, so existing callers are byte-identical. The subtle
+intersection is pinned — torch applies label smoothing to non-ignored rows only and `mean`
+divides by the NON-ignored count — and the all-ignored degenerate case was confirmed
+EMPIRICALLY against torch (mean→NaN, sum→0, none→zeros, gradients zero throughout) rather
+than assumed. Tier-1 torch parity across the full cross-product (reduction × ignore_index ×
+label_smoothing = 12 cases + 3 degenerate) at ≤1e-12 on loss AND grad, plus venv-free
+property gates: masked ≡ hand-filtered BIT-exact, ignored rows' gradient exactly zero, and
+`autograd.GradCheck` (T839's own export) on five masked configurations.
+
+### backend — GPU attr guards made self-policing (T841)
+
+The metal/vulkan/cpu CrossEntropy guards were hand-maintained field allow-lists: adding an
+Attrs field without extending every guard produced a SILENT WRONG GPU ANSWER with nothing
+linking the struct to the guards. They now call whole-struct predicates (`IsBasic`,
+`IsUnmaskedMean`) so new fields are covered by construction, and a reflection-driven test
+fails on any field lacking a probe — turning that defect class into a test-RED event. Proven
+by negative control (reverting to the old hand-list makes the GPU/ref comparison fail loudly).
+A second live instance was found and fixed in the arm64 CPU vexp kernel.
+
+### docs — backend/nn package-doc corrections from the discovery sweep (2026-07-18)
+
+`backend/doc.go` claimed all accel backends including cpu are "build-tagged" and register
+"ONLY when their device is present" — false for cpu, which has no build tag and always
+registers (it needs no device); only metal/cuda/vulkan are device-gated. Fixed there and at
+the repeat in `registry.go`. `Kernel` was described as an interface; it is a func type.
+`nn/doc.go`'s catalogue had fallen behind the code: eight shipped optimizers (Lion,
+Prodigy, D-Adapt-Adam, Adam-mini, MARS, PSGD-Kron, Q-GaLore, Grokfast-MA), two LR schedules
+(inverse-sqrt, WSD), and the entire preference-loss family (DPO/IPO/KTO/CPO/SimPO/ORPO plus
+PPO and the GRPO variants) were absent from a list that reads exhaustive. Every added symbol
+was verified present in the code before being named.
+
 ### autograd — per-tensor gradient hooks (T840, 2026-07-18)
 
 `Tape.RegisterGradHook(x, fn)` observes or replaces one tensor's gradient mid-backward

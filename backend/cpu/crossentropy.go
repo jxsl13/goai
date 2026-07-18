@@ -51,6 +51,12 @@ func crossEntropyKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs back
 	if pa.ZLoss < 0 {
 		return nil, fmt.Errorf("cpu: crossentropy z_loss coefficient %g must be ≥ 0", pa.ZLoss)
 	}
+	if pa.HasIgnoreIndex || pa.Reduction != backend.ReductionMean {
+		// Masked rows / non-mean reductions stay on the reference (§I4): this vexp path
+		// exists purely for the hot unmasked mean training loop, and a partial
+		// implementation here would silently diverge from ref (TestCEGuardFallback).
+		return backend.Execute(ctx.WithBackend(backend.Reference()).WithRecorder(nil), backend.OpCrossEntropy, in, attrs)
+	}
 
 	// Targets validated serially up front (cheap, b reads) so the parallel row
 	// loop below is error-free; first bad index reported like ref's serial loop.
@@ -119,6 +125,9 @@ func crossEntropyBackwardKernelCPU(ctx *backend.Context, in []*tensor.Tensor, at
 		return nil, fmt.Errorf("cpu: crossentropy-backward targets len %d != batch %d", tg.Shape()[0], b)
 	}
 	pX, _ := attrs.(backend.CrossEntropyAttrs)
+	if pX.HasIgnoreIndex || pX.Reduction != backend.ReductionMean {
+		return backend.Execute(ctx.WithBackend(backend.Reference()).WithRecorder(nil), backend.OpCrossEntropyBackward, in, attrs)
+	}
 	eps := float32(pX.LabelSmoothing)
 	zl := pX.ZLoss
 	gv := g.AtF64()
