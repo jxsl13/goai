@@ -752,6 +752,10 @@ func gqaCore(q, k, v *DeviceF32, qHeads, kvHeads, hd, offset int, tf32 bool) (*D
 	return &DeviceF32{ptr: out, rows: seqQ, cols: wq}, nil
 }
 
+// Rows and Cols expose the device tensor's shape.
+func (d *DeviceF32) Rows() int { return d.rows }
+func (d *DeviceF32) Cols() int { return d.cols }
+
 func (d *DeviceF32) shape() tensor.Shape { return tensor.Shape{d.rows, d.cols} }
 
 // Clone returns a new resident activation with a device→device copy of this
