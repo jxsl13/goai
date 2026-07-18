@@ -79,6 +79,21 @@ func NewChatTemplate(family string) (*ChatTemplate, error) {
 // value) onto a native renderer by its distinctive control tokens. Unknown templates
 // return an error CONTAINING THE RAW JINJA so callers can fall back to their own
 // handling rather than silently mis-prompting the model.
+//
+// # The failure mode this CANNOT catch
+//
+// Detection is a substring match on marker tokens, and the returned renderer is a
+// hand-written Go implementation of that family — the actual Jinja is never
+// interpreted. Non-detection is therefore safe (it errors), but MIS-detection is
+// not: a fine-tune shipping a customized variant of a known family still matches
+// that family, and its customizations are silently ignored. The result is a
+// plausible, well-formed prompt that differs from what the model was tuned on, with
+// no error.
+//
+// Interpreting the Jinja for real is the only complete fix and is out of scope for a
+// zero-dependency library. So if prompt fidelity matters for your model, check
+// [ChatTemplate.Family] against what you expect and compare a rendered sample to the
+// template's own output — do not assume a successful detection means an exact match.
 func DetectChatTemplate(jinja string) (*ChatTemplate, error) {
 	switch {
 	case strings.Contains(jinja, "<|im_start|>"):
