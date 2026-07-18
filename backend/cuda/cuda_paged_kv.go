@@ -10,6 +10,7 @@ import "C"
 import (
 	"fmt"
 	"math"
+	"unsafe"
 )
 
 // §ROADMAP FRONT B / B1 — paged KV cache (the PagedAttention SOSP'23 storage design), the
@@ -173,6 +174,98 @@ func (s *SeqKV) Release() {
 	}
 	s.table = nil
 	s.n = 0
+}
+
+// PagedBatchView is a device-resident snapshot of a batch's block tables + sequence lengths,
+// uploaded ONCE per decode step and reused across all layers. BatchedDecodeAttn re-uploaded (and
+// device-synced) these every call — a 22-layer step paid 22 host↔device round-trips just to ship
+// the same integers. Building the view once and calling BatchedDecodeAttnView removes 21 of them.
+type PagedBatchView struct {
+	pool      *PagedKVPool
+	dbt, dsl  unsafe.Pointer
+	batch     int
+	maxBlocks int
+}
+
+// UploadBatchView packs and uploads (async, no device sync) the block tables + seq lengths for
+// `seqs`. Valid while the sequences' block tables and lengths are unchanged (a single decode step,
+// before Append). Call Free() when the step is done.
+func (p *PagedKVPool) UploadBatchView(seqs []*SeqKV) (*PagedBatchView, error) {
+	batch := len(seqs)
+	if batch == 0 {
+		return nil, fmt.Errorf("cuda: UploadBatchView empty batch")
+	}
+	maxBlocks := 0
+	for _, s := range seqs {
+		if s.pool != p {
+			return nil, fmt.Errorf("cuda: UploadBatchView sequence not from this pool")
+		}
+		if len(s.table) > maxBlocks {
+			maxBlocks = len(s.table)
+		}
+	}
+	if maxBlocks == 0 {
+		return nil, fmt.Errorf("cuda: UploadBatchView all sequences empty")
+	}
+	bt := make([]int32, batch*maxBlocks)
+	sl := make([]int32, batch)
+	for i, s := range seqs {
+		copy(bt[i*maxBlocks:], s.table)
+		sl[i] = int32(s.n)
+	}
+	dbt := C.cu_upload_i32_async((*C.int)(&bt[0]), C.int(len(bt)))
+	dsl := C.cu_upload_i32_async((*C.int)(&sl[0]), C.int(len(sl)))
+	if dbt == nil || dsl == nil {
+		freeIf(dbt)
+		freeIf(dsl)
+		return nil, fmt.Errorf("cuda: UploadBatchView device alloc failed")
+	}
+	return &PagedBatchView{pool: p, dbt: unsafe.Pointer(dbt), dsl: unsafe.Pointer(dsl), batch: batch, maxBlocks: maxBlocks}, nil
+}
+
+// Free releases the view's device buffers.
+func (v *PagedBatchView) Free() {
+	if v.dbt != nil {
+		C.cu_free_f32(v.dbt)
+		v.dbt = nil
+	}
+	if v.dsl != nil {
+		C.cu_free_f32(v.dsl)
+		v.dsl = nil
+	}
+}
+
+// BatchedDecodeAttnView is BatchedDecodeAttn using a pre-uploaded PagedBatchView (no per-call
+// block-table upload/sync). q is [batch, qHeads·hd]; returns o[batch, qHeads·hd].
+func (p *PagedKVPool) BatchedDecodeAttnView(q *DeviceF32, view *PagedBatchView, qHeads, kvHeads int) (*DeviceF32, error) {
+	if view.pool != p {
+		return nil, fmt.Errorf("cuda: BatchedDecodeAttnView view not from this pool")
+	}
+	if q.rows != view.batch {
+		return nil, fmt.Errorf("cuda: BatchedDecodeAttnView q rows %d != batch %d", q.rows, view.batch)
+	}
+	if qHeads <= 0 || kvHeads <= 0 || qHeads%kvHeads != 0 || q.cols%qHeads != 0 {
+		return nil, fmt.Errorf("cuda: BatchedDecodeAttnView bad head config q=%d kv=%d width=%d", qHeads, kvHeads, q.cols)
+	}
+	hd := q.cols / qHeads
+	if hd != 64 {
+		return nil, fmt.Errorf("cuda: BatchedDecodeAttnView requires hd==64 (got %d)", hd)
+	}
+	if kvHeads*hd != p.wkv {
+		return nil, fmt.Errorf("cuda: BatchedDecodeAttnView kvHeads*hd=%d != pool wkv=%d", kvHeads*hd, p.wkv)
+	}
+	out := C.cu_alloc_f32(C.int(view.batch * q.cols))
+	if out == nil {
+		return nil, fmt.Errorf("cuda: BatchedDecodeAttnView device alloc failed")
+	}
+	scale := float32(1.0 / math.Sqrt(float64(hd)))
+	rc := C.cu_paged_decode_attn(q.ptr, p.k.ptr, p.v.ptr, view.dbt, view.dsl, out,
+		C.int(view.batch), C.int(qHeads), C.int(kvHeads), C.int(hd), C.int(p.blockSize), C.int(view.maxBlocks), C.float(scale))
+	if rc != 0 {
+		C.cu_free_f32(out)
+		return nil, fmt.Errorf("cuda: BatchedDecodeAttnView failed (code %d)", int(rc))
+	}
+	return &DeviceF32{ptr: out, rows: view.batch, cols: q.cols}, nil
 }
 
 // BatchedDecodeAttn runs single-query decode attention for a batch of sequences over this pool:

@@ -191,6 +191,11 @@ int cu_gemm_f16_pure(const void* dA16, const void* dW16, void* dC16, int M, int 
 // cu_copy_rows: device→device copy nElems floats from src to dst+dstOffset (KV-cache append).
 int cu_copy_rows(void* dst, const void* src, int dstOffset, int nElems);
 void* cu_upload_i32(const int* src, int n);
+// cu_upload_i32_async: like cu_upload_i32 but WITHOUT a cudaStreamSynchronize. Safe when the
+// uploaded buffer is consumed only by later ops on gStream (stream-ordered) — the pageable H2D
+// copy is host-blocking so the source slice is free after return. Lets a decode step upload its
+// block-table/seq-len ONCE and feed all layers without a per-layer device sync.
+void* cu_upload_i32_async(const int* src, int n);
 // Device-position (graph-capturable) op twins: position lives in a device int.
 int cu_set_i32(void* d, int val);
 int cu_rope_f32_dpos(void* x, const void* inv, int seq, int heads, int hd, const void* dPos, double posDiv);

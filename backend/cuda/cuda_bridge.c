@@ -1613,6 +1613,25 @@ done:
     return d;
 }
 
+// cu_upload_i32_async: same as cu_upload_i32 but skips cudaStreamSynchronize. The pageable H2D
+// copy is host-blocking (source consumed before return) and the buffer is read only by later
+// gStream ops, so no device sync is needed for correctness — removing it saves a full device
+// round-trip per call (a decode step that uploads its block table per layer paid 22 of these).
+void* cu_upload_i32_async(const int* src, int n) {
+    void* d = NULL;
+    size_t sz = (size_t)n * sizeof(int);
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { goto done; }
+    if (cudaMallocAsync(&d, sz, gStream) != cudaSuccess) { d = NULL; goto done; }
+    if (cudaMemcpyAsync(d, src, sz, cudaMemcpyHostToDevice, gStream) != cudaSuccess) {
+        cudaFreeAsync(d, gStream);
+        d = NULL;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return d;
+}
+
 // cu_embed_f32: out[i,:] = table[ids[i],:] — the input embedding row gather. One
 // thread per output element; table is [vocab,d] resident, ids [seq] resident.
 int cu_embed_f32(const void* dTable, const void* dIds, void* dOut, int seq, int d) {

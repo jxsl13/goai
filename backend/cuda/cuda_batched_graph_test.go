@@ -1,0 +1,208 @@
+//go:build cuda && cgo && (linux || windows)
+
+package cuda_test
+
+import (
+	"math/rand"
+	"testing"
+
+	"github.com/jxsl13/goai/backend"
+	"github.com/jxsl13/goai/backend/cuda"
+	"github.com/jxsl13/goai/tensor"
+)
+
+// §ROADMAP FRONT B — kill the per-step overhead on the batched decode forward. B4's eager cut
+// (4245 tok/s at batch=64, 0.91× vLLM) re-uploaded + device-synced each sequence's block table
+// ONCE PER LAYER (22 full host↔device round-trips per step). This bench compares three modes:
+//   eager — B4's BatchedDecodeAttn (per-layer upload + sync)
+//   view  — UploadBatchView once per step + BatchedDecodeAttnView (no per-layer sync)
+//   graph — the view path captured as a CUDA graph and replayed (launch-overhead-free)
+// The lever to push batch=64 aggregate throughput PAST vLLM's ~4655.
+const (
+	bgDim, bgQHeads, bgKVHeads, bgHD, bgHidden = 2048, 32, 4, 64, 5632
+)
+
+type bgLayer struct {
+	gAttn, gFFN    *cuda.ResidentVec
+	wq, wk, wv, wo *cuda.ResidentBF16
+	wg, wu, wd     *cuda.ResidentBF16
+}
+
+func bgBuild(b *testing.B, batch, seqLen, layers int) ([]*bgLayer, *cuda.PagedKVPool, []*cuda.SeqKV, *cuda.DeviceF32) {
+	qW, kvW := bgQHeads*bgHD, bgKVHeads*bgHD
+	rng := rand.New(rand.NewSource(9))
+	mkW := func(k, n int) *cuda.ResidentBF16 {
+		t := tensor.New(tensor.F32, tensor.Shape{k, n})
+		f := t.Storage().F32()
+		for i := range f {
+			f[i] = float32(rng.NormFloat64()) * 0.02
+		}
+		r, err := cuda.NewResidentBF16(t)
+		if err != nil {
+			b.Fatal(err)
+		}
+		return r
+	}
+	mkVec := func(n int) *cuda.ResidentVec {
+		t := tensor.New(tensor.F32, tensor.Shape{n})
+		for i := range t.Storage().F32() {
+			t.Storage().F32()[i] = 1.0
+		}
+		r, _ := cuda.NewResidentVec(t)
+		return r
+	}
+	ls := make([]*bgLayer, layers)
+	for i := range ls {
+		ls[i] = &bgLayer{gAttn: mkVec(bgDim), gFFN: mkVec(bgDim),
+			wq: mkW(bgDim, qW), wk: mkW(bgDim, kvW), wv: mkW(bgDim, kvW), wo: mkW(qW, bgDim),
+			wg: mkW(bgDim, bgHidden), wu: mkW(bgDim, bgHidden), wd: mkW(bgHidden, bgDim)}
+	}
+	pool, err := cuda.NewPagedKVPool(batch*((seqLen+16)/16+1), 16, kvW)
+	if err != nil {
+		b.Fatal(err)
+	}
+	seqs := make([]*cuda.SeqKV, batch)
+	for i := range seqs {
+		seqs[i] = pool.NewSeqKV()
+		kf := make([]float32, seqLen*kvW)
+		for j := range kf {
+			kf[j] = float32(rng.NormFloat64()) * 0.1
+		}
+		dk, _ := cuda.NewDeviceF32(seqLen, kvW)
+		dk.UploadF32(kf)
+		seqs[i].Append(dk, dk)
+		dk.Free()
+	}
+	xf := make([]float32, batch*bgDim)
+	for i := range xf {
+		xf[i] = float32(rng.NormFloat64()) * 0.1
+	}
+	x0, _ := cuda.NewDeviceF32(batch, bgDim)
+	x0.UploadF32(xf)
+	return ls, pool, seqs, x0
+}
+
+func benchBatchedGraph(b *testing.B, batch, seqLen, layers int, mode string) {
+	if !cuda.Available() {
+		b.Skip("no gpu")
+	}
+	ls, pool, seqs, x0 := bgBuild(b, batch, seqLen, layers)
+	defer pool.Free()
+	defer x0.Free()
+	defer func() { // free resident weights so a batch sweep in one process doesn't leak VRAM
+		for _, l := range ls {
+			l.gAttn.Free()
+			l.gFFN.Free()
+			for _, w := range []*cuda.ResidentBF16{l.wq, l.wk, l.wv, l.wo, l.wg, l.wu, l.wd} {
+				w.Free()
+			}
+		}
+	}()
+	rq := backend.RoPEAttrs{Base: 10000, Heads: bgQHeads, PosOffset: seqLen}
+	rk := backend.RoPEAttrs{Base: 10000, Heads: bgKVHeads, PosOffset: seqLen}
+
+	// step runs one full batched decode forward. When view != nil it uses the pre-uploaded
+	// block table (view mode / graph mode); otherwise it re-uploads per layer (eager mode).
+	step := func(view *cuda.PagedBatchView) {
+		x, _ := cuda.NewDeviceF32(batch, bgDim)
+		x.CopyFrom(x0)
+		for _, l := range ls {
+			dh, _ := x.RMSNormTo(l.gAttn, 1e-5)
+			dq, _ := l.wq.MatMulDevice(dh)
+			dk, _ := l.wk.MatMulDevice(dh)
+			dv, _ := l.wv.MatMulDevice(dh)
+			dh.Free()
+			dq.RoPE(rq)
+			dk.RoPE(rk)
+			dk.Free()
+			dv.Free()
+			var da *cuda.DeviceF32
+			var err error
+			if view != nil {
+				da, err = pool.BatchedDecodeAttnView(dq, view, bgQHeads, bgKVHeads)
+			} else {
+				da, err = pool.BatchedDecodeAttn(dq, seqs, bgQHeads, bgKVHeads)
+			}
+			if err != nil {
+				b.Fatal(err)
+			}
+			dq.Free()
+			l.wo.MatMulAccInto(da, x)
+			da.Free()
+			dh2, _ := x.RMSNormTo(l.gFFN, 1e-5)
+			dg, _ := l.wg.MatMulDevice(dh2)
+			du, _ := l.wu.MatMulDevice(dh2)
+			dh2.Free()
+			dg.SwiGLU(du)
+			du.Free()
+			l.wd.MatMulAccInto(dg, x)
+			dg.Free()
+		}
+		x.Free()
+	}
+
+	switch mode {
+	case "eager":
+		step(nil)
+		cuda.GraphSync()
+		b.ResetTimer()
+		for range b.N {
+			step(nil)
+		}
+		cuda.GraphSync()
+		b.StopTimer()
+	case "view":
+		view, err := pool.UploadBatchView(seqs)
+		if err != nil {
+			b.Fatal(err)
+		}
+		defer view.Free()
+		step(view)
+		cuda.GraphSync()
+		b.ResetTimer()
+		for range b.N {
+			step(view)
+		}
+		cuda.GraphSync()
+		b.StopTimer()
+	case "graph":
+		view, err := pool.UploadBatchView(seqs)
+		if err != nil {
+			b.Fatal(err)
+		}
+		defer view.Free()
+		step(view) // warm up (cuBLAS heuristics, kernel load)
+		cuda.GraphSync()
+		if err := cuda.CaptureBegin(); err != nil {
+			b.Skipf("capture begin: %v", err)
+		}
+		step(view)
+		g, err := cuda.CaptureEnd()
+		if err != nil {
+			b.Skipf("capture end (cuBLAS/alloc not capturable): %v", err)
+		}
+		defer g.Free()
+		g.Launch()
+		cuda.GraphSync()
+		b.ResetTimer()
+		for range b.N {
+			g.Launch()
+		}
+		cuda.GraphSync()
+		b.StopTimer()
+	}
+	b.ReportMetric(float64(batch)*float64(b.N)/b.Elapsed().Seconds(), "tok/s")
+}
+
+func BenchmarkBatchedGraph_b64_eager(b *testing.B) { benchBatchedGraph(b, 64, 128, 22, "eager") }
+func BenchmarkBatchedGraph_b64_view(b *testing.B)  { benchBatchedGraph(b, 64, 128, 22, "view") }
+func BenchmarkBatchedGraph_b64_graph(b *testing.B) { benchBatchedGraph(b, 64, 128, 22, "graph") }
+
+// Batch sweep on the graph path: decode streams the full weight set once per step regardless of
+// batch, so aggregate tok/s climbs with batch until the GEMMs go compute-bound. Finds our peak
+// sustained serving throughput vs vLLM's ~4655.
+func BenchmarkBatchedGraph_b128_graph(b *testing.B) { benchBatchedGraph(b, 128, 128, 22, "graph") }
+func BenchmarkBatchedGraph_b256_graph(b *testing.B) { benchBatchedGraph(b, 256, 128, 22, "graph") }
+func BenchmarkBatchedGraph_b384_graph(b *testing.B) { benchBatchedGraph(b, 384, 128, 22, "graph") }
+
+func BenchmarkBatchedGraph_b512_graph(b *testing.B) { benchBatchedGraph(b, 512, 128, 22, "graph") }
