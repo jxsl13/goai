@@ -33,6 +33,10 @@ type Tape struct {
 
 	anomaly    bool  // anomaly-detection mode (anomaly.go); off by default
 	anomalyErr error // first forward-pass anomaly; surfaced by Err and Backward*
+
+	hooks     map[*tensor.Tensor][]GradHook // per-tensor gradient hooks (hooks.go); nil until first RegisterGradHook
+	hookOrder []*tensor.Tensor              // hooked tensors in first-registration order (deterministic leaf firing)
+	hookFired map[*tensor.Tensor]bool       // per-backward: hooked tensors whose firing point the walk already passed
 }
 
 // NewTape returns an empty tape executing on the default backend. Options
@@ -137,8 +141,20 @@ func (t *Tape) BackwardGrad(out *tensor.Tensor, cotangent *tensor.Tensor) error 
 // Split out from backward so a checkpoint's recomputation sub-tape can be driven with a
 // pre-seeded, multi-output gradient map.
 func (t *Tape) runBackward() error {
+	if t.hooks != nil {
+		t.hookFired = make(map[*tensor.Tensor]bool, len(t.hooks))
+	}
 	for i := len(t.nodes) - 1; i >= 0; i-- {
 		n := t.nodes[i]
+		// Gradient hooks on n's outputs fire HERE: every consumer of those
+		// outputs sits later on the tape and has therefore already contributed
+		// its VJP — the cotangents are final — and n's own VJP has not yet
+		// consumed them, so a hook's replacement propagates upstream (hooks.go).
+		if t.hooks != nil {
+			if err := t.fireOutputHooks(i, n); err != nil {
+				return err
+			}
+		}
 		if n.ckpt != nil {
 			if err := t.backwardCheckpoint(n); err != nil {
 				return err
@@ -173,6 +189,11 @@ func (t *Tape) runBackward() error {
 		if err := t.accumulateGrads(n, gins); err != nil {
 			return err
 		}
+	}
+	// Leaf tensors have no producer node; their gradients are final only now,
+	// at the end of the walk — fire their hooks here (hooks.go).
+	if t.hooks != nil {
+		return t.fireLeafHooks()
 	}
 	return nil
 }
