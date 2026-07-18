@@ -14,6 +14,15 @@ import (
 // forward pass needs no rescaling. Because E[out]=x (§R55), the layer changes the
 // training signal but not the expected activation.
 //
+// MODE DEFAULTS TO TRAINING, AND NOTHING SWITCHES IT FOR YOU. A freshly built
+// Dropout has Training == true, so if you run inference without switching modes,
+// dropout keeps firing and your predictions are noisy — silently, with no error.
+// Before predicting, call [Dropout.Eval] on the layer, or [SetTrain](model, false)
+// / [Sequential.Eval] on the model that contains it, which propagate to every
+// nested mode-dependent layer. Call [Dropout.Train] (or SetTrain(model, true)) to
+// resume training. See [Mode] for the opt-in interface and [SetTrain] for the one
+// case a generic walk cannot reach.
+//
 // It carries no learnable parameters and is implemented as an elementwise multiply
 // by a fresh Bernoulli mask through the recording context, so its gradient comes
 // entirely from the Mul VJP: ∂L/∂x = mask ⊙ ∂L/∂out (gradient flows only through

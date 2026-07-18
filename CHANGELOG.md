@@ -4,6 +4,31 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nn — train/eval mode propagation and Embedding layer (T845, 2026-07-18)
+
+Closes a long-standing API footgun. `Dropout.Training` defaults true and was reachable
+only by holding the concrete `*Dropout`, so a user composing `nn.Sequential` with a nested
+dropout had no generic way to switch to inference. Note this was NOT a live bug in the
+shipped stack: none of the 20 nlp architectures use `nn.Dropout`, and the one in-repo
+consumer (`nn/simcse.go`) deliberately requires it active — so no default changed and
+simcse is untouched (its 7 tests re-verified green).
+
+Two opt-in interfaces in the `StatefulOptimizer` style leave `Layer` unchanged, so nothing
+existing breaks: `Mode` (`Train()`/`Eval()`, already satisfied by `*Dropout`/`*DropPath`)
+and `Composite` (`Sublayers() []Layer`, the walkability opt-in). `SetTrain(root, training)`
+recurses through both. The walk asks the type rather than faking it via reflection: a struct
+owning layers in unexported fields is an opaque leaf the walk cannot reach, and that limit
+is stated in the godoc and asserted both ways by a test that tells a future author to update
+the doc if it ever changes.
+
+`nn.Embedding` wraps `OpEmbed` and is gated bit-identical to a test-reimplemented
+`nlp/gpt.go` oracle in F64 and F32, so the six hand-rolled lookup sites can migrate later
+(deliberately not migrated here). `padding_idx` is honest rather than magic: the pad row is
+zero-initialised, but grad zeroing is caller-installed via `PadGradHook()` because the layer
+holds no tape reference and `nn` does not import `autograd` in production code. The godoc
+states in capitals that PadIdx is INERT without the hook. The grad test first asserts the
+pad row does accumulate unhooked, so it cannot pass vacuously.
+
 ### nn — optimizer parameter groups (T844, 2026-07-18)
 
 `ParamGroups` runs N sub-optimizers over disjoint parameter subsets behind the plain
