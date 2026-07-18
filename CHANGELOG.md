@@ -4,6 +4,24 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — the Granite quant test could not see a dropped LogitsScale (T856, 2026-07-18)
+
+`TestQuantGraniteCosineVsFloat` gated on cosine similarity alone while its doc comment
+claimed it covered "the scalar effects on the residual stream". Cosine does cover
+EmbeddingMult, AttentionMult and ResidualMult — those act inside the network, so dropping
+one rotates the logit vector. It is blind to LogitsScale, which divides the final logits
+UNIFORMLY (`llama.go:172`), and cosine is scale-invariant by construction. A
+`QuantizeLlama` that dropped `logits_scaling` entirely would have sailed through the whole
+Granite quant suite.
+
+Demonstrated rather than asserted: with `divLogits` mutated to drop the scale, cosine stays
+at 0.999967 while the new L2-magnitude gate fires at 0.125059 — exactly 1/8, the fixture's
+LogitsScale of 8.0.
+
+The sibling Cohere test already made this precise argument for `logit_scale` and carries
+the magnitude check; Granite simply never had it applied. That is the class-audit gap, not
+a novel insight — the lesson existed in the repo and had not been swept across siblings.
+
 ### nlp — special-token parsing, and an injection vector found on the way (B72/T855, 2026-07-18)
 
 No tokenizer matched special/added tokens before its merge loop, so a vocabulary holding
