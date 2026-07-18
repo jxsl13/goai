@@ -25,6 +25,11 @@
 //     (Lookahead, SAM sharpness-aware steps, cautious masking, Grokfast EMA (exponential moving average)
 //     filtering, GaLore and APOLLO memory-efficient low-rank gradient projection), LR (learning rate) schedules (OneCycle, inverse-sqrt, WSD),
 //     gradient clipping and accumulation, and mixed-precision (AMP) helpers.
+//     Per-group hyperparameters come from ParamGroups, a fan-out wrapper over
+//     disjoint parameter subsets (validated disjoint, optionally validated
+//     exhaustive) that expresses the standard "no weight decay on biases and
+//     LayerNorm/RMSNorm gains" recipe via SplitParams — and checkpoints as one
+//     file through StatefulParamGroups.
 //   - Parameter-efficient fine-tuning: LoRA, DoRA, PiSSA, VeRA, (IA)³,
 //     bottleneck adapters, prefix tuning, prompt tuning, and NEFTune noise.
 //   - Quantization, pruning & discrete bottlenecks: AWQ, GPTQ, HQQ, NF4 (QLoRA),

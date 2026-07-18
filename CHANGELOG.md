@@ -4,6 +4,28 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nn — optimizer parameter groups (T844, 2026-07-18)
+
+`ParamGroups` runs N sub-optimizers over disjoint parameter subsets behind the plain
+`Optimizer` interface, so the near-universal transformer recipe — no weight decay on biases
+and norm gains, decay on everything else — is finally expressible, in a few lines and
+without touching any of the 22 optimizer implementations. Both silent failure modes are
+hard errors: overlapping groups (a parameter stepped twice gets roughly double the intended
+learning rate — the error names both groups, both positions and the shape) and, via the
+opt-in `WithParamGroupsExpected(model.Params())`, parameters covered by no group at all
+(silently never trained). `SplitParams` partitions exhaustively so the documented recipe
+cannot lose a parameter by construction.
+
+The checkpointing composition is deliberately explicit: `*ParamGroups` does NOT implement
+`StatefulOptimizer`, because `State()` has no error channel — a `.(StatefulOptimizer)` probe
+would succeed even when a group holds one of the 18 unwired optimizers, and that group's
+momentum would vanish on restart with no warning. `NewStatefulParamGroups` verifies every
+sub-optimizer is stateful at construction instead, naming the first offender. Gates are
+bit-exact throughout, each with a discriminator proving the test is not vacuous (a single
+optimizer at either LR does NOT reproduce the grouped result; uniform decay does NOT
+reproduce the recipe). `IsBiasOrNorm`'s rank≤1 heuristic documents its failure modes in both
+directions, with the miss pinned as an executable test case.
+
 ### llamagpu — weight-flatten 5.9× and a corrected diagnosis (T843, 2026-07-18)
 
 The tied-lm_head and weight-upload paths flattened tensors with per-element `AtF64` loops
