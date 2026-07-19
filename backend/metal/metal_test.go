@@ -24,6 +24,19 @@ func skipNoGPU(t *testing.T) {
 	}
 }
 
+func TestMetalMemoryProber(t *testing.T) {
+	skipNoGPU(t)
+	var p backend.MemoryProber = metal.Backend{}
+	bytes, ok := p.AvailableMemory()
+	if !ok || bytes <= 0 {
+		t.Fatalf("Metal device must report a positive remaining working-set budget, got %d/%v", bytes, ok)
+	}
+	budgets := backend.ProbeBudgets(backend.Metal)
+	if budgets[backend.Metal] <= 0 {
+		t.Fatalf("ProbeBudgets omitted positive Metal probe (direct=%d)", bytes)
+	}
+}
+
 // crossTol is the §V11 tolerance for GPU f32 GEMM: MPS accumulates in f32 and
 // reorders sums, so rtol scales with reduction length: rtol(K) = 2.5e-6·√K.
 //

@@ -38,7 +38,11 @@ func (r *rowBuf) Append(cur, row *tensor.Tensor) *tensor.Tensor {
 		return cur
 	}
 	if cur == nil {
-		r.buf, r.n = nil, 0
+		// Truncate(0) deliberately returns nil while retaining the allocation. Keep
+		// that empty backing; an externally cleared non-empty view still resets it.
+		if r.n != 0 {
+			r.buf, r.n = nil, 0
+		}
 	} else if !r.owns(cur) {
 		// Foreign view: adopt it as the backing. Contiguous() copies at most
 		// once (and not at all for a contiguous offset-0 tensor); the adopted
@@ -75,6 +79,70 @@ func (r *rowBuf) Append(cur, row *tensor.Tensor) *tensor.Tensor {
 	r.n = need
 	view, err := r.buf.Slice(0, 0, r.n)
 	if err != nil { // bounds are ours by construction; unreachable
+		panic(err)
+	}
+	return view
+}
+
+// Truncate discards rows [n:] while retaining the backing allocation for the next
+// append. LayerSkip uses it to roll speculative KV rows back after a rejection.
+// cur may be a foreign public cache view; as in Append, it is adopted first.
+func (r *rowBuf) Truncate(cur *tensor.Tensor, n int) *tensor.Tensor {
+	if cur == nil {
+		if n != 0 {
+			panic("nlp: truncate nil row buffer to nonzero length")
+		}
+		r.n = 0
+		return nil
+	}
+	if !r.owns(cur) {
+		c := cur.Contiguous()
+		r.buf, r.n = c, c.Shape()[0]
+	}
+	if n < 0 || n > r.n {
+		panic("nlp: row buffer truncate outside current length")
+	}
+	r.n = n
+	if n == 0 {
+		return nil
+	}
+	view, err := r.buf.Slice(0, 0, n)
+	if err != nil { // bounds are ours by construction; unreachable
+		panic(err)
+	}
+	return view
+}
+
+// CopyPrefix replaces the logical rows with the first n rows of src while retaining
+// a compatible backing allocation. Prefix-pool cloning uses this instead of making
+// a temporary src.Slice and then routing it through Append: one typed block copy and
+// one destination view are sufficient. src is never adopted or shared.
+func (r *rowBuf) CopyPrefix(src *tensor.Tensor, n int) *tensor.Tensor {
+	if src == nil || src.Ndim() != 2 || n < 0 || n > src.Shape()[0] {
+		panic("nlp: row buffer copy prefix outside source")
+	}
+	if n == 0 {
+		r.n = 0
+		return nil
+	}
+	width, dt := src.Shape()[1], src.Dtype()
+	if !typedRowCopyOK(dt) {
+		prefix, err := src.Slice(0, 0, n)
+		if err != nil { // bounds checked above; unreachable
+			panic(err)
+		}
+		out := prefix.Cast(dt) // Cast always makes an independent contiguous copy
+		r.buf, r.n = out, n
+		return out
+	}
+	if r.buf == nil || r.buf.Dtype() != dt || r.buf.Shape()[1] != width || r.buf.Shape()[0] < n {
+		capRows := max(2*n, 8)
+		r.buf = tensor.NewOn(src.Device(), dt, tensor.Shape{capRows, width})
+	}
+	copyRows(r.buf, 0, src, n*width)
+	r.n = n
+	view, err := r.buf.Slice(0, 0, n)
+	if err != nil { // capacity is ours by construction; unreachable
 		panic(err)
 	}
 	return view

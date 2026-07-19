@@ -173,13 +173,13 @@ func (e *EagleHead) Predict(ctx *backend.Context, feats, embs *tensor.Tensor) (*
 
 // EagleLoss is the EAGLE training loss for one sequence on a FROZEN base:
 // feature regression + down-weighted token classification (paper §4.1,
-// L = L_reg + 0.1·L_cls; MSE stands in for the paper's Smooth L1). tokens is the
+// L = L_reg + 0.1·L_cls; L_reg is Smooth L1 with β=1). tokens is the
 // training sequence (≥ 3 tokens) and hidden the base's ForwardHidden(tokens)
 // [len(tokens),dim] computed OUTSIDE the tape (the frozen-base recipe shared
 // with MedusaHeads training). For every position t the head predicts f̂_{t+1}
 // from (f_t, embed(token_{t+1})); the loss is
 //
-//	MSE(f̂_{t+1}, f_{t+1})  +  0.1·CE(f̂_{t+1}·Head, token_{t+2})
+//	SmoothL1(f̂_{t+1}, f_{t+1})  +  0.1·CE(f̂_{t+1}·Head, token_{t+2})
 //
 // where TokEmb and Head are the base's frozen tensors (they sit on the tape but
 // only head.Params() are stepped). Run under a recording context to train.
@@ -220,7 +220,7 @@ func EagleLoss(ctx *backend.Context, head *EagleHead, base *GPT, tokens []int, h
 	if err != nil {
 		return nil, err
 	}
-	lossF, err := nn.MSE(ctx, pred, next)
+	lossF, err := eagleSmoothL1(ctx, pred, next)
 	if err != nil {
 		return nil, err
 	}
@@ -248,6 +248,55 @@ func EagleLoss(ctx *backend.Context, head *EagleHead, base *GPT, tokens []int, h
 		return nil, err
 	}
 	return exec1(ctx, backend.OpAdd, nil, lossF, lossT)
+}
+
+// eagleSmoothL1 is the EAGLE feature-regression term (paper §4.1), averaged
+// elementwise with β=1:
+//
+//	0.5·d²                 if |d| ≤ 1
+//	|d| − 0.5              otherwise
+//
+// The branch-free identity 0.5·(d²−ReLU(|d|−1)²) composes only existing
+// differentiable ops, so the head's ordinary first-order tape receives the
+// exact Smooth-L1 gradient without a new backend kernel.
+func eagleSmoothL1(ctx *backend.Context, pred, target *tensor.Tensor) (*tensor.Tensor, error) {
+	d, err := exec1(ctx, backend.OpSub, nil, pred, target)
+	if err != nil {
+		return nil, err
+	}
+	d2, err := exec1(ctx, backend.OpMul, nil, d, d)
+	if err != nil {
+		return nil, err
+	}
+	a, err := exec1(ctx, backend.OpAbs, nil, d)
+	if err != nil {
+		return nil, err
+	}
+	one := tensor.New(pred.Dtype(), pred.Shape())
+	for i := range one.Numel() {
+		one.SetF64(1, tensor.Unravel(i, one.Shape())...)
+	}
+	excess, err := exec1(ctx, backend.OpSub, nil, a, one)
+	if err != nil {
+		return nil, err
+	}
+	excess, err = exec1(ctx, backend.OpReLU, nil, excess)
+	if err != nil {
+		return nil, err
+	}
+	excess2, err := exec1(ctx, backend.OpMul, nil, excess, excess)
+	if err != nil {
+		return nil, err
+	}
+	smooth, err := exec1(ctx, backend.OpSub, nil, d2, excess2)
+	if err != nil {
+		return nil, err
+	}
+	mean, err := exec1(ctx, backend.OpMean, nil, smooth)
+	if err != nil {
+		return nil, err
+	}
+	return exec1(ctx, backend.OpAXPY, backend.AXPYAttrs{Alpha: 0.5}, mean, tensor.New(mean.Dtype(), tensor.Shape{}))
 }
 
 // eagleEmbed gathers the base token embedding row [1,dim] for one token (no

@@ -21,6 +21,12 @@ type GPT struct {
 	Blocks []*Block       // the stacked transformer blocks
 	LNf    *nn.LayerNorm  // final pre-logits LayerNorm
 	Head   *tensor.Tensor // [dim, vocab]
+	// LayerBackends optionally assigns each transformer block's batched forward
+	// execution (Forward/ForwardHidden/ForwardResiduals) to a backend.
+	// Set it to [backend.PlanOffload]'s Layers result to spill blocks that exceed
+	// device memory onto CPU/ref. nil keeps the historical single-backend path;
+	// a non-empty slice must contain exactly one name per block.
+	LayerBackends []backend.Name
 }
 
 // GPTConfig fixes the model geometry.
@@ -197,6 +203,38 @@ func (g *GPT) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor, error
 	return g.ForwardFromEmbed(ctx, x)
 }
 
+// ForwardExit computes early-exit logits after the zero-based transformer block
+// exitLayer. It executes only blocks 0 through exitLayer, then applies the model's
+// shared final LayerNorm and LM head. LayerSkip-style checkpoints train that shared
+// exit to make intermediate predictions useful; an ordinary GPT is valid input but
+// may produce poor draft acceptance. Choosing the final block is bit-identical to
+// [GPT.Forward].
+//
+// Unlike [GPT.ForwardEarlyExit], this method stops the block stack at the requested
+// layer instead of also completing the mature forward. It is therefore the cheap
+// draft primitive for [SelfSpeculativeDecode].
+func (g *GPT) ForwardExit(ctx *backend.Context, tokens []int, exitLayer int) (*tensor.Tensor, error) {
+	if g == nil {
+		return nil, fmt.Errorf("nlp: ForwardExit needs a model")
+	}
+	if exitLayer < 0 || exitLayer >= len(g.Blocks) {
+		return nil, fmt.Errorf("nlp: ForwardExit exitLayer %d outside [0,%d)", exitLayer, len(g.Blocks))
+	}
+	if err := validateLayerBackends(g.LayerBackends, len(g.Blocks)); err != nil {
+		return nil, err
+	}
+	x, err := g.Embed(ctx, tokens)
+	if err != nil {
+		return nil, err
+	}
+	for layer := 0; layer <= exitLayer; layer++ {
+		if x, err = g.forwardBlock(ctx, x, layer); err != nil {
+			return nil, err
+		}
+	}
+	return g.Unembed(ctx, x)
+}
+
 // ForwardFromEmbed runs the transformer blocks and LM head on a precomputed embedding
 // x [seq, dim], returning logits [seq, vocab]. Splitting the embedding step out lets a
 // training loop inject NEFTune noise (nn.NEFTune) between the embedding and the blocks.
@@ -260,50 +298,65 @@ func (g *GPT) Unembed(ctx *backend.Context, h *tensor.Tensor) (*tensor.Tensor, e
 // (the GPT sibling of Llama.hiddenFromEmbedTaps). The tap is a pure observer: a
 // nil capture is byte-identical to the historical hiddenFromEmbed.
 func (g *GPT) hiddenFromEmbedCapture(ctx *backend.Context, x *tensor.Tensor, capture ResidualCapture) (*tensor.Tensor, error) {
-	var err error
+	if err := validateLayerBackends(g.LayerBackends, len(g.Blocks)); err != nil {
+		return nil, err
+	}
 	if capture != nil {
 		capture(0, x) // h_0: the post-embedding input to block 0
 	}
-	for l, b := range g.Blocks {
-		// attention sublayer: x += Attn(LN1(x))
-		h, err := b.LN1.Forward(ctx, x)
-		if err != nil {
-			return nil, err
-		}
-		if h, err = b.Attn.Forward(ctx, h); err != nil {
-			return nil, err
-		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, h); err != nil {
-			return nil, err
-		}
-		// FFN sublayer: x += W2·gelu(W1·LN2(x)+b1)+b2
-		if h, err = b.LN2.Forward(ctx, x); err != nil {
-			return nil, err
-		}
-		if h, err = exec1(ctx, backend.OpMatMul, nil, h, b.W1); err != nil {
-			return nil, err
-		}
-		if h, err = exec1(ctx, backend.OpAddBias, nil, h, b.B1); err != nil {
-			return nil, err
-		}
-		if h, err = exec1(ctx, backend.OpGELU, nil, h); err != nil {
-			return nil, err
-		}
-		if h, err = exec1(ctx, backend.OpMatMul, nil, h, b.W2); err != nil {
-			return nil, err
-		}
-		if h, err = exec1(ctx, backend.OpAddBias, nil, h, b.B2); err != nil {
-			return nil, err
-		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, h); err != nil {
+	for l := range g.Blocks {
+		var err error
+		if x, err = g.forwardBlock(ctx, x, l); err != nil {
 			return nil, err
 		}
 		if capture != nil {
 			capture(l+1, x) // h_{l+1}: the residual stream after block l
 		}
 	}
+	var err error
 	if x, err = g.LNf.Forward(ctx, x); err != nil {
 		return nil, err
 	}
 	return x, nil
+}
+
+// forwardBlock applies one GPT block through its configured layer backend. Keeping
+// this step shared makes the normal full stack and bounded early-exit execution use
+// exactly the same operator order.
+func (g *GPT) forwardBlock(ctx *backend.Context, x *tensor.Tensor, layer int) (*tensor.Tensor, error) {
+	b := g.Blocks[layer]
+	layerCtx := contextForLayer(ctx, g.LayerBackends, layer)
+
+	// attention sublayer: x += Attn(LN1(x))
+	h, err := b.LN1.Forward(layerCtx, x)
+	if err != nil {
+		return nil, err
+	}
+	if h, err = b.Attn.Forward(layerCtx, h); err != nil {
+		return nil, err
+	}
+	if x, err = exec1(layerCtx, backend.OpAdd, nil, x, h); err != nil {
+		return nil, err
+	}
+
+	// FFN sublayer: x += W2·gelu(W1·LN2(x)+b1)+b2
+	if h, err = b.LN2.Forward(layerCtx, x); err != nil {
+		return nil, err
+	}
+	if h, err = exec1(layerCtx, backend.OpMatMul, nil, h, b.W1); err != nil {
+		return nil, err
+	}
+	if h, err = exec1(layerCtx, backend.OpAddBias, nil, h, b.B1); err != nil {
+		return nil, err
+	}
+	if h, err = exec1(layerCtx, backend.OpGELU, nil, h); err != nil {
+		return nil, err
+	}
+	if h, err = exec1(layerCtx, backend.OpMatMul, nil, h, b.W2); err != nil {
+		return nil, err
+	}
+	if h, err = exec1(layerCtx, backend.OpAddBias, nil, h, b.B2); err != nil {
+		return nil, err
+	}
+	return exec1(layerCtx, backend.OpAdd, nil, x, h)
 }

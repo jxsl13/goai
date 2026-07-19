@@ -65,25 +65,25 @@ func TopKGating(gateLogits []float64, k int) (experts []int, weights []float64) 
 // per-expert bias b_i that steers WHICH experts win the top-k selection WITHOUT
 // touching the gate weights:
 //
-//   - SELECTION is by argmax over (gateLogitsᵢ + biasᵢ): raising bias_i makes
-//     expert i more likely to be picked, lowering it makes i less likely.
-//   - The returned WEIGHTS are still Softmax over the RAW gateLogits of the
-//     selected experts (renormalized over the selected set) — the bias never
-//     enters a gate value. This separation is the crux: balancing changes the
-//     routing distribution, not the mixing coefficients, so it cannot fight the
-//     main training objective the way an auxiliary loss can.
+//   - Raw router logits become sigmoid affinities s_i = sigmoid(logit_i), as in
+//     DeepSeek-V3. SELECTION is by argmax over (s_i + bias_i): raising bias_i
+//     makes expert i more likely to be picked, lowering it makes i less likely.
+//   - The returned WEIGHTS are the sigmoid affinities of the selected experts,
+//     renormalized over that set. The bias never enters a gate value. This
+//     separation is the crux: balancing changes the routing distribution, not
+//     the mixing coefficients, so it cannot fight the main training objective
+//     the way an auxiliary loss can.
 //
-// A nil bias is treated as all-zero and yields byte-identical results to
-// TopKGating. bias, when non-nil, must be at least len(gateLogits) long.
+// A nil bias is treated as all-zero. It intentionally does not equal TopKGating's
+// softmax weights: enabling loss-free routing selects DeepSeek's sigmoid gate,
+// while omitting [WithLossFreeBalance] preserves the historical softmax path.
+// bias, when non-nil, must be at least len(gateLogits) long.
 //
 // In plain terms: it is a thermostat for experts. If one expert is getting too
 // much traffic, its bias is nudged down so the router picks it less often — but
 // the amount each chosen expert contributes to the answer is untouched, so
 // nudging the thermostat never distorts the model's predictions.
 func TopKGatingBiased(gateLogits, bias []float64, k int) (experts []int, weights []float64) {
-	if bias == nil {
-		return TopKGating(gateLogits, k) // zero bias ⇒ identical to the unbiased router
-	}
 	n := len(gateLogits)
 	if k > n {
 		k = n
@@ -91,42 +91,48 @@ func TopKGatingBiased(gateLogits, bias []float64, k int) (experts []int, weights
 	if k <= 0 {
 		return nil, nil
 	}
-	// Gate weights come from the RAW logits (softmax over all, renormalized over
-	// the selected set) — exactly as TopKGating computes them; bias is absent here.
-	m := math.Inf(-1)
-	for _, v := range gateLogits {
-		if v > m {
-			m = v
-		}
-	}
-	probs := make([]float64, n)
-	var sum float64
+	// DeepSeek's raw routing affinities are independent sigmoids, not a softmax.
+	// They are deliberately NOT normalized before the bias is added for selection.
+	affinity := make([]float64, n)
 	for i, v := range gateLogits {
-		probs[i] = math.Exp(v - m)
-		sum += probs[i]
-	}
-	for i := range probs {
-		probs[i] /= sum
+		affinity[i] = sigmoidAffinity(v)
 	}
 	idx := make([]int, n)
 	for i := range idx {
 		idx[i] = i
 	}
-	// SELECTION key = raw logit + bias (the only place bias participates).
+	// SELECTION key = sigmoid affinity + bias (the only place bias participates).
 	sort.SliceStable(idx, func(a, b int) bool {
-		return gateLogits[idx[a]]+bias[idx[a]] > gateLogits[idx[b]]+bias[idx[b]]
+		ai, bi := affinity[idx[a]], affinity[idx[b]]
+		if bias != nil {
+			ai += bias[idx[a]]
+			bi += bias[idx[b]]
+		}
+		return ai > bi
 	})
 
 	experts = append([]int(nil), idx[:k]...)
 	var wsum float64
 	for _, e := range experts {
-		wsum += probs[e]
+		wsum += affinity[e]
 	}
 	weights = make([]float64, k)
+	if wsum == 0 {
+		return experts, weights
+	}
 	for i, e := range experts {
-		weights[i] = probs[e] / wsum // RAW-logit gate weight — bias never inflates it
+		weights[i] = affinity[e] / wsum // raw sigmoid affinity; bias never inflates it
 	}
 	return experts, weights
+}
+
+func sigmoidAffinity(x float64) float64 {
+	if x >= 0 {
+		z := math.Exp(-x)
+		return 1 / (1 + z)
+	}
+	z := math.Exp(x)
+	return z / (1 + z)
 }
 
 // SparseMoE is a Mixtral-style sparse Mixture-of-Experts feed-forward layer
@@ -135,7 +141,11 @@ func TopKGatingBiased(gateLogits, bias []float64, k int) (experts []int, weights
 // top-k experts (k=2 in Mixtral) and their SwiGLU FFN outputs are mixed with
 // gate weights renormalized over the selected experts:
 //
-//	y = Σ_{i∈topk} g_i·E_i(x),   g = Softmax(TopK) of the router logits
+//	y = Σ_{i∈topk} g_i·E_i(x)
+//
+// By default g is Softmax(TopK) of the router logits (Mixtral). With
+// [WithLossFreeBalance], g is the renormalized sigmoid affinity of the selected
+// experts (DeepSeek-V3); the control bias affects selection only.
 //
 // Forward evaluates every expert densely and combines with masked gates via the
 // fused OpMoECombine; this is numerically identical to sparse top-k dispatch
@@ -176,8 +186,9 @@ type SparseMoEOption func(*SparseMoE)
 // rate ≤ 0 selects the research default 0.001. The knob trades responsiveness
 // against stability: larger u balances faster but, if too large, makes the bias
 // oscillate around the balanced point; u → 0 freezes the bias so no balancing
-// occurs (routing then matches the unbiased router). When this option is not
-// passed the layer is byte-identical to a SparseMoE built without it.
+// occurs. Because rate ≤ 0 selects the research default, use a small positive
+// rate when near-frozen control is desired. When this option is not passed the
+// historical softmax layer remains byte-identical.
 //
 // In plain terms: this balances how evenly the experts are used without adding a
 // penalty term that pulls against the model's real goal — a thermostat, not a
@@ -219,7 +230,11 @@ func (m *SparseMoE) Forward(ctx *backend.Context, x *tensor.Tensor) (y, gateLogi
 	}
 	tks, e := logits.Shape()[0], logits.Shape()[1]
 
-	gates, err := backend.Execute(ctx, backend.OpSoftmax, []*tensor.Tensor{logits}, nil)
+	gateOp := backend.OpSoftmax
+	if m.balancer != nil {
+		gateOp = backend.OpSigmoid // §R242: DeepSeek loss-free routing uses sigmoid affinities.
+	}
+	gates, err := backend.Execute(ctx, gateOp, []*tensor.Tensor{logits}, nil)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -231,9 +246,9 @@ func (m *SparseMoE) Forward(ctx *backend.Context, x *tensor.Tensor) (y, gateLogi
 		for i := range e {
 			row[i] = logits.AtF64(t, i)
 		}
-		// Biased selection when auxiliary-loss-free balancing is enabled; the gate
-		// weights (computed later via OpSoftmax over the RAW logits) are unaffected.
-		// When disabled this is exactly the historical TopKGating call.
+		// Biased selection when auxiliary-loss-free balancing is enabled; the
+		// sigmoid gate values computed above are unaffected by the bias. When
+		// disabled this is exactly the historical softmax TopKGating path.
 		var selected []int
 		if m.balancer != nil {
 			selected, _ = TopKGatingBiased(row, m.balancer.Bias, m.TopK)
@@ -275,9 +290,9 @@ func (m *SparseMoE) Forward(ctx *backend.Context, x *tensor.Tensor) (y, gateLogi
 // (E−k)/E of the expert FFN GEMVs Forward wastes — a 4× saving for Mixtral (k=2, E=8) and
 // far more for many-expert MoEs (Qwen2/Qwen3-MoE) — where the expert FFNs are the
 // weight-bandwidth decode floor. The result is NUMERICALLY IDENTICAL to Forward: the
-// combine weights are the same renormalized top-k softmax (raw-logit softmax over the
-// selected set, exactly what OpMoECombine produces from Forward's masked gates), and the
-// unselected experts contribute zero in Forward anyway.
+// combine weights are the same renormalized top-k gate values (softmax by default,
+// sigmoid affinity with loss-free balancing, exactly what OpMoECombine produces
+// from Forward's masked gates), and the unselected experts contribute zero in Forward.
 //
 // It records NO gradient and does NOT touch the load-balancer accumulator (decode is
 // inference-neutral). Use it in the KV-cached decode path; keep [SparseMoE.Forward] for
@@ -290,9 +305,9 @@ func (m *SparseMoE) ForwardDecode(ctx *backend.Context, x *tensor.Tensor) (y, ga
 	}
 	tks, e := logits.Shape()[0], logits.Shape()[1]
 
-	// Per-token top-k routing + renormalized weights, and the union of experts any token
-	// selected. TopKGating(Biased)'s weights ARE the renormalized combine weights (raw-logit
-	// softmax over the selected set) — identical to Forward's masked-then-OpMoECombine path.
+	// Per-token top-k routing + renormalized weights, and the union of experts any
+	// token selected. TopKGating(Biased)'s weights ARE the renormalized combine
+	// weights — identical to Forward's masked-then-OpMoECombine path.
 	weight := tensor.New(x.Dtype(), tensor.Shape{tks, e}) // 0 for unselected
 	ws := weight.Storage().F64()
 	used := make([]bool, e)

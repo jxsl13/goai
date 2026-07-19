@@ -24,6 +24,23 @@ func skipNoGPU(t *testing.T) {
 	}
 }
 
+func TestVulkanMemoryProber(t *testing.T) {
+	skipNoGPU(t)
+	var p backend.MemoryProber = vulkan.Backend{}
+	bytes, ok := p.AvailableMemory()
+	budgets := backend.ProbeBudgets(backend.Vulkan)
+	if !ok {
+		if _, present := budgets[backend.Vulkan]; present {
+			t.Fatalf("unknown direct budget must be omitted, got %d", budgets[backend.Vulkan])
+		}
+		t.Log("VK_EXT_memory_budget unavailable; ProbeBudgets safely omits Vulkan")
+		return
+	}
+	if bytes <= 0 || budgets[backend.Vulkan] <= 0 {
+		t.Fatalf("Vulkan budget direct=%d, ProbeBudgets=%d", bytes, budgets[backend.Vulkan])
+	}
+}
+
 // crossTol is the §V11 tolerance for GPU f32 GEMM: the tiled matmul.comp shader
 // accumulates in f32 (reordered vs the f64 reference), so rtol scales with the
 // reduction length: rtol(K) = 2.5e-6·√K.

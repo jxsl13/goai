@@ -81,21 +81,21 @@ func (m *Llama) StreamStep(ctx *backend.Context, cache *StreamCache, token, sink
 		return nil, err
 	}
 	attn := backend.AttnAttrs{Heads: cfg.Heads, KVHeads: kv, Causal: false, Scale: cfg.attnScale()}
-	h, err := m.blockStack(ctx, x, func(l int, q, k, v *tensor.Tensor) (*tensor.Tensor, error) {
+	h, err := m.blockStack(ctx, x, func(layerCtx *backend.Context, l int, q, k, v *tensor.Tensor) (*tensor.Tensor, error) {
 		// append the RAW (pre-RoPE) k,v and bound the cache to sinks + recent window
 		cache.K[l] = keepSinkRecent(concatRows(cache.K[l], k), sinks, window)
 		cache.V[l] = keepSinkRecent(concatRows(cache.V[l], v), sinks, window)
 		n := cache.K[l].Shape()[0]
 		// RoPE using cache positions: keys at 0..n−1, the query (last entry) at n−1
-		qr, err := exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: cfg.Heads, PosOffset: n - 1}, q)
+		qr, err := exec1(layerCtx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: cfg.Heads, PosOffset: n - 1}, q)
 		if err != nil {
 			return nil, err
 		}
-		kr, err := exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: kv}, cache.K[l])
+		kr, err := exec1(layerCtx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: kv}, cache.K[l])
 		if err != nil {
 			return nil, err
 		}
-		return exec1(ctx, backend.OpMHA, attn, qr, kr, cache.V[l])
+		return exec1(layerCtx, backend.OpMHA, attn, qr, kr, cache.V[l])
 	})
 	if err != nil {
 		return nil, err

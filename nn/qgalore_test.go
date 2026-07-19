@@ -189,9 +189,10 @@ func TestQGaLoreQuantRoundTrip(t *testing.T) {
 	}
 }
 
-// §V16 anchor 3b — convergence: quantized Q-GaLore (INT8 moments) converges on the
-// quadratic and lands within a small factor of quant-OFF GaLore's floor on the SAME
-// problem/budget. Quantizing the states must not wreck the trajectory.
+// §V16 anchor 3b — convergence: paper-mode Q-GaLore (INT8 moments + weights,
+// packed INT4 projection) converges on the quadratic. The persistent INT8 weight
+// grid creates an expected non-zero floor, so equality with fp GaLore is neither
+// expected nor desirable here; the QuantBits(0) collapse test is that anchor.
 func TestQGaLoreQuantizedConverges(t *testing.T) {
 	const rows, cols, steps, lr = 5, 7, 3000, 0.05
 
@@ -204,26 +205,119 @@ func TestQGaLoreQuantizedConverges(t *testing.T) {
 		}
 	}
 	lf := lossQ()
-	if lf > 0.1*l0 {
-		t.Errorf("quantized Q-GaLore did not converge: loss %.4f → %.4f (want < 10%% of initial)", l0, lf)
+	if lf > 0.001*l0 || lf > 0.05 {
+		t.Errorf("quantized Q-GaLore did not converge to its INT8 floor: loss %.4f → %.4f", l0, lf)
 	}
+	t.Logf("paper-mode Q-GaLore loss %.6g → %.6g", l0, lf)
+}
 
-	// GaLore baseline (== Q-GaLore with quant off) on the identical problem.
-	wg, lossG, gradG := qgQuadratic(rows, cols)
-	g := NewGaLore([]*tensor.Tensor{wg}, lr, WithGaLoreRank(rows), WithGaLoreScale(1.0))
-	for range steps {
-		if err := g.Step(gradG); err != nil {
-			t.Fatal(err)
+// §V16 / paper §3.3: the SVD projection is not merely fake-quantized for a
+// forward — its authoritative store is two packed INT4 codes per byte, with only
+// affine block metadata retained. The dequantized execution view stays within one
+// quantization step of the original projection.
+func TestQGaLoreProjectionStoredPackedINT4(t *testing.T) {
+	w := tensor.New(tensor.F64, tensor.Shape{5, 7})
+	g := tensor.New(tensor.F64, w.Shape())
+	for i := range g.Numel() {
+		idx := tensor.Unravel(i, g.Shape())
+		g.SetF64(math.Sin(float64(i)+0.25), idx...)
+	}
+	opt := NewQGaLore([]*tensor.Tensor{w}, 0.01,
+		WithQGaLoreRank(3), WithQGaLoreBlockSize(8),
+		WithQGaLoreWeightQuantization(false), WithQGaLoreAdaptiveRefresh(false))
+	if err := opt.Step(func(*tensor.Tensor) *tensor.Tensor { return g }); err != nil {
+		t.Fatal(err)
+	}
+	st := opt.st[0]
+	if st.proj != nil {
+		t.Fatal("paper mode retained an fp projection; want packed INT4 only")
+	}
+	n := st.projRows * st.projCols
+	if got, want := len(st.projQ), (n+1)/2; got != want {
+		t.Fatalf("packed projection bytes %d, want %d for %d INT4 values", got, want, n)
+	}
+	for i, q := range unpackInt4(st.projQ, n) {
+		if q > 15 {
+			t.Fatalf("projection code[%d]=%d outside INT4", i, q)
 		}
 	}
-	lg := lossG()
-	if lf > 100*lg+1e-3 {
-		t.Errorf("quantized floor %.6g not close to GaLore floor %.6g (want within 100×)", lf, lg)
+	want, _ := galoreProjection(matAt(g), 3)
+	got := st.projection(opt.BlockSize)
+	for i := range want {
+		for j := range want[i] {
+			k := i*len(want[i]) + j
+			if d := math.Abs(got[i][j] - want[i][j]); d > st.projScales[k/opt.BlockSize]+1e-12 {
+				t.Fatalf("projection[%d,%d] error %.6g exceeds one INT4 step %.6g", i, j, d, st.projScales[k/opt.BlockSize])
+			}
+		}
 	}
 }
 
-// Determinism: same params + config replay a bit-identical trajectory (no hidden
-// randomness — the projection is SVD-derived, the quantization deterministic).
+// §V16 / paper §3.2: stable adjacent subspaces slow only this parameter's SVD
+// cadence. The tiny queue makes the official threshold→gap-multiply mechanism
+// decisive without a long run.
+func TestQGaLoreAdaptiveRefresh(t *testing.T) {
+	w := tensor.New(tensor.F64, tensor.Shape{4, 6})
+	g := tensor.New(tensor.F64, w.Shape())
+	for i := range g.Numel() {
+		idx := tensor.Unravel(i, g.Shape())
+		g.SetF64(math.Cos(float64(i)+0.5), idx...)
+	}
+	opt := NewQGaLore([]*tensor.Tensor{w}, 0.001,
+		WithQGaLoreRank(2), WithQGaLoreGap(1),
+		WithQGaLoreAdaptiveConfig(0.99, 2, 2),
+		WithQGaLoreWeightQuantization(false))
+	for range 6 {
+		if err := opt.Step(func(*tensor.Tensor) *tensor.Tensor { return g }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	st := opt.st[0]
+	if st.gap < 4 {
+		t.Fatalf("stable subspace gap=%d, want at least 4 after two multiplications", st.gap)
+	}
+	if st.svdCount >= 6 {
+		t.Fatalf("adaptive path performed %d SVDs over 6 steps; fixed gap=1 would perform 6", st.svdCount)
+	}
+}
+
+// §V16 / paper §3.4: stochastic rounding chooses ceil with exactly the
+// fractional probability. Fixed random draws exercise both branches, then the
+// integrated path proves the public tensor is the dequantized INT8 store.
+func TestQGaLoreINT8WeightStochasticRounding(t *testing.T) {
+	x := []float64{0, 0.25, 1}
+	up, us, uz := quantizeAffine(x, 3, 2, true, func() float64 { return 0.5 })
+	down, ds, dz := quantizeAffine(x, 3, 2, true, func() float64 { return 0.9 })
+	u, d := make([]float64, len(x)), make([]float64, len(x))
+	dequantizeAffine(up, us, uz, 3, u)
+	dequantizeAffine(down, ds, dz, 3, d)
+	if !(u[1] > x[1] && d[1] < x[1]) {
+		t.Fatalf("stochastic branches: up %.6g, x %.6g, down %.6g", u[1], x[1], d[1])
+	}
+
+	w := tensor.FromFloat64(tensor.Shape{2, 3}, []float64{-1, -0.4, 0.1, 0.3, 0.8, 1.2})
+	opt := NewQGaLore([]*tensor.Tensor{w}, 0.01, WithQGaLoreRank(2), WithQGaLoreSeed(7))
+	g := tensor.New(tensor.F64, w.Shape())
+	g.SetF64(1, 0, 0)
+	if err := opt.Step(func(*tensor.Tensor) *tensor.Tensor { return g }); err != nil {
+		t.Fatal(err)
+	}
+	st := opt.st[0]
+	if len(st.wq) != w.Numel() {
+		t.Fatalf("INT8 weight store length %d, want %d", len(st.wq), w.Numel())
+	}
+	mirror := make([]float64, w.Numel())
+	dequantizeAffine(st.wq, st.weightScales, st.weightZeros, opt.BlockSize, mirror)
+	for i := range mirror {
+		idx := tensor.Unravel(i, w.Shape())
+		if got := w.AtF64(idx...); got != mirror[i] {
+			t.Fatalf("weight mirror[%d]=%g, dequantized store=%g", i, got, mirror[i])
+		}
+	}
+}
+
+// Determinism: same params + config replay a bit-identical trajectory; stochastic
+// weight rounding is driven solely by the optimizer's deterministic seed.
 func TestQGaLoreDeterminism(t *testing.T) {
 	run := func() *tensor.Tensor {
 		w, _, grad := qgQuadratic(5, 7)
@@ -320,10 +414,10 @@ func TestQGaLoreDtypes(t *testing.T) {
 	}
 }
 
-// Q-GaLore stores GaLore's subspace Adam moments in INT8 instead of fp64, cutting the
-// optimizer state ~8× further: for a 512×256 layer at rank 32 the moment vectors drop
-// from 8 bytes/element to 1 (plus a small per-block scale), while the projection and
-// the full-rank weights are unchanged from GaLore (Zhang et al. 2024, arXiv:2407.08296).
+// Q-GaLore stores GaLore's subspace Adam moments in INT8 instead of fp64, cutting
+// that state ~8× further. The default also packs the projection to INT4, mirrors
+// weights from an INT8 stochastic-rounded store, and adapts stable SVD cadences
+// (Zhang et al. 2024, arXiv:2407.08296).
 func ExampleQGaLore() {
 	newOpt := func(opts ...QGaLoreOption) *QGaLore {
 		w := tensor.New(tensor.F32, tensor.Shape{512, 256})

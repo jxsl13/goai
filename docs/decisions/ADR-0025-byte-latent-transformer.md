@@ -1,6 +1,6 @@
 # ADR-0025 — Byte Latent Transformer (BLT): the "needs ragged tensors" deferral is invalid
 
-- Status: Proposed (feasibility spike GO-BUT-LARGE; a user-pick L-sized feature — not built autonomously)
+- Status: Accepted and implemented
 - Date: 2026-07-15
 - Task: §T650/§T654/§T655 (BLT was repeatedly deferred as "needs ragged/segmented tensors")
 - Related: ADR-0022 (Titans — same "spike overturns an infra deferral" pattern), ADR-0023 (diffusion-LM), ADR-0024 (CLA); `nn/mod.go` (the data-dependent-dimension precedent), `nn/qknorm.go` (the composed-mask trainable attention precedent)
@@ -33,7 +33,7 @@ shipped) — and the deferral is WRONG.
 - **Reuse**: GPT block stack for the latent transformer; OpEmbed for byte + hash-n-gram
   embeddings; windowed OpMHA (`AttnAttrs.Window`) for the local byte layers.
 
-## Decision (proposed) — GO-BUT-LARGE, user-pick
+## Decision — GO-BUT-LARGE, implemented
 
 BLT is buildable on the current engine with NO autograd/backend/kernel change and no cuda-lane
 collision — PURE composition. Correct the SPEC deferral (ragged-tensors reason is invalid).
@@ -43,4 +43,11 @@ cross-attn pooling, latent GPT, LocalDecoder, Forward/Loss/Generate) + tests inc
 test (stride-1 patches + identity pooling ≈ byte-GPT, the Titans/CLA pinning pattern) and an e2e
 on the ASCII grammar corpus (chars are bytes → CE-halves + valid-grammar generation fits §V16).
 Optional perf follow-up: a trainable free-mask fused attention (OpMHAMasked VJP) to replace the
-composed-primitive path. Not built autonomously — L-sized feature-project = the user's pick.
+composed-primitive path.
+
+## Outcome
+
+Implemented in nlp/blt.go on 2026-07-15 using the composition above, without ragged tensors or
+new backend/autograd work. Fresh 2026-07-19 validation kept the stride-1 byte-GPT collapse,
+patch-span isolation, 52-parameter gradient check, entropy patcher convergence (CE 5.477 to
+0.654), and end-to-end byte-LM convergence (CE 5.631 to 0.184) with valid generation green.

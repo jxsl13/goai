@@ -83,7 +83,7 @@ func (c LlamaConfig) attnScale() float64 {
 // AttnAttrs.Scale. That is the one per-architecture feature this seam cannot apply on
 // the caller's behalf, because it is a property of the attention kernel invocation
 // rather than of the surrounding block.
-type attendFunc func(block int, q, k, v *tensor.Tensor) (*tensor.Tensor, error)
+type attendFunc func(ctx *backend.Context, block int, q, k, v *tensor.Tensor) (*tensor.Tensor, error)
 
 // blockStack runs the Llama block stack over an embedded input x [rows, Dim] with a
 // pluggable attention core, returning the PRE-final-norm residual stream. Callers
@@ -115,75 +115,86 @@ type attendFunc func(block int, q, k, v *tensor.Tensor) (*tensor.Tensor, error)
 // residual-capture taps. The two are pinned against each other by the parity tests
 // above, not by construction.
 func (m *Llama) blockStack(ctx *backend.Context, x *tensor.Tensor, attend attendFunc) (*tensor.Tensor, error) {
-	cfg := m.Config
-	kv := cfg.kvHeads()
-	var err error
-	// Granite: inputs_embeds *= embedding_multiplier (no-op for Llama, EmbeddingMult 0).
-	if x, err = scaleScalar(ctx, x, cfg.EmbeddingMult); err != nil {
+	if err := validateLayerBackends(m.LayerBackends, len(m.Blocks)); err != nil {
 		return nil, err
 	}
-	for l, b := range m.Blocks {
-		xb, err := b.AttnNorm.Forward(ctx, x)
+	var err error
+	// Granite: inputs_embeds *= embedding_multiplier (no-op for Llama, EmbeddingMult 0).
+	if x, err = scaleScalar(ctx, x, m.Config.EmbeddingMult); err != nil {
+		return nil, err
+	}
+	return m.blockRange(ctx, x, 0, len(m.Blocks), attend)
+}
+
+// blockRange runs blocks [start,end) without embedding scaling or final unembedding.
+// LayerSkip verification enters here with the early pass' cached residual rows.
+func (m *Llama) blockRange(ctx *backend.Context, x *tensor.Tensor, start, end int, attend attendFunc) (*tensor.Tensor, error) {
+	cfg := m.Config
+	kv := cfg.kvHeads()
+	for l := start; l < end; l++ {
+		b := m.Blocks[l]
+		layerCtx := contextForLayer(ctx, m.LayerBackends, l)
+		xb, err := b.AttnNorm.Forward(layerCtx, x)
 		if err != nil {
 			return nil, err
 		}
-		q, err := project(ctx, xb, b.Wq)
+		q, err := project(layerCtx, xb, b.Wq)
 		if err != nil {
 			return nil, err
 		}
-		k, err := project(ctx, xb, b.Wk)
+		k, err := project(layerCtx, xb, b.Wk)
 		if err != nil {
 			return nil, err
 		}
-		v, err := project(ctx, xb, b.Wv)
+		v, err := project(layerCtx, xb, b.Wv)
 		if err != nil {
 			return nil, err
 		}
 		// Qwen2-family q/k/v projection biases (added before RoPE); nil for Llama/Mistral.
-		if q, err = addBiasIf(ctx, q, b.Bq); err != nil {
+		if q, err = addBiasIf(layerCtx, q, b.Bq); err != nil {
 			return nil, err
 		}
-		if k, err = addBiasIf(ctx, k, b.Bk); err != nil {
+		if k, err = addBiasIf(layerCtx, k, b.Bk); err != nil {
 			return nil, err
 		}
-		if v, err = addBiasIf(ctx, v, b.Bv); err != nil {
+		if v, err = addBiasIf(layerCtx, v, b.Bv); err != nil {
 			return nil, err
 		}
 		// Qwen3 per-head QK-norm (before RoPE); nil for Llama/Qwen2.
-		if q, err = applyQKNorm(ctx, q, b.QNorm, cfg.Heads); err != nil {
+		if q, err = applyQKNorm(layerCtx, q, b.QNorm, cfg.Heads); err != nil {
 			return nil, err
 		}
-		if k, err = applyQKNorm(ctx, k, b.KNorm, kv); err != nil {
+		if k, err = applyQKNorm(layerCtx, k, b.KNorm, kv); err != nil {
 			return nil, err
 		}
-		a, err := attend(l, q, k, v)
+		a, err := attend(layerCtx, l, q, k, v)
 		if err != nil {
 			return nil, err
 		}
-		o, err := project(ctx, a, b.Wo)
+		o, err := project(layerCtx, a, b.Wo)
 		if err != nil {
 			return nil, err
 		}
 		// Granite: x = x + o·residual_multiplier (no-op for Llama, ResidualMult 0).
-		if o, err = scaleScalar(ctx, o, cfg.ResidualMult); err != nil {
+		if o, err = scaleScalar(layerCtx, o, cfg.ResidualMult); err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, o); err != nil {
+		if x, err = exec1(layerCtx, backend.OpAdd, nil, x, o); err != nil {
 			return nil, err
 		}
-		xf, err := b.FFNNorm.Forward(ctx, x)
+		xf, err := b.FFNNorm.Forward(layerCtx, x)
 		if err != nil {
 			return nil, err
 		}
-		ff, err := b.FFN.Forward(ctx, xf)
+		ff, err := b.FFN.Forward(layerCtx, xf)
 		if err != nil {
 			return nil, err
 		}
 		// Granite: x = x + ff·residual_multiplier (same scalar as the attention residual).
-		if ff, err = scaleScalar(ctx, ff, cfg.ResidualMult); err != nil {
+		if ff, err = scaleScalar(layerCtx, ff, cfg.ResidualMult); err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, ff); err != nil {
+		if x, err = exec1(layerCtx, backend.OpAdd, nil, x, ff); err != nil {
 			return nil, err
 		}
 	}
@@ -222,19 +233,19 @@ func (m *Llama) DecodeStep(ctx *backend.Context, cache *LlamaCache, token, pos i
 		return nil, err
 	}
 	attn := backend.AttnAttrs{Heads: cfg.Heads, KVHeads: kv, Causal: false, Scale: cfg.attnScale()}
-	h, err := m.blockStack(ctx, x, func(l int, q, k, v *tensor.Tensor) (*tensor.Tensor, error) {
+	h, err := m.blockStack(ctx, x, func(layerCtx *backend.Context, l int, q, k, v *tensor.Tensor) (*tensor.Tensor, error) {
 		// RoPE the single token at its absolute position, then append k,v to the cache.
-		q, err := exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: cfg.Heads, PosOffset: pos}, q)
+		q, err := exec1(layerCtx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: cfg.Heads, PosOffset: pos}, q)
 		if err != nil {
 			return nil, err
 		}
-		if k, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: kv, PosOffset: pos}, k); err != nil {
+		if k, err = exec1(layerCtx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: kv, PosOffset: pos}, k); err != nil {
 			return nil, err
 		}
 		kNew, vNew := cache.bufs.appendKV(cache.K, cache.V, l, k, v)
 		cache.K[l], cache.V[l] = kNew, vNew
 		// single query at the last position attends to all cached keys → no causal mask
-		return exec1(ctx, backend.OpMHA, attn, q, kNew, vNew)
+		return exec1(layerCtx, backend.OpMHA, attn, q, kNew, vNew)
 	})
 	if err != nil {
 		return nil, err
@@ -302,6 +313,57 @@ func (m *Llama) Prefill(ctx *backend.Context, cache *LlamaCache, tokens []int) (
 	}
 	// Granite: logits /= logits_scaling, matching ForwardFromEmbed (no-op for Llama).
 	return divLogits(ctx, logits, m.Config.LogitsScale)
+}
+
+// PrefillAppend processes a non-empty token suffix in one batch against an existing
+// contiguous Llama KV prefix and returns logits for the suffix [len(tokens), vocab].
+// It is the compute primitive behind exact prompt-prefix reuse: callers may retain a
+// cache for a stable system prompt, document, or conversation prefix, then append only
+// each new turn instead of running [Llama.Prefill] over the shared prefix again.
+//
+// The operation is exact, not an approximation. Decoder keys and values at position t
+// depend only on tokens through t, so an identical cached prefix supplies the same
+// attention state; rectangular causal attention lets suffix row i see every prefix row
+// plus suffix rows through i. This is the single-request contiguous-cache seam used by
+// automatic prefix-caching systems such as SGLang RadixAttention. It does not itself
+// provide a multi-request radix tree, LRU eviction, paging, or cache isolation.
+//
+// An empty fresh cache is supported and produces logits and K/V bit-identical to
+// [Llama.Prefill]. The cache must contain every position from zero through Len()-1 in
+// every model layer; offset-anchored, evicted, asymmetric, wrong-width, or over-context
+// caches are rejected before any rows are appended. Inference-only (no tape), like
+// Prefill and [Llama.DecodeStep].
+func (m *Llama) PrefillAppend(ctx *backend.Context, cache *LlamaCache, tokens []int) (*tensor.Tensor, error) {
+	if len(tokens) == 0 {
+		return nil, fmt.Errorf("nlp: PrefillAppend needs a non-empty suffix")
+	}
+	prefix, err := validateLlamaPrefixState(m, cache)
+	if err != nil {
+		return nil, err
+	}
+	if prefix+len(tokens) > m.Config.Ctx {
+		return nil, fmt.Errorf("nlp: PrefillAppend total length %d exceeds context %d", prefix+len(tokens), m.Config.Ctx)
+	}
+	for _, token := range tokens {
+		if token < 0 || token >= m.Config.Vocab {
+			return nil, fmt.Errorf("nlp: token %d outside vocab %d", token, m.Config.Vocab)
+		}
+	}
+	if err := cache.pos.admit(prefix, prefix, "LlamaCache"); err != nil {
+		return nil, err
+	}
+	x, err := m.Embed(ctx, tokens)
+	if err != nil {
+		return nil, err
+	}
+	if x, err = scaleScalar(ctx, x, m.Config.EmbeddingMult); err != nil {
+		return nil, err
+	}
+	h, err := m.cachedBlockRange(ctx, cache, x, 0, len(m.Blocks), prefix, nil)
+	if err != nil {
+		return nil, err
+	}
+	return m.Unembed(ctx, h)
 }
 
 // Generate autoregressively decodes up to maxNew tokens after prompt with the sampler

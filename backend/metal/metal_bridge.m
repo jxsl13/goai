@@ -31,6 +31,13 @@ static int ensure_init(void) {
 
 int mtl_available(void) { return ensure_init() == 0 ? 1 : 0; }
 
+unsigned long long mtl_available_memory(void) {
+    if (ensure_init() != 0) return 0;
+    uint64_t limit = (uint64_t)gDevice.recommendedMaxWorkingSetSize;
+    uint64_t used = (uint64_t)gDevice.currentAllocatedSize;
+    return limit > used ? (unsigned long long)(limit - used) : 0;
+}
+
 // ---- process-wide buffer pool (§T336, twin of the Vulkan pool §T335) --------
 // Every op previously created (and ARC-released) a fresh MTLBuffer per operand
 // per call — a device allocation each time. Buffers are now pooled: capacities

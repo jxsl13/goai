@@ -26,6 +26,12 @@ type Llama struct {
 	Blocks []*LlamaBlock  // the stacked transformer blocks
 	Norm   *nn.RMSNorm    // final pre-logits RMSNorm
 	Out    *tensor.Tensor // [dim, vocab] output projection (untied)
+	// LayerBackends optionally assigns each transformer block's batched forward
+	// execution (including Prefill/ForwardHidden/ForwardResiduals) to a backend.
+	// Set it to [backend.PlanOffload]'s Layers result to spill blocks that exceed
+	// device memory onto CPU/ref. nil keeps the historical single-backend path;
+	// a non-empty slice must contain exactly one name per block.
+	LayerBackends []backend.Name
 }
 
 // LlamaConfig fixes the model geometry.
@@ -143,6 +149,41 @@ func (m *Llama) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor, err
 	return m.ForwardFromEmbed(ctx, x)
 }
 
+// ForwardExit computes early-exit logits after the zero-based transformer block
+// exitLayer. It executes only blocks 0 through exitLayer, then applies the model's
+// shared final RMSNorm, output projection and any configured Granite logit scaling.
+// Official LayerSkip checkpoints are ordinary Llama-family models trained so this
+// shared readout is useful at intermediate layers; [LlamaFromHF] loads them without
+// auxiliary weights. Choosing the final block is bit-identical to [Llama.Forward].
+//
+// The bounded stack is the draft primitive for [LlamaSelfSpeculativeDecode]. It
+// preserves every hook supported by the shared Llama block path: GQA, Qwen2 biases,
+// Qwen3 QK-norm, and Granite multipliers.
+func (m *Llama) ForwardExit(ctx *backend.Context, tokens []int, exitLayer int) (*tensor.Tensor, error) {
+	if m == nil {
+		return nil, fmt.Errorf("nlp: Llama.ForwardExit needs a model")
+	}
+	if exitLayer < 0 || exitLayer >= len(m.Blocks) {
+		return nil, fmt.Errorf("nlp: Llama.ForwardExit exitLayer %d outside [0,%d)", exitLayer, len(m.Blocks))
+	}
+	if err := validateLayerBackends(m.LayerBackends, len(m.Blocks)); err != nil {
+		return nil, err
+	}
+	x, err := m.Embed(ctx, tokens)
+	if err != nil {
+		return nil, err
+	}
+	if x, err = scaleScalar(ctx, x, m.Config.EmbeddingMult); err != nil {
+		return nil, err
+	}
+	for layer := 0; layer <= exitLayer; layer++ {
+		if x, err = m.forwardBlock(ctx, x, layer, nil); err != nil {
+			return nil, err
+		}
+	}
+	return m.Unembed(ctx, x)
+}
+
 // ForwardHidden returns the final hidden states [seq, dim] — the residual stream after
 // all blocks and the final RMSNorm, i.e. Forward WITHOUT the output projection (§T447,
 // the Llama sibling of GPT.ForwardHidden). This is the representation auxiliary decoding
@@ -256,14 +297,8 @@ func (m *Llama) ForwardResiduals(ctx *backend.Context, tokens []int, capture Res
 // this byte-identical to the historical hiddenFromEmbed (no extra ops recorded).
 func (m *Llama) hiddenFromEmbedTaps(ctx *backend.Context, x *tensor.Tensor, capture func(layer int, k, v *tensor.Tensor), resid ResidualCapture) (*tensor.Tensor, error) {
 	cfg := m.Config
-	kv := cfg.kvHeads()
-	rope := backend.RoPEAttrs{Base: cfg.RopeBase}
-	attn := backend.AttnAttrs{Heads: cfg.Heads, KVHeads: kv, Causal: true}
-	// Granite: replace the default 1/√headDim pre-softmax scale with attention_multiplier.
-	// OpMHA builds in a 1/√headDim, and AttnAttrs.Scale is an EXTRA factor on top of it
-	// (as T5 uses it), so Scale = AttentionMult·√headDim leaves a net scale of AttentionMult.
-	if cfg.AttentionMult != 0 {
-		attn.Scale = cfg.AttentionMult * math.Sqrt(float64(cfg.Dim/cfg.Heads))
+	if err := validateLayerBackends(m.LayerBackends, len(m.Blocks)); err != nil {
+		return nil, err
 	}
 
 	var err error
@@ -274,79 +309,8 @@ func (m *Llama) hiddenFromEmbedTaps(ctx *backend.Context, x *tensor.Tensor, capt
 	if resid != nil {
 		resid(0, x) // h_0: the post-embedding (post-Granite-scale) input to block 0
 	}
-	for l, b := range m.Blocks {
-		// attention sublayer: x += Wo·Attn(RoPE(Wq·x̄), RoPE(Wk·x̄), Wv·x̄), x̄=RMSNorm(x)
-		xb, err := b.AttnNorm.Forward(ctx, x)
-		if err != nil {
-			return nil, err
-		}
-		q, err := project(ctx, xb, b.Wq)
-		if err != nil {
-			return nil, err
-		}
-		k, err := project(ctx, xb, b.Wk)
-		if err != nil {
-			return nil, err
-		}
-		v, err := project(ctx, xb, b.Wv)
-		if err != nil {
-			return nil, err
-		}
-		// Qwen2-family q/k/v projection biases (added before RoPE); nil for Llama/Mistral.
-		if q, err = addBiasIf(ctx, q, b.Bq); err != nil {
-			return nil, err
-		}
-		if k, err = addBiasIf(ctx, k, b.Bk); err != nil {
-			return nil, err
-		}
-		if v, err = addBiasIf(ctx, v, b.Bv); err != nil {
-			return nil, err
-		}
-		// Qwen3 per-head QK-norm (before RoPE); nil for Llama/Qwen2.
-		if q, err = applyQKNorm(ctx, q, b.QNorm, cfg.Heads); err != nil {
-			return nil, err
-		}
-		if k, err = applyQKNorm(ctx, k, b.KNorm, kv); err != nil {
-			return nil, err
-		}
-		if q, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: rope.Base, Heads: cfg.Heads}, q); err != nil {
-			return nil, err
-		}
-		if k, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: rope.Base, Heads: kv}, k); err != nil {
-			return nil, err
-		}
-		if capture != nil {
-			capture(l, k, v)
-		}
-		a, err := exec1(ctx, backend.OpMHA, attn, q, k, v)
-		if err != nil {
-			return nil, err
-		}
-		o, err := project(ctx, a, b.Wo)
-		if err != nil {
-			return nil, err
-		}
-		// Granite: x = x + o·residual_multiplier (no-op for Llama, ResidualMult 0).
-		if o, err = scaleScalar(ctx, o, cfg.ResidualMult); err != nil {
-			return nil, err
-		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, o); err != nil {
-			return nil, err
-		}
-		// FFN sublayer: x += SwiGLU(RMSNorm(x))
-		xf, err := b.FFNNorm.Forward(ctx, x)
-		if err != nil {
-			return nil, err
-		}
-		ff, err := b.FFN.Forward(ctx, xf)
-		if err != nil {
-			return nil, err
-		}
-		// Granite: x = x + ff·residual_multiplier (same scalar as the attention residual).
-		if ff, err = scaleScalar(ctx, ff, cfg.ResidualMult); err != nil {
-			return nil, err
-		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, ff); err != nil {
+	for l := range m.Blocks {
+		if x, err = m.forwardBlock(ctx, x, l, capture); err != nil {
 			return nil, err
 		}
 		if resid != nil {
@@ -357,6 +321,97 @@ func (m *Llama) hiddenFromEmbedTaps(ctx *backend.Context, x *tensor.Tensor, capt
 		return nil, err
 	}
 	return x, nil
+}
+
+// forwardBlock applies one Llama-family block through its configured layer backend.
+// The optional capture observes the post-RoPE key and value rows used by Prefill.
+// Forward, ForwardExit, residual observation and prefill all share this exact path.
+func (m *Llama) forwardBlock(ctx *backend.Context, x *tensor.Tensor, layer int, capture func(layer int, k, v *tensor.Tensor)) (*tensor.Tensor, error) {
+	cfg := m.Config
+	kv := cfg.kvHeads()
+	b := m.Blocks[layer]
+	layerCtx := contextForLayer(ctx, m.LayerBackends, layer)
+	attn := backend.AttnAttrs{Heads: cfg.Heads, KVHeads: kv, Causal: true}
+	// Granite: replace the default 1/√headDim pre-softmax scale with attention_multiplier.
+	// OpMHA builds in a 1/√headDim, and AttnAttrs.Scale is an EXTRA factor on top of it
+	// (as T5 uses it), so Scale = AttentionMult·√headDim leaves a net scale of AttentionMult.
+	if cfg.AttentionMult != 0 {
+		attn.Scale = cfg.AttentionMult * math.Sqrt(float64(cfg.Dim/cfg.Heads))
+	}
+
+	// attention sublayer: x += Wo·Attn(RoPE(Wq·x̄), RoPE(Wk·x̄), Wv·x̄), x̄=RMSNorm(x)
+	xb, err := b.AttnNorm.Forward(layerCtx, x)
+	if err != nil {
+		return nil, err
+	}
+	q, err := project(layerCtx, xb, b.Wq)
+	if err != nil {
+		return nil, err
+	}
+	k, err := project(layerCtx, xb, b.Wk)
+	if err != nil {
+		return nil, err
+	}
+	v, err := project(layerCtx, xb, b.Wv)
+	if err != nil {
+		return nil, err
+	}
+	// Qwen2-family q/k/v projection biases (added before RoPE); nil for Llama/Mistral.
+	if q, err = addBiasIf(layerCtx, q, b.Bq); err != nil {
+		return nil, err
+	}
+	if k, err = addBiasIf(layerCtx, k, b.Bk); err != nil {
+		return nil, err
+	}
+	if v, err = addBiasIf(layerCtx, v, b.Bv); err != nil {
+		return nil, err
+	}
+	// Qwen3 per-head QK-norm (before RoPE); nil for Llama/Qwen2.
+	if q, err = applyQKNorm(layerCtx, q, b.QNorm, cfg.Heads); err != nil {
+		return nil, err
+	}
+	if k, err = applyQKNorm(layerCtx, k, b.KNorm, kv); err != nil {
+		return nil, err
+	}
+	if q, err = exec1(layerCtx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: cfg.Heads}, q); err != nil {
+		return nil, err
+	}
+	if k, err = exec1(layerCtx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: kv}, k); err != nil {
+		return nil, err
+	}
+	if capture != nil {
+		capture(layer, k, v)
+	}
+	a, err := exec1(layerCtx, backend.OpMHA, attn, q, k, v)
+	if err != nil {
+		return nil, err
+	}
+	o, err := project(layerCtx, a, b.Wo)
+	if err != nil {
+		return nil, err
+	}
+	// Granite: x = x + o·residual_multiplier (no-op for Llama, ResidualMult 0).
+	if o, err = scaleScalar(layerCtx, o, cfg.ResidualMult); err != nil {
+		return nil, err
+	}
+	if x, err = exec1(layerCtx, backend.OpAdd, nil, x, o); err != nil {
+		return nil, err
+	}
+
+	// FFN sublayer: x += SwiGLU(RMSNorm(x))
+	xf, err := b.FFNNorm.Forward(layerCtx, x)
+	if err != nil {
+		return nil, err
+	}
+	ff, err := b.FFN.Forward(layerCtx, xf)
+	if err != nil {
+		return nil, err
+	}
+	// Granite: x = x + ff·residual_multiplier (same scalar as the attention residual).
+	if ff, err = scaleScalar(layerCtx, ff, cfg.ResidualMult); err != nil {
+		return nil, err
+	}
+	return exec1(layerCtx, backend.OpAdd, nil, x, ff)
 }
 
 // project computes x·W (a bias-free linear layer).

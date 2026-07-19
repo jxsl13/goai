@@ -5,8 +5,22 @@ package cuda_test
 import (
 	"testing"
 
+	"github.com/jxsl13/goai/backend"
 	"github.com/jxsl13/goai/backend/cuda"
 )
+
+func TestCUDAMemoryProber(t *testing.T) {
+	skipNoGPU(t)
+	var p backend.MemoryProber = cuda.Backend{}
+	bytes, ok := p.AvailableMemory()
+	if !ok || bytes <= 0 {
+		t.Fatalf("CUDA device must report positive free VRAM, got %d/%v", bytes, ok)
+	}
+	budgets := backend.ProbeBudgets(backend.CUDA)
+	if budgets[backend.CUDA] <= 0 {
+		t.Fatal("ProbeBudgets omitted registered CUDA MemoryProber")
+	}
+}
 
 // The T631 layer-assignment policy must split a model's layers correctly across all the
 // budget regimes: whole model fits, partial spill, everything spills, and the guard when

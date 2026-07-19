@@ -65,6 +65,14 @@ runs Vulkan on Metal).
 | RetentionBackward | 320.93 ms | 25.29 ms | 20.22 ms | 20.31 ms |  |
 | Softmax | 77.51 ms | 7.76 ms | 1.73 ms | 1.76 ms |  |
 
+The 2418.93-GFLOP/s torch-mps Conv2D figure above is a historical
+GPU-resident, pipelined measurement (one synchronization after 30 iterations);
+it is not contract-equivalent to `backend.Execute`, which transfers and
+synchronizes every call. Under the same per-call transfer+sync contract
+(§T659), the small Conv2D measured 253 GFLOP/s in GoAI versus 133 GFLOP/s in
+torch-mps (1.9× faster). Keep the historical number for reproducibility, but
+do not interpret the difference as a Conv2D-kernel gap.
+
 | Decode workload | variant | rate |
 |---|---|---|
 | LlamaDecode | batched-metal | 263.1 tok/s |
@@ -74,6 +82,109 @@ runs Vulkan on Metal).
 | LlamaDecodeLongContext | batched-vulkan | 66.84 tok/s |
 | LlamaPrefill | sequential-metal | 276.9 tok/s |
 | LlamaPrefill | stepn-metal | 11068 tok/s |
+
+### Incremental prompt-prefix reuse (§T873)
+
+`Llama.PrefillAppend` retains an already computed contiguous prompt KV cache and
+processes only the new suffix as one rectangular causal batch. This is the
+single-request compute seam behind RadixAttention/automatic prefix caching; it
+does not include a multi-request radix tree or serving scheduler.
+
+Same-model A/B on Apple M2 Pro, Pure-Go reference backend, 96 shared tokens plus
+8 new tokens, deterministic 3-layer GQA Llama, 20 iterations × 3 runs:
+
+| path | time/op range | median | bytes/op |
+|---|---:|---:|---:|
+| Full 104-token prefill | 1.90–2.02 ms | 1.94 ms | 1,059,866 |
+| Reuse 96, append 8 | 266–276 µs | 272 µs | 155,160 |
+
+That is a median **7.13× latency win** and **6.83× fewer allocated bytes**.
+The permanent benchmark is `BenchmarkLlamaPrefillAppendSharedPrefix`; setup of
+the shared prefix is outside the append timer, matching the repeated-query use
+case. Bit-exact chunk/full parity gates the optimization independently of timing.
+
+### Automatic single-slot prefix matching (§T874)
+
+`LlamaPrefixCache` adds the stateful policy immediately above `PrefillAppend`: each
+complete prompt is compared with the preceding prompt, the ordinary KV cache is
+truncated to their exact longest common token prefix, and only the suffix is appended.
+It returns `[1,vocab]` next-token logits and an explicit reuse count. Identical prompts
+reuse 100%; a strict shortening deliberately recomputes only its last token because the
+slot does not retain the much larger `[prompt,vocab]` logits tensor.
+
+Same machine and model geometry as the T873 measurement, now alternating two complete
+104-token prompts with an identical 96-token prefix, 20 iterations × 3 runs:
+
+| path | time/op range | median | bytes/op median |
+|---|---:|---:|---:|
+| Full 104-token prefill | 1.92–2.74 ms | 2.11 ms | 1,059,876 |
+| Automatic LCP reuse 96 | 254–264 µs | 256 µs | 157,152 |
+
+The medians are an **8.25× latency win** and **6.74× fewer allocated bytes**.
+`BenchmarkLlamaPrefixCacheSharedPrefix` is the permanent A/B. The manager is a
+sequential single slot and is not concurrency-safe; these numbers do not claim a
+multi-request radix tree, LRU policy, paging, cache isolation, or serving scheduler.
+
+### Salt-isolated multi-slot prefix reuse (§T875)
+
+`LlamaPrefixPool` retains a bounded LRU of complete prompt states. A compressed token
+radix index is separate for every cache salt, so lookup traverses one request path and
+separate trust groups cannot observe or reuse one another's hits. A non-exact hit copies
+the best contiguous K/V prefix into a new slot before appending its suffix; an exact hit
+returns the protected stored final-logit row. This gives transactional error behavior
+and leaves source entries immutable.
+
+Apple M2 Pro, Pure-Go reference backend, two alternating 104-token prompts with 96
+shared tokens, deterministic 3-layer GQA Llama, 20 iterations × 3 runs:
+
+| path | time/op range | median | bytes/op median |
+|---|---:|---:|---:|
+| Full 104-token prefill (current) | 1.94–2.09 ms | 1.94 ms | 1,059,869 |
+| T874 single-slot truncate+append 8 (current) | 262–267 µs | 263 µs | 157,152 |
+| T875 one-slot copy 96+append 8, before recycling | 272–277 µs | 275 µs | 234,064 |
+| T876 recycled one-slot copy 96+append 8 | 261–268 µs | 261 µs | 162,479 |
+| T877 recycled direct-copy miss 96+append 8 (current) | 262–278 µs | 266 µs | 161,808 |
+| T878 radix-indexed miss 96+append 8 (current) | 259–270 µs | 262 µs | 161,808 |
+| T878 two-slot exact hit 104 (current) | 454–519 ns | 479 ns | 1,208 |
+
+Recycling the last evicted row-buffer storage cut miss allocation bytes by **30.6%**
+and allocations from 562 to 520 versus T875. Direct prefix copy lowers that further
+to 161,808 bytes and 508 allocations. Its current end-to-end median is within the
+historical run-to-run range and only **1.0% latency** over the current destructive
+single-slot path. Once both prompts are resident, the exact-hit median is about
+**4,220× below full-prefill latency**; that large ratio
+specifically describes repeated exact prompts and is not a general miss claim.
+`BenchmarkLlamaPrefixPoolRepeatedPrompts` is the permanent benchmark.
+
+The copy primitive is isolated by `BenchmarkLlamaCachePrefixCopy` with a 32-layer,
+96-row cache, 100 iterations × 3 runs:
+
+| path | time/op range | median | bytes/op | allocs/op |
+|---|---:|---:|---:|---:|
+| T876 source Slice + append | 25.8–28.9 µs | 27.9 µs | 22,344 | 259 |
+| T877 direct `rowBuf.CopyPrefix` | 19.3–21.0 µs | 20.1 µs | 15,176 | 131 |
+
+That is a **1.38× latency win**, **32.1% fewer bytes**, and **49.4% fewer
+allocations** in the layer-scaled copy seam. Exact-value, storage-retention, and
+source-immutability tests cover every supported row-buffer dtype.
+
+T878 isolates policy lookup with 1,024 complete 256-token slots sharing 192 tokens,
+1,000 iterations × 3 runs. Both rows include the selection and successful MRU touch:
+
+| policy | time/op range | median | bytes/op | allocs/op |
+|---|---:|---:|---:|---:|
+| T875–T877 linear slot scan + timestamp | 79.5–101.6 µs | 81.2 µs | 0 | 0 |
+| T878 compressed-radix lookup + intrusive-LRU touch | 272.5–286.6 ns | 276 ns | 0 | 0 |
+
+The indexed path is **294× faster** at this bounded high-capacity workload. A
+1,200-operation randomized differential gate pins every result against the old scan,
+and recycled radix nodes avoid adding allocations to the real miss path.
+`BenchmarkLlamaPrefixPoolLookup` is the permanent policy A/B.
+
+The radix tree is an index over whole contiguous prompt slots, not a tree of KV
+storage. The pool therefore still does not claim physical KV sharing, block-level
+eviction, RadixAttention, paging, reference counts, concurrent scheduling, or
+multi-process serving.
 
 | Python stack workload | numpy-cpu | torch-cpu | torch-mps |
 |---|---|---|---|
@@ -128,6 +239,10 @@ On the compute-bound shape that closes the torch-mps gap (≈2418 GFLOP/s) to �
 from ≈3.6×. Correctness stays within a documented 2× cross-tolerance (MPSGraph uses
 a different f32 reduction order). The vulkan fused+vec4 kernel, the metal MPSGraph
 switch, and these findings are §T620.
+
+At equal synchronous transfer semantics (§T659), the small-shape comparison is
+253 GFLOP/s here versus 133 GFLOP/s in torch-mps. The ≈2418 number is useful as
+a pipelined/GPU-resident ceiling, not as a like-for-like kernel comparison.
 
 
 ### MPSGraph attention prefill on Metal (§T621, experiment — opt-in)

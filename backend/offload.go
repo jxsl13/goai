@@ -49,8 +49,9 @@ type OffloadPlan struct {
 // can be measured rather than guessed (§T631). It is not part of the core
 // Backend interface: a backend that cannot query its device (the host/CPU and
 // reference backends, or a GPU backend on a platform without a memory-info API)
-// simply does not implement it, and ProbeBudgets omits it. GPU backends
-// (metal/cuda/vulkan) are the natural implementers.
+// simply does not implement it, and ProbeBudgets omits it. CUDA reports live
+// free VRAM, Metal reports its remaining recommended working set, and Vulkan
+// reports VK_EXT_memory_budget when the driver exposes it.
 type MemoryProber interface {
 	// AvailableMemory reports the free device memory in bytes. ok is false when
 	// the amount is unknown/unqueryable, in which case the caller treats the

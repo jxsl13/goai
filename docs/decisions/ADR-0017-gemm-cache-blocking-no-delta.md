@@ -1,6 +1,6 @@
 # ADR-0017 — Pure-Go GEMM cache blocking parked (no delta on arm64)
 
-- Status: Accepted (measurement-driven negative result)
+- Status: Accepted (measurement-driven cache-blocking rejection); §T74 umbrella closed 2026-07-19 after §T656/§T658
 - Date: 2026-07-07
 - Task: §T74 (L1b-opt GEMM ladder to the Go ceiling), §R67 (BLIS/Goto packing)
 - Related: §B41, §B39 (identical outcome on the Vulkan GEMM), §B27 (NEON parked
@@ -91,3 +91,17 @@ The x86-server resume condition is now **closed with data**: blocking does not
 help this kernel on this class of host either. The remaining gap to vendor SGEMM
 (≈3× on this Zen 3) is microkernel saturation (register/prefetch scheduling, and
 the f64-accumulation policy §V10/ADR-0021), not cache blocking.
+
+## T74 umbrella closure (2026-07-19)
+
+The SIMD sentence above is historical, not a live blocker. §T656 later built the
+arm64 Plan9-NEON 4×16 F32 kernel (≈13×, ≈795 GFLOP/s); §T658 added Accelerate
+SGEMM plus a pure-Go raw-AMX kernel with measured per-shape dispatch, reaching
+Torch parity at 1024³ and beating Accelerate on large shapes. §T662 completed the
+m=2 GEMV rung. Default builds retain exact F64-accumulating results; the explicit
+GOEXPERIMENT=simd F32 path follows ADR-0021/ADR-0026 tolerance.
+
+Fresh M2 Pro verification: 1024³ NEON 678–770, raw AMX 1982–2096, Accelerate
+2374–2538 GFLOP/s; 512×2048×4096 median raw AMX 1564 > Accelerate 1477; no-cgo
+raw AMX 1024³ 1717 GFLOP/s. Parity passed in default, SIMD, and SIMD+CGO0 builds.
+Thus cache blocking stays rejected while the broader §T74 GEMM ladder is done.

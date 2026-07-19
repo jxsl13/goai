@@ -7,6 +7,11 @@
 // mtl_available returns 1 if a Metal device with MPS support exists.
 int mtl_available(void);
 
+// mtl_available_memory returns the device's remaining recommended working-set
+// budget in bytes (recommendedMaxWorkingSetSize-currentAllocatedSize), or 0
+// when Metal cannot report one.
+unsigned long long mtl_available_memory(void);
+
 // mtl_matmul_f32 computes C[M,N] = A[M,K]·B[K,N], all row-major float32.
 // Returns 0 on success, nonzero on failure.
 int mtl_matmul_f32(const float* A, const float* B, float* C, int M, int K, int N,

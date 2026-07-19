@@ -3,44 +3,35 @@ package nn
 import (
 	"fmt"
 	"math"
+	"math/rand/v2"
 
 	"github.com/jxsl13/goai/tensor"
 )
 
-// QGaLore (Zhang et al. 2024, arXiv:2407.08296, "Q-GaLore: Quantized GaLore with
-// INT4 Projection and Layer-Adaptive Low-Rank Gradients"): a strictly more
-// memory-efficient GaLore (arXiv:2403.03507, nn.GaLore). GaLore already cuts the
-// Adam optimizer state from O(m·n) to O(r·max(m,n)) by running the moments in a
-// rank-r SVD subspace of the gradient; Q-GaLore keeps that projection UNCHANGED and
-// wins more memory by storing the subspace moments THEMSELVES in low precision.
+// QGaLore implements Q-GaLore (Zhang et al. 2024, arXiv:2407.08296): GaLore's
+// rank-r SVD gradient subspace plus all four defining low-memory mechanisms from
+// the paper/reference implementation:
 //
-// Concretely, for a matrix parameter W[m,n] Q-GaLore does exactly what GaLore does —
-// project the gradient into the top-r singular subspace P, run Adam there, project
-// the update back, apply W ← W − lr·Scale·P·Adam(PᵀG), refresh P by SVD every Gap
-// steps — but the first- and second-moment vectors m, v live QUANTIZED as INT8
-// (block-wise, one absmax scale per BlockSize-element block, on a NON-LINEAR log-
-// magnitude grid dense near zero, the bitsandbytes 8-bit-optimizer scheme GaLore
-// itself uses; a linear grid would round small second-moments to zero and blow up the
-// Adam denominator). Each step dequantizes a block to fp, runs the EMA update, and
-// requantizes. That is ~8× less state than GaLore's fp64 moments (1 byte per element +
-// a small per-block scale, versus 8), on top of GaLore's already-large win over Adam.
-// Non-matrix parameters use plain fp Adam, as in GaLore.
+//  1. Adam moments in the subspace use block-wise INT8 storage.
+//  2. The SVD projection itself uses packed, block-wise affine INT4 storage.
+//  3. Each matrix owns an adaptive SVD cadence: after five adjacent first-vector
+//     cosine similarities average at least 0.4, its refresh gap doubles.
+//  4. Matrix weights are re-quantized block-wise to INT8 after every update using
+//     stochastic rounding, which preserves small updates in expectation.
 //
-// COLLAPSE: with quantization disabled (WithQGaLoreQuantBits(0) — also 64) the
-// moments are stored in fp and Q-GaLore reduces EXACTLY to GaLore, bit-identical at
-// the same rank/scale/gap/betas. The only thing quantization changes is the moment
-// precision.
+// The public tensor remains a dequantized execution mirror because tensor currently
+// has no integer dtype; qgaloreState.wq is the authoritative compressed weight state.
+// Thus this package validates the paper's numerics and compressed stores, while an
+// integer-native Tensor is still required to realize the full end-to-end weight-memory
+// saving during a model forward. Non-matrix parameters use plain fp Adam, as GaLore.
 //
-// Shipped here: the INT8-quantized moment state (the core memory win, arXiv:2407.08296
-// §3.2). Two further ideas from the paper are documented follow-ups: INT4 storage of
-// the projection matrix P itself (§3.2, a smaller secondary win), and the
-// convergence-based adaptive subspace refresh that skips SVDs while the gradient
-// subspace is stable (§3.1) — here the refresh cadence stays GaLore's fixed Gap.
+// COLLAPSE: WithQGaLoreQuantBits(0) (also 64) disables the entire Q-GaLore path —
+// moments, projection and weights stay fp and the cadence stays fixed — so updates
+// reduce bit-identically to nn.GaLore at the same rank/scale/gap/betas.
 //
-// Further reading: Zhang et al. 2024 (arXiv:2407.08296); the GaLore paper it builds
-// on (Zhao et al. 2024, arXiv:2403.03507); Dettmers et al. "8-bit Optimizers via
-// Block-wise Quantization" 2022 (arXiv:2110.02861) for the block-wise INT8 state; and
-// Goodfellow, Bengio & Courville, Deep Learning (2016), ch. 8, for the Adam family.
+// Further reading: Zhang et al. 2024 (arXiv:2407.08296); the official
+// VITA-Group/Q-GaLore reference; Zhao et al. 2024 (arXiv:2403.03507); and Dettmers
+// et al. 2022 (arXiv:2110.02861) for block-wise 8-bit Adam state.
 type QGaLore struct {
 	Params []*tensor.Tensor // parameters this optimizer updates
 	LR     float64          // learning rate
@@ -50,12 +41,10 @@ type QGaLore struct {
 	Beta1  float64          // Adam first-moment decay (default 0.9)
 	Beta2  float64          // Adam second-moment decay (default 0.999)
 	Eps    float64          // Adam denominator epsilon (default 1e-8)
-	// QuantBits selects the precision of the stored subspace Adam moments. 8 (default)
-	// stores m, v as block-wise INT8 — the Q-GaLore memory win. SPECIAL VALUES: 0 and
-	// 64 both mean "no quantization", storing the moments in fp64 so the optimizer
-	// collapses bit-identically onto nn.GaLore (the §V16 collapse anchor). Only INT8
-	// is implemented for the quantized path; any other non-zero, non-64 value is
-	// treated as 8. Default 8 (arXiv:2407.08296 §3.2 quantizes the states to 8-bit).
+	// QuantBits selects Q-GaLore mode. 8 (default) enables INT8 moments/weights,
+	// packed INT4 projections, and adaptive refresh. SPECIAL VALUES 0 and 64 disable
+	// the whole paper path for bit-identical GaLore collapse. Other values currently
+	// select the same 8-bit path; lower-bit moments are not implemented.
 	QuantBits int
 	// BlockSize is the block length for the block-wise INT8 moment quantization: the
 	// moments are split into contiguous BlockSize-element blocks, each with its own
@@ -66,18 +55,51 @@ type QGaLore struct {
 	// quantization is off. Default 256 (the bitsandbytes 8-bit-Adam block size GaLore
 	// adopts, arXiv:2110.02861 §3).
 	BlockSize int
+	// WeightQuant and ProjectionQuant enable the two low-precision stores that
+	// distinguish Q-GaLore from GaLore: INT8 model weights and packed INT4 SVD
+	// projections. They default on. QuantBits 0 or 64 disables the complete
+	// Q-GaLore path (including these stores) for the bit-identical GaLore anchor.
+	WeightQuant bool
+	// ProjectionQuant stores P as packed INT4 when paper mode is active.
+	ProjectionQuant bool
+	// AdaptiveRefresh implements the paper's lazy layer-wise SVD schedule. Each
+	// parameter starts at Gap, keeps QueueSize adjacent first-vector cosine
+	// similarities, and multiplies its own gap by GapMultiplier when their mean is
+	// at least CosThreshold. Paper/reference defaults: 0.4, 2, and 5.
+	AdaptiveRefresh bool
+	// CosThreshold is the mean-similarity trigger for slowing SVD refreshes.
+	CosThreshold float64
+	// GapMultiplier scales a stable parameter's current SVD gap.
+	GapMultiplier int
+	// QueueSize is the number of adjacent projection similarities to average.
+	QueueSize int
+	// Seed controls stochastic INT8 weight rounding reproducibly.
+	Seed uint64
 
-	t  int
-	st []*qgaloreState // per-parameter state (nil until first use)
+	t   int
+	st  []*qgaloreState // per-parameter state (nil until first use)
+	rng *rand.Rand
 }
 
 // qgaloreState holds one parameter's projection and its Adam moments. Matrix
 // parameters keep the moments either quantized (mq/vq codes + ms/vs block scales,
 // when quantization is on) or in fp (mf/vf); non-matrix parameters always use fp.
 type qgaloreState struct {
-	proj [][]float64 // top-r singular vectors P (proj[k] is the k-th, length = reduced dim)
-	left bool        // true: project rows (m≤n), R=PᵀG; false: project cols, R=GP
-	n    int         // logical moment length (= reduced size, or Numel for non-matrix)
+	proj [][]float64 // fp projection, used only by the GaLore-collapse path
+	// Q-GaLore stores P as packed unsigned INT4 with affine scale/zero per block.
+	projQ                  []byte
+	projScales, projZeros  []float64
+	projRows, projCols     int
+	left                   bool // true: project rows (m≤n), R=PᵀG; false: project cols, R=GP
+	n                      int  // logical moment length (= reduced size, or Numel for non-matrix)
+	gap, svdCount          int
+	prevProjectionVector   []float64
+	projectionSimilarities []float64
+	// Q-GaLore's authoritative INT8 weight store. The public Tensor remains a
+	// dequantized execution mirror because tensor currently has no integer dtype.
+	wq           []uint8
+	weightScales []float64
+	weightZeros  []float64
 
 	mf, vf []float64 // fp moments (used when quantization is off, or for non-matrix params)
 	mq, vq []int8    // INT8 moment codes (used when quantization is on)
@@ -114,10 +136,9 @@ func WithQGaLoreScale(a float64) QGaLoreOption { return func(g *QGaLore) { g.Sca
 // In plain terms: Q-GaLore periodically recomputes (via SVD) which low-rank slice to
 // work in; this is how many steps it reuses one before refreshing. Boundary behavior —
 // small gap keeps the subspace accurate but pays frequent SVD cost; large gap
-// amortizes the SVD but lets the subspace go stale. Q-GaLore's paper additionally
-// SKIPS refreshes adaptively once the subspace stabilizes (a documented follow-up
-// here); this knob is the fixed baseline cadence. Default 200 (research-grounded: the
-// GaLore reference update gap, arXiv:2403.03507).
+// amortizes the SVD but lets the subspace go stale. In paper mode this is the INITIAL
+// per-parameter gap; stable subspaces then multiply their own cadence adaptively.
+// Default 200 (Q-GaLore paper and official reference implementation).
 func WithQGaLoreGap(gap int) QGaLoreOption { return func(g *QGaLore) { g.Gap = gap } }
 
 // WithQGaLoreBetas sets the inner Adam's moment EMA decays β₁, β₂ (applied within the
@@ -130,48 +151,91 @@ func WithQGaLoreBetas(b1, b2 float64) QGaLoreOption {
 	return func(g *QGaLore) { g.Beta1, g.Beta2 = b1, b2 }
 }
 
-// WithQGaLoreQuantBits sets the precision of the stored subspace Adam moments and is
-// the knob behind the §V16 collapse anchor.
+// WithQGaLoreQuantBits sets the moment precision and the §V16 collapse mode.
 //
 // In plain terms: 8 (the default) is real Q-GaLore — the moments are stored in one
-// byte each (block-wise INT8), the memory win over GaLore. The SPECIAL VALUES 0 and
-// 64 turn quantization OFF: the moments are kept in full fp64 precision and the
-// optimizer becomes bit-for-bit identical to nn.GaLore, which is how the collapse is
-// tested. Boundary behavior — only INT8 is implemented for the quantized path, so any
-// other non-zero, non-64 value is treated as 8-bit. Default 8 (arXiv:2407.08296 §3.2
-// stores the optimizer states in 8-bit).
+// byte each and the remaining paper mechanisms are enabled. SPECIAL VALUES 0 and 64
+// turn the complete Q-GaLore path off: fp moments/projection/weights plus fixed SVD
+// cadence become bit-for-bit nn.GaLore. Other non-zero values currently select INT8.
+// Default 8 (paper Figure 1 and official reference).
 func WithQGaLoreQuantBits(bits int) QGaLoreOption { return func(g *QGaLore) { g.QuantBits = bits } }
 
-// WithQGaLoreBlockSize sets the block length for the block-wise INT8 moment
+// WithQGaLoreBlockSize sets the block length for moment, projection, and weight
 // quantization.
 //
 // In plain terms: the quantizer picks one scale per block of this many moment
-// entries, so an outlier only coarsens its own block, not the whole vector. Boundary
+// entries, so an outlier only coarsens its own block, not the whole tensor. Boundary
 // behavior — small blocks give the finest accuracy but store more per-block scales
 // (shrinking the memory win); large blocks store fewer scales but let one big entry
-// coarsen a wide span; ignored entirely when quantization is off. Default 256 (the
-// bitsandbytes 8-bit-Adam block size, arXiv:2110.02861 §3).
+// coarsen a wide span; ignored entirely when quantization is off. Default 256
+// (Q-GaLore §3.1 and official reference).
 func WithQGaLoreBlockSize(bs int) QGaLoreOption {
 	return func(g *QGaLore) { g.BlockSize = bs }
 }
 
+// WithQGaLoreWeightQuantization controls the paper's persistent INT8 weight path.
+// Enabled by default; false is an ablation that keeps full-precision weights while
+// retaining quantized moments/projections. QuantBits 0 or 64 disables it regardless.
+func WithQGaLoreWeightQuantization(enabled bool) QGaLoreOption {
+	return func(g *QGaLore) { g.WeightQuant = enabled }
+}
+
+// WithQGaLoreProjectionQuantization controls packed INT4 storage of the SVD
+// projection. Enabled by default; false stores P in fp64 as an ablation.
+func WithQGaLoreProjectionQuantization(enabled bool) QGaLoreOption {
+	return func(g *QGaLore) { g.ProjectionQuant = enabled }
+}
+
+// WithQGaLoreAdaptiveRefresh controls the paper's layer-local lazy SVD cadence.
+// Enabled by default. False retains the fixed Gap cadence used by plain GaLore.
+func WithQGaLoreAdaptiveRefresh(enabled bool) QGaLoreOption {
+	return func(g *QGaLore) { g.AdaptiveRefresh = enabled }
+}
+
+// WithQGaLoreAdaptiveConfig sets the lazy-refresh threshold, gap multiplier, and
+// similarity-window length. Defaults are 0.4, 2, and 5 from the paper's reference
+// implementation. A larger threshold delays slowing the SVD cadence; a multiplier
+// <=1 or queue <=0 is normalized back to the defaults.
+func WithQGaLoreAdaptiveConfig(threshold float64, multiplier, queue int) QGaLoreOption {
+	return func(g *QGaLore) {
+		g.CosThreshold, g.GapMultiplier, g.QueueSize = threshold, multiplier, queue
+	}
+}
+
+// WithQGaLoreSeed sets the deterministic random stream used for unbiased stochastic
+// rounding of INT8 weights. Same seed and inputs produce the same trajectory.
+func WithQGaLoreSeed(seed uint64) QGaLoreOption { return func(g *QGaLore) { g.Seed = seed } }
+
 // NewQGaLore builds a Q-GaLore optimizer over params with learning rate lr and the
-// paper's defaults (rank 128, scale 0.25, gap 200, Adam β 0.9/0.999, INT8 moments in
-// 256-element blocks). With WithQGaLoreQuantBits(0) it is exactly nn.GaLore.
+// paper/reference defaults: rank 128, scale 0.25, initial gap 200, Adam β 0.9/0.999,
+// block size 256, INT8 moments+weights, INT4 projection, adaptive 0.4/2/5 cadence,
+// and deterministic stochastic-rounding seed 1. QuantBits(0) is exactly nn.GaLore.
 func NewQGaLore(params []*tensor.Tensor, lr float64, opts ...QGaLoreOption) *QGaLore {
 	g := &QGaLore{
 		Params: params, LR: lr, Rank: 128, Scale: 0.25, Gap: 200,
 		Beta1: 0.9, Beta2: 0.999, Eps: 1e-8, QuantBits: 8, BlockSize: 256,
+		WeightQuant: true, ProjectionQuant: true, AdaptiveRefresh: true,
+		CosThreshold: 0.4, GapMultiplier: 2, QueueSize: 5, Seed: 1,
 	}
 	for _, o := range opts {
 		o(g)
 	}
+	if g.BlockSize <= 0 {
+		g.BlockSize = 256
+	}
+	if g.GapMultiplier <= 1 {
+		g.GapMultiplier = 2
+	}
+	if g.QueueSize <= 0 {
+		g.QueueSize = 5
+	}
 	g.st = make([]*qgaloreState, len(params))
+	g.rng = rand.New(rand.NewPCG(g.Seed, g.Seed^0x9e3779b97f4a7c15))
 	return g
 }
 
-// quantized reports whether the subspace moments are stored in INT8 (true) or kept in
-// fp (false — the nn.GaLore-collapse mode, QuantBits 0 or 64).
+// quantized reports whether the complete paper mode is enabled. False is the
+// nn.GaLore-collapse mode (QuantBits 0 or 64).
 func (g *QGaLore) quantized() bool { return g.QuantBits != 0 && g.QuantBits != 64 }
 
 // qgLogRange is the number of binary orders of magnitude below a block's absmax that
@@ -257,6 +321,154 @@ func dequantizeBlockwise(codes []int8, scales []float64, blockSize int, out []fl
 	}
 }
 
+// quantizeAffine implements the paper/reference block-wise uniform quantizer. The
+// code range is unsigned [0,2^bits-1], with one scale and zero point per block.
+// Stochastic mode chooses ceil(y) with probability frac(y), otherwise floor(y), so
+// the pre-clamp rounded value is unbiased: E[round(y)] = y.
+func quantizeAffine(x []float64, blockSize, bits int, stochastic bool, random func() float64) ([]uint8, []float64, []float64) {
+	maxCode := (1 << bits) - 1
+	codes := make([]uint8, len(x))
+	scales := make([]float64, numBlocks(len(x), blockSize))
+	zeros := make([]float64, len(scales))
+	for b := range scales {
+		lo, hi := b*blockSize, min((b+1)*blockSize, len(x))
+		mn, mx := x[lo], x[lo]
+		for i := lo + 1; i < hi; i++ {
+			mn, mx = math.Min(mn, x[i]), math.Max(mx, x[i])
+		}
+		scale := (mx - mn) / float64(maxCode)
+		if scale < 1e-5 { // official Q-GaLore quantizer clamp
+			scale = 1e-5
+		}
+		zero := math.Round(-mn / scale)
+		zero = math.Max(0, math.Min(float64(maxCode), zero))
+		scales[b], zeros[b] = scale, zero
+		for i := lo; i < hi; i++ {
+			y := x[i] / scale
+			var rounded float64
+			if stochastic {
+				down := math.Floor(y)
+				rounded = down
+				if random() < y-down {
+					rounded = down + 1
+				}
+			} else {
+				rounded = math.Round(y)
+			}
+			q := math.Max(0, math.Min(float64(maxCode), rounded+zero))
+			codes[i] = uint8(q)
+		}
+	}
+	return codes, scales, zeros
+}
+
+func dequantizeAffine(codes []uint8, scales, zeros []float64, blockSize int, out []float64) {
+	for i, q := range codes {
+		b := i / blockSize
+		out[i] = (float64(q) - zeros[b]) * scales[b]
+	}
+}
+
+func packInt4(codes []uint8) []byte {
+	packed := make([]byte, (len(codes)+1)/2)
+	for i, q := range codes {
+		if i&1 == 0 {
+			packed[i/2] = q & 0x0f
+		} else {
+			packed[i/2] |= (q & 0x0f) << 4
+		}
+	}
+	return packed
+}
+
+func unpackInt4(packed []byte, n int) []uint8 {
+	codes := make([]uint8, n)
+	for i := range n {
+		if i&1 == 0 {
+			codes[i] = packed[i/2] & 0x0f
+		} else {
+			codes[i] = packed[i/2] >> 4
+		}
+	}
+	return codes
+}
+
+func flattenMatrix(m [][]float64) []float64 {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make([]float64, 0, len(m)*len(m[0]))
+	for _, row := range m {
+		out = append(out, row...)
+	}
+	return out
+}
+
+func (st *qgaloreState) setProjection(proj [][]float64, blockSize int, quant bool) {
+	st.projRows, st.projCols = len(proj), len(proj[0])
+	if !quant {
+		st.proj = proj
+		st.projQ, st.projScales, st.projZeros = nil, nil, nil
+		return
+	}
+	flat := flattenMatrix(proj)
+	codes, scales, zeros := quantizeAffine(flat, blockSize, 4, false, nil)
+	st.proj = nil
+	st.projQ, st.projScales, st.projZeros = packInt4(codes), scales, zeros
+}
+
+func (st *qgaloreState) projection(blockSize int) [][]float64 {
+	if st.proj != nil {
+		return st.proj
+	}
+	n := st.projRows * st.projCols
+	flat := make([]float64, n)
+	dequantizeAffine(unpackInt4(st.projQ, n), st.projScales, st.projZeros, blockSize, flat)
+	proj := make([][]float64, st.projRows)
+	for i := range proj {
+		proj[i] = flat[i*st.projCols : (i+1)*st.projCols]
+	}
+	return proj
+}
+
+func projectionCosine(a, b []float64) float64 {
+	var dot, aa, bb float64
+	for i := range a {
+		dot += a[i] * b[i]
+		aa += a[i] * a[i]
+		bb += b[i] * b[i]
+	}
+	if aa == 0 || bb == 0 {
+		return 0
+	}
+	return dot / math.Sqrt(aa*bb)
+}
+
+func (g *QGaLore) refreshProjection(st *qgaloreState, mat [][]float64, paperMode bool) {
+	proj, left := galoreProjection(mat, g.Rank)
+	st.left = left
+	st.svdCount++
+	if paperMode && g.AdaptiveRefresh && st.prevProjectionVector != nil {
+		sim := projectionCosine(st.prevProjectionVector, proj[0])
+		if len(st.projectionSimilarities) == g.QueueSize {
+			copy(st.projectionSimilarities, st.projectionSimilarities[1:])
+			st.projectionSimilarities = st.projectionSimilarities[:g.QueueSize-1]
+		}
+		st.projectionSimilarities = append(st.projectionSimilarities, sim)
+		if len(st.projectionSimilarities) == g.QueueSize {
+			var sum float64
+			for _, v := range st.projectionSimilarities {
+				sum += v
+			}
+			if sum/float64(g.QueueSize) >= g.CosThreshold {
+				st.gap *= g.GapMultiplier
+			}
+		}
+	}
+	st.prevProjectionVector = append(st.prevProjectionVector[:0], proj[0]...)
+	st.setProjection(proj, g.BlockSize, paperMode && g.ProjectionQuant)
+}
+
 // numBlocks is the block count for an n-element vector at the given block size.
 func numBlocks(n, blockSize int) int { return (n + blockSize - 1) / blockSize }
 
@@ -288,6 +500,7 @@ func (g *QGaLore) Step(grad GradFn) error {
 	b1c := 1 - math.Pow(g.Beta1, float64(g.t))
 	b2c := 1 - math.Pow(g.Beta2, float64(g.t))
 	quant := g.quantized()
+	paperMode := quant
 	bs := g.BlockSize
 
 	for pi, p := range g.Params {
@@ -327,7 +540,10 @@ func (g *QGaLore) Step(grad GradFn) error {
 			if !left {
 				n = rows * r
 			}
-			st = &qgaloreState{proj: proj, left: left, n: n}
+			st = &qgaloreState{left: left, n: n, gap: g.Gap}
+			st.prevProjectionVector = append([]float64(nil), proj[0]...)
+			st.svdCount = 1
+			st.setProjection(proj, bs, paperMode && g.ProjectionQuant)
 			if quant {
 				nb := numBlocks(n, bs)
 				st.mq, st.vq = make([]int8, n), make([]int8, n)
@@ -336,12 +552,13 @@ func (g *QGaLore) Step(grad GradFn) error {
 				st.mf, st.vf = make([]float64, n), make([]float64, n)
 			}
 			g.st[pi] = st
-		} else if g.Gap > 0 && g.t%g.Gap == 0 {
-			st.proj, st.left = galoreProjection(mat, g.Rank) // refresh subspace; keep moments
+		} else if st.gap > 0 && g.t%st.gap == 0 {
+			g.refreshProjection(st, mat, paperMode) // refresh subspace; keep moments
 		}
 
 		// project → dequantize moments → Adam in subspace → requantize → project back.
-		red := galoreProjectDown(mat, st.proj, st.left)
+		proj := st.projection(bs)
+		red := galoreProjectDown(mat, proj, st.left)
 		mf, vf := st.mf, st.vf
 		if quant {
 			mf = make([]float64, st.n)
@@ -359,10 +576,22 @@ func (g *QGaLore) Step(grad GradFn) error {
 			quantizeBlockwise(mf, bs, st.mq, st.ms)
 			quantizeBlockwise(vf, bs, st.vq, st.vs)
 		}
-		n := galoreProjectUp(upd, st.proj, st.left, rows, cols)
+		n := galoreProjectUp(upd, proj, st.left, rows, cols)
+		next := make([]float64, 0, rows*cols)
 		for i := range rows {
 			for j := range cols {
-				p.SetF64(p.AtF64(i, j)-g.LR*g.Scale*n[i][j], i, j)
+				next = append(next, p.AtF64(i, j)-g.LR*g.Scale*n[i][j])
+			}
+		}
+		if paperMode && g.WeightQuant {
+			st.wq, st.weightScales, st.weightZeros = quantizeAffine(next, bs, 8, true, g.rng.Float64)
+			dequantizeAffine(st.wq, st.weightScales, st.weightZeros, bs, next)
+		} else {
+			st.wq, st.weightScales, st.weightZeros = nil, nil, nil
+		}
+		for i := range rows {
+			for j := range cols {
+				p.SetF64(next[i*cols+j], i, j)
 			}
 		}
 	}

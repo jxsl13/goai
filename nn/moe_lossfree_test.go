@@ -14,19 +14,13 @@ import (
 	_ "github.com/jxsl13/goai/backend/ref"
 )
 
-// rawSoftmaxOverSet returns softmax over the raw logits of the given index set —
-// the value the load-balancing bias must NOT influence.
-func rawSoftmaxOverSet(logits []float64, set []int) []float64 {
-	m := math.Inf(-1)
-	for _, i := range set {
-		if logits[i] > m {
-			m = logits[i]
-		}
-	}
+// rawSigmoidOverSet returns the normalized sigmoid affinities of an index set —
+// the DeepSeek gate value the load-balancing bias must NOT influence.
+func rawSigmoidOverSet(logits []float64, set []int) []float64 {
 	var sum float64
 	out := make([]float64, len(set))
 	for j, i := range set {
-		out[j] = math.Exp(logits[i] - m)
+		out[j] = 1 / (1 + math.Exp(-logits[i]))
 		sum += out[j]
 	}
 	for j := range out {
@@ -53,7 +47,7 @@ func TestLossFreeGateValueInvariance(t *testing.T) {
 	if !(experts[0] == 0 && experts[1] == 1) {
 		t.Fatalf("biased selection = %v, want [0 1]", experts)
 	}
-	want := rawSoftmaxOverSet(logits, experts)
+	want := rawSigmoidOverSet(logits, experts)
 	for i := range weights {
 		if math.Abs(weights[i]-want[i]) > 1e-12 {
 			t.Errorf("weight[%d] = %.15g, want raw-logit softmax %.15g (bias leaked into gate)", i, weights[i], want[i])
@@ -62,10 +56,10 @@ func TestLossFreeGateValueInvariance(t *testing.T) {
 
 	// (2) A bias that does NOT change the selection must be byte-identical (same
 	// experts AND same weights) to the unbiased router — proving the weights are a
-	// pure function of the selected set and the raw logits.
+	// pure function of the selected set and the raw sigmoid affinities.
 	small := []float64{0.1, 0.2, -0.3, 0.05} // too small to reorder the top-2 {1,3}
 	be, bw := nn.TopKGatingBiased(logits, small, 2)
-	ue, uw := nn.TopKGating(logits, 2)
+	ue, uw := nn.TopKGatingBiased(logits, nil, 2)
 	if len(be) != len(ue) {
 		t.Fatalf("selection size differs: %v vs %v", be, ue)
 	}
@@ -79,8 +73,48 @@ func TestLossFreeGateValueInvariance(t *testing.T) {
 	}
 }
 
-// nilBias must reproduce TopKGating byte-for-byte (documented equivalence).
-func TestTopKGatingBiasedNilEqualsUnbiased(t *testing.T) {
+// §R242's gate is sigmoid, not softmax. This case is deliberately chosen so
+// adding the bias after sigmoid changes the winner while adding it to the raw
+// logit would not; it catches both the activation and selection-order bugs.
+func TestTopKGatingBiasedUsesSigmoidAffinity(t *testing.T) {
+	logits := []float64{10, 0}
+	bias := []float64{0, 1.1}
+	experts, _ := nn.TopKGatingBiased(logits, bias, 1)
+	if len(experts) != 1 || experts[0] != 1 {
+		t.Fatalf("sigmoid(logit)+bias selection = %v, want [1]", experts)
+	}
+
+	// With no bias, sigmoid is monotone so selection matches TopKGating, but the
+	// combination weights are normalized sigmoid affinities, not softmax logits.
+	logits = []float64{2, 0, -1}
+	experts, weights := nn.TopKGatingBiased(logits, nil, 2)
+	if experts[0] != 0 || experts[1] != 1 {
+		t.Fatalf("zero-bias selection = %v, want [0 1]", experts)
+	}
+	want := rawSigmoidOverSet(logits, experts)
+	for i := range weights {
+		if math.Abs(weights[i]-want[i]) > 1e-12 {
+			t.Fatalf("sigmoid weight[%d]=%.15g, want %.15g", i, weights[i], want[i])
+		}
+	}
+	_, softmaxWeights := nn.TopKGating(logits, 2)
+	if weights[0] == softmaxWeights[0] {
+		t.Fatal("loss-free sigmoid gate unexpectedly equals historical softmax gate")
+	}
+
+	// Saturated negative logits may round every sigmoid affinity to zero. Decode
+	// must return finite zero weights, matching dense OpMoECombine's zero-denom
+	// policy, rather than divide 0/0.
+	_, weights = nn.TopKGatingBiased([]float64{-1000, -1000}, nil, 2)
+	for i, weight := range weights {
+		if weight != 0 || math.IsNaN(weight) {
+			t.Fatalf("saturated weight[%d]=%g, want finite zero", i, weight)
+		}
+	}
+}
+
+// nilBias must reproduce an explicit all-zero bias byte-for-byte.
+func TestTopKGatingBiasedNilEqualsZeroBias(t *testing.T) {
 	cases := [][]float64{
 		{1, 3, 0.5, 2},
 		{-2, -2, -2, 5, 0.1},
@@ -89,16 +123,67 @@ func TestTopKGatingBiasedNilEqualsUnbiased(t *testing.T) {
 	for _, logits := range cases {
 		for k := 1; k <= len(logits); k++ {
 			be, bw := nn.TopKGatingBiased(logits, nil, k)
-			ue, uw := nn.TopKGating(logits, k)
+			ue, uw := nn.TopKGatingBiased(logits, make([]float64, len(logits)), k)
 			if len(be) != len(ue) {
 				t.Fatalf("k=%d len %d != %d", k, len(be), len(ue))
 			}
 			for i := range be {
 				if be[i] != ue[i] || bw[i] != uw[i] {
-					t.Fatalf("logits=%v k=%d: biased(nil)=(%v,%v) != unbiased(%v,%v)", logits, k, be, bw, ue, uw)
+					t.Fatalf("logits=%v k=%d: biased(nil)=(%v,%v) != zero-bias(%v,%v)", logits, k, be, bw, ue, uw)
 				}
 			}
 		}
+	}
+}
+
+// The integrated SparseMoE path must feed sigmoid affinities — not the historical
+// softmax gates — into OpMoECombine when loss-free routing is enabled.
+func TestLossFreeSparseMoEUsesSigmoidGate(t *testing.T) {
+	const dim, hidden, experts, topK, tokens = 3, 5, 3, 2, 2
+	m := nn.NewSparseMoE(tensor.F64, dim, hidden, experts, topK, 17, nn.WithLossFreeBalance(0.01))
+	x := tensor.FromFloat64(tensor.Shape{tokens, dim}, []float64{
+		1.2, -0.7, 0.3,
+		-0.4, 1.1, 0.8,
+	})
+	ctx := backend.NewContext()
+	got, logits, err := m.Forward(ctx, x)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expertOut := make([]*tensor.Tensor, experts)
+	for i := range experts {
+		expertOut[i], err = m.Experts[i].Forward(ctx, x)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var differsFromSoftmax bool
+	for tok := range tokens {
+		row := make([]float64, experts)
+		for i := range experts {
+			row[i] = logits.AtF64(tok, i)
+		}
+		selected, weights := nn.TopKGatingBiased(row, nil, topK)
+		softSelected, softWeights := nn.TopKGating(row, topK)
+		for d := range dim {
+			var want, softWant float64
+			for j, expert := range selected {
+				want += weights[j] * expertOut[expert].AtF64(tok, d)
+			}
+			for j, expert := range softSelected {
+				softWant += softWeights[j] * expertOut[expert].AtF64(tok, d)
+			}
+			if math.Abs(got.AtF64(tok, d)-want) > 1e-12 {
+				t.Fatalf("token %d dim %d: integrated=%g sigmoid-ref=%g", tok, d, got.AtF64(tok, d), want)
+			}
+			if math.Abs(got.AtF64(tok, d)-softWant) > 1e-8 {
+				differsFromSoftmax = true
+			}
+		}
+	}
+	if !differsFromSoftmax {
+		t.Fatal("decisive fixture did not distinguish sigmoid routing from softmax")
 	}
 }
 
@@ -213,24 +298,11 @@ func TestLossFreeOffByDefaultIdentity(t *testing.T) {
 			t.Fatalf("off-by-default routing diverged at %v: %.17g vs %.17g", idx, ya.AtF64(idx...), yb.AtF64(idx...))
 		}
 	}
-	// And with an all-zero (freshly enabled, un-updated) bias, routing still
-	// matches the unbiased layer — the bias only bites after UpdateLoadBias moves it.
-	c := nn.NewSparseMoE(tensor.F64, dim, hidden, experts, topK, 42, nn.WithLossFreeBalance(0.01))
-	yc, _, err := c.Forward(ctx, x)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for k := 0; k < ya.Numel(); k++ {
-		idx := tensor.Unravel(k, ya.Shape())
-		if ya.AtF64(idx...) != yc.AtF64(idx...) {
-			t.Fatalf("zero-bias routing diverged from unbiased at %v: %.17g vs %.17g", idx, ya.AtF64(idx...), yc.AtF64(idx...))
-		}
-	}
 }
 
 // §R242 (test d): the bias buffer is NOT a Parameter and adds NO gradient. The
-// parameter set is unchanged by the option, and a training step's gradients are
-// identical whether or not the layer carries the (freshly enabled, zero) bias.
+// parameter set is unchanged by the option and the sigmoid-gated path remains
+// differentiable through the ordinary model parameters.
 func TestLossFreeBiasNotAParameter(t *testing.T) {
 	const dim, hidden, experts, topK = 4, 6, 3, 2
 	x := tensor.FromFloat64(tensor.Shape{2, dim}, []float64{0.5, -1, 2, 0.3, -0.7, 1.1, 0.2, -1.5})
@@ -243,50 +315,62 @@ func TestLossFreeBiasNotAParameter(t *testing.T) {
 		t.Fatalf("Params() count differs: plain=%d free=%d (bias leaked into Params)", len(plain.Params()), len(free.Params()))
 	}
 
-	// (2) A backward pass produces identical gradients on the shared parameters
-	// (same seed ⇒ same weights; the zero bias does not perturb the graph).
-	grads := func(m *nn.SparseMoE) map[*tensor.Tensor]float64 {
-		tape := autograd.NewTape()
-		y, _, err := m.Forward(tape.Context(), x)
+	// (2) A backward pass through the sigmoid-gated route produces finite
+	// gradients on every selected model parameter.
+	tape := autograd.NewTape()
+	y, _, err := free.Forward(tape.Context(), x)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tape.Backward(y); err != nil {
+		t.Fatal(err)
+	}
+	var gradientBearing int
+	for i, p := range free.Params() {
+		g := tape.Grad(p)
+		if g == nil {
+			continue
+		}
+		gradientBearing++
+		for k := 0; k < g.Numel(); k++ {
+			v := g.AtF64(tensor.Unravel(k, g.Shape())...)
+			if math.IsNaN(v) || math.IsInf(v, 0) {
+				t.Fatalf("param %d gradient[%d] is non-finite: %g", i, k, v)
+			}
+		}
+	}
+	if gradientBearing == 0 {
+		t.Fatal("loss-free route produced no parameter gradients")
+	}
+
+	// (3) Central finite difference through the integrated sigmoid route. The
+	// fixture has stable top-k choices under this small perturbation, so it checks
+	// the differentiable gate math rather than the detached selector.
+	p := free.Router.W
+	const h = 1e-5
+	orig := p.AtF64(0, 0)
+	lossAt := func(v float64) float64 {
+		p.SetF64(v, 0, 0)
+		out, _, err := free.Forward(backend.NewContext(), x)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := tape.Backward(y); err != nil {
-			t.Fatal(err)
+		var sum float64
+		for k := 0; k < out.Numel(); k++ {
+			sum += out.AtF64(tensor.Unravel(k, out.Shape())...)
 		}
-		out := map[*tensor.Tensor]float64{}
-		for _, p := range m.Params() {
-			g := tape.Grad(p)
-			if g == nil {
-				continue
-			}
-			var s float64
-			for k := 0; k < g.Numel(); k++ {
-				s += g.AtF64(tensor.Unravel(k, g.Shape())...)
-			}
-			out[p] = s
-		}
-		return out
+		return sum
 	}
-	gp := grads(plain)
-	gf := grads(free)
-	if len(gp) != len(gf) {
-		t.Fatalf("gradient-bearing param count differs: %d vs %d", len(gp), len(gf))
-	}
-	// Compare by matching index order of Params() (same construction order).
-	pp, fp := plain.Params(), free.Params()
-	for i := range pp {
-		vp, okp := gp[pp[i]]
-		vf, okf := gf[fp[i]]
-		if okp != okf {
-			t.Fatalf("param %d gradient presence differs (%v vs %v)", i, okp, okf)
-		}
-		if okp && math.Abs(vp-vf) > 1e-12 {
-			t.Errorf("param %d grad-sum differs: plain=%.17g free=%.17g (bias affected backprop)", i, vp, vf)
-		}
+	lp, lm := lossAt(orig+h), lossAt(orig-h)
+	p.SetF64(orig, 0, 0)
+	numeric := (lp - lm) / (2 * h)
+	analytic := tape.Grad(p).AtF64(0, 0)
+	denom := math.Max(1, math.Max(math.Abs(numeric), math.Abs(analytic)))
+	if rel := math.Abs(numeric-analytic) / denom; rel > 1e-4 {
+		t.Fatalf("router sigmoid grad analytic=%g numeric=%g rel=%g", analytic, numeric, rel)
 	}
 
-	// (3) UpdateLoadBias must NOT run during Backward: gradients above already
+	// (4) UpdateLoadBias must NOT run during Backward: gradients above already
 	// prove it, and the disabled layer's UpdateLoadBias is a nil no-op.
 	if got := plain.UpdateLoadBias(); got != nil {
 		t.Errorf("disabled UpdateLoadBias returned %v, want nil no-op", got)
@@ -294,15 +378,15 @@ func TestLossFreeBiasNotAParameter(t *testing.T) {
 }
 
 // ExampleTopKGatingBiased shows the §R242 crux: a bias can pull an expert into the
-// selection, but the returned gate weights are still softmax over the RAW logits
-// of the selected pair — the bias never inflates a gate value.
+// selection, but the returned gate weights are still the normalized RAW sigmoid
+// affinities of the selected pair — the bias never inflates a gate value.
 func ExampleTopKGatingBiased() {
 	logits := []float64{1, 3, 0.5, 2}
 	// A +5 bias on expert 0 (raw logit 1) makes it beat expert 3 for the second
-	// slot, but its WEIGHT is still computed from the raw logits 1 and 3.
+	// slot, but its WEIGHT is still computed from sigmoid(1) and sigmoid(3).
 	experts, weights := nn.TopKGatingBiased(logits, []float64{5, 0, 0, 0}, 2)
 	fmt.Printf("experts=%v weights=%.2f,%.2f\n", experts, weights[0], weights[1])
-	// Output: experts=[0 1] weights=0.12,0.88
+	// Output: experts=[0 1] weights=0.43,0.57
 }
 
 // ExampleSparseMoE_lossFreeBalance enables auxiliary-loss-free load balancing

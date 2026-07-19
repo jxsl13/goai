@@ -1,6 +1,6 @@
 # ADR-0024 — Cross-Layer Attention (CLA): isolated KV-sharing variant
 
-- Status: Accepted (feasibility spike GO; building autonomously as an isolated variant)
+- Status: Accepted and implemented as an isolated variant
 - Date: 2026-07-15
 - Task: §T654(b) (the "cheapest quick-win" of the round-4 discovery)
 - Related: ADR-0023 (diffusion-LM; same reuse-the-GPT-primitives pattern), §R245 (Hymba — the "own projections + direct OpMHA dispatch, zero refactor" precedent)
@@ -39,3 +39,10 @@ gradcheck (exercises fan-out grads into the shared k,v), decode≡forward parity
 invariant `len(cache.K)==Layers/Share`, e2e grammar-corpus train (Share=2, loss halves),
 Example. Reuses LayerNorm/OpMHA/concatRows/XavierUniform; only the two new files change.
 Follow-ups (not v1): compose with the KV-evict/quant cache tooling; GQA composability.
+
+## Outcome
+
+Implemented on 2026-07-15 in `nlp/cla.go`. Share=1 remains an exact GPT
+collapse; the fan-out gradient, `Layers/Share` cache cardinality,
+Forward/Decode parity, and a Share=2 trained grammar run are green. The isolated
+design held: no shared GPT/MHA/decode or backend code changed.

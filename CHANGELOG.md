@@ -4,6 +4,296 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — compressed-radix prefix lookup and constant-time LRU (T878, 2026-07-19)
+
+`LlamaPrefixPool` now indexes each salt namespace with a compressed token radix tree. Each node
+tracks the most-recently-used complete slot in its subtree, so one prompt-path traversal preserves
+the old greatest-LCP, exact-hit priority, and MRU tie-break semantics without scanning every slot.
+An intrusive slot list also makes LRU touch and eviction constant-time. The index stores policy
+metadata only: every retained entry still owns and copies one complete contiguous K/V cache.
+
+A 1,200-operation randomized differential test compares every indexed result with the former
+linear selector across inserts, touches, evictions, exact hits, strict shortenings, divergences,
+and three salts, while checking radix compression, subtree candidates, and the full LRU chain after
+every operation. At 1,024 slots × 256 tokens, three 1,000-iteration runs measured 79.5–101.6 µs
+(81.2 µs median) for linear scan plus touch versus 272.5–286.6 ns (276 ns median) for compressed
+radix plus touch: **294x faster**, with zero allocations on both paths. Recycled radix nodes keep
+the real capacity-one miss at T877's 161,808 bytes and 508 allocations per call.
+
+### nlp — direct row-buffer prefix copy (T877, 2026-07-19)
+
+Prefix-pool misses now copy source K/V prefixes directly into retained `rowBuf` backing instead of
+creating two temporary source `Tensor.Slice` objects per layer and passing them through the append
+path. `rowBuf.CopyPrefix` performs one typed block copy and creates only the destination view; its
+partial-prefix gates cover F64, F32, F16, and BF16, prove retained storage and exact values, and
+prove that destination mutation cannot affect the source.
+
+In the permanent 32-layer prefix-copy microbenchmark, the old slice-plus-append path took
+25.8–28.9 µs (27.9 µs median), 22,344 bytes, and 259 allocations. Direct copy took 19.3–21.0 µs
+(20.1 µs median), 15,176 bytes, and 131 allocations: **1.38x faster**, **32.1% fewer bytes**, and
+**49.4% fewer allocations**. In the complete three-layer pool benchmark, allocation fell from
+T876's 162,479 bytes and 520 allocations to 161,808 bytes and 508 allocations; median latency
+remained within run-to-run noise and only 1.0% above the current destructive single-slot path.
+
+### nlp — recycle evicted prefix-pool KV backing (T876, 2026-07-19)
+
+`LlamaPrefixPool` now retains the last evicted cache as an invisible scratch slot. On the next
+non-exact request it rewinds that cache to zero rows while retaining every row-buffer allocation,
+copies the selected prefix into the existing storage, appends the suffix, and only after successful
+model execution swaps the newly evicted visible entry back into the spare. Visible entries, source
+caches, LRU ordering, salt isolation, and transactional error behavior are unchanged.
+
+A capacity-one A→B→A gate proves that A regains the same cache object and K/V storage pointers,
+with every value still bit-identical to independent prefill. An injected backend failure leaves the
+visible slot and LRU clock unchanged and the scratch allocation remains recoverable. Across three
+20-iteration runs, a 96-token prefix miss fell from T875's 234,064 to 162,479 allocated bytes
+(−30.6%) and from 562 to 520 allocations; median latency also improved from 274.6 to 261.2 µs
+(−4.9%), only 1.0% above destructive single-slot reuse.
+
+### nlp — salt-isolated multi-slot Llama prefix pool (T875, 2026-07-19)
+
+Added `LlamaPrefixPool`, a bounded LRU of complete prompt states above the incremental
+`Llama.PrefillAppend` primitive. Each request searches only entries carrying the same cache salt,
+copies the best token-exact K/V prefix into a new contiguous cache, and computes the remaining
+suffix. Returning to an older prompt after an intervening request is therefore a full hit instead
+of losing that state; different salts never reuse one another, closing the cross-tenant cache-hit
+timing channel described by vLLM's automatic-prefix-cache design.
+
+Independent full-prefill references pin every returned logit, K/V scalar, and next position for
+GQA and combined Qwen2/Qwen3/Granite hooks with per-layer routing. Tests also cover exact-vs-longer
+tie-breaking, strict shortening, source immutability, protected returned logits, deterministic
+LRU eviction, salt isolation, and validation atomicity. On alternating 104-token prompts sharing
+96 tokens, copying a prefix costs 272–277 µs versus 1.94–2.91 ms for full prefill (median 7.56x
+faster); after both slots are warm, exact hits cost 433–463 ns and 1.2 KB. Slots own complete
+contiguous caches: this does not claim physical block sharing, hashing, radix indexing, paging,
+reference counts, a scheduler, or concurrency safety.
+
+### nlp — automatic single-slot Llama prompt-prefix cache (T874, 2026-07-19)
+
+Added `LlamaPrefixCache`, a stateful sequential wrapper that compares each complete prompt with
+the preceding one, retains their exact longest common token prefix, rolls the ordinary Llama KV
+cache back to that boundary, and batches only the changed suffix through `Llama.PrefillAppend`.
+It returns one next-token logit row plus the number of tokens whose transformer work was reused.
+Identical prompts are full cache hits through a protected stored logit row; strict shortening
+recomputes only the new final token, avoiding a retained `[prompt,vocab]` logit tensor.
+
+The transition sequence first, extend, diverge, shorten, and identical is bit-identical to an
+independent full prefill at every returned logit and every K/V cell for GQA and combined
+Qwen2/Qwen3/Granite hooks with per-layer backend routing. Nil, empty, invalid-token,
+over-context, and stale-plan errors preserve the previous slot. On alternating 104-token prompts
+with a shared 96-token prefix, three 20-iteration reference-backend runs measured 1.92–2.74 ms
+for full recomputation versus 254–264 µs for automatic reuse: median 8.25x faster and 1.06 MB
+versus 157 KB allocated per call. This is deliberately one non-concurrent slot, not a radix
+tree, LRU, paged cache, scheduler, or multi-tenant serving cache.
+
+### nlp — incremental batched prefill for exact prompt-prefix reuse (T873, 2026-07-19)
+
+Added `Llama.PrefillAppend`, the contiguous-cache compute seam behind automatic prompt-prefix
+caching. A caller can prefill a stable system prompt, document, or conversation prefix once,
+retain its ordinary `LlamaCache`, and process each non-empty suffix as one rectangular causal
+batch. Empty-cache append is bit-identical to `Prefill`; arbitrary chunk partitions reproduce
+the same logits, every K/V value, and the next position as one full prefill, including GQA,
+Qwen2/Qwen3/Granite hooks, and per-layer backend routing.
+
+The method deliberately does not claim a multi-request radix tree, LRU policy, paging, or cache
+isolation; it is the model-side primitive such a manager needs. Validation rejects malformed,
+asymmetric, offset-anchored, wrong-width, invalid-token, and over-context inputs before appending.
+On a 96-token shared prefix plus an 8-token new turn, three 20-iteration reference-backend runs
+measured 1.90–2.02 ms for full recomputation versus 266–276 µs for prefix reuse: median 7.13x
+faster and 1.06 MB versus 155 KB allocated per call.
+
+### nlp — shared KVQ-cache for LayerSkip Llama decoding (T872, 2026-07-19)
+
+`LlamaSelfSpeculativeDecode` now implements LayerSkip's optimized KVQ execution instead of
+recomputing prefixes. Early blocks append each draft token's keys and values once and retain the
+post-exit residual; verification resumes directly at the next block over the complete exit-query
+window. One asymmetric per-layer cache therefore serves both stages, then rolls every layer back
+to the accepted prefix after rejection. The public API and exact modified-rejection sampler are
+unchanged; the GPT entry point remains the architecture-neutral reference implementation.
+
+Independent GQA and combined Qwen2/Qwen3/Granite fixtures pin early-exit logits, mature logits,
+every cached K/V value, rollback position, greedy output, seeded sampled output, and acceptance
+statistics against the old recomputing path. A block-token observer proves each verification
+window visits every block exactly once per token. On the deterministic two-layer test workload,
+shared KVQ measured 155-179 µs versus 284-371 µs for recomputation across three 20-iteration
+runs (median 1.83x faster).
+
+### nlp — paper-exact LayerSkip training for Llama-family models (T871, 2026-07-19)
+
+Added `Llama.LayerSkipLoss` and `LayerSkipTrainConfig`, completing the training side of the
+LayerSkip pipeline behind the GPT/Llama early-exit inference APIs. The differentiable path applies
+the paper's exponential depth schedule, optional from-scratch time curriculum, seeded whole-block
+Bernoulli dropout for GoAI's one-sequence forward, rotational exit curriculum, and normalized
+shared final-norm/LM-head losses. It reuses the ordinary Llama block implementation, including
+GQA, Qwen2 biases, Qwen3 QK-norm, Granite scalars, and per-layer backend routing.
+
+The zero config is bit-identical to ordinary final-layer cross-entropy in both loss and every
+parameter gradient. Hand-computed schedule goldens pin Eq.2-6; a forced final-block drop matches
+an explicit early exit and leaves that block gradient-free; central differences cover every
+parameter element of a three-block multi-exit graph. A seeded tiny training run lowers block-1
+exit CE from 1.9851 to 0.0762. The rank-2 model API remains explicitly batch-size one: callers
+train batched data as per-sample or accumulated microbatches rather than receiving a false
+per-row dropout claim.
+
+### nlp — LayerSkip inference for official Llama-family checkpoints (T870, 2026-07-19)
+
+Extended single-model self-speculation to the architecture used by Meta's released LayerSkip
+checkpoints. `Llama.ForwardExit` executes only through a selected block and then reuses the
+model's final RMSNorm and output projection; `LlamaSelfSpeculativeDecode` drafts and verifies
+through the same distribution-preserving driver as the GPT entry point. The shared Llama block
+path retains GQA, Qwen2 projection biases, Qwen3 QK-norm, and Granite scalar hooks.
+
+Meta's model card confirms that its native Hugging Face recipe loads an ordinary Llama causal LM,
+shares its weights, and truncates only the assistant model's layer list, so no auxiliary checkpoint
+parameters are needed. Final-exit identity is pinned bit-for-bit on real HF-loaded MHA and GQA
+fixtures plus the combined Qwen/Granite hook fixture; arbitrary early exits remain greedy-identical
+to `Llama.Generate`, while final exits accept every greedy and sampled proposal. Shared KV-cache
+and activation reuse remain a separate performance optimization.
+
+### nlp — LayerSkip-style single-model self-speculative decoding (T869, 2026-07-19)
+
+Added `GPT.ForwardExit`, which executes only through a selected zero-based transformer block
+before applying the model's shared final norm and language-model head. Selecting the final block
+is bit-identical to `Forward`; earlier exits provide the cheap draft distributions expected from
+checkpoints trained with LayerSkip's early-exit objective.
+
+Added `SelfSpeculativeDecode`: the early exit drafts several tokens from the same GPT, one mature
+forward verifies the window, and the existing modified-rejection rule corrects every mismatch so
+the output remains target-distributed. The reference path deliberately shares weights but not KV
+caches or activations, matching Meta's simple integration variant; ordinary checkpoints are
+correct but may not accept enough drafts for a speedup. Greedy target identity, final-exit 100%
+acceptance, stochastic distribution parity, context boundaries, docs, and runnable examples are
+covered.
+
+### nlp — persistent Q8 inference for loaded Hugging Face BERT models (T739, 2026-07-19)
+
+Added `QuantBert` and `QuantizeBert`: load BERT, RoBERTa, or DistilBERT through the
+existing Hugging Face converters, then replace all six large projections per layer with
+persistent Q8_0 byte blocks. Attention is composed from separately quantized q/k/v/o
+projections around bidirectional MHA, so the shared float `MHA` implementation is unchanged;
+the GELU FFN uses quantized W1/W2. Embeddings, biases, and LayerNorm parameters remain f32.
+
+On a two-layer block-aligned HF-shaped checkpoint, full hidden states match the f64 model at
+0.111253% relative RMS and 0.999999381 cosine. Projection storage falls exactly from 131072 to
+17408 bytes (7.529x smaller). RoBERTa position offsets, DistilBERT's absent segment table,
+boundary errors, device cleanup, race, the full nlp suite, and pure-Go gates are covered. The
+older dynamic `LLMInt8MatMul` remains an accuracy utility, not a memory-saving model path,
+because it retains and re-quantizes its float weight on every call.
+
+### nn — close APOLLO/Softpick/Q-GaLore discovery round and repair optimizer state (T651/B92/B94, 2026-07-19)
+
+Closed the stale round-three candidate task against the later shipped implementations and added
+durable primary-source findings for APOLLO, Fira, softmax-off-by-one/Softpick, and Q-GaLore.
+Fresh APOLLO convergence/state gates and Softpick collapse, hand-reference, attend-to-nothing,
+gradient, causal, F32, and race gates remain green.
+
+Corrected APOLLO's hidden full Gaussian projection matrix: persistent state now keeps only two
+seed words plus low-rank moments and regenerates the same projection on demand, redrawing it only
+at the configured gap. This makes the implementation match its seed-only memory claim; dedicated
+gates cover bit-identical regeneration and gap-boundary reseeding.
+
+Corrected `QGaLore`, whose original implementation quantized only the low-rank Adam moments
+while calling the paper's defining mechanisms follow-ups. Paper mode now stores the SVD
+projection as packed affine INT4, lengthens stable per-parameter SVD cadences with the official
+0.4/2/5 rule, and maintains block-wise affine INT8 weights through seeded unbiased stochastic
+rounding. The float Tensor is documented as a dequantized execution mirror, so no end-to-end
+weight-memory saving is claimed until integer-native Tensor storage exists. Quantization-off
+still collapses bit-identically to GaLore; paper mode converges from 23.1797 to 0.01346.
+
+### nlp/nn — close BitNet, PRM, EAGLE, and BLT discovery round (T655/B90, 2026-07-19)
+
+Reverified all four shipped algorithms and closed their stale umbrella task. BitNet b1.58's
+ternary QAT, PRM's per-step supervision and best-of-N advantage, EAGLE's lossless speculative
+verification, and BLT's no-ragged byte/patch composition remain green through their decisive
+structure, gradient, collapse, and trained end-to-end gates.
+
+Corrected EAGLE's feature regression from the implementation's documented MSE proxy to the
+paper's Smooth-L1 objective. A hand reference now exercises the linear abs(d)>1 branch; full
+gradient and arbitrary-head lossless-generation gates remain green. ADR-0025 now records BLT's
+implemented outcome, and durable research entries cover all four methods.
+
+### nlp — close the diffusion-LM, CLA, and Coconut discovery round (T654, 2026-07-19)
+
+Reverified the three shipped architectures end to end and closed their stale
+umbrella task. Diffusion-LM's masked objective, parameter gradients, unmasking
+schedule, and trained grammar run are green; CLA still collapses exactly to GPT
+at Share=1, propagates gradients through shared KV, reduces cache slots, and
+matches cached decode; Coconut still demonstrates the recurrent latent-depth
+advantage over both no-CoT and equal-position pause controls.
+
+Updated the two feasibility ADRs from proposed/building to implemented and
+recorded durable paper findings for all three algorithms in §R. The fresh
+targeted suite completed in 214.851 seconds with the original metrics intact.
+
+### nn — correct loss-free MoE routing to the paper's sigmoid gate (T648/B87, 2026-07-19)
+
+Fixed the already-wired loss-free router to use DeepSeek's sigmoid affinities:
+top-k selection now ranks `sigmoid(routerLogit) + bias`, while expert combine
+weights use the bias-free sigmoid affinities. The previous implementation ranked
+`routerLogit + bias` and combined with softmax, so it preserved bias isolation
+but did not implement the gate specified by §R242.
+
+The historical Mixtral softmax route remains byte-identical when the option is
+absent. Forward and sparse decode now share the sigmoid semantics; a decisive
+selector counterexample, integrated forward reference, central router gradcheck,
+control-state/parameter exclusion, balancing, DeepSeek forwarding, and
+dense-versus-decode parity are green.
+
+### backend/gpu — close the Conv2D performance gap task (T620, 2026-07-19)
+
+Closed the stale umbrella task against the implementations and measurements it had already
+produced. Vulkan's fused implicit-GEMM path removes im2col for a 20–23% gain and its vec4
+gather adds roughly 7%; Metal's live native MPSGraph convolution reaches about 1850 GFLOP/s
+on the large shape, 2.35× the retained im2col path and above the task's 600-GFLOP/s target.
+The measured hand-written Metal implicit-GEMM path remains rejected because it was 1.7×
+slower.
+
+Clarified the benchmark contract: the historical 2418-GFLOP/s torch-mps result keeps tensors
+GPU-resident and pipelines 30 calls, while GoAI transfers and synchronizes each Execute.
+Under equal per-call semantics, GoAI measured 253 versus torch-mps 133 GFLOP/s on the small
+Conv2D shape. Current Metal and Vulkan cross-reference targets compile and correctly device-
+skip in the sandbox; the recorded same-device A/B runs remain the performance evidence.
+
+### backend/cpu — close the superseded GEMM ceiling task (T74, 2026-07-19)
+
+Closed the stale host-blocked status after reconciling it with the shipped NEON, raw-AMX,
+Accelerate, and GEMV work. Cache blocking remains rejected by measurements on both arm64 and
+Zen 3; the winning ladder instead reaches Torch-class 1024³ throughput through Accelerate and
+uses pure-Go raw AMX for large shapes where it beats the vendor path.
+
+Fresh M2 Pro checks measured 678–770 GFLOP/s NEON, 1982–2096 raw AMX, and 2374–2538
+Accelerate at 1024³. Raw AMX remained ahead in the 512×2048×4096 median, while the no-cgo
+1024³ path reached 1717 GFLOP/s. Default, SIMD, and SIMD+CGO0 parity gates are green.
+
+### backend/nlp — complete functional low-VRAM layer offload (T631, 2026-07-19)
+
+Connected the existing measured layer planner to real GPT and Llama forward paths. Models can
+assign PlanOffload(...).Layers through LayerBackends; blocks that do not fit a device budget
+spill to CPU/reference while nil preserves the historical single-backend execution. CUDA now
+feeds the generic planner from free VRAM, Metal from its remaining recommended working set, and
+Vulkan from VK_EXT_memory_budget when available.
+
+A simulated two-layer model with only one layer of device budget proves both device and host
+backends execute and produces bit-exact GPT and Llama logits versus the all-reference path.
+Malformed plans fail before partial execution; drivers without a trustworthy memory budget are
+omitted so placement falls back safely instead of guessing into an OOM.
+
+### backend — reconcile GPU softmax/norm policy with measured routes (T29, 2026-07-19)
+
+Closed the stale T29 blanket rejection and amended ADR-0008 to use the repository's current
+measurement gate: binary/add-bias remains on CPU, while the already-shipped cooperative
+Softmax, RMSNorm, and LayerNorm GPU kernels remain enabled where same-shape benchmarks show
+clear wins. Current 2048² results put Metal/Vulkan near 1.7 ms versus roughly 4–8 ms on CPU;
+the explicit F32 GPU backends currently dispatch all non-empty valid shapes, so no unmeasured
+small-shape CPU threshold is claimed. Graph residency remains the next latency-amortization step.
+
+### backend — close rejected per-op GPU elementwise offload (T28, 2026-07-19)
+
+Confirmed ADR-0008 remains enforced: host-resident elementwise and add-bias work stays on
+the optimized CPU/reference path because per-op GPU transfer costs exceed its linear-time
+compute. Metal routing, fallback-under-tape, add-bias parity, and single-recording regression
+tests are green; compute-bound and graph-resident GPU paths remain unchanged.
+
 ### llamagpu — an assertion that could not fail, a decoder that skipped the model (B78/T868, 2026-07-18)
 
 **B78 — the inverted NaN guard.** Four encoder equivalence tests assigned where they should
@@ -3180,7 +3470,8 @@ re-verified on `main`.
 - **Quantization (3).** **AQLM** (additive multi-codebook 2–3-bit weight quantization, rate-distortion
   faithful); **SpinQuant** (rotation-based outlier removal with a learnable orthogonal via QR, ~31×
   lower quantization MSE on outlier-heavy activations); **Q-GaLore** (GaLore with INT8 log-magnitude
-  quantized optimizer state, ~7.8× less state, bit-identical to GaLore at full precision).
+  optimizer moments, packed INT4 projection, adaptive SVD cadence, and stochastically rounded
+  INT8 weights; ~7.8× less moment state, bit-identical to GaLore when paper mode is disabled).
 - **Sampling / MoE / distillation.** **top-nσ** (temperature-stable logit truncation); **ReMoE**
   (fully-differentiable ReLU-routed mixture-of-experts, no auxiliary load-balancing loss); **MiniLM**
   deep self-attention distillation (v1 + v2, width-independent teacher→student transfer).
@@ -3388,9 +3679,9 @@ it, and the real f32 GPT forward is **≈10.9×** faster end-to-end. All of this
   greedy base decoding, so the output is LOSSLESS (token-for-token what plain greedy
   decoding produces). EAGLE drafts at the feature level (more predictable than tokens),
   distinct from Medusa's parallel token heads and from draft-model speculative decoding.
-  The head trains on a frozen base via ForwardHidden (feature MSE + a small token CE).
+  The head trains on a frozen base via ForwardHidden (feature Smooth-L1 + a small token CE).
   Verified: lossless equality with greedy for random and trained heads, acceptance rate
-  12%→54% after training, full gradcheck.
+  12%→69% after training, full gradcheck.
 
 ### T655 — BitNet b1.58: ternary quantization-aware training (2026-07-15)
 - New `nn.BitLinear`: a drop-in linear layer that TRAINS with 1.58-bit ternary weights
@@ -3657,7 +3948,8 @@ it, and the real f32 GPT forward is **≈10.9×** faster end-to-end. All of this
   Norm-Growth Limiter tames early-training spikes; `WithAPOLLOMini` is the rank-1
   tensor-wise variant with O(max(m,n)) state. Distinct from `nn.GaLore` (SVD subspace,
   projects the update back low-rank). Convergence verified against plain Adam on a
-  synthetic problem; deterministic under a seeded projection.
+  synthetic problem; deterministic under a seeded projection. The Gaussian matrix is
+  regenerated from two stored seed words on use rather than retained in optimizer state.
 
 ### CUDA — Qwen2.5-3B validated: engine generalizes across a 6× parameter range (worker linux-amd64, 2026-07-15)
 - `TestCUDAQwenGenerate` now also runs **Qwen2.5-3B** (qwen2, 36 layers, dim 2048, GQA
@@ -3941,7 +4233,7 @@ it, and the real f32 GPT forward is **≈10.9×** faster end-to-end. All of this
   loss that competes with the language-model objective. Opt in with
   `nn.WithLossFreeBalance(rate)`: a per-expert bias steers *which* experts win the
   top-k routing (raised for under-used experts, lowered for over-used), while the
-  gate weight that scales each expert's output still comes from the raw router score,
+  gate weight that scales each expert's output still comes from the raw sigmoid affinity,
   so gradients are untouched. The bias is a gradient-free control buffer updated once
   per batch via `UpdateLoadBias()` (`b += rate·sign(mean − load)`, default rate
   0.001, per arXiv:2408.15664). Off by default — existing MoE behaviour is unchanged.

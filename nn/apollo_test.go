@@ -75,9 +75,10 @@ func TestAPOLLOConvergesQuadratic(t *testing.T) {
 	}
 }
 
-// The whole point of APOLLO: the Adam moment state lives in the rank-r random
-// sketch, so its size is O(r·max(m,n)), NOT O(m·n) — while the parameter and its
-// applied update stay full-rank. Checked for both projection sides.
+// The whole point of APOLLO: the persistent state is only the two-word random
+// projection seed plus rank-r Adam moments, so its numeric payload is
+// O(r·max(m,n)), NOT O(m·n) — while the parameter and its applied update stay
+// full-rank. Checked for both projection sides.
 func TestAPOLLOStateLowRank(t *testing.T) {
 	for _, dims := range []struct{ rows, cols int }{{64, 16}, {16, 64}} {
 		w := tensor.New(tensor.F32, tensor.Shape{dims.rows, dims.cols})
@@ -96,10 +97,60 @@ func TestAPOLLOStateLowRank(t *testing.T) {
 		if len(st.m) >= full {
 			t.Errorf("dims %v: moment state %d not smaller than full %d — no memory win", dims, len(st.m), full)
 		}
-		if len(st.proj) != 4 || len(st.proj[0]) != min(dims.rows, dims.cols) {
-			t.Errorf("dims %v: projection %dx%d, want 4x%d (r rows over the SMALLER dim)",
-				dims, len(st.proj), len(st.proj[0]), min(dims.rows, dims.cols))
+		if st.rank != 4 || st.left != (dims.rows <= dims.cols) {
+			t.Errorf("dims %v: projection metadata rank=%d left=%v", dims, st.rank, st.left)
 		}
+		proj := st.projection(dims.rows, dims.cols)
+		if len(proj) != 4 || len(proj[0]) != min(dims.rows, dims.cols) {
+			t.Errorf("dims %v: projection %dx%d, want 4x%d (r rows over the SMALLER dim)",
+				dims, len(proj), len(proj[0]), min(dims.rows, dims.cols))
+		}
+	}
+}
+
+// The paper's memory claim depends on regenerating P from a stored seed rather
+// than retaining P itself. Repeated regeneration must be bit-identical; a Gap
+// boundary must replace the seed and therefore the projection while preserving
+// the low-rank moment buffers.
+func TestAPOLLOProjectionRegeneratesFromSeed(t *testing.T) {
+	w := tensor.New(tensor.F32, tensor.Shape{5, 7})
+	g := tensor.New(tensor.F32, w.Shape())
+	g.SetF64(1, 0, 0)
+	opt := NewAPOLLO([]*tensor.Tensor{w}, 1e-3, 17, WithAPOLLORank(3), WithAPOLLOGap(2))
+	grad := func(*tensor.Tensor) *tensor.Tensor { return g }
+	if err := opt.Step(grad); err != nil {
+		t.Fatal(err)
+	}
+	st := opt.st[0]
+	seed1, seed2 := st.seed1, st.seed2
+	m, v := st.m, st.v
+	p1, p2 := st.projection(5, 7), st.projection(5, 7)
+	for i := range p1 {
+		for j := range p1[i] {
+			if p1[i][j] != p2[i][j] {
+				t.Fatalf("regenerated projection differs at [%d,%d]: %v != %v", i, j, p1[i][j], p2[i][j])
+			}
+		}
+	}
+
+	if err := opt.Step(grad); err != nil { // t=2: Gap boundary
+		t.Fatal(err)
+	}
+	if st.seed1 == seed1 && st.seed2 == seed2 {
+		t.Fatal("Gap boundary did not replace projection seed")
+	}
+	if len(st.m) != len(m) || len(st.v) != len(v) || &st.m[0] != &m[0] || &st.v[0] != &v[0] {
+		t.Fatal("Gap boundary replaced low-rank moment buffers")
+	}
+	p3 := st.projection(5, 7)
+	same := true
+	for i := range p1 {
+		for j := range p1[i] {
+			same = same && p1[i][j] == p3[i][j]
+		}
+	}
+	if same {
+		t.Fatal("new seed regenerated the old projection")
 	}
 }
 
@@ -198,7 +249,8 @@ func TestAPOLLOShapeMismatch(t *testing.T) {
 // APOLLO keeps its Adam moments in a rank-r RANDOM sketch — no SVD — while the
 // weight and its update stay full-rank: for a 1024×1024 layer at rank 64 the moment
 // state shrinks from 1024·1024 to 64·1024 floats — 16× smaller — and APOLLO-Mini
-// (rank 1) would need just 1024 (Zhu, Zhang, Hao et al. 2024, arXiv:2412.05270).
+// (rank 1) would need just 1024. P is regenerated from a stored seed instead of
+// being retained (Zhu, Zhang, Hao et al. 2024, arXiv:2412.05270).
 func ExampleAPOLLO() {
 	w := tensor.New(tensor.F32, tensor.Shape{1024, 1024})
 	opt := NewAPOLLO([]*tensor.Tensor{w}, 1e-3, 42, WithAPOLLORank(64))

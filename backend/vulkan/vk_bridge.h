@@ -12,6 +12,10 @@
 // device is present.
 int vk_available(void);
 
+// vk_available_memory returns the unused device-local heap budget reported by
+// VK_EXT_memory_budget, or 0 when the extension/device cannot report one.
+unsigned long long vk_available_memory(void);
+
 // vk_matmul_f32 computes C[M,N] = opA(A)·opB(B), row-major float32, via the SPIR-V module
 // in `spv`. transA: A is stored [K,M] and read transposed (opA=Aᵀ); transB: B stored [N,K].
 // Returns 0 on success, nonzero on failure (see vk_bridge.c for codes).

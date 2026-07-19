@@ -50,6 +50,20 @@ func MemInfo() (free, total uint64) {
 	return uint64(f), uint64(t)
 }
 
+// AvailableMemory implements backend.MemoryProber with CUDA's live free-VRAM
+// reading, so backend.ProbeBudgets can feed PlanOffload without a guessed cap.
+func (Backend) AvailableMemory() (bytes int64, ok bool) {
+	free, _ := MemInfo()
+	if free == 0 {
+		return 0, false
+	}
+	const maxInt64Bytes = uint64(1<<63 - 1)
+	if free > maxInt64Bytes {
+		free = maxInt64Bytes
+	}
+	return int64(free), true
+}
+
 func (Backend) Kernel(op backend.Op, dtype tensor.Dtype) (backend.Kernel, bool) {
 	if dtype != tensor.F32 {
 		return nil, false // F64 and other dtypes: Pure-Go (§I4)

@@ -17,17 +17,22 @@ import (
 // tokens to contextual states [seq, dim] (T5EncoderModel's last_hidden_state),
 // which the sentence-T5 / retrieval and text-classification use cases consume.
 // Load a Hugging Face checkpoint with [T5FromHF].
+//
+// Further reading: Raffel et al., "Exploring the Limits of Transfer Learning
+// with a Unified Text-to-Text Transformer" (https://arxiv.org/abs/1910.10683),
+// and the Hugging Face T5 documentation
+// (https://huggingface.co/docs/transformers/model_doc/t5).
 type T5 struct {
-	Config    T5Config
+	Config    T5Config           // Config describes the loaded encoder geometry.
 	Shared    *tensor.Tensor     // [vocab, dim] tied token embedding
 	RelBias   *nn.T5RelativeBias // shared relative-position bias (block 0 in HF)
-	Blocks    []*T5Block
-	FinalNorm *nn.RMSNorm
+	Blocks    []*T5Block         // Blocks are the encoder layers in execution order.
+	FinalNorm *nn.RMSNorm        // FinalNorm normalizes the encoder output.
 }
 
 // T5Config fixes the encoder geometry.
 type T5Config struct {
-	Vocab        int
+	Vocab        int     // Vocab is the number of token embeddings; T5FromHF infers it.
 	Dim          int     // d_model
 	Heads        int     // num_heads
 	HeadDim      int     // d_kv (heads*HeadDim need NOT equal Dim)
@@ -42,9 +47,9 @@ type T5Config struct {
 
 // T5Block is one encoder block (pre-LN residual, no bias anywhere).
 type T5Block struct {
-	AttnNorm       *nn.RMSNorm
+	AttnNorm       *nn.RMSNorm    // AttnNorm normalizes inputs to self-attention.
 	Wq, Wk, Wv, Wo *tensor.Tensor // [dim, heads*HeadDim] … [heads*HeadDim, dim]
-	FFNNorm        *nn.RMSNorm
+	FFNNorm        *nn.RMSNorm    // FFNNorm normalizes inputs to the feed-forward network.
 	Wi0, WOut      *tensor.Tensor // FFN in (gate for gated) and out
 	Wi1            *tensor.Tensor // gated FFN up projection; nil for v1.0 ReLU
 }

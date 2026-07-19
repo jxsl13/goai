@@ -227,18 +227,18 @@ func (m *Llama) SelfExtendForward(ctx *backend.Context, tokens []int, window, gr
 	if err != nil {
 		return nil, err
 	}
-	h, err := m.blockStack(ctx, x, func(_ int, q, k, v *tensor.Tensor) (*tensor.Tensor, error) {
-		qn, err := exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: base, Heads: cfg.Heads}, q)
+	h, err := m.blockStack(ctx, x, func(layerCtx *backend.Context, _ int, q, k, v *tensor.Tensor) (*tensor.Tensor, error) {
+		qn, err := exec1(layerCtx, backend.OpRoPE, backend.RoPEAttrs{Base: base, Heads: cfg.Heads}, q)
 		if err != nil {
 			return nil, err
 		}
-		kn, err := exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: base, Heads: kv}, k)
+		kn, err := exec1(layerCtx, backend.OpRoPE, backend.RoPEAttrs{Base: base, Heads: kv}, k)
 		if err != nil {
 			return nil, err
 		}
 		qg := hostRoPE(q, qpos, cfg.Heads, base)
 		kg := hostRoPE(k, kpos, kv, base)
-		return exec1(ctx, backend.OpMHASelect, attn, qn, kn, qg, kg, v, sel)
+		return exec1(layerCtx, backend.OpMHASelect, attn, qn, kn, qg, kg, v, sel)
 	})
 	if err != nil {
 		return nil, err

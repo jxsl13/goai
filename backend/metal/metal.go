@@ -67,6 +67,20 @@ func (Backend) Synchronize() error    { return nil }
 // Available reports whether a Metal device with MPS support exists.
 func Available() bool { return C.mtl_available() == 1 }
 
+// AvailableMemory implements backend.MemoryProber using Metal's remaining
+// recommended working-set budget, which is safer for placement than total UMA.
+func (Backend) AvailableMemory() (bytes int64, ok bool) {
+	free := uint64(C.mtl_available_memory())
+	if free == 0 {
+		return 0, false
+	}
+	const maxInt64Bytes = uint64(1<<63 - 1)
+	if free > maxInt64Bytes {
+		free = maxInt64Bytes
+	}
+	return int64(free), true
+}
+
 // ggml quant type codes accelerated by the in-kernel quantized matmuls (§R94/§R100/§R99).
 const (
 	qtQ4_0 = 2

@@ -318,6 +318,21 @@ func (Backend) Synchronize() error    { return nil }
 // Available reports whether a Vulkan compute-capable device is present.
 func Available() bool { return C.vk_available() == 1 }
 
+// AvailableMemory implements backend.MemoryProber from VK_EXT_memory_budget's
+// unused device-local heap budget. It reports unknown when the driver lacks the
+// extension rather than substituting total heap size for free memory.
+func (Backend) AvailableMemory() (bytes int64, ok bool) {
+	free := uint64(C.vk_available_memory())
+	if free == 0 {
+		return 0, false
+	}
+	const maxInt64Bytes = uint64(1<<63 - 1)
+	if free > maxInt64Bytes {
+		free = maxInt64Bytes
+	}
+	return int64(free), true
+}
+
 // ggml quant type codes accelerated by the in-kernel quantized matmuls (§R94/§R100/§R99).
 const (
 	qtQ4_0 = 2

@@ -172,7 +172,91 @@ func TestEagleAcceptanceAfterTraining(t *testing.T) {
 		trainedStats.Accepted, trainedStats.Proposed, 100*trainedStats.AcceptanceRate())
 }
 
-// The EAGLE loss (feature MSE + 0.1·token CE through the frozen base Head) at
+// EagleLoss uses the paper's Smooth-L1 feature term, not an MSE proxy. The
+// independent scalar loop covers both quadratic and linear branches and adds
+// the separately recomputed 0.1·token CE.
+func TestEagleLossSmoothL1Reference(t *testing.T) {
+	model, tokens := loadGPTModel(t)
+	head, err := nlp.NewEagleHead(tensor.F64, model.Config.Dim, model.Config.Vocab, 11, nlp.WithEagleFFNMult(2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := backend.NewContext()
+	hidden, err := model.ForwardHidden(ctx, tokens)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Make the reference decisive for Smooth-L1's linear branch: row 1 is the
+	// target for prediction row 0 but not an input to that prediction.
+	hcopy := tensor.New(hidden.Dtype(), hidden.Shape())
+	copy(hcopy.Storage().F64(), hidden.Contiguous().Storage().F64())
+	hidden = hcopy
+	hidden.SetF64(hidden.AtF64(1, 0)+10, 1, 0)
+	got, err := nlp.EagleLoss(ctx, head, model, tokens, hidden)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	n, dim := len(tokens), model.Config.Dim
+	feats, err := hidden.Slice(0, 0, n-1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	embs := tensor.New(tensor.F64, tensor.Shape{n - 1, dim})
+	for i := 0; i < n-1; i++ {
+		for d := range dim {
+			embs.SetF64(model.TokEmb.AtF64(tokens[i+1], d), i, d)
+		}
+	}
+	pred, err := head.Predict(ctx, feats.Contiguous(), embs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, err := hidden.Slice(0, 1, n)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var feature float64
+	var hasLinearBranch bool
+	for i := range pred.Numel() {
+		idx := tensor.Unravel(i, pred.Shape())
+		d := pred.AtF64(idx...) - next.AtF64(idx...)
+		a := math.Abs(d)
+		if a <= 1 {
+			feature += 0.5 * d * d
+		} else {
+			feature += a - 0.5
+			hasLinearBranch = true
+		}
+	}
+	feature /= float64(pred.Numel())
+
+	predT, err := pred.Slice(0, 0, n-2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logits, err := backend.Execute(ctx, backend.OpMatMul, []*tensor.Tensor{predT.Contiguous(), model.Head}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targets := tensor.New(tensor.F32, tensor.Shape{n - 2})
+	for i := 0; i < n-2; i++ {
+		targets.SetF64(float64(tokens[i+2]), i)
+	}
+	ce, err := nn.CrossEntropy(ctx, logits[0], targets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := feature + 0.1*ce.AtF64()
+	if math.Abs(got.AtF64()-want) > 1e-12 {
+		t.Fatalf("EagleLoss=%g, SmoothL1+0.1CE reference=%g", got.AtF64(), want)
+	}
+	if !hasLinearBranch {
+		t.Fatal("decisive fixture did not exercise Smooth-L1's linear branch")
+	}
+}
+
+// The EAGLE loss (feature Smooth-L1 + 0.1·token CE through the frozen base Head) at
 // least halves under the library's own frozen-base training loop — gradients
 // flow through Predict and both loss terms into the head parameters.
 func TestEagleHeadTrains(t *testing.T) {

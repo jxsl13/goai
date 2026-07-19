@@ -49,11 +49,18 @@
 //     MambaFromHF and Mamba2FromHF (selective-scan state-space models) and RWKVFromHF
 //     (WKV linear attention). Hybrid: JambaFromHF (interleaved Mamba/NoPE-attention
 //     mixers with MoE/dense FFNs). Encoders: BertFromHF, RobertaFromHF,
-//     DistilBertFromHF; and T5FromHF + T5DecoderFromHF (the full seq2seq
+//     DistilBertFromHF; any of the shared BERT-family models can then become a
+//     persistent Q8 inference model with QuantizeBert (all six projections per
+//     layer stay as byte blocks, while embeddings/biases/norms remain f32); and
+//     T5FromHF + T5DecoderFromHF (the full seq2seq
 //     encoder–decoder). Each anchored bit- or tolerance-exact against transformers,
 //     and each decoder supports generation with its architecture-native serving
-//     mechanics: batched Prefill (one block-stack pass seeds the KV-cache,
-//     bit-identical to stepwise decode), amortized-O(T) KV-cache growth, sparse
+//     mechanics: batched Prefill (one block-stack pass seeds the KV-cache),
+//     incremental Llama.PrefillAppend (exact reuse of a retained prompt prefix) and
+//     LlamaPrefixCache (automatic longest-common-prefix reuse for one sequential slot),
+//     plus LlamaPrefixPool (compressed-radix lookup over a bounded LRU of complete,
+//     salt-isolated sequential-request caches),
+//     all bit-identical to one full/stepwise decode; amortized-O(T) KV-cache growth, sparse
 //     top-k MoE decode, O(1) constant-size state for the recurrent families,
 //     Jamba's hybrid KV+SSM state, and DeepSeek-V2's absorbed-latent cache
 //     (6.7× less KV memory). Weights load from safetensors, from .pt/.bin via the safe
@@ -104,13 +111,22 @@
 //   - Constrained & marked output: regex/FSM-guided constrained decoding and
 //     red/green-list LLM watermarking with statistical detection.
 //   - Accelerated decoding: lossless speculative decoding with a draft model,
-//     draft-model-free prompt-lookup (n-gram), Medusa multi-head drafting
+//     LayerSkip-style self-speculative decoding with an early exit of the same GPT
+//     or Llama-family model (SelfSpeculativeDecode / LlamaSelfSpeculativeDecode; no
+//     second model; the Llama path shares LayerSkip's per-layer KV cache and exit
+//     residuals between draft and verify), draft-model-free prompt-lookup (n-gram),
+//     Medusa multi-head drafting
 //     (trainable MedusaHeads over ForwardHidden + MedusaGenerate with typical
 //     acceptance; MedusaGenerateTree verifies a topK candidate tree in ONE
 //     masked forward; the GPU loop lives in llamagpu), EAGLE feature-level
 //     autoregressive drafting (EagleHead over ForwardHidden + lossless
 //     EagleGenerate), and Jacobi parallel decoding (JacobiDecode /
 //     GPT.JacobiGenerate).
+//   - LayerSkip training: Llama.LayerSkipLoss combines seeded whole-block layer
+//     dropout with the paper's exponential depth/time schedules and rotational,
+//     shared-head early-exit objective. LayerSkipTrainConfig's zero value is the
+//     exact ordinary final-layer cross-entropy path; configured training produces
+//     the early-exit-capable checkpoints consumed by LlamaSelfSpeculativeDecode.
 //   - Long-context inference: attention-sink streaming (StreamGenerate), bounded
 //     KV-cache eviction policies, SnapKV prompt compression, PyramidKV per-layer
 //     cache budgets, an 8-bit quantized KV-cache, and Self-Extend length

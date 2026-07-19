@@ -14,7 +14,8 @@ import (
 // primitive tree attention (Medusa's MedusaTreeMask) and grouped-position
 // schemes (Self-Extend) need; heads/GQA/scale follow AttnAttrs like OpMHA, but
 // causal/window/ALiBi are NOT applied — the mask expresses the structure.
-// A fully-masked row outputs zeros. Inference-only: no VJP is registered.
+// A fully-masked row outputs zeros. OpMHAMaskedBackward provides the VJP used
+// for training, including gradients for a trainable additive mask.
 func mhaMaskedKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
 	if len(in) != 4 {
 		return nil, fmt.Errorf("ref: mha_masked wants (Q,K,V,mask), got %d inputs", len(in))

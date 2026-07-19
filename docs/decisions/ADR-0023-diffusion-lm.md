@@ -1,6 +1,6 @@
 # ADR-0023 — LLaDA-style masked-diffusion language model: design + GO verdict
 
-- Status: Proposed (feasibility spike GO; awaiting user greenlight to implement)
+- Status: Accepted and implemented
 - Date: 2026-07-15
 - Task: §T654(a) (empty-backlog topic-discovery round 4 — the standout gap)
 - Related: `nn/ddpm.go` (continuous diffusion, the sibling this complements), ADR-0022 (Titans; same "does it need new infra?" spike pattern — here the answer is NO)
@@ -36,7 +36,7 @@ spike checked whether GoAI can express it; verdict below.
 - **Blockers: none.** All first-order autograd over existing ops — no new kernels, no new
   VJPs, no second-order (unlike Titans).
 
-## Decision (proposed) — GO, size S/M
+## Decision — GO, implemented at size S/M
 
 Reuse non-causal OpMHA + the GPT-shaped block + OpEmbed-gather CE; add three new pure-Go
 pieces in `nlp/diffusion_lm.go`: DiffusionMask (forward corruption), the masked weighted-CE
@@ -46,5 +46,9 @@ generation matches the grammar), mirroring `nn/newblocks_lm_e2e_test.go`. No bac
 coverage work: the non-causal OpMHA path is already parity-tested on cpu/metal/vulkan
 (verified), so diffusion-LM inherits verified bidirectional attention.
 
-Not started autonomously — this is a user-pick feature (the Titans pattern). The ADR makes
-it implementation-ready on greenlight.
+Implemented on 2026-07-15 in `nlp/diffusion_lm.go`. The shipped validation covers
+the masked objective against a hand reference, mask statistics, all-parameter
+finite-difference gradients, the unmasking schedule, and a trained grammar task
+(eval CE 2.924→0.147). The implementation corrected one spike detail: greedy
+generation ranks confidence by the chosen token's softmax probability; a generic
+sampler-distance score would degenerate under greedy selection.

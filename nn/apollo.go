@@ -61,13 +61,15 @@ type APOLLO struct {
 	st  []*apolloState // per-parameter state (nil until first use)
 }
 
-// apolloState holds one parameter's random projection, low-rank Adam moments and
-// the Norm-Growth Limiter's previous update norm.
+// apolloState holds only the random projection's two-word seed, low-rank Adam
+// moments and the Norm-Growth Limiter's previous update norm. The projection is
+// regenerated from the seed per step, matching the paper's no-matrix-storage claim.
 type apolloState struct {
-	proj [][]float64 // random projection rows P[k] (length = reduced dim)
-	left bool        // true: project rows (m≤n), R=P·G; false: project cols, R=G·Pᵀ
-	m, v []float64   // Adam moments in the auxiliary low-rank (or full, for non-matrix) space
-	prev float64     // ‖previous scaled gradient‖ for the Norm-Growth Limiter (0 = none yet)
+	seed1, seed2 uint64
+	rank         int
+	left         bool      // true: project rows (m≤n), R=P·G; false: project cols, R=G·Pᵀ
+	m, v         []float64 // Adam moments in the auxiliary low-rank (or full, for non-matrix) space
+	prev         float64   // ‖previous scaled gradient‖ for the Norm-Growth Limiter (0 = none yet)
 }
 
 // APOLLOOption configures an APOLLO optimizer (functional-options idiom, §C12).
@@ -144,28 +146,40 @@ func NewAPOLLO(params []*tensor.Tensor, lr float64, seed uint64, opts ...APOLLOO
 	return a
 }
 
-// apolloProjection draws a fresh random Gaussian projection for a [rows,cols]
+// apolloProjection regenerates a Gaussian projection for a [rows,cols]
 // gradient: r rows of N(0, 1/r) entries over the SMALLER dimension, so the sketch
 // R keeps the larger dimension as its channel axis (paper: P[r,m] with m≤n,
 // R = P·G[r,n]; mirrored to R = G·Pᵀ[m,r] when rows>cols). By the
 // Johnson–Lindenstrauss lemma the 1/r-variance draw approximately preserves
 // channel norms, which is all the scaling estimate needs.
-func (a *APOLLO) apolloProjection(rows, cols int) (proj [][]float64, left bool) {
+func apolloProjection(rows, cols, rank int, seed1, seed2 uint64) (proj [][]float64, left bool) {
 	left = rows <= cols
 	d := rows
 	if !left {
 		d = cols
 	}
-	r := min(a.Rank, d)
+	r := min(rank, d)
 	std := 1 / math.Sqrt(float64(r))
+	rng := rand.New(rand.NewPCG(seed1, seed2))
 	proj = make([][]float64, r)
 	for k := range r {
 		proj[k] = make([]float64, d)
 		for i := range d {
-			proj[k][i] = a.rng.NormFloat64() * std
+			proj[k][i] = rng.NormFloat64() * std
 		}
 	}
 	return proj, left
+}
+
+func (a *APOLLO) reseed(st *apolloState, rows, cols int) {
+	st.seed1, st.seed2 = a.rng.Uint64(), a.rng.Uint64()
+	st.rank = min(a.Rank, min(rows, cols))
+	st.left = rows <= cols
+}
+
+func (st *apolloState) projection(rows, cols int) [][]float64 {
+	proj, _ := apolloProjection(rows, cols, st.rank, st.seed1, st.seed2)
+	return proj
 }
 
 // Step applies one APOLLO update. Parameters with a nil gradient are skipped.
@@ -205,20 +219,22 @@ func (a *APOLLO) Step(grad GradFn) error {
 		mat := matAt(gt)
 		rows, cols := p.Shape()[0], p.Shape()[1]
 		if st == nil {
-			proj, left := a.apolloProjection(rows, cols)
-			r := len(proj)
+			st = &apolloState{}
+			a.reseed(st, rows, cols)
+			r := st.rank
 			red := r * cols
-			if !left {
+			if !st.left {
 				red = rows * r
 			}
-			st = &apolloState{proj: proj, left: left, m: make([]float64, red), v: make([]float64, red)}
+			st.m, st.v = make([]float64, red), make([]float64, red)
 			a.st[pi] = st
 		} else if a.Gap > 0 && a.t%a.Gap == 0 {
-			st.proj, st.left = a.apolloProjection(rows, cols) // fresh random draw; keep moments
+			a.reseed(st, rows, cols) // fresh random seed; keep moments
 		}
 
 		// Sketch the gradient (R = P·G or G·Pᵀ) and run Adam on the sketch only.
-		red := galoreProjectDown(mat, st.proj, st.left)
+		proj := st.projection(rows, cols)
+		red := galoreProjectDown(mat, proj, st.left)
 		upd := make([]float64, len(red))
 		for i := range red {
 			st.m[i] = a.Beta1*st.m[i] + (1-a.Beta1)*red[i]
@@ -229,7 +245,7 @@ func (a *APOLLO) Step(grad GradFn) error {
 		// Channel-wise (or tensor-wise for Mini) scaling factors s = ‖Ř‖/‖R‖.
 		// The sketch's channel axis is the larger dim: columns j when left
 		// (red is [r,cols] row-major), rows i otherwise (red is [rows,r]).
-		r := len(st.proj)
+		r := st.rank
 		ratio := func(nUpd, nRaw float64) float64 {
 			if nRaw == 0 {
 				return 0 // zero sketch ⇒ no scaling information; skip the channel

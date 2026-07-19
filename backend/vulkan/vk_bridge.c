@@ -25,6 +25,7 @@ static int              gInitOK    = 0;
 static int              gAtomicFloat = 0; // VK_EXT_shader_atomic_float enabled? (§T90)
 static int              gCoopMat = 0;     // VK_KHR_cooperative_matrix enabled? (Tw-COOPMAT)
 static int              gCoopMat2 = 0;    // VK_NV_cooperative_matrix2 (tensor addressing) enabled?
+static int              gMemoryBudget = 0; // VK_EXT_memory_budget available for T631 placement?
 typedef struct { VkBuffer buf; VkDeviceMemory mem; } ResidentBuf;
 
 // find_compute_queue returns the index of a queue family with COMPUTE, or -1.
@@ -102,11 +103,18 @@ static int attempt_device(VkPhysicalDevice pd) {
     qci.pQueuePriorities = &prio;
 
     // Portability (MoltenVK) needs VK_KHR_portability_subset at device creation; absent elsewhere.
-    const char* devExts[4];
+    const char* devExts[5];
     uint32_t nDevExts = 0;
     if (has_device_ext(pd, "VK_KHR_portability_subset")) {
         devExts[nDevExts++] = "VK_KHR_portability_subset";
     }
+    int memoryBudget = 0;
+#ifdef VK_EXT_memory_budget
+    if (has_device_ext(pd, "VK_EXT_memory_budget")) {
+        devExts[nDevExts++] = "VK_EXT_memory_budget";
+        memoryBudget = 1;
+    }
+#endif
     // VK_EXT_shader_atomic_float: float atomicAdd for the MHA-backward dK/dV accumulation (§T90).
     VkPhysicalDeviceShaderAtomicFloatFeaturesEXT atomicFeat = {0};
     atomicFeat.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT;
@@ -186,6 +194,7 @@ static int attempt_device(VkPhysicalDevice pd) {
     gAtomicFloat = atomic;
     gCoopMat = coop;
     gCoopMat2 = coop2;
+    gMemoryBudget = memoryBudget;
     vkGetDeviceQueue(gDevice, gQueueFamily, 0, &gQueue);
     return 0;
 }
@@ -248,6 +257,28 @@ static int ensure_init(void) {
 }
 
 int vk_available(void) { return ensure_init() == 0 ? 1 : 0; }
+
+unsigned long long vk_available_memory(void) {
+#ifdef VK_EXT_memory_budget
+    if (ensure_init() != 0 || !gMemoryBudget) return 0;
+    VkPhysicalDeviceMemoryBudgetPropertiesEXT budget = {0};
+    budget.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT;
+    VkPhysicalDeviceMemoryProperties2 props = {0};
+    props.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2;
+    props.pNext = &budget;
+    vkGetPhysicalDeviceMemoryProperties2(gPhys, &props);
+    uint64_t freeB = 0;
+    for (uint32_t i = 0; i < props.memoryProperties.memoryHeapCount; ++i) {
+        if (!(props.memoryProperties.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)) continue;
+        if (budget.heapBudget[i] > budget.heapUsage[i]) {
+            freeB += budget.heapBudget[i] - budget.heapUsage[i];
+        }
+    }
+    return (unsigned long long)freeB;
+#else
+    return 0;
+#endif
+}
 
 // vk_atomic_float reports whether the device enabled VK_EXT_shader_atomic_float
 // (required by the MHA-backward kernel's shared dK/dV accumulation, §T90).
