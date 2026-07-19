@@ -130,7 +130,13 @@ for step := 0; step < 150; step++ {
   (**1.81×**, 97% acceptance), lossless prompt-lookup (**1.80×**), draft-model
   speculative decoding, tree-Medusa (candidate trees verified in ONE masked
   forward), Jacobi decoding, Self-Extend (4× the training length, no
-  fine-tuning). Numbers and method: [`docs/benchmarking.md`](docs/benchmarking.md),
+  fine-tuning), and LayerSkip self-speculative decoding — one model drafts
+  from its own early exit and verifies with its full depth, losslessly, with
+  the paper's training curriculum and a shared draft/verify KV cache
+  (**1.83×** per window). Prompt-prefix caching serves repeated or shared
+  prompts by recomputing only the new suffix (**7.13×** prefill latency),
+  with a salted multi-request pool for tenant isolation. Numbers and method:
+  [`docs/benchmarking.md`](docs/benchmarking.md),
   [`docs/inference.md`](docs/inference.md).
 - **Interpretability — see what a model is "thinking"**: a pure-Go port of
   Anthropic's **Jacobian lens / J-space** (2026): fit per-layer expected

@@ -1,4 +1,4 @@
-# Inference on trained models: measured findings (§T472–§T477, §T504–§T513)
+# Inference on trained models: measured findings (§T472–§T477, §T504–§T513, §T869–§T878)
 
 > **In plain terms:** "inference" is using a trained model to generate text.
 > This page lists what GoAI's generation features (faster decoding tricks,
@@ -32,6 +32,20 @@ CPU backend in ~3s), so every number re-derives with the full suite; all tests a
 | Self-Extend extrapolates length with NO fine-tuning | trained only on 32-token windows, evaluated at 4×: plain CE 0.316→1.488 beyond training length; Self-Extend (w=8, G=8) holds 0.515 | `llamagpu/self_extend_trained_test.go` |
 | Self-Extend stays nearly FLAT out to 8× | extension curve, far-half CE at 2×/4×/8× training length: plain 0.91→1.95→2.40 (marching toward uniform ≈2.9); Self-Extend (w=8, G per length) 0.57→0.68→0.70 | `llamagpu/self_extend_curve_test.go` |
 | Self-Extend GENERATION stays coherent at 4× | far-half windowed surprise of generated text: Self-Extend 0.50 (≈ trained level) vs plain greedy 2.30 (degenerated) | `llamagpu/self_extend_trained_test.go` |
+| LayerSkip self-speculation is lossless — one model drafts against itself | drafting from an early exit of the SAME model, verified by the full model: greedy output token-for-token equal to plain `Generate`, at every draft depth | `nlp/llama_self_speculative_test.go` |
+| LayerSkip early exits need the paper's training curriculum | layer-dropout + early-exit loss (`D(l)=2^(l/(L-1))-1`, Eq. 5/6 rotation) trains a Llama's early exit from CE 1.985 to 0.076; untrained early exits draft poorly by design | `nlp/layerskip_train_test.go` |
+| Sharing one KV cache between draft and verify pays | asymmetric per-layer draft/verify cache + saved exit residuals: median **1.83×** per-window latency vs the reference self-speculative driver, with logits, every K/V cell and the sampled tokens bit-exact | `nlp/llama_layerskip_decode_internal_test.go` |
+
+**Serving-side latency seams** (speed numbers live in
+[`benchmarking.md`](benchmarking.md)): `Llama.PrefillAppend` reuses an
+already-computed prompt KV prefix and batches only the new suffix (median
+**7.13×** prefill latency on a 96-shared/8-new split), `NewLlamaPrefixCache`
+does that matching automatically for one slot, and `NewLlamaPrefixPool` is
+the bounded multi-request version — token-exact longest-prefix matching via a
+compressed radix index, LRU eviction, and a cache *salt* that isolates
+tenants (requests only ever reuse a prefix carrying their own salt, the
+vLLM/SGLang isolation policy). All three are bit-exact against a full
+prefill: they change *when* work happens, never *what* is computed.
 
 ## Sharpened understandings
 
@@ -71,5 +85,7 @@ CPU backend in ~3s), so every number re-derives with the full suite; all tests a
 
 - Pope et al. 2022, *Efficiently Scaling Transformer Inference* — the systems view (batching, memory, latency ceilings) behind these measurements.
 - Leviathan, Kalman & Matias 2023, *Fast Inference from Transformers via Speculative Decoding* — the lossless acceptance math all speculative paths here implement.
+- Elhoushi et al. 2024, *LayerSkip: Enabling Early Exit Inference and Self-Speculative Decoding* (arXiv:2404.16710) — the training curriculum, self-drafting and shared-cache design behind the LayerSkip rows (§R262–§R265).
+- Zheng et al. 2024, *SGLang: Efficient Execution of Structured Language Model Programs* — RadixAttention, the industry mirror of the prefix-reuse seam (§R266–§R268).
 - Kwon et al. 2023, *Efficient Memory Management for LLM Serving with PagedAttention* — the serving-side counterpart deliberately out of scope here (SPEC ADR-0020).
 - Jurafsky & Martin, *Speech and Language Processing* (3rd ed. draft) — the textbook grounding for decoding and language modeling generally.
