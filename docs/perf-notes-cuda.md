@@ -41,7 +41,7 @@ Reinforced 13× in our logs, every time it was skipped it cost a wasted build:
   The decode e2e floor is the weight read; attention/norms/rope/sampling are single-digit-%
   slices at typical sizes, so a 1.16–2.3× on them can dilute to ~0 e2e. Measure the full
   decode step, not just the kernel — the honest number is often "kernel win, e2e-neutral,
-  matters only at <regime>". See §8.
+  matters only at `<regime>`". See §8.
 
 ---
 
@@ -195,7 +195,7 @@ vector, a huge weight matrix). Rules, strongest first:
   gated by the K/V SHARED-TILE size (§Tw81–84).** The single-query flash kernel
   (`gqa_flash_partial`) sat at 35–50% of peak — occupancy-bound, not BW-bound (achieved
   GB/s *rose* with more KV bytes; halving bytes via f16-KV did NOT speed it up). Root
-  cause: a 32-row K+V shared tile (~33 KB) pins ~1 block/SM on the 48 KB budget. Levers,
+  cause: a 32-row K+V shared tile (≈33 KB) pins ≈1 block/SM on the 48 KB budget. Levers,
   all bit-exact: **f16-KV path** — stage K/V in shared as raw `u16` (they're already f16
   in the cache) instead of converting to f32 → tile halves to ~16 KB → 2 blocks/SM
   (186→142 µs, 1.31×). **f32 path** — can't use u16, so use a **16-row tile** (2
@@ -212,7 +212,7 @@ vector, a huge weight matrix). Rules, strongest first:
   reimplemented; no `cuda_fp16.h` needed). Rule: a hand-rolled convert only matters on a
   *per-element* hot path in a *compute/latency-bound* kernel — audit those (`cvt.f32.f16`,
   `cvt.rn.f16.f32`), skip the BW-bound per-block ones (the quant GEMVs' branchless `f16f`
-  is already ~4 instrs and BW-bound → swapping it gave ~0 wall-time).
+  is already ≈4 instrs and BW-bound → swapping it gave ≈0 wall-time).
 
 ---
 
@@ -227,7 +227,7 @@ vector, a huge weight matrix). Rules, strongest first:
   warp-specialized 64×128 int8 GEMM (4 producer + 8 consumer warps) came in ~16%
   *slower* than a modest ldmatrix tile — sm_86's limited registers/shared cap
   occupancy, and every big-tile variant we tried lost. The hand-NVRTC int8 GEMM
-  ceiling is ~22–23 TOPS (beats cuBLAS-f16 by ~7%, ~22% of int8 peak); the 2×
+  ceiling is ≈22–23 TOPS (beats cuBLAS-f16 by ≈7%, ≈22% of int8 peak); the 2×
   needs CUTLASS-level ptxas tuning we can't reach from NVRTC. **On sm_86, prefer
   smaller tiles + higher occupancy over big tiles + reuse.** (This is the practical
   face of Volkov, GTC 2010, *"Better Performance at Lower Occupancy"*: occupancy

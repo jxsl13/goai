@@ -321,8 +321,12 @@ tests are green; compute-bound and graph-resident GPU paths remain unchanged.
 have failed:
 
 ```go
-if math.IsNaN(...) || d > maxAbs { maxAbs = d }   // maxAbs becomes NaN
-if maxAbs > 2e-3 { t.Fatalf(...) }                 // NaN > 2e-3 is FALSE
+if math.IsNaN(d) || d > maxAbs {
+	maxAbs = d // maxAbs becomes NaN
+}
+if maxAbs > 2e-3 {
+	t.Fatalf("diverged") // NaN > 2e-3 is FALSE — never reached
+}
 ```
 
 An all-NaN GPU output PASSED, and the NaN was STICKY — once `maxAbs` is NaN every later
@@ -987,7 +991,7 @@ serving-hot-path win. Measured, it is not a win at all.
 `rowLogits` already has typed fast paths, so the cost is allocation and memory traffic
 rather than per-element dispatch — confirmed by the F64 arm running level with the F32 one,
 meaning nothing is saved by skipping the widening conversion. Against a real decode step the
-ratio is ~0.02% at the 1000-entry benchmark vocabulary (1.4 µs vs 6.1 ms/token) and ~0.1%
+ratio is ≈0.02% at the 1000-entry benchmark vocabulary (1.4 µs vs 6.1 ms/token) and ≈0.1%
 at Gemma scale, because a forward pass through the model dwarfs one linear pass over its
 output row. No change shipped, per §C3.
 
@@ -1058,7 +1062,7 @@ The DIAGNOSIS WAS WRONG and that is the durable lesson: the sweep (and the repo'
 per-element-`AtF64` heuristic) blamed interface dispatch, but a dispatch-free pure-Go control
 measured only ~24% of the cost. The transpose's 1 MB write stride — one TLB entry per element
 — was the real dominant term. Removing the dispatch alone yielded a disappointing 1.2×; cache
-tiling produced the rest (~1.3× dispatch, ~4.4× tiling). A naive "remove AtF64" fix would have
+tiling produced the rest (≈1.3× dispatch, ≈4.4× tiling). A naive "remove AtF64" fix would have
 been near-worthless churn. Remaining headroom (6.8 GB/s vs DRAM) is deliberately left: this is
 a once-per-model-load cost.
 
@@ -1796,7 +1800,7 @@ stashing during the T793 verification); recorded as §B65.
 ### backend/cpu — perf: latency-aware worker pool + GEMV column-split — 1.68× decode (T793, 2026-07-17)
 
 A CPU profile showed single-token decode dominated by pool synchronization (54% `pthread_cond_signal`
-+ 17% wait, compute ~8%): the only decode-path pool dispatcher was the MHA kernel, whose ~2µs chunks
++ 17% wait, compute ≈8%): the only decode-path pool dispatcher was the MHA kernel, whose ≈2µs chunks
 paid ~100µs cold-wake costs (the T617 threshold was calibrated on a warm pool), and the m=1 GEMVs —
 the actual compute bulk — didn't parallelize at all (the row-band split degenerates at one row). Two
 changes: (1) `gemvF64Cols` parallelizes single-row f64 matmuls over output columns with the identical
@@ -2273,7 +2277,7 @@ transformers `Olmo2ForCausalLM`: max abs logit diff 3.9e-8; KV-decode matches Fo
 ### cuda — perf: default (f32) decode attention 1.16–1.52× via 16-row shared tile (Tw84, 2026-07-16)
 
 The DEFAULT decode path (f32 KV cache → `gqa_flash_partial`) was occupancy-bound at 128–178 GB/s —
-the same 32-row K+V shared tile (~33KB) that pinned ~1 block/SM in the f16 case, but here the tile is
+the same 32-row K+V shared tile (≈33KB) that pinned ≈1 block/SM in the f16 case, but here the tile is
 genuinely f32 so the u16/`cvt` tricks don't apply. The one lever that does: halve the tile to **16
 rows** (~20KB → 2 blocks/SM). Bit-exact (`gqa_flash_partial` numerics unchanged — just 16-key
 sub-chunks). Measured (RTX 3060): gqa8/ctx2048 128→149 GB/s (1.16×), gqa8/ctx4096 146→169,
@@ -2432,7 +2436,7 @@ architectures now number nine (GPT-2, Llama, Qwen2, Phi-3, BERT, RoBERTa, Distil
   tests pass). Measured on RTX 3060: IQ3 2048² 32263 → **21574 ns (~1.5×)**, 5632×2048 85582 →
   57995 ns; IQ2_XXS 2048² ~24238 ns.
 - This is **not diluted** like an ordinary GEMV micro-opt: an i-quant model runs *every* projection
-  through this kernel, so ~1.5× kernel ≈ ~1.5× decode — and i-quants are exactly the extreme quant
+  through this kernel, so ≈1.5× kernel ≈ ≈1.5× decode — and i-quants are exactly the extreme quant
   that lets a big model fit a 12 GB card. IQ1 (64 KB grid, needs the sm_86 >48 KB opt-in) is the follow-up.
 
 ### nlp — feat: Gemma (v1) support — 8th loadable architecture (T742, 2026-07-16)
@@ -3190,7 +3194,7 @@ foundational architectures were still absent. Both compose on existing `nn.*` la
   probes:
 - **int8 via cublas — rejected (Tw60).** `cublasGemmEx` int8 (`COMPUTE_32I`) gives only +5-8%
   over f16; `cublasLt` with heuristic algo selection is the same (+32% qkv, −9% gate/up). Both
-  cap int8 at ~24 TOPS ≈ 23% of the 3060's int8 peak, while f16 already runs at ~88% of *its*
+  cap int8 at ≈24 TOPS ≈ 23% of the 3060's int8 peak, while f16 already runs at ≈88% of *its*
   peak. cublas can't deliver int8 2× on GA106 for prefill shapes — llama.cpp's int8 lead needs
   custom MMQ kernels (deferred). The cublasLt scaffolding was discarded.
 - **f16 accumulate — the win (Tw61).** GeForce/GA106 runs FP32-accumulate tensor ops at *half*

@@ -29,7 +29,7 @@ The obvious remedy is to add `go vet -tags cuda ./llamagpu/` and `go vet -tags v
 `go vet -tags cuda ./llamagpu/` **succeeds on darwin and verifies nothing.** The cuda test
 files are:
 
-```go
+```text
 //go:build cuda && cgo && (linux || windows)
 ```
 
