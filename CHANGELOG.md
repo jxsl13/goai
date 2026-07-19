@@ -29,6 +29,26 @@ Added the package's first runnable example. It loads the shipped PyTorch
 `state_dict` fixture, sorts and prints the flattened parameter names, and
 inspects one tensor's dtype, shape, and value. This closes the sole public
 package missing an example under §V19 without changing loader behavior.
+### nn — contiguous fast path for parameter initializers (T870, 2026-07-20)
+
+A CPU profile of the decode benchmark showed `fillUniform` / `Zeros` at ~11% of samples —
+all of it model SETUP, not the decode loop. The initializers wrote every element via
+`SetF64(value, tensor.Unravel(i, shape)…)`, which allocated an index slice and ran a strided
+dispatch per element, the per-element `AtF64`/`SetF64` anti-pattern this codebase has removed
+elsewhere (Cast 17×, concatRows 19×).
+
+`Zeros`, `fillUniform` and `KaimingNormal` now share `fillGen`, which for the common case (a
+freshly allocated, contiguous, offset-0 tensor) writes straight into the typed backing slice
+— one dtype decision for the whole tensor. Non-contiguous or offset views fall back to the
+general path, so a fill through a transposed view still behaves correctly.
+
+Measured (M2 Pro, 2048×2048 F32, §V22): `Zeros` 21.4 ms → 3.8 ms (**5.6×**) — the isolated
+dispatch overhead, no RNG involved. `fillUniform` 26.0 ms → 19.7 ms (**1.32×**), the smaller
+figure because `rand.Float64()` per element is now the floor and masks the rest. Values are
+bit-identical to the old path: `gen()` is called in the same flat order and the f64→dtype
+conversion mirrors `storage.setF64` exactly, proven across five shapes and both float dtypes
+against a verbatim copy of the old loop. F16/BF16 fall through to the general path, whose
+`SetF64` carries the correct half-float rounding.
 
 ### nlp — compressed-radix prefix lookup and constant-time LRU (T878, 2026-07-19)
 

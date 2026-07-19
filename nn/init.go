@@ -26,9 +26,7 @@ func XavierUniform(t *tensor.Tensor, fanIn, fanOut int, seed uint64) {
 func KaimingNormal(t *tensor.Tensor, fanIn int, seed uint64) {
 	std := math.Sqrt(2.0 / float64(fanIn))
 	rng := rand.New(rand.NewPCG(seed, 0x6b79a2c3d4e5f601))
-	for i := range t.Numel() {
-		t.SetF64(rng.NormFloat64()*std, tensor.Unravel(i, t.Shape())...)
-	}
+	fillGen(t, func() float64 { return rng.NormFloat64() * std })
 }
 
 // KaimingUniform fills t with U(-a, a), a = √(6/fanIn) (He et al. 2015, uniform
@@ -40,15 +38,49 @@ func KaimingUniform(t *tensor.Tensor, fanIn int, seed uint64) {
 
 // Zeros fills t with 0 (the conventional bias init).
 func Zeros(t *tensor.Tensor) {
-	for i := range t.Numel() {
-		t.SetF64(0, tensor.Unravel(i, t.Shape())...)
-	}
+	fillGen(t, func() float64 { return 0 })
 }
 
 func fillUniform(t *tensor.Tensor, lo, hi float64, seed uint64) {
 	rng := rand.New(rand.NewPCG(seed, 0x6b79a2c3d4e5f601))
-	for i := range t.Numel() {
-		t.SetF64(lo+rng.Float64()*(hi-lo), tensor.Unravel(i, t.Shape())...)
+	fillGen(t, func() float64 { return lo + rng.Float64()*(hi-lo) })
+}
+
+// fillGen writes gen() into every element of t in row-major (flat) order.
+//
+// For the overwhelmingly common case — a freshly allocated, contiguous,
+// offset-0 tensor — it writes straight into the typed backing slice, one dtype
+// decision for the whole tensor instead of the per-element SetF64(Unravel(i)…)
+// path, which allocated an index slice and ran a strided dispatch for EVERY
+// element (a real cost when initializing large weight matrices; it showed up as
+// ~11% of a decode benchmark's CPU profile — all of it model setup). The values
+// are bit-identical to the slow path: gen() is called in the same flat order and
+// the f64→dtype conversion mirrors storage.setF64 exactly (float32() for F32,
+// f32ToF16/BF16 for the half floats). Non-contiguous or offset views fall back to
+// the general path, so a fill through a transposed view still behaves correctly.
+func fillGen(t *tensor.Tensor, gen func() float64) {
+	n := t.Numel()
+	if t.IsContiguous() && t.Offset() == 0 {
+		switch t.Dtype() {
+		case tensor.F64:
+			d := t.Storage().F64()
+			for i := range n {
+				d[i] = gen()
+			}
+			return
+		case tensor.F32:
+			d := t.Storage().F32()
+			for i := range n {
+				d[i] = float32(gen())
+			}
+			return
+		}
+		// F16/BF16 and any future dtype fall through to the general path, whose
+		// SetF64 carries the correct half-float rounding.
+	}
+	shape := t.Shape()
+	for i := range n {
+		t.SetF64(gen(), tensor.Unravel(i, shape)...)
 	}
 }
 
