@@ -4,6 +4,12 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### docs — unique task identities (T898, 2026-07-20)
+
+Removed eight duplicated SPEC task rows and resolved a merged T870 collision:
+Llama LayerSkip keeps T870, while the parameter-initializer fast path is now
+T897. Only documentation identifiers and their exact references changed.
+
 ### format/safetensors — sharding-option example (T895, 2026-07-20)
 
 The runnable sharded-checkpoint example now shows a reusable `ShardOption`
@@ -29,7 +35,7 @@ Added the package's first runnable example. It loads the shipped PyTorch
 `state_dict` fixture, sorts and prints the flattened parameter names, and
 inspects one tensor's dtype, shape, and value. This closes the sole public
 package missing an example under §V19 without changing loader behavior.
-### nn — contiguous fast path for parameter initializers (T870, 2026-07-20)
+### nn — contiguous fast path for parameter initializers (T897, 2026-07-20)
 
 A CPU profile of the decode benchmark showed `fillUniform` / `Zeros` at ~11% of samples —
 all of it model SETUP, not the decode loop. The initializers wrote every element via

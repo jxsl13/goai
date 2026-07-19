@@ -8,7 +8,7 @@ import (
 	"github.com/jxsl13/goai/tensor"
 )
 
-// slowFillUniform is the verbatim pre-T870 per-element path, kept here as the
+// slowFillUniform is the verbatim pre-T897 per-element path, kept here as the
 // bit-identity oracle: the fast path must reproduce it exactly (seeded, §V13).
 func slowFillUniform(t *tensor.Tensor, lo, hi float64, seed uint64) {
 	rng := rand.New(rand.NewPCG(seed, 0x6b79a2c3d4e5f601))
