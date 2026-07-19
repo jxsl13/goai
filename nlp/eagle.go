@@ -272,10 +272,12 @@ func eagleSmoothL1(ctx *backend.Context, pred, target *tensor.Tensor) (*tensor.T
 	if err != nil {
 		return nil, err
 	}
-	one := tensor.New(pred.Dtype(), pred.Shape())
-	for i := range one.Numel() {
-		one.SetF64(1, tensor.Unravel(i, one.Shape())...)
-	}
+	// Constant-1 tensor for |d|−1. tensor.Ones fills the typed backing slice directly
+	// (its fill helper is dtype-switched over the contiguous storage), which is
+	// bit-identical to the old per-element SetF64(1) loop for every dtype — the value 1
+	// narrows to exactly 1 in F32/F64/F16/BF16. eagleSmoothL1 runs on the EAGLE training
+	// forward for every step, so the strided per-element fill was a real cost.
+	one := tensor.Ones(pred.Dtype(), pred.Shape())
 	excess, err := exec1(ctx, backend.OpSub, nil, a, one)
 	if err != nil {
 		return nil, err

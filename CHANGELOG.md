@@ -59,6 +59,31 @@ same sweep verified every README quickstart symbol against the source — no
 API drift found.
 
 ### nn — contiguous fast path for parameter initializers (T879, formerly booked as duplicate id T870; 2026-07-20)
+### perf — per-element hot-loop fast paths, batch 1 (T895, 2026-07-20)
+
+The T870 contiguous-typed-slice pattern applied to four more per-element loops a profiler and
+a directed sweep found, each measured and each bit-identical to the old path (verbatim-oracle
+`Float64bits` equality, plus gradcheck where it is a VJP).
+
+- `autograd/vjp_reshape.go` (training BACKWARD path, every reshape/flatten/head-split): the
+  per-element cotangent copy becomes one typed `copy()` when the cotangent is contiguous and
+  offset-0 — a fresh alloc, not a view, preserving the old un-aliased ownership. Measured
+  ~17× (F32) / ~15× (F64) here; non-contiguous cotangents and F16/BF16 fall through.
+  `TestReshapeGradcheck` (finite-difference) confirms gradients are untouched.
+- `nn/sam.go` `SAM.Step`: the lone remaining raw per-element optimizer loop (three elementwise
+  transforms) now grabs the typed slice once, matching every devirtualized sibling. 8.8×
+  (F64/F32), bit-identical over 6 steps across F64/F32 × contiguous/transposed.
+- `nlp/quant_llama.go` `f32Clone`: the F64→F32 cast of the token-embedding table and every
+  norm/bias gain at quantization time — 40× (F32) / 11× (F64). Load-time, not steady-state;
+  reported honestly as such.
+- `nlp/eagle.go` `eagleSmoothL1`: a per-step full-tensor ones-fill replaced with
+  `tensor.Ones` (already dtype-switched), 9.2×; `TestEagleHeadGradcheck` (max rel err 6.4e-10)
+  unchanged.
+
+Four optimizer files (`optim.go`, `adammini.go`, `mars.go`, `psgd.go`) and `autograd/vjp_cv.go`,
+`autograd/anomaly.go` were confirmed already optimal (T652/T653/T463) and left untouched.
+
+### nn — contiguous fast path for parameter initializers (T870, 2026-07-20)
 
 A CPU profile of the decode benchmark showed `fillUniform` / `Zeros` at ~11% of samples —
 all of it model SETUP, not the decode loop. The initializers wrote every element via

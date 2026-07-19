@@ -85,6 +85,21 @@ func (s *SAM) Step(grads func() (GradFn, error)) error {
 		if g == nil {
 			continue
 		}
+		// Typed fast paths (contiguous f64/f32): flat L2 accumulation in float64,
+		// exactly the arithmetic (and flat order) of the generic widening path.
+		if gf := flatF64(g); gf != nil {
+			for _, v := range gf {
+				sumsq += v * v
+			}
+			continue
+		}
+		if gf := flatF32(g); gf != nil {
+			for _, gv := range gf {
+				v := float64(gv)
+				sumsq += v * v
+			}
+			continue
+		}
 		for i := range p.Numel() {
 			v := g.AtF64(tensor.Unravel(i, p.Shape())...)
 			sumsq += v * v
@@ -94,16 +109,39 @@ func (s *SAM) Step(grads func() (GradFn, error)) error {
 	// ascend to w_adv = w + ρ·g/‖g‖, saving the perturbation to undo it after the second grad
 	for pi, p := range s.Params {
 		g := gs[pi]
+		pert := s.pert[pi]
 		if g == nil {
-			for i := range s.pert[pi] {
-				s.pert[pi][i] = 0 // no perturbation for a nil-grad param this step
+			for i := range pert {
+				pert[i] = 0 // no perturbation for a nil-grad param this step
 			}
 			continue
 		}
+		// Typed fast paths (contiguous f64/f32 param+grad pairs): flat ascend saving the
+		// perturbation, all arithmetic in float64 exactly as the generic path computes it.
+		if pf := flatF64(p); pf != nil {
+			if gf := flatF64(g); gf != nil {
+				for i, gv := range gf {
+					e := scale * gv
+					pert[i] = e
+					pf[i] += e
+				}
+				continue
+			}
+		} else if pf := flatF32(p); pf != nil {
+			if gf := flatF32(g); gf != nil {
+				for i := range gf {
+					e := scale * float64(gf[i])
+					pert[i] = e
+					pf[i] = float32(float64(pf[i]) + e)
+				}
+				continue
+			}
+		}
+		// Generic fallback: any dtype/layout via the widening accessors.
 		for i := range p.Numel() {
 			idx := tensor.Unravel(i, p.Shape())
 			e := scale * g.AtF64(idx...)
-			s.pert[pi][i] = e
+			pert[i] = e
 			p.SetF64(p.AtF64(idx...)+e, idx...)
 		}
 	}
@@ -115,9 +153,21 @@ func (s *SAM) Step(grads func() (GradFn, error)) error {
 	// restore w (subtract the saved perturbation; 0 for skipped params → no-op), then let the base
 	// optimizer take its step using the sharpness-aware gradient g2
 	for pi, p := range s.Params {
-		for i := range p.Numel() {
-			idx := tensor.Unravel(i, p.Shape())
-			p.SetF64(p.AtF64(idx...)-s.pert[pi][i], idx...)
+		pert := s.pert[pi]
+		// Typed fast paths (contiguous f64/f32): flat restore, exact generic arithmetic.
+		if pf := flatF64(p); pf != nil {
+			for i := range pf {
+				pf[i] -= pert[i]
+			}
+		} else if pf := flatF32(p); pf != nil {
+			for i := range pf {
+				pf[i] = float32(float64(pf[i]) - pert[i])
+			}
+		} else {
+			for i := range p.Numel() {
+				idx := tensor.Unravel(i, p.Shape())
+				p.SetF64(p.AtF64(idx...)-pert[i], idx...)
+			}
 		}
 	}
 	return s.Base.Step(g2)

@@ -263,10 +263,33 @@ func f32CloneIf(t *tensor.Tensor) *tensor.Tensor {
 
 // f32Clone copies a tensor into a fresh F32 tensor of the same shape (quantized inference runs
 // in f32, which also engages the f32-only accelerators).
+//
+// A contiguous, offset-0 source reads straight from its typed backing slice instead of the
+// per-element AtF64(Unravel(i)…) path (an index-slice allocation plus a strided dispatch for
+// EVERY element). This is bit-identical to the accessor path — float32(float64(v)) round-trips
+// exactly for an F32 source, and an F64 source narrows exactly as AtF64→float32 does. f32Clone
+// converts the (often large) token-embedding table and every RMSNorm/bias gain at quantization
+// time, so the loop showed up as model-load latency; this mirrors nn.fillGen's contiguous
+// setup fast path. F16/BF16 sources and any non-contiguous view fall through to the general
+// accessor (whose widening carries the correct half-float rounding).
 func f32Clone(t *tensor.Tensor) *tensor.Tensor {
 	out := tensor.New(tensor.F32, t.Shape())
 	dst := out.Storage().F32()
-	for i := range t.Numel() {
+	n := t.Numel()
+	if t.IsContiguous() && t.Offset() == 0 {
+		switch t.Dtype() {
+		case tensor.F32:
+			copy(dst, t.Storage().F32()[:n])
+			return out
+		case tensor.F64:
+			src := t.Storage().F64()
+			for i := range n {
+				dst[i] = float32(src[i])
+			}
+			return out
+		}
+	}
+	for i := range n {
 		dst[i] = float32(t.AtF64(tensor.Unravel(i, t.Shape())...))
 	}
 	return out
