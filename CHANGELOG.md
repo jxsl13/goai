@@ -4,6 +4,12 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### backend — loss-reduction example (T894, 2026-07-20)
+
+Added a runnable `Reduction` example that executes mean, sum, and per-row
+cross-entropy on the same input. It shows both the PyTorch-compatible names
+and the scalar-versus-vector output contract without changing backend logic.
+
 ### autograd — advanced control examples (T893, 2026-07-20)
 
 Added runnable examples for explicit-cotangent vector-Jacobian products and

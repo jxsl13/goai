@@ -41,6 +41,35 @@ func ExampleAvailable() {
 	// Output: cpu present: true
 }
 
+// Reduction controls whether a batch of per-row losses is averaged, summed,
+// or returned intact. Mean and sum therefore produce one scalar; none keeps
+// one value per input row so callers can apply their own weighting or mask.
+// String uses the same names as PyTorch's reduction argument.
+func ExampleReduction() {
+	ctx := backend.NewContext()
+	logits := tensor.FromFloat64(tensor.Shape{2, 2}, []float64{2, 0, 0, 2})
+	targets := tensor.FromFloat64(tensor.Shape{2}, []float64{0, 1})
+	reductions := []backend.Reduction{
+		backend.ReductionMean,
+		backend.ReductionSum,
+		backend.ReductionNone,
+	}
+
+	for _, reduction := range reductions {
+		out, err := backend.Execute(ctx, backend.OpCrossEntropy,
+			[]*tensor.Tensor{logits, targets},
+			backend.CrossEntropyAttrs{Reduction: reduction})
+		if err != nil {
+			panic(err)
+		}
+		fmt.Printf("%s: %v\n", reduction.String(), out[0].Shape())
+	}
+	// Output:
+	// mean: ()
+	// sum: ()
+	// none: (2)
+}
+
 // --- Level 3: embedded — a real matmul on the auto-selected backend ----------
 
 // End to end with zero configuration: build tensors and run a matmul. It executes
