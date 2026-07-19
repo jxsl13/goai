@@ -27,6 +27,20 @@
 #include <stdlib.h>
 #include <string.h> // strstr — GPU-class name check (cu_gpu_is_geforce)
 #include <stdio.h>
+#include <stdatomic.h> // gLiveBufs — caller-owned device-buffer leak counter
+
+// gLiveBufs counts caller-owned device buffers (those returned to Go and freed via cu_free_f32)
+// currently outstanding. Every such allocator routes its result through track(); cu_free_f32
+// decrements. A balanced workload returns this to its starting value — the deterministic hook
+// the Go leak tests assert on (an unbalanced alloc/free = a cgo leak, independent of the CUDA
+// mempool's caching, which cudaMemGetInfo cannot see through). Internal scratch (freed inside
+// the same C call, never handed to Go) never touches it.
+static atomic_long gLiveBufs = 0;
+static void* track(void* d) {
+    if (d) atomic_fetch_add_explicit(&gLiveBufs, 1, memory_order_relaxed);
+    return d;
+}
+long cu_live_bufs(void) { return atomic_load_explicit(&gLiveBufs, memory_order_relaxed); }
 
 static pthread_mutex_t gLock = PTHREAD_MUTEX_INITIALIZER;
 static cublasHandle_t gHandle = NULL;
@@ -1502,7 +1516,7 @@ void* cu_upload_f32(const float* src, int n) {
     }
 done:
     pthread_mutex_unlock(&gLock);
-    return d;
+    return track(d);
 }
 
 // cu_zero_f32 zeroes n floats on the stream (fixed-size KV cache init so masked
@@ -1528,7 +1542,7 @@ void* cu_alloc_u16(int n) {
         if (cudaMallocAsync(&d, (size_t)n * sizeof(unsigned short), gStream) != cudaSuccess) d = NULL;
     }
     pthread_mutex_unlock(&gLock);
-    return d;
+    return track(d);
 }
 
 int cu_zero_u16(void* d, int n) {
@@ -1544,6 +1558,7 @@ done:
 
 void cu_free_f32(void* dptr) {
     if (!dptr) return;
+    atomic_fetch_sub_explicit(&gLiveBufs, 1, memory_order_relaxed);
     pthread_mutex_lock(&gLock);
     cudaFreeAsync(dptr, gStream);
     pthread_mutex_unlock(&gLock);
@@ -1593,7 +1608,7 @@ void* cu_alloc_f32(int n) {
         if (cudaMallocAsync(&d, (size_t)n * sizeof(float), gStream) != cudaSuccess) d = NULL;
     }
     pthread_mutex_unlock(&gLock);
-    return d;
+    return track(d);
 }
 
 // cu_upload_i32 copies n int32 to a fresh device buffer (token ids for embed).
@@ -1610,7 +1625,26 @@ void* cu_upload_i32(const int* src, int n) {
     }
 done:
     pthread_mutex_unlock(&gLock);
-    return d;
+    return track(d);
+}
+
+// cu_upload_i32_async: same as cu_upload_i32 but skips cudaStreamSynchronize. The pageable H2D
+// copy is host-blocking (source consumed before return) and the buffer is read only by later
+// gStream ops, so no device sync is needed for correctness — removing it saves a full device
+// round-trip per call (a decode step that uploads its block table per layer paid 22 of these).
+void* cu_upload_i32_async(const int* src, int n) {
+    void* d = NULL;
+    size_t sz = (size_t)n * sizeof(int);
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { goto done; }
+    if (cudaMallocAsync(&d, sz, gStream) != cudaSuccess) { d = NULL; goto done; }
+    if (cudaMemcpyAsync(d, src, sz, cudaMemcpyHostToDevice, gStream) != cudaSuccess) {
+        cudaFreeAsync(d, gStream);
+        d = NULL;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return track(d);
 }
 
 // cu_embed_f32: out[i,:] = table[ids[i],:] — the input embedding row gather. One
@@ -1661,7 +1695,7 @@ void* cu_upload_i8(const signed char* src, int n) {
     }
 done:
     pthread_mutex_unlock(&gLock);
-    return d;
+    return track(d);
 }
 
 // cu_qmatmul_q8: out[M,N] = a[M,K] · dequant(W), where W is stored TRANSPOSED and
@@ -4218,7 +4252,7 @@ void* cu_upload_f16(const float* src, long n) {
     cudaFreeAsync(d32, gStream); d32 = NULL;
     if (cudaStreamSynchronize(gStream) != cudaSuccess) goto fail; // src is caller host memory
     pthread_mutex_unlock(&gLock);
-    return d16;
+    return track(d16);
 fail:
     if (d32) cudaFreeAsync(d32, gStream);
     if (d16) cudaFreeAsync(d16, gStream);
@@ -5163,7 +5197,7 @@ void* cu_alloc_i8(int n) {
         if (cudaMalloc(&d, (size_t)n) != cudaSuccess) d = NULL;
     }
     pthread_mutex_unlock(&gLock);
-    return d;
+    return track(d);
 }
 
 // ---- Device-position (graph-capturable) op twins. The decode graph must be
@@ -5684,7 +5718,7 @@ void* cu_clone_f32(const void* src, int n) {
     }
 done:
     pthread_mutex_unlock(&gLock);
-    return d;
+    return track(d);
 }
 
 int cu_download_f32(const void* dsrc, float* dst, int n) {
