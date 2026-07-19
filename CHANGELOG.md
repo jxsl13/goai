@@ -13091,9 +13091,11 @@ it, and the real f32 GPT forward is **≈10.9×** faster end-to-end. All of this
 ### T91 — GPU parity: 2-D convolution forward on Vulkan (2026-07-06)
 - Brings `OpConv2D` to the Vulkan backend (portable twin of the Metal kernel §T88),
   so Vulkan now matches Metal's op set (matmul, attention forward+backward, conv2d).
-  A GLSL shader [shaders/conv2d.comp](backend/vulkan/shaders/conv2d.comp) (one
-  invocation per output element, accumulate over `(c,ky,kx)` with zero-padding, bias
-  added last) compiled with `glslc` and embedded; an op-specific `vk_conv2d_f32` in
+  The then-current GLSL shader `shaders/conv2d.comp` was later replaced by T342;
+  current Vulkan convolution uses [shaders/conv_igemm.comp](backend/vulkan/shaders/conv_igemm.comp).
+  The original dispatched one invocation per output element, accumulated over
+  `(c,ky,kx)` with zero-padding, added bias last, and was compiled with `glslc`
+  and embedded; an op-specific `vk_conv2d_f32` in
   [vk_bridge.c](backend/vulkan/vk_bridge.c) (four storage buffers, 1-D dispatch).
   The Go kernel serves stride, padding, and an optional per-filter bias; non-f32
   falls back to the reference (§I4).
