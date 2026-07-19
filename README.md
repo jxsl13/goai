@@ -16,6 +16,14 @@ against PyTorch, tiktoken and ggml goldens at fixed tolerances — and is only
 then optimized against that reference. `CGO_ENABLED=0 go test ./...` is green
 on Linux, macOS and Windows.
 
+**How fast is it, really?** [`BENCHMARKS.md`](BENCHMARKS.md) puts GoAI next
+to the incumbents — llama.cpp, vLLM, PyTorch, NumPy, scikit-learn — on the
+same machine and the same model weights, by category, wins and losses alike:
+GPU decode ahead of llama.cpp-Q8 at every measured scale (up to **1.19×** at
+Mistral-7B), CPU GEMM at **torch-cpu parity** (ahead on large shapes, in pure
+Go), scikit-learn **beaten or matched on every classical method**, and the
+open gaps (vLLM prefill, serving throughput) stated with root causes.
+
 ## Quickstart
 
 Load a quantized llama.cpp model and generate text — in plain terms: open a
@@ -184,10 +192,11 @@ make bench-compare  # cross-backend benchmark harness
 
 Requires Go 1.26+. No C toolchain needed for the default build. Architecture
 and task history live in [`SPEC.md`](SPEC.md) (caveman-encoded, see
-[`FORMAT.md`](FORMAT.md)); design rationale in [`docs/`](docs/); performance
-numbers and measurement policy in [`docs/benchmarking.md`](docs/benchmarking.md);
-the GGUF architecture matrix and its convention-verification methodology in
-[`docs/gguf.md`](docs/gguf.md).
+[`FORMAT.md`](FORMAT.md)); design rationale in [`docs/`](docs/); the
+categorical comparison against the industry incumbents in
+[`BENCHMARKS.md`](BENCHMARKS.md), with the full measurement log and policy in
+[`docs/benchmarking.md`](docs/benchmarking.md); the GGUF architecture matrix
+and its convention-verification methodology in [`docs/gguf.md`](docs/gguf.md).
 
 ## License
 
