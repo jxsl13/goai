@@ -4,6 +4,13 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### format/pytorch — runnable checkpoint-loading example (T889, 2026-07-20)
+
+Added the package's first runnable example. It loads the shipped PyTorch
+`state_dict` fixture, sorts and prints the flattened parameter names, and
+inspects one tensor's dtype, shape, and value. This closes the sole public
+package missing an example under §V19 without changing loader behavior.
+
 ### nlp — compressed-radix prefix lookup and constant-time LRU (T878, 2026-07-19)
 
 `LlamaPrefixPool` now indexes each salt namespace with a compressed token radix tree. Each node
