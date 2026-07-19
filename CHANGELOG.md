@@ -4,6 +4,12 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### format/safetensors — sharding-option example (T895, 2026-07-20)
+
+The runnable sharded-checkpoint example now shows a reusable `ShardOption`
+slice with both size and base-name controls, and checks its filesystem errors.
+Save, index, and load behavior is unchanged.
+
 ### backend — loss-reduction example (T894, 2026-07-20)
 
 Added a runnable `Reduction` example that executes mean, sum, and per-row
