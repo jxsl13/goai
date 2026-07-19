@@ -4,7 +4,61 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
-### nn — contiguous fast path for parameter initializers (T870, 2026-07-20)
+### docs — BENCHMARKS.md: the categorical comparison vs the incumbents (T880, 2026-07-20)
+
+New root-level `BENCHMARKS.md`, linked prominently from the README: GoAI vs
+llama.cpp, vLLM, PyTorch, NumPy and scikit-learn on the same machines and the
+same weights — a scoreboard at a glance, per-category tables (GPU decode,
+Apple silicon, pure-Go CPU, GEMM/kernels, classical ML, speculative
+decoding, correctness parity), an explicit "where GoAI loses today" table
+with root causes, and the booked not-yet-measured axes. The measurement gaps
+it exposed are spec tasks T881–T888 (committed sklearn timing script,
+tokenizer throughput vs tiktoken, training step vs torch, vision vs torch,
+format-IO load throughput, spec-lint guard, production-size Apple silicon
+head-to-head, SGLang datapoint).
+
+### spec — SPEC.md structural repair: duplicate ids and a fragmented task table (B96/B97/V36, 2026-07-20)
+
+Two parallel-agent bookkeeping defects, found while sourcing BENCHMARKS.md:
+a duplicate task id (two T870 rows — the initializer fast-path below is now
+**T879**) and 148 task rows appended after the §B section, inside the
+4-column backprop table, which GitHub rendered mangled and mdlint flagged
+166×. §B now precedes §T, so §T is the last section and append-at-EOF stays
+structurally correct; 18 rows with bare in-cell pipes are escaped; a
+byte-identical re-appended T791–T798 block is deleted. V36 pins ids-unique +
+single-table + §T-last; T886 books the mechanical spec-lint guard.
+
+### docs — the doc gate is red-but-unselected; debt and selector fix booked (B98, T892/T893, 2026-07-20)
+
+Running `go test ./internal/apicheck` during the sweep showed the §V19/§C13
+"hard" documentation gate failing on main: 136 undocumented exported
+symbols, 136 types and 28 methods without a runnable Example,
+`format/pytorch` with no Example at all, and 3 magic backend-name strings —
+tolerated because the CI selector's import-graph impact model structurally
+never selects source-walking meta-tests (apicheck, mdlint). T892 books the
+per-package debt teardown (the mass is 149 items in `nlp`); T893 books the
+selector fix (always include the cheap meta-tests in any non-empty
+selection). The same seam left the repo markdown test pending-red; the
+main-owned files (CHANGELOG, perf-notes-cuda, ADR-0029) are fixed, the
+worker-owned remainder is delegated as T889.
+
+### docs — README and inference.md catch up to the LayerSkip and prefix-caching arcs (T890, 2026-07-20)
+
+The two newest shipped arcs (T869–T878) were in the changelog and benchmark
+log but invisible in the README feature list and `docs/inference.md`. Three
+measured claim rows (lossless self-speculation; the training-curriculum
+requirement, CE 1.985→0.076; the shared draft/verify KV cache, 1.83×
+bit-exact) plus a plain-terms serving-seams paragraph (prefix reuse 7.13×,
+salt isolation) and LayerSkip/SGLang further-reading now close that gap.
+
+### docs — a reading-guide index for docs/ (T894, 2026-07-20)
+
+`docs/README.md` routes by question across the eleven top-level pages,
+`decisions/` and `research/`, and states the documentation conventions. The
+same sweep verified every README quickstart symbol against the source — no
+API drift found.
+
+### nn — contiguous fast path for parameter initializers (T879, formerly booked as duplicate id T870; 2026-07-20)
 
 A CPU profile of the decode benchmark showed `fillUniform` / `Zeros` at ~11% of samples —
 all of it model SETUP, not the decode loop. The initializers wrote every element via
