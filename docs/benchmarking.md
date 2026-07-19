@@ -528,6 +528,24 @@ behind: llama.cpp's hand-tuned kernels and years of decode-path engineering
 Honest caveat: 17.7 M parameters is far below production size; the gap
 composition will differ at 7B-class sizes where memory bandwidth dominates.
 
+**Independent M2 reproduction (2026-07-20).** The head-to-head was re-run live on
+this Apple M2 Pro to validate the harness end to end — `exportgguf` writes the
+GGUF, `llama-bench b-current` and the batched-decoder benchmark race the same
+weights in one session:
+
+| Engine | prefill (pp64) | decode (tg64) |
+|---|---|---|
+| llama.cpp Metal | 17,397 ± 11,973 t/s | 723 ± 36 t/s |
+| GoAI metal (batched) | 8,613 t/s | 236 t/s |
+
+The decode gap reproduced at ≈3.1× (better than the 4.2× above, because
+llama.cpp's tg64 landed lower this run — 723 vs 1,098). The pp64 gap looks worse
+(≈2×) but llama.cpp's prefill error bar spans ±11,973 t/s at this toy size, so the
+point estimate is not separable from noise; only decode is a stable comparison
+here. Both readings confirm the recorded figures are the right order and the gap
+is real, not a harness artifact. The production-scale story is the three-way
+TinyLlama-1.1B head-to-head below, where the toy-size caveat is discharged.
+
 Honest read of the gaps (as of 2026-07-14):
 
 - **CPU vs vendor BLAS** (BLAS = the decades-old optimized linear-algebra
@@ -1769,3 +1787,29 @@ out and raw AMX serves every m,n ≥ 32 shape — the pure-Go build now reaches 
 @1024³ (was 795 NEON-only). MatMul/1024 through the full op path (`GEMM_F32_1024_gflops`):
 ≈2380 GFLOP/s with cgo, ≈1740 without. Same ADR-0021 tolerance contract as the NEON kernel;
 the default (non-simd) build stays bit-exact and untouched. (T658.)
+
+## Measurement note: GPU test-ordering variance ≠ state contamination (2026-07-20)
+
+A GPU-bug fix round (§B78/T868) flagged that running any small metal test *before*
+`TestNEFTuneOnTrainedGPT` reproducibly raised its cross-entropy ~0.10 past the 1.3
+threshold, and asked whether preceding GPU work degrades a *seeded* run through pooled
+buffers handed back unzeroed — which would be a real correctness bug.
+
+Re-measured directly, the contamination reading does not survive its own data. Plain-CE,
+NEFTune-trained GPT, n=3 each:
+
+- **NEFTune alone:** 1.309, 1.177, 1.278
+- **After a preceding metal test:** 1.214, 1.373, 1.370
+
+The distributions **overlap** — the "alone" max (1.309) exceeds the "after" min (1.214) —
+so at n=3 there is no separable effect; both samples are drawn from the same
+high-variance ~1.17–1.37 band. The earlier 3/3 "always fails after" observation was a
+too-tight threshold sampling the upper tail, not a systematic shift. A seeded run whose
+own spread is ~0.20 bits cannot demonstrate a 0.10 mean shift with three samples.
+
+Conclusion: this is test-ordering *variance* against a gate with less margin than the
+test's intrinsic noise, not GPU state leaking across tests. The buffer-zeroing hypothesis
+is **not supported** by the evidence and is not pursued; the actionable item is the
+threshold's margin, and the test is `-short`-skipped so it never runs in CI regardless. If
+the buffer-pool question is ever reopened it needs a deterministic probe (same seed, assert
+bit-identical output with and without a preceding GPU op), not a noisy end-to-end CE gate.
