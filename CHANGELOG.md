@@ -4,6 +4,13 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### autograd — advanced control examples (T893, 2026-07-20)
+
+Added runnable examples for explicit-cotangent vector-Jacobian products and
+immediate forward-anomaly inspection. The hook, gradient-check, and anomaly
+examples now also show their reusable callback and option types explicitly.
+This is documentation-only; autograd behavior is unchanged.
+
 ### format/pytorch — runnable checkpoint-loading example (T889, 2026-07-20)
 
 Added the package's first runnable example. It loads the shipped PyTorch

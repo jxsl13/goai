@@ -28,6 +28,29 @@ func ExampleTape_Backward() {
 	// Output: 2 4 6
 }
 
+// BackwardGrad computes a vector-Jacobian product (VJP): the cotangent says
+// how strongly each output element should contribute to the input gradient.
+// Here y=x², so the result is cotangent⊙2x. This is useful when the output is a
+// vector and you need one weighted direction instead of an all-ones sum.
+func ExampleTape_BackwardGrad() {
+	tape := autograd.NewTape()
+	ctx := tape.Context()
+	x := tensor.FromFloat64(tensor.Shape{3}, []float64{1, 2, 3})
+
+	y, err := backend.Execute(ctx, backend.OpMul, []*tensor.Tensor{x, x}, nil)
+	if err != nil {
+		panic(err)
+	}
+	cotangent := tensor.FromFloat64(tensor.Shape{3}, []float64{0.5, 2, -1})
+	if err := tape.BackwardGrad(y[0], cotangent); err != nil {
+		panic(err)
+	}
+
+	g := tape.Grad(x)
+	fmt.Printf("weighted input gradient: %.1f %.1f %.1f\n", g.AtF64(0), g.AtF64(1), g.AtF64(2))
+	// Output: weighted input gradient: 1.0 8.0 -6.0
+}
+
 // --- Level 2: realistic use-case ---------------------------------------------
 
 // The gradient a network actually trains on: dL/dW through a linear layer y=x·W.
@@ -103,4 +126,19 @@ func ExampleTape_Record() {
 	_ = tape.Backward(y)
 	fmt.Println(tape.Grad(x).AtF64(0)) // dy/dx = 2x = 4
 	// Output: 4
+}
+
+// Anomaly detection catches a non-finite forward value as soon as the tape
+// records it. Err lets a debugging tool stop after the forward pass instead of
+// waiting for Backward to surface the same numerical failure.
+func ExampleTape_Err() {
+	options := []autograd.TapeOption{autograd.WithAnomalyDetection()}
+	tape := autograd.NewTape(options...)
+	x := tensor.FromFloat64(tensor.Shape{2}, []float64{1, 1000})
+
+	if _, err := backend.Execute(tape.Context(), backend.OpExp, []*tensor.Tensor{x}, nil); err != nil {
+		panic(err)
+	}
+	fmt.Println("overflow detected before backward:", tape.Err() != nil)
+	// Output: overflow detected before backward: true
 }
