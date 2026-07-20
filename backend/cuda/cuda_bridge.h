@@ -103,6 +103,7 @@ int cu_blit(void* dst, int dstOff, const void* src, int srcOff, int n);
 int cu_copy2d(void* dst, int dstOff, int dstStride, const void* src, int srcOff, int srcStride, int rows, int rowFloats);
 // cu_argmax_f32 returns argmax over x[n] (greedy token) — downloads only the index.
 int cu_argmax_f32(const void* x, int n);
+int cu_argmax_batched_f16(const void* x16, int* hostOut, int rows, int cols); // per-row greedy argmax over f16 logits (serving sampling)
 // cu_upload_i8: upload n signed bytes (Q8 weights) to a fresh device buffer.
 void* cu_upload_i8(const signed char* src, int n);
 // cu_qmatmul_q8: out[M,N] = a[M,K]·dequant(W), W = transposed Q8 q[N,K] + per-32-block scales[N,nb].

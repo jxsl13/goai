@@ -4,6 +4,7 @@ package cuda_test
 
 import (
 	"math"
+	"math/rand"
 	"testing"
 
 	"github.com/jxsl13/goai/backend"
@@ -204,4 +205,38 @@ func TestLeakDeviceF16(t *testing.T) {
 		}
 		x.Free()
 	})
+}
+
+// TestBatchArgmax: the serving-loop sampling primitive returns the argmax token per row.
+func TestBatchArgmax(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("no gpu")
+	}
+	const rows, cols = 6, 5000
+	rng := rand.New(rand.NewSource(9))
+	f := make([]float32, rows*cols)
+	want := make([]int32, rows)
+	for r := 0; r < rows; r++ {
+		for c := 0; c < cols; c++ {
+			f[r*cols+c] = float32(rng.NormFloat64())
+		}
+		// plant a clear max at a known column
+		want[r] = int32((r*777 + 13) % cols)
+		f[r*cols+int(want[r])] = 100.0
+	}
+	d, _ := cuda.NewDeviceF32(rows, cols)
+	d.UploadF32(f)
+	h16, _ := cuda.F16FromF32(d)
+	d.Free()
+	defer h16.Free()
+	got, err := h16.BatchArgmax()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for r := 0; r < rows; r++ {
+		if got[r] != want[r] {
+			t.Fatalf("row %d: BatchArgmax = %d, want %d", r, got[r], want[r])
+		}
+	}
+	t.Logf("BatchArgmax correct for %d rows x %d cols", rows, cols)
 }

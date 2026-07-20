@@ -131,3 +131,16 @@ func (d *DeviceF16) Add(src *DeviceF16) error {
 	}
 	return nil
 }
+
+// BatchArgmax returns the greedy-sampled token index (argmax) of each row of the f16 logits
+// [rows,cols] — the serving loop's sampling step. On-device reduction, only rows ints come back.
+func (d *DeviceF16) BatchArgmax() ([]int32, error) {
+	out := make([]int32, d.rows)
+	if d.rows == 0 {
+		return out, nil
+	}
+	if rc := C.cu_argmax_batched_f16(d.ptr, (*C.int)(&out[0]), C.int(d.rows), C.int(d.cols)); rc != 0 {
+		return nil, fmt.Errorf("cuda: BatchArgmax rc=%d", int(rc))
+	}
+	return out, nil
+}

@@ -131,6 +131,43 @@ done:
     pthread_mutex_unlock(&gLock);
     return (rc == 0) ? host : -1;
 }
+static CUfunction gArgmaxBatchF16 = NULL; // per-row argmax over f16 logits (serving-loop sampling)
+// cu_argmax_batched_f16: greedy sample — argmax over each row of x16[rows,cols] (f16 logits),
+// writing the rows token indices to hostOut[rows]. One block per row, reduces over cols; reads u16
+// directly (no 65MB f16->f32 convert). The serving loop's sampling step.
+int cu_argmax_batched_f16(const void* x16, int* hostOut, int rows, int cols) {
+    int rc = -1;
+    void* dOut = NULL;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { goto donebam; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { goto donebam; }
+    if (!gArgmaxBatchF16 && compile_kernel(
+            "__device__ __forceinline__ float h2f(unsigned short h){ float f; asm(\"cvt.f32.f16 %0, %1;\":\"=f\"(f):\"h\"(h)); return f; }\n"
+            "extern \"C\" __global__ void argmax_batched_f16(const unsigned short* x, int* out, int rows, int cols){\n"
+            "  int row = blockIdx.x; if (row >= rows) return;\n"
+            "  const unsigned short* r = x + (size_t)row*cols;\n"
+            "  extern __shared__ char sh[]; float* sv=(float*)sh; int* si=(int*)(sv+blockDim.x);\n"
+            "  int t = threadIdx.x, nt = blockDim.x; float bv = -1e30f; int bi = 0;\n"
+            "  for (int i = t; i < cols; i += nt){ float v = h2f(r[i]); if (v > bv){ bv = v; bi = i; } }\n"
+            "  sv[t] = bv; si[t] = bi; __syncthreads();\n"
+            "  for (int s = nt/2; s > 0; s >>= 1){ if (t < s && sv[t+s] > sv[t]){ sv[t] = sv[t+s]; si[t] = si[t+s]; } __syncthreads(); }\n"
+            "  if (t == 0) out[row] = si[0];\n"
+            "}\n", "argmax_batched_f16.cu", "argmax_batched_f16", &gArgmaxBatchF16) != 0) { goto donebam; }
+    if (cudaMallocAsync(&dOut, (size_t)rows*sizeof(int), gStream) != cudaSuccess) { goto donebam; }
+    {
+        int threads = 256;
+        size_t shmem = (size_t)threads * (sizeof(float) + sizeof(int));
+        void* args[4] = { &x16, &dOut, &rows, &cols };
+        if (cuLaunchKernel(gArgmaxBatchF16, (unsigned)rows, 1, 1, threads, 1, 1, shmem, (CUstream)gStream, args, NULL) != CUDA_SUCCESS) { goto donebam; }
+        if (cudaMemcpyAsync(hostOut, dOut, (size_t)rows*sizeof(int), cudaMemcpyDeviceToHost, gStream) != cudaSuccess) { goto donebam; }
+        if (cudaStreamSynchronize(gStream) != cudaSuccess) { goto donebam; }
+        rc = 0;
+    }
+donebam:
+    if (dOut) cudaFreeAsync(dOut, gStream);
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
 static CUfunction gBuildPtrs = NULL; // device-side batched pointer-array builder (graph-capturable GQA)
 static int compile_kernel(const char* src, const char* name, const char* entry, CUfunction* out); // fwd decl
 
