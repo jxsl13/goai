@@ -59,14 +59,17 @@ func defaultRules() (ignore, ignoreRe, fullRe, pkgRe, alwaysRun []string) {
 	//     enabled. It gates the TOOL, not the codebase: the scan stays ADVISORY (no
 	//     candidate-count assertion), so a legitimately cold per-element loop never
 	//     reddens CI, but a detector that panics/regresses on real source does.
-	//   - internal/apicheck (§V19 doc/example gate) and internal/mdlint (every *.md)
-	//     stay OUT until they are green: apicheck fails the §V19 doc-debt (T892, now
-	//     140→18, blocked on the worker's llamagpu godoc); mdlint fails on
-	//     .claude/memory + SPEC-worker-*.md (T889). Add them here once green.
+	//   - internal/apicheck (§V19 doc/example gate) is now GREEN — the per-package
+	//     documentation pass added the missing godocs/Examples and justified-allowlisted
+	//     the internal transformer blocks/caches — so it is enabled and gates every push
+	//     (a new undocumented exported public symbol reddens CI). Note apicheck parses
+	//     source (no compile), so it is orthogonal to the cgo/cuda build lanes.
+	//   - internal/mdlint (every *.md) stays OUT until green: it fails on
+	//     .claude/memory + SPEC-worker-*.md tilde debt (T889). Add it here once green.
 	//   - internal/docgraph (§V39 dangling refs + §V41 render-sync: spec/ is the
 	//     source, SPEC.md a generated view) is GREEN and hermetic — enabled so a
 	//     hand-edited rendered view goes red on the next non-empty selection.
-	alwaysRun = []string{"internal/speccheck", "internal/perfscan", "internal/docgraph"}
+	alwaysRun = []string{"internal/speccheck", "internal/perfscan", "internal/docgraph", "internal/apicheck"}
 	return ignore, ignoreRe, fullRe, pkgRe, alwaysRun
 }
 

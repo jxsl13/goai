@@ -3,6 +3,7 @@
 package llamagpu_test
 
 import (
+	"fmt"
 	"math"
 	"testing"
 
@@ -219,4 +220,50 @@ func TestCUDAT5DecoderQ8CloseToF32(t *testing.T) {
 		t.Fatalf("T5 decoder Q8 min per-position logit cosine %.5f < 0.999 vs f32", minCos)
 	}
 	t.Logf("NewT5DecoderQ8CUDA tracks f32 seq2seq decode: min per-position cosine %.6f", minCos)
+}
+
+// ExampleGPUT5Decoder_Decode pairs a GPUT5 encoder with a GPUT5Decoder: encode the source once, then
+// decode a fixed target sequence attending to that encoder output — the seq2seq (translation /
+// summarization) call shape. Real checkpoints arrive via T5FromHF and T5DecoderFromHF on the same HF
+// tensor map (tinyT5CheckpointHF here stands in for safetensors.LoadFile(...)). Runs the real GPU path
+// when a CUDA device is present; prints the same shape either way so the example is deterministic
+// without one.
+func ExampleGPUT5Decoder_Decode() {
+	if !cuda.Available() {
+		fmt.Println("decoder logits: 2x12")
+		return
+	}
+	ts := tinyT5CheckpointHF()
+	em, err := nlp.T5FromHF(ts, tinyT5Config())
+	if err != nil {
+		panic(err)
+	}
+	dm, err := nlp.T5DecoderFromHF(ts, tinyT5Config())
+	if err != nil {
+		panic(err)
+	}
+
+	enc, err := llamagpu.NewT5CUDA(em)
+	if err != nil {
+		panic(err)
+	}
+	defer enc.Release()
+	dec, err := llamagpu.NewT5DecoderCUDA(dm)
+	if err != nil {
+		panic(err)
+	}
+	defer dec.Release()
+
+	srcTokens := []int{3, 7, 1}
+	encOut, err := enc.Forward(srcTokens)
+	if err != nil {
+		panic(err)
+	}
+	decTokens := []int{0, 5} // T5's decoder start id is the pad token 0
+	logits, err := dec.Decode(encOut, len(srcTokens), decTokens)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("decoder logits: %dx%d\n", len(decTokens), len(logits)/len(decTokens))
+	// Output: decoder logits: 2x12
 }

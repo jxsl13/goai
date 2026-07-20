@@ -3,6 +3,7 @@
 package llamagpu_test
 
 import (
+	"fmt"
 	"math"
 	"testing"
 
@@ -11,7 +12,95 @@ import (
 	"github.com/jxsl13/goai/format/safetensors"
 	"github.com/jxsl13/goai/llamagpu"
 	"github.com/jxsl13/goai/nlp"
+	"github.com/jxsl13/goai/tensor"
 )
+
+// tinyT5CheckpointHF builds a minimal but well-formed HF T5ForConditionalGeneration tensor map — one
+// gated-GELU (v1.1) encoder block and one decoder block sharing "shared.weight" (dim 8, 2 heads,
+// d_kv 4), small deterministic weights, no safetensors fixture. T5FromHF reads only its encoder.*
+// keys and T5DecoderFromHF only its decoder.* keys, so the same map (a real checkpoint's shape) feeds
+// both loaders — used by ExampleGPUT5_Forward and ExampleGPUT5Decoder_Decode to demonstrate the
+// NewT5CUDA / NewT5DecoderCUDA call shape without needing `make golden` fixtures.
+func tinyT5CheckpointHF() map[string]*tensor.Tensor {
+	const dim, heads, headDim, ffn, vocab, buckets = 8, 2, 4, 16, 12, 8
+	attW := heads * headDim
+	w := func(shape ...int) *tensor.Tensor {
+		x := tensor.New(tensor.F32, tensor.Shape(shape))
+		d := x.Storage().F32()
+		for i := range d {
+			d[i] = float32(i%13-6) * 0.03
+		}
+		return x
+	}
+	ones := func(n int) *tensor.Tensor {
+		x := tensor.New(tensor.F32, tensor.Shape{n})
+		d := x.Storage().F32()
+		for i := range d {
+			d[i] = 1
+		}
+		return x
+	}
+	m := map[string]*tensor.Tensor{"shared.weight": w(vocab, dim)}
+	for _, side := range []string{"encoder", "decoder"} {
+		m[side+".block.0.layer.0.SelfAttention.relative_attention_bias.weight"] = w(buckets, heads)
+		m[side+".final_layer_norm.weight"] = ones(dim)
+		p := side + ".block.0."
+		m[p+"layer.0.SelfAttention.q.weight"] = w(attW, dim)
+		m[p+"layer.0.SelfAttention.k.weight"] = w(attW, dim)
+		m[p+"layer.0.SelfAttention.v.weight"] = w(attW, dim)
+		m[p+"layer.0.SelfAttention.o.weight"] = w(dim, attW)
+		m[p+"layer.0.layer_norm.weight"] = ones(dim)
+	}
+	// encoder.layer.1 is the FFN sublayer; decoder.layer.1 is cross-attention and layer.2 the FFN.
+	m["encoder.block.0.layer.1.layer_norm.weight"] = ones(dim)
+	m["encoder.block.0.layer.1.DenseReluDense.wi_0.weight"] = w(ffn, dim)
+	m["encoder.block.0.layer.1.DenseReluDense.wi_1.weight"] = w(ffn, dim)
+	m["encoder.block.0.layer.1.DenseReluDense.wo.weight"] = w(dim, ffn)
+	m["decoder.block.0.layer.1.EncDecAttention.q.weight"] = w(attW, dim)
+	m["decoder.block.0.layer.1.EncDecAttention.k.weight"] = w(attW, dim)
+	m["decoder.block.0.layer.1.EncDecAttention.v.weight"] = w(attW, dim)
+	m["decoder.block.0.layer.1.EncDecAttention.o.weight"] = w(dim, attW)
+	m["decoder.block.0.layer.1.layer_norm.weight"] = ones(dim)
+	m["decoder.block.0.layer.2.layer_norm.weight"] = ones(dim)
+	m["decoder.block.0.layer.2.DenseReluDense.wi_0.weight"] = w(ffn, dim)
+	m["decoder.block.0.layer.2.DenseReluDense.wi_1.weight"] = w(ffn, dim)
+	m["decoder.block.0.layer.2.DenseReluDense.wo.weight"] = w(dim, ffn)
+	return m
+}
+
+// tinyT5Config is the nlp.T5Config matching tinyT5CheckpointHF (both the encoder and decoder loaders
+// take the same geometry from the same checkpoint).
+func tinyT5Config() nlp.T5Config {
+	return nlp.T5Config{Heads: 2, HeadDim: 4, NumBuckets: 8, MaxDistance: 16, Eps: 1e-6}
+}
+
+// ExampleGPUT5_Forward uploads a tiny T5 encoder to the GPU and runs one bidirectional forward over
+// the relative-position-bias attention. Real checkpoints arrive via T5FromHF(safetensors.LoadFile(...),
+// ...). Runs the real GPU path when a CUDA device is present; prints the same shape either way so the
+// example is deterministic without one.
+func ExampleGPUT5_Forward() {
+	if !cuda.Available() {
+		fmt.Println("hidden states: 3x8")
+		return
+	}
+	m, err := nlp.T5FromHF(tinyT5CheckpointHF(), tinyT5Config())
+	if err != nil {
+		panic(err)
+	}
+	enc, err := llamagpu.NewT5CUDA(m)
+	if err != nil {
+		panic(err)
+	}
+	defer enc.Release()
+
+	tokens := []int{3, 7, 1}
+	hidden, err := enc.Forward(tokens)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("hidden states: %dx%d\n", len(tokens), len(hidden)/len(tokens))
+	// Output: hidden states: 3x8
+}
 
 // TestCUDAT5MatchesReference is the parity anchor for the GPU T5 encoder — the second non-decoder GPU
 // model. Its [seq, dim] hidden states must match the reference nlp.T5.Forward for BOTH FFN variants:

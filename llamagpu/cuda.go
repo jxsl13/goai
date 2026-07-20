@@ -230,16 +230,28 @@ func NewLlamaQ4KCUDA(m *nlp.Llama) (*Decoder, error) {
 // Llama variants (Qwen2/2.5 qkv-bias, Qwen3 QK-norm, Phi-3) — their 4-bit path so a bigger model fits the
 // 12GB 3060. Load with nlp.LlamaFromHF / Phi3FromHF; biases/QK-norm stay f32.
 func NewQwen2Q4KCUDA(m *nlp.Llama) (*Decoder, error) { return NewLlamaQ4KCUDA(m) }
+
+// NewQwen3Q4KCUDA is NewQwen2Q4KCUDA's Qwen3 sibling (see above): NewLlamaQ4KCUDA with a Qwen3-typed
+// signature, so it picks up Qwen3's per-head QK-norm automatically from the checkpoint.
 func NewQwen3Q4KCUDA(m *nlp.Llama) (*Decoder, error) { return NewLlamaQ4KCUDA(m) }
-func NewPhi3Q4KCUDA(m *nlp.Llama) (*Decoder, error)  { return NewLlamaQ4KCUDA(m) }
+
+// NewPhi3Q4KCUDA is NewQwen2Q4KCUDA's Phi-3 sibling (see above): NewLlamaQ4KCUDA with a Phi-3-typed
+// signature. Load with nlp.Phi3FromHF.
+func NewPhi3Q4KCUDA(m *nlp.Llama) (*Decoder, error) { return NewLlamaQ4KCUDA(m) }
 
 // NewQwen2Q8CUDA / NewQwen3Q8CUDA / NewPhi3Q8CUDA are NewLlamaQ8CUDA typed entry points for the Llama
 // variants that nlp.QuantLlama cannot represent (Qwen2 qkv-bias, Qwen3 QK-norm) or that only had an f32
 // GPU path (Phi-3). They give those models their first quantized decode. Load with nlp.LlamaFromHF /
 // Phi3FromHF; biases and QK-norm gains are picked up and kept f32.
 func NewQwen2Q8CUDA(m *nlp.Llama) (*Decoder, error) { return NewLlamaQ8CUDA(m) }
+
+// NewQwen3Q8CUDA is NewQwen2Q8CUDA's Qwen3 sibling (see above): NewLlamaQ8CUDA with a Qwen3-typed
+// signature, so it picks up Qwen3's per-head QK-norm automatically from the checkpoint.
 func NewQwen3Q8CUDA(m *nlp.Llama) (*Decoder, error) { return NewLlamaQ8CUDA(m) }
-func NewPhi3Q8CUDA(m *nlp.Llama) (*Decoder, error)  { return NewLlamaQ8CUDA(m) }
+
+// NewPhi3Q8CUDA is NewQwen2Q8CUDA's Phi-3 sibling (see above): NewLlamaQ8CUDA with a Phi-3-typed
+// signature — Phi-3's first quantized GPU decode path. Load with nlp.Phi3FromHF.
+func NewPhi3Q8CUDA(m *nlp.Llama) (*Decoder, error) { return NewLlamaQ8CUDA(m) }
 
 // cudaQ8Ops is the cuda backendOps with resident-Q8_0 quantization enabled (ops.quantizeF32 set) —
 // shared by the dense-transformer NewXQ8CUDA entry points below. Each routes its arch's f32 checkpoint
@@ -268,6 +280,10 @@ func cudaQ8Ops() backendOps {
 	}
 }
 
+// NewGemma2Q8CUDA is NewGemma2CUDA with every projection (fused QKV, o_proj, gate/up/down) and the
+// tied lm_head quantized to resident Q8_0 — Gemma2's vocab is huge (256k), so newGemma2Decoder routes
+// the tied head through the same quantize-aware builder rather than leaving it f32. The attention-logit
+// soft-cap (MHACap), √dim embed scaling and (1+w) RMSNorm gains stay f32. cuda-only.
 func NewGemma2Q8CUDA(m *nlp.Gemma2) (*Decoder, error) {
 	if !cuda.Available() {
 		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
@@ -288,54 +304,89 @@ func NewGemmaQ8CUDA(m *nlp.Gemma) (*Decoder, error) {
 // embMult/attn-scale/residual-mult/logit-scale config scalars, all folded into the upload), so this is
 // NewLlamaQ8CUDA with a Granite-typed signature. The scaled Wo/Wdown are quantized post-scale.
 func NewGraniteQ8CUDA(m *nlp.Llama) (*Decoder, error) { return NewLlamaQ8CUDA(m) }
+
+// NewCohereQ8CUDA is NewCohereCUDA with every projection (fused QKV, o_proj, gate/up/down) quantized to
+// resident Q8_0 — Command-R's weight-bandwidth win. The logit_scale-folded tied lm_head is quantized
+// too (via mkLinS); the parallel-residual weight-only mean-centered LayerNorm gains stay f32. cuda-only.
 func NewCohereQ8CUDA(m *nlp.Cohere) (*Decoder, error) {
 	if !cuda.Available() {
 		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
 	}
 	return newCohereDecoder(m, cudaQ8Ops())
 }
+
+// NewNemotronQ8CUDA is NewNemotronCUDA with every projection (fused QKV, o_proj, the 2-layer relu²
+// MLP's up/down) and the lm_head quantized to resident Q8_0. The LayerNorm1P gain/bias (γ=w+1, β
+// folded in by NemotronFromHF) and the squared-ReLU activation stay f32. cuda-only.
 func NewNemotronQ8CUDA(m *nlp.Nemotron) (*Decoder, error) {
 	if !cuda.Available() {
 		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
 	}
 	return newNemotronDecoder(m, cudaQ8Ops())
 }
+
+// NewOLMo2Q8CUDA is NewOLMo2CUDA with every projection (fused QKV, o_proj, gate/up/down) and the
+// untied lm_head quantized to resident Q8_0. The post-norm placement and the full-width q/k RMSNorm
+// gains (applied before RoPE) stay f32. cuda-only.
 func NewOLMo2Q8CUDA(m *nlp.OLMo2) (*Decoder, error) {
 	if !cuda.Available() {
 		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
 	}
 	return newOLMo2Decoder(m, cudaQ8Ops())
 }
+
+// NewFalconQ8CUDA is NewFalconCUDA with every projection (fused QKV, dense, the 2-layer GELU MLP's
+// up/down) and the lm_head quantized to resident Q8_0. The parallel-residual LayerNorm-with-bias gains
+// stay f32. cuda-only.
 func NewFalconQ8CUDA(m *nlp.Falcon) (*Decoder, error) {
 	if !cuda.Available() {
 		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
 	}
 	return newFalconDecoder(m, cudaQ8Ops())
 }
+
+// NewStableLMQ8CUDA is NewStableLMCUDA with every projection (fused QKV, o_proj, gate/up/down) and the
+// lm_head quantized to resident Q8_0. The LayerNorm-with-bias gains and the partial-rotary split stay
+// f32. cuda-only.
 func NewStableLMQ8CUDA(m *nlp.StableLM) (*Decoder, error) {
 	if !cuda.Available() {
 		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
 	}
 	return newStableLMDecoder(m, cudaQ8Ops())
 }
+
+// NewStarCoder2Q8CUDA is NewStarCoder2CUDA with every projection (fused QKV, o_proj, the 2-layer GELU
+// MLP's fc/proj) and the untied lm_head quantized to resident Q8_0. Every projection bias and the
+// LayerNorm-with-bias gains stay f32. cuda-only.
 func NewStarCoder2Q8CUDA(m *nlp.StarCoder2) (*Decoder, error) {
 	if !cuda.Available() {
 		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
 	}
 	return newStarCoder2Decoder(m, cudaQ8Ops())
 }
+
+// NewMPTQ8CUDA is NewMPTCUDA with every projection and the tied lm_head quantized to resident Q8_0.
+// The per-head ALiBi slopes and the weight-only LayerNorm gains stay f32. cuda-only.
 func NewMPTQ8CUDA(m *nlp.MPT) (*Decoder, error) {
 	if !cuda.Available() {
 		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
 	}
 	return newMPTDecoder(m, cudaQ8Ops())
 }
+
+// NewGPTNeoXQ8CUDA is NewGPTNeoXCUDA with every projection (fused QKV, o_proj, the 2-layer GELU MLP's
+// up/down) and the untied, unbiased lm_head quantized to resident Q8_0. Every projection bias, the
+// two-norm LayerNorm gains and the (partial or full) rotary split stay f32. cuda-only.
 func NewGPTNeoXQ8CUDA(m *nlp.GPTNeoX) (*Decoder, error) {
 	if !cuda.Available() {
 		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
 	}
 	return newGPTNeoXDecoder(m, cudaQ8Ops())
 }
+
+// NewPhiQ8CUDA is NewPhiCUDA with every projection (fused QKV, dense, the 2-layer GELU MLP's fc1/fc2)
+// and the untied lm_head quantized to resident Q8_0. Every projection bias (including the lm_head's),
+// the final LayerNorm and the partial-rotary split stay f32. cuda-only.
 func NewPhiQ8CUDA(m *nlp.Phi) (*Decoder, error) {
 	if !cuda.Available() {
 		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
@@ -353,19 +404,35 @@ func NewMixtralQ8CUDA(m *nlp.Mixtral) (*Decoder, error) {
 	}
 	return newMixtralDecoder(m, cudaQ8Ops())
 }
+
+// NewQwen3MoEQ8CUDA is NewMixtralQ8CUDA's Qwen3-MoE entry point (see the MoE Q8 note above) —
+// Qwen3-MoE loads as an nlp.Mixtral, so this is exactly NewMixtralQ8CUDA. Load with nlp.Qwen3MoeFromHF.
 func NewQwen3MoEQ8CUDA(m *nlp.Mixtral) (*Decoder, error) { return NewMixtralQ8CUDA(m) }
+
+// NewQwen2MoEQ8CUDA is the Q8 entry point for nlp.Qwen2MoE (see the MoE Q8 note above): the routed and
+// shared-expert matrices plus the Qwen2 attention (with its q/k/v projection biases) go resident Q8_0;
+// the shared-expert sigmoid gate is quantized too. The top-k router stays f32. cuda-only.
 func NewQwen2MoEQ8CUDA(m *nlp.Qwen2MoE) (*Decoder, error) {
 	if !cuda.Available() {
 		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
 	}
 	return newQwen2MoEDecoder(m, cudaQ8Ops())
 }
+
+// NewGraniteMoEQ8CUDA is the Q8 entry point for nlp.GraniteMoE (see the MoE Q8 note above): the
+// attention projections and the routed expert gate/up/down matrices go resident Q8_0, with
+// ResidualMult/LogitsScale folded pre-quantization into Wo/expert-Wdown/lm_head (as NewGraniteQ8CUDA
+// does for dense Granite). The top-k router stays f32 (routing is selection-sensitive). cuda-only.
 func NewGraniteMoEQ8CUDA(m *nlp.GraniteMoE) (*Decoder, error) {
 	if !cuda.Available() {
 		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
 	}
 	return newGraniteMoEDecoder(m, cudaQ8Ops())
 }
+
+// NewOLMoEQ8CUDA is the Q8 entry point for nlp.OLMoE (see the MoE Q8 note above): the attention
+// projections and the routed expert matrices go resident Q8_0; the full-width q/k RMSNorm gains and
+// the top-k router stay f32. cuda-only.
 func NewOLMoEQ8CUDA(m *nlp.OLMoE) (*Decoder, error) {
 	if !cuda.Available() {
 		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
