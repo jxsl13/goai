@@ -52,6 +52,12 @@ func GemmF16PureAcc32(a16, w16, c16 unsafe.Pointer, m, k, n int) int {
 	return int(C.cu_gemm_f16_pure_acc32(a16, w16, c16, C.int(m), C.int(k), C.int(n)))
 }
 
+// GemmF16PureAddC: C16 += A16·W16 (f16, beta=1) — folds a residual add into the GEMM epilogue,
+// removing a separate AddF16 kernel + scratch buffer per layer.
+func GemmF16PureAddC(a16, w16, c16 unsafe.Pointer, m, k, n int) int {
+	return int(C.cu_gemm_f16_pure_addc(a16, w16, c16, C.int(m), C.int(k), C.int(n)))
+}
+
 // WPtr exposes a ResidentBF16's raw device f16 weight pointer ([K,N]) for the A1 f16 GEMM path.
 func (r *ResidentBF16) WPtr() unsafe.Pointer { return r.ptr }
 
