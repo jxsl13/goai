@@ -4,7 +4,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
-### fix -- read-only parallel audit round: five latent-defect fixes across format/nn/nlp/classic (T909, 2026-07-20)
+### fix -- read-only parallel audit round: seven latent-defect fixes across format/nn/nlp/classic (T909, 2026-07-20)
 
 A four-subagent read-only audit swept format, nn, nlp and classic for latent defects; each finding
 was then independently reproduced and fixed on the main line (the subagent output is untrusted data
@@ -31,6 +31,13 @@ by stripping the guard (test goes red) and restoring it (green):
   (chat markers) -- EncodeSpecial emitted the id, Decode discarded it. specialSet now carries an
   id → text reverse the decoders consult for out-of-range ids; byte-level BPE decoders were already
   safe (id-keyed map).
+- **nn (B109):** FSQ centered each even-L channel with shift = atanh(offset/half); at L=2,
+  offset==half so atanh(1)=+Inf saturated tanh, making the binary channel emit one constant level
+  with a zero gradient -- a dead channel. The degenerate case now leaves shift 0 (two reachable
+  levels, live gradient); atanh is unchanged for L≥4, so existing even-L configs are byte-identical.
+- **nn (B110, §B77):** KimiDeltaAttention reads beta as beta.AtF64(t,0) but its shape guard skipped
+  beta -- a 1-D beta [seq] (as the doc wrongly said) panicked, a [seq,2] beta silently used only
+  column 0. beta now joins the rank-2 guard with an explicit [seq,1] width check.
 
 ### tooling -- spec-lint (internal/speccheck) for §V36 SPEC integrity, wired into CI gating (T886, 2026-07-20)
 
