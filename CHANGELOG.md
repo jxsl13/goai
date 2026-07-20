@@ -4,6 +4,16 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### docs — the comparison table understated goai's CPU matmul by ~32x (T897, 2026-07-20)
+
+The cross-comparison table's `goai-cpu` MatMul column is the DEFAULT pure-Go build (67.72
+GFLOP/s @1024), a correctness baseline — not goai's fastest CPU path. Read against
+`torch-cpu 2684` it wrongly implies goai is ~40x slower. goai's `GOEXPERIMENT=simd` AMX +
+Apple-Accelerate f32 GEMM, measured fresh on this M2 Pro (F32 MatMul/1024): goai-simd **2195**
+vs numpy 2545, torch-cpu 2464, torch-mps 4339 — i.e. **89% of torch-cpu**, at the shared
+Accelerate/BLAS ceiling. A measured note now sits under the table so the comparison is honest;
+no numbers in the table changed. (F64 stays ~64 GFLOP/s: Accelerate cblas is f32-only.)
+
 ### perf — per-element hot-loop fast paths, batch 2 (T896, 2026-07-20)
 
 Two directed sweeps (initialization/parameter-assembly helpers, and quant/specialized layers)

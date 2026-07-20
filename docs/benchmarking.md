@@ -65,6 +65,28 @@ runs Vulkan on Metal).
 | RetentionBackward | 320.93 ms | 25.29 ms | 20.22 ms | 20.31 ms |  |
 | Softmax | 77.51 ms | 7.76 ms | 1.73 ms | 1.76 ms |  |
 
+**Read the `goai-cpu` MatMul rows in context — they understate goai's real CPU
+matmul by ~32×.** That column is the DEFAULT build's pure-Go backend (no cgo, no
+`GOEXPERIMENT=simd`), which is a correctness/portability baseline, not goai's
+fastest CPU path. goai also ships an AMX + Apple-Accelerate f32 GEMM behind
+`GOEXPERIMENT=simd` (ADR-0026/0027/0028, §T658). Measured fresh on this M2 Pro
+(2026-07-20, F32 MatMul/1024):
+
+| engine | GFLOP/s | vs torch-cpu |
+|---|---|---|
+| **goai-simd** (`GOEXPERIMENT=simd`, cgo) | **2195** | **89%** |
+| numpy-cpu | 2545 | 103% |
+| torch-cpu | 2464 | 100% |
+| torch-mps | 4339 | 176% |
+
+So goai's real CPU f32 matmul sits at ≈89% of torch-cpu and ≈86% of numpy — i.e.
+at the shared **Apple-Accelerate/BLAS ceiling** (all three ultimately call
+Accelerate; the residual is dispatch/measurement, not algorithm). The `67.72`
+in the table is the pure-Go column, NOT the number to compare against torch. The
+per-shape AMX-vs-Accelerate breakdown is in the AMX GEMM section below. (F64 stays
+at ≈64 GFLOP/s: Accelerate's `cblas_sgemm` is f32-only, so f64 uses the AMX/pure-Go
+path — the f64 pure-Go column is representative there.)
+
 The 2418.93-GFLOP/s torch-mps Conv2D figure above is a historical
 GPU-resident, pipelined measurement (one synchronization after 30 iterations);
 it is not contract-equivalent to `backend.Execute`, which transfers and
