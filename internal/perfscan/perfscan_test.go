@@ -65,6 +65,31 @@ func Step(p, g *T) {
 	}
 }
 
+// The older typed-fast-path idiom — a Storage().F64()/.F32() bulk slice grab with a
+// per-element Unravel loop kept only as the fallback (fillSigmoidFocalConstants) —
+// must silence detector A just like flatF64 does.
+func TestDetectA_SilentWithStorageTypedPath(t *testing.T) {
+	src := `package p
+func fill(x, out *T) {
+	n := x.Numel()
+	if x.Dtype() == F64 {
+		sd := x.Storage().F64()
+		od := out.Storage().F64()
+		for i := range n {
+			od[i] = sd[i] * 2
+		}
+		return
+	}
+	for i := range n {
+		c := Unravel(i, x.Shape())
+		out.SetF64(x.AtF64(c...)*2, c...)
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["per-element-dispatch"] != 0 {
+		t.Fatalf("Storage().F64() fast path present, want 0 per-element-dispatch, got %d", got["per-element-dispatch"])
+	}
+}
+
 // A per-ROW loop (SetF64 indexed by the loop var, no Numel bound, no Unravel) is
 // NOT a full-tensor walk and must not be flagged — the key false-positive guard.
 func TestDetectA_SilentOnPerRow(t *testing.T) {

@@ -119,7 +119,13 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 		stack = append(stack, n)
 		switch x := n.(type) {
 		case *ast.CallExpr:
-			if name := calleeName(x.Fun); name == "flatF64" || name == "flatF32" {
+			// A fast path is any typed BULK access to the backing store: the
+			// flatF64/flatF32 helpers, or a direct Storage().F64()/.F32() slice grab
+			// (the older idiom, e.g. fillSigmoidFocalConstants). Its presence means the
+			// function's per-element Unravel loop is only the strided/other-dtype
+			// fallback, not the hot path — so it must NOT be reported.
+			switch calleeName(x.Fun) {
+			case "flatF64", "flatF32", "F64", "F32":
 				hasFlat = true
 			}
 		case *ast.AssignStmt:
@@ -168,7 +174,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 			out = append(out, finding{
 				pos:      fset.Position(loop.Pos()),
 				category: "per-element-dispatch",
-				msg: fmt.Sprintf("per-element .%s in a Numel/Unravel loop, no flatF64/flatF32 fast path in %s()"+
+				msg: fmt.Sprintf("per-element .%s in a Numel/Unravel loop, no typed fast path (flatF64/flatF32/Storage().F64()) in %s()"+
 					" — add a typed contiguous walk (docs/perf-notes-training.md §1)", name, fn.Name.Name),
 			})
 		}
