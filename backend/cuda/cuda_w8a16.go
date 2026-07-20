@@ -16,6 +16,11 @@ func GemmW8A16(a16, w8, scale, c16 unsafe.Pointer, m, k, n int) int {
 	return int(C.cu_gemm_w8a16(a16, w8, scale, c16, C.int(m), C.int(k), C.int(n)))
 }
 
+// GemmW8A16T is the shared-tiled W8A16 GEMM (coalesced int8 staging). Requires n%64==0.
+func GemmW8A16T(a16, w8, scale, c16 unsafe.Pointer, m, k, n int) int {
+	return int(C.cu_gemm_w8a16_t(a16, w8, scale, c16, C.int(m), C.int(k), C.int(n)))
+}
+
 // UploadI8 copies an int8 slice to a device buffer (caller frees via FreeDev).
 func UploadI8(vals []int8) unsafe.Pointer {
 	if len(vals) == 0 {
