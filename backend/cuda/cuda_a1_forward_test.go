@@ -405,3 +405,6 @@ func TestLeakA1Forward(t *testing.T) {
 	}
 	noLeak(t, "A1 f16 forward step", 8, step)
 }
+
+func BenchmarkBatchedGraphA1_b1024(b *testing.B) { benchBatchedGraphA1(b, 1024, 128, 22) }
+func BenchmarkBatchedGraphA1_b1536(b *testing.B) { benchBatchedGraphA1(b, 1536, 128, 22) }
