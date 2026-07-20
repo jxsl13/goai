@@ -120,6 +120,11 @@ extern "C" __global__ void wmma_paged_decode(const float* Q, const float* poolK,
 // occupancy) AND handles arbitrary seqLen — the regime where the warp-GQA kernel degrades and vLLM's
 // Flash-Decoding wins. Running (max, sum, unnormalized O) carried in shared across tiles; QK/PV WMMA
 // per tile on warp 0. hd==64, group<=8, blockSize<=16. Q,O f32 [batch,qHeads*hd]; poolK/V f32.
+// MEASURED: 0.73-0.74x the warp-GQA kernel at ctx 128 AND 512 (M=8 GQA group wastes 50% of WMMA's
+// M=16 tile; occupancy shared-limited). A 4-warp FTILE=64 variant (distribute the 4 QK + 4 PV col-
+// tiles across warps) was tried and is WORSE (0.60x — 32KB shared drops occupancy to 1 block/SM,
+// outweighing the intra-block parallelism). WMMA is the wrong tool for M=8 decode attention; do NOT
+// re-attempt. Kept as a correct, context-general reference (the non-flash kernel above caps at 128).
 #define FTILE 32
 extern "C" __global__ void wmma_paged_decode_flash(const float* Q, const float* poolK, const float* poolV,
                                                    const int* blockTables, const int* seqLens, float* O,
