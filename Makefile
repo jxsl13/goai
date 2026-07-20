@@ -5,7 +5,7 @@ CGO_OFF   = CGO_ENABLED=0
 
 .PHONY: all build vet test race bench fmt tidy ci golden simd-build clean apicheck \
 	metal-test metal-bench cuda-test vulkan-spv vulkan-test vulkan-bench \
-	perfscan perfscan-check
+	perfscan perfscan-check preflight preflight-full install-hooks
 
 all: build vet apicheck test
 
@@ -229,10 +229,50 @@ perfscan:
 perfscan-check:
 	$(CGO_OFF) $(GO) test ./internal/perfscan/
 
-## install-hooks: wire lint-md as a git pre-commit hook.
+## preflight: the local PRE-PUSH gate — every HARD CI check runnable without a
+## C/CUDA/Vulkan toolchain, fail-fast (§V23). Mirrors ci.yml: gofmt (the cgo+race
+## lane), go vet ./... (all lanes' §V23 soundness backstop, compiles every _test.go),
+## the -short test suite INCLUDING the always-run meta-tests speccheck / perfscan /
+## specgraph render-sync (pure-go lane + §V41), and the go-mod-tidy drift gate. The
+## -short suite self-skips the trained-model e2e tests, so this is ~seconds. It runs
+## every package EXCEPT internal/mdlint and internal/apicheck — the two CI deliberately
+## holds out of the always-run gate as known-red debt (mdlint reddens on unrelated
+## worker markdown, apicheck on the llamagpu doc-debt), so gating on them here would
+## diverge from CI, not match it. The cgo/metal/cuda/vulkan/simd COMPILE lanes need
+## toolchains and run in CI; add the locally-available ones with `make preflight-full`.
+preflight:
+	@echo "→ gofmt (tracked *.go)"
+	@bad=$$(gofmt -l $$(git ls-files '*.go')); if [ -n "$$bad" ]; then echo "unformatted — run gofmt -w:"; echo "$$bad"; exit 1; fi
+	@echo "→ CGO_ENABLED=0 go build ./..."
+	@$(CGO_OFF) $(GO) build ./...
+	@echo "→ CGO_ENABLED=0 go vet ./...  (compiles every test, §V23)"
+	@$(CGO_OFF) $(GO) vet ./...
+	@echo "→ go mod tidy drift gate"
+	@$(CGO_OFF) $(GO) mod tidy && git diff --exit-code -- go.mod go.sum || { echo "go.mod/go.sum drift — commit the tidy result"; exit 1; }
+	@echo "→ CGO_ENABLED=0 go test -short  (buildable pure-go packages, minus held-out mdlint/apicheck)"
+	@$(CGO_OFF) $(GO) test -short -count=1 $$($(CGO_OFF) $(GO) list -e -f '{{if or .GoFiles .TestGoFiles}}{{.ImportPath}}{{end}}' ./... | grep -vE 'internal/(mdlint|apicheck)$$')
+	@echo "✓ preflight OK — cgo/metal/cuda/vulkan/simd lanes run in CI (or: make preflight-full)"
+
+## preflight-full: preflight + the remaining CI lanes runnable on THIS machine — the
+## §V5 benchmark smoke (build+run each once) and the simd build (soft lane). cgo/metal
+## (needs CGO), vulkan (needs an ICD) and cuda (needs the CUDA toolkit) stay explicit
+## opt-ins via their own targets (make metal-test / vulkan-test / cuda-test).
+preflight-full: preflight
+	@echo "→ benchmark smoke (§V5, -benchtime=1x)"
+	@$(CGO_OFF) $(GO) test ./... -run='^$$' -bench=. -benchtime=1x -timeout 15m >/dev/null
+	@echo "→ simd build (GOEXPERIMENT=simd, soft lane)"
+	@GOEXPERIMENT=simd $(CGO_OFF) $(GO) build -tags=simd ./...
+	@echo "✓ preflight-full OK"
+
+## install-hooks: wire `make preflight` as the git PRE-PUSH hook — CI runs on push, so
+## the comprehensive gate belongs there (commits stay fast). Retires the old lint-md
+## pre-commit hook (CI does not gate markdown; it reddened on unrelated worker files).
+## Re-run after editing the preflight target.
 install-hooks:
-	printf '#!/bin/sh\nmake lint-md || exit 1\n' > .git/hooks/pre-commit
-	chmod +x .git/hooks/pre-commit
+	rm -f .git/hooks/pre-commit
+	printf '#!/bin/sh\nexec make preflight\n' > .git/hooks/pre-push
+	chmod +x .git/hooks/pre-push
+	@echo "wired .git/hooks/pre-push → make preflight (retired the lint-md pre-commit)"
 
 ## golden: regenerate reference values from NumPy/torch (§V1,§V13).
 ## Uses a local venv (PEP 668). Bootstrap: python3 -m venv .venv && .venv/bin/pip install numpy
