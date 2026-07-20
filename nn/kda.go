@@ -21,11 +21,14 @@ import (
 // per full-attention layer (the hybrid is architecture wiring, not new math).
 // Keys and queries are L2-normalized per row (the DeltaNet convention, matching
 // GatedDeltaNet). Host f64 analysis utility. q,k [seq,d_k]; v [seq,d_v];
-// a [seq,d_k]; beta [seq].
+// a [seq,d_k]; beta [seq,1].
 func KimiDeltaAttention(q, k, v, a, beta *tensor.Tensor) (*tensor.Tensor, error) {
-	for _, t := range []*tensor.Tensor{q, k, v, a} {
+	// beta is read per row as beta.AtF64(t,0), so it MUST be rank-2 [seq,1] like the
+	// others — guarding only q,k,v,a let a 1-D beta [seq] panic at that access and a
+	// [seq,W>1] beta silently contribute only column 0 (§B77).
+	for _, t := range []*tensor.Tensor{q, k, v, a, beta} {
 		if t.Ndim() != 2 {
-			return nil, fmt.Errorf("nn: KimiDeltaAttention wants rank-2 q,k,v,a")
+			return nil, fmt.Errorf("nn: KimiDeltaAttention wants rank-2 q,k,v,a,beta")
 		}
 	}
 	seq, dk := q.Shape()[0], q.Shape()[1]
@@ -35,6 +38,9 @@ func KimiDeltaAttention(q, k, v, a, beta *tensor.Tensor) (*tensor.Tensor, error)
 	}
 	if k.Shape()[1] != dk || a.Shape()[1] != dk {
 		return nil, fmt.Errorf("nn: KimiDeltaAttention k/a must be [seq,%d]", dk)
+	}
+	if beta.Shape()[1] != 1 {
+		return nil, fmt.Errorf("nn: KimiDeltaAttention beta must be [seq,1], got %v", beta.Shape())
 	}
 	out := tensor.New(q.Dtype(), tensor.Shape{seq, dv})
 	S := make([]float64, dv*dk) // memory [d_v, d_k]

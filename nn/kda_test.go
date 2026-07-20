@@ -84,3 +84,30 @@ func ExampleKimiDeltaAttention() {
 	fmt.Println(out.AtF64(1, 0)) // t1 reads back the t0 write
 	// Output: 2
 }
+
+// §B110/§B77: beta is read per row as beta.AtF64(t,0), so it must be rank-2 [seq,1].
+// Before the guard, a 1-D beta [seq] (as the doc wrongly said) PANICKED at that access
+// and a [seq,2] beta silently used only column 0 — the shape guard skipped beta entirely.
+func TestKDABetaShapeGuard(t *testing.T) {
+	const seq, dk, dv = 3, 2, 2
+	q, k, a := mobaProbe(1, seq, dk), mobaProbe(2, seq, dk), mobaProbe(4, seq, dk)
+	v := mobaProbe(3, seq, dv)
+	for _, tc := range []struct {
+		name string
+		beta *tensor.Tensor
+	}{
+		{"1-D [seq]", tensor.New(tensor.F64, tensor.Shape{seq})},
+		{"[seq,2]", tensor.New(tensor.F64, tensor.Shape{seq, 2})},
+	} {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("%s beta PANICKED (want clean error): %v", tc.name, r)
+				}
+			}()
+			if _, err := nn.KimiDeltaAttention(q, k, v, a, tc.beta); err == nil {
+				t.Errorf("%s beta: got nil error, want a shape error", tc.name)
+			}
+		}()
+	}
+}
