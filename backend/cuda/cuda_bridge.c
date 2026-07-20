@@ -237,6 +237,7 @@ static CUfunction gWmmaGemm = NULL; // nvcc-compiled WMMA GEMM (Tw-FLASHATTN sli
 static CUfunction gPagedDecode = NULL; // paged batched decode attention (FRONT B / B2)
 static CUfunction gPagedDecodeGqa = NULL; // paged batched decode, GQA K/V-shared (FRONT B, cuts group× L2 traffic)
 static CUfunction gPagedDecodeGqaF16 = NULL; // f16-KV twin of gPagedDecodeGqa (half the global K/V bytes)
+static CUfunction gRmsF16 = NULL, gSwigluF16 = NULL, gRopeF16 = NULL; // A1 fp16-activation elementwise twins (u16 I/O, f32 math)
 static CUfunction gWmmaAttn = NULL; // nvcc-compiled fused prefill attention (slice 2)
 static CUfunction gWmmaAttnGqa = NULL; // GQA/strided fused prefill attention (§ROADMAP A2)
 static int launch_cvt_f16(const void* src, void* dst, long n); // fwd decl (defined below)
@@ -1004,6 +1005,108 @@ int cu_rmsnorm_f32(const void* in, void* out, const void* gamma, int rows, int c
         rc = (cuLaunchKernel(gRms, blocks, 1, 1, threads, 1, 1, shmem, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// A1 fp16-activation elementwise twins: in/out are u16 (f16), gamma/inv stay f32 (resident).
+// h2f/f2h are PTX conversions; math runs in f32/f64 identically to the f32 kernels.
+#define A1_CVT_HELPERS \
+    "__device__ __forceinline__ float h2f(unsigned short h){ float f; asm(\"cvt.f32.f16 %0, %1;\":\"=f\"(f):\"h\"(h)); return f; }\n" \
+    "__device__ __forceinline__ unsigned short f2h(float f){ unsigned short h; asm(\"cvt.rn.f16.f32 %0, %1;\":\"=h\"(h):\"f\"(f)); return h; }\n"
+
+int cu_rmsnorm_f16(const void* in, void* out, const void* gamma, int rows, int cols, float eps) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto donerf; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto donerf; }
+    if (!gRmsF16 && compile_kernel(
+            A1_CVT_HELPERS
+            "extern \"C\" __global__ void rmsnorm_f16(const unsigned short* in, unsigned short* out, const float* w, int rows, int cols, float eps){\n"
+            "  int row=blockIdx.x; if(row>=rows) return;\n"
+            "  extern __shared__ double sh[];\n"
+            "  int t=threadIdx.x, nt=blockDim.x;\n"
+            "  const unsigned short* xr = in + (size_t)row*cols;\n"
+            "  unsigned short* yr = out + (size_t)row*cols;\n"
+            "  double local=0.0;\n"
+            "  for(int j=t;j<cols;j+=nt){ double v=h2f(xr[j]); local+=v*v; }\n"
+            "  sh[t]=local; __syncthreads();\n"
+            "  for(int s=nt/2;s>0;s>>=1){ if(t<s) sh[t]+=sh[t+s]; __syncthreads(); }\n"
+            "  double ms=sh[0]/(double)cols;\n"
+            "  float inv=(float)(1.0/sqrt(ms+(double)eps));\n"
+            "  for(int j=t;j<cols;j+=nt){ yr[j]=f2h(h2f(xr[j])*inv*w[j]); }\n"
+            "}\n",
+            "rmsnorm_f16.cu", "rmsnorm_f16", &gRmsF16) != 0) { rc = -2; goto donerf; }
+    {
+        int threads = 256, blocks = rows;
+        size_t shmem = (size_t)threads * sizeof(double);
+        void* args[6] = { (void*)&in, &out, (void*)&gamma, &rows, &cols, &eps };
+        rc = (cuLaunchKernel(gRmsF16, blocks, 1, 1, threads, 1, 1, shmem, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+donerf:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+int cu_swiglu_f16(void* gate, const void* up, int n) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto donesf; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto donesf; }
+    if (!gSwigluF16 && compile_kernel(
+            A1_CVT_HELPERS
+            "extern \"C\" __global__ void swiglu_f16(unsigned short* gate, const unsigned short* up, int n){\n"
+            "  int i = blockIdx.x*blockDim.x + threadIdx.x;\n"
+            "  if (i < n){ float v = h2f(gate[i]);\n"
+            "    float s = v>=0.0f ? 1.0f/(1.0f+expf(-v)) : expf(v)/(1.0f+expf(v));\n"
+            "    gate[i] = f2h(v*s*h2f(up[i])); }\n"
+            "}\n",
+            "swiglu_f16.cu", "swiglu_f16", &gSwigluF16) != 0) { rc = -2; goto donesf; }
+    {
+        int threads = 256, blocks = (n + threads - 1) / threads;
+        void* args[3] = { &gate, (void*)&up, &n };
+        rc = (cuLaunchKernel(gSwigluF16, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+donesf:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+int cu_rope_f16(void* x, const void* inv, int seq, int heads, int hd, int posOffset, double posDiv) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto donerpf; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto donerpf; }
+    if (!gRopeF16 && compile_kernel(
+            A1_CVT_HELPERS
+            "extern \"C\" __global__ void rope_f16(unsigned short* x, const float* inv, int seq, int heads, int hd, int posOffset, double posDiv){\n"
+            "  int half = hd/2;\n"
+            "  long total = (long)seq*heads*half;\n"
+            "  long gid = (long)blockIdx.x*blockDim.x + threadIdx.x;\n"
+            "  if (gid >= total) return;\n"
+            "  int i = (int)(gid % half);\n"
+            "  int h = (int)((gid / half) % heads);\n"
+            "  int p = (int)(gid / ((long)half*heads));\n"
+            "  double pos = (double)(posOffset + p) / posDiv;\n"
+            "  double ang = pos * (double)inv[i];\n"
+            "  const double TWO_PI = 6.283185307179586476925286766559;\n"
+            "  double k = floor(ang / TWO_PI + 0.5);\n"
+            "  float r = (float)(ang - k * TWO_PI);\n"
+            "  float c, s; sincosf(r, &s, &c);\n"
+            "  unsigned short* xr = x + (size_t)p*heads*hd + (size_t)h*hd;\n"
+            "  float qi = h2f(xr[i]), qih = h2f(xr[i+half]);\n"
+            "  xr[i] = f2h(qi*c - qih*s);\n"
+            "  xr[i+half] = f2h(qih*c + qi*s);\n"
+            "}\n",
+            "rope_f16.cu", "rope_f16", &gRopeF16) != 0) { rc = -2; goto donerpf; }
+    {
+        long total = (long)seq * heads * (hd / 2);
+        int threads = 256, blocks = (int)((total + threads - 1) / threads);
+        if (blocks < 1) blocks = 1;
+        void* args[7] = { &x, (void*)&inv, &seq, &heads, &hd, &posOffset, &posDiv };
+        rc = (cuLaunchKernel(gRopeF16, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+donerpf:
     pthread_mutex_unlock(&gLock);
     return rc;
 }

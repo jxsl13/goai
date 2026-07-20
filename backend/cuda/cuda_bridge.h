@@ -80,6 +80,10 @@ int cu_paged_decode_attn_gqa(const void* dQ, const void* dPoolK, const void* dPo
 int cu_cvt_f32_to_f16(void* dst16, const void* src32, long n);
 // cu_gemm_int8: C32[M,N] int32 = A8[M,K]·W8[K,N] int8 via cublasGemmEx IMMA (int8 tensor cores).
 int cu_gemm_int8(const void* dA8, const void* dW8, void* dC32, int M, int K, int N);
+// A1 fp16-activation elementwise twins — in/out are u16 (f16); gamma/inv stay f32. Math == the f32 kernels.
+int cu_rmsnorm_f16(const void* in, void* out, const void* gamma, int rows, int cols, float eps);
+int cu_swiglu_f16(void* gate, const void* up, int n);
+int cu_rope_f16(void* x, const void* inv, int seq, int heads, int hd, int posOffset, double posDiv);
 // cu_paged_decode_attn_gqa_f16: f16-KV twin of cu_paged_decode_attn_gqa (poolK16/V16 are u16, half the global bytes).
 int cu_paged_decode_attn_gqa_f16(const void* dQ, const void* dPoolK16, const void* dPoolV16, const void* dBlockTables, const void* dSeqLens, void* dO, int batch, int qHeads, int kvHeads, int hd, int blockSize, int maxBlocks, float scale);
 // cu_wmma_attn_gqa: fused prefill attention on f32 DEVICE buffers, [seq,heads·hd] GQA layout — drop-in for GroupedQueryAttention.
