@@ -19,7 +19,10 @@ Single-thread native plan→execute. You are main Claude. No swarm.
 1. Read `SPEC.md`. If missing → tell user to invoke the spec skill first. Stop.
 2. Read `FORMAT.md` once if not loaded.
 3. Read §R if present — external facts the build must honor, ⊥ re-derive or contradict.
-4. Parse invocation args:
+4. Pull the task's citation neighborhood (T915, cheap, <1s): `make spec-graph ARGS='related T<n>'`
+   + `ARGS='bugs-for <pkg>'` per touched package — prior same-class bugs, guarding §V, sibling
+   PERF patterns land in context instead of grepping SPEC.md.
+5. Parse invocation args:
    - `§T.n` → that task only
    - `--next` → lowest-numbered row with status `.` or `~`
    - `--all` or empty → every `.` row in §T order

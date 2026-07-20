@@ -4,6 +4,23 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### tooling -- specgraph: queryable citation graph over SPEC/docs/git for bug- and pattern-lookup (T915, 2026-07-20)
+
+New dependency-free CLI `internal/specgraph` (`make spec-graph ARGS="why V22"`): parses SPEC.md,
+the worker specs, docs/** (ADRs included), CHANGELOG.md and `git log` into a typed in-memory
+graph — tasks, bugs, invariants, constraints, ADRs, commits, doc sections and packages as nodes;
+cites/guards/fixed_by/implements/records/relates/mentions/touches as edges, every record anchored
+at `file:line`. Subcommands `show`/`related`/`why`/`bugs-for`/`impact`/`path` answer the multi-hop
+questions that previously meant grepping megabytes ("which bugs touched this package", "why does
+this invariant exist"); `patterns` clusters recurring §B bug classes and done-PERF optimizations
+deterministically; `search` is BM25 with optional hybrid vector ranking through GoAI's own
+`nlp.Bert` + `MeanPool` + `CosineRerank` (a local HF checkpoint via `$SPECGRAPH_EMBED_MODEL`,
+no external API); `dangling` reports references whose target does not exist. A gitignored
+`.specgraph/` JSONL cache (mtime+HEAD-invalidated, never a source of truth) makes repeat calls
+~3x faster. `internal/speccheck` remains the §V36 validator; a drift test pins the two id
+grammars to each other. First `dangling` run already surfaced real hygiene debt (V27 cited but
+never defined; a changelog entry for a T765 that has no §T row).
+
 ### fix -- read-only parallel audit round: nine latent-defect fixes across format/nn/nlp/classic (T909, 2026-07-20)
 
 A four-subagent read-only audit swept format, nn, nlp and classic for latent defects; each finding

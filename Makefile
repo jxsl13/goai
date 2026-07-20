@@ -195,6 +195,17 @@ lint-md:
 spec-check:
 	$(CGO_OFF) $(GO) test ./internal/speccheck/
 
+## spec-graph: query the SPEC.md/docs citation graph (T915) — e.g.
+## make spec-graph ARGS='why V22' | ARGS='bugs-for format/gguf' | ARGS='patterns'.
+## The graph rebuilds from the corpus + git log; .specgraph/ only caches.
+spec-graph:
+	$(CGO_OFF) $(GO) run ./internal/specgraph $(ARGS)
+
+## spec-graph-check: the specgraph test suite (fixture extraction, real-corpus
+## golden edges, determinism, cache roundtrip, speccheck-drift pin).
+spec-graph-check:
+	$(CGO_OFF) $(GO) test ./internal/specgraph/
+
 ## install-hooks: wire lint-md as a git pre-commit hook.
 install-hooks:
 	printf '#!/bin/sh\nmake lint-md || exit 1\n' > .git/hooks/pre-commit

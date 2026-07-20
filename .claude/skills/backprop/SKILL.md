@@ -26,6 +26,9 @@ That edit is backprop.
 Read failure output / bug report.
 Find exact file:line of wrong behavior.
 Name root cause in one caveman sentence.
+Check recurrence (T915): `make spec-graph ARGS='bugs-for <pkg>'` +
+`ARGS='search <cause keywords>'` — if a prior §B row matches the class,
+its guarding §V is the invariant to extend (cite both in the new row).
 
 ### 2. ANALYZE
 Ask three questions:

@@ -1,0 +1,17 @@
+V1  SPEC.md:32  FIXTURE-TAG  every op has a reference test. Prevents §B1-class waste.
+guards bugs (2):
+  B2  SPEC.md:41  2026-01-03  per-element allocation in nn.Fixture optimizer step loop, same NaN class
+  B1  SPEC.md:40  2026-01-02  per-element allocation in backend/cpu softmax loop caused NaN poisoning (commit abc1234)
+cited by (6):
+  T10  SPEC-worker-test.md:10  x  done  med  worker-side task for backend/cpu, prose mentions Tw-FLASHATTN and Iw8
+  B2  SPEC.md:41  2026-01-03  per-element allocation in nn.Fixture optimizer step loop, same NaN class
+  T2  SPEC.md:48  x  done  med  PERF nn.Fixture optimizer fast path, T1 class
+  B1  SPEC.md:40  2026-01-02  per-element allocation in backend/cpu softmax loop caused NaN poisoning (commit abc1234)
+  C1  SPEC.md:13  pure Go, references §V1.
+  T1  SPEC.md:47  x  done  high  scaffold backend/cpu softmax (commit abc1234)
+related ADRs (1):
+  ADR-0001  docs/decisions/ADR-0001-fixture.md:1  Accepted  2026-01-01  fixture decision
+documented in (1):
+  docs/notes.md#Measured section  docs/notes.md:3  Measured section
+cites (1):
+  B1  SPEC.md:40  2026-01-02  per-element allocation in backend/cpu softmax loop caused NaN poisoning (commit abc1234)

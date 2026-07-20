@@ -26,7 +26,7 @@ CURRENT STATE (2026-07-16, this worker, most recent first — supersedes the his
   FUSED cu_rope_partial kernel — rope_band is for fused-QKV band extraction, NOT partial rotary; +
   LayerNorm-bias/GELU-MLP variants). Surfaced, NOT built (unmeasured + cross-cutting). rope_band ≠
   partial rotary; RoPEAttrs has no RotaryDim field. This is the 2nd big cross-cutting lever after MoE
-  T762 — both need coordination/reassignment, neither is a clean in-niche quick win. **SLICE 1 BUILT (2026-07-16 ~21:34Z, branch cuda-rope-partial, commit ed2db20, PUSH PENDING ~21:58 perf window): cu_rope_partial** — the foundational partial-rotary CUDA kernel (mirrors cu_rope_f32 but half=rotaryDim/2, only the rotaryDim prefix rotated, tail passthrough; rope_f32 = rotaryDim==hd case). DeviceF32.RoPEPartial wrapper (own file). VALIDATED TestCUDARoPEPartial: (1) rotaryDim==hd BIT-IDENTICAL to trusted full RoPE; (2) rotaryDim<hd == host partial-rope (Phi/decode/PI cases). This is REAL in-niche work (backend/cuda, low-collision new files), NOT dead code = the prereq for a graph-captured llamagpu decoder of GPT-NeoX/Phi/StableLM. NEXT SLICES (multi-fire, in llamagpu — my domain per the feat(cuda) NewCUDA history): a GPT-NeoX/StableLM device decoder (LayerNorm-bias + GELU-MLP + parallel/sequential residual + partial-rope via RoPEPartial + KV cache + graph capture), parity vs the nlp reference model. SCOPED (same fire ~21:40Z): cu_rope_partial was THE key missing kernel — confirmed by studying llamagpu/gpt.go GPTDecoder (has device LayerNorm-WITH-BIAS) + the Llama Decoder (SwiGLU/GQA/KV-cache/graph-capture). CLEANEST TARGET = StableLM: it ≈ the Llama device decoder with exactly 2 SWAPS — RMSNorm→LayerNorm-bias (GPTDecoder already has it) + full-RoPE→partialRoPE (my RoPEPartial). SwiGLU FFN + GQA + untied head + KV cache all reuse the Llama path. So the decoder is now a pure ASSEMBLY of existing device primitives (NO more foundational kernels). Slice plan: (2) cu_rope_partial_dpos + recorder support (device-pos partial rope for graph capture — build WHEN the decoder needs it, not before per C3); (3) assemble StableLMDecoder in llamagpu (new file, mine) composing Llama-SwiGLU/GQA/KV + LayerNorm-bias + RoPEPartial(Dpos); (4) parity vs nlp.StableLM + e2e decode t/s. Collision note: depends on nlp.StableLM weight layout (main-machine model type) as INPUT, but the decoder file is mine. GPT-NeoX/Phi are harder (parallel residual, biased proj, GELU-MLP) — do StableLM first. **BOUNDARY FOUND (same-ish fire ~21:44Z, studied llamagpu/decoder.go): the decoder ASSEMBLY is CROSS-CUTTING, NOT purely mine.** decoder.go = the backend-AGNOSTIC Decoder core (drives metal+vulkan+cuda via a `recorder` interface), authored by the gpu:/T613-614 unification (NOT my cuda-adapter work). It's Llama-HARDCODED: inline r.RMSNorm at Step (lines 377/402/414/520/546/558), takes nlp.LlamaConfig, full RoPE. Supporting StableLM needs EITHER generalize the shared core (norm-type + rope-type params → affects metal/vulkan, collision-risk) OR a heavily-duplicated separate decoder (like GPTDecoder). Neither is a clean solo in-niche build. So cu_rope_partial (slice 1) WAS the clean purely-mine boundary; the rest is coordinate-with-owners (same pattern as MoE T762). Purely-mine leftovers if pursued: cu_rope_partial_dpos + cuda.Recorder.RoPEPartial (additive, backend/cuda) — but GOLD-PLATING w/o the decoder consumer (C3), so NOT built. NET: slice 1 ships; the decoder is surfaced as cross-cutting, awaiting coordination/greenlight. **UPDATE ~21:50Z: slice 2 (cu_rope_partial_dpos + RoPEPartialDpos) BUILT after all — reframed as COMPLETING the partial-rope capability (a host-pos-only partial rope is incomplete for decode; graph capture needs device-pos), not gold-plating a new feature. Both commits on branch cuda-rope-partial (ed2db20 eager + 900da69 dpos), bit-exact (dpos==host-offset), PUSH PENDING ~21:58 perf window (rebase onto main c28ae88+ first — phantom deletions = main's new granitemoe/olmoe T766 MoE files). PR = complete partial-rope CUDA kernels. The decoder ASSEMBLY stays cross-cutting/coordinate.**
+  T762 — both need coordination/reassignment, neither is a clean in-niche quick win. **SLICE 1 BUILT (2026-07-16 ≈21:34Z, branch cuda-rope-partial, commit ed2db20, PUSH PENDING ≈21:58 perf window): cu_rope_partial** — the foundational partial-rotary CUDA kernel (mirrors cu_rope_f32 but half=rotaryDim/2, only the rotaryDim prefix rotated, tail passthrough; rope_f32 = rotaryDim==hd case). DeviceF32.RoPEPartial wrapper (own file). VALIDATED TestCUDARoPEPartial: (1) rotaryDim==hd BIT-IDENTICAL to trusted full RoPE; (2) rotaryDim<hd == host partial-rope (Phi/decode/PI cases). This is REAL in-niche work (backend/cuda, low-collision new files), NOT dead code = the prereq for a graph-captured llamagpu decoder of GPT-NeoX/Phi/StableLM. NEXT SLICES (multi-fire, in llamagpu — my domain per the feat(cuda) NewCUDA history): a GPT-NeoX/StableLM device decoder (LayerNorm-bias + GELU-MLP + parallel/sequential residual + partial-rope via RoPEPartial + KV cache + graph capture), parity vs the nlp reference model. SCOPED (same fire ≈21:40Z): cu_rope_partial was THE key missing kernel — confirmed by studying llamagpu/gpt.go GPTDecoder (has device LayerNorm-WITH-BIAS) + the Llama Decoder (SwiGLU/GQA/KV-cache/graph-capture). CLEANEST TARGET = StableLM: it ≈ the Llama device decoder with exactly 2 SWAPS — RMSNorm→LayerNorm-bias (GPTDecoder already has it) + full-RoPE→partialRoPE (my RoPEPartial). SwiGLU FFN + GQA + untied head + KV cache all reuse the Llama path. So the decoder is now a pure ASSEMBLY of existing device primitives (NO more foundational kernels). Slice plan: (2) cu_rope_partial_dpos + recorder support (device-pos partial rope for graph capture — build WHEN the decoder needs it, not before per C3); (3) assemble StableLMDecoder in llamagpu (new file, mine) composing Llama-SwiGLU/GQA/KV + LayerNorm-bias + RoPEPartial(Dpos); (4) parity vs nlp.StableLM + e2e decode t/s. Collision note: depends on nlp.StableLM weight layout (main-machine model type) as INPUT, but the decoder file is mine. GPT-NeoX/Phi are harder (parallel residual, biased proj, GELU-MLP) — do StableLM first. **BOUNDARY FOUND (same-ish fire ≈21:44Z, studied llamagpu/decoder.go): the decoder ASSEMBLY is CROSS-CUTTING, NOT purely mine.** decoder.go = the backend-AGNOSTIC Decoder core (drives metal+vulkan+cuda via a `recorder` interface), authored by the gpu:/T613-614 unification (NOT my cuda-adapter work). It's Llama-HARDCODED: inline r.RMSNorm at Step (lines 377/402/414/520/546/558), takes nlp.LlamaConfig, full RoPE. Supporting StableLM needs EITHER generalize the shared core (norm-type + rope-type params → affects metal/vulkan, collision-risk) OR a heavily-duplicated separate decoder (like GPTDecoder). Neither is a clean solo in-niche build. So cu_rope_partial (slice 1) WAS the clean purely-mine boundary; the rest is coordinate-with-owners (same pattern as MoE T762). Purely-mine leftovers if pursued: cu_rope_partial_dpos + cuda.Recorder.RoPEPartial (additive, backend/cuda) — but GOLD-PLATING w/o the decoder consumer (C3), so NOT built. NET: slice 1 ships; the decoder is surfaced as cross-cutting, awaiting coordination/greenlight. **UPDATE ≈21:50Z: slice 2 (cu_rope_partial_dpos + RoPEPartialDpos) BUILT after all — reframed as COMPLETING the partial-rope capability (a host-pos-only partial rope is incomplete for decode; graph capture needs device-pos), not gold-plating a new feature. Both commits on branch cuda-rope-partial (ed2db20 eager + 900da69 dpos), bit-exact (dpos==host-offset), PUSH PENDING ≈21:58 perf window (rebase onto main c28ae88+ first — phantom deletions = main's new granitemoe/olmoe T766 MoE files). PR = complete partial-rope CUDA kernels. The decoder ASSEMBLY stays cross-cutting/coordinate.**
 
 
 - **★ BIGGEST MoE DECODE LEVER FOUND — DENSE expert eval at decode = 4-15x wasted FFN compute (2026-07-16
@@ -107,7 +107,7 @@ CURRENT STATE (2026-07-16, this worker, most recent first — supersedes the his
   Achieved BW RISES with more KV bytes = the OCCUPANCY/LATENCY-bound signature (NOT bandwidth-bound).
   CORROBORATED: f16-KV path is NO faster (186 vs 130 us same shape) — halving bytes can't help a
   non-BW-bound kernel (f16-KV is a VRAM/capacity play, not a decode-speed one). ROOT CAUSE: the 32-row
-  K+V shared tile is ~33KB (+group·hd·4 query) → ~37KB even at the max supported group=8 → pins ~1
+  K+V shared tile is ≈33KB (+group·hd·4 query) → ≈37KB even at the max supported group=8 → pins ≈1
   block/SM on the 48KB budget → memory latency unhidden. The kernel guards group=qHeads/kvHeads>8 with
   code -4 (register/warp budget; pure MQA / kvHeads=2 route through the non-flash path, NOT a bug).
   **FIX (Tw82) DONE + committed e1ccd05 (same branch cuda-flash-decode-probe, on top of the Tw81
@@ -160,14 +160,14 @@ CURRENT STATE (2026-07-16, this worker, most recent first — supersedes the his
   GB/s, same 33KB 32-row tile -> 1 block/SM); can't use u16/cvt (genuinely f32) so its lever is the
   16-ROW TILE (2 blocks/SM, costs half-warp QKt) = the one f32-applicable idea from Tw82. (Tw85?) make
   f16-KV the DEFAULT now that it's faster+smaller (needs e2e accuracy sign-off). E2E: at ctx2048
-  attention ~= 22 layers x 81us ~= 1.8ms/token (was 4.1ms) = a real fraction of the decode step at long
+  attention ≈ 22 layers x 81us ≈ 1.8ms/token (was 4.1ms) = a real fraction of the decode step at long
   ctx (unlike the Q4_K-predecode dilution), so the win is NOT diluted where it applies.**
-  **CORRECTION + Tw84 E2E MEASURED (2026-07-16 ~20:30Z) — my ctx2048 "~40% of decode" estimate above
+  **CORRECTION + Tw84 E2E MEASURED (2026-07-16 ≈20:30Z) — my ctx2048 "≈40% of decode" estimate above
   was WRONG; MEASURED it (BenchmarkTinyLlamaDecodeCtx_1024, routes through the f32 flash = Tw84):
   BEFORE (32-row) 172.4 tok/s vs AFTER (Tw84 16-row) 170.3 tok/s = WITHIN NOISE, ~0 e2e gain. Tw84's
   1.16-1.52x KERNEL win DILUTES to ~0 e2e for TinyLlama Q8 decode because it's WEIGHT-BANDWIDTH-BOUND:
   ~1GB/token Q8 weight read dominates; TinyLlama attention (32q/4kv/hd64) at ctx1024 = 22 layers x
-  ~0.12ms = ~2% of the 5.8ms/token step. So a 1.16x on 2% = ~0.3% e2e. THE Q4_K-PREDECODE DILUTION
+  ≈0.12ms = ≈2% of the 5.8ms/token step. So a 1.16x on 2% = ≈0.3% e2e. THE Q4_K-PREDECODE DILUTION
   LESSON AGAIN (V22/V28): decode-attention kernel wins are e2e-NEUTRAL for weight-bound small-model
   Q8/Q4 decode; they matter e2e ONLY where attention is a big fraction = LONG context (8k+), MHA /
   large-hd models, BIG models, or the f16-KV VRAM mode at long ctx. Ship the decode-attn PR HONESTLY:
@@ -197,7 +197,7 @@ CURRENT STATE (2026-07-16, this worker, most recent first — supersedes the his
   launch sharedMemBytes). NOTE the branch is misnamed 'repack' (fix is grid-in-shared, not repack).**
   (Grids are small — IQ3 256×4=4KB, IQ2 256×8=8KB, IQ1 2048×8=64KB — L2-cached, so the
   gather is likely minor; a stub-probe would confirm.) HIGH VALUE + NOT DILUTED: an i-quant MODEL runs
-  ALL projections through this kernel (unlike the predecode's k/v+down subset), so ~2× kernel = ~2×
+  ALL projections through this kernel (unlike the predecode's k/v+down subset), so ≈2× kernel = ≈2×
   decode — and i-quants are exactly the extreme-quant that fits big models on the 12GB card = this
   hardware's niche. FIX = §Tw72 repack in the resident ctor (split each block into aligned scale/index/
   qh regions → coalesced uint reads + keep the float4 acts I already have). Applies to IQ1/IQ2/IQ3.
@@ -222,7 +222,7 @@ CURRENT STATE (2026-07-16, this worker, most recent first — supersedes the his
   awk-insert before the iq2xs anchor + sed-add the globals. VERIFIED: all IQ1+IQ3 parity tests pass
   (reconstruction correct), gofmt+vet clean, no deletions. ALSO wired the IQ3 dispatcher cases (18/21)
   into NewResidentQuant now that IQ3 is in main → dispatcher covers the full family. Both branches
-  gofmt-clean, validated, ready. Windows: playbook ~18:00, IQ1 ~19:00 (main does nlp not cuda, so
+  gofmt-clean, validated, ready. Windows: playbook ≈18:00, IQ1 ≈19:00 (main does nlp not cuda, so
   future advances likely only re-conflict CHANGELOG/SPEC, not the hard bridge.c). 
 - **IQ3 → PR #125 (superseded above).** The STALE-GUARDED time-gated push
   I armed WORKED: main jumped a048489→d4247f7 (Gemma T742, +T740/T741) right as the window opened;
@@ -327,7 +327,7 @@ CURRENT STATE (2026-07-16, this worker, most recent first — supersedes the his
   DECISIVE: on Ampere sm_86 the 384-thread/18KB-shared block (2 blocks/SM) + 4 idle producer warps
   cost MORE occupancy than the producer-streaming buys. EVERY big-tile/warp-spec variant regresses
   (lm2 bigger-M, lmw bigger-N, ws warp-spec). **The int8 GEMM is at its practical hand-NVRTC CEILING
-  on the 3060: ~22-23 TOPS (lm3 22850), beats cuBLAS f16 by 7%, ~22% of int8 peak. The 2× needs
+  on the 3060: ≈22-23 TOPS (lm3 22850), beats cuBLAS f16 by 7%, ≈22% of int8 peak. The 2× needs
   CUTLASS-level ptxas tuning (register alloc + tile sizing) unreachable in hand-written NVRTC.**
   → PREFILL-SPEED-vs-llcpp is HW/EFFORT-LIMITED and now CLOSED. Don't re-attempt the int8-GEMM 2×
   (all levers exhausted+measured). The realistic CUDA wins are SHIPPED (PRs #118-#122: IQ2, MMQ
@@ -354,7 +354,7 @@ CURRENT STATE (2026-07-16, this worker, most recent first — supersedes the his
   wants ~8 consumer warp-tiles), and the Ampere CUTLASS norm is SOFTWARE PIPELINING (all warps
   load+compute, multi-stage) — which I already tried (lm3 3-stage +3%; bigger tiles regress) and hit
   the OCCUPANCY WALL. So the named-barrier de-risk is valid but warp-spec's PAYOFF on this HW is
-  UNCERTAIN; ~23 TOPS may be near the practical hand-NVRTC limit on a 3060 (CUTLASS's ~40 TOPS is
+  UNCERTAIN; ≈23 TOPS may be near the practical hand-NVRTC limit on a 3060 (CUTLASS's ≈40 TOPS is
   ptxas-level tuning hard to replicate). NEXT-FIRE DECISION: attempt ONE warp-spec 64×128 build to
   MEASURE — beats lm3 22850 → pursue; occupancy-capped like the rest → int8-GEMM is at its 3060
   ceiling, prefill-speed-vs-llcpp closed as HW-limited → pivot. The incremental MMQ wins (ldmatrix+
@@ -486,8 +486,8 @@ CURRENT STATE (2026-07-16, this worker, most recent first — supersedes the his
 - **★★ STUB PROBE OVERTURNS "occupancy-bound" — int8 GEMM is MEMORY-PIPELINE-LATENCY-bound (2026-07-16
   ~13:00Z)**: no ncu on this box (pip wheels = ptxas only), so used the stub method — ran lm with the
   mma.sync REPLACED by a cheap accumulate (d+=ra+rb, loads kept live), measured vs full lm. RESULT:
-  stub ~47100 ns vs full ~48500 ns → **the MMAs are only ~3% of runtime**. Tensor cores ~97% IDLE
-  waiting for data; effective BW ~90 GB/s = only 25% of the 3060's ~360 GB/s. So the int8 GEMM is NOT
+  stub ≈47100 ns vs full ≈48500 ns → **the MMAs are only ≈3% of runtime**. Tensor cores ≈97% IDLE
+  waiting for data; effective BW ≈90 GB/s = only 25% of the 3060's ≈360 GB/s. So the int8 GEMM is NOT
   MMA-bound and NOT bandwidth-bound — it's LATENCY-bound on the memory pipeline (too few in-flight
   loads to saturate BW). CORRECTS the "occupancy-bound, register-tiling regresses, 2× deferred" call:
   the real lever is **DEEPER cp.async PIPELINING** (3-4 stages vs the current 2 → more loads in flight
@@ -513,7 +513,7 @@ CURRENT STATE (2026-07-16, this worker, most recent first — supersedes the his
   whether to commit to the warp-specialization rewrite or pivot (the shippable CUDA wins are done).
 - **BYTE RE-COUNT + WIDE-N EXPERIMENT → int8 GEMM CEILING DEFINITIVE (2026-07-16 ~13:15Z)**: corrected
   the stub-probe BW math — the GEMM moves ~16.8MB WITH re-reads (A re-read N/64=32×, W M/64=2×) at
-  ~357 GB/s = ~94% of the 3060's ~360 GB/s peak → it's BANDWIDTH-bound, not latency-bound. Tested the
+  ≈357 GB/s = ≈94% of the 3060's ≈360 GB/s peak → it's BANDWIDTH-bound, not latency-bound. Tested the
   implied lever (cu_matmul_i8_mma_lmw, wide-N 64x128, halves A re-read to 16×): CORRECT but REGRESSED
   to 21577 (vs lm3 22850). REFUTES "just cut A re-reads" — the wider block's occupancy drop (sWt 128
   rows → 18KB shared → fewer blocks/SM) LOWERS ACHIEVED BW more than the byte savings help. So achieved
@@ -574,8 +574,8 @@ CURRENT STATE (2026-07-16, this worker, most recent first — supersedes the his
   shared-fill behind MMAs — the BIG lever (1.91×). **BASELINE vs cuBLAS @same shape (BenchmarkF16acc_qkv):
   cuBLAS f16 f32-accum 9998 GFLOP/s (int8-DB now BEATS it 1.1×, 97950 vs 107394 ns); cuBLAS f16
   f16-accum 21279 GFLOP/s (the FAST prefill path GOAI_CUDA_F16ACC uses — int8 still ~1.94× behind).**
-  int8 peak GA106 ~2× f16 peak → matching cuBLAS's fraction-of-peak on int8 = ~2× ahead of f16-accum
-  (llcpp MMQ lever). Now ~11 TOPS = ~11% of int8 peak.
+  int8 peak GA106 ≈2× f16 peak → matching cuBLAS's fraction-of-peak on int8 = ≈2× ahead of f16-accum
+  (llcpp MMQ lever). Now ≈11 TOPS = ≈11% of int8 peak.
 - **SLICE 1e TRIED + REJECTED**: (a) wider 64x128 block REGRESSED (9738, worse B bank conflicts +
   occupancy); (b) vectorized *(int*) A reads NEUTRAL (nvcc already coalesced; A not the bottleneck).
   Reverted. Diagnosis: B-fragment strided reads were the limiter — pW[c*64+col] gathered 4 shared
@@ -586,7 +586,7 @@ CURRENT STATE (2026-07-16, this worker, most recent first — supersedes the his
   makes B-fragment reads CONTIGUOUS single-int32 loads → kills the conflict. CORRECT (maxErr 0).
   **19100 GOP/s = 1.75× _db (10900)**. Trajectory: 2300→3438→5744→10962→**19100**. vs cuBLAS
   @128x2048x2048: beats f16-f32acc (9998) by 1.91×; at **~90% of f16-f16acc (21279)** — the fast
-  prefill path — WITHIN 11%. ~19 TOPS = ~19% of int8 peak. BONUS: [N][K] = exactly how GGUF stores
+  prefill path — WITHIN 11%. ≈19 TOPS = ≈19% of int8 peak. BONUS: [N][K] = exactly how GGUF stores
   weights → MMQ wiring needs NO transpose.
 - **★★ SLICE 1g — CONFLICT-FREE PADDING = PARITY WITH cuBLAS f16 (branch cuda-i8-mma, commit
   722129c, KEEPER/best)**: cu_matmul_i8_mma_wp = _wt with shared rows padded 32→**48 bytes** (32 data
@@ -597,7 +597,7 @@ CURRENT STATE (2026-07-16, this worker, most recent first — supersedes the his
   reads. CORRECT (maxErr 0). **21135 GOP/s (avg 21268/20964/21173) = 1.10× _wt**. Trajectory:
   2300→3438→5744→10962→19100→**21135**. vs cuBLAS @128x2048x2048: beats f16-f32acc (9998) 2.11×;
   **at 99.3% of f16-f16acc (21279) = PARITY** with the fastest cuBLAS f16 prefill path. Now ~21 TOPS
-  = ~21% of int8 peak (~102 TOPS) vs cuBLAS f16's ~42% of f16 peak → still headroom to BEAT outright.
+  = ≈21% of int8 peak (≈102 TOPS) vs cuBLAS f16's ≈42% of f16 peak → still headroom to BEAT outright.
 - **SLICE 1h — wide block RE-TRY, REJECTED AGAIN (occupancy this time, not conflicts)**: with reads
   now conflict-free, retried the 64x128 block (8 MMAs/warp, sWt[128][48]). CORRECT (maxErr 0) but
   REGRESSED to 19100 (vs wp 21135). ROOT CAUSE now OCCUPANCY: sWt 128 rows → 18KB shared/block → 2
@@ -676,10 +676,10 @@ CURRENT STATE (2026-07-16, this worker, most recent first — supersedes the his
   b010f59) — PUSH AT 11:53Z window**. Added real-weight e2e validation (TestCUDAResidentMMQvsF16Real
   Weights): builds ResidentBF16 AND ResidentMMQ from the SAME dequantized Qwen2.5-0.5B projections
   (attn_q/attn_output/ffn_gate/ffn_down), both vs f32 GEMM. RESULT: f16-vs-f32 ~0.15% RMS, MMQ-vs-f32
-  ~0.8%, MMQ-vs-f16 ~0.8%; **weight VRAM MMQ = 56% of f16 (44% saved)**. Proves the int8 drop-in is
+  ≈0.8%, MMQ-vs-f16 ≈0.8%; **weight VRAM MMQ = 56% of f16 (44% saved)**. Proves the int8 drop-in is
   valid on REAL weights + quantifies the VRAM win. Branch diff = 3 new files (cuda_mmq.go +
   cuda_mmq_test.go + cuda_mmq_e2e_test.go), clean vs origin/main. IMPORTANT MODEL-TEST TRICK: real
-  GGUFs at /var/home/john/Development/goai/models/; worktree models/ is a stub → `ln -sf <real>/qwen2.5
+  GGUFs at /var/home/john/Development/goai/models/; worktree models/ is a stub → `ln -sf $REAL/qwen2.5
   -0.5b-instruct-q8_0.gguf models/` before the run, `rm` BEFORE commit (never commit the symlink).
   NEXT FIRE (at 11:53 window): re-check stale-base (main races), push branch, gh pr create, CI, merge.
 - **SLICE 3b NOW COMPLETE + serve-path e2e (branch cuda-mmq-prefill, 3 commits 5b93290+b24020a+
@@ -831,7 +831,7 @@ main POST-decode-merge): tested the "int8 tensor-core prefill" lever. Built cu_m
 (cublasGemmEx CUDA_R_8I×CUDA_R_8I→CUDA_R_32I, CUBLAS_COMPUTE_32I, int32 alpha/beta constants,
 OP_N/OP_N — WORKS, no layout fuss). RESULT: int8 only +5-8% over f16, NOT 2×. GFLOP/s @M=128:
 qkv f16 9683/i8 12517 (+29%), gate/up 16742/17756 (+6%), down 17058/16867 (−1%); @M=512/2048
-~+5-8% flat. int8 hits only ~24 TOPS = ~23% of the 3060's int8 peak while f16 hits ~22 TFLOPS
+~+5-8% flat. int8 hits only ≈24 TOPS = ≈23% of the 3060's int8 peak while f16 hits ≈22 TFLOPS
 = ~43% of f16 peak → cublasGemmEx UNDER-utilizes int8 tensor cores. The 2× int8 lever needs
 cublasLt IMMA (COL32 layout) = the HARD path (Tw61). Per PERF-PREFILL-PROFILE the FFN GEMM is
 ~72% of prefill, so GEMM speedup IS the prefill lever, but easy-int8 doesn't deliver it. NEXT
@@ -1076,7 +1076,7 @@ prefill seeds the KV caches, then the Q4_K graph decoder continues. Pieces: a re
 variant that does NOT free dk/dv but writes them into the layer's KVCache (post-RoPE,
 cu_copy_rows/Append at positions 0..P-1), then graphDecoder starts at pos=P. Value: kills
 the current bespoke-engine weakness (prefill runs token-by-token through the decode
-graph); expected: P=128 prompt prefills in ~30ms (4184 tok/s) instead of ~640ms (199
+graph); expected: P=128 prompt prefills in ≈30ms (4184 tok/s) instead of ≈640ms (199
 tok/s decode path) on TinyLlama. Watch VRAM: f16 weights + Q4_K weights resident
 simultaneously (TinyLlama 2.2+0.7GB ✓; Qwen3B 6.2+1.7GB ✓ tight; 7B f16 14.5GB ✗ —
 7B stays decode-only or prefills f32-chunked). (b2) small-op fusion assessed as thin

@@ -15,7 +15,7 @@ per-element allocation still hid large wins.
 The dominant pattern. An optimizer `Step` loop that updates a parameter
 element-by-element via the widening accessors —
 
-```go
+```text
 for i := range p.Numel() {
     idx := tensor.Unravel(i, p.Shape())   // per-element multi-index
     gv := g.AtF64(idx...)                  // per-element dtype dispatch
@@ -29,7 +29,7 @@ parameter and gradient are **contiguous** (the common case: a freshly-allocated
 weight and its gradient), the flat row-major index *is* the storage index, so a
 single dtype switch up front collapses the loop to a typed slice walk:
 
-```go
+```text
 if pf := flatF64(p); pf != nil {           // nil unless F64 & contiguous
     if gf := flatF64(g); gf != nil {
         for i, gv := range gf { pf[i] = update(pf[i], gv) }
@@ -79,8 +79,8 @@ helper allocated a one-element tensor and cast it on every call:
 
 ```go
 func roundHalf(v float64, dt tensor.Dtype) float64 {
-    h := tensor.FromFloat64(tensor.Shape{1}, []float64{v}).Cast(dt) // ALLOC per call
-    return h.AtF64(0)
+	h := tensor.FromFloat64(tensor.Shape{1}, []float64{v}).Cast(dt) // ALLOC per call
+	return h.AtF64(0)
 }
 ```
 
