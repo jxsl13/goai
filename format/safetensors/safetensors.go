@@ -277,13 +277,32 @@ func SaveFile(path string, tensors map[string]*tensor.Tensor, meta map[string]st
 }
 
 // Load reads all tensors and metadata from r.
+// Load reads safetensors from a stream. The stream length is unknown, so a
+// hostile header claiming huge data_offsets is bounded only by the per-dim cap;
+// prefer [LoadFile], which cross-checks the declared offsets against the real
+// file size and refuses to allocate a tensor the file cannot contain.
 func Load(r io.Reader) (map[string]*tensor.Tensor, map[string]string, error) {
+	return loadFrom(r, -1)
+}
+
+// loadFrom is the core reader. fileSize is the underlying file's total size in
+// bytes, or -1 for a stream of unknown length. When known, a tensor's declared
+// data-offset end may not exceed the file's payload capacity, so an 80-byte file
+// claiming a 1 GiB tensor errors before tensor.New rather than allocating it from
+// untrusted input (§B-DoS).
+func loadFrom(r io.Reader, fileSize int64) (map[string]*tensor.Tensor, map[string]string, error) {
 	var hlen uint64
 	if err := binary.Read(r, binary.LittleEndian, &hlen); err != nil {
 		return nil, nil, fmt.Errorf("safetensors: read header length: %w", err)
 	}
 	if hlen > maxHeaderSize {
 		return nil, nil, fmt.Errorf("safetensors: header size %d exceeds cap %d", hlen, maxHeaderSize)
+	}
+	// Payload begins after the 8-byte length field and the header. When the file
+	// size is known, no tensor's declared end offset may reach past it.
+	availPayload := int64(-1)
+	if fileSize >= 0 {
+		availPayload = fileSize - 8 - int64(hlen)
 	}
 	hbuf := make([]byte, hlen)
 	if _, err := io.ReadFull(r, hbuf); err != nil {
@@ -366,6 +385,13 @@ func Load(r io.Reader) (map[string]*tensor.Tensor, map[string]string, error) {
 		}
 		if end-begin != want {
 			return nil, nil, fmt.Errorf("safetensors: tensor %q: %d bytes ≠ shape %v × %s", ne.name, end-begin, shape, e.Dtype)
+		}
+		// DoS guard: when the file size is known, this tensor's declared data
+		// cannot extend past the file. Without it a tiny file with a huge declared
+		// tensor allocates the whole tensor (measured: 1 GiB from a 79-byte file)
+		// before the read discovers the EOF.
+		if availPayload >= 0 && int64(end) > availPayload {
+			return nil, nil, fmt.Errorf("safetensors: tensor %q: data ends at %d but the file holds only %d bytes of payload — refusing to allocate from a malformed file", ne.name, end, max(availPayload, 0))
 		}
 		t := tensor.New(dt.out, shape)
 		// Fast path: a verbatim-bit dtype on a little-endian host streams straight
@@ -493,5 +519,9 @@ func LoadFile(path string) (map[string]*tensor.Tensor, map[string]string, error)
 		return nil, nil, err
 	}
 	defer f.Close()
-	return Load(f)
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, nil, err
+	}
+	return loadFrom(f, fi.Size())
 }

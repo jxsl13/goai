@@ -4,6 +4,25 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### format/npy, format/safetensors -- reject over-claiming headers before allocating (B99/T902, 2026-07-20)
+
+Fixes a live denial-of-service in two untrusted-file readers. Both allocated the full tensor
+from the header-declared shape BEFORE reading or validating the payload, so a tiny hostile
+file with a huge declared shape allocated the whole thing up front -- measured 1024 MiB from a
+138-byte .npy and a 79-byte .safetensors -- and the size caps (npy 8 GiB, safetensors 8 TiB)
+permitted far more; an 8 TiB `make` is an unrecoverable out-of-memory fatal that cannot even
+be caught. gguf already does this right (grow, don't pre-allocate).
+
+`LoadFile` now threads the real file size through the loader and refuses a header whose
+declared payload exceeds what the file holds -- npy checks `numel * dtype.size` against the
+bytes after the header, safetensors checks each tensor's declared data-offset end -- so a
+malformed file errors before `tensor.New` (measured 1024 MiB -> 0). The streaming
+`Load(io.Reader)` path cannot know the length and stays bounded by the existing element caps,
+documented on both entry points. Permanent hostile-allocation tests assert the ALLOCATION is
+bounded (not merely that an error is returned, since an error after a multi-gigabyte make is
+the failure this guards); proven non-vacuous by neutering the guard and watching 1024 MiB
+return.
+
 ### format/safetensors — independent F16/BF16 reference fixture (T901, §B67, 2026-07-20)
 
 Closes a §B67 blind spot. Every .safetensors fixture in the tree was F32/F64, so GoAI's

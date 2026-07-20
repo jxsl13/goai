@@ -222,7 +222,21 @@ func SaveFile(path string, t *tensor.Tensor) error {
 
 // Load reads one array from r (a .npy stream). Only C-order, little-endian
 // F16/F32/F64 arrays are supported; malformed input returns an error and never panics.
+// Load reads an .npy array from a stream. The stream's total size is unknown, so
+// a hostile header claiming a huge shape is bounded only by maxElems; prefer
+// [LoadFile], which cross-checks the declared payload against the real file size
+// and refuses to allocate more than the file can contain.
 func Load(r io.Reader) (*tensor.Tensor, error) {
+	return loadFrom(r, -1)
+}
+
+// loadFrom is the core reader. fileSize is the total size of the underlying file
+// in bytes, or -1 when reading a stream of unknown length. When known, it caps
+// the pre-allocation: a header may not declare more payload than the file holds
+// after the header, so an 80-byte file claiming an 8 TiB array errors before
+// tensor.New instead of triggering a multi-gigabyte allocation (or an
+// unrecoverable out-of-memory make) from untrusted input (§B-DoS).
+func loadFrom(r io.Reader, fileSize int64) (*tensor.Tensor, error) {
 	var head [8]byte
 	if _, err := io.ReadFull(r, head[:]); err != nil {
 		return nil, fmt.Errorf("npy: reading magic/version: %w", err)
@@ -281,6 +295,21 @@ func Load(r io.Reader) (*tensor.Tensor, error) {
 			return nil, fmt.Errorf("npy: array too large (%v)", shape)
 		}
 		numel *= d
+	}
+	// DoS guard: when the file size is known, the header may not declare more
+	// payload than the file actually contains after the header. Without this a
+	// tiny file with a huge declared shape allocates the whole tensor up front
+	// (measured: 1 GiB from a 138-byte file) before readData discovers the EOF.
+	if fileSize >= 0 {
+		hdrField := int64(2) // v1 uses a uint16 header-length field
+		if major != 1 {
+			hdrField = 4 // v2/v3 use uint32
+		}
+		payloadStart := 8 + hdrField + int64(hlen)
+		avail := fileSize - payloadStart
+		if need := int64(numel) * int64(dtype.Size()); avail < 0 || need > avail {
+			return nil, fmt.Errorf("npy: header declares %d bytes of data but the file holds only %d after the header — refusing to allocate from a malformed file", need, max(avail, 0))
+		}
 	}
 	out := tensor.New(dtype, shape)
 	if err := readData(r, out, numel); err != nil {
@@ -421,5 +450,9 @@ func LoadFile(path string) (*tensor.Tensor, error) {
 		return nil, err
 	}
 	defer f.Close()
-	return Load(bufio.NewReader(f))
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	return loadFrom(bufio.NewReader(f), fi.Size())
 }
