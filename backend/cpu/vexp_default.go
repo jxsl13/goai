@@ -1,13 +1,16 @@
-//go:build !(goexperiment.simd && arm64)
+//go:build !(goexperiment.simd && (arm64 || amd64))
 
 package cpu
 
-// Every build that is NOT the arm64 SIMD perf build keeps the f64 math.Exp
-// softmax bit-for-bit: vexpNeon gates the whole vexp path off, and this
-// vexpF32 exists only so the driver type-checks (dead code at run time here —
-// same pattern as gemm_rows_default.go). The amd64 perf build lands here too:
-// its MHA softmax is untouched.
-const vexpNeon = false
+// Every build that is NOT a SIMD perf build (arm64 → vexp_arm64.go, amd64 →
+// vexp_amd64.go) keeps the f64 math.Exp softmax bit-for-bit: vexpNeon gates the
+// whole vexp activation path off, vexpF32Fast gates the softmax-family exp+sum
+// off, and this vexpF32 exists only so the driver type-checks (dead code at run
+// time here — same pattern as gemm_rows_default.go).
+const (
+	vexpNeon    = false
+	vexpF32Fast = false
+)
 
 // vexpF32 computes p[i] = exp(p[i]-m) in place and returns Σ p[i].
 // len(p) must be a multiple of 4 (the NEON kernel's quad contract).
