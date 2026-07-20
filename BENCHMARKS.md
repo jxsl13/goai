@@ -44,6 +44,7 @@ Two machines appear below:
 | CPU GEMM f32 1024³ | M2 Pro, `GOEXPERIMENT=simd` | ≈2,590 GFLOP/s | torch-cpu ≈2,584 | **parity** (pure-Go path ≈2,100) |
 | CPU GEMM f32, >L2 shapes | 512×2048×4096, M2 Pro | 1,695 GFLOP/s (raw AMX) | Accelerate 1,294 | **GoAI +31%, in pure Go** |
 | Classical ML fit | 6 methods vs scikit-learn | see scorecard | scikit-learn | **beats or matches every method** |
+| CPU tokenizer encode | GPT-2 BPE 1 MB, M2 Pro | ≈28.2 MB/s (6.7M tok/s) | tiktoken Rust 18.8 | **GoAI 1.50×** (237,208-token parity) |
 | GPU matmul (Apple) | f32 1024³, M2 Pro | 1,376 GFLOP/s (Metal) | torch-mps 4,171 | 3.0× behind (MPS-kernel ceiling) |
 | Apple-GPU LLM decode | 17.7 M-param toy, M2 Pro | 236 tok/s | llama.cpp Metal 723 | ≈3.1× behind at toy size (see caveat) |
 
@@ -161,6 +162,29 @@ ggml blocks on the fly — quantization currently buys memory (4–8× less), no
 CPU speed. The fix (a block-native quantized GEMV kernel) is flagged in the
 log; on GPU the quantized decoders already run block-native.
 
+### Tokenizer throughput — pure-Go BPE vs tiktoken
+
+*M2 Pro, GPT-2 / r50k_base vocab, one 1,000,116-byte corpus, single-threaded
+both sides. Both emit the **identical 237,208 tokens** (bit-exact parity — the
+fairness anchor). GoAI = `go test -bench` average; tiktoken = best-of-9, its most
+flattering measure, so the ratios if anything under-sell GoAI. Source:
+`nlp/bpe_throughput_test.go`, companion
+`internal/benchcompare/tokenizer_compare.py` (tiktoken 0.13.0). T882.*
+
+| GPT-2 BPE, 1 MB | GoAI pure-Go | tiktoken (Rust core) | GoAI |
+|---|---:|---:|---:|
+| Encode | **≈28.2 MB/s** (6.7M tok/s) | 18.8 MB/s (4.5M tok/s) | 1.50× faster |
+| Decode | **≈470 MB/s** (111M tok/s) | 392 MB/s (93M tok/s) | 1.20× faster |
+
+GoAI's allocation-free byte-pair merge (§T625, tiktoken's own `byte_pair_merge`
+algorithm in pure Go) tokenizes faster than tiktoken *as delivered to the host
+language*: the tiktoken figure is end-to-end through its Python binding, which
+materializes the 237k-token list a Python application consumes, whereas a Go
+application gets a native `[]int32` with no cross-language marshalling. tiktoken's
+`encode_ordinary` fast path measures the same ≈18.9 MB/s, so the gap is not a
+special-token-scan artifact. The honest framing: this is a library-delivery win,
+not a claim that pure Go out-computes the Rust core in isolation.
+
 ## 4. GEMM and core kernels — vs Accelerate, PyTorch, NumPy
 
 *M2 Pro, f32, `GOEXPERIMENT=simd`; paired A/B medians. Source:
@@ -275,7 +299,6 @@ a spec task with an id you can grep in [`SPEC.md`](SPEC.md):
 | Axis | Incumbent | Task |
 |---|---|---|
 | Committed, versioned sklearn timing script (today the sklearn side of §5 is reproducible only by an ad-hoc script) | scikit-learn | T881 |
-| Tokenizer encode/decode throughput (correctness is bit-exact; speed unmeasured) | tiktoken, HF tokenizers | T882 |
 | End-to-end training step, same model geometry | torch-cpu / torch-mps | T883 |
 | Vision models forward + train (CNN, ViT) | torch | T884 |
 | Model-file loading throughput (GGUF, safetensors) | gguf-py, safetensors-python | T885 |

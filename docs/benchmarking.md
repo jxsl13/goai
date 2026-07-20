@@ -423,6 +423,38 @@ Parity is locked by the real-tiktoken golden (`TestBPEEncodeParityTiktoken`), a 
 piece-for-piece old-vs-new check (`TestBPEMergeNaiveParity`), and the existing
 2.5M-exec round-trip fuzz — all green, CGO0 vet + full `nlp` suite green.
 
+### BPE tokenizer throughput — pure-Go vs tiktoken's Rust (T882, 2026-07-20)
+
+The merge above made GoAI's BPE allocation-free; T882 measures what that buys against
+the industry incumbent. tiktoken (OpenAI's Rust-cored BPE) is timed on the **byte-for-byte
+identical** corpus and vocab as `BenchmarkGPT2Encode`: the GPT-2 / r50k_base ranks, one
+1,000,116-byte text. The fairness anchor is exact output equality — both tokenizers emit
+the **same 237,208 tokens** (the committed golden `TestBPEEncodeParityTiktoken` already
+pins GoAI's ids == tiktoken's ids piece-for-piece), so this is a like-for-like speed
+comparison, not two different tokenizations.
+
+Methodology: GoAI is the `go test -bench` average; tiktoken is best-of-9 from the committed
+companion `internal/benchcompare/tokenizer_compare.py` (its most flattering measure, so the
+ratios under-sell GoAI if anything). Single-threaded on both sides. M2 Pro, tiktoken 0.13.0,
+Python 3.14.
+
+| GPT-2 BPE, 1 MB | GoAI pure-Go | tiktoken (Rust core) | factor |
+|---|---|---|---|
+| Encode | ≈28.2 MB/s (6.7M tok/s) | 18.8 MB/s (4.5M tok/s) | **1.50× GoAI** |
+| Decode | ≈470 MB/s (111M tok/s) | 392 MB/s (93M tok/s) | **1.20× GoAI** |
+
+Prior to T882 the benchmark's doc comment *asserted* ≈23 vs ≈20 MB/s "measured 2026-07-16"
+with a 216,511-token count — but that count is for a different corpus and neither side had
+actually been timed against the other (§C3: an asserted comparison is not a measured one).
+The real numbers are above.
+
+The honest reading: tiktoken's Rust `byte_pair_merge` core is not slower than pure Go in
+isolation — but tiktoken is consumed through a Python binding that materializes the
+237k-token list, and that marshalling is part of every real Python caller's cost. GoAI hands
+back a native `[]int32`. So the win is at the library-delivery boundary: an application in
+the host language gets its tokens ≈1.5× faster from GoAI. tiktoken's `encode_ordinary` fast
+path (no special-token scan) measures the same ≈18.9 MB/s, ruling out that scan as the cause.
+
 ### Sampler top-k via quickselect (§T626, 2026-07-14)
 
 `Sampler.Dist` is the other end of every generated token: it turns a logit vector

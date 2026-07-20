@@ -4,6 +4,32 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp -- BPE tokenizer throughput measured vs tiktoken (T882, B102, 2026-07-20)
+
+The allocation-free byte-pair merge (T625) was never actually timed against the
+industry incumbent; the benchmark comment asserted "≈23 vs ≈20 MB/s" as if measured
+(B102, a C3 violation) with a token count from a different corpus. Now measured for
+real on a byte-identical 1 MB corpus and the same GPT-2 / r50k_base vocab, with the
+same 237,208-token output on both sides as the fairness anchor (the committed
+TestBPEEncodeParityTiktoken golden already pins id-for-id parity).
+
+GoAI go-bench average vs tiktoken 0.13.0 best-of-9 (its most flattering measure),
+single-threaded, M2 Pro:
+
+| GPT-2 BPE, 1 MB | GoAI pure-Go | tiktoken (Rust core) | factor |
+|---|---|---|---|
+| Encode | ≈28.2 MB/s (6.7M tok/s) | 18.8 MB/s (4.5M tok/s) | 1.50× GoAI |
+| Decode | ≈470 MB/s (111M tok/s) | 392 MB/s (93M tok/s) | 1.20× GoAI |
+
+Honest framing: tiktoken's Rust core is not slower than pure Go in isolation -- the
+figure is end-to-end through its Python binding, which materializes the 237k-token
+list a Python caller consumes, whereas GoAI returns a native slice. tiktoken's
+encode_ordinary fast path measures the same ≈18.9 MB/s, so it is not a
+special-token-scan artifact. Added BenchmarkGPT2Decode and the reproducible companion
+internal/benchcompare/tokenizer_compare.py (tiktoken version recorded, V13); promoted
+the BENCHMARKS.md not-yet-measured row into the scoreboard + section 3, with a
+docs/benchmarking.md entry.
+
 ### classic -- predict-width guard across estimators (T906, 2026-07-20)
 
 A read-only discovery sweep over classic/ surfaced a live silent-wrong bug and a
