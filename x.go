@@ -1,4 +1,4 @@
 package p
 
-// #include <math.h>
+// #include <stdio.h>
 import "C"
