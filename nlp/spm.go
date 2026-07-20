@@ -106,14 +106,21 @@ func (s *SPM) Encode(text string) []int {
 	if str == "" {
 		return nil
 	}
-	syms := make([]string, 0, len(str))
-	for _, r := range str {
-		syms = append(syms, string(r))
+	// Symbols as boundary byte-offsets into str: symbol k spans str[bounds[k]:bounds[k+1]],
+	// and since merges only combine ADJACENT symbols, every symbol (and every candidate
+	// pair) is a contiguous substring of str. So the merge-candidate is the alloc-free
+	// slice str[bounds[i]:bounds[i+2]] instead of the concatenation syms[i]+syms[i+1],
+	// which allocated a fresh string per adjacent pair per merge round (§T625, the
+	// BPE-merge anti-pattern, here shared with SPM).
+	bounds := make([]int, 0, len(str)+1)
+	for i := range str { // rune-boundary starts
+		bounds = append(bounds, i)
 	}
+	bounds = append(bounds, len(str))
 	for {
 		best, bestScore := -1, 0.0
-		for i := 0; i+1 < len(syms); i++ {
-			merged := syms[i] + syms[i+1]
+		for i := 0; i+2 < len(bounds); i++ {
+			merged := str[bounds[i]:bounds[i+2]] // symbols i and i+1, alloc-free
 			// Registered special markers are never produced by ordinary merging (§B60):
 			// a vocabulary holding the intermediates could otherwise build a control
 			// token out of untrusted literal text. EncodeSpecial is the only path that
@@ -129,19 +136,19 @@ func (s *SPM) Encode(text string) []int {
 		if best < 0 {
 			break
 		}
-		syms[best] += syms[best+1]
-		syms = append(syms[:best+1], syms[best+2:]...)
+		bounds = append(bounds[:best+1], bounds[best+2:]...) // drop the boundary between best and best+1
 	}
 	var ids []int
-	for _, sym := range syms {
+	for k := 0; k+1 < len(bounds); k++ {
+		sym := str[bounds[k]:bounds[k+1]]
 		// blocked() again for the degenerate case of a single-character marker, which
 		// merging never had to build (§B60); it falls through to byte fallback.
 		if id, ok := s.id[sym]; ok && !s.specials.blocked(sym) {
 			ids = append(ids, id)
 			continue
 		}
-		for _, b := range []byte(sym) { // byte fallback for uncovered characters
-			if id := s.byteID[b]; id >= 0 {
+		for b := bounds[k]; b < bounds[k+1]; b++ { // byte fallback for uncovered characters
+			if id := s.byteID[str[b]]; id >= 0 {
 				ids = append(ids, id)
 			} else {
 				ids = append(ids, s.unkID)
