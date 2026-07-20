@@ -1104,6 +1104,38 @@ def build_gguf(root):
     print("wrote format/gguf/testdata/{sample.gguf, expected.json}")
 
 
+def write_safetensors_halffloat(root):
+    """Emit a reference F16+BF16 .safetensors via the OFFICIAL torch lib (§B67/§V16).
+
+    The §B67 blind spot this closes: every other .safetensors fixture is F32/F64,
+    so GoAI's verbatim-U16 read of the half floats — the dtypes real HuggingFace
+    checkpoints actually ship in — was verified only by its own writer->reader
+    round-trip, never against a file the reference implementation produced. torch
+    (not numpy, which has no bfloat16) writes these exactly as HF does.
+
+    Values are nonzero, non-constant, and chosen exactly representable in BOTH F16
+    (10-bit mantissa) and BF16 (7-bit mantissa) — so the reader must reproduce them
+    to the bit. A byte-swap or wrong-half read turns 1.5 (F16 0x3E00) into a tiny
+    denormal, so the exact-equality assertion is a real discriminator (§B68).
+    """
+    try:
+        import torch
+        from safetensors.torch import save_file
+    except ImportError:
+        print("torch/safetensors missing — skipping half-float sample")
+        return
+    dest = os.path.join(root, "..", "format", "safetensors", "testdata")
+    os.makedirs(dest, exist_ok=True)
+    vals = [1.5, -2.5, 3.5, -4.25, 0.75, -0.125]
+    tensors = {
+        "h16": torch.tensor(vals, dtype=torch.float16).reshape(2, 3),
+        "hbf16": torch.tensor(vals, dtype=torch.bfloat16).reshape(2, 3),
+    }
+    save_file(tensors, os.path.join(dest, "ref_halffloat.safetensors"),
+              metadata={"format": "goai-golden"})  # single key: safetensors' Rust HashMap does not preserve multi-key order → non-reproducible bytes
+    print("wrote format/safetensors/testdata/ref_halffloat.safetensors")
+
+
 def write_safetensors_sample(root):
     """Emit a reference .safetensors file via the official lib (§T19, §V1)."""
     try:
@@ -1748,6 +1780,7 @@ def main():
     print("wrote nn/testdata/muon.json")
     write_npy_samples(root)
     write_safetensors_sample(root)
+    write_safetensors_halffloat(root)
     build_transformer(root)
     build_qmatmul(root)
     build_gguf(root)
