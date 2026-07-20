@@ -63,8 +63,27 @@ func AddF16ToF32(dst32, src16 unsafe.Pointer, n int) int {
 	return int(C.cu_addf16_to_f32(dst32, src16, C.long(n)))
 }
 
-// RoPEF16DposRaw: device-position f16 RoPE on a raw u16 pointer (graph-capturable decode).
+// RoPEF16DposRaw: device-position f16 RoPE on a raw u16 pointer (graph-capturable decode). Row p is
+// positioned at *pos + p (uniform base + row) — correct for uniform-length batched decode (each seq's
+// K and Q share the +row shift, RoPE relative-invariance).
 func RoPEF16DposRaw(x, inv unsafe.Pointer, seq, heads, hd int, pos *DevicePos, attrs backend.RoPEAttrs) int {
 	_, posDiv := backend.RoPEFreqs(hd, attrs)
 	return int(C.cu_rope_f16_dpos(x, inv, C.int(seq), C.int(heads), C.int(hd), pos.Ptr(), C.double(posDiv)))
+}
+
+// UploadI32 uploads an int32 slice to a fresh device buffer, returning its device pointer (free with
+// FreeDev). Used for per-sequence position arrays (continuous-batch RoPE) and similar small int state.
+func UploadI32(vals []int32) unsafe.Pointer {
+	if len(vals) == 0 {
+		return nil
+	}
+	return unsafe.Pointer(C.cu_upload_i32((*C.int)(&vals[0]), C.int(len(vals))))
+}
+
+// RoPEF16DposArrRaw: PER-SEQUENCE-position f16 RoPE — row p is positioned at dPosArr[p] (a device int
+// array of `seq` positions), for continuous batching where concurrent sequences sit at DIFFERENT
+// absolute positions. dPosArr is a device pointer to seq int32s. Capturable.
+func RoPEF16DposArrRaw(x, inv, dPosArr unsafe.Pointer, seq, heads, hd int, attrs backend.RoPEAttrs) int {
+	_, posDiv := backend.RoPEFreqs(hd, attrs)
+	return int(C.cu_rope_f16_dpos_arr(x, inv, C.int(seq), C.int(heads), C.int(hd), dPosArr, C.double(posDiv)))
 }

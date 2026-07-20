@@ -1383,6 +1383,48 @@ donerpdf:
     return rc;
 }
 
+// cu_rope_f16_dpos_arr: PER-SEQUENCE-position f16 RoPE — position of row p is dPos[p] (a device int
+// ARRAY of `seq` positions), NOT *dPos+p. The enabler for CONTINUOUS batching, where concurrently
+// decoded sequences sit at DIFFERENT absolute positions (admitted mid-stream, pre-existing KV at true
+// positions) so a uniform base+row shift is wrong. Capturable (reads the device dPos[] array).
+static CUfunction gRopeDposArrF16 = NULL;
+int cu_rope_f16_dpos_arr(void* x, const void* inv, int seq, int heads, int hd, const void* dPosArr, double posDiv) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto donerpda; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto donerpda; }
+    if (!gRopeDposArrF16 && compile_kernel(
+            A1_CVT_HELPERS
+            "extern \"C\" __global__ void rope_f16_dpos_arr(unsigned short* x, const float* inv, int seq, int heads, int hd, const int* dPos, double posDiv){\n"
+            "  int half = hd/2;\n"
+            "  long total = (long)seq*heads*half;\n"
+            "  long gid = (long)blockIdx.x*blockDim.x + threadIdx.x;\n"
+            "  if (gid >= total) return;\n"
+            "  int i = (int)(gid % half);\n"
+            "  int h = (int)((gid / half) % heads);\n"
+            "  int p = (int)(gid / ((long)half*heads));\n"
+            "  double pos = (double)(dPos[p]) / posDiv;\n" // per-seq position, not *dPos+p
+            "  double ang = pos * (double)inv[i];\n"
+            "  const double TWO_PI = 6.283185307179586476925286766559;\n"
+            "  double k2 = floor(ang / TWO_PI + 0.5);\n"
+            "  float r = (float)(ang - k2 * TWO_PI); float c, s; sincosf(r, &s, &c);\n"
+            "  unsigned short* xr = x + (size_t)p*heads*hd + (size_t)h*hd;\n"
+            "  float qi = h2f(xr[i]), qih = h2f(xr[i+half]);\n"
+            "  xr[i] = f2h(qi*c - qih*s); xr[i+half] = f2h(qih*c + qi*s);\n"
+            "}\n",
+            "rope_f16_dpos_arr.cu", "rope_f16_dpos_arr", &gRopeDposArrF16) != 0) { rc = -2; goto donerpda; }
+    {
+        long total = (long)seq * heads * (hd / 2);
+        int threads = 256, blocks = (int)((total + threads - 1) / threads);
+        if (blocks < 1) blocks = 1;
+        void* args[7] = { &x, (void*)&inv, &seq, &heads, &hd, (void*)&dPosArr, &posDiv };
+        rc = (cuLaunchKernel(gRopeDposArrF16, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+donerpda:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
 // cu_add_f16: dst[i] += src[i], u16 (f16) — the A1 residual add (x += proj output).
 int cu_add_f16(void* dst, const void* src, int n) {
     int rc = -1;
