@@ -533,6 +533,35 @@ parity). The lever is graph/kernel fusion on both backends. This is the first co
 GoAI-vs-torch end-to-end training measurement; run it with `make bench-gpt-train-python`
 alongside the Go benchmark.
 
+### Model-file load -- safetensors, pure Go vs the Rust reference (T885 safetensors half, 2026-07-20)
+
+Loading weights is upstream of every inference and training run, and GoAI's safetensors
+reader is hostile-gated -- it rejects a header that over-claims the file size before
+allocating (V15/V29/B99). T885 measures what that pure-Go safety costs versus the Rust-cored
+`safetensors` Python package on a byte-identical 64 MiB fixture (16 f32 tensors of
+[1024,1024], deterministic values the Go side bit-checks -- the fairness anchor). Both read
+the same file from warm page cache; best-of-7 each.
+
+| safetensors load, 64 MiB | GoAI (pure Go) | safetensors-python (Rust+mmap) | gap |
+|---|---|---|---|
+| Full (all 16 tensors) | 8.4 GB/s | 12.2 GB/s | 1.45x |
+| One tensor from the file | 4.0 GB/s (1.05 ms) | 10.8 GB/s (0.39 ms) | 2.69x |
+
+An honest loss, and a modest one on full load: GoAI's pure-Go reader materializes every
+tensor at 8.4 GB/s, within 1.45x of a Rust core that mmaps the file and hands back zero-copy
+numpy views -- while GoAI also validates the header against the file size first (the safety
+B99 added). The one-tensor gap is wider (2.69x) and diagnosable: LoadTensor seeks to the
+tensor's byte range, read()s it into a buffer, then frames that buffer as a minimal stream
+for the shared decode path (two copies), whereas safe_open mmaps and memcpys once. The lever
+is an mmap-based partial read that decodes in place -- a real optimization, tracked.
+
+The structural property both share: extracting one tensor touches only that tensor's bytes,
+not the whole file. GoAI's one-tensor load (1.05 ms) is ~7.6x faster than its own full load
+(7.95 ms) of the 16-tensor file -- the O(one tensor) path T903/T904 built, confirmed against
+the reference. GGUF (gguf.ReadFile vs gguf-py) is the remaining T885 half. Run:
+`ST_BENCH_FILE=/tmp/st.safetensors .venv/bin/python testdata/bench_safetensors_load.py` then
+`ST_BENCH_FILE=/tmp/st.safetensors go test ./format/safetensors -run LoadCompare -v`.
+
 ### Sampler top-k via quickselect (§T626, 2026-07-14)
 
 `Sampler.Dist` is the other end of every generated token: it turns a logit vector

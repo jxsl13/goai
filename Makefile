@@ -151,6 +151,15 @@ bench-classic-python:
 bench-gpt-train-python:
 	.venv/bin/python testdata/bench_gpt_train_torch.py
 
+## bench-safetensors-load: time safetensors model-file loading (full + one-tensor)
+## in GoAI vs the Rust-cored safetensors-python on a shared fixture, for the pure-Go
+## reader comparison (BENCHMARKS.md losses table). Needs .venv (safetensors). T885.
+bench-safetensors-load:
+	@f=$$(mktemp -u).safetensors; \
+	ST_BENCH_FILE=$$f .venv/bin/python testdata/bench_safetensors_load.py; \
+	ST_BENCH_FILE=$$f $(GO) test ./format/safetensors -run TestSafetensorsLoadCompare -count=1 -v | grep GOAI_LOAD; \
+	rm -f $$f
+
 ## lint-md: dependency-free markdown lint — discovers every *.md recursively (SPEC T612).
 ## Also runs as a test in ./internal/mdlint (CI-enforced on code pushes).
 lint-md:

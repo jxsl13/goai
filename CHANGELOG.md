@@ -4,6 +4,27 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### bench -- safetensors model-file load, pure Go vs the Rust reference (T885 safetensors half, 2026-07-20)
+
+Measured what GoAI's pure-Go hostile-gated safetensors reader costs versus the Rust-cored
+safetensors-python, on a byte-identical 64 MiB fixture (16 f32 tensors, deterministic values
+the Go side bit-checks as the fairness anchor). Committed companion
+testdata/bench_safetensors_load.py + Go harness
+format/safetensors/loadcompare_external_test.go (gated on ST_BENCH_FILE) + a
+make bench-safetensors-load target.
+
+| safetensors load, 64 MiB | GoAI (pure Go) | safetensors-python (Rust+mmap) |
+|---|---|---|
+| Full (16 tensors) | 8.4 GB/s | 12.2 GB/s (1.45×) |
+| One tensor | 4.0 GB/s | 10.8 GB/s (2.69×) |
+
+An honest loss, modest on full load: GoAI is within 1.45× of a Rust core that mmaps and
+returns zero-copy numpy views, while also validating the header against the file size (B99).
+The one-tensor gap (2.69×) is GoAI's read()+frame double-copy vs safe_open's mmap+memcpy --
+the lever is an mmap-based partial read. Both share the O(one-tensor) property: GoAI's
+one-tensor load is ~7.6× faster than its own full load (the T903/T904 seek path). The GGUF
+half (gguf.ReadFile vs gguf-py) remains.
+
 ### bench -- pin incumbent versions + reproduce rows for the comparison suite (2026-07-20)
 
 Capstone for the T881/T882/T883 comparison arc: committed testdata/requirements-bench.txt

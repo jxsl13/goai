@@ -339,6 +339,8 @@ honestly documented deficit with a root cause is a deliverable):
 | Apple-GPU matmul vs torch-mps | 3.0× | Apple's closed MPS kernel tuning; measured as the platform ceiling | parked (§B39/§T410) — revisit only with new evidence |
 | Training step vs torch-mps (Apple GPU) | 3.95× | op-by-op autograd dispatch (≈0.27 ms/op × hundreds) + MPS-kernel ceiling; torch dispatches one fused graph | tape recorder (≈1.4× at seq 256, §T411) + fusion |
 | Training step vs torch-cpu | 2.24× | GEMM is at AMX parity, but torch fuses SDPA attention + autograd backward; GoAI runs separate NEON kernels | fused-attention/backward CPU kernels |
+| safetensors full load vs safetensors-python | 1.45× | Rust core + mmap + zero-copy numpy views; ours is a pure-Go hostile-gated read+parse (8.4 vs 12.2 GB/s) | mmap the file to skip the read copy |
+| safetensors one-tensor load vs `safe_open` | 2.69× | their mmap+memcpy vs our read()+frame double-copy; both read only that tensor's bytes | mmap-based partial load, no intermediate buffer |
 | CPU attention vs torch fused SDPA | 2.6× | operator fusion | candidate fused-attention CPU kernel |
 | CPU quantized decode vs own f32 | 8.8× | on-the-fly block dequantize in the hot loop | block-native quantized GEMV (flagged) |
 | Toy-size Apple decode vs llama.cpp Metal | ≈3.1× | hand-tuned decode kernels; toy size favors their Accelerate path | production-size measurement first (T887) |
@@ -352,7 +354,7 @@ a spec task with an id you can grep in [`SPEC.md`](SPEC.md):
 |---|---|---|
 | Committed, versioned sklearn timing script (today the sklearn side of §5 is reproducible only by an ad-hoc script) | scikit-learn | T881 |
 | Vision models forward + train (CNN, ViT) | torch | T884 |
-| Model-file loading throughput (GGUF, safetensors) | gguf-py, safetensors-python | T885 |
+| Model-file loading throughput — GGUF half (safetensors measured, see losses table) | gguf-py | T885 |
 | Production-size LLM decode on Apple silicon | llama.cpp Metal, MLX | T887 |
 | SGLang datapoint beside vLLM (installs on the worker box, never measured) | SGLang | T888 |
 
