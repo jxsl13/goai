@@ -438,8 +438,17 @@ func decodeTensor(ti tensorInfo, data []byte) (*tensor.Tensor, error) {
 	case tF16:
 		t := tensor.New(tensor.F32, ti.shape)
 		dst := t.Storage().F32()
-		for i := range dst {
-			dst[i] = f16ToF32(binary.LittleEndian.Uint16(raw[i*2:]))
+		// Bulk-copy the LE F16 halfwords into an aligned buffer (one memmove), then table-
+		// convert sequentially — avoids the per-element binary.LittleEndian.Uint16 reslice.
+		// f16→f32 itself is a table lookup, so the read was the remaining per-element cost.
+		if src := make([]uint16, len(dst)); rawCopyLE(src, raw, 2) {
+			for i, h := range src {
+				dst[i] = f16ToF32(h)
+			}
+		} else {
+			for i := range dst {
+				dst[i] = f16ToF32(binary.LittleEndian.Uint16(raw[i*2:]))
+			}
 		}
 		return t, nil
 	case tQ8_0:
