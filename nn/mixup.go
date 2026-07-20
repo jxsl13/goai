@@ -138,6 +138,29 @@ func PermuteRows(t *tensor.Tensor, perm []int) *tensor.Tensor {
 		out.SetF64(t.AtF64())
 		return out
 	}
+	batch := t.Shape()[0]
+	rowLen := t.Numel() / batch
+	// The reorder (out row i = t row perm[i]) is a pure value copy, so for a
+	// contiguous, offset-0 tensor copy whole rows through the typed backing slice
+	// — the general path below allocated a fresh index slice for EVERY element and
+	// paid the AtF64/SetF64 dispatch. Bit-identical (an exact copy, same dtype);
+	// F16/BF16 and strided/offset views fall through.
+	if t.IsContiguous() && t.Offset() == 0 {
+		switch t.Dtype() {
+		case tensor.F64:
+			td, od := t.Storage().F64(), out.Storage().F64()
+			for i := range batch {
+				copy(od[i*rowLen:(i+1)*rowLen], td[perm[i]*rowLen:perm[i]*rowLen+rowLen])
+			}
+			return out
+		case tensor.F32:
+			td, od := t.Storage().F32(), out.Storage().F32()
+			for i := range batch {
+				copy(od[i*rowLen:(i+1)*rowLen], td[perm[i]*rowLen:perm[i]*rowLen+rowLen])
+			}
+			return out
+		}
+	}
 	n := t.Numel()
 	for i := range n {
 		idx := tensor.Unravel(i, t.Shape())

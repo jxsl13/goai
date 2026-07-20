@@ -106,11 +106,7 @@ func LSQQuantize(ctx *backend.Context, v, s *tensor.Tensor, qn, qp int, gradScal
 		return nil, err
 	}
 	// round with a straight-through gradient: v̂bar = vbar + sg(round(vbar) − vbar).
-	rounded := tensor.New(vbar.Dtype(), vbar.Shape())
-	for i := range vbar.Numel() {
-		c := tensor.Unravel(i, vbar.Shape())
-		rounded.SetF64(math.Round(vbar.AtF64(c...)), c...)
-	}
+	rounded := lsqRound(vbar)
 	delta, err := ex(backend.OpSub, nil, rounded, vbar)
 	if err != nil {
 		return nil, err
@@ -124,4 +120,36 @@ func LSQQuantize(ctx *backend.Context, v, s *tensor.Tensor, qn, qp int, gradScal
 		return nil, err
 	}
 	return ex(backend.OpMul, nil, vhat, sUsed) // dequantize
+}
+
+// lsqRound returns round(vbar) elementwise as a fresh tensor — the value half of
+// the LSQ straight-through round. For a contiguous, offset-0 vbar it rounds
+// through the typed backing slice instead of the per-element AtF64(Unravel)/
+// SetF64 dispatch; the round sweeps the full weight/activation tensor on every
+// QAT forward. Bit-identical to the general path (see the slowLSQRound oracle) —
+// the f64→dtype narrowing mirrors storage.setF64; F16/BF16 fall through.
+func lsqRound(vbar *tensor.Tensor) *tensor.Tensor {
+	rounded := tensor.New(vbar.Dtype(), vbar.Shape())
+	n := vbar.Numel()
+	if vbar.IsContiguous() && vbar.Offset() == 0 {
+		switch vbar.Dtype() {
+		case tensor.F64:
+			vd, rd := vbar.Storage().F64(), rounded.Storage().F64()
+			for i := range n {
+				rd[i] = math.Round(vd[i])
+			}
+			return rounded
+		case tensor.F32:
+			vd, rd := vbar.Storage().F32(), rounded.Storage().F32()
+			for i := range n {
+				rd[i] = float32(math.Round(float64(vd[i])))
+			}
+			return rounded
+		}
+	}
+	for i := range n {
+		c := tensor.Unravel(i, vbar.Shape())
+		rounded.SetF64(math.Round(vbar.AtF64(c...)), c...)
+	}
+	return rounded
 }

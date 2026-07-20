@@ -80,9 +80,7 @@ func NewEmbeddingPadded(dtype tensor.Dtype, vocab, dim, padIdx int, seed uint64)
 	}
 	w := tensor.New(dtype, tensor.Shape{vocab, dim})
 	rng := rand.New(rand.NewPCG(seed, 0x9e3779b97f4a7c15))
-	for i := range w.Numel() {
-		w.SetF64(rng.NormFloat64(), tensor.Unravel(i, w.Shape())...)
-	}
+	fillGen(w, func() float64 { return rng.NormFloat64() })
 	e := &Embedding{W: w, PadIdx: -1}
 	if padIdx >= 0 {
 		e.PadIdx = padIdx

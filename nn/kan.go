@@ -223,6 +223,40 @@ func (l *KANLayer) buildBasis(x *tensor.Tensor) *tensor.Tensor {
 	nbasis := l.gridSize + l.splineOrder
 	out := tensor.New(l.dtype, tensor.Shape{B, l.inDim, nbasis})
 	scratch := make([]float64, len(l.knots)) // reused per coordinate
+	// buildBasis runs on every Forward; for a contiguous, offset-0 input whose
+	// dtype matches the layer's, read x and write out through their typed backing
+	// slices (flat row-major index) instead of the per-element AtF64/SetF64
+	// dispatch. The Cox–de Boor eval is unchanged, so the result is bit-identical
+	// to the general path (see the slowBuildBasis oracle); other dtypes or strided/
+	// offset inputs fall through.
+	if x.IsContiguous() && x.Offset() == 0 && x.Dtype() == l.dtype {
+		switch l.dtype {
+		case tensor.F64:
+			xd, od := x.Storage().F64(), out.Storage().F64()
+			for b := range B {
+				for i := range l.inDim {
+					vals := evalBSplineBasis(xd[b*l.inDim+i], l.knots, l.splineOrder, scratch)
+					dst := (b*l.inDim + i) * nbasis
+					for c := range nbasis {
+						od[dst+c] = vals[c]
+					}
+				}
+			}
+			return out
+		case tensor.F32:
+			xd, od := x.Storage().F32(), out.Storage().F32()
+			for b := range B {
+				for i := range l.inDim {
+					vals := evalBSplineBasis(float64(xd[b*l.inDim+i]), l.knots, l.splineOrder, scratch)
+					dst := (b*l.inDim + i) * nbasis
+					for c := range nbasis {
+						od[dst+c] = float32(vals[c])
+					}
+				}
+			}
+			return out
+		}
+	}
 	for b := range B {
 		for i := range l.inDim {
 			vals := evalBSplineBasis(x.AtF64(b, i), l.knots, l.splineOrder, scratch)

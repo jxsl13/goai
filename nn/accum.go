@@ -33,9 +33,11 @@ func (a *GradAccumulator) Add(grad GradFn) {
 			continue
 		}
 		s := a.sums[p]
-		for i := range s {
-			s[i] += g.AtF64(tensor.Unravel(i, p.Shape())...)
-		}
+		idx := 0
+		readGen(g, func(v float64) {
+			s[idx] += v
+			idx++
+		})
 	}
 	a.steps++
 }
@@ -54,9 +56,12 @@ func (a *GradAccumulator) GradFn() GradFn {
 			return nil
 		}
 		out := tensor.New(p.Dtype(), p.Shape())
-		for i := range s {
-			out.SetF64(s[i]/k, tensor.Unravel(i, p.Shape())...)
-		}
+		idx := 0
+		fillGen(out, func() float64 {
+			v := s[idx] / k
+			idx++
+			return v
+		})
 		return out
 	}
 }

@@ -178,9 +178,58 @@ const bitnetScaleFloor = 1e-5
 // quantized weight in the forward pass while ∂effective/∂w = 1 (straight-through) —
 // gradients reach the full-precision master unchanged.
 func BitQuantizeWeight(ctx *backend.Context, w *tensor.Tensor) (*tensor.Tensor, float64, error) {
-	n := w.Numel()
-	if n == 0 {
+	if w.Numel() == 0 {
 		return nil, 0, fmt.Errorf("nn: BitQuantizeWeight got an empty weight tensor")
+	}
+	q := tensor.New(w.Dtype(), w.Shape())
+	gamma := bitTernaryFill(w, q)
+	weff, err := bitSTE(ctx, w, q)
+	if err != nil {
+		return nil, 0, err
+	}
+	return weff, gamma, nil
+}
+
+// bitTernaryFill writes the BitNet absmean ternary fake-quant of w into q (same
+// shape/dtype, freshly allocated) and returns γ = mean(|w|). Both the absmean
+// reduction and the ternary map sweep the FULL weight matrix on every QAT
+// forward, so for a contiguous, offset-0 w it reads/writes the typed backing
+// slices once (one dtype decision for the whole matrix) instead of the
+// per-element AtF64(Unravel)/SetF64 dispatch that dominated the loop. The output
+// is bit-identical to the general path below — the f64→dtype narrowing mirrors
+// storage.setF64 (float32() for F32) and γ is accumulated in the same flat order
+// (see the slowBitTernaryFill oracle). F16/BF16 fall through to the general path.
+func bitTernaryFill(w, q *tensor.Tensor) float64 {
+	n := w.Numel()
+	if w.IsContiguous() && w.Offset() == 0 {
+		switch w.Dtype() {
+		case tensor.F64:
+			wd, qd := w.Storage().F64(), q.Storage().F64()
+			var sum float64
+			for i := range n {
+				sum += math.Abs(wd[i])
+			}
+			gamma := sum / float64(n)
+			scale := math.Max(gamma, bitnetScaleFloor)
+			for i := range n {
+				t := math.Round(wd[i] / scale)
+				qd[i] = scale * math.Max(-1, math.Min(1, t))
+			}
+			return gamma
+		case tensor.F32:
+			wd, qd := w.Storage().F32(), q.Storage().F32()
+			var sum float64
+			for i := range n {
+				sum += math.Abs(float64(wd[i]))
+			}
+			gamma := sum / float64(n)
+			scale := math.Max(gamma, bitnetScaleFloor)
+			for i := range n {
+				t := math.Round(float64(wd[i]) / scale)
+				qd[i] = float32(scale * math.Max(-1, math.Min(1, t)))
+			}
+			return gamma
+		}
 	}
 	var sum float64
 	for i := range n {
@@ -188,17 +237,12 @@ func BitQuantizeWeight(ctx *backend.Context, w *tensor.Tensor) (*tensor.Tensor, 
 	}
 	gamma := sum / float64(n)
 	scale := math.Max(gamma, bitnetScaleFloor)
-	q := tensor.New(w.Dtype(), w.Shape())
 	for i := range n {
 		c := tensor.Unravel(i, w.Shape())
 		t := math.Round(w.AtF64(c...) / scale)
 		q.SetF64(scale*math.Max(-1, math.Min(1, t)), c...)
 	}
-	weff, err := bitSTE(ctx, w, q)
-	if err != nil {
-		return nil, 0, err
-	}
-	return weff, gamma, nil
+	return gamma
 }
 
 // BitQuantizeAct8 fake-quantizes x [batch, d] to 8 bits with the BitNet b1.58
@@ -210,8 +254,57 @@ func BitQuantizeAct8(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, er
 	if x.Ndim() != 2 {
 		return nil, fmt.Errorf("nn: BitQuantizeAct8 wants rank-2 x[batch,d], got %v", x.Shape())
 	}
-	rows, cols := x.Shape()[0], x.Shape()[1]
 	q := tensor.New(x.Dtype(), x.Shape())
+	bitAct8Fill(x, q)
+	return bitSTE(ctx, x, q)
+}
+
+// bitAct8Fill writes the per-token absmax 8-bit fake-quant of x[rows,cols] into q
+// (same shape/dtype, freshly allocated). For a contiguous, offset-0 x it walks
+// the typed backing slice by flat row-major index (r*cols+c) instead of the
+// per-element AtF64/SetF64 dispatch — this runs over the activation matrix on
+// every forward. Bit-identical to the general path (see the slowBitAct8Fill
+// oracle); F16/BF16 fall through.
+func bitAct8Fill(x, q *tensor.Tensor) {
+	rows, cols := x.Shape()[0], x.Shape()[1]
+	if x.IsContiguous() && x.Offset() == 0 {
+		switch x.Dtype() {
+		case tensor.F64:
+			xd, qd := x.Storage().F64(), q.Storage().F64()
+			for r := range rows {
+				base := r * cols
+				absmax := 0.0
+				for c := range cols {
+					if a := math.Abs(xd[base+c]); a > absmax {
+						absmax = a
+					}
+				}
+				s := 127 / math.Max(absmax, bitnetScaleFloor)
+				for c := range cols {
+					v := math.Max(-128, math.Min(127, math.Round(xd[base+c]*s)))
+					qd[base+c] = v / s
+				}
+			}
+			return
+		case tensor.F32:
+			xd, qd := x.Storage().F32(), q.Storage().F32()
+			for r := range rows {
+				base := r * cols
+				absmax := 0.0
+				for c := range cols {
+					if a := math.Abs(float64(xd[base+c])); a > absmax {
+						absmax = a
+					}
+				}
+				s := 127 / math.Max(absmax, bitnetScaleFloor)
+				for c := range cols {
+					v := math.Max(-128, math.Min(127, math.Round(float64(xd[base+c])*s)))
+					qd[base+c] = float32(v / s)
+				}
+			}
+			return
+		}
+	}
 	for r := range rows {
 		absmax := 0.0
 		for c := range cols {
@@ -225,7 +318,6 @@ func BitQuantizeAct8(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, er
 			q.SetF64(v/s, r, c)
 		}
 	}
-	return bitSTE(ctx, x, q)
 }
 
 // BitNetBitsPerWeight returns the information content of one ternary weight,

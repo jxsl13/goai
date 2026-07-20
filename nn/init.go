@@ -84,6 +84,37 @@ func fillGen(t *tensor.Tensor, gen func() float64) {
 	}
 }
 
+// readGen is the read-side mirror of fillGen: it calls visit(v) once per element
+// of t, in the same row-major (flat) order, instead of writing into t. The same
+// contiguous, offset-0 case reads straight from the typed backing slice instead
+// of paying an index-slice alloc plus strided dispatch per element via
+// AtF64(Unravel(i)…); non-contiguous or offset views fall back to the general
+// path, so a scan through a transposed view still reads the correct values.
+func readGen(t *tensor.Tensor, visit func(float64)) {
+	n := t.Numel()
+	if t.IsContiguous() && t.Offset() == 0 {
+		switch t.Dtype() {
+		case tensor.F64:
+			d := t.Storage().F64()
+			for i := range n {
+				visit(d[i])
+			}
+			return
+		case tensor.F32:
+			d := t.Storage().F32()
+			for i := range n {
+				visit(float64(d[i]))
+			}
+			return
+		}
+		// F16/BF16 and any future dtype fall through to the general path.
+	}
+	shape := t.Shape()
+	for i := range n {
+		visit(t.AtF64(tensor.Unravel(i, shape)...))
+	}
+}
+
 // --- Truncated normal (§T15 extension) ---
 
 // truncNormalCfg holds the resolved TruncNormal parameters.
@@ -155,6 +186,13 @@ func TruncNormal(t *tensor.Tensor, seed uint64, opts ...TruncNormalOption) error
 	lo := 2*normCDF((cfg.a-cfg.mean)/cfg.std) - 1
 	hi := 2*normCDF((cfg.b-cfg.mean)/cfg.std) - 1
 
+	// NOT converted to fillGen (T870 follow-up, measured): the per-element cost
+	// here is dominated by rng.Float64() + math.Erfinv, both computed INSIDE the
+	// loop body being converted (unlike Orthogonal's QR, this cost cannot be
+	// isolated away as a separate, unrelated phase). A whole-function A/B
+	// (2048×2048 F32, benchmarked against a verbatim copy of this loop) measured
+	// only ~1.09× — repeatably under the 1.1× bar — so the conversion was
+	// reverted per the measurement gate rather than shipped for a sub-noise win.
 	rng := rand.New(rand.NewPCG(seed, 0x6b79a2c3d4e5f601))
 	for i := range t.Numel() {
 		u := lo + rng.Float64()*(hi-lo)
@@ -276,8 +314,11 @@ func Orthogonal(t *tensor.Tensor, seed uint64, opts ...OrthogonalOption) error {
 		}
 		qm = t2
 	}
-	for i := range t.Numel() {
-		t.SetF64(qm[i], tensor.Unravel(i, t.Shape())...)
-	}
+	idx := 0
+	fillGen(t, func() float64 {
+		v := qm[idx]
+		idx++
+		return v
+	})
 	return nil
 }

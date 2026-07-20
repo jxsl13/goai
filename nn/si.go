@@ -69,15 +69,46 @@ func (s *SI) Accumulate(grads []*tensor.Tensor) error {
 		if !grads[pi].Shape().Equal(p.Shape()) {
 			return fmt.Errorf("nn: SI.Accumulate grad %d shape %v != param %v", pi, grads[pi].Shape(), p.Shape())
 		}
-		for i := range p.Numel() {
-			c := tensor.Unravel(i, p.Shape())
-			cur := p.AtF64(c...)
-			dTheta := cur - s.prev[pi][i]
-			s.omega[pi][i] += -grads[pi].AtF64(c...) * dTheta
-			s.prev[pi][i] = cur
-		}
+		siAccumulate(p, grads[pi], s.omega[pi], s.prev[pi])
 	}
 	return nil
+}
+
+// siAccumulate folds one step's contribution into the running path integral for a
+// single parameter: omega[i] += −grad[i]·(p[i] − prev[i]) and prev[i] ← p[i]. It
+// runs over EVERY parameter each optimizer step, so for contiguous, offset-0
+// F64/F32 p and grad it reads the typed backing slices directly instead of the
+// per-element AtF64(Unravel) dispatch on two tensors. Bit-identical to the general
+// path (see the slowSIAccumulate oracle): the arithmetic and the read-prev-then-
+// write-prev order are unchanged; F16/BF16 (or mixed dtypes) fall through.
+func siAccumulate(p, grad *tensor.Tensor, omega, prev []float64) {
+	n := p.Numel()
+	if p.IsContiguous() && p.Offset() == 0 && grad.IsContiguous() && grad.Offset() == 0 {
+		if p.Dtype() == tensor.F64 && grad.Dtype() == tensor.F64 {
+			pd, gd := p.Storage().F64(), grad.Storage().F64()
+			for i := range n {
+				cur := pd[i]
+				omega[i] += -gd[i] * (cur - prev[i])
+				prev[i] = cur
+			}
+			return
+		}
+		if p.Dtype() == tensor.F32 && grad.Dtype() == tensor.F32 {
+			pd, gd := p.Storage().F32(), grad.Storage().F32()
+			for i := range n {
+				cur := float64(pd[i])
+				omega[i] += -float64(gd[i]) * (cur - prev[i])
+				prev[i] = cur
+			}
+			return
+		}
+	}
+	for i := range n {
+		c := tensor.Unravel(i, p.Shape())
+		cur := p.AtF64(c...)
+		omega[i] += -grad.AtF64(c...) * (cur - prev[i])
+		prev[i] = cur
+	}
 }
 
 // Consolidate ends the current task: it folds the running path integral into the importance

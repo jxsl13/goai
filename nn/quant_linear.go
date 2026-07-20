@@ -81,7 +81,19 @@ func asF32(x *tensor.Tensor) *tensor.Tensor {
 	}
 	out := tensor.New(tensor.F32, x.Shape())
 	dst := out.Storage().F32()
-	for i := range x.Numel() {
+	n := x.Numel()
+	// F64 is the common non-F32 activation dtype; read its contiguous backing
+	// slice directly instead of the per-element AtF64(Unravel) dispatch. The
+	// narrowing is bit-identical (float32(f64), exactly x.AtF64's F64 path).
+	// F16/BF16 and strided/offset views fall through to the general path.
+	if x.IsContiguous() && x.Offset() == 0 && x.Dtype() == tensor.F64 {
+		src := x.Storage().F64()
+		for i := range n {
+			dst[i] = float32(src[i])
+		}
+		return out
+	}
+	for i := range n {
 		dst[i] = float32(x.AtF64(tensor.Unravel(i, x.Shape())...))
 	}
 	return out

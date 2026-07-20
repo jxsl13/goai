@@ -4,6 +4,29 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### perf — per-element hot-loop fast paths, batch 2 (T896, 2026-07-20)
+
+Two directed sweeps (initialization/parameter-assembly helpers, and quant/specialized layers)
+applied the T870 contiguous-typed-slice pattern to thirteen more per-element loops, each
+measured (§V22) and each bit-identical to the old path (verbatim-oracle `Float64bits` equality;
+gradcheck where a loss/VJP is involved). Only loops on large/hot tensors that cleared 1.1× were
+converted.
+
+Initialization & assembly (a `readGen` helper was added as the read-side mirror of `fillGen`,
+since weight-averaging and gradient accumulation FOLD parameters into an accumulator rather
+than fill): `Orthogonal` fill 2.63×; SWA/EMA/`materialize` weight-averaging 2.29–2.60×;
+gradient-accumulator add/materialize 2.27–2.40×; `NewEmbeddingPadded` 1.36× (RNG-bound).
+`TruncNormal` was converted and then REVERTED after measuring 1.086× (erfinv+RNG dominate,
+computed inside the loop) — under the bar, so not shipped. `mup_coordcheck` diagnostics
+(≤16k elements, ~15 calls/run) were correctly left cold.
+
+Quant & specialized layers: `mixup.PermuteRows` 65× (and 256005→5 allocations, the old path
+allocated an index slice per element); `LSQQuantize` 14.4×; `quant_linear.asF32` 10.7×;
+`SigmoidFocalLoss` 10.7× (with a matched-dtype guard, falling through when logits/targets
+dtypes diverge); `SI.Accumulate` 8.77×; BitNet weight/activation quantization 2.74×/2.14×;
+`normalizeColumns` 2.29×; KAN `buildBasis` 1.53×. `gumbel` (1.05×, RNG-bound) and a thin
+`remoe` gate-count tensor (negligible share of forward) were measured and left.
+
 ### docs — BENCHMARKS.md: the categorical comparison vs the incumbents (T880, 2026-07-20)
 
 New root-level `BENCHMARKS.md`, linked prominently from the README: GoAI vs

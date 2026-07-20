@@ -45,10 +45,12 @@ func (s *SWA) Update() error {
 		if p.Numel() != len(s.avg[pi]) {
 			return fmt.Errorf("nn: SWA param %d size changed: %d != %d", pi, p.Numel(), len(s.avg[pi]))
 		}
-		for i := range p.Numel() {
-			w := p.AtF64(tensor.Unravel(i, p.Shape())...)
-			s.avg[pi][i] += (w - s.avg[pi][i]) / float64(s.n+1)
-		}
+		avg := s.avg[pi]
+		idx := 0
+		readGen(p, func(w float64) {
+			avg[idx] += (w - avg[idx]) / float64(s.n+1)
+			idx++
+		})
 	}
 	s.n++
 	return nil
@@ -74,10 +76,13 @@ type EMA struct {
 func NewEMA(params []*tensor.Tensor, decay float64) *EMA {
 	e := &EMA{Params: params, Decay: decay, avg: make([][]float64, len(params))}
 	for i, p := range params {
-		e.avg[i] = make([]float64, p.Numel())
-		for j := range p.Numel() {
-			e.avg[i][j] = p.AtF64(tensor.Unravel(j, p.Shape())...)
-		}
+		avg := make([]float64, p.Numel())
+		idx := 0
+		readGen(p, func(w float64) {
+			avg[idx] = w
+			idx++
+		})
+		e.avg[i] = avg
 	}
 	return e
 }
@@ -89,10 +94,12 @@ func (e *EMA) Update() error {
 		if p.Numel() != len(e.avg[pi]) {
 			return fmt.Errorf("nn: EMA param %d size changed: %d != %d", pi, p.Numel(), len(e.avg[pi]))
 		}
-		for i := range p.Numel() {
-			w := p.AtF64(tensor.Unravel(i, p.Shape())...)
-			e.avg[pi][i] = e.Decay*e.avg[pi][i] + (1-e.Decay)*w
-		}
+		avg := e.avg[pi]
+		idx := 0
+		readGen(p, func(w float64) {
+			avg[idx] = e.Decay*avg[idx] + (1-e.Decay)*w
+			idx++
+		})
 	}
 	return nil
 }
@@ -106,9 +113,13 @@ func materialize(ref []*tensor.Tensor, avg [][]float64) []*tensor.Tensor {
 	out := make([]*tensor.Tensor, len(ref))
 	for pi, p := range ref {
 		t := tensor.New(p.Dtype(), p.Shape())
-		for i := range p.Numel() {
-			t.SetF64(avg[pi][i], tensor.Unravel(i, p.Shape())...)
-		}
+		a := avg[pi]
+		idx := 0
+		fillGen(t, func() float64 {
+			v := a[idx]
+			idx++
+			return v
+		})
 		out[pi] = t
 	}
 	return out

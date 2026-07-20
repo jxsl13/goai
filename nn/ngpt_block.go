@@ -360,6 +360,49 @@ func (b *NGPTBlock) NormalizeWeights() {
 // (a zero column is left untouched). In-place, pure-f64 — not recorded on any tape.
 func normalizeColumns(w *tensor.Tensor) {
 	in, out := w.Shape()[0], w.Shape()[1]
+	// NormalizeWeights runs this over every weight matrix after each optimizer
+	// Step, so for a contiguous, offset-0 w read/write the typed backing slice by
+	// flat index (column j at stride `out`) instead of the per-element AtF64/SetF64
+	// dispatch. Bit-identical to the general path below (see the slowNormalizeColumns
+	// oracle); F16/BF16 fall through.
+	if w.IsContiguous() && w.Offset() == 0 {
+		switch w.Dtype() {
+		case tensor.F64:
+			d := w.Storage().F64()
+			for j := range out {
+				var ss float64
+				for i := range in {
+					v := d[i*out+j]
+					ss += v * v
+				}
+				n := math.Sqrt(ss)
+				if n == 0 {
+					continue
+				}
+				for i := range in {
+					d[i*out+j] = d[i*out+j] / n
+				}
+			}
+			return
+		case tensor.F32:
+			d := w.Storage().F32()
+			for j := range out {
+				var ss float64
+				for i := range in {
+					v := float64(d[i*out+j])
+					ss += v * v
+				}
+				n := math.Sqrt(ss)
+				if n == 0 {
+					continue
+				}
+				for i := range in {
+					d[i*out+j] = float32(float64(d[i*out+j]) / n)
+				}
+			}
+			return
+		}
+	}
 	for j := range out {
 		var ss float64
 		for i := range in {

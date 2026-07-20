@@ -121,19 +121,7 @@ func SigmoidFocalLoss(ctx *backend.Context, logits, targets *tensor.Tensor, gamm
 	// per-element constants from the (non-differentiable) targets: sign s=1−2y and weight α_t.
 	sign := tensor.New(logits.Dtype(), logits.Shape())
 	alphaT := tensor.New(logits.Dtype(), logits.Shape())
-	for i := range targets.Numel() {
-		c := tensor.Unravel(i, targets.Shape())
-		y := targets.AtF64(c...)
-		sign.SetF64(1-2*y, c...)
-		switch {
-		case alpha < 0:
-			alphaT.SetF64(1, c...) // α-weighting disabled
-		case y == 1:
-			alphaT.SetF64(alpha, c...)
-		default:
-			alphaT.SetF64(1-alpha, c...)
-		}
-	}
+	fillSigmoidFocalConstants(sign, alphaT, targets, alpha)
 	ex := func(op backend.Op, at backend.Attrs, in ...*tensor.Tensor) (*tensor.Tensor, error) {
 		o, err := backend.Execute(ctx, op, in, at)
 		if err != nil {
@@ -176,4 +164,66 @@ func SigmoidFocalLoss(ctx *backend.Context, logits, targets *tensor.Tensor, gamm
 		return nil, err
 	}
 	return ex(backend.OpMean, nil, weighted)
+}
+
+// fillSigmoidFocalConstants writes the per-element straight-through constants that
+// SigmoidFocalLoss folds in as detached tensors: sign[i] = 1−2·y[i] and the class
+// weight alphaT[i] (α for positives, 1−α for negatives, 1 when α-weighting is
+// disabled). sign and alphaT are fresh tensors of the LOGITS dtype; targets holds
+// the labels. When targets is contiguous, offset-0 and shares that dtype (F32/F64),
+// all three typed backing slices are walked directly instead of the per-element
+// AtF64/SetF64 dispatch, which sweeps the full logits tensor once per loss.
+// Bit-identical to the general path (see the slowSigmoidFocalConstants oracle);
+// mismatched dtypes or strided/offset targets fall through.
+func fillSigmoidFocalConstants(sign, alphaT, targets *tensor.Tensor, alpha float64) {
+	n := targets.Numel()
+	if targets.IsContiguous() && targets.Offset() == 0 && sign.Dtype() == targets.Dtype() {
+		switch targets.Dtype() {
+		case tensor.F64:
+			td := targets.Storage().F64()
+			sd, ad := sign.Storage().F64(), alphaT.Storage().F64()
+			for i := range n {
+				y := td[i]
+				sd[i] = 1 - 2*y
+				switch {
+				case alpha < 0:
+					ad[i] = 1
+				case y == 1:
+					ad[i] = alpha
+				default:
+					ad[i] = 1 - alpha
+				}
+			}
+			return
+		case tensor.F32:
+			td := targets.Storage().F32()
+			sd, ad := sign.Storage().F32(), alphaT.Storage().F32()
+			for i := range n {
+				y := float64(td[i])
+				sd[i] = float32(1 - 2*y)
+				switch {
+				case alpha < 0:
+					ad[i] = 1
+				case y == 1:
+					ad[i] = float32(alpha)
+				default:
+					ad[i] = float32(1 - alpha)
+				}
+			}
+			return
+		}
+	}
+	for i := range n {
+		c := tensor.Unravel(i, targets.Shape())
+		y := targets.AtF64(c...)
+		sign.SetF64(1-2*y, c...)
+		switch {
+		case alpha < 0:
+			alphaT.SetF64(1, c...) // α-weighting disabled
+		case y == 1:
+			alphaT.SetF64(alpha, c...)
+		default:
+			alphaT.SetF64(1-alpha, c...)
+		}
+	}
 }
