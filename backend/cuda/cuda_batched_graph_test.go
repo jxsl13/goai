@@ -235,6 +235,15 @@ func BenchmarkBatchedGraph_b512_gqa(b *testing.B) { benchBatchedGraph(b, 512, 12
 func BenchmarkBatchedGraph_b768_gqa(b *testing.B) { benchBatchedGraph(b, 768, 128, 22, "graph-gqa") }
 func BenchmarkBatchedGraph_b256_gqa(b *testing.B) { benchBatchedGraph(b, 256, 128, 22, "graph-gqa") }
 
+// Low-concurrency points on the production f16-KV path, to compare apples-to-apples with vLLM's
+// published 64-concurrent serving number (BENCHMARKS.md) rather than only the saturated peak.
+func BenchmarkBatchedGraph_b64_gqaf16(b *testing.B) {
+	benchBatchedGraph(b, 64, 128, 22, "graph-gqa-f16")
+}
+func BenchmarkBatchedGraph_b128_gqaf16(b *testing.B) {
+	benchBatchedGraph(b, 128, 128, 22, "graph-gqa-f16")
+}
+
 func BenchmarkBatchedGraph_b512_gqaf16(b *testing.B) {
 	benchBatchedGraph(b, 512, 128, 22, "graph-gqa-f16")
 }
