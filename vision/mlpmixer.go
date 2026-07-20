@@ -321,8 +321,13 @@ func (m *MLPMixer) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tens
 	if x.Ndim() != 4 {
 		return nil, fmt.Errorf("vision: MLPMixer expects [batch,C,H,W] or [C,H,W], got %v", x.Shape())
 	}
-	rows := make([]*tensor.Tensor, x.Shape()[0])
-	for b := range rows {
+	// Batched path: run the whole batch as ONE packed [B·P, hidden] token table so every embed / MLP /
+	// LayerNorm / head is a single large GEMM instead of B tiny per-image ones (the per-image loop's
+	// cost, mirrors the ViT T908 fix). Token-mixing's per-image transpose stays per-image (cheap
+	// elementwise) but its two GEMMs batch. Numerically identical to looping forwardOne.
+	B := x.Shape()[0]
+	patchRows := make([]*tensor.Tensor, B)
+	for b := range B {
 		img, err := backend.Execute(ctx, backend.OpSlice, []*tensor.Tensor{x},
 			backend.SliceAttrs{Axis: 0, Start: b, End: b + 1})
 		if err != nil {
@@ -333,15 +338,47 @@ func (m *MLPMixer) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tens
 		if err != nil {
 			return nil, err
 		}
-		if rows[b], err = m.forwardOne(ctx, one[0]); err != nil {
+		if patchRows[b], err = m.mixerPatchify(one[0]); err != nil {
 			return nil, err
 		}
 	}
-	out, err := backend.Execute(ctx, backend.OpConcat, rows, backend.ConcatAttrs{Axis: 0})
+	allPatches, err := backend.Execute(ctx, backend.OpConcat, patchRows, backend.ConcatAttrs{Axis: 0})
 	if err != nil {
 		return nil, err
 	}
-	return out[0], nil
+	h, err := m.Embed.Forward(ctx, allPatches[0]) // [B·P, hidden]
+	if err != nil {
+		return nil, err
+	}
+	for _, blk := range m.Layers {
+		if h, err = blk.forwardBatched(ctx, h, B); err != nil {
+			return nil, err
+		}
+	}
+	if h, err = m.Norm.Forward(ctx, h); err != nil {
+		return nil, err
+	}
+	// Global average pool over each image's P patches → [B, hidden], then the head once.
+	P := h.Shape()[0] / B
+	pooled := make([]*tensor.Tensor, B)
+	for b := range B {
+		hb, err := backend.Execute(ctx, backend.OpSlice, []*tensor.Tensor{h},
+			backend.SliceAttrs{Axis: 0, Start: b * P, End: (b + 1) * P})
+		if err != nil {
+			return nil, err
+		}
+		pm, err := backend.Execute(ctx, backend.OpMean, []*tensor.Tensor{hb[0]},
+			backend.ReduceAttrs{Axes: []int{0}, KeepDims: true})
+		if err != nil {
+			return nil, err
+		}
+		pooled[b] = pm[0]
+	}
+	pool, err := backend.Execute(ctx, backend.OpConcat, pooled, backend.ConcatAttrs{Axis: 0})
+	if err != nil {
+		return nil, err
+	}
+	return m.Head.Forward(ctx, pool[0]) // [B, classes]
 }
 
 // forwardOne runs one [C,H,W] image to [1, classes] logits: features → global-average-pool over
@@ -358,6 +395,94 @@ func (m *MLPMixer) forwardOne(ctx *backend.Context, img *tensor.Tensor) (*tensor
 		return nil, err
 	}
 	return m.Head.Forward(ctx, pooled[0]) // [1, classes]
+}
+
+// forwardBatched is mixerBlock.forward over a packed [batch·P, C] batch (P patches per image). Channel
+// mixing and both LayerNorms are row-wise, so they run on the packed matrix unchanged. Token-mixing
+// mixes ACROSS an image's P patches, so its transpose is done per image (cheap elementwise) but the
+// two token MLPs run as single [batch·C, P] GEMMs. Identical to forward per image.
+func (b *mixerBlock) forwardBatched(ctx *backend.Context, x *tensor.Tensor, batch int) (*tensor.Tensor, error) {
+	P := x.Shape()[0] / batch
+	C := x.Shape()[1]
+	// Token-mixing: batched norm → per-image transpose to [C,P] → batched token MLP → per-image transpose back.
+	h, err := b.tokenNorm.Forward(ctx, x) // [B·P, C]
+	if err != nil {
+		return nil, err
+	}
+	tParts := make([]*tensor.Tensor, batch)
+	for i := range batch {
+		hb, err := backend.Execute(ctx, backend.OpSlice, []*tensor.Tensor{h},
+			backend.SliceAttrs{Axis: 0, Start: i * P, End: (i + 1) * P})
+		if err != nil {
+			return nil, err
+		}
+		ht, err := backend.Execute(ctx, backend.OpTranspose, []*tensor.Tensor{hb[0]}, nil) // [C, P]
+		if err != nil {
+			return nil, err
+		}
+		tParts[i] = ht[0]
+	}
+	hT, err := backend.Execute(ctx, backend.OpConcat, tParts, backend.ConcatAttrs{Axis: 0}) // [B·C, P]
+	if err != nil {
+		return nil, err
+	}
+	u, err := b.tokenFC1.Forward(ctx, hT[0]) // [B·C, D_token]
+	if err != nil {
+		return nil, err
+	}
+	g, err := backend.Execute(ctx, backend.OpGELU, []*tensor.Tensor{u}, nil)
+	if err != nil {
+		return nil, err
+	}
+	u, err = b.tokenFC2.Forward(ctx, g[0]) // [B·C, P]
+	if err != nil {
+		return nil, err
+	}
+	bParts := make([]*tensor.Tensor, batch)
+	for i := range batch {
+		ub, err := backend.Execute(ctx, backend.OpSlice, []*tensor.Tensor{u},
+			backend.SliceAttrs{Axis: 0, Start: i * C, End: (i + 1) * C})
+		if err != nil {
+			return nil, err
+		}
+		ut, err := backend.Execute(ctx, backend.OpTranspose, []*tensor.Tensor{ub[0]}, nil) // [P, C]
+		if err != nil {
+			return nil, err
+		}
+		bParts[i] = ut[0]
+	}
+	tok, err := backend.Execute(ctx, backend.OpConcat, bParts, backend.ConcatAttrs{Axis: 0}) // [B·P, C]
+	if err != nil {
+		return nil, err
+	}
+	sum, err := backend.Execute(ctx, backend.OpAdd, []*tensor.Tensor{x, tok[0]}, nil)
+	if err != nil {
+		return nil, err
+	}
+	x = sum[0]
+
+	// Channel-mixing: fully batched (row-wise over C).
+	h, err = b.channelNorm.Forward(ctx, x)
+	if err != nil {
+		return nil, err
+	}
+	v, err := b.channelFC1.Forward(ctx, h) // [B·P, D_channel]
+	if err != nil {
+		return nil, err
+	}
+	g, err = backend.Execute(ctx, backend.OpGELU, []*tensor.Tensor{v}, nil)
+	if err != nil {
+		return nil, err
+	}
+	v, err = b.channelFC2.Forward(ctx, g[0]) // [B·P, C]
+	if err != nil {
+		return nil, err
+	}
+	sum, err = backend.Execute(ctx, backend.OpAdd, []*tensor.Tensor{x, v}, nil)
+	if err != nil {
+		return nil, err
+	}
+	return sum[0], nil
 }
 
 // forward runs one Mixer layer on x [S,C]: token-mixing then channel-mixing, each a pre-LayerNorm
