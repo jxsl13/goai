@@ -427,12 +427,12 @@ func expKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([
 		})
 	case tensor.F32:
 		d, o := xc.Storage().F32(), out.Storage().F32()
-		if vexpNeon {
-			// arm64 perf build (§T666): f32-native 4-wide NEON full-domain
-			// exp — the vexp reduction with split 2^n scaling and exact
-			// overflow/underflow masks (vexp.go). Compile-time const: every
-			// other build (default, amd64) keeps the f64 path below
-			// bit-for-bit; this path rides the ADR-0021 f32 tolerance.
+		if vexpF32Fast {
+			// SIMD perf build (§T666): f32-native vectorized full-domain exp — the
+			// vexp reduction with split 2^n scaling and exact overflow/underflow
+			// masks (4-wide NEON on arm64, 8-wide AVX2 on amd64; vexp.go /
+			// vexp_amd64.go). Compile-time const: the plain (no-simd) build keeps
+			// the f64 path below bit-for-bit; rides the ADR-0021 f32 tolerance.
 			parallel(len(o), func(lo, hi int) { vexpFullF32(o[lo:hi], d[lo:hi]) })
 			break
 		}
@@ -459,11 +459,11 @@ func logKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([
 		})
 	case tensor.F32:
 		d, o := xc.Storage().F32(), out.Storage().F32()
-		if vexpNeon {
-			// arm64 perf build (§T666): f32-native 4-wide NEON log — the
-			// Cephes logf reduction, a new primitive (vexp.go). Compile-time
-			// const: every other build keeps the f64 path bit-for-bit; this
-			// path rides the ADR-0021 f32 tolerance.
+		if vexpF32Fast {
+			// SIMD perf build (§T666): f32-native vectorized log — the Cephes logf
+			// reduction (4-wide NEON on arm64, 8-wide AVX2 on amd64; vexp.go /
+			// vexp_amd64.go). Compile-time const: the plain (no-simd) build keeps
+			// the f64 path bit-for-bit; rides the ADR-0021 f32 tolerance.
 			parallel(len(o), func(lo, hi int) { vlogF32(o[lo:hi], d[lo:hi]) })
 			break
 		}
@@ -490,12 +490,12 @@ func tanhKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) (
 		})
 	case tensor.F32:
 		d, o := xc.Storage().F32(), out.Storage().F32()
-		if vexpNeon {
-			// arm64 perf build (§T666): f32-native 4-wide NEON tanh — the
-			// stable sign-split (1−e^(−2|x|))/(1+e^(−2|x|)) on the vexp exp
-			// primitive (vexp.go). Compile-time const: every other build
-			// keeps the f64 path bit-for-bit; this path rides the ADR-0021
-			// f32 tolerance.
+		if vexpF32Fast {
+			// SIMD perf build (§T666): f32-native vectorized tanh — the stable
+			// sign-split (1−e^(−2|x|))/(1+e^(−2|x|)) on the vexp exp primitive
+			// (4-wide NEON on arm64, 8-wide AVX2 on amd64; vexp.go / vexp_amd64.go).
+			// Compile-time const: the plain (no-simd) build keeps the f64 path
+			// bit-for-bit; rides the ADR-0021 f32 tolerance.
 			parallel(len(o), func(lo, hi int) { vtanhF32(o[lo:hi], d[lo:hi]) })
 			break
 		}

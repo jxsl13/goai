@@ -2,7 +2,10 @@
 
 package cpu
 
-import "simd/archsimd"
+import (
+	"math"
+	"simd/archsimd"
+)
 
 // amd64 perf build: the perf-critical f32 transcendentals run through AVX2 8-wide kernels (this
 // file), the twins of the arm64 NEON kernels (vexp_arm64.s). vexpF32Fast gates the vectorized fast
@@ -45,6 +48,31 @@ var (
 	vGA5    = archsimd.BroadcastFloat32x8(geluA5)
 	vGPdf   = archsimd.BroadcastFloat32x8(geluInvSqrt2Pi)
 	vGPdfMn = archsimd.BroadcastFloat32x8(geluGradPdfMin)
+	// full-domain exp (standalone OpExp): wider hi clamp + split 2ⁿ scale + overflow/underflow pins.
+	vFullHi = archsimd.BroadcastFloat32x8(expFullHiClamp)
+	vInfCut = archsimd.BroadcastFloat32x8(expFullInfCut)
+	vMaxF32 = archsimd.BroadcastFloat32x8(math.MaxFloat32)
+	vInf    = archsimd.BroadcastFloat32x8(float32(math.Inf(1)))
+	vNegInf = archsimd.BroadcastFloat32x8(float32(math.Inf(-1)))
+	vNaN    = archsimd.BroadcastFloat32x8(float32(math.NaN()))
+	// standalone OpLog (Cephes logf): exponent extract + mantissa fold + degree-8 poly.
+	vLogMin  = archsimd.BroadcastFloat32x8(logMinNormal)
+	vLog2P25 = archsimd.BroadcastFloat32x8(logTwoP25)
+	v25i     = archsimd.BroadcastInt32x8(25)
+	vMant    = archsimd.BroadcastUint32x8(0x007FFFFF)
+	vExp1    = archsimd.BroadcastUint32x8(0x3F800000)
+	vSqrt2   = archsimd.BroadcastFloat32x8(logSqrtHalfx2)
+	vLLn2Hi  = archsimd.BroadcastFloat32x8(logLn2Hi)
+	vLLn2Lo  = archsimd.BroadcastFloat32x8(logLn2Lo)
+	vLL0     = archsimd.BroadcastFloat32x8(logL0)
+	vLL1     = archsimd.BroadcastFloat32x8(logL1)
+	vLL2     = archsimd.BroadcastFloat32x8(logL2)
+	vLL3     = archsimd.BroadcastFloat32x8(logL3)
+	vLL4     = archsimd.BroadcastFloat32x8(logL4)
+	vLL5     = archsimd.BroadcastFloat32x8(logL5)
+	vLL6     = archsimd.BroadcastFloat32x8(logL6)
+	vLL7     = archsimd.BroadcastFloat32x8(logL7)
+	vLL8     = archsimd.BroadcastFloat32x8(logL8)
 )
 
 // expF32x8 evaluates exp(x) 8-wide via the Cephes range-reduced degree-5 polynomial — exp(x) =
@@ -242,19 +270,103 @@ func vsigmoidF32(dst, src []float32) {
 // so the driver type-checks — dead code at run time here, exactly as in vexp_default.go.
 
 func vexpFullF32(dst, src []float32) {
-	for i, v := range src {
-		dst[i] = expFullF32(v)
+	if !vexpHasAVX {
+		for i, v := range src {
+			dst[i] = expFullF32(v)
+		}
+		return
+	}
+	n8 := len(src) &^ 7
+	for i := 0; i < n8; i += 8 {
+		x := archsimd.LoadFloat32x8Slice(src[i:])
+		xc := x.Max(vLo).Min(vFullHi)
+		n := xc.MulAdd(vLog2e, vMagic).Sub(vMagic)
+		r := n.MulAdd(vNHi, xc)
+		r = n.MulAdd(vNLo, r)
+		pp := vE0.MulAdd(r, vE1)
+		pp = pp.MulAdd(r, vE2)
+		pp = pp.MulAdd(r, vE3)
+		pp = pp.MulAdd(r, vE4)
+		pp = pp.MulAdd(r, vHalf)
+		res := pp.MulAdd(r.Mul(r), r.Add(vOne))
+		// split the 2ⁿ scale as 2^floor(n/2)·2^ceil(n/2) so neither exponent field overflows for n≤129.
+		n1f := n.Mul(vHalf).Floor()
+		s1 := n1f.ConvertToInt32().Add(vBias).AsUint32x8().ShiftAllLeft(23).AsFloat32x8()
+		s2 := n.Sub(n1f).ConvertToInt32().Add(vBias).AsUint32x8().ShiftAllLeft(23).AsFloat32x8()
+		res = res.Mul(s1).Mul(s2).Min(vMaxF32)
+		res = vZero.Merge(res, x.Less(vLo))       // underflow → exact 0 (NaN keeps res)
+		res = vInf.Merge(res, x.Greater(vInfCut)) // overflow → +Inf (NaN keeps res)
+		res.StoreSlice(dst[i:])
+	}
+	for i := n8; i < len(src); i++ {
+		dst[i] = expFullF32(src[i])
 	}
 }
 
 func vtanhF32(dst, src []float32) {
-	for i, v := range src {
-		dst[i] = tanhF32(v)
+	if !vexpHasAVX {
+		for i, v := range src {
+			dst[i] = tanhF32(v)
+		}
+		return
+	}
+	n8 := len(src) &^ 7
+	for i := 0; i < n8; i += 8 {
+		x := archsimd.LoadFloat32x8Slice(src[i:])
+		a := x.AsUint32x8().And(vAbs).AsFloat32x8()                       // |x|
+		z := expF32x8(vZero.Sub(a.Add(a)))                                // e^(−2|x|), only the lo clamp is live
+		t := vOne.Sub(z).Div(vOne.Add(z))                                 // (1−z)/(1+z)
+		res := t.AsUint32x8().Or(x.AsUint32x8().And(vSign)).AsFloat32x8() // re-apply sign(x)
+		res.StoreSlice(dst[i:])
+	}
+	for i := n8; i < len(src); i++ {
+		dst[i] = tanhF32(src[i])
 	}
 }
 
 func vlogF32(dst, src []float32) {
-	for i, v := range src {
-		dst[i] = logF32(v)
+	if !vexpHasAVX {
+		for i, v := range src {
+			dst[i] = logF32(v)
+		}
+		return
+	}
+	n8 := len(src) &^ 7
+	for i := 0; i < n8; i += 8 {
+		x := archsimd.LoadFloat32x8Slice(src[i:])
+		sub := x.Less(vLogMin)              // subnormal (also 0/neg; fixed by the specials below)
+		xs := x.Mul(vLog2P25).Merge(x, sub) // pre-scale subnormals by 2²⁵
+		bx := xs.AsUint32x8()
+		e := bx.ShiftAllRight(23).AsInt32x8().Sub(vBias) // unbiased exponent
+		e = e.Sub(sub.ToInt32x8().And(v25i))             // undo the 2²⁵ pre-scale where it was applied
+		m := bx.And(vMant).Or(vExp1).AsFloat32x8()       // mantissa ∈ [1,2)
+		fold := m.GreaterEqual(vSqrt2)
+		m = m.Mul(vHalf).Merge(m, fold) // fold m ≥ √2 into [√½,√2)
+		e = e.Sub(fold.ToInt32x8())     // and bump the exponent (subtract −1)
+		ef := e.ConvertToFloat32()
+		f := m.Sub(vOne) // Sterbenz-exact
+		z := f.Mul(f)
+		p := vLL0.MulAdd(f, vLL1)
+		p = p.MulAdd(f, vLL2)
+		p = p.MulAdd(f, vLL3)
+		p = p.MulAdd(f, vLL4)
+		p = p.MulAdd(f, vLL5)
+		p = p.MulAdd(f, vLL6)
+		p = p.MulAdd(f, vLL7)
+		p = p.MulAdd(f, vLL8)
+		y := f.Mul(z.Mul(p))
+		y = ef.MulAdd(vLLn2Lo, y)
+		y = y.Sub(vHalf.Mul(z))
+		r := f.Add(y)
+		r = ef.MulAdd(vLLn2Hi, r)
+		// specials in ref's order (each later select wins): NaN→x, 0→−Inf, <0→NaN, +Inf→+Inf.
+		r = x.Merge(r, x.IsNaN())
+		r = vNegInf.Merge(r, x.Equal(vZero))
+		r = vNaN.Merge(r, x.Less(vZero))
+		r = vInf.Merge(r, x.Equal(vInf))
+		r.StoreSlice(dst[i:])
+	}
+	for i := n8; i < len(src); i++ {
+		dst[i] = logF32(src[i])
 	}
 }
