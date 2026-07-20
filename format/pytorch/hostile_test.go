@@ -191,3 +191,15 @@ func TestHostileNumelOverflow(t *testing.T) {
 		})
 	}
 }
+
+// Regression: the unpickler's read(n) guard `u.pos+n > len(u.buf)` overflows for a
+// hostile 8-byte length near maxint64 — u.pos+n wraps NEGATIVE, so the guard passes
+// and the slice u.buf[u.pos:u.pos+n] panics with "slice bounds out of range" instead
+// of returning a clean error (§V29). BINUNICODE8 (0x8d) reaches read() directly.
+func TestHostileBinUnicode8LengthOverflow(t *testing.T) {
+	// PROTO 2, BINUNICODE8, length = 0x7FFFFFFFFFFFFFFF (maxint64).
+	pkl := []byte{0x80, 0x02, 0x8d, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f}
+	if err := loadHostile(t, "BINUNICODE8-overflow", hostileZip(t, pkl, nil)); err == nil {
+		t.Error("a hostile 8-byte length must error, not panic or succeed")
+	}
+}

@@ -135,7 +135,11 @@ func (u *unpickler) byte() (byte, error) {
 }
 
 func (u *unpickler) read(n int) ([]byte, error) {
-	if n < 0 || u.pos+n > len(u.buf) {
+	// Compare against the REMAINING length, not u.pos+n: a hostile 8-byte length
+	// (BINUNICODE8/BINBYTES8) near maxint64 makes u.pos+n overflow to a negative
+	// value that slips past `> len(u.buf)`, and the slice below then panics (§V29,
+	// §B99 class). len(u.buf)-u.pos cannot overflow (u.pos ≤ len(u.buf) always).
+	if n < 0 || n > len(u.buf)-u.pos {
 		return nil, io.ErrUnexpectedEOF
 	}
 	b := u.buf[u.pos : u.pos+n]
