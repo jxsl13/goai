@@ -42,7 +42,7 @@ func (s *stringList) Set(v string) error {
 // exactly what the hardcoded classifier used to do (§T584).
 func defaultRules() (ignore, ignoreRe, fullRe, pkgRe, alwaysRun []string) {
 	ignore = []string{"docs", ".claude", "spec"} // + .claude/** (skills/workflows/memory) + spec/** (the §V40 source tree — pure markdown, never embedded; §T585 root-markdown covers LICENSE.md)
-	ignoreRe = []string{`^[^/]+\.(md|txt)$`} // root-level markdown/text (deeper ones can be embedded, §B50)
+	ignoreRe = []string{`^[^/]+\.(md|txt)$`}     // root-level markdown/text (deeper ones can be embedded, §B50)
 	fullRe = []string{`^go\.sum$`, `^Makefile$`, `^\.github/`}
 	// The whole-tree meta-tests walk SOURCE/markdown they have no import edge to, so
 	// the reverse closure can never select them (§B98: they rot red while CI stays
