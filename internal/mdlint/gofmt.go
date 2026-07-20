@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"go/format"
+	"go/scanner"
+	"go/token"
 	"strings"
 )
 
@@ -42,6 +44,28 @@ func goBlocks(lines []string) []goBlock {
 	return out
 }
 
+// hasCodeTokens reports whether the snippet contains any token beyond
+// comments. A comment-only block — e.g. a lone `//go:build vulkan`
+// constraint (ADR-0029) — must be left verbatim: format.Source's fragment
+// heuristic "formats" it destructively (`//go:build vulkan` →
+// "vulkan\n\npackage p", the constraint prefix stripped and a package
+// clause invented — §B115/§T889(b)).
+func hasCodeTokens(src string) bool {
+	fset := token.NewFileSet()
+	var s scanner.Scanner
+	s.Init(fset.AddFile("", fset.Base(), len(src)), []byte(src), nil, 0)
+	for {
+		_, tok, _ := s.Scan()
+		switch tok {
+		case token.EOF:
+			return false
+		case token.SEMICOLON: // auto-inserted, not code
+		default:
+			return true
+		}
+	}
+}
+
 // formatSnippet gofmt-formats a statement-level snippet. It first tries the
 // snippet as a whole file (for blocks with package/func decls), then wrapped
 // in a synthetic func body. Returns the formatted snippet lines.
@@ -79,6 +103,9 @@ func lintGoBlocks(file string, lines []string, rewrite bool) ([]finding, []strin
 	blocks := goBlocks(lines)
 	for bi := len(blocks) - 1; bi >= 0; bi-- {
 		b := blocks[bi]
+		if !hasCodeTokens(strings.Join(b.body, "\n")) {
+			continue // comment-only block: verbatim by contract (§B115)
+		}
 		formatted, err := formatSnippet(b.body)
 		if err != nil {
 			out = append(out, finding{file, b.startLine, "go-block-parse", err.Error()})
