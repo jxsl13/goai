@@ -281,6 +281,7 @@ static CUfunction gRopeDposF16 = NULL; // f16 device-position RoPE (graph-captur
 static CUfunction gWmmaAttn = NULL; // nvcc-compiled fused prefill attention (slice 2)
 static CUfunction gWmmaAttnGqa = NULL; // GQA/strided fused prefill attention (§ROADMAP A2)
 static CUfunction gWmmaPagedDecode = NULL; // tensor-core batched paged DECODE attention (breaks the 0.64 TFLOP/s latency-bound GEMV)
+static CUfunction gPagedAppendBatched = NULL; // device-side batched paged KV append (real serving: no host round-trip)
 static int launch_cvt_f16(const void* src, void* dst, long n); // fwd decl (defined below)
 
 // cu_paged_decode_attn: FRONT B / B2 — batched single-query decode attention over a PAGED KV
@@ -457,6 +458,45 @@ int cu_wmma_paged_decode(const void* fatbin, int fatlen, const void* dQ, const v
                              shbytes, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 donewpd:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_paged_append_batched: scatter one freshly-computed K/V row per sequence into its next paged KV
+// slot, DEVICE-SIDE — the real serving append. Decode produces dk/dv [batch, WKV] already on device;
+// this writes row b at slot seqLens[b] of block blockTables[b][seqLens[b]/blockSize], with no host
+// round-trip (the test-harness SeqKV.Append path pays batch× host uploads/step; this replaces it).
+// The caller pre-allocates blocks so the target slot exists and bumps the host-side logical length
+// after; seqLens here is the PRE-append length (where the new token lands). One block per sequence.
+int cu_paged_append_batched(void* dPoolK, void* dPoolV, const void* dBlockTables, const void* dSeqLens,
+                            const void* dK, const void* dV, int batch, int wkv, int blockSize, int maxBlocks) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto doneapp; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto doneapp; }
+    if (!gPagedAppendBatched && compile_kernel(
+        "extern \"C\" __global__ void paged_append(float* poolK, float* poolV,\n"
+        "    const int* blockTables, const int* seqLens, const float* dK, const float* dV,\n"
+        "    int batch, int wkv, int blockSize, int maxBlocks){\n"
+        "  int seq = blockIdx.x; if (seq >= batch) return;\n"
+        "  int len = seqLens[seq];\n"
+        "  int phys = blockTables[(size_t)seq*maxBlocks + len/blockSize];\n"
+        "  size_t dst = ((size_t)phys*blockSize + (len % blockSize)) * wkv;\n"
+        "  size_t src = (size_t)seq*wkv;\n"
+        "  for (int i = threadIdx.x; i < wkv; i += blockDim.x){\n"
+        "    poolK[dst+i] = dK[src+i];\n"
+        "    poolV[dst+i] = dV[src+i];\n"
+        "  }\n"
+        "}\n",
+        "paged_append.cu", "paged_append", &gPagedAppendBatched) != 0) { rc = -2; goto doneapp; }
+    {
+        void* args[10] = { &dPoolK, &dPoolV, (void*)&dBlockTables, (void*)&dSeqLens, (void*)&dK, (void*)&dV,
+                           &batch, &wkv, &blockSize, &maxBlocks };
+        unsigned threads = wkv < 256 ? (unsigned)wkv : 256u;
+        rc = (cuLaunchKernel(gPagedAppendBatched, (unsigned)batch, 1, 1, threads, 1, 1,
+                             0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+doneapp:
     pthread_mutex_unlock(&gLock);
     return rc;
 }

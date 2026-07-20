@@ -165,6 +165,45 @@ func (s *SeqKV) Append(k, v *DeviceF32) error {
 	return nil
 }
 
+// Reserve1 ensures a physical block exists for this sequence's NEXT token, so a device-side append
+// can write it. Block allocation is the infrequent host-side bookkeeping paged serving does out of
+// band (once per blockSize tokens); the per-step data write stays on the device (see AppendBatched).
+func (s *SeqKV) Reserve1() error {
+	lb := s.n / s.pool.blockSize
+	for lb >= len(s.table) {
+		b, err := s.pool.alloc()
+		if err != nil {
+			return err
+		}
+		s.table = append(s.table, b)
+	}
+	return nil
+}
+
+// AppendBatched appends ONE token per sequence device-side: dk/dv are [batch,wkv] device buffers (the
+// decode step's own freshly-computed K/V), scattered into each sequence's next KV slot by a single
+// kernel — no host round-trip. This is the real serving append; SeqKV.Append (host uploads per call)
+// is the harness path. `view` must reflect the sequences' CURRENT (pre-append) block tables + lengths,
+// and each sequence must have its next block reserved (call Reserve1 then view.Update first). On
+// success each sequence's logical length is bumped by one (host-side metadata only — no data copy).
+func (p *PagedKVPool) AppendBatched(seqs []*SeqKV, dk, dv *DeviceF32, view *PagedBatchView) error {
+	batch := len(seqs)
+	if dk.rows != batch || dv.rows != batch || dk.cols != p.wkv || dv.cols != p.wkv {
+		return fmt.Errorf("cuda: AppendBatched shape dk[%d,%d] dv[%d,%d] want [%d,%d]", dk.rows, dk.cols, dv.rows, dv.cols, batch, p.wkv)
+	}
+	if view.batch != batch {
+		return fmt.Errorf("cuda: AppendBatched view batch %d != %d", view.batch, batch)
+	}
+	if rc := C.cu_paged_append_batched(p.k.ptr, p.v.ptr, view.dbt, view.dsl, dk.ptr, dv.ptr,
+		C.int(batch), C.int(p.wkv), C.int(p.blockSize), C.int(view.maxBlocks)); rc != 0 {
+		return fmt.Errorf("cuda: AppendBatched rc=%d", int(rc))
+	}
+	for _, s := range seqs {
+		s.n++
+	}
+	return nil
+}
+
 // GatherK / GatherV materialize the sequence's K / V as fresh contiguous [n,wkv] buffers by
 // copying the (possibly non-contiguous) physical blocks in logical order — the bridge that lets
 // the existing contiguous attention kernel consume paged storage until B2 lands.
@@ -290,6 +329,24 @@ func (v *PagedBatchView) Update(seqs []*SeqKV) error {
 	}
 	if rc := C.cu_update_i32(v.dsl, (*C.int)(&sl[0]), C.int(len(sl))); rc != 0 {
 		return fmt.Errorf("cuda: PagedBatchView.Update seq-len update failed (%d)", int(rc))
+	}
+	return nil
+}
+
+// UpdateLens re-uploads ONLY the sequence lengths (batch int32) — the cheap per-step refresh for a
+// steady-state decode where no block boundary was crossed (block tables unchanged). Real paged
+// serving allocates a block only every blockSize tokens, so the full block-table rebuild in Update
+// is amortized ~1/blockSize; every other step needs just this small length bump.
+func (v *PagedBatchView) UpdateLens(seqs []*SeqKV) error {
+	if len(seqs) != v.batch {
+		return fmt.Errorf("cuda: PagedBatchView.UpdateLens batch %d != view %d", len(seqs), v.batch)
+	}
+	sl := make([]int32, v.batch)
+	for i, s := range seqs {
+		sl[i] = int32(s.n)
+	}
+	if rc := C.cu_update_i32(v.dsl, (*C.int)(&sl[0]), C.int(len(sl))); rc != 0 {
+		return fmt.Errorf("cuda: PagedBatchView.UpdateLens failed (%d)", int(rc))
 	}
 	return nil
 }

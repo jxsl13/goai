@@ -80,6 +80,10 @@ int cu_paged_decode_attn_gqa(const void* dQ, const void* dPoolK, const void* dPo
 int cu_paged_decode_attn_gqa_sk(const void* dQ, const void* dPoolK, const void* dPoolV, const void* dBlockTables, const void* dSeqLens, void* dO, int batch, int qHeads, int kvHeads, int hd, int blockSize, int maxBlocks, float scale, int splitK);
 // cu_wmma_paged_decode: tensor-core (nvcc mma.h fatbin) batched paged decode attention. hd==64, group≤8, blockSize≤16, seqLen≤128.
 int cu_wmma_paged_decode(const void* fatbin, int fatlen, const void* dQ, const void* dPoolK, const void* dPoolV, const void* dBlockTables, const void* dSeqLens, void* dO, int batch, int qHeads, int kvHeads, int hd, int blockSize, int maxBlocks, float scale);
+
+// cu_paged_append_batched: device-side batched paged KV append. Scatter dK/dV [batch,wkv] into each
+// sequence's slot seqLens[b] (pre-append length) — the real serving append with no host round-trip.
+int cu_paged_append_batched(void* dPoolK, void* dPoolV, const void* dBlockTables, const void* dSeqLens, const void* dK, const void* dV, int batch, int wkv, int blockSize, int maxBlocks);
 // cu_cvt_f32_to_f16: convert n device f32 (src32) to device f16/u16 (dst16), stream-ordered.
 int cu_cvt_f32_to_f16(void* dst16, const void* src32, long n);
 int cu_cvt_f16_to_f32(void* dst32, const void* src16, long n);

@@ -16,7 +16,7 @@ import (
 // device position + PagedBatchView.Update in-place + BatchedDecodeAttnViewInto fixed output). Each
 // replay: launch the captured step, append the step's K/V (external, throughput-equivalent), Update
 // the view, advance DevicePos. Measures the real graph-captured serving-decode throughput.
-func benchServingGraphA1(b *testing.B, batch, startLen, layers int) {
+func benchServingGraphA1(b *testing.B, batch, startLen, layers int, hostAppend bool) {
 	if !cuda.Available() {
 		b.Skip("no gpu")
 	}
@@ -164,13 +164,31 @@ func benchServingGraphA1(b *testing.B, batch, startLen, layers int) {
 		b.Skipf("capture end: %v", err)
 	}
 	defer g.Free()
+	// device-resident K/V for the append (real decode produces these on-device; content is irrelevant
+	// to throughput). AppendBatched scatters them into each seq's next slot with NO host round-trip.
+	dkDev, _ := cuda.NewDeviceF32(batch, kvW)
+	dvDev, _ := cuda.NewDeviceF32(batch, kvW)
+	defer dkDev.Free()
+	defer dvDev.Free()
 	b.ResetTimer()
 	for n := 0; n < b.N; n++ {
 		g.Launch()
-		for i := range seqs { // grow KV + advance (outside the graph)
-			appendTok(seqs[i], 1)
+		if hostAppend { // harness path: per-seq host K/V upload (NewDeviceF32+UploadF32+Append+Free)
+			for i := range seqs {
+				appendTok(seqs[i], 1)
+			}
+			view.Update(seqs)
+		} else { // real serving path: reserve block (host bookkeeping) + device-side scatter, no host K/V
+			for i := range seqs {
+				seqs[i].Reserve1()
+			}
+			if (startLen+n)%16 == 0 { // block boundary: block table changed -> full rebuild
+				view.Update(seqs)
+			} else { // steady state: only seq lengths changed -> cheap batch-int32 bump
+				view.UpdateLens(seqs)
+			}
+			pool.AppendBatched(seqs, dkDev, dvDev, view) // device-side scatter, bumps logical len
 		}
-		view.Update(seqs)
 		pos.Set(startLen + n + 1)
 	}
 	cuda.GraphSync()
@@ -181,7 +199,8 @@ func benchServingGraphA1(b *testing.B, batch, startLen, layers int) {
 	}
 }
 
-func BenchmarkServingGraphA1_b512(b *testing.B) { benchServingGraphA1(b, 512, 128, 22) }
+func BenchmarkServingGraphA1_b512(b *testing.B)     { benchServingGraphA1(b, 512, 128, 22, false) }
+func BenchmarkServingGraphA1Host_b512(b *testing.B) { benchServingGraphA1(b, 512, 128, 22, true) }
 
 // benchServingGraphA1NoAppend isolates the graph-decode replay cost from the test harness's naive
 // per-seq host K/V append: it replays the captured step + Update + DevicePos advance over a FIXED
