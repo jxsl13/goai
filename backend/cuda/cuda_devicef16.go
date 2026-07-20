@@ -96,6 +96,22 @@ func (r *ResidentBF16) MatMulF16(a *DeviceF16) (*DeviceF16, error) {
 	return out, nil
 }
 
+// MatMulF16AddInto computes c += a·W in one GEMM (beta=1 epilogue), fusing the residual add — no
+// scratch DeviceF16, no separate Add kernel. c is read-modify-write; a[rows,K], W[K,N], c[rows,N].
+// Bit-identical to MatMulF16 followed by c.Add(tmp) (see TestGemmF16PureAddCParity).
+func (r *ResidentBF16) MatMulF16AddInto(a, c *DeviceF16) error {
+	if a.cols != r.k {
+		return fmt.Errorf("cuda: MatMulF16AddInto inner dim a[%d,%d]·W[%d,%d]", a.rows, a.cols, r.k, r.n)
+	}
+	if c.rows != a.rows || c.cols != r.n {
+		return fmt.Errorf("cuda: MatMulF16AddInto dest c[%d,%d] != [%d,%d]", c.rows, c.cols, a.rows, r.n)
+	}
+	if rc := C.cu_gemm_f16_pure_addc(a.ptr, r.ptr, c.ptr, C.int(a.rows), C.int(r.k), C.int(r.n)); rc != 0 {
+		return fmt.Errorf("cuda: MatMulF16AddInto rc=%d", int(rc))
+	}
+	return nil
+}
+
 // RoPE applies rotary position embedding in place (inv is a resident f32 [hd/2] table).
 func (d *DeviceF16) RoPE(inv *DeviceF32, attrs backend.RoPEAttrs) error {
 	heads := attrs.Heads
