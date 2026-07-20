@@ -145,3 +145,10 @@ func BenchmarkBatchedGraphA1Logits_b512(b *testing.B) {
 func BenchmarkBatchedGraphA1Logits_b768(b *testing.B) {
 	benchBatchedGraphA1Logits(b, 768, 128, 22, 32000)
 }
+
+// Full-step (layers+final-norm+logits GEMM) at longer context: logits is context-INDEPENDENT so it
+// shifts the whole decode-throughput curve down uniformly vs layers-only — the honest complete-step
+// number to compare against vLLM (whose figure includes the head + sampling). Iw8.
+func BenchmarkBatchedGraphA1Logits_b512_len256(b *testing.B) {
+	benchBatchedGraphA1Logits(b, 512, 256, 22, 32000)
+}
