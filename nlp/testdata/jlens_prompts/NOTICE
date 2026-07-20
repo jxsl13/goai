@@ -1,9 +1,0 @@
-The JSON prompt sets in this directory are the experiment-replication and
-lens-evaluation prompt sets from Anthropic's jacobian-lens repository
-(https://github.com/anthropics/jacobian-lens), the companion code of
-"Verbalizable Representations Form a Global Workspace in Language Models"
-(2026). They are synthetic data released under the Apache License 2.0 and are
-redistributed here unmodified under that license (see the repository's LICENSE
-for the full text). The Go code in this repository that consumes them remains
-under GoAI's own MPL-2.0 license; the .pt lens-artifact format compatibility
-implemented in nlp/jlens.go follows the same repository's published format.
