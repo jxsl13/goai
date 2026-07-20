@@ -102,6 +102,8 @@ int cu_rope_f16_dpos(void* x, const void* inv, int seq, int heads, int hd, const
 int cu_rope_f16_dpos_arr(void* x, const void* inv, int seq, int heads, int hd, const void* dPosArr, double posDiv); // f16 PER-SEQ-position RoPE (continuous batching)
 // cu_paged_decode_attn_gqa_f16: f16-KV twin of cu_paged_decode_attn_gqa (poolK16/V16 are u16, half the global bytes).
 int cu_paged_decode_attn_gqa_f16(const void* dQ, const void* dPoolK16, const void* dPoolV16, const void* dBlockTables, const void* dSeqLens, void* dO, int batch, int qHeads, int kvHeads, int hd, int blockSize, int maxBlocks, float scale);
+// cu_paged_decode_attn_gqa_f16_qio: f16-KV + f16 Q-in/O-out — kills the A1 per-layer Q/O conversions.
+int cu_paged_decode_attn_gqa_f16_qio(const void* dQ16, const void* dPoolK16, const void* dPoolV16, const void* dBlockTables, const void* dSeqLens, void* dO16, int batch, int qHeads, int kvHeads, int hd, int blockSize, int maxBlocks, float scale);
 // cu_wmma_attn_gqa: fused prefill attention on f32 DEVICE buffers, [seq,heads·hd] GQA layout — drop-in for GroupedQueryAttention.
 int cu_wmma_attn_gqa(const void* fatbin, int fatlen, const void* dQ32, const void* dK32, const void* dV32, void* dO32, int seq, int qHeads, int kvHeads, int hd, float scale);
 void* cu_clone_f32(const void* src, int n);
@@ -218,6 +220,10 @@ int cu_download_u16(const void* dsrc, unsigned short* dst, int n);
 int cu_matmul_f16w_acc16(const void* dA32, const void* dW16, void* dC32, int M, int K, int N, float beta);
 // cu_gemm_f16_pure: pure f16 GEMM (f16 in/out, no per-call conversions) — isolates the A1 conversion cost.
 int cu_gemm_f16_pure(const void* dA16, const void* dW16, void* dC16, int M, int K, int N);
+// cu_gemm_f16_pure_acc32: pure f16 GEMM but f32 ACCUMULATE (COMPUTE_32F) — vLLM-precision, no conversions.
+int cu_gemm_f16_pure_acc32(const void* dA16, const void* dW16, void* dC16, int M, int K, int N);
+// cu_gemm_f16_pure_addc: f16 GEMM with beta=1 (C += A·B) — folds a residual add into the GEMM epilogue.
+int cu_gemm_f16_pure_addc(const void* dA16, const void* dW16, void* dC16, int M, int K, int N);
 // cu_copy_rows: device→device copy nElems floats from src to dst+dstOffset (KV-cache append).
 int cu_copy_rows(void* dst, const void* src, int dstOffset, int nElems);
 void* cu_upload_i32(const int* src, int n);

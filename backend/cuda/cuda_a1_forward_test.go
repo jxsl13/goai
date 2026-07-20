@@ -3,6 +3,7 @@
 package cuda_test
 
 import (
+	"os"
 	"testing"
 	"unsafe"
 
@@ -59,6 +60,19 @@ func benchBatchedGraphA1(b *testing.B, batch, seqLen, layers int) {
 	}
 	defer view.Free()
 
+	// GOAI_F16_ACC32=1 swaps the pure-f16 GEMM (f16 accumulate) for the f32-accumulate variant —
+	// vLLM-matched precision on the SAME conversion-free f16-activation path, isolating the
+	// matched-precision gap from the f32-activation convert overhead of the bf16/MatMulDevice path.
+	gemm := cuda.GemmF16Pure
+	if os.Getenv("GOAI_F16_ACC32") == "1" {
+		gemm = cuda.GemmF16PureAcc32
+	}
+	// GOAI_FUSE_RESIDUAL=1 folds the wo/wd residual adds into those GEMMs' epilogue (beta=1),
+	// removing 2 AddF16 kernels + 2 scratch buffers per layer — the first fused-forward lever.
+	fuseResid := os.Getenv("GOAI_FUSE_RESIDUAL") == "1"
+	// GOAI_ATTN_QIO=1 feeds the f16 query straight into attention and gets f16 back, killing the two
+	// per-layer f32<->f16 conversions around attention.
+	qioAttn := os.Getenv("GOAI_ATTN_QIO") == "1"
 	step := func() {
 		x := cuda.AllocU16(batch * dim)
 		cuda.CvtF32ToF16(x, x0.DevPtr(), batch*dim)
@@ -68,9 +82,9 @@ func benchBatchedGraphA1(b *testing.B, batch, seqLen, layers int) {
 			dq := cuda.AllocU16(batch * qW)
 			dk := cuda.AllocU16(batch * kvW)
 			dv := cuda.AllocU16(batch * kvW)
-			cuda.GemmF16Pure(dh, l.wq.WPtr(), dq, batch, dim, qW)
-			cuda.GemmF16Pure(dh, l.wk.WPtr(), dk, batch, dim, kvW)
-			cuda.GemmF16Pure(dh, l.wv.WPtr(), dv, batch, dim, kvW)
+			gemm(dh, l.wq.WPtr(), dq, batch, dim, qW)
+			gemm(dh, l.wk.WPtr(), dk, batch, dim, kvW)
+			gemm(dh, l.wv.WPtr(), dv, batch, dim, kvW)
 			cuda.FreeDev(dh)
 			cuda.RoPEF16(dq, invQdev.DevPtr(), batch, bgQHeads, bgHD, seqLen, posDivQ)
 			cuda.RoPEF16(dk, invKdev.DevPtr(), batch, bgKVHeads, bgHD, seqLen, posDivK)
@@ -80,6 +94,13 @@ func benchBatchedGraphA1(b *testing.B, batch, seqLen, layers int) {
 			var da unsafe.Pointer
 			if a1SkipAttn {
 				da = dq // qW==dim: feed query straight to wo, skip attention
+			} else if qioAttn {
+				var err error
+				da, err = pool.BatchedDecodeAttnViewGQAf16Qio(dq, qW, view, bgQHeads, bgKVHeads)
+				if err != nil {
+					b.Fatal(err)
+				}
+				cuda.FreeDev(dq)
 			} else {
 				dqf, _ := cuda.NewDeviceF32(batch, qW)
 				cuda.CvtF16ToF32(dqf.DevPtr(), dq, batch*qW)
@@ -93,25 +114,35 @@ func benchBatchedGraphA1(b *testing.B, batch, seqLen, layers int) {
 				cuda.CvtF32ToF16(da, daf.DevPtr(), batch*qW)
 				daf.Free()
 			}
-			tmp := cuda.AllocU16(batch * dim)
-			cuda.GemmF16Pure(da, l.wo.WPtr(), tmp, batch, qW, dim)
-			cuda.FreeDev(da)
-			cuda.AddF16(x, tmp, batch*dim)
-			cuda.FreeDev(tmp)
+			if fuseResid {
+				cuda.GemmF16PureAddC(da, l.wo.WPtr(), x, batch, qW, dim) // x += da·wo
+				cuda.FreeDev(da)
+			} else {
+				tmp := cuda.AllocU16(batch * dim)
+				gemm(da, l.wo.WPtr(), tmp, batch, qW, dim)
+				cuda.FreeDev(da)
+				cuda.AddF16(x, tmp, batch*dim)
+				cuda.FreeDev(tmp)
+			}
 			dh2 := cuda.AllocU16(batch * dim)
 			cuda.RMSNormF16(x, dh2, l.gFFN.VecPtr(), batch, dim, 1e-5)
 			dg := cuda.AllocU16(batch * hidden)
 			du := cuda.AllocU16(batch * hidden)
-			cuda.GemmF16Pure(dh2, l.wg.WPtr(), dg, batch, dim, hidden)
-			cuda.GemmF16Pure(dh2, l.wu.WPtr(), du, batch, dim, hidden)
+			gemm(dh2, l.wg.WPtr(), dg, batch, dim, hidden)
+			gemm(dh2, l.wu.WPtr(), du, batch, dim, hidden)
 			cuda.FreeDev(dh2)
 			cuda.SwiGLUF16(dg, du, batch*hidden)
 			cuda.FreeDev(du)
-			tmp2 := cuda.AllocU16(batch * dim)
-			cuda.GemmF16Pure(dg, l.wd.WPtr(), tmp2, batch, hidden, dim)
-			cuda.FreeDev(dg)
-			cuda.AddF16(x, tmp2, batch*dim)
-			cuda.FreeDev(tmp2)
+			if fuseResid {
+				cuda.GemmF16PureAddC(dg, l.wd.WPtr(), x, batch, hidden, dim) // x += dg·wd
+				cuda.FreeDev(dg)
+			} else {
+				tmp2 := cuda.AllocU16(batch * dim)
+				gemm(dg, l.wd.WPtr(), tmp2, batch, hidden, dim)
+				cuda.FreeDev(dg)
+				cuda.AddF16(x, tmp2, batch*dim)
+				cuda.FreeDev(tmp2)
+			}
 		}
 		cuda.FreeDev(x)
 	}
@@ -222,6 +253,10 @@ func TestA1ForwardRCsAndSanity(t *testing.T) {
 
 func BenchmarkBatchedGraphA1_b256(b *testing.B) { benchBatchedGraphA1(b, 256, 128, 22) }
 func BenchmarkBatchedGraphA1_b64(b *testing.B)  { benchBatchedGraphA1(b, 64, 128, 22) }
+
+// A1 best-path (f16-act/f16-acc) context sweep at b64, to complete the vs-vLLM matrix.
+func BenchmarkBatchedGraphA1_b64_len256(b *testing.B) { benchBatchedGraphA1(b, 64, 256, 22) }
+func BenchmarkBatchedGraphA1_b64_len512(b *testing.B) { benchBatchedGraphA1(b, 64, 512, 22) }
 
 // f32-residual A1 variant: f16 GEMMs + f16 elementwise, but the residual stream x stays f32
 // (higher accuracy at a few extra converts/layer). The accuracy fallback if full-f16 tokens drift.
