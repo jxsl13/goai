@@ -3,8 +3,12 @@
 package cpu
 
 // arm64 perf build: the MHA softmax exp runs through the vexp path
-// (mhaSoftmaxBandF32 gates on this const; driver + numerics in vexp.go).
-const vexpNeon = true
+// (mhaSoftmaxBandF32 gates on vexpF32Fast; the GELU/SiLU/… activation kernels
+// gate on vexpNeon; driver + numerics in vexp.go). Both are true here.
+const (
+	vexpNeon    = true
+	vexpF32Fast = true
+)
 
 // vexpQuadsNeonF32 is the 4-wide NEON exp kernel (vexp_arm64.s):
 // p[i] = exp(p[i]-m) in place for i in [0, 4·quads), returns Σ of the results.
