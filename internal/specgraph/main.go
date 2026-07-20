@@ -221,6 +221,11 @@ func dispatchMutation(out *strings.Builder, root, cmd string, rest []string, che
 		fmt.Fprintf(out, "%s: unknown subcommand %q (try help)\n", cmd, sub)
 		return true, 2
 	case "render":
+		for _, a := range rest {
+			if a == "-check" || a == "--check" {
+				check = true
+			}
+		}
 		return true, cmdRender(out, root, check)
 	case "verify":
 		return true, cmdVerify(out, root)

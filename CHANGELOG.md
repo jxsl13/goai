@@ -4,6 +4,24 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### tooling -- spec/ hierarchy: SPEC.md becomes a generated view, all spec mutations via specgraph (T919, 2026-07-20)
+
+The spec corpus moved to a `spec/` source tree (one caveman-markdown file per section, worker
+sections under `spec/worker/linux-amd64-cuda/`); `SPEC.md` and `SPEC-worker-*.md` are now
+deterministically rendered, committed views — the migration split is byte-proven (render of the
+split equals the original file exactly, asserted before anything is written; the migration commit
+leaves both views untouched). `internal/specgraph` gained the full mutation layer: `task
+add/set-status/edit`, `bug add` (guard chain included), `research/verif/goal/constraint/archinv
+add`, `entry get/rm` (§V39-guarded), `next-id`, `render`, `verify`, `split`. Every mutation
+applies in memory, re-renders all views and runs the complete verify suite (§V36 speccheck, table
+shapes, §V39 dangling refs, render-sync) before writing fragments and views in one transaction —
+a violating mutation writes nothing. Hand-edits to a rendered view go CI-red via the new
+`TestRenderSync` (specgraph joined cichange's always-run set); worker views are warn-only until
+the worker machine picks up the tool (RUN9 protocol). All skills, LOOP.md, FORMAT.md (new
+HIERARCHY section) and the planning docs now route spec writes through the CLI. New §V40
+invariant documents the whole contract; T919 itself was booked, started and closed through the
+new commands.
+
 ### fix -- mdlint -w no longer destroys comment-only go blocks; T889 lint-debt closed (T889, B115, 2026-07-20)
 
 `go/format.Source`'s fragment heuristic turns a lone `//go:build vulkan` into
