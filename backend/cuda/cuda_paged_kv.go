@@ -351,6 +351,17 @@ func (v *PagedBatchView) UpdateLens(seqs []*SeqKV) error {
 	return nil
 }
 
+// BumpLens increments the view's device-resident seq-lengths by delta ON-DEVICE (capturable, no host
+// sync) — the enabler for a CORRECT in-graph decode: append writes slot=seqLen, BumpLens(1) advances
+// it, then the captured attention reads seqLen+1 keys (including the just-appended current token). The
+// off-by-one path (attend before append) is catastrophically wrong (0/24 tokens, see ordering test).
+func (v *PagedBatchView) BumpLens(delta int) error {
+	if rc := C.cu_bump_i32(v.dsl, C.int(v.batch), C.int(delta)); rc != 0 {
+		return fmt.Errorf("cuda: BumpLens failed (%d)", int(rc))
+	}
+	return nil
+}
+
 // Free releases the view's device buffers.
 func (v *PagedBatchView) Free() {
 	if v.dbt != nil {

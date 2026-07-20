@@ -2251,6 +2251,30 @@ doneui:
     return rc;
 }
 
+// cu_bump_i32: buf[i] += delta on-device — a CAPTURABLE length-bump for correct in-graph decode
+// (append writes slot=seqLen, this bumps seqLen, then attention reads seqLen+1 keys incl the current
+// token). Pure device op, no host sync, so it captures into the decode graph.
+static CUfunction gBumpI32 = NULL;
+int cu_bump_i32(void* buf, int n, int delta) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { goto doneb; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto doneb; }
+    if (!gBumpI32 && compile_kernel(
+        "extern \"C\" __global__ void bump_i32(int* buf, int n, int delta){\n"
+        "  int i = blockIdx.x*blockDim.x + threadIdx.x;\n"
+        "  if (i < n) buf[i] += delta;\n"
+        "}\n", "bump_i32.cu", "bump_i32", &gBumpI32) != 0) { rc = -2; goto doneb; }
+    {
+        int threads = 256, blocks = (n + threads - 1) / threads;
+        void* args[3] = { &buf, &n, &delta };
+        rc = (cuLaunchKernel(gBumpI32, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+doneb:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
 // cu_embed_f32: out[i,:] = table[ids[i],:] — the input embedding row gather. One
 // thread per output element; table is [vocab,d] resident, ids [seq] resident.
 int cu_embed_f32(const void* dTable, const void* dIds, void* dOut, int seq, int d) {
