@@ -4,10 +4,12 @@ package cpu
 
 import "simd/archsimd"
 
-// amd64 perf build: the MHA/softmax-family exp+sum runs through an AVX2 8-wide vexp (this file),
-// the twin of the arm64 NEON kernel (vexp_arm64.s). vexpF32Fast gates ONLY the exp+sum softmax
-// paths (mhaSoftmaxBandF32 etc.); vexpNeon stays false here so the GELU/SiLU/exp/tanh/log activation
-// kernels keep their existing scalar-f64 paths bit-for-bit (only the softmax exp changes on amd64).
+// amd64 perf build: the perf-critical f32 transcendentals run through AVX2 8-wide kernels (this
+// file), the twins of the arm64 NEON kernels (vexp_arm64.s). vexpF32Fast gates the vectorized fast
+// paths that are wired up on amd64 — the MHA/softmax-family exp+sum (mhaSoftmaxBandF32) AND the GELU
+// forward/backward (the two heaviest f32 transcendentals, §T657/§T664: GELU was 13.6%/18.9% of the
+// GPT forward/train). vexpNeon stays false so the SiLU/sigmoid/exp/tanh/log kernels keep their scalar
+// paths on amd64 (that broader campaign is separate); their v* funcs below are scalar (dead here).
 const (
 	vexpNeon    = false
 	vexpF32Fast = true
@@ -15,16 +17,61 @@ const (
 
 var vexpHasAVX = archsimd.X86.AVX() && archsimd.X86.FMA()
 
+// exp poly / erf constants as broadcast vectors (built once at init; Broadcast is a cheap splat).
+var (
+	vLo     = archsimd.BroadcastFloat32x8(expLoClamp)
+	vHi     = archsimd.BroadcastFloat32x8(expHiClamp)
+	vLog2e  = archsimd.BroadcastFloat32x8(expLog2e)
+	vMagic  = archsimd.BroadcastFloat32x8(expMagic)
+	vNHi    = archsimd.BroadcastFloat32x8(-expLn2Hi)
+	vNLo    = archsimd.BroadcastFloat32x8(-expLn2Lo)
+	vE0     = archsimd.BroadcastFloat32x8(1.9875691500e-4)
+	vE1     = archsimd.BroadcastFloat32x8(1.3981999507e-3)
+	vE2     = archsimd.BroadcastFloat32x8(8.3334519073e-3)
+	vE3     = archsimd.BroadcastFloat32x8(4.1665795894e-2)
+	vE4     = archsimd.BroadcastFloat32x8(1.6666665459e-1)
+	vHalf   = archsimd.BroadcastFloat32x8(0.5)
+	vOne    = archsimd.BroadcastFloat32x8(1.0)
+	vZero   = archsimd.BroadcastFloat32x8(0.0)
+	vBias   = archsimd.BroadcastInt32x8(127)
+	vAbs    = archsimd.BroadcastUint32x8(0x7fffffff)
+	vSign   = archsimd.BroadcastUint32x8(0x80000000)
+	vGInvS2 = archsimd.BroadcastFloat32x8(geluInvSqrt2)
+	vGP     = archsimd.BroadcastFloat32x8(geluP)
+	vGA1    = archsimd.BroadcastFloat32x8(geluA1)
+	vGA2    = archsimd.BroadcastFloat32x8(geluA2)
+	vGA3    = archsimd.BroadcastFloat32x8(geluA3)
+	vGA4    = archsimd.BroadcastFloat32x8(geluA4)
+	vGA5    = archsimd.BroadcastFloat32x8(geluA5)
+	vGPdf   = archsimd.BroadcastFloat32x8(geluInvSqrt2Pi)
+	vGPdfMn = archsimd.BroadcastFloat32x8(geluGradPdfMin)
+)
+
+// expF32x8 evaluates exp(x) 8-wide via the Cephes range-reduced degree-5 polynomial — exp(x) =
+// 2ⁿ·exp(r), n = rint(x·log2e), r = x − n·ln2 — the register-level primitive shared by vexpF32 and
+// the GELU kernels. Same math as the scalar expF32 (clamps → magic-round n → reduced r → Horner →
+// 2ⁿ scale), so ~3e-7 max rel err vs math.Exp; MulAdd fuses where the scalar mul-then-adds (~1 ulp).
+func expF32x8(x archsimd.Float32x8) archsimd.Float32x8 {
+	x = x.Max(vLo).Min(vHi)
+	n := x.MulAdd(vLog2e, vMagic).Sub(vMagic) // rint(x·log2e), round-half-even via the 1.5·2²³ magic
+	r := n.MulAdd(vNHi, x)                    // x − n·ln2Hi
+	r = n.MulAdd(vNLo, r)                     // − n·ln2Lo
+	pp := vE0.MulAdd(r, vE1)
+	pp = pp.MulAdd(r, vE2)
+	pp = pp.MulAdd(r, vE3)
+	pp = pp.MulAdd(r, vE4)
+	pp = pp.MulAdd(r, vHalf)
+	res := pp.MulAdd(r.Mul(r), r.Add(vOne)) // p·r² + r + 1
+	scale := n.ConvertToInt32().Add(vBias).AsUint32x8().ShiftAllLeft(23).AsFloat32x8()
+	return res.Mul(scale)
+}
+
 // vexpF32 computes p[i] = exp(p[i]-m) in place and returns Σ p[i], 8-wide via AVX2 FMA — the amd64
-// twin of the NEON vexpF32 (vexp_arm64.s). It evaluates the SAME Cephes range-reduced degree-5
-// polynomial as the scalar expF32 — exp(x) = 2ⁿ·exp(r), n = rint(x·log2e), r = x − n·ln2 — so its
-// accuracy matches (~3e-7 max rel err vs math.Exp, TestExpF32Accuracy) and rides the ADR-0021 f32
-// tolerance the surrounding f32-native score/output gemms already use. len(p) is a multiple of 4
-// (the shared vexpRowF32 contract): an 8-lane body plus a scalar tail for the final 0 or 4 elements.
-// Products fuse (MulAdd) where the scalar uses mul-then-add, so results agree to ~1 ulp, exactly as
-// the NEON kernel does (the "FMA contraction may differ" note in vexp.go).
+// twin of the NEON vexpF32 (vexp_arm64.s). len(p) is a multiple of 4 (the shared vexpRowF32
+// contract): an 8-lane body plus a scalar tail for the final 0 or 4 elements. Accuracy matches the
+// scalar expF32 (~3e-7 rel), riding the ADR-0021 f32 tolerance the surrounding f32-native gemms use.
 func vexpF32(p []float32, m float32) float32 {
-	if !vexpHasAVX { // built with the experiment but run on a pre-AVX/FMA CPU: correct scalar poly
+	if !vexpHasAVX {
 		var sum float32
 		for i, v := range p {
 			e := expF32(v - m)
@@ -34,49 +81,17 @@ func vexpF32(p []float32, m float32) float32 {
 		return sum
 	}
 	mv := archsimd.BroadcastFloat32x8(m)
-	lo := archsimd.BroadcastFloat32x8(expLoClamp)
-	hi := archsimd.BroadcastFloat32x8(expHiClamp)
-	log2e := archsimd.BroadcastFloat32x8(expLog2e)
-	magic := archsimd.BroadcastFloat32x8(expMagic)
-	nHi := archsimd.BroadcastFloat32x8(-expLn2Hi)
-	nLo := archsimd.BroadcastFloat32x8(-expLn2Lo)
-	c0 := archsimd.BroadcastFloat32x8(1.9875691500e-4)
-	c1 := archsimd.BroadcastFloat32x8(1.3981999507e-3)
-	c2 := archsimd.BroadcastFloat32x8(8.3334519073e-3)
-	c3 := archsimd.BroadcastFloat32x8(4.1665795894e-2)
-	c4 := archsimd.BroadcastFloat32x8(1.6666665459e-1)
-	c5 := archsimd.BroadcastFloat32x8(0.5)
-	one := archsimd.BroadcastFloat32x8(1.0)
-	bias := archsimd.BroadcastInt32x8(127)
-	sumv := archsimd.BroadcastFloat32x8(0.0)
-
+	sumv := vZero
 	n8 := len(p) &^ 7
 	for i := 0; i < n8; i += 8 {
-		x := archsimd.LoadFloat32x8Slice(p[i:]).Sub(mv) // x = p[i] - m
-		x = x.Max(lo).Min(hi)                           // clamp to the finite exp domain
-		// n = rint(x·log2e) via the 1.5·2²³ magic (round-half-even, matches expF32/FRINTN).
-		n := x.MulAdd(log2e, magic).Sub(magic)
-		// r = x − n·ln2Hi − n·ln2Lo (FMA with the negated split constants).
-		r := n.MulAdd(nHi, x)
-		r = n.MulAdd(nLo, r)
-		// degree-5 Horner poly on r ∈ [−ln2/2, ln2/2].
-		pp := c0.MulAdd(r, c1)
-		pp = pp.MulAdd(r, c2)
-		pp = pp.MulAdd(r, c3)
-		pp = pp.MulAdd(r, c4)
-		pp = pp.MulAdd(r, c5)
-		// exp(r) ≈ p·r² + r + 1.
-		res := pp.MulAdd(r.Mul(r), r.Add(one))
-		// scale by 2ⁿ: ((int32(n)+127) << 23) reinterpreted as f32 bits.
-		scale := n.ConvertToInt32().Add(bias).AsUint32x8().ShiftAllLeft(23).AsFloat32x8()
-		res = res.Mul(scale)
+		res := expF32x8(archsimd.LoadFloat32x8Slice(p[i:]).Sub(mv))
 		res.StoreSlice(p[i:])
 		sumv = sumv.Add(res)
 	}
 	var lanes [8]float32
 	sumv.Store(&lanes)
 	sum := lanes[0] + lanes[1] + lanes[2] + lanes[3] + lanes[4] + lanes[5] + lanes[6] + lanes[7]
-	for i := n8; i < len(p); i++ { // scalar tail (len%8 ∈ {0,4})
+	for i := n8; i < len(p); i++ {
 		e := expF32(p[i] - m)
 		p[i] = e
 		sum += e
@@ -84,21 +99,75 @@ func vexpF32(p []float32, m float32) float32 {
 	return sum
 }
 
-// The activation vexp fast paths are NOT vectorized on amd64 (vexpNeon is false, so elementwise.go
-// keeps the scalar-f64 GELU/SiLU/exp/tanh/log kernels bit-for-bit). These scalar instantiations exist
-// only so the driver type-checks — dead code at run time here, exactly as in vexp_default.go.
-
+// vgeluF32 computes dst[i] = gelu(src[i]) 8-wide via AVX2 — the amd64 twin of the NEON vgelu
+// pipeline. Same AS-7.1.26 erf assembled on expF32x8 as the scalar geluF32 (erf(x) ≈ sign(x)·(1 −
+// t·poly(t)·e^(−x²)), t = 1/(1+p·|x|)), so it matches within the ADR-0021 f32 tolerance
+// (TestGeluF32Accuracy). 8-lane body + scalar geluF32 tail.
 func vgeluF32(dst, src []float32) {
-	for i, v := range src {
-		dst[i] = geluF32(v)
+	if !vexpHasAVX {
+		for i, v := range src {
+			dst[i] = geluF32(v)
+		}
+		return
+	}
+	n8 := len(src) &^ 7
+	for i := 0; i < n8; i += 8 {
+		x := archsimd.LoadFloat32x8Slice(src[i:])
+		a := x.Mul(vGInvS2).AsUint32x8().And(vAbs).AsFloat32x8() // |x/√2|
+		t := vOne.Div(a.MulAdd(vGP, vOne))                       // 1/(1+p·a)
+		s := vGA5.MulAdd(t, vGA4)
+		s = s.MulAdd(t, vGA3)
+		s = s.MulAdd(t, vGA2)
+		s = s.MulAdd(t, vGA1)
+		e := expF32x8(vZero.Sub(a.Mul(a)))                   // e^(−a²)
+		E := vOne.Sub(s.Mul(t).Mul(e))                       // erf magnitude
+		erf := E.AsUint32x8().Or(x.AsUint32x8().And(vSign))  // re-apply sign(x)
+		res := x.Mul(vHalf.MulAdd(erf.AsFloat32x8(), vHalf)) // x·(0.5 + 0.5·erf)
+		res.StoreSlice(dst[i:])
+	}
+	for i := n8; i < len(src); i++ {
+		dst[i] = geluF32(src[i])
 	}
 }
 
+// vgeluGradF32 computes dst[i] = g[i]·gelu'(x[i]) 8-wide via AVX2 — the amd64 twin of the NEON
+// vgeluGrad pipeline: dx = g·(Φ(x) + x·φ(x)), Φ = 0.5·(1+erf), φ = e^(−x²/2)/√(2π), with ONE exp
+// feeding both erf and pdf. The pdf-underflow mask (zero e at/below the clamp floor) restores exact
+// ±Inf/NaN semantics, matching geluGradF32. 8-lane body + scalar geluGradF32 tail.
 func vgeluGradF32(dst, x, g []float32) {
-	for i, v := range x {
-		dst[i] = geluGradF32(v, g[i])
+	if !vexpHasAVX {
+		for i, v := range x {
+			dst[i] = geluGradF32(v, g[i])
+		}
+		return
+	}
+	n8 := len(x) &^ 7
+	for i := 0; i < n8; i += 8 {
+		xv := archsimd.LoadFloat32x8Slice(x[i:])
+		gv := archsimd.LoadFloat32x8Slice(g[i:])
+		a := xv.Mul(vGInvS2).AsUint32x8().And(vAbs).AsFloat32x8() // |x/√2|
+		t := vOne.Div(a.MulAdd(vGP, vOne))
+		s := vGA5.MulAdd(t, vGA4)
+		s = s.MulAdd(t, vGA3)
+		s = s.MulAdd(t, vGA2)
+		s = s.MulAdd(t, vGA1)
+		e := expF32x8(vZero.Sub(a.Mul(a))) // e^(−x²/2) (a² = x²/2)
+		e = e.Masked(e.Greater(vGPdfMn))   // zero sub-clamp/NaN e (NaN-safe: Greater→false→0)
+		E := vOne.Sub(s.Mul(t).Mul(e))     // erf magnitude
+		erf := E.AsUint32x8().Or(xv.AsUint32x8().And(vSign)).AsFloat32x8()
+		phi := vHalf.MulAdd(erf, vHalf)    // Φ(x) = 0.5 + 0.5·erf
+		pdf := vGPdf.Mul(e)                // φ(x)
+		res := gv.Mul(xv.MulAdd(pdf, phi)) // g·(Φ + x·φ)
+		res.StoreSlice(dst[i:])
+	}
+	for i := n8; i < len(x); i++ {
+		dst[i] = geluGradF32(x[i], g[i])
 	}
 }
+
+// The SiLU/sigmoid/exp/tanh/log vexp fast paths are NOT vectorized on amd64 (vexpNeon is false, so
+// elementwise.go keeps their scalar-f64 kernels bit-for-bit). These scalar instantiations exist only
+// so the driver type-checks — dead code at run time here, exactly as in vexp_default.go.
 
 func vsiluF32(dst, src []float32) {
 	for i, v := range src {

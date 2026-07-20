@@ -303,12 +303,12 @@ func geluKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) (
 		})
 	case tensor.F32:
 		d, o := xc.Storage().F32(), out.Storage().F32()
-		if vexpNeon {
-			// arm64 perf build: f32-native 4-wide NEON GELU — AS-7.1.26 erf
-			// assembled on the vexp exp primitive (vexp.go). Scalar math.Erf
-			// was 13.6% of the f32 GPT forward. Compile-time const: every
-			// other build (default, amd64) keeps the f64 path below
-			// bit-for-bit; this path rides the ADR-0021 f32 tolerance.
+		if vexpF32Fast {
+			// SIMD perf build: f32-native vectorized GELU — AS-7.1.26 erf assembled
+			// on the vexp exp primitive (4-wide NEON on arm64, 8-wide AVX2 on amd64;
+			// vexp.go / vexp_amd64.go). Scalar math.Erf was 13.6% of the f32 GPT
+			// forward. Compile-time const: the plain (no-simd) build keeps the f64
+			// path below bit-for-bit; this path rides the ADR-0021 f32 tolerance.
 			parallel(len(o), func(lo, hi int) { vgeluF32(o[lo:hi], d[lo:hi]) })
 			break
 		}
@@ -633,12 +633,15 @@ func init() {
 	reg(backend.OpSigmoid, sigmoidKernelCPU)
 	reg(backend.OpSiLU, siluKernelCPU)
 
-	if vexpNeon {
-		// arm64 perf build only, F32 only (§T664/§T665): the NEON GELU and
-		// SiLU VJPs. vexpNeon is a compile-time const, so every other build
-		// registers nothing here and gelu_backward / silu_backward keep their
-		// ref fallbacks bit-for-bit (as does F64).
+	if vexpF32Fast {
+		// SIMD perf build, F32 only (§T664): the vectorized GELU VJP — 4-wide NEON
+		// on arm64, 8-wide AVX2 on amd64. gelu_backward was 18.9% of the f32 GPT
+		// training step as the scalar-f64 ref fallback.
 		std.add(backend.OpGELUBackward, tensor.F32, geluBackwardKernelCPU)
+	}
+	if vexpNeon {
+		// arm64-only for now, F32 only (§T665): the NEON SiLU VJP (the amd64 AVX
+		// SiLU campaign is separate). Every other build keeps the ref fallback.
 		std.add(backend.OpSiLUBackward, tensor.F32, siluBackwardKernelCPU)
 	}
 }
