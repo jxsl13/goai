@@ -4426,6 +4426,34 @@ static int launch_cvt_f16(const void* src, void* dst, long n) {
     return (cuLaunchKernel(gCvtF16, (unsigned)blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
 }
 
+// cu_gemm_int8: row-major C32[M,N] (int32) = A8[M,K]·W8[K,N] (int8) via cublasGemmEx IMMA int8
+// tensor cores (Ampere ~2x f16 peak). Same col-major Cᵀ=Wᵀ·Aᵀ transpose idiom as the f16 path.
+// MEASUREMENT of raw int8 GEMM throughput vs cuBLAS f16 — the W8A8 decode-GEMM lever, gated on
+// whether cublas IMMA actually beats its own f16 GEMM here (the custom MMQ kernel does not).
+int cu_gemm_int8(const void* dA8, const void* dW8, void* dC32, int M, int K, int N) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done8; }
+    {
+        int alpha = 1, beta = 0;
+        cublasSetPointerMode(gHandle, CUBLAS_POINTER_MODE_HOST);
+        cublasStatus_t st = cublasGemmEx(gHandle, CUBLAS_OP_N, CUBLAS_OP_N,
+                                         N, M, K,
+                                         &alpha,
+                                         dW8, CUDA_R_8I, N,
+                                         dA8, CUDA_R_8I, K,
+                                         &beta,
+                                         dC32, CUDA_R_32I, N,
+                                         CUBLAS_COMPUTE_32I, CUBLAS_GEMM_DEFAULT);
+        cublasSetPointerMode(gHandle, CUBLAS_POINTER_MODE_DEVICE);
+        if (st != CUBLAS_STATUS_SUCCESS) { rc = -(4000 + (int)st); goto done8; }
+    }
+    rc = 0;
+done8:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
 // cu_cvt_f32_to_f16: convert n device f32 elements (src) to device f16/u16 (dst16), stream-ordered.
 // Both buffers are caller-owned; used to build an f16 shadow of an f32 KV pool for the f16 decode path.
 int cu_cvt_f32_to_f16(void* dst16, const void* src32, long n) {
