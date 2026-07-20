@@ -266,6 +266,16 @@ func BenchmarkBatchedGraph_b512_noattn(b *testing.B) {
 	benchBatchedGraph(b, 512, 128, 22, "graph-noattn")
 }
 
+// Moderate-batch noattn (GEMMs+elementwise only, no attention, no logits) to decompose the
+// matched-precision gap vs vLLM: full-step minus noattn = attention's share of the step. Run at
+// GOAI_CUDA_F16ACC=0 for the like-for-like (f32-acc) comparison.
+func BenchmarkBatchedGraph_b64_noattn(b *testing.B) {
+	benchBatchedGraph(b, 64, 128, 22, "graph-noattn")
+}
+func BenchmarkBatchedGraph_b256_noattn(b *testing.B) {
+	benchBatchedGraph(b, 256, 128, 22, "graph-noattn")
+}
+
 // GQA K/V-shared attention in the full captured step at b512 — the e2e payoff of cutting the
 // naive kernel's group× redundant K/V reads (attention was ~45% of the step).
 func BenchmarkBatchedGraph_b512_gqa(b *testing.B) { benchBatchedGraph(b, 512, 128, 22, "graph-gqa") }
