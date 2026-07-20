@@ -110,7 +110,12 @@ graph-captured **full-step** f16-KV GQA decode numbers (22 layers + final
 RMSNorm + logits GEMM [batch,dim]×[dim,32000] — the head vLLM's figure also
 pays) on the synthetic layer stack; throughput is weight-value-independent so
 these are representative of the real model. Only the argmax reduction (one
-memory-bound pass over the logits, <1%) is omitted.
+memory-bound pass over the logits, <1%) is omitted. These figures use the
+bf16-weight/**f32-activation** GEMM path — *higher* precision than vLLM's
+f16, so a conservative comparison; GoAI's precision-closer pure-f16 path
+measures 10–14% faster (b64 6,346 vs 5,765 layers-only), which would widen
+the short-context lead but is held back pending a clean weight-vs-activation
+accumulate-precision match to vLLM.
 ‡ vLLM 0.25.1, **measured on this same RTX 3060** (not a published figure) —
 `BATCH=<n> testdata/vllm_ctx_sweep.py`, f16, CUDA graphs on, decode-marginal
 (prefill cancelled by a two-point gen-length subtraction), same
