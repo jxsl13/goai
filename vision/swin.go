@@ -290,8 +290,14 @@ func (m *SwinTransformer) Forward(ctx *backend.Context, x *tensor.Tensor) (*tens
 	if x.Ndim() != 4 {
 		return nil, fmt.Errorf("vision: Swin expects [batch,C,H,W] or [C,H,W], got %v", x.Shape())
 	}
-	rows := make([]*tensor.Tensor, x.Shape()[0])
-	for b := range rows {
+	// Batched path: run the batch as ONE packed [B·N, C] token grid so every projection / MLP / merge /
+	// LayerNorm / head is a single large GEMM. The per-image spatial ops (cyclic shift, window
+	// partition, patch-merge grouping) stay per-image gathers — cheap index permutations — but the
+	// windowed attention runs over all B·numWin windows at once (projections batch). Identical to
+	// looping forwardOne (mirrors the ViT/MLPMixer T908 fixes).
+	B := x.Shape()[0]
+	patchRows := make([]*tensor.Tensor, B)
+	for b := range B {
 		img, err := backend.Execute(ctx, backend.OpSlice, []*tensor.Tensor{x},
 			backend.SliceAttrs{Axis: 0, Start: b, End: b + 1})
 		if err != nil {
@@ -302,15 +308,149 @@ func (m *SwinTransformer) Forward(ctx *backend.Context, x *tensor.Tensor) (*tens
 		if err != nil {
 			return nil, err
 		}
-		if rows[b], err = m.forwardOne(ctx, one[0]); err != nil {
+		if patchRows[b], err = m.swinPatchify(one[0]); err != nil {
 			return nil, err
 		}
 	}
-	out, err := backend.Execute(ctx, backend.OpConcat, rows, backend.ConcatAttrs{Axis: 0})
+	allPatches, err := backend.Execute(ctx, backend.OpConcat, patchRows, backend.ConcatAttrs{Axis: 0})
 	if err != nil {
 		return nil, err
 	}
-	return out[0], nil
+	xb, err := m.Embed.Forward(ctx, allPatches[0]) // [B·N, embedC]
+	if err != nil {
+		return nil, err
+	}
+	h, w := m.grid, m.grid
+	for si, blocks := range m.Stages {
+		for _, blk := range blocks {
+			if xb, err = blk.forwardBatched(ctx, xb, h, w, B); err != nil {
+				return nil, err
+			}
+		}
+		if si < len(m.Merges) {
+			if xb, h, w, err = m.Merges[si].forwardBatched(ctx, xb, h, w, B); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if xb, err = m.Norm.Forward(ctx, xb); err != nil {
+		return nil, err
+	}
+	// Global average pool over each image's remaining tokens → [B, Cfinal], then the head once.
+	tok := xb.Shape()[0] / B
+	pooled := make([]*tensor.Tensor, B)
+	for b := range B {
+		xbi, err := backend.Execute(ctx, backend.OpSlice, []*tensor.Tensor{xb},
+			backend.SliceAttrs{Axis: 0, Start: b * tok, End: (b + 1) * tok})
+		if err != nil {
+			return nil, err
+		}
+		pm, err := backend.Execute(ctx, backend.OpMean, []*tensor.Tensor{xbi[0]},
+			backend.ReduceAttrs{Axes: []int{0}, KeepDims: true})
+		if err != nil {
+			return nil, err
+		}
+		pooled[b] = pm[0]
+	}
+	pool, err := backend.Execute(ctx, backend.OpConcat, pooled, backend.ConcatAttrs{Axis: 0})
+	if err != nil {
+		return nil, err
+	}
+	return m.Head.Forward(ctx, pool[0]) // [B, classes]
+}
+
+// forwardBatched is SwinBlock.Forward over a packed [batch·N, C] grid. LayerNorms and the MLP are
+// row-wise → batch unchanged. The cyclic shift and window partition are per-image gathers (built per
+// image, cheap), but their windows are concatenated so windowedAttention projects Q/K/V for all
+// batch·numWin windows in single GEMMs. Identical to Forward per image.
+func (b *SwinBlock) forwardBatched(ctx *backend.Context, x *tensor.Tensor, h, w, batch int) (*tensor.Tensor, error) {
+	m := b.Window
+	shift := 0
+	if b.Shift && h > m {
+		shift = m / 2
+	}
+	N := h * w
+	numWin := (h / m) * (w / m)
+	ln1, err := b.LN1.Forward(ctx, x) // [batch·N, C] batched
+	if err != nil {
+		return nil, err
+	}
+	shiftIdx := swinShiftIdx(h, w, shift)
+	partIdx := swinPartitionIdx(h, w, m)
+	// per-image shift → partition, collect each image's [numWin·M², C] windows.
+	parts := make([]*tensor.Tensor, batch)
+	for i := range batch {
+		gi, err := swinExec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: i * N, End: (i + 1) * N}, ln1)
+		if err != nil {
+			return nil, err
+		}
+		if shift > 0 {
+			if gi, err = swinGather(ctx, gi, shiftIdx, b.dtype()); err != nil {
+				return nil, err
+			}
+		}
+		if parts[i], err = swinGather(ctx, gi, partIdx, b.dtype()); err != nil {
+			return nil, err
+		}
+	}
+	allWin, err := swinExec1(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 0}, parts...) // [batch·numWin·M², C]
+	if err != nil {
+		return nil, err
+	}
+	var masks []*tensor.Tensor
+	if shift > 0 {
+		masks = swinBuildMasks(h, w, m, shift, b.dtype())
+	}
+	att, err := b.windowedAttention(ctx, allWin, batch*numWin, m, masks)
+	if err != nil {
+		return nil, err
+	}
+	// per-image inverse partition → inverse shift, back to [batch·N, C].
+	invPart := swinInverse(partIdx)
+	invShift := swinInverse(shiftIdx)
+	winRows := numWin * m * m
+	outs := make([]*tensor.Tensor, batch)
+	for i := range batch {
+		ai, err := swinExec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: i * winRows, End: (i + 1) * winRows}, att)
+		if err != nil {
+			return nil, err
+		}
+		if ai, err = swinGather(ctx, ai, invPart, b.dtype()); err != nil {
+			return nil, err
+		}
+		if shift > 0 {
+			if ai, err = swinGather(ctx, ai, invShift, b.dtype()); err != nil {
+				return nil, err
+			}
+		}
+		outs[i] = ai
+	}
+	a, err := swinExec1(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 0}, outs...) // [batch·N, C]
+	if err != nil {
+		return nil, err
+	}
+	x, err = swinExec1(ctx, backend.OpAdd, nil, x, a)
+	if err != nil {
+		return nil, err
+	}
+	// MLP branch — all row-wise, batches over the packed matrix.
+	ln2, err := b.LN2.Forward(ctx, x)
+	if err != nil {
+		return nil, err
+	}
+	f1, err := b.FC1.Forward(ctx, ln2)
+	if err != nil {
+		return nil, err
+	}
+	gelu, err := swinExec1(ctx, backend.OpGELU, nil, f1)
+	if err != nil {
+		return nil, err
+	}
+	f2, err := b.FC2.Forward(ctx, gelu)
+	if err != nil {
+		return nil, err
+	}
+	return swinExec1(ctx, backend.OpAdd, nil, x, f2)
 }
 
 // forwardOne runs one [C,H,W] image to [1, classes] logits: patch-embed → stages
@@ -549,7 +689,9 @@ func (b *SwinBlock) windowedAttention(ctx *backend.Context, xWin *tensor.Tensor,
 				}
 			}
 			if masks != nil {
-				if sc, err = swinExec1(ctx, backend.OpAdd, nil, sc, masks[w]); err != nil {
+				// masks describe one image's numWin windows; when this runs over B·numWin batched
+				// windows the geometry (and mask) repeats every numWin, so index modulo (§batched).
+				if sc, err = swinExec1(ctx, backend.OpAdd, nil, sc, masks[w%len(masks)]); err != nil {
 					return nil, err
 				}
 			}
@@ -602,6 +744,50 @@ func (mg *swinMerge) forward(ctx *backend.Context, x *tensor.Tensor, h, w int) (
 		subs[i] = s
 	}
 	cat, err := swinExec1(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 1}, subs...) // [(H/2)(W/2), 4C]
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	nrm, err := mg.Norm.Forward(ctx, cat)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	out, err := mg.Reduce.Forward(ctx, nrm)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	return out, h / 2, w / 2, nil
+}
+
+// forwardBatched is swinMerge.forward over a packed [batch·(H·W), C] grid. The 2×2 neighborhood
+// gather is per-image (a spatial index permutation), but the concatenated [batch·(H/2·W/2), 4C]
+// rows run through one batched LayerNorm + Reduce GEMM. Identical to forward per image.
+func (mg *swinMerge) forwardBatched(ctx *backend.Context, x *tensor.Tensor, h, w, batch int) (*tensor.Tensor, int, int, error) {
+	dt := x.Dtype()
+	N := h * w
+	offs := [4][2]int{{0, 0}, {1, 0}, {0, 1}, {1, 1}}
+	idx := make([][]int, 4)
+	for i, o := range offs {
+		idx[i] = swinMergeIdx(h, w, o[0], o[1])
+	}
+	cats := make([]*tensor.Tensor, batch)
+	for bi := range batch {
+		xi, err := swinExec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: bi * N, End: (bi + 1) * N}, x)
+		if err != nil {
+			return nil, 0, 0, err
+		}
+		subs := make([]*tensor.Tensor, 4)
+		for i := range offs {
+			s, err := swinGather(ctx, xi, idx[i], dt)
+			if err != nil {
+				return nil, 0, 0, err
+			}
+			subs[i] = s
+		}
+		if cats[bi], err = swinExec1(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 1}, subs...); err != nil { // [(H/2·W/2), 4C]
+			return nil, 0, 0, err
+		}
+	}
+	cat, err := swinExec1(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 0}, cats...) // [batch·(H/2·W/2), 4C]
 	if err != nil {
 		return nil, 0, 0, err
 	}
