@@ -135,6 +135,16 @@ bench-compare: vulkan-spv
 bench-python:
 	.venv/bin/python internal/benchcompare/python_compare.py
 
+## bench-classic-python: time scikit-learn's fit for the six classical scorecard
+## methods on the IDENTICAL data classic/perfcompare_test.go writes, so GoAI's
+## classical learners can be compared head-to-head (BENCHMARKS.md §5). Needs the
+## project .venv (scikit-learn + numpy). Prints GoAI then scikit-learn. T881.
+bench-classic-python:
+	@dir=$$(mktemp -d); \
+	PERF_CSV_DIR=$$dir $(GO) test ./classic/ -run TestPerfCompareVsSklearn -count=1 -v | grep GOAI_FIT; \
+	PERF_CSV_DIR=$$dir .venv/bin/python testdata/bench_sklearn.py; \
+	rm -rf $$dir
+
 ## lint-md: dependency-free markdown lint — discovers every *.md recursively (SPEC T612).
 ## Also runs as a test in ./internal/mdlint (CI-enforced on code pushes).
 lint-md:

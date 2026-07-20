@@ -4,6 +4,33 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### classic -- reproducible scikit-learn scorecard, honest recorded-version verdict (T881, B103, 2026-07-20)
+
+The classical-ML fit scorecard (BENCHMARKS.md section 5) compared GoAI to scikit-learn,
+but the scikit-learn side ran only through an uncommitted script with no recorded version,
+so it silently rotted as scikit-learn improved (B103, a C3/V13 gap). Committed a
+reproducible companion testdata/bench_sklearn.py (reads the shared CSVs the Go harness
+writes, best-of-5 fit for all six methods, n_jobs 1 and -1, prints sklearn/numpy/python
+versions) and a make bench-classic-python target.
+
+Re-measured against recorded scikit-learn 1.9.0 / numpy 2.5.1 on M2 Pro. GoAI's own
+numbers reproduce the old table exactly (GBM 137->134, forest 83.8->80.8, tree 18.0->18.1,
+SVC 6.9->6.8 ms), but the incumbent got faster, so the honest verdict is now a split:
+
+| Method | GoAI (ms) | scikit-learn | verdict |
+|---|---|---|---|
+| Gradient boosting (100) | 134 | 1,232 | GoAI 9.2× |
+| Random forest (100) | 80.8 | 271 / 96 (all cores) | GoAI beats even n_jobs=-1 |
+| Gaussian naive Bayes | 0.42 | 0.66 | GoAI 1.6× |
+| Decision tree (depth 12) | 18.1 | 13.9 | scikit-learn 1.3× |
+| SVC (RBF) | 6.8 | 3.4 | scikit-learn 2.0× |
+| k-NN fit (k=5) | 4.5 | 0.27 | scikit-learn (fit-only; GoAI eager-builds the ball tree) |
+
+GoAI wins the compute-heavy ensembles decisively and naive Bayes; scikit-learn 1.9.0's
+Cython/libsvm cores win the single tree and RBF SVC (GoAI within 2×, pure Go). The k-NN row
+is a fit-only artifact -- GoAI builds the query index at Fit. Corrected the section-5 table,
+the scoreboard row, and added a docs/benchmarking.md entry, all with recorded versions.
+
 ### nlp -- BPE tokenizer throughput measured vs tiktoken (T882, B102, 2026-07-20)
 
 The allocation-free byte-pair merge (T625) was never actually timed against the

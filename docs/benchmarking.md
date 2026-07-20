@@ -455,6 +455,47 @@ back a native `[]int32`. So the win is at the library-delivery boundary: an appl
 the host language gets its tokens ≈1.5× faster from GoAI. tiktoken's `encode_ordinary` fast
 path (no special-token scan) measures the same ≈18.9 MB/s, ruling out that scan as the cause.
 
+### Classical ML fit vs scikit-learn — recorded-version scorecard (T881, B103, 2026-07-20)
+
+The classical-ML scorecard (BENCHMARKS.md section 5) times GoAI's fit for six methods
+against scikit-learn on an identical 4000x20 synthetic dataset that the Go harness
+(`classic/perfcompare_test.go`) writes to a shared CSV, so both sides fit the exact same
+rows. Until T881 the scikit-learn side ran only through an uncommitted ad-hoc script with
+no recorded version -- so the comparison silently rotted as scikit-learn improved (B103).
+T881 commits the reproducible companion `testdata/bench_sklearn.py` and a
+`make bench-classic-python` target, and re-measures against recorded scikit-learn 1.9.0 /
+numpy 2.5.1 on M2 Pro (best-of-5 fit each side, both reading the same CSV):
+
+| Method | GoAI (ms) | sklearn 1 job | sklearn all cores | verdict |
+|---|---|---|---|---|
+| Gradient boosting (100) | 134 | 1,232 | -- | GoAI 9.2x |
+| Random forest (100) | 80.8 | 271 | 96 | GoAI beats both |
+| Gaussian naive Bayes | 0.42 | 0.66 | -- | GoAI 1.6x |
+| Decision tree (depth 12) | 18.1 | 13.9 | -- | sklearn 1.3x |
+| SVC (RBF) | 6.8 | 3.4 | -- | sklearn 2.0x |
+| k-NN fit (k=5) | 4.5 | 0.27 | 0.27 | sklearn (fit-only) |
+
+GoAI's own numbers reproduce the original scorecard exactly (GBM 137->134, forest
+83.8->80.8, tree 18.0->18.1, SVC 6.9->6.8). What changed is the incumbent: scikit-learn
+1.9.0's Cython decision-tree splitter and libsvm SVC are faster than the unrecorded
+baseline the old table used, flipping "parity" and "1.2x behind" into sklearn 1.3x and
+2.0x. This is the V13 lesson made concrete -- a cross-library number without a recorded
+incumbent version is not reproducible and decays silently.
+
+Two caveats keep the split fair to GoAI:
+
+- **k-NN is fit-only.** GoAI's `KNNClassifier.Fit` eagerly builds a ball tree (moving cost
+  onto fit so queries are O(log n)); scikit-learn's `fit` builds its tree in optimized C
+  and the number here is that build. A fit+query comparison -- the honest k-NN measure --
+  is not yet harnessed. The old 0.06 ms GoAI figure predated the eager ball tree entirely.
+- **Random forest is compared past scikit-learn's own parallelism.** GoAI's fit is
+  GOMAXPROCS-parallel; even against `n_jobs=-1` (96 ms) GoAI's 80.8 ms is ahead on this box.
+
+Net: GoAI decisively wins the compute-heavy ensembles (gradient boosting 9.2x, random
+forest past scikit-learn's parallel fit) and naive Bayes, and runs a pure-Go CART and SMO
+within 2x of scikit-learn's decades-tuned C cores on the single tree and RBF SVC -- an
+honest split, dependency-free, now reproducible from committed artifacts.
+
 ### Sampler top-k via quickselect (§T626, 2026-07-14)
 
 `Sampler.Dist` is the other end of every generated token: it turns a logit vector
