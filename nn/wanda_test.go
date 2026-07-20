@@ -180,3 +180,43 @@ func ExampleWandaPrune() {
 	// Output:
 	// kept=[0.1 0.0]
 }
+
+// §B111: WandaPrune documents ⌊sparsity·C_in⌋ dropped per column (the paper's int()
+// truncation), but used math.Round — over-pruning fractional cases. C_in=3, sparsity 0.5:
+// ⌊1.5⌋=1 dropped (2 kept), not Round(1.5)=2 dropped (1 kept). Also checks the f64-exact
+// target 0.7·10=6.999… floors to 7, not 6.
+func TestWandaFloorNotRound(t *testing.T) {
+	w3 := toT([][]float64{{1}, {2}, {3}}) // C_in=3, C_out=1
+	x3 := toT([][]float64{{1, 1, 1}})
+	_, mask, err := nn.WandaPrune(w3, x3, 0.5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kept := 0
+	for j := range 3 {
+		kept += int(mask.AtF64(j, 0))
+	}
+	if kept != 2 { // ⌊0.5·3⌋=1 dropped ⇒ 2 kept (Round dropped 2 ⇒ 1 kept)
+		t.Errorf("C_in=3 sparsity=0.5 kept %d, want 2 (⌊1.5⌋=1 dropped, not Round=2)", kept)
+	}
+
+	w10 := toT(func() [][]float64 {
+		m := make([][]float64, 10)
+		for i := range m {
+			m[i] = []float64{float64(i + 1)}
+		}
+		return m
+	}())
+	x10 := toT([][]float64{{1, 1, 1, 1, 1, 1, 1, 1, 1, 1}})
+	_, mask10, err := nn.WandaPrune(w10, x10, 0.7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kept10 := 0
+	for j := range 10 {
+		kept10 += int(mask10.AtF64(j, 0))
+	}
+	if kept10 != 3 { // ⌊0.7·10⌋=7 dropped ⇒ 3 kept (naive f64 floor of 6.999… would drop 6 ⇒ 4 kept)
+		t.Errorf("C_in=10 sparsity=0.7 kept %d, want 3 (⌊7⌋ dropped, f64-robust)", kept10)
+	}
+}

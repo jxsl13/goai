@@ -55,7 +55,10 @@ func WandaPrune(w, x *tensor.Tensor, sparsity float64) (pruned, mask *tensor.Ten
 		return nil, nil, err
 	}
 	cin, cout := w.Shape()[0], w.Shape()[1]
-	k := int(math.Round(sparsity * float64(cin))) // weights to drop per output column
+	// ⌊sparsity·C_in⌋ weights to drop per output column, matching the doc and the paper's
+	// int() truncation (Round over-pruned fractional cases, e.g. 0.5·3=1.5 dropped 2 not 1).
+	// +1e-9 absorbs float error so an exact integer target (0.7·10=6.999… in f64) floors right.
+	k := int(math.Floor(sparsity*float64(cin) + 1e-9))
 	pruned = tensor.New(w.Dtype(), w.Shape())
 	mask = tensor.New(w.Dtype(), w.Shape())
 	idx := make([]int, cin)
