@@ -4,7 +4,7 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
-### tooling -- spec/ hierarchy: SPEC.md becomes a generated view, all spec mutations via specgraph (T919, 2026-07-20)
+### tooling -- spec/ hierarchy: SPEC.md becomes a generated view, all spec mutations via specgraph (T921, 2026-07-20)
 
 The spec corpus moved to a `spec/` source tree (one caveman-markdown file per section, worker
 sections under `spec/worker/linux-amd64-cuda/`); `SPEC.md` and `SPEC-worker-*.md` are now

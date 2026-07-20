@@ -71,6 +71,19 @@ so the element loop is <0.1 % of the step. Muon is Newton-Schulz-matmul-bound.
 A `flatF64` pass there would be non-winning churn — the lever is SIMD dequant/SVD,
 not devirtualization.
 
+**Not only optimizers — the mask builders (T919).** The same fast path applies to
+any freshly-allocated contiguous tensor filled per element. `Dropout.Forward` and
+`DropPath.Forward` built their Bernoulli / per-sample masks with a per-element
+`Unravel`+`SetF64` walk on every training forward; the mask is `tensor.New`'d (so
+contiguous and zeroed), and a typed slice walk — writing only the survivors,
+`DropPath` sample-major — replaces the dispatch. Bit-identical (the RNG is drawn
+once per element in flat order in every branch, proven by a parity test that
+reconstructs the old walk on the same PCG stream). Measured best-of-6 on
+`[16,128,768]`: Dropout **1.58×** (its 1.57M `rng.Float64` draws are the floor),
+DropPath **13.1×** (only 16 draws — the per-element mask fill *was* the whole cost).
+Allocs were already flat (14/15): `Unravel` is stack-elided, so the win is pure
+dispatch/index-compute, not allocation — worth stating honestly.
+
 ## 2. Per-element *allocation* is worse than per-element dispatch
 
 The standout of the pass. `MixedPrecision.Sync` (AMP) rounded each master weight
@@ -124,6 +137,17 @@ That single scan surfaced the six optimizers in §1 that the previous "closed"
 note had missed. Treat a floor claim as scoped to the path it measured; re-sweep
 the adjacent classes (construction, quantization, weight-averaging, the
 mixed-precision glue here) explicitly.
+
+**`internal/perfscan` supersedes this awk (T920).** The scan above is now a real
+`go/ast` tool: `make perfscan` (or `go run ./internal/perfscan ./...`). It parses
+source rather than text, so comments and strings don't false-match and
+build-tagged cgo backends are still scanned; it scopes the fast-path check per
+function (a `flatF64`/`flatF32` presence silences the finding) and reports the
+three patterns above — per-element dispatch, allocation-in-loop, and the
+single-row batch wrap of §T917. It is **advisory**: a static check sees the shape
+of a hot loop, never its temperature, so every hit still needs an A/B measurement
+(§C3) and a bit-identity proof (§V22) before it ships. `-strict` makes it exit
+non-zero for optional CI gating.
 
 ## See also
 
