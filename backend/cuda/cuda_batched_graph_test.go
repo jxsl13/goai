@@ -30,7 +30,7 @@ type bgLayer struct {
 	wg, wu, wd     *cuda.ResidentBF16
 }
 
-func bgBuild(b *testing.B, batch, seqLen, layers int) ([]*bgLayer, *cuda.PagedKVPool, []*cuda.SeqKV, *cuda.DeviceF32) {
+func bgBuild(b testing.TB, batch, seqLen, layers int) ([]*bgLayer, *cuda.PagedKVPool, []*cuda.SeqKV, *cuda.DeviceF32) {
 	qW, kvW := bgQHeads*bgHD, bgKVHeads*bgHD
 	rng := rand.New(rand.NewSource(9))
 	mkW := func(k, n int) *cuda.ResidentBF16 {
@@ -107,6 +107,7 @@ func benchBatchedGraph(b *testing.B, batch, seqLen, layers int, mode string) {
 	// (same [batch,qHeads*hd] shape), so full-step minus this baseline = attention cost.
 	skipAttn := mode == "graph-noattn"
 	gqaAttn := mode == "graph-gqa" // use the GQA K/V-shared paged decode kernel
+	gqaF16 := mode == "graph-gqa-f16"
 
 	// step runs one full batched decode forward. When view != nil it uses the pre-uploaded
 	// block table (view mode / graph mode); otherwise it re-uploads per layer (eager mode).
@@ -127,6 +128,8 @@ func benchBatchedGraph(b *testing.B, batch, seqLen, layers int, mode string) {
 			var err error
 			if skipAttn {
 				da = dq // alias: skip attention, reuse dq as its output
+			} else if gqaF16 {
+				da, err = pool.BatchedDecodeAttnViewGQAf16(dq, view, bgQHeads, bgKVHeads)
 			} else if gqaAttn {
 				da, err = pool.BatchedDecodeAttnViewGQA(dq, view, bgQHeads, bgKVHeads)
 			} else if view != nil {
@@ -178,7 +181,7 @@ func benchBatchedGraph(b *testing.B, batch, seqLen, layers int, mode string) {
 		}
 		cuda.GraphSync()
 		b.StopTimer()
-	case "graph", "graph-noattn", "graph-gqa":
+	case "graph", "graph-noattn", "graph-gqa", "graph-gqa-f16":
 		view, err := pool.UploadBatchView(seqs)
 		if err != nil {
 			b.Fatal(err)
@@ -231,3 +234,10 @@ func BenchmarkBatchedGraph_b512_gqa(b *testing.B) { benchBatchedGraph(b, 512, 12
 
 func BenchmarkBatchedGraph_b768_gqa(b *testing.B) { benchBatchedGraph(b, 768, 128, 22, "graph-gqa") }
 func BenchmarkBatchedGraph_b256_gqa(b *testing.B) { benchBatchedGraph(b, 256, 128, 22, "graph-gqa") }
+
+func BenchmarkBatchedGraph_b512_gqaf16(b *testing.B) {
+	benchBatchedGraph(b, 512, 128, 22, "graph-gqa-f16")
+}
+func BenchmarkBatchedGraph_b768_gqaf16(b *testing.B) {
+	benchBatchedGraph(b, 768, 128, 22, "graph-gqa-f16")
+}

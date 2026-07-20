@@ -198,3 +198,498 @@ func benchPagedDecodeAttnGQA(b *testing.B, batch, seqLen int) {
 	b.StopTimer()
 	b.ReportMetric(float64(b.N)/b.Elapsed().Seconds(), "attn/s")
 }
+
+// TestPagedDecodeGQAf16Parity: f16-KV decode must match the f32 kernel within f16 rounding
+// (~1e-3 rel-RMS) — K/V stored as f16, converted to f32 in shared for identical compute.
+func TestPagedDecodeGQAf16Parity(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("no gpu")
+	}
+	const qHeads, kvHeads, hd = 32, 4, 64
+	kvW := kvHeads * hd
+	rng := rand.New(rand.NewSource(3))
+	pool, err := cuda.NewPagedKVPool(512, 16, kvW)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Free()
+	lens := []int{20, 47, 5, 128, 1, 63, 64, 33}
+	batch := len(lens)
+	seqs := make([]*cuda.SeqKV, batch)
+	for i, n := range lens {
+		seqs[i] = pool.NewSeqKV()
+		kf := make([]float32, n*kvW)
+		for j := range kf {
+			kf[j] = float32(rng.NormFloat64()) * 0.1
+		}
+		dk, _ := cuda.NewDeviceF32(n, kvW)
+		dk.UploadF32(kf)
+		seqs[i].Append(dk, dk)
+		dk.Free()
+	}
+	qf := make([]float32, batch*qHeads*hd)
+	for i := range qf {
+		qf[i] = float32(rng.NormFloat64()) * 0.1
+	}
+	q, _ := cuda.NewDeviceF32(batch, qHeads*hd)
+	q.UploadF32(qf)
+	defer q.Free()
+	view, err := pool.UploadBatchView(seqs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer view.Free()
+	oF32, err := pool.BatchedDecodeAttnViewGQA(q, view, qHeads, kvHeads)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer oF32.Free()
+	oF16, err := pool.BatchedDecodeAttnViewGQAf16(q, view, qHeads, kvHeads)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer oF16.Free()
+	a := make([]float32, batch*qHeads*hd)
+	b := make([]float32, batch*qHeads*hd)
+	oF32.DownloadF32(a)
+	oF16.DownloadF32(b)
+	var num, den float64
+	for i := range a {
+		d := float64(a[i] - b[i])
+		num += d * d
+		den += float64(a[i]) * float64(a[i])
+	}
+	relRMS := 0.0
+	if den > 0 {
+		relRMS = math.Sqrt(num / den)
+	}
+	if relRMS > 3e-3 {
+		t.Fatalf("f16 vs f32 paged decode rel-RMS %.3e too high", relRMS)
+	}
+	t.Logf("paged decode f16-KV parity rel-RMS %.3e", relRMS)
+}
+
+func BenchmarkPagedDecodeAttnGQAf16_b512(b *testing.B) {
+	if !cuda.Available() {
+		b.Skip("no gpu")
+	}
+	const qHeads, kvHeads, hd = 32, 4, 64
+	kvW := kvHeads * hd
+	rng := rand.New(rand.NewSource(7))
+	pool, _ := cuda.NewPagedKVPool(512*((128+16)/16+1), 16, kvW)
+	defer pool.Free()
+	seqs := make([]*cuda.SeqKV, 512)
+	for i := range seqs {
+		seqs[i] = pool.NewSeqKV()
+		kf := make([]float32, 128*kvW)
+		for j := range kf {
+			kf[j] = float32(rng.NormFloat64()) * 0.1
+		}
+		dk, _ := cuda.NewDeviceF32(128, kvW)
+		dk.UploadF32(kf)
+		seqs[i].Append(dk, dk)
+		dk.Free()
+	}
+	qf := make([]float32, 512*qHeads*hd)
+	for i := range qf {
+		qf[i] = float32(rng.NormFloat64()) * 0.1
+	}
+	q, _ := cuda.NewDeviceF32(512, qHeads*hd)
+	q.UploadF32(qf)
+	defer q.Free()
+	view, _ := pool.UploadBatchView(seqs)
+	defer view.Free()
+	o, err := pool.BatchedDecodeAttnViewGQAf16(q, view, qHeads, kvHeads)
+	if err != nil {
+		b.Fatal(err)
+	}
+	o.Free()
+	cuda.GraphSync()
+	b.ResetTimer()
+	for range b.N {
+		o, _ := pool.BatchedDecodeAttnViewGQAf16(q, view, qHeads, kvHeads)
+		o.Free()
+	}
+	cuda.GraphSync()
+	b.StopTimer()
+	b.ReportMetric(float64(b.N)/b.Elapsed().Seconds(), "attn/s")
+}
+
+func TestPagedDecodeSKParity(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("no gpu")
+	}
+	const qHeads, kvHeads, hd = 32, 4, 64
+	kvW := kvHeads * hd
+	rng := rand.New(rand.NewSource(3))
+	pool, _ := cuda.NewPagedKVPool(512, 16, kvW)
+	defer pool.Free()
+	lens := []int{20, 47, 5, 128, 1, 63, 64, 33}
+	batch := len(lens)
+	seqs := make([]*cuda.SeqKV, batch)
+	for i, n := range lens {
+		seqs[i] = pool.NewSeqKV()
+		kf := make([]float32, n*kvW)
+		for j := range kf {
+			kf[j] = float32(rng.NormFloat64()) * 0.1
+		}
+		dk, _ := cuda.NewDeviceF32(n, kvW)
+		dk.UploadF32(kf)
+		seqs[i].Append(dk, dk)
+		dk.Free()
+	}
+	qf := make([]float32, batch*qHeads*hd)
+	for i := range qf {
+		qf[i] = float32(rng.NormFloat64()) * 0.1
+	}
+	q, _ := cuda.NewDeviceF32(batch, qHeads*hd)
+	q.UploadF32(qf)
+	defer q.Free()
+	view, _ := pool.UploadBatchView(seqs)
+	defer view.Free()
+	oRef, _ := pool.BatchedDecodeAttnViewGQA(q, view, qHeads, kvHeads)
+	defer oRef.Free()
+	oSK, err := pool.BatchedDecodeAttnViewSK(q, view, qHeads, kvHeads, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer oSK.Free()
+	a := make([]float32, batch*qHeads*hd)
+	b := make([]float32, batch*qHeads*hd)
+	oRef.DownloadF32(a)
+	oSK.DownloadF32(b)
+	var num, den float64
+	for i := range a {
+		d := float64(a[i] - b[i])
+		num += d * d
+		den += float64(a[i]) * float64(a[i])
+	}
+	rms := math.Sqrt(num / den)
+	t.Logf("split-K vs GQA paged decode rel-RMS %.3e", rms)
+	if rms > 1e-5 {
+		t.Fatalf("split-K parity rel-RMS %.3e too high", rms)
+	}
+}
+
+func benchPagedDecodeSK(b *testing.B, batch, seqLen, splitK int) {
+	if !cuda.Available() {
+		b.Skip("no gpu")
+	}
+	const qHeads, kvHeads, hd = 32, 4, 64
+	kvW := kvHeads * hd
+	rng := rand.New(rand.NewSource(7))
+	pool, _ := cuda.NewPagedKVPool(batch*((seqLen+16)/16+1), 16, kvW)
+	defer pool.Free()
+	seqs := make([]*cuda.SeqKV, batch)
+	for i := range seqs {
+		seqs[i] = pool.NewSeqKV()
+		kf := make([]float32, seqLen*kvW)
+		for j := range kf {
+			kf[j] = float32(rng.NormFloat64()) * 0.1
+		}
+		dk, _ := cuda.NewDeviceF32(seqLen, kvW)
+		dk.UploadF32(kf)
+		seqs[i].Append(dk, dk)
+		dk.Free()
+	}
+	qf := make([]float32, batch*qHeads*hd)
+	for i := range qf {
+		qf[i] = float32(rng.NormFloat64()) * 0.1
+	}
+	q, _ := cuda.NewDeviceF32(batch, qHeads*hd)
+	q.UploadF32(qf)
+	defer q.Free()
+	view, _ := pool.UploadBatchView(seqs)
+	defer view.Free()
+	o, err := pool.BatchedDecodeAttnViewSK(q, view, qHeads, kvHeads, splitK)
+	if err != nil {
+		b.Skipf("sk: %v", err)
+	}
+	o.Free()
+	cuda.GraphSync()
+	b.ResetTimer()
+	for range b.N {
+		o, _ := pool.BatchedDecodeAttnViewSK(q, view, qHeads, kvHeads, splitK)
+		o.Free()
+	}
+	cuda.GraphSync()
+	b.StopTimer()
+	b.ReportMetric(float64(b.N)/b.Elapsed().Seconds(), "attn/s")
+}
+func BenchmarkPagedDecodeSK_b512_sk2(b *testing.B) { benchPagedDecodeSK(b, 512, 128, 2) }
+func BenchmarkPagedDecodeSK_b512_sk4(b *testing.B) { benchPagedDecodeSK(b, 512, 128, 4) }
+
+func TestPagedDecodeWMMAParity(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("no gpu")
+	}
+	const qHeads, kvHeads, hd = 32, 4, 64
+	kvW := kvHeads * hd
+	rng := rand.New(rand.NewSource(3))
+	pool, _ := cuda.NewPagedKVPool(512, 16, kvW)
+	defer pool.Free()
+	lens := []int{20, 47, 5, 128, 1, 63, 64, 33}
+	batch := len(lens)
+	seqs := make([]*cuda.SeqKV, batch)
+	for i, n := range lens {
+		seqs[i] = pool.NewSeqKV()
+		kf := make([]float32, n*kvW)
+		for j := range kf {
+			kf[j] = float32(rng.NormFloat64()) * 0.1
+		}
+		dk, _ := cuda.NewDeviceF32(n, kvW)
+		dk.UploadF32(kf)
+		seqs[i].Append(dk, dk)
+		dk.Free()
+	}
+	qf := make([]float32, batch*qHeads*hd)
+	for i := range qf {
+		qf[i] = float32(rng.NormFloat64()) * 0.1
+	}
+	q, _ := cuda.NewDeviceF32(batch, qHeads*hd)
+	q.UploadF32(qf)
+	defer q.Free()
+	view, _ := pool.UploadBatchView(seqs)
+	defer view.Free()
+	oRef, _ := pool.BatchedDecodeAttnViewGQA(q, view, qHeads, kvHeads)
+	defer oRef.Free()
+	oW, err := pool.BatchedDecodeAttnViewWMMA(q, view, qHeads, kvHeads)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer oW.Free()
+	a := make([]float32, batch*qHeads*hd)
+	b := make([]float32, batch*qHeads*hd)
+	oRef.DownloadF32(a)
+	oW.DownloadF32(b)
+	var num, den float64
+	for i := range a {
+		d := float64(a[i] - b[i])
+		num += d * d
+		den += float64(a[i]) * float64(a[i])
+	}
+	rms := math.Sqrt(num / den)
+	t.Logf("WMMA vs warp-GQA paged decode rel-RMS %.3e (f16 attention)", rms)
+	if rms > 6e-3 {
+		t.Fatalf("WMMA decode parity rel-RMS %.3e too high", rms)
+	}
+}
+
+func benchPagedDecodeWMMA(b *testing.B, batch, seqLen int) {
+	if !cuda.Available() {
+		b.Skip("no gpu")
+	}
+	const qHeads, kvHeads, hd = 32, 4, 64
+	kvW := kvHeads * hd
+	rng := rand.New(rand.NewSource(7))
+	pool, _ := cuda.NewPagedKVPool(batch*((seqLen+16)/16+1), 16, kvW)
+	defer pool.Free()
+	seqs := make([]*cuda.SeqKV, batch)
+	for i := range seqs {
+		seqs[i] = pool.NewSeqKV()
+		kf := make([]float32, seqLen*kvW)
+		for j := range kf {
+			kf[j] = float32(rng.NormFloat64()) * 0.1
+		}
+		dk, _ := cuda.NewDeviceF32(seqLen, kvW)
+		dk.UploadF32(kf)
+		seqs[i].Append(dk, dk)
+		dk.Free()
+	}
+	qf := make([]float32, batch*qHeads*hd)
+	for i := range qf {
+		qf[i] = float32(rng.NormFloat64()) * 0.1
+	}
+	q, _ := cuda.NewDeviceF32(batch, qHeads*hd)
+	q.UploadF32(qf)
+	defer q.Free()
+	view, _ := pool.UploadBatchView(seqs)
+	defer view.Free()
+	o, err := pool.BatchedDecodeAttnViewWMMA(q, view, qHeads, kvHeads)
+	if err != nil {
+		b.Skipf("wmma: %v", err)
+	}
+	o.Free()
+	cuda.GraphSync()
+	b.ResetTimer()
+	for range b.N {
+		o, _ := pool.BatchedDecodeAttnViewWMMA(q, view, qHeads, kvHeads)
+		o.Free()
+	}
+	cuda.GraphSync()
+	b.StopTimer()
+	b.ReportMetric(float64(b.N)/b.Elapsed().Seconds(), "attn/s")
+}
+func BenchmarkPagedDecodeWMMA_b512(b *testing.B) { benchPagedDecodeWMMA(b, 512, 128) }
+
+func TestPagedBatchViewUpdate(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("no gpu")
+	}
+	const qHeads, kvHeads, hd = 32, 4, 64
+	kvW := kvHeads * hd
+	rng := rand.New(rand.NewSource(4))
+	pool, _ := cuda.NewPagedKVPool(256, 16, kvW)
+	defer pool.Free()
+	lens := []int{20, 47, 5, 100}
+	batch := len(lens)
+	seqs := make([]*cuda.SeqKV, batch)
+	for i, n := range lens {
+		seqs[i] = pool.NewSeqKV()
+		kf := make([]float32, n*kvW)
+		for j := range kf {
+			kf[j] = float32(rng.NormFloat64()) * 0.1
+		}
+		dk, _ := cuda.NewDeviceF32(n, kvW)
+		dk.UploadF32(kf)
+		seqs[i].Append(dk, dk)
+		dk.Free()
+	}
+	qf := make([]float32, batch*qHeads*hd)
+	for i := range qf {
+		qf[i] = float32(rng.NormFloat64()) * 0.1
+	}
+	q, _ := cuda.NewDeviceF32(batch, qHeads*hd)
+	q.UploadF32(qf)
+	defer q.Free()
+	view, _ := pool.UploadBatchView(seqs) // sized for current (100-tok -> 7 blocks) state
+	defer view.Free()
+	// append a token to each seq, then Update the view in place
+	for i := range seqs {
+		kf := make([]float32, kvW)
+		for j := range kf {
+			kf[j] = float32(rng.NormFloat64()) * 0.1
+		}
+		d, _ := cuda.NewDeviceF32(1, kvW)
+		d.UploadF32(kf)
+		seqs[i].Append(d, d)
+		d.Free()
+	}
+	if err := view.Update(seqs); err != nil {
+		t.Fatal(err)
+	}
+	oUpd, err := pool.BatchedDecodeAttnView(q, view, qHeads, kvHeads)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer oUpd.Free()
+	fresh, _ := pool.UploadBatchView(seqs)
+	defer fresh.Free()
+	oFresh, _ := pool.BatchedDecodeAttnView(q, fresh, qHeads, kvHeads)
+	defer oFresh.Free()
+	a := make([]float32, batch*qHeads*hd)
+	b := make([]float32, batch*qHeads*hd)
+	oUpd.DownloadF32(a)
+	oFresh.DownloadF32(b)
+	for i := range a {
+		if a[i] != b[i] {
+			t.Fatalf("Update view attn != fresh view attn at %d: %v vs %v", i, a[i], b[i])
+		}
+	}
+	t.Logf("PagedBatchView.Update in-place == fresh view (bit-exact), post-append")
+}
+
+// TestGraphDecodeGrowingKV: the make-or-break for the fixed-buffer graph decode — a CAPTURED
+// attention graph must correctly attend over GROWING KV when the persistent view is updated in
+// place between replays (vLLM's pattern). Captures the attention once, then each step appends a
+// K/V token + Update()s the view + replays, comparing the graph output to a fresh eager attention.
+func TestGraphDecodeGrowingKV(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("no gpu")
+	}
+	const qHeads, kvHeads, hd = 32, 4, 64
+	kvW := kvHeads * hd
+	const startLen, maxLen, batch = 40, 90, 3
+	rng := rand.New(rand.NewSource(6))
+	pool, _ := cuda.NewPagedKVPool(batch*(maxLen/16+2), 16, kvW)
+	defer pool.Free()
+	seqs := make([]*cuda.SeqKV, batch)
+	appendTok := func(s *cuda.SeqKV) {
+		kf := make([]float32, kvW)
+		for j := range kf {
+			kf[j] = float32(rng.NormFloat64()) * 0.1
+		}
+		d, _ := cuda.NewDeviceF32(1, kvW)
+		d.UploadF32(kf)
+		s.Append(d, d)
+		d.Free()
+	}
+	for i := range seqs {
+		seqs[i] = pool.NewSeqKV()
+		for k := 0; k < startLen; k++ {
+			appendTok(seqs[i])
+		}
+	}
+	qf := make([]float32, batch*qHeads*hd)
+	for i := range qf {
+		qf[i] = float32(rng.NormFloat64()) * 0.1
+	}
+	q, _ := cuda.NewDeviceF32(batch, qHeads*hd)
+	q.UploadF32(qf)
+	defer q.Free()
+	// grow every sequence to maxLen up front so the view's maxBlocks capacity covers the max,
+	// then Release+re-seed to startLen (the view is sized for max).
+	for i := range seqs {
+		for k := startLen; k < maxLen; k++ {
+			appendTok(seqs[i])
+		}
+	}
+	view, _ := pool.UploadBatchView(seqs) // sized for maxLen blocks
+	defer view.Free()
+	// reset to startLen
+	for i := range seqs {
+		seqs[i].Release()
+		seqs[i] = pool.NewSeqKV()
+		for k := 0; k < startLen; k++ {
+			appendTok(seqs[i])
+		}
+	}
+	view.Update(seqs)
+	out, _ := cuda.NewDeviceF32(batch, qHeads*hd)
+	defer out.Free()
+
+	// capture the attention (fixed output) reading the persistent view
+	pool.BatchedDecodeAttnViewInto(q, view, qHeads, kvHeads, out) // warm
+	cuda.GraphSync()
+	if err := cuda.CaptureBegin(); err != nil {
+		t.Skipf("capture: %v", err)
+	}
+	pool.BatchedDecodeAttnViewInto(q, view, qHeads, kvHeads, out)
+	g, err := cuda.CaptureEnd()
+	if err != nil {
+		t.Skipf("capture end: %v", err)
+	}
+	defer g.Free()
+
+	for step := 0; step < 6; step++ {
+		for i := range seqs {
+			appendTok(seqs[i]) // grow KV
+		}
+		if err := view.Update(seqs); err != nil {
+			t.Fatal(err)
+		}
+		g.Launch() // replay the captured attention over the grown KV
+		cuda.GraphSync()
+		gotHost := make([]float32, batch*qHeads*hd)
+		out.DownloadF32(gotHost)
+		// eager reference at the same state
+		ref, _ := pool.BatchedDecodeAttnView(q, view, qHeads, kvHeads)
+		refHost := make([]float32, batch*qHeads*hd)
+		ref.DownloadF32(refHost)
+		ref.Free()
+		var num, den float64
+		for i := range gotHost {
+			d := float64(gotHost[i] - refHost[i])
+			num += d * d
+			den += float64(refHost[i]) * float64(refHost[i])
+		}
+		rms := math.Sqrt(num / den)
+		if rms > 1e-5 { // f32-reduction-order noise is ~1e-7; a real growing-KV mismatch would be O(1)
+			t.Fatalf("step %d (len %d): graph replay vs eager rel-RMS %.3e too high", step, seqs[0].Len(), rms)
+		}
+		t.Logf("step %d: captured graph attends over grown KV (len %d) == eager (rel-RMS %.2e)", step, seqs[0].Len(), rms)
+	}
+	for _, s := range seqs {
+		s.Release()
+	}
+}

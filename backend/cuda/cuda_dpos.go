@@ -170,3 +170,6 @@ func GroupedQueryAttentionKVDpos(q, k, v *DeviceF32, qHeads, kvHeads int, off *D
 	}
 	return &DeviceF32{ptr: out, rows: seqQ, cols: wq}, nil
 }
+
+// Ptr exposes the device position pointer (for raw graph-decode wrappers).
+func (p *DevicePos) Ptr() unsafe.Pointer { return p.ptr }

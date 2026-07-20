@@ -29,7 +29,9 @@ type PagedKVPool struct {
 	blockSize int
 	wkv       int
 	numBlocks int
-	free      []int32 // free physical block ids
+	free      []int32        // free physical block ids
+	kf16      unsafe.Pointer // lazy f16 (u16) shadow of k for the f16 decode path (nil until built)
+	vf16      unsafe.Pointer
 }
 
 // NewPagedKVPool allocates a pool of numBlocks × blockSize × wkv for K and V.
@@ -75,6 +77,40 @@ func (p *PagedKVPool) Free() {
 		p.v.Free()
 		p.k, p.v = nil, nil
 	}
+	if p.kf16 != nil {
+		C.cu_free_f32(p.kf16)
+		C.cu_free_f32(p.vf16)
+		p.kf16, p.vf16 = nil, nil
+	}
+}
+
+// ensureF16 lazily builds an f16 (u16) shadow of the whole K/V pool for the f16 decode path.
+// NOTE: this is a read-optimized shadow that assumes the pool is STATIC after it is built — it is
+// not refreshed on Append (a measurement/bench path today; full f16 storage is the productization).
+func (p *PagedKVPool) ensureF16() error {
+	if p.kf16 != nil {
+		return nil
+	}
+	n := p.numBlocks * p.blockSize * p.wkv
+	kf16 := C.cu_alloc_u16(C.int(n))
+	vf16 := C.cu_alloc_u16(C.int(n))
+	if kf16 == nil || vf16 == nil {
+		freeIf(kf16)
+		freeIf(vf16)
+		return fmt.Errorf("cuda: PagedKVPool f16 shadow alloc failed")
+	}
+	if rc := C.cu_cvt_f32_to_f16(kf16, p.k.ptr, C.long(n)); rc != 0 {
+		C.cu_free_f32(kf16)
+		C.cu_free_f32(vf16)
+		return fmt.Errorf("cuda: PagedKVPool f16 convert K failed (%d)", int(rc))
+	}
+	if rc := C.cu_cvt_f32_to_f16(vf16, p.v.ptr, C.long(n)); rc != 0 {
+		C.cu_free_f32(kf16)
+		C.cu_free_f32(vf16)
+		return fmt.Errorf("cuda: PagedKVPool f16 convert V failed (%d)", int(rc))
+	}
+	p.kf16, p.vf16 = unsafe.Pointer(kf16), unsafe.Pointer(vf16)
+	return nil
 }
 
 // SeqKV is one sequence's paged view into a pool: a block table (logical block -> physical id)
@@ -126,6 +162,45 @@ func (s *SeqKV) Append(k, v *DeviceF32) error {
 		pos += cnt
 	}
 	s.n += ntok
+	return nil
+}
+
+// Reserve1 ensures a physical block exists for this sequence's NEXT token, so a device-side append
+// can write it. Block allocation is the infrequent host-side bookkeeping paged serving does out of
+// band (once per blockSize tokens); the per-step data write stays on the device (see AppendBatched).
+func (s *SeqKV) Reserve1() error {
+	lb := s.n / s.pool.blockSize
+	for lb >= len(s.table) {
+		b, err := s.pool.alloc()
+		if err != nil {
+			return err
+		}
+		s.table = append(s.table, b)
+	}
+	return nil
+}
+
+// AppendBatched appends ONE token per sequence device-side: dk/dv are [batch,wkv] device buffers (the
+// decode step's own freshly-computed K/V), scattered into each sequence's next KV slot by a single
+// kernel — no host round-trip. This is the real serving append; SeqKV.Append (host uploads per call)
+// is the harness path. `view` must reflect the sequences' CURRENT (pre-append) block tables + lengths,
+// and each sequence must have its next block reserved (call Reserve1 then view.Update first). On
+// success each sequence's logical length is bumped by one (host-side metadata only — no data copy).
+func (p *PagedKVPool) AppendBatched(seqs []*SeqKV, dk, dv *DeviceF32, view *PagedBatchView) error {
+	batch := len(seqs)
+	if dk.rows != batch || dv.rows != batch || dk.cols != p.wkv || dv.cols != p.wkv {
+		return fmt.Errorf("cuda: AppendBatched shape dk[%d,%d] dv[%d,%d] want [%d,%d]", dk.rows, dk.cols, dv.rows, dv.cols, batch, p.wkv)
+	}
+	if view.batch != batch {
+		return fmt.Errorf("cuda: AppendBatched view batch %d != %d", view.batch, batch)
+	}
+	if rc := C.cu_paged_append_batched(p.k.ptr, p.v.ptr, view.dbt, view.dsl, dk.ptr, dv.ptr,
+		C.int(batch), C.int(p.wkv), C.int(p.blockSize), C.int(view.maxBlocks)); rc != 0 {
+		return fmt.Errorf("cuda: AppendBatched rc=%d", int(rc))
+	}
+	for _, s := range seqs {
+		s.n++
+	}
 	return nil
 }
 
@@ -223,6 +298,59 @@ func (p *PagedKVPool) UploadBatchView(seqs []*SeqKV) (*PagedBatchView, error) {
 	return &PagedBatchView{pool: p, dbt: unsafe.Pointer(dbt), dsl: unsafe.Pointer(dsl), batch: batch, maxBlocks: maxBlocks}, nil
 }
 
+// Update re-packs the block tables + seq lengths for `seqs` into the view's EXISTING device
+// buffers in place (no alloc) — for a fixed-buffer graph-decode: capture the decode step reading
+// this view, then between launches append K/V and Update(), replay. Requires the sequences still
+// fit the view's batch and maxBlocks (allocate the view for the max sequence length up front).
+func (v *PagedBatchView) Update(seqs []*SeqKV) error {
+	if len(seqs) != v.batch {
+		return fmt.Errorf("cuda: PagedBatchView.Update batch %d != view %d", len(seqs), v.batch)
+	}
+	mb := 0
+	for _, s := range seqs {
+		if s.pool != v.pool {
+			return fmt.Errorf("cuda: PagedBatchView.Update sequence not from this pool")
+		}
+		if len(s.table) > mb {
+			mb = len(s.table)
+		}
+	}
+	if mb > v.maxBlocks {
+		return fmt.Errorf("cuda: PagedBatchView.Update needs %d blocks > view capacity %d — pre-size the view", mb, v.maxBlocks)
+	}
+	bt := make([]int32, v.batch*v.maxBlocks) // padded to the view's fixed stride
+	sl := make([]int32, v.batch)
+	for i, s := range seqs {
+		copy(bt[i*v.maxBlocks:], s.table)
+		sl[i] = int32(s.n)
+	}
+	if rc := C.cu_update_i32(v.dbt, (*C.int)(&bt[0]), C.int(len(bt))); rc != 0 {
+		return fmt.Errorf("cuda: PagedBatchView.Update block-table update failed (%d)", int(rc))
+	}
+	if rc := C.cu_update_i32(v.dsl, (*C.int)(&sl[0]), C.int(len(sl))); rc != 0 {
+		return fmt.Errorf("cuda: PagedBatchView.Update seq-len update failed (%d)", int(rc))
+	}
+	return nil
+}
+
+// UpdateLens re-uploads ONLY the sequence lengths (batch int32) — the cheap per-step refresh for a
+// steady-state decode where no block boundary was crossed (block tables unchanged). Real paged
+// serving allocates a block only every blockSize tokens, so the full block-table rebuild in Update
+// is amortized ~1/blockSize; every other step needs just this small length bump.
+func (v *PagedBatchView) UpdateLens(seqs []*SeqKV) error {
+	if len(seqs) != v.batch {
+		return fmt.Errorf("cuda: PagedBatchView.UpdateLens batch %d != view %d", len(seqs), v.batch)
+	}
+	sl := make([]int32, v.batch)
+	for i, s := range seqs {
+		sl[i] = int32(s.n)
+	}
+	if rc := C.cu_update_i32(v.dsl, (*C.int)(&sl[0]), C.int(len(sl))); rc != 0 {
+		return fmt.Errorf("cuda: PagedBatchView.UpdateLens failed (%d)", int(rc))
+	}
+	return nil
+}
+
 // Free releases the view's device buffers.
 func (v *PagedBatchView) Free() {
 	if v.dbt != nil {
@@ -268,6 +396,25 @@ func (p *PagedKVPool) BatchedDecodeAttnView(q *DeviceF32, view *PagedBatchView, 
 	return &DeviceF32{ptr: out, rows: view.batch, cols: q.cols}, nil
 }
 
+// BatchedDecodeAttnViewInto writes the decode attention into a caller-provided output buffer (no
+// alloc) — the fixed-buffer form a CUDA-graph capture needs. Same math as BatchedDecodeAttnView.
+func (p *PagedKVPool) BatchedDecodeAttnViewInto(q *DeviceF32, view *PagedBatchView, qHeads, kvHeads int, out *DeviceF32) error {
+	if view.pool != p || q.rows != view.batch || out.rows != view.batch || out.cols != q.cols {
+		return fmt.Errorf("cuda: BatchedDecodeAttnViewInto shape/pool mismatch")
+	}
+	hd := q.cols / qHeads
+	if hd != 64 || kvHeads*hd != p.wkv {
+		return fmt.Errorf("cuda: BatchedDecodeAttnViewInto bad config")
+	}
+	scale := float32(1.0 / math.Sqrt(float64(hd)))
+	rc := C.cu_paged_decode_attn_gqa(q.ptr, p.k.ptr, p.v.ptr, view.dbt, view.dsl, out.ptr,
+		C.int(view.batch), C.int(qHeads), C.int(kvHeads), C.int(hd), C.int(p.blockSize), C.int(view.maxBlocks), C.float(scale))
+	if rc != 0 {
+		return fmt.Errorf("cuda: BatchedDecodeAttnViewInto failed (code %d)", int(rc))
+	}
+	return nil
+}
+
 // BatchedDecodeAttnViewGQA is BatchedDecodeAttnView using the GQA K/V-shared kernel (one block per
 // (kv head, sequence), staging each K/V tile into shared memory once and serving all group query
 // heads) — cuts the naive kernel's group× redundant K/V traffic. Requires hd==64, group≤8,
@@ -299,6 +446,77 @@ func (p *PagedKVPool) BatchedDecodeAttnViewGQA(q *DeviceF32, view *PagedBatchVie
 	if rc != 0 {
 		C.cu_free_f32(out)
 		return nil, fmt.Errorf("cuda: BatchedDecodeAttnViewGQA failed (code %d)", int(rc))
+	}
+	return &DeviceF32{ptr: out, rows: view.batch, cols: q.cols}, nil
+}
+
+// BatchedDecodeAttnViewGQAf16 is BatchedDecodeAttnViewGQA reading an f16 (u16) shadow of the pool
+// K/V — half the global bytes, the lever once the GQA kernel is memory-bound. Builds the shadow
+// lazily (see ensureF16: assumes a static pool after build). Requires hd==64, group≤8, blockSize≤16.
+func (p *PagedKVPool) BatchedDecodeAttnViewGQAf16(q *DeviceF32, view *PagedBatchView, qHeads, kvHeads int) (*DeviceF32, error) {
+	if view.pool != p {
+		return nil, fmt.Errorf("cuda: BatchedDecodeAttnViewGQAf16 view not from this pool")
+	}
+	if q.rows != view.batch {
+		return nil, fmt.Errorf("cuda: BatchedDecodeAttnViewGQAf16 q rows %d != batch %d", q.rows, view.batch)
+	}
+	if qHeads <= 0 || kvHeads <= 0 || qHeads%kvHeads != 0 || q.cols%qHeads != 0 {
+		return nil, fmt.Errorf("cuda: BatchedDecodeAttnViewGQAf16 bad head config q=%d kv=%d width=%d", qHeads, kvHeads, q.cols)
+	}
+	hd := q.cols / qHeads
+	if hd != 64 {
+		return nil, fmt.Errorf("cuda: BatchedDecodeAttnViewGQAf16 requires hd==64 (got %d)", hd)
+	}
+	if kvHeads*hd != p.wkv {
+		return nil, fmt.Errorf("cuda: BatchedDecodeAttnViewGQAf16 kvHeads*hd=%d != pool wkv=%d", kvHeads*hd, p.wkv)
+	}
+	if err := p.ensureF16(); err != nil {
+		return nil, err
+	}
+	out := C.cu_alloc_f32(C.int(view.batch * q.cols))
+	if out == nil {
+		return nil, fmt.Errorf("cuda: BatchedDecodeAttnViewGQAf16 device alloc failed")
+	}
+	scale := float32(1.0 / math.Sqrt(float64(hd)))
+	rc := C.cu_paged_decode_attn_gqa_f16(q.ptr, p.kf16, p.vf16, view.dbt, view.dsl, out,
+		C.int(view.batch), C.int(qHeads), C.int(kvHeads), C.int(hd), C.int(p.blockSize), C.int(view.maxBlocks), C.float(scale))
+	if rc != 0 {
+		C.cu_free_f32(out)
+		return nil, fmt.Errorf("cuda: BatchedDecodeAttnViewGQAf16 failed (code %d)", int(rc))
+	}
+	return &DeviceF32{ptr: out, rows: view.batch, cols: q.cols}, nil
+}
+
+// BatchedDecodeAttnViewSK is BatchedDecodeAttnView with split-K (FlashDecoding): splitK blocks per
+// (kv head, sequence) scan disjoint key chunks into partials, then a merge combines them — parallelizes
+// the online-softmax scan (attention is ~34% of the A1 step, latency-bound). splitK 1..32.
+func (p *PagedKVPool) BatchedDecodeAttnViewSK(q *DeviceF32, view *PagedBatchView, qHeads, kvHeads, splitK int) (*DeviceF32, error) {
+	if view.pool != p {
+		return nil, fmt.Errorf("cuda: BatchedDecodeAttnViewSK view not from this pool")
+	}
+	if q.rows != view.batch {
+		return nil, fmt.Errorf("cuda: BatchedDecodeAttnViewSK q rows %d != batch %d", q.rows, view.batch)
+	}
+	if qHeads <= 0 || kvHeads <= 0 || qHeads%kvHeads != 0 || q.cols%qHeads != 0 {
+		return nil, fmt.Errorf("cuda: BatchedDecodeAttnViewSK bad head config")
+	}
+	hd := q.cols / qHeads
+	if hd != 64 {
+		return nil, fmt.Errorf("cuda: BatchedDecodeAttnViewSK requires hd==64 (got %d)", hd)
+	}
+	if kvHeads*hd != p.wkv {
+		return nil, fmt.Errorf("cuda: BatchedDecodeAttnViewSK kvHeads*hd=%d != pool wkv=%d", kvHeads*hd, p.wkv)
+	}
+	out := C.cu_alloc_f32(C.int(view.batch * q.cols))
+	if out == nil {
+		return nil, fmt.Errorf("cuda: BatchedDecodeAttnViewSK device alloc failed")
+	}
+	scale := float32(1.0 / math.Sqrt(float64(hd)))
+	rc := C.cu_paged_decode_attn_gqa_sk(q.ptr, p.k.ptr, p.v.ptr, view.dbt, view.dsl, out,
+		C.int(view.batch), C.int(qHeads), C.int(kvHeads), C.int(hd), C.int(p.blockSize), C.int(view.maxBlocks), C.float(scale), C.int(splitK))
+	if rc != 0 {
+		C.cu_free_f32(out)
+		return nil, fmt.Errorf("cuda: BatchedDecodeAttnViewSK failed (code %d)", int(rc))
 	}
 	return &DeviceF32{ptr: out, rows: view.batch, cols: q.cols}, nil
 }

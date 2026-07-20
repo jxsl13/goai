@@ -76,6 +76,28 @@ int cu_paged_decode_attn(const void* dQ, const void* dPoolK, const void* dPoolV,
 // cu_paged_decode_attn_gqa: same contract, GQA K/V-shared (one block per (kv head, seq), group warps,
 // K/V staged into shared once per tile) — cuts the naive kernel's group× redundant K/V reads. hd==64, group≤8, blockSize≤16.
 int cu_paged_decode_attn_gqa(const void* dQ, const void* dPoolK, const void* dPoolV, const void* dBlockTables, const void* dSeqLens, void* dO, int batch, int qHeads, int kvHeads, int hd, int blockSize, int maxBlocks, float scale);
+// cu_paged_decode_attn_gqa_sk: split-K (FlashDecoding) — splitK blocks per (kv head, seq) + merge; parallelizes the online-softmax scan. splitK 1..32.
+int cu_paged_decode_attn_gqa_sk(const void* dQ, const void* dPoolK, const void* dPoolV, const void* dBlockTables, const void* dSeqLens, void* dO, int batch, int qHeads, int kvHeads, int hd, int blockSize, int maxBlocks, float scale, int splitK);
+// cu_wmma_paged_decode: tensor-core (nvcc mma.h fatbin) batched paged decode attention. hd==64, group≤8, blockSize≤16, seqLen≤128.
+int cu_wmma_paged_decode(const void* fatbin, int fatlen, const void* dQ, const void* dPoolK, const void* dPoolV, const void* dBlockTables, const void* dSeqLens, void* dO, int batch, int qHeads, int kvHeads, int hd, int blockSize, int maxBlocks, float scale);
+
+// cu_paged_append_batched: device-side batched paged KV append. Scatter dK/dV [batch,wkv] into each
+// sequence's slot seqLens[b] (pre-append length) — the real serving append with no host round-trip.
+int cu_paged_append_batched(void* dPoolK, void* dPoolV, const void* dBlockTables, const void* dSeqLens, const void* dK, const void* dV, int batch, int wkv, int blockSize, int maxBlocks);
+// cu_cvt_f32_to_f16: convert n device f32 (src32) to device f16/u16 (dst16), stream-ordered.
+int cu_cvt_f32_to_f16(void* dst16, const void* src32, long n);
+int cu_cvt_f16_to_f32(void* dst32, const void* src16, long n);
+int cu_addf16_to_f32(void* dst32, const void* src16, long n); // f32-residual A1: dst32 += f16(src16)
+// cu_gemm_int8: C32[M,N] int32 = A8[M,K]·W8[K,N] int8 via cublasGemmEx IMMA (int8 tensor cores).
+int cu_gemm_int8(const void* dA8, const void* dW8, void* dC32, int M, int K, int N);
+// A1 fp16-activation elementwise twins — in/out are u16 (f16); gamma/inv stay f32. Math == the f32 kernels.
+int cu_rmsnorm_f16(const void* in, void* out, const void* gamma, int rows, int cols, float eps);
+int cu_swiglu_f16(void* gate, const void* up, int n);
+int cu_rope_f16(void* x, const void* inv, int seq, int heads, int hd, int posOffset, double posDiv);
+int cu_add_f16(void* dst, const void* src, int n); // A1 f16 residual add (dst += src, u16)
+int cu_rope_f16_dpos(void* x, const void* inv, int seq, int heads, int hd, const void* dPos, double posDiv); // f16 device-position RoPE (graph decode)
+// cu_paged_decode_attn_gqa_f16: f16-KV twin of cu_paged_decode_attn_gqa (poolK16/V16 are u16, half the global bytes).
+int cu_paged_decode_attn_gqa_f16(const void* dQ, const void* dPoolK16, const void* dPoolV16, const void* dBlockTables, const void* dSeqLens, void* dO, int batch, int qHeads, int kvHeads, int hd, int blockSize, int maxBlocks, float scale);
 // cu_wmma_attn_gqa: fused prefill attention on f32 DEVICE buffers, [seq,heads·hd] GQA layout — drop-in for GroupedQueryAttention.
 int cu_wmma_attn_gqa(const void* fatbin, int fatlen, const void* dQ32, const void* dK32, const void* dV32, void* dO32, int seq, int qHeads, int kvHeads, int hd, float scale);
 void* cu_clone_f32(const void* src, int n);
@@ -86,6 +108,7 @@ int cu_blit(void* dst, int dstOff, const void* src, int srcOff, int n);
 int cu_copy2d(void* dst, int dstOff, int dstStride, const void* src, int srcOff, int srcStride, int rows, int rowFloats);
 // cu_argmax_f32 returns argmax over x[n] (greedy token) — downloads only the index.
 int cu_argmax_f32(const void* x, int n);
+int cu_argmax_batched_f16(const void* x16, int* hostOut, int rows, int cols); // per-row greedy argmax over f16 logits (serving sampling)
 // cu_upload_i8: upload n signed bytes (Q8 weights) to a fresh device buffer.
 void* cu_upload_i8(const signed char* src, int n);
 // cu_qmatmul_q8: out[M,N] = a[M,K]·dequant(W), W = transposed Q8 q[N,K] + per-32-block scales[N,nb].
@@ -198,6 +221,7 @@ void* cu_upload_i32(const int* src, int n);
 // cu_upload_*/cu_alloc_*/cu_clone_* family and not yet freed via cu_free_f32). A balanced Go
 // workload returns this to its starting value; the leak tests assert on that. Not a byte count.
 long cu_live_bufs(void);
+int cu_update_i32(void* dst, const int* src, int n); // in-place H2D update of an existing device int buffer (persistent view for graph decode)
 // cu_upload_i32_async: like cu_upload_i32 but WITHOUT a cudaStreamSynchronize. Safe when the
 // uploaded buffer is consumed only by later ops on gStream (stream-ordered) — the pageable H2D
 // copy is host-blocking so the source slice is free after return. Lets a decode step upload its
