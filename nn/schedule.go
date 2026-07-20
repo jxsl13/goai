@@ -49,6 +49,14 @@ func WSD(step, warmup, decayStart, halfLife int, peak float64) float64 {
 		return peak * float64(step) / float64(warmup)
 	case step < decayStart:
 		return peak
+	case halfLife <= 0:
+		// a non-positive half-life makes the decay instantaneous; compute it directly
+		// rather than let (step-decayStart)/0 produce 0/0 = NaN at step == decayStart
+		// (which would then silently poison every downstream update).
+		if step > decayStart {
+			return 0
+		}
+		return peak
 	default:
 		return peak * math.Pow(0.5, float64(step-decayStart)/float64(halfLife))
 	}

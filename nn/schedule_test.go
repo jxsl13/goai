@@ -95,3 +95,26 @@ func ExampleWSD() {
 	fmt.Printf("%.4f\n", nn.WSD(120, 10, 100, 20, 1.0))
 	// Output: 0.5000
 }
+
+// §B112: a non-positive halfLife made the WSD decay branch compute (step-decayStart)/0.
+// At step == decayStart that is 0/0 = NaN (Pow(0.5,NaN)=NaN), silently poisoning every
+// downstream update; past decayStart it was +Inf → 0. The guard makes the degenerate
+// decay instantaneous (peak at the boundary, 0 after) with no NaN.
+func TestWSDZeroHalfLifeNoNaN(t *testing.T) {
+	for _, c := range []struct {
+		step int
+		want float64
+	}{
+		{100, 1.0}, // step == decayStart: was 0/0 = NaN
+		{130, 0.0}, // past decayStart: instantaneous decay
+		{50, 1.0},  // still stable: unaffected
+	} {
+		got := nn.WSD(c.step, 10, 100, 0, 1.0)
+		if math.IsNaN(got) {
+			t.Errorf("WSD step=%d halfLife=0 returned NaN", c.step)
+		}
+		if got != c.want {
+			t.Errorf("WSD step=%d halfLife=0 = %v, want %v", c.step, got, c.want)
+		}
+	}
+}
