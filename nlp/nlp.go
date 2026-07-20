@@ -1,3 +1,4 @@
 package nlp
 
-func F() int { return 2 }
+// F does.
+func F() int { return 1 }
