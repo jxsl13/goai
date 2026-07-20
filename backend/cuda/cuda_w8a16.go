@@ -21,6 +21,11 @@ func GemmW8A16T(a16, w8, scale, c16 unsafe.Pointer, m, k, n int) int {
 	return int(C.cu_gemm_w8a16_t(a16, w8, scale, c16, C.int(m), C.int(k), C.int(n)))
 }
 
+// GemmW8A16B is the BM-spanning W8A16 GEMM (64x64 tile → W read once per N-strip). m%64==0, n%64==0.
+func GemmW8A16B(a16, w8, scale, c16 unsafe.Pointer, m, k, n int) int {
+	return int(C.cu_gemm_w8a16_b(a16, w8, scale, c16, C.int(m), C.int(k), C.int(n)))
+}
+
 // UploadI8 copies an int8 slice to a device buffer (caller frees via FreeDev).
 func UploadI8(vals []int8) unsafe.Pointer {
 	if len(vals) == 0 {
