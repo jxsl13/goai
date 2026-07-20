@@ -47,7 +47,7 @@ static cublasHandle_t gHandle = NULL;
 static float *gOne = NULL, *gZero = NULL; // device 1.0f/0.0f — cuBLAS DEVICE pointer mode (graph-capture-safe alpha/beta)
 static cudaStream_t gStream = NULL;
 static CUcontext gCtx = NULL; // runtime's primary context, retained for driver-API launches
-static CUfunction gGelu = NULL, gRelu2 = NULL, gRelu = NULL, gMoeGate = NULL, gRowAxpy = NULL, gSsmStep = NULL, gSsdStep = NULL, gConv1dStep = NULL, gWkvStep = NULL, gSilu = NULL, gSigmoid = NULL, gSoftplus = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gRopePartial = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gAttnSoftmaxCap = NULL, gAttnSoftmaxAlibi = NULL, gAttnSoftmaxBias = NULL, gQgemv = NULL, gQgemv4 = NULL, gQgemv4k = NULL, gQgemv4kMT = NULL, gQgemv4kMTS = NULL, gQgemv4kPre = NULL, gQgemv5k = NULL, gQgemv5kMT = NULL, gQgemv5kMTS = NULL, gQgemv6k = NULL, gQgemv6kMT = NULL, gQgemv6kMTS = NULL, gQgemv3k = NULL, gQgemv3kMT = NULL, gQgemv3kMTS = NULL, gQgemv2k = NULL, gQgemv2kMT = NULL, gQgemv40 = NULL, gQgemvI4nl = NULL, gQgemvI4xs = NULL, gQgemvI4xsMT = NULL, gQgemvI4xsMTS = NULL, gQgemvMxfp4 = NULL, gQgemvMxfp4MT = NULL, gQgemvI2xxs = NULL, gQgemvI2xxsMT = NULL, gQgemvI2xs = NULL, gQgemvI3xxs = NULL, gQgemvI3xxsMT = NULL, gQgemvI3s = NULL, gQgemvI3sMT = NULL, gQgemvI1s = NULL, gQgemvI1m = NULL, gI8Mma = NULL, gI8MmaT = NULL, gI8MmaRb = NULL, gI8MmaDb = NULL, gI8MmaWt = NULL, gI8MmaWp = NULL, gI8Mmq = NULL, gI8MmqR = NULL, gQrowsI8 = NULL, gLdmProbe = NULL, gLdmProbe2 = NULL, gI8MmaLm = NULL, gCvtF16 = NULL, gCvtFrom16 = NULL, gW8A16 = NULL; // lazily nvrtc-compiled
+static CUfunction gGelu = NULL, gRelu2 = NULL, gRelu = NULL, gMoeGate = NULL, gRowAxpy = NULL, gSsmStep = NULL, gSsdStep = NULL, gConv1dStep = NULL, gWkvStep = NULL, gSilu = NULL, gSigmoid = NULL, gSoftplus = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gRopePartial = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gAttnSoftmaxCap = NULL, gAttnSoftmaxAlibi = NULL, gAttnSoftmaxBias = NULL, gQgemv = NULL, gQgemv4 = NULL, gQgemv4k = NULL, gQgemv4kMT = NULL, gQgemv4kMTS = NULL, gQgemv4kPre = NULL, gQgemv5k = NULL, gQgemv5kMT = NULL, gQgemv5kMTS = NULL, gQgemv6k = NULL, gQgemv6kMT = NULL, gQgemv6kMTS = NULL, gQgemv3k = NULL, gQgemv3kMT = NULL, gQgemv3kMTS = NULL, gQgemv2k = NULL, gQgemv2kMT = NULL, gQgemv40 = NULL, gQgemvI4nl = NULL, gQgemvI4xs = NULL, gQgemvI4xsMT = NULL, gQgemvI4xsMTS = NULL, gQgemvMxfp4 = NULL, gQgemvMxfp4MT = NULL, gQgemvI2xxs = NULL, gQgemvI2xxsMT = NULL, gQgemvI2xs = NULL, gQgemvI3xxs = NULL, gQgemvI3xxsMT = NULL, gQgemvI3s = NULL, gQgemvI3sMT = NULL, gQgemvI1s = NULL, gQgemvI1m = NULL, gI8Mma = NULL, gI8MmaT = NULL, gI8MmaRb = NULL, gI8MmaDb = NULL, gI8MmaWt = NULL, gI8MmaWp = NULL, gI8Mmq = NULL, gI8MmqR = NULL, gQrowsI8 = NULL, gLdmProbe = NULL, gLdmProbe2 = NULL, gI8MmaLm = NULL, gCvtF16 = NULL, gCvtFrom16 = NULL, gW8A16 = NULL, gW8A16T = NULL; // lazily nvrtc-compiled
 static CUfunction gRopeDpos = NULL, gRopePartialDpos = NULL, gAttnSoftmaxDpos = NULL, gAppendDpos = NULL; // device-position (graph-capturable) twins
 static CUfunction gGqaFlashPart = NULL, gGqaFlashMerge = NULL; // flash decode: GQA K/V-shared split-K partials + merge
 static CUfunction gGqaFlashPartF16 = NULL, gAppendDposF16 = NULL; // f16 KV-cache twins (u16 storage, f32 compute)
@@ -5343,6 +5343,74 @@ int cu_gemm_w8a16(const void* dA16, const void* dW8, const void* dScale, void* d
         rc = (cuLaunchKernel(gW8A16, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 donew8:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_gemm_w8a16_t: SHARED-TILED W8A16 — a 256-thread block computes a 16x64 output tile; per K-step
+// (16) the block cooperatively stages A[16x16] (f16) + W[16x64] (int8→dequant→f16) into shared,
+// COALESCED, so each of the 8 warps reads its mma fragment from shared. Requires M%16==0, N%64==0,
+// K%16==0.
+//
+// MEASURED (M=64): 3.11 vs v1's 3.72 vs f16's 17.3 TFLOP/s — TILING-WITHIN-BLOCK IS NOT ENOUGH. With
+// a 16-row M-tile, each N-column-strip of W is re-read once per M-block (M/16 = 4x at M=64), so the
+// cross-M-block W RE-READ still dominates — coalescing the reads doesn't cut their COUNT. The fix is
+// a BM-SPANNING tile (one block computes ALL M rows for its 64 N-cols → reads each W strip ONCE);
+// that captures the weight-bandwidth win. v3 = BM=64/128 block, multiple M-subtiles per warp reusing
+// the staged W. (This kernel kept as the coalesced-staging building block for v3.)
+int cu_gemm_w8a16_t(const void* dA16, const void* dW8, const void* dScale, void* dC16, int M, int K, int N) {
+    int rc = -1;
+    if ((M & 15) || (N & 63) || (K & 15)) return -4;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto donew8t; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto donew8t; }
+    if (!gW8A16T && compile_kernel(
+        "__device__ __forceinline__ unsigned short f2h(float f){ unsigned short h; asm(\"cvt.rn.f16.f32 %0,%1;\":\"=h\"(h):\"f\"(f)); return h; }\n"
+        "extern \"C\" __global__ void w8a16t(const unsigned short* A, const signed char* W, const float* Scale, unsigned short* C, int M, int K, int N){\n"
+        "  __shared__ unsigned short sA[16*16];\n"
+        "  __shared__ unsigned short sW[16*64];\n"
+        "  int t = threadIdx.x, warp = t >> 5, lane = t & 31;\n"
+        "  int nblk = N >> 6;\n"
+        "  int bM = blockIdx.x / nblk, bN = blockIdx.x % nblk;\n"
+        "  int rowBase = bM*16, colBase = bN*64;\n"
+        "  int gid = lane >> 2, tid = lane & 3;\n"
+        "  float c0=0.f,c1=0.f,c2=0.f,c3=0.f;\n"
+        "  for (int kt = 0; kt < K; kt += 16){\n"
+        "    { int r = t >> 4, kk = t & 15; sA[t] = A[(size_t)(rowBase+r)*K + kt + kk]; }\n"  // 256 elems, coalesced
+        "    #pragma unroll\n"
+        "    for (int i = 0; i < 4; i++){\n"                                      // 1024 W elems / 256 = 4
+        "      int e = t + i*256, kk = e >> 6, nn = e & 63;\n"
+        "      signed char w = W[(size_t)(kt+kk)*N + colBase + nn];\n"           // coalesced: lanes 0..31 → nn 0..31
+        "      sW[e] = f2h((float)w * Scale[colBase+nn]);\n"
+        "    }\n"
+        "    __syncthreads();\n"
+        "    unsigned a0 = *(const unsigned*)(sA + gid*16 + 2*tid);\n"
+        "    unsigned a1 = *(const unsigned*)(sA + (gid+8)*16 + 2*tid);\n"
+        "    unsigned a2 = *(const unsigned*)(sA + gid*16 + 2*tid + 8);\n"
+        "    unsigned a3 = *(const unsigned*)(sA + (gid+8)*16 + 2*tid + 8);\n"
+        "    int wc = warp*8 + gid;\n"                                            // this thread's B column in the tile
+        "    unsigned b0 = ((unsigned)sW[(2*tid+1)*64 + wc] << 16) | sW[(2*tid)*64 + wc];\n"
+        "    unsigned b1 = ((unsigned)sW[(2*tid+9)*64 + wc] << 16) | sW[(2*tid+8)*64 + wc];\n"
+        "    asm volatile(\n"
+        "      \"mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32 \"\n"
+        "      \"{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9}, {%0,%1,%2,%3};\"\n"
+        "      : \"+f\"(c0),\"+f\"(c1),\"+f\"(c2),\"+f\"(c3)\n"
+        "      : \"r\"(a0),\"r\"(a1),\"r\"(a2),\"r\"(a3),\"r\"(b0),\"r\"(b1));\n"
+        "    __syncthreads();\n"
+        "  }\n"
+        "  int col = colBase + warp*8;\n"
+        "  C[(size_t)(rowBase+gid)*N   + col + 2*tid]     = f2h(c0);\n"
+        "  C[(size_t)(rowBase+gid)*N   + col + 2*tid + 1] = f2h(c1);\n"
+        "  C[(size_t)(rowBase+gid+8)*N + col + 2*tid]     = f2h(c2);\n"
+        "  C[(size_t)(rowBase+gid+8)*N + col + 2*tid + 1] = f2h(c3);\n"
+        "}\n",
+        "w8a16t.cu", "w8a16t", &gW8A16T) != 0) { rc = -2; goto donew8t; }
+    {
+        long blocks = (long)(M/16) * (N/64);
+        void* args[7] = { (void*)&dA16, (void*)&dW8, (void*)&dScale, &dC16, &M, &K, &N };
+        rc = (cuLaunchKernel(gW8A16T, (unsigned)blocks, 1, 1, 256, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+donew8t:
     pthread_mutex_unlock(&gLock);
     return rc;
 }
