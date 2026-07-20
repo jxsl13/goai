@@ -11,6 +11,11 @@ or train a network — in ordinary Go, with `go get`, on any platform. GPU
 acceleration (Metal, Vulkan, CUDA) is optional and switches on by itself when
 compiled in; without it, everything still runs.
 
+> **Performance compared honestly:** the canonical
+> [`BENCHMARKS.md`](BENCHMARKS.md) matrix names every required industry
+> baseline, separates current same-machine evidence from planned coverage, and
+> defines the measurement contract behind every ranking.
+
 Every operation ships as a validated pure-Go reference first — cross-checked
 against PyTorch, tiktoken and ggml goldens at fixed tolerances — and is only
 then optimized against that reference. `CGO_ENABLED=0 go test ./...` is green

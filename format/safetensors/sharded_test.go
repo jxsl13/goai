@@ -334,7 +334,10 @@ func ExampleLoadSharded() {
 // shard files plus the index, exactly as Hugging Face tools do, and
 // LoadSharded (or any HF loader) reads it back.
 func ExampleSaveSharded() {
-	dir, _ := os.MkdirTemp("", "sharded")
+	dir, err := os.MkdirTemp("", "sharded")
+	if err != nil {
+		panic(err)
+	}
 	defer os.RemoveAll(dir)
 
 	weights := map[string]*tensor.Tensor{
@@ -342,12 +345,19 @@ func ExampleSaveSharded() {
 		"head":  tensor.FromFloat64(tensor.Shape{2}, []float64{3, 4}),
 	}
 	// A 16-byte budget forces one tensor per shard (the default is HF's 5 GB).
-	if err := safetensors.SaveSharded(dir, weights, map[string]string{"format": "pt"},
-		safetensors.WithMaxShardSize(16)); err != nil {
+	options := []safetensors.ShardOption{
+		safetensors.WithMaxShardSize(16),
+		safetensors.WithBaseName("model"),
+	}
+	if err := safetensors.SaveSharded(dir, weights,
+		map[string]string{"format": "pt"}, options...); err != nil {
 		panic(err)
 	}
 
-	files, _ := os.ReadDir(dir)
+	files, err := os.ReadDir(dir)
+	if err != nil {
+		panic(err)
+	}
 	for _, f := range files {
 		fmt.Println(f.Name())
 	}
