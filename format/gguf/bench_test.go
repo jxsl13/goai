@@ -183,3 +183,26 @@ func BenchmarkReadFileModel(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkWriteQuantizedModel times quantizing+writing a many-tensor F32 "model" to
+// Q4_K (the model-producer path) — exercises the parallel encode.
+func BenchmarkWriteQuantizedModel(b *testing.B) {
+	const nT, dim = 48, 512
+	f := &File{Version: 3, Metadata: map[string]any{}, Tensors: make(map[string]*tensor.Tensor, nT)}
+	quant := make(map[string]QuantType, nT)
+	for t := range nT {
+		name := "blk." + string(rune('a'+t%26)) + string(rune('0'+t/26))
+		w := tensor.New(tensor.F32, tensor.Shape{dim, dim})
+		s := w.Storage().F32()
+		for i := range s {
+			s[i] = float32((i*7+t)%101-50) * 0.02
+		}
+		f.Tensors[name] = w
+		quant[name] = Q4_K
+	}
+	for b.Loop() {
+		if err := WriteQuantized(io.Discard, f, quant); err != nil {
+			b.Fatal(err)
+		}
+	}
+}

@@ -7,7 +7,10 @@ import (
 	"io"
 	"math"
 	"os"
+	"runtime"
 	"sort"
+	"sync"
+	"sync/atomic"
 
 	"github.com/jxsl13/goai/tensor"
 )
@@ -53,19 +56,49 @@ func WriteQuantized(w io.Writer, f *File, quant map[string]QuantType) error {
 	sort.Strings(tenNames)
 
 	// per-tensor ggml type + byte length (quantized tensors are encoded once here).
+	// Quantize is CPU-heavy and independent per tensor (reads one tensor from the
+	// read-only map, produces its own byte buffer), so run the encode across a bounded
+	// worker pool; the header/data are still written sequentially from the filled arrays.
 	ggTypes := make([]uint32, len(tenNames))
 	lens := make([]uint64, len(tenNames))
 	qbytes := make([][]byte, len(tenNames)) // nil = write F32 lazily
-	for i, name := range tenNames {
-		t := f.Tensors[name]
-		if qt, ok := quant[name]; ok {
+	encErr := make([]error, len(tenNames))
+	encode := func(i int) {
+		t := f.Tensors[tenNames[i]] // concurrent map READS are safe (no writers)
+		if qt, ok := quant[tenNames[i]]; ok {
 			b, err := Quantize(t, qt)
 			if err != nil {
-				return fmt.Errorf("gguf: quantize %q: %w", name, err)
+				encErr[i] = fmt.Errorf("gguf: quantize %q: %w", tenNames[i], err)
+				return
 			}
 			ggTypes[i], qbytes[i], lens[i] = uint32(qt), b, uint64(len(b))
 		} else {
 			ggTypes[i], lens[i] = tF32, uint64(t.Numel()*4)
+		}
+	}
+	if workers := min(runtime.GOMAXPROCS(0), len(tenNames)); workers > 1 {
+		var next atomic.Int64
+		var wg sync.WaitGroup
+		for range workers {
+			wg.Go(func() {
+				for {
+					i := int(next.Add(1)) - 1
+					if i >= len(tenNames) {
+						return
+					}
+					encode(i)
+				}
+			})
+		}
+		wg.Wait()
+	} else {
+		for i := range tenNames {
+			encode(i)
+		}
+	}
+	for _, err := range encErr {
+		if err != nil {
+			return err
 		}
 	}
 
