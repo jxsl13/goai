@@ -47,7 +47,7 @@ static cublasHandle_t gHandle = NULL;
 static float *gOne = NULL, *gZero = NULL; // device 1.0f/0.0f — cuBLAS DEVICE pointer mode (graph-capture-safe alpha/beta)
 static cudaStream_t gStream = NULL;
 static CUcontext gCtx = NULL; // runtime's primary context, retained for driver-API launches
-static CUfunction gGelu = NULL, gRelu2 = NULL, gRelu = NULL, gMoeGate = NULL, gRowAxpy = NULL, gSsmStep = NULL, gSsdStep = NULL, gConv1dStep = NULL, gWkvStep = NULL, gSilu = NULL, gSigmoid = NULL, gSoftplus = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gRopePartial = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gAttnSoftmaxCap = NULL, gAttnSoftmaxAlibi = NULL, gAttnSoftmaxBias = NULL, gQgemv = NULL, gQgemv4 = NULL, gQgemv4k = NULL, gQgemv4kMT = NULL, gQgemv4kMTS = NULL, gQgemv4kPre = NULL, gQgemv5k = NULL, gQgemv5kMT = NULL, gQgemv5kMTS = NULL, gQgemv6k = NULL, gQgemv6kMT = NULL, gQgemv6kMTS = NULL, gQgemv3k = NULL, gQgemv3kMT = NULL, gQgemv3kMTS = NULL, gQgemv2k = NULL, gQgemv2kMT = NULL, gQgemv40 = NULL, gQgemvI4nl = NULL, gQgemvI4xs = NULL, gQgemvI4xsMT = NULL, gQgemvI4xsMTS = NULL, gQgemvMxfp4 = NULL, gQgemvMxfp4MT = NULL, gQgemvI2xxs = NULL, gQgemvI2xxsMT = NULL, gQgemvI2xs = NULL, gQgemvI3xxs = NULL, gQgemvI3xxsMT = NULL, gQgemvI3s = NULL, gQgemvI3sMT = NULL, gQgemvI1s = NULL, gQgemvI1m = NULL, gI8Mma = NULL, gI8MmaT = NULL, gI8MmaRb = NULL, gI8MmaDb = NULL, gI8MmaWt = NULL, gI8MmaWp = NULL, gI8Mmq = NULL, gI8MmqR = NULL, gQrowsI8 = NULL, gLdmProbe = NULL, gLdmProbe2 = NULL, gI8MmaLm = NULL, gCvtF16 = NULL, gCvtFrom16 = NULL, gW8A16 = NULL, gW8A16T = NULL, gW8A16B = NULL, gW8A16D = NULL; // lazily nvrtc-compiled
+static CUfunction gGelu = NULL, gRelu2 = NULL, gRelu = NULL, gMoeGate = NULL, gRowAxpy = NULL, gSsmStep = NULL, gSsdStep = NULL, gConv1dStep = NULL, gWkvStep = NULL, gSilu = NULL, gSigmoid = NULL, gSoftplus = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gRopePartial = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gAttnSoftmaxCap = NULL, gAttnSoftmaxAlibi = NULL, gAttnSoftmaxBias = NULL, gQgemv = NULL, gQgemv4 = NULL, gQgemv4k = NULL, gQgemv4kMT = NULL, gQgemv4kMTS = NULL, gQgemv4kPre = NULL, gQgemv5k = NULL, gQgemv5kMT = NULL, gQgemv5kMTS = NULL, gQgemv6k = NULL, gQgemv6kMT = NULL, gQgemv6kMTS = NULL, gQgemv3k = NULL, gQgemv3kMT = NULL, gQgemv3kMTS = NULL, gQgemv2k = NULL, gQgemv2kMT = NULL, gQgemv40 = NULL, gQgemvI4nl = NULL, gQgemvI4xs = NULL, gQgemvI4xsMT = NULL, gQgemvI4xsMTS = NULL, gQgemvMxfp4 = NULL, gQgemvMxfp4MT = NULL, gQgemvI2xxs = NULL, gQgemvI2xxsMT = NULL, gQgemvI2xs = NULL, gQgemvI3xxs = NULL, gQgemvI3xxsMT = NULL, gQgemvI3s = NULL, gQgemvI3sMT = NULL, gQgemvI1s = NULL, gQgemvI1m = NULL, gI8Mma = NULL, gI8MmaT = NULL, gI8MmaRb = NULL, gI8MmaDb = NULL, gI8MmaWt = NULL, gI8MmaWp = NULL, gI8Mmq = NULL, gI8MmqR = NULL, gQrowsI8 = NULL, gLdmProbe = NULL, gLdmProbe2 = NULL, gI8MmaLm = NULL, gCvtF16 = NULL, gCvtFrom16 = NULL, gW8A16 = NULL, gW8A16T = NULL, gW8A16B = NULL, gW8A16D = NULL, gW8A16SK = NULL, gW8A16Fin = NULL; // lazily nvrtc-compiled
 static CUfunction gRopeDpos = NULL, gRopePartialDpos = NULL, gAttnSoftmaxDpos = NULL, gAppendDpos = NULL; // device-position (graph-capturable) twins
 static CUfunction gGqaFlashPart = NULL, gGqaFlashMerge = NULL; // flash decode: GQA K/V-shared split-K partials + merge
 static CUfunction gGqaFlashPartF16 = NULL, gAppendDposF16 = NULL; // f16 KV-cache twins (u16 storage, f32 compute)
@@ -5568,6 +5568,93 @@ int cu_gemm_w8a16_d(const void* dA16, const void* dW8, const void* dScale, void*
         rc = (cuLaunchKernel(gW8A16D, (unsigned)blocks, 1, 1, 256, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 donew8d:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_gemm_w8a16_sk: SPLIT-K W8A16 — the OCCUPANCY fix. Grid = (M/64)*(N/64)*splitK: each block scans a
+// K-slice and atomicAdds its f32 partial to a scratch accumulator, so at M=64 the block count goes
+// 32 -> 32*splitK (fills the 28 SMs). A finalize pass applies the per-column scale + converts to f16.
+// If the kernel was occupancy-bound, this is the path to the int8 bandwidth roofline. M%64,N%64,K%(16*splitK).
+int cu_gemm_w8a16_sk(const void* dA16, const void* dW8, const void* dScale, void* dCacc, void* dC16,
+                     int M, int K, int N, int splitK) {
+    int rc = -1;
+    if ((M & 63) || (N & 63) || (K % (16*splitK)) || splitK < 1) return -4;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto donesk; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto donesk; }
+    if (!gW8A16SK && compile_kernel(
+        "extern \"C\" __global__ void w8a16sk(const unsigned short* A, const signed char* W, float* Cacc, int M, int K, int N, int splitK){\n"
+        "  __shared__ unsigned short sA[64*16];\n"
+        "  __shared__ unsigned short sW[16*64];\n"
+        "  int t = threadIdx.x, warp = t >> 5, lane = t & 31;\n"
+        "  int wm = warp >> 1, wn = warp & 1;\n"
+        "  int nblk = N >> 6;\n"
+        "  int bK = blockIdx.x % splitK, mn = blockIdx.x / splitK;\n"
+        "  int bM = mn / nblk, bN = mn % nblk;\n"
+        "  int rowBase = bM*64, colBase = bN*64;\n"
+        "  int gid = lane >> 2, tid = lane & 3;\n"
+        "  int Ks = K / splitK, kStart = bK*Ks, kEnd = kStart + Ks;\n"
+        "  float acc[4][4];\n"
+        "  #pragma unroll\n"
+        "  for (int j=0;j<4;j++){ acc[j][0]=0.f; acc[j][1]=0.f; acc[j][2]=0.f; acc[j][3]=0.f; }\n"
+        "  for (int kt = kStart; kt < kEnd; kt += 16){\n"
+        "    #pragma unroll\n"
+        "    for (int i=0;i<4;i++){ int e=t+i*256, r=e>>4, kk=e&15; sA[e]=A[(size_t)(rowBase+r)*K + kt + kk]; }\n"
+        "    { int e0=t*4, kk=e0>>6, nn0=e0&63;\n"
+        "      unsigned x = (*(const unsigned*)(W + (size_t)(kt+kk)*N + colBase + nn0)) ^ 0x80808080u, lo, hi;\n"
+        "      asm(\"prmt.b32 %0,%1,%2,0x4140;\":\"=r\"(lo):\"r\"(x),\"r\"(0x64646464u));\n"
+        "      asm(\"prmt.b32 %0,%1,%2,0x4342;\":\"=r\"(hi):\"r\"(x),\"r\"(0x64646464u));\n"
+        "      asm(\"sub.f16x2 %0,%0,%1;\":\"+r\"(lo):\"r\"(0x64806480u));\n"
+        "      asm(\"sub.f16x2 %0,%0,%1;\":\"+r\"(hi):\"r\"(0x64806480u));\n"
+        "      *(unsigned*)(sW + e0) = lo; *(unsigned*)(sW + e0 + 2) = hi; }\n"
+        "    __syncthreads();\n"
+        "    const unsigned short* sa = sA + wm*16*16;\n"
+        "    unsigned a0 = *(const unsigned*)(sa + gid*16 + 2*tid);\n"
+        "    unsigned a1 = *(const unsigned*)(sa + (gid+8)*16 + 2*tid);\n"
+        "    unsigned a2 = *(const unsigned*)(sa + gid*16 + 2*tid + 8);\n"
+        "    unsigned a3 = *(const unsigned*)(sa + (gid+8)*16 + 2*tid + 8);\n"
+        "    #pragma unroll\n"
+        "    for (int j=0;j<4;j++){\n"
+        "      int bcol = wn*32 + j*8 + gid;\n"
+        "      unsigned b0 = ((unsigned)sW[(2*tid+1)*64 + bcol] << 16) | sW[(2*tid)*64 + bcol];\n"
+        "      unsigned b1 = ((unsigned)sW[(2*tid+9)*64 + bcol] << 16) | sW[(2*tid+8)*64 + bcol];\n"
+        "      asm volatile(\n"
+        "        \"mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32 \"\n"
+        "        \"{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9}, {%0,%1,%2,%3};\"\n"
+        "        : \"+f\"(acc[j][0]),\"+f\"(acc[j][1]),\"+f\"(acc[j][2]),\"+f\"(acc[j][3])\n"
+        "        : \"r\"(a0),\"r\"(a1),\"r\"(a2),\"r\"(a3),\"r\"(b0),\"r\"(b1));\n"
+        "    }\n"
+        "    __syncthreads();\n"
+        "  }\n"
+        "  int rowT = rowBase + wm*16;\n"
+        "  #pragma unroll\n"
+        "  for (int j=0;j<4;j++){\n"
+        "    int col = colBase + wn*32 + j*8 + 2*tid;\n"
+        "    atomicAdd(&Cacc[(size_t)(rowT+gid)*N   + col],     acc[j][0]);\n"
+        "    atomicAdd(&Cacc[(size_t)(rowT+gid)*N   + col + 1], acc[j][1]);\n"
+        "    atomicAdd(&Cacc[(size_t)(rowT+gid+8)*N + col],     acc[j][2]);\n"
+        "    atomicAdd(&Cacc[(size_t)(rowT+gid+8)*N + col + 1], acc[j][3]);\n"
+        "  }\n"
+        "}\n",
+        "w8a16sk.cu", "w8a16sk", &gW8A16SK) != 0) { rc = -2; goto donesk; }
+    if (!gW8A16Fin && compile_kernel(
+        "__device__ __forceinline__ unsigned short f2h(float f){ unsigned short h; asm(\"cvt.rn.f16.f32 %0,%1;\":\"=h\"(h):\"f\"(f)); return h; }\n"
+        "extern \"C\" __global__ void w8a16fin(const float* Cacc, const float* Scale, unsigned short* C, int MN, int N){\n"
+        "  int i = blockIdx.x*blockDim.x + threadIdx.x;\n"
+        "  if (i < MN){ C[i] = f2h(Cacc[i] * Scale[i % N]); }\n"
+        "}\n",
+        "w8a16fin.cu", "w8a16fin", &gW8A16Fin) != 0) { rc = -2; goto donesk; }
+    {
+        cuMemsetD8Async((CUdeviceptr)dCacc, 0, (size_t)M*N*sizeof(float), (CUstream)gStream);
+        long blocks = (long)(M/64) * (N/64) * splitK;
+        void* a1[7] = { (void*)&dA16, (void*)&dW8, &dCacc, &M, &K, &N, &splitK };
+        if (cuLaunchKernel(gW8A16SK, (unsigned)blocks, 1, 1, 256, 1, 1, 0, (CUstream)gStream, a1, NULL) != CUDA_SUCCESS) { rc = -3; goto donesk; }
+        int MN = M*N, thr = 256, blk = (MN + thr - 1)/thr;
+        void* a2[5] = { &dCacc, (void*)&dScale, &dC16, &MN, &N };
+        rc = (cuLaunchKernel(gW8A16Fin, (unsigned)blk, 1, 1, (unsigned)thr, 1, 1, 0, (CUstream)gStream, a2, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+donesk:
     pthread_mutex_unlock(&gLock);
     return rc;
 }

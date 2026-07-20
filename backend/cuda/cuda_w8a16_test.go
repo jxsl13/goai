@@ -131,6 +131,14 @@ func TestGemmW8A16Parity(t *testing.T) {
 		t.Fatalf("GemmW8A16D rc=%d", rc)
 	}
 	defer cuda.FreeDev(outD)
+	// split-K variant (occupancy fix)
+	cacc, _ := cuda.NewDeviceF32(M, N)
+	defer cacc.Free()
+	outS := cuda.AllocU16(M * N)
+	if rc := cuda.GemmW8A16SK(a16, w8dev, unsafe.Pointer(scf.DevPtr()), unsafe.Pointer(cacc.DevPtr()), outS, M, K, N, 8); rc != 0 {
+		t.Fatalf("GemmW8A16SK rc=%d", rc)
+	}
+	defer cuda.FreeDev(outS)
 
 	ref := dl(ref16)
 	relOf := func(p unsafe.Pointer) float64 {
@@ -147,10 +155,11 @@ func TestGemmW8A16Parity(t *testing.T) {
 	relT := relOf(outT)
 	relB := relOf(outB)
 	relD := relOf(outD)
-	if rel > 3e-2 || relT > 3e-2 || relB > 3e-2 || relD > 3e-2 {
-		t.Fatalf("W8A16 kernel bug — v1 %.3e tiled %.3e bmspan %.3e dbuf %.3e", rel, relT, relB, relD)
+	relS := relOf(outS)
+	if rel > 3e-2 || relT > 3e-2 || relB > 3e-2 || relD > 3e-2 || relS > 3e-2 {
+		t.Fatalf("W8A16 kernel bug — v1 %.3e tiled %.3e bmspan %.3e dbuf %.3e splitk %.3e", rel, relT, relB, relD, relS)
 	}
-	t.Logf("W8A16 CORRECT — v1 %.3e, tiled %.3e, BM-span %.3e, dbuf %.3e vs cuBLAS-f16", rel, relT, relB, relD)
+	t.Logf("W8A16 CORRECT — v1 %.3e, tiled %.3e, BM-span %.3e, dbuf %.3e, splitK %.3e vs cuBLAS-f16", rel, relT, relB, relD, relS)
 }
 
 // benchmark v1 W8A16 vs cuBLAS f16 at a decode shape — establishes the optimization baseline. v1 is
@@ -241,6 +250,20 @@ func benchW8A16vsF16(b *testing.B, M, K, N int) {
 		b.ResetTimer()
 		for range b.N {
 			cuda.GemmW8A16D(a16, w8dev, unsafe.Pointer(scf.DevPtr()), c16, M, K, N)
+		}
+		cuda.GraphSync()
+		b.StopTimer()
+		b.ReportMetric(gf*float64(b.N)/b.Elapsed().Seconds()/1e12, "TFLOP/s")
+	})
+	b.Run("w8a16sk8", func(b *testing.B) {
+		cacc, _ := cuda.NewDeviceF32(M, N)
+		defer cacc.Free()
+		cp := unsafe.Pointer(cacc.DevPtr())
+		cuda.GemmW8A16SK(a16, w8dev, unsafe.Pointer(scf.DevPtr()), cp, c16, M, K, N, 8)
+		cuda.GraphSync()
+		b.ResetTimer()
+		for range b.N {
+			cuda.GemmW8A16SK(a16, w8dev, unsafe.Pointer(scf.DevPtr()), cp, c16, M, K, N, 8)
 		}
 		cuda.GraphSync()
 		b.StopTimer()

@@ -22,6 +22,8 @@ int cu_gemm_w8a16_t(const void* dA16, const void* dW8, const void* dScale, void*
 int cu_gemm_w8a16_b(const void* dA16, const void* dW8, const void* dScale, void* dC16, int M, int K, int N);
 // cu_gemm_w8a16_d: double-buffered (cp.async pipeline) W8A16 — overlaps weight load with compute.
 int cu_gemm_w8a16_d(const void* dA16, const void* dW8, const void* dScale, void* dC16, int M, int K, int N);
+// cu_gemm_w8a16_sk: split-K W8A16 (occupancy fix). dCacc = scratch f32 [M*N] (zeroed internally).
+int cu_gemm_w8a16_sk(const void* dA16, const void* dW8, const void* dScale, void* dCacc, void* dC16, int M, int K, int N, int splitK);
 // cu_matmul_i8_mma_t: shared-tiled int8 mma GEMM (16x64 block, shared A/W staging). N%64==0.
 int cu_matmul_i8_mma_t(const void* dA8, const void* dW8, void* dC32, int M, int K, int N);
 // cu_matmul_i8_mma_rb: register-blocked int8 mma GEMM (64x64 block, 4 MMAs/warp). M%64,N%64,K%32==0.

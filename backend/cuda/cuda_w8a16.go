@@ -31,6 +31,11 @@ func GemmW8A16D(a16, w8, scale, c16 unsafe.Pointer, m, k, n int) int {
 	return int(C.cu_gemm_w8a16_d(a16, w8, scale, c16, C.int(m), C.int(k), C.int(n)))
 }
 
+// GemmW8A16SK is the split-K W8A16 GEMM (occupancy fix). cacc = scratch f32 [m*n] device buffer.
+func GemmW8A16SK(a16, w8, scale, cacc, c16 unsafe.Pointer, m, k, n, splitK int) int {
+	return int(C.cu_gemm_w8a16_sk(a16, w8, scale, cacc, c16, C.int(m), C.int(k), C.int(n), C.int(splitK)))
+}
+
 // UploadI8 copies an int8 slice to a device buffer (caller frees via FreeDev).
 func UploadI8(vals []int8) unsafe.Pointer {
 	if len(vals) == 0 {
