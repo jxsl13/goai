@@ -242,6 +242,7 @@ static CUfunction gRmsF16 = NULL, gSwigluF16 = NULL, gRopeF16 = NULL; // A1 fp16
 static CUfunction gAddF16 = NULL; // A1 f16 residual add (dst += src, u16)
 static CUfunction gWmmaAttn = NULL; // nvcc-compiled fused prefill attention (slice 2)
 static CUfunction gWmmaAttnGqa = NULL; // GQA/strided fused prefill attention (§ROADMAP A2)
+static CUfunction gWmmaPagedDecode = NULL; // tensor-core batched paged DECODE attention (breaks the 0.64 TFLOP/s latency-bound GEMV)
 static int launch_cvt_f16(const void* src, void* dst, long n); // fwd decl (defined below)
 
 // cu_paged_decode_attn: FRONT B / B2 — batched single-query decode attention over a PAGED KV
@@ -396,6 +397,32 @@ donepg:
 // step). Split-K runs `splitK` blocks per (kv head, seq), each scanning a disjoint key chunk into
 // a partial (m, l, unnormalized acc), then a merge combines the partials per query head — shorter
 // serial chains, more parallel work. hd==64, group≤8, blockSize≤16.
+// cu_wmma_paged_decode: tensor-core batched paged decode attention (nvcc mma.h fatbin). One block
+// per (kv head, seq), the GQA group's queries as the M=16 tile; paged K/V staged to shared f16,
+// WMMA QK + softmax + WMMA PV. Q/poolK/poolV f32 (converted in-staging). hd==64, group≤8, blockSize≤16, seqLen≤128.
+int cu_wmma_paged_decode(const void* fatbin, int fatlen, const void* dQ, const void* dPoolK, const void* dPoolV,
+                         const void* dBlockTables, const void* dSeqLens, void* dO,
+                         int batch, int qHeads, int kvHeads, int hd, int blockSize, int maxBlocks, float scale) {
+    (void)fatlen;
+    int rc = -1;
+    if (hd != 64 || (qHeads / kvHeads) > 8 || blockSize > 16) return -4;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto donewpd; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto donewpd; }
+    if (!gWmmaPagedDecode && load_module_kernel(fatbin, "wmma_paged_decode", &gWmmaPagedDecode) != 0) { rc = -2; goto donewpd; }
+    {
+        unsigned shbytes = (unsigned)(16*hd*2 + 128*hd*2 + 128*hd*2 + 16*128*4); // shQ + shK + shV + shS
+        cuFuncSetAttribute(gWmmaPagedDecode, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, shbytes);
+        void* args[13] = { (void*)&dQ, (void*)&dPoolK, (void*)&dPoolV, (void*)&dBlockTables, (void*)&dSeqLens,
+                           &dO, &batch, &qHeads, &kvHeads, &hd, &blockSize, &maxBlocks, &scale };
+        rc = (cuLaunchKernel(gWmmaPagedDecode, (unsigned)kvHeads, (unsigned)batch, 1, 256, 1, 1,
+                             shbytes, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+donewpd:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
 static int ensure_devp(void **buf, size_t *cap, size_t need); // fwd decl (defined below, grow-only device scratch)
 int cu_paged_decode_attn_gqa_sk(const void* dQ, const void* dPoolK, const void* dPoolV,
                                 const void* dBlockTables, const void* dSeqLens, void* dO,
