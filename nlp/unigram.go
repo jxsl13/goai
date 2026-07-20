@@ -265,6 +265,9 @@ func (u *Unigram) Decode(ids []int) string {
 	var b strings.Builder
 	for _, id := range ids {
 		if id < 0 || id >= len(u.pieces) {
+			if t, ok := u.specials.textForID(id); ok {
+				b.WriteString(t) // added/special token appended past the base vocab
+			}
 			continue
 		}
 		p := u.pieces[id].Piece

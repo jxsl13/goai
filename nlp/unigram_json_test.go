@@ -38,6 +38,33 @@ func TestUnigramFromJSONParse(t *testing.T) {
 	}
 }
 
+// §B108: an added token whose id sits PAST the base vocab (how HuggingFace chat models
+// append control tokens like <|im_start|>) must survive Encode→Decode. EncodeSpecial
+// correctly emitted id 5, but Decode indexed only pieces[0..4] and silently DROPPED it —
+// a round-trip loss on every such model. Now decoded via the specials' id→text reverse.
+func TestUnigramAddedTokenBeyondVocabDecode(t *testing.T) {
+	const j = `{
+	  "model": { "type": "Unigram", "unk_id": 0, "vocab": [
+	    ["<unk>", 0.0], ["▁", -3.0], ["h", -4.0], ["i", -4.0], ["▁hi", -5.0]
+	  ]},
+	  "added_tokens": [ {"id": 5, "content": "<|im_start|>", "special": true} ]
+	}`
+	u, err := nlp.UnigramFromJSON([]byte(j))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Pure decode: id 5 is past pieces[0..4] and used to be dropped → "".
+	if got := u.Decode([]int{5}); got != "<|im_start|>" {
+		t.Errorf("Decode([5]) = %q, want %q (added token past the vocab was dropped)", got, "<|im_start|>")
+	}
+	// Clean round-trip with the special LAST (the leading dummy-prefix space is trimmed):
+	// EncodeSpecial emits id 5, and Decode must round-trip it rather than silently drop it.
+	ids := u.EncodeSpecial("hi<|im_start|>")
+	if got := u.Decode(ids); got != "hi<|im_start|>" {
+		t.Errorf("Decode(%v) = %q, want %q", ids, got, "hi<|im_start|>")
+	}
+}
+
 // §V15: round-trip — load → ToJSON → load reproduces identical encodings.
 func TestUnigramJSONRoundTrip(t *testing.T) {
 	u, err := nlp.UnigramFromJSON([]byte(sampleUnigramJSON))

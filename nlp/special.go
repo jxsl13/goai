@@ -72,6 +72,7 @@ const (
 type specialSet struct {
 	byText  map[string]int    // marker text → token id
 	byFirst map[byte][]string // first byte → candidates, longest first then lexicographic
+	byID    map[int]string    // token id → marker text, for decoding added tokens past the base vocab
 }
 
 // specialFrag is one piece of a split input: either a resolved special token (ID >= 0)
@@ -94,8 +95,10 @@ func (s *specialSet) add(specials map[string]int) {
 		s.byText[text] = id
 	}
 	s.byFirst = make(map[byte][]string, len(s.byText))
+	s.byID = make(map[int]string, len(s.byText))
 	for text := range s.byText {
 		s.byFirst[text[0]] = append(s.byFirst[text[0]], text)
+		s.byID[s.byText[text]] = text
 	}
 	for b := range s.byFirst {
 		bucket := s.byFirst[b]
@@ -127,6 +130,19 @@ func (s *specialSet) blocked(text string) bool {
 	}
 	_, ok := s.byText[text]
 	return ok
+}
+
+// textForID returns the marker text registered for a token id. Decoders consult it for
+// added/special tokens whose id lies OUTSIDE the base model vocabulary: HuggingFace
+// appends those past it (e.g. chat control tokens like <|im_start|>), so a pieces[id]
+// lookup can't resolve them and would silently drop the token — corrupting the
+// Encode(Special)→Decode round-trip (§B108). ok is false when no special owns the id.
+func (s *specialSet) textForID(id int) (string, bool) {
+	if s == nil {
+		return "", false
+	}
+	t, ok := s.byID[id]
+	return t, ok
 }
 
 // split cuts text into alternating literal and special fragments by leftmost-longest

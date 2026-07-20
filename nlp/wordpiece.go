@@ -163,6 +163,12 @@ func (w *WordPiece) Decode(ids []int) string {
 	var b strings.Builder
 	for _, id := range ids {
 		if id < 0 || id >= len(w.pieces) {
+			if t, ok := w.specials.textForID(id); ok {
+				if b.Len() > 0 {
+					b.WriteByte(' ')
+				}
+				b.WriteString(t) // added/special token appended past the base vocab
+			}
 			continue
 		}
 		p := w.pieces[id]
