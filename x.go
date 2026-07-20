@@ -1,3 +1,4 @@
 package p
 
-func {{{ broken
+// #include <math.h>
+import "C"
