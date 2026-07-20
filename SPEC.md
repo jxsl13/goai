@@ -476,6 +476,8 @@ V18 AUTOSELECT: backend.Default() = highest-preference REGISTERED backend along 
 
 V17 DOCS: ∀ exported package & top-level symbol → godoc present, dual-audience (professional: math + §R paper-cite; layperson: plain what/why/when). ∀ user-facing package → runnable `Example` fns at ≥3 levels: trivial, realistic use-case, embedded-in-bigger-pipeline. examples live in `example_test.go`, verified by `// Output:` under `go test` (∴ docs ⊥ rot — CI runs them). new public API ⊥ "done" until its godoc + examples exist (part of task DoD). guards C10.
 
+V40 SPEC-RENDER-SYNC: SPEC.md + SPEC-worker-*.md = GENERATED views of spec/** (source of truth: one file per section, lexicographic filename sort = render order, tasks file sorts LAST → §T last per §V36). render = concat with single blank-line separator, byte-deterministic; split = proven inverse (byte round-trip asserted before write). ∀ id-bearing entry mutation (add/edit/rm/set-status) via the internal/specgraph CLI — every mutation re-renders + re-verifies (V36 + V39 + table shapes + render-sync) in ONE transaction; violation → nothing written. hand-edit of a rendered view → TestRenderSync red (internal/specgraph ∈ cichange always-run). prose sections: edit the spec/ fragment directly + render. worker views warn-only until workerRenderSyncHard flips (migration phase C). prevents §B96/§B97/§B113-class drift at the mechanism level
+
 ## §B — backprop log
 
 | id | date | cause | fix |

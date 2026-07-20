@@ -36,3 +36,22 @@ Inside a table CELL, `|` is ALWAYS the column separator — a cell NEVER contain
 ## RULE
 Numbering monotonic — ⊥ reuse V.n/B.n/T.n. If cutting word loses fact, keep it. Compression, not amputation.
 Tables clean: ∀ markdown table (here ∨ in docs/README) = valid GFM (header + delimiter row + consistent columns), mdlint-green. ⊥ ship a table missing its delimiter row ∨ with ragged ∨ mismatched columns.
+
+## HIERARCHY (§V40)
+`spec/` = source of truth, one file per section; `SPEC.md` + `SPEC-worker-*.md` = GENERATED views — ⊥ hand-edit them (TestRenderSync red).
+
+| file | section |
+|------|---------|
+| spec/00-preamble.md | title + WORKER SUB-SPECS note |
+| spec/10-goals.md | §G |
+| spec/20-constraints.md | §C |
+| spec/30-arch-invariants.md | §I |
+| spec/40-research.md | §R |
+| spec/50-verification.md | §V |
+| spec/60-backprop.md | §B |
+| spec/70-tasks.md | §T (sorts LAST → §T last, §V36) |
+| spec/worker/`<host>`/*.md | §RUN/§MODELS/§H/§Iw/§CPU/§GPU/§GAP/§PERF/§Tw/§GOAL/§NEXT |
+
+render = lexicographic concat, one blank line between sections, byte-deterministic; `specgraph split` = proven inverse.
+∀ id-bearing entry mutation via `go run ./internal/specgraph` (`task add/set-status/edit`, `bug add`, `verif|research|goal|constraint|archinv add`, `entry rm`) — ids allocated by the tool (`next-id`), ⊥ hand-numbered. Every mutation re-renders + re-verifies in one transaction. Prose blocks: edit the spec/ fragment + `make spec-render`.
+Future lever (⊥ implemented): reserved id blocks per machine (e.g. worker T950–T999) to kill cross-host rebase races (§B96 class).
