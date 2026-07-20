@@ -1,5 +1,6 @@
 # Memory Index
 
+- [Document memory in the repo](document-memory-in-repo.md) — user directive: mirror durable memory into `<repo>/.claude/memory-main/` each session + polished write-ups into `docs/perf-notes-*`/ADR/SPEC; scan for and NEVER commit secrets/PII (opaque session UUIDs are fine).
 - [GoAI autonomous build loop](goai-autonomous-loop.md) — fully autonomous loop; cgo-last; CURRENT model = autonomous commit+push under the C16 hourly throttle (fetch-rebase + §V27 + CI-watch per push); user works parallel on backend/cuda-amd64 (stay collision-free in nn/nlp/autograd); delegate-then-independently-reverify feature pattern.
 - [Prefer idiomatic Go / functional options](prefer-idiomatic-go-functional-options.md) — use variadic `...Option` for multi-param config, not long positional lists.
 - [GPU ops on all backends](gpu-ops-all-backends.md) — implement+test every GPU op on metal AND vulkan AND cpu; never metal-only. Vulkan runs here via MoltenVK.
