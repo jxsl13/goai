@@ -339,6 +339,25 @@ func (p *PagedKVPool) BatchedDecodeAttnView(q *DeviceF32, view *PagedBatchView, 
 	return &DeviceF32{ptr: out, rows: view.batch, cols: q.cols}, nil
 }
 
+// BatchedDecodeAttnViewInto writes the decode attention into a caller-provided output buffer (no
+// alloc) — the fixed-buffer form a CUDA-graph capture needs. Same math as BatchedDecodeAttnView.
+func (p *PagedKVPool) BatchedDecodeAttnViewInto(q *DeviceF32, view *PagedBatchView, qHeads, kvHeads int, out *DeviceF32) error {
+	if view.pool != p || q.rows != view.batch || out.rows != view.batch || out.cols != q.cols {
+		return fmt.Errorf("cuda: BatchedDecodeAttnViewInto shape/pool mismatch")
+	}
+	hd := q.cols / qHeads
+	if hd != 64 || kvHeads*hd != p.wkv {
+		return fmt.Errorf("cuda: BatchedDecodeAttnViewInto bad config")
+	}
+	scale := float32(1.0 / math.Sqrt(float64(hd)))
+	rc := C.cu_paged_decode_attn_gqa(q.ptr, p.k.ptr, p.v.ptr, view.dbt, view.dsl, out.ptr,
+		C.int(view.batch), C.int(qHeads), C.int(kvHeads), C.int(hd), C.int(p.blockSize), C.int(view.maxBlocks), C.float(scale))
+	if rc != 0 {
+		return fmt.Errorf("cuda: BatchedDecodeAttnViewInto failed (code %d)", int(rc))
+	}
+	return nil
+}
+
 // BatchedDecodeAttnViewGQA is BatchedDecodeAttnView using the GQA K/V-shared kernel (one block per
 // (kv head, sequence), staging each K/V tile into shared memory once and serving all group query
 // heads) — cuts the naive kernel's group× redundant K/V traffic. Requires hd==64, group≤8,

@@ -588,3 +588,108 @@ func TestPagedBatchViewUpdate(t *testing.T) {
 	}
 	t.Logf("PagedBatchView.Update in-place == fresh view (bit-exact), post-append")
 }
+
+// TestGraphDecodeGrowingKV: the make-or-break for the fixed-buffer graph decode — a CAPTURED
+// attention graph must correctly attend over GROWING KV when the persistent view is updated in
+// place between replays (vLLM's pattern). Captures the attention once, then each step appends a
+// K/V token + Update()s the view + replays, comparing the graph output to a fresh eager attention.
+func TestGraphDecodeGrowingKV(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("no gpu")
+	}
+	const qHeads, kvHeads, hd = 32, 4, 64
+	kvW := kvHeads * hd
+	const startLen, maxLen, batch = 40, 90, 3
+	rng := rand.New(rand.NewSource(6))
+	pool, _ := cuda.NewPagedKVPool(batch*(maxLen/16+2), 16, kvW)
+	defer pool.Free()
+	seqs := make([]*cuda.SeqKV, batch)
+	appendTok := func(s *cuda.SeqKV) {
+		kf := make([]float32, kvW)
+		for j := range kf {
+			kf[j] = float32(rng.NormFloat64()) * 0.1
+		}
+		d, _ := cuda.NewDeviceF32(1, kvW)
+		d.UploadF32(kf)
+		s.Append(d, d)
+		d.Free()
+	}
+	for i := range seqs {
+		seqs[i] = pool.NewSeqKV()
+		for k := 0; k < startLen; k++ {
+			appendTok(seqs[i])
+		}
+	}
+	qf := make([]float32, batch*qHeads*hd)
+	for i := range qf {
+		qf[i] = float32(rng.NormFloat64()) * 0.1
+	}
+	q, _ := cuda.NewDeviceF32(batch, qHeads*hd)
+	q.UploadF32(qf)
+	defer q.Free()
+	// grow every sequence to maxLen up front so the view's maxBlocks capacity covers the max,
+	// then Release+re-seed to startLen (the view is sized for max).
+	for i := range seqs {
+		for k := startLen; k < maxLen; k++ {
+			appendTok(seqs[i])
+		}
+	}
+	view, _ := pool.UploadBatchView(seqs) // sized for maxLen blocks
+	defer view.Free()
+	// reset to startLen
+	for i := range seqs {
+		seqs[i].Release()
+		seqs[i] = pool.NewSeqKV()
+		for k := 0; k < startLen; k++ {
+			appendTok(seqs[i])
+		}
+	}
+	view.Update(seqs)
+	out, _ := cuda.NewDeviceF32(batch, qHeads*hd)
+	defer out.Free()
+
+	// capture the attention (fixed output) reading the persistent view
+	pool.BatchedDecodeAttnViewInto(q, view, qHeads, kvHeads, out) // warm
+	cuda.GraphSync()
+	if err := cuda.CaptureBegin(); err != nil {
+		t.Skipf("capture: %v", err)
+	}
+	pool.BatchedDecodeAttnViewInto(q, view, qHeads, kvHeads, out)
+	g, err := cuda.CaptureEnd()
+	if err != nil {
+		t.Skipf("capture end: %v", err)
+	}
+	defer g.Free()
+
+	for step := 0; step < 6; step++ {
+		for i := range seqs {
+			appendTok(seqs[i]) // grow KV
+		}
+		if err := view.Update(seqs); err != nil {
+			t.Fatal(err)
+		}
+		g.Launch() // replay the captured attention over the grown KV
+		cuda.GraphSync()
+		gotHost := make([]float32, batch*qHeads*hd)
+		out.DownloadF32(gotHost)
+		// eager reference at the same state
+		ref, _ := pool.BatchedDecodeAttnView(q, view, qHeads, kvHeads)
+		refHost := make([]float32, batch*qHeads*hd)
+		ref.DownloadF32(refHost)
+		ref.Free()
+		var num, den float64
+		for i := range gotHost {
+			d := float64(gotHost[i] - refHost[i])
+			num += d * d
+			den += float64(refHost[i]) * float64(refHost[i])
+		}
+		rms := math.Sqrt(num / den)
+		if rms > 1e-5 { // f32-reduction-order noise is ~1e-7; a real growing-KV mismatch would be O(1)
+			t.Fatalf("step %d (len %d): graph replay vs eager rel-RMS %.3e too high", step, seqs[0].Len(), rms)
+		}
+		t.Logf("step %d: captured graph attends over grown KV (len %d) == eager (rel-RMS %.2e)", step, seqs[0].Len(), rms)
+	}
+	for _, s := range seqs {
+		s.Release()
+	}
+}
