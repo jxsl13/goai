@@ -204,6 +204,23 @@ func (p *PagedKVPool) AppendBatched(seqs []*SeqKV, dk, dv *DeviceF32, view *Page
 	return nil
 }
 
+// AppendBatchedDev is AppendBatched WITHOUT the host-side SeqKV.n bump — the pure-device (capturable)
+// append for GRAPH decode. In a captured graph the append KERNEL replays each step but the Go host
+// code runs only at capture time, so the length must advance device-side (BumpLens, in-graph) and
+// the host SeqKV.n manually (per replay, so Reserve1 knows where to allocate on block boundaries).
+// Writes each row of dk/dv to slot=view.dsl[b] of its sequence — view.dsl must hold the pre-append
+// length (=pos); pair with view.BumpLens(1) so the captured attention reads pos+1 keys.
+func (p *PagedKVPool) AppendBatchedDev(dk, dv *DeviceF32, view *PagedBatchView) error {
+	if dk.rows != view.batch || dv.rows != view.batch || dk.cols != p.wkv || dv.cols != p.wkv {
+		return fmt.Errorf("cuda: AppendBatchedDev shape mismatch")
+	}
+	if rc := C.cu_paged_append_batched(p.k.ptr, p.v.ptr, view.dbt, view.dsl, dk.ptr, dv.ptr,
+		C.int(view.batch), C.int(p.wkv), C.int(p.blockSize), C.int(view.maxBlocks)); rc != 0 {
+		return fmt.Errorf("cuda: AppendBatchedDev rc=%d", int(rc))
+	}
+	return nil
+}
+
 // GatherK / GatherV materialize the sequence's K / V as fresh contiguous [n,wkv] buffers by
 // copying the (possibly non-contiguous) physical blocks in logical order — the bridge that lets
 // the existing contiguous attention kernel consume paged storage until B2 lands.
