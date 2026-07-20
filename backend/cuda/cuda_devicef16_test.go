@@ -134,3 +134,74 @@ func TestDeviceF16Forward(t *testing.T) {
 		t.Fatalf("DeviceF16 forward rel-RMS %.4e too high", rms)
 	}
 }
+
+// TestLeakDeviceF16 (Iw7): the DeviceF16 op family (New/Free/F16FromF32/ToF32/RMSNormInto/
+// MatMulF16/RoPE/SwiGLU/Add) must not leak device buffers across a forward step.
+func TestLeakDeviceF16(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("no gpu")
+	}
+	const batch, seqLen, layers = 8, 128, 2
+	ls, pool, seqs, x0 := bgBuild(t, batch, seqLen, layers)
+	defer pool.Free()
+	defer x0.Free()
+	defer func() {
+		for _, l := range ls {
+			l.gAttn.Free()
+			l.gFFN.Free()
+			for _, w := range []*cuda.ResidentBF16{l.wq, l.wk, l.wv, l.wo, l.wg, l.wu, l.wd} {
+				w.Free()
+			}
+		}
+	}()
+	dim := bgDim
+	rq := backend.RoPEAttrs{Base: 10000, Heads: bgQHeads, PosOffset: seqLen}
+	rk := backend.RoPEAttrs{Base: 10000, Heads: bgKVHeads, PosOffset: seqLen}
+	invD, _ := backend.RoPEFreqs(bgHD, rq)
+	inv32 := make([]float32, len(invD))
+	for i := range invD {
+		inv32[i] = float32(invD[i])
+	}
+	invDev, _ := cuda.NewDeviceF32(1, len(inv32))
+	invDev.UploadF32(inv32)
+	defer invDev.Free()
+	view, _ := pool.UploadBatchView(seqs)
+	defer view.Free()
+	noLeak(t, "DeviceF16 forward step", 8, func() {
+		x, _ := cuda.F16FromF32(x0)
+		for _, l := range ls {
+			dh, _ := cuda.NewDeviceF16(batch, dim)
+			x.RMSNormInto(l.gAttn, 1e-5, dh)
+			dq, _ := l.wq.MatMulF16(dh)
+			dk, _ := l.wk.MatMulF16(dh)
+			dv, _ := l.wv.MatMulF16(dh)
+			dh.Free()
+			dq.RoPE(invDev, rq)
+			dk.RoPE(invDev, rk)
+			dk.Free()
+			dv.Free()
+			dqf, _ := dq.ToF32()
+			dq.Free()
+			daf, _ := pool.BatchedDecodeAttnViewGQAf16(dqf, view, bgQHeads, bgKVHeads)
+			dqf.Free()
+			da, _ := cuda.F16FromF32(daf)
+			daf.Free()
+			tmp, _ := l.wo.MatMulF16(da)
+			da.Free()
+			x.Add(tmp)
+			tmp.Free()
+			dh2, _ := cuda.NewDeviceF16(batch, dim)
+			x.RMSNormInto(l.gFFN, 1e-5, dh2)
+			dg, _ := l.wg.MatMulF16(dh2)
+			du, _ := l.wu.MatMulF16(dh2)
+			dh2.Free()
+			dg.SwiGLU(du)
+			du.Free()
+			tmp2, _ := l.wd.MatMulF16(dg)
+			dg.Free()
+			x.Add(tmp2)
+			tmp2.Free()
+		}
+		x.Free()
+	})
+}
