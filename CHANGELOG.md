@@ -4,6 +4,15 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### format/pytorch — runnable checkpoint-loading example (T898, 2026-07-20)
+
+Adds the package's first runnable Example: it loads the shipped PyTorch `state_dict`
+fixture, prints the sorted flattened parameter names, and inspects one tensor's dtype,
+shape and value. This closes the last public package missing a §V19 example (apicheck's
+`format/pytorch` flag now clears), with no loader behaviour change. Salvaged from the
+superseded PR #179 (whose docs/spec were ~130 rows stale against main) and verified to
+build and pass against the current API.
+
 ### docs — the comparison table understated goai's CPU matmul by ~32x (T897, 2026-07-20)
 
 The cross-comparison table's `goai-cpu` MatMul column is the DEFAULT pure-Go build (67.72
