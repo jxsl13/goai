@@ -70,6 +70,9 @@ func benchBatchedGraphA1(b *testing.B, batch, seqLen, layers int) {
 	// GOAI_FUSE_RESIDUAL=1 folds the wo/wd residual adds into those GEMMs' epilogue (beta=1),
 	// removing 2 AddF16 kernels + 2 scratch buffers per layer — the first fused-forward lever.
 	fuseResid := os.Getenv("GOAI_FUSE_RESIDUAL") == "1"
+	// GOAI_ATTN_QIO=1 feeds the f16 query straight into attention and gets f16 back, killing the two
+	// per-layer f32<->f16 conversions around attention.
+	qioAttn := os.Getenv("GOAI_ATTN_QIO") == "1"
 	step := func() {
 		x := cuda.AllocU16(batch * dim)
 		cuda.CvtF32ToF16(x, x0.DevPtr(), batch*dim)
@@ -91,6 +94,13 @@ func benchBatchedGraphA1(b *testing.B, batch, seqLen, layers int) {
 			var da unsafe.Pointer
 			if a1SkipAttn {
 				da = dq // qW==dim: feed query straight to wo, skip attention
+			} else if qioAttn {
+				var err error
+				da, err = pool.BatchedDecodeAttnViewGQAf16Qio(dq, qW, view, bgQHeads, bgKVHeads)
+				if err != nil {
+					b.Fatal(err)
+				}
+				cuda.FreeDev(dq)
 			} else {
 				dqf, _ := cuda.NewDeviceF32(batch, qW)
 				cuda.CvtF16ToF32(dqf.DevPtr(), dq, batch*qW)

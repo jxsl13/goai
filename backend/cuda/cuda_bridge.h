@@ -102,6 +102,8 @@ int cu_rope_f16_dpos(void* x, const void* inv, int seq, int heads, int hd, const
 int cu_rope_f16_dpos_arr(void* x, const void* inv, int seq, int heads, int hd, const void* dPosArr, double posDiv); // f16 PER-SEQ-position RoPE (continuous batching)
 // cu_paged_decode_attn_gqa_f16: f16-KV twin of cu_paged_decode_attn_gqa (poolK16/V16 are u16, half the global bytes).
 int cu_paged_decode_attn_gqa_f16(const void* dQ, const void* dPoolK16, const void* dPoolV16, const void* dBlockTables, const void* dSeqLens, void* dO, int batch, int qHeads, int kvHeads, int hd, int blockSize, int maxBlocks, float scale);
+// cu_paged_decode_attn_gqa_f16_qio: f16-KV + f16 Q-in/O-out — kills the A1 per-layer Q/O conversions.
+int cu_paged_decode_attn_gqa_f16_qio(const void* dQ16, const void* dPoolK16, const void* dPoolV16, const void* dBlockTables, const void* dSeqLens, void* dO16, int batch, int qHeads, int kvHeads, int hd, int blockSize, int maxBlocks, float scale);
 // cu_wmma_attn_gqa: fused prefill attention on f32 DEVICE buffers, [seq,heads·hd] GQA layout — drop-in for GroupedQueryAttention.
 int cu_wmma_attn_gqa(const void* fatbin, int fatlen, const void* dQ32, const void* dK32, const void* dV32, void* dO32, int seq, int qHeads, int kvHeads, int hd, float scale);
 void* cu_clone_f32(const void* src, int n);

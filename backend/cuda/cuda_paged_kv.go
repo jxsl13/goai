@@ -522,6 +522,41 @@ func (p *PagedKVPool) BatchedDecodeAttnViewGQAf16(q *DeviceF32, view *PagedBatch
 	return &DeviceF32{ptr: out, rows: view.batch, cols: q.cols}, nil
 }
 
+// BatchedDecodeAttnViewGQAf16Qio is BatchedDecodeAttnViewGQAf16 with f16 query IN and f16 output OUT
+// (raw u16 pointers) — for the A1 decode, which already has its query in f16 and immediately wants
+// the result in f16, so this kills the two per-layer f32<->f16 conversions around attention. qCols =
+// qHeads*hd. Caller owns the returned f16 buffer (FreeDev). Bit-identical to the f32-IO path + converts.
+func (p *PagedKVPool) BatchedDecodeAttnViewGQAf16Qio(q16 unsafe.Pointer, qCols int, view *PagedBatchView, qHeads, kvHeads int) (unsafe.Pointer, error) {
+	if view.pool != p {
+		return nil, fmt.Errorf("cuda: GQAf16Qio view not from this pool")
+	}
+	if qHeads <= 0 || kvHeads <= 0 || qHeads%kvHeads != 0 || qCols%qHeads != 0 {
+		return nil, fmt.Errorf("cuda: GQAf16Qio bad head config q=%d kv=%d width=%d", qHeads, kvHeads, qCols)
+	}
+	hd := qCols / qHeads
+	if hd != 64 {
+		return nil, fmt.Errorf("cuda: GQAf16Qio requires hd==64 (got %d)", hd)
+	}
+	if kvHeads*hd != p.wkv {
+		return nil, fmt.Errorf("cuda: GQAf16Qio kvHeads*hd=%d != pool wkv=%d", kvHeads*hd, p.wkv)
+	}
+	if err := p.ensureF16(); err != nil {
+		return nil, err
+	}
+	out := C.cu_alloc_u16(C.int(view.batch * qCols))
+	if out == nil {
+		return nil, fmt.Errorf("cuda: GQAf16Qio device alloc failed")
+	}
+	scale := float32(1.0 / math.Sqrt(float64(hd)))
+	rc := C.cu_paged_decode_attn_gqa_f16_qio(q16, p.kf16, p.vf16, view.dbt, view.dsl, unsafe.Pointer(out),
+		C.int(view.batch), C.int(qHeads), C.int(kvHeads), C.int(hd), C.int(p.blockSize), C.int(view.maxBlocks), C.float(scale))
+	if rc != 0 {
+		C.cu_free_f32(unsafe.Pointer(out))
+		return nil, fmt.Errorf("cuda: GQAf16Qio failed (code %d)", int(rc))
+	}
+	return unsafe.Pointer(out), nil
+}
+
 // BatchedDecodeAttnViewSK is BatchedDecodeAttnView with split-K (FlashDecoding): splitK blocks per
 // (kv head, sequence) scan disjoint key chunks into partials, then a merge combines them — parallelizes
 // the online-softmax scan (attention is ~34% of the A1 step, latency-bound). splitK 1..32.
