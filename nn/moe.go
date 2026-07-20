@@ -309,7 +309,6 @@ func (m *SparseMoE) ForwardDecode(ctx *backend.Context, x *tensor.Tensor) (y, ga
 	// token selected. TopKGating(Biased)'s weights ARE the renormalized combine
 	// weights — identical to Forward's masked-then-OpMoECombine path.
 	weight := tensor.New(x.Dtype(), tensor.Shape{tks, e}) // 0 for unselected
-	ws := weight.Storage().F64()
 	used := make([]bool, e)
 	row := make([]float64, e)
 	for t := range tks {
@@ -324,7 +323,7 @@ func (m *SparseMoE) ForwardDecode(ctx *backend.Context, x *tensor.Tensor) (y, ga
 			selected, weights = TopKGating(row, m.TopK)
 		}
 		for j, i := range selected {
-			ws[t*e+i] = weights[j]
+			weight.SetF64(weights[j], t, i) // dtype-agnostic: Storage().F64() panics on F32/F16
 			used[i] = true
 		}
 	}
