@@ -11,7 +11,7 @@ During §C16 push-throttle waits (or any external gate: CI runs, timers), loop f
 NOT be "holding, no action" replies.
 
 **Why:** the user explicitly corrected this ("continue working, never idle, bro",
-2026-07-15) after ~15 no-op fires while waiting ~40 min for a push window. LOOP.md's
+2026-07-15) after ≈15 no-op fires while waiting ≈40 min for a push window. LOOP.md's
 never-idle rule already said it: a blocked delivery thread is NOT a reason to idle —
 advance another thread; commits accumulate locally and push as a batch when the window
 opens.

@@ -15,7 +15,7 @@ CI job (ubuntu+windows) that also exercises it.
 
 State (as of PR#81, 2026-07-15):
 - GEMM microkernel `gemmF32BandDirect` (m≥4): mature — 4×16 FMA tile, B-reuse, BCE,
-  L2 col-blocking. ~154 GFLOP/s @256, ~230 @512. Near the practical Go-intrinsics ceiling;
+  L2 col-blocking. ≈154 GFLOP/s @256, ≈230 @512. Near the practical Go-intrinsics ceiling;
   beating it is high-effort/uncertain — don't force it.
 - **Decode GEMV (small-m, m≤3)** `gemmF32SmallM` + its dispatch: FIXED in PR#81 — the
   column-block size now adapts to ≈n/workers (was fixed 512 → only 4 workers for n=2048).
@@ -73,7 +73,7 @@ Same root cause as the quant GEMV (int8→int32→float / ExtendToInt16 conversi
 CONCLUSION: Go 1.26 `simd/archsimd` FLOAT FMA ops are fast (→ the mature f32 GEMM at
 154-230 GFLOP/s, and 7.3× on a float poly), but the INT-vector ops (ConvertToInt32,
 ShiftAllLeft, ExtendToInt16/Int32, AsFloat32x8, etc.) are ~14-60× too slow (likely
-non-inlining or codegen fallback — a single VPSLLD/VCVTPS2DQ should be ~1ns, measured ~18ns).
+non-inlining or codegen fallback — a single VPSLLD/VCVTPS2DQ should be ≈1ns, measured ≈18ns).
 IMPLICATION: the amd64 SIMD niche is AT ITS CEILING on Go 1.26 for the remaining workloads —
 quantized GEMV (needs int8 dot + int→float) AND SIMD transcendentals/activations (exp/gelu/
 silu need 2^n int-bit-assembly) are BOTH blocked. Only pure-float-FMA kernels win, and the
@@ -84,7 +84,7 @@ would need a float-only 2^n (none available). Niche is mature/ceiling — pivot 
 
 CEILING RE-CONFIRMED (2026-07-16 ~12:20Z, this box Ryzen 7 5700G Zen3 avx2+fma, GOEXPERIMENT=simd):
 BenchmarkGEMM_F32 gflops — 512² 177-208, 1024² 202-223 GFLOP/s. SINGLE-CORE (GOMAXPROCS=1) 1024² =
-**33.45 GFLOP/s = ~23% of the ~147 single-core peak**; scales 5.8× to 8 cores (194.5) + SMT to ~223
+**33.45 GFLOP/s = ≈23% of the ≈147 single-core peak**; scales 5.8× to 8 cores (194.5) + SMT to ≈223
 @16. The 8-accumulator gemmF32BandDirectCols kernel (4 rows × 2 Float32x8, 8 FMA chains, L2-blocked)
 is well-blocked; 512→1024 gets FASTER (177→223) = overhead-amortizing, NOT memory-bound → so the
 strided-B access (bo+=n) is NOT the limiter and B-PANEL PACKING would NOT help (a codegen-bound kernel
