@@ -124,10 +124,8 @@ func benchA1Prefill(b *testing.B, seq, layers int, a1 bool) {
 			dvf.Free()
 			da16, _ := cuda.F16FromF32(da)
 			da.Free()
-			tmp, _ := l.wo.MatMulF16(da16)
+			l.wo.MatMulF16AddInto(da16, x) // x += da·wo (fused residual)
 			da16.Free()
-			x.Add(tmp)
-			tmp.Free()
 			dh2, _ := cuda.NewDeviceF16(seq, dim)
 			x.RMSNormInto(l.gF, 1e-5, dh2)
 			dg, _ := l.wg.MatMulF16(dh2)
@@ -135,10 +133,8 @@ func benchA1Prefill(b *testing.B, seq, layers int, a1 bool) {
 			dh2.Free()
 			dg.SwiGLU(du)
 			du.Free()
-			tmp2, _ := l.wd.MatMulF16(dg)
+			l.wd.MatMulF16AddInto(dg, x) // x += dg·wd (fused residual)
 			dg.Free()
-			x.Add(tmp2)
-			tmp2.Free()
 		}
 		x.Free()
 	}
