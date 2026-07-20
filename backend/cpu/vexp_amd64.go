@@ -7,9 +7,9 @@ import "simd/archsimd"
 // amd64 perf build: the perf-critical f32 transcendentals run through AVX2 8-wide kernels (this
 // file), the twins of the arm64 NEON kernels (vexp_arm64.s). vexpF32Fast gates the vectorized fast
 // paths that are wired up on amd64 — the MHA/softmax-family exp+sum (mhaSoftmaxBandF32) AND the GELU
-// forward/backward (the two heaviest f32 transcendentals, §T657/§T664: GELU was 13.6%/18.9% of the
-// GPT forward/train). vexpNeon stays false so the SiLU/sigmoid/exp/tanh/log kernels keep their scalar
-// paths on amd64 (that broader campaign is separate); their v* funcs below are scalar (dead here).
+// forward/backward (§T657/§T664) AND SiLU forward/backward + sigmoid (§T665, the Llama/Qwen/Mistral
+// FFN activation). vexpNeon stays false so only the standalone exp/tanh/log kernels keep their scalar
+// paths on amd64 (that campaign is separate); their v* funcs below are scalar (dead here).
 const (
 	vexpNeon    = false
 	vexpF32Fast = true
@@ -165,27 +165,81 @@ func vgeluGradF32(dst, x, g []float32) {
 	}
 }
 
-// The SiLU/sigmoid/exp/tanh/log vexp fast paths are NOT vectorized on amd64 (vexpNeon is false, so
+// vsiluF32 computes dst[i] = silu(src[i]) = x·σ(x) 8-wide via AVX2 — the amd64 twin of the NEON
+// vsilu pipeline. Numerically-stable split on one exp: z = e^(−|x|), num = (x≥0 ? 1 : z), silu =
+// x·num/(1+z) (no positive magnitude is ever exponentiated). The pdf-underflow mask on z (zero at/
+// below the clamp floor) keeps ±Inf·0 = NaN exact, matching siluF32. 8-lane body + scalar tail.
+func vsiluF32(dst, src []float32) {
+	if !vexpHasAVX {
+		for i, v := range src {
+			dst[i] = siluF32(v)
+		}
+		return
+	}
+	n8 := len(src) &^ 7
+	for i := 0; i < n8; i += 8 {
+		x := archsimd.LoadFloat32x8Slice(src[i:])
+		z := expF32x8(vZero.Sub(x.AsUint32x8().And(vAbs).AsFloat32x8())) // e^(−|x|)
+		z = z.Masked(z.Greater(vGPdfMn))
+		num := vOne.Merge(z, x.GreaterEqual(vZero)) // x≥0 ? 1 : z
+		x.Mul(num).Div(vOne.Add(z)).StoreSlice(dst[i:])
+	}
+	for i := n8; i < len(src); i++ {
+		dst[i] = siluF32(src[i])
+	}
+}
+
+// vsiluGradF32 computes dst[i] = g[i]·silu'(x[i]) 8-wide via AVX2 — the amd64 twin of the NEON
+// vsiluGrad pipeline. silu'(x) = (num·(1+z) + x·z)/(1+z)² with z = e^(−|x|), num = (x≥0 ? 1 : z) —
+// the single-division form that is algebraically identical to σ·(1+x·(1−σ)). 8-lane body + tail.
+func vsiluGradF32(dst, x, g []float32) {
+	if !vexpHasAVX {
+		for i, v := range x {
+			dst[i] = siluGradF32(v, g[i])
+		}
+		return
+	}
+	n8 := len(x) &^ 7
+	for i := 0; i < n8; i += 8 {
+		xv := archsimd.LoadFloat32x8Slice(x[i:])
+		gv := archsimd.LoadFloat32x8Slice(g[i:])
+		z := expF32x8(vZero.Sub(xv.AsUint32x8().And(vAbs).AsFloat32x8()))
+		z = z.Masked(z.Greater(vGPdfMn))
+		num := vOne.Merge(z, xv.GreaterEqual(vZero))
+		den := vOne.Add(z)
+		d := num.MulAdd(den, xv.Mul(z)).Div(den.Mul(den)) // (num·den + x·z)/den²
+		gv.Mul(d).StoreSlice(dst[i:])
+	}
+	for i := n8; i < len(x); i++ {
+		dst[i] = siluGradF32(x[i], g[i])
+	}
+}
+
+// vsigmoidF32 computes dst[i] = σ(src[i]) 8-wide via AVX2 — the amd64 twin of the NEON vsigmoid
+// pipeline: z = e^(−|x|), num = (x≥0 ? 1 : z), σ = num/(1+z). No pdf mask (NaN propagates through z),
+// matching sigmoidF32. 8-lane body + scalar tail.
+func vsigmoidF32(dst, src []float32) {
+	if !vexpHasAVX {
+		for i, v := range src {
+			dst[i] = sigmoidF32(v)
+		}
+		return
+	}
+	n8 := len(src) &^ 7
+	for i := 0; i < n8; i += 8 {
+		x := archsimd.LoadFloat32x8Slice(src[i:])
+		z := expF32x8(vZero.Sub(x.AsUint32x8().And(vAbs).AsFloat32x8()))
+		num := vOne.Merge(z, x.GreaterEqual(vZero))
+		num.Div(vOne.Add(z)).StoreSlice(dst[i:])
+	}
+	for i := n8; i < len(src); i++ {
+		dst[i] = sigmoidF32(src[i])
+	}
+}
+
+// The standalone exp/tanh/log vexp fast paths are NOT vectorized on amd64 yet (vexpNeon is false, so
 // elementwise.go keeps their scalar-f64 kernels bit-for-bit). These scalar instantiations exist only
 // so the driver type-checks — dead code at run time here, exactly as in vexp_default.go.
-
-func vsiluF32(dst, src []float32) {
-	for i, v := range src {
-		dst[i] = siluF32(v)
-	}
-}
-
-func vsiluGradF32(dst, x, g []float32) {
-	for i, v := range x {
-		dst[i] = siluGradF32(v, g[i])
-	}
-}
-
-func vsigmoidF32(dst, src []float32) {
-	for i, v := range src {
-		dst[i] = sigmoidF32(v)
-	}
-}
 
 func vexpFullF32(dst, src []float32) {
 	for i, v := range src {
