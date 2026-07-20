@@ -145,6 +145,12 @@ bench-classic-python:
 	PERF_CSV_DIR=$$dir .venv/bin/python testdata/bench_sklearn.py; \
 	rm -rf $$dir
 
+## bench-gpt-train-python: time a GPT training step (fwd+CE+bwd) in PyTorch at the
+## SAME geometry as internal/benchcompare BenchmarkGPTTrainingStep, for the GoAI-vs-
+## torch end-to-end training comparison (BENCHMARKS.md §6). Needs .venv (torch). T883.
+bench-gpt-train-python:
+	.venv/bin/python testdata/bench_gpt_train_torch.py
+
 ## lint-md: dependency-free markdown lint — discovers every *.md recursively (SPEC T612).
 ## Also runs as a test in ./internal/mdlint (CI-enforced on code pushes).
 lint-md:

@@ -496,6 +496,43 @@ forest past scikit-learn's parallel fit) and naive Bayes, and runs a pure-Go CAR
 within 2x of scikit-learn's decades-tuned C cores on the single tree and RBF SVC -- an
 honest split, dependency-free, now reproducible from committed artifacts.
 
+### End-to-end GPT training step vs PyTorch (T883, 2026-07-20)
+
+The op-level comparison (matmul/conv/MHA vs torch) existed, but the end-to-end training
+step -- the workload that decides "can you actually train with this library" -- was never
+A/B'd against torch. T883 adds it: one GPT training step (forward + cross-entropy +
+backward, no optimizer update, matching the Go benchmark) at identical geometry (vocab
+4096, ctx 256, dim 512, 8 heads, 6 layers, seq 256, batch 1, f32) on the same M2 Pro box.
+GoAI numbers from `internal/benchcompare` BenchmarkGPTTrainingStep (GOEXPERIMENT=simd cpu,
+Metal via cgo, Vulkan via MoltenVK); torch 2.12.1 from the committed companion
+`testdata/bench_gpt_train_torch.py` (median of 12, warm-up excluded, MPS synchronized).
+
+| Backend | GoAI (tok/s) | torch (tok/s) | gap |
+|---|---|---|---|
+| CPU | 2,257 (simd) | 5,058 (torch-cpu, 8 threads) | torch 2.24x |
+| Apple GPU | 3,263 (Metal) | 12,904 (torch-mps) | torch 3.95x |
+| Vulkan | 1,966 (MoltenVK) | -- | no torch Vulkan path |
+
+torch is ahead on both, as anticipated. The root causes are the two already on the
+BENCHMARKS.md losses table:
+
+- **Apple GPU (3.95x):** GoAI's Metal training runs the autograd tape op-by-op -- every op
+  is a command-buffer commit + wait (~0.27 ms dispatch floor), and a 6-layer fwd+bwd is
+  hundreds of ops; torch dispatches one fused MPS graph and synchronizes once. GoAI's
+  matmuls already call the same MPS kernels (benchmarking section 4), so the gap is
+  dispatch + fusion, not raw GEMM. Recorder-izing the training tape buys only ~1.4x at
+  seq 256 (T411, matmul-dominated) -- the residual ~3x is the MPS-kernel-tuning ceiling.
+- **CPU (2.24x):** GoAI's f32 GEMM is at Accelerate/AMX parity, but a training step is more
+  than GEMM -- torch fuses scaled-dot-product attention and its autograd backward, where
+  GoAI runs separate NEON kernels (its CPU attention alone is 2.6x behind torch's fused
+  SDPA). No-interpreter-overhead does not beat a decade of fused-kernel work.
+
+Honest read: GoAI's decode inference is competitive-to-ahead, but the training step trails
+torch 2-4x on this box -- fusion and MPS tuning, not a pure-Go penalty (the GEMM is at
+parity). The lever is graph/kernel fusion on both backends. This is the first committed
+GoAI-vs-torch end-to-end training measurement; run it with `make bench-gpt-train-python`
+alongside the Go benchmark.
+
 ### Sampler top-k via quickselect (§T626, 2026-07-14)
 
 `Sampler.Dist` is the other end of every generated token: it turns a logit vector

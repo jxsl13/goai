@@ -4,6 +4,30 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### bench -- end-to-end GPT training step measured vs PyTorch (T883, 2026-07-20)
+
+The op-level torch comparison (matmul/MHA) existed, but the end-to-end training step was
+never A/B'd against torch. T883 commits a faithful nanoGPT companion
+testdata/bench_gpt_train_torch.py (exact geometry vocab-4096/dim-512/8-head/6-layer/seq-256,
+times fwd+CE+bwd matching internal/benchcompare BenchmarkGPTTrainingStep, torch-cpu +
+torch-mps, median-of-12, MPS-synced, versions printed) and a make bench-gpt-train-python
+target.
+
+Measured on M2 Pro (forward + cross-entropy + backward, no optimizer step):
+
+| Backend | GoAI | torch |
+|---|---|---|
+| CPU | 2,257 tok/s (simd) | 5,058 (torch-cpu) |
+| Apple GPU | 3,263 tok/s (Metal) | 12,904 (torch-mps) |
+| Vulkan | 1,966 tok/s | -- |
+
+An honest loss -- torch 2.24× (CPU) / 3.95× (Apple GPU) ahead -- and an expected one:
+GoAI's f32 GEMM is at Accelerate/AMX parity and its Metal matmuls call the same MPS kernels,
+so the gap is op-by-op autograd dispatch + torch's fused SDPA/graph, not a pure-Go penalty.
+Recorded in BENCHMARKS.md section 6 + the losses table + scoreboard, with a
+docs/benchmarking.md entry and diagnosed root causes. First committed GoAI-vs-torch
+end-to-end training measurement.
+
 ### classic -- reproducible scikit-learn scorecard, honest recorded-version verdict (T881, B103, 2026-07-20)
 
 The classical-ML fit scorecard (BENCHMARKS.md section 5) compared GoAI to scikit-learn,

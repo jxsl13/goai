@@ -47,6 +47,7 @@ Two machines appear below:
 | CPU tokenizer encode | GPT-2 BPE 1 MB, M2 Pro | ≈28.2 MB/s (6.7M tok/s) | tiktoken Rust 18.8 | **GoAI 1.50×** (237,208-token parity) |
 | GPU matmul (Apple) | f32 1024³, M2 Pro | 1,376 GFLOP/s (Metal) | torch-mps 4,171 | 3.0× behind (MPS-kernel ceiling) |
 | Apple-GPU LLM decode | 17.7 M-param toy, M2 Pro | 236 tok/s | llama.cpp Metal 723 | ≈3.1× behind at toy size (see caveat) |
+| Training step (fwd+bwd) | GPT dim512/6L seq256, M2 Pro | Metal 3,263 / cpu 2,257 tok/s | torch-mps 12,904; torch-cpu 5,058 | 2–4× behind (fusion + MPS ceiling, §6) |
 
 Losses are listed with the same care as wins — each has a diagnosed cause and,
 where one exists, a booked lever (see
@@ -254,7 +255,43 @@ exactly, but scikit-learn sped up on the tree and SVC (flipping parity/1.2× to
 Recording the incumbent version (§V13) and committing the companion is what makes
 the scorecard rot-proof from here.
 
-## 6. Speculative and assisted decoding — measured on real trained models
+## 6. End-to-end training step — vs PyTorch
+
+*M2 Pro, one GPT training step = forward + cross-entropy + backward (no optimizer
+update, matching the Go benchmark), identical geometry (vocab 4096, ctx 256, dim
+512, 8 heads, 6 layers, seq 256, batch 1, f32). tok/s = seq / step time. GoAI:
+`internal/benchcompare` BenchmarkGPTTrainingStep (`GOEXPERIMENT=simd` cpu, Metal,
+Vulkan). torch 2.12.1, companion `testdata/bench_gpt_train_torch.py` (torch-cpu 8
+threads, torch-mps), median of 12. T883.*
+
+| Training step | GoAI | PyTorch | Gap |
+|---|---:|---:|---|
+| CPU | 2,257 tok/s (simd) | torch-cpu 5,058 | torch 2.24× ahead |
+| Apple GPU | 3,263 tok/s (Metal) | torch-mps 12,904 | torch-mps 3.95× ahead |
+| Vulkan | 1,966 tok/s | — | MoltenVK; no torch Vulkan path |
+
+A loss, and an expected one. Two diagnosed causes, both already on the
+[losses table](#where-goai-loses-today):
+
+- **Apple GPU (3.95×):** GoAI's Metal training runs the autograd tape op-by-op —
+  each op is its own command-buffer commit + wait (≈0.27 ms dispatch floor), and a
+  6-layer forward+backward is hundreds of ops. PyTorch dispatches one fused MPS
+  graph and synchronizes once. GoAI's matmuls already call the same MPS kernels
+  (§4), so the gap is dispatch + fusion, not raw GEMM: the batched recorder that
+  gives 24× on *decode* (ADR-0019) buys only ≈1.4× on this training shape (§T411,
+  matmul-dominated at seq 256), leaving the ≈3× MPS-tuning ceiling.
+- **CPU (2.24×):** GoAI's f32 GEMM matches torch's Accelerate/AMX (§4), but a
+  training step is not all GEMM — PyTorch fuses scaled-dot-product attention and
+  its autograd backward, where GoAI runs separate NEON kernels (its CPU attention
+  is 2.6× behind torch's fused SDPA on its own). "No interpreter overhead" does not
+  beat a decade of fused-kernel engineering here.
+
+Honest read: GoAI's *inference* decode is competitive-to-ahead (§1–§3), but the
+*training* step trails PyTorch 2–4× on this box — fusion and MPS-kernel tuning, not
+a pure-Go penalty (the pure-Go f32 GEMM is at parity). The lever is graph/kernel
+fusion, tracked for both backends.
+
+## 7. Speculative and assisted decoding — measured on real trained models
 
 *M2 Pro, in-repo-trained char-level models (the schemes' value depends on
 acceptance rates, so they are measured on genuinely trained models, not
@@ -274,7 +311,7 @@ unmeasured axis. Lesson worth the table: on a dispatch-bound decoder the
 *round cost*, not the acceptance rate, decides the win — free-drafting
 schemes (Medusa, prompt-lookup) pay off where a draft *model* does not.
 
-## 7. Correctness parity — the benchmark behind every benchmark
+## 8. Correctness parity — the benchmark behind every benchmark
 
 Speed claims are only meaningful if both sides compute the same thing.
 Every GoAI number above sits on mechanically enforced parity gates
@@ -300,6 +337,8 @@ honestly documented deficit with a root cause is a deliverable):
 | Multi-request serving throughput vs vLLM | ≈18× at 64 requests | no PagedAttention / continuous batching — a missing capability, not a slow kernel | serving arc (worker roadmap FRONT B) |
 | Same-class Q4 decode vs llama.cpp Q4_K_M | 1.19–1.27× | their iterative quant encoder + fused attention | Q4_K encoder quality + attention fusion |
 | Apple-GPU matmul vs torch-mps | 3.0× | Apple's closed MPS kernel tuning; measured as the platform ceiling | parked (§B39/§T410) — revisit only with new evidence |
+| Training step vs torch-mps (Apple GPU) | 3.95× | op-by-op autograd dispatch (≈0.27 ms/op × hundreds) + MPS-kernel ceiling; torch dispatches one fused graph | tape recorder (≈1.4× at seq 256, §T411) + fusion |
+| Training step vs torch-cpu | 2.24× | GEMM is at AMX parity, but torch fuses SDPA attention + autograd backward; GoAI runs separate NEON kernels | fused-attention/backward CPU kernels |
 | CPU attention vs torch fused SDPA | 2.6× | operator fusion | candidate fused-attention CPU kernel |
 | CPU quantized decode vs own f32 | 8.8× | on-the-fly block dequantize in the hot loop | block-native quantized GEMV (flagged) |
 | Toy-size Apple decode vs llama.cpp Metal | ≈3.1× | hand-tuned decode kernels; toy size favors their Accelerate path | production-size measurement first (T887) |
@@ -312,7 +351,6 @@ a spec task with an id you can grep in [`SPEC.md`](SPEC.md):
 | Axis | Incumbent | Task |
 |---|---|---|
 | Committed, versioned sklearn timing script (today the sklearn side of §5 is reproducible only by an ad-hoc script) | scikit-learn | T881 |
-| End-to-end training step, same model geometry | torch-cpu / torch-mps | T883 |
 | Vision models forward + train (CNN, ViT) | torch | T884 |
 | Model-file loading throughput (GGUF, safetensors) | gguf-py, safetensors-python | T885 |
 | Production-size LLM decode on Apple silicon | llama.cpp Metal, MLX | T887 |
