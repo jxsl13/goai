@@ -28,6 +28,13 @@ func TestOptimizerFastPathParity(t *testing.T) {
 		"Shampoo":   func(ps []*tensor.Tensor) nn.Optimizer { return nn.NewShampoo(ps, 1e-3) },
 		"Sophia":    func(ps []*tensor.Tensor) nn.Optimizer { return nn.NewSophia(ps, 1e-3) },
 		"Cautious":  func(ps []*tensor.Tensor) nn.Optimizer { return nn.NewCautiousAdamW(ps, 1e-3) },
+		"Grokfast":  func(ps []*tensor.Tensor) nn.Optimizer { return nn.NewGrokfast(nn.NewSGD(ps, 1e-2, 0), ps) },
+		"GrokfastMA": func(ps []*tensor.Tensor) nn.Optimizer {
+			return nn.NewGrokfastMA(nn.NewSGD(ps, 1e-2, 0), ps, nn.WithGrokfastMAWindow(2))
+		},
+		"Lookahead": func(ps []*tensor.Tensor) nn.Optimizer {
+			return nn.NewLookahead(nn.NewSGD(ps, 1e-2, 0), ps, nn.WithLookaheadK(2))
+		},
 		"ScheduleFree": func(ps []*tensor.Tensor) nn.Optimizer {
 			return nn.NewScheduleFreeAdamW(ps, 1e-3, nn.WithScheduleFreeWeightDecay(0.01))
 		},

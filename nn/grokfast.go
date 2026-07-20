@@ -77,14 +77,40 @@ func (g *Grokfast) Step(grad GradFn) error {
 			continue
 		}
 		ghat := tensor.New(p.Dtype(), p.Shape())
-		for k := range p.Numel() {
-			idx := tensor.Unravel(k, p.Shape())
-			gv := gr.AtF64(idx...)
-			if !g.inited {
-				g.ema[i][k] = gv // seed μ with the first gradient
+		ema := g.ema[i]
+		// Contiguous fast paths (ghat is fresh → contiguous; gr usually is): flat loops,
+		// arithmetic in float64 exactly as the generic path (§base-perf: no per-element
+		// Unravel/AtF64/SetF64 dispatch).
+		switch gf64, hf64 := flatF64(gr), flatF64(ghat); {
+		case gf64 != nil && hf64 != nil:
+			for k, gv := range gf64 {
+				if !g.inited {
+					ema[k] = gv // seed μ with the first gradient
+				}
+				ema[k] = g.Alpha*ema[k] + (1-g.Alpha)*gv // μ = α·μ + (1−α)·g
+				hf64[k] = gv + g.Lambda*ema[k]           // ĝ = g + λ·μ
 			}
-			g.ema[i][k] = g.Alpha*g.ema[i][k] + (1-g.Alpha)*gv // μ = α·μ + (1−α)·g
-			ghat.SetF64(gv+g.Lambda*g.ema[i][k], idx...)       // ĝ = g + λ·μ
+		default:
+			if gf32, hf32 := flatF32(gr), flatF32(ghat); gf32 != nil && hf32 != nil {
+				for k := range gf32 {
+					gv := float64(gf32[k])
+					if !g.inited {
+						ema[k] = gv
+					}
+					ema[k] = g.Alpha*ema[k] + (1-g.Alpha)*gv
+					hf32[k] = float32(gv + g.Lambda*ema[k])
+				}
+			} else {
+				for k := range p.Numel() {
+					idx := tensor.Unravel(k, p.Shape())
+					gv := gr.AtF64(idx...)
+					if !g.inited {
+						ema[k] = gv
+					}
+					ema[k] = g.Alpha*ema[k] + (1-g.Alpha)*gv
+					ghat.SetF64(gv+g.Lambda*ema[k], idx...)
+				}
+			}
 		}
 		filtered[p] = ghat
 	}

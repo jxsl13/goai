@@ -88,11 +88,25 @@ func (l *Lookahead) Step(grad GradFn) error {
 		return nil
 	}
 	for pi, p := range l.Params {
-		for i := range p.Numel() {
-			idx := tensor.Unravel(i, p.Shape())
-			theta := p.AtF64(idx...)
-			l.slow[pi][i] = (1-l.Alpha)*l.slow[pi][i] + l.Alpha*theta // φ ← (1−α)φ + α·θ
-			p.SetF64(l.slow[pi][i], idx...)                           // θ ← φ (reset)
+		slow := l.slow[pi]
+		// Contiguous fast paths (§base-perf: no per-element Unravel/AtF64/SetF64).
+		if pf := flatF64(p); pf != nil {
+			for i := range pf {
+				slow[i] = (1-l.Alpha)*slow[i] + l.Alpha*pf[i] // φ ← (1−α)φ + α·θ
+				pf[i] = slow[i]                               // θ ← φ (reset)
+			}
+		} else if pf := flatF32(p); pf != nil {
+			for i := range pf {
+				slow[i] = (1-l.Alpha)*slow[i] + l.Alpha*float64(pf[i])
+				pf[i] = float32(slow[i])
+			}
+		} else {
+			for i := range p.Numel() {
+				idx := tensor.Unravel(i, p.Shape())
+				theta := p.AtF64(idx...)
+				slow[i] = (1-l.Alpha)*slow[i] + l.Alpha*theta
+				p.SetF64(slow[i], idx...)
+			}
 		}
 	}
 	return nil

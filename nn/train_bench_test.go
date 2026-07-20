@@ -277,3 +277,17 @@ func BenchmarkCautiousStepOnly(b *testing.B) {
 func BenchmarkCautiousStepOnlyF32(b *testing.B) {
 	benchStepOnly(b, tensor.F32, func(p []*tensor.Tensor) nn.Optimizer { return nn.NewCautiousAdamW(p, 1e-3) })
 }
+
+func BenchmarkGrokfastStepOnly(b *testing.B) {
+	benchStepOnly(b, tensor.F64, func(p []*tensor.Tensor) nn.Optimizer { return nn.NewGrokfast(nn.NewSGD(p, 1e-2, 0), p) })
+}
+func BenchmarkGrokfastMAStepOnly(b *testing.B) {
+	benchStepOnly(b, tensor.F64, func(p []*tensor.Tensor) nn.Optimizer {
+		return nn.NewGrokfastMA(nn.NewSGD(p, 1e-2, 0), p, nn.WithGrokfastMAWindow(8))
+	})
+}
+func BenchmarkLookaheadStepOnly(b *testing.B) {
+	benchStepOnly(b, tensor.F64, func(p []*tensor.Tensor) nn.Optimizer {
+		return nn.NewLookahead(nn.NewSGD(p, 1e-2, 0), p, nn.WithLookaheadK(1))
+	})
+}

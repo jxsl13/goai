@@ -105,8 +105,17 @@ func (g *GrokfastMA) Step(grad GradFn) error {
 		}
 		n := p.Numel()
 		flat := make([]float64, n)
-		for k := range n {
-			flat[k] = gr.AtF64(tensor.Unravel(k, p.Shape())...)
+		// Read gr into flat via the contiguous fast path when possible (§base-perf).
+		if gf := flatF64(gr); gf != nil {
+			copy(flat, gf)
+		} else if gf := flatF32(gr); gf != nil {
+			for k := range gf {
+				flat[k] = float64(gf[k])
+			}
+		} else {
+			for k := range n {
+				flat[k] = gr.AtF64(tensor.Unravel(k, p.Shape())...)
+			}
 		}
 		// Push flat into the ring, maintaining the running sum (evict the oldest when full).
 		if g.filled[i] == g.Window {
@@ -129,13 +138,33 @@ func (g *GrokfastMA) Step(grad GradFn) error {
 		if !g.FilterSum {
 			div = float64(g.filled[i]) // mean over the gradients currently in the window
 		}
-		for k := range n {
-			idx := tensor.Unravel(k, p.Shape())
-			gv := gr.AtF64(idx...)
-			if amplify {
-				gv += g.Lambda * (g.sum[i][k] / div) // ĝ = g + λ·μ
+		// gr[k] was already read into flat[k] above, so reuse it (bit-identical) and write
+		// ghat (fresh → contiguous) through the fast path.
+		sum := g.sum[i]
+		if hf := flatF64(ghat); hf != nil {
+			for k := range n {
+				gv := flat[k]
+				if amplify {
+					gv += g.Lambda * (sum[k] / div) // ĝ = g + λ·μ
+				}
+				hf[k] = gv
 			}
-			ghat.SetF64(gv, idx...)
+		} else if hf := flatF32(ghat); hf != nil {
+			for k := range n {
+				gv := flat[k]
+				if amplify {
+					gv += g.Lambda * (sum[k] / div)
+				}
+				hf[k] = float32(gv)
+			}
+		} else {
+			for k := range n {
+				gv := flat[k]
+				if amplify {
+					gv += g.Lambda * (sum[k] / div)
+				}
+				ghat.SetF64(gv, tensor.Unravel(k, p.Shape())...)
+			}
 		}
 		filtered[p] = ghat
 	}
