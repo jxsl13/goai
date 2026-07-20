@@ -98,6 +98,69 @@ func (m *MHA) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, e
 	return m.proj(ctx, attn, m.Wo, "o")
 }
 
+// ForwardBatched runs MHA over B independent sequences packed row-major as x[batch*seq, dmodel]
+// (sequence b occupies rows [b*seq, (b+1)*seq)). It batches the four projection GEMMs (q,k,v,o) into
+// single [batch*seq, ·] matmuls — the layout batched vision encoders (ViT/Swin/VLM) want, so B images
+// share one large GEMM instead of B tiny ones — while the core softmax(QKᵀ)V still runs PER sequence
+// (OpMHA is rank-2). Because every projection is row-wise and each sequence's attention is computed on
+// its own slice, the result is identical to concatenating Forward over each [seq,dmodel] block; Bias,
+// LoRA and Mask all apply exactly as in Forward. batch must divide the row count.
+func (m *MHA) ForwardBatched(ctx *backend.Context, x *tensor.Tensor, batch int) (*tensor.Tensor, error) {
+	if x.Ndim() != 2 || x.Shape()[1] != m.Wq.Shape()[0] {
+		return nil, fmt.Errorf("nlp: MHA.ForwardBatched expects x[batch*seq,%d], got %v", m.Wq.Shape()[0], x.Shape())
+	}
+	rows := x.Shape()[0]
+	if batch <= 0 || rows%batch != 0 {
+		return nil, fmt.Errorf("nlp: MHA.ForwardBatched batch %d must divide rows %d", batch, rows)
+	}
+	seq := rows / batch
+	q, err := m.proj(ctx, x, m.Wq, "q")
+	if err != nil {
+		return nil, err
+	}
+	k, err := m.proj(ctx, x, m.Wk, "k")
+	if err != nil {
+		return nil, err
+	}
+	v, err := m.proj(ctx, x, m.Wv, "v")
+	if err != nil {
+		return nil, err
+	}
+	parts := make([]*tensor.Tensor, batch)
+	for b := range batch {
+		sl := func(t *tensor.Tensor) (*tensor.Tensor, error) {
+			return m.exec(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: b * seq, End: (b + 1) * seq}, t)
+		}
+		qb, err := sl(q)
+		if err != nil {
+			return nil, err
+		}
+		kb, err := sl(k)
+		if err != nil {
+			return nil, err
+		}
+		vb, err := sl(v)
+		if err != nil {
+			return nil, err
+		}
+		var ab *tensor.Tensor
+		if m.Mask != nil { // §T508: mask expresses the structure; Causal is NOT also applied
+			ab, err = m.exec(ctx, backend.OpMHAMasked, backend.AttnAttrs{Heads: m.Heads}, qb, kb, vb, m.Mask)
+		} else {
+			ab, err = m.exec(ctx, backend.OpMHA, backend.AttnAttrs{Heads: m.Heads, Causal: m.Causal}, qb, kb, vb)
+		}
+		if err != nil {
+			return nil, err
+		}
+		parts[b] = ab
+	}
+	attn, err := m.exec(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 0}, parts...)
+	if err != nil {
+		return nil, err
+	}
+	return m.proj(ctx, attn, m.Wo, "o")
+}
+
 // proj applies one attention projection — through its LoRA adapter when attached
 // (§T504), else the plain matmul — and adds the projection's bias when one is set
 // (§T505). With LoRA's zero-initialized B and no bias the path is numerically

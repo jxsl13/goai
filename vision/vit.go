@@ -258,8 +258,16 @@ func (m *ViT) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, e
 	if x.Ndim() != 4 {
 		return nil, fmt.Errorf("vision: ViT expects [batch,C,H,W] or [C,H,W], got %v", x.Shape())
 	}
-	rows := make([]*tensor.Tensor, x.Shape()[0])
-	for b := range rows {
+	// Batched path: run the whole batch through the encoder as ONE packed [B·(N+1), D] sequence set,
+	// so every projection/embed/MLP/head is a single large GEMM instead of B tiny per-image ones (the
+	// per-image loop's cost, BENCHMARKS.md §7 / T908). Only the core softmax(QKᵀ)V stays per-sequence
+	// (MHA.ForwardBatched). Numerically identical to looping forwardOne — every op here is row-wise.
+	B := x.Shape()[0]
+	S := m.Pos.Shape()[0] // N+1 tokens (class + patches)
+	N := S - 1
+	// patchify each image (no gradient) and stack into one [B·N, C·p·p] matrix for a single Embed GEMM.
+	patchRows := make([]*tensor.Tensor, B)
+	for b := range B {
 		img, err := backend.Execute(ctx, backend.OpSlice, []*tensor.Tensor{x},
 			backend.SliceAttrs{Axis: 0, Start: b, End: b + 1})
 		if err != nil {
@@ -270,15 +278,64 @@ func (m *ViT) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, e
 		if err != nil {
 			return nil, err
 		}
-		if rows[b], err = m.forwardOne(ctx, one[0]); err != nil {
+		if patchRows[b], err = m.patchify(one[0]); err != nil {
 			return nil, err
 		}
 	}
-	out, err := backend.Execute(ctx, backend.OpConcat, rows, backend.ConcatAttrs{Axis: 0})
+	allPatches, err := backend.Execute(ctx, backend.OpConcat, patchRows, backend.ConcatAttrs{Axis: 0})
 	if err != nil {
 		return nil, err
 	}
-	return out[0], nil
+	emb, err := m.Embed.Forward(ctx, allPatches[0]) // [B·N, D]
+	if err != nil {
+		return nil, err
+	}
+	// Prepend the [class] token and add position embeddings per image → packed [B·(N+1), D].
+	seqs := make([]*tensor.Tensor, B)
+	for b := range B {
+		pb, err := backend.Execute(ctx, backend.OpSlice, []*tensor.Tensor{emb},
+			backend.SliceAttrs{Axis: 0, Start: b * N, End: (b + 1) * N})
+		if err != nil {
+			return nil, err
+		}
+		cat, err := backend.Execute(ctx, backend.OpConcat, []*tensor.Tensor{m.Class, pb[0]}, backend.ConcatAttrs{Axis: 0})
+		if err != nil {
+			return nil, err
+		}
+		wp, err := backend.Execute(ctx, backend.OpAdd, []*tensor.Tensor{cat[0], m.Pos}, nil)
+		if err != nil {
+			return nil, err
+		}
+		seqs[b] = wp[0]
+	}
+	packed, err := backend.Execute(ctx, backend.OpConcat, seqs, backend.ConcatAttrs{Axis: 0})
+	if err != nil {
+		return nil, err
+	}
+	h := packed[0]
+	for _, blk := range m.Blocks {
+		if h, err = blk.forwardBatched(ctx, h, B); err != nil {
+			return nil, err
+		}
+	}
+	if h, err = m.Norm.Forward(ctx, h); err != nil {
+		return nil, err
+	}
+	// Gather each image's [class] row (row b·S) → [B, D] and run the classification head once.
+	clsRows := make([]*tensor.Tensor, B)
+	for b := range B {
+		cr, err := backend.Execute(ctx, backend.OpSlice, []*tensor.Tensor{h},
+			backend.SliceAttrs{Axis: 0, Start: b * S, End: b*S + 1})
+		if err != nil {
+			return nil, err
+		}
+		clsRows[b] = cr[0]
+	}
+	cls, err := backend.Execute(ctx, backend.OpConcat, clsRows, backend.ConcatAttrs{Axis: 0})
+	if err != nil {
+		return nil, err
+	}
+	return m.Head.Forward(ctx, cls[0]) // [B, classes]
 }
 
 // Features returns the encoder's final token representations [N+1, D] for one
@@ -324,6 +381,43 @@ func (m *ViT) forwardOne(ctx *backend.Context, img *tensor.Tensor) (*tensor.Tens
 		return nil, err
 	}
 	return m.Head.Forward(ctx, cls[0]) // [1, classes]
+}
+
+// forwardBatched is vitBlock.forward over a packed [batch·seq, D] batch: identical op sequence, but
+// the attention runs through MHA.ForwardBatched (batched projections, per-sequence SDPA). LN, the MLP
+// GEMMs, GELU and the residual adds are all row-wise, so they operate on the packed matrix unchanged.
+func (b *vitBlock) forwardBatched(ctx *backend.Context, x *tensor.Tensor, batch int) (*tensor.Tensor, error) {
+	h, err := b.ln1.Forward(ctx, x)
+	if err != nil {
+		return nil, err
+	}
+	a, err := b.attn.ForwardBatched(ctx, h, batch)
+	if err != nil {
+		return nil, err
+	}
+	sum, err := backend.Execute(ctx, backend.OpAdd, []*tensor.Tensor{x, a}, nil)
+	if err != nil {
+		return nil, err
+	}
+	x = sum[0]
+	if h, err = b.ln2.Forward(ctx, x); err != nil {
+		return nil, err
+	}
+	if h, err = b.fc1.Forward(ctx, h); err != nil {
+		return nil, err
+	}
+	g, err := backend.Execute(ctx, backend.OpGELU, []*tensor.Tensor{h}, nil)
+	if err != nil {
+		return nil, err
+	}
+	if h, err = b.fc2.Forward(ctx, g[0]); err != nil {
+		return nil, err
+	}
+	sum, err = backend.Execute(ctx, backend.OpAdd, []*tensor.Tensor{x, h}, nil)
+	if err != nil {
+		return nil, err
+	}
+	return sum[0], nil
 }
 
 func (b *vitBlock) forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, error) {
