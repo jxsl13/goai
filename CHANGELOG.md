@@ -4,6 +4,21 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### format/safetensors — independent F16/BF16 reference fixture (T901, §B67, 2026-07-20)
+
+Closes a §B67 blind spot. Every .safetensors fixture in the tree was F32/F64, so GoAI's
+verbatim-U16 read of the half floats — the dtypes real HuggingFace checkpoints actually ship
+in — was verified only by its own writer→reader round-trip, which proves nothing about the
+foreign convention: a wrong byte order, wrong-half, or F16↔BF16 tag mixup would pass the
+round-trip while mis-loading every real checkpoint. `testdata/ref_halffloat.safetensors` is
+now produced by the official torch `safetensors.torch.save_file` (as HF does — numpy has no
+bfloat16), with values exactly representable in both F16 and BF16 so a correct read must
+reproduce them to the bit. `TestLoadHalfFloatReference` asserts that exact equality — a real
+§B68 discriminator, since 1.5 is F16 `0x3E00` and a byte-swap makes it a 3.7e-06 denormal.
+GoAI's read is correct; it was simply untested against a reference-produced file. A single
+metadata key keeps the fixture byte-reproducible (safetensors' Rust HashMap does not preserve
+multi-key order).
+
 ### docs — extend the honest-CPU-matmul note to MHA (T900, 2026-07-20)
 
 Following T897 (matmul): the comparison table's `goai-cpu` MHAForward is the pure-Go default,
