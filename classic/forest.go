@@ -189,12 +189,13 @@ func (m *RandomForestClassifier) Predict(x [][]float64) ([]int, error) {
 		for k := range votes {
 			votes[k] = 0
 		}
+		// Single-row tree walk (tree.root.predict) instead of tree.Predict([][]float64{row}):
+		// avoids the per-(sample,tree) wrapper + result-slice allocation (80001 → 1 alloc
+		// per Predict). NOT parallelized — the per-sample work (a few tree walks) is too
+		// fine-grained, so parallelBuild's per-item channel measured SLOWER than sequential
+		// (§C3: 497µs sequential vs 832µs pooled); parallelism is Fit's lever, not predict's.
 		for _, tree := range m.trees {
-			lab, err := tree.Predict([][]float64{row})
-			if err != nil {
-				return nil, err
-			}
-			votes[pos[lab[0]]]++
+			votes[pos[tree.classes[tree.root.predict(row).predClass]]]++
 		}
 		best, bc := 0, -1
 		for k, v := range votes {
@@ -279,13 +280,11 @@ func (m *RandomForestRegressor) Predict(x [][]float64) ([]float64, error) {
 		if len(row) != m.nFeature {
 			return nil, fmt.Errorf("classic: row %d width %d, want %d", i, len(row), m.nFeature)
 		}
+		// Single-row tree walk avoids the per-(sample,tree) wrapper/result allocation; sum
+		// in tree order and divide by the tree count exactly as before → bit-identical.
 		var s float64
 		for _, tree := range m.trees {
-			v, err := tree.Predict([][]float64{row})
-			if err != nil {
-				return nil, err
-			}
-			s += v[0]
+			s += tree.root.predict(row).value
 		}
 		out[i] = s / float64(len(m.trees))
 	}
