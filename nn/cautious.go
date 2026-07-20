@@ -122,21 +122,45 @@ func (a *CautiousAdamW) Step(grad GradFn) error {
 		n := p.Numel()
 		u := make([]float64, n)  // the adaptive step lr·m̂/(√v̂+ε), pre-mask
 		gg := make([]float64, n) // the gradient, for the alignment test
-		for i := range n {
-			idx := tensor.Unravel(i, p.Shape())
-			gv := g.AtF64(idx...)
-			a.m[pi][i] = a.Beta1*a.m[pi][i] + (1-a.Beta1)*gv
-			a.v[pi][i] = a.Beta2*a.v[pi][i] + (1-a.Beta2)*gv*gv
-			mh := a.m[pi][i] / c1
-			vh := a.v[pi][i] / c2
+		m, v := a.m[pi], a.v[pi]
+		// Build u, gg from the gradient + moments — contiguous fast paths, else the
+		// generic accessor loop (§base-perf: no per-element Unravel/AtF64 dispatch).
+		buildStep := func(gv float64, i int) {
+			m[i] = a.Beta1*m[i] + (1-a.Beta1)*gv
+			v[i] = a.Beta2*v[i] + (1-a.Beta2)*gv*gv
+			mh := m[i] / c1
+			vh := v[i] / c2
 			u[i] = a.LR * mh / (math.Sqrt(vh) + a.Eps)
 			gg[i] = gv
 		}
+		if gf := flatF64(g); gf != nil {
+			for i, gv := range gf {
+				buildStep(gv, i)
+			}
+		} else if gf := flatF32(g); gf != nil {
+			for i := range gf {
+				buildStep(float64(gf[i]), i)
+			}
+		} else {
+			for i := range n {
+				buildStep(g.AtF64(tensor.Unravel(i, g.Shape())...), i)
+			}
+		}
 		CautiousMask(u, gg) // zero anti-descent coords + rescale, in place
-		for i := range n {
-			idx := tensor.Unravel(i, p.Shape())
-			// decoupled weight decay outside the mask, then the masked adaptive step
-			p.SetF64(p.AtF64(idx...)*decay-u[i], idx...)
+		// Apply the decoupled weight decay (outside the mask) then the masked step.
+		if pf := flatF64(p); pf != nil {
+			for i := range pf {
+				pf[i] = pf[i]*decay - u[i]
+			}
+		} else if pf := flatF32(p); pf != nil {
+			for i := range pf {
+				pf[i] = float32(float64(pf[i])*decay - u[i])
+			}
+		} else {
+			for i := range n {
+				idx := tensor.Unravel(i, p.Shape())
+				p.SetF64(p.AtF64(idx...)*decay-u[i], idx...)
+			}
 		}
 	}
 	return nil

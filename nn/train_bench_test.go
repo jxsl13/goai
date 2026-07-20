@@ -270,3 +270,10 @@ func BenchmarkScheduleFreeStepOnly(b *testing.B) {
 func BenchmarkScheduleFreeStepOnlyF32(b *testing.B) {
 	benchStepOnly(b, tensor.F32, func(p []*tensor.Tensor) nn.Optimizer { return nn.NewScheduleFreeAdamW(p, 1e-3) })
 }
+
+func BenchmarkCautiousStepOnly(b *testing.B) {
+	benchStepOnly(b, tensor.F64, func(p []*tensor.Tensor) nn.Optimizer { return nn.NewCautiousAdamW(p, 1e-3) })
+}
+func BenchmarkCautiousStepOnlyF32(b *testing.B) {
+	benchStepOnly(b, tensor.F32, func(p []*tensor.Tensor) nn.Optimizer { return nn.NewCautiousAdamW(p, 1e-3) })
+}

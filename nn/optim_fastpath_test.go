@@ -27,6 +27,7 @@ func TestOptimizerFastPathParity(t *testing.T) {
 		"SOAP":      func(ps []*tensor.Tensor) nn.Optimizer { return nn.NewSOAP(ps, 1e-3) },
 		"Shampoo":   func(ps []*tensor.Tensor) nn.Optimizer { return nn.NewShampoo(ps, 1e-3) },
 		"Sophia":    func(ps []*tensor.Tensor) nn.Optimizer { return nn.NewSophia(ps, 1e-3) },
+		"Cautious":  func(ps []*tensor.Tensor) nn.Optimizer { return nn.NewCautiousAdamW(ps, 1e-3) },
 		"ScheduleFree": func(ps []*tensor.Tensor) nn.Optimizer {
 			return nn.NewScheduleFreeAdamW(ps, 1e-3, nn.WithScheduleFreeWeightDecay(0.01))
 		},
