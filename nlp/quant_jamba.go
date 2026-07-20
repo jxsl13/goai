@@ -41,11 +41,11 @@ import (
 // llama.cpp-quantized checkpoint with [QuantJambaFromGGUF], or quantize a float model
 // with [QuantizeJamba].
 type QuantJamba struct {
-	Config JambaConfig
-	TokEmb *tensor.Tensor // [vocab, dim] f32 token embedding (lookup only)
-	Layers []*QuantJambaLayer
-	Norm   *nn.RMSNorm     // final RMSNorm (f32 gain)
-	Out    *nn.QuantLinear // LM head: quantized token_embd bytes (tied) or output.weight (untied)
+	Config JambaConfig        // geometry and per-layer mixer/FFN pattern (see JambaConfig)
+	TokEmb *tensor.Tensor     // [vocab, dim] f32 token embedding (lookup only)
+	Layers []*QuantJambaLayer // the quantized hybrid attention/Mamba blocks
+	Norm   *nn.RMSNorm        // final RMSNorm (f32 gain)
+	Out    *nn.QuantLinear    // LM head: quantized token_embd bytes (tied) or output.weight (untied)
 }
 
 // QuantJambaLayer is one pre-norm hybrid block, the quantized twin of [JambaLayer]:

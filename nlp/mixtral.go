@@ -16,22 +16,22 @@ import (
 // modern MoE counterpart to the dense Llama FFN; load a Hugging Face checkpoint
 // with [MixtralFromHF].
 type Mixtral struct {
-	Config MixtralConfig
-	TokEmb *tensor.Tensor
-	Blocks []*MixtralBlock
-	Norm   *nn.RMSNorm
-	Out    *tensor.Tensor // [dim, vocab] output projection
+	Config MixtralConfig   // geometry: dims, heads, expert count (see MixtralConfig)
+	TokEmb *tensor.Tensor  // [vocab, dim] token embedding
+	Blocks []*MixtralBlock // the attention + sparse-MoE blocks
+	Norm   *nn.RMSNorm     // final pre-logits RMSNorm (model.norm)
+	Out    *tensor.Tensor  // [dim, vocab] output projection
 }
 
 // MixtralConfig fixes the model geometry. Dim, Vocab, Layers, Hidden, Experts are
 // inferred from the checkpoint by MixtralFromHF; the rest come from config.json.
 type MixtralConfig struct {
-	Vocab    int
-	Ctx      int
-	Dim      int
-	Heads    int
-	KVHeads  int // GQA; 0 → Heads
-	Layers   int
+	Vocab    int     // vocabulary size
+	Ctx      int     // maximum context length in tokens
+	Dim      int     // embedding width (hidden_size)
+	Heads    int     // query heads (num_attention_heads)
+	KVHeads  int     // GQA; 0 → Heads
+	Layers   int     // number of decoder layers
 	Hidden   int     // per-expert SwiGLU inner width
 	Experts  int     // number of experts (num_local_experts)
 	TopK     int     // experts per token (num_experts_per_tok); 0 → 2
@@ -43,11 +43,11 @@ type MixtralConfig struct {
 // QNorm/KNorm are optional per-head query/key RMSNorms applied before RoPE — nil for
 // plain Mixtral, non-nil for Qwen3-MoE (see [Qwen3MoeFromHF]).
 type MixtralBlock struct {
-	AttnNorm       *nn.RMSNorm
-	Wq, Wk, Wv, Wo *tensor.Tensor
-	QNorm, KNorm   *nn.RMSNorm // optional per-head QK-norm before RoPE (Qwen3-MoE); nil otherwise
-	FFNNorm        *nn.RMSNorm
-	MoE            *nn.SparseMoE
+	AttnNorm       *nn.RMSNorm    // RMSNorm before attention (input_layernorm)
+	Wq, Wk, Wv, Wo *tensor.Tensor // bias-free attention projections (q/k/v/o)
+	QNorm, KNorm   *nn.RMSNorm    // optional per-head QK-norm before RoPE (Qwen3-MoE); nil otherwise
+	FFNNorm        *nn.RMSNorm    // RMSNorm before the MoE FFN (post_attention_layernorm)
+	MoE            *nn.SparseMoE  // sparse top-k SwiGLU expert bank
 }
 
 func (c MixtralConfig) kvHeads() int {

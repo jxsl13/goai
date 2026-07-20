@@ -33,9 +33,9 @@ import (
 // x += ffn(pre_ff_layernorm(x)); final RMSNorm and an untied LM head finish the
 // stack. Load a Hugging Face JambaForCausalLM checkpoint with [JambaFromHF].
 type Jamba struct {
-	Config JambaConfig
+	Config JambaConfig    // geometry and the per-layer mixer/FFN pattern (see JambaConfig)
 	TokEmb *tensor.Tensor // token embedding [vocab, dim]
-	Layers []*JambaLayer
+	Layers []*JambaLayer  // the hybrid attention/Mamba + MoE/dense blocks
 	Norm   *nn.RMSNorm    // model.final_layernorm
 	Out    *tensor.Tensor // [dim, vocab] untied LM head (embedding transpose when tied)
 }
@@ -44,11 +44,11 @@ type Jamba struct {
 // per-layer types are inferred from the checkpoint by [JambaFromHF]; Heads,
 // TopK and Eps come from config.json (TopK defaults to 2, Eps to 1e-6).
 type JambaConfig struct {
-	Vocab   int
-	Dim     int
-	Heads   int // num_attention_heads (attention layers)
-	KVHeads int // num_key_value_heads (GQA); 0 → Heads
-	Layers  int
+	Vocab   int     // vocabulary size
+	Dim     int     // embedding width (hidden_size)
+	Heads   int     // num_attention_heads (attention layers)
+	KVHeads int     // num_key_value_heads (GQA); 0 → Heads
+	Layers  int     // number of hybrid blocks
 	TopK    int     // num_experts_per_tok on MoE layers; 0 → 2
 	Eps     float64 // rms_norm_eps
 }
@@ -80,8 +80,8 @@ type JambaAttention struct {
 // semantics; Forward re-wires the same ops with the norms inserted, mirroring
 // transformers' JambaMambaMixer.slow_forward.
 type JambaMixer struct {
-	Block                *nn.MambaBlock
-	DtNorm, BNorm, CNorm *nn.RMSNorm // RMSNorms on Δ_low [dt_rank], B [N], C [N]
+	Block                *nn.MambaBlock // shared Mamba weights (in/x/dt/out projections, conv, A/D)
+	DtNorm, BNorm, CNorm *nn.RMSNorm    // RMSNorms on Δ_low [dt_rank], B [N], C [N]
 }
 
 // Forward runs the mixer on u[L, dim]: in_proj split → causal depthwise conv +

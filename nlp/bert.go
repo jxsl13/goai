@@ -21,12 +21,12 @@ import (
 //
 // Load a Hugging Face checkpoint with [BertFromHF].
 type Bert struct {
-	Config BertConfig
+	Config BertConfig     // encoder geometry: width, heads, layers (see BertConfig)
 	TokEmb *tensor.Tensor // [vocab, dim]
 	PosEmb *tensor.Tensor // [maxPos, dim]
 	SegEmb *tensor.Tensor // [typeVocab, dim]
 	EmbLN  *nn.LayerNorm  // LayerNorm over the summed embeddings
-	Layers []*BertLayer
+	Layers []*BertLayer   // the post-LN encoder layers
 }
 
 // BertConfig fixes the encoder geometry.

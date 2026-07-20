@@ -41,11 +41,11 @@ import (
 // Load a llama.cpp-quantized checkpoint with [QuantStableLMFromGGUF], or quantize a
 // float model with [QuantizeStableLM].
 type QuantStableLM struct {
-	Config StableLMConfig
-	TokEmb *tensor.Tensor // [vocab, dim] f32 token embedding (lookup only)
-	Blocks []*QuantStableLMBlock
-	Norm   *nn.LayerNorm   // final pre-logits LayerNorm (f32 γ+β)
-	Out    *nn.QuantLinear // untied LM head (output.weight, required)
+	Config StableLMConfig        // model geometry, shared with float StableLM (see StableLMConfig)
+	TokEmb *tensor.Tensor        // [vocab, dim] f32 token embedding (lookup only)
+	Blocks []*QuantStableLMBlock // the quantized StableLM blocks
+	Norm   *nn.LayerNorm         // final pre-logits LayerNorm (f32 γ+β)
+	Out    *nn.QuantLinear       // untied LM head (output.weight, required)
 }
 
 // QuantStableLMBlock is one sequential-residual QuantStableLM block: f32 full

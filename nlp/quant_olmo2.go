@@ -44,11 +44,11 @@ import (
 // Load a llama.cpp-quantized checkpoint with [QuantOLMo2FromGGUF], or quantize a float
 // model with [QuantizeOLMo2].
 type QuantOLMo2 struct {
-	Config OLMo2Config
-	TokEmb *tensor.Tensor // [vocab, dim] f32 token embedding (lookup only)
-	Blocks []*QuantOLMo2Block
-	Norm   *nn.RMSNorm     // final pre-logits RMSNorm (f32 gain)
-	Out    *nn.QuantLinear // untied LM head (output.weight, required)
+	Config OLMo2Config        // model geometry, shared with float OLMo2 (see OLMo2Config)
+	TokEmb *tensor.Tensor     // [vocab, dim] f32 token embedding (lookup only)
+	Blocks []*QuantOLMo2Block // the quantized OLMo2 blocks
+	Norm   *nn.RMSNorm        // final pre-logits RMSNorm (f32 gain)
+	Out    *nn.QuantLinear    // untied LM head (output.weight, required)
 }
 
 // QuantOLMo2Block is one post-norm QuantOLMo2 block: quantized bias-free attention

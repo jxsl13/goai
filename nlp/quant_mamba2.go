@@ -48,11 +48,11 @@ import (
 // llama.cpp-quantized checkpoint with [QuantMamba2FromGGUF], or quantize a
 // float model with [QuantizeMamba2].
 type QuantMamba2 struct {
-	Config Mamba2Config
-	Embed  *tensor.Tensor // [vocab, d_model] f32 embedding table (lookup only)
-	Layers []QuantMamba2Layer
-	Norm   *nn.RMSNorm     // final RMSNorm (f32 gain)
-	Head   *nn.QuantLinear // LM head: quantized token_embd bytes (tied) or output.weight (untied)
+	Config Mamba2Config       // checkpoint dimensions (see Mamba2Config)
+	Embed  *tensor.Tensor     // [vocab, d_model] f32 embedding table (lookup only)
+	Layers []QuantMamba2Layer // the quantized SSD blocks
+	Norm   *nn.RMSNorm        // final RMSNorm (f32 gain)
+	Head   *nn.QuantLinear    // LM head: quantized token_embd bytes (tied) or output.weight (untied)
 }
 
 // QuantMamba2Layer is one residual block: f32 pre-norm then the quantized SSD
@@ -80,13 +80,13 @@ type QuantMamba2Mixer struct {
 	NormW   *tensor.Tensor  // [intermediate] gated-RMSNorm gain (f32)
 	OutProj *nn.QuantLinear // intermediate → d_model
 
-	DModel       int
-	NumHeads     int
-	HeadDim      int
-	NGroups      int
-	N            int
-	DConv        int
-	Intermediate int
+	DModel       int     // hidden_size (model/embedding width)
+	NumHeads     int     // num_heads (each with a scalar decay A[h])
+	HeadDim      int     // head_dim; Intermediate = NumHeads·HeadDim
+	NGroups      int     // n_groups (heads sharing a B/C)
+	N            int     // state_size (SSM state dimension per head)
+	DConv        int     // conv_kernel (depthwise causal-conv width)
+	Intermediate int     // conv/SSM inner width (NumHeads·HeadDim)
 	ConvDim      int     // intermediate + 2·n_groups·N
 	Eps          float64 // gated-norm epsilon
 }

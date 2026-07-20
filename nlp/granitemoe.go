@@ -27,23 +27,23 @@ import (
 // Real GraniteMoE checkpoints set these ≠ 1; each is composed with the sparse MoE below.
 // Load a Hugging Face checkpoint with [GraniteMoeFromHF].
 type GraniteMoE struct {
-	Config GraniteMoeConfig
-	TokEmb *tensor.Tensor // [vocab, dim] token embedding
-	Blocks []*GraniteMoeBlock
-	Norm   *nn.RMSNorm    // final pre-logits RMSNorm
-	Out    *tensor.Tensor // [dim, vocab] output projection (untied)
+	Config GraniteMoeConfig   // geometry and Granite scalar multipliers (see GraniteMoeConfig)
+	TokEmb *tensor.Tensor     // [vocab, dim] token embedding
+	Blocks []*GraniteMoeBlock // the attention + sparse-MoE blocks
+	Norm   *nn.RMSNorm        // final pre-logits RMSNorm
+	Out    *tensor.Tensor     // [dim, vocab] output projection (untied)
 }
 
 // GraniteMoeConfig fixes the model geometry. Dim, Vocab, Layers, Hidden and Experts are
 // inferred from the checkpoint by [GraniteMoeFromHF]; the rest come from config.json,
 // including Granite's four scalar multipliers.
 type GraniteMoeConfig struct {
-	Vocab    int
-	Ctx      int
-	Dim      int
-	Heads    int
-	KVHeads  int // GQA; 0 → Heads
-	Layers   int
+	Vocab    int     // vocabulary size
+	Ctx      int     // maximum context length in tokens
+	Dim      int     // embedding width (hidden_size)
+	Heads    int     // query heads (num_attention_heads)
+	KVHeads  int     // GQA; 0 → Heads
+	Layers   int     // number of decoder layers
 	Hidden   int     // per-expert SwiGLU inner width (intermediate_size)
 	Experts  int     // number of experts (num_local_experts)
 	TopK     int     // experts per token (num_experts_per_tok); 0 → 2
@@ -63,10 +63,10 @@ type GraniteMoeConfig struct {
 // QK-norm) followed by a sparse-MoE FFN. The Granite scalars live in the enclosing
 // [GraniteMoeConfig] and are applied by Forward/DecodeStep, not stored per-block.
 type GraniteMoeBlock struct {
-	AttnNorm       *nn.RMSNorm
-	Wq, Wk, Wv, Wo *tensor.Tensor
-	FFNNorm        *nn.RMSNorm
-	MoE            *nn.SparseMoE
+	AttnNorm       *nn.RMSNorm    // RMSNorm before attention (input_layernorm)
+	Wq, Wk, Wv, Wo *tensor.Tensor // bias-free attention projections (q/k/v/o)
+	FFNNorm        *nn.RMSNorm    // RMSNorm before the MoE FFN (post_attention_layernorm)
+	MoE            *nn.SparseMoE  // sparse top-k SwiGLU expert bank
 }
 
 func (c GraniteMoeConfig) kvHeads() int {

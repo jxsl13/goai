@@ -23,9 +23,9 @@ import (
 // [Mamba2Mixer] is the only sequence-mixing primitive. Build one from a checkpoint
 // with [Mamba2FromHF].
 type Mamba2 struct {
-	Config Mamba2Config
+	Config Mamba2Config   // checkpoint dimensions (see Mamba2Config)
 	Embed  *tensor.Tensor // token embedding [vocab, d_model]; tied LM head is its transpose
-	Layers []Mamba2Layer
+	Layers []Mamba2Layer  // the SSD residual blocks
 	Norm   *nn.RMSNorm    // final RMSNorm (backbone.norm_f)
 	Head   *tensor.Tensor // [d_model, vocab] = Embedᵀ (tied); logits = hidden · Head
 }
@@ -131,13 +131,13 @@ type Mamba2Mixer struct {
 	NormW   *tensor.Tensor // [intermediate] gated-RMSNorm weight
 	OutProj *tensor.Tensor // [d_model, intermediate] (torch orientation)
 
-	DModel       int
-	NumHeads     int
-	HeadDim      int
-	NGroups      int
-	N            int
-	DConv        int
-	Intermediate int
+	DModel       int     // hidden_size (model/embedding width)
+	NumHeads     int     // num_heads (each with a scalar decay A[h])
+	HeadDim      int     // head_dim; Intermediate = NumHeads·HeadDim
+	NGroups      int     // n_groups (heads sharing a B/C)
+	N            int     // state_size (SSM state dimension per head)
+	DConv        int     // conv_kernel (depthwise causal-conv width)
+	Intermediate int     // conv/SSM inner width (NumHeads·HeadDim)
 	ConvDim      int     // intermediate + 2·n_groups·N
 	Eps          float64 // gated-norm epsilon
 }

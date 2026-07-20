@@ -59,11 +59,11 @@ import (
 // bypass the tape. Load a llama.cpp-quantized checkpoint with
 // [QuantDeepSeekV2FromGGUF], or quantize a float model with [QuantizeDeepSeekV2].
 type QuantDeepSeekV2 struct {
-	Config DeepSeekV2Config
-	TokEmb *tensor.Tensor // [vocab, dim] f32 token embedding (lookup only)
-	Blocks []*QuantDeepSeekV2Block
-	Norm   *nn.RMSNorm     // final pre-logits RMSNorm (f32 gain)
-	Out    *nn.QuantLinear // LM head (In=dim, Out=vocab); untied output.weight or tied token_embd bytes
+	Config DeepSeekV2Config        // MLA + DeepSeekMoE geometry, shared with float model (see DeepSeekV2Config)
+	TokEmb *tensor.Tensor          // [vocab, dim] f32 token embedding (lookup only)
+	Blocks []*QuantDeepSeekV2Block // the quantized MLA + FFN blocks
+	Norm   *nn.RMSNorm             // final pre-logits RMSNorm (f32 gain)
+	Out    *nn.QuantLinear         // LM head (In=dim, Out=vocab); untied output.weight or tied token_embd bytes
 }
 
 // QuantDeepSeekV2Block is one MLA + FFN block with quantized projections. The

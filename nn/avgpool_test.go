@@ -166,7 +166,7 @@ func TestAvgPool2DBatchAndChannelsIndependent(t *testing.T) {
 // Every backend must agree bit-for-bit with the cpu path (§V3/§V11 tol 0).
 func TestAvgPool2DBackendParity(t *testing.T) {
 	ctxs := avgPoolContexts(t)
-	cpu, ok := ctxs["cpu"]
+	cpu, ok := ctxs[string(backend.CPU)]
 	if !ok {
 		t.Skip("no cpu backend to use as reference")
 	}
@@ -177,7 +177,7 @@ func TestAvgPool2DBackendParity(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, ctx := range ctxs {
-		if name == "cpu" {
+		if name == string(backend.CPU) {
 			continue
 		}
 		t.Run(name, func(t *testing.T) {

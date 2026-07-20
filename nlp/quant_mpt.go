@@ -39,11 +39,11 @@ import (
 // Load a llama.cpp-quantized checkpoint with [QuantMPTFromGGUF], or quantize a float
 // model with [QuantizeMPT].
 type QuantMPT struct {
-	Config    MPTConfig
-	TokEmb    *tensor.Tensor // [vocab, dim] f32 DEQUANTIZED embedding table (lookup only)
-	Blocks    []*QuantMPTBlock
-	FinalNorm *nn.LayerNorm   // norm_f: weight-only (f32 γ, zero β)
-	Out       *nn.QuantLinear // tied LM head: the quantized token_embd bytes (or an untied output.weight)
+	Config    MPTConfig        // model geometry, shared with float MPT (see MPTConfig)
+	TokEmb    *tensor.Tensor   // [vocab, dim] f32 DEQUANTIZED embedding table (lookup only)
+	Blocks    []*QuantMPTBlock // the quantized MPT blocks
+	FinalNorm *nn.LayerNorm    // norm_f: weight-only (f32 γ, zero β)
+	Out       *nn.QuantLinear  // tied LM head: the quantized token_embd bytes (or an untied output.weight)
 }
 
 // QuantMPTBlock is one sequential-residual QuantMPT block: f32 weight-only LayerNorms

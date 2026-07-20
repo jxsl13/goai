@@ -17,12 +17,12 @@ import (
 // decoder's final hidden states, which a tied [T5Decoder.Shared] head turns into
 // logits.
 type T5Decoder struct {
-	Config    T5Config
+	Config    T5Config           // shared T5 encoder/decoder geometry (see T5Config)
 	Shared    *tensor.Tensor     // [vocab, dim] tied token embedding
 	RelBias   *nn.T5RelativeBias // causal (unidirectional) relative-position bias
-	Blocks    []*T5DecoderBlock
-	FinalNorm *nn.RMSNorm
-	LMHead    *tensor.Tensor // [dim, vocab] output head (tied models: sharedᵀ·d_model^-0.5)
+	Blocks    []*T5DecoderBlock  // the self-attn + cross-attn + FFN decoder blocks
+	FinalNorm *nn.RMSNorm        // final RMSNorm (decoder.final_layer_norm)
+	LMHead    *tensor.Tensor     // [dim, vocab] output head (tied models: sharedᵀ·d_model^-0.5)
 }
 
 // Logits maps decoder hidden states [dec, dim] (from [T5Decoder.Decode]) to
@@ -37,12 +37,12 @@ func (d *T5Decoder) Logits(ctx *backend.Context, hidden *tensor.Tensor) (*tensor
 
 // T5DecoderBlock is one decoder block: self-attn, cross-attn, FFN.
 type T5DecoderBlock struct {
-	SelfNorm           *nn.RMSNorm
+	SelfNorm           *nn.RMSNorm    // RMSNorm before self-attention
 	SWq, SWk, SWv, SWo *tensor.Tensor // causal self-attention
-	CrossNorm          *nn.RMSNorm
+	CrossNorm          *nn.RMSNorm    // RMSNorm before cross-attention
 	CWq, CWk, CWv, CWo *tensor.Tensor // cross-attention over encoder output
-	FFNNorm            *nn.RMSNorm
-	Wi0, WOut          *tensor.Tensor
+	FFNNorm            *nn.RMSNorm    // RMSNorm before the FFN
+	Wi0, WOut          *tensor.Tensor // FFN up (wi_0) and down (wo) projections
 	Wi1                *tensor.Tensor // gated FFN up (nil → ReLU)
 }
 

@@ -20,9 +20,9 @@ import (
 // the mixer is the only sequence-mixing primitive. Build one from a checkpoint
 // with [MambaFromHF].
 type Mamba struct {
-	Config MambaConfig
+	Config MambaConfig    // checkpoint dimensions (see MambaConfig)
 	Embed  *tensor.Tensor // token embedding [vocab, d_model]; tied LM head is its transpose
-	Layers []MambaLayer
+	Layers []MambaLayer   // the selective-scan residual blocks
 	Norm   *nn.RMSNorm    // final RMSNorm (backbone.norm_f)
 	Head   *tensor.Tensor // [d_model, vocab] = Embedᵀ (tied); logits = hidden · Head
 }

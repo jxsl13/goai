@@ -84,7 +84,7 @@ type JSpaceDecomposition struct {
 	// accepted component (ResidualNorm == InputNorm when nothing was
 	// accepted).
 	InputNorm    float64
-	ResidualNorm float64
+	ResidualNorm float64 // ‖residual‖ after the final accepted component (== InputNorm if none accepted)
 	// ResidualCurve holds ‖residual‖ after each accepted pursuit step
 	// (strictly decreasing; one entry per accepted step, which can exceed
 	// len(Components) when a direction was re-selected and merged).

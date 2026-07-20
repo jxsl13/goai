@@ -15,10 +15,10 @@ import (
 // header — dtype, shape and the size of its data section — without the data
 // itself.
 type TensorInfo struct {
-	Name   string
-	Dtype  tensor.Dtype
-	Shape  tensor.Shape
-	NBytes int64 // length of this tensor's byte range in the file
+	Name   string       // tensor name — the safetensors header key
+	Dtype  tensor.Dtype // element type (F32/F64/F16/BF16/…)
+	Shape  tensor.Shape // logical shape, row-major
+	NBytes int64        // length of this tensor's byte range in the file
 }
 
 // Names reads only the header of a safetensors file and returns a descriptor for

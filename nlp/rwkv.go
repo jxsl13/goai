@@ -24,7 +24,7 @@ import (
 // LayerNorm (rwkv.ln_out) → an UNTIED linear head (head.weight). Build one from
 // a checkpoint with [RWKVFromHF].
 type RWKV struct {
-	Config RWKVConfig
+	Config RWKVConfig      // checkpoint dimensions (see RWKVConfig)
 	Embed  *tensor.Tensor  // token embedding [vocab, dim]
 	PreLN  *nn.LayerNorm   // block-0 pre-norm (rwkv.blocks.0.pre_ln / "ln0")
 	Blocks []*nn.RWKVBlock // the L time-mix + channel-mix layers

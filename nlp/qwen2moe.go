@@ -36,7 +36,7 @@ import (
 // norm_topk_prob=True. A norm_topk_prob=False checkpoint routes to the same experts but
 // weights them un-renormalized and so would NOT match this loader.
 type Qwen2MoE struct {
-	Config Qwen2MoeConfig
+	Config Qwen2MoeConfig   // geometry incl. shared+routed experts (see Qwen2MoeConfig)
 	TokEmb *tensor.Tensor   // [vocab, dim] token embedding (model.embed_tokens)
 	Blocks []*Qwen2MoeBlock // stacked pre-norm transformer blocks
 	Norm   *nn.RMSNorm      // final pre-logits RMSNorm (model.norm)

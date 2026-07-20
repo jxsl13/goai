@@ -32,11 +32,11 @@ import (
 // Load a llama.cpp-quantized checkpoint with [QuantFalconFromGGUF], or quantize a
 // float model with [QuantizeFalcon].
 type QuantFalcon struct {
-	Config    FalconConfig
-	TokEmb    *tensor.Tensor // [vocab, dim] f32 token embedding (lookup only)
-	Blocks    []*QuantFalconBlock
-	FinalNorm *nn.LayerNorm   // ln_f (f32 γ+β)
-	Out       *nn.QuantLinear // LM head (untied output.weight, or the tied token_embd bytes)
+	Config    FalconConfig        // model geometry, shared with float Falcon (see FalconConfig)
+	TokEmb    *tensor.Tensor      // [vocab, dim] f32 token embedding (lookup only)
+	Blocks    []*QuantFalconBlock // the quantized Falcon blocks
+	FinalNorm *nn.LayerNorm       // ln_f (f32 γ+β)
+	Out       *nn.QuantLinear     // LM head (untied output.weight, or the tied token_embd bytes)
 }
 
 // QuantFalconBlock is one SINGLE-NORM parallel-residual QuantFalcon block: ONE f32

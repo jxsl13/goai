@@ -43,11 +43,11 @@ import (
 // Load a llama.cpp-quantized checkpoint with [QuantCohereFromGGUF], or quantize a float
 // model with [QuantizeCohere].
 type QuantCohere struct {
-	Config CohereConfig
-	TokEmb *tensor.Tensor // [vocab, dim] f32 DEQUANTIZED embedding table (lookup only)
-	Blocks []*QuantCohereBlock
-	Norm   *nn.LayerNorm   // final pre-logits LayerNorm (f32 γ, zero β — weight-only)
-	Out    *nn.QuantLinear // tied LM head: the quantized token_embd bytes, In=dim Out=vocab
+	Config CohereConfig        // model geometry, shared with float Cohere (see CohereConfig)
+	TokEmb *tensor.Tensor      // [vocab, dim] f32 DEQUANTIZED embedding table (lookup only)
+	Blocks []*QuantCohereBlock // the quantized parallel-residual Cohere blocks
+	Norm   *nn.LayerNorm       // final pre-logits LayerNorm (f32 γ, zero β — weight-only)
+	Out    *nn.QuantLinear     // tied LM head: the quantized token_embd bytes, In=dim Out=vocab
 }
 
 // QuantCohereBlock is one parallel-residual QuantCohere block: the single f32

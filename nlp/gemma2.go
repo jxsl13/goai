@@ -36,10 +36,10 @@ import (
 // [Gemma], GoAI's exact-erf OpGELU vs Gemma's tanh-approx gelu_pytorch_tanh leaves a
 // small approximation residual, bounded by the parity test.
 type Gemma2 struct {
-	Config    Gemma2Config
+	Config    Gemma2Config   // model geometry plus the soft-cap/scalar knobs (see Gemma2Config)
 	TokEmb    *tensor.Tensor // [vocab, dim] tied token embedding
-	Blocks    []*Gemma2Block
-	FinalNorm *nn.RMSNorm
+	Blocks    []*Gemma2Block // the stacked Gemma 2 blocks (sandwich norms)
+	FinalNorm *nn.RMSNorm    // final pre-logits RMSNorm (model.norm)
 
 	outT *tensor.Tensor // cached [dim, vocab] tied-head transpose (see tiedHead)
 }
@@ -63,13 +63,13 @@ func (m *Gemma2) RefreshTiedHead() { m.outT = nil }
 // config.json. QueryPreAttnScalar, AttnLogitCap and FinalLogitCap are the three
 // Gemma 2-specific scalars; leaving a cap ≤ 0 disables that soft-cap.
 type Gemma2Config struct {
-	Vocab    int
-	Ctx      int
-	Dim      int // d_model (embedding width)
-	Heads    int // query heads
-	KVHeads  int // key/value heads (GQA); 0 → Heads
-	HeadDim  int // per-head width (may differ from Dim/Heads)
-	Layers   int
+	Vocab    int     // vocabulary size
+	Ctx      int     // maximum context length in tokens
+	Dim      int     // d_model (embedding width)
+	Heads    int     // query heads
+	KVHeads  int     // key/value heads (GQA); 0 → Heads
+	HeadDim  int     // per-head width (may differ from Dim/Heads)
+	Layers   int     // number of decoder layers
 	FFN      int     // GeGLU inner width
 	Eps      float64 // RMSNorm epsilon
 	RopeBase float64 // RoPE θ; 0 → 10000

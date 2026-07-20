@@ -32,11 +32,11 @@ import (
 // Load a llama.cpp-quantized checkpoint with [QuantGemmaFromGGUF], or quantize a float
 // model with [QuantizeGemma].
 type QuantGemma struct {
-	Config    GemmaConfig
-	TokEmb    *tensor.Tensor // [vocab, dim] f32 DEQUANTIZED embedding table (lookup only)
-	Blocks    []*QuantGemmaBlock
-	FinalNorm *nn.RMSNorm     // final pre-logits RMSNorm (f32 gain, +1 pre-folded)
-	Out       *nn.QuantLinear // tied LM head: the quantized token_embd bytes, In=dim Out=vocab
+	Config    GemmaConfig        // model geometry, shared with float Gemma (see GemmaConfig)
+	TokEmb    *tensor.Tensor     // [vocab, dim] f32 DEQUANTIZED embedding table (lookup only)
+	Blocks    []*QuantGemmaBlock // the quantized pre-norm Gemma blocks
+	FinalNorm *nn.RMSNorm        // final pre-logits RMSNorm (f32 gain, +1 pre-folded)
+	Out       *nn.QuantLinear    // tied LM head: the quantized token_embd bytes, In=dim Out=vocab
 }
 
 // QuantGemmaBlock is one pre-norm QuantGemma block: f32 RMSNorm gains (already carrying

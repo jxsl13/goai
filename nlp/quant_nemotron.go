@@ -42,11 +42,11 @@ import (
 // Load a llama.cpp-quantized checkpoint with [QuantNemotronFromGGUF], or quantize a
 // float model with [QuantizeNemotron].
 type QuantNemotron struct {
-	Config NemotronConfig
-	TokEmb *tensor.Tensor // [vocab, dim] f32 token embedding (lookup only)
-	Blocks []*QuantNemotronBlock
-	Norm   *nn.LayerNorm   // final LayerNorm1P (f32 γ=1+w folded, β)
-	Out    *nn.QuantLinear // untied LM head (output.weight, required)
+	Config NemotronConfig        // model geometry, shared with float Nemotron (see NemotronConfig)
+	TokEmb *tensor.Tensor        // [vocab, dim] f32 token embedding (lookup only)
+	Blocks []*QuantNemotronBlock // the quantized Nemotron blocks
+	Norm   *nn.LayerNorm         // final LayerNorm1P (f32 γ=1+w folded, β)
+	Out    *nn.QuantLinear       // untied LM head (output.weight, required)
 }
 
 // QuantNemotronBlock is one sequential-residual QuantNemotron block: f32 LayerNorm1P

@@ -29,11 +29,11 @@ import (
 // Load a llama.cpp-quantized checkpoint with [QuantMixtralFromGGUF], or quantize a
 // float model with [QuantizeMixtral].
 type QuantMixtral struct {
-	Config MixtralConfig
-	TokEmb *tensor.Tensor // [vocab, dim] f32 token embedding (lookup only)
-	Blocks []*QuantMixtralBlock
-	Norm   *nn.RMSNorm     // final pre-logits RMSNorm (f32 gain)
-	Out    *nn.QuantLinear // quantized output projection (In=dim, Out=vocab)
+	Config MixtralConfig        // geometry: dims, heads, expert count (see MixtralConfig)
+	TokEmb *tensor.Tensor       // [vocab, dim] f32 token embedding (lookup only)
+	Blocks []*QuantMixtralBlock // the quantized attention + sparse-MoE blocks
+	Norm   *nn.RMSNorm          // final pre-logits RMSNorm (f32 gain)
+	Out    *nn.QuantLinear      // quantized output projection (In=dim, Out=vocab)
 }
 
 // QuantMixtralBlock is one pre-norm QuantMixtral block: f32 RMSNorm gains, quantized

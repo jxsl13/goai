@@ -525,6 +525,9 @@ func gbmWidthCheck(x [][]float64, nFeat int, who string) error {
 	return nil
 }
 
+// Predict returns the boosted model's prediction F(x) = F_0 + lr·Σ_m h_m(x) for
+// each row of x (the additive stagewise model of [GradientBoostingRegressor.Fit]).
+// It errors if a row's width differs from the feature count seen at Fit.
 func (m *GradientBoostingRegressor) Predict(x [][]float64) ([]float64, error) {
 	if !m.fitted {
 		return nil, fmt.Errorf("classic: GradientBoostingRegressor.Predict before Fit")

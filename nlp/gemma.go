@@ -24,10 +24,10 @@ import (
 // OpGELU is the exact erf GELU, so loaded logits carry a small approximation
 // residual (as with T5 v1.1), documented and bounded by the parity test.
 type Gemma struct {
-	Config    GemmaConfig
+	Config    GemmaConfig    // model geometry: width, heads, head_dim, layers (see GemmaConfig)
 	TokEmb    *tensor.Tensor // [vocab, dim] tied token embedding
-	Blocks    []*GemmaBlock
-	FinalNorm *nn.RMSNorm
+	Blocks    []*GemmaBlock  // the stacked pre-norm Gemma blocks
+	FinalNorm *nn.RMSNorm    // final pre-logits RMSNorm (model.norm)
 
 	outT *tensor.Tensor // cached [dim, vocab] tied-head transpose (see tiedHead)
 }
@@ -53,13 +53,13 @@ func (m *Gemma) RefreshTiedHead() { m.outT = nil }
 // inferred from the checkpoint by GemmaFromHF; Heads/KVHeads/Eps/RopeBase/Ctx come
 // from config.json.
 type GemmaConfig struct {
-	Vocab    int
-	Ctx      int
-	Dim      int // d_model (embedding width)
-	Heads    int // query heads
-	KVHeads  int // key/value heads (GQA); 0 → Heads
-	HeadDim  int // per-head width (may differ from Dim/Heads)
-	Layers   int
+	Vocab    int     // vocabulary size
+	Ctx      int     // maximum context length in tokens
+	Dim      int     // d_model (embedding width)
+	Heads    int     // query heads
+	KVHeads  int     // key/value heads (GQA); 0 → Heads
+	HeadDim  int     // per-head width (may differ from Dim/Heads)
+	Layers   int     // number of decoder layers
 	FFN      int     // GeGLU inner width
 	Eps      float64 // RMSNorm epsilon
 	RopeBase float64 // RoPE θ; 0 → 10000
@@ -68,10 +68,10 @@ type GemmaConfig struct {
 // GemmaBlock is one pre-norm Gemma block. The RMSNorm gains already carry the +1
 // offset (folded at load), so nn.RMSNorm applies Gemma's (1+w) directly.
 type GemmaBlock struct {
-	AttnNorm       *nn.RMSNorm
+	AttnNorm       *nn.RMSNorm    // RMSNorm before attention (input_layernorm)
 	Wq, Wk, Wv, Wo *tensor.Tensor // [dim, heads·head_dim] … [heads·head_dim, dim]
-	FFNNorm        *nn.RMSNorm
-	FFN            *nn.GLU // GeGLU
+	FFNNorm        *nn.RMSNorm    // RMSNorm before the FFN (post_attention_layernorm)
+	FFN            *nn.GLU        // GeGLU
 }
 
 func (c GemmaConfig) kvHeads() int {

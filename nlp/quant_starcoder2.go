@@ -32,11 +32,11 @@ import (
 // Load a llama.cpp-quantized checkpoint with [QuantStarCoder2FromGGUF], or quantize a
 // float model with [QuantizeStarCoder2].
 type QuantStarCoder2 struct {
-	Config StarCoder2Config
-	TokEmb *tensor.Tensor // [vocab, dim] f32 token embedding (lookup only)
-	Blocks []*QuantStarCoder2Block
-	Norm   *nn.LayerNorm   // final pre-logits LayerNorm (f32 γ+β)
-	Out    *nn.QuantLinear // LM head (untied output.weight, or the tied token_embd bytes)
+	Config StarCoder2Config        // model geometry, shared with float StarCoder2 (see StarCoder2Config)
+	TokEmb *tensor.Tensor          // [vocab, dim] f32 token embedding (lookup only)
+	Blocks []*QuantStarCoder2Block // the quantized StarCoder2 blocks
+	Norm   *nn.LayerNorm           // final pre-logits LayerNorm (f32 γ+β)
+	Out    *nn.QuantLinear         // LM head (untied output.weight, or the tied token_embd bytes)
 }
 
 // QuantStarCoder2Block is one sequential-residual QuantStarCoder2 block: f32 full

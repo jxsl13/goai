@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"testing"
 
+	"github.com/jxsl13/goai/backend"
 	"github.com/jxsl13/goai/format/pytorch"
 )
 
@@ -123,7 +124,7 @@ func hostileShapePickle(shape []int64, stride []int64, storageNumel int) []byte 
 	pBinUnicode(&b, "storage")
 	b.WriteString("ctorch\nFloatStorage\n")
 	pBinUnicode(&b, "0")
-	pBinUnicode(&b, "cpu")
+	pBinUnicode(&b, string(backend.CPU))
 	b.WriteByte('K')
 	b.WriteByte(byte(storageNumel))
 	b.WriteByte('t') // TUPLE

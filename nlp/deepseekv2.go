@@ -40,11 +40,11 @@ import (
 // Pre-norm RMSNorm blocks with sequential Llama-style residuals; final model.norm and an
 // UNTIED lm_head. Load a Hugging Face DeepseekV2ForCausalLM checkpoint with [DeepSeekV2FromHF].
 type DeepSeekV2 struct {
-	Config    DeepSeekV2Config
-	TokEmb    *tensor.Tensor // [vocab, dim] token embedding
-	Blocks    []*DeepSeekV2Block
-	FinalNorm *nn.RMSNorm    // model.norm
-	LmHead    *tensor.Tensor // [dim, vocab] untied output projection
+	Config    DeepSeekV2Config   // MLA + DeepSeekMoE geometry (see DeepSeekV2Config)
+	TokEmb    *tensor.Tensor     // [vocab, dim] token embedding
+	Blocks    []*DeepSeekV2Block // decoder blocks: dense-MLP early, DeepSeekMoE later
+	FinalNorm *nn.RMSNorm        // model.norm
+	LmHead    *tensor.Tensor     // [dim, vocab] untied output projection
 }
 
 // DeepSeekV2Config fixes the MLA geometry. Vocab, Dim, Layers and FFN are inferred from
@@ -52,8 +52,8 @@ type DeepSeekV2 struct {
 // (QLoraRank, KVLoraRank) and the split head dims (QKNope, QKRope, VHead) fully determine
 // MLA's projection shapes.
 type DeepSeekV2Config struct {
-	Vocab int
-	Ctx   int
+	Vocab int // vocabulary size
+	Ctx   int // maximum context length in tokens
 	Dim   int // d_model (hidden width)
 	Heads int // attention heads
 	// QLoraRank is the query compression rank (config.q_lora_rank): the width of the
@@ -62,10 +62,10 @@ type DeepSeekV2Config struct {
 	// KVLoraRank is the key/value compression rank (config.kv_lora_rank): the width of the
 	// kv latent that kv_a_layernorm normalizes before kv_b_proj expands it.
 	KVLoraRank int
-	QKNope     int // qk_nope_head_dim: non-positional per-head query/key width
-	QKRope     int // qk_rope_head_dim: rotary (decoupled RoPE) per-head query/key width
-	VHead      int // v_head_dim: per-head value width (may differ from QKNope+QKRope)
-	Layers     int
+	QKNope     int     // qk_nope_head_dim: non-positional per-head query/key width
+	QKRope     int     // qk_rope_head_dim: rotary (decoupled RoPE) per-head query/key width
+	VHead      int     // v_head_dim: per-head value width (may differ from QKNope+QKRope)
+	Layers     int     // number of decoder layers
 	FFN        int     // SwiGLU inner width
 	Eps        float64 // RMSNorm epsilon
 	RopeBase   float64 // RoPE θ; 0 → 10000

@@ -34,11 +34,11 @@ import (
 // Load a llama.cpp-quantized checkpoint with [QuantGPTNeoXFromGGUF], or quantize a
 // float model with [QuantizeGPTNeoX].
 type QuantGPTNeoX struct {
-	Config    GPTNeoXConfig
-	TokEmb    *tensor.Tensor // [vocab, dim] f32 token embedding (lookup only)
-	Blocks    []*QuantGPTNeoXBlock
-	FinalNorm *nn.LayerNorm   // final_layer_norm (f32 γ+β)
-	Out       *nn.QuantLinear // LM head (embed_out — untied, required)
+	Config    GPTNeoXConfig        // model geometry, shared with float GPT-NeoX (see GPTNeoXConfig)
+	TokEmb    *tensor.Tensor       // [vocab, dim] f32 token embedding (lookup only)
+	Blocks    []*QuantGPTNeoXBlock // the quantized GPT-NeoX blocks
+	FinalNorm *nn.LayerNorm        // final_layer_norm (f32 γ+β)
+	Out       *nn.QuantLinear      // LM head (embed_out — untied, required)
 }
 
 // QuantGPTNeoXBlock is one PARALLEL-residual QuantGPTNeoX block: two f32 full

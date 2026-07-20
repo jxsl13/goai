@@ -4,6 +4,22 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### docs -- V19 public-API godoc for the nlp model architectures (T892 partial, 2026-07-20)
+
+Paid down the bulk of the §V19 documentation debt (apicheck undocumented 140 → 18). Documented
+122 exported symbols across the nlp model architectures (Bert, Gemma/Gemma2, Jamba, Mamba/Mamba2,
+Mixtral, DeepSeekV2, GraniteMoE, RWKV, T5, Qwen2MoE, and all 16 Quant* twins) plus
+classic.GradientBoostingRegressor.Predict and format/safetensors.TensorInfo -- architecture-aware
+godoc referencing the HF tensor names/roles, not filler. Fixed the 3 §C15 magic backend-name
+string literals (nn/avgpool_test, format/pytorch/hostile_test) to the typed backend.CPU constant,
+so TestNoMagicBackendNameStrings is green.
+
+The 18 still-undocumented symbols are all the llamagpu New*Q8CUDA/Q4KCUDA constructors the parallel
+CUDA worker added (flagged to them); runnable Examples remain a separate pass. A fully-green
+apicheck gate then unblocks enabling the T893 always-run for apicheck. Built by a delegated
+subagent, independently reverified (comment-only diff, apicheck count, godoc quality, builds +
+tests) by the main agent.
+
 ### bench -- production-size Apple LLM decode vs llama.cpp (T887, 2026-07-20)
 
 Ran the production-size Apple-silicon head-to-head the toy 17.7M comparison (T607) had deferred.

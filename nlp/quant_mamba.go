@@ -48,11 +48,11 @@ import (
 // argument, no context limit. Load a llama.cpp-quantized checkpoint with
 // [QuantMambaFromGGUF], or quantize a float model with [QuantizeMamba].
 type QuantMamba struct {
-	Config MambaConfig
-	Embed  *tensor.Tensor // [vocab, d_model] f32 embedding table (lookup only)
-	Layers []QuantMambaLayer
-	Norm   *nn.RMSNorm     // final RMSNorm (f32 gain)
-	Head   *nn.QuantLinear // LM head: quantized token_embd bytes (tied) or output.weight (untied)
+	Config MambaConfig       // checkpoint dimensions (see MambaConfig)
+	Embed  *tensor.Tensor    // [vocab, d_model] f32 embedding table (lookup only)
+	Layers []QuantMambaLayer // the quantized selective-scan blocks
+	Norm   *nn.RMSNorm       // final RMSNorm (f32 gain)
+	Head   *nn.QuantLinear   // LM head: quantized token_embd bytes (tied) or output.weight (untied)
 }
 
 // QuantMambaLayer is one residual block: f32 pre-norm then the quantized

@@ -13,9 +13,9 @@ import (
 // over a [BertFromHF] model, optionally attach [ApplyLoRABert] adapters, and train
 // [BertClassifier.Params] (or just the head + adapters) with the autograd toolkit.
 type BertClassifier struct {
-	Encoder *Bert
+	Encoder *Bert      // the underlying BERT/RoBERTa/DistilBERT encoder
 	Head    *nn.Linear // [dim, classes]
-	Classes int
+	Classes int        // number of output classes
 }
 
 // NewBertClassifier attaches a fresh classification head (classes outputs) to enc.
