@@ -4567,6 +4567,19 @@ donecvf:
     return rc;
 }
 
+// cu_addf16_to_f32: dst32[i] += f16->f32(src16[i]) — the f32-RESIDUAL A1 variant's residual add
+// (keeps the residual stream in f32 while GEMMs run f16, higher accuracy at a small convert cost).
+int cu_addf16_to_f32(void* dst32, const void* src16, long n) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto doneacf; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto doneacf; }
+    rc = launch_cvt_from_f16(src16, dst32, n, 1);
+doneacf:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
 // cu_gemm_int8: row-major C32[M,N] (int32) = A8[M,K]·W8[K,N] (int8) via cublasGemmEx IMMA int8
 // tensor cores (Ampere ~2x f16 peak). Same col-major Cᵀ=Wᵀ·Aᵀ transpose idiom as the f16 path.
 // MEASUREMENT of raw int8 GEMM throughput vs cuBLAS f16 — the W8A8 decode-GEMM lever, gated on

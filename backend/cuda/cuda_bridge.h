@@ -79,6 +79,7 @@ int cu_paged_decode_attn_gqa(const void* dQ, const void* dPoolK, const void* dPo
 // cu_cvt_f32_to_f16: convert n device f32 (src32) to device f16/u16 (dst16), stream-ordered.
 int cu_cvt_f32_to_f16(void* dst16, const void* src32, long n);
 int cu_cvt_f16_to_f32(void* dst32, const void* src16, long n);
+int cu_addf16_to_f32(void* dst32, const void* src16, long n); // f32-residual A1: dst32 += f16(src16)
 // cu_gemm_int8: C32[M,N] int32 = A8[M,K]·W8[K,N] int8 via cublasGemmEx IMMA (int8 tensor cores).
 int cu_gemm_int8(const void* dA8, const void* dW8, void* dC32, int M, int K, int N);
 // A1 fp16-activation elementwise twins — in/out are u16 (f16); gamma/inv stay f32. Math == the f32 kernels.

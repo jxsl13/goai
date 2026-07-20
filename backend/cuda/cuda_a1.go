@@ -54,3 +54,7 @@ func (r *ResidentVec) VecPtr() unsafe.Pointer { return r.ptr }
 func CvtF16ToF32(dst32, src16 unsafe.Pointer, n int) int {
 	return int(C.cu_cvt_f16_to_f32(dst32, src16, C.long(n)))
 }
+
+func AddF16ToF32(dst32, src16 unsafe.Pointer, n int) int {
+	return int(C.cu_addf16_to_f32(dst32, src16, C.long(n)))
+}

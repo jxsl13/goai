@@ -211,3 +211,116 @@ func TestA1ForwardRCsAndSanity(t *testing.T) {
 }
 
 func BenchmarkBatchedGraphA1_b256(b *testing.B) { benchBatchedGraphA1(b, 256, 128, 22) }
+
+// f32-residual A1 variant: f16 GEMMs + f16 elementwise, but the residual stream x stays f32
+// (higher accuracy at a few extra converts/layer). The accuracy fallback if full-f16 tokens drift.
+func benchBatchedGraphA1R(b *testing.B, batch, seqLen, layers int) {
+	if !cuda.Available() {
+		b.Skip("no gpu")
+	}
+	ls, pool, seqs, x0 := bgBuild(b, batch, seqLen, layers)
+	defer pool.Free()
+	defer x0.Free()
+	defer func() {
+		for _, l := range ls {
+			l.gAttn.Free()
+			l.gFFN.Free()
+			for _, w := range []*cuda.ResidentBF16{l.wq, l.wk, l.wv, l.wo, l.wg, l.wu, l.wd} {
+				w.Free()
+			}
+		}
+	}()
+	invQd, posDivQ := backend.RoPEFreqs(bgHD, backend.RoPEAttrs{Base: 10000, Heads: bgQHeads, PosOffset: seqLen})
+	invKd, posDivK := backend.RoPEFreqs(bgHD, backend.RoPEAttrs{Base: 10000, Heads: bgKVHeads, PosOffset: seqLen})
+	invQ32 := make([]float32, len(invQd))
+	invK32 := make([]float32, len(invKd))
+	for i := range invQd {
+		invQ32[i] = float32(invQd[i])
+	}
+	for i := range invKd {
+		invK32[i] = float32(invKd[i])
+	}
+	invQdev, _ := cuda.NewDeviceF32(1, len(invQ32))
+	invQdev.UploadF32(invQ32)
+	defer invQdev.Free()
+	invKdev, _ := cuda.NewDeviceF32(1, len(invK32))
+	invKdev.UploadF32(invK32)
+	defer invKdev.Free()
+	dim, qW, kvW, hidden := bgDim, bgQHeads*bgHD, bgKVHeads*bgHD, bgHidden
+	view, _ := pool.UploadBatchView(seqs)
+	defer view.Free()
+
+	step := func() {
+		x, _ := cuda.NewDeviceF32(batch, dim) // residual stream stays f32
+		x.CopyFrom(x0)
+		for _, l := range ls {
+			dhf, _ := x.RMSNormTo(l.gAttn, 1e-5)
+			dh := cuda.AllocU16(batch * dim)
+			cuda.CvtF32ToF16(dh, dhf.DevPtr(), batch*dim)
+			dhf.Free()
+			dq := cuda.AllocU16(batch * qW)
+			dk := cuda.AllocU16(batch * kvW)
+			dv := cuda.AllocU16(batch * kvW)
+			cuda.GemmF16Pure(dh, l.wq.WPtr(), dq, batch, dim, qW)
+			cuda.GemmF16Pure(dh, l.wk.WPtr(), dk, batch, dim, kvW)
+			cuda.GemmF16Pure(dh, l.wv.WPtr(), dv, batch, dim, kvW)
+			cuda.FreeDev(dh)
+			cuda.RoPEF16(dq, invQdev.DevPtr(), batch, bgQHeads, bgHD, seqLen, posDivQ)
+			cuda.RoPEF16(dk, invKdev.DevPtr(), batch, bgKVHeads, bgHD, seqLen, posDivK)
+			cuda.FreeDev(dk)
+			cuda.FreeDev(dv)
+			dqf, _ := cuda.NewDeviceF32(batch, qW)
+			cuda.CvtF16ToF32(dqf.DevPtr(), dq, batch*qW)
+			cuda.FreeDev(dq)
+			daf, _ := pool.BatchedDecodeAttnViewGQAf16(dqf, view, bgQHeads, bgKVHeads)
+			dqf.Free()
+			da := cuda.AllocU16(batch * qW)
+			cuda.CvtF32ToF16(da, daf.DevPtr(), batch*qW)
+			daf.Free()
+			tmp := cuda.AllocU16(batch * dim)
+			cuda.GemmF16Pure(da, l.wo.WPtr(), tmp, batch, qW, dim)
+			cuda.FreeDev(da)
+			cuda.AddF16ToF32(x.DevPtr(), tmp, batch*dim) // f32 residual add
+			cuda.FreeDev(tmp)
+			dh2f, _ := x.RMSNormTo(l.gFFN, 1e-5)
+			dh2 := cuda.AllocU16(batch * dim)
+			cuda.CvtF32ToF16(dh2, dh2f.DevPtr(), batch*dim)
+			dh2f.Free()
+			dg := cuda.AllocU16(batch * hidden)
+			du := cuda.AllocU16(batch * hidden)
+			cuda.GemmF16Pure(dh2, l.wg.WPtr(), dg, batch, dim, hidden)
+			cuda.GemmF16Pure(dh2, l.wu.WPtr(), du, batch, dim, hidden)
+			cuda.FreeDev(dh2)
+			cuda.SwiGLUF16(dg, du, batch*hidden)
+			cuda.FreeDev(du)
+			tmp2 := cuda.AllocU16(batch * dim)
+			cuda.GemmF16Pure(dg, l.wd.WPtr(), tmp2, batch, hidden, dim)
+			cuda.FreeDev(dg)
+			cuda.AddF16ToF32(x.DevPtr(), tmp2, batch*dim)
+			cuda.FreeDev(tmp2)
+		}
+		x.Free()
+	}
+	step()
+	cuda.GraphSync()
+	if err := cuda.CaptureBegin(); err != nil {
+		b.Skipf("capture: %v", err)
+	}
+	step()
+	g, err := cuda.CaptureEnd()
+	if err != nil {
+		b.Skipf("capture end: %v", err)
+	}
+	defer g.Free()
+	g.Launch()
+	cuda.GraphSync()
+	b.ResetTimer()
+	for range b.N {
+		g.Launch()
+	}
+	cuda.GraphSync()
+	b.StopTimer()
+	b.ReportMetric(float64(batch)*float64(b.N)/b.Elapsed().Seconds(), "tok/s")
+}
+
+func BenchmarkBatchedGraphA1R_b512(b *testing.B) { benchBatchedGraphA1R(b, 512, 128, 22) }
