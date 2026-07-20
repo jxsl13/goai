@@ -614,9 +614,13 @@ donesk:
 }
 
 // cu_paged_decode_attn_gqa_f16: the f16-KV twin of cu_paged_decode_attn_gqa. poolK/poolV are u16
-// (f16) — half the global bytes of the f32 pool, the lever once the GQA kernel is memory-bound
-// (~89% of the f32 roofline at b512). K/V tiles are converted to f32 in shared during staging, so
-// compute is identical. Same contract otherwise; hd==64, group≤8, blockSize≤16.
+// (f16) — half the global bytes of the f32 pool. K/V tiles are staged to shared AS u16 and converted
+// to f32 by h2f INSIDE the compute loop (once per query head → group×=8 redundant converts). That
+// redundancy looks wasteful, but staging f32 to shared instead (convert once) was MEASURED SLOWER:
+// b512 690µs vs 663µs (+4%) @len128, +0.6% @len512, 2026-07-20 — the f32 tile doubles shared use
+// (10.4KB→18.7KB) and halves occupancy (4→2 blocks/SM), and that loss outweighs the saved h2f. So
+// the kernel is occupancy-bound, not h2f-bound; u16-shared is the right call. Same contract
+// otherwise; hd==64, group≤8, blockSize≤16.
 int cu_paged_decode_attn_gqa_f16(const void* dQ, const void* dPoolK16, const void* dPoolV16,
                                  const void* dBlockTables, const void* dSeqLens, void* dO,
                                  int batch, int qHeads, int kvHeads, int hd, int blockSize, int maxBlocks,
