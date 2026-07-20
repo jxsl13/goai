@@ -1,3 +1,4 @@
 package a
 
-func A() int { return 1 }
+// Add adds.
+func Add(x, y int) int { return x + y }
