@@ -268,13 +268,19 @@ func cmdVerifAdd(w *strings.Builder, root, text string, fl mutFlags) int {
 		if f == nil {
 			return fmt.Errorf("missing %s", classFile["V"])
 		}
-		appendDef(f, id+" "+fl.Tag+": "+strings.TrimSpace(text))
-		fmt.Fprintf(w, "%s allocated (%s)\n", id, f.Path)
+		row, err := joinRow([]string{id, fl.Tag, strings.TrimSpace(text)})
+		if err != nil {
+			return err
+		}
+		if err := insertRow(f, "V", row); err != nil {
+			return err
+		}
+		fmt.Fprintf(w, "%s allocated\n%s  %s\n", id, f.Path, truncate(row, 160))
 		return nil
 	})
 }
 
-// cmdDefAdd covers goal/constraint/archinv add.
+// cmdDefAdd covers goal/constraint/archinv add — each a `| id | text |` row.
 func cmdDefAdd(w *strings.Builder, root, class, text string, fl mutFlags) int {
 	if strings.TrimSpace(text) == "" {
 		fmt.Fprintf(w, "%s add: text required\n", strings.ToLower(class))
@@ -289,12 +295,14 @@ func cmdDefAdd(w *strings.Builder, root, class, text string, fl mutFlags) int {
 		if f == nil {
 			return fmt.Errorf("missing %s", classFile[class])
 		}
-		sep := ": "
-		if strings.HasPrefix(id, "I.L") {
-			sep = " "
+		row, err := joinRow([]string{id, strings.TrimSpace(text)})
+		if err != nil {
+			return err
 		}
-		appendDef(f, id+sep+strings.TrimSpace(text))
-		fmt.Fprintf(w, "%s allocated (%s)\n", id, f.Path)
+		if err := insertRow(f, class, row); err != nil {
+			return err
+		}
+		fmt.Fprintf(w, "%s allocated\n%s  %s\n", id, f.Path, truncate(row, 160))
 		return nil
 	})
 }
@@ -310,28 +318,33 @@ func cmdDefEdit(w *strings.Builder, root, id, text string, fl mutFlags) int {
 			return fmt.Errorf("no entry %s", id)
 		}
 		old := l.entryLine()
-		switch {
-		case strings.HasPrefix(old, "| "): // table row: edit text cell via task edit
-			return fmt.Errorf("%s is a table row — use `task edit`", id)
-		case strings.HasPrefix(id, "V"):
-			// keep the canonical `V<n> TAG:` prefix; -tag overrides it.
-			tag := fl.Tag
-			if tag == "" {
-				if m := reVDef.FindStringSubmatch(old); m != nil {
-					tag = m[2]
-				}
-			}
-			if tag == "" {
-				return fmt.Errorf("%s has no TAG — pass -tag", id)
-			}
-			replaceLine(l, id+" "+tag+": "+strings.TrimSpace(text))
-		default:
-			sep := ": "
-			if strings.HasPrefix(id, "I.L") {
-				sep = " "
-			}
-			replaceLine(l, id+sep+strings.TrimSpace(text))
+		if !strings.HasPrefix(strings.TrimSpace(old), "|") {
+			return fmt.Errorf("%s is not a table row", id)
 		}
+		cells := splitRow(old)
+		switch {
+		case strings.HasPrefix(id, "V"):
+			// §V row: `| id | tag | invariant |`. -tag overrides the tag cell,
+			// otherwise it is preserved; the text replaces the invariant cell.
+			if len(cells) < 3 {
+				return fmt.Errorf("%s is not a §V row", id)
+			}
+			if fl.Tag != "" {
+				cells[1] = fl.Tag
+			}
+			cells[2] = strings.TrimSpace(text)
+		default:
+			// §G/§C/§I row: `| id | text |`.
+			if len(cells) < 2 {
+				return fmt.Errorf("%s is not a def row", id)
+			}
+			cells[1] = strings.TrimSpace(text)
+		}
+		row, err := joinRow(cells)
+		if err != nil {
+			return err
+		}
+		replaceLine(l, row)
 		fmt.Fprintf(w, "%s edited (%s)\n", id, l.Frag.Path)
 		return nil
 	})

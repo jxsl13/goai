@@ -190,12 +190,6 @@ func insertRow(f *Fragment, class, row string) error {
 	return nil
 }
 
-// appendDef adds a def-style entry (V/G/C/I) at the end of its fragment,
-// blank-line separated like its neighbors.
-func appendDef(f *Fragment, def string) {
-	f.Content = strings.TrimRight(f.Content, "\n") + "\n\n" + def + "\n"
-}
-
 // Status transitions for §T rows: forward-only unless forced. The paired
 // `state` column follows the status cell.
 var statusState = map[string]string{".": ".", "~": "wip", "x": "done"}

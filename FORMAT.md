@@ -15,10 +15,14 @@ Drop articles, filler, aux verbs, hedging. Fragments fine. Short synonyms (fix>i
 Code, paths, URLs, identifiers, numbers/versions, error strings, quoted strings.
 
 ## SHAPES
-Invariant (under §V): `V<n> <TAG>: <subject> <relation> <condition>`
+Invariant (under §V): a table row `| V<n> | <TAG> | <subject> <relation> <condition> |` — the TAG is its own column.
 
-§T, §B, §R are **CLEAN GFM MARKDOWN TABLES** — they MUST render as tables and pass mdlint's table checks (`table-ragged` + `table-separator-mismatch`). Each = a header row, a delimiter row, then data rows; every row has leading & trailing `|` and the SAME column count. Columns:
+§G, §C, §I, §V, §R, §B, §T — EVERY id-bearing section — are **CLEAN GFM MARKDOWN TABLES** — they MUST render as tables and pass mdlint's table checks (`table-ragged` + `table-separator-mismatch`). Each = a header row, a delimiter row, then data rows; every row has leading & trailing `|` and the SAME column count. Columns:
 
+- §G (goals): `| id | goal |`.
+- §C (constraints): `| id | constraint |` — any `(tag)` (e.g. C3's `(thr):`) stays INSIDE the constraint cell, ⊥ dropped.
+- §I (arch invariants): a layer-model intro paragraph, then `| id | interface |` (the I.L* layer model, then an `INVARIANTS:` label, then the I* invariants — two tables of the same shape).
+- §V (verification): `| id | tag | invariant |` — the TAG (`^\| (V\d+) \| <TAG> \|`) is its own column.
 - §T (tasks): `| id | status | task | cites | state | priority |` — status `x` done, `~` wip, `.` todo; state ∈ done/wip/. (secondary lifecycle); priority ∈ high/med/low. Old rows may leave state+priority empty.
 - §B (bugs): `| id | date | cause | fix |`
 - §R (research): `| id | claim | source | conf |` — conf ∈ high/med/low/ref.
