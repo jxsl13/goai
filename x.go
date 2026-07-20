@@ -1,3 +1,3 @@
-//go:build linux
+//go:build darwin
 
 package p
