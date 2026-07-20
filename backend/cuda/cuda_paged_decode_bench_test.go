@@ -269,32 +269,38 @@ func TestPagedDecodeGQAf16Parity(t *testing.T) {
 	t.Logf("paged decode f16-KV parity rel-RMS %.3e", relRMS)
 }
 
-func BenchmarkPagedDecodeAttnGQAf16_b512(b *testing.B) {
+func BenchmarkPagedDecodeAttnGQAf16_b512(b *testing.B) { benchPagedDecodeAttnGQAf16(b, 512, 128) }
+
+// benchPagedDecodeAttnGQAf16 measures the f16-KV GQA attention. At ctx 128 f16-KV was throughput-
+// NEUTRAL (attention L2-served + compute/latency-bound). At ctx 512 the K/V working set (~550MB f32
+// for b512) blows past L2 into global memory → attention becomes BANDWIDTH-bound, where halving the
+// K/V bytes (f16) should ~2x it — the regime the ctx-128 negative did not cover (Iw8).
+func benchPagedDecodeAttnGQAf16(b *testing.B, batch, seqLen int) {
 	if !cuda.Available() {
 		b.Skip("no gpu")
 	}
 	const qHeads, kvHeads, hd = 32, 4, 64
 	kvW := kvHeads * hd
 	rng := rand.New(rand.NewSource(7))
-	pool, _ := cuda.NewPagedKVPool(512*((128+16)/16+1), 16, kvW)
+	pool, _ := cuda.NewPagedKVPool(batch*((seqLen+16)/16+1), 16, kvW)
 	defer pool.Free()
-	seqs := make([]*cuda.SeqKV, 512)
+	seqs := make([]*cuda.SeqKV, batch)
 	for i := range seqs {
 		seqs[i] = pool.NewSeqKV()
-		kf := make([]float32, 128*kvW)
+		kf := make([]float32, seqLen*kvW)
 		for j := range kf {
 			kf[j] = float32(rng.NormFloat64()) * 0.1
 		}
-		dk, _ := cuda.NewDeviceF32(128, kvW)
+		dk, _ := cuda.NewDeviceF32(seqLen, kvW)
 		dk.UploadF32(kf)
 		seqs[i].Append(dk, dk)
 		dk.Free()
 	}
-	qf := make([]float32, 512*qHeads*hd)
+	qf := make([]float32, batch*qHeads*hd)
 	for i := range qf {
 		qf[i] = float32(rng.NormFloat64()) * 0.1
 	}
-	q, _ := cuda.NewDeviceF32(512, qHeads*hd)
+	q, _ := cuda.NewDeviceF32(batch, qHeads*hd)
 	q.UploadF32(qf)
 	defer q.Free()
 	view, _ := pool.UploadBatchView(seqs)
@@ -313,6 +319,10 @@ func BenchmarkPagedDecodeAttnGQAf16_b512(b *testing.B) {
 	cuda.GraphSync()
 	b.StopTimer()
 	b.ReportMetric(float64(b.N)/b.Elapsed().Seconds(), "attn/s")
+}
+
+func BenchmarkPagedDecodeAttnGQAf16_b512_len512(b *testing.B) {
+	benchPagedDecodeAttnGQAf16(b, 512, 512)
 }
 
 func TestPagedDecodeSKParity(t *testing.T) {
