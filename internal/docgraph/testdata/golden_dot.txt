@@ -1,4 +1,4 @@
-digraph specgraph {
+digraph docgraph {
   rankdir=LR;
   node [shape=box, fontsize=10];
   "ADR-0001" [label="ADR-0001\nadr"];

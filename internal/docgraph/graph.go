@@ -1,4 +1,4 @@
-// Package main (specgraph) is the query layer over the SPEC.md/docs citation
+// Package main (docgraph) is the query layer over the SPEC.md/docs citation
 // graph: it deterministically parses the spec corpus (SPEC.md, worker specs,
 // ADRs, CHANGELOG.md, docs/*.md) plus git history into a typed in-memory
 // multigraph and answers the multi-hop questions the SDD workflow needs —
@@ -6,7 +6,7 @@
 // "which PERF patterns were already measured" — as fast CLI subcommands with
 // file:line-anchored output.
 //
-// internal/speccheck stays the §V36 validator; specgraph never mutates the
+// internal/speccheck stays the §V36 validator; docgraph never mutates the
 // spec. Extraction is regex/table-based (no LLM, no external deps beyond the
 // module's own packages): the corpus is already typed via T/B/R/V/C/G/I/ADR
 // ids and the §T cites column, so a parser-derived graph is reproducible and
@@ -14,7 +14,7 @@
 // clean GFM — `make lint-md` guarantees no ragged rows or bare pipes.
 //
 // Subcommands: show, related, why, bugs-for, impact, path, patterns, search,
-// index, stats, dangling. Run `go run ./internal/specgraph help` or
+// index, stats, dangling. Run `go run ./internal/docgraph help` or
 // `make spec-graph ARGS=...`.
 package main
 
@@ -123,7 +123,7 @@ func (g *Graph) AddEdge(e Edge) {
 	g.In[e.To] = append(g.In[e.To], i)
 }
 
-// NodeIDs returns every node id in sorted order (all iteration in specgraph
+// NodeIDs returns every node id in sorted order (all iteration in docgraph
 // is sorted so output — and the DOT export — is byte-deterministic).
 func (g *Graph) NodeIDs() []string {
 	ids := make([]string, 0, len(g.Nodes))

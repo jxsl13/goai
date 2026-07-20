@@ -108,9 +108,9 @@ func TestFixtureExtraction(t *testing.T) {
 	}
 }
 
-// TestParseMatchesSpeccheck pins specgraph's copied defining-occurrence
+// TestParseMatchesSpeccheck pins docgraph's copied defining-occurrence
 // regexes to speccheck's behavior without coupling the packages: doubling
-// the spec makes speccheck report a duplicate for exactly the ids specgraph
+// the spec makes speccheck report a duplicate for exactly the ids docgraph
 // extracts as T/B/R/V nodes from the same content.
 func TestParseMatchesSpeccheck(t *testing.T) {
 	content, err := os.ReadFile(filepath.Join(fixtureRoot, "SPEC.md"))
@@ -138,12 +138,12 @@ func TestParseMatchesSpeccheck(t *testing.T) {
 	}
 	for id := range mine {
 		if !theirs[id] {
-			t.Errorf("specgraph extracts %s but speccheck does not track it", id)
+			t.Errorf("docgraph extracts %s but speccheck does not track it", id)
 		}
 	}
 	for id := range theirs {
 		if !mine[id] {
-			t.Errorf("speccheck tracks %s but specgraph does not extract it", id)
+			t.Errorf("speccheck tracks %s but docgraph does not extract it", id)
 		}
 	}
 }
@@ -409,7 +409,7 @@ func TestRealCorpusGit(t *testing.T) {
 }
 
 // TestGoldenOutputs freezes the LLM-facing text format per subcommand on the
-// fixture; regenerate with UPDATE_GOLDEN=1 go test ./internal/specgraph.
+// fixture; regenerate with UPDATE_GOLDEN=1 go test ./internal/docgraph.
 func TestGoldenOutputs(t *testing.T) {
 	g := fixtureGraph(t)
 	runs := map[string]func(w *strings.Builder){

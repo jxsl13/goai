@@ -13,11 +13,11 @@ import (
 // whenever parse*/gitlog output shape or semantics change.
 const cacheSchemaVersion = 3 // 2: splitRow honors \| escapes (§B114); 3: spec/ hierarchy corpus (§V41)
 
-// cacheDir/graph file live under .specgraph/ at repo root (gitignored): the
+// cacheDir/graph file live under .docgraph/ at repo root (gitignored): the
 // cache is pure acceleration, never a source of truth — any doubt about its
 // freshness resolves to a rebuild, and a cache failure is never fatal.
 const (
-	cacheDirName   = ".specgraph"
+	cacheDirName   = ".docgraph"
 	graphCacheName = "graph.jsonl"
 	embedCacheName = "embeddings.jsonl"
 )

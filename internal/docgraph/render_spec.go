@@ -19,7 +19,7 @@ func renderOutput(o Output) (string, error) {
 	for i, f := range o.Fragments {
 		c := strings.TrimRight(f.Content, "\n") + "\n"
 		if strings.TrimSpace(c) == "" {
-			return "", fmt.Errorf("specgraph: %s is empty", f.Path)
+			return "", fmt.Errorf("docgraph: %s is empty", f.Path)
 		}
 		parts[i] = c
 	}
@@ -28,7 +28,7 @@ func renderOutput(o Output) (string, error) {
 		// stays the last rendered section.
 		last := o.Fragments[len(o.Fragments)-1].Path
 		if !strings.Contains(last, "tasks") {
-			return "", fmt.Errorf("specgraph: tasks file must sort last in spec/ (got %s last) — §V36/§V41", last)
+			return "", fmt.Errorf("docgraph: tasks file must sort last in spec/ (got %s last) — §V36/§V41", last)
 		}
 	}
 	return strings.Join(parts, "\n"), nil
@@ -75,7 +75,7 @@ func renderCheck(root string, c *Corpus) ([]mismatch, error) {
 		case err != nil:
 			out = append(out, mismatch{path, "rendered view missing: " + err.Error(), worker})
 		case string(got) != want:
-			out = append(out, mismatch{path, "rendered view out of sync with spec/ — regenerate via `specgraph render`, never hand-edit (§V41)", worker})
+			out = append(out, mismatch{path, "rendered view out of sync with spec/ — regenerate via `docgraph render`, never hand-edit (§V41)", worker})
 		}
 	}
 	return out, nil

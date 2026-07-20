@@ -100,7 +100,7 @@ func nearestID(g *Graph, id string) string {
 // deterministic Graphviz DOT.
 func renderDOT(g *Graph, ids map[string]bool) string {
 	var w strings.Builder
-	w.WriteString("digraph specgraph {\n  rankdir=LR;\n  node [shape=box, fontsize=10];\n")
+	w.WriteString("digraph docgraph {\n  rankdir=LR;\n  node [shape=box, fontsize=10];\n")
 	include := func(id string) bool { return ids == nil || ids[id] }
 	for _, id := range g.NodeIDs() {
 		if !include(id) {
