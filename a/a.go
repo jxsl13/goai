@@ -1,3 +1,3 @@
 package a
 
-func A() {}
+func A() int { return 1 }
