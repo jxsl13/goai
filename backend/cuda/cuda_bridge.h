@@ -18,6 +18,8 @@ int cu_matmul_i8_mma(const void* dA8, const void* dW8, void* dC32, int M, int K,
 int cu_gemm_w8a16(const void* dA16, const void* dW8, const void* dScale, void* dC16, int M, int K, int N);
 // cu_gemm_w8a16_t: shared-tiled W8A16 (coalesced int8 staging, W read once/block). N%64==0.
 int cu_gemm_w8a16_t(const void* dA16, const void* dW8, const void* dScale, void* dC16, int M, int K, int N);
+// cu_gemm_w8a16_b: BM-spanning W8A16 (64x64 tile, W read once/N-strip). M%64==0, N%64==0.
+int cu_gemm_w8a16_b(const void* dA16, const void* dW8, const void* dScale, void* dC16, int M, int K, int N);
 // cu_matmul_i8_mma_t: shared-tiled int8 mma GEMM (16x64 block, shared A/W staging). N%64==0.
 int cu_matmul_i8_mma_t(const void* dA8, const void* dW8, void* dC32, int M, int K, int N);
 // cu_matmul_i8_mma_rb: register-blocked int8 mma GEMM (64x64 block, 4 MMAs/warp). M%64,N%64,K%32==0.
