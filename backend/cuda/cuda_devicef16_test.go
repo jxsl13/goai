@@ -240,3 +240,57 @@ func TestBatchArgmax(t *testing.T) {
 	}
 	t.Logf("BatchArgmax correct for %d rows x %d cols", rows, cols)
 }
+
+// TestRoPEDposF16: device-position f16 RoPE must equal host-position f16 RoPE at the same position.
+func TestRoPEDposF16(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("no gpu")
+	}
+	const seq, heads, hd = 4, 2, 64
+	const posOffset = 37
+	rng := rand.New(rand.NewSource(8))
+	xf := make([]float32, seq*heads*hd)
+	for i := range xf {
+		xf[i] = float32(rng.NormFloat64())
+	}
+	attrs := backend.RoPEAttrs{Base: 10000, Heads: heads, PosOffset: posOffset}
+	invD, _ := backend.RoPEFreqs(hd, attrs)
+	inv := make([]float32, len(invD))
+	for i := range invD {
+		inv[i] = float32(invD[i])
+	}
+	invDev, _ := cuda.NewDeviceF32(1, len(inv))
+	invDev.UploadF32(inv)
+	defer invDev.Free()
+	// build DeviceF16 from the same rounded input for both host- and device-position paths
+	da, _ := cuda.NewDeviceF32(seq, heads*hd)
+	da.UploadF32(xf)
+	hostV, _ := cuda.F16FromF32(da)
+	dposV, _ := cuda.F16FromF32(da)
+	da.Free()
+	defer hostV.Free()
+	defer dposV.Free()
+	if err := hostV.RoPE(invDev, attrs); err != nil {
+		t.Fatal(err)
+	}
+	pos, _ := cuda.NewDevicePos()
+	defer pos.Free()
+	pos.Set(posOffset)
+	if err := dposV.RoPEDpos(invDev, attrs, pos); err != nil {
+		t.Fatal(err)
+	}
+	a, _ := hostV.ToF32()
+	b, _ := dposV.ToF32()
+	defer a.Free()
+	defer b.Free()
+	ha := make([]float32, seq*heads*hd)
+	hb := make([]float32, seq*heads*hd)
+	a.DownloadF32(ha)
+	b.DownloadF32(hb)
+	for i := range ha {
+		if ha[i] != hb[i] {
+			t.Fatalf("RoPEDpos != RoPE at %d: %v vs %v", i, ha[i], hb[i])
+		}
+	}
+	t.Logf("f16 RoPEDpos (device pos) == RoPE (host pos), bit-exact")
+}

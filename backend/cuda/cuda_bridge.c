@@ -277,6 +277,7 @@ static CUfunction gPagedDecodeSkPart = NULL, gPagedDecodeSkMerge = NULL; // spli
 static CUfunction gPagedDecodeGqaF16 = NULL; // f16-KV twin of gPagedDecodeGqa (half the global K/V bytes)
 static CUfunction gRmsF16 = NULL, gSwigluF16 = NULL, gRopeF16 = NULL; // A1 fp16-activation elementwise twins (u16 I/O, f32 math)
 static CUfunction gAddF16 = NULL; // A1 f16 residual add (dst += src, u16)
+static CUfunction gRopeDposF16 = NULL; // f16 device-position RoPE (graph-capturable decode)
 static CUfunction gWmmaAttn = NULL; // nvcc-compiled fused prefill attention (slice 2)
 static CUfunction gWmmaAttnGqa = NULL; // GQA/strided fused prefill attention (§ROADMAP A2)
 static CUfunction gWmmaPagedDecode = NULL; // tensor-core batched paged DECODE attention (breaks the 0.64 TFLOP/s latency-bound GEMV)
@@ -1260,6 +1261,46 @@ int cu_rope_f16(void* x, const void* inv, int seq, int heads, int hd, int posOff
         rc = (cuLaunchKernel(gRopeF16, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 donerpf:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_rope_f16_dpos: f16 device-position RoPE — position from a device int (*dPos), for the
+// graph-capturable decode (the captured graph has fixed structure; the position advances via
+// cu_set_i32 between launches). u16 I/O, f32 math. hd even.
+int cu_rope_f16_dpos(void* x, const void* inv, int seq, int heads, int hd, const void* dPos, double posDiv) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto donerpdf; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto donerpdf; }
+    if (!gRopeDposF16 && compile_kernel(
+            A1_CVT_HELPERS
+            "extern \"C\" __global__ void rope_f16_dpos(unsigned short* x, const float* inv, int seq, int heads, int hd, const int* dPos, double posDiv){\n"
+            "  int half = hd/2;\n"
+            "  long total = (long)seq*heads*half;\n"
+            "  long gid = (long)blockIdx.x*blockDim.x + threadIdx.x;\n"
+            "  if (gid >= total) return;\n"
+            "  int i = (int)(gid % half);\n"
+            "  int h = (int)((gid / half) % heads);\n"
+            "  int p = (int)(gid / ((long)half*heads));\n"
+            "  double pos = (double)(*dPos + p) / posDiv;\n"
+            "  double ang = pos * (double)inv[i];\n"
+            "  const double TWO_PI = 6.283185307179586476925286766559;\n"
+            "  double k2 = floor(ang / TWO_PI + 0.5);\n"
+            "  float r = (float)(ang - k2 * TWO_PI); float c, s; sincosf(r, &s, &c);\n"
+            "  unsigned short* xr = x + (size_t)p*heads*hd + (size_t)h*hd;\n"
+            "  float qi = h2f(xr[i]), qih = h2f(xr[i+half]);\n"
+            "  xr[i] = f2h(qi*c - qih*s); xr[i+half] = f2h(qih*c + qi*s);\n"
+            "}\n",
+            "rope_f16_dpos.cu", "rope_f16_dpos", &gRopeDposF16) != 0) { rc = -2; goto donerpdf; }
+    {
+        long total = (long)seq * heads * (hd / 2);
+        int threads = 256, blocks = (int)((total + threads - 1) / threads);
+        if (blocks < 1) blocks = 1;
+        void* args[7] = { &x, (void*)&inv, &seq, &heads, &hd, (void*)&dPos, &posDiv };
+        rc = (cuLaunchKernel(gRopeDposF16, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+donerpdf:
     pthread_mutex_unlock(&gLock);
     return rc;
 }

@@ -144,3 +144,18 @@ func (d *DeviceF16) BatchArgmax() ([]int32, error) {
 	}
 	return out, nil
 }
+
+// RoPEDpos applies RoPE in place using a device-resident position (for graph-capturable decode:
+// the captured graph reads *pos, which is advanced via DevicePos.Set between launches).
+func (d *DeviceF16) RoPEDpos(inv *DeviceF32, attrs backend.RoPEAttrs, pos *DevicePos) error {
+	heads := attrs.Heads
+	if heads <= 0 {
+		heads = 1
+	}
+	hd := d.cols / heads
+	_, posDiv := backend.RoPEFreqs(hd, attrs)
+	if rc := C.cu_rope_f16_dpos(d.ptr, inv.ptr, C.int(d.rows), C.int(heads), C.int(hd), pos.ptr, C.double(posDiv)); rc != 0 {
+		return fmt.Errorf("cuda: DeviceF16.RoPEDpos rc=%d", int(rc))
+	}
+	return nil
+}
