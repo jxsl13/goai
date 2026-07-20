@@ -209,3 +209,5 @@ func TestA1ForwardRCsAndSanity(t *testing.T) {
 	cuda.FreeDev(da)
 	cuda.FreeDev(tmp)
 }
+
+func BenchmarkBatchedGraphA1_b256(b *testing.B) { benchBatchedGraphA1(b, 256, 128, 22) }
