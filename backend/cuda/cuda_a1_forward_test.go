@@ -4,10 +4,15 @@ package cuda_test
 
 import (
 	"testing"
+	"unsafe"
 
 	"github.com/jxsl13/goai/backend"
 	"github.com/jxsl13/goai/backend/cuda"
 )
+
+// a1SkipAttn, when set, makes benchBatchedGraphA1's step feed dq straight into wo (skip attention
+// + its 2 converts): full A1 minus this = A1's attention share. Reset after the noattn bench.
+var a1SkipAttn bool
 
 // A1 fp16-activation forward: threads f16 (u16) activations through the whole decode step so the
 // per-GEMM f32<->f16 conversions vanish (measured ceiling ~5-7%). Attention still reads f32 Q
@@ -72,17 +77,22 @@ func benchBatchedGraphA1(b *testing.B, batch, seqLen, layers int) {
 			cuda.FreeDev(dk)
 			cuda.FreeDev(dv)
 			// attention: f16 q -> f32, paged decode (f16 KV), f32 -> f16
-			dqf, _ := cuda.NewDeviceF32(batch, qW)
-			cuda.CvtF16ToF32(dqf.DevPtr(), dq, batch*qW)
-			cuda.FreeDev(dq)
-			daf, err := pool.BatchedDecodeAttnViewGQAf16(dqf, view, bgQHeads, bgKVHeads)
-			if err != nil {
-				b.Fatal(err)
+			var da unsafe.Pointer
+			if a1SkipAttn {
+				da = dq // qW==dim: feed query straight to wo, skip attention
+			} else {
+				dqf, _ := cuda.NewDeviceF32(batch, qW)
+				cuda.CvtF16ToF32(dqf.DevPtr(), dq, batch*qW)
+				cuda.FreeDev(dq)
+				daf, err := pool.BatchedDecodeAttnViewGQAf16(dqf, view, bgQHeads, bgKVHeads)
+				if err != nil {
+					b.Fatal(err)
+				}
+				dqf.Free()
+				da = cuda.AllocU16(batch * qW)
+				cuda.CvtF32ToF16(da, daf.DevPtr(), batch*qW)
+				daf.Free()
 			}
-			dqf.Free()
-			da := cuda.AllocU16(batch * qW)
-			cuda.CvtF32ToF16(da, daf.DevPtr(), batch*qW)
-			daf.Free()
 			tmp := cuda.AllocU16(batch * dim)
 			cuda.GemmF16Pure(da, l.wo.WPtr(), tmp, batch, qW, dim)
 			cuda.FreeDev(da)
@@ -408,3 +418,9 @@ func TestLeakA1Forward(t *testing.T) {
 
 func BenchmarkBatchedGraphA1_b1024(b *testing.B) { benchBatchedGraphA1(b, 1024, 128, 22) }
 func BenchmarkBatchedGraphA1_b1536(b *testing.B) { benchBatchedGraphA1(b, 1536, 128, 22) }
+
+func BenchmarkBatchedGraphA1_b512_noattn(b *testing.B) {
+	a1SkipAttn = true
+	defer func() { a1SkipAttn = false }()
+	benchBatchedGraphA1(b, 512, 128, 22)
+}
