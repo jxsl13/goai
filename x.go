@@ -1,4 +1,4 @@
 package p
 
-// #include <stdio.h>
-import "C"
+// Add adds two ints.
+func Add(a, b int) int { return a + b }
