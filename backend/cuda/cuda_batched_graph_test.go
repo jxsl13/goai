@@ -22,6 +22,7 @@ import (
 // The lever to push batch=64 aggregate throughput PAST vLLM's ~4655.
 const (
 	bgDim, bgQHeads, bgKVHeads, bgHD, bgHidden = 2048, 32, 4, 64, 5632
+	bgVocab                                    = 32000 // TinyLlama vocab, for the full-step logits GEMM
 )
 
 type bgLayer struct {
@@ -107,7 +108,35 @@ func benchBatchedGraph(b *testing.B, batch, seqLen, layers int, mode string) {
 	// (same [batch,qHeads*hd] shape), so full-step minus this baseline = attention cost.
 	skipAttn := mode == "graph-noattn"
 	gqaAttn := mode == "graph-gqa" // use the GQA K/V-shared paged decode kernel
-	gqaF16 := mode == "graph-gqa-f16"
+	gqaF16 := mode == "graph-gqa-f16" || mode == "graph-gqa-f16-full"
+
+	// full-step mode adds the decoder HEAD to the captured step (final RMSNorm + logits GEMM
+	// [batch,dim]×[dim,vocab]), so the tok/s includes the ~logits cost vLLM's number also pays —
+	// closing the "layers-only" caveat. The argmax reduction (one memory-bound pass over the logits)
+	// is omitted as <1%. Head weights are synthetic (throughput is weight-value-independent).
+	fullStep := mode == "graph-gqa-f16-full"
+	var wLogits *cuda.ResidentBF16
+	var gFinal *cuda.ResidentVec
+	if fullStep {
+		rngH := rand.New(rand.NewSource(11))
+		lt := tensor.New(tensor.F32, tensor.Shape{bgDim, bgVocab})
+		lf := lt.Storage().F32()
+		for i := range lf {
+			lf[i] = float32(rngH.NormFloat64()) * 0.02
+		}
+		var err error
+		wLogits, err = cuda.NewResidentBF16(lt)
+		if err != nil {
+			b.Fatal(err)
+		}
+		defer wLogits.Free()
+		gt := tensor.New(tensor.F32, tensor.Shape{bgDim})
+		for i := range gt.Storage().F32() {
+			gt.Storage().F32()[i] = 1.0
+		}
+		gFinal, _ = cuda.NewResidentVec(gt)
+		defer gFinal.Free()
+	}
 
 	// step runs one full batched decode forward. When view != nil it uses the pre-uploaded
 	// block table (view mode / graph mode); otherwise it re-uploads per layer (eager mode).
@@ -154,6 +183,15 @@ func benchBatchedGraph(b *testing.B, batch, seqLen, layers int, mode string) {
 			l.wd.MatMulAccInto(dg, x)
 			dg.Free()
 		}
+		if fullStep {
+			dhf, _ := x.RMSNormTo(gFinal, 1e-5)
+			lg, err := wLogits.MatMulDevice(dhf)
+			if err != nil {
+				b.Fatal(err)
+			}
+			dhf.Free()
+			lg.Free()
+		}
 		x.Free()
 	}
 
@@ -181,7 +219,7 @@ func benchBatchedGraph(b *testing.B, batch, seqLen, layers int, mode string) {
 		}
 		cuda.GraphSync()
 		b.StopTimer()
-	case "graph", "graph-noattn", "graph-gqa", "graph-gqa-f16":
+	case "graph", "graph-noattn", "graph-gqa", "graph-gqa-f16", "graph-gqa-f16-full":
 		view, err := pool.UploadBatchView(seqs)
 		if err != nil {
 			b.Fatal(err)
@@ -235,9 +273,56 @@ func BenchmarkBatchedGraph_b512_gqa(b *testing.B) { benchBatchedGraph(b, 512, 12
 func BenchmarkBatchedGraph_b768_gqa(b *testing.B) { benchBatchedGraph(b, 768, 128, 22, "graph-gqa") }
 func BenchmarkBatchedGraph_b256_gqa(b *testing.B) { benchBatchedGraph(b, 256, 128, 22, "graph-gqa") }
 
+// Low-concurrency points on the production f16-KV path, to compare apples-to-apples with vLLM's
+// published 64-concurrent serving number (BENCHMARKS.md) rather than only the saturated peak.
+func BenchmarkBatchedGraph_b64_gqaf16(b *testing.B) {
+	benchBatchedGraph(b, 64, 128, 22, "graph-gqa-f16")
+}
+func BenchmarkBatchedGraph_b128_gqaf16(b *testing.B) {
+	benchBatchedGraph(b, 128, 128, 22, "graph-gqa-f16")
+}
+
 func BenchmarkBatchedGraph_b512_gqaf16(b *testing.B) {
 	benchBatchedGraph(b, 512, 128, 22, "graph-gqa-f16")
 }
+
+// Full-step (layers + final-norm + logits GEMM) on the production f16-KV path — the honest,
+// apples-to-apples serving number vs vLLM's full-pipeline figure (drops the layers-only caveat).
+func BenchmarkBatchedGraph_b64_gqaf16_full(b *testing.B) {
+	benchBatchedGraph(b, 64, 128, 22, "graph-gqa-f16-full")
+}
+func BenchmarkBatchedGraph_b256_gqaf16_full(b *testing.B) {
+	benchBatchedGraph(b, 256, 128, 22, "graph-gqa-f16-full")
+}
+func BenchmarkBatchedGraph_b512_gqaf16_full(b *testing.B) {
+	benchBatchedGraph(b, 512, 128, 22, "graph-gqa-f16-full")
+}
+func BenchmarkBatchedGraph_b768_gqaf16_full(b *testing.B) {
+	benchBatchedGraph(b, 768, 128, 22, "graph-gqa-f16-full")
+}
+
+// Context sweep at 64-concurrent, full-step: attention cost grows with context while the GEMMs stay
+// fixed, so the serving lead over vLLM erodes as ctx climbs. Pins where the win holds vs crosses over.
+func BenchmarkBatchedGraph_b64_gqaf16_full_ctx256(b *testing.B) {
+	benchBatchedGraph(b, 64, 256, 22, "graph-gqa-f16-full")
+}
+func BenchmarkBatchedGraph_b64_gqaf16_full_ctx512(b *testing.B) {
+	benchBatchedGraph(b, 64, 512, 22, "graph-gqa-f16-full")
+}
 func BenchmarkBatchedGraph_b768_gqaf16(b *testing.B) {
 	benchBatchedGraph(b, 768, 128, 22, "graph-gqa-f16")
+}
+
+// b1024/b1536 on the f16-KV path (half the KV footprint of MHA) to find the aggregate-throughput
+// ceiling — where the decode GEMMs saturate the SMs and adding sequences stops buying tok/s.
+// Measured plateau: b768 9195 | b1024 9191 | b1536 9296 tok/s (synthetic bgBuild, LAYERS-ONLY —
+// no logits/sampling, so it OVERSTATES a full serving step). Ratio caveat (SPEC Iw8 honesty): the
+// fair precision-matched vLLM decode baseline is ~6972 tok/s (both f16 activations, same session),
+// NOT the handicapped ~4655 — so the honest standing is ~1.33x fair vLLM, not 2x. These points only
+// pin the SM-saturation plateau; they do not move the honest headline.
+func BenchmarkBatchedGraph_b1024_gqaf16(b *testing.B) {
+	benchBatchedGraph(b, 1024, 128, 22, "graph-gqa-f16")
+}
+func BenchmarkBatchedGraph_b1536_gqaf16(b *testing.B) {
+	benchBatchedGraph(b, 1536, 128, 22, "graph-gqa-f16")
 }

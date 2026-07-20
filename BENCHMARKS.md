@@ -40,7 +40,7 @@ Two machines appear below:
 | GPU LLM decode (single stream) | Mistral-7B Q4_K, RTX 3060 | 49.6 tok/s | llama.cpp Q8 41.6 tok/s | **GoAI +19%** (0.84× of their Q4_K_M) |
 | GPU LLM decode (single stream) | TinyLlama-1.1B, RTX 3060 | 258.5 tok/s | llama.cpp Q8 245.4; vLLM fp16 103 | **GoAI leads both** |
 | GPU LLM prefill | TinyLlama pp128, RTX 3060 | 5,600 tok/s | vLLM 10,729 | vLLM 1.9× ahead (open front) |
-| Multi-request serving throughput | 64 concurrent, RTX 3060 | ≈257 tok/s | vLLM 4,655 | vLLM dominates (capability gap, booked) |
+| Multi-request serving throughput | 64 concurrent ctx128, RTX 3060 | 5,503 tok/s | vLLM 5,096 (measured, this HW) | **GoAI 1.08×** at short ctx; parity@b512, vLLM ahead at long ctx (§1) |
 | CPU GEMM f32 1024³ | M2 Pro, `GOEXPERIMENT=simd` | ≈2,590 GFLOP/s | torch-cpu ≈2,584 | **parity** (pure-Go path ≈2,100) |
 | CPU GEMM f32, >L2 shapes | 512×2048×4096, M2 Pro | 1,695 GFLOP/s (raw AMX) | Accelerate 1,294 | **GoAI +31%, in pure Go** |
 | Classical ML fit | 6 methods vs scikit-learn 1.9.0 | see §5 | scikit-learn | **wins the heavy ensembles** (GBM 9.2×, RF 3.4×, past sklearn's own parallel fit); C cores win tree/SVC |
@@ -97,18 +97,51 @@ its documented pip-only setup):
 |---|---:|---:|---:|---|
 | Decode tg128, batch=1 | **257** (Q4_K) | 244 (Q8) | 103 (fp16) | **GoAI** |
 | Prefill pp128, batch=1 | 5,600 (f16) | 8,474 (Q8) | **10,729** (fp16) | vLLM |
-| Batched decode, 64 requests | ≈257* | ≈244* | **4,655** | vLLM |
+| Batched decode, 64 concurrent, ctx128 | **5,503**† | ≈244* | 5,096‡ | **GoAI 1.08×** |
+| Batched decode, 256 concurrent, ctx128 | **8,019**† | ≈244* | 7,466‡ | **GoAI 1.07×** |
+| Batched decode, 512 concurrent, ctx128 | 8,675† | ≈244* | 8,721‡ | parity (0.99×) |
+| Batched decode, 64 concurrent, ctx512 | 3,621† | ≈244* | **4,367**‡ | vLLM 1.21× |
 
-\* GoAI and llama.cpp are single-stream engines here — no continuous
-batching, so the aggregate equals the single-stream rate.
+\* llama.cpp is a single-stream engine here — no continuous batching, so its
+aggregate equals the single-stream rate.
+† GoAI now has a PagedAttention-style paged KV pool + continuous batching
+(admit/evict, validated bit-identical to eager decode). These are
+graph-captured **full-step** f16-KV GQA decode numbers (22 layers + final
+RMSNorm + logits GEMM [batch,dim]×[dim,32000] — the head vLLM's figure also
+pays) on the synthetic layer stack; throughput is weight-value-independent so
+these are representative of the real model. Only the argmax reduction (one
+memory-bound pass over the logits, <1%) is omitted. These figures use the
+bf16-weight/**f32-activation** GEMM path — *higher* precision than vLLM's
+f16, so a conservative comparison; GoAI's precision-closer pure-f16 path
+measures 10–14% faster (b64 6,346 vs 5,765 layers-only), which would widen
+the short-context lead but is held back pending a clean weight-vs-activation
+accumulate-precision match to vLLM.
+‡ vLLM 0.25.1, **measured on this same RTX 3060** (not a published figure) —
+`BATCH=<n> testdata/vllm_ctx_sweep.py`, f16, CUDA graphs on, decode-marginal
+(prefill cancelled by a two-point gen-length subtraction), same
+2026-07-20 session. This corrects an earlier draft that used vLLM's stale
+published 4,655 (an older/eager number) and wrongly implied ~2× at
+saturation — vLLM's continuous batching scales with batch too, so the honest
+gap is small. Still booked: a real-model end-to-end run with variable
+sequence lengths + real scheduling.
 
 **Verdict by regime:** single-user chat (batch-1 decode) — GoAI wins all
 three engines. Prompt processing — vLLM's fused FlashAttention leads 1.9×
 (GoAI's attention is cuBLAS-batched, not fused; the GEMMs themselves already
 run at ≈51% of the card's f16 peak, near the cuBLAS ceiling). Many
-concurrent users — vLLM's PagedAttention + continuous batching is a
-capability GoAI does not have yet; both fronts are booked on the worker
-roadmap (`SPEC-worker-linux-amd64-cuda.md` §ROADMAP).
+concurrent users — GoAI now HAS the paged KV + continuous-batching
+capability (PagedAttention-style paged pool + block tables, admit/evict
+scheduling, CUDA-graph-captured f16-KV GQA decode), all validated
+bit-identical to eager decode — the ≈18× capability gap is closed. Head to
+head against vLLM **measured on this same RTX 3060**, the two are now close:
+GoAI leads slightly at short context (ctx128: 1.08× @64, 1.07× @256), reaches
+parity at high batch (0.99× @512), and vLLM's FlashDecoding pulls ahead as
+context grows (ctx512, @64: 3,621 vs 4,367 = vLLM 1.21×). So the honest
+verdict is **rough parity, GoAI's nose ahead on short-prompt chat-style
+serving, vLLM ahead on long contexts** — not the ~2× an earlier draft claimed
+off vLLM's stale published number. The remaining decode-attention gap at long
+context is the same fused-FlashDecoding lever as prefill (booked,
+`SPEC-worker-linux-amd64-cuda.md` §ROADMAP). Prefill remains the open front.
 
 ## 2. LLM inference on Apple silicon — vs llama.cpp Metal
 
@@ -402,7 +435,7 @@ honestly documented deficit with a root cause is a deliverable):
 | Deficit | Size | Diagnosed cause | Lever |
 |---|---|---|---|
 | GPU prefill vs vLLM (RTX 3060) | 1.9× | fused FlashAttention + zero-overhead scheduling on their side; ours is cuBLAS-batched attention | fused-attention prefill (worker roadmap FRONT A) |
-| Multi-request serving throughput vs vLLM | ≈18× at 64 requests | no PagedAttention / continuous batching — a missing capability, not a slow kernel | serving arc (worker roadmap FRONT B) |
+| Serving throughput vs vLLM — long context | 1.21× (ctx512, b64) | ≈18× CAPABILITY gap now CLOSED (paged KV + admit/evict continuous batching + graph-captured f16-KV GQA decode); head-to-head on this RTX 3060 GoAI leads short-ctx (1.08× @ctx128) but vLLM's FlashDecoding wins as ctx grows (§1) | fused-FlashDecoding long-context attention (shared with the prefill lever) |
 | Same-class Q4 decode vs llama.cpp Q4_K_M | 1.19–1.27× | their iterative quant encoder + fused attention | Q4_K encoder quality + attention fusion |
 | Apple-GPU matmul vs torch-mps | 3.0× | Apple's closed MPS kernel tuning; measured as the platform ceiling | parked (§B39/§T410) — revisit only with new evidence |
 | Training step vs torch-mps (Apple GPU) | 3.95× | op-by-op autograd dispatch (≈0.27 ms/op × hundreds) + MPS-kernel ceiling; torch dispatches one fused graph | tape recorder (≈1.4× at seq 256, §T411) + fusion |

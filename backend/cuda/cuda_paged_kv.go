@@ -127,6 +127,13 @@ func (p *PagedKVPool) NewSeqKV() *SeqKV { return &SeqKV{pool: p} }
 // Len returns the sequence's token count.
 func (s *SeqKV) Len() int { return s.n }
 
+// Advance bumps the sequence's logical length by delta WITHOUT copying K/V — the host-side counterpart
+// to a device-side AppendBatchedDev (which writes the K/V but does not touch SeqKV.n). Pair them for a
+// continuous-batch decode with a DYNAMIC active set, where the view is re-uploaded each step from
+// SeqKV.n (so n must track the device length): view(dsl=n) -> AppendBatchedDev(slot=n) -> Advance(1)
+// -> view(dsl=n+1) -> attention. Caller must ensure blocks exist for the advanced positions (Reserve1).
+func (s *SeqKV) Advance(delta int) { s.n += delta }
+
 // Append writes ntok=k.rows tokens (k,v are [ntok,wkv] device buffers) at the current logical
 // end, allocating physical blocks as logical block boundaries are crossed. K and V are appended
 // in lockstep.

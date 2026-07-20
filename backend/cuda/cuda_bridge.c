@@ -614,9 +614,13 @@ donesk:
 }
 
 // cu_paged_decode_attn_gqa_f16: the f16-KV twin of cu_paged_decode_attn_gqa. poolK/poolV are u16
-// (f16) — half the global bytes of the f32 pool, the lever once the GQA kernel is memory-bound
-// (~89% of the f32 roofline at b512). K/V tiles are converted to f32 in shared during staging, so
-// compute is identical. Same contract otherwise; hd==64, group≤8, blockSize≤16.
+// (f16) — half the global bytes of the f32 pool. K/V tiles are staged to shared AS u16 and converted
+// to f32 by h2f INSIDE the compute loop (once per query head → group×=8 redundant converts). That
+// redundancy looks wasteful, but staging f32 to shared instead (convert once) was MEASURED SLOWER:
+// b512 690µs vs 663µs (+4%) @len128, +0.6% @len512, 2026-07-20 — the f32 tile doubles shared use
+// (10.4KB→18.7KB) and halves occupancy (4→2 blocks/SM), and that loss outweighs the saved h2f. So
+// the kernel is occupancy-bound, not h2f-bound; u16-shared is the right call. Same contract
+// otherwise; hd==64, group≤8, blockSize≤16.
 int cu_paged_decode_attn_gqa_f16(const void* dQ, const void* dPoolK16, const void* dPoolV16,
                                  const void* dBlockTables, const void* dSeqLens, void* dO,
                                  int batch, int qHeads, int kvHeads, int hd, int blockSize, int maxBlocks,
@@ -1379,6 +1383,48 @@ int cu_rope_f16_dpos(void* x, const void* inv, int seq, int heads, int hd, const
         rc = (cuLaunchKernel(gRopeDposF16, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 donerpdf:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_rope_f16_dpos_arr: PER-SEQUENCE-position f16 RoPE — position of row p is dPos[p] (a device int
+// ARRAY of `seq` positions), NOT *dPos+p. The enabler for CONTINUOUS batching, where concurrently
+// decoded sequences sit at DIFFERENT absolute positions (admitted mid-stream, pre-existing KV at true
+// positions) so a uniform base+row shift is wrong. Capturable (reads the device dPos[] array).
+static CUfunction gRopeDposArrF16 = NULL;
+int cu_rope_f16_dpos_arr(void* x, const void* inv, int seq, int heads, int hd, const void* dPosArr, double posDiv) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto donerpda; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto donerpda; }
+    if (!gRopeDposArrF16 && compile_kernel(
+            A1_CVT_HELPERS
+            "extern \"C\" __global__ void rope_f16_dpos_arr(unsigned short* x, const float* inv, int seq, int heads, int hd, const int* dPos, double posDiv){\n"
+            "  int half = hd/2;\n"
+            "  long total = (long)seq*heads*half;\n"
+            "  long gid = (long)blockIdx.x*blockDim.x + threadIdx.x;\n"
+            "  if (gid >= total) return;\n"
+            "  int i = (int)(gid % half);\n"
+            "  int h = (int)((gid / half) % heads);\n"
+            "  int p = (int)(gid / ((long)half*heads));\n"
+            "  double pos = (double)(dPos[p]) / posDiv;\n" // per-seq position, not *dPos+p
+            "  double ang = pos * (double)inv[i];\n"
+            "  const double TWO_PI = 6.283185307179586476925286766559;\n"
+            "  double k2 = floor(ang / TWO_PI + 0.5);\n"
+            "  float r = (float)(ang - k2 * TWO_PI); float c, s; sincosf(r, &s, &c);\n"
+            "  unsigned short* xr = x + (size_t)p*heads*hd + (size_t)h*hd;\n"
+            "  float qi = h2f(xr[i]), qih = h2f(xr[i+half]);\n"
+            "  xr[i] = f2h(qi*c - qih*s); xr[i+half] = f2h(qih*c + qi*s);\n"
+            "}\n",
+            "rope_f16_dpos_arr.cu", "rope_f16_dpos_arr", &gRopeDposArrF16) != 0) { rc = -2; goto donerpda; }
+    {
+        long total = (long)seq * heads * (hd / 2);
+        int threads = 256, blocks = (int)((total + threads - 1) / threads);
+        if (blocks < 1) blocks = 1;
+        void* args[7] = { &x, (void*)&inv, &seq, &heads, &hd, (void*)&dPosArr, &posDiv };
+        rc = (cuLaunchKernel(gRopeDposArrF16, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+donerpda:
     pthread_mutex_unlock(&gLock);
     return rc;
 }

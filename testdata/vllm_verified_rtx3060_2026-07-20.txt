@@ -1,0 +1,15 @@
+# vLLM 0.25.1 decode-marginal throughput, MEASURED on this RTX 3060 (2026-07-20)
+# f16, CUDA graphs ON (enforce_eager=False), prefill cancelled via 2-point gen-length subtraction.
+# Reproduce: BATCH=<n> ~/.local/share/goai-vllm/vllm-venv/bin/python testdata/vllm_ctx_sweep.py
+# batch  ctx128   ctx256   ctx384   ctx512   (tok/s)
+   64    5096.2   5020.1   4915.8   4367.2
+  256    7465.9   6630.7   6910.7   6119.6
+  512    8720.5   7711.1   6730.7   6048.4
+#
+# GoAI full-step (graph-gqa-f16-full, 22L, same GPU/session) for comparison:
+# batch  ctx128   ctx256   ctx512
+#   64   5503     4728     3621
+#  256   8019     -        -
+#  512   8675     -        -
+#  768   8790     -        -
+# => ctx128: GoAI 1.08x@64, 1.07x@256, 0.99x@512 (parity).  ctx512@64: vLLM 1.21x (FlashDecoding).

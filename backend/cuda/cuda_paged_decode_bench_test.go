@@ -271,10 +271,27 @@ func TestPagedDecodeGQAf16Parity(t *testing.T) {
 
 func BenchmarkPagedDecodeAttnGQAf16_b512(b *testing.B) { benchPagedDecodeAttnGQAf16(b, 512, 128) }
 
-// benchPagedDecodeAttnGQAf16 measures the f16-KV GQA attention. At ctx 128 f16-KV was throughput-
-// NEUTRAL (attention L2-served + compute/latency-bound). At ctx 512 the K/V working set (~550MB f32
-// for b512) blows past L2 into global memory → attention becomes BANDWIDTH-bound, where halving the
-// K/V bytes (f16) should ~2x it — the regime the ctx-128 negative did not cover (Iw8).
+// benchPagedDecodeAttnGQAf16 measures the f16-KV GQA attention.
+//
+// MEASURED (b512, 200x, 2026-07-20) — the ctx-512 "should become bandwidth-bound" hypothesis is
+// DISPROVEN; attention is per-key COMPUTE-bound at BOTH contexts:
+//   - GQA f32 KV : len128 707µs | len512 2698µs
+//   - GQA f16 KV : len128 663µs | len512 2619µs
+//
+// Two independent signals:
+//
+//	(1) LINEAR in seqLen — 4x the keys (128->512) costs 3.95x the time, so per-key work (QK·, exp,
+//	    running max/sum, PV) dominates, not a fixed launch/latency floor.
+//	(2) f16 barely beats f32 — halving the K/V BYTES buys only 3-7% (663/707 @128, 2619/2698 @512).
+//	    A bandwidth-bound kernel would ~halve. Achieved BW is only ~101-107 GB/s = ~30% of the 3060's
+//	    ~360 GB/s peak at BOTH contexts, so bytes are not the limit.
+//
+// => int8/fp8 KV will NOT speed attention (fewer bytes ≠ the bottleneck; it would give even less than
+//
+//	f16's 3-7%). f16-KV's real payoff is CAPACITY (half the VRAM footprint => more concurrent seqs =>
+//	higher max batch => the aggregate serving throughput we measured), not per-call latency. The only
+//	attention speed levers left change the COMPUTE: tensor-core QK/PV (WMMA tried, negative — the M=8
+//	GQA group wastes half a 16x16 tile) or fewer keys (sliding-window/sparse — an approximation).
 func benchPagedDecodeAttnGQAf16(b *testing.B, batch, seqLen int) {
 	if !cuda.Available() {
 		b.Skip("no gpu")
@@ -711,6 +728,17 @@ func TestGraphDecodeGrowingKV(t *testing.T) {
 func BenchmarkPagedDecodeAttnGQA_b512_len512(b *testing.B) { benchPagedDecodeAttnGQA(b, 512, 512) }
 func BenchmarkPagedDecodeSK4_b512_len512(b *testing.B)     { benchPagedDecodeSK(b, 512, 512, 4) }
 func BenchmarkPagedDecodeSK8_b512_len512(b *testing.B)     { benchPagedDecodeSK(b, 512, 512, 8) }
+
+// MODERATE-batch long-context: where split-K SHOULD pay if anywhere — 512 keys is a long serial
+// online-softmax chain and b64/b256 leave SM headroom (64/256 seqs × 4 kvh = 256/1024 base blocks
+// vs 28 SMs) for split-K's extra blocks to shorten the critical path. The b512 negatives were
+// SM-saturated. This is the honest test of the re-opened long-context FlashDecoding lever (vLLM
+// beats us 1.21× at ctx512/b64).
+func BenchmarkPagedDecodeAttnGQA_b64_len512(b *testing.B)  { benchPagedDecodeAttnGQA(b, 64, 512) }
+func BenchmarkPagedDecodeSK4_b64_len512(b *testing.B)      { benchPagedDecodeSK(b, 64, 512, 4) }
+func BenchmarkPagedDecodeSK8_b64_len512(b *testing.B)      { benchPagedDecodeSK(b, 64, 512, 8) }
+func BenchmarkPagedDecodeAttnGQA_b256_len512(b *testing.B) { benchPagedDecodeAttnGQA(b, 256, 512) }
+func BenchmarkPagedDecodeSK4_b256_len512(b *testing.B)     { benchPagedDecodeSK(b, 256, 512, 4) }
 
 // TestPagedDecodeWMMAFlashParity validates the tiled FlashDecoding WMMA kernel against the warp-GQA
 // reference across RAGGED lengths INCLUDING long ones (300, 512) the non-flash WMMA (seqLen<=128)
