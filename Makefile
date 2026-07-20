@@ -4,7 +4,8 @@ PKGS     ?= ./...
 CGO_OFF   = CGO_ENABLED=0
 
 .PHONY: all build vet test race bench fmt tidy ci golden simd-build clean apicheck \
-	metal-test metal-bench cuda-test vulkan-spv vulkan-test vulkan-bench
+	metal-test metal-bench cuda-test vulkan-spv vulkan-test vulkan-bench \
+	perfscan perfscan-check
 
 all: build vet apicheck test
 
@@ -205,6 +206,18 @@ spec-graph:
 ## golden edges, determinism, cache roundtrip, speccheck-drift pin).
 spec-graph-check:
 	$(CGO_OFF) $(GO) test ./internal/specgraph/
+
+## perfscan: static finder for the per-element hot-loop anti-patterns (T919) —
+## per-element AtF64/SetF64 with no flatF64/flatF32 fast path, allocation inside a
+## per-element loop, batch API fed a wrapped single row. Advisory (candidates need
+## an A/B measurement, §C3/§V22); -strict exits non-zero. e.g. make perfscan
+## ARGS='-strict ./nn/...'. The detectors are unit-tested in internal/perfscan.
+perfscan:
+	$(CGO_OFF) $(GO) run ./internal/perfscan $(ARGS)
+
+## perfscan-check: the perfscan detector test suite (positive + negative fixtures).
+perfscan-check:
+	$(CGO_OFF) $(GO) test ./internal/perfscan/
 
 ## install-hooks: wire lint-md as a git pre-commit hook.
 install-hooks:
