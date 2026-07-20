@@ -282,6 +282,7 @@ static CUfunction gWmmaAttn = NULL; // nvcc-compiled fused prefill attention (sl
 static CUfunction gWmmaAttnGqa = NULL; // GQA/strided fused prefill attention (§ROADMAP A2)
 static CUfunction gWmmaPagedDecode = NULL; // tensor-core batched paged DECODE attention (breaks the 0.64 TFLOP/s latency-bound GEMV)
 static CUfunction gPagedAppendBatched = NULL; // device-side batched paged KV append (real serving: no host round-trip)
+static CUfunction gWmmaPagedDecodeFlash = NULL; // tiled FlashDecoding WMMA paged decode (O(tile) shared, any seqLen)
 static int launch_cvt_f16(const void* src, void* dst, long n); // fwd decl (defined below)
 
 // cu_paged_decode_attn: FRONT B / B2 — batched single-query decode attention over a PAGED KV
@@ -497,6 +498,32 @@ int cu_paged_append_batched(void* dPoolK, void* dPoolV, const void* dBlockTables
                              0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 doneapp:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_wmma_paged_decode_flash: tiled FlashDecoding WMMA paged decode (kernel wmma_paged_decode_flash).
+// O(FTILE) shared -> handles arbitrary seqLen at good occupancy, unlike cu_wmma_paged_decode (all-K/V
+// in shared, seqLen<=128, 1 block/SM). One block per (kv head, seq), 128 threads (warp 0 does WMMA).
+int cu_wmma_paged_decode_flash(const void* fatbin, int fatlen, const void* dQ, const void* dPoolK, const void* dPoolV,
+                               const void* dBlockTables, const void* dSeqLens, void* dO,
+                               int batch, int qHeads, int kvHeads, int hd, int blockSize, int maxBlocks, float scale) {
+    (void)fatlen;
+    int rc = -1;
+    if (hd != 64 || (qHeads / kvHeads) > 8 || blockSize > 16) return -4;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto donewpf; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto donewpf; }
+    if (!gWmmaPagedDecodeFlash && load_module_kernel(fatbin, "wmma_paged_decode_flash", &gWmmaPagedDecodeFlash) != 0) { rc = -2; goto donewpf; }
+    {
+        const int FTILE = 32;
+        unsigned shbytes = (unsigned)(16*hd*2 + FTILE*hd*2 + FTILE*hd*2 + 16*FTILE*4 + 16*FTILE*2 + 16*hd*4 + 16*hd*4 + 16*3*4);
+        void* args[13] = { (void*)&dQ, (void*)&dPoolK, (void*)&dPoolV, (void*)&dBlockTables, (void*)&dSeqLens,
+                           &dO, &batch, &qHeads, &kvHeads, &hd, &blockSize, &maxBlocks, &scale };
+        rc = (cuLaunchKernel(gWmmaPagedDecodeFlash, (unsigned)kvHeads, (unsigned)batch, 1, 128, 1, 1,
+                             shbytes, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+donewpf:
     pthread_mutex_unlock(&gLock);
     return rc;
 }
