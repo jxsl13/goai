@@ -693,3 +693,11 @@ func TestGraphDecodeGrowingKV(t *testing.T) {
 		s.Release()
 	}
 }
+
+// Long-context (512) attention isolation: at ctx 128 split-K lost (batch already SM-saturates), but
+// the warp-GQA online-softmax scan is 4x longer at ctx 512 — does split-K's shorter parallel chains
+// now win, or does the high-batch SM saturation still dominate? Rigor for the "long-context decode
+// attention = the real lever vs vLLM FlashDecoding" hypothesis (Iw8).
+func BenchmarkPagedDecodeAttnGQA_b512_len512(b *testing.B) { benchPagedDecodeAttnGQA(b, 512, 512) }
+func BenchmarkPagedDecodeSK4_b512_len512(b *testing.B)     { benchPagedDecodeSK(b, 512, 512, 4) }
+func BenchmarkPagedDecodeSK8_b512_len512(b *testing.B)     { benchPagedDecodeSK(b, 512, 512, 8) }
