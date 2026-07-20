@@ -485,6 +485,43 @@ func (p *PagedKVPool) BatchedDecodeAttnViewGQA(q *DeviceF32, view *PagedBatchVie
 	return &DeviceF32{ptr: out, rows: view.batch, cols: q.cols}, nil
 }
 
+// BatchedDecodeAttnViewGQAQio is BatchedDecodeAttnViewGQA with f16 query IN and f16 output OUT (raw
+// u16 pointers) over the SAME f32 K/V pool — for the A1 serving decode, which has its query in f16
+// and immediately wants the result in f16, so this kills the two per-layer f32<->f16 conversions
+// around attention with NO accuracy change (K/V precision unchanged). qCols = qHeads*hd. Caller owns
+// the returned DeviceF16 (Free()). q is the f16 [batch,qCols] query.
+func (p *PagedKVPool) BatchedDecodeAttnViewGQAQio(q *DeviceF16, view *PagedBatchView, qHeads, kvHeads int) (*DeviceF16, error) {
+	if view.pool != p {
+		return nil, fmt.Errorf("cuda: GQAQio view not from this pool")
+	}
+	if q.rows != view.batch {
+		return nil, fmt.Errorf("cuda: GQAQio q rows %d != batch %d", q.rows, view.batch)
+	}
+	qCols := q.cols
+	if qHeads <= 0 || kvHeads <= 0 || qHeads%kvHeads != 0 || qCols%qHeads != 0 {
+		return nil, fmt.Errorf("cuda: GQAQio bad head config q=%d kv=%d width=%d", qHeads, kvHeads, qCols)
+	}
+	hd := qCols / qHeads
+	if hd != 64 {
+		return nil, fmt.Errorf("cuda: GQAQio requires hd==64 (got %d)", hd)
+	}
+	if kvHeads*hd != p.wkv {
+		return nil, fmt.Errorf("cuda: GQAQio kvHeads*hd=%d != pool wkv=%d", kvHeads*hd, p.wkv)
+	}
+	out := C.cu_alloc_u16(C.int(view.batch * qCols))
+	if out == nil {
+		return nil, fmt.Errorf("cuda: GQAQio device alloc failed")
+	}
+	scale := float32(1.0 / math.Sqrt(float64(hd)))
+	rc := C.cu_paged_decode_attn_gqa_qio(q.ptr, p.k.ptr, p.v.ptr, view.dbt, view.dsl, unsafe.Pointer(out),
+		C.int(view.batch), C.int(qHeads), C.int(kvHeads), C.int(hd), C.int(p.blockSize), C.int(view.maxBlocks), C.float(scale))
+	if rc != 0 {
+		C.cu_free_f32(unsafe.Pointer(out))
+		return nil, fmt.Errorf("cuda: GQAQio failed (code %d)", int(rc))
+	}
+	return &DeviceF16{ptr: unsafe.Pointer(out), rows: view.batch, cols: qCols}, nil
+}
+
 // BatchedDecodeAttnViewGQAf16 is BatchedDecodeAttnViewGQA reading an f16 (u16) shadow of the pool
 // K/V — half the global bytes, the lever once the GQA kernel is memory-bound. Builds the shadow
 // lazily (see ensureF16: assumes a static pool after build). Requires hd==64, group≤8, blockSize≤16.

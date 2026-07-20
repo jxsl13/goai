@@ -273,6 +273,7 @@ static int load_module_kernel(const void* image, const char* entry, CUfunction* 
 static CUfunction gWmmaGemm = NULL; // nvcc-compiled WMMA GEMM (Tw-FLASHATTN slice 1)
 static CUfunction gPagedDecode = NULL; // paged batched decode attention (FRONT B / B2)
 static CUfunction gPagedDecodeGqa = NULL; // paged batched decode, GQA K/V-shared (FRONT B, cuts group× L2 traffic)
+static CUfunction gPagedDecodeGqaQio = NULL; // f32-KV GQA but f16 Q-in/O-out (kills serving-path Q/O converts, no accuracy change)
 static CUfunction gPagedDecodeSkPart = NULL, gPagedDecodeSkMerge = NULL; // split-K (FlashDecoding) paged decode: parallelize the online-softmax scan
 static CUfunction gPagedDecodeGqaF16 = NULL; // f16-KV twin of gPagedDecodeGqa (half the global K/V bytes)
 static CUfunction gPagedDecodeGqaF16Qio = NULL; // f16-KV + f16 Q-in/O-out (kills the A1 per-layer Q/O converts)
@@ -432,6 +433,102 @@ int cu_paged_decode_attn_gqa(const void* dQ, const void* dPoolK, const void* dPo
                              (unsigned)shmem, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 donepg:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_paged_decode_attn_gqa_qio: identical math to cu_paged_decode_attn_gqa (f32 K/V pool) but Q is f16
+// (u16) IN and O is f16 (u16) OUT — h2f the query at staging, f2h the result at store. Lets the A1
+// serving decode feed its f16 query straight in and get f16 back, killing the two per-layer f32<->f16
+// conversions (dq->dqf, da->da16) around attention. NO accuracy change (K/V precision unchanged; Q
+// f16->f32 is exact vs the caller's own convert, O is f16-rounded either way). hd==64, group≤8, blockSize≤16.
+int cu_paged_decode_attn_gqa_qio(const void* dQ16, const void* dPoolK, const void* dPoolV,
+                                 const void* dBlockTables, const void* dSeqLens, void* dO16,
+                                 int batch, int qHeads, int kvHeads, int hd, int blockSize, int maxBlocks,
+                                 float scale) {
+    int rc = -1;
+    int group = qHeads / kvHeads;
+    if (hd != 64 || group > 8 || blockSize > 16) return -4;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto doneqio; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto doneqio; }
+    if (!gPagedDecodeGqaQio && compile_kernel(
+        "__device__ __forceinline__ float h2f(unsigned short h){ float f; asm(\"cvt.f32.f16 %0, %1;\":\"=f\"(f):\"h\"(h)); return f; }\n"
+        "__device__ __forceinline__ unsigned short f2h(float f){ unsigned short h; asm(\"cvt.rn.f16.f32 %0, %1;\":\"=h\"(h):\"f\"(f)); return h; }\n"
+        "extern \"C\" __global__ void paged_decode_gqa_qio(const unsigned short* Q, const float* poolK, const float* poolV,\n"
+        "    const int* blockTables, const int* seqLens, unsigned short* O,\n"
+        "    int batch, int qHeads, int kvHeads, int hd, int blockSize, int maxBlocks, float scale){\n"
+        "  int kvh = blockIdx.x, seq = blockIdx.y;\n"
+        "  int group = qHeads / kvHeads, WKV = kvHeads * hd, n = seqLens[seq];\n"
+        "  const int* bt = blockTables + (size_t)seq*maxBlocks;\n"
+        "  int t = threadIdx.x, nt = blockDim.x, lane = t & 31, w = t >> 5;\n"
+        "  int hp = hd + 1;\n"
+        "  extern __shared__ float sh[];\n"
+        "  float* shq = sh;\n"
+        "  float* shk = shq + group*hd;\n"
+        "  float* shv = shk + 32*hp;\n"
+        "  for (int i = t; i < group*hd; i += nt) shq[i] = h2f(Q[(size_t)seq*qHeads*hd + (size_t)kvh*group*hd + i]);\n"
+        "  float NEGINF = __int_as_float(0xff800000);\n"
+        "  float m = NEGINF, l = 0.f, a0 = 0.f, a1 = 0.f;\n"
+        "  for (int base = 0; base < n; base += 32){\n"
+        "    int nk = n - base; if (nk > 32) nk = 32;\n"
+        "    __syncthreads();\n"
+        "    for (int i = t*4; i < nk*hd; i += nt*4){\n"
+        "      int j = i / hd, d = i - j*hd;\n"
+        "      int tok = base + j;\n"
+        "      size_t phys = (size_t)bt[tok / blockSize]*blockSize + (tok % blockSize);\n"
+        "      size_t src = phys*WKV + (size_t)kvh*hd + d;\n"
+        "      float4 k4 = *(const float4*)(poolK + src);\n"
+        "      float4 v4 = *(const float4*)(poolV + src);\n"
+        "      float* dk = shk + j*hp + d; float* dv = shv + j*hp + d;\n"
+        "      dk[0]=k4.x; dk[1]=k4.y; dk[2]=k4.z; dk[3]=k4.w;\n"
+        "      dv[0]=v4.x; dv[1]=v4.y; dv[2]=v4.z; dv[3]=v4.w;\n"
+        "    }\n"
+        "    __syncthreads();\n"
+        "    if (w < group){\n"
+        "      float s = NEGINF;\n"
+        "      if (lane < nk){\n"
+        "        const float* kr = shk + lane*hp;\n"
+        "        const float* qh = shq + w*hd;\n"
+        "        float dot = 0.f;\n"
+        "        for (int d = 0; d < hd; d++) dot += qh[d]*kr[d];\n"
+        "        s = dot*scale;\n"
+        "      }\n"
+        "      float bm = s;\n"
+        "      for (int o=16;o>0;o>>=1){ float z=__shfl_down_sync(0xffffffffu,bm,o); if(z>bm) bm=z; }\n"
+        "      bm = __shfl_sync(0xffffffffu,bm,0);\n"
+        "      float newm = m>bm?m:bm;\n"
+        "      float corr = __expf(m-newm);\n"
+        "      float p = (lane<nk)?__expf(s-newm):0.f;\n"
+        "      float bl = p;\n"
+        "      for (int o=16;o>0;o>>=1) bl += __shfl_down_sync(0xffffffffu,bl,o);\n"
+        "      bl = __shfl_sync(0xffffffffu,bl,0);\n"
+        "      l = l*corr + bl; m = newm;\n"
+        "      a0 *= corr; a1 *= corr;\n"
+        "      for (int j=0;j<nk;j++){\n"
+        "        float pj = __shfl_sync(0xffffffffu,p,j);\n"
+        "        const float* vr = shv + j*hp;\n"
+        "        a0 += pj*vr[lane]; a1 += pj*vr[lane+32];\n"
+        "      }\n"
+        "    }\n"
+        "  }\n"
+        "  if (w < group){\n"
+        "    int qh = kvh*group + w;\n"
+        "    float inv = (l>0.f)?1.f/l:0.f;\n"
+        "    unsigned short* o = O + (size_t)seq*qHeads*hd + (size_t)qh*hd;\n"
+        "    o[lane] = f2h(a0*inv); o[lane+32] = f2h(a1*inv);\n"
+        "  }\n"
+        "}\n",
+        "paged_decode_gqa_qio.cu", "paged_decode_gqa_qio", &gPagedDecodeGqaQio) != 0) { rc = -2; goto doneqio; }
+    {
+        void* args[13] = { (void*)&dQ16, (void*)&dPoolK, (void*)&dPoolV, (void*)&dBlockTables,
+                           (void*)&dSeqLens, &dO16, &batch, &qHeads, &kvHeads, &hd, &blockSize,
+                           &maxBlocks, &scale };
+        size_t shmem = ((size_t)group*hd + 2u*32u*(hd+1)) * sizeof(float);
+        rc = (cuLaunchKernel(gPagedDecodeGqaQio, (unsigned)kvHeads, (unsigned)batch, 1, 256, 1, 1,
+                             (unsigned)shmem, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+doneqio:
     pthread_mutex_unlock(&gLock);
     return rc;
 }
