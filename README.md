@@ -197,7 +197,7 @@ make bench-compare  # cross-backend benchmark harness
 ```
 
 Requires Go 1.26+. No C toolchain needed for the default build. Architecture
-and task history live in [`SPEC.md`](SPEC.md) (caveman-encoded, see
+and task history live in [`SPEC.md`](SPEC.md) (a generated view of the `spec/` source tree — mutate via `go run ./internal/specgraph`, §V40; caveman-encoded, see
 [`FORMAT.md`](FORMAT.md)); design rationale in [`docs/`](docs/); the
 categorical comparison against the industry incumbents in
 [`BENCHMARKS.md`](BENCHMARKS.md), with the full measurement log and policy in

@@ -77,6 +77,7 @@ Unresolved blocking unknown that needs the outside world → recommend `/researc
 ## BOUNDARIES
 
 - ⊥ make product decisions for the user. Recommend, never decide.
-- ⊥ write SPEC.md. Hand structured answers to spec.
+- ⊥ write spec files. Hand structured answers to spec (it lands them via
+  `specgraph goal|constraint add`, §V40).
 - ⊥ ask in bulk. One question, one recommendation, wait.
 - ⊥ grill a trivial change. Right-size or skip.

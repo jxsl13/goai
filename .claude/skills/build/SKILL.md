@@ -47,10 +47,10 @@ Show plan. Wait for user OK unless auto mode.
 
 Per task in order:
 
-1. Flip §T.n status cell `.` → `~`. Just write to SPEC.md.
+1. `go run ./internal/specgraph task set-status T<n> ~` (re-renders + re-verifies).
 2. Edit code per plan.
 3. Run verification command.
-4. **Pass** → flip `~` → `x`. Next task.
+4. **Pass** → `go run ./internal/specgraph task set-status T<n> x`. Next task.
 5. **Fail** → invoke backprop skill. Do NOT retry blindly.
 
 ## FAIL → BACKPROP
@@ -66,8 +66,9 @@ Rule: never silently fix root-cause without considering backprop. §B is the mem
 
 ## WRITE POLICY
 
-- Only flip §T status. No other SPEC.md edits from build.
-- Other spec edits → invoke spec skill.
+- Only `task set-status`. ⊥ hand-edit SPEC.md (generated view, TestRenderSync red)
+  ∨ spec/ table rows directly (§V40).
+- Other spec edits → invoke spec skill (which writes via the same CLI).
 - Commit after each §T completes. Message: `T<n>: <goal line>` + §V cites.
 
 ## VERIFICATION
