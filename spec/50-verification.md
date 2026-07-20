@@ -1,5 +1,47 @@
 ## §V — verification invariants
 
+V1 PARITY: ∀ op → golden test vs NumPy/torch within §R6 tol (f64 rtol 1e-12, f32 rtol 1e-5). missing golden → generate reproducibly + commit.
+
+V2 GRAD: ∀ differentiable op → numeric gradient check (central finite diff) under rel 1e-4.
+
+V3 CROSS: accel backend result == Pure-Go reference within backend tol defined by V11 (exact bit-match ⊥ required — SIMD/parallel reorders sums).
+
+V4 PLATFORM: CI green ∀ {macOS, Windows, Linux} × {Pure-Go fallback + available accel}. missing accel → skip w/ log, ⊥ silent pass.
+
+V5 BENCH: ∀ optimized op → benchmark + baseline number recorded. regression breaks CI.
+
+V6 PROP: property-based tests (shape algebra, linearity, associativity where math-guaranteed).
+
+V7 CGO: ⊥ cgo in ship path without green optimized Pure-Go ref + committed benchmark over §C.thr. `CGO_ENABLED=0` green everywhere.
+
+V8 STABLE: public API changes only via documented deprecation path.
+
+V9 TRUTH: Pure-Go reference backend = source of numeric truth; accel validated against it (⊥ vice versa).
+
+V10 ACCUM: reduction & GEMM accumulation → f32 inputs accumulate in f64 (| Kahan) unless §R justifies else. parallel/goroutine reduction order documented; non-determinism only w/ §R-justified tol. guards non-associative FP [B6].
+
+V11 CROSSTOL: ∀ accel op → backend tol documented per op, rtol scales w/ reduction length K (⊥ single fixed rtol). defines V3. established: elementwise (T11) & blocked-GEMM (T12/T12b) = exact (tol 0, same accum order); metal f32 GEMM (T20) = rtol(K)=1e-6·√K (MPS f32 accum + reorder) [B5].
+
+V12 EDGE: ∀ op → documented policy for NaN/Inf (IEEE-754 propagate), empty tensor, zero-dim, non-contiguous view. golden ! include edge cases [B9].
+
+V13 GOLDEN-REPRO: ∀ golden file → record generating env (lib+version, dtype, seed, shape) in sidecar. regeneration deterministic. guards V1 reproducibility [B8].
+
+V14 BACKEND-EXEC: `Backend`/`Kernel` interface ! define execution/sync model (sync default; async accel exposes explicit `Synchronize()`) at T5, before any accel/T20. adding GPU ⊥ break V8 [B7].
+
+V15 UNTRUSTED-IO: ∀ format reader (gguf/safetensors/npy) on hostile input → return error, NEVER panic/OOM/overflow. all length/dim/nesting claims capped BEFORE alloc (header ≤ cap, numel ≤ cap, array-depth ≤ 64, grow ⊥ pre-alloc-from-claim). GUARDED BY native fuzz tests (FuzzLoad/FuzzRead/FuzzRoundTrip) + hostile-input regressions [B28,B31,B32].
+
+V16 VALIDATION-LADDER: ∀ ALGORITHM impl → 2 tiers, both required. tier1 = bit/tol parity vs a reference LIB (torch/sklearn/ggml-py/…). tier2 (FINAL authority) = the defining SCIENTIFIC paper/source (arXiv/DOI/canonical textbook) — implemented formula matches the paper's equation, cited in §R. tier1 alone ⊥ sufficient. FILE FORMATS have no paper → their reference SPEC/impl IS the definitional source (stated, ⊥ invent a paper). paper-tier status tracked per algorithm in §R.
+
+V17 DOCS: ∀ exported package & top-level symbol → godoc present, dual-audience (professional: math + §R paper-cite; layperson: plain what/why/when). ∀ user-facing package → runnable `Example` fns at ≥3 levels: trivial, realistic use-case, embedded-in-bigger-pipeline. examples live in `example_test.go`, verified by `// Output:` under `go test` (∴ docs ⊥ rot — CI runs them). new public API ⊥ "done" until its godoc + examples exist (part of task DoD). guards C10.
+
+V18 AUTOSELECT: backend.Default() = highest-preference REGISTERED backend along the descending-performance order (default cuda>metal>vulkan>cpu, §R46), else the reference — the guaranteed final fallback, ALWAYS present. accel backends Register in init() ONLY when their device is detected (§V4 — ⊥ silent claim of an absent device). selection by preference order, ⊥ by registration/import order. order overridable via SetPreference; unknown names skipped safely. NewContext & autograd.NewTape use Default → building with an accel tag routes work to GPU w/ NO code change. GPU-first default justified by benchmark, ⊥ aspiration (§R46).
+
+V19 DOCS-GATE: internal/apicheck walks every public pkg via go/ast (parses SOURCE, ⊥ imports the pkgs → build-tagged cgo backends checked too) and FAILS on: (a) any exported symbol (func/type/method/const/var) lacking a godoc comment, incl. any exported STRUCT FIELD lacking a doc/inline comment (fields = public-facing API, "docs for everything public facing"); (b) any user-facing pkg with no `Example`; (c) any exported user-facing TYPE not shown in a runnable Example — coverage credited if the Type name, its `New<Type>` ctor, OR an `ExampleType`/`ExampleType_*` appears in any Example (bodies inspected via ast). section comments before a grouped const/var attach as doc to the first spec only → each grouped one-liner needs its own comment. (d) any exported METHOD on a user-facing type not exercised in any runnable Example — credited if the method name is CALLED in any Example body (ast-inspected selector calls) or an ExampleType_Method exists. per-type AND per-method rules each have a JUSTIFIED allowlist (typeExampleExempt / methodExampleExempt: interfaces, functional-option/callback func types, enums, config structs, fixture-heavy models, trivial accessors covered by the type example = "where meaningful"). runs as a normal test (`go test ./...`) + `make apicheck`; in `all`/`ci`. = mechanical enforcement of C10/V17/C13 BEFORE commit/push. exempts internal/* + backend impl subpkgs (blank-import registration, not public surface). guards C13.
+
+V20 OP-PARAMS-TYPED: `backend.Attrs` is a sealed interface (`interface{ opAttrs() }`), never `map[string]any`; every op's params = a concrete struct impl (§I6/§C14/ADR-0014). guard test internal/apicheck TestNoStringKeyedAttrs greps the tree → FAILS if the accessor pattern (`attrs.Int(`/`.Bool(`/`.Float(`/`.Ints(` on an Attrs) or an `Attrs map[string]` decl reappears. defaults single-sourced in each struct's `WithDefaults` (kernel+VJP call it → ⊥ drift). construction wrong-field/type = compile error. in `all`/`ci`.
+
+V21 NO-MAGIC-STRINGS: internal/apicheck TestNoMagicBackendNameStrings walks every .go via go/ast (string BasicLits only → comments/import-paths ignored) & FAILS on any backend-name literal ("cpu"/"ref"/"metal"/"cuda"/"vulkan") outside the allowlist {backend/names.go = the Name enum def, tensor/device.go = the DeviceKind Stringer}. enforces §C15/ADR-0015: backends referenced by typed backend.Name constants, ⊥ bare literals. in `all`/`ci`.
+
 V22 BOTTLENECK-MEASURED: a "the floor/bottleneck is X" attribution is a MEASURABLE claim, ⊥ an assumption — before recording it as fact OR building an optimization on it, A/B it by forcing the suspected cost OFF (e.g. force-disable the copy / the alloc / the dispatch) and comparing same-session medians. If removing X ⊥ moves the number, X is not the bottleneck. Prevents §B42-class waste (3 notes asserted a memcpy floor never measured; zero-copy built on it → 0 delta → reverted).
 
 V23 CGO0-COMPILES-TESTS: the pure-Go gate runs `CGO_ENABLED=0 go vet ./...` (or `go test`), ⊥ `go build` alone — build skips _test.go files, so an untagged test file referencing cgo-only symbols passes build but breaks the suite (§B45). every cgo-backend test file carries its build tag; the gate must compile tests to enforce it
@@ -37,47 +79,5 @@ V38 CROSS-IMPL-PERF-CLAIM-IS-MEASURED: a performance claim comparing GoAI to an 
 V39 NO-DANGLING-STRONG-REFS: ∀ id in a §T cites cell, a CHANGELOG task ref, ∨ a §B guard chain → resolves to a defined entity. enforced: internal/specgraph TestNoDanglingStrongRefs (strong edge classes cites/records/guards over the real corpus). weak prose refs stay advisory — V1024-class lookalikes (vocab-size tokens), pre-rewrite ids (T96/R269) & rebased-away commit SHAs are TOLERATED, ⊥ spec bugs. prevents B113 recurrence (V27-in-§T fragment, T765 changelog-only booking)
 
 V40 CICHANGE-ALWAYSRUN-PARITY: the -run path (Run(), what CI executes — ci.yml) and the -impact path (Impact()) MUST apply the IDENTICAL always-run set (§T893 whole-tree meta-tests the reverse import closure can't reach) to every NON-EMPTY selection, and NEITHER to an empty one (docs-only/all-ignored → zero-runner, §C16 EXC2). A package registered in alwaysRun that Impact pads into AFFECTED but Run never selects for execution is a §B98 seam left open — it never actually gates a push (§B116: speccheck was impact-padded but run-skipped on nn/nlp pushes). enforced: internal/cichange TestRunAlwaysRunSelectsMetaTests + TestRunAlwaysRunSkippedOnDocsOnly (mirroring the Impact twins).
-
-V1 PARITY: ∀ op → golden test vs NumPy/torch within §R6 tol (f64 rtol 1e-12, f32 rtol 1e-5). missing golden → generate reproducibly + commit.
-
-V2 GRAD: ∀ differentiable op → numeric gradient check (central finite diff) under rel 1e-4.
-
-V3 CROSS: accel backend result == Pure-Go reference within backend tol defined by V11 (exact bit-match ⊥ required — SIMD/parallel reorders sums).
-
-V4 PLATFORM: CI green ∀ {macOS, Windows, Linux} × {Pure-Go fallback + available accel}. missing accel → skip w/ log, ⊥ silent pass.
-
-V5 BENCH: ∀ optimized op → benchmark + baseline number recorded. regression breaks CI.
-
-V6 PROP: property-based tests (shape algebra, linearity, associativity where math-guaranteed).
-
-V7 CGO: ⊥ cgo in ship path without green optimized Pure-Go ref + committed benchmark over §C.thr. `CGO_ENABLED=0` green everywhere.
-
-V8 STABLE: public API changes only via documented deprecation path.
-
-V9 TRUTH: Pure-Go reference backend = source of numeric truth; accel validated against it (⊥ vice versa).
-
-V10 ACCUM: reduction & GEMM accumulation → f32 inputs accumulate in f64 (| Kahan) unless §R justifies else. parallel/goroutine reduction order documented; non-determinism only w/ §R-justified tol. guards non-associative FP [B6].
-
-V11 CROSSTOL: ∀ accel op → backend tol documented per op, rtol scales w/ reduction length K (⊥ single fixed rtol). defines V3. established: elementwise (T11) & blocked-GEMM (T12/T12b) = exact (tol 0, same accum order); metal f32 GEMM (T20) = rtol(K)=1e-6·√K (MPS f32 accum + reorder) [B5].
-
-V15 UNTRUSTED-IO: ∀ format reader (gguf/safetensors/npy) on hostile input → return error, NEVER panic/OOM/overflow. all length/dim/nesting claims capped BEFORE alloc (header ≤ cap, numel ≤ cap, array-depth ≤ 64, grow ⊥ pre-alloc-from-claim). GUARDED BY native fuzz tests (FuzzLoad/FuzzRead/FuzzRoundTrip) + hostile-input regressions [B28,B31,B32].
-
-V16 VALIDATION-LADDER: ∀ ALGORITHM impl → 2 tiers, both required. tier1 = bit/tol parity vs a reference LIB (torch/sklearn/ggml-py/…). tier2 (FINAL authority) = the defining SCIENTIFIC paper/source (arXiv/DOI/canonical textbook) — implemented formula matches the paper's equation, cited in §R. tier1 alone ⊥ sufficient. FILE FORMATS have no paper → their reference SPEC/impl IS the definitional source (stated, ⊥ invent a paper). paper-tier status tracked per algorithm in §R.
-
-V12 EDGE: ∀ op → documented policy for NaN/Inf (IEEE-754 propagate), empty tensor, zero-dim, non-contiguous view. golden ! include edge cases [B9].
-
-V13 GOLDEN-REPRO: ∀ golden file → record generating env (lib+version, dtype, seed, shape) in sidecar. regeneration deterministic. guards V1 reproducibility [B8].
-
-V14 BACKEND-EXEC: `Backend`/`Kernel` interface ! define execution/sync model (sync default; async accel exposes explicit `Synchronize()`) at T5, before any accel/T20. adding GPU ⊥ break V8 [B7].
-
-V19 DOCS-GATE: internal/apicheck walks every public pkg via go/ast (parses SOURCE, ⊥ imports the pkgs → build-tagged cgo backends checked too) and FAILS on: (a) any exported symbol (func/type/method/const/var) lacking a godoc comment, incl. any exported STRUCT FIELD lacking a doc/inline comment (fields = public-facing API, "docs for everything public facing"); (b) any user-facing pkg with no `Example`; (c) any exported user-facing TYPE not shown in a runnable Example — coverage credited if the Type name, its `New<Type>` ctor, OR an `ExampleType`/`ExampleType_*` appears in any Example (bodies inspected via ast). section comments before a grouped const/var attach as doc to the first spec only → each grouped one-liner needs its own comment. (d) any exported METHOD on a user-facing type not exercised in any runnable Example — credited if the method name is CALLED in any Example body (ast-inspected selector calls) or an ExampleType_Method exists. per-type AND per-method rules each have a JUSTIFIED allowlist (typeExampleExempt / methodExampleExempt: interfaces, functional-option/callback func types, enums, config structs, fixture-heavy models, trivial accessors covered by the type example = "where meaningful"). runs as a normal test (`go test ./...`) + `make apicheck`; in `all`/`ci`. = mechanical enforcement of C10/V17/C13 BEFORE commit/push. exempts internal/* + backend impl subpkgs (blank-import registration, not public surface). guards C13.
-
-V21 NO-MAGIC-STRINGS: internal/apicheck TestNoMagicBackendNameStrings walks every .go via go/ast (string BasicLits only → comments/import-paths ignored) & FAILS on any backend-name literal ("cpu"/"ref"/"metal"/"cuda"/"vulkan") outside the allowlist {backend/names.go = the Name enum def, tensor/device.go = the DeviceKind Stringer}. enforces §C15/ADR-0015: backends referenced by typed backend.Name constants, ⊥ bare literals. in `all`/`ci`.
-
-V20 OP-PARAMS-TYPED: `backend.Attrs` is a sealed interface (`interface{ opAttrs() }`), never `map[string]any`; every op's params = a concrete struct impl (§I6/§C14/ADR-0014). guard test internal/apicheck TestNoStringKeyedAttrs greps the tree → FAILS if the accessor pattern (`attrs.Int(`/`.Bool(`/`.Float(`/`.Ints(` on an Attrs) or an `Attrs map[string]` decl reappears. defaults single-sourced in each struct's `WithDefaults` (kernel+VJP call it → ⊥ drift). construction wrong-field/type = compile error. in `all`/`ci`.
-
-V18 AUTOSELECT: backend.Default() = highest-preference REGISTERED backend along the descending-performance order (default cuda>metal>vulkan>cpu, §R46), else the reference — the guaranteed final fallback, ALWAYS present. accel backends Register in init() ONLY when their device is detected (§V4 — ⊥ silent claim of an absent device). selection by preference order, ⊥ by registration/import order. order overridable via SetPreference; unknown names skipped safely. NewContext & autograd.NewTape use Default → building with an accel tag routes work to GPU w/ NO code change. GPU-first default justified by benchmark, ⊥ aspiration (§R46).
-
-V17 DOCS: ∀ exported package & top-level symbol → godoc present, dual-audience (professional: math + §R paper-cite; layperson: plain what/why/when). ∀ user-facing package → runnable `Example` fns at ≥3 levels: trivial, realistic use-case, embedded-in-bigger-pipeline. examples live in `example_test.go`, verified by `// Output:` under `go test` (∴ docs ⊥ rot — CI runs them). new public API ⊥ "done" until its godoc + examples exist (part of task DoD). guards C10.
 
 V41 SPEC-RENDER-SYNC: SPEC.md + SPEC-worker-*.md = GENERATED views of spec/** (source of truth: one file per section, lexicographic filename sort = render order, tasks file sorts LAST → §T last per §V36). render = concat with single blank-line separator, byte-deterministic; split = proven inverse (byte round-trip asserted before write). ∀ id-bearing entry mutation (add/edit/rm/set-status) via the internal/specgraph CLI — every mutation re-renders + re-verifies (V36 + V39 + table shapes + render-sync) in ONE transaction; violation → nothing written. hand-edit of a rendered view → CI-red TWICE: TestRenderSync (internal/specgraph ∈ cichange always-run) AND the dedicated spec-sync workflow (.github/workflows/spec-sync.yml — re-renders on EVERY push touching spec/**∨SPEC*.md∨FORMAT.md, fails on any byte diff with the use-the-utility hint; closes the docs-only-push gap where ci.yml starts no runner). prose sections: edit the spec/ fragment directly + render. worker views warn-only until workerRenderSyncHard flips (migration phase C). prevents §B96/§B97/§B113-class drift at the mechanism level
