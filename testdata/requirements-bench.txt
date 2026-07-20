@@ -1,0 +1,17 @@
+# Industry-incumbent versions the BENCHMARKS.md cross-language comparisons were
+# measured against (M2 Pro, 2026-07-20). GoAI itself is dependency-free Go; these
+# packages exist ONLY to time the incumbents side-by-side, in a local .venv.
+#
+# Recreate the bench venv:
+#   python3 -m venv .venv && .venv/bin/pip install -r testdata/requirements-bench.txt
+#
+# Each companion also prints its own incumbent version at run time, so a report is
+# self-describing even if this file drifts (SPEC.md V13/V38 — a cross-library number
+# without a recorded incumbent version is not reproducible, see B102/B103).
+#
+# torch is pinned to the version measured here; on a non-Apple box install the
+# platform-appropriate torch build of the same 2.x line.
+numpy==2.5.1
+scikit-learn==1.9.0
+tiktoken==0.13.0
+torch==2.12.1

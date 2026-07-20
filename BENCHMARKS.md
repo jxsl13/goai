@@ -383,13 +383,16 @@ non-negotiables (§V22, §C3):
 
 | Table | Command(s) |
 |---|---|
+| Python bench venv (incumbents) | `python3 -m venv .venv && .venv/bin/pip install -r testdata/requirements-bench.txt` (versions pinned per §V13) |
 | Comparison matrix + Python side (M2) | `make bench-compare bench-python`, render with `go run ./internal/benchcompare/rendertables` |
 | CPU f32 campaign | `GOEXPERIMENT=simd make bench-compare` |
 | CUDA decode scoreboard (worker) | `go test -tags cuda -run TestCUDAQ4KGraphDecodeSweep ./backend/cuda/` |
 | llama.cpp side (worker) | `scripts/bench-llamacpp.sh <model.gguf>` |
 | vLLM side (worker) | uv venv + env flags as documented in docs/benchmarking.md ("Three-way head-to-head") |
 | Apple toy head-to-head | `go run ./internal/benchcompare/exportgguf` + `llama-bench`, per docs/benchmarking.md §T607 |
-| Classical ML vs sklearn | `PERF_CSV_DIR=/tmp/perfcsv go test ./classic -run TestPerfCompareVsSklearn -v` (sklearn companion: T881) |
+| Classical ML vs scikit-learn | `make bench-classic-python` (GoAI + scikit-learn 1.9.0 on the same CSV; §5, T881) |
+| BPE tokenizer vs tiktoken | `go test ./nlp -run '^$' -bench BenchmarkGPT2` + `.venv/bin/python internal/benchcompare/tokenizer_compare.py` (§3, T882) |
+| GPT training step vs torch | `make bench-gpt-train-python` + `GOEXPERIMENT=simd VK_ICD_FILENAMES=$VK_MOLTENVK_ICD go test -tags vulkan ./internal/benchcompare -run '^$' -bench BenchmarkGPTTrainingStep` (§6, T883) |
 | GEMM AMX head-to-head | `GOEXPERIMENT=simd go test ./backend/cpu -run '^$' -bench GEMM -benchtime 10x` |
 
 ## Further reading

@@ -4,6 +4,15 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### bench -- pin incumbent versions + reproduce rows for the comparison suite (2026-07-20)
+
+Capstone for the T881/T882/T883 comparison arc: committed testdata/requirements-bench.txt
+pinning the exact incumbent versions the numbers were measured against (numpy 2.5.1,
+scikit-learn 1.9.0, tiktoken 0.13.0, torch 2.12.1) so the whole .venv is recreatable in one
+command, and filled in the BENCHMARKS.md Reproduce table (venv bootstrap, tokenizer,
+training-step, and the now-committed classical rows). Each companion still prints its own
+incumbent version at run time, so a report stays self-describing (V13/V38).
+
 ### bench -- end-to-end GPT training step measured vs PyTorch (T883, 2026-07-20)
 
 The op-level torch comparison (matmul/MHA) existed, but the end-to-end training step was
