@@ -244,6 +244,11 @@ func BenchmarkBatchedGraph_b768_gqaf16(b *testing.B) {
 
 // b1024/b1536 on the f16-KV path (half the KV footprint of MHA) to find the aggregate-throughput
 // ceiling — where the decode GEMMs saturate the SMs and adding sequences stops buying tok/s.
+// Measured plateau: b768 9195 | b1024 9191 | b1536 9296 tok/s (synthetic bgBuild, LAYERS-ONLY —
+// no logits/sampling, so it OVERSTATES a full serving step). Ratio caveat (SPEC Iw8 honesty): the
+// fair precision-matched vLLM decode baseline is ~6972 tok/s (both f16 activations, same session),
+// NOT the handicapped ~4655 — so the honest standing is ~1.33x fair vLLM, not 2x. These points only
+// pin the SM-saturation plateau; they do not move the honest headline.
 func BenchmarkBatchedGraph_b1024_gqaf16(b *testing.B) {
 	benchBatchedGraph(b, 1024, 128, 22, "graph-gqa-f16")
 }
