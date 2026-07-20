@@ -50,7 +50,10 @@ Steps:
 6. Break goal into ordered tasks. → §T pipe table, all status `.`, ids T1…
 7. §B section with header row only (`id|date|cause|fix`).
 
-Write to `SPEC.md`. Show user full file. Ask: "spec OK? `/review` if high-blast-radius, else `/build`."
+Write the sections as spec/ fragments (spec/10-goals.md … spec/70-tasks.md,
+FORMAT.md HIERARCHY layout) and run `make spec-render`; on an existing corpus
+use the CLI adds instead. Show user the rendered SPEC.md. Ask: "spec OK?
+`/review` if high-blast-radius, else `/build`."
 
 ## DISTILL — code → spec
 
@@ -65,31 +68,41 @@ Input: `bug: <description>`.
 Steps:
 1. Parse bug description.
 2. Find root cause (read relevant code).
-3. Decide: would a new invariant catch recurrence? If yes → draft `V<next>`.
-4. Append §B row: `B<next>|<date>|<cause>|V<N>`.
-5. Append new invariant to §V.
-6. If fix also changes behavior → add/update §T rows.
-7. Show diff. Apply only on user OK.
+3. Decide: would a new invariant catch recurrence? If yes → draft it.
+4. Write the invariant FIRST (id auto-allocated):
+   `go run ./internal/specgraph verif add -tag <TAG> "<testable rule>"`
+5. Write the §B row citing it (guard chain lands as the fix cell's last sentence):
+   `go run ./internal/specgraph bug add -cause "<cause>" -fix "<fix>" -guards V<n>`
+6. If fix also changes behavior → `task add` / `task edit`.
+7. The CLI re-renders + re-verifies per mutation; show the resulting diff.
 
 Rule: every bug gets a §B entry. Invariant optional but preferred.
+⊥ hand-edit SPEC.md ∨ spec/ table rows — the CLI is the writer (§V41).
 
 ## AMEND — targeted edit
 
 Input: `amend §V.3` or `amend §T` etc.
 
-Read that section. Show current. Ask user what changes. Write. Show diff.
-
-Never silently rewrite sections user did not name.
+Read the section (`specgraph entry get <id>` for one entry). Show current.
+Ask user what changes. Apply via the CLI:
+- table rows: `task edit -text/-cites/-state/-priority <id>`; removal: `entry rm <id>`
+- defs: `goal|constraint|archinv edit <id> "<new text>"`; `verif add` for new §V
+- prose sections (§I layer model, worker §RUN/§PERF/§GOAL/§NEXT, preambles):
+  edit the `spec/` fragment directly, then `make spec-render`.
+Show diff. Never silently rewrite sections user did not name.
 
 ## OUTPUT RULES
 
-- Caveman format per `FORMAT.md`.
+- Caveman format per `FORMAT.md` (incl. the HIERARCHY section: spec/ = source, SPEC.md = generated view).
 - Preserve identifiers, paths, code verbatim.
-- Numbering monotonic — never reuse §V.N or §B.N.
-- §T row `cites` column ! list §V/§I deps: `T5|.|impl auth mw|V2,I.api`.
+- Numbering monotonic — ids come from the CLI (`next-id` / auto-allocation on add), never hand-numbered.
+- §T `cites` ! list §V/§I deps: `task add -cites V2,I.api "impl auth mw"`.
+- Every mutation goes through `go run ./internal/specgraph` — it re-renders the
+  views and re-verifies (V36+V39+V41) in one transaction; a violating write is
+  rejected with nothing written.
 
 ## NON-GOALS
 
 - No sub-agents. Main thread writes.
-- No dashboards, no logs, no state files beyond SPEC.md itself.
+- No dashboards, no logs, no state files beyond the spec/ tree and its generated views.
 - No auto-build after spec. User invokes build explicitly.

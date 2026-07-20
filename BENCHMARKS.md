@@ -113,7 +113,7 @@ unfused elementwise). A later fused-forward pass — f16 activations end-to-end
 plus residual-into-GEMM-epilogue and f16 attention-IO fusion (both verified
 bit-identical) — **narrows the matched-precision gap to rough parity**:
 same-session at matched f32-accumulate, fused GoAI decode measures b64 5,454
-vs vLLM 5,252 (~1.0× after the ~4% logits adjustment) and b256 7,864 vs 7,811
+vs vLLM 5,252 (≈1.0× after the ≈4% logits adjustment) and b256 7,864 vs 7,811
 (~0.97×), up from the 0.90× of the f32-activation path. So the honest current
 read is **near-parity at matched precision on short context**, with vLLM still
 ahead at long context (its FlashDecoding) — and the fused f16-accumulate path
@@ -127,7 +127,7 @@ unfused f32-activation path) — its FlashAttention + mature GEMM scheduling. Go
 rate that vLLM leaves on the table by defaulting to f32). That path —
 validated token-identical to f32 on TinyLlama — on GoAI's fastest
 conversion-free forward (f16 activations end-to-end) lifts throughput to
-~6,100 / ~9,080 full-step (≈**1.20× / 1.22×** vs vLLM's f32-acc default
+≈6,100 / ≈9,080 full-step (≈**1.20× / 1.22×** vs vLLM's f32-acc default
 @64/256), but it is **not** a like-for-like kernel comparison (lower
 accumulate precision). Honest verdict:
 **capability parity reached; raw decode-kernel throughput still favors vLLM at

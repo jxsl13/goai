@@ -79,7 +79,8 @@ GO or NO-GO, never a shrug. Review is the checkpoint that stops a confident wron
 
 ## BOUNDARIES
 
-- ⊥ write SPEC.md. Draft §V & hand to spec.
+- ⊥ write spec files. Draft §V as ready-to-run
+  `specgraph verif add -tag <TAG> "<rule>"` invocations & hand to spec (§V41).
 - ⊥ pass a finding with no evidence as fact. Flag `[unverified]`.
 - ⊥ review trivia. Right-size or skip.
 - ⊥ rewrite the user's intent. You harden the spec, you do not replace its goal.

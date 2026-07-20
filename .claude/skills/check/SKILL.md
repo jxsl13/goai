@@ -11,7 +11,10 @@ description: |
 
 # check — drift report
 
-Pure diagnostic. Reports violations. Writes nothing. User decides remedy.
+Pure diagnostic. Reports violations. Writes nothing. Read toolbox: `make spec-graph ARGS='…'` queries,
+`specgraph verify` (render-sync + V36 + V39), `specgraph entry get <id>`,
+`specgraph dangling`. SPEC.md = generated view of spec/ (§V41) — audit the
+views, cite spec/ fragment file:line in findings. User decides remedy.
 
 Spec drifting silently from code is the #1 SDD failure mode. check is the
 detector. Run it after each `/build` and before each ship — drift caught here is

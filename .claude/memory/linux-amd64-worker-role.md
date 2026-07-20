@@ -42,3 +42,5 @@ This machine is a **secondary** goai build worker (user directive, 2026-07-14). 
 **Authoritative task log = the worker sub-spec `SPEC-worker-linux-amd64-cuda.md` §Tw** (not this memory). As of PR #11: F32 GEMM at nr=16 = 153 GFLOP/s (3.6× scalar, vendor gap 3.8×).
 
 **Next options (see sub-spec §NEXT):** Nx1 CUDA activation residency (§V14/ADR-0019 full — big, user priority); Nx2 remaining = cache blocking (ADR-0017 re-open this large-cache x86) + FMA-saturation microkernel; Nx3 batched cuBLAS Sgemm for attention. `.venv`=numpy+torch-cpu, `.venv-cuda`=CUDA 12.9.
+
+**§V41 PICKUP (2026-07-20):** the spec corpus moved to a `spec/` source tree; `SPEC-worker-linux-amd64-cuda.md` is now a GENERATED view. After your next `git pull` of main: book §Tw rows via `go run ./internal/specgraph task add -worker linux-amd64-cuda -cites <ids> "<text>"`, edit prose sections in `spec/worker/linux-amd64-cuda/` + `make spec-render`, add `go run ./internal/specgraph verify` to your RUN4 gates (see RUN9 in §RUN). Hand-edits to the rendered file are warn-only for now and will turn CI-red once workerRenderSyncHard flips.

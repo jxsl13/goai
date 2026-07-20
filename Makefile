@@ -207,6 +207,16 @@ spec-graph:
 spec-graph-check:
 	$(CGO_OFF) $(GO) test ./internal/specgraph/
 
+## spec-render: regenerate the SPEC.md + SPEC-worker-*.md views from spec/ (§V41).
+spec-render:
+	$(CGO_OFF) $(GO) run ./internal/specgraph render
+
+## spec-verify: render-sync + §V36 speccheck + table shapes + §V39 dangling
+## strong refs, plus the full markdown lint. The local pre-push spec gate.
+spec-verify:
+	$(CGO_OFF) $(GO) run ./internal/specgraph verify
+	$(GO) run ./internal/mdlint ./...
+
 ## perfscan: static finder for the per-element hot-loop anti-patterns (T919) —
 ## per-element AtF64/SetF64 with no flatF64/flatF32 fast path, allocation inside a
 ## per-element loop, batch API fed a wrapped single row. Advisory (candidates need

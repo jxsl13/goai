@@ -27,6 +27,23 @@ commands:
   dangling             references whose target does not exist (spec hygiene)
   help                 this text
 
+mutation commands (§V41 — spec/ is the source, SPEC.md a generated view;
+every mutation re-renders and fully re-verifies before writing anything):
+  next-id T|B|R|V|G|C|I                  print the next free id of a class
+  task add [flags] <text>                new §T row (-cites, -priority, -status, -id; -worker <n> books a Tw row)
+  task set-status [flags] <id> .|~|x     forward-only lifecycle (backward needs -force); keeps state in step
+  task edit [flags] <id>                 rewrite cells (-text, -cites, -state, -priority)
+  bug add -cause .. -fix .. [flags]      new §B row, newest-first (-date; -guards V<n> appends the guard chain)
+  research add -claim .. -source .. [-conf high|med|low|ref]
+  verif add -tag TAG <text>              new §V def (canonical "V<n> TAG:" shape)
+  goal|constraint|archinv add <text> | edit <id> <text> | rm <id>
+  entry get <id>                         raw source line + spec/<file>:<line>
+  entry rm [-force] <id>                 remove an entry (refuses when strong refs point at it)
+  NOTE: mutation flags come BEFORE positional text (Go flag convention).
+  render [-check]               regenerate SPEC.md + SPEC-worker-*.md (-check: report drift, write nothing)
+  verify                        render-sync + §V36 speccheck + table shapes + §V39 dangling strong refs
+  split [-force]                one-time migration SPEC.md -> spec/ (also re-import during worker phase A)
+
 flags:
   -d N            traversal depth (related: 2, impact: 3)
   -n N            max records per group (default 20; 0 = all)
@@ -48,6 +65,7 @@ func main() {
 		noCache    = flag.Bool("no-cache", false, "bypass .specgraph/ caches")
 		refresh    = flag.Bool("refresh", false, "force rebuild")
 		embedModel = flag.String("embed-model", os.Getenv("SPECGRAPH_EMBED_MODEL"), "HF embedding checkpoint dir")
+		check      = flag.Bool("check", false, "render: report drift instead of writing")
 	)
 	flag.Usage = func() { fmt.Fprintln(os.Stderr, usage) }
 	flag.Parse()
@@ -61,9 +79,13 @@ func main() {
 		fmt.Fprintln(os.Stderr, "specgraph:", err)
 		os.Exit(1)
 	}
-	g := loadGraph(root, !*noGit, *noCache, *refresh)
 	out := &strings.Builder{}
 	cmd, rest := args[0], args[1:]
+	if handled, rc := dispatchMutation(out, root, cmd, rest, *check); handled {
+		fmt.Print(out.String())
+		os.Exit(rc)
+	}
+	g := loadGraph(root, !*noGit, *noCache, *refresh)
 	switch cmd {
 	case "show":
 		cmdShow(out, g, one(rest), *limit, *dot)
@@ -96,6 +118,133 @@ func main() {
 		os.Exit(2)
 	}
 	fmt.Print(out.String())
+}
+
+// newMutFlagSet builds the per-subcommand flag set: mutation flags come
+// right after the subcommand words, positional text follows them
+// (`specgraph verif add -tag TAG the text …`, Go flag convention).
+func newMutFlagSet() (*flag.FlagSet, *mutFlags) {
+	fs := flag.NewFlagSet("mutation", flag.ContinueOnError)
+	fl := &mutFlags{}
+	fs.StringVar(&fl.Cites, "cites", "", "comma-joined cites list")
+	fs.StringVar(&fl.Priority, "priority", "", "task priority high|med|low")
+	fs.StringVar(&fl.Status, "status", "", "initial task status (default .)")
+	fs.StringVar(&fl.ID, "id", "", "explicit id (default: allocate next)")
+	fs.StringVar(&fl.Worker, "worker", "", "worker name for worker task rows")
+	fs.StringVar(&fl.Cause, "cause", "", "bug cause cell")
+	fs.StringVar(&fl.Fix, "fix", "", "bug fix cell")
+	fs.StringVar(&fl.Date, "date", "", "bug date (default today UTC)")
+	fs.StringVar(&fl.Guards, "guards", "", "guard chain ids appended to the fix cell")
+	fs.StringVar(&fl.Claim, "claim", "", "research claim cell")
+	fs.StringVar(&fl.Source, "source", "", "research source cell")
+	fs.StringVar(&fl.Conf, "conf", "", "research confidence high|med|low|ref")
+	fs.StringVar(&fl.Tag, "tag", "", "verification invariant TAG")
+	fs.StringVar(&fl.Text, "text", "", "replacement text for edit")
+	fs.StringVar(&fl.State, "state", "", "task state cell")
+	fs.BoolVar(&fl.Force, "force", false, "override guarded transitions/removals")
+	fs.BoolVar(&fl.DryRun, "dry-run", false, "verify and report, write nothing")
+	return fs, fl
+}
+
+// dispatchMutation routes the §V41 mutation/render commands; returns false
+// when cmd is a query for the graph-backed switch in main. rest[0] is the
+// subcommand; flags follow it, positionals come last.
+func dispatchMutation(out *strings.Builder, root, cmd string, rest []string, check bool) (handled bool, rc int) {
+	sub := ""
+	if len(rest) > 0 {
+		sub = rest[0]
+	}
+	fs, flp := newMutFlagSet()
+	parse := func() ([]string, bool) {
+		if len(rest) < 2 {
+			return nil, true
+		}
+		if err := fs.Parse(rest[1:]); err != nil {
+			fmt.Fprintf(out, "%v\n", err)
+			return nil, false
+		}
+		return fs.Args(), true
+	}
+	switch cmd {
+	case "next-id":
+		return true, cmdNextID(out, root, sub)
+	case "task", "bug", "research", "verif", "goal", "constraint", "archinv", "entry":
+		pos, ok := parse()
+		if !ok {
+			return true, 2
+		}
+		fl := *flp
+		text := strings.Join(pos, " ")
+		switch cmd + " " + sub {
+		case "task add":
+			return true, cmdTaskAdd(out, root, text, fl)
+		case "task set-status":
+			if len(pos) < 2 {
+				fmt.Fprintln(out, "task set-status: [flags] <id> <.|~|x>")
+				return true, 2
+			}
+			return true, cmdTaskSetStatus(out, root, pos[0], pos[1], fl)
+		case "task edit":
+			if len(pos) < 1 {
+				fmt.Fprintln(out, "task edit: [flags] <id>")
+				return true, 2
+			}
+			return true, cmdTaskEdit(out, root, pos[0], fl)
+		case "bug add":
+			return true, cmdBugAdd(out, root, fl)
+		case "research add":
+			return true, cmdResearchAdd(out, root, fl)
+		case "verif add":
+			return true, cmdVerifAdd(out, root, text, fl)
+		case "verif edit":
+			if len(pos) < 2 {
+				fmt.Fprintln(out, "verif edit: [flags] <id> <text>")
+				return true, 2
+			}
+			return true, cmdDefEdit(out, root, pos[0], strings.Join(pos[1:], " "), fl)
+		case "goal add", "constraint add", "archinv add":
+			class := map[string]string{"goal": "G", "constraint": "C", "archinv": "I"}[cmd]
+			return true, cmdDefAdd(out, root, class, text, fl)
+		case "goal edit", "constraint edit", "archinv edit":
+			if len(pos) < 2 {
+				fmt.Fprintf(out, "%s edit: [flags] <id> <text>\n", cmd)
+				return true, 2
+			}
+			return true, cmdDefEdit(out, root, pos[0], strings.Join(pos[1:], " "), fl)
+		case "goal rm", "constraint rm", "archinv rm", "entry rm":
+			if len(pos) < 1 {
+				fmt.Fprintf(out, "%s rm: [flags] <id>\n", cmd)
+				return true, 2
+			}
+			return true, cmdEntryRm(out, root, pos[0], fl)
+		case "entry get":
+			if len(pos) < 1 {
+				fmt.Fprintln(out, "entry get: <id>")
+				return true, 2
+			}
+			return true, cmdEntryGet(out, root, pos[0])
+		}
+		fmt.Fprintf(out, "%s: unknown subcommand %q (try help)\n", cmd, sub)
+		return true, 2
+	case "render":
+		for _, a := range rest {
+			if a == "-check" || a == "--check" {
+				check = true
+			}
+		}
+		return true, cmdRender(out, root, check)
+	case "verify":
+		return true, cmdVerify(out, root)
+	case "split":
+		force := false
+		for _, a := range rest {
+			if a == "-force" || a == "--force" {
+				force = true
+			}
+		}
+		return true, cmdSplit(out, root, force)
+	}
+	return false, 0
 }
 
 func one(args []string) string {

@@ -41,8 +41,8 @@ func (s *stringList) Set(v string) error {
 // defaultRules returns this repository's rules expressed as config vocabulary —
 // exactly what the hardcoded classifier used to do (§T584).
 func defaultRules() (ignore, ignoreRe, fullRe, pkgRe, alwaysRun []string) {
-	ignore = []string{"docs", ".claude"}     // + .claude/** (skills/workflows/memory — no Go, never affects build/tests; §T585 root-markdown covers LICENSE.md)
-	ignoreRe = []string{`^[^/]+\.(md|txt)$`} // root-level markdown/text (deeper ones can be embedded, §B50)
+	ignore = []string{"docs", ".claude", "spec"} // + .claude/** (skills/workflows/memory) + spec/** (the §V40 source tree — pure markdown, never embedded; §T585 root-markdown covers LICENSE.md)
+	ignoreRe = []string{`^[^/]+\.(md|txt)$`}     // root-level markdown/text (deeper ones can be embedded, §B50)
 	fullRe = []string{`^go\.sum$`, `^Makefile$`, `^\.github/`}
 	// The whole-tree meta-tests walk SOURCE/markdown they have no import edge to, so
 	// the reverse closure can never select them (§B98: they rot red while CI stays
@@ -63,7 +63,10 @@ func defaultRules() (ignore, ignoreRe, fullRe, pkgRe, alwaysRun []string) {
 	//     stay OUT until they are green: apicheck fails the §V19 doc-debt (T892, now
 	//     140→18, blocked on the worker's llamagpu godoc); mdlint fails on
 	//     .claude/memory + SPEC-worker-*.md (T889). Add them here once green.
-	alwaysRun = []string{"internal/speccheck", "internal/perfscan"}
+	//   - internal/specgraph (§V39 dangling refs + §V41 render-sync: spec/ is the
+	//     source, SPEC.md a generated view) is GREEN and hermetic — enabled so a
+	//     hand-edited rendered view goes red on the next non-empty selection.
+	alwaysRun = []string{"internal/speccheck", "internal/perfscan", "internal/specgraph"}
 	return ignore, ignoreRe, fullRe, pkgRe, alwaysRun
 }
 
