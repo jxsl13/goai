@@ -531,12 +531,12 @@ func sigmoidKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs
 		})
 	case tensor.F32:
 		d, o := xc.Storage().F32(), out.Storage().F32()
-		if vexpNeon {
-			// arm64 perf build: f32-native 4-wide NEON sigmoid — the same
-			// stable split evaluated on the vexp exp primitive (vexp.go,
-			// §T665). Compile-time const: every other build (default, amd64)
-			// keeps the f64 path below bit-for-bit; this path rides the
-			// ADR-0021 f32 tolerance.
+		if vexpF32Fast {
+			// SIMD perf build: f32-native vectorized sigmoid — the same stable
+			// split on the vexp exp primitive, 4-wide NEON on arm64 / 8-wide AVX2
+			// on amd64 (vexp.go / vexp_amd64.go, §T665). Compile-time const: the
+			// plain (no-simd) build keeps the f64 path below bit-for-bit; this
+			// path rides the ADR-0021 f32 tolerance.
 			parallel(len(o), func(lo, hi int) { vsigmoidF32(o[lo:hi], d[lo:hi]) })
 			break
 		}
@@ -570,12 +570,12 @@ func siluKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) (
 		})
 	case tensor.F32:
 		d, o := xc.Storage().F32(), out.Storage().F32()
-		if vexpNeon {
-			// arm64 perf build: f32-native 4-wide NEON SiLU on the vexp exp
-			// primitive (vexp.go, §T665) — the SwiGLU FFN activation on every
-			// Llama/Qwen/Mistral layer was scalar f64 math.Exp here. Compile-
-			// time const: every other build (default, amd64) keeps the f64
-			// path below bit-for-bit; this path rides the ADR-0021 tolerance.
+		if vexpF32Fast {
+			// SIMD perf build: f32-native vectorized SiLU on the vexp exp primitive
+			// (4-wide NEON on arm64 / 8-wide AVX2 on amd64; vexp.go / vexp_amd64.go,
+			// §T665) — the SwiGLU FFN activation on every Llama/Qwen/Mistral layer
+			// was scalar f64 math.Exp here. Compile-time const: the plain (no-simd)
+			// build keeps the f64 path below bit-for-bit; rides the ADR-0021 tolerance.
 			parallel(len(o), func(lo, hi int) { vsiluF32(o[lo:hi], d[lo:hi]) })
 			break
 		}
@@ -634,14 +634,11 @@ func init() {
 	reg(backend.OpSiLU, siluKernelCPU)
 
 	if vexpF32Fast {
-		// SIMD perf build, F32 only (§T664): the vectorized GELU VJP — 4-wide NEON
-		// on arm64, 8-wide AVX2 on amd64. gelu_backward was 18.9% of the f32 GPT
-		// training step as the scalar-f64 ref fallback.
+		// SIMD perf build, F32 only (§T664/§T665): the vectorized GELU and SiLU VJPs
+		// — 4-wide NEON on arm64, 8-wide AVX2 on amd64. gelu_backward was 18.9% of
+		// the f32 GPT training step; silu_backward is the SwiGLU-FFN VJP on every
+		// Llama/Qwen/Mistral layer. The plain build keeps the ref fallbacks.
 		std.add(backend.OpGELUBackward, tensor.F32, geluBackwardKernelCPU)
-	}
-	if vexpNeon {
-		// arm64-only for now, F32 only (§T665): the NEON SiLU VJP (the amd64 AVX
-		// SiLU campaign is separate). Every other build keeps the ref fallback.
 		std.add(backend.OpSiLUBackward, tensor.F32, siluBackwardKernelCPU)
 	}
 }
