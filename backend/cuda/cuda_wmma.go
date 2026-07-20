@@ -150,3 +150,34 @@ func GroupedQueryAttentionWMMA(q, k, v *DeviceF32, qHeads, kvHeads int) (*Device
 	}
 	return &DeviceF32{ptr: out, rows: seq, cols: q.cols}, nil
 }
+
+// GroupedQueryAttentionWMMAF16 is GroupedQueryAttentionWMMA with f16 (DeviceF16) Q/K/V — the wmma
+// kernel takes half* natively, so this skips the internal f32->f16 convert the f32 path pays. For the
+// A1 prefill (Q/K/V are f16 out of the GEMMs) it removes a DOUBLE conversion (caller's f16->f32 +
+// wrapper's f32->f16). Output is f32 (the kernel writes f32). Bit-identical to the f32 path fed the
+// same f16-rounded Q/K/V.
+func GroupedQueryAttentionWMMAF16(q, k, v *DeviceF16, qHeads, kvHeads int) (*DeviceF32, error) {
+	if qHeads <= 0 || kvHeads <= 0 || qHeads%kvHeads != 0 || q.cols%qHeads != 0 {
+		return nil, fmt.Errorf("cuda: GQA-WMMA-f16 bad head config q=%d kv=%d width=%d", qHeads, kvHeads, q.cols)
+	}
+	seq := q.rows
+	hd := q.cols / qHeads
+	if hd != 64 || seq%16 != 0 {
+		return nil, fmt.Errorf("cuda: GQA-WMMA-f16 needs hd==64 and seq%%16==0 (got hd=%d seq=%d)", hd, seq)
+	}
+	if k.cols != kvHeads*hd || v.cols != kvHeads*hd || k.rows != seq || v.rows != seq {
+		return nil, fmt.Errorf("cuda: GQA-WMMA-f16 k/v shape mismatch")
+	}
+	out := C.cu_alloc_f32(C.int(seq * q.cols))
+	if out == nil {
+		return nil, fmt.Errorf("cuda: GQA-WMMA-f16 output alloc failed")
+	}
+	scale := float32(1.0 / math.Sqrt(float64(hd)))
+	rc := C.cu_wmma_attn_gqa_f16(unsafe.Pointer(&wmmaAttnGqaFatbin[0]), C.int(len(wmmaAttnGqaFatbin)),
+		q.ptr, k.ptr, v.ptr, out, C.int(seq), C.int(qHeads), C.int(kvHeads), C.int(hd), C.float(scale))
+	if rc != 0 {
+		C.cu_free_f32(out)
+		return nil, fmt.Errorf("cuda: GQA-WMMA-f16 failed (code %d)", int(rc))
+	}
+	return &DeviceF32{ptr: out, rows: seq, cols: q.cols}, nil
+}

@@ -891,6 +891,31 @@ done2:
     return rc;
 }
 
+// cu_wmma_attn_gqa_f16: like cu_wmma_attn_gqa but Q/K/V are ALREADY f16 (u16) — the wmma_attn_gqa
+// kernel takes half* natively, so this skips the internal f32->f16 convert + q16/k16/v16 alloc that
+// the f32 wrapper pays. For the A1 prefill (whose Q/K/V are f16 out of the projection GEMMs), this
+// removes a DOUBLE conversion: the caller's own f16->f32 AND this wrapper's f32->f16. Output is f32.
+int cu_wmma_attn_gqa_f16(const void* fatbin, int fatlen, const void* dQ16, const void* dK16,
+                         const void* dV16, void* dO32, int seq, int qHeads, int kvHeads, int hd,
+                         float scale) {
+    (void)fatlen;
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto donewf16; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto donewf16; }
+    if (!gWmmaAttnGqa && load_module_kernel(fatbin, "wmma_attn_gqa", &gWmmaAttnGqa) != 0) { rc = -2; goto donewf16; }
+    {
+        unsigned shbytes = (unsigned)(16 * seq * (int)sizeof(float));
+        cuFuncSetAttribute(gWmmaAttnGqa, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, shbytes);
+        void* args[9] = { &dQ16, &dK16, &dV16, &dO32, &seq, &qHeads, &kvHeads, &hd, &scale };
+        unsigned gx = (unsigned)(seq / 16), gy = (unsigned)qHeads;
+        rc = (cuLaunchKernel(gWmmaAttnGqa, gx, gy, 1, 32, 1, 1, shbytes, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+donewf16:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
 // launch_unary runs an in-place elementwise kernel (float* x, int n) on gStream.
 static int launch_unary(CUfunction fn, void* d, int n) {
     int threads = 256, blocks = (n + threads - 1) / threads;

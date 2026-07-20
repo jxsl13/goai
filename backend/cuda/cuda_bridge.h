@@ -106,6 +106,8 @@ int cu_paged_decode_attn_gqa_f16(const void* dQ, const void* dPoolK16, const voi
 int cu_paged_decode_attn_gqa_f16_qio(const void* dQ16, const void* dPoolK16, const void* dPoolV16, const void* dBlockTables, const void* dSeqLens, void* dO16, int batch, int qHeads, int kvHeads, int hd, int blockSize, int maxBlocks, float scale);
 // cu_wmma_attn_gqa: fused prefill attention on f32 DEVICE buffers, [seq,heads·hd] GQA layout — drop-in for GroupedQueryAttention.
 int cu_wmma_attn_gqa(const void* fatbin, int fatlen, const void* dQ32, const void* dK32, const void* dV32, void* dO32, int seq, int qHeads, int kvHeads, int hd, float scale);
+// cu_wmma_attn_gqa_f16: same but Q/K/V already f16 — skips the internal f32->f16 convert. Output f32.
+int cu_wmma_attn_gqa_f16(const void* fatbin, int fatlen, const void* dQ16, const void* dK16, const void* dV16, void* dO32, int seq, int qHeads, int kvHeads, int hd, float scale);
 void* cu_clone_f32(const void* src, int n);
 int cu_zero_f32(void* d, int n); // zero n floats on the stream
 // cu_blit: contiguous device→device copy of n floats, src[srcOff:]→dst[dstOff:].
