@@ -1284,14 +1284,18 @@ int cu_swiglu_f16(void* gate, const void* up, int n) {
     if (!gSwigluF16 && compile_kernel(
             A1_CVT_HELPERS
             "extern \"C\" __global__ void swiglu_f16(unsigned short* gate, const unsigned short* up, int n){\n"
-            "  int i = blockIdx.x*blockDim.x + threadIdx.x;\n"
-            "  if (i < n){ float v = h2f(gate[i]);\n"
-            "    float s = v>=0.0f ? 1.0f/(1.0f+expf(-v)) : expf(v)/(1.0f+expf(v));\n"
-            "    gate[i] = f2h(v*s*h2f(up[i])); }\n"
+            "  int base = (blockIdx.x*blockDim.x + threadIdx.x)*8;\n"
+            "  if (base + 8 <= n){\n" // vectorized: 8 u16 (uint4) per thread, 8x fewer load/store instrs
+            "    uint4 g = *(uint4*)(gate+base); uint4 u = *(const uint4*)(up+base);\n"
+            "    unsigned short* gp = (unsigned short*)&g; const unsigned short* upp = (const unsigned short*)&u;\n"
+            "    #pragma unroll\n"
+            "    for (int e=0;e<8;e++){ float v=h2f(gp[e]); float s=v>=0.0f?1.0f/(1.0f+expf(-v)):expf(v)/(1.0f+expf(v)); gp[e]=f2h(v*s*h2f(upp[e])); }\n"
+            "    *(uint4*)(gate+base) = g;\n"
+            "  } else { for (int i=base;i<n;i++){ float v=h2f(gate[i]); float s=v>=0.0f?1.0f/(1.0f+expf(-v)):expf(v)/(1.0f+expf(v)); gate[i]=f2h(v*s*h2f(up[i])); } }\n"
             "}\n",
             "swiglu_f16.cu", "swiglu_f16", &gSwigluF16) != 0) { rc = -2; goto donesf; }
     {
-        int threads = 256, blocks = (n + threads - 1) / threads;
+        int threads = 256, blocks = ((n + 7) / 8 + threads - 1) / threads; // 8 elems/thread (vectorized)
         void* args[3] = { &gate, (void*)&up, &n };
         rc = (cuLaunchKernel(gSwigluF16, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
@@ -1388,12 +1392,18 @@ int cu_add_f16(void* dst, const void* src, int n) {
     if (!gAddF16 && compile_kernel(
             A1_CVT_HELPERS
             "extern \"C\" __global__ void add_f16(unsigned short* dst, const unsigned short* src, int n){\n"
-            "  int i = blockIdx.x*blockDim.x + threadIdx.x;\n"
-            "  if (i < n) dst[i] = f2h(h2f(dst[i]) + h2f(src[i]));\n"
+            "  int base = (blockIdx.x*blockDim.x + threadIdx.x)*8;\n"
+            "  if (base + 8 <= n){\n" // vectorized: 8 u16 (uint4) per thread
+            "    uint4 d = *(uint4*)(dst+base); uint4 s = *(const uint4*)(src+base);\n"
+            "    unsigned short* dp = (unsigned short*)&d; const unsigned short* sp = (const unsigned short*)&s;\n"
+            "    #pragma unroll\n"
+            "    for (int e=0;e<8;e++) dp[e]=f2h(h2f(dp[e])+h2f(sp[e]));\n"
+            "    *(uint4*)(dst+base) = d;\n"
+            "  } else { for (int i=base;i<n;i++) dst[i]=f2h(h2f(dst[i])+h2f(src[i])); }\n"
             "}\n",
             "add_f16.cu", "add_f16", &gAddF16) != 0) { rc = -2; goto doneaf; }
     {
-        int threads = 256, blocks = (n + threads - 1) / threads;
+        int threads = 256, blocks = ((n + 7) / 8 + threads - 1) / threads; // 8 elems/thread
         void* args[3] = { &dst, (void*)&src, &n };
         rc = (cuLaunchKernel(gAddF16, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
