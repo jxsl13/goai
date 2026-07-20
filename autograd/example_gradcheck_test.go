@@ -53,9 +53,13 @@ func fusedPoly(ctx *backend.Context, x *tensor.Tensor) *tensor.Tensor {
 // nil error means the hand-derived calculus matches the kernel.
 func ExampleGradCheck() {
 	x := tensor.FromFloat64(tensor.Shape{4}, []float64{0.4, -1.2, 2.0, 0.1})
+	options := []autograd.GradCheckOption{
+		autograd.WithGradCheckEps(1e-6),
+		autograd.WithGradCheckRTol(1e-5),
+	}
 	err := autograd.GradCheck(func(ctx *backend.Context, xs []*tensor.Tensor) (*tensor.Tensor, error) {
 		return fusedPoly(ctx, xs[0]), nil
-	}, []*tensor.Tensor{x})
+	}, []*tensor.Tensor{x}, options...)
 	fmt.Println("custom VJP verified:", err == nil)
 	// Output: custom VJP verified: true
 }

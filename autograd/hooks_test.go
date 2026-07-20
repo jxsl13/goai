@@ -410,8 +410,9 @@ func ExampleTape_RegisterGradHook() {
 	}
 	h, _ := backend.Execute(ctx, backend.OpExp, []*tensor.Tensor{w}, nil)
 
-	// Clip this tensor's gradient into ±0.5 the moment it is final.
-	tape.RegisterGradHook(h[0], func(g *tensor.Tensor) *tensor.Tensor {
+	// Clip this tensor's gradient into ±0.5 the moment it is final. Naming the
+	// callback type makes the hook reusable across tensors.
+	clip := autograd.GradHook(func(g *tensor.Tensor) *tensor.Tensor {
 		out := tensor.New(g.Dtype(), g.Shape().Clone())
 		src, dst := g.Storage().F64(), out.Storage().F64()
 		clipped := 0
@@ -424,6 +425,7 @@ func ExampleTape_RegisterGradHook() {
 		fmt.Printf("clipped %d of %d gradient elements\n", clipped, len(src))
 		return out
 	})
+	tape.RegisterGradHook(h[0], clip)
 
 	y, _ := backend.Execute(ctx, backend.OpTanh, h, nil)
 	if err := tape.Backward(y[0]); err != nil {
