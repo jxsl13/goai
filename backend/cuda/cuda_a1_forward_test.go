@@ -433,3 +433,9 @@ func BenchmarkBatchedGraphA1_b512_len128(b *testing.B) { benchBatchedGraphA1(b, 
 func BenchmarkBatchedGraphA1_b512_len256(b *testing.B) { benchBatchedGraphA1(b, 512, 256, 22) }
 func BenchmarkBatchedGraphA1_b512_len384(b *testing.B) { benchBatchedGraphA1(b, 512, 384, 22) }
 func BenchmarkBatchedGraphA1_b512_len512(b *testing.B) { benchBatchedGraphA1(b, 512, 512, 22) }
+
+// Long-context (512) throughput vs BATCH: at ctx 512 vLLM wins (5875 vs our b512 4882). Does our
+// throughput keep scaling with batch at long context? If so, higher serving batch closes the gap.
+func BenchmarkBatchedGraphA1_b256_len512(b *testing.B)  { benchBatchedGraphA1(b, 256, 512, 22) }
+func BenchmarkBatchedGraphA1_b768_len512(b *testing.B)  { benchBatchedGraphA1(b, 768, 512, 22) }
+func BenchmarkBatchedGraphA1_b1024_len512(b *testing.B) { benchBatchedGraphA1(b, 1024, 512, 22) }
