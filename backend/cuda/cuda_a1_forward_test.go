@@ -67,6 +67,9 @@ func benchBatchedGraphA1(b *testing.B, batch, seqLen, layers int) {
 	if os.Getenv("GOAI_F16_ACC32") == "1" {
 		gemm = cuda.GemmF16PureAcc32
 	}
+	// GOAI_FUSE_RESIDUAL=1 folds the wo/wd residual adds into those GEMMs' epilogue (beta=1),
+	// removing 2 AddF16 kernels + 2 scratch buffers per layer — the first fused-forward lever.
+	fuseResid := os.Getenv("GOAI_FUSE_RESIDUAL") == "1"
 	step := func() {
 		x := cuda.AllocU16(batch * dim)
 		cuda.CvtF32ToF16(x, x0.DevPtr(), batch*dim)
@@ -101,11 +104,16 @@ func benchBatchedGraphA1(b *testing.B, batch, seqLen, layers int) {
 				cuda.CvtF32ToF16(da, daf.DevPtr(), batch*qW)
 				daf.Free()
 			}
-			tmp := cuda.AllocU16(batch * dim)
-			gemm(da, l.wo.WPtr(), tmp, batch, qW, dim)
-			cuda.FreeDev(da)
-			cuda.AddF16(x, tmp, batch*dim)
-			cuda.FreeDev(tmp)
+			if fuseResid {
+				cuda.GemmF16PureAddC(da, l.wo.WPtr(), x, batch, qW, dim) // x += da·wo
+				cuda.FreeDev(da)
+			} else {
+				tmp := cuda.AllocU16(batch * dim)
+				gemm(da, l.wo.WPtr(), tmp, batch, qW, dim)
+				cuda.FreeDev(da)
+				cuda.AddF16(x, tmp, batch*dim)
+				cuda.FreeDev(tmp)
+			}
 			dh2 := cuda.AllocU16(batch * dim)
 			cuda.RMSNormF16(x, dh2, l.gFFN.VecPtr(), batch, dim, 1e-5)
 			dg := cuda.AllocU16(batch * hidden)
@@ -115,11 +123,16 @@ func benchBatchedGraphA1(b *testing.B, batch, seqLen, layers int) {
 			cuda.FreeDev(dh2)
 			cuda.SwiGLUF16(dg, du, batch*hidden)
 			cuda.FreeDev(du)
-			tmp2 := cuda.AllocU16(batch * dim)
-			gemm(dg, l.wd.WPtr(), tmp2, batch, hidden, dim)
-			cuda.FreeDev(dg)
-			cuda.AddF16(x, tmp2, batch*dim)
-			cuda.FreeDev(tmp2)
+			if fuseResid {
+				cuda.GemmF16PureAddC(dg, l.wd.WPtr(), x, batch, hidden, dim) // x += dg·wd
+				cuda.FreeDev(dg)
+			} else {
+				tmp2 := cuda.AllocU16(batch * dim)
+				gemm(dg, l.wd.WPtr(), tmp2, batch, hidden, dim)
+				cuda.FreeDev(dg)
+				cuda.AddF16(x, tmp2, batch*dim)
+				cuda.FreeDev(tmp2)
+			}
 		}
 		cuda.FreeDev(x)
 	}

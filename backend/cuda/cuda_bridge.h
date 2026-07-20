@@ -220,6 +220,8 @@ int cu_matmul_f16w_acc16(const void* dA32, const void* dW16, void* dC32, int M, 
 int cu_gemm_f16_pure(const void* dA16, const void* dW16, void* dC16, int M, int K, int N);
 // cu_gemm_f16_pure_acc32: pure f16 GEMM but f32 ACCUMULATE (COMPUTE_32F) — vLLM-precision, no conversions.
 int cu_gemm_f16_pure_acc32(const void* dA16, const void* dW16, void* dC16, int M, int K, int N);
+// cu_gemm_f16_pure_addc: f16 GEMM with beta=1 (C += A·B) — folds a residual add into the GEMM epilogue.
+int cu_gemm_f16_pure_addc(const void* dA16, const void* dW16, void* dC16, int M, int K, int N);
 // cu_copy_rows: device→device copy nElems floats from src to dst+dstOffset (KV-cache append).
 int cu_copy_rows(void* dst, const void* src, int dstOffset, int nElems);
 void* cu_upload_i32(const int* src, int n);
