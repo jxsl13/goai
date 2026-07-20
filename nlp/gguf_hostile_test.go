@@ -3,6 +3,7 @@ package nlp_test
 import (
 	"bytes"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/jxsl13/goai/format/gguf"
@@ -633,6 +634,261 @@ func TestHostileGGUFLlamaRank1Projection(t *testing.T) {
 			mustErrNoPanic(t, name+" rank 1", func() error {
 				_, err := nlp.LlamaFromGGUF(meta, ts)
 				return err
+			})
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// §B77 follow-up: the class-wide float rank guard across EVERY float loader.
+// ---------------------------------------------------------------------------
+
+// poisonRank1 rewrites the lexicographically-first fixture tensor whose name ends in
+// suffix as a RANK-1 tensor of the same leading dimension — the malformed shape §B77's
+// follow-up hardens the float loaders against. Before the fix such a tensor fell through
+// to transpose2D / sliceRows, whose bare Shape()[1] read PANICS `index out of range [1]`;
+// after it, require2D (the float twin of the quantized loaders' `len(qt.Shape) != 2`
+// guard) rejects it with a clean error naming the tensor and its rank (§V29). The
+// smallest matching key is picked so the choice is deterministic across map iterations.
+func poisonRank1(t *testing.T, gts map[string]*tensor.Tensor, suffix string) {
+	t.Helper()
+	best := ""
+	for name := range gts {
+		if strings.HasSuffix(name, suffix) && (best == "" || name < best) {
+			best = name
+		}
+	}
+	if best == "" {
+		t.Fatalf("fixture has no tensor ending in %q to poison", suffix)
+	}
+	gts[best] = tensor.New(tensor.F64, tensor.Shape{gts[best].Shape()[0]})
+}
+
+// b77Llama is a small valid Llama the §B77 rank tests round-trip through the various
+// llama-family serializers (Llama/Qwen2/Qwen3/Phi3), each of which reaches the shared
+// llamaArchFromGGUF projection loop.
+func b77Llama(t *testing.T) *nlp.Llama {
+	t.Helper()
+	m, err := nlp.NewLlama(nlp.LlamaConfig{
+		Vocab: 12, Ctx: 16, Dim: 8, Heads: 4, KVHeads: 2, Layers: 2, Hidden: 16,
+		Eps: 1e-5, RopeBase: 10000,
+	}, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m
+}
+
+// hostileHF loads a golden HF checkpoint for the fixture builders below.
+func hostileHF(t *testing.T, file string) map[string]*tensor.Tensor {
+	t.Helper()
+	ts, _, err := safetensors.LoadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ts
+}
+
+// TestHostileGGUFRank1Projection is the class gate for the §B77 follow-up: EVERY float
+// GGUF loader must reject a rank-1 projection with a clean error, never a transpose2D /
+// sliceRows panic. Each case builds a VALID model, serializes it with the arch's own
+// *ToGGUF (so the fixture reaches the code under test — §B70's FuzzLoad lesson), poisons
+// the one tensor with NO prior row-count check — attn_output.weight, or ssm_out.weight
+// for the pure-SSM Mamba — to rank-1, and demands a clean error. mamba2 already guarded
+// its float side, so it is not listed. Each closure returns the poisoned (meta, tensors)
+// pair and the loader under test.
+func TestHostileGGUFRank1Projection(t *testing.T) {
+	type fixture struct {
+		meta map[string]any
+		gts  map[string]*tensor.Tensor
+		load func(map[string]any, map[string]*tensor.Tensor) error
+	}
+	cases := map[string]struct {
+		suffix string
+		build  func(t *testing.T) fixture
+	}{
+		"Llama": {"attn_output.weight", func(t *testing.T) fixture {
+			meta, gts := nlp.LlamaToGGUF(b77Llama(t))
+			return fixture{meta, gts, func(m map[string]any, ts map[string]*tensor.Tensor) error { _, e := nlp.LlamaFromGGUF(m, ts); return e }}
+		}},
+		"Qwen2": {"attn_output.weight", func(t *testing.T) fixture {
+			meta, gts := nlp.Qwen2ToGGUF(b77Llama(t))
+			return fixture{meta, gts, func(m map[string]any, ts map[string]*tensor.Tensor) error { _, e := nlp.Qwen2FromGGUF(m, ts); return e }}
+		}},
+		"Qwen3": {"attn_output.weight", func(t *testing.T) fixture {
+			meta, gts := nlp.Qwen3ToGGUF(b77Llama(t))
+			return fixture{meta, gts, func(m map[string]any, ts map[string]*tensor.Tensor) error { _, e := nlp.Qwen3FromGGUF(m, ts); return e }}
+		}},
+		"Phi3": {"attn_output.weight", func(t *testing.T) fixture {
+			meta, gts := nlp.Phi3ToGGUF(b77Llama(t))
+			return fixture{meta, gts, func(m map[string]any, ts map[string]*tensor.Tensor) error { _, e := nlp.Phi3FromGGUF(m, ts); return e }}
+		}},
+		"Granite": {"attn_output.weight", func(t *testing.T) fixture {
+			g, err := nlp.NewLlama(nlp.LlamaConfig{
+				Vocab: 48, Ctx: 16, Dim: 32, Heads: 4, KVHeads: 2, Layers: 2, Hidden: 64,
+				Eps: 1e-5, RopeBase: 10000,
+				EmbeddingMult: 1.5, AttentionMult: 0.5, ResidualMult: 0.25, LogitsScale: 8.0,
+			}, 9)
+			if err != nil {
+				t.Fatal(err)
+			}
+			meta, gts := nlp.GraniteToGGUF(g)
+			return fixture{meta, gts, func(m map[string]any, ts map[string]*tensor.Tensor) error {
+				_, e := nlp.GraniteFromGGUF(m, ts)
+				return e
+			}}
+		}},
+		"Mixtral": {"attn_output.weight", func(t *testing.T) fixture {
+			hf, err := nlp.MixtralFromHF(hostileHF(t, "testdata/mixtral_hf.safetensors"),
+				nlp.MixtralConfig{Heads: 4, KVHeads: 2, TopK: 2, Eps: 1e-5, RopeBase: 10000, Ctx: 32})
+			if err != nil {
+				t.Fatal(err)
+			}
+			meta, gts := nlp.MixtralToGGUF(hf)
+			return fixture{meta, gts, func(m map[string]any, ts map[string]*tensor.Tensor) error {
+				_, e := nlp.MixtralFromGGUF(m, ts)
+				return e
+			}}
+		}},
+		"Cohere": {"attn_output.weight", func(t *testing.T) fixture {
+			meta, gts := nlp.CohereToGGUF(cohereGolden(t))
+			return fixture{meta, gts, func(m map[string]any, ts map[string]*tensor.Tensor) error {
+				_, e := nlp.CohereFromGGUF(m, ts)
+				return e
+			}}
+		}},
+		"Falcon": {"attn_output.weight", func(t *testing.T) fixture {
+			hf, err := nlp.FalconFromHF(hostileHF(t, "testdata/falcon_hf.safetensors"),
+				nlp.FalconConfig{Heads: 4, Eps: 1e-5, RopeBase: 10000, Ctx: 32})
+			if err != nil {
+				t.Fatal(err)
+			}
+			meta, gts := nlp.FalconToGGUF(hf)
+			return fixture{meta, gts, func(m map[string]any, ts map[string]*tensor.Tensor) error {
+				_, e := nlp.FalconFromGGUF(m, ts)
+				return e
+			}}
+		}},
+		"GPTNeoX": {"attn_output.weight", func(t *testing.T) fixture {
+			hf, err := nlp.GPTNeoXFromHF(hostileHF(t, "testdata/gptneox_hf.safetensors"),
+				nlp.GPTNeoXConfig{Heads: 4, Eps: 1e-5, RopeBase: 10000, RotaryPct: 0.5, Ctx: 32})
+			if err != nil {
+				t.Fatal(err)
+			}
+			meta, gts := nlp.GPTNeoXToGGUF(hf)
+			return fixture{meta, gts, func(m map[string]any, ts map[string]*tensor.Tensor) error {
+				_, e := nlp.GPTNeoXFromGGUF(m, ts)
+				return e
+			}}
+		}},
+		"MPT": {"attn_output.weight", func(t *testing.T) fixture {
+			hf, err := nlp.MPTFromHF(hostileHF(t, "testdata/mpt_hf.safetensors"),
+				nlp.MPTConfig{Heads: 4, Eps: 1e-5, Ctx: 32})
+			if err != nil {
+				t.Fatal(err)
+			}
+			meta, gts := nlp.MPTToGGUF(hf)
+			return fixture{meta, gts, func(m map[string]any, ts map[string]*tensor.Tensor) error { _, e := nlp.MPTFromGGUF(m, ts); return e }}
+		}},
+		"Nemotron": {"attn_output.weight", func(t *testing.T) fixture {
+			hf, err := nlp.NemotronFromHF(hostileHF(t, "testdata/nemotron_hf.safetensors"),
+				nlp.NemotronConfig{Heads: 4, KVHeads: 4, Eps: 1e-5, RopeBase: 10000, RotaryPct: 0.5, Ctx: 32})
+			if err != nil {
+				t.Fatal(err)
+			}
+			meta, gts := nlp.NemotronToGGUF(hf)
+			return fixture{meta, gts, func(m map[string]any, ts map[string]*tensor.Tensor) error {
+				_, e := nlp.NemotronFromGGUF(m, ts)
+				return e
+			}}
+		}},
+		"OLMo2": {"attn_output.weight", func(t *testing.T) fixture {
+			hf, err := nlp.OLMo2FromHF(hostileHF(t, "testdata/olmo2_hf.safetensors"),
+				nlp.OLMo2Config{Heads: 4, KVHeads: 2, Eps: 1e-6, RopeBase: 10000, Ctx: 32})
+			if err != nil {
+				t.Fatal(err)
+			}
+			meta, gts := nlp.OLMo2ToGGUF(hf)
+			return fixture{meta, gts, func(m map[string]any, ts map[string]*tensor.Tensor) error { _, e := nlp.OLMo2FromGGUF(m, ts); return e }}
+		}},
+		"StableLM": {"attn_output.weight", func(t *testing.T) fixture {
+			hf, err := nlp.StableLMFromHF(hostileHF(t, "testdata/stablelm_hf.safetensors"),
+				nlp.StableLMConfig{Heads: 4, KVHeads: 2, Eps: 1e-5, RopeBase: 10000, RotaryPct: 0.5, Ctx: 32})
+			if err != nil {
+				t.Fatal(err)
+			}
+			meta, gts := nlp.StableLMToGGUF(hf)
+			return fixture{meta, gts, func(m map[string]any, ts map[string]*tensor.Tensor) error {
+				_, e := nlp.StableLMFromGGUF(m, ts)
+				return e
+			}}
+		}},
+		"StarCoder2": {"attn_output.weight", func(t *testing.T) fixture {
+			hf, err := nlp.StarCoder2FromHF(hostileHF(t, "testdata/starcoder2_hf.safetensors"),
+				nlp.StarCoder2Config{Heads: 4, KVHeads: 2, Eps: 1e-5, RopeBase: 10000, Ctx: 32})
+			if err != nil {
+				t.Fatal(err)
+			}
+			meta, gts := nlp.StarCoder2ToGGUF(hf)
+			return fixture{meta, gts, func(m map[string]any, ts map[string]*tensor.Tensor) error {
+				_, e := nlp.StarCoder2FromGGUF(m, ts)
+				return e
+			}}
+		}},
+		"Gemma": {"attn_output.weight", func(t *testing.T) fixture {
+			hf, err := nlp.GemmaFromHF(hostileHF(t, "testdata/gemma_hf.safetensors"),
+				nlp.GemmaConfig{Heads: 2, KVHeads: 1, Eps: 1e-6, RopeBase: 10000, Ctx: 32})
+			if err != nil {
+				t.Fatal(err)
+			}
+			meta, gts := nlp.GemmaToGGUF(hf)
+			return fixture{meta, gts, func(m map[string]any, ts map[string]*tensor.Tensor) error { _, e := nlp.GemmaFromGGUF(m, ts); return e }}
+		}},
+		"Gemma2": {"attn_output.weight", func(t *testing.T) fixture {
+			hf, err := nlp.Gemma2FromHF(hostileHF(t, "testdata/gemma2_hf.safetensors"), gemma2HFCfg())
+			if err != nil {
+				t.Fatal(err)
+			}
+			meta, gts := nlp.Gemma2ToGGUF(hf)
+			return fixture{meta, gts, func(m map[string]any, ts map[string]*tensor.Tensor) error {
+				_, e := nlp.Gemma2FromGGUF(m, ts)
+				return e
+			}}
+		}},
+		"Mamba": {"ssm_out.weight", func(t *testing.T) fixture {
+			hf, err := nlp.MambaFromHF(hostileHF(t, "testdata/mamba_hf.safetensors"), nlp.MambaConfig{Eps: 1e-5})
+			if err != nil {
+				t.Fatal(err)
+			}
+			meta, gts := nlp.MambaToGGUF(hf)
+			return fixture{meta, gts, func(m map[string]any, ts map[string]*tensor.Tensor) error { _, e := nlp.MambaFromGGUF(m, ts); return e }}
+		}},
+		"Jamba": {"attn_output.weight", func(t *testing.T) fixture {
+			hf, err := nlp.JambaFromHF(hostileHF(t, "testdata/jamba_hf.safetensors"), nlp.JambaConfig{Heads: 4, TopK: 2, Eps: 1e-6})
+			if err != nil {
+				t.Fatal(err)
+			}
+			meta, gts := nlp.JambaToGGUF(hf)
+			return fixture{meta, gts, func(m map[string]any, ts map[string]*tensor.Tensor) error { _, e := nlp.JambaFromGGUF(m, ts); return e }}
+		}},
+		"DeepSeekV2": {"attn_output.weight", func(t *testing.T) fixture {
+			hf, err := nlp.DeepSeekV2FromHF(hostileHF(t, "testdata/deepseekv2moe_hf.safetensors"), deepseekV2GoldenCfg(true))
+			if err != nil {
+				t.Fatal(err)
+			}
+			meta, gts := nlp.DeepSeekV2ToGGUF(hf)
+			return fixture{meta, gts, func(m map[string]any, ts map[string]*tensor.Tensor) error {
+				_, e := nlp.DeepSeekV2FromGGUF(m, ts)
+				return e
+			}}
+		}},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := c.build(t)
+			poisonRank1(t, f.gts, c.suffix)
+			mustErrNoPanic(t, name+"FromGGUF on a rank-1 "+c.suffix, func() error {
+				return f.load(f.meta, f.gts)
 			})
 		})
 	}

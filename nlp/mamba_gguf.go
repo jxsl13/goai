@@ -134,6 +134,12 @@ func MambaFromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor) (*Mam
 	// Tied head with optional override: absent output.weight → Embedᵀ (llama.cpp's
 	// TENSOR_DUPLICATED fallback; the converter omits a torch.equal-tied lm_head).
 	if o, ok := tensors["output.weight"]; ok {
+		// An untied head override; pin its shape exactly as QuantMambaFromGGUF does
+		// (`len(o.Shape) != 2 || …`) so a rank-1 output.weight is a clean error, not a
+		// transpose2D panic (§B77). The tied branch reuses the already-guarded Embed.
+		if o.Ndim() != 2 || o.Shape()[0] != cfg.Vocab || o.Shape()[1] != cfg.DModel {
+			return nil, fmt.Errorf("nlp: Mamba GGUF output.weight %v, want [vocab, d_model] = [%d, %d]", o.Shape(), cfg.Vocab, cfg.DModel)
+		}
 		m.Head = transpose2D(o)
 	} else {
 		m.Head = transpose2D(m.Embed)
@@ -259,6 +265,12 @@ func ssmMixerFromGGUF(tensors map[string]*tensor.Tensor, p string, dModel, dInne
 	}
 	if a.Ndim() != 2 || a.Shape()[0] != dInner || a.Shape()[1] != n {
 		return nil, fmt.Errorf("nlp: GGUF %sssm_a %v, want [d_inner, d_state] = [%d, %d]", p, a.Shape(), dInner, n)
+	}
+	// ssm_out is the one remaining tensor this mixer transposes; pin its shape exactly as
+	// the quantized twin's QuantMambaFromGGUF does (`len(Shape) != 2 || …`) so a rank-1
+	// ssm_out is a clean error, not a transpose2D panic (§B77).
+	if outProj.Ndim() != 2 || outProj.Shape()[0] != dModel || outProj.Shape()[1] != dInner {
+		return nil, fmt.Errorf("nlp: GGUF %sssm_out.weight %v, want [d_model, d_inner] = [%d, %d]", p, outProj.Shape(), dModel, dInner)
 	}
 	aLog, err := alogFromGGUFA(a, p)
 	if err != nil {

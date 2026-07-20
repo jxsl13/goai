@@ -135,6 +135,17 @@ func Gemma2FromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor) (*Ge
 				return nil, err
 			}
 		}
+		// Rank-guard the projections this block transposes (all but the four 1-D
+		// sandwich-norm gains) — the float twin of QuantGemma2FromGGUF's mkQ
+		// `len(qt.Shape) != 2`; a rank-1 tensor would otherwise PANIC in transpose2D (§B77).
+		for i, n := range names {
+			if isNormWeight(n) {
+				continue
+			}
+			if err := require2D(p+n, w[i]); err != nil {
+				return nil, err
+			}
+		}
 		if m.Config.HeadDim == 0 { // no attention.key_length key: derive from the q width
 			if m.Config.HeadDim, err = gemmaHeadDimFromQ(p+"attn_q.weight", w[1], heads); err != nil {
 				return nil, err

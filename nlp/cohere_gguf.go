@@ -119,6 +119,11 @@ func CohereFromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor) (*Co
 		var wq, wk, wv *tensor.Tensor
 		if qkv, ok := tensors[p+"attn_qkv.weight"]; ok {
 			// Fused form (create_tensor_qkv's alternative layout): rows [q; k; v].
+			// Rank-guard before the row check reads Shape()[1] via sliceRows — the same
+			// order QuantCohereFromGGUF's `len(qkv.Shape) != 2 || …` uses (§B77).
+			if err := require2D(p+"attn_qkv.weight", qkv); err != nil {
+				return nil, err
+			}
 			if got := qkv.Shape()[0]; got != dim+2*kvSize {
 				return nil, fmt.Errorf("nlp: Cohere GGUF %sattn_qkv.weight rows %d != dim+2·kv·hd = %d", p, got, dim+2*kvSize)
 			}
@@ -154,6 +159,15 @@ func CohereFromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor) (*Co
 		if err != nil {
 			return nil, err
 		}
+		// wq/wk are rank-checked by permuteInterleaveToSplitChecked below; wv/wo and the
+		// FFN weights reach transpose2D unchecked, so rank-guard them here — the float twin
+		// of QuantCohereFromGGUF's mkQ `len(qt.Shape) != 2` (§B77).
+		if err := require2DEach(
+			ggufWeight{p + "attn_v.weight", wv}, ggufWeight{p + "attn_output.weight", wo},
+			ggufWeight{p + "ffn_gate.weight", gate}, ggufWeight{p + "ffn_up.weight", up}, ggufWeight{p + "ffn_down.weight", down},
+		); err != nil {
+			return nil, err
+		}
 		// The GGUF keeps the HF interleaved row layout (NORM rope on unpermuted rows);
 		// permute interleaved→split-half so GoAI's split-half OpRoPE reproduces it.
 		// v/o are untouched. The SPLIT branch above only proves the tensors are
@@ -181,6 +195,11 @@ func CohereFromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor) (*Co
 		return nil, fmt.Errorf("nlp: GGUF missing output_norm.weight")
 	}
 	m.Norm = layerNormFromHF(norm, cfg.Eps)
+	// The head is tied to token_embd and transposed; rank-guard it as QuantCohereFromGGUF
+	// gates `len(tok.Shape) != 2` (§B77).
+	if err := require2D("token_embd.weight (tied LM head)", tok); err != nil {
+		return nil, err
+	}
 	m.Out = transpose2D(tok) // tied head: [vocab,dim] → [dim,vocab] = TokEmbᵀ
 	return m, nil
 }

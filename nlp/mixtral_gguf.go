@@ -99,6 +99,16 @@ func MixtralFromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor) (*M
 				return nil, err
 			}
 		}
+		// Rank-guard the 2-D tensors this block feeds to ropeUnpermuteRows/transpose2D:
+		// the attention projections attn_q/k/v/output (w[1..4]) and the MoE router
+		// ffn_gate_inp (w[6]). The fused expert banks (w[7..9]) are 3-D and are shape-
+		// checked inside mixtralMoEFromGGUF; the norm gains (w[0], w[5]) are 1-D. Mirrors
+		// QuantMixtralFromGGUF's mkQ/mkQPermuted `len(qt.Shape) != 2` (§B77).
+		for _, i := range []int{1, 2, 3, 4, 6} {
+			if err := require2D(p+names[i], w[i]); err != nil {
+				return nil, err
+			}
+		}
 		moe, err := mixtralMoEFromGGUF(cfg, w[6], w[7], w[8], w[9], p)
 		if err != nil {
 			return nil, err
@@ -128,9 +138,12 @@ func MixtralFromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor) (*M
 		return nil, fmt.Errorf("nlp: GGUF missing output_norm.weight")
 	}
 	m.Norm = rmsFromGGUF(on, cfg.Eps)
-	head := tok // tied LM head when output.weight is absent
+	head, headName := tok, "token_embd.weight (tied LM head)" // tied when output.weight is absent
 	if o, ok := tensors["output.weight"]; ok {
-		head = o
+		head, headName = o, "output.weight"
+	}
+	if err := require2D(headName, head); err != nil { // guards transpose2D below (§B77)
+		return nil, err
 	}
 	m.Out = transpose2D(head)
 	return m, nil

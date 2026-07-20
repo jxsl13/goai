@@ -110,6 +110,11 @@ func MPTFromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor) (*MPT, 
 		if err != nil {
 			return nil, err
 		}
+		// Rank-guard before the row check reads Shape()[1] via sliceRows — the order
+		// QuantMPTFromGGUF's `len(qkv.Shape) != 2 || …` uses (§B77).
+		if err := require2D(p+"attn_qkv.weight", qkv); err != nil {
+			return nil, err
+		}
 		if got := qkv.Shape()[0]; got != 3*dim {
 			return nil, fmt.Errorf("nlp: MPT GGUF %sattn_qkv.weight rows %d != 3·hidden = %d", p, got, 3*dim)
 		}
@@ -137,6 +142,14 @@ func MPTFromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor) (*MPT, 
 		if err != nil {
 			return nil, err
 		}
+		// wq/wk/wv are rank-2 by construction (sliced from the guarded qkv); wo and the
+		// two MLP weights reach transpose2D unchecked — the float twin of QuantMPTFromGGUF's
+		// mkQ `len(qt.Shape) != 2` (§B77).
+		if err := require2DEach(
+			ggufWeight{p + "attn_output.weight", wo}, ggufWeight{p + "ffn_up.weight", wup}, ggufWeight{p + "ffn_down.weight", wdown},
+		); err != nil {
+			return nil, err
+		}
 		m.Blocks = append(m.Blocks, &MPTBlock{
 			Norm1: layerNormFromHF(n1, cfg.Eps), Norm2: layerNormFromHF(n2, cfg.Eps), // weight-only (β = 0)
 			Wq: transpose2D(wq), Wk: transpose2D(wk), Wv: transpose2D(wv), Wo: transpose2D(wo), // GGUF [out,in] → GoAI [in,out]
@@ -151,9 +164,12 @@ func MPTFromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor) (*MPT, 
 		return nil, fmt.Errorf("nlp: GGUF missing output_norm.weight")
 	}
 	m.FinalNorm = layerNormFromHF(nf, cfg.Eps)
-	head := tok // llama.cpp's TENSOR_DUPLICATED fallback: MPT's head is tied, output.weight absent
+	head, headName := tok, "token_embd.weight (tied LM head)" // TENSOR_DUPLICATED fallback when output.weight is absent
 	if o, ok := tensors["output.weight"]; ok {
-		head = o
+		head, headName = o, "output.weight"
+	}
+	if err := require2D(headName, head); err != nil { // guards transpose2D below (§B77)
+		return nil, err
 	}
 	m.Out = transpose2D(head) // [vocab,dim] → [dim,vocab]
 	return m, nil

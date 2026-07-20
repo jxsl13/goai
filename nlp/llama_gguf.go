@@ -2,6 +2,7 @@ package nlp
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/jxsl13/goai/nn"
 	"github.com/jxsl13/goai/tensor"
@@ -146,6 +147,18 @@ func llamaArchFromGGUF(arch string, meta map[string]any, tensors map[string]*ten
 				return nil, err
 			}
 		}
+		// Rank-guard every projection this block will transpose (all names but the two
+		// 1-D RMSNorm gains, which load through rmsFromGGUF untransposed). Mirrors
+		// quantLlamaArchFromGGUF's mkQ `len(qt.Shape) != 2`; without it a rank-1
+		// projection falls through to transpose2D's bare Shape()[1] and PANICS (§B77).
+		for i, n := range names {
+			if isNormWeight(n) {
+				continue
+			}
+			if err := require2D(p+n, w[i]); err != nil {
+				return nil, err
+			}
+		}
 		// Optional q/k/v biases (1-D, copied as-is — no transpose). Qwen2/Qwen3 store
 		// them unpermuted on disk (§R93); for the llama arch [LlamaFromGGUF] has
 		// already un-permuted q/k before delegating here (§B67 follow-up).
@@ -182,9 +195,12 @@ func llamaArchFromGGUF(arch string, meta map[string]any, tensors map[string]*ten
 		return nil, fmt.Errorf("nlp: GGUF missing output_norm.weight")
 	}
 	m.Norm = rmsFromGGUF(on, cfg.Eps)
-	head := tok // tied LM head when output.weight is absent
+	head, headName := tok, "token_embd.weight (tied LM head)" // tied when output.weight is absent
 	if o, ok := tensors["output.weight"]; ok {
-		head = o
+		head, headName = o, "output.weight"
+	}
+	if err := require2D(headName, head); err != nil { // guards transpose2D below (§B77)
+		return nil, err
 	}
 	m.Out = transpose2D(head) // [vocab,dim] → [dim,vocab]
 	return m, nil
@@ -466,6 +482,57 @@ func transpose2D(t *tensor.Tensor) *tensor.Tensor {
 		}
 	}
 	return out
+}
+
+// require2D reports a clean error when a GGUF weight a loader is about to TRANSPOSE
+// ([transpose2D]) or ROW-SLICE ([sliceRows]) is not rank-2, naming the tensor and its
+// actual rank. Both helpers read Shape()[1] with no bounds test of their own, so a
+// rank-1 tensor from a malformed file indexes out of range and PANICS where §V29 wants
+// a clean error (§B77).
+//
+// This is the float-side twin of the `len(qt.Shape) != 2` guard every quantized loader
+// gates each projection on before wrapping it — quantLlamaArchFromGGUF's mkQ,
+// QuantCohereFromGGUF, QuantFalconFromGGUF, QuantMixtralFromGGUF and their siblings. The
+// predicate is shared as ONE helper so the float loaders reject exactly the rank the
+// quantized twins do and NO MORE: only the tensors a loader will transpose or slice are
+// checked, matching mkQ, which never rank-checks the 1-D RMSNorm/LayerNorm gains it loads
+// through mkNorm. Restating the check inline at each of the ~30 call sites would let the
+// float loaders drift apart from the quantized ones and from each other (§B77 lesson:
+// share the predicate the twin already uses; match its strictness, no more).
+func require2D(name string, t *tensor.Tensor) error {
+	if t.Ndim() != 2 {
+		return fmt.Errorf("nlp: GGUF %s must be 2-D, got rank %d (shape %v)", name, t.Ndim(), t.Shape())
+	}
+	return nil
+}
+
+// ggufWeight pairs a GGUF tensor with its name for the batched rank guard below.
+type ggufWeight struct {
+	name string
+	t    *tensor.Tensor
+}
+
+// require2DEach rank-guards ([require2D]) each projection a block is about to transpose or
+// row-slice, returning the first failure. The fused-qkv and own-build loaders call it once
+// per block so the shared predicate covers every transpose2D/sliceRows input in one place,
+// never restated at the individual call sites (§B77).
+func require2DEach(ws ...ggufWeight) error {
+	for _, w := range ws {
+		if err := require2D(w.name, w.t); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// isNormWeight reports whether a GGUF block-tensor name is a 1-D norm gain
+// (attn_norm.weight, ffn_norm.weight, post_attention_norm.weight, …) rather than a 2-D
+// projection. The llama/gemma/gemma2 block builders load every listed tensor through the
+// same fetch loop, then transpose only the projections; this lets them [require2D] the
+// projections while leaving the norm gains — which are legitimately 1-D — unchecked, the
+// same split the quantized twins make between mkQ and mkNorm.
+func isNormWeight(name string) bool {
+	return strings.HasSuffix(name, "norm.weight")
 }
 
 // cloneF64 copies a tensor into a fresh F64 tensor of the same shape (widening from

@@ -102,6 +102,10 @@ func NemotronFromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor) (*
 		var wq, wk, wv *tensor.Tensor
 		if qkv, ok := tensors[p+"attn_qkv.weight"]; ok {
 			// Fused form (create_tensor_qkv's alternative layout): rows [q; k; v].
+			// Rank-guard before the row check reads Shape()[1] via sliceRows (§B77).
+			if err := require2D(p+"attn_qkv.weight", qkv); err != nil {
+				return nil, err
+			}
 			if got := qkv.Shape()[0]; got != dim+2*kvSize {
 				return nil, fmt.Errorf("nlp: Nemotron GGUF %sattn_qkv.weight rows %d != dim+2·kv·hd = %d", p, got, dim+2*kvSize)
 			}
@@ -138,6 +142,15 @@ func NemotronFromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor) (*
 		if err != nil {
 			return nil, err
 		}
+		// In the split branch wq/wk/wv are fetched raw; wo and the MLP weights always
+		// reach transpose2D unchecked — the float twin of QuantNemotronFromGGUF's mkQ
+		// `len(qt.Shape) != 2` (§B77). (Fused wq/wk/wv are already rank-2 from the guarded qkv.)
+		if err := require2DEach(
+			ggufWeight{p + "attn_q.weight", wq}, ggufWeight{p + "attn_k.weight", wk}, ggufWeight{p + "attn_v.weight", wv},
+			ggufWeight{p + "attn_output.weight", wo}, ggufWeight{p + "ffn_up.weight", up}, ggufWeight{p + "ffn_down.weight", down},
+		); err != nil {
+			return nil, err
+		}
 		m.Blocks = append(m.Blocks, &NemotronBlock{
 			InputNorm:    inNorm,
 			PostAttnNorm: postNorm,
@@ -157,6 +170,9 @@ func NemotronFromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor) (*
 	head, ok := tensors["output.weight"]
 	if !ok {
 		return nil, fmt.Errorf("nlp: GGUF missing output.weight (the nemotron architecture's LM head is untied and required)")
+	}
+	if err := require2D("output.weight", head); err != nil { // guards transpose2D below (§B77)
+		return nil, err
 	}
 	m.Out = transpose2D(head) // [vocab,dim] → [dim,vocab]
 	return m, nil

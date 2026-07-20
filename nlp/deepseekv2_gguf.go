@@ -181,11 +181,24 @@ func DeepSeekV2FromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor) 
 			if err != nil {
 				return nil, err
 			}
+			// Rank-guard the dense FFN weights before swiGLUFromGGUF transposes them —
+			// the float twin of QuantDeepSeekV2FromGGUF's mkQ `len(qt.Shape) != 2` (§B77).
+			if err := require2DEach(
+				ggufWeight{p + "ffn_gate.weight", gate}, ggufWeight{p + "ffn_up.weight", up}, ggufWeight{p + "ffn_down.weight", down},
+			); err != nil {
+				return nil, err
+			}
 			dense = swiGLUFromGGUF(gate, up, down)
 		} else {
 			if moe, err = deepseekV2MoEFromGGUF(tensors, p, cfg); err != nil {
 				return nil, err
 			}
+		}
+		// wqB/wkvA are rank-checked by deinterleaveRoPEChecked below and kvB is built
+		// internally; wqA and wo reach transpose2D unchecked — the float twin of
+		// QuantDeepSeekV2FromGGUF's mkQ `len(qt.Shape) != 2` (§B77).
+		if err := require2DEach(ggufWeight{p + "attn_q_a.weight", wqA}, ggufWeight{p + "attn_output.weight", wo}); err != nil {
+			return nil, err
 		}
 		// De-interleave the pe rows (interleaved on disk, LLAMA_ROPE_TYPE_NORM) into
 		// split-half order for GoAI's OpRoPE — the same permutation as DeepSeekV2FromHF.
@@ -217,9 +230,12 @@ func DeepSeekV2FromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor) 
 		return nil, fmt.Errorf("nlp: GGUF missing output_norm.weight")
 	}
 	m.FinalNorm = rmsFromGGUF(norm, cfg.Eps)
-	head := tok // tied LM head when output.weight is absent (TENSOR_DUPLICATED fallback)
+	head, headName := tok, "token_embd.weight (tied LM head)" // tied when output.weight is absent (TENSOR_DUPLICATED)
 	if o, ok := tensors["output.weight"]; ok {
-		head = o
+		head, headName = o, "output.weight"
+	}
+	if err := require2D(headName, head); err != nil { // guards transpose2D below (§B77)
+		return nil, err
 	}
 	m.LmHead = transpose2D(head) // [vocab,dim] → [dim,vocab]
 	return m, nil
@@ -451,6 +467,15 @@ func deepseekV2MoEFromGGUF(tensors map[string]*tensor.Tensor, p string, cfg Deep
 	}
 	if want := cfg.NSharedExperts * inter; sg.Shape()[0] != want {
 		return nil, fmt.Errorf("nlp: deepseek2 GGUF %sffn_gate_shexp.weight width %d, want expert_shared_count·expert_feed_forward_length = %d", p, sg.Shape()[0], want)
+	}
+	// The 2-D router and the shared-expert weights reach transpose2D/swiGLUFromGGUF; the
+	// routed expert banks are 3-D (checked above). Guard them as the quantized twin does
+	// with `len(qt.Shape) != 2` (§B77).
+	if err := require2DEach(
+		ggufWeight{p + "ffn_gate_inp.weight", router},
+		ggufWeight{p + "ffn_gate_shexp.weight", sg}, ggufWeight{p + "ffn_up_shexp.weight", su}, ggufWeight{p + "ffn_down_shexp.weight", sd},
+	); err != nil {
+		return nil, err
 	}
 
 	return &nn.DeepSeekMoE{

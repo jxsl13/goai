@@ -83,6 +83,11 @@ func Phi3FromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor) (*Llam
 	for l := range layers {
 		p := fmt.Sprintf("blk.%d.", l)
 		if qkv, ok := tensors[p+"attn_qkv.weight"]; ok {
+			// Rank-guard before the row check reads Shape()[1] via sliceRows — the order
+			// QuantPhi3FromGGUF's `len(qkv.Shape) != 2 || …` uses (§B77).
+			if err := require2D(p+"attn_qkv.weight", qkv); err != nil {
+				return nil, err
+			}
 			if got := qkv.Shape()[0]; got != qSize+2*kvSize {
 				return nil, fmt.Errorf("nlp: Phi-3 GGUF %sattn_qkv.weight rows %d != heads·hd+2·kv·hd = %d", p, got, qSize+2*kvSize)
 			}
@@ -93,6 +98,9 @@ func Phi3FromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor) (*Llam
 		}
 		_, hasGate := tensors[p+"ffn_gate.weight"]
 		if gu, ok := tensors[p+"ffn_up.weight"]; ok && !hasGate {
+			if err := require2D(p+"ffn_up.weight", gu); err != nil { // sliceRows below reads Shape()[1] (§B77)
+				return nil, err
+			}
 			if got := gu.Shape()[0]; got != 2*ffn {
 				return nil, fmt.Errorf("nlp: Phi-3 GGUF %sffn_up.weight rows %d != 2·feed_forward_length = %d", p, got, 2*ffn)
 			}

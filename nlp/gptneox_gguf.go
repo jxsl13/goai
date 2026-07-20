@@ -95,6 +95,11 @@ func GPTNeoXFromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor) (*G
 		if err != nil {
 			return nil, err
 		}
+		// Rank-guard before the row check reads Shape()[1] via sliceRows — the order
+		// QuantGPTNeoXFromGGUF's `len(qkv.Shape) != 2 || …` uses (§B77).
+		if err := require2D(p+"attn_qkv.weight", qkv); err != nil {
+			return nil, err
+		}
 		if got := qkv.Shape()[0]; got != 3*dim {
 			return nil, fmt.Errorf("nlp: GPT-NeoX GGUF %sattn_qkv.weight rows %d != 3·hidden = %d", p, got, 3*dim)
 		}
@@ -145,6 +150,14 @@ func GPTNeoXFromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor) (*G
 		if err != nil {
 			return nil, err
 		}
+		// wq/wk/wv are rank-2 by construction (sliced from the guarded qkv); wo and the
+		// two MLP weights reach transpose2D unchecked — the float twin of
+		// QuantGPTNeoXFromGGUF's mkQ `len(qt.Shape) != 2` (§B77).
+		if err := require2DEach(
+			ggufWeight{p + "attn_output.weight", wo}, ggufWeight{p + "ffn_up.weight", wh}, ggufWeight{p + "ffn_down.weight", wout},
+		); err != nil {
+			return nil, err
+		}
 		m.Blocks = append(m.Blocks, &GPTNeoXBlock{
 			InputNorm: inNorm, PostAttnNorm: postNorm,
 			Wq: transpose2D(wq), Wk: transpose2D(wk), Wv: transpose2D(wv), Wo: transpose2D(wo), // GGUF [out,in] → GoAI [in,out]
@@ -161,6 +174,9 @@ func GPTNeoXFromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor) (*G
 	head, ok := tensors["output.weight"]
 	if !ok {
 		return nil, fmt.Errorf("nlp: GGUF missing output.weight (the gptneox architecture's LM head is untied and required)")
+	}
+	if err := require2D("output.weight", head); err != nil { // guards transpose2D below (§B77)
+		return nil, err
 	}
 	m.Out = transpose2D(head) // [vocab,dim] → [dim,vocab]
 	return m, nil

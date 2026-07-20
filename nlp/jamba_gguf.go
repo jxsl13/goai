@@ -192,6 +192,11 @@ func JambaFromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor) (*Jam
 			if wk.Ndim() != 2 || wk.Shape()[0] != kvVec[l]*hd {
 				return nil, fmt.Errorf("nlp: Jamba GGUF %sattn_k.weight %v disagrees with head_count_kv[%d]=%d (want %d rows)", p, wk.Shape(), l, kvVec[l], kvVec[l]*hd)
 			}
+			// wq/wk are rank-checked above; wv/wo reach transpose2D unchecked — the float
+			// twin of QuantJambaFromGGUF's mkQ `len(qt.Shape) != 2` (§B77).
+			if err := require2DEach(ggufWeight{p + "attn_v.weight", wv}, ggufWeight{p + "attn_output.weight", wo}); err != nil {
+				return nil, err
+			}
 			layer.Attn = &JambaAttention{
 				Wq: transpose2D(wq), Wk: transpose2D(wk), Wv: transpose2D(wv), Wo: transpose2D(wo),
 			}
@@ -243,6 +248,13 @@ func JambaFromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor) (*Jam
 			if err != nil {
 				return nil, err
 			}
+			// Rank-guard the dense FFN weights before swiGLUFromGGUF transposes them — the
+			// float twin of QuantJambaFromGGUF's mkQ `len(qt.Shape) != 2` (§B77).
+			if err := require2DEach(
+				ggufWeight{p + "ffn_gate.weight", gate}, ggufWeight{p + "ffn_up.weight", up}, ggufWeight{p + "ffn_down.weight", down},
+			); err != nil {
+				return nil, err
+			}
 			if gate.Shape()[0] != ffn {
 				return nil, fmt.Errorf("nlp: Jamba GGUF %sffn_gate.weight width %d != jamba.feed_forward_length %d", p, gate.Shape()[0], ffn)
 			}
@@ -256,9 +268,12 @@ func JambaFromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor) (*Jam
 		return nil, fmt.Errorf("nlp: GGUF missing output_norm.weight")
 	}
 	m.Norm = rmsFromGGUF(on, cfg.Eps)
-	head := tok // tied fallback (TENSOR_NOT_REQUIRED + token_embd duplicate)
+	head, headName := tok, "token_embd.weight (tied LM head)" // tied fallback (TENSOR_NOT_REQUIRED + token_embd duplicate)
 	if o, ok := tensors["output.weight"]; ok {
-		head = o
+		head, headName = o, "output.weight"
+	}
+	if err := require2D(headName, head); err != nil { // guards transpose2D below (§B77)
+		return nil, err
 	}
 	m.Out = transpose2D(head)
 	m.Config = cfg
@@ -289,6 +304,11 @@ func jambaMoEFromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor, p 
 	}
 	if gate.Shape()[1] != ffn || up.Shape()[1] != ffn || down.Shape()[2] != ffn || gate.Shape()[2] != dim {
 		return nil, fmt.Errorf("nlp: Jamba GGUF %sffn_*_exps shapes %v/%v/%v disagree with feed_forward_length %d / dim %d", p, gate.Shape(), up.Shape(), down.Shape(), ffn, dim)
+	}
+	// The router is 2-D and reaches transpose2D; the expert banks are 3-D (checked above).
+	// Guard the router as QuantJambaFromGGUF gates `len(router.Shape) != 2` (§B77).
+	if err := require2D(p+"ffn_gate_inp.weight", router); err != nil {
+		return nil, err
 	}
 	moe := &JambaMoE{Router: transpose2D(router), TopK: topK} // [E,dim] → [dim,E]
 	for i := range e {

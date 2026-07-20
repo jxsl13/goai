@@ -4,6 +4,26 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nlp — every float GGUF loader now rejects a rank-1 tensor instead of panicking (T899, §B77/§V29, 2026-07-20)
+
+Completes the §B77 sweep. Every quantized GGUF loader guards tensor rank (`len(qt.Shape) != 2`),
+but the float twins indexed `Shape()[0]` bare and fell through to `transpose2D`/`sliceRows`,
+whose bare `Shape()[1]` read PANICKED `index out of range [1] with length 1` on a rank-1 tensor
+from a malformed file — where the quant path returns a clean error. T863 fixed only llama's
+q/k; this closes the remaining ~18 pairs.
+
+One shared helper `require2D` (the float-side twin of the quant loaders' `mkQ` rank guard,
+godoc naming the sibling) backs all 16 hardened loaders; nothing is restated inline, and it is
+a pure rank check — norm gains stay unchecked exactly as `mkNorm` leaves them, so the float
+path is never stricter than the quant path (the §B77/T863 lesson: a float-only check reopens
+the asymmetry from the other side). Every guard is an `if err := require2D(...)` statement in
+the body after a successful fetch, never a presence-condition that skips the malformed input.
+
+`TestHostileGGUFRank1Projection` adds one subtest per loader. All 19 were proven to PANIC
+against the pre-fix code (verified independently here by neutering `require2D` and watching
+every subtest catch the `index out of range` panic) and to return a clean error after. The
+per-architecture golden tests stay green, confirming valid files load bit-identically.
+
 ### format/pytorch — runnable checkpoint-loading example (T898, 2026-07-20)
 
 Adds the package's first runnable Example: it loads the shipped PyTorch `state_dict`

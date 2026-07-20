@@ -101,6 +101,11 @@ func FalconFromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor) (*Fa
 		if err != nil {
 			return nil, err
 		}
+		// Rank-guard before the row check reads Shape()[1] via sliceRows — the order
+		// QuantFalconFromGGUF's `len(qkv.Shape) != 2 || …` uses (§B77).
+		if err := require2D(p+"attn_qkv.weight", qkv); err != nil {
+			return nil, err
+		}
 		if got := qkv.Shape()[0]; got != qSize+2*kvSize {
 			return nil, fmt.Errorf("nlp: Falcon GGUF %sattn_qkv.weight rows %d != (heads+2)·head_dim = %d", p, got, qSize+2*kvSize)
 		}
@@ -126,6 +131,14 @@ func FalconFromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor) (*Fa
 		if err != nil {
 			return nil, err
 		}
+		// wq/wk/wv are rank-2 by construction (sliced from the guarded qkv); wo and the
+		// two MLP weights reach transpose2D unchecked — the float twin of
+		// QuantFalconFromGGUF's mkQ `len(qt.Shape) != 2` (§B77).
+		if err := require2DEach(
+			ggufWeight{p + "attn_output.weight", wo}, ggufWeight{p + "ffn_up.weight", wh}, ggufWeight{p + "ffn_down.weight", wout},
+		); err != nil {
+			return nil, err
+		}
 		m.Blocks = append(m.Blocks, &FalconBlock{
 			InputNorm: inNorm,
 			Wq:        transpose2D(wq), // GGUF [out,in] → GoAI [in,out]
@@ -141,9 +154,12 @@ func FalconFromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor) (*Fa
 		return nil, err
 	}
 	m.FinalNorm = finalNorm
-	head := tok // llama.cpp's TENSOR_DUPLICATED fallback: tied head when output.weight is absent
+	head, headName := tok, "token_embd.weight (tied LM head)" // TENSOR_DUPLICATED fallback when output.weight is absent
 	if o, ok := tensors["output.weight"]; ok {
-		head = o
+		head, headName = o, "output.weight"
+	}
+	if err := require2D(headName, head); err != nil { // guards transpose2D below (§B77)
+		return nil, err
 	}
 	m.Out = transpose2D(head) // [vocab,dim] → [dim,vocab]
 	return m, nil
