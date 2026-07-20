@@ -14,6 +14,18 @@ int cu_mem_info(unsigned long long* freeB, unsigned long long* totalB);
 int cu_gpu_is_geforce(void);
 // cu_matmul_i8_mma: dC[M,N](i32) = dA8[M,K]·dW8[K,N] via tiled mma.sync int8 tensor cores.
 int cu_matmul_i8_mma(const void* dA8, const void* dW8, void* dC32, int M, int K, int N);
+// cu_gemm_w8a16: C[M,N]f16 = A[M,K]f16 · dequant(W[K,N]int8, per-col f32 Scale). Dequant-in-tile mma.
+int cu_gemm_w8a16(const void* dA16, const void* dW8, const void* dScale, void* dC16, int M, int K, int N);
+// cu_gemm_w8a16_t: shared-tiled W8A16 (coalesced int8 staging, W read once/block). N%64==0.
+int cu_gemm_w8a16_t(const void* dA16, const void* dW8, const void* dScale, void* dC16, int M, int K, int N);
+// cu_gemm_w8a16_b: BM-spanning W8A16 (64x64 tile, W read once/N-strip). M%64==0, N%64==0.
+int cu_gemm_w8a16_b(const void* dA16, const void* dW8, const void* dScale, void* dC16, int M, int K, int N);
+// cu_gemm_w8a16_d: double-buffered (cp.async pipeline) W8A16 — overlaps weight load with compute.
+int cu_gemm_w8a16_d(const void* dA16, const void* dW8, const void* dScale, void* dC16, int M, int K, int N);
+// cu_gemm_w8a16_sk: split-K W8A16 (occupancy fix). dCacc = scratch f32 [M*N] (zeroed internally).
+int cu_gemm_w8a16_sk(const void* dA16, const void* dW8, const void* dScale, void* dCacc, void* dC16, int M, int K, int N, int splitK);
+// cu_gemm_w8a16_p3: 3-stage cp.async pipeline + split-K W8A16 (deeper pipeline test). dCacc scratch f32.
+int cu_gemm_w8a16_p3(const void* dA16, const void* dW8, const void* dScale, void* dCacc, void* dC16, int M, int K, int N, int splitK);
 // cu_matmul_i8_mma_t: shared-tiled int8 mma GEMM (16x64 block, shared A/W staging). N%64==0.
 int cu_matmul_i8_mma_t(const void* dA8, const void* dW8, void* dC32, int M, int K, int N);
 // cu_matmul_i8_mma_rb: register-blocked int8 mma GEMM (64x64 block, 4 MMAs/warp). M%64,N%64,K%32==0.
