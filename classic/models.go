@@ -67,17 +67,26 @@ func (m *LinearRegression) Fit(x [][]float64, y []float64) error {
 	return nil
 }
 
-// Predict returns X·coef + intercept.
-func (m *LinearRegression) Predict(x [][]float64) []float64 {
+// Predict returns X·coef + intercept for each row.
+//
+// It errors on a row whose width differs from the coefficient vector, matching
+// every other estimator in this package. Ranging over the row alone (the former
+// behaviour) silently DROPPED the trailing coefficient terms for a short row and
+// returned a plausible wrong number with no error — the exact feature-count
+// mismatch the sibling estimators reject (§B100).
+func (m *LinearRegression) Predict(x [][]float64) ([]float64, error) {
 	out := make([]float64, len(x))
 	for i, row := range x {
+		if len(row) != len(m.Coef) {
+			return nil, fmt.Errorf("classic: LinearRegression.Predict row %d width %d, want %d", i, len(row), len(m.Coef))
+		}
 		s := m.Intercept
 		for j, v := range row {
 			s += m.Coef[j] * v
 		}
 		out[i] = s
 	}
-	return out
+	return out, nil
 }
 
 // --- softmax (multinomial logistic) regression ---
@@ -364,6 +373,9 @@ func (m *SoftmaxRegression) PredictProba(x [][]float64) ([][]float64, error) {
 	k := m.W.Shape()[1]
 	xt := tensor.New(tensor.F64, tensor.Shape{n, d})
 	for i := range n {
+		if len(x[i]) != d {
+			return nil, fmt.Errorf("classic: SoftmaxRegression.PredictProba row %d width %d, want %d", i, len(x[i]), d)
+		}
 		for j := range d {
 			xt.SetF64(x[i][j], i, j)
 		}

@@ -557,6 +557,9 @@ func (m *SVC) DecisionFunction(x [][]float64) ([]float64, error) {
 	}
 	out := make([]float64, len(x))
 	for i, row := range x {
+		if len(row) != m.nFeat {
+			return nil, fmt.Errorf("classic: SVC.DecisionFunction row %d width %d, want %d", i, len(row), m.nFeat)
+		}
 		out[i] = m.decision(row)
 	}
 	return out, nil
@@ -566,12 +569,15 @@ func (m *SVC) DecisionFunction(x [][]float64) ([]float64, error) {
 // for each row of X: the positive class where f(x) ≥ 0, else the negative
 // class. Returns an error if called before [SVC.Fit].
 func (m *SVC) Predict(x [][]float64) ([]float64, error) {
-	if !m.fitted {
-		return nil, fmt.Errorf("classic: svc Predict before Fit")
+	// Route through DecisionFunction so the fitted-state and per-row width guards
+	// live in exactly one place; here we only threshold the decision values.
+	f, err := m.DecisionFunction(x)
+	if err != nil {
+		return nil, err
 	}
-	out := make([]float64, len(x))
-	for i, row := range x {
-		if m.decision(row) >= 0 {
+	out := make([]float64, len(f))
+	for i, fi := range f {
+		if fi >= 0 {
 			out[i] = m.classPos
 		} else {
 			out[i] = m.classNeg

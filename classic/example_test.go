@@ -19,7 +19,7 @@ func ExampleLinearRegression() {
 	if err := m.Fit([][]float64{{0}, {1}, {2}, {3}}, []float64{1, 3, 5, 7}); err != nil {
 		panic(err)
 	}
-	pred := m.Predict([][]float64{{4}})
+	pred, _ := m.Predict([][]float64{{4}})
 	fmt.Printf("coef=%.1f intercept=%.1f pred(4)=%.1f\n", m.Coef[0], m.Intercept, pred[0])
 	// Output: coef=2.0 intercept=1.0 pred(4)=9.0
 }

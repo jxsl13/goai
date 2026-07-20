@@ -336,7 +336,11 @@ func TestGBMBeatsStumpAndOLS(t *testing.T) {
 	if err := ols.Fit(xtr, g.YTrain); err != nil {
 		t.Fatal(err)
 	}
-	olsScore := gbmR2(g.YTest, ols.Predict(xte))
+	olsPred, err := ols.Predict(xte)
+	if err != nil {
+		t.Fatal(err)
+	}
+	olsScore := gbmR2(g.YTest, olsPred)
 
 	if gbmScore <= stumpScore {
 		t.Errorf("GBM R² %.4f not > stump R² %.4f", gbmScore, stumpScore)

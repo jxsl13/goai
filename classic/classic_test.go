@@ -85,7 +85,10 @@ func TestLinearRegressionParity(t *testing.T) {
 	if math.Abs(m.Intercept-g.Intercept) > 1e-8*math.Max(1, math.Abs(g.Intercept)) {
 		t.Errorf("intercept: got %.12g want %.12g", m.Intercept, g.Intercept)
 	}
-	pred := m.Predict(x)
+	pred, err := m.Predict(x)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for i, want := range g.Pred {
 		if math.Abs(pred[i]-want) > 1e-8*math.Max(1, math.Abs(want)) {
 			t.Errorf("pred[%d]: got %.12g want %.12g", i, pred[i], want)

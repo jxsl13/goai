@@ -446,6 +446,7 @@ func validX(x [][]float64, y int) (int, int, error) {
 type GradientBoostingRegressor struct {
 	cfg       gbmConfig
 	init      float64    // F_0 = mean(y)
+	nFeat     int        // feature count seen in Fit, for the Predict width guard
 	trees     []*gbmTree // staged weak learners
 	trainLoss []float64  // per-round training MSE (length nEstimators+1)
 	fitted    bool
@@ -472,6 +473,7 @@ func (m *GradientBoostingRegressor) Fit(x [][]float64, y []float64) error {
 	if err := m.cfg.validate(n); err != nil {
 		return err
 	}
+	m.nFeat = d
 	// F_0 = mean(y); running predictions f start there.
 	var s float64
 	for _, v := range y {
@@ -511,9 +513,24 @@ func (m *GradientBoostingRegressor) Fit(x [][]float64, y []float64) error {
 
 // Predict returns F_0 + learningRate·Σ_m tree_m(x) for each row of x. It errors
 // if called before Fit or on ragged input.
+// gbmWidthCheck rejects a prediction row whose width differs from the feature
+// count seen in Fit, matching every other estimator in this package. Without it a
+// short row panics with a raw index-out-of-range inside the tree walk.
+func gbmWidthCheck(x [][]float64, nFeat int, who string) error {
+	for i, row := range x {
+		if len(row) != nFeat {
+			return fmt.Errorf("classic: %s row %d width %d, want %d", who, i, len(row), nFeat)
+		}
+	}
+	return nil
+}
+
 func (m *GradientBoostingRegressor) Predict(x [][]float64) ([]float64, error) {
 	if !m.fitted {
 		return nil, fmt.Errorf("classic: GradientBoostingRegressor.Predict before Fit")
+	}
+	if err := gbmWidthCheck(x, m.nFeat, "GradientBoostingRegressor.Predict"); err != nil {
+		return nil, err
 	}
 	out := make([]float64, len(x))
 	for i := range out {
@@ -571,6 +588,7 @@ func mseLoss(y, f []float64) float64 {
 type GradientBoostingClassifier struct {
 	cfg       gbmConfig
 	init      float64 // F_0 = log-odds of the base rate
+	nFeat     int     // feature count seen in Fit, for the predict width guard
 	trees     []*gbmTree
 	trainLoss []float64 // per-round training log loss (length nEstimators+1)
 	fitted    bool
@@ -598,6 +616,7 @@ func (m *GradientBoostingClassifier) Fit(x [][]float64, y []int) error {
 	if err := m.cfg.validate(n); err != nil {
 		return err
 	}
+	m.nFeat = d
 	yf := make([]float64, n)
 	var pos float64
 	for i, v := range y {
@@ -666,6 +685,9 @@ func (m *GradientBoostingClassifier) PredictProba(x [][]float64) ([]float64, err
 	if !m.fitted {
 		return nil, fmt.Errorf("classic: GradientBoostingClassifier.PredictProba before Fit")
 	}
+	if err := gbmWidthCheck(x, m.nFeat, "GradientBoostingClassifier.PredictProba"); err != nil {
+		return nil, err
+	}
 	f := m.decision(x)
 	out := make([]float64, len(f))
 	for i, v := range f {
@@ -679,6 +701,9 @@ func (m *GradientBoostingClassifier) PredictProba(x [][]float64) ([]float64, err
 func (m *GradientBoostingClassifier) Predict(x [][]float64) ([]int, error) {
 	if !m.fitted {
 		return nil, fmt.Errorf("classic: GradientBoostingClassifier.Predict before Fit")
+	}
+	if err := gbmWidthCheck(x, m.nFeat, "GradientBoostingClassifier.Predict"); err != nil {
+		return nil, err
 	}
 	f := m.decision(x)
 	out := make([]int, len(f))

@@ -4,6 +4,31 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### classic -- predict-width guard across estimators (T906, 2026-07-20)
+
+A read-only discovery sweep over classic/ surfaced a live silent-wrong bug and a
+class-wide asymmetry, both now fixed.
+
+Finding #1 (B100): LinearRegression.Predict ranged over the INPUT ROW instead of the
+fitted coefficients, so a row narrower than the training width silently dropped the
+trailing coefficient terms and returned a plausible wrong number with a nil error --
+a 3-feature model on the 2-feature row {2,1} returned 4.125, dropping coef[2]*x[2].
+Predict now returns ([]float64, error) and rejects a row whose width differs from
+len(Coef). SoftmaxRegression.PredictProba got the same guard.
+
+Finding #2 (B101): SVC.{DecisionFunction,Predict}, GradientBoostingRegressor.Predict
+and GradientBoostingClassifier.{Predict,PredictProba} lacked the fitted-width guard
+that KNN/tree/forest/GaussianNB already carried. On a short row SVC panicked
+(index-out-of-range) and GBM silently mispredicted (its shallow trees split only on
+the surviving low-index features). Each estimator now records the feature count at
+Fit and rejects a mismatched width before compute; SVC.Predict routes through the
+guarded DecisionFunction so the check lives at one site.
+
+Proven non-vacuous: predict_width_test.go goes red with the guards stripped
+(silent-drop 4.125, silent-accept, index-panic) and green with them restored; the
+full classic suite is otherwise unchanged. This changes the Predict/PredictProba
+signatures, allowed pre-1.0 (V8).
+
 ### nn -- PadGradHook bulk-copy fast path (T905, 2026-07-20)
 
 The booked T896 follow-up. Embedding.PadGradHook returns the gradient with the padding row
@@ -214,7 +239,7 @@ a directed sweep found, each measured and each bit-identical to the old path (ve
 - `autograd/vjp_reshape.go` (training BACKWARD path, every reshape/flatten/head-split): the
   per-element cotangent copy becomes one typed `copy()` when the cotangent is contiguous and
   offset-0 — a fresh alloc, not a view, preserving the old un-aliased ownership. Measured
-  ~17× (F32) / ~15× (F64) here; non-contiguous cotangents and F16/BF16 fall through.
+  ≈17× (F32) / ≈15× (F64) here; non-contiguous cotangents and F16/BF16 fall through.
   `TestReshapeGradcheck` (finite-difference) confirms gradients are untouched.
 - `nn/sam.go` `SAM.Step`: the lone remaining raw per-element optimizer loop (three elementwise
   transforms) now grabs the typed slice once, matching every devirtualized sibling. 8.8×
