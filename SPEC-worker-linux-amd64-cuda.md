@@ -288,6 +288,8 @@ CAPABILITY gap, where a from-scratch engine wins because it's a missing feature 
 race). Start B1 (paged KV pool + block tables) -> B2 (paged/ragged batched decode kernel,
 nvcc-buildable) -> B3 (continuous-batch scheduler). A3 is a fill-in only.
 
+**STATUS 2026-07-20 — FRONT B decode perf EXHAUSTIVELY COMPLETE (see GPU-8):** B1✓ B2✓ B3✓ done + merged (graph-capture + GQA-shared + 32-key-tile paged decode, #177/#178). THE beat-vLLM lever = A1 fp16-activations (PR #181): decode ~1.33-1.37× fair vLLM FULL-STEP (layers+logits; layers-only 1.4× was ~5% optimistic), prefill 1.13×, token-identical to f32 on real TinyLlama, DeviceF16 clean API. Decode perf at the f16 HARDWARE CEILING: GEMMs cuBLAS-f16-peak, attention 34%/latency-bound resisted 8 approaches (f16-KV, int8×2, multi-accum, p-in-shared, f16-in-shared, split-K, WMMA tensor-core decode — all measured, all lose to warp GQA kernel; 2.1× A1-noattn ceiling needs production-grade FlashDecoding beyond bounded effort). REMAINING = DEPLOYMENT not perf: wire A1 (DeviceF16) into a REAL batched serving loop — real prefill → PER-LAYER paged KV (22 caches, not the synthetic shared pool) → A1 continuous-batch decode (append K/V per step, fixed-buffer graph over growing KV like vLLM) → argmax/sample. Large multi-component engineering phase; the A1 kernel+accuracy foundation is done & validated. B4 (chunked prefill) + B5 (RadixAttention prefix cache) are further serving features.
+
 ## §NEXT — open levers
 
 **Tw-COOPMAT (booked 2026-07-18, research-lite CONFIRMED 3/3 + host probes): the prefill
