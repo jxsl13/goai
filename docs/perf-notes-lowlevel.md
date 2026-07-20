@@ -73,6 +73,19 @@ The known §base-perf anti-pattern, found twice more:
   M=1: 339→129 µs (2.6×); M=16: 4.23→1.27 ms (3.3×).
 - `format/gguf/writer.go` f32Data non-F32 branch: same fix, F64 tensor
   write 1.30→0.30 ms (4.3×).
+- `format/gguf/gguf.go` `decodeTensor` **read** path was the last reader still
+  decoding verbatim F32 per element
+  (`math.Float32frombits(binary.LittleEndian.Uint32(raw[i*4:]))`) — safetensors,
+  npy and pytorch already had the verbatim `rawCopyLE` bulk copy; gguf missed it.
+  On a little-endian host the GGUF data section *is* the F32 bit layout, so the
+  decode is one `copy` (added a local `rawCopyLE`, big-endian element-wise
+  fallback). F32 2890→9757 MB/s (**3.4×**, now above safetensors' 8.4 GB/s and
+  within ~1.3× of gguf-py's 12.2). F16 cannot memmove (it widens F16→F32), but
+  the *read* was still per-element: bulk-copy the halfwords into an aligned
+  `[]uint16` then table-convert sequentially → 1.53× (the `f16ToF32` table
+  lookup itself is the remaining, inherently scattered, per-element cost).
+  Class-audit lesson: when a bulk-decode fix lands, apply it to **every** sibling
+  reader — one straggler carried the slow path for a year.
 
 ### 5. Bulk encode instead of per-element Buffer.Write
 - `format/safetensors/safetensors.go` Save paid a `bytes.Buffer.Write` call
@@ -99,7 +112,12 @@ open `buf[i*8:]` 322 µs ≈ two-index `buf[i*8:i*8+8]` ≈ capped-hint
 `p := buf[:8*n:8*n]` — but the pointer-walk form `p = p[8:]` per element was
 1.7× SLOWER (563 µs): it serializes the loop on the slice-header update.
 Keep `binary.LittleEndian.UintNN(buf[i*k:])`; on little-endian arm64/amd64 it
-compiles to a bare load.
+compiles to a bare load. **Scope:** this is the optimal form only when the loop
+must actually *decode* — i.e. the on-disk type differs from the storage type
+(F16→F32 widening, quant unpacking). For a **verbatim-bit** dtype (F32→F32,
+F64→F64) the whole loop is unnecessary: the LE bytes already are the layout, so
+`rawCopyLE` (§4) is one memmove and wins ~3–4× outright. Reach for the
+per-element form only after ruling out the bulk copy.
 
 ## Bench-hygiene note
 Two sessions of contradictory chunking numbers (npy §6) traced to thermal /
