@@ -71,6 +71,11 @@ func EWCPenalty(ctx *backend.Context, params, refParams, fisher []*tensor.Tensor
 		}
 	}
 	// scale the scalar total by λ/2 without promoting its rank (AXPY with a rank-0 zero).
+	// λ==0 (no regularization) must yield 0, but AXPYAttrs.WithDefaults() rewrites
+	// Alpha 0→1 and would return the full unscaled penalty — guard the off case.
+	if lambda == 0 {
+		return tensor.New(total.Dtype(), total.Shape()), nil
+	}
 	return ex(backend.OpAXPY, backend.AXPYAttrs{Alpha: lambda / 2}, total, tensor.New(total.Dtype(), total.Shape()))
 }
 

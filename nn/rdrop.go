@@ -97,6 +97,11 @@ func RDropLoss(ctx *backend.Context, logits1, logits2, targets *tensor.Tensor, a
 	if err != nil {
 		return nil, err
 	}
-	// α·kl + ceAvg
+	// α·kl + ceAvg. α==0 (the R-Drop-off baseline) must return ceAvg alone, but
+	// AXPYAttrs.WithDefaults() rewrites Alpha 0→1 and would add the full-weight KL —
+	// so short-circuit the disabled case.
+	if alpha == 0 {
+		return ceAvg, nil
+	}
 	return rdropExec(ctx, backend.OpAXPY, backend.AXPYAttrs{Alpha: alpha}, kl, ceAvg)
 }

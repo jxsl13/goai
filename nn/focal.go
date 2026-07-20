@@ -97,6 +97,11 @@ func FocalLoss(ctx *backend.Context, logits, targets *tensor.Tensor, gamma, alph
 		return nil, err
 	}
 	// loss = −α · mean(t), scaled without promoting the rank-0 scalar (AXPY + rank-0 zero).
+	// α==0 must yield 0, but AXPYAttrs.WithDefaults() rewrites Alpha 0→1, so guard it
+	// explicitly (the sibling losses guard their own "off" scalars the same way).
+	if alpha == 0 {
+		return tensor.New(meanT.Dtype(), meanT.Shape()), nil
+	}
 	return ex(backend.OpAXPY, backend.AXPYAttrs{Alpha: -alpha}, meanT, tensor.New(meanT.Dtype(), meanT.Shape()))
 }
 
