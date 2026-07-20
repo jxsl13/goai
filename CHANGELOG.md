@@ -4,6 +4,29 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### bench -- vision models (ViT + CNN) forward + train vs PyTorch (T884, 2026-07-20)
+
+Extended the torch comparison to computer vision: a ViT (807,306 params) and a small CNN
+(1,562 params) classifier, forward-only and a full training step (forward + cross-entropy +
+backward, no optimizer), at 32x32x3, batch 8, f32. Both models carry identical param counts on
+the GoAI and torch sides -- the fairness anchor, verified at runtime. Committed
+internal/benchcompare/vision_train_test.go + testdata/bench_vision_torch.py + make
+bench-vision-python.
+
+| img/s | GoAI cpu / Metal | torch cpu / mps |
+|---|---|---|
+| ViT forward | 775 / 111 | 2034 / 4352 |
+| ViT train | 155 / 39 | 652 / 1592 |
+| CNN forward | 8701 / 7375 | 25744 / 17832 |
+| CNN train | 2618 / 1083 | 9453 / 6017 |
+
+torch is ahead everywhere, but the ViT GPU gap (~40×) is a fixable GoAI defect, not a ceiling:
+vision.ViT.Forward loops over the batch internally (8 separate per-image encoder passes), so
+every op pays the Metal dispatch floor ×8 -- on CPU the same defect is only 2.6-4.2×. Batching
+the ViT encoder is booked as T908. The CNN gap (2.4× fwd / 5.6× train) is an ordinary
+fused-conv gap. Note the inversion: at these toy shapes GoAI's CPU beats its own GPU
+(dispatch-bound). Recorded in BENCHMARKS.md section 7 + losses table + scoreboard + docs.
+
 ### bench -- model-file load vs the reference readers: safetensors + GGUF (T885, 2026-07-20)
 
 Measured what GoAI's pure-Go hostile-gated readers cost versus the reference implementations,

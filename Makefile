@@ -169,6 +169,13 @@ bench-gguf-load:
 	GGUF_BENCH_FILE=$$f $(GO) test ./internal/benchcompare -run TestGGUFLoadCompare -count=1 -v | grep GOAI_GGUF_LOAD; \
 	rm -f $$f
 
+## bench-vision-python: time a ViT and a CNN (forward + training step) in GoAI
+## (cpu-simd/Metal/Vulkan) and PyTorch (cpu/mps) at identical geometry, for the vision
+## comparison (BENCHMARKS.md §7). Needs .venv (torch) + MoltenVK. T884.
+bench-vision-python:
+	VK_ICD_FILENAMES=$(VK_MOLTENVK_ICD) GOEXPERIMENT=simd $(GO) test -tags vulkan ./internal/benchcompare -run '^$$' -bench 'BenchmarkViT|BenchmarkCNN' -benchtime 8x | grep -E 'Benchmark(ViT|CNN)'
+	.venv/bin/python testdata/bench_vision_torch.py
+
 ## lint-md: dependency-free markdown lint — discovers every *.md recursively (SPEC T612).
 ## Also runs as a test in ./internal/mdlint (CI-enforced on code pushes).
 lint-md:

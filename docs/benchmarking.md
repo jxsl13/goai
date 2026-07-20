@@ -577,6 +577,45 @@ testdata/bench_gguf_load.py` then `GGUF_BENCH_FILE=/tmp/b.gguf go test ./interna
 -run GGUFLoadCompare -v`. This is the honest-loss-with-a-lever pattern: measuring the incumbent
 surfaced a concrete pure-Go optimization, not a platform ceiling.
 
+### Vision models forward + train vs PyTorch (T884, 2026-07-20)
+
+The torch comparison covered LLM ops and the GPT training step (T883); T884 extends it to
+computer vision -- a ViT and a small CNN classifier, forward-only and a full training step
+(forward + cross-entropy + backward, no optimizer), at 32x32x3, batch 8, f32. The fairness
+anchor is identical geometry: both the GoAI and torch models carry exactly 807,306 (ViT) and
+1,562 (CNN) parameters, verified on both sides at runtime. GoAI: internal/benchcompare
+BenchmarkViT*/CNN* (GOEXPERIMENT=simd cpu, Metal via cgo, Vulkan via MoltenVK); torch 2.12.1,
+testdata/bench_vision_torch.py (median-of-12, warm-up excluded, MPS synchronized). Run
+`make bench-vision-python` alongside the tagged Go benchmark.
+
+| img/s | GoAI cpu | GoAI Metal | GoAI Vulkan | torch-cpu | torch-mps |
+|---|---|---|---|---|---|
+| ViT forward | 775 | 111 | 97 | 2034 | 4352 |
+| ViT train | 155 | 39 | 35 | 652 | 1592 |
+| CNN forward | 8701 | 7375 | 6264 | 25744 | 17832 |
+| CNN train | 2618 | 1083 | 1048 | 9453 | 6017 |
+
+torch is ahead everywhere, but the two models fail for different reasons, and the ViT gap is a
+GoAI inefficiency rather than a ceiling:
+
+- **ViT (~40x behind torch-mps) -- a fixable batching defect.** vision/vit.go's ViT.Forward
+  loops over the batch internally: `for b := range rows { slice image b; forwardOne }` then
+  concat, so a batch of 8 runs as 8 independent length-65 encoder forward+backward passes. On
+  the GPU every one of the hundreds of per-image ops pays the ~0.27 ms Metal command-buffer
+  dispatch floor, x8 -- catastrophic. torch batches [8,65,128] into one attention. On CPU (no
+  dispatch floor) the same defect is only 2.6-4.2x. The GPT/MHA path already batches
+  attention; porting that to the ViT encoder is booked as T908 and is the single biggest
+  vision lever.
+- **CNN (2.4x fwd / 5.6x train on the GPU) -- an ordinary fusion gap.** The CNN is natively
+  batched on both sides, so this is the fused-conv + fused-autograd-backward story from the
+  training-step section: torch fuses, GoAI runs separate conv/pool/backward ops.
+
+An honest inversion worth noting: for these toy shapes GoAI's CPU beats its own Metal and
+Vulkan on every row -- 32x32 batch-8 is small enough that GPU dispatch overhead dominates
+useful compute. GoAI's GPU backends pay off at larger shapes (the LLM sections), not here.
+Measuring the incumbent again surfaced a concrete GoAI optimization (T908), the vision analog
+of the GGUF per-element finding (T907).
+
 ### Sampler top-k via quickselect (§T626, 2026-07-14)
 
 `Sampler.Dist` is the other end of every generated token: it turns a logit vector

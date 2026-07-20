@@ -48,6 +48,7 @@ Two machines appear below:
 | GPU matmul (Apple) | f32 1024³, M2 Pro | 1,376 GFLOP/s (Metal) | torch-mps 4,171 | 3.0× behind (MPS-kernel ceiling) |
 | Apple-GPU LLM decode | 17.7 M-param toy, M2 Pro | 236 tok/s | llama.cpp Metal 723 | ≈3.1× behind at toy size (see caveat) |
 | Training step (fwd+bwd) | GPT dim512/6L seq256, M2 Pro | Metal 3,263 / cpu 2,257 tok/s | torch-mps 12,904; torch-cpu 5,058 | 2–4× behind (fusion + MPS ceiling, §6) |
+| Vision fwd/train (toy) | ViT+CNN 32²/batch-8, M2 Pro | see §7 | torch-mps | 2.4–40× behind (ViT per-image loop → T908) |
 
 Losses are listed with the same care as wins — each has a diagnosed cause and,
 where one exists, a booked lever (see
@@ -291,7 +292,43 @@ Honest read: GoAI's *inference* decode is competitive-to-ahead (§1–§3), but 
 a pure-Go penalty (the pure-Go f32 GEMM is at parity). The lever is graph/kernel
 fusion, tracked for both backends.
 
-## 7. Speculative and assisted decoding — measured on real trained models
+## 7. Vision models — forward and training vs PyTorch
+
+*M2 Pro, a ViT (807,306 params: patch 4, dim 128, depth 4, heads 4) and a small
+CNN (1,562 params: two 3×3 conv stages → global-avg-pool → head) at 32×32×3,
+batch 8, f32. img/s = batch / step time. Forward-only and a full training step
+(forward + cross-entropy + backward, no optimizer). GoAI: `internal/benchcompare`
+BenchmarkViT*/CNN* (`GOEXPERIMENT=simd` cpu, Metal, Vulkan). torch 2.12.1,
+companion `testdata/bench_vision_torch.py`; both models carry the identical
+807,306 / 1,562 params — the fairness anchor. T884.*
+
+| img/s | GoAI cpu | GoAI Metal | torch-cpu | torch-mps |
+|---|---:|---:|---:|---:|
+| ViT forward | 775 | 111 | 2,034 | **4,352** |
+| ViT train | 155 | 39 | 652 | **1,592** |
+| CNN forward | 8,701 | 7,375 | 25,744 | 17,832 |
+| CNN train | 2,618 | 1,083 | 9,453 | 6,017 |
+
+torch is ahead everywhere, but the two models fail differently — and one gap is a
+GoAI inefficiency worth calling out, not a platform ceiling:
+
+- **ViT on the GPU is catastrophic (≈40× behind torch-mps), and it is fixable.**
+  `vision.ViT.Forward` loops over the batch INTERNALLY — it slices each of the 8
+  images and runs a separate length-65 encoder forward+backward instead of one
+  batched [8,65,128] attention. Every per-image op pays the Metal dispatch floor
+  (≈0.27 ms), ×8 images ×hundreds of ops. torch batches the attention in one pass.
+  On CPU (no dispatch floor) the same defect is only 2.6–4.2×. Booked as **T908**:
+  batch the ViT encoder (the GPT/MHA path already does). The single biggest vision
+  lever.
+- **CNN is a normal fusion gap (2.4× fwd / 5.6× train on the GPU).** The CNN is
+  natively batched on both sides, so this is the same fused-conv + fused-backward
+  story as the training-step section (§6): torch's fused kernels vs GoAI's separate
+  conv/pool/backward ops.
+
+Note the inversion: for these toy models GoAI's CPU beats its own Metal/Vulkan
+(dispatch-bound at 32²/batch-8) — the GPU pays off only at larger shapes.
+
+## 8. Speculative and assisted decoding — measured on real trained models
 
 *M2 Pro, in-repo-trained char-level models (the schemes' value depends on
 acceptance rates, so they are measured on genuinely trained models, not
@@ -311,7 +348,7 @@ unmeasured axis. Lesson worth the table: on a dispatch-bound decoder the
 *round cost*, not the acceptance rate, decides the win — free-drafting
 schemes (Medusa, prompt-lookup) pay off where a draft *model* does not.
 
-## 8. Correctness parity — the benchmark behind every benchmark
+## 9. Correctness parity — the benchmark behind every benchmark
 
 Speed claims are only meaningful if both sides compute the same thing.
 Every GoAI number above sits on mechanically enforced parity gates
@@ -342,6 +379,7 @@ honestly documented deficit with a root cause is a deliverable):
 | safetensors full load vs safetensors-python | 1.45× | Rust core + mmap + zero-copy numpy views; ours is a pure-Go hostile-gated read+parse (8.4 vs 12.2 GB/s) | mmap the file to skip the read copy |
 | safetensors one-tensor load vs `safe_open` | 2.69× | their mmap+memcpy vs our read()+frame double-copy; both read only that tensor's bytes | mmap-based partial load, no intermediate buffer |
 | GGUF full load vs gguf-py | 5.4× | `decodeTensor`'s F32/F16 path is a per-element decode loop (`Float32frombits` per element), not a bulk copy — a fixable inefficiency, not a ceiling (GoAI's own safetensors reader is already bulk at 8.4 GB/s vs GGUF's 2.2) | bulk F32/F16 decode fast path → **T907** (format/gguf) |
+| ViT training vs torch-mps (Apple GPU) | ≈40× | `vision.ViT.Forward` runs the batch as 8 separate per-image encoders → each op pays the Metal dispatch floor ×8; torch batches attention in one pass (on CPU the same defect is only 2.6–4.2×) | batch the ViT encoder → **T908** (vision) |
 | CPU attention vs torch fused SDPA | 2.6× | operator fusion | candidate fused-attention CPU kernel |
 | CPU quantized decode vs own f32 | 8.8× | on-the-fly block dequantize in the hot loop | block-native quantized GEMV (flagged) |
 | Toy-size Apple decode vs llama.cpp Metal | ≈3.1× | hand-tuned decode kernels; toy size favors their Accelerate path | production-size measurement first (T887) |
@@ -354,7 +392,6 @@ a spec task with an id you can grep in [`SPEC.md`](SPEC.md):
 | Axis | Incumbent | Task |
 |---|---|---|
 | Committed, versioned sklearn timing script (today the sklearn side of §5 is reproducible only by an ad-hoc script) | scikit-learn | T881 |
-| Vision models forward + train (CNN, ViT) | torch | T884 |
 | Production-size LLM decode on Apple silicon | llama.cpp Metal, MLX | T887 |
 | SGLang datapoint beside vLLM (installs on the worker box, never measured) | SGLang | T888 |
 
