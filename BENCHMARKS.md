@@ -341,6 +341,7 @@ honestly documented deficit with a root cause is a deliverable):
 | Training step vs torch-cpu | 2.24× | GEMM is at AMX parity, but torch fuses SDPA attention + autograd backward; GoAI runs separate NEON kernels | fused-attention/backward CPU kernels |
 | safetensors full load vs safetensors-python | 1.45× | Rust core + mmap + zero-copy numpy views; ours is a pure-Go hostile-gated read+parse (8.4 vs 12.2 GB/s) | mmap the file to skip the read copy |
 | safetensors one-tensor load vs `safe_open` | 2.69× | their mmap+memcpy vs our read()+frame double-copy; both read only that tensor's bytes | mmap-based partial load, no intermediate buffer |
+| GGUF full load vs gguf-py | 5.4× | `decodeTensor`'s F32/F16 path is a per-element decode loop (`Float32frombits` per element), not a bulk copy — a fixable inefficiency, not a ceiling (GoAI's own safetensors reader is already bulk at 8.4 GB/s vs GGUF's 2.2) | bulk F32/F16 decode fast path → **T907** (format/gguf) |
 | CPU attention vs torch fused SDPA | 2.6× | operator fusion | candidate fused-attention CPU kernel |
 | CPU quantized decode vs own f32 | 8.8× | on-the-fly block dequantize in the hot loop | block-native quantized GEMV (flagged) |
 | Toy-size Apple decode vs llama.cpp Metal | ≈3.1× | hand-tuned decode kernels; toy size favors their Accelerate path | production-size measurement first (T887) |
@@ -354,7 +355,6 @@ a spec task with an id you can grep in [`SPEC.md`](SPEC.md):
 |---|---|---|
 | Committed, versioned sklearn timing script (today the sklearn side of §5 is reproducible only by an ad-hoc script) | scikit-learn | T881 |
 | Vision models forward + train (CNN, ViT) | torch | T884 |
-| Model-file loading throughput — GGUF half (safetensors measured, see losses table) | gguf-py | T885 |
 | Production-size LLM decode on Apple silicon | llama.cpp Metal, MLX | T887 |
 | SGLang datapoint beside vLLM (installs on the worker box, never measured) | SGLang | T888 |
 

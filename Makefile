@@ -160,6 +160,15 @@ bench-safetensors-load:
 	ST_BENCH_FILE=$$f $(GO) test ./format/safetensors -run TestSafetensorsLoadCompare -count=1 -v | grep GOAI_LOAD; \
 	rm -f $$f
 
+## bench-gguf-load: time GGUF model-file loading in GoAI (gguf.ReadFile) vs gguf-py's
+## GGUFReader on a shared F32 fixture, for the pure-Go reader comparison (BENCHMARKS.md
+## losses table, T885). Needs .venv (gguf). T907 tracks the F32/F16 fast-path lever.
+bench-gguf-load:
+	@f=$$(mktemp -u).gguf; \
+	GGUF_BENCH_FILE=$$f .venv/bin/python testdata/bench_gguf_load.py; \
+	GGUF_BENCH_FILE=$$f $(GO) test ./internal/benchcompare -run TestGGUFLoadCompare -count=1 -v | grep GOAI_GGUF_LOAD; \
+	rm -f $$f
+
 ## lint-md: dependency-free markdown lint — discovers every *.md recursively (SPEC T612).
 ## Also runs as a test in ./internal/mdlint (CI-enforced on code pushes).
 lint-md:

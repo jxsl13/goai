@@ -533,7 +533,7 @@ parity). The lever is graph/kernel fusion on both backends. This is the first co
 GoAI-vs-torch end-to-end training measurement; run it with `make bench-gpt-train-python`
 alongside the Go benchmark.
 
-### Model-file load -- safetensors, pure Go vs the Rust reference (T885 safetensors half, 2026-07-20)
+### Model-file load -- safetensors and GGUF, pure Go vs the reference readers (T885, 2026-07-20)
 
 Loading weights is upstream of every inference and training run, and GoAI's safetensors
 reader is hostile-gated -- it rejects a header that over-claims the file size before
@@ -558,9 +558,24 @@ is an mmap-based partial read that decodes in place -- a real optimization, trac
 The structural property both share: extracting one tensor touches only that tensor's bytes,
 not the whole file. GoAI's one-tensor load (1.05 ms) is ~7.6x faster than its own full load
 (7.95 ms) of the 16-tensor file -- the O(one tensor) path T903/T904 built, confirmed against
-the reference. GGUF (gguf.ReadFile vs gguf-py) is the remaining T885 half. Run:
-`ST_BENCH_FILE=/tmp/st.safetensors .venv/bin/python testdata/bench_safetensors_load.py` then
-`ST_BENCH_FILE=/tmp/st.safetensors go test ./format/safetensors -run LoadCompare -v`.
+the reference. Run: `ST_BENCH_FILE=/tmp/st.safetensors .venv/bin/python
+testdata/bench_safetensors_load.py` then `ST_BENCH_FILE=/tmp/st.safetensors go test
+./format/safetensors -run LoadCompare -v`.
+
+**GGUF -- a bigger gap, but a fixable one (the GGUF half).** The same 64 MiB fixture as F32
+GGUF tensors (gguf-py's GGUFWriter writes it, deterministic values the Go side bit-checks;
+F32 means no dequant on either side): GoAI `gguf.ReadFile` loads it at **2.2 GB/s**, gguf-py's
+mmap-based `GGUFReader` (materialized to numpy) at **12.2 GB/s** -- GoAI **5.4x behind**, much
+worse than safetensors' 1.45x. This one is *not* a Rust-vs-Go or mmap ceiling: it is a
+per-element decode. `decodeTensor`'s F32 (and F16) branch runs
+`dst[i] = math.Float32frombits(binary.LittleEndian.Uint32(raw[i*4:]))` in a scalar loop over
+every element, where GoAI's *own* safetensors reader already does a bulk copy (hence 8.4 vs
+2.2 GB/s for the same F32 bytes). A bulk F32/F16 decode fast path -- reinterpreting the
+little-endian bytes in one shot, as safetensors does -- should close most of the gap. Booked
+as **T907** (the reader lives in format/gguf). Run: `GGUF_BENCH_FILE=/tmp/b.gguf .venv/bin/python
+testdata/bench_gguf_load.py` then `GGUF_BENCH_FILE=/tmp/b.gguf go test ./internal/benchcompare
+-run GGUFLoadCompare -v`. This is the honest-loss-with-a-lever pattern: measuring the incumbent
+surfaced a concrete pure-Go optimization, not a platform ceiling.
 
 ### Sampler top-k via quickselect (§T626, 2026-07-14)
 

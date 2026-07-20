@@ -4,26 +4,30 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
-### bench -- safetensors model-file load, pure Go vs the Rust reference (T885 safetensors half, 2026-07-20)
+### bench -- model-file load vs the reference readers: safetensors + GGUF (T885, 2026-07-20)
 
-Measured what GoAI's pure-Go hostile-gated safetensors reader costs versus the Rust-cored
-safetensors-python, on a byte-identical 64 MiB fixture (16 f32 tensors, deterministic values
-the Go side bit-checks as the fairness anchor). Committed companion
-testdata/bench_safetensors_load.py + Go harness
-format/safetensors/loadcompare_external_test.go (gated on ST_BENCH_FILE) + a
-make bench-safetensors-load target.
+Measured what GoAI's pure-Go hostile-gated readers cost versus the reference implementations,
+on byte-identical 64 MiB fixtures (16 f32 tensors, deterministic values each Go side bit-checks
+as the fairness anchor). Committed companions testdata/bench_safetensors_load.py +
+testdata/bench_gguf_load.py, Go harnesses format/safetensors/loadcompare_external_test.go and
+internal/benchcompare/gguf_load_external_test.go (gated on env), and make
+bench-safetensors-load / bench-gguf-load targets.
 
-| safetensors load, 64 MiB | GoAI (pure Go) | safetensors-python (Rust+mmap) |
+| Load, 64 MiB | GoAI (pure Go) | reference |
 |---|---|---|
-| Full (16 tensors) | 8.4 GB/s | 12.2 GB/s (1.45×) |
-| One tensor | 4.0 GB/s | 10.8 GB/s (2.69×) |
+| safetensors full (16 tensors) | 8.4 GB/s | safetensors-python 12.2 (1.45×) |
+| safetensors one tensor | 4.0 GB/s | safe_open 10.8 (2.69×) |
+| GGUF full (16 tensors) | 2.2 GB/s | gguf-py 12.2 (5.4×) |
 
-An honest loss, modest on full load: GoAI is within 1.45× of a Rust core that mmaps and
-returns zero-copy numpy views, while also validating the header against the file size (B99).
-The one-tensor gap (2.69×) is GoAI's read()+frame double-copy vs safe_open's mmap+memcpy --
-the lever is an mmap-based partial read. Both share the O(one-tensor) property: GoAI's
-one-tensor load is ~7.6× faster than its own full load (the T903/T904 seek path). The GGUF
-half (gguf.ReadFile vs gguf-py) remains.
+safetensors is an honest, modest loss (within 1.45× of a Rust core that mmaps + returns
+zero-copy numpy views, while GoAI also validates the header against the file size, B99); the
+one-tensor gap is GoAI's read()+frame double-copy vs safe_open's mmap+memcpy, and both share
+the O(one-tensor) property (GoAI's one-tensor load is ~7.6× faster than its own full load, the
+T903/T904 seek path). GGUF is a bigger gap (5.4×) but a **fixable** one, not a ceiling:
+gguf.decodeTensor's F32/F16 branch decodes every element via a scalar Float32frombits loop
+where GoAI's own safetensors reader is bulk (8.4 vs 2.2 GB/s for the same F32 bytes) -- a
+bulk-reinterpret fast path is booked as T907 (the reader lives in the worker's format/gguf).
+Measuring the incumbent surfaced a concrete pure-Go optimization.
 
 ### bench -- pin incumbent versions + reproduce rows for the comparison suite (2026-07-20)
 
