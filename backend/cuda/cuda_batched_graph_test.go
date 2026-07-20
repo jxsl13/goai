@@ -294,8 +294,20 @@ func BenchmarkBatchedGraph_b64_gqaf16_full(b *testing.B) {
 func BenchmarkBatchedGraph_b256_gqaf16_full(b *testing.B) {
 	benchBatchedGraph(b, 256, 128, 22, "graph-gqa-f16-full")
 }
+func BenchmarkBatchedGraph_b512_gqaf16_full(b *testing.B) {
+	benchBatchedGraph(b, 512, 128, 22, "graph-gqa-f16-full")
+}
 func BenchmarkBatchedGraph_b768_gqaf16_full(b *testing.B) {
 	benchBatchedGraph(b, 768, 128, 22, "graph-gqa-f16-full")
+}
+
+// Context sweep at 64-concurrent, full-step: attention cost grows with context while the GEMMs stay
+// fixed, so the serving lead over vLLM erodes as ctx climbs. Pins where the win holds vs crosses over.
+func BenchmarkBatchedGraph_b64_gqaf16_full_ctx256(b *testing.B) {
+	benchBatchedGraph(b, 64, 256, 22, "graph-gqa-f16-full")
+}
+func BenchmarkBatchedGraph_b64_gqaf16_full_ctx512(b *testing.B) {
+	benchBatchedGraph(b, 64, 512, 22, "graph-gqa-f16-full")
 }
 func BenchmarkBatchedGraph_b768_gqaf16(b *testing.B) {
 	benchBatchedGraph(b, 768, 128, 22, "graph-gqa-f16")
