@@ -51,7 +51,15 @@ func NewFSQ(levels []int) (*FSQ, error) {
 		f.half[i] = float64(l-1) / 2
 		if l%2 == 0 {
 			f.offset[i] = 0.5
-			f.shift[i] = math.Atanh(f.offset[i] / f.half[i])
+			// shift re-centers the (asymmetric) even-L grid so round hits L levels.
+			// At L==2, half==offset==0.5 ⇒ offset/half==1 ⇒ atanh(1)==+Inf: tanh(z+∞)
+			// saturates to 1 for every z, so the channel emits ONE constant level with a
+			// zero straight-through gradient — a dead channel. No finite shift can center
+			// a 2-level grid; leaving it 0 gives bounded = ½·tanh(z) − ½ ∈ (−1,0), which
+			// rounds to two reachable levels {−1,0} split at z==0 with a live gradient.
+			if f.half[i] > f.offset[i] {
+				f.shift[i] = math.Atanh(f.offset[i] / f.half[i])
+			}
 		}
 	}
 	return f, nil

@@ -146,3 +146,25 @@ func ExampleFSQ() {
 	// Output:
 	// codes=[1 -1] index=2 size=9
 }
+
+// §B109: an even L==2 (binary) channel used to be DEAD. shift = atanh(offset/half) =
+// atanh(0.5/0.5) = atanh(1) = +Inf saturated tanh(z+shift) to 1 for every z, so the
+// channel emitted one constant level with a zero straight-through gradient. L=2 is a
+// valid FSQ config; both of its levels must be reachable across the input range.
+func TestFSQBinaryChannelNotDead(t *testing.T) {
+	fsq, err := nn.NewFSQ([]int{2, 5}) // ch0 binary (the fix), ch1 odd control
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[int]bool{}
+	for _, zv := range []float64{-6, -3, -1, -0.2, 0.2, 1, 3, 6} {
+		_, idx, err := fsq.Quantize(backend.NewContext(), toT([][]float64{{zv, 0}}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		seen[idx[0]%2] = true // ch0 is the stride-1 radix, so idx%2 is its level
+	}
+	if len(seen) < 2 {
+		t.Errorf("L=2 channel exposed %d distinct level(s) %v, want 2 — dead channel", len(seen), seen)
+	}
+}
