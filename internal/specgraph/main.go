@@ -41,6 +41,7 @@ every mutation re-renders and fully re-verifies before writing anything):
   entry rm [-force] <id>                 remove an entry (refuses when strong refs point at it)
   NOTE: mutation flags come BEFORE positional text (Go flag convention).
   render [-check]               regenerate SPEC.md + SPEC-worker-*.md (-check: report drift, write nothing)
+  sort [-n]                     reorder every section by id (asc; §B newest-first), then re-render (-n: dry-run)
   verify                        render-sync + §V36 speccheck + table shapes + §V39 dangling strong refs
   split [-force]                one-time migration SPEC.md -> spec/ (also re-import during worker phase A)
 
@@ -233,6 +234,14 @@ func dispatchMutation(out *strings.Builder, root, cmd string, rest []string, che
 			}
 		}
 		return true, cmdRender(out, root, check)
+	case "sort":
+		dry := false
+		for _, a := range rest {
+			if a == "-n" || a == "-dry-run" || a == "--dry-run" {
+				dry = true
+			}
+		}
+		return true, cmdSort(out, root, dry)
 	case "verify":
 		return true, cmdVerify(out, root)
 	case "split":
