@@ -12,6 +12,10 @@ coverage.*
 /exportgguf
 /mdlint
 /rendertables
+/specgraph
+
+# specgraph citation-graph cache (T915; local, rebuildable: make spec-graph)
+.specgraph/
 
 # Golden generation scratch (keep committed golden files under */testdata/)
 *.tmp

@@ -1,0 +1,23 @@
+T1  SPEC.md:47  x  done  high  scaffold backend/cpu softmax (commit abc1234)
+adr (1):
+  d1 ADR-0001  docs/decisions/ADR-0001-fixture.md:1  Accepted  2026-01-01  fixture decision
+archinv (1):
+  d2 I1  SPEC.md:22  : registry pattern, see §C1.
+bug (2):
+  d2 B2  SPEC.md:41  2026-01-03  per-element allocation in nn.Fixture optimizer step loop, same NaN class
+  d2 B1  SPEC.md:40  2026-01-02  per-element allocation in backend/cpu softmax loop caused NaN poisoning (commit abc1234)
+change (2):
+  d1 CL:T1:2026-01-02  CHANGELOG.md:5  2026-01-02  fix  softmax NaN guard
+  d2 CL:T2:2026-01-03  CHANGELOG.md:9  2026-01-03  backend/cpu  bulk cast fast path
+constraint (1):
+  d1 C1  SPEC.md:13  pure Go, references §V1.
+doc (1):
+  d2 docs/notes.md#Measured section  docs/notes.md:3  Measured section
+pkg (2):
+  d1 backend/cpu  pkg
+  d2 nn  pkg
+task (2):
+  d1 T2  SPEC.md:48  x  done  med  PERF nn.Fixture optimizer fast path, T1 class
+  d2 T10  SPEC-worker-test.md:10  x  done  med  worker-side task for backend/cpu, prose mentions Tw-FLASHATTN and Iw8
+verif (1):
+  d1 V1  SPEC.md:32  FIXTURE-TAG  every op has a reference test. Prevents §B1-class waste.
