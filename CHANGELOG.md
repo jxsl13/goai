@@ -28,20 +28,23 @@ both engines on M2 Metal: llama.cpp llama-bench b9960 vs GoAI's batched quant de
 (gguf.ReadRaw -> QuantLlamaFromGGUF -> llamagpu.NewQuant; harness
 internal/benchcompare/prod_decode_external_test.go, gated on TINYLLAMA_GGUF).
 
-| TinyLlama-1.1B Q4_K_M, M2 Metal | prefill (pp64) | decode (tg64) |
+Three Apple-Metal engines on TinyLlama-1.1B at ~4-bit (MLX runs its native 4-bit convert of the
+same base model, testdata/bench_mlx.py):
+
+| engine (TinyLlama-1.1B ~4-bit, M2 Metal) | prefill | decode (tg64) |
 |---|---|---|
-| llama.cpp Metal | 1754 t/s | 197.2 t/s |
-| GoAI Metal (batched quant) | 82 t/s | 9.9 t/s |
-| gap | 21× | 20× |
+| MLX (Apple, native 4-bit) | 953 t/s (pp56) | 230.6 t/s |
+| llama.cpp Metal (Q4_K_M) | 1754 t/s (pp64) | 197.2 t/s |
+| GoAI Metal (Q4_K_M, batched quant) | 82 t/s (pp64) | 9.9 t/s |
 
 The toy-size caveat is discharged, and the honest finding is the opposite of the hope: the gap
-WIDENS at scale (≈3× at 17.7M → ≈20× at 1.1B). GoAI's Q4_K dequant kernels are
-one-thread-per-output (T416) so the dequant dominates at 1.1B, and llama.cpp's hand-tuned Metal
-Q4_K kernels + fused attention pull far ahead. It is a uniform kernel-efficiency gap, not a
-broken path -- GoAI's prefill/decode ratio (8.3×) matches llama.cpp's (8.9×), it loads the model
-at the correct config, and its quantized decode is f32-exact against gguf-py. Recorded in
-BENCHMARKS.md section 2 + scoreboard + losses table + docs. MLX left as the optional second
-incumbent.
+WIDENS at scale (≈3× at 17.7M → ≈20-23× at 1.1B) -- and it is NOT llama.cpp-specific. Apple's OWN
+MLX framework decodes even faster than llama.cpp (231 vs 197 t/s), so GoAI trails BOTH mature
+Apple-Metal engines ~20×, pinning the cause on GoAI's kernel maturity. GoAI's Q4_K dequant kernels
+are one-thread-per-output (T416) so the dequant dominates at 1.1B, where llama.cpp's hand-tuned
+kernels and MLX's fused Metal graph are years of decode engineering. Not a broken path -- GoAI's
+prefill/decode ratio (8.3×) matches llama.cpp's (8.9×), correct-config load, f32-exact decode.
+Recorded in BENCHMARKS.md section 2 + scoreboard + losses table + docs.
 
 ### tooling -- cichange always-run mechanism for the whole-tree meta-tests (T893, 2026-07-20)
 

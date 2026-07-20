@@ -15,3 +15,5 @@ numpy==2.5.1
 scikit-learn==1.9.0
 tiktoken==0.13.0
 torch==2.12.1
+# Apple-silicon only (mlx wheels are macOS/arm64); used for the T887 3-way MLX datapoint.
+mlx-lm==0.31.3

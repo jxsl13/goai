@@ -47,7 +47,7 @@ Two machines appear below:
 | CPU tokenizer encode | GPT-2 BPE 1 MB, M2 Pro | ≈28.2 MB/s (6.7M tok/s) | tiktoken Rust 18.8 | **GoAI 1.50×** (237,208-token parity) |
 | GPU matmul (Apple) | f32 1024³, M2 Pro | 1,376 GFLOP/s (Metal) | torch-mps 4,171 | 3.0× behind (MPS-kernel ceiling) |
 | Apple-GPU LLM decode | 17.7 M-param toy, M2 Pro | 236 tok/s | llama.cpp Metal 723 | ≈3.1× behind at toy size (see caveat) |
-| Apple-GPU LLM decode (production) | TinyLlama-1.1B Q4_K_M, M2 | 9.9 tok/s | llama.cpp Metal 197 | ≈20× behind — gap widens at scale (§2) |
+| Apple-GPU LLM decode (production) | TinyLlama-1.1B ~4-bit, M2 | 9.9 tok/s | llama.cpp 197, MLX 231 | ≈20–23× behind BOTH Apple engines (§2) |
 | Training step (fwd+bwd) | GPT dim512/6L seq256, M2 Pro | Metal 3,263 / cpu 2,257 tok/s | torch-mps 12,904; torch-cpu 5,058 | 2–4× behind (fusion + MPS ceiling, §6) |
 | Vision fwd/train (toy) | ViT+CNN 32²/batch-8, M2 Pro | see §7 | torch-mps | 2.4–40× behind (ViT per-image loop → T908) |
 
@@ -132,25 +132,31 @@ widens.** A real TinyLlama-1.1B Q4_K_M GGUF (669 MB, downloaded), the same file
 timed by both engines on M2 Metal (llama.cpp `llama-bench` b9960, 3 reps; GoAI's
 batched quant decoder via `llamagpu.NewQuant`, best-of-3):
 
-| TinyLlama-1.1B Q4_K_M, M2 Metal | Prefill (pp64) | Decode (tg64) |
+Three Apple-Metal engines on TinyLlama-1.1B at ~4-bit — GoAI and llama.cpp share
+the Q4_K_M GGUF; MLX (Apple's own framework) runs its native 4-bit quant of the
+same base model (converted via `mlx_lm.convert -q --q-bits 4`):
+
+| Engine (TinyLlama-1.1B ~4-bit, M2 Metal) | Prefill | Decode (tg64) |
 |---|---:|---:|
-| llama.cpp Metal | 1,754 ± 27 tok/s | 197.2 ± 0.2 tok/s |
-| GoAI Metal (batched quant) | 82 tok/s | 9.9 tok/s |
-| gap | 21× | 20× |
+| MLX (Apple, native 4-bit) | 953 tok/s (pp56) | **230.6 tok/s** |
+| llama.cpp Metal (Q4_K_M) | 1,754 tok/s (pp64) | 197.2 tok/s |
+| GoAI Metal (Q4_K_M, batched quant) | 82 tok/s (pp64) | 9.9 tok/s |
 
 The toy-size hope — that the gap narrows at scale where memory bandwidth dominates
-— does **not** hold: it *widens*, from ≈3× at 17.7 M to ≈20× at 1.1 B. Two
-compounding causes: GoAI's Q4_K dequant kernels are one-thread-per-output, not
-MPS-class (§T416), so at 1.1 B the dequant dominates the decode; and llama.cpp's
-hand-tuned Metal Q4_K kernels + fused attention + years of decode-path engineering
-pull far ahead at production size. GoAI's own prefill/decode ratio (8.3×) matches
-llama.cpp's (8.9×) — a uniform kernel-efficiency gap, not a broken path: GoAI loads
-the model at the correct config (vocab 32000, dim 2048, 22 layers, GQA 32:4) and
-its quantized decode is f32-exact against gguf-py (the parity gates). The lever is
-production-grade Q4_K Metal kernels + attention fusion — a large kernel-engineering
-effort and llama.cpp's core competency. Fairness anchor: same GGUF, same Q4_K
-weights, same machine; harness `internal/benchcompare/prod_decode_external_test.go`
-(gated on TINYLLAMA_GGUF).
+— does **not** hold: it *widens*, from ≈3× at 17.7 M to ≈**20–23×** at 1.1 B. And it
+is **not llama.cpp-specific**: Apple's own MLX decodes even faster than llama.cpp
+(231 vs 197 tok/s), so GoAI trails *both* mature Apple-Metal engines ~20×. That
+pins the cause on GoAI's kernel maturity, not one incumbent's tricks: GoAI's Q4_K
+dequant kernels are one-thread-per-output, not MPS-class (§T416), so at 1.1 B the
+dequant dominates every decode step, where llama.cpp's hand-tuned Metal Q4_K
+kernels and MLX's fused Metal graph are years of decode-path engineering. It is not
+a broken path — GoAI's prefill/decode ratio (8.3×) matches llama.cpp's (8.9×), it
+loads the model at the correct config (vocab 32000, dim 2048, 22 layers, GQA 32:4)
+and its quantized decode is f32-exact against gguf-py (the parity gates). The lever
+is production-grade Q4_K Metal kernels + attention fusion — a large effort and the
+core competency of both incumbents. Harnesses:
+`internal/benchcompare/prod_decode_external_test.go` (GoAI, gated on
+TINYLLAMA_GGUF), `llama-bench` (llama.cpp), `testdata/bench_mlx.py` (MLX).
 
 What the batched recorder architecture is worth *within* GoAI on this machine is
 measured precisely:
@@ -407,7 +413,7 @@ honestly documented deficit with a root cause is a deliverable):
 | ViT training vs torch-mps (Apple GPU) | ≈40× | `vision.ViT.Forward` runs the batch as 8 separate per-image encoders → each op pays the Metal dispatch floor ×8; torch batches attention in one pass (on CPU the same defect is only 2.6–4.2×) | batch the ViT encoder → **T908** (vision) |
 | CPU attention vs torch fused SDPA | 2.6× | operator fusion | candidate fused-attention CPU kernel |
 | CPU quantized decode vs own f32 | 8.8× | on-the-fly block dequantize in the hot loop | block-native quantized GEMV (flagged) |
-| Apple decode vs llama.cpp Metal | ≈3.1× toy → **≈20× at 1.1B Q4_K** (T887) | one-thread-per-output Q4_K dequant (§T416) + their hand-tuned Metal Q4_K kernels & fused attention; the gap WIDENS at production scale | production-grade Q4_K Metal kernels + attention fusion |
+| Apple decode vs llama.cpp AND MLX | ≈3.1× toy → **≈20–23× at 1.1B ~4-bit** (T887) | one-thread-per-output Q4_K dequant (§T416); trails BOTH mature Apple-Metal engines (llama.cpp 197, MLX 231 vs GoAI 9.9 tok/s) so it is kernel maturity, not one incumbent | production-grade Q4_K Metal kernels + attention fusion |
 
 ## Not yet measured — booked benchmark tasks
 
@@ -417,7 +423,6 @@ a spec task with an id you can grep in [`SPEC.md`](SPEC.md):
 | Axis | Incumbent | Task |
 |---|---|---|
 | Committed, versioned sklearn timing script (today the sklearn side of §5 is reproducible only by an ad-hoc script) | scikit-learn | T881 |
-| Production Apple LLM decode — MLX datapoint (llama.cpp done, §2) | MLX | T887 (MLX half) |
 | SGLang datapoint beside vLLM (installs on the worker box, never measured) | SGLang | T888 |
 
 Reinforcement learning and probabilistic methods are currently out of perf

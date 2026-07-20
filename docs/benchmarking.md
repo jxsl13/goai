@@ -789,26 +789,34 @@ b9960 (3 reps) vs GoAI's batched quant decoder (gguf.ReadRaw -> nlp.QuantLlamaFr
 llamagpu.NewQuant, best-of-3; harness internal/benchcompare/prod_decode_external_test.go gated
 on TINYLLAMA_GGUF).
 
-| TinyLlama-1.1B Q4_K_M, M2 Metal | prefill (pp64) | decode (tg64) |
+Three Apple-Metal engines on TinyLlama-1.1B at ~4-bit -- GoAI and llama.cpp share the Q4_K_M
+GGUF; MLX (Apple's own framework) runs a native 4-bit quant of the same base model, converted
+with `mlx_lm.convert -q --q-bits 4` (companion testdata/bench_mlx.py):
+
+| engine (TinyLlama-1.1B ~4-bit, M2 Metal) | prefill | decode (tg64) |
 |---|---|---|
-| llama.cpp Metal | 1754 +/- 27 t/s | 197.2 +/- 0.2 t/s |
-| GoAI Metal (batched quant) | 82 t/s | 9.9 t/s |
-| gap | 21x | 20x |
+| MLX (Apple, native 4-bit) | 953 t/s (pp56) | 230.6 t/s |
+| llama.cpp Metal (Q4_K_M) | 1754 t/s (pp64) | 197.2 t/s |
+| GoAI Metal (Q4_K_M, batched quant) | 82 t/s (pp64) | 9.9 t/s |
 
 The hoped-for narrowing at scale does not happen -- the decode gap goes from ~3x at 17.7 M to
-~20x at 1.1 B. Diagnosed causes: (1) GoAI's Q4_K dequant kernels are one-thread-per-output, not
-MPS-class (T416), so the quant path that buys 4x memory costs throughput, and at 1.1 B the
-dequant dominates every decode step; (2) llama.cpp's hand-tuned Metal Q4_K kernels, fused
-attention, and optimized KV cache are years of decode-path engineering GoAI has not matched at
-this size. It is a uniform kernel-efficiency gap, not a broken path: GoAI's prefill/decode
-ratio (8.3x) matches llama.cpp's (8.9x), it loads the model at the correct config (vocab 32000,
-dim 2048, 22 layers, GQA 32:4) and its quantized decode is f32-exact against gguf-py (the
-parity gates), so the comparison is same-model, same-Q4_K-weights, same-machine. The lever is
-production-grade Q4_K Metal kernels + attention fusion -- llama.cpp's core competency and a
-large kernel effort. MLX (Apple's own framework) is the remaining optional second incumbent.
-Re-run: `TINYLLAMA_GGUF=$PWD/models/tinyllama-1.1b-q4km.gguf GOEXPERIMENT=simd
-VK_ICD_FILENAMES=$VK_MOLTENVK_ICD go test -tags vulkan ./internal/benchcompare -run
-TestProdDecodeGGUF -v` alongside `llama-bench -m models/tinyllama-1.1b-q4km.gguf -p 64 -n 64 -r 3`.
+~20-23x at 1.1 B, and it is NOT llama.cpp-specific: Apple's own MLX decodes even faster than
+llama.cpp (231 vs 197 t/s), so GoAI trails BOTH mature Apple-Metal engines ~20x. That pins the
+cause on GoAI's kernel maturity, not one incumbent's tricks: (1) GoAI's Q4_K dequant kernels are
+one-thread-per-output, not MPS-class (T416), so the quant path that buys 4x memory costs
+throughput and at 1.1 B the dequant dominates every decode step; (2) both llama.cpp's hand-tuned
+Metal Q4_K kernels and MLX's fused Metal graph are years of decode-path engineering GoAI has not
+matched at this size. It is a uniform kernel-efficiency gap, not a broken path: GoAI's
+prefill/decode ratio (8.3x) matches llama.cpp's (8.9x), it loads the model at the correct config
+(vocab 32000, dim 2048, 22 layers, GQA 32:4) and its quantized decode is f32-exact against
+gguf-py, so the comparison is same-base-model, ~4-bit, same-machine. The lever is
+production-grade Q4_K Metal kernels + attention fusion -- the core competency of both incumbents,
+a large kernel effort. Re-run: GoAI `TINYLLAMA_GGUF=$PWD/models/tinyllama-1.1b-q4km.gguf
+GOEXPERIMENT=simd VK_ICD_FILENAMES=$VK_MOLTENVK_ICD go test -tags vulkan ./internal/benchcompare
+-run TestProdDecodeGGUF -v`; llama.cpp `llama-bench -m models/tinyllama-1.1b-q4km.gguf -p 64 -n 64
+-r 3`; MLX `.venv/bin/python testdata/bench_mlx.py` (after the one-time convert). MLX quant scheme
+differs from Q4_K (its own affine 4-bit), so weights are not byte-identical -- a
+precision-matched engine comparison, not a same-weights one.
 
 Honest read of the gaps (as of 2026-07-14):
 

@@ -177,6 +177,13 @@ bench-vision-python:
 	VK_ICD_FILENAMES=$(VK_MOLTENVK_ICD) GOEXPERIMENT=simd $(GO) test -tags vulkan ./internal/benchcompare -run '^$$' -bench 'BenchmarkViT|BenchmarkCNN' -benchtime 8x | grep -E 'Benchmark(ViT|CNN)'
 	.venv/bin/python testdata/bench_vision_torch.py
 
+## bench-mlx: time Apple's MLX framework decoding a native-4-bit TinyLlama on the M2
+## Metal GPU, for the T887 three-way Apple head-to-head (§2). Needs .venv (mlx-lm) and a
+## one-time convert: .venv/bin/python -m mlx_lm convert --hf-path
+## TinyLlama/TinyLlama-1.1B-Chat-v1.0 -q --q-bits 4 --mlx-path models/tinyllama-mlx-4bit
+bench-mlx:
+	.venv/bin/python testdata/bench_mlx.py
+
 ## lint-md: dependency-free markdown lint — discovers every *.md recursively (SPEC T612).
 ## Also runs as a test in ./internal/mdlint (CI-enforced on code pushes).
 lint-md:
