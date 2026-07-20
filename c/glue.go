@@ -4,3 +4,5 @@ package c
 import "C"
 
 func G() { C.puts(nil) }
+
+var X = 1
