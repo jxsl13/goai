@@ -76,6 +76,8 @@ int cu_paged_decode_attn(const void* dQ, const void* dPoolK, const void* dPoolV,
 // cu_paged_decode_attn_gqa: same contract, GQA K/V-shared (one block per (kv head, seq), group warps,
 // K/V staged into shared once per tile) — cuts the naive kernel's group× redundant K/V reads. hd==64, group≤8, blockSize≤16.
 int cu_paged_decode_attn_gqa(const void* dQ, const void* dPoolK, const void* dPoolV, const void* dBlockTables, const void* dSeqLens, void* dO, int batch, int qHeads, int kvHeads, int hd, int blockSize, int maxBlocks, float scale);
+// cu_paged_decode_attn_gqa_sk: split-K (FlashDecoding) — splitK blocks per (kv head, seq) + merge; parallelizes the online-softmax scan. splitK 1..32.
+int cu_paged_decode_attn_gqa_sk(const void* dQ, const void* dPoolK, const void* dPoolV, const void* dBlockTables, const void* dSeqLens, void* dO, int batch, int qHeads, int kvHeads, int hd, int blockSize, int maxBlocks, float scale, int splitK);
 // cu_cvt_f32_to_f16: convert n device f32 (src32) to device f16/u16 (dst16), stream-ordered.
 int cu_cvt_f32_to_f16(void* dst16, const void* src32, long n);
 int cu_cvt_f16_to_f32(void* dst32, const void* src16, long n);

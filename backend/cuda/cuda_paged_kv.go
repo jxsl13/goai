@@ -376,6 +376,40 @@ func (p *PagedKVPool) BatchedDecodeAttnViewGQAf16(q *DeviceF32, view *PagedBatch
 	return &DeviceF32{ptr: out, rows: view.batch, cols: q.cols}, nil
 }
 
+// BatchedDecodeAttnViewSK is BatchedDecodeAttnView with split-K (FlashDecoding): splitK blocks per
+// (kv head, sequence) scan disjoint key chunks into partials, then a merge combines them — parallelizes
+// the online-softmax scan (attention is ~34% of the A1 step, latency-bound). splitK 1..32.
+func (p *PagedKVPool) BatchedDecodeAttnViewSK(q *DeviceF32, view *PagedBatchView, qHeads, kvHeads, splitK int) (*DeviceF32, error) {
+	if view.pool != p {
+		return nil, fmt.Errorf("cuda: BatchedDecodeAttnViewSK view not from this pool")
+	}
+	if q.rows != view.batch {
+		return nil, fmt.Errorf("cuda: BatchedDecodeAttnViewSK q rows %d != batch %d", q.rows, view.batch)
+	}
+	if qHeads <= 0 || kvHeads <= 0 || qHeads%kvHeads != 0 || q.cols%qHeads != 0 {
+		return nil, fmt.Errorf("cuda: BatchedDecodeAttnViewSK bad head config")
+	}
+	hd := q.cols / qHeads
+	if hd != 64 {
+		return nil, fmt.Errorf("cuda: BatchedDecodeAttnViewSK requires hd==64 (got %d)", hd)
+	}
+	if kvHeads*hd != p.wkv {
+		return nil, fmt.Errorf("cuda: BatchedDecodeAttnViewSK kvHeads*hd=%d != pool wkv=%d", kvHeads*hd, p.wkv)
+	}
+	out := C.cu_alloc_f32(C.int(view.batch * q.cols))
+	if out == nil {
+		return nil, fmt.Errorf("cuda: BatchedDecodeAttnViewSK device alloc failed")
+	}
+	scale := float32(1.0 / math.Sqrt(float64(hd)))
+	rc := C.cu_paged_decode_attn_gqa_sk(q.ptr, p.k.ptr, p.v.ptr, view.dbt, view.dsl, out,
+		C.int(view.batch), C.int(qHeads), C.int(kvHeads), C.int(hd), C.int(p.blockSize), C.int(view.maxBlocks), C.float(scale), C.int(splitK))
+	if rc != 0 {
+		C.cu_free_f32(out)
+		return nil, fmt.Errorf("cuda: BatchedDecodeAttnViewSK failed (code %d)", int(rc))
+	}
+	return &DeviceF32{ptr: out, rows: view.batch, cols: q.cols}, nil
+}
+
 // BatchedDecodeAttn runs single-query decode attention for a batch of sequences over this pool:
 // q is [batch, qHeads·hd] (one query token per sequence, row i for seqs[i]), returning
 // o[batch, qHeads·hd]. Each sequence attends over its own paged K/V via its block table — the
