@@ -189,8 +189,18 @@ func (u *Unigram) preprocess(text string) string {
 // [ContainsSpaceMeta] detects that input; the [Unigram] type doc explains why no
 // escape is possible.
 func (u *Unigram) Encode(text string) []int {
-	runes := []rune(u.preprocess(text))
-	n := len(runes)
+	s := u.preprocess(text)
+	// Rune-boundary byte offsets: off[k] is the byte index of rune k, off[n] == len(s).
+	// The DP then slices candidate pieces as s[off[j]:off[i]] — a substring that SHARES
+	// s's backing (no allocation), so the u.id lookup and blocked() check cost no per-
+	// candidate string conversion (the old string(runes[j:i]) allocated O(runes·maxlen)
+	// strings just to key the map — the §T625 anti-pattern).
+	off := make([]int, 0, len(s)+1)
+	for bi := range s {
+		off = append(off, bi)
+	}
+	n := len(off)
+	off = append(off, len(s))
 	if n == 0 {
 		return nil
 	}
@@ -204,7 +214,7 @@ func (u *Unigram) Encode(text string) []int {
 	for i := 1; i <= n; i++ {
 		lo := max(0, i-u.maxRunes)
 		for j := lo; j < i; j++ {
-			piece := string(runes[j:i])
+			piece := s[off[j]:off[i]] // alloc-free substring (shares s's backing)
 			id, ok := u.id[piece]
 			if !ok {
 				continue
