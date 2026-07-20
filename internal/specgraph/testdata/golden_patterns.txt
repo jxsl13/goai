@@ -1,8 +1,8 @@
 == recurring §B bug classes ==
 guard V1 (2)  2026-01-02..2026-01-03
-  B2  SPEC.md:41  2026-01-03  per-element allocation in nn.Fixture optimizer step loop, same NaN class
-  B1  SPEC.md:40  2026-01-02  per-element allocation in backend/cpu softmax loop caused NaN poisoning (commit abc1234)
-keywords allocation,loop,nan,per-element (2)  2026-01-02..2026-01-03
-  B2  SPEC.md:41  2026-01-03  per-element allocation in nn.Fixture optimizer step loop, same NaN class
-  B1  SPEC.md:40  2026-01-02  per-element allocation in backend/cpu softmax loop caused NaN poisoning (commit abc1234)
+  B2  SPEC.md:41  2026-01-03  per-element allocation in nn.Fixture optimizer step loop caused same NaN class
+  B1  SPEC.md:40  2026-01-02  per-element allocation in backend/cpu softmax loop caused NaN poisoning (escape `a | b`, commit abc1234)
+keywords allocation,caused,loop,nan (2)  2026-01-02..2026-01-03
+  B2  SPEC.md:41  2026-01-03  per-element allocation in nn.Fixture optimizer step loop caused same NaN class
+  B1  SPEC.md:40  2026-01-02  per-element allocation in backend/cpu softmax loop caused NaN poisoning (escape `a | b`, commit abc1234)
 == done-PERF §T optimization patterns ==

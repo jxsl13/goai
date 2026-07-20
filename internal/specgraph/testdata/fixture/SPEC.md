@@ -37,8 +37,8 @@ V2 MULTI WORD TAG: tolerates spaces in the tag like the real V26.
 
 | id | date | cause | fix |
 | --- | --- | --- | --- |
-| B1 | 2026-01-02 | per-element allocation in backend/cpu softmax loop caused NaN poisoning (commit abc1234) | bulk cast fixed it. Non-vacuous: guard test added. V1,T2. |
-| B2 | 2026-01-03 | per-element allocation in nn.Fixture optimizer step loop, same NaN class | flat fast path. V1. |
+| B1 | 2026-01-02 | per-element allocation in backend/cpu softmax loop caused NaN poisoning (escape `a \| b`, commit abc1234) | bulk cast fixed it. Non-vacuous: guard test added. V1,T2. |
+| B2 | 2026-01-03 | per-element allocation in nn.Fixture optimizer step loop caused same NaN class | flat fast path. V1. |
 
 ## §T — task backlog
 

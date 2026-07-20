@@ -4,8 +4,8 @@ adr (1):
 archinv (1):
   d2 I1  SPEC.md:22  : registry pattern, see §C1.
 bug (2):
-  d2 B2  SPEC.md:41  2026-01-03  per-element allocation in nn.Fixture optimizer step loop, same NaN class
-  d2 B1  SPEC.md:40  2026-01-02  per-element allocation in backend/cpu softmax loop caused NaN poisoning (commit abc1234)
+  d2 B2  SPEC.md:41  2026-01-03  per-element allocation in nn.Fixture optimizer step loop caused same NaN class
+  d2 B1  SPEC.md:40  2026-01-02  per-element allocation in backend/cpu softmax loop caused NaN poisoning (escape `a | b`, commit abc1234)
 change (2):
   d1 CL:T1:2026-01-02  CHANGELOG.md:5  2026-01-02  fix  softmax NaN guard
   d2 CL:T2:2026-01-03  CHANGELOG.md:9  2026-01-03  backend/cpu  bulk cast fast path
