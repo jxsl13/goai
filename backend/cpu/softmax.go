@@ -36,11 +36,12 @@ func softmaxKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs
 	// ulps (§V9). Softmax is single-dtype I/O → no fallback.
 	switch xc.Dtype() {
 	case tensor.F32:
-		if vexpNeon {
-			// arm64 perf build (goexperiment.simd): f32-native softmax with the
-			// 4-wide NEON exp (vexp.go) — the T660 MHA-band kernel applied to the
-			// standalone op. Compile-time const: the default build (and amd64)
-			// keeps the f64 math.Exp path below bit-for-bit.
+		if vexpF32Fast {
+			// SIMD perf build: f32-native softmax with the vectorized exp (4-wide
+			// NEON on arm64, 8-wide AVX2 on amd64; vexp.go / vexp_amd64.go) — the
+			// T660 MHA-band kernel applied to the standalone op (LLM logits, explicit
+			// attention softmax). Compile-time const: the plain (no-simd) build keeps
+			// the f64 math.Exp path below bit-for-bit; rides the ADR-0021 f32 tolerance.
 			softmaxVexpF32(xc.Storage().F32(), out.Storage().F32(), rows, d)
 		} else {
 			softmaxTyped(xc.Storage().F32(), out.Storage().F32(), rows, d)
