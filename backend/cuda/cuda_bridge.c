@@ -5444,7 +5444,7 @@ int cu_gemm_w8a16_b(const void* dA16, const void* dW8, const void* dScale, void*
         "    #pragma unroll\n"
         "    for (int i=0;i<4;i++){ int e=t+i*256, r=e>>4, kk=e&15; sA[e]=A[(size_t)(rowBase+r)*K + kt + kk]; }\n"
         "    #pragma unroll\n"
-        "    for (int i=0;i<4;i++){ int e=t+i*256, kk=e>>6, nn=e&63; signed char w=W[(size_t)(kt+kk)*N + colBase + nn]; sW[e]=f2h((float)w*Scale[colBase+nn]); }\n"
+        "    for (int i=0;i<4;i++){ int e=t+i*256, kk=e>>6, nn=e&63; signed char w=W[(size_t)(kt+kk)*N + colBase + nn]; sW[e]=f2h((float)w); }\n"  // scale DEFERRED to output
         "    __syncthreads();\n"
         "    const unsigned short* sa = sA + wm*16*16;\n"                       // this warp's 16x16 A tile
         "    unsigned a0 = *(const unsigned*)(sa + gid*16 + 2*tid);\n"
@@ -5468,10 +5468,11 @@ int cu_gemm_w8a16_b(const void* dA16, const void* dW8, const void* dScale, void*
         "  #pragma unroll\n"
         "  for (int j=0;j<4;j++){\n"
         "    int col = colBase + wn*32 + j*8 + 2*tid;\n"
-        "    C[(size_t)(rowT+gid)*N   + col]     = f2h(acc[j][0]);\n"
-        "    C[(size_t)(rowT+gid)*N   + col + 1] = f2h(acc[j][1]);\n"
-        "    C[(size_t)(rowT+gid+8)*N + col]     = f2h(acc[j][2]);\n"
-        "    C[(size_t)(rowT+gid+8)*N + col + 1] = f2h(acc[j][3]);\n"
+        "    float s0 = Scale[col], s1 = Scale[col+1];\n"                       // per-column scale applied ONCE at output
+        "    C[(size_t)(rowT+gid)*N   + col]     = f2h(acc[j][0]*s0);\n"
+        "    C[(size_t)(rowT+gid)*N   + col + 1] = f2h(acc[j][1]*s1);\n"
+        "    C[(size_t)(rowT+gid+8)*N + col]     = f2h(acc[j][2]*s0);\n"
+        "    C[(size_t)(rowT+gid+8)*N + col + 1] = f2h(acc[j][3]*s1);\n"
         "  }\n"
         "}\n",
         "w8a16b.cu", "w8a16b", &gW8A16B) != 0) { rc = -2; goto donew8b; }
