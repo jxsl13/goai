@@ -11,7 +11,7 @@ import (
 
 // cacheSchemaVersion invalidates every cache on extractor changes — bump it
 // whenever parse*/gitlog output shape or semantics change.
-const cacheSchemaVersion = 3 // 2: splitRow honors \| escapes (§B114); 3: spec/ hierarchy corpus (§V41)
+const cacheSchemaVersion = 4 // 2: splitRow honors \| escapes (§B114); 3: spec/ hierarchy corpus (§V41); 4: §V/§C/§G/§I are GFM tables
 
 // cacheDir/graph file live under .docgraph/ at repo root (gitignored): the
 // cache is pure acceleration, never a source of truth — any doubt about its

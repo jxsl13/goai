@@ -34,7 +34,9 @@ func TestRealSpecClean(t *testing.T) {
 // and the unmutated fixture must be clean (the non-vacuity floor).
 const cleanFixture = `## §V — verification invariants
 
-V1 FOO: the first invariant.
+| id | tag | invariant |
+| --- | --- | --- |
+| V1 | FOO | the first invariant. |
 
 ## §B — backprop log
 

@@ -42,12 +42,14 @@ func (v Violation) String() string {
 }
 
 var (
-	// Defining occurrences: a §T/§B/§R id in the LEADING cell of a GFM table row,
-	// or a §V invariant at the start of a line. A digit must follow the letter.
+	// Defining occurrences: a §T/§B/§R/§V id in the LEADING cell of a GFM table
+	// row. Every id-bearing section is now a clean GFM table (§V/§C/§G/§I joined
+	// §T/§B/§R), so the shape is uniform: `| <id> | …`. A digit must follow the
+	// letter.
 	reTRow    = regexp.MustCompile(`^\| (T\d+) `)
 	reBRow    = regexp.MustCompile(`^\| (B\d+) `)
 	reRRow    = regexp.MustCompile(`^\| (R\d+) `)
-	reVDef    = regexp.MustCompile(`^(V\d+) `)
+	reVDef    = regexp.MustCompile(`^\| (V\d+) `)
 	reSection = regexp.MustCompile(`^## §?([A-Z])\b`) // "## §T — …" or "## T. …"
 )
 
