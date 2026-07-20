@@ -40,7 +40,11 @@ func readTiktoken(r io.Reader) (*Tokenizer, error) {
 		t.ranks[string(b)] = id
 		t.decoder[id] = string(b)
 	}
-	return t, sc.Err()
+	if err := sc.Err(); err != nil {
+		return nil, err
+	}
+	t.buildPairRank()
+	return t, nil
 }
 
 // TiktokenFromBytes parses an in-memory tiktoken rank file into a byte-level BPE Tokenizer — the

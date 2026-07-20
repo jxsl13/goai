@@ -18,6 +18,24 @@ type Tokenizer struct {
 	ranks    map[string]int // token bytes → id / merge rank
 	decoder  map[int]string // id → token bytes
 	specials specialSet     // markers parsed only by EncodeSpecial (§B60)
+	// pairRank[a<<8|b] = rank of the two-byte token {a,b}, or math.MaxInt if not a token. The
+	// initial merge pass looks up every adjacent BYTE pair; a direct array index skips the string
+	// hash + compare that dominated the profile (mapaccess2_faststr). len 65536 or nil (map fallback).
+	pairRank []int
+}
+
+// buildPairRank fills the two-byte fast-lookup table from ranks (call once after ranks is populated).
+func (t *Tokenizer) buildPairRank() {
+	pr := make([]int, 65536)
+	for i := range pr {
+		pr[i] = math.MaxInt
+	}
+	for tok, id := range t.ranks {
+		if len(tok) == 2 {
+			pr[int(tok[0])<<8|int(tok[1])] = id
+		}
+	}
+	t.pairRank = pr
 }
 
 // LoadGPT2 reads a tiktoken-exported rank file (base64(bytes) rank per line).
@@ -61,7 +79,9 @@ func (t *Tokenizer) bpeMerge(piece []byte) []int {
 	minRank, minI := math.MaxInt, -1
 	for i := 0; i < len(piece)-1; i++ {
 		r := math.MaxInt
-		if v, ok := t.ranks[string(piece[i:i+2])]; ok {
+		if t.pairRank != nil {
+			r = t.pairRank[int(piece[i])<<8|int(piece[i+1])] // direct index, no string hash
+		} else if v, ok := t.ranks[string(piece[i:i+2])]; ok {
 			r = v
 		}
 		parts[i] = bpePart{i, r}
