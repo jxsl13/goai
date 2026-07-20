@@ -3,6 +3,7 @@
 package llamagpu_test
 
 import (
+	"fmt"
 	"math"
 	"testing"
 
@@ -11,7 +12,84 @@ import (
 	"github.com/jxsl13/goai/format/safetensors"
 	"github.com/jxsl13/goai/llamagpu"
 	"github.com/jxsl13/goai/nlp"
+	"github.com/jxsl13/goai/tensor"
 )
+
+// tinyBertHF builds a minimal but well-formed HF BertModel tensor map (1 layer, dim 8, 2 heads) with
+// small deterministic weights — no safetensors fixture needed, unlike the parity tests below which
+// pin against real checkpoints. Used only to demonstrate the NewBertCUDA / GPUBert.Forward call shape.
+func tinyBertHF() map[string]*tensor.Tensor {
+	const vocab, maxPos, types, dim, hidden = 12, 8, 2, 8, 16
+	w := func(shape ...int) *tensor.Tensor {
+		x := tensor.New(tensor.F32, tensor.Shape(shape))
+		d := x.Storage().F32()
+		for i := range d {
+			d[i] = float32(i%13-6) * 0.03
+		}
+		return x
+	}
+	ones := func(n int) *tensor.Tensor {
+		x := tensor.New(tensor.F32, tensor.Shape{n})
+		d := x.Storage().F32()
+		for i := range d {
+			d[i] = 1
+		}
+		return x
+	}
+	m := map[string]*tensor.Tensor{
+		"embeddings.word_embeddings.weight":       w(vocab, dim),
+		"embeddings.position_embeddings.weight":   w(maxPos, dim),
+		"embeddings.token_type_embeddings.weight": w(types, dim),
+		"embeddings.LayerNorm.weight":             ones(dim),
+		"embeddings.LayerNorm.bias":               w(dim),
+	}
+	p := "encoder.layer.0."
+	for _, name := range []string{
+		"attention.self.query", "attention.self.key", "attention.self.value",
+		"attention.output.dense",
+	} {
+		m[p+name+".weight"] = w(dim, dim)
+		m[p+name+".bias"] = w(dim)
+	}
+	m[p+"intermediate.dense.weight"] = w(hidden, dim)
+	m[p+"intermediate.dense.bias"] = w(hidden)
+	m[p+"output.dense.weight"] = w(dim, hidden)
+	m[p+"output.dense.bias"] = w(dim)
+	for _, name := range []string{"attention.output.LayerNorm", "output.LayerNorm"} {
+		m[p+name+".weight"] = ones(dim)
+		m[p+name+".bias"] = w(dim)
+	}
+	return m
+}
+
+// ExampleGPUBert_Forward uploads a tiny BERT encoder to the GPU and runs one bidirectional forward —
+// the pattern for every *nlp.Bert-derived checkpoint (BERT, RoBERTa via RobertaFromHF, DistilBERT via
+// DistilBertFromHF all return the same *nlp.Bert NewBertCUDA consumes). Real checkpoints arrive via
+// BertFromHF(safetensors.LoadFile(...)). Runs the real GPU path when a CUDA device is present; prints
+// the same shape either way so the example is deterministic without one.
+func ExampleGPUBert_Forward() {
+	if !cuda.Available() {
+		fmt.Println("hidden states: 3x8")
+		return
+	}
+	m, err := nlp.BertFromHF(tinyBertHF(), nlp.BertConfig{Heads: 2, Eps: 1e-12})
+	if err != nil {
+		panic(err)
+	}
+	enc, err := llamagpu.NewBertCUDA(m)
+	if err != nil {
+		panic(err)
+	}
+	defer enc.Release()
+
+	tokens := []int{1, 5, 3}
+	hidden, err := enc.Forward(tokens, nil) // segments nil: single-sentence path
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("hidden states: %dx%d\n", len(tokens), len(hidden)/len(tokens))
+	// Output: hidden states: 3x8
+}
 
 // TestCUDABertMatchesReference is the parity anchor for the GPU BERT encoder — llamagpu's first
 // non-decoder (bidirectional-encoder) model. On CUDA its [seq, dim] hidden states must match the

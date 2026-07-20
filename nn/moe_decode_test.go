@@ -1,6 +1,7 @@
 package nn_test
 
 import (
+	"fmt"
 	"math"
 	"testing"
 
@@ -90,6 +91,26 @@ func TestSparseMoEForwardDecodeF32(t *testing.T) {
 	if maxAbs > 1e-5 { // F32 tolerance
 		t.Fatalf("F32 ForwardDecode diverges from dense Forward: %.3e", maxAbs)
 	}
+}
+
+// ForwardDecode is [SparseMoE.Forward]'s inference-only counterpart: for a single
+// decode token it evaluates only the experts that token's top-k routing selects,
+// instead of Forward's dense all-experts-then-mask pass. The output matches the
+// dense Forward (up to floating-point summation-order slack) at a fraction of the
+// compute — use it on the KV-cached decode path, [SparseMoE.Forward] for training
+// and prefill.
+func ExampleSparseMoE_ForwardDecode() {
+	moe := nn.NewSparseMoE(tensor.F64, 4 /*dim*/, 8 /*hidden*/, 3 /*experts*/, 2 /*top-k*/, 42)
+	x := tensor.FromFloat64(tensor.Shape{1, 4}, []float64{1, 0, -1, 0.5}) // one decode token
+
+	dense, _, _ := moe.Forward(backend.NewContext(), x)
+	sparse, _, _ := moe.ForwardDecode(backend.NewContext(), x)
+
+	fmt.Println(sparse.Shape())
+	fmt.Println(math.Abs(dense.AtF64(0, 0)-sparse.AtF64(0, 0)) < 1e-9)
+	// Output:
+	// (1, 4)
+	// true
 }
 
 // BenchmarkSparseMoEDecode measures the dense-vs-sparse decode cost at one token for a

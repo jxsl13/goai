@@ -235,11 +235,11 @@ perfscan-check:
 ## the -short test suite INCLUDING the always-run meta-tests speccheck / perfscan /
 ## docgraph render-sync (pure-go lane + §V41), and the go-mod-tidy drift gate. The
 ## -short suite self-skips the trained-model e2e tests, so this is ~seconds. It runs
-## every package EXCEPT internal/mdlint and internal/apicheck — the two CI deliberately
-## holds out of the always-run gate as known-red debt (mdlint reddens on unrelated
-## worker markdown, apicheck on the llamagpu doc-debt), so gating on them here would
-## diverge from CI, not match it. The cgo/metal/cuda/vulkan/simd COMPILE lanes need
-## toolchains and run in CI; add the locally-available ones with `make preflight-full`.
+## every package EXCEPT internal/mdlint — the one gate CI still holds out of always-run
+## as known-red debt (mdlint reddens on unrelated worker markdown). apicheck is now
+## GREEN and IN the gate (its doc/example debt was cleared), matching CI. The
+## cgo/metal/cuda/vulkan/simd COMPILE lanes need toolchains and run in CI; add the
+## locally-available ones with `make preflight-full`.
 preflight:
 	@echo "→ gofmt (tracked *.go)"
 	@bad=$$(gofmt -l $$(git ls-files '*.go')); if [ -n "$$bad" ]; then echo "unformatted — run gofmt -w:"; echo "$$bad"; exit 1; fi
@@ -249,8 +249,8 @@ preflight:
 	@$(CGO_OFF) $(GO) vet ./...
 	@echo "→ go mod tidy drift gate"
 	@$(CGO_OFF) $(GO) mod tidy && git diff --exit-code -- go.mod go.sum || { echo "go.mod/go.sum drift — commit the tidy result"; exit 1; }
-	@echo "→ CGO_ENABLED=0 go test -short  (buildable pure-go packages, minus held-out mdlint/apicheck)"
-	@$(CGO_OFF) $(GO) test -short -count=1 $$($(CGO_OFF) $(GO) list -e -f '{{if or .GoFiles .TestGoFiles}}{{.ImportPath}}{{end}}' ./... | grep -vE 'internal/(mdlint|apicheck)$$')
+	@echo "→ CGO_ENABLED=0 go test -short  (buildable pure-go packages incl. apicheck; only mdlint held out)"
+	@$(CGO_OFF) $(GO) test -short -count=1 $$($(CGO_OFF) $(GO) list -e -f '{{if or .GoFiles .TestGoFiles}}{{.ImportPath}}{{end}}' ./... | grep -vE 'internal/(mdlint)$$')
 	@echo "✓ preflight OK — cgo/metal/cuda/vulkan/simd lanes run in CI (or: make preflight-full)"
 
 ## preflight-full: preflight + the remaining CI lanes runnable on THIS machine — the

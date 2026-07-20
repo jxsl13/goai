@@ -121,6 +121,88 @@ var typeExampleExempt = map[string]bool{
 	"nlp.StreamCache":                 true, // StreamingLLM decode state; needs a full model, covered by streaming tests
 	"nlp.Tokenizer":                   true, // needs a GPT-2 vocab fixture; covered by tokenizer tests
 	"nlp.MHA":                         true, // needs four projection matrices; used within GPT/decode
+	"nlp.BertLayer":                   true, // internal transformer layer (part of Bert, shown in ExampleBert)
+	"nlp.CohereBlock":                 true, // internal transformer block (part of Cohere)
+	"nlp.DeepSeekV2Block":             true, // internal transformer block (part of DeepSeekV2)
+	"nlp.FalconBlock":                 true, // internal transformer block (part of Falcon)
+	"nlp.GPTNeoXBlock":                true, // internal transformer block (part of GPTNeoX)
+	"nlp.GemmaBlock":                  true, // internal transformer block (part of Gemma)
+	"nlp.Gemma2Block":                 true, // internal transformer block (part of Gemma2)
+	"nlp.GraniteMoeBlock":             true, // internal transformer block (part of GraniteMoe)
+	"nlp.JambaAttention":              true, // internal attention sublayer (part of Jamba)
+	"nlp.JambaLayer":                  true, // internal hybrid layer (part of Jamba)
+	"nlp.JambaMixer":                  true, // internal Mamba mixer sublayer (part of Jamba)
+	"nlp.JambaMoE":                    true, // internal MoE sublayer (part of Jamba)
+	"nlp.MPTBlock":                    true, // internal transformer block (part of MPT)
+	"nlp.MambaLayer":                  true, // internal SSM layer (part of Mamba)
+	"nlp.Mamba2Layer":                 true, // internal SSM layer (part of Mamba2)
+	"nlp.Mamba2Mixer":                 true, // internal SSD mixer sublayer (part of Mamba2)
+	"nlp.MixtralBlock":                true, // internal transformer block (part of Mixtral)
+	"nlp.NemotronBlock":               true, // internal transformer block (part of Nemotron)
+	"nlp.OLMo2Block":                  true, // internal transformer block (part of OLMo2)
+	"nlp.OLMoEBlock":                  true, // internal transformer block (part of OLMoE)
+	"nlp.PhiBlock":                    true, // internal transformer block (part of Phi)
+	"nlp.Qwen2MoeBlock":               true, // internal transformer block (part of Qwen2Moe)
+	"nlp.StableLMBlock":               true, // internal transformer block (part of StableLM)
+	"nlp.StarCoder2Block":             true, // internal transformer block (part of StarCoder2)
+	"nlp.T5DecoderBlock":              true, // internal transformer block (part of T5Decoder)
+	"nlp.QuantCohereBlock":            true, // quantized transformer block (part of QuantCohere)
+	"nlp.QuantDeepSeekMoE":            true, // quantized MoE sublayer (part of QuantDeepSeekV2)
+	"nlp.QuantDeepSeekV2Block":        true, // quantized transformer block (part of QuantDeepSeekV2)
+	"nlp.QuantFalconBlock":            true, // quantized transformer block (part of QuantFalcon)
+	"nlp.QuantGPTNeoXBlock":           true, // quantized transformer block (part of QuantGPTNeoX)
+	"nlp.QuantGeGLU":                  true, // quantized FFN sublayer (part of QuantGemma)
+	"nlp.QuantGemmaBlock":             true, // quantized transformer block (part of QuantGemma)
+	"nlp.QuantGemma2Block":            true, // quantized transformer block (part of QuantGemma2)
+	"nlp.QuantJambaAttention":         true, // quantized attention sublayer (part of QuantJamba)
+	"nlp.QuantJambaLayer":             true, // quantized hybrid layer (part of QuantJamba)
+	"nlp.QuantJambaMixer":             true, // quantized Mamba mixer sublayer (part of QuantJamba)
+	"nlp.QuantJambaMoE":               true, // quantized MoE sublayer (part of QuantJamba)
+	"nlp.QuantMPTBlock":               true, // quantized transformer block (part of QuantMPT)
+	"nlp.QuantMambaLayer":             true, // quantized SSM layer (part of QuantMamba)
+	"nlp.QuantMambaMixer":             true, // quantized SSM mixer sublayer (part of QuantMamba)
+	"nlp.QuantMamba2Layer":            true, // quantized SSM layer (part of QuantMamba2)
+	"nlp.QuantMamba2Mixer":            true, // quantized SSD mixer sublayer (part of QuantMamba2)
+	"nlp.QuantMixtralBlock":           true, // quantized transformer block (part of QuantMixtral)
+	"nlp.QuantMoE":                    true, // quantized MoE sublayer (part of QuantMixtral)
+	"nlp.QuantNemotronBlock":          true, // quantized transformer block (part of QuantNemotron)
+	"nlp.QuantOLMo2Block":             true, // quantized transformer block (part of QuantOLMo2)
+	"nlp.QuantStableLMBlock":          true, // quantized transformer block (part of QuantStableLM)
+	"nlp.QuantStarCoder2Block":        true, // quantized transformer block (part of QuantStarCoder2)
+	"nlp.CohereCache":                 true, // Cohere decode state; needs a full model, covered by decode tests
+	"nlp.DeepSeekV2Cache":             true, // DeepSeekV2 decode state; needs a full model, covered by decode tests
+	"nlp.DeepSeekV2LatentCache":       true, // DeepSeekV2 MLA latent decode state; needs a full model, covered by decode tests
+	"nlp.FalconCache":                 true, // Falcon decode state; needs a full model, covered by decode tests
+	"nlp.GPTNeoXCache":                true, // GPTNeoX decode state; needs a full model, covered by decode tests
+	"nlp.GemmaCache":                  true, // Gemma decode state; needs a full model, covered by decode tests
+	"nlp.Gemma2Cache":                 true, // Gemma2 decode state; needs a full model, covered by decode tests
+	"nlp.GraniteMoeCache":             true, // GraniteMoe decode state; needs a full model, covered by decode tests
+	"nlp.JambaDecodeState":            true, // Jamba decode state (KV + SSM slots); covered by decode tests
+	"nlp.MPTCache":                    true, // MPT decode state; needs a full model, covered by decode tests
+	"nlp.MambaDecodeState":            true, // Mamba decode state (conv+SSM slots); covered by decode tests
+	"nlp.MambaLayerState":             true, // per-layer slot of MambaDecodeState; covered by decode tests
+	"nlp.Mamba2DecodeState":           true, // Mamba2 decode state (conv+SSD slots); covered by decode tests
+	"nlp.Mamba2LayerState":            true, // per-layer slot of Mamba2DecodeState; covered by decode tests
+	"nlp.MixtralCache":                true, // Mixtral decode state; needs a full model, covered by decode tests
+	"nlp.NemotronCache":               true, // Nemotron decode state; needs a full model, covered by decode tests
+	"nlp.OLMo2Cache":                  true, // OLMo2 decode state; needs a full model, covered by decode tests
+	"nlp.OLMoECache":                  true, // OLMoE decode state; needs a full model, covered by decode tests
+	"nlp.PhiCache":                    true, // Phi decode state; needs a full model, covered by decode tests
+	"nlp.QuantDeepSeekV2Cache":        true, // QuantDeepSeekV2 decode state; needs a full model, covered by decode tests
+	"nlp.Qwen2MoeCache":               true, // Qwen2Moe decode state; needs a full model, covered by decode tests
+	"nlp.RWKVDecodeState":             true, // RWKV decode state (per-layer wkv/shift slots); covered by decode tests
+	"nlp.StableLMCache":               true, // StableLM decode state; needs a full model, covered by decode tests
+	"nlp.StarCoder2Cache":             true, // StarCoder2 decode state; needs a full model, covered by decode tests
+	"nlp.T5DecoderCache":              true, // T5 decoder decode state; needs a full model, covered by decode tests
+	"nlp.JLensHTMLOption":             true, // functional-option type (shown via WithJLensHTMLTitle etc.)
+	"nlp.JSpaceOption":                true, // functional-option type (shown via WithJSpaceControlDirections etc.)
+	"nlp.QuantizeDeepSeekV2Option":    true, // functional-option type (shown via its With* setters)
+	"nlp.SPMOption":                   true, // functional-option type (shown via its With* setters)
+	"nlp.JSpaceComponent":             true, // plain result record inside JSpaceDecomposition
+	"nlp.JSpaceDecomposition":         true, // plain result record returned by JSpaceDecompose
+	"nlp.EOSReporter":                 true, // optional model capability interface (EOS token discovery)
+	"nlp.StopTokener":                 true, // optional model capability interface (stop-token discovery)
+	"nlp.SpecialVocab":                true, // tokenizer capability interface (control-token classification)
 	"nn.Layer":                        true, // interface (Linear/Sequential are the impls)
 	"nn.Optimizer":                    true, // interface (SGD/Adam/Lion are the impls)
 	"nn.Activation":                   true, // built via ReLU()/GELU()/…, shown in ExampleSequential
