@@ -29,7 +29,9 @@ type PagedKVPool struct {
 	blockSize int
 	wkv       int
 	numBlocks int
-	free      []int32 // free physical block ids
+	free      []int32        // free physical block ids
+	kf16      unsafe.Pointer // lazy f16 (u16) shadow of k for the f16 decode path (nil until built)
+	vf16      unsafe.Pointer
 }
 
 // NewPagedKVPool allocates a pool of numBlocks × blockSize × wkv for K and V.
@@ -75,6 +77,40 @@ func (p *PagedKVPool) Free() {
 		p.v.Free()
 		p.k, p.v = nil, nil
 	}
+	if p.kf16 != nil {
+		C.cu_free_f32(p.kf16)
+		C.cu_free_f32(p.vf16)
+		p.kf16, p.vf16 = nil, nil
+	}
+}
+
+// ensureF16 lazily builds an f16 (u16) shadow of the whole K/V pool for the f16 decode path.
+// NOTE: this is a read-optimized shadow that assumes the pool is STATIC after it is built — it is
+// not refreshed on Append (a measurement/bench path today; full f16 storage is the productization).
+func (p *PagedKVPool) ensureF16() error {
+	if p.kf16 != nil {
+		return nil
+	}
+	n := p.numBlocks * p.blockSize * p.wkv
+	kf16 := C.cu_alloc_u16(C.int(n))
+	vf16 := C.cu_alloc_u16(C.int(n))
+	if kf16 == nil || vf16 == nil {
+		freeIf(kf16)
+		freeIf(vf16)
+		return fmt.Errorf("cuda: PagedKVPool f16 shadow alloc failed")
+	}
+	if rc := C.cu_cvt_f32_to_f16(kf16, p.k.ptr, C.long(n)); rc != 0 {
+		C.cu_free_f32(kf16)
+		C.cu_free_f32(vf16)
+		return fmt.Errorf("cuda: PagedKVPool f16 convert K failed (%d)", int(rc))
+	}
+	if rc := C.cu_cvt_f32_to_f16(vf16, p.v.ptr, C.long(n)); rc != 0 {
+		C.cu_free_f32(kf16)
+		C.cu_free_f32(vf16)
+		return fmt.Errorf("cuda: PagedKVPool f16 convert V failed (%d)", int(rc))
+	}
+	p.kf16, p.vf16 = unsafe.Pointer(kf16), unsafe.Pointer(vf16)
+	return nil
 }
 
 // SeqKV is one sequence's paged view into a pool: a block table (logical block -> physical id)
@@ -299,6 +335,43 @@ func (p *PagedKVPool) BatchedDecodeAttnViewGQA(q *DeviceF32, view *PagedBatchVie
 	if rc != 0 {
 		C.cu_free_f32(out)
 		return nil, fmt.Errorf("cuda: BatchedDecodeAttnViewGQA failed (code %d)", int(rc))
+	}
+	return &DeviceF32{ptr: out, rows: view.batch, cols: q.cols}, nil
+}
+
+// BatchedDecodeAttnViewGQAf16 is BatchedDecodeAttnViewGQA reading an f16 (u16) shadow of the pool
+// K/V — half the global bytes, the lever once the GQA kernel is memory-bound. Builds the shadow
+// lazily (see ensureF16: assumes a static pool after build). Requires hd==64, group≤8, blockSize≤16.
+func (p *PagedKVPool) BatchedDecodeAttnViewGQAf16(q *DeviceF32, view *PagedBatchView, qHeads, kvHeads int) (*DeviceF32, error) {
+	if view.pool != p {
+		return nil, fmt.Errorf("cuda: BatchedDecodeAttnViewGQAf16 view not from this pool")
+	}
+	if q.rows != view.batch {
+		return nil, fmt.Errorf("cuda: BatchedDecodeAttnViewGQAf16 q rows %d != batch %d", q.rows, view.batch)
+	}
+	if qHeads <= 0 || kvHeads <= 0 || qHeads%kvHeads != 0 || q.cols%qHeads != 0 {
+		return nil, fmt.Errorf("cuda: BatchedDecodeAttnViewGQAf16 bad head config q=%d kv=%d width=%d", qHeads, kvHeads, q.cols)
+	}
+	hd := q.cols / qHeads
+	if hd != 64 {
+		return nil, fmt.Errorf("cuda: BatchedDecodeAttnViewGQAf16 requires hd==64 (got %d)", hd)
+	}
+	if kvHeads*hd != p.wkv {
+		return nil, fmt.Errorf("cuda: BatchedDecodeAttnViewGQAf16 kvHeads*hd=%d != pool wkv=%d", kvHeads*hd, p.wkv)
+	}
+	if err := p.ensureF16(); err != nil {
+		return nil, err
+	}
+	out := C.cu_alloc_f32(C.int(view.batch * q.cols))
+	if out == nil {
+		return nil, fmt.Errorf("cuda: BatchedDecodeAttnViewGQAf16 device alloc failed")
+	}
+	scale := float32(1.0 / math.Sqrt(float64(hd)))
+	rc := C.cu_paged_decode_attn_gqa_f16(q.ptr, p.kf16, p.vf16, view.dbt, view.dsl, out,
+		C.int(view.batch), C.int(qHeads), C.int(kvHeads), C.int(hd), C.int(p.blockSize), C.int(view.maxBlocks), C.float(scale))
+	if rc != 0 {
+		C.cu_free_f32(out)
+		return nil, fmt.Errorf("cuda: BatchedDecodeAttnViewGQAf16 failed (code %d)", int(rc))
 	}
 	return &DeviceF32{ptr: out, rows: view.batch, cols: q.cols}, nil
 }
