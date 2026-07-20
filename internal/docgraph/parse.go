@@ -5,25 +5,28 @@ import (
 	"strings"
 )
 
-// Defining-occurrence and reference regexes. reTRow/reBRow/reRRow/reVDef are
-// speccheck's defining-occurrence rules (the row regexes verbatim; reVDef
-// additionally captures the TAG, falling back to speccheck's bare `^V\d+ `
-// via reVDefBare) — TestParseMatchesSpeccheck pins the copies to identical id
-// extraction on a shared fixture instead of coupling the packages, since
-// speccheck is the §V36 CI guard and documents its self-containment. The
-// digit-after-letter rule keeps worker prose ids like "Tw-FLASHATTN" or
-// "Iw8" from ever matching. reSection widens speccheck's single-letter rule
-// to the worker specs' multi-letter sections (§RUN, §Tw, §CPU).
+// Defining-occurrence and reference regexes. Every id-bearing section is now a
+// clean GFM table (§V/§C/§G/§I joined §T/§B/§R), so the defining occurrence is
+// always the leading cell of a table row: `| <id> | …`. reTRow/reBRow/reRRow/
+// reVDefBare are speccheck's defining-occurrence rules verbatim; reVDef is the
+// docgraph-only extension that additionally captures the §V TAG (its own
+// column, `| id | tag | invariant |`). TestParseMatchesSpeccheck pins the
+// copies to identical id extraction on a shared fixture instead of coupling
+// the packages, since speccheck is the §V36 CI guard and documents its
+// self-containment. The digit-after-letter rule keeps worker prose ids like
+// "Tw-FLASHATTN" or "Iw8" from ever matching. reSection widens speccheck's
+// single-letter rule to the worker specs' multi-letter sections (§RUN, §Tw,
+// §CPU).
 var (
 	reTRow     = regexp.MustCompile(`^\| (T\d+) `)
 	reBRow     = regexp.MustCompile(`^\| (B\d+) `)
 	reRRow     = regexp.MustCompile(`^\| (R\d+) `)
-	reVDef     = regexp.MustCompile(`^(V\d+) ([A-Z][A-Z0-9+/ -]*):`)
-	reVDefBare = regexp.MustCompile(`^(V\d+) `)
+	reVDef     = regexp.MustCompile(`^\| (V\d+) \| ([A-Z][A-Z0-9+/ -]*?) \|`)
+	reVDefBare = regexp.MustCompile(`^\| (V\d+) `)
 	reSection  = regexp.MustCompile(`^## §?([A-Za-z]+)\b`)
 
-	reGCDef = regexp.MustCompile(`^([GC]\d+)(?: \([^)]*\))?:`)
-	reIDef  = regexp.MustCompile(`^(I\.L\d+[a-z]?|I\d+)[: ]`)
+	reGCDef = regexp.MustCompile(`^\| ([GC]\d+) `)
+	reIDef  = regexp.MustCompile(`^\| (I\.L\d+[a-z]?|I\d+) `)
 
 	// Reference forms. Bare T/B/V/R ids are the corpus norm (cites cells,
 	// commit subjects, §B guard chains); C/G/I need the § prefix in prose
@@ -99,6 +102,15 @@ func splitRow(line string) []string {
 	return append(cells, strings.TrimSpace(cur.String()))
 }
 
+// cellText returns the second cell of a two-column def row (`| id | text |`),
+// or "" when the row is malformed. Used for §G/§C/§I whose body is one cell.
+func cellText(cells []string) string {
+	if len(cells) >= 2 {
+		return cells[1]
+	}
+	return ""
+}
+
 // kindOfID maps a spec id to its node kind, or "" for unknown shapes.
 func kindOfID(id string) Kind {
 	switch {
@@ -166,28 +178,37 @@ func parseSpec(g *Graph, file, content string, pkgs *pkgSet) {
 			}
 		case reVDefBare.MatchString(ln):
 			flush()
-			id, tag, rest := "", "", ""
+			// §V row: `| id | tag | invariant |`. splitRow yields clean cells
+			// (it unescapes \| and never keeps the trailing separator); reVDef
+			// recovers the TAG column.
+			cells := splitRow(ln)
+			tag := ""
 			if m := reVDef.FindStringSubmatch(ln); m != nil {
-				id, tag, rest = m[1], m[2], strings.TrimSpace(ln[len(m[0]):])
-			} else {
-				m := reVDefBare.FindStringSubmatch(ln)
-				id, rest = m[1], strings.TrimSpace(ln[len(m[0]):])
+				tag = m[2]
+			}
+			rest := ""
+			switch {
+			case len(cells) >= 3:
+				rest = cells[2]
+			case len(cells) == 2:
+				rest = cells[1]
 			}
 			n := g.AddNode(&Node{
-				ID: id, Kind: KindVerif, File: file, Line: lineNo,
+				ID: cells[0], Kind: KindVerif, File: file, Line: lineNo,
 				Text: rest,
 				Meta: map[string]string{"tag": tag},
 			})
-			for _, ref := range scanRefs(n.Text) {
-				if ref != n.ID {
-					g.AddEdge(Edge{From: n.ID, To: ref, Type: EdgeRefs, File: file, Line: lineNo})
-				}
-			}
+			addRefEdges(g, n, file, lineNo, n.Text)
 		case section == "G" || section == "C":
-			if m := reGCDef.FindStringSubmatch(ln); m != nil {
+			// §G/§C rows: `| id | text |`. A non-row line (the section header,
+			// the table header/delimiter, a trailing prose paragraph like §G's
+			// "vollwertig" note, or a wrapped continuation) folds into the open
+			// entry when it is non-blank, else flushes.
+			if reGCDef.MatchString(ln) {
+				cells := splitRow(ln)
 				open = g.AddNode(&Node{
-					ID: m[1], Kind: kindOfID(m[1]), File: file, Line: lineNo,
-					Text: strings.TrimSpace(ln[len(m[0]):]),
+					ID: cells[0], Kind: kindOfID(cells[0]), File: file, Line: lineNo,
+					Text: cellText(cells),
 				})
 				addRefEdges(g, open, file, lineNo, open.Text)
 			} else if open != nil && strings.TrimSpace(ln) != "" {
@@ -197,10 +218,12 @@ func parseSpec(g *Graph, file, content string, pkgs *pkgSet) {
 				flush()
 			}
 		case section == "I":
-			if m := reIDef.FindStringSubmatch(ln); m != nil {
+			// §I rows: `| id | interface |` (I.L* layer model + I* invariants).
+			if reIDef.MatchString(ln) {
+				cells := splitRow(ln)
 				open = g.AddNode(&Node{
-					ID: m[1], Kind: KindArchInv, File: file, Line: lineNo,
-					Text: strings.TrimSpace(ln[len(m[1]):]),
+					ID: cells[0], Kind: KindArchInv, File: file, Line: lineNo,
+					Text: cellText(cells),
 				})
 				addRefEdges(g, open, file, lineNo, open.Text)
 			} else if open != nil && strings.TrimSpace(ln) != "" {

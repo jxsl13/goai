@@ -35,7 +35,7 @@ every mutation re-renders and fully re-verifies before writing anything):
   task edit [flags] <id>                 rewrite cells (-text, -cites, -state, -priority)
   bug add -cause .. -fix .. [flags]      new §B row, newest-first (-date; -guards V<n> appends the guard chain)
   research add -claim .. -source .. [-conf high|med|low|ref]
-  verif add -tag TAG <text>              new §V def (canonical "V<n> TAG:" shape)
+  verif add -tag TAG <text>              new §V row (| id | tag | invariant |)
   goal|constraint|archinv add <text> | edit <id> <text> | rm <id>
   entry get <id>                         raw source line + spec/<file>:<line>
   entry rm [-force] <id>                 remove an entry (refuses when strong refs point at it)

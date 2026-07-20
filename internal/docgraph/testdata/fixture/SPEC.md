@@ -1,25 +1,29 @@
 # SPEC — fixture
 
 Synthetic mini-corpus for the docgraph extractor tests. Mirrors the real
-SPEC.md section shapes (FORMAT.md): defs for §G/§C/§I/§V, tables for §R/§B/§T,
-worker prose ids (Tw-X, Iw8) that must NEVER match, and a §T cites column.
+SPEC.md section shapes (FORMAT.md): clean GFM tables for every id-bearing
+section (§G/§C/§I/§V/§R/§B/§T), worker prose ids (Tw-X, Iw8) that must NEVER
+match, and a §T cites column.
 
 ## §G — goals
 
-G1: tiny fixture goal — exercise §I.L0 and backend/cpu.
+| id | goal |
+| --- | --- |
+| G1 | tiny fixture goal — exercise §I.L0 and backend/cpu. |
 
 ## §C — constraints
 
-C1: pure Go, references §V1.
-
-C2: multi-line def start,
-  continuation line citing §G1.
+| id | constraint |
+| --- | --- |
+| C1 | pure Go, references §V1. |
+| C2 | multi-line def start, continuation line citing §G1. |
 
 ## §I — architecture invariants
 
-I.L0 core: tensor layer, no cgo.
-
-I1: registry pattern, see §C1.
+| id | interface |
+| --- | --- |
+| I.L0 | core: tensor layer, no cgo. |
+| I1 | registry pattern, see §C1. |
 
 ## §R — research log
 
@@ -29,9 +33,10 @@ I1: registry pattern, see §C1.
 
 ## §V — verification invariants
 
-V1 FIXTURE-TAG: every op has a reference test. Prevents §B1-class waste.
-
-V2 MULTI WORD TAG: tolerates spaces in the tag like the real V26.
+| id | tag | invariant |
+| --- | --- | --- |
+| V1 | FIXTURE-TAG | every op has a reference test. Prevents §B1-class waste. |
+| V2 | MULTI WORD TAG | tolerates spaces in the tag like the real V26. |
 
 ## §B — backprop log
 

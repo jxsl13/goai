@@ -1,4 +1,4 @@
 dangling references (3):
-  SPEC.md:34  V2 -[refs]-> V26
-  SPEC.md:40  B1 -[fixed_by]-> abc1234
-  SPEC.md:47  T1 -[fixed_by]-> abc1234
+  SPEC.md:39  V2 -[refs]-> V26
+  SPEC.md:45  B1 -[fixed_by]-> abc1234
+  SPEC.md:52  T1 -[fixed_by]-> abc1234

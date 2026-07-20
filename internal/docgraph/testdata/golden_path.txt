@@ -1,3 +1,3 @@
-B2  SPEC.md:41  2026-01-03  per-element allocation in nn.Fixture optimizer step loop caused same NaN class
-  <-[guards]- V1  SPEC.md:32  FIXTURE-TAG  every op has a reference test. Prevents §B1-class waste.
-  <-[cites]- T1  SPEC.md:47  x  done  high  scaffold backend/cpu softmax (commit abc1234)
+B2  SPEC.md:46  2026-01-03  per-element allocation in nn.Fixture optimizer step loop caused same NaN class
+  <-[guards]- V1  SPEC.md:38  FIXTURE-TAG  every op has a reference test. Prevents §B1-class waste.
+  <-[cites]- T1  SPEC.md:52  x  done  high  scaffold backend/cpu softmax (commit abc1234)
