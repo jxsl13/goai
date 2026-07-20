@@ -4,6 +4,23 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### tooling -- cichange always-run mechanism for the whole-tree meta-tests (T893, 2026-07-20)
+
+The CI impact selector (internal/cichange) maps a diff to the affected packages via the reverse
+import closure, but the whole-tree meta-tests -- internal/apicheck (the V19 doc/example gate)
+and internal/mdlint (every .md) -- have no import edge to what they check, so the closure can
+never select them (B98: they rot red while CI stays green on nlp/nn/... pushes). This adds the
+mechanism to close that seam: a config.alwaysRun list (a repeatable -always-run flag) that
+Impact() appends to every NON-EMPTY selection -- only packages that exist in the graph, so a
+pure-docs diff stays zero-runner (C16 EXC2) and a temp/renamed package injects nothing.
+Unit-tested including the B98 regression (an nlp-only diff selects apicheck+mdlint), proven
+non-vacuous by stripping the loop.
+
+The DEFAULT always-run set is left EMPTY for now: enabling apicheck+mdlint while they are red on
+the committed tree would fail CI on the first push -- apicheck on the V19 doc-debt (T892),
+mdlint on .claude/memory + SPEC-worker-*.md (T889). Once those gates are green, enabling is a
+one-line change (ci.yml already runs the default config). T893 stays in progress until then.
+
 ### bench -- vision models (ViT + CNN) forward + train vs PyTorch (T884, 2026-07-20)
 
 Extended the torch comparison to computer vision: a ViT (807,306 params) and a small CNN

@@ -26,6 +26,7 @@ type config struct {
 	ignoreRe    []*regexp.Regexp // -ignore-regex: relative path matches → no impact
 	fullRe      []*regexp.Regexp // -full-rerun-regex: match → verdict all
 	pkgRe       []*regexp.Regexp // -pkg-rerun-regex: match → owning package reruns
+	alwaysRun   []string         // -always-run: module-relative package dirs added to every NON-EMPTY selection (§T893: source-walking meta-tests the import closure can never reach)
 }
 
 // stringList is a repeatable flag.Value collecting strings in order.
@@ -39,21 +40,37 @@ func (s *stringList) Set(v string) error {
 
 // defaultRules returns this repository's rules expressed as config vocabulary —
 // exactly what the hardcoded classifier used to do (§T584).
-func defaultRules() (ignore, ignoreRe, fullRe, pkgRe []string) {
+func defaultRules() (ignore, ignoreRe, fullRe, pkgRe, alwaysRun []string) {
 	ignore = []string{"docs", ".claude"}     // + .claude/** (skills/workflows/memory — no Go, never affects build/tests; §T585 root-markdown covers LICENSE.md)
 	ignoreRe = []string{`^[^/]+\.(md|txt)$`} // root-level markdown/text (deeper ones can be embedded, §B50)
 	fullRe = []string{`^go\.sum$`, `^Makefile$`, `^\.github/`}
-	return ignore, ignoreRe, fullRe, pkgRe
+	// The whole-tree meta-tests (internal/apicheck: the §V19 doc/example gate;
+	// internal/mdlint: every *.md) have NO import edge to what they check, so the
+	// reverse closure can never select them (§B98: they rot red while CI stays green
+	// on nlp/nn/… pushes). The -always-run mechanism forces configured packages into
+	// every non-empty selection to close that seam — but the DEFAULT is left empty
+	// until both gates are GREEN on the committed tree, because enabling them while
+	// red would fail CI on the FIRST push (a pure-docs diff still stays zero-runner,
+	// §C16 EXC2, so that is not the risk). Blockers: apicheck fails the §V19 doc-debt
+	// (T892); mdlint fails on .claude/memory + SPEC-worker-*.md (T889). Once both are
+	// green, enable with `alwaysRun = []string{"internal/apicheck", "internal/mdlint"}`
+	// here (or an -always-run flag in ci.yml). §T893.
+	return ignore, ignoreRe, fullRe, pkgRe, alwaysRun
 }
 
 // newConfig absolutizes the path rules against root and compiles the regex rules.
 // An invalid regex or unresolvable path is a configuration error (usage, exit 2).
-func newConfig(root string, ignore, ignoreRe, fullRe, pkgRe []string) (*config, error) {
+func newConfig(root string, ignore, ignoreRe, fullRe, pkgRe, alwaysRun []string) (*config, error) {
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
 		return nil, fmt.Errorf("cichange: resolve root %q: %w", root, err)
 	}
 	c := &config{root: absRoot}
+	for _, ar := range alwaysRun {
+		if ar = strings.TrimSpace(filepath.ToSlash(ar)); ar != "" {
+			c.alwaysRun = append(c.alwaysRun, ar)
+		}
+	}
 	for _, p := range ignore {
 		ap := p
 		if !filepath.IsAbs(ap) {
@@ -85,8 +102,8 @@ func newConfig(root string, ignore, ignoreRe, fullRe, pkgRe []string) (*config, 
 
 // defaultConfig is the zero-flag configuration rooted at dir.
 func defaultConfig(dir string) *config {
-	ig, igRe, fRe, pRe := defaultRules()
-	c, err := newConfig(dir, ig, igRe, fRe, pRe)
+	ig, igRe, fRe, pRe, aRun := defaultRules()
+	c, err := newConfig(dir, ig, igRe, fRe, pRe, aRun)
 	if err != nil {
 		panic(err) // defaults are constants: cannot fail
 	}

@@ -48,11 +48,13 @@ func main() {
 		ignoreRe     stringList
 		fullRe       stringList
 		pkgRe        stringList
+		alwaysRun    stringList
 	)
 	flag.Var(&ignore, "ignore", "path (file or dir) with no CI impact; repeatable")
 	flag.Var(&ignoreRe, "ignore-regex", "repo-relative path regex with no CI impact; repeatable")
 	flag.Var(&fullRe, "full-rerun-regex", "repo-relative path regex forcing the full suite; repeatable")
 	flag.Var(&pkgRe, "pkg-rerun-regex", "repo-relative path regex forcing the owning package's tests; repeatable")
+	flag.Var(&alwaysRun, "always-run", "module-relative package added to every non-empty selection (whole-tree meta-tests the import closure cannot reach); repeatable")
 	flag.Parse()
 	if flag.NArg() < 2 {
 		fmt.Fprintln(os.Stderr, "usage: cichange [-impact|-validate|-run] [rule flags] <base-rev> <head-rev> [-- go-test-args]")
@@ -63,13 +65,14 @@ func main() {
 		os.Exit(2)
 	}
 	if !*noDefaults {
-		dIg, dIgRe, dFull, dPkg := defaultRules()
+		dIg, dIgRe, dFull, dPkg, dAlways := defaultRules()
 		ignore = append(stringList(dIg), ignore...)
 		ignoreRe = append(stringList(dIgRe), ignoreRe...)
 		fullRe = append(stringList(dFull), fullRe...)
 		pkgRe = append(stringList(dPkg), pkgRe...)
+		alwaysRun = append(stringList(dAlways), alwaysRun...)
 	}
-	cfg, err := newConfig(".", ignore, ignoreRe, fullRe, pkgRe)
+	cfg, err := newConfig(".", ignore, ignoreRe, fullRe, pkgRe, alwaysRun)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)

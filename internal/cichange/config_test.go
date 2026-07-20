@@ -9,10 +9,10 @@ import (
 // cfgWith builds a config rooted at dir with the defaults plus extra rules.
 func cfgWith(t *testing.T, dir string, ignore, ignoreRe, fullRe, pkgRe []string) *config {
 	t.Helper()
-	dIg, dIgRe, dFull, dPkg := defaultRules()
+	dIg, dIgRe, dFull, dPkg, dAlways := defaultRules()
 	c, err := newConfig(dir,
 		append(dIg, ignore...), append(dIgRe, ignoreRe...),
-		append(dFull, fullRe...), append(dPkg, pkgRe...))
+		append(dFull, fullRe...), append(dPkg, pkgRe...), dAlways)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,10 +78,10 @@ func TestConfigPrecedence(t *testing.T) {
 
 // §V16 tier-1 (§T584): invalid regexes are configuration errors, not silent no-ops.
 func TestConfigInvalidRegex(t *testing.T) {
-	if _, err := newConfig("example.com/m", nil, []string{"["}, nil, nil); err == nil || !strings.Contains(err.Error(), "ignore-regex") {
+	if _, err := newConfig("example.com/m", nil, []string{"["}, nil, nil, nil); err == nil || !strings.Contains(err.Error(), "ignore-regex") {
 		t.Errorf("invalid ignore-regex must error with the flag name, got %v", err)
 	}
-	if _, err := newConfig("example.com/m", nil, nil, []string{"("}, nil); err == nil {
+	if _, err := newConfig("example.com/m", nil, nil, []string{"("}, nil, nil); err == nil {
 		t.Error("invalid full-rerun-regex must error")
 	}
 }

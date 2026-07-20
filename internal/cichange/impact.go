@@ -54,7 +54,18 @@ func Impact(cfg *config, dir, base, head string) string {
 		affected[p] = true
 	}
 	if len(affected) == 0 {
-		return None
+		return None // pure documentation → zero runner (§C16 EXC2); no meta-test either
+	}
+	// §T893: a pipeline is starting, so add every configured always-run package that
+	// exists in the graph — the whole-tree meta-tests (apicheck, mdlint) that have no
+	// import edge to what they check, so the reverse closure above can never reach
+	// them (§B98). Only packages present in g.pkgs are added: a configured path absent
+	// from this checkout (a temp test module, or a renamed package) contributes
+	// nothing rather than a bogus `go test` target.
+	for _, ar := range cfg.alwaysRun {
+		if g.pkgs[ar] {
+			affected[ar] = true
+		}
 	}
 	if len(affected) == len(g.pkgs) {
 		return All
