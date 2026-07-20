@@ -245,6 +245,15 @@ func TestA1ContinuousBatchAdmit(t *testing.T) {
 		gen[0] = append(gen[0], nx[0])
 		gen[1] = append(gen[1], nx[1])
 	}
+	// EVICT A (as if finished): release its blocks; B continues SOLO — the active set shrinks 2->1 and
+	// B's KV/position are unaffected. This is the evict half of continuous batching.
+	for li := range ls {
+		seqs[li][0].Release()
+	}
+	for n := 0; n < 2; n++ {
+		lastB = feed([]int{1}, []int32{int32(gen[1][len(gen[1])-1])})[0]
+		gen[1] = append(gen[1], lastB)
+	}
 
 	// eager references
 	eagerOne := func(prompt []int32, maxGen int) []int {
@@ -344,5 +353,5 @@ func TestA1ContinuousBatchAdmit(t *testing.T) {
 			t.Fatalf("B diverged at %d: eager %d vs cbatch %d", i, refB[i], gen[1][i])
 		}
 	}
-	t.Logf("=> CONTINUOUS BATCHING with admit-mid-stream WORKS: A(solo->joint) + B(admitted) both == eager")
+	t.Logf("=> CONTINUOUS BATCHING (ADMIT + EVICT) WORKS: A(solo->joint->evicted) + B(admitted->joint->solo) both == eager")
 }
