@@ -4,6 +4,18 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### nn -- PadGradHook bulk-copy fast path (T905, 2026-07-20)
+
+The booked T896 follow-up. Embedding.PadGradHook returns the gradient with the padding row
+zeroed, and did so by copying the ENTIRE gradient element-by-element via
+SetF64(AtF64(i,j)) -- vocab x dim dispatched calls on every backward pass that uses
+padding_idx (a 32000x4096 table is 131M calls). It is just "clone the gradient, zero one
+row": the fast path copies the rows before and after the pad row in two bulk copy() calls on
+the typed backing slice, leaving the pad row at its zero init. Measured 95.4 ms -> 2.2 ms on
+a 32000x512 F32 gradient (~44x). Bit-identical to the old loop (proven across F32/F64/F16/BF16
+against a verbatim oracle -- the same float bits are copied and the pad row is zero in both);
+F16/BF16 and non-contiguous gradients fall through to the general path.
+
 ### format/safetensors -- partial load for sharded checkpoints (T904, 2026-07-20)
 
 Extends the T903 partial-load story to sharded models -- the real case, since 70B-class

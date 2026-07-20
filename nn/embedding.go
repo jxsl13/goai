@@ -173,6 +173,29 @@ func (e *Embedding) PadGradHook() func(grad *tensor.Tensor) *tensor.Tensor {
 		}
 		rows, cols := grad.Shape()[0], grad.Shape()[1]
 		out := tensor.New(grad.Dtype(), grad.Shape())
+		// Fast path: the whole gradient is copied except the padding row, which
+		// stays at its zero init. On a contiguous, offset-0 tensor the rows before
+		// and after `pad` are two bulk copies of the typed backing slice — one
+		// dtype decision instead of the per-element SetF64(AtF64(i,j)) loop that
+		// ran vocab×dim dispatched calls on every backward pass (the whole
+		// embedding gradient). Values are bit-identical: the same float bits are
+		// copied and the pad row is zero in both paths. F16/BF16 and non-contiguous
+		// gradients fall through to the general path.
+		if grad.IsContiguous() && grad.Offset() == 0 {
+			lo, hi := pad*cols, (pad+1)*cols
+			switch grad.Dtype() {
+			case tensor.F64:
+				src, dst := grad.Storage().F64(), out.Storage().F64()
+				copy(dst[:lo], src[:lo])
+				copy(dst[hi:], src[hi:])
+				return out
+			case tensor.F32:
+				src, dst := grad.Storage().F32(), out.Storage().F32()
+				copy(dst[:lo], src[:lo])
+				copy(dst[hi:], src[hi:])
+				return out
+			}
+		}
 		for i := range rows {
 			if i == pad {
 				continue // leave the padding row at its zero init
