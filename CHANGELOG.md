@@ -4,6 +4,18 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### format/safetensors -- partial load for sharded checkpoints (T904, 2026-07-20)
+
+Extends the T903 partial-load story to sharded models -- the real case, since 70B-class
+checkpoints ship split across many files. LoadShardedTensor(indexPath, name) resolves the
+tensor through the index weight_map and reads ONLY the shard that holds it (seeking to its
+byte range via LoadTensor), so a single weight comes out of a many-shard model without
+opening the rest; previously LoadSharded loaded every shard and merged (peak RSS ~ whole
+model). ShardedNames(indexPath) lists every tensor's name/dtype/shape reading only the index
+and each shard's header. Shard names keep the same bare-name validation LoadSharded applies
+(no path traversal). Tested bit-identical to LoadSharded, and a memory test confirms pulling
+one tensor from a 4-shard model allocates far less than the whole model.
+
 ### format/safetensors -- partial / header-only load (T903, 2026-07-20)
 
 Adds the two functions a large checkpoint needs and the package lacked: Names(path) reads
