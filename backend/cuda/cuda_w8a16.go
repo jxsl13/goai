@@ -36,6 +36,11 @@ func GemmW8A16SK(a16, w8, scale, cacc, c16 unsafe.Pointer, m, k, n, splitK int) 
 	return int(C.cu_gemm_w8a16_sk(a16, w8, scale, cacc, c16, C.int(m), C.int(k), C.int(n), C.int(splitK)))
 }
 
+// GemmW8A16P3 is the 3-stage cp.async pipeline W8A16 GEMM (deeper-pipeline test). cacc = scratch f32.
+func GemmW8A16P3(a16, w8, scale, cacc, c16 unsafe.Pointer, m, k, n, splitK int) int {
+	return int(C.cu_gemm_w8a16_p3(a16, w8, scale, cacc, c16, C.int(m), C.int(k), C.int(n), C.int(splitK)))
+}
+
 // UploadI8 copies an int8 slice to a device buffer (caller frees via FreeDev).
 func UploadI8(vals []int8) unsafe.Pointer {
 	if len(vals) == 0 {
