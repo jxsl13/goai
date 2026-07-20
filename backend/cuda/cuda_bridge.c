@@ -238,6 +238,7 @@ static CUfunction gPagedDecode = NULL; // paged batched decode attention (FRONT 
 static CUfunction gPagedDecodeGqa = NULL; // paged batched decode, GQA K/V-shared (FRONT B, cuts group× L2 traffic)
 static CUfunction gPagedDecodeGqaF16 = NULL; // f16-KV twin of gPagedDecodeGqa (half the global K/V bytes)
 static CUfunction gRmsF16 = NULL, gSwigluF16 = NULL, gRopeF16 = NULL; // A1 fp16-activation elementwise twins (u16 I/O, f32 math)
+static CUfunction gAddF16 = NULL; // A1 f16 residual add (dst += src, u16)
 static CUfunction gWmmaAttn = NULL; // nvcc-compiled fused prefill attention (slice 2)
 static CUfunction gWmmaAttnGqa = NULL; // GQA/strided fused prefill attention (§ROADMAP A2)
 static int launch_cvt_f16(const void* src, void* dst, long n); // fwd decl (defined below)
@@ -1107,6 +1108,29 @@ int cu_rope_f16(void* x, const void* inv, int seq, int heads, int hd, int posOff
         rc = (cuLaunchKernel(gRopeF16, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 donerpf:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_add_f16: dst[i] += src[i], u16 (f16) — the A1 residual add (x += proj output).
+int cu_add_f16(void* dst, const void* src, int n) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto doneaf; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto doneaf; }
+    if (!gAddF16 && compile_kernel(
+            A1_CVT_HELPERS
+            "extern \"C\" __global__ void add_f16(unsigned short* dst, const unsigned short* src, int n){\n"
+            "  int i = blockIdx.x*blockDim.x + threadIdx.x;\n"
+            "  if (i < n) dst[i] = f2h(h2f(dst[i]) + h2f(src[i]));\n"
+            "}\n",
+            "add_f16.cu", "add_f16", &gAddF16) != 0) { rc = -2; goto doneaf; }
+    {
+        int threads = 256, blocks = (n + threads - 1) / threads;
+        void* args[3] = { &dst, (void*)&src, &n };
+        rc = (cuLaunchKernel(gAddF16, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+doneaf:
     pthread_mutex_unlock(&gLock);
     return rc;
 }
@@ -4527,6 +4551,20 @@ static int launch_cvt_f16(const void* src, void* dst, long n) {
     long blocks = (n + threads - 1) / threads;
     void* args[3] = { &src, &dst, &n };
     return (cuLaunchKernel(gCvtF16, (unsigned)blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+}
+
+// cu_cvt_f16_to_f32: convert n device f16/u16 (src16) to device f32 (dst32), stream-ordered
+// (A1 attention boundary: the paged decode kernel reads f32 Q). Forward-declared launch helper.
+static int launch_cvt_from_f16(const void* src16, void* dst32, long n, int add);
+int cu_cvt_f16_to_f32(void* dst32, const void* src16, long n) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto donecvf; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto donecvf; }
+    rc = launch_cvt_from_f16(src16, dst32, n, 0);
+donecvf:
+    pthread_mutex_unlock(&gLock);
+    return rc;
 }
 
 // cu_gemm_int8: row-major C32[M,N] (int32) = A8[M,K]·W8[K,N] (int8) via cublasGemmEx IMMA int8

@@ -35,9 +35,22 @@ func SwiGLUF16(gate, up unsafe.Pointer, n int) int {
 func RoPEF16(x, inv unsafe.Pointer, seq, heads, hd, posOffset int, posDiv float64) int {
 	return int(C.cu_rope_f16(x, inv, C.int(seq), C.int(heads), C.int(hd), C.int(posOffset), C.double(posDiv)))
 }
+func AddF16(dst, src unsafe.Pointer, n int) int { return int(C.cu_add_f16(dst, src, C.int(n))) }
+
+// GemmF16Pure: C16[M,N] = A16[M,K]·W16[K,N], all f16, no per-call conversion (the A1 GEMM).
+func GemmF16Pure(a16, w16, c16 unsafe.Pointer, m, k, n int) int {
+	return int(C.cu_gemm_f16_pure(a16, w16, c16, C.int(m), C.int(k), C.int(n)))
+}
+
+// WPtr exposes a ResidentBF16's raw device f16 weight pointer ([K,N]) for the A1 f16 GEMM path.
+func (r *ResidentBF16) WPtr() unsafe.Pointer { return r.ptr }
 
 // DevPtr exposes a DeviceF32's raw device pointer (for building f16 shadows / A1 wiring).
 func (d *DeviceF32) DevPtr() unsafe.Pointer { return d.ptr }
 
 // VecPtr exposes a ResidentVec's raw device pointer (gamma for f16 rmsnorm).
 func (r *ResidentVec) VecPtr() unsafe.Pointer { return r.ptr }
+
+func CvtF16ToF32(dst32, src16 unsafe.Pointer, n int) int {
+	return int(C.cu_cvt_f16_to_f32(dst32, src16, C.long(n)))
+}

@@ -30,7 +30,7 @@ type bgLayer struct {
 	wg, wu, wd     *cuda.ResidentBF16
 }
 
-func bgBuild(b *testing.B, batch, seqLen, layers int) ([]*bgLayer, *cuda.PagedKVPool, []*cuda.SeqKV, *cuda.DeviceF32) {
+func bgBuild(b testing.TB, batch, seqLen, layers int) ([]*bgLayer, *cuda.PagedKVPool, []*cuda.SeqKV, *cuda.DeviceF32) {
 	qW, kvW := bgQHeads*bgHD, bgKVHeads*bgHD
 	rng := rand.New(rand.NewSource(9))
 	mkW := func(k, n int) *cuda.ResidentBF16 {
