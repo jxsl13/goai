@@ -100,3 +100,27 @@ func benchInt8Gemm(b *testing.B, m, k, n int) {
 
 func BenchmarkGemmInt8_512x2048x2048(b *testing.B) { benchInt8Gemm(b, 512, 2048, 2048) }
 func BenchmarkGemmInt8_512x2048x5632(b *testing.B) { benchInt8Gemm(b, 512, 2048, 5632) }
+
+func benchF16Pure(b *testing.B, m, k, n int) {
+	if !cuda.Available() {
+		b.Skip("no gpu")
+	}
+	p, err := cuda.NewF16PureProbe(m, k, n)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer p.Free()
+	if err := p.Run(); err != nil {
+		b.Skipf("f16pure: %v", err)
+	}
+	cuda.GraphSync()
+	b.ResetTimer()
+	for range b.N {
+		p.Run()
+	}
+	cuda.GraphSync()
+	b.StopTimer()
+	b.ReportMetric(2*float64(m)*float64(k)*float64(n)*float64(b.N)/b.Elapsed().Seconds()/1e12, "TFLOP/s")
+}
+func BenchmarkGemmF16Pure_512x2048x2048(b *testing.B) { benchF16Pure(b, 512, 2048, 2048) }
+func BenchmarkGemmF16Pure_512x2048x5632(b *testing.B) { benchF16Pure(b, 512, 2048, 5632) }

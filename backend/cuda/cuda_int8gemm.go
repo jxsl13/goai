@@ -46,3 +46,37 @@ func (p *Int8GemmProbe) Free() {
 	C.cu_free_f32(p.c32)
 	p.a8, p.w8, p.c32 = nil, nil, nil
 }
+
+// F16PureProbe times cu_gemm_f16_pure (f16 in, f16 out, NO per-call f32<->f16 convert) vs the
+// converting cu_matmul_f16w path — the delta is A1's per-GEMM conversion cost (fp16-activations lever).
+type F16PureProbe struct {
+	a16, w16, c16 unsafe.Pointer
+	m, k, n       int
+}
+
+func NewF16PureProbe(m, k, n int) (*F16PureProbe, error) {
+	a16 := C.cu_alloc_u16(C.int(m * k))
+	w16 := C.cu_alloc_u16(C.int(k * n))
+	c16 := C.cu_alloc_u16(C.int(m * n))
+	if a16 == nil || w16 == nil || c16 == nil {
+		freeIf(a16)
+		freeIf(w16)
+		freeIf(c16)
+		return nil, fmt.Errorf("cuda: F16PureProbe alloc failed")
+	}
+	return &F16PureProbe{a16: a16, w16: w16, c16: c16, m: m, k: k, n: n}, nil
+}
+
+func (p *F16PureProbe) Run() error {
+	if rc := matmulF16pure(p.a16, p.w16, p.c16, p.m, p.k, p.n); rc != 0 {
+		return fmt.Errorf("cuda: matmulF16pure rc=%d", rc)
+	}
+	return nil
+}
+
+func (p *F16PureProbe) Free() {
+	C.cu_free_f32(p.a16)
+	C.cu_free_f32(p.w16)
+	C.cu_free_f32(p.c16)
+	p.a16, p.w16, p.c16 = nil, nil, nil
+}
