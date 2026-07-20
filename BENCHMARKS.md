@@ -108,8 +108,20 @@ both engines accumulate in f32):
 | 512 | 6,643§ | **8,721** | vLLM 1.31× |
 | 64, ctx512 | 3,621† | **4,367** | vLLM 1.21× |
 
-So **at matched precision vLLM's decode kernels are faster** (≈1.1–1.4×) — its
-FlashAttention + mature GEMM scheduling. GoAI's edge appears only with a
+Those GoAI numbers are the f32-**activation** path (per-GEMM conversions +
+unfused elementwise). A later fused-forward pass — f16 activations end-to-end
+plus residual-into-GEMM-epilogue and f16 attention-IO fusion (both verified
+bit-identical) — **narrows the matched-precision gap to rough parity**:
+same-session at matched f32-accumulate, fused GoAI decode measures b64 5,454
+vs vLLM 5,252 (~1.0× after the ~4% logits adjustment) and b256 7,864 vs 7,811
+(~0.97×), up from the 0.90× of the f32-activation path. So the honest current
+read is **near-parity at matched precision on short context**, with vLLM still
+ahead at long context (its FlashDecoding) — and the fused f16-accumulate path
+remains GoAI's fastest deployable (≈1.2×, precision trade). Measurement carries
+±10% run-to-run GPU-clock/vLLM variance, so parity is claimed cautiously.
+
+So **at matched precision vLLM's decode kernels were faster** (≈1.1–1.4× on the
+unfused f32-activation path) — its FlashAttention + mature GEMM scheduling. GoAI's edge appears only with a
 **precision trade**: on GeForce it auto-enables **f16 GEMM-accumulate**
 (`CUBLAS_COMPUTE_16F`, exploiting consumer-Ampere's 2× f16-accumulate tensor
 rate that vLLM leaves on the table by defaulting to f32). That path —
