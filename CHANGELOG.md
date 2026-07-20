@@ -4,6 +4,22 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### format/safetensors -- partial / header-only load (T903, 2026-07-20)
+
+Adds the two functions a large checkpoint needs and the package lacked: Names(path) reads
+only the header and returns each tensor's name, dtype and shape plus metadata WITHOUT loading
+data (O(header) memory, safe to point at a multi-gigabyte file just to see what is inside),
+and LoadTensor(path, name) pulls exactly one tensor by seeking to its byte range so no other
+tensor is read or allocated. Before this, extracting a single weight meant Load-ing the whole
+file.
+
+LoadTensor decodes by framing the one tensor's bytes as a minimal in-memory safetensors
+stream and reusing the full Load path, so a tensor loaded this way is bit-identical to the
+same tensor from LoadFile (tested across F32/F64/F16/BF16, including the reference F16/BF16
+fixture) -- no second decode implementation, and the hot Load path is untouched. A test
+proves the partial property: pulling a tiny tensor from a file with a 64 MiB neighbour
+allocates under 8 MiB.
+
 ### format/npy, format/safetensors -- reject over-claiming headers before allocating (B99/T902, 2026-07-20)
 
 Fixes a live denial-of-service in two untrusted-file readers. Both allocated the full tensor

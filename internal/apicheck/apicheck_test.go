@@ -47,6 +47,7 @@ var methodExampleExempt = map[string]bool{
 }
 
 var typeExampleExempt = map[string]bool{
+	"format/safetensors.TensorInfo":   true, // plain header descriptor; exercised via ExampleLoadTensor (Names)
 	"backend.Op":                      true, // opcode enum; shown via ops/nn examples, not per-op
 	"llamagpu.Stepper":                true, // parameter-constraint interface (Decoder/GPTDecoder); shown via ExampleSpeculativeGenerate
 	"llamagpu.HiddenStepper":          true, // parameter-constraint interface (Decoder/GPTDecoder + StepHidden); consumed by MedusaGenerate
