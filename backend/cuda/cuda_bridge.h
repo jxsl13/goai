@@ -76,6 +76,8 @@ int cu_paged_decode_attn(const void* dQ, const void* dPoolK, const void* dPoolV,
 // cu_paged_decode_attn_gqa: same contract, GQA K/V-shared (one block per (kv head, seq), group warps,
 // K/V staged into shared once per tile) — cuts the naive kernel's group× redundant K/V reads. hd==64, group≤8, blockSize≤16.
 int cu_paged_decode_attn_gqa(const void* dQ, const void* dPoolK, const void* dPoolV, const void* dBlockTables, const void* dSeqLens, void* dO, int batch, int qHeads, int kvHeads, int hd, int blockSize, int maxBlocks, float scale);
+// cu_paged_decode_attn_gqa_qio: f32-KV GQA with f16 Q-in/O-out — kills serving-path Q/O converts, no accuracy change.
+int cu_paged_decode_attn_gqa_qio(const void* dQ16, const void* dPoolK, const void* dPoolV, const void* dBlockTables, const void* dSeqLens, void* dO16, int batch, int qHeads, int kvHeads, int hd, int blockSize, int maxBlocks, float scale);
 // cu_paged_decode_attn_gqa_sk: split-K (FlashDecoding) — splitK blocks per (kv head, seq) + merge; parallelizes the online-softmax scan. splitK 1..32.
 int cu_paged_decode_attn_gqa_sk(const void* dQ, const void* dPoolK, const void* dPoolV, const void* dBlockTables, const void* dSeqLens, void* dO, int batch, int qHeads, int kvHeads, int hd, int blockSize, int maxBlocks, float scale, int splitK);
 // cu_wmma_paged_decode: tensor-core (nvcc mma.h fatbin) batched paged decode attention. hd==64, group≤8, blockSize≤16, seqLen≤128.
