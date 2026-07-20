@@ -413,9 +413,9 @@ int cu_paged_decode_attn_gqa_f16(const void* dQ, const void* dPoolK16, const voi
         "  int t = threadIdx.x, nt = blockDim.x, lane = t & 31, w = t >> 5;\n"
         "  int hp = hd + 1;\n"
         "  extern __shared__ float sh[];\n"
-        "  float* shq = sh;                 // [group*hd] the group's query heads\n"
-        "  float* shk = shq + group*hd;     // [32*hp] K tile (converted to f32 on load)\n"
-        "  float* shv = shk + 32*hp;        // [32*hp] V tile\n"
+        "  float* shq = sh;                                          // [group*hd] the group's query heads\n"
+        "  unsigned short* shk = (unsigned short*)(shq + group*hd);  // [32*hp] u16 K tile (half shared → higher occupancy)\n"
+        "  unsigned short* shv = shk + 32*hp;                        // [32*hp] u16 V tile\n"
         "  for (int i = t; i < group*hd; i += nt) shq[i] = Q[(size_t)seq*qHeads*hd + (size_t)kvh*group*hd + i];\n"
         "  float NEGINF = __int_as_float(0xff800000);\n"
         "  float m = NEGINF, l = 0.f, a0 = 0.f, a1 = 0.f;\n"
@@ -427,17 +427,17 @@ int cu_paged_decode_attn_gqa_f16(const void* dQ, const void* dPoolK16, const voi
         "      int tok = base + j;\n"
         "      size_t phys = (size_t)bt[tok / blockSize]*blockSize + (tok % blockSize);\n"
         "      size_t src = phys*WKV + (size_t)kvh*hd + d;\n"
-        "      shk[j*hp + d] = h2f(poolK[src]);\n"
-        "      shv[j*hp + d] = h2f(poolV[src]);\n"
+        "      shk[j*hp + d] = poolK[src];\n"
+        "      shv[j*hp + d] = poolV[src];\n"
         "    }\n"
         "    __syncthreads();\n"
         "    if (w < group){\n"
         "      float s = NEGINF;\n"
         "      if (lane < nk){\n"
-        "        const float* kr = shk + lane*hp;\n"
+        "        const unsigned short* kr = shk + lane*hp;\n"
         "        const float* qh = shq + w*hd;\n"
         "        float dot = 0.f;\n"
-        "        for (int d = 0; d < hd; d++) dot += qh[d]*kr[d];\n"
+        "        for (int d = 0; d < hd; d++) dot += qh[d]*h2f(kr[d]);\n"
         "        s = dot*scale;\n"
         "      }\n"
         "      float bm = s;\n"
@@ -453,8 +453,8 @@ int cu_paged_decode_attn_gqa_f16(const void* dQ, const void* dPoolK16, const voi
         "      a0 *= corr; a1 *= corr;\n"
         "      for (int j=0;j<nk;j++){\n"
         "        float pj = __shfl_sync(0xffffffffu,p,j);\n"
-        "        const float* vr = shv + j*hp;\n"
-        "        a0 += pj*vr[lane]; a1 += pj*vr[lane+32];\n"
+        "        const unsigned short* vr = shv + j*hp;\n"
+        "        a0 += pj*h2f(vr[lane]); a1 += pj*h2f(vr[lane+32]);\n"
         "      }\n"
         "    }\n"
         "  }\n"
@@ -470,7 +470,7 @@ int cu_paged_decode_attn_gqa_f16(const void* dQ, const void* dPoolK16, const voi
         void* args[13] = { (void*)&dQ, (void*)&dPoolK16, (void*)&dPoolV16, (void*)&dBlockTables,
                            (void*)&dSeqLens, &dO, &batch, &qHeads, &kvHeads, &hd, &blockSize,
                            &maxBlocks, &scale };
-        size_t shmem = ((size_t)group*hd + 2u*32u*(hd+1)) * sizeof(float);
+        size_t shmem = (size_t)group*hd*sizeof(float) + 2u*32u*(hd+1)*sizeof(unsigned short);
         rc = (cuLaunchKernel(gPagedDecodeGqaF16, (unsigned)kvHeads, (unsigned)batch, 1, 256, 1, 1,
                              (unsigned)shmem, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }

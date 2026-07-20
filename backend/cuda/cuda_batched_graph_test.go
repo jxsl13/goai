@@ -238,3 +238,6 @@ func BenchmarkBatchedGraph_b256_gqa(b *testing.B) { benchBatchedGraph(b, 256, 12
 func BenchmarkBatchedGraph_b512_gqaf16(b *testing.B) {
 	benchBatchedGraph(b, 512, 128, 22, "graph-gqa-f16")
 }
+func BenchmarkBatchedGraph_b768_gqaf16(b *testing.B) {
+	benchBatchedGraph(b, 768, 128, 22, "graph-gqa-f16")
+}
