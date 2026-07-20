@@ -194,3 +194,27 @@ func TestMixedPrecisionTrainsRegression(t *testing.T) {
 		})
 	}
 }
+
+func benchmarkAMP(b *testing.B, sync bool) {
+	W := tensor.New(tensor.F32, tensor.Shape{512, 512})
+	for i := range W.Storage().F32() {
+		W.Storage().F32()[i] = float32(0.01 * float64(i%97-48))
+	}
+	mp := nn.NewMixedPrecision([]*tensor.Tensor{W}, tensor.F16)
+	g := tensor.New(tensor.F32, tensor.Shape{512, 512})
+	for i := range g.Storage().F32() {
+		g.Storage().F32()[i] = float32(0.001 * float64(i%53-26))
+	}
+	gf := func(*tensor.Tensor) *tensor.Tensor { return g }
+	var found bool
+	b.ReportAllocs()
+	for b.Loop() {
+		if sync {
+			mp.Sync()
+		} else {
+			mp.UnscaleGrads(gf, 65536, &found)(mp.Masters[0])
+		}
+	}
+}
+func BenchmarkAMPSync(b *testing.B)         { benchmarkAMP(b, true) }
+func BenchmarkAMPUnscaleGrads(b *testing.B) { benchmarkAMP(b, false) }

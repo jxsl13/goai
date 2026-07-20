@@ -97,9 +97,20 @@ func NewMixedPrecision(weights []*tensor.Tensor, dtype tensor.Dtype) *MixedPreci
 func (mp *MixedPrecision) Sync() {
 	for i, m := range mp.Masters {
 		w := mp.Compute[i]
-		for j := range m.Numel() {
-			idx := tensor.Unravel(j, m.Shape())
-			w.SetF64(roundHalf(m.AtF64(idx...), mp.Dtype), idx...)
+		// Round the WHOLE master to half precision in two bulk casts instead of calling
+		// roundHalf per element — roundHalf allocates a 1-element tensor and casts it on
+		// every call, so the old loop did O(Numel) allocations per weight. m.Cast applies
+		// the identical element-wise rounding, so this is bit-identical (§base-perf).
+		src := m.Cast(mp.Dtype).Cast(w.Dtype()) // F32 master → half (round) → w's storage dtype
+		if wf, sf := flatF32(w), flatF32(src); wf != nil && sf != nil {
+			copy(wf, sf)
+		} else if wf, sf := flatF64(w), flatF64(src); wf != nil && sf != nil {
+			copy(wf, sf)
+		} else {
+			for j := range m.Numel() {
+				idx := tensor.Unravel(j, m.Shape())
+				w.SetF64(src.AtF64(idx...), idx...)
+			}
 		}
 	}
 }
@@ -120,13 +131,33 @@ func (mp *MixedPrecision) UnscaleGrads(grad GradFn, scale float64, foundInf *boo
 			return nil
 		}
 		out := tensor.New(tensor.F32, g.Shape())
-		for j := range g.Numel() {
-			idx := tensor.Unravel(j, g.Shape())
-			v := g.AtF64(idx...) * inv
-			if math.IsInf(v, 0) || math.IsNaN(v) {
-				*foundInf = true
+		of := flatF32(out) // fresh F32 → contiguous
+		// Contiguous fast paths (§base-perf: no per-element Unravel/AtF64/SetF64).
+		if gf := flatF32(g); gf != nil {
+			for j, gv := range gf {
+				v := float64(gv) * inv
+				if math.IsInf(v, 0) || math.IsNaN(v) {
+					*foundInf = true
+				}
+				of[j] = float32(v)
 			}
-			out.SetF64(v, idx...)
+		} else if gf := flatF64(g); gf != nil {
+			for j, gv := range gf {
+				v := gv * inv
+				if math.IsInf(v, 0) || math.IsNaN(v) {
+					*foundInf = true
+				}
+				of[j] = float32(v)
+			}
+		} else {
+			for j := range g.Numel() {
+				idx := tensor.Unravel(j, g.Shape())
+				v := g.AtF64(idx...) * inv
+				if math.IsInf(v, 0) || math.IsNaN(v) {
+					*foundInf = true
+				}
+				out.SetF64(v, idx...)
+			}
 		}
 		return out
 	}
