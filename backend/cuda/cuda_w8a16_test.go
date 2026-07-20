@@ -125,6 +125,12 @@ func TestGemmW8A16Parity(t *testing.T) {
 		t.Fatalf("GemmW8A16B rc=%d", rc)
 	}
 	defer cuda.FreeDev(outB)
+	// double-buffered (cp.async) variant
+	outD := cuda.AllocU16(M * N)
+	if rc := cuda.GemmW8A16D(a16, w8dev, unsafe.Pointer(scf.DevPtr()), outD, M, K, N); rc != 0 {
+		t.Fatalf("GemmW8A16D rc=%d", rc)
+	}
+	defer cuda.FreeDev(outD)
 
 	ref := dl(ref16)
 	relOf := func(p unsafe.Pointer) float64 {
@@ -140,10 +146,11 @@ func TestGemmW8A16Parity(t *testing.T) {
 	rel := relOf(out16)
 	relT := relOf(outT)
 	relB := relOf(outB)
-	if rel > 3e-2 || relT > 3e-2 || relB > 3e-2 {
-		t.Fatalf("W8A16 kernel bug — v1 %.3e tiled %.3e bmspan %.3e", rel, relT, relB)
+	relD := relOf(outD)
+	if rel > 3e-2 || relT > 3e-2 || relB > 3e-2 || relD > 3e-2 {
+		t.Fatalf("W8A16 kernel bug — v1 %.3e tiled %.3e bmspan %.3e dbuf %.3e", rel, relT, relB, relD)
 	}
-	t.Logf("W8A16 CORRECT — v1 %.3e, tiled %.3e, BM-span %.3e vs cuBLAS-f16 on same dequant weights", rel, relT, relB)
+	t.Logf("W8A16 CORRECT — v1 %.3e, tiled %.3e, BM-span %.3e, dbuf %.3e vs cuBLAS-f16", rel, relT, relB, relD)
 }
 
 // benchmark v1 W8A16 vs cuBLAS f16 at a decode shape — establishes the optimization baseline. v1 is
@@ -223,6 +230,17 @@ func benchW8A16vsF16(b *testing.B, M, K, N int) {
 		b.ResetTimer()
 		for range b.N {
 			cuda.GemmW8A16B(a16, w8dev, unsafe.Pointer(scf.DevPtr()), c16, M, K, N)
+		}
+		cuda.GraphSync()
+		b.StopTimer()
+		b.ReportMetric(gf*float64(b.N)/b.Elapsed().Seconds()/1e12, "TFLOP/s")
+	})
+	b.Run("w8a16d", func(b *testing.B) {
+		cuda.GemmW8A16D(a16, w8dev, unsafe.Pointer(scf.DevPtr()), c16, M, K, N)
+		cuda.GraphSync()
+		b.ResetTimer()
+		for range b.N {
+			cuda.GemmW8A16D(a16, w8dev, unsafe.Pointer(scf.DevPtr()), c16, M, K, N)
 		}
 		cuda.GraphSync()
 		b.StopTimer()
