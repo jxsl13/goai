@@ -26,8 +26,8 @@ decode; vLLM 0.25.1 f16, graphs on, decode-marginal (prefill cancelled), measure
 
 ## Honest ratios (best GoAI full-step ≈ layers −4% for logits)
 
-- **GoAI best (A1 f16-acc) vs vLLM**: ~1.20× @b64, ~1.22× @b256, ~1.13× @b512 (ctx128).
-  Context: ~1.20× @ctx128, ~1.05× @ctx256, ~0.91× @ctx512 (vLLM's FlashDecoding wins long ctx).
+- **GoAI best (A1 f16-acc) vs vLLM**: ≈1.20× @b64, ≈1.22× @b256, ≈1.13× @b512 (ctx128).
+  Context: ≈1.20× @ctx128, ≈1.05× @ctx256, ≈0.91× @ctx512 (vLLM's FlashDecoding wins long ctx).
 - **At MATCHED f32-accumulate precision**: vLLM wins everywhere — GoAI 0.78–0.91×.
 - The **f16-accumulate GeForce exploit** (validated token-identical on TinyLlama) is worth
   +24–31% and is the entire source of GoAI's edge; vLLM defaults to f32-accumulate.
