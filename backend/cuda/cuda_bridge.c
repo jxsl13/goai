@@ -5443,8 +5443,14 @@ int cu_gemm_w8a16_b(const void* dA16, const void* dW8, const void* dScale, void*
         "  for (int kt = 0; kt < K; kt += 16){\n"
         "    #pragma unroll\n"
         "    for (int i=0;i<4;i++){ int e=t+i*256, r=e>>4, kk=e&15; sA[e]=A[(size_t)(rowBase+r)*K + kt + kk]; }\n"
-        "    #pragma unroll\n"
-        "    for (int i=0;i<4;i++){ int e=t+i*256, kk=e>>6, nn=e&63; signed char w=W[(size_t)(kt+kk)*N + colBase + nn]; sW[e]=f2h((float)w); }\n"  // scale DEFERRED to output
+        "    { int e0=t*4, kk=e0>>6, nn0=e0&63;\n"                             // fast int8->f16 (cutlass prmt trick), 4 contiguous
+        "      unsigned x = (*(const unsigned*)(W + (size_t)(kt+kk)*N + colBase + nn0)) ^ 0x80808080u, lo, hi;\n"
+        "      asm(\"prmt.b32 %0,%1,%2,0x4140;\":\"=r\"(lo):\"r\"(x),\"r\"(0x64646464u));\n"
+        "      asm(\"prmt.b32 %0,%1,%2,0x4342;\":\"=r\"(hi):\"r\"(x),\"r\"(0x64646464u));\n"
+        "      asm(\"sub.f16x2 %0,%0,%1;\":\"+r\"(lo):\"r\"(0x64806480u));\n"    // -1152 → exact int8 value in f16
+        "      asm(\"sub.f16x2 %0,%0,%1;\":\"+r\"(hi):\"r\"(0x64806480u));\n"
+        "      *(unsigned*)(sW + e0) = lo; *(unsigned*)(sW + e0 + 2) = hi;\n"
+        "    }\n"
         "    __syncthreads();\n"
         "    const unsigned short* sa = sA + wm*16*16;\n"                       // this warp's 16x16 A tile
         "    unsigned a0 = *(const unsigned*)(sa + gid*16 + 2*tid);\n"
