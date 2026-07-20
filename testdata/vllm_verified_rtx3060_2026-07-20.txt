@@ -13,3 +13,14 @@
 #  512   8675     -        -
 #  768   8790     -        -
 # => ctx128: GoAI 1.08x@64, 1.07x@256, 0.99x@512 (parity).  ctx512@64: vLLM 1.21x (FlashDecoding).
+
+# ACCUMULATE-PRECISION RESOLUTION (2026-07-20): GoAI decode GEMMs auto-enable f16-accumulate
+# (CUBLAS_COMPUTE_16F) on GeForce, exploiting consumer-Ampere's 2x f16-acc tensor rate. vLLM
+# defaults to f32-accumulate. MATCHED-precision (both f32-acc) full-step decode, ctx128:
+# batch  GoAI-f32acc  GoAI-f16acc  vLLM(f32acc)   matched-ratio
+#   64    4571         5503         5096           vLLM 1.11x
+#  256    6219         8019         7466           vLLM 1.20x
+#  512    6643         8675         8721           vLLM 1.31x
+# => At MATCHED precision vLLM's decode kernels are 1.1-1.4x faster. GoAI's f16-acc trade
+#    (validated token-identical on TinyLlama) closes it to 1.07-1.08x vs vLLM's f32-acc default,
+#    but that is not a like-for-like kernel comparison. Force GoAI f32-acc: GOAI_CUDA_F16ACC=0.
