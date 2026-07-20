@@ -241,3 +241,12 @@ func BenchmarkBatchedGraph_b512_gqaf16(b *testing.B) {
 func BenchmarkBatchedGraph_b768_gqaf16(b *testing.B) {
 	benchBatchedGraph(b, 768, 128, 22, "graph-gqa-f16")
 }
+
+// b1024/b1536 on the f16-KV path (half the KV footprint of MHA) to find the aggregate-throughput
+// ceiling — where the decode GEMMs saturate the SMs and adding sequences stops buying tok/s.
+func BenchmarkBatchedGraph_b1024_gqaf16(b *testing.B) {
+	benchBatchedGraph(b, 1024, 128, 22, "graph-gqa-f16")
+}
+func BenchmarkBatchedGraph_b1536_gqaf16(b *testing.B) {
+	benchBatchedGraph(b, 1536, 128, 22, "graph-gqa-f16")
+}
