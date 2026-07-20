@@ -61,12 +61,33 @@ func (d *Dropout) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tenso
 	scale := 1 / keep
 	mask := tensor.New(x.Dtype(), x.Shape())
 	n := x.Numel()
-	for i := range n {
-		idx := tensor.Unravel(i, x.Shape())
-		if d.rng.Float64() < d.Rate {
-			mask.SetF64(0, idx...)
-		} else {
-			mask.SetF64(scale, idx...)
+	// The mask is freshly allocated by tensor.New, hence contiguous and zeroed: its
+	// flat index IS its storage index, so a typed slice walk replaces the per-element
+	// Unravel+SetF64 dispatch (§T910 fast path). Dropped units keep the allocator's 0;
+	// only survivors are written. The RNG is drawn once per element in flat order in
+	// EVERY branch, so the Bernoulli sequence — and the mask — is bit-identical to the
+	// generic fallback (F16/BF16/strided).
+	if mf := flatF64(mask); mf != nil {
+		for i := range mf {
+			if d.rng.Float64() >= d.Rate {
+				mf[i] = scale
+			}
+		}
+	} else if mf := flatF32(mask); mf != nil {
+		s32 := float32(scale)
+		for i := range mf {
+			if d.rng.Float64() >= d.Rate {
+				mf[i] = s32
+			}
+		}
+	} else {
+		for i := range n {
+			idx := tensor.Unravel(i, x.Shape())
+			if d.rng.Float64() < d.Rate {
+				mask.SetF64(0, idx...)
+			} else {
+				mask.SetF64(scale, idx...)
+			}
 		}
 	}
 	out, err := backend.Execute(ctx, backend.OpMul, []*tensor.Tensor{x, mask}, nil)

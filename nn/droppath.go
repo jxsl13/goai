@@ -76,9 +76,34 @@ func (d *DropPath) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tens
 	}
 	mask := tensor.New(x.Dtype(), x.Shape())
 	n := x.Numel()
-	for i := range n {
-		idx := tensor.Unravel(i, x.Shape())
-		mask.SetF64(perSample[idx[0]], idx...) // broadcast the per-sample value over the rest
+	// The mask is freshly allocated by tensor.New, hence contiguous row-major: sample s
+	// occupies the flat block [s*rest, (s+1)*rest), so a sample-major slice walk replaces
+	// the per-element Unravel+SetF64 dispatch (§T910 fast path) and needs no per-element
+	// division. rest is the product of the trailing dims (0-safe: batch==0 ⇒ n==0 ⇒ no
+	// iteration). Bit-identical to the generic fallback (F16/BF16/strided) below.
+	rest := 1
+	for _, s := range x.Shape()[1:] {
+		rest *= s
+	}
+	if mf := flatF64(mask); mf != nil {
+		for s := range batch {
+			v := perSample[s]
+			for j := s * rest; j < (s+1)*rest; j++ {
+				mf[j] = v
+			}
+		}
+	} else if mf := flatF32(mask); mf != nil {
+		for s := range batch {
+			v := float32(perSample[s])
+			for j := s * rest; j < (s+1)*rest; j++ {
+				mf[j] = v
+			}
+		}
+	} else {
+		for i := range n {
+			idx := tensor.Unravel(i, x.Shape())
+			mask.SetF64(perSample[idx[0]], idx...) // broadcast the per-sample value over the rest
+		}
 	}
 	out, err := backend.Execute(ctx, backend.OpMul, []*tensor.Tensor{x, mask}, nil)
 	if err != nil {
