@@ -232,6 +232,13 @@ func TestResearchAndDefAdds(t *testing.T) {
 	if g.Nodes["V3"].Meta["tag"] != "DEMO-TAG" {
 		t.Errorf("V3 tag = %q", g.Nodes["V3"].Meta["tag"])
 	}
+	// verif edit keeps the canonical tag prefix and re-renders.
+	w.Reset()
+	mustRun(t, cmdDefEdit(&w, root, "V3", "reworded rule text", mutFlags{}), &w)
+	g = buildGraph(root, false)
+	if g.Nodes["V3"].Text != "reworded rule text" || g.Nodes["V3"].Meta["tag"] != "DEMO-TAG" {
+		t.Errorf("verif edit lost text/tag: %q / %q", g.Nodes["V3"].Text, g.Nodes["V3"].Meta["tag"])
+	}
 }
 
 // TestWorkerTwRow: -worker books a bare-pipe Tw row in the worker fragment

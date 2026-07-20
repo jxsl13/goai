@@ -196,6 +196,12 @@ func dispatchMutation(out *strings.Builder, root, cmd string, rest []string, che
 			return true, cmdResearchAdd(out, root, fl)
 		case "verif add":
 			return true, cmdVerifAdd(out, root, text, fl)
+		case "verif edit":
+			if len(pos) < 2 {
+				fmt.Fprintln(out, "verif edit: [flags] <id> <text>")
+				return true, 2
+			}
+			return true, cmdDefEdit(out, root, pos[0], strings.Join(pos[1:], " "), fl)
 		case "goal add", "constraint add", "archinv add":
 			class := map[string]string{"goal": "G", "constraint": "C", "archinv": "I"}[cmd]
 			return true, cmdDefAdd(out, root, class, text, fl)

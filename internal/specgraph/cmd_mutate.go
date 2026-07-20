@@ -310,12 +310,21 @@ func cmdDefEdit(w *strings.Builder, root, id, text string, fl mutFlags) int {
 			return fmt.Errorf("no entry %s", id)
 		}
 		old := l.entryLine()
-		head := old[:len(old)-len(strings.TrimLeft(old, ""))]
-		_ = head
-		// keep the id + tag/sep prefix, replace the body
 		switch {
 		case strings.HasPrefix(old, "| "): // table row: edit text cell via task edit
 			return fmt.Errorf("%s is a table row — use `task edit`", id)
+		case strings.HasPrefix(id, "V"):
+			// keep the canonical `V<n> TAG:` prefix; -tag overrides it.
+			tag := fl.Tag
+			if tag == "" {
+				if m := reVDef.FindStringSubmatch(old); m != nil {
+					tag = m[2]
+				}
+			}
+			if tag == "" {
+				return fmt.Errorf("%s has no TAG — pass -tag", id)
+			}
+			replaceLine(l, id+" "+tag+": "+strings.TrimSpace(text))
 		default:
 			sep := ": "
 			if strings.HasPrefix(id, "I.L") {
