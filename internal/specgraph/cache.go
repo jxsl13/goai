@@ -11,7 +11,7 @@ import (
 
 // cacheSchemaVersion invalidates every cache on extractor changes — bump it
 // whenever parse*/gitlog output shape or semantics change.
-const cacheSchemaVersion = 1
+const cacheSchemaVersion = 2 // 2: splitRow honors \| escapes (§B114)
 
 // cacheDir/graph file live under .specgraph/ at repo root (gitignored): the
 // cache is pure acceleration, never a source of truth — any doubt about its

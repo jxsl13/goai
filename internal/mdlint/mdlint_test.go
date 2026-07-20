@@ -97,4 +97,17 @@ func TestGoBlockRules(t *testing.T) {
 	if len(fs3) != 1 || fs3[0].rule != "go-block-parse" {
 		t.Errorf("want go-block-parse, got %v", fs3)
 	}
+	// §B115/§T889(b): a comment-only block (the ADR-0029 lone build
+	// constraint) is verbatim by contract — no finding, and -w must not
+	// rewrite it (format.Source would strip the //go:build prefix and
+	// invent a package clause).
+	constraint := "```go\n//go:build vulkan\n```\n"
+	fs4, _ := lintGoBlocks("x.md", strings.Split(constraint, "\n"), false)
+	if len(fs4) != 0 {
+		t.Errorf("comment-only block flagged: %v", fs4)
+	}
+	_, rewritten := lintGoBlocks("x.md", strings.Split(constraint, "\n"), true)
+	if strings.Join(rewritten, "\n") != constraint {
+		t.Errorf("comment-only block rewritten destructively: %q", strings.Join(rewritten, "\n"))
+	}
 }

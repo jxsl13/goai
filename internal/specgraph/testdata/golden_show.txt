@@ -6,13 +6,13 @@ V1  SPEC.md:32  FIXTURE-TAG  every op has a reference test. Prevents §B1-class 
 <- mentions (1):
   docs/notes.md#Measured section  docs/notes.md:3  Measured section
 <- refs (3):
-  B1  SPEC.md:40  2026-01-02  per-element allocation in backend/cpu softmax loop caused NaN poisoning (commit abc1234)
-  B2  SPEC.md:41  2026-01-03  per-element allocation in nn.Fixture optimizer step loop, same NaN class
+  B1  SPEC.md:40  2026-01-02  per-element allocation in backend/cpu softmax loop caused NaN poisoning (escape `a | b`, commit abc1234)
+  B2  SPEC.md:41  2026-01-03  per-element allocation in nn.Fixture optimizer step loop caused same NaN class
   C1  SPEC.md:13  pure Go, references §V1.
 <- relates (1):
   ADR-0001  docs/decisions/ADR-0001-fixture.md:1  Accepted  2026-01-01  fixture decision
 guards -> (2):
-  B1  SPEC.md:40  2026-01-02  per-element allocation in backend/cpu softmax loop caused NaN poisoning (commit abc1234)
-  B2  SPEC.md:41  2026-01-03  per-element allocation in nn.Fixture optimizer step loop, same NaN class
+  B1  SPEC.md:40  2026-01-02  per-element allocation in backend/cpu softmax loop caused NaN poisoning (escape `a | b`, commit abc1234)
+  B2  SPEC.md:41  2026-01-03  per-element allocation in nn.Fixture optimizer step loop caused same NaN class
 refs -> (1):
-  B1  SPEC.md:40  2026-01-02  per-element allocation in backend/cpu softmax loop caused NaN poisoning (commit abc1234)
+  B1  SPEC.md:40  2026-01-02  per-element allocation in backend/cpu softmax loop caused NaN poisoning (escape `a | b`, commit abc1234)

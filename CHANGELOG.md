@@ -4,6 +4,28 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### fix -- mdlint -w no longer destroys comment-only go blocks; T889 lint-debt closed (T889, B115, 2026-07-20)
+
+`go/format.Source`'s fragment heuristic turns a lone `//go:build vulkan` into
+`vulkan` + an invented `package p` clause (err nil), so `mdlint -w` would replace a documented
+build constraint with garbage — the live find recorded in T889(b). `lintGoBlocks` now skips
+blocks containing zero code tokens (`hasCodeTokens`, a go/scanner walk): comment-only blocks are
+verbatim by contract — no finding, no rewrite; mixed comment+code blocks are formatted as before.
+With that and the tree-wide tilde/fence cleanup already landed, the whole T889 lint-debt arc is
+closed.
+
+### spec -- restore the stranded V27 invariant and the lost T765 booking; strong dangling refs now test-guarded (T918, 2026-07-20)
+
+The first `specgraph dangling` run (T915) found two real spec holes: the V27 selector-soundness
+invariant existed only as a headerless `V27|…` fragment inside §T — invisible to every tool while
+three tasks cited it — and the 2026-07-16 "loadable-architecture catalogue to twenty-three" work
+was changelogged as T765 without its §T row ever being written. V27 now sits in §V in canonical
+shape (text verbatim), the T765 row is reconstructed next to T764/T766, and the new §V39 +
+`TestNoDanglingStrongRefs` keep every strong reference class (§T cites cells, CHANGELOG task refs,
+§B guard chains) resolvable from here on — the test was red on the pre-fix corpus. Weak prose
+lookalikes (V1024 vocab-size tokens, pre-rewrite ids, rebased-away SHAs) are documented as
+tolerated in §B113, not silently "fixed".
+
 ### tooling -- specgraph: queryable citation graph over SPEC/docs/git for bug- and pattern-lookup (T915, 2026-07-20)
 
 New dependency-free CLI `internal/specgraph` (`make spec-graph ARGS="why V22"`): parses SPEC.md,

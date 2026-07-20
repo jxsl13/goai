@@ -73,17 +73,30 @@ func scanSHAs(s string) []string {
 
 // splitRow splits a clean GFM table row into trimmed cells. lint-md
 // guarantees every table is well-formed and cells never contain a bare pipe
-// (FORMAT.md: logical-or is ∨, literal pipes are escaped \|).
+// (FORMAT.md: logical-or is ∨, literal pipes are escaped \|) — so the scan
+// treats \| as a literal pipe INSIDE the cell and only a bare | as the
+// separator. A strings.Split on every pipe silently shifted all columns
+// after an escaped one (§B114: B113's cause tail became its fix cell and
+// the guard-chain extractor minted strong edges out of prose).
 func splitRow(line string) []string {
 	line = strings.TrimSpace(line)
 	line = strings.TrimPrefix(line, "|")
 	line = strings.TrimSuffix(line, "|")
-	parts := strings.Split(line, "|")
-	cells := make([]string, len(parts))
-	for i, p := range parts {
-		cells[i] = strings.TrimSpace(strings.ReplaceAll(p, `\|`, "|"))
+	var cells []string
+	var cur strings.Builder
+	for i := 0; i < len(line); i++ {
+		switch {
+		case line[i] == '\\' && i+1 < len(line) && line[i+1] == '|':
+			cur.WriteByte('|')
+			i++
+		case line[i] == '|':
+			cells = append(cells, strings.TrimSpace(cur.String()))
+			cur.Reset()
+		default:
+			cur.WriteByte(line[i])
+		}
 	}
-	return cells
+	return append(cells, strings.TrimSpace(cur.String()))
 }
 
 // kindOfID maps a spec id to its node kind, or "" for unknown shapes.

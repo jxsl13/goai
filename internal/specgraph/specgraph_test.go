@@ -358,6 +358,25 @@ func TestRealCorpus(t *testing.T) {
 	}
 }
 
+// TestNoDanglingStrongRefs is the §V39 guard: every STRONG reference — a §T
+// cites cell, a CHANGELOG task ref, a §B guard chain — must resolve to a
+// defined entity. Weak prose refs (refs/mentions) stay advisory: vocab-size
+// lookalikes (V1024), pre-rewrite ids and rebased-away SHAs are tolerated
+// there. Born red on the pre-B113 corpus (V27 stranded in §T, T765 booked
+// only in the CHANGELOG), green after.
+func TestNoDanglingStrongRefs(t *testing.T) {
+	root := "../.."
+	if _, err := os.Stat(filepath.Join(root, "SPEC.md")); err != nil {
+		t.Skip("no repo SPEC.md (fixture-only checkout)")
+	}
+	strong := map[string]bool{EdgeCites: true, EdgeRecords: true, EdgeGuards: true}
+	for _, e := range buildGraph(root, false).Dangling() {
+		if strong[e.Type] {
+			t.Errorf("dangling strong ref %s:%d %s -[%s]-> %s (§V39/§B113)", e.File, e.Line, e.From, e.Type, e.To)
+		}
+	}
+}
+
 // TestRealCorpusGit checks the git side (Commit nodes + implements edges)
 // and skips gracefully on shallow or git-less checkouts.
 func TestRealCorpusGit(t *testing.T) {
