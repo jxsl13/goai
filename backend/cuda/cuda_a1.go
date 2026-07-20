@@ -46,6 +46,12 @@ func GemmF16Pure(a16, w16, c16 unsafe.Pointer, m, k, n int) int {
 	return int(C.cu_gemm_f16_pure(a16, w16, c16, C.int(m), C.int(k), C.int(n)))
 }
 
+// GemmF16PureAcc32: like GemmF16Pure but f32 accumulate (vLLM precision), no conversions. Used to
+// isolate the matched-precision gap vs vLLM without the f32-activation convert overhead.
+func GemmF16PureAcc32(a16, w16, c16 unsafe.Pointer, m, k, n int) int {
+	return int(C.cu_gemm_f16_pure_acc32(a16, w16, c16, C.int(m), C.int(k), C.int(n)))
+}
+
 // WPtr exposes a ResidentBF16's raw device f16 weight pointer ([K,N]) for the A1 f16 GEMM path.
 func (r *ResidentBF16) WPtr() unsafe.Pointer { return r.ptr }
 

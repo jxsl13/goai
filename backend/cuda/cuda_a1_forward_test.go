@@ -3,6 +3,7 @@
 package cuda_test
 
 import (
+	"os"
 	"testing"
 	"unsafe"
 
@@ -59,6 +60,13 @@ func benchBatchedGraphA1(b *testing.B, batch, seqLen, layers int) {
 	}
 	defer view.Free()
 
+	// GOAI_F16_ACC32=1 swaps the pure-f16 GEMM (f16 accumulate) for the f32-accumulate variant —
+	// vLLM-matched precision on the SAME conversion-free f16-activation path, isolating the
+	// matched-precision gap from the f32-activation convert overhead of the bf16/MatMulDevice path.
+	gemm := cuda.GemmF16Pure
+	if os.Getenv("GOAI_F16_ACC32") == "1" {
+		gemm = cuda.GemmF16PureAcc32
+	}
 	step := func() {
 		x := cuda.AllocU16(batch * dim)
 		cuda.CvtF32ToF16(x, x0.DevPtr(), batch*dim)
@@ -68,9 +76,9 @@ func benchBatchedGraphA1(b *testing.B, batch, seqLen, layers int) {
 			dq := cuda.AllocU16(batch * qW)
 			dk := cuda.AllocU16(batch * kvW)
 			dv := cuda.AllocU16(batch * kvW)
-			cuda.GemmF16Pure(dh, l.wq.WPtr(), dq, batch, dim, qW)
-			cuda.GemmF16Pure(dh, l.wk.WPtr(), dk, batch, dim, kvW)
-			cuda.GemmF16Pure(dh, l.wv.WPtr(), dv, batch, dim, kvW)
+			gemm(dh, l.wq.WPtr(), dq, batch, dim, qW)
+			gemm(dh, l.wk.WPtr(), dk, batch, dim, kvW)
+			gemm(dh, l.wv.WPtr(), dv, batch, dim, kvW)
 			cuda.FreeDev(dh)
 			cuda.RoPEF16(dq, invQdev.DevPtr(), batch, bgQHeads, bgHD, seqLen, posDivQ)
 			cuda.RoPEF16(dk, invKdev.DevPtr(), batch, bgKVHeads, bgHD, seqLen, posDivK)
@@ -94,7 +102,7 @@ func benchBatchedGraphA1(b *testing.B, batch, seqLen, layers int) {
 				daf.Free()
 			}
 			tmp := cuda.AllocU16(batch * dim)
-			cuda.GemmF16Pure(da, l.wo.WPtr(), tmp, batch, qW, dim)
+			gemm(da, l.wo.WPtr(), tmp, batch, qW, dim)
 			cuda.FreeDev(da)
 			cuda.AddF16(x, tmp, batch*dim)
 			cuda.FreeDev(tmp)
@@ -102,13 +110,13 @@ func benchBatchedGraphA1(b *testing.B, batch, seqLen, layers int) {
 			cuda.RMSNormF16(x, dh2, l.gFFN.VecPtr(), batch, dim, 1e-5)
 			dg := cuda.AllocU16(batch * hidden)
 			du := cuda.AllocU16(batch * hidden)
-			cuda.GemmF16Pure(dh2, l.wg.WPtr(), dg, batch, dim, hidden)
-			cuda.GemmF16Pure(dh2, l.wu.WPtr(), du, batch, dim, hidden)
+			gemm(dh2, l.wg.WPtr(), dg, batch, dim, hidden)
+			gemm(dh2, l.wu.WPtr(), du, batch, dim, hidden)
 			cuda.FreeDev(dh2)
 			cuda.SwiGLUF16(dg, du, batch*hidden)
 			cuda.FreeDev(du)
 			tmp2 := cuda.AllocU16(batch * dim)
-			cuda.GemmF16Pure(dg, l.wd.WPtr(), tmp2, batch, hidden, dim)
+			gemm(dg, l.wd.WPtr(), tmp2, batch, hidden, dim)
 			cuda.FreeDev(dg)
 			cuda.AddF16(x, tmp2, batch*dim)
 			cuda.FreeDev(tmp2)

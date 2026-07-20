@@ -218,6 +218,8 @@ int cu_download_u16(const void* dsrc, unsigned short* dst, int n);
 int cu_matmul_f16w_acc16(const void* dA32, const void* dW16, void* dC32, int M, int K, int N, float beta);
 // cu_gemm_f16_pure: pure f16 GEMM (f16 in/out, no per-call conversions) — isolates the A1 conversion cost.
 int cu_gemm_f16_pure(const void* dA16, const void* dW16, void* dC16, int M, int K, int N);
+// cu_gemm_f16_pure_acc32: pure f16 GEMM but f32 ACCUMULATE (COMPUTE_32F) — vLLM-precision, no conversions.
+int cu_gemm_f16_pure_acc32(const void* dA16, const void* dW16, void* dC16, int M, int K, int N);
 // cu_copy_rows: device→device copy nElems floats from src to dst+dstOffset (KV-cache append).
 int cu_copy_rows(void* dst, const void* src, int dstOffset, int nElems);
 void* cu_upload_i32(const int* src, int n);
