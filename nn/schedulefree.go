@@ -173,18 +173,60 @@ func (s *ScheduleFree) Step(grad GradFn) error {
 		if !g.Shape().Equal(p.Shape()) {
 			return fmt.Errorf("nn: ScheduleFree grad shape %v != param %v", g.Shape(), p.Shape())
 		}
+		z, x := s.z[pi], s.x[pi]
+		var v []float64
+		if s.adam {
+			v = s.v[pi]
+		}
+		// Typed fast paths (contiguous f64/f32): flat loops, arithmetic in float64
+		// exactly as the generic path (§base-perf: no per-element Unravel/AtF64/SetF64).
+		// p is write-only here (y_{t+1}); only g is read.
+		if pf := flatF64(p); pf != nil {
+			if gf := flatF64(g); gf != nil {
+				for i, graw := range gf {
+					yv := (1-s.Beta)*z[i] + s.Beta*x[i]
+					gv := graw + s.WeightDecay*yv
+					step := gv
+					if s.adam {
+						v[i] = s.Beta2*v[i] + (1-s.Beta2)*gv*gv
+						step = gv / (math.Sqrt(v[i]/bc2) + s.Eps)
+					}
+					z[i] -= lr * step
+					x[i] = (1-ck)*x[i] + ck*z[i]
+					pf[i] = (1-s.Beta)*z[i] + s.Beta*x[i]
+				}
+				continue
+			}
+		} else if pf := flatF32(p); pf != nil {
+			if gf := flatF32(g); gf != nil {
+				for i := range gf {
+					yv := (1-s.Beta)*z[i] + s.Beta*x[i]
+					gv := float64(gf[i]) + s.WeightDecay*yv
+					step := gv
+					if s.adam {
+						v[i] = s.Beta2*v[i] + (1-s.Beta2)*gv*gv
+						step = gv / (math.Sqrt(v[i]/bc2) + s.Eps)
+					}
+					z[i] -= lr * step
+					x[i] = (1-ck)*x[i] + ck*z[i]
+					pf[i] = float32((1-s.Beta)*z[i] + s.Beta*x[i])
+				}
+				continue
+			}
+		}
+		// Generic fallback: any dtype/layout via the widening accessors.
 		for i := range p.Numel() {
 			idx := tensor.Unravel(i, p.Shape())
-			yv := (1-s.Beta)*s.z[pi][i] + s.Beta*s.x[pi][i] // y_t from buffers
-			gv := g.AtF64(idx...) + s.WeightDecay*yv        // decoupled wd at y
+			yv := (1-s.Beta)*z[i] + s.Beta*x[i]      // y_t from buffers
+			gv := g.AtF64(idx...) + s.WeightDecay*yv // decoupled wd at y
 			step := gv
 			if s.adam {
-				s.v[pi][i] = s.Beta2*s.v[pi][i] + (1-s.Beta2)*gv*gv
-				step = gv / (math.Sqrt(s.v[pi][i]/bc2) + s.Eps)
+				v[i] = s.Beta2*v[i] + (1-s.Beta2)*gv*gv
+				step = gv / (math.Sqrt(v[i]/bc2) + s.Eps)
 			}
-			s.z[pi][i] -= lr * step
-			s.x[pi][i] = (1-ck)*s.x[pi][i] + ck*s.z[pi][i]
-			p.SetF64((1-s.Beta)*s.z[pi][i]+s.Beta*s.x[pi][i], idx...) // y_{t+1}
+			z[i] -= lr * step
+			x[i] = (1-ck)*x[i] + ck*z[i]
+			p.SetF64((1-s.Beta)*z[i]+s.Beta*x[i], idx...) // y_{t+1}
 		}
 	}
 	return nil

@@ -257,3 +257,16 @@ func BenchmarkClipGradNorm(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkSophiaStepOnly(b *testing.B) {
+	benchStepOnly(b, tensor.F64, func(p []*tensor.Tensor) nn.Optimizer { return nn.NewSophia(p, 1e-3) })
+}
+func BenchmarkSophiaStepOnlyF32(b *testing.B) {
+	benchStepOnly(b, tensor.F32, func(p []*tensor.Tensor) nn.Optimizer { return nn.NewSophia(p, 1e-3) })
+}
+func BenchmarkScheduleFreeStepOnly(b *testing.B) {
+	benchStepOnly(b, tensor.F64, func(p []*tensor.Tensor) nn.Optimizer { return nn.NewScheduleFreeAdamW(p, 1e-3) })
+}
+func BenchmarkScheduleFreeStepOnlyF32(b *testing.B) {
+	benchStepOnly(b, tensor.F32, func(p []*tensor.Tensor) nn.Optimizer { return nn.NewScheduleFreeAdamW(p, 1e-3) })
+}

@@ -26,6 +26,10 @@ func TestOptimizerFastPathParity(t *testing.T) {
 		"Adafactor": func(ps []*tensor.Tensor) nn.Optimizer { return nn.NewAdafactor(ps) },
 		"SOAP":      func(ps []*tensor.Tensor) nn.Optimizer { return nn.NewSOAP(ps, 1e-3) },
 		"Shampoo":   func(ps []*tensor.Tensor) nn.Optimizer { return nn.NewShampoo(ps, 1e-3) },
+		"Sophia":    func(ps []*tensor.Tensor) nn.Optimizer { return nn.NewSophia(ps, 1e-3) },
+		"ScheduleFree": func(ps []*tensor.Tensor) nn.Optimizer {
+			return nn.NewScheduleFreeAdamW(ps, 1e-3, nn.WithScheduleFreeWeightDecay(0.01))
+		},
 	}
 	const steps = 4
 	pval := func(i int) float64 { return math.Sin(float64(i)*0.7) + 0.1 }

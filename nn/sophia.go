@@ -144,11 +144,36 @@ func (s *Sophia) Step(grad GradFn) error {
 		if !g.Shape().Equal(p.Shape()) {
 			return fmt.Errorf("nn: Sophia grad shape %v != param %v", g.Shape(), p.Shape())
 		}
+		m, h := s.m[pi], s.h[pi]
+		// Typed fast paths (contiguous f64/f32): flat loops with the update arithmetic
+		// in float64 exactly as the generic path computes it (§base-perf: no per-element
+		// Unravel/AtF64/SetF64 dispatch).
+		if pf := flatF64(p); pf != nil {
+			if gf := flatF64(g); gf != nil {
+				for i, gv := range gf {
+					m[i] = s.Beta1*m[i] + (1-s.Beta1)*gv // 1st-moment EMA
+					ratio := m[i] / math.Max(s.Gamma*h[i], s.Eps)
+					pf[i] = pf[i]*decay - s.LR*clampf(ratio, 1) // wd + clipped 2nd-order step
+				}
+				continue
+			}
+		} else if pf := flatF32(p); pf != nil {
+			if gf := flatF32(g); gf != nil {
+				for i := range gf {
+					gv := float64(gf[i])
+					m[i] = s.Beta1*m[i] + (1-s.Beta1)*gv
+					ratio := m[i] / math.Max(s.Gamma*h[i], s.Eps)
+					pf[i] = float32(float64(pf[i])*decay - s.LR*clampf(ratio, 1))
+				}
+				continue
+			}
+		}
+		// Generic fallback: any dtype/layout via the widening accessors.
 		for i := range p.Numel() {
 			idx := tensor.Unravel(i, p.Shape())
 			gv := g.AtF64(idx...)
-			s.m[pi][i] = s.Beta1*s.m[pi][i] + (1-s.Beta1)*gv // 1st-moment EMA
-			ratio := s.m[pi][i] / math.Max(s.Gamma*s.h[pi][i], s.Eps)
+			m[i] = s.Beta1*m[i] + (1-s.Beta1)*gv // 1st-moment EMA
+			ratio := m[i] / math.Max(s.Gamma*h[i], s.Eps)
 			pv := p.AtF64(idx...)*decay - s.LR*clampf(ratio, 1) // wd + clipped 2nd-order step
 			p.SetF64(pv, idx...)
 		}
