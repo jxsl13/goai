@@ -29,9 +29,25 @@ func NEFTune(ctx *backend.Context, emb *tensor.Tensor, alpha float64, rng *rand.
 	l, d := emb.Shape()[0], emb.Shape()[1]
 	mag := alpha / math.Sqrt(float64(l*d))
 	noise := tensor.New(emb.Dtype(), emb.Shape())
-	for i := range emb.Numel() {
-		idx := tensor.Unravel(i, emb.Shape())
-		noise.SetF64((rng.Float64()*2-1)*mag, idx...) // Uniform(−mag, +mag)
+	n := emb.Numel()
+	// noise is freshly tensor.New'd, hence contiguous: its flat index IS its storage
+	// index, so a typed slice walk replaces the per-element Unravel+SetF64 dispatch
+	// (§T919 fast path). The rng is drawn once per element in flat order in EVERY
+	// branch, so the Uniform(−mag,+mag) sequence — and the noise tensor — is
+	// bit-identical to the generic fallback (F16/BF16/strided).
+	if nf := flatF64(noise); nf != nil {
+		for i := range nf {
+			nf[i] = (rng.Float64()*2 - 1) * mag // Uniform(−mag, +mag)
+		}
+	} else if nf := flatF32(noise); nf != nil {
+		for i := range nf {
+			nf[i] = float32((rng.Float64()*2 - 1) * mag)
+		}
+	} else {
+		for i := range n {
+			idx := tensor.Unravel(i, emb.Shape())
+			noise.SetF64((rng.Float64()*2-1)*mag, idx...) // Uniform(−mag, +mag)
+		}
 	}
 	out, err := backend.Execute(ctx, backend.OpAdd, []*tensor.Tensor{emb, noise}, nil)
 	if err != nil {

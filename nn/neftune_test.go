@@ -102,3 +102,70 @@ func ExampleNEFTune() {
 	fmt.Println(max <= mag)
 	// Output: true
 }
+
+// refNEFTuneNoise reconstructs the pre-fast-path NEFTune noise loop verbatim (same
+// PCG stream, same flat draw order), so a bit-for-bit match proves the flatF64/flatF32
+// fast path is a faithful transcription of the generic Unravel+SetF64 walk (§T921).
+func refNEFTuneNoise(dt tensor.Dtype, shape tensor.Shape, alpha float64, s1, s2 uint64) *tensor.Tensor {
+	l, d := shape[0], shape[1]
+	mag := alpha / math.Sqrt(float64(l*d))
+	rng := rand.New(rand.NewPCG(s1, s2))
+	noise := tensor.New(dt, shape)
+	n := noise.Numel()
+	for i := range n {
+		idx := tensor.Unravel(i, shape)
+		noise.SetF64((rng.Float64()*2-1)*mag, idx...)
+	}
+	return noise
+}
+
+// The NEFTune noise builder was switched from a per-element Unravel+SetF64 walk to a
+// typed contiguous slice walk (§T921). This proves the switch is BIT-IDENTICAL across
+// F64/F32 (the fast-path dtypes with an add kernel): NEFTune(emb) must equal emb plus
+// the reference noise through the same OpAdd. F16/BF16 keep the verbatim generic
+// fallback (add/f16 has no cpu kernel, as with dropout).
+func TestNEFTuneFastPathParity(t *testing.T) {
+	const alpha = 12.0
+	const s1, s2 = 0x1234, 0x5678
+	shapes := []tensor.Shape{{1, 1}, {7, 3}, {16, 64}, {129, 5}}
+	for _, dt := range []tensor.Dtype{tensor.F64, tensor.F32} {
+		for _, shape := range shapes {
+			emb := tensor.New(dt, shape)
+			for i := range emb.Numel() {
+				emb.SetF64(float64(i%13)-6, tensor.Unravel(i, shape)...)
+			}
+			out, err := nn.NEFTune(backend.NewContext(), emb, alpha, rand.New(rand.NewPCG(s1, s2)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			refNoise := refNEFTuneNoise(dt, shape, alpha, s1, s2)
+			refOut, err := backend.Execute(backend.NewContext(), backend.OpAdd, []*tensor.Tensor{emb, refNoise}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			nEl := out.Numel()
+			for i := range nEl {
+				idx := tensor.Unravel(i, shape)
+				g, w := out.AtF64(idx...), refOut[0].AtF64(idx...)
+				if math.Float64bits(g) != math.Float64bits(w) {
+					t.Fatalf("%s %v: element %d = %v (bits %#x), want %v (bits %#x)",
+						dt, shape, i, g, math.Float64bits(g), w, math.Float64bits(w))
+				}
+			}
+		}
+	}
+}
+
+// A realistic fine-tuning embedding [seq, dim]: NEFTune runs once per forward, so the
+// noise build is O(seq·dim) per training step.
+func BenchmarkNEFTune(b *testing.B) {
+	emb := tensor.New(tensor.F32, tensor.Shape{512, 768})
+	ctx := backend.NewContext()
+	rng := rand.New(rand.NewPCG(1, 2))
+	b.ResetTimer()
+	for b.Loop() {
+		if _, err := nn.NEFTune(ctx, emb, 10, rng); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
