@@ -231,6 +231,10 @@ func TestA1ForwardRCsAndSanity(t *testing.T) {
 func BenchmarkBatchedGraphA1_b256(b *testing.B) { benchBatchedGraphA1(b, 256, 128, 22) }
 func BenchmarkBatchedGraphA1_b64(b *testing.B)  { benchBatchedGraphA1(b, 64, 128, 22) }
 
+// A1 best-path (f16-act/f16-acc) context sweep at b64, to complete the vs-vLLM matrix.
+func BenchmarkBatchedGraphA1_b64_len256(b *testing.B) { benchBatchedGraphA1(b, 64, 256, 22) }
+func BenchmarkBatchedGraphA1_b64_len512(b *testing.B) { benchBatchedGraphA1(b, 64, 512, 22) }
+
 // f32-residual A1 variant: f16 GEMMs + f16 elementwise, but the residual stream x stays f32
 // (higher accuracy at a few extra converts/layer). The accuracy fallback if full-f16 tokens drift.
 func benchBatchedGraphA1R(b *testing.B, batch, seqLen, layers int) {
