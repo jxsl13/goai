@@ -324,3 +324,84 @@ func benchBatchedGraphA1R(b *testing.B, batch, seqLen, layers int) {
 }
 
 func BenchmarkBatchedGraphA1R_b512(b *testing.B) { benchBatchedGraphA1R(b, 512, 128, 22) }
+
+// TestLeakA1Forward (Iw7): the A1 f16 forward path allocates many u16/f32 buffers per layer via
+// the new cgo ops (AllocU16, GemmF16Pure, Cvt*, attention) — assert one full step nets zero
+// outstanding device buffers (no leak across the serving loop's thousands of steps).
+func TestLeakA1Forward(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("no gpu")
+	}
+	const batch, seqLen, layers = 8, 128, 2
+	ls, pool, seqs, x0 := bgBuild(t, batch, seqLen, layers)
+	defer pool.Free()
+	defer x0.Free()
+	defer func() {
+		for _, l := range ls {
+			l.gAttn.Free()
+			l.gFFN.Free()
+			for _, w := range []*cuda.ResidentBF16{l.wq, l.wk, l.wv, l.wo, l.wg, l.wu, l.wd} {
+				w.Free()
+			}
+		}
+	}()
+	dim, qW, kvW, hidden := bgDim, bgQHeads*bgHD, bgKVHeads*bgHD, bgHidden
+	invQd, posDivQ := backend.RoPEFreqs(bgHD, backend.RoPEAttrs{Base: 10000, Heads: bgQHeads, PosOffset: seqLen})
+	invQ32 := make([]float32, len(invQd))
+	for i := range invQd {
+		invQ32[i] = float32(invQd[i])
+	}
+	invQdev, _ := cuda.NewDeviceF32(1, len(invQ32))
+	invQdev.UploadF32(invQ32)
+	defer invQdev.Free()
+	view, _ := pool.UploadBatchView(seqs)
+	defer view.Free()
+
+	step := func() {
+		x := cuda.AllocU16(batch * dim)
+		cuda.CvtF32ToF16(x, x0.DevPtr(), batch*dim)
+		for _, l := range ls {
+			dh := cuda.AllocU16(batch * dim)
+			cuda.RMSNormF16(x, dh, l.gAttn.VecPtr(), batch, dim, 1e-5)
+			dq := cuda.AllocU16(batch * qW)
+			dk := cuda.AllocU16(batch * kvW)
+			dv := cuda.AllocU16(batch * kvW)
+			cuda.GemmF16Pure(dh, l.wq.WPtr(), dq, batch, dim, qW)
+			cuda.GemmF16Pure(dh, l.wk.WPtr(), dk, batch, dim, kvW)
+			cuda.GemmF16Pure(dh, l.wv.WPtr(), dv, batch, dim, kvW)
+			cuda.FreeDev(dh)
+			cuda.RoPEF16(dq, invQdev.DevPtr(), batch, bgQHeads, bgHD, seqLen, posDivQ)
+			cuda.FreeDev(dk)
+			cuda.FreeDev(dv)
+			dqf, _ := cuda.NewDeviceF32(batch, qW)
+			cuda.CvtF16ToF32(dqf.DevPtr(), dq, batch*qW)
+			cuda.FreeDev(dq)
+			daf, _ := pool.BatchedDecodeAttnViewGQAf16(dqf, view, bgQHeads, bgKVHeads)
+			dqf.Free()
+			da := cuda.AllocU16(batch * qW)
+			cuda.CvtF32ToF16(da, daf.DevPtr(), batch*qW)
+			daf.Free()
+			tmp := cuda.AllocU16(batch * dim)
+			cuda.GemmF16Pure(da, l.wo.WPtr(), tmp, batch, qW, dim)
+			cuda.FreeDev(da)
+			cuda.AddF16(x, tmp, batch*dim)
+			cuda.FreeDev(tmp)
+			dh2 := cuda.AllocU16(batch * dim)
+			cuda.RMSNormF16(x, dh2, l.gFFN.VecPtr(), batch, dim, 1e-5)
+			dg := cuda.AllocU16(batch * hidden)
+			du := cuda.AllocU16(batch * hidden)
+			cuda.GemmF16Pure(dh2, l.wg.WPtr(), dg, batch, dim, hidden)
+			cuda.GemmF16Pure(dh2, l.wu.WPtr(), du, batch, dim, hidden)
+			cuda.FreeDev(dh2)
+			cuda.SwiGLUF16(dg, du, batch*hidden)
+			cuda.FreeDev(du)
+			tmp2 := cuda.AllocU16(batch * dim)
+			cuda.GemmF16Pure(dg, l.wd.WPtr(), tmp2, batch, hidden, dim)
+			cuda.FreeDev(dg)
+			cuda.AddF16(x, tmp2, batch*dim)
+			cuda.FreeDev(tmp2)
+		}
+		cuda.FreeDev(x)
+	}
+	noLeak(t, "A1 f16 forward step", 8, step)
+}
