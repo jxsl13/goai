@@ -2112,6 +2112,20 @@ done:
     return track(d);
 }
 
+// cu_update_i32: overwrite an EXISTING device int buffer in place (no alloc). The persistent
+// block-table / seq-len buffer a fixed-buffer graph-decode reads across steps — update between
+// graph launches (append K/V, then refresh the table), replay the captured step. Pageable H2D is
+// host-blocking so src is free after return; stream-ordered so a later graph launch sees the update.
+int cu_update_i32(void* dst, const int* src, int n) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { goto doneui; }
+    if (cudaMemcpyAsync(dst, src, (size_t)n * sizeof(int), cudaMemcpyHostToDevice, gStream) == cudaSuccess) rc = 0;
+doneui:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
 // cu_embed_f32: out[i,:] = table[ids[i],:] — the input embedding row gather. One
 // thread per output element; table is [vocab,d] resident, ids [seq] resident.
 int cu_embed_f32(const void* dTable, const void* dIds, void* dOut, int seq, int d) {

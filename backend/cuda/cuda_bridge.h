@@ -216,6 +216,7 @@ void* cu_upload_i32(const int* src, int n);
 // cu_upload_*/cu_alloc_*/cu_clone_* family and not yet freed via cu_free_f32). A balanced Go
 // workload returns this to its starting value; the leak tests assert on that. Not a byte count.
 long cu_live_bufs(void);
+int cu_update_i32(void* dst, const int* src, int n); // in-place H2D update of an existing device int buffer (persistent view for graph decode)
 // cu_upload_i32_async: like cu_upload_i32 but WITHOUT a cudaStreamSynchronize. Safe when the
 // uploaded buffer is consumed only by later ops on gStream (stream-ordered) — the pageable H2D
 // copy is host-blocking so the source slice is free after return. Lets a decode step upload its

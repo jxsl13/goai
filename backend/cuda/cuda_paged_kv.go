@@ -259,6 +259,41 @@ func (p *PagedKVPool) UploadBatchView(seqs []*SeqKV) (*PagedBatchView, error) {
 	return &PagedBatchView{pool: p, dbt: unsafe.Pointer(dbt), dsl: unsafe.Pointer(dsl), batch: batch, maxBlocks: maxBlocks}, nil
 }
 
+// Update re-packs the block tables + seq lengths for `seqs` into the view's EXISTING device
+// buffers in place (no alloc) — for a fixed-buffer graph-decode: capture the decode step reading
+// this view, then between launches append K/V and Update(), replay. Requires the sequences still
+// fit the view's batch and maxBlocks (allocate the view for the max sequence length up front).
+func (v *PagedBatchView) Update(seqs []*SeqKV) error {
+	if len(seqs) != v.batch {
+		return fmt.Errorf("cuda: PagedBatchView.Update batch %d != view %d", len(seqs), v.batch)
+	}
+	mb := 0
+	for _, s := range seqs {
+		if s.pool != v.pool {
+			return fmt.Errorf("cuda: PagedBatchView.Update sequence not from this pool")
+		}
+		if len(s.table) > mb {
+			mb = len(s.table)
+		}
+	}
+	if mb > v.maxBlocks {
+		return fmt.Errorf("cuda: PagedBatchView.Update needs %d blocks > view capacity %d — pre-size the view", mb, v.maxBlocks)
+	}
+	bt := make([]int32, v.batch*v.maxBlocks) // padded to the view's fixed stride
+	sl := make([]int32, v.batch)
+	for i, s := range seqs {
+		copy(bt[i*v.maxBlocks:], s.table)
+		sl[i] = int32(s.n)
+	}
+	if rc := C.cu_update_i32(v.dbt, (*C.int)(&bt[0]), C.int(len(bt))); rc != 0 {
+		return fmt.Errorf("cuda: PagedBatchView.Update block-table update failed (%d)", int(rc))
+	}
+	if rc := C.cu_update_i32(v.dsl, (*C.int)(&sl[0]), C.int(len(sl))); rc != 0 {
+		return fmt.Errorf("cuda: PagedBatchView.Update seq-len update failed (%d)", int(rc))
+	}
+	return nil
+}
+
 // Free releases the view's device buffers.
 func (v *PagedBatchView) Free() {
 	if v.dbt != nil {

@@ -521,3 +521,70 @@ func benchPagedDecodeWMMA(b *testing.B, batch, seqLen int) {
 	b.ReportMetric(float64(b.N)/b.Elapsed().Seconds(), "attn/s")
 }
 func BenchmarkPagedDecodeWMMA_b512(b *testing.B) { benchPagedDecodeWMMA(b, 512, 128) }
+
+func TestPagedBatchViewUpdate(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("no gpu")
+	}
+	const qHeads, kvHeads, hd = 32, 4, 64
+	kvW := kvHeads * hd
+	rng := rand.New(rand.NewSource(4))
+	pool, _ := cuda.NewPagedKVPool(256, 16, kvW)
+	defer pool.Free()
+	lens := []int{20, 47, 5, 100}
+	batch := len(lens)
+	seqs := make([]*cuda.SeqKV, batch)
+	for i, n := range lens {
+		seqs[i] = pool.NewSeqKV()
+		kf := make([]float32, n*kvW)
+		for j := range kf {
+			kf[j] = float32(rng.NormFloat64()) * 0.1
+		}
+		dk, _ := cuda.NewDeviceF32(n, kvW)
+		dk.UploadF32(kf)
+		seqs[i].Append(dk, dk)
+		dk.Free()
+	}
+	qf := make([]float32, batch*qHeads*hd)
+	for i := range qf {
+		qf[i] = float32(rng.NormFloat64()) * 0.1
+	}
+	q, _ := cuda.NewDeviceF32(batch, qHeads*hd)
+	q.UploadF32(qf)
+	defer q.Free()
+	view, _ := pool.UploadBatchView(seqs) // sized for current (100-tok -> 7 blocks) state
+	defer view.Free()
+	// append a token to each seq, then Update the view in place
+	for i := range seqs {
+		kf := make([]float32, kvW)
+		for j := range kf {
+			kf[j] = float32(rng.NormFloat64()) * 0.1
+		}
+		d, _ := cuda.NewDeviceF32(1, kvW)
+		d.UploadF32(kf)
+		seqs[i].Append(d, d)
+		d.Free()
+	}
+	if err := view.Update(seqs); err != nil {
+		t.Fatal(err)
+	}
+	oUpd, err := pool.BatchedDecodeAttnView(q, view, qHeads, kvHeads)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer oUpd.Free()
+	fresh, _ := pool.UploadBatchView(seqs)
+	defer fresh.Free()
+	oFresh, _ := pool.BatchedDecodeAttnView(q, fresh, qHeads, kvHeads)
+	defer oFresh.Free()
+	a := make([]float32, batch*qHeads*hd)
+	b := make([]float32, batch*qHeads*hd)
+	oUpd.DownloadF32(a)
+	oFresh.DownloadF32(b)
+	for i := range a {
+		if a[i] != b[i] {
+			t.Fatalf("Update view attn != fresh view attn at %d: %v vs %v", i, a[i], b[i])
+		}
+	}
+	t.Logf("PagedBatchView.Update in-place == fresh view (bit-exact), post-append")
+}
