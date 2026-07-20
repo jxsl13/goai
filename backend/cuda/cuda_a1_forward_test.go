@@ -424,3 +424,18 @@ func BenchmarkBatchedGraphA1_b512_noattn(b *testing.B) {
 	defer func() { a1SkipAttn = false }()
 	benchBatchedGraphA1(b, 512, 128, 22)
 }
+
+// Context-length sweep (batch 512, 22 layers): the GEMMs (QKV/O/gate/up/down) are context-INDEPENDENT
+// but attention grows with KV length, so decode throughput must fall as context grows. vLLM's fair
+// ~6972 baseline runs at avg context ~320, not 128 — this sweep gives the HONEST matched-context
+// number and shows whether the A1 advantage holds as the latency-bound attention share rises (Iw8).
+func BenchmarkBatchedGraphA1_b512_len128(b *testing.B) { benchBatchedGraphA1(b, 512, 128, 22) }
+func BenchmarkBatchedGraphA1_b512_len256(b *testing.B) { benchBatchedGraphA1(b, 512, 256, 22) }
+func BenchmarkBatchedGraphA1_b512_len384(b *testing.B) { benchBatchedGraphA1(b, 512, 384, 22) }
+func BenchmarkBatchedGraphA1_b512_len512(b *testing.B) { benchBatchedGraphA1(b, 512, 512, 22) }
+
+// Long-context (512) throughput vs BATCH: at ctx 512 vLLM wins (5875 vs our b512 4882). Does our
+// throughput keep scaling with batch at long context? If so, higher serving batch closes the gap.
+func BenchmarkBatchedGraphA1_b256_len512(b *testing.B)  { benchBatchedGraphA1(b, 256, 512, 22) }
+func BenchmarkBatchedGraphA1_b768_len512(b *testing.B)  { benchBatchedGraphA1(b, 768, 512, 22) }
+func BenchmarkBatchedGraphA1_b1024_len512(b *testing.B) { benchBatchedGraphA1(b, 1024, 512, 22) }

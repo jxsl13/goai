@@ -113,3 +113,116 @@ extern "C" __global__ void wmma_paged_decode(const float* Q, const float* poolK,
         O[(size_t)seq * qHeads * hd + (size_t)(kvh * group + r) * hd + d] = shO[(size_t)r * hd + d];
     }
 }
+
+// wmma_paged_decode_flash — FlashDecoding form of the WMMA paged decode: online softmax across K/V
+// TILES (FTILE keys/iter) so shared memory is O(tile) not O(seqLen). The non-flash kernel above
+// materializes ALL K/V (MAXK=128 cap, 42KB shared -> 1 block/SM); this tiles at ~21KB (better
+// occupancy) AND handles arbitrary seqLen — the regime where the warp-GQA kernel degrades and vLLM's
+// Flash-Decoding wins. Running (max, sum, unnormalized O) carried in shared across tiles; QK/PV WMMA
+// per tile on warp 0. hd==64, group<=8, blockSize<=16. Q,O f32 [batch,qHeads*hd]; poolK/V f32.
+// MEASURED: 0.73-0.74x the warp-GQA kernel at ctx 128 AND 512 (M=8 GQA group wastes 50% of WMMA's
+// M=16 tile; occupancy shared-limited). A 4-warp FTILE=64 variant (distribute the 4 QK + 4 PV col-
+// tiles across warps) was tried and is WORSE (0.60x — 32KB shared drops occupancy to 1 block/SM,
+// outweighing the intra-block parallelism). WMMA is the wrong tool for M=8 decode attention; do NOT
+// re-attempt. Kept as a correct, context-general reference (the non-flash kernel above caps at 128).
+#define FTILE 32
+extern "C" __global__ void wmma_paged_decode_flash(const float* Q, const float* poolK, const float* poolV,
+                                                   const int* blockTables, const int* seqLens, float* O,
+                                                   int batch, int qHeads, int kvHeads, int hd, int blockSize,
+                                                   int maxBlocks, float scale) {
+    int kvh = blockIdx.x, seq = blockIdx.y;
+    int group = qHeads / kvHeads, WKV = kvHeads * hd, n = seqLens[seq];
+    const int* bt = blockTables + (size_t)seq * maxBlocks;
+    int tid = threadIdx.x, nt = blockDim.x;
+
+    extern __shared__ char smem[];
+    half*  shQ  = (half*)smem;                 // [16*hd]
+    half*  shK  = shQ + 16 * hd;               // [FTILE*hd]
+    half*  shV  = shK + FTILE * hd;            // [FTILE*hd]
+    float* shS  = (float*)(shV + FTILE * hd);  // [16*FTILE]
+    half*  shP  = (half*)(shS + 16 * FTILE);   // [16*FTILE]
+    float* shO  = (float*)(shP + 16 * FTILE);  // [16*hd] running unnormalized output
+    float* shTO = shO + 16 * hd;               // [16*hd] this tile's PV output
+    float* rm   = shTO + 16 * hd;              // [16] running max
+    float* rl   = rm + 16;                     // [16] running sum
+    float* rc   = rl + 16;                     // [16] per-tile correction
+
+    for (int i = tid; i < 16 * hd; i += nt) {
+        int r = i / hd, d = i - r * hd;
+        shQ[i] = (r < group) ? __float2half(Q[(size_t)seq * qHeads * hd + (size_t)(kvh * group + r) * hd + d]) : (half)0;
+    }
+    for (int i = tid; i < 16; i += nt) { rm[i] = -1e30f; rl[i] = 0.f; }
+    for (int i = tid; i < 16 * hd; i += nt) shO[i] = 0.f;
+    __syncthreads();
+
+    for (int base = 0; base < n; base += FTILE) {
+        int nk = n - base; if (nk > FTILE) nk = FTILE;
+        int nkp = (nk + 15) & ~15;
+        for (int i = tid; i < FTILE * hd; i += nt) {
+            int j = i / hd, d = i - j * hd;
+            if (j < nk) {
+                size_t phys = (size_t)bt[(base + j) / blockSize] * blockSize + ((base + j) % blockSize);
+                size_t src = phys * WKV + (size_t)kvh * hd + d;
+                shK[i] = __float2half(poolK[src]);
+                shV[i] = __float2half(poolV[src]);
+            } else { shK[i] = (half)0; shV[i] = (half)0; }
+        }
+        __syncthreads();
+        if (tid < 32) { // QK: shS[16,nkp] = shQ[16,hd] * shK[nkp,hd]^T
+            wmma::fragment<wmma::matrix_a, 16, 16, 16, half, wmma::row_major> qf[4];
+            #pragma unroll
+            for (int kk = 0; kk < 4; kk++) wmma::load_matrix_sync(qf[kk], shQ + kk * 16, hd);
+            for (int ct = 0; ct < nkp; ct += 16) {
+                wmma::fragment<wmma::accumulator, 16, 16, 16, float> sf;
+                wmma::fill_fragment(sf, 0.f);
+                #pragma unroll
+                for (int kk = 0; kk < 4; kk++) {
+                    wmma::fragment<wmma::matrix_b, 16, 16, 16, half, wmma::col_major> kf;
+                    wmma::load_matrix_sync(kf, shK + (size_t)ct * hd + kk * 16, hd);
+                    wmma::mma_sync(sf, qf[kk], kf, sf);
+                }
+                wmma::store_matrix_sync(shS + ct, sf, FTILE, wmma::mem_row_major);
+            }
+        }
+        __syncthreads();
+        if (tid < group) { // online softmax update for this row over the tile's nk keys
+            float* row = shS + (size_t)tid * FTILE;
+            float tmax = -1e30f;
+            for (int j = 0; j < nk; j++) { float v = row[j] * scale; row[j] = v; if (v > tmax) tmax = v; }
+            float newm = rm[tid] > tmax ? rm[tid] : tmax;
+            float corr = __expf(rm[tid] - newm);
+            float s = 0.f;
+            for (int j = 0; j < nk; j++) { float e = __expf(row[j] - newm); shP[(size_t)tid * FTILE + j] = __float2half(e); s += e; }
+            for (int j = nk; j < FTILE; j++) shP[(size_t)tid * FTILE + j] = (half)0;
+            rl[tid] = rl[tid] * corr + s; rm[tid] = newm; rc[tid] = corr;
+        }
+        __syncthreads();
+        for (int i = tid; i < 16 * FTILE; i += nt) { if (i / FTILE >= group) shP[i] = (half)0; } // pad unused rows
+        __syncthreads();
+        if (tid < 32) { // PV: shTO[16,hd] = shP[16,nkp] * shV[nkp,hd]
+            wmma::fragment<wmma::accumulator, 16, 16, 16, float> of[4];
+            #pragma unroll
+            for (int nn = 0; nn < 4; nn++) wmma::fill_fragment(of[nn], 0.f);
+            for (int ct = 0; ct < nkp; ct += 16) {
+                wmma::fragment<wmma::matrix_a, 16, 16, 16, half, wmma::row_major> pf;
+                wmma::load_matrix_sync(pf, shP + ct, FTILE);
+                #pragma unroll
+                for (int nn = 0; nn < 4; nn++) {
+                    wmma::fragment<wmma::matrix_b, 16, 16, 16, half, wmma::row_major> vf;
+                    wmma::load_matrix_sync(vf, shV + (size_t)ct * hd + nn * 16, hd);
+                    wmma::mma_sync(of[nn], pf, vf, of[nn]);
+                }
+            }
+            #pragma unroll
+            for (int nn = 0; nn < 4; nn++) wmma::store_matrix_sync(shTO + nn * 16, of[nn], hd, wmma::mem_row_major);
+        }
+        __syncthreads();
+        for (int i = tid; i < group * hd; i += nt) { int r = i / hd; shO[i] = shO[i] * rc[r] + shTO[i]; }
+        __syncthreads();
+    }
+    for (int i = tid; i < group * hd; i += nt) {
+        int r = i / hd, d = i - r * hd;
+        float inv = (rl[r] > 0.f) ? 1.f / rl[r] : 0.f;
+        O[(size_t)seq * qHeads * hd + (size_t)(kvh * group + r) * hd + d] = shO[i] * inv;
+    }
+}

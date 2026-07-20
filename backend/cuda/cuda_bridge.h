@@ -84,6 +84,9 @@ int cu_wmma_paged_decode(const void* fatbin, int fatlen, const void* dQ, const v
 // cu_paged_append_batched: device-side batched paged KV append. Scatter dK/dV [batch,wkv] into each
 // sequence's slot seqLens[b] (pre-append length) — the real serving append with no host round-trip.
 int cu_paged_append_batched(void* dPoolK, void* dPoolV, const void* dBlockTables, const void* dSeqLens, const void* dK, const void* dV, int batch, int wkv, int blockSize, int maxBlocks);
+
+// cu_wmma_paged_decode_flash: tiled FlashDecoding WMMA paged decode (O(tile) shared, any seqLen). hd==64, group<=8, blockSize<=16.
+int cu_wmma_paged_decode_flash(const void* fatbin, int fatlen, const void* dQ, const void* dPoolK, const void* dPoolV, const void* dBlockTables, const void* dSeqLens, void* dO, int batch, int qHeads, int kvHeads, int hd, int blockSize, int maxBlocks, float scale);
 // cu_cvt_f32_to_f16: convert n device f32 (src32) to device f16/u16 (dst16), stream-ordered.
 int cu_cvt_f32_to_f16(void* dst16, const void* src32, long n);
 int cu_cvt_f16_to_f32(void* dst32, const void* src16, long n);
@@ -222,6 +225,7 @@ void* cu_upload_i32(const int* src, int n);
 // workload returns this to its starting value; the leak tests assert on that. Not a byte count.
 long cu_live_bufs(void);
 int cu_update_i32(void* dst, const int* src, int n); // in-place H2D update of an existing device int buffer (persistent view for graph decode)
+int cu_bump_i32(void* buf, int n, int delta); // buf[i]+=delta on-device (capturable length-bump for correct in-graph decode)
 // cu_upload_i32_async: like cu_upload_i32 but WITHOUT a cudaStreamSynchronize. Safe when the
 // uploaded buffer is consumed only by later ops on gStream (stream-ordered) — the pageable H2D
 // copy is host-blocking so the source slice is free after return. Lets a decode step upload its

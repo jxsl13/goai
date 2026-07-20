@@ -282,6 +282,7 @@ static CUfunction gWmmaAttn = NULL; // nvcc-compiled fused prefill attention (sl
 static CUfunction gWmmaAttnGqa = NULL; // GQA/strided fused prefill attention (§ROADMAP A2)
 static CUfunction gWmmaPagedDecode = NULL; // tensor-core batched paged DECODE attention (breaks the 0.64 TFLOP/s latency-bound GEMV)
 static CUfunction gPagedAppendBatched = NULL; // device-side batched paged KV append (real serving: no host round-trip)
+static CUfunction gWmmaPagedDecodeFlash = NULL; // tiled FlashDecoding WMMA paged decode (O(tile) shared, any seqLen)
 static int launch_cvt_f16(const void* src, void* dst, long n); // fwd decl (defined below)
 
 // cu_paged_decode_attn: FRONT B / B2 — batched single-query decode attention over a PAGED KV
@@ -374,13 +375,16 @@ int cu_paged_decode_attn_gqa(const void* dQ, const void* dPoolK, const void* dPo
         "  for (int base = 0; base < n; base += 32){\n"
         "    int nk = n - base; if (nk > 32) nk = 32;\n"
         "    __syncthreads();\n"
-        "    for (int i = t; i < nk*hd; i += nt){\n"
+        "    for (int i = t*4; i < nk*hd; i += nt*4){\n"
         "      int j = i / hd, d = i - j*hd;\n"
         "      int tok = base + j;\n"
         "      size_t phys = (size_t)bt[tok / blockSize]*blockSize + (tok % blockSize); // per-token: a 32-tile may cross 2 paged blocks\n"
         "      size_t src = phys*WKV + (size_t)kvh*hd + d;\n"
-        "      shk[j*hp + d] = poolK[src];\n"
-        "      shv[j*hp + d] = poolV[src];\n"
+        "      float4 k4 = *(const float4*)(poolK + src);\n" // hd%4==0 -> 4 contiguous within a token
+        "      float4 v4 = *(const float4*)(poolV + src);\n"
+        "      float* dk = shk + j*hp + d; float* dv = shv + j*hp + d;\n"
+        "      dk[0]=k4.x; dk[1]=k4.y; dk[2]=k4.z; dk[3]=k4.w;\n"
+        "      dv[0]=v4.x; dv[1]=v4.y; dv[2]=v4.z; dv[3]=v4.w;\n"
         "    }\n"
         "    __syncthreads();\n"
         "    if (w < group){\n"
@@ -501,6 +505,32 @@ doneapp:
     return rc;
 }
 
+// cu_wmma_paged_decode_flash: tiled FlashDecoding WMMA paged decode (kernel wmma_paged_decode_flash).
+// O(FTILE) shared -> handles arbitrary seqLen at good occupancy, unlike cu_wmma_paged_decode (all-K/V
+// in shared, seqLen<=128, 1 block/SM). One block per (kv head, seq), 128 threads (warp 0 does WMMA).
+int cu_wmma_paged_decode_flash(const void* fatbin, int fatlen, const void* dQ, const void* dPoolK, const void* dPoolV,
+                               const void* dBlockTables, const void* dSeqLens, void* dO,
+                               int batch, int qHeads, int kvHeads, int hd, int blockSize, int maxBlocks, float scale) {
+    (void)fatlen;
+    int rc = -1;
+    if (hd != 64 || (qHeads / kvHeads) > 8 || blockSize > 16) return -4;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto donewpf; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto donewpf; }
+    if (!gWmmaPagedDecodeFlash && load_module_kernel(fatbin, "wmma_paged_decode_flash", &gWmmaPagedDecodeFlash) != 0) { rc = -2; goto donewpf; }
+    {
+        const int FTILE = 32;
+        unsigned shbytes = (unsigned)(16*hd*2 + FTILE*hd*2 + FTILE*hd*2 + 16*FTILE*4 + 16*FTILE*2 + 16*hd*4 + 16*hd*4 + 16*3*4);
+        void* args[13] = { (void*)&dQ, (void*)&dPoolK, (void*)&dPoolV, (void*)&dBlockTables, (void*)&dSeqLens,
+                           &dO, &batch, &qHeads, &kvHeads, &hd, &blockSize, &maxBlocks, &scale };
+        rc = (cuLaunchKernel(gWmmaPagedDecodeFlash, (unsigned)kvHeads, (unsigned)batch, 1, 128, 1, 1,
+                             shbytes, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+donewpf:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
 static int ensure_devp(void **buf, size_t *cap, size_t need); // fwd decl (defined below, grow-only device scratch)
 int cu_paged_decode_attn_gqa_sk(const void* dQ, const void* dPoolK, const void* dPoolV,
                                 const void* dBlockTables, const void* dSeqLens, void* dO,
@@ -617,13 +647,17 @@ int cu_paged_decode_attn_gqa_f16(const void* dQ, const void* dPoolK16, const voi
         "  for (int base = 0; base < n; base += 32){\n"
         "    int nk = n - base; if (nk > 32) nk = 32;\n"
         "    __syncthreads();\n"
-        "    for (int i = t; i < nk*hd; i += nt){\n"
+        "    for (int i = t*8; i < nk*hd; i += nt*8){\n"
         "      int j = i / hd, d = i - j*hd;\n"
         "      int tok = base + j;\n"
         "      size_t phys = (size_t)bt[tok / blockSize]*blockSize + (tok % blockSize);\n"
         "      size_t src = phys*WKV + (size_t)kvh*hd + d;\n"
-        "      shk[j*hp + d] = poolK[src];\n"
-        "      shv[j*hp + d] = poolV[src];\n"
+        "      uint4 k8 = *(const uint4*)(poolK + src);\n" // 8 contiguous u16 within a token (hd%8==0)
+        "      uint4 v8 = *(const uint4*)(poolV + src);\n"
+        "      const unsigned short* kp = (const unsigned short*)&k8; const unsigned short* vp = (const unsigned short*)&v8;\n"
+        "      unsigned short* dk = shk + j*hp + d; unsigned short* dv = shv + j*hp + d;\n"
+        "      #pragma unroll\n"
+        "      for (int e=0;e<8;e++){ dk[e]=kp[e]; dv[e]=vp[e]; }\n"
         "    }\n"
         "    __syncthreads();\n"
         "    if (w < group){\n"
@@ -1250,14 +1284,18 @@ int cu_swiglu_f16(void* gate, const void* up, int n) {
     if (!gSwigluF16 && compile_kernel(
             A1_CVT_HELPERS
             "extern \"C\" __global__ void swiglu_f16(unsigned short* gate, const unsigned short* up, int n){\n"
-            "  int i = blockIdx.x*blockDim.x + threadIdx.x;\n"
-            "  if (i < n){ float v = h2f(gate[i]);\n"
-            "    float s = v>=0.0f ? 1.0f/(1.0f+expf(-v)) : expf(v)/(1.0f+expf(v));\n"
-            "    gate[i] = f2h(v*s*h2f(up[i])); }\n"
+            "  int base = (blockIdx.x*blockDim.x + threadIdx.x)*8;\n"
+            "  if (base + 8 <= n){\n" // vectorized: 8 u16 (uint4) per thread, 8x fewer load/store instrs
+            "    uint4 g = *(uint4*)(gate+base); uint4 u = *(const uint4*)(up+base);\n"
+            "    unsigned short* gp = (unsigned short*)&g; const unsigned short* upp = (const unsigned short*)&u;\n"
+            "    #pragma unroll\n"
+            "    for (int e=0;e<8;e++){ float v=h2f(gp[e]); float s=v>=0.0f?1.0f/(1.0f+expf(-v)):expf(v)/(1.0f+expf(v)); gp[e]=f2h(v*s*h2f(upp[e])); }\n"
+            "    *(uint4*)(gate+base) = g;\n"
+            "  } else { for (int i=base;i<n;i++){ float v=h2f(gate[i]); float s=v>=0.0f?1.0f/(1.0f+expf(-v)):expf(v)/(1.0f+expf(v)); gate[i]=f2h(v*s*h2f(up[i])); } }\n"
             "}\n",
             "swiglu_f16.cu", "swiglu_f16", &gSwigluF16) != 0) { rc = -2; goto donesf; }
     {
-        int threads = 256, blocks = (n + threads - 1) / threads;
+        int threads = 256, blocks = ((n + 7) / 8 + threads - 1) / threads; // 8 elems/thread (vectorized)
         void* args[3] = { &gate, (void*)&up, &n };
         rc = (cuLaunchKernel(gSwigluF16, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
@@ -1354,12 +1392,18 @@ int cu_add_f16(void* dst, const void* src, int n) {
     if (!gAddF16 && compile_kernel(
             A1_CVT_HELPERS
             "extern \"C\" __global__ void add_f16(unsigned short* dst, const unsigned short* src, int n){\n"
-            "  int i = blockIdx.x*blockDim.x + threadIdx.x;\n"
-            "  if (i < n) dst[i] = f2h(h2f(dst[i]) + h2f(src[i]));\n"
+            "  int base = (blockIdx.x*blockDim.x + threadIdx.x)*8;\n"
+            "  if (base + 8 <= n){\n" // vectorized: 8 u16 (uint4) per thread
+            "    uint4 d = *(uint4*)(dst+base); uint4 s = *(const uint4*)(src+base);\n"
+            "    unsigned short* dp = (unsigned short*)&d; const unsigned short* sp = (const unsigned short*)&s;\n"
+            "    #pragma unroll\n"
+            "    for (int e=0;e<8;e++) dp[e]=f2h(h2f(dp[e])+h2f(sp[e]));\n"
+            "    *(uint4*)(dst+base) = d;\n"
+            "  } else { for (int i=base;i<n;i++) dst[i]=f2h(h2f(dst[i])+h2f(src[i])); }\n"
             "}\n",
             "add_f16.cu", "add_f16", &gAddF16) != 0) { rc = -2; goto doneaf; }
     {
-        int threads = 256, blocks = (n + threads - 1) / threads;
+        int threads = 256, blocks = ((n + 7) / 8 + threads - 1) / threads; // 8 elems/thread
         void* args[3] = { &dst, (void*)&src, &n };
         rc = (cuLaunchKernel(gAddF16, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
@@ -2203,6 +2247,30 @@ int cu_update_i32(void* dst, const int* src, int n) {
     if (ensure_init() != 0) { goto doneui; }
     if (cudaMemcpyAsync(dst, src, (size_t)n * sizeof(int), cudaMemcpyHostToDevice, gStream) == cudaSuccess) rc = 0;
 doneui:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_bump_i32: buf[i] += delta on-device — a CAPTURABLE length-bump for correct in-graph decode
+// (append writes slot=seqLen, this bumps seqLen, then attention reads seqLen+1 keys incl the current
+// token). Pure device op, no host sync, so it captures into the decode graph.
+static CUfunction gBumpI32 = NULL;
+int cu_bump_i32(void* buf, int n, int delta) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { goto doneb; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto doneb; }
+    if (!gBumpI32 && compile_kernel(
+        "extern \"C\" __global__ void bump_i32(int* buf, int n, int delta){\n"
+        "  int i = blockIdx.x*blockDim.x + threadIdx.x;\n"
+        "  if (i < n) buf[i] += delta;\n"
+        "}\n", "bump_i32.cu", "bump_i32", &gBumpI32) != 0) { rc = -2; goto doneb; }
+    {
+        int threads = 256, blocks = (n + threads - 1) / threads;
+        void* args[3] = { &buf, &n, &delta };
+        rc = (cuLaunchKernel(gBumpI32, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+doneb:
     pthread_mutex_unlock(&gLock);
     return rc;
 }
