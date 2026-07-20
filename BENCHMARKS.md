@@ -113,9 +113,11 @@ FlashAttention + mature GEMM scheduling. GoAI's edge appears only with a
 **precision trade**: on GeForce it auto-enables **f16 GEMM-accumulate**
 (`CUBLAS_COMPUTE_16F`, exploiting consumer-Ampere's 2× f16-accumulate tensor
 rate that vLLM leaves on the table by defaulting to f32). That path —
-validated token-identical to f32 on TinyLlama — lifts GoAI to 5,503 / 8,019
-(1.08× / 1.07× vs vLLM's f32-acc default @64/256), but it is **not** a
-like-for-like kernel comparison (lower accumulate precision). Honest verdict:
+validated token-identical to f32 on TinyLlama — on GoAI's fastest
+conversion-free forward (f16 activations end-to-end) lifts throughput to
+~6,100 / ~9,080 full-step (≈**1.20× / 1.22×** vs vLLM's f32-acc default
+@64/256), but it is **not** a like-for-like kernel comparison (lower
+accumulate precision). Honest verdict:
 **capability parity reached; raw decode-kernel throughput still favors vLLM at
 matched precision; GoAI pulls even-to-ahead in practice only via its GeForce
 f16-accumulate optimization.**
@@ -148,7 +150,7 @@ bit-identical to eager decode — the ≈18× **capability** gap is closed. But 
 raw decode-kernel throughput, measured head-to-head on this same RTX 3060 **at
 matched f32-accumulate precision, vLLM is still ≈1.1–1.4× faster** (its
 FlashAttention + mature GEMM scheduling). GoAI reaches even-to-slightly-ahead
-in practice (1.07–1.08× @ctx128/b64–256) only by auto-enabling f16
+in practice (up to ≈1.2× @ctx128/b64–256 on its fastest f16 forward) only by auto-enabling f16
 GEMM-accumulate on GeForce — a validated (token-identical) precision trade
 vLLM doesn't take by default, not a like-for-like kernel win. And at long
 context vLLM leads regardless (ctx512: vLLM 1.21×, its FlashDecoding). So the
