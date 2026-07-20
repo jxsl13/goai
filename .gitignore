@@ -41,3 +41,4 @@ graphify-out/
 models/*
 !models/README.md
 .venv-cuda
+models/*.gguf

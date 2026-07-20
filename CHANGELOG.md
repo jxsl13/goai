@@ -4,6 +4,29 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### bench -- production-size Apple LLM decode vs llama.cpp (T887, 2026-07-20)
+
+Ran the production-size Apple-silicon head-to-head the toy 17.7M comparison (T607) had deferred.
+A real TinyLlama-1.1B Q4_K_M GGUF (669 MB, gitignored under models/), the same file timed by
+both engines on M2 Metal: llama.cpp llama-bench b9960 vs GoAI's batched quant decoder
+(gguf.ReadRaw -> QuantLlamaFromGGUF -> llamagpu.NewQuant; harness
+internal/benchcompare/prod_decode_external_test.go, gated on TINYLLAMA_GGUF).
+
+| TinyLlama-1.1B Q4_K_M, M2 Metal | prefill (pp64) | decode (tg64) |
+|---|---|---|
+| llama.cpp Metal | 1754 t/s | 197.2 t/s |
+| GoAI Metal (batched quant) | 82 t/s | 9.9 t/s |
+| gap | 21× | 20× |
+
+The toy-size caveat is discharged, and the honest finding is the opposite of the hope: the gap
+WIDENS at scale (≈3× at 17.7M → ≈20× at 1.1B). GoAI's Q4_K dequant kernels are
+one-thread-per-output (T416) so the dequant dominates at 1.1B, and llama.cpp's hand-tuned Metal
+Q4_K kernels + fused attention pull far ahead. It is a uniform kernel-efficiency gap, not a
+broken path -- GoAI's prefill/decode ratio (8.3×) matches llama.cpp's (8.9×), it loads the model
+at the correct config, and its quantized decode is f32-exact against gguf-py. Recorded in
+BENCHMARKS.md section 2 + scoreboard + losses table + docs. MLX left as the optional second
+incumbent.
+
 ### tooling -- cichange always-run mechanism for the whole-tree meta-tests (T893, 2026-07-20)
 
 The CI impact selector (internal/cichange) maps a diff to the affected packages via the reverse

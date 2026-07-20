@@ -782,6 +782,34 @@ here. Both readings confirm the recorded figures are the right order and the gap
 is real, not a harness artifact. The production-scale story is the three-way
 TinyLlama-1.1B head-to-head below, where the toy-size caveat is discharged.
 
+**Apple production-scale head-to-head (T887, 2026-07-20) — the toy caveat discharged on
+darwin, and the gap WIDENS.** A real TinyLlama-1.1B Q4_K_M GGUF (669 MB, downloaded to
+models/) timed by both engines on the same M2 Pro Metal GPU, same file: llama.cpp llama-bench
+b9960 (3 reps) vs GoAI's batched quant decoder (gguf.ReadRaw -> nlp.QuantLlamaFromGGUF ->
+llamagpu.NewQuant, best-of-3; harness internal/benchcompare/prod_decode_external_test.go gated
+on TINYLLAMA_GGUF).
+
+| TinyLlama-1.1B Q4_K_M, M2 Metal | prefill (pp64) | decode (tg64) |
+|---|---|---|
+| llama.cpp Metal | 1754 +/- 27 t/s | 197.2 +/- 0.2 t/s |
+| GoAI Metal (batched quant) | 82 t/s | 9.9 t/s |
+| gap | 21x | 20x |
+
+The hoped-for narrowing at scale does not happen -- the decode gap goes from ~3x at 17.7 M to
+~20x at 1.1 B. Diagnosed causes: (1) GoAI's Q4_K dequant kernels are one-thread-per-output, not
+MPS-class (T416), so the quant path that buys 4x memory costs throughput, and at 1.1 B the
+dequant dominates every decode step; (2) llama.cpp's hand-tuned Metal Q4_K kernels, fused
+attention, and optimized KV cache are years of decode-path engineering GoAI has not matched at
+this size. It is a uniform kernel-efficiency gap, not a broken path: GoAI's prefill/decode
+ratio (8.3x) matches llama.cpp's (8.9x), it loads the model at the correct config (vocab 32000,
+dim 2048, 22 layers, GQA 32:4) and its quantized decode is f32-exact against gguf-py (the
+parity gates), so the comparison is same-model, same-Q4_K-weights, same-machine. The lever is
+production-grade Q4_K Metal kernels + attention fusion -- llama.cpp's core competency and a
+large kernel effort. MLX (Apple's own framework) is the remaining optional second incumbent.
+Re-run: `TINYLLAMA_GGUF=$PWD/models/tinyllama-1.1b-q4km.gguf GOEXPERIMENT=simd
+VK_ICD_FILENAMES=$VK_MOLTENVK_ICD go test -tags vulkan ./internal/benchcompare -run
+TestProdDecodeGGUF -v` alongside `llama-bench -m models/tinyllama-1.1b-q4km.gguf -p 64 -n 64 -r 3`.
+
 Honest read of the gaps (as of 2026-07-14):
 
 - **CPU vs vendor BLAS** (BLAS = the decades-old optimized linear-algebra
