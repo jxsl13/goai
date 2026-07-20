@@ -4,6 +4,34 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### fix -- read-only parallel audit round: five latent-defect fixes across format/nn/nlp/classic (T909, 2026-07-20)
+
+A four-subagent read-only audit swept format, nn, nlp and classic for latent defects; each finding
+was then independently reproduced and fixed on the main line (the subagent output is untrusted data
+-- one flagged item, GSPOLoss with epsilon 0, was a FALSE POSITIVE because GSPOAttrs.WithDefaults
+already defaults epsilon 0 → 3e-4, and was reverted). Five real bugs fixed, each proven non-vacuous
+by stripping the guard (test goes red) and restoring it (green):
+
+- **format/pytorch (B104, §V29):** the pickle reader's length bound `u.pos+n > len(u.buf)`
+  overflowed for a hostile BINUNICODE8 length near maxint64 -- the sum wrapped negative, the guard
+  passed, and the following slice panicked instead of erroring. pytorch reads untrusted downloaded
+  checkpoints. Rewritten in overflow-safe remaining-length form.
+- **classic (B105, §V37):** KMeans.Fit / PCA.Fit indexed x[0] with no ragged-row guard,
+  SoftmaxRegression.PredictProba dereferenced a nil weight matrix before Fit, and GaussianNB.Fit let
+  epsilon collapse to 0 on all-zero-variance data → NaN log-likelihoods. All now error cleanly.
+- **nn (B106):** backend.AXPYAttrs.WithDefaults() rewrites Alpha 0 → 1, so EWCPenalty(λ=0),
+  FocalLoss(α=0) and RDropLoss(α=0) -- where 0 means "off" -- silently computed at full scale
+  (EWC returned 8 for a 0 case, Focal a negative loss, RDrop added the whole KL). Each now
+  short-circuits the disabled case before the AXPY.
+- **nn (B107):** SparseMoE.ForwardDecode filled its weight tensor via Storage().F64(), which panics
+  on F32/F16 -- so the KV-cached decode path crashed for any F32 model (the standard inference
+  dtype). Now uses the dtype-agnostic SetF64, matching the dense Forward.
+- **nlp (B108, §V15):** the slice-based decoders (Unigram, WordPiece, SPM) dropped any token id
+  ≥ len(pieces), silently losing added/control tokens that HuggingFace appends past the base vocab
+  (chat markers) -- EncodeSpecial emitted the id, Decode discarded it. specialSet now carries an
+  id → text reverse the decoders consult for out-of-range ids; byte-level BPE decoders were already
+  safe (id-keyed map).
+
 ### tooling -- spec-lint (internal/speccheck) for §V36 SPEC integrity, wired into CI gating (T886, 2026-07-20)
 
 New internal/speccheck package: a mechanical guard for SPEC.md's structural invariant §V36
