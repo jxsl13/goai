@@ -85,7 +85,7 @@ func loadOutput(root, dir, renderPath string) (Output, error) {
 	o := Output{RenderPath: renderPath}
 	entries, err := os.ReadDir(filepath.Join(root, dir))
 	if err != nil {
-		return o, fmt.Errorf("specgraph: %s: %w", dir, err)
+		return o, fmt.Errorf("docgraph: %s: %w", dir, err)
 	}
 	names := make([]string, 0, len(entries))
 	for _, e := range entries {
@@ -103,7 +103,7 @@ func loadOutput(root, dir, renderPath string) (Output, error) {
 		o.Fragments = append(o.Fragments, Fragment{Path: rel, Content: string(b)})
 	}
 	if len(o.Fragments) == 0 {
-		return o, fmt.Errorf("specgraph: %s has no .md fragments", dir)
+		return o, fmt.Errorf("docgraph: %s has no .md fragments", dir)
 	}
 	return o, nil
 }

@@ -37,7 +37,7 @@ const maxEmbedTokens = 512
 func newBertEmbedder(dir string) (*bertEmbedder, error) {
 	cfgJSON, err := os.ReadFile(filepath.Join(dir, "config.json"))
 	if err != nil {
-		return nil, fmt.Errorf("specgraph: embed model config: %w", err)
+		return nil, fmt.Errorf("docgraph: embed model config: %w", err)
 	}
 	cfg, err := nlp.BertConfigFromHF(cfgJSON)
 	if err != nil {
@@ -45,7 +45,7 @@ func newBertEmbedder(dir string) (*bertEmbedder, error) {
 	}
 	ts, _, err := safetensors.LoadFile(filepath.Join(dir, "model.safetensors"))
 	if err != nil {
-		return nil, fmt.Errorf("specgraph: embed model weights: %w", err)
+		return nil, fmt.Errorf("docgraph: embed model weights: %w", err)
 	}
 	model, err := nlp.BertFromHF(ts, cfg)
 	if err != nil {
@@ -53,7 +53,7 @@ func newBertEmbedder(dir string) (*bertEmbedder, error) {
 	}
 	tokJSON, err := os.ReadFile(filepath.Join(dir, "tokenizer.json"))
 	if err != nil {
-		return nil, fmt.Errorf("specgraph: embed model tokenizer: %w", err)
+		return nil, fmt.Errorf("docgraph: embed model tokenizer: %w", err)
 	}
 	tok, err := nlp.WordPieceFromJSON(tokJSON)
 	if err != nil {
@@ -65,7 +65,7 @@ func newBertEmbedder(dir string) (*bertEmbedder, error) {
 func (e *bertEmbedder) Embed(text string) ([]float64, error) {
 	ids := e.tok.Encode(text)
 	if len(ids) == 0 {
-		return nil, fmt.Errorf("specgraph: empty tokenization")
+		return nil, fmt.Errorf("docgraph: empty tokenization")
 	}
 	if len(ids) > maxEmbedTokens {
 		ids = ids[:maxEmbedTokens]
@@ -77,7 +77,7 @@ func (e *bertEmbedder) Embed(text string) ([]float64, error) {
 	return nlp.MeanPool(hidden, nil)
 }
 
-// embedRecord is one line of .specgraph/embeddings.jsonl: node id, the
+// embedRecord is one line of .docgraph/embeddings.jsonl: node id, the
 // content hash the vector was computed from, and the vector. Keyed on the
 // hash so `index` only re-embeds changed nodes.
 type embedRecord struct {
@@ -166,7 +166,7 @@ func indexEmbeddings(g *Graph, emb Embedder, path string) (int, int, int, error)
 		}
 		vec, err := emb.Embed(embedText(n))
 		if err != nil {
-			return embedded, kept, len(fresh), fmt.Errorf("specgraph: embedding %s: %w", id, err)
+			return embedded, kept, len(fresh), fmt.Errorf("docgraph: embedding %s: %w", id, err)
 		}
 		fresh[id] = embedRecord{ID: id, Hash: h, Vec: vec}
 		embedded++

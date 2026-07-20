@@ -16,7 +16,7 @@ import (
 // nothing at all (TestMutationVerifyGate).
 func applyMutation(w *strings.Builder, root string, dryRun bool, mutate func(c *Corpus) error) int {
 	if !HasSpecDir(root) {
-		fmt.Fprintln(w, "no spec/ hierarchy — run `specgraph split` first (mutations require the source tree, §V41)")
+		fmt.Fprintln(w, "no spec/ hierarchy — run `docgraph split` first (mutations require the source tree, §V41)")
 		return 1
 	}
 	c, err := LoadCorpus(root)

@@ -198,23 +198,23 @@ spec-check:
 
 ## spec-graph: query the SPEC.md/docs citation graph (T915) — e.g.
 ## make spec-graph ARGS='why V22' | ARGS='bugs-for format/gguf' | ARGS='patterns'.
-## The graph rebuilds from the corpus + git log; .specgraph/ only caches.
+## The graph rebuilds from the corpus + git log; .docgraph/ only caches.
 spec-graph:
-	$(CGO_OFF) $(GO) run ./internal/specgraph $(ARGS)
+	$(CGO_OFF) $(GO) run ./internal/docgraph $(ARGS)
 
-## spec-graph-check: the specgraph test suite (fixture extraction, real-corpus
+## spec-graph-check: the docgraph test suite (fixture extraction, real-corpus
 ## golden edges, determinism, cache roundtrip, speccheck-drift pin).
 spec-graph-check:
-	$(CGO_OFF) $(GO) test ./internal/specgraph/
+	$(CGO_OFF) $(GO) test ./internal/docgraph/
 
 ## spec-render: regenerate the SPEC.md + SPEC-worker-*.md views from spec/ (§V41).
 spec-render:
-	$(CGO_OFF) $(GO) run ./internal/specgraph render
+	$(CGO_OFF) $(GO) run ./internal/docgraph render
 
 ## spec-verify: render-sync + §V36 speccheck + table shapes + §V39 dangling
 ## strong refs, plus the full markdown lint. The local pre-push spec gate.
 spec-verify:
-	$(CGO_OFF) $(GO) run ./internal/specgraph verify
+	$(CGO_OFF) $(GO) run ./internal/docgraph verify
 	$(GO) run ./internal/mdlint ./...
 
 ## perfscan: static finder for the per-element hot-loop anti-patterns (T919) —
@@ -233,7 +233,7 @@ perfscan-check:
 ## C/CUDA/Vulkan toolchain, fail-fast (§V23). Mirrors ci.yml: gofmt (the cgo+race
 ## lane), go vet ./... (all lanes' §V23 soundness backstop, compiles every _test.go),
 ## the -short test suite INCLUDING the always-run meta-tests speccheck / perfscan /
-## specgraph render-sync (pure-go lane + §V41), and the go-mod-tidy drift gate. The
+## docgraph render-sync (pure-go lane + §V41), and the go-mod-tidy drift gate. The
 ## -short suite self-skips the trained-model e2e tests, so this is ~seconds. It runs
 ## every package EXCEPT internal/mdlint and internal/apicheck — the two CI deliberately
 ## holds out of the always-run gate as known-red debt (mdlint reddens on unrelated

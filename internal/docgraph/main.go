@@ -9,9 +9,9 @@ import (
 	"strings"
 )
 
-const usage = `specgraph — query the SPEC.md/docs citation graph.
+const usage = `docgraph — query the SPEC.md/docs citation graph.
 
-usage: go run ./internal/specgraph [flags] <command> [args]
+usage: go run ./internal/docgraph [flags] <command> [args]
 
 commands:
   show <id>            node + one-hop neighborhood, grouped by edge type
@@ -22,7 +22,7 @@ commands:
   path <id> <id>       shortest reference chain between two entities
   patterns             recurring §B bug classes + done-PERF §T optimization patterns
   search <query...>    hybrid BM25 + vector search (vectors when indexed; see index)
-  index                (re-)embed node texts into .specgraph/ (needs -embed-model or $SPECGRAPH_EMBED_MODEL)
+  index                (re-)embed node texts into .docgraph/ (needs -embed-model or $SPECGRAPH_EMBED_MODEL)
   stats                node/edge counts by kind/type
   dangling             references whose target does not exist (spec hygiene)
   help                 this text
@@ -50,12 +50,12 @@ flags:
   -n N            max records per group (default 20; 0 = all)
   -dot            emit the result subgraph as Graphviz DOT instead of text
   -no-git         skip git history (hermetic)
-  -no-cache       neither read nor write .specgraph/ caches
+  -no-cache       neither read nor write .docgraph/ caches
   -refresh        force rebuild (still writes the cache)
   -embed-model D  HF checkpoint dir (config.json+model.safetensors+tokenizer.json)
 
 The graph is rebuilt from SPEC.md, SPEC-worker-*.md, CHANGELOG.md, docs/**
-and git log; .specgraph/ (gitignored) only accelerates repeat calls.`
+and git log; .docgraph/ (gitignored) only accelerates repeat calls.`
 
 func main() {
 	var (
@@ -63,7 +63,7 @@ func main() {
 		limit      = flag.Int("n", 20, "max records per group (0 = all)")
 		dot        = flag.Bool("dot", false, "emit Graphviz DOT")
 		noGit      = flag.Bool("no-git", false, "skip git history")
-		noCache    = flag.Bool("no-cache", false, "bypass .specgraph/ caches")
+		noCache    = flag.Bool("no-cache", false, "bypass .docgraph/ caches")
 		refresh    = flag.Bool("refresh", false, "force rebuild")
 		embedModel = flag.String("embed-model", os.Getenv("SPECGRAPH_EMBED_MODEL"), "HF embedding checkpoint dir")
 		check      = flag.Bool("check", false, "render: report drift instead of writing")
@@ -77,7 +77,7 @@ func main() {
 	}
 	root, err := repoRoot()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "specgraph:", err)
+		fmt.Fprintln(os.Stderr, "docgraph:", err)
 		os.Exit(1)
 	}
 	out := &strings.Builder{}
@@ -100,7 +100,7 @@ func main() {
 		cmdImpact(out, g, one(rest), orDefault(*depth, 3), *limit, *dot)
 	case "path":
 		if len(rest) < 2 {
-			fmt.Fprintln(os.Stderr, "specgraph: path needs two ids")
+			fmt.Fprintln(os.Stderr, "docgraph: path needs two ids")
 			os.Exit(2)
 		}
 		cmdPath(out, g, rest[0], rest[1], *dot)
@@ -115,7 +115,7 @@ func main() {
 	case "dangling":
 		cmdDangling(out, g, *limit)
 	default:
-		fmt.Fprintf(os.Stderr, "specgraph: unknown command %q (try help)\n", cmd)
+		fmt.Fprintf(os.Stderr, "docgraph: unknown command %q (try help)\n", cmd)
 		os.Exit(2)
 	}
 	fmt.Print(out.String())
@@ -123,7 +123,7 @@ func main() {
 
 // newMutFlagSet builds the per-subcommand flag set: mutation flags come
 // right after the subcommand words, positional text follows them
-// (`specgraph verif add -tag TAG the text …`, Go flag convention).
+// (`docgraph verif add -tag TAG the text …`, Go flag convention).
 func newMutFlagSet() (*flag.FlagSet, *mutFlags) {
 	fs := flag.NewFlagSet("mutation", flag.ContinueOnError)
 	fl := &mutFlags{}
@@ -533,7 +533,7 @@ func cmdSearch(w *strings.Builder, g *Graph, root, query, embedModel string, lim
 		fmt.Fprintf(w, "  %.4f %s\n", h.Score, nodeLine(g.Nodes[h.ID]))
 	}
 	if mode == "bm25" {
-		fmt.Fprintln(w, "note: bm25-only — run `specgraph index` with -embed-model (or $SPECGRAPH_EMBED_MODEL) for hybrid vector search")
+		fmt.Fprintln(w, "note: bm25-only — run `docgraph index` with -embed-model (or $SPECGRAPH_EMBED_MODEL) for hybrid vector search")
 	}
 }
 

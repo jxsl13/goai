@@ -1,6 +1,6 @@
 # SPEC — fixture
 
-Synthetic mini-corpus for the specgraph extractor tests. Mirrors the real
+Synthetic mini-corpus for the docgraph extractor tests. Mirrors the real
 SPEC.md section shapes (FORMAT.md): defs for §G/§C/§I/§V, tables for §R/§B/§T,
 worker prose ids (Tw-X, Iw8) that must NEVER match, and a §T cites column.
 

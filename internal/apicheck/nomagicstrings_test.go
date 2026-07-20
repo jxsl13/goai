@@ -26,11 +26,11 @@ var backendNameLiterals = map[string]bool{
 // The GPU backends' own device.String() derives from Kind(), so they carry no
 // literal and are NOT exempt.
 func magicStringExempt(rel string) bool {
-	// internal/specgraph validates SPEC VOCABULARY, not backends: §R's conf
+	// internal/docgraph validates SPEC VOCABULARY, not backends: §R's conf
 	// levels are literally "high|med|low|ref" (FORMAT.md) — its "ref" is a
 	// research-confidence value, not a backend reference (§V40 tooling).
 	return rel == "backend/names.go" || strings.HasPrefix(rel, "tensor/") ||
-		strings.HasPrefix(rel, "internal/specgraph/")
+		strings.HasPrefix(rel, "internal/docgraph/")
 }
 
 // TestNoMagicBackendNameStrings guards §C15/§V21: backends are referred to by the

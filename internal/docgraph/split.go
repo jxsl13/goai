@@ -115,7 +115,7 @@ func splitOne(content, dir string, isWorker bool) (Output, error) {
 		return o, err
 	}
 	if back != content {
-		return o, fmt.Errorf("specgraph: split round-trip NOT byte-identical for %s — refusing to write (§V41)", dir)
+		return o, fmt.Errorf("docgraph: split round-trip NOT byte-identical for %s — refusing to write (§V41)", dir)
 	}
 	return o, nil
 }

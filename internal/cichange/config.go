@@ -63,10 +63,10 @@ func defaultRules() (ignore, ignoreRe, fullRe, pkgRe, alwaysRun []string) {
 	//     stay OUT until they are green: apicheck fails the §V19 doc-debt (T892, now
 	//     140→18, blocked on the worker's llamagpu godoc); mdlint fails on
 	//     .claude/memory + SPEC-worker-*.md (T889). Add them here once green.
-	//   - internal/specgraph (§V39 dangling refs + §V41 render-sync: spec/ is the
+	//   - internal/docgraph (§V39 dangling refs + §V41 render-sync: spec/ is the
 	//     source, SPEC.md a generated view) is GREEN and hermetic — enabled so a
 	//     hand-edited rendered view goes red on the next non-empty selection.
-	alwaysRun = []string{"internal/speccheck", "internal/perfscan", "internal/specgraph"}
+	alwaysRun = []string{"internal/speccheck", "internal/perfscan", "internal/docgraph"}
 	return ignore, ignoreRe, fullRe, pkgRe, alwaysRun
 }
 
