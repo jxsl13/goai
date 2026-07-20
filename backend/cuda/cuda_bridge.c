@@ -5138,6 +5138,31 @@ donep:
     return rc;
 }
 
+// cu_gemm_f16_pure_acc32: like cu_gemm_f16_pure but f32 ACCUMULATE (CUBLAS_COMPUTE_32F) — f16
+// operands in/out, NO per-call conversions, but the tensor-core MMA accumulates in f32 (vLLM's
+// default precision). On GeForce this runs the HALF-rate f16-with-f32-accum HMMA, so it's the path
+// to compare like-for-like vs vLLM WITHOUT the f32-activation convert overhead of cu_matmul_f16w.
+int cu_gemm_f16_pure_acc32(const void* dA16, const void* dW16, void* dC16, int M, int K, int N) {
+    int rc = -2;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto donep32; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto donep32; }
+    {
+        static const float f1 = 1.0f, f0 = 0.0f; // f32 scale type for COMPUTE_32F
+        cublasStatus_t st = cublasSetPointerMode(gHandle, CUBLAS_POINTER_MODE_HOST);
+        if (st == CUBLAS_STATUS_SUCCESS)
+            st = cublasGemmEx(gHandle, CUBLAS_OP_N, CUBLAS_OP_N, N, M, K,
+                              &f1, dW16, CUDA_R_16F, N, dA16, CUDA_R_16F, K,
+                              &f0, dC16, CUDA_R_16F, N, CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT);
+        cublasSetPointerMode(gHandle, CUBLAS_POINTER_MODE_DEVICE);
+        if (st != CUBLAS_STATUS_SUCCESS) { rc = -(4000 + (int)st); goto donep32; }
+    }
+    rc = 0;
+donep32:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
 // cu_matmul_i8_mma: dC[M,N] (int32) = dA8[M,K] (int8 row-major) · dW8[K,N] (int8 row-major), via
 // TILED tensor-core mma.sync.m16n8k32.s8 (inline PTX, no headers). One warp per 16×8 output tile,
 // K looped in 32-wide MMA steps accumulating int32. The int8 tensor-core path llama.cpp's prefill
