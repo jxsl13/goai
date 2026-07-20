@@ -369,6 +369,9 @@ func (m *SoftmaxRegression) Fit(x [][]float64, y []int, k, steps int, lr float64
 
 // PredictProba returns softmax probabilities [n][k].
 func (m *SoftmaxRegression) PredictProba(x [][]float64) ([][]float64, error) {
+	if m.W == nil {
+		return nil, fmt.Errorf("classic: SoftmaxRegression.PredictProba before Fit")
+	}
 	n, d := len(x), m.W.Shape()[0]
 	k := m.W.Shape()[1]
 	xt := tensor.New(tensor.F64, tensor.Shape{n, d})
@@ -415,6 +418,16 @@ func KMeans(x [][]float64, init [][]float64, maxIter int) (centers [][]float64, 
 		return nil, nil, fmt.Errorf("classic: kmeans needs data and init centers")
 	}
 	d := len(x[0])
+	for _, row := range x {
+		if len(row) != d {
+			return nil, nil, fmt.Errorf("classic: kmeans ragged X (row width %d, want %d)", len(row), d)
+		}
+	}
+	for _, c := range init {
+		if len(c) != d {
+			return nil, nil, fmt.Errorf("classic: kmeans init center width %d, want %d", len(c), d)
+		}
+	}
 	centers = make([][]float64, k)
 	for i := range centers {
 		if len(init[i]) != d {
@@ -490,6 +503,11 @@ func (p *PCA) Fit(x [][]float64, ncomp int) error {
 	d := len(x[0])
 	if ncomp < 1 || ncomp > d {
 		return fmt.Errorf("classic: ncomp %d outside [1,%d]", ncomp, d)
+	}
+	for _, row := range x {
+		if len(row) != d {
+			return fmt.Errorf("classic: PCA ragged X (row width %d, want %d)", len(row), d)
+		}
 	}
 	p.Mean = make([]float64, d)
 	for _, row := range x {

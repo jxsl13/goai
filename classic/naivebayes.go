@@ -115,6 +115,14 @@ func (m *GaussianNB) Fit(x [][]float64, y []int) error {
 			maxVar = v
 		}
 	}
+	// Var-smoothing (§V3) prevents ÷0 by adding epsilon = varSmoothing·maxVar to every
+	// class-feature variance — but epsilon collapses to 0 when maxVar is 0 (every
+	// feature constant across the whole dataset), so the Gaussian would divide by zero
+	// and PredictProba would return NaN with no error. A zero-variance dataset carries
+	// no signal for a Gaussian model; reject it loudly instead.
+	if maxVar == 0 {
+		return fmt.Errorf("classic: GaussianNB every feature has zero variance (constant data); cannot fit")
+	}
 	epsilon := m.cfg.varSmoothing * maxVar
 
 	counts := make([]int, nc)
