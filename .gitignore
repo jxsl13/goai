@@ -40,3 +40,4 @@ graphify-out/
 # fetched model weights (never commit — multi-GB); keep the README
 models/*
 !models/README.md
+.venv-cuda

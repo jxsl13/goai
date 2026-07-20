@@ -7,7 +7,11 @@ package cuda
 */
 import "C"
 
-import "unsafe"
+import (
+	"unsafe"
+
+	"github.com/jxsl13/goai/backend"
+)
 
 // A1 fp16-activation kernel wrappers (raw device pointers). These thread f16 (u16) activations
 // through the decode forward so the per-GEMM f32<->f16 conversions vanish (measured ~5-7% e2e),
@@ -57,4 +61,10 @@ func CvtF16ToF32(dst32, src16 unsafe.Pointer, n int) int {
 
 func AddF16ToF32(dst32, src16 unsafe.Pointer, n int) int {
 	return int(C.cu_addf16_to_f32(dst32, src16, C.long(n)))
+}
+
+// RoPEF16DposRaw: device-position f16 RoPE on a raw u16 pointer (graph-capturable decode).
+func RoPEF16DposRaw(x, inv unsafe.Pointer, seq, heads, hd int, pos *DevicePos, attrs backend.RoPEAttrs) int {
+	_, posDiv := backend.RoPEFreqs(hd, attrs)
+	return int(C.cu_rope_f16_dpos(x, inv, C.int(seq), C.int(heads), C.int(hd), pos.Ptr(), C.double(posDiv)))
 }
