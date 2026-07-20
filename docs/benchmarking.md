@@ -87,6 +87,27 @@ per-shape AMX-vs-Accelerate breakdown is in the AMX GEMM section below. (F64 sta
 at ≈64 GFLOP/s: Accelerate's `cblas_sgemm` is f32-only, so f64 uses the AMX/pure-Go
 path — the f64 pure-Go column is representative there.)
 
+**The same caveat applies to `goai-cpu` MHA** (and any GEMM-backed op): the
+`goai-cpu` column is the pure-Go default, but MHA routes its two per-head matmuls
+(QKᵀ, A·V) through the simd `gemmF32` under `GOEXPERIMENT=simd`
+(`backend/cpu/mha.go`). Measured fresh on this M2 Pro (2026-07-20, single-head
+512×512 forward):
+
+| MHA forward | ms | vs torch-cpu |
+|---|---|---|
+| goai-cpu (pure-Go) | 9.30 | 23× |
+| **goai-simd** | **1.28** | **3.1×** |
+| torch-cpu (manual softmax) | 0.409 | 1.0× |
+| torch-cpu (fused SDPA) | 0.645 | 0.6× |
+| torch-mps | 0.212 | — |
+
+So the simd path is ≈7× faster than pure-Go and brings goai within ≈3× of
+torch-cpu — not the ≈23× the pure-Go column implies. The residual (vs matmul's
+≈1.1×) is goai computing QKᵀ → softmax → A·V as separate ops with intermediate
+materialization, where torch fuses; the two GEMMs themselves are at the Accelerate
+ceiling. Read every compute row's `goai-cpu` cell as the portable baseline, not
+goai's fastest CPU path.
+
 The 2418.93-GFLOP/s torch-mps Conv2D figure above is a historical
 GPU-resident, pipelined measurement (one synchronization after 30 iterations);
 it is not contract-equivalent to `backend.Execute`, which transfers and

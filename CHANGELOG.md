@@ -4,6 +4,16 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### docs — extend the honest-CPU-matmul note to MHA (T900, 2026-07-20)
+
+Following T897 (matmul): the comparison table's `goai-cpu` MHAForward is the pure-Go default,
+but MHA routes its two per-head matmuls through the simd `gemmF32` under `GOEXPERIMENT=simd`.
+Measured fresh on this M2 (single-head 512×512 forward): goai-cpu 9.30 ms → goai-simd 1.28 ms
+(≈7×), vs torch-cpu 0.409 ms (manual) / 0.645 ms (fused SDPA) / torch-mps 0.212 ms. So goai's
+real MHA sits ≈3× behind torch-cpu, not the ≈23× the pure-Go column implies — the residual
+(vs matmul's ≈1.1×) being goai's separate QKᵀ→softmax→A·V materialization where torch fuses.
+A measured note now sits under the matmul one; no table numbers changed.
+
 ### nlp — every float GGUF loader now rejects a rank-1 tensor instead of panicking (T899, §B77/§V29, 2026-07-20)
 
 Completes the §B77 sweep. Every quantized GGUF loader guards tensor rank (`len(qt.Shape) != 2`),
