@@ -173,11 +173,12 @@ func crossEntropyBackwardKernelCPU(ctx *backend.Context, in []*tensor.Tensor, at
 }
 
 func init() {
-	if vexpNeon {
-		// arm64 perf build only, F32 only (§T664): vexp-routed cross-entropy.
-		// vexpNeon is a compile-time const, so every other build registers
-		// nothing here and both ops keep their ref fallback bit-for-bit (as
-		// does F64 on this build).
+	if vexpF32Fast {
+		// SIMD perf build, F32 only (§T664): vexp-routed cross-entropy — the LSE
+		// exp+sum runs through vexpRowF32 (4-wide NEON on arm64, 8-wide AVX2 on
+		// amd64; the single per-row math.Log stays scalar). Compile-time const: the
+		// plain (no-simd) build registers nothing and both ops keep their ref f64
+		// fallback bit-for-bit. Rides the ADR-0021 f32 tolerance.
 		std.add(backend.OpCrossEntropy, tensor.F32, crossEntropyKernelCPU)
 		std.add(backend.OpCrossEntropyBackward, tensor.F32, crossEntropyBackwardKernelCPU)
 	}
