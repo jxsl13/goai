@@ -27,6 +27,22 @@ commands:
   dangling             references whose target does not exist (spec hygiene)
   help                 this text
 
+mutation commands (§V40 — spec/ is the source, SPEC.md a generated view;
+every mutation re-renders and fully re-verifies before writing anything):
+  next-id T|B|R|V|G|C|I         print the next free id of a class
+  task add <text>               new §T row (-cites, -priority, -status, -id; -worker <n> books a Tw row)
+  task set-status <id> .|~|x    forward-only lifecycle (backward needs -force); keeps state column in step
+  task edit <id>                rewrite cells (-text, -cites, -state, -priority)
+  bug add -cause .. -fix ..     new §B row, newest-first (-date, -guards V<n> appends the guard chain)
+  research add -claim .. -source .. [-conf high|med|low|ref]
+  verif add -tag TAG <text>     new §V def (canonical "V<n> TAG:" shape)
+  goal|constraint|archinv add <text> | edit <id> <text>
+  entry get <id>                raw source line + spec/<file>:<line>
+  entry rm <id>                 remove an entry (refuses when strong refs point at it, -force overrides)
+  render [-check]               regenerate SPEC.md + SPEC-worker-*.md (-check: report drift, write nothing)
+  verify                        render-sync + §V36 speccheck + table shapes + §V39 dangling strong refs
+  split [-force]                one-time migration SPEC.md -> spec/ (also re-import during worker phase A)
+
 flags:
   -d N            traversal depth (related: 2, impact: 3)
   -n N            max records per group (default 20; 0 = all)
@@ -48,7 +64,26 @@ func main() {
 		noCache    = flag.Bool("no-cache", false, "bypass .specgraph/ caches")
 		refresh    = flag.Bool("refresh", false, "force rebuild")
 		embedModel = flag.String("embed-model", os.Getenv("SPECGRAPH_EMBED_MODEL"), "HF embedding checkpoint dir")
+		check      = flag.Bool("check", false, "render: report drift instead of writing")
+		fl         mutFlags
 	)
+	flag.StringVar(&fl.Cites, "cites", "", "comma-joined cites list")
+	flag.StringVar(&fl.Priority, "priority", "", "task priority high|med|low")
+	flag.StringVar(&fl.Status, "status", "", "initial task status (default .)")
+	flag.StringVar(&fl.ID, "id", "", "explicit id (default: allocate next)")
+	flag.StringVar(&fl.Worker, "worker", "", "worker name for -worker task rows")
+	flag.StringVar(&fl.Cause, "cause", "", "bug cause cell")
+	flag.StringVar(&fl.Fix, "fix", "", "bug fix cell")
+	flag.StringVar(&fl.Date, "date", "", "bug date (default today UTC)")
+	flag.StringVar(&fl.Guards, "guards", "", "guard chain ids appended to the fix cell")
+	flag.StringVar(&fl.Claim, "claim", "", "research claim cell")
+	flag.StringVar(&fl.Source, "source", "", "research source cell")
+	flag.StringVar(&fl.Conf, "conf", "", "research confidence high|med|low|ref")
+	flag.StringVar(&fl.Tag, "tag", "", "verification invariant TAG")
+	flag.StringVar(&fl.Text, "text", "", "replacement text for edit")
+	flag.StringVar(&fl.State, "state", "", "task state cell")
+	flag.BoolVar(&fl.Force, "force", false, "override guarded transitions/removals")
+	flag.BoolVar(&fl.DryRun, "dry-run", false, "verify and report, write nothing")
 	flag.Usage = func() { fmt.Fprintln(os.Stderr, usage) }
 	flag.Parse()
 	args := flag.Args()
@@ -61,9 +96,13 @@ func main() {
 		fmt.Fprintln(os.Stderr, "specgraph:", err)
 		os.Exit(1)
 	}
-	g := loadGraph(root, !*noGit, *noCache, *refresh)
 	out := &strings.Builder{}
 	cmd, rest := args[0], args[1:]
+	if handled, rc := dispatchMutation(out, root, cmd, rest, *check, fl); handled {
+		fmt.Print(out.String())
+		os.Exit(rc)
+	}
+	g := loadGraph(root, !*noGit, *noCache, *refresh)
 	switch cmd {
 	case "show":
 		cmdShow(out, g, one(rest), *limit, *dot)
@@ -96,6 +135,100 @@ func main() {
 		os.Exit(2)
 	}
 	fmt.Print(out.String())
+}
+
+// dispatchMutation routes the §V40 mutation/render commands; returns false
+// when cmd is a query for the graph-backed switch in main.
+func dispatchMutation(out *strings.Builder, root, cmd string, rest []string, check bool, fl mutFlags) (handled bool, rc int) {
+	sub := ""
+	if len(rest) > 0 {
+		sub = rest[0]
+	}
+	switch cmd {
+	case "next-id":
+		return true, cmdNextID(out, root, sub)
+	case "task":
+		switch sub {
+		case "add":
+			return true, cmdTaskAdd(out, root, strings.Join(rest[1:], " "), fl)
+		case "set-status":
+			if len(rest) < 3 {
+				fmt.Fprintln(out, "task set-status: <id> <.|~|x> required")
+				return true, 2
+			}
+			return true, cmdTaskSetStatus(out, root, rest[1], rest[2], fl)
+		case "edit":
+			if len(rest) < 2 {
+				fmt.Fprintln(out, "task edit: <id> required")
+				return true, 2
+			}
+			return true, cmdTaskEdit(out, root, rest[1], fl)
+		}
+		fmt.Fprintln(out, "task: add | set-status | edit")
+		return true, 2
+	case "bug":
+		if sub == "add" {
+			return true, cmdBugAdd(out, root, fl)
+		}
+		fmt.Fprintln(out, "bug: add")
+		return true, 2
+	case "research":
+		if sub == "add" {
+			return true, cmdResearchAdd(out, root, fl)
+		}
+		fmt.Fprintln(out, "research: add")
+		return true, 2
+	case "verif":
+		if sub == "add" {
+			return true, cmdVerifAdd(out, root, strings.Join(rest[1:], " "), fl)
+		}
+		fmt.Fprintln(out, "verif: add")
+		return true, 2
+	case "goal", "constraint", "archinv":
+		class := map[string]string{"goal": "G", "constraint": "C", "archinv": "I"}[cmd]
+		switch sub {
+		case "add":
+			return true, cmdDefAdd(out, root, class, strings.Join(rest[1:], " "), fl)
+		case "edit":
+			if len(rest) < 3 {
+				fmt.Fprintf(out, "%s edit: <id> <text> required\n", cmd)
+				return true, 2
+			}
+			return true, cmdDefEdit(out, root, rest[1], strings.Join(rest[2:], " "), fl)
+		case "rm":
+			if len(rest) < 2 {
+				fmt.Fprintf(out, "%s rm: <id> required\n", cmd)
+				return true, 2
+			}
+			return true, cmdEntryRm(out, root, rest[1], fl)
+		}
+		fmt.Fprintf(out, "%s: add | edit | rm\n", cmd)
+		return true, 2
+	case "entry":
+		switch sub {
+		case "get":
+			if len(rest) < 2 {
+				fmt.Fprintln(out, "entry get: <id> required")
+				return true, 2
+			}
+			return true, cmdEntryGet(out, root, rest[1])
+		case "rm":
+			if len(rest) < 2 {
+				fmt.Fprintln(out, "entry rm: <id> required")
+				return true, 2
+			}
+			return true, cmdEntryRm(out, root, rest[1], fl)
+		}
+		fmt.Fprintln(out, "entry: get | rm")
+		return true, 2
+	case "render":
+		return true, cmdRender(out, root, check)
+	case "verify":
+		return true, cmdVerify(out, root)
+	case "split":
+		return true, cmdSplit(out, root, fl.Force)
+	}
+	return false, 0
 }
 
 func one(args []string) string {

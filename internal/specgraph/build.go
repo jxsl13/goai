@@ -18,10 +18,27 @@ func inputFiles(root string) []string {
 			files = append(files, rel)
 		}
 	}
-	add("SPEC.md")
-	workers, _ := filepath.Glob(filepath.Join(root, "SPEC-worker-*.md"))
-	for _, w := range workers {
-		add(filepath.Base(w))
+	// With the spec/ hierarchy (§V40) the fragments ARE the spec corpus and
+	// the rendered SPEC.md / SPEC-worker-*.md views are EXCLUDED — parsing
+	// both would define every id twice. Without spec/ (fixtures, worker
+	// machines before the tool pull) the legacy flat files stay canonical.
+	if HasSpecDir(root) {
+		_ = filepath.WalkDir(filepath.Join(root, specDirName), func(path string, d os.DirEntry, err error) error {
+			if err != nil || d.IsDir() || !strings.HasSuffix(path, ".md") {
+				return nil
+			}
+			rel, err := filepath.Rel(root, path)
+			if err == nil {
+				files = append(files, filepath.ToSlash(rel))
+			}
+			return nil
+		})
+	} else {
+		add("SPEC.md")
+		workers, _ := filepath.Glob(filepath.Join(root, "SPEC-worker-*.md"))
+		for _, w := range workers {
+			add(filepath.Base(w))
+		}
 	}
 	add("CHANGELOG.md")
 	add("README.md")
@@ -52,6 +69,8 @@ func buildGraph(root string, withGit bool) *Graph {
 	classify := func(rel string) string {
 		base := filepath.Base(rel)
 		switch {
+		case strings.HasPrefix(rel, specDirName+"/"):
+			return "spec"
 		case strings.HasPrefix(base, "SPEC"):
 			return "spec"
 		case base == "CHANGELOG.md":

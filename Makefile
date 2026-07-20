@@ -206,6 +206,16 @@ spec-graph:
 spec-graph-check:
 	$(CGO_OFF) $(GO) test ./internal/specgraph/
 
+## spec-render: regenerate the SPEC.md + SPEC-worker-*.md views from spec/ (§V40).
+spec-render:
+	$(CGO_OFF) $(GO) run ./internal/specgraph render
+
+## spec-verify: render-sync + §V36 speccheck + table shapes + §V39 dangling
+## strong refs, plus the full markdown lint. The local pre-push spec gate.
+spec-verify:
+	$(CGO_OFF) $(GO) run ./internal/specgraph verify
+	$(GO) run ./internal/mdlint ./...
+
 ## install-hooks: wire lint-md as a git pre-commit hook.
 install-hooks:
 	printf '#!/bin/sh\nmake lint-md || exit 1\n' > .git/hooks/pre-commit
