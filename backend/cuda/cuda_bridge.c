@@ -235,6 +235,7 @@ static int load_module_kernel(const void* image, const char* entry, CUfunction* 
 
 static CUfunction gWmmaGemm = NULL; // nvcc-compiled WMMA GEMM (Tw-FLASHATTN slice 1)
 static CUfunction gPagedDecode = NULL; // paged batched decode attention (FRONT B / B2)
+static CUfunction gPagedDecodeGqa = NULL; // paged batched decode, GQA K/V-shared (FRONT B, cuts group× L2 traffic)
 static CUfunction gWmmaAttn = NULL; // nvcc-compiled fused prefill attention (slice 2)
 static CUfunction gWmmaAttnGqa = NULL; // GQA/strided fused prefill attention (§ROADMAP A2)
 static int launch_cvt_f16(const void* src, void* dst, long n); // fwd decl (defined below)
@@ -289,6 +290,99 @@ int cu_paged_decode_attn(const void* dQ, const void* dPoolK, const void* dPoolV,
                              (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 donepd:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_paged_decode_attn_gqa: same contract as cu_paged_decode_attn, but ONE block per (kv head,
+// sequence) with `group` warps — each tile of K/V is staged into shared memory ONCE and reused by
+// all `group` query heads of that kv head (the naive B2 kernel re-reads each kv head group×; on
+// TinyLlama group=8, so ~8× the L2 traffic, and decode attention measured at 45% of the batched
+// step at b512). Online-softmax flash form, hd==64, 32-key shared tiles (full-warp QK; a tile may
+// span two paged blocks, resolved per token via the block table). group ≤ 8 (8 warps/block). GQA
+// K/V sharing mirrors gqa_flash_partial without the split-K (batch×kvHeads blocks saturate the SMs).
+int cu_paged_decode_attn_gqa(const void* dQ, const void* dPoolK, const void* dPoolV,
+                             const void* dBlockTables, const void* dSeqLens, void* dO,
+                             int batch, int qHeads, int kvHeads, int hd, int blockSize, int maxBlocks,
+                             float scale) {
+    int rc = -1;
+    int group = qHeads / kvHeads;
+    if (hd != 64 || group > 8 || blockSize > 16) return -4; // warp budget; paged blocks ≤16 tok (32-key tile may span 2)
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto donepg; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto donepg; }
+    if (!gPagedDecodeGqa && compile_kernel(
+        "extern \"C\" __global__ void paged_decode_gqa(const float* Q, const float* poolK, const float* poolV,\n"
+        "    const int* blockTables, const int* seqLens, float* O,\n"
+        "    int batch, int qHeads, int kvHeads, int hd, int blockSize, int maxBlocks, float scale){\n"
+        "  int kvh = blockIdx.x, seq = blockIdx.y;\n"
+        "  int group = qHeads / kvHeads, WKV = kvHeads * hd, n = seqLens[seq];\n"
+        "  const int* bt = blockTables + (size_t)seq*maxBlocks;\n"
+        "  int t = threadIdx.x, nt = blockDim.x, lane = t & 31, w = t >> 5;\n"
+        "  int hp = hd + 1;\n"
+        "  extern __shared__ float sh[];\n"
+        "  float* shq = sh;                 // [group*hd] the group's query heads\n"
+        "  float* shk = shq + group*hd;     // [32*hp] K tile (32 keys → full-warp QK)\n"
+        "  float* shv = shk + 32*hp;        // [32*hp] V tile\n"
+        "  for (int i = t; i < group*hd; i += nt) shq[i] = Q[(size_t)seq*qHeads*hd + (size_t)kvh*group*hd + i];\n"
+        "  float NEGINF = __int_as_float(0xff800000);\n"
+        "  float m = NEGINF, l = 0.f, a0 = 0.f, a1 = 0.f;\n"
+        "  for (int base = 0; base < n; base += 32){\n"
+        "    int nk = n - base; if (nk > 32) nk = 32;\n"
+        "    __syncthreads();\n"
+        "    for (int i = t; i < nk*hd; i += nt){\n"
+        "      int j = i / hd, d = i - j*hd;\n"
+        "      int tok = base + j;\n"
+        "      size_t phys = (size_t)bt[tok / blockSize]*blockSize + (tok % blockSize); // per-token: a 32-tile may cross 2 paged blocks\n"
+        "      size_t src = phys*WKV + (size_t)kvh*hd + d;\n"
+        "      shk[j*hp + d] = poolK[src];\n"
+        "      shv[j*hp + d] = poolV[src];\n"
+        "    }\n"
+        "    __syncthreads();\n"
+        "    if (w < group){\n"
+        "      float s = NEGINF;\n"
+        "      if (lane < nk){\n"
+        "        const float* kr = shk + lane*hp;\n"
+        "        const float* qh = shq + w*hd;\n"
+        "        float dot = 0.f;\n"
+        "        for (int d = 0; d < hd; d++) dot += qh[d]*kr[d];\n"
+        "        s = dot*scale;\n"
+        "      }\n"
+        "      float bm = s;\n"
+        "      for (int o=16;o>0;o>>=1){ float z=__shfl_down_sync(0xffffffffu,bm,o); if(z>bm) bm=z; }\n"
+        "      bm = __shfl_sync(0xffffffffu,bm,0);\n"
+        "      float newm = m>bm?m:bm;\n"
+        "      float corr = __expf(m-newm);\n"
+        "      float p = (lane<nk)?__expf(s-newm):0.f;\n"
+        "      float bl = p;\n"
+        "      for (int o=16;o>0;o>>=1) bl += __shfl_down_sync(0xffffffffu,bl,o);\n"
+        "      bl = __shfl_sync(0xffffffffu,bl,0);\n"
+        "      l = l*corr + bl; m = newm;\n"
+        "      a0 *= corr; a1 *= corr;\n"
+        "      for (int j=0;j<nk;j++){\n"
+        "        float pj = __shfl_sync(0xffffffffu,p,j);\n"
+        "        const float* vr = shv + j*hp;\n"
+        "        a0 += pj*vr[lane]; a1 += pj*vr[lane+32];\n"
+        "      }\n"
+        "    }\n"
+        "  }\n"
+        "  if (w < group){\n"
+        "    int qh = kvh*group + w;\n"
+        "    float inv = (l>0.f)?1.f/l:0.f;\n"
+        "    float* o = O + (size_t)seq*qHeads*hd + (size_t)qh*hd;\n"
+        "    o[lane] = a0*inv; o[lane+32] = a1*inv;\n"
+        "  }\n"
+        "}\n",
+        "paged_decode_gqa.cu", "paged_decode_gqa", &gPagedDecodeGqa) != 0) { rc = -2; goto donepg; }
+    {
+        void* args[13] = { (void*)&dQ, (void*)&dPoolK, (void*)&dPoolV, (void*)&dBlockTables,
+                           (void*)&dSeqLens, &dO, &batch, &qHeads, &kvHeads, &hd, &blockSize,
+                           &maxBlocks, &scale };
+        size_t shmem = ((size_t)group*hd + 2u*32u*(hd+1)) * sizeof(float);
+        rc = (cuLaunchKernel(gPagedDecodeGqa, (unsigned)kvHeads, (unsigned)batch, 1, 256, 1, 1,
+                             (unsigned)shmem, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+donepg:
     pthread_mutex_unlock(&gLock);
     return rc;
 }

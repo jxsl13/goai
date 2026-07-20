@@ -290,6 +290,11 @@ func TestLeakPagedKV(t *testing.T) {
 			t.Fatal(err)
 		}
 		o2.Free()
+		o3, err := p.BatchedDecodeAttnViewGQA(q, view, qHeads, kvHeads)
+		if err != nil {
+			t.Fatal(err)
+		}
+		o3.Free()
 		view.Free()
 		q.Free()
 		for _, s := range seqs {

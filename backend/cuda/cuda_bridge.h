@@ -73,6 +73,9 @@ int cu_wmma_gemm(const void* fatbin, int fatlen, const void* dA, const void* dB,
 int cu_wmma_attn(const void* fatbin, int fatlen, const void* dQ, const void* dK, const void* dV, void* dO, int heads, int seq, int hd, float scale);
 // cu_paged_decode_attn: batched single-query decode attention over a paged KV pool (FRONT B / B2). hd==64.
 int cu_paged_decode_attn(const void* dQ, const void* dPoolK, const void* dPoolV, const void* dBlockTables, const void* dSeqLens, void* dO, int batch, int qHeads, int kvHeads, int hd, int blockSize, int maxBlocks, float scale);
+// cu_paged_decode_attn_gqa: same contract, GQA K/V-shared (one block per (kv head, seq), group warps,
+// K/V staged into shared once per tile) — cuts the naive kernel's group× redundant K/V reads. hd==64, group≤8, blockSize≤16.
+int cu_paged_decode_attn_gqa(const void* dQ, const void* dPoolK, const void* dPoolV, const void* dBlockTables, const void* dSeqLens, void* dO, int batch, int qHeads, int kvHeads, int hd, int blockSize, int maxBlocks, float scale);
 // cu_wmma_attn_gqa: fused prefill attention on f32 DEVICE buffers, [seq,heads·hd] GQA layout — drop-in for GroupedQueryAttention.
 int cu_wmma_attn_gqa(const void* fatbin, int fatlen, const void* dQ32, const void* dK32, const void* dV32, void* dO32, int seq, int qHeads, int kvHeads, int hd, float scale);
 void* cu_clone_f32(const void* src, int n);

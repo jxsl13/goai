@@ -268,6 +268,41 @@ func (p *PagedKVPool) BatchedDecodeAttnView(q *DeviceF32, view *PagedBatchView, 
 	return &DeviceF32{ptr: out, rows: view.batch, cols: q.cols}, nil
 }
 
+// BatchedDecodeAttnViewGQA is BatchedDecodeAttnView using the GQA K/V-shared kernel (one block per
+// (kv head, sequence), staging each K/V tile into shared memory once and serving all group query
+// heads) — cuts the naive kernel's group× redundant K/V traffic. Requires hd==64, group≤8,
+// blockSize≤16 (falls back is the caller's choice); otherwise returns an error.
+func (p *PagedKVPool) BatchedDecodeAttnViewGQA(q *DeviceF32, view *PagedBatchView, qHeads, kvHeads int) (*DeviceF32, error) {
+	if view.pool != p {
+		return nil, fmt.Errorf("cuda: BatchedDecodeAttnViewGQA view not from this pool")
+	}
+	if q.rows != view.batch {
+		return nil, fmt.Errorf("cuda: BatchedDecodeAttnViewGQA q rows %d != batch %d", q.rows, view.batch)
+	}
+	if qHeads <= 0 || kvHeads <= 0 || qHeads%kvHeads != 0 || q.cols%qHeads != 0 {
+		return nil, fmt.Errorf("cuda: BatchedDecodeAttnViewGQA bad head config q=%d kv=%d width=%d", qHeads, kvHeads, q.cols)
+	}
+	hd := q.cols / qHeads
+	if hd != 64 {
+		return nil, fmt.Errorf("cuda: BatchedDecodeAttnViewGQA requires hd==64 (got %d)", hd)
+	}
+	if kvHeads*hd != p.wkv {
+		return nil, fmt.Errorf("cuda: BatchedDecodeAttnViewGQA kvHeads*hd=%d != pool wkv=%d", kvHeads*hd, p.wkv)
+	}
+	out := C.cu_alloc_f32(C.int(view.batch * q.cols))
+	if out == nil {
+		return nil, fmt.Errorf("cuda: BatchedDecodeAttnViewGQA device alloc failed")
+	}
+	scale := float32(1.0 / math.Sqrt(float64(hd)))
+	rc := C.cu_paged_decode_attn_gqa(q.ptr, p.k.ptr, p.v.ptr, view.dbt, view.dsl, out,
+		C.int(view.batch), C.int(qHeads), C.int(kvHeads), C.int(hd), C.int(p.blockSize), C.int(view.maxBlocks), C.float(scale))
+	if rc != 0 {
+		C.cu_free_f32(out)
+		return nil, fmt.Errorf("cuda: BatchedDecodeAttnViewGQA failed (code %d)", int(rc))
+	}
+	return &DeviceF32{ptr: out, rows: view.batch, cols: q.cols}, nil
+}
+
 // BatchedDecodeAttn runs single-query decode attention for a batch of sequences over this pool:
 // q is [batch, qHeads·hd] (one query token per sequence, row i for seqs[i]), returning
 // o[batch, qHeads·hd]. Each sequence attends over its own paged K/V via its block table — the
