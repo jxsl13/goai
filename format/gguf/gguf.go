@@ -19,9 +19,32 @@ import (
 	"io"
 	"math"
 	"os"
+	"unsafe"
 
 	"github.com/jxsl13/goai/tensor"
 )
+
+// nativeLittleEndian reports whether the host stores integers little-endian. GGUF's
+// data section is little-endian on disk, so on such hosts (every platform GoAI targets)
+// the raw F32 bytes already match the in-memory layout of an F32 tensor and decoding is
+// one bulk copy rather than a per-element Float32frombits loop (§T907). Big-endian hosts
+// fall back to the element-wise path, so the result is identical either way.
+var nativeLittleEndian = func() bool {
+	var x uint16 = 1
+	return *(*byte)(unsafe.Pointer(&x)) == 1
+}()
+
+// rawCopyLE bulk-copies verbatim little-endian source bytes into the backing store of a
+// numeric destination slice, collapsing a per-element decode into one memmove. elemSize
+// is the byte width of one T. Returns false on a big-endian host or an empty slice,
+// signalling the caller to fall back to the element-wise decode.
+func rawCopyLE[T any](dst []T, src []byte, elemSize int) bool {
+	if !nativeLittleEndian || len(dst) == 0 {
+		return false
+	}
+	copy(unsafe.Slice((*byte)(unsafe.Pointer(&dst[0])), len(dst)*elemSize), src)
+	return true
+}
 
 const magic = 0x46554747 // "GGUF" little-endian
 
@@ -404,8 +427,12 @@ func decodeTensor(ti tensorInfo, data []byte) (*tensor.Tensor, error) {
 	case tF32:
 		t := tensor.New(tensor.F32, ti.shape)
 		dst := t.Storage().F32()
-		for i := range dst {
-			dst[i] = math.Float32frombits(binary.LittleEndian.Uint32(raw[i*4:]))
+		// On a little-endian host the raw section IS the F32 bit layout — one memmove
+		// (§T907: was a per-element Float32frombits loop at 2.2 GB/s vs gguf-py's 12.2).
+		if !rawCopyLE(dst, raw, 4) {
+			for i := range dst {
+				dst[i] = math.Float32frombits(binary.LittleEndian.Uint32(raw[i*4:]))
+			}
 		}
 		return t, nil
 	case tF16:

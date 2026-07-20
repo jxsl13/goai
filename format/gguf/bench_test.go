@@ -93,6 +93,21 @@ func BenchmarkQuantizeQ8_0(b *testing.B) { benchQuantize(b, Q8_0) }
 func BenchmarkQuantizeQ4_K(b *testing.B) { benchQuantize(b, Q4_K) }
 
 // decodeTensor F16 path: the per-element f16ToF32 conversion.
+func BenchmarkDecodeF32(b *testing.B) {
+	raw := make([]byte, 4*benchN)
+	for i := range raw {
+		raw[i] = byte(i*7 + 1)
+	}
+	ti := tensorInfo{name: "t", shape: tensor.Shape{benchN}, ggType: tF32}
+	b.SetBytes(int64(len(raw)))
+	b.ResetTimer()
+	for range b.N {
+		if _, err := decodeTensor(ti, raw); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func BenchmarkDecodeF16(b *testing.B) {
 	raw := make([]byte, 2*benchN)
 	for i := range benchN {
