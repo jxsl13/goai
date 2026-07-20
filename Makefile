@@ -189,6 +189,12 @@ bench-mlx:
 lint-md:
 	$(GO) run ./internal/mdlint ./...
 
+## spec-check: §V36 SPEC-integrity guard — id-uniqueness (across SPEC.md + worker
+## specs), §T-membership, §T-last. A Go test in internal/speccheck; also runs on
+## every non-empty CI selection via the cichange always-run list (T886/T893).
+spec-check:
+	$(CGO_OFF) $(GO) test ./internal/speccheck/
+
 ## install-hooks: wire lint-md as a git pre-commit hook.
 install-hooks:
 	printf '#!/bin/sh\nmake lint-md || exit 1\n' > .git/hooks/pre-commit

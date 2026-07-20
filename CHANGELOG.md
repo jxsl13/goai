@@ -4,6 +4,24 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### tooling -- spec-lint (internal/speccheck) for §V36 SPEC integrity, wired into CI gating (T886, 2026-07-20)
+
+New internal/speccheck package: a mechanical guard for SPEC.md's structural invariant §V36
+(prevents the B96 duplicate-id and B97 headerless-fragment classes from recurring). Check(spec,
+workers) verifies (a) §T/§B/§R/§V id uniqueness within SPEC.md and cross-file against the
+SPEC-worker-*.md files, (b) every task row lives inside the single §T section, (c) §T is the last
+section (so the append-at-EOF habit stays safe). The id regexes require a digit after the class
+letter, so a worker's Tw-/Iw prose ids never false-positive. TestRealSpecClean gates the live
+SPEC.md; the checks are red-proofed on mutated fixtures (dup-id, fragment-outside-§T,
+section-after-§T, cross-file collision) with a clean-fixture vacuity floor.
+
+Crucially, speccheck is GREEN on the current tree, so -- unlike apicheck (the V19 doc-debt) and
+mdlint (.claude/SPEC-worker reds) -- it can be wired into the cichange always-run default (T893).
+It now runs on every non-empty CI selection, closing the B98 seam for the SPEC-structural class: a
+future duplicate id or misplaced task row fails CI immediately, where before the check would never
+have been selected on a code push. This is the first meta-test the T893 mechanism actually gates,
+proving the always-run path end-to-end. make spec-check.
+
 ### docs -- V19 public-API godoc for the nlp model architectures (T892 partial, 2026-07-20)
 
 Paid down the bulk of the §V19 documentation debt (apicheck undocumented 140 → 18). Documented

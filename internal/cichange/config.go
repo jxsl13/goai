@@ -44,17 +44,20 @@ func defaultRules() (ignore, ignoreRe, fullRe, pkgRe, alwaysRun []string) {
 	ignore = []string{"docs", ".claude"}     // + .claude/** (skills/workflows/memory — no Go, never affects build/tests; §T585 root-markdown covers LICENSE.md)
 	ignoreRe = []string{`^[^/]+\.(md|txt)$`} // root-level markdown/text (deeper ones can be embedded, §B50)
 	fullRe = []string{`^go\.sum$`, `^Makefile$`, `^\.github/`}
-	// The whole-tree meta-tests (internal/apicheck: the §V19 doc/example gate;
-	// internal/mdlint: every *.md) have NO import edge to what they check, so the
-	// reverse closure can never select them (§B98: they rot red while CI stays green
-	// on nlp/nn/… pushes). The -always-run mechanism forces configured packages into
-	// every non-empty selection to close that seam — but the DEFAULT is left empty
-	// until both gates are GREEN on the committed tree, because enabling them while
-	// red would fail CI on the FIRST push (a pure-docs diff still stays zero-runner,
-	// §C16 EXC2, so that is not the risk). Blockers: apicheck fails the §V19 doc-debt
-	// (T892); mdlint fails on .claude/memory + SPEC-worker-*.md (T889). Once both are
-	// green, enable with `alwaysRun = []string{"internal/apicheck", "internal/mdlint"}`
-	// here (or an -always-run flag in ci.yml). §T893.
+	// The whole-tree meta-tests walk SOURCE/markdown they have no import edge to, so
+	// the reverse closure can never select them (§B98: they rot red while CI stays
+	// green on nlp/nn/… pushes). The -always-run mechanism forces configured packages
+	// into every non-empty selection to close that seam (a pure-docs diff still stays
+	// zero-runner, §C16 EXC2). A package may only be listed here once it is GREEN on
+	// the committed tree, else it fails CI on the FIRST push.
+	//   - internal/speccheck (§V36 SPEC-integrity: id-uniqueness, §T-membership) is
+	//     GREEN today — SPEC.md is clean — so it is enabled and now gates every push
+	//     (§T886/§T893).
+	//   - internal/apicheck (§V19 doc/example gate) and internal/mdlint (every *.md)
+	//     stay OUT until they are green: apicheck fails the §V19 doc-debt (T892, now
+	//     140→18, blocked on the worker's llamagpu godoc); mdlint fails on
+	//     .claude/memory + SPEC-worker-*.md (T889). Add them here once green.
+	alwaysRun = []string{"internal/speccheck"}
 	return ignore, ignoreRe, fullRe, pkgRe, alwaysRun
 }
 
