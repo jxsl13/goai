@@ -76,6 +76,16 @@ func benchGemmF16vsMMQ(b *testing.B, m, k, n int) {
 func BenchmarkGemm_512x2048x2048(b *testing.B) { benchGemmF16vsMMQ(b, 512, 2048, 2048) }
 func BenchmarkGemm_512x2048x5632(b *testing.B) { benchGemmF16vsMMQ(b, 512, 2048, 5632) }
 
+// DECODE shapes (small M) — the untested regime. At M=512 (prefill) int8 lost 0.71x because the
+// GEMM is compute-bound and int8's dequant/quant overhead dominates. But decode GEMMs are
+// WEIGHT-BANDWIDTH-bound (M small, weights streamed once), and int8 weights are HALF the bytes — so
+// int8 could WIN at decode even though it lost at prefill. Tests that hypothesis at the two TinyLlama
+// projection shapes across decode batches.
+func BenchmarkGemm_64x2048x2048(b *testing.B)  { benchGemmF16vsMMQ(b, 64, 2048, 2048) }
+func BenchmarkGemm_64x2048x5632(b *testing.B)  { benchGemmF16vsMMQ(b, 64, 2048, 5632) }
+func BenchmarkGemm_128x2048x2048(b *testing.B) { benchGemmF16vsMMQ(b, 128, 2048, 2048) }
+func BenchmarkGemm_256x2048x2048(b *testing.B) { benchGemmF16vsMMQ(b, 256, 2048, 2048) }
+
 func benchInt8Gemm(b *testing.B, m, k, n int) {
 	if !cuda.Available() {
 		b.Skip("no gpu")
