@@ -96,7 +96,7 @@ func TestRenderDeterminism(t *testing.T) {
 	}
 }
 
-// TestRenderSync is the §V40 CI guard: when spec/ exists at the repo root,
+// TestRenderSync is the §V41 CI guard: when spec/ exists at the repo root,
 // the committed rendered views must match render(spec/) byte-for-byte.
 // Worker views are warn-only while workerRenderSyncHard is false (phase A).
 func TestRenderSync(t *testing.T) {

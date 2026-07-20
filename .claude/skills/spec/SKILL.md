@@ -77,7 +77,7 @@ Steps:
 7. The CLI re-renders + re-verifies per mutation; show the resulting diff.
 
 Rule: every bug gets a §B entry. Invariant optional but preferred.
-⊥ hand-edit SPEC.md ∨ spec/ table rows — the CLI is the writer (§V40).
+⊥ hand-edit SPEC.md ∨ spec/ table rows — the CLI is the writer (§V41).
 
 ## AMEND — targeted edit
 
@@ -98,7 +98,7 @@ Show diff. Never silently rewrite sections user did not name.
 - Numbering monotonic — ids come from the CLI (`next-id` / auto-allocation on add), never hand-numbered.
 - §T `cites` ! list §V/§I deps: `task add -cites V2,I.api "impl auth mw"`.
 - Every mutation goes through `go run ./internal/specgraph` — it re-renders the
-  views and re-verifies (V36+V39+V40) in one transaction; a violating write is
+  views and re-verifies (V36+V39+V41) in one transaction; a violating write is
   rejected with nothing written.
 
 ## NON-GOALS

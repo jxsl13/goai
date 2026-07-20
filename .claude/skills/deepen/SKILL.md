@@ -79,7 +79,7 @@ deepened beats five churned. Budget left → pick the next shallowest, fresh pas
 
 - ⊥ change behavior. Green before, green after. Pure structure.
 - ⊥ write spec files. Propose §I/§V/§T as `specgraph archinv|verif|task add`
-  invocations; spec executes them (§V40).
+  invocations; spec executes them (§V41).
 - ⊥ deepen more than one module per pass.
 - ⊥ run under deadline or mid-feature. This is the spare-budget pass.
 - ⊥ add abstraction for single-use code. A deep module earns its hiding; a speculative one is just more surface.

@@ -27,7 +27,7 @@ commands:
   dangling             references whose target does not exist (spec hygiene)
   help                 this text
 
-mutation commands (§V40 — spec/ is the source, SPEC.md a generated view;
+mutation commands (§V41 — spec/ is the source, SPEC.md a generated view;
 every mutation re-renders and fully re-verifies before writing anything):
   next-id T|B|R|V|G|C|I                  print the next free id of a class
   task add [flags] <text>                new §T row (-cites, -priority, -status, -id; -worker <n> books a Tw row)
@@ -146,7 +146,7 @@ func newMutFlagSet() (*flag.FlagSet, *mutFlags) {
 	return fs, fl
 }
 
-// dispatchMutation routes the §V40 mutation/render commands; returns false
+// dispatchMutation routes the §V41 mutation/render commands; returns false
 // when cmd is a query for the graph-backed switch in main. rest[0] is the
 // subcommand; flags follow it, positionals come last.
 func dispatchMutation(out *strings.Builder, root, cmd string, rest []string, check bool) (handled bool, rc int) {

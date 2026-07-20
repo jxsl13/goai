@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-// The spec/ hierarchy (§V40): one caveman-markdown file per section, and the
+// The spec/ hierarchy (§V41): one caveman-markdown file per section, and the
 // committed SPEC.md / SPEC-worker-*.md become deterministically RENDERED
 // views. Render = lexicographic filename sort + join with "\n" (each fragment
 // ends with exactly one \n, so the join separator recreates the single blank

@@ -67,7 +67,7 @@ Rule: never silently fix root-cause without considering backprop. §B is the mem
 ## WRITE POLICY
 
 - Only `task set-status`. ⊥ hand-edit SPEC.md (generated view, TestRenderSync red)
-  ∨ spec/ table rows directly (§V40).
+  ∨ spec/ table rows directly (§V41).
 - Other spec edits → invoke spec skill (which writes via the same CLI).
 - Commit after each §T completes. Message: `T<n>: <goal line>` + §V cites.
 

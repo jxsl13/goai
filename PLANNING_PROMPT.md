@@ -231,7 +231,7 @@ For details see `LOOP.md` → "Research rule".
 > Every objection with evidence (file:line in the spec or a §R source). Surviving
 > findings harden §V. End with an explicit go/no-go.
 
-After the go: the spec is frozen as the truth (source: `spec/` tree; `SPEC.md` = generated view, mutations via `internal/specgraph`, §V40). Only now does the build begin.
+After the go: the spec is frozen as the truth (source: `spec/` tree; `SPEC.md` = generated view, mutations via `internal/specgraph`, §V41). Only now does the build begin.
 
 ---
 

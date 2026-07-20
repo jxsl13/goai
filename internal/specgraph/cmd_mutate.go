@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// applyMutation is the single write path for every entity mutation (§V40):
+// applyMutation is the single write path for every entity mutation (§V41):
 // load the corpus, mutate IN MEMORY, run the full verify suite on the
 // would-be state, and only when clean write the touched fragments AND the
 // regenerated rendered views in one pass. A mutation can therefore never
@@ -16,7 +16,7 @@ import (
 // nothing at all (TestMutationVerifyGate).
 func applyMutation(w *strings.Builder, root string, dryRun bool, mutate func(c *Corpus) error) int {
 	if !HasSpecDir(root) {
-		fmt.Fprintln(w, "no spec/ hierarchy — run `specgraph split` first (mutations require the source tree, §V40)")
+		fmt.Fprintln(w, "no spec/ hierarchy — run `specgraph split` first (mutations require the source tree, §V41)")
 		return 1
 	}
 	c, err := LoadCorpus(root)

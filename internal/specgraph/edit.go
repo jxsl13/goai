@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-// Entity mutation layer (§V40): every id-bearing entry — §T/§B/§R rows,
+// Entity mutation layer (§V41): every id-bearing entry — §T/§B/§R rows,
 // §V/§G/§C/§I defs, worker §Tw bare-pipe rows — is created, edited and
 // removed through these helpers, never by hand. All functions operate on
 // the in-memory Corpus; applyMutation (cmd_mutate.go) is the only writer.

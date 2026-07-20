@@ -207,7 +207,7 @@ spec-graph:
 spec-graph-check:
 	$(CGO_OFF) $(GO) test ./internal/specgraph/
 
-## spec-render: regenerate the SPEC.md + SPEC-worker-*.md views from spec/ (§V40).
+## spec-render: regenerate the SPEC.md + SPEC-worker-*.md views from spec/ (§V41).
 spec-render:
 	$(CGO_OFF) $(GO) run ./internal/specgraph render
 

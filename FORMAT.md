@@ -37,7 +37,7 @@ Inside a table CELL, `|` is ALWAYS the column separator — a cell NEVER contain
 Numbering monotonic — ⊥ reuse V.n/B.n/T.n. If cutting word loses fact, keep it. Compression, not amputation.
 Tables clean: ∀ markdown table (here ∨ in docs/README) = valid GFM (header + delimiter row + consistent columns), mdlint-green. ⊥ ship a table missing its delimiter row ∨ with ragged ∨ mismatched columns.
 
-## HIERARCHY (§V40)
+## HIERARCHY (§V41)
 `spec/` = source of truth, one file per section; `SPEC.md` + `SPEC-worker-*.md` = GENERATED views — ⊥ hand-edit them (TestRenderSync red).
 
 | file | section |

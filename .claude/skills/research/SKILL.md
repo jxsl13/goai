@@ -67,7 +67,7 @@ questions you scoped — that is just burning the attention budget.
 ## BOUNDARIES
 
 - ⊥ write spec files. Hand ready-to-run invocations to spec:
-  `go run ./internal/specgraph research add -claim "…" -source "…" -conf high|med|low|ref` (§V40).
+  `go run ./internal/specgraph research add -claim "…" -source "…" -conf high|med|low|ref` (§V41).
 - ⊥ write a finding as fact without a source.
 - ⊥ dump raw pages into context or §R. Distill or it does not land.
 - ⊥ research what you can read in the repo. Local truth > web guess.

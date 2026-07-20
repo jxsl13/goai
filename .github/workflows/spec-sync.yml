@@ -1,4 +1,4 @@
-# spec-sync (§V40): SPEC.md + SPEC-worker-*.md are GENERATED views of the
+# spec-sync (§V41): SPEC.md + SPEC-worker-*.md are GENERATED views of the
 # spec/ source tree. This job ALWAYS re-renders the views from spec/ and
 # fails on any byte diff — with an explicit pointer to the editing utility.
 #
@@ -32,7 +32,7 @@ permissions:
 
 jobs:
   render-check:
-    name: render views from spec/ and diff (§V40)
+    name: render views from spec/ and diff (§V41)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -42,7 +42,7 @@ jobs:
       - name: regenerate SPEC.md + SPEC-worker-*.md from spec/ and fail on any diff
         run: |
           if ! CGO_ENABLED=0 go run ./internal/specgraph render -check; then
-            echo "::error title=spec out of sync (§V40)::SPEC.md / SPEC-worker-*.md are GENERATED views of spec/ — never edit them by hand."
+            echo "::error title=spec out of sync (§V41)::SPEC.md / SPEC-worker-*.md are GENERATED views of spec/ — never edit them by hand."
             echo "::error::Mutate entries ONLY via the utility: go run ./internal/specgraph  (task add | task set-status | task edit | bug add | verif add | research add | goal/constraint/archinv add/edit | entry rm)."
             echo "::error::Prose sections: edit the spec/ fragment directly, then regenerate with 'make spec-render'. Validate locally with 'make spec-verify'."
             exit 1

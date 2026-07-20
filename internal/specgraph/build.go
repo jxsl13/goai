@@ -18,7 +18,7 @@ func inputFiles(root string) []string {
 			files = append(files, rel)
 		}
 	}
-	// With the spec/ hierarchy (§V40) the fragments ARE the spec corpus and
+	// With the spec/ hierarchy (§V41) the fragments ARE the spec corpus and
 	// the rendered SPEC.md / SPEC-worker-*.md views are EXCLUDED — parsing
 	// both would define every id twice. Without spec/ (fixtures, worker
 	// machines before the tool pull) the legacy flat files stay canonical.

@@ -37,7 +37,7 @@ Ask three questions:
 - Is §T wrong — did we build the wrong thing? (rare but real)
 
 ### 3. PROPOSE
-Draft the spec change as ready-to-run CLI invocations (§V40 — the spec skill
+Draft the spec change as ready-to-run CLI invocations (§V41 — the spec skill
 executes them verbatim; ids auto-allocate):
 `go run ./internal/specgraph verif add -tag <TAG> "<rule>"` then
 `go run ./internal/specgraph bug add -cause "…" -fix "…" -guards V<n>`.

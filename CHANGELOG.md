@@ -18,7 +18,7 @@ shapes, §V39 dangling refs, render-sync) before writing fragments and views in 
 a violating mutation writes nothing. Hand-edits to a rendered view go CI-red via the new
 `TestRenderSync` (specgraph joined cichange's always-run set); worker views are warn-only until
 the worker machine picks up the tool (RUN9 protocol). All skills, LOOP.md, FORMAT.md (new
-HIERARCHY section) and the planning docs now route spec writes through the CLI. New §V40
+HIERARCHY section) and the planning docs now route spec writes through the CLI. New §V41
 invariant documents the whole contract; T919 itself was booked, started and closed through the
 new commands.
 

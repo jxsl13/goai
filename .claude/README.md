@@ -9,7 +9,7 @@ without depending on a machine's global `~/.claude`.
 | Path | Purpose |
 |------|---------|
 | `.claude/workflows/research-lite.js` | The schema-free 3-agent web-research workflow for §V16 tier-2 paper verification (never the built-in `/deep-research`; see `LOOP.md`). Invoke: `Workflow({scriptPath: ".claude/workflows/research-lite.js", args: "<one focused question>"})`. |
-| `.claude/skills/` | The full workflow-skill suite, so the whole build loop is portable: `spec` (mutate the spec/ tree via internal/specgraph — SPEC.md is a generated view, §V40), `build` (implement one §T task), `research` (external facts → §R), `review` (red-team before build), `grill` (sharpen a fuzzy idea), `deepen`, `check`, `backprop` (bug → §B), `find-skills`, and `caveman` (the SPEC.md encoding skill, slimmed — see below). |
+| `.claude/skills/` | The full workflow-skill suite, so the whole build loop is portable: `spec` (mutate the spec/ tree via internal/specgraph — SPEC.md is a generated view, §V41), `build` (implement one §T task), `research` (external facts → §R), `review` (red-team before build), `grill` (sharpen a fuzzy idea), `deepen`, `check`, `backprop` (bug → §B), `find-skills`, and `caveman` (the SPEC.md encoding skill, slimmed — see below). |
 | `FORMAT.md` (repo root) | The **authoritative** caveman encoding — grammar, symbol table, `§V`/`§T`/`§B` row shapes. The skills point here; nothing restates it. |
 | `LOOP.md` (repo root) | The autonomous per-iteration build-loop prompt the cron/loop references. |
 
