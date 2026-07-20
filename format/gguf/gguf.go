@@ -19,6 +19,9 @@ import (
 	"io"
 	"math"
 	"os"
+	"runtime"
+	"sync"
+	"sync/atomic"
 	"unsafe"
 
 	"github.com/jxsl13/goai/tensor"
@@ -341,12 +344,38 @@ func Read(r io.Reader) (*File, error) {
 		return nil, err
 	}
 	out := &File{Version: p.version, Metadata: p.meta, Tensors: make(map[string]*tensor.Tensor, len(p.infos))}
-	for _, ti := range p.infos {
-		t, err := decodeTensor(ti, p.data)
-		if err != nil {
-			return nil, err
+	// Tensor decode/dequant is CPU-bound and independent per tensor — each reads a disjoint,
+	// read-only region of p.data and writes its own fresh output tensor, sharing no mutable
+	// state — so decode them across a bounded worker pool. A real model carries hundreds of
+	// tensors and the host has many cores; the map is populated single-threaded afterward.
+	decoded := make([]*tensor.Tensor, len(p.infos))
+	errs := make([]error, len(p.infos))
+	workers := min(runtime.GOMAXPROCS(0), len(p.infos))
+	if workers > 1 {
+		var next atomic.Int64
+		var wg sync.WaitGroup
+		for range workers {
+			wg.Go(func() {
+				for {
+					i := int(next.Add(1)) - 1 // work-steal (tensors vary in size)
+					if i >= len(p.infos) {
+						return
+					}
+					decoded[i], errs[i] = decodeTensor(p.infos[i], p.data)
+				}
+			})
 		}
-		out.Tensors[ti.name] = t
+		wg.Wait()
+	} else {
+		for i := range p.infos {
+			decoded[i], errs[i] = decodeTensor(p.infos[i], p.data)
+		}
+	}
+	for i, ti := range p.infos {
+		if errs[i] != nil {
+			return nil, errs[i]
+		}
+		out.Tensors[ti.name] = decoded[i]
 	}
 	return out, nil
 }

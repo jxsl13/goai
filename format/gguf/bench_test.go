@@ -3,6 +3,7 @@ package gguf
 import (
 	"io"
 	"math"
+	"os"
 	"testing"
 
 	"github.com/jxsl13/goai/tensor"
@@ -161,6 +162,23 @@ func BenchmarkWriteF64Tensor(b *testing.B) {
 	b.ResetTimer()
 	for range b.N {
 		if err := Write(io.Discard, f); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// BenchmarkReadFileModel times a full ReadFile of a real quantized model if present
+// (models/tinyllama-1.1b-q4km.gguf, ~200 Q4_K tensors). Measures the parallel decode.
+func BenchmarkReadFileModel(b *testing.B) {
+	const path = "../../models/tinyllama-1.1b-q4km.gguf"
+	if _, err := os.Stat(path); err != nil {
+		b.Skip("model file not present")
+	}
+	if _, err := ReadFile(path); err != nil { // warm OS cache + validate
+		b.Fatal(err)
+	}
+	for b.Loop() {
+		if _, err := ReadFile(path); err != nil {
 			b.Fatal(err)
 		}
 	}
