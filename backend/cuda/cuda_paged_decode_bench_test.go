@@ -729,6 +729,17 @@ func BenchmarkPagedDecodeAttnGQA_b512_len512(b *testing.B) { benchPagedDecodeAtt
 func BenchmarkPagedDecodeSK4_b512_len512(b *testing.B)     { benchPagedDecodeSK(b, 512, 512, 4) }
 func BenchmarkPagedDecodeSK8_b512_len512(b *testing.B)     { benchPagedDecodeSK(b, 512, 512, 8) }
 
+// MODERATE-batch long-context: where split-K SHOULD pay if anywhere — 512 keys is a long serial
+// online-softmax chain and b64/b256 leave SM headroom (64/256 seqs × 4 kvh = 256/1024 base blocks
+// vs 28 SMs) for split-K's extra blocks to shorten the critical path. The b512 negatives were
+// SM-saturated. This is the honest test of the re-opened long-context FlashDecoding lever (vLLM
+// beats us 1.21× at ctx512/b64).
+func BenchmarkPagedDecodeAttnGQA_b64_len512(b *testing.B)  { benchPagedDecodeAttnGQA(b, 64, 512) }
+func BenchmarkPagedDecodeSK4_b64_len512(b *testing.B)      { benchPagedDecodeSK(b, 64, 512, 4) }
+func BenchmarkPagedDecodeSK8_b64_len512(b *testing.B)      { benchPagedDecodeSK(b, 64, 512, 8) }
+func BenchmarkPagedDecodeAttnGQA_b256_len512(b *testing.B) { benchPagedDecodeAttnGQA(b, 256, 512) }
+func BenchmarkPagedDecodeSK4_b256_len512(b *testing.B)     { benchPagedDecodeSK(b, 256, 512, 4) }
+
 // TestPagedDecodeWMMAFlashParity validates the tiled FlashDecoding WMMA kernel against the warp-GQA
 // reference across RAGGED lengths INCLUDING long ones (300, 512) the non-flash WMMA (seqLen<=128)
 // cannot handle. This is the correctness gate for the one remaining perf lever (long-context decode).
