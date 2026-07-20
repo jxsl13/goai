@@ -53,11 +53,17 @@ func defaultRules() (ignore, ignoreRe, fullRe, pkgRe, alwaysRun []string) {
 	//   - internal/speccheck (§V36 SPEC-integrity: id-uniqueness, §T-membership) is
 	//     GREEN today — SPEC.md is clean — so it is enabled and now gates every push
 	//     (§T886/§T893).
+	//   - internal/perfscan (T920 per-element hot-loop finder) is GREEN — its detector
+	//     tests + TestScanWholeModule (parses every first-party .go, asserts the scan
+	//     completes and still finds candidates) pass on the committed tree — so it is
+	//     enabled. It gates the TOOL, not the codebase: the scan stays ADVISORY (no
+	//     candidate-count assertion), so a legitimately cold per-element loop never
+	//     reddens CI, but a detector that panics/regresses on real source does.
 	//   - internal/apicheck (§V19 doc/example gate) and internal/mdlint (every *.md)
 	//     stay OUT until they are green: apicheck fails the §V19 doc-debt (T892, now
 	//     140→18, blocked on the worker's llamagpu godoc); mdlint fails on
 	//     .claude/memory + SPEC-worker-*.md (T889). Add them here once green.
-	alwaysRun = []string{"internal/speccheck"}
+	alwaysRun = []string{"internal/speccheck", "internal/perfscan"}
 	return ignore, ignoreRe, fullRe, pkgRe, alwaysRun
 }
 

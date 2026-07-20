@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 )
@@ -44,6 +45,55 @@ func TestImpactAlwaysRunSelectsMetaTests(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("nlp-only diff: %q is missing %q (the meta-test the closure cannot reach)", got, want)
 		}
+	}
+}
+
+// TestRunAlwaysRunSelectsMetaTests is the §B98 regression for the EXECUTION path: CI runs
+// tests via `cichange -run` (ci.yml), not Impact(), so the always-run set must be forced
+// into a non-empty RUN selection too — else the meta-tests are padded into the -impact
+// AFFECTED string but never actually execute on an nlp/nn push. Mirrors the Impact test.
+func TestRunAlwaysRunSelectsMetaTests(t *testing.T) {
+	dir, base, head := scratchRepo(t, modAlwaysRun, map[string]string{
+		"nlp/nlp.go": "package nlp\n\n// F does.\nfunc F() int { return 2 }\n",
+	})
+	ig, igRe, fRe, pRe, _ := defaultRules()
+	cfg, err := newConfig(dir, ig, igRe, fRe, pRe, []string{"internal/apicheck", "internal/mdlint"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	code := Run(cfg, dir, base, head, []string{"-count=1"}, &buf)
+	out := buf.String()
+	if code != 0 {
+		t.Fatalf("exit %d, output:\n%s", code, out)
+	}
+	for _, want := range []string{
+		"run \texample.com/m/internal/apicheck\t[always-run meta-test (§T893)]",
+		"run \texample.com/m/internal/mdlint\t[always-run meta-test (§T893)]",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("run-mode selection lacks %q (the seam that let meta-tests skip execution)\n---\n%s", want, out)
+		}
+	}
+}
+
+// TestRunAlwaysRunSkippedOnDocsOnly: the run path, like Impact, must NOT resurrect the
+// meta-tests on a docs-only diff — the None verdict returns before the always-run loop.
+func TestRunAlwaysRunSkippedOnDocsOnly(t *testing.T) {
+	dir, base, head := scratchRepo(t, modAlwaysRun, map[string]string{
+		"docs/guide.md": "changed\n",
+	})
+	ig, igRe, fRe, pRe, _ := defaultRules()
+	cfg, err := newConfig(dir, ig, igRe, fRe, pRe, []string{"internal/apicheck", "internal/mdlint"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if code := Run(cfg, dir, base, head, []string{"-count=1"}, &buf); code != 0 {
+		t.Fatalf("exit %d, output:\n%s", code, buf.String())
+	}
+	if out := buf.String(); strings.Contains(out, "always-run meta-test") {
+		t.Errorf("docs-only diff must not select any always-run meta-test\n---\n%s", out)
 	}
 }
 

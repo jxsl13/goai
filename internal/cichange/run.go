@@ -67,6 +67,22 @@ func Run(cfg *config, dir, base, head string, goTestArgs []string, w io.Writer) 
 			}
 			affected[p] = true
 		}
+		// §T893/§B98: force the always-run meta-tests into every NON-EMPTY selection —
+		// exactly as Impact() does. They walk SPEC.md / the whole source tree, surfaces
+		// the reverse import closure can never reach, so without this they rot red while
+		// CI stays green on nn/nlp/… pushes. Gated on a non-empty selection so a change
+		// whose files are all ignored (docs-only) stays zero-runner (§C16 EXC2), matching
+		// Impact()'s `len(affected)==0 → None` short-circuit which precedes its own padding.
+		if len(affected) > 0 {
+			for _, ar := range cfg.alwaysRun {
+				if g.pkgs[ar] {
+					if _, ok := reasons[ar]; !ok {
+						reasons[ar] = "selected: always-run meta-test (§T893)"
+					}
+					affected[ar] = true
+				}
+			}
+		}
 		// refine: test-edge selections (in closure but only via _test.go imports)
 		for p := range affected {
 			if !propagate[p] && !testOnly[p] && reasons[p] == "selected: depends on a changed package" {

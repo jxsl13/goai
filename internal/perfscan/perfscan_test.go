@@ -3,6 +3,8 @@ package main
 import (
 	"go/parser"
 	"go/token"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -208,6 +210,57 @@ func f(x *T) {
 	if n != 1 {
 		t.Fatalf("want 1 deduped per-element-dispatch, got %d", n)
 	}
+}
+
+// moduleRoot walks up from the test's cwd to the directory holding go.mod.
+func moduleRoot(t *testing.T) string {
+	t.Helper()
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatal("go.mod not found walking up from cwd")
+		}
+		dir = parent
+	}
+}
+
+// TestScanWholeModule is the always-run meta-test (§T893): it exercises the tool
+// over EVERY first-party .go file — a surface the package's import closure can
+// never reach — so a detector that panics or a parser regression on some real
+// construct fails CI on any push, not just one that touches internal/perfscan.
+// It is deliberately ADVISORY: it asserts the scan COMPLETES cleanly and finds a
+// non-empty candidate set (proving the detectors still fire on real code), NOT a
+// fixed count — candidate counts move as the tree is optimized (§C3), and pinning
+// them would turn an advisory tool into a brittle gate.
+func TestScanWholeModule(t *testing.T) {
+	root := moduleRoot(t)
+	files, err := goFiles([]string{root + "/..."}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) == 0 {
+		t.Fatal("no .go files discovered under module root")
+	}
+	fset := token.NewFileSet()
+	total := 0
+	for _, path := range files {
+		f, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			continue // a first-party parse error is not perfscan's concern (main skips too)
+		}
+		total += len(scanFile(fset, f)) // must not panic on any real file
+	}
+	if total == 0 {
+		t.Error("expected perfscan to surface candidates on the real tree; detectors may have silently stopped matching")
+	}
+	t.Logf("perfscan scanned %d files, %d candidates", len(files), total)
 }
 
 // The tool must not choke on comment/string occurrences of the trigger tokens —
