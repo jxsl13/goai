@@ -36,6 +36,16 @@ func BeamSearch(next NextLogits, start []int, width, maxNew, eos int, alpha floa
 		score  float64 // raw cumulative log-prob
 		newLen int
 	}
+	// cnd is a lightweight candidate backpointer — {parent beam index, next token} —
+	// scored and pruned WITHOUT materializing its token sequence; only the survivors
+	// that advance materialize toks (make+copy), instead of one full slice per vocab
+	// token per beam (the T942 diverse-beam fix, applied to plain beam search: T943).
+	type cnd struct {
+		parent int
+		tok    int
+		score  float64
+		newLen int
+	}
 	lenPenalty := func(n int) float64 {
 		if alpha == 0 {
 			return 1
@@ -47,14 +57,11 @@ func BeamSearch(next NextLogits, start []int, width, maxNew, eos int, alpha floa
 	var done []Beam
 
 	for len(live) > 0 {
-		cand := make([]node, 0, len(live)*8)
-		for _, h := range live {
+		cand := make([]cnd, 0, len(live)*8)
+		for p, h := range live {
 			ls := logSoftmaxRow(next(h.toks))
 			for tok, l := range ls {
-				nt := make([]int, len(h.toks)+1)
-				copy(nt, h.toks)
-				nt[len(h.toks)] = tok
-				cand = append(cand, node{nt, h.score + l, h.newLen + 1})
+				cand = append(cand, cnd{p, tok, h.score + l, h.newLen + 1})
 			}
 		}
 		// prune the frontier to the top `width` by RAW cumulative log-prob
@@ -71,15 +78,20 @@ func BeamSearch(next NextLogits, start []int, width, maxNew, eos int, alpha floa
 		// a 2-token EOS hypothesis for any model with a real eos id. Only a
 		// candidate that outranks the entire frontier may complete.
 		var nextLive []node
-		for _, h := range cand {
+		for _, c := range cand {
 			if len(nextLive) >= width {
 				break
 			}
-			complete := (eos >= 0 && h.toks[len(h.toks)-1] == eos) || h.newLen >= maxNew
+			// materialize this survivor's tokens only now — not for every discarded candidate
+			pt := live[c.parent].toks
+			nt := make([]int, len(pt)+1)
+			copy(nt, pt)
+			nt[len(pt)] = c.tok
+			complete := (eos >= 0 && c.tok == eos) || c.newLen >= maxNew
 			if complete {
-				done = append(done, Beam{h.toks, h.score / lenPenalty(h.newLen)})
+				done = append(done, Beam{nt, c.score / lenPenalty(c.newLen)})
 			} else {
-				nextLive = append(nextLive, h)
+				nextLive = append(nextLive, node{nt, c.score, c.newLen})
 			}
 		}
 		live = nextLive
