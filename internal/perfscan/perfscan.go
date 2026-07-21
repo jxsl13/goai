@@ -103,6 +103,7 @@ var classes = []struct{ letter, category string }{
 	{"I", "per-element-closure"},
 	{"J", "closure-comparator-sort"},
 	{"K", "scalar-transcendental-vectorizable"},
+	{"L", "transcendental-wrapper-in-loop"},
 }
 
 // resolveClass maps a user token (a letter code OR a category string,
@@ -359,12 +360,17 @@ func ignoreDirectives(fset *token.FileSet, f *ast.File) map[int]map[string]bool 
 // (one per enclosing loop per category).
 func scanFile(fset *token.FileSet, f *ast.File) []finding {
 	var out []finding
+	// File-scoped fact: the package-local elementwise funcs that WRAP a libm
+	// transcendental (softplus, mish, swish, …). Class K only sees a DIRECT math.X
+	// in the loop; these hide it one call deep, so a hot per-element loop over them
+	// reads as scalar-clean. Class L flags calls to them inside loops.
+	wrappers := transcendentalWrappers(f)
 	for _, decl := range f.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
 		if !ok || fn.Body == nil {
 			continue
 		}
-		out = append(out, scanFunc(fset, fn)...)
+		out = append(out, scanFunc(fset, fn, wrappers)...)
 	}
 	// drop sites silenced by an inline //perfscan:ignore directive (per class).
 	ign := ignoreDirectives(fset, f)
@@ -381,7 +387,56 @@ func scanFile(fset *token.FileSet, f *ast.File) []finding {
 // scanFunc analyzes a single function body. Fast-path presence (flatF64/flatF32)
 // and Numel-derived loop bounds are function-scoped facts, so they are gathered up
 // front; then each trigger call is attributed to its nearest enclosing loop.
-func scanFunc(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+// transcendentalWrappers collects package-local funcs that are scalar float→float
+// AND call a libm transcendental in their body — the elementwise activations
+// (softplus, mish, swish, erf-based …) a hot loop may invoke per element. Because
+// the math.X hides one call deep, class K's direct-call detector never sees it.
+func transcendentalWrappers(f *ast.File) map[string]bool {
+	w := map[string]bool{}
+	for _, decl := range f.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Body == nil || fn.Recv != nil || !isScalarFloatFunc(fn.Type) {
+			continue
+		}
+		calls := false
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			if _, ok := pkgFuncCall(call.Fun, "math", scalarTranscendentals); ok {
+				calls = true
+				return false
+			}
+			return true
+		})
+		if calls {
+			w[fn.Name.Name] = true
+		}
+	}
+	return w
+}
+
+// isScalarFloatFunc reports whether every parameter and the single result are a
+// bare float32/float64 — an elementwise-kernel signature, safe to vectorize over a
+// slice. Rejects funcs taking slices/structs (already batched or not elementwise).
+func isScalarFloatFunc(t *ast.FuncType) bool {
+	isFloat := func(e ast.Expr) bool {
+		id, ok := e.(*ast.Ident)
+		return ok && (id.Name == "float32" || id.Name == "float64")
+	}
+	if t.Params == nil || len(t.Params.List) == 0 {
+		return false
+	}
+	for _, fld := range t.Params.List {
+		if !isFloat(fld.Type) {
+			return false
+		}
+	}
+	return t.Results != nil && len(t.Results.List) == 1 && isFloat(t.Results.List[0].Type)
+}
+
+func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers map[string]bool) []finding {
 	// Pass 1: function-scoped facts + a child→parent map for ancestor walks.
 	hasFlat := false
 	hasBuilder := false // declares a strings.Builder / bytes.Buffer
@@ -562,6 +617,21 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 					" (keep a bit-identical scalar tail). FIRST verify the op is NOT under a bit-exact"+
 					" CPU==Ref invariant (some f64 ops are locked to the scalar reference). T667: F64 SiLU"+
 					" vexp = 1.52× Llama prefill.", tname),
+			})
+		}
+		// L: a loop calls a package-local elementwise helper that WRAPS a libm
+		// transcendental (softplus = x+log1p(exp(-x)), mish, swish, …). K sees only a
+		// DIRECT math.X, so these hide the scalar cost one call deep and a per-element
+		// loop over them reads as clean. Candidate for a SIMD kernel / batched op.
+		if wname := calleeName(call.Fun); wrappers[wname] {
+			out = append(out, finding{
+				pos:      fset.Position(loop.Pos()),
+				category: "transcendental-wrapper-in-loop",
+				msg: fmt.Sprintf("%s(…) wraps a scalar libm transcendental and runs per element in a loop —"+
+					" the same class as a raw math.Exp/Log (K), just one call deep. Candidate for a"+
+					" vectorized SIMD kernel or a batched tensor op (compute the whole slice 4/8-wide,"+
+					" keep a bit-identical scalar tail). Verify hotness + that the op is not under a"+
+					" bit-exact CPU==Ref invariant. F64 OpSoftplus vsoftplus = 1.62× Mamba prefill.", wname),
 			})
 		}
 		return true
@@ -772,9 +842,10 @@ func main() {
 		return
 	}
 	fmt.Printf("\nperfscan: %d candidate(s) — dispatch=%d alloc-in-loop=%d batch-single-elt=%d"+
-		" per-elem-closure=%d closure-sort=%d scalar-transcendental=%d\n",
+		" per-elem-closure=%d closure-sort=%d scalar-transcendental=%d transcendental-wrapper=%d\n",
 		len(all), byCat["per-element-dispatch"], byCat["alloc-in-loop"], byCat["batch-single-elt"],
-		byCat["per-element-closure"], byCat["closure-comparator-sort"], byCat["scalar-transcendental-vectorizable"])
+		byCat["per-element-closure"], byCat["closure-comparator-sort"], byCat["scalar-transcendental-vectorizable"],
+		byCat["transcendental-wrapper-in-loop"])
 	fmt.Println("NOTE: candidates, not confirmed wins — measure hotness (§C3) + prove bit-identity (§V22) before shipping.")
 	if *strict {
 		os.Exit(1)

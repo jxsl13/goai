@@ -11,9 +11,10 @@ scanner (extend a callee map or add a detector in `perfscan.go`, with a positive
 + negative fixture test in `perfscan_test.go`) — SPEC §C29.
 
 This is the SINGLE perfscan for the repo (`internal/perfscan`, run via
-`make perfscan` / `go run ./internal/perfscan`); the code labels detectors A–K.
+`make perfscan` / `go run ./internal/perfscan`); the code labels detectors A–L.
 Sections P1/P2 below are the static detectors **I** and **J**; P3/P4 are
-profile/benchmark heuristics (no static detector); K is the newest static one.
+profile/benchmark heuristics (no static detector); K and L (below) are the newest
+static ones — L generalizes K to transcendentals hidden one call deep in a helper.
 
 ## Suppressing findings (class-granular, staticcheck-style)
 
@@ -136,6 +137,61 @@ family that could ship.
 AVX2 f64 exp (`expF64x4`, 1 ulp) made it **1.52× Llama prefill** (1.89× kernel),
 goldens green (T667). The sibling exp/log/tanh/sigmoid/gelu f64 kernels are
 flagged too but are exact-locked.
+
+---
+
+## L — a loop calls a local helper that WRAPS a transcendental  *(scanner: static)*
+
+**Smell.** A hot per-element loop calls a package-local elementwise helper
+(`softplus`, `mish`, `swish`, `silu`, a `gaussianQuantile`, …) whose body hides a
+scalar libm transcendental one call deep. Class K only sees a **direct** `math.X`
+in the loop, so a loop over such a wrapper reads as scalar-clean and slips past it.
+The detector collects the file's scalar-`float→float` funcs that call a
+transcendental, then flags any loop that calls one.
+
+**Fix.** Same as K: give the op a vectorized SIMD kernel (compute the whole slice
+4/8-wide on a SIMD transcendental primitive, bit-identical scalar tail), or route
+it through a **batched tensor op** that already has a vectorized CPU kernel instead
+of a scalar helper per element. Verify hotness (profile — a wrapper in a loop is
+not automatically hot) and the CPU==Ref invariant first, exactly as K.
+
+**Win.** `OpSoftplus` (Mamba/Jamba Δ) had **no CPU kernel** and fell through to the
+scalar single-threaded ref backend — 32% of `math.archExp` in Mamba f64 prefill. A
+4-wide AVX2 f64 softplus kernel (`vsoftplusF64` = `expF64x4` + the Cephes double-log
+rational, ~1 ulp) made it **1.62× Mamba prefill**, goldens green (PR #249). The
+detector still flags the Mamba2 **mixer** `softplus`/`silu` (`mamba2.go`) — a
+scalar per-`(t,h)` loop that the kernel does not cover — as the leftover sub-win.
+
+---
+
+## P5 — a transcendental op registered ONLY on the ref backend  *(heuristic: registration diff)*
+
+**Smell.** A tensor `Op` whose only kernel is on the **ref** backend (a scalar
+`math.Exp/Log/Tanh/…` loop) with **no CPU kernel** — so on the CPU backend it falls
+through to that scalar, single-threaded reference. This is the shape both `OpSoftplus`
+(Mamba/Jamba Δ, 1.62× — PR #249) and `OpSoftCap` (Gemma-2 `cap·tanh(x/cap)`, 6.1× at
+attention-score shape) had. Class K/L never see it: the transcendental lives in
+`backend/ref`, not in a hot first-party loop with a vector sibling.
+
+**Finder (generic).** Diff the ref-registered ops against the CPU-registered ops:
+
+```sh
+grep -rhoE 'std\.add\(backend\.(Op[A-Za-z0-9]+)' backend/ref/*.go   | grep -oE 'Op[A-Za-z0-9]+' | sort -u > /tmp/ref_ops
+grep -rhoE '(reg|std\.add)\(backend\.(Op[A-Za-z0-9]+)' backend/cpu/*.go | grep -oE 'Op[A-Za-z0-9]+' | sort -u > /tmp/cpu_ops
+comm -23 /tmp/ref_ops /tmp/cpu_ops   # ops with NO CPU kernel — the candidates
+```
+
+Then keep the ones whose ref kernel is elementwise + transcendental (a SIMD kernel
+pays) and that sit on a hot path. Live candidates from this diff (2026-07-21):
+`OpConv1D` (Mamba causal conv), `OpSSM`/`OpWKV` (recurrent scans — sequential, harder),
+`OpZLoss` (MoE router logsumexp), the RL preference losses (`OpDPO`/`OpKTO`/… — niche).
+
+**Fix.** Add a CPU kernel: vectorize the transcendental on a SIMD primitive
+(`expF64x4`, `vtanhF32`, …) with a bit-identical scalar tail, `parallel()` the outer
+range, register `std.add(OpX, F64, kernelCPU)`. Verify the op is not under the
+CPU==Ref exact invariant first, and prove the model golden (measure hotness — a
+ref-only op is not automatically hot). *(Could graduate to a static detector once
+perfscan grows a module-level cross-package registration pass.)*
 
 ---
 
