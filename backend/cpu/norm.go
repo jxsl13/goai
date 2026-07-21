@@ -40,38 +40,10 @@ type normFloat interface{ ~float32 | ~float64 }
 // sequential order and only []float32 inputs take these.
 
 // sumF32 returns Σx accumulated in f64, 4-way unrolled.
-func sumF32(x []float32) float64 {
-	var s0, s1, s2, s3 float64
-	i := 0
-	for ; i+3 < len(x); i += 4 {
-		s0 += float64(x[i])
-		s1 += float64(x[i+1])
-		s2 += float64(x[i+2])
-		s3 += float64(x[i+3])
-	}
-	for ; i < len(x); i++ {
-		s0 += float64(x[i])
-	}
-	return (s0 + s1) + (s2 + s3)
-}
-
-// sumSqF32 returns Σx² accumulated in f64, 4-way unrolled.
-func sumSqF32(x []float32) float64 {
-	var s0, s1, s2, s3 float64
-	i := 0
-	for ; i+3 < len(x); i += 4 {
-		v0, v1, v2, v3 := float64(x[i]), float64(x[i+1]), float64(x[i+2]), float64(x[i+3])
-		s0 += v0 * v0
-		s1 += v1 * v1
-		s2 += v2 * v2
-		s3 += v3 * v3
-	}
-	for ; i < len(x); i++ {
-		v := float64(x[i])
-		s0 += v * v
-	}
-	return (s0 + s1) + (s2 + s3)
-}
+// sumF32 (Σx), sumSqF32 (Σx²) and varSumF32 (Σ(x−μ)²) — the f32 norm-forward reductions, all f64
+// accumulated — live in the build-tagged norm_avx_*.go files: AVX2 8-wide with f64-widened
+// accumulation on the amd64 SIMD build (norm_avx_amd64.go), scalar 4-way-unrolled elsewhere
+// (norm_avx_other.go). Both accumulate in f64 so the result stays within the §V9 norm parity budget.
 
 // dot3F32 returns Σ (u·g)·x accumulated in f64, 4-way unrolled (the rmsnorm
 // backward's per-row Σ aₖxₖ with a=g⊙γ; same (u·g)·x grouping as ref).
@@ -86,27 +58,6 @@ func dot3F32(u, g, x []float32) float64 {
 	}
 	for ; i < len(u) && i < len(g) && i < len(x); i++ {
 		s0 += float64(u[i]) * float64(g[i]) * float64(x[i])
-	}
-	return (s0 + s1) + (s2 + s3)
-}
-
-// varSumF32 returns Σ(x−mu)² accumulated in f64, 4-way unrolled.
-func varSumF32(x []float32, mu float64) float64 {
-	var s0, s1, s2, s3 float64
-	i := 0
-	for ; i+3 < len(x); i += 4 {
-		d0 := float64(x[i]) - mu
-		d1 := float64(x[i+1]) - mu
-		d2 := float64(x[i+2]) - mu
-		d3 := float64(x[i+3]) - mu
-		s0 += d0 * d0
-		s1 += d1 * d1
-		s2 += d2 * d2
-		s3 += d3 * d3
-	}
-	for ; i < len(x); i++ {
-		d := float64(x[i]) - mu
-		s0 += d * d
 	}
 	return (s0 + s1) + (s2 + s3)
 }
@@ -189,6 +140,12 @@ func rmsNormKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.A
 func rmsNormFwd[T normFloat](x, gamma, out []T, rows, d int, eps float64) {
 	x32, isF32 := any(x).([]float32) // boxed ONCE per kernel call, not per row
 	gm := gamma[:d:d]
+	fast := isF32 && normF32Fast // amd64-SIMD: AVX2 FMA normalize pass (see layerNormFwd)
+	var g32, o32 []float32
+	if fast {
+		g32, _ = any(gamma).([]float32)
+		o32, _ = any(out).([]float32)
+	}
 	parallelWork(rows, 3*d, func(lo, hi int) {
 		for r := lo; r < hi; r++ {
 			base := r * d
@@ -204,6 +161,10 @@ func rmsNormFwd[T normFloat](x, gamma, out []T, rows, d int, eps float64) {
 				}
 			}
 			inv := 1 / math.Sqrt(ms/float64(d)+eps)
+			if fast {
+				rmsNormNormalizeF32(x32[base:base+d], g32, o32[base:base+d], float32(inv))
+				continue
+			}
 			for j, g := range gm {
 				or[j] = T(float64(xr[j]) * inv * float64(g))
 			}
@@ -265,6 +226,16 @@ func layerNormKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend
 func layerNormFwd[T normFloat](x, gamma, beta, out []T, rows, d int, eps float64) {
 	x32, isF32 := any(x).([]float32)
 	gm, bt := gamma[:d:d], beta[:d:d]
+	// amd64-SIMD f32 fast path: vectorize the normalize pass (the profiled ~45% scalar-f64 hotspot)
+	// through AVX2 FMA while the mean/variance reductions stay f64. Rounds mean/inv to f32 once per
+	// row (ADR-0021 tolerant f32 parity, norm_test rtol 5e-5); other builds keep the scalar loop.
+	fast := isF32 && normF32Fast
+	var g32, b32, o32 []float32
+	if fast {
+		g32, _ = any(gamma).([]float32)
+		b32, _ = any(beta).([]float32)
+		o32, _ = any(out).([]float32)
+	}
 	parallelWork(rows, 4*d, func(lo, hi int) {
 		for r := lo; r < hi; r++ {
 			base := r * d
@@ -286,6 +257,10 @@ func layerNormFwd[T normFloat](x, gamma, beta, out []T, rows, d int, eps float64
 				}
 			}
 			inv := 1 / math.Sqrt(varsum/float64(d)+eps)
+			if fast {
+				layerNormNormalizeF32(x32[base:base+d], g32, b32, o32[base:base+d], float32(mean), float32(inv))
+				continue
+			}
 			for j, g := range gm {
 				or[j] = T((float64(xr[j])-mean)*inv*float64(g) + float64(bt[j]))
 			}
