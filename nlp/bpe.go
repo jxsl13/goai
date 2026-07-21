@@ -23,20 +23,33 @@ type Tokenizer struct {
 	// initial merge pass looks up every adjacent BYTE pair; a direct array index skips the string
 	// hash + compare that dominated the profile (mapaccess2_faststr). len 65536 or nil (map fallback).
 	pairRank []int
+	// byteRank[b] = id of the single-byte token b, or math.MaxInt. Lets the merge track each part's
+	// token id (initial = single byte; after a merge = the merge rank) so the final emit reads
+	// parts[i].id instead of re-hashing ranks[piece[a:b]] per token (mapaccess1_faststr). len 256 or nil.
+	byteRank []int
 }
 
-// buildPairRank fills the two-byte fast-lookup table from ranks (call once after ranks is populated).
+// buildPairRank fills the two-byte AND single-byte fast-lookup tables from ranks (call once after
+// ranks is populated). Both are built together so t.pairRank != nil ⇔ t.byteRank != nil.
 func (t *Tokenizer) buildPairRank() {
 	pr := make([]int, 65536)
 	for i := range pr {
 		pr[i] = math.MaxInt
 	}
+	// byteRank is ZERO-initialized (not maxInt): the id it feeds replaces the old
+	// mapaccess1 final emit t.ranks[string(1 byte)], which yields 0 on a miss — so a
+	// byte with no single-byte token must read 0 here too, keeping the emit bit-identical.
+	br := make([]int, 256)
 	for tok, id := range t.ranks {
-		if len(tok) == 2 {
+		switch len(tok) {
+		case 1:
+			br[tok[0]] = id
+		case 2:
 			pr[int(tok[0])<<8|int(tok[1])] = id
 		}
 	}
 	t.pairRank = pr
+	t.byteRank = br
 }
 
 // LoadGPT2 reads a tiktoken-exported rank file (base64(bytes) rank per line).
@@ -51,8 +64,11 @@ func LoadGPT2(path string) (*Tokenizer, error) {
 
 // bpePart is one token boundary during the merge: start = its byte offset into
 // the contiguous piece; rank = the merge rank of the pair (this token, the next),
-// i.e. ranks[piece[start : parts[i+1].next.start]] — or maxInt when not mergeable.
-type bpePart struct{ start, rank int }
+// i.e. ranks[piece[start : parts[i+1].next.start]] — or maxInt when not mergeable;
+// id = this token's own id = ranks[piece[start : next.start]], tracked as the piece
+// grows (initial single byte, then each merge's rank) so the final emit skips a map
+// lookup per token. id is only maintained when the fast tables are built (byteRank != nil).
+type bpePart struct{ start, rank, id int }
 
 // bpeMerge applies byte-pair merging to a single piece's bytes, returning token
 // ids. Repeatedly merges the adjacent pair whose concatenation has the lowest
@@ -93,19 +109,30 @@ func (t *Tokenizer) bpeMergeInto(piece []byte, out []int, parts []bpePart) ([]in
 	}
 	minRank, minI := math.MaxInt, -1
 	for i := 0; i < len(piece)-1; i++ {
-		r := math.MaxInt
+		r, id := math.MaxInt, 0
 		if t.pairRank != nil {
 			r = t.pairRank[int(piece[i])<<8|int(piece[i+1])] // direct index, no string hash
-		} else if v, ok := t.ranks[string(piece[i:i+2])]; ok {
-			r = v
+			id = t.byteRank[piece[i]]                        // this token's id (a single byte for now)
+		} else {
+			if v, ok := t.ranks[string(piece[i:i+2])]; ok {
+				r = v
+			}
+			id = t.ranks[string(piece[i:i+1])] // mapaccess1: 0 on miss, matching the old emit
 		}
-		parts[i] = bpePart{i, r}
+		parts[i] = bpePart{i, r, id}
 		if r < minRank { // leftmost lowest rank (strict < ⇒ first wins), as before
 			minRank, minI = r, i
 		}
 	}
-	parts[len(piece)-1] = bpePart{len(piece) - 1, math.MaxInt}
-	parts[len(piece)] = bpePart{len(piece), math.MaxInt}
+	// last real token: no right neighbor (rank maxInt); its id is its single byte.
+	lastID := 0
+	if t.byteRank != nil {
+		lastID = t.byteRank[piece[len(piece)-1]]
+	} else {
+		lastID = t.ranks[string(piece[len(piece)-1:])]
+	}
+	parts[len(piece)-1] = bpePart{len(piece) - 1, math.MaxInt, lastID}
+	parts[len(piece)] = bpePart{len(piece), math.MaxInt, 0}
 
 	// getRank(i) = rank of the pair centered on parts[i] AFTER a merge there =
 	// ranks[piece[parts[i].start : parts[i+3].start]] (i+3 because the merge that
@@ -121,6 +148,7 @@ func (t *Tokenizer) bpeMergeInto(piece []byte, out []int, parts []bpePart) ([]in
 
 	for minRank != math.MaxInt {
 		i := minI
+		parts[i].id = minRank // the merged token's own id = ranks[merged bytes] = this merge's rank
 		if i > 0 {
 			parts[i-1].rank = getRank(i - 1)
 		}
@@ -136,7 +164,7 @@ func (t *Tokenizer) bpeMergeInto(piece []byte, out []int, parts []bpePart) ([]in
 	}
 
 	for i := 0; i < len(parts)-1; i++ {
-		out = append(out, t.ranks[string(piece[parts[i].start:parts[i+1].start])])
+		out = append(out, parts[i].id) // tracked = ranks[piece[parts[i].start:parts[i+1].start]], no re-hash
 	}
 	return out, parts
 }
