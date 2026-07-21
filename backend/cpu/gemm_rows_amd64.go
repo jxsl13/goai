@@ -10,19 +10,34 @@ package cpu
 // f32-native scalar rows (still tolerance-grade, never bit-exactness-gated —
 // the f32NativeKernels const only routes here on tolerant builds).
 func gemmF32Rows(A, B, C []float32, loRow, hiRow, k, n int) {
-	if !gemmHasFMA {
-		gemmF32RowsPortable(A, B, C, loRow, hiRow, k, n)
-		return
-	}
-	gemmF32BandDirect(A, B, C, loRow, hiRow, k, n)
+	gemmF32RowsCols(A, B, C, loRow, hiRow, k, n, 0, n)
 }
 
 // gemmF32RowsCols is gemmF32Rows restricted to columns [jLo,jHi) — the causal
-// attention bands use it to skip the fully-masked column span.
+// attention bands use it to skip the fully-masked column span. jLo is 16-aligned.
+// The full 6×16 sub-tiles run through the hand-asm microkernel (SERIAL — the caller
+// owns the parallelism); the m%6 / n%16 edges take the archsimd band kernel.
 func gemmF32RowsCols(A, B, C []float32, loRow, hiRow, k, n, jLo, jHi int) {
 	if !gemmHasFMA {
 		gemmF32RowsColsPortable(A, B, C, loRow, hiRow, k, n, jLo, jHi)
 		return
 	}
-	gemmF32BandDirectCols(A, B, C, loRow, hiRow, k, n, jLo, jHi)
+	if !gemmAsmF32Ok(hiRow-loRow, jHi-jLo) {
+		gemmF32BandDirectCols(A, B, C, loRow, hiRow, k, n, jLo, jHi)
+		return
+	}
+	m6end := loRow + (hiRow - loRow) - (hiRow-loRow)%6
+	n16end := jLo + (jHi-jLo)&^15
+	for i := loRow; i < m6end; i += 6 {
+		aBase := &A[i*k]
+		for j := jLo; j < n16end; j += 16 {
+			gemmF32Tile6x16AVX2(aBase, &B[j], &C[i*n+j], k, k, n, n)
+		}
+	}
+	if n16end < jHi { // right column strip, all rows
+		gemmF32BandDirectCols(A, B, C, loRow, hiRow, k, n, n16end, jHi)
+	}
+	if m6end < hiRow && n16end > jLo { // bottom row strip, left cols
+		gemmF32BandDirectCols(A, B, C, m6end, hiRow, k, n, jLo, n16end)
+	}
 }
