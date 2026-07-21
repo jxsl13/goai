@@ -125,21 +125,27 @@ func (t *BPETokenizer) pairRankAt(mapped string, parts []ggufPart, k int) int {
 	return math.MaxInt
 }
 
-// bpe merges one pre-token's byte-mapped string into symbols by rank, returning ids.
+// bpeInto merges one pre-token's byte-mapped string into symbols by rank, APPENDING the
+// piece's token ids to out and returning the grown out plus the parts scratch for reuse on
+// the next piece (caller-owned scratch, mirrors Tokenizer.bpeMergeInto, §T939). Encode
+// threads one out (the whole result) and one parts scratch across every piece, so a text of
+// N pieces does O(1) heap allocations for the merge instead of O(N) — the per-piece parts
+// slice + the returned ids slice were the residual ~68k allocs/op after T938's byte-offset
+// merge. Numerically identical to the old bpe — same merge order, same boundaries.
 //
-// Byte-OFFSET merge (mirrors Tokenizer.bpeMergeInto, §T938): parts are boundary
-// offsets into the immutable mapped string, never per-rune substrings, and a merge
-// DROPS a boundary rather than concatenating two strings. Every pair rank comes from
-// substrings of mapped (pairRankAt), so the merge does ZERO string allocations — the
-// old scan allocated a string(r) per rune plus a concat per merge, the GC-dominated
-// 220k allocs/op of the profile. Merge order — repeatedly the LEFTMOST lowest-rank
-// adjacent pair — and the final token boundaries are bit-identical to the old scan
-// (§V15/§V16), so token ids are unchanged for every input.
-func (t *BPETokenizer) bpe(mapped string) []int {
+// Byte-OFFSET merge (§T938): parts are boundary offsets into the immutable mapped string,
+// never per-rune substrings, and a merge DROPS a boundary rather than concatenating two
+// strings. Every pair rank comes from substrings of mapped (pairRankAt), so the merge does
+// ZERO string allocations. Merge order — repeatedly the LEFTMOST lowest-rank adjacent pair —
+// and the final token boundaries are bit-identical to the old scan (§V15/§V16), so token ids
+// are unchanged for every input. mapped is NOT retained: only map-key lookups on mapped[a:b]
+// substrings, which never retain the key — so the caller may safely reuse its mapped builder.
+func (t *BPETokenizer) bpeInto(mapped string, out []int, parts []ggufPart) ([]int, []ggufPart) {
 	// parts[k].start = byte offset of part k; the trailing sentinel {len(mapped)}
 	// makes part k span mapped[parts[k].start : parts[k+1].start]. Initial parts are
-	// per-RUNE — range mapped yields each rune's leading byte offset.
-	parts := make([]ggufPart, 0, len(mapped)+1)
+	// per-RUNE — range mapped yields each rune's leading byte offset. parts[:0] reuses the
+	// caller's backing array (grows only when a piece is longer than any previously seen).
+	parts = parts[:0]
 	for i := range mapped {
 		parts = append(parts, ggufPart{start: i, rank: math.MaxInt})
 	}
@@ -170,27 +176,36 @@ func (t *BPETokenizer) bpe(mapped string) []int {
 		}
 	}
 
-	ids := make([]int, 0, len(parts)-1)
 	for k := 0; k < len(parts)-1; k++ {
 		if id, ok := t.vocab[mapped[parts[k].start:parts[k+1].start]]; ok {
-			ids = append(ids, id)
+			out = append(out, id)
 		} else if t.hasUnk {
-			ids = append(ids, t.unkID)
+			out = append(out, t.unkID)
 		}
 	}
-	return ids
+	return out, parts
 }
 
 // Encode turns text into token ids: GPT-2 pre-tokenization → byte→Unicode mapping →
 // rank-ordered BPE merges → vocab lookup.
+//
+// It ranges gpt2SplitSeq (an iterator, no pieces []string) and threads one ids (the whole
+// result) + one parts merge scratch across every piece, so the per-piece heap traffic is just
+// the mapped string (§T939, mirrors Tokenizer.Encode). The mapped builder is declared once and
+// Reset per piece: Reset NILs its buffer so each piece still allocates one mapped string, but
+// bpeInto never retains it (map-key lookups on mapped[a:b] substrings only), so the reuse is
+// safe. mapped stays a string (not []byte) to keep the [2]string{mapped[a:b],mapped[b:c]} merge
+// key alloc-free — its substrings share the backing array, so the pair lookup allocates nothing.
 func (t *BPETokenizer) Encode(text string) []int {
 	var ids []int
-	for _, piece := range gpt2Split(text) {
-		var mapped strings.Builder
+	var parts []ggufPart       // merge scratch, reused across pieces
+	var mapped strings.Builder // byte→Unicode buffer, reused (Reset) across pieces
+	for piece := range gpt2SplitSeq(text) {
+		mapped.Reset()
 		for i := 0; i < len(piece); i++ {
 			mapped.WriteRune(t.b2u[piece[i]]) // map each raw byte
 		}
-		ids = append(ids, t.bpe(mapped.String())...)
+		ids, parts = t.bpeInto(mapped.String(), ids, parts)
 	}
 	return ids
 }
