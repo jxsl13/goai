@@ -41,11 +41,11 @@ jobs:
           go-version-file: go.mod
       - name: regenerate SPEC.md + SPEC-worker-*.md from spec/ and fail on any diff
         run: |
-          if ! CGO_ENABLED=0 go run ./internal/docgraph render -check; then
+          if ! CGO_ENABLED=0 go run ./internal/docgraph spec render -check; then
             echo "::error title=spec out of sync (§V41)::SPEC.md / SPEC-worker-*.md are GENERATED views of spec/ — never edit them by hand."
-            echo "::error::Mutate entries ONLY via the utility: go run ./internal/docgraph  (task add | task set-status | task edit | bug add | verif add | research add | goal/constraint/archinv add/edit | entry rm)."
+            echo "::error::Mutate entries ONLY via the utility: go run ./internal/docgraph spec (task add | task set-status | task edit | bug add | verif add | research add | goal/constraint/archinv add/edit | entry rm)."
             echo "::error::Prose sections: edit the spec/ fragment directly, then regenerate with 'make spec-render'. Validate locally with 'make spec-verify'."
             exit 1
           fi
       - name: full spec verify (V36 ids, table shapes, V39 dangling strong refs)
-        run: CGO_ENABLED=0 go run ./internal/docgraph verify
+        run: CGO_ENABLED=0 go run ./internal/docgraph spec verify

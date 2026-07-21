@@ -56,6 +56,6 @@ Tables clean: ∀ markdown table (here ∨ in docs/README) = valid GFM (header +
 | spec/70-tasks.md | §T (sorts LAST → §T last, §V36) |
 | spec/worker/`<host>`/*.md | §RUN/§MODELS/§H/§Iw/§CPU/§GPU/§GAP/§PERF/§Tw/§GOAL/§NEXT |
 
-render = lexicographic concat, one blank line between sections, byte-deterministic; `specgraph split` = proven inverse.
-∀ id-bearing entry mutation via `go run ./internal/specgraph` (`task add/set-status/edit`, `bug add`, `verif|research|goal|constraint|archinv add`, `entry rm`) — ids allocated by the tool (`next-id`), ⊥ hand-numbered. Every mutation re-renders + re-verifies in one transaction. Prose blocks: edit the spec/ fragment + `make spec-render`.
+render = lexicographic concat, one blank line between sections, byte-deterministic; `docgraph split` = proven inverse.
+∀ id-bearing entry mutation via `go run ./internal/docgraph` (`task add/set-status/edit`, `bug add`, `verif|research|goal|constraint|archinv add`, `entry rm`) — ids allocated by the tool (`next-id`), ⊥ hand-numbered. Every mutation re-renders + re-verifies in one transaction. Prose blocks: edit the spec/ fragment + `make spec-render`.
 Future lever (⊥ implemented): reserved id blocks per machine (e.g. worker T950–T999) to kill cross-host rebase races (§B96 class).

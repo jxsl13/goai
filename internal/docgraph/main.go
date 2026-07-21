@@ -27,7 +27,8 @@ commands:
   dangling             references whose target does not exist (spec hygiene)
   help                 this text
 
-mutation commands (§V41 — spec/ is the source, SPEC.md a generated view;
+spec-source commands — run as: docgraph spec <cmd>   (the bare form still works; §V41 — spec/ is
+the source, SPEC.md a generated view;
 every mutation re-renders and fully re-verifies before writing anything):
   next-id T|B|R|V|G|C|I                  print the next free id of a class
   task add [flags] <text>                new §T row (-cites, -priority, -status, -id; -worker <n> books a Tw row)
@@ -82,6 +83,16 @@ func main() {
 	}
 	out := &strings.Builder{}
 	cmd, rest := args[0], args[1:]
+	// `docgraph spec <cmd>` is the canonical namespace for the spec-source commands
+	// (render/verify/sort/next-id/task/bug/…) now that docgraph owns all documentation,
+	// not only the spec. The bare `docgraph <cmd>` form stays accepted for compatibility.
+	if cmd == "spec" {
+		if len(rest) == 0 {
+			fmt.Println(usage)
+			return
+		}
+		cmd, rest = rest[0], rest[1:]
+	}
 	if handled, rc := dispatchMutation(out, root, cmd, rest, *check); handled {
 		fmt.Print(out.String())
 		os.Exit(rc)

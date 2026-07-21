@@ -37,7 +37,7 @@ library in this repository. Complete EXACTLY ONE task per fire, end to end.
    (`go test ./...`) ALWAYS with `-timeout 1800s` (llamagpu exceeds the
    600s default, §B46) and the exit code checked UN-PIPED — `| grep | tail`
    masks a FAIL as exit 0 (§V24).
-7. **Completion:** `go run ./internal/specgraph task set-status T<n> x`
+7. **Completion:** `go run ./internal/docgraph task set-status T<n> x`
    (⊥ hand-edit — SPEC.md is a generated view, §V41; `make spec-verify` must be
    green before push), add a short entry to
    `CHANGELOG.md`.

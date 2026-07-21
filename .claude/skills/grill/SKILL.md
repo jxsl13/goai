@@ -78,6 +78,6 @@ Unresolved blocking unknown that needs the outside world → recommend `/researc
 
 - ⊥ make product decisions for the user. Recommend, never decide.
 - ⊥ write spec files. Hand structured answers to spec (it lands them via
-  `specgraph goal|constraint add`, §V41).
+  `docgraph goal|constraint add`, §V41).
 - ⊥ ask in bulk. One question, one recommendation, wait.
 - ⊥ grill a trivial change. Right-size or skip.
