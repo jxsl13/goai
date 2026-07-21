@@ -175,6 +175,7 @@ var (
 	eC4    = archsimd.BroadcastFloat64x4(4.166666666666666e-02)
 	eC3    = archsimd.BroadcastFloat64x4(1.6666666666666666e-01)
 	eC2    = archsimd.BroadcastFloat64x4(0.5)
+	eAbs   = archsimd.BroadcastUint64x4(0x7fffffffffffffff) // clear sign bit → |x|
 )
 
 // expF64x4v returns eˣ (~1 ulp) per lane for x ≤ 0 (the softmax numerator feeds
@@ -232,4 +233,39 @@ func ExpSumF64(dst, src []float64, bias float64) float64 {
 		sum += e
 	}
 	return sum
+}
+
+// SigmoidF64 sets dst[i] = 1/(1+e^(−src[i])), 4-wide AVX2+FMA, in the overflow-safe
+// form z = e^(−|x|), sigmoid = (x≥0 ? 1 : z)/(1+z) — the logistic gradient the GBM
+// residual (yᵢ − σ(fᵢ)) recomputes every boosting round. ~1 ulp; the scalar tail is
+// the exact overflow-safe form. Rides the caller's tolerance (GBM goldens gate at
+// 1e-2 R² vs sklearn). Scalar fallback off the AVX/FMA path.
+func SigmoidF64(dst, src []float64) {
+	if !hasAVX || !hasFMA {
+		for i, x := range src {
+			if x >= 0 {
+				dst[i] = 1 / (1 + math.Exp(-x))
+			} else {
+				z := math.Exp(x)
+				dst[i] = z / (1 + z)
+			}
+		}
+		return
+	}
+	i, n := 0, len(src)
+	for ; i+4 <= n; i += 4 {
+		x := archsimd.LoadFloat64x4Slice(src[i:])
+		z := expF64x4v(eZero.Sub(x.AsUint64x4().And(eAbs).AsFloat64x4())) // e^(−|x|)
+		num := eOne.Merge(z, x.GreaterEqual(eZero))                       // x≥0 ? 1 : z
+		num.Div(eOne.Add(z)).StoreSlice(dst[i:])
+	}
+	for ; i < n; i++ {
+		x := src[i]
+		if x >= 0 {
+			dst[i] = 1 / (1 + math.Exp(-x))
+		} else {
+			z := math.Exp(x)
+			dst[i] = z / (1 + z)
+		}
+	}
 }

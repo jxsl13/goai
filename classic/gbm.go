@@ -5,6 +5,8 @@ import (
 	"math"
 	"math/rand"
 	"sort"
+
+	"github.com/jxsl13/goai/internal/simd"
 )
 
 // --- gradient boosting (Friedman 2001) ------------------------------------
@@ -663,8 +665,13 @@ func (m *GradientBoostingClassifier) Fit(x [][]float64, y []int) error {
 		gb = newGBMGrower(m.cfg, x, n, d)
 	}
 	for round := 0; round < m.cfg.nEstimators; round++ {
+		// negative gradient of log loss: resid = y − σ(f). Vectorize σ over the whole
+		// score vector (recomputed every boosting round — ~18% of GBM fit); σ writes
+		// into resid, then the subtraction runs in place. ~1 ulp, well inside the GBM
+		// goldens' 1e-2 R² tolerance.
+		simd.SigmoidF64(resid, f)
 		for i := 0; i < n; i++ {
-			resid[i] = yf[i] - sigmoid(f[i]) // negative gradient of log loss
+			resid[i] = yf[i] - resid[i]
 		}
 		idx := subsampleIdx(n, m.cfg.subsample, rng)
 		tree := gb.grow(resid, idx)

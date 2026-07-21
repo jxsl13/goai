@@ -85,3 +85,16 @@ func ExpSumF64(dst, src []float64, bias float64) float64 {
 	}
 	return sum
 }
+
+// SigmoidF64 sets dst[i] = 1/(1+e^(−src[i])) (overflow-safe). Portable scalar
+// fallback; the amd64 SIMD build vectorizes the body.
+func SigmoidF64(dst, src []float64) {
+	for i, x := range src {
+		if x >= 0 {
+			dst[i] = 1 / (1 + math.Exp(-x))
+		} else {
+			z := math.Exp(x)
+			dst[i] = z / (1 + z)
+		}
+	}
+}
