@@ -692,7 +692,13 @@ func sortIdxDescByProb(idx []int, key []float64) {
 
 // nucleusIdxPool reuses nucleusTopP's vocab-sized index scratch across the per-token
 // top-p calls (T945, the sibling of T944's radix-scratch pool: the remaining alloc).
+// typicalTruncate (T947) shares it for its own idx scratch.
 var nucleusIdxPool = sync.Pool{New: func() any { return []int(nil) }}
+
+// typicalScorePool / typicalKeepPool reuse typicalTruncate's per-call score ([]float64)
+// and keep ([]bool) scratch across the per-token typical calls (T947).
+var typicalScorePool = sync.Pool{New: func() any { return []float64(nil) }}
+var typicalKeepPool = sync.Pool{New: func() any { return []bool(nil) }}
 
 // nucleusTopP applies top-p (nucleus) truncation to probs in place: keep the
 // minimal set of highest-probability tokens whose mass ≥ p, then renormalize. The
@@ -901,8 +907,22 @@ func typicalTruncate(probs []float64, tau float64) {
 			h -= p * math.Log(p)
 		}
 	}
-	score := make([]float64, n) // |−log p − H|; masked (zero-prob) tokens sort last
-	idx := make([]int, n)
+	// pool the three per-call vocab-sized scratch buffers (T947); defer Put covers the
+	// early-return paths. |−log p − H|; masked (zero-prob) tokens sort last.
+	score := typicalScorePool.Get().([]float64)
+	if cap(score) < n {
+		score = make([]float64, n)
+	} else {
+		score = score[:n]
+	}
+	defer typicalScorePool.Put(score)
+	idx := nucleusIdxPool.Get().([]int)
+	if cap(idx) < n {
+		idx = make([]int, n)
+	} else {
+		idx = idx[:n]
+	}
+	defer nucleusIdxPool.Put(idx)
 	for i, p := range probs {
 		idx[i] = i
 		if p > 0 {
@@ -911,7 +931,14 @@ func typicalTruncate(probs []float64, tau float64) {
 			score[i] = math.Inf(1)
 		}
 	}
-	keep := make([]bool, n)
+	keep := typicalKeepPool.Get().([]bool)
+	if cap(keep) < n {
+		keep = make([]bool, n)
+	} else {
+		keep = keep[:n]
+		clear(keep) // a reused buffer may hold stale true flags
+	}
+	defer typicalKeepPool.Put(keep)
 	const k = 512
 	if k < n {
 		quickselectIdxAsc(idx, score, k)
