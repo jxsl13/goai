@@ -23,3 +23,4 @@
 | BM19 | 2026-07-21 | nlp Watermark.BiasLogits (vocab 32000) | darwin/arm64 | self | us | 146.4 | 106.9 | 1.37× | V22,C27 |
 | BM20 | 2026-07-21 | nlp ApplyPenalties (vocab 32000, history 2048) | darwin/arm64 | self | us | 37.98 | 36.28 | 1.05× | T941,V22 |
 | BM21 | 2026-07-21 | nlp diverse-beam step (deferred materialization), cheap forward; allocs/op 320776->1528 -99.5%, B/op 82.6->41.5MiB -49.8% | darwin/arm64 | self | ms | 140.1 | 126.3 | 1.11× | T942,V22 |
+| BM22 | 2026-07-21 | nlp BeamSearch step (deferred materialization, cheap-fwd) | darwin/arm64 | self | ms | 124.1 | 105.6 | 1.18× | T943,V22 |
