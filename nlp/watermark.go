@@ -95,6 +95,39 @@ func NewWatermark(vocabSize int, opts ...WatermarkOption) (*Watermark, error) {
 // greenSize is ⌊γ·|V|⌋, the number of green tokens per step.
 func (w *Watermark) greenSize() int { return int(w.Gamma * float64(w.VocabSize)) }
 
+// seedGreen runs the (Key, prevToken)-seeded partial Fisher–Yates over perm so
+// that perm[0:g] hold the green-list ids (g = greenSize), recording each swap's
+// partner in swaps[0:g]. perm MUST enter as the identity 0..VocabSize-1; after
+// restoreIdentity(perm, swaps, g) it is the identity again, so ONE scratch perm
+// serves an entire sequence instead of GreenMask's fresh VocabSize perm+mask per
+// token. The caller's pcg is RESEEDED to (Key, prevToken) each call and rng wraps
+// it — reseeding one generator is bit-identical to rand.New(rand.NewPCG(Key,
+// prevToken)) (rand.Rand buffers no state) but allocates nothing per token, so
+// the swap sequence is byte-for-byte the one GreenMask draws and the selected
+// green set is identical.
+func (w *Watermark) seedGreen(rng *rand.Rand, pcg *rand.PCG, perm, swaps []int, prevToken int) int {
+	pcg.Seed(w.Key, uint64(prevToken))
+	g := w.greenSize()
+	for i := 0; i < g; i++ {
+		j := i + rng.IntN(w.VocabSize-i)
+		perm[i], perm[j] = perm[j], perm[i]
+		swaps[i] = j
+	}
+	return g
+}
+
+// restoreIdentity reverses the g transpositions recorded by seedGreen in LIFO
+// order, returning perm to the identity it entered with. A product of
+// transpositions is inverted by replaying them in reverse (each is its own
+// inverse), so this restores perm exactly regardless of index overlap — in O(g),
+// never touching the untouched tail.
+func restoreIdentity(perm, swaps []int, g int) {
+	for i := g - 1; i >= 0; i-- {
+		j := swaps[i]
+		perm[i], perm[j] = perm[j], perm[i]
+	}
+}
+
 // GreenMask returns a length-VocabSize boolean mask of the green list seeded by prevToken: a
 // partial Fisher–Yates shuffle picks the first ⌊γ·|V|⌋ ids of a (Key, prevToken)-seeded
 // permutation as green. Deterministic — generation and detection call it identically.
@@ -124,14 +157,21 @@ func (w *Watermark) BiasLogits(logits []float64, prevToken int) ([]float64, erro
 	if len(logits) != w.VocabSize {
 		return nil, fmt.Errorf("nlp: Watermark.BiasLogits logits length %d != vocab %d", len(logits), w.VocabSize)
 	}
-	mask := w.GreenMask(prevToken)
 	out := make([]float64, len(logits))
-	for i, l := range logits {
-		if mask[i] {
-			out[i] = l + w.Delta
-		} else {
-			out[i] = l
-		}
+	copy(out, logits)
+	// Add δ to the green tokens directly (the first g ids of the seeded partial
+	// Fisher–Yates) — O(g) writes to distinct indices, no VocabSize bool mask.
+	// Same index set and single +δ per green token as the mask form, so the
+	// result is bit-identical.
+	perm := make([]int, w.VocabSize)
+	for i := range perm {
+		perm[i] = i
+	}
+	swaps := make([]int, w.greenSize())
+	pcg := rand.NewPCG(0, 0)
+	g := w.seedGreen(rand.New(pcg), pcg, perm, swaps, prevToken)
+	for i := 0; i < g; i++ {
+		out[perm[i]] += w.Delta
 	}
 	return out, nil
 }
@@ -171,10 +211,27 @@ func (w *Watermark) Detect(tokens []int) (z float64, green, scored int) {
 	if scored <= 0 {
 		return 0, 0, 0
 	}
+	// One reusable identity permutation restored in O(g) after each token,
+	// instead of GreenMask minting a fresh VocabSize perm+mask per token just to
+	// read one entry (that O(T·|V|) allocation is GC-bound, not compute-bound).
+	// The green set per token is identical, so green — and thus z — is unchanged.
+	perm := make([]int, w.VocabSize)
+	for i := range perm {
+		perm[i] = i
+	}
+	swaps := make([]int, w.greenSize())
+	pcg := rand.NewPCG(0, 0)
+	rng := rand.New(pcg)
 	for i := 1; i < len(tokens); i++ {
-		if w.GreenMask(tokens[i-1])[tokens[i]] {
-			green++
+		g := w.seedGreen(rng, pcg, perm, swaps, tokens[i-1])
+		tok := tokens[i]
+		for j := 0; j < g; j++ {
+			if perm[j] == tok {
+				green++
+				break
+			}
 		}
+		restoreIdentity(perm, swaps, g)
 	}
 	T := float64(scored)
 	z = (float64(green) - w.Gamma*T) / math.Sqrt(T*w.Gamma*(1-w.Gamma))
