@@ -159,6 +159,12 @@ type cartBuilder struct {
 	featPool []int   // reused pool for feature subsampling (maxFeatures>0)
 	featSub  []int   // reused subsample result (maxFeatures>0)
 	sortBuf  []int   // reused per-feature sort scratch for the subsampled path
+	// radix-sort scratch (reused): keys = order-preserving u64 of the feature value,
+	// tmpI/tmpK = ping-pong buffers for the 8-pass LSD radix (replaces the sort.Slice
+	// closure sort — the split-search's dominant cost).
+	radixKeys []uint64
+	radixTmpI []int
+	radixTmpK []uint64
 }
 
 // subsampled reports whether per-split feature subsampling is active (the random
@@ -180,13 +186,74 @@ func (b *cartBuilder) initIdx(n int) {
 		b.leftCnt = make([]int, b.nClasses)
 	}
 	b.sortBuf = make([]int, n)
+	b.radixKeys = make([]uint64, n)
+	b.radixTmpI = make([]int, n)
+	b.radixTmpK = make([]uint64, n)
 }
 
 // initColumns argsorts every feature once and allocates the reusable scratch the
 // presort/partition split finder needs. Called once per Fit before build.
+// treeRadixCutoff is the index count above which sorting `order` ascending by a
+// feature value switches from the comparison sort to the 8-pass LSD radix. Below it
+// the O(n log n) comparison sort's lower constant wins.
+const treeRadixCutoff = 512
+
+// radixByFeature sorts order ascending by b.x[order[i]][ff]. Tie order is
+// unspecified — irrelevant to split decisions (thresholds sit between DISTINCT
+// values, per initColumns/bestSplitIdx), so the split chosen is identical to the
+// comparison sort's. Closure-free O(n) radix on the order-preserving u64 transform
+// of the float64 bits (negatives → ^bits, non-negatives → bits|sign): monotonic in
+// the float value, so a plain unsigned radix orders it. Uses the reused scratch.
+func (b *cartBuilder) radixByFeature(order []int, ff int) {
+	n := len(order)
+	if n < treeRadixCutoff {
+		sort.Slice(order, func(a, c int) bool { return b.x[order[a]][ff] < b.x[order[c]][ff] })
+		return
+	}
+	k := b.radixKeys[:n]
+	for i, id := range order {
+		u := math.Float64bits(b.x[id][ff])
+		if u&(1<<63) != 0 {
+			u = ^u
+		} else {
+			u |= 1 << 63
+		}
+		k[i] = u
+	}
+	src, dst := order, b.radixTmpI[:n]
+	srcK, dstK := k, b.radixTmpK[:n]
+	var count [256]int
+	for shift := uint(0); shift < 64; shift += 8 {
+		count = [256]int{}
+		for _, u := range srcK {
+			count[(u>>shift)&0xff]++
+		}
+		sum := 0
+		for i := range count {
+			c := count[i]
+			count[i] = sum
+			sum += c
+		}
+		for i, u := range srcK {
+			bkt := (u >> shift) & 0xff
+			p := count[bkt]
+			count[bkt]++
+			dst[p] = src[i]
+			dstK[p] = u
+		}
+		src, dst = dst, src
+		srcK, dstK = dstK, srcK
+	}
+	// 8 (even) passes ⇒ src is again the caller's `order` slice, now holding the
+	// sorted indices; no final copy needed.
+}
+
 func (b *cartBuilder) initColumns(n, d int) {
 	b.cols = make([][]int, d)
 	base := make([]int, n*d) // single backing allocation for all d columns
+	b.radixKeys = make([]uint64, n)
+	b.radixTmpI = make([]int, n)
+	b.radixTmpK = make([]uint64, n)
 	for f := 0; f < d; f++ {
 		col := base[f*n : f*n+n : f*n+n]
 		for i := range col {
@@ -196,7 +263,7 @@ func (b *cartBuilder) initColumns(n, d int) {
 		// Order by feature value only. Tie order is irrelevant to split
 		// decisions (thresholds sit between distinct values), so an unstable
 		// sort is safe and reproduces the previous per-node sort's choices.
-		sort.Slice(col, func(a, c int) bool { return b.x[col[a]][ff] < b.x[col[c]][ff] })
+		b.radixByFeature(col, ff)
 		b.cols[f] = col
 	}
 	b.part = make([]int, n)
@@ -365,7 +432,7 @@ func (b *cartBuilder) bestSplitIdx(idx []int) (feat int, thr float64, ok bool) {
 		order := b.sortBuf[:len(idx)]
 		copy(order, idx)
 		ff := f
-		sort.Slice(order, func(a, c int) bool { return b.x[order[a]][ff] < b.x[order[c]][ff] })
+		b.radixByFeature(order, ff)
 		cost, cut, found := b.sweep(order, f, minLeaf)
 		if found && cost < bestCost {
 			bestCost = cost
