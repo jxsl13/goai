@@ -451,19 +451,50 @@ func KMeans(x [][]float64, init [][]float64, maxIter int) (centers [][]float64, 
 		centers[i] = append([]float64(nil), init[i]...)
 	}
 	labels = make([]int, n)
+	// Assignment through the AVX GEMM: the nearest centre is argmin_c ‖x−c‖² =
+	// argmin_c (‖c‖² − 2 x·c) since ‖x‖² is constant per row, and the inner
+	// products x·c for all (row, centre) are exactly the matmul X·Cᵀ. This is
+	// scikit-learn's own BLAS decomposition — it reproduces its labels — while
+	// routing the O(n·k·d) work through the vectorised kernel instead of a scalar
+	// distance loop. X is built once; C is rebuilt each iteration.
+	xt := tensor.New(tensor.F64, tensor.Shape{n, d})
+	xf := xt.Storage().F64()
+	for r := range n {
+		copy(xf[r*d:r*d+d], x[r])
+	}
+	be, ok := backend.Get(backend.CPU)
+	if !ok {
+		return nil, nil, fmt.Errorf("classic: cpu backend unavailable")
+	}
+	ctx := backend.NewContext().WithBackend(be)
+	cnorm := make([]float64, k)
 	for iter := range maxIter {
 		changed := false
-		for i, row := range x {
-			best, bd := 0, math.Inf(1)
-			for c := range k {
-				cc := centers[c] // hoist the center slice out of the j-loop so the
-				var dist float64 // compiler drops the per-element re-index + bounds check
-				for j := 0; j < d; j++ {
-					dv := row[j] - cc[j]
-					dist += dv * dv
-				}
-				if dist < bd {
-					bd, best = dist, c
+		ct := tensor.New(tensor.F64, tensor.Shape{k, d})
+		cf := ct.Storage().F64()
+		for c := range k {
+			copy(cf[c*d:c*d+d], centers[c])
+			var s float64
+			for j := 0; j < d; j++ {
+				s += centers[c][j] * centers[c][j]
+			}
+			cnorm[c] = s
+		}
+		ctT, terr := ct.Transpose(0, 1)
+		if terr != nil {
+			return nil, nil, terr
+		}
+		dres, terr := backend.Execute(ctx, backend.OpMatMul, []*tensor.Tensor{xt, ctT}, nil)
+		if terr != nil {
+			return nil, nil, terr
+		}
+		df := dres[0].Storage().F64()
+		for i := 0; i < n; i++ {
+			drow := df[i*k : i*k+k]
+			best, bd := 0, cnorm[0]-2*drow[0]
+			for c := 1; c < k; c++ {
+				if s := cnorm[c] - 2*drow[c]; s < bd {
+					bd, best = s, c
 				}
 			}
 			if labels[i] != best {
