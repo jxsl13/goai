@@ -41,14 +41,35 @@ func NewSWA(params []*tensor.Tensor) *SWA {
 // Update captures the current parameters as a new snapshot and folds them into the equal-weight
 // running average: avg ← avg + (w − avg)/(n+1), so avg is the arithmetic mean of all snapshots.
 func (s *SWA) Update() error {
+	denom := float64(s.n + 1)
 	for pi, p := range s.Params {
 		if p.Numel() != len(s.avg[pi]) {
 			return fmt.Errorf("nn: SWA param %d size changed: %d != %d", pi, p.Numel(), len(s.avg[pi]))
 		}
 		avg := s.avg[pi]
+		// Contiguous fast path: read the raw parameter slice in a tight loop
+		// instead of readGen's per-element closure (the same arithmetic, so
+		// bit-identical to the general path). denom is loop-invariant (s.n is
+		// bumped only after all params), matching the closure's / float64(s.n+1).
+		if p.IsContiguous() && p.Offset() == 0 {
+			switch p.Dtype() {
+			case tensor.F64:
+				d := p.Storage().F64()
+				for i := range avg {
+					avg[i] += (d[i] - avg[i]) / denom
+				}
+				continue
+			case tensor.F32:
+				d := p.Storage().F32()
+				for i := range avg {
+					avg[i] += (float64(d[i]) - avg[i]) / denom
+				}
+				continue
+			}
+		}
 		idx := 0
 		readGen(p, func(w float64) {
-			avg[idx] += (w - avg[idx]) / float64(s.n+1)
+			avg[idx] += (w - avg[idx]) / denom
 			idx++
 		})
 	}
@@ -95,6 +116,24 @@ func (e *EMA) Update() error {
 			return fmt.Errorf("nn: EMA param %d size changed: %d != %d", pi, p.Numel(), len(e.avg[pi]))
 		}
 		avg := e.avg[pi]
+		// Contiguous fast path: raw slice loop, no per-element closure — the same
+		// decay update, so bit-identical to the general readGen path.
+		if p.IsContiguous() && p.Offset() == 0 {
+			switch p.Dtype() {
+			case tensor.F64:
+				d := p.Storage().F64()
+				for i := range avg {
+					avg[i] = e.Decay*avg[i] + (1-e.Decay)*d[i]
+				}
+				continue
+			case tensor.F32:
+				d := p.Storage().F32()
+				for i := range avg {
+					avg[i] = e.Decay*avg[i] + (1-e.Decay)*float64(d[i])
+				}
+				continue
+			}
+		}
 		idx := 0
 		readGen(p, func(w float64) {
 			avg[idx] = e.Decay*avg[idx] + (1-e.Decay)*w
