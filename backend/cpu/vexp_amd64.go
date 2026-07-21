@@ -618,3 +618,44 @@ func vsoftplusF64(dst, src []float64) {
 		dst[i] = softplusF64poly(src[i])
 	}
 }
+
+var vF64Sign = archsimd.BroadcastUint64x4(0x8000000000000000)
+
+// softcapF64poly is the SCALAR twin of the vsoftcapF64 lane — bit-identical
+// (division for z/cap, expF64poly, the same abs/sign bit-ops) so a value yields the
+// same soft-cap in the 4-lane body or the scalar tail.
+func softcapF64poly(x, cap float64) float64 {
+	zc := x / cap
+	a := math.Float64frombits(math.Float64bits(zc) & 0x7fffffffffffffff) // |zc|
+	z := expF64poly(-(a + a))
+	t := (1 - z) / (1 + z)
+	t = math.Float64frombits(math.Float64bits(t) | (math.Float64bits(zc) & 0x8000000000000000))
+	return t * cap
+}
+
+// vsoftcapF64 computes dst[i] = cap·tanh(src[i]/cap) 4-wide via AVX2 — the Gemma-2
+// attention-score / final-logit soft-cap (attn_logit_softcapping). tanh rides
+// expF64x4 in the overflow-safe form (1−e^(−2|z|))/(1+e^(−2|z|)) with sign(z)
+// reapplied (same construction as vtanhF32). 4-lane body + bit-identical scalar
+// tail via softcapF64poly. Not under the CPU==Ref exact invariant.
+func vsoftcapF64(dst, src []float64, cap float64) {
+	if !vexpHasAVX {
+		for i, v := range src {
+			dst[i] = softcapF64poly(v, cap)
+		}
+		return
+	}
+	capV := archsimd.BroadcastFloat64x4(cap)
+	n4 := len(src) &^ 3
+	for i := 0; i < n4; i += 4 {
+		zc := archsimd.LoadFloat64x4Slice(src[i:]).Div(capV) // x/cap
+		a := zc.AsUint64x4().And(vF64Abs).AsFloat64x4()      // |zc|
+		z := expF64x4(vF64Zero.Sub(a.Add(a)))                // e^(−2|zc|)
+		t := vF64One.Sub(z).Div(vF64One.Add(z))              // tanh(|zc|)
+		t = t.AsUint64x4().Or(zc.AsUint64x4().And(vF64Sign)).AsFloat64x4()
+		t.Mul(capV).StoreSlice(dst[i:])
+	}
+	for i := n4; i < len(src); i++ {
+		dst[i] = softcapF64poly(src[i], cap)
+	}
+}

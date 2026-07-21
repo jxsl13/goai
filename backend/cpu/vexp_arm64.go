@@ -202,3 +202,11 @@ func vsoftplusF64(dst, src []float64) {
 		}
 	}
 }
+
+// vsoftcapF64 exists only so softCapKernelCPU type-checks on arm64; vexpF64Fast is
+// false here (amd64-only for now), so it is dead code.
+func vsoftcapF64(dst, src []float64, cap float64) {
+	for i, v := range src {
+		dst[i] = cap * math.Tanh(v/cap)
+	}
+}
