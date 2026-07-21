@@ -73,9 +73,13 @@ func NewSPM(vocab []UnigramPiece, opts ...SPMOption) (*SPM, error) {
 			return nil, fmt.Errorf("nlp: SPM duplicate piece %q", p.Piece)
 		}
 		s.id[p.Piece] = i
-		var b int
-		if n, _ := fmt.Sscanf(p.Piece, "<0x%02X>", &b); n == 1 && len(p.Piece) == 6 {
-			s.byteID[b] = i
+		// same <0xHH> gate as Decode (T931): skip the reflection-based fmt.Sscanf for the
+		// vast majority of vocab pieces that are not byte tokens (one-time build cost).
+		if pc := p.Piece; len(pc) == 6 && pc[0] == '<' && pc[1] == '0' && pc[2] == 'x' {
+			var b int
+			if n, _ := fmt.Sscanf(pc, "<0x%02X>", &b); n == 1 {
+				s.byteID[b] = i
+			}
 		}
 	}
 	if id, ok := s.id["<unk>"]; ok {
