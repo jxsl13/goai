@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"sync"
 )
 
 // spaceMeta is SentencePiece's whitespace meta-symbol ▁ (U+2581, LOWER ONE EIGHTH
@@ -188,6 +189,19 @@ func (u *Unigram) preprocess(text string) string {
 // in text is indistinguishable from a space and will decode back as one, silently.
 // [ContainsSpaceMeta] detects that input; the [Unigram] type doc explains why no
 // escape is possible.
+// unigramScratch holds Encode's Viterbi DP working arrays, reused across calls
+// (T951): off (rune-boundary byte offsets), best (DP scores), start/pid
+// (backpointers) and rev (the reversed-ids scratch). None escape Encode — only the
+// freshly-built ids slice does — so pooling them is bit-identical, provided best[0]
+// is re-zeroed each call (the pooled buffer is dirty and the DP reads best[0] as the
+// empty-prefix score; every other cell is written before it is read).
+type unigramScratch struct {
+	off, start, pid, rev []int
+	best                 []float64
+}
+
+var unigramScratchPool = sync.Pool{New: func() any { return new(unigramScratch) }}
+
 func (u *Unigram) Encode(text string) []int {
 	s := u.preprocess(text)
 	// Rune-boundary byte offsets: off[k] is the byte index of rune k, off[n] == len(s).
@@ -195,19 +209,28 @@ func (u *Unigram) Encode(text string) []int {
 	// s's backing (no allocation), so the u.id lookup and blocked() check cost no per-
 	// candidate string conversion (the old string(runes[j:i]) allocated O(runes·maxlen)
 	// strings just to key the map — the §T625 anti-pattern).
-	off := make([]int, 0, len(s)+1)
+	sp := unigramScratchPool.Get().(*unigramScratch)
+	defer unigramScratchPool.Put(sp)
+	off := sp.off[:0]
 	for bi := range s {
 		off = append(off, bi)
 	}
 	n := len(off)
 	off = append(off, len(s))
+	sp.off = off // retain the (possibly grown) backing for the next call
 	if n == 0 {
 		return nil
 	}
 	unkScore := u.minScore - unkPenalty
-	best := make([]float64, n+1)
-	start := make([]int, n+1) // start position of the piece ending at i
-	pid := make([]int, n+1)   // id of that piece
+	if cap(sp.best) < n+1 { // grow the DP trio together, mirroring radixScratch (T944)
+		sp.best = make([]float64, n+1)
+		sp.start = make([]int, n+1)
+		sp.pid = make([]int, n+1)
+	}
+	best := sp.best[:n+1]
+	start := sp.start[:n+1] // start position of the piece ending at i
+	pid := sp.pid[:n+1]     // id of that piece
+	best[0] = 0             // pooled buffer is dirty; the DP reads best[0] as the empty-prefix score
 	for i := 1; i <= n; i++ {
 		best[i] = math.Inf(-1)
 	}
@@ -237,10 +260,11 @@ func (u *Unigram) Encode(text string) []int {
 		}
 	}
 	// backtrack
-	var rev []int
+	rev := sp.rev[:0]
 	for i := n; i > 0; i = start[i] {
 		rev = append(rev, pid[i])
 	}
+	sp.rev = rev // retain the (possibly grown) backing for the next call
 	ids := make([]int, len(rev))
 	for i, id := range rev {
 		ids[len(rev)-1-i] = id

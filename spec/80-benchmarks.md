@@ -31,3 +31,4 @@
 | BM27 | 2026-07-21 | nlp Sampler.Dist z+topk-scratch pooled (temp+topk+topp, vocab 32000) | darwin/arm64 | self | us | 347.8 | 316.5 | 1.1× | T948,V22 |
 | BM28 | 2026-07-21 | nlp Sampler.penalize logits-copy pooled (SampleWithHistory, penalties+top-p, vocab 50257) | darwin/arm64 | self | us | 521.4 | 484.2 | 1.08× | T949,V22 |
 | BM29 | 2026-07-21 | nlp Sample per-token probs pooled via distInto (SampleWithHistory, penalties+top-p, vocab 50257) | darwin/arm64 | self | us | 486.8 | 453.9 | 1.07× | T950,V22 |
+| BM30 | 2026-07-21 | nlp Unigram.Encode Viterbi DP scratch pooled (~2KB text) | darwin/arm64 | self | us | 123.2 | 116.2 | 1.06× | T951,V22 |
