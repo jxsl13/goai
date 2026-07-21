@@ -134,3 +134,36 @@ func BenchmarkGBMHist_exact_20k(b *testing.B) { benchGBMFitMode(b, 20000, false)
 func BenchmarkGBMHist_hist_20k(b *testing.B)  { benchGBMFitMode(b, 20000, true) }
 func BenchmarkGBMHist_exact_80k(b *testing.B) { benchGBMFitMode(b, 80000, false) }
 func BenchmarkGBMHist_hist_80k(b *testing.B)  { benchGBMFitMode(b, 80000, true) }
+
+// TestGBMHistEdge exercises the histogram grower on degenerate inputs: a single
+// sample, a constant (unsplittable) feature, fewer samples than bins, and a
+// single-valued target. None may panic or produce NaN.
+func TestGBMHistEdge(t *testing.T) {
+	cases := []struct {
+		name string
+		x    [][]float64
+		y    []float64
+	}{
+		{"n1", [][]float64{{1, 2}}, []float64{1}},
+		{"const-feat", [][]float64{{5, 5}, {5, 5}, {5, 5}, {5, 5}}, []float64{0, 1, 0, 1}},
+		{"tiny-n<bins", [][]float64{{1, 0}, {2, 1}, {3, 0}, {4, 1}, {5, 0}}, []float64{0, 1, 0, 1, 0}},
+		{"one-class", [][]float64{{1, 1}, {2, 2}, {3, 3}, {4, 4}}, []float64{1, 1, 1, 1}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			m := NewGradientBoostingRegressor(WithGBMNEstimators(10), WithGBMHistogram(256), WithGBMMaxDepth(3))
+			if err := m.Fit(c.x, c.y); err != nil {
+				t.Fatalf("fit: %v", err)
+			}
+			p, err := m.Predict(c.x)
+			if err != nil {
+				t.Fatalf("predict: %v", err)
+			}
+			for i, v := range p {
+				if v != v {
+					t.Fatalf("NaN at %d", i)
+				}
+			}
+		})
+	}
+}
