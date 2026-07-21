@@ -97,3 +97,15 @@ func vsiluF64(dst, src []float64) {
 		dst[i] = v / (1 + math.Exp(-v))
 	}
 }
+
+// vsoftplusF64 exists only so softplusKernelCPU type-checks off the amd64 SIMD
+// build; vexpF64Fast is false here, so it is dead at run time.
+func vsoftplusF64(dst, src []float64) {
+	for i, v := range src {
+		if v > 0 {
+			dst[i] = v + math.Log1p(math.Exp(-v))
+		} else {
+			dst[i] = math.Log1p(math.Exp(v))
+		}
+	}
+}

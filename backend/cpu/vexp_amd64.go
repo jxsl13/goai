@@ -505,3 +505,116 @@ func vsiluF64(dst, src []float64) {
 		dst[i] = siluF64poly(src[i])
 	}
 }
+
+// F64 softplus (Mamba/Jamba Δ discretization) constants. softplus was scalar
+// math.Exp+math.Log1p on the ref backend (~32% of Mamba f64 prefill, §T——).
+// log1p(u) is computed by the Cephes double log rational on v=1+u: because the
+// stable form feeds u = e^(−|x|) ∈ (0,1], v ∈ (1,2] so the frexp exponent is only
+// 0 or 1 — a mask-selected float, NO bit-level exponent extract and NO AVX-512-only
+// i64→f64 convert (which VCVTQQ2PD would need). log(m) = f − 0.5f² + f³·P(f)/Q(f),
+// 1/√2 ≤ m < √2, f = m−1.
+var (
+	vF64Half  = archsimd.BroadcastFloat64x4(0.5)
+	vLogSqrt2 = archsimd.BroadcastFloat64x4(1.4142135623730951)          // √2: the v=1+u fold threshold
+	vLogLn2Hi = archsimd.BroadcastFloat64x4(6.93359375e-1)               // ln2 high (exact)
+	vLogLn2Lo = archsimd.BroadcastFloat64x4(-2.121944400546905827679e-4) // ln2 low
+	// Cephes double log: polevl(f,P,5)/p1evl(f,Q,5) (Q monic).
+	vLogP0 = archsimd.BroadcastFloat64x4(1.01875663804580931796e-4)
+	vLogP1 = archsimd.BroadcastFloat64x4(4.97494994976747001425e-1)
+	vLogP2 = archsimd.BroadcastFloat64x4(4.70579119878881725854e0)
+	vLogP3 = archsimd.BroadcastFloat64x4(1.44989225341610930846e1)
+	vLogP4 = archsimd.BroadcastFloat64x4(1.79368678507819816313e1)
+	vLogP5 = archsimd.BroadcastFloat64x4(7.70838733755885391666e0)
+	vLogQ0 = archsimd.BroadcastFloat64x4(1.12873587189167450590e1)
+	vLogQ1 = archsimd.BroadcastFloat64x4(4.52279145837532221105e1)
+	vLogQ2 = archsimd.BroadcastFloat64x4(8.29875266912776603211e1)
+	vLogQ3 = archsimd.BroadcastFloat64x4(7.11544750618563894466e1)
+	vLogQ4 = archsimd.BroadcastFloat64x4(2.31251620126765340583e1)
+)
+
+// softplusF64x4 returns softplus(x) = log(1+eˣ) 4-wide via AVX2, in the overflow-
+// safe form max(x,0) + log1p(e^(−|x|)). The log1p rides the expF64x4 primitive plus
+// the Cephes double log rational; ~1 ulp, well inside the model f64 tolerance (the
+// Mamba goldens gate at 1e-9).
+func softplusF64x4(x archsimd.Float64x4) archsimd.Float64x4 {
+	ax := x.AsUint64x4().And(vF64Abs).AsFloat64x4()
+	u := expF64x4(vF64Zero.Sub(ax)) // e^(−|x|) ∈ (0,1]
+	v := vF64One.Add(u)             // 1+u ∈ (1,2]
+	// frexp+fold, specialized to v ∈ (1,2]: exponent e is 0 (v<√2) or 1 (v≥√2).
+	fold := v.GreaterEqual(vLogSqrt2)
+	f := v.Mul(vF64Half).Sub(vF64One).Merge(v.Sub(vF64One), fold) // fold ? v/2−1 : v−1
+	e := vF64One.Merge(vF64Zero, fold)                            // fold ? 1 : 0
+	z := f.Mul(f)
+	p := vLogP0
+	p = p.MulAdd(f, vLogP1)
+	p = p.MulAdd(f, vLogP2)
+	p = p.MulAdd(f, vLogP3)
+	p = p.MulAdd(f, vLogP4)
+	p = p.MulAdd(f, vLogP5)
+	q := f.Add(vLogQ0)
+	q = q.MulAdd(f, vLogQ1)
+	q = q.MulAdd(f, vLogQ2)
+	q = q.MulAdd(f, vLogQ3)
+	q = q.MulAdd(f, vLogQ4)
+	y := f.Mul(z.Mul(p).Div(q)) // f·(z·P/Q)
+	y = e.MulAdd(vLogLn2Lo, y)  // − e·2.1219e-4
+	y = y.Sub(z.Mul(vF64Half))  // − 0.5·z
+	r := f.Add(y)               // log1p(u) = f + y + e·ln2Hi
+	r = e.MulAdd(vLogLn2Hi, r)
+	return x.Max(vF64Zero).Add(r) // + max(x,0)
+}
+
+// softplusF64poly is the SCALAR twin of softplusF64x4 — bit-for-bit identical (same
+// abs mask, expF64poly, Cody-Waite reduction, Cephes Horner and mask-select, each
+// step a fused math.FMA to match archsimd MulAdd) so a value yields the same
+// softplus in the 4-lane body or the scalar tail.
+func softplusF64poly(x float64) float64 {
+	ax := math.Float64frombits(math.Float64bits(x) & 0x7fffffffffffffff)
+	v := 1.0 + expF64poly(-ax)
+	var f, e float64
+	if v >= 1.4142135623730951 {
+		f, e = v*0.5-1, 1
+	} else {
+		f, e = v-1, 0
+	}
+	z := f * f
+	p := 1.01875663804580931796e-4
+	p = math.FMA(p, f, 4.97494994976747001425e-1)
+	p = math.FMA(p, f, 4.70579119878881725854e0)
+	p = math.FMA(p, f, 1.44989225341610930846e1)
+	p = math.FMA(p, f, 1.79368678507819816313e1)
+	p = math.FMA(p, f, 7.70838733755885391666e0)
+	q := f + 1.12873587189167450590e1
+	q = math.FMA(q, f, 4.52279145837532221105e1)
+	q = math.FMA(q, f, 8.29875266912776603211e1)
+	q = math.FMA(q, f, 7.11544750618563894466e1)
+	q = math.FMA(q, f, 2.31251620126765340583e1)
+	y := f * (z * p / q)
+	y = math.FMA(e, -2.121944400546905827679e-4, y)
+	y = y - z*0.5
+	r := f + y
+	r = math.FMA(e, 6.93359375e-1, r)
+	mx := x
+	if mx < 0 {
+		mx = 0
+	}
+	return mx + r
+}
+
+// vsoftplusF64 computes dst[i] = softplus(src[i]) 4-wide via AVX2 — 4-lane body +
+// scalar tail via softplusF64poly (bit-identical to the body, not math.Log1p).
+func vsoftplusF64(dst, src []float64) {
+	if !vexpHasAVX {
+		for i, v := range src {
+			dst[i] = softplusF64poly(v)
+		}
+		return
+	}
+	n4 := len(src) &^ 3
+	for i := 0; i < n4; i += 4 {
+		softplusF64x4(archsimd.LoadFloat64x4Slice(src[i:])).StoreSlice(dst[i:])
+	}
+	for i := n4; i < len(src); i++ {
+		dst[i] = softplusF64poly(src[i])
+	}
+}

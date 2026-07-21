@@ -600,6 +600,37 @@ func siluKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) (
 	return []*tensor.Tensor{out}, nil
 }
 
+// softplusKernelCPU is the F64 CPU softplus (Mamba/Jamba Δ). softplus was scalar
+// math.Exp+math.Log1p on the ref backend and dominated Mamba f64 prefill (~32% of
+// samples, split ref.softplus + the mixer). The amd64 SIMD build routes F64 through
+// the 4-wide vsoftplusF64 (expF64x4 + Cephes double log); F32 stays on the ref
+// fallback (unregistered). Not under the CPU==Ref exact invariant (that test omits
+// OpSoftplus); rides the model f64 tolerance (Mamba goldens gate at 1e-9). The
+// non-SIMD build keeps the scalar formula bit-for-bit.
+func softplusKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*tensor.Tensor, error) {
+	if in[0].Dtype() != tensor.F64 {
+		return nil, fmt.Errorf("cpu: softplus unsupported dtype %v", in[0].Dtype())
+	}
+	xc := in[0].Contiguous()
+	out := tensor.NewOn(ctx.Device(), tensor.F64, in[0].Shape())
+	d, o := xc.Storage().F64(), out.Storage().F64()
+	if vexpF64Fast {
+		parallel(len(o), func(lo, hi int) { vsoftplusF64(o[lo:hi], d[lo:hi]) })
+		return []*tensor.Tensor{out}, nil
+	}
+	parallel(len(o), func(lo, hi int) {
+		for i := lo; i < hi; i++ {
+			x := d[i]
+			if x > 0 {
+				o[i] = x + math.Log1p(math.Exp(-x))
+			} else {
+				o[i] = math.Log1p(math.Exp(x))
+			}
+		}
+	})
+	return []*tensor.Tensor{out}, nil
+}
+
 // siluBackwardKernelCPU is the arm64 perf-build F32 SiLU VJP (§T665): dx =
 // g·silu'(x) evaluated f32-native through the NEON vsiluGrad pipeline
 // (vexp.go / vexp_arm64.s) — one exp per element instead of the ref
@@ -641,6 +672,10 @@ func init() {
 	reg(backend.OpGELU, geluKernelCPU)
 	reg(backend.OpSigmoid, sigmoidKernelCPU)
 	reg(backend.OpSiLU, siluKernelCPU)
+
+	// F64-only: softplus (Mamba/Jamba Δ) rides the amd64 vsoftplusF64 SIMD kernel;
+	// F32 stays on the ref fallback. The non-SIMD build runs the scalar formula.
+	std.add(backend.OpSoftplus, tensor.F64, softplusKernelCPU)
 
 	if vexpF32Fast {
 		// SIMD perf build, F32 only (§T664/§T665): the vectorized GELU and SiLU VJPs

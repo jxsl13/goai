@@ -190,3 +190,15 @@ func vsiluF64(dst, src []float64) {
 		dst[i] = v / (1 + math.Exp(-v))
 	}
 }
+
+// vsoftplusF64 exists only so softplusKernelCPU type-checks on arm64; vexpF64Fast
+// is false here (amd64-only for now), so it is dead code.
+func vsoftplusF64(dst, src []float64) {
+	for i, v := range src {
+		if v > 0 {
+			dst[i] = v + math.Log1p(math.Exp(-v))
+		} else {
+			dst[i] = math.Log1p(math.Exp(v))
+		}
+	}
+}
