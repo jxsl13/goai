@@ -86,6 +86,14 @@ func ExpSumF64(dst, src []float64, bias float64) float64 {
 	return sum
 }
 
+// ExpScaledF64 writes dst[i] = exp(scale·src[i]). Portable scalar fallback; the
+// amd64 SIMD build vectorizes the body. See the AVX variant for the parity note.
+func ExpScaledF64(dst, src []float64, scale float64) {
+	for i, v := range src {
+		dst[i] = math.Exp(scale * v)
+	}
+}
+
 // SigmoidF64 sets dst[i] = 1/(1+e^(−src[i])) (overflow-safe). Portable scalar
 // fallback; the amd64 SIMD build vectorizes the body.
 func SigmoidF64(dst, src []float64) {

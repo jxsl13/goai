@@ -321,6 +321,29 @@ func ExpSumF64(dst, src []float64, bias float64) float64 {
 	return sum
 }
 
+// ExpScaledF64 writes dst[i] = exp(scale·src[i]) 4-wide via AVX2 — the SSM/Mamba
+// state-decay kernel (abar = exp(Δ·A), A<0 so the argument is ≤ 0). The 4-lane
+// body runs the expF64x4v poly; the len%4 tail uses math.Exp, exactly as ExpSumF64
+// does. Callers that need cross-path bit-parity (Mamba prefill vs decode) get it for
+// free by passing the same-length slice on both paths — the body/tail split, and so
+// every element's value, is identical. The non-SIMD build below is math.Exp for all.
+func ExpScaledF64(dst, src []float64, scale float64) {
+	if !hasAVX || !hasFMA {
+		for i, v := range src {
+			dst[i] = math.Exp(scale * v)
+		}
+		return
+	}
+	vs := archsimd.BroadcastFloat64x4(scale)
+	i, n := 0, len(src)
+	for ; i+4 <= n; i += 4 {
+		expF64x4v(archsimd.LoadFloat64x4Slice(src[i:]).Mul(vs)).StoreSlice(dst[i:])
+	}
+	for ; i < n; i++ {
+		dst[i] = math.Exp(scale * src[i])
+	}
+}
+
 // SigmoidF64 sets dst[i] = 1/(1+e^(−src[i])), 4-wide AVX2+FMA, in the overflow-safe
 // form z = e^(−|x|), sigmoid = (x≥0 ? 1 : z)/(1+z) — the logistic gradient the GBM
 // residual (yᵢ − σ(fᵢ)) recomputes every boosting round. ~1 ulp; the scalar tail is
