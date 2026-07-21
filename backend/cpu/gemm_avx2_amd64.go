@@ -29,7 +29,14 @@ func gemmF32Asm6x16(A, B, C []float32, m, k, n int) {
 		// contend re-reading it — below that the extra C load/store + pack traffic is a net loss
 		// (measured: 512/1024 slower, 2048 +16%, 4096 within ~1.2x of numpy). So block+pack only in the
 		// memory-bound regime; small/mid GEMMs take a single overwrite pass.
-		if k > gemmAsmKC && k*n > 2_000_000 {
+		//
+		// The pack cost (writing B into bp) is amortized over the m rows that reuse each packed element,
+		// so it only pays with enough rows (rowTiles≥12, i.e. m≳72) OR a k large enough that the
+		// sequential-B-stream win dominates regardless of m (k≥4096). Medium-m at moderate k — batched /
+		// speculative decode (m=8,32) — takes the single-pass column-block path instead, where B is read
+		// once with no pack: measured 8×2048×2048 9.5→12.8, 32×2048×2048 32→43 GFLOP/s, while the large-k
+		// down-proj 32×5632×2048 stays on the packed path (23 vs 21 single-pass).
+		if k > gemmAsmKC && k*n > 2_000_000 && (rowTiles >= 12 || k >= 4096) {
 			nb := n16 / 16
 			bp := make([]float32, gemmAsmKC*n16) // packed B slab, reused across k-slabs (stride kc*16 per block)
 			for p0 := 0; p0 < k; p0 += gemmAsmKC {
@@ -49,16 +56,19 @@ func gemmF32Asm6x16(A, B, C []float32, m, k, n int) {
 						}
 					}
 				})
-				parallelWork(rowTiles, 6*kc*n16, func(loT, hiT int) {
-					for t := loT; t < hiT; t++ {
-						i := t * 6
-						aBase := &A[i*k+p0]
-						for blk := 0; blk < nb; blk++ {
-							if first {
-								gemmF32Tile6x16AVX2(aBase, &bp[blk*kc*16], &C[i*n+blk*16], kc, k, 16, n)
-							} else {
-								gemmF32Tile6x16AVX2Acc(aBase, &bp[blk*kc*16], &C[i*n+blk*16], kc, k, 16, n)
-							}
+				// Grain over (rowTile × colBlock) UNITS, not just rowTiles: medium-m shapes have
+				// rowTiles ≪ cores (m=32→5, m=8→1) and a rowTile-only split leaves most cores idle
+				// (measured 8×2048×2048 9.5, 32×2048×2048 32 GFLOP/s). w=t*nb+blk keeps the same
+				// row-major order, so a contiguous worker range sees identical A-panel/packed-B reuse
+				// as before for large m, while small m now fills every core. C tiles stay disjoint.
+				parallelWork(rowTiles*nb, 6*kc*16, func(lo, hi int) {
+					for w := lo; w < hi; w++ {
+						t, blk := w/nb, w%nb
+						aBase := &A[t*6*k+p0]
+						if first {
+							gemmF32Tile6x16AVX2(aBase, &bp[blk*kc*16], &C[t*6*n+blk*16], kc, k, 16, n)
+						} else {
+							gemmF32Tile6x16AVX2Acc(aBase, &bp[blk*kc*16], &C[t*6*n+blk*16], kc, k, 16, n)
 						}
 					}
 				})
