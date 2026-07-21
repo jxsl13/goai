@@ -213,6 +213,128 @@ func TestBugAddNewestFirst(t *testing.T) {
 	}
 }
 
+// writeBenchSection seeds the empty §Bench source file in a fixture root (the
+// migration creates it out-of-band; bench add only inserts rows).
+func writeBenchSection(t *testing.T, root string) {
+	t.Helper()
+	hdr := "## §Bench — benchmark records\n\n" +
+		"| id | date | benchmark | machine | incumbent | metric | before | after | impact | cites |\n" +
+		"| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n"
+	if err := os.WriteFile(filepath.Join(root, "spec", "80-benchmarks.md"), []byte(hdr), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestBenchAdd: bench add COMPUTES impact = before/after, renders the row into
+// SPEC.md in one transaction, and the row parses back as a KindBench node whose
+// cites column mints EdgeCites to the §T task and §V invariant.
+func TestBenchAdd(t *testing.T) {
+	root := specFixture(t)
+	writeBenchSection(t, root)
+	var w strings.Builder
+	out := mustRun(t, cmdBenchAdd(&w, root, mutFlags{
+		Benchmark: "demo op forward", Machine: "darwin/arm64", Metric: "ms",
+		Before: "2.76", After: "2.00", Cites: "T1,V1", Date: "2026-01-05",
+	}), &w)
+	if !strings.Contains(out, "BM1 allocated (impact 1.38×)") {
+		t.Fatalf("unexpected add output: %s", out)
+	}
+	spec, _ := os.ReadFile(filepath.Join(root, "SPEC.md"))
+	want := "| BM1 | 2026-01-05 | demo op forward | darwin/arm64 | self | ms | 2.76 | 2.00 | 1.38× | T1,V1 |"
+	if !strings.Contains(string(spec), want) {
+		t.Fatalf("rendered §Bench row missing/wrong: %s", grepLine(string(spec), "BM1"))
+	}
+	g := buildGraph(root, false)
+	if n := g.Nodes["BM1"]; n == nil || n.Kind != KindBench {
+		t.Fatalf("BM1 not a bench node: %#v", n)
+	}
+	if !hasEdge(g, "BM1", EdgeCites, "T1") || !hasEdge(g, "BM1", EdgeCites, "V1") {
+		t.Error("BM1 cites edges to T1/V1 missing")
+	}
+	// Add a second row, then normalize once (the documented cmdSort workflow for
+	// a fresh section — insertRow's single-row heuristic is ambiguous until a
+	// sort pins the ascending order). §Bench is a plain ascending table, so sort
+	// leaves BM1 then BM2, and a subsequent add appends BM3 last.
+	w.Reset()
+	mustRun(t, cmdBenchAdd(&w, root, mutFlags{Benchmark: "second", Before: "4", After: "1", Cites: "T1"}), &w)
+	if !strings.Contains(w.String(), "BM2 allocated (impact 4×)") {
+		t.Fatalf("BM2 add: %s", w.String())
+	}
+	w.Reset()
+	mustRun(t, cmdSort(&w, root, false), &w)
+	w.Reset()
+	mustRun(t, cmdBenchAdd(&w, root, mutFlags{Benchmark: "third", Before: "9", After: "3", Cites: "T1"}), &w)
+	bench, _ := os.ReadFile(filepath.Join(root, "spec", "80-benchmarks.md"))
+	lines := strings.Split(strings.TrimRight(string(bench), "\n"), "\n")
+	if !strings.HasPrefix(lines[len(lines)-3], "| BM1 ") ||
+		!strings.HasPrefix(lines[len(lines)-2], "| BM2 ") ||
+		!strings.HasPrefix(lines[len(lines)-1], "| BM3 ") {
+		t.Fatalf("§Bench not ascending after normalize+add:\n%s", strings.Join(lines[len(lines)-3:], "\n"))
+	}
+	// and the normalized section is sort-clean (dry-run reports no change).
+	w.Reset()
+	if rc := cmdSort(&w, root, true); rc != 0 {
+		t.Fatalf("sort -n after normalize failed: %s", w.String())
+	}
+}
+
+// TestBenchAddRequiresMeasuredValues: missing/bad before/after is a hard error,
+// so a bogus impact is never stored.
+func TestBenchAddRequiresMeasuredValues(t *testing.T) {
+	root := specFixture(t)
+	writeBenchSection(t, root)
+	var w strings.Builder
+	if rc := cmdBenchAdd(&w, root, mutFlags{Benchmark: "x", Before: "1"}); rc == 0 {
+		t.Fatal("bench add accepted a missing -after")
+	}
+	w.Reset()
+	if rc := cmdBenchAdd(&w, root, mutFlags{Benchmark: "x", Before: "nope", After: "2"}); rc == 0 {
+		t.Fatalf("bench add accepted a non-numeric -before: %s", w.String())
+	}
+}
+
+// TestComputeImpact pins the before/after ratio + trailing-zero trimming.
+func TestComputeImpact(t *testing.T) {
+	cases := []struct{ before, after, want string }{
+		{"2.76", "2.00", "1.38×"},
+		{"16.90", "10.69", "1.58×"},
+		{"11.97", "0.91", "13.15×"},
+		{"2.00", "1.00", "2×"},        // trailing zeros trimmed
+		{"2.76ms", "2.00ms", "1.38×"}, // trailing unit tolerated
+	}
+	for _, c := range cases {
+		got, err := computeImpact(c.before, c.after)
+		if err != nil || got != c.want {
+			t.Errorf("computeImpact(%q,%q) = %q,%v want %q", c.before, c.after, got, err, c.want)
+		}
+	}
+	if _, err := computeImpact("abc", "2"); err == nil {
+		t.Error("non-numeric before accepted")
+	}
+	if _, err := computeImpact("2", "0"); err == nil {
+		t.Error("zero after (division by zero) accepted")
+	}
+}
+
+// TestBenchmarksMaySortAfterTasks: §Bench is the ONE section allowed to render
+// after §T (§V36 relaxation), but only directly after it.
+func TestBenchmarksMaySortAfterTasks(t *testing.T) {
+	ok := Output{RenderPath: "SPEC.md", Fragments: []Fragment{
+		{Path: "spec/70-tasks.md", Content: "## §T\n\n| id |\n"},
+		{Path: "spec/80-benchmarks.md", Content: "## §Bench\n\n| id |\n"},
+	}}
+	if _, err := renderOutput(ok); err != nil {
+		t.Fatalf("§Bench directly after §T must be accepted: %v", err)
+	}
+	bad := Output{RenderPath: "SPEC.md", Fragments: []Fragment{
+		{Path: "spec/60-backprop.md", Content: "## §B\n\n| id |\n"},
+		{Path: "spec/80-benchmarks.md", Content: "## §Bench\n\n| id |\n"},
+	}}
+	if _, err := renderOutput(bad); err == nil {
+		t.Fatal("§Bench last without §T directly before it must be rejected")
+	}
+}
+
 // TestResearchAndDefAdds: research add + verif/goal/constraint adds render
 // into the view and parse back as nodes.
 func TestResearchAndDefAdds(t *testing.T) {

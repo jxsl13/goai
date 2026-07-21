@@ -84,23 +84,29 @@ func applyMutation(w *strings.Builder, root string, dryRun bool, mutate func(c *
 
 // mutFlags are the shared mutation options parsed by main.go.
 type mutFlags struct {
-	Cites    string
-	Priority string
-	Status   string
-	ID       string
-	Worker   string
-	Cause    string
-	Fix      string
-	Date     string
-	Guards   string
-	Claim    string
-	Source   string
-	Conf     string
-	Tag      string
-	Text     string
-	State    string
-	Force    bool
-	DryRun   bool
+	Cites     string
+	Priority  string
+	Status    string
+	ID        string
+	Worker    string
+	Cause     string
+	Fix       string
+	Date      string
+	Guards    string
+	Claim     string
+	Source    string
+	Conf      string
+	Tag       string
+	Text      string
+	State     string
+	Benchmark string
+	Machine   string
+	Incumbent string
+	Metric    string
+	Before    string
+	After     string
+	Force     bool
+	DryRun    bool
 }
 
 func cmdNextID(w *strings.Builder, root string, class string) int {
@@ -227,6 +233,39 @@ func cmdBugAdd(w *strings.Builder, root string, fl mutFlags) int {
 			return err
 		}
 		fmt.Fprintf(w, "%s allocated\n%s  %s\n", id, f.Path, truncate(row, 160))
+		return nil
+	})
+}
+
+// cmdBenchAdd books a §Bench row (BM class) into spec/80-benchmarks.md. Impact
+// is COMPUTED (before/after) and stored, never passed in, so it can never drift
+// from the measured values (§V22). Mirrors cmdBugAdd: insertRow keeps §Bench
+// ascending by id.
+func cmdBenchAdd(w *strings.Builder, root string, fl mutFlags) int {
+	if fl.Benchmark == "" || fl.Before == "" || fl.After == "" {
+		fmt.Fprintln(w, "bench add: -benchmark, -before and -after required")
+		return 2
+	}
+	return applyMutation(w, root, fl.DryRun, func(c *Corpus) error {
+		impact, err := computeImpact(fl.Before, fl.After)
+		if err != nil {
+			return err
+		}
+		id := fmt.Sprintf("BM%d", nextID(c, "BM"))
+		row, err := buildBenchRow(id, orStr(fl.Date, time.Now().UTC().Format("2006-01-02")),
+			fl.Benchmark, fl.Machine, orStr(fl.Incumbent, "self"), fl.Metric,
+			fl.Before, fl.After, impact, fl.Cites)
+		if err != nil {
+			return err
+		}
+		f := c.fragmentByPath(classFile["BM"])
+		if f == nil {
+			return fmt.Errorf("missing %s — create the §Bench source file first", classFile["BM"])
+		}
+		if err := insertRow(f, "BM", row); err != nil {
+			return err
+		}
+		fmt.Fprintf(w, "%s allocated (impact %s)\n%s  %s\n", id, impact, f.Path, truncate(row, 160))
 		return nil
 	})
 }

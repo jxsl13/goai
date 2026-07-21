@@ -6,11 +6,14 @@ import (
 )
 
 // Defining-occurrence and reference regexes. Every id-bearing section is now a
-// clean GFM table (§V/§C/§G/§I joined §T/§B/§R), so the defining occurrence is
-// always the leading cell of a table row: `| <id> | …`. reTRow/reBRow/reRRow/
-// reVDefBare are speccheck's defining-occurrence rules verbatim; reVDef is the
-// docgraph-only extension that additionally captures the §V TAG (its own
-// column, `| id | tag | invariant |`). TestParseMatchesSpeccheck pins the
+// clean GFM table (§V/§C/§G/§I joined §T/§B/§R/§Bench), so the defining
+// occurrence is always the leading cell of a table row: `| <id> | …`.
+// reTRow/reBRow/reBMRow/reRRow/reVDefBare are speccheck's defining-occurrence
+// rules verbatim; reVDef is the docgraph-only extension that additionally
+// captures the §V TAG (its own column, `| id | tag | invariant |`). The BM
+// (benchmark) class is a two-letter prefix disjoint from B (bug): `B\d+` needs
+// a digit right after the B, so `| BM1 |` never matches reBRow and `| B116 |`
+// never matches reBMRow. TestParseMatchesSpeccheck pins the
 // copies to identical id extraction on a shared fixture instead of coupling
 // the packages, since speccheck is the §V36 CI guard and documents its
 // self-containment. The digit-after-letter rule keeps worker prose ids like
@@ -20,6 +23,7 @@ import (
 var (
 	reTRow     = regexp.MustCompile(`^\| (T\d+) `)
 	reBRow     = regexp.MustCompile(`^\| (B\d+) `)
+	reBMRow    = regexp.MustCompile(`^\| (BM\d+) `)
 	reRRow     = regexp.MustCompile(`^\| (R\d+) `)
 	reVDef     = regexp.MustCompile(`^\| (V\d+) \| ([A-Z][A-Z0-9+/ -]*?) \|`)
 	reVDefBare = regexp.MustCompile(`^\| (V\d+) `)
@@ -36,7 +40,7 @@ var (
 	reRefCGI   = regexp.MustCompile(`§(C\d+|G\d+|I\.L\d+[a-z]?|I\d+)\b`)
 	reRefADR   = regexp.MustCompile(`\b(ADR-\d{4})\b`)
 	reRefSHA   = regexp.MustCompile(`\bcommit ([0-9a-f]{7,40})\b`)
-	reCitesRef = regexp.MustCompile(`^(T\d+|B\d+|R\d+|V\d+|C\d+|G\d+|I\.L\d+[a-z]?|I\d+|ADR-\d{4})$`)
+	reCitesRef = regexp.MustCompile(`^(T\d+|BM\d+|B\d+|R\d+|V\d+|C\d+|G\d+|I\.L\d+[a-z]?|I\d+|ADR-\d{4})$`)
 
 	// "T870/T905 class" phrases inside §T rows become same_class edges.
 	reClass = regexp.MustCompile(`((?:T\d+[/, ]+)*T\d+) class\b`)
@@ -116,6 +120,8 @@ func kindOfID(id string) Kind {
 	switch {
 	case strings.HasPrefix(id, "ADR-"):
 		return KindADR
+	case strings.HasPrefix(id, "BM"):
+		return KindBench // intercept before the id[0]=='B' bug case
 	case strings.HasPrefix(id, "I.L"):
 		return KindArchInv
 	}
@@ -164,6 +170,9 @@ func parseSpec(g *Graph, file, content string, pkgs *pkgSet) {
 		case reTRow.MatchString(ln):
 			flush()
 			parseTaskRow(g, file, lineNo, ln, pkgs)
+		case reBMRow.MatchString(ln):
+			flush()
+			parseBenchRow(g, file, lineNo, ln)
 		case reBRow.MatchString(ln):
 			flush()
 			parseBugRow(g, file, lineNo, ln, pkgs)
@@ -332,6 +341,41 @@ func parseBugRow(g *Graph, file string, lineNo int, ln string, pkgs *pkgSet) {
 	}
 	for _, p := range pkgs.find(cause + " " + fix) {
 		g.AddEdge(Edge{From: n.ID, To: p, Type: EdgeTouches, File: file, Line: lineNo})
+	}
+}
+
+// parseBenchRow handles a §Bench row:
+// `| id | date | benchmark | machine | incumbent | metric | before | after | impact | cites |`.
+// The benchmark cell is the node text; the numeric/context columns land in Meta.
+// The trailing cites column is a trusted context (bare comma-separated ids,
+// exactly like §T) → EdgeCites to the §T task and §V invariant each measurement
+// backs, so `docgraph why V22` / `impact T919` reach their benchmark records and
+// §V39 keeps those cites from dangling.
+func parseBenchRow(g *Graph, file string, lineNo int, ln string) {
+	cells := splitRow(ln)
+	n := g.AddNode(&Node{ID: cells[0], Kind: KindBench, File: file, Line: lineNo, Meta: map[string]string{}})
+	put := func(i int, key string) {
+		if len(cells) > i && cells[i] != "" {
+			n.Meta[key] = cells[i]
+		}
+	}
+	put(1, "date")
+	if len(cells) > 2 {
+		n.Text = cells[2] // the benchmark description
+	}
+	put(3, "machine")
+	put(4, "incumbent")
+	put(5, "metric")
+	put(6, "before")
+	put(7, "after")
+	put(8, "impact")
+	if len(cells) > 9 {
+		for _, c := range strings.Split(cells[9], ",") {
+			c = strings.TrimSpace(c)
+			if reCitesRef.MatchString(c) && c != n.ID {
+				g.AddEdge(Edge{From: n.ID, To: c, Type: EdgeCites, File: file, Line: lineNo})
+			}
+		}
 	}
 }
 

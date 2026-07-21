@@ -148,6 +148,49 @@ func TestParseMatchesSpeccheck(t *testing.T) {
 	}
 }
 
+// TestBenchClassParsedAndChecked pins the §Bench (BM) class end-to-end without
+// disturbing the golden fixture: docgraph parses a BM row as a KindBench node
+// whose cites column mints EdgeCites, and speccheck tracks the same BM id for
+// §V36 uniqueness — the two regex copies must agree on the new class exactly as
+// TestParseMatchesSpeccheck pins them for T/B/R/V.
+func TestBenchClassParsedAndChecked(t *testing.T) {
+	const spec = `## §T — tasks
+
+| id | status | task | cites |
+| --- | --- | --- | --- |
+| T1 | x | a task | V1 |
+
+## §Bench — benchmark records
+
+| id | date | benchmark | machine | incumbent | metric | before | after | impact | cites |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| BM1 | 2026-07-20 | demo op | darwin/arm64 | self | ms | 2 | 1 | 2× | T1 |
+`
+	g := NewGraph()
+	parseSpec(g, "SPEC.md", spec, loadPkgSet(fixtureRoot))
+	if n := g.Nodes["BM1"]; n == nil || n.Kind != KindBench {
+		t.Fatalf("BM1 not parsed as a bench node: %#v", n)
+	}
+	if !hasEdge(g, "BM1", EdgeCites, "T1") {
+		t.Error("BM1 -cites-> T1 missing")
+	}
+	// the bug id B1 must NOT be confused with a BM id, and BM1 must NOT be read
+	// as bug B1: kindOfID intercepts the two-letter prefix.
+	if kindOfID("BM1") != KindBench || kindOfID("B1") != KindBug {
+		t.Errorf("kindOfID BM/B confusion: BM1=%s B1=%s", kindOfID("BM1"), kindOfID("B1"))
+	}
+	// speccheck tracks BM1 for id-uniqueness: doubling the row flags the dup.
+	found := false
+	for _, v := range speccheck.Check(spec+"\n"+spec, nil) {
+		if strings.Contains(v.Msg, "duplicate id BM1") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("speccheck does not track BM1 uniqueness")
+	}
+}
+
 // TestDeterminism: two independent builds must render byte-identical DOT —
 // the guard forcing sorted iteration everywhere.
 func TestDeterminism(t *testing.T) {

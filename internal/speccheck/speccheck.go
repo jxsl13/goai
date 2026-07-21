@@ -6,9 +6,10 @@
 //
 // The three checks (§V36):
 //
-//   - id UNIQUENESS: every §T/§B/§R/§V id is defined at most once, within SPEC.md
-//     and across the SPEC-worker-*.md files (§B96: parallel agents numbering from
-//     different bases both booked T870; the byte-identical T791–T798 re-append).
+//   - id UNIQUENESS: every §T/§B/§BM/§R/§V id is defined at most once, within
+//     SPEC.md and across the SPEC-worker-*.md files (§B96: parallel agents
+//     numbering from different bases both booked T870; the byte-identical
+//     T791–T798 re-append). §BM (benchmark records) is the §Bench ledger's class.
 //   - §T MEMBERSHIP: every task row (a line beginning "| T<n> |") lives inside the
 //     §T section, never as a headerless fragment spliced into another section
 //     (§B97: 148 rows appended after §B fed the 4-col §B table 6-col rows).
@@ -42,12 +43,16 @@ func (v Violation) String() string {
 }
 
 var (
-	// Defining occurrences: a §T/§B/§R/§V id in the LEADING cell of a GFM table
-	// row. Every id-bearing section is now a clean GFM table (§V/§C/§G/§I joined
-	// §T/§B/§R), so the shape is uniform: `| <id> | …`. A digit must follow the
-	// letter.
+	// Defining occurrences: a §T/§B/§BM/§R/§V id in the LEADING cell of a GFM
+	// table row. Every id-bearing section is now a clean GFM table (§V/§C/§G/§I
+	// joined §T/§B/§R plus the §Bench ledger), so the shape is uniform:
+	// `| <id> | …`. A digit must follow the letter(s). reBMRow (benchmark
+	// records) is a two-letter class disjoint from reBRow (bugs): `B\d+` requires
+	// a digit right after the B, so `| BM1 |` never matches reBRow and
+	// `| B116 |` never matches reBMRow — each id is counted under exactly one.
 	reTRow    = regexp.MustCompile(`^\| (T\d+) `)
 	reBRow    = regexp.MustCompile(`^\| (B\d+) `)
+	reBMRow   = regexp.MustCompile(`^\| (BM\d+) `)
 	reRRow    = regexp.MustCompile(`^\| (R\d+) `)
 	reVDef    = regexp.MustCompile(`^\| (V\d+) `)
 	reSection = regexp.MustCompile(`^## §?([A-Z])\b`) // "## §T — …" or "## T. …"
@@ -82,7 +87,7 @@ func Check(spec string, workers map[string]string) []Violation {
 	seen := map[string]int{} // id -> first line in SPEC.md
 	for i, ln := range lines {
 		lineNo := i + 1
-		for _, re := range []*regexp.Regexp{reTRow, reBRow, reRRow, reVDef} {
+		for _, re := range []*regexp.Regexp{reTRow, reBRow, reBMRow, reRRow, reVDef} {
 			if m := re.FindStringSubmatch(ln); m != nil {
 				id := m[1]
 				if first, ok := seen[id]; ok {
