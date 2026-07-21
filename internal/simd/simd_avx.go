@@ -444,3 +444,49 @@ func WKVScanStateF64(k, v, w, u, out, aa0, bb0, pp0 []float64, seq, d int) {
 		wkvScanStateScalar(k, v, w, u, out, aa0, bb0, pp0, seq, d, c, d)
 	}
 }
+
+// SSMScanF64 runs the Mamba/S6 selective-scan recurrence (Gu & Dao 2023), vectorizing
+// the reduction over the state dim N 4-wide: per (t,d) the decay abar = exp(Δ·A[d,n])
+// (A<0 ⟹ argument ≤ 0, so expF64x4v is valid), the state update h = abar·h + Δ·B·u,
+// and the output y = Σ_n C·h — the exp is the kernel's dominant cost (~65% scalar).
+// Same operations and iteration order as ssmScanScalar; the len%4 state-dim tail runs
+// the scalar form (N is a multiple of 4 for every real Mamba — 16/128/256 — so the
+// tail is dead in practice). h (D·N) is the scan state, allocated by the caller and
+// zero at entry. ~1 ulp per exp vs libm; the caller rides the model f64 tolerance.
+//
+//	u,delta [L,D]; as (A) [D,N]; bs (B), cs (C) [L,N]; dsk (D-skip) [D] or nil; out [L,D].
+func SSMScanF64(u, delta, as, bs, cs, dsk, out, h []float64, L, D, N int) {
+	if !hasAVX || !hasFMA {
+		ssmScanScalar(u, delta, as, bs, cs, dsk, out, h, L, D, N, 0, N)
+		return
+	}
+	nMain := N - N%4
+	for t := 0; t < L; t++ {
+		for d := 0; d < D; d++ {
+			dt := delta[t*D+d]
+			ut := u[t*D+d]
+			base := d * N
+			tn := t * N
+			dtVec := archsimd.BroadcastFloat64x4(dt)
+			dtut := archsimd.BroadcastFloat64x4(dt * ut)
+			yacc := eZero
+			for n := 0; n < nMain; n += 4 {
+				abar := expF64x4v(dtVec.Mul(archsimd.LoadFloat64x4Slice(as[base+n:])))
+				hv := abar.Mul(archsimd.LoadFloat64x4Slice(h[base+n:])).
+					Add(dtut.Mul(archsimd.LoadFloat64x4Slice(bs[tn+n:])))
+				hv.StoreSlice(h[base+n:])
+				yacc = yacc.Add(archsimd.LoadFloat64x4Slice(cs[tn+n:]).Mul(hv))
+			}
+			var lanes [4]float64
+			yacc.StoreSlice(lanes[:])
+			y := lanes[0] + lanes[1] + lanes[2] + lanes[3]
+			if dsk != nil { // AVX main owns the per-d skip (the tail pass must not re-add it)
+				y += dsk[d] * ut
+			}
+			out[t*D+d] = y
+		}
+	}
+	if nMain < N {
+		ssmScanScalar(u, delta, as, bs, cs, dsk, out, h, L, D, N, nMain, N)
+	}
+}

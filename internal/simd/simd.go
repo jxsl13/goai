@@ -133,3 +133,9 @@ func WKVScanF64(k, v, w, u, out []float64, seq, d int) {
 func WKVScanStateF64(k, v, w, u, out, aa0, bb0, pp0 []float64, seq, d int) {
 	wkvScanStateScalar(k, v, w, u, out, aa0, bb0, pp0, seq, d, 0, d)
 }
+
+// SSMScanF64 runs the Mamba/S6 selective scan (see the AVX variant). Portable scalar
+// fallback; the amd64 SIMD build vectorizes the reduction over the state dim N.
+func SSMScanF64(u, delta, as, bs, cs, dsk, out, h []float64, L, D, N int) {
+	ssmScanScalar(u, delta, as, bs, cs, dsk, out, h, L, D, N, 0, N)
+}
