@@ -378,3 +378,45 @@ func SigmoidF64(dst, src []float64) {
 		}
 	}
 }
+
+// WKVScanF64 runs the RWKV-4 WKV time-mixing recurrence (Peng et al. 2023,
+// arXiv:2305.13048): k,v are [seq,d] row-major; w,u are [d]; out is [seq,d]. The d
+// CHANNELS are independent (each carries its own aa/bb/pp state), so this
+// vectorizes the scan over d 4-wide. Every exp argument is ≤0 (max-subtracted, the
+// log-space stabilization), so expF64x4v is valid. Same operations, per channel, as
+// wkvScanScalar; the len%4 channel tail runs the scalar form. ~1 ulp per exp vs
+// libm — the RWKV caller rides the model f64 tolerance; the non-AVX build is the
+// bit-exact scalar path.
+func WKVScanF64(k, v, w, u, out []float64, seq, d int) {
+	if !hasAVX || !hasFMA {
+		wkvScanScalar(k, v, w, u, out, seq, d, 0, d)
+		return
+	}
+	pInit := archsimd.BroadcastFloat64x4(-1e38)
+	c := 0
+	for ; c+4 <= d; c += 4 {
+		wc := archsimd.LoadFloat64x4Slice(w[c:])
+		uc := archsimd.LoadFloat64x4Slice(u[c:])
+		aa, bb, pp := eZero, eZero, pInit
+		for t := 0; t < seq; t++ {
+			base := t*d + c
+			kk := archsimd.LoadFloat64x4Slice(k[base:])
+			vv := archsimd.LoadFloat64x4Slice(v[base:])
+			ww := uc.Add(kk)
+			q := pp.Max(ww)
+			e1 := expF64x4v(pp.Sub(q))
+			e2 := expF64x4v(ww.Sub(q))
+			e1.Mul(aa).Add(e2.Mul(vv)).Div(e1.Mul(bb).Add(e2)).StoreSlice(out[base:])
+			ppw := pp.Sub(wc)
+			q2 := ppw.Max(kk)
+			e3 := expF64x4v(ppw.Sub(q2))
+			e4 := expF64x4v(kk.Sub(q2))
+			aa = e3.Mul(aa).Add(e4.Mul(vv))
+			bb = e3.Mul(bb).Add(e4)
+			pp = q2
+		}
+	}
+	if c < d {
+		wkvScanScalar(k, v, w, u, out, seq, d, c, d)
+	}
+}
