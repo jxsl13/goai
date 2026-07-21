@@ -146,13 +146,15 @@ func (t *BPETokenizer) Encode(text string) []int {
 // byte→Unicode map back to raw bytes. Byte-exact for any input the vocabulary covers.
 func (t *BPETokenizer) Decode(ids []int) string {
 	var mapped strings.Builder
+	mapped.Grow(len(ids) * 4) // pre-size (§T929): skip the log(n) builder growth churn
 	for _, id := range ids {
 		if s, ok := t.decoder[id]; ok {
 			mapped.WriteString(s)
 		}
 	}
-	var out []byte
-	for _, r := range mapped.String() {
+	m := mapped.String()
+	out := make([]byte, 0, len(m)) // one byte per rune ≤ len(m) bytes — pre-sized, no append growth
+	for _, r := range m {
 		if b, ok := t.u2b[r]; ok {
 			out = append(out, b)
 		}

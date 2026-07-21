@@ -16,3 +16,4 @@
 | BM12 | 2026-07-21 | nlp SPM Decode (inline meta-unescape; 300k ids) | darwin/arm64 | self | ms | 4.530 | 2.742 | 1.65× | T934,V22 |
 | BM13 | 2026-07-21 | nlp Unigram Decode (inline meta-unescape; 300k ids) | darwin/arm64 | self | ms | 4.354 | 2.636 | 1.65× | T934,V22 |
 | BM14 | 2026-07-21 | nlp BPETokenizer(GGUF) Encode (~100k-char text) | darwin/arm64 | self | ms | 12.241 | 9.618 | 1.27× | T936,V22 |
+| BM15 | 2026-07-21 | nlp BPETokenizer(GGUF) Decode (ids->text) | darwin/arm64 | self | ms | 1.649 | 1.559 | 1.06× | T937,V22 |
