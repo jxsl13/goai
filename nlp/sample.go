@@ -932,12 +932,6 @@ func applyKeep(probs []float64, keep []bool) {
 // +inf score and are never kept, matching the old `if probs[i]==0 break`.
 func typicalTruncate(probs []float64, tau float64) {
 	n := len(probs)
-	var h float64 // Shannon entropy in nats over the current distribution
-	for _, p := range probs {
-		if p > 0 {
-			h -= p * math.Log(p)
-		}
-	}
 	// pool the three per-call vocab-sized scratch buffers (T947); defer Put covers the
 	// early-return paths. |−log p − H|; masked (zero-prob) tokens sort last.
 	score := typicalScorePool.Get().([]float64)
@@ -954,12 +948,25 @@ func typicalTruncate(probs []float64, tau float64) {
 		idx = idx[:n]
 	}
 	defer nucleusIdxPool.Put(idx)
+	// One log per token: stash log(p) in score while accumulating the Shannon entropy
+	// H = −Σ p·log p in the same pass, then fold each score into the typicality
+	// |−log p − H|. math.Log is deterministic, so reusing the stored value is
+	// bit-identical to recomputing it (the §T628/1e-12 parity holds) while halving the
+	// transcendental work — the dominant cost of this, the slowest truncation sampler.
+	var h float64 // Shannon entropy in nats over the current distribution
 	for i, p := range probs {
 		idx[i] = i
 		if p > 0 {
-			score[i] = math.Abs(-math.Log(p) - h)
+			lp := math.Log(p)
+			score[i] = lp
+			h -= p * lp
 		} else {
 			score[i] = math.Inf(1)
+		}
+	}
+	for i, p := range probs {
+		if p > 0 {
+			score[i] = math.Abs(-score[i] - h)
 		}
 	}
 	keep := typicalKeepPool.Get().([]bool)
