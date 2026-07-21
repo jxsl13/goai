@@ -4,19 +4,19 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
-### tooling -- spec/ hierarchy: SPEC.md becomes a generated view, all spec mutations via specgraph (T921, 2026-07-20)
+### tooling -- spec/ hierarchy: SPEC.md becomes a generated view, all spec mutations via docgraph (T921, 2026-07-20)
 
 The spec corpus moved to a `spec/` source tree (one caveman-markdown file per section, worker
 sections under `spec/worker/linux-amd64-cuda/`); `SPEC.md` and `SPEC-worker-*.md` are now
 deterministically rendered, committed views — the migration split is byte-proven (render of the
 split equals the original file exactly, asserted before anything is written; the migration commit
-leaves both views untouched). `internal/specgraph` gained the full mutation layer: `task
+leaves both views untouched). `internal/docgraph` gained the full mutation layer: `task
 add/set-status/edit`, `bug add` (guard chain included), `research/verif/goal/constraint/archinv
 add`, `entry get/rm` (§V39-guarded), `next-id`, `render`, `verify`, `split`. Every mutation
 applies in memory, re-renders all views and runs the complete verify suite (§V36 speccheck, table
 shapes, §V39 dangling refs, render-sync) before writing fragments and views in one transaction —
 a violating mutation writes nothing. Hand-edits to a rendered view go CI-red via the new
-`TestRenderSync` (specgraph joined cichange's always-run set); worker views are warn-only until
+`TestRenderSync` (docgraph joined cichange's always-run set); worker views are warn-only until
 the worker machine picks up the tool (RUN9 protocol). All skills, LOOP.md, FORMAT.md (new
 HIERARCHY section) and the planning docs now route spec writes through the CLI. New §V41
 invariant documents the whole contract; T919 itself was booked, started and closed through the
@@ -34,7 +34,7 @@ closed.
 
 ### spec -- restore the stranded V27 invariant and the lost T765 booking; strong dangling refs now test-guarded (T918, 2026-07-20)
 
-The first `specgraph dangling` run (T915) found two real spec holes: the V27 selector-soundness
+The first `docgraph dangling` run (T915) found two real spec holes: the V27 selector-soundness
 invariant existed only as a headerless `V27|…` fragment inside §T — invisible to every tool while
 three tasks cited it — and the 2026-07-16 "loadable-architecture catalogue to twenty-three" work
 was changelogged as T765 without its §T row ever being written. V27 now sits in §V in canonical
@@ -44,9 +44,9 @@ shape (text verbatim), the T765 row is reconstructed next to T764/T766, and the 
 lookalikes (V1024 vocab-size tokens, pre-rewrite ids, rebased-away SHAs) are documented as
 tolerated in §B113, not silently "fixed".
 
-### tooling -- specgraph: queryable citation graph over SPEC/docs/git for bug- and pattern-lookup (T915, 2026-07-20)
+### tooling -- docgraph: queryable citation graph over SPEC/docs/git for bug- and pattern-lookup (T915, 2026-07-20)
 
-New dependency-free CLI `internal/specgraph` (`make spec-graph ARGS="why V22"`): parses SPEC.md,
+New dependency-free CLI `internal/docgraph` (`make spec-graph ARGS="why V22"`): parses SPEC.md,
 the worker specs, docs/** (ADRs included), CHANGELOG.md and `git log` into a typed in-memory
 graph — tasks, bugs, invariants, constraints, ADRs, commits, doc sections and packages as nodes;
 cites/guards/fixed_by/implements/records/relates/mentions/touches as edges, every record anchored
@@ -56,7 +56,7 @@ this invariant exist"); `patterns` clusters recurring §B bug classes and done-P
 deterministically; `search` is BM25 with optional hybrid vector ranking through GoAI's own
 `nlp.Bert` + `MeanPool` + `CosineRerank` (a local HF checkpoint via `$SPECGRAPH_EMBED_MODEL`,
 no external API); `dangling` reports references whose target does not exist. A gitignored
-`.specgraph/` JSONL cache (mtime+HEAD-invalidated, never a source of truth) makes repeat calls
+`.docgraph/` JSONL cache (mtime+HEAD-invalidated, never a source of truth) makes repeat calls
 ~3x faster. `internal/speccheck` remains the §V36 validator; a drift test pins the two id
 grammars to each other. First `dangling` run already surfaced real hygiene debt (V27 cited but
 never defined; a changelog entry for a T765 that has no §T row).

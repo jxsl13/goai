@@ -70,9 +70,9 @@ Steps:
 2. Find root cause (read relevant code).
 3. Decide: would a new invariant catch recurrence? If yes → draft it.
 4. Write the invariant FIRST (id auto-allocated):
-   `go run ./internal/specgraph verif add -tag <TAG> "<testable rule>"`
+   `go run ./internal/docgraph verif add -tag <TAG> "<testable rule>"`
 5. Write the §B row citing it (guard chain lands as the fix cell's last sentence):
-   `go run ./internal/specgraph bug add -cause "<cause>" -fix "<fix>" -guards V<n>`
+   `go run ./internal/docgraph bug add -cause "<cause>" -fix "<fix>" -guards V<n>`
 6. If fix also changes behavior → `task add` / `task edit`.
 7. The CLI re-renders + re-verifies per mutation; show the resulting diff.
 
@@ -83,7 +83,7 @@ Rule: every bug gets a §B entry. Invariant optional but preferred.
 
 Input: `amend §V.3` or `amend §T` etc.
 
-Read the section (`specgraph entry get <id>` for one entry). Show current.
+Read the section (`docgraph entry get <id>` for one entry). Show current.
 Ask user what changes. Apply via the CLI:
 - table rows: `task edit -text/-cites/-state/-priority <id>`; removal: `entry rm <id>`
 - defs: `goal|constraint|archinv edit <id> "<new text>"`; `verif add` for new §V
@@ -97,7 +97,7 @@ Show diff. Never silently rewrite sections user did not name.
 - Preserve identifiers, paths, code verbatim.
 - Numbering monotonic — ids come from the CLI (`next-id` / auto-allocation on add), never hand-numbered.
 - §T `cites` ! list §V/§I deps: `task add -cites V2,I.api "impl auth mw"`.
-- Every mutation goes through `go run ./internal/specgraph` — it re-renders the
+- Every mutation goes through `go run ./internal/docgraph` — it re-renders the
   views and re-verifies (V36+V39+V41) in one transaction; a violating write is
   rejected with nothing written.
 

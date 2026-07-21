@@ -209,12 +209,12 @@ spec-graph-check:
 
 ## spec-render: regenerate the SPEC.md + SPEC-worker-*.md views from spec/ (§V41).
 spec-render:
-	$(CGO_OFF) $(GO) run ./internal/docgraph render
+	$(CGO_OFF) $(GO) run ./internal/docgraph spec render
 
 ## spec-verify: render-sync + §V36 speccheck + table shapes + §V39 dangling
 ## strong refs, plus the full markdown lint. The local pre-push spec gate.
 spec-verify:
-	$(CGO_OFF) $(GO) run ./internal/docgraph verify
+	$(CGO_OFF) $(GO) run ./internal/docgraph spec verify
 	$(GO) run ./internal/mdlint ./...
 
 ## perfscan: static finder for the per-element hot-loop anti-patterns (T919) —

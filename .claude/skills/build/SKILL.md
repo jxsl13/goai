@@ -47,10 +47,10 @@ Show plan. Wait for user OK unless auto mode.
 
 Per task in order:
 
-1. `go run ./internal/specgraph task set-status T<n> ~` (re-renders + re-verifies).
+1. `go run ./internal/docgraph task set-status T<n> ~` (re-renders + re-verifies).
 2. Edit code per plan.
 3. Run verification command.
-4. **Pass** → `go run ./internal/specgraph task set-status T<n> x`. Next task.
+4. **Pass** → `go run ./internal/docgraph task set-status T<n> x`. Next task.
 5. **Fail** → invoke backprop skill. Do NOT retry blindly.
 
 ## FAIL → BACKPROP
