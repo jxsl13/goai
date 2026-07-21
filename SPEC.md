@@ -1468,6 +1468,7 @@ T38b|x|L4 Llama-family pt2: SiLU op+VJP, SwiGLU FFN (nn layer, trainable), GQA (
 | T927 | x | nn: FocalLoss one-hot typed fast path (fillFocalOneHot) — contiguous F32/F64 targets written into oneHot backing at i*classes+c, no per-row Unravel/AtF64/SetF64 dispatch; detection-shape [8192,4] 1.03× (§V22 p=0.026, classify-shape flat), bit-identical vs oracle + non-vacuity-checked | V22 | done | med |
 | T928 | x | nlp: BPE encode track token ids through the merge (byteRank[256] + bpePart.id) — final emit reads parts[i].id instead of re-hashing ranks[piece[a:b]] per token (mapaccess1_faststr, ~7.5% of encode); 1.06× encode, bit-identical (tiktoken-golden + 841K-exec fuzz + full nlp suite) | V22 | done | med |
 | T929 | x | nlp: BPE Decode pre-size strings.Builder by estimate (len(ids)*4) — kills the log(n) growth-buffer churn (33→2 allocs/op) the profile showed as gcDrain; an EXACT pre-pass regressed (2nd O(n) map sweep costs more than the churn), the estimate wins with no extra lookups; 1.10× decode, bit-identical (Grow is capacity-only; roundtrip+fuzz green) | V22 | done | med |
+| T930 | x | nlp: class-audit the T929 builder-pre-size fix across the sibling detokenizers — SPM/Unigram/WordPiece Decode all built an un-pre-sized strings.Builder in a per-token loop; b.Grow(len(ids)*4) each. §V22: WordPiece 1.10× (allocs 31→1), Unigram 1.03× (B/op -45%), SPM 1.02×; all bit-identical (Grow capacity-only, roundtrip green). NOTE SPM still does 1.55M allocs (~5/id in ▁/byte-piece handling) = separate deeper opportunity | V22,T929 | done | med |
 
 ## §Bench — benchmark records
 
@@ -1479,3 +1480,6 @@ T38b|x|L4 Llama-family pt2: SiLU op+VJP, SwiGLU FFN (nn layer, trainable), GQA (
 | BM4 | 2026-07-21 | nn FocalLoss detection one-hot build [8192,4] many-rows | darwin/arm64 | self | ms | 1.079 | 1.045 | 1.03× | T927,V22 |
 | BM5 | 2026-07-21 | nlp BPE GPT2Encode (per-prompt tokenization, 1MB corpus) | darwin/arm64 | self | ms | 23.37 | 22.13 | 1.06× | T928,V22 |
 | BM6 | 2026-07-21 | nlp BPE GPT2Decode (ids->text, 1MB output) | darwin/arm64 | self | ms | 2.299 | 2.086 | 1.1× | T929,V22 |
+| BM7 | 2026-07-21 | nlp WordPiece Decode (ids->text, 300k ids) | darwin/arm64 | self | ms | 1.947 | 1.767 | 1.1× | T930,V22 |
+| BM8 | 2026-07-21 | nlp Unigram Decode (ids->text, 300k ids) | darwin/arm64 | self | ms | 4.485 | 4.371 | 1.03× | T930,V22 |
+| BM9 | 2026-07-21 | nlp SPM Decode (ids->text, 300k ids) | darwin/arm64 | self | ms | 94.93 | 93.20 | 1.02× | T930,V22 |

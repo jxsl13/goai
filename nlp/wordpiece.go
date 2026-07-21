@@ -161,6 +161,7 @@ func (w *WordPiece) encodeWord(word string) []int {
 // word (prefix stripped), a non-continuation piece starts a new space-separated word.
 func (w *WordPiece) Decode(ids []int) string {
 	var b strings.Builder
+	b.Grow(len(ids) * 4) // pre-size (§T929): avoid the log(n) growth-buffer churn; Grow is capacity-only, output byte-identical
 	for _, id := range ids {
 		if id < 0 || id >= len(w.pieces) {
 			if t, ok := w.specials.textForID(id); ok {
