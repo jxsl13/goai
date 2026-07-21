@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"unicode/utf8"
+	"unsafe"
 )
 
 // bytesToUnicode builds the reversible GPT-2 byte→Unicode map (Radford et al. 2019,
@@ -190,22 +192,26 @@ func (t *BPETokenizer) bpeInto(mapped string, out []int, parts []ggufPart) ([]in
 // rank-ordered BPE merges → vocab lookup.
 //
 // It ranges gpt2SplitSeq (an iterator, no pieces []string) and threads one ids (the whole
-// result) + one parts merge scratch across every piece, so the per-piece heap traffic is just
-// the mapped string (§T939, mirrors Tokenizer.Encode). The mapped builder is declared once and
-// Reset per piece: Reset NILs its buffer so each piece still allocates one mapped string, but
-// bpeInto never retains it (map-key lookups on mapped[a:b] substrings only), so the reuse is
-// safe. mapped stays a string (not []byte) to keep the [2]string{mapped[a:b],mapped[b:c]} merge
-// key alloc-free — its substrings share the backing array, so the pair lookup allocates nothing.
+// result), one parts merge scratch, AND one mapped byte→Unicode buffer across every piece
+// (§T939/§T954, mirrors Tokenizer.Encode). mapped is a reused []byte truncated per piece; the
+// string handed to bpeInto ALIASES it via unsafe.String (no copy). That is sound because bpeInto
+// only does map-key lookups on mapped[a:b] substrings and never retains them, so the alias is
+// dead before the next piece overwrites the buffer — turning the old per-piece strings.Builder
+// allocation (Reset nils its backing, so each piece grew a fresh one: ~82% of Encode's allocs)
+// into O(1) heap traffic for the whole text. mapped stays contiguous so the merge key
+// [2]string{mapped[a:b],mapped[b:c]} aliases its backing and the pair lookup allocates nothing.
 func (t *BPETokenizer) Encode(text string) []int {
 	var ids []int
-	var parts []ggufPart       // merge scratch, reused across pieces
-	var mapped strings.Builder // byte→Unicode buffer, reused (Reset) across pieces
+	var parts []ggufPart // merge scratch, reused across pieces
+	var mapped []byte    // byte→Unicode buffer, reused (truncated) across pieces
 	for piece := range gpt2SplitSeq(text) {
-		mapped.Reset()
+		mapped = mapped[:0]
 		for i := 0; i < len(piece); i++ {
-			mapped.WriteRune(t.b2u[piece[i]]) // map each raw byte
+			mapped = utf8.AppendRune(mapped, t.b2u[piece[i]]) // map each raw byte
 		}
-		ids, parts = t.bpeInto(mapped.String(), ids, parts)
+		// unsafe.String aliases the reused buffer (no copy); safe because bpeInto never
+		// retains the string past the call, so the next piece may overwrite mapped (§T954).
+		ids, parts = t.bpeInto(unsafe.String(unsafe.SliceData(mapped), len(mapped)), ids, parts)
 	}
 	return ids
 }
