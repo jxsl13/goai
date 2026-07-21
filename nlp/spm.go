@@ -3,6 +3,7 @@ package nlp
 import (
 	"fmt"
 	"strings"
+	"sync"
 )
 
 // SPM is the SentencePiece BPE-mode encoder of the Llama model family (Llama 1/2,
@@ -202,21 +203,43 @@ func spmHeapPop(h []spmCand) (spmCand, []spmCand) {
 // round re-scanned every adjacent pair — catastrophic on long inputs since SPM merges over the WHOLE
 // string, not per pre-token). Segmentation is IDENTICAL to the naive scan: same global-max-score
 // choice each step, same leftmost tie-break, so encode parity holds (TestSPM*).
+// spmScratch pools spmBounds's per-call working arrays (T952): the rune-start list,
+// the symbol linked-list-over-arrays (start/end/prev/next/gen + alive) and the merge
+// heap. None escape spmBounds — the returned bounds slice is built fresh and copies
+// its values out — so they are reused across calls. gen must be cleared each call: the
+// lazy-delete generation guard relies on its zero-init and the init loop never sets
+// it, exactly the SentencePiece analog of Unigram.Encode's best[0] re-zero (T951).
+type spmScratch struct {
+	starts, start, end, prev, next, gen []int
+	alive                               []bool
+	heap                                []spmCand
+}
+
+var spmScratchPool = sync.Pool{New: func() any { return new(spmScratch) }}
+
 func (s *SPM) spmBounds(str string) []int {
-	var starts []int
+	sp := spmScratchPool.Get().(*spmScratch)
+	defer spmScratchPool.Put(sp)
+	starts := sp.starts[:0]
 	for i := range str { // rune-boundary starts
 		starts = append(starts, i)
 	}
+	sp.starts = starts
 	m := len(starts)
 	if m == 0 {
 		return []int{0}
 	}
-	start := make([]int, m)
-	end := make([]int, m)
-	prev := make([]int, m)
-	next := make([]int, m)
-	gen := make([]int, m)
-	alive := make([]bool, m)
+	if cap(sp.start) < m { // grow the symbol arrays together, mirroring radixScratch (T944)
+		sp.start = make([]int, m)
+		sp.end = make([]int, m)
+		sp.prev = make([]int, m)
+		sp.next = make([]int, m)
+		sp.gen = make([]int, m)
+		sp.alive = make([]bool, m)
+	}
+	start, end, prev := sp.start[:m], sp.end[:m], sp.prev[:m]
+	next, gen, alive := sp.next[:m], sp.gen[:m], sp.alive[:m]
+	clear(gen) // pooled buffer is dirty; gen relies on zero-init (the lgen/rgen generation guard)
 	for k := 0; k < m; k++ {
 		start[k] = starts[k]
 		if k+1 < m {
@@ -229,7 +252,7 @@ func (s *SPM) spmBounds(str string) []int {
 		prev[k] = k - 1
 		alive[k] = true
 	}
-	var h []spmCand
+	h := sp.heap[:0]
 	tryPush := func(a int) {
 		b := next[a]
 		if b < 0 {
@@ -264,6 +287,7 @@ func (s *SPM) spmBounds(str string) []int {
 			tryPush(prev[a]) // a's left neighbor with the grown a
 		}
 	}
+	sp.heap = h // retain the (possibly grown) heap backing for the next call
 	// symbol 0 is never a right operand (nothing to its left), so it always survives as the head.
 	bounds := make([]int, 0, m+1)
 	for n := 0; n >= 0; n = next[n] {
