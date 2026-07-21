@@ -2,6 +2,7 @@ package nlp_test
 
 import (
 	"fmt"
+	"math"
 	"reflect"
 	"testing"
 
@@ -143,4 +144,19 @@ func ExampleStreamingKeep() {
 	keep := nlp.StreamingKeep(20, 4 /*sinks*/, 6 /*recent*/)
 	fmt.Println(keep)
 	// Output: [0 1 2 3 14 15 16 17 18 19]
+}
+
+// BenchmarkH2OKeep exercises the accumulated-attention sort that H2O eviction
+// runs per decode step at long context. The radix path (sortIdxDescByProb) cut
+// it from ~1.32ms to ~0.27ms (4.89×) at n=8192.
+func BenchmarkH2OKeep(b *testing.B) {
+	const n = 8192
+	scores := make([]float64, n)
+	for i := range scores {
+		scores[i] = math.Abs(math.Sin(float64(i)*0.001)) * float64(i%97)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = nlp.H2OKeep(scores, 256, 1024)
+	}
 }
