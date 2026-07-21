@@ -192,6 +192,52 @@ func merge(base []*T) {
 	}
 }
 
+// Detector D: a reflection-based fmt scan/format call inside a loop is a candidate
+// (the SPM.Decode fmt.Sscanf-per-token class, T931).
+func TestDetectD_FmtScanInLoop(t *testing.T) {
+	src := `package p
+import "fmt"
+func Decode(ids []int, pieces []string) {
+	for _, id := range ids {
+		var v int
+		fmt.Sscanf(pieces[id], "<0x%02X>", &v)
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["reflection-in-loop"] != 1 {
+		t.Fatalf("want 1 reflection-in-loop, got %d (%v)", got["reflection-in-loop"], got)
+	}
+}
+
+// …but the SAME call outside any loop is fine (one-shot parse, not per-element).
+func TestDetectD_SilentOutsideLoop(t *testing.T) {
+	src := `package p
+import "fmt"
+func Parse(s string) int {
+	var v int
+	fmt.Sscanf(s, "<0x%02X>", &v)
+	return v
+}`
+	if got := countCat(scanSrc(t, src)); got["reflection-in-loop"] != 0 {
+		t.Fatalf("call outside a loop, want 0 reflection-in-loop, got %d", got["reflection-in-loop"])
+	}
+}
+
+// …and a same-named method on another type (not the fmt package) must NOT fire —
+// the pkg check guards against that false positive.
+func TestDetectD_SilentOnNonFmtSscanf(t *testing.T) {
+	src := `package p
+type parser struct{}
+func (parser) Sscanf(s, f string, a ...any) (int, error) { return 0, nil }
+func run(ps []parser, ss []string) {
+	for i := range ss {
+		ps[i].Sscanf(ss[i], "%d")
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["reflection-in-loop"] != 0 {
+		t.Fatalf("non-fmt Sscanf, want 0 reflection-in-loop, got %d", got["reflection-in-loop"])
+	}
+}
+
 // One loop holding both an AtF64 and a SetF64 is a single candidate, not two.
 func TestDedupPerLoop(t *testing.T) {
 	src := `package p

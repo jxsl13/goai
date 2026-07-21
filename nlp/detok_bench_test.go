@@ -1,10 +1,32 @@
 package nlp_test
 
 import (
+	"fmt"
+	"strconv"
 	"testing"
 
 	"github.com/jxsl13/goai/nlp"
 )
+
+// BenchmarkNewSPM times SPM construction over a realistic-size vocab (30k subwords +
+// the 256 <0xHH> byte pieces): the constructor parses every piece to build the byte
+// table, so it exercises the same per-piece fmt.Sscanf gate as Decode (T931).
+func BenchmarkNewSPM(b *testing.B) {
+	vocab := []nlp.UnigramPiece{{Piece: "<unk>"}, {Piece: "▁"}}
+	for n := 0; n < 256; n++ {
+		vocab = append(vocab, nlp.UnigramPiece{Piece: fmt.Sprintf("<0x%02X>", n)})
+	}
+	for i := 0; i < 30000; i++ {
+		vocab = append(vocab, nlp.UnigramPiece{Piece: "w" + strconv.Itoa(i), Score: -float64(i)})
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if _, err := nlp.NewSPM(vocab); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
 
 // unigramBenchVocab is the small SPM/Unigram vocab shared by the encode benchmarks:
 // <unk>, the ▁ space-meta, a–z, then 20 multi-char merges. Ids 2..47 are real pieces.

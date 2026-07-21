@@ -73,9 +73,13 @@ func NewSPM(vocab []UnigramPiece, opts ...SPMOption) (*SPM, error) {
 			return nil, fmt.Errorf("nlp: SPM duplicate piece %q", p.Piece)
 		}
 		s.id[p.Piece] = i
-		var b int
-		if n, _ := fmt.Sscanf(p.Piece, "<0x%02X>", &b); n == 1 && len(p.Piece) == 6 {
-			s.byteID[b] = i
+		// same <0xHH> gate as Decode (T931): skip the reflection-based fmt.Sscanf for the
+		// vast majority of vocab pieces that are not byte tokens (one-time build cost).
+		if pc := p.Piece; len(pc) == 6 && pc[0] == '<' && pc[1] == '0' && pc[2] == 'x' {
+			var b int
+			if n, _ := fmt.Sscanf(pc, "<0x%02X>", &b); n == 1 {
+				s.byteID[b] = i
+			}
 		}
 	}
 	if id, ok := s.id["<unk>"]; ok {
@@ -298,10 +302,16 @@ func (s *SPM) Decode(ids []int) string {
 			continue
 		}
 		p := s.pieces[id].Piece
-		var v int
-		if n, _ := fmt.Sscanf(p, "<0x%02X>", &v); n == 1 && len(p) == 6 {
-			b.WriteByte(byte(v)) // BYTE: raw, no unescaping
-			continue
+		// BYTE piece <0xHH>: gate the (allocating, reflection-based) fmt.Sscanf behind a
+		// cheap prefix+length check. A successful n==1 REQUIRES the "<0x" literal to match,
+		// so this is bit-identical — but it skips the Sscanf and its ~5 allocs for the 99%+
+		// of tokens that are ordinary subwords, not byte pieces (was 1.55M allocs/decode).
+		if len(p) == 6 && p[0] == '<' && p[1] == '0' && p[2] == 'x' {
+			var v int
+			if n, _ := fmt.Sscanf(p, "<0x%02X>", &v); n == 1 {
+				b.WriteByte(byte(v)) // BYTE: raw, no unescaping
+				continue
+			}
 		}
 		if s.specials.blocked(p) {
 			b.WriteString(p) // CONTROL / USER_DEFINED: ▁ is part of its name

@@ -11,3 +11,5 @@
 | BM7 | 2026-07-21 | nlp WordPiece Decode (ids->text, 300k ids) | darwin/arm64 | self | ms | 1.947 | 1.767 | 1.1× | T930,V22 |
 | BM8 | 2026-07-21 | nlp Unigram Decode (ids->text, 300k ids) | darwin/arm64 | self | ms | 4.485 | 4.371 | 1.03× | T930,V22 |
 | BM9 | 2026-07-21 | nlp SPM Decode (ids->text, 300k ids) | darwin/arm64 | self | ms | 94.93 | 93.20 | 1.02× | T930,V22 |
+| BM10 | 2026-07-21 | nlp SPM Decode (Sscanf-gated; ids->text, 300k) | darwin/arm64 | self | ms | 93.29 | 4.624 | 20.18× | T931,V22 |
+| BM11 | 2026-07-21 | nlp NewSPM construction (30k-piece vocab, byteID build) | darwin/arm64 | self | ms | 10.773 | 1.054 | 10.22× | T932,V22 |

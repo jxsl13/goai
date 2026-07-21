@@ -1,7 +1,7 @@
 // Command perfscan is a static finder for the per-element hot-loop anti-patterns
 // this codebase repeatedly optimizes away (§base-perf-sweep). It parses Go source
 // with go/ast — it never builds or imports the packages, so cgo/build-tagged
-// backends are scanned too — and reports the STRUCTURAL SHAPE of three patterns:
+// backends are scanned too — and reports the STRUCTURAL SHAPE of four patterns:
 //
 //	A. per-element .AtF64/.SetF64 dispatch in a Numel/Unravel loop with no
 //	   flatF64/flatF32 contiguous fast path in the enclosing function
@@ -10,6 +10,9 @@
 //	   loop — worse than dispatch (the AMP roundHalf case, 50×).
 //	C. a batch API called with a single-element slice literal inside a loop, e.g.
 //	   tree.Predict([][]float64{row}) (forest predict, 80001→1 alloc, 3×).
+//	D. a reflection-based fmt SCAN call (fmt.Sscanf/Sscan/Fscanf/…) in a loop —
+//	   parses a format string + reflects over varargs every call, allocating
+//	   (SPM.Decode ran fmt.Sscanf per token, 1.55M allocs → 20× once gated, T931).
 //
 // IMPORTANT — these are CANDIDATES, not confirmed wins. A static check sees the
 // shape of a hot loop, never its temperature: a per-element write in a one-time
@@ -41,7 +44,7 @@ import (
 // finding is one candidate anti-pattern occurrence, anchored to the enclosing loop.
 type finding struct {
 	pos      token.Position
-	category string // "per-element-dispatch" | "alloc-in-loop" | "batch-single-elt"
+	category string // "per-element-dispatch" | "alloc-in-loop" | "batch-single-elt" | "reflection-in-loop"
 	msg      string
 }
 
@@ -51,6 +54,35 @@ var allocCallees = map[string]bool{
 	"New": true, "NewOn": true, "FromFloat64": true, "FromFloat32": true,
 	"Zeros": true, "Ones": true, "Full": true, "Scalar": true,
 	"scalarTensor": true, "Cast": true,
+}
+
+// fmtReflectCallees are the fmt SCAN functions: they PARSE a format string and
+// REFLECT over their pointer varargs on every call, allocating heavily. Inside a
+// loop over elements that is a per-element reflect+parse+alloc cost; a hand-parse or
+// a cheap guard that skips the call for the common case is far cheaper (§T931:
+// SPM.Decode ran fmt.Sscanf("<0x%02X>") PER TOKEN = 1.55M allocs/decode; gating it
+// behind a len==6 && "<0x" prefix check → 20×). The FORMAT family (Sprintf/Sprint/…)
+// is DELIBERATELY excluded: it is common and usually benign in loops (139 vs 2
+// module-wide), so flagging it would drown the signal — scan-in-loop is the sharp,
+// almost-always-a-bug shape.
+var fmtReflectCallees = map[string]bool{
+	"Sscanf": true, "Sscan": true, "Sscanln": true, // parse a string via reflection
+	"Fscanf": true, "Fscan": true, "Fscanln": true, // parse a reader via reflection
+}
+
+// fmtReflectCall reports whether fun is a call to one of the fmtReflectCallees on the
+// fmt package specifically (`fmt.Sscanf`), returning the function name. The pkg check
+// keeps a same-named method on some other type from false-firing.
+func fmtReflectCall(fun ast.Expr) (string, bool) {
+	sel, ok := fun.(*ast.SelectorExpr)
+	if !ok {
+		return "", false
+	}
+	pkg, ok := sel.X.(*ast.Ident)
+	if !ok || pkg.Name != "fmt" || !fmtReflectCallees[sel.Sel.Name] {
+		return "", false
+	}
+	return sel.Sel.Name, true
 }
 
 // calleeName returns the trailing identifier of a call target: the func name for a
@@ -198,6 +230,15 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 				})
 				break
 			}
+		}
+		// D: a reflection-based fmt scan/format call in any loop (per-element reflection + alloc).
+		if fname, ok := fmtReflectCall(call.Fun); ok {
+			out = append(out, finding{
+				pos:      fset.Position(loop.Pos()),
+				category: "reflection-in-loop",
+				msg: fmt.Sprintf("fmt.%s in a loop — reflection-based + allocates on every call;"+
+					" gate it behind a cheap check or hand-parse (T931: SPM.Decode fmt.Sscanf per token = 1.55M allocs → 20×)", fname),
+			})
 		}
 		return true
 	})
