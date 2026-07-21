@@ -13,9 +13,31 @@ func init() {
 		pa, _ := attrs.(backend.SoftCapAttrs)
 		x, y := in[0], out[0]
 		gin := tensor.New(x.Dtype(), x.Shape())
-		for i := range x.Numel() {
+		n := x.Numel()
+		cap := pa.Cap
+		// raw-slice typed fast path (no per-element Unravel/AtF64/SetF64 dispatch).
+		// BIT-IDENTICAL: the generic path reads y/g via AtF64 (f64), computes in f64,
+		// and SetF64-narrows — so the f32 branch inlines that same f64-math round-trip.
+		yc, gc := y.Contiguous(), g.Contiguous()
+		if x.Dtype() == tensor.F64 && yc.Dtype() == tensor.F64 && gc.Dtype() == tensor.F64 {
+			ys, gs, ds := yc.Storage().F64(), gc.Storage().F64(), gin.Storage().F64()
+			for i := 0; i < n; i++ {
+				t := ys[i] / cap
+				ds[i] = gs[i] * (1 - t*t)
+			}
+			return []*tensor.Tensor{gin}, nil
+		}
+		if x.Dtype() == tensor.F32 && yc.Dtype() == tensor.F32 && gc.Dtype() == tensor.F32 {
+			ys, gs, ds := yc.Storage().F32(), gc.Storage().F32(), gin.Storage().F32()
+			for i := 0; i < n; i++ {
+				t := float64(ys[i]) / cap
+				ds[i] = float32(float64(gs[i]) * (1 - t*t))
+			}
+			return []*tensor.Tensor{gin}, nil
+		}
+		for i := range n { // generic per-element fallback
 			idx := tensor.Unravel(i, x.Shape())
-			t := y.AtF64(idx...) / pa.Cap // = tanh(x/cap)
+			t := y.AtF64(idx...) / cap
 			gin.SetF64(g.AtF64(idx...)*(1-t*t), idx...)
 		}
 		return []*tensor.Tensor{gin}, nil
