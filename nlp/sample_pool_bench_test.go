@@ -50,3 +50,20 @@ func BenchmarkTypicalTruncate(b *testing.B) {
 		typicalTruncate(work, 0.95)
 	}
 }
+
+// BenchmarkSamplerDist measures the per-token distribution build (temperature + top-k
+// + top-p) — the z working buffer and top-k scratch are pooled (T948); the returned
+// probs is a separate slice.
+func BenchmarkSamplerDist(b *testing.B) {
+	const vocab = 32000
+	logits := make([]float64, vocab)
+	for i := range logits {
+		logits[i] = math.Sin(float64(i)*0.01) * 3
+	}
+	s := NewSampler(1, WithTemperature(0.8), WithTopK(200), WithTopP(0.95))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		_ = s.Dist(logits)
+	}
+}

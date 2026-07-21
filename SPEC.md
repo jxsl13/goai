@@ -1487,6 +1487,7 @@ T38b|x|L4 Llama-family pt2: SiLU op+VJP, SwiGLU FFN (nn layer, trainable), GQA (
 | T945 | x | nlp: nucleusTopP still allocs idx=make([]int,vocab) per call (the residual 1 alloc/256KB after T944) — pool it too (verify idx isn't retained past the call). §V22. | T944 | done | med |
 | T946 | x | nlp: sortIdxAscByScore (typical-sampling radix sort) reuse radixScratchPool — class-audit of T944, structurally identical (ascending vs descending bits), shares the same pool. §V22 (typicalTruncate, vocab 32000, full-sort): allocs 6->3, B/op 1312->596KiB -55%, -2.9%. Bit-identical (typical tests). perfscan: no rule (interprocedural, T941/T944 class) | V22,T944 | done | med |
 | T947 | x | nlp: typicalTruncate still allocs score=make([]float64,vocab) + idx=make([]int,vocab) + keep=make([]bool,vocab) per call (the residual 3 allocs after T946). Pool them (idx via nucleusIdxPool; score []float64 pool; keep []bool pool + clear() reset). §V22. | T946 | done | med |
+| T948 | x | nlp: Sampler.Dist pool the per-token working buffers z (temp-scaled logits) + top-k kthLargest scratch via a shared []float64 pool — each was make([]float64,vocab) every token (z also zeroed). Not retained (the returned probs is separate). §V22 (Dist temp+topk+topp, vocab 32000): 347.8->316.5us -9% (biggest time win of the sweep, avoids the make+zero), B/op 834->304KiB -63%. Bit-identical (sampler/topk/topp tests). perfscan: no rule (interprocedural, T941/T944 class) | V22,T944 | done | med |
 
 ## §Bench — benchmark records
 
@@ -1518,3 +1519,4 @@ T38b|x|L4 Llama-family pt2: SiLU op+VJP, SwiGLU FFN (nn layer, trainable), GQA (
 | BM24 | 2026-07-21 | nlp nucleusTopP idx pooled (top-p, vocab 32000) | darwin/arm64 | self | us | 676 | 655.5 | 1.03× | T945,V22 |
 | BM25 | 2026-07-21 | nlp typicalTruncate radix pooled (vocab 32000, full-sort) | darwin/arm64 | self | us | 1179 | 1144 | 1.03× | T946,V22 |
 | BM26 | 2026-07-21 | nlp typicalTruncate score/idx/keep pooled (vocab 32000) | darwin/arm64 | self | us | 1148 | 1102 | 1.04× | T947,V22 |
+| BM27 | 2026-07-21 | nlp Sampler.Dist z+topk-scratch pooled (temp+topk+topp, vocab 32000) | darwin/arm64 | self | us | 347.8 | 316.5 | 1.1× | T948,V22 |

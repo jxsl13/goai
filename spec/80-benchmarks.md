@@ -28,3 +28,4 @@
 | BM24 | 2026-07-21 | nlp nucleusTopP idx pooled (top-p, vocab 32000) | darwin/arm64 | self | us | 676 | 655.5 | 1.03× | T945,V22 |
 | BM25 | 2026-07-21 | nlp typicalTruncate radix pooled (vocab 32000, full-sort) | darwin/arm64 | self | us | 1179 | 1144 | 1.03× | T946,V22 |
 | BM26 | 2026-07-21 | nlp typicalTruncate score/idx/keep pooled (vocab 32000) | darwin/arm64 | self | us | 1148 | 1102 | 1.04× | T947,V22 |
+| BM27 | 2026-07-21 | nlp Sampler.Dist z+topk-scratch pooled (temp+topk+topp, vocab 32000) | darwin/arm64 | self | us | 347.8 | 316.5 | 1.1× | T948,V22 |
