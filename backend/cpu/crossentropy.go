@@ -75,14 +75,9 @@ func crossEntropyKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs back
 		scratch := make([]float32, c)
 		for i := lo; i < hi; i++ {
 			row := zs[i*c : (i+1)*c : (i+1)*c]
-			m := float32(math.Inf(-1))
-			for _, v := range row {
-				if v > m {
-					m = v
-				}
-			}
+			m := rowMaxF32(row) // AVX2 max (amd64-SIMD) / scalar −Inf-start reduction elsewhere
 			copy(scratch, row)
-			sum := vexpRowF32(scratch, m) // exp(z−m) + 4-lane f32 sum, NEON
+			sum := vexpRowF32(scratch, m) // exp(z−m) + 8-lane f32 sum (AVX) / NEON / scalar
 			lse := float64(m) + math.Log(float64(sum))
 			loss := lse - float64(row[tis[i]])
 			if eps != 0 {
@@ -145,12 +140,7 @@ func crossEntropyBackwardKernelCPU(ctx *backend.Context, in []*tensor.Tensor, at
 		for i := lo; i < hi; i++ {
 			zr := zs[i*c : (i+1)*c : (i+1)*c]
 			dr := dzs[i*c : (i+1)*c : (i+1)*c]
-			m := float32(math.Inf(-1))
-			for _, v := range zr {
-				if v > m {
-					m = v
-				}
-			}
+			m := rowMaxF32(zr) // AVX2 max (amd64-SIMD) / scalar −Inf-start reduction elsewhere
 			copy(dr, zr)
 			sum := vexpRowF32(dr, m) // dr[j] = exp(z−m), reused as p below
 			inv := 1 / sum
@@ -159,14 +149,13 @@ func crossEntropyBackwardKernelCPU(ctx *backend.Context, in []*tensor.Tensor, at
 				lseTerm = float32(2 * zl * (float64(m) + math.Log(float64(sum))))
 			}
 			ti := tis[i]
-			for j, e := range dr {
-				p := e * inv
-				q := q0
-				if j == ti {
-					q += 1 - eps
-				}
-				dr[j] = scale * (p - q + lseTerm*p)
-			}
+			// dr holds e=exp(z−m). Common gradient scale·(p·(1+lseTerm) − q0), p=e·inv, is the
+			// affine e·k1 − k2 (k1=inv·scale·(1+lseTerm), k2=scale·q0) applied 8-wide; the target
+			// column then subtracts scale·(1−eps) (its q carries the extra 1−eps).
+			k1 := inv * scale * (1 + lseTerm)
+			k2 := scale * q0
+			axpbRowF32(dr, k1, -k2)
+			dr[ti] -= scale * (1 - eps)
 		}
 	})
 	return []*tensor.Tensor{dz}, nil

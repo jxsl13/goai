@@ -22,3 +22,9 @@ func scaleRowF32(x []float32, inv float32) {
 		x[j] *= inv
 	}
 }
+
+func axpbRowF32(x []float32, a, b float32) {
+	for j := range x {
+		x[j] = x[j]*a + b
+	}
+}
