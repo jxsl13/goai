@@ -28,3 +28,25 @@ func BenchmarkBPEGGUFEncode(b *testing.B) {
 		_ = tok.Encode(text)
 	}
 }
+
+// BenchmarkBPEGGUFDecode drives the GGUF byte-level BPE Decode (ids → byte-mapped
+// symbols → raw bytes) over a large id sequence — the un-pre-sized builder + out
+// buffer regime (T929).
+func BenchmarkBPEGGUFDecode(b *testing.B) {
+	vocab := []string{"Ġ"}
+	for c := 'a'; c <= 'z'; c++ {
+		vocab = append(vocab, string(c))
+	}
+	vocab = append(vocab, "th", "he", "the", "in", "ing", "er", "an", "on", "at", "en", "re", "ed", "nd", "ou", "ea", "st", "ar", "nt")
+	merges := []string{"t h", "h e", "th e", "i n", "in g", "e r", "a n", "o n", "a t", "e n", "r e", "e d", "n d", "o u", "e a", "s t", "a r", "n t"}
+	tok, err := nlp.NewBPE(vocab, merges)
+	if err != nil {
+		b.Fatal(err)
+	}
+	ids := tok.Encode(strings.Repeat("the rain in spain remained on the ground and then rested ", 2000))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		_ = tok.Decode(ids)
+	}
+}
