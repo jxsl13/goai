@@ -125,5 +125,11 @@ func SoftplusNegLLSumF64(f, y []float64) float64 {
 // WKVScanF64 runs the RWKV-4 WKV recurrence (see the AVX variant). Portable scalar
 // fallback; the amd64 SIMD build vectorizes over channels.
 func WKVScanF64(k, v, w, u, out []float64, seq, d int) {
-	wkvScanScalar(k, v, w, u, out, seq, d, 0, d)
+	wkvScanStateScalar(k, v, w, u, out, nil, nil, nil, seq, d, 0, d)
+}
+
+// WKVScanStateF64 is the continuing-scan form (see the AVX variant). Portable scalar
+// fallback; passing nil aa0/bb0/pp0 is exactly WKVScanF64.
+func WKVScanStateF64(k, v, w, u, out, aa0, bb0, pp0 []float64, seq, d int) {
+	wkvScanStateScalar(k, v, w, u, out, aa0, bb0, pp0, seq, d, 0, d)
 }

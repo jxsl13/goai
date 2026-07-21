@@ -388,8 +388,22 @@ func SigmoidF64(dst, src []float64) {
 // libm — the RWKV caller rides the model f64 tolerance; the non-AVX build is the
 // bit-exact scalar path.
 func WKVScanF64(k, v, w, u, out []float64, seq, d int) {
+	WKVScanStateF64(k, v, w, u, out, nil, nil, nil, seq, d)
+}
+
+// WKVScanStateF64 is WKVScanF64 generalized to a CONTINUING scan against persistent
+// per-channel state. When aa0/bb0/pp0 (each [d]) are non-nil, every channel resumes
+// from its carried (aa0[c], bb0[c], pp0[c]) instead of the fresh (0, 0, -1e38) start,
+// and the final state is written back so the caller can absorb the next token chunk —
+// this is the RWKV decode/prefill recurrence, which rides persistent AA/BB/PP. Passing
+// nil for all three is exactly WKVScanF64 (the fresh forward scan): the nil branch sits
+// outside the per-token loop, so the fresh path keeps WKVScanF64's throughput and stays
+// bit-identical to it. Because StoreSlice/Load round-trips the f64 state losslessly,
+// chunking a sequence through this (decode) is bit-exact with one whole-sequence scan
+// (forward) — the property RWKV's forward/decode parity depends on.
+func WKVScanStateF64(k, v, w, u, out, aa0, bb0, pp0 []float64, seq, d int) {
 	if !hasAVX || !hasFMA {
-		wkvScanScalar(k, v, w, u, out, seq, d, 0, d)
+		wkvScanStateScalar(k, v, w, u, out, aa0, bb0, pp0, seq, d, 0, d)
 		return
 	}
 	pInit := archsimd.BroadcastFloat64x4(-1e38)
@@ -398,6 +412,11 @@ func WKVScanF64(k, v, w, u, out []float64, seq, d int) {
 		wc := archsimd.LoadFloat64x4Slice(w[c:])
 		uc := archsimd.LoadFloat64x4Slice(u[c:])
 		aa, bb, pp := eZero, eZero, pInit
+		if aa0 != nil {
+			aa = archsimd.LoadFloat64x4Slice(aa0[c:])
+			bb = archsimd.LoadFloat64x4Slice(bb0[c:])
+			pp = archsimd.LoadFloat64x4Slice(pp0[c:])
+		}
 		for t := 0; t < seq; t++ {
 			base := t*d + c
 			kk := archsimd.LoadFloat64x4Slice(k[base:])
@@ -415,8 +434,13 @@ func WKVScanF64(k, v, w, u, out []float64, seq, d int) {
 			bb = e3.Mul(bb).Add(e4)
 			pp = q2
 		}
+		if aa0 != nil {
+			aa.StoreSlice(aa0[c:])
+			bb.StoreSlice(bb0[c:])
+			pp.StoreSlice(pp0[c:])
+		}
 	}
 	if c < d {
-		wkvScanScalar(k, v, w, u, out, seq, d, c, d)
+		wkvScanStateScalar(k, v, w, u, out, aa0, bb0, pp0, seq, d, c, d)
 	}
 }
