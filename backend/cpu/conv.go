@@ -207,17 +207,34 @@ func im2colFillBand[D, T normFloat](cols []D, xs []T, lo, hi, k, ho, wo, c, kh, 
 		rem := r % (ho * wo)
 		oy, ox := rem/wo, rem%wo
 		base := r * k
+		// Along the kernel width the input x-coord ix = ox·s − p + kx steps by 1, so
+		// the in-bounds kx taps form ONE contiguous input run [kxLo,kxHi). Hoist the
+		// x-bounds test out of the inner loop (compute the window once per row) and
+		// copy the run branch-free; padding taps outside the window stay pre-zeroed
+		// (§T342 relies on cols being zeroed). Bit-identical values to the per-element
+		// bounds-checked gather — im2col was 62% of the f32 Conv2D (the GEMM is only
+		// ~30%), so killing the per-tap branch is the lever.
+		ix0 := ox*s - p
+		kxLo, kxHi := 0, kw
+		if ix0 < 0 {
+			kxLo = -ix0
+		}
+		if ix0+kw > wd {
+			kxHi = wd - ix0
+		}
 		kk := 0
 		for ci := 0; ci < c; ci++ {
 			for ky := 0; ky < kh; ky++ {
 				iy := oy*s + ky - p
-				for kx := 0; kx < kw; kx++ {
-					ix := ox*s + kx - p
-					if iy >= 0 && iy < h && ix >= 0 && ix < wd {
-						cols[base+kk] = D(xs[((ni*c+ci)*h+iy)*wd+ix])
+				if iy >= 0 && iy < h && kxLo < kxHi {
+					rowBase := ((ni*c+ci)*h+iy)*wd + ix0
+					dst := cols[base+kk+kxLo : base+kk+kxHi]
+					src := xs[rowBase+kxLo : rowBase+kxHi]
+					for i := range dst {
+						dst[i] = D(src[i])
 					}
-					kk++
 				}
+				kk += kw
 			}
 		}
 	}
