@@ -1,7 +1,7 @@
 // Command perfscan is a static finder for the per-element hot-loop anti-patterns
 // this codebase repeatedly optimizes away (§base-perf-sweep). It parses Go source
 // with go/ast — it never builds or imports the packages, so cgo/build-tagged
-// backends are scanned too — and reports the STRUCTURAL SHAPE of four patterns:
+// backends are scanned too — and reports the STRUCTURAL SHAPE of eight patterns:
 //
 //	A. per-element .AtF64/.SetF64 dispatch in a Numel/Unravel loop with no
 //	   flatF64/flatF32 contiguous fast path in the enclosing function
@@ -13,6 +13,15 @@
 //	D. a reflection-based fmt SCAN call (fmt.Sscanf/Sscan/Fscanf/…) in a loop —
 //	   parses a format string + reflects over varargs every call, allocating
 //	   (SPM.Decode ran fmt.Sscanf per token, 1.55M allocs → 20× once gated, T931).
+//	E. a strings.Builder/bytes.Buffer written in a loop with no .Grow — WriteX
+//	   doubles the backing buffer log(n) times (BPE/SPM/Unigram Decode pre-size, T929).
+//	F. an allocating strings transform (ReplaceAll/Replace/Map/Repeat) in a loop —
+//	   a fresh string per iteration; write it in place (T934, 52k→1 alloc, 1.65×).
+//	G. a per-element little-endian bit decode (binary.LittleEndian.UintN /
+//	   math.FloatNfrombits) in a loop with no rawCopyLE fast path — a memcpy in
+//	   disguise on LE hosts for VERBATIM-bit dtypes (T720/T907 readers, 2–5×).
+//	H. a regexp.Compile/MustCompile inside a loop — recompiles the pattern every
+//	   iteration; hoist it out.
 //
 // IMPORTANT — these are CANDIDATES, not confirmed wins. A static check sees the
 // shape of a hot loop, never its temperature: a per-element write in a one-time
@@ -43,8 +52,10 @@ import (
 
 // finding is one candidate anti-pattern occurrence, anchored to the enclosing loop.
 type finding struct {
-	pos      token.Position
-	category string // "per-element-dispatch" | "alloc-in-loop" | "batch-single-elt" | "reflection-in-loop"
+	pos token.Position
+	// one of: per-element-dispatch | alloc-in-loop | batch-single-elt | reflection-in-loop |
+	// unsized-builder | strings-alloc-in-loop | le-decode-in-loop | regexp-compile-in-loop
+	category string
 	msg      string
 }
 
@@ -70,19 +81,84 @@ var fmtReflectCallees = map[string]bool{
 	"Fscanf": true, "Fscan": true, "Fscanln": true, // parse a reader via reflection
 }
 
-// fmtReflectCall reports whether fun is a call to one of the fmtReflectCallees on the
-// fmt package specifically (`fmt.Sscanf`), returning the function name. The pkg check
-// keeps a same-named method on some other type from false-firing.
-func fmtReflectCall(fun ast.Expr) (string, bool) {
+// pkgFuncCall reports whether fun is `pkg.Name(...)` for a Name in set, returning the
+// name. The pkg check keeps a same-named method on some other type from false-firing.
+func pkgFuncCall(fun ast.Expr, pkg string, set map[string]bool) (string, bool) {
 	sel, ok := fun.(*ast.SelectorExpr)
 	if !ok {
 		return "", false
 	}
-	pkg, ok := sel.X.(*ast.Ident)
-	if !ok || pkg.Name != "fmt" || !fmtReflectCallees[sel.Sel.Name] {
+	id, ok := sel.X.(*ast.Ident)
+	if !ok || id.Name != pkg || !set[sel.Sel.Name] {
 		return "", false
 	}
 	return sel.Sel.Name, true
+}
+
+// fmtReflectCall reports a call to a fmtReflectCallees function on the fmt package.
+func fmtReflectCall(fun ast.Expr) (string, bool) { return pkgFuncCall(fun, "fmt", fmtReflectCallees) }
+
+// stringsAllocCallees are strings-package transforms that ALLOCATE a fresh string on
+// every call. In a per-element loop that is a per-iteration allocation; the alloc-free
+// idiom writes the transform straight into the caller's builder or slices in place
+// (T934: SPM/Unigram Decode did strings.ReplaceAll(p,▁," ") per token → the inline
+// writeUnescapedMeta, 52k→1 alloc, 1.65×).
+var stringsAllocCallees = map[string]bool{
+	"ReplaceAll": true, "Replace": true, "Map": true, "Repeat": true,
+}
+
+// regexpCompileCallees compile a pattern; INSIDE a loop they recompile the SAME
+// pattern every iteration (a classic O(n)-compiles bug) — hoist the compile out.
+var regexpCompileCallees = map[string]bool{
+	"Compile": true, "MustCompile": true, "CompilePOSIX": true, "MustCompilePOSIX": true,
+}
+
+// leUintCallees / mathBitsCallees are per-element little-endian binary readers. On a
+// LE host (every GoAI target) the on-disk LE bytes ARE the in-memory layout of a
+// verbatim-bit tensor, so a per-element decode loop is a memcpy in disguise — one
+// rawCopyLE replaces it (T720/T721/T907 format readers: safetensors 2×, npy 3–5×,
+// gguf 3.4×).
+var leUintCallees = map[string]bool{"Uint16": true, "Uint32": true, "Uint64": true}
+var mathBitsCallees = map[string]bool{"Float32frombits": true, "Float64frombits": true}
+
+// binaryDecodeCall matches the per-element bit decoders math.FloatNfrombits(...) and
+// binary.{Little,Big}Endian.UintN(...), returning a printable name.
+func binaryDecodeCall(fun ast.Expr) (string, bool) {
+	sel, ok := fun.(*ast.SelectorExpr)
+	if !ok {
+		return "", false
+	}
+	if id, ok := sel.X.(*ast.Ident); ok && id.Name == "math" && mathBitsCallees[sel.Sel.Name] {
+		return "math." + sel.Sel.Name, true
+	}
+	if inner, ok := sel.X.(*ast.SelectorExpr); ok && leUintCallees[sel.Sel.Name] {
+		if pkg, ok := inner.X.(*ast.Ident); ok && pkg.Name == "binary" &&
+			(inner.Sel.Name == "LittleEndian" || inner.Sel.Name == "BigEndian") {
+			return "binary." + inner.Sel.Name + "." + sel.Sel.Name, true
+		}
+	}
+	return "", false
+}
+
+// builderWriteCallees are the strings.Builder / bytes.Buffer append methods. A loop of
+// these with no preceding .Grow doubles the backing buffer log(n) times, leaving
+// throw-away buffers (T929: BPE/SPM/Unigram/WordPiece Decode, pre-size → −9%/allocs).
+var builderWriteCallees = map[string]bool{
+	"WriteString": true, "WriteByte": true, "WriteRune": true, "Write": true,
+}
+
+// isBuilderType reports whether e names strings.Builder or bytes.Buffer.
+func isBuilderType(e ast.Expr) bool {
+	sel, ok := e.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	pkg, ok := sel.X.(*ast.Ident)
+	if !ok {
+		return false
+	}
+	return (pkg.Name == "strings" && sel.Sel.Name == "Builder") ||
+		(pkg.Name == "bytes" && sel.Sel.Name == "Buffer")
 }
 
 // calleeName returns the trailing identifier of a call target: the func name for a
@@ -137,6 +213,11 @@ func scanFile(fset *token.FileSet, f *ast.File) []finding {
 func scanFunc(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 	// Pass 1: function-scoped facts + a child→parent map for ancestor walks.
 	hasFlat := false
+	hasBuilder := false // declares a strings.Builder / bytes.Buffer
+	hasGrow := false    // …and calls .Grow on it (so it is pre-sized — detector E stays silent)
+	hasLEBulk := false  // calls rawCopyLE/rawStoreLE (the LE bulk-copy fast path is present, so a
+	//                     per-element binary decode in the same function is the intended big-endian
+	//                     fallback, not a candidate — detector G stays silent, mirroring hasFlat/A)
 	numelIdents := map[string]bool{}
 	parent := map[ast.Node]ast.Node{}
 	var stack []ast.Node
@@ -159,6 +240,18 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 			switch calleeName(x.Fun) {
 			case "flatF64", "flatF32", "F64", "F32":
 				hasFlat = true
+			case "Grow":
+				hasGrow = true
+			case "rawCopyLE", "rawStoreLE":
+				hasLEBulk = true
+			}
+		case *ast.CompositeLit:
+			if isBuilderType(x.Type) { // b := strings.Builder{}
+				hasBuilder = true
+			}
+		case *ast.ValueSpec:
+			if isBuilderType(x.Type) { // var b strings.Builder
+				hasBuilder = true
 			}
 		case *ast.AssignStmt:
 			// n := x.Numel()  /  n = x.Numel()
@@ -238,6 +331,46 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 				category: "reflection-in-loop",
 				msg: fmt.Sprintf("fmt.%s in a loop — reflection-based + allocates on every call;"+
 					" gate it behind a cheap check or hand-parse (T931: SPM.Decode fmt.Sscanf per token = 1.55M allocs → 20×)", fname),
+			})
+		}
+		// E: a strings.Builder/bytes.Buffer written in a loop with NO .Grow anywhere in the
+		// function — WriteX doubles the backing buffer log(n) times, leaving throw-away buffers.
+		if hasBuilder && !hasGrow && builderWriteCallees[name] {
+			out = append(out, finding{
+				pos:      fset.Position(loop.Pos()),
+				category: "unsized-builder",
+				msg: fmt.Sprintf("a strings.Builder/bytes.Buffer is written (.%s) in a loop with no .Grow —"+
+					" pre-size it to skip the log(n) growth-buffer churn (T929: BPE/SPM/Unigram Decode pre-size, allocs↓, up to 1.65×)", name),
+			})
+		}
+		// F: an allocating strings transform in any loop (a fresh string per iteration).
+		if fname, ok := pkgFuncCall(call.Fun, "strings", stringsAllocCallees); ok {
+			out = append(out, finding{
+				pos:      fset.Position(loop.Pos()),
+				category: "strings-alloc-in-loop",
+				msg: fmt.Sprintf("strings.%s in a loop — allocates a new string every call;"+
+					" write the transform into the builder or slice in place (T934: Decode ReplaceAll per token → inline, 52k→1 alloc, 1.65×)", fname),
+			})
+		}
+		// G: a per-element little-endian bit decode in a loop — a memcpy in disguise on LE hosts.
+		// Silent when the function already has a rawCopyLE/rawStoreLE fast path (the loop is then
+		// the big-endian fallback, not a candidate — the hasFlat discipline of detector A).
+		if bname, ok := binaryDecodeCall(call.Fun); ok && !hasLEBulk {
+			out = append(out, finding{
+				pos:      fset.Position(loop.Pos()),
+				category: "le-decode-in-loop",
+				msg: fmt.Sprintf("%s in a loop — on a little-endian host the on-disk bytes ARE the in-memory layout;"+
+					" a single rawCopyLE replaces the per-element decode for VERBATIM-bit dtypes (F32/F64/F16), T720/T907"+
+					" (2–5×). A quant-widen path genuinely decodes per-element — triage before acting.", bname),
+			})
+		}
+		// H: a regexp compile inside a loop — recompiles the same pattern every iteration.
+		if rname, ok := pkgFuncCall(call.Fun, "regexp", regexpCompileCallees); ok {
+			out = append(out, finding{
+				pos:      fset.Position(loop.Pos()),
+				category: "regexp-compile-in-loop",
+				msg: fmt.Sprintf("regexp.%s in a loop — recompiles the pattern on every iteration;"+
+					" hoist the compile above the loop (compile once, match many)", rname),
 			})
 		}
 		return true
