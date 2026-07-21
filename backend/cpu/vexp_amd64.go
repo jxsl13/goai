@@ -16,6 +16,7 @@ import (
 const (
 	vexpNeon    = false
 	vexpF32Fast = true
+	vexpF64Fast = true // amd64 SIMD build: vsiluF64 (F64 SwiGLU FFN activation, §T667)
 )
 
 var vexpHasAVX = archsimd.X86.AVX() && archsimd.X86.FMA()
@@ -368,5 +369,139 @@ func vlogF32(dst, src []float32) {
 	}
 	for i := n8; i < len(src); i++ {
 		dst[i] = logF32(src[i])
+	}
+}
+
+// ---- F64 SiLU vectorization (§T667: the F64 SwiGLU FFN activation) ----------
+//
+// The F32 FFN activation runs the 8-wide vexp pipeline (vsiluF32); the F64 path
+// was scalar `x/(1+math.Exp(-x))` — and end-to-end Llama F64 prefill profiles as
+// ~40% math.Exp inside siluKernelCPU (the SwiGLU gate over the large hidden dim).
+// vsiluF64 vectorizes it 4-wide on an accurate AVX2 f64 exp (expF64x4), gated by
+// vexpF64Fast (compile-time; the non-SIMD build keeps the scalar path). F64 SiLU
+// is NOT under the CPU==Ref bit-exact invariant — TestCPUCrossReferenceExact
+// SKIPS OpSiLU/F64 (cpu uses x/(1+e⁻ˣ), ref uses x·σ(x), already ulp-split), so a
+// ~1-ulp vectorized exp is admissible and rides the model f64 tolerance (the
+// Llama golden is 1e-12·max(1,|ref|); expF64x4 is sub-ulp — see TestExpF64x4Accuracy).
+//
+// expF64x4 evaluates eˣ for x ≤ 0 (vsiluF64 only ever feeds it −|x|): Cody-Waite
+// range reduction x = k·ln2 + r with the full-f64 ln2 split (k·ln2Hi exact, ln2Hi
+// has 21 trailing zero mantissa bits), then a degree-13 Taylor of eʳ over
+// |r|≤ln2/2 (remainder ≈4e-18, sub-ulp), scaled by 2ᵏ built from the exponent
+// field. The arg is clamped to ≥ −708 so k+1023 stays a valid biased exponent.
+var (
+	vF64ExpLo  = archsimd.BroadcastFloat64x4(-708.0)         // min arg before 2ᵏ underflows
+	vF64Log2e  = archsimd.BroadcastFloat64x4(1.4426950408889634) // 1/ln2
+	vF64NLn2Hi = archsimd.BroadcastFloat64x4(-6.93147180369123816490e-01) // −ln2 high (exact·k)
+	vF64NLn2Lo = archsimd.BroadcastFloat64x4(-1.90821492927058770002e-10) // −ln2 low
+	vF64Bias   = archsimd.BroadcastInt32x4(1023)
+	vF64Abs    = archsimd.BroadcastUint64x4(0x7fffffffffffffff)
+	vF64Zero   = archsimd.BroadcastFloat64x4(0.0)
+	vF64One    = archsimd.BroadcastFloat64x4(1.0)
+	// eʳ Taylor coefficients 1/k! (k = 13 … 0), Horner high→low.
+	vF64E13 = archsimd.BroadcastFloat64x4(1.6059043836821613e-10)
+	vF64E12 = archsimd.BroadcastFloat64x4(2.08767569878681e-09)
+	vF64E11 = archsimd.BroadcastFloat64x4(2.505210838544172e-08)
+	vF64E10 = archsimd.BroadcastFloat64x4(2.755731922398589e-07)
+	vF64E9  = archsimd.BroadcastFloat64x4(2.7557319223985893e-06)
+	vF64E8  = archsimd.BroadcastFloat64x4(2.48015873015873e-05)
+	vF64E7  = archsimd.BroadcastFloat64x4(1.984126984126984e-04)
+	vF64E6  = archsimd.BroadcastFloat64x4(1.388888888888889e-03)
+	vF64E5  = archsimd.BroadcastFloat64x4(8.333333333333333e-03)
+	vF64E4  = archsimd.BroadcastFloat64x4(4.166666666666666e-02)
+	vF64E3  = archsimd.BroadcastFloat64x4(1.6666666666666666e-01)
+	vF64E2  = archsimd.BroadcastFloat64x4(0.5)
+)
+
+// expF64x4 returns eˣ (accurate to ~1 ulp) for each lane, valid for x ≤ 0.
+func expF64x4(x archsimd.Float64x4) archsimd.Float64x4 {
+	x = x.Max(vF64ExpLo)
+	kf := x.Mul(vF64Log2e).RoundToEven()
+	r := kf.MulAdd(vF64NLn2Hi, x) // x − k·ln2Hi
+	r = kf.MulAdd(vF64NLn2Lo, r)  // − k·ln2Lo
+	// degree-13 Taylor of eʳ: p = Σ rᵏ/k!, Horner from 1/13! down to 1 + r.
+	p := vF64E13
+	p = p.MulAdd(r, vF64E12)
+	p = p.MulAdd(r, vF64E11)
+	p = p.MulAdd(r, vF64E10)
+	p = p.MulAdd(r, vF64E9)
+	p = p.MulAdd(r, vF64E8)
+	p = p.MulAdd(r, vF64E7)
+	p = p.MulAdd(r, vF64E6)
+	p = p.MulAdd(r, vF64E5)
+	p = p.MulAdd(r, vF64E4)
+	p = p.MulAdd(r, vF64E3)
+	p = p.MulAdd(r, vF64E2)
+	p = p.MulAdd(r, vF64One) // + r
+	p = p.MulAdd(r, vF64One) // + 1
+	// scale = 2ᵏ via the biased exponent field: (k+1023)<<52. Built through int32
+	// (VCVTPD2DQ) + sign-extend to int64 (VPMOVSXDQ) + VPSLLQ — all AVX2, avoiding
+	// the AVX-512-only f64→i64 convert (VCVTTPD2QQ).
+	scale := kf.ConvertToInt32().Add(vF64Bias).ExtendToInt64().ShiftAllLeft(52).AsFloat64x4()
+	return p.Mul(scale)
+}
+
+// expF64poly is the SCALAR twin of expF64x4 — bit-for-bit identical (same clamp,
+// Cody-Waite reduction, degree-13 Horner and 2ᵏ construction, every step a fused
+// math.FMA to match archsimd's MulAdd). vsiluF64's tail uses it so a given input
+// value yields the SAME silu whether it lands in the 4-lane body or the scalar
+// tail — the invariant TestQuantDeepSeekV2DecodeMatchesForward relies on (absorbed
+// decode == batched forward, byte-exact, regardless of array length/alignment).
+func expF64poly(x float64) float64 {
+	if x < -708.0 {
+		x = -708.0
+	}
+	kf := math.RoundToEven(x * 1.4426950408889634)
+	r := math.FMA(kf, -6.93147180369123816490e-01, x)
+	r = math.FMA(kf, -1.90821492927058770002e-10, r)
+	p := 1.6059043836821613e-10
+	p = math.FMA(p, r, 2.08767569878681e-09)
+	p = math.FMA(p, r, 2.505210838544172e-08)
+	p = math.FMA(p, r, 2.755731922398589e-07)
+	p = math.FMA(p, r, 2.7557319223985893e-06)
+	p = math.FMA(p, r, 2.48015873015873e-05)
+	p = math.FMA(p, r, 1.984126984126984e-04)
+	p = math.FMA(p, r, 1.388888888888889e-03)
+	p = math.FMA(p, r, 8.333333333333333e-03)
+	p = math.FMA(p, r, 4.166666666666666e-02)
+	p = math.FMA(p, r, 1.6666666666666666e-01)
+	p = math.FMA(p, r, 0.5)
+	p = math.FMA(p, r, 1.0)
+	p = math.FMA(p, r, 1.0)
+	scale := math.Float64frombits(uint64(int64(kf)+1023) << 52)
+	return p * scale
+}
+
+// siluF64poly = silu via the expF64poly primitive, the exact scalar mirror of the
+// vsiluF64 SIMD lane (overflow-safe z = e^(−|x|), num = (x≥0 ? 1 : z), x·num/(1+z)).
+func siluF64poly(x float64) float64 {
+	z := expF64poly(-math.Abs(x))
+	num := z
+	if x >= 0 {
+		num = 1
+	}
+	return x * num / (1 + z)
+}
+
+// vsiluF64 computes dst[i] = silu(src[i]) = x·σ(x) 4-wide via AVX2 — the f64 twin
+// of vsiluF32. Uses the overflow-safe form z = e^(−|x|), num = (x≥0 ? 1 : z),
+// silu = x·num/(1+z). 4-lane body + scalar tail via siluF64poly (bit-identical to
+// the body, not math.Exp — see expF64poly).
+func vsiluF64(dst, src []float64) {
+	if !vexpHasAVX {
+		for i, v := range src {
+			dst[i] = siluF64poly(v)
+		}
+		return
+	}
+	n4 := len(src) &^ 3
+	for i := 0; i < n4; i += 4 {
+		x := archsimd.LoadFloat64x4Slice(src[i:])
+		z := expF64x4(vF64Zero.Sub(x.AsUint64x4().And(vF64Abs).AsFloat64x4())) // e^(−|x|)
+		num := vF64One.Merge(z, x.GreaterEqual(vF64Zero))                      // x≥0 ? 1 : z
+		x.Mul(num).Div(vF64One.Add(z)).StoreSlice(dst[i:])
+	}
+	for i := n4; i < len(src); i++ {
+		dst[i] = siluF64poly(src[i])
 	}
 }

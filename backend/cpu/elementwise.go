@@ -562,6 +562,15 @@ func siluKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) (
 	switch in[0].Dtype() {
 	case tensor.F64:
 		d, o := xc.Storage().F64(), out.Storage().F64()
+		if vexpF64Fast {
+			// amd64 SIMD build: 4-wide f64-native SiLU on the AVX2 expF64x4 primitive
+			// (§T667) — the SwiGLU FFN gate was scalar f64 math.Exp here (~40% of
+			// Llama f64 prefill). Not under the CPU==Ref exact invariant (that test
+			// skips OpSiLU/F64); rides the model f64 tolerance. Non-SIMD build below
+			// keeps the scalar path bit-for-bit.
+			parallel(len(o), func(lo, hi int) { vsiluF64(o[lo:hi], d[lo:hi]) })
+			break
+		}
 		parallel(len(o), func(lo, hi int) {
 			for i := lo; i < hi; i++ {
 				x := d[i]

@@ -2,12 +2,15 @@
 
 package cpu
 
+import "math"
+
 // arm64 perf build: the MHA softmax exp runs through the vexp path
 // (mhaSoftmaxBandF32 gates on vexpF32Fast; the GELU/SiLU/… activation kernels
 // gate on vexpNeon; driver + numerics in vexp.go). Both are true here.
 const (
 	vexpNeon    = true
 	vexpF32Fast = true
+	vexpF64Fast = false // F64 vector SiLU is amd64-only for now (§T667); arm64 keeps the scalar exact path
 )
 
 // vexpQuadsNeonF32 is the 4-wide NEON exp kernel (vexp_arm64.s):
@@ -177,5 +180,13 @@ func vlogF32(dst, src []float32) {
 	}
 	for i := nv; i < len(src); i++ {
 		dst[i] = logF32(src[i])
+	}
+}
+
+// vsiluF64 exists only so siluKernelCPU type-checks on arm64; vexpF64Fast is
+// false here (the F64 vector SiLU is amd64-only for now), so it is dead code.
+func vsiluF64(dst, src []float64) {
+	for i, v := range src {
+		dst[i] = v / (1 + math.Exp(-v))
 	}
 }
