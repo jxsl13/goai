@@ -5,6 +5,7 @@ import (
 	"math"
 	"math/rand/v2"
 	"slices"
+	"sync"
 
 	"github.com/jxsl13/goai/backend"
 	"github.com/jxsl13/goai/internal/simd"
@@ -629,20 +630,36 @@ const radixSortCutoff = 1024
 // closure call. The resulting value sequence is identical to sortIdxDescByKey
 // for distinct keys — the nucleus threshold depends only on the value order, so
 // top-p truncation is unchanged (§T627). Small n defers to the comparison sort.
+// radixScratch holds the 3×n scratch buffers of the LSD radix sort. sortIdxDescByProb
+// runs once per generated token (top-p / typical sampling), so a fresh scratch each
+// call is O(T) large allocations over a decode; pooled + grown-on-demand it is
+// amortized allocation-free. Pure scratch — the sort result is unchanged.
+type radixScratch struct {
+	bits    []uint64
+	tmpBits []uint64
+	tmpIdx  []int
+}
+
+var radixScratchPool = sync.Pool{New: func() any { return new(radixScratch) }}
+
 func sortIdxDescByProb(idx []int, key []float64) {
 	n := len(idx)
 	if n < radixSortCutoff {
 		sortIdxDescByKey(idx, key)
 		return
 	}
+	sc := radixScratchPool.Get().(*radixScratch)
+	if cap(sc.bits) < n {
+		sc.bits = make([]uint64, n)
+		sc.tmpBits = make([]uint64, n)
+		sc.tmpIdx = make([]int, n)
+	}
 	// bits[i] = ^Float64bits(key[idx[i]]): inverting makes an ASCENDING radix
 	// pass emit values in DESCENDING order (largest probability first).
-	bits := make([]uint64, n)
+	bits, tmpBits, tmpIdx := sc.bits[:n], sc.tmpBits[:n], sc.tmpIdx[:n]
 	for i, id := range idx {
 		bits[i] = ^math.Float64bits(key[id])
 	}
-	tmpIdx := make([]int, n)
-	tmpBits := make([]uint64, n)
 	var count [256]int
 	for shift := uint(0); shift < 64; shift += 8 {
 		for i := range count {
@@ -668,7 +685,9 @@ func sortIdxDescByProb(idx []int, key []float64) {
 		bits, tmpBits = tmpBits, bits
 	}
 	// 8 passes (even) ⇒ the swapped idx alias is the caller's slice again, now
-	// holding the sorted order; no final copy needed.
+	// holding the sorted order; no final copy needed. sc.{bits,tmpBits,tmpIdx} still
+	// alias their backing arrays (the swaps only rebound the locals), so it pools cleanly.
+	radixScratchPool.Put(sc)
 }
 
 // nucleusTopP applies top-p (nucleus) truncation to probs in place: keep the
