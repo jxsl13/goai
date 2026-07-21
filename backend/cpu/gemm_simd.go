@@ -246,6 +246,13 @@ func gemmF32(A, B, C []float32, m, k, n int) {
 		})
 		return
 	}
+	// m ≥ 6, n ≥ 16: the hand-asm 6×16 AVX2 tile (12 YMM accumulators — past the archsimd
+	// allocator ceiling, golang/go#76969) roughly doubles the register tile's arithmetic
+	// intensity; the m%6 / n%16 edges fall back to the 4×16 band kernel below.
+	if gemmAsmF32Ok(m, n) {
+		gemmF32Asm6x16(A, B, C, m, k, n)
+		return
+	}
 	// m ≥ 4: the fast path is the 4-row register tile (gemmF32BandDirect reuses each
 	// B load across 4 rows). Parallelising over ROWS alone starves it — a worker handed
 	// 1–3 leftover rows can't form a 4-row tile and falls to the no-B-reuse single-row
