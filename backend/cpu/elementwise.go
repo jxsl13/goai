@@ -631,6 +631,36 @@ func softplusKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attr
 	return []*tensor.Tensor{out}, nil
 }
 
+// softCapKernelCPU is the F64 CPU soft-cap (Gemma-2 attn_logit_softcapping /
+// final_logit_softcapping): out = cap·tanh(x/cap), applied to every attention
+// score on every layer — a hot scalar-tanh op that had no CPU kernel and fell to
+// the ref backend. The amd64 SIMD build routes F64 through the 4-wide vsoftcapF64
+// (tanh off expF64x4); F32 stays on the ref fallback. Not under the CPU==Ref exact
+// invariant; rides the model f64 tolerance. Non-SIMD builds keep the scalar formula
+// (bit-for-bit ref) below.
+func softCapKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
+	pa, _ := attrs.(backend.SoftCapAttrs)
+	if pa.Cap <= 0 {
+		return nil, fmt.Errorf("cpu: softcap cap must be > 0, got %g", pa.Cap)
+	}
+	if in[0].Dtype() != tensor.F64 {
+		return nil, fmt.Errorf("cpu: softcap unsupported dtype %v", in[0].Dtype())
+	}
+	xc := in[0].Contiguous()
+	out := tensor.NewOn(ctx.Device(), tensor.F64, in[0].Shape())
+	d, o := xc.Storage().F64(), out.Storage().F64()
+	if vexpF64Fast {
+		parallel(len(o), func(lo, hi int) { vsoftcapF64(o[lo:hi], d[lo:hi], pa.Cap) })
+		return []*tensor.Tensor{out}, nil
+	}
+	parallel(len(o), func(lo, hi int) {
+		for i := lo; i < hi; i++ {
+			o[i] = pa.Cap * math.Tanh(d[i]/pa.Cap)
+		}
+	})
+	return []*tensor.Tensor{out}, nil
+}
+
 // siluBackwardKernelCPU is the arm64 perf-build F32 SiLU VJP (§T665): dx =
 // g·silu'(x) evaluated f32-native through the NEON vsiluGrad pipeline
 // (vexp.go / vexp_arm64.s) — one exp per element instead of the ref
@@ -676,6 +706,8 @@ func init() {
 	// F64-only: softplus (Mamba/Jamba Δ) rides the amd64 vsoftplusF64 SIMD kernel;
 	// F32 stays on the ref fallback. The non-SIMD build runs the scalar formula.
 	std.add(backend.OpSoftplus, tensor.F64, softplusKernelCPU)
+	// F64-only: soft-cap (Gemma-2 attention/final logits) rides vsoftcapF64.
+	std.add(backend.OpSoftCap, tensor.F64, softCapKernelCPU)
 
 	if vexpF32Fast {
 		// SIMD perf build, F32 only (§T664/§T665): the vectorized GELU and SiLU VJPs
