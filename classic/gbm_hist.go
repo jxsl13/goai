@@ -29,8 +29,8 @@ type histBuilder struct {
 	nbins             int
 	edges             [][]float64 // [d][≤nbins-1] ascending split thresholds
 	binned            []uint16    // [n*d] row-major bin index (bin = #edges < x)
-	hsum              []float64   // [d*nbins] scratch gradient histogram
-	hcnt              []int32     // [d*nbins] scratch count histogram
+	hsum              [][]float64 // [maxDepth+1][d*nbins] per-level gradient histograms
+	hcnt              [][]int32   // [maxDepth+1][d*nbins] per-level count histograms
 	idxbuf            []int       // reusable full-sample index scratch
 }
 
@@ -62,36 +62,27 @@ func newHistBuilder(x [][]float64, n, d, maxDepth, minLeaf, nbins int) *histBuil
 			b.binned[i*d+f] = uint16(sort.SearchFloat64s(ed, x[i][f]))
 		}
 	}
-	b.hsum = make([]float64, d*nbins)
-	b.hcnt = make([]int32, d*nbins)
+	// One histogram buffer per recursion level (the histogram-subtraction scheme
+	// keeps the parent's histogram live while its children are grown).
+	levels := maxDepth + 1
+	b.hsum = make([][]float64, levels)
+	b.hcnt = make([][]int32, levels)
+	for l := 0; l < levels; l++ {
+		b.hsum[l] = make([]float64, d*nbins)
+		b.hcnt[l] = make([]int32, d*nbins)
+	}
 	b.idxbuf = make([]int, n)
 	return b
 }
 
-// grow sets the round target and grows one weak-learner tree over sample set idx.
-func (b *histBuilder) grow(y []float64, idx []int) *gbmTree {
-	b.y = y
-	work := b.idxbuf[:len(idx)]
-	copy(work, idx) // partition works in place; never mutate the caller's idx
-	return &gbmTree{root: b.buildNode(work, 0)}
-}
-
-func (b *histBuilder) buildNode(idx []int, depth int) *gbmNode {
-	m := len(idx)
-	var total float64
-	for _, i := range idx {
-		total += b.y[i]
-	}
-	value := total / float64(m)
-	if depth >= b.maxDepth || m < 2*b.minLeaf {
-		return &gbmNode{leaf: true, value: value}
-	}
-	nb := b.nbins
+// buildHist clears buffer `buf` and accumulates the round target over idx into it.
+func (b *histBuilder) buildHist(idx []int, buf int) {
+	hs, hc, nb := b.hsum[buf], b.hcnt[buf], b.nbins
 	for f := 0; f < b.d; f++ {
 		base := f * nb
-		for j := 0; j <= len(b.edges[f]); j++ { // bins 0..len(edges)
-			b.hsum[base+j] = 0
-			b.hcnt[base+j] = 0
+		for j := 0; j <= len(b.edges[f]); j++ {
+			hs[base+j] = 0
+			hc[base+j] = 0
 		}
 	}
 	for _, i := range idx {
@@ -99,20 +90,58 @@ func (b *histBuilder) buildNode(idx []int, depth int) *gbmNode {
 		row := i * b.d
 		for f := 0; f < b.d; f++ {
 			c := f*nb + int(b.binned[row+f])
-			b.hsum[c] += yi
-			b.hcnt[c]++
+			hs[c] += yi
+			hc[c]++
 		}
 	}
+}
+
+// subHist turns buffer `par` (the parent histogram) into the LARGER child's by
+// subtracting the already-built smaller child in buffer `small` — the
+// histogram-subtraction trick that builds only one child per node.
+func (b *histBuilder) subHist(par, small int) {
+	hs, shs, hc, shc, nb := b.hsum[par], b.hsum[small], b.hcnt[par], b.hcnt[small], b.nbins
+	for f := 0; f < b.d; f++ {
+		base := f * nb
+		for j := 0; j <= len(b.edges[f]); j++ {
+			hs[base+j] -= shs[base+j]
+			hc[base+j] -= shc[base+j]
+		}
+	}
+}
+
+// grow sets the round target and grows one weak-learner tree over sample set idx.
+func (b *histBuilder) grow(y []float64, idx []int) *gbmTree {
+	b.y = y
+	work := b.idxbuf[:len(idx)]
+	copy(work, idx) // partition works in place; never mutate the caller's idx
+	b.buildHist(work, 0)
+	return &gbmTree{root: b.buildNode(work, 0, 0)}
+}
+
+// buildNode grows the subtree over idx whose histogram is ALREADY in buffer buf
+// (built by the caller — the root by grow, each child by buildHist/subHist).
+func (b *histBuilder) buildNode(idx []int, depth, buf int) *gbmNode {
+	m := len(idx)
+	hs, hc, nb := b.hsum[buf], b.hcnt[buf], b.nbins
+	var total float64 // = Σ residual over idx = sum of feature-0's histogram bins
+	for j := 0; j <= len(b.edges[0]); j++ {
+		total += hs[j]
+	}
+	value := total / float64(m)
+	if depth >= b.maxDepth || m < 2*b.minLeaf {
+		return &gbmNode{leaf: true, value: value}
+	}
 	bestGain := 0.0
-	bestFeat, bestBin := -1, -1
+	bestFeat, bestBin, bestNL := -1, -1, 0
 	for f := 0; f < b.d; f++ {
 		base := f * nb
 		var leftSum float64
 		var nl int
 		ne := len(b.edges[f])
 		for sb := 0; sb < ne; sb++ { // split after bin sb → left = {x ≤ edges[f][sb]}
-			leftSum += b.hsum[base+sb]
-			nl += int(b.hcnt[base+sb])
+			leftSum += hs[base+sb]
+			nl += int(hc[base+sb])
 			nr := m - nl
 			if nl < b.minLeaf || nr < b.minLeaf {
 				continue
@@ -122,15 +151,14 @@ func (b *histBuilder) buildNode(idx []int, depth int) *gbmNode {
 			diff := meanL - meanR
 			gain := float64(nl) * float64(nr) / float64(m) * diff * diff
 			if gain > bestGain {
-				bestGain, bestFeat, bestBin = gain, f, sb
+				bestGain, bestFeat, bestBin, bestNL = gain, f, sb, nl
 			}
 		}
 	}
 	if bestFeat < 0 {
 		return &gbmNode{leaf: true, value: value}
 	}
-	// Partition idx in place (unstable — node order is irrelevant to the mean /
-	// histogram of the children): bin ≤ bestBin goes left.
+	// Partition idx in place (unstable): bin ≤ bestBin goes left. nl==bestNL.
 	lo := 0
 	for k := 0; k < m; k++ {
 		s := idx[k]
@@ -139,12 +167,25 @@ func (b *histBuilder) buildNode(idx []int, depth int) *gbmNode {
 			lo++
 		}
 	}
-	return &gbmNode{
-		feature:   bestFeat,
-		threshold: b.edges[bestFeat][bestBin],
-		left:      b.buildNode(idx[:lo], depth+1),
-		right:     b.buildNode(idx[lo:], depth+1),
+	left, right := idx[:lo], idx[lo:]
+	// Build the SMALLER child's histogram into buf+1, then subtract from this
+	// node's histogram (buf) in place to get the LARGER child's — one build per
+	// node instead of two. Always recurse the buf+1 child FIRST: its subtree
+	// reuses buffers ≥buf+1, so the larger child's histogram in buf survives.
+	nl, nr := bestNL, m-bestNL
+	node := &gbmNode{feature: bestFeat, threshold: b.edges[bestFeat][bestBin]}
+	if nl <= nr { // small = left (buf+1), large = right (buf)
+		b.buildHist(left, buf+1)
+		b.subHist(buf, buf+1)
+		node.left = b.buildNode(left, depth+1, buf+1)
+		node.right = b.buildNode(right, depth+1, buf)
+	} else { // small = right (buf+1), large = left (buf)
+		b.buildHist(right, buf+1)
+		b.subHist(buf, buf+1)
+		node.right = b.buildNode(right, depth+1, buf+1)
+		node.left = b.buildNode(left, depth+1, buf)
 	}
+	return node
 }
 
 // gbmGrower is the weak-learner grower shared by the exact (gbmBuilder) and
