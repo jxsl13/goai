@@ -614,11 +614,12 @@ func sortIdxDescByKey(idx []int, key []float64) {
 	})
 }
 
-// radixSortCutoff is the index count above which the nucleus full-sort fallback
-// switches from the comparison sort to the LSD radix sort. Below it the closure
-// sort's lower constant wins; above it radix's O(n) (and closure-free) inner
-// loop dominates (measured ~3.9× at n=50k).
-const radixSortCutoff = 2048
+// radixSortCutoff is the index count above which a full sort switches from the
+// comparison sort to the LSD radix. The measured crossover is ~1024: radix is
+// ~6% slower at n=512, ~1.17× faster at n=1024, and 2.4× at n=2048 (its fixed
+// 8-pass + allocation overhead amortises out), so 1024 captures every sort that
+// benefits while leaving small sorts on the lower-constant comparison path.
+const radixSortCutoff = 1024
 
 // sortIdxDescByProb orders idx so that key[idx[0]] ≥ key[idx[1]] ≥ … for
 // NON-NEGATIVE keys (post-softmax probabilities). For large n it uses an 8-pass
