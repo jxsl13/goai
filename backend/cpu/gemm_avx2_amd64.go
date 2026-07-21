@@ -91,12 +91,20 @@ func gemmF32Asm6x16(A, B, C []float32, m, k, n int) {
 			})
 		}
 	}
-	// edge B: columns [n16,n) over every row.
+	// edge B: columns [n16,n) over every row — parallelize over ROWS (the ≤15
+	// remainder columns are identical for every row; a serial pass wastes cores).
 	if n16 < n {
-		gemmF32BandDirectCols(A, B, C, 0, m, k, n, n16, n)
+		parallelWork(m, k*(n-n16), func(lo, hi int) {
+			gemmF32BandDirectCols(A, B, C, lo, hi, k, n, n16, n)
+		})
 	}
-	// edge C: rows [m6,m) over the full-width columns [0,n16).
+	// edge C: rows [m6,m) over the full-width columns [0,n16) — parallelize over
+	// 16-col BLOCKS. Only ≤5 rows but full-width; running it serially while the
+	// main tiles used every core stole ~20% at m%6≠0 (m=256→+9%, 256×2048×512
+	// 331→371) — i.e. every seq=256 training GEMM. jLo/jHi stay 16-aligned.
 	if m6 < m && n16 > 0 {
-		gemmF32BandDirectCols(A, B, C, m6, m, k, n, 0, n16)
+		parallelWork(n16/16, (m-m6)*k*16, func(loB, hiB int) {
+			gemmF32BandDirectCols(A, B, C, m6, m, k, n, loB*16, hiB*16)
+		})
 	}
 }
