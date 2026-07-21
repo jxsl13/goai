@@ -5,7 +5,7 @@ CGO_OFF   = CGO_ENABLED=0
 
 .PHONY: all build vet test race bench fmt tidy ci golden simd-build clean apicheck \
 	metal-test metal-bench cuda-test vulkan-spv vulkan-test vulkan-bench \
-	perfscan perfscan-check preflight preflight-full install-hooks
+	perfscan perfscan-check gofmt-check preflight preflight-full install-hooks
 
 all: build vet apicheck test
 
@@ -240,9 +240,15 @@ perfscan-check:
 ## GREEN and IN the gate (its doc/example debt was cleared), matching CI. The
 ## cgo/metal/cuda/vulkan/simd COMPILE lanes need toolchains and run in CI; add the
 ## locally-available ones with `make preflight-full`.
+## gofmt-check: fail-fast gofmt gate over ALL tracked *.go (milliseconds). Shared by
+## preflight AND the git pre-commit hook, so unformatted Go is caught at COMMIT time —
+## even when a push uses --no-verify, which bypasses the pre-push preflight entirely.
+gofmt-check:
+	@bad=$$(gofmt -l $$(git ls-files '*.go')); if [ -n "$$bad" ]; then echo "unformatted — run: gofmt -w $$bad"; exit 1; fi
+
 preflight:
 	@echo "→ gofmt (tracked *.go)"
-	@bad=$$(gofmt -l $$(git ls-files '*.go')); if [ -n "$$bad" ]; then echo "unformatted — run gofmt -w:"; echo "$$bad"; exit 1; fi
+	@$(MAKE) --no-print-directory gofmt-check
 	@echo "→ CGO_ENABLED=0 go build ./..."
 	@$(CGO_OFF) $(GO) build ./...
 	@echo "→ CGO_ENABLED=0 go vet ./...  (compiles every test, §V23)"
@@ -264,15 +270,19 @@ preflight-full: preflight
 	@GOEXPERIMENT=simd $(CGO_OFF) $(GO) build -tags=simd ./...
 	@echo "✓ preflight-full OK"
 
-## install-hooks: wire `make preflight` as the git PRE-PUSH hook — CI runs on push, so
-## the comprehensive gate belongs there (commits stay fast). Retires the old lint-md
-## pre-commit hook (CI does not gate markdown; it reddened on unrelated worker files).
+## install-hooks: wire two git hooks — a FAST pre-commit (`make gofmt-check`, milliseconds)
+## and the comprehensive pre-push (`make preflight`, the full CI mirror). The pre-commit
+## exists because a push may use --no-verify (bypassing pre-push) while CI re-runs
+## everything anyway; gofmt is the one cheap gate worth catching at commit time so an
+## unformatted file never reaches a branch (it reddens CI's cgo+race lane). Both are
+## fast enough not to be bypassed at their own stage.
 ## Re-run after editing the preflight target.
 install-hooks:
-	rm -f .git/hooks/pre-commit
+	printf '#!/bin/sh\nbad=$$(gofmt -l $$(git ls-files "*.go"))\n[ -z "$$bad" ] || { echo "unformatted — run: gofmt -w $$bad"; exit 1; }\n' > .git/hooks/pre-commit
+	chmod +x .git/hooks/pre-commit
 	printf '#!/bin/sh\nexec make preflight\n' > .git/hooks/pre-push
 	chmod +x .git/hooks/pre-push
-	@echo "wired .git/hooks/pre-push → make preflight (retired the lint-md pre-commit)"
+	@echo "wired pre-commit → inline gofmt gate (self-contained, no make dep; catches fmt even when push --no-verify), pre-push → make preflight"
 
 ## golden: regenerate reference values from NumPy/torch (§V1,§V13).
 ## Uses a local venv (PEP 668). Bootstrap: python3 -m venv .venv && .venv/bin/pip install numpy
