@@ -317,13 +317,31 @@ func (s *SPM) Decode(ids []int) string {
 			b.WriteString(p) // CONTROL / USER_DEFINED: ▁ is part of its name
 			continue
 		}
-		b.WriteString(strings.ReplaceAll(p, spaceMeta, " "))
+		writeUnescapedMeta(&b, p)
 	}
 	out := b.String()
 	if s.dummy {
 		out = strings.TrimPrefix(out, " ")
 	}
 	return out
+}
+
+// writeUnescapedMeta writes p into b with every spaceMeta (▁) replaced by a space,
+// straight into the builder. It is the alloc-free equivalent of
+// b.WriteString(strings.ReplaceAll(p, spaceMeta, " ")) — which allocated a fresh
+// string for every ▁-bearing piece (52k allocs in the T931 SPM decode profile).
+// Byte-identical: same replacement, same output.
+func writeUnescapedMeta(b *strings.Builder, p string) {
+	for {
+		j := strings.Index(p, spaceMeta)
+		if j < 0 {
+			b.WriteString(p)
+			return
+		}
+		b.WriteString(p[:j])
+		b.WriteByte(' ')
+		p = p[j+len(spaceMeta):]
+	}
 }
 
 // SPMFromGGUF builds the SPM (llama-family SentencePiece BPE) tokenizer from the

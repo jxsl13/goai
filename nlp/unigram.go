@@ -286,7 +286,7 @@ func (u *Unigram) Decode(ids []int) string {
 			b.WriteString(p) // control/user-defined marker: ▁ is part of its name
 			continue
 		}
-		b.WriteString(strings.ReplaceAll(p, spaceMeta, " "))
+		writeUnescapedMeta(&b, p)
 	}
 	s := b.String()
 	if u.dummy {
