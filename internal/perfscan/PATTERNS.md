@@ -164,6 +164,37 @@ scalar per-`(t,h)` loop that the kernel does not cover — as the leftover sub-w
 
 ---
 
+## P5 — a transcendental op registered ONLY on the ref backend  *(heuristic: registration diff)*
+
+**Smell.** A tensor `Op` whose only kernel is on the **ref** backend (a scalar
+`math.Exp/Log/Tanh/…` loop) with **no CPU kernel** — so on the CPU backend it falls
+through to that scalar, single-threaded reference. This is the shape both `OpSoftplus`
+(Mamba/Jamba Δ, 1.62× — PR #249) and `OpSoftCap` (Gemma-2 `cap·tanh(x/cap)`, 6.1× at
+attention-score shape) had. Class K/L never see it: the transcendental lives in
+`backend/ref`, not in a hot first-party loop with a vector sibling.
+
+**Finder (generic).** Diff the ref-registered ops against the CPU-registered ops:
+
+```sh
+grep -rhoE 'std\.add\(backend\.(Op[A-Za-z0-9]+)' backend/ref/*.go   | grep -oE 'Op[A-Za-z0-9]+' | sort -u > /tmp/ref_ops
+grep -rhoE '(reg|std\.add)\(backend\.(Op[A-Za-z0-9]+)' backend/cpu/*.go | grep -oE 'Op[A-Za-z0-9]+' | sort -u > /tmp/cpu_ops
+comm -23 /tmp/ref_ops /tmp/cpu_ops   # ops with NO CPU kernel — the candidates
+```
+
+Then keep the ones whose ref kernel is elementwise + transcendental (a SIMD kernel
+pays) and that sit on a hot path. Live candidates from this diff (2026-07-21):
+`OpConv1D` (Mamba causal conv), `OpSSM`/`OpWKV` (recurrent scans — sequential, harder),
+`OpZLoss` (MoE router logsumexp), the RL preference losses (`OpDPO`/`OpKTO`/… — niche).
+
+**Fix.** Add a CPU kernel: vectorize the transcendental on a SIMD primitive
+(`expF64x4`, `vtanhF32`, …) with a bit-identical scalar tail, `parallel()` the outer
+range, register `std.add(OpX, F64, kernelCPU)`. Verify the op is not under the
+CPU==Ref exact invariant first, and prove the model golden (measure hotness — a
+ref-only op is not automatically hot). *(Could graduate to a static detector once
+perfscan grows a module-level cross-package registration pass.)*
+
+---
+
 ## Discipline
 
 - **Verify or revert.** No change ships without a pre/post benchmark on
