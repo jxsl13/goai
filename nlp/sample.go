@@ -7,6 +7,7 @@ import (
 	"slices"
 
 	"github.com/jxsl13/goai/backend"
+	"github.com/jxsl13/goai/internal/simd"
 	"github.com/jxsl13/goai/tensor"
 )
 
@@ -1058,11 +1059,10 @@ func (s *Sampler) Dist(logits []float64) []float64 {
 		}
 	}
 	probs := make([]float64, n)
-	var sum float64
-	for i, v := range z {
-		probs[i] = math.Exp(v - m)
-		sum += probs[i]
-	}
+	// dst[i] = exp(z[i]-m), returns Σ — 4-wide AVX2 f64 exp over the full vocab
+	// on the SIMD build (the exp was ~26% of large-vocab Dist), scalar otherwise.
+	// Rides the Dist f64 tolerance (§sample_test 1e-12); masked −Inf lanes → ~0.
+	sum := simd.ExpSumF64(probs, z, m)
 	for i := range probs {
 		probs[i] /= sum
 	}

@@ -2,6 +2,8 @@
 
 package simd
 
+import "math"
+
 // Portable SIMD-class primitives: tight, allocation-free elementwise loops the
 // Go compiler can auto-vectorize. dst, a, b must have equal length. These are the
 // fallback used on every arch EXCEPT amd64+GOEXPERIMENT=simd, where simd_avx.go
@@ -69,4 +71,17 @@ func DivF32(dst, a, b []float32) {
 	for i := range dst {
 		dst[i] = a[i] / b[i]
 	}
+}
+
+// ExpSumF64 sets dst[i] = exp(src[i]-bias) and returns Σ dst[i] — the scalar
+// (non-SIMD build) form. The amd64+simd build overrides it with a 4-wide AVX2
+// version (simd_avx.go). Used by the large-vocab softmax in nlp sampling.
+func ExpSumF64(dst, src []float64, bias float64) float64 {
+	var sum float64
+	for i, v := range src {
+		e := math.Exp(v - bias)
+		dst[i] = e
+		sum += e
+	}
+	return sum
 }

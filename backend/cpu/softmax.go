@@ -6,6 +6,7 @@ import (
 	"runtime"
 
 	"github.com/jxsl13/goai/backend"
+	"github.com/jxsl13/goai/internal/simd"
 	"github.com/jxsl13/goai/tensor"
 )
 
@@ -73,6 +74,14 @@ func softmaxTyped[T normFloat](x, out []T, rows, d int) {
 		softmaxWide(x, out, rows, d, nw)
 		return
 	}
+	// F64 fast path: the per-row exp+sum is the softmax's dominant cost (~62% of
+	// the f64 kernel was math.Exp) — route it through the 4-wide AVX2 f64 exp
+	// (internal/simd.ExpSumF64) when the concrete dtype is f64. The check is once
+	// per call (T is fixed per instantiation); f32 keeps the scalar widen path.
+	// Rides the softmax ulp tolerance (§V9, assertCloseUlps) — the F32 sibling is
+	// already vexp'd.
+	xf64, isF64 := any(x).([]float64)
+	of64, _ := any(out).([]float64)
 	parallelWork(rows, 4*d, func(lo, hi int) {
 		for r := lo; r < hi; r++ {
 			base := r * d
@@ -85,10 +94,14 @@ func softmaxTyped[T normFloat](x, out []T, rows, d int) {
 				}
 			}
 			var sum float64
-			for j, v := range xr {
-				ev := math.Exp(float64(v) - m)
-				sum += ev
-				or[j] = T(ev)
+			if isF64 {
+				sum = simd.ExpSumF64(of64[base:base+d], xf64[base:base+d], m)
+			} else {
+				for j, v := range xr {
+					ev := math.Exp(float64(v) - m)
+					sum += ev
+					or[j] = T(ev)
+				}
 			}
 			inv := 1 / sum
 			for j, v := range or {

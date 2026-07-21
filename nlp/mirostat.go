@@ -3,6 +3,8 @@ package nlp
 import (
 	"math"
 	"math/rand/v2"
+
+	"github.com/jxsl13/goai/internal/simd"
 )
 
 // Mirostat is the Mirostat 2.0 decoding algorithm (Basu et al. 2020, "Mirostat: A
@@ -99,11 +101,7 @@ func (m *Mirostat) Sample(logits []float64) int {
 		}
 	}
 	probs := make([]float64, n)
-	var sum float64
-	for i, v := range logits {
-		probs[i] = math.Exp(v - mx)
-		sum += probs[i]
-	}
+	sum := simd.ExpSumF64(probs, logits, mx) // 4-wide AVX2 f64 softmax exp (see Sampler.Dist)
 	for i := range probs {
 		probs[i] /= sum
 	}
