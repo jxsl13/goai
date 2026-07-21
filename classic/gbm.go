@@ -5,6 +5,8 @@ import (
 	"math"
 	"math/rand"
 	"sort"
+
+	"github.com/jxsl13/goai/internal/simd"
 )
 
 // --- gradient boosting (Friedman 2001) ------------------------------------
@@ -663,8 +665,13 @@ func (m *GradientBoostingClassifier) Fit(x [][]float64, y []int) error {
 		gb = newGBMGrower(m.cfg, x, n, d)
 	}
 	for round := 0; round < m.cfg.nEstimators; round++ {
+		// negative gradient of log loss: resid = y − σ(f). Vectorize σ over the whole
+		// score vector (recomputed every boosting round — ~18% of GBM fit); σ writes
+		// into resid, then the subtraction runs in place. ~1 ulp, well inside the GBM
+		// goldens' 1e-2 R² tolerance.
+		simd.SigmoidF64(resid, f)
 		for i := 0; i < n; i++ {
-			resid[i] = yf[i] - sigmoid(f[i]) // negative gradient of log loss
+			resid[i] = yf[i] - resid[i]
 		}
 		idx := subsampleIdx(n, m.cfg.subsample, rng)
 		tree := gb.grow(resid, idx)
@@ -736,16 +743,11 @@ func sigmoid(x float64) float64 {
 }
 
 func logLoss(y, f []float64) float64 {
-	const eps = 1e-15
-	var s float64
-	for i := range y {
-		p := sigmoid(f[i])
-		if p < eps {
-			p = eps
-		} else if p > 1-eps {
-			p = 1 - eps
-		}
-		s += -(y[i]*math.Log(p) + (1-y[i])*math.Log(1-p))
-	}
-	return s / float64(len(y))
+	// Mean binary cross-entropy. −(y·log σ(f) + (1−y)·log(1−σ(f))) = softplus((1−2y)·f)
+	// exactly (y∈{0,1}), so one vectorized softplus per sample replaces the sigmoid +
+	// two logs the old form recomputed every boosting round (~15% of GBM fit as scalar
+	// math.Log). No eps clamp needed — softplus is stable at both tails. This is the
+	// monitoring loss curve (predictions come from the trees), so the ~1-ulp SIMD shift
+	// is invisible to the sklearn parity and keeps the curve monotonic.
+	return simd.SoftplusNegLLSumF64(f, y) / float64(len(y))
 }

@@ -93,3 +93,31 @@ func ExpScaledF64(dst, src []float64, scale float64) {
 		dst[i] = math.Exp(scale * v)
 	}
 }
+
+// SigmoidF64 sets dst[i] = 1/(1+e^(−src[i])) (overflow-safe). Portable scalar
+// fallback; the amd64 SIMD build vectorizes the body.
+func SigmoidF64(dst, src []float64) {
+	for i, x := range src {
+		if x >= 0 {
+			dst[i] = 1 / (1 + math.Exp(-x))
+		} else {
+			z := math.Exp(x)
+			dst[i] = z / (1 + z)
+		}
+	}
+}
+
+// SoftplusNegLLSumF64 returns Σ softplus((1−2·y[i])·f[i]) — binary cross-entropy sum
+// for y∈{0,1}. Portable scalar fallback; the amd64 SIMD build vectorizes the body.
+func SoftplusNegLLSumF64(f, y []float64) float64 {
+	var s float64
+	for i := range f {
+		x := (1 - 2*y[i]) * f[i]
+		if x > 0 {
+			s += x + math.Log1p(math.Exp(-x))
+		} else {
+			s += math.Log1p(math.Exp(x))
+		}
+	}
+	return s
+}

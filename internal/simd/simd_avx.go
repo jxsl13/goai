@@ -175,7 +175,94 @@ var (
 	eC4    = archsimd.BroadcastFloat64x4(4.166666666666666e-02)
 	eC3    = archsimd.BroadcastFloat64x4(1.6666666666666666e-01)
 	eC2    = archsimd.BroadcastFloat64x4(0.5)
+	eAbs   = archsimd.BroadcastUint64x4(0x7fffffffffffffff) // clear sign bit → |x|
 )
+
+// Cephes double-log rational constants for softplus's log1p (folded on v=1+u∈(1,2],
+// so no bit exponent extract) — the same recipe as backend/cpu's softplusF64x4.
+var (
+	spSqrt2 = archsimd.BroadcastFloat64x4(1.4142135623730951)
+	spLn2Hi = archsimd.BroadcastFloat64x4(6.93359375e-1)
+	spLn2Lo = archsimd.BroadcastFloat64x4(-2.121944400546905827679e-4)
+	spTwo   = archsimd.BroadcastFloat64x4(2.0)
+	spP0    = archsimd.BroadcastFloat64x4(1.01875663804580931796e-4)
+	spP1    = archsimd.BroadcastFloat64x4(4.97494994976747001425e-1)
+	spP2    = archsimd.BroadcastFloat64x4(4.70579119878881725854e0)
+	spP3    = archsimd.BroadcastFloat64x4(1.44989225341610930846e1)
+	spP4    = archsimd.BroadcastFloat64x4(1.79368678507819816313e1)
+	spP5    = archsimd.BroadcastFloat64x4(7.70838733755885391666e0)
+	spQ0    = archsimd.BroadcastFloat64x4(1.12873587189167450590e1)
+	spQ1    = archsimd.BroadcastFloat64x4(4.52279145837532221105e1)
+	spQ2    = archsimd.BroadcastFloat64x4(8.29875266912776603211e1)
+	spQ3    = archsimd.BroadcastFloat64x4(7.11544750618563894466e1)
+	spQ4    = archsimd.BroadcastFloat64x4(2.31251620126765340583e1)
+)
+
+// softplusF64x4v returns softplus(x) = max(x,0)+log1p(e^(−|x|)) per lane, ~1 ulp,
+// any sign — the log1p rides expF64x4v + the Cephes double-log rational.
+func softplusF64x4v(x archsimd.Float64x4) archsimd.Float64x4 {
+	ax := x.AsUint64x4().And(eAbs).AsFloat64x4()
+	u := expF64x4v(eZero.Sub(ax)) // e^(−|x|) ∈ (0,1]
+	v := eOne.Add(u)              // 1+u ∈ (1,2]
+	fold := v.GreaterEqual(spSqrt2)
+	f := v.Mul(eC2).Sub(eOne).Merge(v.Sub(eOne), fold) // fold ? v/2−1 : v−1
+	e := eOne.Merge(eZero, fold)                       // fold ? 1 : 0
+	z := f.Mul(f)
+	p := spP0
+	p = p.MulAdd(f, spP1)
+	p = p.MulAdd(f, spP2)
+	p = p.MulAdd(f, spP3)
+	p = p.MulAdd(f, spP4)
+	p = p.MulAdd(f, spP5)
+	q := f.Add(spQ0)
+	q = q.MulAdd(f, spQ1)
+	q = q.MulAdd(f, spQ2)
+	q = q.MulAdd(f, spQ3)
+	q = q.MulAdd(f, spQ4)
+	y := f.Mul(z.Mul(p).Div(q))
+	y = e.MulAdd(spLn2Lo, y)
+	y = y.Sub(z.Mul(eC2))
+	r := f.Add(y)
+	r = e.MulAdd(spLn2Hi, r)
+	return x.Max(eZero).Add(r)
+}
+
+func softplusScalar(x float64) float64 {
+	if x > 0 {
+		return x + math.Log1p(math.Exp(-x))
+	}
+	return math.Log1p(math.Exp(x))
+}
+
+// SoftplusNegLLSumF64 returns Σ softplus((1−2·y[i])·f[i]) — the binary cross-entropy
+// SUM for labels y∈{0,1} (y=1 → softplus(−f), y=0 → softplus(f)), computed via
+// softplus so there is no eps clamp and no separate sigmoid+log. 4-wide AVX2+FMA;
+// scalar tail + non-AVX fall back to the scalar softplus. ~1 ulp — the caller (GBM
+// trainLoss) is monitoring-only (goldens gate on the loss curve's monotonicity, not
+// its exact value; predictions come from the trees).
+func SoftplusNegLLSumF64(f, y []float64) float64 {
+	if !hasAVX || !hasFMA {
+		var s float64
+		for i := range f {
+			s += softplusScalar((1 - 2*y[i]) * f[i])
+		}
+		return s
+	}
+	acc := eZero
+	i, n := 0, len(f)
+	for ; i+4 <= n; i += 4 {
+		fv := archsimd.LoadFloat64x4Slice(f[i:])
+		yv := archsimd.LoadFloat64x4Slice(y[i:])
+		acc = acc.Add(softplusF64x4v(eOne.Sub(yv.Mul(spTwo)).Mul(fv))) // softplus((1−2y)·f)
+	}
+	var lanes [4]float64
+	acc.StoreSlice(lanes[:])
+	s := lanes[0] + lanes[1] + lanes[2] + lanes[3]
+	for ; i < n; i++ {
+		s += softplusScalar((1 - 2*y[i]) * f[i])
+	}
+	return s
+}
 
 // expF64x4v returns eˣ (~1 ulp) per lane for x ≤ 0 (the softmax numerator feeds
 // it z−max ≤ 0). Masked/−Inf lanes clamp to eLo → ~3e-308 (≈0 after normalize).
@@ -254,5 +341,40 @@ func ExpScaledF64(dst, src []float64, scale float64) {
 	}
 	for ; i < n; i++ {
 		dst[i] = math.Exp(scale * src[i])
+	}
+}
+
+// SigmoidF64 sets dst[i] = 1/(1+e^(−src[i])), 4-wide AVX2+FMA, in the overflow-safe
+// form z = e^(−|x|), sigmoid = (x≥0 ? 1 : z)/(1+z) — the logistic gradient the GBM
+// residual (yᵢ − σ(fᵢ)) recomputes every boosting round. ~1 ulp; the scalar tail is
+// the exact overflow-safe form. Rides the caller's tolerance (GBM goldens gate at
+// 1e-2 R² vs sklearn). Scalar fallback off the AVX/FMA path.
+func SigmoidF64(dst, src []float64) {
+	if !hasAVX || !hasFMA {
+		for i, x := range src {
+			if x >= 0 {
+				dst[i] = 1 / (1 + math.Exp(-x))
+			} else {
+				z := math.Exp(x)
+				dst[i] = z / (1 + z)
+			}
+		}
+		return
+	}
+	i, n := 0, len(src)
+	for ; i+4 <= n; i += 4 {
+		x := archsimd.LoadFloat64x4Slice(src[i:])
+		z := expF64x4v(eZero.Sub(x.AsUint64x4().And(eAbs).AsFloat64x4())) // e^(−|x|)
+		num := eOne.Merge(z, x.GreaterEqual(eZero))                       // x≥0 ? 1 : z
+		num.Div(eOne.Add(z)).StoreSlice(dst[i:])
+	}
+	for ; i < n; i++ {
+		x := src[i]
+		if x >= 0 {
+			dst[i] = 1 / (1 + math.Exp(-x))
+		} else {
+			z := math.Exp(x)
+			dst[i] = z / (1 + z)
+		}
 	}
 }
