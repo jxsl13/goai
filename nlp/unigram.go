@@ -273,6 +273,7 @@ func (u *Unigram) Encode(text string) []int {
 //     comes back as a space. [ContainsSpaceMeta] tests for this up front.
 func (u *Unigram) Decode(ids []int) string {
 	var b strings.Builder
+	b.Grow(len(ids) * 4) // pre-size (§T929): avoid the log(n) growth-buffer churn; Grow is capacity-only, output byte-identical
 	for _, id := range ids {
 		if id < 0 || id >= len(u.pieces) {
 			if t, ok := u.specials.textForID(id); ok {

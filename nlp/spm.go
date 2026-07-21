@@ -289,6 +289,7 @@ func (s *SPM) spmBounds(str string) []int {
 // tests for this up front.
 func (s *SPM) Decode(ids []int) string {
 	var b strings.Builder
+	b.Grow(len(ids) * 4) // pre-size (§T929): avoid the log(n) growth-buffer churn; Grow is capacity-only, output byte-identical
 	for _, id := range ids {
 		if id < 0 || id >= len(s.pieces) {
 			if t, ok := s.specials.textForID(id); ok {
