@@ -1,6 +1,7 @@
 package nlp
 
 import (
+	"iter"
 	"math"
 	"os"
 	"strings"
@@ -18,6 +19,24 @@ type Tokenizer struct {
 	ranks    map[string]int // token bytes → id / merge rank
 	decoder  map[int]string // id → token bytes
 	specials specialSet     // markers parsed only by EncodeSpecial (§B60)
+	// pairRank[a<<8|b] = rank of the two-byte token {a,b}, or math.MaxInt if not a token. The
+	// initial merge pass looks up every adjacent BYTE pair; a direct array index skips the string
+	// hash + compare that dominated the profile (mapaccess2_faststr). len 65536 or nil (map fallback).
+	pairRank []int
+}
+
+// buildPairRank fills the two-byte fast-lookup table from ranks (call once after ranks is populated).
+func (t *Tokenizer) buildPairRank() {
+	pr := make([]int, 65536)
+	for i := range pr {
+		pr[i] = math.MaxInt
+	}
+	for tok, id := range t.ranks {
+		if len(tok) == 2 {
+			pr[int(tok[0])<<8|int(tok[1])] = id
+		}
+	}
+	t.pairRank = pr
 }
 
 // LoadGPT2 reads a tiktoken-exported rank file (base64(bytes) rank per line).
@@ -48,20 +67,36 @@ type bpePart struct{ start, rank int }
 // candidate pair per iteration. Merge order (leftmost lowest rank) and the final
 // token boundaries are bit-identical to the old scan, so encode parity holds.
 func (t *Tokenizer) bpeMerge(piece []byte) []int {
+	ids, _ := t.bpeMergeInto(piece, nil, nil)
+	return ids
+}
+
+// bpeMergeInto is bpeMerge with caller-owned scratch: it APPENDS the piece's token ids to out and
+// returns the grown out plus the parts buffer for reuse on the next piece. Encode threads one out
+// (the whole result) and one parts scratch across every piece, so a text of N pieces does O(1)
+// heap allocations for the merge instead of O(N) (the parts slice + per-piece ids slice were 40%+60%
+// of encode's allocations in the profile). Numerically identical to bpeMerge — same merge order.
+func (t *Tokenizer) bpeMergeInto(piece []byte, out []int, parts []bpePart) ([]int, []bpePart) {
 	if len(piece) <= 1 {
 		if len(piece) == 0 {
-			return nil
+			return out, parts
 		}
-		return []int{t.ranks[string(piece)]}
+		return append(out, t.ranks[string(piece)]), parts
 	}
 	// parts[i] = {start offset of token i, rank of merging token i with i+1}; the
 	// trailing sentinel {len, maxInt} makes token i span piece[parts[i].start :
 	// parts[i+1].start]. Build all adjacent-pair ranks once, tracking the min.
-	parts := make([]bpePart, len(piece)+1)
+	if cap(parts) >= len(piece)+1 {
+		parts = parts[:len(piece)+1]
+	} else {
+		parts = make([]bpePart, len(piece)+1)
+	}
 	minRank, minI := math.MaxInt, -1
 	for i := 0; i < len(piece)-1; i++ {
 		r := math.MaxInt
-		if v, ok := t.ranks[string(piece[i:i+2])]; ok {
+		if t.pairRank != nil {
+			r = t.pairRank[int(piece[i])<<8|int(piece[i+1])] // direct index, no string hash
+		} else if v, ok := t.ranks[string(piece[i:i+2])]; ok {
 			r = v
 		}
 		parts[i] = bpePart{i, r}
@@ -100,19 +135,21 @@ func (t *Tokenizer) bpeMerge(piece []byte) []int {
 		}
 	}
 
-	ids := make([]int, len(parts)-1)
 	for i := 0; i < len(parts)-1; i++ {
-		ids[i] = t.ranks[string(piece[parts[i].start:parts[i+1].start])]
+		out = append(out, t.ranks[string(piece[parts[i].start:parts[i+1].start])])
 	}
-	return ids
+	return out, parts
 }
 
 // Encode turns text into token ids: GPT-2 pre-tokenization → byte-pair merge per
 // piece.
 func (t *Tokenizer) Encode(text string) []int {
 	var ids []int
-	for _, piece := range gpt2Split(text) {
-		ids = append(ids, t.bpeMerge([]byte(piece))...)
+	var parts []bpePart // merge scratch, reused across pieces
+	var pb []byte       // piece bytes, reused across pieces (avoids a []byte(piece) alloc per piece)
+	for piece := range gpt2SplitSeq(text) {
+		pb = append(pb[:0], piece...)
+		ids, parts = t.bpeMergeInto(pb, ids, parts)
 	}
 	return ids
 }
@@ -132,77 +169,97 @@ func (t *Tokenizer) Decode(ids []int) string {
 // string — never []rune, which would corrupt invalid UTF-8 — so decode∘encode is
 // byte-exact for any input (§V15). Invalid bytes decode to RuneError and
 // classify as "other", becoming byte tokens. Matches tiktoken on valid UTF-8.
+// gpt2Split materializes the pre-tokens into a slice (the []string form used by BPETokenizer.Encode
+// and the tests). Tokenizer.Encode ranges gpt2SplitSeq directly to avoid this slice allocation.
 func gpt2Split(text string) []string {
 	var out []string
-	n := len(text)
-	dec := func(i int) (rune, int) { return utf8.DecodeRuneInString(text[i:]) }
-	i := 0
-	for i < n {
-		// 1. contractions (ASCII apostrophe)
-		if text[i] == '\'' {
-			if m := contraction(text, i); m > 0 {
-				out = append(out, text[i:i+m])
-				i += m
-				continue
-			}
-		}
-		// 2/3/4: optional literal-space prefix + letters | numbers | others
-		j := i
-		if text[j] == ' ' {
-			j++
-		}
-		if j < n {
-			r, sz := dec(j)
-			if !unicode.IsSpace(r) {
-				switch {
-				case unicode.IsLetter(r):
-					for j < n {
-						if r, sz = dec(j); !unicode.IsLetter(r) {
-							break
-						}
-						j += sz
-					}
-				case unicode.IsNumber(r):
-					for j < n {
-						if r, sz = dec(j); !unicode.IsNumber(r) {
-							break
-						}
-						j += sz
-					}
-				default:
-					for j < n {
-						if r, sz = dec(j); unicode.IsSpace(r) || unicode.IsLetter(r) || unicode.IsNumber(r) {
-							break
-						}
-						j += sz
-					}
-				}
-				out = append(out, text[i:j])
-				i = j
-				continue
-			}
-		}
-		// 5/6: whitespace run. \s+(?!\S) hands the last whitespace rune to the
-		// following token when a non-space follows; a trailing run is kept whole.
-		j = i
-		lastStart := i
-		count := 0
-		for j < n {
-			r, sz := dec(j)
-			if !unicode.IsSpace(r) {
-				break
-			}
-			lastStart = j
-			j += sz
-			count++
-		}
-		if j < n && count > 1 {
-			j = lastStart // leave the last whitespace rune for the next token
-		}
-		out = append(out, text[i:j])
-		i = j
+	for p := range gpt2SplitSeq(text) {
+		out = append(out, p)
 	}
 	return out
+}
+
+// gpt2SplitSeq yields each GPT-2 pre-token as a SUBSTRING of text without materializing a slice — the
+// pieces are the exact same boundaries gpt2Split produces (the pre-tokenizer regex reimplemented as a
+// hand scan). Streaming lets Tokenizer.Encode process one pre-token at a time (no []string alloc,
+// which the profile showed at 36% of encode's allocations).
+func gpt2SplitSeq(text string) iter.Seq[string] {
+	return func(yield func(string) bool) {
+		n := len(text)
+		dec := func(i int) (rune, int) { return utf8.DecodeRuneInString(text[i:]) }
+		i := 0
+		for i < n {
+			// 1. contractions (ASCII apostrophe)
+			if text[i] == '\'' {
+				if m := contraction(text, i); m > 0 {
+					if !yield(text[i : i+m]) {
+						return
+					}
+					i += m
+					continue
+				}
+			}
+			// 2/3/4: optional literal-space prefix + letters | numbers | others
+			j := i
+			if text[j] == ' ' {
+				j++
+			}
+			if j < n {
+				r, sz := dec(j)
+				if !unicode.IsSpace(r) {
+					switch {
+					case unicode.IsLetter(r):
+						for j < n {
+							if r, sz = dec(j); !unicode.IsLetter(r) {
+								break
+							}
+							j += sz
+						}
+					case unicode.IsNumber(r):
+						for j < n {
+							if r, sz = dec(j); !unicode.IsNumber(r) {
+								break
+							}
+							j += sz
+						}
+					default:
+						for j < n {
+							if r, sz = dec(j); unicode.IsSpace(r) || unicode.IsLetter(r) || unicode.IsNumber(r) {
+								break
+							}
+							j += sz
+						}
+					}
+					if !yield(text[i:j]) {
+						return
+					}
+					i = j
+					continue
+				}
+			}
+			// 5/6: whitespace run. \s+(?!\S) hands the last whitespace rune to the
+			// following token when a non-space follows; a trailing run is kept whole.
+			j = i
+			lastStart := i
+			count := 0
+			for j < n {
+				r, sz := dec(j)
+				if !unicode.IsSpace(r) {
+					break
+				}
+				lastStart = j
+				j += sz
+				count++
+			}
+			if j < n && count > 1 {
+				j = lastStart // leave the last whitespace rune for the next token
+			}
+			if !yield(text[i:j]) {
+				return
+			}
+			i = j
+		}
+	}
 }
 
 var contractions = []string{"'s", "'t", "'re", "'ve", "'m", "'ll", "'d"}
