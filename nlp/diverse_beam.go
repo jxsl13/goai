@@ -49,7 +49,17 @@ func DiverseBeamSearch(next NextLogits, start []int, width, groups, maxNew, eos 
 		newLen int
 		done   bool
 	}
-	last := func(nd node) int { return nd.toks[len(nd.toks)-1] }
+	// A scored candidate extension, kept as a lightweight backpointer into the group's
+	// CURRENT beams instead of a materialized token sequence (T942). The full toks slice
+	// (make+copy+append) is built ONLY for the B' survivors that advance — not for every
+	// ~vocab candidate that is scored and then discarded, which dominated allocation.
+	type cand struct {
+		parent int     // index into the group's current beams (grp[g])
+		tok    int     // token appended to parent (meaningful only for a freshly extended candidate)
+		score  float64 // raw cumulative log-prob (parent.score+lp fresh; parent.score for a carried done beam)
+		newLen int
+		done   bool
+	}
 
 	grp := make([][]node, groups)
 	for g := range grp {
@@ -60,39 +70,52 @@ func DiverseBeamSearch(next NextLogits, start []int, width, groups, maxNew, eos 
 		stepCount := map[int]int{} // token → # earlier groups (this step) that selected it
 		anyLive := false
 		for g := 0; g < groups; g++ {
-			cand := make([]node, 0, len(grp[g])*8)
-			for _, b := range grp[g] {
+			beams := grp[g]
+			cands := make([]cand, 0, len(beams)*8)
+			for pi := range beams {
+				b := beams[pi]
 				if b.done {
-					cand = append(cand, b) // carry a finished hypothesis unchanged
+					cands = append(cands, cand{pi, 0, b.score, b.newLen, true}) // carry a finished hypothesis unchanged
 					continue
 				}
 				anyLive = true
 				ls := logSoftmaxRow(next(b.toks))
 				for tok, lp := range ls {
-					nt := make([]int, len(b.toks)+1)
-					copy(nt, b.toks)
-					nt[len(b.toks)] = tok
-					cand = append(cand, node{nt, b.score + lp, b.newLen + 1, eos >= 0 && tok == eos})
+					cands = append(cands, cand{pi, tok, b.score + lp, b.newLen + 1, eos >= 0 && tok == eos})
 				}
 			}
 			// select this group's top B' by the diversity-augmented score; the penalty applies
 			// only to candidates freshly extended THIS step (carried done beams keep their score).
-			fresh := func(nd node) bool { return nd.newLen == step+1 }
-			aug := func(nd node) float64 {
-				if fresh(nd) {
-					return nd.score - lambda*float64(stepCount[last(nd)])
+			// last(fresh candidate) == its appended tok, so selection needs no materialized toks.
+			fresh := func(c cand) bool { return c.newLen == step+1 }
+			aug := func(c cand) float64 {
+				if fresh(c) {
+					return c.score - lambda*float64(stepCount[c.tok])
 				}
-				return nd.score
+				return c.score
 			}
-			sort.SliceStable(cand, func(i, j int) bool { return aug(cand[i]) > aug(cand[j]) })
-			if len(cand) > bPrime {
-				cand = cand[:bPrime]
+			sort.SliceStable(cands, func(i, j int) bool { return aug(cands[i]) > aug(cands[j]) })
+			if len(cands) > bPrime {
+				cands = cands[:bPrime]
 			}
-			grp[g] = cand
+			// materialize toks ONLY for the B' survivors that advance.
+			survivors := make([]node, len(cands))
+			for i, c := range cands {
+				p := beams[c.parent]
+				if !fresh(c) {
+					survivors[i] = p // carried done beam — shares toks (never mutated)
+					continue
+				}
+				nt := make([]int, len(p.toks)+1)
+				copy(nt, p.toks)
+				nt[len(p.toks)] = c.tok
+				survivors[i] = node{nt, c.score, c.newLen, c.done}
+			}
+			grp[g] = survivors
 			// record this group's fresh picks so later groups diversify against them.
-			for _, b := range grp[g] {
-				if fresh(b) {
-					stepCount[last(b)]++
+			for _, c := range cands {
+				if fresh(c) {
+					stepCount[c.tok]++
 				}
 			}
 		}
