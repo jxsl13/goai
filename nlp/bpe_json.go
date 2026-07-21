@@ -133,7 +133,7 @@ func (t *BPETokenizer) ToJSON() ([]byte, error) {
 	}
 	// merges ordered by their rank (lowest first = highest priority).
 	type mr struct {
-		m string
+		m [2]string
 		r int
 	}
 	ms := make([]mr, 0, len(t.mergeRank))
@@ -143,7 +143,7 @@ func (t *BPETokenizer) ToJSON() ([]byte, error) {
 	sort.Slice(ms, func(a, b int) bool { return ms[a].r < ms[b].r })
 	merges := make([]string, len(ms))
 	for i, e := range ms {
-		merges[i] = e.m
+		merges[i] = e.m[0] + " " + e.m[1] // rejoin {left,right} into the HF "left right" form
 	}
 	var out hfTokJSON
 	out.Model.Type = "BPE"

@@ -39,14 +39,16 @@ func bytesToUnicode() (b2u [256]rune, u2b map[rune]byte) {
 // the list) is merged, until none remains. Because all 256 byte code points are base
 // tokens, decode∘encode is byte-exact for any input (§V15).
 type BPETokenizer struct {
-	vocab     map[string]int // byte-mapped symbol → id
-	decoder   map[int]string // id → byte-mapped symbol
-	mergeRank map[string]int // "left right" → merge priority (list index)
-	b2u       [256]rune
-	u2b       map[rune]byte
-	unkID     int
-	hasUnk    bool
-	specials  specialSet // markers parsed only by EncodeSpecial (§B60)
+	vocab     map[string]int    // byte-mapped symbol → id
+	decoder   map[int]string    // id → byte-mapped symbol
+	mergeRank map[[2]string]int // {left, right} → merge priority (list index). A struct key, not
+	//                            "left right", so the O(L²) merge scan looks up a pair with ZERO
+	//                            string allocation (no per-pair concat, no string() — T625 class).
+	b2u      [256]rune
+	u2b      map[rune]byte
+	unkID    int
+	hasUnk   bool
+	specials specialSet // markers parsed only by EncodeSpecial (§B60)
 }
 
 // NewBPE builds a byte-level BPE tokenizer from a vocabulary (byte-mapped token strings
@@ -59,7 +61,7 @@ func NewBPE(vocab []string, merges []string, opts ...BPEOption) (*BPETokenizer, 
 	t := &BPETokenizer{
 		vocab:     make(map[string]int, len(vocab)),
 		decoder:   make(map[int]string, len(vocab)),
-		mergeRank: make(map[string]int, len(merges)),
+		mergeRank: make(map[[2]string]int, len(merges)),
 	}
 	t.b2u, t.u2b = bytesToUnicode()
 	for id, tok := range vocab {
@@ -67,8 +69,13 @@ func NewBPE(vocab []string, merges []string, opts ...BPEOption) (*BPETokenizer, 
 		t.decoder[id] = tok
 	}
 	for i, m := range merges {
-		if _, dup := t.mergeRank[m]; !dup {
-			t.mergeRank[m] = i // earlier = higher priority
+		l, r, ok := strings.Cut(m, " ")
+		if !ok {
+			continue // no separator: a malformed merge that the {left,right} lookup can never match
+		}
+		key := [2]string{l, r}
+		if _, dup := t.mergeRank[key]; !dup {
+			t.mergeRank[key] = i // earlier = higher priority
 		}
 	}
 	for _, o := range opts {
@@ -100,7 +107,7 @@ func (t *BPETokenizer) bpe(mapped string) []int {
 	for len(parts) > 1 {
 		bestRank, bestI := math.MaxInt, -1
 		for i := 0; i < len(parts)-1; i++ {
-			if rk, ok := t.mergeRank[parts[i]+" "+parts[i+1]]; ok && rk < bestRank {
+			if rk, ok := t.mergeRank[[2]string{parts[i], parts[i+1]}]; ok && rk < bestRank {
 				bestRank, bestI = rk, i
 			}
 		}
@@ -139,13 +146,15 @@ func (t *BPETokenizer) Encode(text string) []int {
 // byte→Unicode map back to raw bytes. Byte-exact for any input the vocabulary covers.
 func (t *BPETokenizer) Decode(ids []int) string {
 	var mapped strings.Builder
+	mapped.Grow(len(ids) * 4) // pre-size (§T929): skip the log(n) builder growth churn
 	for _, id := range ids {
 		if s, ok := t.decoder[id]; ok {
 			mapped.WriteString(s)
 		}
 	}
-	var out []byte
-	for _, r := range mapped.String() {
+	m := mapped.String()
+	out := make([]byte, 0, len(m)) // one byte per rune ≤ len(m) bytes — pre-sized, no append growth
+	for _, r := range m {
 		if b, ok := t.u2b[r]; ok {
 			out = append(out, b)
 		}

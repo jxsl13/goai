@@ -8,7 +8,7 @@ eval-only) where the fix isn't worth the code.
 
 When you find a NEW generic pattern worth codifying, add it here AND teach the
 scanner (extend a callee map or add a detector in `perfscan.go`, with a positive
-+ negative fixture test in `perfscan_test.go`) — SPEC §C28.
++ negative fixture test in `perfscan_test.go`) — SPEC §C29.
 
 This is the SINGLE perfscan for the repo (`internal/perfscan`, run via
 `make perfscan` / `go run ./internal/perfscan`); the code labels detectors A–K.
