@@ -24,3 +24,4 @@
 | BM20 | 2026-07-21 | nlp ApplyPenalties (vocab 32000, history 2048) | darwin/arm64 | self | us | 37.98 | 36.28 | 1.05× | T941,V22 |
 | BM21 | 2026-07-21 | nlp diverse-beam step (deferred materialization), cheap forward; allocs/op 320776->1528 -99.5%, B/op 82.6->41.5MiB -49.8% | darwin/arm64 | self | ms | 140.1 | 126.3 | 1.11× | T942,V22 |
 | BM22 | 2026-07-21 | nlp BeamSearch step (deferred materialization, cheap-fwd) | darwin/arm64 | self | ms | 124.1 | 105.6 | 1.18× | T943,V22 |
+| BM23 | 2026-07-21 | nlp nucleusTopP (top-p, vocab 32000, full-sort path) | darwin/arm64 | self | us | 703 | 674.6 | 1.04× | T944,V22 |
