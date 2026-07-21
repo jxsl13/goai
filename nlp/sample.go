@@ -734,11 +734,25 @@ func nucleusTopP(probs []float64, p float64) {
 		idx = idx[:n]
 	}
 	defer nucleusIdxPool.Put(idx) // covers the early-return paths; idx is not retained
+	var sumSq float64             // Σp² — accumulated for free in the index-init pass
 	for i := range idx {
 		idx[i] = i
+		sumSq += probs[i] * probs[i]
 	}
 	const k = 512
-	if k < n {
+	// Cheap provable test for whether the K-candidate prefix can possibly reach the
+	// nucleus. By Cauchy–Schwarz the k largest probs sum to at most √(k·Σ_topk p²) ≤
+	// √(k·Σp²), so when k·Σp² < p² the top-k prefix provably falls short of p — the
+	// quickselect+partial-sort would fail and fall through to the full sort anyway.
+	// Skip straight to it and save the wasted O(n) selection. This is the high-entropy
+	// case (temperature ≳ 1, large vocab) where the nucleus spans a big fraction of the
+	// vocabulary — the default temp-1 top-p-0.9 config included; measured ~1.3–1.4× on
+	// Dist there. sumSq = Σp² was accumulated for free in the index-init loop above.
+	// The result is unchanged either way — both paths accumulate in exact
+	// descending order and find the same crossing token; only the routing differs, so
+	// the §T627 full-sort parity (TestDistQuickselectParity, 1e-12) still holds. The
+	// squared form avoids a sqrt: √(k·Σp²) < p ⟺ k·Σp² < p² (both sides ≥ 0).
+	if k < n && float64(k)*sumSq >= p*p {
 		quickselectIdxDesc(idx, probs, k)
 		top := idx[:k]
 		sortIdxDescByProb(top, probs)
