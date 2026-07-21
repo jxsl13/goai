@@ -830,12 +830,16 @@ func sortIdxAscByScore(idx []int, key []float64) {
 		sortIdxAscByKey(idx, key)
 		return
 	}
-	bits := make([]uint64, n)
+	sc := radixScratchPool.Get().(*radixScratch) // shared with sortIdxDescByProb (T944)
+	if cap(sc.bits) < n {
+		sc.bits = make([]uint64, n)
+		sc.tmpBits = make([]uint64, n)
+		sc.tmpIdx = make([]int, n)
+	}
+	bits, tmpBits, tmpIdx := sc.bits[:n], sc.tmpBits[:n], sc.tmpIdx[:n]
 	for i, id := range idx {
 		bits[i] = math.Float64bits(key[id]) // ascending bits ⇒ ascending value (key ≥ 0)
 	}
-	tmpIdx := make([]int, n)
-	tmpBits := make([]uint64, n)
 	var count [256]int
 	for shift := uint(0); shift < 64; shift += 8 {
 		for i := range count {
@@ -860,6 +864,7 @@ func sortIdxAscByScore(idx []int, key []float64) {
 		idx, tmpIdx = tmpIdx, idx
 		bits, tmpBits = tmpBits, bits
 	}
+	radixScratchPool.Put(sc)
 }
 
 // applyKeep zeroes every probability whose keep flag is false and renormalizes over

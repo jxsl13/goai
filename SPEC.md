@@ -1485,6 +1485,8 @@ T38b|x|L4 Llama-family pt2: SiLU op+VJP, SwiGLU FFN (nn layer, trainable), GQA (
 | T943 | x | nlp: beam.go BeamSearch has the SAME materialize-then-discard pattern as diverse_beam (T942) — sibling class-audit: defer per-candidate token materialization to the top-B survivors via backpointers. Bit-identical (same beams). Expect ~200× fewer allocs like T942/BM21. | T942 | done | med |
 | T944 | x | nlp: sortIdxDescByProb pool the 3xn radix scratch (bits/tmpBits/tmpIdx) via sync.Pool — runs once per generated token in top-p/typical sampling, so a fresh 3xn scratch was O(T) large allocs. Pooled+grown-on-demand, amortized alloc-free; the swaps only rebind locals so sc fields still alias their backing → pools cleanly, bit-identical. §V22: 703->674us -4%, allocs 4->1, B/op 1024->366KiB -64%. perfscan: no rule (interprocedural make-in-hot-func, like ApplyPenalties) | V22 | done | med |
 | T945 | x | nlp: nucleusTopP still allocs idx=make([]int,vocab) per call (the residual 1 alloc/256KB after T944) — pool it too (verify idx isn't retained past the call). §V22. | T944 | done | med |
+| T946 | x | nlp: sortIdxAscByScore (typical-sampling radix sort) reuse radixScratchPool — class-audit of T944, structurally identical (ascending vs descending bits), shares the same pool. §V22 (typicalTruncate, vocab 32000, full-sort): allocs 6->3, B/op 1312->596KiB -55%, -2.9%. Bit-identical (typical tests). perfscan: no rule (interprocedural, T941/T944 class) | V22,T944 | done | med |
+| T947 | . | nlp: typicalTruncate still allocs score=make([]float64,vocab) + idx=make([]int,vocab) + keep=make([]bool,vocab) per call (the residual 3 allocs after T946). Pool them (idx via nucleusIdxPool; score []float64 pool; keep []bool pool + clear() reset). §V22. | T946 | . | med |
 
 ## §Bench — benchmark records
 
@@ -1514,3 +1516,4 @@ T38b|x|L4 Llama-family pt2: SiLU op+VJP, SwiGLU FFN (nn layer, trainable), GQA (
 | BM22 | 2026-07-21 | nlp BeamSearch step (deferred materialization, cheap-fwd) | darwin/arm64 | self | ms | 124.1 | 105.6 | 1.18× | T943,V22 |
 | BM23 | 2026-07-21 | nlp nucleusTopP (top-p, vocab 32000, full-sort path) | darwin/arm64 | self | us | 703 | 674.6 | 1.04× | T944,V22 |
 | BM24 | 2026-07-21 | nlp nucleusTopP idx pooled (top-p, vocab 32000) | darwin/arm64 | self | us | 676 | 655.5 | 1.03× | T945,V22 |
+| BM25 | 2026-07-21 | nlp typicalTruncate radix pooled (vocab 32000, full-sort) | darwin/arm64 | self | us | 1179 | 1144 | 1.03× | T946,V22 |
