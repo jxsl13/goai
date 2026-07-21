@@ -3,6 +3,8 @@ package classic
 import (
 	"fmt"
 	"math"
+	"runtime"
+	"sync"
 )
 
 // DBSCANMetric selects the distance function DBSCAN uses to decide whether two
@@ -154,19 +156,48 @@ func (m *DBSCAN) Fit(x [][]float64) ([]int, error) {
 	tree := buildBallTree(x, ballMetricOfDBSCAN(m.cfg.metric))
 	neighbors := make([][]int, n)
 	m.core = make([]bool, n)
-	for i := range n {
-		var nb []int
-		if tree != nil {
-			nb = tree.radius(x[i], m.cfg.eps, nil) // nil ⇒ a fresh slice per query
-		} else {
-			for j := range n {
-				if m.dist(x[i], x[j], eps2) {
-					nb = append(nb, j)
+	// Neighbour search is ~94% of Fit and each query is independent: tree.radius
+	// reads the immutable tree and allocates its own (sorted) result via the nil
+	// buffer, and the brute-force fallback only reads x — so distributing the
+	// outer loop over goroutines writes each neighbors[i]/core[i] exactly once
+	// and is bit-identical to the serial scan (§V1 exact-label parity holds).
+	ng := runtime.GOMAXPROCS(0)
+	if ng > n {
+		ng = n
+	}
+	neigh := func(lo, hi int) {
+		for i := lo; i < hi; i++ {
+			var nb []int
+			if tree != nil {
+				nb = tree.radius(x[i], m.cfg.eps, nil) // nil ⇒ a fresh slice per query
+			} else {
+				for j := range n {
+					if m.dist(x[i], x[j], eps2) {
+						nb = append(nb, j)
+					}
 				}
 			}
+			neighbors[i] = nb
+			m.core[i] = len(nb) >= m.cfg.minSamples
 		}
-		neighbors[i] = nb
-		m.core[i] = len(nb) >= m.cfg.minSamples
+	}
+	if ng <= 1 {
+		neigh(0, n)
+	} else {
+		var wg sync.WaitGroup
+		chunk := (n + ng - 1) / ng
+		for lo := 0; lo < n; lo += chunk {
+			hi := lo + chunk
+			if hi > n {
+				hi = n
+			}
+			wg.Add(1)
+			go func(lo, hi int) {
+				defer wg.Done()
+				neigh(lo, hi)
+			}(lo, hi)
+		}
+		wg.Wait()
 	}
 
 	// Cluster expansion — a faithful port of scikit-learn's dbscan_inner: scan
