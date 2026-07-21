@@ -12,7 +12,7 @@ import (
 func scanSrc(t *testing.T, src string) []finding {
 	t.Helper()
 	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, "x.go", src, 0)
+	f, err := parser.ParseFile(fset, "x.go", src, parser.ParseComments)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -392,7 +392,7 @@ func TestScanWholeModule(t *testing.T) {
 	fset := token.NewFileSet()
 	total := 0
 	for _, path := range files {
-		f, err := parser.ParseFile(fset, path, nil, 0)
+		f, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
 		if err != nil {
 			continue // a first-party parse error is not perfscan's concern (main skips too)
 		}
@@ -415,5 +415,155 @@ func f() {
 }`
 	if got := scanSrc(t, src); len(got) != 0 {
 		t.Fatalf("comments/strings must not match, got %v", got)
+	}
+}
+
+// Detector K fires on a scalar transcendental in a loop beside a vectorized
+// v*F32/F64 sibling (the F64 SiLU signature)…
+func TestDetectK_ScalarTranscendentalWithVectorSibling(t *testing.T) {
+	src := `package p
+import "math"
+func vsiluF32(a, b []float32) {}
+func silu(o, d []float64, f32 bool) {
+	if f32 { vsiluF32(nil, nil); return }
+	for i := range o { o[i] = d[i] / (1 + math.Exp(-d[i])) }
+}`
+	if got := countCat(scanSrc(t, src)); got["scalar-transcendental-vectorizable"] != 1 {
+		t.Fatalf("want 1 scalar-transcendental-vectorizable, got %d (%v)", got["scalar-transcendental-vectorizable"], got)
+	}
+}
+
+// …and stays silent when there is no vectorized sibling (nothing proves the SIMD
+// path exists) or the transcendental is outside a loop.
+func TestDetectK_SilentWithoutSiblingOrLoop(t *testing.T) {
+	noSibling := `package p
+import "math"
+func silu(o, d []float64) {
+	for i := range o { o[i] = d[i] / (1 + math.Exp(-d[i])) }
+}`
+	if got := countCat(scanSrc(t, noSibling)); got["scalar-transcendental-vectorizable"] != 0 {
+		t.Fatalf("no-sibling: want 0, got %d", got["scalar-transcendental-vectorizable"])
+	}
+	notInLoop := `package p
+import "math"
+func vexpF32(a []float32) {}
+func f(x float64) float64 { vexpF32(nil); return math.Exp(x) }`
+	if got := countCat(scanSrc(t, notInLoop)); got["scalar-transcendental-vectorizable"] != 0 {
+		t.Fatalf("not-in-loop: want 0, got %d", got["scalar-transcendental-vectorizable"])
+	}
+}
+
+// Detector I fires on a per-element visitor fed a closure.
+func TestDetectI_PerElementClosure(t *testing.T) {
+	src := `package p
+func avg(dst *T) {
+	fillGen(dst, func(i int) float64 { return float64(i) * 0.5 })
+}`
+	if got := countCat(scanSrc(t, src)); got["per-element-closure"] != 1 {
+		t.Fatalf("want 1 per-element-closure, got %d (%v)", got["per-element-closure"], got)
+	}
+}
+
+// Detector J fires on a package-qualified sort with a comparator, and does NOT
+// false-match a non-sort homonym like ops.Slice.
+func TestDetectJ_ClosureSortQualified(t *testing.T) {
+	fires := `package p
+import "sort"
+func rank(idx []int, s []float64) {
+	sort.SliceStable(idx, func(a, b int) bool { return s[idx[a]] < s[idx[b]] })
+}`
+	if got := countCat(scanSrc(t, fires)); got["closure-comparator-sort"] != 1 {
+		t.Fatalf("want 1 closure-comparator-sort, got %d (%v)", got["closure-comparator-sort"], got)
+	}
+	homonym := `package p
+func crop(x *T, a, b int) *T { return ops.Slice(x, a, b) }`
+	if got := countCat(scanSrc(t, homonym)); got["closure-comparator-sort"] != 0 {
+		t.Fatalf("ops.Slice homonym must not fire, got %d", got["closure-comparator-sort"])
+	}
+}
+
+// An inline //perfscan:ignore naming a class silences ONLY that class at the site,
+// leaving other detectors live — the staticcheck-style class-granular ignore.
+func TestIgnore_ClassGranular(t *testing.T) {
+	// two independent findings on the same loop: alloc-in-loop (B) + a per-element
+	// closure visitor (I) nearby. Ignoring only B must keep I… but they are on
+	// different lines, so test each class on its own site.
+	base := `package p
+import "math"
+func vsiluF32(a, b []float32) {}
+func silu(o, d []float64, f32 bool) {
+	if f32 { vsiluF32(nil, nil); return }
+	for i := range o { o[i] = d[i] / (1 + math.Exp(-d[i])) }
+}`
+	if got := countCat(scanSrc(t, base))["scalar-transcendental-vectorizable"]; got != 1 {
+		t.Fatalf("baseline: want 1, got %d", got)
+	}
+	// ignore by LETTER on the line above the loop.
+	byLetter := `package p
+import "math"
+func vsiluF32(a, b []float32) {}
+func silu(o, d []float64, f32 bool) {
+	if f32 { vsiluF32(nil, nil); return }
+	//perfscan:ignore K exact-locked reference op
+	for i := range o { o[i] = d[i] / (1 + math.Exp(-d[i])) }
+}`
+	if got := countCat(scanSrc(t, byLetter))["scalar-transcendental-vectorizable"]; got != 0 {
+		t.Fatalf("ignore-by-letter: want 0, got %d", got)
+	}
+	// ignore by CATEGORY string.
+	byCat := `package p
+import "math"
+func vsiluF32(a, b []float32) {}
+func silu(o, d []float64, f32 bool) {
+	if f32 { vsiluF32(nil, nil); return }
+	//perfscan:ignore scalar-transcendental-vectorizable reason
+	for i := range o { o[i] = d[i] / (1 + math.Exp(-d[i])) }
+}`
+	if got := countCat(scanSrc(t, byCat))["scalar-transcendental-vectorizable"]; got != 0 {
+		t.Fatalf("ignore-by-category: want 0, got %d", got)
+	}
+}
+
+// Ignoring an UNRELATED class does not silence a live one (the user's scenario:
+// a previously-ignored class must not blind the tool to a new, different pattern).
+func TestIgnore_UnrelatedClassDoesNotSilence(t *testing.T) {
+	src := `package p
+import "math"
+func vsiluF32(a, b []float32) {}
+func silu(o, d []float64, f32 bool) {
+	if f32 { vsiluF32(nil, nil); return }
+	//perfscan:ignore alloc-in-loop we accept this one elsewhere
+	for i := range o { o[i] = d[i] / (1 + math.Exp(-d[i])) }
+}`
+	if got := countCat(scanSrc(t, src))["scalar-transcendental-vectorizable"]; got != 1 {
+		t.Fatalf("ignoring an unrelated class must leave K live, got %d", got)
+	}
+}
+
+// A bare //perfscan:ignore (no class) silences all classes at the site — the
+// backward-compatible catch-all.
+func TestIgnore_BareSilencesAll(t *testing.T) {
+	src := `package p
+import "math"
+func vsiluF32(a, b []float32) {}
+func silu(o, d []float64, f32 bool) {
+	if f32 { vsiluF32(nil, nil); return }
+	//perfscan:ignore
+	for i := range o { o[i] = d[i] / (1 + math.Exp(-d[i])) }
+}`
+	if got := countCat(scanSrc(t, src))["scalar-transcendental-vectorizable"]; got != 0 {
+		t.Fatalf("bare ignore should silence all, got %d", got)
+	}
+}
+
+func TestResolveClass(t *testing.T) {
+	if resolveClass("K") != "scalar-transcendental-vectorizable" {
+		t.Error("letter K should resolve")
+	}
+	if resolveClass("per-element-dispatch") != "per-element-dispatch" {
+		t.Error("category should resolve to itself")
+	}
+	if resolveClass("nonsense") != "" {
+		t.Error("unknown token should resolve to empty")
 	}
 }

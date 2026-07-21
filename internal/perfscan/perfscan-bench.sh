@@ -6,8 +6,8 @@
 # runs both and reports the ratio; ratios below THRESHOLD (default 2.0) are
 # flagged as candidates worth investigating.
 #
-# Usage:  tools/perfscan/perfscan-bench.sh <pkg> [threshold] [benchtime]
-#   e.g.  tools/perfscan/perfscan-bench.sh ./nn 2.0 500x
+# Usage:  internal/perfscan/perfscan-bench.sh <pkg> [threshold] [benchtime]
+#   e.g.  internal/perfscan/perfscan-bench.sh ./nn 2.0 500x
 set -u
 PKG="${1:-./...}"
 THRESHOLD="${2:-2.0}"
