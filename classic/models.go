@@ -441,9 +441,10 @@ func KMeans(x [][]float64, init [][]float64, maxIter int) (centers [][]float64, 
 		for i, row := range x {
 			best, bd := 0, math.Inf(1)
 			for c := range k {
-				var dist float64
-				for j := range d {
-					dv := row[j] - centers[c][j]
+				cc := centers[c] // hoist the center slice out of the j-loop so the
+				var dist float64 // compiler drops the per-element re-index + bounds check
+				for j := 0; j < d; j++ {
+					dv := row[j] - cc[j]
 					dist += dv * dv
 				}
 				if dist < bd {
@@ -464,16 +465,18 @@ func KMeans(x [][]float64, init [][]float64, maxIter int) (centers [][]float64, 
 		for i, row := range x {
 			c := labels[i]
 			counts[c]++
-			for j := range d {
-				sums[c][j] += row[j]
+			sc := sums[c]
+			for j := 0; j < d; j++ {
+				sc[j] += row[j]
 			}
 		}
 		for c := range k {
 			if counts[c] == 0 {
 				continue // keep empty cluster's center (sklearn relocates; our golden has none)
 			}
-			for j := range d {
-				centers[c][j] = sums[c][j] / float64(counts[c])
+			cc, sc, cnt := centers[c], sums[c], float64(counts[c])
+			for j := 0; j < d; j++ {
+				cc[j] = sc[j] / cnt // keep division (bit-identical to the sklearn-parity golden)
 			}
 		}
 		if !changed && iter > 0 {
