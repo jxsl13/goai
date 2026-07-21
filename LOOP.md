@@ -42,6 +42,38 @@ library in this repository. Complete EXACTLY ONE task per fire, end to end.
    green before push), add a short entry to
    `CHANGELOG.md`.
 
+## Performance grind — STANDING MANDATE (user directive 2026-07-21)
+
+Performance leadership is a PERMANENT priority, not just an empty-backlog fallback.
+When a §T task does not dictate otherwise, advance the perf front:
+
+1. **Beat every incumbent.** The goal is for GoAI to be FASTER than the incumbent
+   (torch / numpy / sklearn / llama.cpp / tiktoken / safetensors / …) in EVERY honest
+   benchmark. Where a real hardware ceiling exists (BLAS / MPS / silicon / memory
+   bandwidth), say so HONESTLY and pivot to the structural-advantage frontiers
+   (no-interpreter, no-FFI-binding overhead); keep grinding every gap that is winnable.
+
+2. **Honest, statistically correct benchmarks — MANDATORY.**
+   - Every perf claim gets a PRE- and POST-optimization measurement (§V22 same-machine
+     A/B, best-of-N INTERLEAVED — A,B,A,B…). Report the median, not a lucky minimum.
+   - Compare LIKE-FOR-LIKE ONLY. NEVER put different quantizations, dtypes, or configs
+     in the same comparison row — GoAI-Q4_K vs llama.cpp-Q8 is meaningless (4.5-bit vs
+     8-bit). Compare GoAI-Q4_K vs incumbent-Q4_K, GoAI-Q8 vs incumbent-Q8, SEPARATELY.
+   - Record the incumbent NAME + VERSION and the exact workload / shape / machine
+     (§V38). A number without its incumbent version + config is not a comparison.
+   - Ship MEASURED wins only (§C3); a claimed win with no committed measurement path is
+     a §C3 violation. Record benchmarks via the docgraph §Bench table when it exists.
+
+3. **Backpropagate generalizable wins into perfscan.** Whenever an optimization removes
+   an anti-pattern that could recur (a per-element dispatch/alloc, a batch-API-wrapped
+   single item, a re-encode-instead-of-slice, a copy a verbatim-bulk move avoids), ADD
+   or extend a detector in `internal/perfscan` so the whole tree is swept for it
+   automatically. A one-off fix that leaves the class undetectable is HALF-DONE — the
+   tool is how each win compounds across the codebase.
+
+4. **New optimization field?** When you discover a fresh axis/domain to optimize,
+   re-read this file and the `base-perf-sweep` notes before diving in.
+
 ## Research rule (mandatory — mitigates the StructuredOutput failure)
 
 NEVER use the built-in `/deep-research` workflow for external research: it
