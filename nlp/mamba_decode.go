@@ -5,6 +5,7 @@ import (
 	"math"
 
 	"github.com/jxsl13/goai/backend"
+	"github.com/jxsl13/goai/internal/simd"
 	"github.com/jxsl13/goai/nn"
 	"github.com/jxsl13/goai/tensor"
 )
@@ -191,14 +192,17 @@ func mixerStep(ctx *backend.Context, mb *nn.MambaBlock, ls *MambaLayerState, u *
 	bb := rows2D(bRow)[0]
 	cc := rows2D(cRow)[0]
 	y := tensor.New(xc.Dtype(), tensor.Shape{1, D})
+	abar := make([]float64, N) // scratch for exp(Δ·A) over the state dim (see mixerPrefill)
 	for d := range D {
 		dt := dd[d]
 		ut := uu[d]
 		base := d * N
+		// abar[n] = exp(Δ·A[n]); A<0 → argument ≤0. Same ExpScaledF64 call as the
+		// prefill scan on the same-length slice → bit-equal state (parity §V22).
+		simd.ExpScaledF64(abar, ls.a[base:base+N], dt)
 		var yv float64
 		for n := range N {
-			abar := math.Exp(dt * ls.a[base+n])
-			hv := abar*ls.H[base+n] + dt*bb[n]*ut
+			hv := abar[n]*ls.H[base+n] + dt*bb[n]*ut
 			ls.H[base+n] = hv
 			yv += cc[n] * hv
 		}
@@ -281,16 +285,22 @@ func mixerPrefill(ctx *backend.Context, mb *nn.MambaBlock, ls *MambaLayerState, 
 	// each t in order; ls.H ends as the post-prompt hidden state.
 	uuA, ddA, bbA, ccA := rows2D(xc), rows2D(delta), rows2D(bMat), rows2D(cMat)
 	y := tensor.New(xc.Dtype(), tensor.Shape{T, D})
+	abar := make([]float64, N) // scratch for the vectorized exp(Δ·A) over the state dim
 	for t := range T {
 		uu, dd, bb, cc := uuA[t], ddA[t], bbA[t], ccA[t]
 		for d := range D {
 			dt := dd[d]
 			ut := uu[d]
 			base := d * N
+			// abar[n] = exp(Δ·A[n]); A = −exp(A_log) < 0 so the argument is ≤ 0. The exp
+			// is vectorized over the state dim (was ~25% of Mamba prefill as scalar
+			// math.Exp); the recurrence + reduction below run in the SAME order, and the
+			// decode path (mixerStep) calls ExpScaledF64 the same way on the same-length
+			// slice, so prefill stays bit-equal to decode (TestMambaPrefillStateParity).
+			simd.ExpScaledF64(abar, ls.a[base:base+N], dt)
 			var yv float64
 			for n := range N {
-				abar := math.Exp(dt * ls.a[base+n])
-				hv := abar*ls.H[base+n] + dt*bb[n]*ut
+				hv := abar[n]*ls.H[base+n] + dt*bb[n]*ut
 				ls.H[base+n] = hv
 				yv += cc[n] * hv
 			}
