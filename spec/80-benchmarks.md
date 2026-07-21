@@ -19,3 +19,5 @@
 | BM15 | 2026-07-21 | nlp BPETokenizer(GGUF) Decode (ids->text) | darwin/arm64 | self | ms | 1.649 | 1.559 | 1.06× | T937,V22 |
 | BM16 | 2026-07-21 | nlp BPETokenizer(GGUF) Encode byte-offset | darwin/arm64 | self | ms | 9.609 | 6.779 | 1.42× | T938,V22 |
 | BM17 | 2026-07-21 | nlp BPETokenizer(GGUF) Encode scratch-reuse | darwin/arm64 | self | ms | 6.712 | 5.355 | 1.25× | T939,V22 |
+| BM18 | 2026-07-21 | nlp Watermark.Detect (vocab 32000, seq 1024) | darwin/arm64 | self | ms | 75.76 | 50.69 | 1.49× | V22,C27 |
+| BM19 | 2026-07-21 | nlp Watermark.BiasLogits (vocab 32000) | darwin/arm64 | self | us | 146.4 | 106.9 | 1.37× | V22,C27 |
