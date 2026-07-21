@@ -453,6 +453,51 @@ func f(x float64) float64 { vexpF32(nil); return math.Exp(x) }`
 	}
 }
 
+// Detector L fires on a loop that calls a package-local elementwise helper WRAPPING
+// a transcendental (the softplus/mixer case class K misses because the math.X is one
+// call deep). This is the mamba2.go mixer softplus that stayed scalar after the
+// OpSoftplus kernel landed.
+func TestDetectL_TranscendentalWrapperInLoop(t *testing.T) {
+	src := `package p
+import "math"
+func softplus(x float64) float64 {
+	if x > 0 { return x + math.Log1p(math.Exp(-x)) }
+	return math.Log1p(math.Exp(x))
+}
+func mixer(dt []float64, out []float64) {
+	for t := range dt { out[t] = softplus(dt[t]) }
+}`
+	if got := countCat(scanSrc(t, src)); got["transcendental-wrapper-in-loop"] != 1 {
+		t.Fatalf("want 1 transcendental-wrapper-in-loop, got %d (%v)", got["transcendental-wrapper-in-loop"], got)
+	}
+}
+
+// …and stays silent when the wrapper is called OUTSIDE a loop, when the helper is
+// not scalar float→float (takes a slice → already batched), and when the local func
+// contains no transcendental at all.
+func TestDetectL_Silent(t *testing.T) {
+	outsideLoop := `package p
+import "math"
+func softplus(x float64) float64 { return math.Log1p(math.Exp(x)) }
+func f(x float64) float64 { return softplus(x) }`
+	if got := countCat(scanSrc(t, outsideLoop)); got["transcendental-wrapper-in-loop"] != 0 {
+		t.Fatalf("outside-loop: want 0, got %d", got["transcendental-wrapper-in-loop"])
+	}
+	batched := `package p
+import "math"
+func softplusVec(x []float64) { for i := range x { x[i] = math.Log1p(math.Exp(x[i])) } }
+func f(x []float64) { for range x { softplusVec(x) } }`
+	if got := countCat(scanSrc(t, batched)); got["transcendental-wrapper-in-loop"] != 0 {
+		t.Fatalf("batched-helper (slice arg): want 0, got %d", got["transcendental-wrapper-in-loop"])
+	}
+	noTranscendental := `package p
+func scale(x float64) float64 { return x * 0.5 }
+func f(x []float64) { for i := range x { x[i] = scale(x[i]) } }`
+	if got := countCat(scanSrc(t, noTranscendental)); got["transcendental-wrapper-in-loop"] != 0 {
+		t.Fatalf("no-transcendental: want 0, got %d", got["transcendental-wrapper-in-loop"])
+	}
+}
+
 // Detector I fires on a per-element visitor fed a closure.
 func TestDetectI_PerElementClosure(t *testing.T) {
 	src := `package p

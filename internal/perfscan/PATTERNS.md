@@ -11,9 +11,10 @@ scanner (extend a callee map or add a detector in `perfscan.go`, with a positive
 + negative fixture test in `perfscan_test.go`) — SPEC §C29.
 
 This is the SINGLE perfscan for the repo (`internal/perfscan`, run via
-`make perfscan` / `go run ./internal/perfscan`); the code labels detectors A–K.
+`make perfscan` / `go run ./internal/perfscan`); the code labels detectors A–L.
 Sections P1/P2 below are the static detectors **I** and **J**; P3/P4 are
-profile/benchmark heuristics (no static detector); K is the newest static one.
+profile/benchmark heuristics (no static detector); K and L (below) are the newest
+static ones — L generalizes K to transcendentals hidden one call deep in a helper.
 
 ## Suppressing findings (class-granular, staticcheck-style)
 
@@ -136,6 +137,30 @@ family that could ship.
 AVX2 f64 exp (`expF64x4`, 1 ulp) made it **1.52× Llama prefill** (1.89× kernel),
 goldens green (T667). The sibling exp/log/tanh/sigmoid/gelu f64 kernels are
 flagged too but are exact-locked.
+
+---
+
+## L — a loop calls a local helper that WRAPS a transcendental  *(scanner: static)*
+
+**Smell.** A hot per-element loop calls a package-local elementwise helper
+(`softplus`, `mish`, `swish`, `silu`, a `gaussianQuantile`, …) whose body hides a
+scalar libm transcendental one call deep. Class K only sees a **direct** `math.X`
+in the loop, so a loop over such a wrapper reads as scalar-clean and slips past it.
+The detector collects the file's scalar-`float→float` funcs that call a
+transcendental, then flags any loop that calls one.
+
+**Fix.** Same as K: give the op a vectorized SIMD kernel (compute the whole slice
+4/8-wide on a SIMD transcendental primitive, bit-identical scalar tail), or route
+it through a **batched tensor op** that already has a vectorized CPU kernel instead
+of a scalar helper per element. Verify hotness (profile — a wrapper in a loop is
+not automatically hot) and the CPU==Ref invariant first, exactly as K.
+
+**Win.** `OpSoftplus` (Mamba/Jamba Δ) had **no CPU kernel** and fell through to the
+scalar single-threaded ref backend — 32% of `math.archExp` in Mamba f64 prefill. A
+4-wide AVX2 f64 softplus kernel (`vsoftplusF64` = `expF64x4` + the Cephes double-log
+rational, ~1 ulp) made it **1.62× Mamba prefill**, goldens green (PR #249). The
+detector still flags the Mamba2 **mixer** `softplus`/`silu` (`mamba2.go`) — a
+scalar per-`(t,h)` loop that the kernel does not cover — as the leftover sub-win.
 
 ---
 
