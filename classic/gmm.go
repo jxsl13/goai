@@ -357,10 +357,12 @@ func (m *GaussianMixture) mStep(x [][]float64, resp [][]float64) error {
 		inv := 1.0 / (nk[c] + 1e-300)
 		for i := range n {
 			r := resp[i][c]
-			for a := range d {
-				da := x[i][a] - m.Means[c][a]
-				for b := range d {
-					s[a*d+b] += r * da * (x[i][b] - m.Means[c][b])
+			xi, mc := x[i], m.Means[c] // hoist the row + mean slices out of the a/b loops
+			for a := 0; a < d; a++ {
+				da := xi[a] - mc[a]
+				sa := s[a*d : a*d+d]
+				for b := 0; b < d; b++ {
+					sa[b] += r * da * (xi[b] - mc[b])
 				}
 			}
 		}
@@ -386,10 +388,11 @@ func (m *GaussianMixture) logGaussian(x []float64, c int) (float64, error) {
 	d := m.nFeat
 	const log2pi = 1.8378770664093453 // log(2π)
 	if m.cfg.covariance == GMMDiag {
+		mc, cvc := m.Means[c], m.cov[c] // hoist the component slices out of the j-loop
 		var quad float64
-		for j := range d {
-			dv := x[j] - m.Means[c][j]
-			quad += dv * dv / m.cov[c][j]
+		for j := 0; j < d; j++ {
+			dv := x[j] - mc[j]
+			quad += dv * dv / cvc[j]
 		}
 		return -0.5*(float64(d)*log2pi+quad) - m.logDetHalf[c], nil
 	}
