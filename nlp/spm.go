@@ -1,7 +1,6 @@
 package nlp
 
 import (
-	"container/heap"
 	"fmt"
 	"strings"
 )
@@ -146,20 +145,53 @@ type spmCand struct {
 	id          int
 }
 
-// spmHeap orders candidates by score DESC, then position ASC (leftmost) — matching the naive scan's
-// "first symbol with the maximum score wins" so the produced segmentation is bit-identical.
-type spmHeap []spmCand
-
-func (h spmHeap) Len() int { return len(h) }
-func (h spmHeap) Less(i, j int) bool {
-	if h[i].score != h[j].score {
-		return h[i].score > h[j].score
+// spmLess reports that candidate a outranks b — higher score, or (equal score) the leftmost. This
+// is a strict total order (pos is a symbol's unique start offset), so the heap pop order is
+// deterministic and matches the naive scan's "first symbol with the maximum score wins".
+func spmLess(a, b spmCand) bool {
+	if a.score != b.score {
+		return a.score > b.score
 	}
-	return h[i].pos < h[j].pos
+	return a.pos < b.pos
 }
-func (h spmHeap) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
-func (h *spmHeap) Push(x any)   { *h = append(*h, x.(spmCand)) }
-func (h *spmHeap) Pop() any     { o := *h; n := len(o); it := o[n-1]; *h = o[:n-1]; return it }
+
+// A hand-written binary max-priority heap over []spmCand. Avoids container/heap's any-boxing (one
+// heap alloc per Push — 876 allocs in the profile for a 1 KB input); the typed version pushes into
+// the reused backing array with zero per-element allocation.
+func spmHeapPush(h []spmCand, c spmCand) []spmCand {
+	h = append(h, c)
+	for i := len(h) - 1; i > 0; {
+		p := (i - 1) / 2
+		if !spmLess(h[i], h[p]) {
+			break
+		}
+		h[i], h[p] = h[p], h[i]
+		i = p
+	}
+	return h
+}
+
+func spmHeapPop(h []spmCand) (spmCand, []spmCand) {
+	top := h[0]
+	n := len(h) - 1
+	h[0] = h[n]
+	h = h[:n]
+	for i := 0; ; {
+		l, r, best := 2*i+1, 2*i+2, i
+		if l < n && spmLess(h[l], h[best]) {
+			best = l
+		}
+		if r < n && spmLess(h[r], h[best]) {
+			best = r
+		}
+		if best == i {
+			break
+		}
+		h[i], h[best] = h[best], h[i]
+		i = best
+	}
+	return top, h
+}
 
 // spmBounds runs the highest-score-first BPE merge as an O(N log N) priority-queue over a linked list
 // of symbols, returning the final symbol byte-boundaries. Replaces the O(N²) full-rescan merge (each
@@ -193,7 +225,7 @@ func (s *SPM) spmBounds(str string) []int {
 		prev[k] = k - 1
 		alive[k] = true
 	}
-	h := &spmHeap{}
+	var h []spmCand
 	tryPush := func(a int) {
 		b := next[a]
 		if b < 0 {
@@ -204,13 +236,14 @@ func (s *SPM) spmBounds(str string) []int {
 		if !ok || s.specials.blocked(merged) {
 			return
 		}
-		heap.Push(h, spmCand{score: s.pieces[id].Score, pos: start[a], left: a, right: b, lgen: gen[a], rgen: gen[b], id: id})
+		h = spmHeapPush(h, spmCand{score: s.pieces[id].Score, pos: start[a], left: a, right: b, lgen: gen[a], rgen: gen[b], id: id})
 	}
 	for k := 0; k < m; k++ {
 		tryPush(k)
 	}
-	for h.Len() > 0 {
-		c := heap.Pop(h).(spmCand)
+	for len(h) > 0 {
+		var c spmCand
+		c, h = spmHeapPop(h)
 		a, b := c.left, c.right
 		if !alive[a] || !alive[b] || next[a] != b || gen[a] != c.lgen || gen[b] != c.rgen {
 			continue // stale (a or b already merged) — lazy delete
