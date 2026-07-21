@@ -690,6 +690,10 @@ func sortIdxDescByProb(idx []int, key []float64) {
 	radixScratchPool.Put(sc)
 }
 
+// nucleusIdxPool reuses nucleusTopP's vocab-sized index scratch across the per-token
+// top-p calls (T945, the sibling of T944's radix-scratch pool: the remaining alloc).
+var nucleusIdxPool = sync.Pool{New: func() any { return []int(nil) }}
+
 // nucleusTopP applies top-p (nucleus) truncation to probs in place: keep the
 // minimal set of highest-probability tokens whose mass ≥ p, then renormalize. The
 // nucleus is almost always tiny relative to the vocabulary, so instead of sorting
@@ -700,7 +704,13 @@ func sortIdxDescByProb(idx []int, key []float64) {
 // probs) and the cost is never worse than that sort (§T627).
 func nucleusTopP(probs []float64, p float64) {
 	n := len(probs)
-	idx := make([]int, n)
+	idx := nucleusIdxPool.Get().([]int)
+	if cap(idx) < n {
+		idx = make([]int, n)
+	} else {
+		idx = idx[:n]
+	}
+	defer nucleusIdxPool.Put(idx) // covers the early-return paths; idx is not retained
 	for i := range idx {
 		idx[i] = i
 	}

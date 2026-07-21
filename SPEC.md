@@ -1484,7 +1484,7 @@ T38b|x|L4 Llama-family pt2: SiLU op+VJP, SwiGLU FFN (nn layer, trainable), GQA (
 | T942 | x | nlp: diverse_beam.go materializes a FULL token sequence (make([]int)+copy) for every ~vocab candidate per group per step, before selecting top-B' — most are discarded. Defer materialization: keep candidates as (parentBeam, tok, score) backpointers, materialize only the B' survivors. Bit-identical (same selected beams). CAUTION magnitude: measure vs the model forward (next()) which may dominate for large models — profile a beam-search benchmark first; if forward-bound, honestly park it. (stepCount map[int]int at :60 is NOT it — 1 alloc/step, negligible.) | V22 | done | med |
 | T943 | x | nlp: beam.go BeamSearch has the SAME materialize-then-discard pattern as diverse_beam (T942) — sibling class-audit: defer per-candidate token materialization to the top-B survivors via backpointers. Bit-identical (same beams). Expect ~200× fewer allocs like T942/BM21. | T942 | done | med |
 | T944 | x | nlp: sortIdxDescByProb pool the 3xn radix scratch (bits/tmpBits/tmpIdx) via sync.Pool — runs once per generated token in top-p/typical sampling, so a fresh 3xn scratch was O(T) large allocs. Pooled+grown-on-demand, amortized alloc-free; the swaps only rebind locals so sc fields still alias their backing → pools cleanly, bit-identical. §V22: 703->674us -4%, allocs 4->1, B/op 1024->366KiB -64%. perfscan: no rule (interprocedural make-in-hot-func, like ApplyPenalties) | V22 | done | med |
-| T945 | . | nlp: nucleusTopP still allocs idx=make([]int,vocab) per call (the residual 1 alloc/256KB after T944) — pool it too (verify idx isn't retained past the call). §V22. | T944 | . | med |
+| T945 | x | nlp: nucleusTopP still allocs idx=make([]int,vocab) per call (the residual 1 alloc/256KB after T944) — pool it too (verify idx isn't retained past the call). §V22. | T944 | done | med |
 
 ## §Bench — benchmark records
 
@@ -1513,3 +1513,4 @@ T38b|x|L4 Llama-family pt2: SiLU op+VJP, SwiGLU FFN (nn layer, trainable), GQA (
 | BM21 | 2026-07-21 | nlp diverse-beam step (deferred materialization), cheap forward; allocs/op 320776->1528 -99.5%, B/op 82.6->41.5MiB -49.8% | darwin/arm64 | self | ms | 140.1 | 126.3 | 1.11× | T942,V22 |
 | BM22 | 2026-07-21 | nlp BeamSearch step (deferred materialization, cheap-fwd) | darwin/arm64 | self | ms | 124.1 | 105.6 | 1.18× | T943,V22 |
 | BM23 | 2026-07-21 | nlp nucleusTopP (top-p, vocab 32000, full-sort path) | darwin/arm64 | self | us | 703 | 674.6 | 1.04× | T944,V22 |
+| BM24 | 2026-07-21 | nlp nucleusTopP idx pooled (top-p, vocab 32000) | darwin/arm64 | self | us | 676 | 655.5 | 1.03× | T945,V22 |
