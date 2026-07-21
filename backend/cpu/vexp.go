@@ -475,18 +475,10 @@ func softmaxVexpF32(x, out []float32, rows, d int) {
 			base := r * d
 			xr := x[base : base+d : base+d]
 			or := out[base : base+d : base+d]
-			m := float32(math.Inf(-1)) // −Inf start keeps ref's NaN/−Inf row semantics
-			for _, v := range xr {
-				if v > m {
-					m = v
-				}
-			}
+			m := rowMaxF32(xr) // AVX2 max (amd64-SIMD) / scalar −Inf-start reduction elsewhere
 			copy(or, xr)
 			sum := vexpRowF32(or, m)
-			inv := 1 / sum
-			for j, v := range or {
-				or[j] = v * inv
-			}
+			scaleRowF32(or, 1/sum) // AVX2 ×1/sum / scalar elsewhere
 		}
 	})
 }
@@ -503,13 +495,7 @@ func softmaxWideVexpF32(x, out []float32, d, nw int) {
 	sums := make([]float64, nch)
 	parallelWork(nch, 4*chunk, func(lo, hi int) {
 		for c := lo; c < hi; c++ {
-			m := float32(math.Inf(-1))
-			for _, v := range x[c*chunk : min((c+1)*chunk, d)] {
-				if v > m {
-					m = v
-				}
-			}
-			maxs[c] = m
+			maxs[c] = rowMaxF32(x[c*chunk : min((c+1)*chunk, d)]) // AVX2 max / scalar elsewhere
 		}
 	})
 	m := float32(math.Inf(-1))
@@ -532,8 +518,6 @@ func softmaxWideVexpF32(x, out []float32, d, nw int) {
 	}
 	inv := float32(1 / sum)
 	parallelWork(d, 2, func(lo, hi int) {
-		for j := lo; j < hi; j++ {
-			out[j] *= inv
-		}
+		scaleRowF32(out[lo:hi], inv) // AVX2 ×1/sum / scalar elsewhere
 	})
 }
