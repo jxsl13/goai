@@ -184,7 +184,14 @@ func (t *Tokenizer) Encode(text string) []int {
 
 // Decode reconstructs the exact original text (byte-level → round-trip exact).
 func (t *Tokenizer) Decode(ids []int) string {
+	// Pre-size the builder by ESTIMATE: without Grow, WriteString doubles the buffer
+	// as it fills, leaving log(n) throw-away buffers per decode (the profile's gcDrain).
+	// An exact pre-pass over decoder[id] lengths costs a second O(n) map sweep that
+	// outweighs the churn it saves (measured slower), so estimate ~4 bytes/token (GPT-2
+	// average) — one or two grows instead of log(n), and no extra lookups. Grow only
+	// affects capacity, so the decoded string is byte-identical either way.
 	var b strings.Builder
+	b.Grow(len(ids) * 4)
 	for _, id := range ids {
 		b.WriteString(t.decoder[id])
 	}
