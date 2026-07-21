@@ -1,7 +1,16 @@
 package nlp
 
+import "sync"
+
 // Logit penalties that reduce repetition during generation, applied to the raw
 // logits BEFORE temperature/top-k/top-p sampling (§R57).
+
+// penaltyCountPool reuses the token→count map across calls: ApplyPenalties runs once
+// per generated token in a decode loop over a GROWING history, so a fresh map per call
+// is O(T) allocations. Pooled + cleared, it is amortized allocation-free. The apply
+// step mutates each unique token's logit independently, so map iteration order does not
+// affect the result — pooling is bit-identical.
+var penaltyCountPool = sync.Pool{New: func() any { return make(map[int]int) }}
 
 // ApplyPenalties adjusts logits in place using the history of already-generated
 // tokens:
@@ -20,7 +29,7 @@ func ApplyPenalties(logits []float64, generated []int, repetition, frequency, pr
 	if len(generated) == 0 {
 		return
 	}
-	counts := make(map[int]int, len(generated))
+	counts := penaltyCountPool.Get().(map[int]int)
 	for _, t := range generated {
 		if t >= 0 && t < len(logits) {
 			counts[t]++
@@ -38,4 +47,6 @@ func ApplyPenalties(logits []float64, generated []int, repetition, frequency, pr
 		l -= frequency*float64(c) + presence // OpenAI additive penalties
 		logits[tok] = l
 	}
+	clear(counts) // return an empty map to the pool for the next call
+	penaltyCountPool.Put(counts)
 }
