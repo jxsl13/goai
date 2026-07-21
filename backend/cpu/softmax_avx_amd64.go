@@ -46,6 +46,25 @@ func rowMaxF32(x []float32) float32 {
 	return m
 }
 
+// axpbRowF32 applies the affine map x[j] = x[j]·a + b in place, 8-wide FMA. The fused mul-add is one
+// rounding vs the scalar mul-then-add's two — inside the ADR-0021 f32 tolerance its callers ride.
+func axpbRowF32(x []float32, a, b float32) {
+	if !vexpHasAVX {
+		for j := range x {
+			x[j] = x[j]*a + b
+		}
+		return
+	}
+	av, bv := archsimd.BroadcastFloat32x8(a), archsimd.BroadcastFloat32x8(b)
+	n8 := len(x) &^ 7
+	for i := 0; i < n8; i += 8 {
+		archsimd.LoadFloat32x8Slice(x[i:]).MulAdd(av, bv).StoreSlice(x[i:])
+	}
+	for i := n8; i < len(x); i++ {
+		x[i] = x[i]*a + b
+	}
+}
+
 // scaleRowF32 multiplies x[j] by inv in place, 8-wide. Same arithmetic as the scalar `x[j]*=inv`.
 func scaleRowF32(x []float32, inv float32) {
 	if !vexpHasAVX {
