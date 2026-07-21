@@ -34,6 +34,29 @@ func BenchmarkUnigramEncode(b *testing.B) {
 	}
 }
 
+// BenchmarkWordPieceEncode exercises MaxMatch's per-candidate substring lookups. The
+// vocab carries word-initial AND ##-continuation single chars plus multi-char pieces,
+// so every word decomposes and the longest-match shrink loop runs its full O(len²)
+// candidate scan — the regime where the old string(runes[start:end]) + continuation
+// concatenation allocated a fresh key per candidate (the §T625 anti-pattern).
+func BenchmarkWordPieceEncode(b *testing.B) {
+	v := []string{"[UNK]", "[CLS]", "[SEP]"}
+	for c := 'a'; c <= 'z'; c++ {
+		v = append(v, string(c), "##"+string(c)) // word-initial + continuation singletons
+	}
+	v = append(v, "the", "cat", "play", "run", "jump", "walk", "read", "write",
+		"##ing", "##ed", "##er", "##ion", "##ly", "##ation", "##ness", "##ment", "##able")
+	w, err := nlp.NewWordPiece(v)
+	if err != nil {
+		panic(err)
+	}
+	text := strings.Repeat("the playing cat jumped and running writer talked ableness walkable ", 40)
+	b.ReportAllocs()
+	for b.Loop() {
+		_ = w.Encode(text)
+	}
+}
+
 func BenchmarkSPMEncode(b *testing.B) {
 	var vocab []nlp.UnigramPiece
 	vocab = append(vocab, nlp.UnigramPiece{Piece: "<unk>", Score: 0})
