@@ -700,6 +700,11 @@ var nucleusIdxPool = sync.Pool{New: func() any { return []int(nil) }}
 var typicalScorePool = sync.Pool{New: func() any { return []float64(nil) }}
 var typicalKeepPool = sync.Pool{New: func() any { return []bool(nil) }}
 
+// float64ScratchPool reuses Dist's per-call working buffers (the temperature-scaled
+// logits z, and top-k's kthLargest copy) across per-token Dist calls (T948). The
+// returned distribution is a separate slice, so these are pure scratch.
+var float64ScratchPool = sync.Pool{New: func() any { return []float64(nil) }}
+
 // nucleusTopP applies top-p (nucleus) truncation to probs in place: keep the
 // minimal set of highest-probability tokens whose mass ≥ p, then renormalize. The
 // nucleus is almost always tiny relative to the vocabulary, so instead of sorting
@@ -1080,7 +1085,13 @@ func (s *Sampler) Dist(logits []float64) []float64 {
 		}
 		return d
 	}
-	z := make([]float64, n)
+	z := float64ScratchPool.Get().([]float64)
+	if cap(z) < n {
+		z = make([]float64, n)
+	} else {
+		z = z[:n]
+	}
+	defer float64ScratchPool.Put(z) // z is scratch; the returned probs is a separate slice
 	for i, v := range logits {
 		z[i] = v / s.Temperature
 	}
@@ -1102,9 +1113,15 @@ func (s *Sampler) Dist(logits []float64) []float64 {
 	// their members, a benign, arguably-more-principled difference from the old
 	// arbitrary sort tie-break). §T626.
 	if s.TopK > 0 && s.TopK < n {
-		scratch := make([]float64, n)
+		scratch := float64ScratchPool.Get().([]float64)
+		if cap(scratch) < n {
+			scratch = make([]float64, n)
+		} else {
+			scratch = scratch[:n]
+		}
 		copy(scratch, z)
 		kv := kthLargest(scratch, s.TopK) // the k-th largest logit is the threshold
+		float64ScratchPool.Put(scratch)
 		for i := range z {
 			if z[i] < kv {
 				z[i] = math.Inf(-1)
