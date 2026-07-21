@@ -1,7 +1,9 @@
 // Command perfscan is a static finder for the per-element hot-loop anti-patterns
 // this codebase repeatedly optimizes away (§base-perf-sweep). It parses Go source
 // with go/ast — it never builds or imports the packages, so cgo/build-tagged
-// backends are scanned too — and reports the STRUCTURAL SHAPE of eight patterns:
+// backends are scanned too — and reports the STRUCTURAL SHAPE of eleven patterns
+// (this is the SINGLE perfscan for the repo — the earlier tools/perfscan P1/P2
+// prototype was folded in here as detectors I/J):
 //
 //	A. per-element .AtF64/.SetF64 dispatch in a Numel/Unravel loop with no
 //	   flatF64/flatF32 contiguous fast path in the enclosing function
@@ -22,6 +24,18 @@
 //	   disguise on LE hosts for VERBATIM-bit dtypes (T720/T907 readers, 2–5×).
 //	H. a regexp.Compile/MustCompile inside a loop — recompiles the pattern every
 //	   iteration; hoist it out.
+//	I. a per-element visitor (readGen/fillGen/visitGen/…) fed a CLOSURE — an
+//	   indirect call per element even on its contiguous branch; add a raw-slice
+//	   fast path (SWA/EMA/GradAccum 1.6–4.2×). (Ex tools/perfscan P1.)
+//	J. a package-qualified sort (sort.Slice/SliceStable/Sort, slices.SortFunc/…)
+//	   with a comparator — a per-comparison indirect call; radix on the key bits
+//	   when it is a monotonic float/int over a large slice (top-p 1.9–2.25×).
+//	   (Ex tools/perfscan P2.)
+//	K. a scalar libm transcendental (math.Exp/Tanh/Erf/Log/…) in a loop while the
+//	   SAME kernel calls a vectorized v*F32/F64 sibling for another dtype — the
+//	   scalar dtype branch is a SIMD candidate (F64 SwiGLU SiLU vexp = 1.52× Llama
+//	   prefill, T667). CAVEAT: first check the op is not under a bit-exact CPU==Ref
+//	   invariant (f64 exp/log/tanh/sigmoid/gelu are locked; OpSiLU/F64 is not).
 //
 // IMPORTANT — these are CANDIDATES, not confirmed wins. A static check sees the
 // shape of a hot loop, never its temperature: a per-element write in a one-time
@@ -32,10 +46,25 @@
 //
 // Usage:
 //
-//	go run ./internal/perfscan ./...        # scan the whole module (advisory)
-//	go run ./internal/perfscan ./nn/...     # scan one subtree
-//	go run ./internal/perfscan -strict ./nn # exit 1 if any candidate is found
-//	go run ./internal/perfscan -tests ./... # include _test.go files
+//	go run ./internal/perfscan ./...             # scan the whole module (advisory)
+//	go run ./internal/perfscan ./nn/...          # scan one subtree
+//	go run ./internal/perfscan -strict ./nn      # exit 1 if any candidate is found
+//	go run ./internal/perfscan -tests ./...      # include _test.go files
+//	go run ./internal/perfscan -list             # list the detector classes (A…K)
+//	go run ./internal/perfscan -exclude=K,I ./…  # silence whole classes repo-wide
+//
+// SUPPRESSING FINDINGS (staticcheck-style, class-granular). Silencing one class
+// never hides another — so a site you deliberately accept for class X still
+// reports a NEW, unrelated class Y:
+//
+//	//perfscan:ignore K reason        // silence ONLY class K on the next (or same) line
+//	//perfscan:ignore K,I reason      // silence several classes; letters or categories
+//	//perfscan:ignore scalar-transcendental-vectorizable reason  // by category name
+//	//perfscan:ignore                 // bare: silence ALL classes at that site
+//	-exclude=K,per-element-closure    // silence whole classes for the whole run
+//
+// The class names are the LETTER codes (A…K) or the CATEGORY strings printed in
+// the report (copy-paste from a report line); `-list` prints both.
 package main
 
 import (
@@ -52,11 +81,40 @@ import (
 
 // finding is one candidate anti-pattern occurrence, anchored to the enclosing loop.
 type finding struct {
-	pos token.Position
-	// one of: per-element-dispatch | alloc-in-loop | batch-single-elt | reflection-in-loop |
-	// unsized-builder | strings-alloc-in-loop | le-decode-in-loop | regexp-compile-in-loop
-	category string
+	pos      token.Position
+	category string // one of classes[].category (see below)
 	msg      string
+}
+
+// classes is the registry of detectors: a short LETTER code (A…K, as used in the
+// package doc) paired with the CATEGORY string printed in the output. An ignore
+// directive or the -exclude flag may name EITHER — the copy-pasteable category
+// from a report line, or the terse letter. This is what makes suppression
+// class-granular (staticcheck-style): silencing one class never hides another.
+var classes = []struct{ letter, category string }{
+	{"A", "per-element-dispatch"},
+	{"B", "alloc-in-loop"},
+	{"C", "batch-single-elt"},
+	{"D", "reflection-in-loop"},
+	{"E", "unsized-builder"},
+	{"F", "strings-alloc-in-loop"},
+	{"G", "le-decode-in-loop"},
+	{"H", "regexp-compile-in-loop"},
+	{"I", "per-element-closure"},
+	{"J", "closure-comparator-sort"},
+	{"K", "scalar-transcendental-vectorizable"},
+}
+
+// resolveClass maps a user token (a letter code OR a category string,
+// case-insensitive) to its canonical category, or "" if it names no class.
+func resolveClass(tok string) string {
+	tok = strings.TrimSpace(tok)
+	for _, c := range classes {
+		if strings.EqualFold(tok, c.letter) || strings.EqualFold(tok, c.category) {
+			return c.category
+		}
+	}
+	return ""
 }
 
 // allocCallees are constructors/converters that allocate a fresh tensor; called
@@ -193,8 +251,112 @@ func isSingleEltNestedSliceLit(e ast.Expr) bool {
 	return nested
 }
 
-// scanFile runs every detector over one parsed file and returns deduplicated
-// findings (one per enclosing loop per category).
+// perElemVisitors are helpers that invoke their function-literal argument ONCE
+// PER ELEMENT. Passing a closure to them means an indirect call per element even
+// on their contiguous fast branch — the cost that made SWA/EMA/GradAccum/GradFn
+// 1.6–4.2× slower than a raw-slice loop (detector I; formerly tools/perfscan P1).
+var perElemVisitors = map[string]bool{
+	"readGen": true, "fillGen": true, "visitGen": true, "forEach": true, "eachElem": true,
+}
+
+// sortClosureCallees / slicesClosureCallees are sort entry points whose comparator
+// is a function value, PACKAGE-QUALIFIED (sort.* / slices.*) so the many non-sort
+// homonyms — ops.Slice, tensor.Slice, a local Sort method — do NOT false-match. On
+// a large slice keyed by a monotonic float/int the per-comparison indirect call
+// dominates — an LSD radix on the key bits made top-p / typical sampling 1.9–2.25×
+// faster (detector J; formerly tools/perfscan P2).
+var sortClosureCallees = map[string]bool{"Slice": true, "SliceStable": true, "Sort": true}
+var slicesClosureCallees = map[string]bool{"SortFunc": true, "SortStableFunc": true}
+
+// scalarTranscendentals are libm calls whose per-element cost dominates an
+// elementwise kernel. When one dtype branch runs them scalar in a loop while the
+// same kernel calls a hand-vectorized v*F32/F64 sibling for another dtype, the
+// scalar branch is a candidate for the same SIMD treatment (detector K). The F64
+// SwiGLU SiLU was exactly this — scalar math.Exp on the f64 branch, vsiluF32 on
+// the f32 branch — and an AVX2 f64 exp gave 1.52× Llama prefill.
+var scalarTranscendentals = map[string]bool{
+	"Exp": true, "Expm1": true, "Log": true, "Log1p": true, "Log2": true, "Log10": true,
+	"Tanh": true, "Sinh": true, "Cosh": true, "Erf": true, "Erfc": true, "Pow": true,
+}
+
+// vectorizedSibling reports whether name looks like a hand-vectorized numeric
+// kernel helper (vsiluF32, vexpF32, vgeluF32, expF64x4, …): a 'v'-prefixed
+// F32/F64 helper, or an xN-lane-suffixed SIMD primitive.
+func vectorizedSibling(name string) bool {
+	if strings.HasPrefix(name, "v") && (strings.Contains(name, "F32") || strings.Contains(name, "F64")) {
+		return true
+	}
+	return strings.Contains(name, "x8") || strings.Contains(name, "x4") || strings.Contains(name, "x16")
+}
+
+// hasFuncLitArg reports whether any argument is a function literal (a closure).
+func hasFuncLitArg(call *ast.CallExpr) bool {
+	for _, a := range call.Args {
+		if _, ok := a.(*ast.FuncLit); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// hasFuncArg reports whether any argument is a function value — a literal, or an
+// ident/selector that plausibly names a comparator (catches SortFunc(s, cmp)).
+func hasFuncArg(call *ast.CallExpr) bool {
+	for _, a := range call.Args {
+		switch a.(type) {
+		case *ast.FuncLit, *ast.Ident, *ast.SelectorExpr:
+			return true
+		}
+	}
+	return false
+}
+
+// ignoreDirectives parses `//perfscan:ignore [class[,class…]] [reason]` comments
+// (staticcheck-style). It returns a line→categories map where a directive on line
+// L suppresses matching findings on L AND L+1 (so the marker may sit ON or just
+// ABOVE the reported line). The special category "*" means "all classes" — the
+// bare `//perfscan:ignore` (reason-only counts as bare too, so a comment whose
+// first token names no class silences everything at that site, matching the
+// pre-consolidation tool). Naming ≥1 class silences ONLY those classes, leaving
+// every other detector live at that site — the whole point of class-granular
+// ignores. Requires the file to be parsed with parser.ParseComments.
+func ignoreDirectives(fset *token.FileSet, f *ast.File) map[int]map[string]bool {
+	out := map[int]map[string]bool{}
+	for _, cg := range f.Comments {
+		for _, c := range cg.List {
+			i := strings.Index(c.Text, "perfscan:ignore")
+			if i < 0 {
+				continue
+			}
+			rest := strings.TrimSpace(c.Text[i+len("perfscan:ignore"):])
+			cats := map[string]bool{}
+			if fields := strings.Fields(rest); len(fields) > 0 {
+				for _, tok := range strings.Split(fields[0], ",") {
+					if cat := resolveClass(tok); cat != "" {
+						cats[cat] = true
+					}
+				}
+			}
+			if len(cats) == 0 { // bare, or a reason-only comment with no class token
+				cats["*"] = true
+			}
+			ln := fset.Position(c.Pos()).Line
+			for _, l := range []int{ln, ln + 1} {
+				if out[l] == nil {
+					out[l] = map[string]bool{}
+				}
+				for cat := range cats {
+					out[l][cat] = true
+				}
+			}
+		}
+	}
+	return out
+}
+
+// scanFile runs every detector over one parsed file, drops sites suppressed by
+// inline `//perfscan:ignore` directives, and returns the deduplicated findings
+// (one per enclosing loop per category).
 func scanFile(fset *token.FileSet, f *ast.File) []finding {
 	var out []finding
 	for _, decl := range f.Decls {
@@ -204,7 +366,16 @@ func scanFile(fset *token.FileSet, f *ast.File) []finding {
 		}
 		out = append(out, scanFunc(fset, fn)...)
 	}
-	return dedup(out)
+	// drop sites silenced by an inline //perfscan:ignore directive (per class).
+	ign := ignoreDirectives(fset, f)
+	var kept []finding
+	for _, fd := range dedup(out) {
+		if supp := ign[fd.pos.Line]; supp != nil && (supp["*"] || supp[fd.category]) {
+			continue
+		}
+		kept = append(kept, fd)
+	}
+	return kept
 }
 
 // scanFunc analyzes a single function body. Fast-path presence (flatF64/flatF32)
@@ -218,6 +389,8 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 	hasLEBulk := false  // calls rawCopyLE/rawStoreLE (the LE bulk-copy fast path is present, so a
 	//                     per-element binary decode in the same function is the intended big-endian
 	//                     fallback, not a candidate — detector G stays silent, mirroring hasFlat/A)
+	hasVectorSibling := false // calls a v*F32/F64 / xN SIMD helper (another dtype branch is
+	//                          hand-vectorized) → a scalar transcendental here is detector K
 	numelIdents := map[string]bool{}
 	parent := map[ast.Node]ast.Node{}
 	var stack []ast.Node
@@ -244,6 +417,9 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 				hasGrow = true
 			case "rawCopyLE", "rawStoreLE":
 				hasLEBulk = true
+			}
+			if vectorizedSibling(calleeName(x.Fun)) {
+				hasVectorSibling = true
 			}
 		case *ast.CompositeLit:
 			if isBuilderType(x.Type) { // b := strings.Builder{}
@@ -373,6 +549,60 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 					" hoist the compile above the loop (compile once, match many)", rname),
 			})
 		}
+		// K: a scalar libm transcendental in a loop while THIS kernel already calls a
+		// hand-vectorized v*F32/F64 sibling for another dtype — the scalar branch is a
+		// candidate for the same SIMD treatment (the F64 SwiGLU SiLU: scalar math.Exp
+		// beside vsiluF32 → 1.52× Llama prefill once the f64 branch ran an AVX2 f64 exp).
+		if tname, ok := pkgFuncCall(call.Fun, "math", scalarTranscendentals); ok && hasVectorSibling {
+			out = append(out, finding{
+				pos:      fset.Position(loop.Pos()),
+				category: "scalar-transcendental-vectorizable",
+				msg: fmt.Sprintf("math.%s runs scalar in a loop while a vectorized v*F32/F64 sibling is"+
+					" called in the same kernel — vectorize this dtype branch on a SIMD transcendental"+
+					" (keep a bit-identical scalar tail). FIRST verify the op is NOT under a bit-exact"+
+					" CPU==Ref invariant (some f64 ops are locked to the scalar reference). T667: F64 SiLU"+
+					" vexp = 1.52× Llama prefill.", tname),
+			})
+		}
+		return true
+	})
+
+	// Pass 4: call-level detectors that are NOT loop-nested — the visitor/sort call
+	// IS itself the per-element / per-comparison hot loop.
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		name := calleeName(call.Fun)
+		// I: a per-element visitor (readGen/fillGen/…) fed a closure → an indirect call
+		// per element even on its contiguous branch.
+		if perElemVisitors[name] && hasFuncLitArg(call) {
+			out = append(out, finding{
+				pos:      fset.Position(call.Pos()),
+				category: "per-element-closure",
+				msg: fmt.Sprintf("%s(…) invokes a closure per element — add a contiguous raw-slice fast"+
+					" path (IsContiguous && Offset==0) for F32/F64, keep the closure as the strided"+
+					" fallback (SWA/EMA/GradAccum 1.6–4.2×). Verify bit-identical + benchmark.", name),
+			})
+		}
+		// J: a closure-comparator sort → a per-comparison indirect call; radix candidate
+		// when the key is a monotonic float/int over a large slice. Package-qualified to
+		// sort.*/slices.* so ops.Slice / tensor.Slice do not false-match.
+		sname, sortOK := pkgFuncCall(call.Fun, "sort", sortClosureCallees)
+		if !sortOK {
+			sname, sortOK = pkgFuncCall(call.Fun, "slices", slicesClosureCallees)
+		}
+		if sortOK && hasFuncArg(call) {
+			out = append(out, finding{
+				pos:      fset.Position(call.Pos()),
+				category: "closure-comparator-sort",
+				msg: fmt.Sprintf("%s uses an indirect comparator — if the key is a monotonic float/int"+
+					" over a large slice, replace with an LSD radix on the key bits (math.Float64bits is"+
+					" monotonic for non-negative f64). Top-p / typical sampling 1.9–2.25×. Verify identical"+
+					" order + benchmark.", sname),
+			})
+		}
 		return true
 	})
 	return out
@@ -477,7 +707,29 @@ func dedup(in []finding) []finding {
 func main() {
 	strict := flag.Bool("strict", false, "exit 1 if any candidate is found (for optional CI gating)")
 	tests := flag.Bool("tests", false, "include _test.go files")
+	exclude := flag.String("exclude", "", "comma-separated classes to silence repo-wide (letter A…K or category, e.g. -exclude=K,per-element-closure); the rest still report")
+	list := flag.Bool("list", false, "list the detector classes (letter + category) and exit")
 	flag.Parse()
+	if *list {
+		fmt.Println("perfscan detector classes (name either in -exclude or a //perfscan:ignore directive):")
+		for _, c := range classes {
+			fmt.Printf("  %s  %s\n", c.letter, c.category)
+		}
+		return
+	}
+	// resolve -exclude tokens (letter or category) to canonical categories.
+	excluded := map[string]bool{}
+	for _, tok := range strings.Split(*exclude, ",") {
+		if tok = strings.TrimSpace(tok); tok == "" {
+			continue
+		}
+		cat := resolveClass(tok)
+		if cat == "" {
+			fmt.Fprintf(os.Stderr, "perfscan: -exclude: unknown class %q (see -list)\n", tok)
+			os.Exit(2)
+		}
+		excluded[cat] = true
+	}
 	roots := flag.Args()
 	if len(roots) == 0 {
 		roots = []string{"./..."}
@@ -492,12 +744,16 @@ func main() {
 	fset := token.NewFileSet()
 	var all []finding
 	for _, path := range files {
-		f, err := parser.ParseFile(fset, path, nil, 0)
+		f, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "perfscan: parse %s: %v\n", path, err)
 			continue
 		}
-		all = append(all, scanFile(fset, f)...)
+		for _, fd := range scanFile(fset, f) {
+			if !excluded[fd.category] {
+				all = append(all, fd)
+			}
+		}
 	}
 	sort.Slice(all, func(i, j int) bool {
 		if all[i].pos.Filename != all[j].pos.Filename {
@@ -515,8 +771,10 @@ func main() {
 		fmt.Println("perfscan: no candidate anti-patterns found")
 		return
 	}
-	fmt.Printf("\nperfscan: %d candidate(s) — dispatch=%d alloc-in-loop=%d batch-single-elt=%d\n",
-		len(all), byCat["per-element-dispatch"], byCat["alloc-in-loop"], byCat["batch-single-elt"])
+	fmt.Printf("\nperfscan: %d candidate(s) — dispatch=%d alloc-in-loop=%d batch-single-elt=%d"+
+		" per-elem-closure=%d closure-sort=%d scalar-transcendental=%d\n",
+		len(all), byCat["per-element-dispatch"], byCat["alloc-in-loop"], byCat["batch-single-elt"],
+		byCat["per-element-closure"], byCat["closure-comparator-sort"], byCat["scalar-transcendental-vectorizable"])
 	fmt.Println("NOTE: candidates, not confirmed wins — measure hotness (§C3) + prove bit-identity (§V22) before shipping.")
 	if *strict {
 		os.Exit(1)

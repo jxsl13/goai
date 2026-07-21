@@ -7,12 +7,34 @@ pre/post benchmark before changing, and skip cold paths (one-time init,
 eval-only) where the fix isn't worth the code.
 
 When you find a NEW generic pattern worth codifying, add it here AND teach the
-scanner (extend `perElemVisitors` / `closureSorters` / add a new detector in
-`main.go`).
+scanner (extend a callee map or add a detector in `perfscan.go`, with a positive
++ negative fixture test in `perfscan_test.go`) — SPEC §C28.
+
+This is the SINGLE perfscan for the repo (`internal/perfscan`, run via
+`make perfscan` / `go run ./internal/perfscan`); the code labels detectors A–K.
+Sections P1/P2 below are the static detectors **I** and **J**; P3/P4 are
+profile/benchmark heuristics (no static detector); K is the newest static one.
+
+## Suppressing findings (class-granular, staticcheck-style)
+
+Silencing one class never hides another — accepting a site for class X still
+surfaces a new, unrelated class Y there. Name a class by its **letter** (A–K) or
+its **category** (copy-paste from a report line; `-list` shows both):
+
+```go
+//perfscan:ignore K reason        // silence ONLY class K on the next (or same) line
+//perfscan:ignore K,I reason      // several classes at once
+//perfscan:ignore                 // bare: silence ALL classes at that site
+```
+
+Repo-wide, pass `-exclude=K,per-element-closure`. Example: the f64
+exp/log/tanh/sigmoid/gelu kernels are flagged by K but are exact-locked
+(`TestCPUCrossReferenceExact`) — mark each `//perfscan:ignore K exact-locked ref`
+so the one genuinely-open member of the family still reports.
 
 ---
 
-## P1 — per-element closure over a contiguous buffer  *(scanner: static)*
+## P1 (detector I) — per-element closure over a contiguous buffer  *(scanner: static)*
 
 **Smell.** A helper that invokes a `func(...)` argument once per element
 (`readGen`, `fillGen`, `forEach`, …). Even on the helper's contiguous fast
@@ -32,7 +54,7 @@ non-contiguous / F16 / BF16 fallback. Result is **bit-identical**.
 
 ---
 
-## P2 — closure-comparator sort on a large keyed slice  *(scanner: static)*
+## P2 (detector J) — closure-comparator sort on a large keyed slice  *(scanner: static)*
 
 **Smell.** `slices.SortFunc` / `sort.Slice` / `sort.Sort` sorting a large slice
 by a float/int key looked up through the comparator. The per-comparison indirect
@@ -87,6 +109,33 @@ the common input) — this is how P1 (SWA was 1.53× over slow) and P2 (top-p wa
 in a package and flags ratios below a threshold (default 2.0×). Investigate the
 flagged ones; a genuinely-optimal path clears the bar easily (SAM 19.6×,
 GradAccum-vs-AtF64 3.0×).
+
+---
+
+## K — scalar transcendental where a vectorized sibling exists  *(scanner: static)*
+
+**Smell.** A numeric kernel switches on dtype: one branch runs a scalar libm
+transcendental (`math.Exp`/`Tanh`/`Erf`/`Log`/…) in a loop, while the same kernel
+calls a hand-vectorized `v*F32/F64` sibling for another dtype. The scalar branch
+pays per-element libm cost the sibling already avoids.
+
+**Fix.** Vectorize the scalar branch on a SIMD transcendental primitive (e.g. an
+AVX2 f64 `exp`), keeping a **bit-identical scalar tail** (a `math.FMA` scalar twin
+of the SIMD lane) so a value yields the same result in the body or the tail —
+preserving any absorbed-decode == batched-forward byte-exactness.
+
+**Caveat — check the invariant FIRST.** Some f64 ops are deliberately locked to
+the scalar reference: `TestCPUCrossReferenceExact` asserts CPU==Ref **bit-exact**
+for f64 `Exp`/`Log`/`Tanh`/`Sigmoid`/`GELU`, so a ~1-ulp SIMD poly would fail it.
+The scanner flags all of these; only vectorize the ones the exact test does NOT
+lock. `OpSiLU/F64` is the one it *skips* (cpu `x/(1+e⁻ˣ)` vs ref `x·σ(x)` are
+already ulp-split) — which is why the **F64 SwiGLU SiLU** was the member of this
+family that could ship.
+
+**Win.** `siluKernelCPU` f64 branch was scalar `math.Exp` beside `vsiluF32`; an
+AVX2 f64 exp (`expF64x4`, 1 ulp) made it **1.52× Llama prefill** (1.89× kernel),
+goldens green (T667). The sibling exp/log/tanh/sigmoid/gelu f64 kernels are
+flagged too but are exact-locked.
 
 ---
 
