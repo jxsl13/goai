@@ -98,28 +98,81 @@ func WithBPEUnkID(id int) BPEOption {
 	return func(t *BPETokenizer) { t.unkID, t.hasUnk = id, true }
 }
 
-// bpe merges one pre-token's byte-mapped string into symbols by rank, returning ids.
-func (t *BPETokenizer) bpe(mapped string) []int {
-	parts := make([]string, 0, len(mapped))
-	for _, r := range mapped {
-		parts = append(parts, string(r))
+// ggufPart is one token boundary during the GGUF/JSON byte-level merge: start = its
+// byte offset into the immutable mapped string. A part k spans mapped[parts[k].start :
+// parts[k+1].start], and rank caches the merge rank of the pair (part k, part k+1) so
+// each merge recomputes only the two neighbours it touches (mirrors Tokenizer.bpePart).
+// Unlike bpePart it carries no id: GGUF keeps mergeRank and vocab as SEPARATE maps
+// (a merge rank is a list index, NOT a token id), so the final id is resolved by a
+// vocab lookup at emit, not tracked through the merge.
+type ggufPart struct{ start, rank int }
+
+// pairRankAt returns the merge rank of the adjacent pair (part k, part k+1), or
+// math.MaxInt when part k has no right neighbour or the pair is not in mergeRank. The
+// two operands are SUBSTRINGS of mapped, so building the [2]string map key allocates
+// nothing (the Go map lookup hashes the substrings in place) — the whole merge does
+// ZERO string allocations (T625/§T938 class).
+func (t *BPETokenizer) pairRankAt(mapped string, parts []ggufPart, k int) int {
+	if k+2 >= len(parts) {
+		return math.MaxInt
 	}
-	for len(parts) > 1 {
-		bestRank, bestI := math.MaxInt, -1
-		for i := 0; i < len(parts)-1; i++ {
-			if rk, ok := t.mergeRank[[2]string{parts[i], parts[i+1]}]; ok && rk < bestRank {
-				bestRank, bestI = rk, i
+	if rk, ok := t.mergeRank[[2]string{
+		mapped[parts[k].start:parts[k+1].start],
+		mapped[parts[k+1].start:parts[k+2].start],
+	}]; ok {
+		return rk
+	}
+	return math.MaxInt
+}
+
+// bpe merges one pre-token's byte-mapped string into symbols by rank, returning ids.
+//
+// Byte-OFFSET merge (mirrors Tokenizer.bpeMergeInto, §T938): parts are boundary
+// offsets into the immutable mapped string, never per-rune substrings, and a merge
+// DROPS a boundary rather than concatenating two strings. Every pair rank comes from
+// substrings of mapped (pairRankAt), so the merge does ZERO string allocations — the
+// old scan allocated a string(r) per rune plus a concat per merge, the GC-dominated
+// 220k allocs/op of the profile. Merge order — repeatedly the LEFTMOST lowest-rank
+// adjacent pair — and the final token boundaries are bit-identical to the old scan
+// (§V15/§V16), so token ids are unchanged for every input.
+func (t *BPETokenizer) bpe(mapped string) []int {
+	// parts[k].start = byte offset of part k; the trailing sentinel {len(mapped)}
+	// makes part k span mapped[parts[k].start : parts[k+1].start]. Initial parts are
+	// per-RUNE — range mapped yields each rune's leading byte offset.
+	parts := make([]ggufPart, 0, len(mapped)+1)
+	for i := range mapped {
+		parts = append(parts, ggufPart{start: i, rank: math.MaxInt})
+	}
+	parts = append(parts, ggufPart{start: len(mapped), rank: math.MaxInt})
+
+	// Seed every adjacent-pair rank once, tracking the leftmost lowest. A strict <
+	// (first wins on ties) with minRank = MaxInt reproduces the old ascending scan
+	// exactly: an unmergeable pair (rank MaxInt) is never selected.
+	minRank, minI := math.MaxInt, -1
+	for k := 0; k < len(parts)-1; k++ {
+		parts[k].rank = t.pairRankAt(mapped, parts, k)
+		if parts[k].rank < minRank {
+			minRank, minI = parts[k].rank, k
+		}
+	}
+	for minRank != math.MaxInt {
+		i := minI
+		parts = append(parts[:i+1], parts[i+2:]...) // merge parts i,i+1: drop boundary i+1
+		if i > 0 {                                  // only the two pairs touching the merge changed
+			parts[i-1].rank = t.pairRankAt(mapped, parts, i-1)
+		}
+		parts[i].rank = t.pairRankAt(mapped, parts, i)
+		minRank, minI = math.MaxInt, -1 // rescan the cached ranks for the new leftmost min
+		for k := 0; k < len(parts)-1; k++ {
+			if parts[k].rank < minRank {
+				minRank, minI = parts[k].rank, k
 			}
 		}
-		if bestI < 0 {
-			break // no adjacent pair is mergeable
-		}
-		parts[bestI] += parts[bestI+1]
-		parts = append(parts[:bestI+1], parts[bestI+2:]...)
 	}
-	ids := make([]int, 0, len(parts))
-	for _, p := range parts {
-		if id, ok := t.vocab[p]; ok {
+
+	ids := make([]int, 0, len(parts)-1)
+	for k := 0; k < len(parts)-1; k++ {
+		if id, ok := t.vocab[mapped[parts[k].start:parts[k+1].start]]; ok {
 			ids = append(ids, id)
 		} else if t.hasUnk {
 			ids = append(ids, t.unkID)
