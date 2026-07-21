@@ -37,17 +37,17 @@ Two machines appear below:
 
 | Category | Benchmark | GoAI | Best incumbent | Verdict |
 |---|---|---|---|---|
-| GPU LLM decode (single stream) | Mistral-7B Q4_K, RTX 3060 | 49.6 tok/s | llama.cpp Q8 41.6 tok/s | **GoAI +19%** (0.84× of their Q4_K_M) |
-| GPU LLM decode (single stream) | TinyLlama-1.1B, RTX 3060 | 258.5 tok/s | llama.cpp Q8 245.4; vLLM fp16 103 | **GoAI leads both** |
+| GPU LLM decode, matched Q4_K (single stream) | Mistral-7B, RTX 3060 | 49.6 tok/s (Q4_K) | llama.cpp Q4_K_M 59.1 | llama.cpp 1.19× (same precision class, §1) |
+| GPU LLM decode, matched Q8 (single stream) | Qwen2.5-0.5B, RTX 3060 | 316 tok/s (Q8) | llama.cpp Q8 306 | **GoAI 1.03×** (same precision class, §1) |
 | GPU LLM prefill | TinyLlama pp128, RTX 3060 | 5,600 tok/s | vLLM 10,729 | vLLM 1.9× ahead (open front) |
-| Multi-request serving throughput | 64 concurrent ctx128, RTX 3060 | 4,571 (f32-acc) | vLLM 5,096 (measured, this HW) | vLLM 1.11× at matched precision; GoAI reaches 1.08× only via f16-acc trade (§1) |
+| Multi-request serving throughput, matched f32-acc | 64 concurrent ctx128, RTX 3060 | 4,571 (f32-acc) | vLLM 5,096 (f32-acc, measured, this HW) | vLLM 1.11× at matched precision; GoAI's f16-acc path is a precision trade, not like-for-like (§1) |
 | CPU GEMM f32 1024³ | M2 Pro, `GOEXPERIMENT=simd` | ≈2,590 GFLOP/s | torch-cpu ≈2,584 | **parity** (pure-Go path ≈2,100) |
 | CPU GEMM f32, >L2 shapes | 512×2048×4096, M2 Pro | 1,695 GFLOP/s (raw AMX) | Accelerate 1,294 | **GoAI +31%, in pure Go** |
 | Classical ML fit | 6 methods vs scikit-learn 1.9.0 | see §5 | scikit-learn | **wins the heavy ensembles** (GBM 9.2×, RF 3.4×, past sklearn's own parallel fit); C cores win tree/SVC |
 | CPU tokenizer encode | GPT-2 BPE 1 MB, M2 Pro | ≈28.2 MB/s (6.7M tok/s) | tiktoken Rust 18.8 | **GoAI 1.50×** (237,208-token parity) |
 | GPU matmul (Apple) | f32 1024³, M2 Pro | 1,376 GFLOP/s (Metal) | torch-mps 4,171 | 3.0× behind (MPS-kernel ceiling) |
 | Apple-GPU LLM decode | 17.7 M-param toy, M2 Pro | 236 tok/s | llama.cpp Metal 723 | ≈3.1× behind at toy size (see caveat) |
-| Apple-GPU LLM decode (production) | TinyLlama-1.1B ~4-bit, M2 | 9.9 tok/s | llama.cpp 197, MLX 231 | ≈20–23× behind BOTH Apple engines (§2) |
+| Apple-GPU LLM decode (production) | TinyLlama-1.1B, 4-bit class, M2 | 9.9 tok/s (Q4_K_M) | llama.cpp 197 (Q4_K_M), MLX 231 (4-bit) | ≈20–23× behind BOTH Apple engines (§2) |
 | Training step (fwd+bwd) | GPT dim512/6L seq256, M2 Pro | Metal 3,263 / cpu 2,257 tok/s | torch-mps 12,904; torch-cpu 5,058 | 2–4× behind (fusion + MPS ceiling, §6) |
 | Vision fwd/train (toy) | ViT+CNN 32²/batch-8, M2 Pro | see §7 | torch-mps | 2.4–40× behind (ViT per-image loop → T908) |
 
@@ -69,21 +69,48 @@ GoAI's CUDA decoder (built from scratch on nvrtc + cuBLAS, CUDA-graph
 capture, Q4_K weights resident in ggml's own super-block format) vs the
 incumbents on identical model files:
 
-| Model | GoAI Q4_K graph | llama.cpp Q8 | llama.cpp Q4_K_M | vs their Q8 | vs their Q4_K_M |
-|---|---:|---:|---:|---:|---:|
-| TinyLlama-1.1B | 258.4 tok/s | 244 | 328.0 | **1.06×** | 0.79× |
-| Qwen2.5-1.5B | 175.0 tok/s | 166 | 214.9 | **1.05×** | 0.81× |
-| Qwen2.5-3B | 98.4 tok/s | 87 | 121.9 | **1.13×** | 0.81× |
-| Mistral-7B | 49.6 tok/s | 41.6 | 59.1 | **1.19×** | 0.84× |
+**Like-for-like Q4_K decode** — GoAI's Q4_K graph vs llama.cpp's **Q4_K_M**,
+the same precision class (both approx 4.5 bits/weight), identical
+GGUF-derived weights:
 
-- **GoAI leads llama.cpp-Q8 at every scale, and the lead grows with model
-  size** (1.06× → 1.19×) — the weight-bandwidth story: the bigger the model,
-  the more decode is bound by weight bytes, the more the 0.5625-bytes/weight
-  Q4_K format and a near-ceiling GEMV (matrix-vector multiply) pay.
-- **The same-precision-class comparison is honestly open**: llama.cpp's
-  Q4_K_M stays 1.19–1.27× ahead at similar weight bytes — their iterative
-  quantization encoder plus fused-attention margin. At Qwen2.5-0.5B (Q4-
-  ineligible) GoAI's Q8 graph path still leads their Q8, 316 vs 306 tok/s.
+| Model | GoAI Q4_K graph | llama.cpp Q4_K_M | GoAI vs llama.cpp |
+|---|---:|---:|---:|
+| TinyLlama-1.1B | 258.4 tok/s | 328.0 | 0.79× |
+| Qwen2.5-1.5B | 175.0 tok/s | 214.9 | 0.81× |
+| Qwen2.5-3B | 98.4 tok/s | 121.9 | 0.81× |
+| Mistral-7B | 49.6 tok/s | 59.1 | 0.84× |
+
+- **At matched Q4_K precision llama.cpp leads 1.19–1.27×**, and the gap
+  narrows as the model grows (1.27× at 1.1 B → 1.19× at 7 B) — the
+  weight-bandwidth story: the bigger the model, the more decode is bound by
+  weight bytes, and the more GoAI's 0.5625-bytes/weight Q4_K format and a
+  near-ceiling GEMV (matrix-vector multiply) claw back llama.cpp's iterative
+  quantization-encoder plus fused-attention margin. llama.cpp stays ahead at
+  every measured scale, but by less at 7 B.
+
+**Like-for-like Q8 decode** — GoAI's Q8 graph vs llama.cpp's Q8 (both 8-bit).
+The one scale with a head-to-head Q8 pair is Qwen2.5-0.5B (too small to
+quantize to Q4_K):
+
+| Model | GoAI Q8 graph | llama.cpp Q8 | GoAI vs llama.cpp |
+|---|---:|---:|---:|
+| Qwen2.5-0.5B | 316 tok/s | 306 | **1.03×** |
+
+- **GoAI's Q8 graph path edges llama.cpp's Q8 here.** GoAI's Q8 decode was not
+  measured at the four larger scales, so no Q8 comparison is drawn there.
+
+**llama.cpp Q8 at the larger scales — single-system reference only.** These
+8-bit numbers have **no** GoAI Q8 counterpart and are a different precision
+class from GoAI's Q4_K above (8-bit vs approx 4.5-bit), so no cross-quant
+speedup is computed against them; listed for context:
+
+| Model | llama.cpp Q8 |
+|---|---:|
+| TinyLlama-1.1B | 244 tok/s |
+| Qwen2.5-1.5B | 166 |
+| Qwen2.5-3B | 87 |
+| Mistral-7B | 41.6 |
+
 - **Quality is gated, not assumed**: each run must produce the verified
   answer (e.g. "Paris"), a gate that caught a real tokenizer bug parity
   tests could not see; at 7B, Q4_K decode is token-for-token identical to
@@ -91,12 +118,32 @@ incumbents on identical model files:
 
 Against the professional serving engines (TinyLlama-1.1B, batch = 1, same
 GPU, 2026-07-18 — vLLM 0.25.1 runs fp16 with eager mode + Triton attention,
-its documented pip-only setup):
+its documented pip-only setup), each engine ran a **different precision**, so
+there is no single cross-engine winner; the numbers are listed per system and
+a speedup is drawn only within one precision class:
 
-| Metric | GoAI | llama.cpp | vLLM | Winner |
-|---|---:|---:|---:|---|
-| Decode tg128, batch=1 | **257** (Q4_K) | 244 (Q8) | 103 (fp16) | **GoAI** |
-| Prefill pp128, batch=1 | 5,600 (f16) | 8,474 (Q8) | **10,729** (fp16) | vLLM |
+| Engine | Precision | Decode tg128, batch=1 |
+|---|---|---:|
+| GoAI | Q4_K | 257 tok/s |
+| llama.cpp | Q4_K_M | 328 tok/s |
+| llama.cpp | Q8 | 244 tok/s |
+| vLLM | fp16 | 103 tok/s |
+
+The only like-for-like decode pair here is GoAI Q4_K vs llama.cpp Q4_K_M (257,
+the same run reported as 258.4 above, vs 328) — **llama.cpp leads 1.27×**,
+consistent with the Q4_K table. vLLM's batch-1 fp16 decode (103) reflects its
+eager-mode + Triton setup, not a Q4/Q8 comparison.
+
+| Engine | Precision | Prefill pp128, batch=1 |
+|---|---|---:|
+| GoAI | f16 | 5,600 tok/s |
+| vLLM | fp16 | 10,729 tok/s |
+| llama.cpp | Q8 | 8,474 tok/s |
+
+Like-for-like at 16-bit float, **vLLM leads GoAI 1.9×** on prefill (its fused
+FlashAttention). llama.cpp's 8,474 is an 8-bit-precision point, not part of
+that ratio.
+
 Full-step batched decode (22 layers + final-norm + logits GEMM), ctx128, at
 **matched f32 GEMM-accumulate precision** (the like-for-like comparison —
 both engines accumulate in f32):
@@ -114,7 +161,7 @@ plus residual-into-GEMM-epilogue and f16 attention-IO fusion (both verified
 bit-identical) — **narrows the matched-precision gap to rough parity**:
 same-session at matched f32-accumulate, fused GoAI decode measures b64 5,454
 vs vLLM 5,252 (≈1.0× after the ≈4% logits adjustment) and b256 7,864 vs 7,811
-(~0.97×), up from the 0.90× of the f32-activation path. So the honest current
+(≈0.97×), up from the 0.90× of the f32-activation path. So the honest current
 read is **near-parity at matched precision on short context**, with vLLM still
 ahead at long context (its FlashDecoding) — and the fused f16-accumulate path
 remains GoAI's fastest deployable (≈1.2×, precision trade). Measurement carries
@@ -146,13 +193,17 @@ precision (all four points measured this session).
 `BATCH=<n> testdata/vllm_ctx_sweep.py`, f16, CUDA graphs on, decode-marginal
 (prefill cancelled by a two-point gen-length subtraction), same
 2026-07-20 session. This corrects an earlier draft that used vLLM's stale
-published 4,655 (an older/eager number) and wrongly implied ~2× at
+published 4,655 (an older/eager number) and wrongly implied ≈2× at
 saturation — vLLM's continuous batching scales with batch too, so the honest
 gap is small. Still booked: a real-model end-to-end run with variable
 sequence lengths + real scheduling.
 
-**Verdict by regime:** single-user chat (batch-1 decode) — GoAI wins all
-three engines. Prompt processing — vLLM's fused FlashAttention leads 1.9×
+**Verdict by regime:** single-user chat (batch-1 decode) — no clean
+cross-engine winner, because each engine ran a different precision; at matched
+Q4_K, llama.cpp's Q4_K_M leads GoAI 1.27×, and at matched Q8 GoAI edges
+llama.cpp 1.03× (Qwen2.5-0.5B), while vLLM's eager-mode fp16 batch-1 path
+(103 tok/s) is config-limited, not a precision-matched result. Prompt
+processing — vLLM's fused FlashAttention leads 1.9×
 (GoAI's attention is cuBLAS-batched, not fused; the GEMMs themselves already
 run at ≈51% of the card's f16 peak, near the cuBLAS ceiling). Many
 concurrent users — GoAI now HAS the paged KV + continuous-batching
@@ -170,7 +221,7 @@ honest verdict is **capability parity, vLLM's decode kernels still faster at
 matched precision** — the open lever is a fused FlashAttention/FlashDecoding
 kernel (shared with prefill, booked `SPEC-worker-linux-amd64-cuda.md`
 §ROADMAP). Prefill remains the larger open front. Earlier drafts of this row
-overclaimed (a stale-baseline ~2×, then an unmatched-precision 1.08× "win");
+overclaimed (a stale-baseline ≈2×, then an unmatched-precision 1.08× "win");
 both are corrected here.
 
 ## 2. LLM inference on Apple silicon — vs llama.cpp Metal
@@ -195,11 +246,12 @@ widens.** A real TinyLlama-1.1B Q4_K_M GGUF (669 MB, downloaded), the same file
 timed by both engines on M2 Metal (llama.cpp `llama-bench` b9960, 3 reps; GoAI's
 batched quant decoder via `llamagpu.NewQuant`, best-of-3):
 
-Three Apple-Metal engines on TinyLlama-1.1B at ~4-bit — GoAI and llama.cpp share
-the Q4_K_M GGUF; MLX (Apple's own framework) runs its native 4-bit quant of the
-same base model (converted via `mlx_lm.convert -q --q-bits 4`):
+Three Apple-Metal engines on TinyLlama-1.1B in the 4-bit class — GoAI and
+llama.cpp share the Q4_K_M GGUF; MLX (Apple's own framework) runs its native
+4-bit quant of the same base model (converted via `mlx_lm.convert -q --q-bits
+4`). All three are 4-bit-class weights, so decode is compared across them:
 
-| Engine (TinyLlama-1.1B ~4-bit, M2 Metal) | Prefill | Decode (tg64) |
+| Engine (TinyLlama-1.1B, 4-bit class, M2 Metal) | Prefill | Decode (tg64) |
 |---|---:|---:|
 | MLX (Apple, native 4-bit) | 953 tok/s (pp56) | **230.6 tok/s** |
 | llama.cpp Metal (Q4_K_M) | 1,754 tok/s (pp64) | 197.2 tok/s |
@@ -208,7 +260,7 @@ same base model (converted via `mlx_lm.convert -q --q-bits 4`):
 The toy-size hope — that the gap narrows at scale where memory bandwidth dominates
 — does **not** hold: it *widens*, from ≈3× at 17.7 M to ≈**20–23×** at 1.1 B. And it
 is **not llama.cpp-specific**: Apple's own MLX decodes even faster than llama.cpp
-(231 vs 197 tok/s), so GoAI trails *both* mature Apple-Metal engines ~20×. That
+(231 vs 197 tok/s), so GoAI trails *both* mature Apple-Metal engines ≈20×. That
 pins the cause on GoAI's kernel maturity, not one incumbent's tricks: GoAI's Q4_K
 dequant kernels are one-thread-per-output, not MPS-class (§T416), so at 1.1 B the
 dequant dominates every decode step, where llama.cpp's hand-tuned Metal Q4_K
@@ -476,7 +528,7 @@ honestly documented deficit with a root cause is a deliverable):
 | ViT training vs torch-mps (Apple GPU) | ≈40× | `vision.ViT.Forward` runs the batch as 8 separate per-image encoders → each op pays the Metal dispatch floor ×8; torch batches attention in one pass (on CPU the same defect is only 2.6–4.2×) | batch the ViT encoder → **T908** (vision) |
 | CPU attention vs torch fused SDPA | 2.6× | operator fusion | candidate fused-attention CPU kernel |
 | CPU quantized decode vs own f32 | 8.8× | on-the-fly block dequantize in the hot loop | block-native quantized GEMV (flagged) |
-| Apple decode vs llama.cpp AND MLX | ≈3.1× toy → **≈20–23× at 1.1B ~4-bit** (T887) | one-thread-per-output Q4_K dequant (§T416); trails BOTH mature Apple-Metal engines (llama.cpp 197, MLX 231 vs GoAI 9.9 tok/s) so it is kernel maturity, not one incumbent | production-grade Q4_K Metal kernels + attention fusion |
+| Apple decode vs llama.cpp AND MLX | ≈3.1× toy → **≈20–23× at 1.1B, 4-bit class** (T887) | one-thread-per-output Q4_K dequant (§T416); trails BOTH mature Apple-Metal engines (llama.cpp 197, MLX 231 vs GoAI 9.9 tok/s) so it is kernel maturity, not one incumbent | production-grade Q4_K Metal kernels + attention fusion |
 
 ## Not yet measured — booked benchmark tasks
 
