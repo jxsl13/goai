@@ -74,6 +74,122 @@ func selectVJP(pick func(a, b float64) bool) VJP {
 	}
 }
 
+// reluVJP is the specialized OpReLU backward: gin[i] = x[i]>0 ? g[i] : 0 — a raw-slice
+// F32/F64 select with NO per-element closure and NO f64 round-trip (the generic
+// unaryVJP path profiled at ~17% of the ReLU training backward). Bit-identical to the
+// generic rule: ReLU's derivative is a pure pass-through/zero select, so
+// float32(select_f64) == select_f32 exactly, and gin is pre-zeroed so x<=0 stays 0.
+func reluVJP(_ *backend.Context, in, out []*tensor.Tensor, attrs backend.Attrs, g *tensor.Tensor) ([]*tensor.Tensor, error) {
+	x := in[0]
+	gin := tensor.New(x.Dtype(), x.Shape())
+	n := x.Numel()
+	xc, gc := x.Contiguous(), g.Contiguous()
+	switch x.Dtype() {
+	case tensor.F64:
+		if gc.Dtype() == tensor.F64 {
+			xs, gs := xc.Storage().F64(), gc.Storage().F64()
+			ds := gin.Storage().F64()
+			for i := 0; i < n; i++ {
+				if xs[i] > 0 {
+					ds[i] = gs[i]
+				}
+			}
+			return []*tensor.Tensor{gin}, nil
+		}
+	case tensor.F32:
+		if gc.Dtype() == tensor.F32 {
+			xs, gs := xc.Storage().F32(), gc.Storage().F32()
+			ds := gin.Storage().F32()
+			for i := 0; i < n; i++ {
+				if xs[i] > 0 {
+					ds[i] = gs[i]
+				}
+			}
+			return []*tensor.Tensor{gin}, nil
+		}
+	}
+	// mixed-dtype / exotic-layout fallback: the generic per-element rule.
+	return unaryVJP(func(xv, _, gv float64) float64 {
+		if xv > 0 {
+			return gv
+		}
+		return 0
+	})(nil, in, out, attrs, g)
+}
+
+// tanhVJP / expVJP / sigmoidVJP are raw-slice, CLOSURE-FREE specializations of the
+// hot activation backwards. The generic unaryVJP applied a per-element closure with
+// an f32->f64->f32 round-trip (a P1 anti-pattern; the sibling reluVJP shaved ~1.24×
+// off the f64 train step). BIT-IDENTICAL: the f64 branch runs the exact arithmetic
+// the closure did, and the f32 branch inlines the identical float32(<f64 math>).
+func tanhVJP(_ *backend.Context, in, out []*tensor.Tensor, attrs backend.Attrs, g *tensor.Tensor) ([]*tensor.Tensor, error) {
+	x, y := in[0], out[0]
+	gin := tensor.New(x.Dtype(), x.Shape())
+	n := x.Numel()
+	yc, gc := y.Contiguous(), g.Contiguous()
+	if x.Dtype() == tensor.F64 && yc.Dtype() == tensor.F64 && gc.Dtype() == tensor.F64 {
+		ys, gs, ds := yc.Storage().F64(), gc.Storage().F64(), gin.Storage().F64()
+		for i := 0; i < n; i++ {
+			ds[i] = gs[i] * (1 - ys[i]*ys[i])
+		}
+		return []*tensor.Tensor{gin}, nil
+	}
+	if x.Dtype() == tensor.F32 && yc.Dtype() == tensor.F32 && gc.Dtype() == tensor.F32 {
+		ys, gs, ds := yc.Storage().F32(), gc.Storage().F32(), gin.Storage().F32()
+		for i := 0; i < n; i++ {
+			yv := float64(ys[i])
+			ds[i] = float32(float64(gs[i]) * (1 - yv*yv))
+		}
+		return []*tensor.Tensor{gin}, nil
+	}
+	return unaryVJP(func(_, yv, gv float64) float64 { return gv * (1 - yv*yv) })(nil, in, out, attrs, g)
+}
+
+func expVJP(_ *backend.Context, in, out []*tensor.Tensor, attrs backend.Attrs, g *tensor.Tensor) ([]*tensor.Tensor, error) {
+	x, y := in[0], out[0]
+	gin := tensor.New(x.Dtype(), x.Shape())
+	n := x.Numel()
+	yc, gc := y.Contiguous(), g.Contiguous()
+	if x.Dtype() == tensor.F64 && yc.Dtype() == tensor.F64 && gc.Dtype() == tensor.F64 {
+		ys, gs, ds := yc.Storage().F64(), gc.Storage().F64(), gin.Storage().F64()
+		for i := 0; i < n; i++ {
+			ds[i] = gs[i] * ys[i]
+		}
+		return []*tensor.Tensor{gin}, nil
+	}
+	if x.Dtype() == tensor.F32 && yc.Dtype() == tensor.F32 && gc.Dtype() == tensor.F32 {
+		ys, gs, ds := yc.Storage().F32(), gc.Storage().F32(), gin.Storage().F32()
+		for i := 0; i < n; i++ {
+			ds[i] = float32(float64(gs[i]) * float64(ys[i]))
+		}
+		return []*tensor.Tensor{gin}, nil
+	}
+	return unaryVJP(func(_, yv, gv float64) float64 { return gv * yv })(nil, in, out, attrs, g)
+}
+
+func sigmoidVJP(_ *backend.Context, in, out []*tensor.Tensor, attrs backend.Attrs, g *tensor.Tensor) ([]*tensor.Tensor, error) {
+	x, y := in[0], out[0]
+	gin := tensor.New(x.Dtype(), x.Shape())
+	n := x.Numel()
+	yc, gc := y.Contiguous(), g.Contiguous()
+	if x.Dtype() == tensor.F64 && yc.Dtype() == tensor.F64 && gc.Dtype() == tensor.F64 {
+		ys, gs, ds := yc.Storage().F64(), gc.Storage().F64(), gin.Storage().F64()
+		for i := 0; i < n; i++ {
+			ds[i] = gs[i] * ys[i] * (1 - ys[i])
+		}
+		return []*tensor.Tensor{gin}, nil
+	}
+	if x.Dtype() == tensor.F32 && yc.Dtype() == tensor.F32 && gc.Dtype() == tensor.F32 {
+		ys, gs, ds := yc.Storage().F32(), gc.Storage().F32(), gin.Storage().F32()
+		for i := 0; i < n; i++ {
+			yv := float64(ys[i])
+			ds[i] = float32(float64(gs[i]) * yv * (1 - yv))
+		}
+		return []*tensor.Tensor{gin}, nil
+	}
+	return unaryVJP(func(_, yv, gv float64) float64 { return gv * yv * (1 - yv) })(nil, in, out, attrs, g)
+}
+
 func init() {
 	// d(a/b): (g/b, -g·a/b²), broadcast-aware — read a,b at their broadcast coords
 	// and accumulate into each input's shape (accumulation performs the reduction).
@@ -97,15 +213,10 @@ func init() {
 
 	// detach: the forward is the identity, but no gradient flows back through x.
 	RegisterVJP(backend.OpStopGradient, unaryVJP(func(_, _, _ float64) float64 { return 0 }))
-	RegisterVJP(backend.OpExp, unaryVJP(func(_, y, g float64) float64 { return g * y }))
+	RegisterVJP(backend.OpExp, expVJP)
 	RegisterVJP(backend.OpLog, unaryVJP(func(x, _, g float64) float64 { return g / x }))
-	RegisterVJP(backend.OpTanh, unaryVJP(func(_, y, g float64) float64 { return g * (1 - y*y) }))
-	RegisterVJP(backend.OpReLU, unaryVJP(func(x, _, g float64) float64 {
-		if x > 0 {
-			return g
-		}
-		return 0
-	}))
+	RegisterVJP(backend.OpTanh, tanhVJP)
+	RegisterVJP(backend.OpReLU, reluVJP)
 	// gelu'(x) = Φ(x) + x·φ(x), exact erf form (ADR-0004). Dispatch OpGELUBackward on the
 	// tape's active backend (like the norm/CE VJPs) — the elementwise scalar-loop VJP was
 	// ~30ms at the FFN's 256×2048, a dominant training-step cost (§T353).
@@ -116,7 +227,7 @@ func init() {
 		}
 		return []*tensor.Tensor{out[0]}, nil
 	})
-	RegisterVJP(backend.OpSigmoid, unaryVJP(func(_, y, g float64) float64 { return g * y * (1 - y) }))
+	RegisterVJP(backend.OpSigmoid, sigmoidVJP)
 	// silu(x)=x·σ(x); silu'(x)=σ(x)·(1+x·(1−σ(x))). Dispatch OpSiLUBackward on the tape's
 	// active backend (like GELU §T353) — SiLU is SwiGLU's activation, so its elementwise
 	// scalar-loop VJP was a training-step cost for Llama-style models (§T362).
