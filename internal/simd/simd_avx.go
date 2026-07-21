@@ -13,7 +13,11 @@ package simd
 // runtime (§I4): a binary built with the experiment but run on a pre-AVX CPU
 // falls back to the scalar loop instead of executing an illegal instruction.
 
-import "simd/archsimd"
+import (
+	"math"
+
+	"simd/archsimd"
+)
 
 // 256-bit float arithmetic is AVX; that is the only feature these kernels need.
 var hasAVX = archsimd.X86.AVX()
@@ -144,4 +148,88 @@ func DivF32(dst, a, b []float32) {
 	for ; i < n; i++ {
 		dst[i] = a[i] / b[i]
 	}
+}
+
+var hasFMA = archsimd.X86.FMA()
+
+// exp constants for ExpSumF64: full-f64 Cody-Waite ln2 split + degree-13 Taylor
+// of eʳ over |r|≤ln2/2 (remainder ≈4e-18, ~1 ulp), scaled by 2ᵏ built through
+// int32→sign-extend→VPSLLQ (all AVX2, avoiding the AVX-512-only f64→i64 convert).
+var (
+	eLo    = archsimd.BroadcastFloat64x4(-708.0)
+	eLog2e = archsimd.BroadcastFloat64x4(1.4426950408889634)
+	eNHi   = archsimd.BroadcastFloat64x4(-6.93147180369123816490e-01)
+	eNLo   = archsimd.BroadcastFloat64x4(-1.90821492927058770002e-10)
+	eBias  = archsimd.BroadcastInt32x4(1023)
+	eOne   = archsimd.BroadcastFloat64x4(1.0)
+	eZero  = archsimd.BroadcastFloat64x4(0.0)
+	eC13   = archsimd.BroadcastFloat64x4(1.6059043836821613e-10)
+	eC12   = archsimd.BroadcastFloat64x4(2.08767569878681e-09)
+	eC11   = archsimd.BroadcastFloat64x4(2.505210838544172e-08)
+	eC10   = archsimd.BroadcastFloat64x4(2.755731922398589e-07)
+	eC9    = archsimd.BroadcastFloat64x4(2.7557319223985893e-06)
+	eC8    = archsimd.BroadcastFloat64x4(2.48015873015873e-05)
+	eC7    = archsimd.BroadcastFloat64x4(1.984126984126984e-04)
+	eC6    = archsimd.BroadcastFloat64x4(1.388888888888889e-03)
+	eC5    = archsimd.BroadcastFloat64x4(8.333333333333333e-03)
+	eC4    = archsimd.BroadcastFloat64x4(4.166666666666666e-02)
+	eC3    = archsimd.BroadcastFloat64x4(1.6666666666666666e-01)
+	eC2    = archsimd.BroadcastFloat64x4(0.5)
+)
+
+// expF64x4v returns eˣ (~1 ulp) per lane for x ≤ 0 (the softmax numerator feeds
+// it z−max ≤ 0). Masked/−Inf lanes clamp to eLo → ~3e-308 (≈0 after normalize).
+func expF64x4v(x archsimd.Float64x4) archsimd.Float64x4 {
+	x = x.Max(eLo)
+	kf := x.Mul(eLog2e).RoundToEven()
+	r := kf.MulAdd(eNHi, x)
+	r = kf.MulAdd(eNLo, r)
+	p := eC13
+	p = p.MulAdd(r, eC12)
+	p = p.MulAdd(r, eC11)
+	p = p.MulAdd(r, eC10)
+	p = p.MulAdd(r, eC9)
+	p = p.MulAdd(r, eC8)
+	p = p.MulAdd(r, eC7)
+	p = p.MulAdd(r, eC6)
+	p = p.MulAdd(r, eC5)
+	p = p.MulAdd(r, eC4)
+	p = p.MulAdd(r, eC3)
+	p = p.MulAdd(r, eC2)
+	p = p.MulAdd(r, eOne)
+	p = p.MulAdd(r, eOne)
+	scale := kf.ConvertToInt32().Add(eBias).ExtendToInt64().ShiftAllLeft(52).AsFloat64x4()
+	return p.Mul(scale)
+}
+
+// ExpSumF64 sets dst[i] = exp(src[i]-bias) and returns Σ dst[i], 4-wide AVX2+FMA.
+// The exp is ~1 ulp; the caller (nlp large-vocab softmax) rides an f64 tolerance
+// (Dist golden 1e-12). Scalar tail + a pre-AVX/pre-FMA CPU fall back to math.Exp.
+func ExpSumF64(dst, src []float64, bias float64) float64 {
+	if !hasAVX || !hasFMA {
+		var sum float64
+		for i, v := range src {
+			e := math.Exp(v - bias)
+			dst[i] = e
+			sum += e
+		}
+		return sum
+	}
+	vb := archsimd.BroadcastFloat64x4(bias)
+	acc := eZero
+	i, n := 0, len(src)
+	for ; i+4 <= n; i += 4 {
+		e := expF64x4v(archsimd.LoadFloat64x4Slice(src[i:]).Sub(vb))
+		e.StoreSlice(dst[i:])
+		acc = acc.Add(e)
+	}
+	var lanes [4]float64
+	acc.StoreSlice(lanes[:])
+	sum := lanes[0] + lanes[1] + lanes[2] + lanes[3]
+	for ; i < n; i++ {
+		e := math.Exp(src[i] - bias)
+		dst[i] = e
+		sum += e
+	}
+	return sum
 }
