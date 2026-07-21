@@ -32,6 +32,48 @@ import (
 // neutral, numerics untouched. Lives in gemm_simd.go (amd64+simd only); the
 // portable scalar kernels below stay unblocked per the arm64 result.
 
+// matContiguousF32 returns a dense row-major copy of a rank-2 F32 tensor,
+// parallelizing the gather over output ROWS. matmulKernel's backward calls
+// materialize a TRANSPOSED operand (Wᵀ/Aᵀ) whose Contiguous() runs a single
+// serial per-element gather (~2 GB/s, a textbook transpose cache-thrash) before
+// the parallel GEMM — an Amdahl serialization the profile put at ~5-7% of a GPT
+// training step. Each output row is independent, so a row-band split removes it.
+// The gather order (out[r*C+c] = src[off + r·s0 + c·s1], ascending r then c) is
+// identical to tensor.Contiguous, so the result is bit-for-bit the same. The
+// parThreshold gate inside parallelWork keeps small operands serial (no fork
+// cost), and nested calls degrade to inline via the pool, so this is safe even
+// if a caller is already inside a parallel region. Non-rank-2 / already-dense
+// tensors fall back to the shared Contiguous fast paths.
+func matContiguousF32(t *tensor.Tensor) *tensor.Tensor {
+	if t.IsContiguous() && t.Offset() == 0 {
+		return t
+	}
+	sh := t.Shape()
+	if len(sh) != 2 {
+		return t.Contiguous()
+	}
+	rows, cols := sh[0], sh[1]
+	st := t.Strides()
+	s0, s1, off := st[0], st[1], t.Offset()
+	src := t.Storage().F32()
+	out := tensor.NewOn(t.Device(), tensor.F32, tensor.Shape{rows, cols})
+	dst := out.Storage().F32()
+	parallelWork(rows, cols, func(lo, hi int) {
+		for r := lo; r < hi; r++ {
+			drow := dst[r*cols : r*cols+cols]
+			so := off + r*s0
+			if s1 == 1 {
+				copy(drow, src[so:so+cols])
+			} else {
+				for c := 0; c < cols; c++ {
+					drow[c] = src[so+c*s1]
+				}
+			}
+		}
+	})
+	return out
+}
+
 func matmulKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*tensor.Tensor, error) {
 	if len(in) != 2 {
 		return nil, fmt.Errorf("cpu: matmul wants 2 inputs, got %d", len(in))
@@ -48,7 +90,12 @@ func matmulKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([
 	if k != k2 {
 		return nil, fmt.Errorf("cpu: matmul inner dim mismatch %v · %v", a.Shape(), b.Shape())
 	}
-	ac, bc := a.Contiguous(), b.Contiguous()
+	ac, bc := a, b
+	if a.Dtype() == tensor.F32 {
+		ac, bc = matContiguousF32(a), matContiguousF32(b)
+	} else {
+		ac, bc = a.Contiguous(), b.Contiguous()
+	}
 	out := tensor.NewOn(ctx.Device(), a.Dtype(), tensor.Shape{m, n})
 
 	switch a.Dtype() {
