@@ -115,19 +115,25 @@ func NewWordPiece(vocab []string, opts ...WordPieceOption) (*WordPiece, error) {
 // WordPiece to each word.
 func (w *WordPiece) Encode(text string) []int {
 	var out []int
-	for _, word := range strings.Fields(text) {
-		out = append(out, w.encodeWord(word)...)
+	for word := range strings.FieldsSeq(text) { // FieldsSeq avoids allocating the full []string of words
+		out = w.encodeWordInto(out, word)
 	}
 	return out
 }
 
-// encodeWord runs MaxMatch on a single word.
-func (w *WordPiece) encodeWord(word string) []int {
+// encodeWordInto runs MaxMatch on a single word, appending its piece ids directly to
+// out (returned regrown). Emitting into the caller's slice instead of a fresh per-word
+// []int — the old encodeWord built one and Encode spread it in — drops one heap
+// allocation per word (T953). On an unmatchable position the whole word becomes a
+// single [UNK]: any pieces already appended for this word are first rolled back
+// (out[:wordStart]), exactly as the old encodeWord discarded its partial result before
+// returning []int{unkID}.
+func (w *WordPiece) encodeWordInto(out []int, word string) []int {
 	runes := []rune(word)
 	if len(runes) > w.maxChars {
-		return []int{w.unkID}
+		return append(out, w.unkID)
 	}
-	var toks []int
+	wordStart := len(out) // rollback point if this word proves unmatchable
 	start := 0
 	for start < len(runes) {
 		// longest substring runes[start:end] in the vocab (with "##" if not word-initial).
@@ -149,12 +155,12 @@ func (w *WordPiece) encodeWord(word string) []int {
 			end--
 		}
 		if matchedID < 0 {
-			return []int{w.unkID} // no piece at this position ⇒ the whole word is unk
+			return append(out[:wordStart], w.unkID) // no piece here ⇒ whole word is one unk
 		}
-		toks = append(toks, matchedID)
+		out = append(out, matchedID)
 		start += matchedLen
 	}
-	return toks
+	return out
 }
 
 // Decode concatenates the pieces of ids: a continuation piece ("##…") is appended to the current
