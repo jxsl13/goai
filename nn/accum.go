@@ -77,6 +77,23 @@ func (a *GradAccumulator) GradFn() GradFn {
 			return nil
 		}
 		out := tensor.New(p.Dtype(), p.Shape())
+		// out is freshly allocated (contiguous, offset 0), so write its raw slice
+		// directly rather than through fillGen's per-element closure — the same
+		// sum÷Steps average with the identical float32 rounding, so bit-identical.
+		switch out.Dtype() {
+		case tensor.F64:
+			d := out.Storage().F64()
+			for i := range s {
+				d[i] = s[i] / k
+			}
+			return out
+		case tensor.F32:
+			d := out.Storage().F32()
+			for i := range s {
+				d[i] = float32(s[i] / k)
+			}
+			return out
+		}
 		idx := 0
 		fillGen(out, func() float64 {
 			v := s[idx] / k
