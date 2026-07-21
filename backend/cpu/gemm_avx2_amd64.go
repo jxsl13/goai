@@ -30,13 +30,15 @@ func gemmF32Asm6x16(A, B, C []float32, m, k, n int) {
 		// (measured: 512/1024 slower, 2048 +16%, 4096 within ~1.2x of numpy). So block+pack only in the
 		// memory-bound regime; small/mid GEMMs take a single overwrite pass.
 		//
-		// The pack cost (writing B into bp) is amortized over the m rows that reuse each packed element,
-		// so it only pays with enough rows (rowTiles≥12, i.e. m≳72) OR a k large enough that the
-		// sequential-B-stream win dominates regardless of m (k≥4096). Medium-m at moderate k — batched /
-		// speculative decode (m=8,32) — takes the single-pass column-block path instead, where B is read
-		// once with no pack: measured 8×2048×2048 9.5→12.8, 32×2048×2048 32→43 GFLOP/s, while the large-k
-		// down-proj 32×5632×2048 stays on the packed path (23 vs 21 single-pass).
-		if k > gemmAsmKC && k*n > 2_000_000 && (rowTiles >= 12 || k >= 4096) {
+		// Packing DOUBLES B traffic (write-to-bp + read) to buy a sequential compute-read, so it only
+		// pays when that win outweighs the pack write:
+		//   - k≥1024: below this the pack write isn't amortized even for large m — small-k/large-n takes
+		//     single-pass (measured 256×512×4096 232→297, 512×512×4096 250→280, 256×512×8192 201→254).
+		//   - then (rowTiles≥12 i.e. m≳72) OR (k≥4096 where the stream win dominates regardless of m):
+		//     medium-m at moderate k — batched/speculative decode (m=8,32) — takes single-pass
+		//     (8×2048×2048 9.5→12.8, 32×2048×2048 32→43), while the large-k down-proj 32×5632×2048 stays
+		//     packed (23 vs 21). Every designed-for large-n×large-k shape (k≥2048, m≥512) stays packed.
+		if k >= 1024 && k*n > 2_000_000 && (rowTiles >= 12 || k >= 4096) {
 			nb := n16 / 16
 			bp := make([]float32, gemmAsmKC*n16) // packed B slab, reused across k-slabs (stride kc*16 per block)
 			for p0 := 0; p0 < k; p0 += gemmAsmKC {
