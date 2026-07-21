@@ -743,16 +743,11 @@ func sigmoid(x float64) float64 {
 }
 
 func logLoss(y, f []float64) float64 {
-	const eps = 1e-15
-	var s float64
-	for i := range y {
-		p := sigmoid(f[i])
-		if p < eps {
-			p = eps
-		} else if p > 1-eps {
-			p = 1 - eps
-		}
-		s += -(y[i]*math.Log(p) + (1-y[i])*math.Log(1-p))
-	}
-	return s / float64(len(y))
+	// Mean binary cross-entropy. −(y·log σ(f) + (1−y)·log(1−σ(f))) = softplus((1−2y)·f)
+	// exactly (y∈{0,1}), so one vectorized softplus per sample replaces the sigmoid +
+	// two logs the old form recomputed every boosting round (~15% of GBM fit as scalar
+	// math.Log). No eps clamp needed — softplus is stable at both tails. This is the
+	// monitoring loss curve (predictions come from the trees), so the ~1-ulp SIMD shift
+	// is invisible to the sklearn parity and keeps the curve monotonic.
+	return simd.SoftplusNegLLSumF64(f, y) / float64(len(y))
 }

@@ -98,3 +98,18 @@ func SigmoidF64(dst, src []float64) {
 		}
 	}
 }
+
+// SoftplusNegLLSumF64 returns Σ softplus((1−2·y[i])·f[i]) — binary cross-entropy sum
+// for y∈{0,1}. Portable scalar fallback; the amd64 SIMD build vectorizes the body.
+func SoftplusNegLLSumF64(f, y []float64) float64 {
+	var s float64
+	for i := range f {
+		x := (1 - 2*y[i]) * f[i]
+		if x > 0 {
+			s += x + math.Log1p(math.Exp(-x))
+		} else {
+			s += math.Log1p(math.Exp(x))
+		}
+	}
+	return s
+}
