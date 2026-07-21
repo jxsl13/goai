@@ -705,6 +705,12 @@ var typicalKeepPool = sync.Pool{New: func() any { return []bool(nil) }}
 // returned distribution is a separate slice, so these are pure scratch.
 var float64ScratchPool = sync.Pool{New: func() any { return []float64(nil) }}
 
+// penalizeBufPool reuses the per-token penalized-logits copy in SampleWithHistory (T949):
+// penalize/DRY need a mutable copy of logits (the input is never mutated), which was a
+// fresh make per token when penalties are on. The copy lives only until Sample returns,
+// so SampleWithHistory pools it (Put once, iff a copy was actually taken).
+var penalizeBufPool = sync.Pool{New: func() any { return []float64(nil) }}
+
 // nucleusTopP applies top-p (nucleus) truncation to probs in place: keep the
 // minimal set of highest-probability tokens whose mass ≥ p, then renormalize. The
 // nucleus is almost always tiny relative to the vocabulary, so instead of sorting
@@ -1043,10 +1049,16 @@ func (s *Sampler) penalize(logits []float64, history []int) []float64 {
 	if s.PenaltyLastN > 0 && len(w) > s.PenaltyLastN {
 		w = w[len(w)-s.PenaltyLastN:]
 	}
-	if len(w) == 0 {
+	if len(w) == 0 || len(logits) == 0 {
 		return logits
 	}
-	out := append([]float64(nil), logits...)
+	out := penalizeBufPool.Get().([]float64) // Put by SampleWithHistory after Sample returns
+	if cap(out) < len(logits) {
+		out = make([]float64, len(logits))
+	} else {
+		out = out[:len(logits)]
+	}
+	copy(out, logits)
 	ApplyPenalties(out, w, s.RepeatPenalty, s.FreqPenalty, s.PresencePenalty)
 	return out
 }
@@ -1062,13 +1074,25 @@ func (s *Sampler) penalize(logits []float64, history []int) []float64 {
 // distributions.
 func (s *Sampler) SampleWithHistory(logits []float64, history []int) int {
 	out := s.penalize(logits, history)
+	pooled := len(out) > 0 && &out[0] != &logits[0] // penalize returned a pooled copy
 	if s.DRYMultiplier > 0 && len(out) > 0 {
-		if &out[0] == &logits[0] { // penalize passed the original through: copy
-			out = append([]float64(nil), logits...)
+		if !pooled { // penalize passed the original through: take a pooled copy for DRY
+			c := penalizeBufPool.Get().([]float64)
+			if cap(c) < len(logits) {
+				c = make([]float64, len(logits))
+			} else {
+				c = c[:len(logits)]
+			}
+			copy(c, logits)
+			out, pooled = c, true
 		}
 		s.applyDRY(out, history) // DRY after the token-level penalties (§T573)
 	}
-	return s.Sample(out)
+	tok := s.Sample(out)
+	if pooled {
+		penalizeBufPool.Put(out) // safe: Sample consumed out and returns an int, not out
+	}
+	return tok
 }
 
 // Dist returns the probability distribution this sampler draws from for the given
