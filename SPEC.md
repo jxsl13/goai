@@ -1472,6 +1472,7 @@ T38b|x|L4 Llama-family pt2: SiLU op+VJP, SwiGLU FFN (nn layer, trainable), GQA (
 | T931 | x | nlp: SPM.Decode gate the per-token fmt.Sscanf('<0x%02X>') behind a cheap len==6 && '<0x' prefix check — Sscanf is reflection-based + allocates ~5×/call and ran on EVERY token (1.55M allocs/decode). n==1 requires the '<0x' literal to match, so the gate is bit-identical but skips Sscanf for the 99%+ non-byte-piece tokens. §V22: 93.29→4.62ms = 20.2× (allocs 1.55M→52k); TestSPMByteFallback+roundtrip green | V22,T930 | done | med |
 | T932 | x | nlp: NewSPM apply the same <0xHH> gate to the per-vocab-piece fmt.Sscanf that builds byteID — surfaced by the new perfscan reflection-in-loop detector (spm.go:71). One-time load cost, but the reflection Sscanf ran on EVERY vocab piece. §V22 (30k-piece vocab): 10.77→1.05ms = 10.2× (allocs 151k→1.2k); bit-identical, TestSPMByteFallback green | V22,T931 | done | med |
 | T933 | x | internal/perfscan: add detector D (reflection-in-loop) — flags the fmt SCAN family (Sscanf/Sscan/Sscanln/Fscanf/Fscan/Fscanln) called in ANY loop, pkg-checked so a same-named method doesn't false-fire. The format family (Sprintf/…) is EXCLUDED as noise (139 vs 2 module-wide). This is the T931/T932 SPM class; the detector immediately surfaced spm.go:71 → the 10.2× NewSPM win. Tests: in-loop positive + outside-loop + non-fmt-method negatives; module scan clean (2 candidates) | T931,T932 | done | med |
+| T934 | x | nlp: SPM+Unigram Decode replace ▁ inline via writeUnescapedMeta instead of strings.ReplaceAll(p,▁,' ') per token — ReplaceAll allocated a fresh string for every ▁-bearing piece (52k allocs). Write the pieces around each ▁ straight into the builder. §V22: both 1.65× (SPM 4.53→2.74ms, Unigram 4.35→2.64ms), allocs 52k→1; bit-identical (roundtrip green). SPM decode now 34.6× total for the session (94.9→2.74ms) | V22,T931 | done | med |
 
 ## §Bench — benchmark records
 
@@ -1488,3 +1489,5 @@ T38b|x|L4 Llama-family pt2: SiLU op+VJP, SwiGLU FFN (nn layer, trainable), GQA (
 | BM9 | 2026-07-21 | nlp SPM Decode (ids->text, 300k ids) | darwin/arm64 | self | ms | 94.93 | 93.20 | 1.02× | T930,V22 |
 | BM10 | 2026-07-21 | nlp SPM Decode (Sscanf-gated; ids->text, 300k) | darwin/arm64 | self | ms | 93.29 | 4.624 | 20.18× | T931,V22 |
 | BM11 | 2026-07-21 | nlp NewSPM construction (30k-piece vocab, byteID build) | darwin/arm64 | self | ms | 10.773 | 1.054 | 10.22× | T932,V22 |
+| BM12 | 2026-07-21 | nlp SPM Decode (inline meta-unescape; 300k ids) | darwin/arm64 | self | ms | 4.530 | 2.742 | 1.65× | T934,V22 |
+| BM13 | 2026-07-21 | nlp Unigram Decode (inline meta-unescape; 300k ids) | darwin/arm64 | self | ms | 4.354 | 2.636 | 1.65× | T934,V22 |
