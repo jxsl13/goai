@@ -238,6 +238,101 @@ func run(ps []parser, ss []string) {
 	}
 }
 
+// Detector E: a strings.Builder written in a loop with no Grow (the T929 pre-size class).
+func TestDetectE_UnsizedBuilderInLoop(t *testing.T) {
+	src := `package p
+import "strings"
+func Decode(ids []int, pieces []string) string {
+	var b strings.Builder
+	for _, id := range ids {
+		b.WriteString(pieces[id])
+	}
+	return b.String()
+}`
+	if got := countCat(scanSrc(t, src)); got["unsized-builder"] != 1 {
+		t.Fatalf("want 1 unsized-builder, got %d (%v)", got["unsized-builder"], got)
+	}
+}
+
+// …silent once the builder is pre-sized with Grow.
+func TestDetectE_SilentWithGrow(t *testing.T) {
+	src := `package p
+import "strings"
+func Decode(ids []int, pieces []string) string {
+	var b strings.Builder
+	b.Grow(len(ids) * 4)
+	for _, id := range ids {
+		b.WriteString(pieces[id])
+	}
+	return b.String()
+}`
+	if got := countCat(scanSrc(t, src)); got["unsized-builder"] != 0 {
+		t.Fatalf("Grow present, want 0 unsized-builder, got %d", got["unsized-builder"])
+	}
+}
+
+// Detector F: an allocating strings transform in a loop (the builder is Grown so only F fires).
+func TestDetectF_StringsAllocInLoop(t *testing.T) {
+	src := `package p
+import "strings"
+func Decode(ids []int, pieces []string, meta string) {
+	var b strings.Builder
+	b.Grow(8)
+	for _, id := range ids {
+		b.WriteString(strings.ReplaceAll(pieces[id], meta, " "))
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["strings-alloc-in-loop"] != 1 {
+		t.Fatalf("want 1 strings-alloc-in-loop, got %d (%v)", got["strings-alloc-in-loop"], got)
+	}
+}
+
+// Detector G: a per-element little-endian bit decode in a loop with no rawCopyLE fast path.
+func TestDetectG_LEDecodeInLoop(t *testing.T) {
+	src := `package p
+import "encoding/binary"
+func read(raw []byte, dst []uint32) {
+	for i := range dst {
+		dst[i] = binary.LittleEndian.Uint32(raw[i*4:])
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["le-decode-in-loop"] != 1 {
+		t.Fatalf("want 1 le-decode-in-loop, got %d (%v)", got["le-decode-in-loop"], got)
+	}
+}
+
+// …silent when the function has a rawCopyLE fast path (the loop is the big-endian fallback).
+func TestDetectG_SilentWithRawCopyLE(t *testing.T) {
+	src := `package p
+import "encoding/binary"
+func read(raw []byte, dst []uint32) bool {
+	if rawCopyLE(dst, raw, 4) {
+		return true
+	}
+	for i := range dst {
+		dst[i] = binary.LittleEndian.Uint32(raw[i*4:])
+	}
+	return false
+}`
+	if got := countCat(scanSrc(t, src)); got["le-decode-in-loop"] != 0 {
+		t.Fatalf("rawCopyLE present, want 0 le-decode-in-loop, got %d", got["le-decode-in-loop"])
+	}
+}
+
+// Detector H: a regexp compile inside a loop recompiles the same pattern every iteration.
+func TestDetectH_RegexpCompileInLoop(t *testing.T) {
+	src := `package p
+import "regexp"
+func run(pats []string) {
+	for _, p := range pats {
+		_ = regexp.MustCompile(p)
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["regexp-compile-in-loop"] != 1 {
+		t.Fatalf("want 1 regexp-compile-in-loop, got %d (%v)", got["regexp-compile-in-loop"], got)
+	}
+}
+
 // One loop holding both an AtF64 and a SetF64 is a single candidate, not two.
 func TestDedupPerLoop(t *testing.T) {
 	src := `package p
