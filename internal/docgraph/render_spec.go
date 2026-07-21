@@ -24,10 +24,23 @@ func renderOutput(o Output) (string, error) {
 		parts[i] = c
 	}
 	if o.RenderPath == "SPEC.md" {
-		// §V36 defense in depth: the tasks fragment must sort last so §T
-		// stays the last rendered section.
-		last := o.Fragments[len(o.Fragments)-1].Path
-		if !strings.Contains(last, "tasks") {
+		// §V36 defense in depth: §T must stay the last APPEND-oriented section so
+		// an append-at-EOF task row still lands in §T. The §Bench ledger
+		// (spec/80-benchmarks.md) is the ONE section allowed to follow it: it is
+		// itself an id-keyed GFM table mutated only through insertRow (never by
+		// hand-append), and its header `## §Bench` is invisible to speccheck's
+		// single-letter section regex, so §T stays the last section speccheck
+		// tracks. When §Bench is present §T must be the fragment directly before
+		// it; otherwise §T is last outright.
+		frags := o.Fragments
+		last := frags[len(frags)-1].Path
+		switch {
+		case strings.Contains(last, "tasks"):
+		case strings.Contains(last, "benchmarks"):
+			if len(frags) < 2 || !strings.Contains(frags[len(frags)-2].Path, "tasks") {
+				return "", fmt.Errorf("docgraph: §Bench (%s) may only follow §T — the tasks file must be the fragment before it (§V36/§V41)", last)
+			}
+		default:
 			return "", fmt.Errorf("docgraph: tasks file must sort last in spec/ (got %s last) — §V36/§V41", last)
 		}
 	}

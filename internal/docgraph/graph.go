@@ -32,6 +32,7 @@ const (
 	KindConstraint Kind = "constraint" // §C defs: C3
 	KindGoal       Kind = "goal"       // §G defs: G5
 	KindArchInv    Kind = "archinv"    // §I defs: I.L0, I4
+	KindBench      Kind = "bench"      // §Bench rows: BM1 (benchmark records)
 	KindADR        Kind = "adr"        // docs/decisions: ADR-0027
 	KindCommit     Kind = "commit"     // git log: 2d35b3b
 	KindDoc        Kind = "doc"        // docs/x.md#heading

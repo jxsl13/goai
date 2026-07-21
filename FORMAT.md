@@ -17,7 +17,7 @@ Code, paths, URLs, identifiers, numbers/versions, error strings, quoted strings.
 ## SHAPES
 Invariant (under §V): a table row `| V<n> | <TAG> | <subject> <relation> <condition> |` — the TAG is its own column.
 
-§G, §C, §I, §V, §R, §B, §T — EVERY id-bearing section — are **CLEAN GFM MARKDOWN TABLES** — they MUST render as tables and pass mdlint's table checks (`table-ragged` + `table-separator-mismatch`). Each = a header row, a delimiter row, then data rows; every row has leading & trailing `|` and the SAME column count. Columns:
+§G, §C, §I, §V, §R, §B, §T, §Bench — EVERY id-bearing section — are **CLEAN GFM MARKDOWN TABLES** — they MUST render as tables and pass mdlint's table checks (`table-ragged` + `table-separator-mismatch`). Each = a header row, a delimiter row, then data rows; every row has leading & trailing `|` and the SAME column count. Columns:
 
 - §G (goals): `| id | goal |`.
 - §C (constraints): `| id | constraint |` — any `(tag)` (e.g. C3's `(thr):`) stays INSIDE the constraint cell, ⊥ dropped.
@@ -26,6 +26,7 @@ Invariant (under §V): a table row `| V<n> | <TAG> | <subject> <relation> <condi
 - §T (tasks): `| id | status | task | cites | state | priority |` — status `x` done, `~` wip, `.` todo; state ∈ done/wip/. (secondary lifecycle); priority ∈ high/med/low. Old rows may leave state+priority empty.
 - §B (bugs): `| id | date | cause | fix |`
 - §R (research): `| id | claim | source | conf |` — conf ∈ high/med/low/ref.
+- §Bench (benchmark records): `| id | date | benchmark | machine | incumbent | metric | before | after | impact | cites |` — id class `BM<n>` (disjoint from §B: `BM1` ≠ a bug id). benchmark = what's measured; machine = host/config; incumbent = compared system + VERSION (e.g. `torch-mps 2.5`) ∨ `self` for a pure pre/post; metric = unit (ns/op, MB/s, tok/s, ms); before/after = pre/post (∨ incumbent-vs-GoAI) values; impact = COMPUTED speedup `before/after` (e.g. `1.38×`), never hand-typed; cites = the §T task + §V22. Records ALL benchmarks, pre- AND post-optimization; ascending by id; renders AFTER §T (the one section allowed past §T — its `## §Bench` header is invisible to the single-letter §-section regex so §T stays last, §V36).
 
 Each table opens with its header + delimiter row, e.g. §T:
 
@@ -53,9 +54,10 @@ Tables clean: ∀ markdown table (here ∨ in docs/README) = valid GFM (header +
 | spec/40-research.md | §R |
 | spec/50-verification.md | §V |
 | spec/60-backprop.md | §B |
-| spec/70-tasks.md | §T (sorts LAST → §T last, §V36) |
+| spec/70-tasks.md | §T (sorts LAST among the single-letter sections → §T last, §V36) |
+| spec/80-benchmarks.md | §Bench (benchmark ledger; renders after §T) |
 | spec/worker/`<host>`/*.md | §RUN/§MODELS/§H/§Iw/§CPU/§GPU/§GAP/§PERF/§Tw/§GOAL/§NEXT |
 
 render = lexicographic concat, one blank line between sections, byte-deterministic; `docgraph split` = proven inverse.
-∀ id-bearing entry mutation via `go run ./internal/docgraph` (`task add/set-status/edit`, `bug add`, `verif|research|goal|constraint|archinv add`, `entry rm`) — ids allocated by the tool (`next-id`), ⊥ hand-numbered. Every mutation re-renders + re-verifies in one transaction. Prose blocks: edit the spec/ fragment + `make spec-render`.
+∀ id-bearing entry mutation via `go run ./internal/docgraph` (`task add/set-status/edit`, `bug add`, `bench add`, `verif|research|goal|constraint|archinv add`, `entry rm`) — ids allocated by the tool (`next-id`), ⊥ hand-numbered. Every mutation re-renders + re-verifies in one transaction. Prose blocks: edit the spec/ fragment + `make spec-render`.
 Future lever (⊥ implemented): reserved id blocks per machine (e.g. worker T950–T999) to kill cross-host rebase races (§B96 class).

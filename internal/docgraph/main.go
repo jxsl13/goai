@@ -30,11 +30,13 @@ commands:
 spec-source commands — run as: docgraph spec <cmd>   (the bare form still works; §V41 — spec/ is
 the source, SPEC.md a generated view;
 every mutation re-renders and fully re-verifies before writing anything):
-  next-id T|B|R|V|G|C|I                  print the next free id of a class
+  next-id T|B|BM|R|V|G|C|I               print the next free id of a class
   task add [flags] <text>                new §T row (-cites, -priority, -status, -id; -worker <n> books a Tw row)
   task set-status [flags] <id> .|~|x     forward-only lifecycle (backward needs -force); keeps state in step
   task edit [flags] <id>                 rewrite cells (-text, -cites, -state, -priority)
   bug add -cause .. -fix .. [flags]      new §B row, newest-first (-date; -guards V<n> appends the guard chain)
+  bench add -benchmark .. -before .. -after .. [flags]   new §Bench row (BM); impact=before/after COMPUTED
+                                         (-machine, -incumbent [self], -metric, -cites, -date)
   research add -claim .. -source .. [-conf high|med|low|ref]
   verif add -tag TAG <text>              new §V row (| id | tag | invariant |)
   goal|constraint|archinv add <text> | edit <id> <text> | rm <id>
@@ -153,6 +155,12 @@ func newMutFlagSet() (*flag.FlagSet, *mutFlags) {
 	fs.StringVar(&fl.Tag, "tag", "", "verification invariant TAG")
 	fs.StringVar(&fl.Text, "text", "", "replacement text for edit")
 	fs.StringVar(&fl.State, "state", "", "task state cell")
+	fs.StringVar(&fl.Benchmark, "benchmark", "", "§Bench: what is measured")
+	fs.StringVar(&fl.Machine, "machine", "", "§Bench: host/config")
+	fs.StringVar(&fl.Incumbent, "incumbent", "", "§Bench: compared system + version, or 'self' (default)")
+	fs.StringVar(&fl.Metric, "metric", "", "§Bench: unit (ns/op, MB/s, tok/s, ms)")
+	fs.StringVar(&fl.Before, "before", "", "§Bench: pre-optimization / incumbent value")
+	fs.StringVar(&fl.After, "after", "", "§Bench: post-optimization / GoAI value")
 	fs.BoolVar(&fl.Force, "force", false, "override guarded transitions/removals")
 	fs.BoolVar(&fl.DryRun, "dry-run", false, "verify and report, write nothing")
 	return fs, fl
@@ -180,7 +188,7 @@ func dispatchMutation(out *strings.Builder, root, cmd string, rest []string, che
 	switch cmd {
 	case "next-id":
 		return true, cmdNextID(out, root, sub)
-	case "task", "bug", "research", "verif", "goal", "constraint", "archinv", "entry":
+	case "task", "bug", "bench", "research", "verif", "goal", "constraint", "archinv", "entry":
 		pos, ok := parse()
 		if !ok {
 			return true, 2
@@ -204,6 +212,8 @@ func dispatchMutation(out *strings.Builder, root, cmd string, rest []string, che
 			return true, cmdTaskEdit(out, root, pos[0], fl)
 		case "bug add":
 			return true, cmdBugAdd(out, root, fl)
+		case "bench add":
+			return true, cmdBenchAdd(out, root, fl)
 		case "research add":
 			return true, cmdResearchAdd(out, root, fl)
 		case "verif add":

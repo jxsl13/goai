@@ -67,6 +67,8 @@ func sectionFileName(fragment string, isWorker bool) string {
 			return "60-backprop.md"
 		case "T":
 			return "70-tasks.md"
+		case "Bench":
+			return "80-benchmarks.md"
 		}
 	} else {
 		switch key {
