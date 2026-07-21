@@ -47,3 +47,4 @@ models/*
 !models/README.md
 .venv-cuda
 models/*.gguf
+/perfscan
