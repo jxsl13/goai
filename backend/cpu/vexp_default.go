@@ -2,6 +2,8 @@
 
 package cpu
 
+import "math"
+
 // Every build that is NOT a SIMD perf build (arm64 → vexp_arm64.go, amd64 →
 // vexp_amd64.go) keeps the f64 math.Exp softmax bit-for-bit: vexpNeon gates the
 // whole vexp activation path off, vexpF32Fast gates the softmax-family exp+sum
@@ -10,6 +12,7 @@ package cpu
 const (
 	vexpNeon    = false
 	vexpF32Fast = false
+	vexpF64Fast = false // no F64 vector SiLU off the amd64 SIMD build; scalar path stays exact
 )
 
 // vexpF32 computes p[i] = exp(p[i]-m) in place and returns Σ p[i].
@@ -84,5 +87,13 @@ func vtanhF32(dst, src []float32) {
 func vlogF32(dst, src []float32) {
 	for i, v := range src {
 		dst[i] = logF32(v)
+	}
+}
+
+// vsiluF64 exists only so siluKernelCPU type-checks on non-amd64-SIMD builds;
+// vexpF64Fast is false here, so it is dead at run time (the scalar exact path runs).
+func vsiluF64(dst, src []float64) {
+	for i, v := range src {
+		dst[i] = v / (1 + math.Exp(-v))
 	}
 }
