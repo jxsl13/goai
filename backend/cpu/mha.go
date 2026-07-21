@@ -146,7 +146,7 @@ func mhaFwdGemmF32(q, k, v, out []float32, g mhaGeo) {
 // mhaFwdBandRows is the row-band grain of the dynamic forward scheduler:
 // small enough for load balance across the causal exp gradient, big enough
 // that the two band gemms keep whole 4-row tiles busy.
-const mhaFwdBandRows = 32
+const mhaFwdBandRows = 30
 
 // mhaFwdGemmBand runs the forward pipeline for rows [i0,i0+iN) of head h.
 func mhaFwdGemmBand(q, kt, vh, out []float32, g mhaGeo, h, i0, iN int) {
