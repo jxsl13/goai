@@ -417,13 +417,15 @@ func mhaSoftmaxBandVexpF32(sb []float32, g mhaGeo, h, i0, iN int) {
 				}
 			}
 		} else {
-			for jj, v := range span {
-				x := v * scale
-				span[jj] = x
-				if x > m {
-					m = x
-				}
-			}
+			// No-slope band: scale + row-max + ×1/sum all run 8-wide (rowMaxF32/scaleRowF32 are the
+			// AVX2 amd64 primitives, scalar elsewhere) — the exp already goes through vexpRowF32.
+			scaleRowF32(span, scale)
+			m = rowMaxF32(span)
+			sum := vexpRowF32(span, m)
+			scaleRowF32(span, 1/sum)
+			clear(sr[:jmin])
+			clear(sr[jmax:])
+			continue
 		}
 		sum := vexpRowF32(span, m)
 		inv := 1 / sum
