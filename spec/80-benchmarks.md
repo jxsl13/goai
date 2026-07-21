@@ -18,3 +18,4 @@
 | BM14 | 2026-07-21 | nlp BPETokenizer(GGUF) Encode (~100k-char text) | darwin/arm64 | self | ms | 12.241 | 9.618 | 1.27× | T936,V22 |
 | BM15 | 2026-07-21 | nlp BPETokenizer(GGUF) Decode (ids->text) | darwin/arm64 | self | ms | 1.649 | 1.559 | 1.06× | T937,V22 |
 | BM16 | 2026-07-21 | nlp BPETokenizer(GGUF) Encode byte-offset | darwin/arm64 | self | ms | 9.609 | 6.779 | 1.42× | T938,V22 |
+| BM17 | 2026-07-21 | nlp BPETokenizer(GGUF) Encode scratch-reuse | darwin/arm64 | self | ms | 6.712 | 5.355 | 1.25× | T939,V22 |
