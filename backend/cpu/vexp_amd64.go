@@ -390,8 +390,8 @@ func vlogF32(dst, src []float32) {
 // |r|≤ln2/2 (remainder ≈4e-18, sub-ulp), scaled by 2ᵏ built from the exponent
 // field. The arg is clamped to ≥ −708 so k+1023 stays a valid biased exponent.
 var (
-	vF64ExpLo  = archsimd.BroadcastFloat64x4(-708.0)         // min arg before 2ᵏ underflows
-	vF64Log2e  = archsimd.BroadcastFloat64x4(1.4426950408889634) // 1/ln2
+	vF64ExpLo  = archsimd.BroadcastFloat64x4(-708.0)                      // min arg before 2ᵏ underflows
+	vF64Log2e  = archsimd.BroadcastFloat64x4(1.4426950408889634)          // 1/ln2
 	vF64NLn2Hi = archsimd.BroadcastFloat64x4(-6.93147180369123816490e-01) // −ln2 high (exact·k)
 	vF64NLn2Lo = archsimd.BroadcastFloat64x4(-1.90821492927058770002e-10) // −ln2 low
 	vF64Bias   = archsimd.BroadcastInt32x4(1023)
