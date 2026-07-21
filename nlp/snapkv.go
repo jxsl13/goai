@@ -1,7 +1,5 @@
 package nlp
 
-import "sort"
-
 // SnapKV prompt KV-cache compression (Li, Huang, Yang, Yang, Zhang, Cai, Feng, Xu, Chen et
 // al. 2024, "SnapKV: LLM Knows What You are Looking for Before Generation", NeurIPS 2024,
 // arXiv:2404.14469). Unlike the decode-time eviction policies here — StreamingLLM (recent +
@@ -86,12 +84,10 @@ func SnapKVKeep(obsAttn [][]float64, budget, kernel int) []int {
 		for i := range cand {
 			cand[i] = i
 		}
-		sort.SliceStable(cand, func(a, b int) bool {
-			if pooled[cand[a]] != pooled[cand[b]] {
-				return pooled[cand[a]] > pooled[cand[b]]
-			}
-			return cand[a] < cand[b]
-		})
+		// pooled scores are non-negative (max-pooled attention), so the stable
+		// radix orders them identically to the closure sort and preserves the
+		// ascending-index tie-break — closure-free / O(n) on the candidate set.
+		sortIdxDescByProb(cand, pooled)
 		if kPrefix > len(cand) {
 			kPrefix = len(cand)
 		}

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"math"
 	"math/rand/v2"
-	"sort"
 
 	"github.com/jxsl13/goai/backend"
 	"github.com/jxsl13/goai/nn"
@@ -311,16 +310,7 @@ func (m *DiffusionLM) diffusionGenerate(length, steps int, s *Sampler, onStep fu
 			remain = len(masked)
 		}
 		if remain > 0 {
-			order := make([]int, len(masked))
-			for k := range order {
-				order[k] = k
-			}
-			sort.Slice(order, func(a, b int) bool {
-				if confs[order[a]] != confs[order[b]] {
-					return confs[order[a]] < confs[order[b]]
-				}
-				return masked[order[a]] < masked[order[b]]
-			})
+			order := diffusionRefillOrder(confs)
 			for _, k := range order[:remain] {
 				seq[masked[k]] = maskID
 			}
@@ -335,6 +325,21 @@ func (m *DiffusionLM) diffusionGenerate(length, steps int, s *Sampler, onStep fu
 // logitsRow copies the first v entries of row i from a contiguous [L, stride]
 // logits tensor — the real-vocabulary slice of one position's logits, excluding
 // the trailing [MASK] column. Typed fast paths mirror rowLogits (§base-perf).
+// diffusionRefillOrder orders the masked-position indices by ASCENDING
+// confidence (lowest first — those get re-masked next). Confidences are softmax
+// probabilities (≥0), so the ascending radix (sortIdxAscByScore) orders them
+// identically to the comparison sort; equal confidences retain ascending index
+// order, which — because the caller's masked list is in ascending position order
+// — reproduces the previous masked[order[a]] < masked[order[b]] tie-break.
+func diffusionRefillOrder(confs []float64) []int {
+	order := make([]int, len(confs))
+	for k := range order {
+		order[k] = k
+	}
+	sortIdxAscByScore(order, confs)
+	return order
+}
+
 func logitsRow(t *tensor.Tensor, i, stride, v int) []float64 {
 	out := make([]float64, v)
 	switch t.Dtype() {

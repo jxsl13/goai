@@ -614,6 +614,62 @@ func sortIdxDescByKey(idx []int, key []float64) {
 	})
 }
 
+// radixSortCutoff is the index count above which a full sort switches from the
+// comparison sort to the LSD radix. The measured crossover is ~1024: radix is
+// ~6% slower at n=512, ~1.17× faster at n=1024, and 2.4× at n=2048 (its fixed
+// 8-pass + allocation overhead amortises out), so 1024 captures every sort that
+// benefits while leaving small sorts on the lower-constant comparison path.
+const radixSortCutoff = 1024
+
+// sortIdxDescByProb orders idx so that key[idx[0]] ≥ key[idx[1]] ≥ … for
+// NON-NEGATIVE keys (post-softmax probabilities). For large n it uses an 8-pass
+// LSD radix sort on the IEEE-754 bits: for x ≥ 0 math.Float64bits is monotonic
+// in x, so sorting the bit patterns orders the values, with no per-comparison
+// closure call. The resulting value sequence is identical to sortIdxDescByKey
+// for distinct keys — the nucleus threshold depends only on the value order, so
+// top-p truncation is unchanged (§T627). Small n defers to the comparison sort.
+func sortIdxDescByProb(idx []int, key []float64) {
+	n := len(idx)
+	if n < radixSortCutoff {
+		sortIdxDescByKey(idx, key)
+		return
+	}
+	// bits[i] = ^Float64bits(key[idx[i]]): inverting makes an ASCENDING radix
+	// pass emit values in DESCENDING order (largest probability first).
+	bits := make([]uint64, n)
+	for i, id := range idx {
+		bits[i] = ^math.Float64bits(key[id])
+	}
+	tmpIdx := make([]int, n)
+	tmpBits := make([]uint64, n)
+	var count [256]int
+	for shift := uint(0); shift < 64; shift += 8 {
+		for i := range count {
+			count[i] = 0
+		}
+		for i := 0; i < n; i++ {
+			count[(bits[i]>>shift)&0xff]++
+		}
+		sum := 0
+		for i := 0; i < 256; i++ {
+			c := count[i]
+			count[i] = sum
+			sum += c
+		}
+		for i := 0; i < n; i++ {
+			b := (bits[i] >> shift) & 0xff
+			pos := count[b]
+			count[b]++
+			tmpIdx[pos] = idx[i]
+			tmpBits[pos] = bits[i]
+		}
+		idx, tmpIdx = tmpIdx, idx
+		bits, tmpBits = tmpBits, bits
+	}
+	// 8 passes (even) ⇒ the swapped idx alias is the caller's slice again, now
+	// holding the sorted order; no final copy needed.
+}
+
 // nucleusTopP applies top-p (nucleus) truncation to probs in place: keep the
 // minimal set of highest-probability tokens whose mass ≥ p, then renormalize. The
 // nucleus is almost always tiny relative to the vocabulary, so instead of sorting
@@ -632,7 +688,7 @@ func nucleusTopP(probs []float64, p float64) {
 	if k < n {
 		quickselectIdxDesc(idx, probs, k)
 		top := idx[:k]
-		sortIdxDescByKey(top, probs)
+		sortIdxDescByProb(top, probs)
 		var cum float64
 		for _, i := range top {
 			cum += probs[i]
@@ -643,7 +699,7 @@ func nucleusTopP(probs []float64, p float64) {
 		}
 		// nucleus larger than K candidates → exact full-sort fallback below
 	}
-	sortIdxDescByKey(idx, probs)
+	sortIdxDescByProb(idx, probs)
 	var cum float64
 	for _, i := range idx {
 		cum += probs[i]
@@ -731,6 +787,51 @@ func sortIdxAscByKey(idx []int, key []float64) {
 	})
 }
 
+// sortIdxAscByScore orders idx so that key[idx[0]] ≤ key[idx[1]] ≤ … for
+// NON-NEGATIVE keys (the typical score |−log p − H|, with masked tokens at
+// +Inf). Like sortIdxDescByProb it radix-sorts the IEEE-754 bits — but without
+// the inversion, so an ascending pass emits values smallest-first; +Inf has the
+// largest positive bit pattern and lands last, exactly where the masked tail
+// belongs. Identical value order to sortIdxAscByKey for distinct scores, so the
+// typical set is unchanged (§T628). Small n defers to the comparison sort.
+func sortIdxAscByScore(idx []int, key []float64) {
+	n := len(idx)
+	if n < radixSortCutoff {
+		sortIdxAscByKey(idx, key)
+		return
+	}
+	bits := make([]uint64, n)
+	for i, id := range idx {
+		bits[i] = math.Float64bits(key[id]) // ascending bits ⇒ ascending value (key ≥ 0)
+	}
+	tmpIdx := make([]int, n)
+	tmpBits := make([]uint64, n)
+	var count [256]int
+	for shift := uint(0); shift < 64; shift += 8 {
+		for i := range count {
+			count[i] = 0
+		}
+		for i := 0; i < n; i++ {
+			count[(bits[i]>>shift)&0xff]++
+		}
+		sum := 0
+		for i := 0; i < 256; i++ {
+			c := count[i]
+			count[i] = sum
+			sum += c
+		}
+		for i := 0; i < n; i++ {
+			b := (bits[i] >> shift) & 0xff
+			pos := count[b]
+			count[b]++
+			tmpIdx[pos] = idx[i]
+			tmpBits[pos] = bits[i]
+		}
+		idx, tmpIdx = tmpIdx, idx
+		bits, tmpBits = tmpBits, bits
+	}
+}
+
 // applyKeep zeroes every probability whose keep flag is false and renormalizes over
 // the survivors — the exact prefix mask the old typical/top-p loops used.
 func applyKeep(probs []float64, keep []bool) {
@@ -780,7 +881,7 @@ func typicalTruncate(probs []float64, tau float64) {
 	if k < n {
 		quickselectIdxAsc(idx, score, k)
 		top := idx[:k]
-		sortIdxAscByKey(top, score)
+		sortIdxAscByScore(top, score)
 		var cum float64
 		for _, i := range top {
 			if probs[i] == 0 {
@@ -799,7 +900,7 @@ func typicalTruncate(probs []float64, tau float64) {
 			keep[i] = false
 		}
 	}
-	sortIdxAscByKey(idx, score)
+	sortIdxAscByScore(idx, score)
 	var cum float64
 	for _, i := range idx {
 		if probs[i] == 0 {

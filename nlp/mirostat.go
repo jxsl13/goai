@@ -3,7 +3,6 @@ package nlp
 import (
 	"math"
 	"math/rand/v2"
-	"sort"
 )
 
 // Mirostat is the Mirostat 2.0 decoding algorithm (Basu et al. 2020, "Mirostat: A
@@ -109,12 +108,14 @@ func (m *Mirostat) Sample(logits []float64) int {
 		probs[i] /= sum
 	}
 
-	// sort ids by probability descending → surprise −log₂p ascending
+	// sort ids by probability descending → surprise −log₂p ascending. probs are
+	// post-softmax (≥0), so the radix helper orders them identically to the
+	// closure-comparator sort but closure-free / O(n) on the full vocab.
 	idx := make([]int, n)
 	for i := range idx {
 		idx[i] = i
 	}
-	sort.Slice(idx, func(a, b int) bool { return probs[idx[a]] > probs[idx[b]] })
+	sortIdxDescByProb(idx, probs)
 
 	// truncate to the prefix with surprise ≤ μ, always keeping the top token
 	keep := 1

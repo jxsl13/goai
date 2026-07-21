@@ -92,12 +92,10 @@ func H2OKeep(scores []float64, recent, budget int) []int {
 	for i := range n - recent {
 		cand = append(cand, i)
 	}
-	sort.SliceStable(cand, func(a, b int) bool {
-		if scores[cand[a]] != scores[cand[b]] {
-			return scores[cand[a]] > scores[cand[b]]
-		}
-		return cand[a] < cand[b]
-	})
+	// accumulated-attention scores are non-negative, so the stable radix orders
+	// them identically to the closure sort and preserves the ascending-index
+	// tie-break — closure-free / O(n) on the candidate set.
+	sortIdxDescByProb(cand, scores)
 	heavy := budget - recent
 	for i := 0; i < heavy && i < len(cand); i++ {
 		keepSet[cand[i]] = true
