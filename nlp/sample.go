@@ -711,6 +711,12 @@ var float64ScratchPool = sync.Pool{New: func() any { return []float64(nil) }}
 // so SampleWithHistory pools it (Put once, iff a copy was actually taken).
 var penalizeBufPool = sync.Pool{New: func() any { return []float64(nil) }}
 
+// sampleProbsPool reuses the per-token probability buffer that Sample draws from
+// (T950). Sample builds the distribution via distInto into this pooled buffer and
+// discards it after the multinomial draw — it never escapes, so reuse is safe, unlike
+// Dist's public return which speculative decoding retains to compare distributions.
+var sampleProbsPool = sync.Pool{New: func() any { return []float64(nil) }}
+
 // nucleusTopP applies top-p (nucleus) truncation to probs in place: keep the
 // minimal set of highest-probability tokens whose mass ≥ p, then renormalize. The
 // nucleus is almost always tiny relative to the vocabulary, so instead of sorting
@@ -999,8 +1005,17 @@ func (s *Sampler) Sample(logits []float64) int {
 		return argmax(logits) // greedy: deterministic, no rng draw
 	}
 	rng := s.source() // materialize BEFORE applyXTC, which draws from it too
-	probs := s.Dist(logits)
-	s.applyXTC(probs) // §T574: after truncation, before the draw; Dist stays pure
+	// Pooled distribution buffer: probs is consumed by the draw below and never
+	// escapes Sample, so unlike Dist's retained public return it can be reused (T950).
+	dst := sampleProbsPool.Get().([]float64)
+	if cap(dst) < len(logits) {
+		dst = make([]float64, len(logits))
+	} else {
+		dst = dst[:len(logits)]
+	}
+	probs := s.distInto(dst, logits)
+	defer sampleProbsPool.Put(probs) // Put on every draw-loop return path
+	s.applyXTC(probs)                // §T574: after truncation, before the draw; Dist stays pure
 	u := rng.Float64()
 	var cum float64
 	for i, p := range probs {
@@ -1101,21 +1116,34 @@ func (s *Sampler) SampleWithHistory(logits []float64, history []int) int {
 // vector at the arg-max. Speculative decoding (§R53) uses it to obtain the target
 // and draft distributions p and q that the accept/reject rule compares.
 func (s *Sampler) Dist(logits []float64) []float64 {
-	n := len(logits)
 	if s.Temperature <= 0 {
-		d := make([]float64, n)
-		if n > 0 {
+		d := make([]float64, len(logits))
+		if len(logits) > 0 {
 			d[argmax(logits)] = 1
 		}
 		return d
 	}
+	// Fresh dst: Dist's callers (speculative decoding, §R53) retain the returned
+	// distribution to compare p against q, so it must be a slice they own.
+	return s.distInto(make([]float64, len(logits)), logits)
+}
+
+// distInto is Dist's temperature>0 core: it writes the sampling distribution into
+// the caller-provided dst (len(dst) must equal len(logits)) and returns it.
+// Splitting it out lets Sample pass a pooled buffer for the per-token probs it
+// draws from and immediately discards (T950), while Dist keeps allocating a fresh
+// dst for callers that retain the result. Precondition: Temperature > 0 — the
+// greedy one-hot stays in Dist, and the ExpSumF64 softmax below overwrites every
+// dst lane, so a dirty pooled buffer is fully defined before any filter reads it.
+func (s *Sampler) distInto(dst, logits []float64) []float64 {
+	n := len(logits)
 	z := float64ScratchPool.Get().([]float64)
 	if cap(z) < n {
 		z = make([]float64, n)
 	} else {
 		z = z[:n]
 	}
-	defer float64ScratchPool.Put(z) // z is scratch; the returned probs is a separate slice
+	defer float64ScratchPool.Put(z) // z is scratch; dst holds the returned distribution
 	for i, v := range logits {
 		z[i] = v / s.Temperature
 	}
@@ -1160,19 +1188,18 @@ func (s *Sampler) Dist(logits []float64) []float64 {
 			m = v
 		}
 	}
-	probs := make([]float64, n)
 	// dst[i] = exp(z[i]-m), returns Σ — 4-wide AVX2 f64 exp over the full vocab
 	// on the SIMD build (the exp was ~26% of large-vocab Dist), scalar otherwise.
 	// Rides the Dist f64 tolerance (§sample_test 1e-12); masked −Inf lanes → ~0.
-	sum := simd.ExpSumF64(probs, z, m)
-	for i := range probs {
-		probs[i] /= sum
+	sum := simd.ExpSumF64(dst, z, m)
+	for i := range dst {
+		dst[i] /= sum
 	}
 
 	// top-p nucleus: keep smallest desc-prob prefix with cumsum ≥ p (crossing
 	// token included), renormalize (§T627: bounded selection, not a full sort).
 	if s.TopP > 0 && s.TopP < 1 {
-		nucleusTopP(probs, s.TopP)
+		nucleusTopP(dst, s.TopP)
 	}
 
 	// min-p: keep tokens with prob ≥ MinP·max-prob (Nguyen et al. 2024, §R63), an
@@ -1181,35 +1208,35 @@ func (s *Sampler) Dist(logits []float64) []float64 {
 	// most the peak and the arg-max clears it on its own, while at MinP > 1 the
 	// explicit guard is what keeps the distribution a valid one-hot instead of an
 	// all-zero vector normalized into NaN (§B73).
-	if s.MinP > 0 && len(probs) > 0 { // len guard: probs[top] on an empty vocab
-		top := argmax(probs)
-		truncateAboveKeeping(probs, s.MinP*probs[top], top)
+	if s.MinP > 0 && len(dst) > 0 { // len guard: dst[top] on an empty vocab
+		top := argmax(dst)
+		truncateAboveKeeping(dst, s.MinP*dst[top], top)
 	}
 
 	// locally typical sampling (Meister et al. 2023): keep the smallest set of tokens
 	// whose surprisal −log p is closest to the entropy H, by cumulative probability τ
 	// (§T628: bounded selection over the typical score, not a full sort).
 	if s.Typical > 0 && s.Typical < 1 {
-		typicalTruncate(probs, s.Typical)
+		typicalTruncate(dst, s.Typical)
 	}
 
 	// epsilon sampling: absolute-probability floor (Hewitt et al. 2022, §R91).
 	if s.Epsilon > 0 {
-		truncateAbove(probs, s.Epsilon)
+		truncateAbove(dst, s.Epsilon)
 	}
 	// eta sampling: entropy-adaptive threshold η = min(ε, √ε·exp(−H)) over the current
 	// distribution, H the Shannon entropy in nats (Hewitt et al. 2022, §R91).
 	if s.Eta > 0 {
 		var h float64
-		for _, p := range probs {
+		for _, p := range dst {
 			if p > 0 {
 				h -= p * math.Log(p)
 			}
 		}
-		truncateAbove(probs, math.Min(s.Eta, math.Sqrt(s.Eta)*math.Exp(-h)))
+		truncateAbove(dst, math.Min(s.Eta, math.Sqrt(s.Eta)*math.Exp(-h)))
 	}
 
-	return probs
+	return dst
 }
 
 // truncateAbove zeroes every probability below thresh, always keeping the arg-max so
