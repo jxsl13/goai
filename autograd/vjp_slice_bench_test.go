@@ -52,3 +52,18 @@ func benchConcatVJP(b *testing.B, dt tensor.Dtype) {
 }
 func BenchmarkConcatVJP_F32(b *testing.B) { benchConcatVJP(b, tensor.F32) }
 func BenchmarkConcatVJP_F64(b *testing.B) { benchConcatVJP(b, tensor.F64) }
+
+func benchSoftCapVJP(b *testing.B, dt tensor.Dtype) {
+	vjp := vjps[backend.OpSoftCap]
+	mk := func() *tensor.Tensor { return tensor.New(dt, tensor.Shape{512, 512}) }
+	x, y, g := mk(), mk(), mk()
+	attrs := backend.SoftCapAttrs{Cap: 30.0}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := vjp(nil, []*tensor.Tensor{x}, []*tensor.Tensor{y}, attrs, g); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+func BenchmarkSoftCapVJP_F32(b *testing.B) { benchSoftCapVJP(b, tensor.F32) }
+func BenchmarkSoftCapVJP_F64(b *testing.B) { benchSoftCapVJP(b, tensor.F64) }
