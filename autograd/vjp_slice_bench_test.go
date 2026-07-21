@@ -67,3 +67,17 @@ func benchSoftCapVJP(b *testing.B, dt tensor.Dtype) {
 }
 func BenchmarkSoftCapVJP_F32(b *testing.B) { benchSoftCapVJP(b, tensor.F32) }
 func BenchmarkSoftCapVJP_F64(b *testing.B) { benchSoftCapVJP(b, tensor.F64) }
+
+func benchCumsumVJP(b *testing.B, dt tensor.Dtype) {
+	vjp := vjps[backend.OpCumsum]
+	x := tensor.New(dt, tensor.Shape{256, 512})
+	g := tensor.New(dt, tensor.Shape{256, 512})
+	attrs := backend.CumsumAttrs{Axis: 1}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := vjp(nil, []*tensor.Tensor{x}, nil, attrs, g); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+func BenchmarkCumsumVJP_F64(b *testing.B) { benchCumsumVJP(b, tensor.F64) }
