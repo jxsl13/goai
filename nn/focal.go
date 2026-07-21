@@ -37,12 +37,8 @@ func FocalLoss(ctx *backend.Context, logits, targets *tensor.Tensor, gamma, alph
 	}
 	// one-hot of the (constant) targets, [batch, classes].
 	oneHot := tensor.New(logits.Dtype(), tensor.Shape{batch, classes})
-	for i := range batch {
-		c := int(targets.AtF64(tensor.Unravel(i, targets.Shape())...))
-		if c < 0 || c >= classes {
-			return nil, fmt.Errorf("nn: FocalLoss target %d out of range [0,%d)", c, classes)
-		}
-		oneHot.SetF64(1, i, c)
+	if err := fillFocalOneHot(oneHot, targets, batch, classes); err != nil {
+		return nil, err
 	}
 	ex := func(op backend.Op, at backend.Attrs, in ...*tensor.Tensor) (*tensor.Tensor, error) {
 		o, err := backend.Execute(ctx, op, in, at)
@@ -103,6 +99,46 @@ func FocalLoss(ctx *backend.Context, logits, targets *tensor.Tensor, gamma, alph
 		return tensor.New(meanT.Dtype(), meanT.Shape()), nil
 	}
 	return ex(backend.OpAXPY, backend.AXPYAttrs{Alpha: -alpha}, meanT, tensor.New(meanT.Dtype(), meanT.Shape()))
+}
+
+// fillFocalOneHot writes the one-hot of the (constant, integer-valued) targets into
+// the fresh [batch,classes] oneHot: oneHot[i, int(targets[i])] = 1. When targets and
+// oneHot share a contiguous F32/F64 layout the typed backing slices are walked
+// directly — oneHot is fresh, so it is contiguous at offset 0 and the hot cell of row
+// i is index i*classes+c — instead of the per-row Unravel/AtF64/SetF64 dispatch that
+// dominates the detection regime (many rows, few classes). Bit-identical to the
+// general path: int(target) truncates toward zero the same way and the FIRST
+// out-of-range row returns the same error (partial writes are discarded by the caller
+// on error); strided or half-precision targets fall through.
+func fillFocalOneHot(oneHot, targets *tensor.Tensor, batch, classes int) error {
+	if of, tf := flatF64(oneHot), flatF64(targets); of != nil && tf != nil && len(tf) == batch {
+		for i, cv := range tf {
+			c := int(cv)
+			if c < 0 || c >= classes {
+				return fmt.Errorf("nn: FocalLoss target %d out of range [0,%d)", c, classes)
+			}
+			of[i*classes+c] = 1
+		}
+		return nil
+	}
+	if of, tf := flatF32(oneHot), flatF32(targets); of != nil && tf != nil && len(tf) == batch {
+		for i, cv := range tf {
+			c := int(cv)
+			if c < 0 || c >= classes {
+				return fmt.Errorf("nn: FocalLoss target %d out of range [0,%d)", c, classes)
+			}
+			of[i*classes+c] = 1
+		}
+		return nil
+	}
+	for i := range batch {
+		c := int(targets.AtF64(tensor.Unravel(i, targets.Shape())...))
+		if c < 0 || c >= classes {
+			return fmt.Errorf("nn: FocalLoss target %d out of range [0,%d)", c, classes)
+		}
+		oneHot.SetF64(1, i, c)
+	}
+	return nil
 }
 
 // SigmoidFocalLoss is the BINARY (sigmoid) focal loss — the paper's original form (Lin et al. 2018,
