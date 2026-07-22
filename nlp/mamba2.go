@@ -5,6 +5,7 @@ import (
 	"math"
 
 	"github.com/jxsl13/goai/backend"
+	"github.com/jxsl13/goai/internal/simd"
 	"github.com/jxsl13/goai/nn"
 	"github.com/jxsl13/goai/tensor"
 )
@@ -229,6 +230,10 @@ func (m *Mamba2Mixer) forward(u *tensor.Tensor) (*tensor.Tensor, error) {
 	for t := range seq {
 		xc[t] = make([]float64, m.ConvDim)
 	}
+	// Fill the raw conv accs, then apply silu(acc)=acc·σ(acc) with σ (the exp, ~1/3 of the
+	// mixer once the projections are matmuls) vectorized per TOKEN ROW — the same
+	// [conv_dim]-length grouping the single-token step uses, so every row bit-matches it
+	// (TestMamba2PrefillStateParity is bit-exact, not just <1e-9).
 	for c := range m.ConvDim {
 		wbase := c * m.DConv
 		for t := range seq {
@@ -239,7 +244,14 @@ func (m *Mamba2Mixer) forward(u *tensor.Tensor) (*tensor.Tensor, error) {
 					acc += convW[wbase+k] * xBC[src][c]
 				}
 			}
-			xc[t][c] = silu(acc)
+			xc[t][c] = acc
+		}
+	}
+	sigRow := make([]float64, m.ConvDim)
+	for t := range seq {
+		simd.SigmoidF64(sigRow, xc[t])
+		for c := range m.ConvDim {
+			xc[t][c] *= sigRow[c]
 		}
 	}
 
@@ -300,12 +312,16 @@ func (m *Mamba2Mixer) forward(u *tensor.Tensor) (*tensor.Tensor, error) {
 	}
 
 	// 5. Gated RMSNorm over the full intermediate width: norm(y · SiLU(z)).
+	// silu(z)=z·σ(z): vectorize σ over the contiguous z row (same stable σ as the
+	// decode/prefill gate, so the paths stay <1e-9). sigZ/gated hoist out of the t-loop.
 	normW := m.NormW.Storage().F64()
+	sigZ := make([]float64, m.Intermediate)
+	gated := make([]float64, m.Intermediate)
 	for t := range seq {
+		simd.SigmoidF64(sigZ, z[t])
 		var variance float64
-		gated := make([]float64, m.Intermediate)
 		for o := range m.Intermediate {
-			gated[o] = y[t][o] * silu(z[t][o])
+			gated[o] = y[t][o] * z[t][o] * sigZ[o]
 			variance += gated[o] * gated[o]
 		}
 		variance /= float64(m.Intermediate)
