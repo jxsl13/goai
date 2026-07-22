@@ -65,8 +65,19 @@ func BeamSearch(next NextLogits, start []int, width, maxNew, eos int, alpha floa
 			}
 		}
 		// prune the frontier to the top `width` by RAW cumulative log-prob
-		// (length penalty is applied only at completion, matching GNMT/HF).
-		sort.SliceStable(cand, func(i, j int) bool { return cand[i].score > cand[j].score })
+		// (length penalty is applied only at completion, matching GNMT/HF). Unstable
+		// sort.Slice with an explicit (score, parent, tok) tie-break reproduces the stable
+		// sort's order — cand is appended parent-outer, tok-inner, so ties resolve to that
+		// same append order — but with pdqsort's lower constant instead of symMerge.
+		sort.Slice(cand, func(i, j int) bool {
+			if cand[i].score != cand[j].score {
+				return cand[i].score > cand[j].score
+			}
+			if cand[i].parent != cand[j].parent {
+				return cand[i].parent < cand[j].parent
+			}
+			return cand[i].tok < cand[j].tok
+		})
 
 		// Walk candidates best-first and STOP once the frontier is full.
 		//
