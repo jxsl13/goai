@@ -208,6 +208,7 @@ func (a *Adam) Step(grad GradFn) error {
 	a.t++
 	c1 := 1 - math.Pow(a.Beta1, float64(a.t))
 	c2 := 1 - math.Pow(a.Beta2, float64(a.t))
+	ic1, ic2 := 1/c1, 1/c2          // bias-correction reciprocals: hoist the two invariant divides out of the per-element loop
 	decay := 1 - a.LR*a.WeightDecay // 1 when wd==0 → plain Adam
 	for pi, p := range a.Params {
 		g := grad(p)
@@ -225,8 +226,8 @@ func (a *Adam) Step(grad GradFn) error {
 				for i, gv := range gf {
 					m[i] = a.Beta1*m[i] + (1-a.Beta1)*gv
 					v[i] = a.Beta2*v[i] + (1-a.Beta2)*gv*gv
-					mh := m[i] / c1
-					vh := v[i] / c2
+					mh := m[i] * ic1
+					vh := v[i] * ic2
 					pf[i] = pf[i]*decay - a.LR*mh/(math.Sqrt(vh)+a.Eps)
 				}
 				continue
@@ -237,8 +238,8 @@ func (a *Adam) Step(grad GradFn) error {
 					gv := float64(gf[i])
 					m[i] = a.Beta1*m[i] + (1-a.Beta1)*gv
 					v[i] = a.Beta2*v[i] + (1-a.Beta2)*gv*gv
-					mh := m[i] / c1
-					vh := v[i] / c2
+					mh := m[i] * ic1
+					vh := v[i] * ic2
 					pf[i] = float32(float64(pf[i])*decay - a.LR*mh/(math.Sqrt(vh)+a.Eps))
 				}
 				continue
@@ -250,8 +251,8 @@ func (a *Adam) Step(grad GradFn) error {
 			gv := g.AtF64(idx...)
 			m[i] = a.Beta1*m[i] + (1-a.Beta1)*gv
 			v[i] = a.Beta2*v[i] + (1-a.Beta2)*gv*gv
-			mh := m[i] / c1
-			vh := v[i] / c2
+			mh := m[i] * ic1
+			vh := v[i] * ic2
 			p.SetF64(p.AtF64(idx...)*decay-a.LR*mh/(math.Sqrt(vh)+a.Eps), idx...)
 		}
 	}
