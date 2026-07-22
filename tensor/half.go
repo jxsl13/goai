@@ -7,7 +7,25 @@ import "math"
 // match numpy (f16) and torch (bf16). Confirmed vs those references (§R41).
 
 // f16ToF32 converts IEEE binary16 bits to float32 (subnormals, inf, NaN).
-func f16ToF32(h uint16) float32 {
+// f16LUT is the complete f16→f32 table (every uint16 → its exact f32). f16→f32 is a
+// lossless widening, so the 65536-entry table is exact; it turns f16ToF32 into a single
+// branchless load, replacing the sign/exp/mantissa splice with its (predictable-but-real)
+// switch and the subnormal normalization loop. 256 KiB, built once at init.
+var f16LUT = func() *[65536]float32 {
+	t := new([65536]float32)
+	for h := 0; h < 65536; h++ {
+		t[h] = f16ToF32Bits(uint16(h))
+	}
+	return t
+}()
+
+// f16ToF32 widens an IEEE-754 half to f32 via the precomputed table (bit-identical to
+// f16ToF32Bits, which built it).
+func f16ToF32(h uint16) float32 { return f16LUT[h] }
+
+// f16ToF32Bits is the direct bit-manipulation widening; f16LUT is built from it, and it
+// is the reference the table reproduces exactly.
+func f16ToF32Bits(h uint16) float32 {
 	sign := uint32(h>>15) << 31
 	exp := uint32(h>>10) & 0x1F
 	frac := uint32(h) & 0x3FF
