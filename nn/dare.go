@@ -48,6 +48,37 @@ func DARE(base, model []*tensor.Tensor, dropRate float64, seed uint64) ([]*tenso
 		b, m := base[i], model[i]
 		shape := b.Shape()
 		res := tensor.New(b.Dtype(), shape)
+		// Typed contiguous fast path (§base-perf; model-merge sibling of SLERP): b, m and
+		// res are dense same-dtype tensors, so walk the backing []T directly — no
+		// per-element Unravel/AtF64/SetF64 dispatch. rng.Float64() is still drawn once per
+		// element in index order (the drop decision), so the survivor mask — and therefore
+		// every output value — is bit-identical to the generic walk.
+		if bf, mf := flatF64(b), flatF64(m); bf != nil && mf != nil {
+			rf := res.Storage().F64()
+			for p := range rf {
+				bv := bf[p]
+				var kept float64
+				if rng.Float64() >= dropRate {
+					kept = (mf[p] - bv) * scale
+				}
+				rf[p] = bv + kept
+			}
+			out[i] = res
+			continue
+		}
+		if bf, mf := flatF32(b), flatF32(m); bf != nil && mf != nil {
+			rf := res.Storage().F32()
+			for p := range rf {
+				bv := float64(bf[p])
+				var kept float64
+				if rng.Float64() >= dropRate {
+					kept = (float64(mf[p]) - bv) * scale
+				}
+				rf[p] = float32(bv + kept)
+			}
+			out[i] = res
+			continue
+		}
 		for p := range b.Numel() {
 			idx := tensor.Unravel(p, shape)
 			bv := b.AtF64(idx...)
