@@ -131,6 +131,9 @@ type Mamba2Mixer struct {
 	NormW   *tensor.Tensor // [intermediate] gated-RMSNorm weight
 	OutProj *tensor.Tensor // [d_model, intermediate] (torch orientation)
 
+	inProjT  *tensor.Tensor // cached transpose of InProj  → [d_model, projection_size]
+	outProjT *tensor.Tensor // cached transpose of OutProj → [intermediate, d_model]
+
 	DModel       int     // hidden_size (model/embedding width)
 	NumHeads     int     // num_heads (each with a scalar decay A[h])
 	HeadDim      int     // head_dim; Intermediate = NumHeads·HeadDim
@@ -147,6 +150,51 @@ func (m *Mamba2Mixer) Params() []*tensor.Tensor {
 	return []*tensor.Tensor{m.InProj, m.ConvW, m.ConvB, m.ALog, m.D, m.DtBias, m.NormW, m.OutProj}
 }
 
+// transposeF64 returns wᵀ of a row-major [r,c] tensor as a fresh [c,r] tensor.
+func transposeF64(w *tensor.Tensor) *tensor.Tensor {
+	r, c := w.Shape()[0], w.Shape()[1]
+	src := w.Contiguous().Storage().F64()
+	out := tensor.New(tensor.F64, tensor.Shape{c, r})
+	d := out.Storage().F64()
+	for i := 0; i < r; i++ {
+		base := i * c
+		for j := 0; j < c; j++ {
+			d[j*r+i] = src[base+j]
+		}
+	}
+	return out
+}
+
+// inProjMul / outProjMul apply the mixer's projections through the backend's
+// blocked+parallel matmul instead of a scalar host GEMV — the in_proj/out_proj GEMVs
+// dominate the pure-f64 mixer. InProj/OutProj are torch [out,in]; GoAI matmul wants
+// [in,out], so each transpose is built once and cached. The backend f64 matmul computes
+// every output row independently (verified), so the single-token step, batched prefill
+// and full forward produce bit-identical rows — preserving the <1e-9 decode/prefill
+// parity — while the HF tolerance (9.9e-7) absorbs the ~1e-15 accumulation-order change
+// vs the old ascending-i sum. Both projections are bias-free.
+func (m *Mamba2Mixer) inProjMul(u *tensor.Tensor) ([]float64, error) {
+	if m.inProjT == nil {
+		m.inProjT = transposeF64(m.InProj)
+	}
+	out, err := backend.Execute(backend.NewContext(), backend.OpMatMul, []*tensor.Tensor{u, m.inProjT}, nil)
+	if err != nil {
+		return nil, err
+	}
+	return out[0].Contiguous().Storage().F64(), nil
+}
+
+func (m *Mamba2Mixer) outProjMul(y *tensor.Tensor) (*tensor.Tensor, error) {
+	if m.outProjT == nil {
+		m.outProjT = transposeF64(m.OutProj)
+	}
+	out, err := backend.Execute(backend.NewContext(), backend.OpMatMul, []*tensor.Tensor{y, m.outProjT}, nil)
+	if err != nil {
+		return nil, err
+	}
+	return out[0], nil
+}
+
 // forward runs the mixer on u[seq, d_model], returning out[seq, d_model]. Pure
 // host f64: it mirrors transformers Mamba2Mixer.torch_forward (the slow/recurrent
 // reference) step by step so the SSD scan matches to f64 precision.
@@ -155,26 +203,19 @@ func (m *Mamba2Mixer) forward(u *tensor.Tensor) (*tensor.Tensor, error) {
 	if u.Shape()[1] != m.DModel {
 		return nil, fmt.Errorf("nlp: Mamba2 mixer got width %d, want d_model %d", u.Shape()[1], m.DModel)
 	}
-	uu := rows2D(u) // [seq][d_model]
-
-	inW := m.InProj.Storage().F64() // [projection_size, d_model]
 	projSize := m.Intermediate + m.ConvDim + m.NumHeads
 
 	// 1. in_proj (no bias) → split [gate | xBC | dt]. Two leading zero-width d_mlp
 	//    splits are absent here (d_mlp = 0), so the split is exactly [z, xBC, dt].
+	pm, err := m.inProjMul(u) // [seq, projSize] via backend matmul
+	if err != nil {
+		return nil, err
+	}
 	z := make([][]float64, seq)   // gate [seq][intermediate]
 	xBC := make([][]float64, seq) // conv input [seq][conv_dim]
 	dt := make([][]float64, seq)  // Δ pre-activation [seq][num_heads]
 	for t := range seq {
-		proj := make([]float64, projSize)
-		for o := range projSize {
-			var s float64
-			base := o * m.DModel
-			for i := range m.DModel {
-				s += uu[t][i] * inW[base+i]
-			}
-			proj[o] = s
-		}
+		proj := pm[t*projSize : (t+1)*projSize]
 		z[t] = proj[:m.Intermediate]
 		xBC[t] = proj[m.Intermediate : m.Intermediate+m.ConvDim]
 		dt[t] = proj[m.Intermediate+m.ConvDim:]
@@ -274,21 +315,13 @@ func (m *Mamba2Mixer) forward(u *tensor.Tensor) (*tensor.Tensor, error) {
 		}
 	}
 
-	// 6. out_proj (no bias): [intermediate] → [d_model].
-	outW := m.OutProj.Storage().F64() // [d_model, intermediate]
-	out := tensor.New(tensor.F64, tensor.Shape{seq, m.DModel})
-	os := out.Storage().F64()
+	// 6. out_proj (no bias): [intermediate] → [d_model], via backend matmul.
+	yT := tensor.New(tensor.F64, tensor.Shape{seq, m.Intermediate})
+	yd := yT.Storage().F64()
 	for t := range seq {
-		for i := range m.DModel {
-			var s float64
-			base := i * m.Intermediate
-			for o := range m.Intermediate {
-				s += y[t][o] * outW[base+o]
-			}
-			os[t*m.DModel+i] = s
-		}
+		copy(yd[t*m.Intermediate:(t+1)*m.Intermediate], y[t])
 	}
-	return out, nil
+	return m.outProjMul(yT)
 }
 
 // rows2D copies a 2-D tensor into a [rows][cols] f64 slice for host math.
