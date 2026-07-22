@@ -49,7 +49,14 @@ func putScaleMinK4(sc, mn *[q4kSubs]byte, out []byte) {
 // nibbles of 32 qs bytes give sub-block is+0, the high nibbles give is+1.
 func dequantQ4_K(shape tensor.Shape, raw []byte) (*tensor.Tensor, error) {
 	t := tensor.New(tensor.F32, shape)
-	dst := t.Storage().F32()
+	dequantQ4_KInto(t.Storage().F32(), raw)
+	return t, nil
+}
+
+// dequantQ4_KInto is dequantQ4_K writing into a caller-provided dst (len = element
+// count) — lets QMatMul reuse one row buffer across all weight rows instead of
+// allocating a tensor per row. The fill is byte-for-byte the tensor-returning form.
+func dequantQ4_KInto(dst []float32, raw []byte) {
 	for sb := 0; sb*qkK < len(dst); sb++ {
 		blk := raw[sb*q4kBlockSize:]
 		d := f16ToF32(binary.LittleEndian.Uint16(blk[0:]))
@@ -70,7 +77,6 @@ func dequantQ4_K(shape tensor.Shape, raw []byte) (*tensor.Tensor, error) {
 			}
 		}
 	}
-	return t, nil
 }
 
 // quantizeQ4_K encodes f32 values into the Q4_K super-block layout — the inverse of
