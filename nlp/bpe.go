@@ -18,6 +18,7 @@ import (
 type Tokenizer struct {
 	ranks    map[string]int // token bytes → id / merge rank
 	decoder  map[int]string // id → token bytes
+	decSlice []string       // id → token bytes as a dense slice (Decode fast path; nil until buildPairRank)
 	specials specialSet     // markers parsed only by EncodeSpecial (§B60)
 	// pairRank[a<<8|b] = rank of the two-byte token {a,b}, or math.MaxInt if not a token. The
 	// initial merge pass looks up every adjacent BYTE pair; a direct array index skips the string
@@ -50,6 +51,21 @@ func (t *Tokenizer) buildPairRank() {
 	}
 	t.pairRank = pr
 	t.byteRank = br
+
+	// Dense id→bytes slice for Decode: the ids are the tiktoken ranks (0..vocab−1), so a
+	// slice index replaces the per-token mapaccess1_fast64 that dominated Decode. Gaps and
+	// out-of-range ids resolve to "" exactly as the map's zero value did.
+	maxID := -1
+	for id := range t.decoder {
+		if id > maxID {
+			maxID = id
+		}
+	}
+	ds := make([]string, maxID+1)
+	for id, tok := range t.decoder {
+		ds[id] = tok
+	}
+	t.decSlice = ds
 }
 
 // LoadGPT2 reads a tiktoken-exported rank file (base64(bytes) rank per line).
@@ -192,8 +208,16 @@ func (t *Tokenizer) Decode(ids []int) string {
 	// affects capacity, so the decoded string is byte-identical either way.
 	var b strings.Builder
 	b.Grow(len(ids) * 4)
-	for _, id := range ids {
-		b.WriteString(t.decoder[id])
+	if ds := t.decSlice; ds != nil {
+		for _, id := range ids {
+			if uint(id) < uint(len(ds)) { // in-range → its bytes; out-of-range → "" (map-miss parity)
+				b.WriteString(ds[id])
+			}
+		}
+	} else {
+		for _, id := range ids {
+			b.WriteString(t.decoder[id])
+		}
 	}
 	return b.String()
 }
