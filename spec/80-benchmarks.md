@@ -48,3 +48,4 @@
 | BM44 | 2026-07-22 | rl softUpdate typed fast path (Polyak target update, ~130k-param MLP) | darwin/arm64 | self | us | 1279.8 | 70.35 | 18.19× | T966,V22 |
 | BM45 | 2026-07-22 | rl forward() typed contiguous fill (256×64 batch) | darwin/arm64 | self | us | 214.6 | 155.9 | 1.38× | T967,V22 |
 | BM46 | 2026-07-22 | nn EWCFisher typed contiguous fast path (Fisher-info estimate, ~131k-param MLP × 8 samples) | darwin/arm64 | self | us | 11179.5 | 548.3 | 20.39× | T968,V22 |
+| BM47 | 2026-07-22 | nn MASImportance typed contiguous fast path (MAS importance Ω=mean\|g\|, ~131k-param MLP × 8 samples) | darwin/arm64 | self | us | 11176.8 | 579.4 | 19.29× | T969,V22 |

@@ -35,10 +35,63 @@ func MASImportance(gradSamples [][]*tensor.Tensor) ([]*tensor.Tensor, error) {
 		shape := gradSamples[0][i].Shape()
 		acc := tensor.New(gradSamples[0][i].Dtype(), shape)
 		for s := range nS {
-			g := gradSamples[s][i]
-			if !g.Shape().Equal(shape) {
-				return nil, fmt.Errorf("nn: MASImportance sample %d param %d shape %v != %v", s, i, g.Shape(), shape)
+			if !gradSamples[s][i].Shape().Equal(shape) {
+				return nil, fmt.Errorf("nn: MASImportance sample %d param %d shape %v != %v", s, i, gradSamples[s][i].Shape(), shape)
 			}
+		}
+		// Typed contiguous fast path (§base-perf; sibling of EWCFisher): acc is freshly
+		// allocated (contiguous); when every gradient sample is contiguous too, accumulate
+		// ∑|g| by walking the backing []T directly — no per-element Unravel/AtF64/SetF64
+		// dispatch. The sum stays in sample order and normalization divides (not reciprocal-
+		// multiplies), so the result is bit-identical to the generic walk.
+		if af := flatF64(acc); af != nil {
+			allFlat := true
+			for s := range nS {
+				if flatF64(gradSamples[s][i]) == nil {
+					allFlat = false
+					break
+				}
+			}
+			if allFlat {
+				for s := range nS {
+					gf := flatF64(gradSamples[s][i])
+					for e := range af {
+						af[e] += math.Abs(gf[e])
+					}
+				}
+				for e := range af {
+					af[e] = af[e] / float64(nS)
+				}
+				omega[i] = acc
+				continue
+			}
+		}
+		if af := flatF32(acc); af != nil {
+			allFlat := true
+			for s := range nS {
+				if flatF32(gradSamples[s][i]) == nil {
+					allFlat = false
+					break
+				}
+			}
+			if allFlat {
+				for s := range nS {
+					gf := flatF32(gradSamples[s][i])
+					for e := range af {
+						af[e] = float32(float64(af[e]) + math.Abs(float64(gf[e])))
+					}
+				}
+				for e := range af {
+					af[e] = float32(float64(af[e]) / float64(nS))
+				}
+				omega[i] = acc
+				continue
+			}
+		}
+		// Generic fallback (non-contiguous or mixed-dtype gradients). Shapes were
+		// validated above, so accumulate directly.
+		for s := range nS {
+			g := gradSamples[s][i]
 			for e := range g.Numel() {
 				c := tensor.Unravel(e, shape)
 				acc.SetF64(acc.AtF64(c...)+math.Abs(g.AtF64(c...)), c...)
