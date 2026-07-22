@@ -29,6 +29,13 @@ type GrokfastMA struct {
 	sum    [][]float64   // per-parameter running sum of the gradients currently in the ring
 	filled []int         // per-parameter count of occupied ring slots (min(steps, W))
 	pos    []int         // per-parameter ring write position
+
+	// Reused across steps: the amplified-gradient tensors handed to the base optimizer
+	// (one per param, fully overwritten each step) and the p→ĝ map. The ring slots are
+	// pre-allocated and overwritten in place too, so a step allocates nothing — the base
+	// reads each gradient transiently within its Step (the GradFn contract).
+	out      []*tensor.Tensor
+	filtered map[*tensor.Tensor]*tensor.Tensor
 }
 
 // GrokfastMAOption configures a GrokfastMA optimizer (functional-options idiom, §C12).
@@ -85,9 +92,16 @@ func NewGrokfastMA(base Optimizer, params []*tensor.Tensor, opts ...GrokfastMAOp
 	g.sum = make([][]float64, len(params))
 	g.filled = make([]int, len(params))
 	g.pos = make([]int, len(params))
+	g.out = make([]*tensor.Tensor, len(params))
+	g.filtered = make(map[*tensor.Tensor]*tensor.Tensor, len(params))
 	for i, p := range params {
+		n := p.Numel()
 		g.ring[i] = make([][]float64, g.Window)
-		g.sum[i] = make([]float64, p.Numel())
+		for j := range g.ring[i] {
+			g.ring[i][j] = make([]float64, n) // pre-allocate slots; overwritten in place each step
+		}
+		g.sum[i] = make([]float64, n)
+		g.out[i] = tensor.New(p.Dtype(), p.Shape())
 	}
 	return g
 }
@@ -96,7 +110,8 @@ func NewGrokfastMA(base Optimizer, params []*tensor.Tensor, opts ...GrokfastMAOp
 // ĝ = g + λ·μ (μ = window mean or sum) to the base optimizer. Gradients are queried once per
 // parameter (the window advances exactly one step regardless of how the base reads them).
 func (g *GrokfastMA) Step(grad GradFn) error {
-	filtered := make(map[*tensor.Tensor]*tensor.Tensor, len(g.Params))
+	filtered := g.filtered
+	clear(filtered) // reused map: drop last step's entries
 	for i, p := range g.Params {
 		gr := grad(p)
 		if gr == nil {
@@ -104,8 +119,19 @@ func (g *GrokfastMA) Step(grad GradFn) error {
 			continue
 		}
 		n := p.Numel()
-		flat := make([]float64, n)
-		// Read gr into flat via the contiguous fast path when possible (§base-perf).
+		// flat is the pre-allocated ring slot at pos: it currently holds the gradient from
+		// W steps ago (the one to evict when full). Evict it FROM the running sum before
+		// overwriting the slot in place with the current gradient — same sum−old+new as the
+		// old allocate-a-fresh-slot version, bit-identical, but with no per-step allocation.
+		flat := g.ring[i][g.pos[i]]
+		if g.filled[i] == g.Window {
+			for k := range n {
+				g.sum[i][k] -= flat[k]
+			}
+		} else {
+			g.filled[i]++
+		}
+		// Read gr into the slot via the contiguous fast path when possible (§base-perf).
 		if gf := flatF64(gr); gf != nil {
 			copy(flat, gf)
 		} else if gf := flatF32(gr); gf != nil {
@@ -117,22 +143,12 @@ func (g *GrokfastMA) Step(grad GradFn) error {
 				flat[k] = gr.AtF64(tensor.Unravel(k, p.Shape())...)
 			}
 		}
-		// Push flat into the ring, maintaining the running sum (evict the oldest when full).
-		if g.filled[i] == g.Window {
-			old := g.ring[i][g.pos[i]]
-			for k := range n {
-				g.sum[i][k] -= old[k]
-			}
-		} else {
-			g.filled[i]++
-		}
-		g.ring[i][g.pos[i]] = flat
 		for k := range n {
 			g.sum[i][k] += flat[k]
 		}
 		g.pos[i] = (g.pos[i] + 1) % g.Window
 
-		ghat := tensor.New(p.Dtype(), p.Shape())
+		ghat := g.out[i] // reused per-param output tensor, overwritten below
 		amplify := !g.Warmup || g.filled[i] == g.Window
 		div := 1.0
 		if !g.FilterSum {
