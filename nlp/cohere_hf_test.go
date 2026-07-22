@@ -28,6 +28,39 @@ func cohereHF(t *testing.T) *nlp.Cohere {
 	return m
 }
 
+// cohereBench loads the golden Command-R checkpoint for a benchmark (no *testing.T).
+func cohereBench(b *testing.B) *nlp.Cohere {
+	b.Helper()
+	ts, _, err := safetensors.LoadFile("testdata/cohere_hf.safetensors")
+	if err != nil {
+		b.Fatal(err)
+	}
+	m, err := nlp.CohereFromHF(ts, nlp.CohereConfig{
+		Heads: 4, KVHeads: 2, Eps: 1e-5, RopeBase: 10000, LogitScale: 0.0625, Ctx: 32,
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+	return m
+}
+
+// BenchmarkCohereDecode drives the per-token KV-cache decode — the path where
+// DecodeStep's per-layer RoPE/MHA Attrs boxing shows up (T956, the T955/T957 hoist for Cohere).
+func BenchmarkCohereDecode(b *testing.B) {
+	m := cohereBench(b)
+	toks := []int{3, 7, 1, 9, 4, 2, 8}
+	b.ReportAllocs()
+	for b.Loop() {
+		ctx := backend.NewContext()
+		cache := m.NewCache()
+		for pos := range 28 {
+			if _, err := m.DecodeStep(ctx, cache, toks[pos%len(toks)], pos); err != nil {
+				b.Fatal(err)
+			}
+		}
+	}
+}
+
 // TestCohereFromHF is the forward-parity anchor for the Command-R converter (§V16): a real
 // transformers CohereForCausalLM's weights loaded through CohereFromHF must reproduce that
 // model's logits. The golden exercises every Cohere-specific detail — the PARALLEL residual

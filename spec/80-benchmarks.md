@@ -37,3 +37,4 @@
 | BM33 | 2026-07-21 | nlp BPETokenizer(GGUF).Encode reuse mapped buffer via unsafe.String (110KB text) | darwin/arm64 | self | ms | 5.061 | 4.546 | 1.11× | T954,V22 |
 | BM34 | 2026-07-22 | nlp Llama.DecodeStep hoist per-layer Attrs boxing (Generate500, allocs) | darwin/arm64 | self | allocs/op | 350988 | 346483 | 1.01× | T955,V22 |
 | BM35 | 2026-07-22 | nlp Gemma.DecodeStep hoist per-layer Attrs boxing (28-step decode, allocs) | darwin/arm64 | self | allocs/op | 9757 | 9673 | 1.01× | T957,V22 |
+| BM36 | 2026-07-22 | nlp Cohere.DecodeStep hoist per-layer Attrs boxing (28-step decode, allocs) | darwin/arm64 | self | allocs/op | 8917 | 8833 | 1.01× | T958,V22 |
