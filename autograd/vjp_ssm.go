@@ -4,6 +4,7 @@ import (
 	"math"
 
 	"github.com/jxsl13/goai/backend"
+	"github.com/jxsl13/goai/internal/simd"
 	"github.com/jxsl13/goai/tensor"
 )
 
@@ -84,16 +85,19 @@ func init() {
 				abar := make([]float64, L*D*N)
 				h := make([]float64, L*D*N)
 				state := make([]float64, D*N)
+				abrow := make([]float64, N) // Ā over the state dim, one 4-wide exp per (t,d)
 				for t := range L {
 					for d := range D {
 						dtv := ds[t*D+d]
 						ut := us[t*D+d]
+						base := d * N
+						simd.ExpScaledF64(abrow, as[base:base+N], dtv) // abrow[n]=exp(Δ·A[d,n]), A<0⇒arg≤0
 						for n := range N {
-							ab := math.Exp(dtv * as[d*N+n])
-							hv := ab*state[d*N+n] + dtv*bs[t*N+n]*ut
+							ab := abrow[n]
+							hv := ab*state[base+n] + dtv*bs[t*N+n]*ut
 							abar[idx(t, d, n)] = ab
 							h[idx(t, d, n)] = hv
-							state[d*N+n] = hv
+							state[base+n] = hv
 						}
 					}
 				}
@@ -158,16 +162,23 @@ func init() {
 				abar := make([]float64, L*D*N)
 				h := make([]float64, L*D*N)
 				state := make([]float64, D*N)
+				abrow := make([]float64, N) // Ā over the state dim
+				asrow := make([]float64, N) // the F32 A row widened to f64 for the vector exp
 				for t := range L {
 					for d := range D {
 						dtv := float64(ds[t*D+d])
 						ut := float64(us[t*D+d])
+						base := d * N
 						for n := range N {
-							ab := math.Exp(dtv * float64(as[d*N+n]))
-							hv := ab*state[d*N+n] + dtv*float64(bs[t*N+n])*ut
+							asrow[n] = float64(as[base+n])
+						}
+						simd.ExpScaledF64(abrow, asrow, dtv)
+						for n := range N {
+							ab := abrow[n]
+							hv := ab*state[base+n] + dtv*float64(bs[t*N+n])*ut
 							abar[idx(t, d, n)] = ab
 							h[idx(t, d, n)] = hv
-							state[d*N+n] = hv
+							state[base+n] = hv
 						}
 					}
 				}
