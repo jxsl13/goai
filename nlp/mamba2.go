@@ -272,6 +272,15 @@ func (m *Mamba2Mixer) forward(u *tensor.Tensor) (*tensor.Tensor, error) {
 	// 4. Per-head SSD scan. A[h] = −exp(A_log[h]); Δ[t,h] = softplus(dt+dt_bias);
 	//    scan input = x_h·Δ (fold Δ into the value), scalar decay = exp(Δ·A[h]);
 	//    B/C come from the head's group. D skip uses the UN-scaled x_h.
+	//
+	// The scan is inlined on raw slices — the SAME per-t recurrence mixer2Prefill/Step
+	// run against a persistent state — instead of building four [seq,·] tensors per head
+	// and calling nn.SSDRecurrent (which was ~1300 allocs / 40MB per mixer, plus its
+	// AtF64 reads). Forward starts each head from a zero state (h[−1]=0), so hst is reused
+	// across heads. This makes Forward bit-identical to the decode/prefill inline scan
+	// (they already agree to <1e-9; now exactly), all within the HF tolerance.
+	hst := make([]float64, m.N*m.HeadDim) // per-head [N, head_dim] scan state, reused
+	xrow := make([]float64, m.HeadDim)    // Δ-scaled value row, hoisted out of the i loop
 	for h := range m.NumHeads {
 		g := h / headsPerGroup
 		A := -math.Exp(aLog[h])
@@ -279,34 +288,31 @@ func (m *Mamba2Mixer) forward(u *tensor.Tensor) (*tensor.Tensor, error) {
 		hOff := h * m.HeadDim
 		bOff := m.Intermediate + g*m.N      // B lives at [intermediate : intermediate+gN] of xc
 		cOff := m.Intermediate + gN + g*m.N // C lives after B
-
-		xScaled := tensor.New(tensor.F64, tensor.Shape{seq, m.HeadDim})
-		aDec := tensor.New(tensor.F64, tensor.Shape{seq})
-		bMat := tensor.New(tensor.F64, tensor.Shape{seq, m.N})
-		cMat := tensor.New(tensor.F64, tensor.Shape{seq, m.N})
-		xs := xScaled.Storage().F64()
-		as := aDec.Storage().F64()
-		bs := bMat.Storage().F64()
-		cs := cMat.Storage().F64()
+		for i := range hst {
+			hst[i] = 0
+		}
 		for t := range seq {
 			delta := softplus(dt[t][h] + dtBias[h])
-			as[t] = math.Exp(delta * A)
+			at := math.Exp(delta * A)
+			// Precompute the Δ-scaled value row once (nn.SSDRecurrent's xScaled) rather
+			// than re-forming xc[t][hOff+j]·Δ inside the N loop — same product, so the
+			// scan stays bit-identical to the decode/prefill inline scan.
 			for j := range m.HeadDim {
-				xs[t*m.HeadDim+j] = xc[t][hOff+j] * delta
+				xrow[j] = xc[t][hOff+j] * delta
 			}
-			for n := range m.N {
-				bs[t*m.N+n] = xc[t][bOff+n]
-				cs[t*m.N+n] = xc[t][cOff+n]
+			for i := range m.N {
+				bi := xc[t][bOff+i]
+				hb := hst[i*m.HeadDim:]
+				for j := range m.HeadDim {
+					hb[j] = at*hb[j] + bi*xrow[j]
+				}
 			}
-		}
-		yh, err := nn.SSDRecurrent(xScaled, aDec, bMat, cMat)
-		if err != nil {
-			return nil, err
-		}
-		ys := yh.Storage().F64()
-		for t := range seq {
 			for j := range m.HeadDim {
-				y[t][hOff+j] = ys[t*m.HeadDim+j] + Dh*xc[t][hOff+j]
+				var s float64
+				for i := range m.N {
+					s += xc[t][cOff+i] * hst[i*m.HeadDim+j]
+				}
+				y[t][hOff+j] = s + Dh*xc[t][hOff+j]
 			}
 		}
 	}
