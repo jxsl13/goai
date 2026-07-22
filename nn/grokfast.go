@@ -25,6 +25,13 @@ type Grokfast struct {
 
 	ema    [][]float64 // per-parameter gradient EMA μ
 	inited bool        // false until μ has been seeded with the first gradient
+
+	// Reused across steps: the filtered-gradient tensors handed to the base optimizer
+	// (one per param, fully overwritten each step) and the p→ĝ map. The base reads each
+	// gradient transiently within its Step (the GradFn contract), so reusing them avoids
+	// a fresh tensor + map allocation on every call — bit-identical output.
+	out      []*tensor.Tensor
+	filtered map[*tensor.Tensor]*tensor.Tensor
 }
 
 // GrokfastOption configures a Grokfast optimizer (functional-options idiom, §C12).
@@ -59,8 +66,11 @@ func NewGrokfast(base Optimizer, params []*tensor.Tensor, opts ...GrokfastOption
 		o(g)
 	}
 	g.ema = make([][]float64, len(params))
+	g.out = make([]*tensor.Tensor, len(params))
+	g.filtered = make(map[*tensor.Tensor]*tensor.Tensor, len(params))
 	for i, p := range params {
 		g.ema[i] = make([]float64, p.Numel())
+		g.out[i] = tensor.New(p.Dtype(), p.Shape())
 	}
 	return g
 }
@@ -69,14 +79,15 @@ func NewGrokfast(base Optimizer, params []*tensor.Tensor, opts ...GrokfastOption
 // base optimizer. Gradients are queried once per parameter (the EMA advances exactly
 // one step regardless of how the base optimizer reads them).
 func (g *Grokfast) Step(grad GradFn) error {
-	filtered := make(map[*tensor.Tensor]*tensor.Tensor, len(g.Params))
+	filtered := g.filtered
+	clear(filtered) // reused map: drop last step's entries
 	for i, p := range g.Params {
 		gr := grad(p)
 		if gr == nil {
 			filtered[p] = nil
 			continue
 		}
-		ghat := tensor.New(p.Dtype(), p.Shape())
+		ghat := g.out[i] // reused per-param output tensor, overwritten below
 		ema := g.ema[i]
 		// Contiguous fast paths (ghat is fresh → contiguous; gr usually is): flat loops,
 		// arithmetic in float64 exactly as the generic path (§base-perf: no per-element
