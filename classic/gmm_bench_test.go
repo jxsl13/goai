@@ -47,3 +47,17 @@ func BenchmarkGMMScoreFull(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkGMMFitFull times full-covariance EM — the mStep covariance accumulation
+// (Σ resp·(x−μ)(x−μ)ᵀ per component) is the O(n·k·d²) hot loop.
+func BenchmarkGMMFitFull(b *testing.B) {
+	X, _ := spatialData(2000, 24)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		m := NewGaussianMixture(WithGMMComponents(6), WithGMMMaxIter(15), WithGMMSeed(1),
+			WithGMMCovariance(GMMFull))
+		if err := m.Fit(X); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
