@@ -89,12 +89,32 @@ func RetentionChunkwise(q, k, v *tensor.Tensor, gamma float64, chunkSize int) (*
 	}
 	out := tensor.New(q.Dtype(), tensor.Shape{l, dv})
 	r := make([]float64, dk*dv) // cross-chunk state R[i,j], i over dk, j over dv (row-major), R_0=0
+	// γ^k is a decay by an INTEGER power everywhere below (position differences), so cache
+	// it once per chunk instead of calling math.Pow in the O(cb²·dv) inner loop — using
+	// math.Pow(γ,k) so the cached value is bit-identical to the old inline call. wbuf holds
+	// the inner-chunk weight γ^(lj−lm)·(Q_n·K_m), which is INDEPENDENT of the value column
+	// jv, so it (and the Q·K dot) is hoisted out of the jv loop — the dot was recomputed dv
+	// times per (lj,lm) before.
+	gpow := make([]float64, chunkSize+1)
+	wbuf := make([]float64, chunkSize)
 	for start := 0; start < l; start += chunkSize {
 		end := min(start+chunkSize, l)
 		cb := end - start // actual chunk length (the last chunk may be shorter)
+		for kk := 0; kk <= cb; kk++ {
+			gpow[kk] = math.Pow(gamma, float64(kk))
+		}
 		for lj := range cb {
 			n := start + lj
-			zeta := math.Pow(gamma, float64(lj+1)) // cross-chunk decay ζ_j = γ^(j+1)
+			zeta := gpow[lj+1] // cross-chunk decay ζ_j = γ^(j+1)
+			// inner-chunk weights (jv-independent): γ^(lj−lm)·(Q_n·K_{start+lm}).
+			for lm := 0; lm <= lj; lm++ {
+				m := start + lm
+				var qk float64
+				for i := range dk {
+					qk += q.AtF64(n, i) * k.AtF64(m, i)
+				}
+				wbuf[lm] = gpow[lj-lm] * qk
+			}
 			for jv := range dv {
 				// cross-chunk: ζ_j · (Q_n · R[:,jv])
 				var cross float64
@@ -102,26 +122,21 @@ func RetentionChunkwise(q, k, v *tensor.Tensor, gamma float64, chunkSize int) (*
 					cross += q.AtF64(n, i) * r[i*dv+jv]
 				}
 				acc := zeta * cross
-				// inner-chunk parallel: Σ_{lm≤lj} γ^(lj−lm) (Q_n·K_{start+lm}) V_{start+lm,jv}
+				// inner-chunk parallel: Σ_{lm≤lj} wbuf[lm]·V_{start+lm,jv}
 				for lm := 0; lm <= lj; lm++ {
-					m := start + lm
-					var qk float64
-					for i := range dk {
-						qk += q.AtF64(n, i) * k.AtF64(m, i)
-					}
-					acc += math.Pow(gamma, float64(lj-lm)) * qk * v.AtF64(m, jv)
+					acc += wbuf[lm] * v.AtF64(start+lm, jv)
 				}
 				out.SetF64(acc, n, jv)
 			}
 		}
 		// state update: R ← γ^cb · R + K_[i]ᵀ(V_[i] ⊙ ξ), ξ_j = γ^(cb−1−j)
-		gB := math.Pow(gamma, float64(cb))
+		gB := gpow[cb]
 		for idx := range r {
 			r[idx] *= gB
 		}
 		for lm := range cb {
 			m := start + lm
-			xi := math.Pow(gamma, float64(cb-1-lm))
+			xi := gpow[cb-1-lm]
 			for i := range dk {
 				kv := k.AtF64(m, i) * xi
 				for jv := range dv {
