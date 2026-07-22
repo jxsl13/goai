@@ -2,6 +2,9 @@ package nn
 
 import (
 	"fmt"
+	"runtime"
+	"sync"
+	"sync/atomic"
 
 	"github.com/jxsl13/goai/backend"
 	"github.com/jxsl13/goai/tensor"
@@ -91,14 +94,21 @@ func EWCFisher(gradSamples [][]*tensor.Tensor) ([]*tensor.Tensor, error) {
 	}
 	nS, nP := len(gradSamples), len(gradSamples[0])
 	fisher := make([]*tensor.Tensor, nP)
+	// Validate shapes up front (cheap, serial) so the parallel compute below has no
+	// error path and each parameter's Fisher tensor is fully independent.
 	for i := range nP {
 		shape := gradSamples[0][i].Shape()
-		acc := tensor.New(gradSamples[0][i].Dtype(), shape)
 		for s := range nS {
 			if !gradSamples[s][i].Shape().Equal(shape) {
 				return nil, fmt.Errorf("nn: EWCFisher sample %d param %d shape %v != %v", s, i, gradSamples[s][i].Shape(), shape)
 			}
 		}
+	}
+	// Each fisher[i] depends only on gradSamples[·][i], so fan the per-parameter work
+	// across cores (memory-bound ∑g² accumulation; a bandwidth-limited speedup).
+	do := func(i int) {
+		shape := gradSamples[0][i].Shape()
+		acc := tensor.New(gradSamples[0][i].Dtype(), shape)
 		// Typed contiguous fast path: acc is freshly allocated (contiguous); when
 		// every gradient sample is contiguous too, accumulate ∑ g² by walking the
 		// backing []T directly — no per-element Unravel/AtF64/SetF64 dispatch. The
@@ -123,7 +133,7 @@ func EWCFisher(gradSamples [][]*tensor.Tensor) ([]*tensor.Tensor, error) {
 					af[e] = af[e] / float64(nS)
 				}
 				fisher[i] = acc
-				continue
+				return
 			}
 		}
 		if af := flatF32(acc); af != nil {
@@ -145,7 +155,7 @@ func EWCFisher(gradSamples [][]*tensor.Tensor) ([]*tensor.Tensor, error) {
 					af[e] = float32(float64(af[e]) / float64(nS))
 				}
 				fisher[i] = acc
-				continue
+				return
 			}
 		}
 		// Generic fallback (non-contiguous or mixed-dtype gradients). Shapes were
@@ -163,6 +173,27 @@ func EWCFisher(gradSamples [][]*tensor.Tensor) ([]*tensor.Tensor, error) {
 			acc.SetF64(acc.AtF64(c...)/float64(nS), c...)
 		}
 		fisher[i] = acc
+	}
+	workers := min(runtime.GOMAXPROCS(0), nP)
+	if workers > 1 {
+		var next atomic.Int64
+		var wg sync.WaitGroup
+		for range workers {
+			wg.Go(func() {
+				for {
+					i := int(next.Add(1)) - 1
+					if i >= nP {
+						return
+					}
+					do(i)
+				}
+			})
+		}
+		wg.Wait()
+	} else {
+		for i := range nP {
+			do(i)
+		}
 	}
 	return fisher, nil
 }
