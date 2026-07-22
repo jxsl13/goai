@@ -48,6 +48,26 @@ func f16ToF32Bits(h uint16) float32 {
 	}
 }
 
+// RoundToHalfF32 rounds each src float32 to the 16-bit float dtype dt (F16/BF16) and back
+// to float32, writing into dst (len(dst) must be ≥ len(src)). It is bit-identical to
+// casting a contiguous F32 tensor to dt and back to F32, but in a SINGLE pass with no
+// intermediate tensor — the AMP master→compute sync fused this from two Casts (two
+// allocations + two passes + a copy) down to one. A non-half dt is a plain copy.
+func RoundToHalfF32(dst, src []float32, dt Dtype) {
+	switch dt {
+	case F16:
+		for i, v := range src {
+			dst[i] = f16ToF32(f32ToF16(v))
+		}
+	case BF16:
+		for i, v := range src {
+			dst[i] = bf16ToF32(f32ToBF16(v))
+		}
+	default:
+		copy(dst, src)
+	}
+}
+
 // f32ToF16 converts float32 to IEEE binary16 bits with round-to-nearest-even.
 func f32ToF16(f float32) uint16 {
 	b := math.Float32bits(f)
