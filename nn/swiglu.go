@@ -26,36 +26,31 @@ func NewSwiGLU(dtype tensor.Dtype, dim, hidden int, seed uint64) *SwiGLU {
 	return &SwiGLU{Wgate: wg, Wup: wu, Wdown: wd}
 }
 
-func (s *SwiGLU) exec(ctx *backend.Context, op backend.Op, ins ...*tensor.Tensor) (*tensor.Tensor, error) {
-	out, err := backend.Execute(ctx, op, ins, nil)
-	if err != nil {
-		return nil, err
-	}
-	return out[0], nil
-}
-
-// Forward computes the SwiGLU FFN for x[..., dim].
+// Forward computes the SwiGLU FFN for x[..., dim]. The five ops route through the
+// recorder-guarded execPool helpers (T964), so an inference FFN reuses one pooled input
+// slice per op instead of allocating a fresh one; under a tape (training) they fall back
+// to a fresh slice the tape node can keep — see execpool.go.
 func (s *SwiGLU) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, error) {
 	if x.Shape()[x.Ndim()-1] != s.Wgate.Shape()[0] {
 		return nil, fmt.Errorf("nn: SwiGLU in-dim %d != x last %d", s.Wgate.Shape()[0], x.Shape()[x.Ndim()-1])
 	}
-	gate, err := s.exec(ctx, backend.OpMatMul, x, s.Wgate)
+	gate, err := execPool2(ctx, backend.OpMatMul, nil, x, s.Wgate)
 	if err != nil {
 		return nil, err
 	}
-	act, err := s.exec(ctx, backend.OpSiLU, gate)
+	act, err := execPool1(ctx, backend.OpSiLU, nil, gate)
 	if err != nil {
 		return nil, err
 	}
-	up, err := s.exec(ctx, backend.OpMatMul, x, s.Wup)
+	up, err := execPool2(ctx, backend.OpMatMul, nil, x, s.Wup)
 	if err != nil {
 		return nil, err
 	}
-	h, err := s.exec(ctx, backend.OpMul, act, up)
+	h, err := execPool2(ctx, backend.OpMul, nil, act, up)
 	if err != nil {
 		return nil, err
 	}
-	return s.exec(ctx, backend.OpMatMul, h, s.Wdown)
+	return execPool2(ctx, backend.OpMatMul, nil, h, s.Wdown)
 }
 
 // Params returns the three projection matrices.

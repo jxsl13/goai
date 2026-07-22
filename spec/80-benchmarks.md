@@ -43,3 +43,4 @@
 | BM39 | 2026-07-22 | nlp residual OpAdd pooled via exec2 across 23 decode models (Falcon 28-step, allocs) | darwin/arm64 | self | allocs/op | 7265 | 7153 | 1.02× | T961,V22 |
 | BM40 | 2026-07-22 | nlp RoPE+MHA pooled via exec1a/exec3 recorder-guarded (Falcon 28-step decode, allocs) | darwin/arm64 | self | allocs/op | 7153 | 6986 | 1.02× | T962,V22 |
 | BM41 | 2026-07-22 | nn RMSNorm/LayerNorm input slice pooled recorder-guarded (Falcon 28-step decode, allocs) | darwin/arm64 | self | allocs/op | 6986 | 6903 | 1.01× | T963,V22 |
+| BM42 | 2026-07-22 | nn SwiGLU FFN input slices pooled recorder-guarded (Forward dim256/hidden1024, allocs) | darwin/arm64 | self | allocs/op | 46 | 41 | 1.12× | T964,V22 |
