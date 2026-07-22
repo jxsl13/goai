@@ -101,15 +101,39 @@ func averageModels(models [][]*tensor.Tensor, idxs []int) []*tensor.Tensor {
 	inv := 1 / float64(len(idxs))
 	for i, p := range ref {
 		acc := make([]float64, p.Numel())
+		// Typed contiguous fast path (§base-perf; model-merge sibling of SLERP/DARE/TIES):
+		// accumulate each contiguous model directly from its backing []T — no per-element
+		// Unravel/AtF64 dispatch. Same model-then-element order (so the float sum is
+		// unchanged) and the same *inv rescale as the generic walk → bit-identical.
 		for _, t := range idxs {
 			mp := models[t][i]
-			for e := range mp.Numel() {
-				acc[e] += mp.AtF64(tensor.Unravel(e, mp.Shape())...)
+			if mf := flatF64(mp); mf != nil {
+				for e := range acc {
+					acc[e] += mf[e]
+				}
+			} else if mf := flatF32(mp); mf != nil {
+				for e := range acc {
+					acc[e] += float64(mf[e])
+				}
+			} else {
+				for e := range mp.Numel() {
+					acc[e] += mp.AtF64(tensor.Unravel(e, mp.Shape())...)
+				}
 			}
 		}
 		res := tensor.New(p.Dtype(), p.Shape())
-		for e := range res.Numel() {
-			res.SetF64(acc[e]*inv, tensor.Unravel(e, p.Shape())...)
+		if rf := flatF64(res); rf != nil {
+			for e := range rf {
+				rf[e] = acc[e] * inv
+			}
+		} else if rf := flatF32(res); rf != nil {
+			for e := range rf {
+				rf[e] = float32(acc[e] * inv)
+			}
+		} else {
+			for e := range res.Numel() {
+				res.SetF64(acc[e]*inv, tensor.Unravel(e, p.Shape())...)
+			}
 		}
 		out[i] = res
 	}

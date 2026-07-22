@@ -54,3 +54,4 @@
 | BM50 | 2026-07-22 | nn DARE typed contiguous fast path (drop-and-rescale model merge, ~131k params, rng-dominated) | darwin/arm64 | self | us | 2485.3 | 1881.3 | 1.32× | T972,V22 |
 | BM51 | 2026-07-22 | nn TIESMerge slices.SortStableFunc + typed passes (TIES model merge, ~131k params × 3 models, sort-dominated) | darwin/arm64 | self | us | 54415.1 | 32598.6 | 1.67× | T973,V22 |
 | BM52 | 2026-07-22 | nn MemorizingAttention AddSegment typed row-copy (memory-bank fold, 128×512) | darwin/arm64 | self | us | 433.5 | 129.7 | 3.34× | T974,V22 |
+| BM53 | 2026-07-22 | nn UniformSoup/averageModels typed fast path (model-soup averaging, 5 models × ~131k params) | darwin/arm64 | self | us | 3904.4 | 410.9 | 9.5× | T975,V22 |
