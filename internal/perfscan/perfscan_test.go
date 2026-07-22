@@ -612,3 +612,73 @@ func TestResolveClass(t *testing.T) {
 		t.Error("unknown token should resolve to empty")
 	}
 }
+
+// Detector M fires on a READ of an integer-keyed map inside a loop (the map→slice
+// candidate: BPE/GGUF Decode, forest votes).
+func TestDetectM_IntKeyMapReadInLoop(t *testing.T) {
+	src := `package p
+type T struct{ decoder map[int]string }
+func (t *T) Decode(ids []int) string {
+	var b Builder
+	for _, id := range ids {
+		b.WriteString(t.decoder[id])
+	}
+	return b.String()
+}`
+	got := countCat(scanSrc(t, src))
+	if got["int-key-map-in-loop"] != 1 {
+		t.Fatalf("want 1 int-key-map-in-loop, got %d (%v)", got["int-key-map-in-loop"], got)
+	}
+}
+
+// …also matches a rune/byte-keyed local map (the u2b byte-inversion), comma-ok reads
+// included.
+func TestDetectM_RuneKeyCommaOk(t *testing.T) {
+	src := `package p
+func Invert(s string) []byte {
+	u2b := make(map[rune]byte, 256)
+	var out []byte
+	for _, r := range s {
+		if b, ok := u2b[r]; ok {
+			out = append(out, b)
+		}
+	}
+	return out
+}`
+	if got := countCat(scanSrc(t, src))["int-key-map-in-loop"]; got != 1 {
+		t.Fatalf("want 1 int-key-map-in-loop, got %d", got)
+	}
+}
+
+// …stays silent on the things that are NOT dense-slice candidates: a string-keyed map,
+// a slice index, a set-like map[int]bool, and a pure map build (m[k] = v).
+func TestDetectM_Silent(t *testing.T) {
+	cases := map[string]string{
+		"string-key": `package p
+func f(m map[string]int, ks []string) (s int) {
+	for _, k := range ks { s += m[k] }
+	return
+}`,
+		"slice-index": `package p
+func f(a []int, ids []int) (s int) {
+	for _, id := range ids { s += a[id] }
+	return
+}`,
+		"set-map-bool": `package p
+func f(seen map[int]bool, ids []int) (n int) {
+	for _, id := range ids { if seen[id] { n++ } }
+	return
+}`,
+		"map-build-write": `package p
+func f(ids []int) map[int]int {
+	m := make(map[int]int)
+	for i, id := range ids { m[id] = i }
+	return m
+}`,
+	}
+	for name, src := range cases {
+		if got := countCat(scanSrc(t, src))["int-key-map-in-loop"]; got != 0 {
+			t.Fatalf("%s: want 0 int-key-map-in-loop, got %d", name, got)
+		}
+	}
+}
