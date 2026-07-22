@@ -463,7 +463,7 @@ func (m *GaussianMixture) ScoreSamples(x [][]float64) ([]float64, error) {
 			}
 			buf[c] = logW[c] + ld
 		}
-		out[i] = logSumExp(buf)
+		out[i] = softmaxLSE(buf, buf) // buf is scratch; we keep only the log-sum-exp
 	}
 	return out, nil
 }
@@ -506,11 +506,9 @@ func (m *GaussianMixture) PredictProba(x [][]float64) ([][]float64, error) {
 			}
 			lr[c] = logW[c] + ld
 		}
-		norm := logSumExp(lr)
-		out[i] = make([]float64, k)
-		for c := range k {
-			out[i][c] = math.Exp(lr[c] - norm)
-		}
+		o := make([]float64, k)
+		softmaxLSE(o, lr) // o = normalized responsibilities (one fused SIMD exp pass)
+		out[i] = o
 	}
 	return out, nil
 }
@@ -569,19 +567,29 @@ func gmmCholesky(a []float64, d int) ([][]float64, float64, error) {
 }
 
 // logSumExp returns log Σ exp(v_i) computed stably by subtracting the max.
-func logSumExp(v []float64) float64 {
+// softmaxLSE writes dst[c] = softmax(src)[c] and returns the log-sum-exp of src, in a
+// single 4-wide SIMD exp pass: ExpSumF64 fills dst with exp(src−max) and returns Σ, so
+// the normalized responsibility is dst[c]/Σ and the LSE is max+log Σ. This is the same
+// fuse the E-step uses (halving GMM's exp count vs a separate logSumExp + exp); every
+// argument is ≤ 0 after the max shift so the SIMD exp is valid. The all−Inf row keeps
+// the scalar path. Callers that only need the LSE (ScoreSamples) pass a scratch dst.
+func softmaxLSE(dst, src []float64) float64 {
 	mx := math.Inf(-1)
-	for _, x := range v {
-		if x > mx {
-			mx = x
+	for _, v := range src {
+		if v > mx {
+			mx = v
 		}
 	}
 	if math.IsInf(mx, -1) {
+		for c := range src {
+			dst[c] = math.Exp(src[c] - mx)
+		}
 		return mx
 	}
-	var s float64
-	for _, x := range v {
-		s += math.Exp(x - mx)
+	s := simd.ExpSumF64(dst, src, mx)
+	inv := 1 / s
+	for c := range dst {
+		dst[c] *= inv
 	}
 	return mx + math.Log(s)
 }
