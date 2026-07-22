@@ -25,6 +25,38 @@ func gemmaHF(t *testing.T) *nlp.Gemma {
 	return m
 }
 
+// gemmaBench loads the golden Gemma checkpoint for a benchmark (no *testing.T).
+func gemmaBench(b *testing.B) *nlp.Gemma {
+	b.Helper()
+	ts, _, err := safetensors.LoadFile("testdata/gemma_hf.safetensors")
+	if err != nil {
+		b.Fatal(err)
+	}
+	m, err := nlp.GemmaFromHF(ts, nlp.GemmaConfig{Heads: 2, KVHeads: 1, Eps: 1e-6, RopeBase: 10000, Ctx: 32})
+	if err != nil {
+		b.Fatal(err)
+	}
+	return m
+}
+
+// BenchmarkGemmaDecode drives the per-token KV-cache decode (embed → block stack →
+// unembed) over a fixed short sequence — the path where DecodeStep's per-layer RoPE/MHA
+// Attrs boxing shows up (T956, the T955 hoist applied to Gemma).
+func BenchmarkGemmaDecode(b *testing.B) {
+	m := gemmaBench(b)
+	toks := []int{3, 7, 1, 9, 4, 2, 8}
+	b.ReportAllocs()
+	for b.Loop() {
+		ctx := backend.NewContext()
+		cache := m.NewCache()
+		for pos := range 28 {
+			if _, err := m.DecodeStep(ctx, cache, toks[pos%len(toks)], pos); err != nil {
+				b.Fatal(err)
+			}
+		}
+	}
+}
+
 // §V16 tier-1: the KV-cache Gemma decode is lossless — feeding a prompt through
 // DecodeStep yields the SAME next-token logits as a full Forward over that prompt. The
 // gate is bit-identical (<1e-9) because the cache changes nothing about the math,
