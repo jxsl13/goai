@@ -285,6 +285,28 @@ func softUpdate(online, target *nn.Sequential, tau float64) {
 	src, dst := online.Params(), target.Params()
 	for i := range src {
 		s, d := src[i], dst[i]
+		// Typed contiguous fast path (§base-perf: dtype-switch ONCE, no per-element
+		// tensor.Unravel alloc / AtF64 / SetF64 dispatch — softUpdate runs every training
+		// step over every parameter). Params are contiguous, so flat index = storage index,
+		// and the arithmetic stays in float64 in the same order the generic path uses, so
+		// the result is bit-identical (F32 reads widen and the store rounds exactly as
+		// AtF64/SetF64 did). Mixed/non-contiguous dtypes fall through to the generic walk.
+		if s.Dtype() == tensor.F64 && d.Dtype() == tensor.F64 && s.IsContiguous() && d.IsContiguous() {
+			so := s.Storage().F64()[s.Offset() : s.Offset()+s.Numel()]
+			to := d.Storage().F64()[d.Offset() : d.Offset()+d.Numel()]
+			for j := range to {
+				to[j] = tau*so[j] + (1-tau)*to[j]
+			}
+			continue
+		}
+		if s.Dtype() == tensor.F32 && d.Dtype() == tensor.F32 && s.IsContiguous() && d.IsContiguous() {
+			so := s.Storage().F32()[s.Offset() : s.Offset()+s.Numel()]
+			to := d.Storage().F32()[d.Offset() : d.Offset()+d.Numel()]
+			for j := range to {
+				to[j] = float32(tau*float64(so[j]) + (1-tau)*float64(to[j]))
+			}
+			continue
+		}
 		n := s.Numel()
 		for j := 0; j < n; j++ {
 			idx := tensor.Unravel(j, s.Shape())

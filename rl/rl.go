@@ -313,9 +313,21 @@ func NewDQN(env Env, hidden int, lr, gamma float64, seed uint64) *DQN {
 func (d *DQN) sync() {
 	src, dst := d.Net.Params(), d.Target.Params()
 	for i := range src {
-		for j := range src[i].Numel() {
-			idx := tensor.Unravel(j, src[i].Shape())
-			dst[i].SetF64(src[i].AtF64(idx...), idx...)
+		s, t := src[i], dst[i]
+		// Typed contiguous fast path: a hard copy target←online is one memmove per
+		// parameter instead of a per-element Unravel/AtF64/SetF64 walk (§base-perf). The
+		// F32→F64→F32 round-trip the generic path performed is exact, so bit-identical.
+		if s.Dtype() == tensor.F64 && t.Dtype() == tensor.F64 && s.IsContiguous() && t.IsContiguous() {
+			copy(t.Storage().F64()[t.Offset():t.Offset()+t.Numel()], s.Storage().F64()[s.Offset():s.Offset()+s.Numel()])
+			continue
+		}
+		if s.Dtype() == tensor.F32 && t.Dtype() == tensor.F32 && s.IsContiguous() && t.IsContiguous() {
+			copy(t.Storage().F32()[t.Offset():t.Offset()+t.Numel()], s.Storage().F32()[s.Offset():s.Offset()+s.Numel()])
+			continue
+		}
+		for j := range s.Numel() {
+			idx := tensor.Unravel(j, s.Shape())
+			t.SetF64(s.AtF64(idx...), idx...)
 		}
 	}
 }
