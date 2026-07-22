@@ -44,18 +44,56 @@ func fill(t *Tensor, gen func(i int) float64) *Tensor {
 	return t
 }
 
+// fillConst writes the constant val into every element of a fresh contiguous tensor —
+// the Full/Ones fast path. It skips fill's per-element gen closure (a non-inlined
+// indirect call on every element) and does the f16/bf16 rounding ONCE, leaving a tight
+// s[i]=v loop the compiler can lower to a vector/rep store. Bit-identical to fill with a
+// constant gen. Same dtype fast paths as fill.
+func fillConst(t *Tensor, val float64) *Tensor {
+	switch t.Dtype() {
+	case F64:
+		s := t.storage.F64()
+		for i := range s {
+			s[i] = val
+		}
+	case F32:
+		v := float32(val)
+		s := t.storage.F32()
+		for i := range s {
+			s[i] = v
+		}
+	case F16:
+		v := f32ToF16(float32(val))
+		s := t.storage.U16()
+		for i := range s {
+			s[i] = v
+		}
+	case BF16:
+		v := f32ToBF16(float32(val))
+		s := t.storage.U16()
+		for i := range s {
+			s[i] = v
+		}
+	default:
+		for i := range t.Numel() {
+			t.storage.setF64(i, val)
+		}
+	}
+	return t
+}
+
 // Zeros returns a tensor of shape filled with 0 — the numpy np.zeros. (New already zeroes, so this is
 // a numpy-familiar alias.)
 func Zeros(dtype Dtype, shape Shape) *Tensor { return New(dtype, shape) }
 
 // Ones returns a tensor of shape filled with 1 (np.ones).
 func Ones(dtype Dtype, shape Shape) *Tensor {
-	return fill(New(dtype, shape), func(int) float64 { return 1 })
+	return fillConst(New(dtype, shape), 1)
 }
 
 // Full returns a tensor of shape filled with val (np.full).
 func Full(dtype Dtype, shape Shape, val float64) *Tensor {
-	return fill(New(dtype, shape), func(int) float64 { return val })
+	return fillConst(New(dtype, shape), val)
 }
 
 // ZerosLike returns a zero tensor with the same shape and dtype as t (np.zeros_like).
