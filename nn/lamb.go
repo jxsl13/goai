@@ -35,6 +35,8 @@ type LAMB struct {
 
 	m, v [][]float64
 	t    int
+
+	uScr []float64 // per-Step update-direction scratch, reused (fully overwritten → bit-identical)
 }
 
 // LAMBOption configures a LAMB optimizer (functional-options idiom, §C12).
@@ -101,7 +103,8 @@ func (l *LAMB) Step(grad GradFn) error {
 		}
 		n := p.Numel()
 		m, v := l.m[pi], l.v[pi]
-		u := make([]float64, n) // per-layer update direction m̂/(√v̂+ε) + λθ
+		u := growF64(l.uScr, n) // per-layer update direction m̂/(√v̂+ε) + λθ
+		l.uScr = u
 		var wNorm2, uNorm2 float64
 		// Typed fast paths (contiguous f64/f32 pairs): flat loops, moments and the
 		// update arithmetic in float64 exactly as the generic path computes them.
