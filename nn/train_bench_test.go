@@ -118,6 +118,10 @@ func BenchmarkSGDStepOnly(b *testing.B) {
 	benchStepOnly(b, tensor.F64, func(p []*tensor.Tensor) nn.Optimizer { return nn.NewSGD(p, 1e-2, 0.9) })
 }
 
+func BenchmarkAdamMiniStepOnly(b *testing.B) {
+	benchStepOnly(b, tensor.F64, func(p []*tensor.Tensor) nn.Optimizer { return nn.NewAdamMini(p, 1e-3) })
+}
+
 func BenchmarkLionStepOnly(b *testing.B) {
 	benchStepOnly(b, tensor.F64, func(p []*tensor.Tensor) nn.Optimizer { return nn.NewLion(p, 1e-4) })
 }

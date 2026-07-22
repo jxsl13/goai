@@ -205,6 +205,7 @@ func (a *AdamMini) Step(grad GradFn) error {
 	a.t++
 	c1 := 1 - math.Pow(a.Beta1, float64(a.t))
 	c2 := 1 - math.Pow(a.Beta2, float64(a.t))
+	ic1 := 1 / c1                   // bias-correction reciprocal, hoisted out of the per-element loop
 	decay := 1 - a.LR*a.WeightDecay // 1 when wd==0 → plain Adam-mini
 	for pi, p := range a.Params {
 		g := grad(p)
@@ -230,10 +231,10 @@ func (a *AdamMini) Step(grad GradFn) error {
 						sum += gv * gv
 					}
 					v[b] = a.Beta2*v[b] + (1-a.Beta2)*(sum/float64(hi-lo))
-					den := math.Sqrt(v[b]/c2) + a.Eps
+					iden := 1 / (math.Sqrt(v[b]/c2) + a.Eps) // per-block denominator reciprocal
 					for i := lo; i < hi; i++ {
 						m[i] = a.Beta1*m[i] + (1-a.Beta1)*gf[i]
-						pf[i] = pf[i]*decay - a.LR*(m[i]/c1)/den
+						pf[i] = pf[i]*decay - a.LR*(m[i]*ic1)*iden
 					}
 				}
 				continue
@@ -249,11 +250,11 @@ func (a *AdamMini) Step(grad GradFn) error {
 						sum += gv * gv
 					}
 					v[b] = a.Beta2*v[b] + (1-a.Beta2)*(sum/float64(hi-lo))
-					den := math.Sqrt(v[b]/c2) + a.Eps
+					iden := 1 / (math.Sqrt(v[b]/c2) + a.Eps) // per-block denominator reciprocal
 					for i := lo; i < hi; i++ {
 						gv := float64(gf[i])
 						m[i] = a.Beta1*m[i] + (1-a.Beta1)*gv
-						pf[i] = float32(float64(pf[i])*decay - a.LR*(m[i]/c1)/den)
+						pf[i] = float32(float64(pf[i])*decay - a.LR*(m[i]*ic1)*iden)
 					}
 				}
 				continue
@@ -271,12 +272,12 @@ func (a *AdamMini) Step(grad GradFn) error {
 				sum += gv * gv
 			}
 			v[b] = a.Beta2*v[b] + (1-a.Beta2)*(sum/float64(hi-lo))
-			den := math.Sqrt(v[b]/c2) + a.Eps
+			iden := 1 / (math.Sqrt(v[b]/c2) + a.Eps) // per-block denominator reciprocal
 			for i := lo; i < hi; i++ {
 				idx := tensor.Unravel(i, shape)
 				gv := g.AtF64(idx...)
 				m[i] = a.Beta1*m[i] + (1-a.Beta1)*gv
-				p.SetF64(p.AtF64(idx...)*decay-a.LR*(m[i]/c1)/den, idx...)
+				p.SetF64(p.AtF64(idx...)*decay-a.LR*(m[i]*ic1)*iden, idx...)
 			}
 		}
 	}
