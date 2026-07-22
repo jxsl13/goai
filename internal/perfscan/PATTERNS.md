@@ -270,3 +270,25 @@ receiver field, or a ring slot (`ring[pos] = flat`). Those are still poolable bu
 different fix — pre-allocate the slot and overwrite it in place — so N does not
 mis-advise "hoist to one reused field." Also silent on value-receiver methods and free
 functions (no receiver to hang the reused buffer on) and on `make()` outside any loop.
+
+## O (detector O) — divide by a loop-invariant scalar  *(scanner: static)*
+
+A `/` (or `/=`) by a loop-invariant scalar on every iteration of an element-wise loop.
+Hoisting `inv := 1/D` once and multiplying is **1.2–1.5×** when the divide is the
+loop's standalone cost — a float divide is ~20–40 cycles versus ~4 for a multiply.
+
+**Shipped:** SoftCap VJP 1.28×/1.29×, and the whole optimizer reciprocal-multiply family
+(Adam/Cautious/LAMB/AdEMAMix/Adafactor bias-correction & moment divides, 1.1–1.3×).
+
+**SAFE ONLY for a CONTINUOUS output** — a gradient, an optimizer moment, a probability —
+whose ½-ulp reassociation rides a tolerance. **NEVER** when the result feeds a discrete
+step: `math.Round`, quantization (the nf4 `am` scale is flagged precisely so you DON'T
+blindly convert it), or an `argmax`. Keep every path (typed fast + generic) on the same
+`inv` so their bit-identity holds. Verify the divisor is a float, and that the divide is
+standalone rather than amortized behind other per-element work.
+
+**Deliberately narrowed** to keep the signal actionable: silent on a divisor accumulated
+via `+=`/`-=`/`*=` (a reduction — a softmax Σ or attention denominator, where the divide
+is minor or parity-locked, not a config scalar), on loops already dominated by a
+transcendental (K/L territory — the divide is in the noise), on integer INDEX divisions
+(`a[i/stride]`), on divisors that vary across iterations, and on non-element-wise loops.
