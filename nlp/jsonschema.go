@@ -42,7 +42,15 @@ func JSONSchemaToGrammar(schema []byte) (string, error) {
 		names = append(names, n)
 	}
 	sort.Strings(names)
+	// Pre-size the grammar buffer to the exact rule text (name + " ::= " + body + "\n"
+	// per rule) plus the primitives, so the Builder is grown once rather than doubling
+	// through log(n) reallocations as the rules are appended (§base-perf unsized-builder).
+	grammarSize := len(jsonPrimitives) + 16
+	for n, body := range c.rules {
+		grammarSize += len(n) + len(body) + len(" ::= \n")
+	}
 	var sb strings.Builder
+	sb.Grow(grammarSize)
 	fmt.Fprintf(&sb, "root ::= %s\n", c.rules["root"])
 	for _, n := range names {
 		if n != "root" {
@@ -306,6 +314,7 @@ func jsonLiteral(v any) (string, error) {
 // sanitizeRuleName maps arbitrary property names onto the GBNF identifier alphabet.
 func sanitizeRuleName(s string) string {
 	var sb strings.Builder
+	sb.Grow(len(s)) // one char out per input byte/rune — exact upper bound
 	for _, r := range s {
 		switch {
 		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
