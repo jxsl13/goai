@@ -48,6 +48,8 @@ type BPETokenizer struct {
 	//                            string allocation (no per-pair concat, no string() — T625 class).
 	b2u      [256]rune
 	u2b      map[rune]byte
+	decSlice []string // id → symbol as a dense slice (Decode fast path; nil until built)
+	u2bSlice []int16  // rune → byte (−1 = unmapped) for Decode's byte-inversion, sized to the max u2b rune
 	unkID    int
 	hasUnk   bool
 	specials specialSet // markers parsed only by EncodeSpecial (§B60)
@@ -83,6 +85,7 @@ func NewBPE(vocab []string, merges []string, opts ...BPEOption) (*BPETokenizer, 
 	for _, o := range opts {
 		o(t)
 	}
+	t.buildDecodeSlices()
 	return t, nil
 }
 
@@ -216,21 +219,72 @@ func (t *BPETokenizer) Encode(text string) []int {
 	return ids
 }
 
+// buildDecodeSlices flattens the two id/rune-keyed maps Decode walks into dense slices:
+// decoder (dense ids 0..vocab−1) → []string, and u2b (runes ≤ ~323 with gaps) → []int16
+// with −1 for the unmapped runes. Both replace a per-element map hash in Decode with a
+// bounds-checked slice load; gaps/out-of-range resolve to the same skip the maps' !ok did.
+func (t *BPETokenizer) buildDecodeSlices() {
+	maxID := -1
+	for id := range t.decoder {
+		if id > maxID {
+			maxID = id
+		}
+	}
+	ds := make([]string, maxID+1)
+	for id, tok := range t.decoder {
+		ds[id] = tok
+	}
+	t.decSlice = ds
+
+	maxR := rune(-1)
+	for r := range t.u2b {
+		if r > maxR {
+			maxR = r
+		}
+	}
+	u2s := make([]int16, maxR+1)
+	for i := range u2s {
+		u2s[i] = -1
+	}
+	for r, b := range t.u2b {
+		u2s[r] = int16(b)
+	}
+	t.u2bSlice = u2s
+}
+
 // Decode reconstructs the original text: token ids → byte-mapped symbols → invert the
 // byte→Unicode map back to raw bytes. Byte-exact for any input the vocabulary covers.
 func (t *BPETokenizer) Decode(ids []int) string {
 	var mapped strings.Builder
 	mapped.Grow(len(ids) * 4) // pre-size (§T929): skip the log(n) builder growth churn
-	for _, id := range ids {
-		if s, ok := t.decoder[id]; ok {
-			mapped.WriteString(s)
+	if ds := t.decSlice; ds != nil {
+		for _, id := range ids {
+			if uint(id) < uint(len(ds)) {
+				mapped.WriteString(ds[id])
+			}
+		}
+	} else {
+		for _, id := range ids {
+			if s, ok := t.decoder[id]; ok {
+				mapped.WriteString(s)
+			}
 		}
 	}
 	m := mapped.String()
 	out := make([]byte, 0, len(m)) // one byte per rune ≤ len(m) bytes — pre-sized, no append growth
-	for _, r := range m {
-		if b, ok := t.u2b[r]; ok {
-			out = append(out, b)
+	if u2s := t.u2bSlice; u2s != nil {
+		for _, r := range m {
+			if uint(r) < uint(len(u2s)) {
+				if b := u2s[r]; b >= 0 {
+					out = append(out, byte(b))
+				}
+			}
+		}
+	} else {
+		for _, r := range m {
+			if b, ok := t.u2b[r]; ok {
+				out = append(out, b)
+			}
 		}
 	}
 	return string(out)
