@@ -182,6 +182,25 @@ func (m *RandomForestClassifier) Predict(x [][]float64) ([]int, error) {
 	for i, c := range m.classes {
 		pos[c] = i
 	}
+	// Precompute each tree's class-index → forest vote-index once, so the hot per-(sample,
+	// tree) loop does a plain slice lookup instead of the pos[label] map access (measured
+	// ~14% of Predict). A tree's classes are a subset of the forest's, so every lookup hits.
+	// One flat backing array (not a slice per tree) keeps this at two allocations.
+	total := 0
+	for _, tree := range m.trees {
+		total += len(tree.classes)
+	}
+	flat := make([]int, total)
+	treeVote := make([][]int, len(m.trees))
+	off := 0
+	for t, tree := range m.trees {
+		tv := flat[off : off+len(tree.classes)]
+		for ci, label := range tree.classes {
+			tv[ci] = pos[label]
+		}
+		treeVote[t] = tv
+		off += len(tree.classes)
+	}
 	for i, row := range x {
 		if len(row) != m.nFeature {
 			return nil, fmt.Errorf("classic: row %d width %d, want %d", i, len(row), m.nFeature)
@@ -194,8 +213,8 @@ func (m *RandomForestClassifier) Predict(x [][]float64) ([]int, error) {
 		// per Predict). NOT parallelized — the per-sample work (a few tree walks) is too
 		// fine-grained, so parallelBuild's per-item channel measured SLOWER than sequential
 		// (§C3: 497µs sequential vs 832µs pooled); parallelism is Fit's lever, not predict's.
-		for _, tree := range m.trees {
-			votes[pos[tree.classes[tree.root.predict(row).predClass]]]++
+		for t, tree := range m.trees {
+			votes[treeVote[t][tree.root.predict(row).predClass]]++
 		}
 		best, bc := 0, -1
 		for k, v := range votes {
