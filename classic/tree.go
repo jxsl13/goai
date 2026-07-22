@@ -599,6 +599,44 @@ func (b *cartBuilder) sweep(order []int, f, minLeaf int) (bestCost float64, cut 
 	for k := range left {
 		left[k] = 0
 	}
+	if b.cfg.criterion != Entropy {
+		// Gini: maintain Σleft[k]² and Σright[k]² incrementally. Moving one sample across
+		// the split increments exactly one class count, so each sum updates in O(1) — the
+		// left gains 2v+1 (=(v+1)²−v²) and the right loses 2·rc−1 — instead of the O(classes)
+		// rescan weightedImpurityClf/Comp did at every candidate. The counts are integers
+		// whose squared sums stay well under 2^53, so the running float64 totals equal the
+		// freshly-summed ones bit-for-bit, and the cost is formed with the same op order as
+		// weightedImpurityClf/Comp (pf·(1−Σ/pf²)); the chosen split is therefore identical to
+		// the per-point rescan.
+		var sumLeftSq, sumRightSq float64
+		for k := range total {
+			tf := float64(total[k])
+			sumRightSq += tf * tf
+		}
+		for p := 1; p < n; p++ {
+			c := b.yi[order[p-1]]
+			v := left[c]
+			rc := total[c] - v
+			sumLeftSq += float64(2*v + 1)
+			sumRightSq += float64(1 - 2*rc)
+			left[c] = v + 1
+			if p < minLeaf || n-p < minLeaf {
+				continue
+			}
+			if vals[p]-vals[p-1] <= featureThreshold {
+				continue
+			}
+			pf := float64(p)
+			nrf := float64(n - p)
+			cost := pf*(1-sumLeftSq/(pf*pf)) + nrf*(1-sumRightSq/(nrf*nrf))
+			if cost < bestCost {
+				bestCost, cut, found = cost, p, true
+			}
+		}
+		return bestCost, cut, found
+	}
+	// entropy — per-split (the clogc terms are floats, so an incremental running sum
+	// would not be bit-identical to the fresh Σ; keep the exact per-candidate rescan).
 	for p := 1; p < n; p++ {
 		left[b.yi[order[p-1]]]++
 		if p < minLeaf || n-p < minLeaf {
