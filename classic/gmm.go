@@ -386,17 +386,24 @@ func (m *GaussianMixture) mStep(x [][]float64, resp [][]float64) error {
 	m.invCholDiag = make([][]float64, k)
 	m.yScratch = make([]float64, d)
 	m.logDetHalf = make([]float64, k)
+	cen := make([]float64, d) // centered-row scratch, reused per sample
 	for c := range k {
 		s := make([]float64, d*d)
 		inv := 1.0 / (nk[c] + 1e-300)
 		for i := range n {
 			r := resp[i][c]
-			xi, mc := x[i], m.Means[c] // hoist the row + mean slices out of the a/b loops
+			xi, mc := x[i], m.Means[c]
+			// Center the row ONCE (cen[b] = xi[b]−mc[b]) instead of recomputing xi[b]−mc[b]
+			// for every a, then accumulate s[a] += (r·cen[a])·cen as an equal-length slice
+			// axpy (auto-vectorizing). r·da·(xi[b]−mc[b]) = (r·cen[a])·cen[b] bit-identically.
+			for b := range cen {
+				cen[b] = xi[b] - mc[b]
+			}
 			for a := 0; a < d; a++ {
-				da := xi[a] - mc[a]
+				rda := r * cen[a]
 				sa := s[a*d : a*d+d]
-				for b := 0; b < d; b++ {
-					sa[b] += r * da * (xi[b] - mc[b])
+				for b := range sa {
+					sa[b] += rda * cen[b]
 				}
 			}
 		}
