@@ -73,20 +73,40 @@ func SSDQuadratic(x, a, b, c *tensor.Tensor) (*tensor.Tensor, error) {
 	T, d := x.Shape()[0], x.Shape()[1]
 	n := b.Shape()[1]
 	y := tensor.New(x.Dtype(), x.Shape())
+	// Hoist the per-element dispatches out of the O(T²)–O(T³) loops: a_t drives the decay
+	// product (read O(T³) times via a.AtF64), c_i is re-read for every earlier position j,
+	// and the output was a y.AtF64+SetF64 read-modify-write per (i,j,d). arow/crow are
+	// contiguous rows; yrow accumulates the row locally and is written once per i. Values
+	// and the ascending-j / ascending-k accumulation order are unchanged (bit-identical).
+	arow := make([]float64, T)
+	for t := range T {
+		arow[t] = a.AtF64(t)
+	}
+	crow := make([]float64, n)
+	yrow := make([]float64, d)
 	for i := range T {
+		for k := range n {
+			crow[k] = c.AtF64(i, k)
+		}
+		for dd := range d {
+			yrow[dd] = y.AtF64(i, dd)
+		}
 		for j := 0; j <= i; j++ {
 			var cb float64
 			for k := range n {
-				cb += c.AtF64(i, k) * b.AtF64(j, k)
+				cb += crow[k] * b.AtF64(j, k)
 			}
 			decay := 1.0
 			for k := j + 1; k <= i; k++ {
-				decay *= a.AtF64(k)
+				decay *= arow[k]
 			}
 			m := cb * decay
 			for dd := range d {
-				y.SetF64(y.AtF64(i, dd)+m*x.AtF64(j, dd), i, dd)
+				yrow[dd] += m * x.AtF64(j, dd)
 			}
+		}
+		for dd := range d {
+			y.SetF64(yrow[dd], i, dd)
 		}
 	}
 	return y, nil
