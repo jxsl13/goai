@@ -387,7 +387,7 @@ func (m *Mamba) Prefill(ctx *backend.Context, st *MambaDecodeState, tokens []int
 		if err != nil {
 			return nil, err
 		}
-		if h, err = exec1(ctx, backend.OpAdd, nil, h, mix); err != nil {
+		if h, err = exec2(ctx, backend.OpAdd, nil, h, mix); err != nil {
 			return nil, err
 		}
 	}
@@ -422,7 +422,7 @@ func (m *Mamba) DecodeStep(ctx *backend.Context, st *MambaDecodeState, token int
 		if err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, mix); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, mix); err != nil {
 			return nil, err
 		}
 	}

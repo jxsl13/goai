@@ -98,7 +98,7 @@ func (m *OLMo2) DecodeStep(ctx *backend.Context, cache *OLMo2Cache, token, pos i
 		if a, err = b.PostAttnNorm.Forward(ctx, a); err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, a); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, a); err != nil {
 			return nil, err
 		}
 		// FFN sublayer (post-norm) on the RAW residual x.
@@ -109,7 +109,7 @@ func (m *OLMo2) DecodeStep(ctx *backend.Context, cache *OLMo2Cache, token, pos i
 		if f, err = b.PostFFNNorm.Forward(ctx, f); err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, f); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, f); err != nil {
 			return nil, err
 		}
 	}

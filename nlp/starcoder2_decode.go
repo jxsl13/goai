@@ -91,7 +91,7 @@ func (m *StarCoder2) DecodeStep(ctx *backend.Context, cache *StarCoder2Cache, to
 		if a, err = projBias(ctx, a, b.Wo, b.Bo); err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, a); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, a); err != nil {
 			return nil, err
 		}
 		// MLP sublayer: post_attention_layernorm → biased GELU 2-layer → residual add.
@@ -103,7 +103,7 @@ func (m *StarCoder2) DecodeStep(ctx *backend.Context, cache *StarCoder2Cache, to
 		if err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, f); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, f); err != nil {
 			return nil, err
 		}
 	}

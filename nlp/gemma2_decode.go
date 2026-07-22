@@ -78,7 +78,7 @@ func (m *Gemma2) DecodeStep(ctx *backend.Context, cache *Gemma2Cache, token, pos
 		if a, err = b.PostAttnNorm.Forward(ctx, a); err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, a); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, a); err != nil {
 			return nil, err
 		}
 		// FFN sublayer: pre_feedforward_layernorm → GeGLU →
@@ -94,7 +94,7 @@ func (m *Gemma2) DecodeStep(ctx *backend.Context, cache *Gemma2Cache, token, pos
 		if ff, err = b.PostFFNNorm.Forward(ctx, ff); err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, ff); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, ff); err != nil {
 			return nil, err
 		}
 	}

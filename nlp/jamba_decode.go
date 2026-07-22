@@ -397,7 +397,7 @@ func (m *Jamba) Prefill(ctx *backend.Context, st *JambaDecodeState, tokens []int
 				return nil, err
 			}
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, mix); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, mix); err != nil {
 			return nil, err
 		}
 		// FFN sublayer (stateless: sparse MoE or dense SwiGLU), batched.
@@ -414,7 +414,7 @@ func (m *Jamba) Prefill(ctx *backend.Context, st *JambaDecodeState, tokens []int
 		if err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, ff); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, ff); err != nil {
 			return nil, err
 		}
 	}
@@ -487,7 +487,7 @@ func (m *Jamba) DecodeStep(ctx *backend.Context, st *JambaDecodeState, token int
 				return nil, err
 			}
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, mix); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, mix); err != nil {
 			return nil, err
 		}
 		// FFN sublayer (stateless: sparse MoE or dense SwiGLU)
@@ -504,7 +504,7 @@ func (m *Jamba) DecodeStep(ctx *backend.Context, st *JambaDecodeState, token int
 		if err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, ff); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, ff); err != nil {
 			return nil, err
 		}
 	}

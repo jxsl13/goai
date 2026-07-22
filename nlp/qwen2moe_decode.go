@@ -91,7 +91,7 @@ func (m *Qwen2MoE) DecodeStep(ctx *backend.Context, cache *Qwen2MoeCache, token,
 		if err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, o); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, o); err != nil {
 			return nil, err
 		}
 		// sparse-MoE + shared-expert FFN sublayer (identical to Forward)
@@ -103,7 +103,7 @@ func (m *Qwen2MoE) DecodeStep(ctx *backend.Context, cache *Qwen2MoeCache, token,
 		if err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, ff); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, ff); err != nil {
 			return nil, err
 		}
 	}

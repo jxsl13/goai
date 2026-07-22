@@ -106,7 +106,7 @@ func (m *Gemma) DecodeStep(ctx *backend.Context, cache *GemmaCache, token, pos i
 		if err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, o); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, o); err != nil {
 			return nil, err
 		}
 		// FFN sublayer (GeGLU)
@@ -118,7 +118,7 @@ func (m *Gemma) DecodeStep(ctx *backend.Context, cache *GemmaCache, token, pos i
 		if err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, ff); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, ff); err != nil {
 			return nil, err
 		}
 	}

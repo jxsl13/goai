@@ -179,7 +179,7 @@ func (m *Llama) blockRange(ctx *backend.Context, x *tensor.Tensor, start, end in
 		if o, err = scaleScalar(layerCtx, o, cfg.ResidualMult); err != nil {
 			return nil, err
 		}
-		if x, err = exec1(layerCtx, backend.OpAdd, nil, x, o); err != nil {
+		if x, err = exec2(layerCtx, backend.OpAdd, nil, x, o); err != nil {
 			return nil, err
 		}
 		xf, err := b.FFNNorm.Forward(layerCtx, x)
@@ -194,7 +194,7 @@ func (m *Llama) blockRange(ctx *backend.Context, x *tensor.Tensor, start, end in
 		if ff, err = scaleScalar(layerCtx, ff, cfg.ResidualMult); err != nil {
 			return nil, err
 		}
-		if x, err = exec1(layerCtx, backend.OpAdd, nil, x, ff); err != nil {
+		if x, err = exec2(layerCtx, backend.OpAdd, nil, x, ff); err != nil {
 			return nil, err
 		}
 	}
