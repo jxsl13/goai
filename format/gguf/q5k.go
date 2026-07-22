@@ -20,7 +20,13 @@ const q5kBlockSize = 176 // f16 d + f16 dmin + scales 12 + qh 32 + qs 128
 // (is=2p): the low nibbles use qh bit 2p, the high nibbles use qh bit 2p+1.
 func dequantQ5_K(shape tensor.Shape, raw []byte) (*tensor.Tensor, error) {
 	t := tensor.New(tensor.F32, shape)
-	dst := t.Storage().F32()
+	dequantQ5_KInto(t.Storage().F32(), raw)
+	return t, nil
+}
+
+// dequantQ5_KInto is dequantQ5_K writing into a caller-provided dst — lets QMatMul
+// reuse one row buffer across all weight rows. Byte-for-byte the tensor form.
+func dequantQ5_KInto(dst []float32, raw []byte) {
 	for sb := 0; sb*qkK < len(dst); sb++ {
 		blk := raw[sb*q5kBlockSize:]
 		d := f16ToF32(binary.LittleEndian.Uint16(blk[0:]))
@@ -49,7 +55,6 @@ func dequantQ5_K(shape tensor.Shape, raw []byte) (*tensor.Tensor, error) {
 			}
 		}
 	}
-	return t, nil
 }
 
 // quantizeQ5_K encodes f32 values into the Q5_K super-block layout — the inverse of
