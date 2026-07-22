@@ -2,6 +2,7 @@ package nlp
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/jxsl13/goai/backend"
 	"github.com/jxsl13/goai/nn"
@@ -112,6 +113,34 @@ func FromSafetensors(cfg GPTConfig, ts map[string]*tensor.Tensor) (*GPT, error) 
 
 func exec1(ctx *backend.Context, op backend.Op, attrs backend.Attrs, ins ...*tensor.Tensor) (*tensor.Tensor, error) {
 	out, err := backend.Execute(ctx, op, ins, attrs)
+	if err != nil {
+		return nil, err
+	}
+	return out[0], nil
+}
+
+// ins2Pool reuses the 2-element input slice backend.Execute takes, for 2-input ops on
+// the INFERENCE decode/prefill hot path (T960). backend.Execute retains its inputs slice
+// ONLY through ctx.Recorder.Record (execute.go), which fires only when a tape is attached;
+// with a nil Recorder — every DecodeStep/Prefill context is inference-only — the slice is
+// dead the instant Execute returns, so it goes straight back to the pool.
+var ins2Pool = sync.Pool{New: func() any { s := make([]*tensor.Tensor, 2); return &s }}
+
+// exec2 runs a 2-input op, reusing a pooled input slice when the context is NOT recording.
+// Under a recorder it defers to exec1's fresh slice, because Record stores that exact slice
+// in the tape node and a pooled one would be overwritten by the next op (a training-only
+// correctness trap the guard closes). project — 4 calls per layer per token, shared by every
+// model — is the hot caller, so one change speeds every decode.
+func exec2(ctx *backend.Context, op backend.Op, attrs backend.Attrs, a, b *tensor.Tensor) (*tensor.Tensor, error) {
+	if ctx.Recorder != nil {
+		return exec1(ctx, op, attrs, a, b)
+	}
+	sp := ins2Pool.Get().(*[]*tensor.Tensor)
+	s := *sp
+	s[0], s[1] = a, b
+	out, err := backend.Execute(ctx, op, s, attrs)
+	s[0], s[1] = nil, nil // don't pin the input tensors alive in the pool
+	ins2Pool.Put(sp)
 	if err != nil {
 		return nil, err
 	}
