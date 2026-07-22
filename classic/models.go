@@ -575,10 +575,20 @@ func (p *PCA) Fit(x [][]float64, ncomp int) error {
 	for i := range cov {
 		cov[i] = make([]float64, d)
 	}
+	// Accumulate the covariance as the sum of centered outer products. Centering the
+	// row ONCE into c (instead of recomputing row[i]−mean[i] and row[j]−mean[j] for
+	// every (i,j)) and writing cov[i] += c[i]·c as an equal-length slice axpy lets the
+	// inner loop auto-vectorize; same i-outer/j-inner accumulation order → bit-identical.
+	c := make([]float64, d)
 	for _, row := range x {
+		for j := range d {
+			c[j] = row[j] - p.Mean[j]
+		}
 		for i := range d {
-			for j := range d {
-				cov[i][j] += (row[i] - p.Mean[i]) * (row[j] - p.Mean[j])
+			ci := c[i]
+			covi := cov[i]
+			for j := range covi {
+				covi[j] += ci * c[j]
 			}
 		}
 	}
