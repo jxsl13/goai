@@ -30,3 +30,20 @@ func BenchmarkGMMScore(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkGMMScoreFull times ScoreSamples with a full covariance — the Cholesky
+// triangular solve per (sample, component), previously allocating y every call.
+func BenchmarkGMMScoreFull(b *testing.B) {
+	X, _ := spatialData(4000, 20)
+	m := NewGaussianMixture(WithGMMComponents(8), WithGMMMaxIter(20), WithGMMSeed(1),
+		WithGMMCovariance(GMMFull))
+	if err := m.Fit(X); err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := m.ScoreSamples(X); err != nil {
+			b.Fatal(err)
+		}
+	}
+}

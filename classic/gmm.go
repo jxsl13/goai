@@ -146,9 +146,11 @@ type GaussianMixture struct {
 	// chol caches, per component, the lower-Cholesky factor of Σ_k (GMMFull)
 	// used by the density, together with logDetPrec = −Σ log L_ii (half the log
 	// determinant of the precision). For GMMDiag chol is unused.
-	chol       [][][]float64
-	logDetHalf []float64   // per component: 0.5·log|Σ_k| (density normaliser)
-	invCov     [][]float64 // GMMDiag only: per component 1/Σ_k[j], so logGaussian multiplies instead of dividing
+	chol        [][][]float64
+	invCholDiag [][]float64 // GMMFull only: per component 1/L_k[i][i], so the triangular solve multiplies
+	yScratch    []float64   // GMMFull only: reused forward-substitution buffer (logGaussian runs serially)
+	logDetHalf  []float64   // per component: 0.5·log|Σ_k| (density normaliser)
+	invCov      [][]float64 // GMMDiag only: per component 1/Σ_k[j], so logGaussian multiplies instead of dividing
 
 	nFeat  int
 	fitted bool
@@ -381,6 +383,8 @@ func (m *GaussianMixture) mStep(x [][]float64, resp [][]float64) error {
 	}
 	// full covariance
 	m.chol = make([][][]float64, k)
+	m.invCholDiag = make([][]float64, k)
+	m.yScratch = make([]float64, d)
 	m.logDetHalf = make([]float64, k)
 	for c := range k {
 		s := make([]float64, d*d)
@@ -408,6 +412,11 @@ func (m *GaussianMixture) mStep(x [][]float64, resp [][]float64) error {
 		}
 		m.cov[c] = s
 		m.chol[c] = l
+		id := make([]float64, d)
+		for i := range d {
+			id[i] = 1 / l[i][i] // reciprocal of the Cholesky diagonal for the solve
+		}
+		m.invCholDiag[c] = id
 		m.logDetHalf[c] = half
 	}
 	return nil
@@ -426,15 +435,16 @@ func (m *GaussianMixture) logGaussian(x []float64, c int) (float64, error) {
 		}
 		return -0.5*(float64(d)*log2pi+quad) - m.logDetHalf[c], nil
 	}
-	// full: solve L y = (x−μ), Mahalanobis = ‖y‖²
-	l := m.chol[c]
-	y := make([]float64, d)
+	// full: solve L y = (x−μ), Mahalanobis = ‖y‖². y reuses a per-model scratch
+	// (logGaussian runs serially) and multiplies the cached 1/L[i][i].
+	l, id := m.chol[c], m.invCholDiag[c]
+	y := m.yScratch
 	for i := range d {
 		s := x[i] - m.Means[c][i]
 		for j := range i {
 			s -= l[i][j] * y[j]
 		}
-		y[i] = s / l[i][i]
+		y[i] = s * id[i]
 	}
 	var quad float64
 	for i := range d {
