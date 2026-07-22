@@ -90,6 +90,7 @@ func (l *LAMB) Step(grad GradFn) error {
 	l.t++
 	c1 := 1 - math.Pow(l.Beta1, float64(l.t))
 	c2 := 1 - math.Pow(l.Beta2, float64(l.t))
+	ic1, ic2 := 1/c1, 1/c2 // bias-correction reciprocals: hoist the invariant divides out of the per-element loop
 	for pi, p := range l.Params {
 		g := grad(p)
 		if g == nil {
@@ -111,8 +112,8 @@ func (l *LAMB) Step(grad GradFn) error {
 			for i, gv := range gf64 {
 				m[i] = l.Beta1*m[i] + (1-l.Beta1)*gv
 				v[i] = l.Beta2*v[i] + (1-l.Beta2)*gv*gv
-				mh := m[i] / c1
-				vh := v[i] / c2
+				mh := m[i] * ic1
+				vh := v[i] * ic2
 				theta := pf64[i]
 				ui := mh/(math.Sqrt(vh)+l.Eps) + l.WeightDecay*theta
 				u[i] = ui
@@ -124,8 +125,8 @@ func (l *LAMB) Step(grad GradFn) error {
 				gv := float64(gf32[i])
 				m[i] = l.Beta1*m[i] + (1-l.Beta1)*gv
 				v[i] = l.Beta2*v[i] + (1-l.Beta2)*gv*gv
-				mh := m[i] / c1
-				vh := v[i] / c2
+				mh := m[i] * ic1
+				vh := v[i] * ic2
 				theta := float64(pf32[i])
 				ui := mh/(math.Sqrt(vh)+l.Eps) + l.WeightDecay*theta
 				u[i] = ui
@@ -139,8 +140,8 @@ func (l *LAMB) Step(grad GradFn) error {
 				gv := g.AtF64(idx...)
 				m[i] = l.Beta1*m[i] + (1-l.Beta1)*gv
 				v[i] = l.Beta2*v[i] + (1-l.Beta2)*gv*gv
-				mh := m[i] / c1
-				vh := v[i] / c2
+				mh := m[i] * ic1
+				vh := v[i] * ic2
 				theta := p.AtF64(idx...)
 				ui := mh/(math.Sqrt(vh)+l.Eps) + l.WeightDecay*theta
 				u[i] = ui

@@ -100,6 +100,7 @@ func (a *AdEMAMix) Step(grad GradFn) error {
 	a.t++
 	bc1 := 1 - math.Pow(a.Beta1, float64(a.t)) // bias correction for m1
 	bc2 := 1 - math.Pow(a.Beta2, float64(a.t)) // bias correction for ν
+	ibc1, ibc2 := 1/bc1, 1/bc2                 // bias-correction reciprocals: hoist the invariant divides out of the per-element loop
 	for pi, p := range a.Params {
 		g := grad(p)
 		if g == nil {
@@ -117,8 +118,8 @@ func (a *AdEMAMix) Step(grad GradFn) error {
 					m1[i] = a.Beta1*m1[i] + (1-a.Beta1)*gv
 					m2[i] = a.Beta3*m2[i] + (1-a.Beta3)*gv
 					v[i] = a.Beta2*v[i] + (1-a.Beta2)*gv*gv
-					m1hat := m1[i] / bc1
-					vhat := v[i] / bc2
+					m1hat := m1[i] * ibc1
+					vhat := v[i] * ibc2
 					upd := (m1hat + a.Alpha*m2[i]) / (math.Sqrt(vhat) + a.Eps)
 					pv := pf[i]
 					pf[i] = pv - a.LR*(upd+a.WeightDecay*pv)
@@ -132,8 +133,8 @@ func (a *AdEMAMix) Step(grad GradFn) error {
 					m1[i] = a.Beta1*m1[i] + (1-a.Beta1)*gv
 					m2[i] = a.Beta3*m2[i] + (1-a.Beta3)*gv
 					v[i] = a.Beta2*v[i] + (1-a.Beta2)*gv*gv
-					m1hat := m1[i] / bc1
-					vhat := v[i] / bc2
+					m1hat := m1[i] * ibc1
+					vhat := v[i] * ibc2
 					upd := (m1hat + a.Alpha*m2[i]) / (math.Sqrt(vhat) + a.Eps)
 					pv := float64(pf[i])
 					pf[i] = float32(pv - a.LR*(upd+a.WeightDecay*pv))
@@ -148,8 +149,8 @@ func (a *AdEMAMix) Step(grad GradFn) error {
 			m1[i] = a.Beta1*m1[i] + (1-a.Beta1)*gv
 			m2[i] = a.Beta3*m2[i] + (1-a.Beta3)*gv
 			v[i] = a.Beta2*v[i] + (1-a.Beta2)*gv*gv
-			m1hat := m1[i] / bc1
-			vhat := v[i] / bc2
+			m1hat := m1[i] * ibc1
+			vhat := v[i] * ibc2
 			upd := (m1hat + a.Alpha*m2[i]) / (math.Sqrt(vhat) + a.Eps)
 			pv := p.AtF64(idx...)
 			p.SetF64(pv-a.LR*(upd+a.WeightDecay*pv), idx...)
