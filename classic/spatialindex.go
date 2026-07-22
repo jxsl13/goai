@@ -356,19 +356,31 @@ func (bt *ballTree) searchRadius(n *ballNode, query []float64, eps, eps2 float64
 // brute-force DBSCAN scan uses: squared distance ≤ eps² for L2, |·| sum ≤ eps
 // for L1.
 func (bt *ballTree) within(a, b []float64, eps, eps2 float64) bool {
+	// Early-exit: the accumulator is monotonically non-decreasing (each term is ≥0),
+	// so once it exceeds the threshold the point is out and the remaining dimensions
+	// can only push it further out. Bailing returns the SAME boolean the full sum
+	// would (a point that is within never trips the check, since its full sum ≤ thr),
+	// so the neighbour set is bit-identical to the brute-force scan — it just skips
+	// the tail dims of the far points that dominate a leaf test.
 	switch bt.metric {
 	case ballL1:
 		var s float64
 		for i := range a {
 			s += math.Abs(a[i] - b[i])
+			if s > eps {
+				return false
+			}
 		}
-		return s <= eps
+		return true
 	default: // ballL2
 		var s float64
 		for i := range a {
 			d := a[i] - b[i]
 			s += d * d
+			if s > eps2 {
+				return false
+			}
 		}
-		return s <= eps2
+		return true
 	}
 }
