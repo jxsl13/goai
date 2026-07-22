@@ -341,18 +341,41 @@ func (t *Tensor) Cast(dtype Dtype) *Tensor {
 		return out
 	}
 	// Strided typed paths for the f32/f64 combos (transposed GPU-prep casts):
-	// incremental-offset walk, direct conversion, no dtype dispatch per element.
+	// incremental-offset walk, direct conversion, no dtype dispatch per element. A
+	// rank-2 non-row-run source (a transposed view) is tiled like Contiguous so the
+	// cast doesn't thrash the cache sweeping a source column per output row.
+	blk2d := nd == 2 && t.strides[nd-1] != 1
 	switch {
 	case sd == F64 && dtype == F32:
-		gatherCast(out.storage.F32()[:n], t.storage.F64(), t.shape, t.strides, t.offset)
+		if blk2d {
+			gatherBlocked2D(out.storage.F32()[:n], t.storage.F64(), t.shape[0], t.shape[1], t.strides[0], t.strides[1], t.offset)
+		} else {
+			gatherCast(out.storage.F32()[:n], t.storage.F64(), t.shape, t.strides, t.offset)
+		}
 	case sd == F32 && dtype == F64:
-		gatherCast(out.storage.F64()[:n], t.storage.F32(), t.shape, t.strides, t.offset)
+		if blk2d {
+			gatherBlocked2D(out.storage.F64()[:n], t.storage.F32(), t.shape[0], t.shape[1], t.strides[0], t.strides[1], t.offset)
+		} else {
+			gatherCast(out.storage.F64()[:n], t.storage.F32(), t.shape, t.strides, t.offset)
+		}
 	case sd == dtype && dtype == F32:
-		gatherCast(out.storage.F32()[:n], t.storage.F32(), t.shape, t.strides, t.offset)
+		if blk2d {
+			gatherBlocked2D(out.storage.F32()[:n], t.storage.F32(), t.shape[0], t.shape[1], t.strides[0], t.strides[1], t.offset)
+		} else {
+			gatherCast(out.storage.F32()[:n], t.storage.F32(), t.shape, t.strides, t.offset)
+		}
 	case sd == dtype && dtype == F64:
-		gatherCast(out.storage.F64()[:n], t.storage.F64(), t.shape, t.strides, t.offset)
+		if blk2d {
+			gatherBlocked2D(out.storage.F64()[:n], t.storage.F64(), t.shape[0], t.shape[1], t.strides[0], t.strides[1], t.offset)
+		} else {
+			gatherCast(out.storage.F64()[:n], t.storage.F64(), t.shape, t.strides, t.offset)
+		}
 	case sd == dtype && (dtype == F16 || dtype == BF16):
-		gatherCast(out.storage.U16()[:n], t.storage.U16(), t.shape, t.strides, t.offset)
+		if blk2d {
+			gatherBlocked2D(out.storage.U16()[:n], t.storage.U16(), t.shape[0], t.shape[1], t.strides[0], t.strides[1], t.offset)
+		} else {
+			gatherCast(out.storage.U16()[:n], t.storage.U16(), t.shape, t.strides, t.offset)
+		}
 	default:
 		// Strided cross-dtype half casts: widen-through-f64 generic walk.
 		gatherGeneric(out, t, n)
