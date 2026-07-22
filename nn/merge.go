@@ -3,7 +3,7 @@ package nn
 import (
 	"fmt"
 	"math"
-	"sort"
+	"slices"
 
 	"github.com/jxsl13/goai/tensor"
 )
@@ -54,10 +54,21 @@ func TIESMerge(base []*tensor.Tensor, models [][]*tensor.Tensor, density, lambda
 		n := b.Numel()
 		shape := b.Shape()
 
-		// base + trimmed task vectors, flattened
+		// base + trimmed task vectors, flattened. Typed contiguous fast path
+		// (§base-perf; model-merge sibling of SLERP/DARE): read the dense backing slice
+		// directly. F32 widens through float64 exactly as AtF64 does, so bflat is
+		// bit-identical to the generic walk.
 		bflat := make([]float64, n)
-		for p := range n {
-			bflat[p] = b.AtF64(tensor.Unravel(p, shape)...)
+		if bf := flatF64(b); bf != nil {
+			copy(bflat, bf)
+		} else if bf := flatF32(b); bf != nil {
+			for p := range bflat {
+				bflat[p] = float64(bf[p])
+			}
+		} else {
+			for p := range n {
+				bflat[p] = b.AtF64(tensor.Unravel(p, shape)...)
+			}
 		}
 		keep := int(math.Ceil(density * float64(n)))
 		keep = max(1, min(keep, n))
@@ -65,14 +76,25 @@ func TIESMerge(base []*tensor.Tensor, models [][]*tensor.Tensor, density, lambda
 		for t := range models {
 			tau := make([]float64, n)
 			mt := models[t][i]
-			for p := range n {
-				tau[p] = mt.AtF64(tensor.Unravel(p, shape)...) - bflat[p]
+			if mf := flatF64(mt); mf != nil {
+				for p := range tau {
+					tau[p] = mf[p] - bflat[p]
+				}
+			} else if mf := flatF32(mt); mf != nil {
+				for p := range tau {
+					tau[p] = float64(mf[p]) - bflat[p]
+				}
+			} else {
+				for p := range n {
+					tau[p] = mt.AtF64(tensor.Unravel(p, shape)...) - bflat[p]
+				}
 			}
 			trimmed[t] = trimTopK(tau, keep)
 		}
 
 		// elect sign + disjoint mean per coordinate
 		res := tensor.New(b.Dtype(), shape)
+		rf64, rf32 := flatF64(res), flatF32(res) // res is fresh + contiguous
 		for p := range n {
 			var sum float64
 			for t := range models {
@@ -94,7 +116,15 @@ func TIESMerge(base []*tensor.Tensor, models [][]*tensor.Tensor, density, lambda
 					merged = agg / float64(cnt)
 				}
 			}
-			res.SetF64(bflat[p]+lambda*merged, tensor.Unravel(p, shape)...)
+			val := bflat[p] + lambda*merged
+			switch {
+			case rf64 != nil:
+				rf64[p] = val
+			case rf32 != nil:
+				rf32[p] = float32(val)
+			default:
+				res.SetF64(val, tensor.Unravel(p, shape)...)
+			}
 		}
 		out[i] = res
 	}
@@ -113,8 +143,20 @@ func trimTopK(v []float64, keep int) []float64 {
 	for i := range idx {
 		idx[i] = i
 	}
-	sort.SliceStable(idx, func(a, b int) bool {
-		return math.Abs(v[idx[a]]) > math.Abs(v[idx[b]])
+	// Dominant cost of TIESMerge: the generic slices.SortStableFunc avoids the
+	// reflect.Swapper indirection sort.SliceStable pays. The comparator receives idx
+	// elements (original indices) directly, ranks by descending |v|, and returns 0 on
+	// ties so the stable order (ascending index, as idx starts [0,1,…]) is preserved —
+	// bit-identical selection of the kept top-k.
+	slices.SortStableFunc(idx, func(p, q int) int {
+		xp, xq := math.Abs(v[p]), math.Abs(v[q])
+		if xp > xq {
+			return -1
+		}
+		if xp < xq {
+			return 1
+		}
+		return 0
 	})
 	res := make([]float64, n)
 	for k := range keep {
