@@ -118,7 +118,7 @@ func (m *DeepSeekV2) DecodeStep(ctx *backend.Context, cache *DeepSeekV2Cache, to
 			return nil, err
 		}
 		// Decoupled RoPE on the SHARED key (one head of width QKRope) at absolute position pos.
-		kPeRot, err := exec1(ctx, backend.OpRoPE, rope, kPe)
+		kPeRot, err := exec1a(ctx, backend.OpRoPE, rope, kPe)
 		if err != nil {
 			return nil, err
 		}
@@ -137,7 +137,7 @@ func (m *DeepSeekV2) DecodeStep(ctx *backend.Context, cache *DeepSeekV2Cache, to
 			if err != nil {
 				return nil, err
 			}
-			qPeRot, err := exec1(ctx, backend.OpRoPE, rope, qPe)
+			qPeRot, err := exec1a(ctx, backend.OpRoPE, rope, qPe)
 			if err != nil {
 				return nil, err
 			}

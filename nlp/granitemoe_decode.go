@@ -83,16 +83,16 @@ func (m *GraniteMoE) DecodeStep(ctx *backend.Context, cache *GraniteMoeCache, to
 			return nil, err
 		}
 		// RoPE the single token at its absolute position, then append k,v to the cache
-		if q, err = exec1(ctx, backend.OpRoPE, qRoPE, q); err != nil {
+		if q, err = exec1a(ctx, backend.OpRoPE, qRoPE, q); err != nil {
 			return nil, err
 		}
-		if k, err = exec1(ctx, backend.OpRoPE, kRoPE, k); err != nil {
+		if k, err = exec1a(ctx, backend.OpRoPE, kRoPE, k); err != nil {
 			return nil, err
 		}
 		kNew, vNew := cache.bufs.appendKV(cache.K, cache.V, l, k, v)
 		cache.K[l], cache.V[l] = kNew, vNew
 		// single query attends to all cached keys → no causal mask; Granite attention scale
-		a, err := exec1(ctx, backend.OpMHA, attn, q, kNew, vNew)
+		a, err := exec3(ctx, backend.OpMHA, attn, q, kNew, vNew)
 		if err != nil {
 			return nil, err
 		}

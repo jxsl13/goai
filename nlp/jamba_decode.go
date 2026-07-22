@@ -385,7 +385,7 @@ func (m *Jamba) Prefill(ctx *backend.Context, st *JambaDecodeState, tokens []int
 			}
 			kNew, vNew := st.bufs.appendKV(st.K, st.V, l, k, v)
 			st.K[l], st.V[l] = kNew, vNew
-			a, err := exec1(ctx, backend.OpMHA, attn, q, kNew, vNew)
+			a, err := exec3(ctx, backend.OpMHA, attn, q, kNew, vNew)
 			if err != nil {
 				return nil, err
 			}
@@ -475,7 +475,7 @@ func (m *Jamba) DecodeStep(ctx *backend.Context, st *JambaDecodeState, token int
 			}
 			kNew, vNew := st.bufs.appendKV(st.K, st.V, l, k, v)
 			st.K[l], st.V[l] = kNew, vNew
-			a, err := exec1(ctx, backend.OpMHA, attn, q, kNew, vNew)
+			a, err := exec3(ctx, backend.OpMHA, attn, q, kNew, vNew)
 			if err != nil {
 				return nil, err
 			}

@@ -241,17 +241,17 @@ func (m *Llama) DecodeStep(ctx *backend.Context, cache *LlamaCache, token, pos i
 	attn := backend.Attrs(backend.AttnAttrs{Heads: cfg.Heads, KVHeads: kv, Causal: false, Scale: cfg.attnScale()})
 	h, err := m.blockStack(ctx, x, func(layerCtx *backend.Context, l int, q, k, v *tensor.Tensor) (*tensor.Tensor, error) {
 		// RoPE the single token at its absolute position, then append k,v to the cache.
-		q, err := exec1(layerCtx, backend.OpRoPE, qRoPE, q)
+		q, err := exec1a(layerCtx, backend.OpRoPE, qRoPE, q)
 		if err != nil {
 			return nil, err
 		}
-		if k, err = exec1(layerCtx, backend.OpRoPE, kRoPE, k); err != nil {
+		if k, err = exec1a(layerCtx, backend.OpRoPE, kRoPE, k); err != nil {
 			return nil, err
 		}
 		kNew, vNew := cache.bufs.appendKV(cache.K, cache.V, l, k, v)
 		cache.K[l], cache.V[l] = kNew, vNew
 		// single query at the last position attends to all cached keys → no causal mask
-		return exec1(layerCtx, backend.OpMHA, attn, q, kNew, vNew)
+		return exec3(layerCtx, backend.OpMHA, attn, q, kNew, vNew)
 	})
 	if err != nil {
 		return nil, err
