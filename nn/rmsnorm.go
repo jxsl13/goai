@@ -24,11 +24,7 @@ func NewRMSNorm(dtype tensor.Dtype, d int) *RMSNorm {
 
 // Forward normalizes x[..., d] through ctx.
 func (r *RMSNorm) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, error) {
-	out, err := backend.Execute(ctx, backend.OpRMSNorm, []*tensor.Tensor{x, r.Gamma}, backend.NormAttrs{Eps: r.Eps})
-	if err != nil {
-		return nil, err
-	}
-	return out[0], nil
+	return execPool2(ctx, backend.OpRMSNorm, backend.NormAttrs{Eps: r.Eps}, x, r.Gamma)
 }
 
 // Params returns gamma.
