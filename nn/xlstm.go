@@ -356,8 +356,18 @@ func MLSTMRecurrent(q, k, v, ipre, fpre *tensor.Tensor, expForget bool) (*tensor
 	out := tensor.New(q.Dtype(), tensor.Shape{seq, dv})
 	c := make([]float64, dv*dk) // C[a,i], a over value dim, i over key dim (row-major)
 	n := make([]float64, dk)    // n[i]
-	mPrev := math.Inf(-1)       // m_{-1} = −∞ ⇒ f'_0 = 0, i'_0 = 1
+	// k_t and q_t are read across the whole value dimension; hoist each row into a
+	// contiguous buffer once per step so the O(dv·dk) inner loops index a slice instead of
+	// re-dispatching k.AtF64(t,i)/q.AtF64(t,i) dv times per key element. Values and the
+	// left-to-right multiply order are unchanged (bit-identical).
+	krow := make([]float64, dk)
+	qrow := make([]float64, dk)
+	mPrev := math.Inf(-1) // m_{-1} = −∞ ⇒ f'_0 = 0, i'_0 = 1
 	for t := range seq {
+		for i := range dk {
+			krow[i] = k.AtF64(t, i)
+			qrow[i] = q.AtF64(t, i)
+		}
 		it := ipre.AtF64(t, 0)
 		logf := fpre.AtF64(t, 0)
 		if !expForget {
@@ -370,25 +380,25 @@ func MLSTMRecurrent(q, k, v, ipre, fpre *tensor.Tensor, expForget bool) (*tensor
 		}
 		ip := math.Exp(it - mt) // i'_t
 		for a := range dv {
-			va := v.AtF64(t, a)
+			ipva := ip * v.AtF64(t, a)
 			base := a * dk
 			for i := range dk {
-				c[base+i] = fp*c[base+i] + ip*va*k.AtF64(t, i)
+				c[base+i] = fp*c[base+i] + ipva*krow[i]
 			}
 		}
 		for i := range dk {
-			n[i] = fp*n[i] + ip*k.AtF64(t, i)
+			n[i] = fp*n[i] + ip*krow[i]
 		}
 		var nq float64 // n_tᵀ q_t
 		for i := range dk {
-			nq += n[i] * q.AtF64(t, i)
+			nq += n[i] * qrow[i]
 		}
 		denom := math.Max(math.Abs(nq), math.Exp(-mt))
 		for a := range dv {
 			var cq float64 // (C_t q_t)[a]
 			base := a * dk
 			for i := range dk {
-				cq += c[base+i] * q.AtF64(t, i)
+				cq += c[base+i] * qrow[i]
 			}
 			out.SetF64(cq/denom, t, a)
 		}
