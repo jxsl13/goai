@@ -602,7 +602,13 @@ func byteSize(ggType uint32, n int) (int, error) {
 // checks in the inner loop (docs/perf-notes-lowlevel.md).
 func dequantQ8_0(shape tensor.Shape, raw []byte) (*tensor.Tensor, error) {
 	t := tensor.New(tensor.F32, shape)
-	dst := t.Storage().F32()
+	dequantQ8_0Into(t.Storage().F32(), raw)
+	return t, nil
+}
+
+// dequantQ8_0Into is dequantQ8_0 writing into a caller-provided dst — lets QMatMul
+// reuse one row buffer across all weight rows. Byte-for-byte the tensor form.
+func dequantQ8_0Into(dst []float32, raw []byte) {
 	for b := 0; b*blockElems < len(dst); b++ {
 		blk := raw[b*34 : b*34+34]
 		d := f16ToF32(binary.LittleEndian.Uint16(blk))
@@ -611,14 +617,19 @@ func dequantQ8_0(shape tensor.Shape, raw []byte) (*tensor.Tensor, error) {
 			y[i] = d * float32(int8(q[i]))
 		}
 	}
-	return t, nil
 }
 
 // dequantQ4_0: per 32-block, 16 bytes hold 32 nibbles; x = d·(nibble−8). The
 // ggml layout pairs element i with i+16: low nibble → i, high nibble → i+16.
 func dequantQ4_0(shape tensor.Shape, raw []byte) (*tensor.Tensor, error) {
 	t := tensor.New(tensor.F32, shape)
-	dst := t.Storage().F32()
+	dequantQ4_0Into(t.Storage().F32(), raw)
+	return t, nil
+}
+
+// dequantQ4_0Into is dequantQ4_0 writing into a caller-provided dst — lets QMatMul
+// reuse one row buffer across all weight rows. Byte-for-byte the tensor form.
+func dequantQ4_0Into(dst []float32, raw []byte) {
 	for b := 0; b*blockElems < len(dst); b++ {
 		blk := raw[b*18 : b*18+18]
 		d := f16ToF32(binary.LittleEndian.Uint16(blk))
@@ -628,7 +639,6 @@ func dequantQ4_0(shape tensor.Shape, raw []byte) (*tensor.Tensor, error) {
 			y[i+16] = d * float32(int(q>>4)-8)
 		}
 	}
-	return t, nil
 }
 
 // f16Table caches all 65536 f16→f32 conversions (256 KiB), built at init from
