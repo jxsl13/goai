@@ -21,7 +21,13 @@ const q2kBlockSize = 84 // scales 16 + qs 64 + f16 d + f16 dmin
 // and min4 are the low/high nibbles of scales[is]; y = d·sc4·((q>>shift)&3) − dmin·min4.
 func dequantQ2_K(shape tensor.Shape, raw []byte) (*tensor.Tensor, error) {
 	t := tensor.New(tensor.F32, shape)
-	dst := t.Storage().F32()
+	dequantQ2_KInto(t.Storage().F32(), raw)
+	return t, nil
+}
+
+// dequantQ2_KInto is dequantQ2_K writing into a caller-provided dst — lets QMatMul
+// reuse one row buffer across all weight rows. Byte-for-byte the tensor form.
+func dequantQ2_KInto(dst []float32, raw []byte) {
 	for sb := 0; sb*qkK < len(dst); sb++ {
 		blk := raw[sb*q2kBlockSize:]
 		scales := blk[0:16]
@@ -49,7 +55,6 @@ func dequantQ2_K(shape tensor.Shape, raw []byte) (*tensor.Tensor, error) {
 			}
 		}
 	}
-	return t, nil
 }
 
 // quantizeQ2_K encodes f32 values into the Q2_K super-block layout — the inverse of

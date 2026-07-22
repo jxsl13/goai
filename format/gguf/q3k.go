@@ -61,7 +61,13 @@ func packScalesQ3_K(sc *[16]byte, out []byte) {
 // INVERTED hmask arithmetic subtracts 4 when the bit is CLEAR.
 func dequantQ3_K(shape tensor.Shape, raw []byte) (*tensor.Tensor, error) {
 	t := tensor.New(tensor.F32, shape)
-	dst := t.Storage().F32()
+	dequantQ3_KInto(t.Storage().F32(), raw)
+	return t, nil
+}
+
+// dequantQ3_KInto is dequantQ3_K writing into a caller-provided dst — lets QMatMul
+// reuse one row buffer across all weight rows. Byte-for-byte the tensor form.
+func dequantQ3_KInto(dst []float32, raw []byte) {
 	for sb := 0; sb*qkK < len(dst); sb++ {
 		blk := raw[sb*q3kBlockSize:]
 		hm := blk[0:32]
@@ -96,7 +102,6 @@ func dequantQ3_K(shape tensor.Shape, raw []byte) (*tensor.Tensor, error) {
 			}
 		}
 	}
-	return t, nil
 }
 
 // quantizeQ3_K encodes f32 values into the Q3_K super-block layout — the inverse of

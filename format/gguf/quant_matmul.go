@@ -100,44 +100,32 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 	// Q8_0 decode path above avoids. The fill and the dot are byte-for-byte identical to
 	// the per-row-tensor path, and this covers prefill (m>1) too. Other types keep the
 	// per-row path below.
-	var scratch []float32
-	switch qt {
-	case Q8_0, Q4_0, Q4_K, Q6_K:
-		scratch = make([]float32, k)
-	}
+	// Every supported quant type dequantizes each weight row into ONE reused buffer
+	// rather than a per-row tensor — the n-allocs-per-matmul anti-pattern is gone for all
+	// of them (Q8_0/Q4_0/Q4_K/Q6_K landed first as the common formats; Q2_K/Q3_K/Q5_K —
+	// aggressive quants — complete the set). Fill + dot are byte-for-byte the per-row form.
+	scratch := make([]float32, k)
 	for ni := range n {
 		rowBits := weight[ni*rowBytes : (ni+1)*rowBytes]
-		var wf []float32
 		switch qt {
 		case Q8_0:
 			dequantQ8_0Into(scratch, rowBits)
-			wf = scratch
 		case Q4_0:
 			dequantQ4_0Into(scratch, rowBits)
-			wf = scratch
+		case Q2_K:
+			dequantQ2_KInto(scratch, rowBits)
+		case Q3_K:
+			dequantQ3_KInto(scratch, rowBits)
 		case Q4_K:
 			dequantQ4_KInto(scratch, rowBits)
-			wf = scratch
+		case Q5_K:
+			dequantQ5_KInto(scratch, rowBits)
 		case Q6_K:
 			dequantQ6_KInto(scratch, rowBits)
-			wf = scratch
 		default:
-			var wrow *tensor.Tensor
-			switch qt {
-			case Q2_K:
-				wrow, err = dequantQ2_K(tensor.Shape{k}, rowBits)
-			case Q3_K:
-				wrow, err = dequantQ3_K(tensor.Shape{k}, rowBits)
-			case Q5_K:
-				wrow, err = dequantQ5_K(tensor.Shape{k}, rowBits)
-			default:
-				return nil, fmt.Errorf("gguf: QMatMul unsupported quant type %d", qt)
-			}
-			if err != nil {
-				return nil, err
-			}
-			wf = wrow.Storage().F32()[:k]
+			return nil, fmt.Errorf("gguf: QMatMul unsupported quant type %d", qt)
 		}
+		wf := scratch
 		for mi := range m {
 			var acc float64
 			switch {
