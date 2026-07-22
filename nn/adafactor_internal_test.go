@@ -28,7 +28,8 @@ func TestAdafactorFactoredExactRank1(t *testing.T) {
 	for j := range b {
 		c[j] = b[j] * sumA
 	}
-	vhat := adafactorVhat(r, c)
+	vhat := make([]float64, len(r)*len(c))
+	adafactorVhat(vhat, r, c)
 	for i := range a {
 		for j := range b {
 			want := a[i] * b[j] // = g²[i,j]

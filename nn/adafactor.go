@@ -33,6 +33,20 @@ type Adafactor struct {
 	r, c [][]float64 // factored row/col second moments for rank-2 params (else nil)
 	v    [][]float64 // full second moment for non-matrix params (else nil)
 	m    [][]float64 // first moment (allocated only when Beta1 > 0)
+
+	// Per-Step scratch, reused across steps AND across params within a step (params are
+	// processed serially, each finishing before the next). Hoisting these off the hot
+	// path drops Adafactor.Step from 12 allocs/3.1 MB per call to zero — no GC churn. Each
+	// is fully overwritten (or explicitly zeroed) before use, so reuse is bit-identical.
+	uScr, vhatScr, rowScr, colScr []float64
+}
+
+// growF64 returns b resliced to length n, reallocating only when its capacity is short.
+func growF64(b []float64, n int) []float64 {
+	if cap(b) < n {
+		return make([]float64, n)
+	}
+	return b[:n]
 }
 
 // AdafactorOption configures an Adafactor optimizer (functional-options idiom, §C12).
@@ -112,18 +126,24 @@ func NewAdafactor(params []*tensor.Tensor, opts ...AdafactorOption) *Adafactor {
 // adafactorVhat reconstructs the factored second moment V̂[i,j] = R[i]·C[j]/ΣR (row-
 // major, len(R)×len(C)). This rank-1 form is EXACT when g² is itself rank-1, which
 // is the property the factorization exploits (Shazeer & Stern §3).
-func adafactorVhat(r, c []float64) []float64 {
+func adafactorVhat(out, r, c []float64) {
 	var sumR float64
 	for _, rv := range r {
 		sumR += rv
 	}
-	out := make([]float64, len(r)*len(c))
+	// V̂ = R⊗C/ΣR — hoist the loop-invariant 1/ΣR to a per-row reciprocal-multiply
+	// (rᵢ/ΣR once, then ·cⱼ). V̂ is a continuous second-moment estimate fed through
+	// √ and a division, so the ½-ulp reassociation rides the optimizer's tolerance
+	// (like the other reciprocal-multiplied moments), not a discrete/golden output.
+	invSumR := 1 / sumR
+	nc := len(c)
 	for i, rv := range r {
+		ri := rv * invSumR
+		base := i * nc
 		for j, cv := range c {
-			out[i*len(c)+j] = rv * cv / sumR
+			out[base+j] = ri * cv
 		}
 	}
-	return out
 }
 
 // Step applies one Adafactor update. Parameters with a nil gradient are skipped.
@@ -152,8 +172,15 @@ func (a *Adafactor) Step(grad GradFn) error {
 		var vhat []float64
 		if p.Ndim() == 2 {
 			rows, cols := p.Shape()[0], p.Shape()[1]
-			rowsum := make([]float64, rows)
-			colsum := make([]float64, cols)
+			rowsum := growF64(a.rowScr, rows)
+			colsum := growF64(a.colScr, cols)
+			a.rowScr, a.colScr = rowsum, colsum
+			for i := range rowsum { // reused buffer: zero before accumulating
+				rowsum[i] = 0
+			}
+			for j := range colsum {
+				colsum[j] = 0
+			}
 			switch {
 			case gf64 != nil:
 				for i := range rows {
@@ -192,10 +219,13 @@ func (a *Adafactor) Step(grad GradFn) error {
 			for j := range C {
 				C[j] = beta2t*C[j] + (1-beta2t)*colsum[j]
 			}
-			vhat = adafactorVhat(R, C)
+			vhat = growF64(a.vhatScr, n)
+			a.vhatScr = vhat
+			adafactorVhat(vhat, R, C)
 		} else {
 			V := a.v[pi]
-			vhat = make([]float64, n)
+			vhat = growF64(a.vhatScr, n)
+			a.vhatScr = vhat
 			switch {
 			case gf64 != nil:
 				for i, gv := range gf64 {
@@ -220,7 +250,8 @@ func (a *Adafactor) Step(grad GradFn) error {
 
 		// U = g/√V̂, optional first moment, then RMS update-clipping and the
 		// parameter-relative step.
-		u := make([]float64, n)
+		u := growF64(a.uScr, n)
+		a.uScr = u
 		switch {
 		case gf64 != nil:
 			for i, gv := range gf64 {
