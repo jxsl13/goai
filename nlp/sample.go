@@ -790,8 +790,9 @@ func truncateNucleus(probs []float64, thresh float64) {
 		}
 	}
 	if ksum > 0 {
+		inv := 1 / ksum // reciprocal-multiply the renormalize
 		for i := range probs {
-			probs[i] /= ksum
+			probs[i] *= inv
 		}
 	}
 }
@@ -916,8 +917,9 @@ func applyKeep(probs []float64, keep []bool) {
 		}
 	}
 	if ksum > 0 {
+		inv := 1 / ksum // reciprocal-multiply the renormalize
 		for i := range probs {
-			probs[i] /= ksum
+			probs[i] *= inv
 		}
 	}
 }
@@ -1165,8 +1167,9 @@ func (s *Sampler) distInto(dst, logits []float64) []float64 {
 		z = z[:n]
 	}
 	defer float64ScratchPool.Put(z) // z is scratch; dst holds the returned distribution
+	invT := 1 / s.Temperature       // reciprocal-multiply: one divide, then a mul per lane
 	for i, v := range logits {
-		z[i] = v / s.Temperature
+		z[i] = v * invT
 	}
 
 	// top-nσ (Tang et al. 2024 arXiv:2411.07641, see sample_topnsigma.go): mask
@@ -1213,8 +1216,9 @@ func (s *Sampler) distInto(dst, logits []float64) []float64 {
 	// on the SIMD build (the exp was ~26% of large-vocab Dist), scalar otherwise.
 	// Rides the Dist f64 tolerance (§sample_test 1e-12); masked −Inf lanes → ~0.
 	sum := simd.ExpSumF64(dst, z, m)
+	inv := 1 / sum // reciprocal-multiply the normalize: one divide, a mul per lane
 	for i := range dst {
-		dst[i] /= sum
+		dst[i] *= inv
 	}
 
 	// top-p nucleus: keep smallest desc-prob prefix with cumsum ≥ p (crossing
@@ -1296,8 +1300,9 @@ func truncateAboveKeeping(probs []float64, thresh float64, top int) {
 	if ksum == 0 {
 		return
 	}
+	inv := 1 / ksum // reciprocal-multiply the renormalize
 	for i := range probs {
-		probs[i] /= ksum
+		probs[i] *= inv
 	}
 }
 
