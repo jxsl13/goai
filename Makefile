@@ -217,11 +217,13 @@ spec-verify:
 	$(CGO_OFF) $(GO) run ./internal/docgraph spec verify
 	$(GO) run ./internal/mdlint ./...
 
-## perfscan: static finder for the per-element hot-loop anti-patterns (T919) —
-## per-element AtF64/SetF64 with no flatF64/flatF32 fast path, allocation inside a
-## per-element loop, batch API fed a wrapped single row. Advisory (candidates need
-## an A/B measurement, §C3/§V22); -strict exits non-zero. e.g. make perfscan
-## ARGS='-strict ./nn/...'. The detectors are unit-tested in internal/perfscan.
+## perfscan: staticcheck-style finder for the hot-loop anti-patterns this repo
+## repeatedly optimizes away (T919). Each check has a stable PS-prefixed 4-digit ID
+## (PS1001…; `make perfscan ARGS=-list` prints the table). Advisory by design —
+## candidates need an A/B + bit-identity proof (§C3/§V22); -strict exits non-zero.
+## -fix applies the safe mechanical fixes in place; -json emits findings+fixes for
+## an editor. e.g. make perfscan ARGS='-strict ./nn/...' or ARGS='-fix ./...'.
+## The detectors are unit-tested in internal/perfscan.
 perfscan:
 	$(CGO_OFF) $(GO) run ./internal/perfscan $(ARGS)
 

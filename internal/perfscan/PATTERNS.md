@@ -11,31 +11,71 @@ scanner (extend a callee map or add a detector in `perfscan.go`, with a positive
 + negative fixture test in `perfscan_test.go`) — SPEC §C29.
 
 This is the SINGLE perfscan for the repo (`internal/perfscan`, run via
-`make perfscan` / `go run ./internal/perfscan`); the code labels detectors A–M.
-Sections P1/P2 below are the static detectors **I** and **J**; P3/P4 are
-profile/benchmark heuristics (no static detector); K and L (below) are the newest
-static ones — L generalizes K to transcendentals hidden one call deep in a helper.
+`make perfscan` / `go run ./internal/perfscan`); each static check has a
+PS-prefixed 4-digit ID (`perfscan -list` prints them all). The sections below
+catalog a subset with detailed wins — their IDs head each section. The `P3`/`P4`/
+`P5` sections are profile/benchmark heuristics with **no** static detector.
+`PS4003` generalizes `PS4002` to a transcendental hidden one call deep in a helper.
 
-## Suppressing findings (class-granular, staticcheck-style)
+## Check IDs, auto-fix, editor integration
 
-Silencing one class never hides another — accepting a site for class X still
-surfaces a new, unrelated class Y there. Name a class by its **letter** (A–K) or
-its **category** (copy-paste from a report line; `-list` shows both):
+Every check has a stable **PS-prefixed 4-digit ID** (`PS1001`…), grouped by the
+thousands digit: `PS1xxx` per-element access, `PS2xxx` allocation, `PS3xxx`
+indirection/reflection, `PS4xxx` vectorization, `PS5xxx` arithmetic. `perfscan
+-list` prints the table (ID, category, whether `-fix` can rewrite it, title).
 
-```go
-//perfscan:ignore K reason        // silence ONLY class K on the next (or same) line
-//perfscan:ignore K,I reason      // several classes at once
-//perfscan:ignore                 // bare: silence ALL classes at that site
+- `-fix` applies the **safe mechanical fixes** in place. Only checks with a
+  deterministic, bit-identical rewrite carry one (today `PS2005`
+  regexp-compile-in-loop hoists a literal-pattern compile out of the loop);
+  everything else is advisory — the transform needs an A/B + bit-identity proof
+  (§C3/§V22) a static tool cannot give. Review the diff even for applied fixes.
+- `-json` emits every finding, with any fix's text edits (line:col ranges + byte
+  offsets + replacement text), for a VS Code task/extension to offer as a quick-fix.
+
+**VS Code integration.** The text output is a standard `file:line:col: message (PSid)`,
+so a task with a `problemMatcher` surfaces findings in the Problems panel — no
+extension needed:
+
+```jsonc
+// .vscode/tasks.json
+{
+  "label": "perfscan",
+  "type": "shell",
+  "command": "go run ./internal/perfscan ./...",
+  "problemMatcher": {
+    "owner": "perfscan",
+    "fileLocation": ["relative", "${workspaceFolder}"],
+    "pattern": { "regexp": "^(.*):(\\d+):(\\d+): (.*) \\((PS\\d{4})[^)]*\\)$",
+                 "file": 1, "line": 2, "column": 3, "message": 4, "code": 5 }
+  }
+}
 ```
 
-Repo-wide, pass `-exclude=K,per-element-closure`. Example: the f64
-exp/log/tanh/sigmoid/gelu kernels are flagged by K but are exact-locked
-(`TestCPUCrossReferenceExact`) — mark each `//perfscan:ignore K exact-locked ref`
-so the one genuinely-open member of the family still reports.
+For quick-fixes, a thin extension runs `perfscan -json ${file}` and maps each
+`fix.edits` entry to a `vscode.WorkspaceEdit` (the `line`/`col`/`endLine`/`endCol`
+range → `newText`). `perfscan -fix ./...` applies them from the CLI.
+
+## Suppressing findings (per-check, staticcheck-style)
+
+Silencing one check never hides another — accepting a site for `PS1001` still
+surfaces a new, unrelated `PS2002` there. Name a check by its **ID** (precise —
+the "ignore only this explicit detection" path) or its **category** alias:
+
+```go
+//perfscan:ignore PS4002 reason         // silence ONLY PS4002 on the next (or same) line
+//perfscan:ignore PS4002,PS1002 reason   // several checks at once (IDs or categories)
+//perfscan:ignore                       // bare: silence ALL checks at that site
+```
+
+Repo-wide, pass `-exclude=PS4002,per-element-closure`, or `-checks=PS1001,PS2002`
+to run an allow-list. Example: the f64 exp/log/tanh/sigmoid/gelu kernels are
+flagged by `PS4002` but are exact-locked (`TestCPUCrossReferenceExact`) — mark each
+`//perfscan:ignore PS4002 exact-locked ref` so the one genuinely-open member of
+the family still reports.
 
 ---
 
-## P1 (detector I) — per-element closure over a contiguous buffer  *(scanner: static)*
+## PS1002 — per-element closure over a contiguous buffer  *(scanner: static)*
 
 **Smell.** A helper that invokes a `func(...)` argument once per element
 (`readGen`, `fillGen`, `forEach`, …). Even on the helper's contiguous fast
@@ -55,7 +95,7 @@ non-contiguous / F16 / BF16 fallback. Result is **bit-identical**.
 
 ---
 
-## P2 (detector J) — closure-comparator sort on a large keyed slice  *(scanner: static)*
+## PS3002 — closure-comparator sort on a large keyed slice  *(scanner: static)*
 
 **Smell.** `slices.SortFunc` / `sort.Slice` / `sort.Sort` sorting a large slice
 by a float/int key looked up through the comparator. The per-comparison indirect
@@ -129,7 +169,7 @@ GradAccum-vs-AtF64 3.0×).
 
 ---
 
-## K — scalar transcendental where a vectorized sibling exists  *(scanner: static)*
+## PS4002 — scalar transcendental where a vectorized sibling exists  *(scanner: static)*
 
 **Smell.** A numeric kernel switches on dtype: one branch runs a scalar libm
 transcendental (`math.Exp`/`Tanh`/`Erf`/`Log`/…) in a loop, while the same kernel
@@ -156,11 +196,11 @@ flagged too but are exact-locked.
 
 ---
 
-## L — a loop calls a local helper that WRAPS a transcendental  *(scanner: static)*
+## PS4003 — a loop calls a local helper that WRAPS a transcendental  *(scanner: static)*
 
 **Smell.** A hot per-element loop calls a package-local elementwise helper
 (`softplus`, `mish`, `swish`, `silu`, a `gaussianQuantile`, …) whose body hides a
-scalar libm transcendental one call deep. Class K only sees a **direct** `math.X`
+scalar libm transcendental one call deep. PS4002 only sees a **direct** `math.X`
 in the loop, so a loop over such a wrapper reads as scalar-clean and slips past it.
 The detector collects the file's scalar-`float→float` funcs that call a
 transcendental, then flags any loop that calls one.
@@ -186,7 +226,7 @@ scalar per-`(t,h)` loop that the kernel does not cover — as the leftover sub-w
 `math.Exp/Log/Tanh/…` loop) with **no CPU kernel** — so on the CPU backend it falls
 through to that scalar, single-threaded reference. This is the shape both `OpSoftplus`
 (Mamba/Jamba Δ, 1.62× — PR #249) and `OpSoftCap` (Gemma-2 `cap·tanh(x/cap)`, 6.1× at
-attention-score shape) had. Class K/L never see it: the transcendental lives in
+attention-score shape) had. PS4002/PS4003 never see it: the transcendental lives in
 `backend/ref`, not in a hot first-party loop with a vector sibling.
 
 **Finder (generic).** Diff the ref-registered ops against the CPU-registered ops:
@@ -211,7 +251,7 @@ perfscan grows a module-level cross-package registration pass.)*
 
 ---
 
-## M (detector M) — integer-keyed map read in a loop  *(scanner: static)*
+## PS3003 — integer-keyed map read in a loop  *(scanner: static)*
 
 **Smell.** A `map[int]…` / `map[rune]…` / `map[int32]…` (sets — `map[int]bool`,
 `map[int]struct{}` — excluded) is READ inside a loop: `t.decoder[id]`, `u2b[r]`,
@@ -249,7 +289,7 @@ candidate (which is why the detector skips set-typed maps and the report says
   for other hardware (e.g. the CPU pool `parThreshold` / dense-worker cap) on a
   single box's numbers — that needs multi-platform validation.
 
-## N (detector N) — poolable per-call scratch in a stateful method  *(scanner: static)*
+## PS2004 — poolable per-call scratch in a stateful method  *(scanner: static)*
 
 A `make([]T, …)` inside a per-item loop of a **pointer-receiver method**, bound to a
 **local that does not escape** the iteration (not returned, not stored into a field or
@@ -271,7 +311,7 @@ different fix — pre-allocate the slot and overwrite it in place — so N does 
 mis-advise "hoist to one reused field." Also silent on value-receiver methods and free
 functions (no receiver to hang the reused buffer on) and on `make()` outside any loop.
 
-## O (detector O) — divide by a loop-invariant scalar  *(scanner: static)*
+## PS5001 — divide by a loop-invariant scalar  *(scanner: static)*
 
 A `/` (or `/=`) by a loop-invariant scalar on every iteration of an element-wise loop.
 Hoisting `inv := 1/D` once and multiplying is **1.2–1.5×** when the divide is the
