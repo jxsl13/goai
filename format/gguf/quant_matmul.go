@@ -101,13 +101,20 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 	// the per-row-tensor path, and this covers prefill (m>1) too. Other types keep the
 	// per-row path below.
 	var scratch []float32
-	if qt == Q4_K || qt == Q6_K {
+	switch qt {
+	case Q8_0, Q4_0, Q4_K, Q6_K:
 		scratch = make([]float32, k)
 	}
 	for ni := range n {
 		rowBits := weight[ni*rowBytes : (ni+1)*rowBytes]
 		var wf []float32
 		switch qt {
+		case Q8_0:
+			dequantQ8_0Into(scratch, rowBits)
+			wf = scratch
+		case Q4_0:
+			dequantQ4_0Into(scratch, rowBits)
+			wf = scratch
 		case Q4_K:
 			dequantQ4_KInto(scratch, rowBits)
 			wf = scratch
@@ -117,10 +124,6 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 		default:
 			var wrow *tensor.Tensor
 			switch qt {
-			case Q8_0:
-				wrow, err = dequantQ8_0(tensor.Shape{k}, rowBits)
-			case Q4_0:
-				wrow, err = dequantQ4_0(tensor.Shape{k}, rowBits)
 			case Q2_K:
 				wrow, err = dequantQ2_K(tensor.Shape{k}, rowBits)
 			case Q3_K:
