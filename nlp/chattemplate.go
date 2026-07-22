@@ -242,9 +242,22 @@ func (t *ChatTemplate) Render(messages []ChatMessage, opts ...ChatRenderOption) 
 
 // renderTurnStyle covers the turn-wrapped families: bos + per message
 // open+role+sep+content+close, plus the assistant opener as generation prompt.
+// estChatSize is a capacity estimate for a rendered chat prompt: the total message
+// content plus a fixed per-turn allowance for role tags and separators. Growing the
+// strings.Builder once to this size skips the log(n) doubling reallocations; a rough
+// over-estimate is fine (Grow only ensures a lower bound on capacity).
+func estChatSize(messages []ChatMessage) int {
+	n := 64 // BOS + trailing generation-prompt opener slack
+	for _, m := range messages {
+		n += len(m.Content) + len(m.Role) + 40
+	}
+	return n
+}
+
 // roleMap renames roles (gemma: assistant→model); trim strips content whitespace.
 func renderTurnStyle(messages []ChatMessage, cfg chatRenderCfg, bos, open, sep, closeTok string, roleMap map[string]string, trim bool) string {
 	var sb strings.Builder
+	sb.Grow(estChatSize(messages))
 	if !cfg.withoutBOS {
 		sb.WriteString(bos)
 	}
@@ -283,6 +296,7 @@ func renderMistral(messages []ChatMessage, cfg chatRenderCfg) (string, error) {
 		return "", err
 	}
 	var sb strings.Builder
+	sb.Grow(estChatSize(messages))
 	if !cfg.withoutBOS {
 		sb.WriteString("<s>")
 	}
@@ -313,6 +327,7 @@ func renderMistral(messages []ChatMessage, cfg chatRenderCfg) (string, error) {
 // tokenizer.apply_chat_template (transformers 5.14.1).
 func renderOLMo2(messages []ChatMessage, cfg chatRenderCfg) string {
 	var sb strings.Builder
+	sb.Grow(estChatSize(messages))
 	if !cfg.withoutBOS {
 		sb.WriteString("<|endoftext|>")
 	}
@@ -345,6 +360,7 @@ func renderOLMo2(messages []ChatMessage, cfg chatRenderCfg) string {
 // tokenizer.apply_chat_template (transformers 5.14.1).
 func renderDeepSeek(messages []ChatMessage, cfg chatRenderCfg) string {
 	var sb strings.Builder
+	sb.Grow(estChatSize(messages))
 	if !cfg.withoutBOS {
 		sb.WriteString("<｜begin▁of▁sentence｜>")
 	}
