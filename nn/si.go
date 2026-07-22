@@ -119,14 +119,38 @@ func (s *SI) Consolidate(xi float64) {
 		xi = SIDefaultDamping
 	}
 	for pi, p := range s.Params {
+		// The importance math already runs on the flat []float64 masters; the only
+		// per-element tensor dispatch is reading cur from p. For contiguous F64/F32 p
+		// read the typed backing slice directly (cur is float64 either way, so the
+		// arithmetic and write order are unchanged — bit-identical to the generic
+		// walk). Same fast-path idiom as siAccumulate above.
+		ts, bo, om, pr, rf := s.taskStart[pi], s.bigOmega[pi], s.omega[pi], s.prev[pi], s.ref[pi]
+		if pf := flatF64(p); pf != nil {
+			for i := range pf {
+				cur := pf[i]
+				dTask := cur - ts[i]
+				bo[i] += om[i] / (dTask*dTask + xi)
+				om[i] = 0
+				ts[i], pr[i], rf[i] = cur, cur, cur
+			}
+			continue
+		}
+		if pf := flatF32(p); pf != nil {
+			for i := range pf {
+				cur := float64(pf[i])
+				dTask := cur - ts[i]
+				bo[i] += om[i] / (dTask*dTask + xi)
+				om[i] = 0
+				ts[i], pr[i], rf[i] = cur, cur, cur
+			}
+			continue
+		}
 		for i := range p.Numel() {
 			cur := p.AtF64(tensor.Unravel(i, p.Shape())...)
-			dTask := cur - s.taskStart[pi][i]
-			s.bigOmega[pi][i] += s.omega[pi][i] / (dTask*dTask + xi)
-			s.omega[pi][i] = 0
-			s.taskStart[pi][i] = cur
-			s.prev[pi][i] = cur
-			s.ref[pi][i] = cur
+			dTask := cur - ts[i]
+			bo[i] += om[i] / (dTask*dTask + xi)
+			om[i] = 0
+			ts[i], pr[i], rf[i] = cur, cur, cur
 		}
 	}
 }
@@ -143,9 +167,23 @@ func (s *SI) RefParams() []*tensor.Tensor { return materialize(s.Params, s.ref) 
 func snapshot(params []*tensor.Tensor) [][]float64 {
 	out := make([][]float64, len(params))
 	for pi, p := range params {
-		out[pi] = make([]float64, p.Numel())
-		for i := range p.Numel() {
-			out[pi][i] = p.AtF64(tensor.Unravel(i, p.Shape())...)
+		n := p.Numel()
+		o := make([]float64, n)
+		out[pi] = o
+		// Contiguous F64/F32 read the typed backing slice directly (F64 is a plain
+		// copy) instead of the per-element AtF64(Unravel) dispatch; bit-identical.
+		if pf := flatF64(p); pf != nil {
+			copy(o, pf)
+			continue
+		}
+		if pf := flatF32(p); pf != nil {
+			for i := range o {
+				o[i] = float64(pf[i])
+			}
+			continue
+		}
+		for i := range n {
+			o[i] = p.AtF64(tensor.Unravel(i, p.Shape())...)
 		}
 	}
 	return out
