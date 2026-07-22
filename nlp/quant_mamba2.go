@@ -283,6 +283,13 @@ func (b *QuantMamba2Mixer) forward(ctx *backend.Context, u *tensor.Tensor) (*ten
 	for t := range seq {
 		y[t] = make([]float64, b.Intermediate)
 	}
+	// Inline per-head SSD scan on raw slices — the same recurrence [QuantMamba2Mixer.step]
+	// runs, mirroring the float mixer. Avoids building four [seq,·] tensors per head +
+	// nn.SSDRecurrent (~1300 allocs / tens of MB per mixer); the Δ-scaled value row is
+	// hoisted once per timestep (not re-formed inside the N loop). Forward is thus
+	// bit-identical to the single-token step (TestQuantMamba2DecodeMatchesForward is exact).
+	hst := make([]float64, b.N*b.HeadDim) // per-head [N, head_dim] state, reused
+	xrow := make([]float64, b.HeadDim)    // Δ-scaled value row, hoisted out of the i loop
 	for h := range b.NumHeads {
 		g := h / headsPerGroup
 		A := b.A.AtF64(h)
@@ -291,34 +298,28 @@ func (b *QuantMamba2Mixer) forward(ctx *backend.Context, u *tensor.Tensor) (*ten
 		hOff := h * b.HeadDim
 		bOff := b.Intermediate + g*b.N
 		cOff := b.Intermediate + gN + g*b.N
-
-		xScaled := tensor.New(tensor.F64, tensor.Shape{seq, b.HeadDim})
-		aDec := tensor.New(tensor.F64, tensor.Shape{seq})
-		bMat := tensor.New(tensor.F64, tensor.Shape{seq, b.N})
-		cMat := tensor.New(tensor.F64, tensor.Shape{seq, b.N})
-		xs := xScaled.Storage().F64()
-		as := aDec.Storage().F64()
-		bs := bMat.Storage().F64()
-		cs := cMat.Storage().F64()
+		for i := range hst {
+			hst[i] = 0
+		}
 		for t := range seq {
 			delta := softplus(dt[t][h] + dtB)
-			as[t] = math.Exp(delta * A)
+			at := math.Exp(delta * A)
 			for j := range b.HeadDim {
-				xs[t*b.HeadDim+j] = xc[t][hOff+j] * delta
+				xrow[j] = xc[t][hOff+j] * delta
 			}
-			for n := range b.N {
-				bs[t*b.N+n] = xc[t][bOff+n]
-				cs[t*b.N+n] = xc[t][cOff+n]
+			for i := range b.N {
+				bi := xc[t][bOff+i]
+				hb := hst[i*b.HeadDim:]
+				for j := range b.HeadDim {
+					hb[j] = at*hb[j] + bi*xrow[j]
+				}
 			}
-		}
-		yh, err := nn.SSDRecurrent(xScaled, aDec, bMat, cMat)
-		if err != nil {
-			return nil, err
-		}
-		ys := yh.Storage().F64()
-		for t := range seq {
 			for j := range b.HeadDim {
-				y[t][hOff+j] = ys[t*b.HeadDim+j] + Dh*xc[t][hOff+j]
+				var s float64
+				for i := range b.N {
+					s += xc[t][cOff+i] * hst[i*b.HeadDim+j]
+				}
+				y[t][hOff+j] = s + Dh*xc[t][hOff+j]
 			}
 		}
 	}
