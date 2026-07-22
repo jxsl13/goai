@@ -731,6 +731,23 @@ func (o *Opt) Step() {
 		o.ring[o.pos] = flat
 	}
 }`,
+		"stored-in-struct-literal": `package p
+type layer struct{ a []float64 }
+type M struct{ Layers []int; out []layer }
+func (m *M) NewState() {
+	for l := range m.Layers {
+		a := make([]float64, l)
+		m.out[l] = layer{a: a}
+	}
+}`,
+		"stored-in-slice-literal": `package p
+type M struct{ Layers []int; keep [][][]float64 }
+func (m *M) Step() {
+	for l := range m.Layers {
+		buf := make([]float64, l)
+		m.keep[l] = [][]float64{buf}
+	}
+}`,
 		"not-pointer-method": `package p
 type Opt struct{ Params []int }
 func (o Opt) Step() {

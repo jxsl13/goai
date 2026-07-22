@@ -603,6 +603,19 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 			if isBuilderType(x.Type) { // b := strings.Builder{}
 				hasBuilder = true
 			}
+			// A local used as a value in a struct/slice/map literal is stored by reference
+			// into it and outlives the loop iteration — e.g. State{a: a} or []T{buf}. Mark it
+			// escaping so detector N does not mis-flag it as reusable scratch.
+			for _, elt := range x.Elts {
+				switch e := elt.(type) {
+				case *ast.KeyValueExpr:
+					if id, ok := e.Value.(*ast.Ident); ok {
+						escaping[id.Name] = true
+					}
+				case *ast.Ident:
+					escaping[e.Name] = true
+				}
+			}
 		case *ast.ValueSpec:
 			if isBuilderType(x.Type) { // var b strings.Builder
 				hasBuilder = true
