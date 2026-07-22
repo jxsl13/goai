@@ -2,7 +2,10 @@ package nn
 
 import (
 	"fmt"
+	"runtime"
 	"sort"
+	"sync"
+	"sync/atomic"
 
 	"github.com/jxsl13/goai/tensor"
 )
@@ -99,7 +102,12 @@ func averageModels(models [][]*tensor.Tensor, idxs []int) []*tensor.Tensor {
 	ref := models[idxs[0]]
 	out := make([]*tensor.Tensor, len(ref))
 	inv := 1 / float64(len(idxs))
-	for i, p := range ref {
+	// Each parameter's average is independent (out[i] depends only on models[·][i] and a
+	// local accumulator), so the per-tensor work fans out across cores — a large win when
+	// merging real models with many tensors. The per-tensor math is unchanged, so the
+	// result is identical regardless of how the tensors are scheduled.
+	do := func(i int) {
+		p := ref[i]
 		acc := make([]float64, p.Numel())
 		// Typed contiguous fast path (§base-perf; model-merge sibling of SLERP/DARE/TIES):
 		// accumulate each contiguous model directly from its backing []T — no per-element
@@ -136,6 +144,27 @@ func averageModels(models [][]*tensor.Tensor, idxs []int) []*tensor.Tensor {
 			}
 		}
 		out[i] = res
+	}
+	workers := min(runtime.GOMAXPROCS(0), len(ref))
+	if workers > 1 {
+		var next atomic.Int64
+		var wg sync.WaitGroup
+		for range workers {
+			wg.Go(func() {
+				for {
+					i := int(next.Add(1)) - 1 // work-steal (tensors vary in size)
+					if i >= len(ref) {
+						return
+					}
+					do(i)
+				}
+			})
+		}
+		wg.Wait()
+	} else {
+		for i := range ref {
+			do(i)
+		}
 	}
 	return out
 }
