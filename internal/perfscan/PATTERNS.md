@@ -68,9 +68,25 @@ replace with an 8-pass **LSD radix sort** on the key bits — closure-free, O(n)
 The value order is identical to the comparison sort for distinct keys. Gate on
 `n >= ~2048` so small slices keep the lower-constant comparison sort.
 
+**Cheaper sub-fix — drop cosmetic stability (`SliceStable` → `Slice`).** When the
+callee is `sort.SliceStable` and stability is used ONLY for a deterministic tie
+order (not a semantic requirement), a full radix rewrite is overkill: just switch to
+`sort.Slice`. `SliceStable`'s `symMerge` has a far higher constant than `Slice`'s
+pdqsort, and the tie order is recovered for free when the comparator is already a
+**total order** (a unique field like a token id or index breaks every tie → output is
+byte-identical) or when the append order is reconstructable (index-argsort → append
+`idx[a] < idx[b]`; beam frontier → `(score, parent, tok)`). Use this when the key
+isn't a bare monotonic scalar (so radix doesn't apply) but n is still large.
+
 **Wins (~50k-vocab flat distribution):**
 - `nlp` top-p nucleus (`sortIdxDescByProb`) — **2.25×** (7.38→3.27 ms)
 - `nlp` locally-typical (`sortIdxAscByScore`) — **1.89×** (7.14→3.77 ms)
+
+**Wins (SliceStable → Slice sub-fix):**
+- `nlp` logit-lens full-vocab readout (`newJLensReadout`) — **5.44×** (129→23.7 ms)
+- `nlp` `CosineRerank` (20k×64) — **3.89×** (15.0→3.86 ms)
+- `nlp` beam-search frontier (`BeamSearch`) — **2.4–3.1×**
+- `nlp` diverse-beam per-group frontier — **1.7×**
 
 ---
 
