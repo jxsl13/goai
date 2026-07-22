@@ -101,6 +101,12 @@ func (mp *MixedPrecision) Sync() {
 		// roundHalf per element — roundHalf allocates a 1-element tensor and casts it on
 		// every call, so the old loop did O(Numel) allocations per weight. m.Cast applies
 		// the identical element-wise rounding, so this is bit-identical (§base-perf).
+		// F32 master → F32 compute: round through half in ONE pass straight into w, no
+		// intermediate F16 + F32 tensors (bit-identical to the two-Cast form below).
+		if wf, mf := flatF32(w), flatF32(m); wf != nil && mf != nil {
+			tensor.RoundToHalfF32(wf, mf, mp.Dtype)
+			continue
+		}
 		src := m.Cast(mp.Dtype).Cast(w.Dtype()) // F32 master → half (round) → w's storage dtype
 		if wf, sf := flatF32(w), flatF32(src); wf != nil && sf != nil {
 			copy(wf, sf)
