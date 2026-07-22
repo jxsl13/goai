@@ -139,10 +139,12 @@ func policyNet(obsDim, hidden, actions int, seed uint64) *nn.Sequential {
 func forward(ctx *backend.Context, net *nn.Sequential, states [][]float64) (*tensor.Tensor, error) {
 	n, d := len(states), len(states[0])
 	x := tensor.New(tensor.F64, tensor.Shape{n, d})
+	// Typed contiguous fill: x is a fresh row-major [n,d] F64 tensor, so row i occupies
+	// flat[i*d:(i+1)*d]; copy each state row straight into the storage instead of the
+	// per-element SetF64 dispatch the generic fill paid on all n·d inputs (§base-perf).
+	xf := x.Storage().F64()
 	for i, s := range states {
-		for j, v := range s {
-			x.SetF64(v, i, j)
-		}
+		copy(xf[i*d:(i+1)*d], s)
 	}
 	return net.Forward(ctx, x)
 }

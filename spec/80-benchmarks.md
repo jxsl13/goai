@@ -46,3 +46,4 @@
 | BM42 | 2026-07-22 | nn SwiGLU FFN input slices pooled recorder-guarded (Forward dim256/hidden1024, allocs) | darwin/arm64 | self | allocs/op | 46 | 41 | 1.12× | T964,V22 |
 | BM43 | 2026-07-22 | nn SparseMoE.ForwardDecode per-expert slices pooled recorder-guarded (Mixtral decode, allocs) | darwin/arm64 | self | allocs/op | 155 | 152 | 1.02× | T965,V22 |
 | BM44 | 2026-07-22 | rl softUpdate typed fast path (Polyak target update, ~130k-param MLP) | darwin/arm64 | self | us | 1279.8 | 70.35 | 18.19× | T966,V22 |
+| BM45 | 2026-07-22 | rl forward() typed contiguous fill (256×64 batch) | darwin/arm64 | self | us | 214.6 | 155.9 | 1.38× | T967,V22 |
