@@ -776,3 +776,61 @@ func (o *Opt) Step() {
 		}
 	}
 }
+
+// Detector O fires on a divide by a loop-invariant scalar in an element-wise arithmetic
+// loop — the SoftCap VJP / optimizer bias-correction shape a reciprocal-multiply speeds
+// up 1.2–1.5×.
+func TestDetectO_LoopInvariantDivide(t *testing.T) {
+	src := `package p
+func softcapVJP(ys, gs, ds []float64, cap float64) {
+	for i := range ys {
+		t := ys[i] / cap
+		ds[i] = gs[i] * (1 - t*t)
+	}
+}`
+	if got := countCat(scanSrc(t, src))["loop-invariant-divide"]; got != 1 {
+		t.Fatalf("want 1 loop-invariant-divide, got %d", got)
+	}
+}
+
+// It stays silent on: a divide by a REDUCTION accumulated in the function (softmax Σ), a
+// loop already dominated by a transcendental (the divide is minor there), an integer
+// INDEX division, a divisor that VARIES across iterations, and a non-element-wise loop.
+func TestDetectO_Silent(t *testing.T) {
+	cases := map[string]string{
+		"reduction-divisor": `package p
+func softmax(x, o []float64) {
+	var sum float64
+	for i := range x { sum += x[i] }
+	for i := range x { o[i] = x[i] / sum }
+}`,
+		"transcendental-loop": `package p
+import "math"
+func f(x, o []float64, sum float64) {
+	for i := range x { o[i] = math.Exp(x[i]) / sum }
+}`,
+		"index-division": `package p
+func f(x, o []float64, stride int) {
+	for i := range o { o[i] = x[i/stride] }
+}`,
+		"varying-divisor": `package p
+func f(x, y, o []float64) {
+	for i := range x { o[i] = x[i] / y[i] }
+}`,
+		"reassigned-divisor": `package p
+func f(x, o []float64, d float64) {
+	for i := range x { d = d + x[i]; o[i] = x[i] / d }
+}`,
+		"scalar-not-elementwise": `package p
+func f(total, n float64) float64 {
+	var acc float64
+	for k := 0; k < 10; k++ { acc += total / n }
+	return acc
+}`,
+	}
+	for name, src := range cases {
+		if got := countCat(scanSrc(t, src))["loop-invariant-divide"]; got != 0 {
+			t.Fatalf("%s: want 0 loop-invariant-divide, got %d", name, got)
+		}
+	}
+}

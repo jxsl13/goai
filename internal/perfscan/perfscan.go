@@ -1,7 +1,7 @@
 // Command perfscan is a static finder for the per-element hot-loop anti-patterns
 // this codebase repeatedly optimizes away (§base-perf-sweep). It parses Go source
 // with go/ast — it never builds or imports the packages, so cgo/build-tagged
-// backends are scanned too — and reports the STRUCTURAL SHAPE of thirteen patterns
+// backends are scanned too — and reports the STRUCTURAL SHAPE of fifteen patterns
 // (this is the SINGLE perfscan for the repo — the earlier tools/perfscan P1/P2
 // prototype was folded in here as detectors I/J):
 //
@@ -42,6 +42,12 @@
 //	M. a READ of an integer-keyed map (map[int]/map[rune]/…, sets excluded) inside a
 //	   loop — when the keys are dense over [0,N) a []T indexed by the key drops the
 //	   per-lookup hash (BPE Decode 2.85×, GGUF Decode 3.67×, forest votes T312).
+//	N. a slice make() bound to a NON-escaping local inside a per-item loop of a
+//	   pointer-receiver method — per-call scratch reallocated every call; hoist it to a
+//	   reused receiver field (Adafactor/Cautious/LAMB/Grokfast Step, 1.2–1.6×, →0 allocs).
+//	O. a divide by a loop-invariant SCALAR on every element of an element-wise arithmetic
+//	   loop — hoist inv:=1/D and multiply (SoftCap VJP 1.28×, optimizer bias-corrections
+//	   1.1–1.3×). SAFE ONLY for continuous outputs (½ulp), NEVER feeding round/quantize.
 //
 // IMPORTANT — these are CANDIDATES, not confirmed wins. A static check sees the
 // shape of a hot loop, never its temperature: a per-element write in a one-time
@@ -56,7 +62,7 @@
 //	go run ./internal/perfscan ./nn/...          # scan one subtree
 //	go run ./internal/perfscan -strict ./nn      # exit 1 if any candidate is found
 //	go run ./internal/perfscan -tests ./...      # include _test.go files
-//	go run ./internal/perfscan -list             # list the detector classes (A…M)
+//	go run ./internal/perfscan -list             # list the detector classes (A…O)
 //	go run ./internal/perfscan -exclude=K,I ./…  # silence whole classes repo-wide
 //
 // SUPPRESSING FINDINGS (staticcheck-style, class-granular). Silencing one class
@@ -69,7 +75,7 @@
 //	//perfscan:ignore                 // bare: silence ALL classes at that site
 //	-exclude=K,per-element-closure    // silence whole classes for the whole run
 //
-// The class names are the LETTER codes (A…M) or the CATEGORY strings printed in
+// The class names are the LETTER codes (A…O) or the CATEGORY strings printed in
 // the report (copy-paste from a report line); `-list` prints both.
 package main
 
@@ -92,7 +98,7 @@ type finding struct {
 	msg      string
 }
 
-// classes is the registry of detectors: a short LETTER code (A…M, as used in the
+// classes is the registry of detectors: a short LETTER code (A…O, as used in the
 // package doc) paired with the CATEGORY string printed in the output. An ignore
 // directive or the -exclude flag may name EITHER — the copy-pasteable category
 // from a report line, or the terse letter. This is what makes suppression
@@ -112,6 +118,139 @@ var classes = []struct{ letter, category string }{
 	{"L", "transcendental-wrapper-in-loop"},
 	{"M", "int-key-map-in-loop"},
 	{"N", "poolable-loop-scratch"},
+	{"O", "loop-invariant-divide"},
+}
+
+// loopAssignedIdents returns the set of identifier names that a loop MUTATES — the LHS
+// of every assignment/inc-dec in its body, plus the loop's own iteration variables. A
+// divisor drawn from this set varies across iterations and is NOT a hoistable invariant.
+func loopAssignedIdents(loop ast.Node) map[string]bool {
+	m := map[string]bool{}
+	mark := func(e ast.Expr) {
+		switch x := e.(type) {
+		case *ast.Ident:
+			m[x.Name] = true
+		case *ast.SelectorExpr: // recv.field = … : the field (and its root) may change
+			if id, ok := x.X.(*ast.Ident); ok {
+				m[id.Name] = true
+			}
+		}
+	}
+	var body ast.Node
+	switch l := loop.(type) {
+	case *ast.RangeStmt:
+		mark(l.Key)
+		mark(l.Value)
+		body = l.Body
+	case *ast.ForStmt:
+		if a, ok := l.Init.(*ast.AssignStmt); ok {
+			for _, lhs := range a.Lhs {
+				mark(lhs)
+			}
+		}
+		if p, ok := l.Post.(*ast.IncDecStmt); ok {
+			mark(p.X)
+		}
+		body = l.Body
+	default:
+		return m
+	}
+	ast.Inspect(body, func(n ast.Node) bool {
+		switch s := n.(type) {
+		case *ast.AssignStmt:
+			for _, lhs := range s.Lhs {
+				mark(lhs)
+			}
+		case *ast.IncDecStmt:
+			mark(s.X)
+		}
+		return true
+	})
+	return m
+}
+
+// loopBodyNode returns a loop's body block, or nil for a non-loop node.
+func loopBodyNode(loop ast.Node) ast.Node {
+	switch l := loop.(type) {
+	case *ast.RangeStmt:
+		return l.Body
+	case *ast.ForStmt:
+		return l.Body
+	}
+	return nil
+}
+
+// loopHasIndexAccess reports whether a loop's body indexes a slice/array (a[i]) — the
+// element-wise shape that makes a per-iteration divide worth vectorizing (and keeps
+// scalar/integer bookkeeping loops out of detector O's signal).
+func loopHasIndexAccess(loop ast.Node) bool {
+	body := loopBodyNode(loop)
+	if body == nil {
+		return false
+	}
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if _, ok := n.(*ast.IndexExpr); ok {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+// oExpensiveOps are per-element costs that DWARF a divide — a loop already dominated by
+// one of these is not a reciprocal-multiply candidate (the divide is in the noise, and
+// it is already the K/L detectors' territory). math.Sqrt is deliberately absent: a
+// divide-after-sqrt (norm/RMSNorm) is exactly where the reciprocal-multiply pays.
+var oExpensiveOps = map[string]bool{
+	"Exp": true, "Log": true, "Log1p": true, "Log2": true, "Log10": true,
+	"Tanh": true, "Sinh": true, "Cosh": true, "Erf": true, "Erfc": true,
+	"Pow": true, "Sin": true, "Cos": true, "Tan": true, "Atan": true, "Atan2": true,
+	"Exp2": true, "Expm1": true, "Cbrt": true, "Gamma": true,
+}
+
+// loopHasExpensiveTranscendental reports whether the loop body calls a transcendental
+// (math.X or a package-local wrapper) that dominates a per-element divide.
+func loopHasExpensiveTranscendental(loop ast.Node, wrappers map[string]bool) bool {
+	body := loopBodyNode(loop)
+	if body == nil {
+		return false
+	}
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if name, ok := pkgFuncCall(call.Fun, "math", oExpensiveOps); ok {
+			_ = name
+			found = true
+			return false
+		}
+		if wrappers[calleeName(call.Fun)] {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+// invariantDivisorName reports the name of a divisor that is a bare identifier or a
+// simple recv.field selector (the shape of a scalar constant/parameter/attr), for the
+// loop-invariance check. Calls (float64(n), len(x)) and indexed operands (a[i]) are NOT
+// simple divisors and return false — they are either type conversions or per-element.
+func invariantDivisorName(e ast.Expr) (string, bool) {
+	switch x := e.(type) {
+	case *ast.Ident:
+		return x.Name, true
+	case *ast.SelectorExpr:
+		if id, ok := x.X.(*ast.Ident); ok {
+			return id.Name, true // invariance keyed on the receiver/struct root
+		}
+	}
+	return "", false
 }
 
 // isSliceMake reports whether call is make([]T, …) — a slice allocation, not a map or
@@ -829,6 +968,95 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 						" 12 allocs to 0). Verify the buffer is fully overwritten before use.", id.Name),
 				})
 			}
+			return true
+		})
+	}
+
+	// O: a divide by a loop-invariant scalar on every iteration of an element-wise loop.
+	// Hoisting inv := 1/D once and multiplying is ~1.2-1.5x when the divide is standalone
+	// (SoftCap VJP 1.28x, optimizer moments 1.1-1.3x). SAFE ONLY for a CONTINUOUS output
+	// (gradient, moment, probability) whose ½-ulp shift rides a tolerance — NEVER when the
+	// result feeds a discrete step (round/quantize/argmax). Advisory: verify float + intent.
+	{
+		// Idents accumulated via +=/-=/*= are REDUCTIONS (a softmax Σ, an attention denom):
+		// dividing by one is usually a normalization whose divide is minor or parity-locked,
+		// not the standalone config-scalar divide (cap, temp, eps, 1/√d) the recip-multiply
+		// pays for. Exclude them to keep O's signal on the SoftCap-shaped wins.
+		accumulated := map[string]bool{}
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			a, ok := n.(*ast.AssignStmt)
+			if !ok {
+				return true
+			}
+			if a.Tok == token.ADD_ASSIGN || a.Tok == token.SUB_ASSIGN || a.Tok == token.MUL_ASSIGN {
+				for _, lhs := range a.Lhs {
+					if id, ok := lhs.(*ast.Ident); ok {
+						accumulated[id.Name] = true
+					}
+				}
+			}
+			return true
+		})
+		loopAssigned := map[ast.Node]map[string]bool{} // per-loop cache
+		invariantDivisor := func(loop ast.Node, div ast.Expr) (string, bool) {
+			name, ok := invariantDivisorName(div)
+			if !ok || accumulated[name] { // a reduction, not a config scalar
+				return "", false
+			}
+			set := loopAssigned[loop]
+			if set == nil {
+				set = loopAssignedIdents(loop)
+				loopAssigned[loop] = set
+			}
+			if set[name] { // the divisor is mutated in the loop → not invariant
+				return "", false
+			}
+			return name, true
+		}
+		reported := map[ast.Node]bool{} // one finding per loop
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			var div ast.Expr
+			switch e := n.(type) {
+			case *ast.BinaryExpr:
+				if e.Op == token.QUO {
+					div = e.Y
+				}
+			case *ast.AssignStmt:
+				if e.Tok == token.QUO_ASSIGN && len(e.Rhs) == 1 {
+					div = e.Rhs[0]
+				}
+			}
+			if div == nil {
+				return true
+			}
+			// Skip an integer index computation (a[i/stride]) — reciprocal-multiply is a
+			// float transform, wrong for the discrete index it feeds.
+			if ix, ok := parent[n].(*ast.IndexExpr); ok && ix.Index == n {
+				return true
+			}
+			loop := nearestLoop(parent, n)
+			if loop == nil || reported[loop] {
+				return true
+			}
+			// Require an element-wise loop (indexes some slice) to keep scalar/integer
+			// bookkeeping divides out of the signal, and skip loops already dominated by a
+			// transcendental (there the divide is in the noise — and it is K/L territory).
+			if !loopHasIndexAccess(loop) || loopHasExpensiveTranscendental(loop, wrappers) {
+				return true
+			}
+			name, ok := invariantDivisor(loop, div)
+			if !ok {
+				return true
+			}
+			reported[loop] = true
+			out = append(out, finding{
+				pos:      fset.Position(loop.Pos()),
+				category: "loop-invariant-divide",
+				msg: fmt.Sprintf("divide by %q, loop-invariant, on every element — hoist inv := 1/%s"+
+					" once and multiply. ~1.2-1.5x when the divide is standalone (SoftCap VJP 1.28x,"+
+					" optimizer moments). SAFE ONLY for a CONTINUOUS output (gradient/moment/probability,"+
+					" ½ulp rides tolerance) — NEVER feeding round/quantize/argmax. Verify float + intent.", name, name),
+			})
 			return true
 		})
 	}
