@@ -57,9 +57,13 @@ func NSABranches(q, k, v *tensor.Tensor, heads, blockSize, topN, window int, sca
 	}
 
 	scores := make([]float64, max(seq, nBlocks))
+	qrow := make([]float64, dk) // q_i[off:off+dk] hoisted per (head,query); all 3 branches re-read it
 	for h := range heads {
 		off := h * dk
 		for i := range seq {
+			for d := range dk {
+				qrow[d] = q.AtF64(i, off+d)
+			}
 			// ---- cmp: softmax over complete blocks strictly before the query.
 			nPast := i / blockSize // complete blocks before i
 			blockW := make([]float64, nPast)
@@ -68,7 +72,7 @@ func NSABranches(q, k, v *tensor.Tensor, heads, blockSize, topN, window int, sca
 				for b := range nPast {
 					var s float64
 					for d := range dk {
-						s += q.AtF64(i, off+d) * poolK[b*dm+off+d]
+						s += qrow[d] * poolK[b*dm+off+d]
 					}
 					s *= scale
 					scores[b] = s
@@ -81,15 +85,18 @@ func NSABranches(q, k, v *tensor.Tensor, heads, blockSize, topN, window int, sca
 					scores[b] = math.Exp(scores[b] - m)
 					sum += scores[b]
 				}
+				for b := range nPast {
+					scores[b] /= sum // normalize once, not per channel d
+				}
 				for d := range dk {
 					var o float64
 					for b := range nPast {
-						o += scores[b] / sum * poolV[b*dm+off+d]
+						o += scores[b] * poolV[b*dm+off+d]
 					}
 					cmp.SetF64(o, i, off+d)
 				}
 				for b := range nPast {
-					blockW[b] = scores[b] / sum // importance for selection
+					blockW[b] = scores[b] // already normalized
 				}
 			}
 			// ---- slc: top-n blocks by cmp importance, own block always in.
@@ -106,9 +113,9 @@ func NSABranches(q, k, v *tensor.Tensor, heads, blockSize, topN, window int, sca
 			for gi := 0; gi < len(imps) && len(selected) < topN; gi++ {
 				selected[imps[gi].block] = true
 			}
-			attendMask(q, k, v, slc, i, off, dk, scale, scores, func(j int) bool { return selected[j/blockSize] })
+			attendMask(qrow, k, v, slc, i, off, dk, scale, scores, func(j int) bool { return selected[j/blockSize] })
 			// ---- win: last `window` keys.
-			attendMask(q, k, v, win, i, off, dk, scale, scores, func(j int) bool { return i-j < window })
+			attendMask(qrow, k, v, win, i, off, dk, scale, scores, func(j int) bool { return i-j < window })
 		}
 	}
 	return cmp, slc, win, nil
@@ -116,7 +123,9 @@ func NSABranches(q, k, v *tensor.Tensor, heads, blockSize, topN, window int, sca
 
 // attendMask runs causal softmax attention for query row i over keys admitted by
 // keep, writing the head slice [off,off+dk) of out.
-func attendMask(q, k, v, out *tensor.Tensor, i, off, dk int, scale float64, scores []float64, keep func(j int) bool) {
+// attendMask takes the query row pre-hoisted as qrow = q_i[off:off+dk] (it is re-read for
+// every key j, so hoisting it out of the caller kills a dk×(i+1) redundant gather).
+func attendMask(qrow []float64, k, v, out *tensor.Tensor, i, off, dk int, scale float64, scores []float64, keep func(j int) bool) {
 	m := math.Inf(-1)
 	for j := 0; j <= i; j++ {
 		if !keep(j) {
@@ -125,7 +134,7 @@ func attendMask(q, k, v, out *tensor.Tensor, i, off, dk int, scale float64, scor
 		}
 		var s float64
 		for d := range dk {
-			s += q.AtF64(i, off+d) * k.AtF64(j, off+d)
+			s += qrow[d] * k.AtF64(j, off+d)
 		}
 		s *= scale
 		scores[j] = s
@@ -142,11 +151,17 @@ func attendMask(q, k, v, out *tensor.Tensor, i, off, dk int, scale float64, scor
 		scores[j] = math.Exp(scores[j] - m)
 		sum += scores[j]
 	}
+	// Normalize by sum ONCE, not once per value channel d.
+	if sum > 0 {
+		for j := 0; j <= i; j++ {
+			scores[j] /= sum
+		}
+	}
 	for d := range dk {
 		var o float64
 		if sum > 0 {
 			for j := 0; j <= i; j++ {
-				o += scores[j] / sum * v.AtF64(j, off+d)
+				o += scores[j] * v.AtF64(j, off+d)
 			}
 		}
 		out.SetF64(o, i, off+d)

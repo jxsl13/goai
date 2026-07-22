@@ -43,6 +43,7 @@ func DSAAttention(q, k, v, qIdx, kIdx *tensor.Tensor, w []float64, heads, topK i
 	}
 	out := tensor.New(q.Dtype(), q.Shape())
 	scores := make([]float64, seq)
+	qrow := make([]float64, dk) // q_i[off:off+dk] hoisted per (query,head) for attendMask
 	for i := range seq {
 		// lightning indexer: rank all past tokens once per query (shared by heads).
 		type ranked struct {
@@ -70,7 +71,10 @@ func DSAAttention(q, k, v, qIdx, kIdx *tensor.Tensor, w []float64, heads, topK i
 		}
 		for h := range heads {
 			off := h * dk
-			attendMask(q, k, v, out, i, off, dk, scale, scores, func(j int) bool { return selected[j] })
+			for d := range dk {
+				qrow[d] = q.AtF64(i, off+d)
+			}
+			attendMask(qrow, k, v, out, i, off, dk, scale, scores, func(j int) bool { return selected[j] })
 		}
 	}
 	return out, nil
