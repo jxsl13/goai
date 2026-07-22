@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+
+	"github.com/jxsl13/goai/internal/simd"
 )
 
 // GMMCovariance selects the shape of the per-component covariance matrix a
@@ -284,18 +286,41 @@ func (m *GaussianMixture) eStep(x [][]float64, resp, logResp [][]float64) (float
 		logW[c] = math.Log(m.Weights[c])
 	}
 	for i, row := range x {
+		lr := logResp[i]
 		for c := range k {
 			ld, err := m.logGaussian(row, c)
 			if err != nil {
 				return 0, err
 			}
-			logResp[i][c] = logW[c] + ld
+			lr[c] = logW[c] + ld
 		}
-		norm := logSumExp(logResp[i])
+		// Fused log-sum-exp + responsibilities: ExpSumF64 writes resp[c]=exp(lr[c]−mx)
+		// and returns Σ in one 4-wide pass, so norm=mx+log(Σ) and the responsibility is
+		// resp[c]/Σ — HALVING the exp count (the old logSumExp discarded its exps) and
+		// vectorizing what remains (math.Exp was ~76% of GMM Fit). Args lr[c]−mx ≤ 0, so
+		// the SIMD exp is valid; EM is robust to the ≤1-ulp shift (monotone likelihood,
+		// §V1 golden rtol 1e-3).
+		mx := math.Inf(-1)
+		for _, v := range lr {
+			if v > mx {
+				mx = v
+			}
+		}
+		if math.IsInf(mx, -1) {
+			total += mx // degenerate all-−Inf row: preserve the scalar semantics
+			for c := range k {
+				lr[c] -= mx
+				resp[i][c] = math.Exp(lr[c])
+			}
+			continue
+		}
+		s := simd.ExpSumF64(resp[i], lr, mx)
+		norm := mx + math.Log(s)
 		total += norm
+		inv := 1 / s
 		for c := range k {
-			logResp[i][c] -= norm
-			resp[i][c] = math.Exp(logResp[i][c])
+			lr[c] -= norm
+			resp[i][c] *= inv
 		}
 	}
 	return total / float64(len(x)), nil
