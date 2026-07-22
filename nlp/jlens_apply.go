@@ -109,7 +109,10 @@ func newJLensReadout(logits *tensor.Tensor, row int) *JLensReadout {
 		r.Logits[j] = logits.AtF64(row, j)
 		r.Ranked[j] = JLensToken{Token: j, Score: r.Logits[j]}
 	}
-	sort.SliceStable(r.Ranked, func(i, k int) bool {
+	// (Score desc, Token asc) is already a TOTAL order — Token is unique per element —
+	// so stability adds nothing; unstable sort.Slice (pdqsort) gives the identical full-
+	// vocab ranking at a fraction of symMerge's cost.
+	sort.Slice(r.Ranked, func(i, k int) bool {
 		if r.Ranked[i].Score != r.Ranked[k].Score {
 			return r.Ranked[i].Score > r.Ranked[k].Score
 		}
