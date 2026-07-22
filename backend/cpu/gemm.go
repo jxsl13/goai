@@ -74,6 +74,11 @@ func matContiguousF32(t *tensor.Tensor) *tensor.Tensor {
 	return out
 }
 
+// matmulInlineWork gates the F64 matmul's serial fast path: below this m·k·n it runs on
+// the caller (see matmulKernel). Tuned above a training step's tiny layers (~1.3e5) and
+// well below the isolated-throughput matmuls that still need the pool.
+const matmulInlineWork = 1 << 18
+
 func matmulKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*tensor.Tensor, error) {
 	if len(in) != 2 {
 		return nil, fmt.Errorf("cpu: matmul wants 2 inputs, got %d", len(in))
@@ -114,9 +119,20 @@ func matmulKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([
 			})
 			return []*tensor.Tensor{out}, nil
 		}
-		parallelWork(m, k*n, func(loRow, hiRow int) {
-			gemmF64Band(A, B, C, loRow, hiRow, k, n)
-		})
+		if m*k*n < matmulInlineWork {
+			// Small matmul (e.g. a training step's tiny layers): compute-cheap but it
+			// would pay the pool's fork/join + worker-spin machinery per op. Run it
+			// serial on the caller — measurably faster in the many-small-ops regime,
+			// while larger matmuls still fan out. Bit-identical: one unsplit band is the
+			// same ascending accumulation as the row-band chunks (§V3, §V11 tol 0). Only
+			// matmul uses this higher gate — bandwidth-bound elementwise and expensive-
+			// per-element transcendentals keep parThreshold so they still parallelize.
+			gemmF64Band(A, B, C, 0, m, k, n)
+		} else {
+			parallelWork(m, k*n, func(loRow, hiRow int) {
+				gemmF64Band(A, B, C, loRow, hiRow, k, n)
+			})
+		}
 	case tensor.F32:
 		A, B := ac.Storage().F32(), bc.Storage().F32()
 		C := out.Storage().F32()
