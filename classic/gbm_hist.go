@@ -1,6 +1,61 @@
 package classic
 
-import "sort"
+import (
+	"math"
+	"sort"
+)
+
+// histRadixCutoff is the column length above which the per-feature quantile sort switches
+// from sort.Float64s to the O(n) LSD radix (tree.go's proven transform). Below it the
+// comparison sort's lower constant wins.
+const histRadixCutoff = 512
+
+// radixSortF64 sorts col ascending with an 8-pass LSD radix on the order-preserving u64
+// transform of the float64 bits (negatives → ^bits, non-negatives → bits|sign — monotone in
+// the value). keys/tmp are caller-provided scratch of length ≥ len(col), reused across
+// features. newHistBuilder needs only the SORTED VALUES (the quantile positions), which are
+// identical to sort.Float64s's (ties at a quantile hold the same value), so binning is
+// unchanged. Assumes no NaN, as the tree radix does.
+func radixSortF64(col []float64, keys, tmp []uint64) {
+	n := len(col)
+	for i, v := range col {
+		u := math.Float64bits(v)
+		if u&(1<<63) != 0 {
+			u = ^u
+		} else {
+			u |= 1 << 63
+		}
+		keys[i] = u
+	}
+	src, dst := keys[:n], tmp[:n]
+	var count [256]int
+	for shift := uint(0); shift < 64; shift += 8 {
+		count = [256]int{}
+		for _, u := range src {
+			count[(u>>shift)&0xff]++
+		}
+		sum := 0
+		for i := range count {
+			c := count[i]
+			count[i] = sum
+			sum += c
+		}
+		for _, u := range src {
+			b := (u >> shift) & 0xff
+			dst[count[b]] = u
+			count[b]++
+		}
+		src, dst = dst, src
+	}
+	for i, u := range src { // src holds the sorted keys (8 passes → back in keys); invert
+		if u&(1<<63) != 0 {
+			u &^= 1 << 63
+		} else {
+			u = ^u
+		}
+		col[i] = math.Float64frombits(u)
+	}
+}
 
 // histBuilder is the histogram weak-learner grower for gradient boosting — the
 // fast large-N path, opt-in via WithGBMHistogram. It bins every feature into
@@ -43,11 +98,20 @@ func newHistBuilder(x [][]float64, n, d, maxDepth, minLeaf, nbins int) *histBuil
 	b.edges = make([][]float64, d)
 	b.binned = make([]uint16, n*d)
 	col := make([]float64, n)
+	var rkeys, rtmp []uint64
+	if n >= histRadixCutoff {
+		rkeys = make([]uint64, n)
+		rtmp = make([]uint64, n)
+	}
 	for f := 0; f < d; f++ {
 		for i := 0; i < n; i++ {
 			col[i] = x[i][f]
 		}
-		sort.Float64s(col)
+		if n >= histRadixCutoff {
+			radixSortF64(col, rkeys, rtmp)
+		} else {
+			sort.Float64s(col)
+		}
 		ne := nbins - 1
 		ed := make([]float64, 0, ne)
 		for q := 1; q <= ne; q++ {
