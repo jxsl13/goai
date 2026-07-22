@@ -56,6 +56,11 @@ type CautiousAdamW struct {
 
 	m, v [][]float64
 	t    int
+
+	// Per-Step scratch (adaptive step u, gradient copy gg), reused across steps and
+	// across params within a step — both are fully overwritten before use, so reuse is
+	// bit-identical and drops Step from 8 allocs/3.16 MB per call to zero.
+	uScr, ggScr []float64
 }
 
 // CautiousAdamWOption configures a CautiousAdamW optimizer (functional-options idiom, §C12).
@@ -121,8 +126,9 @@ func (a *CautiousAdamW) Step(grad GradFn) error {
 			return fmt.Errorf("nn: CautiousAdamW grad shape %v != param %v", g.Shape(), p.Shape())
 		}
 		n := p.Numel()
-		u := make([]float64, n)  // the adaptive step lr·m̂/(√v̂+ε), pre-mask
-		gg := make([]float64, n) // the gradient, for the alignment test
+		u := growF64(a.uScr, n)   // the adaptive step lr·m̂/(√v̂+ε), pre-mask
+		gg := growF64(a.ggScr, n) // the gradient, for the alignment test
+		a.uScr, a.ggScr = u, gg
 		m, v := a.m[pi], a.v[pi]
 		// Build u, gg from the gradient + moments — contiguous fast paths, else the
 		// generic accessor loop (§base-perf: no per-element Unravel/AtF64 dispatch).
