@@ -256,7 +256,30 @@ func init() {
 		x := in[0]
 		pa, _ := attrs.(backend.ClipAttrs)
 		gin := tensor.New(x.Dtype(), x.Shape())
-		for i := range x.Numel() {
+		n := x.Numel()
+		// Devirtualized fast paths: x and g share the (contiguous) forward shape, so
+		// element i is flat i — the ravel and multi-index dispatch are pure overhead.
+		// gin is pre-zeroed, so clamped elements (gradient 0) stay 0. Bit-identical.
+		xc, gc := x.Contiguous(), g.Contiguous()
+		if x.Dtype() == tensor.F64 && gc.Dtype() == tensor.F64 {
+			xs, gs, ds := xc.Storage().F64(), gc.Storage().F64(), gin.Storage().F64()
+			for i := 0; i < n; i++ {
+				if xs[i] >= pa.Lo && xs[i] <= pa.Hi {
+					ds[i] = gs[i]
+				}
+			}
+			return []*tensor.Tensor{gin}, nil
+		}
+		if x.Dtype() == tensor.F32 && gc.Dtype() == tensor.F32 {
+			xs, gs, ds := xc.Storage().F32(), gc.Storage().F32(), gin.Storage().F32()
+			for i := 0; i < n; i++ {
+				if v := float64(xs[i]); v >= pa.Lo && v <= pa.Hi {
+					ds[i] = gs[i]
+				}
+			}
+			return []*tensor.Tensor{gin}, nil
+		}
+		for i := range n { // generic fallback (mixed dtype / exotic layout)
 			idx := tensor.Unravel(i, x.Shape())
 			v := x.AtF64(idx...)
 			if v >= pa.Lo && v <= pa.Hi {
@@ -276,7 +299,35 @@ func init() {
 		cond, a, b := in[0], in[1], in[2]
 		da := tensor.New(a.Dtype(), a.Shape())
 		db := tensor.New(b.Dtype(), b.Shape())
-		for i := range a.Numel() {
+		n := a.Numel()
+		// Devirtualized fast paths: cond/g/da/db share the (contiguous) forward shape,
+		// so element i is flat i. da/db are pre-zeroed, so the unselected branch stays
+		// 0. Bit-identical to the generic rule (f32 store is an exact round-trip).
+		if a.Dtype() == tensor.F64 && b.Dtype() == tensor.F64 && cond.Dtype() == tensor.F64 && g.Dtype() == tensor.F64 {
+			cs, gs := cond.Contiguous().Storage().F64(), g.Contiguous().Storage().F64()
+			das, dbs := da.Storage().F64(), db.Storage().F64()
+			for i := 0; i < n; i++ {
+				if cs[i] != 0 {
+					das[i] = gs[i]
+				} else {
+					dbs[i] = gs[i]
+				}
+			}
+			return []*tensor.Tensor{nil, da, db}, nil
+		}
+		if a.Dtype() == tensor.F32 && b.Dtype() == tensor.F32 && cond.Dtype() == tensor.F32 && g.Dtype() == tensor.F32 {
+			cs, gs := cond.Contiguous().Storage().F32(), g.Contiguous().Storage().F32()
+			das, dbs := da.Storage().F32(), db.Storage().F32()
+			for i := 0; i < n; i++ {
+				if cs[i] != 0 {
+					das[i] = gs[i]
+				} else {
+					dbs[i] = gs[i]
+				}
+			}
+			return []*tensor.Tensor{nil, da, db}, nil
+		}
+		for i := range n { // generic fallback (mixed dtype / exotic layout)
 			idx := tensor.Unravel(i, a.Shape())
 			if cond.AtF64(idx...) != 0 {
 				da.SetF64(g.AtF64(idx...), idx...)
