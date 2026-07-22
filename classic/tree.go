@@ -150,15 +150,17 @@ type cartBuilder struct {
 	rng        *lcg
 
 	// presort/partition scratch, allocated once per fit and reused everywhere.
-	cols     [][]int // cols[f][start:end] = current node's samples, sorted asc by feature f
-	part     []int   // scratch for the stable partition (len n)
-	goLeft   []bool  // per-sample split membership during a partition (len n)
-	totCnt   []int   // reused class-count buffer (len nClasses); classification only
-	leftCnt  []int   // reused running left-count buffer (len nClasses); classification only
-	allFeats []int   // reused ascending [0..d) for the all-features split path
-	featPool []int   // reused pool for feature subsampling (maxFeatures>0)
-	featSub  []int   // reused subsample result (maxFeatures>0)
-	sortBuf  []int   // reused per-feature sort scratch for the subsampled path
+	cols    [][]int   // cols[f][start:end] = current node's samples, sorted asc by feature f
+	part    []int     // scratch for the stable partition (len n)
+	goLeft  []bool    // per-sample split membership during a partition (len n)
+	totCnt  []int     // reused class-count buffer (len nClasses); classification only
+	leftCnt []int     // reused running left-count buffer (len nClasses); classification only
+	clogc   []float64 // Entropy only: clogc[c] = c·ln c cache (counts are integers), so a
+	// node's weighted entropy is clogc[n] − Σ clogc[countₖ] with no per-split math.Log.
+	allFeats []int // reused ascending [0..d) for the all-features split path
+	featPool []int // reused pool for feature subsampling (maxFeatures>0)
+	featSub  []int // reused subsample result (maxFeatures>0)
+	sortBuf  []int // reused per-feature sort scratch for the subsampled path
 	// radix-sort scratch (reused): keys = order-preserving u64 of the feature value,
 	// tmpI/tmpK = ping-pong buffers for the 8-pass LSD radix (replaces the sort.Slice
 	// closure sort — the split-search's dominant cost).
@@ -189,6 +191,20 @@ func (b *cartBuilder) initIdx(n int) {
 	b.radixKeys = make([]uint64, n)
 	b.radixTmpI = make([]int, n)
 	b.radixTmpK = make([]uint64, n)
+	b.buildCLogC(n)
+}
+
+// buildCLogC caches clogc[c] = c·ln c for c∈[0,n] when the Entropy criterion is active
+// (counts are integers ≤ n), so the impurity kernels evaluate no math.Log per candidate
+// split — the log was ~52% of an entropy tree fit. No-op for Gini/regression.
+func (b *cartBuilder) buildCLogC(n int) {
+	if b.regression || b.cfg.criterion != Entropy {
+		return
+	}
+	b.clogc = make([]float64, n+1)
+	for c := 1; c <= n; c++ {
+		b.clogc[c] = float64(c) * math.Log(float64(c))
+	}
 }
 
 // initColumns argsorts every feature once and allocates the reusable scratch the
@@ -272,6 +288,7 @@ func (b *cartBuilder) initColumns(n, d int) {
 		b.totCnt = make([]int, b.nClasses)
 		b.leftCnt = make([]int, b.nClasses)
 	}
+	b.buildCLogC(n)
 	b.allFeats = make([]int, d)
 	for i := range b.allFeats {
 		b.allFeats[i] = i
@@ -576,7 +593,15 @@ func (b *cartBuilder) sweep(order []int, f, minLeaf int) (bestCost float64, cut 
 
 // weightedImpurityClf returns nL·impurity(left counts).
 func (b *cartBuilder) weightedImpurityClf(counts []int, n int) float64 {
-	return float64(n) * impurityCounts(counts, n, b.cfg.criterion)
+	if b.cfg.criterion == Entropy {
+		// n·H = clogc[n] − Σ clogc[cₖ] directly (matches weightedImpurityClfComp).
+		w := b.clogc[n]
+		for _, c := range counts {
+			w -= b.clogc[c]
+		}
+		return w
+	}
+	return float64(n) * b.impurityCounts(counts, n)
 }
 
 // weightedImpurityClfComp returns nR·impurity(total−left counts) without
@@ -589,13 +614,14 @@ func (b *cartBuilder) weightedImpurityClfComp(left, total []int, n int) float64 
 	nf := float64(n)
 	switch b.cfg.criterion {
 	case Entropy:
+		// Weighted entropy n·H = n·ln n − Σₖ cₖ·ln cₖ = clogc[n] − Σ clogc[cₖ]; the cₖ
+		// are integer class counts, so this needs no per-split math.Log. Returned directly
+		// (this function's contract is the n-weighted impurity), skipping the ×nf below.
+		w := b.clogc[n]
 		for k := range total {
-			c := total[k] - left[k]
-			if c > 0 {
-				p := float64(c) / nf
-				acc -= p * math.Log(p)
-			}
+			w -= b.clogc[total[k]-left[k]]
 		}
+		return w
 	default: // Gini
 		var sq float64
 		for k := range total {
@@ -607,21 +633,19 @@ func (b *cartBuilder) weightedImpurityClfComp(left, total []int, n int) float64 
 	return nf * acc
 }
 
-// impurityCounts computes the impurity of a set given its class counts.
-func impurityCounts(counts []int, n int, cr Criterion) float64 {
+// impurityCounts computes the (unweighted) impurity of a set given its class counts.
+func (b *cartBuilder) impurityCounts(counts []int, n int) float64 {
 	if n == 0 {
 		return 0
 	}
 	nf := float64(n)
-	if cr == Entropy {
-		var e float64
+	if b.cfg.criterion == Entropy {
+		// H = (n·ln n − Σ cₖ·ln cₖ)/n = (clogc[n] − Σ clogc[cₖ]) / n (no per-node math.Log).
+		w := b.clogc[n]
 		for _, c := range counts {
-			if c > 0 {
-				p := float64(c) / nf
-				e -= p * math.Log(p)
-			}
+			w -= b.clogc[c]
 		}
-		return e
+		return w / nf
 	}
 	var sq float64
 	for _, c := range counts {
@@ -650,7 +674,7 @@ func (b *cartBuilder) impurity(idx []int) float64 {
 	for _, i := range idx {
 		counts[b.yi[i]]++
 	}
-	return impurityCounts(counts, len(idx), b.cfg.criterion)
+	return b.impurityCounts(counts, len(idx))
 }
 
 func (b *cartBuilder) mean(idx []int) float64 {
