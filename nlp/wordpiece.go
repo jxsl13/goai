@@ -3,6 +3,7 @@ package nlp
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 )
 
 // WordPiece is the subword tokenizer of BERT (Devlin, Chang, Lee & Toutanova 2019; the wordpiece
@@ -25,8 +26,46 @@ type WordPiece struct {
 	unkID        int            // id emitted for an unmatchable / too-long word
 	continuation string         // continuation-piece prefix ("##")
 	maxChars     int            // words longer than this (in runes) → unk
+	trie         *unigramTrie   // byte trie over the vocabulary for greedy longest-match
+	contNode     int32          // trie node reached by descending the continuation prefix
+	hasCont      bool           // whether the continuation prefix exists in the trie
 
 	specials specialSet // markers parsed only by EncodeSpecial (§B60)
+}
+
+// buildWordPieceTrie inserts every vocabulary piece (including the "##…" continuation
+// forms) into a byte trie, sharing common prefixes.
+func buildWordPieceTrie(pieces []string) *unigramTrie {
+	t := &unigramTrie{edge: make(map[uint64]int32, len(pieces)*4), id: make([]int32, 1, len(pieces)*4)}
+	t.id[0] = -1 // root
+	for pid, p := range pieces {
+		node := int32(0)
+		for i := 0; i < len(p); i++ {
+			key := uint64(node)<<8 | uint64(p[i])
+			child, ok := t.edge[key]
+			if !ok {
+				child = int32(len(t.id))
+				t.id = append(t.id, -1)
+				t.edge[key] = child
+			}
+			node = child
+		}
+		t.id[node] = int32(pid)
+	}
+	return t
+}
+
+// descend walks node down by the bytes of s, returning the reached node (false if a
+// byte has no edge).
+func (t *unigramTrie) descend(node int32, s string) (int32, bool) {
+	for i := 0; i < len(s); i++ {
+		child, ok := t.edge[uint64(node)<<8|uint64(s[i])]
+		if !ok {
+			return 0, false
+		}
+		node = child
+	}
+	return node, true
 }
 
 // WordPieceOption configures a WordPiece tokenizer (functional-options idiom, §C12).
@@ -108,6 +147,8 @@ func NewWordPiece(vocab []string, opts ...WordPieceOption) (*WordPiece, error) {
 	for _, o := range opts {
 		o(w)
 	}
+	w.trie = buildWordPieceTrie(w.pieces)
+	w.contNode, w.hasCont = w.trie.descend(0, w.continuation)
 	return w, nil
 }
 
@@ -129,36 +170,58 @@ func (w *WordPiece) Encode(text string) []int {
 // (out[:wordStart]), exactly as the old encodeWord discarded its partial result before
 // returning []int{unkID}.
 func (w *WordPiece) encodeWordInto(out []int, word string) []int {
-	runes := []rune(word)
-	if len(runes) > w.maxChars {
+	if utf8.RuneCountInString(word) > w.maxChars {
 		return append(out, w.unkID)
 	}
+	// Byte-trie greedy longest-match. From each byte start bs, descend the trie one byte
+	// at a time (from the root, or from the "##" continuation node when bs>0), tracking
+	// the LONGEST piece that ends at a rune boundary — one pass instead of re-building and
+	// re-hashing string(runes[start:end]) (+ "##") for every candidate length (§T625). The
+	// rune-boundary guard keeps candidates rune-aligned, exactly as the old []rune slice did.
+	hasSpecials := len(w.specials.byText) > 0
 	wordStart := len(out) // rollback point if this word proves unmatchable
-	start := 0
-	for start < len(runes) {
-		// longest substring runes[start:end] in the vocab (with "##" if not word-initial).
-		end := len(runes)
-		matchedID, matchedLen := -1, 0
-		for end > start {
-			sub := string(runes[start:end])
-			if start > 0 {
-				sub = w.continuation + sub
+	bs := 0
+	for bs < len(word) {
+		node, have := int32(0), true
+		if bs > 0 {
+			node, have = w.contNode, w.hasCont
+		}
+		matchedID, matchedEnd := -1, -1
+		if have {
+			cur := node
+			for be := bs; be < len(word); be++ {
+				child, ok := w.trie.edge[uint64(cur)<<8|uint64(word[be])]
+				if !ok {
+					break // no piece shares this prefix
+				}
+				cur = child
+				if be+1 < len(word) && !utf8.RuneStart(word[be+1]) {
+					continue // mid-rune: a piece may only end on a rune boundary
+				}
+				id := w.trie.id[cur]
+				if id < 0 {
+					continue // this prefix is not itself a piece; a longer one may be
+				}
+				// Registered special markers are never produced by ordinary segmentation
+				// (§B60): so a blocked special is skipped, and a shorter/longer non-blocked
+				// piece is taken instead. EncodeSpecial is the only path that emits them.
+				if hasSpecials {
+					sub := word[bs : be+1]
+					if bs > 0 {
+						sub = w.continuation + sub
+					}
+					if w.specials.blocked(sub) {
+						continue
+					}
+				}
+				matchedID, matchedEnd = int(id), be+1
 			}
-			// Registered special markers are never produced by ordinary segmentation
-			// (§B60): MaxMatch searches the whole vocabulary, so without this the literal
-			// text "[MASK]" in untrusted input would match the real mask id.
-			// EncodeSpecial is the only path that emits them.
-			if id, ok := w.id[sub]; ok && !w.specials.blocked(sub) {
-				matchedID, matchedLen = id, end-start
-				break
-			}
-			end--
 		}
 		if matchedID < 0 {
 			return append(out[:wordStart], w.unkID) // no piece here ⇒ whole word is one unk
 		}
 		out = append(out, matchedID)
-		start += matchedLen
+		bs = matchedEnd
 	}
 	return out
 }
