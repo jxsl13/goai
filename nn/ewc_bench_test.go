@@ -34,3 +34,28 @@ func BenchmarkEWCFisher(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkEWCFisherManyTensors estimates Fisher information over a realistic parameter
+// count (32 tensors of 128×128) across 8 samples — the regime where the per-parameter ∑g²
+// accumulation fans out across cores (memory-bound, so a bandwidth-limited speedup).
+func BenchmarkEWCFisherManyTensors(b *testing.B) {
+	const nS, nT = 8, 32
+	gradSamples := make([][]*tensor.Tensor, nS)
+	for s := range gradSamples {
+		gradSamples[s] = make([]*tensor.Tensor, nT)
+		for i := range gradSamples[s] {
+			t := tensor.New(tensor.F64, tensor.Shape{128, 128})
+			f := t.Storage().F64()
+			for e := range f {
+				f[e] = 0.001 * float64((s+i+e)%13)
+			}
+			gradSamples[s][i] = t
+		}
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		if _, err := nn.EWCFisher(gradSamples); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
