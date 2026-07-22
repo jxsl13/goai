@@ -3,7 +3,10 @@ package nn
 import (
 	"fmt"
 	"math"
+	"runtime"
 	"slices"
+	"sync"
+	"sync/atomic"
 
 	"github.com/jxsl13/goai/tensor"
 )
@@ -49,7 +52,11 @@ func TIESMerge(base []*tensor.Tensor, models [][]*tensor.Tensor, density, lambda
 	}
 
 	out := make([]*tensor.Tensor, len(base))
-	for i := range base {
+	// Each parameter's merged tensor is independent (out[i] depends only on base[i] and
+	// models[·][i]; trimTopK is pure), so the per-tensor work — dominated by the top-k
+	// magnitude sort — fans out across cores. The math is unchanged, so the result is
+	// identical regardless of scheduling.
+	do := func(i int) {
 		b := base[i]
 		n := b.Numel()
 		shape := b.Shape()
@@ -127,6 +134,27 @@ func TIESMerge(base []*tensor.Tensor, models [][]*tensor.Tensor, density, lambda
 			}
 		}
 		out[i] = res
+	}
+	workers := min(runtime.GOMAXPROCS(0), len(base))
+	if workers > 1 {
+		var next atomic.Int64
+		var wg sync.WaitGroup
+		for range workers {
+			wg.Go(func() {
+				for {
+					i := int(next.Add(1)) - 1 // work-steal (the top-k sorts dominate)
+					if i >= len(base) {
+						return
+					}
+					do(i)
+				}
+			})
+		}
+		wg.Wait()
+	} else {
+		for i := range base {
+			do(i)
+		}
 	}
 	return out, nil
 }
