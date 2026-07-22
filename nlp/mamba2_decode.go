@@ -5,6 +5,7 @@ import (
 	"math"
 
 	"github.com/jxsl13/goai/backend"
+	"github.com/jxsl13/goai/internal/simd"
 	"github.com/jxsl13/goai/tensor"
 )
 
@@ -122,7 +123,14 @@ func mixer2Step(mx *Mamba2Mixer, ls *Mamba2LayerState, u *tensor.Tensor) (*tenso
 			acc += convW[wbase+k] * ls.ConvBuf[k*D+c]
 		}
 		acc += convW[wbase+K-1] * xBC[c]
-		xc[c] = silu(acc)
+		xc[c] = acc // silu applied vectorized below
+	}
+	// silu(acc)=acc·σ(acc) with the SAME vectorized stable σ the batched paths use, so
+	// this token's conv output bit-matches (parity). xc holds the raw conv accs here.
+	sigC := make([]float64, D)
+	simd.SigmoidF64(sigC, xc)
+	for c := range D {
+		xc[c] *= sigC[c]
 	}
 	// Shift the window: drop the oldest row, append this token's pre-conv row.
 	if K > 1 {
@@ -165,11 +173,14 @@ func mixer2Step(mx *Mamba2Mixer, ls *Mamba2LayerState, u *tensor.Tensor) (*tenso
 	}
 
 	// 5. Gated RMSNorm over the full intermediate width: norm(y · SiLU(z)).
+	// silu(z)=z·σ(z) with the SAME vectorized stable σ the batched gate uses (parity).
 	normW := mx.NormW.Storage().F64()
 	var variance float64
 	gated := make([]float64, mx.Intermediate)
+	sigZ := make([]float64, mx.Intermediate)
+	simd.SigmoidF64(sigZ, z)
 	for o := range mx.Intermediate {
-		gated[o] = y[o] * silu(z[o])
+		gated[o] = y[o] * z[o] * sigZ[o]
 		variance += gated[o] * gated[o]
 	}
 	variance /= float64(mx.Intermediate)
@@ -234,6 +245,9 @@ func mixer2Prefill(mx *Mamba2Mixer, ls *Mamba2LayerState, u *tensor.Tensor) (*te
 	for t := range seq {
 		xc[t] = make([]float64, D)
 	}
+	// Fill raw conv accs, then apply silu(acc)=acc·σ(acc) with σ vectorized per TOKEN ROW
+	// ([conv_dim]-length) — the same grouping mixer2Step uses, so every row bit-matches it
+	// (TestMamba2PrefillStateParity is bit-exact).
 	for c := range D {
 		wbase := c * K
 		for t := range seq {
@@ -244,7 +258,14 @@ func mixer2Prefill(mx *Mamba2Mixer, ls *Mamba2LayerState, u *tensor.Tensor) (*te
 					acc += convW[wbase+k] * xBC[src][c]
 				}
 			}
-			xc[t][c] = silu(acc)
+			xc[t][c] = acc
+		}
+	}
+	sigRow := make([]float64, D)
+	for t := range seq {
+		simd.SigmoidF64(sigRow, xc[t])
+		for c := range D {
+			xc[t][c] *= sigRow[c]
 		}
 	}
 
@@ -295,12 +316,15 @@ func mixer2Prefill(mx *Mamba2Mixer, ls *Mamba2LayerState, u *tensor.Tensor) (*te
 	}
 
 	// 5. Gated RMSNorm over the full intermediate width: norm(y · SiLU(z)).
+	// Same vectorized stable silu(z)=z·σ(z) as the step and full-forward gate (parity).
 	normW := mx.NormW.Storage().F64()
+	sigZ := make([]float64, mx.Intermediate)
+	gated := make([]float64, mx.Intermediate)
 	for t := range seq {
+		simd.SigmoidF64(sigZ, z[t])
 		var variance float64
-		gated := make([]float64, mx.Intermediate)
 		for o := range mx.Intermediate {
-			gated[o] = y[t][o] * silu(z[t][o])
+			gated[o] = y[t][o] * z[t][o] * sigZ[o]
 			variance += gated[o] * gated[o]
 		}
 		variance /= float64(mx.Intermediate)
