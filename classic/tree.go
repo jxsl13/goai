@@ -168,6 +168,10 @@ type cartBuilder struct {
 	radixKeys []uint64
 	radixTmpI []int
 	radixTmpK []uint64
+	// keyByID[id] = the current feature's value for sample id, filled once before a
+	// sub-cutoff comparison sort so its comparator reads one contiguous float instead
+	// of chasing b.x[id] (a scattered [][]float64 row pointer) on every comparison.
+	keyByID []float64
 }
 
 // subsampled reports whether per-split feature subsampling is active (the random
@@ -193,6 +197,7 @@ func (b *cartBuilder) initIdx(n int) {
 	b.radixTmpI = make([]int, n)
 	b.radixTmpK = make([]uint64, n)
 	b.sweepVals = make([]float64, n)
+	b.keyByID = make([]float64, n)
 	b.buildCLogC(n)
 }
 
@@ -225,7 +230,15 @@ const treeRadixCutoff = 512
 func (b *cartBuilder) radixByFeature(order []int, ff int) {
 	n := len(order)
 	if n < treeRadixCutoff {
-		sort.Slice(order, func(a, c int) bool { return b.x[order[a]][ff] < b.x[order[c]][ff] })
+		// Hoist the scattered b.x[id][ff] loads out of the O(n log n) comparator: fill a
+		// contiguous id-indexed key once (O(n)), then compare those. Tie order stays
+		// unspecified (irrelevant — thresholds sit between distinct values), so the
+		// chosen split is unchanged.
+		kb := b.keyByID
+		for _, id := range order {
+			kb[id] = b.x[id][ff]
+		}
+		sort.Slice(order, func(a, c int) bool { return kb[order[a]] < kb[order[c]] })
 		return
 	}
 	k := b.radixKeys[:n]
@@ -272,6 +285,7 @@ func (b *cartBuilder) initColumns(n, d int) {
 	b.radixKeys = make([]uint64, n)
 	b.radixTmpI = make([]int, n)
 	b.radixTmpK = make([]uint64, n)
+	b.keyByID = make([]float64, n) // sub-cutoff comparison-sort key scratch (radixByFeature)
 	for f := 0; f < d; f++ {
 		col := base[f*n : f*n+n : f*n+n]
 		for i := range col {
