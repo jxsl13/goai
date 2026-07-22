@@ -32,18 +32,30 @@ func SSDRecurrent(x, a, b, c *tensor.Tensor) (*tensor.Tensor, error) {
 	n := b.Shape()[1]
 	h := make([]float64, n*d) // state [N,d]
 	y := tensor.New(x.Dtype(), x.Shape())
+	// x_t and c_t are read across the other dimension in the O(n·d) inner loops
+	// (x[t,j] once per state row i, c[t,i] once per channel j), so hoist each row once per
+	// step into a contiguous buffer instead of re-dispatching AtF64. Bit-identical.
+	xrow := make([]float64, d)
+	crow := make([]float64, n)
 	for t := range T {
 		at := a.AtF64(t)
+		for j := range d {
+			xrow[j] = x.AtF64(t, j)
+		}
+		for i := range n {
+			crow[i] = c.AtF64(t, i)
+		}
 		for i := range n {
 			bi := b.AtF64(t, i)
+			base := i * d
 			for j := range d {
-				h[i*d+j] = at*h[i*d+j] + bi*x.AtF64(t, j)
+				h[base+j] = at*h[base+j] + bi*xrow[j]
 			}
 		}
 		for j := range d {
 			var s float64
 			for i := range n {
-				s += c.AtF64(t, i) * h[i*d+j]
+				s += crow[i] * h[i*d+j]
 			}
 			y.SetF64(s, t, j)
 		}
