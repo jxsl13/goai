@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -51,10 +52,18 @@ func JSONSchemaToGrammar(schema []byte) (string, error) {
 	}
 	var sb strings.Builder
 	sb.Grow(grammarSize)
-	fmt.Fprintf(&sb, "root ::= %s\n", c.rules["root"])
+	// Direct WriteString instead of fmt.Fprintf: these run once per rule and fmt's
+	// reflection + arg boxing dominated the compile allocations. The emitted bytes are
+	// identical (plain %s substitution).
+	sb.WriteString("root ::= ")
+	sb.WriteString(c.rules["root"])
+	sb.WriteByte('\n')
 	for _, n := range names {
 		if n != "root" {
-			fmt.Fprintf(&sb, "%s ::= %s\n", n, c.rules[n])
+			sb.WriteString(n)
+			sb.WriteString(" ::= ")
+			sb.WriteString(c.rules[n])
+			sb.WriteByte('\n')
 		}
 	}
 	sb.WriteString(jsonPrimitives)
@@ -129,7 +138,7 @@ func (c *schemaCompiler) visitObjectSchema(s map[string]any, hint string) (strin
 			}
 			var alts []string
 			for i, sub := range items {
-				expr, err := c.visit(sub, fmt.Sprintf("%s-alt%d", hint, i))
+				expr, err := c.visit(sub, hint+"-alt"+strconv.Itoa(i))
 				if err != nil {
 					return "", err
 				}
@@ -150,7 +159,7 @@ func (c *schemaCompiler) visitObjectSchema(s map[string]any, hint string) (strin
 			if !ok {
 				return "", fmt.Errorf("type list entries must be strings")
 			}
-			expr, err := c.visitType(s, name, fmt.Sprintf("%s-t%d", hint, i))
+			expr, err := c.visitType(s, name, hint+"-t"+strconv.Itoa(i))
 			if err != nil {
 				return "", err
 			}
@@ -182,7 +191,7 @@ func (c *schemaCompiler) visitType(s map[string]any, typ, hint string) (string, 
 			}
 			item = expr
 		}
-		body := fmt.Sprintf(`"[" sp (%s (sp "," sp %s)*)? sp "]"`, item, item)
+		body := `"[" sp (` + item + ` (sp "," sp ` + item + `)*)? sp "]"`
 		return c.addRule(hint, body), nil
 	case "object":
 		return c.visitObjectType(s, hint)
@@ -222,7 +231,7 @@ func (c *schemaCompiler) visitObjectType(s map[string]any, hint string) (string,
 		if err != nil {
 			return "", err
 		}
-		kv[n] = fmt.Sprintf(`%s sp ":" sp %s`, key, expr)
+		kv[n] = key + ` sp ":" sp ` + expr
 	}
 	var reqNames, optNames []string
 	for _, n := range names {
@@ -243,7 +252,9 @@ func (c *schemaCompiler) visitObjectType(s map[string]any, hint string) (string,
 			body.WriteString(kv[n])
 		}
 		for _, n := range optNames {
-			fmt.Fprintf(&body, ` (sp "," sp %s)?`, kv[n])
+			body.WriteString(` (sp "," sp `)
+			body.WriteString(kv[n])
+			body.WriteString(`)?`)
 		}
 	default:
 		// all optional: alternate on which property appears first.
@@ -252,11 +263,15 @@ func (c *schemaCompiler) visitObjectType(s map[string]any, hint string) (string,
 			var alt strings.Builder
 			alt.WriteString(kv[first])
 			for _, later := range optNames[i+1:] {
-				fmt.Fprintf(&alt, ` (sp "," sp %s)?`, kv[later])
+				alt.WriteString(` (sp "," sp `)
+				alt.WriteString(kv[later])
+				alt.WriteString(`)?`)
 			}
 			alts = append(alts, alt.String())
 		}
-		fmt.Fprintf(&body, "(%s)?", strings.Join(alts, " | "))
+		body.WriteByte('(')
+		body.WriteString(strings.Join(alts, " | "))
+		body.WriteString(")?")
 	}
 	body.WriteString(` sp "}"`)
 	return c.addRule(hint, body.String()), nil
@@ -276,7 +291,7 @@ func (c *schemaCompiler) addRule(hint, body string) string {
 	name := sanitizeRuleName(hint)
 	if _, taken := c.rules[name]; taken {
 		c.n++
-		name = fmt.Sprintf("%s-%d", name, c.n)
+		name = name + "-" + strconv.Itoa(c.n)
 	}
 	c.rules[name] = body
 	return name
