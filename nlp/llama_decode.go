@@ -232,14 +232,20 @@ func (m *Llama) DecodeStep(ctx *backend.Context, cache *LlamaCache, token, pos i
 	if err != nil {
 		return nil, err
 	}
-	attn := backend.AttnAttrs{Heads: cfg.Heads, KVHeads: kv, Causal: false, Scale: cfg.attnScale()}
+	// These attrs are identical for every layer of this step (Base/Heads/KV/pos/scale are
+	// all layer-independent), so box each into the Attrs interface ONCE per token here
+	// rather than re-boxing it inside the per-layer closure — as concrete structs passed to
+	// exec1's Attrs parameter they were heap-boxed ~N_layers times per decoded token (T955).
+	qRoPE := backend.Attrs(backend.RoPEAttrs{Base: cfg.RopeBase, Heads: cfg.Heads, PosOffset: pos})
+	kRoPE := backend.Attrs(backend.RoPEAttrs{Base: cfg.RopeBase, Heads: kv, PosOffset: pos})
+	attn := backend.Attrs(backend.AttnAttrs{Heads: cfg.Heads, KVHeads: kv, Causal: false, Scale: cfg.attnScale()})
 	h, err := m.blockStack(ctx, x, func(layerCtx *backend.Context, l int, q, k, v *tensor.Tensor) (*tensor.Tensor, error) {
 		// RoPE the single token at its absolute position, then append k,v to the cache.
-		q, err := exec1(layerCtx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: cfg.Heads, PosOffset: pos}, q)
+		q, err := exec1(layerCtx, backend.OpRoPE, qRoPE, q)
 		if err != nil {
 			return nil, err
 		}
-		if k, err = exec1(layerCtx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: kv, PosOffset: pos}, k); err != nil {
+		if k, err = exec1(layerCtx, backend.OpRoPE, kRoPE, k); err != nil {
 			return nil, err
 		}
 		kNew, vNew := cache.bufs.appendKV(cache.K, cache.V, l, k, v)
