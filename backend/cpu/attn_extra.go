@@ -3,10 +3,45 @@ package cpu
 import (
 	"fmt"
 	"math"
+	"sync"
 
 	"github.com/jxsl13/goai/backend"
 	"github.com/jxsl13/goai/tensor"
 )
+
+// ropeFreqKey identifies a RoPE inverse-frequency table by the ONLY inputs that shape
+// it: the rotary dim and the base/interpolation/YaRN parameters. It deliberately omits
+// PosOffset (which changes every decode step) and the xPos fields (a separate ζ scaling),
+// so the cache hits across a whole generation instead of missing on every token.
+type ropeFreqKey struct {
+	hd                                                                 int
+	base, posScale, yarnScale, yarnOrigCtx, yarnBetaFast, yarnBetaSlow float64
+}
+
+type ropeFreqEntry struct {
+	inv    []float64
+	posDiv float64
+}
+
+// ropeFreqCache memoizes RoPEFreqs across calls. The inverse frequencies are constant
+// for a model, but ropeApplyKernel ran the make([]float64) + math.Pow loop for Q and K
+// in every layer of every token (~4% of Gemma decode CPU + 400k allocs/token). The
+// cached slice is READ-ONLY (ropeApply only reads inv), so sharing it is safe; sync.Map
+// handles the concurrent prefill workers, and duplicate misses store the same value.
+var ropeFreqCache sync.Map // ropeFreqKey → ropeFreqEntry
+
+// cachedRoPEFreqs returns the memoized RoPEFreqs result, computing and caching on a miss.
+func cachedRoPEFreqs(hd int, pr backend.RoPEAttrs) ([]float64, float64) {
+	d := pr.WithDefaults()
+	key := ropeFreqKey{hd, d.Base, d.PosScale, d.YaRNScale, d.YaRNOrigCtx, d.YaRNBetaFast, d.YaRNBetaSlow}
+	if v, ok := ropeFreqCache.Load(key); ok {
+		e := v.(ropeFreqEntry)
+		return e.inv, e.posDiv
+	}
+	inv, posDiv := backend.RoPEFreqs(hd, pr)
+	ropeFreqCache.Store(key, ropeFreqEntry{inv, posDiv})
+	return inv, posDiv
+}
 
 // Typed parallel kernels for the remaining attention-family ops (§T610, closing
 // the last ref≡cpu rows of the T606 matrix): FlashAttention-2 forward and RetNet
@@ -191,7 +226,7 @@ func ropeApplyKernel(ctx *backend.Context, q *tensor.Tensor, attrs backend.Attrs
 	if err != nil {
 		return nil, err
 	}
-	inv, posDiv := backend.RoPEFreqs(2*half, pr)
+	inv, posDiv := cachedRoPEFreqs(2*half, pr)
 	var zeta []float64
 	if pr.XPos {
 		zeta = backend.XPosScales(2*half, pr)
