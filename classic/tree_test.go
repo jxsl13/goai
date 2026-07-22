@@ -245,12 +245,15 @@ func TestTreePerfectFitRegressor(t *testing.T) {
 // hand-computed split's impurity reduction matches too.
 func TestTreeImpurityFormulas(t *testing.T) {
 	// counts [3,1], n=4
-	if got := impurityCounts([]int{3, 1}, 4, Gini); math.Abs(got-0.375) > 1e-10 {
+	bGini := &cartBuilder{cfg: cartConfig{criterion: Gini}}
+	if got := bGini.impurityCounts([]int{3, 1}, 4); math.Abs(got-0.375) > 1e-10 {
 		t.Errorf("gini[3,1] = %.12f, want 0.375", got)
 	}
 	// entropy = -(0.75 ln0.75 + 0.25 ln0.25)
 	wantEnt := -(0.75*math.Log(0.75) + 0.25*math.Log(0.25))
-	if got := impurityCounts([]int{3, 1}, 4, Entropy); math.Abs(got-wantEnt) > 1e-10 {
+	bEnt := &cartBuilder{cfg: cartConfig{criterion: Entropy}}
+	bEnt.buildCLogC(4)
+	if got := bEnt.impurityCounts([]int{3, 1}, 4); math.Abs(got-wantEnt) > 1e-10 {
 		t.Errorf("entropy[3,1] = %.12f, want %.12f", got, wantEnt)
 	}
 	// MSE reduction: parent y=[0,0,10,10] variance=25; split at feature0=1.5 gives
