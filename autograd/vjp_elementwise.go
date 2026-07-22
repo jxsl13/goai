@@ -293,7 +293,43 @@ func init() {
 		d := y.Shape()[y.Ndim()-1]
 		rows := y.Numel() / d
 		gin := tensor.New(in[0].Dtype(), in[0].Shape())
-		for r := range rows {
+		// Devirtualized fast paths: y and g are row-major over the last axis, so
+		// element (r,j) lives at flat r*d+j — the same value tensor.Unravel+AtF64
+		// computes, but without the per-element ravel and multi-index dispatch (this
+		// VJP is the attention softmax backward, run once per layer per step). gin is
+		// freshly contiguous. The F32 branch keeps the dot and the product in f64
+		// (matching AtF64's widen) and rounds only on store, so both fast paths are
+		// bit-identical to the generic rule below.
+		yc, gc := y.Contiguous(), g.Contiguous()
+		if in[0].Dtype() == tensor.F64 && yc.Dtype() == tensor.F64 && gc.Dtype() == tensor.F64 {
+			ys, gs, ds := yc.Storage().F64(), gc.Storage().F64(), gin.Storage().F64()
+			for r := range rows {
+				base := r * d
+				var dot float64
+				for j := range d {
+					dot += gs[base+j] * ys[base+j]
+				}
+				for j := range d {
+					ds[base+j] = ys[base+j] * (gs[base+j] - dot)
+				}
+			}
+			return []*tensor.Tensor{gin}, nil
+		}
+		if in[0].Dtype() == tensor.F32 && yc.Dtype() == tensor.F32 && gc.Dtype() == tensor.F32 {
+			ys, gs, ds := yc.Storage().F32(), gc.Storage().F32(), gin.Storage().F32()
+			for r := range rows {
+				base := r * d
+				var dot float64
+				for j := range d {
+					dot += float64(gs[base+j]) * float64(ys[base+j])
+				}
+				for j := range d {
+					ds[base+j] = float32(float64(ys[base+j]) * (float64(gs[base+j]) - dot))
+				}
+			}
+			return []*tensor.Tensor{gin}, nil
+		}
+		for r := range rows { // generic fallback (mixed dtype / exotic layout)
 			var dot float64
 			for j := range d {
 				idx := tensor.Unravel(r*d+j, y.Shape())
