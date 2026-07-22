@@ -215,6 +215,7 @@ func (t *Tokenizer) Decode(ids []int) string {
 			}
 		}
 	} else {
+		//perfscan:ignore M decSlice is the map→slice fast path; this is the defensive fallback
 		for _, id := range ids {
 			b.WriteString(t.decoder[id])
 		}
