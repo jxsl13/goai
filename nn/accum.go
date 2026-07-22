@@ -71,6 +71,7 @@ func (a *GradAccumulator) Steps() int { return a.steps }
 // equals the full-batch mean gradient. Returns nil grads before any Add.
 func (a *GradAccumulator) GradFn() GradFn {
 	k := float64(a.steps)
+	ik := 1 / k // average by multiplying the invariant reciprocal, not dividing per element
 	return func(p *tensor.Tensor) *tensor.Tensor {
 		s, ok := a.sums[p]
 		if !ok || a.steps == 0 {
@@ -84,19 +85,19 @@ func (a *GradAccumulator) GradFn() GradFn {
 		case tensor.F64:
 			d := out.Storage().F64()
 			for i := range s {
-				d[i] = s[i] / k
+				d[i] = s[i] * ik
 			}
 			return out
 		case tensor.F32:
 			d := out.Storage().F32()
 			for i := range s {
-				d[i] = float32(s[i] / k)
+				d[i] = float32(s[i] * ik)
 			}
 			return out
 		}
 		idx := 0
 		fillGen(out, func() float64 {
-			v := s[idx] / k
+			v := s[idx] * ik
 			idx++
 			return v
 		})
