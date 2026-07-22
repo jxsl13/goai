@@ -1,9 +1,14 @@
-// Command perfscan is a static finder for the per-element hot-loop anti-patterns
-// this codebase repeatedly optimizes away (§base-perf-sweep). It parses Go source
-// with go/ast — it never builds or imports the packages, so cgo/build-tagged
-// backends are scanned too — and reports the STRUCTURAL SHAPE of fifteen patterns
-// (this is the SINGLE perfscan for the repo — the earlier tools/perfscan P1/P2
-// prototype was folded in here as detectors I/J):
+// Command perfscan is a REPO-AGNOSTIC static finder for hot-loop performance
+// anti-patterns. It parses Go source with go/ast — it never builds or imports the
+// packages, so cgo/build-tagged files are scanned too — and reports the STRUCTURAL
+// SHAPE of fifteen patterns. The language/stdlib-shape checks run on any module
+// with no configuration; the four DOMAIN checks that key on a project's own
+// element-access / allocation vocabulary (per-element dispatch/closure, alloc in a
+// per-element loop, a scalar transcendental beside a vectorized sibling) are driven
+// entirely by a Config (see -config; empty by default, so they stay silent until a
+// project names its functions — the engine hard-codes nothing project-specific).
+// The illustrative names below (AtF64, flatF64, …) are just one project's config;
+// substitute your own.
 //
 //	PS1001. per-element .AtF64/.SetF64 dispatch in a Numel/Unravel loop with no
 //	   flatF64/flatF32 contiguous fast path in the enclosing function
@@ -51,10 +56,23 @@
 //
 // IMPORTANT — these are CANDIDATES, not confirmed wins. A static check sees the
 // shape of a hot loop, never its temperature: a per-element write in a one-time
-// constructor is fine (§C3, measure don't assume). Each hit still needs an A/B
-// measurement and a bit-identity proof before it ships (§V22). perfscan replaces
-// the ad-hoc awk scans in docs/perf-notes-training.md with an AST-accurate,
-// comment/string-safe, CI-wirable pass.
+// constructor is fine (measure, don't assume). Each hit still needs an A/B
+// measurement and a bit-identity proof before it ships. perfscan is an
+// AST-accurate, comment/string-safe, CI-wirable pass.
+//
+// CONFIG (making it repo-agnostic). Ten checks are pure language/stdlib shapes and
+// need no configuration: PS2002 unsized-builder, PS2003 strings-alloc, PS2004
+// poolable-scratch, PS2005 regexp, PS3001 reflection, PS3002 closure-comparator-
+// sort, PS3003 int-key-map, PS4001 le-decode, PS4003 transcendental-wrapper, PS5001
+// loop-invariant-divide. The four DOMAIN checks — PS1001, PS1002, PS2001, PS4002 —
+// key on a project's own vocabulary (its element accessors, allocators, fast-path
+// helpers and vectorized kernels), which lives in a JSON Config, NOT in the engine.
+// With no config those four stay silent, so perfscan on an arbitrary module reports
+// only the language/stdlib patterns. Point it at a config with `-config file.json`
+// (fields: elementAccessors, fastPathHelpers, elementCountMethods,
+// indexDecomposeFuncs, allocatorFuncs, perElementVisitors, bulkCopyHelpers,
+// vectorizedSiblingFuncs), or drop a perfscan.json / .perfscan.json in a parent
+// directory to have it discovered automatically.
 //
 // CHECK IDs. Every detector has a stable, staticcheck-style ID: the prefix PS
 // plus a four-digit number whose thousands digit groups the detector — PS1xxx
@@ -189,6 +207,109 @@ var catToID = func() map[string]string {
 	}
 	return m
 }()
+
+// Config makes perfscan repo-agnostic. The language/stdlib-shape checks — PS2002
+// unsized-builder, PS2003 strings-alloc, PS2004 poolable-scratch, PS2005 regexp,
+// PS3001 reflection, PS3002 closure-comparator-sort, PS3003 int-key-map, PS4001
+// le-decode, PS4003 transcendental-wrapper, PS5001 loop-invariant-divide — run on
+// ANY Go module with no configuration. The four DOMAIN checks — PS1001
+// per-element-dispatch, PS1002 per-element-closure, PS2001 alloc-in-loop, PS4002
+// scalar-transcendental-vectorizable — key on a project's own vocabulary (the
+// element accessors, allocators and fast-path helpers of its tensor/array type),
+// which lives ENTIRELY here rather than hard-coded in the engine. Every field is
+// empty by default, so those four checks stay silent until a project names its
+// functions. Supply them with `-config <file.json>` or a perfscan.json /
+// .perfscan.json discovered upward from the working directory.
+type Config struct {
+	// PS1001/PS1002 — per-element read/write methods (e.g. a tensor's AtF64/SetF64).
+	ElementAccessors []string `json:"elementAccessors,omitempty"`
+	// PS1001 — bulk/typed accessors whose presence in a function proves its
+	// per-element loop is only a fallback, so the dispatch is NOT reported (the
+	// "fast path" helpers, e.g. flatF64/flatF32 or a Storage().F64() slice grab).
+	FastPathHelpers []string `json:"fastPathHelpers,omitempty"`
+	// PS1001 — element-count methods; a loop bounded by x.Method() over one reads as
+	// per-element (e.g. Numel).
+	ElementCountMethods []string `json:"elementCountMethods,omitempty"`
+	// PS1001 — flat→multi-index calls; one in a loop body marks it per-element
+	// (e.g. Unravel).
+	IndexDecomposeFuncs []string `json:"indexDecomposeFuncs,omitempty"`
+	// PS2001 — allocation constructors/converters flagged inside a per-element loop
+	// (e.g. a tensor package's New/Zeros/FromFloat64/Cast).
+	AllocatorFuncs []string `json:"allocatorFuncs,omitempty"`
+	// PS1002 — helpers that invoke a per-element closure argument (e.g. readGen/fillGen).
+	PerElementVisitors []string `json:"perElementVisitors,omitempty"`
+	// PS4001 — bulk little-endian copy helpers whose presence proves an intentional
+	// big-endian / genuine-decode path, silencing the per-element-decode report.
+	BulkCopyHelpers []string `json:"bulkCopyHelpers,omitempty"`
+	// PS4002 — hand-vectorized SIMD kernel names; a call to one in a file marks a
+	// scalar math.X in a loop there as a vectorize candidate (e.g. vsiluF32).
+	VectorizedSiblingFuncs []string `json:"vectorizedSiblingFuncs,omitempty"`
+}
+
+// nameSets is Config compiled to maps for O(1) lookup during a scan.
+type nameSets struct {
+	accessors, fastPath, elemCount, indexDecompose map[string]bool
+	allocators, visitors, bulkCopy, vectorized     map[string]bool
+}
+
+func toSet(xs []string) map[string]bool {
+	m := make(map[string]bool, len(xs))
+	for _, x := range xs {
+		m[x] = true
+	}
+	return m
+}
+
+func (c Config) compile() nameSets {
+	return nameSets{
+		accessors:      toSet(c.ElementAccessors),
+		fastPath:       toSet(c.FastPathHelpers),
+		elemCount:      toSet(c.ElementCountMethods),
+		indexDecompose: toSet(c.IndexDecomposeFuncs),
+		allocators:     toSet(c.AllocatorFuncs),
+		visitors:       toSet(c.PerElementVisitors),
+		bulkCopy:       toSet(c.BulkCopyHelpers),
+		vectorized:     toSet(c.VectorizedSiblingFuncs),
+	}
+}
+
+// loadConfig reads a JSON Config from path.
+func loadConfig(path string) (Config, error) {
+	var c Config
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return c, err
+	}
+	if err := json.Unmarshal(b, &c); err != nil {
+		return c, fmt.Errorf("%s: %w", path, err)
+	}
+	return c, nil
+}
+
+// discoverConfig walks up from the working directory looking for perfscan.json or
+// .perfscan.json (golangci-lint style). It returns the empty Config — the fully
+// generic, stdlib-only mode — when none is found.
+func discoverConfig() (Config, string) {
+	dir, err := os.Getwd()
+	if err != nil {
+		return Config{}, ""
+	}
+	for {
+		for _, name := range []string{"perfscan.json", ".perfscan.json"} {
+			p := filepath.Join(dir, name)
+			if _, err := os.Stat(p); err == nil {
+				if c, err := loadConfig(p); err == nil {
+					return c, p
+				}
+			}
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return Config{}, ""
+		}
+		dir = parent
+	}
+}
 
 // loopAssignedIdents returns the set of identifier names that a loop MUTATES — the LHS
 // of every assignment/inc-dec in its body, plus the loop's own iteration variables. A
@@ -442,14 +563,6 @@ func resolveClass(tok string) string {
 	return ""
 }
 
-// allocCallees are constructors/converters that allocate a fresh tensor; called
-// per element they turn an O(n) loop into O(n) allocations (§base-perf §2).
-var allocCallees = map[string]bool{
-	"New": true, "NewOn": true, "FromFloat64": true, "FromFloat32": true,
-	"Zeros": true, "Ones": true, "Full": true, "Scalar": true,
-	"scalarTensor": true, "Cast": true,
-}
-
 // fmtReflectCallees are the fmt SCAN functions: they PARSE a format string and
 // REFLECT over their pointer varargs on every call, allocating heavily. Inside a
 // loop over elements that is a per-element reflect+parse+alloc cost; a hand-parse or
@@ -614,14 +727,6 @@ func isSingleEltNestedSliceLit(e ast.Expr) bool {
 	return nested
 }
 
-// perElemVisitors are helpers that invoke their function-literal argument ONCE
-// PER ELEMENT. Passing a closure to them means an indirect call per element even
-// on their contiguous fast branch — the cost that made SWA/EMA/GradAccum/GradFn
-// 1.6–4.2× slower than a raw-slice loop (detector PS1002; formerly tools/perfscan P1).
-var perElemVisitors = map[string]bool{
-	"readGen": true, "fillGen": true, "visitGen": true, "forEach": true, "eachElem": true,
-}
-
 // sortClosureCallees / slicesClosureCallees are sort entry points whose comparator
 // is a function value, PACKAGE-QUALIFIED (sort.* / slices.*) so the many non-sort
 // homonyms — ops.Slice, tensor.Slice, a local Sort method — do NOT false-match. On
@@ -640,16 +745,6 @@ var slicesClosureCallees = map[string]bool{"SortFunc": true, "SortStableFunc": t
 var scalarTranscendentals = map[string]bool{
 	"Exp": true, "Expm1": true, "Log": true, "Log1p": true, "Log2": true, "Log10": true,
 	"Tanh": true, "Sinh": true, "Cosh": true, "Erf": true, "Erfc": true, "Pow": true,
-}
-
-// vectorizedSibling reports whether name looks like a hand-vectorized numeric
-// kernel helper (vsiluF32, vexpF32, vgeluF32, expF64x4, …): a 'v'-prefixed
-// F32/F64 helper, or an xN-lane-suffixed SIMD primitive.
-func vectorizedSibling(name string) bool {
-	if strings.HasPrefix(name, "v") && (strings.Contains(name, "F32") || strings.Contains(name, "F64")) {
-		return true
-	}
-	return strings.Contains(name, "x8") || strings.Contains(name, "x4") || strings.Contains(name, "x16")
 }
 
 // hasFuncLitArg reports whether any argument is a function literal (a closure).
@@ -720,7 +815,7 @@ func ignoreDirectives(fset *token.FileSet, f *ast.File) map[int]map[string]bool 
 // scanFile runs every detector over one parsed file, drops sites suppressed by
 // inline `//perfscan:ignore` directives, and returns the deduplicated findings
 // (one per enclosing loop per category).
-func scanFile(fset *token.FileSet, f *ast.File) []finding {
+func scanFile(fset *token.FileSet, f *ast.File, ns nameSets) []finding {
 	var out []finding
 	// File-scoped fact: the package-local elementwise funcs that WRAP a libm
 	// transcendental (softplus, mish, swish, …). Class PS4002 only sees a DIRECT math.X
@@ -735,7 +830,7 @@ func scanFile(fset *token.FileSet, f *ast.File) []finding {
 		if !ok || fn.Body == nil {
 			continue
 		}
-		out = append(out, scanFunc(fset, fn, wrappers, intKeyMaps)...)
+		out = append(out, scanFunc(fset, fn, wrappers, intKeyMaps, ns)...)
 	}
 	// drop sites silenced by an inline //perfscan:ignore directive (per class).
 	ign := ignoreDirectives(fset, f)
@@ -801,7 +896,7 @@ func isScalarFloatFunc(t *ast.FuncType) bool {
 	return t.Results != nil && len(t.Results.List) == 1 && isFloat(t.Results.List[0].Type)
 }
 
-func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[string]bool) []finding {
+func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[string]bool, ns nameSets) []finding {
 	// Pass 1: function-scoped facts + a child→parent map for ancestor walks.
 	hasFlat := false
 	hasBuilder := false // declares a strings.Builder / bytes.Buffer
@@ -837,15 +932,17 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 			// (the older idiom, e.g. fillSigmoidFocalConstants). Its presence means the
 			// function's per-element Unravel loop is only the strided/other-dtype
 			// fallback, not the hot path — so it must NOT be reported.
-			switch calleeName(x.Fun) {
-			case "flatF64", "flatF32", "F64", "F32":
+			cn := calleeName(x.Fun)
+			if ns.fastPath[cn] { // a configured typed bulk accessor (flatF64/…)
 				hasFlat = true
-			case "Grow":
+			}
+			if cn == "Grow" { // strings.Builder/bytes.Buffer pre-size (stdlib)
 				hasGrow = true
-			case "rawCopyLE", "rawStoreLE":
+			}
+			if ns.bulkCopy[cn] { // a configured LE bulk-copy helper (rawCopyLE/…)
 				hasLEBulk = true
 			}
-			if vectorizedSibling(calleeName(x.Fun)) {
+			if ns.vectorized[cn] { // a configured hand-vectorized SIMD kernel
 				hasVectorSibling = true
 			}
 		case *ast.CompositeLit:
@@ -870,10 +967,10 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 				hasBuilder = true
 			}
 		case *ast.AssignStmt:
-			// n := x.Numel()  /  n = x.Numel()
+			// n := x.Numel()  /  n = x.Numel()  (Numel = a configured element-count method)
 			for i, rhs := range x.Rhs {
 				call, ok := rhs.(*ast.CallExpr)
-				if !ok || calleeName(call.Fun) != "Numel" || i >= len(x.Lhs) {
+				if !ok || !ns.elemCount[calleeName(call.Fun)] || i >= len(x.Lhs) {
 					continue
 				}
 				if id, ok := x.Lhs[i].(*ast.Ident); ok {
@@ -907,9 +1004,9 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
 		switch loop := n.(type) {
 		case *ast.RangeStmt:
-			perElemLoop[loop] = isNumelRange(loop, numelIdents) || directlyHasUnravel(loop.Body)
+			perElemLoop[loop] = isNumelRange(loop, numelIdents, ns) || directlyHasUnravel(loop.Body, ns)
 		case *ast.ForStmt:
-			perElemLoop[loop] = isNumelForCond(loop, numelIdents) || directlyHasUnravel(loop.Body)
+			perElemLoop[loop] = isNumelForCond(loop, numelIdents, ns) || directlyHasUnravel(loop.Body, ns)
 		}
 		return true
 	})
@@ -929,21 +1026,22 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 		name := calleeName(call.Fun)
 
 		// A: per-element dispatch with no fast path in this function.
-		if perElem && (name == "AtF64" || name == "SetF64") && !hasFlat {
+		if perElem && ns.accessors[name] && !hasFlat {
 			out = append(out, finding{
 				pos:      fset.Position(loop.Pos()),
 				category: "per-element-dispatch",
-				msg: fmt.Sprintf("per-element .%s in a Numel/Unravel loop, no typed fast path (flatF64/flatF32/Storage().F64()) in %s()"+
-					" — add a typed contiguous walk (docs/perf-notes-training.md §1)", name, fn.Name.Name),
+				msg: fmt.Sprintf("per-element .%s in an element-count/index loop with no configured typed bulk"+
+					" accessor in %s() — walk the backing slice directly for the contiguous case, keeping the"+
+					" per-element form as the strided/other-dtype fallback", name, fn.Name.Name),
 			})
 		}
 		// B: allocation inside a per-element loop.
-		if perElem && allocCallees[name] {
+		if perElem && ns.allocators[name] {
 			out = append(out, finding{
 				pos:      fset.Position(loop.Pos()),
 				category: "alloc-in-loop",
-				msg: fmt.Sprintf("allocation %q inside a per-element loop — hoist/bulk it out of the loop"+
-					" (docs/perf-notes-training.md §2, AMP roundHalf 50×)", name),
+				msg: fmt.Sprintf("allocation %q inside a per-element loop — turns an O(n) loop into O(n)"+
+					" allocations; hoist it out of the loop or allocate once and reuse", name),
 			})
 		}
 		// C: batch API fed a single-element nested-slice literal (a wrapped row), in any loop.
@@ -953,7 +1051,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 					pos:      fset.Position(loop.Pos()),
 					category: "batch-single-elt",
 					msg: fmt.Sprintf("%q called with a single-element slice literal inside a loop"+
-						" — use the single-item path (T917, forest predict 80001→1 alloc)", name),
+						" — call a single-item API instead of wrapping each element in a fresh slice", name),
 				})
 				break
 			}
@@ -963,8 +1061,8 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 			out = append(out, finding{
 				pos:      fset.Position(loop.Pos()),
 				category: "reflection-in-loop",
-				msg: fmt.Sprintf("fmt.%s in a loop — reflection-based + allocates on every call;"+
-					" gate it behind a cheap check or hand-parse (T931: SPM.Decode fmt.Sscanf per token = 1.55M allocs → 20×)", fname),
+				msg: fmt.Sprintf("fmt.%s in a loop — reflection-based and allocates on every call;"+
+					" gate it behind a cheap check or hand-parse the input", fname),
 			})
 		}
 		// E: a strings.Builder/bytes.Buffer written in a loop with NO .Grow anywhere in the
@@ -974,7 +1072,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 				pos:      fset.Position(loop.Pos()),
 				category: "unsized-builder",
 				msg: fmt.Sprintf("a strings.Builder/bytes.Buffer is written (.%s) in a loop with no .Grow —"+
-					" pre-size it to skip the log(n) growth-buffer churn (T929: BPE/SPM/Unigram Decode pre-size, allocs↓, up to 1.65×)", name),
+					" pre-size it with .Grow(n) to skip the log(n) growth-buffer reallocations", name),
 			})
 		}
 		// F: an allocating strings transform in any loop (a fresh string per iteration).
@@ -983,7 +1081,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 				pos:      fset.Position(loop.Pos()),
 				category: "strings-alloc-in-loop",
 				msg: fmt.Sprintf("strings.%s in a loop — allocates a new string every call;"+
-					" write the transform into the builder or slice in place (T934: Decode ReplaceAll per token → inline, 52k→1 alloc, 1.65×)", fname),
+					" write the transform into a builder or byte slice in place", fname),
 			})
 		}
 		// G: a per-element little-endian bit decode in a loop — a memcpy in disguise on LE hosts.
@@ -993,9 +1091,9 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 			out = append(out, finding{
 				pos:      fset.Position(loop.Pos()),
 				category: "le-decode-in-loop",
-				msg: fmt.Sprintf("%s in a loop — on a little-endian host the on-disk bytes ARE the in-memory layout;"+
-					" a single rawCopyLE replaces the per-element decode for VERBATIM-bit dtypes (F32/F64/F16), T720/T907"+
-					" (2–5×). A quant-widen path genuinely decodes per-element — triage before acting.", bname),
+				msg: fmt.Sprintf("%s in a loop — on a little-endian host the on-disk bytes already match the"+
+					" in-memory layout, so a single bulk copy replaces the per-element decode for verbatim-bit values;"+
+					" a path that genuinely converts per element is fine — triage before acting.", bname),
 			})
 		}
 		// PS2005: a regexp compile inside a loop — recompiles the pattern every iteration.
@@ -1016,11 +1114,10 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 			out = append(out, finding{
 				pos:      fset.Position(loop.Pos()),
 				category: "scalar-transcendental-vectorizable",
-				msg: fmt.Sprintf("math.%s runs scalar in a loop while a vectorized v*F32/F64 sibling is"+
-					" called in the same kernel — vectorize this dtype branch on a SIMD transcendental"+
-					" (keep a bit-identical scalar tail). FIRST verify the op is NOT under a bit-exact"+
-					" CPU==Ref invariant (some f64 ops are locked to the scalar reference). T667: F64 SiLU"+
-					" vexp = 1.52× Llama prefill.", tname),
+				msg: fmt.Sprintf("math.%s runs scalar in a loop while a configured vectorized sibling is"+
+					" called in the same file — this scalar branch is a candidate for the same SIMD"+
+					" treatment (keep a bit-identical scalar tail). First verify the op is not required to"+
+					" be bit-for-bit identical to a scalar reference.", tname),
 			})
 		}
 		// L: a loop calls a package-local elementwise helper that WRAPS a libm
@@ -1032,10 +1129,10 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 				pos:      fset.Position(loop.Pos()),
 				category: "transcendental-wrapper-in-loop",
 				msg: fmt.Sprintf("%s(…) wraps a scalar libm transcendental and runs per element in a loop —"+
-					" the same class as a raw math.Exp/Log (K), just one call deep. Candidate for a"+
-					" vectorized SIMD kernel or a batched tensor op (compute the whole slice 4/8-wide,"+
-					" keep a bit-identical scalar tail). Verify hotness + that the op is not under a"+
-					" bit-exact CPU==Ref invariant. F64 OpSoftplus vsoftplus = 1.62× Mamba prefill.", wname),
+					" the same class as a raw math.Exp/Log (PS4002), just one call deep. Candidate for a"+
+					" vectorized SIMD kernel or a batched op (compute the whole slice 4/8-wide, keep a"+
+					" bit-identical scalar tail). Verify hotness and that the op need not match a scalar"+
+					" reference bit-for-bit.", wname),
 			})
 		}
 		return true
@@ -1073,10 +1170,9 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 					pos:      fset.Position(loop.Pos()),
 					category: "poolable-loop-scratch",
 					msg: fmt.Sprintf("%q: make() per iteration of a pointer-method loop, bound to a"+
-						" non-escaping local - per-call scratch reallocated every call. Hoist it to a"+
+						" non-escaping local — per-call scratch reallocated every call. Hoist it to a"+
 						" reused receiver field (grow-on-demand, zero only if read-before-write) so the"+
-						" per-Step allocations drop to zero (Adafactor/Cautious/LAMB StepOnly 1.2-1.5x,"+
-						" 12 allocs to 0). Verify the buffer is fully overwritten before use.", id.Name),
+						" per-call allocations drop to zero. Verify the buffer is fully overwritten before use.", id.Name),
 				})
 			}
 			return true
@@ -1182,13 +1278,13 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 		name := calleeName(call.Fun)
 		// I: a per-element visitor (readGen/fillGen/…) fed a closure → an indirect call
 		// per element even on its contiguous branch.
-		if perElemVisitors[name] && hasFuncLitArg(call) {
+		if ns.visitors[name] && hasFuncLitArg(call) {
 			out = append(out, finding{
 				pos:      fset.Position(call.Pos()),
 				category: "per-element-closure",
-				msg: fmt.Sprintf("%s(…) invokes a closure per element — add a contiguous raw-slice fast"+
-					" path (IsContiguous && Offset==0) for F32/F64, keep the closure as the strided"+
-					" fallback (SWA/EMA/GradAccum 1.6–4.2×). Verify bit-identical + benchmark.", name),
+				msg: fmt.Sprintf("%s(…) invokes a closure per element — an indirect call per element."+
+					" Add a raw-slice tight loop for the contiguous case, keeping the closure as the"+
+					" fallback. Verify bit-identical + benchmark.", name),
 			})
 		}
 		// J: a closure-comparator sort → a per-comparison indirect call; radix candidate
@@ -1240,9 +1336,8 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 				pos:      fset.Position(loop.Pos()),
 				category: "int-key-map-in-loop",
 				msg: fmt.Sprintf("%q (an integer-keyed map) is read in a loop — if the keys are dense over"+
-					" [0,N) a []T indexed by the key replaces the per-lookup hash (map→slice: BPE Decode 2.85×,"+
-					" GGUF Decode 3.67×, forest votes T312). Verify key density; gaps/out-of-range keep the"+
-					" map's zero-value via a bounds check.", indexedMapName(idx.X)),
+					" [0,N) a []T indexed by the key replaces the per-lookup hash. Verify key density; gaps or"+
+					" out-of-range keys keep the map's zero-value via a bounds check.", indexedMapName(idx.X)),
 			})
 			return true
 		})
@@ -1252,19 +1347,20 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 
 // isNumelRange reports whether a range loop iterates a tensor's element count:
 // `for … range x.Numel()` or `for … range n` with n bound from a .Numel() call.
-func isNumelRange(r *ast.RangeStmt, numelIdents map[string]bool) bool {
+func isNumelRange(r *ast.RangeStmt, numelIdents map[string]bool, ns nameSets) bool {
 	switch x := r.X.(type) {
 	case *ast.CallExpr:
-		return calleeName(x.Fun) == "Numel"
+		return ns.elemCount[calleeName(x.Fun)]
 	case *ast.Ident:
 		return numelIdents[x.Name]
 	}
 	return false
 }
 
-// isNumelForCond reports whether a 3-clause for loop is bounded by a Numel-derived
-// count: `for i := 0; i < n; i++` with n from a .Numel() call (either operand).
-func isNumelForCond(f *ast.ForStmt, numelIdents map[string]bool) bool {
+// isNumelForCond reports whether a 3-clause for loop is bounded by an
+// element-count-derived count: `for i := 0; i < n; i++` with n from a configured
+// element-count method (either operand).
+func isNumelForCond(f *ast.ForStmt, numelIdents map[string]bool, ns nameSets) bool {
 	bin, ok := f.Cond.(*ast.BinaryExpr)
 	if !ok {
 		return false
@@ -1273,7 +1369,7 @@ func isNumelForCond(f *ast.ForStmt, numelIdents map[string]bool) bool {
 		if id, ok := side.(*ast.Ident); ok && numelIdents[id.Name] {
 			return true
 		}
-		if call, ok := side.(*ast.CallExpr); ok && calleeName(call.Fun) == "Numel" {
+		if call, ok := side.(*ast.CallExpr); ok && ns.elemCount[calleeName(call.Fun)] {
 			return true
 		}
 	}
@@ -1286,7 +1382,7 @@ func isNumelForCond(f *ast.ForStmt, numelIdents map[string]bool) bool {
 // belongs to that inner loop, so counting it would misclassify an outer per-row or
 // per-parameter loop as per-element (the TIESMerge/soup false positive: a
 // once-per-parameter tensor.New sitting above an inner per-element Unravel loop).
-func directlyHasUnravel(body *ast.BlockStmt) bool {
+func directlyHasUnravel(body *ast.BlockStmt, ns nameSets) bool {
 	found := false
 	ast.Inspect(body, func(n ast.Node) bool {
 		if found {
@@ -1296,7 +1392,7 @@ func directlyHasUnravel(body *ast.BlockStmt) bool {
 		case *ast.RangeStmt, *ast.ForStmt, *ast.FuncLit:
 			return false // nested scope: its Unravel belongs to that loop, not this one
 		}
-		if call, ok := n.(*ast.CallExpr); ok && calleeName(call.Fun) == "Unravel" {
+		if call, ok := n.(*ast.CallExpr); ok && ns.indexDecompose[calleeName(call.Fun)] {
 			found = true
 			return false
 		}
@@ -1354,7 +1450,24 @@ func main() {
 	list := flag.Bool("list", false, "list the checks (ID, category, title, fixable) and exit")
 	doFix := flag.Bool("fix", false, "apply the safe mechanical fixes in place (fixable checks only; see -list)")
 	jsonOut := flag.Bool("json", false, "emit findings and fixes as JSON (for editor / tool integration)")
+	configPath := flag.String("config", "", "path to a JSON config naming a project's element accessors/allocators/etc. that drive the domain checks (PS1001/PS1002/PS2001/PS4002); empty = discover perfscan.json/.perfscan.json upward, else stdlib-only")
 	flag.Parse()
+
+	// Load the project vocabulary that activates the domain checks. An explicit
+	// -config wins; otherwise discover perfscan.json/.perfscan.json upward from the
+	// working directory; otherwise stay in the fully generic, stdlib-only mode.
+	var cfg Config
+	if *configPath != "" {
+		c, err := loadConfig(*configPath)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "perfscan: -config:", err)
+			os.Exit(2)
+		}
+		cfg = c
+	} else {
+		cfg, _ = discoverConfig()
+	}
+	ns := cfg.compile()
 
 	if *list {
 		fmt.Println("perfscan checks — name any in -checks, -exclude, or a //perfscan:ignore directive (by ID or category):")
@@ -1414,7 +1527,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "perfscan: parse %s: %v\n", path, err)
 			continue
 		}
-		for _, fd := range scanFile(fset, f) {
+		for _, fd := range scanFile(fset, f, ns) {
 			if enabled[fd.category] {
 				fd.id = catToID[fd.category]
 				all = append(all, fd)

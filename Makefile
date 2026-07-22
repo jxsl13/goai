@@ -218,14 +218,16 @@ spec-verify:
 	$(GO) run ./internal/mdlint ./...
 
 ## perfscan: staticcheck-style finder for the hot-loop anti-patterns this repo
-## repeatedly optimizes away (T919). Each check has a stable PS-prefixed 4-digit ID
-## (PS1001…; `make perfscan ARGS=-list` prints the table). Advisory by design —
-## candidates need an A/B + bit-identity proof (§C3/§V22); -strict exits non-zero.
-## -fix applies the safe mechanical fixes in place; -json emits findings+fixes for
+## repeatedly optimizes away (T919). REPO-AGNOSTIC engine — the language/stdlib
+## checks run on any module; the four domain checks (per-element access/alloc,
+## PS1001/PS1002/PS2001/PS4002) read GoAI's own vocabulary from
+## internal/perfscan/perfscan.json (-config), so nothing GoAI-specific is baked in.
+## Each check has a stable PS-prefixed 4-digit ID (`make perfscan ARGS=-list`).
+## Advisory (candidates need an A/B + bit-identity proof, §C3/§V22); -strict exits
+## non-zero. -fix applies the safe mechanical fixes; -json emits findings+fixes for
 ## an editor. e.g. make perfscan ARGS='-strict ./nn/...' or ARGS='-fix ./...'.
-## The detectors are unit-tested in internal/perfscan.
 perfscan:
-	$(CGO_OFF) $(GO) run ./internal/perfscan $(ARGS)
+	$(CGO_OFF) $(GO) run ./internal/perfscan -config internal/perfscan/perfscan.json $(ARGS)
 
 ## perfscan-check: the perfscan detector test suite (positive + negative fixtures).
 perfscan-check:

@@ -17,6 +17,34 @@ catalog a subset with detailed wins — their IDs head each section. The `P3`/`P
 `P5` sections are profile/benchmark heuristics with **no** static detector.
 `PS4003` generalizes `PS4002` to a transcendental hidden one call deep in a helper.
 
+## Repo-agnostic engine + config
+
+perfscan detects the problems **independent of any one repo**. Ten checks are pure
+language/stdlib shapes and run on any Go module with no configuration (PS2002–PS2005,
+PS3001–PS3003, PS4001, PS4003, PS5001). The four **domain** checks — `PS1001`
+per-element-dispatch, `PS1002` per-element-closure, `PS2001` alloc-in-loop, `PS4002`
+scalar-transcendental-vectorizable — key on a project's own vocabulary (its element
+accessors, allocators, fast-path helpers and vectorized kernels), which lives in a
+**JSON config, not the engine**. With no config those four stay silent. Supply one
+with `-config file.json` or a discovered `perfscan.json` / `.perfscan.json`:
+
+```jsonc
+{
+  "elementAccessors":       ["AtF64", "SetF64"],     // PS1001/PS1002
+  "fastPathHelpers":        ["flatF64", "flatF32"],   // PS1001 — presence silences a fallback loop
+  "elementCountMethods":    ["Numel"],               // PS1001 — a loop bound over this reads as per-element
+  "indexDecomposeFuncs":    ["Unravel"],             // PS1001 — flat→multi-index marks a per-element loop
+  "allocatorFuncs":         ["New", "Zeros", "Cast"], // PS2001 — allocation in a per-element loop
+  "perElementVisitors":     ["readGen", "fillGen"],   // PS1002 — helper fed a per-element closure
+  "bulkCopyHelpers":        ["rawCopyLE"],            // PS4001 — presence silences a genuine-decode path
+  "vectorizedSiblingFuncs": ["vexpF32", "vsiluF32"]   // PS4002 — a SIMD kernel beside a scalar math.X
+}
+```
+
+GoAI ships its own vocabulary in `internal/perfscan/perfscan.json`, which `make
+perfscan` loads. This catalog's win figures are GoAI's measured results; the
+patterns and the engine are generic.
+
 ## Check IDs, auto-fix, editor integration
 
 Every check has a stable **PS-prefixed 4-digit ID** (`PS1001`…), grouped by the

@@ -11,6 +11,19 @@ import (
 )
 
 // scanSrc parses one in-memory source file and returns the findings.
+// testSets loads the shipped GoAI vocabulary (perfscan.json, next to this test)
+// and compiles it, so the domain-check fixtures run with AtF64/flatF64/Numel/… and
+// the tests double as a validation that the shipped config parses and activates the
+// checks. The engine itself is repo-agnostic; this is the config a project supplies.
+func testSets(t *testing.T) nameSets {
+	t.Helper()
+	c, err := loadConfig("perfscan.json")
+	if err != nil {
+		t.Fatalf("load perfscan.json: %v", err)
+	}
+	return c.compile()
+}
+
 func scanSrc(t *testing.T, src string) []finding {
 	t.Helper()
 	fset := token.NewFileSet()
@@ -18,7 +31,7 @@ func scanSrc(t *testing.T, src string) []finding {
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	return scanFile(fset, f)
+	return scanFile(fset, f, testSets(t))
 }
 
 // countCat tallies findings by category.
@@ -398,7 +411,7 @@ func TestScanWholeModule(t *testing.T) {
 		if err != nil {
 			continue // a first-party parse error is not perfscan's concern (main skips too)
 		}
-		total += len(scanFile(fset, f)) // must not panic on any real file
+		total += len(scanFile(fset, f, testSets(t))) // must not panic on any real file
 	}
 	if total == 0 {
 		t.Error("expected perfscan to surface candidates on the real tree; detectors may have silently stopped matching")
@@ -648,6 +661,47 @@ func TestCheckRegistry(t *testing.T) {
 	}
 }
 
+// TestConfigGatesDomainChecks is the core repo-agnostic contract: the domain
+// checks (here PS1001) are SILENT with no config — perfscan on an arbitrary module
+// reports only language/stdlib patterns — and activate only when a project names
+// its own vocabulary. The stdlib checks (PS3002 here) fire regardless.
+func TestConfigGatesDomainChecks(t *testing.T) {
+	src := `package p
+
+import "sort"
+
+type T struct{ xs []float64 }
+
+func (t T) Numel() int          { return len(t.xs) }
+func (t T) AtF64(i int) float64 { return t.xs[i] }
+
+func f(a T, ss []int) {
+	for i := 0; i < a.Numel(); i++ {
+		_ = a.AtF64(i) // per-element dispatch — PS1001, domain
+	}
+	sort.Slice(ss, func(i, j int) bool { return ss[i] < ss[j] }) // PS3002, stdlib
+}
+`
+	fset := token.NewFileSet()
+	af, err := parser.ParseFile(fset, "p.go", src, parser.ParseComments)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Generic mode: empty config ⇒ the domain check is silent, the stdlib one fires.
+	generic := countCat(scanFile(fset, af, Config{}.compile()))
+	if generic["per-element-dispatch"] != 0 {
+		t.Errorf("empty config: PS1001 must be silent (repo-agnostic), got %d", generic["per-element-dispatch"])
+	}
+	if generic["closure-comparator-sort"] != 1 {
+		t.Errorf("empty config: stdlib PS3002 must still fire, got %d", generic["closure-comparator-sort"])
+	}
+	// Configured: a project names AtF64/Numel ⇒ PS1001 activates.
+	cfg := Config{ElementAccessors: []string{"AtF64"}, ElementCountMethods: []string{"Numel"}}
+	if got := countCat(scanFile(fset, af, cfg.compile()))["per-element-dispatch"]; got != 1 {
+		t.Errorf("configured: want 1 PS1001, got %d", got)
+	}
+}
+
 // TestRegexpFix exercises the one auto-fix: PS2005 hoists a loop-invariant
 // literal-pattern compile, and the suggested edits transform the source into
 // valid, re-scan-clean Go.
@@ -672,7 +726,7 @@ func F(ss []string) int {
 		t.Fatal(err)
 	}
 	var fx *suggestedFix
-	for _, fd := range scanFile(fset, f) {
+	for _, fd := range scanFile(fset, f, testSets(t)) {
 		if fd.category == "regexp-compile-in-loop" {
 			fx = fd.fix
 		}
@@ -724,7 +778,7 @@ func F(ss []string) {
 		t.Fatal(err)
 	}
 	found := false
-	for _, fd := range scanFile(fset, f) {
+	for _, fd := range scanFile(fset, f, testSets(t)) {
 		if fd.category == "regexp-compile-in-loop" {
 			found = true
 			if fd.fix != nil {
