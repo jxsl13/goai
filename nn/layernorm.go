@@ -28,12 +28,7 @@ func NewLayerNorm(dtype tensor.Dtype, d int) *LayerNorm {
 
 // Forward normalizes x[..., d] through ctx.
 func (l *LayerNorm) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, error) {
-	out, err := backend.Execute(ctx, backend.OpLayerNorm,
-		[]*tensor.Tensor{x, l.Gamma, l.Beta}, backend.NormAttrs{Eps: l.Eps})
-	if err != nil {
-		return nil, err
-	}
-	return out[0], nil
+	return execPool3(ctx, backend.OpLayerNorm, backend.NormAttrs{Eps: l.Eps}, x, l.Gamma, l.Beta)
 }
 
 // Params returns gamma and beta.
