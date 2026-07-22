@@ -111,8 +111,42 @@ type Unigram struct {
 	minScore float64        // min piece score (base of the unk penalty)
 	maxRunes int            // longest piece in runes (bounds the DP inner loop)
 	dummy    bool           // prepend a ▁ (add_dummy_prefix)
+	trie     *unigramTrie   // byte trie over the vocabulary for the Viterbi DP
 
 	specials specialSet // markers parsed only by EncodeSpecial (§B60)
+}
+
+// unigramTrie is a byte trie over the vocabulary pieces. The Viterbi DP walks it
+// forward from each start position, descending one byte at a time: extending a match
+// from length L to L+1 is a single edge step reusing the length-L node, instead of
+// re-hashing the whole length-(L+1) substring in the piece map. It also prunes — once
+// a prefix has no outgoing edge, no longer piece can start there, so the inner loop
+// stops early. Edges live in ONE flat map keyed by (parentNode<<8 | byte); id[node] is
+// the piece id ending at that node, or -1.
+type unigramTrie struct {
+	edge map[uint64]int32
+	id   []int32
+}
+
+// buildUnigramTrie inserts every piece byte-by-byte, sharing common prefixes.
+func buildUnigramTrie(pieces []UnigramPiece) *unigramTrie {
+	t := &unigramTrie{edge: make(map[uint64]int32, len(pieces)*4), id: make([]int32, 1, len(pieces)*4)}
+	t.id[0] = -1 // root
+	for pid, p := range pieces {
+		node := int32(0)
+		for i := 0; i < len(p.Piece); i++ {
+			key := uint64(node)<<8 | uint64(p.Piece[i])
+			child, ok := t.edge[key]
+			if !ok {
+				child = int32(len(t.id))
+				t.id = append(t.id, -1)
+				t.edge[key] = child
+			}
+			node = child
+		}
+		t.id[node] = int32(pid)
+	}
+	return t
 }
 
 // UnigramOption configures a Unigram tokenizer (functional-options idiom, §C12).
@@ -168,6 +202,7 @@ func NewUnigram(vocab []UnigramPiece, opts ...UnigramOption) (*Unigram, error) {
 	for _, o := range opts {
 		o(u)
 	}
+	u.trie = buildUnigramTrie(u.pieces)
 	return u, nil
 }
 
@@ -234,29 +269,42 @@ func (u *Unigram) Encode(text string) []int {
 	for i := 1; i <= n; i++ {
 		best[i] = math.Inf(-1)
 	}
-	for i := 1; i <= n; i++ {
-		lo := max(0, i-u.maxRunes)
-		for j := lo; j < i; j++ {
-			piece := s[off[j]:off[i]] // alloc-free substring (shares s's backing)
-			id, ok := u.id[piece]
-			if !ok {
-				continue
-			}
-			// Registered special markers are never produced by ordinary segmentation
-			// (§B60): Viterbi searches the whole vocabulary, and GGUF keeps control
-			// tokens in it, so without this the literal text "<|im_start|>" in untrusted
-			// input would segment straight to the control id. EncodeSpecial is the only
-			// path that emits them.
-			if u.specials.blocked(piece) {
-				continue
-			}
-			if sc := best[j] + u.pieces[id].Score; sc > best[i] {
-				best[i], start[i], pid[i] = sc, j, id
+	// Forward Viterbi over the byte trie. For each start j (increasing) extend pieces
+	// to ends i>j by descending the trie one rune at a time, then take the <unk>
+	// single-character step j→j+1. best[j] is final by the time j is used as a start
+	// (every update to it comes from a start < j), and for any end i the updates arrive
+	// in exactly the old order — pieces from j=lo..i-1 ascending, then the <unk> from
+	// i-1 last — so the strict-`>` tie-break, and thus the segmentation, is unchanged.
+	tr := u.trie
+	for j := 0; j < n; j++ {
+		if bj := best[j]; bj != math.Inf(-1) {
+			node := int32(0)
+			maxI := min(n, j+u.maxRunes)
+		extend:
+			for i := j + 1; i <= maxI; i++ {
+				for b := off[i-1]; b < off[i]; b++ { // descend the bytes of rune i-1
+					child, has := tr.edge[uint64(node)<<8|uint64(s[b])]
+					if !has {
+						break extend // no piece shares this prefix → stop extending
+					}
+					node = child
+				}
+				id := tr.id[node]
+				if id < 0 {
+					continue // this prefix is not itself a piece; a longer one may be
+				}
+				piece := s[off[j]:off[i]]
+				if u.specials.blocked(piece) {
+					continue
+				}
+				if sc := bj + u.pieces[id].Score; sc > best[i] {
+					best[i], start[i], pid[i] = sc, j, int(id)
+				}
 			}
 		}
 		// <unk> single-character fallback (only wins where no piece covers)
-		if sc := best[i-1] + unkScore; sc > best[i] {
-			best[i], start[i], pid[i] = sc, i-1, u.unkID
+		if sc := best[j] + unkScore; sc > best[j+1] {
+			best[j+1], start[j+1], pid[j+1] = sc, j, u.unkID
 		}
 	}
 	// backtrack
