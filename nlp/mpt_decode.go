@@ -83,7 +83,7 @@ func (m *MPT) DecodeStep(ctx *backend.Context, cache *MPTCache, token, pos int) 
 		}
 		kNew, vNew := cache.bufs.appendKV(cache.K, cache.V, l, k, v)
 		cache.K[l], cache.V[l] = kNew, vNew
-		a, err := exec1(ctx, backend.OpMHA, attn, q, kNew, vNew)
+		a, err := exec3(ctx, backend.OpMHA, attn, q, kNew, vNew)
 		if err != nil {
 			return nil, err
 		}

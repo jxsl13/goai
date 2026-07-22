@@ -147,6 +147,49 @@ func exec2(ctx *backend.Context, op backend.Op, attrs backend.Attrs, a, b *tenso
 	return out[0], nil
 }
 
+// ins1Pool / ins3Pool are the 1- and 3-input siblings of ins2Pool for the same
+// inference hot path (T962): RoPE is a single-input op (2 per layer per token) and MHA
+// a 3-input op (1 per layer). Same recorder-guarded reuse — pool only when nothing is
+// taping, so backend.Execute never keeps the slice past the call.
+var (
+	ins1Pool = sync.Pool{New: func() any { s := make([]*tensor.Tensor, 1); return &s }}
+	ins3Pool = sync.Pool{New: func() any { s := make([]*tensor.Tensor, 3); return &s }}
+)
+
+// exec1a runs a 1-input op with a pooled input slice when not recording (RoPE). See exec2.
+func exec1a(ctx *backend.Context, op backend.Op, attrs backend.Attrs, a *tensor.Tensor) (*tensor.Tensor, error) {
+	if ctx.Recorder != nil {
+		return exec1(ctx, op, attrs, a)
+	}
+	sp := ins1Pool.Get().(*[]*tensor.Tensor)
+	s := *sp
+	s[0] = a
+	out, err := backend.Execute(ctx, op, s, attrs)
+	s[0] = nil
+	ins1Pool.Put(sp)
+	if err != nil {
+		return nil, err
+	}
+	return out[0], nil
+}
+
+// exec3 runs a 3-input op with a pooled input slice when not recording (MHA q,k,v). See exec2.
+func exec3(ctx *backend.Context, op backend.Op, attrs backend.Attrs, a, b, c *tensor.Tensor) (*tensor.Tensor, error) {
+	if ctx.Recorder != nil {
+		return exec1(ctx, op, attrs, a, b, c)
+	}
+	sp := ins3Pool.Get().(*[]*tensor.Tensor)
+	s := *sp
+	s[0], s[1], s[2] = a, b, c
+	out, err := backend.Execute(ctx, op, s, attrs)
+	s[0], s[1], s[2] = nil, nil, nil
+	ins3Pool.Put(sp)
+	if err != nil {
+		return nil, err
+	}
+	return out[0], nil
+}
+
 // Embed gathers token+position embeddings for the prompt through the dispatch,
 // so gradients flow to TokEmb/PosEmb (differentiable, §T34): x = Embed(TokEmb,
 // tokens) + Embed(PosEmb, 0..seq−1).
