@@ -169,13 +169,17 @@ func newtonSchulz5(x []float64, rows, cols, steps int) []float64 {
 func matmulFlat(a, b []float64, m, k, n int) []float64 {
 	c := make([]float64, m*n)
 	for i := range m {
+		ci := c[i*n : i*n+n]
 		for p := range k {
 			av := a[i*k+p]
 			if av == 0 {
 				continue
 			}
-			for j := range n {
-				c[i*n+j] += av * b[p*n+j]
+			// axpy over equal-length slices (one bounds check each) so the inner mul-add
+			// auto-vectorizes; ikj order + same accumulation order, so bit-identical.
+			bp := b[p*n : p*n+n]
+			for j := range ci {
+				ci[j] += av * bp[j]
 			}
 		}
 	}
@@ -186,12 +190,15 @@ func matmulFlat(a, b []float64, m, k, n int) []float64 {
 func matmulABt(a, b []float64, m, k int) []float64 {
 	c := make([]float64, m*m)
 	for i := range m {
+		ai := a[i*k : i*k+k]
+		ci := c[i*m : i*m+m]
 		for j := range m {
+			bj := b[j*k : j*k+k]
 			var s float64
-			for p := range k {
-				s += a[i*k+p] * b[j*k+p]
+			for p := range ai { // equal-length slice dot → auto-vectorizes; same order
+				s += ai[p] * bj[p]
 			}
-			c[i*m+j] = s
+			ci[j] = s
 		}
 	}
 	return c
