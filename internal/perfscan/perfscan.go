@@ -111,6 +111,29 @@ var classes = []struct{ letter, category string }{
 	{"K", "scalar-transcendental-vectorizable"},
 	{"L", "transcendental-wrapper-in-loop"},
 	{"M", "int-key-map-in-loop"},
+	{"N", "poolable-loop-scratch"},
+}
+
+// isSliceMake reports whether call is make([]T, …) — a slice allocation, not a map or
+// channel or a fixed array (an array type carries a non-nil Len).
+func isSliceMake(call *ast.CallExpr) bool {
+	id, ok := call.Fun.(*ast.Ident)
+	if !ok || id.Name != "make" || len(call.Args) == 0 {
+		return false
+	}
+	at, ok := call.Args[0].(*ast.ArrayType)
+	return ok && at.Len == nil
+}
+
+// isPointerMethod reports whether fn is a method with a pointer receiver (the shape of
+// a reusable stateful object — an optimizer, a builder — whose per-call scratch can be
+// hoisted to a receiver field and reused across calls).
+func isPointerMethod(fn *ast.FuncDecl) bool {
+	if fn.Recv == nil || len(fn.Recv.List) != 1 {
+		return false
+	}
+	_, ok := fn.Recv.List[0].Type.(*ast.StarExpr)
+	return ok
 }
 
 // integerKeyType reports whether e names a Go integer type — the map key that, when
@@ -540,6 +563,13 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	hasVectorSibling := false // calls a v*F32/F64 / xN SIMD helper (another dtype branch is
 	//                          hand-vectorized) → a scalar transcendental here is detector K
 	numelIdents := map[string]bool{}
+	// escaping: locals that outlive a loop iteration — returned, or stored by reference
+	// into a field/slot (recv.f = x, ring[i] = x). Such a buffer is NOT simple reusable
+	// scratch (detector N stays silent), even though some, like a ring slot, are poolable
+	// by a different fix (pre-allocate the slot). A make() feeding one is deliberately
+	// excluded to keep N's "hoist to a reused field" advice correct.
+	escaping := map[string]bool{}
+	ptrMethod := isPointerMethod(fn)
 	parent := map[ast.Node]ast.Node{}
 	var stack []ast.Node
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
@@ -586,6 +616,24 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 				}
 				if id, ok := x.Lhs[i].(*ast.Ident); ok {
 					numelIdents[id.Name] = true
+				}
+			}
+			// A local stored by reference into a field/slot escapes the loop: recv.f = x,
+			// ring[i] = x, m[p] = x. Mark the RHS ident (detector N excludes it).
+			for i, lhs := range x.Lhs {
+				switch lhs.(type) {
+				case *ast.SelectorExpr, *ast.IndexExpr:
+					if i < len(x.Rhs) {
+						if id, ok := x.Rhs[i].(*ast.Ident); ok {
+							escaping[id.Name] = true
+						}
+					}
+				}
+			}
+		case *ast.ReturnStmt:
+			for _, r := range x.Results { // a returned local escapes
+				if id, ok := r.(*ast.Ident); ok {
+					escaping[id.Name] = true
 				}
 			}
 		}
@@ -729,6 +777,48 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 		}
 		return true
 	})
+
+	// N: poolable per-call scratch. A slice make() inside a per-item loop of a
+	// pointer-receiver method, bound to a LOCAL that does not escape (not returned, not
+	// stored into a field/slot), is scratch reallocated on every call. On a reusable
+	// stateful object (an optimizer stepping over its params) that is pure GC churn —
+	// hoist it to a reused receiver field (grow-on-demand). Ring slots / returned buffers
+	// escape and are deliberately excluded (they need a different fix).
+	if ptrMethod {
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok || !isSliceMake(call) {
+				return true
+			}
+			loop := nearestLoop(parent, call)
+			if loop == nil {
+				return true
+			}
+			as, ok := parent[call].(*ast.AssignStmt)
+			if !ok {
+				return true
+			}
+			for i, rhs := range as.Rhs {
+				if rhs != call || i >= len(as.Lhs) {
+					continue
+				}
+				id, ok := as.Lhs[i].(*ast.Ident)
+				if !ok || id.Name == "_" || escaping[id.Name] {
+					continue
+				}
+				out = append(out, finding{
+					pos:      fset.Position(loop.Pos()),
+					category: "poolable-loop-scratch",
+					msg: fmt.Sprintf("%q: make() per iteration of a pointer-method loop, bound to a"+
+						" non-escaping local - per-call scratch reallocated every call. Hoist it to a"+
+						" reused receiver field (grow-on-demand, zero only if read-before-write) so the"+
+						" per-Step allocations drop to zero (Adafactor/Cautious/LAMB StepOnly 1.2-1.5x,"+
+						" 12 allocs to 0). Verify the buffer is fully overwritten before use.", id.Name),
+				})
+			}
+			return true
+		})
+	}
 
 	// Pass 4: call-level detectors that are NOT loop-nested — the visitor/sort call
 	// IS itself the per-element / per-comparison hot loop.

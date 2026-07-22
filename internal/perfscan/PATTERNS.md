@@ -248,3 +248,25 @@ candidate (which is why the detector skips set-typed maps and the report says
 - **Cross-platform.** Don't retune a constant that was deliberately calibrated
   for other hardware (e.g. the CPU pool `parThreshold` / dense-worker cap) on a
   single box's numbers — that needs multi-platform validation.
+
+## N (detector N) — poolable per-call scratch in a stateful method  *(scanner: static)*
+
+A `make([]T, …)` inside a per-item loop of a **pointer-receiver method**, bound to a
+**local that does not escape** the iteration (not returned, not stored into a field or
+slot), is scratch reallocated on every call. On a reusable stateful object — an
+optimizer's `Step` iterating over its parameters — that is pure GC churn: N allocs and
+several MB per step, feeding the collector for the whole training run.
+
+**Fix:** hoist the buffer to a reused receiver field grown on demand
+(`u := growF64(o.uScr, n); o.uScr = u`), zeroing only when the code reads before it
+writes. Params and steps run serially, so a single grow-able buffer per scratch is
+safe, and — being fully overwritten before use — the reuse is bit-identical.
+
+**Shipped:** Adafactor 1.32×, CautiousAdamW 1.44×, LAMB 1.19×, Grokfast 1.58×,
+GrokfastMA 1.47× — each from 8–27 allocs/step to 0.
+
+**Deliberately silent** on buffers that escape: a returned buffer, one stored into a
+receiver field, or a ring slot (`ring[pos] = flat`). Those are still poolable but by a
+different fix — pre-allocate the slot and overwrite it in place — so N does not
+mis-advise "hoist to one reused field." Also silent on value-receiver methods and free
+functions (no receiver to hang the reused buffer on) and on `make()` outside any loop.

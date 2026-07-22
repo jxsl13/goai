@@ -682,3 +682,80 @@ func f(ids []int) map[int]int {
 		}
 	}
 }
+
+// Detector N fires on a slice make() bound to a non-escaping local inside a per-item
+// loop of a pointer-receiver method — the optimizer per-Step scratch shape (Adafactor,
+// Cautious, LAMB, …) that GC-churns until hoisted to a reused receiver field.
+func TestDetectN_PoolableScratch(t *testing.T) {
+	src := `package p
+type Opt struct{ Params []int }
+func (o *Opt) Step() {
+	for _, n := range o.Params {
+		u := make([]float64, n)
+		for i := range u { u[i] = float64(i) }
+		_ = u
+	}
+}`
+	if got := countCat(scanSrc(t, src))["poolable-loop-scratch"]; got != 1 {
+		t.Fatalf("want 1 poolable-loop-scratch, got %d", got)
+	}
+}
+
+// It stays silent when the buffer escapes the iteration — returned, stored into a
+// receiver field, or stored into a slot (a ring slot) — since those need a different
+// fix than a single reused scratch field; and when the function is not a pointer method.
+func TestDetectN_Silent(t *testing.T) {
+	cases := map[string]string{
+		"returned": `package p
+type Opt struct{ Params []int }
+func (o *Opt) grad(n int) []float64 {
+	for _, m := range o.Params {
+		u := make([]float64, n+m)
+		return u
+	}
+	return nil
+}`,
+		"stored-to-field": `package p
+type Opt struct{ Params []int; keep [][]float64 }
+func (o *Opt) Step() {
+	for i, n := range o.Params {
+		u := make([]float64, n)
+		o.keep[i] = u
+	}
+}`,
+		"stored-to-slot": `package p
+type Opt struct{ Params []int; ring [][]float64; pos int }
+func (o *Opt) Step() {
+	for _, n := range o.Params {
+		flat := make([]float64, n)
+		o.ring[o.pos] = flat
+	}
+}`,
+		"not-pointer-method": `package p
+type Opt struct{ Params []int }
+func (o Opt) Step() {
+	for _, n := range o.Params {
+		u := make([]float64, n)
+		_ = u
+	}
+}`,
+		"free-function": `package p
+func Step(params []int) {
+	for _, n := range params {
+		u := make([]float64, n)
+		_ = u
+	}
+}`,
+		"not-in-loop": `package p
+type Opt struct{ N int }
+func (o *Opt) Step() {
+	u := make([]float64, o.N)
+	_ = u
+}`,
+	}
+	for name, src := range cases {
+		if got := countCat(scanSrc(t, src))["poolable-loop-scratch"]; got != 0 {
+			t.Fatalf("%s: want 0 poolable-loop-scratch, got %d", name, got)
+		}
+	}
+}
