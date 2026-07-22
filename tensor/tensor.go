@@ -127,6 +127,29 @@ type gatherElem interface{ ~float32 | ~float64 | ~uint16 }
 // S/D pairs where the plain Go conversion IS the desired numeric cast
 // (float32/float64 combos, or S==D for raw uint16 half bits) — for f16↔f32
 // value conversion use the generic setF64 path instead.
+// gatherBlocked2D gathers a rank-2 strided view into a contiguous dst in 32×32 tiles.
+// For a transpose (innermost stride = #rows) the naive row-major walk reads src down a
+// full column between consecutive writes, thrashing the cache; tiling keeps each block's
+// source footprint cache-resident. Same (i,j)→dst[i*cols+j] mapping as gatherCast, just
+// reordered — bit-identical values.
+func gatherBlocked2D[S, D gatherElem](dst []D, src []S, rows, cols, s0, s1, off int) {
+	const blk = 16
+	for i0 := 0; i0 < rows; i0 += blk {
+		iMax := min(i0+blk, rows)
+		for j0 := 0; j0 < cols; j0 += blk {
+			jMax := min(j0+blk, cols)
+			for i := i0; i < iMax; i++ {
+				d := dst[i*cols+j0 : i*cols+jMax]
+				s := off + i*s0 + j0*s1
+				for p := range d { // increment the source offset (no per-element multiply)
+					d[p] = D(src[s])
+					s += s1
+				}
+			}
+		}
+	}
+}
+
 func gatherCast[S, D gatherElem](dst []D, src []S, shape Shape, strides Strides, off int) {
 	nd := len(shape)
 	idx := make([]int, nd)
@@ -378,24 +401,37 @@ func (t *Tensor) Contiguous() *Tensor {
 	// Unravel path → identical result. Every op that materializes a transposed/
 	// permuted view (attention Q/K/V reshapes) hits this.
 	rowRuns := t.strides[nd-1] == 1 && t.shape[nd-1] > 0
+	// A rank-2 non-row-run view is a transpose/column-strided gather — tile it so the
+	// source footprint stays cache-resident (blocked transpose), instead of the naive
+	// column-sweep gatherCast that thrashes the cache on large matrices.
+	blk2d := nd == 2 && !rowRuns
 	switch t.Dtype() {
 	case F32:
-		if rowRuns {
+		switch {
+		case rowRuns:
 			gatherRows(out.storage.F32()[:n], t.storage.F32(), t.shape, t.strides, t.offset)
-		} else {
+		case blk2d:
+			gatherBlocked2D(out.storage.F32()[:n], t.storage.F32(), t.shape[0], t.shape[1], t.strides[0], t.strides[1], t.offset)
+		default:
 			gatherCast(out.storage.F32()[:n], t.storage.F32(), t.shape, t.strides, t.offset)
 		}
 	case F64:
-		if rowRuns {
+		switch {
+		case rowRuns:
 			gatherRows(out.storage.F64()[:n], t.storage.F64(), t.shape, t.strides, t.offset)
-		} else {
+		case blk2d:
+			gatherBlocked2D(out.storage.F64()[:n], t.storage.F64(), t.shape[0], t.shape[1], t.strides[0], t.strides[1], t.offset)
+		default:
 			gatherCast(out.storage.F64()[:n], t.storage.F64(), t.shape, t.strides, t.offset)
 		}
 	case F16, BF16:
 		// Same-dtype raw bit moves — exact, no f64 round-trip.
-		if rowRuns {
+		switch {
+		case rowRuns:
 			gatherRows(out.storage.U16()[:n], t.storage.U16(), t.shape, t.strides, t.offset)
-		} else {
+		case blk2d:
+			gatherBlocked2D(out.storage.U16()[:n], t.storage.U16(), t.shape[0], t.shape[1], t.strides[0], t.strides[1], t.offset)
+		default:
 			gatherCast(out.storage.U16()[:n], t.storage.U16(), t.shape, t.strides, t.offset)
 		}
 	default: // any future dtype: keep the generic accessor
