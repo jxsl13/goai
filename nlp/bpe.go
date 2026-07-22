@@ -218,10 +218,44 @@ func gpt2Split(text string) []string {
 // pieces are the exact same boundaries gpt2Split produces (the pre-tokenizer regex reimplemented as a
 // hand scan). Streaming lets Tokenizer.Encode process one pre-token at a time (no []string alloc,
 // which the profile showed at 36% of encode's allocations).
+// isSpaceR/isLetterR/isNumberR classify a rune, resolving ASCII (the overwhelming
+// majority of real text) with a branchless range check and only consulting the
+// Unicode tables for a multibyte rune. Each is bit-for-bit equal to the unicode.IsX
+// it replaces on ASCII: IsSpace is {\t..\r, ' '}, IsLetter is A–Z/a–z, IsNumber is
+// 0–9 there. gpt2SplitSeq's split points — and thus the tokenization — are unchanged.
+func isSpaceR(r rune) bool {
+	if r < 0x80 {
+		return r == ' ' || (r >= '\t' && r <= '\r')
+	}
+	return unicode.IsSpace(r)
+}
+
+func isLetterR(r rune) bool {
+	if r < 0x80 {
+		c := r | 0x20 // fold ASCII case; digits/punct fold outside a–z
+		return c >= 'a' && c <= 'z'
+	}
+	return unicode.IsLetter(r)
+}
+
+func isNumberR(r rune) bool {
+	if r < 0x80 {
+		return r >= '0' && r <= '9'
+	}
+	return unicode.IsNumber(r)
+}
+
 func gpt2SplitSeq(text string) iter.Seq[string] {
 	return func(yield func(string) bool) {
 		n := len(text)
-		dec := func(i int) (rune, int) { return utf8.DecodeRuneInString(text[i:]) }
+		// ASCII fast path: a one-byte rune needs no UTF-8 decode (the decode was
+		// ~4% of Encode); multibyte bytes fall through to the real decoder.
+		dec := func(i int) (rune, int) {
+			if b := text[i]; b < utf8.RuneSelf {
+				return rune(b), 1
+			}
+			return utf8.DecodeRuneInString(text[i:])
+		}
 		i := 0
 		for i < n {
 			// 1. contractions (ASCII apostrophe)
@@ -241,25 +275,25 @@ func gpt2SplitSeq(text string) iter.Seq[string] {
 			}
 			if j < n {
 				r, sz := dec(j)
-				if !unicode.IsSpace(r) {
+				if !isSpaceR(r) {
 					switch {
-					case unicode.IsLetter(r):
+					case isLetterR(r):
 						for j < n {
-							if r, sz = dec(j); !unicode.IsLetter(r) {
+							if r, sz = dec(j); !isLetterR(r) {
 								break
 							}
 							j += sz
 						}
-					case unicode.IsNumber(r):
+					case isNumberR(r):
 						for j < n {
-							if r, sz = dec(j); !unicode.IsNumber(r) {
+							if r, sz = dec(j); !isNumberR(r) {
 								break
 							}
 							j += sz
 						}
 					default:
 						for j < n {
-							if r, sz = dec(j); unicode.IsSpace(r) || unicode.IsLetter(r) || unicode.IsNumber(r) {
+							if r, sz = dec(j); isSpaceR(r) || isLetterR(r) || isNumberR(r) {
 								break
 							}
 							j += sz
@@ -279,7 +313,7 @@ func gpt2SplitSeq(text string) iter.Seq[string] {
 			count := 0
 			for j < n {
 				r, sz := dec(j)
-				if !unicode.IsSpace(r) {
+				if !isSpaceR(r) {
 					break
 				}
 				lastStart = j
