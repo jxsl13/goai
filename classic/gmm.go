@@ -147,7 +147,8 @@ type GaussianMixture struct {
 	// used by the density, together with logDetPrec = −Σ log L_ii (half the log
 	// determinant of the precision). For GMMDiag chol is unused.
 	chol       [][][]float64
-	logDetHalf []float64 // per component: 0.5·log|Σ_k| (density normaliser)
+	logDetHalf []float64   // per component: 0.5·log|Σ_k| (density normaliser)
+	invCov     [][]float64 // GMMDiag only: per component 1/Σ_k[j], so logGaussian multiplies instead of dividing
 
 	nFeat  int
 	fitted bool
@@ -351,8 +352,10 @@ func (m *GaussianMixture) mStep(x [][]float64, resp [][]float64) error {
 	}
 	if m.cfg.covariance == GMMDiag {
 		m.logDetHalf = make([]float64, k)
+		m.invCov = make([][]float64, k)
 		for c := range k {
 			v := make([]float64, d)
+			iv := make([]float64, d)
 			inv := 1.0 / (nk[c] + 1e-300)
 			for i := range n {
 				r := resp[i][c]
@@ -368,8 +371,10 @@ func (m *GaussianMixture) mStep(x [][]float64, resp [][]float64) error {
 					return fmt.Errorf("classic: gmm component %d variance %g non-positive (raise regCovar)", c, v[j])
 				}
 				half += 0.5 * math.Log(v[j])
+				iv[j] = 1 / v[j] // cached reciprocal for logGaussian's Mahalanobis term
 			}
 			m.cov[c] = v
+			m.invCov[c] = iv
 			m.logDetHalf[c] = half
 		}
 		return nil
@@ -413,11 +418,11 @@ func (m *GaussianMixture) logGaussian(x []float64, c int) (float64, error) {
 	d := m.nFeat
 	const log2pi = 1.8378770664093453 // log(2π)
 	if m.cfg.covariance == GMMDiag {
-		mc, cvc := m.Means[c], m.cov[c] // hoist the component slices out of the j-loop
+		mc, ivc := m.Means[c], m.invCov[c] // hoist the component slices out of the j-loop
 		var quad float64
 		for j := 0; j < d; j++ {
 			dv := x[j] - mc[j]
-			quad += dv * dv / cvc[j]
+			quad += dv * dv * ivc[j]
 		}
 		return -0.5*(float64(d)*log2pi+quad) - m.logDetHalf[c], nil
 	}
