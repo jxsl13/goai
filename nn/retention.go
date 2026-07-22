@@ -39,19 +39,30 @@ func RetentionRecurrent(q, k, v *tensor.Tensor, gamma float64) (*tensor.Tensor, 
 	}
 	out := tensor.New(q.Dtype(), tensor.Shape{l, dv})
 	s := make([]float64, dk*dv) // state S[i,j], i over key dim, j over value dim, row-major
+	// V_n and Q_n are read across the other dimension in the O(dk·dv) loops (v[n,j] once per
+	// key i, q[n,i] once per value j), so hoist each row once per step into a contiguous
+	// buffer instead of re-dispatching AtF64. Values and order unchanged (bit-identical).
+	vrow := make([]float64, dv)
+	qrow := make([]float64, dk)
 	for n := range l {
+		for j := range dv {
+			vrow[j] = v.AtF64(n, j)
+		}
+		for i := range dk {
+			qrow[i] = q.AtF64(n, i)
+		}
 		for i := range dk {
 			ki := k.AtF64(n, i)
 			base := i * dv
 			for j := range dv {
 				// S_n = γ·S_{n−1} + K_nᵀV_n
-				s[base+j] = gamma*s[base+j] + ki*v.AtF64(n, j)
+				s[base+j] = gamma*s[base+j] + ki*vrow[j]
 			}
 		}
 		for j := range dv {
 			var acc float64 // out_n = Q_n·S_n
 			for i := range dk {
-				acc += q.AtF64(n, i) * s[i*dv+j]
+				acc += qrow[i] * s[i*dv+j]
 			}
 			out.SetF64(acc, n, j)
 		}
