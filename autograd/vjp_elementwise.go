@@ -59,6 +59,36 @@ func selectVJP(pick func(a, b float64) bool) VJP {
 		ac, bc := make([]int, a.Ndim()), make([]int, b.Ndim())
 		ga := tensor.New(a.Dtype(), a.Shape())
 		gb := tensor.New(b.Dtype(), b.Shape())
+		// No-broadcast fast path (see OpDiv): equal shapes ⇒ each coord maps 1:1 at
+		// flat i, so ravel + BroadcastCoords + dispatch are pure overhead. ga/gb are
+		// pre-zeroed; the f32 store is an exact round-trip of AtF64's widen and pick's
+		// f64 comparison of widened f32s matches comparing the f32s — bit-identical.
+		if a.Shape().Equal(outShape) && b.Shape().Equal(outShape) {
+			if a.Dtype() == tensor.F64 && b.Dtype() == tensor.F64 && g.Dtype() == tensor.F64 {
+				as, bs, gs := a.Contiguous().Storage().F64(), b.Contiguous().Storage().F64(), g.Contiguous().Storage().F64()
+				gas, gbs := ga.Storage().F64(), gb.Storage().F64()
+				for i := range gs {
+					if pick(as[i], bs[i]) {
+						gas[i] = gs[i]
+					} else {
+						gbs[i] = gs[i]
+					}
+				}
+				return []*tensor.Tensor{ga, gb}, nil
+			}
+			if a.Dtype() == tensor.F32 && b.Dtype() == tensor.F32 && g.Dtype() == tensor.F32 {
+				as, bs, gs := a.Contiguous().Storage().F32(), b.Contiguous().Storage().F32(), g.Contiguous().Storage().F32()
+				gas, gbs := ga.Storage().F32(), gb.Storage().F32()
+				for i := range gs {
+					if pick(float64(as[i]), float64(bs[i])) {
+						gas[i] = gs[i]
+					} else {
+						gbs[i] = gs[i]
+					}
+				}
+				return []*tensor.Tensor{ga, gb}, nil
+			}
+		}
 		for pos := range g.Numel() {
 			oc := tensor.Unravel(pos, outShape)
 			backend.BroadcastCoords(ac, oc, a.Shape(), offA)
@@ -200,6 +230,32 @@ func init() {
 		ac, bc := make([]int, a.Ndim()), make([]int, b.Ndim())
 		ga := tensor.New(a.Dtype(), a.Shape())
 		gb := tensor.New(b.Dtype(), b.Shape())
+		// No-broadcast fast path: when a, b, g share one shape each output element maps
+		// to exactly one (a,b) element at flat i, so no reduction is needed and the
+		// per-element ravel + BroadcastCoords + multi-index dispatch are pure overhead.
+		// ga/gb are pre-zeroed, so the single write per coord matches the +=. F32 keeps
+		// the arithmetic in f64 (as AtF64 does) and rounds only on store — bit-identical.
+		if a.Shape().Equal(outShape) && b.Shape().Equal(outShape) {
+			if a.Dtype() == tensor.F64 && b.Dtype() == tensor.F64 && g.Dtype() == tensor.F64 {
+				as, bs, gs := a.Contiguous().Storage().F64(), b.Contiguous().Storage().F64(), g.Contiguous().Storage().F64()
+				gas, gbs := ga.Storage().F64(), gb.Storage().F64()
+				for i := range gs {
+					gas[i] = gs[i] / bs[i]
+					gbs[i] = -gs[i] * as[i] / (bs[i] * bs[i])
+				}
+				return []*tensor.Tensor{ga, gb}, nil
+			}
+			if a.Dtype() == tensor.F32 && b.Dtype() == tensor.F32 && g.Dtype() == tensor.F32 {
+				as, bs, gs := a.Contiguous().Storage().F32(), b.Contiguous().Storage().F32(), g.Contiguous().Storage().F32()
+				gas, gbs := ga.Storage().F32(), gb.Storage().F32()
+				for i := range gs {
+					av, bv, gv := float64(as[i]), float64(bs[i]), float64(gs[i])
+					gas[i] = float32(gv / bv)
+					gbs[i] = float32(-gv * av / (bv * bv))
+				}
+				return []*tensor.Tensor{ga, gb}, nil
+			}
+		}
 		for pos := range g.Numel() {
 			oc := tensor.Unravel(pos, outShape)
 			backend.BroadcastCoords(ac, oc, a.Shape(), offA)
