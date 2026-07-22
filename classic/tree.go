@@ -157,10 +157,11 @@ type cartBuilder struct {
 	leftCnt []int     // reused running left-count buffer (len nClasses); classification only
 	clogc   []float64 // Entropy only: clogc[c] = c·ln c cache (counts are integers), so a
 	// node's weighted entropy is clogc[n] − Σ clogc[countₖ] with no per-split math.Log.
-	allFeats []int // reused ascending [0..d) for the all-features split path
-	featPool []int // reused pool for feature subsampling (maxFeatures>0)
-	featSub  []int // reused subsample result (maxFeatures>0)
-	sortBuf  []int // reused per-feature sort scratch for the subsampled path
+	sweepVals []float64 // sweep scratch: a node's feature values in sorted order (len n)
+	allFeats  []int     // reused ascending [0..d) for the all-features split path
+	featPool  []int     // reused pool for feature subsampling (maxFeatures>0)
+	featSub   []int     // reused subsample result (maxFeatures>0)
+	sortBuf   []int     // reused per-feature sort scratch for the subsampled path
 	// radix-sort scratch (reused): keys = order-preserving u64 of the feature value,
 	// tmpI/tmpK = ping-pong buffers for the 8-pass LSD radix (replaces the sort.Slice
 	// closure sort — the split-search's dominant cost).
@@ -191,6 +192,7 @@ func (b *cartBuilder) initIdx(n int) {
 	b.radixKeys = make([]uint64, n)
 	b.radixTmpI = make([]int, n)
 	b.radixTmpK = make([]uint64, n)
+	b.sweepVals = make([]float64, n)
 	b.buildCLogC(n)
 }
 
@@ -288,6 +290,7 @@ func (b *cartBuilder) initColumns(n, d int) {
 		b.totCnt = make([]int, b.nClasses)
 		b.leftCnt = make([]int, b.nClasses)
 	}
+	b.sweepVals = make([]float64, n)
 	b.buildCLogC(n)
 	b.allFeats = make([]int, d)
 	for i := range b.allFeats {
@@ -535,6 +538,13 @@ func (b *cartBuilder) bestSplit(start, end int) (feat int, thr float64, ok bool)
 func (b *cartBuilder) sweep(order []int, f, minLeaf int) (bestCost float64, cut int, found bool) {
 	n := len(order)
 	bestCost = math.Inf(1)
+	// Hoist this node's sorted feature values once (n gathers into b.x), then the sweep
+	// reads them sequentially. The old inline b.x[order[p]][f] / b.x[order[p-1]][f]
+	// re-gathered every value TWICE across adjacent iterations — halved to one here.
+	vals := b.sweepVals[:n]
+	for k := 0; k < n; k++ {
+		vals[k] = b.x[order[k]][f]
+	}
 	if b.regression {
 		var totSum, totSq float64
 		for _, i := range order {
@@ -550,7 +560,7 @@ func (b *cartBuilder) sweep(order []int, f, minLeaf int) (bestCost float64, cut 
 			if p < minLeaf || n-p < minLeaf {
 				continue
 			}
-			if b.x[order[p]][f]-b.x[order[p-1]][f] <= featureThreshold {
+			if vals[p]-vals[p-1] <= featureThreshold {
 				continue
 			}
 			nl := float64(p)
@@ -580,7 +590,7 @@ func (b *cartBuilder) sweep(order []int, f, minLeaf int) (bestCost float64, cut 
 		if p < minLeaf || n-p < minLeaf {
 			continue
 		}
-		if b.x[order[p]][f]-b.x[order[p-1]][f] <= featureThreshold {
+		if vals[p]-vals[p-1] <= featureThreshold {
 			continue
 		}
 		cost := b.weightedImpurityClf(left, p) + b.weightedImpurityClfComp(left, total, n-p)
