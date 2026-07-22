@@ -87,6 +87,8 @@ type histBuilder struct {
 	hsum              [][]float64 // [maxDepth+1][d*nbins] per-level gradient histograms
 	hcnt              [][]int32   // [maxDepth+1][d*nbins] per-level count histograms
 	idxbuf            []int       // reusable full-sample index scratch
+	contrib           []float64   // [n] per-sample leaf value of the last grown tree (full-sample rounds)
+	wantContrib       bool        // capture contrib this round (only when the round grows on all n samples)
 }
 
 // newHistBuilder bins every feature once and allocates the reusable scratch.
@@ -136,8 +138,27 @@ func newHistBuilder(x [][]float64, n, d, maxDepth, minLeaf, nbins int) *histBuil
 		b.hcnt[l] = make([]int32, d*nbins)
 	}
 	b.idxbuf = make([]int, n)
+	b.contrib = make([]float64, n)
 	return b
 }
+
+// leafNode makes a leaf and, on a full-sample round, records value as the tree's
+// contribution for every sample reaching this leaf. The bin partition routes each
+// training sample to the same leaf its float-threshold predict would (bin ≤ bestBin
+// ⟺ x ≤ edges[bestBin]), so contrib[s] equals tree.root.predict(x[s]) exactly —
+// letting the boosting loop skip the O(n·depth) retraversal (§C-gbm).
+func (b *histBuilder) leafNode(idx []int, value float64) *gbmNode {
+	if b.wantContrib {
+		for _, s := range idx {
+			b.contrib[s] = value
+		}
+	}
+	return &gbmNode{leaf: true, value: value}
+}
+
+// lastContrib returns the per-sample leaf values captured while growing the most
+// recent full-sample tree (see leafNode); satisfies contribGrower.
+func (b *histBuilder) lastContrib() []float64 { return b.contrib }
 
 // buildHist clears buffer `buf` and accumulates the round target over idx into it.
 func (b *histBuilder) buildHist(idx []int, buf int) {
@@ -177,6 +198,7 @@ func (b *histBuilder) subHist(par, small int) {
 // grow sets the round target and grows one weak-learner tree over sample set idx.
 func (b *histBuilder) grow(y []float64, idx []int) *gbmTree {
 	b.y = y
+	b.wantContrib = len(idx) == b.n // full-sample round: every sample lands in a leaf, so contrib is complete
 	work := b.idxbuf[:len(idx)]
 	copy(work, idx) // partition works in place; never mutate the caller's idx
 	b.buildHist(work, 0)
@@ -194,7 +216,7 @@ func (b *histBuilder) buildNode(idx []int, depth, buf int) *gbmNode {
 	}
 	value := total / float64(m)
 	if depth >= b.maxDepth || m < 2*b.minLeaf {
-		return &gbmNode{leaf: true, value: value}
+		return b.leafNode(idx, value)
 	}
 	bestGain := 0.0
 	bestFeat, bestBin, bestNL := -1, -1, 0
@@ -220,7 +242,7 @@ func (b *histBuilder) buildNode(idx []int, depth, buf int) *gbmNode {
 		}
 	}
 	if bestFeat < 0 {
-		return &gbmNode{leaf: true, value: value}
+		return b.leafNode(idx, value)
 	}
 	// Partition idx in place (unstable): bin ≤ bestBin goes left. nl==bestNL.
 	lo := 0
@@ -257,6 +279,15 @@ func (b *histBuilder) buildNode(idx []int, depth, buf int) *gbmNode {
 // returns one tree over the sample set idx.
 type gbmGrower interface {
 	grow(y []float64, idx []int) *gbmTree
+}
+
+// contribGrower is an optional gbmGrower extension: after a full-sample grow, it
+// exposes the per-sample leaf value of the tree it just built, so the boosting
+// loop can update its scores without re-walking the tree for every row. Only the
+// histogram grower implements it (it routes every sample during its bin
+// partition); the exact grower falls back to tree.root.predict.
+type contribGrower interface {
+	lastContrib() []float64
 }
 
 // grow adapts the exact builder to gbmGrower.

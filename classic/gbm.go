@@ -404,6 +404,27 @@ func (t *gbmTree) Predict(x [][]float64) []float64 {
 
 // subsampleIdx draws floor(subsample·n) row indices without replacement, or all
 // n indices (in order) when subsample ≥ 1 — the deterministic default path.
+// addTreeScore adds the freshly grown tree's contribution to every score:
+// f[i] += lr·(tree value for row i). When the grower captured each row's leaf
+// value during a full-sample grow (the histogram grower's bin partition already
+// routed every training row to its leaf), that value is reused directly —
+// bit-identical to walking the tree, since bin routing and float-threshold predict
+// send every training row to the same leaf — sparing an O(n·depth) retraversal.
+// Any other case (the exact grower, or a subsampled round whose out-of-bag rows the
+// tree never routed) falls back to tree.root.predict.
+func addTreeScore(f []float64, gb gbmGrower, tree *gbmTree, x [][]float64, lr float64, fullSample bool) {
+	if cg, ok := gb.(contribGrower); ok && fullSample {
+		c := cg.lastContrib()
+		for i := range f {
+			f[i] += lr * c[i]
+		}
+		return
+	}
+	for i := range f {
+		f[i] += lr * tree.root.predict(x[i])
+	}
+}
+
 func subsampleIdx(n int, subsample float64, rng *rand.Rand) []int {
 	idx := make([]int, n)
 	for i := range idx {
@@ -522,9 +543,7 @@ func (m *GradientBoostingRegressor) Fit(x [][]float64, y []float64) error {
 		}
 		idx := subsampleIdx(n, m.cfg.subsample, rng)
 		tree := gb.grow(resid, idx)
-		for i := 0; i < n; i++ {
-			f[i] += m.cfg.learningRate * tree.root.predict(x[i])
-		}
+		addTreeScore(f, gb, tree, x, m.cfg.learningRate, len(idx) == n)
 		m.trees = append(m.trees, tree)
 		m.trainLoss = append(m.trainLoss, mseLoss(y, f))
 	}
@@ -684,9 +703,7 @@ func (m *GradientBoostingClassifier) Fit(x [][]float64, y []int) error {
 		}
 		idx := subsampleIdx(n, m.cfg.subsample, rng)
 		tree := gb.grow(resid, idx)
-		for i := 0; i < n; i++ {
-			f[i] += m.cfg.learningRate * tree.root.predict(x[i])
-		}
+		addTreeScore(f, gb, tree, x, m.cfg.learningRate, len(idx) == n)
 		m.trees = append(m.trees, tree)
 		m.trainLoss = append(m.trainLoss, logLoss(yf, f))
 	}
