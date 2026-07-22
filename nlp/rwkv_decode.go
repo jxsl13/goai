@@ -116,7 +116,7 @@ func rwkvMix(ctx *backend.Context, x, shift, mu *tensor.Tensor) (*tensor.Tensor,
 	if err != nil {
 		return nil, err
 	}
-	return exec1(ctx, backend.OpAdd, nil, shift, md)
+	return exec2(ctx, backend.OpAdd, nil, shift, md)
 }
 
 // rwkvBlockPrefill runs one [nn.RWKVBlock] over the whole prompt x[T, dim] in
@@ -198,7 +198,7 @@ func rwkvBlockPrefill(ctx *backend.Context, b *nn.RWKVBlock, st *nn.RWKVState, x
 	if err != nil {
 		return nil, err
 	}
-	y, err := exec1(ctx, backend.OpAdd, nil, x, o)
+	y, err := exec2(ctx, backend.OpAdd, nil, x, o)
 	if err != nil {
 		return nil, err
 	}
@@ -242,7 +242,7 @@ func rwkvBlockPrefill(ctx *backend.Context, b *nn.RWKVBlock, st *nn.RWKVState, x
 		return nil, err
 	}
 	copy(st.PrevCM, rows2D(yn)[T-1])
-	return exec1(ctx, backend.OpAdd, nil, y, cv)
+	return exec2(ctx, backend.OpAdd, nil, y, cv)
 }
 
 // Prefill absorbs the whole prompt into the decode state in ONE batched pass

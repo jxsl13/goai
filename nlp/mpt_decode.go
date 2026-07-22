@@ -90,7 +90,7 @@ func (m *MPT) DecodeStep(ctx *backend.Context, cache *MPTCache, token, pos int) 
 		if a, err = project(ctx, a, b.Wo); err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, a); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, a); err != nil {
 			return nil, err
 		}
 		// MLP sublayer over norm_2(x).
@@ -102,7 +102,7 @@ func (m *MPT) DecodeStep(ctx *backend.Context, cache *MPTCache, token, pos int) 
 		if err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, f); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, f); err != nil {
 			return nil, err
 		}
 	}

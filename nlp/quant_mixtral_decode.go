@@ -84,7 +84,7 @@ func (m *QuantMixtral) DecodeStep(ctx *backend.Context, cache *MixtralCache, tok
 		if err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, o); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, o); err != nil {
 			return nil, err
 		}
 		// sparse-MoE FFN: only the top-k routed experts run for this token
@@ -96,7 +96,7 @@ func (m *QuantMixtral) DecodeStep(ctx *backend.Context, cache *MixtralCache, tok
 		if err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, ff); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, ff); err != nil {
 			return nil, err
 		}
 	}

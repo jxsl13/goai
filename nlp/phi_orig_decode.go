@@ -95,10 +95,10 @@ func (m *Phi) DecodeStep(ctx *backend.Context, cache *PhiCache, token, pos int) 
 			return nil, err
 		}
 		// Sum both sublayer outputs onto the raw residual.
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, a); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, a); err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, f); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, f); err != nil {
 			return nil, err
 		}
 	}

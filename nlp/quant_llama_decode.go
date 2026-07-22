@@ -94,7 +94,7 @@ func (m *QuantLlama) DecodeStep(ctx *backend.Context, cache *LlamaCache, token, 
 		if o, err = scaleScalar(ctx, o, cfg.ResidualMult); err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, o); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, o); err != nil {
 			return nil, err
 		}
 		xf, err := b.FFNNorm.Forward(ctx, x)
@@ -108,7 +108,7 @@ func (m *QuantLlama) DecodeStep(ctx *backend.Context, cache *LlamaCache, token, 
 		if ff, err = scaleScalar(ctx, ff, cfg.ResidualMult); err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, ff); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, ff); err != nil {
 			return nil, err
 		}
 	}

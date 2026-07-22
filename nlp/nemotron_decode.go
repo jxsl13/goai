@@ -93,7 +93,7 @@ func (m *Nemotron) DecodeStep(ctx *backend.Context, cache *NemotronCache, token,
 		if a, err = project(ctx, a, b.Wo); err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, a); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, a); err != nil {
 			return nil, err
 		}
 		// MLP sublayer: post_attention_layernorm → ReLU² MLP → residual add.
@@ -105,7 +105,7 @@ func (m *Nemotron) DecodeStep(ctx *backend.Context, cache *NemotronCache, token,
 		if err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, f); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, f); err != nil {
 			return nil, err
 		}
 	}
