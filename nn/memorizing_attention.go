@@ -369,12 +369,39 @@ func (m *MemMemory) AddSegment(k, v *tensor.Tensor) error {
 		return fmt.Errorf("nn: MemorizingAttention AddSegment k rows %d != v rows %d", k.Shape()[0], v.Shape()[0])
 	}
 	s := k.Shape()[0]
+	// Each stored row still needs its own backing slice (it is retained in the bank),
+	// but the copy that detaches it from the tape takes the typed contiguous fast path
+	// (§base-perf): for dense k,v read the row straight out of the backing []T instead
+	// of m.dim per-element AtF64 dispatches. F32 widens through float64 exactly as
+	// AtF64 does, so the stored rows are bit-identical.
+	kf64, kf32 := flatF64(k), flatF32(k)
+	vf64, vf32 := flatF64(v), flatF32(v)
 	for i := range s {
 		kr := make([]float64, m.dim)
 		vr := make([]float64, m.dim)
-		for j := range m.dim {
-			kr[j] = k.AtF64(i, j) // copy detaches: plain floats, no tape linkage
-			vr[j] = v.AtF64(i, j)
+		switch {
+		case kf64 != nil:
+			copy(kr, kf64[i*m.dim:(i+1)*m.dim])
+		case kf32 != nil:
+			for j := range m.dim {
+				kr[j] = float64(kf32[i*m.dim+j])
+			}
+		default:
+			for j := range m.dim {
+				kr[j] = k.AtF64(i, j) // copy detaches: plain floats, no tape linkage
+			}
+		}
+		switch {
+		case vf64 != nil:
+			copy(vr, vf64[i*m.dim:(i+1)*m.dim])
+		case vf32 != nil:
+			for j := range m.dim {
+				vr[j] = float64(vf32[i*m.dim+j])
+			}
+		default:
+			for j := range m.dim {
+				vr[j] = v.AtF64(i, j)
+			}
 		}
 		m.keys = append(m.keys, kr)
 		m.vals = append(m.vals, vr)
