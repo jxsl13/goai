@@ -5,12 +5,15 @@ import "sync"
 // Logit penalties that reduce repetition during generation, applied to the raw
 // logits BEFORE temperature/top-k/top-p sampling (§R57).
 
-// penaltyCountPool reuses the token→count map across calls: ApplyPenalties runs once
-// per generated token in a decode loop over a GROWING history, so a fresh map per call
-// is O(T) allocations. Pooled + cleared, it is amortized allocation-free. The apply
-// step mutates each unique token's logit independently, so map iteration order does not
-// affect the result — pooling is bit-identical.
-var penaltyCountPool = sync.Pool{New: func() any { return make(map[int]int) }}
+// penaltyCountPool reuses the token→count buffer across calls: ApplyPenalties runs once
+// per generated token in a decode loop over a GROWING history, so a fresh buffer per call
+// is O(T) allocations. Token ids are dense over the vocabulary, so the count is a plain
+// []int32 indexed by token — a slice increment instead of the mapassign_fast64 that was
+// ~80% of the op (map hashing + iteration). The apply step restores it to all-zero (it
+// zeros each unique token as it applies), so the pooled buffer stays clean for reuse.
+// Each unique token's logit is modified exactly once and independently, so the history
+// iteration order matches the old random map order — bit-identical.
+var penaltyCountPool = sync.Pool{New: func() any { s := make([]int32, 0); return &s }}
 
 // ApplyPenalties adjusts logits in place using the history of already-generated
 // tokens:
@@ -29,14 +32,29 @@ func ApplyPenalties(logits []float64, generated []int, repetition, frequency, pr
 	if len(generated) == 0 {
 		return
 	}
-	counts := penaltyCountPool.Get().(map[int]int)
+	n := len(logits)
+	cp := penaltyCountPool.Get().(*[]int32) // pool a *slice so Put doesn't box the header
+	counts := *cp
+	if cap(counts) < n {
+		counts = make([]int32, n) // grow; a fresh (or apply-reset) buffer is all-zero
+	} else {
+		counts = counts[:n]
+	}
 	for _, t := range generated {
-		if t >= 0 && t < len(logits) {
+		if uint(t) < uint(n) {
 			counts[t]++
 		}
 	}
-	for tok, c := range counts {
-		l := logits[tok]
+	// Apply once per UNIQUE token by walking the history and zeroing each token as it is
+	// handled (a repeat then sees counts[t]==0 and skips) — this also restores counts to
+	// all-zero for the pool.
+	for _, t := range generated {
+		if uint(t) >= uint(n) || counts[t] == 0 {
+			continue
+		}
+		c := counts[t]
+		counts[t] = 0
+		l := logits[t]
 		if repetition > 0 && repetition != 1 { // CTRL, sign-aware
 			if l > 0 {
 				l /= repetition
@@ -45,8 +63,8 @@ func ApplyPenalties(logits []float64, generated []int, repetition, frequency, pr
 			}
 		}
 		l -= frequency*float64(c) + presence // OpenAI additive penalties
-		logits[tok] = l
+		logits[t] = l
 	}
-	clear(counts) // return an empty map to the pool for the next call
-	penaltyCountPool.Put(counts)
+	*cp = counts
+	penaltyCountPool.Put(cp)
 }
