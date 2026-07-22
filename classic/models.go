@@ -287,9 +287,13 @@ func (m *SoftmaxRegression) Fit(x [][]float64, y []int, k, steps int, lr float64
 						if wa == 0 {
 							continue
 						}
-						base := a * mAug
-						for b := a; b < mAug; b++ {
-							gram[base+b] += wa * row[b]
+						// Upper-triangle Hessian axpy gram[a][a:] += wa·row[a:]. Written over
+						// equal-length slices (one bounds check each) so the compiler
+						// auto-vectorizes the inner mul-add; same order, so bit-identical.
+						g := gram[a*mAug+a : a*mAug+mAug]
+						r := row[a:mAug]
+						for j := range g {
+							g[j] += wa * r[j]
 						}
 					}
 				}
