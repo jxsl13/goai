@@ -60,6 +60,11 @@ func (m *OLMoE) DecodeStep(ctx *backend.Context, cache *OLMoECache, token, pos i
 	if err != nil {
 		return nil, err
 	}
+	// Step-invariant attrs boxed once here instead of ~N_layers times inside the loop
+	// (T956, the T955/T957 per-layer-Attrs-boxing hoist applied to OLMoE decode).
+	qRoPE := backend.Attrs(backend.RoPEAttrs{Base: cfg.RopeBase, Heads: cfg.Heads, PosOffset: pos})
+	kRoPE := backend.Attrs(backend.RoPEAttrs{Base: cfg.RopeBase, Heads: kv, PosOffset: pos})
+	attn := backend.Attrs(backend.AttnAttrs{Heads: cfg.Heads, KVHeads: kv, Causal: false})
 	for l, b := range m.Blocks {
 		// Attention sublayer (pre-norm) on the input_layernorm'd residual.
 		xb, err := b.AttnNorm.Forward(ctx, x)
@@ -88,16 +93,16 @@ func (m *OLMoE) DecodeStep(ctx *backend.Context, cache *OLMoECache, token, pos i
 			return nil, err
 		}
 		// RoPE the single token at its absolute position, then append k,v to the cache.
-		if q, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: cfg.Heads, PosOffset: pos}, q); err != nil {
+		if q, err = exec1(ctx, backend.OpRoPE, qRoPE, q); err != nil {
 			return nil, err
 		}
-		if k, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: kv, PosOffset: pos}, k); err != nil {
+		if k, err = exec1(ctx, backend.OpRoPE, kRoPE, k); err != nil {
 			return nil, err
 		}
 		kNew, vNew := cache.bufs.appendKV(cache.K, cache.V, l, k, v)
 		cache.K[l], cache.V[l] = kNew, vNew
 		// single query attends to all cached keys → no causal mask
-		a, err := exec1(ctx, backend.OpMHA, backend.AttnAttrs{Heads: cfg.Heads, KVHeads: kv, Causal: false}, q, kNew, vNew)
+		a, err := exec1(ctx, backend.OpMHA, attn, q, kNew, vNew)
 		if err != nil {
 			return nil, err
 		}

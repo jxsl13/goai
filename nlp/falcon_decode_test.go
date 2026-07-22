@@ -26,6 +26,38 @@ func falconDecodeHF(t *testing.T) *nlp.Falcon {
 	return m
 }
 
+// falconBench loads the golden Falcon checkpoint for a benchmark (no *testing.T).
+func falconBench(b *testing.B) *nlp.Falcon {
+	b.Helper()
+	ts, _, err := safetensors.LoadFile("testdata/falcon_hf.safetensors")
+	if err != nil {
+		b.Fatal(err)
+	}
+	m, err := nlp.FalconFromHF(ts, nlp.FalconConfig{Heads: 4, Eps: 1e-5, RopeBase: 10000, Ctx: 32})
+	if err != nil {
+		b.Fatal(err)
+	}
+	return m
+}
+
+// BenchmarkFalconDecode drives the per-token KV-cache decode — the path where DecodeStep's
+// per-layer RoPE/MHA Attrs boxing shows up (T956, the T955/T957/T958 hoist for Falcon +
+// olmoe + granitemoe, all measured by this one representative).
+func BenchmarkFalconDecode(b *testing.B) {
+	m := falconBench(b)
+	toks := []int{3, 7, 1, 9, 4, 2, 8}
+	b.ReportAllocs()
+	for b.Loop() {
+		ctx := backend.NewContext()
+		cache := m.NewCache()
+		for pos := range 28 {
+			if _, err := m.DecodeStep(ctx, cache, toks[pos%len(toks)], pos); err != nil {
+				b.Fatal(err)
+			}
+		}
+	}
+}
+
 // §V16 tier-1: the KV-cache Falcon decode is lossless — feeding a prompt through DecodeStep
 // yields the SAME next-token logits as a full Forward over that prompt. The gate is
 // bit-identical (<1e-9). Falcon stresses MQA (a single cached key/value head per block) and
