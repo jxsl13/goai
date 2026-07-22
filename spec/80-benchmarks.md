@@ -50,3 +50,4 @@
 | BM46 | 2026-07-22 | nn EWCFisher typed contiguous fast path (Fisher-info estimate, ~131k-param MLP × 8 samples) | darwin/arm64 | self | us | 11179.5 | 548.3 | 20.39× | T968,V22 |
 | BM47 | 2026-07-22 | nn MASImportance typed contiguous fast path (MAS importance Ω=mean\|g\|, ~131k-param MLP × 8 samples) | darwin/arm64 | self | us | 11176.8 | 579.4 | 19.29× | T969,V22 |
 | BM48 | 2026-07-22 | nn SI Consolidate typed contiguous fast path (Synaptic-Intelligence task-boundary consolidation, ~131k-param MLP) | darwin/arm64 | self | us | 1094.6 | 255.5 | 4.28× | T970,V22 |
+| BM49 | 2026-07-22 | nn SLERP typed contiguous fast path (spherical weight interpolation, model-merge, ~131k params) | darwin/arm64 | self | us | 1872.7 | 325.5 | 5.75× | T971,V22 |
