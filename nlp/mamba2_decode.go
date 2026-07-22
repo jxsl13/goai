@@ -100,19 +100,11 @@ func mixer2Step(mx *Mamba2Mixer, ls *Mamba2LayerState, u *tensor.Tensor) (*tenso
 	if u.Shape()[1] != mx.DModel {
 		return nil, fmt.Errorf("nlp: Mamba2 mixer got width %d, want d_model %d", u.Shape()[1], mx.DModel)
 	}
-	uu := rows2D(u)[0] // [d_model]
-
-	// 1. in_proj (no bias) → split [gate | xBC | dt], exactly like forward.
-	inW := mx.InProj.Storage().F64() // [projection_size, d_model]
-	projSize := mx.Intermediate + D + mx.NumHeads
-	proj := make([]float64, projSize)
-	for o := range projSize {
-		var s float64
-		base := o * mx.DModel
-		for i := range mx.DModel {
-			s += uu[i] * inW[base+i]
-		}
-		proj[o] = s
+	// 1. in_proj (no bias) → split [gate | xBC | dt], exactly like forward — the same
+	//    backend matmul, so this single-token row bit-matches the batched paths.
+	proj, err := mx.inProjMul(u)
+	if err != nil {
+		return nil, err
 	}
 	z := proj[:mx.Intermediate]
 	xBC := proj[mx.Intermediate : mx.Intermediate+D]
@@ -186,19 +178,11 @@ func mixer2Step(mx *Mamba2Mixer, ls *Mamba2LayerState, u *tensor.Tensor) (*tenso
 		y[o] = normW[o] * gated[o] * inv
 	}
 
-	// 6. out_proj (no bias): [intermediate] → [d_model].
-	outW := mx.OutProj.Storage().F64() // [d_model, intermediate]
-	out := tensor.New(tensor.F64, tensor.Shape{1, mx.DModel})
-	os := out.Storage().F64()
-	for i := range mx.DModel {
-		var s float64
-		base := i * mx.Intermediate
-		for o := range mx.Intermediate {
-			s += y[o] * outW[base+o]
-		}
-		os[i] = s
-	}
-	return out, nil
+	// 6. out_proj (no bias): [intermediate] → [d_model], via backend matmul (same
+	//    weight as the batched paths, so the row bit-matches).
+	yT := tensor.New(tensor.F64, tensor.Shape{1, mx.Intermediate})
+	copy(yT.Storage().F64(), y)
+	return mx.outProjMul(yT)
 }
 
 // mixer2Prefill absorbs a whole prompt into one [Mamba2Mixer]'s recurrent
@@ -224,25 +208,19 @@ func mixer2Prefill(mx *Mamba2Mixer, ls *Mamba2LayerState, u *tensor.Tensor) (*te
 	if u.Shape()[1] != mx.DModel {
 		return nil, fmt.Errorf("nlp: Mamba2 mixer got width %d, want d_model %d", u.Shape()[1], mx.DModel)
 	}
-	uu := rows2D(u) // [seq][d_model]
-
-	inW := mx.InProj.Storage().F64() // [projection_size, d_model]
 	projSize := mx.Intermediate + D + mx.NumHeads
 
-	// 1. in_proj (no bias) → split [gate | xBC | dt], exactly like forward.
+	// 1. in_proj (no bias) → split [gate | xBC | dt], exactly like forward — the same
+	//    backend matmul, so each row bit-matches the step and full-forward paths.
+	pm, err := mx.inProjMul(u)
+	if err != nil {
+		return nil, err
+	}
 	z := make([][]float64, seq)   // gate [seq][intermediate]
 	xBC := make([][]float64, seq) // conv input [seq][conv_dim]
 	dt := make([][]float64, seq)  // Δ pre-activation [seq][num_heads]
 	for t := range seq {
-		proj := make([]float64, projSize)
-		for o := range projSize {
-			var s float64
-			base := o * mx.DModel
-			for i := range mx.DModel {
-				s += uu[t][i] * inW[base+i]
-			}
-			proj[o] = s
-		}
+		proj := pm[t*projSize : (t+1)*projSize]
 		z[t] = proj[:mx.Intermediate]
 		xBC[t] = proj[mx.Intermediate : mx.Intermediate+D]
 		dt[t] = proj[mx.Intermediate+D:]
@@ -332,21 +310,13 @@ func mixer2Prefill(mx *Mamba2Mixer, ls *Mamba2LayerState, u *tensor.Tensor) (*te
 		}
 	}
 
-	// 6. out_proj (no bias): [intermediate] → [d_model].
-	outW := mx.OutProj.Storage().F64() // [d_model, intermediate]
-	out := tensor.New(tensor.F64, tensor.Shape{seq, mx.DModel})
-	os := out.Storage().F64()
+	// 6. out_proj (no bias): [intermediate] → [d_model], via backend matmul.
+	yT := tensor.New(tensor.F64, tensor.Shape{seq, mx.Intermediate})
+	yd := yT.Storage().F64()
 	for t := range seq {
-		for i := range mx.DModel {
-			var s float64
-			base := i * mx.Intermediate
-			for o := range mx.Intermediate {
-				s += y[t][o] * outW[base+o]
-			}
-			os[t*mx.DModel+i] = s
-		}
+		copy(yd[t*mx.Intermediate:(t+1)*mx.Intermediate], y[t])
 	}
-	return out, nil
+	return mx.outProjMul(yT)
 }
 
 // Prefill absorbs the whole prompt into the decode state in ONE pass per layer
