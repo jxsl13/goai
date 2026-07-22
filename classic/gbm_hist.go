@@ -76,6 +76,17 @@ func radixSortF64(col []float64, keys, tmp []uint64) {
 // LightGBM / sklearn HistGradientBoosting). It produces the same gbmTree shape,
 // so prediction is unchanged. Same mean-of-residual leaves as gbmBuilder, so it
 // is a drop-in for both the regressor and the classifier weak learners.
+// histBin holds one histogram bin's gradient sum and sample count together. The
+// scatter that fills the histogram (buildHist) and the sweep that reads it
+// (buildNode) both touch a bin's sum AND count at the same index, so keeping them
+// interleaved lands both in one cache line — half the line traffic of the old
+// parallel []float64 / []int32 arrays. The 4 bytes of tail padding are cheaper than
+// the second cache miss on the memory-bound scatter.
+type histBin struct {
+	sum float64
+	cnt int32
+}
+
 type histBuilder struct {
 	x                 [][]float64
 	y                 []float64 // current round's target (residual); set per round via grow
@@ -84,8 +95,7 @@ type histBuilder struct {
 	nbins             int
 	edges             [][]float64 // [d][≤nbins-1] ascending split thresholds
 	binned            []uint16    // [n*d] row-major bin index (bin = #edges < x)
-	hsum              [][]float64 // [maxDepth+1][d*nbins] per-level gradient histograms
-	hcnt              [][]int32   // [maxDepth+1][d*nbins] per-level count histograms
+	hist              [][]histBin // [maxDepth+1][d*nbins] per-level (gradient sum, count) histograms
 	idxbuf            []int       // reusable full-sample index scratch
 	contrib           []float64   // [n] per-sample leaf value of the last grown tree (full-sample rounds)
 	wantContrib       bool        // capture contrib this round (only when the round grows on all n samples)
@@ -131,11 +141,9 @@ func newHistBuilder(x [][]float64, n, d, maxDepth, minLeaf, nbins int) *histBuil
 	// One histogram buffer per recursion level (the histogram-subtraction scheme
 	// keeps the parent's histogram live while its children are grown).
 	levels := maxDepth + 1
-	b.hsum = make([][]float64, levels)
-	b.hcnt = make([][]int32, levels)
+	b.hist = make([][]histBin, levels)
 	for l := 0; l < levels; l++ {
-		b.hsum[l] = make([]float64, d*nbins)
-		b.hcnt[l] = make([]int32, d*nbins)
+		b.hist[l] = make([]histBin, d*nbins)
 	}
 	b.idxbuf = make([]int, n)
 	b.contrib = make([]float64, n)
@@ -162,12 +170,11 @@ func (b *histBuilder) lastContrib() []float64 { return b.contrib }
 
 // buildHist clears buffer `buf` and accumulates the round target over idx into it.
 func (b *histBuilder) buildHist(idx []int, buf int) {
-	hs, hc, nb := b.hsum[buf], b.hcnt[buf], b.nbins
+	h, nb := b.hist[buf], b.nbins
 	for f := 0; f < b.d; f++ {
 		base := f * nb
 		for j := 0; j <= len(b.edges[f]); j++ {
-			hs[base+j] = 0
-			hc[base+j] = 0
+			h[base+j] = histBin{}
 		}
 	}
 	for _, i := range idx {
@@ -175,8 +182,8 @@ func (b *histBuilder) buildHist(idx []int, buf int) {
 		row := i * b.d
 		for f := 0; f < b.d; f++ {
 			c := f*nb + int(b.binned[row+f])
-			hs[c] += yi
-			hc[c]++
+			h[c].sum += yi
+			h[c].cnt++
 		}
 	}
 }
@@ -185,12 +192,12 @@ func (b *histBuilder) buildHist(idx []int, buf int) {
 // subtracting the already-built smaller child in buffer `small` — the
 // histogram-subtraction trick that builds only one child per node.
 func (b *histBuilder) subHist(par, small int) {
-	hs, shs, hc, shc, nb := b.hsum[par], b.hsum[small], b.hcnt[par], b.hcnt[small], b.nbins
+	h, sh, nb := b.hist[par], b.hist[small], b.nbins
 	for f := 0; f < b.d; f++ {
 		base := f * nb
 		for j := 0; j <= len(b.edges[f]); j++ {
-			hs[base+j] -= shs[base+j]
-			hc[base+j] -= shc[base+j]
+			h[base+j].sum -= sh[base+j].sum
+			h[base+j].cnt -= sh[base+j].cnt
 		}
 	}
 }
@@ -209,10 +216,10 @@ func (b *histBuilder) grow(y []float64, idx []int) *gbmTree {
 // (built by the caller — the root by grow, each child by buildHist/subHist).
 func (b *histBuilder) buildNode(idx []int, depth, buf int) *gbmNode {
 	m := len(idx)
-	hs, hc, nb := b.hsum[buf], b.hcnt[buf], b.nbins
+	h, nb := b.hist[buf], b.nbins
 	var total float64 // = Σ residual over idx = sum of feature-0's histogram bins
 	for j := 0; j <= len(b.edges[0]); j++ {
-		total += hs[j]
+		total += h[j].sum
 	}
 	value := total / float64(m)
 	if depth >= b.maxDepth || m < 2*b.minLeaf {
@@ -226,8 +233,8 @@ func (b *histBuilder) buildNode(idx []int, depth, buf int) *gbmNode {
 		var nl int
 		ne := len(b.edges[f])
 		for sb := 0; sb < ne; sb++ { // split after bin sb → left = {x ≤ edges[f][sb]}
-			leftSum += hs[base+sb]
-			nl += int(hc[base+sb])
+			leftSum += h[base+sb].sum
+			nl += int(h[base+sb].cnt)
 			nr := m - nl
 			if nl < b.minLeaf || nr < b.minLeaf {
 				continue
