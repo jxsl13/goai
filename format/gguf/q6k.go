@@ -22,7 +22,13 @@ const (
 // nibble) and qh (2 high bits), the sub-block scale int8·d.
 func dequantQ6_K(shape tensor.Shape, raw []byte) (*tensor.Tensor, error) {
 	t := tensor.New(tensor.F32, shape)
-	dst := t.Storage().F32()
+	dequantQ6_KInto(t.Storage().F32(), raw)
+	return t, nil
+}
+
+// dequantQ6_KInto is dequantQ6_K writing into a caller-provided dst — lets QMatMul
+// reuse one row buffer across all weight rows. Byte-for-byte the tensor-returning form.
+func dequantQ6_KInto(dst []float32, raw []byte) {
 	for sb := 0; sb*qkK < len(dst); sb++ {
 		blk := raw[sb*q6kBlockSize:]
 		ql, qh, sc := blk[0:128], blk[128:192], blk[192:208]
@@ -43,7 +49,6 @@ func dequantQ6_K(shape tensor.Shape, raw []byte) (*tensor.Tensor, error) {
 			}
 		}
 	}
-	return t, nil
 }
 
 // quantizeQ6_K encodes f32 values into the Q6_K super-block layout — the inverse packing

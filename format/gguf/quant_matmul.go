@@ -94,31 +94,47 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 		return out, nil
 	}
 
+	// Reused row buffer for the quant types with a fill-into-slice variant (Q4_K/Q6_K —
+	// llama.cpp's common deployment formats): dequant each weight row into one buffer
+	// rather than allocating a [k] tensor per row, the same n-allocs-per-matmul cost the
+	// Q8_0 decode path above avoids. The fill and the dot are byte-for-byte identical to
+	// the per-row-tensor path, and this covers prefill (m>1) too. Other types keep the
+	// per-row path below.
+	var scratch []float32
+	if qt == Q4_K || qt == Q6_K {
+		scratch = make([]float32, k)
+	}
 	for ni := range n {
 		rowBits := weight[ni*rowBytes : (ni+1)*rowBytes]
-		var wrow *tensor.Tensor
+		var wf []float32
 		switch qt {
-		case Q8_0:
-			wrow, err = dequantQ8_0(tensor.Shape{k}, rowBits)
-		case Q4_0:
-			wrow, err = dequantQ4_0(tensor.Shape{k}, rowBits)
-		case Q2_K:
-			wrow, err = dequantQ2_K(tensor.Shape{k}, rowBits)
-		case Q3_K:
-			wrow, err = dequantQ3_K(tensor.Shape{k}, rowBits)
 		case Q4_K:
-			wrow, err = dequantQ4_K(tensor.Shape{k}, rowBits)
-		case Q5_K:
-			wrow, err = dequantQ5_K(tensor.Shape{k}, rowBits)
+			dequantQ4_KInto(scratch, rowBits)
+			wf = scratch
 		case Q6_K:
-			wrow, err = dequantQ6_K(tensor.Shape{k}, rowBits)
+			dequantQ6_KInto(scratch, rowBits)
+			wf = scratch
 		default:
-			return nil, fmt.Errorf("gguf: QMatMul unsupported quant type %d", qt)
+			var wrow *tensor.Tensor
+			switch qt {
+			case Q8_0:
+				wrow, err = dequantQ8_0(tensor.Shape{k}, rowBits)
+			case Q4_0:
+				wrow, err = dequantQ4_0(tensor.Shape{k}, rowBits)
+			case Q2_K:
+				wrow, err = dequantQ2_K(tensor.Shape{k}, rowBits)
+			case Q3_K:
+				wrow, err = dequantQ3_K(tensor.Shape{k}, rowBits)
+			case Q5_K:
+				wrow, err = dequantQ5_K(tensor.Shape{k}, rowBits)
+			default:
+				return nil, fmt.Errorf("gguf: QMatMul unsupported quant type %d", qt)
+			}
+			if err != nil {
+				return nil, err
+			}
+			wf = wrow.Storage().F32()[:k]
 		}
-		if err != nil {
-			return nil, err
-		}
-		wf := wrow.Storage().F32()[:k]
 		for mi := range m {
 			var acc float64
 			switch {
