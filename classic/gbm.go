@@ -226,11 +226,12 @@ type gbmBuilder struct {
 	n, d     int
 	maxDepth int
 	minLeaf  int
-	master   [][]int // presorted [0..n) by each feature (built once, immutable)
-	cols     [][]int // per-round working columns; cols[f][start:end] = node samples sorted by f
-	part     []int   // stable-partition scratch (len n)
-	goLeft   []bool  // per-sample split membership during a partition (len n)
-	inSet    []bool  // membership of a round's subsample (len n)
+	master   [][]int   // presorted [0..n) by each feature (built once, immutable)
+	cols     [][]int   // per-round working columns; cols[f][start:end] = node samples sorted by f
+	part     []int     // stable-partition scratch (len n)
+	goLeft   []bool    // per-sample split membership during a partition (len n)
+	inSet    []bool    // membership of a round's subsample (len n)
+	vals     []float64 // bestSplit scratch: a node's feature values in sorted order (len n)
 }
 
 // newGBMBuilder argsorts every feature once and allocates the reusable scratch.
@@ -255,6 +256,7 @@ func newGBMBuilder(x [][]float64, n, d, maxDepth, minLeaf int) *gbmBuilder {
 	b.part = make([]int, n)
 	b.goLeft = make([]bool, n)
 	b.inSet = make([]bool, n)
+	b.vals = make([]float64, n)
 	return b
 }
 
@@ -317,17 +319,24 @@ func (b *gbmBuilder) bestSplit(start, end int) (feat int, thr float64, ok bool) 
 		total += b.y[col0[p]]
 	}
 	bestGain := 0.0
+	vals := b.vals
 	for f := 0; f < b.d; f++ {
 		cf := b.cols[f]
+		// Hoist this node's sorted feature values into a contiguous buffer once (n
+		// gathers into b.x), then the split scan reads them sequentially. The old inline
+		// b.x[cf[k]][f] / b.x[cf[k+1]][f] re-gathered every value TWICE (as the right
+		// endpoint at k, then the left at k+1) — halved to one gather per value here.
+		for k := 0; k < n; k++ {
+			vals[k] = b.x[cf[start+k]][f]
+		}
 		var leftSum float64
 		for k := 0; k < n-1; k++ {
-			s := cf[start+k]
-			leftSum += b.y[s]
+			leftSum += b.y[cf[start+k]]
 			nl, nr := k+1, n-(k+1)
 			if nl < b.minLeaf || nr < b.minLeaf {
 				continue
 			}
-			vk, vn := b.x[s][f], b.x[cf[start+k+1]][f]
+			vk, vn := vals[k], vals[k+1]
 			if vk == vn { // cannot split between equal values
 				continue
 			}
