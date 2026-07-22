@@ -6,6 +6,7 @@ import (
 
 	"github.com/jxsl13/goai/backend"
 	"github.com/jxsl13/goai/format/gguf"
+	"github.com/jxsl13/goai/internal/simd"
 	"github.com/jxsl13/goai/nn"
 	"github.com/jxsl13/goai/tensor"
 )
@@ -271,7 +272,17 @@ func (b *QuantMamba2Mixer) forward(ctx *backend.Context, u *tensor.Tensor) (*ten
 					acc += cwrow[k] * xBC[src][c]
 				}
 			}
-			xc[t][c] = silu(acc)
+			xc[t][c] = acc // raw conv acc; silu applied vectorized per token row below
+		}
+	}
+	// silu(acc)=acc·σ(acc): vectorize σ (the exp) per TOKEN ROW ([conv_dim]-length) — the
+	// same grouping the single-token step uses, so forward's rows bit-match it (the quant
+	// decode-vs-forward test is bit-exact).
+	sigRow := make([]float64, b.ConvDim)
+	for t := range seq {
+		simd.SigmoidF64(sigRow, xc[t])
+		for c := range b.ConvDim {
+			xc[t][c] *= sigRow[c]
 		}
 	}
 
@@ -329,11 +340,15 @@ func (b *QuantMamba2Mixer) forward(ctx *backend.Context, u *tensor.Tensor) (*ten
 	// on the n_groups>1 divergence from llama.cpp's per-group norm). Stored
 	// f32 so a single-row decode step rounds identically.
 	yT := tensor.New(tensor.F32, tensor.Shape{seq, b.Intermediate})
+	// silu(z)=z·σ(z): vectorize σ over the contiguous z row (same [intermediate]-length
+	// grouping the step's gate uses, so rows bit-match). sigZ/gated hoist out of the loop.
+	sigZ := make([]float64, b.Intermediate)
+	gated := make([]float64, b.Intermediate)
 	for t := range seq {
+		simd.SigmoidF64(sigZ, z[t])
 		var variance float64
-		gated := make([]float64, b.Intermediate)
 		for o := range b.Intermediate {
-			gated[o] = y[t][o] * silu(z[t][o])
+			gated[o] = y[t][o] * z[t][o] * sigZ[o]
 			variance += gated[o] * gated[o]
 		}
 		variance /= float64(b.Intermediate)
@@ -402,7 +417,13 @@ func (b *QuantMamba2Mixer) step(ctx *backend.Context, ls *Mamba2LayerState, u *t
 			acc += b.ConvW.AtF64(c, k) * ls.ConvBuf[k*D+c]
 		}
 		acc += b.ConvW.AtF64(c, K-1) * xBC[c]
-		xc[c] = silu(acc)
+		xc[c] = acc // raw conv acc; silu vectorized below
+	}
+	// silu(acc)=acc·σ(acc) with the same vectorized σ over the [conv_dim] row as forward.
+	sigC := make([]float64, D)
+	simd.SigmoidF64(sigC, xc)
+	for c := range D {
+		xc[c] *= sigC[c]
 	}
 	// Shift the window: drop the oldest row, append this token's pre-conv row.
 	if K > 1 {
@@ -440,11 +461,14 @@ func (b *QuantMamba2Mixer) step(ctx *backend.Context, ls *Mamba2LayerState, u *t
 		}
 	}
 
-	// Gated RMSNorm, stored f32 exactly like forward's per-row store.
+	// Gated RMSNorm, stored f32 exactly like forward's per-row store. Same vectorized
+	// silu(z)=z·σ(z) over the [intermediate] z row as forward's gate (rows bit-match).
 	var variance float64
 	gated := make([]float64, b.Intermediate)
+	sigZ := make([]float64, b.Intermediate)
+	simd.SigmoidF64(sigZ, z)
 	for o := range b.Intermediate {
-		gated[o] = y[o] * silu(z[o])
+		gated[o] = y[o] * z[o] * sigZ[o]
 		variance += gated[o] * gated[o]
 	}
 	variance /= float64(b.Intermediate)
