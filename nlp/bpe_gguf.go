@@ -264,7 +264,7 @@ func (t *BPETokenizer) Decode(ids []int) string {
 			}
 		}
 	} else {
-		//perfscan:ignore M decSlice is the map→slice fast path; this is the defensive fallback
+		//perfscan:ignore PS3003 decSlice is the map→slice fast path; this is the defensive fallback
 		for _, id := range ids {
 			if s, ok := t.decoder[id]; ok {
 				mapped.WriteString(s)
@@ -282,7 +282,7 @@ func (t *BPETokenizer) Decode(ids []int) string {
 			}
 		}
 	} else {
-		//perfscan:ignore M u2bSlice is the map→slice fast path; this is the defensive fallback
+		//perfscan:ignore PS3003 u2bSlice is the map→slice fast path; this is the defensive fallback
 		for _, r := range m {
 			if b, ok := t.u2b[r]; ok {
 				out = append(out, b)

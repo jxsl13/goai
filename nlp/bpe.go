@@ -225,7 +225,7 @@ func (t *Tokenizer) Decode(ids []int) string {
 	// churn it saves (measured slower), so estimate ~4 bytes/token (GPT-2 average) — one or
 	// two grows instead of log(n), no extra lookups. Grow only affects capacity.
 	b.Grow(len(ids) * 4)
-	//perfscan:ignore M decSlice is the map→slice fast path; this is the defensive fallback
+	//perfscan:ignore PS3003 decSlice is the map→slice fast path; this is the defensive fallback
 	for _, id := range ids {
 		b.WriteString(t.decoder[id])
 	}

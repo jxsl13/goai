@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"go/parser"
 	"go/token"
 	"os"
 	"path/filepath"
+	"sort"
 	"testing"
 )
 
@@ -602,14 +604,136 @@ func silu(o, d []float64, f32 bool) {
 }
 
 func TestResolveClass(t *testing.T) {
-	if resolveClass("K") != "scalar-transcendental-vectorizable" {
-		t.Error("letter K should resolve")
+	if resolveClass("PS4002") != "scalar-transcendental-vectorizable" {
+		t.Error("check ID PS4002 should resolve to its category")
+	}
+	if resolveClass("ps4002") != "scalar-transcendental-vectorizable" {
+		t.Error("ID resolution should be case-insensitive")
 	}
 	if resolveClass("per-element-dispatch") != "per-element-dispatch" {
 		t.Error("category should resolve to itself")
 	}
+	if resolveClass("K") != "" {
+		t.Error("the retired single-letter codes must no longer resolve")
+	}
 	if resolveClass("nonsense") != "" {
 		t.Error("unknown token should resolve to empty")
+	}
+}
+
+// TestCheckRegistry pins the ID scheme: every check has a well-formed PS-prefixed
+// 4-digit ID and a category, and both are unique. This is the public contract that
+// -checks / -exclude / //perfscan:ignore directives name.
+func TestCheckRegistry(t *testing.T) {
+	ids, cats := map[string]bool{}, map[string]bool{}
+	for _, c := range checks {
+		if len(c.id) != 6 || c.id[:2] != "PS" {
+			t.Errorf("%q: ID must be PS + 4 digits", c.id)
+		}
+		for _, r := range c.id[2:] {
+			if r < '0' || r > '9' {
+				t.Errorf("%q: ID suffix must be 4 digits", c.id)
+			}
+		}
+		if ids[c.id] {
+			t.Errorf("duplicate ID %q", c.id)
+		}
+		if cats[c.category] {
+			t.Errorf("duplicate category %q", c.category)
+		}
+		ids[c.id], cats[c.category] = true, true
+		if catToID[c.category] != c.id {
+			t.Errorf("catToID[%q] = %q, want %q", c.category, catToID[c.category], c.id)
+		}
+	}
+}
+
+// TestRegexpFix exercises the one auto-fix: PS2005 hoists a loop-invariant
+// literal-pattern compile, and the suggested edits transform the source into
+// valid, re-scan-clean Go.
+func TestRegexpFix(t *testing.T) {
+	src := `package p
+
+import "regexp"
+
+func F(ss []string) int {
+	n := 0
+	for _, s := range ss {
+		if regexp.MustCompile(` + "`" + `\d+` + "`" + `).MatchString(s) {
+			n++
+		}
+	}
+	return n
+}
+`
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "p.go", src, parser.ParseComments)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fx *suggestedFix
+	for _, fd := range scanFile(fset, f) {
+		if fd.category == "regexp-compile-in-loop" {
+			fx = fd.fix
+		}
+	}
+	if fx == nil {
+		t.Fatal("PS2005 produced no fix for a literal pattern")
+	}
+	// apply the edits (high offset first) to the source.
+	type oe struct {
+		s, e int
+		txt  string
+	}
+	var edits []oe
+	for _, e := range fx.edits {
+		edits = append(edits, oe{fset.Position(e.start).Offset, fset.Position(e.end).Offset, e.newText})
+	}
+	sort.Slice(edits, func(i, j int) bool { return edits[i].s > edits[j].s })
+	out := []byte(src)
+	for _, e := range edits {
+		out = append(out[:e.s], append([]byte(e.txt), out[e.e:]...)...)
+	}
+	if _, err := parser.ParseFile(token.NewFileSet(), "p.go", out, 0); err != nil {
+		t.Fatalf("fixed source does not parse: %v\n%s", err, out)
+	}
+	if !bytes.Contains(out, []byte("perfscanRe")) || bytes.Count(out, []byte("regexp.MustCompile")) != 1 {
+		t.Fatalf("fix did not hoist the compile:\n%s", out)
+	}
+}
+
+// TestRegexpFixSkipsDynamicPattern: a pattern that is not a plain string literal
+// (it may reference the loop variable) gets NO auto-fix — advisory only.
+func TestRegexpFixSkipsDynamicPattern(t *testing.T) {
+	src := `package p
+
+import (
+	"fmt"
+	"regexp"
+)
+
+func F(ss []string) {
+	for i, s := range ss {
+		_ = regexp.MustCompile(fmt.Sprintf("a%d", i)).MatchString(s)
+	}
+}
+`
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "p.go", src, parser.ParseComments)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, fd := range scanFile(fset, f) {
+		if fd.category == "regexp-compile-in-loop" {
+			found = true
+			if fd.fix != nil {
+				t.Error("a computed pattern must not be auto-fixed (may depend on the loop var)")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("PS2005 should still flag the computed pattern (advisory)")
 	}
 }
 

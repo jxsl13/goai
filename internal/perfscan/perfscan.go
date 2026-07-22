@@ -5,47 +5,47 @@
 // (this is the SINGLE perfscan for the repo — the earlier tools/perfscan P1/P2
 // prototype was folded in here as detectors I/J):
 //
-//	A. per-element .AtF64/.SetF64 dispatch in a Numel/Unravel loop with no
+//	PS1001. per-element .AtF64/.SetF64 dispatch in a Numel/Unravel loop with no
 //	   flatF64/flatF32 contiguous fast path in the enclosing function
 //	   (the dominant win: optimizers 3.5–15×, dropout/droppath 1.6×/13×).
-//	B. an allocation (tensor.New/FromFloat64/Zeros/…/.Cast) INSIDE a per-element
+//	PS2001. an allocation (tensor.New/FromFloat64/Zeros/…/.Cast) INSIDE a per-element
 //	   loop — worse than dispatch (the AMP roundHalf case, 50×).
-//	C. a batch API called with a single-element slice literal inside a loop, e.g.
+//	PS1003. a batch API called with a single-element slice literal inside a loop, e.g.
 //	   tree.Predict([][]float64{row}) (forest predict, 80001→1 alloc, 3×).
-//	D. a reflection-based fmt SCAN call (fmt.Sscanf/Sscan/Fscanf/…) in a loop —
+//	PS3001. a reflection-based fmt SCAN call (fmt.Sscanf/Sscan/Fscanf/…) in a loop —
 //	   parses a format string + reflects over varargs every call, allocating
 //	   (SPM.Decode ran fmt.Sscanf per token, 1.55M allocs → 20× once gated, T931).
-//	E. a strings.Builder/bytes.Buffer written in a loop with no .Grow — WriteX
+//	PS2002. a strings.Builder/bytes.Buffer written in a loop with no .Grow — WriteX
 //	   doubles the backing buffer log(n) times (BPE/SPM/Unigram Decode pre-size, T929).
-//	F. an allocating strings transform (ReplaceAll/Replace/Map/Repeat) in a loop —
+//	PS2003. an allocating strings transform (ReplaceAll/Replace/Map/Repeat) in a loop —
 //	   a fresh string per iteration; write it in place (T934, 52k→1 alloc, 1.65×).
-//	G. a per-element little-endian bit decode (binary.LittleEndian.UintN /
+//	PS4001. a per-element little-endian bit decode (binary.LittleEndian.UintN /
 //	   math.FloatNfrombits) in a loop with no rawCopyLE fast path — a memcpy in
 //	   disguise on LE hosts for VERBATIM-bit dtypes (T720/T907 readers, 2–5×).
-//	H. a regexp.Compile/MustCompile inside a loop — recompiles the pattern every
+//	PS2005. a regexp.Compile/MustCompile inside a loop — recompiles the pattern every
 //	   iteration; hoist it out.
-//	I. a per-element visitor (readGen/fillGen/visitGen/…) fed a CLOSURE — an
+//	PS1002. a per-element visitor (readGen/fillGen/visitGen/…) fed a CLOSURE — an
 //	   indirect call per element even on its contiguous branch; add a raw-slice
 //	   fast path (SWA/EMA/GradAccum 1.6–4.2×). (Ex tools/perfscan P1.)
-//	J. a package-qualified sort (sort.Slice/SliceStable/Sort, slices.SortFunc/…)
+//	PS3002. a package-qualified sort (sort.Slice/SliceStable/Sort, slices.SortFunc/…)
 //	   with a comparator — a per-comparison indirect call; radix on the key bits
 //	   when it is a monotonic float/int over a large slice (top-p 1.9–2.25×).
 //	   (Ex tools/perfscan P2.)
-//	K. a scalar libm transcendental (math.Exp/Tanh/Erf/Log/…) in a loop while the
+//	PS4002. a scalar libm transcendental (math.Exp/Tanh/Erf/Log/…) in a loop while the
 //	   SAME kernel calls a vectorized v*F32/F64 sibling for another dtype — the
 //	   scalar dtype branch is a SIMD candidate (F64 SwiGLU SiLU vexp = 1.52× Llama
 //	   prefill, T667). CAVEAT: first check the op is not under a bit-exact CPU==Ref
 //	   invariant (f64 exp/log/tanh/sigmoid/gelu are locked; OpSiLU/F64 is not).
-//	L. a loop calls a package-local elementwise helper that WRAPS a libm
+//	PS4003. a loop calls a package-local elementwise helper that WRAPS a libm
 //	   transcendental (softplus/mish/swish/…) — K sees only a DIRECT math.X, so this
 //	   hides the scalar cost one call deep (F64 OpSoftplus vsoftplus = 1.62× Mamba).
-//	M. a READ of an integer-keyed map (map[int]/map[rune]/…, sets excluded) inside a
+//	PS3003. a READ of an integer-keyed map (map[int]/map[rune]/…, sets excluded) inside a
 //	   loop — when the keys are dense over [0,N) a []T indexed by the key drops the
 //	   per-lookup hash (BPE Decode 2.85×, GGUF Decode 3.67×, forest votes T312).
-//	N. a slice make() bound to a NON-escaping local inside a per-item loop of a
+//	PS2004. a slice make() bound to a NON-escaping local inside a per-item loop of a
 //	   pointer-receiver method — per-call scratch reallocated every call; hoist it to a
 //	   reused receiver field (Adafactor/Cautious/LAMB/Grokfast Step, 1.2–1.6×, →0 allocs).
-//	O. a divide by a loop-invariant SCALAR on every element of an element-wise arithmetic
+//	PS5001. a divide by a loop-invariant SCALAR on every element of an element-wise arithmetic
 //	   loop — hoist inv:=1/D and multiply (SoftCap VJP 1.28×, optimizer bias-corrections
 //	   1.1–1.3×). SAFE ONLY for continuous outputs (½ulp), NEVER feeding round/quantize.
 //
@@ -56,34 +56,58 @@
 // the ad-hoc awk scans in docs/perf-notes-training.md with an AST-accurate,
 // comment/string-safe, CI-wirable pass.
 //
+// CHECK IDs. Every detector has a stable, staticcheck-style ID: the prefix PS
+// plus a four-digit number whose thousands digit groups the detector — PS1xxx
+// per-element access, PS2xxx allocation, PS3xxx indirection/reflection, PS4xxx
+// vectorization, PS5xxx arithmetic. The ID is what a report line, -checks,
+// -exclude and a //perfscan:ignore directive all name; the descriptive category
+// (per-element-dispatch, …) is accepted everywhere as an alias. `-list` prints
+// the full table (ID, category, whether -fix can rewrite it, and a one-line title).
+//
 // Usage:
 //
-//	go run ./internal/perfscan ./...             # scan the whole module (advisory)
-//	go run ./internal/perfscan ./nn/...          # scan one subtree
-//	go run ./internal/perfscan -strict ./nn      # exit 1 if any candidate is found
-//	go run ./internal/perfscan -tests ./...      # include _test.go files
-//	go run ./internal/perfscan -list             # list the detector classes (A…O)
-//	go run ./internal/perfscan -exclude=K,I ./…  # silence whole classes repo-wide
+//	go run ./internal/perfscan ./...                  # scan the whole module (advisory)
+//	go run ./internal/perfscan ./nn/...               # scan one subtree
+//	go run ./internal/perfscan -list                  # list the checks (ID, category, fixable, title)
+//	go run ./internal/perfscan -strict ./nn           # exit 1 if any finding is reported (CI gating)
+//	go run ./internal/perfscan -tests ./...           # include _test.go files
+//	go run ./internal/perfscan -checks=PS1001 ./...    # run ONLY these checks (allow-list)
+//	go run ./internal/perfscan -exclude=PS4002 ./...   # silence these checks repo-wide
+//	go run ./internal/perfscan -fix ./...             # apply the safe mechanical fixes in place
+//	go run ./internal/perfscan -json ./...            # emit findings + fixes as JSON (editor / VS Code)
 //
-// SUPPRESSING FINDINGS (staticcheck-style, class-granular). Silencing one class
-// never hides another — so a site you deliberately accept for class X still
-// reports a NEW, unrelated class Y:
+// AUTO-FIX (-fix) and EDITOR INTEGRATION (-json). Only checks whose rewrite is
+// deterministic AND bit-identical carry a fix (see the FIX column of -list; today
+// PS2005 regexp-compile-in-loop hoists a literal-pattern compile out of the loop).
+// Everything else is advisory by design — a per-element→typed rewrite needs an A/B
+// measurement + a bit-identity proof (§C3/§V22) a static tool cannot give, so
+// perfscan reports the shape and leaves the transform to a human. -fix applies the
+// safe fixes in place (review the diff — even these want an A/B before shipping);
+// -json emits every finding, with any fix's text edits (line:col ranges + byte
+// offsets + replacement text), for a VS Code task/extension to surface as a
+// quick-fix.
 //
-//	//perfscan:ignore K reason        // silence ONLY class K on the next (or same) line
-//	//perfscan:ignore K,I reason      // silence several classes; letters or categories
-//	//perfscan:ignore scalar-transcendental-vectorizable reason  // by category name
-//	//perfscan:ignore                 // bare: silence ALL classes at that site
-//	-exclude=K,per-element-closure    // silence whole classes for the whole run
+// SUPPRESSING FINDINGS (staticcheck-style, per-check). Silencing one check never
+// hides another — so a site you deliberately accept for PS1001 still reports a
+// NEW, unrelated PS2002. Name a check by ID (precise — the "ignore only this
+// explicit detection" path) or by its category alias:
 //
-// The class names are the LETTER codes (A…O) or the CATEGORY strings printed in
-// the report (copy-paste from a report line); `-list` prints both.
+//	//perfscan:ignore PS1001 reason        // silence ONLY PS1001 on the next (or same) line
+//	//perfscan:ignore PS1001,PS3003 reason  // silence several checks; IDs or categories
+//	//perfscan:ignore per-element-dispatch reason  // by category alias
+//	//perfscan:ignore                      // bare: silence ALL checks at that site
+//	-exclude=PS4002,per-element-closure    // silence checks for the whole run
+//	-checks=PS1001,PS2002                  // run ONLY these (allow-list; -exclude still subtracts)
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"go/ast"
 	"go/parser"
+	"go/printer"
 	"go/token"
 	"os"
 	"path/filepath"
@@ -94,32 +118,77 @@ import (
 // finding is one candidate anti-pattern occurrence, anchored to the enclosing loop.
 type finding struct {
 	pos      token.Position
-	category string // one of classes[].category (see below)
+	end      token.Position // end of the flagged node (for -json ranges / editor highlight); zero ⇒ unset
+	id       string         // PS1001… — filled from category at report time
+	category string         // one of checks[].category (see below)
 	msg      string
+	fix      *suggestedFix // nil ⇒ advisory (no safe mechanical rewrite)
 }
 
-// classes is the registry of detectors: a short LETTER code (A…O, as used in the
-// package doc) paired with the CATEGORY string printed in the output. An ignore
-// directive or the -exclude flag may name EITHER — the copy-pasteable category
-// from a report line, or the terse letter. This is what makes suppression
-// class-granular (staticcheck-style): silencing one class never hides another.
-var classes = []struct{ letter, category string }{
-	{"A", "per-element-dispatch"},
-	{"B", "alloc-in-loop"},
-	{"C", "batch-single-elt"},
-	{"D", "reflection-in-loop"},
-	{"E", "unsized-builder"},
-	{"F", "strings-alloc-in-loop"},
-	{"G", "le-decode-in-loop"},
-	{"H", "regexp-compile-in-loop"},
-	{"I", "per-element-closure"},
-	{"J", "closure-comparator-sort"},
-	{"K", "scalar-transcendental-vectorizable"},
-	{"L", "transcendental-wrapper-in-loop"},
-	{"M", "int-key-map-in-loop"},
-	{"N", "poolable-loop-scratch"},
-	{"O", "loop-invariant-divide"},
+// suggestedFix is a staticcheck/gopls-style rewrite: a human title plus the byte
+// edits that realise it. -fix applies the edits in place; -json emits them so an
+// editor (VS Code) can offer the quick-fix. Only checks with a DETERMINISTIC,
+// bit-identical rewrite carry one (see checks[].fixable); everything else is
+// advisory by design — most perf patterns need an A/B + bit-identity proof a
+// static tool cannot give (§C3/§V22).
+type suggestedFix struct {
+	title string
+	edits []textEdit
 }
+
+// textEdit replaces the half-open range [start,end) with newText. Positions are
+// token.Pos values resolved through the FileSet, so both a byte offset (for -fix)
+// and a line:col range (for -json / an editor) derive from the same source.
+type textEdit struct {
+	start, end token.Pos
+	newText    string
+}
+
+// check is one detector. The stable public ID is a PREFIX (PS) + a four-digit
+// number whose THOUSANDS digit groups the detector (staticcheck-style, e.g.
+// SA1xxx/S1xxx): PS1xxx per-element access, PS2xxx allocation, PS3xxx
+// indirection/reflection, PS4xxx vectorization, PS5xxx arithmetic. The ID is
+// what -checks and //perfscan:ignore name; the descriptive category is accepted
+// as an alias. fixable marks checks that -fix can rewrite automatically.
+type check struct {
+	id       string
+	category string
+	title    string
+	fixable  bool
+}
+
+// checks is the detector registry (order = report/-list order = ID order).
+var checks = []check{
+	// PS1xxx — per-element access in hot loops
+	{"PS1001", "per-element-dispatch", "per-element AtF64/SetF64 dispatch in a Numel/Unravel loop with no typed fast path", false},
+	{"PS1002", "per-element-closure", "per-element visitor fed a closure (an indirect call per element)", false},
+	{"PS1003", "batch-single-elt", "a batch API called with a single-element slice literal inside a loop", false},
+	// PS2xxx — allocation inside loops
+	{"PS2001", "alloc-in-loop", "a tensor allocation inside a per-element loop", false},
+	{"PS2002", "unsized-builder", "a strings.Builder/bytes.Buffer written in a loop with no .Grow", false},
+	{"PS2003", "strings-alloc-in-loop", "an allocating strings transform (Replace/Map/Repeat) in a loop", false},
+	{"PS2004", "poolable-loop-scratch", "per-call scratch make() bound to a non-escaping local in a pointer-method loop", false},
+	{"PS2005", "regexp-compile-in-loop", "a regexp.Compile/MustCompile inside a loop", true},
+	// PS3xxx — indirection / reflection overhead
+	{"PS3001", "reflection-in-loop", "a reflection-based fmt scan (Sscanf/Sscan/Fscanf) in a loop", false},
+	{"PS3002", "closure-comparator-sort", "a package sort (sort.Slice/SliceStable) with a comparator closure", false},
+	{"PS3003", "int-key-map-in-loop", "a read of an integer-keyed map inside a loop", false},
+	// PS4xxx — vectorization candidates
+	{"PS4001", "le-decode-in-loop", "a per-element little-endian bit decode in a loop with no bulk-copy fast path", false},
+	{"PS4002", "scalar-transcendental-vectorizable", "a scalar libm transcendental in a loop while a vectorized sibling is called", false},
+	{"PS4003", "transcendental-wrapper-in-loop", "a loop calls a helper that wraps a libm transcendental", false},
+	// PS5xxx — arithmetic
+	{"PS5001", "loop-invariant-divide", "a divide by a loop-invariant scalar on every element", false},
+}
+
+// catToID indexes the registry for O(1) id lookup at report time.
+var catToID = func() map[string]string {
+	m := make(map[string]string, len(checks))
+	for _, c := range checks {
+		m[c.category] = c.id
+	}
+	return m
+}()
 
 // loopAssignedIdents returns the set of identifier names that a loop MUTATES — the LHS
 // of every assignment/inc-dec in its body, plus the loop's own iteration variables. A
@@ -182,7 +251,7 @@ func loopBodyNode(loop ast.Node) ast.Node {
 
 // loopHasIndexAccess reports whether a loop's body indexes a slice/array (a[i]) — the
 // element-wise shape that makes a per-iteration divide worth vectorizing (and keeps
-// scalar/integer bookkeeping loops out of detector O's signal).
+// scalar/integer bookkeeping loops out of detector PS5001's signal).
 func loopHasIndexAccess(loop ast.Node) bool {
 	body := loopBodyNode(loop)
 	if body == nil {
@@ -276,7 +345,7 @@ func isPointerMethod(fn *ast.FuncDecl) bool {
 }
 
 // integerKeyType reports whether e names a Go integer type — the map key that, when
-// dense over [0,N), a []T indexed by the key can replace (detector M).
+// dense over [0,N), a []T indexed by the key can replace (detector PS3003).
 func integerKeyType(e ast.Expr) bool {
 	id, ok := e.(*ast.Ident)
 	if !ok {
@@ -358,12 +427,15 @@ func indexedMapName(e ast.Expr) string {
 	return ""
 }
 
-// resolveClass maps a user token (a letter code OR a category string,
-// case-insensitive) to its canonical category, or "" if it names no class.
+// resolveClass maps a user token — a check ID (PS1001) OR a category string
+// (per-element-dispatch), case-insensitive — to its canonical category, or ""
+// if it names no check. This is what makes -checks/-exclude and //perfscan:ignore
+// name a check PRECISELY by its ID (the "ignore only this explicit detection"
+// path) while still accepting the readable category as an alias.
 func resolveClass(tok string) string {
 	tok = strings.TrimSpace(tok)
-	for _, c := range classes {
-		if strings.EqualFold(tok, c.letter) || strings.EqualFold(tok, c.category) {
+	for _, c := range checks {
+		if strings.EqualFold(tok, c.id) || strings.EqualFold(tok, c.category) {
 			return c.category
 		}
 	}
@@ -422,6 +494,44 @@ var stringsAllocCallees = map[string]bool{
 // pattern every iteration (a classic O(n)-compiles bug) — hoist the compile out.
 var regexpCompileCallees = map[string]bool{
 	"Compile": true, "MustCompile": true, "CompilePOSIX": true, "MustCompilePOSIX": true,
+}
+
+// regexpHoistFix is the -fix rewrite for PS2005: hoist a loop-invariant
+// regexp.Compile of a STRING-LITERAL pattern into a fresh variable declared just
+// above the loop, and replace the in-loop call with it. A compiled *regexp.Regexp
+// is immutable and safe to reuse, so this is bit-identical; declaring it before the
+// loop compiles once per call instead of once per iteration.
+//
+// It returns nil (advisory, no auto-fix) unless the sole argument is a plain string
+// literal — a computed pattern may reference the loop variable, where hoisting would
+// change behaviour. gofmt-style tab indentation is assumed for the inserted line.
+func regexpHoistFix(fset *token.FileSet, loop ast.Node, call *ast.CallExpr) *suggestedFix {
+	if len(call.Args) != 1 {
+		return nil
+	}
+	if lit, ok := call.Args[0].(*ast.BasicLit); !ok || lit.Kind != token.STRING {
+		return nil
+	}
+	var buf bytes.Buffer
+	if err := printer.Fprint(&buf, fset, call); err != nil {
+		return nil
+	}
+	lp := fset.Position(loop.Pos())
+	if lp.Column < 1 {
+		return nil
+	}
+	name := fmt.Sprintf("perfscanRe%d", lp.Line) // unique per loop (loops start on distinct lines)
+	indent := strings.Repeat("\t", lp.Column-1)
+	return &suggestedFix{
+		title: "hoist the compile above the loop (compile once, reuse)",
+		edits: []textEdit{
+			// insert "<name> := <call>\n<indent>" at the loop's first token (after its
+			// existing indent), so the decl and the loop line up.
+			{start: loop.Pos(), end: loop.Pos(), newText: name + " := " + buf.String() + "\n" + indent},
+			// replace the in-loop compile call with the hoisted variable.
+			{start: call.Pos(), end: call.End(), newText: name},
+		},
+	}
 }
 
 // leUintCallees / mathBitsCallees are per-element little-endian binary readers. On a
@@ -487,7 +597,7 @@ func calleeName(fun ast.Expr) string {
 
 // isSingleEltNestedSliceLit reports whether e is a one-element NESTED-slice literal
 // such as [][]float64{row} — the shape of wrapping one ROW to feed a batch API
-// (detector C, the forest-predict case). The element type must itself be a
+// (detector PS1003, the forest-predict case). The element type must itself be a
 // slice/array: that excludes []*tensor.Tensor{x}, the canonical single-INPUT
 // op-argument list (backend.Execute), which is not a batch-wrap and was the sole
 // source of false positives on the first module-wide run.
@@ -507,7 +617,7 @@ func isSingleEltNestedSliceLit(e ast.Expr) bool {
 // perElemVisitors are helpers that invoke their function-literal argument ONCE
 // PER ELEMENT. Passing a closure to them means an indirect call per element even
 // on their contiguous fast branch — the cost that made SWA/EMA/GradAccum/GradFn
-// 1.6–4.2× slower than a raw-slice loop (detector I; formerly tools/perfscan P1).
+// 1.6–4.2× slower than a raw-slice loop (detector PS1002; formerly tools/perfscan P1).
 var perElemVisitors = map[string]bool{
 	"readGen": true, "fillGen": true, "visitGen": true, "forEach": true, "eachElem": true,
 }
@@ -517,14 +627,14 @@ var perElemVisitors = map[string]bool{
 // homonyms — ops.Slice, tensor.Slice, a local Sort method — do NOT false-match. On
 // a large slice keyed by a monotonic float/int the per-comparison indirect call
 // dominates — an LSD radix on the key bits made top-p / typical sampling 1.9–2.25×
-// faster (detector J; formerly tools/perfscan P2).
+// faster (detector PS3002; formerly tools/perfscan P2).
 var sortClosureCallees = map[string]bool{"Slice": true, "SliceStable": true, "Sort": true}
 var slicesClosureCallees = map[string]bool{"SortFunc": true, "SortStableFunc": true}
 
 // scalarTranscendentals are libm calls whose per-element cost dominates an
 // elementwise kernel. When one dtype branch runs them scalar in a loop while the
 // same kernel calls a hand-vectorized v*F32/F64 sibling for another dtype, the
-// scalar branch is a candidate for the same SIMD treatment (detector K). The F64
+// scalar branch is a candidate for the same SIMD treatment (detector PS4002). The F64
 // SwiGLU SiLU was exactly this — scalar math.Exp on the f64 branch, vsiluF32 on
 // the f32 branch — and an AVX2 f64 exp gave 1.52× Llama prefill.
 var scalarTranscendentals = map[string]bool{
@@ -613,11 +723,11 @@ func ignoreDirectives(fset *token.FileSet, f *ast.File) map[int]map[string]bool 
 func scanFile(fset *token.FileSet, f *ast.File) []finding {
 	var out []finding
 	// File-scoped fact: the package-local elementwise funcs that WRAP a libm
-	// transcendental (softplus, mish, swish, …). Class K only sees a DIRECT math.X
+	// transcendental (softplus, mish, swish, …). Class PS4002 only sees a DIRECT math.X
 	// in the loop; these hide it one call deep, so a hot per-element loop over them
-	// reads as scalar-clean. Class L flags calls to them inside loops.
+	// reads as scalar-clean. Class PS4003 flags calls to them inside loops.
 	wrappers := transcendentalWrappers(f)
-	// File-scoped fact: names declared as integer-keyed maps (detector M) — indexing
+	// File-scoped fact: names declared as integer-keyed maps (detector PS3003) — indexing
 	// them in a loop is a dense-slice (map→slice) candidate.
 	intKeyMaps := intKeyMapNames(f)
 	for _, decl := range f.Decls {
@@ -645,7 +755,7 @@ func scanFile(fset *token.FileSet, f *ast.File) []finding {
 // transcendentalWrappers collects package-local funcs that are scalar float→float
 // AND call a libm transcendental in their body — the elementwise activations
 // (softplus, mish, swish, erf-based …) a hot loop may invoke per element. Because
-// the math.X hides one call deep, class K's direct-call detector never sees it.
+// the math.X hides one call deep, class PS4002's direct-call detector never sees it.
 func transcendentalWrappers(f *ast.File) map[string]bool {
 	w := map[string]bool{}
 	for _, decl := range f.Decls {
@@ -695,16 +805,16 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	// Pass 1: function-scoped facts + a child→parent map for ancestor walks.
 	hasFlat := false
 	hasBuilder := false // declares a strings.Builder / bytes.Buffer
-	hasGrow := false    // …and calls .Grow on it (so it is pre-sized — detector E stays silent)
+	hasGrow := false    // …and calls .Grow on it (so it is pre-sized — detector PS2002 stays silent)
 	hasLEBulk := false  // calls rawCopyLE/rawStoreLE (the LE bulk-copy fast path is present, so a
 	//                     per-element binary decode in the same function is the intended big-endian
-	//                     fallback, not a candidate — detector G stays silent, mirroring hasFlat/A)
+	//                     fallback, not a candidate — detector PS4001 stays silent, mirroring hasFlat/A)
 	hasVectorSibling := false // calls a v*F32/F64 / xN SIMD helper (another dtype branch is
-	//                          hand-vectorized) → a scalar transcendental here is detector K
+	//                          hand-vectorized) → a scalar transcendental here is detector PS4002
 	numelIdents := map[string]bool{}
 	// escaping: locals that outlive a loop iteration — returned, or stored by reference
 	// into a field/slot (recv.f = x, ring[i] = x). Such a buffer is NOT simple reusable
-	// scratch (detector N stays silent), even though some, like a ring slot, are poolable
+	// scratch (detector PS2004 stays silent), even though some, like a ring slot, are poolable
 	// by a different fix (pre-allocate the slot). A make() feeding one is deliberately
 	// excluded to keep N's "hoist to a reused field" advice correct.
 	escaping := map[string]bool{}
@@ -744,7 +854,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 			}
 			// A local used as a value in a struct/slice/map literal is stored by reference
 			// into it and outlives the loop iteration — e.g. State{a: a} or []T{buf}. Mark it
-			// escaping so detector N does not mis-flag it as reusable scratch.
+			// escaping so detector PS2004 does not mis-flag it as reusable scratch.
 			for _, elt := range x.Elts {
 				switch e := elt.(type) {
 				case *ast.KeyValueExpr:
@@ -771,7 +881,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 				}
 			}
 			// A local stored by reference into a field/slot escapes the loop: recv.f = x,
-			// ring[i] = x, m[p] = x. Mark the RHS ident (detector N excludes it).
+			// ring[i] = x, m[p] = x. Mark the RHS ident (detector PS2004 excludes it).
 			for i, lhs := range x.Lhs {
 				switch lhs.(type) {
 				case *ast.SelectorExpr, *ast.IndexExpr:
@@ -878,7 +988,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 		}
 		// G: a per-element little-endian bit decode in a loop — a memcpy in disguise on LE hosts.
 		// Silent when the function already has a rawCopyLE/rawStoreLE fast path (the loop is then
-		// the big-endian fallback, not a candidate — the hasFlat discipline of detector A).
+		// the big-endian fallback, not a candidate — the hasFlat discipline of detector PS1001).
 		if bname, ok := binaryDecodeCall(call.Fun); ok && !hasLEBulk {
 			out = append(out, finding{
 				pos:      fset.Position(loop.Pos()),
@@ -888,13 +998,14 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 					" (2–5×). A quant-widen path genuinely decodes per-element — triage before acting.", bname),
 			})
 		}
-		// H: a regexp compile inside a loop — recompiles the same pattern every iteration.
+		// PS2005: a regexp compile inside a loop — recompiles the pattern every iteration.
 		if rname, ok := pkgFuncCall(call.Fun, "regexp", regexpCompileCallees); ok {
 			out = append(out, finding{
 				pos:      fset.Position(loop.Pos()),
 				category: "regexp-compile-in-loop",
 				msg: fmt.Sprintf("regexp.%s in a loop — recompiles the pattern on every iteration;"+
 					" hoist the compile above the loop (compile once, match many)", rname),
+				fix: regexpHoistFix(fset, loop, call),
 			})
 		}
 		// K: a scalar libm transcendental in a loop while THIS kernel already calls a
@@ -1100,7 +1211,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 		return true
 	})
 
-	// Pass 5 (detector M): a READ of an integer-keyed map inside a loop. When the keys
+	// Pass 5 (detector PS3003): a READ of an integer-keyed map inside a loop. When the keys
 	// are dense over [0,N), a []T indexed by the key replaces the per-lookup hash. One
 	// finding per loop; pure map-build writes (m[k] = v) are skipped.
 	if len(intKeyMaps) > 0 {
@@ -1236,36 +1347,59 @@ func dedup(in []finding) []finding {
 // --- CLI ---
 
 func main() {
-	strict := flag.Bool("strict", false, "exit 1 if any candidate is found (for optional CI gating)")
+	strict := flag.Bool("strict", false, "exit 1 if any finding is reported (optional CI gating)")
 	tests := flag.Bool("tests", false, "include _test.go files")
-	exclude := flag.String("exclude", "", "comma-separated classes to silence repo-wide (letter A…M or category, e.g. -exclude=K,per-element-closure); the rest still report")
-	list := flag.Bool("list", false, "list the detector classes (letter + category) and exit")
+	checksFlag := flag.String("checks", "", "comma-separated allow-list of checks to run, by ID (PS1001) or category; empty = all")
+	exclude := flag.String("exclude", "", "comma-separated checks to silence, by ID (PS1001) or category")
+	list := flag.Bool("list", false, "list the checks (ID, category, title, fixable) and exit")
+	doFix := flag.Bool("fix", false, "apply the safe mechanical fixes in place (fixable checks only; see -list)")
+	jsonOut := flag.Bool("json", false, "emit findings and fixes as JSON (for editor / tool integration)")
 	flag.Parse()
+
 	if *list {
-		fmt.Println("perfscan detector classes (name either in -exclude or a //perfscan:ignore directive):")
-		for _, c := range classes {
-			fmt.Printf("  %s  %s\n", c.letter, c.category)
+		fmt.Println("perfscan checks — name any in -checks, -exclude, or a //perfscan:ignore directive (by ID or category):")
+		fmt.Printf("  %-8s %-4s %-38s %s\n", "ID", "FIX", "CATEGORY", "TITLE")
+		for _, c := range checks {
+			fix := "—"
+			if c.fixable {
+				fix = "yes"
+			}
+			fmt.Printf("  %-8s %-4s %-38s %s\n", c.id, fix, c.category, c.title)
 		}
 		return
 	}
-	// resolve -exclude tokens (letter or category) to canonical categories.
-	excluded := map[string]bool{}
-	for _, tok := range strings.Split(*exclude, ",") {
-		if tok = strings.TrimSpace(tok); tok == "" {
-			continue
+
+	// Build the enabled set: -checks is an allow-list (empty ⇒ all checks), then
+	// -exclude subtracts. Both accept a check ID (PS1001) or its category alias, so a
+	// single explicit detection can be silenced precisely without touching the others.
+	enabled := map[string]bool{}
+	if toks := splitTokens(*checksFlag); len(toks) > 0 {
+		for _, tok := range toks {
+			cat := resolveClass(tok)
+			if cat == "" {
+				fmt.Fprintf(os.Stderr, "perfscan: -checks: unknown check %q (see -list)\n", tok)
+				os.Exit(2)
+			}
+			enabled[cat] = true
 		}
+	} else {
+		for _, c := range checks {
+			enabled[c.category] = true
+		}
+	}
+	for _, tok := range splitTokens(*exclude) {
 		cat := resolveClass(tok)
 		if cat == "" {
-			fmt.Fprintf(os.Stderr, "perfscan: -exclude: unknown class %q (see -list)\n", tok)
+			fmt.Fprintf(os.Stderr, "perfscan: -exclude: unknown check %q (see -list)\n", tok)
 			os.Exit(2)
 		}
-		excluded[cat] = true
+		delete(enabled, cat)
 	}
+
 	roots := flag.Args()
 	if len(roots) == 0 {
 		roots = []string{"./..."}
 	}
-
 	files, err := goFiles(roots, *tests)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "perfscan:", err)
@@ -1281,7 +1415,8 @@ func main() {
 			continue
 		}
 		for _, fd := range scanFile(fset, f) {
-			if !excluded[fd.category] {
+			if enabled[fd.category] {
+				fd.id = catToID[fd.category]
 				all = append(all, fd)
 			}
 		}
@@ -1290,26 +1425,189 @@ func main() {
 		if all[i].pos.Filename != all[j].pos.Filename {
 			return all[i].pos.Filename < all[j].pos.Filename
 		}
-		return all[i].pos.Line < all[j].pos.Line
+		if all[i].pos.Line != all[j].pos.Line {
+			return all[i].pos.Line < all[j].pos.Line
+		}
+		return all[i].id < all[j].id
 	})
 
-	byCat := map[string]int{}
+	if *jsonOut {
+		emitJSON(fset, all)
+		if *strict && len(all) > 0 {
+			os.Exit(1)
+		}
+		return
+	}
+
+	if *doFix {
+		nFix, nFile := applyFixes(fset, all)
+		nSkip := 0
+		for _, f := range all {
+			if f.fix == nil {
+				nSkip++
+			}
+		}
+		fmt.Printf("perfscan: applied %d fix(es) across %d file(s); %d finding(s) have no safe mechanical fix (advisory — see -list)\n", nFix, nFile, nSkip)
+		fmt.Println("NOTE: even applied fixes need an A/B + bit-identity check before shipping (§C3/§V22); review the diff.")
+		return
+	}
+
+	// Text report — staticcheck-style "pos: message (PS1001)"; a fixable finding is
+	// tagged so -fix / an editor quick-fix is discoverable.
+	byID := map[string]int{}
+	nFixable := 0
 	for _, f := range all {
-		fmt.Printf("%s: [%s] %s\n", f.pos, f.category, f.msg)
-		byCat[f.category]++
+		tag := f.id
+		if f.fix != nil {
+			tag = f.id + ", fixable"
+			nFixable++
+		}
+		fmt.Printf("%s: %s (%s)\n", f.pos, f.msg, tag)
+		byID[f.id]++
 	}
 	if len(all) == 0 {
 		fmt.Println("perfscan: no candidate anti-patterns found")
 		return
 	}
-	fmt.Printf("\nperfscan: %d candidate(s) — dispatch=%d alloc-in-loop=%d batch-single-elt=%d"+
-		" per-elem-closure=%d closure-sort=%d scalar-transcendental=%d transcendental-wrapper=%d\n",
-		len(all), byCat["per-element-dispatch"], byCat["alloc-in-loop"], byCat["batch-single-elt"],
-		byCat["per-element-closure"], byCat["closure-comparator-sort"], byCat["scalar-transcendental-vectorizable"],
-		byCat["transcendental-wrapper-in-loop"])
+	var counts []string
+	for _, c := range checks {
+		if n := byID[c.id]; n > 0 {
+			counts = append(counts, fmt.Sprintf("%s=%d", c.id, n))
+		}
+	}
+	fmt.Printf("\nperfscan: %d candidate(s) — %s\n", len(all), strings.Join(counts, " "))
+	if nFixable > 0 {
+		fmt.Printf("perfscan: %d have a safe mechanical fix — run `perfscan -fix` (or `-json` for an editor)\n", nFixable)
+	}
 	fmt.Println("NOTE: candidates, not confirmed wins — measure hotness (§C3) + prove bit-identity (§V22) before shipping.")
 	if *strict {
 		os.Exit(1)
+	}
+}
+
+// splitTokens splits a comma list, trimming blanks.
+func splitTokens(s string) []string {
+	var out []string
+	for _, tok := range strings.Split(s, ",") {
+		if tok = strings.TrimSpace(tok); tok != "" {
+			out = append(out, tok)
+		}
+	}
+	return out
+}
+
+// applyFixes rewrites every finding that carries a suggestedFix, in place. Edits
+// are grouped per file and applied HIGH-offset-first so earlier offsets stay valid.
+// It returns (edits applied, files touched). Overlapping edits within a file are
+// dropped defensively (first-wins) so a fix can never corrupt the source.
+func applyFixes(fset *token.FileSet, all []finding) (int, int) {
+	type off struct {
+		start, end int
+		text       string
+	}
+	perFile := map[string][]off{}
+	for _, f := range all {
+		if f.fix == nil {
+			continue
+		}
+		for _, e := range f.fix.edits {
+			ps, pe := fset.Position(e.start), fset.Position(e.end)
+			perFile[ps.Filename] = append(perFile[ps.Filename], off{ps.Offset, pe.Offset, e.newText})
+		}
+	}
+	nEdit, nFile := 0, 0
+	for name, edits := range perFile {
+		src, err := os.ReadFile(name)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "perfscan -fix: read %s: %v\n", name, err)
+			continue
+		}
+		sort.Slice(edits, func(i, j int) bool { return edits[i].start > edits[j].start })
+		out := append([]byte(nil), src...)
+		lastStart := len(src) + 1
+		applied := 0
+		for _, e := range edits {
+			if e.start < 0 || e.end > len(out) || e.start > e.end || e.end > lastStart {
+				continue // out of range or overlaps a later (already-applied) edit
+			}
+			out = append(out[:e.start], append([]byte(e.text), out[e.end:]...)...)
+			lastStart = e.start
+			applied++
+		}
+		if applied == 0 {
+			continue
+		}
+		if err := os.WriteFile(name, out, 0o644); err != nil {
+			fmt.Fprintf(os.Stderr, "perfscan -fix: write %s: %v\n", name, err)
+			continue
+		}
+		nEdit += applied
+		nFile++
+	}
+	return nEdit, nFile
+}
+
+// jsonEdit / jsonFix / jsonFinding are the -json wire shapes. Positions are 1-based
+// line and 1-based column (byte); ranges are half-open. An editor can build a
+// quick-fix straight from fix.edits, and a range from {line,col}→{endLine,endCol}.
+type jsonEdit struct {
+	Line    int    `json:"line"`
+	Col     int    `json:"col"`
+	EndLine int    `json:"endLine"`
+	EndCol  int    `json:"endCol"`
+	Offset  int    `json:"offset"`
+	EndOff  int    `json:"endOffset"`
+	NewText string `json:"newText"`
+}
+
+type jsonFix struct {
+	Title string     `json:"title"`
+	Edits []jsonEdit `json:"edits"`
+}
+
+type jsonFinding struct {
+	ID       string   `json:"id"`
+	Category string   `json:"category"`
+	File     string   `json:"file"`
+	Line     int      `json:"line"`
+	Col      int      `json:"col"`
+	EndLine  int      `json:"endLine,omitempty"`
+	EndCol   int      `json:"endCol,omitempty"`
+	Message  string   `json:"message"`
+	Fixable  bool     `json:"fixable"`
+	Fix      *jsonFix `json:"fix,omitempty"`
+}
+
+// emitJSON writes the findings as a JSON array to stdout.
+func emitJSON(fset *token.FileSet, all []finding) {
+	out := make([]jsonFinding, 0, len(all))
+	for _, f := range all {
+		jf := jsonFinding{
+			ID: f.id, Category: f.category, File: f.pos.Filename,
+			Line: f.pos.Line, Col: f.pos.Column, Message: f.msg,
+			Fixable: f.fix != nil,
+		}
+		if f.end.IsValid() {
+			jf.EndLine, jf.EndCol = f.end.Line, f.end.Column
+		}
+		if f.fix != nil {
+			jx := &jsonFix{Title: f.fix.title}
+			for _, e := range f.fix.edits {
+				ps, pe := fset.Position(e.start), fset.Position(e.end)
+				jx.Edits = append(jx.Edits, jsonEdit{
+					Line: ps.Line, Col: ps.Column, EndLine: pe.Line, EndCol: pe.Column,
+					Offset: ps.Offset, EndOff: pe.Offset, NewText: e.newText,
+				})
+			}
+			jf.Fix = jx
+		}
+		out = append(out, jf)
+	}
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(out); err != nil {
+		fmt.Fprintln(os.Stderr, "perfscan -json:", err)
+		os.Exit(2)
 	}
 }
 
