@@ -255,13 +255,20 @@ func (b *QuantMamba2Mixer) forward(ctx *backend.Context, u *tensor.Tensor) (*ten
 	for t := range seq {
 		xc[t] = make([]float64, b.ConvDim)
 	}
+	cwrow := make([]float64, b.DConv) // conv weights for channel c, hoisted out of the t loop
 	for c := range b.ConvDim {
+		// convB[c] and convW[c,:] are constant across timesteps but were re-dispatched via
+		// AtF64 for every t; hoist them once per channel (bit-identical; ~2× on the conv).
+		cbv := convB.AtF64(c)
+		for k := range b.DConv {
+			cwrow[k] = convW.AtF64(c, k)
+		}
 		for t := range seq {
-			acc := convB.AtF64(c)
+			acc := cbv
 			for k := range b.DConv {
 				src := t - (b.DConv - 1) + k
 				if src >= 0 {
-					acc += convW.AtF64(c, k) * xBC[src][c]
+					acc += cwrow[k] * xBC[src][c]
 				}
 			}
 			xc[t][c] = silu(acc)
