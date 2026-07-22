@@ -1,7 +1,7 @@
 // Command perfscan is a static finder for the per-element hot-loop anti-patterns
 // this codebase repeatedly optimizes away (§base-perf-sweep). It parses Go source
 // with go/ast — it never builds or imports the packages, so cgo/build-tagged
-// backends are scanned too — and reports the STRUCTURAL SHAPE of eleven patterns
+// backends are scanned too — and reports the STRUCTURAL SHAPE of thirteen patterns
 // (this is the SINGLE perfscan for the repo — the earlier tools/perfscan P1/P2
 // prototype was folded in here as detectors I/J):
 //
@@ -36,6 +36,12 @@
 //	   scalar dtype branch is a SIMD candidate (F64 SwiGLU SiLU vexp = 1.52× Llama
 //	   prefill, T667). CAVEAT: first check the op is not under a bit-exact CPU==Ref
 //	   invariant (f64 exp/log/tanh/sigmoid/gelu are locked; OpSiLU/F64 is not).
+//	L. a loop calls a package-local elementwise helper that WRAPS a libm
+//	   transcendental (softplus/mish/swish/…) — K sees only a DIRECT math.X, so this
+//	   hides the scalar cost one call deep (F64 OpSoftplus vsoftplus = 1.62× Mamba).
+//	M. a READ of an integer-keyed map (map[int]/map[rune]/…, sets excluded) inside a
+//	   loop — when the keys are dense over [0,N) a []T indexed by the key drops the
+//	   per-lookup hash (BPE Decode 2.85×, GGUF Decode 3.67×, forest votes T312).
 //
 // IMPORTANT — these are CANDIDATES, not confirmed wins. A static check sees the
 // shape of a hot loop, never its temperature: a per-element write in a one-time
@@ -50,7 +56,7 @@
 //	go run ./internal/perfscan ./nn/...          # scan one subtree
 //	go run ./internal/perfscan -strict ./nn      # exit 1 if any candidate is found
 //	go run ./internal/perfscan -tests ./...      # include _test.go files
-//	go run ./internal/perfscan -list             # list the detector classes (A…K)
+//	go run ./internal/perfscan -list             # list the detector classes (A…M)
 //	go run ./internal/perfscan -exclude=K,I ./…  # silence whole classes repo-wide
 //
 // SUPPRESSING FINDINGS (staticcheck-style, class-granular). Silencing one class
@@ -63,7 +69,7 @@
 //	//perfscan:ignore                 // bare: silence ALL classes at that site
 //	-exclude=K,per-element-closure    // silence whole classes for the whole run
 //
-// The class names are the LETTER codes (A…K) or the CATEGORY strings printed in
+// The class names are the LETTER codes (A…M) or the CATEGORY strings printed in
 // the report (copy-paste from a report line); `-list` prints both.
 package main
 
@@ -86,7 +92,7 @@ type finding struct {
 	msg      string
 }
 
-// classes is the registry of detectors: a short LETTER code (A…K, as used in the
+// classes is the registry of detectors: a short LETTER code (A…M, as used in the
 // package doc) paired with the CATEGORY string printed in the output. An ignore
 // directive or the -exclude flag may name EITHER — the copy-pasteable category
 // from a report line, or the terse letter. This is what makes suppression
@@ -104,6 +110,90 @@ var classes = []struct{ letter, category string }{
 	{"J", "closure-comparator-sort"},
 	{"K", "scalar-transcendental-vectorizable"},
 	{"L", "transcendental-wrapper-in-loop"},
+	{"M", "int-key-map-in-loop"},
+}
+
+// integerKeyType reports whether e names a Go integer type — the map key that, when
+// dense over [0,N), a []T indexed by the key can replace (detector M).
+func integerKeyType(e ast.Expr) bool {
+	id, ok := e.(*ast.Ident)
+	if !ok {
+		return false
+	}
+	switch id.Name {
+	case "int", "int8", "int16", "int32", "int64",
+		"uint", "uint8", "uint16", "uint32", "uint64",
+		"byte", "rune", "uintptr":
+		return true
+	}
+	return false
+}
+
+// intKeyMapNames collects the local-variable and struct-field names declared with an
+// integer-keyed map type (map[int]…, map[rune]…, map[int32]…, …) anywhere in the file —
+// the lookups a hot loop can turn into a dense-slice index. Both a bare name (m[k]) and a
+// selector (t.field[k]) match by this name.
+func intKeyMapNames(f *ast.File) map[string]bool {
+	names := map[string]bool{}
+	add := func(typ ast.Expr, name string) {
+		mt, ok := typ.(*ast.MapType)
+		if !ok || !integerKeyType(mt.Key) {
+			return
+		}
+		// Skip set-like maps (map[int]bool / map[int]struct{}) — almost always a sparse
+		// membership set, not a dense [0,N) lookup a slice would replace.
+		if id, ok := mt.Value.(*ast.Ident); ok && id.Name == "bool" {
+			return
+		}
+		if st, ok := mt.Value.(*ast.StructType); ok && st.Fields != nil && len(st.Fields.List) == 0 {
+			return
+		}
+		names[name] = true
+	}
+	ast.Inspect(f, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.Field: // struct field: `decoder map[int]string`
+			for _, nm := range x.Names {
+				add(x.Type, nm.Name)
+			}
+		case *ast.ValueSpec: // var m map[int]V
+			for _, nm := range x.Names {
+				add(x.Type, nm.Name)
+			}
+		case *ast.AssignStmt: // m := make(map[int]V) / m := map[int]V{}
+			for i, rhs := range x.Rhs {
+				if i >= len(x.Lhs) {
+					break
+				}
+				id, ok := x.Lhs[i].(*ast.Ident)
+				if !ok {
+					continue
+				}
+				switch r := rhs.(type) {
+				case *ast.CallExpr:
+					if calleeName(r.Fun) == "make" && len(r.Args) > 0 {
+						add(r.Args[0], id.Name)
+					}
+				case *ast.CompositeLit:
+					add(r.Type, id.Name)
+				}
+			}
+		}
+		return true
+	})
+	return names
+}
+
+// indexedMapName returns the base name an index expression indexes: m → "m",
+// t.decoder → "decoder"; "" for anything else.
+func indexedMapName(e ast.Expr) string {
+	switch v := e.(type) {
+	case *ast.Ident:
+		return v.Name
+	case *ast.SelectorExpr:
+		return v.Sel.Name
+	}
+	return ""
 }
 
 // resolveClass maps a user token (a letter code OR a category string,
@@ -365,12 +455,15 @@ func scanFile(fset *token.FileSet, f *ast.File) []finding {
 	// in the loop; these hide it one call deep, so a hot per-element loop over them
 	// reads as scalar-clean. Class L flags calls to them inside loops.
 	wrappers := transcendentalWrappers(f)
+	// File-scoped fact: names declared as integer-keyed maps (detector M) — indexing
+	// them in a loop is a dense-slice (map→slice) candidate.
+	intKeyMaps := intKeyMapNames(f)
 	for _, decl := range f.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
 		if !ok || fn.Body == nil {
 			continue
 		}
-		out = append(out, scanFunc(fset, fn, wrappers)...)
+		out = append(out, scanFunc(fset, fn, wrappers, intKeyMaps)...)
 	}
 	// drop sites silenced by an inline //perfscan:ignore directive (per class).
 	ign := ignoreDirectives(fset, f)
@@ -436,7 +529,7 @@ func isScalarFloatFunc(t *ast.FuncType) bool {
 	return t.Results != nil && len(t.Results.List) == 1 && isFloat(t.Results.List[0].Type)
 }
 
-func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers map[string]bool) []finding {
+func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[string]bool) []finding {
 	// Pass 1: function-scoped facts + a child→parent map for ancestor walks.
 	hasFlat := false
 	hasBuilder := false // declares a strings.Builder / bytes.Buffer
@@ -675,6 +768,43 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers map[string]bool) [
 		}
 		return true
 	})
+
+	// Pass 5 (detector M): a READ of an integer-keyed map inside a loop. When the keys
+	// are dense over [0,N), a []T indexed by the key replaces the per-lookup hash. One
+	// finding per loop; pure map-build writes (m[k] = v) are skipped.
+	if len(intKeyMaps) > 0 {
+		seen := map[token.Pos]bool{}
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			idx, ok := n.(*ast.IndexExpr)
+			if !ok || !intKeyMaps[indexedMapName(idx.X)] {
+				return true
+			}
+			if as, ok := parent[idx].(*ast.AssignStmt); ok { // skip m[k] = v (build), keep reads incl comma-ok
+				for _, l := range as.Lhs {
+					if l == idx {
+						return true
+					}
+				}
+			}
+			if _, ok := parent[idx].(*ast.IncDecStmt); ok {
+				return true
+			}
+			loop := nearestLoop(parent, idx)
+			if loop == nil || seen[loop.Pos()] {
+				return true
+			}
+			seen[loop.Pos()] = true
+			out = append(out, finding{
+				pos:      fset.Position(loop.Pos()),
+				category: "int-key-map-in-loop",
+				msg: fmt.Sprintf("%q (an integer-keyed map) is read in a loop — if the keys are dense over"+
+					" [0,N) a []T indexed by the key replaces the per-lookup hash (map→slice: BPE Decode 2.85×,"+
+					" GGUF Decode 3.67×, forest votes T312). Verify key density; gaps/out-of-range keep the"+
+					" map's zero-value via a bounds check.", indexedMapName(idx.X)),
+			})
+			return true
+		})
+	}
 	return out
 }
 
@@ -777,7 +907,7 @@ func dedup(in []finding) []finding {
 func main() {
 	strict := flag.Bool("strict", false, "exit 1 if any candidate is found (for optional CI gating)")
 	tests := flag.Bool("tests", false, "include _test.go files")
-	exclude := flag.String("exclude", "", "comma-separated classes to silence repo-wide (letter A…K or category, e.g. -exclude=K,per-element-closure); the rest still report")
+	exclude := flag.String("exclude", "", "comma-separated classes to silence repo-wide (letter A…M or category, e.g. -exclude=K,per-element-closure); the rest still report")
 	list := flag.Bool("list", false, "list the detector classes (letter + category) and exit")
 	flag.Parse()
 	if *list {

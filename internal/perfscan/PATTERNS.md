@@ -11,7 +11,7 @@ scanner (extend a callee map or add a detector in `perfscan.go`, with a positive
 + negative fixture test in `perfscan_test.go`) — SPEC §C29.
 
 This is the SINGLE perfscan for the repo (`internal/perfscan`, run via
-`make perfscan` / `go run ./internal/perfscan`); the code labels detectors A–L.
+`make perfscan` / `go run ./internal/perfscan`); the code labels detectors A–M.
 Sections P1/P2 below are the static detectors **I** and **J**; P3/P4 are
 profile/benchmark heuristics (no static detector); K and L (below) are the newest
 static ones — L generalizes K to transcendentals hidden one call deep in a helper.
@@ -208,6 +208,28 @@ range, register `std.add(OpX, F64, kernelCPU)`. Verify the op is not under the
 CPU==Ref exact invariant first, and prove the model golden (measure hotness — a
 ref-only op is not automatically hot). *(Could graduate to a static detector once
 perfscan grows a module-level cross-package registration pass.)*
+
+---
+
+## M (detector M) — integer-keyed map read in a loop  *(scanner: static)*
+
+**Smell.** A `map[int]…` / `map[rune]…` / `map[int32]…` (sets — `map[int]bool`,
+`map[int]struct{}` — excluded) is READ inside a loop: `t.decoder[id]`, `u2b[r]`,
+`votes[cls]`. Each lookup hashes the integer key and probes the table; the profile
+shows it as `mapaccess1/2_fast64` / `_fast32`.
+
+**Fix.** When the keys are DENSE over `[0,N)` — token/rune/class/vocab ids almost
+always are — flatten the map into a `[]T` indexed by the key, built once at
+construction. A `uint(k) < uint(len(s))` bounds check makes gaps and out-of-range
+keys resolve to the zero value exactly as the map's `!ok` did, so the result is
+byte-identical. **Verify density**: a sparse key space wastes memory and isn't a
+candidate (which is why the detector skips set-typed maps and the report says
+"verify key density").
+
+**Wins (map→slice):**
+- `nlp` BPE `Tokenizer.Decode` (`decoder[id]`) — **2.85×** (310→885 MB/s)
+- `nlp` GGUF `BPETokenizer.Decode` (`decoder[id]` + `u2b[r]`) — **3.67×**
+- `classic` RandomForest `Predict` vote map → precomputed slice — **1.13×** (T312)
 
 ---
 
