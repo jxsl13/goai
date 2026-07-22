@@ -11,6 +11,15 @@ import (
 // slice (layout (p*nheads+h)*dR+e), matching backend/ref mlaRoPE.
 func mlaRopeFwd(src *tensor.Tensor, nheads, dR int, base float64) []float64 {
 	half := dR / 2
+	// θ_e = base^(-2e/dR) depends only on e; cos/sin of p·θ_e depend only on (p,e).
+	// Cache θ once and (cosP,sinP) once per position so the O(seq·nheads·half) rotation
+	// loops don't recompute math.Pow per (p,h,e) or cos/sin per head. Values identical.
+	thetaTab := make([]float64, half)
+	for e := range half {
+		thetaTab[e] = math.Pow(base, -float64(2*e)/float64(dR))
+	}
+	cosP := make([]float64, half)
+	sinP := make([]float64, half)
 	seq := src.Shape()[0]
 	cols := src.Shape()[1] // nheads*dR
 	dst := make([]float64, seq*nheads*dR)
@@ -18,10 +27,13 @@ func mlaRopeFwd(src *tensor.Tensor, nheads, dR int, base float64) []float64 {
 	case tensor.F64:
 		ss := src.Contiguous().Storage().F64()
 		for p := range seq {
+			for e := range half {
+				ang := float64(p) * thetaTab[e]
+				cosP[e], sinP[e] = math.Cos(ang), math.Sin(ang)
+			}
 			for h := range nheads {
 				for e := range half {
-					theta := math.Pow(base, -float64(2*e)/float64(dR))
-					c, s := math.Cos(float64(p)*theta), math.Sin(float64(p)*theta)
+					c, s := cosP[e], sinP[e]
 					x0, x1 := ss[p*cols+h*dR+e], ss[p*cols+h*dR+e+half]
 					dst[(p*nheads+h)*dR+e] = x0*c - x1*s
 					dst[(p*nheads+h)*dR+e+half] = x1*c + x0*s
@@ -32,10 +44,13 @@ func mlaRopeFwd(src *tensor.Tensor, nheads, dR int, base float64) []float64 {
 	case tensor.F32:
 		ss := src.Contiguous().Storage().F32()
 		for p := range seq {
+			for e := range half {
+				ang := float64(p) * thetaTab[e]
+				cosP[e], sinP[e] = math.Cos(ang), math.Sin(ang)
+			}
 			for h := range nheads {
 				for e := range half {
-					theta := math.Pow(base, -float64(2*e)/float64(dR))
-					c, s := math.Cos(float64(p)*theta), math.Sin(float64(p)*theta)
+					c, s := cosP[e], sinP[e]
 					x0, x1 := float64(ss[p*cols+h*dR+e]), float64(ss[p*cols+h*dR+e+half])
 					dst[(p*nheads+h)*dR+e] = x0*c - x1*s
 					dst[(p*nheads+h)*dR+e+half] = x1*c + x0*s
@@ -46,10 +61,13 @@ func mlaRopeFwd(src *tensor.Tensor, nheads, dR int, base float64) []float64 {
 	}
 	// generic fallback (exotic dtypes) — the original AtF64 loop, verbatim
 	for p := range seq {
+		for e := range half {
+			ang := float64(p) * thetaTab[e]
+			cosP[e], sinP[e] = math.Cos(ang), math.Sin(ang)
+		}
 		for h := range nheads {
 			for e := range half {
-				theta := math.Pow(base, -float64(2*e)/float64(dR))
-				c, s := math.Cos(float64(p)*theta), math.Sin(float64(p)*theta)
+				c, s := cosP[e], sinP[e]
 				x0, x1 := src.AtF64(p, h*dR+e), src.AtF64(p, h*dR+e+half)
 				dst[(p*nheads+h)*dR+e] = x0*c - x1*s
 				dst[(p*nheads+h)*dR+e+half] = x1*c + x0*s
@@ -66,16 +84,28 @@ func mlaRopeFwd(src *tensor.Tensor, nheads, dR int, base float64) []float64 {
 // exactly once (non-accumulated), so the F32 path just rounds the final value.
 func mlaRopeBack(grad []float64, nheads, dR int, base float64, out *tensor.Tensor) {
 	half := dR / 2
+	// θ_e = base^(-2e/dR) depends only on e; cos/sin of p·θ_e depend only on (p,e).
+	// Cache θ once and (cosP,sinP) once per position so the O(seq·nheads·half) rotation
+	// loops don't recompute math.Pow per (p,h,e) or cos/sin per head. Values identical.
+	thetaTab := make([]float64, half)
+	for e := range half {
+		thetaTab[e] = math.Pow(base, -float64(2*e)/float64(dR))
+	}
+	cosP := make([]float64, half)
+	sinP := make([]float64, half)
 	seq := out.Shape()[0]
 	cols := out.Shape()[1] // nheads*dR
 	switch out.Dtype() {
 	case tensor.F64:
 		os := out.Storage().F64()
 		for p := range seq {
+			for e := range half {
+				ang := float64(p) * thetaTab[e]
+				cosP[e], sinP[e] = math.Cos(ang), math.Sin(ang)
+			}
 			for h := range nheads {
 				for e := range half {
-					theta := math.Pow(base, -float64(2*e)/float64(dR))
-					c, s := math.Cos(float64(p)*theta), math.Sin(float64(p)*theta)
+					c, s := cosP[e], sinP[e]
 					g0 := grad[(p*nheads+h)*dR+e]
 					g1 := grad[(p*nheads+h)*dR+e+half]
 					os[p*cols+h*dR+e] = g0*c + g1*s
@@ -87,10 +117,13 @@ func mlaRopeBack(grad []float64, nheads, dR int, base float64, out *tensor.Tenso
 	case tensor.F32:
 		os := out.Storage().F32()
 		for p := range seq {
+			for e := range half {
+				ang := float64(p) * thetaTab[e]
+				cosP[e], sinP[e] = math.Cos(ang), math.Sin(ang)
+			}
 			for h := range nheads {
 				for e := range half {
-					theta := math.Pow(base, -float64(2*e)/float64(dR))
-					c, s := math.Cos(float64(p)*theta), math.Sin(float64(p)*theta)
+					c, s := cosP[e], sinP[e]
 					g0 := grad[(p*nheads+h)*dR+e]
 					g1 := grad[(p*nheads+h)*dR+e+half]
 					os[p*cols+h*dR+e] = float32(g0*c + g1*s)
@@ -102,10 +135,13 @@ func mlaRopeBack(grad []float64, nheads, dR int, base float64, out *tensor.Tenso
 	}
 	// generic fallback (exotic dtypes) — the original SetF64 loop, verbatim
 	for p := range seq {
+		for e := range half {
+			ang := float64(p) * thetaTab[e]
+			cosP[e], sinP[e] = math.Cos(ang), math.Sin(ang)
+		}
 		for h := range nheads {
 			for e := range half {
-				theta := math.Pow(base, -float64(2*e)/float64(dR))
-				c, s := math.Cos(float64(p)*theta), math.Sin(float64(p)*theta)
+				c, s := cosP[e], sinP[e]
 				g0 := grad[(p*nheads+h)*dR+e]
 				g1 := grad[(p*nheads+h)*dR+e+half]
 				out.SetF64(g0*c+g1*s, p, h*dR+e)
