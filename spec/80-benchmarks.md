@@ -57,3 +57,4 @@
 | BM53 | 2026-07-22 | nn UniformSoup/averageModels typed fast path (model-soup averaging, 5 models × ~131k params) | darwin/arm64 | self | us | 3904.4 | 410.9 | 9.5× | T975,V22 |
 | BM54 | 2026-07-22 | nlp chat-template Render Builder pre-size (llama3, 11-msg conversation) | darwin/arm64 | self | ns | 2797.5 | 1026 | 2.73× | T976,V22 |
 | BM55 | 2026-07-22 | nlp JSONSchemaToGrammar grammar-Builder pre-size (nested schema, byte-reduction) | darwin/arm64 | self | B/op | 408591 | 350121 | 1.17× | T977,V22 |
+| BM56 | 2026-07-22 | nlp JSONSchemaToGrammar fmt.Sprintf/Fprintf→concat (recursive rule compiler) | darwin/arm64 | self | ns | 165760 | 110551 | 1.5× | T978,V22 |
