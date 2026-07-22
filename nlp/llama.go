@@ -416,7 +416,7 @@ func (m *Llama) forwardBlock(ctx *backend.Context, x *tensor.Tensor, layer int, 
 
 // project computes x·W (a bias-free linear layer).
 func project(ctx *backend.Context, x, w *tensor.Tensor) (*tensor.Tensor, error) {
-	return exec1(ctx, backend.OpMatMul, nil, x, w)
+	return exec2(ctx, backend.OpMatMul, nil, x, w)
 }
 
 // addBiasIf adds bias to x when bias is non-nil (Qwen2-family projections), else
