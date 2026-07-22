@@ -70,6 +70,7 @@ type GaussianNB struct {
 	theta    [][]float64 // [nClasses][nFeat] means
 	sigma    [][]float64 // [nClasses][nFeat] smoothed variances
 	logNorm  [][]float64 // [nClasses][nFeat] cached −½·log(2πσ²) Gaussian log-norm consts
+	invSigma [][]float64 // [nClasses][nFeat] cached 1/σ² so jointRow multiplies instead of dividing
 	epsilon  float64     // absolute variance-smoothing amount added
 	nFeat    int
 	fitted   bool
@@ -172,10 +173,13 @@ func (m *GaussianNB) Fit(x [][]float64, y []int) error {
 	// every query row (Predict/PredictProba/JointLogLikelihood) was n×nc×d redundant
 	// logs. Precomputing it here is bit-identical (same math.Log on the same σ²).
 	logNorm := make([][]float64, nc)
+	invSigma := make([][]float64, nc)
 	for c := 0; c < nc; c++ {
 		logNorm[c] = make([]float64, d)
+		invSigma[c] = make([]float64, d)
 		for j := 0; j < d; j++ {
 			logNorm[c][j] = -0.5 * math.Log(2*math.Pi*sigma[c][j])
+			invSigma[c][j] = 1 / sigma[c][j] // reciprocal of the fitted variance, so jointRow multiplies instead of dividing per (class,feature,row)
 		}
 	}
 
@@ -183,6 +187,7 @@ func (m *GaussianNB) Fit(x [][]float64, y []int) error {
 	m.theta = theta
 	m.sigma = sigma
 	m.logNorm = logNorm
+	m.invSigma = invSigma
 	m.logPrior = logPrior
 	m.epsilon = epsilon
 	m.nFeat = d
@@ -197,10 +202,10 @@ func (m *GaussianNB) jointRow(row []float64) []float64 {
 	for c := range m.classes {
 		ll := m.logPrior[c]
 		ln := m.logNorm[c]
+		iv := m.invSigma[c]
 		for j := 0; j < m.nFeat; j++ {
-			v := m.sigma[c][j]
 			dv := row[j] - m.theta[c][j]
-			ll += ln[j] - 0.5*dv*dv/v
+			ll += ln[j] - 0.5*dv*dv*iv[j]
 		}
 		out[c] = ll
 	}
