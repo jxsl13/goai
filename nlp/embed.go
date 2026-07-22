@@ -112,7 +112,9 @@ func CosineRerank(query []float64, candidates [][]float64) ([]RerankResult, erro
 		}
 		out[i] = RerankResult{Index: i, Score: score}
 	}
-	sort.SliceStable(out, func(a, b int) bool {
+	// (Score desc, Index asc) is already a TOTAL order — Index is unique — so stability
+	// is redundant; unstable sort.Slice (pdqsort) yields the identical ranking faster.
+	sort.Slice(out, func(a, b int) bool {
 		if out[a].Score != out[b].Score {
 			return out[a].Score > out[b].Score
 		}
