@@ -94,7 +94,21 @@ func DiverseBeamSearch(next NextLogits, start []int, width, groups, maxNew, eos 
 				}
 				return c.score
 			}
-			sort.SliceStable(cands, func(i, j int) bool { return aug(cands[i]) > aug(cands[j]) })
+			// Unstable sort.Slice (pdqsort) with an explicit tie-break reproducing the
+			// stable order: cands are appended parent-outer, and within a parent either one
+			// carried-done cand (tok 0) or the fresh vocab expansion (distinct toks), so
+			// (parent, tok) uniquely orders the appends — ties resolve to that same order,
+			// keeping the top-B' set identical, but with pdqsort's lower constant.
+			sort.Slice(cands, func(i, j int) bool {
+				ai, aj := aug(cands[i]), aug(cands[j])
+				if ai != aj {
+					return ai > aj
+				}
+				if cands[i].parent != cands[j].parent {
+					return cands[i].parent < cands[j].parent
+				}
+				return cands[i].tok < cands[j].tok
+			})
 			if len(cands) > bPrime {
 				cands = cands[:bPrime]
 			}
