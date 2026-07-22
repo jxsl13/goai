@@ -32,3 +32,26 @@ func BenchmarkUniformSoup(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkUniformSoupManyTensors merges 5 models with a realistic tensor count (32
+// tensors of 128×128), the regime where averaging the parameters fans out across cores.
+func BenchmarkUniformSoupManyTensors(b *testing.B) {
+	const M, nTensors = 5, 32
+	models := make([][]*tensor.Tensor, M)
+	for t := range models {
+		models[t] = make([]*tensor.Tensor, nTensors)
+		for i := range models[t] {
+			models[t][i] = tensor.New(tensor.F64, tensor.Shape{128, 128})
+			f := models[t][i].Storage().F64()
+			for e := range f {
+				f[e] = 0.01 * float64((t+i+e)%17-8)
+			}
+		}
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		if _, err := nn.UniformSoup(models); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
