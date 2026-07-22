@@ -200,25 +200,34 @@ func (t *Tokenizer) Encode(text string) []int {
 
 // Decode reconstructs the exact original text (byte-level → round-trip exact).
 func (t *Tokenizer) Decode(ids []int) string {
-	// Pre-size the builder by ESTIMATE: without Grow, WriteString doubles the buffer
-	// as it fills, leaving log(n) throw-away buffers per decode (the profile's gcDrain).
-	// An exact pre-pass over decoder[id] lengths costs a second O(n) map sweep that
-	// outweighs the churn it saves (measured slower), so estimate ~4 bytes/token (GPT-2
-	// average) — one or two grows instead of log(n), and no extra lookups. Grow only
-	// affects capacity, so the decoded string is byte-identical either way.
 	var b strings.Builder
-	b.Grow(len(ids) * 4)
 	if ds := t.decSlice; ds != nil {
+		// EXACT pre-size on the slice fast path: a slice-indexed length pass is a cheap
+		// O(n) sum (no map hash), so computing the exact output length up front lets Grow
+		// allocate the backing buffer ONCE — no doubling regrow (the profile's memmove +
+		// a second alloc) that the ~4-bytes/token estimate triggered when a corpus ran
+		// longer. Byte-identical output; only capacity changes.
+		total := 0
+		for _, id := range ids {
+			if uint(id) < uint(len(ds)) {
+				total += len(ds[id])
+			}
+		}
+		b.Grow(total)
 		for _, id := range ids {
 			if uint(id) < uint(len(ds)) { // in-range → its bytes; out-of-range → "" (map-miss parity)
 				b.WriteString(ds[id])
 			}
 		}
-	} else {
-		//perfscan:ignore M decSlice is the map→slice fast path; this is the defensive fallback
-		for _, id := range ids {
-			b.WriteString(t.decoder[id])
-		}
+		return b.String()
+	}
+	// Map fallback: an exact pre-pass here means a second O(n) map sweep that outweighs the
+	// churn it saves (measured slower), so estimate ~4 bytes/token (GPT-2 average) — one or
+	// two grows instead of log(n), no extra lookups. Grow only affects capacity.
+	b.Grow(len(ids) * 4)
+	//perfscan:ignore M decSlice is the map→slice fast path; this is the defensive fallback
+	for _, id := range ids {
+		b.WriteString(t.decoder[id])
 	}
 	return b.String()
 }
