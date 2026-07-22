@@ -99,6 +99,35 @@ func (bt *ballTree) dist(a, b []float64) float64 {
 	}
 }
 
+// distSq is the MONOTONE ranking distance — L1 as-is, L2 WITHOUT the sqrt (Σd²). The kNN
+// search compares and heaps neighbours only by rank, so ordering by distSq is identical to
+// ordering by dist, but skips the per-leaf-point sqrt (the profile's 61% hot path). toDist
+// converts back to the real distance for the pruning bound (per node) and the final k
+// results (per query) — sqrt(Σd²) is bit-identical to dist's, so the returned neighbours and
+// distances are unchanged. For L1 both are identities.
+func (bt *ballTree) distSq(a, b []float64) float64 {
+	if bt.metric == ballL1 {
+		var s float64
+		for i := range a {
+			s += math.Abs(a[i] - b[i])
+		}
+		return s
+	}
+	var s float64
+	for i := range a {
+		d := a[i] - b[i]
+		s += d * d
+	}
+	return s
+}
+
+func (bt *ballTree) toDist(sq float64) float64 {
+	if bt.metric == ballL1 {
+		return sq
+	}
+	return math.Sqrt(sq)
+}
+
 // build recursively partitions idx into a ball-tree node. It splits on the
 // dimension of largest spread at the median coordinate — a standard,
 // deterministic construction that keeps the two children balanced.
@@ -180,12 +209,16 @@ func (bt *ballTree) kNN(query []float64, k int) []neighbour {
 	h := &knnHeap{k: k}
 	bt.searchKNN(bt.root, query, h)
 	out := h.items
+	// out[].dist holds distSq (monotone in dist), so the (dist,idx) sort order is identical.
 	sort.Slice(out, func(a, b int) bool {
 		if out[a].dist != out[b].dist {
 			return out[a].dist < out[b].dist
 		}
 		return out[a].idx < out[b].idx
 	})
+	for i := range out { // convert the k results back to real distances for the caller
+		out[i].dist = bt.toDist(out[i].dist)
+	}
 	return out
 }
 
@@ -193,23 +226,24 @@ func (bt *ballTree) searchKNN(n *ballNode, query []float64, h *knnHeap) {
 	if n == nil {
 		return
 	}
-	// Prune: nearest possible point in this ball is dist(query,centroid)−radius.
+	// Prune: nearest possible point in this ball is dist(query,centroid)−radius. The
+	// heap holds distSq, so convert both sides to real distances for the radius bound.
 	if h.full() {
-		minDist := bt.dist(query, n.centroid) - n.radius
-		if minDist > h.worst()*(1+pruneSlack)+pruneSlack {
+		minDist := bt.toDist(bt.distSq(query, n.centroid)) - n.radius
+		if minDist > bt.toDist(h.worst())*(1+pruneSlack)+pruneSlack {
 			return
 		}
 	}
-	if n.idx != nil { // leaf: score every point exactly
+	if n.idx != nil { // leaf: score every point exactly (rank by distSq, no per-point sqrt)
 		for _, i := range n.idx {
-			h.consider(neighbour{dist: bt.dist(query, bt.pts[i]), idx: i})
+			h.consider(neighbour{dist: bt.distSq(query, bt.pts[i]), idx: i})
 		}
 		return
 	}
 	// Visit the child whose centroid is nearer first, tightening the bound
-	// sooner and so pruning the far child more often.
-	dl := bt.dist(query, n.left.centroid)
-	dr := bt.dist(query, n.right.centroid)
+	// sooner and so pruning the far child more often. distSq orders identically.
+	dl := bt.distSq(query, n.left.centroid)
+	dr := bt.distSq(query, n.right.centroid)
 	if dl <= dr {
 		bt.searchKNN(n.left, query, h)
 		bt.searchKNN(n.right, query, h)
