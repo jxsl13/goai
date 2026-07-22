@@ -4,6 +4,7 @@ import (
 	"math"
 
 	"github.com/jxsl13/goai/backend"
+	"github.com/jxsl13/goai/internal/simd"
 	"github.com/jxsl13/goai/tensor"
 )
 
@@ -71,10 +72,11 @@ func init() {
 								m = a
 							}
 						}
-						var den, wkv float64
+						// exp(loga[i]-m) with Σ = den in one 4-wide pass; the wkv dot keeps
+						// its strided v access scalar.
+						den := simd.ExpSumF64(p[:t+1], loga[:t+1], m)
+						var wkv float64
 						for i := 0; i <= t; i++ {
-							p[i] = math.Exp(loga[i] - m)
-							den += p[i]
 							wkv += p[i] * vs[i*d+c]
 						}
 						wkv /= den
@@ -128,10 +130,9 @@ func init() {
 								m = a
 							}
 						}
-						var den, wkv float64
+						den := simd.ExpSumF64(p[:t+1], loga[:t+1], m)
+						var wkv float64
 						for i := 0; i <= t; i++ {
-							p[i] = math.Exp(loga[i] - m)
-							den += p[i]
 							wkv += p[i] * float64(vs[i*d+c])
 						}
 						wkv /= den
@@ -175,10 +176,9 @@ func init() {
 						m = a
 					}
 				}
-				var den, wkv float64
+				den := simd.ExpSumF64(p[:t+1], loga[:t+1], m)
+				var wkv float64
 				for i := 0; i <= t; i++ {
-					p[i] = math.Exp(loga[i] - m)
-					den += p[i]
 					wkv += p[i] * v.AtF64(i, c)
 				}
 				wkv /= den
