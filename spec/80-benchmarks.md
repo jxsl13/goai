@@ -44,3 +44,4 @@
 | BM40 | 2026-07-22 | nlp RoPE+MHA pooled via exec1a/exec3 recorder-guarded (Falcon 28-step decode, allocs) | darwin/arm64 | self | allocs/op | 7153 | 6986 | 1.02× | T962,V22 |
 | BM41 | 2026-07-22 | nn RMSNorm/LayerNorm input slice pooled recorder-guarded (Falcon 28-step decode, allocs) | darwin/arm64 | self | allocs/op | 6986 | 6903 | 1.01× | T963,V22 |
 | BM42 | 2026-07-22 | nn SwiGLU FFN input slices pooled recorder-guarded (Forward dim256/hidden1024, allocs) | darwin/arm64 | self | allocs/op | 46 | 41 | 1.12× | T964,V22 |
+| BM43 | 2026-07-22 | nn SparseMoE.ForwardDecode per-expert slices pooled recorder-guarded (Mixtral decode, allocs) | darwin/arm64 | self | allocs/op | 155 | 152 | 1.02× | T965,V22 |

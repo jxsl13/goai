@@ -341,18 +341,16 @@ func (m *SparseMoE) ForwardDecode(ctx *backend.Context, x *tensor.Tensor) (y, ga
 		if err != nil {
 			return nil, nil, err
 		}
-		term, err := backend.Execute(ctx, backend.OpMul, []*tensor.Tensor{out, wcol.Contiguous()}, nil)
+		// Recorder-guarded pooled input slices on the MoE decode hot path (T965): both ops
+		// run once per used expert per token, and ForwardDecode is inference-only.
+		term, err := execPool2(ctx, backend.OpMul, nil, out, wcol.Contiguous())
 		if err != nil {
 			return nil, nil, err
 		}
 		if y == nil {
-			y = term[0]
-		} else {
-			sum, err := backend.Execute(ctx, backend.OpAdd, []*tensor.Tensor{y, term[0]}, nil)
-			if err != nil {
-				return nil, nil, err
-			}
-			y = sum[0]
+			y = term
+		} else if y, err = execPool2(ctx, backend.OpAdd, nil, y, term); err != nil {
+			return nil, nil, err
 		}
 	}
 	return y, logits, nil
