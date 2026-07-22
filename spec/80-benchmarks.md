@@ -45,3 +45,4 @@
 | BM41 | 2026-07-22 | nn RMSNorm/LayerNorm input slice pooled recorder-guarded (Falcon 28-step decode, allocs) | darwin/arm64 | self | allocs/op | 6986 | 6903 | 1.01× | T963,V22 |
 | BM42 | 2026-07-22 | nn SwiGLU FFN input slices pooled recorder-guarded (Forward dim256/hidden1024, allocs) | darwin/arm64 | self | allocs/op | 46 | 41 | 1.12× | T964,V22 |
 | BM43 | 2026-07-22 | nn SparseMoE.ForwardDecode per-expert slices pooled recorder-guarded (Mixtral decode, allocs) | darwin/arm64 | self | allocs/op | 155 | 152 | 1.02× | T965,V22 |
+| BM44 | 2026-07-22 | rl softUpdate typed fast path (Polyak target update, ~130k-param MLP) | darwin/arm64 | self | us | 1279.8 | 70.35 | 18.19× | T966,V22 |
