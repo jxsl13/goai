@@ -1,0 +1,1 @@
+{"t":"2026-07-27T17:13:35Z","eid":"74a7338c5e056e3a","ag":"ag-ad78","ev":"rule","dir":"backend/cpu","op":"add","rule":"CPU-001","txt":"WHERE the f32-native GEMM path under the SIMD experiment build, the cpu backend SHALL be compared against the f64 reference at rel 2e-3 and abs 1e-4 rather than at tolerance 0."}

@@ -2,12 +2,19 @@
 
 > Purpose of this file: A reusable prompt set for planning, building, and
 > verifying a full-fledged Go AI library from architecture to optimized
-> implementation, using the skills `/deep-research`, `/research`, `/spec`,
-> `/review`, `/build`, and `/loop`.
+> implementation.
 >
 > Usage: Each section ("PHASE …") is a self-contained prompt block.
-> Copy the respective block after the matching slash command.
 > Order: PHASE 0 → 1 → 2 → 3 → then continuous operation with `/loop`.
+>
+> **HISTORICAL, as of the 2026-07-25 spectackle migration.** The phases below
+> record how this project's spec was originally produced, and the reasoning is
+> still worth reading. The mechanics are not current: the skills they invoke
+> (`/spec`, `/review`, `/build`, `/research`, `/deep-research`) were retired
+> with the cavekit v4 system, and `SPEC.md` no longer exists. The spec now lives
+> in the server-owned `.spectackle/` bundles and is authored through the
+> spectackle server — see `LOOP.md` for the current per-iteration procedure and
+> `.claude/README.md` for the command set.
 
 ---
 

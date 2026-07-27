@@ -8,54 +8,85 @@ without depending on a machine's global `~/.claude`.
 
 | Path | Purpose |
 |------|---------|
-| `.claude/workflows/research-lite.js` | The schema-free 3-agent web-research workflow for §V16 tier-2 paper verification (never the built-in `/deep-research`; see `LOOP.md`). Invoke: `Workflow({scriptPath: ".claude/workflows/research-lite.js", args: "<one focused question>"})`. |
-| `.claude/skills/` | The full workflow-skill suite, so the whole build loop is portable: `spec` (mutate the spec/ tree via internal/docgraph — SPEC.md is a generated view, §V41), `build` (implement one §T task), `research` (external facts → §R), `review` (red-team before build), `grill` (sharpen a fuzzy idea), `deepen`, `check`, `backprop` (bug → §B), `find-skills`, and `caveman` (the SPEC.md encoding skill, slimmed — see below). |
-| `FORMAT.md` (repo root) | The **authoritative** caveman encoding — grammar, symbol table, `§V`/`§T`/`§B` row shapes. The skills point here; nothing restates it. |
+| `.claude/commands/` | Generated slash commands for the spectackle spec server: `/spectackle` (the loop itself), `/spectackle-state`, `/spectackle-find`, `/spectackle-get`, `/spectackle-research`, `/spectackle-swarm`, `/spectackle-export`, `/spectackle-merge`. Regenerate after a server upgrade with `spectackle call commands '{"op":"gen","harness":["claude"]}'`. |
+| `.claude/workflows/research-lite.js` | The schema-free 3-agent web-research workflow for tier-2 paper verification (never the built-in `/deep-research`; see `LOOP.md`). Invoke: `Workflow({scriptPath: ".claude/workflows/research-lite.js", args: "<one focused question>"})`. |
+| `.claude/skills/find-skills/` | Helper for discovering and installing additional agent skills. |
 | `LOOP.md` (repo root) | The autonomous per-iteration build-loop prompt the cron/loop references. |
 
-To use on a fresh host, symlink or copy `.claude/skills/` into the machine's
-`~/.claude/skills/` (or run Claude Code with this repo as the project root so the
-project-local `.claude/` is picked up). The `loop` skill itself is a built-in Claude
-Code skill; only `LOOP.md` (its per-iteration instructions) needs to travel, and it
-lives at the repo root.
+To use on a fresh host, install the spectackle server (`brew install spectackle`)
+and run Claude Code with this repo as the project root so the project-local
+`.claude/` is picked up. The `loop` skill itself is a built-in Claude Code skill;
+only `LOOP.md` needs to travel, and it lives at the repo root.
+
+## Where the spec lives
+
+The spec is **not** a markdown file in this repo. It lives in server-owned
+`.spectackle/` bundles — one at the repo root plus one per context directory
+(`backend/cpu`, `backend/cuda`, `classic`, `format`, `internal/simd`, `nlp`,
+`nn`) — and is read and written **only** through the spectackle server. Never
+hand-edit those files; the server owns them and a manual edit will be
+overwritten or rejected.
+
+Each bundle holds:
+
+- `spec.md` — the living contracts as EARS rules, with stamped code anchors so
+  drift against the real symbols is detectable.
+- `work.md` — active lifecycle items (proposals, tasks, ADRs, research).
+- `journal.ndjson` — append-only history, including every rejection.
+
+Entry points:
+
+```bash
+make spec-state
+```
+
+```bash
+make spec-check
+```
+
+```bash
+make spec-index
+```
 
 ## Token-optimization decisions (evidence-based)
 
 These are deliberately conservative — verified benchmarks (JetBrains SkillsBench
 A/B, SkillReducer arXiv:2603.29919, Anthropic pricing/context-editing docs) show
-the "caveman"/verbosity-reducer style saves only **~8.5% of output tokens** on
+a verbosity-reducer prompt style saves only **~8.5% of output tokens** on
 agentic tasks (code, diffs, tool calls dominate and are left verbatim), not the
-advertised 65–75%. So we keep caveman lean and lean on the real levers.
+advertised 65–75%. So we lean on the real levers instead.
 
-1. **Caveman level = `lite`.** The `cavemem` hook re-injects the style on every
-   `UserPromptSubmit` (~1–1.5k input tokens/turn). `lite` injects less; quality is
-   statistically indistinguishable from `full` (JetBrains sign-test p=0.82). Set via
-   a `.caveman-active` file containing `lite` next to the skills dir.
-2. **Skill body slimmed by progressive disclosure.** `SKILL.md` no longer duplicates
-   `FORMAT.md`; it keeps only the non-derivable guardrails and defers the full
-   encoding to `FORMAT.md` (loaded once by `/spec`). ~72% body reduction, matching
-   SkillReducer's finding that most skill body is non-actionable.
-3. **`FORMAT.md` stays the single source** of the encoding (24 lines, well under
-   Anthropic's <200-line guidance for always-loaded context).
+The spectackle server is itself a token lever, and the larger one: it returns
+IDs and spans rather than file contents, so a lookup costs on the order of the
+result set instead of the codebase. Prefer `find`/`get` over shell `grep` when
+you only need locations or structure.
 
-### The real levers (bigger than caveman), for whoever runs this
+### The real levers, for whoever runs this
 
 - **Prompt caching** — Claude Code caches its own system prompt / tool defs / history
   automatically (cache read = 10% of input price). Keep prefixes stable.
 - **Context hygiene** — `/clear` on task switch, `/compact` (with a focus note) at
   ~40–50% context; the Agent-SDK `clear_tool_uses` (context editing) cut tokens 84%
   in Anthropic's 100-turn eval.
-- **Model routing** — Sonnet for most coding, Opus only for hard architecture/debug,
-  Haiku (~1/5 the input price) for mechanical/subagent work.
+- **Model routing** — a strong model orchestrates (drafts proposals, writes task
+  briefs, reviews), cheaper fresh-context models implement one approved task each.
+  This is the division of labor the server is built around.
 - **Tool-output bloat** is usually the biggest hidden cost — delegate verbose work
   (tests, log dumps) to subagents that return summaries; prefer CLI over MCP.
 - Measure first: `/context`, `/usage`, `ccusage`.
 
-### Optional, host-specific (NOT committed — would break cross-OS)
+## History
 
-The `cavemem` hooks (`SessionStart`/`UserPromptSubmit`/`PostToolUse`/`Stop`) are wired
-in the machine's global `~/.claude/settings.json` with an absolute node path, so they
-are intentionally left out of the repo. If a host wants the per-turn caveman inject,
-add them there and drop a `~/.claude/.caveman-active` file containing `lite`. Given the
-~8.5% ceiling, running without the hook (relying on `FORMAT.md` + the skill on demand)
-is a defensible, lower-token default.
+Until 2026-07-25 this repo ran a hand-rolled spec system ("cavekit v4"): a
+caveman-encoded `SPEC.md` generated from a `spec/` fragment tree by
+`internal/docgraph`, guarded by `internal/speccheck` and a `spec-sync` workflow,
+and driven by nine workflow skills (`spec`, `build`, `check`, `backprop`,
+`grill`, `research`, `review`, `deepen`, `caveman`). `FORMAT.md` held the
+caveman encoding.
+
+All of that was migrated into spectackle and removed. The verification
+invariants, constraints and architecture invariants became EARS contracts; the
+architecture decision records became ADR items; the open tasks became lifecycle
+items; the goals and layer model became intent prose. The historical corpus that
+did not map onto a live contract — the completed task log, the research log and
+the bug ledger — stays in git history and in `CHANGELOG.md`.

@@ -1,0 +1,24 @@
+schema: v1  # server file-format stamp — do not edit; no migration exists, an unknown stamp is a tool error
+langs:  # languages the indexer parses (see internal/langspec for the registry)
+  - go
+ignore:  # glob prune patterns, repo-relative slash paths, on top of the built-in skip list
+  - .git/**
+  - bin/**
+ignore_regex: []  # RE2 prune patterns, repo-relative slash paths (none by default)
+budget_default: 2000  # default token budget for context-pack commands
+compact:
+  journal_max: 300  # journal events since last compact before check/the swarm hint flags it due
+  done_max: 8  # done-but-unarchived items before check flags it due
+swarm:
+  lease_ttl: 600  # seconds a scope lease lives without refresh
+  agent_ttl: 900  # seconds without heartbeat before an agent counts as gone
+  panel_max: 3  # cap on a per-item review panel (grill panel=n needs a live risk signal; config caps, never raises)
+feedback:
+  max_rounds: 3  # reopen/gate-fail rounds before an item escalates to blocked
+  grill: ""  # optional shell command producing grill feedback on reopen (none by default)
+  risk_files: 8  # landed-diff file count that requires a validation verdict even when validate is warn
+  dangerous_paths: []  # repo-relative globs whose landed changes require a validation verdict (empty by default)
+worktrees_dir: ""  # override for .spectackle/wt (abs or root-relative); empty = default location
+coverage_gate: ""  # "package": check counts internal/ and cmd/ packages without a binding contract as findings; empty = silent (visibility stays in state)
+git:
+  mode: offline  # commit only, never push (ADR-0031 open)

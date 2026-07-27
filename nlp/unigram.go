@@ -216,14 +216,6 @@ func (u *Unigram) preprocess(text string) string {
 	return s
 }
 
-// Encode segments text into token ids by the 1-best Viterbi over the unigram LM.
-//
-// It treats text as LITERAL and never emits a registered special marker's id, so it is
-// the right entry point for untrusted input (§B60); [Unigram.EncodeSpecial] is the one
-// that parses markers. Spaces are escaped to ▁ first — which means a literal ▁ already
-// in text is indistinguishable from a space and will decode back as one, silently.
-// [ContainsSpaceMeta] detects that input; the [Unigram] type doc explains why no
-// escape is possible.
 // unigramScratch holds Encode's Viterbi DP working arrays, reused across calls
 // (T951): off (rune-boundary byte offsets), best (DP scores), start/pid
 // (backpointers) and rev (the reversed-ids scratch). None escape Encode — only the
@@ -237,6 +229,14 @@ type unigramScratch struct {
 
 var unigramScratchPool = sync.Pool{New: func() any { return new(unigramScratch) }}
 
+// Encode segments text into token ids by the 1-best Viterbi over the unigram LM.
+//
+// It treats text as LITERAL and never emits a registered special marker's id, so it is
+// the right entry point for untrusted input; [Unigram.EncodeSpecial] is the one
+// that parses markers. Spaces are escaped to ▁ first — which means a literal ▁ already
+// in text is indistinguishable from a space and will decode back as one, silently.
+// [ContainsSpaceMeta] detects that input; the [Unigram] type doc explains why no
+// escape is possible.
 func (u *Unigram) Encode(text string) []int {
 	s := u.preprocess(text)
 	// Rune-boundary byte offsets: off[k] is the byte index of rune k, off[n] == len(s).

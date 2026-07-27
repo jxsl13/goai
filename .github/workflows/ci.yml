@@ -25,10 +25,10 @@ on:
       - "*.md"
       - "docs/**"
       - ".claude/**"
-      # spec/ is the §V40 source tree for the generated SPEC.md views — pure
-      # markdown, contains no Go packages and is never //go:embed-ed (the B50
-      # concern is package-adjacent md), same reasoning as docs/**.
-      - "spec/**"
+      # .spectackle/ is the server-owned spec bundle — markdown and ndjson,
+      # contains no Go packages and is never //go:embed-ed (the B50 concern is
+      # package-adjacent md), same reasoning as docs/**.
+      - "**/.spectackle/**"
   pull_request:
   workflow_dispatch:
 

@@ -17,7 +17,8 @@
 //	go run ./internal/mdlint ./...            lint every *.md under the repo
 //	go run ./internal/mdlint <dir|file.md …>  lint specific paths (dirs recurse)
 //
-// Exit 1 on findings. Discovery skips .git and .venv; no file list to maintain.
+// Exit 1 on findings. Discovery skips .git, .venv and the server-owned
+// .spectackle/ spec bundles; no file list to maintain.
 package main
 
 import (
@@ -34,6 +35,18 @@ type finding struct {
 	line int
 	rule string
 	msg  string
+}
+
+// skipDir reports whether a directory is excluded from markdown discovery. It is
+// the SINGLE source of that list: both the CLI walker and the repo-wide test walk
+// through it, so the two can never drift apart on what counts as lintable.
+//
+// .spectackle/ holds server-owned spec bundles with their own linter
+// (`spectackle lint`); that markdown is generated rather than hand-authored for
+// GitHub, so the human-audience style rules here do not apply to it.
+func skipDir(name string) bool {
+	return name == ".git" || strings.HasPrefix(name, ".venv") ||
+		name == "node_modules" || name == ".spectackle"
 }
 
 func main() {
@@ -67,7 +80,7 @@ func main() {
 				return err
 			}
 			if d.IsDir() {
-				if name := d.Name(); name == ".git" || strings.HasPrefix(name, ".venv") || name == "node_modules" {
+				if skipDir(d.Name()) {
 					return filepath.SkipDir
 				}
 				return nil
