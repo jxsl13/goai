@@ -32,3 +32,28 @@ EXPECTED: 3.46 -> 0.7-1.0 ns/element, i.e. 3.5-5x on SumF64_64K and SumAxisF64; 
 BIT-IDENTITY BAR, HIGHEST TIER — this IS the reference, so a drift here moves the goalposts for cpu, metal, cuda and vulkan simultaneously. The invariant is preservable EXACTLY: each accumulator must see the same combine sequence in the same ascending row-major pos order. (a) and (b) change only WHEN THE ODOMETER TICKS, not the visit order, so the per-accumulator add chain is unchanged and the result is bit-identical. (d) is exact — float32 to float64 widening is lossless and f64Data already performs precisely that conversion. (c) IS THE ONE TO WATCH: inlining a+x into a loop can create a new FMA-contraction opportunity on arm64 if a multiply ends up adjacent. For Sum/Mean/Max/Min there is no multiply so it cannot fire, but OpProd's a*x is the case to check. GATE THE CHANGE on -gcflags=-S showing no FMADDD in the reduce core, and re-run the cross-backend parity suite. THE PER-OP TOLERANCE MUST NOT BE WIDENED TO MAKE THIS PASS.
 
 PERFSCAN RULES REQUIRED, one of which is a THIRD DETECTOR BUG: (i) PS1002 (per-element visitor closure) DID NOT FIRE HERE and should have. Widen it to match a loop whose body contains a CallExpr whose Fun is an *ast.Ident resolving to a PARAMETER OR FREE VARIABLE of function type (not a package-level FuncDecl), where the loop bound derives from len() or Numel(). Instances it currently misses: ref/reduce.go:110, ref/elementwise.go:37,44,81,89, and ref/reduce.go:271-272 where math.Max/math.Min are passed as values. (ii) NEW RULE, per-element odometer: a ForStmt whose body contains a nested ForStmt that is not data-dependent on the outer index, only mutates an []int counter and an integer offset, and reads a loop-invariant stride slice — shape for d := N-1; d >= 0; d-- containing idx[d]++, off += eff[d], if idx[d] < shape[d] { break }. Instances: ref/reduce.go:111, ref/broadcast.go:50,66, and the autograd odometers already tasked separately.
+
+## T-01KYJREGVQEX696JPW87A887YA Make broadcastKernel copy contiguous runs instead of walking an odometer per element
+kind: task
+state: draft
+created: 2026-07-27
+
+LOWEST-RISK ITEM IN THE BACKEND SET and a clean 3x — take it first if you want a safe calibration of the harness.
+
+SITE: backend/ref/broadcast.go:14 broadcastKernel; loops at :48-59 (F64) and :64-75 (F32); registered at :96-97.
+
+WHY HOT: OpBroadcast is registered ONLY by ref — no cpu, no metal, nothing below it. It is the VJP of every reduction and of AddBias, so it runs once per broadcast-shaped gradient per training step, per element of the OUTPUT (the larger tensor). In autograd-heavy code that output is the full activation tensor.
+
+MEASURED: BenchmarkBroadcastF64_256to256x256 159,650-161,650 ns = 2.44 ns/element, against BenchmarkReshapeF64_64K allocating and copying the identical 512 KB at 0.657 ns/element — a 3.7x gap on pure data movement.
+
+DEFECT: the op is a verbatim same-dtype copy, yet every element pays the odometer at :50-58. For the benchmarked [256] -> [256,256] case eff = [0, 1]: the innermost axis advances ioff by exactly 1 for 255 of every 256 elements. That is a fully contiguous 2 KB run being copied one float64 at a time with an odometer and bounds checks around each store.
+
+FIX: before the loop, compute the trailing contiguous run length. Innermost axes with eff[d] == 1 and matching extents give L = product -> emit copy(dst[pos:pos+L], src[ioff:ioff+L]). Innermost axes with eff[d] == 0 (the true broadcast axes) mean the source value is constant over the run -> fill dst[pos:pos+L], or use a doubling copy from the first written element. Tick the odometer once per run rather than once per element. Both branches are dtype-generic over refFloat so F32 and F64 share one core.
+
+VALIDATION GATE (benchmark only): BenchmarkBroadcastF64_256to256x256 (backend/ref/perf_regress_test.go:197) covers the eff=[0,1] shape. ADD TWO CASES for the other regimes, since the run-length computation is where a bug would hide: [256,1] -> [256,256] (innermost eff==0, the replicate path) and [1,256,1] -> [8,256,16] (mixed). Land the run-length change ALONE, nothing else, and A/B against all three.
+
+EXPECTED: 2.44 -> about 0.7 ns/element, i.e. roughly 3-3.5x (160 us -> 45-55 us); the replicate path should go further since it avoids re-reading src. High confidence — the target rate is measured in the same package on the same host.
+
+BIT-IDENTITY BAR: LOWEST OF THE SET, though still a ref kernel. The op performs NO ARITHMETIC WHATSOEVER — the kernel's own comment at broadcast.go:30 calls it a verbatim copy. Replacing element-at-a-time stores with copy() over the same source and destination pairs cannot change any bit: no accumulation order, no widening, no rounding. The only failure mode is an INDEXING bug (wrong run length), which is a wrong-value error rather than a rounding error and is caught outright by the existing exact-equality broadcast tests. No tolerance change, and no cross-backend implication since no other backend implements the op.
+
+PERFSCAN RULE REQUIRED: scalar copy loop with a contiguous inner run. AST shape: a ForStmt whose body's only data statement is an assignment dst[i] = src[j] between two slices of the same element type, where j advances by a loop-invariant stride slice and the loop contains no arithmetic on the copied value. Detector: AssignStmt with IndexExpr on both sides, both base idents having identical types.Slice element types, no BinaryExpr on the RHS value.

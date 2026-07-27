@@ -1,1 +1,2 @@
 {"t":"2026-07-27T21:42:12Z","eid":"ce326136a338c6b4","ag":"ag-1f37","ev":"create","id":"T-01KYJREGCMF3Q8H8D9SNSNT9ZE","k":"task","ti":"Fix reduceKernel — closure call, odometer and F32 pre-widening on every element","dir":"backend/ref"}
+{"t":"2026-07-27T21:42:13Z","eid":"4d18dc04e8961380","ag":"ag-1f37","ev":"create","id":"T-01KYJREGVQEX696JPW87A887YA","k":"task","ti":"Make broadcastKernel copy contiguous runs instead of walking an odometer per element","dir":"backend/ref"}
