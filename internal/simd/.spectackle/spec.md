@@ -17,3 +17,8 @@ Rationale: Go 1.26 simd/archsimd provides Float32x8 (8 lanes) and Float64x4 (4 l
 WHERE the amd64 SIMD build, the a bit-exact SIMD kernel SHALL vectorize the free dimension j rather than the reduction k, and use separate Mul and Add rather than MulAdd.
 
 Rationale: Vectorizing the reduction changes summation order. On amd64 the scalar twin rounds twice (mul then add) while FMA rounds once, so a bit-exact kernel must NOT fuse. This is architecture-specific: see the arm64 companion rule, where the rule inverts. Migrated from the linux-amd64-cuda worker spec Iw5, which was written for that host only.
+
+## SIMD-007
+WHERE the arm64 NEON build, the a bit-exact SIMD kernel SHALL use FMLA rather than separate FMUL and FADD, because the Go arm64 backend already contracts the scalar twin into FMADDS.
+
+Rationale: The rule inverts against amd64 and following the amd64 form here would BREAK bit-exactness, not preserve it: the repo verified on objdump that the scalar SAXPY loop compiles to scalar FMADDS (backend/cpu/gemm_neon_arm64.go), and the NEON kernel header records that each C element accumulates its k products in ascending p order in one fused-FMA chain (gemm_neon_arm64.s). A kernel using separate mul and add would round twice where the scalar rounds once, failing TestGemmCrossReferenceExact. Note also that the real arm64 NEON kernels live in backend/cpu, not in internal/simd, which has no arm64 files at all.
