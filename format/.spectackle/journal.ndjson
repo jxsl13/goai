@@ -6,3 +6,4 @@
 {"t":"2026-07-27T20:49:52Z","eid":"d485be06809b8ace","ag":"ag-09a1","ev":"move","id":"T-01KYJNDV2VFRFR5RDBSPKJBRVK","dir":"format","fr":"draft","to":"approved"}
 {"t":"2026-07-27T21:13:15Z","eid":"2d3dd144303c6af8","ag":"ag-8715","ev":"create","id":"T-01KYJPSG8XFXVRA5TER8FSAPMH","k":"task","ti":"Pre-size and then mmap the gguf data-section read","dir":"format"}
 {"t":"2026-07-27T21:13:16Z","eid":"b10698c19bbc7186","ag":"ag-8715","ev":"create","id":"T-01KYJPSGQMFGER0YD90EG3PGRK","k":"task","ti":"Eliminate the bounds checks and unhoisted scale products in the Q4_K and Q6_K dequant loops","dir":"format"}
+{"t":"2026-07-27T21:13:16Z","eid":"084f92dcce1ba7b8","ag":"ag-8715","ev":"create","id":"T-01KYJPSH4HE33TTJBJM602RMBG","k":"task","ti":"Make gguf ReadRaw subslice instead of copying every tensor","dir":"format"}

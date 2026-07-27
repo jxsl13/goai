@@ -78,3 +78,24 @@ EXPECTED: Q4_K 1.10-1.25x (medium-high — bounds checks confirmed present, but 
 CORRECTNESS BAR: THIS TOUCHES BOUNDS CHECKS, flag it explicitly. It replaces implicit per-element IsInBounds with one IsSliceInBounds. The safety argument is that the caller already guarantees length — decodeTensor validates need via byteSize (gguf.go:513/521, which enforces n % qkK == 0) and the offset range at :449-453 before reaching here. But the invariant len(dst) % qkK == 0 is CURRENTLY IMPLICIT: add an explicit guard at the top of each dequant*Into so a short raw produces a deterministic single-site error rather than a mid-loop panic. Re-run format/gguf/hostile_test.go, q4k_test.go, and the FuzzRead corpus; round-trip parity (quant_write_test.go) must remain exact. Output is bit-identical in both cases — no arithmetic changes.
 
 PERFSCAN RULE REQUIRED, two new classes: (i) open-ended block subslice in a decode loop — inside a for whose body indexes a slice at base+i, a SliceExpr x[a*C:] with no High where C is a package-level constant named *BlockSize/*blockSize, or a store dst[expr] where dst is a function parameter never resliced to a constant length; cross-check against -d=ssa/check_bce output to eliminate false positives. This rule would have caught q4k.go and q6k.go while correctly passing q2k.go and q5k.go. (ii) loop-invariant-per-stride expression not hoisted — an inner for over l containing an index expression E[f(l)] where f is l/K or l>>k with K a constant at least half the trip count, whose value feeds a BinaryExpr otherwise invariant in the loop; suggest loop fission at the K boundary.
+
+## T-01KYJPSH4HE33TTJBJM602RMBG Make gguf ReadRaw subslice instead of copying every tensor
+kind: task
+state: draft
+created: 2026-07-27
+
+SITE: format/gguf/gguf.go:424-425 — raw := make([]byte, need); copy(raw, p.data[ti.offset:ti.offset+uint64(need)]).
+
+NOTE, verified: deferred dequantization ALREADY EXISTS (ReadRaw / QuantTensor, gguf.go:408) and is used by about 40 nlp/quant_*_gguf.go loaders. Do not re-propose it as a lever — but it carries this copy defect.
+
+WHY HOT: ReadRaw is THE load path for quantized inference — entry point of about 40 constructors (nlp/quant_llama_gguf.go:22, quant_qwen_gguf.go:6, quant_mixtral_gguf.go:12, ...) and of internal/benchcompare/prod_decode_external_test.go:30, the harness behind the TinyLlama-1.1B benchmark row. Once per model load, over the entire 668MB weight payload.
+
+DEFECT: the loop allocates and memcpys a fresh buffer for every tensor, reproducing the whole quantized model a second time. Since tensor extents tile the data section, total copied is about len(p.data) — a full 668MB serial memcpy plus roughly 200 separate large allocations, and 2x peak RSS (1.3GB) at exactly the moment the caller is about to upload weights to a device. p.data is discarded immediately after, so the copy buys nothing. Compounded with the io.ReadAll defect, a ReadRaw of a 669MB model currently touches about 2.7GB of memory to deliver 669MB of bytes.
+
+FIX: raw := p.data[ti.offset : ti.offset+uint64(need) : ti.offset+uint64(need)] — the THREE-INDEX form is mandatory, capping cap so a caller's append cannot scribble into the neighbouring tensor. All tensors then share one backing array, which is correct because their union IS that array, so nothing extra is retained. Document on QuantTensor.Data that the slice aliases the parsed file and is read-only. Composes with the mmap tier to make ReadRaw genuinely zero-copy, at which point the mapping must be owned by RawFile via an explicit Close or runtime.AddCleanup.
+
+VALIDATION GATE (benchmark only): BenchmarkReadRawSynthetic on the same 200-tensor Q4_K fixture (about 470MB), opening and reading in the loop. The primary signal is -benchmem: B/op should drop by roughly 470MB and allocs/op by about 200. Measure INDEPENDENTLY of the io.ReadAll change (A/B on top of an unchanged parse) so the two wins are separable. Add a runtime.ReadMemStats peak-RSS reading if the memory claim is to go into BENCHMARKS.md.
+
+EXPECTED: 30-60ms off a ReadRaw of a 669MB model and -669MB peak RSS. High confidence on the allocation and RSS win (arithmetic, not a guess), medium on the wall-clock share since the memcpy is bandwidth-bound and partially overlapped with page-cache reads.
+
+CORRECTNESS BAR: does NOT weaken a bounds check — the guard at :419-423 (the overflow-safe subtraction form) runs BEFORE the slice and is untouched, so the subslice is provably in range. The real risk is ALIASING SEMANTICS: QuantTensor.Data becomes mutation-visible across tensors and keeps the whole data section alive even if the caller retains one tensor. Both are acceptable for the actual callers (weight upload, read-only), but the three-index cap is mandatory and the QuantTensor doc comment must state the aliasing. Re-run format/gguf/hostile_test.go and the FuzzReadRaw corpus unchanged.
