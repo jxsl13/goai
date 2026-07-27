@@ -468,16 +468,76 @@ func isPointerMethod(fn *ast.FuncDecl) bool {
 
 // integerKeyType reports whether e names a Go integer type — the map key that, when
 // dense over [0,N), a []T indexed by the key can replace (detector PS3003).
-func integerKeyType(e ast.Expr) bool {
-	id, ok := e.(*ast.Ident)
-	if !ok {
-		return false
+// intTypeReg maps a package name to the NAMED integer types it declares
+// (`type Op int`). curPkg is the package of the file being scanned. Both are
+// package-level because perfscan is a single-pass, single-threaded CLI and
+// threading them through scanFile/scanFunc/intKeyMapNames would be a wide diff
+// for no behavioural gain.
+//
+// They exist because PS3003 was blind to every enum-keyed dispatch table: a key
+// spelled `backend.Op` is an *ast.SelectorExpr and a locally named `Op` is a
+// non-builtin *ast.Ident, so the old builtin-name switch rejected both on sight.
+// In a library whose dispatch is entirely enum-keyed that is a systemic miss.
+// Resolving it needs to know the underlying type — but perfscan is AST-only
+// (no go/types, no packages.Load), so instead the declarations are harvested
+// from the scanned source itself, which is where they already live.
+var (
+	intTypeReg = map[string]map[string]bool{}
+	curPkg     string
+)
+
+// collectIntTypes pre-scans parsed files for `type <Name> <integer kind>` and
+// records them per package. It must run over ALL files before any is judged,
+// since a key can name a type declared in another package.
+func collectIntTypes(files []*ast.File) {
+	for _, f := range files {
+		if f.Name == nil {
+			continue
+		}
+		pkg := f.Name.Name
+		for _, decl := range f.Decls {
+			gd, ok := decl.(*ast.GenDecl)
+			if !ok || gd.Tok != token.TYPE {
+				continue
+			}
+			for _, spec := range gd.Specs {
+				ts, ok := spec.(*ast.TypeSpec)
+				if !ok {
+					continue
+				}
+				if under, ok := ts.Type.(*ast.Ident); ok && builtinIntName(under.Name) {
+					if intTypeReg[pkg] == nil {
+						intTypeReg[pkg] = map[string]bool{}
+					}
+					intTypeReg[pkg][ts.Name.Name] = true
+				}
+			}
+		}
 	}
-	switch id.Name {
+}
+
+func builtinIntName(n string) bool {
+	switch n {
 	case "int", "int8", "int16", "int32", "int64",
 		"uint", "uint8", "uint16", "uint32", "uint64",
 		"byte", "rune", "uintptr":
 		return true
+	}
+	return false
+}
+
+func integerKeyType(e ast.Expr) bool {
+	switch k := e.(type) {
+	case *ast.Ident:
+		// A builtin, or a named integer type declared in this package.
+		return builtinIntName(k.Name) || intTypeReg[curPkg][k.Name]
+	case *ast.SelectorExpr:
+		// pkg.Name — resolvable only when the qualifier is a plain identifier.
+		// An alias or dot-import is left UNREPORTED rather than guessed: a
+		// detector that guesses is how this class of bug arises.
+		if q, ok := k.X.(*ast.Ident); ok {
+			return intTypeReg[q.Name][k.Sel.Name]
+		}
 	}
 	return false
 }
@@ -509,9 +569,19 @@ func intKeyMapNames(f *ast.File) map[string]bool {
 			for _, nm := range x.Names {
 				add(x.Type, nm.Name)
 			}
-		case *ast.ValueSpec: // var m map[int]V
-			for _, nm := range x.Names {
+		case *ast.ValueSpec: // var m map[int]V  /  var m = map[int]V{}
+			for i, nm := range x.Names {
 				add(x.Type, nm.Name)
+				// With no explicit type the map type lives on the RHS composite
+				// literal (`var vjps = map[backend.Op]VJP{}`), so x.Type is nil and
+				// the line above is a no-op. The AssignStmt arm below already
+				// handles that shape; this mirrors it for package-level vars, which
+				// is exactly where dispatch registries are declared.
+				if x.Type == nil && i < len(x.Values) {
+					if cl, ok := x.Values[i].(*ast.CompositeLit); ok {
+						add(cl.Type, nm.Name)
+					}
+				}
 			}
 		case *ast.AssignStmt: // m := make(map[int]V) / m := map[int]V{}
 			for i, rhs := range x.Rhs {
@@ -818,6 +888,9 @@ func ignoreDirectives(fset *token.FileSet, f *ast.File) map[int]map[string]bool 
 // (one per enclosing loop per category).
 func scanFile(fset *token.FileSet, f *ast.File, ns nameSets) []finding {
 	var out []finding
+	if f.Name != nil {
+		curPkg = f.Name.Name
+	}
 	// File-scoped fact: the package-local elementwise funcs that WRAP a libm
 	// transcendental (softplus, mish, swish, …). Class PS4002 only sees a DIRECT math.X
 	// in the loop; these hide it one call deep, so a hot per-element loop over them
@@ -1655,12 +1728,20 @@ func main() {
 
 	fset := token.NewFileSet()
 	var all []finding
+	// Parse everything first: the named-integer-type registry PS3003 needs is a
+	// REPO-scoped fact (a map key can name a type declared in another package),
+	// so it must be complete before any file is judged.
+	parsed := make([]*ast.File, 0, len(files))
 	for _, path := range files {
 		f, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "perfscan: parse %s: %v\n", path, err)
 			continue
 		}
+		parsed = append(parsed, f)
+	}
+	collectIntTypes(parsed)
+	for _, f := range parsed {
 		for _, fd := range scanFile(fset, f, ns) {
 			if enabled[fd.category] {
 				fd.id = catToID[fd.category]
