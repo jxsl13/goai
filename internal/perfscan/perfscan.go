@@ -195,6 +195,7 @@ var checks = []check{
 	{"PS4001", "le-decode-in-loop", "a per-element little-endian bit decode in a loop with no bulk-copy fast path", false},
 	{"PS4002", "scalar-transcendental-vectorizable", "a scalar libm transcendental in a loop while a vectorized sibling is called", false},
 	{"PS4003", "transcendental-wrapper-in-loop", "a loop calls a helper that wraps a libm transcendental", false},
+	{"PS4004", "scalar-copy-loop", "an element-by-element slice copy in a loop where a bulk copy would do", false},
 	// PS5xxx — arithmetic
 	{"PS5001", "loop-invariant-divide", "a divide by a loop-invariant scalar on every element", false},
 }
@@ -1268,6 +1269,75 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 		})
 	}
 
+	// PS4004: a loop whose only data statement copies one element from one slice to
+	// another — dst[i] = src[j], no arithmetic on the value. That is a memmove written
+	// out longhand: the run can be moved with a single copy() once the index pattern is
+	// hoisted out of the loop. Found by the ref broadcast work, where the innermost axis
+	// of a broadcast is either a verbatim contiguous row (source stride 1) or one value
+	// repeated (stride 0); hoisting it out of the per-element odometer measured 4.49x on
+	// BenchmarkBroadcastF64_256to256x256, bit-identically — a same-dtype copy performs no
+	// arithmetic, so there is no accumulation order to disturb.
+	//
+	// Silent when the loop body contains ANY call: a body already reaching for copy(),
+	// a helper, or a conversion is either fixed or is doing real per-element work, and
+	// flagging it would be noise. Requiring distinct source and destination idents keeps
+	// in-place shuffles (dst[i] = dst[j]) out, since those are permutations, not moves.
+	{
+		reportedCopy := map[ast.Node]bool{} // one finding per loop
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			as, ok := n.(*ast.AssignStmt)
+			if !ok || as.Tok != token.ASSIGN || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+				return true
+			}
+			lhs, ok := as.Lhs[0].(*ast.IndexExpr)
+			if !ok {
+				return true
+			}
+			rhs, ok := as.Rhs[0].(*ast.IndexExpr) // a BARE index: no BinaryExpr, no call
+			if !ok {
+				return true
+			}
+			dstID, ok1 := lhs.X.(*ast.Ident)
+			srcID, ok2 := rhs.X.(*ast.Ident)
+			if !ok1 || !ok2 || dstID.Name == srcID.Name {
+				return true
+			}
+			loop := nearestLoop(parent, n)
+			if loop == nil || reportedCopy[loop] || loopBodyHasCall(loop) {
+				return true
+			}
+			// Counted-loop gate. Without it the detector also flags rank-sized setup
+			// loops (`for a := range shape { eff[a] = strides[a] }`), structurally
+			// identical but running 2-4 times, where a bulk copy is noise rather than a
+			// win. A copy worth hoisting is driven by an element COUNT — a three-clause
+			// `for i := 0; i < n; i++`, or a range over a call such as `range t.Numel()`
+			// — whereas ranging over a named container is the shape/rank idiom. This
+			// keeps PS4004 a language-shape check that needs no repo configuration.
+			if !isCountedLoop(loop) {
+				return true
+			}
+			// The copy must be UNCONDITIONAL. A guarded store (`if ok { ds[i] = gs[of] }`)
+			// is a filtered scatter, not a run that can be moved with one copy(), and
+			// flagging it is noise. Reject if any conditional sits between the
+			// assignment and its loop.
+			if conditionalBefore(parent, n, loop) {
+				return true
+			}
+			reportedCopy[loop] = true
+			out = append(out, finding{
+				pos:      fset.Position(loop.Pos()),
+				category: "scalar-copy-loop",
+				msg: fmt.Sprintf("%s[...] = %s[...] in a loop with no arithmetic on the value — an"+
+					" element-at-a-time memmove. Where the index pattern has a contiguous run, hoist the"+
+					" run out of the loop and move it with one copy() (a constant source index becomes a"+
+					" fill). Bit-identical by construction: a same-dtype copy does no arithmetic, so there"+
+					" is no accumulation order to change. Verify the run length before acting — a wrong"+
+					" run is a wrong-value bug, not a rounding one.", dstID.Name, srcID.Name),
+			})
+			return true
+		})
+	}
+
 	// Pass 4: call-level detectors that are NOT loop-nested — the visitor/sort call
 	// IS itself the per-element / per-comparison hot loop.
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
@@ -1403,6 +1473,70 @@ func directlyHasUnravel(body *ast.BlockStmt, ns nameSets) bool {
 
 // nearestLoop walks parent links up from n to the innermost enclosing Range/For
 // (nil if n is not inside a loop).
+// conditionalBefore reports whether an if/switch/select sits between node n and
+// its enclosing loop. Detector PS4004 uses it to reject guarded stores: a copy that
+// only happens on some iterations is a filtered scatter, not a contiguous run, so
+// no bulk copy can replace it.
+func conditionalBefore(parent map[ast.Node]ast.Node, n, loop ast.Node) bool {
+	for p := parent[n]; p != nil && p != loop; p = parent[p] {
+		switch p.(type) {
+		case *ast.IfStmt, *ast.SwitchStmt, *ast.TypeSwitchStmt, *ast.SelectStmt, *ast.CaseClause:
+			return true
+		}
+	}
+	return false
+}
+
+// isCountedLoop reports whether a loop is driven by an element count rather than
+// by a named container. A three-clause `for i := 0; i < n; i++` and a range over a
+// call (`for i := range t.Numel()`) both iterate a count; `for a := range shape`
+// walks a rank-sized container. Detector PS4004 uses the distinction to separate a
+// per-element copy worth hoisting from a 2-4 iteration setup loop.
+func isCountedLoop(loop ast.Node) bool {
+	switch l := loop.(type) {
+	case *ast.ForStmt:
+		return l.Cond != nil
+	case *ast.RangeStmt:
+		switch l.X.(type) {
+		case *ast.CallExpr, *ast.BasicLit:
+			return true
+		}
+	}
+	return false
+}
+
+// loopBodyHasCall reports whether the loop body contains any call expression.
+// Detector PS4004 uses it as its silence condition: a copy loop that already
+// reaches for copy(), a helper, or a per-element conversion is either fixed
+// already or is doing genuine work, and flagging it would be noise.
+func loopBodyHasCall(loop ast.Node) bool {
+	var body *ast.BlockStmt
+	switch l := loop.(type) {
+	case *ast.RangeStmt:
+		body = l.Body
+	case *ast.ForStmt:
+		body = l.Body
+	}
+	if body == nil {
+		return false
+	}
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return !found
+		}
+		// len/cap are free index bookkeeping, not work — suppressing on them would
+		// hide real copy loops whose bound is computed from a slice length.
+		if id, ok := call.Fun.(*ast.Ident); ok && (id.Name == "len" || id.Name == "cap") {
+			return true
+		}
+		found = true
+		return false
+	})
+	return found
+}
+
 func nearestLoop(parent map[ast.Node]ast.Node, n ast.Node) ast.Node {
 	for p := parent[n]; p != nil; p = parent[p] {
 		switch p.(type) {

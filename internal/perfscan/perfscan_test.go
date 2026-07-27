@@ -1012,3 +1012,49 @@ func f(total, n float64) float64 {
 		}
 	}
 }
+
+// PS4004: a counted loop whose only data statement copies one element between two
+// slices, with no arithmetic on the value — an element-at-a-time memmove.
+func TestDetectPS4004_ScalarCopyLoop(t *testing.T) {
+	src := `package p
+func fill(dst, src []float64, n int, eff []int, shape []int) {
+	ioff := 0
+	for pos := 0; pos < n; pos++ {
+		dst[pos] = src[ioff]
+		for d := len(shape) - 1; d >= 0; d-- {
+			ioff += eff[d]
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["scalar-copy-loop"] != 1 {
+		t.Fatalf("want 1 scalar-copy-loop, got %d (%v)", got["scalar-copy-loop"], got)
+	}
+}
+
+// …silent on a rank-sized setup loop. Structurally the same assignment, but it
+// ranges over a named container (2-4 iterations), so a bulk copy is noise.
+func TestDetectPS4004_SilentOnRankLoop(t *testing.T) {
+	src := `package p
+func plan(eff []int, strides []int, shape []int) {
+	for a := range shape {
+		eff[a] = strides[a]
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["scalar-copy-loop"] != 0 {
+		t.Fatalf("rank-sized range loop, want 0 scalar-copy-loop, got %d", got["scalar-copy-loop"])
+	}
+}
+
+// …silent when the value is transformed rather than copied: that is real
+// per-element work, not a memmove.
+func TestDetectPS4004_SilentOnArithmetic(t *testing.T) {
+	src := `package p
+func scale(dst, src []float64, n int, k float64) {
+	for i := 0; i < n; i++ {
+		dst[i] = src[i] * k
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["scalar-copy-loop"] != 0 {
+		t.Fatalf("arithmetic on the value, want 0 scalar-copy-loop, got %d", got["scalar-copy-loop"])
+	}
+}
