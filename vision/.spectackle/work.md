@@ -48,3 +48,28 @@ BIT-IDENTITY BAR, split — read carefully before touching tests:
 - unshuffleRows backward: TOLERANCE ONLY. m.MaskToken is placed at every masked slot (mae.go:439), so its gradient sums over 48-147 rows. embedBackwardF32 on Metal uses float atomics (backend/metal/metal.go:1001-1002), which is order-nondeterministic, so the mask-token gradient differs run to run at f32 epsilon. Any gradcheck in mae_test.go asserting exact equality on MaskToken must move to a documented tolerance, and that relaxation must be justified in the commit rather than done silently.
 
 PERFSCAN RULE REQUIRED: new class, unit-slice row gather. AST detector: a for loop whose body calls backend.Execute with backend.OpSlice and SliceAttrs{Axis: 0, Start: E, End: E2} where E2 is syntactically E+1 (or Start: i, End: i+1 with i the loop variable), and whose results are collected into a slice later passed to OpConcat on the same axis. Structurally DISTINCT from PS1003: PS1003 fires on a single-element slice literal handed to an already-batch-capable API (right op, wrong call shape); here there is no slice literal, the loop index IS the slice bound, the op itself is the wrong primitive, and the remedy is a different op (OpEmbed). State that distinction in the rule doc so the two do not get merged later.
+
+## T-01KYJPMP87FJBSEAATV9Z0M6YM Fuse Swin windowed attention into OpMHA/OpMHAMasked
+kind: task
+state: draft
+created: 2026-07-27
+
+DEPENDS ON the Swin permutation-gather task landing first — same function, and that one is provably bit-identical while this one is not.
+
+SITE: vision/swin.go:616 (*SwinBlock).windowedAttention — window loop at :648, head loop at :662, body :663-704.
+
+WHY HOT: SwinTransformer.Forward (swin.go:286) -> SwinBlock.forwardBatched (:366) -> windowedAttention (:404), once per block per forward and again through the tape on backward. forwardBatched passes numWin = batch*numWin (:404), so the trip count scales with batch x windows x heads.
+
+DEFECT: each (window, head) iteration issues about 10 separate backend ops to compute one softmax(QK^T/sqrt(d))V — three OpSlice column cuts (:663-674), OpTranspose (:675), OpMatMul (:679), OpMul scale (:683), OpAdd rel-bias (:687), OpAdd shift mask (:694), OpSoftmax (:698), OpMatMul (:702) — plus three row slices and a concat per window (:649-657, :706). The backend already exposes fused OpMHA (backend/op.go:58) and OpMHAMasked (backend/op.go:60), and backend/ref/mha_masked.go:48 accepts a [heads, sq, sk] per-head additive mask, which is precisely Swin's rel-position-bias shape (swin.go:97). At the pinned BenchmarkSwinForwardBatched config (swin_batched_test.go:78) that is roughly 3,300 of about 3,900 forward dispatches.
+
+FIX (vision-local, no nlp change): delete the head loop. Per window emit one fused call — OpMHA with AttnAttrs{Heads: b.Heads} when b.Rel is nil and masks is nil, otherwise build a [heads, n, n] additive mask once per block (rel-bias head slices from headBias at swin.go:719, stacked; shift mask broadcast-added across the head axis) and emit one OpMHAMasked. Per window: 3 row slices plus 1 fused op, down from about 35. Trainability of Rel.Table survives because OpMHAMaskedBackward gradients the additive mask (backend/ref/mha_masked.go:17).
+
+HOST CAVEAT, do not skip: OpMHAMasked has NO Metal kernel — it runs the ref CPU kernel. The win is dispatch elimination, not GPU math. For Swin's tiny windows (n=16, dk=32) the ref kernel is microseconds against roughly 30 x 0.27ms of dispatch floor, so it still wins comfortably, but the benchmark MUST separate the Rel==nil case (GPU OpMHA) from the Rel!=nil case (CPU OpMHAMasked) or the two effects will be conflated.
+
+VALIDATION GATE (benchmark only): BenchmarkSwinForwardBatched (vision/swin_batched_test.go:76) only contrasts per-image against batched today. Add BenchmarkSwinWindowedAttention looping backends as internal/benchcompare/vision_train_test.go:91-105 does, with sub-benchmarks relbias=on and relbias=off via vision.WithSwinRelativeBias, plus a train-step variant under autograd.NewTapeOn mirroring vision_train_test.go:113. Report img/s and a dispatch count.
+
+EXPECTED: Metal 4-8x on Swin forward and higher on the train step, high confidence because it is arithmetic on the dispatch floor rather than a guess; CPU-ref 1.5-3x from removing dispatch overhead and about 30 intermediate allocations per window, medium confidence.
+
+BIT-IDENTITY BAR: NOT bit-identical, tolerance only. A fused SDPA kernel changes the reduction grouping versus MatMul -> Mul -> Add -> Softmax -> MatMul, and OpDot/OpMatMul accumulate in f64 (backend/op.go:38,43) with different tiling. The rel<1e-9 assertion at swin_batched_test.go:66 will need relaxing to about 1e-6 for f32 — that relaxation is part of the change and must be justified, not quietly applied. What must stay EXACTLY equal: the window partition and shift permutation (integer index maths), the mask -Inf exclusion set, and the output shape.
+
+PERFSCAN RULE REQUIRED: new class, hand-rolled attention where a fused op exists. AST detector: inside a for body, find the op sequence {OpTranspose, OpMatMul, OpMul or OpDiv by scalar, OpSoftmax, OpMatMul} where the second OpMatMul's operands are the OpSoftmax result and a slice of the same tensor that fed the first OpMatMul's transposed operand. Match on the backend.Op constant arguments to backend.Execute. Report only when a fused equivalent (OpMHA, OpMHAMasked, OpFlashAttn) is registered for the target backend.
