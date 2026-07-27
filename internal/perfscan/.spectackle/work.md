@@ -8,28 +8,26 @@ state: draft
 created: 2026-07-27
 targets: internal/perfscan/perfscan.go, internal/perfscan/perfscan_test.go
 
-DETECTOR BUG. PS1001 misses per-element AtF64/SetF64 loops its name implies it covers. FIVE confirmed sites: nlp/quant_llama_decode.go:25-27, nlp/kvevict.go:115-123, llamagpu/t5_decoder.go:226, rl/continuous.go:245-254, and nlp/streaming.go keepSinkRecent (since fixed under its own task, but never flagged).
+DETECTOR BUG — but the evidence base was contaminated and is now corrected. Read this section before acting on anything below it.
 
-DIAGNOSIS BY INSTRUMENTATION, narrowed over two passes. Do not re-derive these; they are measured, not reasoned.
+THE CORRECTION. Every earlier measurement in this task was taken by invoking perfscan WITHOUT its config, which silently disables the four DOMAIN checks. internal/perfscan/perfscan.json supplies elementAccessors (AtF64, SetF64) and friends, and it is discovered by walking UPWARD from the working directory — so running from the repo root never finds it, because the file sits inside internal/perfscan/. make perfscan passes it via -config; ad hoc invocations do not. Measured:
+  go run ./internal/perfscan -checks PS1001 ./...                                   ->  0 findings
+  go run ./internal/perfscan -config internal/perfscan/perfscan.json -checks PS1001 ./...  -> 44 findings
+So PS1001 is NOT globally broken. The instrumented reading that pointed at the loop classifier (perElem=false) was itself an artifact: with no config the accessor set is empty, so ns.accessors[AtF64] is false and the site can never be reported regardless of loop shape. Two rounds of diagnosis chased that.
 
-Pass 1 — the predicate is perElem AND accessors[name] AND NOT hasFlat. Printed at the kvevict SetF64 call site:
-  kvevict.go:120:4  name=SetF64  perElem=false  hasFlat=false
-So the accessor IS recognized and hasFlat is NOT suppressing it. hasFlat was the leading suspect and is now ruled out. perElem is the failing term.
+WHAT SURVIVES THE CORRECTION. Re-run WITH the config, the four originally cited sites are STILL not reported:
+  nlp/kvevict.go, nlp/quant_llama_decode.go, rl/continuous.go, llamagpu/t5_decoder.go  -> 0 each
+So a real gap remains, but it is much narrower than documented and its cause is unknown again — the perElem evidence is void. Start over from a correct baseline.
 
-Pass 2 — printed numelIdents when GatherRows is scanned:
-  baseline:        numelIdents=map[]
-  with the patch:  numelIdents=map[d:true]
-The patch collects idents assigned from an IndexExpr over a CallExpr, i.e. the d := t.Shape()[1] form. IT POPULATES CORRECTLY. An earlier note said this approach did not take; that was wrong, and the patch had been reverted on that mistaken basis.
+MANDATORY FIRST STEP for whoever continues: always pass -config internal/perfscan/perfscan.json (or run make perfscan). Any finding count taken without it is meaningless for the domain checks.
 
-BUT PS1001 STILL DOES NOT FIRE with numelIdents populated. So the blocker lies BETWEEN perElemLoop construction and the anyAncestorPerElem lookup at the call site. The patch was reverted again only because its false-positive impact could not be assessed in the same pass — it is directionally correct and should be reinstated as part of the real fix, not rediscovered.
+WHAT IS STILL KNOWN GOOD, measured with the config absent but independent of it: the five sites are genuine per-element AtF64/SetF64 loops on hot paths, and they share no single bound shape — a shape-call index (kvevict), a struct-field selector (quant_llama_decode), and len() plus range-over-slice (contMat). Whatever the cause turns out to be, a predicate widened for one shape will still miss the others.
 
-NEXT DIAGNOSTIC, precisely: with the patch applied, print perElemLoop for the inner range loop of GatherRows (for j := range d) and, separately, print what anyAncestorPerElem walks from the AtF64 call. One of three things is true — isNumelRange is not matching the RangeStmt over the ident, perElemLoop is keyed on a node that is not the one the parent chain reaches, or the parent map does not link the call to that loop. Each is one print away.
+A CANDIDATE, NOT A CONCLUSION: adding idents assigned from an IndexExpr over a CallExpr to numelIdents does populate correctly (verified: numelIdents=map[d:true] for GatherRows) and does flip the inner loop to perElem=true (verified: kvevict.go:119:3 perElem=true). It was reverted because it could not be shown to change any reported finding. Re-evaluate it against a config-loaded baseline before adopting or discarding.
 
-THE FIVE SITES DO NOT SHARE ONE BOUND SHAPE. Three distinct: a shape-call index (kvevict), a struct-field selector d := m.Config.Dim (quant_llama_decode), and len() plus range-over-slice (contMat). A predicate widened for one still misses the others — fix and verify each separately.
+WORTH FIXING SEPARATELY, and arguably the more valuable defect: perfscan runs the domain checks SILENTLY with an empty vocabulary when no config is found. That is the same false-assurance failure this rule family keeps producing — a clean scan that reads as no instances. It should warn, or refuse, when a domain check is requested with no accessor vocabulary loaded. File it as its own task.
 
-PRECEDENT: the sibling PS3003 bug closed this session, and its final cause was STRUCTURAL, not a predicate — a file-scoped fact that had to become package-scoped. Three reasoned fixes there each left the reproduction silent; one instrumented print found it. Expect the same here.
-
-VALIDATION GATE: fixtures plus a repo sweep, NOT a benchmark. All five sites as positive fixtures, plus a negative where the accessor sits in a genuine dtype fallback branch. Then re-scan and classify every new finding per site.
+VALIDATION GATE: fixtures plus a config-loaded repo sweep, NOT a benchmark. All five sites as positive fixtures, plus a negative where the accessor sits in a genuine dtype fallback branch. Then classify every finding in the 44 per site.
 
 ## T-01KYJR34RJE7HSS68635PKJYZ2 PS3003 is blind to named integer map keys — it cannot see any enum-keyed dispatch table
 kind: task
