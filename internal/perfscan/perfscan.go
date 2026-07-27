@@ -196,6 +196,7 @@ var checks = []check{
 	{"PS4002", "scalar-transcendental-vectorizable", "a scalar libm transcendental in a loop while a vectorized sibling is called", false},
 	{"PS4003", "transcendental-wrapper-in-loop", "a loop calls a helper that wraps a libm transcendental", false},
 	{"PS4004", "scalar-copy-loop", "an element-by-element slice copy in a loop where a bulk copy would do", false},
+	{"PS4005", "per-element-odometer", "an N-D coordinate odometer ticked once per element instead of once per run", false},
 	// PS5xxx — arithmetic
 	{"PS5001", "loop-invariant-divide", "a divide by a loop-invariant scalar on every element", false},
 }
@@ -1476,6 +1477,61 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 		})
 	}
 
+	// PS4005: a loop that ticks an N-D coordinate ODOMETER once per element —
+	//
+	//     for pos := range xs { <one element of work>
+	//         for d := nd - 1; d >= 0; d-- { idx[d]++; off += stride[d]; ... } }
+	//
+	// The innermost axis has a CONSTANT effective stride across a full run of
+	// shape[nd-1] elements, so that run is one straight walk (or a copy/fill when the
+	// stride is 1 or 0) and the odometer only has to tick once per run. Hoisting it
+	// leaves traversal order and every per-element operation untouched, and over a
+	// full run the innermost axis contributes inner*stride - stride*inner = 0 to the
+	// offset, so the outer tick is unchanged — the transform is bit-identical by
+	// construction rather than by rounding argument.
+	//
+	// Measured three times in this tree: backend/ref/broadcast.go 4.49x,
+	// backend/cpu/elementwise.go 5.29x, tensor/gatherCast 3.14x (interleaved A/B).
+	//
+	// Matched on the odometer's SHAPE, not on what the loop body does, so it fires
+	// regardless of whether the per-element work is a copy, a cast, or an accumulate —
+	// the three sites above differ in exactly that respect. The descending `d--` walk
+	// with `idx[d]++` is specific enough that a plain reverse loop does not match.
+	{
+		reportedOdo := map[ast.Node]bool{}
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			odo, ok := n.(*ast.ForStmt)
+			if !ok || !isDescendingAxisWalk(odo) {
+				return true
+			}
+			// An ALREADY-HOISTED odometer keeps this exact shape — it just runs once
+			// per run instead of once per element — so shape alone would flag the fix
+			// as the defect. The discriminator is where the walk starts: a per-element
+			// odometer ticks every axis (`d := nd - 1`), while a hoisted one skips the
+			// innermost (`d := nd - 2`) because that axis was lifted into the run.
+			if startsBelowInnermost(odo) {
+				return true
+			}
+			outer := nearestLoop(parent, n)
+			if outer == nil || reportedOdo[outer] {
+				return true
+			}
+			reportedOdo[outer] = true
+			out = append(out, finding{
+				pos:      fset.Position(outer.Pos()),
+				category: "per-element-odometer",
+				msg: "an N-D coordinate odometer ticked once per ELEMENT — the innermost axis has a" +
+					" constant stride across a run, so hoist it out and tick the odometer once per run" +
+					" instead (stride 1 becomes a copy, stride 0 a fill, anything else a straight strided" +
+					" walk). Bit-identical by construction: traversal order and the per-element work are" +
+					" unchanged, and the innermost axis contributes zero to the offset over a full run." +
+					" Verify the run length and that the enclosing loop is not already a specialized" +
+					" fast path before acting (PS4005)",
+			})
+			return true
+		})
+	}
+
 	// Pass 4: call-level detectors that are NOT loop-nested — the visitor/sort call
 	// IS itself the per-element / per-comparison hot loop.
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
@@ -2173,4 +2229,66 @@ func baseIdentName(e ast.Expr) string {
 			return ""
 		}
 	}
+}
+
+// isDescendingAxisWalk reports whether a for-statement is the axis-ticking half of an
+// N-D odometer: `for d := <expr>; d >= 0; d--` whose body increments a container at
+// index d (`idx[d]++`). Detector PS4005 uses it to find odometers ticked per element.
+// Requiring all three of the descending post, the `>= 0` bound and the indexed
+// increment keeps ordinary reverse loops out.
+func isDescendingAxisWalk(f *ast.ForStmt) bool {
+	if f.Cond == nil || f.Post == nil || f.Body == nil {
+		return false
+	}
+	cond, ok := f.Cond.(*ast.BinaryExpr)
+	if !ok || cond.Op != token.GEQ {
+		return false
+	}
+	axis, ok := cond.X.(*ast.Ident)
+	if !ok {
+		return false
+	}
+	if lit, ok := cond.Y.(*ast.BasicLit); !ok || lit.Value != "0" {
+		return false
+	}
+	post, ok := f.Post.(*ast.IncDecStmt)
+	if !ok || post.Tok != token.DEC {
+		return false
+	}
+	if id, ok := post.X.(*ast.Ident); !ok || id.Name != axis.Name {
+		return false
+	}
+	ticks := false
+	ast.Inspect(f.Body, func(n ast.Node) bool {
+		inc, ok := n.(*ast.IncDecStmt)
+		if !ok || inc.Tok != token.INC || ticks {
+			return !ticks
+		}
+		ix, ok := inc.X.(*ast.IndexExpr)
+		if !ok {
+			return true
+		}
+		if id, ok := ix.Index.(*ast.Ident); ok && id.Name == axis.Name {
+			ticks = true
+		}
+		return !ticks
+	})
+	return ticks
+}
+
+// startsBelowInnermost reports whether an odometer's axis walk begins at `<expr> - 2`
+// rather than `<expr> - 1`, which is the signature of an odometer whose innermost
+// axis has already been hoisted into a run. Detector PS4005 uses it so that applying
+// its own recommendation silences it, instead of the fixed code reporting forever.
+func startsBelowInnermost(f *ast.ForStmt) bool {
+	as, ok := f.Init.(*ast.AssignStmt)
+	if !ok || len(as.Rhs) != 1 {
+		return false
+	}
+	be, ok := as.Rhs[0].(*ast.BinaryExpr)
+	if !ok || be.Op != token.SUB {
+		return false
+	}
+	lit, ok := be.Y.(*ast.BasicLit)
+	return ok && lit.Value == "2"
 }
