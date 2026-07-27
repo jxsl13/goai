@@ -67,3 +67,24 @@ WHAT THIS TASK MUST DO: walk all 22 sites and classify each as either a real can
 EXPLICITLY NOT A BENCHMARK TASK. The gate here is the classified finding set plus the fixture suite, not an A/B — nothing in this task changes runtime behavior.
 
 NOTE ON RANK LOOPS: the counted-loop gate is imperfect by construction. A rank-sized loop written as for d := 0; d < ndo; d++ is indistinguishable from an element loop by shape alone; only the bound provenance separates them, and that is domain knowledge (the Numel vocabulary) rather than a language shape. Deciding whether PS4004 should become a DOMAIN check gated on that vocabulary, as PS1001 is, is part of this triage.
+
+## T-01KYJW0WF7F8PRB1ZVDK6XEZ4F Perfscan reported zero findings for domain checks running with no vocabulary
+kind: task
+state: draft
+created: 2026-07-27
+
+Perfscan silently runs its four DOMAIN checks (PS1001, PS1002, PS2001, PS4002) with an EMPTY vocabulary when no config is found, printing a clean 'no candidate anti-patterns found' that reads as 'no instances'.
+
+CAUSE: the vocabulary lives in internal/perfscan/perfscan.json, and config discovery walks UPWARD from the working directory. The file sits INSIDE internal/perfscan/, so an invocation from the repo root never finds it. make perfscan passes it via -config; ad hoc invocations do not.
+
+MEASURED on this tree:
+  go run ./internal/perfscan -checks PS1001 ./...                                          ->  0 findings
+  go run ./internal/perfscan -config internal/perfscan/perfscan.json -checks PS1001 ./...  -> 44 findings
+
+COST, and the reason this is filed rather than shrugged off: it manufactured a multi-round investigation into PS1001 as a broken detector. It is not broken. With an empty accessor set the site can never be reported regardless of loop shape, and an instrumented reading that appeared to indict the loop classifier (perElem=false) was itself an artifact of the same emptiness. Two rounds of otherwise-sound diagnosis chased a configuration default. This is the same false-assurance failure already recorded in FMT-004 for a fuzz target that never reached its parser: the tool answered confidently about a question it was not equipped to evaluate.
+
+FIXED (commit 5854d2b): perfscan now warns to stderr, naming the starved checks and the remedy, whenever a domain check is enabled with no vocabulary loaded. Silent when a config is present, so make perfscan and CI are unaffected. Fixture suite unchanged and green.
+
+DELIBERATELY A WARNING, NOT A REFUSAL: perfscan is repo-agnostic by design and the language-shape checks are genuinely useful with no config at all, so failing hard would break legitimate stdlib-only scanning. The warning names what is inert and why, which is enough to stop the misreading.
+
+FOLLOW-UP worth considering separately, not done here: move perfscan.json to the repo root so upward discovery finds it, or have perfscan also look next to its own package. Either would remove the trap rather than annotate it. Both are behavioral changes to config resolution and deserve their own decision.
