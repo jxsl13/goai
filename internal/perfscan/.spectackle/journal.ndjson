@@ -1,0 +1,1 @@
+{"t":"2026-07-27T21:18:49Z","eid":"5191f4cca3d39fe4","ag":"ag-8b5d","ev":"create","id":"T-01KYJQ3PGEEFSAKZXXRNP42W5Q","k":"task","ti":"Broaden PS1001 — it misses per-element AtF64/SetF64 outside Numel/Unravel loops","dir":"internal/perfscan"}
