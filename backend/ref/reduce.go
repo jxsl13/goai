@@ -282,14 +282,43 @@ func argmaxKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs
 				eff[ax] = outStrides[p]
 			}
 		}
+		// Hoist the innermost axis out of the odometer (see reduceKernel): its
+		// effective stride is constant across a run, so the odometer ticks once per
+		// run instead of once per element. Two cases, because argmax carries a
+		// COORDINATE as well as a value:
+		//   - the innermost axis IS the reduced axis: its stride is 0, the whole run
+		//     folds into one accumulator, and the coordinate is the position within
+		//     the run;
+		//   - otherwise: the reduced coordinate is constant across the run, and the
+		//     run walks consecutive accumulators.
+		// Both keep the ascending scan order and the STRICT > comparison, so ties
+		// still resolve to the lowest index — bit-identical.
+		inner, sInner := shape[nd-1], eff[nd-1]
+		axisIsInnermost := axis == nd-1
 		idx := make([]int, nd)
 		of := 0
-		for pos := range xs {
-			if v := xs[pos]; v > best[of] {
-				best[of] = v
-				bidx[of] = float64(idx[axis])
+		for pos := 0; pos < len(xs); pos += inner {
+			run := xs[pos : pos+inner]
+			if axisIsInnermost {
+				b, bi := best[of], bidx[of]
+				for j, v := range run {
+					if v > b {
+						b, bi = v, float64(j)
+					}
+				}
+				best[of], bidx[of] = b, bi
+			} else {
+				c := float64(idx[axis])
+				o := of
+				for _, v := range run {
+					if v > best[o] {
+						best[o] = v
+						bidx[o] = c
+					}
+					o += sInner
+				}
 			}
-			for d := nd - 1; d >= 0; d-- {
+			for d := nd - 2; d >= 0; d-- {
 				idx[d]++
 				of += eff[d]
 				if idx[d] < shape[d] {
