@@ -1,1 +1,2 @@
 {"t":"2026-07-27T20:48:22Z","eid":"4dc99155105cd3df","ag":"ag-6e8a","ev":"rule","dir":"backend/cpu","op":"add","rule":"CPU-002","txt":"WHERE the f32-native GEMM path under the SIMD experiment build, the cpu backend SHALL be compared against the f64 reference at rel 2e-3 and abs 1e-4 rather than at tolerance 0."}
+{"t":"2026-07-27T21:18:50Z","eid":"c55483c0915abd15","ag":"ag-8b5d","ev":"create","id":"T-01KYJQ3PXEFMW9RAY47HDFTM18","k":"task","ti":"Give gemmF64Band a NEON kernel and move its accumulators out of memory","dir":"backend/cpu"}
