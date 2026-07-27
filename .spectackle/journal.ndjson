@@ -194,3 +194,4 @@
 {"t":"2026-07-27T22:51:46Z","eid":"0db80387495f0edb","ag":"ag-8ab9","ev":"create","id":"R-01KYJWDW8CESXSAZNJ0694FGJJ","k":"research","ti":"PS1001 narrowing: configured shapeMethods measured, rejected"}
 {"t":"2026-07-27T22:53:07Z","eid":"3fd40703416fdf72","ag":"ag-89d7","ev":"create","id":"T-01KYJWGBGRER59EX4MPX6S8VE7","k":"task","ti":"cpu broadcast odometer: hoist innermost axis into runs (PS4004 triage)"}
 {"t":"2026-07-27T22:55:47Z","eid":"87af9b7b3946d6c4","ag":"ag-fe10","ev":"create","id":"R-01KYJWN7RTF1E8VP2F8APHC8HD","k":"research","ti":"cpu broadcastRuns not validated: benchmarks never enter broadcastContig"}
+{"t":"2026-07-27T23:00:17Z","eid":"a36e51bc4e3b73ba","ag":"ag-d541","ev":"create","id":"R-01KYJWXFVZF42RYNW92Y1T66EN","k":"research","ti":"cpu general-broadcast runs transform validated and shipped (5.29x)"}
