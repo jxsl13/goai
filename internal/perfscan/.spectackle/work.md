@@ -8,26 +8,21 @@ state: draft
 created: 2026-07-27
 targets: internal/perfscan/perfscan.go, internal/perfscan/perfscan_test.go
 
-DETECTOR BUG — but the evidence base was contaminated and is now corrected. Read this section before acting on anything below it.
+DETECTOR GAP, now diagnosed on a CORRECT baseline and quantified. Prior rounds of this task were measured without perfscan's config, which silently disables the domain checks — that contamination is fixed (see the separate task and commit 5854d2b, which now warns) and every number below was taken WITH -config internal/perfscan/perfscan.json.
 
-THE CORRECTION. Every earlier measurement in this task was taken by invoking perfscan WITHOUT its config, which silently disables the four DOMAIN checks. internal/perfscan/perfscan.json supplies elementAccessors (AtF64, SetF64) and friends, and it is discovered by walking UPWARD from the working directory — so running from the repo root never finds it, because the file sits inside internal/perfscan/. make perfscan passes it via -config; ad hoc invocations do not. Measured:
-  go run ./internal/perfscan -checks PS1001 ./...                                   ->  0 findings
-  go run ./internal/perfscan -config internal/perfscan/perfscan.json -checks PS1001 ./...  -> 44 findings
-So PS1001 is NOT globally broken. The instrumented reading that pointed at the loop classifier (perElem=false) was itself an artifact: with no config the accessor set is empty, so ns.accessors[AtF64] is false and the site can never be reported regardless of loop shape. Two rounds of diagnosis chased that.
+BASELINE, config loaded: PS1001 reports 44 findings tree-wide. It does NOT report nlp/kvevict.go, nlp/quant_llama_decode.go, rl/continuous.go or llamagpu/t5_decoder.go.
 
-WHAT SURVIVES THE CORRECTION. Re-run WITH the config, the four originally cited sites are STILL not reported:
-  nlp/kvevict.go, nlp/quant_llama_decode.go, rl/continuous.go, llamagpu/t5_decoder.go  -> 0 each
-So a real gap remains, but it is much narrower than documented and its cause is unknown again — the perElem evidence is void. Start over from a correct baseline.
+CAUSE, instrumented at the kvevict SetF64 call site with config loaded:
+  name=SetF64  acc=true  hasFlat=false  perElem=false
+So the accessor is recognized and no fast-path suppression applies. THE LOOP CLASSIFIER IS THE BLOCKER — perElemLoop is false for `for j := range d` where `d := t.Shape()[1]`, because perElemLoop is set only from a configured element-count method (Numel) or a directly-present Unravel. A shape dimension is neither.
 
-MANDATORY FIRST STEP for whoever continues: always pass -config internal/perfscan/perfscan.json (or run make perfscan). Any finding count taken without it is meaningless for the domain checks.
+THE OBVIOUS FIX WORKS BUT IS FAR TOO BROAD — this is the finding, and it is why nothing was committed. Adding idents assigned from an IndexExpr over a CallExpr to numelIdents does make kvevict.go:119 report. It also takes the tree-wide count from 44 to 266, a six-fold increase. That predicate matches ANY `x := someCall()[i]`, not just a shape dimension, so most of the 222 new hits are presumed false positives. Unshippable without narrowing; reverted rather than left in.
 
-WHAT IS STILL KNOWN GOOD, measured with the config absent but independent of it: the five sites are genuine per-element AtF64/SetF64 loops on hot paths, and they share no single bound shape — a shape-call index (kvevict), a struct-field selector (quant_llama_decode), and len() plus range-over-slice (contMat). Whatever the cause turns out to be, a predicate widened for one shape will still miss the others.
+NARROWING TO TRY, in order: (a) require the call to be a CONFIGURED shape method, adding a shapeMethods list to perfscan.json alongside elementCountMethods — this keeps the rule domain-configured like its siblings and is the smallest honest change; (b) additionally require the ident to be used as a loop bound rather than merely assigned; (c) measure the finding count after each and stop when the delta over 44 is small enough to triage by hand.
 
-A CANDIDATE, NOT A CONCLUSION: adding idents assigned from an IndexExpr over a CallExpr to numelIdents does populate correctly (verified: numelIdents=map[d:true] for GatherRows) and does flip the inner loop to perElem=true (verified: kvevict.go:119:3 perElem=true). It was reverted because it could not be shown to change any reported finding. Re-evaluate it against a config-loaded baseline before adopting or discarding.
+THE OTHER SHAPES REMAIN UNSOLVED. The four sites do not share one bound form: a shape-call index (kvevict), a struct-field selector `d := m.Config.Dim` (quant_llama_decode), and len() plus range-over-slice (contMat). (a) above addresses only the first. Each needs its own predicate and its own count check — do not assume one widening covers them.
 
-WORTH FIXING SEPARATELY, and arguably the more valuable defect: perfscan runs the domain checks SILENTLY with an empty vocabulary when no config is found. That is the same false-assurance failure this rule family keeps producing — a clean scan that reads as no instances. It should warn, or refuse, when a domain check is requested with no accessor vocabulary loaded. File it as its own task.
-
-VALIDATION GATE: fixtures plus a config-loaded repo sweep, NOT a benchmark. All five sites as positive fixtures, plus a negative where the accessor sits in a genuine dtype fallback branch. Then classify every finding in the 44 per site.
+METHOD NOTE, earned across five rounds on this rule: every intermediate conclusion here was wrong at least once — the bound predicate, then hasFlat, then 'the patch does not populate', then the perElem reading itself (a config artifact). What finally held was measuring one term at a time with the tool configured as CI configures it. Instrument, and check the finding count delta before believing a widening.
 
 ## T-01KYJR34RJE7HSS68635PKJYZ2 PS3003 is blind to named integer map keys — it cannot see any enum-keyed dispatch table
 kind: task
