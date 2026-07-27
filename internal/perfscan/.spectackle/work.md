@@ -33,24 +33,21 @@ state: draft
 created: 2026-07-27
 targets: internal/perfscan/perfscan.go, internal/perfscan/perfscan_test.go
 
-PARTIALLY FIXED, and the previous progress note OVERSTATED what landed. Correcting that first.
+ROOT CAUSE FOUND — by instrumentation, after three reasoned fixes each failed. The remaining defect is STRUCTURAL, not a predicate.
 
-WHAT ACTUALLY WORKS. The intKeyMapNames ValueSpec fix works: it now inspects x.Values when x.Type is nil, catching the 'var m = map[K]V{}' shape where the type lives on the composite literal. Tree-wide PS3003 went from 4 findings to 32.
+THE CAUSE: intKeyMapNames is FILE-SCOPED (it takes a single *ast.File), but a dispatch registry is declared in one file and read in another. vjps is declared at autograd/vjp.go:19; the hot read is at autograd/autograd.go:176. When autograd.go is scanned, intKeyMaps is EMPTY — verified by instrumenting the call site, which printed an empty map. No amount of key-type widening can help, because the map name never enters the set for that file.
 
-THE CORRECTION. The commit message and prior note attributed that 4 -> 32 jump to enum-keyed dispatch tables becoming visible. THAT IS WRONG. Inspecting the finding set shows the 28 new hits are ALL plain integer-keyed LOCAL maps — size, pos, children, byFirst, val — i.e. the ValueSpec shape, not the named-type shape. NOT ONE backend.Op-keyed map appears. So the named-integer-type registry is either not resolving or not reaching any call site, and its contribution to that number is zero.
+Established along the way, so nobody re-checks these: the named-integer-type registry DOES populate correctly (instrumented: intTypeReg[backend][Op]=true, 6 packages), the site IS inside a loop (the reverse walk in runBackward), and the declaration IS the fixed ValueSpec-with-composite-literal shape. Those three are not the problem.
 
-WHAT IS STILL BROKEN. autograd/autograd.go:176 rule, ok := vjps[n.op] does not fire under any condition tried:
-- with both known gaps closed;
-- scanning ./autograd/... alone AND scanning ./... whole-tree, which rules out the registry being incomplete because backend/op.go was outside the scanned roots (a real hypothesis, since the registry is only as complete as the roots — worth keeping in mind regardless);
-- the site is genuinely inside a loop (the reverse walk in runBackward, with a continue above it), and vjps is genuinely declared as the fixed ValueSpec shape at autograd/vjp.go:19.
+THE FIX: make map-name collection PACKAGE-SCOPED, exactly as the intTypeReg pre-pass already is. Collect intKeyMapNames over all files of a package before scanning any of them, keyed by package, and have scanFunc consult the package entry rather than a per-file map. The pre-pass infrastructure exists — collectIntTypes already walks all parsed files up front — so this is a small extension of it, not new machinery.
 
-So the registry lookup itself is the next thing to instrument: add a temporary print of intTypeReg after collectIntTypes and confirm whether intTypeReg[backend][Op] is populated at all, then whether integerKeyType is even reached for this key. Do NOT patch further before that print exists — three successive plausible fixes have now failed to move this site, and each was reasoned rather than observed.
+Two things to get right while doing it: a package-scoped set makes a same-named local in another file collide, so key on package and prefer a file-local declaration when both exist; and this widening will raise the finding count again, so re-triage rather than assuming the delta is all real.
 
-DESIGN NOTE THAT STANDS. perfscan is AST-only (go/ast, go/parser, no packages.Load), so the go/types approach originally specified is infeasible without changing the tool architecture. The registry approach — harvesting 'type <Name> <integer kind>' from the scanned source in a pre-pass — remains the right shape; it is the implementation that is unproven, not the design.
+CORRECTION CARRIED FORWARD (previously overstated, now confirmed): the earlier 4 -> 32 jump came ENTIRELY from the ValueSpec/composite-literal fix and is all plain integer-keyed LOCAL maps (size, pos, children, byFirst, val). The named-type registry contributed zero findings, because every enum-keyed registry in this repo is declared in a different file from its hot read — which is precisely the structural bug above. The two facts explain each other.
 
-ALSO OUTSTANDING: the 28 new findings are untriaged. They are plain int-keyed local maps, so most are probably genuine map-to-slice candidates, but each needs a verdict. If the false-positive share is high, narrow to package-level maps written only in init, which is the dispatch-table shape.
+STATUS: the ValueSpec fix and the type registry are committed and green (591f81b). The package-scoping fix is the remaining work, and the 28 new findings are still untriaged.
 
-PATTERN, now three times in this rule family: an isolated, correctly identified cause proved necessary but not sufficient. Reproduce, fix, then RE-CHECK the reproduction before claiming closure — and check what a metric actually counts before attributing it.
+METHOD, earned three times over in this rule family: an isolated cause can be real, necessary, and still not sufficient. Instrument the reproduction before patching — the print that found this took one run, after three reasoned fixes had each left the site silent.
 
 ## T-01KYJSBE7HE87A9AWR362JVB3Z Triage the 22 PS4004 findings and tighten the rule if the false-positive rate warrants it
 kind: task
