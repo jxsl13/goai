@@ -8,24 +8,21 @@ state: draft
 created: 2026-07-27
 targets: internal/perfscan/perfscan.go, internal/perfscan/perfscan_test.go
 
-DETECTOR BUG, confirmed by running the tool. PS1001 does not fire on per-element AtF64/SetF64 loops that its name implies it covers.
+DETECTOR BUG. PS1001 does not fire on per-element AtF64/SetF64 loops its name implies it covers. FIVE confirmed sites: nlp/quant_llama_decode.go:25-27, nlp/kvevict.go:115-123, llamagpu/t5_decoder.go:226, rl/continuous.go:245-254, and nlp/streaming.go keepSinkRecent (since fixed under its own task, but never flagged).
 
-CONFIRMED FALSE NEGATIVES (go run ./internal/perfscan -checks PS1001 reports nothing on any of these):
-- nlp/quant_llama_decode.go:25-27 QuantLlama.embedOne — the sole surviving per-element embedding lookup; 28 of the package 29 embedOne implementations already call the bulk embedRow.
-- nlp/kvevict.go:115-123 GatherRows — row gather where a per-row copy is available.
-- llamagpu/t5_decoder.go:226 — per-token decode path, in a package whose decoder.go:3224 already has the bulk embedRow helper.
-- rl/continuous.go:245-254 contMat — 3 calls x BatchSize x actDim per SAC.learn, which runs every env step; its sibling rl/rl.go:143-149 already received this fix.
-- nlp/streaming.go keepSinkRecent — SINCE FIXED under its own task, but it was never flagged either.
+INSTRUMENTED DIAGNOSIS — the blocker is narrowed to ONE of three conditions, so the next attempt need not guess. The predicate is perElem AND accessors[name] AND NOT hasFlat. Printing all three for nlp/kvevict.go gives, at the SetF64 call site:
 
-CORRECTED ROOT-CAUSE ANALYSIS. The earlier note in this task said the cause was the Numel/Unravel loop-bound predicate and implied a one-line widening. THAT IS WRONG, and an attempt proved it. Two findings:
+  kvevict.go:120:4  name=SetF64  perElem=false  hasFlat=false
 
-(1) The five sites do not share one bound shape. They have THREE: a struct-field selector (d := m.Config.Dim, then range d); len() plus range-over-slice (n, d := len(rows), len(rows[0]), then for i, r := range rows / for j, v := range r); and a shape-call index (d := t.Shape()[1], then range d). A predicate widened for any one of them still misses the others.
+So the accessor IS recognized, and hasFlat is NOT suppressing it — a hypothesis worth discarding explicitly, since it was the leading suspect. THE LOOP CLASSIFICATION IS THE BLOCKER: perElem is false for a range over an ident bound to a shape dimension.
 
-(2) Widening the bound predicate is NOT SUFFICIENT. I implemented the shape-call-index case — an ident assigned from IndexExpr whose X is a CallExpr, added to numelIdents so isNumelRange/isNumelForCond classify the loop as per-element — and PS1001 STILL did not fire on nlp/kvevict.go:115, which uses exactly that form. So a second suppression is in play downstream of the loop classification: most likely the hasFlat fast-path check (the function may reach a typed bulk accessor elsewhere and be treated as having a fallback), or the accessor/anyAncestorPerElem attribution. That change was REVERTED rather than left in as unvalidated speculation.
+WHAT THAT MEANS FOR THE FIX. perElemLoop is set from isNumelRange/isNumelForCond (bound derived from a configured element-count method) or directlyHasUnravel. A range over a shape-dimension ident satisfies neither. An earlier attempt added idents assigned from an IndexExpr over a CallExpr (the shape-call-index form) to numelIdents; it did NOT make the site fire and was reverted rather than left in as unvalidated speculation. Now that perElem is confirmed as the failing term, that direction is right but something in it did not take — instrument numelIdents itself next, printing whether the dimension ident is present when GatherRows is scanned, before changing the predicate again.
 
-WHAT THIS TASK MUST DO, revised: instrument before patching. Take nlp/kvevict.go:115 as the single reproduction case, determine WHY it is suppressed with the loop correctly classified, and fix that. Only then widen the bound predicate, and widen it to cover all three shapes above rather than one. Add all five sites as positive fixtures plus a negative where the accessor sits in a genuine dtype fallback branch, so the rule is proven non-vacuous in both directions. Finally re-scan the tree and classify every new finding per site.
+THE FIVE SITES DO NOT SHARE ONE BOUND SHAPE. Three distinct ones: a shape-call index (kvevict), a struct-field selector (quant_llama_decode), and len() plus range-over-slice (contMat). A predicate widened for one still misses the others — fix and verify each shape separately.
 
-METHOD LESSON worth carrying: the original analysis inferred the bound shape from a description instead of reading the five sites, and the resulting one-line fix was dead code. Read the sites first.
+PRECEDENT WORTH FOLLOWING: the sibling PS3003 bug was closed this session and its final cause was STRUCTURAL, not a predicate — a file-scoped fact that had to become package-scoped. Three reasoned fixes there each left the reproduction silent; one instrumented print located it in a single run. Expect the same shape of surprise here, and re-check the reproduction after every change rather than trusting the reasoning.
+
+VALIDATION GATE: fixtures plus a repo sweep, NOT a benchmark. Add all five sites as positive fixtures, plus a negative where the accessor sits in a genuine dtype fallback branch, so the rule is proven non-vacuous both ways. Then re-scan and classify every new finding per site.
 
 ## T-01KYJR34RJE7HSS68635PKJYZ2 PS3003 is blind to named integer map keys — it cannot see any enum-keyed dispatch table
 kind: task
