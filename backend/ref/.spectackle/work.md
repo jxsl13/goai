@@ -37,6 +37,7 @@ PERFSCAN RULES REQUIRED, one of which is a THIRD DETECTOR BUG: (i) PS1002 (per-e
 kind: task
 state: draft
 created: 2026-07-27
+targets: backend/ref/broadcast.go, backend/ref/broadcast_runs_test.go, docs/benchmarking.md
 
 LOWEST-RISK ITEM IN THE BACKEND SET and a clean 3x — take it first if you want a safe calibration of the harness.
 
