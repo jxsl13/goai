@@ -1,1 +1,2 @@
 {"t":"2026-07-27T21:10:37Z","eid":"ee025905c6fa8bff","ag":"ag-8748","ev":"create","id":"T-01KYJPMNDEE14TWT5FEKCQJ401","k":"task","ti":"Batch the Swin permutation gathers and memoize their index tensors","dir":"vision"}
+{"t":"2026-07-27T21:10:37Z","eid":"968d9f3d0af4e372","ag":"ag-8748","ev":"create","id":"T-01KYJPMNTGFPXRXQ846DZDSFYK","k":"task","ti":"Replace the MAE unit-slice row gathers with OpEmbed","dir":"vision"}
