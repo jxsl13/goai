@@ -46,3 +46,26 @@ EXPECTED: 20-100x on this function; high confidence on the function, medium on t
 BIT-IDENTITY BAR: bit-identical, and provably so IF done exactly as described. For fixed v both forms accumulate hidden[i]*wd[i*vocab+v] into a float32 accumulator with i strictly ascending from zero — same operation sequence, same rounding, same FMA contraction on arm64. The argmax tie-break must also be preserved: scan v ascending with strict >, so the first maximum wins. EXPLICIT PROHIBITION: do NOT widen the accumulator to float64, do NOT delegate to a tensor/nn matvec (which may reduce pairwise or in f64), and do NOT hand-vectorize with independent partial sums. Any of those changes the reduction order, and this function's output is a token id, so a flipped near-tie changes the emitted sequence.
 
 PERFSCAN RULE REQUIRED: a strong general rule. Node shape: a nested for where the INNER induction variable appears in an index expression A[i*S + j] with S loop-invariant and j the OUTER variable — the inner variable carries the large stride. Detect by parsing index expressions of the form BinaryExpr{+, BinaryExpr{*, ident_a, invariant}, ident_b} and comparing ident_a/ident_b against the enclosing loop nest order. Restrict to loops whose bound is a shape or len expression to avoid noise. This is the classic column-major-over-row-major GEMV/argmax.
+
+## T-01KYJPSFVPE1HBM80MHZE5EJRY Stop computing and downloading discarded prefill logits in StepN
+kind: task
+state: draft
+created: 2026-07-27
+
+SITE: llamagpu/decoder.go:3037 (d.recordLogits(r, k)) and :3044 (out := make([]float32, k*d.v) plus DownloadF32); identically llamagpu/gpt.go:230 and :237.
+
+WHY HOT: once per request, but it is the whole of time-to-first-token and it is the path advertised as the 41x prefill win. Of five callers, FOUR discard the result entirely: SpeculativeGenerate (speculative.go:45 and :48, both bound to _), PromptLookupGenerate (promptlookup.go:36), MedusaGenerate (medusa.go:125). Only Decoder.Generate (decoder.go:3066) and GPTDecoder.Generate (gpt.go:264) use it, and they use ROW k-1 ONLY. The per-round verify calls (speculative.go:93, promptlookup.go:73, medusa.go:145) genuinely need all rows and must keep the current path.
+
+DEFECT: for a 512-token prompt on GPT-2-124M geometry the discarded LM head is 512*768*50257 = about 19.8 GFLOP against roughly 43.5 GFLOP for the entire 12-layer prefill — about 31% of prefill compute spent on rows nobody reads. On top of that, out := make([]float32, k*d.v) is a 103MB Go allocation and DownloadF32 a 103MB copy per prefill, both fully wasted at three call sites. Cost scales O(k * vocab * dim), so it worsens exactly where prefill matters.
+
+FIX, two separable changes:
+1. BIT-SAFE. Add an internal prefill(tokens []int, pos int) error — StepN's body with recordLogits and the download omitted — and point speculative.go:45, speculative.go:48, promptlookup.go:36 and medusa.go:125 at it. No logits are read at those sites, so output cannot change by construction.
+2. NEEDS VALIDATION. Add StepNLast for Generate: after the final norm, r.Blit(d.xn.b, (k-1)*d.d, d.xn.b, 0, d.d) to move the last hidden row to offset 0, then recordLogits(r, 1) and download d.v floats. recorder.MatMul takes no source offset, so the Blit is how to express this with existing primitives — one tiny extra dispatch against a whole [k,vocab] GEMM removed.
+
+VALIDATION GATE (benchmark only): TestPrefillThroughput (llamagpu_test.go:358) already times StepN on Metal but is a Test that logs rather than a Benchmark. Write BenchmarkPrefillMetal (//go:build darwin && cgo) over the existing D=512/h8/kv2/6L/vocab=32000 bench model plus GPT-2-124M geometry, prompt lengths 64/256/512, sub-benchmarks StepN vs prefill vs StepNLast, reporting ms/prefill, prompt-tok/s and B/op. Same model instance and f32 on both arms.
+
+EXPECTED: 1.3-1.6x on prefill wall time at 512-token prompts (larger at bigger vocab or shallower depth), plus elimination of a k*vocab*4-byte allocation and copy per request. High confidence for change 1, medium-high for change 2.
+
+BIT-IDENTITY BAR: change 1 has NONE — the removed work has no consumer. Change 2 is REAL and must be gated: the last row's logits would come from a GEMM with M=1 instead of M=k, MPS may select a different kernel and K-reduction order, and the package's own TestStepNMatchesSequentialSteps (llamagpu_test.go:350) asserts only 2e-3 relative tolerance between M=1 and M=k — it already knows they are not bit-equal. A 1e-3 logit shift can flip a near-tie and change the emitted token. Gate change 2 on a new test: greedy Generate(prompt, 256) before and after must return TOKEN-FOR-TOKEN identical ids across several prompt lengths and both decoders. If that does not hold, ship change 1 alone.
+
+PERFSCAN RULE REQUIRED: a function returns a slice of n*stride elements and at one or more call sites the result is bound to the blank identifier, or the only subsequent index expression is a constant-offset suffix such as all[(n-1)*stride:]. AST pass over call sites of package-local functions with slice results: classify each site as discarded, single-row, or full-use, and flag any producer whose expensive tail (a record*/Download* call guarded by the row count) is unconditional while at least one site is discarded.
