@@ -30,22 +30,40 @@ func dequantQ6_K(shape tensor.Shape, raw []byte) (*tensor.Tensor, error) {
 // reuse one row buffer across all weight rows. Byte-for-byte the tensor-returning form.
 func dequantQ6_KInto(dst []float32, raw []byte) {
 	for sb := 0; sb*qkK < len(dst); sb++ {
-		blk := raw[sb*q6kBlockSize:]
+		// Fixed-length reslice: lets the compiler prove the inner stores in range and
+		// concentrates the length check at one named site (see the Q4_K twin).
+		o := sb * q6kBlockSize
+		blk := raw[o : o+q6kBlockSize]
 		ql, qh, sc := blk[0:128], blk[128:192], blk[192:208]
 		d := f16ToF32(binary.LittleEndian.Uint16(blk[208:]))
 		base := sb * qkK
 		for grp := range 2 { // two 128-element groups per super-block
 			qlo, qho, sco, yo := grp*64, grp*32, grp*8, base+grp*128
-			for l := range 32 {
-				is := l / 16
-				q1 := int(ql[qlo+l]&0xF) | int(qh[qho+l]&3)<<4
-				q2 := int(ql[qlo+l+32]&0xF) | int((qh[qho+l]>>2)&3)<<4
-				q3 := int(ql[qlo+l]>>4) | int((qh[qho+l]>>4)&3)<<4
-				q4 := int(ql[qlo+l+32]>>4) | int((qh[qho+l]>>6)&3)<<4
-				dst[yo+l+0] = d * float32(int8(sc[sco+is+0])) * float32(q1-32)
-				dst[yo+l+32] = d * float32(int8(sc[sco+is+2])) * float32(q2-32)
-				dst[yo+l+64] = d * float32(int8(sc[sco+is+4])) * float32(q3-32)
-				dst[yo+l+96] = d * float32(int8(sc[sco+is+6])) * float32(q4-32)
+			y := dst[yo : yo+128]
+			// `is := l / 16` took exactly two values across the 32-iteration l loop, so
+			// the four scale products were recomputed 128 times per group to produce 8
+			// distinct values. Split the loop at that boundary and hoist them.
+			//
+			// BIT-IDENTICAL, and the reason is the grouping: the original expression
+			// d * float32(int8(sc[...])) * float32(q-32) associates left-to-right as
+			// (d*sc)*(q-32). Hoisting s := d*sc and writing s*(q-32) reproduces that
+			// grouping exactly — same operands, same order, same two roundings. Folding
+			// the other way, d*(sc*(q-32)), would NOT be equivalent.
+			for half := range 2 {
+				s1 := d * float32(int8(sc[sco+half+0]))
+				s2 := d * float32(int8(sc[sco+half+2]))
+				s3 := d * float32(int8(sc[sco+half+4]))
+				s4 := d * float32(int8(sc[sco+half+6]))
+				for l := half * 16; l < half*16+16; l++ {
+					q1 := int(ql[qlo+l]&0xF) | int(qh[qho+l]&3)<<4
+					q2 := int(ql[qlo+l+32]&0xF) | int((qh[qho+l]>>2)&3)<<4
+					q3 := int(ql[qlo+l]>>4) | int((qh[qho+l]>>4)&3)<<4
+					q4 := int(ql[qlo+l+32]>>4) | int((qh[qho+l]>>6)&3)<<4
+					y[l+0] = s1 * float32(q1-32)
+					y[l+32] = s2 * float32(q2-32)
+					y[l+64] = s3 * float32(q3-32)
+					y[l+96] = s4 * float32(q4-32)
+				}
 			}
 		}
 	}

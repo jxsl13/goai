@@ -2116,3 +2116,68 @@ result element-for-element against the per-element traversal across F32 and F64
 for a trailing verbatim row, a trailing broadcast axis, a mixed rank-3 case and a
 rank-0 output. The test was proven non-vacuous by mutation: changing the odometer
 tick to start at the innermost axis instead of `ndo-2` turns it red.
+
+## gguf Q4_K dequant: bounds-check elimination (2026-07-27)
+
+Q4_K is the dominant modern GGUF weight format, and `dequantQ4_KInto` sits on two
+hot chains: once per tensor at load, and once per weight row per matmul per token
+through `QMatMul`.
+
+The inner store loop carried one un-eliminated bounds check per output element —
+confirmed, not inferred, via `-gcflags=-d=ssa/check_bce/debug=1` reporting
+`IsInBounds` at `q4k.go:75:8` and `:76:8`. The cause was open-ended reslicing
+(`raw[sb*q4kBlockSize:]`), which leaves the compiler unable to relate the store
+index to the slice length. Reslicing to fixed lengths (`raw[o:o+q4kBlockSize]`,
+`dst[base:base+64]`) lets it prove the stores in range.
+
+| Benchmark | before | after | speedup |
+| --- | --- | --- | --- |
+| `BenchmarkDequantQ4_K` | 177,736 ns | 154,195 ns | **1.15×** |
+
+Method: same host (M2 Pro, darwin/arm64, go1.26.5), interleaved A/B over three
+rounds with a file-copy toggle of `q4k.go`, medians reported.
+
+After the change the per-element `IsInBounds` at `:75`/`:76` are gone; what remains
+is one `IsSliceInBounds` per sub-block for the two reslices — N per-element checks
+traded for one per-run check, which is the point.
+
+Bit-identity: exact. No arithmetic expression changed — `y[l]` addresses the same
+element as `dst[base+l]` by construction — so operand order, accumulation and
+rounding are untouched. Golden, round-trip, hostile-input and fuzz suites all pass.
+The fixed-length reslices also concentrate the length check at one named site, so a
+short `raw` or `dst` now panics there rather than mid-loop.
+
+Not done in this change: the Q6_K half of the same task (its unhoisted per-element
+scale products, a larger win at 1.35-1.7x) remains outstanding.
+
+## gguf Q6_K dequant: hoisted scale products (2026-07-27)
+
+The companion to the Q4_K bounds-check fix, and the larger of the two. In a
+Q4_K_M mix every `attn_v`/`output` tensor is Q6_K, and `dequantQ6_KInto` sits on
+the same two chains: once per tensor at load, once per weight row per matmul per
+token through `QMatMul`.
+
+`is := l / 16` took exactly two values across the 32-iteration inner loop, yet the
+four scale products `d * float32(int8(sc[sco+is+k]))` were recomputed on every
+iteration — 8 distinct values computed 128 times per 128-element group. Splitting
+the loop at the `is` boundary hoists them; the block and destination were also
+resliced to fixed lengths, as in the Q4_K twin.
+
+| Benchmark | before | after | speedup |
+| --- | --- | --- | --- |
+| `BenchmarkDequantQ6_K` | 230,684 ns | 178,457 ns | **1.29×** |
+
+Method: same host (M2 Pro, darwin/arm64, go1.26.5), interleaved A/B over three
+rounds with a file-copy toggle of `q6k.go`, medians reported.
+
+Bit-identity — and here it is a real question, unlike Q4_K, because this change
+touches arithmetic grouping. The original expression
+`d * float32(int8(sc[...])) * float32(q-32)` associates left-to-right as
+`(d*sc)*(q-32)`. Hoisting `s := d*sc` and writing `s*(q-32)` reproduces that
+grouping exactly: same operands, same order, same two roundings. Folding the other
+way, `d*(sc*(q-32))`, would **not** be equivalent.
+
+That argument was verified rather than trusted: the raw output bits of
+`dequantQ6_KInto` were captured for a deterministic 7-block input before and after
+the change (7,168 bytes) and compared byte-for-byte — identical. The per-element
+`IsInBounds` in the loop body also drops to zero.

@@ -58,7 +58,15 @@ func dequantQ4_K(shape tensor.Shape, raw []byte) (*tensor.Tensor, error) {
 // allocating a tensor per row. The fill is byte-for-byte the tensor-returning form.
 func dequantQ4_KInto(dst []float32, raw []byte) {
 	for sb := 0; sb*qkK < len(dst); sb++ {
-		blk := raw[sb*q4kBlockSize:]
+		// Fixed-length reslices, not open-ended ones: they let the compiler prove the
+		// inner stores in range, so the per-element IsInBounds on dst[base+l] and
+		// dst[base+l+32] disappears. They also concentrate the length check at one
+		// named site — a short raw or dst now panics here with a slice-bounds message
+		// instead of mid-loop. Callers already validate (byteSize enforces
+		// len%qkK == 0, and decodeTensor range-checks the offset), so this is
+		// defense in depth, not a new contract.
+		o := sb * q4kBlockSize
+		blk := raw[o : o+q4kBlockSize]
 		d := f16ToF32(binary.LittleEndian.Uint16(blk[0:]))
 		dmin := f16ToF32(binary.LittleEndian.Uint16(blk[2:]))
 		scales := blk[4:16]
@@ -71,9 +79,10 @@ func dequantQ4_KInto(dst []float32, raw []byte) {
 			d1, off1 := d*float32(sc1), dmin*float32(m1)
 			d2, off2 := d*float32(sc2), dmin*float32(m2)
 			base := yo + pair*64
+			y := dst[base : base+64]
 			for l := range 32 {
-				dst[base+l] = d1*float32(q[l]&0xF) - off1
-				dst[base+l+32] = d2*float32(q[l]>>4) - off2
+				y[l] = d1*float32(q[l]&0xF) - off1
+				y[l+32] = d2*float32(q[l]>>4) - off2
 			}
 		}
 	}
