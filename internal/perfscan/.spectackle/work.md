@@ -33,19 +33,24 @@ state: draft
 created: 2026-07-27
 targets: internal/perfscan/perfscan.go, internal/perfscan/perfscan_test.go
 
-PARTIALLY FIXED. Two of the causes are closed and committed; the canonical reproduction still does not fire, and the new findings are untriaged.
+PARTIALLY FIXED, and the previous progress note OVERSTATED what landed. Correcting that first.
 
-DONE. integerKeyType now resolves named integer key types, and intKeyMapNames ValueSpec arm inspects x.Values when x.Type is nil (the package-level 'var m = map[K]V{}' shape, where the type lives on the composite literal). Tree-wide PS3003 goes from 4 findings to 32 — 28 enum-keyed dispatch reads that were always invisible. Fixture suite unchanged and green, no regression.
+WHAT ACTUALLY WORKS. The intKeyMapNames ValueSpec fix works: it now inspects x.Values when x.Type is nil, catching the 'var m = map[K]V{}' shape where the type lives on the composite literal. Tree-wide PS3003 went from 4 findings to 32.
 
-DESIGN CORRECTION, already recorded and now proven in practice: the fix specified earlier assumed go/types. perfscan is AST-ONLY — go/ast and go/parser, no packages.Load — so that path would have meant adding package loading, which is slow, build-context dependent and contrary to the parse-only design. The implemented approach instead harvests 'type <Name> <integer kind>' declarations from the scanned source itself, into a repo-scoped registry built in a pre-pass over all parsed files (a key may name a type declared in another package). An aliased or dot-imported qualifier resolves to nothing and is left unreported rather than guessed.
+THE CORRECTION. The commit message and prior note attributed that 4 -> 32 jump to enum-keyed dispatch tables becoming visible. THAT IS WRONG. Inspecting the finding set shows the 28 new hits are ALL plain integer-keyed LOCAL maps — size, pos, children, byFirst, val — i.e. the ValueSpec shape, not the named-type shape. NOT ONE backend.Op-keyed map appears. So the named-integer-type registry is either not resolving or not reaching any call site, and its contribution to that number is zero.
 
-STILL BROKEN, and this is the important part: autograd/autograd.go:176 rule, ok := vjps[n.op] STILL DOES NOT FIRE with both known gaps closed. The registry resolves backend.Op correctly (proved by the 4 -> 32 jump, which includes other backend.Op-keyed maps), and the declaration form is now harvested. So a THIRD suppression sits downstream of key-type resolution — candidates: the loop-attribution step not treating the enclosing reverse walk as a loop for this site, or a fast-path/allowlist check swallowing it. INSTRUMENT THAT SITE SPECIFICALLY; do not guess again.
+WHAT IS STILL BROKEN. autograd/autograd.go:176 rule, ok := vjps[n.op] does not fire under any condition tried:
+- with both known gaps closed;
+- scanning ./autograd/... alone AND scanning ./... whole-tree, which rules out the registry being incomplete because backend/op.go was outside the scanned roots (a real hypothesis, since the registry is only as complete as the roots — worth keeping in mind regardless);
+- the site is genuinely inside a loop (the reverse walk in runBackward, with a continue above it), and vjps is genuinely declared as the fixed ValueSpec shape at autograd/vjp.go:19.
 
-NOTE THE PATTERN, because it has now happened twice in this rule family: for both PS1001 and PS3003 the isolated cause was real and necessary but NOT SUFFICIENT, and in both cases a plausible one-step fix left the canonical reproduction silent. Treat any remaining detector task the same way — reproduce first, fix, then RE-CHECK the reproduction before claiming closure.
+So the registry lookup itself is the next thing to instrument: add a temporary print of intTypeReg after collectIntTypes and confirm whether intTypeReg[backend][Op] is populated at all, then whether integerKeyType is even reached for this key. Do NOT patch further before that print exists — three successive plausible fixes have now failed to move this site, and each was reasoned rather than observed.
 
-ALSO OUTSTANDING: the 28 new findings are untriaged. Classify each as a real candidate deserving its own task or a false positive to be excluded by construction, and state the verdict per site. If the false-positive share is high the registry may need narrowing (for example requiring the map to be package-level and written only in init, which is the dispatch-table shape).
+DESIGN NOTE THAT STANDS. perfscan is AST-only (go/ast, go/parser, no packages.Load), so the go/types approach originally specified is infeasible without changing the tool architecture. The registry approach — harvesting 'type <Name> <integer kind>' from the scanned source in a pre-pass — remains the right shape; it is the implementation that is unproven, not the design.
 
-SEPARATE, OPTIONAL, do not bundle: converting vjps/vjpsMulti to [backend.NumOps]VJP arrays saves roughly 8-12 ns per node, about 20 us on a 2000-node backward — 1-2 percent, honestly small. Bit-identical, needs its own benchmark.
+ALSO OUTSTANDING: the 28 new findings are untriaged. They are plain int-keyed local maps, so most are probably genuine map-to-slice candidates, but each needs a verdict. If the false-positive share is high, narrow to package-level maps written only in init, which is the dispatch-table shape.
+
+PATTERN, now three times in this rule family: an isolated, correctly identified cause proved necessary but not sufficient. Reproduce, fix, then RE-CHECK the reproduction before claiming closure — and check what a metric actually counts before attributing it.
 
 ## T-01KYJSBE7HE87A9AWR362JVB3Z Triage the 22 PS4004 findings and tighten the rule if the false-positive rate warrants it
 kind: task
