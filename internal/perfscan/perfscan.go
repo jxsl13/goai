@@ -1777,6 +1777,35 @@ func main() {
 	if len(roots) == 0 {
 		roots = []string{"./..."}
 	}
+	// A DOMAIN check is inert without its vocabulary: with no elementAccessors
+	// configured, PS1001/PS1002 can never report, and the scan prints a clean
+	// "no candidates" that reads as "no instances". That false assurance cost a
+	// multi-round investigation into a rule that was not broken — it was simply
+	// running with an empty accessor set because perfscan.json lives inside
+	// internal/perfscan/ and config discovery walks UPWARD from the working
+	// directory, so an invocation from the repo root never finds it. Warn loudly
+	// rather than report a silent zero.
+	domainVocab := map[string]map[string]bool{
+		"per-element-dispatch":               ns.accessors,
+		"per-element-closure":                ns.visitors,
+		"alloc-in-loop":                      ns.allocators,
+		"scalar-transcendental-vectorizable": ns.vectorized,
+	}
+	var starved []string
+	for cat, vocab := range domainVocab {
+		if enabled[cat] && len(vocab) == 0 {
+			starved = append(starved, catToID[cat])
+		}
+	}
+	if len(starved) > 0 {
+		sort.Strings(starved)
+		fmt.Fprintf(os.Stderr, "perfscan: WARNING: %s %s enabled but its vocabulary is empty — "+
+			"these checks CANNOT report and a zero result here means nothing. Pass "+
+			"-config <perfscan.json> (this repo: -config internal/perfscan/perfscan.json, "+
+			"or run `make perfscan`).\n",
+			strings.Join(starved, ", "), map[bool]string{true: "are", false: "is"}[len(starved) > 1])
+	}
+
 	files, err := goFiles(roots, *tests)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "perfscan:", err)
