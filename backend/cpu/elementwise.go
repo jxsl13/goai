@@ -45,35 +45,9 @@ func broadcastContig(t *tensor.Tensor, outShape tensor.Shape) *tensor.Tensor {
 	idx := make([]int, ndo)
 	switch tc.Dtype() {
 	case tensor.F32:
-		src, dst := tc.Storage().F32(), out.Storage().F32()
-		off := 0
-		for pos := 0; pos < n; pos++ {
-			dst[pos] = src[off]
-			for d := ndo - 1; d >= 0; d-- {
-				idx[d]++
-				off += bstride[d]
-				if idx[d] < outShape[d] {
-					break
-				}
-				idx[d] = 0
-				off -= bstride[d] * outShape[d]
-			}
-		}
+		broadcastRuns(out.Storage().F32(), tc.Storage().F32(), bstride, outShape, idx, n)
 	case tensor.F64:
-		src, dst := tc.Storage().F64(), out.Storage().F64()
-		off := 0
-		for pos := 0; pos < n; pos++ {
-			dst[pos] = src[off]
-			for d := ndo - 1; d >= 0; d-- {
-				idx[d]++
-				off += bstride[d]
-				if idx[d] < outShape[d] {
-					break
-				}
-				idx[d] = 0
-				off -= bstride[d] * outShape[d]
-			}
-		}
+		broadcastRuns(out.Storage().F64(), tc.Storage().F64(), bstride, outShape, idx, n)
 	default: // int and other dtypes: the generic coord path
 		ic := make([]int, tc.Ndim())
 		for pos := range n {
@@ -716,5 +690,53 @@ func init() {
 		// Llama/Qwen/Mistral layer. The plain build keeps the ref fallbacks.
 		std.add(backend.OpGELUBackward, tensor.F32, geluBackwardKernelCPU)
 		std.add(backend.OpSiLUBackward, tensor.F32, siluBackwardKernelCPU)
+	}
+}
+
+// broadcastRuns materializes a broadcast by hoisting the INNERMOST axis out of the
+// odometer. Its effective stride is constant across a run, so the run is either one
+// repeated source value (stride 0 — a broadcast axis, a fill) or a straight
+// contiguous read (stride 1 — the axis survives), leaving the odometer to tick once
+// per run instead of once per element. The strided arm keeps the walk total.
+//
+// Bit-identical by construction: this is a pure memmove reordering with no
+// arithmetic on the values, and every dst position still receives the same src
+// offset the per-element odometer computed. Over a full innermost run the odometer's
+// net contribution to off is inner*sInner - sInner*inner = 0, so the outer tick is
+// unchanged.
+func broadcastRuns[T float32 | float64](dst, src []T, bstride []int, outShape tensor.Shape, idx []int, n int) {
+	ndo := len(outShape)
+	if ndo == 0 { // scalar output: the odometer never ticked
+		dst[0] = src[0]
+		return
+	}
+	inner, sInner := outShape[ndo-1], bstride[ndo-1]
+	off := 0
+	for pos := 0; pos < n; pos += inner {
+		run := dst[pos : pos+inner]
+		switch sInner {
+		case 0:
+			v := src[off]
+			for i := range run {
+				run[i] = v
+			}
+		case 1:
+			copy(run, src[off:off+inner])
+		default:
+			o := off
+			for i := range run {
+				run[i] = src[o]
+				o += sInner
+			}
+		}
+		for d := ndo - 2; d >= 0; d-- {
+			idx[d]++
+			off += bstride[d]
+			if idx[d] < outShape[d] {
+				break
+			}
+			idx[d] = 0
+			off -= bstride[d] * outShape[d]
+		}
 	}
 }
