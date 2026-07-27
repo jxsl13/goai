@@ -29,7 +29,7 @@ METHOD LESSON worth carrying: the original analysis inferred the bound shape fro
 
 ## T-01KYJR34RJE7HSS68635PKJYZ2 PS3003 is blind to named integer map keys — it cannot see any enum-keyed dispatch table
 kind: task
-state: draft
+state: done
 created: 2026-07-27
 targets: internal/perfscan/perfscan.go, internal/perfscan/perfscan_test.go
 
