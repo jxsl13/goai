@@ -11,6 +11,58 @@ import (
 // element reads from the input with broadcast (size-1 or missing) axes mapped to
 // index 0. Pure data movement (memory-bound) → reference/cpu only, the GPU backends
 // fall back (§I4 / ADR-0008).
+// broadcastRuns copies src into dst over the output shape, hoisting the
+// INNERMOST axis out of the odometer. That axis is a single contiguous run in
+// dst, and its source stride is 0 (a broadcast axis — one value repeated) or 1
+// (a verbatim row), so the run is a fill or a copy; the odometer then ticks once
+// per run instead of once per element. Element order and the value written at
+// every position are unchanged, so the result is bit-identical to the
+// per-element form — the op does no arithmetic at all, it is a same-dtype copy.
+func broadcastRuns[T refFloat](dst, src []T, shape, eff []int, n int) {
+	ndo := len(shape)
+	if ndo == 0 { // rank-0 output: a single element, no axis to hoist
+		if n > 0 {
+			dst[0] = src[0]
+		}
+		return
+	}
+	inner := shape[ndo-1]
+	sInner := eff[ndo-1]
+	idx := make([]int, ndo)
+	ioff, pos := 0, 0
+	for pos < n {
+		row := dst[pos : pos+inner]
+		switch sInner {
+		case 0: // broadcast axis: one source value repeated across the run
+			v := src[ioff]
+			for j := range row {
+				row[j] = v
+			}
+		case 1: // verbatim contiguous row
+			copy(row, src[ioff:ioff+inner])
+		default: // strided source run (not reachable for row-major inputs; kept total)
+			o := ioff
+			for j := range row {
+				row[j] = src[o]
+				o += sInner
+			}
+		}
+		pos += inner
+		// The innermost axis completed, so its net contribution to ioff is zero
+		// (it advanced by sInner*inner then wrapped by the same amount). Tick the
+		// remaining axes exactly as the per-element odometer would.
+		for d := ndo - 2; d >= 0; d-- {
+			idx[d]++
+			ioff += eff[d]
+			if idx[d] < shape[d] {
+				break
+			}
+			idx[d] = 0
+			ioff -= eff[d] * shape[d]
+		}
+	}
+}
+
 func broadcastKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
 	if len(in) != 1 {
 		return nil, fmt.Errorf("ref: broadcast wants 1 input, got %d", len(in))
@@ -38,41 +90,12 @@ func broadcastKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.At
 				eff[a+offset] = xStrides[a]
 			}
 		}
-		idx := make([]int, ndo)
 		n := out.Numel()
 		switch x.Dtype() {
 		case tensor.F64:
-			src := xc.Storage().F64()
-			dst := out.Storage().F64()
-			ioff := 0
-			for pos := 0; pos < n; pos++ {
-				dst[pos] = src[ioff]
-				for d := ndo - 1; d >= 0; d-- {
-					idx[d]++
-					ioff += eff[d]
-					if idx[d] < pa.Shape[d] {
-						break
-					}
-					idx[d] = 0
-					ioff -= eff[d] * pa.Shape[d]
-				}
-			}
+			broadcastRuns(out.Storage().F64(), xc.Storage().F64(), pa.Shape, eff, n)
 		case tensor.F32:
-			src := xc.Storage().F32()
-			dst := out.Storage().F32()
-			ioff := 0
-			for pos := 0; pos < n; pos++ {
-				dst[pos] = src[ioff]
-				for d := ndo - 1; d >= 0; d-- {
-					idx[d]++
-					ioff += eff[d]
-					if idx[d] < pa.Shape[d] {
-						break
-					}
-					idx[d] = 0
-					ioff -= eff[d] * pa.Shape[d]
-				}
-			}
+			broadcastRuns(out.Storage().F32(), xc.Storage().F32(), pa.Shape, eff, n)
 		}
 		return []*tensor.Tensor{out}, nil
 	}

@@ -2085,3 +2085,34 @@ is **not supported** by the evidence and is not pursued; the actionable item is 
 threshold's margin, and the test is `-short`-skipped so it never runs in CI regardless. If
 the buffer-pool question is ever reopened it needs a deterministic probe (same seed, assert
 bit-identical output with and without a preceding GPU op), not a noisy end-to-end CE gate.
+
+## ref broadcast: run-length hoist (2026-07-27)
+
+`backend/ref` is the *production* kernel for `OpBroadcast` — neither `backend/cpu`
+nor `backend/metal` registers it, so every broadcast on every host lands here
+through the `Execute` fallback chain. It is the VJP of every reduction and of
+`AddBias`, so it runs once per broadcast-shaped gradient per training step, over
+the elements of the larger tensor.
+
+`broadcastKernel` walked a per-element odometer to produce what is, along the
+innermost axis, either a verbatim contiguous row (source stride 1) or one value
+repeated (stride 0). Hoisting that axis out of the odometer turns each run into a
+single `copy` or fill and ticks the odometer once per run instead of once per
+element.
+
+| Benchmark | before | after | speedup |
+| --- | --- | --- | --- |
+| `BenchmarkBroadcastF64_256to256x256` | 160,540 ns | 35,730 ns | **4.49×** |
+
+Method: same host (M2 Pro, darwin/arm64, go1.26.5), interleaved A/B over three
+rounds with a file-copy toggle of `broadcast.go`, medians reported. An earlier
+non-interleaved comparison suggested 5.5×, but the untouched `BenchmarkReshapeF64_64K`
+control moved 46.4 → 37.0 µs between those sessions, so the two runs were not
+comparable and that figure is discarded — the 4.49× above is the interleaved one.
+
+Bit-identity: the op performs no arithmetic (same-dtype copy), so exact equality
+is the bar rather than a tolerance. `TestBroadcastRunsMatchesPerElement` pins the
+result element-for-element against the per-element traversal across F32 and F64
+for a trailing verbatim row, a trailing broadcast axis, a mixed rank-3 case and a
+rank-0 output. The test was proven non-vacuous by mutation: changing the odometer
+tick to start at the innermost axis instead of `ndo-2` turns it red.
