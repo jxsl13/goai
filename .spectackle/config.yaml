@@ -21,4 +21,4 @@ feedback:
 worktrees_dir: ""  # override for .spectackle/wt (abs or root-relative); empty = default location
 coverage_gate: ""  # "package": check counts internal/ and cmd/ packages without a binding contract as findings; empty = silent (visibility stays in state)
 git:
-  mode: offline  # commit only, never push (ADR-0031 open)
+  mode: offline  # commit only, never push (ADR push-authority still open)

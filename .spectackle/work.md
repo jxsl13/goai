@@ -2,7 +2,7 @@
 schema: v1
 ---
 
-## T-01KYJ973VJEXCRJQGN1598MQA2 Add an SGLang datapoint beside vLLM in the serving comparison
+## T-01KYJNDQJZEW0SMH58S84Z23PM Add an SGLang datapoint beside vLLM in the serving comparison
 kind: task
 state: approved
 created: 2026-07-27
@@ -18,7 +18,7 @@ Value: SGLang's RadixAttention prefix reuse is the industry mirror of this repo'
 
 Migrated from cavekit SPEC.md T888.
 
-## T-01KYJ974D1E9YT9817W813Q8D5 Extend the trained-optimizer comparison with APOLLO and Q-GaLore
+## T-01KYJNDR38E4ZSN52KVM0PC5J9 Extend the trained-optimizer comparison with APOLLO and Q-GaLore
 kind: task
 state: approved
 created: 2026-07-27
@@ -32,7 +32,7 @@ Also fix the stale section-range header in training.md so it names the range act
 
 Migrated from cavekit SPEC.md T891.
 
-## T-01KYJ9754VEK59AJ3FX26E9E8R Clear the remaining documentation debt to a green apicheck gate
+## T-01KYJNDS5MFEDAR0GVMSNG4MHD Clear the remaining documentation debt to a green apicheck gate
 kind: task
 state: active
 created: 2026-07-27
@@ -50,7 +50,7 @@ Note: godoc and Example edits are .go files, so this consumes CI and belongs to 
 
 Migrated from cavekit SPEC.md T892.
 
-## T-01KYJ975SKFSBS6BBFQY4CQ3C1 Enable apicheck and mdlint in the CI always-run set
+## T-01KYJNDSP0FG4B672MFS69AQ0F Enable apicheck and mdlint in the CI always-run set
 kind: task
 state: active
 created: 2026-07-27
@@ -68,7 +68,7 @@ Note: the mdlint blocker changes shape once the cavekit spec files are removed, 
 
 Migrated from cavekit SPEC.md T893.
 
-## T-01KYJ976G4FABBJDBB1A1GYE21 Batch the ViT encoder instead of looping over the batch dimension
+## T-01KYJNDT44EKJAXN8W0Y4QFZCE Batch the ViT encoder instead of looping over the batch dimension
 kind: task
 state: approved
 created: 2026-07-27
@@ -86,7 +86,7 @@ Benchmark harness already exists at internal/benchcompare/vision_train_test.go.
 
 Migrated from cavekit SPEC.md T908.
 
-## T-01KYJ97791ETXVQ8WW3YNVZ8MQ Hoist per-layer Attrs boxing across the remaining decode models
+## T-01KYJNDTK2E8A9BK9SGAZ4VKYS Hoist per-layer Attrs boxing across the remaining decode models
 kind: task
 state: approved
 created: 2026-07-27
@@ -102,11 +102,11 @@ Coordination: re-check for a scope collision per file before editing, as a paral
 
 Migrated from cavekit SPEC.md T956.
 
-## ADR-01KYJ98BE4EFVTFS2T8Y2GTMW9 What is the agent commit and push authority on this repo?
+## ADR-01KYJNF428F8Q9RQTABB1ZSVPC What is the agent commit and push authority on this repo?
 kind: adr
 state: submitted
 created: 2026-07-27
-context: The migrated cavekit constraint C8 says the loop must never commit or push without explicit user permission and works in the working tree only. The repository history contradicts this: work lands as autonomous branch-plus-pull-request pushes, and the worker runner protocol RUN2 mandates PR-only pushes with manual merge after green CI. A separate push throttle was removed from the constraints but is still documented in LOOP.md. C8 was therefore not migrated as a rule, because encoding either reading without confirmation would put a false contract in the spec. Note the spec server itself now runs with git.mode=offline, so it commits but never pushes.
+context: The migrated cavekit constraint C8 says the loop must never commit or push without explicit user permission and works in the working tree only. The repository history contradicts this: work lands as autonomous branch-plus-pull-request pushes, and the worker runner protocol RUN2 mandates PR-only pushes with manual merge after green CI. C8 was therefore not migrated as a rule, because encoding either reading without confirmation would put a false contract in the spec. The spec server itself runs with git.mode=offline, so it commits but never pushes.
 status: proposed
 
 kind: radio
