@@ -104,18 +104,82 @@ func reduceKernel(init float64, combine func(acc, x float64) float64, finalize f
 					eff[ax] = outStrides[p]
 				}
 			}
-			idx := make([]int, nd)
-			of := 0
-			for pos := range xs {
-				acc[of] = combine(acc[of], xs[pos])
-				for d := nd - 1; d >= 0; d-- {
-					idx[d]++
-					of += eff[d]
-					if idx[d] < shape[d] {
-						break
+			if len(acc) == 1 {
+				// Reduce-all: every element lands in acc[0], so `of` is invariably 0
+				// and the odometer is pure bookkeeping — for this shape every eff is
+				// zero, so it computes of += 0 once per element. A local accumulator
+				// additionally removes the acc[0] load/store and its bounds check from
+				// the inner loop. Same ascending pos order, same combine sequence, so
+				// the accumulator sees an identical add chain — bit-identical.
+				a := acc[0]
+				for _, v := range xs {
+					a = combine(a, v)
+				}
+				acc[0] = a
+			} else if nd > 0 && shape[nd-1] > 0 {
+				// Hoist the innermost axis out of the odometer. Its effective stride is
+				// constant across the run, so the run is either a single accumulator
+				// fed repeatedly (stride 0 — a reduced innermost axis) or a straight
+				// walk down consecutive accumulators (stride 1 — the innermost axis
+				// survives into the output). Either way the odometer ticks once per run
+				// instead of once per element.
+				//
+				// Bit-identical: every accumulator still sees exactly the same values in
+				// the same ascending order, so its combine chain is unchanged. Only the
+				// index bookkeeping around it moves.
+				inner := shape[nd-1]
+				sInner := eff[nd-1]
+				idx := make([]int, nd)
+				of, pos := 0, 0
+				for pos < len(xs) {
+					run := xs[pos : pos+inner]
+					switch sInner {
+					case 0: // whole run folds into one accumulator
+						a := acc[of]
+						for _, v := range run {
+							a = combine(a, v)
+						}
+						acc[of] = a
+					case 1: // run walks consecutive accumulators
+						dst := acc[of : of+inner]
+						for j, v := range run {
+							dst[j] = combine(dst[j], v)
+						}
+					default: // strided (not reachable for row-major outputs; kept total)
+						o := of
+						for _, v := range run {
+							acc[o] = combine(acc[o], v)
+							o += sInner
+						}
 					}
-					idx[d] = 0
-					of -= eff[d] * shape[d]
+					pos += inner
+					// The innermost axis completed, so its net contribution to `of` is
+					// zero. Tick the remaining axes exactly as the per-element odometer
+					// would have.
+					for d := nd - 2; d >= 0; d-- {
+						idx[d]++
+						of += eff[d]
+						if idx[d] < shape[d] {
+							break
+						}
+						idx[d] = 0
+						of -= eff[d] * shape[d]
+					}
+				}
+			} else {
+				idx := make([]int, nd)
+				of := 0
+				for pos := range xs {
+					acc[of] = combine(acc[of], xs[pos])
+					for d := nd - 1; d >= 0; d-- {
+						idx[d]++
+						of += eff[d]
+						if idx[d] < shape[d] {
+							break
+						}
+						idx[d] = 0
+						of -= eff[d] * shape[d]
+					}
 				}
 			}
 			out := tensor.NewOn(ctx.Device(), x.Dtype(), outShape)

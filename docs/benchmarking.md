@@ -2181,3 +2181,69 @@ That argument was verified rather than trusted: the raw output bits of
 `dequantQ6_KInto` were captured for a deterministic 7-block input before and after
 the change (7,168 bytes) and compared byte-for-byte — identical. The per-element
 `IsInBounds` in the loop body also drops to zero.
+
+## ref reduce-all: fast path off the odometer (2026-07-27)
+
+`backend/ref` is the *production* kernel for every reduction — neither
+`backend/cpu` nor `backend/metal` registers `OpSum`/`OpMean`/`OpMax`/`OpMin`/
+`OpProd`, so all of them reach `reduceKernel` through the `Execute` fallback
+chain. Reductions run per element of the input, in both forward and backward.
+
+For a reduce-all every element lands in `acc[0]`, so the output offset is
+invariably 0 and the per-element odometer is pure bookkeeping — with every
+effective stride zero it computes `of += 0` once per element. Splitting that case
+out and accumulating into a local removes the odometer, the `acc[0]` load/store
+and its bounds check from the inner loop.
+
+| Benchmark | before | after | speedup |
+| --- | --- | --- | --- |
+| `BenchmarkSumF64_64K` (reduce-all) | 226,448 ns | 132,089 ns | **1.71×** |
+| `BenchmarkSumAxisF64_256x256` (control, unaffected) | 225,401 ns | 225,413 ns | 1.00× |
+
+Method: same host (M2 Pro, darwin/arm64, go1.26.5), interleaved A/B over three
+rounds with a file-copy toggle of `reduce.go`, medians reported. The axis-reduce
+control takes the untouched branch and does not move, which is what confines the
+result to the path actually changed.
+
+Bit-identity: exact, and verified rather than argued — `ref` is the numeric truth
+every accelerated kernel is validated against, so a drift here would move the
+goalposts for cpu, metal, cuda and vulkan at once. The raw output bits of 5 ops ×
+3 axis configurations × 2 dtypes (7,760 bytes) were captured before and after and
+compared byte-for-byte: identical. The visit order is unchanged — same ascending
+`pos`, same `combine` sequence — so the accumulator sees an identical add chain.
+
+Only the reduce-all sub-step of that work landed. Still outstanding: run-length
+strip-mining for the general axis case, devirtualizing the `combine` closure, and
+the F32 path's whole-input pre-widening (a 512 KB garbage buffer per call).
+
+## ref reduce, axis case: run-length strip-mining (2026-07-27)
+
+Companion to the reduce-all fast path above, covering the general axis case. The
+innermost axis has a constant effective stride across its run, so the run is
+either one accumulator fed repeatedly (stride 0, a reduced innermost axis) or a
+straight walk down consecutive accumulators (stride 1, the axis survives into the
+output). Hoisting it out of the odometer ticks the bookkeeping once per run
+instead of once per element.
+
+| Benchmark | before | after | speedup |
+| --- | --- | --- | --- |
+| `BenchmarkSumAxisF64_256x256` | 226,176 ns | 129,071 ns | **1.75×** |
+| `BenchmarkSumF64_64K` (control, already hoisted) | 131,981 ns | 132,259 ns | 1.00× |
+
+Method as before: same host, interleaved three-round file-copy toggle, medians.
+The reduce-all benchmark serves as the control here — it takes the branch landed
+previously and does not move, confining this result to the axis path.
+
+Taken together the two changes put both reduce paths at roughly 1.7× off their
+original: reduce-all 226,448 → 132,089, axis 225,401 → 129,071.
+
+Bit-identity: exact, verified over a wider matrix than the first change — 5 ops ×
+4 axis configurations × 3 shapes (including a rank-3 and a non-power-of-two) × 2
+dtypes, 17,040 bytes, byte-for-byte identical before and after. Every accumulator
+still sees the same values in the same ascending order, so its combine chain is
+unchanged; only the index bookkeeping around it moved.
+
+Still outstanding from that task: devirtualizing the `combine` closure (gate it on
+`-gcflags=-S` showing no `FMADDD` in the reduce core) and the F32 path's
+whole-input pre-widening. The 3.5-5× originally predicted covers all four
+sub-steps; the two landed here account for ~1.7×.
