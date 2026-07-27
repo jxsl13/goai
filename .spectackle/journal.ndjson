@@ -195,3 +195,4 @@
 {"t":"2026-07-27T22:53:07Z","eid":"3fd40703416fdf72","ag":"ag-89d7","ev":"create","id":"T-01KYJWGBGRER59EX4MPX6S8VE7","k":"task","ti":"cpu broadcast odometer: hoist innermost axis into runs (PS4004 triage)"}
 {"t":"2026-07-27T22:55:47Z","eid":"87af9b7b3946d6c4","ag":"ag-fe10","ev":"create","id":"R-01KYJWN7RTF1E8VP2F8APHC8HD","k":"research","ti":"cpu broadcastRuns not validated: benchmarks never enter broadcastContig"}
 {"t":"2026-07-27T23:00:17Z","eid":"a36e51bc4e3b73ba","ag":"ag-d541","ev":"create","id":"R-01KYJWXFVZF42RYNW92Y1T66EN","k":"research","ti":"cpu general-broadcast runs transform validated and shipped (5.29x)"}
+{"t":"2026-07-27T23:03:59Z","eid":"30700f10b1fad2f8","ag":"ag-8d6c","ev":"create","id":"T-01KYJX48GFEHZBYPPGBQA9Z4WT","k":"task","ti":"tensor gatherCast: hoist innermost axis out of the strided-gather odometer"}
