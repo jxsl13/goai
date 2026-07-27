@@ -152,10 +152,22 @@ func gatherBlocked2D[S, D gatherElem](dst []D, src []S, rows, cols, s0, s1, off 
 
 func gatherCast[S, D gatherElem](dst []D, src []S, shape Shape, strides Strides, off int) {
 	nd := len(shape)
+	// Hoist the INNERMOST axis out of the odometer: its stride is constant across a
+	// run, so the run is a straight strided walk and the odometer ticks once per run
+	// instead of once per element (the same trick gatherBlocked2D uses inline).
+	// Traversal order and the per-element D() conversion are unchanged, and over a
+	// full run the innermost axis contributes inner*sInner - sInner*inner = 0 to off,
+	// so the outer tick is identical — bit-identical values.
+	inner, sInner := shape[nd-1], strides[nd-1]
 	idx := make([]int, nd)
-	for pos := range dst {
-		dst[pos] = D(src[off])
-		for d := nd - 1; d >= 0; d-- {
+	for pos := 0; pos < len(dst); pos += inner {
+		run := dst[pos : pos+inner]
+		s := off
+		for p := range run {
+			run[p] = D(src[s])
+			s += sInner
+		}
+		for d := nd - 2; d >= 0; d-- {
 			idx[d]++
 			off += strides[d]
 			if idx[d] < shape[d] {
