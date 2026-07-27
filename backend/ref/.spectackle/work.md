@@ -35,7 +35,7 @@ PERFSCAN RULES REQUIRED, one of which is a THIRD DETECTOR BUG: (i) PS1002 (per-e
 
 ## T-01KYJREGVQEX696JPW87A887YA Make broadcastKernel copy contiguous runs instead of walking an odometer per element
 kind: task
-state: draft
+state: done
 created: 2026-07-27
 targets: backend/ref/broadcast.go, backend/ref/broadcast_runs_test.go, docs/benchmarking.md
 
