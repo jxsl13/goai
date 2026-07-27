@@ -6,27 +6,26 @@ schema: v1
 kind: task
 state: draft
 created: 2026-07-27
+targets: internal/perfscan/perfscan.go, internal/perfscan/perfscan_test.go
 
-DETECTOR BUG, verified by running the tool, with the root cause now isolated precisely.
+DETECTOR BUG, confirmed by running the tool. PS1001 does not fire on per-element AtF64/SetF64 loops that its name implies it covers.
 
-ROOT CAUSE: PS1001 keys on Numel/Unravel-driven loops. It therefore misses per-element AtF64/SetF64 nests whose bounds are SHAPE-DERIVED SCALARS — for j := range d, for i := range sinks — which is the far more common shape in this codebase.
+CONFIRMED FALSE NEGATIVES (go run ./internal/perfscan -checks PS1001 reports nothing on any of these):
+- nlp/quant_llama_decode.go:25-27 QuantLlama.embedOne — the sole surviving per-element embedding lookup; 28 of the package 29 embedOne implementations already call the bulk embedRow.
+- nlp/kvevict.go:115-123 GatherRows — row gather where a per-row copy is available.
+- llamagpu/t5_decoder.go:226 — per-token decode path, in a package whose decoder.go:3224 already has the bulk embedRow helper.
+- rl/continuous.go:245-254 contMat — 3 calls x BatchSize x actDim per SAC.learn, which runs every env step; its sibling rl/rl.go:143-149 already received this fix.
+- nlp/streaming.go keepSinkRecent — SINCE FIXED under its own task, but it was never flagged either.
 
-FIVE CONFIRMED FALSE NEGATIVES (go run ./internal/perfscan -checks PS1001 reports "no candidate anti-patterns found" on all of them):
-- nlp/streaming.go:42-51 keepSinkRecent — nested AtF64/SetF64 over (sinks+window) x d, run twice per layer per token on the StreamingLLM path. At sinks=4 / window=1020 / kvWidth=1024 / 32 layers this is roughly 67 MILLION per-element dispatches per token. The single highest-impact miss.
-- nlp/quant_llama_decode.go:25-27 QuantLlama.embedOne — the sole surviving per-element embedding lookup; 28 of the package's 29 embedOne implementations already call the bulk embedRow.
-- nlp/kvevict.go:118-122 GatherRows — row gather where a per-row copy is available, reached from EvictStreaming.
-- llamagpu/t5_decoder.go:226 — emb[j] = float32(d.shared.AtF64(token, j)) on the per-token decode path, in a package whose decoder.go:3224 already has the bulk embedRow helper.
-- rl/continuous.go:245-254 contMat — t.SetF64(v, i, j) nested, 3 calls x BatchSize x actDim per SAC.learn, which runs every env step. Its sibling rl/rl.go:143-149 already received exactly this fix.
+CORRECTED ROOT-CAUSE ANALYSIS. The earlier note in this task said the cause was the Numel/Unravel loop-bound predicate and implied a one-line widening. THAT IS WRONG, and an attempt proved it. Two findings:
 
-FIX: widen the loop predicate from Numel/Unravel-driven to any ForStmt/RangeStmt nest whose innermost body is an ExprStmt of the form X.SetF64(Y.AtF64(i...), j...) where the index expressions are affine in the loop variables AND the innermost loop bound is a shape-derived expression (Shape()[k], a trailing-dim variable, or a struct field holding one). Keep the existing typed-fast-path suppression. The Numel/Unravel case remains a strictly narrower sub-case, so every existing positive must keep firing.
+(1) The five sites do not share one bound shape. They have THREE: a struct-field selector (d := m.Config.Dim, then range d); len() plus range-over-slice (n, d := len(rows), len(rows[0]), then for i, r := range rows / for j, v := range r); and a shape-call index (d := t.Shape()[1], then range d). A predicate widened for any one of them still misses the others.
 
-WORTH ADDING AT THE SAME TIME, a majority-pattern-deviation signal: the embedOne case is detectable more sharply as "a bulk sibling with this exact signature exists in-package and 28 other call sites use it, this one does not". That heuristic would have caught the holdout mechanically rather than by reading.
+(2) Widening the bound predicate is NOT SUFFICIENT. I implemented the shape-call-index case — an ident assigned from IndexExpr whose X is a CallExpr, added to numelIdents so isNumelRange/isNumelForCond classify the loop as per-element — and PS1001 STILL did not fire on nlp/kvevict.go:115, which uses exactly that form. So a second suppression is in play downstream of the loop classification: most likely the hasFlat fast-path check (the function may reach a typed bulk accessor elsewhere and be treated as having a fallback), or the accessor/anyAncestorPerElem attribution. That change was REVERTED rather than left in as unvalidated speculation.
 
-VALIDATION GATE: this is a detector-correctness task, not a speed task, so the gate is fixtures plus a repo sweep, NOT a benchmark. (1) Add all five confirmed sites to internal/perfscan/perfscan_test.go as POSITIVE fixtures, plus a negative fixture where the accessor is hoisted or the receiver varies per iteration, so the rule is proven non-vacuous in both directions. (2) After widening, run go run ./internal/perfscan -checks PS1001 ./... and record the FULL new finding set in the closing note — each newly flagged site is either a real straggler deserving its own task or a false positive that must be suppressed by construction, and which one it is must be stated per site rather than assumed. (3) Confirm the pre-existing positives still fire.
+WHAT THIS TASK MUST DO, revised: instrument before patching. Take nlp/kvevict.go:115 as the single reproduction case, determine WHY it is suppressed with the loop correctly classified, and fix that. Only then widen the bound predicate, and widen it to cover all three shapes above rather than one. Add all five sites as positive fixtures plus a negative where the accessor sits in a genuine dtype fallback branch, so the rule is proven non-vacuous in both directions. Finally re-scan the tree and classify every new finding per site.
 
-WHY THIS RANKS HIGH DESPITE SHIPPING NO SPEED: the standing requirement is that every generalizable optimization becomes a perfscan rule so instances are found mechanically across the tree. A rule with silent false negatives is worse than no rule, because a clean scan is read as "no instances" — the same false-assurance failure FMT-004 already records for a fuzz target that never reached its parser. Five misses in two sweeps, all of the same shape, means the rule has been giving false assurance since it was written. Fixing the detector multiplies across every future sweep.
-
-SCOPE NOTE: do NOT fix the five sites here. Widening the detector and fixing what it finds are separate changes with separate risks; the sites have their own tasks.
+METHOD LESSON worth carrying: the original analysis inferred the bound shape from a description instead of reading the five sites, and the resulting one-line fix was dead code. Read the sites first.
 
 ## T-01KYJR34RJE7HSS68635PKJYZ2 PS3003 is blind to named integer map keys — it cannot see any enum-keyed dispatch table
 kind: task

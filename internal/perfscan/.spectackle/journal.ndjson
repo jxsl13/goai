@@ -2,3 +2,4 @@
 {"t":"2026-07-27T21:33:58Z","eid":"cdc2c5569ee0e95c","ag":"ag-2bf3","ev":"revise","id":"T-01KYJQ3PGEEFSAKZXXRNP42W5Q","dir":"internal/perfscan","note":"body revised"}
 {"t":"2026-07-27T21:36:00Z","eid":"c0343746135e8c52","ag":"ag-8421","ev":"create","id":"T-01KYJR34RJE7HSS68635PKJYZ2","k":"task","ti":"PS3003 is blind to named integer map keys — it cannot see any enum-keyed dispatch table","dir":"internal/perfscan"}
 {"t":"2026-07-27T21:58:00Z","eid":"22d44e513b40f416","ag":"ag-01f9","ev":"create","id":"T-01KYJSBE7HE87A9AWR362JVB3Z","k":"task","ti":"Triage the 22 PS4004 findings and tighten the rule if the false-positive rate warrants it","dir":"internal/perfscan"}
+{"t":"2026-07-27T22:23:50Z","eid":"e0cee7216d2fed75","ag":"ag-d88e","ev":"revise","id":"T-01KYJQ3PGEEFSAKZXXRNP42W5Q","dir":"internal/perfscan","note":"body+targets revised"}
