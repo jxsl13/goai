@@ -14,7 +14,7 @@ The archsimd intrinsic SHALL be gated at runtime by archsimd.X86.AVX() or .FMA()
 Rationale: Go 1.26 simd/archsimd provides Float32x8 (8 lanes) and Float64x4 (4 lanes). Runtime feature detection is the same invariant the accelerator backends follow. Migrated from the worker spec Iw2.
 
 ## SIMD-006
-WHERE the amd64 SIMD build, the a bit-exact SIMD kernel SHALL vectorize the free dimension j rather than the reduction k, and use separate Mul and Add rather than MulAdd.
+WHERE the amd64 SIMD build, the bit-exact SIMD kernels SHALL vectorize the free dimension j rather than the reduction k, and use separate Mul and Add rather than MulAdd.
 
 Rationale: Vectorizing the reduction changes summation order. On amd64 the scalar twin rounds twice (mul then add) while FMA rounds once, so a bit-exact kernel must NOT fuse. This is architecture-specific: see the arm64 companion rule, where the rule inverts. Migrated from the linux-amd64-cuda worker spec Iw5, which was written for that host only.
 
