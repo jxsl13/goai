@@ -70,7 +70,7 @@ Migrated from cavekit SPEC.md T893.
 
 ## T-01KYJNDT44EKJAXN8W0Y4QFZCE Batch the ViT encoder instead of looping over the batch dimension
 kind: task
-state: approved
+state: done
 created: 2026-07-27
 targets: vision
 
