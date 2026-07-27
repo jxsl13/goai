@@ -2247,3 +2247,40 @@ Still outstanding from that task: devirtualizing the `combine` closure (gate it 
 `-gcflags=-S` showing no `FMADDD` in the reduce core) and the F32 path's
 whole-input pre-widening. The 3.5-5× originally predicted covers all four
 sub-steps; the two landed here account for ~1.7×.
+
+## nlp StreamingLLM cache eviction: typed row copies (2026-07-27)
+
+`keepSinkRecent` bounds the StreamingLLM KV cache to the first `sinks` rows plus
+the last `window` rows. It runs twice per layer per token (K and V), and once the
+stream passes `sinks+window` — the steady state that is the entire point of
+StreamingLLM — its early return never fires again.
+
+Both retained regions are contiguous row blocks, yet each element went through a
+variadic `AtF64`/`SetF64` pair: a stride walk plus an interface dispatch into
+storage, per element. Replacing them with two typed copies makes it a memmove.
+
+| Benchmark | before | after | speedup |
+| --- | --- | --- | --- |
+| `BenchmarkKeepSinkRecent` (2048×2048 → 516×2048, F32) | 6,099,284 ns | 147,826 ns | **41×** |
+| throughput | 693 MB/s | 28,595 MB/s | |
+
+Method: same host, interleaved three-round file-copy toggle, medians. The
+benchmark is new — none existed, and the package's own streaming tests use
+`sinks=2, window=6`, far too small to reach the bound.
+
+This exceeds the 5-8× that was predicted from a per-element-versus-row-copy micro
+ratio, and the reason is geometry: at ~1M elements the per-element path also
+thrashes cache, while the typed copy is bandwidth-bound. Both arms allocate
+4,227,3xx B/op — identical work and identical output size — which is what rules
+out the result being an elided-work artifact.
+
+Bit-identity: exact. A same-dtype copy moves the same bits, and the
+`SetF64(AtF64(...))` it replaces was already an exact round trip.
+`TestKeepSinkRecentMatchesPerElement` pins it element-for-element against the
+per-element reference across F32 and F64 and six geometries — past the bound, at
+the bound, below it, degenerate widths, no sinks, no window — and is proven
+non-vacuous by mutation (swapping the window source offset turns it red).
+
+`copyRows` grew a `copyRowsFrom` sibling that takes a source offset; the original
+now delegates to it. It returns false for dtypes it cannot move verbatim, so the
+generic per-element fallback is preserved for those.

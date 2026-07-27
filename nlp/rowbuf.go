@@ -163,15 +163,26 @@ func typedRowCopyOK(dt tensor.Dtype) bool {
 // typed row-block copy of the KV append hot path (§base-perf: no per-element
 // AtF64/SetF64 dispatch).
 func copyRows(dst *tensor.Tensor, dstOff int, src *tensor.Tensor, nEl int) {
+	copyRowsFrom(dst, dstOff, src, 0, nEl)
+}
+
+// copyRowsFrom is copyRows reading from a flat element offset in src rather than
+// from its start — the shape a bounded cache needs when it keeps a trailing block
+// (the recent window) as well as a leading one (the sinks). Returns false for a
+// dtype it cannot move verbatim, so callers keep their generic fallback.
+func copyRowsFrom(dst *tensor.Tensor, dstOff int, src *tensor.Tensor, srcOff, nEl int) bool {
 	s := src.Contiguous() // no-op for kernel outputs and rowBuf views (offset 0)
 	switch dst.Dtype() {
 	case tensor.F32:
-		copy(dst.Storage().F32()[dstOff:dstOff+nEl], s.Storage().F32()[:nEl])
+		copy(dst.Storage().F32()[dstOff:dstOff+nEl], s.Storage().F32()[srcOff:srcOff+nEl])
 	case tensor.F64:
-		copy(dst.Storage().F64()[dstOff:dstOff+nEl], s.Storage().F64()[:nEl])
+		copy(dst.Storage().F64()[dstOff:dstOff+nEl], s.Storage().F64()[srcOff:srcOff+nEl])
 	case tensor.F16, tensor.BF16:
-		copy(dst.Storage().U16()[dstOff:dstOff+nEl], s.Storage().U16()[:nEl])
+		copy(dst.Storage().U16()[dstOff:dstOff+nEl], s.Storage().U16()[srcOff:srcOff+nEl])
+	default:
+		return false
 	}
+	return true
 }
 
 // owns reports whether cur is the row-prefix view this buffer last handed out:
