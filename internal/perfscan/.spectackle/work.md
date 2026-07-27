@@ -8,21 +8,28 @@ state: draft
 created: 2026-07-27
 targets: internal/perfscan/perfscan.go, internal/perfscan/perfscan_test.go
 
-DETECTOR BUG. PS1001 does not fire on per-element AtF64/SetF64 loops its name implies it covers. FIVE confirmed sites: nlp/quant_llama_decode.go:25-27, nlp/kvevict.go:115-123, llamagpu/t5_decoder.go:226, rl/continuous.go:245-254, and nlp/streaming.go keepSinkRecent (since fixed under its own task, but never flagged).
+DETECTOR BUG. PS1001 misses per-element AtF64/SetF64 loops its name implies it covers. FIVE confirmed sites: nlp/quant_llama_decode.go:25-27, nlp/kvevict.go:115-123, llamagpu/t5_decoder.go:226, rl/continuous.go:245-254, and nlp/streaming.go keepSinkRecent (since fixed under its own task, but never flagged).
 
-INSTRUMENTED DIAGNOSIS — the blocker is narrowed to ONE of three conditions, so the next attempt need not guess. The predicate is perElem AND accessors[name] AND NOT hasFlat. Printing all three for nlp/kvevict.go gives, at the SetF64 call site:
+DIAGNOSIS BY INSTRUMENTATION, narrowed over two passes. Do not re-derive these; they are measured, not reasoned.
 
+Pass 1 — the predicate is perElem AND accessors[name] AND NOT hasFlat. Printed at the kvevict SetF64 call site:
   kvevict.go:120:4  name=SetF64  perElem=false  hasFlat=false
+So the accessor IS recognized and hasFlat is NOT suppressing it. hasFlat was the leading suspect and is now ruled out. perElem is the failing term.
 
-So the accessor IS recognized, and hasFlat is NOT suppressing it — a hypothesis worth discarding explicitly, since it was the leading suspect. THE LOOP CLASSIFICATION IS THE BLOCKER: perElem is false for a range over an ident bound to a shape dimension.
+Pass 2 — printed numelIdents when GatherRows is scanned:
+  baseline:        numelIdents=map[]
+  with the patch:  numelIdents=map[d:true]
+The patch collects idents assigned from an IndexExpr over a CallExpr, i.e. the d := t.Shape()[1] form. IT POPULATES CORRECTLY. An earlier note said this approach did not take; that was wrong, and the patch had been reverted on that mistaken basis.
 
-WHAT THAT MEANS FOR THE FIX. perElemLoop is set from isNumelRange/isNumelForCond (bound derived from a configured element-count method) or directlyHasUnravel. A range over a shape-dimension ident satisfies neither. An earlier attempt added idents assigned from an IndexExpr over a CallExpr (the shape-call-index form) to numelIdents; it did NOT make the site fire and was reverted rather than left in as unvalidated speculation. Now that perElem is confirmed as the failing term, that direction is right but something in it did not take — instrument numelIdents itself next, printing whether the dimension ident is present when GatherRows is scanned, before changing the predicate again.
+BUT PS1001 STILL DOES NOT FIRE with numelIdents populated. So the blocker lies BETWEEN perElemLoop construction and the anyAncestorPerElem lookup at the call site. The patch was reverted again only because its false-positive impact could not be assessed in the same pass — it is directionally correct and should be reinstated as part of the real fix, not rediscovered.
 
-THE FIVE SITES DO NOT SHARE ONE BOUND SHAPE. Three distinct ones: a shape-call index (kvevict), a struct-field selector (quant_llama_decode), and len() plus range-over-slice (contMat). A predicate widened for one still misses the others — fix and verify each shape separately.
+NEXT DIAGNOSTIC, precisely: with the patch applied, print perElemLoop for the inner range loop of GatherRows (for j := range d) and, separately, print what anyAncestorPerElem walks from the AtF64 call. One of three things is true — isNumelRange is not matching the RangeStmt over the ident, perElemLoop is keyed on a node that is not the one the parent chain reaches, or the parent map does not link the call to that loop. Each is one print away.
 
-PRECEDENT WORTH FOLLOWING: the sibling PS3003 bug was closed this session and its final cause was STRUCTURAL, not a predicate — a file-scoped fact that had to become package-scoped. Three reasoned fixes there each left the reproduction silent; one instrumented print located it in a single run. Expect the same shape of surprise here, and re-check the reproduction after every change rather than trusting the reasoning.
+THE FIVE SITES DO NOT SHARE ONE BOUND SHAPE. Three distinct: a shape-call index (kvevict), a struct-field selector d := m.Config.Dim (quant_llama_decode), and len() plus range-over-slice (contMat). A predicate widened for one still misses the others — fix and verify each separately.
 
-VALIDATION GATE: fixtures plus a repo sweep, NOT a benchmark. Add all five sites as positive fixtures, plus a negative where the accessor sits in a genuine dtype fallback branch, so the rule is proven non-vacuous both ways. Then re-scan and classify every new finding per site.
+PRECEDENT: the sibling PS3003 bug closed this session, and its final cause was STRUCTURAL, not a predicate — a file-scoped fact that had to become package-scoped. Three reasoned fixes there each left the reproduction silent; one instrumented print found it. Expect the same here.
+
+VALIDATION GATE: fixtures plus a repo sweep, NOT a benchmark. All five sites as positive fixtures, plus a negative where the accessor sits in a genuine dtype fallback branch. Then re-scan and classify every new finding per site.
 
 ## T-01KYJR34RJE7HSS68635PKJYZ2 PS3003 is blind to named integer map keys — it cannot see any enum-keyed dispatch table
 kind: task
