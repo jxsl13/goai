@@ -1,2 +1,3 @@
 {"t":"2026-07-27T21:18:49Z","eid":"5191f4cca3d39fe4","ag":"ag-8b5d","ev":"create","id":"T-01KYJQ3PGEEFSAKZXXRNP42W5Q","k":"task","ti":"Broaden PS1001 — it misses per-element AtF64/SetF64 outside Numel/Unravel loops","dir":"internal/perfscan"}
 {"t":"2026-07-27T21:33:58Z","eid":"cdc2c5569ee0e95c","ag":"ag-2bf3","ev":"revise","id":"T-01KYJQ3PGEEFSAKZXXRNP42W5Q","dir":"internal/perfscan","note":"body revised"}
+{"t":"2026-07-27T21:36:00Z","eid":"c0343746135e8c52","ag":"ag-8421","ev":"create","id":"T-01KYJR34RJE7HSS68635PKJYZ2","k":"task","ti":"PS3003 is blind to named integer map keys — it cannot see any enum-keyed dispatch table","dir":"internal/perfscan"}
