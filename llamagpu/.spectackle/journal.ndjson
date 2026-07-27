@@ -1,3 +1,4 @@
 {"t":"2026-07-27T21:13:14Z","eid":"8d2a9f90ea20b657","ag":"ag-8715","ev":"create","id":"T-01KYJPSEWVFRSRSMX2VEV7AY95","k":"task","ti":"Port the dispatch fusion and encode-overlap from Decoder onto GPTDecoder","dir":"llamagpu"}
 {"t":"2026-07-27T21:13:14Z","eid":"c2d5b5f0cc6b6f2b","ag":"ag-8715","ev":"create","id":"T-01KYJPSFC1FABA9F2ADEX2BPQT","k":"task","ti":"Fix the column-major stride in Medusa headArgmax","dir":"llamagpu"}
 {"t":"2026-07-27T21:13:15Z","eid":"39699903811328c7","ag":"ag-8715","ev":"create","id":"T-01KYJPSFVPE1HBM80MHZE5EJRY","k":"task","ti":"Stop computing and downloading discarded prefill logits in StepN","dir":"llamagpu"}
+{"t":"2026-07-27T21:20:46Z","eid":"78c36942a0987e87","ag":"ag-dac4","ev":"create","id":"T-01KYJQ78FAFCGA1D639T76XZKC","k":"task","ti":"Compute the T5 relative-position bias row directly instead of rebuilding the full matrix per token","dir":"llamagpu"}

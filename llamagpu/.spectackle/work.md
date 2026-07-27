@@ -69,3 +69,28 @@ EXPECTED: 1.3-1.6x on prefill wall time at 512-token prompts (larger at bigger v
 BIT-IDENTITY BAR: change 1 has NONE — the removed work has no consumer. Change 2 is REAL and must be gated: the last row's logits would come from a GEMM with M=1 instead of M=k, MPS may select a different kernel and K-reduction order, and the package's own TestStepNMatchesSequentialSteps (llamagpu_test.go:350) asserts only 2e-3 relative tolerance between M=1 and M=k — it already knows they are not bit-equal. A 1e-3 logit shift can flip a near-tie and change the emitted token. Gate change 2 on a new test: greedy Generate(prompt, 256) before and after must return TOKEN-FOR-TOKEN identical ids across several prompt lengths and both decoders. If that does not hold, ship change 1 alone.
 
 PERFSCAN RULE REQUIRED: a function returns a slice of n*stride elements and at one or more call sites the result is bound to the blank identifier, or the only subsequent index expression is a constant-offset suffix such as all[(n-1)*stride:]. AST pass over call sites of package-local functions with slice results: classify each site as discarded, single-row, or full-use, and flag any producer whose expensive tail (a record*/Download* call guarded by the row count) is unconditional while at least one site is discarded.
+
+## T-01KYJQ78FAFCGA1D639T76XZKC Compute the T5 relative-position bias row directly instead of rebuilding the full matrix per token
+kind: task
+state: draft
+created: 2026-07-27
+
+ASYMPTOTIC, not constant-factor: O(T^3) over a T-token generation where O(T^2) suffices.
+
+SITE: llamagpu/t5_decoder.go:121 (*GPUT5Decoder).selfBiasRow, called at :228 inside (*t5DecSession).step. The byte-identical twin is nlp/t5_decoder.go:377 relBiasRow, called from DecodeStep at nlp/t5_decoder.go:407.
+
+HOST CAVEAT, stated up front: GPUT5Decoder is reachable only through the CUDA constructors, since MHABias is a metal stub — so the end-to-end GPU payoff lands on CUDA, not here. BUT selfBiasRow is pure host code in an untagged file running on backend.Reference(), so it compiles and benchmarks on darwin/arm64 as a CPU function, and the identical nlp twin runs end to end on this host with no GPU at all. Included despite the caveat because the magnitude is asymptotic.
+
+WHY HOT: once per decoded token, on the incremental decode path (both Decode and Generate drive step).
+
+DEFECT: d.relBias.Bias(ctx, pos+1, pos+1) does, PER CALL: builds buckets as [][]int — pos+1 separate slice allocations and (pos+1)^2 bucket calls; materializes a DENSE ONE-HOT [(pos+1)^2, numBuckets] tensor and SetF64s into it element by element — at pos=511 with the default 32 buckets that is 8.4M f64, about 67MB allocated and zeroed PER TOKEN; runs a real OpMatMul of [(pos+1)^2, 32] x [32, heads]; then Contiguous()-copies the result. And then t5_decoder.go:129-134 reads ROW pos ONLY, which is heads*(pos+1) values. Work per token is O(pos^2 * numBuckets); work needed is O(pos * heads). Additionally backend.NewContext() at :122 is rebuilt per token and is loop-invariant.
+
+FIX: compute the row directly from the table — out[h*kk+k] = Table[bucket(k-pos)][h] — with no Bias call, no one-hot and no matmul. Better still, exploit that the bucket for (k - pos) at step pos+1 extends the previous step's row by exactly one entry when the bucketing is causal: keep a persistent []float32 on t5DecSession, grown and appended per step, making per-token cost O(heads). Hoist the Context to session construction. Apply the same fix to nlp/t5_decoder.go:377.
+
+VALIDATION GATE (benchmark only): none exists; two, both runnable here. BenchmarkT5SelfBiasRow in-package with no build tag, constructing a GPUT5Decoder literal with only relBias and heads set, sub-benchmarks pos = 32/128/512, reporting ns/op and B/op. BenchmarkT5DecodeStepCPU in nlp, pure Go end to end on this host, small T5Decoder, 128 DecodeStep calls, reporting tok/s. The ns/op CURVE AGAINST pos is itself the evidence: quadratic before, flat or linear after.
+
+EXPECTED: 10x at pos=32, 100x+ at pos=128, 1000x+ at pos=512 for the function; on the nlp CPU decode path this should move DecodeStep from bias-dominated to attention-dominated. Very high confidence — the asymptotics are read directly off the code.
+
+BIT-IDENTITY BAR: low risk but non-zero, and the reason is worth pinning. Today's value is Table[b][h] delivered through a one-hot matmul, i.e. a sum of numBuckets terms of which all but one are 0.0*Table[j][h]. The direct gather returns Table[b][h] itself. These agree bit-for-bit for FINITE table entries (adding zeros to a finite float is exact, and 0*x = 0) but DIFFER if any entry is +/-Inf or NaN, since 0*Inf = NaN. The table is a trained parameter, so Inf/NaN means a broken checkpoint rather than normal operation — state this in the commit and add an assertion. Validation bar: T5 greedy Generate must produce token-for-token identical ids over at least 128 steps, not merely close logits.
+
+PERFSCAN RULE REQUIRED: a call inside a loop whose arguments are derived from the loop variable such that the callee's cost grows with it, where the result is immediately reduced to a single row indexed by that same variable. AST shape: a CallExpr result flowing into an IndexExpr/SliceExpr chain whose leading index is the loop induction variable, with no other use of the result. That "compute an NxN object to consume its Nth row" pattern is recurring and very expensive. Cheap companion rule: a NewContext()-style constructor call whose arguments are all loop-invariant appearing inside a loop body, which also fires on t5_decoder.go:122.
