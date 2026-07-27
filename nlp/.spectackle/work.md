@@ -4,7 +4,7 @@ schema: v1
 
 ## T-01KYJQZE63ERCSRSWEFEJAFE69 Rewrite keepSinkRecent as typed row copies
 kind: task
-state: draft
+state: done
 created: 2026-07-27
 
 HIGHEST-IMPACT PER-ELEMENT DEFECT FOUND IN THE PACKAGE.
