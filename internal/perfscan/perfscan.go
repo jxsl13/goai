@@ -1453,6 +1453,14 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 			if conditionalBefore(parent, n, loop) {
 				return true
 			}
+			// A guarded FALLBACK is not a missed bulk copy. Where an if/else already
+			// moves this same dst/src pair with copy() on the contiguous side, the
+			// flagged loop IS the strided alternative that has to stay — reporting it
+			// asks for a change that would be wrong. loopBodyHasCall cannot see this,
+			// because the copy() sits in the sibling branch, outside the loop body.
+			if siblingBranchBulkCopies(parent, loop, dstID.Name, srcID.Name) {
+				return true
+			}
 			reportedCopy[loop] = true
 			out = append(out, finding{
 				pos:      fset.Position(loop.Pos()),
@@ -2093,4 +2101,76 @@ func skipDir(name string) bool {
 		return true
 	}
 	return false
+}
+
+// siblingBranchBulkCopies reports whether an if/else alternative to the branch
+// holding this loop already moves the same dst/src pair with copy(). That shape —
+// `if stride == 1 { copy(dst, src[...]) } else { for ... { dst[i] = src[...] } }` —
+// is a deliberate contiguous/strided split, and its else arm must stay exactly as
+// written. Matching on the dst/src pair rather than on any copy() keeps an unrelated
+// copy elsewhere in the sibling branch from silencing a genuine finding.
+func siblingBranchBulkCopies(parent map[ast.Node]ast.Node, loop ast.Node, dst, src string) bool {
+	child := loop
+	for p := parent[child]; p != nil; child, p = p, parent[p] {
+		ifs, ok := p.(*ast.IfStmt)
+		if !ok {
+			continue
+		}
+		var other ast.Node
+		switch child {
+		case ast.Node(ifs.Body):
+			other = ifs.Else
+		case ast.Node(ifs.Else):
+			other = ifs.Body
+		default:
+			continue
+		}
+		if other != nil && blockHasBulkCopy(other, dst, src) {
+			return true
+		}
+	}
+	return false
+}
+
+// blockHasBulkCopy reports whether n contains copy(dst..., src...) over the given
+// base identifiers, ignoring any indexing or slicing applied to them.
+func blockHasBulkCopy(n ast.Node, dst, src string) bool {
+	found := false
+	ast.Inspect(n, func(x ast.Node) bool {
+		if found {
+			return false
+		}
+		call, ok := x.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		id, ok := call.Fun.(*ast.Ident)
+		if !ok || id.Name != "copy" || len(call.Args) != 2 {
+			return true
+		}
+		if baseIdentName(call.Args[0]) == dst && baseIdentName(call.Args[1]) == src {
+			found = true
+		}
+		return !found
+	})
+	return found
+}
+
+// baseIdentName peels index and slice expressions down to the underlying
+// identifier: x, x[i] and x[a:b] all yield "x". Empty for anything else.
+func baseIdentName(e ast.Expr) string {
+	for {
+		switch v := e.(type) {
+		case *ast.Ident:
+			return v.Name
+		case *ast.IndexExpr:
+			e = v.X
+		case *ast.SliceExpr:
+			e = v.X
+		case *ast.ParenExpr:
+			e = v.X
+		default:
+			return ""
+		}
+	}
 }
