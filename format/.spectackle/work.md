@@ -57,7 +57,7 @@ PERFSCAN RULE REQUIRED: io.ReadAll on a source whose size is known. AST shape: a
 
 ## T-01KYJPSGQMFGER0YD90EG3PGRK Eliminate the bounds checks and unhoisted scale products in the Q4_K and Q6_K dequant loops
 kind: task
-state: draft
+state: done
 created: 2026-07-27
 targets: format/gguf/q4k.go, format/gguf/q6k.go, docs/benchmarking.md
 
