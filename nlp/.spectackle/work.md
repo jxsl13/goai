@@ -24,3 +24,26 @@ VALIDATION GATE (benchmark only): none exists — nlp/streaming_test.go:31 and e
 EXPECTED: 5-8x on keepSinkRecent itself, bounded by the measured 7.82x embed ratio; at realistic width it should be the dominant term of StreamStep. High confidence on the ratio, MEDIUM on its share of StreamStep because no StreamStep benchmark exists yet — measure before implementing, do not assume the share.
 
 BIT-IDENTITY BAR: none — SetF64(AtF64(...)) on F32 storage is float32(float64(x)), an exact round trip, and identity on F64; a typed copy moves the same bits. No reduction reordering, no accumulation-width change. This is the same argument concatRows already relies on at nlp/decode.go:54-55. Guard with a table test asserting the new output equals the old loop's output BITWISE across F32/F64 and with rows both above and below the bound.
+
+## T-01KYJQZEK7E1RV0AH9K8MFT89M Propagate the rowBuf KV append to the GPT, CLA, T5 and streaming caches
+kind: task
+state: draft
+created: 2026-07-27
+
+The fix already exists, is already proven by an in-repo A/B, and simply never reached four of the caches.
+
+MEASURED, in-repo, on this host: BenchmarkKVCacheGrowthConcatRows 62,444,861 ns / 1.076 GB / 3,076 allocs versus BenchmarkKVCacheGrowthRowBuf 616,583 ns / 10.3 MB / 1,066 allocs at width 2048, T=512 — 101x time, 104x bytes. End to end: BenchmarkLlamaGenerate500ConcatRows 869,713,097 ns / 2.20 GB versus BenchmarkLlamaGenerate500RowBuf 335,683,472 ns / 150 MB — 2.59x, and that is at only dim 256 / 4 layers / 500 tokens; the gap widens with context length.
+
+SITES still on the quadratic path: nlp/decode.go:104-105 MHA.StepKV (reached from GPT.DecodeStep at :183); nlp/cla.go:330-331 CLA DecodeStep; nlp/t5_decoder.go:434-436 T5 decoder self-attention step; nlp/streaming.go:86-87 (bounded, so O(window) rather than O(T), but still two full copies per layer per token).
+
+DEFECT: each is inside a per-layer loop of a per-token decode step. concatRows (nlp/decode.go:42) allocates a fresh [t+1, width] tensor and recopies all t existing rows EVERY token, giving O(T^2) copy traffic and O(T^2) bytes over a T-token decode. LlamaCache already adopted kvBufs.appendKV (nlp/rowbuf.go:207), which writes one row in place into a doubling backing tensor and returns a zero-copy contiguous view. These four did not.
+
+FIX: embed bufs kvBufs in KVCache (nlp/decode.go:18), CLA's cache and T5's decoder cache, and replace each concatRows pair with cache.bufs.appendKV(cache.K, cache.V, l, k, v). appendKV is already fully generic over (K, V []*tensor.Tensor, l int), so it is a drop-in. CLA needs the GROUP index g rather than l as the buffer key.
+
+VALIDATION GATE (benchmark only): the harness already exists and is exactly right — the ConcatRows/RowBuf pairs above. Add the sibling e2e pairs for GPT, CLA and T5 by reusing the existing bench-only kvAppendViaConcat flag (nlp/rowbuf.go:203), which flips the append while holding every other instruction identical — that is what makes the A/B clean.
+
+EXPECTED: 2-3x end to end at 500 tokens and small dim, more at longer contexts and larger KV width. High confidence — this is a measured in-repo A/B, not an estimate.
+
+BIT-IDENTITY BAR: value-identity is already pinned by TestRowBufAppendMatchesConcatRows (nlp/kvcache_perf_test.go:112) across F32/F64, and there is no reduction reordering or accumulation-width change. THE REAL RISK IS ALIASING, NOT NUMERICS: concatRows returns a FRESH tensor each step while appendKV returns a VIEW into a growing buffer. Any caller that retains an earlier cache.K[l] and assumes later appends cannot touch it changes behavior. rowBuf.owns (nlp/rowbuf.go:179) resynchronizes when a caller replaces the entry, but EACH of GPT, CLA and T5 must be audited for retained views BEFORE the swap — CLA especially, since it shares one cache slot across a group (cache.K[g], nlp/cla.go:330). Do that audit as the first step of the task and record what you found.
+
+PERFSCAN RULE REQUIRED: quadratic accumulate-by-reallocation in a per-token loop. AST shape: an AssignStmt whose LHS is an IndexExpr into a cache-like slice field and whose RHS is concat(<same IndexExpr>, x) — i.e. c.F[i] = f(c.F[i], v) where f allocates output sized from both operands — inside a loop nested in a function whose name matches DecodeStep|StreamStep|Step\w*. Generalizes past tensors to append-free slice and buffer concatenation.
