@@ -489,6 +489,60 @@ var (
 // collectIntTypes pre-scans parsed files for `type <Name> <integer kind>` and
 // records them per package. It must run over ALL files before any is judged,
 // since a key can name a type declared in another package.
+
+// intMapReg maps a package name to the PACKAGE-LEVEL integer-keyed map vars it
+// declares. Dispatch registries are declared in one file and read in another —
+// vjps lives in autograd/vjp.go, its hot read in autograd/autograd.go — and
+// intKeyMapNames is file-scoped, so the name never entered the set for the file
+// that reads it. That, not the key-type predicate, is why PS3003 never saw a
+// single enum-keyed dispatch table.
+//
+// Deliberately package-level declarations ONLY. Collecting function-local maps
+// package-wide would let a `size` in one file mark an unrelated `size` in
+// another, which is a false positive the file-scoped pass already handles
+// correctly on its own.
+var intMapReg = map[string]map[string]bool{}
+
+// collectIntKeyMaps pre-scans for package-level integer-keyed map vars. It must
+// run after collectIntTypes, since deciding whether a key is an integer type
+// consults that registry.
+func collectIntKeyMaps(files []*ast.File) {
+	for _, f := range files {
+		if f.Name == nil {
+			continue
+		}
+		curPkg = f.Name.Name
+		for _, decl := range f.Decls {
+			gd, ok := decl.(*ast.GenDecl)
+			if !ok || gd.Tok != token.VAR {
+				continue
+			}
+			for _, spec := range gd.Specs {
+				vs, ok := spec.(*ast.ValueSpec)
+				if !ok {
+					continue
+				}
+				for i, nm := range vs.Names {
+					t := vs.Type
+					if t == nil && i < len(vs.Values) {
+						if cl, ok := vs.Values[i].(*ast.CompositeLit); ok {
+							t = cl.Type
+						}
+					}
+					mt, ok := t.(*ast.MapType)
+					if !ok || !integerKeyType(mt.Key) {
+						continue
+					}
+					if intMapReg[curPkg] == nil {
+						intMapReg[curPkg] = map[string]bool{}
+					}
+					intMapReg[curPkg][nm.Name] = true
+				}
+			}
+		}
+	}
+}
+
 func collectIntTypes(files []*ast.File) {
 	for _, f := range files {
 		if f.Name == nil {
@@ -899,6 +953,9 @@ func scanFile(fset *token.FileSet, f *ast.File, ns nameSets) []finding {
 	// File-scoped fact: names declared as integer-keyed maps (detector PS3003) — indexing
 	// them in a loop is a dense-slice (map→slice) candidate.
 	intKeyMaps := intKeyMapNames(f)
+	for name := range intMapReg[curPkg] { // cross-file dispatch registries
+		intKeyMaps[name] = true
+	}
 	for _, decl := range f.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
 		if !ok || fn.Body == nil {
@@ -1741,6 +1798,7 @@ func main() {
 		parsed = append(parsed, f)
 	}
 	collectIntTypes(parsed)
+	collectIntKeyMaps(parsed)
 	for _, f := range parsed {
 		for _, fd := range scanFile(fset, f, ns) {
 			if enabled[fd.category] {
