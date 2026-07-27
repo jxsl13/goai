@@ -1354,15 +1354,15 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 		}
 		reported := map[ast.Node]bool{} // one finding per loop
 		ast.Inspect(fn.Body, func(n ast.Node) bool {
-			var div ast.Expr
+			var div, num ast.Expr
 			switch e := n.(type) {
 			case *ast.BinaryExpr:
 				if e.Op == token.QUO {
-					div = e.Y
+					div, num = e.Y, e.X
 				}
 			case *ast.AssignStmt:
 				if e.Tok == token.QUO_ASSIGN && len(e.Rhs) == 1 {
-					div = e.Rhs[0]
+					div, num = e.Rhs[0], e.Lhs[0]
 				}
 			}
 			if div == nil {
@@ -1381,6 +1381,17 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 			// bookkeeping divides out of the signal, and skip loops already dominated by a
 			// transcendental (there the divide is in the noise — and it is K/L territory).
 			if !loopHasIndexAccess(loop) || loopHasExpensiveTranscendental(loop, wrappers) {
+				return true
+			}
+			// Go forbids % on floating-point operands, so a modulo over the SAME
+			// operand pair PROVES both are integers — and an integer divide is index
+			// decomposition (`ni, rem := r/hw, r%hw`), where the recommended
+			// `inv := 1/hw` evaluates to integer zero and following the advice would
+			// silently zero the result. This is a proof, not a heuristic: a genuine
+			// float divide cannot have a modulo sibling, so no true positive is lost.
+			// The existing a[i/stride] guard misses these because the quotient is
+			// assigned to a variable rather than used directly as an index.
+			if num != nil && hasModuloSibling(fn.Body, num, div) {
 				return true
 			}
 			name, ok := invariantDivisor(loop, div)
@@ -2291,4 +2302,58 @@ func startsBelowInnermost(f *ast.ForStmt) bool {
 	}
 	lit, ok := be.Y.(*ast.BasicLit)
 	return ok && lit.Value == "2"
+}
+
+// hasModuloSibling reports whether fn contains `num % div` over the same operand
+// expressions as a divide. Detector PS5001 uses it as an integer PROOF: Go rejects
+// % on floats at compile time, so the pair cannot be floating-point.
+func hasModuloSibling(body *ast.BlockStmt, num, div ast.Expr) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		be, ok := n.(*ast.BinaryExpr)
+		if !ok || be.Op != token.REM {
+			return true
+		}
+		if exprEqual(be.X, num) && exprEqual(be.Y, div) {
+			found = true
+		}
+		return !found
+	})
+	return found
+}
+
+// exprEqual compares two expressions structurally over the shapes a divisor can
+// take, so `r % (ho * wo)` matches `r / (ho * wo)` regardless of parenthesization.
+// Conservative: anything it does not model compares unequal, which can only leave a
+// finding reported.
+func exprEqual(a, b ast.Expr) bool {
+	for {
+		if p, ok := a.(*ast.ParenExpr); ok {
+			a = p.X
+			continue
+		}
+		if p, ok := b.(*ast.ParenExpr); ok {
+			b = p.X
+			continue
+		}
+		break
+	}
+	switch x := a.(type) {
+	case *ast.Ident:
+		y, ok := b.(*ast.Ident)
+		return ok && x.Name == y.Name
+	case *ast.BasicLit:
+		y, ok := b.(*ast.BasicLit)
+		return ok && x.Kind == y.Kind && x.Value == y.Value
+	case *ast.BinaryExpr:
+		y, ok := b.(*ast.BinaryExpr)
+		return ok && x.Op == y.Op && exprEqual(x.X, y.X) && exprEqual(x.Y, y.Y)
+	case *ast.SelectorExpr:
+		y, ok := b.(*ast.SelectorExpr)
+		return ok && x.Sel.Name == y.Sel.Name && exprEqual(x.X, y.X)
+	}
+	return false
 }

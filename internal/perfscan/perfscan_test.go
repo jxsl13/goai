@@ -1058,3 +1058,52 @@ func scale(dst, src []float64, n int, k float64) {
 		t.Fatalf("arithmetic on the value, want 0 scalar-copy-loop, got %d", got["scalar-copy-loop"])
 	}
 }
+
+// PS5001 stays silent on an INTEGER divide, proved integer by a modulo sibling over
+// the same operand pair: Go rejects % on floats, so `r/hw` alongside `r%hw` cannot be
+// floating-point, and the rule's `inv := 1/hw` advice would evaluate to integer zero.
+func TestDetectPS5001_SilentOnIntegerDivideWithModuloSibling(t *testing.T) {
+	src := `package p
+func im2col(dst []float32, src []float32, n, hw int) {
+	for r := range n {
+		ni, rem := r/hw, r%hw
+		dst[r] = src[ni] + src[rem]
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["loop-invariant-divide"] != 0 {
+		t.Fatalf("want 0 loop-invariant-divide on an integer index decomposition, got %d (%v)",
+			got["loop-invariant-divide"], got)
+	}
+}
+
+// The parenthesized form must also be recognized: `r / (ho * wo)` paired with
+// `r % (ho * wo)` is the same proof, and comparison is structural so parentheses
+// do not defeat it.
+func TestDetectPS5001_SilentOnParenthesizedIntegerDivide(t *testing.T) {
+	src := `package p
+func im2col(dst []float32, src []float32, n, ho, wo int) {
+	for r := range n {
+		ni := r / (ho * wo)
+		rem := r % (ho * wo)
+		dst[r] = src[ni] + src[rem]
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["loop-invariant-divide"] != 0 {
+		t.Fatalf("want 0 loop-invariant-divide on a parenthesized integer decomposition, got %d (%v)",
+			got["loop-invariant-divide"], got)
+	}
+}
+
+// FLOOR against over-suppression: a genuine float divide has no modulo sibling —
+// one cannot exist, since % is illegal on floats — so it must still report.
+func TestDetectPS5001_ReportsFloatDivide(t *testing.T) {
+	src := `package p
+func mean(out []float32, acc []float32, l float32) {
+	for d := range out {
+		out[d] = acc[d] / l
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["loop-invariant-divide"] == 0 {
+		t.Fatalf("want ≥1 loop-invariant-divide on a float divide, got 0 (%v)", got)
+	}
+}
