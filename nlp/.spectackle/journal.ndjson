@@ -5,3 +5,4 @@
 {"t":"2026-07-27T21:33:58Z","eid":"678e3dcaf2676841","ag":"ag-2bf3","ev":"create","id":"T-01KYJQZE63ERCSRSWEFEJAFE69","k":"task","ti":"Rewrite keepSinkRecent as typed row copies","dir":"nlp"}
 {"t":"2026-07-27T21:33:59Z","eid":"41ccc1e02a96e980","ag":"ag-2bf3","ev":"create","id":"T-01KYJQZEK7E1RV0AH9K8MFT89M","k":"task","ti":"Propagate the rowBuf KV append to the GPT, CLA, T5 and streaming caches","dir":"nlp"}
 {"t":"2026-07-27T21:33:59Z","eid":"935e99bc5e791170","ag":"ag-2bf3","ev":"create","id":"T-01KYJQZF10F20R8RMTNMG43PBH","k":"task","ti":"Finish the attrs-box hoist and slice pooling across the ~24 skipped decode paths","dir":"nlp"}
+{"t":"2026-07-27T21:34:00Z","eid":"5945e2920cc47979","ag":"ag-2bf3","ev":"create","id":"T-01KYJQZFEHEFRA5QX6P8Z2W0NM","k":"task","ti":"Route QuantLlama.embedOne through the bulk embedRow helper","dir":"nlp"}
