@@ -197,3 +197,4 @@
 {"t":"2026-07-27T23:00:17Z","eid":"a36e51bc4e3b73ba","ag":"ag-d541","ev":"create","id":"R-01KYJWXFVZF42RYNW92Y1T66EN","k":"research","ti":"cpu general-broadcast runs transform validated and shipped (5.29x)"}
 {"t":"2026-07-27T23:03:59Z","eid":"30700f10b1fad2f8","ag":"ag-8d6c","ev":"create","id":"T-01KYJX48GFEHZBYPPGBQA9Z4WT","k":"task","ti":"tensor gatherCast: hoist innermost axis out of the strided-gather odometer"}
 {"t":"2026-07-27T23:31:33Z","eid":"1b9dc4b6f4c6c2de","ag":"ag-dac8","ev":"create","id":"T-01KYJYPQ38E938WYV6HGX9BMF5","k":"task","ti":"PS5001 precision: suppress integer divides via the modulo-sibling proof"}
+{"t":"2026-07-27T23:35:38Z","eid":"0f25271c0ab2c961","ag":"ag-7f5e","ev":"create","id":"ADR-01KYJYY74VE27BSEH9VGZSNFMK","k":"adr","ti":"PS5001 reciprocal-multiply trades bit-identity for speed - accept, reject, or case-by-case"}
