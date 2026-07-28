@@ -171,12 +171,13 @@ func trimTopK(v []float64, keep int) []float64 {
 	for i := range idx {
 		idx[i] = i
 	}
-	// Dominant cost of TIESMerge: the generic slices.SortStableFunc avoids the
-	// reflect.Swapper indirection sort.SliceStable pays. The comparator receives idx
-	// elements (original indices) directly, ranks by descending |v|, and returns 0 on
-	// ties so the stable order (ascending index, as idx starts [0,1,…]) is preserved —
-	// bit-identical selection of the kept top-k.
-	slices.SortStableFunc(idx, func(p, q int) int {
+	// Dominant cost of TIESMerge. Rank by descending |v| with a *total order*:
+	// on |v| ties, break by ascending original index (p<q). A strict total order
+	// makes the unstable pdqsort (slices.SortFunc) produce the identical
+	// permutation the stable sort did (whose 0-on-tie kept idx's ascending order),
+	// so the kept top-k set is bit-identical — while dropping the stable
+	// symMerge's O(n log^2 n) / extra-buffer overhead for pdqsort's O(n log n).
+	slices.SortFunc(idx, func(p, q int) int {
 		xp, xq := math.Abs(v[p]), math.Abs(v[q])
 		if xp > xq {
 			return -1
@@ -184,7 +185,10 @@ func trimTopK(v []float64, keep int) []float64 {
 		if xp < xq {
 			return 1
 		}
-		return 0
+		if p < q {
+			return -1
+		}
+		return 1
 	})
 	res := make([]float64, n)
 	for k := range keep {
