@@ -35,6 +35,10 @@ with `-config file.json` or a discovered `perfscan.json` / `.perfscan.json`:
 {
   "elementAccessors":       ["AtF64", "SetF64"],     // PS1001/PS1002
   "fastPathHelpers":        ["flatF64", "flatF32"],   // PS1001 — presence silences a fallback loop
+                                                     //          KEEP THIS COMPLETE: a comma-ok
+                                                     //          helper missing from the list makes
+                                                     //          PS1001 report the very fallback the
+                                                     //          fast path exists to guard
   "elementCountMethods":    ["Numel"],               // PS1001 — a loop bound over this reads as per-element
   "shapeMethods":           ["Shape"],               // PS1001 — `d := t.Shape()[1]` then `for j := range d`
                                                      //          walks d elements exactly as Numel() does
