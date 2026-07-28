@@ -62,7 +62,12 @@ func parseReducedMask(attrs backend.Attrs, nd int) ([]bool, error) {
 	return reduced, nil
 }
 
-func reduceKernel(init float64, combine func(acc, x float64) float64, finalize func(acc float64, count int) float64) backend.Kernel {
+// isSum: the combine is plain float64 addition (OpSum/OpMean). The hot loops then
+// inline `acc += x` instead of the per-element `combine` func-value call — which Go
+// cannot inline through, so it costs a real indirect CALL on every element. Bit-exact:
+// `a + x` IS what the additive combine computes, same ascending order, so §V10 f64
+// accumulation is byte-identical. Max/Min/Prod keep the closure (isSum=false).
+func reduceKernel(init float64, combine func(acc, x float64) float64, finalize func(acc float64, count int) float64, isSum bool) backend.Kernel {
 	return func(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
 		if len(in) != 1 {
 			return nil, fmt.Errorf("ref: reduce wants 1 input, got %d", len(in))
@@ -112,13 +117,24 @@ func reduceKernel(init float64, combine func(acc, x float64) float64, finalize f
 				}
 			}
 			if trailing {
-				for seg := 0; seg < outNumel; seg++ {
-					a := acc[seg]
-					base := seg * count
-					for k := 0; k < count; k++ {
-						a = combine(a, xs[base+k])
+				if isSum { // inline `a += x`, no per-element indirect combine call
+					for seg := 0; seg < outNumel; seg++ {
+						a := acc[seg]
+						base := seg * count
+						for k := 0; k < count; k++ {
+							a += xs[base+k]
+						}
+						acc[seg] = a
 					}
-					acc[seg] = a
+				} else {
+					for seg := 0; seg < outNumel; seg++ {
+						a := acc[seg]
+						base := seg * count
+						for k := 0; k < count; k++ {
+							a = combine(a, xs[base+k])
+						}
+						acc[seg] = a
+					}
 				}
 			} else {
 				eff := make([]int, nd)
@@ -129,16 +145,31 @@ func reduceKernel(init float64, combine func(acc, x float64) float64, finalize f
 				}
 				idx := make([]int, nd)
 				of := 0
-				for pos := range xs {
-					acc[of] = combine(acc[of], xs[pos])
-					for d := nd - 1; d >= 0; d-- {
-						idx[d]++
-						of += eff[d]
-						if idx[d] < shape[d] {
-							break
+				if isSum {
+					for pos := range xs {
+						acc[of] += xs[pos]
+						for d := nd - 1; d >= 0; d-- {
+							idx[d]++
+							of += eff[d]
+							if idx[d] < shape[d] {
+								break
+							}
+							idx[d] = 0
+							of -= eff[d] * shape[d]
 						}
-						idx[d] = 0
-						of -= eff[d] * shape[d]
+					}
+				} else {
+					for pos := range xs {
+						acc[of] = combine(acc[of], xs[pos])
+						for d := nd - 1; d >= 0; d-- {
+							idx[d]++
+							of += eff[d]
+							if idx[d] < shape[d] {
+								break
+							}
+							idx[d] = 0
+							of -= eff[d] * shape[d]
+						}
 					}
 				}
 			}
@@ -310,10 +341,10 @@ func init() {
 		std.add(op, tensor.F32, k)
 		std.add(op, tensor.F64, k)
 	}
-	reg(backend.OpSum, reduceKernel(0, func(a, x float64) float64 { return a + x }, func(a float64, _ int) float64 { return a }))
-	reg(backend.OpMean, reduceKernel(0, func(a, x float64) float64 { return a + x }, func(a float64, n int) float64 { return a / float64(n) }))
-	reg(backend.OpMax, reduceKernel(math.Inf(-1), math.Max, func(a float64, _ int) float64 { return a }))
-	reg(backend.OpMin, reduceKernel(math.Inf(1), math.Min, func(a float64, _ int) float64 { return a }))
-	reg(backend.OpProd, reduceKernel(1, func(a, x float64) float64 { return a * x }, func(a float64, _ int) float64 { return a }))
+	reg(backend.OpSum, reduceKernel(0, func(a, x float64) float64 { return a + x }, func(a float64, _ int) float64 { return a }, true))
+	reg(backend.OpMean, reduceKernel(0, func(a, x float64) float64 { return a + x }, func(a float64, n int) float64 { return a / float64(n) }, true))
+	reg(backend.OpMax, reduceKernel(math.Inf(-1), math.Max, func(a float64, _ int) float64 { return a }, false))
+	reg(backend.OpMin, reduceKernel(math.Inf(1), math.Min, func(a float64, _ int) float64 { return a }, false))
+	reg(backend.OpProd, reduceKernel(1, func(a, x float64) float64 { return a * x }, func(a float64, _ int) float64 { return a }, false))
 	reg(backend.OpArgMax, argmaxKernel)
 }
