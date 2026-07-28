@@ -283,7 +283,7 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 		case Q5_K:
 			dot = dotQ5_KRow
 		case Q6_K:
-			dot = dotQ6_KRow
+			dot, dot4 = dotQ6_KRow, dotQ6_K4Rows
 		}
 		row := xf32[:k]
 		// Decode (m==1) K-quant row dots are independent per output row → chunk-parallel.

@@ -164,3 +164,64 @@ func dotQ6_KRow(row []float32, raw []byte, k int) float64 {
 	}
 	return acc
 }
+
+// dotQ6_K4Rows is [dotQ6_KRow] over FOUR weight rows at once, sharing each activation
+// load across four accumulators. Bit-exact against the single-row form: same per-element
+// float32 weights, same traversal, independent accumulators.
+func dotQ6_K4Rows(row []float32, r0, r1, r2, r3 []byte, k int) (float64, float64, float64, float64) {
+	var a0, a1, a2, a3 float64
+	for sb := 0; sb*qkK < k; sb++ {
+		o := sb * q6kBlockSize
+		b0, b1, b2, b3 := r0[o:], r1[o:], r2[o:], r3[o:]
+		d0 := f16ToF32(binary.LittleEndian.Uint16(b0[208:]))
+		d1 := f16ToF32(binary.LittleEndian.Uint16(b1[208:]))
+		d2 := f16ToF32(binary.LittleEndian.Uint16(b2[208:]))
+		d3 := f16ToF32(binary.LittleEndian.Uint16(b3[208:]))
+		base := sb * qkK
+		for grp := range 2 {
+			qlo, qho, sco, yo := grp*64, grp*32, grp*8, base+grp*128
+			var s0, s1, s2, s3 [8]float32
+			for j := range 8 {
+				s0[j] = d0 * float32(int8(b0[192+sco+j]))
+				s1[j] = d1 * float32(int8(b1[192+sco+j]))
+				s2[j] = d2 * float32(int8(b2[192+sco+j]))
+				s3[j] = d3 * float32(int8(b3[192+sco+j]))
+			}
+			y := row[yo : yo+128]
+			for l := range 32 {
+				is := l / 16
+				x0, x32 := float64(y[l+0]), float64(y[l+32])
+				x64, x96 := float64(y[l+64]), float64(y[l+96])
+
+				h0, l0 := b0[128+qho+l], b0[qlo+l]
+				l0b := b0[qlo+l+32]
+				a0 += x0 * float64(s0[is+0]*float32((int(l0&0xF)|int(h0&3)<<4)-32))
+				a0 += x32 * float64(s0[is+2]*float32((int(l0b&0xF)|int((h0>>2)&3)<<4)-32))
+				a0 += x64 * float64(s0[is+4]*float32((int(l0>>4)|int((h0>>4)&3)<<4)-32))
+				a0 += x96 * float64(s0[is+6]*float32((int(l0b>>4)|int((h0>>6)&3)<<4)-32))
+
+				h1, l1 := b1[128+qho+l], b1[qlo+l]
+				l1b := b1[qlo+l+32]
+				a1 += x0 * float64(s1[is+0]*float32((int(l1&0xF)|int(h1&3)<<4)-32))
+				a1 += x32 * float64(s1[is+2]*float32((int(l1b&0xF)|int((h1>>2)&3)<<4)-32))
+				a1 += x64 * float64(s1[is+4]*float32((int(l1>>4)|int((h1>>4)&3)<<4)-32))
+				a1 += x96 * float64(s1[is+6]*float32((int(l1b>>4)|int((h1>>6)&3)<<4)-32))
+
+				h2, l2 := b2[128+qho+l], b2[qlo+l]
+				l2b := b2[qlo+l+32]
+				a2 += x0 * float64(s2[is+0]*float32((int(l2&0xF)|int(h2&3)<<4)-32))
+				a2 += x32 * float64(s2[is+2]*float32((int(l2b&0xF)|int((h2>>2)&3)<<4)-32))
+				a2 += x64 * float64(s2[is+4]*float32((int(l2>>4)|int((h2>>4)&3)<<4)-32))
+				a2 += x96 * float64(s2[is+6]*float32((int(l2b>>4)|int((h2>>6)&3)<<4)-32))
+
+				h3, l3 := b3[128+qho+l], b3[qlo+l]
+				l3b := b3[qlo+l+32]
+				a3 += x0 * float64(s3[is+0]*float32((int(l3&0xF)|int(h3&3)<<4)-32))
+				a3 += x32 * float64(s3[is+2]*float32((int(l3b&0xF)|int((h3>>2)&3)<<4)-32))
+				a3 += x64 * float64(s3[is+4]*float32((int(l3>>4)|int((h3>>4)&3)<<4)-32))
+				a3 += x96 * float64(s3[is+6]*float32((int(l3b>>4)|int((h3>>6)&3)<<4)-32))
+			}
+		}
+	}
+	return a0, a1, a2, a3
+}
