@@ -185,29 +185,6 @@ NO NEW GOLDEN, justified rather than skipped: parallelizing over queries leaves 
 
 Both classifier and regressor Predict paths done. NOT DONE: PredictProba, which has the same shape and would take the same change; no benchmark covers it, so there is nothing to validate against.
 
-## T-01KYN61HYKE58V81832PV4NSKT Parallelize the CART sweep in tree.go once the worker's optimization line there settles
-kind: task
-state: draft
-created: 2026-07-28
-
-DEFERRED FOR COLLISION, not for lack of value. BenchmarkTreeFit measures 10.26ms at 0.99x across GOMAXPROCS 1..12 — a serial spine with the same shape as the GBM exact grower, which reached 2.80x by parallelizing its two per-feature loops.
-
-WHY NOT NOW: classic/tree.go has five recent perf commits from the parallel worker (f7f17a07 entropy cache, 7dc38acc sorted-value hoist, 9ccc9b4a comparator key hoist, 78888a32 incremental Gini, 029169eb class-count hoist merged as #447). Editing the same sweep while that line is live invites a merge that silently drops one side's work. gbm.go had no such traffic, which is why the GBM half went first.
-
-WHAT TO DO, by direct analogy to gbm.go (commits c20af9c9 and 98e780d5):
-
-1. cartBuilder.bestSplit / bestSplitIdx (tree.go:461 and :537) loop over features. Expect a SHARED SCRATCH on the builder — gbm's b.vals and b.part were both this, as was GaussianMixture's solve buffer; three independent instances in one campaign. Make it per-chunk.
-
-2. Expect an ARGMAX REDUCTION over features. Record one candidate per feature and combine afterward in ASCENDING FEATURE ORDER with strict >, which reproduces the serial tie-break exactly. NUM-ARGMAX-TIEBREAK-001 requires this be tested on a CONSTRUCTED tie: random data never yields two bit-equal gains, and prediction goldens stayed green under both a >= mutation and a reversed combine order. classic/gbm_split_tiebreak_internal_test.go is the pattern — two features inducing the identical partition, so gains are bit-equal while thresholds differ.
-
-3. The node partition, if tree.go has the same one, may hide a cross-feature WRITE as well as shared scratch. In gbm.go, mid was recomputed per column and the last kept; it cannot differ between columns, and hoisting it was what actually unblocked the split. The scratch was the visible half.
-
-GATE FIRST: check whether an exact-path golden exists for the CART grower. The GBM histogram golden did NOT cover the exact grower — different code, never entered — and parallelizing under it would have been unguarded. Capture a frozen bit-level golden from the pre-change implementation, then probe it: expect it RED on a dropped feature but GREEN on ulp perturbations, because tree growth is decided by comparisons rather than arithmetic.
-
-VERIFY: go test ./classic/ -count 1 -race; the goldens and tie test green; then interleave BenchmarkTreeFit and BenchmarkForestFit per PROC-INTERLEAVE-001 with min of 3 runs per arm (PROC-BENCH-MINOFN-001). ForestFit already measures 7.27x, so it is the control that must not regress.
-
-BEFORE STARTING: re-check git log on classic/tree.go and the open PR list. If the worker's line is still active, defer again rather than racing it.
-
 ## R-01KYN61K6TE3YTBVDWY1CSXBJQ Exact GBM fit 2.80x complete; the shared-scratch shape has now appeared three times independently
 kind: research
 state: draft

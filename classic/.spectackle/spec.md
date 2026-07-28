@@ -13,3 +13,18 @@ IF a method uses a receiver slice field as a per-call temporary, THEN the buffer
 
 ## NUM-ARGMAX-TIEBREAK-001
 IF an argmax reduction is parallelized and its candidates combined afterward, THEN the combine SHALL be tested on a constructed exact tie, since random data yields no bit-equal scores and prediction goldens stay green under a reversed combine order.
+
+## intent
+- T-01KYN61HYKE58V81832PV4NSKT Parallelize the CART sweep in tree.go once the worker's optimization line there settles: DECLINED ON LEVERAGE, not on collision, and the leverage argument is the useful part.
+
+The task deferred parallelizing the CART sweep because classic/tree.go was a collision zone. That zone has since quieted — no open PR touches it — so the deferral reason expired and the work was re-examined rather than started.
+
+IT IS NOT WORTH DOING. BenchmarkForestFit measures 7.85x across GOMAXPROCS 1..12 (1055 -> 134ms) because a forest already parallelizes ACROSS TREES, which saturates the machine. Adding sweep-level parallelism inside each tree would nest under that: internal/parallel's non-blocking submission finds every worker busy and runs the chunk inline, so a forest gains nothing. That is by design — the unbuffered mailbox makes "pool busy" and "send fails" the same event — and is covered by TestRowsNestedDoesNotDeadlock, though the no-gain consequence is derived from the design rather than measured.
+
+The only workload that WOULD gain is a single-tree fit: BenchmarkTreeFit, 10.07ms at 1.00x. Against 10ms, the cost is a shared-scratch split, an argmax-combine with a constructed tie fixture (NUM-ARGMAX-TIEBREAK-001), and a frozen golden for a grower that has none — the same package of work that took the GBM exact path from 1865 to 667ms. Wrong ratio.
+
+THE TRANSFERABLE POINT: when an outer loop already parallelizes to near machine width, an inner parallelization is not additive — it is inert. Check where the existing parallelism lives before splitting a hot loop inside it. The GBM exact grower was worth 2.80x precisely because boosting is SEQUENTIAL across trees, so no outer parallelism existed to saturate the cores; forests are the opposite case.
+
+ALSO MEASURED AND LEFT: BenchmarkKNNFit 3.96ms at 1.00x (ball-tree build, bt.splitKey is the receiver scratch PS6006 flags). Same ratio problem at 4ms.
+
+classic is now swept: ForestFit 7.85x, DBSCANFit 6.16x, GBM exact 2.80x, GMM 4.09x, KNN Predict 7.00x, GBM histogram 1.57x — all either parallel or measured and declined.
