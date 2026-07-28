@@ -33,6 +33,18 @@ func init() {
 		gc := g.Contiguous()
 		if x.Dtype() == tensor.F64 && gc.Dtype() == tensor.F64 {
 			gs, ds := gc.Storage().F64(), dx.Storage().F64()
+			if inner == 1 { // contiguous last-axis scan: slice each line to len L so
+				for o := 0; o < outer; o++ { // the *inner multiply + bounds checks drop out
+					gl := gs[o*L : o*L+L]
+					dl := ds[o*L : o*L+L]
+					var sum float64
+					for i := L - 1; i >= 0; i-- {
+						sum += gl[i]
+						dl[i] = sum
+					}
+				}
+				return []*tensor.Tensor{dx}, nil
+			}
 			for o := 0; o < outer; o++ {
 				for j := 0; j < inner; j++ {
 					base := o*L*inner + j
@@ -47,6 +59,18 @@ func init() {
 		}
 		if x.Dtype() == tensor.F32 && gc.Dtype() == tensor.F32 {
 			gs, ds := gc.Storage().F32(), dx.Storage().F32()
+			if inner == 1 {
+				for o := 0; o < outer; o++ {
+					gl := gs[o*L : o*L+L]
+					dl := ds[o*L : o*L+L]
+					var sum float64
+					for i := L - 1; i >= 0; i-- {
+						sum += float64(gl[i])
+						dl[i] = float32(sum)
+					}
+				}
+				return []*tensor.Tensor{dx}, nil
+			}
 			for o := 0; o < outer; o++ {
 				for j := 0; j < inner; j++ {
 					base := o*L*inner + j
