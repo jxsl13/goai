@@ -480,50 +480,71 @@ func (m *GaussianMixture) mStep(x [][]float64, resp [][]float64) error {
 		m.yScratch4[t] = make([]float64, d)
 	}
 	m.logDetHalf = make([]float64, k)
-	cen := make([]float64, d) // centered-row scratch, reused per sample
-	for c := range k {
-		s := make([]float64, d*d)
-		inv := 1.0 / (nk[c] + 1e-300)
-		for i := range n {
-			r := resp[i][c]
-			xi, mc := x[i], m.Means[c]
-			// Center the row ONCE (cen[b] = xi[b]−mc[b]) instead of recomputing xi[b]−mc[b]
-			// for every a, then accumulate s[a] += (r·cen[a])·cen as an equal-length slice
-			// axpy (auto-vectorizing). r·da·(xi[b]−mc[b]) = (r·cen[a])·cen[b] bit-identically.
-			for b := range cen {
-				cen[b] = xi[b] - mc[b]
+	// PARALLEL over components: each c owns its own accumulator s, its own Cholesky and
+	// its own slot in chol/invCholDiag/logDetHalf. The centered-row scratch was the only
+	// state crossing components and now belongs to the chunk — the same shape that made
+	// logGaussian racy, caught there by -race and avoided here by construction.
+	//
+	// BIT-IDENTICAL: component c still accumulates over samples in ascending i order.
+	// Only the order in which DIFFERENT components are computed changes, and they share
+	// no accumulator.
+	//
+	// k-way at best (6 in the benchmark), so this cannot reach the E-step's 1.93x. It is
+	// worth doing because after that fix this loop is the dominant remainder, not because
+	// the parallelism is wide.
+	var covMu sync.Mutex
+	var covErr error
+	parallelSamples(k, n*d*d/max(k, 1), func(clo, chi int) {
+		cen := make([]float64, d) // per-chunk centered-row scratch
+		for c := clo; c < chi; c++ {
+			s := make([]float64, d*d)
+			inv := 1.0 / (nk[c] + 1e-300)
+			for i := range n {
+				r := resp[i][c]
+				xi, mc := x[i], m.Means[c]
+				// Center the row ONCE (cen[b] = xi[b]−mc[b]) instead of recomputing xi[b]−mc[b]
+				// for every a, then accumulate s[a] += (r·cen[a])·cen as an equal-length slice
+				// axpy (auto-vectorizing). r·da·(xi[b]−mc[b]) = (r·cen[a])·cen[b] bit-identically.
+				for b := range cen {
+					cen[b] = xi[b] - mc[b]
+				}
+				for a := 0; a < d; a++ {
+					rda := r * cen[a]
+					sa := s[a*d : a*d+a+1] // LOWER triangle + diagonal only (b ≤ a): the
+					for b := range sa {    // covariance is symmetric, and gmmCholesky reads only
+						sa[b] += rda * cen[b] // a[i*d+j], j≤i — so skip the redundant upper half,
+					} // halving the O(n·k·d²) accumulation.
+				}
 			}
-			for a := 0; a < d; a++ {
-				rda := r * cen[a]
-				sa := s[a*d : a*d+a+1] // LOWER triangle + diagonal only (b ≤ a): the
-				for b := range sa {    // covariance is symmetric, and gmmCholesky reads only
-					sa[b] += rda * cen[b] // a[i*d+j], j≤i — so skip the redundant upper half,
-				} // halving the O(n·k·d²) accumulation.
+			for a := range d {
+				for b := 0; b <= a; b++ { // normalize the accumulated lower triangle (incl diag)
+					s[a*d+b] *= inv
+				}
+				s[a*d+a] += m.cfg.regCovar
+				for b := 0; b < a; b++ { // mirror lower→upper so the STORED m.cov is symmetric
+					s[b*d+a] = s[a*d+b] // (Covariance(k) reads the full matrix). The Cholesky-
+				} // visible lower half is bit-identical to the full-accumulate; only the upper
+			} // half changes (from a ½-ulp-asymmetric artifact to exact symmetry).
+			l, half, err := gmmCholesky(s, d)
+			if err != nil {
+				covMu.Lock()
+				if covErr == nil {
+					covErr = fmt.Errorf("classic: gmm component %d covariance not positive definite (raise regCovar): %w", c, err)
+				}
+				covMu.Unlock()
+				return
 			}
-		}
-		for a := range d {
-			for b := 0; b <= a; b++ { // normalize the accumulated lower triangle (incl diag)
-				s[a*d+b] *= inv
+			m.cov[c] = s
+			m.chol[c] = l
+			id := make([]float64, d)
+			for i := range d {
+				id[i] = 1 / l[i][i] // reciprocal of the Cholesky diagonal for the solve
 			}
-			s[a*d+a] += m.cfg.regCovar
-			for b := 0; b < a; b++ { // mirror lower→upper so the STORED m.cov is symmetric
-				s[b*d+a] = s[a*d+b] // (Covariance(k) reads the full matrix). The Cholesky-
-			} // visible lower half is bit-identical to the full-accumulate; only the upper
-		} // half changes (from a ½-ulp-asymmetric artifact to exact symmetry).
-		l, half, err := gmmCholesky(s, d)
-		if err != nil {
-			return fmt.Errorf("classic: gmm component %d covariance not positive definite (raise regCovar): %w", c, err)
+			m.invCholDiag[c] = id
+			m.logDetHalf[c] = half
 		}
-		m.cov[c] = s
-		m.chol[c] = l
-		id := make([]float64, d)
-		for i := range d {
-			id[i] = 1 / l[i][i] // reciprocal of the Cholesky diagonal for the solve
-		}
-		m.invCholDiag[c] = id
-		m.logDetHalf[c] = half
-	}
-	return nil
+	})
+	return covErr
 }
 
 // logGaussian returns log N(x; μ_c, Σ_c) for component c.
