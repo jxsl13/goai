@@ -95,20 +95,27 @@ func CosineRerank(query []float64, candidates [][]float64) ([]RerankResult, erro
 	if len(query) == 0 {
 		return nil, fmt.Errorf("nlp: CosineRerank needs a non-empty query vector")
 	}
+	// The query's self-norm is invariant across candidates — hoist it out of the per-candidate
+	// loop (the compiler can't: nq was re-initialized to 0 and re-summed each candidate). qNorm
+	// accumulates in the identical j=0..dim-1 order over the identical operands, so score =
+	// dot/√(qNorm·nc) is bit-identical to the per-candidate nq form → identical ranking.
+	var qNorm float64
+	for j := range query {
+		qNorm += query[j] * query[j]
+	}
 	out := make([]RerankResult, len(candidates))
 	for i, c := range candidates {
 		if len(c) != len(query) {
 			return nil, fmt.Errorf("nlp: candidate %d has dim %d, query has %d", i, len(c), len(query))
 		}
-		var dot, nq, nc float64
+		var dot, nc float64
 		for j := range query {
 			dot += query[j] * c[j]
-			nq += query[j] * query[j]
 			nc += c[j] * c[j]
 		}
 		score := 0.0
-		if nq > 0 && nc > 0 {
-			score = dot / math.Sqrt(nq*nc)
+		if qNorm > 0 && nc > 0 {
+			score = dot / math.Sqrt(qNorm*nc)
 		}
 		out[i] = RerankResult{Index: i, Score: score}
 	}
