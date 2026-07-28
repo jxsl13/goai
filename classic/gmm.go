@@ -288,14 +288,23 @@ func (m *GaussianMixture) eStep(x [][]float64, resp, logResp [][]float64) (float
 	for c := range k {
 		logW[c] = math.Log(m.Weights[c])
 	}
+	diag := m.cfg.covariance == GMMDiag
+	ldBuf := make([]float64, k)
 	for i, row := range x {
 		lr := logResp[i]
-		for c := range k {
-			ld, err := m.logGaussian(row, c)
-			if err != nil {
-				return 0, err
+		if diag {
+			m.logGaussianDiagBatch(row, ldBuf) // unroll-and-jam over components
+			for c := range k {
+				lr[c] = logW[c] + ldBuf[c]
 			}
-			lr[c] = logW[c] + ld
+		} else {
+			for c := range k {
+				ld, err := m.logGaussian(row, c)
+				if err != nil {
+					return 0, err
+				}
+				lr[c] = logW[c] + ld
+			}
 		}
 		// Fused log-sum-exp + responsibilities: ExpSumF64 writes resp[c]=exp(lr[c]−mx)
 		// and returns Σ in one 4-wide pass, so norm=mx+log(Σ) and the responsibility is
@@ -463,6 +472,55 @@ func (m *GaussianMixture) logGaussian(x []float64, c int) (float64, error) {
 	return -0.5*(float64(d)*log2pi+quad) - m.logDetHalf[c], nil
 }
 
+// logGaussianDiagBatch fills ld[c] = log N(x; μ_c, Σ_c) for all k components at
+// once (diagonal-covariance only). The Mahalanobis accumulation is unroll-and-
+// jammed by 4 over the component index: x[j] is loaded once and reused across 4
+// components, and 4 independent quad accumulators break the single-accumulator
+// FADD latency chain of the per-component logGaussian (whose quad += dv·dv·ivc is
+// a loop-carried dependency). The activation x is invariant across components,
+// which is exactly the reuse the jam exploits.
+//
+// Bit-identical to k calls of logGaussian's diag branch: each component keeps its
+// OWN accumulator summing j in the same ascending order over the same dv·dv·ivc[j]
+// terms, and the final expression is the identical -0.5·(d·log2π + quad) - logDetHalf
+// op sequence (the -0.5 is NOT distributed over the sum, which would re-round).
+func (m *GaussianMixture) logGaussianDiagBatch(x []float64, ld []float64) {
+	d := m.nFeat
+	k := m.cfg.k
+	const log2pi = 1.8378770664093453
+	dlog2pi := float64(d) * log2pi
+	c := 0
+	for ; c+4 <= k; c += 4 {
+		m0, m1, m2, m3 := m.Means[c], m.Means[c+1], m.Means[c+2], m.Means[c+3]
+		v0, v1, v2, v3 := m.invCov[c], m.invCov[c+1], m.invCov[c+2], m.invCov[c+3]
+		var q0, q1, q2, q3 float64
+		for j := 0; j < d; j++ {
+			xj := x[j]
+			a0 := xj - m0[j]
+			a1 := xj - m1[j]
+			a2 := xj - m2[j]
+			a3 := xj - m3[j]
+			q0 += a0 * a0 * v0[j]
+			q1 += a1 * a1 * v1[j]
+			q2 += a2 * a2 * v2[j]
+			q3 += a3 * a3 * v3[j]
+		}
+		ld[c] = -0.5*(dlog2pi+q0) - m.logDetHalf[c]
+		ld[c+1] = -0.5*(dlog2pi+q1) - m.logDetHalf[c+1]
+		ld[c+2] = -0.5*(dlog2pi+q2) - m.logDetHalf[c+2]
+		ld[c+3] = -0.5*(dlog2pi+q3) - m.logDetHalf[c+3]
+	}
+	for ; c < k; c++ {
+		mc, ivc := m.Means[c], m.invCov[c]
+		var quad float64
+		for j := 0; j < d; j++ {
+			dv := x[j] - mc[j]
+			quad += dv * dv * ivc[j]
+		}
+		ld[c] = -0.5*(dlog2pi+quad) - m.logDetHalf[c]
+	}
+}
+
 // ScoreSamples returns the per-sample log-likelihood log p(x_n) for each row of
 // X, matching sklearn's score_samples. It panics if the model is unfitted and
 // errors on a feature-count mismatch.
@@ -477,16 +535,24 @@ func (m *GaussianMixture) ScoreSamples(x [][]float64) ([]float64, error) {
 	}
 	out := make([]float64, len(x))
 	buf := make([]float64, k)
+	diag := m.cfg.covariance == GMMDiag
 	for i, row := range x {
 		if len(row) != m.nFeat {
 			return nil, fmt.Errorf("classic: gmm ScoreSamples feature mismatch: got %d want %d", len(row), m.nFeat)
 		}
-		for c := range k {
-			ld, err := m.logGaussian(row, c)
-			if err != nil {
-				return nil, err
+		if diag {
+			m.logGaussianDiagBatch(row, buf) // unroll-and-jam over components → buf[c]=ld[c]
+			for c := range k {
+				buf[c] = logW[c] + buf[c]
 			}
-			buf[c] = logW[c] + ld
+		} else {
+			for c := range k {
+				ld, err := m.logGaussian(row, c)
+				if err != nil {
+					return nil, err
+				}
+				buf[c] = logW[c] + ld
+			}
 		}
 		out[i] = softmaxLSE(buf, buf) // buf is scratch; we keep only the log-sum-exp
 	}
