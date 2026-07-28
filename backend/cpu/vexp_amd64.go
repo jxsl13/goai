@@ -506,39 +506,6 @@ func vsiluF64(dst, src []float64) {
 	}
 }
 
-// sigmoidF64poly is the SCALAR twin of the vsigmoidF64 lane — siluF64poly without the x·
-// factor: overflow-safe σ = num/(1+z), z=e^(−|x|), num=(x≥0?1:z). Bit-identical to the body.
-func sigmoidF64poly(x float64) float64 {
-	z := expF64poly(-math.Abs(x))
-	num := z
-	if x >= 0 {
-		num = 1
-	}
-	return num / (1 + z)
-}
-
-// vsigmoidF64 computes dst[i] = σ(src[i]) = 1/(1+e^−x) 4-wide via AVX2 — the σ subset of
-// vsiluF64 (drop the x· factor). Overflow-safe z=e^(−|x|), num=(x≥0?1:z), σ=num/(1+z).
-// 4-lane body + scalar tail sigmoidF64poly (bit-identical to the body).
-func vsigmoidF64(dst, src []float64) {
-	if !vexpHasAVX {
-		for i, v := range src {
-			dst[i] = sigmoidF64poly(v)
-		}
-		return
-	}
-	n4 := len(src) &^ 3
-	for i := 0; i < n4; i += 4 {
-		x := archsimd.LoadFloat64x4Slice(src[i:])
-		z := expF64x4(vF64Zero.Sub(x.AsUint64x4().And(vF64Abs).AsFloat64x4())) // e^(−|x|)
-		num := vF64One.Merge(z, x.GreaterEqual(vF64Zero))                      // x≥0 ? 1 : z
-		num.Div(vF64One.Add(z)).StoreSlice(dst[i:])                            // num/(1+z)
-	}
-	for i := n4; i < len(src); i++ {
-		dst[i] = sigmoidF64poly(src[i])
-	}
-}
-
 // F64 softplus (Mamba/Jamba Δ discretization) constants. softplus was scalar
 // math.Exp+math.Log1p on the ref backend (~32% of Mamba f64 prefill, §T——).
 // log1p(u) is computed by the Cephes double log rational on v=1+u: because the
