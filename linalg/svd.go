@@ -28,7 +28,7 @@ func SVD(a *tensor.Tensor) (u, s, v *tensor.Tensor, err error) {
 		return vt, st, ut, nil
 	}
 	// one-sided Jacobi on the columns of a working copy; V accumulates the right rotations.
-	acol := toRect(a, m, n)
+	col := toColMajor(a, m, n)
 	vmat := make([][]float64, n)
 	for i := range n {
 		vmat[i] = make([]float64, n)
@@ -39,11 +39,12 @@ func SVD(a *tensor.Tensor) (u, s, v *tensor.Tensor, err error) {
 		off := 0.0
 		for i := range n {
 			for j := i + 1; j < n; j++ {
+				ci, cj := col[i], col[j] // contiguous columns i,j (streamed by every loop below)
 				var alpha, beta, gamma float64
 				for k := range m {
-					alpha += acol[k][i] * acol[k][i]
-					beta += acol[k][j] * acol[k][j]
-					gamma += acol[k][i] * acol[k][j]
+					alpha += ci[k] * ci[k]
+					beta += cj[k] * cj[k]
+					gamma += ci[k] * cj[k]
 				}
 				if alpha == 0 || beta == 0 {
 					continue // a zero column can't be rotated meaningfully
@@ -65,10 +66,10 @@ func SVD(a *tensor.Tensor) (u, s, v *tensor.Tensor, err error) {
 				}
 				c := 1 / math.Sqrt(1+t*t)
 				sn := c * t
-				for k := range m { // rotate columns i,j of A
-					ai, aj := acol[k][i], acol[k][j]
-					acol[k][i] = c*ai - sn*aj
-					acol[k][j] = sn*ai + c*aj
+				for k := range m { // rotate columns i,j of A (in place on their contiguous slices)
+					ai, aj := ci[k], cj[k]
+					ci[k] = c*ai - sn*aj
+					cj[k] = sn*ai + c*aj
 				}
 				for k := range n { // rotate columns i,j of V
 					vi, vj := vmat[k][i], vmat[k][j]
@@ -84,9 +85,10 @@ func SVD(a *tensor.Tensor) (u, s, v *tensor.Tensor, err error) {
 	// singular values = final column norms; left vectors = normalized columns
 	sigma := make([]float64, n)
 	for j := range n {
+		cj := col[j]
 		var nrm float64
 		for k := range m {
-			nrm += acol[k][j] * acol[k][j]
+			nrm += cj[k] * cj[k]
 		}
 		sigma[j] = math.Sqrt(nrm)
 	}
@@ -102,9 +104,10 @@ func SVD(a *tensor.Tensor) (u, s, v *tensor.Tensor, err error) {
 	vOut := make([]float64, n*n)
 	for jj, j := range order {
 		sVec[jj] = sigma[j]
+		cj := col[j]
 		for k := range m {
 			if sigma[j] > 0 {
-				uMat[k*n+jj] = acol[k][j] / sigma[j]
+				uMat[k*n+jj] = cj[k] / sigma[j]
 			}
 		}
 		for k := range n {
@@ -125,4 +128,21 @@ func transposeT(a *tensor.Tensor, m, n int) *tensor.Tensor {
 		}
 	}
 	return tensor.FromFloat64(tensor.Shape{n, m}, d)
+}
+
+// toColMajor copies the m×n input into a COLUMN-major working buffer: col[j] is column j
+// as one contiguous length-m slice. The one-sided Jacobi body is entirely column-oriented
+// (every dot-product and rotation runs down the m rows of two columns), so this layout lets
+// each inner loop stream two contiguous arrays instead of striding across m separate row
+// slices — the cache-locality win for tall (m≫n) matrices. Same values as toRect, just
+// transposed, so the k-accumulation order and every float64 result are bit-identical.
+func toColMajor(a *tensor.Tensor, m, n int) [][]float64 {
+	c := make([][]float64, n)
+	for j := range n {
+		c[j] = make([]float64, m)
+		for k := range m {
+			c[j][k] = a.AtF64(k, j)
+		}
+	}
+	return c
 }
