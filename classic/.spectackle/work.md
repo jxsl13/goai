@@ -205,3 +205,26 @@ THE QUIET HALF OF THE PARTITION FIX was not the scratch. mid was recomputed per 
 GATES: the exact grower needed its OWN frozen golden — the existing GBM golden constructs with WithGBMHistogram and never enters this code. And that golden proved weak by probing: red on a dropped feature, GREEN under a one-ulp left-sum bump, a >= combine and a reversed combine order. Tree growth is decided by COMPARISONS, so ulp noise moves nothing and random data never produces a tie. The tie-break therefore needed a constructed fixture (two features inducing the identical partition), cast as NUM-ARGMAX-TIEBREAK-001.
 
 NOT DONE, deliberately: classic/tree.go carries the same CART sweep and measures 10.26ms at 0.99x, but it has five recent perf commits from the parallel worker and is an active collision zone. Booked as its own task with the full analogy rather than raced.
+
+## R-01KYN91CF3FEYRDQQ4Z9PKW0Q9 classic is swept: where the parallelization campaign paid, and the two places it correctly does not
+kind: research
+state: draft
+created: 2026-07-28
+
+Close-out for the classic package, and a leverage rule that generalizes beyond it.
+
+RESULTS, all interleaved with min of 3 runs per arm:
+  KNN Predict        96.6 -> 13.9ms    7.00x
+  GMM fit            76.5 -> 18.7ms    4.09x  (E-step 1.93x, M-step 2.03x)
+  GBM exact fit      1865 -> 667ms     2.80x  (bestSplit 1.72x, partition 1.62x)
+  GBM histogram fit  337 -> 214ms      1.57x
+Already parallel, no action: ForestFit 7.85x, DBSCANFit 6.16x.
+Measured and DECLINED: TreeFit 10.07ms at 1.00x, KNNFit 3.96ms at 1.00x.
+
+THE DECLINE IS THE INTERESTING PART. TreeFit is a genuine serial spine and the transform is known — it is the same shape that took the GBM exact grower to 2.80x. It is still not worth doing, because a RANDOM FOREST already parallelizes across trees and measures 7.85x, saturating the machine. Splitting the sweep inside each tree nests under that: internal/parallel's non-blocking submission finds every worker busy and runs the chunk inline, so a forest gains nothing. The only beneficiary is a lone tree fit at 10ms, against the cost of a shared-scratch split, an argmax combine with a constructed tie fixture, and a frozen golden for a grower that has none.
+
+WHY GBM WAS DIFFERENT AND FORESTS ARE NOT: boosting is SEQUENTIAL across trees — each fits the previous residuals — so no outer parallelism existed to saturate the cores, and the only available axis was inside the tree. Forests are the opposite. Same inner loop, opposite verdict, decided entirely by what surrounds it.
+
+Cast as PERF-NESTED-PARALLEL-001: when an outer loop already parallelizes to near machine width, do not parallelize the inner one. It is not additive, it is inert — and it still costs the gate work, the scratch split and the reviewer's attention.
+
+RELATED CONFIRMATION: the nesting behavior is by DESIGN in internal/parallel (unbuffered mailboxes make "pool busy" and "send fails" the same event, so nested calls degrade to inline) and is covered by TestRowsNestedDoesNotDeadlock. The no-gain consequence is derived from that design rather than separately measured — stated so it is not mistaken for a benchmark.
