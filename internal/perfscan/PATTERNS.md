@@ -219,6 +219,43 @@ position, and requires that position **not** to be a loop bound: when it bounds 
 the object is being walked in full and the identifier appears in those indices only as a
 stride. Tree-wide that went 6 findings → 2, both genuine.
 
+## PS5003 — an inner-loop expression the outer loop rebuilds  *(scanner: static)*
+
+An expression in the innermost loop that varies with the **inner** index but not the
+outer one, so the outer loop recomputes the same value on every pass:
+
+```go
+for i := range n {
+    for j := range m {
+        h[i*m+j] = a*h[i*m+j] + b*(x[off+j] * delta)   // x[off+j]*delta has no i
+    }
+}
+```
+
+Precompute it once into an m-sized scratch before the outer loop. **Bit-identical** — it
+is the same product, so it rounds the same way; this is not a reassociation. Go will not
+do it for you: the operands are index expressions it cannot prove unaliased across the
+outer iteration, so both the load and the multiply stay put.
+
+**Shipped:** the Mamba2 SSM scan, where `x[t][hOff+j]*delta` was rebuilt N times per `j` —
+**1.08×–1.10×** on prefill end to end, and notably *larger* than fixing that same
+function's pathological access pattern (1.05×). PS4006 pointed at the file; the bigger win
+inside it was this, which PS4006 cannot see.
+
+**The first cut was UNSOUND, not merely noisy, and that is the thing to remember.** An
+expression can mention no outer variable and still change every outer iteration, because
+the outer loop **rewrites what it reads** — a per-row softmax `p[j]*inv` is the canonical
+case, and hoisting it would be *wrong*, not just useless. Every one of the first sampled
+findings was of exactly that kind. The check now requires that no operand be assigned
+anywhere in the outer body. Findings went **445 → 48 → 7** across the two tightenings
+(tight-kernel, then the write guard), and the surviving set includes the sibling of the
+shipped win plus a softmax normalization recomputed per output dimension.
+
+**Deliberately silent** on calls (hoisting changes how often one runs, which is observable
+if it is not pure and the rule cannot know that it is), on inner bodies longer than one
+statement, and on expressions that are not an operand of a larger arithmetic expression —
+a bare `v := x[j]*d` is already as hoisted as a reader will make it.
+
 ## PS3005 — a sort whose comparator dereferences the sorted index  *(scanner: static)*
 
 Sorting an INDEX slice with a comparator that reaches two levels deep through the sorted

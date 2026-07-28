@@ -2148,3 +2148,76 @@ func chol(a []float64, n int) {
 		t.Fatalf("bare directive above the loop did not suppress: %v", got)
 	}
 }
+
+// The shape behind the Mamba2 SSM win: a product varying with the INNER index but not
+// the outer, rebuilt on every outer iteration.
+func TestDetectPS5003_InnerInvariantRecompute(t *testing.T) {
+	src := `package p
+func scan(n, m, off int, h, x []float64, a, delta float64) {
+	for i := range n {
+		for j := range m {
+			h[i*m+j] = a*h[i*m+j] + x[i]*(x[off+j]*delta)
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["inner-invariant-recompute"] == 0 {
+		t.Fatalf("want ≥1 inner-invariant-recompute, got 0 (%v)", got)
+	}
+}
+
+// THE UNSOUNDNESS THAT NEARLY SHIPPED: an expression can mention no outer variable and
+// still change every outer iteration, because the outer loop REWRITES what it reads. A
+// per-row softmax is the canonical case — hoisting p[j]*inv out would be WRONG, not
+// merely useless. Every finding sampled before this guard existed was of this kind.
+func TestDetectPS5003_SilentWhenOperandIsRewrittenByTheOuterLoop(t *testing.T) {
+	src := `package p
+func softmaxRows(n, m int, z, p, out []float64, inv float64) {
+	for i := range n {
+		for j := range m {
+			p[j] = z[i*m+j]
+		}
+		for j := range m {
+			out[i*m+j] = 2 * (p[j] * inv)
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["inner-invariant-recompute"] != 0 {
+		t.Fatalf("want 0 when the outer loop rewrites the operand, got %d (%v)",
+			got["inner-invariant-recompute"], got)
+	}
+}
+
+// SILENT on a call: hoisting changes how often it runs, which is observable if it is
+// not pure, and the rule cannot know that it is.
+func TestDetectPS5003_SilentOnCall(t *testing.T) {
+	src := `package p
+func f(n, m, off int, out, x []float64, d float64) {
+	for i := range n {
+		for j := range m {
+			out[i*m+j] = 2 * (scale(x[off+j]) * d)
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["inner-invariant-recompute"] != 0 {
+		t.Fatalf("want 0 on a call, got %d (%v)", got["inner-invariant-recompute"], got)
+	}
+}
+
+// SILENT when the inner body is not a tight kernel: with more work around it the
+// recompute is not plausibly what dominates, and requiring one statement is what took
+// this check from 445 findings to a usable number.
+func TestDetectPS5003_SilentOnFatInnerBody(t *testing.T) {
+	src := `package p
+func f(n, m, off int, out, x, tmp []float64, d float64) {
+	for i := range n {
+		for j := range m {
+			tmp[j] = float64(j)
+			out[i*m+j] = 2 * (x[off+j] * d)
+			tmp[j] += 1
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["inner-invariant-recompute"] != 0 {
+		t.Fatalf("want 0 on a fat inner body, got %d (%v)", got["inner-invariant-recompute"], got)
+	}
+}

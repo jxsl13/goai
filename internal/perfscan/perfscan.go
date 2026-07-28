@@ -205,6 +205,7 @@ var checks = []check{
 	// PS5xxx — arithmetic
 	{"PS5001", "loop-invariant-divide", "a divide by a loop-invariant scalar on every element", false},
 	{"PS5002", "symmetric-accumulation", "a nested loop accumulating a full symmetric matrix (m[i][j] += x[i]*x[j]) where one triangle + mirror would halve the work", false},
+	{"PS5003", "inner-invariant-recompute", "an inner-loop expression that varies with the INNER index but not the outer one — recomputed once per outer iteration where a precomputed row would do", false},
 	// PS6xxx — verification gaps
 	{"PS6001", "unverified-dual-path", "a devirtualized fast path with a generic fallback — a bit-identity claim needing a bit-exact test", true},
 }
@@ -1744,6 +1745,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	out = append(out, quadraticCacheAppendFindings(fset, fn)...)
 	out = append(out, buildNxNUseOneRowFindings(fset, fn)...)
 	out = append(out, indirectKeyComparatorFindings(fset, fn)...)
+	out = append(out, innerInvariantRecomputeFindings(fset, fn)...)
 	return out
 }
 
@@ -3517,4 +3519,167 @@ func doubleIndexThrough(body *ast.BlockStmt, sorted string, params []string) (st
 		return true
 	})
 	return base, found
+}
+
+// innerInvariantRecomputeFindings flags PS5003 — an expression in the innermost loop
+// that depends on the INNER index but NOT the outer one:
+//
+//	for i := range n {          // outer
+//	    for j := range m {      // inner
+//	        h[i][j] = a*h[i][j] + b*(x[off+j] * delta)   // x[off+j]*delta has no i
+//	    }
+//	}
+//
+// The parenthesized product is recomputed n times for every j, though it is the same
+// value each time. Precomputing it once into an m-sized scratch before the outer loop
+// leaves an indexed read. The rewrite is BIT-IDENTICAL when the expression is pure: it
+// is the SAME product, so it rounds the same way — this is not a reassociation.
+//
+// Go will not do it: the operands are index expressions the compiler cannot prove
+// unaliased across the outer iteration, so the load and the multiply stay in the loop.
+//
+// Measured on the Mamba2 SSM scan, where x[t][hOff+j]*delta was recomputed N times per
+// j: 1.08x-1.10x on prefill end to end, the largest single win in that function and
+// bigger than fixing its pathological access pattern was.
+//
+// Requires the expression to be NON-TRIVIAL — a multiply or divide, at least one index
+// expression, and no call (a call may not be pure, and hoisting it changes evaluation
+// count observably). A bare index read is excluded: hoisting `x[j]` buys nothing.
+func innerInvariantRecomputeFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		outerVar, outerBody, ok := loopVarBody(n)
+		if !ok {
+			return true
+		}
+		for _, st := range outerBody.List {
+			innerVar, innerBody, ok := loopVarBody(st)
+			if !ok || innerVar == outerVar {
+				continue
+			}
+			// A tight kernel only: one statement in the inner loop. Anything longer and
+			// the recompute is not plausibly the dominant cost, which is what turned an
+			// untightened version of this check into 445 findings.
+			if len(innerBody.List) != 1 {
+				continue
+			}
+			ast.Inspect(innerBody, func(m ast.Node) bool {
+				be, isBin := m.(*ast.BinaryExpr)
+				if !isBin || (be.Op != token.MUL && be.Op != token.QUO) {
+					return true
+				}
+				// Must be a PARENTHESIZED or nested subexpression of a larger one — the
+				// shape a compiler cannot hoist and a human does not notice. A whole
+				// right-hand side is already as hoisted as it is going to get.
+				if !nestedInArithmetic(innerBody, be) {
+					return true
+				}
+				if !exprMentions(be, innerVar) || exprMentions(be, outerVar) {
+					return true
+				}
+				if !hasIndexOperand(be) || containsCall(be) {
+					return true
+				}
+				// AND none of its operands may be WRITTEN inside the outer loop. Textual
+				// independence from the outer index is not semantic invariance: a
+				// per-row softmax `p` mentions no outer variable yet is rebuilt every
+				// outer iteration, so hoisting it would be wrong, not merely useless.
+				// Without this the check was unsound — every sampled finding was of
+				// exactly that kind.
+				if mentionsAnyOf(be, assignedIn(outerBody)) {
+					return true
+				}
+				out = append(out, finding{
+					pos:      fset.Position(be.Pos()),
+					category: "inner-invariant-recompute",
+					msg: fmt.Sprintf("this product varies with %q but not with the enclosing %q, so it is"+
+						" recomputed on every iteration of the outer loop for the same result. Precompute"+
+						" it once into a scratch indexed by %q. Bit-identical — it is the same product,"+
+						" not a reassociation. Measured 1.10x on the Mamba2 SSM scan, where the value was"+
+						" rebuilt N times per inner index.", innerVar, outerVar, innerVar),
+				})
+				return true
+			})
+		}
+		return true
+	})
+	return out
+}
+
+// hasIndexOperand reports whether the expression reads through an index — the marker
+// that recomputing it costs a load and not just an arithmetic op.
+func hasIndexOperand(e ast.Expr) bool {
+	found := false
+	ast.Inspect(e, func(n ast.Node) bool {
+		if _, ok := n.(*ast.IndexExpr); ok {
+			found = true
+			return false
+		}
+		return !found
+	})
+	return found
+}
+
+// containsCall reports whether the expression calls anything. A call may not be pure and
+// hoisting it changes how often it runs, which is observable; those are left alone.
+func containsCall(e ast.Expr) bool {
+	found := false
+	ast.Inspect(e, func(n ast.Node) bool {
+		if _, ok := n.(*ast.CallExpr); ok {
+			found = true
+			return false
+		}
+		return !found
+	})
+	return found
+}
+
+// nestedInArithmetic reports whether e appears as an OPERAND of another arithmetic
+// expression rather than standing alone as a statement's value — `b*(x[j]*d)` counts,
+// `v := x[j]*d` does not, because the latter is already a single hoistable assignment a
+// reader would see.
+func nestedInArithmetic(root ast.Node, e ast.Expr) bool {
+	found := false
+	ast.Inspect(root, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		be, ok := n.(*ast.BinaryExpr)
+		if !ok {
+			return true
+		}
+		for _, side := range []ast.Expr{be.X, be.Y} {
+			if inner, ok := side.(*ast.ParenExpr); ok && inner.X == e {
+				found = true
+			}
+			if side == e {
+				found = true
+			}
+		}
+		return !found
+	})
+	return found
+}
+
+// assignedIn collects the base identifiers written anywhere in a loop body — by
+// assignment, compound assignment, or increment. An expression that reads any of them
+// is not invariant across that loop no matter what its indices say.
+func assignedIn(body *ast.BlockStmt) map[string]bool {
+	w := map[string]bool{}
+	ast.Inspect(body, func(n ast.Node) bool {
+		switch v := n.(type) {
+		case *ast.AssignStmt:
+			for _, lhs := range v.Lhs {
+				if name := baseIdentName(lhs); name != "" {
+					w[name] = true
+				}
+			}
+		case *ast.IncDecStmt:
+			if name := baseIdentName(v.X); name != "" {
+				w[name] = true
+			}
+		}
+		return true
+	})
+	return w
 }
