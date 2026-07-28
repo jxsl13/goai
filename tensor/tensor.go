@@ -216,6 +216,37 @@ func gatherGeneric(out, t *Tensor, n int) {
 	nd := len(t.shape)
 	idx := make([]int, nd)
 	off := t.offset
+	// Hoist the INNERMOST axis out of the odometer, exactly as gatherCast does: its
+	// stride is constant across a run, so the run is a straight strided walk and the
+	// odometer ticks once per RUN instead of once per element. Bit-identical by
+	// construction — pure traversal reordering, every destination still reads the same
+	// source offset through the same atF64/setF64 pair, and over a full run the
+	// innermost axis contributes inner*sInner - sInner*inner = 0 to off.
+	//
+	// The per-element accessor dispatch is NOT addressed here; that is the separate
+	// (and probably larger) PS1001 half, which needs a typed switch reproducing this
+	// path's widen-through-float64 semantics exactly.
+	if nd > 0 && t.shape[nd-1] > 0 && n%t.shape[nd-1] == 0 {
+		inner, sInner := t.shape[nd-1], t.strides[nd-1]
+		for pos := 0; pos < n; pos += inner {
+			s := off
+			for p := 0; p < inner; p++ {
+				out.storage.setF64(pos+p, t.storage.atF64(s))
+				s += sInner
+			}
+			for d := nd - 2; d >= 0; d-- {
+				idx[d]++
+				off += t.strides[d]
+				if idx[d] < t.shape[d] {
+					break
+				}
+				idx[d] = 0
+				off -= t.strides[d] * t.shape[d]
+			}
+		}
+		return
+	}
+	//perfscan:ignore PS4005 fallback for shapes the strip-mine above declines
 	for pos := 0; pos < n; pos++ {
 		out.storage.setF64(pos, t.storage.atF64(off))
 		for d := nd - 1; d >= 0; d-- {
