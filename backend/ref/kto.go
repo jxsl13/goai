@@ -50,12 +50,32 @@ func ktoKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) (
 	lambdaU := pa.LambdaU
 
 	var total float64
-	for i := range b {
-		r := beta * (pl.AtF64(i) - rl.AtF64(i))
-		if lab.AtF64(i) != 0 { // desirable
-			total += lambdaD * logistic(zRef-r)
-		} else { // undesirable
-			total += lambdaU * logistic(r-zRef)
+	// Devirtualised traversal (§base-perf), the DPO twin: three AtF64 dispatches per
+	// element for one subtraction, one multiply and a logistic. Flat row-major
+	// []float64 views (exact widening for F32) leave the arithmetic and the
+	// desirable/undesirable branch untouched — same operands, same order, same
+	// accumulation, so bit-identical.
+	pls, ok0 := f64Data(pl)
+	rls, ok1 := f64Data(rl)
+	labs, ok2 := f64Data(lab)
+	if ok0 && ok1 && ok2 {
+		for i := range b {
+			r := beta * (pls[i] - rls[i])
+			if labs[i] != 0 { // desirable
+				total += lambdaD * logistic(zRef-r)
+			} else { // undesirable
+				total += lambdaU * logistic(r-zRef)
+			}
+		}
+	} else {
+		// Generic fallback for dtypes f64Data cannot expose (verbatim original loop).
+		for i := range b {
+			r := beta * (pl.AtF64(i) - rl.AtF64(i))
+			if lab.AtF64(i) != 0 { // desirable
+				total += lambdaD * logistic(zRef-r)
+			} else { // undesirable
+				total += lambdaU * logistic(r-zRef)
+			}
 		}
 	}
 	out := tensor.NewOn(ctx.Device(), pl.Dtype(), tensor.Shape{})

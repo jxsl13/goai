@@ -43,9 +43,27 @@ func dpoKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) (
 	beta := pa.Beta
 
 	var total float64
-	for i := range b {
-		delta := beta * ((pc.AtF64(i) - rc.AtF64(i)) - (pl.AtF64(i) - rl.AtF64(i)))
-		total += softplus(-delta) // −log σ(delta)
+	// Devirtualised traversal (§base-perf): the generic loop pays FOUR AtF64
+	// dispatches per element — an interface hop into storage plus a variadic index
+	// — to do three subtractions and one softplus. Exposing each rank-1 input once
+	// as a flat row-major []float64 (exact widening for F32) leaves the arithmetic
+	// untouched. Same operands, same order, same accumulation into total, so the
+	// result is bit-identical; only the loads move.
+	pcs, ok0 := f64Data(pc)
+	rcs, ok1 := f64Data(rc)
+	pls, ok2 := f64Data(pl)
+	rls, ok3 := f64Data(rl)
+	if ok0 && ok1 && ok2 && ok3 {
+		for i := range b {
+			delta := beta * ((pcs[i] - rcs[i]) - (pls[i] - rls[i]))
+			total += softplus(-delta) // −log σ(delta)
+		}
+	} else {
+		// Generic fallback for dtypes f64Data cannot expose (verbatim original loop).
+		for i := range b {
+			delta := beta * ((pc.AtF64(i) - rc.AtF64(i)) - (pl.AtF64(i) - rl.AtF64(i)))
+			total += softplus(-delta) // −log σ(delta)
+		}
 	}
 	out := tensor.NewOn(ctx.Device(), pc.Dtype(), tensor.Shape{})
 	out.SetF64(total / float64(b))
