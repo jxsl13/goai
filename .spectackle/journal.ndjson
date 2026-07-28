@@ -222,3 +222,4 @@
 {"t":"2026-07-28T10:48:25Z","eid":"ff392e9cc71510f6","ag":"ag-3721","ev":"create","id":"R-01KYM5E3PCEETVZA541J0N8WV1","k":"research","ti":"PS1002/PS1003/PS2001/PS3001 closed outside nn: real findings, inverted cost/benefit"}
 {"t":"2026-07-28T10:50:38Z","eid":"133790aea46e2b31","ag":"ag-fea2","ev":"create","id":"R-01KYM5J5Z8EK99B9JWWNR0E2X9","k":"research","ti":"Collapse tests guard mha; the same trick does NOT work for flashattn (measured)"}
 {"t":"2026-07-28T10:54:01Z","eid":"84434b1836491157","ag":"ag-45fc","ev":"rule","op":"add","rule":"PROC-011","txt":"WHERE a bit-exact oracle is written for a numerical kernel, the GoAI SHALL reproduce the kernel's own algorithm, not the mathematical definition of the quantity it computes."}
+{"t":"2026-07-28T11:04:50Z","eid":"d032962ac7eaab56","ag":"ag-4f4a","ev":"create","id":"R-01KYM6C5AWFKZ8VP8QHGB3XTVA","k":"research","ti":"Production cpu/mha is ULP-blind while its reference twin is guarded"}
