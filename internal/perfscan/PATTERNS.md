@@ -514,6 +514,17 @@ finding), on same-base reductions with no indexed store (a norm has no output in
 independent), and when the inner loop does anything besides the accumulation (the dot is
 then not the whole cost). Findings often overlap PS4006 when the operands are `[][]T`.
 
+**A·Bᵀ needs the TRANSPOSE to win, and the transpose costs an allocation — decide per
+site.** Measured both ways. `nn.matmulABt` transposes the k-dim operand once, which makes
+the inner loop contiguous, and won **2.09×**. The MLA score recompute was rewritten ikj
+*without* a transpose — a pure reorder, no allocation — and **LOST 17–18%**
+(`BenchmarkMLAVJPSeq128` 5.02 → 5.89 ms, `Seq256` 19.9 → 23.5 ms, control flat): the
+strided reads across the output index cost more than the independent accumulators gain.
+So the rewrite is not free-standing; it is worth it only when the inner loop ends up
+contiguous, which for this shape means paying for a transposed copy. That is exactly why
+`soap.go` and `galore.go` decline — pooled paths where a per-call allocation is the thing
+being avoided — and the MLA measurement is the other half of the same lesson.
+
 **"Both operands are already contiguous in the summation index" is NOT a reason to
 decline** — a rationale used twice here before it was disproved. `nn.matmulABt` is exactly
 that shape (`s += ai[p] * bj[p]`, both stride-1 in `p`) and the ikj rewrite still won
