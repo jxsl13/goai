@@ -61,3 +61,6 @@ Shampoo gains least because its products are the smallest here and more of its s
 
 ## PROC-BENCH-MINOFN-001
 IF an A/B arm is measured from a single benchmark run, THEN the result SHALL be re-measured as the minimum of at least 3 runs per arm before it is reported; single samples inverted 2 verdicts in one session.
+
+## PROC-SPLIT-SEARCH-FOLD-001
+IF an expensive independent search feeds a cheap order-dependent reduction in one loop, THEN the loop SHALL be split into a parallel search pass writing an array and a sequential fold over it, since chunked partials reassociate; used in AQLM k-means and the GMM E-step.
