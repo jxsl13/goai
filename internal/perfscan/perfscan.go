@@ -219,6 +219,7 @@ var checks = []check{
 	{"PS6005", "monotone-index-bound", "an innermost loop guarding its tap work with a single relational bound on an index affine in the loop var (j:=t-(K-1)+k; if j>=0) — the in-bounds iterations are one contiguous run, clamp the loop bound instead of branching per tap", false},
 	{"PS6014", "output-invariant-operand-reload", "an output loop whose accumulator re-reads an operand that does NOT vary with the output index — unrolling the output loop by 4 amortizes that load across 4 accumulators (register blocking / unroll-and-jam)", false},
 	{"PS6006", "receiver-scratch-buffer", "a method using a receiver SLICE FIELD as a per-call temporary (indexed write, then indexed read, same call) — unsafe to call concurrently, and every caller contends on one cache line", false},
+	{"PS6007", "search-feeds-reduction", "a loop whose expensive per-item CALL produces an index into an accumulation — split it into a parallel search pass and a sequential fold, since chunked partials would reassociate the sums", false},
 	{"PS6003", "partial-fast-path-coverage", "a fast path that bypasses the general path for only SOME members of a variant family a switch in the same function enumerates — the uncovered variants silently pay the slow path", false},
 	{"PS6004", "unverified-dual-path", "a devirtualized fast path with a generic fallback — a bit-identity claim needing a bit-exact test", true},
 	{"PS4010", "vectorizable-butterfly", "an in-loop butterfly p,q = x+y,x-y (add and subtract of the SAME operand pair written to two indexed slots) — a scalar FWHT/FFT/Hadamard stage a SIMD Add/Sub over the contiguous stride-separated runs would vectorize", false},
@@ -1841,6 +1842,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	out = append(out, partialFastPathFindings(fset, fn)...)
 	out = append(out, outputInvariantReloadFindings(fset, fn)...)
 	out = append(out, receiverScratchFindings(fset, fn)...)
+	out = append(out, searchFeedsReductionFindings(fset, fn)...)
 	out = append(out, vjpScalarBinopFindings(fset, fn)...)
 	out = append(out, fullSortBoundedPrefixFindings(fset, fn)...)
 	out = append(out, spatialBoundsBranchFindings(fset, fn)...)
@@ -5868,4 +5870,122 @@ func isBasicIdent(e ast.Expr) bool {
 		return true
 	}
 	return false
+}
+
+// searchFeedsReductionFindings flags PS6007 — a loop that computes an expensive per-item
+// value with a CALL and then uses that value as the INDEX of an accumulation:
+//
+//	for _, x := range data {
+//	    b := nearest(x, cent)          // expensive, independent per item
+//	    cnt[b]++                       // …but the accumulation is order-dependent
+//	    for t := range dim { sums[b][t] += x[t] }
+//	}
+//
+// The loop cannot be partitioned as written: the accumulation is a reduction over items
+// in order, and per-chunk partial sums reassociate it. The fix is to SPLIT it — run the
+// search in parallel into an assignment array, then fold sequentially in the original
+// order. The expensive half parallelizes and the order-dependent half does not move.
+//
+// Both halves matter to the diagnosis. Parallelizing the whole loop with per-chunk
+// partials is faster to write, silently NOT bit-identical, and passes any test that only
+// checks reproducibility rather than preservation — which is what the determinism tests
+// in this repo do.
+//
+// Shipped twice: AQLM's k-means assignment (part of 990ms -> 278ms end to end) and the
+// GMM E-step's log-likelihood total (part of 76.5ms -> 18.7ms). In both the reduction was
+// a small fraction of the work, so leaving it serial cost nothing measurable.
+func searchFeedsReductionFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil {
+		return nil
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		// NOT loopVarBody: it requires a NAMED loop variable, and the k-means assignment
+		// this check was written from is `for _, x := range data`. Insisting on a named
+		// key made the rule miss its own motivating case — found by replaying it against
+		// the pre-fix revision, which fixtures written from the same mental model could
+		// not have shown.
+		body, ok := anyLoopBody(n)
+		if !ok {
+			return true
+		}
+		// Locals in THIS loop body assigned straight from a call — the per-item search.
+		searched := map[string]bool{}
+		for _, st := range body.List {
+			as, ok := st.(*ast.AssignStmt)
+			if !ok || as.Tok != token.DEFINE || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+				continue
+			}
+			if _, isCall := ast.Unparen(as.Rhs[0]).(*ast.CallExpr); !isCall {
+				continue
+			}
+			if l := identName(as.Lhs[0]); l != "" && l != "_" {
+				searched[l] = true
+			}
+		}
+		if len(searched) == 0 {
+			return true
+		}
+		// …used as the INDEX of an accumulation anywhere below.
+		for name := range searched {
+			if pos, okAcc := accumulationIndexedBy(body, name); okAcc {
+				out = append(out, finding{
+					pos:      fset.Position(pos),
+					category: "search-feeds-reduction",
+					msg:      fmt.Sprintf("%q comes from a per-item call and then indexes an accumulation — split the loop into a parallel search pass writing an assignment array and a sequential fold over it; partitioning as written would reassociate the sums", name),
+				})
+				break // one finding per loop
+			}
+		}
+		return true
+	})
+	return out
+}
+
+// accumulationIndexedBy reports an `acc[name]++` or `acc[name]... += …` inside body — an
+// accumulation whose destination is chosen by the searched value.
+func accumulationIndexedBy(body *ast.BlockStmt, name string) (token.Pos, bool) {
+	var pos token.Pos
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		var lhs ast.Expr
+		switch v := n.(type) {
+		case *ast.IncDecStmt:
+			lhs = v.X
+		case *ast.AssignStmt:
+			if v.Tok != token.ADD_ASSIGN && v.Tok != token.SUB_ASSIGN {
+				return true
+			}
+			if len(v.Lhs) != 1 {
+				return true
+			}
+			lhs = v.Lhs[0]
+		default:
+			return true
+		}
+		// The destination must be indexed BY the searched value somewhere in its chain:
+		// cnt[b] and sums[b][t] both qualify, x[t] does not.
+		for _, ix := range indexExprs(lhs) {
+			if mentions(ix.Index, name) {
+				pos, found = n.Pos(), true
+				return false
+			}
+		}
+		return true
+	})
+	return pos, found
+}
+
+// anyLoopBody returns the body of any for/range loop, whatever its variables are named.
+func anyLoopBody(n ast.Node) (*ast.BlockStmt, bool) {
+	switch v := n.(type) {
+	case *ast.RangeStmt:
+		return v.Body, v.Body != nil
+	case *ast.ForStmt:
+		return v.Body, v.Body != nil
+	}
+	return nil, false
 }

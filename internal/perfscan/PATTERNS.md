@@ -789,6 +789,44 @@ builder buffers in `tree.go` that a deferred task had predicted would be there.
 Silent on plain functions (no receiver, no sharing) and on fields only written and never
 read back, which are outputs rather than temporaries.
 
+## PS6007 — a per-item search that chooses where to accumulate  *(scanner: static)*
+
+```go
+for _, x := range data {
+    b := nearest(x, cent)                       // expensive, independent per item
+    cnt[b]++                                    // …but this is order-dependent
+    for t := range dim { sums[b][t] += x[t] }
+}
+```
+
+The loop **looks** partitionable — every item is independent — and is not. The
+accumulation is a reduction over items in order, and per-chunk partial sums reassociate
+it. What makes this shape worth its own check is that the index *disguises* the
+dependency: with `sums[b]` rather than `total`, the write appears to belong to the item.
+
+**Split it.** Run the search in parallel into an assignment array, then fold sequentially
+in the original order. The expensive half parallelizes; the order-dependent half does not
+move. Shipped twice — AQLM's k-means assignment (part of **990ms → 278ms**) and, in its
+scalar form, the GMM E-step's log-likelihood total (part of **76.5ms → 18.7ms**). In both
+the reduction was a small fraction of the work, so leaving it serial cost nothing
+measurable and bought exactness outright.
+
+**The wrong fix passes the tests.** Parallelizing the whole loop with per-chunk partials
+is quicker to write, silently not bit-identical, and green under any test that checks
+*reproducibility* rather than *preservation* — which is what the determinism tests in this
+repo do (they run the same code twice).
+
+**It missed its own motivating case first.** The k-means loop is `for _, x := range data`,
+and the check used a helper that requires a **named** loop variable, so it found nothing.
+Replaying against the pre-fix revision is what exposed it — fixtures written from the same
+mental model as the detector all used named keys. Third rule in this campaign to fail that
+way (see PS6005, PS6006); replay is now part of how a detector is validated.
+
+Silent on scalar accumulations (`total += v` is every reduction loop ever written), on
+plain indexed **stores** (idempotent — the last writer wins, no order is preserved), and
+when the accumulation index is the loop variable rather than the searched value, since
+each item then owns its slot.
+
 ## PS6003 — a fast path that covers only part of a variant family  *(scanner: static)*
 
 A function short-circuits the general path for some members of a variant family, and a

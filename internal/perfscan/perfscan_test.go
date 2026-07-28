@@ -3672,3 +3672,109 @@ func (b *B) f(src, dst []int, n int) {
 			got["receiver-scratch-buffer"], got)
 	}
 }
+
+// The AQLM k-means shape: an expensive per-item call chooses WHERE to accumulate.
+func TestDetectPS6007_SearchFeedsIndexedReduction(t *testing.T) {
+	src := `package p
+func f(data [][]float64, cent [][]float64, sums [][]float64, cnt []int, dim int) {
+	for _, x := range data {
+		b := nearest(x, cent)
+		cnt[b]++
+		for t := range dim {
+			sums[b][t] += x[t]
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["search-feeds-reduction"] != 1 {
+		t.Fatalf("want 1 search-feeds-reduction, got %d (%v)", got["search-feeds-reduction"], got)
+	}
+}
+
+// A BLANK loop key must not hide it. The loop this check was written from is
+// `for _, x := range data`, and an earlier version required a NAMED loop variable — so it
+// missed its own motivating case. Replaying against the pre-fix revision is what showed
+// that; no fixture written from the same mental model would have.
+func TestDetectPS6007_BlankLoopKeyStillDetected(t *testing.T) {
+	src := `package p
+func f(data []float64, cnt []int) {
+	for _, x := range data {
+		b := bucket(x)
+		cnt[b]++
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["search-feeds-reduction"] != 1 {
+		t.Fatalf("want 1 with a blank loop key, got %d (%v)", got["search-feeds-reduction"], got)
+	}
+}
+
+// SILENT when the accumulation is not indexed by the searched value: an ordinary scalar
+// sum fed by a call is every reduction loop ever written, and flagging those would bury
+// the shape this check exists for. The distinctive part is that the INDEX makes the loop
+// look partitionable when it is not.
+func TestDetectPS6007_SilentOnScalarAccumulation(t *testing.T) {
+	src := `package p
+func f(data []float64) float64 {
+	var total float64
+	for _, x := range data {
+		v := score(x)
+		total += v
+	}
+	return total
+}`
+	if got := countCat(scanSrc(t, src)); got["search-feeds-reduction"] != 0 {
+		t.Fatalf("want 0 on a scalar accumulation, got %d (%v)", got["search-feeds-reduction"], got)
+	}
+}
+
+// SILENT when the searched value indexes a plain STORE rather than an accumulation. A
+// store is idempotent — the last writer wins and no order is being preserved — so the
+// loop does not carry the reduction this check is about. The store is indexed BY the
+// searched value on purpose, so this fixture isolates the accumulation requirement rather
+// than passing on the index check.
+func TestDetectPS6007_SilentOnIndexedStore(t *testing.T) {
+	src := `package p
+func f(data []float64, out []float64) {
+	for _, x := range data {
+		b := bucket(x)
+		out[b] = x
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["search-feeds-reduction"] != 0 {
+		t.Fatalf("want 0 on an indexed store, got %d (%v)", got["search-feeds-reduction"], got)
+	}
+}
+
+// SILENT when the index is not the result of a call: a loop variable indexing an
+// accumulation is an ordinary strided reduction, not a search feeding one.
+func TestDetectPS6007_SilentWhenIndexIsNotFromACall(t *testing.T) {
+	src := `package p
+func f(data []float64, sums []float64, m int) {
+	for i, x := range data {
+		b := i % m
+		sums[b] += x
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["search-feeds-reduction"] != 0 {
+		t.Fatalf("want 0 when the index is not from a call, got %d (%v)",
+			got["search-feeds-reduction"], got)
+	}
+}
+
+// SILENT when an accumulation exists but is indexed by the LOOP variable rather than by
+// the searched value. Each item then accumulates into its own slot, so the loop already
+// partitions and there is nothing to split. This is the fixture that isolates the
+// index-mentions-search requirement: the other silent cases are rejected earlier, by the
+// call check or by having no index at all.
+func TestDetectPS6007_SilentWhenAccumulationIndexedByLoopVar(t *testing.T) {
+	src := `package p
+func f(data []float64, sums []float64) {
+	for i, x := range data {
+		b := score(x)
+		sums[i] += b
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["search-feeds-reduction"] != 0 {
+		t.Fatalf("want 0 when the accumulation is indexed by the loop variable, got %d (%v)",
+			got["search-feeds-reduction"], got)
+	}
+}
