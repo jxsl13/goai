@@ -253,6 +253,9 @@ func (b *cartBuilder) radixByFeature(order []int, ff int) {
 		// the check says itself it cannot verify the precondition. This IS the small-node
 		// fallback: radixByFeature already takes the radix path above treeRadixCutoff,
 		// and below it the radix loses, which is why the cutoff exists.
+		// PS6009, which reports the swapper allocation on its own, now CLEARS here rather
+		// than needing this suppression — the conversion below is its remedy. Only
+		// PS3002's radix advice still applies, and only that is silenced.
 		//perfscan:ignore PS3002 radix is the path above treeRadixCutoff; this is the small-n fallback
 		slices.SortFunc(order, func(a, c int) int {
 			switch ka, kc := kb[a], kb[c]; {
