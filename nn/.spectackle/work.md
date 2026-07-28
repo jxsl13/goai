@@ -129,7 +129,7 @@ TWO REPORTING ERRORS OF MY OWN, both caught before they reached a conclusion and
 
 ## T-01KYNBK6PAFA5SCPX7W1SP3BW7 Benchmark sinkhorn, kda and nsa — PS6005 flags them but nothing can validate a change
 kind: task
-state: draft
+state: active
 created: 2026-07-28
 
 BLOCKED ON MEASUREMENT, not on analysis. PS6005 (output-invariant-operand-reload, the register-blocking shape) reports nn/sinkhorn.go:77 and :86, nn/kda.go:78, and nn/nsa.go:72 and :130. That shape was worth 2.26x on gguf's Q8_0 fused dot and 1.55x on Q4_0, so the findings are plausible.
