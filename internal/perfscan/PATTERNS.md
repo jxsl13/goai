@@ -714,6 +714,15 @@ The quantized prefill path was found the same way and is now **2.52×**.
 and small benchmarks are dominated by dispatch cost rather than compute — hence the
 2 ms floor before the flag is raised.
 
+**A profile that is mostly `cond_wait` is not evidence of overhead.** After the exact GBM
+fit was parallelized its profile read 72% runtime synchronization against 22% compute —
+which looks like the pool eating three quarters of the machine. It is not: samples in
+`pthread_cond_wait` are **parked** time, attributed but free, and a parked worker is not
+consuming its core. Replacing the parking with a bounded yield-free spin measured **2–4%
+SLOWER** across three different callers (GBM −4%, Muon −2%, KNN neutral) and was reverted,
+which is exactly what `backend/cpu`'s own notes record for always-spin variants. **The
+scaling curve is the evidence; the sync share is not.**
+
 **A ratio of two noisy numbers is noisier than either, and this bit already.** The first
 version of the sweep used `-benchtime 10x` and reported `CholeskyVJP_128` at **0.88×** —
 *slower with more cores*, which reads as false sharing and is worth chasing. At 300× the
