@@ -189,10 +189,50 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 	// general path uses.
 	if qt == Q4_0 && m == 1 && xf32 != nil {
 		row := xf32[:k]
-		// Decode (m==1) row dots are independent per output row → chunk-parallel (nlo/nhi are
-		// the chunk's output-row bounds; the inner lo/hi are the block's nibble halves).
 		qmatmulParallelChunks(n, k, func(nlo, nhi int) {
-			for ni := nlo; ni < nhi; ni++ {
+			// Register-block the weight-row loop by 4, as the Q8_0 path above does: m==1
+			// means ONE activation row shared by every output, so each element's load and
+			// float64 convert is reused across 4 rows instead of repeated per row. Blocks
+			// within [lo,hi) — the pool owns the partition, and blocking across the whole
+			// n would write outside this chunk. Bit-exact: each output keeps its own
+			// accumulator and still sees block b's 16 low-nibble terms then its 16
+			// high-nibble terms, ascending. Scalar tail for the chunk's n%4.
+			ni := nlo
+			for ; ni+4 <= nhi; ni += 4 {
+				rb0 := weight[(ni+0)*rowBytes:]
+				rb1 := weight[(ni+1)*rowBytes:]
+				rb2 := weight[(ni+2)*rowBytes:]
+				rb3 := weight[(ni+3)*rowBytes:]
+				var a0, a1, a2, a3 float64
+				for b := 0; b*blockElems < k; b++ {
+					o := b * 18
+					d0 := f16ToF32(binary.LittleEndian.Uint16(rb0[o : o+2]))
+					d1 := f16ToF32(binary.LittleEndian.Uint16(rb1[o : o+2]))
+					d2 := f16ToF32(binary.LittleEndian.Uint16(rb2[o : o+2]))
+					d3 := f16ToF32(binary.LittleEndian.Uint16(rb3[o : o+2]))
+					q0, q1 := rb0[o+2:o+18], rb1[o+2:o+18]
+					q2, q3 := rb2[o+2:o+18], rb3[o+2:o+18]
+					base := b * blockElems
+					xlo, xhi := row[base:base+16], row[base+16:base+32]
+					for i := range 16 {
+						xv := float64(xlo[i])
+						a0 += xv * float64(d0*float32(int(q0[i]&0x0F)-8))
+						a1 += xv * float64(d1*float32(int(q1[i]&0x0F)-8))
+						a2 += xv * float64(d2*float32(int(q2[i]&0x0F)-8))
+						a3 += xv * float64(d3*float32(int(q3[i]&0x0F)-8))
+					}
+					for i := range 16 {
+						xv := float64(xhi[i])
+						a0 += xv * float64(d0*float32(int(q0[i]>>4)-8))
+						a1 += xv * float64(d1*float32(int(q1[i]>>4)-8))
+						a2 += xv * float64(d2*float32(int(q2[i]>>4)-8))
+						a3 += xv * float64(d3*float32(int(q3[i]>>4)-8))
+					}
+				}
+				outf[ni+0], outf[ni+1] = float32(a0), float32(a1)
+				outf[ni+2], outf[ni+3] = float32(a2), float32(a3)
+			}
+			for ; ni < nhi; ni++ {
 				rowBits := weight[ni*rowBytes : (ni+1)*rowBytes]
 				var acc float64
 				for b := 0; b*blockElems < k; b++ {
