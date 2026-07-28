@@ -142,3 +142,54 @@ discipline as the §B47 subtraction-form offset checks:
 Class-audit note (§integration-audit): the pattern recurred across every
 sibling parser — any future size/count cap must use the division (or
 subtraction) form, never check after the arithmetic.
+
+## Session: per-element odometers and row-slice matrices (perfscan PS4005/PS4006)
+
+Eighteen measured wins, all bit-identical by construction (index arithmetic or
+traversal reordering only — no operand or ordering change), each an interleaved
+A/B with a file-copy toggle and an unaffected control benchmark in the same run.
+
+| site | before → after | factor |
+|---|---|---|
+| `backend/cpu` general broadcast | 1303174 → 246575 ns | 5.29× |
+| `backend/einsum` byte-keyed maps → `[256]` arrays | 4608760 → 1002231 ns | 4.60× |
+| `backend/ref` IPO loss devirtualized | 37183 → 5026 ns | 7.40× |
+| `backend/ref` solvespd flat + devirt | 354615 → 165190 ns | 2.15× |
+| `tensor` strided gather (`gatherCast`) | 644021 → 205342 ns | 3.14× |
+| `backend/ref` argmax-axis | 1309029 → 733543 ns | 1.78× |
+| `backend/ref` DPO/KTO devirtualized | 163676 → 104032 ns | 1.57× |
+| `backend/ref` cholesky flat factor | 496002 → 332019 ns | 1.50× |
+| `backend/ref` GRPO / CPO | 209776 → 136247 / 106298 → 71461 ns | 1.54× / 1.49× |
+| `backend/ref` qr flat factor | 22358 → 16607 ns | 1.35× |
+| `backend/ref` PPO-clip devirtualized | 138116 → 112036 ns | 1.23× |
+| `linalg` Pinv devirtualized | 1369432 → 1131386 ns | 1.21× |
+| `internal/linalg` SymEig flat Jacobi | 3207032 → 2661654 ns | 1.20× |
+| `backend/ref` svd flat Jacobi | 711358 → 603454 ns | 1.18× |
+| `linalg` LU.Solve shared scratch | — | 17× fewer allocs (135→8) |
+| `classic` GMM PredictProba scratch | — | allocs halved (4098→2051) |
+
+### The two patterns, and where each stops paying
+
+**Per-element odometer (PS4005).** An N-D coordinate walk ticked once per element.
+The innermost axis has a constant stride across a run, so the run is one straight
+walk — a copy at stride 1, a fill at stride 0 — and the odometer need only tick per
+run. Bit-identical because the innermost axis contributes
+`inner*stride − stride*inner = 0` to the offset over a full run.
+
+**Row-slice matrix (PS4006).** A `[][]T` pays one allocation per row, and a column
+walk (`m[k][p]`, k varying) then dereferences one heap row per step. Flattening to
+`[rows*cols]` makes it a constant stride through one allocation.
+
+PS4006 went five-for-five and then **lost**: flattening `classic/linalg.go`
+cholSolve measured 0.93×, because an OLS fit is dominated by the O(N·d²) Gram-matrix
+build and the O(d³) factorization it flags is a small share of it. The flatten pays
+when the flagged loop IS the enclosing operation's work. Cheaper mitigation when it
+is not: hoist `row := m[i]` above the inner loop — `classic/naivebayes.go` and
+`gmm.go` already do this, which is why they were declined.
+
+### Bench-hygiene, reinforcing the note above
+The same baseline measured 206765 ns standalone, 133412 ns in one interleaved round
+and 163676 ns in another. Only the A-vs-B comparison WITHIN a round means anything.
+Controls drifted up to 9% and twice moved opposite to the effect — which strengthens
+rather than weakens a win measured under worse conditions. One early result was
+discarded entirely when an untouched control moved 46.4 → 37.0 µs on its own.
