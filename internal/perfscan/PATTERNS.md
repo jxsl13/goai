@@ -238,6 +238,14 @@ split (**1.088×** on KNN fit — the half that loses to sklearn). The CART buil
 already solved it locally, which is what made the siblings findable by eye; this rule is
 so the next one does not need luck.
 
+**A hit is a candidate, not a win — and this one has a decline on the board already.**
+SparseGPT's mask selection has the richest-looking instance of the shape (two lookups
+*plus* a `sgSaliency` call per comparison) and hoisting it measured **1.0046×** in an
+interleaved same-session A/B: the sort is a small share of a routine dominated by the
+Hessian inverse and the OBS compensation loops. A first, NON-interleaved reading of the
+same change suggested 1.048× — that was machine drift between two runs, not the change.
+Interleave, or you will ship drift as a result.
+
 **Deliberately silent** on the fixed form (`key[idx[a]]` — applying the advice clears the
 finding), on a direct value sort (`cand[a].dist`, no indirection to hoist), on a single
 dereference, and when the two-level lookup goes through a *different* slice than the one
