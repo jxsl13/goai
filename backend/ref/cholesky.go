@@ -24,34 +24,57 @@ func choleskyKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) 
 		return nil, fmt.Errorf("ref: cholesky needs a square matrix, got shape %v", a.Shape())
 	}
 	n := a.Shape()[0]
-	l := make([][]float64, n) // lower factor, dense f64 working copy
-	for i := range n {
-		l[i] = make([]float64, n)
+	// The lower factor is ONE flat [n*n] row-major buffer, not a slice of rows. The
+	// O(n³) inner product below walks two rows of it per step; with [][]float64 each
+	// step chases a separate pointer to a separately allocated row, which costs both
+	// the indirection and any cache locality between rows. Flattening also drops n
+	// allocations to 1. No arithmetic changes — same values, same order, same
+	// accumulation — so the factor is bit-identical.
+	l := make([]float64, n*n)
+	// Read the input through a flat typed view where possible (exact widening for
+	// F32); the per-element AtF64 dispatch is retained as the fallback.
+	as, aok := f64Data(a)
+	at := func(i, j int) float64 {
+		if aok {
+			return as[i*n+j]
+		}
+		return a.AtF64(i, j)
 	}
 	for j := range n {
+		lj := l[j*n : j*n+n]
 		// diagonal: L[j,j] = √(A[j,j] − Σ_{k<j} L[j,k]²)
-		d := a.AtF64(j, j)
+		d := at(j, j)
 		for k := range j {
-			d -= l[j][k] * l[j][k]
+			d -= lj[k] * lj[k]
 		}
 		if d <= 0 {
 			return nil, fmt.Errorf("ref: cholesky: matrix is not positive-definite (non-positive pivot %.6g at %d)", d, j)
 		}
 		ljj := math.Sqrt(d)
-		l[j][j] = ljj
+		lj[j] = ljj
 		// below the diagonal: L[i,j] = (A[i,j] − Σ_{k<j} L[i,k]·L[j,k]) / L[j,j]
 		for i := j + 1; i < n; i++ {
-			s := a.AtF64(i, j)
+			li := l[i*n : i*n+n]
+			s := at(i, j)
 			for k := range j {
-				s -= l[i][k] * l[j][k]
+				s -= li[k] * lj[k]
 			}
-			l[i][j] = s / ljj
+			li[j] = s / ljj
 		}
 	}
 	out := tensor.NewOn(ctx.Device(), a.Dtype(), tensor.Shape{n, n})
-	for i := range n {
-		for j := 0; j <= i; j++ {
-			out.SetF64(l[i][j], i, j)
+	if os, flush, ok := outF64(out); ok {
+		for i := range n {
+			for j := 0; j <= i; j++ {
+				os[i*n+j] = l[i*n+j]
+			}
+		}
+		flush()
+	} else {
+		for i := range n {
+			for j := 0; j <= i; j++ {
+				out.SetF64(l[i*n+j], i, j)
+			}
 		}
 	}
 	return []*tensor.Tensor{out}, nil
