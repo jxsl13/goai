@@ -1278,3 +1278,50 @@ func sortedKeep(probs []float64, n int, mu float64) []int {
 		t.Fatalf("want 0 (no break consumer), got %d", got)
 	}
 }
+
+// PS6002 fires on an innermost window loop re-testing a compound spatial bounds guard per tap
+// (the pre-fix conv2d col2im shape).
+func TestDetectPS6002_SpatialBoundsBranch(t *testing.T) {
+	src := `package p
+func col2im(dXf, dXcols []float64, kw, oy, ox, s, p, h, wd, base, kk, ci, ky int) {
+	iy := oy*s + ky - p
+	for kx := 0; kx < kw; kx++ {
+		ix := ox*s + kx - p
+		if iy >= 0 && iy < h && ix >= 0 && ix < wd {
+			dXf[ci*h+iy*wd+ix] += dXcols[base+kk]
+		}
+		kk++
+	}
+}`
+	if got := countCat(scanSrc(t, src))["spatial-bounds-branch"]; got != 1 {
+		t.Fatalf("want 1 spatial-bounds-branch, got %d", got)
+	}
+}
+
+// Silent once hoisted: the contiguous run has no per-tap compound guard.
+func TestDetectPS6002_SilentWhenHoisted(t *testing.T) {
+	src := `package p
+func col2im(dXf, dXcols []float64, kxLo, kxHi, rowBase, base, kk int) {
+	for i := kxLo; i < kxHi; i++ {
+		dXf[rowBase+i] += dXcols[base+kk+i]
+	}
+}`
+	if got := countCat(scanSrc(t, src))["spatial-bounds-branch"]; got != 0 {
+		t.Fatalf("want 0 (hoisted), got %d", got)
+	}
+}
+
+// Silent on a plain 1-2 term bounds check (not the spatial 4-term window shape).
+func TestDetectPS6002_SilentOnSimpleGuard(t *testing.T) {
+	src := `package p
+func f(a, b []float64, n int) {
+	for i := 0; i < n; i++ {
+		if i >= 0 && i < n {
+			a[i] = b[i]
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src))["spatial-bounds-branch"]; got != 0 {
+		t.Fatalf("want 0 (simple 2-term guard), got %d", got)
+	}
+}

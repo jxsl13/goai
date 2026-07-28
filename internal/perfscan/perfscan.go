@@ -200,6 +200,7 @@ var checks = []check{
 	{"PS5001", "loop-invariant-divide", "a divide by a loop-invariant scalar on every element", false}, {"PS5002", "symmetric-accumulation", "a nested loop accumulating a full symmetric matrix (m[i][j] += x[i]*x[j]) where one triangle + mirror would halve the work", false},
 	// PS6xxx — algorithmic
 	{"PS6001", "full-sort-bounded-prefix", "a full-vocabulary descending index sort whose result feeds an early-breaking (threshold-bounded) prefix consumer, with no quickselect/pre-filter guard — an O(n log n) sort for an O(prefix) need", false},
+	{"PS6002", "spatial-bounds-branch", "an innermost window/kernel loop re-testing a compound spatial bounds guard (iy>=0 && iy<h && ix>=0 && ix<wd) per tap, where the in-bounds taps form one contiguous run the guard can be hoisted around", false},
 }
 
 // catToID indexes the registry for O(1) id lookup at report time.
@@ -1380,6 +1381,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	out = append(out, symmetricAccumFindings(fset, fn)...)
 	out = append(out, vjpScalarBinopFindings(fset, fn)...)
 	out = append(out, fullSortBoundedPrefixFindings(fset, fn)...)
+	out = append(out, spatialBoundsBranchFindings(fset, fn)...)
 	return out
 }
 
@@ -2191,4 +2193,92 @@ func fullSortBoundedPrefixFindings(fset *token.FileSet, fn *ast.FuncDecl) []find
 			" candidates with SortStableFunc to match the tie order). Shipped: Mirostat, nucleusTopP"+
 			" §T627. Verify the consumer is genuinely bounded, then benchmark.", sortSlice),
 	}}
+}
+
+// andedComparisons counts the relational comparisons (<, >, <=, >=) joined by && in a boolean
+// expression tree — the shape of a compound spatial bounds guard (iy>=0 && iy<h && ix>=0 && ix<wd).
+func andedComparisons(e ast.Expr) int {
+	switch x := e.(type) {
+	case *ast.ParenExpr:
+		return andedComparisons(x.X)
+	case *ast.BinaryExpr:
+		switch x.Op {
+		case token.LAND:
+			return andedComparisons(x.X) + andedComparisons(x.Y)
+		case token.LSS, token.GTR, token.LEQ, token.GEQ:
+			return 1
+		}
+	}
+	return 0
+}
+
+// loopHasNested reports whether a loop body contains another for/range loop (so the outer is
+// not the innermost).
+func loopHasNested(body *ast.BlockStmt) bool {
+	nested := false
+	for _, s := range body.List {
+		ast.Inspect(s, func(n ast.Node) bool {
+			switch n.(type) {
+			case *ast.ForStmt, *ast.RangeStmt:
+				nested = true
+				return false
+			}
+			return true
+		})
+	}
+	return nested
+}
+
+// stmtHasIndexedTarget reports whether the statement is a single assignment/compound-assignment
+// whose LHS is an indexed expression (a[i] = … or a[i] += …) — one scatter/gather move.
+func stmtHasIndexedTarget(s ast.Stmt) bool {
+	as, ok := s.(*ast.AssignStmt)
+	if !ok || len(as.Lhs) != 1 {
+		return false
+	}
+	_, ok = as.Lhs[0].(*ast.IndexExpr)
+	return ok
+}
+
+// spatialBoundsBranchFindings flags PS6002 — an INNERMOST window/kernel loop whose body is a
+// single compound-bounds `if` (≥3 anded relational comparisons: the iy>=0 && iy<h && ix>=0 &&
+// ix<wd shape) guarding one indexed load/store. In a convolution / pooling im2col-style loop the
+// index steps by 1 per tap, so the in-bounds taps form ONE contiguous run and the guard hoists
+// out of the inner loop into a [lo,hi) bulk copy / scatter-add — branch-free and bit-identical
+// (padding taps contribute nothing). Shipped: conv2d forward im2colFillBand + backward col2im.
+func spatialBoundsBranchFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil {
+		return nil
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		_, body, ok := loopVarBody(n)
+		if !ok || body == nil || loopHasNested(body) {
+			return true
+		}
+		for _, stmt := range body.List {
+			ifs, ok := stmt.(*ast.IfStmt)
+			if !ok || ifs.Else != nil || ifs.Init != nil {
+				continue
+			}
+			if andedComparisons(ifs.Cond) < 3 || len(ifs.Body.List) != 1 {
+				continue
+			}
+			if !stmtHasIndexedTarget(ifs.Body.List[0]) {
+				continue
+			}
+			out = append(out, finding{
+				pos:      fset.Position(ifs.Pos()),
+				category: "spatial-bounds-branch",
+				msg: "innermost window/kernel loop re-tests a compound spatial bounds guard per tap" +
+					" (≥3 anded comparisons) around a single indexed move. If the index steps by 1" +
+					" per tap the in-bounds taps form one contiguous run — hoist the guard out into a" +
+					" [lo,hi) bulk copy / scatter-add (branch-free, bit-identical: padding taps add" +
+					" nothing). See conv2d im2colFillBand / col2im. Verify the stride-1 assumption.",
+			})
+			return false
+		}
+		return true
+	})
+	return out
 }
