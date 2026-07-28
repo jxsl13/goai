@@ -4,3 +4,4 @@
 {"t":"2026-07-28T19:41:18Z","eid":"1d2a2aaa92dc4a08","ag":"ag-5f33","ev":"create","id":"R-01KYN3XTYKEASADTC5DZRDEC46","k":"research","ti":"GPT decode is 14% SLOWER at 12 cores than at 8, and 94% of its samples are scheduler wakeups","dir":"backend"}
 {"t":"2026-07-28T19:41:49Z","eid":"b32cf352d771da42","ag":"ag-b621","ev":"create","id":"T-01KYN3YSXCF6H9DZ5XRD1QDBB6","k":"task","ti":"GPT decode regresses 14% from 8 to 12 cores — confirm or kill the poolDenseMaxWork boundary hypothesis","dir":"backend"}
 {"t":"2026-07-28T20:47:05Z","eid":"e8acfc1e1a0dbe31","ag":"ag-7f91","ev":"create","id":"T-01KYN7P9WVEDH839HRR1SHFG2B","k":"task","ti":"Measure the three PS6007 sites in backend/ref/moe.go before splitting them","dir":"backend"}
+{"t":"2026-07-28T21:25:19Z","eid":"5f799a93f3628132","ag":"ag-5d37","ev":"create","id":"T-01KYN9WA0XF35AW2EPHH3ZQ5WW","k":"task","ti":"Check the 23 PS6008 sites in backend/cpu for the per-dispatch allocation regression","dir":"backend"}

@@ -142,3 +142,22 @@ GATE BEFORE CHANGING: check whether a tolerance-0 gate covers the MoE reference 
 VERIFY: go test ./backend/... -count 1 -race; then interleave BenchmarkMoEDecodeQwenDense per PROC-INTERLEAVE-001 with min of 3 runs per arm (PROC-BENCH-MINOFN-001), and check the GOMAXPROCS 1/4/12 curve rather than a single point — an earlier finding in this campaign showed GPT decode getting SLOWER past 8 Ps from pool churn, which a single 12-P number would have hidden.
 
 ALSO REPORTED by the same rule, outside this task's scope: nlp/unigram.go:158 and rl/tabular.go:264. Both are the same shape and neither has a benchmark that reaches it, so there is nothing to validate against yet.
+
+## T-01KYN9WA0XF35AW2EPHH3ZQ5WW Check the 23 PS6008 sites in backend/cpu for the per-dispatch allocation regression
+kind: task
+state: draft
+created: 2026-07-28
+
+BACKEND/CPU ZONE — handed over, not taken. That package has an active parallel worker and its pool constants are tuned against workloads this branch does not measure.
+
+PS6008 reports 23 allocations inside parallel dispatch bodies in backend/cpu: addbias.go:91, crossentropy.go:75, elementwise.go:164, mha.go (337, 338, 339, 762, 763), norm.go (391, 562) and others. Each allocates once per DISPATCH.
+
+THIS IS A QUESTION, NOT A DEFECT REPORT. The same code shape measured harmless in two places and catastrophic in a third, decided entirely by dispatch frequency: AQLM 49 -> 51MB (once per encode pass), GMM 4 -> 4MB (once per EM iteration), GBM exact 64 -> 2007MB (once per TREE NODE). backend/cpu's kernels dispatch once per OP, and a decode step issues many ops per token — closer to the GBM end of that spectrum than the AQLM end, which is why it is worth checking rather than assuming.
+
+HOW TO CHECK, cheaply: run the affected benchmarks with -benchmem and compare allocs/op and B/op against the work being done. An op whose scratch is proportional to its input and is allocated per call will show allocs/op scaling with the number of ops rather than staying flat. BenchmarkGPTGenerate500RowBuf issues ~294k allocs per 500-token decode, which is roughly 600 per token — that number is the place to start.
+
+IF IT IS REAL, the fix is not to remove the allocation but to move it: one buffer per CHUNK on the kernel's own state, allocated once, selected by the chunk index. internal/parallel.RowsIdx exists for exactly this and guarantees distinct chunks receive distinct indices (tested); backend/cpu's own pool would need an equivalent, which is a design decision for whoever owns it.
+
+DO NOT ASSUME THESE ARE ALL REAL. Kernels invoked once per large tensor are the AQLM case and cost nothing. The finding is a list to triage, and a site measured harmless should be recorded as such so the next sweep does not re-triage it.
+
+RELATED: R-01KYN3XTYKEAS (GPT decode is 14% slower at 12 Ps than 8) and T-01KYN3YSXCF6H concern the same package from the scheduling angle. If both turn out to be real they are independent — one is allocation, one is dispatch width.
