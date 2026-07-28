@@ -265,8 +265,13 @@ func SoftplusNegLLSumF64(f, y []float64) float64 {
 }
 
 // expF64x4v returns eˣ (~1 ulp) per lane for x ≤ 0 (the softmax numerator feeds
-// it z−max ≤ 0). Masked/−Inf lanes clamp to eLo → ~3e-308 (≈0 after normalize).
+// it z−max ≤ 0). Masked/−Inf lanes (x below the eLo clamp floor, including −Inf)
+// underflow to EXACT 0 — matching scalar math.Exp, which returns 0 there — so a
+// −inf-masked logit contributes exactly 0 probability instead of a ~3e-308
+// denormal. Without this, exp(clamp to −708)≈3e-308 leaves masked tokens with a
+// vanishingly-small but NONZERO probability (breaking top-nσ's exact keep-set).
 func expF64x4v(x archsimd.Float64x4) archsimd.Float64x4 {
+	under := x.Less(eLo) // x < −708 (incl −Inf): exp underflows to exact 0 below the f64 floor
 	x = x.Max(eLo)
 	kf := x.Mul(eLog2e).RoundToEven()
 	r := kf.MulAdd(eNHi, x)
@@ -286,7 +291,7 @@ func expF64x4v(x archsimd.Float64x4) archsimd.Float64x4 {
 	p = p.MulAdd(r, eOne)
 	p = p.MulAdd(r, eOne)
 	scale := kf.ConvertToInt32().Add(eBias).ExtendToInt64().ShiftAllLeft(52).AsFloat64x4()
-	return p.Mul(scale)
+	return eZero.Merge(p.Mul(scale), under) // under ? 0 : eˣ — deep-underflow/−Inf lanes → exact 0
 }
 
 // ExpSumF64 sets dst[i] = exp(src[i]-bias) and returns Σ dst[i], 4-wide AVX2+FMA.
