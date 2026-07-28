@@ -244,7 +244,25 @@ func flashAttnTyped[T float32 | float64](q, k, v, out []T, seq, dm, dk, dkv, rep
 				for d := range pv {
 					pv[d] = 0
 				}
-				for j := j0; j < j1; j++ {
+				// 2-way unroll-and-jam over the key index j: each pv[d] takes its j
+				// then j+1 contribution as two separate roundings in ascending-j order
+				// (s := pv[d]+p0·v0; pv[d] = s+p1·v1), so every value is bit-identical
+				// to the scalar loop — while halving the pv[] read-modify-write trips
+				// and giving two independent V-load streams. Same transform already
+				// shipped and A/B'd in mhaFwd's key loop.
+				j := j0
+				for ; j+2 <= j1; j += 2 {
+					p0 := p[j-j0]
+					p1 := p[j+1-j0]
+					vb0 := j*dkv + kvOff
+					vr0 := v[vb0 : vb0+dk : vb0+dk]
+					vr1 := v[vb0+dkv : vb0+dkv+dk : vb0+dkv+dk]
+					for d, vv0 := range vr0 {
+						s := pv[d] + p0*float64(vv0)
+						pv[d] = s + p1*float64(vr1[d])
+					}
+				}
+				for ; j < j1; j++ {
 					pj := p[j-j0]
 					vBase := j*dkv + kvOff
 					vr := v[vBase : vBase+dk : vBase+dk]
