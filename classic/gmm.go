@@ -5,7 +5,9 @@ import (
 	"math"
 	"math/rand"
 	"runtime"
+	"sync"
 
+	"github.com/jxsl13/goai/internal/parallel"
 	"github.com/jxsl13/goai/internal/simd"
 )
 
@@ -932,4 +934,20 @@ func gmmKMeansPP(x [][]float64, k int, seed int64) [][]float64 {
 		centers = append(centers, append([]float64(nil), x[pick]...))
 	}
 	return centers
+}
+
+// gmmParThreshold is the total work below which splitting an EM loop costs more than it
+// saves — the same 1<<15 crossover measured for this class of core.
+const gmmParThreshold = 1 << 15
+
+// parallelSamples splits n units of work across the shared bounded pool; per is the
+// per-unit cost so the threshold compares total work rather than a bare count. Routing
+// through the pool rather than spawning keeps a caller that is already parallel from
+// multiplying the process's goroutine count (ADR-01KYMWJ76AFA2).
+func parallelSamples(n, per int, body func(lo, hi int)) {
+	if n*per < gmmParThreshold {
+		body(0, n)
+		return
+	}
+	parallel.Rows(n, body)
 }
