@@ -73,6 +73,14 @@ func TestCPUCrossReferenceExact(t *testing.T) {
 				// not in F64, so only the F32 lane is cross-checked here.
 				continue
 			}
+			if op == backend.OpSigmoid && dtype == tensor.F64 {
+				// Same tolerance-gating as SiLU/softcap/softplus F64: on the SIMD
+				// build σ is the 4-wide expF64poly kernel (vsigmoidF64), ref uses
+				// math.Exp — ~1 ulp apart in F64, within the sigmoid goldens'
+				// budget (TestVsigmoidF64Accuracy ≤ 1e-13). Only the F32 lane is
+				// cross-checked exact here.
+				continue
+			}
 			gc := run(t, cpu, op, in)
 			gr := run(t, ref, op, in)
 			vexpVectorized := op == backend.OpGELU || op == backend.OpSigmoid || op == backend.OpSiLU ||
