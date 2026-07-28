@@ -10,19 +10,25 @@ import "math"
 // vecs[k] is the eigenvector (length n) for vals[k]. a is not modified.
 func SymEig(a [][]float64) (vals []float64, vecs [][]float64) {
 	n := len(a)
-	// working copy + identity eigenvector accumulator
-	m := make([][]float64, n)
-	v := make([][]float64, n)
+	// Working copy and eigenvector accumulator are FLAT [n*n] row-major buffers, not
+	// slices of rows. The Jacobi sweep below is O(n³) and two of its three inner
+	// loops walk a COLUMN (m[k][p], v[k][p]) — with a row-of-slices layout every k
+	// dereferences a different, independently allocated row, which is the worst
+	// access pattern that layout has. Flat buffers make those walks a constant stride
+	// through one allocation and drop 2n allocations to 2. Index arithmetic only: the
+	// operations, their order and their operands are unchanged, so results are
+	// bit-identical.
+	m := make([]float64, n*n)
+	v := make([]float64, n*n)
 	for i := range n {
-		m[i] = append([]float64(nil), a[i]...)
-		v[i] = make([]float64, n)
-		v[i][i] = 1
+		copy(m[i*n:i*n+n], a[i])
+		v[i*n+i] = 1
 	}
 	for range 100 {
 		off := 0.0
 		for i := range n {
 			for j := i + 1; j < n; j++ {
-				off += m[i][j] * m[i][j]
+				off += m[i*n+j] * m[i*n+j]
 			}
 		}
 		if off < 1e-28 {
@@ -30,28 +36,28 @@ func SymEig(a [][]float64) (vals []float64, vecs [][]float64) {
 		}
 		for p := range n {
 			for q := p + 1; q < n; q++ {
-				if math.Abs(m[p][q]) < 1e-300 {
+				if math.Abs(m[p*n+q]) < 1e-300 {
 					continue
 				}
 				// Jacobi rotation zeroing m[p][q]
-				theta := (m[q][q] - m[p][p]) / (2 * m[p][q])
+				theta := (m[q*n+q] - m[p*n+p]) / (2 * m[p*n+q])
 				t := math.Copysign(1, theta) / (math.Abs(theta) + math.Sqrt(theta*theta+1))
 				c := 1 / math.Sqrt(t*t+1)
 				s := t * c
 				for k := range n {
-					mkp, mkq := m[k][p], m[k][q]
-					m[k][p] = c*mkp - s*mkq
-					m[k][q] = s*mkp + c*mkq
+					mkp, mkq := m[k*n+p], m[k*n+q]
+					m[k*n+p] = c*mkp - s*mkq
+					m[k*n+q] = s*mkp + c*mkq
 				}
 				for k := range n {
-					mpk, mqk := m[p][k], m[q][k]
-					m[p][k] = c*mpk - s*mqk
-					m[q][k] = s*mpk + c*mqk
+					mpk, mqk := m[p*n+k], m[q*n+k]
+					m[p*n+k] = c*mpk - s*mqk
+					m[q*n+k] = s*mpk + c*mqk
 				}
 				for k := range n {
-					vkp, vkq := v[k][p], v[k][q]
-					v[k][p] = c*vkp - s*vkq
-					v[k][q] = s*vkp + c*vkq
+					vkp, vkq := v[k*n+p], v[k*n+q]
+					v[k*n+p] = c*vkp - s*vkq
+					v[k*n+q] = s*vkp + c*vkq
 				}
 			}
 		}
@@ -59,7 +65,7 @@ func SymEig(a [][]float64) (vals []float64, vecs [][]float64) {
 	// extract + sort descending
 	vals = make([]float64, n)
 	for i := range n {
-		vals[i] = m[i][i]
+		vals[i] = m[i*n+i]
 	}
 	order := make([]int, n)
 	for i := range order {
@@ -80,7 +86,7 @@ func SymEig(a [][]float64) (vals []float64, vecs [][]float64) {
 		sorted[k] = vals[oi]
 		col := make([]float64, n)
 		for r := range n {
-			col[r] = v[r][oi]
+			col[r] = v[r*n+oi]
 		}
 		vecs[k] = col
 	}
