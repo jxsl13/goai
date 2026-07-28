@@ -2,31 +2,6 @@
 schema: v1
 ---
 
-## T-01KYJR355PF6ZST0W75SWSNGNX Strip-mine the per-element odometer out of the reduce and broadcast VJPs
-kind: task
-state: draft
-created: 2026-07-27
-
-MEASURED BASELINE on this host (M2 Pro, darwin/arm64, -benchtime=300ms): BenchmarkReduceVJPSum 559,886 ns/op, ReduceVJPMean 559,811, BcastReduceBiasF32 273,778 (5 allocs), ReshapeVJPFastF32 78,597.
-
-THE CALIBRATION THAT MAKES THIS UNAMBIGUOUS: BenchmarkReduceVJPSum and BenchmarkReshapeVJPFastF32 process THE SAME 262,144 F32 elements and produce THE SAME 1 MB output, yet 559,886 versus 78,597 ns — 7.1x apart. The reduce VJP moves LESS memory (reads 2 KB, writes 1 MB) than the reshape. It is not memory-bound, it is loop-overhead-bound. The in-repo reference rate on this host is internal/simd BenchmarkAddF32_256K at 0.288 ns/element; the reduce VJP runs at 2.136 ns/element.
-
-SITE A: autograd/vjp_reduce.go:112-138 broadcastVJP, F64 and F32 typed loops, registered for OpSum (:337) and OpMean (:338). Per element of the INPUT on every backward through a reduction — every loss reduction, every LayerNorm/RMSNorm mean, every softmax denominator, every masked-mean pooling.
-DEFECT A: the inner odometer at :114-122 runs a nested loop with two memory operands (coord[ax], axStride[ax]) FOR EVERY ELEMENT, purely to advance of. Assembly (go build -gcflags=-S ./autograd/) confirms the real work is 5 instructions while the odometer adds a taken branch, a load from axStride, a load-and-store to coord, and a data-dependent of that both blocks bounds-check elimination on gs[of] and creates a loop-carried dependency killing unrolling and ILP. About 1.85 ns, 6-7 cycles, per element on pure index bookkeeping. The structural fact ignored: axStride[nd-1] is CONSTANT over the innermost axis — for Axes:[1] on [512,512], axStride = [1,0], so the whole inner run of 512 elements is a constant fill and the odometer computes of += 0 five hundred and twelve times per row.
-FIX A: strip-mine the last axis out of the odometer — compute inner := xs[nd-1], s := axStride[nd-1], outer := n/inner; per row take row := ds[r*inner:r*inner+inner]; if s == 0 fill with a hoisted constant, else gather src[j*s]; advance the odometer over axes 0..nd-2 ONCE PER ROW. Guard nd == 0 and inner == 0 by falling through to the current loop. The re-slice eliminates bounds checks on row — the same trick internal/simd/simd.go:16-18 documents as worth 1.45x on M2 Pro.
-
-SITE B: autograd/vjp.go:111-122 bcastSumInto, reached from bcastReduce (:74-81) and the OpBroadcast VJP (vjp_broadcast.go:29-34). BROADER REACH THAN A: bcastReduce is called by the OpAdd VJP (vjp.go:128, twice), OpSub (:136) and OpMul (:149, twice) — every bias gradient in every linear layer, every per-channel scale, every broadcast residual.
-DEFECT B: identical class — dst[dOff] += v followed by a per-element nested odometer. Measured 2.089 ns/element for the canonical bias shape [128,1024] -> [1024], where the destination is 4 KB and fully L1-resident, against 0.289 ns/element for BenchmarkAddF32_4K at the identical count. 7.2x off, on a loop touching strictly less memory. For the bias case eff = [0,1] the inner run is a plain unit-stride dst[j] += src[j] of length 1024 repeated 128 times — literally simd.AddF32, a primitive this package already imports.
-FIX B: strip-mine on eff[nd-1] — when it is 1 and len(dst) == gs[nd-1], call simd.AddF32/AddF64 per row; when it is 0, accumulate the run into a scalar seeded from dst[dOff] and store once; otherwise a strided inner loop with the odometer only over axes 0..nd-2.
-
-VALIDATION GATE (benchmark only): BenchmarkReduceVJPSum / ReduceVJPMean and BenchmarkBcastReduceBiasF32 / F64 already isolate these exactly (they call the VJP directly, no tape). BenchmarkReduceVJPSumNaive remains as the pre-optimization floor. ADD the two cases the current set never exercises, since each covers the OTHER branch of the new code: BenchmarkReduceVJPSumAxis0 (x [512,512] F32, Axes {0}, so the non-zero-stride path) and BenchmarkBcastReducePerRowF32 (g [128,1024] F32 -> inShape {128,1}, so the broadcast-last-axis path).
-
-EXPECTED: 4-6x on ReduceVJPSum (560 us -> 95-140 us) and 5-7x on BcastReduceBias (274 us -> 40-55 us). High confidence — the target rate is measured on this host by two independent in-repo benchmarks.
-
-BIT-IDENTITY BAR: A is bit-identical UNCONDITIONALLY — that loop performs no accumulation, every ds[i] is a single independent store of gs[of]*scale, so restructuring changes only the order in which DISTINCT destinations are written, never a value; scale stays float64 and the F32 path keeps its single sc := float32(scale) conversion. B is bit-identical ONLY IF IMPLEMENTED AS STATED, and two things are load-bearing: (i) in the unit-stride case each dst[j] is touched once per row and rows are visited in ascending order, so per-destination summation order is unchanged, and simd.AddF32/AddF64 are lane-wise elementwise adds (on darwin/arm64 the portable scalar loop is what compiles in, since the AVX file is amd64-gated); (ii) in the broadcast-last-axis case the scalar accumulator MUST BE TYPED T, NOT WIDENED TO float64 — acc += v on a float32 accumulator rounds at each step exactly as dst[d] += v does, whereas widening to f64 and narrowing once would be MORE accurate and therefore NOT bit-identical, which would move the finite-difference gate.
-
-PERFSCAN RULE REQUIRED: unstrip-mined odometer. AST shape: a for whose body's last statement is a for over the axis index in DESCENDING order (for ax := nd-1; ax >= 0; ax--) containing an increment of coord[ax], a compound-assign to a scalar from stride[ax], and a break guarded by coord[ax] < shape[ax], where the outer loop bound derives from Numel() or len(src). Report: innermost axis has a loop-invariant stride, hoist the inner run out of the odometer. DISTINCT FROM PS1001 — there is no AtF64/SetF64 here, the code already passed that gate, which is exactly why the detector goes quiet on it. The accumulating variant (dst[expr] += v rather than dst[i] = expr) must carry an extra note in the report text: the innermost accumulator must keep the element type.
-
 ## T-01KYJR35K5E6FVTTCVDD9VSTBQ Accumulate gradients in place at fan-in, behind an explicit ownership set
 kind: task
 state: draft
