@@ -337,10 +337,14 @@ func rotateBackInto(out, tmp, ql, nmat, qr [][]float64) {
 	for i := range m {
 		for j := range n {
 			var acc float64
-			// A·Bᵀ: both operands already walk l contiguously, so this does not suffer
-			// the strided read, and the ikj form would need a transposed copy of qr —
-			// an n×n allocation per call on a path whose whole point is being pooled.
-			//perfscan:ignore PS4008 A·Bt, ikj would cost a transposed qr per call
+			// Declined for ALLOCATION, not for speed. The ikj rewrite would likely be
+			// faster here as it was for Muon's matmulABt (2.09x) — that kernel is the
+			// same A·Bᵀ shape with both operands contiguous in the summation index, and
+			// the transpose paid for itself. What rules it out is that this path is
+			// POOLED: a transposed copy of qr is an n×n allocation on every call, which
+			// is the cost the pooling exists to avoid. Revisit if a scratch buffer for
+			// the transpose can be hung off the same pool.
+			//perfscan:ignore PS4008 declined on allocation, not speed — see above
 			for l := range n {
 				acc += tmp[i][l] * qr[j][l]
 			}

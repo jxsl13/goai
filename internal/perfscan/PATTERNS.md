@@ -514,6 +514,16 @@ finding), on same-base reductions with no indexed store (a norm has no output in
 independent), and when the inner loop does anything besides the accumulation (the dot is
 then not the whole cost). Findings often overlap PS4006 when the operands are `[][]T`.
 
+**"Both operands are already contiguous in the summation index" is NOT a reason to
+decline** — a rationale used twice here before it was disproved. `nn.matmulABt` is exactly
+that shape (`s += ai[p] * bj[p]`, both stride-1 in `p`) and the ikj rewrite still won
+**2.09×**, because the serial FMADD chain, not the access pattern, was the cost; the
+transpose paid for itself. A guard encoding that rationale was written and reverted when it
+suppressed the rule's own canonical fixtures. The real reason those two sites were declined
+is **allocation**: the transposed copy is a fresh buffer on every call, on paths that are
+pooled precisely to avoid that. Site-specific and not statically detectable — decline in a
+comment, not in the rule.
+
 ## PS4005 — an N-D odometer ticked once per ELEMENT  *(scanner: static)*
 ```go
 for pos := range xs { // one element of work

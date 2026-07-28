@@ -170,10 +170,13 @@ func galoreProjectDown(g, proj [][]float64, left bool) []float64 {
 		for a := range r {
 			var s float64
 			pa := proj[a][:n]
-			// A·Bᵀ: g[i] and proj[a] already walk j contiguously, so this does not
-			// suffer the strided read, and the ikj form would need a transposed copy
-			// of proj — an n×r allocation per call.
-			//perfscan:ignore PS4008 A·Bt, ikj would cost a transposed proj per call
+			// Declined for ALLOCATION, not for speed. Muon's matmulABt is the same
+			// A·Bᵀ shape with both operands contiguous in the summation index, and the
+			// ikj rewrite won 2.09x there — contiguity is NOT the reason to decline.
+			// What rules it out here is that the ikj form needs a transposed copy of
+			// proj, an n×r allocation on every call, against a projection whose other
+			// three arms allocate nothing.
+			//perfscan:ignore PS4008 declined on allocation, not speed — see above
 			for j := range pa {
 				s += gi[j] * pa[j]
 			}
