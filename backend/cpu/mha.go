@@ -263,7 +263,7 @@ func dot4[T float32 | float64](a []float64, b []T) float64 {
 // ~28% in the forward (whose k-loop is load-bound on the score pass) but
 // consistently REGRESSED ~5-6% in the backward and FlashAttn (p≤0.017, 7
 // interleaved rounds), so those keep the two-convert form.
-func dot4T[T float32 | float64](a, b []T) float64 {
+func dot4T[T ~float32 | ~float64](a, b []T) float64 {
 	var s0, s1, s2, s3 float64
 	d := 0
 	for ; d+3 < len(a) && d+3 < len(b); d += 4 {

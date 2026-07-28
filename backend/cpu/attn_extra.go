@@ -437,6 +437,7 @@ func retentionBackwardKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs
 // (T = float32|float64), accumulating in f64 and preserving each pass's exact
 // operation order for ref-parity (§V9/§V10). gs is dO.
 func retentionBwd[T normFloat](qs, ks, vs, gs, dqs, dks, dvs []T, l, kd, vd int, decay []float64) {
+	_, isF32 := any(qs).([]float32) // dot4 reassociation fits the f32 budget only (F64 keeps serial dots)
 	// Pass A: dQ rows are independent over n (m ≤ n ascending — ref's order).
 	parallelWork(l, l*(kd+vd), func(lo, hi int) {
 		row := make([]float64, kd)
@@ -448,8 +449,12 @@ func retentionBwd[T normFloat](qs, ks, vs, gs, dqs, dks, dvs []T, l, kd, vd int,
 			for m := 0; m <= n; m++ {
 				vm := vs[m*vd : m*vd+vd : m*vd+vd]
 				var dp float64
-				for j, gv := range gn {
-					dp += float64(gv) * float64(vm[j])
+				if isF32 {
+					dp = dot4T(gn, vm)
+				} else {
+					for j, gv := range gn {
+						dp += float64(gv) * float64(vm[j])
+					}
 				}
 				dA := dp * decay[n-m]
 				km := ks[m*kd : m*kd+kd : m*kd+kd]
@@ -479,8 +484,12 @@ func retentionBwd[T normFloat](qs, ks, vs, gs, dqs, dks, dvs []T, l, kd, vd int,
 			for n := m; n < l; n++ {
 				qn := qs[n*kd : n*kd+kd : n*kd+kd]
 				var a float64
-				for i, qv := range qn {
-					a += float64(qv) * float64(km[i])
+				if isF32 {
+					a = dot4T(qn, km)
+				} else {
+					for i, qv := range qn {
+						a += float64(qv) * float64(km[i])
+					}
 				}
 				pnm := a * decay[n-m]
 				gn := gs[n*vd : n*vd+vd : n*vd+vd]
