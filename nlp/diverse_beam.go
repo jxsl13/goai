@@ -3,6 +3,7 @@ package nlp
 import (
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 )
 
@@ -99,15 +100,27 @@ func DiverseBeamSearch(next NextLogits, start []int, width, groups, maxNew, eos 
 			// carried-done cand (tok 0) or the fresh vocab expansion (distinct toks), so
 			// (parent, tok) uniquely orders the appends — ties resolve to that same order,
 			// keeping the top-B' set identical, but with pdqsort's lower constant.
-			sort.Slice(cands, func(i, j int) bool {
-				ai, aj := aug(cands[i]), aug(cands[j])
+			slices.SortFunc(cands, func(a, b cand) int {
+				ai, aj := aug(a), aug(b)
 				if ai != aj {
-					return ai > aj
+					if ai > aj {
+						return -1
+					}
+					return 1
 				}
-				if cands[i].parent != cands[j].parent {
-					return cands[i].parent < cands[j].parent
+				if a.parent != b.parent {
+					if a.parent < b.parent {
+						return -1
+					}
+					return 1
 				}
-				return cands[i].tok < cands[j].tok
+				if a.tok < b.tok {
+					return -1
+				}
+				if a.tok > b.tok {
+					return 1
+				}
+				return 0
 			})
 			if len(cands) > bPrime {
 				cands = cands[:bPrime]
