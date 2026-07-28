@@ -103,8 +103,14 @@ func (f *LU) Solve(b *tensor.Tensor) (*tensor.Tensor, error) {
 		return b.AtF64(i, c)
 	}
 	out := make([]float64, n*cols) // row-major [n,cols]
+	// One forward-substitution scratch for all columns instead of one per column.
+	// The forward pass below assigns y[i] for every i in ascending order and reads
+	// only y[j] with j < i, all written earlier in the SAME column's pass, so a
+	// reused buffer cannot expose the previous column's values. A function local,
+	// not a field on LU: a factorization is immutable after Factor and is safe to
+	// Solve against concurrently, which a shared buffer would silently break.
+	y := make([]float64, n)
 	for c := range cols {
-		y := make([]float64, n)
 		for i := range n { // forward: L·y = P·b, L unit-lower
 			s := bat(f.piv[i], c)
 			for j := range i {
