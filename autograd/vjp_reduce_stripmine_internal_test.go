@@ -145,3 +145,120 @@ func TestBroadcastFillRowsDeclinesUnhandled(t *testing.T) {
 		}
 	}
 }
+
+// bcastSumRef is bcastSumInto's inner loop EXACTLY as it stood before the strip-mine:
+// one odometer tick per ELEMENT, accumulating into dst. Frozen bit-identity oracle.
+func bcastSumRef[T float32 | float64](dst, src []T, gs []int, eff []int) {
+	nd := len(gs)
+	idx := make([]int, nd)
+	dOff := 0
+	for _, v := range src {
+		dst[dOff] += v
+		for d := nd - 1; d >= 0; d-- {
+			idx[d]++
+			dOff += eff[d]
+			if idx[d] < gs[d] {
+				break
+			}
+			idx[d] = 0
+			dOff -= eff[d] * gs[d]
+		}
+	}
+}
+
+// TestBcastSumRowsMatchesOdometerExact holds the accumulating strip-mine bit-identical
+// to the per-element odometer at tolerance 0, over every broadcast pattern of ranks
+// 1..4 — so all three inner-run shapes are covered: unit stride, broadcast axis
+// (eff 0, the scalar-accumulator branch) and strided scatter.
+//
+// Unlike its storing twin, this one accumulates, so bit-identity is CONDITIONAL: the
+// summation order per destination must survive, and the scalar accumulator must keep
+// the element type. F32 is the case that actually discriminates — a float64
+// accumulator would be more accurate and would show up here as differing bits.
+func TestBcastSumRowsMatchesOdometerExact(t *testing.T) {
+	rng := rand.New(rand.NewSource(31337))
+	shapes := [][]int{{6}, {3, 4}, {4, 3}, {1, 5}, {5, 1}, {2, 3, 4}, {3, 1, 2}, {2, 2, 3, 2}}
+	for _, gs := range shapes {
+		nd, n := len(gs), numelOf(gs)
+		for mask := 0; mask < 1<<nd; mask++ {
+			// Build eff exactly as bcastSumInto does: 0 on broadcast axes, the
+			// destination's row-major stride on kept axes.
+			eff := make([]int, nd)
+			stride := 1
+			dstLen := 1
+			for ax := nd - 1; ax >= 0; ax-- {
+				if mask&(1<<ax) != 0 { // broadcast this axis
+					eff[ax] = 0
+					continue
+				}
+				eff[ax] = stride
+				stride *= gs[ax]
+				dstLen *= gs[ax]
+			}
+			src := make([]float64, n)
+			for i := range src {
+				src[i] = rng.NormFloat64() * math.Pow(2, float64(rng.Intn(21)-10))
+			}
+			seed := make([]float64, dstLen)
+			for i := range seed {
+				seed[i] = rng.NormFloat64()
+			}
+
+			gotD, wantD := append([]float64(nil), seed...), append([]float64(nil), seed...)
+			bcastSumRef(wantD, src, gs, eff)
+			if !bcastSumRows(gotD, src, gs, eff) {
+				t.Fatalf("shape %v mask %d: strip-mine declined", gs, mask)
+			}
+			for i := range wantD {
+				if math.Float64bits(gotD[i]) != math.Float64bits(wantD[i]) {
+					t.Fatalf("f64 shape %v mask %d dst[%d]: got %v (%#x), want %v (%#x)",
+						gs, mask, i, gotD[i], math.Float64bits(gotD[i]),
+						wantD[i], math.Float64bits(wantD[i]))
+				}
+			}
+
+			src32 := make([]float32, n)
+			for i := range src32 {
+				src32[i] = float32(src[i])
+			}
+			seed32 := make([]float32, dstLen)
+			for i := range seed32 {
+				seed32[i] = float32(seed[i])
+			}
+			got32, want32 := append([]float32(nil), seed32...), append([]float32(nil), seed32...)
+			bcastSumRef(want32, src32, gs, eff)
+			if !bcastSumRows(got32, src32, gs, eff) {
+				t.Fatalf("shape %v mask %d: f32 strip-mine declined", gs, mask)
+			}
+			for i := range want32 {
+				if math.Float32bits(got32[i]) != math.Float32bits(want32[i]) {
+					t.Fatalf("f32 shape %v mask %d dst[%d]: got %v, want %v — a widened "+
+						"accumulator would look exactly like this", gs, mask, i, got32[i], want32[i])
+				}
+			}
+		}
+	}
+}
+
+// TestBcastSumRowsDeclinesUnhandled pins the fallback contract, and specifically that
+// declining happens BEFORE any row is written. This function ACCUMULATES into dst, so
+// a version that bailed mid-loop would leave the destination half-updated and the
+// caller's fallback would then add those rows a second time.
+func TestBcastSumRowsDeclinesUnhandled(t *testing.T) {
+	dst := []float64{1, 2, 3, 4}
+	src := []float64{5, 6, 7, 8}
+	// An innermost stride that is neither 0 nor 1 cannot arise from a row-major
+	// destination; it must be declined rather than handled by a branch no test reaches.
+	if bcastSumRows(dst, src, []int{2, 2}, []int{0, 2}) {
+		t.Fatal("innermost stride 2: want decline")
+	}
+	if bcastSumRows(dst, src, nil, nil) {
+		t.Fatal("rank-0: want decline")
+	}
+	for i, v := range []float64{1, 2, 3, 4} {
+		if dst[i] != v {
+			t.Fatalf("declined call mutated dst[%d] = %v, want %v — a mid-loop bail would "+
+				"double-count these rows when the caller's fallback runs", i, dst[i], v)
+		}
+	}
+}
