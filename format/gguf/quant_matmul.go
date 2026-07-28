@@ -3,9 +3,8 @@ package gguf
 import (
 	"encoding/binary"
 	"fmt"
-	"runtime"
-	"sync"
 
+	"github.com/jxsl13/goai/internal/parallel"
 	"github.com/jxsl13/goai/tensor"
 )
 
@@ -50,33 +49,22 @@ var q8FusedDecodeM1 func(row []float32, weight []byte, n, k, rowBytes int, outf 
 // GOMAXPROCS. Each output row is an independent dequant-dot (disjoint outf[...ni], no
 // cross-ni reduction), so chunking is bit-identical to the serial loop. Serial below a
 // small total-work threshold.
+// qmatDecodeParThreshold is the decode path's own crossover — higher than the general
+// path's because a decode chunk carries one dot per output row, not m of them.
+const qmatDecodeParThreshold = 1 << 17
+
+// qmatmulParallelChunks splits the n output rows of the m==1 decode paths across the
+// shared bounded pool. Spawning GOMAXPROCS goroutines per call instead would multiply
+// against any caller that is ALREADY parallel — the nlp Mamba2 mixers now call QMatMul
+// from inside their own parallel regions, so a per-call spawn would put GOMAXPROCS²
+// goroutines on a 12-core host. Same partition, same bit-identical row independence as
+// parallelRows; only the execution mechanism is shared (ADR-01KYMWJ76AFA2).
 func qmatmulParallelChunks(n, workPerRow int, body func(lo, hi int)) {
-	nw := runtime.GOMAXPROCS(0)
-	if nw > n {
-		nw = n
-	}
-	if nw <= 1 || n*workPerRow < 1<<17 {
+	if n*workPerRow < qmatDecodeParThreshold {
 		body(0, n)
 		return
 	}
-	csz := (n + nw - 1) / nw
-	var wg sync.WaitGroup
-	for c := 0; c < nw; c++ {
-		lo := c * csz
-		if lo >= n {
-			break
-		}
-		hi := lo + csz
-		if hi > n {
-			hi = n
-		}
-		wg.Add(1)
-		go func(lo, hi int) {
-			defer wg.Done()
-			body(lo, hi)
-		}(lo, hi)
-	}
-	wg.Wait()
+	parallel.Rows(n, body)
 }
 
 func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.Tensor, error) {
@@ -315,140 +303,157 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 	// rather than a per-row tensor — the n-allocs-per-matmul anti-pattern is gone for all
 	// of them (Q8_0/Q4_0/Q4_K/Q6_K landed first as the common formats; Q2_K/Q3_K/Q5_K —
 	// aggressive quants — complete the set). Fill + dot are byte-for-byte the per-row form.
-	// qt is validated once here (loop-invariant), so the per-ni body below cannot error.
+	//
+	// PARALLEL over the weight rows. Prefill measured NO speedup at all across
+	// GOMAXPROCS 1..12 (22.1ms vs 22.6ms) because this loop was the serial spine of it,
+	// and a profile put barely one core's worth of samples on a 12-core host. Each ni
+	// produces its own column of outputs from its own weight row, so the rows are
+	// independent; the only shared mutable state was the dequant scratch, which now
+	// belongs to the chunk rather than the call.
+	//
+	// The unsupported-type rejection is hoisted ABOVE the loop: it must stay an error
+	// return, and a chunk body running on a pool worker has nowhere to return one to.
+	// Checking it once up front is also strictly cheaper than once per row.
 	switch qt {
 	case Q8_0, Q4_0, Q2_K, Q3_K, Q4_K, Q5_K, Q6_K:
 	default:
 		return nil, fmt.Errorf("gguf: QMatMul unsupported quant type %d", qt)
 	}
-	// process dequantizes weight row ni into its OWN scratch and writes the disjoint output
-	// column outf[*n+ni] for all m activation rows. Rows ni are independent (per-ni scratch,
-	// disjoint output column, no cross-ni reduction), so chunk-parallel across GOMAXPROCS is
-	// byte-for-byte identical to the serial loop; the default dtype branch reads x read-only.
-	process := func(scratch []float32, ni int) {
-		rowBits := weight[ni*rowBytes : (ni+1)*rowBytes]
-		switch qt {
-		case Q8_0:
-			dequantQ8_0Into(scratch, rowBits)
-		case Q4_0:
-			dequantQ4_0Into(scratch, rowBits)
-		case Q2_K:
-			dequantQ2_KInto(scratch, rowBits)
-		case Q3_K:
-			dequantQ3_KInto(scratch, rowBits)
-		case Q4_K:
-			dequantQ4_KInto(scratch, rowBits)
-		case Q5_K:
-			dequantQ5_KInto(scratch, rowBits)
-		case Q6_K:
-			dequantQ6_KInto(scratch, rowBits)
-		}
-		wf := scratch
-		// Unroll-and-jam the activation-row (mi) loop by 4: the dequantized weight row wf is
-		// invariant across mi, so 4 independent f64 accumulators break the single-acc FADD
-		// dependency chain (latency-bound → throughput-bound) AND load+convert each wf[ki]
-		// once for 4 rows. Bit-exact: each output keeps its OWN accumulator summing ascending
-		// ki — no reassociation of any individual dot (the §V10 ascending-k order holds). The
-		// dtype switch is hoisted out of the mi loop (loop-invariant). M1 decode is unaffected
-		// (the tail handles m<4).
-		switch {
-		case xf32 != nil:
-			mi := 0
-			for ; mi+4 <= m; mi += 4 {
-				r0 := xf32[(mi+0)*k : (mi+0)*k+k]
-				r1 := xf32[(mi+1)*k : (mi+1)*k+k]
-				r2 := xf32[(mi+2)*k : (mi+2)*k+k]
-				r3 := xf32[(mi+3)*k : (mi+3)*k+k]
-				var a0, a1, a2, a3 float64
-				for ki, wv := range wf {
-					w := float64(wv)
-					a0 += float64(r0[ki]) * w
-					a1 += float64(r1[ki]) * w
-					a2 += float64(r2[ki]) * w
-					a3 += float64(r3[ki]) * w
-				}
-				outf[(mi+0)*n+ni] = float32(a0)
-				outf[(mi+1)*n+ni] = float32(a1)
-				outf[(mi+2)*n+ni] = float32(a2)
-				outf[(mi+3)*n+ni] = float32(a3)
-			}
-			for ; mi < m; mi++ {
-				row := xf32[mi*k : mi*k+k]
-				var acc float64
-				for ki, wv := range wf {
-					acc += float64(row[ki]) * float64(wv)
-				}
-				outf[mi*n+ni] = float32(acc)
-			}
-		case xf64 != nil:
-			mi := 0
-			for ; mi+4 <= m; mi += 4 {
-				r0 := xf64[(mi+0)*k : (mi+0)*k+k]
-				r1 := xf64[(mi+1)*k : (mi+1)*k+k]
-				r2 := xf64[(mi+2)*k : (mi+2)*k+k]
-				r3 := xf64[(mi+3)*k : (mi+3)*k+k]
-				var a0, a1, a2, a3 float64
-				for ki, wv := range wf {
-					w := float64(wv)
-					a0 += r0[ki] * w
-					a1 += r1[ki] * w
-					a2 += r2[ki] * w
-					a3 += r3[ki] * w
-				}
-				outf[(mi+0)*n+ni] = float32(a0)
-				outf[(mi+1)*n+ni] = float32(a1)
-				outf[(mi+2)*n+ni] = float32(a2)
-				outf[(mi+3)*n+ni] = float32(a3)
-			}
-			for ; mi < m; mi++ {
-				row := xf64[mi*k : mi*k+k]
-				var acc float64
-				for ki, wv := range wf {
-					acc += row[ki] * float64(wv)
-				}
-				outf[mi*n+ni] = float32(acc)
-			}
-		default:
-			for mi := range m {
-				var acc float64
-				for ki := range k {
-					acc += x.AtF64(mi, ki) * float64(wf[ki])
-				}
-				outf[mi*n+ni] = float32(acc)
-			}
-		}
-	}
-	nw := runtime.GOMAXPROCS(0)
-	if nw > n {
-		nw = n
-	}
-	if nw <= 1 || m*n*k < 1<<20 {
+	parallelRows2D(n, m*k, func(lo, hi int) {
 		scratch := make([]float32, k)
-		for ni := range n {
-			process(scratch, ni)
-		}
-		return out, nil
-	}
-	csz := (n + nw - 1) / nw
-	var wg sync.WaitGroup
-	for c := 0; c < nw; c++ {
-		lo := c * csz
-		if lo >= n {
-			break
-		}
-		hi := lo + csz
-		if hi > n {
-			hi = n
-		}
-		wg.Add(1)
-		go func(lo, hi int) {
-			defer wg.Done()
-			scratch := make([]float32, k)
-			for ni := lo; ni < hi; ni++ {
-				process(scratch, ni)
+		for ni := lo; ni < hi; ni++ {
+			rowBits := weight[ni*rowBytes : (ni+1)*rowBytes]
+			switch qt {
+			case Q8_0:
+				dequantQ8_0Into(scratch, rowBits)
+			case Q4_0:
+				dequantQ4_0Into(scratch, rowBits)
+			case Q2_K:
+				dequantQ2_KInto(scratch, rowBits)
+			case Q3_K:
+				dequantQ3_KInto(scratch, rowBits)
+			case Q4_K:
+				dequantQ4_KInto(scratch, rowBits)
+			case Q5_K:
+				dequantQ5_KInto(scratch, rowBits)
+			case Q6_K:
+				dequantQ6_KInto(scratch, rowBits)
 			}
-		}(lo, hi)
-	}
-	wg.Wait()
+			wf := scratch
+			// Unroll-and-jam the activation-row (mi) loop by 4: the dequantized weight row wf is
+			// invariant across mi, so 4 independent f64 accumulators break the single-acc FADD
+			// dependency chain (latency-bound → throughput-bound) AND load+convert each wf[ki]
+			// once for 4 rows. Bit-exact: each output keeps its OWN accumulator summing ascending
+			// ki — no reassociation of any individual dot (the §V10 ascending-k order holds). The
+			// dtype switch is hoisted out of the mi loop (loop-invariant). M1 decode is unaffected
+			// (the tail handles m<4).
+			switch {
+			case xf32 != nil:
+				mi := 0
+				for ; mi+4 <= m; mi += 4 {
+					r0 := xf32[(mi+0)*k : (mi+0)*k+k]
+					r1 := xf32[(mi+1)*k : (mi+1)*k+k]
+					r2 := xf32[(mi+2)*k : (mi+2)*k+k]
+					r3 := xf32[(mi+3)*k : (mi+3)*k+k]
+					var a0, a1, a2, a3 float64
+					for ki, wv := range wf {
+						w := float64(wv)
+						a0 += float64(r0[ki]) * w
+						a1 += float64(r1[ki]) * w
+						a2 += float64(r2[ki]) * w
+						a3 += float64(r3[ki]) * w
+					}
+					outf[(mi+0)*n+ni] = float32(a0)
+					outf[(mi+1)*n+ni] = float32(a1)
+					outf[(mi+2)*n+ni] = float32(a2)
+					outf[(mi+3)*n+ni] = float32(a3)
+				}
+				for ; mi < m; mi++ {
+					row := xf32[mi*k : mi*k+k]
+					var acc float64
+					for ki, wv := range wf {
+						acc += float64(row[ki]) * float64(wv)
+					}
+					outf[mi*n+ni] = float32(acc)
+				}
+			case xf64 != nil:
+				mi := 0
+				for ; mi+4 <= m; mi += 4 {
+					r0 := xf64[(mi+0)*k : (mi+0)*k+k]
+					r1 := xf64[(mi+1)*k : (mi+1)*k+k]
+					r2 := xf64[(mi+2)*k : (mi+2)*k+k]
+					r3 := xf64[(mi+3)*k : (mi+3)*k+k]
+					var a0, a1, a2, a3 float64
+					for ki, wv := range wf {
+						w := float64(wv)
+						a0 += r0[ki] * w
+						a1 += r1[ki] * w
+						a2 += r2[ki] * w
+						a3 += r3[ki] * w
+					}
+					outf[(mi+0)*n+ni] = float32(a0)
+					outf[(mi+1)*n+ni] = float32(a1)
+					outf[(mi+2)*n+ni] = float32(a2)
+					outf[(mi+3)*n+ni] = float32(a3)
+				}
+				for ; mi < m; mi++ {
+					row := xf64[mi*k : mi*k+k]
+					var acc float64
+					for ki, wv := range wf {
+						acc += row[ki] * float64(wv)
+					}
+					outf[mi*n+ni] = float32(acc)
+				}
+			default:
+				for mi := range m {
+					var acc float64
+					for ki := range k {
+						acc += x.AtF64(mi, ki) * float64(wf[ki])
+					}
+					outf[mi*n+ni] = float32(acc)
+				}
+			}
+		}
+	})
 	return out, nil
+}
+
+// qmatParThreshold is the total work (output rows x k) below which splitting the row
+// loop costs more than it saves. Taken from backend/cpu's parThreshold, the measured
+// M-series crossover; at this model scale a tied head gemv falls under it and stays
+// serial while the projections cross it.
+const qmatParThreshold = 1 << 15
+
+// parallelRows splits the n output rows across the shared bounded pool when there is
+// enough work, and runs them inline otherwise.
+//
+// BIT-IDENTICAL BY CONSTRUCTION, not by measurement: with m==1 every output row is an
+// independent dot writing its own index, reading a shared read-only activation row and
+// a disjoint slice of the weight bytes. No accumulation crosses a row, so partitioning
+// the range cannot change any value — only the order in which distinct destinations are
+// written. Per ADR-01KYMWJ76AFA2 this routes through internal/parallel's bounded pool
+// rather than spawning per call, so a caller already serving requests concurrently does
+// not multiply the process's goroutine count, and nested calls degrade to inline.
+func parallelRows(n, k int, body func(lo, hi int)) {
+	if n*k < qmatParThreshold {
+		body(0, n)
+		return
+	}
+	parallel.Rows(n, body)
+}
+
+// parallelRows2D splits the n weight rows of the general (m>1) path across the shared
+// bounded pool. work is the per-row cost (m*k) so the threshold compares total work, the
+// same quantity qmatParThreshold is calibrated against.
+//
+// Each chunk allocates its own dequant scratch — that buffer was the ONLY shared mutable
+// state in the loop, and per-chunk it costs a handful of allocations against a matmul
+// that already dominates prefill. Every output element outf[mi*n+ni] is written by
+// exactly one chunk, so the partition changes no value.
+func parallelRows2D(n, work int, body func(lo, hi int)) {
+	if n*work < qmatParThreshold {
+		body(0, n)
+		return
+	}
+	parallel.Rows(n, body)
 }
