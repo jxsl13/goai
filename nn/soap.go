@@ -250,23 +250,27 @@ func eigenBasis(mat [][]float64) [][]float64 {
 func rotateForward(ql, g, qr [][]float64) [][]float64 {
 	m, n := len(ql), len(qr)
 	t := zeroMat(m, n) // T = Q_Lᵀ·G : t[k][j] = Σ_i Q_L[i][k]·G[i][j]
-	for k := range m {
-		for j := range n {
-			var acc float64
-			for i := range m {
-				acc += ql[i][k] * g[i][j]
+	for i := range m { // T = QL^T*G — ikj: contiguous gi[j], tk[j]; ql[i][k] hoisted
+		gi := g[i]
+		qli := ql[i]
+		for k := range m {
+			qlik := qli[k]
+			tk := t[k]
+			for j := range n {
+				tk[j] += qlik * gi[j]
 			}
-			t[k][j] = acc
 		}
 	}
 	out := zeroMat(m, n) // T·Q_R : out[k][l] = Σ_j T[k][j]·Q_R[j][l]
-	for k := range m {
-		for l := range n {
-			var acc float64
-			for j := range n {
-				acc += t[k][j] * qr[j][l]
+	for k := range m {   // T*QR — kjl: contiguous qrj[l], ok[l]
+		tk := t[k]
+		ok := out[k]
+		for j := range n {
+			tkj := tk[j]
+			qrj := qr[j]
+			for l := range n {
+				ok[l] += tkj * qrj[l]
 			}
-			out[k][l] = acc
 		}
 	}
 	return out
@@ -286,22 +290,38 @@ func matAtInto(dst [][]float64, t *tensor.Tensor) {
 // twin of rotateForward — identical arithmetic and order, so bit-identical).
 func rotateForwardInto(out, tmp, ql, g, qr [][]float64) {
 	m, n := len(ql), len(qr)
-	for k := range m {
+	for k := range m { // zero reused tmp before +=
+		tk := tmp[k]
 		for j := range n {
-			var acc float64
-			for i := range m {
-				acc += ql[i][k] * g[i][j]
-			}
-			tmp[k][j] = acc
+			tk[j] = 0
 		}
 	}
-	for k := range m {
-		for l := range n {
-			var acc float64
+	for i := range m { // T = QL^T*G — ikj
+		gi := g[i]
+		qli := ql[i]
+		for k := range m {
+			qlik := qli[k]
+			tk := tmp[k]
 			for j := range n {
-				acc += tmp[k][j] * qr[j][l]
+				tk[j] += qlik * gi[j]
 			}
-			out[k][l] = acc
+		}
+	}
+	for k := range m { // zero reused out before +=
+		ok := out[k]
+		for l := range n {
+			ok[l] = 0
+		}
+	}
+	for k := range m { // T*QR — kjl
+		tk := tmp[k]
+		ok := out[k]
+		for j := range n {
+			tkj := tk[j]
+			qrj := qr[j]
+			for l := range n {
+				ok[l] += tkj * qrj[l]
+			}
 		}
 	}
 }
@@ -310,13 +330,21 @@ func rotateForwardInto(out, tmp, ql, g, qr [][]float64) {
 // rotateBack — bit-identical).
 func rotateBackInto(out, tmp, ql, nmat, qr [][]float64) {
 	m, n := len(ql), len(qr)
-	for i := range m {
+	for i := range m { // zero reused tmp before +=
+		ti := tmp[i]
 		for l := range n {
-			var acc float64
-			for k := range m {
-				acc += ql[i][k] * nmat[k][l]
+			ti[l] = 0
+		}
+	}
+	for i := range m { // QL*N — ikl
+		qli := ql[i]
+		ti := tmp[i]
+		for k := range m {
+			qlik := qli[k]
+			nk := nmat[k]
+			for l := range n {
+				ti[l] += qlik * nk[l]
 			}
-			tmp[i][l] = acc
 		}
 	}
 	for i := range m {
@@ -334,13 +362,15 @@ func rotateBackInto(out, tmp, ql, nmat, qr [][]float64) {
 func rotateBack(ql, nmat, qr [][]float64) [][]float64 {
 	m, n := len(ql), len(qr)
 	t := zeroMat(m, n) // T = Q_L·N : t[i][l] = Σ_k Q_L[i][k]·N[k][l]
-	for i := range m {
-		for l := range n {
-			var acc float64
-			for k := range m {
-				acc += ql[i][k] * nmat[k][l]
+	for i := range m { // QL*N — ikl: contiguous nk[l], ti[l]
+		qli := ql[i]
+		ti := t[i]
+		for k := range m {
+			qlik := qli[k]
+			nk := nmat[k]
+			for l := range n {
+				ti[l] += qlik * nk[l]
 			}
-			t[i][l] = acc
 		}
 	}
 	out := zeroMat(m, n) // T·Q_Rᵀ : out[i][j] = Σ_l T[i][l]·Q_R[j][l]
