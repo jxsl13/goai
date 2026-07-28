@@ -48,7 +48,7 @@ A site may legitimately be DECLINED as A.Bt: when both operands already walk the
 
 ## T-01KYN31VARFTH9KX8RHYMYFYQ3 Parallelize the SOAP and Shampoo rotation matmuls — two loops need an interchange first
 kind: task
-state: draft
+state: active
 created: 2026-07-28
 
 Serial spines from the scaling sweep, same package and same kernel family as the Muon work that just landed at 4.63x: BenchmarkSOAPStepOnly 8.21ms at 0.99x, BenchmarkShampooStepOnly 5.53ms at 1.00x. Smaller absolute stakes than Muon's 190ms, which is why they were split out rather than bundled.
