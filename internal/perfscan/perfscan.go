@@ -1947,6 +1947,31 @@ func hasMatrixWrite(root ast.Node, iName, jName string) bool {
 // eigendecomposition) the upper triangle + a mirror pass halves the accumulation. Requires
 // BOTH a same-base symmetric product AND an m[i][j] write, which excludes matmul (whose
 // factors are different bases). Shipped: GMM, PCA.
+// innerLoopIsTriangular reports whether the inner loop's bounds reference the outer index
+// (for j := i; …  or  for j := 0; j <= i; …) — it already covers only one triangle, so the
+// symmetric-accumulation optimization does not apply (e.g. cholSolve's j<=i Cholesky loop).
+func innerLoopIsTriangular(loop ast.Node, iName string) bool {
+	fl, ok := loop.(*ast.ForStmt)
+	if !ok {
+		return false
+	}
+	return (fl.Init != nil && stmtMentions(fl.Init, iName)) ||
+		(fl.Cond != nil && exprMentions(fl.Cond, iName))
+}
+
+// stmtMentions reports whether the statement references the identifier name.
+func stmtMentions(s ast.Stmt, name string) bool {
+	found := false
+	ast.Inspect(s, func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok && id.Name == name {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
 func symmetricAccumFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 	var out []finding
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
@@ -1956,7 +1981,7 @@ func symmetricAccumFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 		}
 		for _, stmt := range obody.List {
 			jName, _, ok2 := loopVarBody(stmt)
-			if !ok2 || jName == iName {
+			if !ok2 || jName == iName || innerLoopIsTriangular(stmt, iName) {
 				continue
 			}
 			base, hasProd := symmetricProductBase(stmt, iName, jName)
