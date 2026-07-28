@@ -179,3 +179,22 @@ COST: allocs per decode step 102 -> 111, the pool's per-call barrier escaping to
 GATE FOR ALL OF IT: TestQMatMulFusedDecodeMatchesGeneralPathExactly, which runs one activation row as m==1 and as row 0 of m==2 and demands exact equality — production as its own oracle. It replaced a suite that compared only against a float reference at 1e-5, under which a sign bug in the fused path passed everything. Its limit is recorded in NUM-ACCUM-NARROW-001: a float64 accumulator narrowing to float32 makes reassociation unobservable, so the gate covers element mapping, sign and scale selection, NOT summation order.
 
 GENERALIZED: PS6003 (partial-fast-path-coverage) for layer 1, PS6005 (output-invariant-operand-reload) for layer 3. Layer 2 was NOT generalized into a rule — proving that a loop's iterations are independent is a dataflow question this AST-only scanner cannot answer soundly, and a rule that guesses at it would advise races. Recorded as a deliberate non-action rather than an oversight.
+
+## T-01KYN0ADDNER9BVJ0HNH8ENZ0X Unroll-and-jam the m>1 QMatMul general path over activation rows (PS6005, prefill)
+kind: task
+state: draft
+created: 2026-07-28
+
+The one PS6005 finding left in format/gguf: quant_matmul.go's general path dequantizes a weight row into scratch, then loops over the m activation rows dotting each against it. The dequantized row does not vary with the activation index, so every activation row re-reads it — the classic unroll-and-jam, and the dual of the register blocking just completed for the m==1 decode paths.
+
+DISTINCT FROM THAT WORK, which is why it was not folded in. The decode paths block over OUTPUT rows with one shared activation row; this blocks over ACTIVATION rows with one shared weight row. Different loop, different workload: this one is prefill, not decode, so it is a throughput path where the decode work was latency.
+
+EXPECTED SMALLER, and here is the reason to check before building: the general path already reuses one scratch buffer across weight rows, so the dequantized row is hot in L1 by the time the activation loop reads it. The decode win came substantially from eliminating a materialize-and-reread entirely; here the reread is from cache. The gain may be limited to the redundant float64 conversions and bounds checks.
+
+METHOD: unroll the `for mi := range m` loop by 4, keeping four accumulators and reading each wf[ki] once. Bit-exact by the same argument as the decode blocking: each output keeps its own accumulator over the same terms in the same ascending order.
+
+BENCHMARK IS THE BLOCKER. Every existing QuantMamba2 benchmark is single-token (m==1) and never enters this loop — verify with a panic probe before trusting any number, exactly as the Mamba2 prefill work had to. A prefill benchmark over a quantized model is needed first; benchMamba2Model in nlp/quant_mamba2_decode_bench_test.go plus QuantizeMamba2 gives the fixture, and QuantMamba2.Forward over a multi-token prompt reaches m>1.
+
+GATE: the m>1 path is what TestQMatMulFusedDecodeMatchesGeneralPathExactly uses as its ORACLE, so changing it changes the oracle. Add a separate frozen-reference check for the general path before touching it, or the fused-vs-general comparison silently validates the new code against itself — the self-fulfilling-gate failure this repo has hit before.
+
+SCOPE: format/gguf only. Interleave per PROC-INTERLEAVE-001 and expect a first-alternation warm-up outlier; three of six sets in the sibling task had one.
