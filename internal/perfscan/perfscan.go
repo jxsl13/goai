@@ -198,6 +198,7 @@ var checks = []check{
 	{"PS4004", "scalar-copy-loop", "an element-by-element slice copy in a loop where a bulk copy would do", false},
 	{"PS4005", "per-element-odometer", "an N-D coordinate odometer ticked once per element instead of once per run", false},
 	{"PS4006", "row-slice-matrix", "a [][]T matrix built row-by-row and then indexed inside a nested loop", false},
+	{"PS6001", "unverified-dual-path", "a devirtualized fast path with a generic fallback — a bit-identity claim needing a bit-exact test", true},
 	// PS5xxx — arithmetic
 	{"PS5001", "loop-invariant-divide", "a divide by a loop-invariant scalar on every element", false},
 }
@@ -1594,6 +1595,35 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 		}
 	}
 
+	// PS6001: a function carrying BOTH a devirtualized fast path (guarded by a
+	// configured flat-view helper such as f64Data/outF64) and a generic fallback.
+	// That structure is a bit-identity CLAIM: the two arms must agree exactly, and
+	// the claim is usually written in a comment rather than in a test.
+	//
+	// Four such kernels were probed in one session and ALL FOUR were blind — a
+	// one-ulp change in the fast path passed every test (backend/ref distill, blas1,
+	// zloss, retention). Nothing here is a performance defect; the finding is an
+	// unverified invariant, which is why this rule reports a RISK rather than a fix.
+	//
+	// It cannot tell whether a bit-exact test exists — test sensitivity is not an AST
+	// property — so it lists the population that needs one. Probe with a deliberate
+	// one-ulp mutation (PROC-009) to decide, and write the oracle from the kernel's
+	// own algorithm (PROC-011).
+	if ns.fastPath != nil {
+		if name, ok := dualPathFunc(fn, ns); ok {
+			out = append(out, finding{
+				pos:      fset.Position(fn.Pos()),
+				category: "unverified-dual-path",
+				msg: fmt.Sprintf("%s has a devirtualized fast path guarded by %s plus a generic"+
+					" fallback — the two arms claim to agree bit-for-bit. Verify that claim with a"+
+					" bit-exact oracle: probe first with a one-ulp mutation, and if the suite stays"+
+					" green the claim is untested. Four kernels with this exact shape were found"+
+					" blind in one session. Not a performance finding — an unverified invariant.",
+					fn.Name.Name, name),
+			})
+		}
+	}
+
 	// Pass 4: call-level detectors that are NOT loop-nested — the visitor/sort call
 	// IS itself the per-element / per-comparison hot loop.
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
@@ -2553,4 +2583,41 @@ func nestedDoubleIndex(fn *ast.FuncDecl, name string) (token.Pos, bool) {
 	}
 	walk(fn.Body, 0)
 	return found, ok
+}
+
+// dualPathFunc reports whether fn guards a fast path with a configured flat-view
+// helper (fastPathHelpers) AND retains a generic fallback, returning the helper
+// name. Both halves are required: a function with only the fast path has no second
+// arm to disagree with, and one with only accessors makes no bit-identity claim.
+func dualPathFunc(fn *ast.FuncDecl, ns nameSets) (string, bool) {
+	var helper string
+	var hasAccessorFallback bool
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		switch v := n.(type) {
+		case *ast.AssignStmt:
+			// COMMA-OK is the discriminator: `xs, ok := f64Data(x)` returns a success
+			// flag, which is what makes the function dual-armed. Bare storage
+			// accessors such as .Storage().F64() are also in fastPathHelpers and are
+			// single-valued, so requiring two results excludes them — without this the
+			// rule matched 193 functions. Matching the ASSIGNMENT rather than an
+			// if-init is what catches the common `xs, ok := ...` followed by
+			// `if ok && ok2 {` form, which an if-init test misses.
+			if len(v.Lhs) < 2 || len(v.Rhs) != 1 {
+				return true
+			}
+			call, ok := v.Rhs[0].(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			if name := calleeName(call.Fun); helper == "" && ns.fastPath[name] {
+				helper = name
+			}
+		case *ast.CallExpr:
+			if ns.accessors[calleeName(v.Fun)] {
+				hasAccessorFallback = true
+			}
+		}
+		return true
+	})
+	return helper, helper != "" && hasAccessorFallback
 }

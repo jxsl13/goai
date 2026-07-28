@@ -1247,3 +1247,64 @@ func rows(n int) [][]float64 {
 			got["row-slice-matrix"], got)
 	}
 }
+
+// PS6001 reports the dual-arm shape: a comma-ok flat-view guard plus a generic
+// accessor fallback, which together assert bit-identity between two code paths.
+func TestDetectPS6001_DualPath(t *testing.T) {
+	src := `package p
+func loss(a *T, n int) float64 {
+	var total float64
+	as, ok := f64Data(a)
+	if ok {
+		for i := range n {
+			total += as[i]
+		}
+	} else {
+		for i := range n {
+			total += a.AtF64(i)
+		}
+	}
+	return total
+}`
+	if got := countCat(scanSrc(t, src)); got["unverified-dual-path"] == 0 {
+		t.Fatalf("want ≥1 unverified-dual-path, got 0 (%v)", got)
+	}
+}
+
+// Silent with no fallback arm: one path cannot disagree with itself, so there is no
+// bit-identity claim to verify.
+func TestDetectPS6001_SilentWithoutFallback(t *testing.T) {
+	src := `package p
+func loss(a *T, n int) float64 {
+	var total float64
+	as, ok := f64Data(a)
+	if !ok {
+		return 0
+	}
+	for i := range n {
+		total += as[i]
+	}
+	return total
+}`
+	if got := countCat(scanSrc(t, src)); got["unverified-dual-path"] != 0 {
+		t.Fatalf("want 0 unverified-dual-path without a fallback, got %d (%v)",
+			got["unverified-dual-path"], got)
+	}
+}
+
+// Silent on a plain single-valued storage accessor. .Storage().F64() is also in
+// fastPathHelpers but returns one value, so it makes no success-flag claim; without
+// this discrimination the rule matched 193 functions instead of 36.
+func TestDetectPS6001_SilentOnBareStorageAccess(t *testing.T) {
+	src := `package p
+func fill(a *T, n int) {
+	xs := a.Storage().F64()
+	for i := range n {
+		xs[i] = a.AtF64(i)
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["unverified-dual-path"] != 0 {
+		t.Fatalf("want 0 unverified-dual-path on bare storage access, got %d (%v)",
+			got["unverified-dual-path"], got)
+	}
+}
