@@ -31,3 +31,6 @@ classic is now swept: ForestFit 7.85x, DBSCANFit 6.16x, GBM exact 2.80x, GMM 4.0
 
 ## PERF-NESTED-PARALLEL-001
 IF an outer loop already parallelizes to near machine width, THEN the inner loop SHALL not be parallelized as well; it runs inline under a busy pool and adds nothing, as ForestFit at 7.85x shows for the CART sweep.
+
+## PROC-BENCH-MEMAXIS-001
+IF a parallelization allocates scratch inside the parallel body, THEN the change SHALL report allocs and bytes per op alongside the speedup; GBM hid a 31x memory regression (64MB to 2007MB) behind a 2.80x.
