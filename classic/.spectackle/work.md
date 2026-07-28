@@ -207,3 +207,24 @@ GATE FIRST: check whether an exact-path golden exists for the CART grower. The G
 VERIFY: go test ./classic/ -count 1 -race; the goldens and tie test green; then interleave BenchmarkTreeFit and BenchmarkForestFit per PROC-INTERLEAVE-001 with min of 3 runs per arm (PROC-BENCH-MINOFN-001). ForestFit already measures 7.27x, so it is the control that must not regress.
 
 BEFORE STARTING: re-check git log on classic/tree.go and the open PR list. If the worker's line is still active, defer again rather than racing it.
+
+## R-01KYN61K6TE3YTBVDWY1CSXBJQ Exact GBM fit 2.80x complete; the shared-scratch shape has now appeared three times independently
+kind: research
+state: draft
+created: 2026-07-28
+
+Closes the exact-grower line. Two changes, measured separately, interleaved with min of 3 runs per arm.
+
+  baseline              1865ms
+  + bestSplit parallel  1085ms   1.72x  (over features, argmax combined afterward)
+  + partition parallel   667ms   1.62x  (over feature columns)
+  cumulative                     2.80x
+Scales 1814 / 753 / 697ms at 1 / 4 / 12 Ps.
+
+THE RECURRING BLOCKER IS A SHARED SCRATCH BUFFER, and this campaign has now hit it THREE times in unrelated code: GaussianMixture.logGaussian's triangular-solve buffer (a receiver field, caught by -race after costing a misleading 1.16x measurement), gbmBuilder.vals in the split search, and gbmBuilder.part in the node partition. Each was the thing standing between a loop and its parallel form, and each is invisible from the loop body alone. PS6006 detects the receiver-field spelling; its name heuristic missed "vals" and "part", which is a real limit of keying on intent-by-name.
+
+THE QUIET HALF OF THE PARTITION FIX was not the scratch. mid was recomputed per column and the last value kept — a cross-feature WRITE. It cannot differ between columns, since every column holds the same point set, so hoisting it out was what actually unblocked the split. The scratch was the visible obstacle and this was the one that would have produced a race if only the scratch had been fixed. When a loop resists parallelization, enumerate every write that outlives an iteration, not just the buffers.
+
+GATES: the exact grower needed its OWN frozen golden — the existing GBM golden constructs with WithGBMHistogram and never enters this code. And that golden proved weak by probing: red on a dropped feature, GREEN under a one-ulp left-sum bump, a >= combine and a reversed combine order. Tree growth is decided by COMPARISONS, so ulp noise moves nothing and random data never produces a tie. The tie-break therefore needed a constructed fixture (two features inducing the identical partition), cast as NUM-ARGMAX-TIEBREAK-001.
+
+NOT DONE, deliberately: classic/tree.go carries the same CART sweep and measures 10.26ms at 0.99x, but it has five recent perf commits from the parallel worker and is an active collision zone. Booked as its own task with the full analogy rather than raced.
