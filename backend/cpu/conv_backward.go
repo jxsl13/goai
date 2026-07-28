@@ -227,17 +227,32 @@ func conv2dBwdFillBand[T normFloat](cols, dO []float64, xs, gs []T, lo, hi, k, f
 		rem := r % (ho * wo)
 		oy, ox := rem/wo, rem%wo
 		base := r * k
+		// Along the kernel width ix = ox·s − p + kx steps by 1, so the in-bounds kx taps
+		// form ONE contiguous input run [kxLo,kxHi). Hoist the x-bounds test out of the
+		// inner loop and bulk-copy the run branch-free — the same treatment the forward
+		// im2colFillBand already ships (dcf9a30). Padding taps stay pre-zeroed (cols is
+		// getF64→clear'd), so the values are bit-identical to the per-tap gather.
+		ix0 := ox*s - p
+		kxLo, kxHi := 0, kw
+		if ix0 < 0 {
+			kxLo = -ix0
+		}
+		if ix0+kw > wd {
+			kxHi = wd - ix0
+		}
 		kk := 0
 		for ci := 0; ci < c; ci++ {
 			for ky := 0; ky < kh; ky++ {
 				iy := oy*s + ky - p
-				for kx := 0; kx < kw; kx++ {
-					ix := ox*s + kx - p
-					if iy >= 0 && iy < h && ix >= 0 && ix < wd {
-						cols[base+kk] = float64(xs[((ni*c+ci)*h+iy)*wd+ix])
+				if iy >= 0 && iy < h && kxLo < kxHi {
+					rowBase := ((ni*c+ci)*h+iy)*wd + ix0
+					dst := cols[base+kk+kxLo : base+kk+kxHi]
+					src := xs[rowBase+kxLo : rowBase+kxHi]
+					for i := range dst {
+						dst[i] = float64(src[i])
 					}
-					kk++
 				}
+				kk += kw
 			}
 		}
 		for fi := 0; fi < f; fi++ {
