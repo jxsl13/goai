@@ -147,10 +147,11 @@ type GaussianMixture struct {
 	// used by the density, together with logDetPrec = −Σ log L_ii (half the log
 	// determinant of the precision). For GMMDiag chol is unused.
 	chol        [][][]float64
-	invCholDiag [][]float64 // GMMFull only: per component 1/L_k[i][i], so the triangular solve multiplies
-	yScratch    []float64   // GMMFull only: reused forward-substitution buffer (logGaussian runs serially)
-	logDetHalf  []float64   // per component: 0.5·log|Σ_k| (density normaliser)
-	invCov      [][]float64 // GMMDiag only: per component 1/Σ_k[j], so logGaussian multiplies instead of dividing
+	invCholDiag [][]float64  // GMMFull only: per component 1/L_k[i][i], so the triangular solve multiplies
+	yScratch    []float64    // GMMFull only: reused forward-substitution buffer (logGaussian runs serially)
+	yScratch4   [4][]float64 // GMMFull only: 4 solve buffers for logGaussianFullBatch's component jam
+	logDetHalf  []float64    // per component: 0.5·log|Σ_k| (density normaliser)
+	invCov      [][]float64  // GMMDiag only: per component 1/Σ_k[j], so logGaussian multiplies instead of dividing
 
 	nFeat  int
 	fitted bool
@@ -298,12 +299,9 @@ func (m *GaussianMixture) eStep(x [][]float64, resp, logResp [][]float64) (float
 				lr[c] = logW[c] + ldBuf[c]
 			}
 		} else {
+			m.logGaussianFullBatch(row, ldBuf) // unroll-and-jam over components
 			for c := range k {
-				ld, err := m.logGaussian(row, c)
-				if err != nil {
-					return 0, err
-				}
-				lr[c] = logW[c] + ld
+				lr[c] = logW[c] + ldBuf[c]
 			}
 		}
 		// Fused log-sum-exp + responsibilities: ExpSumF64 writes resp[c]=exp(lr[c]−mx)
@@ -477,6 +475,9 @@ func (m *GaussianMixture) mStep(x [][]float64, resp [][]float64) error {
 	m.chol = make([][][]float64, k)
 	m.invCholDiag = make([][]float64, k)
 	m.yScratch = make([]float64, d)
+	for t := range m.yScratch4 {
+		m.yScratch4[t] = make([]float64, d)
+	}
 	m.logDetHalf = make([]float64, k)
 	cen := make([]float64, d) // centered-row scratch, reused per sample
 	for c := range k {
@@ -555,6 +556,63 @@ func (m *GaussianMixture) logGaussian(x []float64, c int) (float64, error) {
 	return -0.5*(float64(d)*log2pi+quad) - m.logDetHalf[c], nil
 }
 
+// logGaussianFullBatch fills ld[c] = log N(x; μ_c, Σ_c) for all k components
+// (full-covariance). The triangular solve L_c·y_c = x−μ_c and its Mahalanobis
+// ‖y_c‖² are unroll-and-jammed by 4 over the invariant component index: x[i] is
+// loaded once and the four independent solves each run their own s_c accumulator,
+// so the loop-carried FSUB latency chain of the per-component logGaussian becomes
+// four throughput-bound chains. Each component keeps its OWN L_c/μ_c/y_c.
+//
+// Bit-identical to k calls of logGaussian's full branch: within a component the
+// solve subtracts l_c[i][j]·y_c[j] in the same ascending j order, y_c[i]=s·id_c[i]
+// is unchanged, quad accumulates y_c[i]² in the same ascending i order, and the
+// final -0.5·(d·log2π+quad) − logDetHalf op sequence is untouched.
+func (m *GaussianMixture) logGaussianFullBatch(x []float64, ld []float64) {
+	d := m.nFeat
+	k := m.cfg.k
+	const log2pi = 1.8378770664093453
+	dlog2pi := float64(d) * log2pi
+	c := 0
+	for ; c+4 <= k; c += 4 {
+		l0, l1, l2, l3 := m.chol[c], m.chol[c+1], m.chol[c+2], m.chol[c+3]
+		id0, id1, id2, id3 := m.invCholDiag[c], m.invCholDiag[c+1], m.invCholDiag[c+2], m.invCholDiag[c+3]
+		mu0, mu1, mu2, mu3 := m.Means[c], m.Means[c+1], m.Means[c+2], m.Means[c+3]
+		y0, y1, y2, y3 := m.yScratch4[0], m.yScratch4[1], m.yScratch4[2], m.yScratch4[3]
+		for i := range d {
+			xi := x[i]
+			s0 := xi - mu0[i]
+			s1 := xi - mu1[i]
+			s2 := xi - mu2[i]
+			s3 := xi - mu3[i]
+			l0i, l1i, l2i, l3i := l0[i], l1[i], l2[i], l3[i]
+			for j := range i {
+				s0 -= l0i[j] * y0[j]
+				s1 -= l1i[j] * y1[j]
+				s2 -= l2i[j] * y2[j]
+				s3 -= l3i[j] * y3[j]
+			}
+			y0[i] = s0 * id0[i]
+			y1[i] = s1 * id1[i]
+			y2[i] = s2 * id2[i]
+			y3[i] = s3 * id3[i]
+		}
+		var q0, q1, q2, q3 float64
+		for i := range d {
+			q0 += y0[i] * y0[i]
+			q1 += y1[i] * y1[i]
+			q2 += y2[i] * y2[i]
+			q3 += y3[i] * y3[i]
+		}
+		ld[c] = -0.5*(dlog2pi+q0) - m.logDetHalf[c]
+		ld[c+1] = -0.5*(dlog2pi+q1) - m.logDetHalf[c+1]
+		ld[c+2] = -0.5*(dlog2pi+q2) - m.logDetHalf[c+2]
+		ld[c+3] = -0.5*(dlog2pi+q3) - m.logDetHalf[c+3]
+	}
+	for ; c < k; c++ {
+		ld[c], _ = m.logGaussian(x, c)
+	}
+}
+
 // logGaussianDiagBatch fills ld[c] = log N(x; μ_c, Σ_c) for all k components at
 // once (diagonal-covariance only). The Mahalanobis accumulation is unroll-and-
 // jammed by 4 over the component index: x[j] is loaded once and reused across 4
@@ -629,12 +687,9 @@ func (m *GaussianMixture) ScoreSamples(x [][]float64) ([]float64, error) {
 				buf[c] = logW[c] + buf[c]
 			}
 		} else {
+			m.logGaussianFullBatch(row, buf) // unroll-and-jam over components
 			for c := range k {
-				ld, err := m.logGaussian(row, c)
-				if err != nil {
-					return nil, err
-				}
-				buf[c] = logW[c] + ld
+				buf[c] = logW[c] + buf[c]
 			}
 		}
 		out[i] = softmaxLSE(buf, buf) // buf is scratch; we keep only the log-sum-exp
