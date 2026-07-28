@@ -410,13 +410,19 @@ func (b *QuantMamba2Mixer) step(ctx *backend.Context, ls *Mamba2LayerState, u *t
 
 	// Causal depthwise conv over the sliding window (this token is the last
 	// row) + bias, then SiLU — forward's ascending-k accumulation replayed.
+	// Hoist the F32 conv weight/bias to their typed backing slices once instead of
+	// ~D·K dispatched AtF64 reads (float64(f32) is exactly what AtF64 returns, so
+	// bit-identical); cw is row-major [D,K]. Same as the float mixer2Prefill.
+	cb := b.ConvB.Storage().F32()
+	cw := b.ConvW.Storage().F32()
 	xc := make([]float64, D)
 	for c := range D {
-		acc := b.ConvB.AtF64(c)
+		acc := float64(cb[c])
+		base := c * K
 		for k := range K - 1 {
-			acc += b.ConvW.AtF64(c, k) * ls.ConvBuf[k*D+c]
+			acc += float64(cw[base+k]) * ls.ConvBuf[k*D+c]
 		}
-		acc += b.ConvW.AtF64(c, K-1) * xBC[c]
+		acc += float64(cw[base+K-1]) * xBC[c]
 		xc[c] = acc // raw conv acc; silu vectorized below
 	}
 	// silu(acc)=acc·σ(acc) with the same vectorized σ over the [conv_dim] row as forward.
@@ -435,21 +441,30 @@ func (b *QuantMamba2Mixer) step(ctx *backend.Context, ls *Mamba2LayerState, u *t
 	// loop verbatim, A from the decode-state cache (the stored −exp(A_log)).
 	gN := b.NGroups * b.N
 	headsPerGroup := b.NumHeads / b.NGroups
+	dData := b.D.Storage().F32()        // F32 skip gains, hoisted out of the head loop
+	dtbData := b.DtBias.Storage().F32() // F32 Δ biases, likewise
 	y := make([]float64, b.Intermediate)
+	xd := make([]float64, b.HeadDim) // Δ-scaled value, i-invariant (PS5003)
 	for h := range b.NumHeads {
 		g := h / headsPerGroup
-		Dh := b.D.AtF64(h)
+		Dh := float64(dData[h])
 		hOff := h * b.HeadDim
 		bOff := b.Intermediate + g*b.N
 		cOff := b.Intermediate + gN + g*b.N
 		hst := ls.H[h*b.N*b.HeadDim:]
 
-		delta := softplus(dt[h] + b.DtBias.AtF64(h))
+		delta := softplus(dt[h] + float64(dtbData[h]))
 		at := math.Exp(delta * ls.a[h])
+		// xc[hOff+j]·delta does not depend on i — compute it once per j, then the
+		// (i,j) update reads xd[j] (bit-identical: same xc[hOff+j]*delta product).
+		for j := range b.HeadDim {
+			xd[j] = xc[hOff+j] * delta
+		}
 		for i := range b.N {
 			bi := xc[bOff+i]
+			hrow := hst[i*b.HeadDim : i*b.HeadDim+b.HeadDim]
 			for j := range b.HeadDim {
-				hst[i*b.HeadDim+j] = at*hst[i*b.HeadDim+j] + bi*(xc[hOff+j]*delta)
+				hrow[j] = at*hrow[j] + bi*xd[j]
 			}
 		}
 		for j := range b.HeadDim {
@@ -474,8 +489,10 @@ func (b *QuantMamba2Mixer) step(ctx *backend.Context, ls *Mamba2LayerState, u *t
 	variance /= float64(b.Intermediate)
 	inv := 1.0 / math.Sqrt(variance+b.Eps)
 	yT := tensor.New(tensor.F32, tensor.Shape{1, b.Intermediate})
+	nw := b.NormW.Storage().F32() // hoist F32 gain; write yT's storage directly (SetF64 stores float32(v))
+	yData := yT.Storage().F32()
 	for o := range b.Intermediate {
-		yT.SetF64(b.NormW.AtF64(o)*gated[o]*inv, 0, o)
+		yData[o] = float32(float64(nw[o]) * gated[o] * inv)
 	}
 	return b.OutProj.Forward(ctx, yT)
 }
