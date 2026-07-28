@@ -23,3 +23,4 @@
 {"t":"2026-07-28T17:32:37Z","eid":"971b9a70f2408793","ag":"ag-ce45","ev":"move","id":"ADR-01KYMWJ76AFA2BJ9R8ZE403KB1","dir":"format","fr":"draft","to":"submitted"}
 {"t":"2026-07-28T17:36:12Z","eid":"10bdf82c39d6d8a4","ag":"ag-53e5","ev":"decide","id":"ADR-01KYMWJ76AFA2BJ9R8ZE403KB1","dir":"format","note":"Route through a bounded pool with an in-worker guard, as backend/cpu already does. Correct under nesting, but needs that pool lifted somewhere both packages can import, or duplicated."}
 {"t":"2026-07-28T18:21:39Z","eid":"9847a4c9313bca28","ag":"ag-d129","ev":"create","id":"T-01KYMZC07EFT6R50S1THRKFCZB","k":"task","ti":"Register-block the six unblocked fused row dots, as Q8_0 already is","dir":"format"}
+{"t":"2026-07-28T18:22:09Z","eid":"6eefba5f92b358eb","ag":"ag-6fa1","ev":"move","id":"T-01KYMZC07EFT6R50S1THRKFCZB","dir":"format","fr":"draft","to":"active"}

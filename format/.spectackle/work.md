@@ -160,7 +160,7 @@ choice: Route through a bounded pool with an in-worker guard, as backend/cpu alr
 
 ## T-01KYMZC07EFT6R50S1THRKFCZB Register-block the six unblocked fused row dots, as Q8_0 already is
 kind: task
-state: draft
+state: active
 created: 2026-07-28
 refs: R-01KYMWGGNMER3B16KBXB8JY18H
 
