@@ -344,6 +344,7 @@ type MemMemory struct {
 	cap  int
 	keys [][]float64 // each row length dim (oldest first)
 	vals [][]float64
+	free [][]float64 // recycled row backings from FIFO eviction (all length dim)
 }
 
 func newMemMemory(dim, capN int) *MemMemory {
@@ -374,11 +375,22 @@ func (m *MemMemory) AddSegment(k, v *tensor.Tensor) error {
 	// (§base-perf): for dense k,v read the row straight out of the backing []T instead
 	// of m.dim per-element AtF64 dispatches. F32 widens through float64 exactly as
 	// AtF64 does, so the stored rows are bit-identical.
+	// Steady state (append S, FIFO-evict S) recycles the evicted row backings instead of
+	// make+GC churn: getRow pops a freed buffer (its stale contents are fully overwritten
+	// by the copy below) and eviction returns backings to the free list.
+	getRow := func() []float64 {
+		if n := len(m.free); n > 0 {
+			r := m.free[n-1]
+			m.free = m.free[:n-1]
+			return r
+		}
+		return make([]float64, m.dim)
+	}
 	kf64, kf32 := flatF64(k), flatF32(k)
 	vf64, vf32 := flatF64(v), flatF32(v)
 	for i := range s {
-		kr := make([]float64, m.dim)
-		vr := make([]float64, m.dim)
+		kr := getRow()
+		vr := getRow()
 		switch {
 		case kf64 != nil:
 			copy(kr, kf64[i*m.dim:(i+1)*m.dim])
@@ -407,6 +419,9 @@ func (m *MemMemory) AddSegment(k, v *tensor.Tensor) error {
 		m.vals = append(m.vals, vr)
 	}
 	if over := len(m.keys) - m.cap; over > 0 { // FIFO eviction of the oldest
+		for i := 0; i < over; i++ { // recycle the evicted backings for the next AddSegment
+			m.free = append(m.free, m.keys[i], m.vals[i])
+		}
 		m.keys = m.keys[over:]
 		m.vals = m.vals[over:]
 	}
