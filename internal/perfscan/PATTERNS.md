@@ -104,6 +104,14 @@ the "ignore only this explicit detection" path) or its **category** alias:
 //perfscan:ignore                       // bare: silence ALL checks at that site
 ```
 
+A directive applies to its **entire enclosing comment block** and to the statement
+directly below that block, so the explanation may wrap freely and the directive may sit
+above or below the prose. It does NOT leak past its own block — a directive attached to
+one declaration will not silence a finding further down. (Anchoring used to be the
+directive's own line plus one, which made any wrapped explanation *silently inert*: the
+comment reads as if it took effect while the finding is still reported. Two directives
+in this repo were dead that way.)
+
 Repo-wide, pass `-exclude=PS4002,per-element-closure`, or `-checks=PS1001,PS2002`
 to run an allow-list. Example: the f64 exp/log/tanh/sigmoid/gelu kernels are
 flagged by `PS4002` but are exact-locked (`TestCPUCrossReferenceExact`) — mark each

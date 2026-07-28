@@ -933,8 +933,22 @@ func ignoreDirectives(fset *token.FileSet, f *ast.File) map[int]map[string]bool 
 			if len(cats) == 0 { // bare, or a reason-only comment with no class token
 				cats["*"] = true
 			}
+			// Apply to every line of the ENCLOSING COMMENT BLOCK and to the line after
+			// it. A comment block attaches to the statement below it, so a directive
+			// anywhere in the block must suppress that statement — anchoring only to the
+			// directive's own line + 1 makes a wrapped explanation silently INERT, which
+			// is worse than no suppression: the comment reads as if it took effect. Two
+			// directives in this repo were dead that way before this covered the block.
+			first := fset.Position(cg.Pos()).Line
+			last := fset.Position(cg.End()).Line
 			ln := fset.Position(c.Pos()).Line
-			for _, l := range []int{ln, ln + 1} {
+			if first > ln {
+				first = ln
+			}
+			if last < ln {
+				last = ln
+			}
+			for l := first; l <= last+1; l++ {
 				if out[l] == nil {
 					out[l] = map[string]bool{}
 				}

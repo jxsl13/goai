@@ -146,14 +146,19 @@ func galoreProjectDown(g, proj [][]float64, left bool) []float64 {
 	r := len(proj)
 	m, n := len(g), len(g[0])
 	if left { // R[a][j] = Σ_i P[a][i] G[i][j]  → [r,n]
+		// ikj/axpy: the dot form accumulated each output through one scalar, a serial
+		// FMADD chain running at the FMA's latency rather than its throughput (PS4008).
+		// BIT-IDENTICAL — each output still sums over i in ascending order from +0, and
+		// out is freshly allocated, so it is already zeroed for the += form.
 		out := make([]float64, r*n)
-		for a := range r {
-			for j := range n {
-				var s float64
-				for i := range m {
-					s += proj[a][i] * g[i][j]
+		for i := range m {
+			gi := g[i]
+			for a := range r {
+				av := proj[a][i]
+				oa := out[a*n : a*n+n]
+				for j := range oa {
+					oa[j] += av * gi[j]
 				}
-				out[a*n+j] = s
 			}
 		}
 		return out
@@ -161,10 +166,16 @@ func galoreProjectDown(g, proj [][]float64, left bool) []float64 {
 	// R[i][a] = Σ_j G[i][j] P[a][j]  → [m,r]
 	out := make([]float64, m*r)
 	for i := range m {
+		gi := g[i]
 		for a := range r {
 			var s float64
-			for j := range n {
-				s += g[i][j] * proj[a][j]
+			pa := proj[a][:n]
+			// A·Bᵀ: g[i] and proj[a] already walk j contiguously, so this does not
+			// suffer the strided read, and the ikj form would need a transposed copy
+			// of proj — an n×r allocation per call.
+			//perfscan:ignore PS4008 A·Bt, ikj would cost a transposed proj per call
+			for j := range pa {
+				s += gi[j] * pa[j]
 			}
 			out[i*r+a] = s
 		}
@@ -180,26 +191,31 @@ func galoreProjectUp(red []float64, proj [][]float64, left bool, m, n int) [][]f
 	for i := range m {
 		out[i] = make([]float64, n)
 	}
+	// Both branches run ikj/axpy for the reason given on galoreProjectDown, and are
+	// bit-identical for the same one: the sum over a stays ascending, and out's rows
+	// are freshly allocated (hence zero) so accumulating into them is safe.
 	if left { // N[i][j] = Σ_a P[a][i] R[a][j]
-		for i := range m {
-			for j := range n {
-				var s float64
-				for a := range r {
-					s += proj[a][i] * red[a*n+j]
+		for a := range r {
+			pa, ra := proj[a], red[a*n:a*n+n]
+			for i := range m {
+				av := pa[i]
+				oi := out[i][:n]
+				for j := range oi {
+					oi[j] += av * ra[j]
 				}
-				out[i][j] = s
 			}
 		}
 		return out
 	}
 	// N[i][j] = Σ_a R[i][a] P[a][j]
 	for i := range m {
-		for j := range n {
-			var s float64
-			for a := range r {
-				s += red[i*r+a] * proj[a][j]
+		oi := out[i][:n]
+		for a := range r {
+			av := red[i*r+a]
+			pa := proj[a][:n]
+			for j := range oi {
+				oi[j] += av * pa[j]
 			}
-			out[i][j] = s
 		}
 	}
 	return out

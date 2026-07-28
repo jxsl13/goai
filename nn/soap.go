@@ -337,8 +337,10 @@ func rotateBackInto(out, tmp, ql, nmat, qr [][]float64) {
 	for i := range m {
 		for j := range n {
 			var acc float64
-			//perfscan:ignore PS4008 A·Bᵀ — both operands already walk l contiguously; the
-			// ikj form would need a transposed copy of qr, an n×n alloc per call on a pooled path
+			// A·Bᵀ: both operands already walk l contiguously, so this does not suffer
+			// the strided read, and the ikj form would need a transposed copy of qr —
+			// an n×n allocation per call on a path whose whole point is being pooled.
+			//perfscan:ignore PS4008 A·Bt, ikj would cost a transposed qr per call
 			for l := range n {
 				acc += tmp[i][l] * qr[j][l]
 			}

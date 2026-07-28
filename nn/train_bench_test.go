@@ -197,6 +197,21 @@ func BenchmarkSOAPStepOnly(b *testing.B) {
 	}
 }
 
+// BenchmarkGaLoreStepOnly isolates GaLore's low-rank projection pair (P^T*G down,
+// P*R back up), which is the whole per-step matrix cost between SVD refreshes —
+// Gap defaults to 200, so the subspace is recomputed on well under 1% of steps and
+// the projections, not the SVD, are what this measures.
+func BenchmarkGaLoreStepOnly(b *testing.B) {
+	params, gf := stepOnlyFixtureSmall()
+	opt := nn.NewGaLore(params, 1e-3)
+	b.ReportAllocs()
+	for b.Loop() {
+		if err := opt.Step(gf); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func BenchmarkShampooStepOnly(b *testing.B) {
 	params, gf := stepOnlyFixtureSmall()
 	opt := nn.NewShampoo(params, 1e-3, nn.WithShampooRootEvery(10))

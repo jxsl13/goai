@@ -1655,3 +1655,76 @@ func mm(a, b, c, d []float64, m, k int) {
 			got["serial-dot-matmul"], got)
 	}
 }
+
+// A //perfscan:ignore whose explanation WRAPS onto following lines must still
+// suppress the statement the comment block documents. Anchoring the directive to its
+// own line + 1 made it silently inert — the comment reads as if it took effect while
+// the finding is still reported. Two directives in this repo were dead exactly so.
+func TestIgnoreDirective_SpansWrappedCommentBlock(t *testing.T) {
+	src := `package p
+func mm(a, b, c []float64, m, k int) {
+	for i := range m {
+		for j := range m {
+			s := 0.0
+			//perfscan:ignore PS4008 deliberate, see below
+			// this explanation wraps onto a second line, and onto a third,
+			// which used to push the flagged loop out of the directive's reach
+			for p := range k {
+				s += a[i*k+p] * b[j*k+p]
+			}
+			c[i*m+j] = s
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["serial-dot-matmul"] != 0 {
+		t.Fatalf("wrapped ignore directive did not suppress: got %d (%v)",
+			got["serial-dot-matmul"], got)
+	}
+}
+
+// The directive may also sit at the END of the block, below the prose.
+func TestIgnoreDirective_AtEndOfCommentBlock(t *testing.T) {
+	src := `package p
+func mm(a, b, c []float64, m, k int) {
+	for i := range m {
+		for j := range m {
+			s := 0.0
+			// prose first, explaining why this shape is deliberate here
+			// and why the rewrite would not pay off
+			//perfscan:ignore PS4008 deliberate
+			for p := range k {
+				s += a[i*k+p] * b[j*k+p]
+			}
+			c[i*m+j] = s
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["serial-dot-matmul"] != 0 {
+		t.Fatalf("trailing ignore directive did not suppress: got %d (%v)",
+			got["serial-dot-matmul"], got)
+	}
+}
+
+// A directive in an UNRELATED comment block must not leak onto a later statement —
+// spanning the block must not become "suppress everything after it".
+func TestIgnoreDirective_DoesNotLeakPastItsBlock(t *testing.T) {
+	src := `package p
+func mm(a, b, c []float64, m, k int) {
+	// prose block with a directive that belongs to the declaration below it
+	//perfscan:ignore PS4008 belongs to the var, not the loop
+	var unrelated int
+	_ = unrelated
+	for i := range m {
+		for j := range m {
+			s := 0.0
+			for p := range k {
+				s += a[i*k+p] * b[j*k+p]
+			}
+			c[i*m+j] = s
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["serial-dot-matmul"] == 0 {
+		t.Fatalf("ignore leaked past its comment block and suppressed a later finding (%v)", got)
+	}
+}
