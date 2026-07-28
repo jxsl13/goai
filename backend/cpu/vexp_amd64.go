@@ -511,6 +511,40 @@ func vsiluF64(dst, src []float64) {
 	}
 }
 
+// vsigmoidF64 is the f64-native logistic sigmoid on the AVX2 expF64x4 primitive —
+// the vsiluF64 lane WITHOUT the final multiply by x (SiLU = x·sigmoid(x)). Same
+// stable split num/(1+e^−|x|) with num = (x≥0 ? 1 : e^−|x|). Rides the model f64
+// tolerance (expF64x4 is ~1 ulp); the non-SIMD build takes the scalar twin.
+func vsigmoidF64(dst, src []float64) {
+	if !vexpHasAVX {
+		for i, v := range src {
+			dst[i] = sigmoidF64poly(v)
+		}
+		return
+	}
+	n4 := len(src) &^ 3
+	for i := 0; i < n4; i += 4 {
+		x := archsimd.LoadFloat64x4Slice(src[i:])
+		z := expF64x4(vF64Zero.Sub(x.AsUint64x4().And(vF64Abs).AsFloat64x4())) // e^(−|x|)
+		num := vF64One.Merge(z, x.GreaterEqual(vF64Zero))                      // x≥0 ? 1 : z
+		num.Div(vF64One.Add(z)).StoreSlice(dst[i:])
+	}
+	for i := n4; i < len(src); i++ {
+		dst[i] = sigmoidF64poly(src[i])
+	}
+}
+
+// sigmoidF64poly is the scalar bit-twin of one vsigmoidF64 lane (uses expF64poly,
+// expF64x4's scalar counterpart) — the remainder tail and the no-AVX fallback.
+func sigmoidF64poly(x float64) float64 {
+	z := expF64poly(-math.Abs(x))
+	num := z
+	if x >= 0 {
+		num = 1
+	}
+	return num / (1 + z)
+}
+
 // F64 softplus (Mamba/Jamba Δ discretization) constants. softplus was scalar
 // math.Exp+math.Log1p on the ref backend (~32% of Mamba f64 prefill, §T——).
 // log1p(u) is computed by the Cephes double log rational on v=1+u: because the
