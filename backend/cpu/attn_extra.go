@@ -31,17 +31,57 @@ type ropeFreqEntry struct {
 // handles the concurrent prefill workers, and duplicate misses store the same value.
 var ropeFreqCache sync.Map // ropeFreqKey → ropeFreqEntry
 
-// cachedRoPEFreqs returns the memoized RoPEFreqs result, computing and caching on a miss.
-func cachedRoPEFreqs(hd int, pr backend.RoPEAttrs) ([]float64, float64) {
+// ropeFreqKeyOf builds the inverse-frequency-table key (the params that shape inv/posDiv).
+func ropeFreqKeyOf(hd int, pr backend.RoPEAttrs) ropeFreqKey {
 	d := pr.WithDefaults()
-	key := ropeFreqKey{hd, d.Base, d.PosScale, d.YaRNScale, d.YaRNOrigCtx, d.YaRNBetaFast, d.YaRNBetaSlow}
+	return ropeFreqKey{hd, d.Base, d.PosScale, d.YaRNScale, d.YaRNOrigCtx, d.YaRNBetaFast, d.YaRNBetaSlow}
+}
+
+// cachedRoPEFreqs returns the memoized RoPEFreqs result (+ its key), computing and caching on a miss.
+func cachedRoPEFreqs(hd int, pr backend.RoPEAttrs) ([]float64, float64, ropeFreqKey) {
+	key := ropeFreqKeyOf(hd, pr)
 	if v, ok := ropeFreqCache.Load(key); ok {
 		e := v.(ropeFreqEntry)
-		return e.inv, e.posDiv
+		return e.inv, e.posDiv, key
 	}
 	inv, posDiv := backend.RoPEFreqs(hd, pr)
 	ropeFreqCache.Store(key, ropeFreqEntry{inv, posDiv})
-	return inv, posDiv
+	return inv, posDiv, key
+}
+
+// ropeTrigKey identifies a cos/sin ROW by (frequency-table key, ABSOLUTE position n). Keying
+// on the absolute position — not a (PosOffset, seq) block — bounds the cache by context length
+// and hits across a token's Q and K at every layer (all share PosOffset), instead of leaking a
+// fresh entry per decode step the way a block key would.
+type ropeTrigKey struct {
+	fk ropeFreqKey
+	n  int
+}
+
+type ropeTrigEntry struct{ cs, sn []float64 }
+
+// ropeTrigCache memoizes the per-position cos/sin rows. The whole [seq × half] matrix was
+// recomputed (math.Cos/Sin) on every Execute even though it depends only on (position, freq
+// table). Rows are write-once, read-only (ropeApply only reads cs/sn), so sharing is safe;
+// concurrent prefill workers may duplicate-fill a row with identical values. BIT-EXACT: pure
+// memoization of math.Cos(pos·th)/math.Sin(pos·th).
+var ropeTrigCache sync.Map // ropeTrigKey → ropeTrigEntry
+
+// cachedRoPETrig returns the memoized cos/sin row for absolute position n (pos = n/posDiv),
+// computing and caching on a miss. The returned slices are READ-ONLY.
+func cachedRoPETrig(fk ropeFreqKey, n int, pos float64, inv []float64) ([]float64, []float64) {
+	if v, ok := ropeTrigCache.Load(ropeTrigKey{fk, n}); ok {
+		e := v.(ropeTrigEntry)
+		return e.cs, e.sn
+	}
+	cs := make([]float64, len(inv))
+	sn := make([]float64, len(inv))
+	for i, th := range inv {
+		a := pos * th
+		cs[i], sn[i] = math.Cos(a), math.Sin(a)
+	}
+	ropeTrigCache.Store(ropeTrigKey{fk, n}, ropeTrigEntry{cs, sn})
+	return cs, sn
 }
 
 // Typed parallel kernels for the remaining attention-family ops (§T610, closing
@@ -226,7 +266,7 @@ func ropeApplyKernel(ctx *backend.Context, q *tensor.Tensor, attrs backend.Attrs
 	if err != nil {
 		return nil, err
 	}
-	inv, posDiv := cachedRoPEFreqs(2*half, pr)
+	inv, posDiv, fk := cachedRoPEFreqs(2*half, pr)
 	var zeta []float64
 	if pr.XPos {
 		zeta = backend.XPosScales(2*half, pr)
@@ -236,10 +276,10 @@ func ropeApplyKernel(ctx *backend.Context, q *tensor.Tensor, attrs backend.Attrs
 	switch q.Dtype() {
 	case tensor.F32:
 		ropeApply(qc.Storage().F32(), out.Storage().F32(), seq, width, heads, half,
-			pr.PosOffset, posDiv, inv, zeta, pr.XPosDownscale, backward)
+			pr.PosOffset, posDiv, inv, zeta, fk, pr.XPosDownscale, backward)
 	case tensor.F64:
 		ropeApply(qc.Storage().F64(), out.Storage().F64(), seq, width, heads, half,
-			pr.PosOffset, posDiv, inv, zeta, pr.XPosDownscale, backward)
+			pr.PosOffset, posDiv, inv, zeta, fk, pr.XPosDownscale, backward)
 	default:
 		return nil, fmt.Errorf("cpu: rope unsupported dtype %v", q.Dtype())
 	}
@@ -252,22 +292,18 @@ func ropeApplyKernel(ctx *backend.Context, q *tensor.Tensor, attrs backend.Attrs
 // §T511 pool. Forward: (lo,hi) = (x·c−y·s, y·c+x·s), then ×ζ^e. Backward:
 // scale first, then (lo,hi) = (x·c+y·s, −x·s+y·c) — exactly ref's order.
 func ropeApply[T normFloat](x, out []T, seq, width, heads, half, posOff int,
-	posDiv float64, inv, zeta []float64, downscale, backward bool) {
+	posDiv float64, inv, zeta []float64, fk ropeFreqKey, downscale, backward bool) {
 	hd := 2 * half
 	parallelWork(seq, width*8, func(plo, phi int) {
-		cs := make([]float64, half)
-		sn := make([]float64, half)
 		var sc []float64
 		if zeta != nil {
 			sc = make([]float64, half)
 		}
 		for p := plo; p < phi; p++ {
-			n := float64(posOff + p)
-			pos := n / posDiv
-			for i, th := range inv {
-				a := pos * th
-				cs[i], sn[i] = math.Cos(a), math.Sin(a)
-			}
+			np := posOff + p
+			n := float64(np)
+			// per-position cos/sin row, memoized across calls (bit-exact); read-only
+			cs, sn := cachedRoPETrig(fk, np, n/posDiv, inv)
 			if zeta != nil {
 				e := n
 				if downscale {
@@ -437,6 +473,7 @@ func retentionBackwardKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs
 // (T = float32|float64), accumulating in f64 and preserving each pass's exact
 // operation order for ref-parity (§V9/§V10). gs is dO.
 func retentionBwd[T normFloat](qs, ks, vs, gs, dqs, dks, dvs []T, l, kd, vd int, decay []float64) {
+	_, isF32 := any(qs).([]float32) // dot4 reassociation fits the f32 budget only (F64 keeps serial dots)
 	// Pass A: dQ rows are independent over n (m ≤ n ascending — ref's order).
 	parallelWork(l, l*(kd+vd), func(lo, hi int) {
 		row := make([]float64, kd)
@@ -448,8 +485,12 @@ func retentionBwd[T normFloat](qs, ks, vs, gs, dqs, dks, dvs []T, l, kd, vd int,
 			for m := 0; m <= n; m++ {
 				vm := vs[m*vd : m*vd+vd : m*vd+vd]
 				var dp float64
-				for j, gv := range gn {
-					dp += float64(gv) * float64(vm[j])
+				if isF32 {
+					dp = dot4T(gn, vm)
+				} else {
+					for j, gv := range gn {
+						dp += float64(gv) * float64(vm[j])
+					}
 				}
 				dA := dp * decay[n-m]
 				km := ks[m*kd : m*kd+kd : m*kd+kd]
@@ -479,8 +520,12 @@ func retentionBwd[T normFloat](qs, ks, vs, gs, dqs, dks, dvs []T, l, kd, vd int,
 			for n := m; n < l; n++ {
 				qn := qs[n*kd : n*kd+kd : n*kd+kd]
 				var a float64
-				for i, qv := range qn {
-					a += float64(qv) * float64(km[i])
+				if isF32 {
+					a = dot4T(qn, km)
+				} else {
+					for i, qv := range qn {
+						a += float64(qv) * float64(km[i])
+					}
 				}
 				pnm := a * decay[n-m]
 				gn := gs[n*vd : n*vd+vd : n*vd+vd]

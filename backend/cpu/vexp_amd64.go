@@ -390,14 +390,15 @@ func vlogF32(dst, src []float32) {
 // |r|≤ln2/2 (remainder ≈4e-18, sub-ulp), scaled by 2ᵏ built from the exponent
 // field. The arg is clamped to ≥ −708 so k+1023 stays a valid biased exponent.
 var (
-	vF64ExpLo  = archsimd.BroadcastFloat64x4(-708.0)                      // min arg before 2ᵏ underflows
-	vF64Log2e  = archsimd.BroadcastFloat64x4(1.4426950408889634)          // 1/ln2
-	vF64NLn2Hi = archsimd.BroadcastFloat64x4(-6.93147180369123816490e-01) // −ln2 high (exact·k)
-	vF64NLn2Lo = archsimd.BroadcastFloat64x4(-1.90821492927058770002e-10) // −ln2 low
-	vF64Bias   = archsimd.BroadcastInt32x4(1023)
-	vF64Abs    = archsimd.BroadcastUint64x4(0x7fffffffffffffff)
-	vF64Zero   = archsimd.BroadcastFloat64x4(0.0)
-	vF64One    = archsimd.BroadcastFloat64x4(1.0)
+	vF64ExpLo   = archsimd.BroadcastFloat64x4(-708.0)                      // min arg before 2ᵏ underflows
+	vF64ExpZero = archsimd.BroadcastFloat64x4(-745.2)                      // below this eˣ underflows to 0 (math.Exp(-745.2)=0)
+	vF64Log2e   = archsimd.BroadcastFloat64x4(1.4426950408889634)          // 1/ln2
+	vF64NLn2Hi  = archsimd.BroadcastFloat64x4(-6.93147180369123816490e-01) // −ln2 high (exact·k)
+	vF64NLn2Lo  = archsimd.BroadcastFloat64x4(-1.90821492927058770002e-10) // −ln2 low
+	vF64Bias    = archsimd.BroadcastInt32x4(1023)
+	vF64Abs     = archsimd.BroadcastUint64x4(0x7fffffffffffffff)
+	vF64Zero    = archsimd.BroadcastFloat64x4(0.0)
+	vF64One     = archsimd.BroadcastFloat64x4(1.0)
 	// eʳ Taylor coefficients 1/k! (k = 13 … 0), Horner high→low.
 	vF64E13 = archsimd.BroadcastFloat64x4(1.6059043836821613e-10)
 	vF64E12 = archsimd.BroadcastFloat64x4(2.08767569878681e-09)
@@ -415,6 +416,7 @@ var (
 
 // expF64x4 returns eˣ (accurate to ~1 ulp) for each lane, valid for x ≤ 0.
 func expF64x4(x archsimd.Float64x4) archsimd.Float64x4 {
+	under := x.Less(vF64ExpZero) // eˣ underflows to 0 for x < −745.2 (masking feeds −∞)
 	x = x.Max(vF64ExpLo)
 	kf := x.Mul(vF64Log2e).RoundToEven()
 	r := kf.MulAdd(vF64NLn2Hi, x) // x − k·ln2Hi
@@ -438,7 +440,7 @@ func expF64x4(x archsimd.Float64x4) archsimd.Float64x4 {
 	// (VCVTPD2DQ) + sign-extend to int64 (VPMOVSXDQ) + VPSLLQ — all AVX2, avoiding
 	// the AVX-512-only f64→i64 convert (VCVTTPD2QQ).
 	scale := kf.ConvertToInt32().Add(vF64Bias).ExtendToInt64().ShiftAllLeft(52).AsFloat64x4()
-	return p.Mul(scale)
+	return vF64Zero.Merge(p.Mul(scale), under) // underflow → exact 0 (NaN keeps res: Less→false), matches math.Exp
 }
 
 // expF64poly is the SCALAR twin of expF64x4 — bit-for-bit identical (same clamp,
@@ -448,6 +450,9 @@ func expF64x4(x archsimd.Float64x4) archsimd.Float64x4 {
 // tail — the invariant TestQuantDeepSeekV2DecodeMatchesForward relies on (absorbed
 // decode == batched forward, byte-exact, regardless of array length/alignment).
 func expF64poly(x float64) float64 {
+	if x < -745.2 {
+		return 0 // eˣ underflows to 0 (matches expF64x4's vF64ExpZero mask, keeping body==tail)
+	}
 	if x < -708.0 {
 		x = -708.0
 	}

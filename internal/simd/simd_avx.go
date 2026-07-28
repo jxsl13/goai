@@ -265,8 +265,13 @@ func SoftplusNegLLSumF64(f, y []float64) float64 {
 }
 
 // expF64x4v returns eˣ (~1 ulp) per lane for x ≤ 0 (the softmax numerator feeds
-// it z−max ≤ 0). Masked/−Inf lanes clamp to eLo → ~3e-308 (≈0 after normalize).
+// it z−max ≤ 0). Masked/−Inf lanes (x below the eLo clamp floor, including −Inf)
+// underflow to EXACT 0 — matching scalar math.Exp, which returns 0 there — so a
+// −inf-masked logit contributes exactly 0 probability instead of a ~3e-308
+// denormal. Without this, exp(clamp to −708)≈3e-308 leaves masked tokens with a
+// vanishingly-small but NONZERO probability (breaking top-nσ's exact keep-set).
 func expF64x4v(x archsimd.Float64x4) archsimd.Float64x4 {
+	under := x.Less(eLo) // x < −708 (incl −Inf): exp underflows to exact 0 below the f64 floor
 	x = x.Max(eLo)
 	kf := x.Mul(eLog2e).RoundToEven()
 	r := kf.MulAdd(eNHi, x)
@@ -286,7 +291,7 @@ func expF64x4v(x archsimd.Float64x4) archsimd.Float64x4 {
 	p = p.MulAdd(r, eOne)
 	p = p.MulAdd(r, eOne)
 	scale := kf.ConvertToInt32().Add(eBias).ExtendToInt64().ShiftAllLeft(52).AsFloat64x4()
-	return p.Mul(scale)
+	return eZero.Merge(p.Mul(scale), under) // under ? 0 : eˣ — deep-underflow/−Inf lanes → exact 0
 }
 
 // ExpSumF64 sets dst[i] = exp(src[i]-bias) and returns Σ dst[i], 4-wide AVX2+FMA.
@@ -421,15 +426,30 @@ func WKVScanStateF64(k, v, w, u, out, aa0, bb0, pp0 []float64, seq, d int) {
 			base := t*d + c
 			kk := archsimd.LoadFloat64x4Slice(k[base:])
 			vv := archsimd.LoadFloat64x4Slice(v[base:])
+			// Each max-subtracted exp pair has one operand exactly 0 (the max side,
+			// pp-q or ww-q), so expF64x4v of it is exactly 1.0 — recomputing it is a
+			// wasted 13-term poly. Evaluate only the ONE negative-argument exp
+			// (min(d1,d2)) and select 1.0 vs e per lane by which side was the max.
+			// Bit-identical: the max side gets literal 1.0 (== expF64x4v(0)), and the
+			// non-max side gets expF64x4v(min(d1,d2)) — the exact same argument and
+			// bits as before. Halves the exp calls (4→2) per (token, 4-channel block).
 			ww := uc.Add(kk)
 			q := pp.Max(ww)
-			e1 := expF64x4v(pp.Sub(q))
-			e2 := expF64x4v(ww.Sub(q))
+			d1 := pp.Sub(q)
+			d2 := ww.Sub(q)
+			e := expF64x4v(d1.Min(d2))
+			ge := d1.GreaterEqual(d2) // pp≥ww ⇔ d1 is the 0/max side
+			e1 := eOne.Merge(e, ge)   // ge ? 1 : e
+			e2 := e.Merge(eOne, ge)   // ge ? e : 1
 			e1.Mul(aa).Add(e2.Mul(vv)).Div(e1.Mul(bb).Add(e2)).StoreSlice(out[base:])
 			ppw := pp.Sub(wc)
 			q2 := ppw.Max(kk)
-			e3 := expF64x4v(ppw.Sub(q2))
-			e4 := expF64x4v(kk.Sub(q2))
+			d3 := ppw.Sub(q2)
+			d4 := kk.Sub(q2)
+			ek := expF64x4v(d3.Min(d4))
+			gk := d3.GreaterEqual(d4)
+			e3 := eOne.Merge(ek, gk)
+			e4 := ek.Merge(eOne, gk)
 			aa = e3.Mul(aa).Add(e4.Mul(vv))
 			bb = e3.Mul(bb).Add(e4)
 			pp = q2

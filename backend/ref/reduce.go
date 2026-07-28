@@ -62,7 +62,12 @@ func parseReducedMask(attrs backend.Attrs, nd int) ([]bool, error) {
 	return reduced, nil
 }
 
-func reduceKernel(init float64, combine func(acc, x float64) float64, finalize func(acc float64, count int) float64) backend.Kernel {
+// isSum: the combine is plain float64 addition (OpSum/OpMean). The hot loops then
+// inline `acc += x` instead of the per-element `combine` func-value call — which Go
+// cannot inline through, so it costs a real indirect CALL on every element. Bit-exact:
+// `a + x` IS what the additive combine computes, same ascending order, so §V10 f64
+// accumulation is byte-identical. Max/Min/Prod keep the closure (isSum=false).
+func reduceKernel(init float64, combine func(acc, x float64) float64, finalize func(acc float64, count int) float64, isSum bool) backend.Kernel {
 	return func(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
 		if len(in) != 1 {
 			return nil, fmt.Errorf("ref: reduce wants 1 input, got %d", len(in))
@@ -98,91 +103,73 @@ func reduceKernel(init float64, combine func(acc, x float64) float64, finalize f
 		// sequence — bit-identical.
 		if xs, ok := f64Data(x); ok {
 			shape := x.Shape()
-			eff := make([]int, nd)
-			for ax := range nd {
-				if p := outAxisOf[ax]; p >= 0 && !reduced[ax] {
-					eff[ax] = outStrides[p]
+			// Trailing-contiguous fast path: when the reduced axes are exactly the innermost
+			// suffix (e.g. axis-1 of [rows,cols]), each output is a contiguous [count]-element
+			// run, so accumulate it in a REGISTER per segment — dropping the per-element odometer
+			// AND the acc[of] load/store to memory. Output index == segment (row-major over the
+			// kept leading axes), and each segment sees xs[seg*count : (seg+1)*count] in the same
+			// ascending order the odometer would → bit-identical combine sequence.
+			trailing := count > 1
+			for ax := 1; ax < nd; ax++ {
+				if reduced[ax-1] && !reduced[ax] { // a kept axis after a reduced one breaks the suffix
+					trailing = false
+					break
 				}
 			}
-			if len(acc) == 1 {
-				// Reduce-all: every element lands in acc[0], so `of` is invariably 0
-				// and the odometer is pure bookkeeping — for this shape every eff is
-				// zero, so it computes of += 0 once per element. A local accumulator
-				// additionally removes the acc[0] load/store and its bounds check from
-				// the inner loop. Same ascending pos order, same combine sequence, so
-				// the accumulator sees an identical add chain — bit-identical.
-				a := acc[0]
-				for _, v := range xs {
-					a = combine(a, v)
-				}
-				acc[0] = a
-			} else if nd > 0 && shape[nd-1] > 0 {
-				// Hoist the innermost axis out of the odometer. Its effective stride is
-				// constant across the run, so the run is either a single accumulator
-				// fed repeatedly (stride 0 — a reduced innermost axis) or a straight
-				// walk down consecutive accumulators (stride 1 — the innermost axis
-				// survives into the output). Either way the odometer ticks once per run
-				// instead of once per element.
-				//
-				// Bit-identical: every accumulator still sees exactly the same values in
-				// the same ascending order, so its combine chain is unchanged. Only the
-				// index bookkeeping around it moves.
-				inner := shape[nd-1]
-				sInner := eff[nd-1]
-				idx := make([]int, nd)
-				of, pos := 0, 0
-				for pos < len(xs) {
-					run := xs[pos : pos+inner]
-					switch sInner {
-					case 0: // whole run folds into one accumulator
-						a := acc[of]
-						for _, v := range run {
-							a = combine(a, v)
+			if trailing {
+				if isSum { // inline `a += x`, no per-element indirect combine call
+					for seg := 0; seg < outNumel; seg++ {
+						a := acc[seg]
+						base := seg * count
+						for k := 0; k < count; k++ {
+							a += xs[base+k]
 						}
-						acc[of] = a
-					case 1: // run walks consecutive accumulators
-						dst := acc[of : of+inner]
-						for j, v := range run {
-							dst[j] = combine(dst[j], v)
-						}
-					default: // strided (not reachable for row-major outputs; kept total)
-						o := of
-						for _, v := range run {
-							acc[o] = combine(acc[o], v)
-							o += sInner
-						}
+						acc[seg] = a
 					}
-					pos += inner
-					// The innermost axis completed, so its net contribution to `of` is
-					// zero. Tick the remaining axes exactly as the per-element odometer
-					// would have.
-					for d := nd - 2; d >= 0; d-- {
-						idx[d]++
-						of += eff[d]
-						if idx[d] < shape[d] {
-							break
+				} else {
+					for seg := 0; seg < outNumel; seg++ {
+						a := acc[seg]
+						base := seg * count
+						for k := 0; k < count; k++ {
+							a = combine(a, xs[base+k])
 						}
-						idx[d] = 0
-						of -= eff[d] * shape[d]
+						acc[seg] = a
 					}
 				}
 			} else {
+				eff := make([]int, nd)
+				for ax := range nd {
+					if p := outAxisOf[ax]; p >= 0 && !reduced[ax] {
+						eff[ax] = outStrides[p]
+					}
+				}
 				idx := make([]int, nd)
 				of := 0
-				// Declined-shape fallback beside the strip-mined branch above, and not
-				// reached by BenchmarkSumF64_64K (verified by panic probe). The
-				// per-element odometer is deliberate here.
-				//perfscan:ignore PS4005 fallback for shapes the strip-mined branch declines
-				for pos := range xs {
-					acc[of] = combine(acc[of], xs[pos])
-					for d := nd - 1; d >= 0; d-- {
-						idx[d]++
-						of += eff[d]
-						if idx[d] < shape[d] {
-							break
+				if isSum {
+					for pos := range xs {
+						acc[of] += xs[pos]
+						for d := nd - 1; d >= 0; d-- {
+							idx[d]++
+							of += eff[d]
+							if idx[d] < shape[d] {
+								break
+							}
+							idx[d] = 0
+							of -= eff[d] * shape[d]
 						}
-						idx[d] = 0
-						of -= eff[d] * shape[d]
+					}
+				} else {
+					for pos := range xs {
+						acc[of] = combine(acc[of], xs[pos])
+						for d := nd - 1; d >= 0; d-- {
+							idx[d]++
+							of += eff[d]
+							if idx[d] < shape[d] {
+								break
+							}
+							idx[d] = 0
+							of -= eff[d] * shape[d]
+						}
 					}
 				}
 			}
@@ -280,56 +267,46 @@ func argmaxKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs
 	// ascending-pos order and strict > comparison — bit-identical tie handling.
 	if xs, ok := f64Data(x); ok {
 		shape := x.Shape()
-		eff := make([]int, nd)
-		for ax := range nd {
-			if p := outAxisOf[ax]; p >= 0 {
-				eff[ax] = outStrides[p]
-			}
-		}
-		// Hoist the innermost axis out of the odometer (see reduceKernel): its
-		// effective stride is constant across a run, so the odometer ticks once per
-		// run instead of once per element. Two cases, because argmax carries a
-		// COORDINATE as well as a value:
-		//   - the innermost axis IS the reduced axis: its stride is 0, the whole run
-		//     folds into one accumulator, and the coordinate is the position within
-		//     the run;
-		//   - otherwise: the reduced coordinate is constant across the run, and the
-		//     run walks consecutive accumulators.
-		// Both keep the ascending scan order and the STRICT > comparison, so ties
-		// still resolve to the lowest index — bit-identical.
-		inner, sInner := shape[nd-1], eff[nd-1]
-		axisIsInnermost := axis == nd-1
-		idx := make([]int, nd)
-		of := 0
-		for pos := 0; pos < len(xs); pos += inner {
-			run := xs[pos : pos+inner]
-			if axisIsInnermost {
-				b, bi := best[of], bidx[of]
-				for j, v := range run {
-					if v > b {
-						b, bi = v, float64(j)
+		if axis == nd-1 {
+			// Trailing axis: each output scans a contiguous [count]-run and the argmax
+			// index is the position k within the run — track (bestVal, k) in registers,
+			// one store per segment (no odometer, no best[of]/bidx[of] memory RMW). Strict
+			// > with ascending k gives the same lowest-index tie as the odometer.
+			count := shape[nd-1]
+			for seg := 0; seg < outNumel; seg++ {
+				base := seg * count
+				bv := math.Inf(-1)
+				bk := 0
+				for k := 0; k < count; k++ {
+					if v := xs[base+k]; v > bv {
+						bv, bk = v, k
 					}
 				}
-				best[of], bidx[of] = b, bi
-			} else {
-				c := float64(idx[axis])
-				o := of
-				for _, v := range run {
-					if v > best[o] {
-						best[o] = v
-						bidx[o] = c
-					}
-					o += sInner
+				bidx[seg] = float64(bk)
+			}
+		} else {
+			eff := make([]int, nd)
+			for ax := range nd {
+				if p := outAxisOf[ax]; p >= 0 {
+					eff[ax] = outStrides[p]
 				}
 			}
-			for d := nd - 2; d >= 0; d-- {
-				idx[d]++
-				of += eff[d]
-				if idx[d] < shape[d] {
-					break
+			idx := make([]int, nd)
+			of := 0
+			for pos := range xs {
+				if v := xs[pos]; v > best[of] {
+					best[of] = v
+					bidx[of] = float64(idx[axis])
 				}
-				idx[d] = 0
-				of -= eff[d] * shape[d]
+				for d := nd - 1; d >= 0; d-- {
+					idx[d]++
+					of += eff[d]
+					if idx[d] < shape[d] {
+						break
+					}
+					idx[d] = 0
+					of -= eff[d] * shape[d]
+				}
 			}
 		}
 		out := tensor.NewOn(ctx.Device(), x.Dtype(), outShape)
@@ -364,10 +341,10 @@ func init() {
 		std.add(op, tensor.F32, k)
 		std.add(op, tensor.F64, k)
 	}
-	reg(backend.OpSum, reduceKernel(0, func(a, x float64) float64 { return a + x }, func(a float64, _ int) float64 { return a }))
-	reg(backend.OpMean, reduceKernel(0, func(a, x float64) float64 { return a + x }, func(a float64, n int) float64 { return a / float64(n) }))
-	reg(backend.OpMax, reduceKernel(math.Inf(-1), math.Max, func(a float64, _ int) float64 { return a }))
-	reg(backend.OpMin, reduceKernel(math.Inf(1), math.Min, func(a float64, _ int) float64 { return a }))
-	reg(backend.OpProd, reduceKernel(1, func(a, x float64) float64 { return a * x }, func(a float64, _ int) float64 { return a }))
+	reg(backend.OpSum, reduceKernel(0, func(a, x float64) float64 { return a + x }, func(a float64, _ int) float64 { return a }, true))
+	reg(backend.OpMean, reduceKernel(0, func(a, x float64) float64 { return a + x }, func(a float64, n int) float64 { return a / float64(n) }, true))
+	reg(backend.OpMax, reduceKernel(math.Inf(-1), math.Max, func(a float64, _ int) float64 { return a }, false))
+	reg(backend.OpMin, reduceKernel(math.Inf(1), math.Min, func(a float64, _ int) float64 { return a }, false))
+	reg(backend.OpProd, reduceKernel(1, func(a, x float64) float64 { return a * x }, func(a float64, _ int) float64 { return a }, false))
 	reg(backend.OpArgMax, argmaxKernel)
 }

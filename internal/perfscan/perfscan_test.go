@@ -1250,9 +1250,9 @@ func rows(n int) [][]float64 {
 	}
 }
 
-// PS6001 reports the dual-arm shape: a comma-ok flat-view guard plus a generic
+// PS6004 reports the dual-arm shape: a comma-ok flat-view guard plus a generic
 // accessor fallback, which together assert bit-identity between two code paths.
-func TestDetectPS6001_DualPath(t *testing.T) {
+func TestDetectPS6004_DualPath(t *testing.T) {
 	src := `package p
 func loss(a *T, n int) float64 {
 	var total float64
@@ -1275,7 +1275,7 @@ func loss(a *T, n int) float64 {
 
 // Silent with no fallback arm: one path cannot disagree with itself, so there is no
 // bit-identity claim to verify.
-func TestDetectPS6001_SilentWithoutFallback(t *testing.T) {
+func TestDetectPS6004_SilentWithoutFallback(t *testing.T) {
 	src := `package p
 func loss(a *T, n int) float64 {
 	var total float64
@@ -1297,7 +1297,7 @@ func loss(a *T, n int) float64 {
 // Silent on a plain single-valued storage accessor. .Storage().F64() is also in
 // fastPathHelpers but returns one value, so it makes no success-flag claim; without
 // this discrimination the rule matched 193 functions instead of 36.
-func TestDetectPS6001_SilentOnBareStorageAccess(t *testing.T) {
+func TestDetectPS6004_SilentOnBareStorageAccess(t *testing.T) {
 	src := `package p
 func fill(a *T, n int) {
 	xs := a.Storage().F64()
@@ -1311,10 +1311,10 @@ func fill(a *T, n int) {
 	}
 }
 
-// PS6001 also reports the dtype-SWITCH form of the same dual-arm shape, which has
+// PS6004 also reports the dtype-SWITCH form of the same dual-arm shape, which has
 // no comma-ok: `switch x.Dtype() { case F64: <typed>; default: <accessor> }`.
 // blas1 uses this form, and omitting it left the known-kernel floor at 6 of 7.
-func TestDetectPS6001_DtypeSwitchForm(t *testing.T) {
+func TestDetectPS6004_DtypeSwitchForm(t *testing.T) {
 	src := `package p
 func dot(a, b *T, n int) float64 {
 	var acc float64
@@ -1338,7 +1338,7 @@ func dot(a, b *T, n int) float64 {
 
 // Silent when the dtype switch is exhaustive: with no default clause there is no
 // fallback arm, so no two paths claim to agree.
-func TestDetectPS6001_SilentOnExhaustiveSwitch(t *testing.T) {
+func TestDetectPS6004_SilentOnExhaustiveSwitch(t *testing.T) {
 	src := `package p
 func dot(a *T, n int) float64 {
 	var acc float64
@@ -1942,12 +1942,12 @@ func (d *D) decode(ctx *C, dseq, heads int) []float64 {
 	}
 }
 
-// The third PS6001 form: a typed fast path that discriminates by comma-ok TYPE
+// The third PS6004 form: a typed fast path that discriminates by comma-ok TYPE
 // ASSERTION on concrete storage and DECLINES to its caller with `return false`. The
 // generic arm lives in the caller, so neither the fast-path-helper test nor the
 // same-function accessor test can see it — this shape shipped as a 3.19x dual path
-// while PS6001 reported nothing.
-func TestDetectPS6001_DecliningTypedFastPath(t *testing.T) {
+// while PS6004 reported nothing.
+func TestDetectPS6004_DecliningTypedFastPath(t *testing.T) {
 	src := `package p
 func gatherHalfTyped(out, t *T, n int) bool {
 	su, okS := t.storage.data.([]uint16)
@@ -1970,7 +1970,7 @@ func gatherHalfTyped(out, t *T, n int) bool {
 // devirtualized kernel and semantically nothing like one. The first cut of this
 // widening fired on 13 such functions inside perfscan itself. Asserting a SLICE OF A
 // NUMERIC TYPE is the discriminator; asserting a pointer-to-struct is not.
-func TestDetectPS6001_SilentOnPointerTypeAssertions(t *testing.T) {
+func TestDetectPS6004_SilentOnPointerTypeAssertions(t *testing.T) {
 	src := `package p
 func visit(n Node) bool {
 	id, ok := n.(*Ident)
@@ -1992,7 +1992,7 @@ func visit(n Node) bool {
 
 // SILENT on a single numeric assertion: one cast is an ordinary conversion, not a
 // dispatch between arms, so there is no second path whose bit-identity is in question.
-func TestDetectPS6001_SilentOnSingleTypedAssertion(t *testing.T) {
+func TestDetectPS6004_SilentOnSingleTypedAssertion(t *testing.T) {
 	src := `package p
 func fill(s *S, n int) bool {
 	d, ok := s.data.([]float64)
@@ -2012,7 +2012,7 @@ func fill(s *S, n int) bool {
 
 // SILENT without the decline: a function that asserts typed slices but never returns
 // false has no fallback arm to disagree with, so nothing needs cross-referencing.
-func TestDetectPS6001_SilentWithoutDecline(t *testing.T) {
+func TestDetectPS6004_SilentWithoutDecline(t *testing.T) {
 	src := `package p
 func both(s *S, d *S, n int) bool {
 	a, _ := s.data.([]float32)
@@ -2472,5 +2472,204 @@ func TestDetectPS6003_SilentWhenGuardDoesNotReturn(t *testing.T) {
 	if got := countCat(scanSrc(t, src)); got["partial-fast-path-coverage"] != 0 {
 		t.Fatalf("want 0 when the guard does not return, got %d (%v)",
 			got["partial-fast-path-coverage"], got)
+	}
+}
+
+// PS4007 fires on a *VJP whose hot loop is a single elementwise binop written as a scalar
+// Go loop (the pre-fix expVJP shape) — it should dispatch the matching backend op instead.
+func TestDetectPS4007_ScalarBinopVJP(t *testing.T) {
+	src := `package p
+func expVJP(ctx *C, in, out []*T, a A, g *T) ([]*T, error) {
+	for i := 0; i < n; i++ {
+		ds[i] = gs[i] * ys[i]
+	}
+	return nil, nil
+}`
+	if got := countCat(scanSrc(t, src))["vjp-scalar-elementwise-binop"]; got != 1 {
+		t.Fatalf("want 1 vjp-scalar-elementwise-binop, got %d", got)
+	}
+}
+
+// …including the f32 conversion-wrapped form float32(float64(a)*float64(b)).
+func TestDetectPS4007_ConversionWrapped(t *testing.T) {
+	src := `package p
+func expVJP(ctx *C, in, out []*T, a A, g *T) ([]*T, error) {
+	for i := 0; i < n; i++ {
+		ds[i] = float32(float64(gs[i]) * float64(ys[i]))
+	}
+	return nil, nil
+}`
+	if got := countCat(scanSrc(t, src))["vjp-scalar-elementwise-binop"]; got != 1 {
+		t.Fatalf("want 1 (conversion-wrapped), got %d", got)
+	}
+}
+
+// Silent on MULTI-op bodies (tanh g·(1−y²)): they keep f64 intermediates and narrow once,
+// so composing f32 backend ops would diverge — they need a fused kernel, not a dispatch.
+func TestDetectPS4007_SilentOnMultiOp(t *testing.T) {
+	src := `package p
+func tanhVJP(ctx *C, in, out []*T, a A, g *T) ([]*T, error) {
+	for i := 0; i < n; i++ {
+		ds[i] = gs[i] * (1 - ys[i]*ys[i])
+	}
+	return nil, nil
+}`
+	if got := countCat(scanSrc(t, src))["vjp-scalar-elementwise-binop"]; got != 0 {
+		t.Fatalf("want 0 (multi-op needs a fused kernel), got %d", got)
+	}
+}
+
+// Silent outside the VJP layer: a backend kernel's scalar loop IS the implementation, not a
+// missed dispatch, so the *VJP name scope keeps it from being flagged.
+func TestDetectPS4007_SilentOnNonVJP(t *testing.T) {
+	src := `package p
+func mulKernelCPU(ds, gs, ys []float64, n int) {
+	for i := 0; i < n; i++ {
+		ds[i] = gs[i] * ys[i]
+	}
+}`
+	if got := countCat(scanSrc(t, src))["vjp-scalar-elementwise-binop"]; got != 0 {
+		t.Fatalf("want 0 (non-VJP kernel), got %d", got)
+	}
+}
+
+// Silent once the VJP already dispatches to the backend (the fixed expVJP shape).
+func TestDetectPS4007_SilentOnDispatch(t *testing.T) {
+	src := `package p
+func expVJP(ctx *C, in, out []*T, a A, g *T) ([]*T, error) {
+	res, err := backend.Execute(ctx, backend.OpMul, []*T{g, out[0]}, nil)
+	if err != nil {
+		return nil, err
+	}
+	return []*T{res[0]}, nil
+}`
+	if got := countCat(scanSrc(t, src))["vjp-scalar-elementwise-binop"]; got != 0 {
+		t.Fatalf("want 0 (already dispatches), got %d", got)
+	}
+}
+
+// PS6001 fires on the pre-fix Mirostat shape: fill the whole vocab, sort it all, consume a
+// break-bounded prefix — with no quickselect guard.
+func TestDetectPS6001_FullSortBoundedPrefix(t *testing.T) {
+	src := `package p
+func sample(probs []float64, mu float64) int {
+	n := len(probs)
+	idx := make([]int, n)
+	for i := range idx {
+		idx[i] = i
+	}
+	sortIdxDescByProb(idx, probs)
+	keep := 1
+	for keep < n && surpriseBits(probs[idx[keep]]) <= mu {
+		keep++
+	}
+	x := idx[0]
+	var cum float64
+	for _, i := range idx[:keep] {
+		cum += probs[i]
+		if cum >= 0.5 {
+			x = i
+			break
+		}
+	}
+	return x
+}`
+	if got := countCat(scanSrc(t, src))["full-sort-bounded-prefix"]; got != 1 {
+		t.Fatalf("want 1 full-sort-bounded-prefix, got %d", got)
+	}
+}
+
+// Silent on the optimized quickselect-then-fallback form (nucleusTopP): the retained full-sort
+// fallback must NOT be flagged.
+func TestDetectPS6001_SilentWithQuickselect(t *testing.T) {
+	src := `package p
+func nucleus(probs []float64, p float64) {
+	n := len(probs)
+	idx := make([]int, n)
+	for i := range idx {
+		idx[i] = i
+	}
+	quickselectIdxDesc(idx, probs, 512)
+	top := idx[:512]
+	sortIdxDescByProb(top, probs)
+	var cum float64
+	for _, i := range top {
+		cum += probs[i]
+		if cum >= p {
+			break
+		}
+	}
+	sortIdxDescByProb(idx, probs)
+}`
+	if got := countCat(scanSrc(t, src))["full-sort-bounded-prefix"]; got != 0 {
+		t.Fatalf("want 0 (quickselect-guarded), got %d", got)
+	}
+}
+
+// Silent on a pure full-sort helper that just returns the sorted prefix (no in-function break) —
+// the caller does the bounded consumption; the helper itself is the guarded fallback.
+func TestDetectPS6001_SilentOnSortHelper(t *testing.T) {
+	src := `package p
+func sortedKeep(probs []float64, n int, mu float64) []int {
+	idx := make([]int, n)
+	for i := range idx {
+		idx[i] = i
+	}
+	sortIdxDescByProb(idx, probs)
+	keep := 1
+	for keep < n && surpriseBits(probs[idx[keep]]) <= mu {
+		keep++
+	}
+	return idx[:keep]
+}`
+	if got := countCat(scanSrc(t, src))["full-sort-bounded-prefix"]; got != 0 {
+		t.Fatalf("want 0 (no break consumer), got %d", got)
+	}
+}
+
+// PS6002 fires on an innermost window loop re-testing a compound spatial bounds guard per tap
+// (the pre-fix conv2d col2im shape).
+func TestDetectPS6002_SpatialBoundsBranch(t *testing.T) {
+	src := `package p
+func col2im(dXf, dXcols []float64, kw, oy, ox, s, p, h, wd, base, kk, ci, ky int) {
+	iy := oy*s + ky - p
+	for kx := 0; kx < kw; kx++ {
+		ix := ox*s + kx - p
+		if iy >= 0 && iy < h && ix >= 0 && ix < wd {
+			dXf[ci*h+iy*wd+ix] += dXcols[base+kk]
+		}
+		kk++
+	}
+}`
+	if got := countCat(scanSrc(t, src))["spatial-bounds-branch"]; got != 1 {
+		t.Fatalf("want 1 spatial-bounds-branch, got %d", got)
+	}
+}
+
+// Silent once hoisted: the contiguous run has no per-tap compound guard.
+func TestDetectPS6002_SilentWhenHoisted(t *testing.T) {
+	src := `package p
+func col2im(dXf, dXcols []float64, kxLo, kxHi, rowBase, base, kk int) {
+	for i := kxLo; i < kxHi; i++ {
+		dXf[rowBase+i] += dXcols[base+kk+i]
+	}
+}`
+	if got := countCat(scanSrc(t, src))["spatial-bounds-branch"]; got != 0 {
+		t.Fatalf("want 0 (hoisted), got %d", got)
+	}
+}
+
+// Silent on a plain 1-2 term bounds check (not the spatial 4-term window shape).
+func TestDetectPS6002_SilentOnSimpleGuard(t *testing.T) {
+	src := `package p
+func f(a, b []float64, n int) {
+	for i := 0; i < n; i++ {
+		if i >= 0 && i < n {
+			a[i] = b[i]
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src))["spatial-bounds-branch"]; got != 0 {
+		t.Fatalf("want 0 (simple 2-term guard), got %d", got)
 	}
 }

@@ -41,19 +41,31 @@ func doraWeightKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs
 	if vs, vok := f64Data(v); vok {
 		if ms, mok := f64Data(m); mok {
 			if os, flush, ook := outF64(out); ook {
-				for j := range cols {
-					var ss float64
-					for i := 0; i < rows; i++ {
-						x := vs[i*cols+j]
-						ss += x * x
+				// Reblock the two column-strided passes (j-outer / i-inner, striding a
+				// row-major buffer by `cols` per step — cache-hostile, one column touches
+				// `rows` distinct lines) into row-major i-outer / j-inner sweeps with a
+				// per-column accumulator array. Each `nrm[j]` still sums i ascending, and
+				// the write keeps the exact `mj·v/n` expression (norm looked up per column,
+				// NOT pre-folded to mj/n which would round differently) — bit-identical.
+				nrm := make([]float64, cols)
+				for i := 0; i < rows; i++ {
+					vrow := vs[i*cols : i*cols+cols]
+					for j, x := range vrow {
+						nrm[j] += x * x
 					}
-					n := math.Sqrt(ss)
-					mj := ms[j]
-					for i := 0; i < rows; i++ {
-						if n > 0 {
-							os[i*cols+j] = mj * vs[i*cols+j] / n
+				}
+				for j := range nrm {
+					nrm[j] = math.Sqrt(nrm[j])
+				}
+				for i := 0; i < rows; i++ {
+					base := i * cols
+					vrow := vs[base : base+cols]
+					orow := os[base : base+cols]
+					for j, x := range vrow {
+						if n := nrm[j]; n > 0 {
+							orow[j] = ms[j] * x / n
 						} else {
-							os[i*cols+j] = 0
+							orow[j] = 0
 						}
 					}
 				}

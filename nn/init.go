@@ -36,14 +36,44 @@ func KaimingUniform(t *tensor.Tensor, fanIn int, seed uint64) {
 	fillUniform(t, -a, a, seed)
 }
 
-// Zeros fills t with 0 (the conventional bias init).
+// Zeros fills t with 0 (the conventional bias init). For a freshly allocated
+// contiguous, offset-0 tensor the whole backing slice is zeroed with the builtin
+// clear() — which lowers to runtime.memclrNoHeapPointers (a vectorized rep-store)
+// — instead of fillGen's per-element indirect closure call (~4M indirect calls +
+// float conversions for a large weight matrix, which the compiler cannot fold or
+// vectorize because gen() is opaque). Zero bytes are +0.0 for F32/F64 and the
+// +0.0 bit-pattern for F16/BF16, exactly what SetF64(0)/fillGen write, so the
+// result is bit-identical; d[:n] guards against any over-length backing slice.
+// Non-contiguous / offset views fall back to fillGen (correct through a strided
+// view).
 func Zeros(t *tensor.Tensor) {
+	if t.IsContiguous() && t.Offset() == 0 {
+		n := t.Numel()
+		switch t.Dtype() {
+		case tensor.F64:
+			clear(t.Storage().F64()[:n])
+			return
+		case tensor.F32:
+			clear(t.Storage().F32()[:n])
+			return
+		case tensor.F16, tensor.BF16:
+			clear(t.Storage().U16()[:n])
+			return
+		}
+	}
 	fillGen(t, func() float64 { return 0 })
 }
 
 func fillUniform(t *tensor.Tensor, lo, hi float64, seed uint64) {
-	rng := rand.New(rand.NewPCG(seed, 0x6b79a2c3d4e5f601))
-	fillGen(t, func() float64 { return lo + rng.Float64()*(hi-lo) })
+	// Hold the concrete *rand.PCG and inline the stdlib Float64 conversion so the draw
+	// is a direct call instead of an indirect one through rand.Rand's Source interface
+	// (non-inlinable, one per element). Bit-identical: rand.Rand.Float64() IS
+	// float64(src.Uint64()<<11>>11)/(1<<53) and rng wrapped this same PCG, so the uint64
+	// stream, the float, and every drawn value are unchanged, one draw per element.
+	pcg := rand.NewPCG(seed, 0x6b79a2c3d4e5f601)
+	fillGen(t, func() float64 {
+		return lo + (float64(pcg.Uint64()<<11>>11)/(1<<53))*(hi-lo)
+	})
 }
 
 // fillGen writes gen() into every element of t in row-major (flat) order.

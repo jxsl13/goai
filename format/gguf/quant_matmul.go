@@ -76,7 +76,44 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 	// path — fusing there would re-dequantize the row for every activation row.)
 	if qt == Q8_0 && m == 1 && xf32 != nil {
 		row := xf32[:k]
-		for ni := range n {
+		// Register-block the OUTPUT (weight-row) loop by 4: m==1 so the single activation
+		// row is shared across all n outputs — reuse each row element's load+f64-convert
+		// across 4 weight rows (and the fixed-length block subslices drop the per-element
+		// bounds check). This is the dual of the m>1 unroll-and-jam. Bit-exact: each output
+		// keeps its own accumulator, wv=d·int8(q) is computed as before, ascending-k order
+		// preserved. Scalar tail for n%4.
+		ni := 0
+		for ; ni+4 <= n; ni += 4 {
+			rb0 := weight[(ni+0)*rowBytes:]
+			rb1 := weight[(ni+1)*rowBytes:]
+			rb2 := weight[(ni+2)*rowBytes:]
+			rb3 := weight[(ni+3)*rowBytes:]
+			var a0, a1, a2, a3 float64
+			for b := 0; b*blockElems < k; b++ {
+				o := b * 34
+				d0 := f16ToF32(binary.LittleEndian.Uint16(rb0[o : o+2]))
+				d1 := f16ToF32(binary.LittleEndian.Uint16(rb1[o : o+2]))
+				d2 := f16ToF32(binary.LittleEndian.Uint16(rb2[o : o+2]))
+				d3 := f16ToF32(binary.LittleEndian.Uint16(rb3[o : o+2]))
+				q0 := rb0[o+2 : o+34]
+				q1 := rb1[o+2 : o+34]
+				q2 := rb2[o+2 : o+34]
+				q3 := rb3[o+2 : o+34]
+				rrow := row[b*blockElems : b*blockElems+blockElems]
+				for i := 0; i < blockElems; i++ {
+					xv := float64(rrow[i])
+					a0 += xv * float64(d0*float32(int8(q0[i])))
+					a1 += xv * float64(d1*float32(int8(q1[i])))
+					a2 += xv * float64(d2*float32(int8(q2[i])))
+					a3 += xv * float64(d3*float32(int8(q3[i])))
+				}
+			}
+			outf[ni+0] = float32(a0)
+			outf[ni+1] = float32(a1)
+			outf[ni+2] = float32(a2)
+			outf[ni+3] = float32(a3)
+		}
+		for ; ni < n; ni++ {
 			rowBits := weight[ni*rowBytes : (ni+1)*rowBytes]
 			var acc float64
 			for b := 0; b*blockElems < k; b++ {
@@ -193,25 +230,78 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 			return nil, fmt.Errorf("gguf: QMatMul unsupported quant type %d", qt)
 		}
 		wf := scratch
-		for mi := range m {
-			var acc float64
-			switch {
-			case xf32 != nil:
+		// Unroll-and-jam the activation-row (mi) loop by 4: the dequantized weight row wf is
+		// invariant across mi, so 4 independent f64 accumulators break the single-acc FADD
+		// dependency chain (latency-bound → throughput-bound) AND load+convert each wf[ki]
+		// once for 4 rows. Bit-exact: each output keeps its OWN accumulator summing ascending
+		// ki — no reassociation of any individual dot (the §V10 ascending-k order holds). The
+		// dtype switch is hoisted out of the mi loop (loop-invariant). M1 decode is unaffected
+		// (the tail handles m<4).
+		switch {
+		case xf32 != nil:
+			mi := 0
+			for ; mi+4 <= m; mi += 4 {
+				r0 := xf32[(mi+0)*k : (mi+0)*k+k]
+				r1 := xf32[(mi+1)*k : (mi+1)*k+k]
+				r2 := xf32[(mi+2)*k : (mi+2)*k+k]
+				r3 := xf32[(mi+3)*k : (mi+3)*k+k]
+				var a0, a1, a2, a3 float64
+				for ki, wv := range wf {
+					w := float64(wv)
+					a0 += float64(r0[ki]) * w
+					a1 += float64(r1[ki]) * w
+					a2 += float64(r2[ki]) * w
+					a3 += float64(r3[ki]) * w
+				}
+				outf[(mi+0)*n+ni] = float32(a0)
+				outf[(mi+1)*n+ni] = float32(a1)
+				outf[(mi+2)*n+ni] = float32(a2)
+				outf[(mi+3)*n+ni] = float32(a3)
+			}
+			for ; mi < m; mi++ {
 				row := xf32[mi*k : mi*k+k]
+				var acc float64
 				for ki, wv := range wf {
 					acc += float64(row[ki]) * float64(wv)
 				}
-			case xf64 != nil:
+				outf[mi*n+ni] = float32(acc)
+			}
+		case xf64 != nil:
+			mi := 0
+			for ; mi+4 <= m; mi += 4 {
+				r0 := xf64[(mi+0)*k : (mi+0)*k+k]
+				r1 := xf64[(mi+1)*k : (mi+1)*k+k]
+				r2 := xf64[(mi+2)*k : (mi+2)*k+k]
+				r3 := xf64[(mi+3)*k : (mi+3)*k+k]
+				var a0, a1, a2, a3 float64
+				for ki, wv := range wf {
+					w := float64(wv)
+					a0 += r0[ki] * w
+					a1 += r1[ki] * w
+					a2 += r2[ki] * w
+					a3 += r3[ki] * w
+				}
+				outf[(mi+0)*n+ni] = float32(a0)
+				outf[(mi+1)*n+ni] = float32(a1)
+				outf[(mi+2)*n+ni] = float32(a2)
+				outf[(mi+3)*n+ni] = float32(a3)
+			}
+			for ; mi < m; mi++ {
 				row := xf64[mi*k : mi*k+k]
+				var acc float64
 				for ki, wv := range wf {
 					acc += row[ki] * float64(wv)
 				}
-			default:
+				outf[mi*n+ni] = float32(acc)
+			}
+		default:
+			for mi := range m {
+				var acc float64
 				for ki := range k {
 					acc += x.AtF64(mi, ki) * float64(wf[ki])
 				}
+				outf[mi*n+ni] = float32(acc)
 			}
-			outf[mi*n+ni] = float32(acc)
 		}
 	}
 	return out, nil

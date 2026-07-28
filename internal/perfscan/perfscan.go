@@ -201,14 +201,17 @@ var checks = []check{
 	{"PS4004", "scalar-copy-loop", "an element-by-element slice copy in a loop where a bulk copy would do", false},
 	{"PS4005", "per-element-odometer", "an N-D coordinate odometer ticked once per element instead of once per run", false},
 	{"PS4006", "row-slice-matrix", "a [][]T matrix built row-by-row and then indexed inside a nested loop", false},
+	{"PS4007", "vjp-scalar-elementwise-binop", "a *VJP with a scalar single-op elementwise loop (dst[i]=a[i]∘b[i]) that a SIMD backend op would vectorize+parallelize, and no backend.Execute dispatch", false},
 	{"PS4008", "serial-dot-matmul", "a matmul whose innermost loop is a serial scalar dot accumulator — latency-bound where an ikj/axpy form has independent accumulators", false},
 	// PS5xxx — arithmetic
 	{"PS5001", "loop-invariant-divide", "a divide by a loop-invariant scalar on every element", false},
 	{"PS5002", "symmetric-accumulation", "a nested loop accumulating a full symmetric matrix (m[i][j] += x[i]*x[j]) where one triangle + mirror would halve the work", false},
 	{"PS5003", "inner-invariant-recompute", "an inner-loop expression that varies with the INNER index but not the outer one — recomputed once per outer iteration where a precomputed row would do", false},
 	// PS6xxx — verification gaps
+	{"PS6001", "full-sort-bounded-prefix", "a full-vocabulary descending index sort whose result feeds an early-breaking (threshold-bounded) prefix consumer, with no quickselect/pre-filter guard — an O(n log n) sort for an O(prefix) need", false},
+	{"PS6002", "spatial-bounds-branch", "an innermost window/kernel loop re-testing a compound spatial bounds guard (iy>=0 && iy<h && ix>=0 && ix<wd) per tap, where the in-bounds taps form one contiguous run the guard can be hoisted around", false},
 	{"PS6003", "partial-fast-path-coverage", "a fast path that bypasses the general path for only SOME members of a variant family a switch in the same function enumerates — the uncovered variants silently pay the slow path", false},
-	{"PS6001", "unverified-dual-path", "a devirtualized fast path with a generic fallback — a bit-identity claim needing a bit-exact test", true},
+	{"PS6004", "unverified-dual-path", "a devirtualized fast path with a generic fallback — a bit-identity claim needing a bit-exact test", true},
 }
 
 // catToID indexes the registry for O(1) id lookup at report time.
@@ -1634,7 +1637,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 		}
 	}
 
-	// PS6001: a function carrying BOTH a devirtualized fast path (guarded by a
+	// PS6004: a function carrying BOTH a devirtualized fast path (guarded by a
 	// configured flat-view helper such as f64Data/outF64) and a generic fallback.
 	// That structure is a bit-identity CLAIM: the two arms must agree exactly, and
 	// the claim is usually written in a comment rather than in a test.
@@ -1748,6 +1751,9 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	out = append(out, indirectKeyComparatorFindings(fset, fn)...)
 	out = append(out, innerInvariantRecomputeFindings(fset, fn)...)
 	out = append(out, partialFastPathFindings(fset, fn)...)
+	out = append(out, vjpScalarBinopFindings(fset, fn)...)
+	out = append(out, fullSortBoundedPrefixFindings(fset, fn)...)
+	out = append(out, spatialBoundsBranchFindings(fset, fn)...)
 	return out
 }
 
@@ -1996,7 +2002,7 @@ func main() {
 		"per-element-closure":                ns.visitors,
 		"alloc-in-loop":                      ns.allocators,
 		"scalar-transcendental-vectorizable": ns.vectorized,
-		// PS6001 needs the accessor set to see a generic fallback arm: with
+		// PS6004 needs the accessor set to see a generic fallback arm: with
 		// elementAccessors empty, hasAccessorFallback is never set and the check
 		// reports zero on any input. Same false assurance, same warning.
 		"unverified-dual-path": ns.accessors,
@@ -2707,7 +2713,7 @@ func dualPathFunc(fn *ast.FuncDecl, ns nameSets) (string, bool) {
 	// neither the helper test nor the same-function accessor test above can see it.
 	// This shape was found by shipping one: tensor.gatherHalfTyped devirtualizes four
 	// half-cast arms and returns false for everything else, a 3.19x dual path that
-	// PS6001 was blind to. Blindness in a rule whose entire job is to demand a
+	// PS6004 was blind to. Blindness in a rule whose entire job is to demand a
 	// bit-identity proof is the worst kind — it reads as "nothing to verify here".
 	if name, ok := decliningTypedFastPath(fn); ok {
 		return name, true
@@ -3866,4 +3872,275 @@ func constName(e ast.Expr) string {
 		}
 	}
 	return ""
+}
+
+// unwrapNumConv strips enclosing numeric conversions (float32(x), float64(x), etc.) so a
+// conversion-wrapped index expression like float64(gs[i]) is seen as the underlying gs[i].
+func unwrapNumConv(e ast.Expr) ast.Expr {
+	for {
+		call, ok := e.(*ast.CallExpr)
+		if !ok || len(call.Args) != 1 {
+			return e
+		}
+		id, ok := call.Fun.(*ast.Ident)
+		if !ok {
+			return e
+		}
+		switch id.Name {
+		case "float32", "float64", "int", "int32", "int64", "uint32", "uint64", "byte":
+			e = call.Args[0]
+		default:
+			return e
+		}
+	}
+}
+
+// indexBase returns the slice identifier of an s[i]-style index expression whose index
+// mentions loop var iName (after stripping numeric conversions): float64(gs[i]) → ("gs", true).
+func indexBase(e ast.Expr, iName string) (string, bool) {
+	ix, ok := unwrapNumConv(e).(*ast.IndexExpr)
+	if !ok || !exprMentions(ix.Index, iName) {
+		return "", false
+	}
+	if id, ok := ix.X.(*ast.Ident); ok {
+		return id.Name, true
+	}
+	return "?", true
+}
+
+// vjpScalarBinopFindings flags PS4007 — a reverse-mode *VJP whose hot loop is a SINGLE
+// elementwise binary op dst[i] = a[i] ∘ b[i] (∘ ∈ *,+,-,/) written as a scalar Go loop
+// instead of dispatching the matching backend op. gc does not autovectorize, so on the
+// GOEXPERIMENT=simd build the loop stays scalar+single-core while backend.Execute(ctx,
+// OpMul/OpAdd/…) routes to the 8-wide AVX kernel + parallel(). A LONE IEEE binop is
+// correctly-rounded regardless of vectorization/chunking, so the dispatch is bit-exact —
+// this is exactly the expVJP → OpMul win. Scoped to *VJP names (the autograd dispatch
+// layer); backend kernels are excluded (their scalar loop IS the implementation). The
+// single-statement guard is essential: multi-op VJP bodies (tanh g·(1−y²), sigmoid
+// g·y·(1−y)) keep f64 intermediates and narrow once — composing f32 backend ops would
+// diverge, so they need a fused backward kernel and are NOT flagged.
+func vjpScalarBinopFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Name == nil || !strings.HasSuffix(fn.Name.Name, "VJP") || fn.Body == nil {
+		return nil
+	}
+	// A VJP that already dispatches to the backend is fine.
+	dispatches := false
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		if sel, ok := n.(*ast.SelectorExpr); ok && sel.Sel.Name == "Execute" {
+			if id, ok := sel.X.(*ast.Ident); ok && id.Name == "backend" {
+				dispatches = true
+				return false
+			}
+		}
+		return true
+	})
+	if dispatches {
+		return nil
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		iName, body, ok := loopVarBody(n)
+		if !ok || body == nil || len(body.List) != 1 {
+			return true
+		}
+		as, ok := body.List[0].(*ast.AssignStmt)
+		if !ok || len(as.Lhs) != 1 || len(as.Rhs) != 1 || as.Tok != token.ASSIGN {
+			return true
+		}
+		if _, ok := indexBase(as.Lhs[0], iName); !ok { // LHS must be dst[i]
+			return true
+		}
+		bin, ok := unwrapNumConv(as.Rhs[0]).(*ast.BinaryExpr)
+		if !ok {
+			return true
+		}
+		op, ok := binopBackendOp[bin.Op]
+		if !ok {
+			return true
+		}
+		aBase, aok := indexBase(bin.X, iName)
+		bBase, bok := indexBase(bin.Y, iName)
+		if !aok || !bok {
+			return true
+		}
+		out = append(out, finding{
+			pos:      fset.Position(n.Pos()),
+			category: "vjp-scalar-elementwise-binop",
+			msg: fmt.Sprintf("VJP %s has a scalar elementwise loop dst[%s] = %s[%s] %s %s[%s] — gc does"+
+				" not autovectorize, so on the simd build it stays scalar+single-core. A lone IEEE %s is"+
+				" correctly-rounded regardless of vectorization, so dispatch backend.Execute(ctx, backend.Op%s,"+
+				" …) to reach the 8-wide SIMD + parallel kernel (bit-exact; see expVJP → OpMul). Applies ONLY"+
+				" to single-op bodies — multi-op VJPs (tanh, sigmoid) need a fused kernel and are not flagged.",
+				fn.Name.Name, iName, aBase, iName, bin.Op.String(), bBase, iName, op[1], op[0]),
+		})
+		return false
+	})
+	return out
+}
+
+// fullSortBoundedPrefixFindings flags PS6001 — a full-vocabulary descending index sort whose
+// result feeds an early-breaking (threshold-bounded) prefix, e.g. sorting all V tokens to take
+// the top-p / surprise-≤-μ / top-k prefix. When only a small prefix is consumed, an O(V) filter
+// (or quickselect) into the small candidate set + sorting just those is O(V + k log k) instead
+// of O(V log V). Shipped: Mirostat prob pre-filter, nucleusTopP quickselect (§T627).
+//
+// Fires only when ALL hold, keeping already-optimized code silent:
+//   - a full-index fill (S[i] = i) initializes the sorted slice → it is the WHOLE vocabulary;
+//   - the function calls sortIdxDescByProb / sortIdxDescByKey on that slice;
+//   - a bounded consumer follows — a for-loop with an early break (the prefix cutoff);
+//   - NO quickselectIdxDesc guard — its presence marks the optimized top-K-then-fallback form
+//     (nucleusTopP), whose retained full-sort fallback must NOT be flagged.
+//
+// A pure full-sort HELPER that just returns the sorted slice (no in-function break consumer,
+// e.g. Mirostat's sortedKeep fallback) is likewise silent.
+func fullSortBoundedPrefixFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil {
+		return nil
+	}
+	guarded, hasBreak := false, false
+	var sortCall *ast.CallExpr
+	var sortSlice string
+	fullFill := map[string]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.CallExpr:
+			if id, ok := x.Fun.(*ast.Ident); ok {
+				switch id.Name {
+				case "quickselectIdxDesc":
+					guarded = true
+				case "sortIdxDescByProb", "sortIdxDescByKey":
+					if len(x.Args) >= 1 {
+						if s, ok := x.Args[0].(*ast.Ident); ok {
+							sortCall, sortSlice = x, s.Name
+						}
+					}
+				}
+			}
+		case *ast.BranchStmt:
+			if x.Tok == token.BREAK {
+				hasBreak = true
+			}
+		case *ast.AssignStmt:
+			// full-index fill: S[i] = i
+			if len(x.Lhs) == 1 && len(x.Rhs) == 1 {
+				ix, ok1 := x.Lhs[0].(*ast.IndexExpr)
+				rid, ok2 := x.Rhs[0].(*ast.Ident)
+				if ok1 && ok2 {
+					s, sok := ix.X.(*ast.Ident)
+					iid, iok := ix.Index.(*ast.Ident)
+					if sok && iok && iid.Name == rid.Name {
+						fullFill[s.Name] = true
+					}
+				}
+			}
+		}
+		return true
+	})
+	if sortCall == nil || guarded || !hasBreak || !fullFill[sortSlice] {
+		return nil
+	}
+	return []finding{{
+		pos:      fset.Position(sortCall.Pos()),
+		category: "full-sort-bounded-prefix",
+		msg: fmt.Sprintf("full-vocabulary descending sort of %q (initialized S[i]=i) feeds an"+
+			" early-breaking prefix — an O(n log n) sort for an O(prefix) need. If only a"+
+			" threshold-bounded prefix is consumed (top-p mass, surprise ≤ μ, top-k), pre-filter"+
+			" to the small candidate set in O(n) (or quickselect) and sort only those; guard the"+
+			" full sort as a fallback. Bit-exact for n ≥ radixSortCutoff (stable radix; sort the"+
+			" candidates with SortStableFunc to match the tie order). Shipped: Mirostat, nucleusTopP"+
+			" §T627. Verify the consumer is genuinely bounded, then benchmark.", sortSlice),
+	}}
+}
+
+// andedComparisons counts the relational comparisons (<, >, <=, >=) joined by && in a boolean
+// expression tree — the shape of a compound spatial bounds guard (iy>=0 && iy<h && ix>=0 && ix<wd).
+func andedComparisons(e ast.Expr) int {
+	switch x := e.(type) {
+	case *ast.ParenExpr:
+		return andedComparisons(x.X)
+	case *ast.BinaryExpr:
+		switch x.Op {
+		case token.LAND:
+			return andedComparisons(x.X) + andedComparisons(x.Y)
+		case token.LSS, token.GTR, token.LEQ, token.GEQ:
+			return 1
+		}
+	}
+	return 0
+}
+
+// loopHasNested reports whether a loop body contains another for/range loop (so the outer is
+// not the innermost).
+func loopHasNested(body *ast.BlockStmt) bool {
+	nested := false
+	for _, s := range body.List {
+		ast.Inspect(s, func(n ast.Node) bool {
+			switch n.(type) {
+			case *ast.ForStmt, *ast.RangeStmt:
+				nested = true
+				return false
+			}
+			return true
+		})
+	}
+	return nested
+}
+
+// stmtHasIndexedTarget reports whether the statement is a single assignment/compound-assignment
+// whose LHS is an indexed expression (a[i] = … or a[i] += …) — one scatter/gather move.
+func stmtHasIndexedTarget(s ast.Stmt) bool {
+	as, ok := s.(*ast.AssignStmt)
+	if !ok || len(as.Lhs) != 1 {
+		return false
+	}
+	_, ok = as.Lhs[0].(*ast.IndexExpr)
+	return ok
+}
+
+// spatialBoundsBranchFindings flags PS6002 — an INNERMOST window/kernel loop whose body is a
+// single compound-bounds `if` (≥3 anded relational comparisons: the iy>=0 && iy<h && ix>=0 &&
+// ix<wd shape) guarding one indexed load/store. In a convolution / pooling im2col-style loop the
+// index steps by 1 per tap, so the in-bounds taps form ONE contiguous run and the guard hoists
+// out of the inner loop into a [lo,hi) bulk copy / scatter-add — branch-free and bit-identical
+// (padding taps contribute nothing). Shipped: conv2d forward im2colFillBand + backward col2im.
+func spatialBoundsBranchFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil {
+		return nil
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		_, body, ok := loopVarBody(n)
+		if !ok || body == nil || loopHasNested(body) {
+			return true
+		}
+		for _, stmt := range body.List {
+			ifs, ok := stmt.(*ast.IfStmt)
+			if !ok || ifs.Else != nil || ifs.Init != nil {
+				continue
+			}
+			if andedComparisons(ifs.Cond) < 3 || len(ifs.Body.List) != 1 {
+				continue
+			}
+			if !stmtHasIndexedTarget(ifs.Body.List[0]) {
+				continue
+			}
+			out = append(out, finding{
+				pos:      fset.Position(ifs.Pos()),
+				category: "spatial-bounds-branch",
+				msg: "innermost window/kernel loop re-tests a compound spatial bounds guard per tap" +
+					" (≥3 anded comparisons) around a single indexed move. If the index steps by 1" +
+					" per tap the in-bounds taps form one contiguous run — hoist the guard out into a" +
+					" [lo,hi) bulk copy / scatter-add (branch-free, bit-identical: padding taps add" +
+					" nothing). See conv2d im2colFillBand / col2im. Verify the stride-1 assumption.",
+			})
+			return false
+		}
+		return true
+	})
+	return out
+}
+
+var binopBackendOp = map[token.Token][2]string{
+	token.MUL: {"Mul", "multiply"}, token.ADD: {"Add", "add"},
+	token.SUB: {"Sub", "subtract"}, token.QUO: {"Div", "divide"},
 }

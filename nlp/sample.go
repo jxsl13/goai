@@ -1178,8 +1178,21 @@ func (s *Sampler) distInto(dst, logits []float64) []float64 {
 	}
 	defer float64ScratchPool.Put(z) // z is scratch; dst holds the returned distribution
 	invT := 1 / s.Temperature       // reciprocal-multiply: one divide, then a mul per lane
+	// Fuse the stable-softmax max-scan into the scale pass: track the running max of
+	// z here instead of a separate full pass over the vocabulary before exp. The
+	// intervening filters that run before softmax only ever LOWER values to −Inf
+	// (topNSigmaMask masks below max−n·σ; top-k's quickselect masks below the k-th
+	// largest) and never touch the arg-max, so max(z) is unchanged by them — the
+	// pre-filter max computed here equals the post-filter max both branches need,
+	// and the top-k branch's kept-set max is this same global max (the max is always
+	// ≥ any keep threshold). Bit-identical m, one fewer O(n) pass over z.
+	m := math.Inf(-1)
 	for i, v := range logits {
-		z[i] = v * invT
+		zi := v * invT
+		z[i] = zi
+		if zi > m {
+			m = zi
+		}
 	}
 
 	// top-nσ (Tang et al. 2024 arXiv:2411.07641, see sample_topnsigma.go): mask
@@ -1218,15 +1231,13 @@ func (s *Sampler) distInto(dst, logits []float64) []float64 {
 		// scratch's contents are spent; reuse its backing array as the compact keep
 		// buffer (no extra pool Get) — cap ≥ n ⇒ the append below never reallocates.
 		keep := scratch[:0]
-		m := math.Inf(-1)
 		for _, v := range z {
 			if v >= kv { // ≥ threshold ⇒ all boundary ties kept, matching the old mask
 				keep = append(keep, v)
-				if v > m {
-					m = v // the global max is always ≥ kv, so it is always in the set
-				}
 			}
 		}
+		// m (the global max, computed in the scale pass) is the kept set's max too: the
+		// global max is always ≥ kv, so it is always in the set — same shift as before.
 		// exp over the compact kept set (in place; elementwise, aliasing-safe), returns
 		// Σ. Masked lanes never enter the sum, so it equals the full-vocab Σ up to the
 		// exp-sum reassociation the Dist f64 tolerance (§sample_test 1e-12) already rides.
@@ -1245,13 +1256,8 @@ func (s *Sampler) distInto(dst, logits []float64) []float64 {
 		}
 		float64ScratchPool.Put(scratch)
 	} else {
-		// stable softmax over the full vocabulary (no top-k truncation)
-		m := math.Inf(-1)
-		for _, v := range z {
-			if v > m {
-				m = v
-			}
-		}
+		// stable softmax over the full vocabulary (no top-k truncation); m is the
+		// vocabulary max already computed in the scale pass above.
 		// dst[i] = exp(z[i]-m), returns Σ — 4-wide AVX2 f64 exp on the SIMD build
 		// (the exp was ~26% of large-vocab Dist), scalar otherwise; rides §sample_test 1e-12.
 		sum := simd.ExpSumF64(dst, z, m)

@@ -23,7 +23,7 @@ perfscan detects the problems **independent of any one repo**. Eighteen of the t
 checks are pure language/stdlib shapes and run on any Go module with no configuration
 (PS1003, PS2002–PS2007, PS3001–PS3003, PS4001, PS4003–PS4006, PS4008, PS5001, PS5002). The five
 **domain** checks — `PS1001` per-element-dispatch, `PS1002` per-element-closure, `PS2001`
-alloc-in-loop, `PS4002` scalar-transcendental-vectorizable, `PS6001` unverified-dual-path
+alloc-in-loop, `PS4002` scalar-transcendental-vectorizable, `PS6004` unverified-dual-path
 — key on a project's own vocabulary (its element accessors, allocators, fast-path helpers
 and vectorized kernels), which lives in a **JSON config, not the engine**. With no config
 those five stay silent — and say so: each one whose vocabulary is empty is named in a
@@ -729,7 +729,7 @@ set of formats. That last filter suppresses nothing on its own, since an all-lit
 has no member matching the guard; what it does is keep a bare literal out of the reported
 variant list when a switch mixes the two. Probing is what established the distinction.
 
-## PS6001 — a dual-path kernel whose bit-identity claim is unverified  *(scanner: static)*
+## PS6004 — a dual-path kernel whose bit-identity claim is unverified  *(scanner: static)*
 A function carrying a devirtualized fast path (guarded by a configured
 `fastPathHelpers` entry in comma-ok form, or a `switch x.Dtype()` with a `default`
 arm) AND a generic accessor fallback. That structure is a bit-identity CLAIM, and
@@ -749,7 +749,7 @@ discriminates on concrete storage rather than through a configured comma-ok help
 the generic arm lives in the *caller*, reached by returning `false`. Neither the
 helper test nor the same-function accessor test sees it. This was found the hard way —
 by shipping one: `tensor.gatherHalfTyped` devirtualizes four half-cast arms for a
-**3.19×** win, and PS6001 reported nothing. A verification rule that goes quiet on a
+**3.19×** win, and PS6004 reported nothing. A verification rule that goes quiet on a
 real dual path is worse than no rule, because the silence reads as "nothing to prove".
 Detected by: a `bool` result, **two or more** comma-ok assertions to *slices of numeric
 types*, and a `return false`.

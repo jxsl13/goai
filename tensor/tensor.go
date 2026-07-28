@@ -525,12 +525,12 @@ func (t *Tensor) Contiguous() *Tensor {
 // because the point is to mirror the original expression rather than to reason about
 // when a widening may be elided. TestGatherGenericMatchesOdometerExact holds every arm
 // to the frozen per-element oracle at tolerance 0, across all six dtype pairs — which
-// is exactly the proof PS6001 exists to demand, so the finding is accepted here rather
+// is exactly the proof PS6004 exists to demand, so the finding is accepted here rather
 // than left open. Every arm is mutation-probed by CORRUPTION, not by disabling it:
 // disabling an arm falls back to the accessor path, which IS the oracle, so it would
 // stay green and prove nothing.
 //
-//perfscan:ignore PS6001 bit-identity proven by TestGatherGenericMatchesOdometerExact
+//perfscan:ignore PS6004 bit-identity proven by TestGatherGenericMatchesOdometerExact
 func gatherHalfTyped(out, t *Tensor, n int) bool {
 	nd := len(t.shape)
 	if nd == 0 || t.shape[nd-1] <= 0 || n%t.shape[nd-1] != 0 {
