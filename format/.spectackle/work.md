@@ -116,3 +116,29 @@ GATE BUILT FIRST, AND IT FOUND A PRE-EXISTING HOLE: every QMatMul test compared 
 LIMIT OF THAT GATE, recorded so it is not over-trusted: reassociating the accumulation is INVISIBLE here, because a float64 accumulator narrows to a float32 output and discards the difference. A deliberate block-order reversal stayed green. The gate covers element mapping, sign and scale selection — the failure modes this path actually has — not summation order.
 
 GENERALIZED as perfscan PS6003 (partial-fast-path-coverage). REMAINING: Q2_K, Q3_K, Q5_K are still uncovered and still unmeasured — the aggressive quants, lower deployment share, each needs its own benchmark before anyone fuses it.
+
+## R-01KYMWGGNMER3B16KBXB8JY18H Row-parallel QMatMul measures 1.70x on decode, bit-identical — blocked on a threading-policy decision
+kind: research
+state: draft
+created: 2026-07-28
+
+After the fusion campaign closed, a re-profile of QuantMamba2 DecodeStep shows gguf.dotQ4_KRow at 80.95% flat / 82.31% cumulative. The fused dot IS the decode step now; nothing else is close.
+
+The remaining structural win is that the n output rows are INDEPENDENT dots. Each writes its own index and shares no mutable state, so splitting the row range changes no accumulation — bit-identical by construction, not by measurement.
+
+PROTOTYPED AND MEASURED, interleaved, 3 alternations:
+  SERIAL   536.3-547.6us
+  PARALLEL 315.3-318.7us
+  1.70x on the whole decode step. Arms 2.2% and 1.1%.
+
+Only 1.70x on a 12-core host, not 12x, and the reasons are understood: a threshold keeps small matmuls serial (the tied Head at n=64,k=256 is 16384 units, under the crossover), the SSD scan and norms stay serial, and each barrier costs a park.
+
+THRESHOLD taken from backend/cpu's parThreshold, 1<<15 = 32768 units of rows x k — the measured M-series crossover below which pool dispatch exceeds the compute saved. In the benchmark model InProj (n=552, k=256 = 141312) and OutProj (65536) cross it; the Head does not.
+
+NOT SHIPPED, and the reason is not the measurement. This changes threading behavior for every caller of QMatMul, library-wide. A server already running requests concurrently would go from N goroutines to N x GOMAXPROCS, which is a deployment-visible regression that no benchmark on this host would show. That is a standing policy question, not a local optimization, so it goes to a decision rather than being assumed.
+
+PRECEDENT CUTS BOTH WAYS: format/gguf ALREADY spawns a bounded worker pool in ReadFile to decode tensors concurrently, so the package spawning goroutines is not new. But ReadFile is a one-shot load-time call, while QMatMul is the innermost hot path called several times per token — the nesting exposure is different in kind. backend/cpu solved the same problem with a bounded pool plus a guard against calling parallelWork from inside a worker, and its comments record that naive wg.Wait parking cost a full M-stop/restart per barrier across the ~16k barriers a 500-token decode issues.
+
+OPTIONS for the decision: (a) land as prototyped with the threshold, accepting nested oversubscription; (b) route through a bounded pool with an in-worker guard, as backend/cpu does, which means either lifting that pool somewhere both packages can use or duplicating it; (c) leave serial and let the caller parallelize, which forfeits the 1.70x for single-stream decode — the latency-sensitive case.
+
+Prototype is reproducible: fusedRows helper over the existing per-row dot functions, guarded by workers>1 and n*k >= 1<<15.
