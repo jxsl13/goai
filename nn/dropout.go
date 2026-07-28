@@ -31,6 +31,7 @@ type Dropout struct {
 	Rate     float64 // probability of dropping a unit, in [0,1)
 	Training bool    // when false, Forward is the identity (inference)
 	rng      *rand.Rand
+	pcg      *rand.PCG // concrete source shared with rng; drawn directly in the hot mask loop
 }
 
 // NewDropout builds a dropout layer with the given drop rate, in training mode.
@@ -39,7 +40,8 @@ func NewDropout(rate float64, seed uint64) *Dropout {
 	if rate < 0 || rate >= 1 {
 		panic(fmt.Sprintf("nn: dropout rate %g out of [0,1)", rate))
 	}
-	return &Dropout{Rate: rate, Training: true, rng: rand.New(rand.NewPCG(seed, 0xd709))}
+	pcg := rand.NewPCG(seed, 0xd709)
+	return &Dropout{Rate: rate, Training: true, rng: rand.New(pcg), pcg: pcg}
 }
 
 // Train and Eval toggle the mode. In eval mode Forward is the identity.
@@ -67,16 +69,21 @@ func (d *Dropout) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tenso
 	// only survivors are written. The RNG is drawn once per element in flat order in
 	// EVERY branch, so the Bernoulli sequence — and the mask — is bit-identical to the
 	// generic fallback (F16/BF16/strided).
+	// d.rng.Float64() routes through the rand.Source INTERFACE field (an indirect,
+	// non-inlinable call per element). Draw from the concrete *rand.PCG directly and inline
+	// the stdlib float64 conversion so PCG's arithmetic folds into the loop. Bit-identical:
+	// rand.Rand.Float64() IS float64(src.Uint64()<<11>>11)/(1<<53) and rng wraps this same
+	// pcg, so one Uint64/element in flat order yields the same Bernoulli sequence + mask.
 	if mf := flatF64(mask); mf != nil {
 		for i := range mf {
-			if d.rng.Float64() >= d.Rate {
+			if float64(d.pcg.Uint64()<<11>>11)/(1<<53) >= d.Rate {
 				mf[i] = scale
 			}
 		}
 	} else if mf := flatF32(mask); mf != nil {
 		s32 := float32(scale)
 		for i := range mf {
-			if d.rng.Float64() >= d.Rate {
+			if float64(d.pcg.Uint64()<<11>>11)/(1<<53) >= d.Rate {
 				mf[i] = s32
 			}
 		}
