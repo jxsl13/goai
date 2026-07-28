@@ -4,7 +4,26 @@ import (
 	"fmt"
 	"math"
 	"math/rand/v2"
+	"sync"
 )
+
+// wmScratch holds the reusable per-call scratch of BiasLogits: the identity
+// permutation, the transposition log, and a PCG/Rand pair (re-seeded per call).
+// Pooled across calls — seedGreen re-seeds the pcg every call so the draw stream is
+// independent of buffer provenance, and restoreIdentity returns perm to the identity
+// before it goes back to the pool, so a same-length perm pulled from the pool is
+// already identity (skips the O(V) re-init). Sized lazily to VocabSize.
+type wmScratch struct {
+	perm  []int
+	swaps []int
+	pcg   *rand.PCG
+	rng   *rand.Rand
+}
+
+var wmScratchPool = sync.Pool{New: func() any {
+	pcg := rand.NewPCG(0, 0)
+	return &wmScratch{pcg: pcg, rng: rand.New(pcg)}
+}}
 
 // LLM watermarking (Kirchenbauer, Geiping, Wen, Katz, Miers & Goldstein 2023, "A Watermark for
 // Large Language Models", ICML, arXiv:2301.10226). A watermark biases generation toward a
@@ -163,16 +182,24 @@ func (w *Watermark) BiasLogits(logits []float64, prevToken int) ([]float64, erro
 	// Fisher–Yates) — O(g) writes to distinct indices, no VocabSize bool mask.
 	// Same index set and single +δ per green token as the mask form, so the
 	// result is bit-identical.
-	perm := make([]int, w.VocabSize)
-	for i := range perm {
-		perm[i] = i
+	sc := wmScratchPool.Get().(*wmScratch)
+	if len(sc.perm) != w.VocabSize { // fresh or different-vocab scratch: (re)build the identity
+		sc.perm = make([]int, w.VocabSize)
+		for i := range sc.perm {
+			sc.perm[i] = i
+		}
+	} // else perm is already identity: restoreIdentity ran before it was pooled
+	if g := w.greenSize(); cap(sc.swaps) < g {
+		sc.swaps = make([]int, g)
+	} else {
+		sc.swaps = sc.swaps[:g]
 	}
-	swaps := make([]int, w.greenSize())
-	pcg := rand.NewPCG(0, 0)
-	g := w.seedGreen(rand.New(pcg), pcg, perm, swaps, prevToken)
+	g := w.seedGreen(sc.rng, sc.pcg, sc.perm, sc.swaps, prevToken)
 	for i := 0; i < g; i++ {
-		out[perm[i]] += w.Delta
+		out[sc.perm[i]] += w.Delta
 	}
+	restoreIdentity(sc.perm, sc.swaps, g) // return perm to identity so the pooled buffer is reusable
+	wmScratchPool.Put(sc)
 	return out, nil
 }
 
