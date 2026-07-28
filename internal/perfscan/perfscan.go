@@ -1150,6 +1150,15 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 			if !ok || !isSliceMake(call) {
 				return true
 			}
+			// Skip pointer-element slices (make([]*T, …)): a handful of pointers used as
+			// orchestration scaffolding (fully overwritten before a concat/reduce reads
+			// them), not the numeric value scratch the growF64 pool win targets. Pooling a
+			// pointer-slice header is negligible churn dwarfed by the elements' own allocs.
+			if at, ok := call.Args[0].(*ast.ArrayType); ok {
+				if _, isPtr := at.Elt.(*ast.StarExpr); isPtr {
+					return true
+				}
+			}
 			loop := nearestLoop(parent, call)
 			if loop == nil {
 				return true
@@ -1204,10 +1213,33 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 			}
 			return true
 		})
+		// A divisor that also appears as a MODULO divisor (x % d) anywhere in this function
+		// is doing INTEGER index arithmetic (e.g. iy, ix := i/m, i%m) — reciprocal-multiply
+		// is a float transform, meaningless for the discrete integer it computes. Skip it.
+		// (perfscan is AST-only with no go/types, so a sibling `% d` is the reliable
+		// integer-arithmetic signal; float code effectively never does `x % scalar`.)
+		modDivisors := map[string]bool{}
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			switch e := n.(type) {
+			case *ast.BinaryExpr:
+				if e.Op == token.REM {
+					if name, ok := invariantDivisorName(e.Y); ok {
+						modDivisors[name] = true
+					}
+				}
+			case *ast.AssignStmt:
+				if e.Tok == token.REM_ASSIGN && len(e.Rhs) == 1 {
+					if name, ok := invariantDivisorName(e.Rhs[0]); ok {
+						modDivisors[name] = true
+					}
+				}
+			}
+			return true
+		})
 		loopAssigned := map[ast.Node]map[string]bool{} // per-loop cache
 		invariantDivisor := func(loop ast.Node, div ast.Expr) (string, bool) {
 			name, ok := invariantDivisorName(div)
-			if !ok || accumulated[name] { // a reduction, not a config scalar
+			if !ok || accumulated[name] || modDivisors[name] { // reduction, or integer (mod) arithmetic
 				return "", false
 			}
 			set := loopAssigned[loop]

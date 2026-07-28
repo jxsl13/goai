@@ -337,7 +337,10 @@ GrokfastMA 1.47× — each from 8–27 allocs/step to 0.
 receiver field, or a ring slot (`ring[pos] = flat`). Those are still poolable but by a
 different fix — pre-allocate the slot and overwrite it in place — so N does not
 mis-advise "hoist to one reused field." Also silent on value-receiver methods and free
-functions (no receiver to hang the reused buffer on) and on `make()` outside any loop.
+functions (no receiver to hang the reused buffer on), on `make()` outside any loop, and
+on **pointer-element slices** (`make([]*T, …)`) — a handful of pointers used as
+orchestration scaffolding (fully overwritten before a concat/reduce reads them), dwarfed
+by the elements' own allocations, not the numeric value scratch the `growF64` win targets.
 
 ## PS5001 — divide by a loop-invariant scalar  *(scanner: static)*
 
@@ -360,3 +363,7 @@ via `+=`/`-=`/`*=` (a reduction — a softmax Σ or attention denominator, where
 is minor or parity-locked, not a config scalar), on loops already dominated by a
 transcendental (K/L territory — the divide is in the noise), on integer INDEX divisions
 (`a[i/stride]`), on divisors that vary across iterations, and on non-element-wise loops.
+Also silent when the divisor also appears as a **modulo** divisor (`x % d`) anywhere in
+the function: Go's `%` requires integer operands, so `d` is provably integer and `i/d` is
+index arithmetic (`iy, ix := i/m, i%m`), never a float reciprocal-multiply candidate —
+this is type-sound, not heuristic, so it never suppresses a real float divide.
