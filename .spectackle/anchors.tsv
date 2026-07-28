@@ -1,0 +1,27 @@
+# rule	node	file	span	chash	rhash
+ARCH-011	go:backend.Execute	backend/execute.go	28-134	e158cb98a3dd13e9	41263a5a493afd7a
+ARCH-012	go:backend.Execute	backend/execute.go	28-134	e158cb98a3dd13e9	c6308907471476f2
+ARCH-013	go:tensor.Tensor	tensor/tensor.go	12-18	aad387fdf4dbc06c	c76049f7e52c0043
+ARCH-014	go:backend.Default	backend/registry.go	125-137	e24cb233d42ebbac	0cdfc66e9f0d7088
+ARCH-015	go:backend.RegisterDefault	backend/registry.go	59-66	df61a976267b09da	5ec4424460711815
+ARCH-016	go:backend.Attrs	backend/attrs.go	41-41	80cf5196e9ab8229	a95c36e5cd3d5bd9
+ARCH-017	go:backend.Execute	backend/execute.go	28-134	e158cb98a3dd13e9	3dfb39f6fd63d34a
+ARCH-018	go:backend.Execute	backend/execute.go	28-134	e158cb98a3dd13e9	9f281c6c2293a179
+ARCH-019	go:backend.Backend	backend/backend.go	26-33	03c713b32f516509	5cbbf7816a6606a8
+ARCH-020	go:apicheck.TestNoMagicBackendNameStrings	internal/apicheck/nomagicstrings_test.go	36-82	cd088fe7f4e09e7a	92bceff4f398f40c
+NUM-013	go:backend.Execute	backend/execute.go	28-134	e158cb98a3dd13e9	f6b05adca6a63e62
+CI-009	go:main.TestRunAlwaysRunSelectsMetaTests	internal/cichange/impact_alwaysrun_test.go	55-78	6fa3699faaf8c24c	16b66fc6c48e0992
+CI-011	go:main.TestRunAlwaysRunSelectsMetaTests	internal/cichange/impact_alwaysrun_test.go	55-78	6fa3699faaf8c24c	1bdc21e01f4699d6
+API-011	go:apicheck.TestPublicAPIDocumentedWithExamples	internal/apicheck/apicheck_test.go	377-601	251765197d19613a	2a20a93347094a32
+API-012	go:apicheck.TestPublicAPIDocumentedWithExamples	internal/apicheck/apicheck_test.go	377-601	251765197d19613a	2f6c61ac00ba79ce
+API-013	go:apicheck.TestPublicAPIDocumentedWithExamples	internal/apicheck/apicheck_test.go	377-601	251765197d19613a	3d9e215324f420f8
+API-014	go:apicheck.TestPublicAPIDocumentedWithExamples	internal/apicheck/apicheck_test.go	377-601	251765197d19613a	df3a65950328e4c8
+CORE-004	go:tensor.Tensor	tensor/tensor.go	12-18	aad387fdf4dbc06c	7ea6d7c04745e81e
+EST-002	go:classic_test.TestPredictWidthGuardConsistency	classic/predict_width_test.go	38-79	a7c740e6fa00c1bb	0db752de9ccfe116
+FMT-005	go:safetensors.FuzzLoad	format/safetensors/fuzz_test.go	14-32	d7c50620a89dc3c0	27324b544290eb28
+FMT-007	go:pytorch_test.loadHostile	format/pytorch/hostile_test.go	47-59	c2b691909aee629d	3c1076812e96e923
+FMT-008	go:npy.FuzzLoad	format/npy/fuzz_test.go	12-33	1de536ecd8087d12	caccafb14c8121be
+TOK-003	go:nlp.BPETokenizer.EncodeSpecial	nlp/special.go	328-330	899aa72f8cc1c8e2	e55daa3d32276b9b
+TOK-004	go:nlp.BPETokenizer.EncodeSpecial	nlp/special.go	328-330	899aa72f8cc1c8e2	723755715720b71f
+DEC-003	go:nlp.Llama.SelfExtendForward	nlp/self_extend.go	196-248	998da571708d7516	7eace3a6ede6f253
+DEC-004	go:nlp.Llama.SelfExtendForward	nlp/self_extend.go	196-248	998da571708d7516	2b65ba005e867bd7
