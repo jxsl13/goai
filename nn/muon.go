@@ -2,6 +2,7 @@ package nn
 
 import (
 	"fmt"
+	"github.com/jxsl13/goai/internal/parallel"
 	"math"
 
 	"github.com/jxsl13/goai/tensor"
@@ -171,21 +172,26 @@ func newtonSchulz5(x []float64, rows, cols, steps int) []float64 {
 // matmulFlat returns C[m,n] = A[m,k]·B[k,n] (row-major flat).
 func matmulFlat(a, b []float64, m, k, n int) []float64 {
 	c := make([]float64, m*n)
-	for i := range m {
-		ci := c[i*n : i*n+n]
-		for p := range k {
-			av := a[i*k+p]
-			if av == 0 {
-				continue
-			}
-			// axpy over equal-length slices (one bounds check each) so the inner mul-add
-			// auto-vectorizes; ikj order + same accumulation order, so bit-identical.
-			bp := b[p*n : p*n+n]
-			for j := range ci {
-				ci[j] += av * bp[j]
+	// Row i writes only c[i*n : (i+1)*n] and reads a and b read-only, so the rows are
+	// independent and a partition changes no value — bit-identical by construction, not
+	// by measurement. The accumulation order within a row is untouched.
+	parallelRowsMM(m, k*n, func(lo, hi int) {
+		for i := lo; i < hi; i++ {
+			ci := c[i*n : i*n+n]
+			for p := range k {
+				av := a[i*k+p]
+				if av == 0 {
+					continue
+				}
+				// axpy over equal-length slices (one bounds check each) so the inner mul-add
+				// auto-vectorizes; ikj order + same accumulation order, so bit-identical.
+				bp := b[p*n : p*n+n]
+				for j := range ci {
+					ci[j] += av * bp[j]
+				}
 			}
 		}
-	}
+	})
 	return c
 }
 
@@ -236,22 +242,29 @@ func matmulABtInto(a, b []float64, m, k int, bt []float64) []float64 {
 	// order, and IEEE multiplication is commutative — TestMatmulABtAliasedIsSymmetric
 	// holds it to that). So compute the lower triangle and mirror: half the MACs.
 	sym := len(a) == len(b) && &a[0] == &b[0]
-	for i := range m {
-		ci := c[i*m : i*m+m]
-		ai := a[i*k : i*k+k]
-		n := m
-		if sym {
-			n = i + 1
-		}
-		ci = ci[:n]
-		for p := range ai {
-			av := ai[p]
-			bp := bt[p*m : p*m+n]
-			for j := range ci {
-				ci[j] += av * bp[j]
+	// Same row independence as matmulFlat. In the symmetric case row i computes only
+	// j <= i, so the work per row is TRIANGULAR and contiguous chunks are unbalanced —
+	// the last chunk carries several times the first. Accepted rather than interleaved:
+	// a strided partition would fix the balance and destroy the sequential locality of
+	// ci and bp, and the mirror pass below must in any case wait for every row.
+	parallelRowsMM(m, k*m, func(lo, hi int) {
+		for i := lo; i < hi; i++ {
+			ci := c[i*m : i*m+m]
+			ai := a[i*k : i*k+k]
+			n := m
+			if sym {
+				n = i + 1
+			}
+			ci = ci[:n]
+			for p := range ai {
+				av := ai[p]
+				bp := bt[p*m : p*m+n]
+				for j := range ci {
+					ci[j] += av * bp[j]
+				}
 			}
 		}
-	}
+	})
 	if sym {
 		for i := range m {
 			for j := i + 1; j < m; j++ {
@@ -271,4 +284,18 @@ func transposeFlat(x []float64, r, c int) []float64 {
 		}
 	}
 	return out
+}
+
+// mmParThreshold is the total work below which splitting a matmul's row loop costs more
+// than it saves — the same 1<<15 crossover measured for this class of core.
+const mmParThreshold = 1 << 15
+
+// parallelRowsMM splits m output rows across the shared bounded pool; per is the
+// per-row cost so the threshold compares total work.
+func parallelRowsMM(m, per int, body func(lo, hi int)) {
+	if m*per < mmParThreshold {
+		body(0, m)
+		return
+	}
+	parallel.Rows(m, body)
 }
