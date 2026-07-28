@@ -182,7 +182,7 @@ GENERALIZED: PS6003 (partial-fast-path-coverage) for layer 1, PS6005 (output-inv
 
 ## T-01KYN0ADDNER9BVJ0HNH8ENZ0X Unroll-and-jam the m>1 QMatMul general path over activation rows (PS6005, prefill)
 kind: task
-state: draft
+state: active
 created: 2026-07-28
 
 The one PS6005 finding left in format/gguf: quant_matmul.go's general path dequantizes a weight row into scratch, then loops over the m activation rows dotting each against it. The dequantized row does not vary with the activation index, so every activation row re-reads it — the classic unroll-and-jam, and the dual of the register blocking just completed for the m==1 decode paths.
