@@ -2,7 +2,7 @@ package nlp
 
 import (
 	"fmt"
-	"sort"
+	"slices"
 
 	"github.com/jxsl13/goai/backend"
 	"github.com/jxsl13/goai/tensor"
@@ -105,18 +105,40 @@ func newJLensReadout(logits *tensor.Tensor, row int) *JLensReadout {
 		Ranked: make([]JLensToken, vocab),
 		rank:   make([]int, vocab),
 	}
-	for j := 0; j < vocab; j++ {
-		r.Logits[j] = logits.AtF64(row, j)
-		r.Ranked[j] = JLensToken{Token: j, Score: r.Logits[j]}
+	// Devirtualize the per-element AtF64 dispatch: for a contiguous F64 tensor
+	// read the row straight from the typed backing slice. AtF64(row,j) on a
+	// row-major tensor is exactly storage[row*vocab+j], so bit-identical.
+	if lc := logits.Contiguous(); lc.Dtype() == tensor.F64 {
+		src := lc.Storage().F64()[row*vocab : row*vocab+vocab]
+		for j := 0; j < vocab; j++ {
+			v := src[j]
+			r.Logits[j] = v
+			r.Ranked[j] = JLensToken{Token: j, Score: v}
+		}
+	} else {
+		for j := 0; j < vocab; j++ {
+			v := logits.AtF64(row, j)
+			r.Logits[j] = v
+			r.Ranked[j] = JLensToken{Token: j, Score: v}
+		}
 	}
 	// (Score desc, Token asc) is already a TOTAL order — Token is unique per element —
 	// so stability adds nothing; unstable sort.Slice (pdqsort) gives the identical full-
 	// vocab ranking at a fraction of symMerge's cost.
-	sort.Slice(r.Ranked, func(i, k int) bool {
-		if r.Ranked[i].Score != r.Ranked[k].Score {
-			return r.Ranked[i].Score > r.Ranked[k].Score
+	slices.SortFunc(r.Ranked, func(a, b JLensToken) int {
+		if a.Score != b.Score {
+			if a.Score > b.Score {
+				return -1
+			}
+			return 1
 		}
-		return r.Ranked[i].Token < r.Ranked[k].Token
+		if a.Token < b.Token {
+			return -1
+		}
+		if a.Token > b.Token {
+			return 1
+		}
+		return 0
 	})
 	for rk, e := range r.Ranked {
 		r.rank[e.Token] = rk
