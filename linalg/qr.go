@@ -2,6 +2,7 @@ package linalg
 
 import (
 	"fmt"
+	"github.com/jxsl13/goai/internal/parallel"
 	"math"
 
 	"github.com/jxsl13/goai/tensor"
@@ -170,16 +171,40 @@ func applyReflector(q [][]float64, v []float64, beta float64, k, m, cols int) {
 	if beta == 0 {
 		return
 	}
-	for j := range cols {
-		s := 0.0
-		for i := k; i < m; i++ {
-			s += v[i] * q[i][j]
+	// PARALLEL over columns. QR is sequential ACROSS reflectors — each depends on the
+	// trailing submatrix the previous one left — but applying ONE reflector touches each
+	// column independently: column j reads the shared read-only v and writes only q[i][j].
+	//
+	// BIT-IDENTICAL: the dot over i and the update over i are untouched within a column,
+	// and no value crosses columns. A partition changes only which goroutine walks which
+	// column.
+	parallelCols(cols, m-k, func(lo, hi int) {
+		for j := lo; j < hi; j++ {
+			s := 0.0
+			for i := k; i < m; i++ {
+				s += v[i] * q[i][j]
+			}
+			bs := beta * s
+			for i := k; i < m; i++ {
+				q[i][j] -= bs * v[i]
+			}
 		}
-		bs := beta * s
-		for i := k; i < m; i++ {
-			q[i][j] -= bs * v[i]
-		}
+	})
+}
+
+// qrParThreshold is the total work (columns x rows) below which splitting the reflector
+// application costs more than it saves — the same 1<<15 crossover measured for this class
+// of core. QR peels one column per step, so the trailing submatrix shrinks and the later
+// reflectors fall under it and run serially, which is correct.
+const qrParThreshold = 1 << 15
+
+// parallelCols splits cols across the shared bounded pool when there is enough work.
+func parallelCols(cols, rows int, body func(lo, hi int)) {
+	if cols*rows < qrParThreshold {
+		body(0, cols)
+		return
 	}
+	parallel.Rows(cols, body)
 }
 
 // shapeMN validates a rank-2 non-empty matrix and returns its dimensions.
