@@ -286,8 +286,31 @@ func mixerPrefill(ctx *backend.Context, mb *nn.MambaBlock, ls *MambaLayerState, 
 	uuA, ddA, bbA, ccA := rows2D(xc), rows2D(delta), rows2D(bMat), rows2D(cMat)
 	y := tensor.New(xc.Dtype(), tensor.Shape{T, D})
 	abar := make([]float64, N) // scratch for the vectorized exp(Δ·A) over the state dim
+	// Dskip is constant across the T prompt rows and a contiguous [D] vector, so
+	// read its storage ONCE instead of dispatching mb.Dskip.AtF64(d) T*D times
+	// (dskip[d] == AtF64(d) for contiguous F64 — zero extra allocation). y is a
+	// fresh contiguous [T,D] tensor, so write its row-major storage directly
+	// (typed) rather than paying a SetF64 stride-dispatch per element. Both are
+	// bit-identical to the AtF64/SetF64 forms.
+	var dskip []float64
+	if mb.Dskip.Dtype() == tensor.F64 {
+		dskip = mb.Dskip.Contiguous().Storage().F64()
+	} else {
+		dskip = make([]float64, D)
+		for d := range D {
+			dskip[d] = mb.Dskip.AtF64(d)
+		}
+	}
+	var yF64 []float64
+	var yF32 []float32
+	if y.Dtype() == tensor.F64 {
+		yF64 = y.Storage().F64()
+	} else {
+		yF32 = y.Storage().F32()
+	}
 	for t := range T {
 		uu, dd, bb, cc := uuA[t], ddA[t], bbA[t], ccA[t]
+		yrow := t * D
 		for d := range D {
 			dt := dd[d]
 			ut := uu[d]
@@ -304,8 +327,12 @@ func mixerPrefill(ctx *backend.Context, mb *nn.MambaBlock, ls *MambaLayerState, 
 				ls.H[base+n] = hv
 				yv += cc[n] * hv
 			}
-			yv += mb.Dskip.AtF64(d) * ut
-			y.SetF64(yv, t, d)
+			yv += dskip[d] * ut
+			if yF64 != nil {
+				yF64[yrow+d] = yv
+			} else {
+				yF32[yrow+d] = float32(yv)
+			}
 		}
 	}
 
