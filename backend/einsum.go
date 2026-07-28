@@ -115,6 +115,51 @@ func EinsumContract(inSubs [][]byte, outSub []byte, operands []*tensor.Tensor) (
 	// per index per combination inside the O(total) contraction loop, so it was the
 	// hottest map in the engine.
 	var val [256]int
+	// Typed fast path: when every operand and the output are F64, index the
+	// contiguous backing slices with precomputed row-major strides instead of the
+	// per-combination variadic AtF64/SetF64 dispatch below (each of which recomputes
+	// the flat offset and bounds-checks). Same ascending-combo accumulation order and
+	// identical products, so the result is bit-identical to the generic path.
+	allF64 := out.Dtype() == tensor.F64
+	for _, op := range operands {
+		if op.Dtype() != tensor.F64 {
+			allF64 = false
+			break
+		}
+	}
+	if allF64 {
+		outData := out.Storage().F64()
+		outStride := tensor.RowMajorStrides(outShape)
+		opData := make([][]float64, len(inSubs))
+		opStride := make([]tensor.Strides, len(inSubs))
+		for k := range inSubs {
+			c := operands[k].Contiguous()
+			opData[k] = c.Storage().F64()
+			opStride[k] = tensor.RowMajorStrides(c.Shape())
+		}
+		for combo := range total {
+			rem := combo
+			for _, ix := range order {
+				val[ix] = rem % size[ix]
+				rem /= size[ix]
+			}
+			prod := 1.0
+			for k, sub := range inSubs {
+				st := opStride[k]
+				off := 0
+				for pos := range len(sub) {
+					off += val[sub[pos]] * st[pos]
+				}
+				prod *= opData[k][off]
+			}
+			of := 0
+			for i := range len(outSub) {
+				of += val[outSub[i]] * outStride[i]
+			}
+			outData[of] += prod
+		}
+		return out, nil
+	}
 	coords := make([][]int, len(inSubs))
 	for k := range inSubs {
 		coords[k] = make([]int, len(inSubs[k]))
