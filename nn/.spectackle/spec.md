@@ -47,3 +47,6 @@ FOUND BY THE SCALING SWEEP, not by re-reading this task: BenchmarkMuonStepOnly m
 PART A (hoist bm, the transpose buffer and the matmul return buffers onto the Muon struct) IS NOT DONE and is now more valuable than it was: the pool's per-call barrier took allocs/op from 47 to 111 across roughly thirty matmuls per Step. Bytes/op is unchanged at 28.3MB. Re-draft it as its own item if the allocation axis is wanted.
 
 Symmetric-path caveat for anyone tuning further: rows compute only j <= i, so work is triangular and contiguous chunks are unbalanced. A strided partition would balance it and destroy the sequential locality the ikj rewrite exists to exploit; the 4.63x is what that imbalance still leaves.
+
+## PROC-BENCH-MINOFN-001
+IF an A/B arm is measured from a single benchmark run, THEN the result SHALL be re-measured as the minimum of at least 3 runs per arm before it is reported; single samples inverted 2 verdicts in one session.
