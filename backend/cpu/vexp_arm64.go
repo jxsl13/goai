@@ -223,3 +223,16 @@ func vsoftplusGradF64(dst, x, g []float64) {
 		dst[i] = g[i] * (num / (1 + z))
 	}
 }
+
+// vsigmoidF64 exists only so sigmoidKernelCPU type-checks off the amd64 SIMD build;
+// vexpF64Fast is false here, so it is dead at run time. Overflow-safe stable form.
+func vsigmoidF64(dst, src []float64) {
+	for i, v := range src {
+		z := math.Exp(-math.Abs(v))
+		num := z
+		if v >= 0 {
+			num = 1
+		}
+		dst[i] = num / (1 + z)
+	}
+}
