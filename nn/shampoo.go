@@ -140,22 +140,32 @@ func (s *Shampoo) Step(grad GradFn) error {
 				st.l = eyeScaled(m, s.Eps)
 				st.r = eyeScaled(n, s.Eps)
 			}
-			for i := range m { // L += G·Gᵀ
-				for j := range m {
+			// L += G·Gᵀ and R += Gᵀ·G are SYMMETRIC (gm[i][k]·gm[j][k] == gm[j][k]·gm[i][k],
+			// same k-order); invMatrixRoot→SymEig reads the full matrix, so accumulate only
+			// the upper triangle + diagonal and mirror once — halves the O(m²n)+O(n²m) grams.
+			// Bit-identical: the original two triangles were already exactly equal.
+			for i := range m {
+				for j := i; j < m; j++ {
 					var acc float64
 					for k := range n {
 						acc += gm[i][k] * gm[j][k]
 					}
 					st.l[i][j] += acc
+					if j != i {
+						st.l[j][i] = st.l[i][j]
+					}
 				}
 			}
-			for i := range n { // R += Gᵀ·G
-				for j := range n {
+			for i := range n {
+				for j := i; j < n; j++ {
 					var acc float64
 					for k := range m {
 						acc += gm[k][i] * gm[k][j]
 					}
 					st.r[i][j] += acc
+					if j != i {
+						st.r[j][i] = st.r[i][j]
+					}
 				}
 			}
 			if refresh || st.li == nil {
