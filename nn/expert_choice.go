@@ -34,14 +34,18 @@ func ExpertAffinity(logits [][]float64) [][]float64 {
 				m = v
 			}
 		}
-		s[t] = make([]float64, len(row))
+		// Hoist the destination row out of both loops (PS4006): s[t] is a separate
+		// allocation, so re-indexing it per element is a pointer load each time.
+		// Bit-identical — same values, same order, only the address computation moves.
+		dst := make([]float64, len(row))
+		s[t] = dst
 		var sum float64
 		for j, v := range row {
-			s[t][j] = math.Exp(v - m)
-			sum += s[t][j]
+			dst[j] = math.Exp(v - m)
+			sum += dst[j]
 		}
-		for j := range s[t] {
-			s[t][j] /= sum
+		for j := range dst {
+			dst[j] /= sum
 		}
 	}
 	return s
@@ -81,9 +85,10 @@ func ExpertChoiceRoute(scores [][]float64, capacity int) (tokens [][]int, gates 
 		// this function's contract is preserved exactly, not merely "probably unchanged".
 		sort.SliceStable(idx, func(a, b int) bool { return key[idx[a]] > key[idx[b]] })
 		tokens[ex] = append([]int(nil), idx[:capacity]...)
-		gates[ex] = make([]float64, capacity)
+		gr := make([]float64, capacity)
+		gates[ex] = gr
 		for i, t := range tokens[ex] {
-			gates[ex][i] = scores[t][ex]
+			gr[i] = scores[t][ex]
 		}
 	}
 	return tokens, gates
@@ -100,10 +105,15 @@ func ExpertChoiceCombine(tokens [][]int, gates [][]float64, expertOut [][][]floa
 		y[t] = make([]float64, dim)
 	}
 	for ex := range tokens {
+		gx, ox := gates[ex], expertOut[ex]
 		for i, t := range tokens[ex] {
-			g := gates[ex][i]
-			for d := range dim {
-				y[t][d] += g * expertOut[ex][i][d]
+			g := gx[i]
+			// Both operands are separate row allocations; re-indexing them per element
+			// is two pointer loads per d (PS4006). Re-slicing also gives the compiler
+			// one bounds check for the run instead of one per element.
+			yt, oi := y[t][:dim], ox[i][:dim]
+			for d := range yt {
+				yt[d] += g * oi[d]
 			}
 		}
 	}

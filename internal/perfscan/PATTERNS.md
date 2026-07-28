@@ -643,6 +643,15 @@ Requires BOTH the per-row allocation loop and a two-deep index inside ≥2 neste
 loops. A `[][]T` merely passed around, indexed once, or genuinely ragged is not a
 candidate.
 
+**Biggest measured win of the rule, and a null beside it — same commit, same file.**
+Interleaved (4 alternations): `ExpertChoiceCombine` **1.554×** (654,598 → 421,160 ns) by
+hoisting BOTH `y[t]` and `expertOut[ex][i]` out of the innermost loop; `ExpertAffinity`
+**1.167×** by hoisting the destination row. The third hoist in the same file, the gate
+fill in `ExpertChoiceRoute`, measured **0.992×** — no effect, because that loop is
+O(capacity) beside an O(n log n) sort. All three are bit-identical; only two pay. The
+size of the enclosing work, not the shape, decides.
+
+
 ## PS6001 — a dual-path kernel whose bit-identity claim is unverified  *(scanner: static)*
 A function carrying a devirtualized fast path (guarded by a configured
 `fastPathHelpers` entry in comma-ok form, or a `switch x.Dtype()` with a `default`
