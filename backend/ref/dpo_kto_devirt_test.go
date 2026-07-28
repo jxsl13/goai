@@ -37,5 +37,23 @@ func TestDPOKTODevirtBitIdentical(t *testing.T) {
 			t.Fatalf("DPO batch=%d: got bits %#x (%v), want %#x (%v)",
 				batch, math.Float64bits(got), got, math.Float64bits(want), want)
 		}
+
+		// PPO-clip over the same inputs: lpNew, lpOld, adv.
+		pp := backend.PPOClipAttrs{}.WithDefaults()
+		pout, err := backend.Execute(ctx, backend.OpPPOClip, []*tensor.Tensor{pc, rc, pl}, pp)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ptotal float64
+		for i := range batch {
+			r := math.Exp(pc.AtF64(i) - rc.AtF64(i))
+			a := pl.AtF64(i)
+			ptotal += math.Min(r*a, math.Max(1-pp.Epsilon, math.Min(1+pp.Epsilon, r))*a)
+		}
+		pwant := -ptotal / float64(batch)
+		if got := pout[0].AtF64(); math.Float64bits(got) != math.Float64bits(pwant) {
+			t.Fatalf("PPO batch=%d: got bits %#x (%v), want %#x (%v)",
+				batch, math.Float64bits(got), got, math.Float64bits(pwant), pwant)
+		}
 	}
 }
