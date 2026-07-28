@@ -204,31 +204,6 @@ LEVERAGE NOTE CARRIED FORWARD: this path is the residual after bcastBlockApply, 
 
 METHOD LESSON, now twice-earned: confirm the benchmark reaches the code under test, and confirm the test reaches the branch it claims, both by deliberate breakage. Name matching proves neither.
 
-## T-01KYJX48GFEHZBYPPGBQA9Z4WT tensor gatherCast: hoist innermost axis out of the strided-gather odometer
-kind: task
-state: draft
-created: 2026-07-27
-
-TARGET: gatherCast[S, D] in tensor/tensor.go (odometer at the loop containing idx[d]++ near line 210). It walks an N-D strided view element by element, paying a full nd-deep odometer tick per element:
-    for pos := range dst { dst[pos] = D(src[off]); for d := nd-1; d >= 0; d-- { ...tick... } }
-
-TRANSFORM (identical in shape to the two already shipped): hoist the innermost axis out of the odometer. Its stride is constant across a run, so a run is a straight walk `s := off; for p := range run { run[p] = D(src[s]); s += sInner }`, with the odometer ticking once per run instead of once per element. gatherBlocked2D in the same file already uses exactly this inner-loop trick, so the idiom is established locally. Precedent: backend/ref/broadcast.go measured 4.49x, backend/cpu/elementwise.go measured 5.29x (commit 5bfa77b), both bit-identical.
-
-Bit-identity is by construction: pure traversal reordering, no arithmetic on values, every dst position still reads the same src offset. The innermost axis's net contribution to off over a full run is inner*sInner - sInner*inner = 0, leaving the outer tick unchanged. The D(src[s]) conversion is per element in both forms, so the cast sequence is untouched.
-
-LEVERAGE IS UNESTABLISHED AND MUST BE MEASURED BEFORE ANY WORK - this is the residual path, not the common one. tensor.go already specializes the two shapes that matter most: gatherRows handles innermost-stride-1 views (what Slice on a non-last axis produces) and gatherBlocked2D handles rank-2 transposes. gatherCast only receives what neither covers - rank>=3 views whose innermost stride is neither 1 nor a rank-2 transpose, for example a permuted attention tensor. That residual may be rare enough that the win never appears in a real workload.
-
-MANDATORY SEQUENCE, in this order (the failure mode this guards against has already occurred twice this line of work):
-1. Establish that a candidate benchmark ENTERS gatherCast, by temporarily panicking inside it and confirming the panic fires. Do not read any timing number before this passes. An existing benchmark whose name matches "contiguous" or "permute" is not evidence - gatherRows and gatherBlocked2D shadow this function for the obvious shapes.
-2. If no existing benchmark enters it, write one over a rank-3+ permuted view whose innermost stride is neither 1 nor a rank-2 transpose, and re-run step 1 against it.
-3. Only then run the interleaved A/B: file-copy toggle, same host and session, three A-B alternations, medians, plus an UNAFFECTED control benchmark that must not move. If the control drifts more than the candidate delta, the result is noise - discard it.
-4. Bit-identity: byte-compare raw output bits (math.Float64bits, no tolerance) across the S/D instantiations, not just float64/float64.
-5. Non-vacuity by MUTATION, per arm, and scope the mutation run to the test that claims the coverage. A test whose case name says which arm it exercises is not proof it does - that exact overclaim was caught in the cpu work, where the case named for the fill arm never reached it.
-
-REJECT AND REVERT if the control drift swamps the delta, or if no benchmark can be made to enter the path - a transform with no reachable hot caller is not worth the risk to a function this central.
-
-PERFSCAN COVERAGE (standing requirement): this site is already machine-findable - PS1001 reports tensor/tensor.go in the current scan, and the per-element-odometer class is what PS4004 and PS1001 exist to surface. No new rule is required for this optimization. If the implementation reveals a shape neither rule catches, add the rule before shipping the code.
-
 ## T-01KYJYPQ38E938WYV6HGX9BMF5 PS5001 precision: suppress integer divides via the modulo-sibling proof
 kind: task
 state: draft
