@@ -65,8 +65,15 @@ func Zeros(t *tensor.Tensor) {
 }
 
 func fillUniform(t *tensor.Tensor, lo, hi float64, seed uint64) {
-	rng := rand.New(rand.NewPCG(seed, 0x6b79a2c3d4e5f601))
-	fillGen(t, func() float64 { return lo + rng.Float64()*(hi-lo) })
+	// Hold the concrete *rand.PCG and inline the stdlib Float64 conversion so the draw
+	// is a direct call instead of an indirect one through rand.Rand's Source interface
+	// (non-inlinable, one per element). Bit-identical: rand.Rand.Float64() IS
+	// float64(src.Uint64()<<11>>11)/(1<<53) and rng wrapped this same PCG, so the uint64
+	// stream, the float, and every drawn value are unchanged, one draw per element.
+	pcg := rand.NewPCG(seed, 0x6b79a2c3d4e5f601)
+	fillGen(t, func() float64 {
+		return lo + (float64(pcg.Uint64()<<11>>11)/(1<<53))*(hi-lo)
+	})
 }
 
 // fillGen writes gen() into every element of t in row-major (flat) order.
