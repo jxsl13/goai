@@ -124,8 +124,70 @@ type Unigram struct {
 // stops early. Edges live in ONE flat map keyed by (parentNode<<8 | byte); id[node] is
 // the piece id ending at that node, or -1.
 type unigramTrie struct {
-	edge map[uint64]int32
+	edge map[uint64]int32 // build-time only; niled after finalize
 	id   []int32
+	// CSR child index (built by finalize): node's children live in
+	// childByte/childNode[childOff[node]:childOff[node+1]], sorted by byte so
+	// child() can early-exit. Replaces the per-descend map[uint64]int32 hash.
+	childOff  []int32
+	childByte []byte
+	childNode []int32
+}
+
+// finalize converts the build-time edge map into the CSR child index and frees
+// the map. Node ids and id[] are unchanged, so token ids are bit-identical.
+func (t *unigramTrie) finalize() {
+	numNodes := len(t.id)
+	t.childOff = make([]int32, numNodes+1)
+	for key := range t.edge {
+		t.childOff[int32(key>>8)+1]++
+	}
+	for i := 0; i < numNodes; i++ {
+		t.childOff[i+1] += t.childOff[i]
+	}
+	ne := t.childOff[numNodes]
+	t.childByte = make([]byte, ne)
+	t.childNode = make([]int32, ne)
+	cur := make([]int32, numNodes)
+	copy(cur, t.childOff[:numNodes])
+	for key, node := range t.edge {
+		parent := int32(key >> 8)
+		pos := cur[parent]
+		t.childByte[pos] = byte(key)
+		t.childNode[pos] = node
+		cur[parent]++
+	}
+	// sort each node's (small) child run ascending by byte for early-exit lookup
+	for i := 0; i < numNodes; i++ {
+		lo, hi := t.childOff[i], t.childOff[i+1]
+		for a := lo + 1; a < hi; a++ {
+			bb, nn := t.childByte[a], t.childNode[a]
+			k := a - 1
+			for k >= lo && t.childByte[k] > bb {
+				t.childByte[k+1], t.childNode[k+1] = t.childByte[k], t.childNode[k]
+				k--
+			}
+			t.childByte[k+1], t.childNode[k+1] = bb, nn
+		}
+	}
+	t.edge = nil
+}
+
+// child returns the node reached from `node` by byte `b` (false if none). A
+// contiguous, sorted, cache-friendly scan over the node's children replaces the
+// (node<<8|byte) map hash on the tokenizer's hot descent.
+func (t *unigramTrie) child(node int32, b byte) (int32, bool) {
+	lo, hi := t.childOff[node], t.childOff[node+1]
+	for i := lo; i < hi; i++ {
+		cb := t.childByte[i]
+		if cb == b {
+			return t.childNode[i], true
+		}
+		if cb > b {
+			break
+		}
+	}
+	return 0, false
 }
 
 // buildUnigramTrie inserts every piece byte-by-byte, sharing common prefixes.
@@ -146,6 +208,7 @@ func buildUnigramTrie(pieces []UnigramPiece) *unigramTrie {
 		}
 		t.id[node] = int32(pid)
 	}
+	t.finalize()
 	return t
 }
 
@@ -283,7 +346,7 @@ func (u *Unigram) Encode(text string) []int {
 		extend:
 			for i := j + 1; i <= maxI; i++ {
 				for b := off[i-1]; b < off[i]; b++ { // descend the bytes of rune i-1
-					child, has := tr.edge[uint64(node)<<8|uint64(s[b])]
+					child, has := tr.child(node, s[b])
 					if !has {
 						break extend // no piece shares this prefix → stop extending
 					}
