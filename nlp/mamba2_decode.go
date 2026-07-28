@@ -308,21 +308,34 @@ func mixer2Prefill(mx *Mamba2Mixer, ls *Mamba2LayerState, u *tensor.Tensor) (*te
 		cOff := mx.Intermediate + gN + g*mx.N // C lives after B
 		hst := ls.H[h*mx.N*mx.HeadDim:]       // this head's [N, head_dim] state
 
+		xd := make([]float64, mx.HeadDim) // x_t·delta, reused across t
 		for t := range seq {
 			delta := softplus(dt[t][h] + dtBias[h])
 			at := math.Exp(delta * ls.a[h])
+			// xt/yt: the row pointers were re-resolved on every element (PS4006).
+			// xd[j]: xc[t][hOff+j]*delta does not depend on i, yet the old form
+			// recomputed it once per (i,j) — N times per j. Computing it once keeps the
+			// SAME product and the same rounding, so bi*xd[j] is bit-identical to
+			// bi*(xc[t][hOff+j]*delta).
+			xt, yt := xc[t], y[t]
+			xrow := xt[hOff : hOff+mx.HeadDim]
+			for j := range xd {
+				xd[j] = xrow[j] * delta
+			}
 			for i := range mx.N {
-				bi := xc[t][bOff+i]
-				for j := range mx.HeadDim {
-					hst[i*mx.HeadDim+j] = at*hst[i*mx.HeadDim+j] + bi*(xc[t][hOff+j]*delta)
+				bi := xt[bOff+i]
+				hrow := hst[i*mx.HeadDim : i*mx.HeadDim+mx.HeadDim]
+				for j := range hrow {
+					hrow[j] = at*hrow[j] + bi*xd[j]
 				}
 			}
+			cv := xt[cOff : cOff+mx.N] // invariant in j; was re-indexed per (j,i)
 			for j := range mx.HeadDim {
 				var s float64
 				for i := range mx.N {
-					s += xc[t][cOff+i] * hst[i*mx.HeadDim+j]
+					s += cv[i] * hst[i*mx.HeadDim+j]
 				}
-				y[t][hOff+j] = s + Dh*xc[t][hOff+j]
+				yt[hOff+j] = s + Dh*xrow[j]
 			}
 		}
 	}
