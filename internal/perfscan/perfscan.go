@@ -205,6 +205,7 @@ var checks = []check{
 	{"PS4008", "serial-dot-matmul", "a matmul whose innermost loop is a serial scalar dot accumulator — latency-bound where an ikj/axpy form has independent accumulators", false},
 	// PS5xxx — arithmetic
 	{"PS5001", "loop-invariant-divide", "a divide by a loop-invariant scalar on every element", false},
+	{"PS5004", "multi-sweep-fusable", "three or more consecutive loops over the same range each indexing a shared slice (fuse the passes into one sweep)", false},
 	{"PS5002", "symmetric-accumulation", "a nested loop accumulating a full symmetric matrix (m[i][j] += x[i]*x[j]) where one triangle + mirror would halve the work", false},
 	{"PS5003", "inner-invariant-recompute", "an inner-loop expression that varies with the INNER index but not the outer one — recomputed once per outer iteration where a precomputed row would do", false},
 	// PS6xxx — verification gaps
@@ -995,6 +996,9 @@ func scanFile(fset *token.FileSet, f *ast.File, ns nameSets) []finding {
 		}
 		out = append(out, scanFunc(fset, fn, wrappers, intKeyMaps, ns)...)
 	}
+	// PS5002 is a whole-file structural check (consecutive sibling loops), not a
+	// per-function trigger attribution, so it runs once over the file's blocks.
+	out = append(out, scanFusableLoops(fset, f)...)
 	// drop sites silenced by an inline //perfscan:ignore directive (per class).
 	ign := ignoreDirectives(fset, f)
 	var kept []finding
@@ -1911,6 +1915,210 @@ func anyAncestorPerElem(parent map[ast.Node]ast.Node, perElem map[ast.Node]bool,
 
 // dedup collapses identical (position, category) findings — one loop can hold both
 // an AtF64 and a SetF64, which are the same candidate.
+// scanFusableLoops reports PS5004 (multi-sweep-fusable): three or more CONSECUTIVE
+// sibling loops in one block that iterate over the SAME range and each index a shared
+// slice — the pass-fusion / scratch-elimination pattern behind the Adafactor (-3.4%),
+// CautiousAdamW (-8%) and GrokfastMA (-54%) wins. Sweeping one buffer N times moves it
+// through memory N times; folding the passes into a single loop cuts that traffic ~Nx.
+// Advisory only: fusion is bit-identical only when no earlier pass writes a slot a
+// later pass reads at a DIFFERENT index (a genuine loop-carried dependency), which a
+// static tool cannot rule out — the finding asks a human to confirm before fusing.
+func scanFusableLoops(fset *token.FileSet, f *ast.File) []finding {
+	render := func(e ast.Expr) string {
+		var buf bytes.Buffer
+		if err := printer.Fprint(&buf, fset, e); err != nil {
+			return ""
+		}
+		return buf.String()
+	}
+	var out []finding
+	ast.Inspect(f, func(n ast.Node) bool {
+		blk, ok := n.(*ast.BlockStmt)
+		if !ok {
+			return true
+		}
+		stmts := blk.List
+		for i := 0; i < len(stmts); {
+			sig, slices, ok := fusableLoop(stmts[i], render)
+			if !ok {
+				i++
+				continue
+			}
+			run := 1
+			shared := map[string]int{}
+			for name := range slices {
+				shared[name]++
+			}
+			j := i + 1
+			for j < len(stmts) {
+				sig2, sl2, ok2 := fusableLoop(stmts[j], render)
+				if !ok2 || sig2 != sig {
+					break
+				}
+				for name := range sl2 {
+					shared[name]++
+				}
+				run++
+				j++
+			}
+			if run >= 3 {
+				// Require a slice indexed by >=2 of the passes: that proves they stream the
+				// SAME buffer (the traffic fusion removes), not three unrelated arrays. Pick
+				// the shared name deterministically for a stable message.
+				keys := make([]string, 0, len(shared))
+				for name := range shared {
+					keys = append(keys, name)
+				}
+				sort.Strings(keys)
+				common := ""
+				for _, name := range keys {
+					if shared[name] >= 2 {
+						common = name
+						break
+					}
+				}
+				if common != "" {
+					out = append(out, finding{
+						pos:      fset.Position(stmts[i].Pos()),
+						end:      fset.Position(stmts[j-1].End()),
+						category: "multi-sweep-fusable",
+						msg:      fmt.Sprintf("%d consecutive loops over the same range each index %q; fuse the passes into one loop to cut memory traffic ~%dx (verify no cross-pass dependency blocks fusion)", run, common, run),
+					})
+				}
+			}
+			i = j
+		}
+		return true
+	})
+	return out
+}
+
+// fusableLoop classifies s as a simple, fusion-eligible loop — a `for k := range X`
+// or classic `for i := 0; i < E; i++` whose body only reads/writes indexed slices with
+// no nested loop, closure, branch, return, defer, go or switch/select that would make
+// fusion unsafe or change the trip count. It returns a signature identifying the range
+// (two loops fuse only if their signatures match) and the set of slice names the body
+// indexes by the loop variable.
+func fusableLoop(s ast.Stmt, render func(ast.Expr) string) (sig string, slices map[string]bool, ok bool) {
+	var body *ast.BlockStmt
+	var idxVar string
+	switch l := s.(type) {
+	case *ast.RangeStmt:
+		key, kok := l.Key.(*ast.Ident)
+		if !kok || l.Value != nil || key.Name == "_" {
+			return "", nil, false
+		}
+		idxVar = key.Name
+		sig = "range " + render(l.X)
+		body = l.Body
+	case *ast.ForStmt:
+		v, b, fok := classicForBound(l, render)
+		if !fok {
+			return "", nil, false
+		}
+		idxVar = v
+		sig = "for " + b
+		body = l.Body
+	default:
+		return "", nil, false
+	}
+	if !simpleLoopBody(body) {
+		return "", nil, false
+	}
+	slices = indexedByVar(body, idxVar, render)
+	if len(slices) == 0 {
+		return "", nil, false
+	}
+	return sig, slices, true
+}
+
+// classicForBound matches `i := 0; i < E; i++` (also `i <= E`), returning the index
+// variable and a rendered bound key. A custom step, downward count, multi-clause init
+// or non-zero start is rejected — those do not fuse by simple alignment.
+func classicForBound(l *ast.ForStmt, render func(ast.Expr) string) (idxVar, bound string, ok bool) {
+	init, iok := l.Init.(*ast.AssignStmt)
+	if !iok || len(init.Lhs) != 1 || len(init.Rhs) != 1 {
+		return "", "", false
+	}
+	name, nok := init.Lhs[0].(*ast.Ident)
+	lit, lok := init.Rhs[0].(*ast.BasicLit)
+	if !nok || !lok || lit.Value != "0" {
+		return "", "", false
+	}
+	inc, pok := l.Post.(*ast.IncDecStmt)
+	if !pok || inc.Tok != token.INC {
+		return "", "", false
+	}
+	if id, ok := inc.X.(*ast.Ident); !ok || id.Name != name.Name {
+		return "", "", false
+	}
+	bin, bok := l.Cond.(*ast.BinaryExpr)
+	if !bok || (bin.Op != token.LSS && bin.Op != token.LEQ) {
+		return "", "", false
+	}
+	if id, ok := bin.X.(*ast.Ident); !ok || id.Name != name.Name {
+		return "", "", false
+	}
+	return name.Name, bin.Op.String() + render(bin.Y), true
+}
+
+// simpleLoopBody reports whether a loop body is safe to consider for fusion: no nested
+// loop, closure, branch/return/defer/go/labeled/switch/select. Straight-line
+// assignments, increments, if-blocks and expression calls are allowed (Cautious's sign
+// test is an if; a math.Sqrt in a fused body is fine).
+func simpleLoopBody(b *ast.BlockStmt) bool {
+	simple := true
+	ast.Inspect(b, func(n ast.Node) bool {
+		if !simple {
+			return false
+		}
+		switch n.(type) {
+		case *ast.ForStmt, *ast.RangeStmt, *ast.FuncLit, *ast.BranchStmt,
+			*ast.ReturnStmt, *ast.DeferStmt, *ast.GoStmt, *ast.LabeledStmt,
+			*ast.SwitchStmt, *ast.TypeSwitchStmt, *ast.SelectStmt:
+			simple = false
+			return false
+		}
+		return true
+	})
+	return simple
+}
+
+// indexedByVar collects the names of slices indexed by the loop variable in the body —
+// s[i], s[i+1], s[i-1], g.sum[i] — i.e. the buffers this pass streams. A slice touched
+// by >=2 fused passes is the shared traffic fusion removes. The name is the rendered
+// indexed expression's base, so a local slice and a field slice both key stably.
+func indexedByVar(b *ast.BlockStmt, idxVar string, render func(ast.Expr) string) map[string]bool {
+	names := map[string]bool{}
+	ast.Inspect(b, func(n ast.Node) bool {
+		ix, ok := n.(*ast.IndexExpr)
+		if !ok {
+			return true
+		}
+		if indexUsesVar(ix.Index, idxVar) {
+			if key := render(ix.X); key != "" {
+				names[key] = true
+			}
+		}
+		return true
+	})
+	return names
+}
+
+// indexUsesVar reports whether the index expression references idxVar (directly as i,
+// or in an offset like i+1 / i-1).
+func indexUsesVar(e ast.Expr, idxVar string) bool {
+	found := false
+	ast.Inspect(e, func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok && id.Name == idxVar {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
 func dedup(in []finding) []finding {
 	seen := map[string]bool{}
 	var out []finding

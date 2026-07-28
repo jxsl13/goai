@@ -2673,3 +2673,78 @@ func f(a, b []float64, n int) {
 		t.Fatalf("want 0 (simple 2-term guard), got %d", got)
 	}
 }
+
+// PS5002 fires on 3+ consecutive same-range loops sharing a buffer (pass-fusion).
+func TestDetectPS5002_MultiSweepFusable(t *testing.T) {
+	src := `package p
+func Step(sum, flat, out []float64, n int) {
+	for k := 0; k < n; k++ {
+		sum[k] -= flat[k]
+	}
+	for k := 0; k < n; k++ {
+		flat[k] = out[k]
+	}
+	for k := 0; k < n; k++ {
+		sum[k] += flat[k]
+	}
+}`
+	got := countCat(scanSrc(t, src))
+	if got["multi-sweep-fusable"] != 1 {
+		t.Fatalf("want 1 multi-sweep-fusable, got %d (%v)", got["multi-sweep-fusable"], got)
+	}
+}
+
+// Two consecutive loops are below the >=3 threshold — no finding (2-pass splits are
+// common and often intentional).
+func TestDetectPS5002_TwoLoopsSilent(t *testing.T) {
+	src := `package p
+func Step(sum, flat []float64, n int) {
+	for k := 0; k < n; k++ {
+		sum[k] -= flat[k]
+	}
+	for k := 0; k < n; k++ {
+		sum[k] += flat[k]
+	}
+}`
+	if got := countCat(scanSrc(t, src))["multi-sweep-fusable"]; got != 0 {
+		t.Fatalf("two loops, want 0 multi-sweep-fusable, got %d", got)
+	}
+}
+
+// Three same-range loops over DISJOINT buffers do not share traffic — no finding.
+func TestDetectPS5002_DisjointBuffersSilent(t *testing.T) {
+	src := `package p
+func Step(a, b, c []float64, n int) {
+	for k := 0; k < n; k++ {
+		a[k] = a[k] * 2
+	}
+	for k := 0; k < n; k++ {
+		b[k] = b[k] * 2
+	}
+	for k := 0; k < n; k++ {
+		c[k] = c[k] * 2
+	}
+}`
+	if got := countCat(scanSrc(t, src))["multi-sweep-fusable"]; got != 0 {
+		t.Fatalf("disjoint buffers, want 0 multi-sweep-fusable, got %d", got)
+	}
+}
+
+// Different ranges (n vs m) are not consecutive-same-range — no finding.
+func TestDetectPS5002_DifferentRangesSilent(t *testing.T) {
+	src := `package p
+func Step(a []float64, n, m int) {
+	for k := 0; k < n; k++ {
+		a[k] = a[k] + 1
+	}
+	for k := 0; k < m; k++ {
+		a[k] = a[k] + 1
+	}
+	for k := 0; k < n; k++ {
+		a[k] = a[k] + 1
+	}
+}`
+	if got := countCat(scanSrc(t, src))["multi-sweep-fusable"]; got != 0 {
+		t.Fatalf("different ranges, want 0 multi-sweep-fusable, got %d", got)
+	}
+}
