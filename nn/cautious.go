@@ -126,19 +126,28 @@ func (a *CautiousAdamW) Step(grad GradFn) error {
 			return fmt.Errorf("nn: CautiousAdamW grad shape %v != param %v", g.Shape(), p.Shape())
 		}
 		n := p.Numel()
-		u := growF64(a.uScr, n)   // the adaptive step lr·m̂/(√v̂+ε), pre-mask
-		gg := growF64(a.ggScr, n) // the gradient, for the alignment test
-		a.uScr, a.ggScr = u, gg
+		u := growF64(a.uScr, n) // the adaptive step lr·m̂/(√v̂+ε)
+		a.uScr = u
 		m, v := a.m[pi], a.v[pi]
-		// Build u, gg from the gradient + moments — contiguous fast paths, else the
-		// generic accessor loop (§base-perf: no per-element Unravel/AtF64 dispatch).
+		// Build u AND fold the cautious sign test (was CautiousMask pass 1) in one
+		// pass, using the gradient the build already holds — no separate gg copy:
+		// zero anti-descent coords and count the kept ones. The rescale is fused
+		// into the apply step below. This drops the gg scratch (a full n-element
+		// write+read) and collapses 4 passes to 2. Bit-identical to
+		// buildStep + CautiousMask(u,gg) + apply.
+		kept := 0
 		buildStep := func(gv float64, i int) {
 			m[i] = a.Beta1*m[i] + (1-a.Beta1)*gv
 			v[i] = a.Beta2*v[i] + (1-a.Beta2)*gv*gv
 			mh := m[i] * ic1
 			vh := v[i] * ic2
-			u[i] = a.LR * mh / (math.Sqrt(vh) + a.Eps)
-			gg[i] = gv
+			ui := a.LR * mh / (math.Sqrt(vh) + a.Eps)
+			if ui*gv > 0 {
+				kept++
+			} else {
+				ui = 0
+			}
+			u[i] = ui
 		}
 		if gf := flatF64(g); gf != nil {
 			for i, gv := range gf {
@@ -153,20 +162,20 @@ func (a *CautiousAdamW) Step(grad GradFn) error {
 				buildStep(g.AtF64(tensor.Unravel(i, g.Shape())...), i)
 			}
 		}
-		CautiousMask(u, gg) // zero anti-descent coords + rescale, in place
-		// Apply the decoupled weight decay (outside the mask) then the masked step.
+		scale := float64(n) / math.Max(float64(kept), 1e-3*float64(n)) // = CautiousMask's 1/mean(mask)
+		// Apply decoupled weight decay (outside the mask) then the masked+rescaled step.
 		if pf := flatF64(p); pf != nil {
 			for i := range pf {
-				pf[i] = pf[i]*decay - u[i]
+				pf[i] = pf[i]*decay - u[i]*scale
 			}
 		} else if pf := flatF32(p); pf != nil {
 			for i := range pf {
-				pf[i] = float32(float64(pf[i])*decay - u[i])
+				pf[i] = float32(float64(pf[i])*decay - u[i]*scale)
 			}
 		} else {
 			for i := range n {
 				idx := tensor.Unravel(i, p.Shape())
-				p.SetF64(p.AtF64(idx...)*decay-u[i], idx...)
+				p.SetF64(p.AtF64(idx...)*decay-u[i]*scale, idx...)
 			}
 		}
 	}
