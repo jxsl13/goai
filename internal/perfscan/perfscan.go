@@ -1000,6 +1000,18 @@ func scanFile(fset *token.FileSet, f *ast.File, ns nameSets) []finding {
 	// File-scoped fact: names declared as integer-keyed maps (detector PS3003) — indexing
 	// them in a loop is a dense-slice (map→slice) candidate.
 	intKeyMaps := intKeyMapNames(f)
+	// File-scoped fact for PS6006: receiver fields that are INDEXED in exactly one
+	// function of this file. A per-call temporary is used element-wise in the one method
+	// that needs it and merely allocated elsewhere; persistent state is indexed by
+	// several. This replaces a name heuristic that missed two of the three real instances
+	// found in this repo (b.vals, b.part) because they are not spelled like buffers.
+	curSoleIndexed = soleIndexedFields(f)
+	// …and the subset of those declared as a SLICE. A per-call buffer is a slice; the
+	// false positives the structural test produced were overwhelmingly MAPS used as
+	// persistent registries — optimizer per-parameter state (a.st, g.st, s.st), intern
+	// tables, memo caches. Indexing a map is not buffer reuse, and a map field is never
+	// the thing standing between a loop and its parallel form.
+	curSliceFields = sliceTypedFields(f)
 	for name := range intMapReg[curPkg] { // cross-file dispatch registries
 		intKeyMaps[name] = true
 	}
@@ -5576,6 +5588,22 @@ func receiverScratchFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 	// through one. A temporary is both; persistent state is written here, read elsewhere.
 	written, read := map[string]token.Pos{}, map[string]bool{}
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		if call, ok := n.(*ast.CallExpr); ok {
+			// A slice of the field passed to a call is a read: copy(cf[w:end], b.part[:r])
+			// is how the gbm partition consumed its scratch, and requiring an INDEXED read
+			// missed it entirely.
+			for _, f := range slicedFields(call.Args, recv, alias) {
+				read[f] = true
+			}
+			for _, a := range call.Args {
+				for _, ix := range indexExprs(a) {
+					if f, okf := indexedField(ix, recv, alias); okf {
+						read[f] = true
+					}
+				}
+			}
+			return true
+		}
 		if as, ok := n.(*ast.AssignStmt); ok {
 			for _, lhs := range as.Lhs {
 				if f, okf := indexedField(lhs, recv, alias); okf {
@@ -5591,6 +5619,9 @@ func receiverScratchFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 					}
 				}
 			}
+			for _, f := range slicedFields(as.Rhs, recv, alias) {
+				read[f] = true
+			}
 			return true
 		}
 		return true
@@ -5600,14 +5631,29 @@ func receiverScratchFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 		if !read[f] {
 			continue // written but never read back here: an output, not a temporary
 		}
-		// Written-and-read-in-one-method is NOT enough on its own, and the first cut of
-		// this check proved it by flagging m.Means — persistent model state that mStep
-		// legitimately fills and reads back. Nothing in the AST separates "temporary"
-		// from "state I happen to finish building here"; the difference is intent, and
-		// the place intent is recorded is the name. This repo spells its temporaries
-		// yScratch, tScr, ghScr, idxbuf — so the name is the discriminator, and a project
-		// whose convention differs configures its own.
-		if !looksLikeScratchName(f) {
+		// Written-and-read-in-one-method is NOT enough on its own: the first cut of this
+		// check flagged m.Means, persistent model state that the M-step legitimately
+		// fills and reads back.
+		//
+		// THE DISCRIMINATOR IS STRUCTURAL, NOT THE NAME. An earlier version keyed on
+		// scratch/buf/tmp-style names and missed two of the three real instances in this
+		// repo — gbmBuilder.vals and gbmBuilder.part — because they are not spelled like
+		// buffers. What actually separates a temporary from state is that a temporary is
+		// INDEXED IN EXACTLY ONE FUNCTION: the method that needs it uses it element-wise
+		// and everything else at most allocates it. State (m.Means, b.cols) is indexed by
+		// several. The name is kept only as a fallback for a field whose sole indexed use
+		// happens to be split across a file boundary this per-file scanner cannot see.
+		// An EXPORTED field is part of the type's API, so callers outside this file can
+		// read it and it cannot be a private temporary — whatever it is indexed by here.
+		// Without this the structural test flags m.Means in a file where the M-step is
+		// the only method that indexes it.
+		if ast.IsExported(f) {
+			continue
+		}
+		if !curSliceFields[f] {
+			continue
+		}
+		if !curSoleIndexed[f] && !looksLikeScratchName(f) {
 			continue
 		}
 		out = append(out, finding{
@@ -5666,4 +5712,160 @@ func indexedField(e ast.Expr, recv string, alias map[string]string) (string, boo
 		}
 	}
 	return "", false
+}
+
+// curSoleIndexed holds, per file, the receiver fields indexed in exactly one function —
+// see the note at its assignment in scanFile. File-scoped like curPkg.
+var curSoleIndexed map[string]bool
+
+// soleIndexedFields returns the field names that appear as recv.field[...] (or through a
+// local alias of recv.field) inside exactly ONE function of f. Wholesale assignment
+// (b.vals = make(...)) does not count as an indexed use, so an allocation site elsewhere
+// leaves a temporary sole-indexed.
+func soleIndexedFields(f *ast.File) map[string]bool {
+	users := map[string]map[string]bool{} // field -> set of function names indexing it
+	for _, decl := range f.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Body == nil || fn.Recv == nil || len(fn.Recv.List) == 0 {
+			continue
+		}
+		recv := ""
+		if len(fn.Recv.List[0].Names) > 0 {
+			recv = fn.Recv.List[0].Names[0].Name
+		}
+		if recv == "" || recv == "_" {
+			continue
+		}
+		alias := receiverAliases(fn.Body, recv)
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			ix, ok := n.(*ast.IndexExpr)
+			if !ok {
+				return true
+			}
+			if fld, ok := indexedField(ix, recv, alias); ok {
+				if users[fld] == nil {
+					users[fld] = map[string]bool{}
+				}
+				users[fld][fn.Name.Name] = true
+			}
+			return true
+		})
+	}
+	out := map[string]bool{}
+	for fld, fns := range users {
+		if len(fns) == 1 {
+			out[fld] = true
+		}
+	}
+	return out
+}
+
+// receiverAliases maps locals assigned directly from a receiver field to that field.
+func receiverAliases(body *ast.BlockStmt, recv string) map[string]string {
+	alias := map[string]string{}
+	ast.Inspect(body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || len(as.Lhs) != len(as.Rhs) {
+			return true
+		}
+		for i, rhs := range as.Rhs {
+			sel, ok := ast.Unparen(rhs).(*ast.SelectorExpr)
+			if !ok {
+				continue
+			}
+			if id, ok := sel.X.(*ast.Ident); !ok || id.Name != recv {
+				continue
+			}
+			if l := identName(as.Lhs[i]); l != "" && l != "_" {
+				alias[l] = sel.Sel.Name
+			}
+		}
+		return true
+	})
+	return alias
+}
+
+// slicedFields returns the receiver fields appearing as recv.field[a:b] (or through a
+// local alias) anywhere in exprs. A slice is a READ of the buffer just as an index is;
+// treating only IndexExpr as a read missed gbmBuilder.part, whose whole consumption is
+// copy(dst, b.part[:r]).
+func slicedFields(exprs []ast.Expr, recv string, alias map[string]string) []string {
+	var out []string
+	for _, e := range exprs {
+		ast.Inspect(e, func(n ast.Node) bool {
+			se, ok := n.(*ast.SliceExpr)
+			if !ok {
+				return true
+			}
+			if f, ok := recvField(se.X, recv); ok {
+				out = append(out, f)
+			} else if id, ok := ast.Unparen(se.X).(*ast.Ident); ok {
+				if f, isAlias := alias[id.Name]; isAlias {
+					out = append(out, f)
+				}
+			}
+			return true
+		})
+	}
+	return out
+}
+
+// recvField matches a bare recv.field selector (no index or slice).
+func recvField(e ast.Expr, recv string) (string, bool) {
+	sel, ok := ast.Unparen(e).(*ast.SelectorExpr)
+	if !ok {
+		return "", false
+	}
+	if id, ok := sel.X.(*ast.Ident); !ok || id.Name != recv {
+		return "", false
+	}
+	return sel.Sel.Name, true
+}
+
+// curSliceFields holds, per file, the struct fields declared with a slice type.
+var curSliceFields map[string]bool
+
+// sliceTypedFields returns every struct field in f declared as a slice ([]T). Scratch is
+// a buffer; the persistent registries this check kept mistaking for one are maps.
+func sliceTypedFields(f *ast.File) map[string]bool {
+	out := map[string]bool{}
+	ast.Inspect(f, func(n ast.Node) bool {
+		st, ok := n.(*ast.StructType)
+		if !ok || st.Fields == nil {
+			return true
+		}
+		for _, fld := range st.Fields.List {
+			at, ok := fld.Type.(*ast.ArrayType)
+			if !ok || at.Len != nil { // Len != nil is a fixed-size array, not a buffer
+				continue
+			}
+			// PRIMITIVE ELEMENTS ONLY. Every genuine scratch buffer found in this repo is
+			// []float64, []int, []bool or []uint16. The persistent registries that kept
+			// being mistaken for one hold structs or pointers — optimizer per-parameter
+			// state ([]soapState), fitted models ([]*tree). A buffer of records is a
+			// collection someone keeps; a buffer of numbers is working space.
+			if !isBasicIdent(at.Elt) {
+				continue
+			}
+			for _, nm := range fld.Names {
+				out[nm.Name] = true
+			}
+		}
+		return true
+	})
+	return out
+}
+
+// isBasicIdent reports whether e is a predeclared numeric/bool element type.
+func isBasicIdent(e ast.Expr) bool {
+	id, ok := ast.Unparen(e).(*ast.Ident)
+	if !ok {
+		return false
+	}
+	switch id.Name {
+	case "float64", "float32", "int", "int8", "int16", "int32", "int64",
+		"uint", "uint8", "uint16", "uint32", "uint64", "byte", "rune", "bool":
+		return true
+	}
+	return false
 }

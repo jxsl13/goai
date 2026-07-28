@@ -3564,3 +3564,111 @@ func f(buf, x []float64, d int) float64 {
 		t.Fatalf("want 0 on a non-method, got %d (%v)", got["receiver-scratch-buffer"], got)
 	}
 }
+
+// The structural discriminator: a field INDEXED IN EXACTLY ONE function is a temporary,
+// even when its name says nothing. gbmBuilder.vals and gbmBuilder.part are both spelled
+// this way, and the name-keyed version of this check missed both.
+func TestDetectPS6006_SoleIndexedFieldWithNoScratchishName(t *testing.T) {
+	src := `package p
+type B struct{ vals []float64 }
+func (b *B) alloc(n int) { b.vals = make([]float64, n) }
+func (b *B) f(x []float64, n int) float64 {
+	v := b.vals
+	for i := range n {
+		v[i] = x[i] * 2
+	}
+	var q float64
+	for i := range n {
+		q += v[i]
+	}
+	return q
+}`
+	if got := countCat(scanSrc(t, src)); got["receiver-scratch-buffer"] != 1 {
+		t.Fatalf("want 1 for a sole-indexed field with an ordinary name, got %d (%v)",
+			got["receiver-scratch-buffer"], got)
+	}
+}
+
+// SILENT when a second function also indexes the field: that is shared state, and the
+// method being examined merely happens to fill and read it.
+func TestDetectPS6006_SilentWhenAnotherFunctionAlsoIndexesIt(t *testing.T) {
+	src := `package p
+type B struct{ vals []float64 }
+func (b *B) f(x []float64, n int) float64 {
+	for i := range n {
+		b.vals[i] = x[i] * 2
+	}
+	var q float64
+	for i := range n {
+		q += b.vals[i]
+	}
+	return q
+}
+func (b *B) g(i int) float64 { return b.vals[i] }`
+	if got := countCat(scanSrc(t, src)); got["receiver-scratch-buffer"] != 0 {
+		t.Fatalf("want 0 when a second function indexes the field, got %d (%v)",
+			got["receiver-scratch-buffer"], got)
+	}
+}
+
+// SILENT on an EXPORTED field: it is part of the type's API, so callers outside this file
+// can read it and it cannot be a private temporary — whatever indexes it here.
+func TestDetectPS6006_SilentOnExportedField(t *testing.T) {
+	src := `package p
+type M struct{ Means []float64 }
+func (m *M) f(x []float64, n int) float64 {
+	for i := range n {
+		m.Means[i] = x[i]
+	}
+	var q float64
+	for i := range n {
+		q += m.Means[i]
+	}
+	return q
+}`
+	if got := countCat(scanSrc(t, src)); got["receiver-scratch-buffer"] != 0 {
+		t.Fatalf("want 0 on an exported field, got %d (%v)", got["receiver-scratch-buffer"], got)
+	}
+}
+
+// SILENT on a slice of RECORDS. Optimizer per-parameter state ([]soapState) and fitted
+// models ([]*tree) are collections someone keeps, not working space, and they were the
+// bulk of the false positives the structural test produced on its own.
+func TestDetectPS6006_SilentOnSliceOfRecords(t *testing.T) {
+	src := `package p
+type entry struct{ v float64 }
+type O struct{ st []entry }
+func (o *O) step(x []float64, n int) float64 {
+	for i := range n {
+		o.st[i] = entry{x[i]}
+	}
+	var q float64
+	for i := range n {
+		q += o.st[i].v
+	}
+	return q
+}`
+	if got := countCat(scanSrc(t, src)); got["receiver-scratch-buffer"] != 0 {
+		t.Fatalf("want 0 on a slice of records, got %d (%v)", got["receiver-scratch-buffer"], got)
+	}
+}
+
+// A SLICE of the field is a read, not only an index. gbmBuilder.part is consumed entirely
+// by copy(dst, b.part[:r]) — requiring an indexed read missed it even after the
+// structural discriminator was in place.
+func TestDetectPS6006_SliceExpressionCountsAsRead(t *testing.T) {
+	src := `package p
+type B struct{ part []int }
+func (b *B) f(src, dst []int, n int) {
+	r := 0
+	for i := range n {
+		b.part[r] = src[i]
+		r++
+	}
+	copy(dst, b.part[:r])
+}`
+	if got := countCat(scanSrc(t, src)); got["receiver-scratch-buffer"] != 1 {
+		t.Fatalf("want 1 when the field is read via a slice expression, got %d (%v)",
+			got["receiver-scratch-buffer"], got)
+	}
+}

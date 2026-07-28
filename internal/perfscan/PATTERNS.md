@@ -764,11 +764,30 @@ back. Nothing in the AST separates *temporary* from *state I happen to finish bu
 here* — the difference is intent, and intent is recorded in the name. Hence
 `scratch`/`scr`/`buf`/`tmp`/`work`; a project with a different convention configures its own.
 
+**The name was the wrong discriminator, and two more instances proved it.** The first
+version keyed on `scratch`/`buf`/`tmp`-style field names. It then MISSED `gbmBuilder.vals`
+and `gbmBuilder.part` — two further blockers found the same way, in the split search and
+the node partition — because neither is spelled like a buffer. Three independent
+instances, one caught.
+
+What actually separates a temporary from state is **structural**: a temporary is *indexed
+in exactly one function*. The method that needs it uses it element-wise; everything else
+at most allocates it. State (`m.Means`, `b.cols`) is indexed by several. Three more
+filters were needed to make that usable, each mutation-probed load-bearing:
+
+- **exported fields are never temporaries** — they are API, readable from outside the file
+- **slice-typed only** — the false positives were maps used as registries
+- **primitive elements only** — `[]soapState` and `[]*tree` are collections someone keeps;
+  `[]float64` is working space
+- **a slice expression is a read** — `copy(dst, b.part[:r])` is how the partition consumed
+  its scratch, and requiring an *indexed* read missed it entirely
+
+Precision went **24 → 15 → 8** findings across those filters while all three real
+instances stayed caught. Six of the surviving eight are genuine, including four CART
+builder buffers in `tree.go` that a deferred task had predicted would be there.
+
 Silent on plain functions (no receiver, no sharing) and on fields only written and never
 read back, which are outputs rather than temporaries.
-
-**Zero findings tree-wide** — the one instance was fixed by the work that motivated the
-rule, so it stands as a regression guard.
 
 ## PS6003 — a fast path that covers only part of a variant family  *(scanner: static)*
 
