@@ -1,6 +1,7 @@
 package classic
 
 import (
+	"github.com/jxsl13/goai/internal/parallel"
 	"math"
 	"sort"
 )
@@ -109,35 +110,45 @@ func newHistBuilder(x [][]float64, n, d, maxDepth, minLeaf, nbins int) *histBuil
 	b := &histBuilder{x: x, n: n, d: d, maxDepth: maxDepth, minLeaf: minLeaf, nbins: nbins}
 	b.edges = make([][]float64, d)
 	b.binned = make([]uint16, n*d)
-	col := make([]float64, n)
-	var rkeys, rtmp []uint64
-	if n >= histRadixCutoff {
-		rkeys = make([]uint64, n)
-		rtmp = make([]uint64, n)
-	}
-	for f := 0; f < d; f++ {
-		for i := 0; i < n; i++ {
-			col[i] = x[i][f]
-		}
+	// Bin the features in parallel. Each feature owns its own edges[f] and its own
+	// column of binned, so the loop bodies share nothing mutable once the sort scratch
+	// is per-chunk — and the sort dominates, which is why this was the second-largest
+	// item in a profile of the histogram fit (sort.Search alone was 17%).
+	//
+	// BIT-IDENTICAL: no value crosses a feature boundary. Each feature's quantile edges
+	// come from a sort of its own column and each sample's bin from a search in its own
+	// feature's edges, so partitioning the feature range reorders nothing.
+	parallelFeatures(d, n, func(lo, hi int) {
+		col := make([]float64, n)
+		var rkeys, rtmp []uint64
 		if n >= histRadixCutoff {
-			radixSortF64(col, rkeys, rtmp)
-		} else {
-			sort.Float64s(col)
+			rkeys = make([]uint64, n)
+			rtmp = make([]uint64, n)
 		}
-		ne := nbins - 1
-		ed := make([]float64, 0, ne)
-		for q := 1; q <= ne; q++ {
-			v := col[q*n/nbins]
-			if len(ed) == 0 || v > ed[len(ed)-1] {
-				ed = append(ed, v) // keep strictly ascending, drop duplicate quantiles
+		for f := lo; f < hi; f++ {
+			for i := 0; i < n; i++ {
+				col[i] = x[i][f]
+			}
+			if n >= histRadixCutoff {
+				radixSortF64(col, rkeys, rtmp)
+			} else {
+				sort.Float64s(col)
+			}
+			ne := nbins - 1
+			ed := make([]float64, 0, ne)
+			for q := 1; q <= ne; q++ {
+				v := col[q*n/nbins]
+				if len(ed) == 0 || v > ed[len(ed)-1] {
+					ed = append(ed, v) // keep strictly ascending, drop duplicate quantiles
+				}
+			}
+			b.edges[f] = ed
+			for i := 0; i < n; i++ {
+				// bin = #edges strictly < x[i][f]  (SearchFloat64s: first idx with ed[idx] ≥ x)
+				b.binned[i*d+f] = uint16(sort.SearchFloat64s(ed, x[i][f]))
 			}
 		}
-		b.edges[f] = ed
-		for i := 0; i < n; i++ {
-			// bin = #edges strictly < x[i][f]  (SearchFloat64s: first idx with ed[idx] ≥ x)
-			b.binned[i*d+f] = uint16(sort.SearchFloat64s(ed, x[i][f]))
-		}
-	}
+	})
 	// One histogram buffer per recursion level (the histogram-subtraction scheme
 	// keeps the parent's histogram live while its children are grown).
 	levels := maxDepth + 1
@@ -170,29 +181,59 @@ func (b *histBuilder) lastContrib() []float64 { return b.contrib }
 
 // buildHist clears buffer `buf` and accumulates the round target over idx into it.
 func (b *histBuilder) buildHist(idx []int, buf int) {
-	h, nb := b.hist[buf], b.nbins
-	for f := 0; f < b.d; f++ {
+	h, nb, d := b.hist[buf], b.nbins, b.d
+	for f := 0; f < d; f++ {
 		base := f * nb
 		for j := 0; j <= len(b.edges[f]); j++ {
 			h[base+j] = histBin{}
 		}
 	}
-	// Hoist the struct fields and take a per-sample bounds-check-elided slice of
-	// the binned row; strength-reduce f*nb to a running base. c is computed to the
-	// identical value in the identical (sample, feature) order, so the histogram
-	// (and every downstream split) is bit-identical.
-	y, binned, d := b.y, b.binned, b.d
-	for _, i := range idx {
-		yi := y[i]
-		br := binned[i*d : i*d+d : i*d+d]
-		base := 0
-		for f := 0; f < d; f++ {
-			c := base + int(br[f])
-			h[c].sum += yi
-			h[c].cnt++
-			base += nb
+	// TWO LOOP ORDERS, chosen by whether the work will actually be split, because the
+	// orders are not equally fast and the faster one is not parallelizable.
+	//
+	// Sample-major (i outer, f inner) reads b.binned contiguously and is the quicker
+	// serial form — measured 336ms against feature-major's 410ms on one core, a 22%
+	// penalty. But it makes every feature's bins a shared write target, so it cannot be
+	// partitioned. Feature-major gives each feature exclusive ownership of
+	// h[f*nb : f*nb+nb], which is what makes splitting safe, and pays for it by striding
+	// b.binned by d.
+	//
+	// Keeping both means a constrained single-core host is not made 22% slower to buy a
+	// multicore speedup it will never collect.
+	//
+	// The serial arm carries the tightening from #475 — hoisted struct fields, a
+	// bounds-check-elided slice of the binned row, and f*nb strength-reduced to a running
+	// base. That is a separate axis from the loop ORDER, so the two compose: the faster
+	// serial form stays the serial arm.
+	//
+	// BIT-IDENTICAL EITHER WAY: for a fixed (feature, bin) the samples accumulate in
+	// ascending idx order in both orders. Only the sequence in which DIFFERENT bins are
+	// touched changes, and those are independent sums.
+	if d*len(idx) < histParThreshold || parallel.Workers() <= 1 {
+		y, binned := b.y, b.binned
+		for _, i := range idx {
+			yi := y[i]
+			br := binned[i*d : i*d+d : i*d+d]
+			base := 0
+			for f := 0; f < d; f++ {
+				c := base + int(br[f])
+				h[c].sum += yi
+				h[c].cnt++
+				base += nb
+			}
 		}
+		return
 	}
+	parallel.Rows(d, func(lo, hi int) {
+		for f := lo; f < hi; f++ {
+			base := f * nb
+			for _, i := range idx {
+				c := base + int(b.binned[i*d+f])
+				h[c].sum += b.y[i]
+				h[c].cnt++
+			}
+		}
+	})
 }
 
 // subHist turns buffer `par` (the parent histogram) into the LARGER child's by
@@ -313,4 +354,20 @@ func newGBMGrower(c gbmConfig, x [][]float64, n, d int) gbmGrower {
 		return newHistBuilder(x, n, d, c.maxDepth, c.minSamplesLeaf, c.histBins)
 	}
 	return newGBMBuilder(x, n, d, c.maxDepth, c.minSamplesLeaf)
+}
+
+// histParThreshold is the total work (features x samples) below which splitting the
+// per-feature loops costs more than it saves. Same 1<<15 crossover backend/cpu measured
+// on this class of core; a small fit stays serial.
+const histParThreshold = 1 << 15
+
+// parallelFeatures splits the d features across the shared bounded pool. Feature-indexed
+// work in this file writes only into its own feature's slice of the output, so a
+// partition never changes a value.
+func parallelFeatures(d, n int, body func(lo, hi int)) {
+	if d*n < histParThreshold {
+		body(0, d)
+		return
+	}
+	parallel.Rows(d, body)
 }
