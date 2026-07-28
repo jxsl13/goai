@@ -467,10 +467,13 @@ func decodeTensor(ti tensorInfo, data []byte) (*tensor.Tensor, error) {
 	case tF16:
 		t := tensor.New(tensor.F32, ti.shape)
 		dst := t.Storage().F32()
-		// Bulk-copy the LE F16 halfwords into an aligned buffer (one memmove), then table-
-		// convert sequentially — avoids the per-element binary.LittleEndian.Uint16 reslice.
-		// f16→f32 itself is a table lookup, so the read was the remaining per-element cost.
-		if src := make([]uint16, len(dst)); rawCopyLE(src, raw, 2) {
+		// On a LE host the raw data bytes ARE the []uint16 halfword layout, so reinterpret
+		// them in place and table-convert straight to dst — dropping the scratch []uint16
+		// allocation AND the memmove the bulk-copy path needed (f16→f32 is just a table
+		// lookup, so the copy was pure overhead; §T907). The len(raw) guard keeps the
+		// unsafe reslice in bounds (unlike copy, unsafe.Slice trusts the length).
+		if nativeLittleEndian && len(dst) > 0 && len(raw) >= 2*len(dst) {
+			src := unsafe.Slice((*uint16)(unsafe.Pointer(&raw[0])), len(dst))
 			for i, h := range src {
 				dst[i] = f16ToF32(h)
 			}
