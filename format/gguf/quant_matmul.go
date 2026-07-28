@@ -270,13 +270,16 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 	if m == 1 && xf32 != nil &&
 		(qt == Q2_K || qt == Q3_K || qt == Q4_K || qt == Q5_K || qt == Q6_K) {
 		var dot func([]float32, []byte, int) float64
+		// dot4 is the register-blocked variant where one exists; nil means this type is
+		// still one row at a time and falls through to the scalar loop below.
+		var dot4 func(row []float32, r0, r1, r2, r3 []byte, k int) (float64, float64, float64, float64)
 		switch qt {
 		case Q2_K:
 			dot = dotQ2_KRow
 		case Q3_K:
 			dot = dotQ3_KRow
 		case Q4_K:
-			dot = dotQ4KRowFn
+			dot, dot4 = dotQ4KRowFn, dotQ4_K4Rows
 		case Q5_K:
 			dot = dotQ5_KRow
 		case Q6_K:
@@ -285,7 +288,17 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 		row := xf32[:k]
 		// Decode (m==1) K-quant row dots are independent per output row → chunk-parallel.
 		qmatmulParallelChunks(n, k, func(lo, hi int) {
-			for ni := lo; ni < hi; ni++ {
+			ni := lo
+			if dot4 != nil { // blocks within [lo,hi): the pool owns the partition
+				for ; ni+4 <= hi; ni += 4 {
+					a0, a1, a2, a3 := dot4(row,
+						weight[(ni+0)*rowBytes:], weight[(ni+1)*rowBytes:],
+						weight[(ni+2)*rowBytes:], weight[(ni+3)*rowBytes:], k)
+					outf[ni+0], outf[ni+1] = float32(a0), float32(a1)
+					outf[ni+2], outf[ni+3] = float32(a2), float32(a3)
+				}
+			}
+			for ; ni < hi; ni++ {
 				outf[ni] = float32(dot(row, weight[ni*rowBytes:(ni+1)*rowBytes], k))
 			}
 		})

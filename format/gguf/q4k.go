@@ -205,3 +205,63 @@ func dotQ4_KRow(row []float32, raw []byte, k int) float64 {
 	}
 	return acc
 }
+
+// dotQ4_K4Rows is [dotQ4_KRow] over FOUR weight rows at once. With m==1 the activation
+// row is shared by every output, so one load and float64 convert of each activation
+// element feeds four accumulators instead of being repeated per row — register blocking,
+// the same transform Q8_0 and Q4_0 already carry.
+//
+// Bit-exact against the single-row form: each accumulator sees the identical per-element
+// float32 weights in the identical ascending-k order; only the interleaving of
+// independent accumulators changes, and they never interact.
+func dotQ4_K4Rows(row []float32, r0, r1, r2, r3 []byte, k int) (float64, float64, float64, float64) {
+	var a0, a1, a2, a3 float64
+	for sb := 0; sb*qkK < k; sb++ {
+		o := sb * q4kBlockSize
+		b0, b1 := r0[o:o+q4kBlockSize], r1[o:o+q4kBlockSize]
+		b2, b3 := r2[o:o+q4kBlockSize], r3[o:o+q4kBlockSize]
+		d0, m0 := f16ToF32(binary.LittleEndian.Uint16(b0[0:])), f16ToF32(binary.LittleEndian.Uint16(b0[2:]))
+		d1, m1 := f16ToF32(binary.LittleEndian.Uint16(b1[0:])), f16ToF32(binary.LittleEndian.Uint16(b1[2:]))
+		d2, m2 := f16ToF32(binary.LittleEndian.Uint16(b2[0:])), f16ToF32(binary.LittleEndian.Uint16(b2[2:]))
+		d3, m3 := f16ToF32(binary.LittleEndian.Uint16(b3[0:])), f16ToF32(binary.LittleEndian.Uint16(b3[2:]))
+		yo := sb * qkK
+		for pair := range 4 {
+			is := pair * 2
+			q0, q1 := b0[16+pair*32:16+pair*32+32], b1[16+pair*32:16+pair*32+32]
+			q2, q3 := b2[16+pair*32:16+pair*32+32], b3[16+pair*32:16+pair*32+32]
+			sc00, mn00 := getScaleMinK4(is+0, b0[4:16])
+			sc01, mn01 := getScaleMinK4(is+1, b0[4:16])
+			sc10, mn10 := getScaleMinK4(is+0, b1[4:16])
+			sc11, mn11 := getScaleMinK4(is+1, b1[4:16])
+			sc20, mn20 := getScaleMinK4(is+0, b2[4:16])
+			sc21, mn21 := getScaleMinK4(is+1, b2[4:16])
+			sc30, mn30 := getScaleMinK4(is+0, b3[4:16])
+			sc31, mn31 := getScaleMinK4(is+1, b3[4:16])
+			dl0, of0 := d0*float32(sc00), m0*float32(mn00)
+			dh0, og0 := d0*float32(sc01), m0*float32(mn01)
+			dl1, of1 := d1*float32(sc10), m1*float32(mn10)
+			dh1, og1 := d1*float32(sc11), m1*float32(mn11)
+			dl2, of2 := d2*float32(sc20), m2*float32(mn20)
+			dh2, og2 := d2*float32(sc21), m2*float32(mn21)
+			dl3, of3 := d3*float32(sc30), m3*float32(mn30)
+			dh3, og3 := d3*float32(sc31), m3*float32(mn31)
+			base := yo + pair*64
+			xlo, xhi := row[base:base+32], row[base+32:base+64]
+			for l := range 32 {
+				xv := float64(xlo[l])
+				a0 += xv * float64(dl0*float32(q0[l]&0xF)-of0)
+				a1 += xv * float64(dl1*float32(q1[l]&0xF)-of1)
+				a2 += xv * float64(dl2*float32(q2[l]&0xF)-of2)
+				a3 += xv * float64(dl3*float32(q3[l]&0xF)-of3)
+			}
+			for l := range 32 {
+				xv := float64(xhi[l])
+				a0 += xv * float64(dh0*float32(q0[l]>>4)-og0)
+				a1 += xv * float64(dh1*float32(q1[l]>>4)-og1)
+				a2 += xv * float64(dh2*float32(q2[l]>>4)-og2)
+				a3 += xv * float64(dh3*float32(q3[l]>>4)-og3)
+			}
+		}
+	}
+	return a0, a1, a2, a3
+}
