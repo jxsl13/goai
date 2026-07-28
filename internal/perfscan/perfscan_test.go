@@ -1127,9 +1127,9 @@ func chol(a, l [][]float64, n int) {
 	}
 }
 
-// PS4004 fires on a *VJP whose hot loop is a single elementwise binop written as a scalar
+// PS4007 fires on a *VJP whose hot loop is a single elementwise binop written as a scalar
 // Go loop (the pre-fix expVJP shape) — it should dispatch the matching backend op instead.
-func TestDetectPS4004_ScalarBinopVJP(t *testing.T) {
+func TestDetectPS4007_ScalarBinopVJP(t *testing.T) {
 	src := `package p
 func expVJP(ctx *C, in, out []*T, a A, g *T) ([]*T, error) {
 	for i := 0; i < n; i++ {
@@ -1143,7 +1143,7 @@ func expVJP(ctx *C, in, out []*T, a A, g *T) ([]*T, error) {
 }
 
 // …including the f32 conversion-wrapped form float32(float64(a)*float64(b)).
-func TestDetectPS4004_ConversionWrapped(t *testing.T) {
+func TestDetectPS4007_ConversionWrapped(t *testing.T) {
 	src := `package p
 func expVJP(ctx *C, in, out []*T, a A, g *T) ([]*T, error) {
 	for i := 0; i < n; i++ {
@@ -1158,7 +1158,7 @@ func expVJP(ctx *C, in, out []*T, a A, g *T) ([]*T, error) {
 
 // Silent on MULTI-op bodies (tanh g·(1−y²)): they keep f64 intermediates and narrow once,
 // so composing f32 backend ops would diverge — they need a fused kernel, not a dispatch.
-func TestDetectPS4004_SilentOnMultiOp(t *testing.T) {
+func TestDetectPS4007_SilentOnMultiOp(t *testing.T) {
 	src := `package p
 func tanhVJP(ctx *C, in, out []*T, a A, g *T) ([]*T, error) {
 	for i := 0; i < n; i++ {
@@ -1173,7 +1173,7 @@ func tanhVJP(ctx *C, in, out []*T, a A, g *T) ([]*T, error) {
 
 // Silent outside the VJP layer: a backend kernel's scalar loop IS the implementation, not a
 // missed dispatch, so the *VJP name scope keeps it from being flagged.
-func TestDetectPS4004_SilentOnNonVJP(t *testing.T) {
+func TestDetectPS4007_SilentOnNonVJP(t *testing.T) {
 	src := `package p
 func mulKernelCPU(ds, gs, ys []float64, n int) {
 	for i := 0; i < n; i++ {
@@ -1186,7 +1186,7 @@ func mulKernelCPU(ds, gs, ys []float64, n int) {
 }
 
 // Silent once the VJP already dispatches to the backend (the fixed expVJP shape).
-func TestDetectPS4004_SilentOnDispatch(t *testing.T) {
+func TestDetectPS4007_SilentOnDispatch(t *testing.T) {
 	src := `package p
 func expVJP(ctx *C, in, out []*T, a A, g *T) ([]*T, error) {
 	res, err := backend.Execute(ctx, backend.OpMul, []*T{g, out[0]}, nil)
