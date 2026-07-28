@@ -10,3 +10,6 @@ Rationale: Two live failure modes: LinearRegression.Predict ranged over the inpu
 
 ## CONC-SCRATCH-FIELD-001
 IF a method uses a receiver slice field as a per-call temporary, THEN the buffer SHALL be passed as a parameter before any caller is parallelized; perfscan PS6006 detects it.
+
+## NUM-ARGMAX-TIEBREAK-001
+IF an argmax reduction is parallelized and its candidates combined afterward, THEN the combine SHALL be tested on a constructed exact tie, since random data yields no bit-equal scores and prediction goldens stay green under a reversed combine order.
