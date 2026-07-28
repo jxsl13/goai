@@ -248,17 +248,29 @@ func mixer2Prefill(mx *Mamba2Mixer, ls *Mamba2LayerState, u *tensor.Tensor) (*te
 	// Fill raw conv accs, then apply silu(acc)=acc·σ(acc) with σ vectorized per TOKEN ROW
 	// ([conv_dim]-length) — the same grouping mixer2Step uses, so every row bit-matches it
 	// (TestMamba2PrefillStateParity is bit-exact).
-	for c := range D {
-		wbase := c * K
-		for t := range seq {
-			acc := convB[c]
-			for k := range K {
-				src := t - (K - 1) + k
-				if src >= 0 {
-					acc += convW[wbase+k] * xBC[src][c]
-				}
+	// Loop order is t → k → c, NOT c → t → k. The old nest read xBC[src][c] with c
+	// FIXED, walking down a column across separately allocated row slices — one cache
+	// line touched per element, the worst case for a [][]float64. Here both xt[c] and
+	// row[c] walk contiguously; convW[c*K+k] becomes strided by K in exchange, which is
+	// cheap because convW is only D*K and stays resident.
+	//
+	// BIT-IDENTICAL: for a fixed (t,c) the accumulation still runs over k ascending
+	// from convB[c], so every rounding is the one the old order produced; only the
+	// order in which distinct (t,c) pairs are visited changes.
+	for t := range seq {
+		xt := xc[t]
+		for c := range D {
+			xt[c] = convB[c]
+		}
+		for k := range K {
+			src := t - (K - 1) + k
+			if src < 0 {
+				continue
 			}
-			xc[t][c] = acc
+			row := xBC[src]
+			for c := range D {
+				xt[c] += convW[c*K+k] * row[c]
+			}
 		}
 	}
 	sigRow := make([]float64, D)
