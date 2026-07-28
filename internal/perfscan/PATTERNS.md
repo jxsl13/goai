@@ -729,6 +729,50 @@ set of formats. That last filter suppresses nothing on its own, since an all-lit
 has no member matching the guard; what it does is keep a bare literal out of the reported
 variant list when a switch mixes the two. Probing is what established the distinction.
 
+## PS6005 — an output loop that re-reads an operand no output varies with  *(scanner: static)*
+
+One accumulator per output, and an operand that is the same for every one of them:
+
+```go
+for ni := range n {              // one output per iteration
+    wr := w[ni*k:]               // per-output
+    var acc float64
+    for i := range k {
+        acc += row[i] * wr[i]    // row[i] is re-loaded for every ni
+    }
+    outf[ni] = acc
+}
+```
+
+Unrolling the OUTPUT loop by 4 amortizes each `row[i]` load and its float conversion
+across 4 accumulators — register blocking, the m==1 dual of unroll-and-jam. Bit-exact:
+every output keeps its own accumulator and still sees the same terms in the same order.
+
+**Shipped:** `gguf.QMatMul`'s Q8_0 single-token path is blocked by 4 and measured
+**526µs → 233µs** per decode step (**2.26×**) — larger than either fusing the dequant into
+the dot (1.40–1.75×) or parallelizing the row loop (1.19–1.66×) delivered. It was blocked
+on **one of seven** sibling paths. Q4_0, the closest in block shape, measured **1.55×**
+when given the same treatment.
+
+**Nothing already in perfscan flagged either.** PS4008 wants a plain `acc += A[i]*B[i]`,
+and these loops unpack nibbles and convert float widths along the way, so it stays silent.
+The remedy differs too: PS4008 breaks a serial FMADD dependency chain, while here the
+chain is already broken by having one accumulator per output — what is wasted is the
+repeated load of the shared operand. Different defect, different fix, separate check.
+
+**The first version missed the loop it was written from**, which is the lesson worth
+keeping. The per-output operand in the Q4_0 loop arrives as a **range value**
+(`for i, q := range qs`), never as an index expression, so a derived-value closure that
+walked only assignments left it unclassified and the check saw no per-output operand at
+all. It reported 55 findings elsewhere while staying silent on its own motivating case —
+a rule can be noisy and blind at once, and only replaying it against the original site
+catches that. Replaying against the pre-blocking revision is now part of the validation.
+
+Silent on already-blocked loops (a stride above 1 is someone having done this), when
+**every** operand is output-invariant (that is PS5003, whose fix is to hoist the whole
+computation out rather than unroll it), and when the accumulator never reaches an output
+index — that last guard took the check from 145 findings tree-wide to 56.
+
 ## PS6004 — a dual-path kernel whose bit-identity claim is unverified  *(scanner: static)*
 A function carrying a devirtualized fast path (guarded by a configured
 `fastPathHelpers` entry in comma-ok form, or a `switch x.Dtype()` with a `default`
