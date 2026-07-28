@@ -250,3 +250,22 @@ FIX: internal/parallel.RowsIdx passes the CHUNK INDEX so a caller can keep one b
 METHOD LESSON, cast as PROC-BENCH-MEMAXIS-001: a benchmark A/B that reports only ns/op can hide an arbitrary regression on every other axis. -benchmem costs nothing and would have caught this at the moment of introduction. More generally, the campaign optimized one axis for many iterations and never re-swept the others; the first sweep on a new axis found a defect immediately, which is the third time in this project that changing the sweep axis has produced a finding where the previous axis looked exhausted.
 
 Residual: 7913 allocs against the original 883, all the pool's per-dispatch closure and WaitGroup, small in bytes (80MB total). Reducing it further means a dispatch API that avoids the closure, which is not worth it at this size.
+
+## T-01KYNA8X45ERT956JBG620TWX1 Triage the remaining PS3002 sort.Slice sites for the reflect.Swapper allocation
+kind: task
+state: draft
+created: 2026-07-28
+
+The CART sweep sort was one of several. Swapping sort.Slice for slices.SortFunc there cut BenchmarkForestFit from 1,095,700 to 352,027 allocations (3.11x) and 182 to 161 MB — reflectlite.Swapper was 37.7% of allocated objects, because sort.Slice reaches its swap through reflection and allocates on EVERY call.
+
+REMAINING SITES flagged by PS3002 in this branch's lane: classic/gbm.go:275, classic/knn.go:115, classic/spatialindex.go:176 and :228. Each is a sort.Slice with an indirect comparator.
+
+TRIAGE BY CALL FREQUENCY, not by the finding count. The CART site paid because it runs once per NODE per FEATURE — hundreds of thousands of calls per forest fit. A sort.Slice called once per Fit allocates one swapper and is not worth touching. Check each site's enclosing loop before changing anything: classic/spatialindex.go builds the ball tree recursively (likely per node, worth checking), while gbm.go:275 is in the presort, which runs once per builder.
+
+THE FIX IS MECHANICAL BUT NOT FREE OF RISK: slices.SortFunc takes VALUES where sort.Slice takes INDICES, so a comparator of the form kb[order[a]] < kb[order[c]] becomes kb[a] < kb[c] — silently wrong if transcribed literally rather than re-derived. Both are unstable and may order ties differently.
+
+GATE FIRST. classic/tree_golden_test.go is the pattern: frozen FNV hashes over every predicted label, probed red by reversing the sort order while the sklearn-parity tests stay green. Hash the WHOLE output, not a prefix — a reordered tie moves a split deep in one branch. If the site being changed has no such gate, build one from the pre-change implementation before touching it.
+
+MEASURE with -benchmem and report allocs/op alongside ns/op (PROC-BENCH-MEMAXIS-001). The time gain here was only ~5%; the allocation reduction was the result, and a ns/op-only A/B would have shown almost nothing.
+
+DO NOT blanket-replace. PS3002's other remedy is an LSD radix on the key bits, and the check states it cannot verify whether that applies. Where a radix path already exists above a cutoff, the sort.Slice below it is the deliberate small-n fallback — suppress with that reason rather than converting, as classic/tree.go now does.
