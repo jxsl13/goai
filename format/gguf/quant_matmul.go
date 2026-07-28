@@ -275,13 +275,13 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 		var dot4 func(row []float32, r0, r1, r2, r3 []byte, k int) (float64, float64, float64, float64)
 		switch qt {
 		case Q2_K:
-			dot = dotQ2_KRow
+			dot, dot4 = dotQ2_KRow, dotQ2_K4Rows
 		case Q3_K:
-			dot = dotQ3_KRow
+			dot, dot4 = dotQ3_KRow, dotQ3_K4Rows
 		case Q4_K:
 			dot, dot4 = dotQ4KRowFn, dotQ4_K4Rows
 		case Q5_K:
-			dot = dotQ5_KRow
+			dot, dot4 = dotQ5_KRow, dotQ5_K4Rows
 		case Q6_K:
 			dot, dot4 = dotQ6_KRow, dotQ6_K4Rows
 		}

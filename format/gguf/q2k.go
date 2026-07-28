@@ -170,3 +170,45 @@ func dotQ2_KRow(row []float32, raw []byte, k int) float64 {
 	}
 	return acc
 }
+
+// dotQ2_K4Rows is [dotQ2_KInto]'s dot over FOUR weight rows at once, sharing each
+// activation load across four accumulators. Bit-exact against [dotQ2_KRow]: same
+// per-element float32 weights, same ascending traversal, independent accumulators.
+func dotQ2_K4Rows(row []float32, r0, r1, r2, r3 []byte, k int) (float64, float64, float64, float64) {
+	var a0, a1, a2, a3 float64
+	for sb := 0; sb*qkK < k; sb++ {
+		o := sb * q2kBlockSize
+		b0, b1, b2, b3 := r0[o:], r1[o:], r2[o:], r3[o:]
+		d0, m0 := f16ToF32(binary.LittleEndian.Uint16(b0[80:82])), f16ToF32(binary.LittleEndian.Uint16(b0[82:84]))
+		d1, m1 := f16ToF32(binary.LittleEndian.Uint16(b1[80:82])), f16ToF32(binary.LittleEndian.Uint16(b1[82:84]))
+		d2, m2 := f16ToF32(binary.LittleEndian.Uint16(b2[80:82])), f16ToF32(binary.LittleEndian.Uint16(b2[82:84]))
+		d3, m3 := f16ToF32(binary.LittleEndian.Uint16(b3[80:82])), f16ToF32(binary.LittleEndian.Uint16(b3[82:84]))
+		yi, is := sb*qkK, 0
+		for nb := range 2 {
+			q0, q1 := b0[16+nb*32:16+nb*32+32], b1[16+nb*32:16+nb*32+32]
+			q2, q3 := b2[16+nb*32:16+nb*32+32], b3[16+nb*32:16+nb*32+32]
+			shift := 0
+			for range 4 {
+				for _, g := range [2]int{0, 16} {
+					s0, s1, s2, s3 := b0[is], b1[is], b2[is], b3[is]
+					is++
+					dl0, ml0 := d0*float32(s0&0xF), m0*float32(s0>>4)
+					dl1, ml1 := d1*float32(s1&0xF), m1*float32(s1>>4)
+					dl2, ml2 := d2*float32(s2&0xF), m2*float32(s2>>4)
+					dl3, ml3 := d3*float32(s3&0xF), m3*float32(s3>>4)
+					x := row[yi : yi+16]
+					for l := range x {
+						xv := float64(x[l])
+						a0 += xv * float64(dl0*float32((q0[l+g]>>shift)&3)-ml0)
+						a1 += xv * float64(dl1*float32((q1[l+g]>>shift)&3)-ml1)
+						a2 += xv * float64(dl2*float32((q2[l+g]>>shift)&3)-ml2)
+						a3 += xv * float64(dl3*float32((q3[l+g]>>shift)&3)-ml3)
+					}
+					yi += 16
+				}
+				shift += 2
+			}
+		}
+	}
+	return a0, a1, a2, a3
+}

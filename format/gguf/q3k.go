@@ -217,3 +217,57 @@ func dotQ3_KRow(row []float32, raw []byte, k int) float64 {
 	}
 	return acc
 }
+
+// dotQ3_K4Rows is [dotQ3_KRow] over FOUR weight rows at once, sharing each activation
+// load across four accumulators. The h-select is left exactly as the single-row form
+// writes it — it compiles to a CSEL on arm64 and a branchless rewrite measured slower.
+func dotQ3_K4Rows(row []float32, r0, r1, r2, r3 []byte, k int) (float64, float64, float64, float64) {
+	var a0, a1, a2, a3 float64
+	for sb := 0; sb*qkK < k; sb++ {
+		o := sb * q3kBlockSize
+		b0, b1, b2, b3 := r0[o:], r1[o:], r2[o:], r3[o:]
+		sc0, sc1 := q3kUnpackScales(b0[96:108]), q3kUnpackScales(b1[96:108])
+		sc2, sc3 := q3kUnpackScales(b2[96:108]), q3kUnpackScales(b3[96:108])
+		d0 := f16ToF32(binary.LittleEndian.Uint16(b0[108:110]))
+		d1 := f16ToF32(binary.LittleEndian.Uint16(b1[108:110]))
+		d2 := f16ToF32(binary.LittleEndian.Uint16(b2[108:110]))
+		d3 := f16ToF32(binary.LittleEndian.Uint16(b3[108:110]))
+		yi, is, m := sb*qkK, 0, byte(1)
+		for nb := range 2 {
+			q0, q1 := b0[32+nb*32:32+nb*32+32], b1[32+nb*32:32+nb*32+32]
+			q2, q3 := b2[32+nb*32:32+nb*32+32], b3[32+nb*32:32+nb*32+32]
+			shift := 0
+			for range 4 {
+				for _, g := range [2]int{0, 16} {
+					dl0, dl1 := d0*float32(int(sc0[is])-32), d1*float32(int(sc1[is])-32)
+					dl2, dl3 := d2*float32(int(sc2[is])-32), d3*float32(int(sc3[is])-32)
+					is++
+					for l := range 16 {
+						xv := float64(row[yi])
+						yi++
+						h0, h1, h2, h3 := 4, 4, 4, 4
+						if b0[l+g]&m != 0 {
+							h0 = 0
+						}
+						if b1[l+g]&m != 0 {
+							h1 = 0
+						}
+						if b2[l+g]&m != 0 {
+							h2 = 0
+						}
+						if b3[l+g]&m != 0 {
+							h3 = 0
+						}
+						a0 += xv * float64(dl0*float32(int((q0[l+g]>>shift)&3)-h0))
+						a1 += xv * float64(dl1*float32(int((q1[l+g]>>shift)&3)-h1))
+						a2 += xv * float64(dl2*float32(int((q2[l+g]>>shift)&3)-h2))
+						a3 += xv * float64(dl3*float32(int((q3[l+g]>>shift)&3)-h3))
+					}
+				}
+				shift += 2
+				m <<= 1
+			}
+		}
+	}
+	return a0, a1, a2, a3
+}
