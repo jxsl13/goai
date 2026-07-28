@@ -45,3 +45,31 @@ MEASURE: a reduction over axis 0 of a 2-D tensor is the shape that exercises the
 RECOVER THE PRIOR CODE from git: the reverted implementation is in this branch's history before the merge commit 92f76c13, in backend/ref/reduce.go. It is a starting point, not a patch to apply — main's file has changed shape around it.
 
 SCOPE: backend/ref only. NOTE the user works in parallel on backend/cuda and backend/cpu amd64 branches; backend/ref has been collision-free so far, but fetch-rebase before starting.
+
+## R-01KYN0Y3EPEV2TAD5AQP5Q74ZG Quantized prefill spent ~69% in scheduler wakeups, not compute — attribution and what is left after the QMatMul fix
+kind: research
+state: draft
+created: 2026-07-28
+
+Recorded because the measurement is in backend/cpu's zone, which this line of work deliberately does not touch, and because the attribution chain took several pprof hops that should not be repeated.
+
+BEFORE the QMatMul weight-row parallelization, a CPU profile of quantized Mamba2 prefill (2 layers, d_model 256, seq 128, Q4_K) read:
+  pthread_cond_signal  20.92% flat
+  gguf.QMatMul         19.61% flat
+  pthread_cond_wait    12.42%
+  runtime.usleep       12.42%
+  runtime.kevent       11.76%
+  runtime.madvise      11.76%
+Roughly 69% in runtime synchronization and memory management against 20% of actual matmul.
+
+ATTRIBUTION CHAIN, via pprof -peek: pthread_cond_signal <- semawakeup <- notewakeup <- startm <- wakep <- ready <- runtime.send.goready.func1. That last frame is a CHANNEL SEND waking a parked receiver — the signature of a channel-dispatch worker pool, not of GC or of the profiled code itself.
+
+NOT THIS LINE OF WORK'S POOL, tested rather than assumed: disabling internal/parallel entirely in QMatMul changed prefill by nothing (22.4/23.0/22.3ms off vs 22.4/22.4/22.1ms on). Prefill took the m>1 general path, which did not use that pool at all. The remaining candidate is backend/cpu's parallelWork dispatch, whose own comments already record that naive parking cost a full M-stop per barrier.
+
+CORROBORATION: total CPU samples (1.53s) matched wall time (1.52s) on a 12-core host, and prefill did not scale across GOMAXPROCS 1..12 (22.1 / 21.3 / 21.4 / 22.6ms). Work that parallelizes does not look like that.
+
+AFTER parallelizing QMatMul's weight-row loop, prefill is 2.52x faster and scales 20.8 / 14.0 / 9.8 / 8.5ms at 1/2/4/12 Ps. The scaling curve flattens past 4 Ps, which is where the remaining serial fraction AND this synchronization cost now live. That flattening is the measurable residue of the effect above.
+
+WHY NO ACTION TAKEN: backend/cpu is the zone a parallel worker is active in, and its pool carries heavily tuned dense/sparse regime machinery whose constants were calibrated against decode-shaped barrier streams. A change there needs that context and that worker's benchmarks, not a drive-by from this side. The actionable question for whoever picks it up is whether the ops a QUANTIZED prefill issues (small per-layer norms and elementwise work between large matmuls) fall below poolDenseMaxWork and thrash the regime detector — this workload did not exist when those constants were set.
+
+Recorded as measurement plus attribution, no proposed fix.
