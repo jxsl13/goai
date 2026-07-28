@@ -706,13 +706,21 @@ rather than inferred — and the measurement is cheap enough to sweep a whole pa
 | `GBMHist_hist_80k` | 334 ms | 1.01× | fixed → **1.57×** |
 | `GMMFitFull` | 77 ms | 1.00× | open |
 | `MLAVJPSeq256` | 20 ms | 0.99× | open |
-| `CholeskyVJP_128` | 4.7 ms | 0.88× | open (slower with more cores) |
+| `CholeskyVJP_128` | 4.3 ms | 1.09× | open |
 
 The quantized prefill path was found the same way and is now **2.52×**.
 
 **A ratio near 1.0 is a candidate, not a defect.** Plenty of work is legitimately serial,
 and small benchmarks are dominated by dispatch cost rather than compute — hence the
 2 ms floor before the flag is raised.
+
+**A ratio of two noisy numbers is noisier than either, and this bit already.** The first
+version of the sweep used `-benchtime 10x` and reported `CholeskyVJP_128` at **0.88×** —
+*slower with more cores*, which reads as false sharing and is worth chasing. At 300× the
+same benchmark measures **1.10×**: the 0.88 was one noisy sample, and it reached a commit
+message and two records before anyone re-measured. The script now defaults to a generous
+benchtime and takes the **minimum of 3 runs per arm** — benchmarks are contaminated upward
+by interference, never downward. The corrected table above reflects the re-measurement.
 
 **Watch for the loop order that blocks the split.** GBM's histogram was sample-major,
 which reads the bin table contiguously and is the *faster serial form*, but makes every

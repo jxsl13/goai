@@ -21,7 +21,7 @@
 set -uo pipefail
 
 pkg="${1:?usage: scaling_sweep.sh <pkg> [benchtime] [regexp]}"
-bt="${2:-10x}"
+bt="${2:-100x}"
 filter="${3:-.}"
 
 # Anything under this is too quick for the ratio to mean much — the measurement noise
@@ -34,10 +34,11 @@ names=$(go test "$pkg" -run XXX -bench . -benchtime 1x -count 1 2>/dev/null \
 
 printf '%-44s %12s %12s %9s\n' BENCHMARK 1P FULL SPEEDUP
 for b in $names; do
-  one=$(GOMAXPROCS=1 go test "$pkg" -run XXX -bench "^${b}\$" -benchtime "$bt" -count 1 2>/dev/null \
-        | awk '/^Benchmark/{print $3}')
-  many=$(go test "$pkg" -run XXX -bench "^${b}\$" -benchtime "$bt" -count 1 2>/dev/null \
-        | awk '/^Benchmark/{print $3}')
+  # min of 3, per arm: benchmarks are contaminated upward by interference, never downward
+  one=$(GOMAXPROCS=1 go test "$pkg" -run XXX -bench "^${b}\$" -benchtime "$bt" -count 3 2>/dev/null \
+        | awk '/^Benchmark/{print $3}' | sort -n | head -1)
+  many=$(go test "$pkg" -run XXX -bench "^${b}\$" -benchtime "$bt" -count 3 2>/dev/null \
+        | awk '/^Benchmark/{print $3}' | sort -n | head -1)
   [ -z "$one" ] || [ -z "$many" ] || [ "$many" = "0" ] && continue
   awk -v n="$b" -v o="$one" -v m="$many" -v min="$MIN_NS" 'BEGIN{
     r = o/m
