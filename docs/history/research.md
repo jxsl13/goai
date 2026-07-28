@@ -1,6 +1,6 @@
 # §R — research log
 
-Historical record migrated from the retired cavekit v4 spec (spec/40-research.md at commit a2f2746):
+Historical record migrated from the retired pre-spectackle spec (spec/40-research.md at commit a2f2746):
 268 findings with their sources and confidence levels.
 
 These entries are closed history. The live contracts they informed are EARS rules in the

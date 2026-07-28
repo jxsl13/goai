@@ -1,6 +1,6 @@
 # §B — backprop ledger
 
-Historical record migrated from the retired cavekit v4 spec (spec/60-backprop.md at commit a2f2746):
+Historical record migrated from the retired pre-spectackle spec (spec/60-backprop.md at commit a2f2746):
 116 bug post-mortems and the invariants they produced.
 
 These entries are closed history. The live contracts they informed are EARS rules in the

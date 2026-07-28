@@ -77,12 +77,7 @@ you only need locations or structure.
 
 ## History
 
-Until 2026-07-25 this repo ran a hand-rolled spec system ("cavekit v4"): a
-caveman-encoded `SPEC.md` generated from a `spec/` fragment tree by
-`internal/docgraph`, guarded by `internal/speccheck` and a `spec-sync` workflow,
-and driven by nine workflow skills (`spec`, `build`, `check`, `backprop`,
-`grill`, `research`, `review`, `deepen`, `caveman`). `FORMAT.md` held the
-caveman encoding.
+Until 2026-07-25 this repo ran a hand-rolled spec system that has since been retired. Its tables were migrated into the server-owned `.spectackle/` bundles; the narrative ledgers it produced live under `docs/history/`, kept only because live citation contracts reference their ids. All spec authoring now goes through spectackle.
 
 All of that was migrated into spectackle and removed. The verification
 invariants, constraints and architecture invariants became EARS contracts; the

@@ -1,6 +1,6 @@
 # §T — task log
 
-Historical record migrated from the retired cavekit v4 spec (spec/70-tasks.md at commit a2f2746):
+Historical record migrated from the retired pre-spectackle spec (spec/70-tasks.md at commit a2f2746):
 978 completed task entries with their citations.
 
 The seven tasks still open at migration time became spectackle lifecycle items and are NOT

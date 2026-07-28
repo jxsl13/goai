@@ -1,6 +1,6 @@
 # §Bench — benchmark ledger
 
-Historical record migrated from the retired cavekit v4 spec (spec/80-benchmarks.md at commit a2f2746):
+Historical record migrated from the retired pre-spectackle spec (spec/80-benchmarks.md at commit a2f2746):
 59 measurement records, pre- and post-optimization.
 
 These entries are closed history. The live contracts they informed are EARS rules in the

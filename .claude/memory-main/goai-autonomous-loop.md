@@ -23,7 +23,7 @@ GoAI (Go-AI-Bibliothek unter /Users/john/Desktop/goai) wird über einen **voll a
 - **Accel-Arc abgeschlossen:** Metal (T20/T30), CUDA/cuBLAS (T42, CI-gated Linux/Win), Vulkan (T43, host-verifiziert), NPU (T44 = dokumentierter Non-Goal, ADR-0011, `backend/npu.Available()=false`). CUDA/AMD/Intel-Verifikation braucht Linux/Win-Host.
 - **Zero-Config-Backend-Selektion (T46/T47, ADR-0012/0013):** `backend.Default()` wählt automatisch das höchstpräferierte registrierte Backend (Order cuda>metal>vulkan>cpu, reference-Fallback); `SetPreference`/`Preference` überschreibbar. `NewContext`/`NewTape` nutzen `Default()`. **Metal ist TAG-FREI** (`darwin && cgo`, keine `-tags metal` mehr — Frameworks immer präsent) → auf macOS reicht `import goai` (cgo=Default) und Metal wird auto-registriert+selektiert. Metal host-verifiziert auf M2 Pro: GPT-Inferenz+Training auf GPU. CUDA/Vulkan bleiben tag-gated (Link-Dep libcublas/-lvulkan); dlopen = künftiger tag-freier Weg. `make metal-test` (ohne Tag), `make vulkan-test` (mit VK_ICD).
 - Toolchain am 2026-07-05 vorhanden: Go 1.26.4, git, clang, Python 3.14.
-- Vollständige Definition in `PLANNING_PROMPT.md` (Abschnitt DAUERBETRIEB). Siehe [[goai-cgo-last-policy]].
+- Full definition in `LOOP.md`; the planning prompt it used to cite was removed with the pre-spectackle spec system. See [[goai-cgo-last-policy]].
 - **Stand 2026-07-13 (§T524):** Alle §T-Tasks done außer geparkten (T74 amd64,
   T28/T29 dropped). Ären abgeschlossen: Attention-Primitive T504–T513 (3 MHA-Nähte,
   OpMHAMasked/OpMHASelect, Tree-Medusa, Self-Extend 4×-Extrapolation), RWKV-Familie
