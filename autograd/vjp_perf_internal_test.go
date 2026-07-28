@@ -133,3 +133,91 @@ func BenchmarkNrm2VJP(b *testing.B) {
 		}
 	}
 }
+
+// benchExtremumVJP covers the OpMax/OpMin backward, which routes the gradient to the
+// first element attaining each group's extremum. It needs the FORWARD output y as
+// well, since the VJP compares x against it — benchReduceVJP passes no `out` because
+// the sum/mean backward does not need one.
+func benchExtremumVJP(b *testing.B, op backend.Op, dt tensor.Dtype) {
+	vjp := vjps[op]
+	x := tensor.New(dt, tensor.Shape{512, 512})
+	y := tensor.New(dt, tensor.Shape{512})
+	g := tensor.New(dt, tensor.Shape{512})
+	switch dt {
+	case tensor.F32:
+		xs, ys, gs := x.Storage().F32(), y.Storage().F32(), g.Storage().F32()
+		for i := range xs {
+			xs[i] = float32(i%97) * 0.25
+		}
+		for i := range ys {
+			ys[i] = 24.0 // the max of i%97*0.25 over a row
+			gs[i] = float32(i%13) * 0.1
+		}
+	case tensor.F64:
+		xs, ys, gs := x.Storage().F64(), y.Storage().F64(), g.Storage().F64()
+		for i := range xs {
+			xs[i] = float64(i%97) * 0.25
+		}
+		for i := range ys {
+			ys[i] = 24.0
+			gs[i] = float64(i%13) * 0.1
+		}
+	}
+	attrs := backend.ReduceAttrs{Axes: []int{1}}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := vjp(nil, []*tensor.Tensor{x}, []*tensor.Tensor{y}, attrs, g); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkExtremumVJPMaxF32(b *testing.B) { benchExtremumVJP(b, backend.OpMax, tensor.F32) }
+func BenchmarkExtremumVJPMaxF64(b *testing.B) { benchExtremumVJP(b, backend.OpMax, tensor.F64) }
+
+// benchProdVJP covers the OpProd backward, the remaining reduceOffsets consumer. It is
+// a genuine TWO-PASS algorithm — one pass tallies zeros and the non-zero product per
+// group, the second builds the gradient — which is why it kept the materialized offset
+// table when extremumVJP moved to forEachReduceRow.
+//
+// The fixture deliberately contains NO zeros: the zero-handling branches are
+// correctness paths exercised by prod_test.go, and seeding zeros here would measure
+// branch behavior rather than the traversal this benchmark exists to compare.
+func benchProdVJP(b *testing.B, dt tensor.Dtype) {
+	vjp := vjps[backend.OpProd]
+	x := tensor.New(dt, tensor.Shape{512, 512})
+	y := tensor.New(dt, tensor.Shape{512})
+	g := tensor.New(dt, tensor.Shape{512})
+	switch dt {
+	case tensor.F32:
+		xs, ys, gs := x.Storage().F32(), y.Storage().F32(), g.Storage().F32()
+		for i := range xs {
+			xs[i] = 1 + float32(i%7)*0.01
+		}
+		for i := range ys {
+			ys[i] = 1
+			gs[i] = float32(i%13) * 0.1
+		}
+	case tensor.F64:
+		xs, ys, gs := x.Storage().F64(), y.Storage().F64(), g.Storage().F64()
+		for i := range xs {
+			xs[i] = 1 + float64(i%7)*0.01
+		}
+		for i := range ys {
+			ys[i] = 1
+			gs[i] = float64(i%13) * 0.1
+		}
+	}
+	attrs := backend.ReduceAttrs{Axes: []int{1}}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := vjp(nil, []*tensor.Tensor{x}, []*tensor.Tensor{y}, attrs, g); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkProdVJPF32(b *testing.B) { benchProdVJP(b, tensor.F32) }
+func BenchmarkProdVJPF64(b *testing.B) { benchProdVJP(b, tensor.F64) }

@@ -49,13 +49,33 @@ func grpoKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) 
 	beta := pa.Beta
 
 	var total float64
-	for i := range b {
-		r := math.Exp(lpNew.AtF64(i) - lpOld.AtF64(i))
-		a := adv.AtF64(i)
-		surr := math.Min(r*a, math.Max(1-eps, math.Min(1+eps, r))*a)
-		d := lpRef.AtF64(i) - lpNew.AtF64(i)
-		kl := math.Exp(d) - d - 1 // Schulman k3, unbiased, ≥ 0
-		total += surr - beta*kl
+	// Devirtualised traversal (§base-perf), as in the DPO/KTO/PPO twins: FIVE AtF64
+	// dispatches per element around one Exp, a clamp and a second Exp. Flat
+	// row-major []float64 views (exact widening for F32) leave the arithmetic, the
+	// clamp and the accumulation order untouched — bit-identical.
+	nsv, ok0 := f64Data(lpNew)
+	osv, ok1 := f64Data(lpOld)
+	rsv, ok2 := f64Data(lpRef)
+	asv, ok3 := f64Data(adv)
+	if ok0 && ok1 && ok2 && ok3 {
+		for i := range b {
+			r := math.Exp(nsv[i] - osv[i])
+			a := asv[i]
+			surr := math.Min(r*a, math.Max(1-eps, math.Min(1+eps, r))*a)
+			d := rsv[i] - nsv[i]
+			kl := math.Exp(d) - d - 1 // Schulman k3, unbiased, ≥ 0
+			total += surr - beta*kl
+		}
+	} else {
+		// Generic fallback for dtypes f64Data cannot expose (verbatim original loop).
+		for i := range b {
+			r := math.Exp(lpNew.AtF64(i) - lpOld.AtF64(i))
+			a := adv.AtF64(i)
+			surr := math.Min(r*a, math.Max(1-eps, math.Min(1+eps, r))*a)
+			d := lpRef.AtF64(i) - lpNew.AtF64(i)
+			kl := math.Exp(d) - d - 1
+			total += surr - beta*kl
+		}
 	}
 	out := tensor.NewOn(ctx.Device(), lpNew.Dtype(), tensor.Shape{})
 	out.SetF64(-total / float64(b))

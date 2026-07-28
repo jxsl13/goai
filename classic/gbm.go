@@ -187,6 +187,10 @@ func bestGBMSplit(x [][]float64, y []float64, idx []int, minLeaf int) (feat int,
 	for f := 0; f < d; f++ {
 		copy(sorted, idx)
 		ff := f
+		// REFERENCE IMPLEMENTATION — deliberately left simple. gbmBuilder is the
+		// production grower and is validated bit-identical against this one; optimizing
+		// an oracle defeats its purpose. Reachable only from gbm_test.go.
+		//perfscan:ignore PS3002,PS3005 reference implementation the production grower is checked against
 		sort.Slice(sorted, func(a, b int) bool { return x[sorted[a]][ff] < x[sorted[b]][ff] })
 		var leftSum float64
 		for k := 0; k < n-1; k++ {
@@ -239,13 +243,29 @@ func newGBMBuilder(x [][]float64, n, d, maxDepth, minLeaf int) *gbmBuilder {
 	b := &gbmBuilder{x: x, n: n, d: d, maxDepth: maxDepth, minLeaf: minLeaf}
 	b.master = make([][]int, d)
 	mbase := make([]int, n*d)
+	// Hoist the scattered x[id][ff] load out of the O(n log n) comparator: fill a
+	// contiguous id-indexed key column once (O(n)), then compare those — the same trick
+	// the CART builder's radixByFeature already uses for the identical operation.
+	// The comparator is the SAME PREDICATE (key[id] == x[id][ff]), so pdqsort on the
+	// same input produces the same permutation, ties included; this is not merely
+	// "unspecified tie order is irrelevant" but an exact match.
+	key := make([]float64, n)
+	var rk, rtk []uint64
+	var rti []int
+	if n >= treeRadixCutoff {
+		rk, rtk, rti = make([]uint64, n), make([]uint64, n), make([]int, n)
+	}
 	for f := 0; f < d; f++ {
 		col := mbase[f*n : f*n+n : f*n+n]
 		for i := range col {
 			col[i] = i
+			key[i] = x[i][f]
 		}
-		ff := f
-		sort.Slice(col, func(a, c int) bool { return x[col[a]][ff] < x[col[c]][ff] })
+		if n >= treeRadixCutoff {
+			gbmRadixByKey(col, key, rk, rtk, rti)
+		} else {
+			sort.Slice(col, func(a, c int) bool { return key[col[a]] < key[col[c]] })
+		}
 		b.master[f] = col
 	}
 	cbase := make([]int, n*d)
@@ -776,4 +796,56 @@ func logLoss(y, f []float64) float64 {
 	// monitoring loss curve (predictions come from the trees), so the ~1-ulp SIMD shift
 	// is invisible to the sklearn parity and keeps the curve monotonic.
 	return simd.SoftplusNegLLSumF64(f, y) / float64(len(y))
+}
+
+// gbmRadixByKey sorts col ascending by key[col[·]] with an 8-pass LSD radix over the
+// ORDER-PRESERVING bit image of the float64 — negatives become ^bits, non-negatives
+// bits|signbit — which is monotonic in the float value, so an unsigned radix orders it.
+// The same transform the CART builder's radixByFeature uses; GBM's presort never got it.
+//
+// O(n) per pass against pdqsort's O(n log n) comparisons, and the comparisons it
+// replaces were the expensive kind: an indirection through col into a key column. Scratch
+// is caller-owned so the d presorts share one allocation.
+//
+// Ties: equal keys keep their relative input order within a pass, and the input is the
+// identity permutation, so equal values come out in ascending id order — at least as
+// well-defined as the unstable comparison sort it replaces. Split thresholds sit between
+// DISTINCT adjacent values, so tie order does not move any split either way.
+func gbmRadixByKey(col []int, key []float64, k, tmpK []uint64, tmpI []int) {
+	n := len(col)
+	k = k[:n]
+	for i, id := range col {
+		u := math.Float64bits(key[id])
+		if u&(1<<63) != 0 {
+			u = ^u
+		} else {
+			u |= 1 << 63
+		}
+		k[i] = u
+	}
+	src, dst := col, tmpI[:n]
+	srcK, dstK := k, tmpK[:n]
+	var count [256]int
+	for shift := uint(0); shift < 64; shift += 8 {
+		count = [256]int{}
+		for _, u := range srcK {
+			count[(u>>shift)&0xff]++
+		}
+		sum := 0
+		for i := range count {
+			c := count[i]
+			count[i] = sum
+			sum += c
+		}
+		for i, u := range srcK {
+			bkt := (u >> shift) & 0xff
+			p := count[bkt]
+			count[bkt]++
+			dst[p] = src[i]
+			dstK[p] = u
+		}
+		src, dst = dst, src
+		srcK, dstK = dstK, srcK
+	}
+	// 8 (even) passes ⇒ src is the caller's col again, holding the sorted ids.
 }

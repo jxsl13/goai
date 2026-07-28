@@ -533,7 +533,7 @@ honestly documented deficit with a root cause is a deliverable):
 ## Not yet measured — booked benchmark tasks
 
 Comparisons this file deliberately does **not** claim yet; each is booked as
-a spec task with an id you can grep in [`SPEC.md`](SPEC.md):
+a spec task you can find with `spectackle call find '{"q":"...","scope":"task"}'`:
 
 | Axis | Incumbent | Task |
 |---|---|---|
@@ -588,5 +588,6 @@ non-negotiables (§V22, §C3):
 - Georges, Buytaert & Eeckhout, *Statistically Rigorous Java Performance
   Evaluation* (OOPSLA '07) — why repeated runs with variance beat single
   numbers.
-- [`SPEC.md`](SPEC.md) §V22/§C3 — the in-repo law behind the method, and the
-  §T ids cited throughout this page.
+- Contracts `PERF-002` (a bottleneck attribution is measured, not assumed)
+  and `BUILD-004` (the significance threshold) in the `.spectackle/` bundle —
+  the in-repo law behind the method.

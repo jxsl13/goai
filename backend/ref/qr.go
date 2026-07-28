@@ -27,11 +27,19 @@ func qrKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*te
 	}
 
 	// working copy (becomes R in its upper triangle); reflectors stored in vs/betas.
-	rm := make([][]float64, m)
-	for i := range m {
-		rm[i] = make([]float64, n)
-		for j := range n {
-			rm[i][j] = a.AtF64(i, j)
+	// Working matrix as ONE flat [m*n] row-major buffer, not m allocated rows. The
+	// Householder loops below walk COLUMNS (rm[i][k] with i varying), so with a
+	// row-of-slices layout every step dereferences a different heap row. Flat makes
+	// that a constant stride through one allocation. Index arithmetic only, so the
+	// factorization is bit-identical.
+	rm := make([]float64, m*n)
+	if as, ok := f64Data(a); ok {
+		copy(rm, as)
+	} else {
+		for i := range m {
+			for j := range n {
+				rm[i*n+j] = a.AtF64(i, j)
+			}
 		}
 	}
 	vs := make([][]float64, n)
@@ -39,7 +47,7 @@ func qrKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*te
 	for k := range n {
 		var nrm float64 // ‖x‖ over rm[k:m, k]
 		for i := k; i < m; i++ {
-			nrm += rm[i][k] * rm[i][k]
+			nrm += rm[i*n+k] * rm[i*n+k]
 		}
 		nrm = math.Sqrt(nrm)
 		v := make([]float64, m)
@@ -48,11 +56,11 @@ func qrKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*te
 			continue // zero column → no reflection
 		}
 		alpha := -nrm // sign opposite x₀ avoids cancellation
-		if rm[k][k] < 0 {
+		if rm[k*n+k] < 0 {
 			alpha = nrm
 		}
 		for i := k; i < m; i++ {
-			v[i] = rm[i][k]
+			v[i] = rm[i*n+k]
 		}
 		v[k] -= alpha
 		var vtv float64
@@ -67,16 +75,16 @@ func qrKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*te
 		for j := k; j < n; j++ { // apply H_k to trailing columns
 			var s float64
 			for i := k; i < m; i++ {
-				s += v[i] * rm[i][j]
+				s += v[i] * rm[i*n+j]
 			}
 			bs := beta * s
 			for i := k; i < m; i++ {
-				rm[i][j] -= bs * v[i]
+				rm[i*n+j] -= bs * v[i]
 			}
 		}
-		rm[k][k] = alpha
+		rm[k*n+k] = alpha
 		for i := k + 1; i < m; i++ {
-			rm[i][k] = 0
+			rm[i*n+k] = 0
 		}
 	}
 
@@ -84,15 +92,16 @@ func qrKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*te
 	rt := tensor.NewOn(ctx.Device(), a.Dtype(), tensor.Shape{n, n})
 	for i := range n {
 		for j := i; j < n; j++ {
-			rt.SetF64(rm[i][j], i, j)
+			rt.SetF64(rm[i*n+j], i, j)
 		}
 	}
 	// reduced Q = H_0···H_{n-1} applied to the first n columns of Iₘ (reflectors in reverse).
-	q := make([][]float64, m)
+	// Same flattening for the Q accumulator: the reflector application below walks
+	// q[i][j] with i varying, another column walk.
+	q := make([]float64, m*n)
 	for i := range m {
-		q[i] = make([]float64, n)
 		if i < n {
-			q[i][i] = 1
+			q[i*n+i] = 1
 		}
 	}
 	for k := n - 1; k >= 0; k-- {
@@ -103,18 +112,18 @@ func qrKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*te
 		for j := range n {
 			var s float64
 			for i := k; i < m; i++ {
-				s += v[i] * q[i][j]
+				s += v[i] * q[i*n+j]
 			}
 			bs := betas[k] * s
 			for i := k; i < m; i++ {
-				q[i][j] -= bs * v[i]
+				q[i*n+j] -= bs * v[i]
 			}
 		}
 	}
 	qt := tensor.NewOn(ctx.Device(), a.Dtype(), tensor.Shape{m, n})
 	for i := range m {
 		for j := range n {
-			qt.SetF64(q[i][j], i, j)
+			qt.SetF64(q[i*n+j], i, j)
 		}
 	}
 	return []*tensor.Tensor{qt, rt}, nil

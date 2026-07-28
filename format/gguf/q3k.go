@@ -178,3 +178,42 @@ func quantizeQ3_K(x []float32) []byte {
 	}
 	return out
 }
+
+// dotQ3_KRow folds the Q3_K super-block dequant into a dot against one activation row,
+// mirroring [dequantQ3_KInto] statement for statement. The h-select is left exactly as
+// that loop writes it: it already compiles to a CSEL on arm64, and both a branchless
+// rewrite and a dst subslice measured slower there.
+func dotQ3_KRow(row []float32, raw []byte, k int) float64 {
+	var acc float64
+	for sb := 0; sb*qkK < k; sb++ {
+		blk := raw[sb*q3kBlockSize:]
+		hm := blk[0:32]
+		qsAll := blk[32:96]
+		sc := q3kUnpackScales(blk[96:108])
+		dAll := f16ToF32(binary.LittleEndian.Uint16(blk[108:110]))
+		yi := sb * qkK
+		m := byte(1)
+		is := 0
+		for nb := range 2 { // n = 0, 128
+			q := qsAll[nb*32 : nb*32+32]
+			shift := 0
+			for range 4 { // j = 0..3
+				for _, g := range [2]int{0, 16} { // two groups of 16 (q[l], q[l+16])
+					dl := dAll * float32(int(sc[is])-32)
+					is++
+					for l := range 16 {
+						h := 4
+						if hm[l+g]&m != 0 {
+							h = 0
+						}
+						acc += float64(row[yi]) * float64(dl*float32(int((q[l+g]>>shift)&3)-h))
+						yi++
+					}
+				}
+				shift += 2
+				m <<= 1
+			}
+		}
+	}
+	return acc
+}

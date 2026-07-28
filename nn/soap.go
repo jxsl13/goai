@@ -247,32 +247,14 @@ func eigenBasis(mat [][]float64) [][]float64 {
 }
 
 // rotateForward returns Q_Lᵀ · G · Q_R for G[m,n], Q_L[m,m], Q_R[n,n].
+//
+// Allocating twin of rotateForwardInto — it DELEGATES rather than carrying its own
+// copy of the loops, so the two cannot drift apart. They used to be duplicated, and a
+// duplicated pair is exactly where a rewrite lands in one half and not the other.
 func rotateForward(ql, g, qr [][]float64) [][]float64 {
 	m, n := len(ql), len(qr)
-	t := zeroMat(m, n) // T = Q_Lᵀ·G : t[k][j] = Σ_i Q_L[i][k]·G[i][j]
-	for i := range m { // T = QL^T*G — ikj: contiguous gi[j], tk[j]; ql[i][k] hoisted
-		gi := g[i]
-		qli := ql[i]
-		for k := range m {
-			qlik := qli[k]
-			tk := t[k]
-			for j := range n {
-				tk[j] += qlik * gi[j]
-			}
-		}
-	}
-	out := zeroMat(m, n) // T·Q_R : out[k][l] = Σ_j T[k][j]·Q_R[j][l]
-	for k := range m {   // T*QR — kjl: contiguous qrj[l], ok[l]
-		tk := t[k]
-		ok := out[k]
-		for j := range n {
-			tkj := tk[j]
-			qrj := qr[j]
-			for l := range n {
-				ok[l] += tkj * qrj[l]
-			}
-		}
-	}
+	out, tmp := zeroMat(m, n), zeroMat(m, n)
+	rotateForwardInto(out, tmp, ql, g, qr)
 	return out
 }
 
@@ -288,39 +270,41 @@ func matAtInto(dst [][]float64, t *tensor.Tensor) {
 
 // rotateForwardInto writes Q_Lᵀ·G·Q_R into out using tmp as the intermediate T (the pooled
 // twin of rotateForward — identical arithmetic and order, so bit-identical).
+// Both products run in ikj/axpy order: the dot form's `acc` is a SERIAL FMADD chain
+// (each add waits on the previous one's latency), and its first product additionally
+// read ql[i][k] with i innermost, striding down a column across separately allocated
+// rows — one cache line touched per element. In ikj order the scalar is hoisted out
+// of the inner loop and both operands are walked along contiguous rows.
+//
+// BIT-IDENTICAL: for each output the products are accumulated over the SAME index in
+// the SAME ascending order, into an accumulator that also starts at +0 — only the
+// order in which distinct outputs are visited changes. tmp and out are pooled scratch
+// and are accumulated into, so both must be zeroed first; TestRotateIntoMatchesAllocatingTwin
+// feeds deliberately dirty buffers to hold that.
 func rotateForwardInto(out, tmp, ql, g, qr [][]float64) {
 	m, n := len(ql), len(qr)
-	for k := range m { // zero reused tmp before +=
-		tk := tmp[k]
-		for j := range n {
-			tk[j] = 0
-		}
+	for k := range m {
+		clear(tmp[k][:n])
+		clear(out[k][:n])
 	}
-	for i := range m { // T = QL^T*G — ikj
+	for i := range m {
 		gi := g[i]
 		qli := ql[i]
 		for k := range m {
-			qlik := qli[k]
-			tk := tmp[k]
-			for j := range n {
-				tk[j] += qlik * gi[j]
+			av := qli[k]
+			tk := tmp[k][:n]
+			for j := range tk {
+				tk[j] += av * gi[j]
 			}
 		}
 	}
-	for k := range m { // zero reused out before +=
-		ok := out[k]
-		for l := range n {
-			ok[l] = 0
-		}
-	}
-	for k := range m { // T*QR — kjl
-		tk := tmp[k]
-		ok := out[k]
+	for k := range m {
+		tk, outk := tmp[k], out[k][:n]
 		for j := range n {
-			tkj := tk[j]
-			qrj := qr[j]
-			for l := range n {
-				ok[l] += tkj * qrj[l]
+			av := tk[j]
+			qj := qr[j][:n]
+			for l := range outk {
+				outk[l] += av * qj[l]
 			}
 		}
 	}
@@ -328,28 +312,39 @@ func rotateForwardInto(out, tmp, ql, g, qr [][]float64) {
 
 // rotateBackInto writes Q_L·N·Q_Rᵀ into out using tmp as the intermediate (pooled twin of
 // rotateBack — bit-identical).
+// The first product runs in ikj/axpy order for the same reason as rotateForwardInto,
+// preserving the ascending-k accumulation per output. The SECOND is deliberately left
+// as a dot: out[i][j] = Σ_l tmp[i][l]·qr[j][l] walks l contiguously in BOTH operands
+// already, so it does not suffer the strided read, and turning it into an axpy would
+// need a transposed copy of qr — an n×n allocation per call, on a path whose whole
+// point is that it is pooled.
 func rotateBackInto(out, tmp, ql, nmat, qr [][]float64) {
 	m, n := len(ql), len(qr)
-	for i := range m { // zero reused tmp before +=
-		ti := tmp[i]
-		for l := range n {
-			ti[l] = 0
-		}
+	for i := range m {
+		clear(tmp[i][:n])
 	}
-	for i := range m { // QL*N — ikl
+	for i := range m {
 		qli := ql[i]
-		ti := tmp[i]
+		ti := tmp[i][:n]
 		for k := range m {
-			qlik := qli[k]
-			nk := nmat[k]
-			for l := range n {
-				ti[l] += qlik * nk[l]
+			av := qli[k]
+			nk := nmat[k][:n]
+			for l := range ti {
+				ti[l] += av * nk[l]
 			}
 		}
 	}
 	for i := range m {
 		for j := range n {
 			var acc float64
+			// Declined for ALLOCATION, not for speed. The ikj rewrite would likely be
+			// faster here as it was for Muon's matmulABt (2.09x) — that kernel is the
+			// same A·Bᵀ shape with both operands contiguous in the summation index, and
+			// the transpose paid for itself. What rules it out is that this path is
+			// POOLED: a transposed copy of qr is an n×n allocation on every call, which
+			// is the cost the pooling exists to avoid. Revisit if a scratch buffer for
+			// the transpose can be hung off the same pool.
+			//perfscan:ignore PS4008 declined on allocation, not speed — see above
 			for l := range n {
 				acc += tmp[i][l] * qr[j][l]
 			}
@@ -359,29 +354,11 @@ func rotateBackInto(out, tmp, ql, nmat, qr [][]float64) {
 }
 
 // rotateBack returns Q_L · N · Q_Rᵀ for N[m,n], Q_L[m,m], Q_R[n,n].
+//
+// Allocating twin of rotateBackInto — delegates, for the reason given on rotateForward.
 func rotateBack(ql, nmat, qr [][]float64) [][]float64 {
 	m, n := len(ql), len(qr)
-	t := zeroMat(m, n) // T = Q_L·N : t[i][l] = Σ_k Q_L[i][k]·N[k][l]
-	for i := range m { // QL*N — ikl: contiguous nk[l], ti[l]
-		qli := ql[i]
-		ti := t[i]
-		for k := range m {
-			qlik := qli[k]
-			nk := nmat[k]
-			for l := range n {
-				ti[l] += qlik * nk[l]
-			}
-		}
-	}
-	out := zeroMat(m, n) // T·Q_Rᵀ : out[i][j] = Σ_l T[i][l]·Q_R[j][l]
-	for i := range m {
-		for j := range n {
-			var acc float64
-			for l := range n {
-				acc += t[i][l] * qr[j][l]
-			}
-			out[i][j] = acc
-		}
-	}
+	out, tmp := zeroMat(m, n), zeroMat(m, n)
+	rotateBackInto(out, tmp, ql, nmat, qr)
 	return out
 }

@@ -5,7 +5,8 @@ CGO_OFF   = CGO_ENABLED=0
 
 .PHONY: all build vet test race bench fmt tidy ci golden simd-build clean apicheck \
 	metal-test metal-bench cuda-test vulkan-spv vulkan-test vulkan-bench \
-	perfscan perfscan-check gofmt-check preflight preflight-full install-hooks
+	perfscan perfscan-check gofmt-check preflight preflight-full install-hooks \
+	spec-check spec-state spec-index spec-verify lint-md
 
 all: build vet apicheck test
 
@@ -190,31 +191,27 @@ bench-mlx:
 lint-md:
 	$(GO) run ./internal/mdlint ./...
 
-## spec-check: §V36 SPEC-integrity guard — id-uniqueness (across SPEC.md + worker
-## specs), §T-membership, §T-last. A Go test in internal/speccheck; also runs on
-## every non-empty CI selection via the cichange always-run list (T886/T893).
+## spec-check: lint every EARS spec bundle under .spectackle/ (exit 1 on errors)
+## and report spec-vs-code drift against the stamped rule anchors. Replaces the
+## former docgraph/speccheck render pipeline.
 spec-check:
-	$(CGO_OFF) $(GO) test ./internal/speccheck/
+	spectackle lint
+	spectackle call check '{}'
 
-## spec-graph: query the SPEC.md/docs citation graph (T915) — e.g.
-## make spec-graph ARGS='why V22' | ARGS='bugs-for format/gguf' | ARGS='patterns'.
-## The graph rebuilds from the corpus + git log; .docgraph/ only caches.
-spec-graph:
-	$(CGO_OFF) $(GO) run ./internal/docgraph $(ARGS)
+## spec-state: one structured snapshot of the spec-driven-development picture —
+## items, rules, graph, swarm, drift, health.
+spec-state:
+	spectackle call state '{}'
 
-## spec-graph-check: the docgraph test suite (fixture extraction, real-corpus
-## golden edges, determinism, cache roundtrip, speccheck-drift pin).
-spec-graph-check:
-	$(CGO_OFF) $(GO) test ./internal/docgraph/
+## spec-index: rebuild the symbol graph and resync the spec/doc cache. Run after
+## a large refactor so rule anchors resolve against current code.
+spec-index:
+	spectackle reindex
 
-## spec-render: regenerate the SPEC.md + SPEC-worker-*.md views from spec/ (§V41).
-spec-render:
-	$(CGO_OFF) $(GO) run ./internal/docgraph spec render
-
-## spec-verify: render-sync + §V36 speccheck + table shapes + §V39 dangling
-## strong refs, plus the full markdown lint. The local pre-push spec gate.
+## spec-verify: the local pre-push spec gate — bundle lint plus the full
+## markdown lint.
 spec-verify:
-	$(CGO_OFF) $(GO) run ./internal/docgraph spec verify
+	spectackle lint
 	$(GO) run ./internal/mdlint ./...
 
 ## perfscan: staticcheck-style finder for the hot-loop anti-patterns this repo
@@ -236,8 +233,8 @@ perfscan-check:
 ## preflight: the local PRE-PUSH gate — every HARD CI check runnable without a
 ## C/CUDA/Vulkan toolchain, fail-fast (§V23). Mirrors ci.yml: gofmt (the cgo+race
 ## lane), go vet ./... (all lanes' §V23 soundness backstop, compiles every _test.go),
-## the -short test suite INCLUDING the always-run meta-tests speccheck / perfscan /
-## docgraph render-sync (pure-go lane + §V41), and the go-mod-tidy drift gate. The
+## the -short test suite INCLUDING the always-run meta-tests perfscan / apicheck
+## (pure-go lane), and the go-mod-tidy drift gate. The
 ## -short suite self-skips the trained-model e2e tests, so this is ~seconds. It runs
 ## every package EXCEPT internal/mdlint — the one gate CI still holds out of always-run
 ## as known-red debt (mdlint reddens on unrelated worker markdown). apicheck is now

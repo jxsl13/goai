@@ -24,6 +24,14 @@ func Pinv(a *tensor.Tensor) (*tensor.Tensor, error) {
 	p := s.Numel()
 	cutoff := 1e-15 * s.AtF64(0) // rcond·σ_max
 	out := make([]float64, n*m)  // A⁺ is [n,m]
+	// The innermost accumulation runs O(p·n·m) times and read U through AtF64 —
+	// an interface hop into storage plus a variadic index — for one multiply-add.
+	// SVD returns freshly built contiguous tensors, so a flat row-major view is
+	// available and the read becomes uf[j*p+k]. Same operands, same order, same
+	// accumulation into out, so bit-identical; the accessor path is retained for
+	// tensors a flat view cannot expose.
+	uf, uok := flatRowMajor(u)
+	vf, vok := flatRowMajor(v)
 	for k := range p {
 		sk := s.AtF64(k)
 		if sk <= cutoff {
@@ -31,9 +39,21 @@ func Pinv(a *tensor.Tensor) (*tensor.Tensor, error) {
 		}
 		inv := 1 / sk
 		for i := range n { // A⁺[i,j] += V[i,k]·(1/σ_k)·U[j,k]
-			vik := v.AtF64(i, k) * inv
-			for j := range m {
-				out[i*m+j] += vik * u.AtF64(j, k)
+			var vik float64
+			if vok {
+				vik = vf[i*p+k] * inv
+			} else {
+				vik = v.AtF64(i, k) * inv
+			}
+			row := out[i*m : i*m+m]
+			if uok {
+				for j := range m {
+					row[j] += vik * uf[j*p+k]
+				}
+			} else {
+				for j := range m {
+					row[j] += vik * u.AtF64(j, k)
+				}
 			}
 		}
 	}
@@ -136,4 +156,19 @@ func NormInf(a *tensor.Tensor) (float64, error) {
 		}
 	}
 	return best, nil
+}
+
+// flatRowMajor exposes a rank-2 tensor's storage as a row-major []float64 when the
+// layout permits it, so a hot loop can index arithmetically instead of dispatching
+// through AtF64. Reports false for anything strided, offset, or of another dtype,
+// leaving the caller's accessor path in charge.
+func flatRowMajor(t *tensor.Tensor) ([]float64, bool) {
+	if t == nil || t.Ndim() != 2 || t.Dtype() != tensor.F64 || !t.IsContiguous() || t.Offset() != 0 {
+		return nil, false
+	}
+	d := t.Storage().F64()
+	if len(d) < t.Numel() {
+		return nil, false
+	}
+	return d, true
 }

@@ -361,6 +361,10 @@ func (d *T5Decoder) Generate(ctx *backend.Context, encoderOut *tensor.Tensor, ma
 type T5DecoderCache struct {
 	selfK, selfV   []*tensor.Tensor // per block, grown one row per step
 	crossK, crossV []*tensor.Tensor // per block, computed once from the encoder
+
+	// Amortized backing for the selfK/selfV views (rowbuf.go). crossK/crossV are
+	// NOT appended per token — the encoder is projected once — so they stay off it.
+	bufs kvBufs
 }
 
 // NewT5DecoderCache allocates a cache sized for the decoder's blocks.
@@ -374,7 +378,36 @@ func (d *T5Decoder) NewCache() *T5DecoderCache {
 
 // relBiasRow builds the [heads, 1, pos+1] additive bias for a single query at
 // absolute position pos attending to keys 0..pos (all past, so no causal mask).
-func (d *T5Decoder) relBiasRow(ctx *backend.Context, pos int) (*tensor.Tensor, error) {
+//
+// It GATHERS the row straight out of the bias table. The previous form called
+// RelBias.Bias(pos+1, pos+1), which builds the whole [pos+1, pos+1] bucket matrix,
+// materializes a dense one-hot [(pos+1)², numBuckets] tensor, runs a real matmul
+// against the table and then reads row pos out of the result — O(pos²·numBuckets)
+// work and allocation per token to produce heads·(pos+1) values, i.e. O(T³) over a
+// decode where O(T²) suffices. At pos=512 that was 86.8 MB allocated PER TOKEN.
+//
+// BIT-IDENTITY, and the one case where it does not hold: the matmul computed each
+// output as a sum of numBuckets products, all but one of them 0·Table[j][h]. For
+// FINITE table entries that sum is exactly Table[b][h], so the gather is bit-identical
+// — TestRelBiasRowMatchesMatmulForm gates it at tolerance 0. It differs if the table
+// holds ±Inf or NaN (0·Inf = NaN), and for a stored −0 (0 + −0 = +0, so the old form
+// returned +0 where the gather returns −0). Both mean a broken checkpoint rather than
+// normal operation — the table is a trained parameter — and neither changes any
+// downstream sum, since −0 and +0 add identically.
+// t5BiasViaMatmul forces relBiasRow back onto the pre-gather one-hot-matmul path. It
+// is a TEST/BENCH-ONLY fallback, exactly like kvAppendViaConcat (rowbuf.go): it lets
+// the A/B and the token-identity gate run the identical decode with only the bias
+// computation swapped, which is what makes either of them evidence rather than a
+// determinism check. Never set outside a test; tests and benchmarks that flip it run
+// sequentially, so no lock.
+var t5BiasViaMatmul bool
+
+// relBiasRowViaMatmul is the pre-gather implementation, kept solely as the oracle the
+// gather is measured and gated against.
+func (d *T5Decoder) relBiasRowViaMatmul(ctx *backend.Context, pos int) (*tensor.Tensor, error) {
+	// This IS the PS2007 shape — that is the whole point of keeping it. It exists
+	// only as the oracle relBiasRow is gated and measured against.
+	//perfscan:ignore PS2007 frozen oracle for the gather it was replaced by
 	full, err := d.RelBias.Bias(ctx, pos+1, pos+1) // [pos+1, pos+1, heads]
 	if err != nil {
 		return nil, err
@@ -383,9 +416,42 @@ func (d *T5Decoder) relBiasRow(ctx *backend.Context, pos int) (*tensor.Tensor, e
 	heads, kk := d.Config.Heads, pos+1
 	out := tensor.New(tensor.F64, tensor.Shape{heads, 1, kk})
 	os := out.Storage().F64()
-	for h := 0; h < heads; h++ {
-		for k := 0; k < kk; k++ {
+	for h := range heads {
+		for k := range kk {
 			os[h*kk+k] = fs[(pos*kk+k)*heads+h] // full[pos][k][h]
+		}
+	}
+	return out, nil
+}
+
+func (d *T5Decoder) relBiasRow(ctx *backend.Context, pos int) (*tensor.Tensor, error) {
+	if t5BiasViaMatmul {
+		return d.relBiasRowViaMatmul(ctx, pos)
+	}
+	rb := d.RelBias
+	if rb == nil || rb.Table == nil {
+		return nil, fmt.Errorf("nlp: T5 decoder has no relative-position bias table")
+	}
+	heads, kk := d.Config.Heads, pos+1
+	nb := rb.NumBuckets
+	if got := rb.Table.Shape(); len(got) != 2 || got[0] != nb || got[1] != heads {
+		return nil, fmt.Errorf("nlp: T5 relative-bias table %v, want [%d, %d]", got, nb, heads)
+	}
+	// Flatten the table once (numBuckets*heads values — 128 at the T5 defaults) so the
+	// gather itself is a typed slice read regardless of the table's dtype.
+	tbl := make([]float64, nb*heads)
+	for b := range nb {
+		for h := range heads {
+			tbl[b*heads+h] = rb.Table.AtF64(b, h)
+		}
+	}
+	out := tensor.New(tensor.F64, tensor.Shape{heads, 1, kk})
+	os := out.Storage().F64()
+	for k := range kk {
+		// Same convention as T5RelativePositionBuckets: bucket(key - query).
+		b := nn.T5RelativePositionBucket(k-pos, rb.Bidirectional, nb, rb.MaxDistance)
+		for h := range heads {
+			os[h*kk+k] = tbl[b*heads+h]
 		}
 	}
 	return out, nil
@@ -429,12 +495,12 @@ func (d *T5Decoder) DecodeStep(ctx *backend.Context, cache *T5DecoderCache, enco
 		if err != nil {
 			return nil, err
 		}
-		if cache.selfK[l] == nil {
-			cache.selfK[l], cache.selfV[l] = kt, vt
-		} else {
-			cache.selfK[l] = concatRows(cache.selfK[l], kt)
-			cache.selfV[l] = concatRows(cache.selfV[l], vt)
-		}
+		// Amortized row append (PS2006): the concat pair reallocated and recopied the
+		// whole self-attention cache per block per token, O(T²) over a decode. This
+		// also drops the nil special case, where the first token ADOPTED the kernel's
+		// own kt/vt as the cache slot — the row buffer copies into its own backing
+		// instead, which is the same values with strictly less sharing.
+		cache.selfK[l], cache.selfV[l] = cache.bufs.appendKV(cache.selfK, cache.selfV, l, kt, vt)
 		attn, err := exec1(ctx, backend.OpMHAMasked, attrs, q, cache.selfK[l], cache.selfV[l], selfMask)
 		if err != nil {
 			return nil, err

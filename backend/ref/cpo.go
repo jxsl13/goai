@@ -32,10 +32,23 @@ func cpoKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) (
 	beta, alpha := pa.Beta, pa.Alpha
 
 	var total float64
-	for i := range b {
-		lw := w.AtF64(i)
-		z := beta * (lw - l.AtF64(i))
-		total += softplus(-z) + alpha*(-lw)
+	// Devirtualised traversal (§base-perf), the CPO member of the preference-loss
+	// family: two AtF64 dispatches per element around one softplus. Bit-identical.
+	ws, ok0 := f64Data(w)
+	ls, ok1 := f64Data(l)
+	if ok0 && ok1 {
+		for i := range b {
+			lw := ws[i]
+			z := beta * (lw - ls[i])
+			total += softplus(-z) + alpha*(-lw)
+		}
+	} else {
+		// Generic fallback for dtypes f64Data cannot expose (verbatim original loop).
+		for i := range b {
+			lw := w.AtF64(i)
+			z := beta * (lw - l.AtF64(i))
+			total += softplus(-z) + alpha*(-lw)
+		}
 	}
 	out := tensor.NewOn(ctx.Device(), w.Dtype(), tensor.Shape{})
 	out.SetF64(total / float64(b))

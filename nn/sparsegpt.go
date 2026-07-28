@@ -164,6 +164,15 @@ func sparseGPTCore(w, x *tensor.Tensor, damp float64, blockSize int, kOf func(bl
 				for t := range blk {
 					idx[t] = bStart + t
 				}
+				// PS3005 DECLINED ON MEASUREMENT. Hoisting the saliency into a per-row key
+				// column AND the Hessian diagonal out of the row loop was implemented and
+				// benchmarked: an INTERLEAVED same-session A/B put it at 1.0046x
+				// (51,611,491 vs 51,847,204 ns on BenchmarkSparseGPTPrune_64x256, ranges
+				// overlapping). A first, non-interleaved reading suggested 1.048x — that
+				// was machine drift between the two runs, not the change. The sort is a
+				// small share of SparseGPT, which is dominated by the Hessian inverse and
+				// the OBS compensation loops.
+				//perfscan:ignore PS3005 measured 1.0046x interleaved — sort is not the bottleneck
 				sort.SliceStable(idx, func(a, b int) bool {
 					return sgSaliency(wm[r][idx[a]], hinv[idx[a]][idx[a]]) < sgSaliency(wm[r][idx[b]], hinv[idx[b]][idx[b]])
 				})

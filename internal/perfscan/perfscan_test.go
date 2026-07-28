@@ -2,11 +2,13 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"go/parser"
 	"go/token"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -1013,19 +1015,421 @@ func f(total, n float64) float64 {
 	}
 }
 
-// TestDetectO_SilentOnModuloIntDivision: a divisor used in `x % d` is provably integer
-// (Go's % requires integer operands), so `i/d` is index arithmetic, not a float
-// reciprocal-multiply candidate — PS5001 must stay silent even in an element-wise loop.
-func TestDetectO_SilentOnModuloIntDivision(t *testing.T) {
+// PS4004: a counted loop whose only data statement copies one element between two
+// slices, with no arithmetic on the value — an element-at-a-time memmove.
+func TestDetectPS4004_ScalarCopyLoop(t *testing.T) {
 	src := `package p
-func f(out []int, m int) {
-	for i := range out {
-		iy, ix := i/m, i%m
-		out[i] = iy*m + ix
+func fill(dst, src []float64, n int, eff []int, shape []int) {
+	ioff := 0
+	for pos := 0; pos < n; pos++ {
+		dst[pos] = src[ioff]
+		for d := len(shape) - 1; d >= 0; d-- {
+			ioff += eff[d]
+		}
 	}
 }`
-	if got := countCat(scanSrc(t, src))["loop-invariant-divide"]; got != 0 {
-		t.Fatalf("want 0 (integer modulo arithmetic), got %d", got)
+	if got := countCat(scanSrc(t, src)); got["scalar-copy-loop"] != 1 {
+		t.Fatalf("want 1 scalar-copy-loop, got %d (%v)", got["scalar-copy-loop"], got)
+	}
+}
+
+// …silent on a rank-sized setup loop. Structurally the same assignment, but it
+// ranges over a named container (2-4 iterations), so a bulk copy is noise.
+func TestDetectPS4004_SilentOnRankLoop(t *testing.T) {
+	src := `package p
+func plan(eff []int, strides []int, shape []int) {
+	for a := range shape {
+		eff[a] = strides[a]
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["scalar-copy-loop"] != 0 {
+		t.Fatalf("rank-sized range loop, want 0 scalar-copy-loop, got %d", got["scalar-copy-loop"])
+	}
+}
+
+// …silent when the value is transformed rather than copied: that is real
+// per-element work, not a memmove.
+func TestDetectPS4004_SilentOnArithmetic(t *testing.T) {
+	src := `package p
+func scale(dst, src []float64, n int, k float64) {
+	for i := 0; i < n; i++ {
+		dst[i] = src[i] * k
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["scalar-copy-loop"] != 0 {
+		t.Fatalf("arithmetic on the value, want 0 scalar-copy-loop, got %d", got["scalar-copy-loop"])
+	}
+}
+
+// PS5001 stays silent on an INTEGER divide, proved integer by a modulo sibling over
+// the same operand pair: Go rejects % on floats, so `r/hw` alongside `r%hw` cannot be
+// floating-point, and the rule's `inv := 1/hw` advice would evaluate to integer zero.
+func TestDetectPS5001_SilentOnIntegerDivideWithModuloSibling(t *testing.T) {
+	src := `package p
+func im2col(dst []float32, src []float32, n, hw int) {
+	for r := range n {
+		ni, rem := r/hw, r%hw
+		dst[r] = src[ni] + src[rem]
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["loop-invariant-divide"] != 0 {
+		t.Fatalf("want 0 loop-invariant-divide on an integer index decomposition, got %d (%v)",
+			got["loop-invariant-divide"], got)
+	}
+}
+
+// The parenthesized form must also be recognized: `r / (ho * wo)` paired with
+// `r % (ho * wo)` is the same proof, and comparison is structural so parentheses
+// do not defeat it.
+func TestDetectPS5001_SilentOnParenthesizedIntegerDivide(t *testing.T) {
+	src := `package p
+func im2col(dst []float32, src []float32, n, ho, wo int) {
+	for r := range n {
+		ni := r / (ho * wo)
+		rem := r % (ho * wo)
+		dst[r] = src[ni] + src[rem]
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["loop-invariant-divide"] != 0 {
+		t.Fatalf("want 0 loop-invariant-divide on a parenthesized integer decomposition, got %d (%v)",
+			got["loop-invariant-divide"], got)
+	}
+}
+
+// FLOOR against over-suppression: a genuine float divide has no modulo sibling —
+// one cannot exist, since % is illegal on floats — so it must still report.
+func TestDetectPS5001_ReportsFloatDivide(t *testing.T) {
+	src := `package p
+func mean(out []float32, acc []float32, l float32) {
+	for d := range out {
+		out[d] = acc[d] / l
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["loop-invariant-divide"] == 0 {
+		t.Fatalf("want ≥1 loop-invariant-divide on a float divide, got 0 (%v)", got)
+	}
+}
+
+// FLOOR for PS4001: the tree currently contains no genuine bulk-copyable decode, so
+// the check reports nothing over ./... . This synthetic true positive is what keeps
+// it from being silently dead — a rule that cannot fire is worse than a noisy one,
+// because nothing distinguishes it from a rule that is merely quiet.
+func TestDetectPS4001_ReportsVerbatimSliceDecode(t *testing.T) {
+	src := `package p
+func load(dst []uint16, src []byte) {
+	for i := range dst {
+		dst[i] = binary.LittleEndian.Uint16(src[2*i:])
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["le-decode-in-loop"] == 0 {
+		t.Fatalf("want ≥1 le-decode-in-loop on a verbatim slice decode, got 0 (%v)", got)
+	}
+}
+
+// Silent on a block SCALE read: one decode per block feeding a conversion, with the
+// payload decoded by arithmetic. Nothing here is a memmove (gguf dequantQ8_0Into).
+func TestDetectPS4001_SilentOnBlockScaleRead(t *testing.T) {
+	src := `package p
+func dequant(dst []float32, raw []byte) {
+	for b := 0; b*32 < len(dst); b++ {
+		blk := raw[b*34 : b*34+34]
+		d := f16ToF32(binary.LittleEndian.Uint16(blk))
+		y, q := dst[b*32:b*32+32], blk[2:34]
+		for i := range y {
+			y[i] = d * float32(int8(q[i]))
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["le-decode-in-loop"] != 0 {
+		t.Fatalf("want 0 le-decode-in-loop on a block-scale read, got %d (%v)",
+			got["le-decode-in-loop"], got)
+	}
+}
+
+// Silent on bits that are COMPUTED rather than read: the IQ sign trick and the radix
+// key inversion both store verbatim but assemble their bits arithmetically.
+func TestDetectPS4001_SilentOnComputedBits(t *testing.T) {
+	for _, src := range []string{`package p
+func iq(y []float32, grid []float32, db float32, sbit uint32) {
+	for k := range y {
+		y[k] = math.Float32frombits(math.Float32bits(db*grid[k]) ^ sbit)
+	}
+}`, `package p
+func invert(col []float64, src []uint64) {
+	for i, u := range src {
+		if u&(1<<63) != 0 {
+			u &^= 1 << 63
+		} else {
+			u = ^u
+		}
+		col[i] = math.Float64frombits(u)
+	}
+}`} {
+		if got := countCat(scanSrc(t, src)); got["le-decode-in-loop"] != 0 {
+			t.Fatalf("want 0 le-decode-in-loop on computed bits, got %d (%v)",
+				got["le-decode-in-loop"], got)
+		}
+	}
+}
+
+// PS1001 must see a loop bounded by a DIMENSION, not only one bounded by an element
+// count: `d := t.Shape()[1]; for j := range d` walks d elements exactly as
+// `for j := range t.Numel()` does. Without this the rule missed backend/ref/dpo.go,
+// whose devirtualization measured 1.57x, and nlp/kvevict.go.
+func TestDetectPS1001_ShapeBoundedLoop(t *testing.T) {
+	src := `package p
+func gather(out, t *T, idx []int) {
+	d := t.Shape()[1]
+	for r, src := range idx {
+		for j := range d {
+			out.SetF64(t.AtF64(src, j), r, j)
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["per-element-dispatch"] == 0 {
+		t.Fatalf("want ≥1 per-element-dispatch on a shape-bounded accessor loop, got 0 (%v)", got)
+	}
+}
+
+// PS4006 fires on a [][]T built one row per allocation and then indexed two-deep
+// inside a nested loop — the shape measured at 1.5x (cholesky) and 1.2x (SymEig).
+func TestDetectPS4006_RowSliceMatrix(t *testing.T) {
+	src := `package p
+func chol(a []float64, n int) {
+	l := make([][]float64, n)
+	for i := range n {
+		l[i] = make([]float64, n)
+	}
+	for j := range n {
+		for i := range n {
+			for k := range j {
+				l[i][j] -= l[i][k] * l[j][k]
+			}
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["row-slice-matrix"] == 0 {
+		t.Fatalf("want ≥1 row-slice-matrix, got 0 (%v)", got)
+	}
+}
+
+// Silent once flattened: a single [rows*cols] buffer has no two-deep index, so
+// applying the rule's own advice removes the finding rather than perpetuating it.
+func TestDetectPS4006_SilentOnFlatBuffer(t *testing.T) {
+	src := `package p
+func chol(a []float64, n int) {
+	l := make([]float64, n*n)
+	for j := range n {
+		for i := range n {
+			for k := range j {
+				l[i*n+j] -= l[i*n+k] * l[j*n+k]
+			}
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["row-slice-matrix"] != 0 {
+		t.Fatalf("want 0 row-slice-matrix on a flat buffer, got %d (%v)",
+			got["row-slice-matrix"], got)
+	}
+}
+
+// Silent on a ragged structure that is never indexed two-deep in a nested loop —
+// a [][]T is only a defect when the row dereference is paid repeatedly.
+func TestDetectPS4006_SilentOnShallowUse(t *testing.T) {
+	src := `package p
+func rows(n int) [][]float64 {
+	m := make([][]float64, n)
+	for i := range n {
+		m[i] = make([]float64, i+1)
+	}
+	return m
+}`
+	if got := countCat(scanSrc(t, src)); got["row-slice-matrix"] != 0 {
+		t.Fatalf("want 0 row-slice-matrix on shallow use, got %d (%v)",
+			got["row-slice-matrix"], got)
+	}
+}
+
+// PS6004 reports the dual-arm shape: a comma-ok flat-view guard plus a generic
+// accessor fallback, which together assert bit-identity between two code paths.
+func TestDetectPS6004_DualPath(t *testing.T) {
+	src := `package p
+func loss(a *T, n int) float64 {
+	var total float64
+	as, ok := f64Data(a)
+	if ok {
+		for i := range n {
+			total += as[i]
+		}
+	} else {
+		for i := range n {
+			total += a.AtF64(i)
+		}
+	}
+	return total
+}`
+	if got := countCat(scanSrc(t, src)); got["unverified-dual-path"] == 0 {
+		t.Fatalf("want ≥1 unverified-dual-path, got 0 (%v)", got)
+	}
+}
+
+// Silent with no fallback arm: one path cannot disagree with itself, so there is no
+// bit-identity claim to verify.
+func TestDetectPS6004_SilentWithoutFallback(t *testing.T) {
+	src := `package p
+func loss(a *T, n int) float64 {
+	var total float64
+	as, ok := f64Data(a)
+	if !ok {
+		return 0
+	}
+	for i := range n {
+		total += as[i]
+	}
+	return total
+}`
+	if got := countCat(scanSrc(t, src)); got["unverified-dual-path"] != 0 {
+		t.Fatalf("want 0 unverified-dual-path without a fallback, got %d (%v)",
+			got["unverified-dual-path"], got)
+	}
+}
+
+// Silent on a plain single-valued storage accessor. .Storage().F64() is also in
+// fastPathHelpers but returns one value, so it makes no success-flag claim; without
+// this discrimination the rule matched 193 functions instead of 36.
+func TestDetectPS6004_SilentOnBareStorageAccess(t *testing.T) {
+	src := `package p
+func fill(a *T, n int) {
+	xs := a.Storage().F64()
+	for i := range n {
+		xs[i] = a.AtF64(i)
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["unverified-dual-path"] != 0 {
+		t.Fatalf("want 0 unverified-dual-path on bare storage access, got %d (%v)",
+			got["unverified-dual-path"], got)
+	}
+}
+
+// PS6004 also reports the dtype-SWITCH form of the same dual-arm shape, which has
+// no comma-ok: `switch x.Dtype() { case F64: <typed>; default: <accessor> }`.
+// blas1 uses this form, and omitting it left the known-kernel floor at 6 of 7.
+func TestDetectPS6004_DtypeSwitchForm(t *testing.T) {
+	src := `package p
+func dot(a, b *T, n int) float64 {
+	var acc float64
+	switch a.Dtype() {
+	case F64:
+		as := a.Storage().F64()
+		for i := range n {
+			acc += as[i]
+		}
+	default:
+		for i := range n {
+			acc += a.AtF64(i)
+		}
+	}
+	return acc
+}`
+	if got := countCat(scanSrc(t, src)); got["unverified-dual-path"] == 0 {
+		t.Fatalf("want ≥1 unverified-dual-path on the dtype-switch form, got 0 (%v)", got)
+	}
+}
+
+// Silent when the dtype switch is exhaustive: with no default clause there is no
+// fallback arm, so no two paths claim to agree.
+func TestDetectPS6004_SilentOnExhaustiveSwitch(t *testing.T) {
+	src := `package p
+func dot(a *T, n int) float64 {
+	var acc float64
+	switch a.Dtype() {
+	case F64:
+		acc = a.AtF64(0)
+	case F32:
+		acc = a.AtF64(1)
+	}
+	return acc
+}`
+	if got := countCat(scanSrc(t, src)); got["unverified-dual-path"] != 0 {
+		t.Fatalf("want 0 unverified-dual-path on an exhaustive switch, got %d (%v)",
+			got["unverified-dual-path"], got)
+	}
+}
+
+// PS4005 fires on an N-D odometer ticked once per ELEMENT — the shape whose fix
+// measured 4.49x (ref broadcast), 5.29x (cpu broadcast), 3.14x (tensor gather) and
+// 1.78x (ref argmax).
+func TestDetectPS4005_PerElementOdometer(t *testing.T) {
+	src := `package p
+func walk(xs []float64, acc []float64, shape []int, eff []int) {
+	nd := len(shape)
+	idx := make([]int, nd)
+	of := 0
+	for pos := range xs {
+		acc[of] = combine(acc[of], xs[pos])
+		for d := nd - 1; d >= 0; d-- {
+			idx[d]++
+			of += eff[d]
+			if idx[d] < shape[d] {
+				break
+			}
+			idx[d] = 0
+			of -= eff[d] * shape[d]
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["per-element-odometer"] == 0 {
+		t.Fatalf("want ≥1 per-element-odometer, got 0 (%v)", got)
+	}
+}
+
+// Silent once the innermost axis is HOISTED: the odometer then starts at nd-2 and
+// ticks once per run. Applying the rule's own advice must remove the finding — the
+// check PS4005 initially failed, reporting the three sites it had just helped fix.
+func TestDetectPS4005_SilentOnHoistedOdometer(t *testing.T) {
+	src := `package p
+func walk(xs []float64, acc []float64, shape []int, eff []int, inner int) {
+	nd := len(shape)
+	idx := make([]int, nd)
+	of := 0
+	for pos := 0; pos < len(xs); pos += inner {
+		run := xs[pos : pos+inner]
+		for j, v := range run {
+			acc[of+j] = combine(acc[of+j], v)
+		}
+		for d := nd - 2; d >= 0; d-- {
+			idx[d]++
+			of += eff[d]
+			if idx[d] < shape[d] {
+				break
+			}
+			idx[d] = 0
+			of -= eff[d] * shape[d]
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["per-element-odometer"] != 0 {
+		t.Fatalf("want 0 per-element-odometer on a hoisted odometer, got %d (%v)",
+			got["per-element-odometer"], got)
+	}
+}
+
+// Silent on an ordinary descending loop with no indexed tick — a plain reverse walk
+// is not an odometer.
+func TestDetectPS4005_SilentOnPlainReverseLoop(t *testing.T) {
+	src := `package p
+func rev(xs []float64, n int) float64 {
+	var total float64
+	for i := range xs {
+		for d := n - 1; d >= 0; d-- {
+			total += xs[i]
+		}
+	}
+	return total
+}`
+	if got := countCat(scanSrc(t, src)); got["per-element-odometer"] != 0 {
+		t.Fatalf("want 0 per-element-odometer on a plain reverse loop, got %d (%v)",
+			got["per-element-odometer"], got)
 	}
 }
 
@@ -1049,24 +1453,19 @@ func (s *M) Step(ps []*int) {
 	}
 }
 
-// PS5002: symmetric-matrix full-accumulation (GMM/PCA class).
-func TestDetectPS5002_SymmetricOuterProduct(t *testing.T) {
+// TestDetectO_SilentOnModuloIntDivision: a divisor used in `x % d` is provably integer
+// (Go's % requires integer operands), so `i/d` is index arithmetic, not a float
+// reciprocal-multiply candidate — PS5001 must stay silent even in an element-wise loop.
+func TestDetectO_SilentOnModuloIntDivision(t *testing.T) {
 	src := `package p
-func cov(x [][]float64, mean []float64, m [][]float64, d int) {
-	c := make([]float64, d)
-	for _, row := range x {
-		for j := range c {
-			c[j] = row[j] - mean[j]
-		}
-		for i := range d {
-			for j := range d {
-				m[i][j] += c[i] * c[j]
-			}
-		}
+func f(out []int, m int) {
+	for i := range out {
+		iy, ix := i/m, i%m
+		out[i] = iy*m + ix
 	}
 }`
-	if got := countCat(scanSrc(t, src))["symmetric-accumulation"]; got != 1 {
-		t.Fatalf("want 1 symmetric-accumulation (outer product), got %d", got)
+	if got := countCat(scanSrc(t, src))["loop-invariant-divide"]; got != 0 {
+		t.Fatalf("want 0 (integer modulo arithmetic), got %d", got)
 	}
 }
 
@@ -1124,6 +1523,955 @@ func chol(a, l [][]float64, n int) {
 }`
 	if got := countCat(scanSrc(t, src))["symmetric-accumulation"]; got != 0 {
 		t.Fatalf("want 0 (already triangular), got %d", got)
+	}
+}
+
+// PS5002: symmetric-matrix full-accumulation (GMM/PCA class).
+func TestDetectPS5002_SymmetricOuterProduct(t *testing.T) {
+	src := `package p
+func cov(x [][]float64, mean []float64, m [][]float64, d int) {
+	c := make([]float64, d)
+	for _, row := range x {
+		for j := range c {
+			c[j] = row[j] - mean[j]
+		}
+		for i := range d {
+			for j := range d {
+				m[i][j] += c[i] * c[j]
+			}
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src))["symmetric-accumulation"]; got != 1 {
+		t.Fatalf("want 1 symmetric-accumulation (outer product), got %d", got)
+	}
+}
+
+// The exact shape that cost Muon 2.09x: a dot product per output element, its
+// accumulator a serial FMADD chain. Taken verbatim from nn.matmulABt as it stood
+// before the ikj rewrite.
+func TestDetectPS4008_SerialDotMatmul(t *testing.T) {
+	src := `package p
+func matmulABt(a, b []float64, m, k int) []float64 {
+	c := make([]float64, m*m)
+	for i := range m {
+		ai := a[i*k : i*k+k]
+		ci := c[i*m : i*m+m]
+		for j := range m {
+			bj := b[j*k : j*k+k]
+			var s float64
+			for p := range ai {
+				s += ai[p] * bj[p]
+			}
+			ci[j] = s
+		}
+	}
+	return c
+}`
+	if got := countCat(scanSrc(t, src)); got["serial-dot-matmul"] == 0 {
+		t.Fatalf("want ≥1 serial-dot-matmul, got 0 (%v)", got)
+	}
+}
+
+// The short-declaration spelling of the same accumulator must be caught too.
+func TestDetectPS4008_ShortDeclAccumulator(t *testing.T) {
+	src := `package p
+func mm(a, b, c []float64, m, k int) {
+	for i := range m {
+		for j := range m {
+			s := 0.0
+			for p := range k {
+				s += a[i*k+p] * b[j*k+p]
+			}
+			c[i*m+j] = s
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["serial-dot-matmul"] == 0 {
+		t.Fatalf("want ≥1 serial-dot-matmul, got 0 (%v)", got)
+	}
+}
+
+// SILENT on the ikj/axpy form — applying the rule's own advice must clear the
+// finding, or the rule would keep reporting the code it just helped fix.
+func TestDetectPS4008_SilentOnIkjAxpy(t *testing.T) {
+	src := `package p
+func mm(a, bt, c []float64, m, k int) {
+	for i := range m {
+		ci := c[i*m : i*m+m]
+		for p := range k {
+			av := a[i*k+p]
+			bp := bt[p*m : p*m+m]
+			for j := range ci {
+				ci[j] += av * bp[j]
+			}
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["serial-dot-matmul"] != 0 {
+		t.Fatalf("want 0 serial-dot-matmul on the ikj/axpy rewrite, got %d (%v)",
+			got["serial-dot-matmul"], got)
+	}
+}
+
+// SILENT on a plain reduction: a norm accumulates a product of one slice with
+// ITSELF and has no indexed store, so there is no output index to make independent
+// and nothing to hoist. Flagging it would be a pure false positive.
+func TestDetectPS4008_SilentOnReduction(t *testing.T) {
+	src := `package p
+func norms(x []float64, out []float64, m, k int) {
+	for i := range m {
+		for j := range m {
+			var s float64
+			for p := range k {
+				s += x[i*k+p] * x[i*k+p]
+			}
+			_ = s
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["serial-dot-matmul"] != 0 {
+		t.Fatalf("want 0 serial-dot-matmul on a same-base reduction with no store, got %d (%v)",
+			got["serial-dot-matmul"], got)
+	}
+}
+
+// SILENT when the inner loop does more than the dot: the accumulation is then not
+// the whole cost and the ikj rewrite is not the fix.
+func TestDetectPS4008_SilentOnCompoundInnerBody(t *testing.T) {
+	src := `package p
+func mm(a, b, c, d []float64, m, k int) {
+	for i := range m {
+		for j := range m {
+			var s float64
+			for p := range k {
+				s += a[i*k+p] * b[j*k+p]
+				d[p] = s
+			}
+			c[i*m+j] = s
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["serial-dot-matmul"] != 0 {
+		t.Fatalf("want 0 serial-dot-matmul when the inner loop has extra work, got %d (%v)",
+			got["serial-dot-matmul"], got)
+	}
+}
+
+// A //perfscan:ignore whose explanation WRAPS onto following lines must still
+// suppress the statement the comment block documents. Anchoring the directive to its
+// own line + 1 made it silently inert — the comment reads as if it took effect while
+// the finding is still reported. Two directives in this repo were dead exactly so.
+func TestIgnoreDirective_SpansWrappedCommentBlock(t *testing.T) {
+	src := `package p
+func mm(a, b, c []float64, m, k int) {
+	for i := range m {
+		for j := range m {
+			s := 0.0
+			//perfscan:ignore PS4008 deliberate, see below
+			// this explanation wraps onto a second line, and onto a third,
+			// which used to push the flagged loop out of the directive's reach
+			for p := range k {
+				s += a[i*k+p] * b[j*k+p]
+			}
+			c[i*m+j] = s
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["serial-dot-matmul"] != 0 {
+		t.Fatalf("wrapped ignore directive did not suppress: got %d (%v)",
+			got["serial-dot-matmul"], got)
+	}
+}
+
+// The directive may also sit at the END of the block, below the prose.
+func TestIgnoreDirective_AtEndOfCommentBlock(t *testing.T) {
+	src := `package p
+func mm(a, b, c []float64, m, k int) {
+	for i := range m {
+		for j := range m {
+			s := 0.0
+			// prose first, explaining why this shape is deliberate here
+			// and why the rewrite would not pay off
+			//perfscan:ignore PS4008 deliberate
+			for p := range k {
+				s += a[i*k+p] * b[j*k+p]
+			}
+			c[i*m+j] = s
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["serial-dot-matmul"] != 0 {
+		t.Fatalf("trailing ignore directive did not suppress: got %d (%v)",
+			got["serial-dot-matmul"], got)
+	}
+}
+
+// A directive in an UNRELATED comment block must not leak onto a later statement —
+// spanning the block must not become "suppress everything after it".
+func TestIgnoreDirective_DoesNotLeakPastItsBlock(t *testing.T) {
+	src := `package p
+func mm(a, b, c []float64, m, k int) {
+	// prose block with a directive that belongs to the declaration below it
+	//perfscan:ignore PS4008 belongs to the var, not the loop
+	var unrelated int
+	_ = unrelated
+	for i := range m {
+		for j := range m {
+			s := 0.0
+			for p := range k {
+				s += a[i*k+p] * b[j*k+p]
+			}
+			c[i*m+j] = s
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["serial-dot-matmul"] == 0 {
+		t.Fatalf("ignore leaked past its comment block and suppressed a later finding (%v)", got)
+	}
+}
+
+// The exact shape that cost a 500-token GPT decode 2.21 GB: a cache slot reassigned
+// to a concat of itself, per layer, per token.
+func TestDetectPS2006_QuadraticCacheAppend(t *testing.T) {
+	src := `package p
+func (g *M) DecodeStep(cache *C, tok int) error {
+	for l := range g.Blocks {
+		kt, vt := g.proj(l)
+		cache.K[l] = concatRows(cache.K[l], kt)
+		cache.V[l] = concatRows(cache.V[l], vt)
+	}
+	return nil
+}`
+	if got := countCat(scanSrc(t, src)); got["quadratic-cache-append"] != 2 {
+		t.Fatalf("want 2 quadratic-cache-append, got %d (%v)", got["quadratic-cache-append"], got)
+	}
+}
+
+// SILENT once the amortized row buffer is adopted — applying the rule's own advice
+// must clear the finding.
+func TestDetectPS2006_SilentOnRowBufAppend(t *testing.T) {
+	src := `package p
+func (g *M) DecodeStep(cache *C, tok int) error {
+	for l := range g.Blocks {
+		kt, vt := g.proj(l)
+		cache.K[l], cache.V[l] = cache.bufs.appendKV(cache.K, cache.V, l, kt, vt)
+	}
+	return nil
+}`
+	if got := countCat(scanSrc(t, src)); got["quadratic-cache-append"] != 0 {
+		t.Fatalf("want 0 on the row-buffer append, got %d (%v)", got["quadratic-cache-append"], got)
+	}
+}
+
+// SILENT outside a per-token step function: the same statement in a one-shot builder
+// is an ordinary concatenation, and pooling it would be premature.
+func TestDetectPS2006_SilentOutsideStepFunction(t *testing.T) {
+	src := `package p
+func buildOnce(cache *C, parts []T) {
+	for l := range parts {
+		cache.K[l] = concatRows(cache.K[l], parts[l])
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["quadratic-cache-append"] != 0 {
+		t.Fatalf("want 0 outside a step function, got %d (%v)", got["quadratic-cache-append"], got)
+	}
+}
+
+// SILENT when the concat's first operand is a DIFFERENT slot: that is not
+// accumulate-into-itself and carries no quadratic growth.
+func TestDetectPS2006_SilentOnCrossSlotConcat(t *testing.T) {
+	src := `package p
+func (g *M) DecodeStep(cache *C, tok int) error {
+	for l := range g.Blocks {
+		cache.K[l] = concatRows(cache.prefix[l], g.row(l))
+	}
+	return nil
+}`
+	if got := countCat(scanSrc(t, src)); got["quadratic-cache-append"] != 0 {
+		t.Fatalf("want 0 on a cross-slot concat, got %d (%v)", got["quadratic-cache-append"], got)
+	}
+}
+
+// SILENT outside a loop: a single concat per call is not quadratic.
+func TestDetectPS2006_SilentOutsideLoop(t *testing.T) {
+	src := `package p
+func (g *M) DecodeStep(cache *C, tok int) error {
+	cache.K[0] = concatRows(cache.K[0], g.row(0))
+	return nil
+}`
+	if got := countCat(scanSrc(t, src)); got["quadratic-cache-append"] != 0 {
+		t.Fatalf("want 0 outside a loop, got %d (%v)", got["quadratic-cache-append"], got)
+	}
+}
+
+// The exact shape that cost the T5 decoder 86.8 MB per token: build a square
+// [pos+1, pos+1] object, then read row pos out of it.
+func TestDetectPS2007_BuildSquareUseOneRow(t *testing.T) {
+	src := `package p
+func (d *D) biasRow(ctx *C, pos int) []float64 {
+	full := d.bias.Bias(ctx, pos+1, pos+1)
+	kk := pos + 1
+	out := make([]float64, kk)
+	for k := range kk {
+		out[k] = full[pos*kk+k]
+	}
+	return out
+}`
+	if got := countCat(scanSrc(t, src)); got["build-nxn-use-one-row"] == 0 {
+		t.Fatalf("want ≥1 build-nxn-use-one-row, got 0 (%v)", got)
+	}
+}
+
+// SILENT once the row is gathered directly — applying the rule's advice must clear it.
+func TestDetectPS2007_SilentOnDirectGather(t *testing.T) {
+	src := `package p
+func (d *D) biasRow(ctx *C, pos int) []float64 {
+	kk := pos + 1
+	out := make([]float64, kk)
+	for k := range kk {
+		out[k] = d.table[bucket(k-pos)]
+	}
+	return out
+}`
+	if got := countCat(scanSrc(t, src)); got["build-nxn-use-one-row"] != 0 {
+		t.Fatalf("want 0 on the direct gather, got %d (%v)", got["build-nxn-use-one-row"], got)
+	}
+}
+
+// SILENT on a fixed small square: foo(x, 2, 2) is an ordinary shape, not a growing one.
+func TestDetectPS2007_SilentOnConstantSquare(t *testing.T) {
+	src := `package p
+func (d *D) rot(ctx *C, pos int) []float64 {
+	m := d.build(ctx, 2, 2)
+	return []float64{m[pos]}
+}`
+	if got := countCat(scanSrc(t, src)); got["build-nxn-use-one-row"] != 0 {
+		t.Fatalf("want 0 on a constant-sized square, got %d (%v)", got["build-nxn-use-one-row"], got)
+	}
+}
+
+// SILENT when the two size arguments DIFFER: a genuinely rectangular build consumed in
+// full is not this pattern.
+func TestDetectPS2007_SilentOnRectangularBuild(t *testing.T) {
+	src := `package p
+func (d *D) block(ctx *C, pos, enc int) []float64 {
+	full := d.bias.Bias(ctx, pos+1, enc)
+	return full[pos:]
+}`
+	if got := countCat(scanSrc(t, src)); got["build-nxn-use-one-row"] != 0 {
+		t.Fatalf("want 0 on a rectangular build, got %d (%v)", got["build-nxn-use-one-row"], got)
+	}
+}
+
+// SILENT when the square result is consumed WITHOUT indexing by the driving position —
+// then it is genuinely used as a matrix and there is nothing to narrow.
+func TestDetectPS2007_SilentWhenWholeMatrixUsed(t *testing.T) {
+	src := `package p
+func (d *D) full(ctx *C, n int) float64 {
+	m := d.bias.Bias(ctx, n+1, n+1)
+	var s float64
+	for _, v := range m {
+		s += v
+	}
+	return s
+}`
+	if got := countCat(scanSrc(t, src)); got["build-nxn-use-one-row"] != 0 {
+		t.Fatalf("want 0 when the whole matrix is consumed, got %d (%v)", got["build-nxn-use-one-row"], got)
+	}
+}
+
+// The two false positives the first cut of PS2007 produced, kept as fixtures so the
+// precision does not regress: an element accessor given the same index twice
+// (a.AtF64(j, j) is a diagonal READ, not a square build), and a square result that IS
+// consumed whole as an attention mask while the driving position happens to index
+// something else nearby.
+func TestDetectPS2007_SilentOnDiagonalElementRead(t *testing.T) {
+	src := `package p
+func chol(a *M, n int) [][]float64 {
+	l := make([][]float64, n)
+	for j := range n {
+		d := a.AtF64(j, j)
+		for k := range j {
+			d -= l[j][k] * l[j][k]
+		}
+		l[j][j] = d
+	}
+	return l
+}`
+	if got := countCat(scanSrc(t, src)); got["build-nxn-use-one-row"] != 0 {
+		t.Fatalf("want 0 on a diagonal element read, got %d (%v)", got["build-nxn-use-one-row"], got)
+	}
+}
+
+func TestDetectPS2007_SilentWhenSquareResultUsedWhole(t *testing.T) {
+	src := `package p
+func (d *D) decode(ctx *C, dseq int, toks []int) *T {
+	rb := d.bias.Bias(ctx, dseq, dseq)
+	rb = rb.Permute(2, 0, 1)
+	first := toks[dseq-1]
+	_ = first
+	return d.attend(rb)
+}`
+	if got := countCat(scanSrc(t, src)); got["build-nxn-use-one-row"] != 0 {
+		t.Fatalf("want 0 when the square result is consumed whole, got %d (%v)",
+			got["build-nxn-use-one-row"], got)
+	}
+}
+
+// The third false positive: the driving identifier is a LOOP BOUND, so the square
+// result is walked in full and the identifier appears in those indices only as a
+// stride. That is the T5 full-Decode mask, not the per-token row read.
+func TestDetectPS2007_SilentWhenPositionIsALoopBound(t *testing.T) {
+	src := `package p
+func (d *D) decode(ctx *C, dseq, heads int) []float64 {
+	rb := d.bias.Bias(ctx, dseq, dseq)
+	sm := rb.Storage()
+	for h := range heads {
+		for i := 0; i < dseq; i++ {
+			for j := i + 1; j < dseq; j++ {
+				sm[(h*dseq+i)*dseq+j] = -1
+			}
+		}
+	}
+	return sm
+}`
+	if got := countCat(scanSrc(t, src)); got["build-nxn-use-one-row"] != 0 {
+		t.Fatalf("want 0 when the position is a loop bound, got %d (%v)",
+			got["build-nxn-use-one-row"], got)
+	}
+}
+
+// The third PS6004 form: a typed fast path that discriminates by comma-ok TYPE
+// ASSERTION on concrete storage and DECLINES to its caller with `return false`. The
+// generic arm lives in the caller, so neither the fast-path-helper test nor the
+// same-function accessor test can see it — this shape shipped as a 3.19x dual path
+// while PS6004 reported nothing.
+func TestDetectPS6004_DecliningTypedFastPath(t *testing.T) {
+	src := `package p
+func gatherHalfTyped(out, t *T, n int) bool {
+	su, okS := t.storage.data.([]uint16)
+	df, okD := out.storage.data.([]float32)
+	if !okS || !okD {
+		return false
+	}
+	for i := range n {
+		df[i] = float32(f16ToF32(su[i]))
+	}
+	return true
+}`
+	if got := countCat(scanSrc(t, src)); got["unverified-dual-path"] == 0 {
+		t.Fatalf("want ≥1 unverified-dual-path on a declining typed fast path, got 0 (%v)", got)
+	}
+}
+
+// THE FALSE POSITIVE THAT NEARLY SHIPPED: an AST visitor is wall-to-wall
+// `x, ok := n.(*ast.Foo)` followed by `return false`, structurally identical to a
+// devirtualized kernel and semantically nothing like one. The first cut of this
+// widening fired on 13 such functions inside perfscan itself. Asserting a SLICE OF A
+// NUMERIC TYPE is the discriminator; asserting a pointer-to-struct is not.
+func TestDetectPS6004_SilentOnPointerTypeAssertions(t *testing.T) {
+	src := `package p
+func visit(n Node) bool {
+	id, ok := n.(*Ident)
+	if !ok {
+		return false
+	}
+	call, ok2 := n.(*CallExpr)
+	if !ok2 {
+		return false
+	}
+	_, _ = id, call
+	return true
+}`
+	if got := countCat(scanSrc(t, src)); got["unverified-dual-path"] != 0 {
+		t.Fatalf("want 0 on pointer-to-struct assertions (an AST walker), got %d (%v)",
+			got["unverified-dual-path"], got)
+	}
+}
+
+// SILENT on a single numeric assertion: one cast is an ordinary conversion, not a
+// dispatch between arms, so there is no second path whose bit-identity is in question.
+func TestDetectPS6004_SilentOnSingleTypedAssertion(t *testing.T) {
+	src := `package p
+func fill(s *S, n int) bool {
+	d, ok := s.data.([]float64)
+	if !ok {
+		return false
+	}
+	for i := range n {
+		d[i] = 0
+	}
+	return true
+}`
+	if got := countCat(scanSrc(t, src)); got["unverified-dual-path"] != 0 {
+		t.Fatalf("want 0 on a single typed assertion, got %d (%v)",
+			got["unverified-dual-path"], got)
+	}
+}
+
+// SILENT without the decline: a function that asserts typed slices but never returns
+// false has no fallback arm to disagree with, so nothing needs cross-referencing.
+func TestDetectPS6004_SilentWithoutDecline(t *testing.T) {
+	src := `package p
+func both(s *S, d *S, n int) bool {
+	a, _ := s.data.([]float32)
+	b, _ := d.data.([]float64)
+	for i := range n {
+		b[i] = float64(a[i])
+	}
+	return true
+}`
+	if got := countCat(scanSrc(t, src)); got["unverified-dual-path"] != 0 {
+		t.Fatalf("want 0 without a decline path, got %d (%v)",
+			got["unverified-dual-path"], got)
+	}
+}
+
+// The shape behind three measured wins: a comparator dereferencing the sorted index
+// into a 2-D structure on every comparison.
+func TestDetectPS3005_IndirectKeyComparator(t *testing.T) {
+	src := `package p
+func presort(x [][]float64, col []int, ff int) {
+	sort.Slice(col, func(a, c int) bool { return x[col[a]][ff] < x[col[c]][ff] })
+}`
+	if got := countCat(scanSrc(t, src)); got["indirect-key-comparator"] == 0 {
+		t.Fatalf("want ≥1 indirect-key-comparator, got 0 (%v)", got)
+	}
+}
+
+// SliceStable and a > comparator are the same shape.
+func TestDetectPS3005_StableAndDescending(t *testing.T) {
+	src := `package p
+func route(scores [][]float64, idx []int, ex int) {
+	sort.SliceStable(idx, func(a, b int) bool { return scores[idx[a]][ex] > scores[idx[b]][ex] })
+}`
+	if got := countCat(scanSrc(t, src)); got["indirect-key-comparator"] == 0 {
+		t.Fatalf("want ≥1 on SliceStable/descending, got 0 (%v)", got)
+	}
+}
+
+// SILENT on the FIXED form — a flat id-indexed key. Applying the rule's own advice must
+// clear the finding, or it would keep reporting the code it just helped fix.
+func TestDetectPS3005_SilentOnHoistedFlatKey(t *testing.T) {
+	src := `package p
+func presort(x [][]float64, col []int, key []float64, ff int) {
+	for i := range col {
+		key[i] = x[i][ff]
+	}
+	sort.Slice(col, func(a, c int) bool { return key[col[a]] < key[col[c]] })
+}`
+	if got := countCat(scanSrc(t, src)); got["indirect-key-comparator"] != 0 {
+		t.Fatalf("want 0 on the hoisted flat key, got %d (%v)", got["indirect-key-comparator"], got)
+	}
+}
+
+// SILENT when the comparator reads the sorted elements directly rather than using them
+// as indices into something else — there is no indirection to hoist.
+func TestDetectPS3005_SilentOnDirectValueSort(t *testing.T) {
+	src := `package p
+func byDist(cand []nb) {
+	sort.Slice(cand, func(a, b int) bool { return cand[a].dist < cand[b].dist })
+}`
+	if got := countCat(scanSrc(t, src)); got["indirect-key-comparator"] != 0 {
+		t.Fatalf("want 0 on a direct value sort, got %d (%v)", got["indirect-key-comparator"], got)
+	}
+}
+
+// SILENT on a single-level lookup: key[idx[a]] is already the hoisted shape, so only a
+// TWO-level dereference through the sorted slice counts.
+func TestDetectPS3005_SilentOnSingleLevelLookup(t *testing.T) {
+	src := `package p
+func byKey(idx []int, key []float64) {
+	sort.Slice(idx, func(a, b int) bool { return key[idx[a]] < key[idx[b]] })
+}`
+	if got := countCat(scanSrc(t, src)); got["indirect-key-comparator"] != 0 {
+		t.Fatalf("want 0 on a single-level lookup, got %d (%v)", got["indirect-key-comparator"], got)
+	}
+}
+
+// SILENT when the two-level dereference goes through a DIFFERENT slice than the one
+// being sorted: m[other[a]][f] while sorting idx is not "read this element's key", so
+// hoisting a key column indexed by the sorted element would not even be well-defined.
+// Without this case the sorted-slice identity check is never exercised — the
+// single-level fixture above never reaches it.
+func TestDetectPS3005_SilentWhenIndexedThroughAnotherSlice(t *testing.T) {
+	src := `package p
+func weird(m [][]float64, idx, other []int, f int) {
+	sort.Slice(idx, func(a, b int) bool { return m[other[a]][f] < m[other[b]][f] })
+}`
+	if got := countCat(scanSrc(t, src)); got["indirect-key-comparator"] != 0 {
+		t.Fatalf("want 0 when indexed through a different slice, got %d (%v)",
+			got["indirect-key-comparator"], got)
+	}
+}
+
+// SILENT when the outer lookup is not itself indexed — m[idx[a]] alone is a single
+// dereference, the cheap case the hoist would not help.
+func TestDetectPS3005_SilentOnSingleDereference(t *testing.T) {
+	src := `package p
+func byRow(m []float64, idx []int) {
+	sort.Slice(idx, func(a, b int) bool { return m[idx[a]] < m[idx[b]] })
+}`
+	if got := countCat(scanSrc(t, src)); got["indirect-key-comparator"] != 0 {
+		t.Fatalf("want 0 on a single dereference, got %d (%v)", got["indirect-key-comparator"], got)
+	}
+}
+
+// PS4006 must be suppressible by a directive written ABOVE THE LOOP, which is where a
+// reader puts one. It was not: the finding anchored to the index expression a line
+// inside the loop, so the directive's block (which covers itself plus the next
+// statement) never reached it. A BARE //perfscan:ignore failing to silence the finding
+// is what exposed it — the ID and category were never the problem.
+func TestDetectPS4006_SuppressibleAboveTheLoop(t *testing.T) {
+	body := `package p
+func chol(a []float64, n int) {
+	l := make([][]float64, n)
+	for i := range n {
+		l[i] = make([]float64, n)
+	}
+	for j := range n {
+		for i := range n {
+			%s
+			for k := range j {
+				l[i][j] -= l[i][k] * l[j][k]
+			}
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, fmt.Sprintf(body, ""))); got["row-slice-matrix"] == 0 {
+		t.Fatalf("fixture must produce a finding without the directive, got %v", got)
+	}
+	if got := countCat(scanSrc(t, fmt.Sprintf(body, "//perfscan:ignore PS4006 deliberate"))); got["row-slice-matrix"] != 0 {
+		t.Fatalf("directive above the loop did not suppress: %v", got)
+	}
+	if got := countCat(scanSrc(t, fmt.Sprintf(body, "//perfscan:ignore"))); got["row-slice-matrix"] != 0 {
+		t.Fatalf("bare directive above the loop did not suppress: %v", got)
+	}
+}
+
+// The shape behind the Mamba2 SSM win: a product varying with the INNER index but not
+// the outer, rebuilt on every outer iteration.
+func TestDetectPS5003_InnerInvariantRecompute(t *testing.T) {
+	src := `package p
+func scan(n, m, off int, h, x []float64, a, delta float64) {
+	for i := range n {
+		for j := range m {
+			h[i*m+j] = a*h[i*m+j] + x[i]*(x[off+j]*delta)
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["inner-invariant-recompute"] == 0 {
+		t.Fatalf("want ≥1 inner-invariant-recompute, got 0 (%v)", got)
+	}
+}
+
+// THE UNSOUNDNESS THAT NEARLY SHIPPED: an expression can mention no outer variable and
+// still change every outer iteration, because the outer loop REWRITES what it reads. A
+// per-row softmax is the canonical case — hoisting p[j]*inv out would be WRONG, not
+// merely useless. Every finding sampled before this guard existed was of this kind.
+func TestDetectPS5003_SilentWhenOperandIsRewrittenByTheOuterLoop(t *testing.T) {
+	src := `package p
+func softmaxRows(n, m int, z, p, out []float64, inv float64) {
+	for i := range n {
+		for j := range m {
+			p[j] = z[i*m+j]
+		}
+		for j := range m {
+			out[i*m+j] = 2 * (p[j] * inv)
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["inner-invariant-recompute"] != 0 {
+		t.Fatalf("want 0 when the outer loop rewrites the operand, got %d (%v)",
+			got["inner-invariant-recompute"], got)
+	}
+}
+
+// SILENT on a call: hoisting changes how often it runs, which is observable if it is
+// not pure, and the rule cannot know that it is.
+func TestDetectPS5003_SilentOnCall(t *testing.T) {
+	src := `package p
+func f(n, m, off int, out, x []float64, d float64) {
+	for i := range n {
+		for j := range m {
+			out[i*m+j] = 2 * (scale(x[off+j]) * d)
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["inner-invariant-recompute"] != 0 {
+		t.Fatalf("want 0 on a call, got %d (%v)", got["inner-invariant-recompute"], got)
+	}
+}
+
+// SILENT when the inner body is not a tight kernel: with more work around it the
+// recompute is not plausibly what dominates, and requiring one statement is what took
+// this check from 445 findings to a usable number.
+func TestDetectPS5003_SilentOnFatInnerBody(t *testing.T) {
+	src := `package p
+func f(n, m, off int, out, x, tmp []float64, d float64) {
+	for i := range n {
+		for j := range m {
+			tmp[j] = float64(j)
+			out[i*m+j] = 2 * (x[off+j] * d)
+			tmp[j] += 1
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["inner-invariant-recompute"] != 0 {
+		t.Fatalf("want 0 on a fat inner body, got %d (%v)", got["inner-invariant-recompute"], got)
+	}
+}
+
+const ps6003Prelude = `package p
+type QT int
+const (A QT = iota; B; C; D)
+func gen(q QT) int
+`
+
+// The gguf.QMatMul shape: a fused path for one format, a switch showing six more.
+func TestDetectPS6003_PartialFastPathCoverage(t *testing.T) {
+	src := ps6003Prelude + `func f(q QT, m int) int {
+	if q == A && m == 1 {
+		return 1
+	}
+	switch q {
+	case A:
+		return 2
+	case B:
+		return 3
+	case C:
+		return 4
+	}
+	return 0
+}`
+	if got := countCat(scanSrc(t, src)); got["partial-fast-path-coverage"] != 1 {
+		t.Fatalf("want 1 partial-fast-path-coverage, got %d (%v)", got["partial-fast-path-coverage"], got)
+	}
+}
+
+// THE ONLY FALSE POSITIVE THIS RULE HAD ON THE TREE: a guard INSIDE one case clause of
+// the very switch it is judged against. It bypasses nothing — it is a sub-case of the
+// dispatch, not a fast path around it. gguf's metadata reader is exactly this shape.
+func TestDetectPS6003_SilentWhenGuardIsInsideTheSwitch(t *testing.T) {
+	src := ps6003Prelude + `func f(q QT) int {
+	switch q {
+	case A:
+		if q == A {
+			return 1
+		}
+		return 2
+	case B:
+		return 3
+	case C:
+		return 4
+	}
+	return 0
+}`
+	if got := countCat(scanSrc(t, src)); got["partial-fast-path-coverage"] != 0 {
+		t.Fatalf("want 0 when the guard is inside the switch, got %d (%v)",
+			got["partial-fast-path-coverage"], got)
+	}
+}
+
+// SILENT when every variant already has a fast path — there is no gap to report.
+func TestDetectPS6003_SilentWhenCoverageIsComplete(t *testing.T) {
+	src := ps6003Prelude + `func f(q QT, m int) int {
+	if q == A && m == 1 {
+		return 1
+	}
+	if q == B && m == 1 {
+		return 2
+	}
+	if q == C && m == 1 {
+		return 3
+	}
+	switch q {
+	case A:
+		return 4
+	case B:
+		return 5
+	case C:
+		return 6
+	}
+	return 0
+}`
+	if got := countCat(scanSrc(t, src)); got["partial-fast-path-coverage"] != 0 {
+		t.Fatalf("want 0 when all variants are covered, got %d (%v)",
+			got["partial-fast-path-coverage"], got)
+	}
+}
+
+// SILENT on a two-way switch: that is a branch, not a variant family, and a fast path
+// for one of two arms is an if/else written twice.
+func TestDetectPS6003_SilentOnTwoWaySwitch(t *testing.T) {
+	src := ps6003Prelude + `func f(q QT, m int) int {
+	if q == A && m == 1 {
+		return 1
+	}
+	switch q {
+	case A:
+		return 2
+	case B:
+		return 3
+	}
+	return 0
+}`
+	if got := countCat(scanSrc(t, src)); got["partial-fast-path-coverage"] != 0 {
+		t.Fatalf("want 0 on a two-way switch, got %d (%v)", got["partial-fast-path-coverage"], got)
+	}
+}
+
+// SILENT on literal cases: `switch n { case 1, 2, 3 }` is not a family of formats, and
+// admitting literals would bury the real findings.
+func TestDetectPS6003_SilentOnLiteralCases(t *testing.T) {
+	src := `package p
+func f(n, m int) int {
+	if n == 1 && m == 1 {
+		return 1
+	}
+	switch n {
+	case 1:
+		return 2
+	case 2:
+		return 3
+	case 3:
+		return 4
+	}
+	return 0
+}`
+	if got := countCat(scanSrc(t, src)); got["partial-fast-path-coverage"] != 0 {
+		t.Fatalf("want 0 on literal cases, got %d (%v)", got["partial-fast-path-coverage"], got)
+	}
+}
+
+// The literal exclusion has TWO sides, and the fixture above only reaches one. There the
+// guard itself compares against a literal, so it is rejected before the switch is ever
+// examined. This case passes the guard side — a named constant — and must still be
+// silent because the switch's members are literals, which is what the members-side
+// filter is for. Probing found the fixture above did not cover it.
+func TestDetectPS6003_SilentOnLiteralCasesWithNamedGuard(t *testing.T) {
+	src := ps6003Prelude + `func f(q QT, m int) int {
+	if q == A && m == 1 {
+		return 1
+	}
+	switch q {
+	case 1:
+		return 2
+	case 2:
+		return 3
+	case 3:
+		return 4
+	}
+	return 0
+}`
+	if got := countCat(scanSrc(t, src)); got["partial-fast-path-coverage"] != 0 {
+		t.Fatalf("want 0 when the switch cases are literals, got %d (%v)",
+			got["partial-fast-path-coverage"], got)
+	}
+}
+
+// A switch that MIXES named constants with literals is where the members-side filter
+// actually earns its place. Probing showed it suppresses nothing on its own — an
+// all-literal switch is already silent because no member matches the guard — so the one
+// thing it does is keep a bare literal out of the reported variant list. Without it this
+// message names an empty string among the uncovered variants.
+func TestDetectPS6003_MixedLiteralAndNamedCasesReportOnlyNamedVariants(t *testing.T) {
+	src := ps6003Prelude + `func f(q QT, m int) int {
+	if q == A && m == 1 {
+		return 1
+	}
+	switch q {
+	case A:
+		return 2
+	case 7:
+		return 3
+	case B:
+		return 4
+	case C:
+		return 5
+	}
+	return 0
+}`
+	fs := scanSrc(t, src)
+	var msg string
+	for _, f := range fs {
+		if f.category == "partial-fast-path-coverage" {
+			msg = f.msg
+		}
+	}
+	if msg == "" {
+		t.Fatalf("want a partial-fast-path-coverage finding, got %v", countCat(fs))
+	}
+	if !strings.Contains(msg, "B, C") {
+		t.Errorf("want the uncovered variants reported as %q, got %q", "B, C", msg)
+	}
+	if strings.Contains(msg, ", ,") || strings.Contains(msg, "; , ") {
+		t.Errorf("literal case leaked into the variant list as an empty name: %q", msg)
+	}
+	if !strings.Contains(msg, "of the 3 ") {
+		t.Errorf("want the literal excluded from the family size (3 named members), got %q", msg)
+	}
+}
+
+// A guard may spell a group of variants as a DISJUNCTION — `(q == A || q == B) && m == 1`
+// is how gguf.QMatMul covers the two K-quants that share a helper. Restricting the walk
+// to && chains made the rule report those two as uncovered the moment they were fused,
+// which is how this case was found.
+func TestDetectPS6003_DisjunctionInTheGuardCountsAsCoverage(t *testing.T) {
+	src := ps6003Prelude + `func f(q QT, m int) int {
+	if (q == A || q == B) && m == 1 {
+		return 1
+	}
+	switch q {
+	case A:
+		return 2
+	case B:
+		return 3
+	case C:
+		return 4
+	}
+	return 0
+}`
+	fs := scanSrc(t, src)
+	var msg string
+	for _, f := range fs {
+		if f.category == "partial-fast-path-coverage" {
+			msg = f.msg
+		}
+	}
+	if msg == "" {
+		t.Fatalf("want a finding naming only the uncovered variant, got %v", countCat(fs))
+	}
+	if !strings.Contains(msg, "2 of the 3") || strings.Contains(msg, "A") && strings.Contains(msg, "B, ") {
+		t.Errorf("want both disjuncts counted as covered and only C reported, got %q", msg)
+	}
+	if !strings.HasSuffix(strings.TrimSuffix(msg, " still take the general path — benchmark whether they should"), "C") {
+		t.Errorf("want C as the sole uncovered variant, got %q", msg)
+	}
+}
+
+// SILENT when the guard does not return: without the early return the general path
+// still runs, so the variant is not short-circuited at all.
+func TestDetectPS6003_SilentWhenGuardDoesNotReturn(t *testing.T) {
+	src := ps6003Prelude + `func f(q QT, m int) int {
+	acc := 0
+	if q == A && m == 1 {
+		acc++
+	}
+	switch q {
+	case A:
+		return acc + 2
+	case B:
+		return acc + 3
+	case C:
+		return acc + 4
+	}
+	return acc
+}`
+	if got := countCat(scanSrc(t, src)); got["partial-fast-path-coverage"] != 0 {
+		t.Fatalf("want 0 when the guard does not return, got %d (%v)",
+			got["partial-fast-path-coverage"], got)
 	}
 }
 

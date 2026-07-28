@@ -39,6 +39,18 @@ func keepSinkRecent(t *tensor.Tensor, sinks, window int) *tensor.Tensor {
 		return t
 	}
 	out := tensor.New(t.Dtype(), tensor.Shape{sinks + window, d})
+	// Both retained regions are CONTIGUOUS row blocks — rows [0,sinks) and
+	// [rows-window,rows) — so each is a single typed copy. The per-element
+	// AtF64/SetF64 form this replaces cost a variadic call plus a stride walk plus
+	// an interface dispatch into storage for every element, and it ran twice per
+	// layer per token once the stream passed the bound (the steady state that is
+	// the whole point of StreamingLLM). Bit-identical: a same-dtype copy moves the
+	// same bits, and SetF64(AtF64(...)) was already an exact round trip.
+	if copyRowsFrom(out, 0, t, 0, sinks*d) {
+		copyRowsFrom(out, sinks*d, t, (rows-window)*d, window*d)
+		return out
+	}
+	// Generic fallback for dtypes copyRowsFrom cannot move verbatim.
 	for i := range sinks {
 		for j := range d {
 			out.SetF64(t.AtF64(i, j), i, j)

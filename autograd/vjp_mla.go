@@ -207,12 +207,24 @@ func init() {
 							jmax = i + 1
 						}
 						// recompute softmax weights a[j]
+						//
+						// PS4008 DECLINED ON TWO MEASUREMENTS, not on argument. The ikj
+						// rewrite was implemented, gated bit-identical and benchmarked
+						// twice: as a pure reorder it is 0.85x, and with the keys
+						// transposed first — the form that made nn.matmulABt win 2.09x —
+						// it is 0.82x, i.e. WORSE. The dot form already exposes
+						// instruction-level parallelism across j, since each (i,j) score
+						// is independent, so there is no serial chain to break; the ikj
+						// form only adds (dh+dR)x the read-modify-write traffic on a[].
+						// See BenchmarkMLAVJPSeq{128,256}.
 						m := math.Inf(-1)
 						for j := range jmax {
 							var s float64
+							//perfscan:ignore PS4008 measured 0.85x reordered, 0.82x transposed
 							for d := range dh {
 								s += qcs[i*cols+hc+d] * kcs[j*cols+hc+d]
 							}
+							//perfscan:ignore PS4008 measured 0.85x reordered, 0.82x transposed
 							for e := range dR {
 								s += qRrot[(i*heads+h)*dR+e] * kRrot[j*dR+e]
 							}
@@ -276,9 +288,11 @@ func init() {
 						m := math.Inf(-1)
 						for j := range jmax {
 							var s float64
+							//perfscan:ignore PS4008 measured 0.85x reordered, 0.82x transposed
 							for d := range dh {
 								s += float64(qcs[i*cols+hc+d]) * float64(kcs[j*cols+hc+d])
 							}
+							//perfscan:ignore PS4008 measured 0.85x reordered, 0.82x transposed
 							for e := range dR {
 								s += qRrot[(i*heads+h)*dR+e] * kRrot[j*dR+e]
 							}
@@ -340,9 +354,11 @@ func init() {
 					m := math.Inf(-1)
 					for j := range jmax {
 						var s float64
+						//perfscan:ignore PS4008 measured 0.85x reordered, 0.82x transposed
 						for d := range dh {
 							s += qC.AtF64(i, hc+d) * kC.AtF64(j, hc+d)
 						}
+						//perfscan:ignore PS4008 measured 0.85x reordered, 0.82x transposed
 						for e := range dR {
 							s += qRrot[(i*heads+h)*dR+e] * kRrot[j*dR+e]
 						}

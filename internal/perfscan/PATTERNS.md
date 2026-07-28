@@ -19,20 +19,29 @@ catalog a subset with detailed wins — their IDs head each section. The `P3`/`P
 
 ## Repo-agnostic engine + config
 
-perfscan detects the problems **independent of any one repo**. Ten checks are pure
-language/stdlib shapes and run on any Go module with no configuration (PS2002–PS2005,
-PS3001–PS3003, PS4001, PS4003, PS5001). The four **domain** checks — `PS1001`
-per-element-dispatch, `PS1002` per-element-closure, `PS2001` alloc-in-loop, `PS4002`
-scalar-transcendental-vectorizable — key on a project's own vocabulary (its element
-accessors, allocators, fast-path helpers and vectorized kernels), which lives in a
-**JSON config, not the engine**. With no config those four stay silent. Supply one
+perfscan detects the problems **independent of any one repo**. Eighteen of the twenty-three
+checks are pure language/stdlib shapes and run on any Go module with no configuration
+(PS1003, PS2002–PS2007, PS3001–PS3003, PS4001, PS4003–PS4006, PS4008, PS5001, PS5002). The five
+**domain** checks — `PS1001` per-element-dispatch, `PS1002` per-element-closure, `PS2001`
+alloc-in-loop, `PS4002` scalar-transcendental-vectorizable, `PS6004` unverified-dual-path
+— key on a project's own vocabulary (its element accessors, allocators, fast-path helpers
+and vectorized kernels), which lives in a **JSON config, not the engine**. With no config
+those five stay silent — and say so: each one whose vocabulary is empty is named in a
+loud stderr warning, because a silent zero from a starved check reads as "no instances"
+and is the one failure mode that costs whole investigations. Supply a config
 with `-config file.json` or a discovered `perfscan.json` / `.perfscan.json`:
 
 ```jsonc
 {
   "elementAccessors":       ["AtF64", "SetF64"],     // PS1001/PS1002
   "fastPathHelpers":        ["flatF64", "flatF32"],   // PS1001 — presence silences a fallback loop
+                                                     //          KEEP THIS COMPLETE: a comma-ok
+                                                     //          helper missing from the list makes
+                                                     //          PS1001 report the very fallback the
+                                                     //          fast path exists to guard
   "elementCountMethods":    ["Numel"],               // PS1001 — a loop bound over this reads as per-element
+  "shapeMethods":           ["Shape"],               // PS1001 — `d := t.Shape()[1]` then `for j := range d`
+                                                     //          walks d elements exactly as Numel() does
   "indexDecomposeFuncs":    ["Unravel"],             // PS1001 — flat→multi-index marks a per-element loop
   "allocatorFuncs":         ["New", "Zeros", "Cast"], // PS2001 — allocation in a per-element loop
   "perElementVisitors":     ["readGen", "fillGen"],   // PS1002 — helper fed a per-element closure
@@ -49,7 +58,11 @@ patterns and the engine are generic.
 
 Every check has a stable **PS-prefixed 4-digit ID** (`PS1001`…), grouped by the
 thousands digit: `PS1xxx` per-element access, `PS2xxx` allocation, `PS3xxx`
-indirection/reflection, `PS4xxx` vectorization, `PS5xxx` arithmetic. `perfscan
+indirection/reflection, `PS4xxx` vectorization, `PS5xxx` arithmetic, `PS6xxx`
+verification gaps. IDs are **stable and never reused** — they are the handle an
+`//perfscan:ignore` directive names, so a new check must claim an ID free on main
+*and* in every open PR that touches the registry, not merely in its own branch
+(§PERF-ID-COLLISION-001). `perfscan
 -list` prints the table (ID, category, whether `-fix` can rewrite it, title).
 
 - `-fix` applies the **safe mechanical fixes** in place. Only checks with a
@@ -95,6 +108,14 @@ the "ignore only this explicit detection" path) or its **category** alias:
 //perfscan:ignore                       // bare: silence ALL checks at that site
 ```
 
+A directive applies to its **entire enclosing comment block** and to the statement
+directly below that block, so the explanation may wrap freely and the directive may sit
+above or below the prose. It does NOT leak past its own block — a directive attached to
+one declaration will not silence a finding further down. (Anchoring used to be the
+directive's own line plus one, which made any wrapped explanation *silently inert*: the
+comment reads as if it took effect while the finding is still reported. Two directives
+in this repo were dead that way.)
+
 Repo-wide, pass `-exclude=PS4002,per-element-closure`, or `-checks=PS1001,PS2002`
 to run an allow-list. Example: the f64 exp/log/tanh/sigmoid/gelu kernels are
 flagged by `PS4002` but are exact-locked (`TestCPUCrossReferenceExact`) — mark each
@@ -122,6 +143,164 @@ non-contiguous / F16 / BF16 fallback. Result is **bit-identical**.
 - `nn.GradAccumulator.GradFn` — **1.62×** (2.56→1.58 ms)
 
 ---
+
+## PS2006 — quadratic cache append in a per-token step  *(scanner: static)*
+
+A cache slot reassigned to a concatenation of **itself** and a new row, inside a loop,
+in a per-token step function: `c.K[l] = concatRows(c.K[l], k)`. The concat allocates a
+fresh `[t+1, width]` buffer and recopies all `t` existing rows **every token**, so a
+T-token decode moves O(T²) bytes and allocates O(T²).
+
+**Fix:** an amortized row buffer — write row `t` in place into a doubling backing store
+and hand back a zero-copy contiguous prefix view, which makes the whole sequence O(T).
+`nlp/rowbuf.go` is the in-repo implementation.
+
+**Shipped:** the GPT decode cache. End to end on a 500-token generate, **2.21 GB → 159 MB
+(13.9×)** and 833 → 630 ms (**1.32×**); the append microbenchmark alone is 101× time and
+104× bytes at width 2048, T=512. Note the memory win is the headline and the wall-clock
+win is much smaller — the brief predicted 2–3× time and the measured figure was 1.32×.
+
+**The risk is ALIASING, not numerics.** The concat hands back a fresh buffer each step;
+the row buffer hands back a **view** into a growing one. Values are identical and
+previously returned views stay valid (appends only ever write row `t` and beyond), so the
+only real hazard is a caller that retains an earlier view **and mutates it in place**.
+Audit for that before switching, and check whatever replaces cache entries wholesale
+(eviction, truncation) — a good row buffer detects a foreign view and resynchronizes.
+
+**A hit does NOT imply a worthwhile win — measure the site, never extrapolate from a
+sibling.** The identical transformation returned **13.9×** (GPT), **8.3×** (CLA) and
+**1.15×** (T5 decoder) on three call sites, decided entirely by whether the quadratic
+append was that site's dominant cost. T5's decode is dominated instead by a per-token
+rebuild of the full relative-position matrix, so removing its O(T²) cache append moved
+12.8% of bytes and nothing measurable in wall clock.
+
+**Deliberately silent** outside a per-token step function (the same statement in a
+one-shot builder is an ordinary concatenation), outside a loop, and when the concat's
+first operand is a *different* slot — that is not accumulate-into-itself and does not
+grow quadratically. It is also silent when the concat is **nested inside another call**
+(`keep(concatRows(c.K[l], k), …)`), which is how a bounded/evicting cache is usually
+written; those are O(window) rather than O(T) and are a weaker target.
+
+## PS2007 — build an N×N object to consume one row  *(scanner: static)*
+
+A call given the **same size expression twice**, whose square result is then read at
+exactly the position that expression is built from:
+
+```go
+full, _ := d.relBias.Bias(ctx, pos+1, pos+1)  // builds [pos+1, pos+1, heads]
+… fs[(pos*kk+k)*heads+h] …                    // reads row pos, discards the rest
+```
+
+The callee's cost grows with the argument in **both** dimensions while the consumer
+needs one row, so the work is an order higher than required — and on a per-token path,
+one order higher again over the whole run (O(T³) where O(T²) suffices).
+
+**Fix:** compute the row from whatever the callee derives it from — usually by exposing
+the per-element rule (here a relative-position bucket lookup) instead of its
+materialized matrix.
+
+**Shipped:** the T5 decoder's relative-position bias. Per call **130× at pos=32, 261× at
+pos=128, 713× at pos=512**, allocation 86.8 MB → 19.7 KB; end to end the 500-token
+decode went **2,679 → 556 ms (4.82×)** and **13.87 GB → 125 MB (111×)**. The ns/op curve
+against `pos` is the real evidence: quadratic before, linear after.
+
+**Bit-identity is claimable but has genuine exceptions.** The old value arrived through
+a one-hot matmul — a sum of `numBuckets` products of which all but one are `0·Table[j][h]`.
+For finite tables that sum *is* `Table[b][h]`, so the gather is bit-identical. It differs
+for ±Inf/NaN entries (`0·Inf = NaN`) and for a stored `−0` (`0 + −0 = +0`). Both mean a
+broken checkpoint rather than normal operation. Gate with a tolerance-0 cross-reference
+**and** a token-for-token identical greedy decode, not merely close logits.
+
+**Precision took three passes and the two rejected cuts are worth knowing.** Asking only
+"is this identifier used in some index in this function" flagged `a.AtF64(j, j)` — a
+diagonal element read, not a builder — and a square attention mask consumed whole. The
+rule now requires the result *or a value derived from it* to be indexed by the driving
+position, and requires that position **not** to be a loop bound: when it bounds a loop
+the object is being walked in full and the identifier appears in those indices only as a
+stride. Tree-wide that went 6 findings → 2, both genuine.
+
+## PS5003 — an inner-loop expression the outer loop rebuilds  *(scanner: static)*
+
+An expression in the innermost loop that varies with the **inner** index but not the
+outer one, so the outer loop recomputes the same value on every pass:
+
+```go
+for i := range n {
+    for j := range m {
+        h[i*m+j] = a*h[i*m+j] + b*(x[off+j] * delta)   // x[off+j]*delta has no i
+    }
+}
+```
+
+Precompute it once into an m-sized scratch before the outer loop. **Bit-identical** — it
+is the same product, so it rounds the same way; this is not a reassociation. Go will not
+do it for you: the operands are index expressions it cannot prove unaliased across the
+outer iteration, so both the load and the multiply stay put.
+
+**Shipped:** the Mamba2 SSM scan, where `x[t][hOff+j]*delta` was rebuilt N times per `j` —
+**1.08×–1.10×** on prefill end to end, and notably *larger* than fixing that same
+function's pathological access pattern (1.05×). PS4006 pointed at the file; the bigger win
+inside it was this, which PS4006 cannot see.
+
+**The first cut was UNSOUND, not merely noisy, and that is the thing to remember.** An
+expression can mention no outer variable and still change every outer iteration, because
+the outer loop **rewrites what it reads** — a per-row softmax `p[j]*inv` is the canonical
+case, and hoisting it would be *wrong*, not just useless. Every one of the first sampled
+findings was of exactly that kind. The check now requires that no operand be assigned
+anywhere in the outer body. Findings went **445 → 48 → 7** across the two tightenings
+(tight-kernel, then the write guard), and the surviving set includes the sibling of the
+shipped win plus a softmax normalization recomputed per output dimension.
+
+**Deliberately silent** on calls (hoisting changes how often one runs, which is observable
+if it is not pure and the rule cannot know that it is), on inner bodies longer than one
+statement, and on expressions that are not an operand of a larger arithmetic expression —
+a bare `v := x[j]*d` is already as hoisted as a reader will make it.
+
+## PS3005 — a sort whose comparator dereferences the sorted index  *(scanner: static)*
+
+Sorting an INDEX slice with a comparator that reaches two levels deep through the sorted
+element:
+
+```go
+sort.Slice(idx, func(a, b int) bool { return m[idx[a]][f] < m[idx[b]][f] })
+```
+
+Every comparison pays a row-pointer load plus an index — O(n log n) times — to read a
+value that depends only on the element. Fill a flat id-indexed key column once (O(n)) and
+compare that.
+
+**Safe by construction, not by argument:** the rewrite keeps the *same predicate*
+(`key[id] == m[id][f]`), so the sort returns the same permutation, ties included. That is
+stronger than the usual "tie order is unspecified but irrelevant" reasoning.
+
+**Shipped, three times, all the same shape.** Figures below are INTERLEAVED (change
+toggled in and out within one session, 3-4 alternations) — the separate-run numbers first
+reported were 5-10% optimistic because the host drifts between sessions:
+GBM presort + radix **1.050×** on `BenchmarkGBMFit` and **1.120×** on
+`BenchmarkGBMHist_exact_20k` (first reported as 1.104× and 1.176×); ball-tree median
+split **1.060×** on KNN fit, ranges overlapping (first reported 1.088×); Expert Choice
+routing **1.21×**, the one case where the control moved *against* the candidate. The CART builder had
+already solved it locally, which is what made the siblings findable by eye; this rule is
+so the next one does not need luck.
+
+**A hit is a candidate, not a win — and this one has a decline on the board already.**
+SparseGPT's mask selection has the richest-looking instance of the shape (two lookups
+*plus* a `sgSaliency` call per comparison) and hoisting it measured **1.0046×** in an
+interleaved same-session A/B: the sort is a small share of a routine dominated by the
+Hessian inverse and the OBS compensation loops. A first, NON-interleaved reading of the
+same change suggested 1.048× — that was machine drift between two runs, not the change.
+Interleave, or you will ship drift as a result.
+
+**Deliberately silent** on the fixed form (`key[idx[a]]` — applying the advice clears the
+finding), on a direct value sort (`cand[a].dist`, no indirection to hoist), on a single
+dereference, and when the two-level lookup goes through a *different* slice than the one
+being sorted — that is not "read this element's key" and a hoisted column would not be
+well-defined.
+
+**The first cut of this rule was silent on all three sites it was written from**, because
+the nesting was inverted: in `m[idx[a]][f]` the sorted slice sits in the *outer*
+IndexExpr's own Index, not in its X. Validated by scanning the pre-fix revisions and
+confirming all three are found.
 
 ## PS3002 — closure-comparator sort on a large keyed slice  *(scanner: static)*
 
@@ -346,7 +525,7 @@ by the elements' own allocations, not the numeric value scratch the `growF64` wi
 
 A `/` (or `/=`) by a loop-invariant scalar on every iteration of an element-wise loop.
 Hoisting `inv := 1/D` once and multiplying is **1.2–1.5×** when the divide is the
-loop's standalone cost — a float divide is ~20–40 cycles versus ~4 for a multiply.
+loop's standalone cost — a float divide is ≈20–40 cycles versus ≈4 for a multiply.
 
 **Shipped:** SoftCap VJP 1.28×/1.29×, and the whole optimizer reciprocal-multiply family
 (Adam/Cautious/LAMB/AdEMAMix/Adafactor bias-correction & moment divides, 1.1–1.3×).
@@ -363,10 +542,15 @@ via `+=`/`-=`/`*=` (a reduction — a softmax Σ or attention denominator, where
 is minor or parity-locked, not a config scalar), on loops already dominated by a
 transcendental (K/L territory — the divide is in the noise), on integer INDEX divisions
 (`a[i/stride]`), on divisors that vary across iterations, and on non-element-wise loops.
-Also silent when the divisor also appears as a **modulo** divisor (`x % d`) anywhere in
-the function: Go's `%` requires integer operands, so `d` is provably integer and `i/d` is
-index arithmetic (`iy, ix := i/m, i%m`), never a float reciprocal-multiply candidate —
-this is type-sound, not heuristic, so it never suppresses a real float divide.
+
+Also silent on an **index decomposition**: when the same `x / d` appears alongside a
+matching `x % d` in the function (`iy, ix := i/m, i%m`). Go's `%` requires integer
+operands, so `x` and `d` are provably integers there and the divide computes a discrete
+index, never a float a reciprocal-multiply could replace — type-sound rather than
+heuristic, so it cannot suppress a real float divide. The match is on the whole pair
+(same numerator AND divisor, modulo parenthesization), not on the divisor name alone, so
+a function that happens to use `d` as a modulus elsewhere still gets its float divide
+reported.
 
 ## PS5002 — symmetric-matrix full accumulation  *(scanner: static)*
 
@@ -387,3 +571,192 @@ column-major win.
 silent** on already-triangular loops and on forms that pre-slice the row (`covi := m[i]; covi[j] +=
 ci·c[j]`) — the hoisted 1-D write hides the `[i][j]` signal, so verify hot covariance/gram loops by
 eye too. **Verify the consumer reads one triangle and benchmark** before shipping.
+
+## PS4008 — a matmul whose inner loop is a serial scalar dot  *(scanner: static)*
+
+A triple-nested loop whose innermost body is a single `acc += A[…] * B[…]`, with `acc`
+declared in the middle loop and stored to an indexed destination after it. The accumulator
+is a **serial dependency chain**: each FMADD waits on the previous one's ~4-cycle latency,
+so the loop runs at the FMA's *latency* rather than its *throughput*, no matter how much
+ILP the machine has.
+
+**Fix:** transpose the k-dim operand once (`k·m` stores against `m·m·k` MACs — negligible)
+and rewrite as ikj/axpy, `c[j] += av * bt[j]`, so the accumulators are independent across
+the output index. If the two operands are the SAME slice the product is symmetric to the
+last bit, so computing one triangle and mirroring halves the work again.
+
+**Shipped:** `nn.matmulABt` — 0.92 → 0.32 ns/MAC, `BenchmarkMuonStepOnly` 418.3 → 200.0 ms
+(**2.09×**), bit-identical, at the cost of one reused `[k,m]` scratch (+6% bytes/op).
+
+**Bit-identity is claimable but must be PROVEN**, not assumed: the ikj form accumulates over
+`p` in the same ascending order into an accumulator that also starts at +0, which is the
+argument `backend/cpu/gemm.go` makes for its tolerance-0 gate — but only a cross-reference
+test against the *pre-rewrite* form actually holds it. Two traps, both measured: reversing
+the `p` order is caught by such a test, while carrying over matmulFlat's
+`if av == 0 { continue }` skip is **NOT** caught by random fixtures (they contain no exact
+zero) and silently drops `0·±Inf` NaNs — the exactness gate needs an explicit zero/Inf case.
+
+**Deliberately silent** on the ikj/axpy form itself (applying the advice clears the
+finding), on same-base reductions with no indexed store (a norm has no output index to make
+independent), and when the inner loop does anything besides the accumulation (the dot is
+then not the whole cost). Findings often overlap PS4006 when the operands are `[][]T`.
+
+**Sometimes the rewrite just loses, and the dot form is already right.** The MLA score
+recompute was implemented BOTH ways, gated bit-identical, and benchmarked: a pure reorder
+is **0.85×**, and transposing the keys first — the very structure that made `matmulABt`
+win — is **0.82×**, i.e. worse still. The reason is that its `j` loop already supplies
+instruction-level parallelism (each `(i,j)` score is independent, so there is no serial
+chain to break), while ikj adds `(dh+dR)×` the read-modify-write traffic on the score
+array. Before assuming the accumulator is the bottleneck, ask whether an enclosing loop
+already provides the independence.
+
+**A·Bᵀ needs the TRANSPOSE to win, and the transpose costs an allocation — decide per
+site.** Measured both ways. `nn.matmulABt` transposes the k-dim operand once, which makes
+the inner loop contiguous, and won **2.09×**. The MLA score recompute was rewritten ikj
+*without* a transpose — a pure reorder, no allocation — and **LOST 17–18%**
+(`BenchmarkMLAVJPSeq128` 5.02 → 5.89 ms, `Seq256` 19.9 → 23.5 ms, control flat): the
+strided reads across the output index cost more than the independent accumulators gain.
+So the rewrite is not free-standing; it is worth it only when the inner loop ends up
+contiguous, which for this shape means paying for a transposed copy. That is exactly why
+`soap.go` and `galore.go` decline — pooled paths where a per-call allocation is the thing
+being avoided — and the MLA measurement is the other half of the same lesson.
+
+**"Both operands are already contiguous in the summation index" is NOT a reason to
+decline** — a rationale used twice here before it was disproved. `nn.matmulABt` is exactly
+that shape (`s += ai[p] * bj[p]`, both stride-1 in `p`) and the ikj rewrite still won
+**2.09×**, because the serial FMADD chain, not the access pattern, was the cost; the
+transpose paid for itself. A guard encoding that rationale was written and reverted when it
+suppressed the rule's own canonical fixtures. The real reason those two sites were declined
+is **allocation**: the transposed copy is a fresh buffer on every call, on paths that are
+pooled precisely to avoid that. Site-specific and not statically detectable — decline in a
+comment, not in the rule.
+
+## PS4005 — an N-D odometer ticked once per ELEMENT  *(scanner: static)*
+```go
+for pos := range xs { // one element of work
+	for d := nd - 1; d >= 0; d-- { // ...then a full odometer tick
+		idx[d]++
+		off += stride[d]
+		if idx[d] < shape[d] {
+			break
+		}
+		idx[d] = 0
+		off -= stride[d] * shape[d]
+	}
+}
+```
+The innermost axis has a CONSTANT stride across a run of `shape[nd-1]` elements, so
+that run is one straight walk — a `copy` at stride 1, a fill at stride 0 — and the
+odometer need only tick once per run. Bit-identical: traversal order and the
+per-element work are untouched, and the innermost axis contributes
+`inner*stride − stride*inner = 0` to the offset over a full run.
+
+Measured 4.49× (ref broadcast), 5.29× (cpu broadcast), 3.14× (tensor gather),
+1.78× (ref argmax).
+
+Matches the odometer's SHAPE, not the loop body — those four sites do a copy, a
+cast and an accumulate respectively, so any rule keyed on the body catches them
+only by accident. **A hoisted odometer keeps the same shape** and merely runs per
+run, so the rule distinguishes them by where the walk starts: per-element ticks
+every axis (`d := nd - 1`), hoisted skips the innermost (`d := nd - 2`). Without
+that discriminator the rule reported the sites it had just helped fix.
+
+## PS4006 — a `[][]T` matrix indexed inside a nested loop  *(scanner: static)*
+One heap allocation per ROW, then `m[i][j]` two-deep in a nested loop. A column walk
+(`m[k][p]`, k varying) dereferences one unrelated cache line per row. Flatten to a
+single `[rows*cols]` buffer indexed `m[i*cols+j]`: index arithmetic only, so
+bit-identical, and `rows+1` allocations collapse to 1.
+
+Measured 2.15× (solvespd), 1.5× (cholesky), 1.35× (qr), 1.2× (SymEig, SVD).
+
+**And 0.93× on `classic/linalg.go` cholSolve** — reverted. An OLS fit is dominated
+by the O(N·d²) Gram-matrix build, so the O(d³) factorization this flags is a small
+share of it. The flatten pays when the flagged loop IS the enclosing operation's
+work; measure the OPERATION end to end, not the loop. Cheaper mitigation when it is
+not: hoist `row := m[i]` above the inner loop — `naivebayes.go` and `gmm.go` already
+do, which is why they were declined.
+
+Requires BOTH the per-row allocation loop and a two-deep index inside ≥2 nested
+loops. A `[][]T` merely passed around, indexed once, or genuinely ragged is not a
+candidate.
+
+**Biggest measured win of the rule, and a null beside it — same commit, same file.**
+Interleaved (4 alternations): `ExpertChoiceCombine` **1.554×** (654,598 → 421,160 ns) by
+hoisting BOTH `y[t]` and `expertOut[ex][i]` out of the innermost loop; `ExpertAffinity`
+**1.167×** by hoisting the destination row. The third hoist in the same file, the gate
+fill in `ExpertChoiceRoute`, measured **0.992×** — no effect, because that loop is
+O(capacity) beside an O(n log n) sort. All three are bit-identical; only two pay. The
+size of the enclosing work, not the shape, decides.
+
+
+## PS6003 — a fast path that covers only part of a variant family  *(scanner: static)*
+
+A function short-circuits the general path for some members of a variant family, and a
+switch in the same function shows the family is larger:
+
+```go
+if qt == Q8_0 && m == 1 { … return out, nil }   // fused: no row materialization
+…
+switch qt {                                      // …and six more types land here
+case Q8_0, Q4_0, Q2_K, Q3_K, Q4_K, Q5_K, Q6_K:
+```
+
+The uncovered variants keep paying the general path, and nothing in the code says so —
+a fast path reads as *this case is handled*, not *only this case is handled*.
+
+**Found by its symptom, not its shape, which is the argument for automating it.**
+`gguf.QMatMul` had the fused single-token path for Q8_0 and none for Q4_0, so Q4_0 decode
+ran **slower than Q8_0 despite half the memory traffic** — backwards for the smaller
+format, and the only reason anyone looked. Fusing it was **1.40×** on the enclosing
+`QuantMamba2` decode step. Nobody reading QMatMul top to bottom would have suspected the
+gap; it is visible only by comparing the guard against the switch fifty lines below.
+
+**Advisory, and deliberately not a defect report.** A fast path may legitimately cover one
+variant: the others may be rare, unfusable, or already fast. What the rule asserts is that
+the asymmetry is intentional-or-not and the code does not distinguish those — so it is
+worth one benchmark per uncovered variant.
+
+**The guard must close before the switch opens.** Its only false positive on this tree was
+`gguf`'s metadata reader, where an `if vt == vtI16 { … return }` sits *inside* one case
+clause of `switch vt` — a sub-case of the dispatch that bypasses nothing. Positional
+dominance is what separates a bypass from a branch.
+
+Also silent on switches with fewer than three named members (a two-way switch is a branch,
+and a fast path for one of two arms is an if/else written twice), on guards that do not
+end in `return` (without it the general path still runs), and when every member is already
+covered. Literal cases are excluded from the family — `switch n { case 1, 2, 3 }` is not a
+set of formats. That last filter suppresses nothing on its own, since an all-literal switch
+has no member matching the guard; what it does is keep a bare literal out of the reported
+variant list when a switch mixes the two. Probing is what established the distinction.
+
+## PS6004 — a dual-path kernel whose bit-identity claim is unverified  *(scanner: static)*
+A function carrying a devirtualized fast path (guarded by a configured
+`fastPathHelpers` entry in comma-ok form, or a `switch x.Dtype()` with a `default`
+arm) AND a generic accessor fallback. That structure is a bit-identity CLAIM, and
+the claim usually lives in a comment rather than a test.
+
+**Not a performance finding** — nothing here is slow. It is an unverified invariant.
+Four kernels with this shape were probed and all four were blind to a one-ulp change
+in the fast path. The rule cannot tell whether a bit-exact test exists (test
+sensitivity is not an AST property); it lists the population that needs one.
+
+Probe with a deliberate one-ulp mutation to decide, confirm the mutated line
+actually executes before believing a surviving mutation, and run the probe over
+every package that could hold a cross-reference test — not just the kernel's own.
+
+**A third form: the fast path that DECLINES to its caller.** `v, ok := x.data.([]float32)`
+discriminates on concrete storage rather than through a configured comma-ok helper, and
+the generic arm lives in the *caller*, reached by returning `false`. Neither the
+helper test nor the same-function accessor test sees it. This was found the hard way —
+by shipping one: `tensor.gatherHalfTyped` devirtualizes four half-cast arms for a
+**3.19×** win, and PS6004 reported nothing. A verification rule that goes quiet on a
+real dual path is worse than no rule, because the silence reads as "nothing to prove".
+Detected by: a `bool` result, **two or more** comma-ok assertions to *slices of numeric
+types*, and a `return false`.
+
+The numeric-slice requirement is not decoration. Without it the widening fired on 13
+functions inside perfscan itself — an AST visitor is wall-to-wall `x, ok := n.(*ast.Foo)`
+followed by `return false`, structurally identical and semantically unrelated. Asserting
+`[]float32` is the signal; asserting `*ast.Ident` is not. Tree-wide the tightened form
+adds exactly one finding (56 → 57) instead of fourteen.
+

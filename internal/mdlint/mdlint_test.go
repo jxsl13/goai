@@ -17,7 +17,7 @@ func TestRepoMarkdownIsClean(t *testing.T) {
 			return err
 		}
 		if d.IsDir() {
-			if n := d.Name(); n == ".git" || strings.HasPrefix(n, ".venv") || n == "node_modules" {
+			if skipDir(d.Name()) {
 				return filepath.SkipDir
 			}
 			return nil

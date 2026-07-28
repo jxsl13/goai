@@ -28,17 +28,24 @@ func svdKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*t
 		return nil, fmt.Errorf("ref: svd needs m ≥ n (tall/square), got %dx%d", m, n)
 	}
 
-	acol := make([][]float64, m) // working copy; columns get orthogonalized into U·Σ
-	for i := range m {
-		acol[i] = make([]float64, n)
-		for j := range n {
-			acol[i][j] = a.AtF64(i, j)
+	// Flat [m*n] and [n*n] row-major working buffers, not slices of rows. The Jacobi
+	// sweep below walks COLUMNS — acol[k][i] and vmat[k][i] with k varying — so a
+	// row-of-slices layout dereferences a different heap row per step. Flat makes
+	// each walk a constant stride through one allocation and drops m+n allocations
+	// to 2. Index arithmetic only, so the decomposition is bit-identical.
+	acol := make([]float64, m*n) // working copy; columns get orthogonalized into U·Σ
+	if as, ok := f64Data(a); ok {
+		copy(acol, as)
+	} else {
+		for i := range m {
+			for j := range n {
+				acol[i*n+j] = a.AtF64(i, j)
+			}
 		}
 	}
-	vmat := make([][]float64, n)
+	vmat := make([]float64, n*n)
 	for i := range n {
-		vmat[i] = make([]float64, n)
-		vmat[i][i] = 1
+		vmat[i*n+i] = 1
 	}
 	const tol = 1e-14
 	for range 100 { // sweeps until columns mutually orthogonal
@@ -47,9 +54,9 @@ func svdKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*t
 			for j := i + 1; j < n; j++ {
 				var alpha, beta, gamma float64
 				for k := range m {
-					alpha += acol[k][i] * acol[k][i]
-					beta += acol[k][j] * acol[k][j]
-					gamma += acol[k][i] * acol[k][j]
+					alpha += acol[k*n+i] * acol[k*n+i]
+					beta += acol[k*n+j] * acol[k*n+j]
+					gamma += acol[k*n+i] * acol[k*n+j]
 				}
 				if alpha == 0 || beta == 0 {
 					continue
@@ -71,14 +78,14 @@ func svdKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*t
 				c := 1 / math.Sqrt(1+t*t)
 				sn := c * t
 				for k := range m {
-					ai, aj := acol[k][i], acol[k][j]
-					acol[k][i] = c*ai - sn*aj
-					acol[k][j] = sn*ai + c*aj
+					ai, aj := acol[k*n+i], acol[k*n+j]
+					acol[k*n+i] = c*ai - sn*aj
+					acol[k*n+j] = sn*ai + c*aj
 				}
 				for k := range n {
-					vi, vj := vmat[k][i], vmat[k][j]
-					vmat[k][i] = c*vi - sn*vj
-					vmat[k][j] = sn*vi + c*vj
+					vi, vj := vmat[k*n+i], vmat[k*n+j]
+					vmat[k*n+i] = c*vi - sn*vj
+					vmat[k*n+j] = sn*vi + c*vj
 				}
 			}
 		}
@@ -90,7 +97,7 @@ func svdKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*t
 	for j := range n {
 		var nrm float64
 		for k := range m {
-			nrm += acol[k][j] * acol[k][j]
+			nrm += acol[k*n+j] * acol[k*n+j]
 		}
 		sigma[j] = math.Sqrt(nrm)
 	}
@@ -107,11 +114,11 @@ func svdKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*t
 		st.SetF64(sigma[j], jj)
 		if sigma[j] > 0 {
 			for k := range m {
-				ut.SetF64(acol[k][j]/sigma[j], k, jj)
+				ut.SetF64(acol[k*n+j]/sigma[j], k, jj)
 			}
 		}
 		for k := range n {
-			vt.SetF64(vmat[k][j], k, jj)
+			vt.SetF64(vmat[k*n+j], k, jj)
 		}
 	}
 	return []*tensor.Tensor{ut, st, vt}, nil

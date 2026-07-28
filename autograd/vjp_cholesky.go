@@ -27,27 +27,28 @@ func init() {
 		l := make([][]float64, n)
 		lbar := make([][]float64, n)
 		for i := range n {
-			l[i] = make([]float64, n)
-			lbar[i] = make([]float64, n)
+			li, lbi := make([]float64, n), make([]float64, n)
+			l[i], lbar[i] = li, lbi
 			for j := 0; j <= i; j++ {
-				l[i][j] = lt.AtF64(i, j)
-				lbar[i][j] = g.AtF64(i, j)
+				li[j] = lt.AtF64(i, j)
+				lbi[j] = g.AtF64(i, j)
 			}
 		}
 
 		// P = Φ(Lᵀ·L̄): M = Lᵀ·L̄, then keep the lower triangle with a halved diagonal.
 		p := make([][]float64, n)
 		for i := range n {
-			p[i] = make([]float64, n)
+			pi := make([]float64, n)
+			p[i] = pi
 			for j := 0; j <= i; j++ {
 				var m float64 // (Lᵀ·L̄)_ij = Σ_k L[k,i]·L̄[k,j]; both lower ⇒ k ≥ max(i,j)
 				for k := i; k < n; k++ {
 					m += l[k][i] * lbar[k][j]
 				}
 				if i == j {
-					p[i][j] = 0.5 * m
+					pi[j] = 0.5 * m
 				} else {
-					p[i][j] = m
+					pi[j] = m
 				}
 			}
 		}
@@ -60,24 +61,27 @@ func init() {
 		for j := range n {
 			linv[j][j] = 1 / l[j][j]
 			for i := j + 1; i < n; i++ {
+				li := l[i] // invariant in k — one pointer load instead of i-j (PS4006)
 				var s float64
 				for k := j; k < i; k++ {
-					s += l[i][k] * linv[k][j]
+					s += li[k] * linv[k][j]
 				}
-				linv[i][j] = -s / l[i][i]
+				linv[i][j] = -s / li[i]
 			}
 		}
 
 		// S = Linvᵀ·P·Linv. First T = P·Linv (P lower), then S = Linvᵀ·T.
 		tmp := make([][]float64, n)
 		for i := range n {
-			tmp[i] = make([]float64, n)
+			ti := make([]float64, n)
+			tmp[i] = ti
+			pi := p[i] // invariant in j and k (PS4006)
 			for j := range n {
 				var s float64 // (P·Linv)_ij = Σ_k P[i,k]·Linv[k,j], Linv lower ⇒ k ≥ j, P lower ⇒ k ≤ i
 				for k := j; k <= i; k++ {
-					s += p[i][k] * linv[k][j]
+					s += pi[k] * linv[k][j]
 				}
-				tmp[i][j] = s
+				ti[j] = s
 			}
 		}
 		abar := tensor.New(lt.Dtype(), lt.Shape())

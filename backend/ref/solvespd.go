@@ -43,26 +43,36 @@ func solveSPDKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) 
 	}
 
 	// y = L⁻¹·B (forward substitution), then x = L⁻ᵀ·y (back substitution), per column.
-	x := make([][]float64, n)
-	y := make([][]float64, n)
-	for i := range n {
-		x[i] = make([]float64, k)
-		y[i] = make([]float64, k)
+	// Flat [n*k] row-major buffers instead of n allocated rows: both substitutions
+	// index y[p][c] and x[p][c] with p varying — a column walk that, in a
+	// row-of-slices layout, dereferences a different heap row per step. Reading L
+	// through a flat typed view additionally removes an AtF64 dispatch from the
+	// O(n²k) innermost loop, which is where the dominant cost was. Index arithmetic
+	// and identical operand order throughout, so results are bit-identical; the
+	// accessor form is kept for dtypes f64Data cannot expose.
+	x := make([]float64, n*k)
+	y := make([]float64, n*k)
+	lf, lok := f64Data(l)
+	lat := func(i, j int) float64 {
+		if lok {
+			return lf[i*n+j]
+		}
+		return l.AtF64(i, j)
 	}
 	for c := range k {
 		for i := range n {
 			s := rhs(i, c)
 			for p := range i {
-				s -= l.AtF64(i, p) * y[p][c]
+				s -= lat(i, p) * y[p*k+c]
 			}
-			y[i][c] = s / l.AtF64(i, i)
+			y[i*k+c] = s / lat(i, i)
 		}
 		for i := n - 1; i >= 0; i-- {
-			s := y[i][c]
+			s := y[i*k+c]
 			for p := i + 1; p < n; p++ {
-				s -= l.AtF64(p, i) * x[p][c] // Lᵀ[i,p] = L[p,i]
+				s -= lat(p, i) * x[p*k+c] // Lᵀ[i,p] = L[p,i]
 			}
-			x[i][c] = s / l.AtF64(i, i)
+			x[i*k+c] = s / lat(i, i)
 		}
 	}
 
@@ -70,9 +80,9 @@ func solveSPDKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) 
 	for i := range n {
 		for c := range k {
 			if vector {
-				out.SetF64(x[i][c], i)
+				out.SetF64(x[i*k+c], i)
 			} else {
-				out.SetF64(x[i][c], i, c)
+				out.SetF64(x[i*k+c], i, c)
 			}
 		}
 	}

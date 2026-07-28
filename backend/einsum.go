@@ -65,21 +65,26 @@ func ParseEinsum(spec string, nOperands int) (inSubs [][]byte, outSub []byte, er
 // consistency across positions. This is the shared engine used by the forward
 // kernel and (via constructed gradient specs) the VJP.
 func EinsumContract(inSubs [][]byte, outSub []byte, operands []*tensor.Tensor) (*tensor.Tensor, error) {
-	size := map[byte]int{}
+	// Subscript indices are BYTES, so a fixed [256]int is a dense, exact replacement
+	// for the map — no hashing, no allocation, and the bound is the key type itself.
+	// sizeSet distinguishes "index absent" from "size 0", which the map's comma-ok
+	// gave for free.
+	var size [256]int
+	var sizeSet [256]bool
 	for k, sub := range inSubs {
 		if len(sub) != operands[k].Ndim() {
 			return nil, fmt.Errorf("backend: einsum subscript %q has %d indices but operand %d is %dD", sub, len(sub), k, operands[k].Ndim())
 		}
 		for pos := range len(sub) {
 			d := operands[k].Shape()[pos]
-			if have, ok := size[sub[pos]]; ok && have != d {
+			if have, ok := size[sub[pos]], sizeSet[sub[pos]]; ok && have != d {
 				return nil, fmt.Errorf("backend: einsum index %q has inconsistent sizes %d and %d", string(sub[pos]), have, d)
 			}
-			size[sub[pos]] = d
+			size[sub[pos]], sizeSet[sub[pos]] = d, true
 		}
 	}
 	for i := range len(outSub) {
-		if _, ok := size[outSub[i]]; !ok {
+		if !sizeSet[outSub[i]] {
 			return nil, fmt.Errorf("backend: einsum output index %q does not appear in any operand", string(outSub[i]))
 		}
 	}
@@ -106,7 +111,10 @@ func EinsumContract(inSubs [][]byte, outSub []byte, operands []*tensor.Tensor) (
 	for _, ix := range order {
 		total *= size[ix]
 	}
-	val := map[byte]int{}
+	// Same treatment for the per-combination index assignment: read and written once
+	// per index per combination inside the O(total) contraction loop, so it was the
+	// hottest map in the engine.
+	var val [256]int
 	coords := make([][]int, len(inSubs))
 	for k := range inSubs {
 		coords[k] = make([]int, len(inSubs[k]))

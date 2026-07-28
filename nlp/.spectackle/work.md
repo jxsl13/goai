@@ -25,29 +25,6 @@ EXPECTED: 5-8x on keepSinkRecent itself, bounded by the measured 7.82x embed rat
 
 BIT-IDENTITY BAR: none — SetF64(AtF64(...)) on F32 storage is float32(float64(x)), an exact round trip, and identity on F64; a typed copy moves the same bits. No reduction reordering, no accumulation-width change. This is the same argument concatRows already relies on at nlp/decode.go:54-55. Guard with a table test asserting the new output equals the old loop's output BITWISE across F32/F64 and with rows both above and below the bound.
 
-## T-01KYJQZEK7E1RV0AH9K8MFT89M Propagate the rowBuf KV append to the GPT, CLA, T5 and streaming caches
-kind: task
-state: draft
-created: 2026-07-27
-
-The fix already exists, is already proven by an in-repo A/B, and simply never reached four of the caches.
-
-MEASURED, in-repo, on this host: BenchmarkKVCacheGrowthConcatRows 62,444,861 ns / 1.076 GB / 3,076 allocs versus BenchmarkKVCacheGrowthRowBuf 616,583 ns / 10.3 MB / 1,066 allocs at width 2048, T=512 — 101x time, 104x bytes. End to end: BenchmarkLlamaGenerate500ConcatRows 869,713,097 ns / 2.20 GB versus BenchmarkLlamaGenerate500RowBuf 335,683,472 ns / 150 MB — 2.59x, and that is at only dim 256 / 4 layers / 500 tokens; the gap widens with context length.
-
-SITES still on the quadratic path: nlp/decode.go:104-105 MHA.StepKV (reached from GPT.DecodeStep at :183); nlp/cla.go:330-331 CLA DecodeStep; nlp/t5_decoder.go:434-436 T5 decoder self-attention step; nlp/streaming.go:86-87 (bounded, so O(window) rather than O(T), but still two full copies per layer per token).
-
-DEFECT: each is inside a per-layer loop of a per-token decode step. concatRows (nlp/decode.go:42) allocates a fresh [t+1, width] tensor and recopies all t existing rows EVERY token, giving O(T^2) copy traffic and O(T^2) bytes over a T-token decode. LlamaCache already adopted kvBufs.appendKV (nlp/rowbuf.go:207), which writes one row in place into a doubling backing tensor and returns a zero-copy contiguous view. These four did not.
-
-FIX: embed bufs kvBufs in KVCache (nlp/decode.go:18), CLA's cache and T5's decoder cache, and replace each concatRows pair with cache.bufs.appendKV(cache.K, cache.V, l, k, v). appendKV is already fully generic over (K, V []*tensor.Tensor, l int), so it is a drop-in. CLA needs the GROUP index g rather than l as the buffer key.
-
-VALIDATION GATE (benchmark only): the harness already exists and is exactly right — the ConcatRows/RowBuf pairs above. Add the sibling e2e pairs for GPT, CLA and T5 by reusing the existing bench-only kvAppendViaConcat flag (nlp/rowbuf.go:203), which flips the append while holding every other instruction identical — that is what makes the A/B clean.
-
-EXPECTED: 2-3x end to end at 500 tokens and small dim, more at longer contexts and larger KV width. High confidence — this is a measured in-repo A/B, not an estimate.
-
-BIT-IDENTITY BAR: value-identity is already pinned by TestRowBufAppendMatchesConcatRows (nlp/kvcache_perf_test.go:112) across F32/F64, and there is no reduction reordering or accumulation-width change. THE REAL RISK IS ALIASING, NOT NUMERICS: concatRows returns a FRESH tensor each step while appendKV returns a VIEW into a growing buffer. Any caller that retains an earlier cache.K[l] and assumes later appends cannot touch it changes behavior. rowBuf.owns (nlp/rowbuf.go:179) resynchronizes when a caller replaces the entry, but EACH of GPT, CLA and T5 must be audited for retained views BEFORE the swap — CLA especially, since it shares one cache slot across a group (cache.K[g], nlp/cla.go:330). Do that audit as the first step of the task and record what you found.
-
-PERFSCAN RULE REQUIRED: quadratic accumulate-by-reallocation in a per-token loop. AST shape: an AssignStmt whose LHS is an IndexExpr into a cache-like slice field and whose RHS is concat(<same IndexExpr>, x) — i.e. c.F[i] = f(c.F[i], v) where f allocates output sized from both operands — inside a loop nested in a function whose name matches DecodeStep|StreamStep|Step\w*. Generalizes past tensors to append-free slice and buffer concatenation.
-
 ## T-01KYJQZF10F20R8RMTNMG43PBH Finish the attrs-box hoist and slice pooling across the ~24 skipped decode paths
 kind: task
 state: draft
@@ -91,3 +68,21 @@ VALIDATION GATE (benchmark only): the micro A/B already exists and is already do
 EXPECTED, stated honestly: about 12 us/token saved at dim 2048. At the benchmark's dim 256 that is under 0.1% of a 3.3 ms quantized token, so EXPECT THE E2E A/B TO SHOW NOISE. The real win is at production geometry (dim 4096+), and even there it is roughly 1-2% of a token. High confidence in the microbenchmark ratio AND high confidence that the e2e delta will be small. Do it because it is one line and closes a completed sweep, not because it is a large win — and do not let a noisy e2e result be read as the change being wrong.
 
 BIT-IDENTITY BAR: none. Identical float64/float32 round-trip argument; embedRow's F32 arm is a bit-exact copy. This exact substitution is already pinned by the TestQuantLlamaDecodeMatchesForward-family equivalence tests on the other 28 paths.
+
+## R-01KYMVHB75F3ETH2YCC3NVZGEQ DECLINED: hoisting the loop-invariant in quant_mamba2's SSD scan — QMatMul is 76% of the decode step
+kind: research
+state: draft
+created: 2026-07-28
+
+perfscan PS5003 flagged nlp/quant_mamba2.go:452 — `bi*(xc[hOff+j]*delta)` rebuilds a value that varies with the inner index but not the outer, N times per j. The pattern is REAL and the finding is correct: it is the exact shape whose fix in the float sibling nlp/mamba2_decode.go measured 1.08-1.10x on prefill, and nlp/mamba2.go already carries the hoist.
+
+DECLINED ANYWAY, on measurement rather than shape. A CPU profile of QuantMamba2 DecodeStep (2 layers, d_model 256, 3000 iterations):
+  gguf.QMatMul                 63.45% flat, 75.86% cumulative
+  QuantMamba2Mixer.step         2.07% flat
+The SSD scan does not surface at all. The hoist removes one of three multiplies in the update loop; against a step three-quarters spent in the quantized matmuls, the ceiling is about 1% and below the interleaving noise floor — unmeasurable here, so not shippable here.
+
+THE ENCLOSING WORK DECIDES, not the code shape. Sixth validation of that heuristic. The same source expression is worth 1.10x in the float path, where no quantized matmul competes with it, and worth nothing in the quantized one.
+
+WHERE THE LEVERAGE ACTUALLY WAS: the profile pointed at QMatMul, where Q4_0 decode ran slower than Q8_0 — a fused single-token path existed for Q8_0 alone. Fusing Q4_0/Q4_K/Q6_K measured 1.40x/1.40x/1.52x on the same benchmark. See R-01KYMVGRENEND. Profiling before optimizing turned a sub-1% candidate into a 1.4x one in the same function's caller.
+
+STATUS: the PS5003 finding at that line stands and is NOT suppressed. It becomes shippable if the quantized matmuls ever stop dominating the step — recorded here so the next agent to see the finding reads the measurement instead of repeating it.

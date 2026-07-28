@@ -173,8 +173,8 @@ for step := 0; step < 150; step++ {
   E4M3/E5M2 — DeepSeek-V3-class checkpoints — and all integer widths), GGUF
   (every ggml quant reads: K-quants, all 8 i-quants, MXFP4), npy/npz.
 
-Every algorithm carries its paper citation (§R in [`SPEC.md`](SPEC.md)) and is
-validated on the §V16 ladder: tier-1 parity against an official reference
+Every algorithm carries its paper citation and is validated on the two-tier
+ladder of contract `NUM-008`: tier-1 parity against an official reference
 where one exists, tier-2 the defining paper. Each package doc ends with
 further-reading pointers (papers, surveys, textbooks) for going deeper.
 
@@ -201,9 +201,10 @@ make vulkan-test  # Vulkan backend suite (MoltenVK on macOS)
 make bench-compare  # cross-backend benchmark harness
 ```
 
-Requires Go 1.26+. No C toolchain needed for the default build. Architecture
-and task history live in [`SPEC.md`](SPEC.md) (a generated view of the `spec/` source tree — mutate via `go run ./internal/docgraph`, §V41; caveman-encoded, see
-[`FORMAT.md`](FORMAT.md)); design rationale in [`docs/`](docs/); the
+Requires Go 1.26+. No C toolchain needed for the default build. The
+architecture intent and the verifiable contracts live in the `.spectackle/`
+spec bundles, read with `make spec-state` and never hand-edited; design
+rationale in [`docs/`](docs/) and [`docs/decisions/`](docs/decisions/); the
 categorical comparison against the industry incumbents in
 [`BENCHMARKS.md`](BENCHMARKS.md), with the full measurement log and policy in
 [`docs/benchmarking.md`](docs/benchmarking.md); the GGUF architecture matrix

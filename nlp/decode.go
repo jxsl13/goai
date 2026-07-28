@@ -18,6 +18,12 @@ import (
 type KVCache struct {
 	K, V []*tensor.Tensor // per block; nil until the first token
 	pos  kvPos            // where the retained rows sit on the stream's position axis
+
+	// Amortized row buffers backing the K/V views (see rowbuf.go). The public
+	// K/V fields keep holding the same [t,width] views callers already read;
+	// this only changes how the next row gets there. EvictStreaming replaces
+	// the entries outright, which rowBuf.owns detects and resynchronizes from.
+	bufs kvBufs
 }
 
 // NewCache returns an empty cache sized for this model's blocks.
@@ -89,6 +95,18 @@ func concatRows(a, b *tensor.Tensor) *tensor.Tensor {
 // (each [t,dmodel] or nil). It appends the token's k,v to the cache and returns
 // (out[1,dmodel], Knew, Vnew). The single query attends to all t+1 keys.
 func (m *MHA) StepKV(ctx *backend.Context, h, kc, vc *tensor.Tensor) (out, kNew, vNew *tensor.Tensor, err error) {
+	return m.stepKV(ctx, h, func(kt, vt *tensor.Tensor) (*tensor.Tensor, *tensor.Tensor) {
+		return concatRows(kc, kt), concatRows(vc, vt)
+	})
+}
+
+// kvAppend appends the token's k,v rows to the cache and returns the refreshed
+// views. It is the seam that lets GPT.DecodeStep use the amortized rowBuf append
+// while the exported StepKV keeps its allocating concatRows semantics for callers
+// that hand in bare tensors and own no buffer.
+type kvAppend func(kt, vt *tensor.Tensor) (kNew, vNew *tensor.Tensor)
+
+func (m *MHA) stepKV(ctx *backend.Context, h *tensor.Tensor, appendRows kvAppend) (out, kNew, vNew *tensor.Tensor, err error) {
 	q, err := m.exec(ctx, backend.OpMatMul, nil, h, m.Wq)
 	if err != nil {
 		return nil, nil, nil, err
@@ -101,8 +119,7 @@ func (m *MHA) StepKV(ctx *backend.Context, h, kc, vc *tensor.Tensor) (out, kNew,
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	kNew = concatRows(kc, kt)
-	vNew = concatRows(vc, vt)
+	kNew, vNew = appendRows(kt, vt)
 	// single query at the last position attends to all cached keys → no mask
 	attn, err := m.exec(ctx, backend.OpMHA, backend.AttnAttrs{Heads: m.Heads, Causal: false}, q, kNew, vNew)
 	if err != nil {
@@ -180,7 +197,9 @@ func (g *GPT) DecodeStep(ctx *backend.Context, cache *KVCache, token, pos int) (
 		if err != nil {
 			return nil, err
 		}
-		attnOut, kNew, vNew, err := b.Attn.StepKV(ctx, h, cache.K[l], cache.V[l])
+		attnOut, kNew, vNew, err := b.Attn.stepKV(ctx, h, func(kt, vt *tensor.Tensor) (*tensor.Tensor, *tensor.Tensor) {
+			return cache.bufs.appendKV(cache.K, cache.V, l, kt, vt)
+		})
 		if err != nil {
 			return nil, err
 		}

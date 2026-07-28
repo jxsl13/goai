@@ -106,35 +106,13 @@ func bcastSumInto[T interface{ ~float32 | ~float64 }](dst, src []T, gs, inShape 
 			eff[j] = ist[d]
 		}
 	}
-	// Blocked-contiguous fast path (the common bias-grad case: reduce over the
-	// leading batch axes, keep a contiguous trailing feature block). When every
-	// ALIGNED axis is non-broadcast (inShape[d] != 1 for all d), the aligned
-	// suffix of gs equals inShape exactly, so each F=len(dst) run of src maps to
-	// the contiguous dst[0:F] and all leading axes are pure broadcast. This
-	// replaces the per-element carry-walk (a branchy index update per element)
-	// with a tight unit-stride add loop the compiler auto-vectorizes. Bit-identical:
-	// each dst[f] accumulates the same src elements in the same row-ascending order
-	// the odometer visits — same operands, same per-accumulator add order.
-	aligned := true
-	for d := range inShape {
-		if inShape[d] == 1 {
-			aligned = false
-			break
-		}
-	}
-	if aligned {
-		if F := len(dst); F > 0 {
-			for base := 0; base+F <= len(src); base += F {
-				row := src[base : base+F]
-				for f, v := range row {
-					dst[f] += v
-				}
-			}
-		}
+	if bcastSumRows(dst, src, gs, eff) {
 		return
 	}
 	idx := make([]int, nd)
 	dOff := 0
+	// Declined-shape fallback: the per-element odometer is deliberate here.
+	//perfscan:ignore PS4005 fallback for shapes bcastSumRows declines
 	for _, v := range src {
 		dst[dOff] += v
 		for d := nd - 1; d >= 0; d-- {
@@ -147,6 +125,78 @@ func bcastSumInto[T interface{ ~float32 | ~float64 }](dst, src []T, gs, inShape 
 			dOff -= eff[d] * gs[d]
 		}
 	}
+}
+
+// bcastSumRows is bcastSumInto's per-element odometer STRIP-MINED over the innermost
+// axis (PS4005). The odometer it replaces advanced the destination offset with a
+// nested loop and two memory operands per ELEMENT, on the path every bias gradient in
+// every linear layer takes (the OpAdd, OpSub and OpMul VJPs all reach it).
+//
+// eff[nd-1] is constant across the innermost axis, which collapses the run to one of
+// three shapes: a unit-stride vector add when the destination row lines up with it, a
+// pure reduction into ONE destination when the axis is broadcast (eff 0), or a strided
+// scatter otherwise. The odometer then ticks once per ROW over axes 0..nd-2.
+//
+// BIT-IDENTITY IS CONDITIONAL HERE, unlike the storing twin in vjp_reduce.go, and two
+// things are load-bearing:
+//
+//   - unit stride: each dst[j] is touched once per row and rows are visited in
+//     ascending order, so every destination's summation order is unchanged.
+//   - broadcast axis: the run is folded into a scalar SEEDED FROM dst[dOff] and stored
+//     once, and that accumulator MUST keep the element type T. Widening it to float64
+//     and narrowing at the end would be MORE accurate than `dst[d] += v` repeated —
+//     and therefore a DIFFERENT answer, which would move the finite-difference gate.
+//
+// Returns false for shapes it does not handle, leaving the caller's original loop.
+func bcastSumRows[T interface{ ~float32 | ~float64 }](dst, src []T, gs tensor.Shape, eff []int) bool {
+	nd := len(gs)
+	if nd == 0 {
+		return false
+	}
+	inner := gs[nd-1]
+	if inner <= 0 || len(src)%inner != 0 {
+		return false
+	}
+	// eff[nd-1] is ALWAYS 0 or 1 for a row-major destination: the innermost kept axis
+	// has stride 1 by construction, and a broadcast axis contributes 0. Anything else
+	// would be a shape this code has never seen, so decline it up front and let the
+	// caller's odometer handle it — rather than carrying a third branch that no test
+	// can reach. Declining must happen BEFORE any row is written, since dst is
+	// accumulated into and a mid-loop bail would leave it half-updated.
+	e := eff[nd-1]
+	if e != 0 && e != 1 {
+		return false
+	}
+	idx := make([]int, nd)
+	dOff := 0
+	for r := 0; r < len(src)/inner; r++ {
+		row := src[r*inner : r*inner+inner] // re-slice: one bounds check for the run
+		switch {
+		case e == 1 && dOff+inner <= len(dst):
+			d := dst[dOff : dOff+inner]
+			for j := range d {
+				d[j] += row[j]
+			}
+		case e == 0:
+			acc := dst[dOff] // typed T — see the bit-identity note above
+			for j := range row {
+				acc += row[j]
+			}
+			dst[dOff] = acc
+		}
+		// Outer axes only: the innermost contributed e*inner and its wrap took the
+		// same back off, so dOff already points at the next row's base.
+		for d := nd - 2; d >= 0; d-- {
+			idx[d]++
+			dOff += eff[d]
+			if idx[d] < gs[d] {
+				break
+			}
+			idx[d] = 0
+			dOff -= eff[d] * gs[d]
+		}
+	}
+	return true
 }
 
 func init() {

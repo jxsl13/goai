@@ -91,3 +91,69 @@ VALIDATION GATE (benchmark only): BenchmarkReadRawSynthetic on the same 200-tens
 EXPECTED: 30-60ms off a ReadRaw of a 669MB model and -669MB peak RSS. High confidence on the allocation and RSS win (arithmetic, not a guess), medium on the wall-clock share since the memcpy is bandwidth-bound and partially overlapped with page-cache reads.
 
 CORRECTNESS BAR: does NOT weaken a bounds check — the guard at :419-423 (the overflow-safe subtraction form) runs BEFORE the slice and is untouched, so the subslice is provably in range. The real risk is ALIASING SEMANTICS: QuantTensor.Data becomes mutation-visible across tensors and keeps the whole data section alive even if the caller retains one tensor. Both are acceptable for the actual callers (weight upload, read-only), but the three-index cap is mandatory and the QuantTensor doc comment must state the aliasing. Re-run format/gguf/hostile_test.go and the FuzzReadRaw corpus unchanged.
+
+## R-01KYMVGRENENDS71F7VFKRAD5H Fused single-token QMatMul completed for Q4_0/Q4_K/Q6_K — 1.40x, 1.40x, 1.52x measured
+kind: research
+state: draft
+created: 2026-07-28
+
+QMatMul carried a fused m==1 (decode) path for Q8_0 only. Every other quant type materialized each weight row into scratch and read it straight back, once per output row.
+
+SYMPTOM THAT EXPOSED IT: Q4_0 decode benchmarked SLOWER than Q8_0 (747us vs 534us per QuantMamba2 DecodeStep) despite half the memory traffic. That ordering is backwards for the smaller format. The K-quants carried the same signature: 107 allocs against the fused paths' 102.
+
+MEASURED, interleaved A/B in one session, alternating in-tree:
+  Q4_0  735.8-746.2us -> 521.2-548.1us   1.40x
+  Q4_K  745.8-751.6us -> 534.3-536.5us   1.40x
+  Q6_K  855.2-861.7us -> 558.6-570.2us   1.52x
+Allocs 107 -> 102 for all three. Q4_0 now edges out Q8_0 (515us vs 526us), restoring the expected ordering. Numbers are whole DecodeStep, not the matmul in isolation.
+
+ONE INTERLEAVE WAS DISCARDED, not published: running Q4_K and Q6_K together drifted the OLD arm 25% within the set (735 -> 921us) while the NEW arm held. A ratio taken from it would have reported machine thermals as a speedup. Re-run one quant at a time at lighter load, both arms came in under 2%.
+
+Q6_K deliberately does NOT accumulate in ascending k: its dequant writes four interleaved streams (l, l+32, l+64, l+96) and following that traversal is what keeps the per-element float32 weights identical. Verified, not assumed.
+
+GATE BUILT FIRST, AND IT FOUND A PRE-EXISTING HOLE: every QMatMul test compared against a float reference at 1e-5, so the EXISTING Q8_0 fused path's bit-for-bit claim had nothing holding it. The new gate runs one activation row as m==1 (fused) and as row 0 of an m==2 call (general), demanding exact equality — production as its own oracle, so it cannot drift like a frozen copy. Mutation-probed: unsigned-instead-of-int8, off-by-one activation index, and a scale read from the wrong block each turn it red while every pre-existing test stays green.
+
+LIMIT OF THAT GATE, recorded so it is not over-trusted: reassociating the accumulation is INVISIBLE here, because a float64 accumulator narrows to a float32 output and discards the difference. A deliberate block-order reversal stayed green. The gate covers element mapping, sign and scale selection — the failure modes this path actually has — not summation order.
+
+GENERALIZED as perfscan PS6003 (partial-fast-path-coverage). REMAINING: Q2_K, Q3_K, Q5_K are still uncovered and still unmeasured — the aggressive quants, lower deployment share, each needs its own benchmark before anyone fuses it.
+
+## R-01KYMWGGNMER3B16KBXB8JY18H Row-parallel QMatMul measures 1.70x on decode, bit-identical — blocked on a threading-policy decision
+kind: research
+state: draft
+created: 2026-07-28
+
+After the fusion campaign closed, a re-profile of QuantMamba2 DecodeStep shows gguf.dotQ4_KRow at 80.95% flat / 82.31% cumulative. The fused dot IS the decode step now; nothing else is close.
+
+The remaining structural win is that the n output rows are INDEPENDENT dots. Each writes its own index and shares no mutable state, so splitting the row range changes no accumulation — bit-identical by construction, not by measurement.
+
+PROTOTYPED AND MEASURED, interleaved, 3 alternations:
+  SERIAL   536.3-547.6us
+  PARALLEL 315.3-318.7us
+  1.70x on the whole decode step. Arms 2.2% and 1.1%.
+
+Only 1.70x on a 12-core host, not 12x, and the reasons are understood: a threshold keeps small matmuls serial (the tied Head at n=64,k=256 is 16384 units, under the crossover), the SSD scan and norms stay serial, and each barrier costs a park.
+
+THRESHOLD taken from backend/cpu's parThreshold, 1<<15 = 32768 units of rows x k — the measured M-series crossover below which pool dispatch exceeds the compute saved. In the benchmark model InProj (n=552, k=256 = 141312) and OutProj (65536) cross it; the Head does not.
+
+NOT SHIPPED, and the reason is not the measurement. This changes threading behavior for every caller of QMatMul, library-wide. A server already running requests concurrently would go from N goroutines to N x GOMAXPROCS, which is a deployment-visible regression that no benchmark on this host would show. That is a standing policy question, not a local optimization, so it goes to a decision rather than being assumed.
+
+PRECEDENT CUTS BOTH WAYS: format/gguf ALREADY spawns a bounded worker pool in ReadFile to decode tensors concurrently, so the package spawning goroutines is not new. But ReadFile is a one-shot load-time call, while QMatMul is the innermost hot path called several times per token — the nesting exposure is different in kind. backend/cpu solved the same problem with a bounded pool plus a guard against calling parallelWork from inside a worker, and its comments record that naive wg.Wait parking cost a full M-stop/restart per barrier across the ~16k barriers a 500-token decode issues.
+
+OPTIONS for the decision: (a) land as prototyped with the threshold, accepting nested oversubscription; (b) route through a bounded pool with an in-worker guard, as backend/cpu does, which means either lifting that pool somewhere both packages can use or duplicating it; (c) leave serial and let the caller parallelize, which forfeits the 1.70x for single-stream decode — the latency-sensitive case.
+
+Prototype is reproducible: fusedRows helper over the existing per-row dot functions, guarded by workers>1 and n*k >= 1<<15.
+
+## ADR-01KYMWJ76AFA2BJ9R8ZE403KB1 May format/gguf QMatMul parallelize across output rows, and under what pooling policy?
+kind: adr
+state: done
+created: 2026-07-28
+context: Row-parallel QMatMul measures 1.70x on QuantMamba2 decode (536.3-547.6us serial vs 315.3-318.7us parallel, interleaved, 3 alternations) and is bit-identical by construction: each output row is an independent dot writing its own index, sharing no mutable state. After the fusion campaign, gguf.dotQ4_KRow is 82% of the decode step, so this is where the remaining leverage is. The blocker is threading policy, not correctness or speed. QMatMul runs several times per token on the innermost path, so a caller already serving requests concurrently would go from N goroutines to N x GOMAXPROCS — a regression no benchmark on this host would surface. Precedent cuts both ways: format/gguf already spawns a bounded pool in ReadFile, but that is a one-shot load-time call. backend/cpu solved the same problem with a bounded pool plus an in-worker guard, and records that naive wg.Wait parking cost a full M-stop per barrier. The tree is currently SERIAL; nothing was shipped pending this.
+decision: Route through a bounded pool with an in-worker guard, as backend/cpu already does. Correct under nesting, but needs that pool lifted somewhere both packages can import, or duplicated.
+status: accepted
+
+kind: radio
+option: Land as prototyped: goroutines per call above a 1<<15 rows-x-k threshold, matching backend/cpu's measured M-series crossover. Simplest, gets the 1.70x, accepts nested oversubscription.
+option: Route through a bounded pool with an in-worker guard, as backend/cpu already does. Correct under nesting, but needs that pool lifted somewhere both packages can import, or duplicated.
+option: Stay serial and let callers parallelize. Forfeits the 1.70x for single-stream decode, which is the latency-sensitive interactive case.
+blocks: R-01KYMWGGNMER3B16KBXB8JY18H
+choice: Route through a bounded pool with an in-worker guard, as backend/cpu already does. Correct under nesting, but needs that pool lifted somewhere both packages can import, or duplicated.

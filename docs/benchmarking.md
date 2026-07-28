@@ -2085,3 +2085,202 @@ is **not supported** by the evidence and is not pursued; the actionable item is 
 threshold's margin, and the test is `-short`-skipped so it never runs in CI regardless. If
 the buffer-pool question is ever reopened it needs a deterministic probe (same seed, assert
 bit-identical output with and without a preceding GPU op), not a noisy end-to-end CE gate.
+
+## ref broadcast: run-length hoist (2026-07-27)
+
+`backend/ref` is the *production* kernel for `OpBroadcast` — neither `backend/cpu`
+nor `backend/metal` registers it, so every broadcast on every host lands here
+through the `Execute` fallback chain. It is the VJP of every reduction and of
+`AddBias`, so it runs once per broadcast-shaped gradient per training step, over
+the elements of the larger tensor.
+
+`broadcastKernel` walked a per-element odometer to produce what is, along the
+innermost axis, either a verbatim contiguous row (source stride 1) or one value
+repeated (stride 0). Hoisting that axis out of the odometer turns each run into a
+single `copy` or fill and ticks the odometer once per run instead of once per
+element.
+
+| Benchmark | before | after | speedup |
+| --- | --- | --- | --- |
+| `BenchmarkBroadcastF64_256to256x256` | 160,540 ns | 35,730 ns | **4.49×** |
+
+Method: same host (M2 Pro, darwin/arm64, go1.26.5), interleaved A/B over three
+rounds with a file-copy toggle of `broadcast.go`, medians reported. An earlier
+non-interleaved comparison suggested 5.5×, but the untouched `BenchmarkReshapeF64_64K`
+control moved 46.4 → 37.0 µs between those sessions, so the two runs were not
+comparable and that figure is discarded — the 4.49× above is the interleaved one.
+
+Bit-identity: the op performs no arithmetic (same-dtype copy), so exact equality
+is the bar rather than a tolerance. `TestBroadcastRunsMatchesPerElement` pins the
+result element-for-element against the per-element traversal across F32 and F64
+for a trailing verbatim row, a trailing broadcast axis, a mixed rank-3 case and a
+rank-0 output. The test was proven non-vacuous by mutation: changing the odometer
+tick to start at the innermost axis instead of `ndo-2` turns it red.
+
+## gguf Q4_K dequant: bounds-check elimination (2026-07-27)
+
+Q4_K is the dominant modern GGUF weight format, and `dequantQ4_KInto` sits on two
+hot chains: once per tensor at load, and once per weight row per matmul per token
+through `QMatMul`.
+
+The inner store loop carried one un-eliminated bounds check per output element —
+confirmed, not inferred, via `-gcflags=-d=ssa/check_bce/debug=1` reporting
+`IsInBounds` at `q4k.go:75:8` and `:76:8`. The cause was open-ended reslicing
+(`raw[sb*q4kBlockSize:]`), which leaves the compiler unable to relate the store
+index to the slice length. Reslicing to fixed lengths (`raw[o:o+q4kBlockSize]`,
+`dst[base:base+64]`) lets it prove the stores in range.
+
+| Benchmark | before | after | speedup |
+| --- | --- | --- | --- |
+| `BenchmarkDequantQ4_K` | 177,736 ns | 154,195 ns | **1.15×** |
+
+Method: same host (M2 Pro, darwin/arm64, go1.26.5), interleaved A/B over three
+rounds with a file-copy toggle of `q4k.go`, medians reported.
+
+After the change the per-element `IsInBounds` at `:75`/`:76` are gone; what remains
+is one `IsSliceInBounds` per sub-block for the two reslices — N per-element checks
+traded for one per-run check, which is the point.
+
+Bit-identity: exact. No arithmetic expression changed — `y[l]` addresses the same
+element as `dst[base+l]` by construction — so operand order, accumulation and
+rounding are untouched. Golden, round-trip, hostile-input and fuzz suites all pass.
+The fixed-length reslices also concentrate the length check at one named site, so a
+short `raw` or `dst` now panics there rather than mid-loop.
+
+Not done in this change: the Q6_K half of the same task (its unhoisted per-element
+scale products, a larger win at 1.35-1.7x) remains outstanding.
+
+## gguf Q6_K dequant: hoisted scale products (2026-07-27)
+
+The companion to the Q4_K bounds-check fix, and the larger of the two. In a
+Q4_K_M mix every `attn_v`/`output` tensor is Q6_K, and `dequantQ6_KInto` sits on
+the same two chains: once per tensor at load, once per weight row per matmul per
+token through `QMatMul`.
+
+`is := l / 16` took exactly two values across the 32-iteration inner loop, yet the
+four scale products `d * float32(int8(sc[sco+is+k]))` were recomputed on every
+iteration — 8 distinct values computed 128 times per 128-element group. Splitting
+the loop at the `is` boundary hoists them; the block and destination were also
+resliced to fixed lengths, as in the Q4_K twin.
+
+| Benchmark | before | after | speedup |
+| --- | --- | --- | --- |
+| `BenchmarkDequantQ6_K` | 230,684 ns | 178,457 ns | **1.29×** |
+
+Method: same host (M2 Pro, darwin/arm64, go1.26.5), interleaved A/B over three
+rounds with a file-copy toggle of `q6k.go`, medians reported.
+
+Bit-identity — and here it is a real question, unlike Q4_K, because this change
+touches arithmetic grouping. The original expression
+`d * float32(int8(sc[...])) * float32(q-32)` associates left-to-right as
+`(d*sc)*(q-32)`. Hoisting `s := d*sc` and writing `s*(q-32)` reproduces that
+grouping exactly: same operands, same order, same two roundings. Folding the other
+way, `d*(sc*(q-32))`, would **not** be equivalent.
+
+That argument was verified rather than trusted: the raw output bits of
+`dequantQ6_KInto` were captured for a deterministic 7-block input before and after
+the change (7,168 bytes) and compared byte-for-byte — identical. The per-element
+`IsInBounds` in the loop body also drops to zero.
+
+## ref reduce-all: fast path off the odometer (2026-07-27)
+
+`backend/ref` is the *production* kernel for every reduction — neither
+`backend/cpu` nor `backend/metal` registers `OpSum`/`OpMean`/`OpMax`/`OpMin`/
+`OpProd`, so all of them reach `reduceKernel` through the `Execute` fallback
+chain. Reductions run per element of the input, in both forward and backward.
+
+For a reduce-all every element lands in `acc[0]`, so the output offset is
+invariably 0 and the per-element odometer is pure bookkeeping — with every
+effective stride zero it computes `of += 0` once per element. Splitting that case
+out and accumulating into a local removes the odometer, the `acc[0]` load/store
+and its bounds check from the inner loop.
+
+| Benchmark | before | after | speedup |
+| --- | --- | --- | --- |
+| `BenchmarkSumF64_64K` (reduce-all) | 226,448 ns | 132,089 ns | **1.71×** |
+| `BenchmarkSumAxisF64_256x256` (control, unaffected) | 225,401 ns | 225,413 ns | 1.00× |
+
+Method: same host (M2 Pro, darwin/arm64, go1.26.5), interleaved A/B over three
+rounds with a file-copy toggle of `reduce.go`, medians reported. The axis-reduce
+control takes the untouched branch and does not move, which is what confines the
+result to the path actually changed.
+
+Bit-identity: exact, and verified rather than argued — `ref` is the numeric truth
+every accelerated kernel is validated against, so a drift here would move the
+goalposts for cpu, metal, cuda and vulkan at once. The raw output bits of 5 ops ×
+3 axis configurations × 2 dtypes (7,760 bytes) were captured before and after and
+compared byte-for-byte: identical. The visit order is unchanged — same ascending
+`pos`, same `combine` sequence — so the accumulator sees an identical add chain.
+
+Only the reduce-all sub-step of that work landed. Still outstanding: run-length
+strip-mining for the general axis case, devirtualizing the `combine` closure, and
+the F32 path's whole-input pre-widening (a 512 KB garbage buffer per call).
+
+## ref reduce, axis case: run-length strip-mining (2026-07-27)
+
+Companion to the reduce-all fast path above, covering the general axis case. The
+innermost axis has a constant effective stride across its run, so the run is
+either one accumulator fed repeatedly (stride 0, a reduced innermost axis) or a
+straight walk down consecutive accumulators (stride 1, the axis survives into the
+output). Hoisting it out of the odometer ticks the bookkeeping once per run
+instead of once per element.
+
+| Benchmark | before | after | speedup |
+| --- | --- | --- | --- |
+| `BenchmarkSumAxisF64_256x256` | 226,176 ns | 129,071 ns | **1.75×** |
+| `BenchmarkSumF64_64K` (control, already hoisted) | 131,981 ns | 132,259 ns | 1.00× |
+
+Method as before: same host, interleaved three-round file-copy toggle, medians.
+The reduce-all benchmark serves as the control here — it takes the branch landed
+previously and does not move, confining this result to the axis path.
+
+Taken together the two changes put both reduce paths at roughly 1.7× off their
+original: reduce-all 226,448 → 132,089, axis 225,401 → 129,071.
+
+Bit-identity: exact, verified over a wider matrix than the first change — 5 ops ×
+4 axis configurations × 3 shapes (including a rank-3 and a non-power-of-two) × 2
+dtypes, 17,040 bytes, byte-for-byte identical before and after. Every accumulator
+still sees the same values in the same ascending order, so its combine chain is
+unchanged; only the index bookkeeping around it moved.
+
+Still outstanding from that task: devirtualizing the `combine` closure (gate it on
+`-gcflags=-S` showing no `FMADDD` in the reduce core) and the F32 path's
+whole-input pre-widening. The 3.5-5× originally predicted covers all four
+sub-steps; the two landed here account for ~1.7×.
+
+## nlp StreamingLLM cache eviction: typed row copies (2026-07-27)
+
+`keepSinkRecent` bounds the StreamingLLM KV cache to the first `sinks` rows plus
+the last `window` rows. It runs twice per layer per token (K and V), and once the
+stream passes `sinks+window` — the steady state that is the entire point of
+StreamingLLM — its early return never fires again.
+
+Both retained regions are contiguous row blocks, yet each element went through a
+variadic `AtF64`/`SetF64` pair: a stride walk plus an interface dispatch into
+storage, per element. Replacing them with two typed copies makes it a memmove.
+
+| Benchmark | before | after | speedup |
+| --- | --- | --- | --- |
+| `BenchmarkKeepSinkRecent` (2048×2048 → 516×2048, F32) | 6,099,284 ns | 147,826 ns | **41×** |
+| throughput | 693 MB/s | 28,595 MB/s | |
+
+Method: same host, interleaved three-round file-copy toggle, medians. The
+benchmark is new — none existed, and the package's own streaming tests use
+`sinks=2, window=6`, far too small to reach the bound.
+
+This exceeds the 5-8× that was predicted from a per-element-versus-row-copy micro
+ratio, and the reason is geometry: at ~1M elements the per-element path also
+thrashes cache, while the typed copy is bandwidth-bound. Both arms allocate
+4,227,3xx B/op — identical work and identical output size — which is what rules
+out the result being an elided-work artifact.
+
+Bit-identity: exact. A same-dtype copy moves the same bits, and the
+`SetF64(AtF64(...))` it replaces was already an exact round trip.
+`TestKeepSinkRecentMatchesPerElement` pins it element-for-element against the
+per-element reference across F32 and F64 and six geometries — past the bound, at
+the bound, below it, degenerate widths, no sinks, no window — and is proven
+non-vacuous by mutation (swapping the window source offset turns it red).
+
+`copyRows` grew a `copyRowsFrom` sibling that takes a source offset; the original
+now delegates to it. It returns false for dtypes it cannot move verbatim, so the
+generic per-element fallback is preserved for those.

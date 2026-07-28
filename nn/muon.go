@@ -147,9 +147,12 @@ func newtonSchulz5(x []float64, rows, cols, steps int) []float64 {
 	for i := range X {
 		X[i] *= inv
 	}
+	// One [cc,r] transpose scratch for the whole run: matmulABt's operand shape is
+	// fixed across the iterations, so reusing it drops steps-1 of these allocations.
+	abt := make([]float64, cc*r)
 	for range steps {
-		A := matmulABt(X, X, r, cc)     // X·Xᵀ  [r,r]
-		A2 := matmulFlat(A, A, r, r, r) // A·A   [r,r]
+		A := matmulABtInto(X, X, r, cc, abt) // X·Xᵀ  [r,r]
+		A2 := matmulFlat(A, A, r, r, r)      // A·A   [r,r]
 		bm := make([]float64, r*r)
 		for i := range bm {
 			bm[i] = b*A[i] + c*A2[i]
@@ -187,18 +190,73 @@ func matmulFlat(a, b []float64, m, k, n int) []float64 {
 }
 
 // matmulABt returns C[m,m] = A[m,k]·B[m,k]ᵀ (A and B same shape).
+//
+// The obvious form — a dot product per output element — carries a SERIAL
+// dependency: `s += ai[p]*bj[p]` makes each FMADD wait on the previous one's
+// latency, so it ran at ~0.92 ns/MAC while the axpy in matmulFlat, whose
+// accumulators are independent across j, ran at ~0.32 ns/MAC on the same host.
+// (The old comment here claimed the dot "auto-vectorizes"; it does not — gc emits
+// scalar FMADDD on arm64, and because ai and bj are distinct slices it could not
+// eliminate the bounds check either.) Transposing the k-dim operand once costs
+// k·m stores against m·m·k MACs and buys the ikj/axpy form instead.
+//
+// BIT-IDENTICAL to the dot form: for a fixed (i,j) the products are accumulated
+// over p in the same ascending order into an accumulator that also starts at +0,
+// so every rounding is the same one. Note this deliberately does NOT copy
+// matmulFlat's `if av == 0 { continue }` skip — dropping a zero term is not a
+// no-op (it turns a -0 accumulator into -0 rather than +0, and 0·±Inf into a
+// skipped NaN), which would break exactness for the sake of a rare branch.
 func matmulABt(a, b []float64, m, k int) []float64 {
+	return matmulABtInto(a, b, m, k, nil)
+}
+
+// matmulABtInto is matmulABt with a caller-supplied [k,m] transpose scratch. The
+// shapes are fixed across a newtonSchulz5 run, so hoisting one buffer out of the
+// iteration keeps the ikj rewrite from trading time for garbage. A nil (or too
+// small) scratch is allocated here, so the plain matmulABt stays correct.
+func matmulABtInto(a, b []float64, m, k int, bt []float64) []float64 {
 	c := make([]float64, m*m)
+	if m == 0 || k == 0 {
+		return c
+	}
+	// bt[p*m+j] = B[j][p] — the k-dim operand transposed so the inner loop walks
+	// j contiguously with one bounds check on a slice the compiler can size.
+	if cap(bt) < k*m {
+		bt = make([]float64, k*m)
+	}
+	bt = bt[:k*m]
+	for j := range m {
+		bj := b[j*k : j*k+k]
+		for p := range bj {
+			bt[p*m+j] = bj[p]
+		}
+	}
+	// newtonSchulz5 calls this as matmulABt(X, X, …), where C = X·Xᵀ is symmetric
+	// to the last bit (c[i][j] and c[j][i] accumulate the same products in the same
+	// order, and IEEE multiplication is commutative — TestMatmulABtAliasedIsSymmetric
+	// holds it to that). So compute the lower triangle and mirror: half the MACs.
+	sym := len(a) == len(b) && &a[0] == &b[0]
 	for i := range m {
-		ai := a[i*k : i*k+k]
 		ci := c[i*m : i*m+m]
-		for j := range m {
-			bj := b[j*k : j*k+k]
-			var s float64
-			for p := range ai { // equal-length slice dot → auto-vectorizes; same order
-				s += ai[p] * bj[p]
+		ai := a[i*k : i*k+k]
+		n := m
+		if sym {
+			n = i + 1
+		}
+		ci = ci[:n]
+		for p := range ai {
+			av := ai[p]
+			bp := bt[p*m : p*m+n]
+			for j := range ci {
+				ci[j] += av * bp[j]
 			}
-			ci[j] = s
+		}
+	}
+	if sym {
+		for i := range m {
+			for j := i + 1; j < m; j++ {
+				c[i*m+j] = c[j*m+i]
+			}
 		}
 	}
 	return c

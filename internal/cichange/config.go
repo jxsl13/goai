@@ -41,8 +41,8 @@ func (s *stringList) Set(v string) error {
 // defaultRules returns this repository's rules expressed as config vocabulary —
 // exactly what the hardcoded classifier used to do (§T584).
 func defaultRules() (ignore, ignoreRe, fullRe, pkgRe, alwaysRun []string) {
-	ignore = []string{"docs", ".claude", "spec"} // + .claude/** (skills/workflows/memory) + spec/** (the §V40 source tree — pure markdown, never embedded; §T585 root-markdown covers LICENSE.md)
-	ignoreRe = []string{`^[^/]+\.(md|txt)$`}     // root-level markdown/text (deeper ones can be embedded, §B50)
+	ignore = []string{"docs", ".claude", ".spectackle"} // + .claude/** (commands/workflows/memory) + .spectackle/** (the server-owned spec bundle — pure markdown/ndjson, never embedded; §T585 root-markdown covers LICENSE.md)
+	ignoreRe = []string{`^[^/]+\.(md|txt)$`}            // root-level markdown/text (deeper ones can be embedded, §B50)
 	fullRe = []string{`^go\.sum$`, `^Makefile$`, `^\.github/`}
 	// The whole-tree meta-tests walk SOURCE/markdown they have no import edge to, so
 	// the reverse closure can never select them (§B98: they rot red while CI stays
@@ -50,9 +50,6 @@ func defaultRules() (ignore, ignoreRe, fullRe, pkgRe, alwaysRun []string) {
 	// into every non-empty selection to close that seam (a pure-docs diff still stays
 	// zero-runner, §C16 EXC2). A package may only be listed here once it is GREEN on
 	// the committed tree, else it fails CI on the FIRST push.
-	//   - internal/speccheck (§V36 SPEC-integrity: id-uniqueness, §T-membership) is
-	//     GREEN today — SPEC.md is clean — so it is enabled and now gates every push
-	//     (§T886/§T893).
 	//   - internal/perfscan (T920 per-element hot-loop finder) is GREEN — its detector
 	//     tests + TestScanWholeModule (parses every first-party .go, asserts the scan
 	//     completes and still finds candidates) pass on the committed tree — so it is
@@ -65,11 +62,12 @@ func defaultRules() (ignore, ignoreRe, fullRe, pkgRe, alwaysRun []string) {
 	//     (a new undocumented exported public symbol reddens CI). Note apicheck parses
 	//     source (no compile), so it is orthogonal to the cgo/cuda build lanes.
 	//   - internal/mdlint (every *.md) stays OUT until green: it fails on
-	//     .claude/memory + SPEC-worker-*.md tilde debt (T889). Add it here once green.
-	//   - internal/docgraph (§V39 dangling refs + §V41 render-sync: spec/ is the
-	//     source, SPEC.md a generated view) is GREEN and hermetic — enabled so a
-	//     hand-edited rendered view goes red on the next non-empty selection.
-	alwaysRun = []string{"internal/speccheck", "internal/perfscan", "internal/docgraph", "internal/apicheck"}
+	//     .claude/memory tilde debt (T889). Add it here once green.
+	//
+	// Spec integrity itself is no longer gated here: the spec lives in the
+	// server-owned .spectackle/ bundle, which is linted by `spectackle lint` and
+	// verified by `spectackle check` rather than by a Go meta-test.
+	alwaysRun = []string{"internal/perfscan", "internal/apicheck"}
 	return ignore, ignoreRe, fullRe, pkgRe, alwaysRun
 }
 

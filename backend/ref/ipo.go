@@ -44,10 +44,26 @@ func ipoKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) (
 	target := 1.0 / (2.0 * beta)
 
 	var total float64
-	for i := range b {
-		h := (pc.AtF64(i) - rc.AtF64(i)) - (pl.AtF64(i) - rl.AtF64(i))
-		d := h - target
-		total += d * d
+	// Devirtualised traversal (§base-perf), the IPO member of the preference-loss
+	// family: four AtF64 dispatches per element for three subtractions and a square.
+	// Bit-identical.
+	pcs, ok0 := f64Data(pc)
+	rcs, ok1 := f64Data(rc)
+	pls, ok2 := f64Data(pl)
+	rls, ok3 := f64Data(rl)
+	if ok0 && ok1 && ok2 && ok3 {
+		for i := range b {
+			h := (pcs[i] - rcs[i]) - (pls[i] - rls[i])
+			d := h - target
+			total += d * d
+		}
+	} else {
+		// Generic fallback for dtypes f64Data cannot expose (verbatim original loop).
+		for i := range b {
+			h := (pc.AtF64(i) - rc.AtF64(i)) - (pl.AtF64(i) - rl.AtF64(i))
+			d := h - target
+			total += d * d
+		}
 	}
 	out := tensor.NewOn(ctx.Device(), pc.Dtype(), tensor.Shape{})
 	out.SetF64(total / float64(b))
