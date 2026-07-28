@@ -3,6 +3,7 @@ package classic
 import (
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 )
 
@@ -238,7 +239,30 @@ func (b *cartBuilder) radixByFeature(order []int, ff int) {
 		for _, id := range order {
 			kb[id] = b.x[id][ff]
 		}
-		sort.Slice(order, func(a, c int) bool { return kb[order[a]] < kb[order[c]] })
+		// slices.SortFunc, NOT sort.Slice. sort.Slice reaches the swap through
+		// reflectlite.Swapper, which ALLOCATES on every call — and this runs once per
+		// node per feature, so a forest fit paid over a million allocations for it
+		// (reflectlite.Swapper was 37.7% of allocated objects in BenchmarkForestFit,
+		// with radixByFeature the caller). The generic form needs no reflection.
+		//
+		// Both are unstable, so tie order may differ between them. The path already
+		// documents ties as irrelevant — thresholds sit strictly between distinct values,
+		// and the split scan skips equal neighbours — but that argument is now CHECKED by
+		// the frozen tree and forest hashes rather than trusted.
+		// PS3002's other remedy — an LSD radix on the key bits — is DECLINED here, and
+		// the check says itself it cannot verify the precondition. This IS the small-node
+		// fallback: radixByFeature already takes the radix path above treeRadixCutoff,
+		// and below it the radix loses, which is why the cutoff exists.
+		//perfscan:ignore PS3002 radix is the path above treeRadixCutoff; this is the small-n fallback
+		slices.SortFunc(order, func(a, c int) int {
+			switch ka, kc := kb[a], kb[c]; {
+			case ka < kc:
+				return -1
+			case ka > kc:
+				return 1
+			}
+			return 0
+		})
 		return
 	}
 	k := b.radixKeys[:n]
