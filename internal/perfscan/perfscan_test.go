@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -2219,5 +2220,220 @@ func f(n, m, off int, out, x, tmp []float64, d float64) {
 }`
 	if got := countCat(scanSrc(t, src)); got["inner-invariant-recompute"] != 0 {
 		t.Fatalf("want 0 on a fat inner body, got %d (%v)", got["inner-invariant-recompute"], got)
+	}
+}
+
+const ps6003Prelude = `package p
+type QT int
+const (A QT = iota; B; C; D)
+func gen(q QT) int
+`
+
+// The gguf.QMatMul shape: a fused path for one format, a switch showing six more.
+func TestDetectPS6003_PartialFastPathCoverage(t *testing.T) {
+	src := ps6003Prelude + `func f(q QT, m int) int {
+	if q == A && m == 1 {
+		return 1
+	}
+	switch q {
+	case A:
+		return 2
+	case B:
+		return 3
+	case C:
+		return 4
+	}
+	return 0
+}`
+	if got := countCat(scanSrc(t, src)); got["partial-fast-path-coverage"] != 1 {
+		t.Fatalf("want 1 partial-fast-path-coverage, got %d (%v)", got["partial-fast-path-coverage"], got)
+	}
+}
+
+// THE ONLY FALSE POSITIVE THIS RULE HAD ON THE TREE: a guard INSIDE one case clause of
+// the very switch it is judged against. It bypasses nothing — it is a sub-case of the
+// dispatch, not a fast path around it. gguf's metadata reader is exactly this shape.
+func TestDetectPS6003_SilentWhenGuardIsInsideTheSwitch(t *testing.T) {
+	src := ps6003Prelude + `func f(q QT) int {
+	switch q {
+	case A:
+		if q == A {
+			return 1
+		}
+		return 2
+	case B:
+		return 3
+	case C:
+		return 4
+	}
+	return 0
+}`
+	if got := countCat(scanSrc(t, src)); got["partial-fast-path-coverage"] != 0 {
+		t.Fatalf("want 0 when the guard is inside the switch, got %d (%v)",
+			got["partial-fast-path-coverage"], got)
+	}
+}
+
+// SILENT when every variant already has a fast path — there is no gap to report.
+func TestDetectPS6003_SilentWhenCoverageIsComplete(t *testing.T) {
+	src := ps6003Prelude + `func f(q QT, m int) int {
+	if q == A && m == 1 {
+		return 1
+	}
+	if q == B && m == 1 {
+		return 2
+	}
+	if q == C && m == 1 {
+		return 3
+	}
+	switch q {
+	case A:
+		return 4
+	case B:
+		return 5
+	case C:
+		return 6
+	}
+	return 0
+}`
+	if got := countCat(scanSrc(t, src)); got["partial-fast-path-coverage"] != 0 {
+		t.Fatalf("want 0 when all variants are covered, got %d (%v)",
+			got["partial-fast-path-coverage"], got)
+	}
+}
+
+// SILENT on a two-way switch: that is a branch, not a variant family, and a fast path
+// for one of two arms is an if/else written twice.
+func TestDetectPS6003_SilentOnTwoWaySwitch(t *testing.T) {
+	src := ps6003Prelude + `func f(q QT, m int) int {
+	if q == A && m == 1 {
+		return 1
+	}
+	switch q {
+	case A:
+		return 2
+	case B:
+		return 3
+	}
+	return 0
+}`
+	if got := countCat(scanSrc(t, src)); got["partial-fast-path-coverage"] != 0 {
+		t.Fatalf("want 0 on a two-way switch, got %d (%v)", got["partial-fast-path-coverage"], got)
+	}
+}
+
+// SILENT on literal cases: `switch n { case 1, 2, 3 }` is not a family of formats, and
+// admitting literals would bury the real findings.
+func TestDetectPS6003_SilentOnLiteralCases(t *testing.T) {
+	src := `package p
+func f(n, m int) int {
+	if n == 1 && m == 1 {
+		return 1
+	}
+	switch n {
+	case 1:
+		return 2
+	case 2:
+		return 3
+	case 3:
+		return 4
+	}
+	return 0
+}`
+	if got := countCat(scanSrc(t, src)); got["partial-fast-path-coverage"] != 0 {
+		t.Fatalf("want 0 on literal cases, got %d (%v)", got["partial-fast-path-coverage"], got)
+	}
+}
+
+// The literal exclusion has TWO sides, and the fixture above only reaches one. There the
+// guard itself compares against a literal, so it is rejected before the switch is ever
+// examined. This case passes the guard side — a named constant — and must still be
+// silent because the switch's members are literals, which is what the members-side
+// filter is for. Probing found the fixture above did not cover it.
+func TestDetectPS6003_SilentOnLiteralCasesWithNamedGuard(t *testing.T) {
+	src := ps6003Prelude + `func f(q QT, m int) int {
+	if q == A && m == 1 {
+		return 1
+	}
+	switch q {
+	case 1:
+		return 2
+	case 2:
+		return 3
+	case 3:
+		return 4
+	}
+	return 0
+}`
+	if got := countCat(scanSrc(t, src)); got["partial-fast-path-coverage"] != 0 {
+		t.Fatalf("want 0 when the switch cases are literals, got %d (%v)",
+			got["partial-fast-path-coverage"], got)
+	}
+}
+
+// A switch that MIXES named constants with literals is where the members-side filter
+// actually earns its place. Probing showed it suppresses nothing on its own — an
+// all-literal switch is already silent because no member matches the guard — so the one
+// thing it does is keep a bare literal out of the reported variant list. Without it this
+// message names an empty string among the uncovered variants.
+func TestDetectPS6003_MixedLiteralAndNamedCasesReportOnlyNamedVariants(t *testing.T) {
+	src := ps6003Prelude + `func f(q QT, m int) int {
+	if q == A && m == 1 {
+		return 1
+	}
+	switch q {
+	case A:
+		return 2
+	case 7:
+		return 3
+	case B:
+		return 4
+	case C:
+		return 5
+	}
+	return 0
+}`
+	fs := scanSrc(t, src)
+	var msg string
+	for _, f := range fs {
+		if f.category == "partial-fast-path-coverage" {
+			msg = f.msg
+		}
+	}
+	if msg == "" {
+		t.Fatalf("want a partial-fast-path-coverage finding, got %v", countCat(fs))
+	}
+	if !strings.Contains(msg, "B, C") {
+		t.Errorf("want the uncovered variants reported as %q, got %q", "B, C", msg)
+	}
+	if strings.Contains(msg, ", ,") || strings.Contains(msg, "; , ") {
+		t.Errorf("literal case leaked into the variant list as an empty name: %q", msg)
+	}
+	if !strings.Contains(msg, "of the 3 ") {
+		t.Errorf("want the literal excluded from the family size (3 named members), got %q", msg)
+	}
+}
+
+// SILENT when the guard does not return: without the early return the general path
+// still runs, so the variant is not short-circuited at all.
+func TestDetectPS6003_SilentWhenGuardDoesNotReturn(t *testing.T) {
+	src := ps6003Prelude + `func f(q QT, m int) int {
+	acc := 0
+	if q == A && m == 1 {
+		acc++
+	}
+	switch q {
+	case A:
+		return acc + 2
+	case B:
+		return acc + 3
+	case C:
+		return acc + 4
+	}
+	return acc
+}`
+	if got := countCat(scanSrc(t, src)); got["partial-fast-path-coverage"] != 0 {
+		t.Fatalf("want 0 when the guard does not return, got %d (%v)",
+			got["partial-fast-path-coverage"], got)
 	}
 }

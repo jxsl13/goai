@@ -207,6 +207,7 @@ var checks = []check{
 	{"PS5002", "symmetric-accumulation", "a nested loop accumulating a full symmetric matrix (m[i][j] += x[i]*x[j]) where one triangle + mirror would halve the work", false},
 	{"PS5003", "inner-invariant-recompute", "an inner-loop expression that varies with the INNER index but not the outer one — recomputed once per outer iteration where a precomputed row would do", false},
 	// PS6xxx — verification gaps
+	{"PS6003", "partial-fast-path-coverage", "a fast path that bypasses the general path for only SOME members of a variant family a switch in the same function enumerates — the uncovered variants silently pay the slow path", false},
 	{"PS6001", "unverified-dual-path", "a devirtualized fast path with a generic fallback — a bit-identity claim needing a bit-exact test", true},
 }
 
@@ -1746,6 +1747,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	out = append(out, buildNxNUseOneRowFindings(fset, fn)...)
 	out = append(out, indirectKeyComparatorFindings(fset, fn)...)
 	out = append(out, innerInvariantRecomputeFindings(fset, fn)...)
+	out = append(out, partialFastPathFindings(fset, fn)...)
 	return out
 }
 
@@ -3682,4 +3684,179 @@ func assignedIn(body *ast.BlockStmt) map[string]bool {
 		return true
 	})
 	return w
+}
+
+// partialFastPathFindings flags PS6003 — a function that short-circuits the general
+// path for SOME members of a variant family, where a switch in the same function shows
+// the family is larger. The uncovered variants keep paying the general path, and nothing
+// about the code says so: the fast path reads as "this case is handled", not "only this
+// case is handled".
+//
+// Found in the wild by its symptom rather than its shape, which is the argument for the
+// rule. gguf.QMatMul had a fused single-token path for Q8_0 and none for Q4_0, so Q4_0
+// decode ran SLOWER than Q8_0 despite half the memory traffic — backwards for the
+// smaller format. Fusing it was 1.40x on the enclosing decode step. Nobody reading
+// QMatMul would have suspected a gap; the switch below the fast path listed seven types.
+//
+// Deliberately NOT a defect report. A fast path may legitimately cover one variant —
+// the others may be rare, or unfusable, or already fast. What the rule asserts is only
+// that the asymmetry is INTENTIONAL-OR-NOT and nothing in the code distinguishes those,
+// so it is worth one benchmark per uncovered variant.
+func partialFastPathFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil {
+		return nil
+	}
+	// Fast paths first: an `if` whose condition tests <subject> == <named constant> and
+	// whose body RETURNS. The early return is what makes it a bypass rather than a
+	// branch — without it the general path still runs and there is no coverage gap.
+	//
+	// The guard must CLOSE BEFORE the switch it is judged against opens. Without that,
+	// an `if vt == vtI16 { … return }` sitting inside one case clause of `switch vt`
+	// reads as a fast path for the whole switch, when it bypasses nothing — it is a
+	// sub-case of the dispatch. That was the rule's only false positive on this tree.
+	type fastPath struct {
+		eqCond
+		end token.Pos
+	}
+	var fast []fastPath
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		ifs, ok := n.(*ast.IfStmt)
+		if !ok || !endsInReturn(ifs.Body) {
+			return true
+		}
+		for _, c := range eqConds(ifs.Cond) {
+			fast = append(fast, fastPath{c, ifs.End()})
+		}
+		return true
+	})
+	if len(fast) == 0 {
+		return nil
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		sw, ok := n.(*ast.SwitchStmt)
+		if !ok || sw.Tag == nil {
+			return true
+		}
+		sub := identName(sw.Tag)
+		if sub == "" {
+			return true
+		}
+		covered := map[string]bool{}
+		for _, f := range fast {
+			if f.subject == sub && f.end <= sw.Pos() {
+				covered[f.constant] = true
+			}
+		}
+		if len(covered) == 0 {
+			return true
+		}
+		// Only NAMED constants count as a variant family. Allowing literals would fire
+		// on every `switch n { case 1: case 2: ... }`, which is not a family of formats.
+		var members []string
+		for _, cl := range sw.Body.List {
+			cc, ok := cl.(*ast.CaseClause)
+			if !ok {
+				continue
+			}
+			for _, e := range cc.List {
+				if c := constName(e); c != "" {
+					members = append(members, c)
+				}
+			}
+		}
+		// Three is the floor for a "family": a two-way switch is a branch, and a fast
+		// path for one of two arms is just an if/else written twice.
+		if len(members) < 3 {
+			return true
+		}
+		var missing []string
+		hits := 0
+		for _, m := range members {
+			if covered[m] {
+				hits++
+			} else {
+				missing = append(missing, m)
+			}
+		}
+		// Both halves must be non-empty. All covered means there is no gap; none covered
+		// means the fast path is keyed on something unrelated to this switch.
+		if hits == 0 || len(missing) == 0 {
+			return true
+		}
+		out = append(out, finding{
+			pos:      fset.Position(sw.Pos()),
+			end:      fset.Position(sw.End()),
+			category: "partial-fast-path-coverage",
+			msg: fmt.Sprintf("fast path short-circuits %d of the %d %q variants this switch handles; %s still take the general path — benchmark whether they should",
+				hits, len(members), sub, strings.Join(missing, ", ")),
+		})
+		return true
+	})
+	return out
+}
+
+// endsInReturn reports whether a block's LAST statement returns. A return buried in a
+// nested conditional is not a bypass — the block can fall through to the general path.
+func endsInReturn(b *ast.BlockStmt) bool {
+	if b == nil || len(b.List) == 0 {
+		return false
+	}
+	_, ok := b.List[len(b.List)-1].(*ast.ReturnStmt)
+	return ok
+}
+
+// eqCond is one `<subject> == <constant>` test recovered from a guard condition.
+type eqCond struct{ subject, constant string }
+
+// eqConds collects every `<ident> == <named constant>` in an && chain. Only && is
+// walked: under || the guard does not establish that the constant holds, so it proves
+// no coverage. A negated test (!=) is likewise not coverage.
+func eqConds(e ast.Expr) []eqCond {
+	var out []eqCond
+	var walk func(ast.Expr)
+	walk = func(e ast.Expr) {
+		be, ok := ast.Unparen(e).(*ast.BinaryExpr)
+		if !ok {
+			return
+		}
+		switch be.Op {
+		case token.LAND:
+			walk(be.X)
+			walk(be.Y)
+		case token.EQL:
+			sub, con := identName(be.X), constName(be.Y)
+			if sub == "" || con == "" { // also accept the reversed spelling
+				sub, con = identName(be.Y), constName(be.X)
+			}
+			if sub != "" && con != "" {
+				out = append(out, eqCond{sub, con})
+			}
+		}
+	}
+	walk(e)
+	return out
+}
+
+// identName renders a plain identifier, the shape a switch tag and a guard subject
+// share. Anything more complex is not matched across the two by name.
+func identName(e ast.Expr) string {
+	if id, ok := ast.Unparen(e).(*ast.Ident); ok {
+		return id.Name
+	}
+	return ""
+}
+
+// constName renders an identifier or a qualified pkg.Const, the two spellings a
+// variant-family member takes. Literals are excluded on purpose (see the caller).
+func constName(e ast.Expr) string {
+	switch v := ast.Unparen(e).(type) {
+	case *ast.Ident:
+		return v.Name
+	case *ast.SelectorExpr:
+		if p, ok := v.X.(*ast.Ident); ok {
+			return p.Name + "." + v.Sel.Name
+		}
+	}
+	return ""
 }

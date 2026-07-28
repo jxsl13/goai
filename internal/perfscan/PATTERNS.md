@@ -689,6 +689,46 @@ O(capacity) beside an O(n log n) sort. All three are bit-identical; only two pay
 size of the enclosing work, not the shape, decides.
 
 
+## PS6003 — a fast path that covers only part of a variant family  *(scanner: static)*
+
+A function short-circuits the general path for some members of a variant family, and a
+switch in the same function shows the family is larger:
+
+```go
+if qt == Q8_0 && m == 1 { … return out, nil }   // fused: no row materialization
+…
+switch qt {                                      // …and six more types land here
+case Q8_0, Q4_0, Q2_K, Q3_K, Q4_K, Q5_K, Q6_K:
+```
+
+The uncovered variants keep paying the general path, and nothing in the code says so —
+a fast path reads as *this case is handled*, not *only this case is handled*.
+
+**Found by its symptom, not its shape, which is the argument for automating it.**
+`gguf.QMatMul` had the fused single-token path for Q8_0 and none for Q4_0, so Q4_0 decode
+ran **slower than Q8_0 despite half the memory traffic** — backwards for the smaller
+format, and the only reason anyone looked. Fusing it was **1.40×** on the enclosing
+`QuantMamba2` decode step. Nobody reading QMatMul top to bottom would have suspected the
+gap; it is visible only by comparing the guard against the switch fifty lines below.
+
+**Advisory, and deliberately not a defect report.** A fast path may legitimately cover one
+variant: the others may be rare, unfusable, or already fast. What the rule asserts is that
+the asymmetry is intentional-or-not and the code does not distinguish those — so it is
+worth one benchmark per uncovered variant.
+
+**The guard must close before the switch opens.** Its only false positive on this tree was
+`gguf`'s metadata reader, where an `if vt == vtI16 { … return }` sits *inside* one case
+clause of `switch vt` — a sub-case of the dispatch that bypasses nothing. Positional
+dominance is what separates a bypass from a branch.
+
+Also silent on switches with fewer than three named members (a two-way switch is a branch,
+and a fast path for one of two arms is an if/else written twice), on guards that do not
+end in `return` (without it the general path still runs), and when every member is already
+covered. Literal cases are excluded from the family — `switch n { case 1, 2, 3 }` is not a
+set of formats. That last filter suppresses nothing on its own, since an all-literal switch
+has no member matching the guard; what it does is keep a bare literal out of the reported
+variant list when a switch mixes the two. Probing is what established the distinction.
+
 ## PS6001 — a dual-path kernel whose bit-identity claim is unverified  *(scanner: static)*
 A function carrying a devirtualized fast path (guarded by a configured
 `fastPathHelpers` entry in comma-ok form, or a `switch x.Dtype()` with a `default`
