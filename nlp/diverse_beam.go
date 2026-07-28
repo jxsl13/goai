@@ -68,7 +68,11 @@ func DiverseBeamSearch(next NextLogits, start []int, width, groups, maxNew, eos 
 	}
 
 	for step := 0; step < maxNew; step++ {
-		stepCount := map[int]int{} // token → # earlier groups (this step) that selected it
+		// token -> #earlier groups (this step) that picked it. Dense []int over the
+		// [0,vocab) token domain (sized on the first logits row) replaces a per-step
+		// map[int]int: aug() reads it twice per sort comparison, so this drops the hash
+		// from the comparator hot path. Zero-init []int == map zero for absent keys.
+		var stepCount []int
 		anyLive := false
 		for g := 0; g < groups; g++ {
 			beams := grp[g]
@@ -81,6 +85,9 @@ func DiverseBeamSearch(next NextLogits, start []int, width, groups, maxNew, eos 
 				}
 				anyLive = true
 				ls := logSoftmaxRow(next(b.toks))
+				if stepCount == nil {
+					stepCount = make([]int, len(ls))
+				}
 				for tok, lp := range ls {
 					cands = append(cands, cand{pi, tok, b.score + lp, b.newLen + 1, eos >= 0 && tok == eos})
 				}
