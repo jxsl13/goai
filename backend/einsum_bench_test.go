@@ -31,3 +31,18 @@ func BenchmarkEinsumMatmul_32(b *testing.B) {
 func BenchmarkEinsumBatched_8x16(b *testing.B) {
 	benchEinsum(b, []string{"bij", "bjk"}, "bik", [][]int{{8, 16, 16}, {8, 16, 16}})
 }
+
+// Control for einsum measurements: exercises the shared backend plumbing without
+// touching EinsumContract, so a run that moves this is measuring the machine rather
+// than the change. Added after d58e40b shipped WITHOUT an in-package control.
+func BenchmarkEinsumControlStrides(b *testing.B) {
+	sh := tensor.Shape{8, 16, 16}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		s := tensor.RowMajorStrides(sh)
+		if s[0] == 0 {
+			b.Fatal("unreachable")
+		}
+	}
+}
