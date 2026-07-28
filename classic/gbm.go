@@ -339,36 +339,63 @@ func (b *gbmBuilder) bestSplit(start, end int) (feat int, thr float64, ok bool) 
 	for p := start; p < end; p++ {
 		total += b.y[col0[p]]
 	}
-	bestGain := 0.0
-	vals := b.vals
-	for f := 0; f < b.d; f++ {
-		cf := b.cols[f]
-		// Hoist this node's sorted feature values into a contiguous buffer once (n
-		// gathers into b.x), then the split scan reads them sequentially. The old inline
-		// b.x[cf[k]][f] / b.x[cf[k+1]][f] re-gathered every value TWICE (as the right
-		// endpoint at k, then the left at k+1) — halved to one gather per value here.
-		for k := 0; k < n; k++ {
-			vals[k] = b.x[cf[start+k]][f]
+	// PARALLEL over features. Two things had to change, neither incidental:
+	//
+	// b.vals was a SHARED scratch buffer on the builder, overwritten by every feature —
+	// the receiver-scratch shape PS6006 exists for, though its name heuristic does not
+	// catch "vals". It becomes a per-chunk buffer.
+	//
+	// The best-gain tracking is an ARGMAX REDUCTION across features. Each feature now
+	// records its own candidate and they are combined afterward in ASCENDING FEATURE
+	// ORDER with the same strict >, which reproduces the serial scan exactly INCLUDING
+	// ITS TIE-BREAK: strict > keeps the FIRST feature achieving the maximum, and an
+	// ascending combine keeps that same one. A different combine order would silently
+	// change which feature a tie selects, and therefore the tree.
+	type cand struct {
+		gain, thr float64
+		feat      int
+		ok        bool
+	}
+	cands := make([]cand, b.d)
+	parallelFeatures(b.d, n, func(flo, fhi int) {
+		vals := make([]float64, n)
+		for f := flo; f < fhi; f++ {
+			bestGain := 0.0
+			cf := b.cols[f]
+			// Hoist this node's sorted feature values into a contiguous buffer once (n
+			// gathers into b.x), then the split scan reads them sequentially. The old inline
+			// b.x[cf[k]][f] / b.x[cf[k+1]][f] re-gathered every value TWICE (as the right
+			// endpoint at k, then the left at k+1) — halved to one gather per value here.
+			for k := 0; k < n; k++ {
+				vals[k] = b.x[cf[start+k]][f]
+			}
+			var leftSum float64
+			for k := 0; k < n-1; k++ {
+				leftSum += b.y[cf[start+k]]
+				nl, nr := k+1, n-(k+1)
+				if nl < b.minLeaf || nr < b.minLeaf {
+					continue
+				}
+				vk, vn := vals[k], vals[k+1]
+				if vk == vn { // cannot split between equal values
+					continue
+				}
+				meanL := leftSum / float64(nl)
+				meanR := (total - leftSum) / float64(nr)
+				diff := meanL - meanR
+				gain := float64(nl) * float64(nr) / float64(n) * diff * diff
+				if gain > bestGain {
+					bestGain = gain
+					cands[f] = cand{gain, (vk + vn) / 2, f, true}
+				}
+			}
 		}
-		var leftSum float64
-		for k := 0; k < n-1; k++ {
-			leftSum += b.y[cf[start+k]]
-			nl, nr := k+1, n-(k+1)
-			if nl < b.minLeaf || nr < b.minLeaf {
-				continue
-			}
-			vk, vn := vals[k], vals[k+1]
-			if vk == vn { // cannot split between equal values
-				continue
-			}
-			meanL := leftSum / float64(nl)
-			meanR := (total - leftSum) / float64(nr)
-			diff := meanL - meanR
-			gain := float64(nl) * float64(nr) / float64(n) * diff * diff
-			if gain > bestGain {
-				bestGain = gain
-				feat, thr, ok = f, (vk+vn)/2, true
-			}
+	})
+	bestGain := 0.0
+	for f := range cands {
+		if c := cands[f]; c.ok && c.gain > bestGain {
+			bestGain = c.gain
+			feat, thr, ok = c.feat, c.thr, true
 		}
 	}
 	return feat, thr, ok

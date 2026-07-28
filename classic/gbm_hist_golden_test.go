@@ -54,3 +54,51 @@ func TestGBMHistogramBitIdenticalToGolden(t *testing.T) {
 		}
 	}
 }
+
+// gbmExactGolden freezes the EXACT (presort) grower's predictions, captured before its
+// per-feature split search was parallelized. Separate from gbmHistGolden because the two
+// growers are different code: the histogram gate constructs with WithGBMHistogram and
+// never enters gbmBuilder.bestSplit at all. Parallelizing the exact path with only the
+// histogram gate in place would have been unguarded.
+var gbmExactGolden = [12]uint64{
+	0x3ff03520ca593d99,
+	0x3ff0292e8463ac2e,
+	0x3fec8a644e702cae,
+	0x3fed56b09334f8bd,
+	0x3fea4e00ed45e180,
+	0x3fed21ef5b05d3d2,
+	0x3fedc92ad6621b17,
+	0x3fecb401999aa1b6,
+	0x3fed13c957e81bcd,
+	0x3fedf23fc6ac885f,
+	0x3fed86439b153e27,
+	0x3feda52ab98991ae,
+}
+
+// TestGBMExactBitIdenticalToGolden holds the presort grower bit-for-bit at tolerance 0.
+// The split search is parallel over features and its argmax is combined afterward, so
+// this also pins the TIE-BREAK: the serial scan keeps the first feature reaching the
+// maximum, and any combine order that does not preserve that picks a different feature
+// on a tie and grows a different tree.
+func TestGBMExactBitIdenticalToGolden(t *testing.T) {
+	x, lab, _ := synthFitData(3000, 12, 3)
+	y := make([]float64, len(lab))
+	for i, v := range lab {
+		y[i] = float64(v)
+	}
+	m := NewGradientBoostingRegressor(WithGBMNEstimators(25))
+	if err := m.Fit(x, y); err != nil {
+		t.Fatal(err)
+	}
+	p, err := m.Predict(x[:len(gbmExactGolden)])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, want := range gbmExactGolden {
+		if got := math.Float64bits(p[i]); got != want {
+			t.Fatalf("prediction %d differs: got %v (%#x) want %v (%#x) — the exact grower "+
+				"is no longer bit-identical to its frozen reference",
+				i, p[i], got, math.Float64frombits(want), want)
+		}
+	}
+}
