@@ -166,6 +166,14 @@ func broadcastVJP(mean bool) VJP {
 // axStride (one pass, no per-element Unravel) — shared by the extremum/prod VJPs so
 // they read the output with a plain slice index instead of a double index round-trip
 // (§base-perf, C25, §T635).
+//
+// STILL USED BY prodVJP ONLY. extremumVJP moved to forEachReduceRow, which produces the
+// offsets as the consumer walks instead of materializing them — that table was 2 MB of
+// the 3.1 MB a [512,512] f32 extremum backward allocated. prodVJP is a genuine TWO-PASS
+// algorithm that reads the offsets twice, so dropping the table there means walking the
+// odometer twice; that is a different trade and is left for its own measurement.
+//
+//perfscan:ignore PS4005 two-pass consumer; see forEachReduceRow for the single-pass form
 func reduceOffsets(xShape tensor.Shape, axStride []int) []int {
 	n := xShape.Numel()
 	nd := len(xShape)
@@ -201,26 +209,32 @@ func extremumVJP() VJP {
 		xc, yc, gc := x.Contiguous(), y.Contiguous(), g.Contiguous()
 		if x.Dtype() == tensor.F64 && yc.Dtype() == tensor.F64 && gc.Dtype() == tensor.F64 {
 			xs, ys, gs, ds := xc.Storage().F64(), yc.Storage().F64(), gc.Storage().F64(), gin.Storage().F64()
-			ofs := reduceOffsets(x.Shape(), axStride)
-			for i := 0; i < n; i++ { // row-major → first hit = lowest index (unchanged)
-				of := ofs[i]
-				if !routed[of] && xs[i] == ys[of] {
-					ds[i] = gs[of]
-					routed[of] = true
+			forEachReduceRow(x.Shape(), axStride, func(i0, of0, inner, sInner int) {
+				of := of0
+				for p := 0; p < inner; p++ {
+					i := i0 + p
+					if !routed[of] && xs[i] == ys[of] {
+						ds[i] = gs[of]
+						routed[of] = true
+					}
+					of += sInner
 				}
-			}
+			})
 			return []*tensor.Tensor{gin}, nil
 		}
 		if x.Dtype() == tensor.F32 && yc.Dtype() == tensor.F32 && gc.Dtype() == tensor.F32 {
 			xs, ys, gs, ds := xc.Storage().F32(), yc.Storage().F32(), gc.Storage().F32(), gin.Storage().F32()
-			ofs := reduceOffsets(x.Shape(), axStride)
-			for i := 0; i < n; i++ {
-				of := ofs[i]
-				if !routed[of] && xs[i] == ys[of] {
-					ds[i] = gs[of]
-					routed[of] = true
+			forEachReduceRow(x.Shape(), axStride, func(i0, of0, inner, sInner int) {
+				of := of0
+				for p := 0; p < inner; p++ {
+					i := i0 + p
+					if !routed[of] && xs[i] == ys[of] {
+						ds[i] = gs[of]
+						routed[of] = true
+					}
+					of += sInner
 				}
-			}
+			})
 			return []*tensor.Tensor{gin}, nil
 		}
 		for i := 0; i < n; i++ { // generic fallback (exotic dtype)
@@ -411,4 +425,47 @@ func broadcastFillRows[T float32 | float64](ds, gs []T, xs, axStride []int, n in
 		}
 	}
 	return true
+}
+
+// forEachReduceRow walks the input in row-major order and hands the caller ONE ROW at a
+// time: the flat input index the row starts at, the output offset it maps to, the run
+// length, and the output stride within the run.
+//
+// It replaces reduceOffsets for single-pass consumers. That function materialized the
+// whole offset table — an []int of x.Numel() entries, 2 MB of the 3.1 MB a [512,512]
+// f32 extremum backward allocated — built by a per-element odometer (PS4005). The
+// offsets are now produced as the consumer walks, so the table is gone and the odometer
+// ticks once per ROW.
+//
+// The callback fires once per row, not per element, so the indirect call is amortized
+// over the run and each caller keeps its own tight typed inner loop.
+//
+// TRAVERSAL ORDER IS UNCHANGED — rows ascending, elements ascending within a row — and
+// that is load-bearing, not incidental: the extremum VJP routes the gradient to the
+// FIRST element attaining each group's maximum, so any reordering would silently move
+// which element receives it.
+func forEachReduceRow(xShape tensor.Shape, axStride []int, fn func(i0, of, inner, sInner int)) {
+	n := xShape.Numel()
+	nd := len(xShape)
+	if nd == 0 || n == 0 {
+		return
+	}
+	inner, sInner := xShape[nd-1], axStride[nd-1]
+	if inner <= 0 || n%inner != 0 {
+		inner, sInner = 1, 0 // degenerate shape: one row per element, contract preserved
+	}
+	coord := make([]int, nd)
+	of := 0
+	for i0 := 0; i0 < n; i0 += inner {
+		fn(i0, of, inner, sInner)
+		for ax := nd - 2; ax >= 0; ax-- {
+			coord[ax]++
+			of += axStride[ax]
+			if coord[ax] < xShape[ax] {
+				break
+			}
+			coord[ax] = 0
+			of -= axStride[ax] * xShape[ax]
+		}
+	}
 }
