@@ -45,26 +45,3 @@ METHOD, established over three rounds: (1) benchmark the site end to end, with a
 TRAPS, all three hit in practice: do NOT carry over a zero-skip (if av == 0 continue), which drops 0*(+-Inf) NaNs and is not order-preserving; destinations that are freshly make()d are already zero and need no clearing, but POOLED scratch does; and if a site is deliberately left as a dot, verify the //perfscan:ignore actually suppresses it by re-running the scan — a directive that does not apply is silently inert.
 
 A site may legitimately be DECLINED as A.Bt: when both operands already walk the summation index contiguously, the ikj form buys nothing but costs a transposed copy per call. Two sites were declined on exactly that ground (soap.go rotateBackInto second product, galore.go projectDown right). Record a decline with its reason rather than leaving the finding unexplained.
-
-## T-01KYN31VARFTH9KX8RHYMYFYQ3 Parallelize the SOAP and Shampoo rotation matmuls — two loops need an interchange first
-kind: task
-state: active
-created: 2026-07-28
-
-Serial spines from the scaling sweep, same package and same kernel family as the Muon work that just landed at 4.63x: BenchmarkSOAPStepOnly 8.21ms at 0.99x, BenchmarkShampooStepOnly 5.53ms at 1.00x. Smaller absolute stakes than Muon's 190ms, which is why they were split out rather than bundled.
-
-THE TWO PRODUCTS ARE NOT THE SAME SHAPE, and this is the part not to rediscover.
-
-EASY HALF: the second product of each rotation (T*QR in rotateForwardInto, and its twins in rotateBackInto and shampooPrecondInto) already loops OUTER over the output row k, with each k writing only out[k]. Parallelize directly with parallelRowsMM — bit-identical by construction, no restructuring, exactly the Muon change.
-
-HARD HALF: the first product (T = QL^T*G) loops outer over i, the REDUCTION index, and each i accumulates into EVERY row of tmp. Parallelizing over i races. It needs a loop interchange to k-outer first. That interchange IS bit-identical — for a fixed (k,j) the sum over i still runs in ascending i order — but it costs locality: the current form loads gi once and reuses it across all k, while k-outer re-reads g per k.
-
-EXPECT A SINGLE-CORE REGRESSION FROM THAT INTERCHANGE and handle it the way the GBM histogram did: keep both loop orders and choose by whether the work will actually be split. GBM's feature-major rewrite cost 22% on one core, and shipping it unconditionally would have made a constrained host slower to buy a multicore speedup it never collects. Measure the interchanged form at GOMAXPROCS=1 before deciding whether it needs the dual-order treatment.
-
-GATES ALREADY EXIST and are tolerance-0: nn/soap_rotate_internal_test.go holds rotateForward, rotateBack, their pooled *Into twins and shampooPrecond against frozen pre-rewrite oracles, and feeds DELIBERATELY DIRTY scratch because the ikj form accumulates with += where the dot form overwrote with =. Do not weaken them; a missing clear is exactly what dirty scratch catches.
-
-VERIFY: go test ./nn/ -run 'Rotate|Shampoo' -count 1 (tolerance 0, must stay green); go test ./nn/ -count 1 -race. Then interleave BenchmarkSOAPStepOnly and BenchmarkShampooStepOnly per PROC-INTERLEAVE-001, 3+ alternations, with an unaffected control benchmark alongside. Note TestEMAUpdateBitIdenticalToSlowPath is a PRE-EXISTING failure in this package, identical at origin/main.
-
-COST TO EXPECT: allocs rise from the pool's per-call barrier, as they did in Muon (47 -> 111 across ~30 matmuls per Step). Report it rather than omitting it.
-
-SCOPE: nn/soap.go and nn/shampoo.go only.

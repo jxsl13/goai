@@ -47,6 +47,17 @@ FOUND BY THE SCALING SWEEP, not by re-reading this task: BenchmarkMuonStepOnly m
 PART A (hoist bm, the transpose buffer and the matmul return buffers onto the Muon struct) IS NOT DONE and is now more valuable than it was: the pool's per-call barrier took allocs/op from 47 to 111 across roughly thirty matmuls per Step. Bytes/op is unchanged at 28.3MB. Re-draft it as its own item if the allocation axis is wanted.
 
 Symmetric-path caveat for anyone tuning further: rows compute only j <= i, so work is triangular and contiguous chunks are unbalanced. A strided partition would balance it and destroy the sequential locality the ikj rewrite exists to exploit; the 4.63x is what that imbalance still leaves.
+- T-01KYN31VARFTH9KX8RHYMYFYQ3 Parallelize the SOAP and Shampoo rotation matmuls — two loops need an interchange first: DONE. SOAP 8.076-8.089ms -> 6.092-6.137ms (1.32x), Shampoo 5.872-5.900ms -> 5.318-5.353ms (1.10x), interleaved over 3 alternations with min of 3 runs per arm and BenchmarkAdamStepOnly flat as control. Single core unchanged (8.31 vs 8.36ms). Landed as ce91c955.
+
+THE TASK OVERSTATED THE WORK: it claimed two loops need a loop interchange; only ONE does. Five of the six products are already output-row-outer, each row writing its own slice of the destination, so they parallelize directly and bit-identically with no restructuring. Reading the actual loop bounds before implementing is what caught it — the task was written from a two-sample glance at rotateForwardInto and generalized wrongly to its siblings.
+
+The genuine exception is rotateForwardInto's first product, which loops over the reduction index while every iteration accumulates into every row of tmp. Interchanged to k-outer it is still bit-identical (for fixed (k,j) the sum over i runs ascending in both), worth 1.03x, and kept behind the dual-order guard the GBM histogram established.
+
+METHOD FAILURE WORTH CARRYING, and it is mine: two measurements were initially misread because each arm was a SINGLE run. One 1P sample showed the interchange costing 7% — min of 3 shows it flat. Three single-sample 12P alternations had it winning, losing, then winning — min of 3 shows a consistent 1.03x. The sweep tool was hardened against exactly this one iteration earlier, after a single sample turned a 1.10x into a reported 0.88x, and I did not carry the lesson to hand-run A/Bs until they contradicted themselves. Cast as PROC-BENCH-MINOFN-001.
+
+NOT DONE: rotateBackInto's second product remains a dot rather than an ikj/axpy form. That is declined for ALLOCATION, not speed — the ikj rewrite needs a transposed copy of qr, an n*n allocation per call on a path whose entire purpose is pooling. It is now parallel, which was the available win without touching that trade.
+
+Shampoo gains least because its products are the smallest here and more of its step lies outside them — an Amdahl ceiling, not a weaker transform.
 
 ## PROC-BENCH-MINOFN-001
 IF an A/B arm is measured from a single benchmark run, THEN the result SHALL be re-measured as the minimum of at least 3 runs per arm before it is reported; single samples inverted 2 verdicts in one session.
