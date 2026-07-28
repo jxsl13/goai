@@ -110,23 +110,32 @@ func (s *SOAP) Step(grad GradFn) error {
 				st.m, st.v = zeroMat(m, n), zeroMat(m, n)
 				st.ql, st.qr = eyeMat(m), eyeMat(n)
 			}
-			// preconditioner EMAs
+			// preconditioner EMAs — L (m×m) and R (n×n) stay SYMMETRIC (gm[i][k]·gm[j][k]
+			// commutative, same k-order; the EMA of a symmetric input is symmetric) and
+			// eigenBasis reads the full matrix, so EMA only the upper triangle + diagonal
+			// and mirror once (bit-identical, PS5002). Halves both O(m²n) and O(n²m) grams.
 			for i := range m {
-				for j := range m {
+				for j := i; j < m; j++ {
 					var acc float64
 					for k := range n {
 						acc += gm[i][k] * gm[j][k]
 					}
 					st.l[i][j] = b2*st.l[i][j] + (1-b2)*acc
+					if j != i {
+						st.l[j][i] = st.l[i][j]
+					}
 				}
 			}
 			for i := range n {
-				for j := range n {
+				for j := i; j < n; j++ {
 					var acc float64
 					for k := range m {
 						acc += gm[k][i] * gm[k][j]
 					}
 					st.r[i][j] = b2*st.r[i][j] + (1-b2)*acc
+					if j != i {
+						st.r[j][i] = st.r[i][j]
+					}
 				}
 			}
 			// eigenbasis refresh: rotate M' into the new basis (V' kept in place).
