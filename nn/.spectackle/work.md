@@ -45,3 +45,20 @@ BIT-IDENTITY BAR, and this is why Part B was NOT bundled into the landed change:
 DO NOT carry over matmulFlat zero-skip (if av == 0 continue) into any rewrite: it drops 0*(+-Inf) NaNs and is not order-preserving. The existing gate has an explicit zero/Inf fixture that catches it; random fixtures do not.
 
 VERIFY: go test ./nn/ -run TestMatmulABt -count 1 (must stay green, tolerance 0); go test ./nn/ -run TestNewtonSchulz5 -count 1; go test ./nn/ -run Muon -count 1; then the A/B, 3 reps of -benchtime 30x interleaved with BenchmarkAdamStepOnly as an unaffected control. Note TestEMAUpdateBitIdenticalToSlowPath is a PRE-EXISTING failure in this package, unrelated.
+
+## T-01KYMDP9EMFTBT3952B5NMZXTN Assess the last PS4008 site, nn/kda.go, and the three in backend/ref/mla.go
+kind: task
+state: draft
+created: 2026-07-28
+
+REMAINING PS4008 candidates after three landed rounds (Muon 2.09x, SOAP 1.20x / Shampoo 1.26x, GaLore 1.75x): nn/kda.go (1), backend/ref/mla.go (3), classic/models.go (1). Tree-wide PS4008 is 12, down from 26 when the rule was minted.
+
+The transform is now routine and its bit-identity argument is settled: transpose or hoist so the inner loop is an axpy over independent accumulators, keeping the summation index ascending, which preserves every rounding. What is NOT routine is whether each site is HOT enough to be worth it — all three landed wins were on optimizer Step paths called once per parameter per step, and a cold or rarely-reached site does not qualify under the standing mandate.
+
+SO THE FIRST QUESTION IS HOTNESS, NOT CORRECTNESS. Before touching any of these, establish a benchmark that actually reaches the site and shows it in the profile; GaLore had NO benchmark at all until one was added for it, and a site with no gate cannot be validated. backend/ref/mla.go is a REFERENCE backend, which historically means correctness-first and not on any hot path, so it likely fails the hotness bar outright — check its callers before writing a benchmark for it. classic/models.go is outside the nn/nlp/autograd lane.
+
+METHOD, established over three rounds: (1) benchmark the site end to end, with an unaffected control benchmark interleaved in the same session; (2) write a tolerance-0 cross-reference test against a FROZEN copy of the pre-rewrite loop before changing anything; (3) mutation-probe that gate by reversing the accumulation order and, if the rewrite accumulates into reused scratch, by removing the zeroing pass — feed deliberately dirty buffers, since clean ones hide a missing clear; (4) A/B, 3 reps, medians.
+
+TRAPS, all three hit in practice: do NOT carry over a zero-skip (if av == 0 continue), which drops 0*(+-Inf) NaNs and is not order-preserving; destinations that are freshly make()d are already zero and need no clearing, but POOLED scratch does; and if a site is deliberately left as a dot, verify the //perfscan:ignore actually suppresses it by re-running the scan — a directive that does not apply is silently inert.
+
+A site may legitimately be DECLINED as A.Bt: when both operands already walk the summation index contiguously, the ikj form buys nothing but costs a transposed copy per call. Two sites were declined on exactly that ground (soap.go rotateBackInto second product, galore.go projectDown right). Record a decline with its reason rather than leaving the finding unexplained.
