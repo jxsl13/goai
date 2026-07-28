@@ -168,8 +168,12 @@ func (a *Adafactor) Step(grad GradFn) error {
 		pf64, gf64 := flatF64(p), flatF64(g)
 		pf32, gf32 := flatF32(p), flatF32(g)
 
-		// second-moment estimate V̂ (flat, row-major).
-		var vhat []float64
+		// Second-moment estimate V-hat fused directly into U = g/sqrt(V-hat), so the
+		// full-size vhat scratch (an n-element write+read round-trip) is eliminated:
+		// the 2D path reconstructs V-hat[i,j]=(R[i]/sumR)*C[j] inline; the vector
+		// path divides by V directly. Values are bit-identical to the two-step form.
+		u := growF64(a.uScr, n)
+		a.uScr = u
 		if p.Ndim() == 2 {
 			rows, cols := p.Shape()[0], p.Shape()[1]
 			rowsum := growF64(a.rowScr, rows)
@@ -219,52 +223,61 @@ func (a *Adafactor) Step(grad GradFn) error {
 			for j := range C {
 				C[j] = beta2t*C[j] + (1-beta2t)*colsum[j]
 			}
-			vhat = growF64(a.vhatScr, n)
-			a.vhatScr = vhat
-			adafactorVhat(vhat, R, C)
+			// U = g / sqrt(V-hat) with V-hat[i,j]=(R[i]/sumR)*C[j] inline (same per-row
+			// reciprocal-multiply adafactorVhat did, then divide) -> no vhat array.
+			var sumR float64
+			for _, rv := range R {
+				sumR += rv
+			}
+			invSumR := 1 / sumR
+			nc := len(C)
+			switch {
+			case gf64 != nil:
+				for i, rv := range R {
+					ri := rv * invSumR
+					base := i * nc
+					for j, cv := range C {
+						u[base+j] = gf64[base+j] / math.Sqrt(ri*cv)
+					}
+				}
+			case gf32 != nil:
+				for i, rv := range R {
+					ri := rv * invSumR
+					base := i * nc
+					for j, cv := range C {
+						u[base+j] = float64(gf32[base+j]) / math.Sqrt(ri*cv)
+					}
+				}
+			default:
+				for i, rv := range R {
+					ri := rv * invSumR
+					base := i * nc
+					for j, cv := range C {
+						u[base+j] = g.AtF64(i, j) / math.Sqrt(ri*cv)
+					}
+				}
+			}
 		} else {
 			V := a.v[pi]
-			vhat = growF64(a.vhatScr, n)
-			a.vhatScr = vhat
 			switch {
 			case gf64 != nil:
 				for i, gv := range gf64 {
 					V[i] = beta2t*V[i] + (1-beta2t)*(gv*gv+a.Eps1)
-					vhat[i] = V[i]
+					u[i] = gv / math.Sqrt(V[i])
 				}
 			case gf32 != nil:
 				for i := range gf32 {
 					gv := float64(gf32[i])
 					V[i] = beta2t*V[i] + (1-beta2t)*(gv*gv+a.Eps1)
-					vhat[i] = V[i]
+					u[i] = gv / math.Sqrt(V[i])
 				}
 			default:
 				for i := range n {
 					idx := tensor.Unravel(i, p.Shape())
 					gv := g.AtF64(idx...)
 					V[i] = beta2t*V[i] + (1-beta2t)*(gv*gv+a.Eps1)
-					vhat[i] = V[i]
+					u[i] = gv / math.Sqrt(V[i])
 				}
-			}
-		}
-
-		// U = g/√V̂, optional first moment, then RMS update-clipping and the
-		// parameter-relative step.
-		u := growF64(a.uScr, n)
-		a.uScr = u
-		switch {
-		case gf64 != nil:
-			for i, gv := range gf64 {
-				u[i] = gv / math.Sqrt(vhat[i])
-			}
-		case gf32 != nil:
-			for i := range gf32 {
-				u[i] = float64(gf32[i]) / math.Sqrt(vhat[i])
-			}
-		default:
-			for i := range n {
-				idx := tensor.Unravel(i, p.Shape())
-				u[i] = g.AtF64(idx...) / math.Sqrt(vhat[i])
 			}
 		}
 		if a.Beta1 > 0 {
