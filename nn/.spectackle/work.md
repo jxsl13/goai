@@ -29,23 +29,6 @@ BIT-IDENTITY BAR: BIT-IDENTICAL AND RNG-SAFE. The draw count is unchanged (Rand.
 
 PERFSCAN RULE REQUIRED, and it has wide reach here: interface-sourced RNG in a per-element loop. AST shape: a SelectorExpr call X.Float64() / .Uint64() / .IntN() / .NormFloat64() where X resolves to *math/rand.Rand or *math/rand/v2.Rand, inside a loop whose bound is a slice length or Numel(). Recommend the concrete source type. THIS IS NOT CONFINED TO DROPOUT: 12 non-test files in nn hold a *rand.Rand field with 32 per-element draw sites — neftune.go, mixup.go, cutmix.go, rso.go, droppath.go, psgd.go, apollo.go, qgalore.go, aqlm.go among them. Run the finished detector and report every site.
 
-## T-01KYMCQ31GEB0TW27W6ZN2AR3P Route Muon newtonSchulz5 products through ops.MatMul and hoist its scratch onto the struct
-kind: task
-state: draft
-created: 2026-07-28
-
-FOLLOW-UP to T-01KYJR5WRXF5C, which landed steps 2+3 (ikj/axpy rewrite + symmetry) for a measured 2.09x: BenchmarkMuonStepOnly 418.3 -> 200.0 ms median on M2 Pro darwin/arm64 go1.26.5. Two parts of the original four remain, and they are independent of each other.
-
-PART A — SCRATCH HOIST (the memory axis). Current bytes/op is 28.3 MB against a 26.7 MB pre-optimization baseline: the ikj rewrite needs a [cc,r] transpose buffer, now allocated once per newtonSchulz5 run instead of once per iteration. Still allocated per run: that buffer, bm (nn/muon.go, inside the steps loop), and the return buffers of matmulABtInto and both matmulFlat calls. Shapes are fixed per parameter and Muon already carries a per-parameter buf field, so all of them can live there. EXPECTED: bytes/op well below the 26.7 MB baseline and allocs/op from 47 toward single digits. VALIDATE with -benchmem on BenchmarkMuonStepOnly; the time win here is secondary (GC pressure), so do not claim a speedup the benchmark does not show.
-
-PART B — ROUTE TO THE PARALLEL GEMM (the time axis, larger). All three products (X.Xt, A.A, bm.X) still run single-threaded in-package while backend/cpu.gemmF64Band measures 61.4 GFLOP/s (BenchmarkGemmDirF64_512) and nn already imports ops (see nn/pissa.go). EXPECTED ~40 ms, i.e. a further ~5x, MEDIUM confidence: the shapes here are smaller than the 512-cubed benchmark and there are roughly 30 fork/joins per Step, so the parallel overhead may eat much of it — measure before believing it.
-
-BIT-IDENTITY BAR, and this is why Part B was NOT bundled into the landed change: steps 2+3 preserved exactness by an argument about accumulation ORDER, which a tolerance-0 cross-reference test could verify directly. Swapping in a different kernel is not that; gemmF64Band may block or reassociate. So Part B MUST be validated against the existing tolerance-0 tests (nn/muon_matmul_internal_test.go gates matmulABt and newtonSchulz5 bit-for-bit) rather than argued, and if it is not bit-identical that is a rejection, not a tolerance to loosen — Muon feeds an optimizer trajectory.
-
-DO NOT carry over matmulFlat zero-skip (if av == 0 continue) into any rewrite: it drops 0*(+-Inf) NaNs and is not order-preserving. The existing gate has an explicit zero/Inf fixture that catches it; random fixtures do not.
-
-VERIFY: go test ./nn/ -run TestMatmulABt -count 1 (must stay green, tolerance 0); go test ./nn/ -run TestNewtonSchulz5 -count 1; go test ./nn/ -run Muon -count 1; then the A/B, 3 reps of -benchtime 30x interleaved with BenchmarkAdamStepOnly as an unaffected control. Note TestEMAUpdateBitIdenticalToSlowPath is a PRE-EXISTING failure in this package, unrelated.
-
 ## T-01KYMDP9EMFTBT3952B5NMZXTN Assess the last PS4008 site, nn/kda.go, and the three in backend/ref/mla.go
 kind: task
 state: draft
