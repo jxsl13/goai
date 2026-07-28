@@ -228,3 +228,25 @@ WHY GBM WAS DIFFERENT AND FORESTS ARE NOT: boosting is SEQUENTIAL across trees �
 Cast as PERF-NESTED-PARALLEL-001: when an outer loop already parallelizes to near machine width, do not parallelize the inner one. It is not additive, it is inert — and it still costs the gate work, the scratch split and the reviewer's attention.
 
 RELATED CONFIRMATION: the nesting behavior is by DESIGN in internal/parallel (unbuffered mailboxes make "pool busy" and "send fails" the same event, so nested calls degrade to inline) and is covered by TestRowsNestedDoesNotDeadlock. The no-gain consequence is derived from that design rather than separately measured — stated so it is not mistaken for a benchmark.
+
+## R-01KYN9EDQFE34AQW5DVCG6717Y Sweeping the ALLOCATION axis found a 31x memory regression I shipped behind a 2.80x speedup
+kind: research
+state: draft
+created: 2026-07-28
+
+A self-caught defect and a method finding. The parallelization campaign measured time and left allocation unexamined; re-sweeping the same benchmarks by allocs/op found it immediately.
+
+BenchmarkGBMHist_exact_80k:
+  before my parallelization   1914ms    883 allocs     64 MB
+  after  my parallelization    693ms   8965 allocs   2007 MB   <- shipped
+  after  the fix               640ms   7913 allocs     80 MB
+
+2 GB per fit for 80k x 20 float64 input is absurd on its face, and nothing in the process caught it: the commit reported 2.80x and never printed bytes/op. The mandate counts resource usage as performance, so this was a regression shipped as an improvement.
+
+CAUSE, and it is a sharp distinction rather than a general rule: allocating per-chunk scratch INSIDE the parallel body is harmless when the parallel call runs once per iteration, and ruinous when the parallel call is itself in a hot loop. Verified both sides rather than assumed — AQLM measured 49 -> 51MB and GMM 4 -> 4MB across their parallelizations, unchanged, because each dispatches once per EM iteration or per encode pass. GBM dispatches once per TREE NODE, thousands of times per fit. Identical code shape, three orders of magnitude difference in cost, decided entirely by the call frequency of the enclosing loop.
+
+FIX: internal/parallel.RowsIdx passes the CHUNK INDEX so a caller can keep one buffer per chunk on its own struct. Guarded by tests that the index stays inside [0, Workers()) and that distinct chunks receive DISTINCT indices — per-chunk buffers alias otherwise, which would be a data race rather than a slowdown.
+
+METHOD LESSON, cast as PROC-BENCH-MEMAXIS-001: a benchmark A/B that reports only ns/op can hide an arbitrary regression on every other axis. -benchmem costs nothing and would have caught this at the moment of introduction. More generally, the campaign optimized one axis for many iterations and never re-swept the others; the first sweep on a new axis found a defect immediately, which is the third time in this project that changing the sweep axis has produced a finding where the previous axis looked exhausted.
+
+Residual: 7913 allocs against the original 883, all the pool's per-dispatch closure and WaitGroup, small in bytes (80MB total). Reducing it further means a dispatch API that avoids the closure, which is not worth it at this size.
