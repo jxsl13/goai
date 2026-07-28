@@ -176,6 +176,24 @@ func extremumVJP() VJP {
 		if x.Dtype() == tensor.F64 && yc.Dtype() == tensor.F64 && gc.Dtype() == tensor.F64 {
 			xs, ys, gs, ds := xc.Storage().F64(), yc.Storage().F64(), gc.Storage().F64(), gin.Storage().F64()
 			forEachReduceRow(x.Shape(), axStride, func(i0, of0, inner, sInner int) {
+				if sInner == 0 {
+					// of is constant across the row (the inner axis is reduced), so
+					// route the first element equal to ys[of0] and stop — the rest of
+					// the row is a no-op once routed[of0] is set. Same first-hit index
+					// and same single write as the full scan; only the tail is skipped.
+					if routed[of0] {
+						return
+					}
+					yv := ys[of0]
+					for p := 0; p < inner; p++ {
+						if xs[i0+p] == yv {
+							ds[i0+p] = gs[of0]
+							routed[of0] = true
+							return
+						}
+					}
+					return
+				}
 				of := of0
 				for p := 0; p < inner; p++ {
 					i := i0 + p
@@ -191,6 +209,24 @@ func extremumVJP() VJP {
 		if x.Dtype() == tensor.F32 && yc.Dtype() == tensor.F32 && gc.Dtype() == tensor.F32 {
 			xs, ys, gs, ds := xc.Storage().F32(), yc.Storage().F32(), gc.Storage().F32(), gin.Storage().F32()
 			forEachReduceRow(x.Shape(), axStride, func(i0, of0, inner, sInner int) {
+				if sInner == 0 {
+					// of is constant across the row (the inner axis is reduced), so
+					// route the first element equal to ys[of0] and stop — the rest of
+					// the row is a no-op once routed[of0] is set. Same first-hit index
+					// and same single write as the full scan; only the tail is skipped.
+					if routed[of0] {
+						return
+					}
+					yv := ys[of0]
+					for p := 0; p < inner; p++ {
+						if xs[i0+p] == yv {
+							ds[i0+p] = gs[of0]
+							routed[of0] = true
+							return
+						}
+					}
+					return
+				}
 				of := of0
 				for p := 0; p < inner; p++ {
 					i := i0 + p
