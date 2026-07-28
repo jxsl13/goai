@@ -100,3 +100,25 @@ WHAT WOULD CONFIRM OR KILL IT: instrument the regime verdict per dispatch and se
 NOT AN nlp-SIDE FIX as far as this analysis goes. The kernels reached are the ordinary four and their total work is 0.87% of samples; nothing about reducing GPT's per-token op count would change a 35:1 overhead ratio into a win. The lever is the pool's dispatch decision, not the caller's.
 
 RELATED: R-01KYN0Y3EPEV2 recorded the same signature on quantized prefill, where the residue after fixing the caller-side spine was scheduler churn from other ops' pools. This is the same effect measured in isolation, on a workload where it dominates outright.
+
+## T-01KYN3YSXCF6H9DZ5XRD1QDBB6 GPT decode regresses 14% from 8 to 12 cores — confirm or kill the poolDenseMaxWork boundary hypothesis
+kind: task
+state: draft
+created: 2026-07-28
+refs: R-01KYN3XTYKEASADTC5DZRDEC46
+
+BACKEND/CPU ZONE, handed over rather than attempted: that package has a parallel worker active on it, and its pool constants were tuned against a barrier stream this workload does not match. Full measurement in R-01KYN3XTYKEAS.
+
+THE DEFECT, reproducible on M2 Pro darwin/arm64: BenchmarkGPTGenerate500RowBuf measures 767.2 / 564.3 / 558.5 / 543.3 / 619.5ms at 1 / 2 / 4 / 8 / 12 Ps (min of 3 runs each). It is FASTEST AT 8 AND 14% SLOWER AT 12. BenchmarkLlamaGenerate500RowBuf, on an identically sized model (Vocab 1000, Ctx 600, Dim 256, Heads 4, Layers 4), scales cleanly: 670.8 / 438.4 / 308.6ms at 1 / 4 / 12.
+
+AT 12 Ps THE PROFILE IS 93.7% RUNTIME SYNCHRONIZATION — pthread_cond_wait 41.15%, usleep 35.61%, pthread_cond_signal 16.95% — against 3.46% in gemvF64Cols. backend.Execute totals 0.21s cumulative (0.87%) while poolWorker totals 7.52s (31.3%) and runqgrab 11.5%. About 35 units of pool machinery per unit of kernel work.
+
+HYPOTHESIS TO TEST, not a conclusion: at Dim 256 the per-token ops land near poolDenseMaxWork (1<<18 = 262144), so the regime detector may flip between barriers. cpu.go already records that always-spin behavior measured +10-40% on warm mid-size ops, which is the same direction. The fastest-at-8 shape suggests a fan-out too wide for the chunk size rather than a missing parallelization.
+
+TWO CHEAP DISCRIMINATORS, either of which settles it: (a) instrument the dense/sparse verdict per dispatch and check whether GPT flips where Llama does not; (b) re-run both decoders at a Dim that puts every op clearly on ONE side of 1<<18 and see whether the 12-P regression follows the boundary or the decoder.
+
+IF CONFIRMED, the fix is a pool-side decision and belongs to whoever owns those constants — likely a width cap or a hysteresis on the regime verdict rather than a threshold move, since the problem is flapping rather than a wrong level. Do not widen poolDenseMaxWork without re-running the benchmarks it was originally calibrated against; cpu.go names them.
+
+NOT AN nlp-SIDE FIX, checked: the kernels reached are the ordinary four (matmul, gelu, addBias, mha) and their total work is under 1% of samples. Reducing GPT's per-token op count cannot turn a 35:1 overhead ratio into a win.
+
+VERIFY any change against BOTH decoders across GOMAXPROCS 1/2/4/8/12, min of 3 runs per point per PROC-BENCH-MINOFN-001 — single samples inverted two verdicts elsewhere in this campaign. A fix must remove the 12-P regression WITHOUT slowing Llama, which currently scales correctly and is the control.
