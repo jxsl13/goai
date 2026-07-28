@@ -396,4 +396,4 @@ Rationale: An ARCH-012 check reported zero gaps while scraping only 48 of 91 dec
 WHEN a probe reports the test suite still green, the a mutation probe SHALL reject the run as INVALID unless the mutation compiled and its anchor matched exactly once — a non-compiling or unmatched mutation yields no failures and reads as proof of no coverage.
 
 ## PROC-INTERLEAVE-001
-WHEN a speedup below roughly 10 percent is claimed, the a benchmark A/B SHALL re-measure with the change toggled in and out within ONE session, alternating at least three times; separate baseline and after runs report machine drift as if it were the result.
+WHEN a speedup below roughly 10 percent is claimed, the a benchmark A/B SHALL toggle the change in and out within ONE session, at least three alternations, AND discard the run unless each arm spread stays near 5 percent — alternation removes drift between runs, not contention during them.
