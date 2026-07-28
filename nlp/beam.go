@@ -2,6 +2,7 @@ package nlp
 
 import (
 	"math"
+	"slices"
 	"sort"
 )
 
@@ -70,14 +71,26 @@ func BeamSearch(next NextLogits, start []int, width, maxNew, eos int, alpha floa
 		// sort's order — cand is appended parent-outer, tok-inner, so ties resolve to that
 		// same append order — but with pdqsort's lower constant instead of symMerge.
 		//perfscan:ignore PS3002 already the optimized form; radix needs a monotonic single key
-		sort.Slice(cand, func(i, j int) bool {
-			if cand[i].score != cand[j].score {
-				return cand[i].score > cand[j].score
+		slices.SortFunc(cand, func(a, b cnd) int {
+			if a.score != b.score {
+				if a.score > b.score {
+					return -1
+				}
+				return 1
 			}
-			if cand[i].parent != cand[j].parent {
-				return cand[i].parent < cand[j].parent
+			if a.parent != b.parent {
+				if a.parent < b.parent {
+					return -1
+				}
+				return 1
 			}
-			return cand[i].tok < cand[j].tok
+			if a.tok < b.tok {
+				return -1
+			}
+			if a.tok > b.tok {
+				return 1
+			}
+			return 0
 		})
 
 		// Walk candidates best-first and STOP once the frontier is full.
