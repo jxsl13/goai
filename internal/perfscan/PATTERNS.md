@@ -836,6 +836,40 @@ plain indexed **stores** (idempotent — the last writer wins, no order is prese
 when the accumulation index is the loop variable rather than the searched value, since
 each item then owns its slot.
 
+## PS6008 — a buffer allocated inside a parallel body  *(scanner: static)*
+
+```go
+parallelFeatures(d, n, func(lo, hi int) {
+    vals := make([]float64, n)   // once per DISPATCH, not once per program
+    …
+})
+```
+
+**Whether this is free or ruinous depends entirely on how often the dispatch runs**, which
+is why the check reports rather than condemns. Both sides were measured here:
+
+| dispatch frequency | site | memory |
+|---|---|---|
+| once per encode pass | AQLM ICM | 49 → 51 MB — fine |
+| once per EM iteration | GMM M-step | 4 → 4 MB — fine |
+| **once per tree node** | GBM exact | **64 → 2007 MB** |
+
+The GBM figure is a **31× memory regression that shipped**, hidden behind a 2.80× speedup,
+because the commit reported only ns/op. Identical code shape in all three; three orders of
+magnitude difference in cost, decided by the enclosing call frequency alone.
+
+**The fix is not to avoid the allocation but to move it** — one buffer per *chunk* on the
+caller's struct, allocated once, selected by the chunk index (`parallel.RowsIdx`).
+
+**No local loop is required to fire, deliberately.** The GBM case has none: `bestSplit`
+contains no loop around its dispatch — `bestSplit` *itself* runs per node, one call frame
+up. A check demanding a visible enclosing loop would have missed the only case that
+mattered. That is also why this is not covered by PS2001/PS2004, which look for
+allocation inside a loop and stay silent here.
+
+Silent when the buffer is hoisted and chunk-indexed, on non-allocating defines in the
+body, and on callbacks that are not parallel dispatches.
+
 ## PS6003 — a fast path that covers only part of a variant family  *(scanner: static)*
 
 A function short-circuits the general path for some members of a variant family, and a

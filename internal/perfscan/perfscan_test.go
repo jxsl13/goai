@@ -3778,3 +3778,100 @@ func f(data []float64, sums []float64) {
 			got["search-feeds-reduction"], got)
 	}
 }
+
+// The GBM shape: scratch allocated inside the parallel body, once per dispatch.
+func TestDetectPS6008_AllocInParallelBody(t *testing.T) {
+	src := `package p
+func f(d, n int, cols [][]int) {
+	parallelFeatures(d, n, func(lo, hi int) {
+		vals := make([]float64, n)
+		_ = vals
+	})
+}`
+	if got := countCat(scanSrc(t, src)); got["alloc-in-parallel-body"] != 1 {
+		t.Fatalf("want 1 alloc-in-parallel-body, got %d (%v)", got["alloc-in-parallel-body"], got)
+	}
+}
+
+// The dispatch may be reached through the package helper directly.
+func TestDetectPS6008_AllocInParallelRowsIdxBody(t *testing.T) {
+	src := `package p
+func f(n int) {
+	parallel.Rows(n, func(lo, hi int) {
+		buf := make([]int, n)
+		_ = buf
+	})
+}`
+	if got := countCat(scanSrc(t, src)); got["alloc-in-parallel-body"] != 1 {
+		t.Fatalf("want 1 for parallel.Rows, got %d (%v)", got["alloc-in-parallel-body"], got)
+	}
+}
+
+// NO LOCAL LOOP IS REQUIRED, and that is deliberate. The GBM case has none: bestSplit
+// contains no loop around its dispatch — bestSplit ITSELF runs once per tree node, one
+// call frame up. A check that demanded a visible enclosing loop would have missed the
+// only case that mattered, which is why this fixture has a bare function.
+func TestDetectPS6008_NoEnclosingLoopStillReported(t *testing.T) {
+	src := `package p
+func bestSplit(d, n int) {
+	parallelFeatures(d, n, func(lo, hi int) {
+		vals := make([]float64, n)
+		_ = vals
+	})
+}`
+	if got := countCat(scanSrc(t, src)); got["alloc-in-parallel-body"] != 1 {
+		t.Fatalf("want 1 without an enclosing loop, got %d (%v)",
+			got["alloc-in-parallel-body"], got)
+	}
+}
+
+// SILENT when the buffer is hoisted out of the body — the fix this check asks for.
+func TestDetectPS6008_SilentWhenHoistedOutOfTheBody(t *testing.T) {
+	src := `package p
+func f(d, n int, scratch [][]float64) {
+	parallelFeaturesIdx(d, n, func(ci, lo, hi int) {
+		vals := scratch[ci][:n]
+		_ = vals
+	})
+}`
+	if got := countCat(scanSrc(t, src)); got["alloc-in-parallel-body"] != 0 {
+		t.Fatalf("want 0 when the buffer is per-chunk and hoisted, got %d (%v)",
+			got["alloc-in-parallel-body"], got)
+	}
+}
+
+// SILENT on an allocation in an ordinary closure: this check is about the cost of a
+// parallel FAN-OUT repeating an allocation, not about allocation in general, which
+// PS2001 and PS2004 already cover.
+func TestDetectPS6008_SilentOnNonParallelCallback(t *testing.T) {
+	src := `package p
+func f(n int) {
+	forEach(n, func(lo, hi int) {
+		buf := make([]int, n)
+		_ = buf
+	})
+}`
+	if got := countCat(scanSrc(t, src)); got["alloc-in-parallel-body"] != 0 {
+		t.Fatalf("want 0 on a non-parallel callback, got %d (%v)",
+			got["alloc-in-parallel-body"], got)
+	}
+}
+
+// SILENT on a non-allocating define inside a parallel body. A parallel body naturally
+// declares locals — slicing a shared buffer, reading a bound — and none of that repeats
+// an allocation. This fixture isolates the make() requirement; without it, relaxing that
+// check to accept any define leaves every other PS6008 fixture green.
+func TestDetectPS6008_SilentOnNonAllocatingDefineInBody(t *testing.T) {
+	src := `package p
+func f(d, n int, shared []float64) {
+	parallelFeatures(d, n, func(lo, hi int) {
+		row := shared[lo:hi]
+		total := compute(row)
+		_ = total
+	})
+}`
+	if got := countCat(scanSrc(t, src)); got["alloc-in-parallel-body"] != 0 {
+		t.Fatalf("want 0 for a non-allocating define, got %d (%v)",
+			got["alloc-in-parallel-body"], got)
+	}
+}

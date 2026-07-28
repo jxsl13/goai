@@ -220,6 +220,7 @@ var checks = []check{
 	{"PS6014", "output-invariant-operand-reload", "an output loop whose accumulator re-reads an operand that does NOT vary with the output index — unrolling the output loop by 4 amortizes that load across 4 accumulators (register blocking / unroll-and-jam)", false},
 	{"PS6006", "receiver-scratch-buffer", "a method using a receiver SLICE FIELD as a per-call temporary (indexed write, then indexed read, same call) — unsafe to call concurrently, and every caller contends on one cache line", false},
 	{"PS6007", "search-feeds-reduction", "a loop whose expensive per-item CALL produces an index into an accumulation — split it into a parallel search pass and a sequential fold, since chunked partials would reassociate the sums", false},
+	{"PS6008", "alloc-in-parallel-body", "a buffer allocated INSIDE a parallel dispatch body — free when the dispatch is infrequent, ruinous when it sits in a hot loop; hoist to per-chunk buffers indexed by the chunk", false},
 	{"PS6003", "partial-fast-path-coverage", "a fast path that bypasses the general path for only SOME members of a variant family a switch in the same function enumerates — the uncovered variants silently pay the slow path", false},
 	{"PS6004", "unverified-dual-path", "a devirtualized fast path with a generic fallback — a bit-identity claim needing a bit-exact test", true},
 	{"PS4010", "vectorizable-butterfly", "an in-loop butterfly p,q = x+y,x-y (add and subtract of the SAME operand pair written to two indexed slots) — a scalar FWHT/FFT/Hadamard stage a SIMD Add/Sub over the contiguous stride-separated runs would vectorize", false},
@@ -1843,6 +1844,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	out = append(out, outputInvariantReloadFindings(fset, fn)...)
 	out = append(out, receiverScratchFindings(fset, fn)...)
 	out = append(out, searchFeedsReductionFindings(fset, fn)...)
+	out = append(out, allocInParallelBodyFindings(fset, fn)...)
 	out = append(out, vjpScalarBinopFindings(fset, fn)...)
 	out = append(out, fullSortBoundedPrefixFindings(fset, fn)...)
 	out = append(out, spatialBoundsBranchFindings(fset, fn)...)
@@ -5988,4 +5990,78 @@ func anyLoopBody(n ast.Node) (*ast.BlockStmt, bool) {
 		return v.Body, v.Body != nil
 	}
 	return nil, false
+}
+
+// allocInParallelBodyFindings flags PS6008 — a buffer allocated inside the body handed to
+// a parallel dispatch:
+//
+//	parallelFeatures(d, n, func(lo, hi int) {
+//	    vals := make([]float64, n)   // once per DISPATCH, not once per program
+//	    …
+//	})
+//
+// WHETHER THIS IS FREE OR RUINOUS DEPENDS ENTIRELY ON HOW OFTEN THE DISPATCH RUNS, which
+// is why the check reports rather than condemns. Measured both sides in this repo: AQLM
+// (49 -> 51MB) and GMM (4 -> 4MB) dispatch once per encode pass or EM iteration and paid
+// nothing. The GBM exact grower dispatches once per TREE NODE — thousands of times per
+// fit — and the identical code shape took it from 64MB/883 allocs to 2007MB/8965, a 31x
+// memory regression that shipped hidden behind a 2.80x speedup because the commit
+// reported only ns/op.
+//
+// The fix is not to avoid the allocation but to move it: one buffer per CHUNK on the
+// caller's struct, allocated once, selected by the chunk index (parallel.RowsIdx).
+//
+// Deliberately NOT restricted to dispatches inside a visible loop: the GBM case is not
+// one. bestSplit contains no loop around its dispatch — it is bestSplit ITSELF that runs
+// per node, one call frame up. A check that demanded a local loop would have missed the
+// only case that mattered.
+func allocInParallelBodyFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil {
+		return nil
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok || !isParallelDispatch(call.Fun) {
+			return true
+		}
+		for _, arg := range call.Args {
+			lit, ok := arg.(*ast.FuncLit)
+			if !ok || lit.Body == nil {
+				continue
+			}
+			for _, st := range lit.Body.List {
+				as, ok := st.(*ast.AssignStmt)
+				if !ok || as.Tok != token.DEFINE || len(as.Rhs) != 1 {
+					continue
+				}
+				mk, ok := ast.Unparen(as.Rhs[0]).(*ast.CallExpr)
+				if !ok || identName(mk.Fun) != "make" {
+					continue
+				}
+				out = append(out, finding{
+					pos:      fset.Position(as.Pos()),
+					category: "alloc-in-parallel-body",
+					msg: fmt.Sprintf("%q is allocated inside a parallel body — once per DISPATCH. Check how often this dispatch runs: if the enclosing function is itself called in a loop, hoist it to one buffer per chunk on the receiver and select it with the chunk index",
+						identName(as.Lhs[0])),
+				})
+			}
+		}
+		return true
+	})
+	return out
+}
+
+// isParallelDispatch matches the naming this project gives its fan-out helpers —
+// parallel.Rows/RowsIdx and the parallelX wrappers each package defines over them.
+func isParallelDispatch(fun ast.Expr) bool {
+	switch v := ast.Unparen(fun).(type) {
+	case *ast.Ident:
+		return strings.HasPrefix(v.Name, "parallel") || strings.Contains(v.Name, "Parallel")
+	case *ast.SelectorExpr:
+		if id, ok := v.X.(*ast.Ident); ok && id.Name == "parallel" {
+			return strings.HasPrefix(v.Sel.Name, "Rows")
+		}
+	}
+	return false
 }
