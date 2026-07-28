@@ -25,24 +25,10 @@ func transposeKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs)
 	// for a same-dtype copy) — byte-identical.
 	switch x.Dtype() {
 	case tensor.F64:
-		xs := x.Contiguous().Storage().F64()[:m*n]
-		os := out.Storage().F64()
-		for i := 0; i < m; i++ {
-			xrow := xs[i*n : i*n+n]
-			for j, v := range xrow {
-				os[j*m+i] = v
-			}
-		}
+		transposeTiled(out.Storage().F64(), x.Contiguous().Storage().F64()[:m*n], m, n)
 		return []*tensor.Tensor{out}, nil
 	case tensor.F32:
-		xs := x.Contiguous().Storage().F32()[:m*n]
-		os := out.Storage().F32()
-		for i := 0; i < m; i++ {
-			xrow := xs[i*n : i*n+n]
-			for j, v := range xrow {
-				os[j*m+i] = v
-			}
-		}
+		transposeTiled(out.Storage().F32(), x.Contiguous().Storage().F32()[:m*n], m, n)
 		return []*tensor.Tensor{out}, nil
 	}
 	// Generic fallback for exotic dtypes (verbatim original loop).
@@ -52,6 +38,33 @@ func transposeKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs)
 		}
 	}
 	return []*tensor.Tensor{out}, nil
+}
+
+// transposeTiled writes out[j,i] = in[i,j] in cache-blocked BLK×BLK tiles. The naive
+// row-walk stores os[j*m+i] with stride m — a fresh cache line every write, so a large
+// matrix thrashes the cache. Blocking keeps each tile's write column-run (and read
+// row-run) resident, touching only BLK lines per tile. Pure data movement: it emits the
+// identical assignments in a different order, so it is byte-identical to the naive loop.
+func transposeTiled[T float32 | float64](os, xs []T, m, n int) {
+	const blk = 16
+	for i0 := 0; i0 < m; i0 += blk {
+		iMax := i0 + blk
+		if iMax > m {
+			iMax = m
+		}
+		for j0 := 0; j0 < n; j0 += blk {
+			jMax := j0 + blk
+			if jMax > n {
+				jMax = n
+			}
+			for i := i0; i < iMax; i++ {
+				xrow := xs[i*n : i*n+n]
+				for j := j0; j < jMax; j++ {
+					os[j*m+i] = xrow[j]
+				}
+			}
+		}
+	}
 }
 
 func init() {
