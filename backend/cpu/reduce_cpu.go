@@ -82,33 +82,75 @@ func init() {
 			}
 			return s / float64(len(xs))
 		})
+	// Max/Min use a 4-way accumulator unroll to break the loop-carried dependency
+	// chain. math.Max/math.Min are NOT intrinsified on amd64 (hardware MAXSD/MINSD
+	// disagree on NaN/signed-zero), so each element is a real non-inlined CALL whose
+	// result feeds the next — the serial single-accumulator form is latency-bound.
+	// Four independent chains let the calls overlap (throughput-bound). Bit-exact
+	// (unlike Sum/Prod reassociation): math.Max/math.Min are associative AND
+	// commutative including their IEEE tie rules — NaN is absorbing, and
+	// math.Max(+0,-0)=+0 / math.Min(+0,-0)=-0 regardless of grouping — so folding the
+	// four partials yields the same bits as the ascending serial scan (and the ref
+	// kernel, which uses the same math.Max/math.Min with ±Inf init).
 	reg(backend.OpMax,
 		func(xs []float64) float64 {
-			m := math.Inf(-1)
-			for _, v := range xs {
-				m = math.Max(m, v)
+			m0, m1, m2, m3 := math.Inf(-1), math.Inf(-1), math.Inf(-1), math.Inf(-1)
+			i := 0
+			for ; i+4 <= len(xs); i += 4 {
+				m0 = math.Max(m0, xs[i])
+				m1 = math.Max(m1, xs[i+1])
+				m2 = math.Max(m2, xs[i+2])
+				m3 = math.Max(m3, xs[i+3])
+			}
+			m := math.Max(math.Max(m0, m1), math.Max(m2, m3))
+			for ; i < len(xs); i++ {
+				m = math.Max(m, xs[i])
 			}
 			return m
 		},
 		func(xs []float32) float64 {
-			m := math.Inf(-1)
-			for _, v := range xs {
-				m = math.Max(m, float64(v))
+			m0, m1, m2, m3 := math.Inf(-1), math.Inf(-1), math.Inf(-1), math.Inf(-1)
+			i := 0
+			for ; i+4 <= len(xs); i += 4 {
+				m0 = math.Max(m0, float64(xs[i]))
+				m1 = math.Max(m1, float64(xs[i+1]))
+				m2 = math.Max(m2, float64(xs[i+2]))
+				m3 = math.Max(m3, float64(xs[i+3]))
+			}
+			m := math.Max(math.Max(m0, m1), math.Max(m2, m3))
+			for ; i < len(xs); i++ {
+				m = math.Max(m, float64(xs[i]))
 			}
 			return m
 		})
 	reg(backend.OpMin,
 		func(xs []float64) float64 {
-			m := math.Inf(1)
-			for _, v := range xs {
-				m = math.Min(m, v)
+			m0, m1, m2, m3 := math.Inf(1), math.Inf(1), math.Inf(1), math.Inf(1)
+			i := 0
+			for ; i+4 <= len(xs); i += 4 {
+				m0 = math.Min(m0, xs[i])
+				m1 = math.Min(m1, xs[i+1])
+				m2 = math.Min(m2, xs[i+2])
+				m3 = math.Min(m3, xs[i+3])
+			}
+			m := math.Min(math.Min(m0, m1), math.Min(m2, m3))
+			for ; i < len(xs); i++ {
+				m = math.Min(m, xs[i])
 			}
 			return m
 		},
 		func(xs []float32) float64 {
-			m := math.Inf(1)
-			for _, v := range xs {
-				m = math.Min(m, float64(v))
+			m0, m1, m2, m3 := math.Inf(1), math.Inf(1), math.Inf(1), math.Inf(1)
+			i := 0
+			for ; i+4 <= len(xs); i += 4 {
+				m0 = math.Min(m0, float64(xs[i]))
+				m1 = math.Min(m1, float64(xs[i+1]))
+				m2 = math.Min(m2, float64(xs[i+2]))
+				m3 = math.Min(m3, float64(xs[i+3]))
+			}
+			m := math.Min(math.Min(m0, m1), math.Min(m2, m3))
+			for ; i < len(xs); i++ {
+				m = math.Min(m, float64(xs[i]))
 			}
 			return m
 		})
