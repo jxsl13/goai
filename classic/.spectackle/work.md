@@ -253,7 +253,7 @@ Residual: 7913 allocs against the original 883, all the pool's per-dispatch clos
 
 ## T-01KYNA8X45ERT956JBG620TWX1 Triage the remaining PS3002 sort.Slice sites for the reflect.Swapper allocation
 kind: task
-state: draft
+state: active
 created: 2026-07-28
 
 The CART sweep sort was one of several. Swapping sort.Slice for slices.SortFunc there cut BenchmarkForestFit from 1,095,700 to 352,027 allocations (3.11x) and 182 to 161 MB — reflectlite.Swapper was 37.7% of allocated objects, because sort.Slice reaches its swap through reflection and allocates on EVERY call.
