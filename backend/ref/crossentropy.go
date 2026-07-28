@@ -312,7 +312,9 @@ func crossEntropyBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, attrs
 			}
 			var sum float64
 			for j := range c {
-				sum += math.Exp(zs[base+j] - m)
+				e := math.Exp(zs[base+j] - m)
+				dzs[base+j] = e // stash exp(z-m) in the grad slot; reused then overwritten below
+				sum += e
 			}
 			var lseTerm float64
 			if zl != 0 {
@@ -320,7 +322,7 @@ func crossEntropyBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, attrs
 			}
 			gv := gAt(i)
 			for j := range c {
-				p := math.Exp(zs[base+j]-m) / sum
+				p := dzs[base+j] / sum // cached exp(z-m) from the sum pass — identical double, no 2nd Exp
 				q := eps / float64(c)
 				if j == ti {
 					q += 1 - eps
@@ -332,6 +334,7 @@ func crossEntropyBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, attrs
 	case tensor.F32:
 		zs := z.Contiguous().Storage().F32()
 		dzs := dz.Storage().F32()
+		expScr := make([]float64, c) // f64 exp cache (can't stash in the f32 grad slot without rounding)
 		for i := range b {
 			ti := int(tg.AtF64(i))
 			if ceIgnored(pX, ti) {
@@ -346,7 +349,9 @@ func crossEntropyBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, attrs
 			}
 			var sum float64
 			for j := range c {
-				sum += math.Exp(float64(zs[base+j]) - m)
+				e := math.Exp(float64(zs[base+j]) - m)
+				expScr[j] = e
+				sum += e
 			}
 			var lseTerm float64
 			if zl != 0 {
@@ -354,7 +359,7 @@ func crossEntropyBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, attrs
 			}
 			gv := gAt(i)
 			for j := range c {
-				p := math.Exp(float64(zs[base+j])-m) / sum
+				p := expScr[j] / sum // cached exp(z-m) — identical double, no 2nd Exp
 				q := eps / float64(c)
 				if j == ti {
 					q += 1 - eps
