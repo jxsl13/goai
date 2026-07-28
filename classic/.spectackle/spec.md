@@ -28,3 +28,6 @@ THE TRANSFERABLE POINT: when an outer loop already parallelizes to near machine 
 ALSO MEASURED AND LEFT: BenchmarkKNNFit 3.96ms at 1.00x (ball-tree build, bt.splitKey is the receiver scratch PS6006 flags). Same ratio problem at 4ms.
 
 classic is now swept: ForestFit 7.85x, DBSCANFit 6.16x, GBM exact 2.80x, GMM 4.09x, KNN Predict 7.00x, GBM histogram 1.57x — all either parallel or measured and declined.
+
+## PERF-NESTED-PARALLEL-001
+IF an outer loop already parallelizes to near machine width, THEN the inner loop SHALL not be parallelized as well; it runs inline under a busy pool and adds nothing, as ForestFit at 7.85x shows for the CART sweep.
