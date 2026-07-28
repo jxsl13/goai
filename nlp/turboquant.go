@@ -80,7 +80,24 @@ func (p *polarRotation) apply(x []float64) ([]float64, error) {
 		return nil, fmt.Errorf("nlp: polarRotation.apply wants len %d, got %d", p.d, len(x))
 	}
 	out := make([]float64, p.d)
-	for i := range p.d {
+	// Unroll-and-jam the GEMV over the free output-row index i: 4 independent
+	// accumulators share each x[j] load, breaking the single-accumulator dot's
+	// FMA latency chain. Each out[i] still sums j ascending over identical
+	// operands → bit-identical (free-dim jam, not an inner-reduction split).
+	i := 0
+	for ; i+3 < p.d; i += 4 {
+		r0, r1, r2, r3 := p.q[i], p.q[i+1], p.q[i+2], p.q[i+3]
+		var a0, a1, a2, a3 float64
+		for j := range p.d {
+			xv := x[j]
+			a0 += r0[j] * xv
+			a1 += r1[j] * xv
+			a2 += r2[j] * xv
+			a3 += r3[j] * xv
+		}
+		out[i], out[i+1], out[i+2], out[i+3] = a0, a1, a2, a3
+	}
+	for ; i < p.d; i++ {
 		var acc float64
 		row := p.q[i]
 		for j := range p.d {
