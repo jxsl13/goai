@@ -3,6 +3,9 @@ package nn
 import (
 	"fmt"
 	"math"
+	"runtime"
+	"sync"
+	"sync/atomic"
 
 	"github.com/jxsl13/goai/tensor"
 )
@@ -31,14 +34,24 @@ func MASImportance(gradSamples [][]*tensor.Tensor) ([]*tensor.Tensor, error) {
 	}
 	nS, nP := len(gradSamples), len(gradSamples[0])
 	omega := make([]*tensor.Tensor, nP)
+	// Validate shapes up front (cheap, serial) so the parallel compute below has no
+	// error path and each parameter's importance tensor is fully independent.
 	for i := range nP {
 		shape := gradSamples[0][i].Shape()
-		acc := tensor.New(gradSamples[0][i].Dtype(), shape)
 		for s := range nS {
 			if !gradSamples[s][i].Shape().Equal(shape) {
 				return nil, fmt.Errorf("nn: MASImportance sample %d param %d shape %v != %v", s, i, gradSamples[s][i].Shape(), shape)
 			}
 		}
+	}
+	// Each omega[i] depends only on gradSamples[·][i] and writes a disjoint tensor, so
+	// fan the per-parameter work across cores (memory-bound ∑|g| accumulation, a
+	// bandwidth-limited speedup — mirrors nn.EWCFisher). Parallelism is across the
+	// parameter index only; each omega[i]'s sample-order sum is untouched, so the
+	// result is bit-identical to the serial version.
+	do := func(i int) {
+		shape := gradSamples[0][i].Shape()
+		acc := tensor.New(gradSamples[0][i].Dtype(), shape)
 		// Typed contiguous fast path (§base-perf; sibling of EWCFisher): acc is freshly
 		// allocated (contiguous); when every gradient sample is contiguous too, accumulate
 		// ∑|g| by walking the backing []T directly — no per-element Unravel/AtF64/SetF64
@@ -63,7 +76,7 @@ func MASImportance(gradSamples [][]*tensor.Tensor) ([]*tensor.Tensor, error) {
 					af[e] = af[e] / float64(nS)
 				}
 				omega[i] = acc
-				continue
+				return
 			}
 		}
 		if af := flatF32(acc); af != nil {
@@ -85,7 +98,7 @@ func MASImportance(gradSamples [][]*tensor.Tensor) ([]*tensor.Tensor, error) {
 					af[e] = float32(float64(af[e]) / float64(nS))
 				}
 				omega[i] = acc
-				continue
+				return
 			}
 		}
 		// Generic fallback (non-contiguous or mixed-dtype gradients). Shapes were
@@ -102,6 +115,27 @@ func MASImportance(gradSamples [][]*tensor.Tensor) ([]*tensor.Tensor, error) {
 			acc.SetF64(acc.AtF64(c...)/float64(nS), c...)
 		}
 		omega[i] = acc
+	}
+	workers := min(runtime.GOMAXPROCS(0), nP)
+	if workers > 1 {
+		var next atomic.Int64
+		var wg sync.WaitGroup
+		for range workers {
+			wg.Go(func() {
+				for {
+					i := int(next.Add(1)) - 1
+					if i >= nP {
+						return
+					}
+					do(i)
+				}
+			})
+		}
+		wg.Wait()
+	} else {
+		for i := range nP {
+			do(i)
+		}
 	}
 	return omega, nil
 }
