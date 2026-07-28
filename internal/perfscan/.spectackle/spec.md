@@ -10,3 +10,6 @@ Rationale: Check IDs are documented as stable and are the handle used by //perfs
 
 ## PERF-SUPPRESS-INERT-001
 WHEN a //perfscan:ignore directive is written, the a perfscan suppression SHALL re-run the scan and confirm the finding is gone; a directive that fails to apply is silently inert and reads as accepted.
+
+## PROC-PROFILE-PARKED-001
+IF a parallel program profiles as mostly runtime synchronization, THEN the reader SHALL measure the GOMAXPROCS 1/4/12 curve before calling it overhead; parked time is attributed but free, and a spin-before-park replacement measured 2-4% slower.
