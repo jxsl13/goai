@@ -117,3 +117,16 @@ func vsoftcapF64(dst, src []float64, cap float64) {
 		dst[i] = cap * math.Tanh(v/cap)
 	}
 }
+
+// vsoftplusGradF64 computes dst[i] = g[i]·softplus'(x[i]) = g[i]·σ(x[i]) scalar (the amd64
+// twin vectorizes this 4-wide). Overflow-safe σ = num/(1+z) with z=e^(−|x|), num=(x≥0?1:z).
+func vsoftplusGradF64(dst, x, g []float64) {
+	for i, v := range x {
+		z := math.Exp(-math.Abs(v))
+		num := z
+		if v >= 0 {
+			num = 1
+		}
+		dst[i] = g[i] * (num / (1 + z))
+	}
+}

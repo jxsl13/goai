@@ -683,6 +683,21 @@ func siluBackwardKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs back
 	return backend.Execute(ctx.WithBackend(backend.Reference()).WithRecorder(nil), backend.OpSiLUBackward, in, attrs)
 }
 
+// softplusBackwardKernelCPU computes dx = g·softplus'(x) = g·σ(x). The F64 case (Mamba/Jamba
+// Δ backward) runs the vectorized vsoftplusGradF64 (4-wide AVX2 on amd64, scalar elsewhere)
+// over parallel chunks; other dtypes fall back to the reference kernel.
+func softplusBackwardKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
+	if len(in) == 2 && in[0].Dtype() == tensor.F64 && in[1].Dtype() == tensor.F64 &&
+		in[1].Shape().Equal(in[0].Shape()) {
+		xc, gc := in[0].Contiguous(), in[1].Contiguous()
+		dx := tensor.NewOn(ctx.Device(), tensor.F64, in[0].Shape())
+		xs, gs, ds := xc.Storage().F64(), gc.Storage().F64(), dx.Storage().F64()
+		parallel(len(ds), func(lo, hi int) { vsoftplusGradF64(ds[lo:hi], xs[lo:hi], gs[lo:hi]) })
+		return []*tensor.Tensor{dx}, nil
+	}
+	return backend.Execute(ctx.WithBackend(backend.Reference()).WithRecorder(nil), backend.OpSoftplusBackward, in, attrs)
+}
+
 func init() {
 	reg := func(op backend.Op, k backend.Kernel) {
 		std.add(op, tensor.F32, k)
@@ -706,6 +721,7 @@ func init() {
 	// F64-only: softplus (Mamba/Jamba Δ) rides the amd64 vsoftplusF64 SIMD kernel;
 	// F32 stays on the ref fallback. The non-SIMD build runs the scalar formula.
 	std.add(backend.OpSoftplus, tensor.F64, softplusKernelCPU)
+	std.add(backend.OpSoftplusBackward, tensor.F64, softplusBackwardKernelCPU)
 	// F64-only: soft-cap (Gemma-2 attention/final logits) rides vsoftcapF64.
 	std.add(backend.OpSoftCap, tensor.F64, softCapKernelCPU)
 

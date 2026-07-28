@@ -1,49 +1,22 @@
 package autograd
 
 import (
-	"math"
-
 	"github.com/jxsl13/goai/backend"
 	"github.com/jxsl13/goai/tensor"
 )
 
 func init() {
-	// softplus'(x) = σ(x) = 1/(1+e⁻ˣ)
-	RegisterVJP(backend.OpSoftplus, func(_ *backend.Context, in, _ []*tensor.Tensor, _ backend.Attrs, g *tensor.Tensor) ([]*tensor.Tensor, error) {
-		x := in[0]
-		dx := tensor.New(x.Dtype(), x.Shape())
-		n := x.Numel()
-		switch x.Dtype() {
-		case tensor.F64:
-			if g.Dtype() == tensor.F64 {
-				xs := x.Contiguous().Storage().F64()
-				gs := g.Contiguous().Storage().F64()
-				ds := dx.Storage().F64()
-				for i := 0; i < n; i++ {
-					s := 1 / (1 + math.Exp(-xs[i]))
-					ds[i] = gs[i] * s
-				}
-				return []*tensor.Tensor{dx}, nil
-			}
-		case tensor.F32:
-			if g.Dtype() == tensor.F32 {
-				xs := x.Contiguous().Storage().F32()
-				gs := g.Contiguous().Storage().F32()
-				ds := dx.Storage().F32()
-				for i := 0; i < n; i++ {
-					s := 1 / (1 + math.Exp(-float64(xs[i])))
-					ds[i] = float32(float64(gs[i]) * s)
-				}
-				return []*tensor.Tensor{dx}, nil
-			}
+	// softplus'(x) = σ(x). Dispatch OpSoftplusBackward on the tape's active backend so the
+	// F64 case runs the vectorized vsoftplusGradF64 (4-wide AVX2 exp) instead of a scalar
+	// math.Exp loop — the Mamba/Jamba Δ-projection backward, the un-accelerated sibling of
+	// the shipped vsoftplusF64 forward (like SiLU/GELU §T362/§T353). Non-F64/F32 and other
+	// backends fall back to the reference kernel.
+	RegisterVJP(backend.OpSoftplus, func(ctx *backend.Context, in, _ []*tensor.Tensor, _ backend.Attrs, g *tensor.Tensor) ([]*tensor.Tensor, error) {
+		out, err := backend.Execute(ctx, backend.OpSoftplusBackward, []*tensor.Tensor{in[0], g}, nil)
+		if err != nil {
+			return nil, err
 		}
-		// generic fallback for exotic dtypes / mixed inputs
-		for i := range x.Numel() {
-			idx := tensor.Unravel(i, x.Shape())
-			s := 1 / (1 + math.Exp(-x.AtF64(idx...)))
-			dx.SetF64(g.AtF64(idx...)*s, idx...)
-		}
-		return []*tensor.Tensor{dx}, nil
+		return []*tensor.Tensor{out[0]}, nil
 	})
 
 	// Causal depthwise conv1d VJP (§R77). out[t,c]=Σ_k w[c,k]·x[t−(K−1)+k,c]+b[c]:

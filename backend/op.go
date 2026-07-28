@@ -155,6 +155,8 @@ const (
 
 	OpMHAMaskedBackward // masked-attention backward: (Q,K,V,mask,dO)→(dQ,dK,dV,dmask); dispatched by OpMHAMasked's VJP (§T730 — makes T5's relative-position attention trainable)
 
+	OpSoftplusBackward // softplus backward: (x,g)→dx = g·σ(x); dispatched by softplus's VJP so the vectorized exp runs on the active backend
+
 	numOps
 )
 
@@ -250,6 +252,7 @@ var opName = [...]string{
 	OpMHAMaskedBackward:    "mha_masked_backward",
 	OpAddBiasBackward:      "addbias_backward",
 	OpSiLUBackward:         "silu_backward",
+	OpSoftplusBackward:     "softplus_backward",
 }
 
 // String implements fmt.Stringer.
