@@ -12,9 +12,21 @@
 # measured rather than inferred.
 #
 # Found in one sweep: classic GBM histogram (1.01x at 334ms, since fixed to 1.57x),
-# GMM full-covariance fit (1.00x at 77ms), MLA VJP (0.99x at 20ms), Cholesky VJP
-# (0.88x at 4.7ms — slower with more cores). The quantized prefill path was found the
-# same way and is now 2.52x.
+# GMM full-covariance fit (1.00x at 77ms, since fixed to 4.09x), MLA VJP (0.99x at 20ms,
+# declined — see the record), Cholesky VJP (1.09x at 4.3ms). The quantized prefill path
+# was found the same way and is now 2.52x.
+#
+# THAT CHOLESKY FIGURE WAS FIRST REPORTED AS 0.88x — "slower with more cores" — from a
+# single run at -benchtime 12x. It is 1.09x. That is why this script now defaults to a
+# generous benchtime and takes the MINIMUM OF 3 runs per arm: benchmarks are contaminated
+# upward by interference and never downward, and a ratio of two noisy numbers is noisier
+# than either.
+#
+# FIELD NOTE: this reads $3 (ns/op), which is safe. Do NOT extend it to read B/op or
+# allocs/op by field index — a benchmark calling SetBytes emits an extra "45.98 MB/s"
+# column after ns/op that shifts everything following it, and a naive $5/$7 read then
+# reports B/op as an allocation count. That misparse briefly turned BenchmarkGPT2Encode's
+# 37 allocs/op into "10,565,506". Match the trailing unit labels instead.
 #
 # Usage:  internal/perfscan/tools/scaling_sweep.sh <pkg> [benchtime] [regexp]
 #   e.g.  internal/perfscan/tools/scaling_sweep.sh ./classic 6x '^BenchmarkGBM'
