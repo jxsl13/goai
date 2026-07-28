@@ -2685,7 +2685,81 @@ func dualPathFunc(fn *ast.FuncDecl, ns nameSets) (string, bool) {
 		}
 		return true
 	})
-	return helper, helper != "" && hasAccessorFallback
+	if helper != "" && hasAccessorFallback {
+		return helper, true
+	}
+	// THIRD FORM: a typed fast path that DECLINES to its caller. `v, ok := x.data.([]T)`
+	// discriminates on concrete storage rather than through a configured comma-ok
+	// helper, and the generic arm lives in the CALLER, reached by returning false — so
+	// neither the helper test nor the same-function accessor test above can see it.
+	// This shape was found by shipping one: tensor.gatherHalfTyped devirtualizes four
+	// half-cast arms and returns false for everything else, a 3.19x dual path that
+	// PS6001 was blind to. Blindness in a rule whose entire job is to demand a
+	// bit-identity proof is the worst kind — it reads as "nothing to verify here".
+	if name, ok := decliningTypedFastPath(fn); ok {
+		return name, true
+	}
+	return "", false
+}
+
+// decliningTypedFastPath recognizes a function that selects a typed fast path by
+// comma-ok TYPE ASSERTION and signals "not my shape" with a bool return, leaving the
+// generic path to its caller. Requires all four of: a bool result, at least two
+// distinct comma-ok assertions to SLICES OF NUMERIC TYPES, and a `return false` — the
+// decline that hands work back.
+//
+// The numeric-slice requirement is what makes this usable. Without it the check fired
+// on 13 functions inside perfscan itself: an AST visitor is wall-to-wall
+// `x, ok := n.(*ast.Foo)` followed by `return false`, which is structurally identical
+// and semantically nothing like a devirtualized kernel. Asserting []float32 or []uint16
+// is the signal; asserting *ast.Ident is not.
+func decliningTypedFastPath(fn *ast.FuncDecl) (string, bool) {
+	if fn.Type.Results == nil || len(fn.Type.Results.List) != 1 {
+		return "", false
+	}
+	if id, ok := fn.Type.Results.List[0].Type.(*ast.Ident); !ok || id.Name != "bool" {
+		return "", false
+	}
+	asserted := map[string]bool{}
+	declines := false
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		switch v := n.(type) {
+		case *ast.AssignStmt:
+			if len(v.Lhs) != 2 || len(v.Rhs) != 1 {
+				return true
+			}
+			if ta, ok := v.Rhs[0].(*ast.TypeAssertExpr); ok && isNumericSliceType(ta.Type) {
+				asserted[typeExprText(ta.Type)] = true
+			}
+		case *ast.ReturnStmt:
+			if len(v.Results) == 1 {
+				if id, ok := v.Results[0].(*ast.Ident); ok && id.Name == "false" {
+					declines = true
+				}
+			}
+		}
+		return true
+	})
+	if len(asserted) < 2 || !declines {
+		return "", false
+	}
+	return "typed storage assertion", true
+}
+
+// typeExprText renders the asserted type compactly, enough to tell []float32 from
+// []uint16 when counting how many concrete arms a dispatch has.
+func typeExprText(e ast.Expr) string {
+	switch x := e.(type) {
+	case *ast.Ident:
+		return x.Name
+	case *ast.ArrayType:
+		return "[]" + typeExprText(x.Elt)
+	case *ast.StarExpr:
+		return "*" + typeExprText(x.X)
+	case *ast.SelectorExpr:
+		return typeExprText(x.X) + "." + x.Sel.Name
+	}
+	return "?"
 }
 
 // loopVarBody returns the index/key variable name and body block of a for/range loop.
@@ -3312,4 +3386,23 @@ func identIsLoopBound(body *ast.BlockStmt, name string) bool {
 		return !found
 	})
 	return found
+}
+
+// isNumericSliceType reports whether an asserted type is a slice of a numeric builtin —
+// the shape a devirtualized storage fast path asserts, as opposed to the pointer-to-
+// struct assertions that fill any AST or reflection walker.
+func isNumericSliceType(e ast.Expr) bool {
+	at, ok := e.(*ast.ArrayType)
+	if !ok || at.Len != nil {
+		return false
+	}
+	id, ok := at.Elt.(*ast.Ident)
+	if !ok {
+		return false
+	}
+	switch id.Name {
+	case "float32", "float64", "uint16", "uint8", "int8", "int16", "int32", "int64", "byte":
+		return true
+	}
+	return false
 }

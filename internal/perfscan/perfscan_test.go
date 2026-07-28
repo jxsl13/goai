@@ -1939,3 +1939,89 @@ func (d *D) decode(ctx *C, dseq, heads int) []float64 {
 			got["build-nxn-use-one-row"], got)
 	}
 }
+
+// The third PS6001 form: a typed fast path that discriminates by comma-ok TYPE
+// ASSERTION on concrete storage and DECLINES to its caller with `return false`. The
+// generic arm lives in the caller, so neither the fast-path-helper test nor the
+// same-function accessor test can see it — this shape shipped as a 3.19x dual path
+// while PS6001 reported nothing.
+func TestDetectPS6001_DecliningTypedFastPath(t *testing.T) {
+	src := `package p
+func gatherHalfTyped(out, t *T, n int) bool {
+	su, okS := t.storage.data.([]uint16)
+	df, okD := out.storage.data.([]float32)
+	if !okS || !okD {
+		return false
+	}
+	for i := range n {
+		df[i] = float32(f16ToF32(su[i]))
+	}
+	return true
+}`
+	if got := countCat(scanSrc(t, src)); got["unverified-dual-path"] == 0 {
+		t.Fatalf("want ≥1 unverified-dual-path on a declining typed fast path, got 0 (%v)", got)
+	}
+}
+
+// THE FALSE POSITIVE THAT NEARLY SHIPPED: an AST visitor is wall-to-wall
+// `x, ok := n.(*ast.Foo)` followed by `return false`, structurally identical to a
+// devirtualized kernel and semantically nothing like one. The first cut of this
+// widening fired on 13 such functions inside perfscan itself. Asserting a SLICE OF A
+// NUMERIC TYPE is the discriminator; asserting a pointer-to-struct is not.
+func TestDetectPS6001_SilentOnPointerTypeAssertions(t *testing.T) {
+	src := `package p
+func visit(n Node) bool {
+	id, ok := n.(*Ident)
+	if !ok {
+		return false
+	}
+	call, ok2 := n.(*CallExpr)
+	if !ok2 {
+		return false
+	}
+	_, _ = id, call
+	return true
+}`
+	if got := countCat(scanSrc(t, src)); got["unverified-dual-path"] != 0 {
+		t.Fatalf("want 0 on pointer-to-struct assertions (an AST walker), got %d (%v)",
+			got["unverified-dual-path"], got)
+	}
+}
+
+// SILENT on a single numeric assertion: one cast is an ordinary conversion, not a
+// dispatch between arms, so there is no second path whose bit-identity is in question.
+func TestDetectPS6001_SilentOnSingleTypedAssertion(t *testing.T) {
+	src := `package p
+func fill(s *S, n int) bool {
+	d, ok := s.data.([]float64)
+	if !ok {
+		return false
+	}
+	for i := range n {
+		d[i] = 0
+	}
+	return true
+}`
+	if got := countCat(scanSrc(t, src)); got["unverified-dual-path"] != 0 {
+		t.Fatalf("want 0 on a single typed assertion, got %d (%v)",
+			got["unverified-dual-path"], got)
+	}
+}
+
+// SILENT without the decline: a function that asserts typed slices but never returns
+// false has no fallback arm to disagree with, so nothing needs cross-referencing.
+func TestDetectPS6001_SilentWithoutDecline(t *testing.T) {
+	src := `package p
+func both(s *S, d *S, n int) bool {
+	a, _ := s.data.([]float32)
+	b, _ := d.data.([]float64)
+	for i := range n {
+		b[i] = float64(a[i])
+	}
+	return true
+}`
+	if got := countCat(scanSrc(t, src)); got["unverified-dual-path"] != 0 {
+		t.Fatalf("want 0 without a decline path, got %d (%v)",
+			got["unverified-dual-path"], got)
+	}
+}

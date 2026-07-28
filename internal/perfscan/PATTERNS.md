@@ -577,3 +577,20 @@ sensitivity is not an AST property); it lists the population that needs one.
 Probe with a deliberate one-ulp mutation to decide, confirm the mutated line
 actually executes before believing a surviving mutation, and run the probe over
 every package that could hold a cross-reference test — not just the kernel's own.
+
+**A third form: the fast path that DECLINES to its caller.** `v, ok := x.data.([]float32)`
+discriminates on concrete storage rather than through a configured comma-ok helper, and
+the generic arm lives in the *caller*, reached by returning `false`. Neither the
+helper test nor the same-function accessor test sees it. This was found the hard way —
+by shipping one: `tensor.gatherHalfTyped` devirtualizes four half-cast arms for a
+**3.19×** win, and PS6001 reported nothing. A verification rule that goes quiet on a
+real dual path is worse than no rule, because the silence reads as "nothing to prove".
+Detected by: a `bool` result, **two or more** comma-ok assertions to *slices of numeric
+types*, and a `return false`.
+
+The numeric-slice requirement is not decoration. Without it the widening fired on 13
+functions inside perfscan itself — an AST visitor is wall-to-wall `x, ok := n.(*ast.Foo)`
+followed by `return false`, structurally identical and semantically unrelated. Asserting
+`[]float32` is the signal; asserting `*ast.Ident` is not. Tree-wide the tightened form
+adds exactly one finding (56 → 57) instead of fourteen.
+
