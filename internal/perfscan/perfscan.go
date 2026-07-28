@@ -1588,8 +1588,12 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 						" two-deep inside a nested loop — every inner step dereferences a separate row"+
 						" pointer, and a column walk touches one cache line per row. Flatten to a single"+
 						" [rows*cols] buffer indexed %s[i*cols+j]; index arithmetic only, so it is"+
-						" bit-identical. Measured 1.5x (cholesky) and 1.2x (SymEig). Check first that the"+
-						" rows are uniform length — a genuinely ragged matrix cannot flatten.", name, name),
+						" bit-identical. Measured 2.15x (solvespd), 1.5x (cholesky), 1.35x (qr), 1.2x"+
+						" (SymEig, SVD) — but 0.93x on classic cholSolve, where the factorization is a"+
+						" small part of an OLS fit dominated by building the Gram matrix. The flatten"+
+						" pays when the flagged loop IS the enclosing operation's work, so measure the"+
+						" OPERATION end to end, not the loop. Check too that the rows are uniform"+
+						" length — a genuinely ragged matrix cannot flatten.", name, name),
 				})
 			}
 		}
