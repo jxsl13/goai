@@ -367,3 +367,23 @@ Also silent when the divisor also appears as a **modulo** divisor (`x % d`) anyw
 the function: Go's `%` requires integer operands, so `d` is provably integer and `i/d` is
 index arithmetic (`iy, ix := i/m, i%m`), never a float reciprocal-multiply candidate —
 this is type-sound, not heuristic, so it never suppresses a real float divide.
+
+## PS5002 — symmetric-matrix full accumulation  *(scanner: static)*
+
+A nested `i`/`j` loop that accumulates a **symmetric** matrix in full — `m[i][j] += x[i]·x[j]`
+(an outer product) or a gram reduction `acc += M[i][k]·M[j][k]` folded into `m[i][j]`. Every
+off-diagonal entry is computed twice.
+
+**Fix:** if the consumer reads only one triangle — a Cholesky factor (`gmmCholesky`), a symmetric
+eigendecomposition (`SymEig`), an inverse-root preconditioner — accumulate the upper triangle +
+diagonal and mirror it down once (`m[j][i] = m[i][j]`). Roughly **halves** the O(n·d²) accumulation.
+Bit-identical where the product is commutative (`x[i]·x[j] == x[j]·x[i]`, exact in IEEE-754).
+
+**Shipped:** GMM full-cov mStep (1.35×), PCA covariance (1.24×) — the same class as the SVD
+column-major win.
+
+**Detection is a same-base product AND an `m[i][j]` write** under the two loops: matmul
+(`C[i][j] += A[i][k]·B[k][j]`) has *different* bases (A≠B) so it is not flagged. **Deliberately
+silent** on already-triangular loops and on forms that pre-slice the row (`covi := m[i]; covi[j] +=
+ci·c[j]`) — the hoisted 1-D write hides the `[i][j]` signal, so verify hot covariance/gram loops by
+eye too. **Verify the consumer reads one triangle and benchmark** before shipping.

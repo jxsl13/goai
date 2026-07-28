@@ -1048,3 +1048,61 @@ func (s *M) Step(ps []*int) {
 		t.Fatalf("want 0 (pointer-element slice), got %d", got)
 	}
 }
+
+// PS5002: symmetric-matrix full-accumulation (GMM/PCA class).
+func TestDetectPS5002_SymmetricOuterProduct(t *testing.T) {
+	src := `package p
+func cov(x [][]float64, mean []float64, m [][]float64, d int) {
+	c := make([]float64, d)
+	for _, row := range x {
+		for j := range c {
+			c[j] = row[j] - mean[j]
+		}
+		for i := range d {
+			for j := range d {
+				m[i][j] += c[i] * c[j]
+			}
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src))["symmetric-accumulation"]; got != 1 {
+		t.Fatalf("want 1 symmetric-accumulation (outer product), got %d", got)
+	}
+}
+
+func TestDetectPS5002_Gram(t *testing.T) {
+	src := `package p
+func gram(gm [][]float64, l [][]float64, m, n int) {
+	for i := range m {
+		for j := range m {
+			var acc float64
+			for k := range n {
+				acc += gm[i][k] * gm[j][k]
+			}
+			l[i][j] += acc
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src))["symmetric-accumulation"]; got != 1 {
+		t.Fatalf("want 1 symmetric-accumulation (gram), got %d", got)
+	}
+}
+
+// Must stay silent on matmul: the factors have DIFFERENT bases, so it is not symmetric.
+func TestDetectPS5002_SilentOnMatmul(t *testing.T) {
+	src := `package p
+func matmul(a, b, c [][]float64, m, n, k int) {
+	for i := range m {
+		for j := range n {
+			var acc float64
+			for kk := range k {
+				acc += a[i][kk] * b[kk][j]
+			}
+			c[i][j] += acc
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src))["symmetric-accumulation"]; got != 0 {
+		t.Fatalf("want 0 (matmul, different bases), got %d", got)
+	}
+}
