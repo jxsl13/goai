@@ -367,37 +367,51 @@ func normalizeColumns(w *tensor.Tensor) {
 	// oracle); F16/BF16 fall through.
 	if w.IsContiguous() && w.Offset() == 0 {
 		switch w.Dtype() {
+		// Row-major reblock: the per-column reduction/scale over a row-major buffer strides
+		// the reads by `out` (8 KB apart), defeating the prefetcher and vectorization. Walk
+		// rows contiguously with an `out`-length sum-of-squares accumulator instead. Bit-
+		// identical to the column-major form (and the slowNormalizeColumns oracle): each
+		// column j still sums i=0..in-1 in order, and the per-element divide is unchanged.
 		case tensor.F64:
 			d := w.Storage().F64()
-			for j := range out {
-				var ss float64
-				for i := range in {
-					v := d[i*out+j]
-					ss += v * v
+			nrm := make([]float64, out)
+			for i := 0; i < in; i++ {
+				drow := d[i*out : i*out+out]
+				for j, v := range drow {
+					nrm[j] += v * v
 				}
-				n := math.Sqrt(ss)
-				if n == 0 {
-					continue
-				}
-				for i := range in {
-					d[i*out+j] = d[i*out+j] / n
+			}
+			for j := range nrm {
+				nrm[j] = math.Sqrt(nrm[j])
+			}
+			for i := 0; i < in; i++ {
+				drow := d[i*out : i*out+out]
+				for j := range drow {
+					if n := nrm[j]; n != 0 {
+						drow[j] = drow[j] / n
+					}
 				}
 			}
 			return
 		case tensor.F32:
 			d := w.Storage().F32()
-			for j := range out {
-				var ss float64
-				for i := range in {
-					v := float64(d[i*out+j])
-					ss += v * v
+			nrm := make([]float64, out)
+			for i := 0; i < in; i++ {
+				drow := d[i*out : i*out+out]
+				for j, v := range drow {
+					fv := float64(v)
+					nrm[j] += fv * fv
 				}
-				n := math.Sqrt(ss)
-				if n == 0 {
-					continue
-				}
-				for i := range in {
-					d[i*out+j] = float32(float64(d[i*out+j]) / n)
+			}
+			for j := range nrm {
+				nrm[j] = math.Sqrt(nrm[j])
+			}
+			for i := 0; i < in; i++ {
+				drow := d[i*out : i*out+out]
+				for j := range drow {
+					if n := nrm[j]; n != 0 {
+						drow[j] = float32(float64(drow[j]) / n)
+					}
 				}
 			}
 			return
