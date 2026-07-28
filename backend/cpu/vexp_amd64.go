@@ -736,3 +736,37 @@ func vsoftcapF64(dst, src []float64, cap float64) {
 		dst[i] = softcapF64poly(src[i], cap)
 	}
 }
+
+// vtanhF64 is the f64-native tanh on the AVX2 expF64x4 primitive — the vsoftcapF64
+// lane at cap=1 (no x/cap or ·cap): the overflow-safe sign-split
+// (1−e^(−2|x|))/(1+e^(−2|x|)) with sign(x) reapplied. Rides the model f64 tolerance
+// (expF64x4 is ~1 ulp); the non-SIMD build keeps math.Tanh (its scalar twin here).
+func vtanhF64(dst, src []float64) {
+	if !vexpHasAVX {
+		for i, v := range src {
+			dst[i] = tanhF64poly(v)
+		}
+		return
+	}
+	n4 := len(src) &^ 3
+	for i := 0; i < n4; i += 4 {
+		x := archsimd.LoadFloat64x4Slice(src[i:])
+		a := x.AsUint64x4().And(vF64Abs).AsFloat64x4()                    // |x|
+		z := expF64x4(vF64Zero.Sub(a.Add(a)))                             // e^(−2|x|)
+		t := vF64One.Sub(z).Div(vF64One.Add(z))                           // tanh(|x|)
+		t = t.AsUint64x4().Or(x.AsUint64x4().And(vF64Sign)).AsFloat64x4() // copysign(t, x)
+		t.StoreSlice(dst[i:])
+	}
+	for i := n4; i < len(src); i++ {
+		dst[i] = tanhF64poly(src[i])
+	}
+}
+
+// tanhF64poly is the scalar bit-twin of one vtanhF64 lane (expF64poly) — the
+// remainder tail and the no-AVX fallback. Mirrors softcapF64poly at cap=1.
+func tanhF64poly(x float64) float64 {
+	a := math.Float64frombits(math.Float64bits(x) & 0x7fffffffffffffff) // |x|
+	z := expF64poly(-(a + a))
+	t := (1 - z) / (1 + z)
+	return math.Float64frombits(math.Float64bits(t) | (math.Float64bits(x) & 0x8000000000000000))
+}

@@ -191,6 +191,14 @@ func vsiluF64(dst, src []float64) {
 	}
 }
 
+// vtanhF64 exists only so tanhKernelCPU type-checks on arm64; vexpF64Fast is false
+// here, so it is dead at run time (the math.Tanh exact path runs).
+func vtanhF64(dst, src []float64) {
+	for i, v := range src {
+		dst[i] = math.Tanh(v)
+	}
+}
+
 // vsigmoidF64 exists only so sigmoidKernelCPU type-checks on arm64; vexpF64Fast is
 // false here, so it is dead at run time (the scalar exact path runs).
 func vsigmoidF64(dst, src []float64) {
