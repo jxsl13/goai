@@ -226,6 +226,9 @@ func gatherGeneric(out, t *Tensor, n int) {
 	// The per-element accessor dispatch is NOT addressed here; that is the separate
 	// (and probably larger) PS1001 half, which needs a typed switch reproducing this
 	// path's widen-through-float64 semantics exactly.
+	if gatherHalfTyped(out, t, n) {
+		return
+	}
 	if nd > 0 && t.shape[nd-1] > 0 && n%t.shape[nd-1] == 0 {
 		inner, sInner := t.shape[nd-1], t.strides[nd-1]
 		for pos := 0; pos < n; pos += inner {
@@ -504,4 +507,106 @@ func (t *Tensor) Contiguous() *Tensor {
 		gatherGeneric(out, t, n)
 	}
 	return out
+}
+
+// gatherHalfTyped is gatherGeneric's devirtualized arm for the STRIDED HALF CASTS that
+// actually reach that function: a f16/bf16 view widened to f32/f64, or the reverse.
+//
+// The generic walk pays an interface type-switch on Storage.data for EVERY element,
+// twice — once to decode the source and once to encode the destination. Hoisting both
+// switches out of the loop leaves a typed strided walk. Everything else still routes
+// through the accessor path, which is why this returns a bool rather than handling all
+// sixteen dtype combinations.
+//
+// BIT-IDENTITY IS BY EXPRESSION, NOT BY ARGUMENT: each arm performs the SAME
+// conversion the accessors perform, written out — decode through float64 exactly as
+// Storage.atF64 does, encode exactly as Storage.setF64 does. The float64 intermediate
+// is kept even where it is provably redundant (f32->f64->f32 round-trips exactly),
+// because the point is to mirror the original expression rather than to reason about
+// when a widening may be elided. TestGatherGenericMatchesOdometerExact holds every arm
+// to the frozen per-element oracle at tolerance 0, across all six dtype pairs.
+func gatherHalfTyped(out, t *Tensor, n int) bool {
+	nd := len(t.shape)
+	if nd == 0 || t.shape[nd-1] <= 0 || n%t.shape[nd-1] != 0 {
+		return false
+	}
+	inner, sInner := t.shape[nd-1], t.strides[nd-1]
+
+	srcU16, srcIsU16 := t.storage.data.([]uint16)
+	dstU16, dstIsU16 := out.storage.data.([]uint16)
+	srcF32, srcIsF32 := t.storage.data.([]float32)
+	dstF32, dstIsF32 := out.storage.data.([]float32)
+	srcF64, srcIsF64 := t.storage.data.([]float64)
+	dstF64, dstIsF64 := out.storage.data.([]float64)
+	srcBF, dstBF := t.storage.dtype == BF16, out.storage.dtype == BF16
+
+	// decode picks the source reader once; encode picks the destination writer once.
+	// Only the half-cast combinations are claimed here.
+	var run func(dstOff, srcOff int)
+	switch {
+	case srcIsU16 && dstIsF32:
+		run = func(dstOff, s int) {
+			for p := 0; p < inner; p++ {
+				if srcBF {
+					dstF32[dstOff+p] = float32(float64(bf16ToF32(srcU16[s])))
+				} else {
+					dstF32[dstOff+p] = float32(float64(f16ToF32(srcU16[s])))
+				}
+				s += sInner
+			}
+		}
+	case srcIsU16 && dstIsF64:
+		run = func(dstOff, s int) {
+			for p := 0; p < inner; p++ {
+				if srcBF {
+					dstF64[dstOff+p] = float64(bf16ToF32(srcU16[s]))
+				} else {
+					dstF64[dstOff+p] = float64(f16ToF32(srcU16[s]))
+				}
+				s += sInner
+			}
+		}
+	case srcIsF32 && dstIsU16:
+		run = func(dstOff, s int) {
+			for p := 0; p < inner; p++ {
+				v := float64(srcF32[s])
+				if dstBF {
+					dstU16[dstOff+p] = f32ToBF16(float32(v))
+				} else {
+					dstU16[dstOff+p] = f32ToF16(float32(v))
+				}
+				s += sInner
+			}
+		}
+	case srcIsF64 && dstIsU16:
+		run = func(dstOff, s int) {
+			for p := 0; p < inner; p++ {
+				v := srcF64[s]
+				if dstBF {
+					dstU16[dstOff+p] = f32ToBF16(float32(v))
+				} else {
+					dstU16[dstOff+p] = f32ToF16(float32(v))
+				}
+				s += sInner
+			}
+		}
+	default:
+		return false
+	}
+
+	idx := make([]int, nd)
+	off := t.offset
+	for pos := 0; pos < n; pos += inner {
+		run(pos, off)
+		for d := nd - 2; d >= 0; d-- {
+			idx[d]++
+			off += t.strides[d]
+			if idx[d] < t.shape[d] {
+				break
+			}
+			idx[d] = 0
+			off -= t.strides[d] * t.shape[d]
+		}
+	}
+	return true
 }
