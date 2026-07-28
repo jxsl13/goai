@@ -1126,3 +1126,76 @@ func chol(a, l [][]float64, n int) {
 		t.Fatalf("want 0 (already triangular), got %d", got)
 	}
 }
+
+// PS4007 fires on a *VJP whose hot loop is a single elementwise binop written as a scalar
+// Go loop (the pre-fix expVJP shape) — it should dispatch the matching backend op instead.
+func TestDetectPS4007_ScalarBinopVJP(t *testing.T) {
+	src := `package p
+func expVJP(ctx *C, in, out []*T, a A, g *T) ([]*T, error) {
+	for i := 0; i < n; i++ {
+		ds[i] = gs[i] * ys[i]
+	}
+	return nil, nil
+}`
+	if got := countCat(scanSrc(t, src))["vjp-scalar-elementwise-binop"]; got != 1 {
+		t.Fatalf("want 1 vjp-scalar-elementwise-binop, got %d", got)
+	}
+}
+
+// …including the f32 conversion-wrapped form float32(float64(a)*float64(b)).
+func TestDetectPS4007_ConversionWrapped(t *testing.T) {
+	src := `package p
+func expVJP(ctx *C, in, out []*T, a A, g *T) ([]*T, error) {
+	for i := 0; i < n; i++ {
+		ds[i] = float32(float64(gs[i]) * float64(ys[i]))
+	}
+	return nil, nil
+}`
+	if got := countCat(scanSrc(t, src))["vjp-scalar-elementwise-binop"]; got != 1 {
+		t.Fatalf("want 1 (conversion-wrapped), got %d", got)
+	}
+}
+
+// Silent on MULTI-op bodies (tanh g·(1−y²)): they keep f64 intermediates and narrow once,
+// so composing f32 backend ops would diverge — they need a fused kernel, not a dispatch.
+func TestDetectPS4007_SilentOnMultiOp(t *testing.T) {
+	src := `package p
+func tanhVJP(ctx *C, in, out []*T, a A, g *T) ([]*T, error) {
+	for i := 0; i < n; i++ {
+		ds[i] = gs[i] * (1 - ys[i]*ys[i])
+	}
+	return nil, nil
+}`
+	if got := countCat(scanSrc(t, src))["vjp-scalar-elementwise-binop"]; got != 0 {
+		t.Fatalf("want 0 (multi-op needs a fused kernel), got %d", got)
+	}
+}
+
+// Silent outside the VJP layer: a backend kernel's scalar loop IS the implementation, not a
+// missed dispatch, so the *VJP name scope keeps it from being flagged.
+func TestDetectPS4007_SilentOnNonVJP(t *testing.T) {
+	src := `package p
+func mulKernelCPU(ds, gs, ys []float64, n int) {
+	for i := 0; i < n; i++ {
+		ds[i] = gs[i] * ys[i]
+	}
+}`
+	if got := countCat(scanSrc(t, src))["vjp-scalar-elementwise-binop"]; got != 0 {
+		t.Fatalf("want 0 (non-VJP kernel), got %d", got)
+	}
+}
+
+// Silent once the VJP already dispatches to the backend (the fixed expVJP shape).
+func TestDetectPS4007_SilentOnDispatch(t *testing.T) {
+	src := `package p
+func expVJP(ctx *C, in, out []*T, a A, g *T) ([]*T, error) {
+	res, err := backend.Execute(ctx, backend.OpMul, []*T{g, out[0]}, nil)
+	if err != nil {
+		return nil, err
+	}
+	return []*T{res[0]}, nil
+}`
+	if got := countCat(scanSrc(t, src))["vjp-scalar-elementwise-binop"]; got != 0 {
+		t.Fatalf("want 0 (already dispatches), got %d", got)
+	}
+}
