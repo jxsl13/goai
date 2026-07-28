@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"go/parser"
 	"go/token"
 	"os"
@@ -2113,5 +2114,37 @@ func byRow(m []float64, idx []int) {
 }`
 	if got := countCat(scanSrc(t, src)); got["indirect-key-comparator"] != 0 {
 		t.Fatalf("want 0 on a single dereference, got %d (%v)", got["indirect-key-comparator"], got)
+	}
+}
+
+// PS4006 must be suppressible by a directive written ABOVE THE LOOP, which is where a
+// reader puts one. It was not: the finding anchored to the index expression a line
+// inside the loop, so the directive's block (which covers itself plus the next
+// statement) never reached it. A BARE //perfscan:ignore failing to silence the finding
+// is what exposed it — the ID and category were never the problem.
+func TestDetectPS4006_SuppressibleAboveTheLoop(t *testing.T) {
+	body := `package p
+func chol(a []float64, n int) {
+	l := make([][]float64, n)
+	for i := range n {
+		l[i] = make([]float64, n)
+	}
+	for j := range n {
+		for i := range n {
+			%s
+			for k := range j {
+				l[i][j] -= l[i][k] * l[j][k]
+			}
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, fmt.Sprintf(body, ""))); got["row-slice-matrix"] == 0 {
+		t.Fatalf("fixture must produce a finding without the directive, got %v", got)
+	}
+	if got := countCat(scanSrc(t, fmt.Sprintf(body, "//perfscan:ignore PS4006 deliberate"))); got["row-slice-matrix"] != 0 {
+		t.Fatalf("directive above the loop did not suppress: %v", got)
+	}
+	if got := countCat(scanSrc(t, fmt.Sprintf(body, "//perfscan:ignore"))); got["row-slice-matrix"] != 0 {
+		t.Fatalf("bare directive above the loop did not suppress: %v", got)
 	}
 }

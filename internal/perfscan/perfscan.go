@@ -2586,11 +2586,18 @@ func rowAllocMatrices(fn *ast.FuncDecl) map[string]bool {
 // nestedDoubleIndex reports the position of a two-deep index on name (m[i][j])
 // occurring inside at least two nested loops — the region where the row-pointer
 // dereference is paid repeatedly rather than once.
+// It reports the position of the INNERMOST ENCLOSING LOOP, not of the index expression
+// itself. That distinction is not cosmetic: `//perfscan:ignore` applies to a comment
+// block and the statement below it, so a finding anchored to an expression one line
+// INSIDE the loop cannot be suppressed by a directive written above the loop — which is
+// where any reader puts it. PS4006 was unsuppressable that way until this changed, and
+// only a bare directive failing to silence it revealed the cause. PS4005 and PS4008
+// already anchor to the loop; this makes the family consistent.
 func nestedDoubleIndex(fn *ast.FuncDecl, name string) (token.Pos, bool) {
 	var found token.Pos
 	var ok bool
-	var walk func(n ast.Node, depth int)
-	walk = func(n ast.Node, depth int) {
+	var walk func(n ast.Node, depth int, loop token.Pos)
+	walk = func(n ast.Node, depth int, loop token.Pos) {
 		if n == nil || ok {
 			return
 		}
@@ -2600,7 +2607,7 @@ func nestedDoubleIndex(fn *ast.FuncDecl, name string) (token.Pos, bool) {
 				if c == v.Body {
 					return true
 				}
-				walk(c, depth+1)
+				walk(c, depth+1, v.Pos())
 				return false
 			})
 			return
@@ -2609,7 +2616,7 @@ func nestedDoubleIndex(fn *ast.FuncDecl, name string) (token.Pos, bool) {
 				if c == v.Body {
 					return true
 				}
-				walk(c, depth+1)
+				walk(c, depth+1, v.Pos())
 				return false
 			})
 			return
@@ -2617,7 +2624,7 @@ func nestedDoubleIndex(fn *ast.FuncDecl, name string) (token.Pos, bool) {
 			if depth >= 2 {
 				if inner, isIdx := v.X.(*ast.IndexExpr); isIdx {
 					if id, isID := inner.X.(*ast.Ident); isID && id.Name == name {
-						found, ok = v.Pos(), true
+						found, ok = loop, true
 						return
 					}
 				}
@@ -2627,11 +2634,11 @@ func nestedDoubleIndex(fn *ast.FuncDecl, name string) (token.Pos, bool) {
 			if c == n {
 				return true
 			}
-			walk(c, depth)
+			walk(c, depth, loop)
 			return false
 		})
 	}
-	walk(fn.Body, 0)
+	walk(fn.Body, 0, token.NoPos)
 	return found, ok
 }
 
