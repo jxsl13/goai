@@ -142,3 +142,26 @@ ERROR PATHS both needed a captured first-error under a mutex, since a chunk body
 GATE: a frozen bit-level golden of the full-covariance scores, mutation-probed red under a one-ulp mStep mean bump, a reversed mStep sample order and a one-ulp responsibility bump, while every pre-existing GMM test stays green. TestGMMDeterminism could not have served — it fits twice with the SAME code and so proves reproducibility, not preservation.
 
 NOT DONE: the diagonal-covariance mStep path is still serial. It is the cheap covariance mode (O(n*k*d) rather than O(n*k*d^2)) and no benchmark in the suite exercises it at scale, so there is nothing to validate against — measure first if it is ever wanted.
+
+## R-01KYN5DVW6F849JR3T85G3FVXG Exact GBM split search 1.72x (saves 780ms/fit); the prediction golden could not see the tie-break, so it needed its own test
+kind: research
+state: draft
+created: 2026-07-28
+
+BenchmarkGBMHist_exact_80k, the presort grower, ran 1.86 SECONDS fully serial — the largest absolute saving found in this campaign. gbmBuilder.bestSplit is 59% flat, partition another 28%.
+
+MEASURED INTERLEAVED, 3 alternations, min of 3 per arm: 1836-1883ms -> 1080-1092ms, 1.72x. Scales 1821 / 1110 / 1089ms at 1 / 4 / 12 Ps, flattening after 4 because partition stays serial. Amdahl caps this at about 2.2x, so 1.72x is most of what is reachable without touching that loop.
+
+A SECOND FALSE "SLOWER WITH MORE CORES": the sweep read 0.93x, and re-measuring at every core count gave 1880-1933ms flat — a 3% noise band. Same shape as the CholeskyVJP 0.88x that reached three records before correction. The re-verification rule caught this one before it became a claim. A sub-1.0 ratio should be treated as unmeasured until re-run per core count.
+
+TWO BLOCKERS, both recurring shapes: b.vals was a shared receiver scratch overwritten per feature (the PS6006 shape — and its name heuristic does NOT catch "vals", a real limitation of that rule found on the very next case), and the best-gain tracking is an argmax reduction, now per-feature candidates combined in ascending order with strict >.
+
+THE GATE GAP IS THE PART WORTH CARRYING. TestGBMHistogramBitIdenticalToGolden constructs with WithGBMHistogram and never enters this function — the exact and histogram growers are different code, and parallelizing one under the other's gate would have been unguarded. A separate frozen golden was captured.
+
+AND THAT GOLDEN IS WEAK IN A SPECIFIC WAY, established by probing: red when a feature is dropped from the search, but GREEN under a one-ulp left-sum bump, under >= instead of > in the combine, and under a descending combine order. The reason is structural, not fixable by a better fixture: tree growth is decided by COMPARISONS, so ulp-level noise does not move a split, and random data never produces two bit-equal gains, so no prediction fixture can exercise a tie at all.
+
+So the tie-break needed a constructed fixture: two features inducing the IDENTICAL partition have bit-equal gains while their thresholds differ, which makes the choice observable. That test is red under both mutations the goldens miss. Cast as NUM-ARGMAX-TIEBREAK-001.
+
+GENERAL LESSON: a prediction-level golden gates VALUES, not DECISIONS. Where an algorithm's output is chosen by comparison rather than computed by arithmetic, exactness gates go quiet exactly where the parallelization is riskiest, and the tie must be constructed deliberately.
+
+NOT DONE: partition (28% flat) is still serial. It permutes every feature column in place for the chosen split, so it is a scatter rather than an independent-row loop and needs its own analysis.
