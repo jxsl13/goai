@@ -39,7 +39,7 @@ type Shampoo struct {
 	step int
 	st   []*shampooState
 
-	gmScr, tScr [][]float64 // pooled per-step matrix scratch (gradient matrix + T=G·R⁻¹ᐟ⁴), grown on demand
+	gmScr, tScr, ghScr [][]float64 // pooled per-step matrix scratch (gradient matrix, T=G·R⁻¹ᐟ⁴, Ĝ), grown on demand
 }
 
 // growMat returns buf reshaped to r×c, reusing the outer slice and each row where they
@@ -175,23 +175,12 @@ func (s *Shampoo) Step(grad GradFn) error {
 			li, ri := st.li, st.ri
 			// Ĝ = L^{−1/4}·G·R^{−1/4}: first T = G·R^{−1/4} [m,n], then L^{−1/4}·T.
 			s.tScr = growMat(s.tScr, m, n) // pooled T scratch (was make per step)
-			t := s.tScr
+			s.ghScr = growMat(s.ghScr, m, n)
+			t, gh := s.tScr, s.ghScr
+			shampooPrecondInto(gh, t, li, gm, ri, m, n)
 			for i := range m {
 				for j := range n {
-					var acc float64
-					for k := range n {
-						acc += gm[i][k] * ri[k][j]
-					}
-					t[i][j] = acc
-				}
-			}
-			for i := range m {
-				for j := range n {
-					var acc float64
-					for k := range m {
-						acc += li[i][k] * t[k][j]
-					}
-					p.SetF64(p.AtF64(i, j)-s.LR*acc, i, j) // W −= η·Ĝ
+					p.SetF64(p.AtF64(i, j)-s.LR*gh[i][j], i, j) // W −= η·Ĝ
 				}
 			}
 			continue
@@ -270,4 +259,40 @@ func invMatrixRoot(mat [][]float64, power int, eps float64) [][]float64 {
 		}
 	}
 	return out
+}
+
+// shampooPrecondInto writes Ĝ = L^{−1/4}·G·R^{−1/4} into gh, using t as the [m,n]
+// intermediate T = G·R^{−1/4}.
+//
+// Both products run in ikj/axpy order. The dot form they replace accumulated each
+// output through a single scalar, a SERIAL FMADD chain that runs at the FMA's latency
+// rather than its throughput (PS4008). BIT-IDENTICAL: every output still accumulates
+// over k in ascending order starting from +0 — only the order in which distinct
+// outputs are visited changes. gh and t are pooled scratch and are accumulated into,
+// so both are zeroed here; TestShampooPrecondCrossReferenceExact feeds dirty buffers.
+func shampooPrecondInto(gh, t, li, gm, ri [][]float64, m, n int) {
+	for i := range m {
+		clear(t[i][:n])
+		clear(gh[i][:n])
+	}
+	for i := range m {
+		gmi, ti := gm[i], t[i][:n]
+		for k := range n {
+			av := gmi[k]
+			rk := ri[k][:n]
+			for j := range ti {
+				ti[j] += av * rk[j]
+			}
+		}
+	}
+	for i := range m {
+		lii, ghi := li[i], gh[i][:n]
+		for k := range m {
+			av := lii[k]
+			tk := t[k][:n]
+			for j := range ghi {
+				ghi[j] += av * tk[j]
+			}
+		}
+	}
 }
