@@ -187,6 +187,10 @@ func bestGBMSplit(x [][]float64, y []float64, idx []int, minLeaf int) (feat int,
 	for f := 0; f < d; f++ {
 		copy(sorted, idx)
 		ff := f
+		// REFERENCE IMPLEMENTATION — deliberately left simple. gbmBuilder is the
+		// production grower and is validated bit-identical against this one; optimizing
+		// an oracle defeats its purpose. Reachable only from gbm_test.go.
+		//perfscan:ignore PS3002 reference implementation the production grower is checked against
 		sort.Slice(sorted, func(a, b int) bool { return x[sorted[a]][ff] < x[sorted[b]][ff] })
 		var leftSum float64
 		for k := 0; k < n-1; k++ {
@@ -239,13 +243,20 @@ func newGBMBuilder(x [][]float64, n, d, maxDepth, minLeaf int) *gbmBuilder {
 	b := &gbmBuilder{x: x, n: n, d: d, maxDepth: maxDepth, minLeaf: minLeaf}
 	b.master = make([][]int, d)
 	mbase := make([]int, n*d)
+	// Hoist the scattered x[id][ff] load out of the O(n log n) comparator: fill a
+	// contiguous id-indexed key column once (O(n)), then compare those — the same trick
+	// the CART builder's radixByFeature already uses for the identical operation.
+	// The comparator is the SAME PREDICATE (key[id] == x[id][ff]), so pdqsort on the
+	// same input produces the same permutation, ties included; this is not merely
+	// "unspecified tie order is irrelevant" but an exact match.
+	key := make([]float64, n)
 	for f := 0; f < d; f++ {
 		col := mbase[f*n : f*n+n : f*n+n]
 		for i := range col {
 			col[i] = i
+			key[i] = x[i][f]
 		}
-		ff := f
-		sort.Slice(col, func(a, c int) bool { return x[col[a]][ff] < x[col[c]][ff] })
+		sort.Slice(col, func(a, c int) bool { return key[col[a]] < key[col[c]] })
 		b.master[f] = col
 	}
 	cbase := make([]int, n*d)
