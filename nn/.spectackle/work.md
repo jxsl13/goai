@@ -64,3 +64,28 @@ HASHING EVERY CODE RATHER THAN A PREFIX IS LOAD-BEARING: groups refine independe
 GATE LIMITS, stated: it does not exercise the argmin tie-break, because float distances never tie exactly — the same structural blindness found on the GBM split search, where the fix was a deliberately constructed tie. Here no constructed tie was added: unlike GBM, the tie-break was not touched by this change (the comparison sequence within a group is untouched by a partition), so the property at risk is coverage of the partition, which IS gated. Recording the reasoning so the absence is not read as an oversight.
 
 It is also unmoved by cutting an ICM sweep from three to two, which means the search has converged by the third on this fixture. Worth knowing before anyone tunes that constant expecting the gate to notice.
+
+## R-01KYN7C0EKFA5T7QVQ2P6GQ27W AQLM encode 3.56x complete; the split-search-then-fold pattern, now used twice
+kind: research
+state: draft
+created: 2026-07-28
+
+Closes the AQLM line. Two changes, measured separately, interleaved with min of 3 runs per arm.
+
+  baseline                 990ms
+  + ICM parallel           481ms   2.06x  (over groups)
+  + nearestAQLM parallel   278ms   1.73x  (two call sites, different treatments)
+  cumulative                       3.56x
+Scales 1004 / 375 / 280ms at 1 / 4 / 12 Ps.
+
+THE PATTERN WORTH NAMING is how the second change handled k-means. Its assignment loop computes an argmin per point (expensive, independent) and then accumulates into shared sums/cnt indexed by the chosen cluster (cheap, order-dependent). Parallelizing the whole loop with per-chunk partial sums would have been the obvious move, would have been faster to write, and would have been silently NON-bit-identical — chunked partials reassociate the float sums. It would also have passed every existing AQLM test, because TestAQLMDeterministic only proves reproducibility.
+
+Instead: two passes. The argmin runs in parallel into an assignment array; the fold into sums/cnt runs sequentially in the original point order. The expensive half parallelizes and the order-dependent half does not move. Cast as PROC-SPLIT-SEARCH-FOLD-001.
+
+Second use of this shape in the campaign. The GMM E-step needed it for the log-likelihood total, where per-sample contributions are stored and summed afterward in sample order rather than accumulated per chunk. Both times the reduction was a small fraction of the work, so keeping it serial cost nothing measurable and bought exactness outright.
+
+THE OTHER CALL SITE needed nothing special — the residual encode touches only its own group's row and partitions directly. Two call sites of the SAME function, two different correct treatments; deciding per site rather than per function is the actual discipline.
+
+STILL SERIAL, with reasons: k-means centroid update (a reduction like the above but not the bottleneck) and solveLinearAQLM, now the largest remaining share. Gauss-Jordan elimination carries a genuine loop-dependency down the pivots; only the per-row updates within one elimination step are independent, which is a narrower win and would need its own measurement to justify.
+
+GATE: the frozen rolling hash over all 768 codes plus the refit codebook row, added with the ICM change. Red on a partition bug, green throughout here, verified under -race.
