@@ -122,3 +122,23 @@ IF CONFIRMED, the fix is a pool-side decision and belongs to whoever owns those 
 NOT AN nlp-SIDE FIX, checked: the kernels reached are the ordinary four (matmul, gelu, addBias, mha) and their total work is under 1% of samples. Reducing GPT's per-token op count cannot turn a 35:1 overhead ratio into a win.
 
 VERIFY any change against BOTH decoders across GOMAXPROCS 1/2/4/8/12, min of 3 runs per point per PROC-BENCH-MINOFN-001 — single samples inverted two verdicts elsewhere in this campaign. A fix must remove the 12-P regression WITHOUT slowing Llama, which currently scales correctly and is the control.
+
+## T-01KYN7P9WVEDH839HRR1SHFG2B Measure the three PS6007 sites in backend/ref/moe.go before splitting them
+kind: task
+state: draft
+created: 2026-07-28
+refs: R-01KYN7C0EKFA5T7QVQ2P6GQ27W
+
+PS6007 reports three search-feeds-reduction loops in backend/ref/moe.go (lines 78, 105, 130) — the MoE routing shape: an expert is chosen per token, then per-expert buffers are accumulated. Same structure as AQLM's k-means assignment, which returned 1.73x when split.
+
+BACKEND/CPU AND BACKEND/REF ARE THE PARALLEL WORKER'S ZONE. Do not start without re-checking git log on the file and the open PR list; this is handed over rather than taken.
+
+THE TRANSFORM, if the measurement justifies it: run the expert selection in parallel into an assignment array, then fold into the per-expert accumulators sequentially in the original token order. Do NOT parallelize the whole loop with per-chunk partial accumulators — that reassociates the sums and is not bit-identical, and it will pass any determinism test, since those run the same code twice and compare.
+
+MEASURE FIRST. BenchmarkMoEDecodeQwenDense is 45ms at 0.99x across GOMAXPROCS 1..12, so the package-level workload is a serial spine, but no measurement yet attributes that time to these three loops specifically. Profile before transforming; the enclosing-work heuristic has inverted predictions repeatedly in this campaign.
+
+GATE BEFORE CHANGING: check whether a tolerance-0 gate covers the MoE reference path. Several backend/ref kernels were found exactness-blind by an earlier audit. If none exists, freeze one from the pre-change implementation and mutation-probe it — a one-ulp perturbation of an accumulated value must turn it red — before trusting any comparison.
+
+VERIFY: go test ./backend/... -count 1 -race; then interleave BenchmarkMoEDecodeQwenDense per PROC-INTERLEAVE-001 with min of 3 runs per arm (PROC-BENCH-MINOFN-001), and check the GOMAXPROCS 1/4/12 curve rather than a single point — an earlier finding in this campaign showed GPT decode getting SLOWER past 8 Ps from pool churn, which a single 12-P number would have hidden.
+
+ALSO REPORTED by the same rule, outside this task's scope: nlp/unigram.go:158 and rl/tabular.go:264. Both are the same shape and neither has a benchmark that reaches it, so there is nothing to validate against yet.
