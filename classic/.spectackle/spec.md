@@ -28,6 +28,21 @@ THE TRANSFERABLE POINT: when an outer loop already parallelizes to near machine 
 ALSO MEASURED AND LEFT: BenchmarkKNNFit 3.96ms at 1.00x (ball-tree build, bt.splitKey is the receiver scratch PS6006 flags). Same ratio problem at 4ms.
 
 classic is now swept: ForestFit 7.85x, DBSCANFit 6.16x, GBM exact 2.80x, GMM 4.09x, KNN Predict 7.00x, GBM histogram 1.57x — all either parallel or measured and declined.
+- T-01KYNA8X45ERT956JBG620TWX1 Triage the remaining PS3002 sort.Slice sites for the reflect.Swapper allocation: DONE. Three sites converted, five declined, triaged by CALL FREQUENCY as the task specified.
+
+CONVERTED (per node or per query): ballTree.build, ballTree.kNN, nearest.
+  KNNPredict  36,004 -> 24,003 allocs (1.50x), 1.63 -> 1.28 MB, 13.90 -> 13.54ms
+  KNNFit       1,539 ->  1,029 allocs (1.50x), 3.85 -> 3.68ms
+
+DECLINED (once per call): classic/gbm.go:275 (per builder), linalg/svd.go:100 (per SVD), nlp/beam.go:128, nlp/embed.go:124, nlp/chattemplate.go:172. One swapper allocation each; converting them is churn.
+
+THE TRIAGE CRITERION IS CALL FREQUENCY, NOT SLICE LENGTH, and these numbers show why: the KNN sorts handle SHORT slices — k results, or one node's indices — and still returned 1.50x, because reflectlite.Swapper is allocated per CALL regardless of length. The earlier CART conversion returned 3.11x for the same reason at higher frequency. A long sort called once is worth nothing here; a short sort called a million times is worth everything.
+
+TWO ORDERING CLAIMS PROBED RATHER THAN ASSERTED. The kNN and brute-force comparators are TOTAL orders on (dist, idx) with unique idx, so the permutation is identical. The build sort is unstable and may reorder ties — harmless, and the probe demonstrates it: reversing the build order OUTRIGHT leaves every KNN test green, because the search is exact and orders results by (dist, idx), so the same k neighbours return whatever shape the tree takes. That is a stronger statement than the comment made and it is now measured.
+
+THE PROBE FOUND A REAL GAP. Inverting the (dist, idx) tie-break in EITHER path also left every existing KNN test green — random data never yields two bit-equidistant points, so an order documented as 'identical to a full brute-force sort by (dist, idx)' was never checked. Closed with a constructed fixture: two points mirrored about the query so distances tie to the bit, plus filler to exceed ballLeafSize so the TREE path is exercised and not only brute force. Red under both inversions.
+
+Third instance in this campaign of a comparison-decided output being untestable without a deliberately constructed tie, after the GBM split argmax and the AQLM ICM argmin. NUM-ARGMAX-TIEBREAK-001 covers the pattern; this is its second application.
 
 ## PERF-NESTED-PARALLEL-001
 IF an outer loop already parallelizes to near machine width, THEN the inner loop SHALL not be parallelized as well; it runs inline under a busy pool and adds nothing, as ForestFit at 7.85x shows for the CART sweep.
