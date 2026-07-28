@@ -73,3 +73,30 @@ AFTER parallelizing QMatMul's weight-row loop, prefill is 2.52x faster and scale
 WHY NO ACTION TAKEN: backend/cpu is the zone a parallel worker is active in, and its pool carries heavily tuned dense/sparse regime machinery whose constants were calibrated against decode-shaped barrier streams. A change there needs that context and that worker's benchmarks, not a drive-by from this side. The actionable question for whoever picks it up is whether the ops a QUANTIZED prefill issues (small per-layer norms and elementwise work between large matmuls) fall below poolDenseMaxWork and thrash the regime detector — this workload did not exist when those constants were set.
 
 Recorded as measurement plus attribution, no proposed fix.
+
+## R-01KYN3XTYKEASADTC5DZRDEC46 GPT decode is 14% SLOWER at 12 cores than at 8, and 94% of its samples are scheduler wakeups
+kind: research
+state: draft
+created: 2026-07-28
+
+A precisely characterized, reproducible defect in backend/cpu's pool. Recorded rather than fixed: that package is the zone a parallel worker is active in, and its regime constants were calibrated against a barrier stream this workload does not match. Handing over the measurement and the attribution, which is the expensive part.
+
+SCALING, min of 3 runs per point, BenchmarkGPTGenerate500RowBuf:
+  1 P  767.2ms
+  2 P  564.3ms
+  4 P  558.5ms
+  8 P  543.3ms   <- fastest
+  12 P 619.5ms   <- 14% SLOWER than 8 P
+More cores make it worse past 8. BenchmarkLlamaGenerate500RowBuf on the SAME host scales cleanly over the same range: 670.8 / 438.4 / 308.6ms at 1 / 4 / 12 P.
+
+THE TWO MODELS ARE THE SAME SIZE, which is what makes the comparison decisive rather than suggestive: both are Vocab 1000, Ctx 600, Dim 256, Heads 4, Layers 4. The difference is the op mix each decoder issues, not scale.
+
+PROFILE of the 12 P run: pthread_cond_wait 41.15% flat, usleep 35.61%, pthread_cond_signal 16.95% — 93.7% in runtime synchronization. Actual compute is gemvF64Cols at 3.46%. backend.Execute totals 0.21s cumulative (0.87%) across matmul 62%, gelu 19%, addBias 9.5% and mha 9.5%, while backend/cpu.poolWorker totals 7.52s (31.3%) and runqgrab another 11.5%. Roughly 35 units of pool machinery per unit of kernel work.
+
+HYPOTHESIS, stated as one because it is not proven: at Dim 256 these per-token ops land near poolDenseMaxWork (1<<18 = 262144), the threshold cpu.go uses to pick its dense regime. Ops straddling that boundary would flip the regime detector between barriers, and cpu.go's own comments record that always-spin behavior measured +10-40% on warm mid-size ops. The fastest-at-8-P shape is consistent with a fan-out that is too wide for the chunk size rather than with a missing parallelization.
+
+WHAT WOULD CONFIRM OR KILL IT: instrument the regime verdict per dispatch and see whether GPT flips where Llama does not; or run both at a Dim that puts every op clearly on one side of 1<<18. Either is cheap for someone already in that package and costs an outsider a lot of guesswork.
+
+NOT AN nlp-SIDE FIX as far as this analysis goes. The kernels reached are the ordinary four and their total work is 0.87% of samples; nothing about reducing GPT's per-token op count would change a 35:1 overhead ratio into a win. The lever is the pool's dispatch decision, not the caller's.
+
+RELATED: R-01KYN0Y3EPEV2 recorded the same signature on quantized prefill, where the residue after fixing the caller-side spine was scheduler churn from other ops' pools. This is the same effect measured in isolation, on a workload where it dominates outright.
