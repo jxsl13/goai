@@ -104,3 +104,26 @@ A FIFTH CHANGE WAS FOR RECALL, and it is the one only replay could find: a SLICE
 THE TRANSFERABLE RULES: (1) validate a detector by REPLAYING it against the revisions where the shape actually occurred, not only against fixtures written from the same mental model that produced the bug; (2) when a shape recurs, re-check whether the detector caught the recurrences — a rule silently degrades from 1-of-1 to 1-of-3 without any test going red; (3) prefer a structural discriminator over a naming one even when the structural version needs several filters, because filters can be probed and conventions cannot.
 
 Residue, stated: classic/dbscan.go m.core and nn/mars.go a.seen are fitted state that happens to be a sole-indexed primitive slice. Advisory check, acceptable.
+
+## R-01KYN8P793FACBKVMRGM9BS7AS CORRECTION: a high cond_wait share in a CPU profile is parked time, not overhead — spin-before-park measured 2-4% SLOWER
+kind: research
+state: draft
+created: 2026-07-28
+
+A methodological correction to how several profiles in this campaign were read, plus a measured negative result that should stop the obvious follow-up.
+
+WHAT PROMPTED IT: after parallelizing the exact GBM fit, its profile shows 72% of samples in runtime sync — pthread_cond_wait 46.9%, cond_signal 17.8%, usleep 7.3% — against 22% in the actual split search and partition. Read naively that says the pool's park/unpark per dispatch is eating three quarters of the machine, and the fix would be to spin before parking, as backend/cpu's pool does.
+
+MEASURED, and it is a REGRESSION. A bounded yield-free spin (4096 non-blocking receives before parking) across three different callers:
+  GBM exact   676-689ms -> 704-716ms   ~4% slower
+  Muon        41.0-41.8ms -> 41.6-42.9ms  ~2% slower
+  KNN Predict 13.80-13.94ms -> 13.90-13.96ms  neutral
+Reverted. This is exactly what backend/cpu's own comments record: always-spin variants measured +10-40% on warm mid-size ops there.
+
+THE CORRECTION: samples accumulated in pthread_cond_wait are PARKED time. A parked worker is not consuming the core; the profile attributes the wait but the wall clock is not paying for it. So a large sync share in a parallel program's CPU profile is NOT by itself evidence of overhead — and replacing parking with spinning converts genuinely free waiting into genuinely burned cycles, which is why it lost.
+
+WHAT DOES CONSTITUTE EVIDENCE is the scaling curve. GBM exact measures 1814 / 753 / 697ms at 1 / 4 / 12 Ps: real speedup, flattening after 4, which bounds how much the barriers cost without misattributing parked time to them.
+
+SCOPE OF THE CORRECTION, stated precisely: this does NOT overturn R-01KYN3XTYKEAS (GPT decode) or the same signature since observed on T5 and CLA decode. That finding rests on WALL-CLOCK evidence — GPT is fastest at 8 Ps and 14% SLOWER at 12 — not on the profile percentages, which were corroboration rather than proof. The percentages there should be read as "workers are waiting a lot", and the regression past 8 Ps as the thing that actually needs explaining.
+
+PRACTICAL RULE: when a parallel program profiles as mostly sync, measure the GOMAXPROCS curve before concluding anything. If it still scales, the waiting is idle capacity, not lost work.
