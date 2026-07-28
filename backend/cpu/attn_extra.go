@@ -403,7 +403,30 @@ func retentionFwd[T normFloat](qs, ks, vs, os []T, l, dk, dv int, decay []float6
 		acc := make([]float64, dv)
 		for n := lo; n < hi; n++ {
 			qn := qs[n*dk : n*dk+dk : n*dk+dk]
-			for m := 0; m <= n; m++ {
+			// Unroll-and-jam the QKᵀ score dot over the free key index m: 4
+			// independent accumulators for p[m..m+3] share each qn[i] load,
+			// breaking the single-accumulator FMA latency chain. Each p[m] still
+			// sums i ascending over identical operands → bit-identical (§V9).
+			m := 0
+			for ; m+3 <= n; m += 4 {
+				km0 := ks[m*dk : m*dk+dk : m*dk+dk]
+				km1 := ks[(m+1)*dk : (m+1)*dk+dk : (m+1)*dk+dk]
+				km2 := ks[(m+2)*dk : (m+2)*dk+dk : (m+2)*dk+dk]
+				km3 := ks[(m+3)*dk : (m+3)*dk+dk : (m+3)*dk+dk]
+				var a0, a1, a2, a3 float64
+				for i, qv := range qn {
+					f := float64(qv)
+					a0 += f * float64(km0[i])
+					a1 += f * float64(km1[i])
+					a2 += f * float64(km2[i])
+					a3 += f * float64(km3[i])
+				}
+				p[m] = a0 * decay[n-m]
+				p[m+1] = a1 * decay[n-m-1]
+				p[m+2] = a2 * decay[n-m-2]
+				p[m+3] = a3 * decay[n-m-3]
+			}
+			for ; m <= n; m++ {
 				km := ks[m*dk : m*dk+dk : m*dk+dk]
 				var a float64
 				for i, qv := range qn {
