@@ -296,7 +296,35 @@ func (q *AQLM) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, 
 // nearestAQLM returns the index of the codebook entry closest (squared-Euclidean) to x.
 func nearestAQLM(x []float64, cent [][]float64) int {
 	best, bd := 0, math.Inf(1)
-	for j := range cent {
+	j := 0
+	for ; j+4 <= len(cent); j += 4 {
+		c0, c1, c2, c3 := cent[j], cent[j+1], cent[j+2], cent[j+3]
+		var d0, d1, d2, d3 float64
+		for t := range x {
+			xv := x[t]
+			e0 := xv - c0[t]
+			d0 += e0 * e0
+			e1 := xv - c1[t]
+			d1 += e1 * e1
+			e2 := xv - c2[t]
+			d2 += e2 * e2
+			e3 := xv - c3[t]
+			d3 += e3 * e3
+		}
+		if d0 < bd {
+			bd, best = d0, j
+		}
+		if d1 < bd {
+			bd, best = d1, j+1
+		}
+		if d2 < bd {
+			bd, best = d2, j+2
+		}
+		if d3 < bd {
+			bd, best = d3, j+3
+		}
+	}
+	for ; j < len(cent); j++ {
 		var d float64
 		for t := range x {
 			diff := x[t] - cent[j][t]
@@ -367,7 +395,42 @@ func icmEncodeAQLM(groups [][]float64, codes []int, codebooks [][]float64, m, k,
 					}
 				}
 				best, bd := 0, math.Inf(1)
-				for j := range k {
+				j := 0
+				for ; j+4 <= k; j += 4 {
+					// Unroll-and-jam the entry scan by 4: one target[t] load feeds
+					// four independent squared-distance accumulators. Each keeps its
+					// own ascending-t sum and the argmin folds in ascending-j strict-<
+					// order -> identical winner (first/lowest j on ties). Bit-exact.
+					cb0 := codebooks[a*k+j]
+					cb1 := codebooks[a*k+j+1]
+					cb2 := codebooks[a*k+j+2]
+					cb3 := codebooks[a*k+j+3]
+					var d0, d1, d2, d3 float64
+					for t := range g {
+						tv := target[t]
+						e0 := tv - cb0[t]
+						d0 += e0 * e0
+						e1 := tv - cb1[t]
+						d1 += e1 * e1
+						e2 := tv - cb2[t]
+						d2 += e2 * e2
+						e3 := tv - cb3[t]
+						d3 += e3 * e3
+					}
+					if d0 < bd {
+						bd, best = d0, j
+					}
+					if d1 < bd {
+						bd, best = d1, j+1
+					}
+					if d2 < bd {
+						bd, best = d2, j+2
+					}
+					if d3 < bd {
+						bd, best = d3, j+3
+					}
+				}
+				for ; j < k; j++ {
 					cb := codebooks[a*k+j]
 					var d float64
 					for t := range g {
