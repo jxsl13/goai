@@ -219,7 +219,9 @@ func (m *SoftmaxRegression) Fit(x [][]float64, y []int, k, steps int, lr float64
 	for i := range h {
 		h[i] = hf[i*p : (i+1)*p : (i+1)*p]
 	}
-	gram := make([]float64, mAug*mAug)
+	numPairs := kEff * (kEff + 1) / 2
+	grams := make([]float64, numPairs*mAug*mAug)
+	wpair := make([]float64, numPairs)
 	invN := 1 / float64(n)
 
 	const (
@@ -267,37 +269,49 @@ func (m *SoftmaxRegression) Fit(x [][]float64, y []int, k, steps int, lr float64
 		for i := range hf {
 			hf[i] = 0
 		}
-		for c1 := range kEff {
-			for c2 := c1; c2 < kEff; c2++ {
-				for gi := range gram {
-					gram[gi] = 0
-				}
-				for i := range n {
-					pr := probs[i]
+		for gi := range grams {
+			grams[gi] = 0
+		}
+		mm := mAug * mAug
+		// Unroll-and-jam all kEff·(kEff+1)/2 class-pairs over ONE pass of X: each
+		// row[j] load feeds numPairs independent per-pair Gram accumulators (only
+		// the scalar weight differs per pair), instead of re-reading X once per
+		// pair. Each pair-Gram still sums i ascending with the same (w·row[a])·row[j]
+		// association -> bit-identical; the w==0/wa==0 skips are dropped (adding an
+		// exact 0.0 is identity for the finite softmax weights).
+		for i := range n {
+			pr := probs[i]
+			pp := 0
+			for c1 := range kEff {
+				for c2 := c1; c2 < kEff; c2++ {
 					w := -pr[c1] * pr[c2]
 					if c1 == c2 {
 						w += pr[c1]
 					}
-					if w == 0 {
-						continue
-					}
-					row := xa[i]
-					for a := range mAug {
-						wa := w * row[a]
-						if wa == 0 {
-							continue
-						}
-						// Upper-triangle Hessian axpy gram[a][a:] += wa·row[a:]. Written over
-						// equal-length slices (one bounds check each) so the compiler
-						// auto-vectorizes the inner mul-add; same order, so bit-identical.
-						g := gram[a*mAug+a : a*mAug+mAug]
-						r := row[a:mAug]
-						for j := range g {
-							g[j] += wa * r[j]
-						}
+					wpair[pp] = w
+					pp++
+				}
+			}
+			row := xa[i]
+			for a := range mAug {
+				ra := row[a]
+				r := row[a:mAug]
+				aoff := a*mAug + a
+				aend := a*mAug + mAug
+				for q := 0; q < numPairs; q++ {
+					wa := wpair[q] * ra
+					g := grams[q*mm+aoff : q*mm+aend]
+					for j := range g {
+						g[j] += wa * r[j]
 					}
 				}
-				// Scatter the symmetric Gram into blocks (c1,c2) and (c2,c1).
+			}
+		}
+		// Scatter each pair-Gram into blocks (c1,c2) and (c2,c1).
+		pp := 0
+		for c1 := range kEff {
+			for c2 := c1; c2 < kEff; c2++ {
+				gbase := pp * mm
 				for a := range mAug {
 					ra := a * kEff
 					for b := range mAug {
@@ -305,13 +319,14 @@ func (m *SoftmaxRegression) Fit(x [][]float64, y []int, k, steps int, lr float64
 						if lo > hi {
 							lo, hi = hi, lo
 						}
-						g := gram[lo*mAug+hi] * invN
+						g := grams[gbase+lo*mAug+hi] * invN
 						hf[(ra+c1)*p+b*kEff+c2] += g
 						if c1 != c2 {
 							hf[(ra+c2)*p+b*kEff+c1] += g
 						}
 					}
 				}
+				pp++
 			}
 		}
 
