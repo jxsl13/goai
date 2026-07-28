@@ -19,9 +19,9 @@ catalog a subset with detailed wins — their IDs head each section. The `P3`/`P
 
 ## Repo-agnostic engine + config
 
-perfscan detects the problems **independent of any one repo**. Seventeen of the twenty-two
+perfscan detects the problems **independent of any one repo**. Eighteen of the twenty-three
 checks are pure language/stdlib shapes and run on any Go module with no configuration
-(PS1003, PS2002–PS2006, PS3001–PS3003, PS4001, PS4003–PS4006, PS4008, PS5001, PS5002). The five
+(PS1003, PS2002–PS2007, PS3001–PS3003, PS4001, PS4003–PS4006, PS4008, PS5001, PS5002). The five
 **domain** checks — `PS1001` per-element-dispatch, `PS1002` per-element-closure, `PS2001`
 alloc-in-loop, `PS4002` scalar-transcendental-vectorizable, `PS6001` unverified-dual-path
 — key on a project's own vocabulary (its element accessors, allocators, fast-path helpers
@@ -176,6 +176,44 @@ first operand is a *different* slot — that is not accumulate-into-itself and d
 grow quadratically. It is also silent when the concat is **nested inside another call**
 (`keep(concatRows(c.K[l], k), …)`), which is how a bounded/evicting cache is usually
 written; those are O(window) rather than O(T) and are a weaker target.
+
+## PS2007 — build an N×N object to consume one row  *(scanner: static)*
+
+A call given the **same size expression twice**, whose square result is then read at
+exactly the position that expression is built from:
+
+```go
+full, _ := d.relBias.Bias(ctx, pos+1, pos+1)  // builds [pos+1, pos+1, heads]
+… fs[(pos*kk+k)*heads+h] …                    // reads row pos, discards the rest
+```
+
+The callee's cost grows with the argument in **both** dimensions while the consumer
+needs one row, so the work is an order higher than required — and on a per-token path,
+one order higher again over the whole run (O(T³) where O(T²) suffices).
+
+**Fix:** compute the row from whatever the callee derives it from — usually by exposing
+the per-element rule (here a relative-position bucket lookup) instead of its
+materialized matrix.
+
+**Shipped:** the T5 decoder's relative-position bias. Per call **130× at pos=32, 261× at
+pos=128, 713× at pos=512**, allocation 86.8 MB → 19.7 KB; end to end the 500-token
+decode went **2,679 → 556 ms (4.82×)** and **13.87 GB → 125 MB (111×)**. The ns/op curve
+against `pos` is the real evidence: quadratic before, linear after.
+
+**Bit-identity is claimable but has genuine exceptions.** The old value arrived through
+a one-hot matmul — a sum of `numBuckets` products of which all but one are `0·Table[j][h]`.
+For finite tables that sum *is* `Table[b][h]`, so the gather is bit-identical. It differs
+for ±Inf/NaN entries (`0·Inf = NaN`) and for a stored `−0` (`0 + −0 = +0`). Both mean a
+broken checkpoint rather than normal operation. Gate with a tolerance-0 cross-reference
+**and** a token-for-token identical greedy decode, not merely close logits.
+
+**Precision took three passes and the two rejected cuts are worth knowing.** Asking only
+"is this identifier used in some index in this function" flagged `a.AtF64(j, j)` — a
+diagonal element read, not a builder — and a square attention mask consumed whole. The
+rule now requires the result *or a value derived from it* to be indexed by the driving
+position, and requires that position **not** to be a loop bound: when it bounds a loop
+the object is being walked in full and the identifier appears in those indices only as a
+stride. Tree-wide that went 6 findings → 2, both genuine.
 
 ## PS3002 — closure-comparator sort on a large keyed slice  *(scanner: static)*
 

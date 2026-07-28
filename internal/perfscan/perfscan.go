@@ -188,6 +188,7 @@ var checks = []check{
 	{"PS2004", "poolable-loop-scratch", "per-call scratch make() bound to a non-escaping local in a pointer-method loop", false},
 	{"PS2005", "regexp-compile-in-loop", "a regexp.Compile/MustCompile inside a loop", true},
 	{"PS2006", "quadratic-cache-append", "a per-token cache slot reassigned to a concat of ITSELF and a new row — O(T\u00b2) copy traffic where an amortized row buffer is O(T)", false},
+	{"PS2007", "build-nxn-use-one-row", "a call given the same size argument twice, whose square result is then read at exactly that position — an N×N object materialized to consume one row", false},
 	// PS3xxx — indirection / reflection overhead
 	{"PS3001", "reflection-in-loop", "a reflection-based fmt scan (Sscanf/Sscan/Fscanf) in a loop", false},
 	{"PS3002", "closure-comparator-sort", "a package sort (sort.Slice/SliceStable) with a comparator closure", false},
@@ -1736,6 +1737,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	out = append(out, symmetricAccumFindings(fset, fn)...)
 	out = append(out, serialDotMatmulFindings(fset, fn)...)
 	out = append(out, quadraticCacheAppendFindings(fset, fn)...)
+	out = append(out, buildNxNUseOneRowFindings(fset, fn)...)
 	return out
 }
 
@@ -3118,4 +3120,192 @@ func exprText(e ast.Expr) string {
 		return exprText(x.X)
 	}
 	return baseIdentName(e)
+}
+
+// buildNxNUseOneRowFindings flags PS2007 — a call given the SAME size-like argument
+// twice, whose result is then indexed at exactly that position:
+//
+//	full, _ := d.relBias.Bias(ctx, pos+1, pos+1)   // builds [pos+1, pos+1, heads]
+//	… fs[(pos*kk+k)*heads+h] …                     // reads row pos, discards the rest
+//
+// The callee's cost grows with the argument in BOTH dimensions while the consumer
+// needs one row, so the work is an order higher than required — and when the call sits
+// on a per-token path, one order higher again over the whole run. Measured in this
+// repo on the T5 decoder's relative-position bias: replacing the build-then-slice with
+// a direct gather was 130x at pos=32, 261x at pos=128 and 713x at pos=512, with
+// allocation falling 86.8 MB -> 19.7 KB per call, and the end-to-end decode going
+// 2,679 -> 556 ms (4.82x) and 13.87 GB -> 125 MB (111x).
+//
+// The give-away is the REPEATED argument: a genuinely square result whose row index is
+// the same expression fed to both size parameters. That is what distinguishes it from
+// an ordinary 2-D build that is legitimately consumed in full.
+//
+// The fix is to compute the needed row from whatever the callee derives it from,
+// which usually means exposing the per-element rule (here a bucket lookup) rather than
+// its materialized matrix. Check bit-identity: a value delivered through a one-hot
+// matmul equals the gathered entry for finite tables, but NOT for +-Inf/NaN (0*Inf is
+// NaN) nor for a stored -0 (0 + -0 = +0).
+func buildNxNUseOneRowFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || len(as.Rhs) != 1 {
+			return true
+		}
+		call, ok := as.Rhs[0].(*ast.CallExpr)
+		if !ok || len(call.Args) < 2 {
+			return true
+		}
+		// The last two arguments must be the SAME non-trivial expression — the square
+		// build. A bare literal (foo(x, 2, 2)) is a fixed small shape, not this.
+		a, b := call.Args[len(call.Args)-2], call.Args[len(call.Args)-1]
+		if !exprEqual(a, b) || isConstSizeExpr(a) {
+			return true
+		}
+		base := sizeDrivingIdent(a)
+		if base == "" {
+			return true
+		}
+		// The result — or a value derived from it — must be INDEXED by the driving
+		// position. Asking only "is `base` used in some index anywhere in this
+		// function" was far too weak: it flagged a.AtF64(j, j) (a diagonal element
+		// read, not a builder) and the full Decode path, where the square bias
+		// genuinely IS the attention mask and is consumed whole.
+		// The driving position must be FIXED, not a loop bound. When it bounds a loop
+		// the square result is being walked in full — the T5 Decode path writes -Inf
+		// across every row of its [dseq, dseq] mask, and `dseq` appears in those
+		// indices only as a STRIDE. In the real pattern the position is a parameter
+		// that selects one row and is never itself iterated.
+		if identIsLoopBound(fn.Body, base) {
+			return true
+		}
+		lhs, ok := assignedIdent(as)
+		if !ok || !derivedValueIndexedBy(fn.Body, lhs, base) {
+			return true
+		}
+		out = append(out, finding{
+			pos:      fset.Position(as.Pos()),
+			category: "build-nxn-use-one-row",
+			msg: fmt.Sprintf("%s is called with %q twice, building a square result, and %q is then used"+
+				" as an index into it — an N×N object materialized to consume one row. Compute the row"+
+				" directly from whatever the callee derives it from (measured 713x at N=512, 86.8 MB ->"+
+				" 19.7 KB per call, on the T5 relative-position bias). Verify bit-identity: a one-hot"+
+				" matmul equals the gathered entry for finite tables, but not for ±Inf/NaN or a stored -0.",
+				calleeName(call.Fun), exprText(a), base),
+		})
+		return true
+	})
+	return out
+}
+
+// sizeDrivingIdent returns the identifier a size expression is built from — `pos` for
+// `pos`, `pos+1`, `pos*2`. Empty when the expression is not driven by a single ident.
+func sizeDrivingIdent(e ast.Expr) string {
+	switch x := e.(type) {
+	case *ast.Ident:
+		return x.Name
+	case *ast.ParenExpr:
+		return sizeDrivingIdent(x.X)
+	case *ast.BinaryExpr:
+		if l := sizeDrivingIdent(x.X); l != "" {
+			return l
+		}
+		return sizeDrivingIdent(x.Y)
+	}
+	return ""
+}
+
+// isConstSizeExpr reports whether an expression is built purely from literals, which
+// makes a square call an ordinary fixed shape rather than a growing one.
+func isConstSizeExpr(e ast.Expr) bool {
+	return sizeDrivingIdent(e) == ""
+}
+
+// assignedIdent returns the first non-blank identifier an assignment binds, which for
+// `full, err := f(…)` is "full" — the handle on the square result.
+func assignedIdent(as *ast.AssignStmt) (string, bool) {
+	for _, lhs := range as.Lhs {
+		if id, ok := lhs.(*ast.Ident); ok && id.Name != "_" && id.Name != "err" {
+			return id.Name, true
+		}
+	}
+	return "", false
+}
+
+// derivedValueIndexedBy reports whether root — or any value transitively derived from
+// it by assignment — is indexed by an expression mentioning pos. Following the
+// derivation chain is what makes this precise: the T5 site reads the matrix as
+// `fs := full.Contiguous().Storage().F64()` and then indexes fs, never full.
+func derivedValueIndexedBy(body *ast.BlockStmt, root, pos string) bool {
+	derived := map[string]bool{root: true}
+	// Two passes so a chain assigned in order (a := f(root); b := g(a)) is followed.
+	for range 2 {
+		ast.Inspect(body, func(n ast.Node) bool {
+			as, ok := n.(*ast.AssignStmt)
+			if !ok {
+				return true
+			}
+			for _, rhs := range as.Rhs {
+				if !mentionsAnyOf(rhs, derived) {
+					continue
+				}
+				if name, ok := assignedIdent(as); ok {
+					derived[name] = true
+				}
+			}
+			return true
+		})
+	}
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		ix, ok := n.(*ast.IndexExpr)
+		if !ok {
+			return true
+		}
+		if derived[baseIdentName(ix.X)] && exprMentions(ix.Index, pos) {
+			found = true
+		}
+		return !found
+	})
+	return found
+}
+
+// mentionsAnyOf reports whether e references any of the given identifiers.
+func mentionsAnyOf(e ast.Expr, names map[string]bool) bool {
+	found := false
+	ast.Inspect(e, func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok && names[id.Name] {
+			found = true
+			return false
+		}
+		return !found
+	})
+	return found
+}
+
+// identIsLoopBound reports whether name appears in a loop's bound — a for-condition or
+// a range expression. That marks the value as something the function walks over, which
+// is the opposite of selecting a single row by it.
+func identIsLoopBound(body *ast.BlockStmt, name string) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		switch l := n.(type) {
+		case *ast.ForStmt:
+			if l.Cond != nil && exprMentions(l.Cond, name) {
+				found = true
+			}
+		case *ast.RangeStmt:
+			if l.X != nil && exprMentions(l.X, name) {
+				found = true
+			}
+		}
+		return !found
+	})
+	return found
 }

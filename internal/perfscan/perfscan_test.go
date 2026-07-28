@@ -1802,3 +1802,140 @@ func (g *M) DecodeStep(cache *C, tok int) error {
 		t.Fatalf("want 0 outside a loop, got %d (%v)", got["quadratic-cache-append"], got)
 	}
 }
+
+// The exact shape that cost the T5 decoder 86.8 MB per token: build a square
+// [pos+1, pos+1] object, then read row pos out of it.
+func TestDetectPS2007_BuildSquareUseOneRow(t *testing.T) {
+	src := `package p
+func (d *D) biasRow(ctx *C, pos int) []float64 {
+	full := d.bias.Bias(ctx, pos+1, pos+1)
+	kk := pos + 1
+	out := make([]float64, kk)
+	for k := range kk {
+		out[k] = full[pos*kk+k]
+	}
+	return out
+}`
+	if got := countCat(scanSrc(t, src)); got["build-nxn-use-one-row"] == 0 {
+		t.Fatalf("want ≥1 build-nxn-use-one-row, got 0 (%v)", got)
+	}
+}
+
+// SILENT once the row is gathered directly — applying the rule's advice must clear it.
+func TestDetectPS2007_SilentOnDirectGather(t *testing.T) {
+	src := `package p
+func (d *D) biasRow(ctx *C, pos int) []float64 {
+	kk := pos + 1
+	out := make([]float64, kk)
+	for k := range kk {
+		out[k] = d.table[bucket(k-pos)]
+	}
+	return out
+}`
+	if got := countCat(scanSrc(t, src)); got["build-nxn-use-one-row"] != 0 {
+		t.Fatalf("want 0 on the direct gather, got %d (%v)", got["build-nxn-use-one-row"], got)
+	}
+}
+
+// SILENT on a fixed small square: foo(x, 2, 2) is an ordinary shape, not a growing one.
+func TestDetectPS2007_SilentOnConstantSquare(t *testing.T) {
+	src := `package p
+func (d *D) rot(ctx *C, pos int) []float64 {
+	m := d.build(ctx, 2, 2)
+	return []float64{m[pos]}
+}`
+	if got := countCat(scanSrc(t, src)); got["build-nxn-use-one-row"] != 0 {
+		t.Fatalf("want 0 on a constant-sized square, got %d (%v)", got["build-nxn-use-one-row"], got)
+	}
+}
+
+// SILENT when the two size arguments DIFFER: a genuinely rectangular build consumed in
+// full is not this pattern.
+func TestDetectPS2007_SilentOnRectangularBuild(t *testing.T) {
+	src := `package p
+func (d *D) block(ctx *C, pos, enc int) []float64 {
+	full := d.bias.Bias(ctx, pos+1, enc)
+	return full[pos:]
+}`
+	if got := countCat(scanSrc(t, src)); got["build-nxn-use-one-row"] != 0 {
+		t.Fatalf("want 0 on a rectangular build, got %d (%v)", got["build-nxn-use-one-row"], got)
+	}
+}
+
+// SILENT when the square result is consumed WITHOUT indexing by the driving position —
+// then it is genuinely used as a matrix and there is nothing to narrow.
+func TestDetectPS2007_SilentWhenWholeMatrixUsed(t *testing.T) {
+	src := `package p
+func (d *D) full(ctx *C, n int) float64 {
+	m := d.bias.Bias(ctx, n+1, n+1)
+	var s float64
+	for _, v := range m {
+		s += v
+	}
+	return s
+}`
+	if got := countCat(scanSrc(t, src)); got["build-nxn-use-one-row"] != 0 {
+		t.Fatalf("want 0 when the whole matrix is consumed, got %d (%v)", got["build-nxn-use-one-row"], got)
+	}
+}
+
+// The two false positives the first cut of PS2007 produced, kept as fixtures so the
+// precision does not regress: an element accessor given the same index twice
+// (a.AtF64(j, j) is a diagonal READ, not a square build), and a square result that IS
+// consumed whole as an attention mask while the driving position happens to index
+// something else nearby.
+func TestDetectPS2007_SilentOnDiagonalElementRead(t *testing.T) {
+	src := `package p
+func chol(a *M, n int) [][]float64 {
+	l := make([][]float64, n)
+	for j := range n {
+		d := a.AtF64(j, j)
+		for k := range j {
+			d -= l[j][k] * l[j][k]
+		}
+		l[j][j] = d
+	}
+	return l
+}`
+	if got := countCat(scanSrc(t, src)); got["build-nxn-use-one-row"] != 0 {
+		t.Fatalf("want 0 on a diagonal element read, got %d (%v)", got["build-nxn-use-one-row"], got)
+	}
+}
+
+func TestDetectPS2007_SilentWhenSquareResultUsedWhole(t *testing.T) {
+	src := `package p
+func (d *D) decode(ctx *C, dseq int, toks []int) *T {
+	rb := d.bias.Bias(ctx, dseq, dseq)
+	rb = rb.Permute(2, 0, 1)
+	first := toks[dseq-1]
+	_ = first
+	return d.attend(rb)
+}`
+	if got := countCat(scanSrc(t, src)); got["build-nxn-use-one-row"] != 0 {
+		t.Fatalf("want 0 when the square result is consumed whole, got %d (%v)",
+			got["build-nxn-use-one-row"], got)
+	}
+}
+
+// The third false positive: the driving identifier is a LOOP BOUND, so the square
+// result is walked in full and the identifier appears in those indices only as a
+// stride. That is the T5 full-Decode mask, not the per-token row read.
+func TestDetectPS2007_SilentWhenPositionIsALoopBound(t *testing.T) {
+	src := `package p
+func (d *D) decode(ctx *C, dseq, heads int) []float64 {
+	rb := d.bias.Bias(ctx, dseq, dseq)
+	sm := rb.Storage()
+	for h := range heads {
+		for i := 0; i < dseq; i++ {
+			for j := i + 1; j < dseq; j++ {
+				sm[(h*dseq+i)*dseq+j] = -1
+			}
+		}
+	}
+	return sm
+}`
+	if got := countCat(scanSrc(t, src)); got["build-nxn-use-one-row"] != 0 {
+		t.Fatalf("want 0 when the position is a loop bound, got %d (%v)",
+			got["build-nxn-use-one-row"], got)
+	}
+}
