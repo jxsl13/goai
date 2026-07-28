@@ -462,12 +462,22 @@ func (b *cartBuilder) bestSplitIdx(idx []int) (feat int, thr float64, ok bool) {
 	d := len(b.x[0])
 	bestCost := math.Inf(1)
 	minLeaf := b.cfg.minSamplesLeaf
+	var total []int
+	if !b.regression {
+		total = b.totCnt
+		for k := range total {
+			total[k] = 0
+		}
+		for _, i := range idx {
+			total[b.yi[i]]++
+		}
+	}
 	for _, f := range b.candidateFeatures(d) {
 		order := b.sortBuf[:len(idx)]
 		copy(order, idx)
 		ff := f
 		b.radixByFeature(order, ff)
-		cost, cut, found := b.sweep(order, f, minLeaf)
+		cost, cut, found := b.sweep(order, f, minLeaf, total)
 		if found && cost < bestCost {
 			bestCost = cost
 			feat = f
@@ -528,9 +538,20 @@ func (b *cartBuilder) bestSplit(start, end int) (feat int, thr float64, ok bool)
 	d := len(b.x[0])
 	bestCost := math.Inf(1)
 	minLeaf := b.cfg.minSamplesLeaf
-	for _, f := range b.candidateFeatures(d) {
+	feats := b.candidateFeatures(d)
+	var total []int
+	if !b.regression && len(feats) > 0 {
+		total = b.totCnt
+		for k := range total {
+			total[k] = 0
+		}
+		for _, i := range b.cols[feats[0]][start:end] { // any feature's order is the same sample set
+			total[b.yi[i]]++
+		}
+	}
+	for _, f := range feats {
 		order := b.cols[f][start:end]
-		cost, cut, found := b.sweep(order, f, minLeaf)
+		cost, cut, found := b.sweep(order, f, minLeaf, total)
 		if found && cost < bestCost {
 			bestCost = cost
 			feat = f
@@ -549,7 +570,7 @@ func (b *cartBuilder) bestSplit(start, end int) (feat int, thr float64, ok bool)
 
 // sweep scans the sorted-by-feature order and returns the minimal weighted child
 // impurity together with the left-child size (cut) achieving it.
-func (b *cartBuilder) sweep(order []int, f, minLeaf int) (bestCost float64, cut int, found bool) {
+func (b *cartBuilder) sweep(order []int, f, minLeaf int, total []int) (bestCost float64, cut int, found bool) {
 	n := len(order)
 	bestCost = math.Inf(1)
 	// Hoist this node's sorted feature values once (n gathers into b.x), then the sweep
@@ -587,14 +608,10 @@ func (b *cartBuilder) sweep(order []int, f, minLeaf int) (bestCost float64, cut 
 		}
 		return bestCost, cut, found
 	}
-	// classification — reuse the builder's count buffers (no per-node alloc)
-	total := b.totCnt
-	for k := range total {
-		total[k] = 0
-	}
-	for _, i := range order {
-		total[b.yi[i]]++
-	}
+	// classification — total (this node's class counts) is feature-invariant, so
+	// the caller computes it once per node and passes it in (integer counts are
+	// order-independent → bit-identical to the old per-feature recount). Only the
+	// per-split left buffer is rebuilt here.
 	left := b.leftCnt
 	for k := range left {
 		left[k] = 0
