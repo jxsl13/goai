@@ -2748,3 +2748,45 @@ func Step(a []float64, n, m int) {
 		t.Fatalf("different ranges, want 0 multi-sweep-fusable, got %d", got)
 	}
 }
+
+// PS1004 fires on a variadic spread accessor .AtF64(idx...) in a non-Numel loop.
+func TestDetectPS1004_SpreadAccessorInLoop(t *testing.T) {
+	src := `package p
+func Contract(ops []*T, coords [][]int, total int) float64 {
+	var acc float64
+	for combo := 0; combo < total; combo++ {
+		acc += ops[0].AtF64(coords[0]...)
+	}
+	return acc
+}`
+	got := countCat(scanSrc(t, src))
+	if got["spread-accessor-in-loop"] != 1 {
+		t.Fatalf("want 1 spread-accessor-in-loop, got %d (%v)", got["spread-accessor-in-loop"], got)
+	}
+}
+
+// A non-spread accessor call (explicit args) is not the PS1004 pattern.
+func TestDetectPS1004_NonSpreadSilent(t *testing.T) {
+	src := `package p
+func F(x *T, n int) float64 {
+	var a float64
+	for i := 0; i < n; i++ {
+		a += x.AtF64(i, 0)
+	}
+	return a
+}`
+	if got := countCat(scanSrc(t, src))["spread-accessor-in-loop"]; got != 0 {
+		t.Fatalf("non-spread call, want 0 spread-accessor-in-loop, got %d", got)
+	}
+}
+
+// A spread accessor OUTSIDE any loop is not flagged.
+func TestDetectPS1004_OutsideLoopSilent(t *testing.T) {
+	src := `package p
+func F(x *T, idx []int) float64 {
+	return x.AtF64(idx...)
+}`
+	if got := countCat(scanSrc(t, src))["spread-accessor-in-loop"]; got != 0 {
+		t.Fatalf("outside a loop, want 0 spread-accessor-in-loop, got %d", got)
+	}
+}

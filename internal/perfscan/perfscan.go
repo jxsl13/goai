@@ -181,6 +181,7 @@ var checks = []check{
 	{"PS1001", "per-element-dispatch", "per-element AtF64/SetF64 dispatch in a Numel/Unravel loop with no typed fast path", false},
 	{"PS1002", "per-element-closure", "per-element visitor fed a closure (an indirect call per element)", false},
 	{"PS1003", "batch-single-elt", "a batch API called with a single-element slice literal inside a loop", false},
+	{"PS1004", "spread-accessor-in-loop", "a variadic AtF64/SetF64(idx...) spread call in a loop outside PS1001's Numel/Unravel domain (rebuilds the flat offset + bounds-checks each call)", false},
 	// PS2xxx — allocation inside loops
 	{"PS2001", "alloc-in-loop", "a tensor allocation inside a per-element loop", false},
 	{"PS2002", "unsized-builder", "a strings.Builder/bytes.Buffer written in a loop with no .Grow", false},
@@ -1213,6 +1214,20 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 				msg: fmt.Sprintf("per-element .%s in an element-count/index loop with no configured typed bulk"+
 					" accessor in %s() — walk the backing slice directly for the contiguous case, keeping the"+
 					" per-element form as the strided/other-dtype fallback", name, fn.Name.Name),
+			})
+		}
+		// A2: a variadic accessor called with a SPREAD index slice — .AtF64(coords...) —
+		// inside a loop that is NOT a Numel/Unravel per-element loop, so PS1001's domain
+		// check (A) misses it. The dynamic-rank spread form recomputes the flat offset and
+		// bounds-checks on every call; take the contiguous backing slice + precomputed
+		// row-major strides once and index it directly. (einsum EinsumContract: -71%.)
+		if !perElem && ns.accessors[name] && call.Ellipsis.IsValid() {
+			out = append(out, finding{
+				pos:      fset.Position(loop.Pos()),
+				category: "spread-accessor-in-loop",
+				msg: fmt.Sprintf("variadic .%s(idx...) with a spread index slice inside a loop — each call"+
+					" rebuilds the flat offset and bounds-checks; take the contiguous backing slice and"+
+					" precomputed row-major strides once, then index it directly (typed fast path)", name),
 			})
 		}
 		// B: allocation inside a per-element loop.
