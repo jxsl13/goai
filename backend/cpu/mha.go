@@ -173,7 +173,23 @@ func mhaFwdGemmBand(q, kt, vh, out []float32, g mhaGeo, h, i0, iN int) {
 	}
 	gemmF32RowsCols(qb, kth, sb, 0, iN, dk, sk, 0, jHi)
 	mhaSoftmaxBandF32(sb, g, h, i0, iN)
-	gemmF32Rows(sb, vhh, ob, 0, iN, sk, dk)
+	// P·V. The score gemm above is column-bounded to jHi but the P·V contraction was
+	// not — it multiplied the full sk columns even though the softmax zeroed every
+	// weight in [jHi, sk) (every band row's jmax ≤ jHi). P·V is the larger of the two
+	// band gemms, so for causal shapes ~1/3 of all forward gemm flops were spent on
+	// provably-zero weights. Bound the contraction to jHi: compact each row's live
+	// [0,jHi) weights to stride jHi (in place — jHi ≤ sk so the forward row copy never
+	// clobbers an unread row) and read only the first jHi rows of V. The dropped
+	// columns held exactly 0.0, so 0·v=0 adds nothing — the retained terms keep their
+	// order, so the result matches the full-width gemm within the f32 MHA parity budget.
+	if jHi < sk {
+		for r := 1; r < iN; r++ {
+			copy(sb[r*jHi:r*jHi+jHi], sb[r*sk:r*sk+jHi])
+		}
+		gemmF32Rows(sb, vhh, ob, 0, iN, jHi, dk)
+	} else {
+		gemmF32Rows(sb, vhh, ob, 0, iN, sk, dk)
+	}
 	for r := range iN {
 		copy(out[(i0+r)*dm+qOff:(i0+r)*dm+qOff+dk], ob[r*dk:(r+1)*dk])
 	}
