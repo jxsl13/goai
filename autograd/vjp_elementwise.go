@@ -175,26 +175,21 @@ func tanhVJP(_ *backend.Context, in, out []*tensor.Tensor, attrs backend.Attrs, 
 	return unaryVJP(func(_, yv, gv float64) float64 { return gv * (1 - yv*yv) })(nil, in, out, attrs, g)
 }
 
-func expVJP(_ *backend.Context, in, out []*tensor.Tensor, attrs backend.Attrs, g *tensor.Tensor) ([]*tensor.Tensor, error) {
-	x, y := in[0], out[0]
-	gin := tensor.New(x.Dtype(), x.Shape())
-	n := x.Numel()
-	yc, gc := y.Contiguous(), g.Contiguous()
-	if x.Dtype() == tensor.F64 && yc.Dtype() == tensor.F64 && gc.Dtype() == tensor.F64 {
-		ys, gs, ds := yc.Storage().F64(), gc.Storage().F64(), gin.Storage().F64()
-		for i := 0; i < n; i++ {
-			ds[i] = gs[i] * ys[i]
-		}
-		return []*tensor.Tensor{gin}, nil
+// expVJP: d/dx eˣ = eˣ, so dx = g ⊙ y where y = out[0] = eˣ (reuse the forward output,
+// no recompute). The backward is a SINGLE elementwise multiply, so dispatch OpMul on the
+// tape's active backend — on the simd build that routes through the 8-wide AVX simd.MulF32/F64
+// + parallel() kernel, whereas a scalar Go loop can't be gc-autovectorized. Bit-exact: a lone
+// IEEE product is correctly-rounded regardless of vectorization/chunking, and g and y share a
+// shape (elementwise exp) so OpMul hits the no-broadcast fast path. Mirrors the OpSiLUBackward
+// dispatch below, but exp's VJP IS OpMul — no dedicated backward kernel needed. (tanh/sigmoid
+// can't do this: their g·(1−y²) / g·y·(1−y) keep f64 intermediates and narrow once, which
+// composed f32 ops would not reproduce bit-for-bit — they'd need a fused backward op.)
+func expVJP(ctx *backend.Context, _, out []*tensor.Tensor, _ backend.Attrs, g *tensor.Tensor) ([]*tensor.Tensor, error) {
+	res, err := backend.Execute(ctx, backend.OpMul, []*tensor.Tensor{g, out[0]}, nil)
+	if err != nil {
+		return nil, err
 	}
-	if x.Dtype() == tensor.F32 && yc.Dtype() == tensor.F32 && gc.Dtype() == tensor.F32 {
-		ys, gs, ds := yc.Storage().F32(), gc.Storage().F32(), gin.Storage().F32()
-		for i := 0; i < n; i++ {
-			ds[i] = float32(float64(gs[i]) * float64(ys[i]))
-		}
-		return []*tensor.Tensor{gin}, nil
-	}
-	return unaryVJP(func(_, yv, gv float64) float64 { return gv * yv })(nil, in, out, attrs, g)
+	return []*tensor.Tensor{res[0]}, nil
 }
 
 func sigmoidVJP(_ *backend.Context, in, out []*tensor.Tensor, attrs backend.Attrs, g *tensor.Tensor) ([]*tensor.Tensor, error) {
