@@ -40,14 +40,35 @@ func broadcastKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.At
 		}
 		idx := make([]int, ndo)
 		n := out.Numel()
+		// Peel the innermost output axis out of the odometer: the innermost
+		// source axis always maps to output axis ndo-1 with effective stride 1
+		// (contiguous, since xc is contiguous) or 0 (that axis is broadcast), so
+		// each inner run of length L = pa.Shape[ndo-1] is either a contiguous
+		// copy from src (stride 1) or a splat of a single src element (stride 0).
+		// The odometer then only carries the outer axes [0, ndo-2], once per run
+		// instead of once per element — bit-identical row-major writes.
 		switch x.Dtype() {
 		case tensor.F64:
 			src := xc.Storage().F64()
 			dst := out.Storage().F64()
+			if ndo == 0 {
+				dst[0] = src[0]
+				return []*tensor.Tensor{out}, nil
+			}
+			L := pa.Shape[ndo-1]
+			istride := eff[ndo-1] // proven 0 or 1
 			ioff := 0
-			for pos := 0; pos < n; pos++ {
-				dst[pos] = src[ioff]
-				for d := ndo - 1; d >= 0; d-- {
+			for pos := 0; pos < n; pos += L {
+				run := dst[pos : pos+L]
+				if istride == 0 {
+					v := src[ioff]
+					for k := range run {
+						run[k] = v
+					}
+				} else {
+					copy(run, src[ioff:ioff+L])
+				}
+				for d := ndo - 2; d >= 0; d-- {
 					idx[d]++
 					ioff += eff[d]
 					if idx[d] < pa.Shape[d] {
@@ -60,10 +81,24 @@ func broadcastKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.At
 		case tensor.F32:
 			src := xc.Storage().F32()
 			dst := out.Storage().F32()
+			if ndo == 0 {
+				dst[0] = src[0]
+				return []*tensor.Tensor{out}, nil
+			}
+			L := pa.Shape[ndo-1]
+			istride := eff[ndo-1] // proven 0 or 1
 			ioff := 0
-			for pos := 0; pos < n; pos++ {
-				dst[pos] = src[ioff]
-				for d := ndo - 1; d >= 0; d-- {
+			for pos := 0; pos < n; pos += L {
+				run := dst[pos : pos+L]
+				if istride == 0 {
+					v := src[ioff]
+					for k := range run {
+						run[k] = v
+					}
+				} else {
+					copy(run, src[ioff:ioff+L])
+				}
+				for d := ndo - 2; d >= 0; d-- {
 					idx[d]++
 					ioff += eff[d]
 					if idx[d] < pa.Shape[d] {
