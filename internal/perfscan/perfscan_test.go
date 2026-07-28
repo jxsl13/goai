@@ -1012,3 +1012,39 @@ func f(total, n float64) float64 {
 		}
 	}
 }
+
+// TestDetectO_SilentOnModuloIntDivision: a divisor used in `x % d` is provably integer
+// (Go's % requires integer operands), so `i/d` is index arithmetic, not a float
+// reciprocal-multiply candidate — PS5001 must stay silent even in an element-wise loop.
+func TestDetectO_SilentOnModuloIntDivision(t *testing.T) {
+	src := `package p
+func f(out []int, m int) {
+	for i := range out {
+		iy, ix := i/m, i%m
+		out[i] = iy*m + ix
+	}
+}`
+	if got := countCat(scanSrc(t, src))["loop-invariant-divide"]; got != 0 {
+		t.Fatalf("want 0 (integer modulo arithmetic), got %d", got)
+	}
+}
+
+// TestDetectN_SilentOnPointerSlice: make([]*T, …) is orchestration scaffolding (a handful
+// of pointers overwritten before a concat/reduce reads them), not the numeric value
+// scratch the growF64 pool win targets — PS2004 must stay silent.
+func TestDetectN_SilentOnPointerSlice(t *testing.T) {
+	src := `package p
+type M struct{ n int }
+func (s *M) Step(ps []*int) {
+	for _, p := range ps {
+		heads := make([]*int, s.n)
+		for i := range heads {
+			heads[i] = p
+		}
+		_ = heads
+	}
+}`
+	if got := countCat(scanSrc(t, src))["poolable-loop-scratch"]; got != 0 {
+		t.Fatalf("want 0 (pointer-element slice), got %d", got)
+	}
+}
