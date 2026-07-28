@@ -196,7 +196,7 @@ var checks = []check{
 	{"PS4002", "scalar-transcendental-vectorizable", "a scalar libm transcendental in a loop while a vectorized sibling is called", false},
 	{"PS4003", "transcendental-wrapper-in-loop", "a loop calls a helper that wraps a libm transcendental", false},
 	// PS5xxx — arithmetic
-	{"PS5001", "loop-invariant-divide", "a divide by a loop-invariant scalar on every element", false},
+	{"PS5001", "loop-invariant-divide", "a divide by a loop-invariant scalar on every element", false}, {"PS5002", "symmetric-accumulation", "a nested loop accumulating a full symmetric matrix (m[i][j] += x[i]*x[j]) where one triangle + mirror would halve the work", false},
 }
 
 // catToID indexes the registry for O(1) id lookup at report time.
@@ -1374,6 +1374,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 			return true
 		})
 	}
+	out = append(out, symmetricAccumFindings(fset, fn)...)
 	return out
 }
 
@@ -1823,4 +1824,158 @@ func skipDir(name string) bool {
 		return true
 	}
 	return false
+}
+
+// loopVarBody returns the index/key variable name and body block of a for/range loop.
+func loopVarBody(n ast.Node) (string, *ast.BlockStmt, bool) {
+	switch l := n.(type) {
+	case *ast.RangeStmt:
+		if id, ok := l.Key.(*ast.Ident); ok && id.Name != "_" {
+			return id.Name, l.Body, true
+		}
+	case *ast.ForStmt:
+		if as, ok := l.Init.(*ast.AssignStmt); ok && len(as.Lhs) == 1 {
+			if id, ok := as.Lhs[0].(*ast.Ident); ok && id.Name != "_" {
+				return id.Name, l.Body, true
+			}
+		}
+	}
+	return "", nil, false
+}
+
+// exprMentions reports whether e references the identifier name.
+func exprMentions(e ast.Expr, name string) bool {
+	found := false
+	ast.Inspect(e, func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok && id.Name == name {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+// symBase returns the base identifier of an index expr whose ROW index mentions v (and
+// not other) — matching both a 1-D operand B[v] and a 2-D gram operand B[v][k] (v in the
+// row index, the shared k in the column index). Returns "" for anything else.
+func symBase(e ast.Expr, v, other string) (string, bool) {
+	ix, ok := e.(*ast.IndexExpr)
+	if !ok {
+		return "", false
+	}
+	if id, ok := ix.X.(*ast.Ident); ok { // 1-D: B[v]
+		if exprMentions(ix.Index, v) && !exprMentions(ix.Index, other) {
+			return id.Name, true
+		}
+		return "", false
+	}
+	if inner, ok := ix.X.(*ast.IndexExpr); ok { // 2-D gram: B[v][k]
+		if id, ok := inner.X.(*ast.Ident); ok &&
+			exprMentions(inner.Index, v) && !exprMentions(inner.Index, other) &&
+			!exprMentions(ix.Index, v) && !exprMentions(ix.Index, other) {
+			return id.Name, true
+		}
+	}
+	return "", false
+}
+
+// symmetricProductBase searches a subtree for a multiply B[..i..]·B[..j..] of the SAME base
+// (the symmetry signal that separates a covariance/gram accumulation from a matmul, whose
+// factors have different bases) and returns that base.
+func symmetricProductBase(root ast.Node, iName, jName string) (string, bool) {
+	var base string
+	var found bool
+	ast.Inspect(root, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		be, ok := n.(*ast.BinaryExpr)
+		if !ok || be.Op != token.MUL {
+			return true
+		}
+		if bi, ok := symBase(be.X, iName, jName); ok {
+			if bj, ok := symBase(be.Y, jName, iName); ok && bi == bj {
+				base, found = bi, true
+			}
+		}
+		if !found {
+			if bi, ok := symBase(be.X, jName, iName); ok {
+				if bj, ok := symBase(be.Y, iName, jName); ok && bi == bj {
+					base, found = bi, true
+				}
+			}
+		}
+		return !found
+	})
+	return base, found
+}
+
+// hasMatrixWrite reports whether the subtree writes (= or +=) into a target indexed by
+// BOTH i and j — nested m[i][j] or flat m[i*n+j].
+func hasMatrixWrite(root ast.Node, iName, jName string) bool {
+	found := false
+	ast.Inspect(root, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || (as.Tok != token.ADD_ASSIGN && as.Tok != token.ASSIGN) {
+			return true
+		}
+		for _, lhs := range as.Lhs {
+			ix, ok := lhs.(*ast.IndexExpr)
+			if !ok {
+				continue
+			}
+			if exprMentions(ix.Index, iName) && exprMentions(ix.Index, jName) { // flat
+				found = true
+			}
+			if inner, ok := ix.X.(*ast.IndexExpr); ok && // nested m[i][j]
+				exprMentions(inner.Index, iName) && exprMentions(ix.Index, jName) {
+				found = true
+			}
+		}
+		return !found
+	})
+	return found
+}
+
+// symmetricAccumFindings flags PS5002 — nested i/j loops that accumulate a FULL symmetric
+// matrix (m[i][j] += x[i]·x[j], or a gram M[i][k]·M[j][k] reduced into m[i][j]). Every
+// off-diagonal is computed twice; if the consumer reads only one triangle (Cholesky /
+// eigendecomposition) the upper triangle + a mirror pass halves the accumulation. Requires
+// BOTH a same-base symmetric product AND an m[i][j] write, which excludes matmul (whose
+// factors are different bases). Shipped: GMM, PCA.
+func symmetricAccumFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		iName, obody, ok := loopVarBody(n)
+		if !ok {
+			return true
+		}
+		for _, stmt := range obody.List {
+			jName, _, ok2 := loopVarBody(stmt)
+			if !ok2 || jName == iName {
+				continue
+			}
+			base, hasProd := symmetricProductBase(stmt, iName, jName)
+			if hasProd && hasMatrixWrite(stmt, iName, jName) {
+				out = append(out, finding{
+					pos:      fset.Position(n.Pos()),
+					category: "symmetric-accumulation",
+					msg: fmt.Sprintf("nested %s/%s loop accumulates a FULL symmetric matrix"+
+						" (m[%s][%s] built from a %s[%s]·%s[%s] product) — every off-diagonal is"+
+						" computed twice. If the consumer reads only one triangle (Cholesky /"+
+						" eigendecomposition), accumulate the upper triangle + diagonal and mirror"+
+						" once (m[%s][%s]=m[%s][%s]) — ~2x the accumulation, bit-identical when the"+
+						" product is commutative. Shipped: GMM, PCA. Verify the consumer + benchmark.",
+						iName, jName, iName, jName, base, iName, base, jName, jName, iName, iName, jName),
+				})
+				return false
+			}
+		}
+		return true
+	})
+	return out
 }
