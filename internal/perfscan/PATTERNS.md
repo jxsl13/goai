@@ -19,9 +19,9 @@ catalog a subset with detailed wins — their IDs head each section. The `P3`/`P
 
 ## Repo-agnostic engine + config
 
-perfscan detects the problems **independent of any one repo**. Fifteen of the twenty
+perfscan detects the problems **independent of any one repo**. Sixteen of the twenty-one
 checks are pure language/stdlib shapes and run on any Go module with no configuration
-(PS1003, PS2002–PS2005, PS3001–PS3003, PS4001, PS4003–PS4006, PS5001, PS5002). The five
+(PS1003, PS2002–PS2005, PS3001–PS3003, PS4001, PS4003–PS4006, PS4008, PS5001, PS5002). The five
 **domain** checks — `PS1001` per-element-dispatch, `PS1002` per-element-closure, `PS2001`
 alloc-in-loop, `PS4002` scalar-transcendental-vectorizable, `PS6001` unverified-dual-path
 — key on a project's own vocabulary (its element accessors, allocators, fast-path helpers
@@ -54,7 +54,11 @@ patterns and the engine are generic.
 
 Every check has a stable **PS-prefixed 4-digit ID** (`PS1001`…), grouped by the
 thousands digit: `PS1xxx` per-element access, `PS2xxx` allocation, `PS3xxx`
-indirection/reflection, `PS4xxx` vectorization, `PS5xxx` arithmetic. `perfscan
+indirection/reflection, `PS4xxx` vectorization, `PS5xxx` arithmetic, `PS6xxx`
+verification gaps. IDs are **stable and never reused** — they are the handle an
+`//perfscan:ignore` directive names, so a new check must claim an ID free on main
+*and* in every open PR that touches the registry, not merely in its own branch
+(§PERF-ID-COLLISION-001). `perfscan
 -list` prints the table (ID, category, whether `-fix` can rewrite it, title).
 
 - `-fix` applies the **safe mechanical fixes** in place. Only checks with a
@@ -397,6 +401,35 @@ column-major win.
 silent** on already-triangular loops and on forms that pre-slice the row (`covi := m[i]; covi[j] +=
 ci·c[j]`) — the hoisted 1-D write hides the `[i][j]` signal, so verify hot covariance/gram loops by
 eye too. **Verify the consumer reads one triangle and benchmark** before shipping.
+
+## PS4008 — a matmul whose inner loop is a serial scalar dot  *(scanner: static)*
+
+A triple-nested loop whose innermost body is a single `acc += A[…] * B[…]`, with `acc`
+declared in the middle loop and stored to an indexed destination after it. The accumulator
+is a **serial dependency chain**: each FMADD waits on the previous one's ~4-cycle latency,
+so the loop runs at the FMA's *latency* rather than its *throughput*, no matter how much
+ILP the machine has.
+
+**Fix:** transpose the k-dim operand once (`k·m` stores against `m·m·k` MACs — negligible)
+and rewrite as ikj/axpy, `c[j] += av * bt[j]`, so the accumulators are independent across
+the output index. If the two operands are the SAME slice the product is symmetric to the
+last bit, so computing one triangle and mirroring halves the work again.
+
+**Shipped:** `nn.matmulABt` — 0.92 → 0.32 ns/MAC, `BenchmarkMuonStepOnly` 418.3 → 200.0 ms
+(**2.09×**), bit-identical, at the cost of one reused `[k,m]` scratch (+6% bytes/op).
+
+**Bit-identity is claimable but must be PROVEN**, not assumed: the ikj form accumulates over
+`p` in the same ascending order into an accumulator that also starts at +0, which is the
+argument `backend/cpu/gemm.go` makes for its tolerance-0 gate — but only a cross-reference
+test against the *pre-rewrite* form actually holds it. Two traps, both measured: reversing
+the `p` order is caught by such a test, while carrying over matmulFlat's
+`if av == 0 { continue }` skip is **NOT** caught by random fixtures (they contain no exact
+zero) and silently drops `0·±Inf` NaNs — the exactness gate needs an explicit zero/Inf case.
+
+**Deliberately silent** on the ikj/axpy form itself (applying the advice clears the
+finding), on same-base reductions with no indexed store (a norm has no output index to make
+independent), and when the inner loop does anything besides the accumulation (the dot is
+then not the whole cost). Findings often overlap PS4006 when the operands are `[][]T`.
 
 ## PS4005 — an N-D odometer ticked once per ELEMENT  *(scanner: static)*
 ```go

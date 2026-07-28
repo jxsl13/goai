@@ -1544,3 +1544,114 @@ func cov(x [][]float64, mean []float64, m [][]float64, d int) {
 		t.Fatalf("want 1 symmetric-accumulation (outer product), got %d", got)
 	}
 }
+
+// The exact shape that cost Muon 2.09x: a dot product per output element, its
+// accumulator a serial FMADD chain. Taken verbatim from nn.matmulABt as it stood
+// before the ikj rewrite.
+func TestDetectPS4008_SerialDotMatmul(t *testing.T) {
+	src := `package p
+func matmulABt(a, b []float64, m, k int) []float64 {
+	c := make([]float64, m*m)
+	for i := range m {
+		ai := a[i*k : i*k+k]
+		ci := c[i*m : i*m+m]
+		for j := range m {
+			bj := b[j*k : j*k+k]
+			var s float64
+			for p := range ai {
+				s += ai[p] * bj[p]
+			}
+			ci[j] = s
+		}
+	}
+	return c
+}`
+	if got := countCat(scanSrc(t, src)); got["serial-dot-matmul"] == 0 {
+		t.Fatalf("want ≥1 serial-dot-matmul, got 0 (%v)", got)
+	}
+}
+
+// The short-declaration spelling of the same accumulator must be caught too.
+func TestDetectPS4008_ShortDeclAccumulator(t *testing.T) {
+	src := `package p
+func mm(a, b, c []float64, m, k int) {
+	for i := range m {
+		for j := range m {
+			s := 0.0
+			for p := range k {
+				s += a[i*k+p] * b[j*k+p]
+			}
+			c[i*m+j] = s
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["serial-dot-matmul"] == 0 {
+		t.Fatalf("want ≥1 serial-dot-matmul, got 0 (%v)", got)
+	}
+}
+
+// SILENT on the ikj/axpy form — applying the rule's own advice must clear the
+// finding, or the rule would keep reporting the code it just helped fix.
+func TestDetectPS4008_SilentOnIkjAxpy(t *testing.T) {
+	src := `package p
+func mm(a, bt, c []float64, m, k int) {
+	for i := range m {
+		ci := c[i*m : i*m+m]
+		for p := range k {
+			av := a[i*k+p]
+			bp := bt[p*m : p*m+m]
+			for j := range ci {
+				ci[j] += av * bp[j]
+			}
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["serial-dot-matmul"] != 0 {
+		t.Fatalf("want 0 serial-dot-matmul on the ikj/axpy rewrite, got %d (%v)",
+			got["serial-dot-matmul"], got)
+	}
+}
+
+// SILENT on a plain reduction: a norm accumulates a product of one slice with
+// ITSELF and has no indexed store, so there is no output index to make independent
+// and nothing to hoist. Flagging it would be a pure false positive.
+func TestDetectPS4008_SilentOnReduction(t *testing.T) {
+	src := `package p
+func norms(x []float64, out []float64, m, k int) {
+	for i := range m {
+		for j := range m {
+			var s float64
+			for p := range k {
+				s += x[i*k+p] * x[i*k+p]
+			}
+			_ = s
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["serial-dot-matmul"] != 0 {
+		t.Fatalf("want 0 serial-dot-matmul on a same-base reduction with no store, got %d (%v)",
+			got["serial-dot-matmul"], got)
+	}
+}
+
+// SILENT when the inner loop does more than the dot: the accumulation is then not
+// the whole cost and the ikj rewrite is not the fix.
+func TestDetectPS4008_SilentOnCompoundInnerBody(t *testing.T) {
+	src := `package p
+func mm(a, b, c, d []float64, m, k int) {
+	for i := range m {
+		for j := range m {
+			var s float64
+			for p := range k {
+				s += a[i*k+p] * b[j*k+p]
+				d[p] = s
+			}
+			c[i*m+j] = s
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["serial-dot-matmul"] != 0 {
+		t.Fatalf("want 0 serial-dot-matmul when the inner loop has extra work, got %d (%v)",
+			got["serial-dot-matmul"], got)
+	}
+}

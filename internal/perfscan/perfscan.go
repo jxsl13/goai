@@ -198,6 +198,7 @@ var checks = []check{
 	{"PS4004", "scalar-copy-loop", "an element-by-element slice copy in a loop where a bulk copy would do", false},
 	{"PS4005", "per-element-odometer", "an N-D coordinate odometer ticked once per element instead of once per run", false},
 	{"PS4006", "row-slice-matrix", "a [][]T matrix built row-by-row and then indexed inside a nested loop", false},
+	{"PS4008", "serial-dot-matmul", "a matmul whose innermost loop is a serial scalar dot accumulator — latency-bound where an ikj/axpy form has independent accumulators", false},
 	// PS5xxx — arithmetic
 	{"PS5001", "loop-invariant-divide", "a divide by a loop-invariant scalar on every element", false},
 	{"PS5002", "symmetric-accumulation", "a nested loop accumulating a full symmetric matrix (m[i][j] += x[i]*x[j]) where one triangle + mirror would halve the work", false},
@@ -1718,6 +1719,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 		})
 	}
 	out = append(out, symmetricAccumFindings(fset, fn)...)
+	out = append(out, serialDotMatmulFindings(fset, fn)...)
 	return out
 }
 
@@ -2837,4 +2839,153 @@ func symmetricProductBase(root ast.Node, iName, jName string) (string, bool) {
 		return !found
 	})
 	return base, found
+}
+
+// serialDotMatmulFindings flags PS4008 — a triple-nested loop whose innermost body is
+// a single scalar dot accumulation, `s += A[…] * B[…]`, with the result stored to an
+// indexed destination after the loop. That accumulator is a SERIAL dependency chain:
+// every FMADD waits on the previous one's latency, so the loop runs at the FMA's
+// latency rather than its throughput. Transposing the k-dim operand once and rewriting
+// as ikj/axpy (`c[j] += av * bt[j]`) gives independent accumulators across j, which
+// measured 0.92 → 0.32 ns/MAC on nn.matmulABt (Muon Step 418 → 200 ms, 2.09×).
+//
+// Requires the accumulator to be declared in the middle loop and stored to an IndexExpr
+// after the inner loop — that store is what distinguishes a matmul from a plain
+// reduction (a norm or a dot product returning a scalar has nowhere to hoist to and is
+// not a candidate). Both operands must be IndexExpr over DISTINCT base identifiers, so
+// an in-place accumulation into one of its own operands is not flagged.
+//
+// The rewrite is BIT-IDENTICAL when the ikj form keeps the same ascending accumulation
+// order — the same argument backend/cpu/gemm.go makes for its tolerance-0 gate — but
+// that must be PROVEN by a cross-reference test against the pre-rewrite form, not
+// assumed, and a zero-skip (`if av == 0 { continue }`) must NOT be carried along: it
+// drops 0·±Inf NaNs and is not order-preserving.
+func serialDotMatmulFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		// outer i loop
+		_, obody, ok := loopVarBody(n)
+		if !ok {
+			return true
+		}
+		for _, mid := range obody.List {
+			_, mbody, ok := loopVarBody(mid)
+			if !ok {
+				continue
+			}
+			acc, inner, store := dotAccumShape(mbody)
+			if acc == "" {
+				continue
+			}
+			out = append(out, finding{
+				pos:      fset.Position(inner.Pos()),
+				category: "serial-dot-matmul",
+				msg: fmt.Sprintf("%q accumulates a scalar dot in the innermost loop and is then stored to %s"+
+					" — a serial FMADD chain running at latency, not throughput. Transpose the k-dim operand"+
+					" once and rewrite as ikj/axpy so the accumulators are independent across the output index"+
+					" (measured 2.9x per-MAC on nn.matmulABt). Prove bit-identity against the current form with"+
+					" a tolerance-0 cross-reference test, and do NOT carry over a zero-skip.", acc, store),
+			})
+		}
+		return true
+	})
+	return out
+}
+
+// dotAccumShape recognizes the matmul dot body inside a middle loop: a scalar
+// declaration, an inner loop whose ONLY statement accumulates a product of two
+// distinctly-based index expressions into it, and a store of it into an IndexExpr.
+// Returns the accumulator name, the inner loop node and the store target's text.
+func dotAccumShape(mbody *ast.BlockStmt) (string, ast.Node, string) {
+	var acc string
+	var inner ast.Node
+	var store string
+	for _, st := range mbody.List {
+		switch v := st.(type) {
+		case *ast.DeclStmt:
+			if gd, ok := v.Decl.(*ast.GenDecl); ok && gd.Tok == token.VAR {
+				for _, sp := range gd.Specs {
+					if vs, ok := sp.(*ast.ValueSpec); ok && len(vs.Names) == 1 && len(vs.Values) == 0 {
+						if isFloatIdent(vs.Type) {
+							acc = vs.Names[0].Name
+						}
+					}
+				}
+			}
+		case *ast.AssignStmt:
+			// `s := 0.0` also declares an accumulator; and `ci[j] = s` is the store.
+			if v.Tok == token.DEFINE && len(v.Lhs) == 1 && len(v.Rhs) == 1 {
+				if id, ok := v.Lhs[0].(*ast.Ident); ok && isZeroLit(v.Rhs[0]) {
+					acc = id.Name
+				}
+				continue
+			}
+			if v.Tok == token.ASSIGN && len(v.Lhs) == 1 && len(v.Rhs) == 1 && acc != "" {
+				if id, ok := v.Rhs[0].(*ast.Ident); ok && id.Name == acc {
+					if ix, ok := v.Lhs[0].(*ast.IndexExpr); ok {
+						store = baseIdentName(ix.X)
+					}
+				}
+			}
+		default:
+			if acc == "" || inner != nil {
+				continue
+			}
+			if _, ibody, ok := loopVarBody(st); ok && accumulatesProduct(ibody, acc) {
+				inner = st
+			}
+		}
+	}
+	if acc == "" || inner == nil || store == "" {
+		return "", nil, ""
+	}
+	return acc, inner, store
+}
+
+// accumulatesProduct reports whether body is exactly `acc += X[…] * Y[…]` with X and
+// Y distinct base identifiers. A single statement is required: anything else in the
+// inner loop means the dot is not the whole cost and the rewrite is not the fix.
+func accumulatesProduct(body *ast.BlockStmt, acc string) bool {
+	if len(body.List) != 1 {
+		return false
+	}
+	as, ok := body.List[0].(*ast.AssignStmt)
+	if !ok || as.Tok != token.ADD_ASSIGN || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+		return false
+	}
+	if id, ok := as.Lhs[0].(*ast.Ident); !ok || id.Name != acc {
+		return false
+	}
+	be, ok := as.Rhs[0].(*ast.BinaryExpr)
+	if !ok || be.Op != token.MUL {
+		return false
+	}
+	lx, lok := be.X.(*ast.IndexExpr)
+	rx, rok := be.Y.(*ast.IndexExpr)
+	if !lok || !rok {
+		return false
+	}
+	l, r := baseIdentName(lx.X), baseIdentName(rx.X)
+	return l != "" && r != "" && l != r
+}
+
+// isFloatIdent reports whether a type expression names a Go float type.
+func isFloatIdent(e ast.Expr) bool {
+	id, ok := e.(*ast.Ident)
+	return ok && (id.Name == "float64" || id.Name == "float32")
+}
+
+// isZeroLit reports whether e is a literal zero (`0` or `0.0`), the shape a
+// short-variable-declared accumulator takes.
+func isZeroLit(e ast.Expr) bool {
+	bl, ok := e.(*ast.BasicLit)
+	if !ok || (bl.Kind != token.INT && bl.Kind != token.FLOAT) {
+		return false
+	}
+	for _, r := range bl.Value {
+		if r != '0' && r != '.' {
+			return false
+		}
+	}
+	return true
 }
