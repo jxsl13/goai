@@ -586,15 +586,21 @@ func (p *PCA) Fit(x [][]float64, ncomp int) error {
 		}
 		for i := range d {
 			ci := c[i]
-			covi := cov[i]
+			covi := cov[i][i:] // upper triangle incl. diagonal — cov is symmetric and
+			cj := c[i:]        // SymEig reads it symmetrically, so skip the redundant half
 			for j := range covi {
-				covi[j] += ci * c[j]
+				covi[j] += ci * cj[j]
 			}
 		}
 	}
+	// scale the upper triangle and mirror it down; keep the DIVISION (not reciprocal-mul)
+	// to preserve bit-parity. Mirror is exact: cov[j][i] = Σ c_j·c_i equals cov[i][j] =
+	// Σ c_i·c_j byte-for-byte (IEEE multiply is commutative, same row-order sum).
 	for i := range d {
-		for j := range d {
-			cov[i][j] /= float64(n - 1)
+		for j := i; j < d; j++ {
+			v := cov[i][j] / float64(n-1)
+			cov[i][j] = v
+			cov[j][i] = v
 		}
 	}
 	vals, vecs := linalg.SymEig(cov)
