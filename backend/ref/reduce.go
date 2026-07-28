@@ -236,27 +236,46 @@ func argmaxKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs
 	// ascending-pos order and strict > comparison — bit-identical tie handling.
 	if xs, ok := f64Data(x); ok {
 		shape := x.Shape()
-		eff := make([]int, nd)
-		for ax := range nd {
-			if p := outAxisOf[ax]; p >= 0 {
-				eff[ax] = outStrides[p]
-			}
-		}
-		idx := make([]int, nd)
-		of := 0
-		for pos := range xs {
-			if v := xs[pos]; v > best[of] {
-				best[of] = v
-				bidx[of] = float64(idx[axis])
-			}
-			for d := nd - 1; d >= 0; d-- {
-				idx[d]++
-				of += eff[d]
-				if idx[d] < shape[d] {
-					break
+		if axis == nd-1 {
+			// Trailing axis: each output scans a contiguous [count]-run and the argmax
+			// index is the position k within the run — track (bestVal, k) in registers,
+			// one store per segment (no odometer, no best[of]/bidx[of] memory RMW). Strict
+			// > with ascending k gives the same lowest-index tie as the odometer.
+			count := shape[nd-1]
+			for seg := 0; seg < outNumel; seg++ {
+				base := seg * count
+				bv := math.Inf(-1)
+				bk := 0
+				for k := 0; k < count; k++ {
+					if v := xs[base+k]; v > bv {
+						bv, bk = v, k
+					}
 				}
-				idx[d] = 0
-				of -= eff[d] * shape[d]
+				bidx[seg] = float64(bk)
+			}
+		} else {
+			eff := make([]int, nd)
+			for ax := range nd {
+				if p := outAxisOf[ax]; p >= 0 {
+					eff[ax] = outStrides[p]
+				}
+			}
+			idx := make([]int, nd)
+			of := 0
+			for pos := range xs {
+				if v := xs[pos]; v > best[of] {
+					best[of] = v
+					bidx[of] = float64(idx[axis])
+				}
+				for d := nd - 1; d >= 0; d-- {
+					idx[d]++
+					of += eff[d]
+					if idx[d] < shape[d] {
+						break
+					}
+					idx[d] = 0
+					of -= eff[d] * shape[d]
+				}
 			}
 		}
 		out := tensor.NewOn(ctx.Device(), x.Dtype(), outShape)
