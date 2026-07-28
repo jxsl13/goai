@@ -377,23 +377,26 @@ func (b *SwinBlock) forwardBatched(ctx *backend.Context, x *tensor.Tensor, h, w,
 	}
 	shiftIdx := swinShiftIdx(h, w, shift)
 	partIdx := swinPartitionIdx(h, w, m)
-	// per-image shift → partition, collect each image's [numWin·M², C] windows.
-	parts := make([]*tensor.Tensor, batch)
-	for i := range batch {
-		gi, err := swinExec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: i * N, End: (i + 1) * N}, ln1)
-		if err != nil {
-			return nil, err
-		}
-		if shift > 0 {
-			if gi, err = swinGather(ctx, gi, shiftIdx, b.dtype()); err != nil {
-				return nil, err
-			}
-		}
-		if parts[i], err = swinGather(ctx, gi, partIdx, b.dtype()); err != nil {
-			return nil, err
+	// Fuse the per-image slice → shift-gather → partition-gather → concat into ONE
+	// batched row-gather over ln1[batch·N, C]. Composing the two permutations
+	// (combo[o] = shiftIdx[partIdx[o]]) and baking the i·N image offset into the
+	// index picks the identical source row for every output row, so allWin is
+	// byte-identical to the per-image pipeline — with ~batch× fewer dispatches.
+	combo := partIdx
+	if shift > 0 {
+		combo = make([]int, len(partIdx))
+		for o, pp := range partIdx {
+			combo[o] = shiftIdx[pp]
 		}
 	}
-	allWin, err := swinExec1(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 0}, parts...) // [batch·numWin·M², C]
+	batchIdx := make([]int, batch*N)
+	for i := range batch {
+		off := i * N
+		for o, c := range combo {
+			batchIdx[off+o] = off + c
+		}
+	}
+	allWin, err := swinGather(ctx, ln1, batchIdx, b.dtype()) // [batch·numWin·M², C]
 	if err != nil {
 		return nil, err
 	}
@@ -409,23 +412,24 @@ func (b *SwinBlock) forwardBatched(ctx *backend.Context, x *tensor.Tensor, h, w,
 	invPart := swinInverse(partIdx)
 	invShift := swinInverse(shiftIdx)
 	winRows := numWin * m * m
-	outs := make([]*tensor.Tensor, batch)
-	for i := range batch {
-		ai, err := swinExec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: i * winRows, End: (i + 1) * winRows}, att)
-		if err != nil {
-			return nil, err
+	// Symmetric inverse fusion: one batched gather over att[batch·winRows, C] with
+	// the composed inverse permutation (invCombo[o] = invPart[invShift[o]]) and the
+	// i·winRows offset baked in — byte-identical to the per-image inverse pipeline.
+	invCombo := invPart
+	if shift > 0 {
+		invCombo = make([]int, len(invPart))
+		for o, sh := range invShift {
+			invCombo[o] = invPart[sh]
 		}
-		if ai, err = swinGather(ctx, ai, invPart, b.dtype()); err != nil {
-			return nil, err
-		}
-		if shift > 0 {
-			if ai, err = swinGather(ctx, ai, invShift, b.dtype()); err != nil {
-				return nil, err
-			}
-		}
-		outs[i] = ai
 	}
-	a, err := swinExec1(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 0}, outs...) // [batch·N, C]
+	outIdx := make([]int, batch*winRows)
+	for i := range batch {
+		off := i * winRows
+		for o, c := range invCombo {
+			outIdx[off+o] = off + c
+		}
+	}
+	a, err := swinGather(ctx, att, outIdx, b.dtype()) // [batch·N, C]
 	if err != nil {
 		return nil, err
 	}
