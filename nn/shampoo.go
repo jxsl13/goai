@@ -293,24 +293,31 @@ func shampooPrecondInto(gh, t, li, gm, ri [][]float64, m, n int) {
 		clear(t[i][:n])
 		clear(gh[i][:n])
 	}
-	for i := range m {
-		gmi, ti := gm[i], t[i][:n]
-		for k := range n {
-			av := gmi[k]
-			rk := ri[k][:n]
-			for j := range ti {
-				ti[j] += av * rk[j]
+	// Both products are output-row-outer: row i writes only t[i], then only gh[i]. The
+	// second reads every t[k], so it must follow the first — parallelRowsMM returns only
+	// once every chunk has finished, which is the barrier that guarantees it.
+	parallelRowsMM(m, n*n, func(lo, hi int) {
+		for i := lo; i < hi; i++ {
+			gmi, ti := gm[i], t[i][:n]
+			for k := range n {
+				av := gmi[k]
+				rk := ri[k][:n]
+				for j := range ti {
+					ti[j] += av * rk[j]
+				}
 			}
 		}
-	}
-	for i := range m {
-		lii, ghi := li[i], gh[i][:n]
-		for k := range m {
-			av := lii[k]
-			tk := t[k][:n]
-			for j := range ghi {
-				ghi[j] += av * tk[j]
+	})
+	parallelRowsMM(m, m*n, func(lo, hi int) {
+		for i := lo; i < hi; i++ {
+			lii, ghi := li[i], gh[i][:n]
+			for k := range m {
+				av := lii[k]
+				tk := t[k][:n]
+				for j := range ghi {
+					ghi[j] += av * tk[j]
+				}
 			}
 		}
-	}
+	})
 }

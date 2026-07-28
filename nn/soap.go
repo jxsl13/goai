@@ -1,6 +1,7 @@
 package nn
 
 import (
+	"github.com/jxsl13/goai/internal/parallel"
 	"math"
 
 	"github.com/jxsl13/goai/internal/linalg"
@@ -306,27 +307,56 @@ func rotateForwardInto(out, tmp, ql, g, qr [][]float64) {
 		clear(tmp[k][:n])
 		clear(out[k][:n])
 	}
-	for i := range m {
-		gi := g[i]
-		qli := ql[i]
-		for k := range m {
-			av := qli[k]
-			tk := tmp[k][:n]
-			for j := range tk {
-				tk[j] += av * gi[j]
+	// THE ONE PRODUCT HERE THAT IS NOT OUTPUT-ROW-OUTER. It loops over i, the REDUCTION
+	// index, and every i accumulates into EVERY row of tmp, so splitting i races.
+	// Interchanging to k-outer gives each k exclusive ownership of tmp[k] and is
+	// bit-identical — for a fixed (k,j) the sum over i still runs ascending — but it
+	// costs locality: the i-outer form loads gi once and reuses it across all k, while
+	// k-outer re-reads g per k and strides ql by m.
+	//
+	// So both orders are kept and chosen by whether the work will actually be split,
+	// the same shape the GBM histogram needed. A serial caller keeps the faster order
+	// rather than paying for parallelism it will not collect.
+	if m*m*n < mmParThreshold || parallel.Workers() <= 1 {
+		for i := range m {
+			gi := g[i]
+			qli := ql[i]
+			for k := range m {
+				av := qli[k]
+				tk := tmp[k][:n]
+				for j := range tk {
+					tk[j] += av * gi[j]
+				}
 			}
 		}
+	} else {
+		parallel.Rows(m, func(lo, hi int) {
+			for k := lo; k < hi; k++ {
+				tk := tmp[k][:n]
+				for i := range m {
+					av := ql[i][k]
+					gi := g[i][:n]
+					for j := range tk {
+						tk[j] += av * gi[j]
+					}
+				}
+			}
+		})
 	}
-	for k := range m {
-		tk, outk := tmp[k], out[k][:n]
-		for j := range n {
-			av := tk[j]
-			qj := qr[j][:n]
-			for l := range outk {
-				outk[l] += av * qj[l]
+	// Output-row-outer already: row k writes only out[k]. Bit-identical under partition —
+	// the accumulation order within a row is untouched.
+	parallelRowsMM(m, n*n, func(lo, hi int) {
+		for k := lo; k < hi; k++ {
+			tk, outk := tmp[k], out[k][:n]
+			for j := range n {
+				av := tk[j]
+				qj := qr[j][:n]
+				for l := range outk {
+					outk[l] += av * qj[l]
+				}
 			}
 		}
-	}
+	})
 }
 
 // rotateBackInto writes Q_L·N·Q_Rᵀ into out using tmp as the intermediate (pooled twin of
@@ -342,34 +372,38 @@ func rotateBackInto(out, tmp, ql, nmat, qr [][]float64) {
 	for i := range m {
 		clear(tmp[i][:n])
 	}
-	for i := range m {
-		qli := ql[i]
-		ti := tmp[i][:n]
-		for k := range m {
-			av := qli[k]
-			nk := nmat[k][:n]
-			for l := range ti {
-				ti[l] += av * nk[l]
+	parallelRowsMM(m, m*n, func(lo, hi int) {
+		for i := lo; i < hi; i++ {
+			qli := ql[i]
+			ti := tmp[i][:n]
+			for k := range m {
+				av := qli[k]
+				nk := nmat[k][:n]
+				for l := range ti {
+					ti[l] += av * nk[l]
+				}
 			}
 		}
-	}
-	for i := range m {
-		for j := range n {
-			var acc float64
-			// Declined for ALLOCATION, not for speed. The ikj rewrite would likely be
-			// faster here as it was for Muon's matmulABt (2.09x) — that kernel is the
-			// same A·Bᵀ shape with both operands contiguous in the summation index, and
-			// the transpose paid for itself. What rules it out is that this path is
-			// POOLED: a transposed copy of qr is an n×n allocation on every call, which
-			// is the cost the pooling exists to avoid. Revisit if a scratch buffer for
-			// the transpose can be hung off the same pool.
-			//perfscan:ignore PS4008 declined on allocation, not speed — see above
-			for l := range n {
-				acc += tmp[i][l] * qr[j][l]
+	})
+	parallelRowsMM(m, n*n, func(lo, hi int) {
+		for i := lo; i < hi; i++ {
+			for j := range n {
+				var acc float64
+				// Declined for ALLOCATION, not for speed. The ikj rewrite would likely be
+				// faster here as it was for Muon's matmulABt (2.09x) — that kernel is the
+				// same A·Bᵀ shape with both operands contiguous in the summation index, and
+				// the transpose paid for itself. What rules it out is that this path is
+				// POOLED: a transposed copy of qr is an n×n allocation on every call, which
+				// is the cost the pooling exists to avoid. Revisit if a scratch buffer for
+				// the transpose can be hung off the same pool.
+				//perfscan:ignore PS4008 declined on allocation, not speed — see above
+				for l := range n {
+					acc += tmp[i][l] * qr[j][l]
+				}
+				out[i][j] = acc
 			}
-			out[i][j] = acc
 		}
-	}
+	})
 }
 
 // rotateBack returns Q_L · N · Q_Rᵀ for N[m,n], Q_L[m,m], Q_R[n,n].
