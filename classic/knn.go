@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"math"
 	"runtime"
-	"sort"
+	"slices"
 )
 
 // KNNMetric selects the distance function a k-nearest-neighbours estimator uses
@@ -112,11 +112,21 @@ func nearest(x [][]float64, row []float64, cfg knnConfig) []neighbour {
 	for i := range x {
 		cand[i] = neighbour{dist: knnDist(x[i], row, cfg.metric), idx: i}
 	}
-	sort.Slice(cand, func(a, b int) bool {
-		if cand[a].dist != cand[b].dist {
-			return cand[a].dist < cand[b].dist
+	// Same swap-allocation fix, once per query. Total order on (dist, idx), so the
+	// permutation is identical.
+	slices.SortFunc(cand, func(a, b neighbour) int {
+		switch {
+		case a.dist != b.dist:
+			if a.dist < b.dist {
+				return -1
+			}
+			return 1
+		case a.idx < b.idx:
+			return -1
+		case a.idx > b.idx:
+			return 1
 		}
-		return cand[a].idx < cand[b].idx
+		return 0
 	})
 	return cand[:cfg.k]
 }

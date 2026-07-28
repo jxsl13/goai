@@ -2,6 +2,7 @@ package classic
 
 import (
 	"math"
+	"slices"
 	"sort"
 )
 
@@ -173,8 +174,19 @@ func (bt *ballTree) build(idx []int) *ballNode {
 	for _, id := range idx {
 		key[id] = bt.pts[id][splitDim]
 	}
-	sort.Slice(idx, func(a, b int) bool {
-		return key[idx[a]] < key[idx[b]]
+	// slices.SortFunc, not sort.Slice: the latter reaches its swap through
+	// reflectlite.Swapper and ALLOCATES on every call, and build recurses once per tree
+	// node. Both are unstable, so ties may land differently — harmless here because the
+	// kNN search is exact and orders its result by (dist, idx), so the SAME k neighbours
+	// come back whatever shape the tree takes.
+	slices.SortFunc(idx, func(a, b int) int {
+		switch ka, kb := key[a], key[b]; {
+		case ka < kb:
+			return -1
+		case ka > kb:
+			return 1
+		}
+		return 0
 	})
 	mid := len(idx) / 2
 	n.left = bt.build(idx[:mid])
@@ -227,11 +239,22 @@ func (bt *ballTree) kNN(query []float64, k int) []neighbour {
 	}
 	out := h.items
 	// out[].dist holds distSq (monotone in dist), so the (dist,idx) sort order is identical.
-	sort.Slice(out, func(a, b int) bool {
-		if out[a].dist != out[b].dist {
-			return out[a].dist < out[b].dist
+	// Same swap-allocation fix, once per QUERY here. This comparator is a TOTAL order —
+	// (dist, idx) with idx unique — so stability is irrelevant and the permutation is
+	// identical, not merely equivalent.
+	slices.SortFunc(out, func(a, b neighbour) int {
+		switch {
+		case a.dist != b.dist:
+			if a.dist < b.dist {
+				return -1
+			}
+			return 1
+		case a.idx < b.idx:
+			return -1
+		case a.idx > b.idx:
+			return 1
 		}
-		return out[a].idx < out[b].idx
+		return 0
 	})
 	for i := range out { // convert the k results back to real distances for the caller
 		out[i].dist = bt.toDist(out[i].dist)
