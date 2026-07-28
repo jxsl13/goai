@@ -119,7 +119,7 @@ GENERALIZED as perfscan PS6003 (partial-fast-path-coverage). REMAINING: Q2_K, Q3
 
 ## T-01KYMVPJW5FEAVQY0AX02QC420 Benchmark Q2_K/Q3_K/Q5_K single-token QMatMul before fusing them
 kind: task
-state: draft
+state: active
 created: 2026-07-28
 refs: R-01KYMVGRENENDS71F7VFKRAD5H
 
