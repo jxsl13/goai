@@ -2,6 +2,9 @@ package nn
 
 import (
 	"fmt"
+	"runtime"
+	"sync"
+	"sync/atomic"
 
 	"github.com/jxsl13/goai/tensor"
 )
@@ -118,7 +121,14 @@ func (s *SI) Consolidate(xi float64) {
 	if xi <= 0 {
 		xi = SIDefaultDamping
 	}
-	for pi, p := range s.Params {
+	// Each parameter's consolidation touches only its OWN master slices
+	// (taskStart/bigOmega/omega/prev/ref at index pi are disjoint per parameter),
+	// so the parameters are independent and consolidate concurrently — the same
+	// atomic work-steal fan-out EWCFisher/MASImportance use. Per-parameter
+	// arithmetic and write order are unchanged, so the result is bit-identical to
+	// the serial walk.
+	do := func(pi int) {
+		p := s.Params[pi]
 		// The importance math already runs on the flat []float64 masters; the only
 		// per-element tensor dispatch is reading cur from p. For contiguous F64/F32 p
 		// read the typed backing slice directly (cur is float64 either way, so the
@@ -133,7 +143,7 @@ func (s *SI) Consolidate(xi float64) {
 				om[i] = 0
 				ts[i], pr[i], rf[i] = cur, cur, cur
 			}
-			continue
+			return
 		}
 		if pf := flatF32(p); pf != nil {
 			for i := range pf {
@@ -143,7 +153,7 @@ func (s *SI) Consolidate(xi float64) {
 				om[i] = 0
 				ts[i], pr[i], rf[i] = cur, cur, cur
 			}
-			continue
+			return
 		}
 		for i := range p.Numel() {
 			cur := p.AtF64(tensor.Unravel(i, p.Shape())...)
@@ -151,6 +161,28 @@ func (s *SI) Consolidate(xi float64) {
 			bo[i] += om[i] / (dTask*dTask + xi)
 			om[i] = 0
 			ts[i], pr[i], rf[i] = cur, cur, cur
+		}
+	}
+	nP := len(s.Params)
+	workers := min(runtime.GOMAXPROCS(0), nP)
+	if workers > 1 {
+		var next atomic.Int64
+		var wg sync.WaitGroup
+		for range workers {
+			wg.Go(func() {
+				for {
+					i := int(next.Add(1)) - 1
+					if i >= nP {
+						return
+					}
+					do(i)
+				}
+			})
+		}
+		wg.Wait()
+	} else {
+		for i := range nP {
+			do(i)
 		}
 	}
 }
