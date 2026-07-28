@@ -210,3 +210,4 @@
 {"t":"2026-07-28T07:32:45Z","eid":"7e3d6415976afb85","ag":"ag-500a","ev":"create","id":"R-01KYKT7TPFF0NRNQ7162MZWX3H","k":"research","ti":"nn ULP failures root-caused: fast path does reciprocal-multiply, comment claims bit-identity"}
 {"t":"2026-07-28T07:35:27Z","eid":"4c6077c0e37e1253","ag":"ag-163d","ev":"create","id":"T-01KYKTCRRZF7NRJTS862VAWBZV","k":"task","ti":"PS2004 per-call scratch: hoist to receiver fields where hot, sequential and fully overwritten"}
 {"t":"2026-07-28T09:46:35Z","eid":"24d26b2a31450f1a","ag":"ag-ec47","ev":"create","id":"R-01KYM1WWMSF0GBMCJR1HVNPTFH","k":"research","ti":"PS2004 complete outside nn: 2 shipped, 3 declined by measurement"}
+{"t":"2026-07-28T09:48:03Z","eid":"979e1fc3d4afd9e8","ag":"ag-d276","ev":"create","id":"R-01KYM1ZJRHFZVBYGF7G1A33DMJ","k":"research","ti":"PS2002 declined outside nlp: every reachable site is debug-gated or one-shot"}
