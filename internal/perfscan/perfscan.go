@@ -195,6 +195,7 @@ var checks = []check{
 	{"PS4001", "le-decode-in-loop", "a per-element little-endian bit decode in a loop with no bulk-copy fast path", false},
 	{"PS4002", "scalar-transcendental-vectorizable", "a scalar libm transcendental in a loop while a vectorized sibling is called", false},
 	{"PS4003", "transcendental-wrapper-in-loop", "a loop calls a helper that wraps a libm transcendental", false},
+	{"PS4004", "vjp-scalar-elementwise-binop", "a *VJP with a scalar single-op elementwise loop (dst[i]=a[i]∘b[i]) that a SIMD backend op would vectorize+parallelize, and no backend.Execute dispatch", false},
 	// PS5xxx — arithmetic
 	{"PS5001", "loop-invariant-divide", "a divide by a loop-invariant scalar on every element", false}, {"PS5002", "symmetric-accumulation", "a nested loop accumulating a full symmetric matrix (m[i][j] += x[i]*x[j]) where one triangle + mirror would halve the work", false},
 }
@@ -1375,6 +1376,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 		})
 	}
 	out = append(out, symmetricAccumFindings(fset, fn)...)
+	out = append(out, vjpScalarBinopFindings(fset, fn)...)
 	return out
 }
 
@@ -2001,6 +2003,115 @@ func symmetricAccumFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 			}
 		}
 		return true
+	})
+	return out
+}
+
+// unwrapNumConv strips enclosing numeric conversions (float32(x), float64(x), etc.) so a
+// conversion-wrapped index expression like float64(gs[i]) is seen as the underlying gs[i].
+func unwrapNumConv(e ast.Expr) ast.Expr {
+	for {
+		call, ok := e.(*ast.CallExpr)
+		if !ok || len(call.Args) != 1 {
+			return e
+		}
+		id, ok := call.Fun.(*ast.Ident)
+		if !ok {
+			return e
+		}
+		switch id.Name {
+		case "float32", "float64", "int", "int32", "int64", "uint32", "uint64", "byte":
+			e = call.Args[0]
+		default:
+			return e
+		}
+	}
+}
+
+// indexBase returns the slice identifier of an s[i]-style index expression whose index
+// mentions loop var iName (after stripping numeric conversions): float64(gs[i]) → ("gs", true).
+func indexBase(e ast.Expr, iName string) (string, bool) {
+	ix, ok := unwrapNumConv(e).(*ast.IndexExpr)
+	if !ok || !exprMentions(ix.Index, iName) {
+		return "", false
+	}
+	if id, ok := ix.X.(*ast.Ident); ok {
+		return id.Name, true
+	}
+	return "?", true
+}
+
+var binopBackendOp = map[token.Token][2]string{
+	token.MUL: {"Mul", "multiply"}, token.ADD: {"Add", "add"},
+	token.SUB: {"Sub", "subtract"}, token.QUO: {"Div", "divide"},
+}
+
+// vjpScalarBinopFindings flags PS4004 — a reverse-mode *VJP whose hot loop is a SINGLE
+// elementwise binary op dst[i] = a[i] ∘ b[i] (∘ ∈ *,+,-,/) written as a scalar Go loop
+// instead of dispatching the matching backend op. gc does not autovectorize, so on the
+// GOEXPERIMENT=simd build the loop stays scalar+single-core while backend.Execute(ctx,
+// OpMul/OpAdd/…) routes to the 8-wide AVX kernel + parallel(). A LONE IEEE binop is
+// correctly-rounded regardless of vectorization/chunking, so the dispatch is bit-exact —
+// this is exactly the expVJP → OpMul win. Scoped to *VJP names (the autograd dispatch
+// layer); backend kernels are excluded (their scalar loop IS the implementation). The
+// single-statement guard is essential: multi-op VJP bodies (tanh g·(1−y²), sigmoid
+// g·y·(1−y)) keep f64 intermediates and narrow once — composing f32 backend ops would
+// diverge, so they need a fused backward kernel and are NOT flagged.
+func vjpScalarBinopFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Name == nil || !strings.HasSuffix(fn.Name.Name, "VJP") || fn.Body == nil {
+		return nil
+	}
+	// A VJP that already dispatches to the backend is fine.
+	dispatches := false
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		if sel, ok := n.(*ast.SelectorExpr); ok && sel.Sel.Name == "Execute" {
+			if id, ok := sel.X.(*ast.Ident); ok && id.Name == "backend" {
+				dispatches = true
+				return false
+			}
+		}
+		return true
+	})
+	if dispatches {
+		return nil
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		iName, body, ok := loopVarBody(n)
+		if !ok || body == nil || len(body.List) != 1 {
+			return true
+		}
+		as, ok := body.List[0].(*ast.AssignStmt)
+		if !ok || len(as.Lhs) != 1 || len(as.Rhs) != 1 || as.Tok != token.ASSIGN {
+			return true
+		}
+		if _, ok := indexBase(as.Lhs[0], iName); !ok { // LHS must be dst[i]
+			return true
+		}
+		bin, ok := unwrapNumConv(as.Rhs[0]).(*ast.BinaryExpr)
+		if !ok {
+			return true
+		}
+		op, ok := binopBackendOp[bin.Op]
+		if !ok {
+			return true
+		}
+		aBase, aok := indexBase(bin.X, iName)
+		bBase, bok := indexBase(bin.Y, iName)
+		if !aok || !bok {
+			return true
+		}
+		out = append(out, finding{
+			pos:      fset.Position(n.Pos()),
+			category: "vjp-scalar-elementwise-binop",
+			msg: fmt.Sprintf("VJP %s has a scalar elementwise loop dst[%s] = %s[%s] %s %s[%s] — gc does"+
+				" not autovectorize, so on the simd build it stays scalar+single-core. A lone IEEE %s is"+
+				" correctly-rounded regardless of vectorization, so dispatch backend.Execute(ctx, backend.Op%s,"+
+				" …) to reach the 8-wide SIMD + parallel kernel (bit-exact; see expVJP → OpMul). Applies ONLY"+
+				" to single-op bodies — multi-op VJPs (tanh, sigmoid) need a fused kernel and are not flagged.",
+				fn.Name.Name, iName, aBase, iName, bin.Op.String(), bBase, iName, op[1], op[0]),
+		})
+		return false
 	})
 	return out
 }
