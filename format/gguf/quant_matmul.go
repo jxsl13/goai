@@ -76,7 +76,44 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 	// path — fusing there would re-dequantize the row for every activation row.)
 	if qt == Q8_0 && m == 1 && xf32 != nil {
 		row := xf32[:k]
-		for ni := range n {
+		// Register-block the OUTPUT (weight-row) loop by 4: m==1 so the single activation
+		// row is shared across all n outputs — reuse each row element's load+f64-convert
+		// across 4 weight rows (and the fixed-length block subslices drop the per-element
+		// bounds check). This is the dual of the m>1 unroll-and-jam. Bit-exact: each output
+		// keeps its own accumulator, wv=d·int8(q) is computed as before, ascending-k order
+		// preserved. Scalar tail for n%4.
+		ni := 0
+		for ; ni+4 <= n; ni += 4 {
+			rb0 := weight[(ni+0)*rowBytes:]
+			rb1 := weight[(ni+1)*rowBytes:]
+			rb2 := weight[(ni+2)*rowBytes:]
+			rb3 := weight[(ni+3)*rowBytes:]
+			var a0, a1, a2, a3 float64
+			for b := 0; b*blockElems < k; b++ {
+				o := b * 34
+				d0 := f16ToF32(binary.LittleEndian.Uint16(rb0[o : o+2]))
+				d1 := f16ToF32(binary.LittleEndian.Uint16(rb1[o : o+2]))
+				d2 := f16ToF32(binary.LittleEndian.Uint16(rb2[o : o+2]))
+				d3 := f16ToF32(binary.LittleEndian.Uint16(rb3[o : o+2]))
+				q0 := rb0[o+2 : o+34]
+				q1 := rb1[o+2 : o+34]
+				q2 := rb2[o+2 : o+34]
+				q3 := rb3[o+2 : o+34]
+				rrow := row[b*blockElems : b*blockElems+blockElems]
+				for i := 0; i < blockElems; i++ {
+					xv := float64(rrow[i])
+					a0 += xv * float64(d0*float32(int8(q0[i])))
+					a1 += xv * float64(d1*float32(int8(q1[i])))
+					a2 += xv * float64(d2*float32(int8(q2[i])))
+					a3 += xv * float64(d3*float32(int8(q3[i])))
+				}
+			}
+			outf[ni+0] = float32(a0)
+			outf[ni+1] = float32(a1)
+			outf[ni+2] = float32(a2)
+			outf[ni+3] = float32(a3)
+		}
+		for ; ni < n; ni++ {
 			rowBits := weight[ni*rowBytes : (ni+1)*rowBytes]
 			var acc float64
 			for b := 0; b*blockElems < k; b++ {
