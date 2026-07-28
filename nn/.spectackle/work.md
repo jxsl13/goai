@@ -89,3 +89,20 @@ THE OTHER CALL SITE needed nothing special — the residual encode touches only 
 STILL SERIAL, with reasons: k-means centroid update (a reduction like the above but not the bottleneck) and solveLinearAQLM, now the largest remaining share. Gauss-Jordan elimination carries a genuine loop-dependency down the pivots; only the per-row updates within one elimination step are independent, which is a narrower win and would need its own measurement to justify.
 
 GATE: the frozen rolling hash over all 768 codes plus the refit codebook row, added with the ICM change. Red on a partition bug, green throughout here, verified under -race.
+
+## R-01KYN8AXQVF96TY283NATPXTPE AQLM: the worker's 4-way unroll and this branch's group parallelization compose to 4.44x — and each independently validated the other
+kind: research
+state: draft
+created: 2026-07-28
+
+A merge-resolution record, worth keeping because the naive resolution would have silently dropped half the work.
+
+BOTH SIDES OPTIMIZED icmEncodeAQLM, on different axes and without knowing about each other. Main (PR #467) unroll-and-jammed the inner entry scan by 4, amortizing each target[t] load across four squared-distance accumulators WITHIN one group's scan (-41.5%). This branch parallelized the outer group loop (2.06x at the time). Different axes, so they compose rather than conflict.
+
+COMPOSED RESULT on M2 Pro: 617 / 275 / 223ms at 1 / 4 / 12 Ps. Against the ~990ms serial starting point, 4.44x. Main's unroll accounts for the 1-P improvement (1004 -> 617ms); the parallelization accounts for 617 -> 223ms.
+
+THE REBASE PRESENTED IT AS A CONFLICT AND THE OBVIOUS RESOLUTIONS WERE BOTH WRONG. Taking either side whole discards the other's optimization, and a naive marker-strip produced a file with the OLD scalar scan and the unrolled scan both present, the second outside its enclosing loop — it compiled far enough to look plausible and referenced an undefined variable. The correct resolution was to restore main's function VERBATIM as a clean base and re-apply the parallel wrapper on top of it, rather than to edit the conflicted text.
+
+EACH SIDE'S GATE VALIDATED THE OTHER'S CLAIM, which is the useful part. This branch's frozen golden — a rolling hash over all 768 codes plus the refit codebook row, captured BEFORE either change — still passes on the composed code. That independently confirms the worker's "bit-exact" claim for the unroll, which their commit asserted from the ascending-j argmin fold but could not check against a pre-change reference, since none existed when they wrote it. The gate was built for one change and paid off on another.
+
+LESSON for parallel lines of work on the same function: when a rebase conflicts inside a hot loop, check whether the two changes are on DIFFERENT AXES before choosing a side. Unrolling and partitioning almost always compose; two rewrites of the same loop order almost never do.
