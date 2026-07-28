@@ -145,3 +145,22 @@ THEN, and only then, evaluate the PS6005 findings: register-block the output loo
 GATE FIRST if a change is made: check whether a tolerance-0 gate covers the module, and freeze one from the pre-change implementation if not. Several nn kernels were found exactness-blind by an earlier audit.
 
 SCOPE: nn/sinkhorn.go, nn/kda.go, nn/nsa.go and their new benchmark files only.
+
+## R-01KYNBK7Z7FF0TMW19APKKQQ1R PS6005 triage: 14 sites in this lane, all low-leverage or unmeasurable — and a single-run scare that was not real
+kind: research
+state: draft
+created: 2026-07-28
+
+Triage of the register-blocking rule's findings outside format/gguf, where it was worth 2.26x (Q8_0) and 1.55x (Q4_0).
+
+SITES AND VERDICTS:
+- nn/sinkhorn.go (2), nn/kda.go (1), nn/nsa.go (2) — NO BENCHMARK EXISTS for any of these modules. Not declinable on leverage, because leverage is precisely what cannot be measured. Booked as a benchmark-building task; the benchmark is the deliverable there, not the optimization.
+- nn/soap.go (2), nn/shampoo.go (3) — 8.0ms and 6.2ms benchmarks, already parallelized (1.31x / 1.08x) and Amdahl-limited; a further register-block would be a small fraction of a small number.
+- nn/galore.go (3) — 1.66ms benchmark.
+- classic/models.go (1) — no hot benchmark reaches it.
+
+Nothing here approaches the gguf case, where the flagged loop WAS the decode step.
+
+A SINGLE-RUN SCARE, recorded because the reflex it tests is the point. BenchmarkSOAPStepOnly read 8.06ms in a one-shot run at -benchtime 20x, against 6.1ms published after parallelizing it — which looks exactly like a change lost to one of the many rebases this branch has taken. It was not: min of 3 at 60x gives 7.83ms at one core and 5.99ms at twelve, a 1.31x that matches the published 1.32x, and the parallel call sites are all still present. The 8.06 was an un-warmed single sample.
+
+That is the third time in this campaign a single run has produced a misleading number (after CholeskyVJP's 0.88x and GBM exact's 0.93x), and the second time it nearly became a claim. PROC-BENCH-MINOFN-001 exists for this; the useful habit is applying it to alarming readings as readily as to favorable ones, since an apparent REGRESSION is exactly the reading one is least inclined to re-measure before reporting.
