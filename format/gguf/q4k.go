@@ -172,3 +172,36 @@ func q4nibbleAffine(y, step, off float32) byte {
 	}
 	return byte(q)
 }
+
+// dotQ4_KRow folds the Q4_K super-block dequant straight into a dot against one
+// activation row — the fused single-token path Q8_0 and Q4_0 already had. It mirrors
+// [dequantQ4_KInto] statement for statement, reading each weight into a register
+// instead of storing it and loading it back, so the per-element float32 values and the
+// ascending-k accumulation order are unchanged.
+func dotQ4_KRow(row []float32, raw []byte, k int) float64 {
+	var acc float64
+	for sb := 0; sb*qkK < k; sb++ {
+		o := sb * q4kBlockSize
+		blk := raw[o : o+q4kBlockSize]
+		d := f16ToF32(binary.LittleEndian.Uint16(blk[0:]))
+		dmin := f16ToF32(binary.LittleEndian.Uint16(blk[2:]))
+		scales, qs := blk[4:16], blk[16:144]
+		yo := sb * qkK
+		for pair := range 4 { // 4 pairs of (32 low, 32 high) = 8 sub-blocks
+			is, q := pair*2, qs[pair*32:pair*32+32]
+			sc1, m1 := getScaleMinK4(is+0, scales)
+			sc2, m2 := getScaleMinK4(is+1, scales)
+			d1, off1 := d*float32(sc1), dmin*float32(m1)
+			d2, off2 := d*float32(sc2), dmin*float32(m2)
+			base := yo + pair*64
+			xlo, xhi := row[base:base+32], row[base+32:base+64]
+			for l := range 32 {
+				acc += float64(xlo[l]) * float64(d1*float32(q[l]&0xF)-off1)
+			}
+			for l := range 32 {
+				acc += float64(xhi[l]) * float64(d2*float32(q[l]>>4)-off2)
+			}
+		}
+	}
+	return acc
+}

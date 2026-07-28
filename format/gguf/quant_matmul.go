@@ -126,6 +126,21 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 		return out, nil
 	}
 
+	// The K-quants carry the same gap, and they are llama.cpp's common deployment
+	// formats. Their per-row dot lives in a helper each: the superblock unpacking is
+	// long enough that inlining four copies of it here would bury the dispatch.
+	if m == 1 && xf32 != nil && (qt == Q4_K || qt == Q6_K) {
+		row := xf32[:k]
+		dot := dotQ4_KRow
+		if qt == Q6_K {
+			dot = dotQ6_KRow
+		}
+		for ni := range n {
+			outf[ni] = float32(dot(row, weight[ni*rowBytes:(ni+1)*rowBytes], k))
+		}
+		return out, nil
+	}
+
 	// Reused row buffer for the quant types with a fill-into-slice variant (Q4_K/Q6_K —
 	// llama.cpp's common deployment formats): dequant each weight row into one buffer
 	// rather than allocating a [k] tensor per row, the same n-allocs-per-matmul cost the

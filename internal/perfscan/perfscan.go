@@ -3809,9 +3809,16 @@ func endsInReturn(b *ast.BlockStmt) bool {
 // eqCond is one `<subject> == <constant>` test recovered from a guard condition.
 type eqCond struct{ subject, constant string }
 
-// eqConds collects every `<ident> == <named constant>` in an && chain. Only && is
-// walked: under || the guard does not establish that the constant holds, so it proves
-// no coverage. A negated test (!=) is likewise not coverage.
+// eqConds collects every `<ident> == <named constant>` reachable through && and || in a
+// guard condition. BOTH operators establish coverage, and restricting this to && was a
+// real defect — the rule reported Q4_K and Q6_K as uncovered immediately after they were
+// fused, because their guard spells the pair as `(qt == Q4_K || qt == Q6_K) && m == 1`.
+//
+// Either operator is sound here. Under && the branch is taken when the constant holds
+// and the rest of the guard passes; under || it is taken whenever the constant holds,
+// regardless of the rest. In both cases a path exists that short-circuits that variant,
+// which is exactly what coverage means. A negated test (!=) is not coverage, and a
+// unary ! is not descended into, so neither is collected.
 func eqConds(e ast.Expr) []eqCond {
 	var out []eqCond
 	var walk func(ast.Expr)
@@ -3821,7 +3828,7 @@ func eqConds(e ast.Expr) []eqCond {
 			return
 		}
 		switch be.Op {
-		case token.LAND:
+		case token.LAND, token.LOR:
 			walk(be.X)
 			walk(be.Y)
 		case token.EQL:

@@ -2414,6 +2414,43 @@ func TestDetectPS6003_MixedLiteralAndNamedCasesReportOnlyNamedVariants(t *testin
 	}
 }
 
+// A guard may spell a group of variants as a DISJUNCTION — `(q == A || q == B) && m == 1`
+// is how gguf.QMatMul covers the two K-quants that share a helper. Restricting the walk
+// to && chains made the rule report those two as uncovered the moment they were fused,
+// which is how this case was found.
+func TestDetectPS6003_DisjunctionInTheGuardCountsAsCoverage(t *testing.T) {
+	src := ps6003Prelude + `func f(q QT, m int) int {
+	if (q == A || q == B) && m == 1 {
+		return 1
+	}
+	switch q {
+	case A:
+		return 2
+	case B:
+		return 3
+	case C:
+		return 4
+	}
+	return 0
+}`
+	fs := scanSrc(t, src)
+	var msg string
+	for _, f := range fs {
+		if f.category == "partial-fast-path-coverage" {
+			msg = f.msg
+		}
+	}
+	if msg == "" {
+		t.Fatalf("want a finding naming only the uncovered variant, got %v", countCat(fs))
+	}
+	if !strings.Contains(msg, "2 of the 3") || strings.Contains(msg, "A") && strings.Contains(msg, "B, ") {
+		t.Errorf("want both disjuncts counted as covered and only C reported, got %q", msg)
+	}
+	if !strings.HasSuffix(strings.TrimSuffix(msg, " still take the general path — benchmark whether they should"), "C") {
+		t.Errorf("want C as the sole uncovered variant, got %q", msg)
+	}
+}
+
 // SILENT when the guard does not return: without the early return the general path
 // still runs, so the variant is not short-circuited at all.
 func TestDetectPS6003_SilentWhenGuardDoesNotReturn(t *testing.T) {

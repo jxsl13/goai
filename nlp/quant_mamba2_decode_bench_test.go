@@ -39,3 +39,8 @@ func benchQuantMamba2Decode(b *testing.B, qt gguf.QuantType) {
 
 func BenchmarkQuantMamba2DecodeQ8_0(b *testing.B) { benchQuantMamba2Decode(b, gguf.Q8_0) }
 func BenchmarkQuantMamba2DecodeQ4_0(b *testing.B) { benchQuantMamba2Decode(b, gguf.Q4_0) }
+
+// The K-quants are what PS6003 still reports as uncovered by a fused single-token path.
+// Q4_K and Q6_K are llama.cpp's common deployment formats, so they carry the leverage.
+func BenchmarkQuantMamba2DecodeQ4_K(b *testing.B) { benchQuantMamba2Decode(b, gguf.Q4_K) }
+func BenchmarkQuantMamba2DecodeQ6_K(b *testing.B) { benchQuantMamba2Decode(b, gguf.Q6_K) }

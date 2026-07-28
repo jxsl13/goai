@@ -124,3 +124,43 @@ func quantizeQ6_K(x []float32) []byte {
 	}
 	return out
 }
+
+// dotQ6_KRow folds the Q6_K super-block dequant straight into a dot against one
+// activation row, mirroring [dequantQ6_KInto] statement for statement including its
+// hoisted d·sc[k] products.
+//
+// Unlike the Q4_0/Q4_K fused paths, this one does NOT accumulate in ascending k: the
+// dequant writes four interleaved streams (l, l+32, l+64, l+96), and following that
+// traversal is what keeps the per-element float32 weights identical. The float64
+// accumulator sums the same set of exact products in a different order, and the result
+// narrows to float32 — so the output is unchanged, which the fused-vs-general gate
+// checks rather than assumes.
+func dotQ6_KRow(row []float32, raw []byte, k int) float64 {
+	var acc float64
+	for sb := 0; sb*qkK < k; sb++ {
+		blk := raw[sb*q6kBlockSize:]
+		ql, qh, sc := blk[0:128], blk[128:192], blk[192:208]
+		d := f16ToF32(binary.LittleEndian.Uint16(blk[208:]))
+		base := sb * qkK
+		for grp := range 2 { // two 128-element groups per super-block
+			qlo, qho, sco, yo := grp*64, grp*32, grp*8, base+grp*128
+			var dsc [8]float32
+			for k := range dsc {
+				dsc[k] = d * float32(int8(sc[sco+k]))
+			}
+			y := row[yo : yo+128]
+			for l := range 32 {
+				is := l / 16
+				q1 := int(ql[qlo+l]&0xF) | int(qh[qho+l]&3)<<4
+				q2 := int(ql[qlo+l+32]&0xF) | int((qh[qho+l]>>2)&3)<<4
+				q3 := int(ql[qlo+l]>>4) | int((qh[qho+l]>>4)&3)<<4
+				q4 := int(ql[qlo+l+32]>>4) | int((qh[qho+l]>>6)&3)<<4
+				acc += float64(y[l+0]) * float64(dsc[is+0]*float32(q1-32))
+				acc += float64(y[l+32]) * float64(dsc[is+2]*float32(q2-32))
+				acc += float64(y[l+64]) * float64(dsc[is+4]*float32(q3-32))
+				acc += float64(y[l+96]) * float64(dsc[is+6]*float32(q4-32))
+			}
+		}
+	}
+	return acc
+}
