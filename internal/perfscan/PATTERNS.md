@@ -514,6 +514,15 @@ finding), on same-base reductions with no indexed store (a norm has no output in
 independent), and when the inner loop does anything besides the accumulation (the dot is
 then not the whole cost). Findings often overlap PS4006 when the operands are `[][]T`.
 
+**Sometimes the rewrite just loses, and the dot form is already right.** The MLA score
+recompute was implemented BOTH ways, gated bit-identical, and benchmarked: a pure reorder
+is **0.85×**, and transposing the keys first — the very structure that made `matmulABt`
+win — is **0.82×**, i.e. worse still. The reason is that its `j` loop already supplies
+instruction-level parallelism (each `(i,j)` score is independent, so there is no serial
+chain to break), while ikj adds `(dh+dR)×` the read-modify-write traffic on the score
+array. Before assuming the accumulator is the bottleneck, ask whether an enclosing loop
+already provides the independence.
+
 **A·Bᵀ needs the TRANSPOSE to win, and the transpose costs an allocation — decide per
 site.** Measured both ways. `nn.matmulABt` transposes the k-dim operand once, which makes
 the inner loop contiguous, and won **2.09×**. The MLA score recompute was rewritten ikj
