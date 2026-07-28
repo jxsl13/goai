@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/jxsl13/goai/backend"
+	"github.com/jxsl13/goai/internal/simd"
 	"github.com/jxsl13/goai/tensor"
 )
 
@@ -140,12 +141,11 @@ func flashAttnTyped[T float32 | float64](q, k, v, out []T, seq, dm, dk, dkv, rep
 					mNew = mBlk
 				}
 				corr := math.Exp(m - mNew)
-				var pSum float64
-				for j := j0; j < j1; j++ {
-					e := math.Exp(p[j-j0] - mNew)
-					p[j-j0] = e
-					pSum += e
-				}
+				// vectorize the block softmax exp (was scalar math.Exp per key) — the last
+				// attention path not routed through the SIMD exp band; MHA/OpSoftmax already
+				// use ExpSumF64. In-place (dst==src) is safe: the 4-lane load precedes the
+				// store of the same 4. Rides the FlashAttn ulp tolerance (mha_test 5e-5 F32).
+				pSum := simd.ExpSumF64(p[:j1-j0], p[:j1-j0], mNew)
 				l = corr*l + pSum
 				// Key-outer/d-inner Σ p·V over the pv scratch: V is read along its
 				// contiguous rows (was stride dkv); each pv[d] still sums ascending
