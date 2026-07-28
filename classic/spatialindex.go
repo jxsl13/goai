@@ -207,7 +207,9 @@ const pruneSlack = 1e-9
 // (dist, idx) truncated to k. It assumes k ≤ n.
 func (bt *ballTree) kNN(query []float64, k int) []neighbour {
 	h := &knnHeap{k: k}
-	bt.searchKNN(bt.root, query, h)
+	if bt.root != nil {
+		bt.searchKNN(bt.root, query, h, bt.distSq(query, bt.root.centroid))
+	}
 	out := h.items
 	// out[].dist holds distSq (monotone in dist), so the (dist,idx) sort order is identical.
 	sort.Slice(out, func(a, b int) bool {
@@ -222,14 +224,20 @@ func (bt *ballTree) kNN(query []float64, k int) []neighbour {
 	return out
 }
 
-func (bt *ballTree) searchKNN(n *ballNode, query []float64, h *knnHeap) {
+// searchKNN takes dCent = bt.distSq(query, n.centroid) precomputed by the caller.
+// Every internal node already computes both children's centroid distSq to order the
+// visit, so threading that value in reuses it for the child's own prune test instead
+// of recomputing a full d-dimensional distSq per node visit. Bit-identical: dCent is
+// the exact value the recompute produced (same distSq call, same operands, same
+// deterministic summation order).
+func (bt *ballTree) searchKNN(n *ballNode, query []float64, h *knnHeap, dCent float64) {
 	if n == nil {
 		return
 	}
 	// Prune: nearest possible point in this ball is dist(query,centroid)−radius. The
 	// heap holds distSq, so convert both sides to real distances for the radius bound.
 	if h.full() {
-		minDist := bt.toDist(bt.distSq(query, n.centroid)) - n.radius
+		minDist := bt.toDist(dCent) - n.radius
 		if minDist > bt.toDist(h.worst())*(1+pruneSlack)+pruneSlack {
 			return
 		}
@@ -245,11 +253,11 @@ func (bt *ballTree) searchKNN(n *ballNode, query []float64, h *knnHeap) {
 	dl := bt.distSq(query, n.left.centroid)
 	dr := bt.distSq(query, n.right.centroid)
 	if dl <= dr {
-		bt.searchKNN(n.left, query, h)
-		bt.searchKNN(n.right, query, h)
+		bt.searchKNN(n.left, query, h, dl)
+		bt.searchKNN(n.right, query, h, dr)
 	} else {
-		bt.searchKNN(n.right, query, h)
-		bt.searchKNN(n.left, query, h)
+		bt.searchKNN(n.right, query, h, dr)
+		bt.searchKNN(n.left, query, h, dl)
 	}
 }
 
