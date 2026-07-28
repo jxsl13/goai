@@ -1582,10 +1582,14 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 				msg: "an N-D coordinate odometer ticked once per ELEMENT — the innermost axis has a" +
 					" constant stride across a run, so hoist it out and tick the odometer once per run" +
 					" instead (stride 1 becomes a copy, stride 0 a fill, anything else a straight strided" +
-					" walk). Bit-identical by construction: traversal order and the per-element work are" +
-					" unchanged, and the innermost axis contributes zero to the offset over a full run." +
-					" Verify the run length and that the enclosing loop is not already a specialized" +
-					" fast path before acting (PS4005)",
+					" walk). Measured 3.66x on autograd's broadcast VJP (543 -> 148 us). Bit-identical" +
+					" for a STORING loop (dst[i] = f(src)): each destination is written once, so only" +
+					" the order in which DISTINCT destinations are touched changes. NOT automatically" +
+					" bit-identical for an ACCUMULATING loop (dst[expr] += v): keep every destination's" +
+					" summation order, and if the hoisted run accumulates into a scalar that scalar MUST" +
+					" keep the element type — widening it to float64 and narrowing once is MORE accurate" +
+					" and therefore a different answer. Verify the run length and that the enclosing loop" +
+					" is not already a specialized fast path before acting (PS4005)",
 			})
 			return true
 		})
