@@ -52,6 +52,7 @@ func buildWordPieceTrie(pieces []string) *unigramTrie {
 		}
 		t.id[node] = int32(pid)
 	}
+	t.finalize()
 	return t
 }
 
@@ -59,7 +60,7 @@ func buildWordPieceTrie(pieces []string) *unigramTrie {
 // byte has no edge).
 func (t *unigramTrie) descend(node int32, s string) (int32, bool) {
 	for i := 0; i < len(s); i++ {
-		child, ok := t.edge[uint64(node)<<8|uint64(s[i])]
+		child, ok := t.child(node, s[i])
 		if !ok {
 			return 0, false
 		}
@@ -190,7 +191,7 @@ func (w *WordPiece) encodeWordInto(out []int, word string) []int {
 		if have {
 			cur := node
 			for be := bs; be < len(word); be++ {
-				child, ok := w.trie.edge[uint64(cur)<<8|uint64(word[be])]
+				child, ok := w.trie.child(cur, word[be])
 				if !ok {
 					break // no piece shares this prefix
 				}
