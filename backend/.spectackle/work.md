@@ -22,3 +22,26 @@ VALIDATION GATE (benchmark only): NOTHING EXISTING ISOLATES THIS, and the one be
 EXPECTED, per op: about 10 ns (map to array), 25 ns (fallback memoization including one 48 B allocation), 15 ns (Metal closure allocation), 150 ns (Metal binary double-dispatch). High confidence on the mechanism, LOW-TO-MEDIUM on end-to-end impact until a working decode benchmark exists.
 
 BIT-IDENTITY BAR: ZERO NUMERIC RISK — no arithmetic is touched anywhere. The risks are semantic and each is testable: the memo must reproduce the exact cpu-then-reference preference order of execute.go:77-94 including the cpu != ctx.Backend guard (backend/routing_test.go and preference_test.go cover this); invalidation must be correct if any program calls SetPreference after contexts exist (the doc at registry.go:112 says call it once at startup — assert that); and declining ops in metal.Kernel changes what Available()-style introspection reports for Metal, so confirm backend/metal/zzz_fallbackaudit_internal_test.go still means what it claims.
+
+## T-01KYMYXXRNEK7AWD5WCKTKCN9T Re-apply the reduceKernel strip-mine for a KEPT innermost axis, on top of main's isSum+trailing path
+kind: task
+state: draft
+created: 2026-07-28
+
+DELIBERATELY REVERTED during the origin/main merge at 92f76c13, and this task is the record of what was given up. This branch had strip-mined backend/ref/reduce.go's odometer; main had landed two orthogonal optimizations the branch lacked. Taking the branch's version would have silently reverted the trunk, so main's was kept whole.
+
+WHAT MAIN HAS: (1) an isSum flag threaded through reduceKernel that inlines `acc += x` rather than paying an indirect call through the combine func value on every element — Go cannot inline through a func value; (2) a trailing-contiguous fast path, taken when the reduced axes are exactly the innermost suffix, that accumulates each output segment in a register.
+
+WHAT IS STILL ON THE TABLE: main's trailing path subsumes the reverted work's reduce-all case and its stride-0 case. The remaining gap is the KEPT-innermost-axis case — reduced axes that are NOT the innermost suffix, e.g. reducing axis 0 of [rows,cols]. That shape falls to main's per-element odometer, which ticks a full O(nd) carry chain per element. The reverted code handled it by hoisting the innermost axis out of the odometer and walking consecutive accumulators (`dst[j] = combine(dst[j], v)` over a re-sliced run), so the odometer ticks once per run.
+
+WHY IT WAS NOT COMPOSED AT MERGE TIME: reduce is a numerics hot path whose bit-identity argument depends on each accumulator seeing the same values in the same ascending order. Splicing two independently-developed traversals together and asserting that property without a benchmark or a fresh gate would have been a guess. Merges are the wrong place to introduce unmeasured optimizations.
+
+HOW: keep main's structure exactly — the trailing branch and both isSum arms — and replace only the `else` per-element odometer with a strip-mined form that hoists shape[nd-1]. Preserve the isSum split inside it, since that is main's win and it is orthogonal. Handle eff[nd-1] == 0 (run folds into one accumulator) and == 1 (run walks consecutive accumulators); decline anything else to the existing odometer rather than carrying an unreachable third branch.
+
+BIT-IDENTITY: unchanged by construction if done correctly — every accumulator must see the same values in the same ascending order, only the index bookkeeping moves. Do not take that on faith. Probe it: perturb one accumulation by a single ulp and confirm the backend/ref reduce tests turn red BEFORE trusting them, per the pattern that found five blind kernels in this package.
+
+MEASURE: a reduction over axis 0 of a 2-D tensor is the shape that exercises the gap; the existing BenchmarkSumF64_64K does NOT reach it (verified by panic probe when the reverted version was written). A new benchmark is part of this task, not optional. Interleave per PROC-INTERLEAVE-001 and discard unless each arm holds near 5%.
+
+RECOVER THE PRIOR CODE from git: the reverted implementation is in this branch's history before the merge commit 92f76c13, in backend/ref/reduce.go. It is a starting point, not a patch to apply — main's file has changed shape around it.
+
+SCOPE: backend/ref only. NOTE the user works in parallel on backend/cuda and backend/cpu amd64 branches; backend/ref has been collision-free so far, but fetch-rebase before starting.
