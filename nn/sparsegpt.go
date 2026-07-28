@@ -91,15 +91,31 @@ func sparseGPTCore(w, x *tensor.Tensor, damp float64, blockSize int, kOf func(bl
 	}
 
 	// H = 2·X·Xᵀ (layer reconstruction Hessian), in×in — mirrors GPTQuantize.
+	// For a contiguous F64 X, route through matmulABtInto (ikj-axpy jam, no
+	// per-element AtF64 dispatch, symmetric-triangle half-MACs when a==b), then
+	// scale by 2 — bit-identical Σ_k ascending order.
 	h := make([][]float64, in)
-	for i := range in {
-		h[i] = make([]float64, in)
-		for j := range in {
-			var s float64
-			for k := range samples {
-				s += x.AtF64(i, k) * x.AtF64(j, k)
+	if xf := flatF64(x); xf != nil {
+		var bt []float64
+		c := matmulABtInto(xf, xf, in, samples, bt) // c[i*in+j] = Σ_k X[i,k]·X[j,k]
+		for i := range in {
+			hi := make([]float64, in)
+			base := i * in
+			for j := range in {
+				hi[j] = 2 * c[base+j]
 			}
-			h[i][j] = 2 * s
+			h[i] = hi
+		}
+	} else {
+		for i := range in {
+			h[i] = make([]float64, in)
+			for j := range in {
+				var s float64
+				for k := range samples {
+					s += x.AtF64(i, k) * x.AtF64(j, k)
+				}
+				h[i][j] = 2 * s
+			}
 		}
 	}
 	wm := matAt(w) // working weight [out][in], mutated by OBS compensation
