@@ -149,6 +149,13 @@ func BenchmarkGradAccumulatorAddSlow(b *testing.B) {
 // closure GradFn() returns.
 func slowGradFnClosure(a *GradAccumulator) GradFn {
 	k := float64(a.steps)
+	ik := 1 / k // MUST match the production GradFn's reciprocal-multiply average, not a
+	// per-element divide: sum·(1/k) is a legitimate ½-ulp gradient-averaging optimization
+	// (continuous output), but it is NOT bit-identical to sum/k in f64. This reference
+	// exists to isolate the ONE thing the fast path changed — the raw-slice loop vs the
+	// fillGen closure — so it must use the identical arithmetic; using a divide here made
+	// the "bit-identical" assert spuriously compare recip-mul against divide and fail
+	// data-dependently in f64 (f32 was masked by the double-rounding to float32).
 	return func(p *tensor.Tensor) *tensor.Tensor {
 		s, ok := a.sums[p]
 		if !ok || a.steps == 0 {
@@ -156,7 +163,7 @@ func slowGradFnClosure(a *GradAccumulator) GradFn {
 		}
 		out := tensor.New(p.Dtype(), p.Shape())
 		for i := range s {
-			out.SetF64(s[i]/k, tensor.Unravel(i, p.Shape())...)
+			out.SetF64(s[i]*ik, tensor.Unravel(i, p.Shape())...)
 		}
 		return out
 	}
