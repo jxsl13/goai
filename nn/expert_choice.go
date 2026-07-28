@@ -64,13 +64,22 @@ func ExpertChoiceRoute(scores [][]float64, capacity int) (tokens [][]int, gates 
 	}
 	tokens = make([][]int, e)
 	gates = make([][]float64, e)
+	// One id-indexed key column, refilled per expert. The comparator would otherwise do
+	// scores[idx[a]][ex] — a row-pointer load plus an index — on every one of the
+	// e·O(n log n) comparisons, to read a value that depends only on the token (PS3005).
+	// Filling it once per expert is O(n) and leaves the comparator a single load.
+	key := make([]float64, n)
 	for ex := range e {
 		idx := make([]int, n)
 		for i := range idx {
 			idx[i] = i
+			key[i] = scores[i][ex]
 		}
-		// sort token indices by this expert's affinity, descending (stable → ties by index)
-		sort.SliceStable(idx, func(a, b int) bool { return scores[idx[a]][ex] > scores[idx[b]][ex] })
+		// sort token indices by this expert's affinity, descending (stable → ties by index).
+		// key[id] == scores[id][ex], so this is the SAME PREDICATE as the direct form and
+		// SliceStable returns the identical permutation — the tie-by-index guarantee in
+		// this function's contract is preserved exactly, not merely "probably unchanged".
+		sort.SliceStable(idx, func(a, b int) bool { return key[idx[a]] > key[idx[b]] })
 		tokens[ex] = append([]int(nil), idx[:capacity]...)
 		gates[ex] = make([]float64, capacity)
 		for i, t := range tokens[ex] {
