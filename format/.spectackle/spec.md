@@ -27,4 +27,4 @@ Rationale: A fuzz target aimed at the zip container left the pickle interpreter 
 IF a dot product accumulates in float64 and stores its result as float32, THEN the exactness gate SHALL state that it covers element mapping and scale selection, not summation order, as TestQMatMulFusedDecodeMatchesGeneralPathExactly does.
 
 ## PERF-FASTPATH-FAMILY-001
-IF an early-return path short-circuits only some members of a variant family a switch enumerates, THEN the each uncovered variant SHALL be benchmarked before the asymmetry is assumed intentional; 3 such in QMatMul measured 1.40x-1.52x.
+IF an early-return path short-circuits only some members of a variant family a switch enumerates, THEN the uncovered variant SHALL be benchmarked before the asymmetry is assumed intentional; 3 such in QMatMul measured 1.40x-1.52x.
