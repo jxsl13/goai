@@ -2,6 +2,7 @@ package classic
 
 import (
 	"fmt"
+	"github.com/jxsl13/goai/internal/parallel"
 	"math"
 	"math/rand"
 	"runtime"
@@ -237,6 +238,13 @@ type gbmBuilder struct {
 	goLeft   []bool    // per-sample split membership during a partition (len n)
 	inSet    []bool    // membership of a round's subsample (len n)
 	vals     []float64 // bestSplit scratch: a node's feature values in sorted order (len n)
+
+	// Per-CHUNK scratch, one slot each, allocated once with the builder. Allocating these
+	// inside the parallel body instead is per NODE, which took an 80k fit from 64MB/883
+	// allocs to 2007MB/8965 — a 31x memory regression hiding behind the speedup.
+	valsPar [][]float64
+	partPar [][]int
+	cands   []splitCand // per-feature split candidates, reused across nodes
 }
 
 // newGBMBuilder argsorts every feature once and allocates the reusable scratch.
@@ -278,6 +286,14 @@ func newGBMBuilder(x [][]float64, n, d, maxDepth, minLeaf int) *gbmBuilder {
 	b.goLeft = make([]bool, n)
 	b.inSet = make([]bool, n)
 	b.vals = make([]float64, n)
+	w := parallel.Workers()
+	b.valsPar = make([][]float64, w)
+	b.partPar = make([][]int, w)
+	for i := range w {
+		b.valsPar[i] = make([]float64, n)
+		b.partPar[i] = make([]int, n)
+	}
+	b.cands = make([]splitCand, d)
 	return b
 }
 
@@ -351,14 +367,12 @@ func (b *gbmBuilder) bestSplit(start, end int) (feat int, thr float64, ok bool) 
 	// ITS TIE-BREAK: strict > keeps the FIRST feature achieving the maximum, and an
 	// ascending combine keeps that same one. A different combine order would silently
 	// change which feature a tie selects, and therefore the tree.
-	type cand struct {
-		gain, thr float64
-		feat      int
-		ok        bool
+	cands := b.cands
+	for i := range cands {
+		cands[i] = splitCand{}
 	}
-	cands := make([]cand, b.d)
-	parallelFeatures(b.d, n, func(flo, fhi int) {
-		vals := make([]float64, n)
+	parallelFeaturesIdx(b.d, n, func(ci, flo, fhi int) {
+		vals := b.valsPar[ci][:n]
 		for f := flo; f < fhi; f++ {
 			bestGain := 0.0
 			cf := b.cols[f]
@@ -386,7 +400,7 @@ func (b *gbmBuilder) bestSplit(start, end int) (feat int, thr float64, ok bool) 
 				gain := float64(nl) * float64(nr) / float64(n) * diff * diff
 				if gain > bestGain {
 					bestGain = gain
-					cands[f] = cand{gain, (vk + vn) / 2, f, true}
+					cands[f] = splitCand{gain, (vk + vn) / 2, f, true}
 				}
 			}
 		}
@@ -427,8 +441,8 @@ func (b *gbmBuilder) partition(start, end, feat int, thr float64) int {
 	// BIT-IDENTICAL: each column still receives the same STABLE partition, left run in
 	// ascending original order followed by the right run in ascending original order.
 	// Nothing is accumulated and no column reads another.
-	parallelFeatures(b.d, end-start, func(flo, fhi int) {
-		part := make([]int, end-start)
+	parallelFeaturesIdx(b.d, end-start, func(ci, flo, fhi int) {
+		part := b.partPar[ci][:end-start]
 		for f := flo; f < fhi; f++ {
 			cf := b.cols[f]
 			w, r := start, 0
@@ -915,4 +929,13 @@ func gbmRadixByKey(col []int, key []float64, k, tmpK []uint64, tmpI []int) {
 		srcK, dstK = dstK, srcK
 	}
 	// 8 (even) passes ⇒ src is the caller's col again, holding the sorted ids.
+}
+
+// splitCand is one feature's best split, recorded during the parallel scan and folded
+// afterward in ascending feature order. Package-scope and reused via gbmBuilder.cands
+// because bestSplit runs once per NODE — a per-call slice was thousands of allocations.
+type splitCand struct {
+	gain, thr float64
+	feat      int
+	ok        bool
 }

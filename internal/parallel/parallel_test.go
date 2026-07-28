@@ -99,3 +99,44 @@ func TestRowsConcurrentCallersDoNotDeadlock(t *testing.T) {
 		t.Fatalf("concurrent Rows covered %d indices, want %d", got, want)
 	}
 }
+
+// RowsIdx must cover every index exactly once, exactly as Rows does, and hand out chunk
+// indices inside [0, Workers()) so a caller can size a per-chunk buffer array by it.
+func TestRowsIdxCoversEveryIndexAndBoundsTheChunkIndex(t *testing.T) {
+	for _, n := range []int{1, 2, 7, 16, 17, 1000} {
+		hits := make([]int32, n)
+		var maxChunk atomic.Int32
+		RowsIdx(n, func(chunk, lo, hi int) {
+			if chunk < 0 || chunk >= Workers() {
+				t.Errorf("n=%d: chunk index %d outside [0,%d)", n, chunk, Workers())
+			}
+			for {
+				old := maxChunk.Load()
+				if int32(chunk) <= old || maxChunk.CompareAndSwap(old, int32(chunk)) {
+					break
+				}
+			}
+			for i := lo; i < hi; i++ {
+				atomic.AddInt32(&hits[i], 1)
+			}
+		})
+		for i, h := range hits {
+			if h != 1 {
+				t.Fatalf("n=%d: index %d visited %d times, want 1", n, i, h)
+			}
+		}
+	}
+}
+
+// Distinct chunks must get DISTINCT indices — a per-chunk buffer array is only safe if no
+// two concurrent chunks share a slot.
+func TestRowsIdxGivesDistinctChunkIndices(t *testing.T) {
+	const n = 4096
+	seen := make([]int32, Workers())
+	RowsIdx(n, func(chunk, lo, hi int) { atomic.AddInt32(&seen[chunk], 1) })
+	for c, k := range seen {
+		if k > 1 {
+			t.Fatalf("chunk index %d handed out %d times — per-chunk buffers would alias", c, k)
+		}
+	}
+}

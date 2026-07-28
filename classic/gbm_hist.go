@@ -364,6 +364,16 @@ const histParThreshold = 1 << 15
 // parallelFeatures splits the d features across the shared bounded pool. Feature-indexed
 // work in this file writes only into its own feature's slice of the output, so a
 // partition never changes a value.
+// parallelFeaturesIdx is parallelFeatures with the chunk index, for callers that keep one
+// scratch buffer per chunk rather than allocating inside the body.
+func parallelFeaturesIdx(d, n int, body func(chunk, lo, hi int)) {
+	if d*n < histParThreshold {
+		body(0, 0, d)
+		return
+	}
+	parallel.RowsIdx(d, body)
+}
+
 func parallelFeatures(d, n int, body func(lo, hi int)) {
 	if d*n < histParThreshold {
 		body(0, d)

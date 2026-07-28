@@ -55,6 +55,50 @@ func init() {
 // a work threshold against the parallelism actually available.
 func Workers() int { return len(mailboxes) + 1 }
 
+// RowsIdx is Rows with the CHUNK INDEX passed to body, so a caller can keep one scratch
+// buffer per chunk on its own struct instead of allocating one per call.
+//
+// This exists because the obvious spelling — allocating the buffer inside the body — is
+// correct but can be ruinously expensive when the parallel call is itself in a loop. The
+// GBM exact grower calls its split search and partition once PER TREE NODE; per-call
+// scratch took that fit from 64MB and 883 allocs to 2007MB and 8965, a 31x memory
+// regression hiding behind a 2.80x speedup. chunk is always in [0, Workers()).
+func RowsIdx(n int, body func(chunk, lo, hi int)) {
+	parts := min(len(mailboxes)+1, n)
+	if parts <= 1 {
+		body(0, 0, n)
+		return
+	}
+	chunk := (n + parts - 1) / parts
+	var wg sync.WaitGroup
+	var inline [][3]int
+	mb, ci := 0, 1
+	for lo := chunk; lo < n; lo += chunk {
+		hi := min(lo+chunk, n)
+		c := ci
+		ci++
+		queued := false
+		for mb < len(mailboxes) && !queued {
+			wg.Add(1)
+			select {
+			case mailboxes[mb] <- task{func(l, h int) { body(c, l, h) }, lo, hi, &wg}:
+				queued = true
+			default:
+				wg.Done()
+			}
+			mb++
+		}
+		if !queued {
+			inline = append(inline, [3]int{c, lo, hi})
+		}
+	}
+	body(0, 0, min(chunk, n)) // the caller works chunk 0
+	for _, r := range inline {
+		body(r[0], r[1], r[2])
+	}
+	wg.Wait()
+}
+
 // Rows splits [0,n) into contiguous chunks and calls body on each, returning once every
 // chunk has run. body must be safe to run concurrently for disjoint ranges: the caller
 // owns that guarantee, and for a matmul it holds because each output row is written
