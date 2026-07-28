@@ -116,25 +116,3 @@ GATE BUILT FIRST, AND IT FOUND A PRE-EXISTING HOLE: every QMatMul test compared 
 LIMIT OF THAT GATE, recorded so it is not over-trusted: reassociating the accumulation is INVISIBLE here, because a float64 accumulator narrows to a float32 output and discards the difference. A deliberate block-order reversal stayed green. The gate covers element mapping, sign and scale selection — the failure modes this path actually has — not summation order.
 
 GENERALIZED as perfscan PS6003 (partial-fast-path-coverage). REMAINING: Q2_K, Q3_K, Q5_K are still uncovered and still unmeasured — the aggressive quants, lower deployment share, each needs its own benchmark before anyone fuses it.
-
-## T-01KYMVPJW5FEAVQY0AX02QC420 Benchmark Q2_K/Q3_K/Q5_K single-token QMatMul before fusing them
-kind: task
-state: active
-created: 2026-07-28
-refs: R-01KYMVGRENENDS71F7VFKRAD5H
-
-The last three uncovered variants from the fused-decode campaign (R-01KYMVGRENEND). perfscan PS6003 reports them at format/gguf/quant_matmul.go: 4 of 7 covered, Q2_K/Q3_K/Q5_K still on the general path.
-
-DO NOT fuse on the strength of the other three. Q4_0, Q4_K and Q6_K each measured 1.40x-1.52x, but they are the deployment formats; these are the aggressive quants with more per-element unpacking and a different compute-to-traffic ratio. PERF-FASTPATH-FAMILY-001 requires a benchmark per variant, and that is the point of the rule.
-
-METHOD, non-negotiable per PROC-INTERLEAVE-001: extend BenchmarkQuantMamba2Decode in nlp/quant_mamba2_decode_bench_test.go with the three types, then alternate the change in and out within ONE session, at least 3 alternations, ONE quant at a time. Running several together already drifted an arm 25% in this campaign and produced a result that had to be discarded. Discard unless each arm's spread stays near 5%.
-
-SIGNAL TO LOOK FOR FIRST: the unfused types carry 107 allocs per decode step against the fused paths' 102, and run 40-60% slower. If a type does not show that signature, it is not paying the materialize-and-reread cost and there is nothing to win.
-
-GATE: TestQMatMulFusedDecodeMatchesGeneralPathExactly in format/gguf/quant_matmul_fused_test.go already covers any type added to its list — it runs one activation row as m==1 and as row 0 of m==2 and demands exact equality. Add the three to its QuantType loop; note its k%256 guard, since K-quants use a 256-element superblock. Per NUM-ACCUM-NARROW-001 that gate proves element mapping and scale selection, NOT summation order.
-
-WRITE EACH DOT AS A MIRROR of the corresponding dequantQ*_KInto, statement for statement, reading each weight into a register instead of storing and reloading it. See dotQ4_KRow and dotQ6_KRow in format/gguf/q4k.go and q6k.go for the shape.
-
-VERIFY: go test ./format/gguf/ ./nlp/ -count 1; gofmt -l; go vet ./format/gguf/; go run ./internal/perfscan -checks PS6003 ./... should then report 7 of 7 and emit no finding.
-
-SCOPE: format/gguf only, plus the benchmark file in nlp. Decline any type whose measurement does not clear the noise floor, and record the number — a declined variant is a result, not a gap.
