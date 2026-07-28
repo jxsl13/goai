@@ -1169,3 +1169,22 @@ func invert(col []float64, src []uint64) {
 		}
 	}
 }
+
+// PS1001 must see a loop bounded by a DIMENSION, not only one bounded by an element
+// count: `d := t.Shape()[1]; for j := range d` walks d elements exactly as
+// `for j := range t.Numel()` does. Without this the rule missed backend/ref/dpo.go,
+// whose devirtualization measured 1.57x, and nlp/kvevict.go.
+func TestDetectPS1001_ShapeBoundedLoop(t *testing.T) {
+	src := `package p
+func gather(out, t *T, idx []int) {
+	d := t.Shape()[1]
+	for r, src := range idx {
+		for j := range d {
+			out.SetF64(t.AtF64(src, j), r, j)
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["per-element-dispatch"] == 0 {
+		t.Fatalf("want ≥1 per-element-dispatch on a shape-bounded accessor loop, got 0 (%v)", got)
+	}
+}

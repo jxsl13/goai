@@ -232,6 +232,8 @@ type Config struct {
 	// PS1001 — element-count methods; a loop bounded by x.Method() over one reads as
 	// per-element (e.g. Numel).
 	ElementCountMethods []string `json:"elementCountMethods,omitempty"`
+	// ShapeMethods name calls whose INDEXED result is a dimension (Shape()[1]).
+	ShapeMethods []string `json:"shapeMethods,omitempty"`
 	// PS1001 — flat→multi-index calls; one in a loop body marks it per-element
 	// (e.g. Unravel).
 	IndexDecomposeFuncs []string `json:"indexDecomposeFuncs,omitempty"`
@@ -251,6 +253,7 @@ type Config struct {
 // nameSets is Config compiled to maps for O(1) lookup during a scan.
 type nameSets struct {
 	accessors, fastPath, elemCount, indexDecompose map[string]bool
+	shapeMethods                                   map[string]bool
 	allocators, visitors, bulkCopy, vectorized     map[string]bool
 }
 
@@ -267,6 +270,7 @@ func (c Config) compile() nameSets {
 		accessors:      toSet(c.ElementAccessors),
 		fastPath:       toSet(c.FastPathHelpers),
 		elemCount:      toSet(c.ElementCountMethods),
+		shapeMethods:   toSet(c.ShapeMethods),
 		indexDecompose: toSet(c.IndexDecomposeFuncs),
 		allocators:     toSet(c.AllocatorFuncs),
 		visitors:       toSet(c.PerElementVisitors),
@@ -1103,6 +1107,19 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 			for i, rhs := range x.Rhs {
 				call, ok := rhs.(*ast.CallExpr)
 				if !ok || !ns.elemCount[calleeName(call.Fun)] || i >= len(x.Lhs) {
+					continue
+				}
+				if id, ok := x.Lhs[i].(*ast.Ident); ok {
+					numelIdents[id.Name] = true
+				}
+			}
+			for i, rhs := range x.Rhs {
+				ix, ok := rhs.(*ast.IndexExpr)
+				if !ok || i >= len(x.Lhs) {
+					continue
+				}
+				call, ok := ix.X.(*ast.CallExpr)
+				if !ok || !ns.shapeMethods[calleeName(call.Fun)] {
 					continue
 				}
 				if id, ok := x.Lhs[i].(*ast.Ident); ok {
