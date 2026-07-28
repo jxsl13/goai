@@ -159,21 +159,71 @@ func flashAttnTyped[T float32 | float64](q, k, v, out []T, seq, dm, dk, dkv, rep
 			for j0 := 0; j0 < jmax; j0 += block {
 				j1 := min(j0+block, jmax)
 				mBlk := math.Inf(-1)
-				for j := j0; j < j1; j++ {
-					kBase := j*dkv + kvOff
-					kr := k[kBase : kBase+dk : kBase+dk]
-					var s float64
-					if isF32 {
-						s = dot4T(qr, kr)
-					} else {
+				if isF32 {
+					// Unroll-and-jam the QKᵀ score GEMV over the free key index j:
+					// 4 independent accumulators for keys j..j+3 share each qr[d]
+					// load (4× fewer Q loads), and each accumulates serially over d
+					// — the ref accumulation order, so this is STRICTLY closer to ref
+					// than the previous dot4T (rides the same FlashAttn f32 budget).
+					j := j0
+					for ; j+4 <= j1; j += 4 {
+						b0 := j*dkv + kvOff
+						kr0 := k[b0 : b0+dk : b0+dk]
+						b1 := b0 + dkv
+						kr1 := k[b1 : b1+dk : b1+dk]
+						b2 := b1 + dkv
+						kr2 := k[b2 : b2+dk : b2+dk]
+						b3 := b2 + dkv
+						kr3 := k[b3 : b3+dk : b3+dk]
+						var a0, a1, a2, a3 float64
+						for d, qv := range qr {
+							f := float64(qv)
+							a0 += f * float64(kr0[d])
+							a1 += f * float64(kr1[d])
+							a2 += f * float64(kr2[d])
+							a3 += f * float64(kr3[d])
+						}
+						s0, s1, s2, s3 := a0*scale, a1*scale, a2*scale, a3*scale
+						p[j-j0], p[j-j0+1], p[j-j0+2], p[j-j0+3] = s0, s1, s2, s3
+						if s0 > mBlk {
+							mBlk = s0
+						}
+						if s1 > mBlk {
+							mBlk = s1
+						}
+						if s2 > mBlk {
+							mBlk = s2
+						}
+						if s3 > mBlk {
+							mBlk = s3
+						}
+					}
+					for ; j < j1; j++ {
+						kBase := j*dkv + kvOff
+						kr := k[kBase : kBase+dk : kBase+dk]
+						var s float64
 						for d, qv := range qr {
 							s += float64(qv) * float64(kr[d])
 						}
+						s *= scale
+						p[j-j0] = s
+						if s > mBlk {
+							mBlk = s
+						}
 					}
-					s *= scale
-					p[j-j0] = s
-					if s > mBlk {
-						mBlk = s
+				} else {
+					for j := j0; j < j1; j++ {
+						kBase := j*dkv + kvOff
+						kr := k[kBase : kBase+dk : kBase+dk]
+						var s float64
+						for d, qv := range qr {
+							s += float64(qv) * float64(kr[d])
+						}
+						s *= scale
+						p[j-j0] = s
+						if s > mBlk {
+							mBlk = s
+						}
 					}
 				}
 				mNew := m
