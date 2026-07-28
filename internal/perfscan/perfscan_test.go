@@ -1106,3 +1106,23 @@ func matmul(a, b, c [][]float64, m, n, k int) {
 		t.Fatalf("want 0 (matmul, different bases), got %d", got)
 	}
 }
+
+// PS5002 must stay silent on an already-triangular inner loop (Cholesky j<=i): the
+// symmetric product is real but the loop covers only one triangle already.
+func TestDetectPS5002_SilentOnTriangular(t *testing.T) {
+	src := `package p
+func chol(a, l [][]float64, n int) {
+	for i := range n {
+		for j := 0; j <= i; j++ {
+			sum := a[i][j]
+			for k := range j {
+				sum -= l[i][k] * l[j][k]
+			}
+			l[i][j] = sum
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src))["symmetric-accumulation"]; got != 0 {
+		t.Fatalf("want 0 (already triangular), got %d", got)
+	}
+}
