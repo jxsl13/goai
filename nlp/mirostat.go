@@ -3,6 +3,7 @@ package nlp
 import (
 	"math"
 	"math/rand/v2"
+	"slices"
 
 	"github.com/jxsl13/goai/internal/simd"
 )
@@ -106,30 +107,81 @@ func (m *Mirostat) Sample(logits []float64) int {
 		probs[i] /= sum
 	}
 
-	// sort ids by probability descending → surprise −log₂p ascending. probs are
-	// post-softmax (≥0), so the radix helper orders them identically to the
-	// closure-comparator sort but closure-free / O(n) on the full vocab.
-	idx := make([]int, n)
-	for i := range idx {
-		idx[i] = i
+	// The survivor set is {i : surprise(i) ≤ μ} (always keeping the top token) — a tiny
+	// prefix of the prob-descending order for a peaked distribution or a decayed μ. Rather
+	// than radix-sort the WHOLE vocab to extract that prefix, pre-filter by the equivalent
+	// prob bound (surprise = −log₂p is monotone, so surprise ≤ μ ⟺ p ≥ 2⁻ᵘ) and apply the
+	// EXACT surpriseBits predicate only to the handful above the bound — the identical set,
+	// with no full-vocab log2 and no full sort. Bit-identical to the sort-then-threshold
+	// path: the 1−2⁻³⁰ margin keeps the bound safely below the true boundary (≫ log2/exp2
+	// ULP) so no qualifying token is dropped, the exact predicate then decides membership,
+	// and the survivors are stable-sorted desc-by-prob (ties → ascending id, matching the
+	// stable LSD radix's prefix). A genuinely flat distribution that admits ≥ radixSortCutoff
+	// candidates falls back to the original full radix sort — never worse than the sort path.
+	var cand []int
+	if n < radixSortCutoff {
+		// Small vocab: the full sort is already cheap AND uses the comparison path
+		// (slices.SortFunc), which is not stable — its tie order among equal-probability
+		// tokens is not reproducible from a subset, so reproduce the original path exactly.
+		cand = m.sortedKeep(probs, n)
+	} else {
+		// Large vocab (the stable LSD-radix regime, n ≥ radixSortCutoff): the full sort's tie
+		// order is ascending-id, which SortStableFunc on the ascending-id candidate list
+		// reproduces exactly — so we can skip the full sort. Pre-filter by the prob bound
+		// equivalent to surprise ≤ μ, exact-refine the few survivors, then stable-sort them.
+		argmax, maxp := 0, math.Inf(-1)
+		if m.Mu >= 0 { // μ<0 ⇒ surprise≥0>μ ⇒ nothing qualifies; just find the forced top token
+			thr := math.Exp2(-m.Mu) * (1 - 1.0/(1<<30))
+			for i, p := range probs {
+				if p > maxp {
+					maxp, argmax = p, i
+				}
+				if p >= thr {
+					cand = append(cand, i)
+				}
+			}
+		} else {
+			for i, p := range probs {
+				if p > maxp {
+					maxp, argmax = p, i
+				}
+			}
+		}
+		if len(cand) >= radixSortCutoff {
+			cand = m.sortedKeep(probs, n) // flat distribution: the full radix sort is the right tool
+		} else {
+			out := cand[:0] // exact refine on the pre-filtered few (in-place; ascending-id order kept)
+			for _, i := range cand {
+				if surpriseBits(probs[i]) <= m.Mu {
+					out = append(out, i)
+				}
+			}
+			cand = out
+			if len(cand) == 0 {
+				cand = append(cand, argmax) // always keep the top token
+			}
+			slices.SortStableFunc(cand, func(a, b int) int {
+				switch {
+				case probs[a] > probs[b]:
+					return -1
+				case probs[a] < probs[b]:
+					return 1
+				default:
+					return 0
+				}
+			})
+		}
 	}
-	sortIdxDescByProb(idx, probs)
 
-	// truncate to the prefix with surprise ≤ μ, always keeping the top token
-	keep := 1
-	for keep < n && surpriseBits(probs[idx[keep]]) <= m.Mu {
-		keep++
-	}
-
-	// sample X from the renormalized survivors
+	// sample X from the renormalized survivors (identical accumulation order to the sort path)
 	var ksum float64
-	for _, i := range idx[:keep] {
+	for _, i := range cand {
 		ksum += probs[i]
 	}
 	u := m.rng.Float64() * ksum
-	x := idx[keep-1]
+	x := cand[len(cand)-1]
 	var cum float64
-	for _, i := range idx[:keep] {
+	for _, i := range cand {
 		cum += probs[i]
 		if u <= cum {
 			x = i
@@ -141,6 +193,23 @@ func (m *Mirostat) Sample(logits []float64) int {
 	observed := surpriseBits(probs[x])
 	m.Mu -= m.Eta * (observed - m.Tau)
 	return x
+}
+
+// sortedKeep is the original full-vocab path: radix-sort all ids by descending probability
+// and return the prefix with surprise ≤ μ (always ≥ 1 token). Used as the fallback when the
+// prob pre-filter admits an unusually large candidate set, so Sample is never slower than the
+// pure sort implementation on a genuinely flat distribution.
+func (m *Mirostat) sortedKeep(probs []float64, n int) []int {
+	idx := make([]int, n)
+	for i := range idx {
+		idx[i] = i
+	}
+	sortIdxDescByProb(idx, probs)
+	keep := 1
+	for keep < n && surpriseBits(probs[idx[keep]]) <= m.Mu {
+		keep++
+	}
+	return idx[:keep]
 }
 
 // surpriseBits returns the information content −log₂(p) in bits, guarding p≤0.
