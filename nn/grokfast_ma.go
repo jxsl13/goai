@@ -124,14 +124,58 @@ func (g *GrokfastMA) Step(grad GradFn) error {
 		// overwriting the slot in place with the current gradient — same sum−old+new as the
 		// old allocate-a-fresh-slot version, bit-identical, but with no per-step allocation.
 		flat := g.ring[i][g.pos[i]]
-		if g.filled[i] == g.Window {
-			for k := range n {
-				g.sum[i][k] -= flat[k]
-			}
-		} else {
+		evict := g.filled[i] == g.Window
+		if !evict {
 			g.filled[i]++
 		}
-		// Read gr into the slot via the contiguous fast path when possible (§base-perf).
+		g.pos[i] = (g.pos[i] + 1) % g.Window
+
+		ghat := g.out[i] // reused per-param output tensor, overwritten below
+		amplify := !g.Warmup || g.filled[i] == g.Window
+		div := 1.0
+		if !g.FilterSum {
+			div = float64(g.filled[i]) // mean over the gradients currently in the window
+		}
+		sum := g.sum[i]
+		// Fused single pass for the all-contiguous-F64 case (the common path): evict the
+		// W-steps-ago slot, overwrite it with the current gradient, update the running sum
+		// and emit ĝ = g + λ·μ in ONE sweep over n instead of four (evict, copy-in, sum-add,
+		// write-out). s = (sum[k] − flat[k]) + gf[k] keeps the exact eviction association of
+		// the multi-pass form, so the running sum and every output are bit-identical.
+		if gf, hf := flatF64(gr), flatF64(ghat); gf != nil && hf != nil {
+			if evict {
+				for k := 0; k < n; k++ {
+					s := sum[k] - flat[k] + gf[k]
+					sum[k] = s
+					flat[k] = gf[k]
+					gv := gf[k]
+					if amplify {
+						gv += g.Lambda * (s / div)
+					}
+					hf[k] = gv
+				}
+			} else {
+				for k := 0; k < n; k++ {
+					s := sum[k] + gf[k]
+					sum[k] = s
+					flat[k] = gf[k]
+					gv := gf[k]
+					if amplify {
+						gv += g.Lambda * (s / div)
+					}
+					hf[k] = gv
+				}
+			}
+			filtered[p] = ghat
+			continue
+		}
+		// General fallback: evict, read the gradient into the slot, add it to the running
+		// sum, then write ĝ — handles F32 / non-contiguous gradients and outputs.
+		if evict {
+			for k := range n {
+				sum[k] -= flat[k]
+			}
+		}
 		if gf := flatF64(gr); gf != nil {
 			copy(flat, gf)
 		} else if gf := flatF32(gr); gf != nil {
@@ -144,28 +188,9 @@ func (g *GrokfastMA) Step(grad GradFn) error {
 			}
 		}
 		for k := range n {
-			g.sum[i][k] += flat[k]
+			sum[k] += flat[k]
 		}
-		g.pos[i] = (g.pos[i] + 1) % g.Window
-
-		ghat := g.out[i] // reused per-param output tensor, overwritten below
-		amplify := !g.Warmup || g.filled[i] == g.Window
-		div := 1.0
-		if !g.FilterSum {
-			div = float64(g.filled[i]) // mean over the gradients currently in the window
-		}
-		// gr[k] was already read into flat[k] above, so reuse it (bit-identical) and write
-		// ghat (fresh → contiguous) through the fast path.
-		sum := g.sum[i]
-		if hf := flatF64(ghat); hf != nil {
-			for k := range n {
-				gv := flat[k]
-				if amplify {
-					gv += g.Lambda * (sum[k] / div) // ĝ = g + λ·μ
-				}
-				hf[k] = gv
-			}
-		} else if hf := flatF32(ghat); hf != nil {
+		if hf := flatF32(ghat); hf != nil {
 			for k := range n {
 				gv := flat[k]
 				if amplify {
