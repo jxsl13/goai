@@ -218,6 +218,7 @@ var checks = []check{
 	{"PS6002", "spatial-bounds-branch", "an innermost window/kernel loop re-testing a compound spatial bounds guard (iy>=0 && iy<h && ix>=0 && ix<wd) per tap, where the in-bounds taps form one contiguous run the guard can be hoisted around", false},
 	{"PS6005", "monotone-index-bound", "an innermost loop guarding its tap work with a single relational bound on an index affine in the loop var (j:=t-(K-1)+k; if j>=0) — the in-bounds iterations are one contiguous run, clamp the loop bound instead of branching per tap", false},
 	{"PS6014", "output-invariant-operand-reload", "an output loop whose accumulator re-reads an operand that does NOT vary with the output index — unrolling the output loop by 4 amortizes that load across 4 accumulators (register blocking / unroll-and-jam)", false},
+	{"PS6006", "receiver-scratch-buffer", "a method using a receiver SLICE FIELD as a per-call temporary (indexed write, then indexed read, same call) — unsafe to call concurrently, and every caller contends on one cache line", false},
 	{"PS6003", "partial-fast-path-coverage", "a fast path that bypasses the general path for only SOME members of a variant family a switch in the same function enumerates — the uncovered variants silently pay the slow path", false},
 	{"PS6004", "unverified-dual-path", "a devirtualized fast path with a generic fallback — a bit-identity claim needing a bit-exact test", true},
 	{"PS4010", "vectorizable-butterfly", "an in-loop butterfly p,q = x+y,x-y (add and subtract of the SAME operand pair written to two indexed slots) — a scalar FWHT/FFT/Hadamard stage a SIMD Add/Sub over the contiguous stride-separated runs would vectorize", false},
@@ -1827,6 +1828,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	out = append(out, invariantTranscendentalRecomputeFindings(fset, fn)...)
 	out = append(out, partialFastPathFindings(fset, fn)...)
 	out = append(out, outputInvariantReloadFindings(fset, fn)...)
+	out = append(out, receiverScratchFindings(fset, fn)...)
 	out = append(out, vjpScalarBinopFindings(fset, fn)...)
 	out = append(out, fullSortBoundedPrefixFindings(fset, fn)...)
 	out = append(out, spatialBoundsBranchFindings(fset, fn)...)
@@ -5516,4 +5518,152 @@ func storedToIndexOf(body *ast.BlockStmt, acc, outVar string) bool {
 		return !found
 	})
 	return found
+}
+
+// receiverScratchFindings flags PS6006 — a method that uses a SLICE FIELD ON ITS RECEIVER
+// as a per-call temporary: written element-wise and read back element-wise within the
+// same call, carrying nothing between calls.
+//
+// It is two defects wearing one shape. The method cannot be called concurrently, which
+// silently blocks parallelizing any loop over it; and when someone parallelizes anyway,
+// every worker writes the same cache line.
+//
+// Both were measured on classic.GaussianMixture.logGaussian, whose triangular-solve
+// buffer was such a field. It carried a comment saying the method "runs serially" — the
+// precondition was known, written down, and still violated the moment the E-step was
+// parallelized. -race caught the correctness half. The performance half is the striking
+// one: the racy version measured 1.16x, and moving the buffer to a parameter took the
+// same parallelization to 1.93x. The contention cost more than the allocation saved.
+//
+// The fix is always the same: make it a parameter. Then the requirement lives in the
+// signature instead of a comment, and the next caller cannot miss it.
+func receiverScratchFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil || fn.Recv == nil || len(fn.Recv.List) == 0 {
+		return nil
+	}
+	recv := ""
+	if len(fn.Recv.List[0].Names) > 0 {
+		recv = fn.Recv.List[0].Names[0].Name
+	}
+	if recv == "" || recv == "_" {
+		return nil
+	}
+	// ALIASES FIRST, and they are the whole reason a naive version of this check found
+	// nothing. The shape in the wild is `y := m.yScratch` followed by `y[i] = …`, never
+	// `m.yScratch[i] = …`. A detector that insists on the literal selector cannot see the
+	// case it was written from — this one could not, until aliases were tracked.
+	alias := map[string]string{} // local ident -> receiver field it aliases
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || len(as.Lhs) != len(as.Rhs) {
+			return true
+		}
+		for i, rhs := range as.Rhs {
+			sel, ok := ast.Unparen(rhs).(*ast.SelectorExpr)
+			if !ok {
+				continue
+			}
+			if id, ok := sel.X.(*ast.Ident); !ok || id.Name != recv {
+				continue
+			}
+			if l := identName(as.Lhs[i]); l != "" && l != "_" {
+				alias[l] = sel.Sel.Name
+			}
+		}
+		return true
+	})
+	// Fields written through an INDEX (m.buf[i] = … or alias[i] = …) and fields read
+	// through one. A temporary is both; persistent state is written here, read elsewhere.
+	written, read := map[string]token.Pos{}, map[string]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		if as, ok := n.(*ast.AssignStmt); ok {
+			for _, lhs := range as.Lhs {
+				if f, okf := indexedField(lhs, recv, alias); okf {
+					if _, seen := written[f]; !seen {
+						written[f] = as.Pos()
+					}
+				}
+			}
+			for _, rhs := range as.Rhs {
+				for _, ix := range indexExprs(rhs) {
+					if f, okf := indexedField(ix, recv, alias); okf {
+						read[f] = true
+					}
+				}
+			}
+			return true
+		}
+		return true
+	})
+	var out []finding
+	for f, pos := range written {
+		if !read[f] {
+			continue // written but never read back here: an output, not a temporary
+		}
+		// Written-and-read-in-one-method is NOT enough on its own, and the first cut of
+		// this check proved it by flagging m.Means — persistent model state that mStep
+		// legitimately fills and reads back. Nothing in the AST separates "temporary"
+		// from "state I happen to finish building here"; the difference is intent, and
+		// the place intent is recorded is the name. This repo spells its temporaries
+		// yScratch, tScr, ghScr, idxbuf — so the name is the discriminator, and a project
+		// whose convention differs configures its own.
+		if !looksLikeScratchName(f) {
+			continue
+		}
+		out = append(out, finding{
+			pos:      fset.Position(pos),
+			category: "receiver-scratch-buffer",
+			msg:      fmt.Sprintf("%q is a receiver slice field used as a per-call temporary — pass it as a parameter instead: as a field it makes this method unsafe to call concurrently, and concurrent callers contend on one cache line", recv+"."+f),
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].pos.Offset < out[j].pos.Offset })
+	return out
+}
+
+// recvIndexField matches `recv.field[...]` and returns "field".
+func recvIndexField(e ast.Expr, recv string) (string, bool) {
+	ix, ok := ast.Unparen(e).(*ast.IndexExpr)
+	if !ok {
+		return "", false
+	}
+	sel, ok := ast.Unparen(ix.X).(*ast.SelectorExpr)
+	if !ok {
+		return "", false
+	}
+	if id, ok := sel.X.(*ast.Ident); !ok || id.Name != recv {
+		return "", false
+	}
+	return sel.Sel.Name, true
+}
+
+// scratchNameParts are the substrings that mark a field as a per-call temporary by
+// convention. Advisory by nature: a name is evidence of intent, not proof of it.
+var scratchNameParts = []string{"scratch", "scr", "buf", "tmp", "temp", "work"}
+
+func looksLikeScratchName(f string) bool {
+	l := strings.ToLower(f)
+	for _, p := range scratchNameParts {
+		if strings.Contains(l, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// indexedField matches an indexed use of a receiver slice field, whether written
+// directly (recv.field[i]) or through a local alias (y := recv.field; y[i]).
+func indexedField(e ast.Expr, recv string, alias map[string]string) (string, bool) {
+	if f, ok := recvIndexField(e, recv); ok {
+		return f, true
+	}
+	ix, ok := ast.Unparen(e).(*ast.IndexExpr)
+	if !ok {
+		return "", false
+	}
+	if id, ok := ast.Unparen(ix.X).(*ast.Ident); ok {
+		if f, isAlias := alias[id.Name]; isAlias {
+			return f, true
+		}
+	}
+	return "", false
 }

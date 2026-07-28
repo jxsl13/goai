@@ -720,6 +720,48 @@ feature's bins a shared write target. Feature-major is partitionable and 22% slo
 core. Keep both and choose by whether the work will actually be split — otherwise a
 constrained host pays for a speedup it will never collect.
 
+## PS6006 — a receiver field used as a per-call temporary  *(scanner: static)*
+
+```go
+func (m *M) logGaussian(x []float64, c int) (float64, error) {
+    y := m.yScratch            // receiver field, taken as a local alias
+    for i := range d { … ; y[i] = s * id[i] }   // written…
+    for i := range d { quad += y[i] * y[i] }    // …and read back, same call
+}
+```
+
+**Two defects wearing one shape.** The method cannot be called concurrently, which
+silently blocks parallelizing any loop over it; and when someone parallelizes anyway,
+every worker writes the same cache line.
+
+**Both were measured.** `classic.GaussianMixture.logGaussian` carried exactly this, with a
+comment saying the method *runs serially* — the precondition was known, written down, and
+violated the moment the E-step was parallelized. `-race` caught the correctness half. The
+performance half is the striking one: the racy version measured **1.16×**, and moving the
+buffer to a parameter took the same parallelization to **1.93×**. The contention cost more
+than the allocation saved.
+
+**The fix is always the same:** make it a parameter. The requirement then lives in the
+signature instead of a comment, where the next caller cannot miss it.
+
+**Two things this check needed that the obvious version lacks.**
+
+*Alias tracking.* Real code writes `y := m.yScratch` then `y[i] = …`, not
+`m.yScratch[i] = …`. A detector insisting on the literal selector found **nothing at all**,
+including the method it was written from.
+
+*A name discriminator.* Written-and-read-in-one-method is not sufficient: the first cut
+flagged `m.Means`, persistent model state that the M-step legitimately fills and reads
+back. Nothing in the AST separates *temporary* from *state I happen to finish building
+here* — the difference is intent, and intent is recorded in the name. Hence
+`scratch`/`scr`/`buf`/`tmp`/`work`; a project with a different convention configures its own.
+
+Silent on plain functions (no receiver, no sharing) and on fields only written and never
+read back, which are outputs rather than temporaries.
+
+**Zero findings tree-wide** — the one instance was fixed by the work that motivated the
+rule, so it stands as a regression guard.
+
 ## PS6003 — a fast path that covers only part of a variant family  *(scanner: static)*
 
 A function short-circuits the general path for some members of a variant family, and a

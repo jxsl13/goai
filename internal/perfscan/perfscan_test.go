@@ -3462,3 +3462,105 @@ func f(n, k int, row, w []float64) float64 {
 			got["output-invariant-operand-reload"], got)
 	}
 }
+
+// The classic.GaussianMixture shape: a receiver slice field taken as a local alias, then
+// written and read back element-wise within one call.
+func TestDetectPS6006_ReceiverScratchViaAlias(t *testing.T) {
+	src := `package p
+type M struct{ yScratch []float64 }
+func (m *M) f(x []float64, d int) float64 {
+	y := m.yScratch
+	for i := range d {
+		s := x[i]
+		for j := range i {
+			s -= y[j]
+		}
+		y[i] = s
+	}
+	var q float64
+	for i := range d {
+		q += y[i] * y[i]
+	}
+	return q
+}`
+	if got := countCat(scanSrc(t, src)); got["receiver-scratch-buffer"] != 1 {
+		t.Fatalf("want 1 receiver-scratch-buffer, got %d (%v)", got["receiver-scratch-buffer"], got)
+	}
+}
+
+// ALIAS TRACKING IS THE LOAD-BEARING PART. The direct spelling is rarer in real code than
+// the aliased one, and a version of this check that only matched `m.buf[i]` found nothing
+// at all — including the very method it was written from.
+func TestDetectPS6006_ReceiverScratchWrittenDirectly(t *testing.T) {
+	src := `package p
+type M struct{ tmpbuf []float64 }
+func (m *M) f(x []float64, d int) float64 {
+	for i := range d {
+		m.tmpbuf[i] = x[i] * 2
+	}
+	var q float64
+	for i := range d {
+		q += m.tmpbuf[i]
+	}
+	return q
+}`
+	if got := countCat(scanSrc(t, src)); got["receiver-scratch-buffer"] != 1 {
+		t.Fatalf("want 1 for the direct spelling, got %d (%v)", got["receiver-scratch-buffer"], got)
+	}
+}
+
+// SILENT on persistent state. This is the false positive the first cut produced: a method
+// that fills model parameters and reads them back is not using a temporary. Nothing in
+// the AST separates the two, so the field NAME carries the intent.
+func TestDetectPS6006_SilentOnPersistentState(t *testing.T) {
+	src := `package p
+type M struct{ Means []float64 }
+func (m *M) f(x []float64, d int) float64 {
+	for i := range d {
+		m.Means[i] = x[i]
+	}
+	var q float64
+	for i := range d {
+		q += m.Means[i]
+	}
+	return q
+}`
+	if got := countCat(scanSrc(t, src)); got["receiver-scratch-buffer"] != 0 {
+		t.Fatalf("want 0 on persistent state, got %d (%v)", got["receiver-scratch-buffer"], got)
+	}
+}
+
+// SILENT when the field is only WRITTEN here: that is an output being produced, not a
+// temporary being reused, and passing it as a parameter would be the wrong advice.
+func TestDetectPS6006_SilentWhenOnlyWritten(t *testing.T) {
+	src := `package p
+type M struct{ outbuf []float64 }
+func (m *M) f(x []float64, d int) {
+	for i := range d {
+		m.outbuf[i] = x[i] * 2
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["receiver-scratch-buffer"] != 0 {
+		t.Fatalf("want 0 when the field is only written, got %d (%v)",
+			got["receiver-scratch-buffer"], got)
+	}
+}
+
+// SILENT on a plain function: with no receiver there is no shared field, so there is
+// neither a concurrency hazard nor contention to report.
+func TestDetectPS6006_SilentOnNonMethod(t *testing.T) {
+	src := `package p
+func f(buf, x []float64, d int) float64 {
+	for i := range d {
+		buf[i] = x[i]
+	}
+	var q float64
+	for i := range d {
+		q += buf[i]
+	}
+	return q
+}`
+	if got := countCat(scanSrc(t, src)); got["receiver-scratch-buffer"] != 0 {
+		t.Fatalf("want 0 on a non-method, got %d (%v)", got["receiver-scratch-buffer"], got)
+	}
+}
