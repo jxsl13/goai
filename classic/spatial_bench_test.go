@@ -142,3 +142,18 @@ func TestBallTreeEquivalence(t *testing.T) {
 		}
 	}
 }
+
+// BenchmarkKNNFit times the FIT, which is where the ball-tree index is built — the
+// half of KNN that has historically lost to sklearn, and which BenchmarkKNNPredict
+// deliberately excludes by fitting before ResetTimer.
+func BenchmarkKNNFit(b *testing.B) {
+	X, y := spatialData(4000, 20)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		m := NewKNNClassifier(WithKNNK(5))
+		if err := m.Fit(X, y); err != nil {
+			b.Fatal(err)
+		}
+	}
+}

@@ -34,6 +34,12 @@ type ballTree struct {
 	pts    [][]float64
 	metric ballMetric
 	root   *ballNode
+
+	// splitKey is point-id-indexed scratch for the median-split sort: filling it once
+	// per node (O(m)) hoists the scattered pts[id][splitDim] load out of the O(m log m)
+	// comparator, which otherwise pays a row-pointer load plus an index per comparison.
+	// One allocation for the whole build, reused down the recursion.
+	splitKey []float64
 }
 
 // ballMetric selects the distance the tree measures with. It mirrors the two
@@ -68,7 +74,7 @@ func buildBallTree(pts [][]float64, metric ballMetric) *ballTree {
 	if len(pts) <= ballLeafSize {
 		return nil
 	}
-	bt := &ballTree{pts: pts, metric: metric}
+	bt := &ballTree{pts: pts, metric: metric, splitKey: make([]float64, len(pts))}
 	idx := make([]int, len(pts))
 	for i := range idx {
 		idx[i] = i
@@ -160,8 +166,15 @@ func (bt *ballTree) build(idx []int) *ballNode {
 		n.idx = idx
 		return n
 	}
+	// Hoist the scattered load out of the comparator (see ballTree.splitKey). The
+	// comparator stays the SAME PREDICATE — key[id] == pts[id][splitDim] — so pdqsort
+	// returns the same permutation on the same input, ties included.
+	key := bt.splitKey
+	for _, id := range idx {
+		key[id] = bt.pts[id][splitDim]
+	}
 	sort.Slice(idx, func(a, b int) bool {
-		return bt.pts[idx[a]][splitDim] < bt.pts[idx[b]][splitDim]
+		return key[idx[a]] < key[idx[b]]
 	})
 	mid := len(idx) / 2
 	n.left = bt.build(idx[:mid])
