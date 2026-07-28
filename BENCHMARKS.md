@@ -33,6 +33,61 @@ Two machines appear below:
 
 ---
 
+## Current system — live, honest, spectackle-sourced
+
+> This section is measured on **the machine this repo is checked out on right
+> now** and regenerated from the [spectackle](spec/) bench store — the single
+> source of truth — by `scripts/bench-host.sh`. Every number carries its tool
+> version and a machine *frame* (os/arch/cpu/ram/gpu), so gaps are honest and
+> per-host: a result from an Apple AMX machine is never silently compared to a
+> Zen 3 AVX2 one. Re-run `scripts/bench-host.sh all` (or the cron) to append a
+> fresh, dated version.
+
+**Host & tool versions** (auto-captured each run; run `scripts/bench-host.sh manifest`):
+
+| Component | Version |
+|---|---|
+| Host | Linux x86_64, AMD **Ryzen 7 5700G** (Zen 3, 8C/16T), 30 GiB |
+| GPU | NVIDIA **RTX 3060** 12 GB, driver 610.43.03 |
+| GoAI | `go1.26.5`, `GOEXPERIMENT=simd` (AVX2 CPU path) |
+| GoAI CUDA | pip CUDA-12 wheels in `.venv-cuda` (cudart/cublas/nvrtc, no system toolkit) |
+| torch (CPU) | **2.13.0+cpu** (OpenBLAS), numpy **2.4.4** — in `.venv` |
+| torch (CUDA) / vLLM | **2.11.0+cu130** / vLLM **0.25.1** — in `vllm-venv` |
+| llama.cpp | prebuilt **Vulkan** `b10012` (runs on Vulkan 1.4.341; no nvcc) |
+
+### CPU GEMM 1024³ — GoAI SIMD vs the installed BLAS incumbents *(measured 2026-07-28)*
+
+Same machine, same shape, same thread count (16). GoAI = `count=10` mean;
+Python = 15-rep median after 3 warmups. Higher GFLOP/s is better.
+
+| Precision | GoAI (AVX2) | numpy 2.4.4 | torch-cpu 2.13.0 | Best incumbent | Verdict |
+|---|--:|--:|--:|---|---|
+| **f32** | 351 GFLOP/s ±6 | 417 ±65 | **530 ±74** | torch 530 | **torch 1.51×** ahead (numpy 1.19×) |
+| **f64** | 90.5 GFLOP/s ±1 | **271 ±33** | 163 ±16 | numpy 271 | **numpy 3.0×** ahead (torch 1.8×) |
+
+**Honest read:** on this Zen 3 host GoAI's pure-Go AVX2 GEMM trails the
+BLAS-backed incumbents — 1.5× behind torch (f32), 3× behind numpy (f64). This
+does **not** contradict the M2-Pro "parity" result below: that number used
+Apple's **AMX** matrix coprocessor, a hardware path with no Zen 3 equivalent.
+The gap here is the honest cost of a portable pure-Go kernel versus decades-tuned
+OpenBLAS, and it is a booked optimization front (blocked/packed micro-kernel,
+`internal/simd` FMA GEMM). Note the incumbents' high variance (±65–74) — BLAS
+thread-pool + turbo jitter; GoAI's is ±1–6.
+
+*Persisted:* `spectackle call bench '{"op":"ls"}' | grep cpu/GEMM` →
+`cpu/GEMM_{f32,f64}_1024/{goai-simd,torch-cpu-2.13.0,numpy-2.4.4}`.
+
+### Wired, refreshing next run (same host, same driver)
+
+`scripts/bench-host.sh` also drives the GPU and tokenizer/classical head-to-heads
+on this exact RTX 3060 — GoAI `-tags cuda` decode vs **vLLM 0.25.1** and
+**llama.cpp Vulkan** on the GGUF checkpoints in `models/`, matched precision class
+(Q4_K vs Q4_K_M, Q8 vs Q8). Those append to spectackle under the `gpu=rtx-3060`
+frame as they run; the tables below are the prior measurements pending this host's
+fresh re-run.
+
+---
+
 ## Scoreboard at a glance
 
 | Category | Benchmark | GoAI | Best incumbent | Verdict |
