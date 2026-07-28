@@ -73,17 +73,60 @@ func Sinkhorn(cost *tensor.Tensor, r, c []float64, eps float64, iters int) (*ten
 	for j := range v {
 		v[j] = 1
 	}
+	// Both half-iterations are register-blocked 4 ways over the OUTPUT index. That choice
+	// is what keeps the result bit-identical to the unblocked form: every accumulator
+	// still walks its reduction axis in ascending order, so each one sums exactly the
+	// sequence it would have summed alone. Unrolling the REDUCTION axis instead would
+	// reassociate the adds and change the last bits.
 	for range iters {
-		for i := range m { // u = r ⊘ (K v)
+		i := 0
+		for ; i+4 <= m; i += 4 { // u = r ⊘ (K v), four rows per pass
+			k0, k1, k2, k3 := k[i], k[i+1], k[i+2], k[i+3]
+			var a0, a1, a2, a3 float64
+			for j := range n {
+				vj := v[j] // one load feeds four accumulators
+				a0 += k0[j] * vj
+				a1 += k1[j] * vj
+				a2 += k2[j] * vj
+				a3 += k3[j] * vj
+			}
+			for b, kv := range [4]float64{a0, a1, a2, a3} {
+				if kv > 0 {
+					u[i+b] = r[i+b] / kv
+				}
+			}
+		}
+		for ; i < m; i++ {
+			ki := k[i]
 			var kv float64
 			for j := range n {
-				kv += k[i][j] * v[j]
+				kv += ki[j] * v[j]
 			}
 			if kv > 0 {
 				u[i] = r[i] / kv
 			}
 		}
-		for j := range n { // v = c ⊘ (Kᵀ u)
+		// v = c ⊘ (Kᵀ u). Blocking matters far more here: k is row-major, so the
+		// unblocked form walks a COLUMN — one cache line touched per row, 7 of its 8
+		// doubles wasted. Four adjacent columns per pass reuse the line that was paid for
+		// anyway, on top of sharing the u[i] load.
+		j := 0
+		for ; j+4 <= n; j += 4 {
+			var a0, a1, a2, a3 float64
+			for i := range m {
+				ui, ki := u[i], k[i]
+				a0 += ki[j] * ui
+				a1 += ki[j+1] * ui
+				a2 += ki[j+2] * ui
+				a3 += ki[j+3] * ui
+			}
+			for b, ktu := range [4]float64{a0, a1, a2, a3} {
+				if ktu > 0 {
+					v[j+b] = c[j+b] / ktu
+				}
+			}
+		}
+		for ; j < n; j++ {
 			var ktu float64
 			for i := range m {
 				ktu += k[i][j] * u[i]
