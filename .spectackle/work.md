@@ -717,3 +717,33 @@ HOW IT WAS FOUND: PS6001 (012326b, extended in 727ef7b) began reporting backend/
 WHAT IS NOT YET KNOWN: only mha was probed in cpu. elementwise, conv and crossentropy returned SKIP because the probe's heuristic (first line matching `x += a * b`) found no match in them; they are UNPROBED, not cleared. A targeted probe per file would settle them, and PS6001 lists 56 dual-path functions tree-wide as the population to work through.
 
 RECOMMENDED ORDER: cpu/mha forward and backward first, since attention is the hottest path and the backward is the least visible; then the remaining cpu dual-path functions; then ref. The collapse-test technique that guards ref/mha may transfer directly — cpu/mha against ref/mha in a shared configuration — but per R-01KYM5J5Z8EK9 that agreement must be MEASURED before being relied upon, since the flashattn collapse looked equally plausible and failed in 27 of 48 elements.
+
+## R-01KYM78A9BEBCRJHERXPEBAP68 Correction: cpu/mha:596 is unreached, not blind — audit evidence overstated
+kind: research
+state: draft
+created: 2026-07-28
+
+CORRECTION to R-01KYM6C5AWFKZ, and a revised count for the production attention audit.
+
+WHAT WAS WRONG: that record listed backend/cpu/mha.go:596 (mhaBwdGemmBand) as BLIND on the strength of a surviving one-ulp mutation. The measurement was vacuous. A panic probe shows mhaBwdGemmBand is not reached by the backend/cpu suite at all, nor by an f32 backward at seq=128. It is selected by `case f32NativeKernels && seq >= mhaGemmMinSeq` — the SIMD experiment build described in CPU-002 — so in the default build it is dead code, and mutating dead code always survives. Unreached is not unguarded.
+
+REVISED STATUS of the three probe points originally reported:
+  mha.go:351 QK product          genuinely blind; now guarded bit-exactly (3d3e882, 92320a2)
+  mha.go:338 ALiBi bias (f32)    genuinely reached; guarded against a sign flip. A one-ulp scale is
+                                 absorbed because the bias is small beside the score (PROC-010), and a
+                                 +1 distance shift stays green and is still UNEXPLAINED
+  mha.go:596 GEMM-band backward  NOT blind — unreached in the default build. Requires the experiment
+                                 build to test at all
+The audit's headline claim — that production attention was less verified than its reference — stands on 351 alone, which is sufficient, but the evidence was overstated by one third.
+
+WHAT NOW GUARDS PRODUCTION ATTENTION:
+  forward F64 and F32   bit-exact against ref (0 of 48 measured before relying on it)
+  backward F64          bit-exact against ref; catches mutations at mha.go:660 and :675
+  backward f32          tolerance rel 2e-3 / abs 1e-4, margins 1.53e-04 and 2.38e-07. The bound is
+                        BORROWED from CPU-002, which scopes it to the experiment-build GEMM path, not
+                        mandated for this one
+  mhaBwdGemmF32         untested and untestable without the experiment build
+
+CAST AS PROC-012: confirm the mutated line executes before concluding a probe means the code is unguarded. This is the missing half of PROC-009 — that rule says to probe before rewriting, but says nothing about validating the probe itself, which is exactly where both errors happened. The other was the AddBias benchmarks, which measured a broadcast path that bcastBlockApply shadows, and that one manufactured an entire investigation before the control benchmark exposed it.
+
+METHOD NOTE: the correction surfaced only because a sign-flip probe on 596 came back green AFTER a tolerance test was in place, which was inconsistent with the earlier BLIND reading. Two probes disagreeing is the signal worth chasing; a single probe agreeing with expectation is not evidence.
