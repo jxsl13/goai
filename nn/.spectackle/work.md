@@ -126,3 +126,22 @@ TWO REPORTING ERRORS OF MY OWN, both caught before they reached a conclusion and
 1. FIELD-INDEXED BENCHMARK PARSING IS UNSAFE. A benchmark calling SetBytes emits an extra MB/s column after ns/op, shifting everything after it. A naive awk read reported BenchmarkGPT2Encode at 10,565,506 allocs/op; the true figure is 37, and the 10.5M was its B/op. Caught only because allocations cannot exceed bytes and the accompanying B/op read as zero. Match trailing unit labels, not positions.
 
 2. A CORRECTION THAT DID NOT REACH THE INSTRUMENT. An earlier commit corrected CholeskyVJP from a reported 0.88x to 1.09x and hardened scaling_sweep.sh so the misreading could not recur — but the script's own HEADER went on citing 0.88x as an example of what the tool finds. A stale figure inside the instrument that produced it is worse than one in prose: it is the first thing the next reader sees, and it recommends chasing a defect that does not exist. Fixed. When correcting a measurement, grep for the number, not just the document.
+
+## T-01KYNBK6PAFA5SCPX7W1SP3BW7 Benchmark sinkhorn, kda and nsa — PS6005 flags them but nothing can validate a change
+kind: task
+state: draft
+created: 2026-07-28
+
+BLOCKED ON MEASUREMENT, not on analysis. PS6005 (output-invariant-operand-reload, the register-blocking shape) reports nn/sinkhorn.go:77 and :86, nn/kda.go:78, and nn/nsa.go:72 and :130. That shape was worth 2.26x on gguf's Q8_0 fused dot and 1.55x on Q4_0, so the findings are plausible.
+
+NONE OF THE THREE MODULES HAS A BENCHMARK. There is nothing to A/B against, so the standing rule that an optimization must be verified on this host cannot be satisfied — the work is not declinable on leverage either, because leverage is exactly what cannot be measured. That makes the benchmark the deliverable, not the optimization.
+
+WHAT TO BUILD: one fixture per module at a shape representative of real use, in the style of nn/train_bench_test.go. Sinkhorn is an iterative normalization over a cost matrix; KDA and NSA are attention variants, so size them by sequence length and head count rather than by parameter count. Reuse an existing constructor if one exists rather than hand-building state — nlp's benchMamba2Model is the pattern for a synthetic model fixture, and building one was itself the blocking step for the T5 KV-cache work.
+
+VERIFY THE BENCHMARK REACHES THE FLAGGED LINE before trusting any number: insert a panic at the site and confirm the benchmark hits it. Two separate efforts in this campaign built benchmarks that never entered the loop they were meant to cover (the pre-existing Mamba prefill benchmarks are Mamba1 and never reach mixer2Prefill; every quantized benchmark was single-token and never reached QMatMul's m>1 path). A benchmark that misses its target measures nothing and reads as evidence anyway.
+
+THEN, and only then, evaluate the PS6005 findings: register-block the output loop by 4 so one shared-operand load feeds four accumulators, measure interleaved with min of 3 runs per arm, and report allocs alongside ns/op. Expect a SMALLER gain than gguf saw — those dots are pure arithmetic over a shared activation row, whereas these sites do more per element, and the campaign's measured ordering was monotone in per-element unpacking cost.
+
+GATE FIRST if a change is made: check whether a tolerance-0 gate covers the module, and freeze one from the pre-change implementation if not. Several nn kernels were found exactness-blind by an earlier audit.
+
+SCOPE: nn/sinkhorn.go, nn/kda.go, nn/nsa.go and their new benchmark files only.
