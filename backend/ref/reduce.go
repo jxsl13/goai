@@ -98,24 +98,48 @@ func reduceKernel(init float64, combine func(acc, x float64) float64, finalize f
 		// sequence — bit-identical.
 		if xs, ok := f64Data(x); ok {
 			shape := x.Shape()
-			eff := make([]int, nd)
-			for ax := range nd {
-				if p := outAxisOf[ax]; p >= 0 && !reduced[ax] {
-					eff[ax] = outStrides[p]
+			// Trailing-contiguous fast path: when the reduced axes are exactly the innermost
+			// suffix (e.g. axis-1 of [rows,cols]), each output is a contiguous [count]-element
+			// run, so accumulate it in a REGISTER per segment — dropping the per-element odometer
+			// AND the acc[of] load/store to memory. Output index == segment (row-major over the
+			// kept leading axes), and each segment sees xs[seg*count : (seg+1)*count] in the same
+			// ascending order the odometer would → bit-identical combine sequence.
+			trailing := count > 1
+			for ax := 1; ax < nd; ax++ {
+				if reduced[ax-1] && !reduced[ax] { // a kept axis after a reduced one breaks the suffix
+					trailing = false
+					break
 				}
 			}
-			idx := make([]int, nd)
-			of := 0
-			for pos := range xs {
-				acc[of] = combine(acc[of], xs[pos])
-				for d := nd - 1; d >= 0; d-- {
-					idx[d]++
-					of += eff[d]
-					if idx[d] < shape[d] {
-						break
+			if trailing {
+				for seg := 0; seg < outNumel; seg++ {
+					a := acc[seg]
+					base := seg * count
+					for k := 0; k < count; k++ {
+						a = combine(a, xs[base+k])
 					}
-					idx[d] = 0
-					of -= eff[d] * shape[d]
+					acc[seg] = a
+				}
+			} else {
+				eff := make([]int, nd)
+				for ax := range nd {
+					if p := outAxisOf[ax]; p >= 0 && !reduced[ax] {
+						eff[ax] = outStrides[p]
+					}
+				}
+				idx := make([]int, nd)
+				of := 0
+				for pos := range xs {
+					acc[of] = combine(acc[of], xs[pos])
+					for d := nd - 1; d >= 0; d-- {
+						idx[d]++
+						of += eff[d]
+						if idx[d] < shape[d] {
+							break
+						}
+						idx[d] = 0
+						of -= eff[d] * shape[d]
+					}
 				}
 			}
 			out := tensor.NewOn(ctx.Device(), x.Dtype(), outShape)
