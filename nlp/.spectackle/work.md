@@ -68,3 +68,21 @@ VALIDATION GATE (benchmark only): the micro A/B already exists and is already do
 EXPECTED, stated honestly: about 12 us/token saved at dim 2048. At the benchmark's dim 256 that is under 0.1% of a 3.3 ms quantized token, so EXPECT THE E2E A/B TO SHOW NOISE. The real win is at production geometry (dim 4096+), and even there it is roughly 1-2% of a token. High confidence in the microbenchmark ratio AND high confidence that the e2e delta will be small. Do it because it is one line and closes a completed sweep, not because it is a large win — and do not let a noisy e2e result be read as the change being wrong.
 
 BIT-IDENTITY BAR: none. Identical float64/float32 round-trip argument; embedRow's F32 arm is a bit-exact copy. This exact substitution is already pinned by the TestQuantLlamaDecodeMatchesForward-family equivalence tests on the other 28 paths.
+
+## R-01KYMVHB75F3ETH2YCC3NVZGEQ DECLINED: hoisting the loop-invariant in quant_mamba2's SSD scan — QMatMul is 76% of the decode step
+kind: research
+state: draft
+created: 2026-07-28
+
+perfscan PS5003 flagged nlp/quant_mamba2.go:452 — `bi*(xc[hOff+j]*delta)` rebuilds a value that varies with the inner index but not the outer, N times per j. The pattern is REAL and the finding is correct: it is the exact shape whose fix in the float sibling nlp/mamba2_decode.go measured 1.08-1.10x on prefill, and nlp/mamba2.go already carries the hoist.
+
+DECLINED ANYWAY, on measurement rather than shape. A CPU profile of QuantMamba2 DecodeStep (2 layers, d_model 256, 3000 iterations):
+  gguf.QMatMul                 63.45% flat, 75.86% cumulative
+  QuantMamba2Mixer.step         2.07% flat
+The SSD scan does not surface at all. The hoist removes one of three multiplies in the update loop; against a step three-quarters spent in the quantized matmuls, the ceiling is about 1% and below the interleaving noise floor — unmeasurable here, so not shippable here.
+
+THE ENCLOSING WORK DECIDES, not the code shape. Sixth validation of that heuristic. The same source expression is worth 1.10x in the float path, where no quantized matmul competes with it, and worth nothing in the quantized one.
+
+WHERE THE LEVERAGE ACTUALLY WAS: the profile pointed at QMatMul, where Q4_0 decode ran slower than Q8_0 — a fused single-token path existed for Q8_0 alone. Fusing Q4_0/Q4_K/Q6_K measured 1.40x/1.40x/1.52x on the same benchmark. See R-01KYMVGRENEND. Profiling before optimizing turned a sub-1% candidate into a 1.4x one in the same function's caller.
+
+STATUS: the PS5003 finding at that line stands and is NOT suppressed. It becomes shippable if the quantized matmuls ever stop dominating the step — recorded here so the next agent to see the finding reads the measurement instead of repeating it.
