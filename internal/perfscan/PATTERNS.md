@@ -33,6 +33,8 @@ with `-config file.json` or a discovered `perfscan.json` / `.perfscan.json`:
   "elementAccessors":       ["AtF64", "SetF64"],     // PS1001/PS1002
   "fastPathHelpers":        ["flatF64", "flatF32"],   // PS1001 — presence silences a fallback loop
   "elementCountMethods":    ["Numel"],               // PS1001 — a loop bound over this reads as per-element
+  "shapeMethods":           ["Shape"],               // PS1001 — `d := t.Shape()[1]` then `for j := range d`
+                                                     //          walks d elements exactly as Numel() does
   "indexDecomposeFuncs":    ["Unravel"],             // PS1001 — flat→multi-index marks a per-element loop
   "allocatorFuncs":         ["New", "Zeros", "Cast"], // PS2001 — allocation in a per-element loop
   "perElementVisitors":     ["readGen", "fillGen"],   // PS1002 — helper fed a per-element closure
@@ -360,3 +362,67 @@ via `+=`/`-=`/`*=` (a reduction — a softmax Σ or attention denominator, where
 is minor or parity-locked, not a config scalar), on loops already dominated by a
 transcendental (K/L territory — the divide is in the noise), on integer INDEX divisions
 (`a[i/stride]`), on divisors that vary across iterations, and on non-element-wise loops.
+
+## PS4005 — an N-D odometer ticked once per ELEMENT  *(scanner: static)*
+```go
+for pos := range xs { // one element of work
+	for d := nd - 1; d >= 0; d-- { // ...then a full odometer tick
+		idx[d]++
+		off += stride[d]
+		if idx[d] < shape[d] {
+			break
+		}
+		idx[d] = 0
+		off -= stride[d] * shape[d]
+	}
+}
+```
+The innermost axis has a CONSTANT stride across a run of `shape[nd-1]` elements, so
+that run is one straight walk — a `copy` at stride 1, a fill at stride 0 — and the
+odometer need only tick once per run. Bit-identical: traversal order and the
+per-element work are untouched, and the innermost axis contributes
+`inner*stride − stride*inner = 0` to the offset over a full run.
+
+Measured 4.49× (ref broadcast), 5.29× (cpu broadcast), 3.14× (tensor gather),
+1.78× (ref argmax).
+
+Matches the odometer's SHAPE, not the loop body — those four sites do a copy, a
+cast and an accumulate respectively, so any rule keyed on the body catches them
+only by accident. **A hoisted odometer keeps the same shape** and merely runs per
+run, so the rule distinguishes them by where the walk starts: per-element ticks
+every axis (`d := nd - 1`), hoisted skips the innermost (`d := nd - 2`). Without
+that discriminator the rule reported the sites it had just helped fix.
+
+## PS4006 — a `[][]T` matrix indexed inside a nested loop  *(scanner: static)*
+One heap allocation per ROW, then `m[i][j]` two-deep in a nested loop. A column walk
+(`m[k][p]`, k varying) dereferences one unrelated cache line per row. Flatten to a
+single `[rows*cols]` buffer indexed `m[i*cols+j]`: index arithmetic only, so
+bit-identical, and `rows+1` allocations collapse to 1.
+
+Measured 2.15× (solvespd), 1.5× (cholesky), 1.35× (qr), 1.2× (SymEig, SVD).
+
+**And 0.93× on `classic/linalg.go` cholSolve** — reverted. An OLS fit is dominated
+by the O(N·d²) Gram-matrix build, so the O(d³) factorization this flags is a small
+share of it. The flatten pays when the flagged loop IS the enclosing operation's
+work; measure the OPERATION end to end, not the loop. Cheaper mitigation when it is
+not: hoist `row := m[i]` above the inner loop — `naivebayes.go` and `gmm.go` already
+do, which is why they were declined.
+
+Requires BOTH the per-row allocation loop and a two-deep index inside ≥2 nested
+loops. A `[][]T` merely passed around, indexed once, or genuinely ragged is not a
+candidate.
+
+## PS6001 — a dual-path kernel whose bit-identity claim is unverified  *(scanner: static)*
+A function carrying a devirtualized fast path (guarded by a configured
+`fastPathHelpers` entry in comma-ok form, or a `switch x.Dtype()` with a `default`
+arm) AND a generic accessor fallback. That structure is a bit-identity CLAIM, and
+the claim usually lives in a comment rather than a test.
+
+**Not a performance finding** — nothing here is slow. It is an unverified invariant.
+Four kernels with this shape were probed and all four were blind to a one-ulp change
+in the fast path. The rule cannot tell whether a bit-exact test exists (test
+sensitivity is not an AST property); it lists the population that needs one.
+
+Probe with a deliberate one-ulp mutation to decide, confirm the mutated line
+actually executes before believing a surviving mutation, and run the probe over
+every package that could hold a cross-reference test — not just the kernel's own.
