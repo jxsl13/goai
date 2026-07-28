@@ -193,6 +193,7 @@ var checks = []check{
 	{"PS3001", "reflection-in-loop", "a reflection-based fmt scan (Sscanf/Sscan/Fscanf) in a loop", false},
 	{"PS3002", "closure-comparator-sort", "a package sort (sort.Slice/SliceStable) with a comparator closure", false},
 	{"PS3003", "int-key-map-in-loop", "a read of an integer-keyed map inside a loop", false},
+	{"PS3005", "indirect-key-comparator", "a sort of an index slice whose comparator dereferences the sorted element into a 2-D structure — hoist the key into a flat column first", false},
 	// PS4xxx — vectorization candidates
 	{"PS4001", "le-decode-in-loop", "a per-element little-endian bit decode in a loop with no bulk-copy fast path", false},
 	{"PS4002", "scalar-transcendental-vectorizable", "a scalar libm transcendental in a loop while a vectorized sibling is called", false},
@@ -1742,6 +1743,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	out = append(out, serialDotMatmulFindings(fset, fn)...)
 	out = append(out, quadraticCacheAppendFindings(fset, fn)...)
 	out = append(out, buildNxNUseOneRowFindings(fset, fn)...)
+	out = append(out, indirectKeyComparatorFindings(fset, fn)...)
 	return out
 }
 
@@ -3405,4 +3407,107 @@ func isNumericSliceType(e ast.Expr) bool {
 		return true
 	}
 	return false
+}
+
+// indirectKeyComparatorFindings flags PS3005 — sorting an INDEX slice with a comparator
+// that dereferences the sorted element into a 2-D structure:
+//
+//	sort.Slice(idx, func(a, b int) bool { return m[idx[a]][f] < m[idx[b]][f] })
+//
+// Every comparison pays a row-pointer load plus an index, O(n log n) times, to read a
+// value that depends only on the element — so filling a flat id-indexed key column once
+// (O(n)) and comparing THAT removes the indirection from the hot loop entirely. The
+// rewrite keeps the SAME PREDICATE, so the sort returns the same permutation, ties
+// included; it is not an argument about acceptable tie orders.
+//
+// Measured three times in this repo, all the same shape: the GBM presort (1.05x, and
+// 1.10x cumulative once the flat key made a radix pass practical) and the ball-tree
+// median split (1.088x on KNN fit, the half that loses to sklearn). The CART builder had
+// already solved it locally, which is what made the siblings findable.
+//
+// Requires the comparator to reach TWO levels deep THROUGH the sorted slice —
+// m[idx[a]][f]. A comparator reading a flat key (key[idx[a]]) is the FIXED form and is
+// deliberately silent, so applying the advice clears the finding.
+func indirectKeyComparatorFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok || len(call.Args) != 2 {
+			return true
+		}
+		switch calleeName(call.Fun) {
+		case "Slice", "SliceStable", "SortFunc", "SortStableFunc":
+		default:
+			return true
+		}
+		sorted := baseIdentName(call.Args[0])
+		if sorted == "" {
+			return true
+		}
+		lit, ok := call.Args[1].(*ast.FuncLit)
+		if !ok || lit.Type.Params == nil {
+			return true
+		}
+		var params []string
+		for _, f := range lit.Type.Params.List {
+			for _, nm := range f.Names {
+				params = append(params, nm.Name)
+			}
+		}
+		if len(params) != 2 {
+			return true
+		}
+		if base, ok := doubleIndexThrough(lit.Body, sorted, params); ok {
+			out = append(out, finding{
+				pos:      fset.Position(call.Pos()),
+				category: "indirect-key-comparator",
+				msg: fmt.Sprintf("the comparator sorting %q dereferences %s[%s[...]][...] on every"+
+					" comparison — a row-pointer load plus an index, O(n log n) times, for a value that"+
+					" depends only on the element. Fill a flat id-indexed key column once (O(n)) and"+
+					" compare that; the predicate is unchanged so the permutation is identical, ties"+
+					" included. Measured 1.05x on the GBM presort and 1.088x on the ball-tree split,"+
+					" and the flat key is what makes a radix pass practical afterwards.",
+					sorted, base, sorted),
+			})
+		}
+		return true
+	})
+	return out
+}
+
+// doubleIndexThrough reports whether the body contains m[sorted[p]][...] for one of the
+// comparator's parameters p — the two-level dereference through the sorted slice that
+// makes the comparator expensive. Returns the outer base name for the message.
+func doubleIndexThrough(body *ast.BlockStmt, sorted string, params []string) (string, bool) {
+	var base string
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		outer, ok := n.(*ast.IndexExpr)
+		if !ok {
+			return true
+		}
+		// Shape: m[idx[a]][f]. The OUTER IndexExpr is m[idx[a]] indexed by f, so the
+		// sorted slice sits in the outer's own Index (idx[a]), not in its X — getting
+		// that nesting backwards made the first cut of this rule silent on all three
+		// sites it was written from.
+		lookup, ok := outer.X.(*ast.IndexExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := lookup.Index.(*ast.IndexExpr)
+		if !ok || baseIdentName(sel.X) != sorted {
+			return true
+		}
+		for _, p := range params {
+			if exprMentions(sel.Index, p) {
+				base, found = baseIdentName(lookup.X), true
+				return false
+			}
+		}
+		return true
+	})
+	return base, found
 }

@@ -2025,3 +2025,93 @@ func both(s *S, d *S, n int) bool {
 			got["unverified-dual-path"], got)
 	}
 }
+
+// The shape behind three measured wins: a comparator dereferencing the sorted index
+// into a 2-D structure on every comparison.
+func TestDetectPS3005_IndirectKeyComparator(t *testing.T) {
+	src := `package p
+func presort(x [][]float64, col []int, ff int) {
+	sort.Slice(col, func(a, c int) bool { return x[col[a]][ff] < x[col[c]][ff] })
+}`
+	if got := countCat(scanSrc(t, src)); got["indirect-key-comparator"] == 0 {
+		t.Fatalf("want ≥1 indirect-key-comparator, got 0 (%v)", got)
+	}
+}
+
+// SliceStable and a > comparator are the same shape.
+func TestDetectPS3005_StableAndDescending(t *testing.T) {
+	src := `package p
+func route(scores [][]float64, idx []int, ex int) {
+	sort.SliceStable(idx, func(a, b int) bool { return scores[idx[a]][ex] > scores[idx[b]][ex] })
+}`
+	if got := countCat(scanSrc(t, src)); got["indirect-key-comparator"] == 0 {
+		t.Fatalf("want ≥1 on SliceStable/descending, got 0 (%v)", got)
+	}
+}
+
+// SILENT on the FIXED form — a flat id-indexed key. Applying the rule's own advice must
+// clear the finding, or it would keep reporting the code it just helped fix.
+func TestDetectPS3005_SilentOnHoistedFlatKey(t *testing.T) {
+	src := `package p
+func presort(x [][]float64, col []int, key []float64, ff int) {
+	for i := range col {
+		key[i] = x[i][ff]
+	}
+	sort.Slice(col, func(a, c int) bool { return key[col[a]] < key[col[c]] })
+}`
+	if got := countCat(scanSrc(t, src)); got["indirect-key-comparator"] != 0 {
+		t.Fatalf("want 0 on the hoisted flat key, got %d (%v)", got["indirect-key-comparator"], got)
+	}
+}
+
+// SILENT when the comparator reads the sorted elements directly rather than using them
+// as indices into something else — there is no indirection to hoist.
+func TestDetectPS3005_SilentOnDirectValueSort(t *testing.T) {
+	src := `package p
+func byDist(cand []nb) {
+	sort.Slice(cand, func(a, b int) bool { return cand[a].dist < cand[b].dist })
+}`
+	if got := countCat(scanSrc(t, src)); got["indirect-key-comparator"] != 0 {
+		t.Fatalf("want 0 on a direct value sort, got %d (%v)", got["indirect-key-comparator"], got)
+	}
+}
+
+// SILENT on a single-level lookup: key[idx[a]] is already the hoisted shape, so only a
+// TWO-level dereference through the sorted slice counts.
+func TestDetectPS3005_SilentOnSingleLevelLookup(t *testing.T) {
+	src := `package p
+func byKey(idx []int, key []float64) {
+	sort.Slice(idx, func(a, b int) bool { return key[idx[a]] < key[idx[b]] })
+}`
+	if got := countCat(scanSrc(t, src)); got["indirect-key-comparator"] != 0 {
+		t.Fatalf("want 0 on a single-level lookup, got %d (%v)", got["indirect-key-comparator"], got)
+	}
+}
+
+// SILENT when the two-level dereference goes through a DIFFERENT slice than the one
+// being sorted: m[other[a]][f] while sorting idx is not "read this element's key", so
+// hoisting a key column indexed by the sorted element would not even be well-defined.
+// Without this case the sorted-slice identity check is never exercised — the
+// single-level fixture above never reaches it.
+func TestDetectPS3005_SilentWhenIndexedThroughAnotherSlice(t *testing.T) {
+	src := `package p
+func weird(m [][]float64, idx, other []int, f int) {
+	sort.Slice(idx, func(a, b int) bool { return m[other[a]][f] < m[other[b]][f] })
+}`
+	if got := countCat(scanSrc(t, src)); got["indirect-key-comparator"] != 0 {
+		t.Fatalf("want 0 when indexed through a different slice, got %d (%v)",
+			got["indirect-key-comparator"], got)
+	}
+}
+
+// SILENT when the outer lookup is not itself indexed — m[idx[a]] alone is a single
+// dereference, the cheap case the hoist would not help.
+func TestDetectPS3005_SilentOnSingleDereference(t *testing.T) {
+	src := `package p
+func byRow(m []float64, idx []int) {
+	sort.Slice(idx, func(a, b int) bool { return m[idx[a]] < m[idx[b]] })
+}`
+	if got := countCat(scanSrc(t, src)); got["indirect-key-comparator"] != 0 {
+		t.Fatalf("want 0 on a single dereference, got %d (%v)", got["indirect-key-comparator"], got)
+	}
+}

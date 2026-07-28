@@ -215,6 +215,40 @@ position, and requires that position **not** to be a loop bound: when it bounds 
 the object is being walked in full and the identifier appears in those indices only as a
 stride. Tree-wide that went 6 findings → 2, both genuine.
 
+## PS3005 — a sort whose comparator dereferences the sorted index  *(scanner: static)*
+
+Sorting an INDEX slice with a comparator that reaches two levels deep through the sorted
+element:
+
+```go
+sort.Slice(idx, func(a, b int) bool { return m[idx[a]][f] < m[idx[b]][f] })
+```
+
+Every comparison pays a row-pointer load plus an index — O(n log n) times — to read a
+value that depends only on the element. Fill a flat id-indexed key column once (O(n)) and
+compare that.
+
+**Safe by construction, not by argument:** the rewrite keeps the *same predicate*
+(`key[id] == m[id][f]`), so the sort returns the same permutation, ties included. That is
+stronger than the usual "tie order is unspecified but irrelevant" reasoning.
+
+**Shipped, three times, all the same shape:** the GBM presort (**1.05×**, and **1.10×**
+cumulative once the flat key made an LSD radix pass practical) and the ball-tree median
+split (**1.088×** on KNN fit — the half that loses to sklearn). The CART builder had
+already solved it locally, which is what made the siblings findable by eye; this rule is
+so the next one does not need luck.
+
+**Deliberately silent** on the fixed form (`key[idx[a]]` — applying the advice clears the
+finding), on a direct value sort (`cand[a].dist`, no indirection to hoist), on a single
+dereference, and when the two-level lookup goes through a *different* slice than the one
+being sorted — that is not "read this element's key" and a hoisted column would not be
+well-defined.
+
+**The first cut of this rule was silent on all three sites it was written from**, because
+the nesting was inverted: in `m[idx[a]][f]` the sorted slice sits in the *outer*
+IndexExpr's own Index, not in its X. Validated by scanning the pre-fix revisions and
+confirming all three are found.
+
 ## PS3002 — closure-comparator sort on a large keyed slice  *(scanner: static)*
 
 **Smell.** `slices.SortFunc` / `sort.Slice` / `sort.Sort` sorting a large slice
