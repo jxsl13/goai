@@ -30,6 +30,10 @@ type SOAP struct {
 
 	t  int
 	st []*soapState
+
+	// pooled per-step matrix scratch (matAt gradient, rotate-forward gp, nprime, rotate-back
+	// upd, and the rotate intermediate) — fully overwritten before read, so reuse is bit-exact.
+	gmScr, gpScr, nprScr, updScr, rotTScr [][]float64
 }
 
 type soapState struct {
@@ -104,7 +108,9 @@ func (s *SOAP) Step(grad GradFn) error {
 
 		if p.Ndim() == 2 {
 			m, n := p.Shape()[0], p.Shape()[1]
-			gm := matAt(g)
+			s.gmScr = growMat(s.gmScr, m, n)
+			matAtInto(s.gmScr, g)
+			gm := s.gmScr
 			if st.l == nil {
 				st.l, st.r = zeroSq(m), zeroSq(n)
 				st.m, st.v = zeroMat(m, n), zeroMat(m, n)
@@ -145,8 +151,12 @@ func (s *SOAP) Step(grad GradFn) error {
 				st.m = rotateForward(st.ql, mOrig, st.qr) // into the new basis
 			}
 			// rotate gradient, Adam in the rotated space, rotate the update back.
-			gp := rotateForward(st.ql, gm, st.qr)
-			nprime := zeroMat(m, n)
+			s.gpScr = growMat(s.gpScr, m, n)
+			s.rotTScr = growMat(s.rotTScr, m, n)
+			rotateForwardInto(s.gpScr, s.rotTScr, st.ql, gm, st.qr)
+			gp := s.gpScr
+			s.nprScr = growMat(s.nprScr, m, n)
+			nprime := s.nprScr
 			for i := range m {
 				for j := range n {
 					st.m[i][j] = b1*st.m[i][j] + (1-b1)*gp[i][j]
@@ -154,7 +164,9 @@ func (s *SOAP) Step(grad GradFn) error {
 					nprime[i][j] = (st.m[i][j] / c1) / (math.Sqrt(st.v[i][j]/c2) + s.Eps)
 				}
 			}
-			upd := rotateBack(st.ql, nprime, st.qr)
+			s.updScr = growMat(s.updScr, m, n)
+			rotateBackInto(s.updScr, s.rotTScr, st.ql, nprime, st.qr)
+			upd := s.updScr
 			for i := range m {
 				for j := range n {
 					p.SetF64(p.AtF64(i, j)-s.LR*upd[i][j], i, j)
@@ -258,6 +270,64 @@ func rotateForward(ql, g, qr [][]float64) [][]float64 {
 		}
 	}
 	return out
+}
+
+// matAtInto fills dst[r][c] from tensor t (the pooled twin of matAt).
+func matAtInto(dst [][]float64, t *tensor.Tensor) {
+	r, c := t.Shape()[0], t.Shape()[1]
+	for i := 0; i < r; i++ {
+		for j := 0; j < c; j++ {
+			dst[i][j] = t.AtF64(i, j)
+		}
+	}
+}
+
+// rotateForwardInto writes Q_Lᵀ·G·Q_R into out using tmp as the intermediate T (the pooled
+// twin of rotateForward — identical arithmetic and order, so bit-identical).
+func rotateForwardInto(out, tmp, ql, g, qr [][]float64) {
+	m, n := len(ql), len(qr)
+	for k := range m {
+		for j := range n {
+			var acc float64
+			for i := range m {
+				acc += ql[i][k] * g[i][j]
+			}
+			tmp[k][j] = acc
+		}
+	}
+	for k := range m {
+		for l := range n {
+			var acc float64
+			for j := range n {
+				acc += tmp[k][j] * qr[j][l]
+			}
+			out[k][l] = acc
+		}
+	}
+}
+
+// rotateBackInto writes Q_L·N·Q_Rᵀ into out using tmp as the intermediate (pooled twin of
+// rotateBack — bit-identical).
+func rotateBackInto(out, tmp, ql, nmat, qr [][]float64) {
+	m, n := len(ql), len(qr)
+	for i := range m {
+		for l := range n {
+			var acc float64
+			for k := range m {
+				acc += ql[i][k] * nmat[k][l]
+			}
+			tmp[i][l] = acc
+		}
+	}
+	for i := range m {
+		for j := range n {
+			var acc float64
+			for l := range n {
+				acc += tmp[i][l] * qr[j][l]
+			}
+			out[i][j] = acc
+		}
+	}
 }
 
 // rotateBack returns Q_L · N · Q_Rᵀ for N[m,n], Q_L[m,m], Q_R[n,n].
