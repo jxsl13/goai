@@ -83,3 +83,24 @@ FIXED (commit 5854d2b): perfscan now warns to stderr, naming the starved checks 
 DELIBERATELY A WARNING, NOT A REFUSAL: perfscan is repo-agnostic by design and the language-shape checks are genuinely useful with no config at all, so failing hard would break legitimate stdlib-only scanning. The warning names what is inert and why, which is enough to stop the misreading.
 
 FOLLOW-UP worth considering separately, not done here: move perfscan.json to the repo root so upward discovery finds it, or have perfscan also look next to its own package. Either would remove the trap rather than annotate it. Both are behavioral changes to config resolution and deserve their own decision.
+
+## R-01KYN6FF37F2P8ZTMMVFYTTXKV PS6006 recognized 1 of 3 instances of the shape it was written for — why name heuristics fail and what replaced it
+kind: research
+state: draft
+created: 2026-07-28
+
+A rule-quality finding, not a performance one. Worth a record because the failure mode is general: a detector keyed on NAMING CONVENTION recognizes the example it was written from and little else.
+
+THE SHAPE blocked three unrelated parallelizations in one campaign — a scratch buffer shared across the units being split. GaussianMixture.logGaussian's triangular-solve buffer (caught by -race, cost a misleading 1.16x measurement before the sharing was fixed), gbmBuilder.vals in the split search, gbmBuilder.part in the node partition. PS6006 was written from the first and caught only the first: it required the field name to contain scratch/scr/buf/tmp/work, and the other two are spelled like ordinary fields.
+
+WHY THE NAME SEEMED REASONABLE at the time: written-and-read-in-one-method flagged m.Means, persistent model state the M-step legitimately fills and reads back, and nothing in the AST separated the two. Intent is not in the syntax, so intent-by-name looked like the only handle. It was not.
+
+WHAT ACTUALLY SEPARATES THEM IS STRUCTURAL: a temporary is INDEXED IN EXACTLY ONE FUNCTION of the file. The method that needs it uses it element-wise and everything else at most allocates it; state is indexed by several. Computed as a file-scoped fact, which this scanner already does for two other checks.
+
+That alone gave 24 findings, so three more filters were needed, each mutation-probed load-bearing: exported fields are never temporaries (they are API, readable outside the file); slice-typed only (the false positives were maps used as registries); primitive element types only ([]soapState and []*tree are collections someone keeps, []float64 is working space). 24 -> 15 -> 8, with all three real instances retained and 6 of 8 survivors genuine.
+
+A FIFTH CHANGE WAS FOR RECALL, and it is the one only replay could find: a SLICE of the field is a read. gbmBuilder.part is consumed entirely by copy(dst, b.part[:r]), so requiring an INDEXED read missed it even after the structural test was in place. Every fixture used an indexed read, so the fixtures could not have caught this — only scanning the actual pre-fix revision did.
+
+THE TRANSFERABLE RULES: (1) validate a detector by REPLAYING it against the revisions where the shape actually occurred, not only against fixtures written from the same mental model that produced the bug; (2) when a shape recurs, re-check whether the detector caught the recurrences — a rule silently degrades from 1-of-1 to 1-of-3 without any test going red; (3) prefer a structural discriminator over a naming one even when the structural version needs several filters, because filters can be probed and conventions cannot.
+
+Residue, stated: classic/dbscan.go m.core and nn/mars.go a.seen are fitted state that happens to be a sole-indexed primitive slice. Advisory check, acceptable.
