@@ -1189,6 +1189,14 @@ func (s *Sampler) distInto(dst, logits []float64) []float64 {
 	// their members, a benign, arguably-more-principled difference from the old
 	// arbitrary sort tie-break). §T626.
 	if s.TopK > 0 && s.TopK < n {
+		// Fused top-k + stable softmax: quickselect the threshold, then run exp over
+		// ONLY the kept lanes instead of masking the n−k tail to −Inf and exp'ing all
+		// n (exp(−Inf)=0 for the dropped lanes is pure waste; exp was ~26% of
+		// large-vocab Dist, at k=40/n=50257 only 0.08% of the exps matter). Gather the
+		// kept set (z[i] ≥ kv keeps every boundary tie exactly as the old −Inf mask
+		// did), exp the compact buffer in place, then scatter the normalized probs
+		// into a zeroed dst so downstream filters still see a full-length distribution
+		// (k nonzero, rest 0). §T626/§T950.
 		scratch := float64ScratchPool.Get().([]float64)
 		if cap(scratch) < n {
 			scratch = make([]float64, n)
@@ -1197,28 +1205,50 @@ func (s *Sampler) distInto(dst, logits []float64) []float64 {
 		}
 		copy(scratch, z)
 		kv := kthLargest(scratch, s.TopK) // the k-th largest logit is the threshold
-		float64ScratchPool.Put(scratch)
-		for i := range z {
-			if z[i] < kv {
-				z[i] = math.Inf(-1)
+		// scratch's contents are spent; reuse its backing array as the compact keep
+		// buffer (no extra pool Get) — cap ≥ n ⇒ the append below never reallocates.
+		keep := scratch[:0]
+		m := math.Inf(-1)
+		for _, v := range z {
+			if v >= kv { // ≥ threshold ⇒ all boundary ties kept, matching the old mask
+				keep = append(keep, v)
+				if v > m {
+					m = v // the global max is always ≥ kv, so it is always in the set
+				}
 			}
 		}
-	}
-
-	// stable softmax
-	m := math.Inf(-1)
-	for _, v := range z {
-		if v > m {
-			m = v
+		// exp over the compact kept set (in place; elementwise, aliasing-safe), returns
+		// Σ. Masked lanes never enter the sum, so it equals the full-vocab Σ up to the
+		// exp-sum reassociation the Dist f64 tolerance (§sample_test 1e-12) already rides.
+		sum := simd.ExpSumF64(keep, keep, m)
+		inv := 1 / sum // reciprocal-multiply the normalize
+		// scatter: re-scan z in the SAME ascending order the gather used, so keep[j]
+		// lands at its original index; zero the rest. No index buffer needed.
+		j := 0
+		for i, v := range z {
+			if v >= kv {
+				dst[i] = keep[j] * inv
+				j++
+			} else {
+				dst[i] = 0
+			}
 		}
-	}
-	// dst[i] = exp(z[i]-m), returns Σ — 4-wide AVX2 f64 exp over the full vocab
-	// on the SIMD build (the exp was ~26% of large-vocab Dist), scalar otherwise.
-	// Rides the Dist f64 tolerance (§sample_test 1e-12); masked −Inf lanes → ~0.
-	sum := simd.ExpSumF64(dst, z, m)
-	inv := 1 / sum // reciprocal-multiply the normalize: one divide, a mul per lane
-	for i := range dst {
-		dst[i] *= inv
+		float64ScratchPool.Put(scratch)
+	} else {
+		// stable softmax over the full vocabulary (no top-k truncation)
+		m := math.Inf(-1)
+		for _, v := range z {
+			if v > m {
+				m = v
+			}
+		}
+		// dst[i] = exp(z[i]-m), returns Σ — 4-wide AVX2 f64 exp on the SIMD build
+		// (the exp was ~26% of large-vocab Dist), scalar otherwise; rides §sample_test 1e-12.
+		sum := simd.ExpSumF64(dst, z, m)
+		inv := 1 / sum // reciprocal-multiply the normalize: one divide, a mul per lane
+		for i := range dst {
+			dst[i] *= inv
+		}
 	}
 
 	// top-p nucleus: keep smallest desc-prob prefix with cumsum ≥ p (crossing

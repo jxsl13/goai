@@ -19,13 +19,16 @@ catalog a subset with detailed wins — their IDs head each section. The `P3`/`P
 
 ## Repo-agnostic engine + config
 
-perfscan detects the problems **independent of any one repo**. Ten checks are pure
-language/stdlib shapes and run on any Go module with no configuration (PS2002–PS2005,
-PS3001–PS3003, PS4001, PS4003, PS5001). The four **domain** checks — `PS1001`
-per-element-dispatch, `PS1002` per-element-closure, `PS2001` alloc-in-loop, `PS4002`
-scalar-transcendental-vectorizable — key on a project's own vocabulary (its element
-accessors, allocators, fast-path helpers and vectorized kernels), which lives in a
-**JSON config, not the engine**. With no config those four stay silent. Supply one
+perfscan detects the problems **independent of any one repo**. Fifteen of the twenty
+checks are pure language/stdlib shapes and run on any Go module with no configuration
+(PS1003, PS2002–PS2005, PS3001–PS3003, PS4001, PS4003–PS4006, PS5001, PS5002). The five
+**domain** checks — `PS1001` per-element-dispatch, `PS1002` per-element-closure, `PS2001`
+alloc-in-loop, `PS4002` scalar-transcendental-vectorizable, `PS6001` unverified-dual-path
+— key on a project's own vocabulary (its element accessors, allocators, fast-path helpers
+and vectorized kernels), which lives in a **JSON config, not the engine**. With no config
+those five stay silent — and say so: each one whose vocabulary is empty is named in a
+loud stderr warning, because a silent zero from a starved check reads as "no instances"
+and is the one failure mode that costs whole investigations. Supply a config
 with `-config file.json` or a discovered `perfscan.json` / `.perfscan.json`:
 
 ```jsonc
@@ -339,7 +342,10 @@ GrokfastMA 1.47× — each from 8–27 allocs/step to 0.
 receiver field, or a ring slot (`ring[pos] = flat`). Those are still poolable but by a
 different fix — pre-allocate the slot and overwrite it in place — so N does not
 mis-advise "hoist to one reused field." Also silent on value-receiver methods and free
-functions (no receiver to hang the reused buffer on) and on `make()` outside any loop.
+functions (no receiver to hang the reused buffer on), on `make()` outside any loop, and
+on **pointer-element slices** (`make([]*T, …)`) — a handful of pointers used as
+orchestration scaffolding (fully overwritten before a concat/reduce reads them), dwarfed
+by the elements' own allocations, not the numeric value scratch the `growF64` win targets.
 
 ## PS5001 — divide by a loop-invariant scalar  *(scanner: static)*
 
@@ -362,6 +368,35 @@ via `+=`/`-=`/`*=` (a reduction — a softmax Σ or attention denominator, where
 is minor or parity-locked, not a config scalar), on loops already dominated by a
 transcendental (K/L territory — the divide is in the noise), on integer INDEX divisions
 (`a[i/stride]`), on divisors that vary across iterations, and on non-element-wise loops.
+
+Also silent on an **index decomposition**: when the same `x / d` appears alongside a
+matching `x % d` in the function (`iy, ix := i/m, i%m`). Go's `%` requires integer
+operands, so `x` and `d` are provably integers there and the divide computes a discrete
+index, never a float a reciprocal-multiply could replace — type-sound rather than
+heuristic, so it cannot suppress a real float divide. The match is on the whole pair
+(same numerator AND divisor, modulo parenthesization), not on the divisor name alone, so
+a function that happens to use `d` as a modulus elsewhere still gets its float divide
+reported.
+
+## PS5002 — symmetric-matrix full accumulation  *(scanner: static)*
+
+A nested `i`/`j` loop that accumulates a **symmetric** matrix in full — `m[i][j] += x[i]·x[j]`
+(an outer product) or a gram reduction `acc += M[i][k]·M[j][k]` folded into `m[i][j]`. Every
+off-diagonal entry is computed twice.
+
+**Fix:** if the consumer reads only one triangle — a Cholesky factor (`gmmCholesky`), a symmetric
+eigendecomposition (`SymEig`), an inverse-root preconditioner — accumulate the upper triangle +
+diagonal and mirror it down once (`m[j][i] = m[i][j]`). Roughly **halves** the O(n·d²) accumulation.
+Bit-identical where the product is commutative (`x[i]·x[j] == x[j]·x[i]`, exact in IEEE-754).
+
+**Shipped:** GMM full-cov mStep (1.35×), PCA covariance (1.24×) — the same class as the SVD
+column-major win.
+
+**Detection is a same-base product AND an `m[i][j]` write** under the two loops: matmul
+(`C[i][j] += A[i][k]·B[k][j]`) has *different* bases (A≠B) so it is not flagged. **Deliberately
+silent** on already-triangular loops and on forms that pre-slice the row (`covi := m[i]; covi[j] +=
+ci·c[j]`) — the hoisted 1-D write hides the `[i][j]` signal, so verify hot covariance/gram loops by
+eye too. **Verify the consumer reads one triangle and benchmark** before shipping.
 
 ## PS4005 — an N-D odometer ticked once per ELEMENT  *(scanner: static)*
 ```go

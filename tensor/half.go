@@ -99,11 +99,12 @@ func f32ToF16(f float32) uint16 {
 		}
 		return sign | uint16(res)
 	}
-	res := uint16(e<<10) | uint16(mant>>13)
-	lower := mant & 0x1FFF
-	if lower > 0x1000 || (lower == 0x1000 && res&1 == 1) {
-		res++ // carry into exponent is correct (0x7BFF→0x7C00 = Inf)
-	}
+	// Branchless round-to-nearest-even: fold the round bias (0xFFF) and the
+	// tie-to-even term ((mant>>13)&1) into one add before the >>13, so the
+	// data-dependent ~50/50 rounding branch disappears. The mantissa→exponent
+	// carry (0x7BFF→0x7C00 = Inf) falls out of the same add. Bit-identical to the
+	// branchy RNE: (mant+0xFFF+((mant>>13)&1))>>13 == (mant>>13)+roundup ∀ cases.
+	res := uint16(e<<10) + uint16((mant+0x0FFF+((mant>>13)&1))>>13)
 	return sign | res
 }
 

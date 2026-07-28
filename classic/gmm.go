@@ -401,18 +401,21 @@ func (m *GaussianMixture) mStep(x [][]float64, resp [][]float64) error {
 			}
 			for a := 0; a < d; a++ {
 				rda := r * cen[a]
-				sa := s[a*d : a*d+d]
-				for b := range sa {
-					sa[b] += rda * cen[b]
-				}
+				sa := s[a*d : a*d+a+1] // LOWER triangle + diagonal only (b ≤ a): the
+				for b := range sa {    // covariance is symmetric, and gmmCholesky reads only
+					sa[b] += rda * cen[b] // a[i*d+j], j≤i — so skip the redundant upper half,
+				} // halving the O(n·k·d²) accumulation.
 			}
 		}
 		for a := range d {
-			for b := range d {
+			for b := 0; b <= a; b++ { // normalize the accumulated lower triangle (incl diag)
 				s[a*d+b] *= inv
 			}
 			s[a*d+a] += m.cfg.regCovar
-		}
+			for b := 0; b < a; b++ { // mirror lower→upper so the STORED m.cov is symmetric
+				s[b*d+a] = s[a*d+b] // (Covariance(k) reads the full matrix). The Cholesky-
+			} // visible lower half is bit-identical to the full-accumulate; only the upper
+		} // half changes (from a ½-ulp-asymmetric artifact to exact symmetry).
 		l, half, err := gmmCholesky(s, d)
 		if err != nil {
 			return fmt.Errorf("classic: gmm component %d covariance not positive definite (raise regCovar): %w", c, err)

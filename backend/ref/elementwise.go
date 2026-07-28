@@ -189,6 +189,48 @@ func siluBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Att
 	return []*tensor.Tensor{dx}, nil
 }
 
+// softplusBackwardKernel computes dx = g·softplus'(x) = g·σ(x), elementwise (in = [x, g]);
+// the CPU backend vectorizes the F64 case (vsoftplusGradF64), the GPU backends and every
+// non-F64/F32 dtype fall back here. Softplus is tolerance-gated, not CPU==Ref exact.
+func softplusBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*tensor.Tensor, error) {
+	if len(in) != 2 {
+		return nil, fmt.Errorf("ref: softplus-backward wants (x, g), got %d", len(in))
+	}
+	x, g := in[0], in[1]
+	if !g.Shape().Equal(x.Shape()) {
+		return nil, fmt.Errorf("ref: softplus-backward g %v != x %v", g.Shape(), x.Shape())
+	}
+	dx := tensor.NewOn(ctx.Device(), x.Dtype(), x.Shape())
+	n := x.Numel()
+	switch x.Dtype() {
+	case tensor.F64:
+		if g.Dtype() == tensor.F64 {
+			xs := x.Contiguous().Storage().F64()
+			gs := g.Contiguous().Storage().F64()
+			ds := dx.Storage().F64()
+			for i := range n {
+				ds[i] = gs[i] * sigmoid(xs[i])
+			}
+			return []*tensor.Tensor{dx}, nil
+		}
+	case tensor.F32:
+		if g.Dtype() == tensor.F32 {
+			xs := x.Contiguous().Storage().F32()
+			gs := g.Contiguous().Storage().F32()
+			ds := dx.Storage().F32()
+			for i := range n {
+				ds[i] = float32(float64(gs[i]) * sigmoid(float64(xs[i])))
+			}
+			return []*tensor.Tensor{dx}, nil
+		}
+	}
+	for i := range n {
+		idx := tensor.Unravel(i, x.Shape())
+		dx.SetF64(g.AtF64(idx...)*sigmoid(x.AtF64(idx...)), idx...)
+	}
+	return []*tensor.Tensor{dx}, nil
+}
+
 // geluBackwardKernel computes dx = g·gelu'(x) elementwise (in = [x, g]); the GPU
 // backends dispatch OpGELUBackward, falling back here (§T353/§I4).
 func geluBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*tensor.Tensor, error) {
@@ -301,6 +343,7 @@ func init() {
 	reg(backend.OpGELU, unaryKernel(gelu))
 	reg(backend.OpGELUBackward, geluBackwardKernel)
 	reg(backend.OpSiLUBackward, siluBackwardKernel)
+	reg(backend.OpSoftplusBackward, softplusBackwardKernel)
 	reg(backend.OpSigmoid, unaryKernel(sigmoid))
 	reg(backend.OpSiLU, unaryKernel(func(x float64) float64 { return x * sigmoid(x) }))
 	reg(backend.OpSqrt, unaryKernel(math.Sqrt))

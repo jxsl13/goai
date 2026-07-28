@@ -198,9 +198,11 @@ var checks = []check{
 	{"PS4004", "scalar-copy-loop", "an element-by-element slice copy in a loop where a bulk copy would do", false},
 	{"PS4005", "per-element-odometer", "an N-D coordinate odometer ticked once per element instead of once per run", false},
 	{"PS4006", "row-slice-matrix", "a [][]T matrix built row-by-row and then indexed inside a nested loop", false},
-	{"PS6001", "unverified-dual-path", "a devirtualized fast path with a generic fallback — a bit-identity claim needing a bit-exact test", true},
 	// PS5xxx — arithmetic
 	{"PS5001", "loop-invariant-divide", "a divide by a loop-invariant scalar on every element", false},
+	{"PS5002", "symmetric-accumulation", "a nested loop accumulating a full symmetric matrix (m[i][j] += x[i]*x[j]) where one triangle + mirror would halve the work", false},
+	// PS6xxx — verification gaps
+	{"PS6001", "unverified-dual-path", "a devirtualized fast path with a generic fallback — a bit-identity claim needing a bit-exact test", true},
 }
 
 // catToID indexes the registry for O(1) id lookup at report time.
@@ -1302,6 +1304,15 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 			if !ok || !isSliceMake(call) {
 				return true
 			}
+			// Skip pointer-element slices (make([]*T, …)): a handful of pointers used as
+			// orchestration scaffolding (fully overwritten before a concat/reduce reads
+			// them), not the numeric value scratch the growF64 pool win targets. Pooling a
+			// pointer-slice header is negligible churn dwarfed by the elements' own allocs.
+			if at, ok := call.Args[0].(*ast.ArrayType); ok {
+				if _, isPtr := at.Elt.(*ast.StarExpr); isPtr {
+					return true
+				}
+			}
 			loop := nearestLoop(parent, call)
 			if loop == nil {
 				return true
@@ -1706,6 +1717,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 			return true
 		})
 	}
+	out = append(out, symmetricAccumFindings(fset, fn)...)
 	return out
 }
 
@@ -1954,6 +1966,10 @@ func main() {
 		"per-element-closure":                ns.visitors,
 		"alloc-in-loop":                      ns.allocators,
 		"scalar-transcendental-vectorizable": ns.vectorized,
+		// PS6001 needs the accessor set to see a generic fallback arm: with
+		// elementAccessors empty, hasAccessorFallback is never set and the check
+		// reports zero on any input. Same false assurance, same warning.
+		"unverified-dual-path": ns.accessors,
 	}
 	var starved []string
 	for cat, vocab := range domainVocab {
@@ -2642,4 +2658,183 @@ func dualPathFunc(fn *ast.FuncDecl, ns nameSets) (string, bool) {
 		return true
 	})
 	return helper, helper != "" && hasAccessorFallback
+}
+
+// loopVarBody returns the index/key variable name and body block of a for/range loop.
+func loopVarBody(n ast.Node) (string, *ast.BlockStmt, bool) {
+	switch l := n.(type) {
+	case *ast.RangeStmt:
+		if id, ok := l.Key.(*ast.Ident); ok && id.Name != "_" {
+			return id.Name, l.Body, true
+		}
+	case *ast.ForStmt:
+		if as, ok := l.Init.(*ast.AssignStmt); ok && len(as.Lhs) == 1 {
+			if id, ok := as.Lhs[0].(*ast.Ident); ok && id.Name != "_" {
+				return id.Name, l.Body, true
+			}
+		}
+	}
+	return "", nil, false
+}
+
+// symBase returns the base identifier of an index expr whose ROW index mentions v (and
+// not other) — matching both a 1-D operand B[v] and a 2-D gram operand B[v][k] (v in the
+// row index, the shared k in the column index). Returns "" for anything else.
+func symBase(e ast.Expr, v, other string) (string, bool) {
+	ix, ok := e.(*ast.IndexExpr)
+	if !ok {
+		return "", false
+	}
+	if id, ok := ix.X.(*ast.Ident); ok { // 1-D: B[v]
+		if exprMentions(ix.Index, v) && !exprMentions(ix.Index, other) {
+			return id.Name, true
+		}
+		return "", false
+	}
+	if inner, ok := ix.X.(*ast.IndexExpr); ok { // 2-D gram: B[v][k]
+		if id, ok := inner.X.(*ast.Ident); ok &&
+			exprMentions(inner.Index, v) && !exprMentions(inner.Index, other) &&
+			!exprMentions(ix.Index, v) && !exprMentions(ix.Index, other) {
+			return id.Name, true
+		}
+	}
+	return "", false
+}
+
+// symmetricAccumFindings flags PS5002 — nested i/j loops that accumulate a FULL symmetric
+// matrix (m[i][j] += x[i]·x[j], or a gram M[i][k]·M[j][k] reduced into m[i][j]). Every
+// off-diagonal is computed twice; if the consumer reads only one triangle (Cholesky /
+// eigendecomposition) the upper triangle + a mirror pass halves the accumulation. Requires
+// BOTH a same-base symmetric product AND an m[i][j] write, which excludes matmul (whose
+// factors are different bases). Shipped: GMM, PCA.
+func symmetricAccumFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		iName, obody, ok := loopVarBody(n)
+		if !ok {
+			return true
+		}
+		for _, stmt := range obody.List {
+			jName, _, ok2 := loopVarBody(stmt)
+			if !ok2 || jName == iName || innerLoopIsTriangular(stmt, iName) {
+				continue
+			}
+			base, hasProd := symmetricProductBase(stmt, iName, jName)
+			if hasProd && hasMatrixWrite(stmt, iName, jName) {
+				out = append(out, finding{
+					pos:      fset.Position(n.Pos()),
+					category: "symmetric-accumulation",
+					msg: fmt.Sprintf("nested %s/%s loop accumulates a FULL symmetric matrix"+
+						" (m[%s][%s] built from a %s[%s]·%s[%s] product) — every off-diagonal is"+
+						" computed twice. If the consumer reads only one triangle (Cholesky /"+
+						" eigendecomposition), accumulate the upper triangle + diagonal and mirror"+
+						" once (m[%s][%s]=m[%s][%s]) — ~2x the accumulation, bit-identical when the"+
+						" product is commutative. Shipped: GMM, PCA. Verify the consumer + benchmark.",
+						iName, jName, iName, jName, base, iName, base, jName, jName, iName, iName, jName),
+				})
+				return false
+			}
+		}
+		return true
+	})
+	return out
+}
+
+// exprMentions reports whether e references the identifier name.
+func exprMentions(e ast.Expr, name string) bool {
+	found := false
+	ast.Inspect(e, func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok && id.Name == name {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+// innerLoopIsTriangular reports whether the inner loop's bounds reference the outer index
+// (for j := i; …  or  for j := 0; j <= i; …) — it already covers only one triangle, so the
+// symmetric-accumulation optimization does not apply (e.g. cholSolve's j<=i Cholesky loop).
+func innerLoopIsTriangular(loop ast.Node, iName string) bool {
+	fl, ok := loop.(*ast.ForStmt)
+	if !ok {
+		return false
+	}
+	return (fl.Init != nil && stmtMentions(fl.Init, iName)) ||
+		(fl.Cond != nil && exprMentions(fl.Cond, iName))
+}
+
+// hasMatrixWrite reports whether the subtree writes (= or +=) into a target indexed by
+// BOTH i and j — nested m[i][j] or flat m[i*n+j].
+func hasMatrixWrite(root ast.Node, iName, jName string) bool {
+	found := false
+	ast.Inspect(root, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || (as.Tok != token.ADD_ASSIGN && as.Tok != token.ASSIGN) {
+			return true
+		}
+		for _, lhs := range as.Lhs {
+			ix, ok := lhs.(*ast.IndexExpr)
+			if !ok {
+				continue
+			}
+			if exprMentions(ix.Index, iName) && exprMentions(ix.Index, jName) { // flat
+				found = true
+			}
+			if inner, ok := ix.X.(*ast.IndexExpr); ok && // nested m[i][j]
+				exprMentions(inner.Index, iName) && exprMentions(ix.Index, jName) {
+				found = true
+			}
+		}
+		return !found
+	})
+	return found
+}
+
+// stmtMentions reports whether the statement references the identifier name.
+func stmtMentions(s ast.Stmt, name string) bool {
+	found := false
+	ast.Inspect(s, func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok && id.Name == name {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+// symmetricProductBase searches a subtree for a multiply B[..i..]·B[..j..] of the SAME base
+// (the symmetry signal that separates a covariance/gram accumulation from a matmul, whose
+// factors have different bases) and returns that base.
+func symmetricProductBase(root ast.Node, iName, jName string) (string, bool) {
+	var base string
+	var found bool
+	ast.Inspect(root, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		be, ok := n.(*ast.BinaryExpr)
+		if !ok || be.Op != token.MUL {
+			return true
+		}
+		if bi, ok := symBase(be.X, iName, jName); ok {
+			if bj, ok := symBase(be.Y, jName, iName); ok && bi == bj {
+				base, found = bi, true
+			}
+		}
+		if !found {
+			if bi, ok := symBase(be.X, jName, iName); ok {
+				if bj, ok := symBase(be.Y, iName, jName); ok && bi == bj {
+					base, found = bi, true
+				}
+			}
+		}
+		return !found
+	})
+	return base, found
 }

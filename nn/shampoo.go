@@ -38,6 +38,28 @@ type Shampoo struct {
 
 	step int
 	st   []*shampooState
+
+	gmScr, tScr [][]float64 // pooled per-step matrix scratch (gradient matrix + T=G·R⁻¹ᐟ⁴), grown on demand
+}
+
+// growMat returns buf reshaped to r×c, reusing the outer slice and each row where they
+// are already long enough and allocating only the shortfall — the jagged-matrix analogue
+// of growF64, for per-step scratch that is fully overwritten before it is read. After a
+// warm-up step every subsequent Step reuses the backing storage (0 allocs).
+func growMat(buf [][]float64, r, c int) [][]float64 {
+	if cap(buf) < r {
+		buf = make([][]float64, r)
+	} else {
+		buf = buf[:r]
+	}
+	for i := range buf {
+		if cap(buf[i]) < c {
+			buf[i] = make([]float64, c)
+		} else {
+			buf[i] = buf[i][:c]
+		}
+	}
+	return buf
 }
 
 type shampooState struct {
@@ -105,27 +127,45 @@ func (s *Shampoo) Step(grad GradFn) error {
 
 		if p.Ndim() == 2 {
 			m, n := p.Shape()[0], p.Shape()[1]
-			gm := matAt(g)
+			// pooled per-step gradient matrix (was matAt(g), m+1 allocs/step) — fully
+			// overwritten before read, so reusing the receiver scratch is bit-identical.
+			s.gmScr = growMat(s.gmScr, m, n)
+			gm := s.gmScr
+			for i := range m {
+				for j := range n {
+					gm[i][j] = g.AtF64(i, j)
+				}
+			}
 			if st.l == nil { // initialize preconditioners to ε·I
 				st.l = eyeScaled(m, s.Eps)
 				st.r = eyeScaled(n, s.Eps)
 			}
-			for i := range m { // L += G·Gᵀ
-				for j := range m {
+			// L += G·Gᵀ and R += Gᵀ·G are SYMMETRIC (gm[i][k]·gm[j][k] == gm[j][k]·gm[i][k],
+			// same k-order); invMatrixRoot→SymEig reads the full matrix, so accumulate only
+			// the upper triangle + diagonal and mirror once — halves the O(m²n)+O(n²m) grams.
+			// Bit-identical: the original two triangles were already exactly equal.
+			for i := range m {
+				for j := i; j < m; j++ {
 					var acc float64
 					for k := range n {
 						acc += gm[i][k] * gm[j][k]
 					}
 					st.l[i][j] += acc
+					if j != i {
+						st.l[j][i] = st.l[i][j]
+					}
 				}
 			}
-			for i := range n { // R += Gᵀ·G
-				for j := range n {
+			for i := range n {
+				for j := i; j < n; j++ {
 					var acc float64
 					for k := range m {
 						acc += gm[k][i] * gm[k][j]
 					}
 					st.r[i][j] += acc
+					if j != i {
+						st.r[j][i] = st.r[i][j]
+					}
 				}
 			}
 			if refresh || st.li == nil {
@@ -134,9 +174,9 @@ func (s *Shampoo) Step(grad GradFn) error {
 			}
 			li, ri := st.li, st.ri
 			// Ĝ = L^{−1/4}·G·R^{−1/4}: first T = G·R^{−1/4} [m,n], then L^{−1/4}·T.
-			t := make([][]float64, m)
+			s.tScr = growMat(s.tScr, m, n) // pooled T scratch (was make per step)
+			t := s.tScr
 			for i := range m {
-				t[i] = make([]float64, n)
 				for j := range n {
 					var acc float64
 					for k := range n {

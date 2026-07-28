@@ -619,6 +619,44 @@ func vsoftplusF64(dst, src []float64) {
 	}
 }
 
+// vsoftplusGradF64 computes dst[i] = g[i]·softplus'(x[i]) = g[i]·σ(x[i]) 4-wide via AVX2
+// — the backward twin of vsoftplusF64 (Mamba/Jamba Δ-projection activation). σ is built in
+// the overflow-safe form z=e^(−|x|), num=(x≥0?1:z), σ=num/(1+z), matching the scalar twin
+// softplusGradF64 bit-for-bit so the 4-lane body and the scalar tail agree. Rides the model
+// f64 tolerance (Mamba goldens 1e-9), not the CPU==Ref exact invariant.
+func vsoftplusGradF64(dst, x, g []float64) {
+	if !vexpHasAVX {
+		for i, v := range x {
+			dst[i] = softplusGradF64(v, g[i])
+		}
+		return
+	}
+	n4 := len(x) &^ 3
+	for i := 0; i < n4; i += 4 {
+		xv := archsimd.LoadFloat64x4Slice(x[i:])
+		gv := archsimd.LoadFloat64x4Slice(g[i:])
+		z := expF64x4(vF64Zero.Sub(xv.AsUint64x4().And(vF64Abs).AsFloat64x4())) // e^(−|x|) ∈ (0,1]
+		num := vF64One.Merge(z, xv.GreaterEqual(vF64Zero))                      // x≥0 ? 1 : z
+		gv.Mul(num.Div(vF64One.Add(z))).StoreSlice(dst[i:])                     // g·num/(1+z)
+	}
+	for i := n4; i < len(x); i++ {
+		dst[i] = softplusGradF64(x[i], g[i])
+	}
+}
+
+// softplusGradF64 is the SCALAR twin of the vsoftplusGradF64 lane — bit-identical (same |x|
+// bit-mask, expF64poly, and num/(1+z) construction) so a value yields the same gradient in
+// the 4-lane body or the scalar tail.
+func softplusGradF64(x, g float64) float64 {
+	ax := math.Float64frombits(math.Float64bits(x) & 0x7fffffffffffffff) // |x|
+	z := expF64poly(-ax)                                                 // e^(−|x|); exp(±0)=1 so the ∓0 at x=0 is moot
+	num := z
+	if x >= 0 {
+		num = 1
+	}
+	return g * (num / (1 + z))
+}
+
 var vF64Sign = archsimd.BroadcastUint64x4(0x8000000000000000)
 
 // softcapF64poly is the SCALAR twin of the vsoftcapF64 lane — bit-identical
