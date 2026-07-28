@@ -45,3 +45,22 @@ METHOD, established over three rounds: (1) benchmark the site end to end, with a
 TRAPS, all three hit in practice: do NOT carry over a zero-skip (if av == 0 continue), which drops 0*(+-Inf) NaNs and is not order-preserving; destinations that are freshly make()d are already zero and need no clearing, but POOLED scratch does; and if a site is deliberately left as a dot, verify the //perfscan:ignore actually suppresses it by re-running the scan — a directive that does not apply is silently inert.
 
 A site may legitimately be DECLINED as A.Bt: when both operands already walk the summation index contiguously, the ikj form buys nothing but costs a transposed copy per call. Two sites were declined on exactly that ground (soap.go rotateBackInto second product, galore.go projectDown right). Record a decline with its reason rather than leaving the finding unexplained.
+
+## R-01KYN72D18E63B15N12HE4KAFX AQLM encode 2.06x; PS6006's rework predicted the blocker instead of -race finding it
+kind: research
+state: draft
+created: 2026-07-28
+
+BenchmarkEncodeAQLM_256x256 ran 986ms at 1.00x across GOMAXPROCS 1..12 — the largest serial spine left in nn. icmEncodeAQLM is 61.6% cumulative and refines each group independently.
+
+MEASURED INTERLEAVED, 3 alternations, min of 3 per arm: 983-995ms -> 478.8-481.6ms, 2.06x. Scales 1000 / 551 / 481ms at 1 / 4 / 12 Ps. kmeansAQLM (18.7%) and the codebook refit remain serial; Amdahl caps this at 2.30x.
+
+THE POINT OF THIS RECORD IS THE FOURTH SHARED SCRATCH. target was a shared residual buffer, after GaussianMixture.logGaussian's solve buffer, gbmBuilder.vals and gbmBuilder.part. The first was found by -race AFTER shipping a racy version that measured a misleading 1.16x; this one was EXPECTED, because PS6006 was reworked from a name heuristic to a structural test one commit earlier. The rework paid for itself immediately: four instances in four unrelated files is not coincidence, it is what a per-call buffer hoisted onto a receiver looks like everywhere.
+
+GATE: TestAQLMDeterministic could not serve — encodes twice with the SAME code, proving reproducibility rather than preservation. ICM is a coordinate-descent search whose every step is an argmin, so a reordering lands on different codes and passes unchanged. A frozen rolling hash over ALL 768 codes plus the refit codebook row replaced it.
+
+HASHING EVERY CODE RATHER THAN A PREFIX IS LOAD-BEARING: groups refine independently, so a partitioning bug corrupts a MIDDLE chunk that a prefix check never reads. Probed — dropping the last group of each chunk turns the golden red while every pre-existing AQLM test stays green.
+
+GATE LIMITS, stated: it does not exercise the argmin tie-break, because float distances never tie exactly — the same structural blindness found on the GBM split search, where the fix was a deliberately constructed tie. Here no constructed tie was added: unlike GBM, the tie-break was not touched by this change (the comparison sequence within a group is untouched by a partition), so the property at risk is coverage of the partition, which IS gated. Recording the reasoning so the absence is not read as an oversight.
+
+It is also unmoved by cutting an ICM sweep from three to two, which means the search has converged by the third on this fixture. Worth knowing before anyone tunes that constant expecting the gate to notice.
