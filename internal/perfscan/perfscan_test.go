@@ -1353,3 +1353,80 @@ func dot(a *T, n int) float64 {
 			got["unverified-dual-path"], got)
 	}
 }
+
+// PS4005 fires on an N-D odometer ticked once per ELEMENT — the shape whose fix
+// measured 4.49x (ref broadcast), 5.29x (cpu broadcast), 3.14x (tensor gather) and
+// 1.78x (ref argmax).
+func TestDetectPS4005_PerElementOdometer(t *testing.T) {
+	src := `package p
+func walk(xs []float64, acc []float64, shape []int, eff []int) {
+	nd := len(shape)
+	idx := make([]int, nd)
+	of := 0
+	for pos := range xs {
+		acc[of] = combine(acc[of], xs[pos])
+		for d := nd - 1; d >= 0; d-- {
+			idx[d]++
+			of += eff[d]
+			if idx[d] < shape[d] {
+				break
+			}
+			idx[d] = 0
+			of -= eff[d] * shape[d]
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["per-element-odometer"] == 0 {
+		t.Fatalf("want ≥1 per-element-odometer, got 0 (%v)", got)
+	}
+}
+
+// Silent once the innermost axis is HOISTED: the odometer then starts at nd-2 and
+// ticks once per run. Applying the rule's own advice must remove the finding — the
+// check PS4005 initially failed, reporting the three sites it had just helped fix.
+func TestDetectPS4005_SilentOnHoistedOdometer(t *testing.T) {
+	src := `package p
+func walk(xs []float64, acc []float64, shape []int, eff []int, inner int) {
+	nd := len(shape)
+	idx := make([]int, nd)
+	of := 0
+	for pos := 0; pos < len(xs); pos += inner {
+		run := xs[pos : pos+inner]
+		for j, v := range run {
+			acc[of+j] = combine(acc[of+j], v)
+		}
+		for d := nd - 2; d >= 0; d-- {
+			idx[d]++
+			of += eff[d]
+			if idx[d] < shape[d] {
+				break
+			}
+			idx[d] = 0
+			of -= eff[d] * shape[d]
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["per-element-odometer"] != 0 {
+		t.Fatalf("want 0 per-element-odometer on a hoisted odometer, got %d (%v)",
+			got["per-element-odometer"], got)
+	}
+}
+
+// Silent on an ordinary descending loop with no indexed tick — a plain reverse walk
+// is not an odometer.
+func TestDetectPS4005_SilentOnPlainReverseLoop(t *testing.T) {
+	src := `package p
+func rev(xs []float64, n int) float64 {
+	var total float64
+	for i := range xs {
+		for d := n - 1; d >= 0; d-- {
+			total += xs[i]
+		}
+	}
+	return total
+}`
+	if got := countCat(scanSrc(t, src)); got["per-element-odometer"] != 0 {
+		t.Fatalf("want 0 per-element-odometer on a plain reverse loop, got %d (%v)",
+			got["per-element-odometer"], got)
+	}
+}
