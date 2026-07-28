@@ -426,15 +426,30 @@ func WKVScanStateF64(k, v, w, u, out, aa0, bb0, pp0 []float64, seq, d int) {
 			base := t*d + c
 			kk := archsimd.LoadFloat64x4Slice(k[base:])
 			vv := archsimd.LoadFloat64x4Slice(v[base:])
+			// Each max-subtracted exp pair has one operand exactly 0 (the max side,
+			// pp-q or ww-q), so expF64x4v of it is exactly 1.0 — recomputing it is a
+			// wasted 13-term poly. Evaluate only the ONE negative-argument exp
+			// (min(d1,d2)) and select 1.0 vs e per lane by which side was the max.
+			// Bit-identical: the max side gets literal 1.0 (== expF64x4v(0)), and the
+			// non-max side gets expF64x4v(min(d1,d2)) — the exact same argument and
+			// bits as before. Halves the exp calls (4→2) per (token, 4-channel block).
 			ww := uc.Add(kk)
 			q := pp.Max(ww)
-			e1 := expF64x4v(pp.Sub(q))
-			e2 := expF64x4v(ww.Sub(q))
+			d1 := pp.Sub(q)
+			d2 := ww.Sub(q)
+			e := expF64x4v(d1.Min(d2))
+			ge := d1.GreaterEqual(d2) // pp≥ww ⇔ d1 is the 0/max side
+			e1 := eOne.Merge(e, ge)   // ge ? 1 : e
+			e2 := e.Merge(eOne, ge)   // ge ? e : 1
 			e1.Mul(aa).Add(e2.Mul(vv)).Div(e1.Mul(bb).Add(e2)).StoreSlice(out[base:])
 			ppw := pp.Sub(wc)
 			q2 := ppw.Max(kk)
-			e3 := expF64x4v(ppw.Sub(q2))
-			e4 := expF64x4v(kk.Sub(q2))
+			d3 := ppw.Sub(q2)
+			d4 := kk.Sub(q2)
+			ek := expF64x4v(d3.Min(d4))
+			gk := d3.GreaterEqual(d4)
+			e3 := eOne.Merge(ek, gk)
+			e4 := ek.Merge(eOne, gk)
 			aa = e3.Mul(aa).Add(e4.Mul(vv))
 			bb = e3.Mul(bb).Add(e4)
 			pp = q2
