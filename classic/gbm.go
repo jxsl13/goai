@@ -409,24 +409,42 @@ func (b *gbmBuilder) partition(start, end, feat int, thr float64) int {
 		s := col[p]
 		b.goLeft[s] = b.x[s][feat] <= thr
 	}
+	// mid is the same for EVERY feature — each column holds the same point set, so the
+	// left count does not depend on f. The serial loop recomputed it per column and kept
+	// the last; computing it once here removes the only cross-feature write and lets the
+	// columns be split.
 	mid := start
-	for f := 0; f < b.d; f++ {
-		cf := b.cols[f]
-		w := start
-		r := 0
-		for p := start; p < end; p++ {
-			s := cf[p]
-			if b.goLeft[s] {
-				cf[w] = s
-				w++
-			} else {
-				b.part[r] = s
-				r++
-			}
+	for p := start; p < end; p++ {
+		if b.goLeft[col[p]] {
+			mid++
 		}
-		copy(cf[w:end], b.part[:r])
-		mid = w
 	}
+	// PARALLEL over features: column f is permuted in place and read by nobody else.
+	// b.part was a SHARED right-side scratch across features — the receiver-scratch shape
+	// PS6006 exists for, and the third instance found in this campaign — so it becomes a
+	// per-chunk buffer.
+	//
+	// BIT-IDENTICAL: each column still receives the same STABLE partition, left run in
+	// ascending original order followed by the right run in ascending original order.
+	// Nothing is accumulated and no column reads another.
+	parallelFeatures(b.d, end-start, func(flo, fhi int) {
+		part := make([]int, end-start)
+		for f := flo; f < fhi; f++ {
+			cf := b.cols[f]
+			w, r := start, 0
+			for p := start; p < end; p++ {
+				s := cf[p]
+				if b.goLeft[s] {
+					cf[w] = s
+					w++
+				} else {
+					part[r] = s
+					r++
+				}
+			}
+			copy(cf[w:end], part[:r])
+		}
+	})
 	return mid
 }
 
