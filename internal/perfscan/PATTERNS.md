@@ -163,6 +163,13 @@ only real hazard is a caller that retains an earlier view **and mutates it in pl
 Audit for that before switching, and check whatever replaces cache entries wholesale
 (eviction, truncation) — a good row buffer detects a foreign view and resynchronizes.
 
+**A hit does NOT imply a worthwhile win — measure the site, never extrapolate from a
+sibling.** The identical transformation returned **13.9×** (GPT), **8.3×** (CLA) and
+**1.15×** (T5 decoder) on three call sites, decided entirely by whether the quadratic
+append was that site's dominant cost. T5's decode is dominated instead by a per-token
+rebuild of the full relative-position matrix, so removing its O(T²) cache append moved
+12.8% of bytes and nothing measurable in wall clock.
+
 **Deliberately silent** outside a per-token step function (the same statement in a
 one-shot builder is an ordinary concatenation), outside a loop, and when the concat's
 first operand is a *different* slot — that is not accumulate-into-itself and does not
