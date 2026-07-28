@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 
 	"github.com/jxsl13/goai/backend"
+	"github.com/jxsl13/goai/internal/simd"
 	"github.com/jxsl13/goai/tensor"
 )
 
@@ -377,9 +378,16 @@ func mhaFwd[T float32 | float64](q, k, v, out []T, g mhaGeo) {
 				}
 			}
 			var sum float64
-			for j := jmin; j < jmax; j++ {
-				row[j] = math.Exp(row[j] - m)
-				sum += row[j]
+			if isF32 {
+				// f32 rides the 5e-5 parity budget: vectorized exp+sum matches
+				// the vexp band softmax the gemm path already uses (§V9). F64
+				// stays on scalar math.Exp to keep its ulp budget.
+				sum = simd.ExpSumF64(row[jmin:jmax], row[jmin:jmax], m)
+			} else {
+				for j := jmin; j < jmax; j++ {
+					row[j] = math.Exp(row[j] - m)
+					sum += row[j]
+				}
 			}
 			ac := acc[:dk]
 			for d := range ac {
