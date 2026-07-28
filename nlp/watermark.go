@@ -249,16 +249,29 @@ func (w *Watermark) Detect(tokens []int) (z float64, green, scored int) {
 	swaps := make([]int, w.greenSize())
 	pcg := rand.NewPCG(0, 0)
 	rng := rand.New(pcg)
+	// Fuse seedGreen's partial Fisher-Yates with the membership test: perm[k] is
+	// finalized at step k (later steps only touch indices > k), so as soon as the
+	// finalized green member equals tok we know tok is green and can stop — no
+	// separate O(g) scan, and the remaining Fisher-Yates draws are skipped. Each
+	// token reseeds pcg, so consuming fewer draws never perturbs a later token;
+	// restoreIdentity reverses exactly the swaps performed. Green count (hence z)
+	// is bit-identical to seedGreen + full scan.
+	gsz := w.greenSize()
 	for i := 1; i < len(tokens); i++ {
-		g := w.seedGreen(rng, pcg, perm, swaps, tokens[i-1])
+		pcg.Seed(w.Key, uint64(tokens[i-1]))
 		tok := tokens[i]
-		for j := 0; j < g; j++ {
-			if perm[j] == tok {
+		done := gsz
+		for k := 0; k < gsz; k++ {
+			j := k + rng.IntN(w.VocabSize-k)
+			perm[k], perm[j] = perm[j], perm[k]
+			swaps[k] = j
+			if perm[k] == tok {
 				green++
+				done = k + 1
 				break
 			}
 		}
-		restoreIdentity(perm, swaps, g)
+		restoreIdentity(perm, swaps, done)
 	}
 	T := float64(scored)
 	z = (float64(green) - w.Gamma*T) / math.Sqrt(T*w.Gamma*(1-w.Gamma))
