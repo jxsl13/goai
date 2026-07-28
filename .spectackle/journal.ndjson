@@ -215,3 +215,4 @@
 {"t":"2026-07-28T10:16:52Z","eid":"1a8e4398b21e5642","ag":"ag-670f","ev":"create","id":"R-01KYM3MB5MERB82PHQ248XN0G0","k":"research","ti":"PS4006 complete outside nn: 4 sites shipped, and two kernels had no correctness tests"}
 {"t":"2026-07-28T10:23:34Z","eid":"9a7dd551e0256c0d","ag":"ag-0b34","ev":"create","id":"R-01KYM40K9NFRNVTYDYE5D3MXP9","k":"research","ti":"PS3003 resolved outside nn: einsum 5x shipped, four sites declined on key density"}
 {"t":"2026-07-28T10:31:07Z","eid":"8fe91edcb5eb6db2","ag":"ag-13cc","ev":"create","id":"R-01KYM4EDWPEFYVQAJZ16PJJWJ8","k":"research","ti":"Five of five numerical kernels are blind to a one-ulp change - tolerance testing is the cause"}
+{"t":"2026-07-28T10:32:48Z","eid":"c8a4f8cb2d852e68","ag":"ag-b5b1","ev":"create","id":"R-01KYM4HGM1EEY8RBVWGAWX2PV6","k":"research","ti":"ULP audit of backend/ref: 11 of 12 kernels blind to a one-ulp change, flashattn among them"}

@@ -595,3 +595,33 @@ WHAT WORKS, used for all five: keep the ORIGINAL implementation as an in-test or
 SCOPE NOT YET COVERED: only kernels reached while optimizing were probed. backend/ref alone holds roughly forty more, and the vjp_* files in autograd mirror precisely the kernels just shown to be unguarded. A systematic ULP-probe sweep of backend/ref would cost one mutation and one test run per kernel and would produce a ranked list of what is unverified — plausibly the highest-value use of a session that is not itself an optimization.
 
 NOT A PERFSCAN RULE, deliberately. Test sensitivity is not an AST property: no static pattern distinguishes a bit-exact assertion from a tolerance one in a way that would survive contact with real test code. The mutation probe is the instrument, and PROC-009 is where it belongs.
+
+## R-01KYM4HGM1EEY8RBVWGAWX2PV6 ULP audit of backend/ref: 11 of 12 kernels blind to a one-ulp change, flashattn among them
+kind: research
+state: draft
+created: 2026-07-28
+
+SYSTEMATIC ULP-BLINDNESS AUDIT of backend/ref, run with a scripted mutation probe: insert `* 1.0000000000000002` on the first float accumulation in a kernel, run the owning suites, record whether anything goes red, restore. Twelve kernels probed. ELEVEN are blind. One is guarded.
+
+BLIND (a one-ulp change in the accumulation passes every test):
+  backend/ref/flashattn.go     s += qv * krow[d]                          <- attention core
+  backend/ref/crossentropy.go  v += zl * lse * lse
+  backend/ref/conv.go          acc += xrow[ix] * wrow[kx]
+  backend/ref/distill.go       kl += p[j] * (math.Log(p[j]) - math.Log(q[j]))
+  backend/ref/grpo.go          total += surr - beta*kl
+  backend/ref/cpo.go           total += softplus(-z) + alpha*(-lw)
+  backend/ref/ipo.go           total += d * d
+  backend/ref/qr.go, solvespd.go, svd.go, and backend/einsum.go - found earlier while optimizing
+  linalg/derived.go Pinv - has a dedicated test file and is still blind
+
+GUARDED: backend/ref/gemm.go only. Worth reading to see what it does differently; it is the single existing example of the pattern the other eleven need.
+
+SKIPPED, not cleared: backend/ref/logdet.go and conv_backward.go matched no float accumulation under the probe's heuristic (first line of the form `x += a * b`). They are unprobed, not verified.
+
+WHAT THIS MEANS: flashattn is the one that should worry someone. Attention is the hottest path in the library and its reference implementation cannot detect a one-ulp error in the QK inner product — which is exactly the error a devirtualization, a reordering or a stale-buffer bug produces. The five optimizations shipped this session into unguarded kernels were each given a bit-exact oracle first (PROC-009); the other seven kernels above have no such protection and no optimization has touched them yet.
+
+METHOD, reusable: the probe script is ~20 lines - regex the first `x += a * b`, append the ulp factor, run the suite, diff on FAIL, restore. It found eleven unverified kernels in two batched runs. Any future session can rerun it over a wider file list; the cost is one test run per kernel.
+
+PRIORITY ORDER for adding oracles, by how hot the kernel is and how likely a rewrite is to touch it: flashattn, conv, crossentropy, then the preference losses (grpo, cpo, ipo, distill) which share the DPO/KTO/PPO shape already optimized this session.
+
+NOT A PERFSCAN RULE: test sensitivity is not an AST property. The mutation probe is the instrument and PROC-009 is the standing requirement; this audit is the inventory it should be applied against.
