@@ -50,3 +50,49 @@ EXPECTED: Stage A alone 1.15-1.3x; A+B 1.3-1.6x (7.25ms -> about 4.5-5.5ms), whi
 BIT-IDENTITY BAR: Stages A and B change NOTHING about fitted-model output — same operations, same order, same values. Stage C WILL change fitted models in the last ulps of alpha/b and possibly by one support vector; the golden test TestSVMGoldenParity (classic/svm_test.go:107) allows 2e-3 on the decision function and +/-1 on SV count so it would likely still pass, but that makes it a BEHAVIOR CHANGE that must be declared as such, not an optimization. Neither stage touches the width guard, which lives solely in DecisionFunction (:559-562) with Predict deliberately routed through it (:572-577) — the flat-SV change must keep m.nFeat as the compared value and must NOT start deriving the width from the flat buffer's stride.
 
 NOTE ON PS4002: math.Exp at :179 is a scalar transcendental in a hot loop and a hand-vectorized sibling does exist (backend/cpu/vexp_arm64.s), but PS4002 will not fire — it is gated on the file already calling a SIMD kernel, and classic/svm.go calls none. Reporting the instance rather than proposing a rule change: the vexp path is f32-only and unexported so it is not directly reusable for []float64, and the exp count is irreducible, which is exactly why Stages A/B target everything AROUND the exp.
+
+## R-01KYN1JXW6EPFBR4PWD04HNE6P Scaling sweep found 4 serial spines; GBM histogram fixed at 1.57x, three still open with numbers
+kind: research
+state: draft
+created: 2026-07-28
+
+A new diagnostic and its first harvest. Running each benchmark at GOMAXPROCS=1 and at full width and dividing turns "is this parallel?" from a code-reading question into a measurement. Shipped as internal/perfscan/tools/scaling_sweep.sh.
+
+FIRST SWEEP, on this host (M2 Pro, 12 P):
+  BenchmarkGBMHist_hist_80k   334ms  1.01x   FIXED, now 1.57x
+  BenchmarkGMMFitFull          77ms  1.00x   OPEN
+  BenchmarkMLAVJPSeq256        20ms  0.99x   OPEN
+  BenchmarkCholeskyVJP_128    4.7ms  0.88x   OPEN, and SLOWER with more cores
+  BenchmarkMamba2Prefill_512   57ms  2.84x   already parallel, no action
+  BenchmarkOLSFit_512x64      1.2ms  2.12x   already parallel, no action
+
+GBM: two per-feature loops, binning in newHistBuilder (1.26x) and accumulation in
+buildHist (1.29x on top), combined 337.0 -> 213.9ms interleaved. Scales 329.8 / 244.3 /
+211.7ms at 1 / 4 / 12 Ps.
+
+THE TRANSFERABLE TRAP, and the reason this is worth a record rather than a commit message:
+the FASTER SERIAL LOOP ORDER WAS THE UNPARTITIONABLE ONE. buildHist was sample-major,
+which reads the bin table contiguously; feature-major is what gives each feature exclusive
+ownership of its bins and makes splitting safe, and it costs 22% on a single core (336 ->
+410ms). The first version shipped that regression. Both orders are now kept and chosen by
+whether the work will actually be split. Expect this shape wherever a reduction is
+parallelized: the axis that makes writes disjoint is rarely the axis with the best
+locality.
+
+GATE: TestGBMHistogramDeterministic could not serve — it fits twice with the SAME code, so
+it proves reproducibility, not preservation, and a deterministic-but-wrong change passes
+it. A frozen bit-level golden was added and mutation-probed: a true one-ulp bump of the
+histogram sums and a one-ulp shift of a binning boundary each turn it red while every
+pre-existing histogram test stays green. One probe was rejected as VACUOUS rather than
+counted — multiplying by (1 + 1e-16) is a no-op because that rounds to exactly 1.0 in
+float64.
+
+NOT GENERALIZED into a perfscan rule, deliberately and for the third time in this
+campaign: proving loop-iteration independence is dataflow, perfscan is AST-only, and a
+rule that guessed would advise races. The fusion and register-blocking wins DID become
+rules (PS6003, PS6005) because they are structural. Parallelization gets a measurement
+tool instead.
+
+CholeskyVJP_128 at 0.88x deserves its own look: something there is not merely serial but
+actively penalized by more cores, which usually means false sharing or a barrier in a hot
+loop, and that is a different defect from an unparallelized one.
