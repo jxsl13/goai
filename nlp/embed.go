@@ -3,7 +3,7 @@ package nlp
 import (
 	"fmt"
 	"math"
-	"sort"
+	"slices"
 
 	"github.com/jxsl13/goai/tensor"
 )
@@ -121,11 +121,20 @@ func CosineRerank(query []float64, candidates [][]float64) ([]RerankResult, erro
 	}
 	// (Score desc, Index asc) is already a TOTAL order — Index is unique — so stability
 	// is redundant; unstable sort.Slice (pdqsort) yields the identical ranking faster.
-	sort.Slice(out, func(a, b int) bool {
-		if out[a].Score != out[b].Score {
-			return out[a].Score > out[b].Score
+	slices.SortFunc(out, func(a, b RerankResult) int {
+		if a.Score != b.Score {
+			if a.Score > b.Score {
+				return -1
+			}
+			return 1
 		}
-		return out[a].Index < out[b].Index
+		if a.Index < b.Index {
+			return -1
+		}
+		if a.Index > b.Index {
+			return 1
+		}
+		return 0
 	})
 	return out, nil
 }
