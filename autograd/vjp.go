@@ -106,6 +106,33 @@ func bcastSumInto[T interface{ ~float32 | ~float64 }](dst, src []T, gs, inShape 
 			eff[j] = ist[d]
 		}
 	}
+	// Blocked-contiguous fast path (the common bias-grad case: reduce over the
+	// leading batch axes, keep a contiguous trailing feature block). When every
+	// ALIGNED axis is non-broadcast (inShape[d] != 1 for all d), the aligned
+	// suffix of gs equals inShape exactly, so each F=len(dst) run of src maps to
+	// the contiguous dst[0:F] and all leading axes are pure broadcast. This
+	// replaces the per-element carry-walk (a branchy index update per element)
+	// with a tight unit-stride add loop the compiler auto-vectorizes. Bit-identical:
+	// each dst[f] accumulates the same src elements in the same row-ascending order
+	// the odometer visits — same operands, same per-accumulator add order.
+	aligned := true
+	for d := range inShape {
+		if inShape[d] == 1 {
+			aligned = false
+			break
+		}
+	}
+	if aligned {
+		if F := len(dst); F > 0 {
+			for base := 0; base+F <= len(src); base += F {
+				row := src[base : base+F]
+				for f, v := range row {
+					dst[f] += v
+				}
+			}
+		}
+		return
+	}
 	idx := make([]int, nd)
 	dOff := 0
 	for _, v := range src {
