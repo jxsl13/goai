@@ -179,3 +179,25 @@ GATE: TestQMatMulFusedDecodeMatchesGeneralPathExactly covers all seven types and
 MEASURE: BenchmarkQuantMamba2Decode{Q4_0,Q2_K,Q3_K,Q4_K,Q5_K,Q6_K} in nlp/quant_mamba2_decode_bench_test.go. Interleave per PROC-INTERLEAVE-001, ONE quant at a time — running several together already drifted an arm 25% in this campaign and produced a set that had to be discarded. Decline any type that does not clear the noise floor and record the number.
 
 SCOPE: format/gguf only. Expect the largest gains where the per-element unpack is cheapest.
+
+## R-01KYMZTEPHF67RZTY2T1679NTY Quantized decode: 525-1082us -> 182-322us across seven types, and what each layer contributed
+kind: research
+state: draft
+created: 2026-07-28
+
+Consolidated result of the QMatMul campaign, so the next agent does not re-derive which layer paid what. All figures are whole QuantMamba2 DecodeStep on M2 Pro darwin/arm64 go1.26.5, interleaved per PROC-INTERLEAVE-001.
+
+THREE INDEPENDENT LAYERS, applied in this order:
+1. FUSE the per-block dequant into the dot, removing a materialize-and-reread of every weight row. Q4_0 1.40x, Q4_K 1.40x, Q6_K 1.52x, Q2_K 1.67x, Q3_K 1.75x, Q5_K 1.41x. Q8_0 already had it.
+2. PARALLELIZE the output-row loop across a bounded pool (ADR-01KYMWJ76AFA2). Q4_K 1.66x, Q8_0 1.19x.
+3. REGISTER-BLOCK the output loop by 4, amortizing the shared activation row across 4 accumulators. Q8_0 2.26x (arrived from main), Q4_0 1.55x.
+
+LAYER 3 IS THE LARGEST SINGLE FACTOR and was the last one noticed, because it arrived on main attached to one of seven sibling paths and nothing flagged the asymmetry. Five K-quant dots remain unblocked; T-01KYMZC07EFT6 carries that work.
+
+ORDERING MATTERS FOR ATTRIBUTION, not for the total: measuring layer 2 after layer 3 had landed on Q8_0 is why Q8_0's parallel gain reads 1.19x against Q4_K's 1.66x. The smaller multiplier is a smaller remainder, not a weaker optimization.
+
+COST: allocs per decode step 102 -> 111, the pool's per-call barrier escaping to heap on the matmuls that clear the 1<<15 work threshold. Stated because a caller measuring bytes/op will see it.
+
+GATE FOR ALL OF IT: TestQMatMulFusedDecodeMatchesGeneralPathExactly, which runs one activation row as m==1 and as row 0 of m==2 and demands exact equality — production as its own oracle. It replaced a suite that compared only against a float reference at 1e-5, under which a sign bug in the fused path passed everything. Its limit is recorded in NUM-ACCUM-NARROW-001: a float64 accumulator narrowing to float32 makes reassociation unobservable, so the gate covers element mapping, sign and scale selection, NOT summation order.
+
+GENERALIZED: PS6003 (partial-fast-path-coverage) for layer 1, PS6005 (output-invariant-operand-reload) for layer 3. Layer 2 was NOT generalized into a rule — proving that a loop's iterations are independent is a dataflow question this AST-only scanner cannot answer soundly, and a rule that guesses at it would advise races. Recorded as a deliberate non-action rather than an oversight.
