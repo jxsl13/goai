@@ -1308,3 +1308,48 @@ func fill(a *T, n int) {
 			got["unverified-dual-path"], got)
 	}
 }
+
+// PS6001 also reports the dtype-SWITCH form of the same dual-arm shape, which has
+// no comma-ok: `switch x.Dtype() { case F64: <typed>; default: <accessor> }`.
+// blas1 uses this form, and omitting it left the known-kernel floor at 6 of 7.
+func TestDetectPS6001_DtypeSwitchForm(t *testing.T) {
+	src := `package p
+func dot(a, b *T, n int) float64 {
+	var acc float64
+	switch a.Dtype() {
+	case F64:
+		as := a.Storage().F64()
+		for i := range n {
+			acc += as[i]
+		}
+	default:
+		for i := range n {
+			acc += a.AtF64(i)
+		}
+	}
+	return acc
+}`
+	if got := countCat(scanSrc(t, src)); got["unverified-dual-path"] == 0 {
+		t.Fatalf("want ≥1 unverified-dual-path on the dtype-switch form, got 0 (%v)", got)
+	}
+}
+
+// Silent when the dtype switch is exhaustive: with no default clause there is no
+// fallback arm, so no two paths claim to agree.
+func TestDetectPS6001_SilentOnExhaustiveSwitch(t *testing.T) {
+	src := `package p
+func dot(a *T, n int) float64 {
+	var acc float64
+	switch a.Dtype() {
+	case F64:
+		acc = a.AtF64(0)
+	case F32:
+		acc = a.AtF64(1)
+	}
+	return acc
+}`
+	if got := countCat(scanSrc(t, src)); got["unverified-dual-path"] != 0 {
+		t.Fatalf("want 0 unverified-dual-path on an exhaustive switch, got %d (%v)",
+			got["unverified-dual-path"], got)
+	}
+}

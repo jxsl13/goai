@@ -2612,6 +2612,24 @@ func dualPathFunc(fn *ast.FuncDecl, ns nameSets) (string, bool) {
 			if name := calleeName(call.Fun); helper == "" && ns.fastPath[name] {
 				helper = name
 			}
+		case *ast.SwitchStmt:
+			// The other dual-arm form: `switch x.Dtype() { case F64: <typed>; default:
+			// <accessor loop> }`. There is no comma-ok here, so the assignment test
+			// above misses it — blas1 is the known example, and leaving it out made the
+			// floor 6 of 7. A default clause is required: without one the switch is
+			// exhaustive over dtypes and has no fallback arm to disagree with.
+			if helper != "" || v.Tag == nil {
+				return true
+			}
+			call, ok := v.Tag.(*ast.CallExpr)
+			if !ok || calleeName(call.Fun) != "Dtype" {
+				return true
+			}
+			for _, st := range v.Body.List {
+				if cc, ok := st.(*ast.CaseClause); ok && cc.List == nil {
+					helper = "Dtype switch"
+				}
+			}
 		case *ast.CallExpr:
 			if ns.accessors[calleeName(v.Fun)] {
 				hasAccessorFallback = true
