@@ -217,6 +217,7 @@ var checks = []check{
 	{"PS6001", "full-sort-bounded-prefix", "a full-vocabulary descending index sort whose result feeds an early-breaking (threshold-bounded) prefix consumer, with no quickselect/pre-filter guard — an O(n log n) sort for an O(prefix) need", false},
 	{"PS6002", "spatial-bounds-branch", "an innermost window/kernel loop re-testing a compound spatial bounds guard (iy>=0 && iy<h && ix>=0 && ix<wd) per tap, where the in-bounds taps form one contiguous run the guard can be hoisted around", false},
 	{"PS6005", "monotone-index-bound", "an innermost loop guarding its tap work with a single relational bound on an index affine in the loop var (j:=t-(K-1)+k; if j>=0) — the in-bounds iterations are one contiguous run, clamp the loop bound instead of branching per tap", false},
+	{"PS6014", "output-invariant-operand-reload", "an output loop whose accumulator re-reads an operand that does NOT vary with the output index — unrolling the output loop by 4 amortizes that load across 4 accumulators (register blocking / unroll-and-jam)", false},
 	{"PS6003", "partial-fast-path-coverage", "a fast path that bypasses the general path for only SOME members of a variant family a switch in the same function enumerates — the uncovered variants silently pay the slow path", false},
 	{"PS6004", "unverified-dual-path", "a devirtualized fast path with a generic fallback — a bit-identity claim needing a bit-exact test", true},
 	{"PS4010", "vectorizable-butterfly", "an in-loop butterfly p,q = x+y,x-y (add and subtract of the SAME operand pair written to two indexed slots) — a scalar FWHT/FFT/Hadamard stage a SIMD Add/Sub over the contiguous stride-separated runs would vectorize", false},
@@ -1825,6 +1826,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	out = append(out, innerInvariantRecomputeFindings(fset, fn)...)
 	out = append(out, invariantTranscendentalRecomputeFindings(fset, fn)...)
 	out = append(out, partialFastPathFindings(fset, fn)...)
+	out = append(out, outputInvariantReloadFindings(fset, fn)...)
 	out = append(out, vjpScalarBinopFindings(fset, fn)...)
 	out = append(out, fullSortBoundedPrefixFindings(fset, fn)...)
 	out = append(out, spatialBoundsBranchFindings(fset, fn)...)
@@ -5302,4 +5304,216 @@ func monotoneIndexBoundFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding
 var binopBackendOp = map[token.Token][2]string{
 	token.MUL: {"Mul", "multiply"}, token.ADD: {"Add", "add"},
 	token.SUB: {"Sub", "subtract"}, token.QUO: {"Div", "divide"},
+}
+
+// outputInvariantReloadFindings flags PS6014 — an output loop whose accumulator reads an
+// operand that does NOT vary with the output index. That operand is re-loaded and
+// re-converted once per output, when unrolling the output loop by 4 would amortize one
+// load across 4 accumulators. This is register blocking, the m==1 dual of unroll-and-jam.
+//
+// Found because main had already applied it to exactly one of seven sibling kernels.
+// gguf.QMatMul's Q8_0 single-token path is blocked by 4 and measured 526us -> 233us per
+// decode step (2.26x) — a larger factor than either fusing the dequant into the dot or
+// parallelizing the row loop delivered. Q4_0, structurally the closest sibling, was still
+// one row at a time; blocking it measured 1.55x. NOTHING IN PERFSCAN FLAGGED EITHER. The
+// existing serial-dot rule (PS4008) requires a plain `acc += A[i]*B[i]`, and these loops
+// unpack nibbles and convert between float widths on the way, so it stays silent.
+//
+// The remedy is NOT the ikj rewrite PS4008 asks for. Here the dependency chain is already
+// broken by having one accumulator per output; what is wasted is the repeated load of the
+// SHARED operand. Different defect, different fix, so it is a separate check.
+func outputInvariantReloadFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil {
+		return nil
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		outVar, outBody, ok := loopVarBody(n)
+		if !ok || outVar == "" {
+			return true
+		}
+		// Already blocked: a stride > 1 means someone has done this. `range n` and `i++`
+		// are the unblocked forms.
+		if f, isFor := n.(*ast.ForStmt); isFor && stridesByMoreThanOne(f.Post) {
+			return true
+		}
+		// Everything reachable from the output index, transitively: `rowBits :=
+		// weight[ni*rowBytes:]` then `q := rowBits[o:]` makes q output-dependent even
+		// though it never mentions ni. Without the closure the shared operand cannot be
+		// told apart from the per-output one.
+		derived := derivedFrom(outVar, outBody)
+		for _, acc := range scalarAccumulators(outBody) {
+			shared, perOutput := false, false
+			ast.Inspect(outBody, func(m ast.Node) bool {
+				as, ok := m.(*ast.AssignStmt)
+				if !ok || as.Tok != token.ADD_ASSIGN || len(as.Lhs) != 1 {
+					return true
+				}
+				if identName(as.Lhs[0]) != acc {
+					return true
+				}
+				for _, ix := range indexExprs(as.Rhs[0]) {
+					base := identName(ix.X)
+					if base == "" {
+						continue
+					}
+					if derived[base] || mentions(ix.Index, outVar) {
+						perOutput = true
+					} else {
+						shared = true
+					}
+				}
+				// A bare identifier counts too: an unpacked byte carried in as a range
+				// value is per-output without ever appearing as an index.
+				if !perOutput && mentionsAnyOf(as.Rhs[0], derived) {
+					perOutput = true
+				}
+				return true
+			})
+			// BOTH are required. Without a shared operand there is nothing to amortize;
+			// without a per-output one the whole accumulation is loop-invariant, which is
+			// PS5003's finding and a different fix (hoist it out entirely, do not unroll).
+			// And the accumulator must be STORED to an index that varies with the output
+			// variable. That is what makes this an output loop producing one value per
+			// iteration — the thing unrolling replicates. Without it the check fires on
+			// every scalar reduction that happens to sit inside some loop, which is what
+			// took it to 145 findings tree-wide.
+			if shared && perOutput && storedToIndexOf(outBody, acc, outVar) {
+				out = append(out, finding{
+					pos:      fset.Position(n.Pos()),
+					end:      fset.Position(n.End()),
+					category: "output-invariant-operand-reload",
+					msg:      fmt.Sprintf("accumulator %q re-reads an operand that does not vary with output index %q — unroll this loop by 4 so one load feeds 4 accumulators (register blocking)", acc, outVar),
+				})
+				break // one finding per output loop, not one per accumulator
+			}
+		}
+		return true
+	})
+	return out
+}
+
+// stridesByMoreThanOne reports whether a for-post is `i += c` with c > 1 — the signature
+// of a loop that is already register-blocked.
+func stridesByMoreThanOne(post ast.Stmt) bool {
+	as, ok := post.(*ast.AssignStmt)
+	if !ok || as.Tok != token.ADD_ASSIGN || len(as.Rhs) != 1 {
+		return false
+	}
+	lit, ok := as.Rhs[0].(*ast.BasicLit)
+	return ok && lit.Kind == token.INT && lit.Value != "1"
+}
+
+// derivedFrom returns every identifier reachable from name by assignment inside body,
+// transitively. Iterated to a fixed point because the chain can be several links long.
+func derivedFrom(name string, body *ast.BlockStmt) map[string]bool {
+	set := map[string]bool{name: true}
+	for changed := true; changed; {
+		changed = false
+		ast.Inspect(body, func(n ast.Node) bool {
+			switch v := n.(type) {
+			case *ast.AssignStmt:
+				for i, lhs := range v.Lhs {
+					if i >= len(v.Rhs) {
+						break
+					}
+					if l := identName(lhs); l != "" && !set[l] && mentionsAnyOf(v.Rhs[i], set) {
+						set[l] = true
+						changed = true
+					}
+				}
+			case *ast.RangeStmt:
+				// `for i, q := range qs` makes q output-dependent when qs is. Omitting
+				// this is what made the check miss the very loop it was written from:
+				// the per-output operand arrived as a range VALUE, never as an index.
+				if !mentionsAnyOf(v.X, set) {
+					return true
+				}
+				for _, e := range []ast.Expr{v.Key, v.Value} {
+					if l := identName(e); l != "" && l != "_" && !set[l] {
+						set[l] = true
+						changed = true
+					}
+				}
+			}
+			return true
+		})
+	}
+	return set
+}
+
+// scalarAccumulators returns names declared in body as a float scalar — `var acc float64`
+// or `acc := 0.0` — the shape an output accumulator takes.
+func scalarAccumulators(body *ast.BlockStmt) []string {
+	var out []string
+	for _, st := range body.List {
+		switch v := st.(type) {
+		case *ast.DeclStmt:
+			gd, ok := v.Decl.(*ast.GenDecl)
+			if !ok || gd.Tok != token.VAR {
+				continue
+			}
+			for _, sp := range gd.Specs {
+				vs, ok := sp.(*ast.ValueSpec)
+				if !ok {
+					continue
+				}
+				if t := identName(vs.Type); t == "float64" || t == "float32" {
+					for _, nm := range vs.Names {
+						out = append(out, nm.Name)
+					}
+				}
+			}
+		case *ast.AssignStmt:
+			if v.Tok != token.DEFINE || len(v.Lhs) != 1 || len(v.Rhs) != 1 {
+				continue
+			}
+			if lit, ok := v.Rhs[0].(*ast.BasicLit); ok && lit.Kind == token.FLOAT {
+				if nm := identName(v.Lhs[0]); nm != "" {
+					out = append(out, nm)
+				}
+			}
+		}
+	}
+	return out
+}
+
+// indexExprs collects every IndexExpr in e.
+func indexExprs(e ast.Expr) []*ast.IndexExpr {
+	var out []*ast.IndexExpr
+	ast.Inspect(e, func(n ast.Node) bool {
+		if ix, ok := n.(*ast.IndexExpr); ok {
+			out = append(out, ix)
+		}
+		return true
+	})
+	return out
+}
+
+// mentions reports whether e references name.
+func mentions(e ast.Expr, name string) bool {
+	return mentionsAnyOf(e, map[string]bool{name: true})
+}
+
+// storedToIndexOf reports whether acc is assigned into an index expression that varies
+// with outVar — `outf[ni] = float32(acc)`, the signature of a per-output accumulator.
+func storedToIndexOf(body *ast.BlockStmt, acc, outVar string) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || found {
+			return !found
+		}
+		for i, lhs := range as.Lhs {
+			ix, ok := ast.Unparen(lhs).(*ast.IndexExpr)
+			if !ok || !mentions(ix.Index, outVar) {
+				continue
+			}
+			if i < len(as.Rhs) && mentions(as.Rhs[i], acc) {
+				found = true
+			}
+		}
+		return !found
+	})
+	return found
 }

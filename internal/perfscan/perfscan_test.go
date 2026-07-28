@@ -3355,3 +3355,110 @@ func scale(x, s []float64, y []float64, m, n int) {
 		t.Fatalf("want 0 scaled-serial-dot without a dot loop, got %d", got)
 	}
 }
+
+// The gguf Q4_0 shape: one activation row shared by every output, one accumulator per
+// output, the shared row re-read on every pass.
+func TestDetectPS6014_OutputInvariantReload(t *testing.T) {
+	src := `package p
+func f(n, k int, outf, row, w []float64) {
+	for ni := range n {
+		wr := w[ni*k:]
+		var acc float64
+		for i := range k {
+			acc += row[i] * wr[i]
+		}
+		outf[ni] = acc
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["output-invariant-operand-reload"] != 1 {
+		t.Fatalf("want 1 output-invariant-operand-reload, got %d (%v)",
+			got["output-invariant-operand-reload"], got)
+	}
+}
+
+// THE CASE THAT MADE THE FIRST VERSION MISS THE LOOP IT WAS WRITTEN FROM: the per-output
+// operand arrives as a RANGE VALUE, never as an index expression. Walking only
+// assignments when computing what is output-dependent left `q` unclassified, so the
+// check saw no per-output operand and stayed silent on its own motivating case.
+func TestDetectPS6014_PerOutputOperandArrivingAsARangeValue(t *testing.T) {
+	src := `package p
+func f(n, k int, outf, row []float64, w []byte) {
+	for ni := range n {
+		wr := w[ni*k:]
+		var acc float64
+		for i, q := range wr {
+			acc += row[i] * float64(q)
+		}
+		outf[ni] = acc
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["output-invariant-operand-reload"] != 1 {
+		t.Fatalf("want 1 when the per-output operand is a range value, got %d (%v)",
+			got["output-invariant-operand-reload"], got)
+	}
+}
+
+// SILENT once blocked: a stride above 1 is the signature of someone having already done
+// this, and re-reporting it would make the check noise on exactly the fixed code.
+func TestDetectPS6014_SilentOnAnAlreadyBlockedLoop(t *testing.T) {
+	src := `package p
+func f(n, k int, outf, row, w []float64) {
+	for ni := 0; ni+4 <= n; ni += 4 {
+		w0, w1 := w[(ni+0)*k:], w[(ni+1)*k:]
+		var a0, a1 float64
+		for i := range k {
+			a0 += row[i] * w0[i]
+			a1 += row[i] * w1[i]
+		}
+		outf[ni] = a0
+		outf[ni+1] = a1
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["output-invariant-operand-reload"] != 0 {
+		t.Fatalf("want 0 on an already-blocked loop, got %d (%v)",
+			got["output-invariant-operand-reload"], got)
+	}
+}
+
+// SILENT when EVERY operand is output-invariant: that is a loop-invariant accumulation,
+// PS5003's finding, and its fix is to hoist the whole thing out rather than unroll —
+// unrolling a computation that should not run n times at all is the wrong advice.
+func TestDetectPS6014_SilentWhenNothingVariesWithTheOutput(t *testing.T) {
+	src := `package p
+func f(n, k int, outf, row, other []float64) {
+	for ni := range n {
+		var acc float64
+		for i := range k {
+			acc += row[i] * other[i]
+		}
+		outf[ni] = acc
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["output-invariant-operand-reload"] != 0 {
+		t.Fatalf("want 0 when nothing varies with the output index, got %d (%v)",
+			got["output-invariant-operand-reload"], got)
+	}
+}
+
+// SILENT when the accumulator never reaches an output index. Without this the check
+// fires on every scalar reduction that happens to sit inside some loop — it was 145
+// findings tree-wide before this guard and 56 after.
+func TestDetectPS6014_SilentWhenTheAccumulatorIsNotStoredPerOutput(t *testing.T) {
+	src := `package p
+func f(n, k int, row, w []float64) float64 {
+	total := 0.0
+	for ni := range n {
+		wr := w[ni*k:]
+		var acc float64
+		for i := range k {
+			acc += row[i] * wr[i]
+		}
+		total += acc
+	}
+	return total
+}`
+	if got := countCat(scanSrc(t, src)); got["output-invariant-operand-reload"] != 0 {
+		t.Fatalf("want 0 when the accumulator is not stored per output, got %d (%v)",
+			got["output-invariant-operand-reload"], got)
+	}
+}
