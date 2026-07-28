@@ -1219,13 +1219,14 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 		// G: a per-element little-endian bit decode in a loop — a memcpy in disguise on LE hosts.
 		// Silent when the function already has a rawCopyLE/rawStoreLE fast path (the loop is then
 		// the big-endian fallback, not a candidate — the hasFlat discipline of detector PS1001).
-		if bname, ok := binaryDecodeCall(call.Fun); ok && !hasLEBulk {
+		if bname, ok := binaryDecodeCall(call.Fun); ok && !hasLEBulk && decodesReadSlice(parent, call) {
 			out = append(out, finding{
 				pos:      fset.Position(loop.Pos()),
 				category: "le-decode-in-loop",
 				msg: fmt.Sprintf("%s in a loop — on a little-endian host the on-disk bytes already match the"+
 					" in-memory layout, so a single bulk copy replaces the per-element decode for verbatim-bit values;"+
-					" a path that genuinely converts per element is fine — triage before acting.", bname),
+					" The fix MUST be guarded by a build tag or a runtime byte-order check: an unconditional"+
+					" bulk copy silently corrupts data on a big-endian host. Prove identical bytes and benchmark.", bname),
 			})
 		}
 		// PS2005: a regexp compile inside a loop — recompiles the pattern every iteration.
@@ -2360,4 +2361,39 @@ func exprEqual(a, b ast.Expr) bool {
 		return ok && x.Sel.Name == y.Sel.Name && exprEqual(x.X, y.X)
 	}
 	return false
+}
+
+// decodesReadSlice reports whether a decode call both STORES its result verbatim
+// into an element (`dst[i] = decode(...)`) and READS its bits straight out of a
+// slice (`decode(src[i])`, `decode(raw[o:o+2])`). A bulk copy can only replace the
+// loop when both hold: anything applied to the value on the way out, and anything
+// computed on the way in, is work no memmove reproduces.
+//
+// Both halves are load-bearing against real code in this tree. Without the store
+// half, the quant block-scale reads qualify (`d := f16ToF32(Uint16(blk))` — one
+// scale per 32 elements, feeding a conversion). Without the read half, two more
+// classes qualify: the IQ sign trick
+// (`y[k] = Float32frombits(Float32bits(db*grid[k]) ^ sbit)`, arithmetic wearing a
+// bit-cast) and the radix key inversion in classic/gbm_hist.go
+// (`col[i] = Float64frombits(u)` after u was conditionally complemented).
+func decodesReadSlice(parent map[ast.Node]ast.Node, call *ast.CallExpr) bool {
+	if !storesVerbatim(parent, call) || len(call.Args) != 1 {
+		return false
+	}
+	switch call.Args[0].(type) {
+	case *ast.IndexExpr, *ast.SliceExpr:
+		return true
+	}
+	return false
+}
+
+// storesVerbatim reports whether a call is the direct right-hand side of an
+// assignment into an index expression — `dst[i] = decode(...)`.
+func storesVerbatim(parent map[ast.Node]ast.Node, call ast.Node) bool {
+	as, ok := parent[call].(*ast.AssignStmt)
+	if !ok || len(as.Lhs) != 1 || len(as.Rhs) != 1 || as.Rhs[0] != call {
+		return false
+	}
+	_, ok = as.Lhs[0].(*ast.IndexExpr)
+	return ok
 }

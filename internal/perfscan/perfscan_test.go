@@ -1107,3 +1107,65 @@ func mean(out []float32, acc []float32, l float32) {
 		t.Fatalf("want ≥1 loop-invariant-divide on a float divide, got 0 (%v)", got)
 	}
 }
+
+// FLOOR for PS4001: the tree currently contains no genuine bulk-copyable decode, so
+// the check reports nothing over ./... . This synthetic true positive is what keeps
+// it from being silently dead — a rule that cannot fire is worse than a noisy one,
+// because nothing distinguishes it from a rule that is merely quiet.
+func TestDetectPS4001_ReportsVerbatimSliceDecode(t *testing.T) {
+	src := `package p
+func load(dst []uint16, src []byte) {
+	for i := range dst {
+		dst[i] = binary.LittleEndian.Uint16(src[2*i:])
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["le-decode-in-loop"] == 0 {
+		t.Fatalf("want ≥1 le-decode-in-loop on a verbatim slice decode, got 0 (%v)", got)
+	}
+}
+
+// Silent on a block SCALE read: one decode per block feeding a conversion, with the
+// payload decoded by arithmetic. Nothing here is a memmove (gguf dequantQ8_0Into).
+func TestDetectPS4001_SilentOnBlockScaleRead(t *testing.T) {
+	src := `package p
+func dequant(dst []float32, raw []byte) {
+	for b := 0; b*32 < len(dst); b++ {
+		blk := raw[b*34 : b*34+34]
+		d := f16ToF32(binary.LittleEndian.Uint16(blk))
+		y, q := dst[b*32:b*32+32], blk[2:34]
+		for i := range y {
+			y[i] = d * float32(int8(q[i]))
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["le-decode-in-loop"] != 0 {
+		t.Fatalf("want 0 le-decode-in-loop on a block-scale read, got %d (%v)",
+			got["le-decode-in-loop"], got)
+	}
+}
+
+// Silent on bits that are COMPUTED rather than read: the IQ sign trick and the radix
+// key inversion both store verbatim but assemble their bits arithmetically.
+func TestDetectPS4001_SilentOnComputedBits(t *testing.T) {
+	for _, src := range []string{`package p
+func iq(y []float32, grid []float32, db float32, sbit uint32) {
+	for k := range y {
+		y[k] = math.Float32frombits(math.Float32bits(db*grid[k]) ^ sbit)
+	}
+}`, `package p
+func invert(col []float64, src []uint64) {
+	for i, u := range src {
+		if u&(1<<63) != 0 {
+			u &^= 1 << 63
+		} else {
+			u = ^u
+		}
+		col[i] = math.Float64frombits(u)
+	}
+}`} {
+		if got := countCat(scanSrc(t, src)); got["le-decode-in-loop"] != 0 {
+			t.Fatalf("want 0 le-decode-in-loop on computed bits, got %d (%v)",
+				got["le-decode-in-loop"], got)
+		}
+	}
+}
