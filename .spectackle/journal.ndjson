@@ -203,3 +203,4 @@
 {"t":"2026-07-28T07:04:06Z","eid":"d3636309239175f0","ag":"ag-a3f4","ev":"rule","op":"add","rule":"PROC-008","txt":"WHERE a non-bit-identical transform is shipped, the GoAI SHALL replace the bit-identical assertion with a tolerance test whose bound is justified in the commit."}
 {"t":"2026-07-28T07:05:38Z","eid":"221e339313728107","ag":"ag-f6ec","ev":"create","id":"R-01KYKRP643E13B2FF1SGBJAX4T","k":"research","ti":"PS3002 triage: radix advice is conditional and mostly inapplicable"}
 {"t":"2026-07-28T07:08:21Z","eid":"5e4787497f131c1b","ag":"ag-84d5","ev":"create","id":"R-01KYKRV4PCENVT0XQC3BGC0VNK","k":"research","ti":"PS4001 triage: block-scale reads are not bulk-copyable decodes"}
+{"t":"2026-07-28T07:11:15Z","eid":"f5b677d2bc2e1307","ag":"ag-3e23","ev":"create","id":"R-01KYKS0FGVEQ6V56X4S52NERD8","k":"research","ti":"PS4001 discriminator built and reverted: survivors unverified"}
