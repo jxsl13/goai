@@ -457,21 +457,52 @@ func transpose2D(t *tensor.Tensor) *tensor.Tensor {
 	out := tensor.New(tensor.F64, tensor.Shape{b, a})
 	tc := t.Contiguous()
 	dst := out.Storage().F64() // [b,a] row-major
+	// Cache-block both axes: a naive transpose writes dst[j*a+i] with column
+	// stride a (= vocab, tens of thousands), so each write lands in a fresh
+	// cache line and thrashes. Tiling by tile keeps a tile x tile block of
+	// output rows resident while streaming source rows through it, turning the
+	// scattered column writes into blocked ones. Pure permutation/convert per
+	// element -> bit-exact.
+	const tile = 64
 	switch tc.Dtype() {
 	case tensor.F64:
 		src := tc.Storage().F64() // [a,b] row-major
-		for i := 0; i < a; i++ {
-			row := i * b
-			for j := 0; j < b; j++ {
-				dst[j*a+i] = src[row+j]
+		for ii := 0; ii < a; ii += tile {
+			iMax := ii + tile
+			if iMax > a {
+				iMax = a
+			}
+			for jj := 0; jj < b; jj += tile {
+				jMax := jj + tile
+				if jMax > b {
+					jMax = b
+				}
+				for i := ii; i < iMax; i++ {
+					row := i * b
+					for j := jj; j < jMax; j++ {
+						dst[j*a+i] = src[row+j]
+					}
+				}
 			}
 		}
 	case tensor.F32:
 		src := tc.Storage().F32()
-		for i := 0; i < a; i++ {
-			row := i * b
-			for j := 0; j < b; j++ {
-				dst[j*a+i] = float64(src[row+j])
+		for ii := 0; ii < a; ii += tile {
+			iMax := ii + tile
+			if iMax > a {
+				iMax = a
+			}
+			for jj := 0; jj < b; jj += tile {
+				jMax := jj + tile
+				if jMax > b {
+					jMax = b
+				}
+				for i := ii; i < iMax; i++ {
+					row := i * b
+					for j := jj; j < jMax; j++ {
+						dst[j*a+i] = float64(src[row+j])
+					}
+				}
 			}
 		}
 	default:
