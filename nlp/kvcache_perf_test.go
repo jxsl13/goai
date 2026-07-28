@@ -229,3 +229,55 @@ func TestKVCacheGrowthCopyTraffic(t *testing.T) {
 	t.Logf("§V22 copy traffic at width=%d, T=%d: concatRows %d el, rowBuf %d el → %.0f× less traffic",
 		kvBenchWidth, kvBenchT, oldMoves, newMoves, ratio)
 }
+
+// kvBenchGPT builds the small GPT (dim 256, 4 layers, vocab 1000, ctx 600) used by
+// the GPT append A/B, matching kvBenchLlama's shape so the two are comparable. It is
+// assembled from a Share=1 CLA, which is exactly a plain GPT over the same tensors.
+func kvBenchGPT(b *testing.B) *GPT {
+	b.Helper()
+	cfg := CLAConfig{Vocab: 1000, Ctx: 600, Dim: 256, Heads: 4, Layers: 4, Share: 1, Eps: 1e-5}
+	c, err := NewCLA(cfg, 42)
+	if err != nil {
+		b.Fatalf("NewCLA: %v", err)
+	}
+	g := &GPT{
+		Config: GPTConfig{Vocab: cfg.Vocab, Ctx: cfg.Ctx, Dim: cfg.Dim,
+			Heads: cfg.Heads, Layers: cfg.Layers, Eps: cfg.Eps},
+		TokEmb: c.TokEmb, PosEmb: c.PosEmb, LNf: c.LNf, Head: c.Head,
+	}
+	for _, blk := range c.Blocks {
+		attn, err := NewMHA(cfg.Heads, blk.Wq, blk.Wk, blk.Wv, blk.Wo)
+		if err != nil {
+			b.Fatalf("NewMHA: %v", err)
+		}
+		attn.Causal = true
+		g.Blocks = append(g.Blocks, &Block{
+			LN1: blk.LN1, LN2: blk.LN2, Attn: attn,
+			W1: blk.W1, B1: blk.B1, W2: blk.W2, B2: blk.B2,
+		})
+	}
+	return g
+}
+
+func benchGPTGenerate(b *testing.B, viaConcat bool) {
+	m := kvBenchGPT(b)
+	old := kvAppendViaConcat
+	kvAppendViaConcat = viaConcat
+	defer func() { kvAppendViaConcat = old }()
+	b.ResetTimer()
+	for range b.N {
+		out, err := m.Generate([]int{1}, 500, Greedy())
+		if err != nil {
+			b.Fatalf("Generate: %v", err)
+		}
+		if len(out) != 501 {
+			b.Fatalf("generated %d tokens, want 501", len(out))
+		}
+	}
+}
+
+// BenchmarkGPTGenerate500ConcatRows / …RowBuf: the GPT twin of the Llama pair. The
+// bench-only kvAppendViaConcat flag flips ONLY the append, so both sides execute the
+// identical DecodeStep instruction sequence otherwise.
+func BenchmarkGPTGenerate500ConcatRows(b *testing.B) { benchGPTGenerate(b, true) }
+func BenchmarkGPTGenerate500RowBuf(b *testing.B)     { benchGPTGenerate(b, false) }

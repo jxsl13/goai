@@ -19,9 +19,9 @@ catalog a subset with detailed wins — their IDs head each section. The `P3`/`P
 
 ## Repo-agnostic engine + config
 
-perfscan detects the problems **independent of any one repo**. Sixteen of the twenty-one
+perfscan detects the problems **independent of any one repo**. Seventeen of the twenty-two
 checks are pure language/stdlib shapes and run on any Go module with no configuration
-(PS1003, PS2002–PS2005, PS3001–PS3003, PS4001, PS4003–PS4006, PS4008, PS5001, PS5002). The five
+(PS1003, PS2002–PS2006, PS3001–PS3003, PS4001, PS4003–PS4006, PS4008, PS5001, PS5002). The five
 **domain** checks — `PS1001` per-element-dispatch, `PS1002` per-element-closure, `PS2001`
 alloc-in-loop, `PS4002` scalar-transcendental-vectorizable, `PS6001` unverified-dual-path
 — key on a project's own vocabulary (its element accessors, allocators, fast-path helpers
@@ -139,6 +139,36 @@ non-contiguous / F16 / BF16 fallback. Result is **bit-identical**.
 - `nn.GradAccumulator.GradFn` — **1.62×** (2.56→1.58 ms)
 
 ---
+
+## PS2006 — quadratic cache append in a per-token step  *(scanner: static)*
+
+A cache slot reassigned to a concatenation of **itself** and a new row, inside a loop,
+in a per-token step function: `c.K[l] = concatRows(c.K[l], k)`. The concat allocates a
+fresh `[t+1, width]` buffer and recopies all `t` existing rows **every token**, so a
+T-token decode moves O(T²) bytes and allocates O(T²).
+
+**Fix:** an amortized row buffer — write row `t` in place into a doubling backing store
+and hand back a zero-copy contiguous prefix view, which makes the whole sequence O(T).
+`nlp/rowbuf.go` is the in-repo implementation.
+
+**Shipped:** the GPT decode cache. End to end on a 500-token generate, **2.21 GB → 159 MB
+(13.9×)** and 833 → 630 ms (**1.32×**); the append microbenchmark alone is 101× time and
+104× bytes at width 2048, T=512. Note the memory win is the headline and the wall-clock
+win is much smaller — the brief predicted 2–3× time and the measured figure was 1.32×.
+
+**The risk is ALIASING, not numerics.** The concat hands back a fresh buffer each step;
+the row buffer hands back a **view** into a growing one. Values are identical and
+previously returned views stay valid (appends only ever write row `t` and beyond), so the
+only real hazard is a caller that retains an earlier view **and mutates it in place**.
+Audit for that before switching, and check whatever replaces cache entries wholesale
+(eviction, truncation) — a good row buffer detects a foreign view and resynchronizes.
+
+**Deliberately silent** outside a per-token step function (the same statement in a
+one-shot builder is an ordinary concatenation), outside a loop, and when the concat's
+first operand is a *different* slot — that is not accumulate-into-itself and does not
+grow quadratically. It is also silent when the concat is **nested inside another call**
+(`keep(concatRows(c.K[l], k), …)`), which is how a bounded/evicting cache is usually
+written; those are O(window) rather than O(T) and are a weaker target.
 
 ## PS3002 — closure-comparator sort on a large keyed slice  *(scanner: static)*
 

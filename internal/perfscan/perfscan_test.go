@@ -1728,3 +1728,77 @@ func mm(a, b, c []float64, m, k int) {
 		t.Fatalf("ignore leaked past its comment block and suppressed a later finding (%v)", got)
 	}
 }
+
+// The exact shape that cost a 500-token GPT decode 2.21 GB: a cache slot reassigned
+// to a concat of itself, per layer, per token.
+func TestDetectPS2006_QuadraticCacheAppend(t *testing.T) {
+	src := `package p
+func (g *M) DecodeStep(cache *C, tok int) error {
+	for l := range g.Blocks {
+		kt, vt := g.proj(l)
+		cache.K[l] = concatRows(cache.K[l], kt)
+		cache.V[l] = concatRows(cache.V[l], vt)
+	}
+	return nil
+}`
+	if got := countCat(scanSrc(t, src)); got["quadratic-cache-append"] != 2 {
+		t.Fatalf("want 2 quadratic-cache-append, got %d (%v)", got["quadratic-cache-append"], got)
+	}
+}
+
+// SILENT once the amortized row buffer is adopted — applying the rule's own advice
+// must clear the finding.
+func TestDetectPS2006_SilentOnRowBufAppend(t *testing.T) {
+	src := `package p
+func (g *M) DecodeStep(cache *C, tok int) error {
+	for l := range g.Blocks {
+		kt, vt := g.proj(l)
+		cache.K[l], cache.V[l] = cache.bufs.appendKV(cache.K, cache.V, l, kt, vt)
+	}
+	return nil
+}`
+	if got := countCat(scanSrc(t, src)); got["quadratic-cache-append"] != 0 {
+		t.Fatalf("want 0 on the row-buffer append, got %d (%v)", got["quadratic-cache-append"], got)
+	}
+}
+
+// SILENT outside a per-token step function: the same statement in a one-shot builder
+// is an ordinary concatenation, and pooling it would be premature.
+func TestDetectPS2006_SilentOutsideStepFunction(t *testing.T) {
+	src := `package p
+func buildOnce(cache *C, parts []T) {
+	for l := range parts {
+		cache.K[l] = concatRows(cache.K[l], parts[l])
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["quadratic-cache-append"] != 0 {
+		t.Fatalf("want 0 outside a step function, got %d (%v)", got["quadratic-cache-append"], got)
+	}
+}
+
+// SILENT when the concat's first operand is a DIFFERENT slot: that is not
+// accumulate-into-itself and carries no quadratic growth.
+func TestDetectPS2006_SilentOnCrossSlotConcat(t *testing.T) {
+	src := `package p
+func (g *M) DecodeStep(cache *C, tok int) error {
+	for l := range g.Blocks {
+		cache.K[l] = concatRows(cache.prefix[l], g.row(l))
+	}
+	return nil
+}`
+	if got := countCat(scanSrc(t, src)); got["quadratic-cache-append"] != 0 {
+		t.Fatalf("want 0 on a cross-slot concat, got %d (%v)", got["quadratic-cache-append"], got)
+	}
+}
+
+// SILENT outside a loop: a single concat per call is not quadratic.
+func TestDetectPS2006_SilentOutsideLoop(t *testing.T) {
+	src := `package p
+func (g *M) DecodeStep(cache *C, tok int) error {
+	cache.K[0] = concatRows(cache.K[0], g.row(0))
+	return nil
+}`
+	if got := countCat(scanSrc(t, src)); got["quadratic-cache-append"] != 0 {
+		t.Fatalf("want 0 outside a loop, got %d (%v)", got["quadratic-cache-append"], got)
+	}
+}

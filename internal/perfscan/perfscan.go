@@ -187,6 +187,7 @@ var checks = []check{
 	{"PS2003", "strings-alloc-in-loop", "an allocating strings transform (Replace/Map/Repeat) in a loop", false},
 	{"PS2004", "poolable-loop-scratch", "per-call scratch make() bound to a non-escaping local in a pointer-method loop", false},
 	{"PS2005", "regexp-compile-in-loop", "a regexp.Compile/MustCompile inside a loop", true},
+	{"PS2006", "quadratic-cache-append", "a per-token cache slot reassigned to a concat of ITSELF and a new row — O(T\u00b2) copy traffic where an amortized row buffer is O(T)", false},
 	// PS3xxx — indirection / reflection overhead
 	{"PS3001", "reflection-in-loop", "a reflection-based fmt scan (Sscanf/Sscan/Fscanf) in a loop", false},
 	{"PS3002", "closure-comparator-sort", "a package sort (sort.Slice/SliceStable) with a comparator closure", false},
@@ -1734,6 +1735,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	}
 	out = append(out, symmetricAccumFindings(fset, fn)...)
 	out = append(out, serialDotMatmulFindings(fset, fn)...)
+	out = append(out, quadraticCacheAppendFindings(fset, fn)...)
 	return out
 }
 
@@ -2475,6 +2477,10 @@ func exprEqual(a, b ast.Expr) bool {
 	case *ast.SelectorExpr:
 		y, ok := b.(*ast.SelectorExpr)
 		return ok && x.Sel.Name == y.Sel.Name && exprEqual(x.X, y.X)
+	case *ast.IndexExpr:
+		// c.K[l] — needed by PS2006 to prove a concat accumulates into its own slot.
+		y, ok := b.(*ast.IndexExpr)
+		return ok && exprEqual(x.X, y.X) && exprEqual(x.Index, y.Index)
 	}
 	return false
 }
@@ -3002,4 +3008,114 @@ func isZeroLit(e ast.Expr) bool {
 		}
 	}
 	return true
+}
+
+// quadraticCacheAppendFindings flags PS2006 — a cache slot reassigned to a concat of
+// ITSELF and a new row, inside a loop, in a per-token step function:
+//
+//	c.K[l] = concatRows(c.K[l], k)
+//
+// The concat allocates a fresh [t+1, width] buffer and recopies all t existing rows
+// EVERY token, so a T-token decode moves O(T²) bytes and allocates O(T²). An amortized
+// row buffer — write row t in place into a doubling backing store, hand back a
+// zero-copy prefix view — makes the same sequence O(T) total. Measured in this repo at
+// width 2048, T=512: 101x time and 104x bytes on the append microbenchmark; end to end
+// on a 500-token GPT decode, 2.21 GB -> 159 MB (13.9x) and 1.32x wall clock.
+//
+// Requires (a) the assignment target to be an IndexExpr whose base also appears as the
+// FIRST argument of the call, (b) an enclosing loop, and (c) an enclosing function
+// whose name marks a per-token step. Without (c) this shape is an ordinary one-shot
+// concatenation and pooling it would be premature.
+//
+// The risk the fix carries is ALIASING, not numerics: the concat hands back a fresh
+// buffer each step while a row buffer hands back a VIEW into a growing one. Audit for
+// callers that retain an earlier view AND mutate it in place before switching.
+func quadraticCacheAppendFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Name == nil || !perTokenStepName(fn.Name.Name) {
+		return nil
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		_, body, ok := loopVarBody(n)
+		if !ok {
+			return true
+		}
+		ast.Inspect(body, func(m ast.Node) bool {
+			as, ok := m.(*ast.AssignStmt)
+			if !ok || as.Tok != token.ASSIGN {
+				return true
+			}
+			for i, lhs := range as.Lhs {
+				if i >= len(as.Rhs) {
+					break
+				}
+				target, ok := lhs.(*ast.IndexExpr)
+				if !ok {
+					continue
+				}
+				call, ok := as.Rhs[i].(*ast.CallExpr)
+				if !ok || len(call.Args) < 2 {
+					continue
+				}
+				if !concatLikeName(calleeName(call.Fun)) || !exprEqual(call.Args[0], target) {
+					continue
+				}
+				out = append(out, finding{
+					pos:      fset.Position(as.Pos()),
+					category: "quadratic-cache-append",
+					msg: fmt.Sprintf("%q is reassigned to %s of ITSELF plus a new row, inside a loop in"+
+						" %s — the call reallocates and recopies every existing row per token, so a"+
+						" T-token run moves O(T²) bytes. Replace with an amortized row buffer (write in"+
+						" place into a doubling backing store, return a zero-copy prefix view): measured"+
+						" 2.21 GB -> 159 MB on a 500-token decode. AUDIT FOR ALIASING FIRST — the buffer"+
+						" hands back a view, not a fresh tensor.",
+						exprText(target), calleeName(call.Fun), fn.Name.Name),
+				})
+			}
+			return true
+		})
+		return true
+	})
+	return out
+}
+
+// perTokenStepName reports whether a function name marks a per-token decode step,
+// which is what makes a repeated concat quadratic rather than incidental.
+func perTokenStepName(name string) bool {
+	for _, suffix := range []string{"DecodeStep", "StepKV", "StreamStep", "Step"} {
+		if strings.HasSuffix(name, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+// concatLikeName reports whether a callee builds a new buffer sized from both of its
+// operands — the allocating concatenation a row buffer replaces.
+func concatLikeName(name string) bool {
+	switch name {
+	case "concatRows", "Concat", "concat", "ConcatRows", "appendRows", "stackRows":
+		return true
+	}
+	return false
+}
+
+// exprText renders the shapes a cache slot takes — x, x.F, x.F[i] — for a finding
+// message. baseIdentName alone renders a selector as "", which turned the PS2006
+// message into a bare "[g]".
+func exprText(e ast.Expr) string {
+	switch x := e.(type) {
+	case *ast.Ident:
+		return x.Name
+	case *ast.SelectorExpr:
+		if base := exprText(x.X); base != "" {
+			return base + "." + x.Sel.Name
+		}
+		return x.Sel.Name
+	case *ast.IndexExpr:
+		return exprText(x.X) + "[" + exprText(x.Index) + "]"
+	case *ast.ParenExpr:
+		return exprText(x.X)
+	}
+	return baseIdentName(e)
 }
