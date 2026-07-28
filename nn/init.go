@@ -36,8 +36,31 @@ func KaimingUniform(t *tensor.Tensor, fanIn int, seed uint64) {
 	fillUniform(t, -a, a, seed)
 }
 
-// Zeros fills t with 0 (the conventional bias init).
+// Zeros fills t with 0 (the conventional bias init). For a freshly allocated
+// contiguous, offset-0 tensor the whole backing slice is zeroed with the builtin
+// clear() — which lowers to runtime.memclrNoHeapPointers (a vectorized rep-store)
+// — instead of fillGen's per-element indirect closure call (~4M indirect calls +
+// float conversions for a large weight matrix, which the compiler cannot fold or
+// vectorize because gen() is opaque). Zero bytes are +0.0 for F32/F64 and the
+// +0.0 bit-pattern for F16/BF16, exactly what SetF64(0)/fillGen write, so the
+// result is bit-identical; d[:n] guards against any over-length backing slice.
+// Non-contiguous / offset views fall back to fillGen (correct through a strided
+// view).
 func Zeros(t *tensor.Tensor) {
+	if t.IsContiguous() && t.Offset() == 0 {
+		n := t.Numel()
+		switch t.Dtype() {
+		case tensor.F64:
+			clear(t.Storage().F64()[:n])
+			return
+		case tensor.F32:
+			clear(t.Storage().F32()[:n])
+			return
+		case tensor.F16, tensor.BF16:
+			clear(t.Storage().U16()[:n])
+			return
+		}
+	}
 	fillGen(t, func() float64 { return 0 })
 }
 
