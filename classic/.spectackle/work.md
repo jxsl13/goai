@@ -165,3 +165,22 @@ So the tie-break needed a constructed fixture: two features inducing the IDENTIC
 GENERAL LESSON: a prediction-level golden gates VALUES, not DECISIONS. Where an algorithm's output is chosen by comparison rather than computed by arithmetic, exactness gates go quiet exactly where the parallelization is riskiest, and the tie must be constructed deliberately.
 
 NOT DONE: partition (28% flat) is still serial. It permutes every feature column in place for the chosen split, so it is a scatter rather than an independent-row loop and needs its own analysis.
+
+## R-01KYN5QSJ5FQQRQ1AJ1SVSQN29 KNN Predict 7.00x; the error-check placement pattern that beats a captured first-error
+kind: research
+state: draft
+created: 2026-07-28
+
+Best speedup of the parallelization campaign and its cleanest case. BenchmarkKNNPredict was 102ms at 1.00x across GOMAXPROCS 1..12; searchKNN is 80% cumulative and distSq 46% flat.
+
+MEASURED INTERLEAVED, 4 alternations, min of 3 per arm: 96.6-97.8ms -> 13.81-13.98ms, 7.00x. Scales 96.9 / 25.7 / 13.7ms at 1 / 4 / 12 Ps, near-linear.
+
+WHY THIS ONE IS NEAR-LINEAR while GBM managed 1.72x and GMM 4.09x: there is NO cross-query state whatsoever. Every other parallelization in this campaign had either a reduction to preserve (argmax, log-likelihood total, histogram bins) or a shared scratch to split. Here each query allocates its own heap, touches no receiver scratch, and writes exactly one output. Speedup tracks how much shared structure a loop has, not how much arithmetic.
+
+THE TRANSFERABLE PATTERN IS THE ERROR CHECK. The serial loop validated each row's width inside the body and returned on the first bad one. The gguf and GMM parallelizations both handled their in-loop errors with a mutex-guarded first-error, because the error depended on work done in the chunk. Here it does not: the width check is a pure function of the input, so it hoists ABOVE the loop as a pre-pass. That keeps "report the FIRST offending row" exact — which a parallel loop cannot cheaply guarantee — AND removes the branch from the hot path. Prefer hoisting over capturing whenever the check does not depend on the work; reach for the mutex only when it does.
+
+SCRATCH CHECKED, NOT ASSUMED: ballTree carries a splitKey buffer, which is exactly the receiver-scratch shape that made logGaussian racy and cost a misleading 1.16x measurement there. Confirmed here that it is build-time only and searchKNN never touches it, before parallelizing rather than after -race complained.
+
+NO NEW GOLDEN, justified rather than skipped: parallelizing over queries leaves the per-query arithmetic completely untouched, so the only failure mode a partition can introduce is writing the wrong index. Probed it — reversing the output order within each chunk turns the existing KNN tests red, so they already gate the one thing that could break. A frozen golden would have added nothing this time, unlike the GBM exact path where the existing gate covered a different grower entirely.
+
+Both classifier and regressor Predict paths done. NOT DONE: PredictProba, which has the same shape and would take the same change; no benchmark covers it, so there is nothing to validate against.
