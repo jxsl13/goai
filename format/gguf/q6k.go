@@ -36,16 +36,24 @@ func dequantQ6_KInto(dst []float32, raw []byte) {
 		base := sb * qkK
 		for grp := range 2 { // two 128-element groups per super-block
 			qlo, qho, sco, yo := grp*64, grp*32, grp*8, base+grp*128
+			// The 8 sub-block scale products d·sc[k] are piecewise-constant across the 32-iter
+			// loop (is = l/16 flips once), so recompute them once here instead of 16x each —
+			// the hoist Q4_K/Q5_K already ship. Bit-exact: Go evaluates d*float32(int8(sc))*
+			// float32(q-32) left-to-right, so dsc[k] holds the identical first product.
+			var dsc [8]float32
+			for k := range dsc {
+				dsc[k] = d * float32(int8(sc[sco+k]))
+			}
 			for l := range 32 {
 				is := l / 16
 				q1 := int(ql[qlo+l]&0xF) | int(qh[qho+l]&3)<<4
 				q2 := int(ql[qlo+l+32]&0xF) | int((qh[qho+l]>>2)&3)<<4
 				q3 := int(ql[qlo+l]>>4) | int((qh[qho+l]>>4)&3)<<4
 				q4 := int(ql[qlo+l+32]>>4) | int((qh[qho+l]>>6)&3)<<4
-				dst[yo+l+0] = d * float32(int8(sc[sco+is+0])) * float32(q1-32)
-				dst[yo+l+32] = d * float32(int8(sc[sco+is+2])) * float32(q2-32)
-				dst[yo+l+64] = d * float32(int8(sc[sco+is+4])) * float32(q3-32)
-				dst[yo+l+96] = d * float32(int8(sc[sco+is+6])) * float32(q4-32)
+				dst[yo+l+0] = dsc[is+0] * float32(q1-32)
+				dst[yo+l+32] = dsc[is+2] * float32(q2-32)
+				dst[yo+l+64] = dsc[is+4] * float32(q3-32)
+				dst[yo+l+96] = dsc[is+6] * float32(q4-32)
 			}
 		}
 	}
