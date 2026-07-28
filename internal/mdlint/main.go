@@ -44,9 +44,16 @@ type finding struct {
 // .spectackle/ holds server-owned spec bundles with their own linter
 // (`spectackle lint`); that markdown is generated rather than hand-authored for
 // GitHub, so the human-audience style rules here do not apply to it.
+// skipDir names directories the markdown walk must not descend into. Beyond the
+// obvious vendored/VCS trees, .claude is excluded because it holds agent scratch
+// state — per-agent memory files and, crucially, .claude/worktrees, where sibling
+// git worktrees of this same repository live. Without the exclusion the linter
+// walks INTO other worktrees and reports their markdown as this checkout's, so a
+// clean tree fails preflight over files belonging to a different branch that this
+// one cannot fix.
 func skipDir(name string) bool {
 	return name == ".git" || strings.HasPrefix(name, ".venv") ||
-		name == "node_modules" || name == ".spectackle"
+		name == "node_modules" || name == ".spectackle" || name == ".claude"
 }
 
 func main() {

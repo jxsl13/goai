@@ -343,7 +343,7 @@ functions (no receiver to hang the reused buffer on) and on `make()` outside any
 
 A `/` (or `/=`) by a loop-invariant scalar on every iteration of an element-wise loop.
 Hoisting `inv := 1/D` once and multiplying is **1.2–1.5×** when the divide is the
-loop's standalone cost — a float divide is ~20–40 cycles versus ~4 for a multiply.
+loop's standalone cost — a float divide is ≈20–40 cycles versus ≈4 for a multiply.
 
 **Shipped:** SoftCap VJP 1.28×/1.29×, and the whole optimizer reciprocal-multiply family
 (Adam/Cautious/LAMB/AdEMAMix/Adafactor bias-correction & moment divides, 1.1–1.3×).
