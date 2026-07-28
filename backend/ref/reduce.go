@@ -169,6 +169,10 @@ func reduceKernel(init float64, combine func(acc, x float64) float64, finalize f
 			} else {
 				idx := make([]int, nd)
 				of := 0
+				// Declined-shape fallback beside the strip-mined branch above, and not
+				// reached by BenchmarkSumF64_64K (verified by panic probe). The
+				// per-element odometer is deliberate here.
+				//perfscan:ignore PS4005 fallback for shapes the strip-mined branch declines
 				for pos := range xs {
 					acc[of] = combine(acc[of], xs[pos])
 					for d := nd - 1; d >= 0; d-- {
