@@ -205,13 +205,17 @@ func EncodeAQLM(w *tensor.Tensor, opts ...AQLMOption) (*AQLM, error) {
 		for j := range k {
 			codebooks[m*k+j] = cb[j]
 		}
-		for i := range residual {
-			b := nearestAQLM(residual[i], cb)
-			codes[i*cfg.m+m] = b
-			for t := range cfg.g {
-				residual[i][t] -= cb[b][t]
+		// Each group's assignment and residual update touch only its own row, so this
+		// partitions cleanly and bit-identically.
+		parallelRowsMM(len(residual), k*cfg.g, func(lo, hi int) {
+			for i := lo; i < hi; i++ {
+				b := nearestAQLM(residual[i], cb)
+				codes[i*cfg.m+m] = b
+				for t := range cfg.g {
+					residual[i][t] -= cb[b][t]
+				}
 			}
-		}
+		})
 	}
 
 	// (2) alternate global codebook refit (codes fixed) and per-group re-encode (codebooks
@@ -358,8 +362,20 @@ func kmeansAQLM(data [][]float64, k, dim int, rng *rand.Rand, iters int) [][]flo
 		for i := range sums {
 			sums[i] = make([]float64, dim)
 		}
-		for _, x := range data {
-			b := nearestAQLM(x, cent)
+		// TWO PASSES, and the split is what makes this bit-identical. The argmin per
+		// point is independent and is the expensive half, so it parallelizes; the
+		// accumulation into sums/cnt is a REDUCTION over points in order, and chunked
+		// partial sums would reassociate it. Assign in parallel, then fold sequentially
+		// in the original point order — the same separation used to keep the GMM
+		// E-step's log-likelihood total exact.
+		assign := make([]int, len(data))
+		parallelRowsMM(len(data), k*dim, func(lo, hi int) {
+			for i := lo; i < hi; i++ {
+				assign[i] = nearestAQLM(data[i], cent)
+			}
+		})
+		for i, x := range data {
+			b := assign[i]
 			cnt[b]++
 			for t := range dim {
 				sums[b][t] += x[t]
