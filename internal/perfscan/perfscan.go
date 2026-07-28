@@ -1689,21 +1689,30 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 		// when the key is a monotonic float/int over a large slice. Package-qualified to
 		// sort.*/slices.* so ops.Slice / tensor.Slice do not false-match.
 		sname, sortOK := pkgFuncCall(call.Fun, "sort", sortClosureCallees)
+		isSortPkg := sortOK // sort.Slice/SliceStable pay reflect.Swapper per swap; slices.* do not
 		if !sortOK {
 			sname, sortOK = pkgFuncCall(call.Fun, "slices", slicesClosureCallees)
 		}
 		if sortOK && hasFuncArg(call) {
+			msg := fmt.Sprintf("%s uses an indirect comparator. An LSD radix on the key bits can"+
+				" replace it (math.Float64bits is monotonic for non-negative f64) — measured 1.9–2.25×"+
+				" on top-p / typical sampling. BOTH preconditions must hold, and this check can verify"+
+				" NEITHER: (1) the sort key is a numeric float/int, not a string or a composite —"+
+				" radix-on-float-bits does not apply to a string key at all; (2) the slice is long"+
+				" (vocab-sized), not rank- or dimension-sized — on a short slice the radix loses and"+
+				" the measurement is noise. Confirm both by reading the site before acting, then prove"+
+				" identical output order and benchmark.", sname)
+			if isSortPkg {
+				// sort.Slice/SliceStable dispatch every element swap through reflect.Swapper.
+				// For a multi-key total order over a struct slice (radix infeasible), switching to
+				// slices.SortFunc/SortStableFunc keeps the comparator + permutation but monomorphizes
+				// the swap - bit-exact, -30..-45% on struct slices (JLens, CosineRerank, beam).
+				msg += " Or, for a multi-key total order over a struct slice, switch sort.Slice/SliceStable -> slices.SortFunc/SortStableFunc: same comparator + permutation, monomorphized swap (no reflect.Swapper) - bit-exact, -30..-45% on struct slices."
+			}
 			out = append(out, finding{
 				pos:      fset.Position(call.Pos()),
 				category: "closure-comparator-sort",
-				msg: fmt.Sprintf("%s uses an indirect comparator. An LSD radix on the key bits can"+
-					" replace it (math.Float64bits is monotonic for non-negative f64) — measured 1.9–2.25×"+
-					" on top-p / typical sampling. BOTH preconditions must hold, and this check can verify"+
-					" NEITHER: (1) the sort key is a numeric float/int, not a string or a composite —"+
-					" radix-on-float-bits does not apply to a string key at all; (2) the slice is long"+
-					" (vocab-sized), not rank- or dimension-sized — on a short slice the radix loses and"+
-					" the measurement is noise. Confirm both by reading the site before acting, then prove"+
-					" identical output order and benchmark.", sname),
+				msg:      msg,
 			})
 		}
 		return true
