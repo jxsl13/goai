@@ -198,13 +198,31 @@ func (m *GaussianNB) Fit(x [][]float64, y []int) error {
 // jointRow returns the unnormalised log-posterior log P(y)+Σ log N(xᵢ;μ,σ²) for
 // each class on one query row.
 func (m *GaussianNB) jointRow(row []float64) []float64 {
-	out := make([]float64, len(m.classes))
-	for c := range m.classes {
-		ll := m.logPrior[c]
-		ln := m.logNorm[c]
-		iv := m.invSigma[c]
+	nc := len(m.classes)
+	out := make([]float64, nc)
+	// Unroll-and-jam the class loop by 2: each row[j] load feeds two independent
+	// per-class accumulators, while each class keeps its own contiguous theta/
+	// logNorm/invSigma row (locality preserved). Each ll_c still sums j ascending
+	// with the same ln[j]-0.5·dv²·iv[j] terms -> bit-identical.
+	c := 0
+	for ; c+1 < nc; c += 2 {
+		ll0, ll1 := m.logPrior[c], m.logPrior[c+1]
+		ln0, iv0, th0 := m.logNorm[c], m.invSigma[c], m.theta[c]
+		ln1, iv1, th1 := m.logNorm[c+1], m.invSigma[c+1], m.theta[c+1]
 		for j := 0; j < m.nFeat; j++ {
-			dv := row[j] - m.theta[c][j]
+			rj := row[j]
+			d0 := rj - th0[j]
+			ll0 += ln0[j] - 0.5*d0*d0*iv0[j]
+			d1 := rj - th1[j]
+			ll1 += ln1[j] - 0.5*d1*d1*iv1[j]
+		}
+		out[c], out[c+1] = ll0, ll1
+	}
+	for ; c < nc; c++ {
+		ll := m.logPrior[c]
+		ln, iv, th := m.logNorm[c], m.invSigma[c], m.theta[c]
+		for j := 0; j < m.nFeat; j++ {
+			dv := row[j] - th[j]
 			ll += ln[j] - 0.5*dv*dv*iv[j]
 		}
 		out[c] = ll
