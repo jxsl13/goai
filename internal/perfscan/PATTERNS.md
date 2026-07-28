@@ -870,6 +870,44 @@ allocation inside a loop and stay silent here.
 Silent when the buffer is hoisted and chunk-indexed, on non-allocating defines in the
 body, and on callbacks that are not parallel dispatches.
 
+## PS6009 — `sort.Slice` allocates a reflect swapper on every call  *(scanner: static)*
+
+`sort.Slice`/`SliceStable` reach the swap through `reflectlite.Swapper`, which **allocates
+on every call regardless of slice length**. `slices.SortFunc`/`SortStableFunc` take the
+same comparator, produce the same permutation for a total order, and monomorphize the swap.
+
+**Triage by call frequency, not slice length** — the counter-intuitive part, and what the
+measurements show:
+
+| site | frequency | result |
+|---|---|---|
+| `classic/tree.go` `radixByFeature` | per node per feature | 1,095,700 → 352,027 allocs (**3.11×**), 182 → 161 MB |
+| `classic/knn.go`, `spatialindex.go` | per node / per query | 36,004 → 24,003 allocs (**1.50×**) |
+| five other sites | once per Fit/SVD/call | **declined** — one swapper each |
+
+The KNN sorts handle *short* slices — k results, one node's indices — and still returned
+1.50×, because the allocation is per **call**. A long sort called once is worth nothing; a
+short sort called a million times is worth everything.
+
+**Split out of PS3002 deliberately, and the reason is concrete.** That check reports the
+same sites but bundles two unrelated remedies — an LSD radix on the key bits, and this swap
+fix — and states it cannot verify the radix precondition. After `classic/tree.go` was
+converted, PS3002 went on flagging the `slices.SortFunc` **replacement it had recommended**,
+so the site could only be *silenced* with a suppression, never *cleared*. A check that
+cannot recognize its own fix cannot tell you whether the work is done. PS6009 clears.
+
+**Two conversion traps**, both real:
+
+- Both forms are **unstable**, so ties may land differently. Check the comparator is a total
+  order, or gate the output. Inverting a `(dist, idx)` tie-break left every KNN test green
+  until a deliberately constructed tie was added.
+- `sort.Slice` passes **indices**, `slices.SortFunc` passes **values** — so
+  `key[order[a]] < key[order[c]]` becomes `key[a] < key[c]`, silently wrong if transcribed
+  rather than re-derived.
+
+Silent on `sort.Ints`/`Strings` (concrete, no reflection) and on same-named methods outside
+the `sort` package.
+
 ## PS6003 — a fast path that covers only part of a variant family  *(scanner: static)*
 
 A function short-circuits the general path for some members of a variant family, and a

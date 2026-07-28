@@ -221,6 +221,7 @@ var checks = []check{
 	{"PS6006", "receiver-scratch-buffer", "a method using a receiver SLICE FIELD as a per-call temporary (indexed write, then indexed read, same call) — unsafe to call concurrently, and every caller contends on one cache line", false},
 	{"PS6007", "search-feeds-reduction", "a loop whose expensive per-item CALL produces an index into an accumulation — split it into a parallel search pass and a sequential fold, since chunked partials would reassociate the sums", false},
 	{"PS6008", "alloc-in-parallel-body", "a buffer allocated INSIDE a parallel dispatch body — free when the dispatch is infrequent, ruinous when it sits in a hot loop; hoist to per-chunk buffers indexed by the chunk", false},
+	{"PS6009", "reflect-swapper-sort", "sort.Slice/SliceStable reaches its swap through reflectlite.Swapper, which ALLOCATES on every call — slices.SortFunc/SortStableFunc is the same comparator with a monomorphized swap and no allocation", false},
 	{"PS6003", "partial-fast-path-coverage", "a fast path that bypasses the general path for only SOME members of a variant family a switch in the same function enumerates — the uncovered variants silently pay the slow path", false},
 	{"PS6004", "unverified-dual-path", "a devirtualized fast path with a generic fallback — a bit-identity claim needing a bit-exact test", true},
 	{"PS4010", "vectorizable-butterfly", "an in-loop butterfly p,q = x+y,x-y (add and subtract of the SAME operand pair written to two indexed slots) — a scalar FWHT/FFT/Hadamard stage a SIMD Add/Sub over the contiguous stride-separated runs would vectorize", false},
@@ -1845,6 +1846,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	out = append(out, receiverScratchFindings(fset, fn)...)
 	out = append(out, searchFeedsReductionFindings(fset, fn)...)
 	out = append(out, allocInParallelBodyFindings(fset, fn)...)
+	out = append(out, reflectSwapperSortFindings(fset, fn)...)
 	out = append(out, vjpScalarBinopFindings(fset, fn)...)
 	out = append(out, fullSortBoundedPrefixFindings(fset, fn)...)
 	out = append(out, spatialBoundsBranchFindings(fset, fn)...)
@@ -6064,4 +6066,64 @@ func isParallelDispatch(fun ast.Expr) bool {
 		}
 	}
 	return false
+}
+
+// reflectSwapperSortFindings flags PS6009 — a call to sort.Slice or sort.SliceStable.
+//
+// Both reach the swap through reflectlite.Swapper, which ALLOCATES on every call
+// regardless of how short the slice is. slices.SortFunc/SortStableFunc take the same
+// comparator, produce the same permutation for a total order, and monomorphize the swap.
+//
+// SPLIT OUT OF PS3002 DELIBERATELY. That check reports the same call sites but bundles two
+// unrelated remedies — an LSD radix on the key bits, and this swap fix — and it states it
+// cannot verify whether the radix precondition holds. The consequence was concrete: after
+// converting classic/tree.go to slices.SortFunc, PS3002 went on flagging the REPLACEMENT,
+// its own recommendation, and the site needed a suppression to go quiet. A check that
+// cannot recognize its own fix cannot be cleared, only silenced. This one clears.
+//
+// TRIAGE BY CALL FREQUENCY, NOT SLICE LENGTH, which is the counter-intuitive part and the
+// reason the message says so. The allocation is per CALL:
+//
+//	classic/tree.go   radixByFeature, once per node per feature   1,095,700 -> 352,027 allocs (3.11x)
+//	classic/knn.go    three per-node/per-query sites                 36,004 ->  24,003 allocs (1.50x)
+//	                  sorts of k results — SHORT slices, still 1.50x
+//
+// A long sort called once allocates one swapper and is not worth touching; a short sort
+// called a million times is. Five sites were declined on exactly that basis.
+//
+// Both forms are unstable, so ties may land differently between them — check that the
+// comparator is a total order, or gate the output, before converting. And note the
+// signature difference: sort.Slice passes INDICES while slices.SortFunc passes VALUES, so
+// `key[order[a]] < key[order[c]]` becomes `key[a] < key[c]` — silently wrong if
+// transcribed rather than re-derived.
+func reflectSwapperSortFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil {
+		return nil
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		pkg, okp := sel.X.(*ast.Ident)
+		if !okp || pkg.Name != "sort" {
+			return true
+		}
+		if sel.Sel.Name != "Slice" && sel.Sel.Name != "SliceStable" {
+			return true
+		}
+		out = append(out, finding{
+			pos:      fset.Position(call.Pos()),
+			category: "reflect-swapper-sort",
+			msg: fmt.Sprintf("sort.%s allocates a reflect swapper on EVERY call, whatever the slice length — switch to slices.%sFunc. Triage by how often this line runs, not by how long the slice is: a short sort called per node or per query is worth converting, a long one called once per Fit is not. slices.SortFunc passes VALUES where sort.%s passes INDICES, so re-derive the comparator rather than transcribing it",
+				sel.Sel.Name, map[string]string{"Slice": "Sort", "SliceStable": "SortStable"}[sel.Sel.Name], sel.Sel.Name),
+		})
+		return true
+	})
+	return out
 }

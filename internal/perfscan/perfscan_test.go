@@ -3875,3 +3875,78 @@ func f(d, n int, shared []float64) {
 			got["alloc-in-parallel-body"], got)
 	}
 }
+
+// sort.Slice allocates a reflect swapper on every call.
+func TestDetectPS6009_SortSlice(t *testing.T) {
+	src := `package p
+func f(idx []int, key []float64) {
+	sort.Slice(idx, func(a, b int) bool { return key[idx[a]] < key[idx[b]] })
+}`
+	if got := countCat(scanSrc(t, src)); got["reflect-swapper-sort"] != 1 {
+		t.Fatalf("want 1 reflect-swapper-sort, got %d (%v)", got["reflect-swapper-sort"], got)
+	}
+}
+
+// SliceStable has the same swapper, so it is reported too — with SortStableFunc as its
+// counterpart, since swapping a stable sort for an unstable one changes tie order.
+func TestDetectPS6009_SortSliceStable(t *testing.T) {
+	src := `package p
+func f(rows []row) {
+	sort.SliceStable(rows, func(a, b int) bool { return rows[a].k < rows[b].k })
+}`
+	got := scanSrc(t, src)
+	if countCat(got)["reflect-swapper-sort"] != 1 {
+		t.Fatalf("want 1 for SliceStable, got %v", countCat(got))
+	}
+	for _, f := range got {
+		if f.category == "reflect-swapper-sort" && !strings.Contains(f.msg, "SortStableFunc") {
+			t.Errorf("SliceStable must be pointed at SortStableFunc, got %q", f.msg)
+		}
+	}
+}
+
+// SILENT ON ITS OWN FIX — the property PS3002 lacks. That check kept flagging the
+// slices.SortFunc replacement it had recommended, so the site could only be silenced with
+// a suppression, never cleared. A check that cannot recognize its own remedy cannot tell
+// you whether the work is done.
+func TestDetectPS6009_SilentOnSlicesSortFunc(t *testing.T) {
+	src := `package p
+func f(idx []int, key []float64) {
+	slices.SortFunc(idx, func(a, b int) int {
+		switch {
+		case key[a] < key[b]:
+			return -1
+		case key[a] > key[b]:
+			return 1
+		}
+		return 0
+	})
+}`
+	if got := countCat(scanSrc(t, src)); got["reflect-swapper-sort"] != 0 {
+		t.Fatalf("want 0 on slices.SortFunc — the fix must clear the finding, got %d (%v)",
+			got["reflect-swapper-sort"], got)
+	}
+}
+
+// SILENT on sort.Ints and friends: those are concrete, not reflection-based.
+func TestDetectPS6009_SilentOnConcreteSorts(t *testing.T) {
+	src := `package p
+func f(xs []int, ss []string) {
+	sort.Ints(xs)
+	sort.Strings(ss)
+}`
+	if got := countCat(scanSrc(t, src)); got["reflect-swapper-sort"] != 0 {
+		t.Fatalf("want 0 on concrete sorts, got %d (%v)", got["reflect-swapper-sort"], got)
+	}
+}
+
+// SILENT on a same-named method that is not the sort package.
+func TestDetectPS6009_SilentOnUnrelatedSliceMethod(t *testing.T) {
+	src := `package p
+func f(db store, xs []int) {
+	db.Slice(xs, nil)
+}`
+	if got := countCat(scanSrc(t, src)); got["reflect-swapper-sort"] != 0 {
+		t.Fatalf("want 0 on an unrelated Slice call, got %d (%v)", got["reflect-swapper-sort"], got)
+	}
+}
