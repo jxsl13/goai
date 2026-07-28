@@ -157,3 +157,25 @@ option: Route through a bounded pool with an in-worker guard, as backend/cpu alr
 option: Stay serial and let callers parallelize. Forfeits the 1.70x for single-stream decode, which is the latency-sensitive interactive case.
 blocks: R-01KYMWGGNMER3B16KBXB8JY18H
 choice: Route through a bounded pool with an in-worker guard, as backend/cpu already does. Correct under nesting, but needs that pool lifted somewhere both packages can import, or duplicated.
+
+## T-01KYMZC07EFT6R50S1THRKFCZB Register-block the six unblocked fused row dots, as Q8_0 already is
+kind: task
+state: draft
+created: 2026-07-28
+refs: R-01KYMWGGNMER3B16KBXB8JY18H
+
+LARGEST REMAINING GAP IN THIS FILE, and it surfaced by accident: merging origin/main brought a 4-way register-blocked loop for the Q8_0 single-token path, which took Q8_0 from 526us to 233us per decode step SERIAL — 2.26x, larger than either the fusion (1.40-1.75x) or the parallelization (1.19-1.66x) delivered. Only Q8_0 has it. Q4_0 and the five K-quant dots still process one weight row at a time.
+
+THE MECHANISM: with m==1 there is exactly ONE activation row, shared across all n outputs. Processing 4 weight rows per pass reuses each activation element's load and float64 convert across those 4 rows instead of reloading it per row, and the fixed-length block subslices drop the per-element bounds check. It is the dual of the m>1 unroll-and-jam. Each output keeps its own accumulator, so ascending-k order and the per-element float32 weight values are unchanged.
+
+EVIDENCE IT TRANSFERS, and the reason it is not certain: Q8_0's block layout is the simplest of the seven (a scale plus 32 int8s). The K-quants unpack more per element — nibble splits, 6-bit scale unpacking, a qh plane — so the arithmetic-to-load ratio is higher and the reuse win is proportionally smaller. Q4_0 is closest to Q8_0 in shape and should be tried first. That is a prediction, and this campaign has now had two predictions inverted by measurement (the aggressive quants gained MORE than the deployment formats, not less), so measure each.
+
+SITES: dotQ4_0 is inline in format/gguf/quant_matmul.go; dotQ2_KRow (q2k.go), dotQ3_KRow (q3k.go), dotQ4_KRow (q4k.go), dotQ5_KRow (q5k.go), dotQ6_KRow (q6k.go). Model the change on the Q8_0 block in quant_matmul.go: a 4-blocked main loop plus a scalar tail for n%4.
+
+INTERACTION WITH THE POOL, do not miss this: parallelRows now partitions the row range, so a blocked inner loop must block within its [lo,hi) chunk, exactly as the Q8_0 path already does. Blocking across the whole n would write outside the chunk and race.
+
+GATE: TestQMatMulFusedDecodeMatchesGeneralPathExactly covers all seven types and is the right instrument — it compares m==1 against row 0 of m==2. Mutation-probe each rewritten dot rather than trusting it: a wrong accumulator index or a tail that drops n%4 rows is the failure mode. Run under -race too, since the pool is now live on these paths.
+
+MEASURE: BenchmarkQuantMamba2Decode{Q4_0,Q2_K,Q3_K,Q4_K,Q5_K,Q6_K} in nlp/quant_mamba2_decode_bench_test.go. Interleave per PROC-INTERLEAVE-001, ONE quant at a time — running several together already drifted an arm 25% in this campaign and produced a set that had to be discarded. Decline any type that does not clear the noise floor and record the number.
+
+SCOPE: format/gguf only. Expect the largest gains where the per-element unpack is cheapest.
