@@ -109,9 +109,27 @@ func broadcastVJP(mean bool) VJP {
 		switch x.Dtype() {
 		case tensor.F64:
 			gs, ds := gc.Storage().F64(), gin.Storage().F64()
-			for i := 0; i < n; i++ {
-				ds[i] = gs[of] * scale
-				for ax := nd - 1; ax >= 0; ax-- {
+			// Peel the innermost axis: with axStride[nd-1]==0 (that axis was reduced)
+			// gs[of] is constant across the whole inner run, so the run is a vectorizable
+			// constant fill instead of a per-element scalar store + odometer carry; with
+			// stride 1 it is a contiguous scaled copy. The outer odometer runs once per run
+			// (n/inner times) instead of per element. Bit-identical: same ds[i]=gs[map(i)]·scale
+			// values in the same row-major order.
+			inner := xs[nd-1]
+			istride := axStride[nd-1]
+			for base := 0; base < n; base += inner {
+				run := ds[base : base+inner]
+				if istride == 0 {
+					v := gs[of] * scale
+					for k := range run {
+						run[k] = v
+					}
+				} else {
+					for k := range run {
+						run[k] = gs[of+k*istride] * scale
+					}
+				}
+				for ax := nd - 2; ax >= 0; ax-- {
 					coord[ax]++
 					of += axStride[ax]
 					if coord[ax] < xs[ax] {
@@ -124,9 +142,27 @@ func broadcastVJP(mean bool) VJP {
 		case tensor.F32:
 			gs, ds := gc.Storage().F32(), gin.Storage().F32()
 			sc := float32(scale)
-			for i := 0; i < n; i++ {
-				ds[i] = gs[of] * sc
-				for ax := nd - 1; ax >= 0; ax-- {
+			// Peel the innermost axis: with axStride[nd-1]==0 (that axis was reduced)
+			// gs[of] is constant across the whole inner run, so the run is a vectorizable
+			// constant fill instead of a per-element scalar store + odometer carry; with
+			// stride 1 it is a contiguous scaled copy. The outer odometer runs once per run
+			// (n/inner times) instead of per element. Bit-identical: same ds[i]=gs[map(i)]·scale
+			// values in the same row-major order.
+			inner := xs[nd-1]
+			istride := axStride[nd-1]
+			for base := 0; base < n; base += inner {
+				run := ds[base : base+inner]
+				if istride == 0 {
+					v := gs[of] * sc
+					for k := range run {
+						run[k] = v
+					}
+				} else {
+					for k := range run {
+						run[k] = gs[of+k*istride] * sc
+					}
+				}
+				for ax := nd - 2; ax >= 0; ax-- {
 					coord[ax]++
 					of += axStride[ax]
 					if coord[ax] < xs[ax] {
