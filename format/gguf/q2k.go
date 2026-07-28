@@ -134,3 +134,39 @@ func quantizeQ2_K(x []float32) []byte {
 	}
 	return out
 }
+
+// dotQ2_KRow folds the Q2_K super-block dequant into a dot against one activation row,
+// mirroring [dequantQ2_KInto] statement for statement: each weight goes to a register
+// instead of a store and a reload. Same per-element float32 values, same ascending-k
+// order, so the output is the general path's — checked by the fused-vs-general gate.
+func dotQ2_KRow(row []float32, raw []byte, k int) float64 {
+	var acc float64
+	for sb := 0; sb*qkK < k; sb++ {
+		blk := raw[sb*q2kBlockSize:]
+		scales := blk[0:16]
+		qsAll := blk[16:80]
+		d := f16ToF32(binary.LittleEndian.Uint16(blk[80:82]))
+		dmin := f16ToF32(binary.LittleEndian.Uint16(blk[82:84]))
+		yi := sb * qkK
+		is := 0
+		for nb := range 2 { // n = 0, 128
+			q := qsAll[nb*32 : nb*32+32]
+			shift := 0
+			for range 4 { // j = 0..3
+				for _, g := range [2]int{0, 16} { // two groups of 16 (q[l], q[l+16])
+					sc := scales[is]
+					is++
+					dl := d * float32(sc&0xF)
+					ml := dmin * float32(sc>>4)
+					x := row[yi : yi+16]
+					for l := range x {
+						acc += float64(x[l]) * float64(dl*float32((q[l+g]>>shift)&3)-ml)
+					}
+					yi += 16
+				}
+				shift += 2
+			}
+		}
+	}
+	return acc
+}

@@ -148,3 +148,41 @@ func q5quant(y, step, off float32) int {
 	}
 	return q
 }
+
+// dotQ5_KRow folds the Q5_K super-block dequant into a dot against one activation row,
+// mirroring [dequantQ5_KInto] statement for statement, including its branchless high-bit
+// extraction (the qh bits are data-dependent and a branch mispredicts about half the
+// time). Low and high nibbles are two sequential passes, as in the Q4_K twin.
+func dotQ5_KRow(row []float32, raw []byte, k int) float64 {
+	var acc float64
+	for sb := 0; sb*qkK < k; sb++ {
+		blk := raw[sb*q5kBlockSize:]
+		d := f16ToF32(binary.LittleEndian.Uint16(blk[0:]))
+		dmin := f16ToF32(binary.LittleEndian.Uint16(blk[2:]))
+		scales := blk[4:16]
+		qh := blk[16:48]
+		qs := blk[48:176]
+		yo := sb * qkK
+		for pair := range 4 { // 4 pairs of (32 low, 32 high) = 8 sub-blocks
+			is, ql := pair*2, qs[pair*32:pair*32+32]
+			sc1, m1 := getScaleMinK4(is+0, scales)
+			sc2, m2 := getScaleMinK4(is+1, scales)
+			d1, off1 := d*float32(sc1), dmin*float32(m1)
+			d2, off2 := d*float32(sc2), dmin*float32(m2)
+			base := yo + pair*64
+			xlo, xhi := row[base:base+32], row[base+32:base+64]
+			sh := 2 * pair
+			for l, q := range ql {
+				h := qh[l] >> sh
+				lo := int(q&0xF) | int(h&1)<<4
+				acc += float64(xlo[l]) * float64(d1*float32(lo)-off1)
+			}
+			for l, q := range ql {
+				h := qh[l] >> sh
+				hi := int(q>>4) | int(h>>1&1)<<4
+				acc += float64(xhi[l]) * float64(d2*float32(hi)-off2)
+			}
+		}
+	}
+	return acc
+}

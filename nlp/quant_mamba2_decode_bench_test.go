@@ -44,3 +44,10 @@ func BenchmarkQuantMamba2DecodeQ4_0(b *testing.B) { benchQuantMamba2Decode(b, gg
 // Q4_K and Q6_K are llama.cpp's common deployment formats, so they carry the leverage.
 func BenchmarkQuantMamba2DecodeQ4_K(b *testing.B) { benchQuantMamba2Decode(b, gguf.Q4_K) }
 func BenchmarkQuantMamba2DecodeQ6_K(b *testing.B) { benchQuantMamba2Decode(b, gguf.Q6_K) }
+
+// The aggressive quants — the last three PS6003 reports as uncovered. More per-element
+// unpacking than Q4_K/Q6_K, so the materialize-and-reread cost they pay is not assumed
+// to be the same; PERF-FASTPATH-FAMILY-001 requires each to be measured on its own.
+func BenchmarkQuantMamba2DecodeQ2_K(b *testing.B) { benchQuantMamba2Decode(b, gguf.Q2_K) }
+func BenchmarkQuantMamba2DecodeQ3_K(b *testing.B) { benchQuantMamba2Decode(b, gguf.Q3_K) }
+func BenchmarkQuantMamba2DecodeQ5_K(b *testing.B) { benchQuantMamba2Decode(b, gguf.Q5_K) }

@@ -129,12 +129,32 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 	// The K-quants carry the same gap, and they are llama.cpp's common deployment
 	// formats. Their per-row dot lives in a helper each: the superblock unpacking is
 	// long enough that inlining four copies of it here would bury the dispatch.
-	if m == 1 && xf32 != nil && (qt == Q4_K || qt == Q6_K) {
-		row := xf32[:k]
-		dot := dotQ4_KRow
-		if qt == Q6_K {
+	// The aggressive quants (Q2_K/Q3_K/Q5_K) were measured before being fused rather
+	// than assumed to behave like the deployment formats — they carried the same tell,
+	// 107 allocs per decode step against the fused paths' 102, and were the three
+	// slowest of the seven types.
+	//
+	// The covered types are named in the GUARD rather than left implicit in the switch
+	// below it. Spelling it the other way — one `if m == 1` around a dispatch switch —
+	// hides the coverage from PS6003, which reads guards and cannot follow a function
+	// value into a later return. That would have made this function report a gap it no
+	// longer has, and silenced the check for whoever adds the eighth quant type.
+	if m == 1 && xf32 != nil &&
+		(qt == Q2_K || qt == Q3_K || qt == Q4_K || qt == Q5_K || qt == Q6_K) {
+		var dot func([]float32, []byte, int) float64
+		switch qt {
+		case Q2_K:
+			dot = dotQ2_KRow
+		case Q3_K:
+			dot = dotQ3_KRow
+		case Q4_K:
+			dot = dotQ4_KRow
+		case Q5_K:
+			dot = dotQ5_KRow
+		case Q6_K:
 			dot = dotQ6_KRow
 		}
+		row := xf32[:k]
 		for ni := range n {
 			outf[ni] = float32(dot(row, weight[ni*rowBytes:(ni+1)*rowBytes], k))
 		}

@@ -30,8 +30,8 @@ func TestQMatMulFusedDecodeMatchesGeneralPathExactly(t *testing.T) {
 			for i := range ws {
 				ws[i] = float32(rng.NormFloat64() * math.Pow(2, float64(rng.Intn(9)-4)))
 			}
-			for _, qt := range []QuantType{Q8_0, Q4_0, Q4_K, Q6_K} {
-				if k%256 != 0 && (qt == Q4_K || qt == Q6_K) {
+			for _, qt := range []QuantType{Q8_0, Q4_0, Q2_K, Q3_K, Q4_K, Q5_K, Q6_K} {
+				if k%256 != 0 && qt != Q8_0 && qt != Q4_0 {
 					continue // K-quants use a 256-element superblock
 				}
 				qb, err := Quantize(w, qt)
