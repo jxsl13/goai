@@ -176,22 +176,35 @@ func (s *Shampoo) Step(grad GradFn) error {
 			// Ĝ = L^{−1/4}·G·R^{−1/4}: first T = G·R^{−1/4} [m,n], then L^{−1/4}·T.
 			s.tScr = growMat(s.tScr, m, n) // pooled T scratch (was make per step)
 			t := s.tScr
-			for i := range m {
+			for i := range m { // T = G*R^-1/4 — ikj so ri[k] row streams contiguous inner
+				ti := t[i]
 				for j := range n {
-					var acc float64
-					for k := range n {
-						acc += gm[i][k] * ri[k][j]
+					ti[j] = 0
+				}
+				gi := gm[i]
+				for k := range n {
+					gik := gi[k]
+					rk := ri[k]
+					for j := range n {
+						ti[j] += gik * rk[j]
 					}
-					t[i][j] = acc
 				}
 			}
-			for i := range m {
+			accL := make([]float64, n)
+			for i := range m { // L^-1/4 * T — ikj so t[k] row streams contiguous inner
 				for j := range n {
-					var acc float64
-					for k := range m {
-						acc += li[i][k] * t[k][j]
+					accL[j] = 0
+				}
+				lii := li[i]
+				for k := range m {
+					lik := lii[k]
+					tk := t[k]
+					for j := range n {
+						accL[j] += lik * tk[j]
 					}
-					p.SetF64(p.AtF64(i, j)-s.LR*acc, i, j) // W −= η·Ĝ
+				}
+				for j := range n {
+					p.SetF64(p.AtF64(i, j)-s.LR*accL[j], i, j) // W -= eta*Ghat
 				}
 			}
 			continue
