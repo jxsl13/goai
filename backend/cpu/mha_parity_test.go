@@ -24,16 +24,24 @@ import (
 // and failed in 27 of 48 elements (R-01KYM5J5Z8EK9), so bitwise agreement is never
 // assumed from algebraic equivalence.
 //
-// SCOPE, verified by mutation rather than claimed: this guards the F64 FORWARD path.
-// A one-ulp change to the QK inner product (mha.go:351) turns it red. It does NOT
-// yet reach two paths that mutation shows are still blind —
-//   - the F32 forward branch (mha.go:338, inside `if isF32`), because these cases
-//     use F64 inputs. Extending there needs cpu-vs-ref F32 agreement to be MEASURED
-//     first: ref accumulates in float64 per the ACCUM invariant while the cpu F32
-//     branch may not, so the two need not agree bitwise.
-//   - the backward pass (mhaBwdGemmBand, mha.go:596), which no case here invokes.
-//
-// Both are recorded in R-01KYM6C5AWFKZ as remaining work.
+// SCOPE, established by mutation in the order PROC-012 requires — confirm the line
+// executes, then confirm its output is used, then read the result:
+//   - QK inner product (mha.go:351): a one-ulp change turns this red. Guarded, in
+//     both dtypes; the F32 branch is separate code and these cases cover it.
+//   - ALiBi bias in the F32 branch (mha.go:338): a SIGN FLIP turns this red. Two
+//     other probes stay green and BOTH are accounted for. A one-ulp scale is
+//     absorbed — the bias is small beside the score it joins, so the perturbation
+//     falls below that score's ulp (PROC-010). A +1 distance shift adds slopes[h]·1,
+//     a per-head CONSTANT, to every score in the row, and softmax is invariant to a
+//     uniform shift, so the output is genuinely unchanged and no test at any
+//     tolerance could catch it. Verified, not assumed: a panic probe shows 338
+//     executes, a nonzero-slope probe shows ALiBi is active, and zeroing the
+//     branch's row[j] turns this test red, so its output does reach the comparison.
+//   - the backward pass is guarded separately, bit-exactly in F64 and by tolerance
+//     in f32, in mha_backward_parity_test.go. mhaBwdGemmF32 is gated by
+//     `f32NativeKernels && seq >= mhaGemmMinSeq` and is UNREACHED in the default
+//     build, so it is untestable here — unreached, not unguarded (R-01KYM78A9BEBC
+//     corrects an earlier claim that conflated the two).
 func TestCPUMHABitIdenticalToRef(t *testing.T) {
 	rb, ok := backend.Get(backend.Ref)
 	if !ok {
