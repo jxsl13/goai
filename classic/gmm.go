@@ -343,7 +343,45 @@ func (m *GaussianMixture) eStep(x [][]float64, resp, logResp [][]float64) (float
 func (m *GaussianMixture) mStep(x [][]float64, resp [][]float64) error {
 	n, d, k := len(x), m.nFeat, m.cfg.k
 	nk := make([]float64, k)
-	for c := range k {
+	// Unroll-and-jam the mean accumulation over the component index c (4-wide):
+	// each x[i][j] load is reused across 4 independent per-component accumulators,
+	// cutting passes over X from k to ceil(k/4). Each mean[c][j]/sum[c] still sums
+	// i ascending over identical operands -> bit-identical.
+	c := 0
+	for ; c+4 <= k; c += 4 {
+		var mm [4][]float64
+		for t := range mm {
+			mm[t] = make([]float64, d)
+		}
+		var s [4]float64
+		for i := range n {
+			ri, xi := resp[i], x[i]
+			r0, r1, r2, r3 := ri[c], ri[c+1], ri[c+2], ri[c+3]
+			s[0] += r0
+			s[1] += r1
+			s[2] += r2
+			s[3] += r3
+			m0, m1, m2, m3 := mm[0], mm[1], mm[2], mm[3]
+			for j := range d {
+				xv := xi[j]
+				m0[j] += r0 * xv
+				m1[j] += r1 * xv
+				m2[j] += r2 * xv
+				m3[j] += r3 * xv
+			}
+		}
+		for t := 0; t < 4; t++ {
+			cix, sc, mt := c+t, s[t], mm[t]
+			nk[cix] = sc
+			inv := 1.0 / (sc + 1e-300)
+			for j := range d {
+				mt[j] *= inv
+			}
+			m.Means[cix] = mt
+			m.Weights[cix] = sc / float64(n)
+		}
+	}
+	for ; c < k; c++ {
 		mean := make([]float64, d)
 		var sum float64
 		for i := range n {
@@ -364,7 +402,52 @@ func (m *GaussianMixture) mStep(x [][]float64, resp [][]float64) error {
 	if m.cfg.covariance == GMMDiag {
 		m.logDetHalf = make([]float64, k)
 		m.invCov = make([][]float64, k)
-		for c := range k {
+		// Unroll-and-jam the covariance accumulation over c (4-wide): reuse each
+		// x[i][j] load across 4 components. dv differs per component (its own mean),
+		// but each v[c][j] still sums i ascending as (r*dv)*dv -> bit-identical.
+		c = 0
+		for ; c+4 <= k; c += 4 {
+			var vv [4][]float64
+			for t := range vv {
+				vv[t] = make([]float64, d)
+			}
+			mn0, mn1, mn2, mn3 := m.Means[c], m.Means[c+1], m.Means[c+2], m.Means[c+3]
+			for i := range n {
+				ri, xi := resp[i], x[i]
+				r0, r1, r2, r3 := ri[c], ri[c+1], ri[c+2], ri[c+3]
+				v0, v1, v2, v3 := vv[0], vv[1], vv[2], vv[3]
+				for j := range d {
+					xv := xi[j]
+					a0 := xv - mn0[j]
+					v0[j] += r0 * a0 * a0
+					a1 := xv - mn1[j]
+					v1[j] += r1 * a1 * a1
+					a2 := xv - mn2[j]
+					v2[j] += r2 * a2 * a2
+					a3 := xv - mn3[j]
+					v3[j] += r3 * a3 * a3
+				}
+			}
+			for t := 0; t < 4; t++ {
+				cix := c + t
+				v := vv[t]
+				iv := make([]float64, d)
+				inv := 1.0 / (nk[cix] + 1e-300)
+				var half float64
+				for j := range d {
+					v[j] = v[j]*inv + m.cfg.regCovar
+					if v[j] <= 0 {
+						return fmt.Errorf("classic: gmm component %d variance %g non-positive (raise regCovar)", cix, v[j])
+					}
+					half += 0.5 * math.Log(v[j])
+					iv[j] = 1 / v[j]
+				}
+				m.cov[cix] = v
+				m.invCov[cix] = iv
+				m.logDetHalf[cix] = half
+			}
+		}
+		for ; c < k; c++ {
 			v := make([]float64, d)
 			iv := make([]float64, d)
 			inv := 1.0 / (nk[c] + 1e-300)
