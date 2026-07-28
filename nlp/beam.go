@@ -69,6 +69,7 @@ func BeamSearch(next NextLogits, start []int, width, maxNew, eos int, alpha floa
 		// sort.Slice with an explicit (score, parent, tok) tie-break reproduces the stable
 		// sort's order — cand is appended parent-outer, tok-inner, so ties resolve to that
 		// same append order — but with pdqsort's lower constant instead of symMerge.
+		//perfscan:ignore PS3002 already the optimized form; radix needs a monotonic single key
 		sort.Slice(cand, func(i, j int) bool {
 			if cand[i].score != cand[j].score {
 				return cand[i].score > cand[j].score

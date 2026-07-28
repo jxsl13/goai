@@ -604,6 +604,11 @@ func quickselectIdxDesc(idx []int, key []float64, k int) {
 
 // sortIdxDescByKey sorts idx so key[idx[·]] is descending (typed, no reflection).
 func sortIdxDescByKey(idx []int, key []float64) {
+	// Small-n fallback for sortIdxDescByProb, which radix-sorts above radixSortCutoff.
+	// The comparison sort is deliberate here: below the cutoff its lower constant
+	// beats a radix pass, and it is also the reference the radix path is checked
+	// against.
+	//perfscan:ignore PS3002 small-n fallback; sortIdxDescByProb is the radix path
 	slices.SortFunc(idx, func(a, b int) int {
 		switch {
 		case key[a] > key[b]:
@@ -843,6 +848,11 @@ func quickselectIdxAsc(idx []int, key []float64, k int) {
 
 // sortIdxAscByKey sorts idx so key[idx[·]] is ascending (typed, no reflection).
 func sortIdxAscByKey(idx []int, key []float64) {
+	// Small-n fallback for sortIdxAscByScore, which radix-sorts above radixSortCutoff.
+	// The comparison sort is deliberate here: below the cutoff its lower constant
+	// beats a radix pass, and it is also the reference the radix path is checked
+	// against.
+	//perfscan:ignore PS3002 small-n fallback; sortIdxAscByScore is the radix path
 	slices.SortFunc(idx, func(a, b int) int {
 		switch {
 		case key[a] < key[b]:
