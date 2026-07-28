@@ -197,6 +197,7 @@ var checks = []check{
 	{"PS4003", "transcendental-wrapper-in-loop", "a loop calls a helper that wraps a libm transcendental", false},
 	{"PS4004", "scalar-copy-loop", "an element-by-element slice copy in a loop where a bulk copy would do", false},
 	{"PS4005", "per-element-odometer", "an N-D coordinate odometer ticked once per element instead of once per run", false},
+	{"PS4006", "row-slice-matrix", "a [][]T matrix built row-by-row and then indexed inside a nested loop", false},
 	// PS5xxx — arithmetic
 	{"PS5001", "loop-invariant-divide", "a divide by a loop-invariant scalar on every element", false},
 }
@@ -1561,6 +1562,38 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 		})
 	}
 
+	// PS4006: a matrix held as [][]T — one heap allocation per ROW — and then indexed
+	// two-deep (m[i][j]) inside a nested loop. Every step of the inner loop
+	// dereferences a row pointer to memory that the allocator may have placed
+	// anywhere, so a column walk (m[k][p] with k varying) touches n unrelated cache
+	// lines. One flat [rows*cols] buffer indexed m[i*cols+j] makes the same walk a
+	// constant stride through a single allocation and collapses rows+1 allocations
+	// to 1. The transform is index arithmetic only — same operands, same order — so
+	// it is bit-identical.
+	//
+	// Measured twice in this tree: backend/ref/cholesky.go 1.5x with allocations
+	// 137 -> 10, and internal/linalg SymEig's Jacobi sweep 1.2x with 277 -> 149.
+	//
+	// Requires BOTH the per-row allocation loop and a two-deep index inside a nested
+	// loop. A [][]T that is merely passed around, or indexed once outside a loop, is
+	// a legitimate ragged structure and not a candidate.
+	{
+		for name := range rowAllocMatrices(fn) {
+			if pos, ok := nestedDoubleIndex(fn, name); ok {
+				out = append(out, finding{
+					pos:      fset.Position(pos),
+					category: "row-slice-matrix",
+					msg: fmt.Sprintf("%s is a [][]T built one row per allocation and then indexed"+
+						" two-deep inside a nested loop — every inner step dereferences a separate row"+
+						" pointer, and a column walk touches one cache line per row. Flatten to a single"+
+						" [rows*cols] buffer indexed %s[i*cols+j]; index arithmetic only, so it is"+
+						" bit-identical. Measured 1.5x (cholesky) and 1.2x (SymEig). Check first that the"+
+						" rows are uniform length — a genuinely ragged matrix cannot flatten.", name, name),
+				})
+			}
+		}
+	}
+
 	// Pass 4: call-level detectors that are NOT loop-nested — the visitor/sort call
 	// IS itself the per-element / per-comparison hot loop.
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
@@ -2413,4 +2446,111 @@ func storesVerbatim(parent map[ast.Node]ast.Node, call ast.Node) bool {
 	}
 	_, ok = as.Lhs[0].(*ast.IndexExpr)
 	return ok
+}
+
+// rowAllocMatrices returns the names of locals assigned from make([][]T, …) that are
+// later filled one row at a time (`m[i] = make([]T, …)` inside a loop). Detector
+// PS4006 needs both halves: the outer make alone could be a ragged or borrowed
+// structure, while the per-row make is what turns a matrix into n allocations.
+func rowAllocMatrices(fn *ast.FuncDecl) map[string]bool {
+	outer := map[string]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+			return true
+		}
+		id, ok := as.Lhs[0].(*ast.Ident)
+		if !ok {
+			return true
+		}
+		call, ok := as.Rhs[0].(*ast.CallExpr)
+		if !ok || len(call.Args) == 0 {
+			return true
+		}
+		if fn, ok := call.Fun.(*ast.Ident); !ok || fn.Name != "make" {
+			return true
+		}
+		if at, ok := call.Args[0].(*ast.ArrayType); ok {
+			if _, inner := at.Elt.(*ast.ArrayType); inner {
+				outer[id.Name] = true
+			}
+		}
+		return true
+	})
+	filled := map[string]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+			return true
+		}
+		ix, ok := as.Lhs[0].(*ast.IndexExpr)
+		if !ok {
+			return true
+		}
+		id, ok := ix.X.(*ast.Ident)
+		if !ok || !outer[id.Name] {
+			return true
+		}
+		call, ok := as.Rhs[0].(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if f, ok := call.Fun.(*ast.Ident); ok && f.Name == "make" {
+			filled[id.Name] = true
+		}
+		return true
+	})
+	return filled
+}
+
+// nestedDoubleIndex reports the position of a two-deep index on name (m[i][j])
+// occurring inside at least two nested loops — the region where the row-pointer
+// dereference is paid repeatedly rather than once.
+func nestedDoubleIndex(fn *ast.FuncDecl, name string) (token.Pos, bool) {
+	var found token.Pos
+	var ok bool
+	var walk func(n ast.Node, depth int)
+	walk = func(n ast.Node, depth int) {
+		if n == nil || ok {
+			return
+		}
+		switch v := n.(type) {
+		case *ast.ForStmt:
+			ast.Inspect(v.Body, func(c ast.Node) bool {
+				if c == v.Body {
+					return true
+				}
+				walk(c, depth+1)
+				return false
+			})
+			return
+		case *ast.RangeStmt:
+			ast.Inspect(v.Body, func(c ast.Node) bool {
+				if c == v.Body {
+					return true
+				}
+				walk(c, depth+1)
+				return false
+			})
+			return
+		case *ast.IndexExpr:
+			if depth >= 2 {
+				if inner, isIdx := v.X.(*ast.IndexExpr); isIdx {
+					if id, isID := inner.X.(*ast.Ident); isID && id.Name == name {
+						found, ok = v.Pos(), true
+						return
+					}
+				}
+			}
+		}
+		ast.Inspect(n, func(c ast.Node) bool {
+			if c == n {
+				return true
+			}
+			walk(c, depth)
+			return false
+		})
+	}
+	walk(fn.Body, 0)
+	return found, ok
 }

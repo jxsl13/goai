@@ -1188,3 +1188,62 @@ func gather(out, t *T, idx []int) {
 		t.Fatalf("want ≥1 per-element-dispatch on a shape-bounded accessor loop, got 0 (%v)", got)
 	}
 }
+
+// PS4006 fires on a [][]T built one row per allocation and then indexed two-deep
+// inside a nested loop — the shape measured at 1.5x (cholesky) and 1.2x (SymEig).
+func TestDetectPS4006_RowSliceMatrix(t *testing.T) {
+	src := `package p
+func chol(a []float64, n int) {
+	l := make([][]float64, n)
+	for i := range n {
+		l[i] = make([]float64, n)
+	}
+	for j := range n {
+		for i := range n {
+			for k := range j {
+				l[i][j] -= l[i][k] * l[j][k]
+			}
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["row-slice-matrix"] == 0 {
+		t.Fatalf("want ≥1 row-slice-matrix, got 0 (%v)", got)
+	}
+}
+
+// Silent once flattened: a single [rows*cols] buffer has no two-deep index, so
+// applying the rule's own advice removes the finding rather than perpetuating it.
+func TestDetectPS4006_SilentOnFlatBuffer(t *testing.T) {
+	src := `package p
+func chol(a []float64, n int) {
+	l := make([]float64, n*n)
+	for j := range n {
+		for i := range n {
+			for k := range j {
+				l[i*n+j] -= l[i*n+k] * l[j*n+k]
+			}
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["row-slice-matrix"] != 0 {
+		t.Fatalf("want 0 row-slice-matrix on a flat buffer, got %d (%v)",
+			got["row-slice-matrix"], got)
+	}
+}
+
+// Silent on a ragged structure that is never indexed two-deep in a nested loop —
+// a [][]T is only a defect when the row dereference is paid repeatedly.
+func TestDetectPS4006_SilentOnShallowUse(t *testing.T) {
+	src := `package p
+func rows(n int) [][]float64 {
+	m := make([][]float64, n)
+	for i := range n {
+		m[i] = make([]float64, i+1)
+	}
+	return m
+}`
+	if got := countCat(scanSrc(t, src)); got["row-slice-matrix"] != 0 {
+		t.Fatalf("want 0 row-slice-matrix on shallow use, got %d (%v)",
+			got["row-slice-matrix"], got)
+	}
+}
