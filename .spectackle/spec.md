@@ -334,3 +334,8 @@ Mathematical and scientific grounding is required per unit of work. Numeric deci
 - ADR-01KYJNCHSQFVSRMZFSCVC82WZW ADR-0012 — Automatic backend selection by performance preference (§T46): compact
 - ADR-01KYJNCHSVE2RB0EGKW50071HA ADR-0009 — CUDA/cuBLAS backend (§T42): compact
 - ADR-01KYJNCHSYF369FXZDS7C16MBQ ADR-0010 — Portable Vulkan compute backend (§T43): compact
+
+## PROC-007
+WHERE a performance transform is not bit-identical, such as replacing a divide by a loop-invariant with a reciprocal multiply, the GoAI SHALL apply it only where the value is a continuous output - gradient, moment, probability, or activation - and never where the value feeds round, quantize, argmax, or a comparison against a threshold, and replace the bit-identical assertion with a tolerance test whose bound is justified in the commit.
+
+Rationale: Every optimization shipped in the perfscan line of work so far was bit-identical by construction (pure traversal reordering), so bit-identity had served as the de facto shipping gate. PS5001 reciprocal-multiply is the first class whose win requires accepting a half-ulp change, and no bit-identical variant exists. The continuous-output boundary is what makes the trade reviewable rather than ad hoc. Adopted by user decision; PS5001 work is additionally gated on the two red nn ULP tests being resolved first, so that a deliberate ulp change does not land on top of an unexplained one and defeat attribution.
