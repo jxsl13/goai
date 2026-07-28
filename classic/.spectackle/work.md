@@ -119,3 +119,26 @@ GATE: TestGMMDeterminism could not serve — it fits twice with the SAME code, s
 HONEST LIMIT OF THAT GATE, recorded so it is not over-trusted: it cannot see the log-likelihood total, because that only drives a convergence check against tol=1e-3, some thirteen orders of magnitude coarser than an ulp. The total is preserved exactly anyway (per-sample contributions summed in sample order rather than accumulated per chunk) because it costs one n-word array and removes the need to reason about how unlikely a flipped stopping decision is.
 
 GENERALIZED as perfscan PS6006 and cast as CONC-SCRATCH-FIELD-001. NOT DONE: mStep is still serial, but it parallelizes only k ways (6 here), so it is a smaller and shallower win than the E-step was.
+
+## R-01KYN4ARFEEA3VKX8RVRMV649P GMM fit 4.09x complete (76.5 -> 18.7ms); mStep was three quarters of what the E-step fix left
+kind: research
+state: draft
+created: 2026-07-28
+
+Closes the GMM line from the scaling sweep. Two changes, measured separately, each interleaved with min of 3 runs per arm.
+
+  baseline            76.5ms
+  + E-step parallel   39.4ms   1.93x  (over samples, plus the logGaussian race fix)
+  + M-step parallel   18.7ms   2.03x  (over components)
+  cumulative                   4.09x
+Scales 76.1 / 26.4 / 18.7ms at 1 / 4 / 12 Ps.
+
+THE SECOND NUMBER IS THE INFORMATIVE ONE. The M-step splits only k ways and k is 6 here, yet it returned 2.03x — which measures how completely the full-covariance accumulation dominated what the E-step fix left behind. A 6-way-parallel section returning 2x was roughly three quarters of the remaining work. Attribution shifted that much because fixing the larger half re-weighted everything; the profile taken BEFORE the E-step change put mStep at 36.5%, and acting on that number alone would have understated this by half.
+
+SAME BLOCKER BOTH TIMES, and the second was avoided rather than discovered: a scratch buffer shared across the units being parallelized. In the E-step it was logGaussian's triangular-solve buffer, a receiver field carrying a comment that said the method runs serially; -race caught it and it cost a 1.16x measurement before the sharing was fixed and the real 1.93x appeared. In the M-step it was the centered-row scratch, moved per-chunk by construction. PS6006 was written from the first; the second is the check being applied.
+
+ERROR PATHS both needed a captured first-error under a mutex, since a chunk body on a pool worker has nowhere to return one to. Worth expecting whenever a loop with an error return is parallelized — it is not incidental.
+
+GATE: a frozen bit-level golden of the full-covariance scores, mutation-probed red under a one-ulp mStep mean bump, a reversed mStep sample order and a one-ulp responsibility bump, while every pre-existing GMM test stays green. TestGMMDeterminism could not have served — it fits twice with the SAME code and so proves reproducibility, not preservation.
+
+NOT DONE: the diagonal-covariance mStep path is still serial. It is the cheap covariance mode (O(n*k*d) rather than O(n*k*d^2)) and no benchmark in the suite exercises it at scale, so there is nothing to validate against — measure first if it is ever wanted.
