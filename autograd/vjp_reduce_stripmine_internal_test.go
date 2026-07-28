@@ -4,6 +4,8 @@ import (
 	"math"
 	"math/rand"
 	"testing"
+
+	"github.com/jxsl13/goai/tensor"
 )
 
 // broadcastFillRef is broadcastVJP's inner loop EXACTLY as it stood before the
@@ -259,6 +261,76 @@ func TestBcastSumRowsDeclinesUnhandled(t *testing.T) {
 		if dst[i] != v {
 			t.Fatalf("declined call mutated dst[%d] = %v, want %v — a mid-loop bail would "+
 				"double-count these rows when the caller's fallback runs", i, dst[i], v)
+		}
+	}
+}
+
+// reduceOffsetsRef rebuilds the offset TABLE the prod VJP used before it moved to two
+// forEachReduceRow walks — the frozen oracle for that change.
+func reduceOffsetsRef(xShape tensor.Shape, axStride []int) []int {
+	n := xShape.Numel()
+	nd := len(xShape)
+	ofs := make([]int, n)
+	coord := make([]int, nd)
+	of := 0
+	for i := 0; i < n; i++ {
+		ofs[i] = of
+		for ax := nd - 1; ax >= 0; ax-- {
+			coord[ax]++
+			of += axStride[ax]
+			if coord[ax] < xShape[ax] {
+				break
+			}
+			coord[ax] = 0
+			of -= axStride[ax] * xShape[ax]
+		}
+	}
+	return ofs
+}
+
+// TestForEachReduceRowMatchesOffsetTable holds the row walk to the exact offset
+// sequence the materialized table produced, for every broadcast pattern of ranks 1..4.
+//
+// It exists because the prod VJP path turned out to be UNGATED: with the corrected
+// mutation harness (which rejects non-compiling and non-unique probes), detaching pass
+// 2's offset from pass 1 and corrupting pass 1's tally target BOTH left the entire
+// autograd suite green. Rewriting an ungated hot path on the strength of "tests pass"
+// is exactly the failure this session has now hit twice, so the traversal itself is
+// pinned here rather than trusted.
+func TestForEachReduceRowMatchesOffsetTable(t *testing.T) {
+	shapes := []tensor.Shape{{6}, {3, 4}, {4, 3}, {1, 5}, {5, 1}, {2, 3, 4}, {3, 1, 2}, {2, 2, 3, 2}}
+	for _, xs := range shapes {
+		nd, n := len(xs), xs.Numel()
+		for mask := 0; mask < 1<<nd; mask++ {
+			axStride := make([]int, nd)
+			stride := 1
+			for ax := nd - 1; ax >= 0; ax-- {
+				if mask&(1<<ax) != 0 {
+					axStride[ax] = 0
+					continue
+				}
+				axStride[ax] = stride
+				stride *= xs[ax]
+			}
+			want := reduceOffsetsRef(xs, axStride)
+			got := make([]int, n)
+			seen := 0
+			forEachReduceRow(xs, axStride, func(i0, of0, inner, sInner int) {
+				of := of0
+				for p := 0; p < inner; p++ {
+					got[i0+p] = of
+					of += sInner
+					seen++
+				}
+			})
+			if seen != n {
+				t.Fatalf("shape %v mask %d: walked %d elements, want %d", xs, mask, seen, n)
+			}
+			for i := range want {
+				if got[i] != want[i] {
+					t.Fatalf("shape %v mask %d: offset[%d] = %d, want %d", xs, mask, i, got[i], want[i])
+				}
+			}
 		}
 	}
 }

@@ -161,40 +161,6 @@ func broadcastVJP(mean bool) VJP {
 	}
 }
 
-// reduceOffsets returns ofs[i] = the flat offset into the contiguous reduced output
-// for each row-major input index i, computed with an incremental odometer over
-// axStride (one pass, no per-element Unravel) — shared by the extremum/prod VJPs so
-// they read the output with a plain slice index instead of a double index round-trip
-// (§base-perf, C25, §T635).
-//
-// STILL USED BY prodVJP ONLY. extremumVJP moved to forEachReduceRow, which produces the
-// offsets as the consumer walks instead of materializing them — that table was 2 MB of
-// the 3.1 MB a [512,512] f32 extremum backward allocated. prodVJP is a genuine TWO-PASS
-// algorithm that reads the offsets twice, so dropping the table there means walking the
-// odometer twice; that is a different trade and is left for its own measurement.
-//
-//perfscan:ignore PS4005 two-pass consumer; see forEachReduceRow for the single-pass form
-func reduceOffsets(xShape tensor.Shape, axStride []int) []int {
-	n := xShape.Numel()
-	nd := len(xShape)
-	ofs := make([]int, n)
-	coord := make([]int, nd)
-	of := 0
-	for i := 0; i < n; i++ {
-		ofs[i] = of
-		for ax := nd - 1; ax >= 0; ax-- {
-			coord[ax]++
-			of += axStride[ax]
-			if coord[ax] < xShape[ax] {
-				break
-			}
-			coord[ax] = 0
-			of -= axStride[ax] * xShape[ax]
-		}
-	}
-	return ofs
-}
-
 // extremumVJP routes g to the first element attaining the group extremum (§B16).
 func extremumVJP() VJP {
 	return func(_ *backend.Context, in, out []*tensor.Tensor, attrs backend.Attrs, g *tensor.Tensor) ([]*tensor.Tensor, error) {
@@ -278,52 +244,76 @@ func prodVJP() VJP {
 		// output offset (prod accumulation stays f64 for precision regardless of dtype).
 		if x.Dtype() == tensor.F64 && yc.Dtype() == tensor.F64 && gc.Dtype() == tensor.F64 {
 			xs, ys, gs, ds := xc.Storage().F64(), yc.Storage().F64(), gc.Storage().F64(), gin.Storage().F64()
-			ofs := reduceOffsets(x.Shape(), axStride)
-			for i := 0; i < n; i++ {
-				if of := ofs[i]; xs[i] == 0 {
-					numZeros[of]++
-				} else {
-					prodNz[of] *= xs[i]
-				}
-			}
-			for i := 0; i < n; i++ {
-				of, v := ofs[i], xs[i]
-				var d float64
-				switch numZeros[of] {
-				case 0:
-					d = ys[of] / v
-				case 1:
-					if v == 0 {
-						d = prodNz[of]
+			// Pass 1: tally zeros and the non-zero product per group.
+			forEachReduceRow(x.Shape(), axStride, func(i0, of0, inner, sInner int) {
+				of := of0
+				for p := 0; p < inner; p++ {
+					i := i0 + p
+					if xs[i] == 0 {
+						numZeros[of]++
+					} else {
+						prodNz[of] *= xs[i]
 					}
+					of += sInner
 				}
-				ds[i] = gs[of] * d
-			}
+			})
+			// Pass 2: build the gradient. A SECOND row walk replaces re-reading the
+			// materialized table; the odometer runs once per row, not once per element.
+			forEachReduceRow(x.Shape(), axStride, func(i0, of0, inner, sInner int) {
+				of := of0
+				for p := 0; p < inner; p++ {
+					i := i0 + p
+					v := xs[i]
+					var d float64
+					switch numZeros[of] {
+					case 0:
+						d = ys[of] / v
+					case 1:
+						if v == 0 {
+							d = prodNz[of]
+						}
+					}
+					ds[i] = gs[of] * d
+					of += sInner
+				}
+			})
 			return []*tensor.Tensor{gin}, nil
 		}
 		if x.Dtype() == tensor.F32 && yc.Dtype() == tensor.F32 && gc.Dtype() == tensor.F32 {
 			xs, ys, gs, ds := xc.Storage().F32(), yc.Storage().F32(), gc.Storage().F32(), gin.Storage().F32()
-			ofs := reduceOffsets(x.Shape(), axStride)
-			for i := 0; i < n; i++ {
-				if of := ofs[i]; xs[i] == 0 {
-					numZeros[of]++
-				} else {
-					prodNz[of] *= float64(xs[i])
-				}
-			}
-			for i := 0; i < n; i++ {
-				of, v := ofs[i], float64(xs[i])
-				var d float64
-				switch numZeros[of] {
-				case 0:
-					d = float64(ys[of]) / v
-				case 1:
-					if v == 0 {
-						d = prodNz[of]
+			// Pass 1: tally zeros and the non-zero product per group.
+			forEachReduceRow(x.Shape(), axStride, func(i0, of0, inner, sInner int) {
+				of := of0
+				for p := 0; p < inner; p++ {
+					i := i0 + p
+					if xs[i] == 0 {
+						numZeros[of]++
+					} else {
+						prodNz[of] *= float64(xs[i])
 					}
+					of += sInner
 				}
-				ds[i] = float32(float64(gs[of]) * d)
-			}
+			})
+			// Pass 2: build the gradient. A SECOND row walk replaces re-reading the
+			// materialized table; the odometer runs once per row, not once per element.
+			forEachReduceRow(x.Shape(), axStride, func(i0, of0, inner, sInner int) {
+				of := of0
+				for p := 0; p < inner; p++ {
+					i := i0 + p
+					v := float64(xs[i])
+					var d float64
+					switch numZeros[of] {
+					case 0:
+						d = float64(ys[of]) / v
+					case 1:
+						if v == 0 {
+							d = prodNz[of]
+						}
+					}
+					ds[i] = float32(float64(gs[of]) * d)
+					of += sInner
+				}
+			})
 			return []*tensor.Tensor{gin}, nil
 		}
 		for i := 0; i < n; i++ { // generic fallback (exotic dtype)
