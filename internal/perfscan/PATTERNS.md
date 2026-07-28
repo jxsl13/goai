@@ -689,6 +689,37 @@ O(capacity) beside an O(n log n) sort. All three are bit-identical; only two pay
 size of the enclosing work, not the shape, decides.
 
 
+## Serial spines — found by scaling sweep, not by a static rule  *(scanner: `tools/scaling_sweep.sh`)*
+
+Run a benchmark at `GOMAXPROCS=1` and at full width and divide. Substantial ns/op with a
+ratio near **1.0** means nothing in it parallelizes — whatever dominates is serial.
+
+**Why this is a script and not a PSxxxx rule.** Proving a loop's iterations are
+independent is a dataflow question, and perfscan is AST-only. A static rule that guessed
+at independence would advise data races. Scaling is an *observation*, so it is measured
+rather than inferred — and the measurement is cheap enough to sweep a whole package.
+
+**One sweep found four**, and the two acted on were the largest wins of their sessions:
+
+| benchmark | before | speedup | outcome |
+|---|---|---|---|
+| `GBMHist_hist_80k` | 334 ms | 1.01× | fixed → **1.57×** |
+| `GMMFitFull` | 77 ms | 1.00× | open |
+| `MLAVJPSeq256` | 20 ms | 0.99× | open |
+| `CholeskyVJP_128` | 4.7 ms | 0.88× | open (slower with more cores) |
+
+The quantized prefill path was found the same way and is now **2.52×**.
+
+**A ratio near 1.0 is a candidate, not a defect.** Plenty of work is legitimately serial,
+and small benchmarks are dominated by dispatch cost rather than compute — hence the
+2 ms floor before the flag is raised.
+
+**Watch for the loop order that blocks the split.** GBM's histogram was sample-major,
+which reads the bin table contiguously and is the *faster serial form*, but makes every
+feature's bins a shared write target. Feature-major is partitionable and 22% slower on one
+core. Keep both and choose by whether the work will actually be split — otherwise a
+constrained host pays for a speedup it will never collect.
+
 ## PS6003 — a fast path that covers only part of a variant family  *(scanner: static)*
 
 A function short-circuits the general path for some members of a variant family, and a
