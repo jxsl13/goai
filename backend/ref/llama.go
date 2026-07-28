@@ -116,7 +116,7 @@ func ropeKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) 
 				n := float64(pr.PosOffset + p) // raw position (xPos exponent)
 				pos := n / posDiv              // PI/YaRN-adjusted position (rotation angle)
 				for i, theta := range inv[:half] {
-					cbuf[i], sbuf[i] = math.Cos(pos*theta), math.Sin(pos*theta)
+					sbuf[i], cbuf[i] = math.Sincos(pos * theta)
 				}
 				if zeta != nil {
 					e := n
@@ -156,7 +156,7 @@ func ropeKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) 
 			base := h * hd
 			for i := range half {
 				theta := inv[i]
-				c, s := math.Cos(pos*theta), math.Sin(pos*theta)
+				s, c := math.Sincos(pos * theta)
 				qi, qih := q.AtF64(p, base+i), q.AtF64(p, base+i+half)
 				lo, hi := qi*c-qih*s, qih*c+qi*s
 				if zeta != nil {
@@ -223,7 +223,7 @@ func ropeBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend
 				n := float64(pr.PosOffset + p)
 				pos := n / posDiv
 				for i, theta := range inv[:half] {
-					cbuf[i], sbuf[i] = math.Cos(pos*theta), math.Sin(pos*theta)
+					sbuf[i], cbuf[i] = math.Sincos(pos * theta)
 				}
 				if zeta != nil {
 					e := n
@@ -262,7 +262,7 @@ func ropeBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend
 			base := h * hd
 			for i := range half {
 				theta := inv[i]
-				c, s := math.Cos(pos*theta), math.Sin(pos*theta)
+				s, c := math.Sincos(pos * theta)
 				gi, gih := g.AtF64(p, base+i), g.AtF64(p, base+i+half)
 				if zeta != nil {
 					e := n

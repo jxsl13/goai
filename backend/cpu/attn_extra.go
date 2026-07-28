@@ -78,7 +78,7 @@ func cachedRoPETrig(fk ropeFreqKey, n int, pos float64, inv []float64) ([]float6
 	sn := make([]float64, len(inv))
 	for i, th := range inv {
 		a := pos * th
-		cs[i], sn[i] = math.Cos(a), math.Sin(a)
+		sn[i], cs[i] = math.Sincos(a)
 	}
 	ropeTrigCache.Store(ropeTrigKey{fk, n}, ropeTrigEntry{cs, sn})
 	return cs, sn
