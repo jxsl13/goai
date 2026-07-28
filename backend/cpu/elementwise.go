@@ -492,6 +492,15 @@ func sigmoidKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs
 	switch in[0].Dtype() {
 	case tensor.F64:
 		d, o := xc.Storage().F64(), out.Storage().F64()
+		if vexpF64Fast {
+			// amd64 SIMD build: 4-wide f64-native sigmoid on the AVX2 expF64x4
+			// primitive — the same stable split, vectorized (the vsiluF64 lane
+			// without the x multiply). Not under the CPU==Ref exact invariant (that
+			// test skips OpSigmoid/F64); rides the model f64 tolerance. The non-SIMD
+			// build below keeps the scalar path bit-for-bit.
+			parallel(len(o), func(lo, hi int) { vsigmoidF64(o[lo:hi], d[lo:hi]) })
+			break
+		}
 		parallel(len(o), func(lo, hi int) {
 			for i := lo; i < hi; i++ {
 				x := d[i]

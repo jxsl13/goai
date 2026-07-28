@@ -191,6 +191,19 @@ func vsiluF64(dst, src []float64) {
 	}
 }
 
+// vsigmoidF64 exists only so sigmoidKernelCPU type-checks on arm64; vexpF64Fast is
+// false here, so it is dead at run time (the scalar exact path runs).
+func vsigmoidF64(dst, src []float64) {
+	for i, v := range src {
+		if v >= 0 {
+			dst[i] = 1 / (1 + math.Exp(-v))
+		} else {
+			z := math.Exp(v)
+			dst[i] = z / (1 + z)
+		}
+	}
+}
+
 // vsoftplusF64 exists only so softplusKernelCPU type-checks on arm64; vexpF64Fast
 // is false here (amd64-only for now), so it is dead code.
 func vsoftplusF64(dst, src []float64) {

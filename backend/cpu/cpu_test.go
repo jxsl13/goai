@@ -67,9 +67,10 @@ func TestCPUCrossReferenceExact(t *testing.T) {
 			if op == backend.OpLog {
 				in = bpos
 			}
-			if op == backend.OpSiLU && dtype == tensor.F64 {
-				// Pre-existing ulp split: cpu evaluates x/(1+e^−x), ref
-				// x·σ(x) — identical after F32 rounding (asserted below) but
+			if (op == backend.OpSiLU || op == backend.OpSigmoid) && dtype == tensor.F64 {
+				// F64 ulp split vs ref's scalar math.Exp: cpu's f64-native
+				// vsiluF64 / vsigmoidF64 (expF64x4, ~1 ulp, rides the model f64
+				// tolerance) — identical after F32 rounding (asserted below) but
 				// not in F64, so only the F32 lane is cross-checked here.
 				continue
 			}
