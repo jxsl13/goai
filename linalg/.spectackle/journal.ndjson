@@ -1,2 +1,3 @@
 {"t":"2026-07-27T21:18:51Z","eid":"7ca2dc9a58252354","ag":"ag-8b5d","ev":"create","id":"T-01KYJQ3QRHFRSTCA1Q521E99DX","k":"task","ti":"Make triangular back-substitution walk the solution contiguously","dir":"linalg"}
 {"t":"2026-07-28T19:45:33Z","eid":"cb53cf977d1b3278","ag":"ag-cb2b","ev":"create","id":"R-01KYN45MA3FA2A0QPA4582JR0H","k":"research","ti":"DECLINED: SVD one-sided Jacobi cannot be parallelized bit-identically — the structure, not the effort, is the blocker","dir":"linalg"}
+{"t":"2026-07-28T20:53:04Z","eid":"edc887200be7ef7d","ag":"ag-de20","ev":"create","id":"R-01KYN818R3F3W97NM7MN0EHWNG","k":"research","ti":"A fast-vs-slow bit-identity gate cannot guard code both arms share — applyReflector was blind under one that looked exactly right","dir":"linalg"}

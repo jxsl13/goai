@@ -43,3 +43,20 @@ The classic Jacobi norm-update identities (alpha' = alpha - t*gamma) are NOT bit
 OBSERVATION FOR ANYONE REVISITING: line 46 (beta over c_j) costs 570ms against line 45 (alpha over c_i) at 250ms, for identical arithmetic. That 2.3x is cache behavior — c_i stays hot across the whole j loop while c_j streams. A blocked pair ordering would fix it and would also change the rotation sequence, so it runs into ROUTE 1.
 
 Also swept and NOT flagged: vision scales well already (MLPMixer 4.26x, Swin 3.29x, ViT 4.40x), Pinv_64x32 is 1.00x but only 0.62ms, LUSolve_128x128 is 1.01x at 2.38ms.
+
+## R-01KYN818R3F3W97NM7MN0EHWNG A fast-vs-slow bit-identity gate cannot guard code both arms share — applyReflector was blind under one that looked exactly right
+kind: research
+state: draft
+created: 2026-07-28
+
+Found while parallelizing Householder QR, and the gate finding matters more than the 1.37x.
+
+THE MEASUREMENT: BenchmarkOrthogonalFast was 45.9ms at 0.97x. applyReflector is 52.8% cumulative; parallelizing its column loop gives 48.2-49.1ms -> 35.2-36.1ms, 1.37x, scaling 48.4 / 34.5 / 34.9ms at 1 / 4 / 12 Ps. It stops improving after 4 Ps because QR peels a column per step, so the trailing submatrix shrinks and later reflectors fall below the work threshold — correct behavior, not a defect.
+
+THE GATE HOLE: a one-ulp perturbation of applyReflector's update turned NO test red. Not linalg's, and not nn.TestOrthogonalBitIdenticalToSlowPath — which looks like exactly the guard for this and structurally cannot be. It compares the FAST path against the SLOW path, and BOTH call applyReflector, so perturbing shared code moves both arms identically and the comparison still passes. A DIFFERENTIAL GATE COVERS ONLY WHAT DIFFERS BETWEEN ITS ARMS. TestQRReconstruct checks Q*R against A within a tolerance and passes a one-ulp shift comfortably.
+
+This is the same family as the self-fulfilling-oracle failure already known here (a guard that reads the table it checks proves the table equals itself), but the differential form is harder to see: the test is genuinely useful, genuinely tolerance-0, and genuinely catches divergence between the two implementations. It just says nothing about their common subroutine, and the name gives no hint of that boundary. Cast as NUM-DIFFERENTIAL-GATE-001.
+
+CORRECTION TO AN EARLIER SESSION: commit e7b27ee8 removed five bit-identity oracles including qr's, concluding each was "guarded elsewhere" after probing. For applyReflector that conclusion does not hold, whatever site was probed at the time. A frozen FNV hash over every element of Q and R replaces it — red under the exact mutation the existing suite missed, while TestQRReconstruct stays green. Worth noting the removal was itself a correction of over-testing, so the lesson is not "never remove an oracle" but "probe the SITE you are about to change, not the file".
+
+STILL SERIAL: householder (34.7%) computes one reflector from a column norm — a reduction, so not bit-identically splittable, and the vectors shrink as QR proceeds.
