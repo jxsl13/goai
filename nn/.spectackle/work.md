@@ -29,27 +29,6 @@ BIT-IDENTITY BAR: BIT-IDENTICAL AND RNG-SAFE. The draw count is unchanged (Rand.
 
 PERFSCAN RULE REQUIRED, and it has wide reach here: interface-sourced RNG in a per-element loop. AST shape: a SelectorExpr call X.Float64() / .Uint64() / .IntN() / .NormFloat64() where X resolves to *math/rand.Rand or *math/rand/v2.Rand, inside a loop whose bound is a slice length or Numel(). Recommend the concrete source type. THIS IS NOT CONFINED TO DROPOUT: 12 non-test files in nn hold a *rand.Rand field with 32 per-element draw sites — neftune.go, mixup.go, cutmix.go, rso.go, droppath.go, psgd.go, apollo.go, qgalore.go, aqlm.go among them. Run the finished detector and report every site.
 
-## T-01KYJR5XXZFJ1AFGN2HR674XNT Flatten the SOAP/Shampoo basis rotation and eliminate its bounds checks
-kind: task
-state: draft
-created: 2026-07-27
-
-SITE: nn/soap.go:229 rotateForward (inner loops :236, :246) and nn/soap.go:255 rotateBack (:261, :271); scratch from zeroMat at nn/soap.go:198.
-
-MEASURED: BenchmarkSOAPStepOnly 11,452,655 ns/op with 758,290 B/op and 976 allocs/op; BenchmarkShampooStepOnly 9,163,610 ns/op, 392 allocs. Profile share: rotateForward 9.05%, rotateBack 5.60% — about 34% of (*SOAP).Step's own cumulative time. Called per matrix parameter, per step.
-
-DEFECT, four parts: serial FP-accumulator dot loops (acc += ...), latency-bound exactly as in the Muon case; THREE UN-ELIMINATED BOUNDS CHECKS PER ELEMENT, confirmed at soap.go:236:17, :236:24, :236:27, :246:13, :246:16, :246:27 all reporting Found IsInBounds; jagged [][]float64 storage, so every element access is a pointer load then an indexed load; and rotateForward:236 reads ql[i][k] with i INNERMOST, striding down a column across separately allocated rows — one cache line touched per element. Separately, zeroMat allocates 1+r slices per call and there are 4 calls per rotate pair per parameter per step, which is where the 976 allocs/op come from.
-
-FIX: change the SOAP/Shampoo state matrices to flat []float64 with an explicit stride (they are already dense and rectangular), reorder both products to ikj so the inner loop is a contiguous axpy, and hoist the t/out scratch onto the optimizer struct. For rotateForward's first product Q_L^T*G the ikj form is: for i { for k { av := ql[i*m+k]; for j { t[k*n+j] += av * g[i*n+j] } } } — note this PRESERVES the i accumulation order per (k,j), which is what keeps it bit-identical.
-
-VALIDATION GATE (benchmark only): BenchmarkSOAPStepOnly (nn/train_bench_test.go:189) and BenchmarkShampooStepOnly (:200) cover it end to end, with BenchmarkSOAPStepOnlyVec (:230) and BenchmarkShampooStepOnlyVec (:241) as CONTROLS THAT MUST NOT MOVE. For isolation add BenchmarkRotateForward64x128 on an internal test file, building ql[64][64], g[64][128], qr[128][128] in f64 and calling rotateForward in the loop.
-
-EXPECTED: rotate pair 3-5x, taking BenchmarkSOAPStepOnly 11.45 ms -> about 8.5 ms (1.35x), and allocs 976 -> about 100. Medium-high confidence on the rotate speedup, medium on the end-to-end number since SymEig at 34% of the profile is the remaining floor.
-
-BIT-IDENTITY BAR: bit-identical — same per-output ascending accumulation order, same FMA contraction; flat-versus-jagged storage changes no value. No RNG.
-
-VERIFIED NOT A DEFECT, recorded so it is not re-investigated: SOAP does NOT recompute its eigenbasis every step. nn/soap.go:133 gates on s.t == 1 || s.t%s.Freq == 0 with Freq defaulting to 10 (:80). The SymEig cost visible at 34% of the profile is already amortized and is not a candidate.
-
 ## T-01KYMCQ31GEB0TW27W6ZN2AR3P Route Muon newtonSchulz5 products through ops.MatMul and hoist its scratch onto the struct
 kind: task
 state: draft
