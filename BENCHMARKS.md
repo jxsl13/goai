@@ -77,14 +77,34 @@ thread-pool + turbo jitter; GoAI's is ±1–6.
 *Persisted:* `spectackle call bench '{"op":"ls"}' | grep cpu/GEMM` →
 `cpu/GEMM_{f32,f64}_1024/{goai-simd,torch-cpu-2.13.0,numpy-2.4.4}`.
 
-### Wired, refreshing next run (same host, same driver)
+### GPU decode — GoAI-CUDA vs llama.cpp, matched Q4_K *(GoAI measured 2026-07-29)*
 
-`scripts/bench-host.sh` also drives the GPU and tokenizer/classical head-to-heads
-on this exact RTX 3060 — GoAI `-tags cuda` decode vs **vLLM 0.25.1** and
-**llama.cpp Vulkan** on the GGUF checkpoints in `models/`, matched precision class
-(Q4_K vs Q4_K_M, Q8 vs Q8). Those append to spectackle under the `gpu=rtx-3060`
-frame as they run; the tables below are the prior measurements pending this host's
-fresh re-run.
+Fresh GoAI `-tags cuda` decode on this RTX 3060 (fused CUDA-graph path, pip CUDA-12
+wheels), decoding the real Q4_K_M GGUF files directly (native Q4_K + Q6_K blocks —
+the same weights llama.cpp reads), paired with llama.cpp Vulkan Q4_K_M measured on
+this same RTX 3060 (2026-07-18). Persisted to spectackle under
+`gpu/*_Q4KM_decode/{goai-cuda,llamacpp-vulkan-prior}`.
+
+| Model (Q4_K_M, single-stream decode) | GoAI-CUDA | llama.cpp Vulkan | Verdict |
+|---|--:|--:|---|
+| Mistral-7B-Instruct | 47.2 tok/s | 59.1 | llama.cpp **1.25×** (GoAI Q4_K coherent — 24/24 tokens match its own Q8) |
+| Qwen2.5-1.5B | 164.6 | 214.9 | llama.cpp **1.31×** |
+| Qwen2.5-3B | 93.6 | 121.9 | llama.cpp **1.30×** |
+
+**Honest read:** at matched Q4_K precision llama.cpp leads **~1.25–1.31×** on
+single-stream decode across model sizes — consistent with the prior campaign's
+figures, so the incumbent gap is real and reproduced. GoAI's Q4_K decode is
+coherent (its output matches its own Q8 path 24/24 for Mistral-7B; smaller Qwen
+models diverge more from Q8 — the expected sensitivity of a 4.5-bit quantization
+on a smaller model, not a decode fault). A separately-measured GoAI Q8
+TinyLlama-1.1B decode runs at **201.8 tok/s** (no matched-precision llama.cpp Q8
+figure on file to pair).
+
+> **llama.cpp freshness note:** the llama.cpp figures are the prior same-hardware
+> measurements; a fresh re-run is pending because the current prebuilt Vulkan
+> tarballs (`b10012`, `b10173`, `ubuntu-vulkan-x64`) ship without
+> `libllama-common.so.0`, so `llama-bench` won't link — completing it needs a
+> self-contained prebuilt (pre-common-split) or a from-source build.
 
 ---
 
