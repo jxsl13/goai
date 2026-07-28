@@ -3,6 +3,7 @@ package nlp
 import (
 	"testing"
 
+	"github.com/jxsl13/goai/backend"
 	_ "github.com/jxsl13/goai/backend/ref"
 	"github.com/jxsl13/goai/tensor"
 )
@@ -281,3 +282,31 @@ func benchGPTGenerate(b *testing.B, viaConcat bool) {
 // identical DecodeStep instruction sequence otherwise.
 func BenchmarkGPTGenerate500ConcatRows(b *testing.B) { benchGPTGenerate(b, true) }
 func BenchmarkGPTGenerate500RowBuf(b *testing.B)     { benchGPTGenerate(b, false) }
+
+// benchCLADecode drives CLA.DecodeStep directly — CLA has no Generate — for 500
+// tokens on the same shape as the GPT/Llama pairs, with Share=2 so the group-keyed
+// cache slot (the thing that makes CLA's append different) is actually exercised.
+func benchCLADecode(b *testing.B, viaConcat bool) {
+	c, err := NewCLA(CLAConfig{
+		Vocab: 1000, Ctx: 600, Dim: 256, Heads: 4, Layers: 4, Share: 2, Eps: 1e-5,
+	}, 42)
+	if err != nil {
+		b.Fatalf("NewCLA: %v", err)
+	}
+	old := kvAppendViaConcat
+	kvAppendViaConcat = viaConcat
+	defer func() { kvAppendViaConcat = old }()
+	b.ResetTimer()
+	for range b.N {
+		ctx := backend.NewContext()
+		cache := c.NewCache()
+		for pos := range 500 {
+			if _, err := c.DecodeStep(ctx, cache, 1, pos); err != nil {
+				b.Fatalf("DecodeStep: %v", err)
+			}
+		}
+	}
+}
+
+func BenchmarkCLADecode500ConcatRows(b *testing.B) { benchCLADecode(b, true) }
+func BenchmarkCLADecode500RowBuf(b *testing.B)     { benchCLADecode(b, false) }

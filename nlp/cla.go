@@ -72,6 +72,8 @@ type CLABlock struct {
 // group's leader appends to it, its followers read it.
 type CLACache struct {
 	K, V []*tensor.Tensor // per KV-sharing group; nil until the group's first token
+
+	bufs kvBufs // amortized backing for the K/V views, keyed by group (rowbuf.go)
 }
 
 // NewCLA builds a randomly initialized Cross-Layer Attention model.
@@ -327,8 +329,12 @@ func (c *CLA) DecodeStep(ctx *backend.Context, cache *CLACache, token, pos int) 
 			if err != nil {
 				return nil, err
 			}
-			cache.K[g] = concatRows(cache.K[g], kt)
-			cache.V[g] = concatRows(cache.V[g], vt)
+			// Amortized row append keyed by the GROUP, not the layer: one slot is
+			// shared by the group's Share layers (PS2006). Safe against the view
+			// semantics because within a step the slot is appended exactly once, by
+			// the leader, and every reader re-reads cache.K[g] from the struct rather
+			// than holding a local from before the append.
+			cache.K[g], cache.V[g] = cache.bufs.appendKV(cache.K, cache.V, g, kt, vt)
 		}
 		q, err := exec1(ctx, backend.OpMatMul, nil, h1, b.Wq)
 		if err != nil {
