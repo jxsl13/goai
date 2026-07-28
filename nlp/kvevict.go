@@ -1,8 +1,6 @@
 package nlp
 
 import (
-	"sort"
-
 	"github.com/jxsl13/goai/tensor"
 )
 
@@ -83,9 +81,14 @@ func H2OKeep(scores []float64, recent, budget int) []int {
 	if recent < 0 {
 		recent = 0
 	}
-	keepSet := make(map[int]bool, budget)
+	// Dense keep-mask over the [0,n) index domain (mirrors SnapKVKeep): mark the
+	// kept tokens, then emit them ascending with a single linear scan. Replaces a
+	// map[int]bool (budget hashed inserts + bucket alloc) plus sort.Ints — the
+	// [0,n) domain makes a []bool strictly cheaper, and the scan yields the same
+	// strictly-ascending kept set the map+sort did → bit-identical output.
+	keep := make([]bool, n)
 	for i := n - recent; i < n; i++ { // most-recent window (always kept)
-		keepSet[i] = true
+		keep[i] = true
 	}
 	// heavy hitters among the non-recent candidates, by score desc (index asc tie)
 	cand := make([]int, 0, n-recent)
@@ -98,15 +101,16 @@ func H2OKeep(scores []float64, recent, budget int) []int {
 	sortIdxDescByProb(cand, scores)
 	heavy := budget - recent
 	for i := 0; i < heavy && i < len(cand); i++ {
-		keepSet[cand[i]] = true
+		keep[cand[i]] = true
 	}
 
-	keep := make([]int, 0, len(keepSet))
-	for i := range keepSet {
-		keep = append(keep, i)
+	out := make([]int, 0, budget)
+	for i := 0; i < n; i++ {
+		if keep[i] {
+			out = append(out, i)
+		}
 	}
-	sort.Ints(keep)
-	return keep
+	return out
 }
 
 // GatherRows selects rows idx (in order) from t[n,d] → [len(idx),d]. Used to apply
