@@ -22,3 +22,6 @@ Rationale: No opcode or field parser may index a stack or buffer without an empt
 The fuzz target SHALL reach the parser it names, taking raw inner bytes rather than a container envelope.
 
 Rationale: A fuzz target aimed at the zip container left the pickle interpreter behind it effectively unreachable: 966k executions yielded 6 interesting inputs, while a target taking raw inner bytes reached 5.77M and 104. A target that does not reach its parser gives false assurance. Migrated from cavekit SPEC.md V29.
+
+## NUM-ACCUM-NARROW-001
+IF a dot product accumulates in float64 and stores its result as float32, THEN the its exactness gate SHALL document that it covers element mapping and scale selection, not summation order.
