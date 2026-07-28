@@ -382,14 +382,18 @@ func (b *cartBuilder) build(start, end, depth int) *cartNode {
 	samples := b.cols[0][start:end]
 	n := end - start
 	node := &cartNode{leaf: true}
+	var imp float64
 	if b.regression {
 		node.value = b.mean(samples)
+		imp = b.impurity(samples)
 	} else {
-		node.predClass = b.majority(samples)
+		// Fuse the leaf-class and impurity histograms: both scanned samples to
+		// rebuild the identical totCnt. classifyCounts does it once.
+		node.predClass, imp = b.classifyCounts(samples)
 	}
 
 	// Stopping rules mirror scikit-learn's DepthFirstTreeBuilder (§C21).
-	pure := b.impurity(samples) <= 1e-12
+	pure := imp <= 1e-12
 	if pure ||
 		(b.cfg.maxDepth >= 0 && depth >= b.cfg.maxDepth) ||
 		n < b.cfg.minSamplesSplit ||
@@ -420,13 +424,15 @@ func (b *cartBuilder) build(start, end, depth int) *cartNode {
 func (b *cartBuilder) buildIdx(idx []int, depth int) *cartNode {
 	n := len(idx)
 	node := &cartNode{leaf: true}
+	var imp float64
 	if b.regression {
 		node.value = b.mean(idx)
+		imp = b.impurity(idx)
 	} else {
-		node.predClass = b.majority(idx)
+		node.predClass, imp = b.classifyCounts(idx)
 	}
 
-	pure := b.impurity(idx) <= 1e-12
+	pure := imp <= 1e-12
 	if pure ||
 		(b.cfg.maxDepth >= 0 && depth >= b.cfg.maxDepth) ||
 		n < b.cfg.minSamplesSplit ||
@@ -732,6 +738,29 @@ func (b *cartBuilder) impurityCounts(counts []int, n int) float64 {
 		sq += cf * cf
 	}
 	return 1 - sq/(nf*nf)
+}
+
+// classifyCounts scans idx ONCE into the reused totCnt buffer and derives both
+// the majority class (argmax, ties broken to the lowest index) and the node
+// impurity from that single histogram. build/buildIdx previously called
+// majority(idx) then impurity(idx), each re-zeroing and re-filling the identical
+// counts — one scan replaces two. Bit-identical: the argmax and impurityCounts
+// see exactly the counts the two-scan form produced.
+func (b *cartBuilder) classifyCounts(idx []int) (predClass int, imp float64) {
+	counts := b.totCnt
+	for k := range counts {
+		counts[k] = 0
+	}
+	for _, i := range idx {
+		counts[b.yi[i]]++
+	}
+	best, bc := 0, -1
+	for k, c := range counts {
+		if c > bc {
+			bc, best = c, k
+		}
+	}
+	return best, b.impurityCounts(counts, len(idx))
 }
 
 // impurity returns the node impurity over sample indices (used for the pure-node
