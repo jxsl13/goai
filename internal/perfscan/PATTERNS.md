@@ -232,9 +232,13 @@ compare that.
 (`key[id] == m[id][f]`), so the sort returns the same permutation, ties included. That is
 stronger than the usual "tie order is unspecified but irrelevant" reasoning.
 
-**Shipped, three times, all the same shape:** the GBM presort (**1.05×**, and **1.10×**
-cumulative once the flat key made an LSD radix pass practical) and the ball-tree median
-split (**1.088×** on KNN fit — the half that loses to sklearn). The CART builder had
+**Shipped, three times, all the same shape.** Figures below are INTERLEAVED (change
+toggled in and out within one session, 3-4 alternations) — the separate-run numbers first
+reported were 5-10% optimistic because the host drifts between sessions:
+GBM presort + radix **1.050×** on `BenchmarkGBMFit` and **1.120×** on
+`BenchmarkGBMHist_exact_20k` (first reported as 1.104× and 1.176×); ball-tree median
+split **1.060×** on KNN fit, ranges overlapping (first reported 1.088×); Expert Choice
+routing **1.21×**, the one case where the control moved *against* the candidate. The CART builder had
 already solved it locally, which is what made the siblings findable by eye; this rule is
 so the next one does not need luck.
 
