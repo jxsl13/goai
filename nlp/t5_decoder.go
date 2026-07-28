@@ -361,6 +361,10 @@ func (d *T5Decoder) Generate(ctx *backend.Context, encoderOut *tensor.Tensor, ma
 type T5DecoderCache struct {
 	selfK, selfV   []*tensor.Tensor // per block, grown one row per step
 	crossK, crossV []*tensor.Tensor // per block, computed once from the encoder
+
+	// Amortized backing for the selfK/selfV views (rowbuf.go). crossK/crossV are
+	// NOT appended per token — the encoder is projected once — so they stay off it.
+	bufs kvBufs
 }
 
 // NewT5DecoderCache allocates a cache sized for the decoder's blocks.
@@ -429,12 +433,12 @@ func (d *T5Decoder) DecodeStep(ctx *backend.Context, cache *T5DecoderCache, enco
 		if err != nil {
 			return nil, err
 		}
-		if cache.selfK[l] == nil {
-			cache.selfK[l], cache.selfV[l] = kt, vt
-		} else {
-			cache.selfK[l] = concatRows(cache.selfK[l], kt)
-			cache.selfV[l] = concatRows(cache.selfV[l], vt)
-		}
+		// Amortized row append (PS2006): the concat pair reallocated and recopied the
+		// whole self-attention cache per block per token, O(T²) over a decode. This
+		// also drops the nil special case, where the first token ADOPTED the kernel's
+		// own kt/vt as the cache slot — the row buffer copies into its own backing
+		// instead, which is the same values with strictly less sharing.
+		cache.selfK[l], cache.selfV[l] = cache.bufs.appendKV(cache.selfK, cache.selfV, l, kt, vt)
 		attn, err := exec1(ctx, backend.OpMHAMasked, attrs, q, cache.selfK[l], cache.selfV[l], selfMask)
 		if err != nil {
 			return nil, err

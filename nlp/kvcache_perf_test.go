@@ -5,6 +5,7 @@ import (
 
 	"github.com/jxsl13/goai/backend"
 	_ "github.com/jxsl13/goai/backend/ref"
+	"github.com/jxsl13/goai/nn"
 	"github.com/jxsl13/goai/tensor"
 )
 
@@ -310,3 +311,31 @@ func benchCLADecode(b *testing.B, viaConcat bool) {
 
 func BenchmarkCLADecode500ConcatRows(b *testing.B) { benchCLADecode(b, true) }
 func BenchmarkCLADecode500RowBuf(b *testing.B)     { benchCLADecode(b, false) }
+
+// benchT5Decode drives T5Decoder.DecodeStep for 500 tokens against a fixed synthetic
+// encoder output, on the same dim/layers as the GPT and CLA pairs. The decoder is
+// built by newTestT5Decoder — before that fixture existed the decoder could only be
+// constructed from real safetensors, which is why this cache went unmeasured.
+func benchT5Decode(b *testing.B, viaConcat bool) {
+	d := newTestT5Decoder(b, T5Config{
+		Vocab: 1000, Dim: 256, Heads: 4, HeadDim: 64, Layers: 4, FFN: 512,
+	})
+	enc := tensor.New(tensor.F64, tensor.Shape{8, 256})
+	nn.XavierUniform(enc, 8, 256, 7)
+	old := kvAppendViaConcat
+	kvAppendViaConcat = viaConcat
+	defer func() { kvAppendViaConcat = old }()
+	b.ResetTimer()
+	for range b.N {
+		ctx := backend.NewContext()
+		cache := d.NewCache()
+		for pos := range 500 {
+			if _, err := d.DecodeStep(ctx, cache, enc, 1, pos); err != nil {
+				b.Fatalf("DecodeStep: %v", err)
+			}
+		}
+	}
+}
+
+func BenchmarkT5Decode500ConcatRows(b *testing.B) { benchT5Decode(b, true) }
+func BenchmarkT5Decode500RowBuf(b *testing.B)     { benchT5Decode(b, false) }
