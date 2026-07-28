@@ -1573,10 +1573,14 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 			out = append(out, finding{
 				pos:      fset.Position(call.Pos()),
 				category: "closure-comparator-sort",
-				msg: fmt.Sprintf("%s uses an indirect comparator — if the key is a monotonic float/int"+
-					" over a large slice, replace with an LSD radix on the key bits (math.Float64bits is"+
-					" monotonic for non-negative f64). Top-p / typical sampling 1.9–2.25×. Verify identical"+
-					" order + benchmark.", sname),
+				msg: fmt.Sprintf("%s uses an indirect comparator. An LSD radix on the key bits can"+
+					" replace it (math.Float64bits is monotonic for non-negative f64) — measured 1.9–2.25×"+
+					" on top-p / typical sampling. BOTH preconditions must hold, and this check can verify"+
+					" NEITHER: (1) the sort key is a numeric float/int, not a string or a composite —"+
+					" radix-on-float-bits does not apply to a string key at all; (2) the slice is long"+
+					" (vocab-sized), not rank- or dimension-sized — on a short slice the radix loses and"+
+					" the measurement is noise. Confirm both by reading the site before acting, then prove"+
+					" identical output order and benchmark.", sname),
 			})
 		}
 		return true
