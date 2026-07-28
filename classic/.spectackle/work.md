@@ -96,3 +96,26 @@ tool instead.
 CholeskyVJP_128 at 0.88x deserves its own look: something there is not merely serial but
 actively penalized by more cores, which usually means false sharing or a barrier in a hot
 loop, and that is a different defect from an unparallelized one.
+
+## R-01KYN2CWFFFA5T1EGCHVEYPK56 GMM E-step 1.93x; the shared receiver scratch was both the race and the reason the first attempt only measured 1.16x
+kind: research
+state: draft
+created: 2026-07-28
+
+Second serial spine from the scaling sweep (R-01KYN1JXW6EPF). BenchmarkGMMFitFull ran 77ms at one core and 77 at twelve. The E-step is 49% of the profile and every sample's responsibilities are independent.
+
+MEASURED INTERLEAVED, 4 alternations: 75.4-77.5ms -> 39.3-40.5ms, 1.93x. Scales 77.9 / 43.2 / 39.4ms at 1 / 4 / 12 Ps.
+
+THREE THINGS WENT WRONG IN ORDER, and each is the useful part of this record.
+
+1. AN EXACT NULL FROM A THRESHOLD, not from the transform. The first measurement was 1.00x because parallelSamples was given k as the per-sample cost. A full-covariance Mahalanobis is a triangular solve, O(d^2) per component, so the estimate was low by a factor of d and a 2000x24 fit took the serial path. A parallelization measuring as a perfect null is more often a threshold that never fired than a transform that does not pay — check the guard before concluding anything about the code.
+
+2. A DATA RACE THE CODE HAD ALREADY DOCUMENTED. logGaussian's triangular-solve buffer was a receiver field carrying the comment "logGaussian runs serially". The precondition was known and written down, and parallelizing violated it silently. -race caught it. A comment is not a guard: the requirement now lives in the signature as a parameter, and the field is deleted rather than left available.
+
+3. THE RACE WAS ALSO A PERFORMANCE BUG. The racy version measured 1.16x; fixing the sharing took the identical parallelization to 1.93x. Twelve cores were writing one cache line. A shared scratch under contention costs more than the allocation it saves — which inverts the usual reason such buffers are hoisted onto a receiver in the first place.
+
+GATE: TestGMMDeterminism could not serve — it fits twice with the SAME code, so it proves reproducibility, not preservation, and EM is iterative enough that a one-ulp shift can land on a different iterate. A frozen bit-level golden was added and probed: red under a one-ulp mStep mean bump, a reversed mStep sample order, and a one-ulp responsibility bump, while every pre-existing GMM test stays green.
+
+HONEST LIMIT OF THAT GATE, recorded so it is not over-trusted: it cannot see the log-likelihood total, because that only drives a convergence check against tol=1e-3, some thirteen orders of magnitude coarser than an ulp. The total is preserved exactly anyway (per-sample contributions summed in sample order rather than accumulated per chunk) because it costs one n-word array and removes the need to reason about how unlikely a flipped stopping decision is.
+
+GENERALIZED as perfscan PS6006 and cast as CONC-SCRATCH-FIELD-001. NOT DONE: mStep is still serial, but it parallelizes only k ways (6 here), so it is a smaller and shallower win than the E-step was.
