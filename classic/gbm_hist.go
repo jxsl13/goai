@@ -177,13 +177,20 @@ func (b *histBuilder) buildHist(idx []int, buf int) {
 			h[base+j] = histBin{}
 		}
 	}
+	// Hoist the struct fields and take a per-sample bounds-check-elided slice of
+	// the binned row; strength-reduce f*nb to a running base. c is computed to the
+	// identical value in the identical (sample, feature) order, so the histogram
+	// (and every downstream split) is bit-identical.
+	y, binned, d := b.y, b.binned, b.d
 	for _, i := range idx {
-		yi := b.y[i]
-		row := i * b.d
-		for f := 0; f < b.d; f++ {
-			c := f*nb + int(b.binned[row+f])
+		yi := y[i]
+		br := binned[i*d : i*d+d : i*d+d]
+		base := 0
+		for f := 0; f < d; f++ {
+			c := base + int(br[f])
 			h[c].sum += yi
 			h[c].cnt++
+			base += nb
 		}
 	}
 }
