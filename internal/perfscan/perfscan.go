@@ -198,6 +198,8 @@ var checks = []check{
 	{"PS4007", "vjp-scalar-elementwise-binop", "a *VJP with a scalar single-op elementwise loop (dst[i]=a[i]∘b[i]) that a SIMD backend op would vectorize+parallelize, and no backend.Execute dispatch", false},
 	// PS5xxx — arithmetic
 	{"PS5001", "loop-invariant-divide", "a divide by a loop-invariant scalar on every element", false}, {"PS5002", "symmetric-accumulation", "a nested loop accumulating a full symmetric matrix (m[i][j] += x[i]*x[j]) where one triangle + mirror would halve the work", false},
+	// PS6xxx — algorithmic
+	{"PS6001", "full-sort-bounded-prefix", "a full-vocabulary descending index sort whose result feeds an early-breaking (threshold-bounded) prefix consumer, with no quickselect/pre-filter guard — an O(n log n) sort for an O(prefix) need", false},
 }
 
 // catToID indexes the registry for O(1) id lookup at report time.
@@ -1377,6 +1379,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	}
 	out = append(out, symmetricAccumFindings(fset, fn)...)
 	out = append(out, vjpScalarBinopFindings(fset, fn)...)
+	out = append(out, fullSortBoundedPrefixFindings(fset, fn)...)
 	return out
 }
 
@@ -2114,4 +2117,78 @@ func vjpScalarBinopFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 		return false
 	})
 	return out
+}
+
+// fullSortBoundedPrefixFindings flags PS6001 — a full-vocabulary descending index sort whose
+// result feeds an early-breaking (threshold-bounded) prefix, e.g. sorting all V tokens to take
+// the top-p / surprise-≤-μ / top-k prefix. When only a small prefix is consumed, an O(V) filter
+// (or quickselect) into the small candidate set + sorting just those is O(V + k log k) instead
+// of O(V log V). Shipped: Mirostat prob pre-filter, nucleusTopP quickselect (§T627).
+//
+// Fires only when ALL hold, keeping already-optimized code silent:
+//   - a full-index fill (S[i] = i) initializes the sorted slice → it is the WHOLE vocabulary;
+//   - the function calls sortIdxDescByProb / sortIdxDescByKey on that slice;
+//   - a bounded consumer follows — a for-loop with an early break (the prefix cutoff);
+//   - NO quickselectIdxDesc guard — its presence marks the optimized top-K-then-fallback form
+//     (nucleusTopP), whose retained full-sort fallback must NOT be flagged.
+//
+// A pure full-sort HELPER that just returns the sorted slice (no in-function break consumer,
+// e.g. Mirostat's sortedKeep fallback) is likewise silent.
+func fullSortBoundedPrefixFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil {
+		return nil
+	}
+	guarded, hasBreak := false, false
+	var sortCall *ast.CallExpr
+	var sortSlice string
+	fullFill := map[string]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.CallExpr:
+			if id, ok := x.Fun.(*ast.Ident); ok {
+				switch id.Name {
+				case "quickselectIdxDesc":
+					guarded = true
+				case "sortIdxDescByProb", "sortIdxDescByKey":
+					if len(x.Args) >= 1 {
+						if s, ok := x.Args[0].(*ast.Ident); ok {
+							sortCall, sortSlice = x, s.Name
+						}
+					}
+				}
+			}
+		case *ast.BranchStmt:
+			if x.Tok == token.BREAK {
+				hasBreak = true
+			}
+		case *ast.AssignStmt:
+			// full-index fill: S[i] = i
+			if len(x.Lhs) == 1 && len(x.Rhs) == 1 {
+				ix, ok1 := x.Lhs[0].(*ast.IndexExpr)
+				rid, ok2 := x.Rhs[0].(*ast.Ident)
+				if ok1 && ok2 {
+					s, sok := ix.X.(*ast.Ident)
+					iid, iok := ix.Index.(*ast.Ident)
+					if sok && iok && iid.Name == rid.Name {
+						fullFill[s.Name] = true
+					}
+				}
+			}
+		}
+		return true
+	})
+	if sortCall == nil || guarded || !hasBreak || !fullFill[sortSlice] {
+		return nil
+	}
+	return []finding{{
+		pos:      fset.Position(sortCall.Pos()),
+		category: "full-sort-bounded-prefix",
+		msg: fmt.Sprintf("full-vocabulary descending sort of %q (initialized S[i]=i) feeds an"+
+			" early-breaking prefix — an O(n log n) sort for an O(prefix) need. If only a"+
+			" threshold-bounded prefix is consumed (top-p mass, surprise ≤ μ, top-k), pre-filter"+
+			" to the small candidate set in O(n) (or quickselect) and sort only those; guard the"+
+			" full sort as a fallback. Bit-exact for n ≥ radixSortCutoff (stable radix; sort the"+
+			" candidates with SortStableFunc to match the tie order). Shipped: Mirostat, nucleusTopP"+
+			" §T627. Verify the consumer is genuinely bounded, then benchmark.", sortSlice),
+	}}
 }

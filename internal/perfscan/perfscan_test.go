@@ -1199,3 +1199,82 @@ func expVJP(ctx *C, in, out []*T, a A, g *T) ([]*T, error) {
 		t.Fatalf("want 0 (already dispatches), got %d", got)
 	}
 }
+
+// PS6001 fires on the pre-fix Mirostat shape: fill the whole vocab, sort it all, consume a
+// break-bounded prefix — with no quickselect guard.
+func TestDetectPS6001_FullSortBoundedPrefix(t *testing.T) {
+	src := `package p
+func sample(probs []float64, mu float64) int {
+	n := len(probs)
+	idx := make([]int, n)
+	for i := range idx {
+		idx[i] = i
+	}
+	sortIdxDescByProb(idx, probs)
+	keep := 1
+	for keep < n && surpriseBits(probs[idx[keep]]) <= mu {
+		keep++
+	}
+	x := idx[0]
+	var cum float64
+	for _, i := range idx[:keep] {
+		cum += probs[i]
+		if cum >= 0.5 {
+			x = i
+			break
+		}
+	}
+	return x
+}`
+	if got := countCat(scanSrc(t, src))["full-sort-bounded-prefix"]; got != 1 {
+		t.Fatalf("want 1 full-sort-bounded-prefix, got %d", got)
+	}
+}
+
+// Silent on the optimized quickselect-then-fallback form (nucleusTopP): the retained full-sort
+// fallback must NOT be flagged.
+func TestDetectPS6001_SilentWithQuickselect(t *testing.T) {
+	src := `package p
+func nucleus(probs []float64, p float64) {
+	n := len(probs)
+	idx := make([]int, n)
+	for i := range idx {
+		idx[i] = i
+	}
+	quickselectIdxDesc(idx, probs, 512)
+	top := idx[:512]
+	sortIdxDescByProb(top, probs)
+	var cum float64
+	for _, i := range top {
+		cum += probs[i]
+		if cum >= p {
+			break
+		}
+	}
+	sortIdxDescByProb(idx, probs)
+}`
+	if got := countCat(scanSrc(t, src))["full-sort-bounded-prefix"]; got != 0 {
+		t.Fatalf("want 0 (quickselect-guarded), got %d", got)
+	}
+}
+
+// Silent on a pure full-sort helper that just returns the sorted prefix (no in-function break) —
+// the caller does the bounded consumption; the helper itself is the guarded fallback.
+func TestDetectPS6001_SilentOnSortHelper(t *testing.T) {
+	src := `package p
+func sortedKeep(probs []float64, n int, mu float64) []int {
+	idx := make([]int, n)
+	for i := range idx {
+		idx[i] = i
+	}
+	sortIdxDescByProb(idx, probs)
+	keep := 1
+	for keep < n && surpriseBits(probs[idx[keep]]) <= mu {
+		keep++
+	}
+	return idx[:keep]
+}`
+	if got := countCat(scanSrc(t, src))["full-sort-bounded-prefix"]; got != 0 {
+		t.Fatalf("want 0 (no break consumer), got %d", got)
+	}
+}
