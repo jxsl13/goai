@@ -106,3 +106,23 @@ THE REBASE PRESENTED IT AS A CONFLICT AND THE OBVIOUS RESOLUTIONS WERE BOTH WRON
 EACH SIDE'S GATE VALIDATED THE OTHER'S CLAIM, which is the useful part. This branch's frozen golden — a rolling hash over all 768 codes plus the refit codebook row, captured BEFORE either change — still passes on the composed code. That independently confirms the worker's "bit-exact" claim for the unroll, which their commit asserted from the ascending-j argmin fold but could not check against a pre-change reference, since none existed when they wrote it. The gate was built for one change and paid off on another.
 
 LESSON for parallel lines of work on the same function: when a rebase conflicts inside a hot loop, check whether the two changes are on DIFFERENT AXES before choosing a side. Unrolling and partitioning almost always compose; two rewrites of the same loop order almost never do.
+
+## R-01KYNB3SA4FKER2VAB0G2C60H6 PS6009 triage complete: 3 converted, the rest declined ON MEASUREMENT — and two self-inflicted reporting errors
+kind: research
+state: draft
+created: 2026-07-28
+
+Closes the reflect-swapper sweep in this branch's lane. Every remaining site was measured rather than argued about.
+
+DECLINED, with the measurement that decided it:
+- nn routing sorts (moe, moba, nsa, dsa, mod, lossfree, peer — 9 sites). They run per forward pass, which sounded high-frequency, but no swapper or sort frame appears in the allocation profile of ANY existing benchmark. BenchmarkMoEDecodeQwenSparse totals 539 allocs and MixtralSparse 153; the sorts are over a handful of experts and the allocation is dominated by SwiGLU. Per-forward is not the same as hot.
+- nlp tokenizer sorts (tiktoken, special, packing, grammar, guided). No swapper anywhere in the BPE encode allocation profile.
+- classic/gbm.go:195/:275, linalg/svd.go:100, format/safetensors — once per call.
+
+CONVERTED EARLIER, for contrast: CART radixByFeature (per node per feature) 3.11x, and three KNN sites (per node / per query) 1.50x. The dividing line is call frequency, and it is sharp: nothing between per-call and per-node showed up at all.
+
+TWO REPORTING ERRORS OF MY OWN, both caught before they reached a conclusion and both worth recording as method.
+
+1. FIELD-INDEXED BENCHMARK PARSING IS UNSAFE. A benchmark calling SetBytes emits an extra MB/s column after ns/op, shifting everything after it. A naive awk read reported BenchmarkGPT2Encode at 10,565,506 allocs/op; the true figure is 37, and the 10.5M was its B/op. Caught only because allocations cannot exceed bytes and the accompanying B/op read as zero. Match trailing unit labels, not positions.
+
+2. A CORRECTION THAT DID NOT REACH THE INSTRUMENT. An earlier commit corrected CholeskyVJP from a reported 0.88x to 1.09x and hardened scaling_sweep.sh so the misreading could not recur — but the script's own HEADER went on citing 0.88x as an example of what the tool finds. A stale figure inside the instrument that produced it is worse than one in prose: it is the first thing the next reader sees, and it recommends chasing a defect that does not exist. Fixed. When correcting a measurement, grep for the number, not just the document.
