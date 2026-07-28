@@ -1,6 +1,8 @@
 package nlp
 
 import (
+	"sort"
+
 	"github.com/jxsl13/goai/tensor"
 )
 
@@ -95,13 +97,51 @@ func H2OKeep(scores []float64, recent, budget int) []int {
 	for i := range n - recent {
 		cand = append(cand, i)
 	}
-	// accumulated-attention scores are non-negative, so the stable radix orders
-	// them identically to the closure sort and preserves the ascending-index
-	// tie-break — closure-free / O(n) on the candidate set.
-	sortIdxDescByProb(cand, scores)
+	// Only the heavy-largest SET is needed (it becomes a keep-mask, then an
+	// ascending emit) — not a full ordering — so partition with quickselect
+	// instead of a full radix sort. quickselectIdxDesc leaves the heavy
+	// highest-scoring indices in cand[:heavy] (order within, and membership of the
+	// equal-score boundary band, arbitrary); the boundary tie band is then resolved
+	// by ascending index below to reproduce the stable radix's exact kept set.
 	heavy := budget - recent
-	for i := 0; i < heavy && i < len(cand); i++ {
-		keep[cand[i]] = true
+	switch {
+	case heavy <= 0:
+		// keep only the recent window
+	case heavy >= len(cand):
+		for _, ci := range cand {
+			keep[ci] = true
+		}
+	default:
+		quickselectIdxDesc(cand, scores, heavy)
+		// bscore = the heavy-th largest score = smallest among the heavy selected.
+		bscore := scores[cand[0]]
+		for i := 1; i < heavy; i++ {
+			if v := scores[cand[i]]; v < bscore {
+				bscore = v
+			}
+		}
+		// Every token scoring strictly above the boundary is unambiguously kept.
+		need := heavy
+		for i := 0; i < heavy; i++ {
+			if ci := cand[i]; scores[ci] > bscore {
+				keep[ci] = true
+				need--
+			}
+		}
+		// Fill the remaining slots from the score==bscore band, lowest index first —
+		// exactly the ascending-index tie-break the stable radix applied.
+		if need > 0 {
+			tie := make([]int, 0, need)
+			for _, ci := range cand {
+				if scores[ci] == bscore {
+					tie = append(tie, ci)
+				}
+			}
+			sort.Ints(tie)
+			for i := 0; i < need && i < len(tie); i++ {
+				keep[tie[i]] = true
+			}
+		}
 	}
 
 	out := make([]int, 0, budget)
