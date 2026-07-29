@@ -1,9 +1,42 @@
 package autograd
 
 import (
+	"runtime"
+	"sync"
+
 	"github.com/jxsl13/goai/backend"
 	"github.com/jxsl13/goai/tensor"
 )
+
+// conv1dParallelChannels runs body over the D channels in GOMAXPROCS chunks. In the conv1d
+// VJP every write (dxs[..*D+c], dws[c*K+..], dbs[c]) is indexed by channel c, so channels
+// touch DISJOINT memory — chunk-parallel is race-free, and keeping t-outer/k-inner within
+// each channel preserves the per-element ascending-t accumulation → bit-identical to the
+// serial loop. Serial below a small work threshold.
+func conv1dParallelChannels(d, workPerChan int, body func(clo, chi int)) {
+	nw := runtime.GOMAXPROCS(0)
+	if nw > d {
+		nw = d
+	}
+	if nw <= 1 || d*workPerChan < 1<<15 {
+		body(0, d)
+		return
+	}
+	var wg sync.WaitGroup
+	chunk := (d + nw - 1) / nw
+	for lo := 0; lo < d; lo += chunk {
+		hi := lo + chunk
+		if hi > d {
+			hi = d
+		}
+		wg.Add(1)
+		go func(lo, hi int) {
+			defer wg.Done()
+			body(lo, hi)
+		}(lo, hi)
+	}
+	wg.Wait()
+}
 
 func init() {
 	// softplus'(x) = σ(x). Dispatch OpSoftplusBackward on the tape's active backend so the
@@ -48,21 +81,23 @@ func init() {
 				if hasBias {
 					dbs = db.Storage().F64()
 				}
-				for t := 0; t < L; t++ {
-					for c := 0; c < D; c++ {
-						gv := gs[t*D+c]
-						if hasBias {
-							dbs[c] += gv
-						}
-						for k := 0; k < K; k++ {
-							j := t - (K - 1) + k
-							if j >= 0 {
-								dws[c*K+k] += gv * xs[j*D+c]
-								dxs[j*D+c] += gv * ws[c*K+k]
+				conv1dParallelChannels(D, L*K, func(clo, chi int) {
+					for c := clo; c < chi; c++ {
+						for t := 0; t < L; t++ {
+							gv := gs[t*D+c]
+							if hasBias {
+								dbs[c] += gv
+							}
+							for k := 0; k < K; k++ {
+								j := t - (K - 1) + k
+								if j >= 0 {
+									dws[c*K+k] += gv * xs[j*D+c]
+									dxs[j*D+c] += gv * ws[c*K+k]
+								}
 							}
 						}
 					}
-				}
+				})
 				grads := []*tensor.Tensor{dx, dw}
 				if hasBias {
 					grads = append(grads, db)
@@ -80,21 +115,23 @@ func init() {
 				if hasBias {
 					dbs = db.Storage().F32()
 				}
-				for t := 0; t < L; t++ {
-					for c := 0; c < D; c++ {
-						gv := float64(gs[t*D+c])
-						if hasBias {
-							dbs[c] = float32(float64(dbs[c]) + gv)
-						}
-						for k := 0; k < K; k++ {
-							j := t - (K - 1) + k
-							if j >= 0 {
-								dws[c*K+k] = float32(float64(dws[c*K+k]) + gv*float64(xs[j*D+c]))
-								dxs[j*D+c] = float32(float64(dxs[j*D+c]) + gv*float64(ws[c*K+k]))
+				conv1dParallelChannels(D, L*K, func(clo, chi int) {
+					for c := clo; c < chi; c++ {
+						for t := 0; t < L; t++ {
+							gv := float64(gs[t*D+c])
+							if hasBias {
+								dbs[c] = float32(float64(dbs[c]) + gv)
+							}
+							for k := 0; k < K; k++ {
+								j := t - (K - 1) + k
+								if j >= 0 {
+									dws[c*K+k] = float32(float64(dws[c*K+k]) + gv*float64(xs[j*D+c]))
+									dxs[j*D+c] = float32(float64(dxs[j*D+c]) + gv*float64(ws[c*K+k]))
+								}
 							}
 						}
 					}
-				}
+				})
 				grads := []*tensor.Tensor{dx, dw}
 				if hasBias {
 					grads = append(grads, db)
