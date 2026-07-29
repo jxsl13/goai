@@ -2418,6 +2418,45 @@ func quant(b byte) int { return int(b) }`
 	}
 }
 
+// PS6001 also fires when the sorted slice feeds a FIXED prefix `cand[:k]` used as a set
+// (a keep-mask), not just an early-breaking loop — the SnapKV shape.
+func TestDetectPS6001_FixedPrefixSliceConsumer(t *testing.T) {
+	src := `package p
+func keep(scores []float64, n, k int, mask []bool) {
+	cand := make([]int, n)
+	for i := range cand {
+		cand[i] = i
+	}
+	sortIdxDescByProb(cand, scores)
+	for _, i := range cand[:k] {
+		mask[i] = true
+	}
+}
+func sortIdxDescByProb(idx []int, key []float64) {}`
+	if got := countCat(scanSrc(t, src)); got["full-sort-bounded-prefix"] == 0 {
+		t.Fatalf("want ≥1 full-sort-bounded-prefix on a fixed cand[:k] consumer, got 0 (%v)", got)
+	}
+}
+
+// SILENT once quickselect guards it (the shipped fix).
+func TestDetectPS6001_SilentWhenQuickselected(t *testing.T) {
+	src := `package p
+func keep(scores []float64, n, k int, mask []bool) {
+	cand := make([]int, n)
+	for i := range cand {
+		cand[i] = i
+	}
+	quickselectIdxDesc(cand, scores, k)
+	for _, i := range cand[:k] {
+		mask[i] = true
+	}
+}
+func quickselectIdxDesc(idx []int, key []float64, k int) {}`
+	if got := countCat(scanSrc(t, src)); got["full-sort-bounded-prefix"] != 0 {
+		t.Fatalf("want 0 once quickselect-guarded, got %d (%v)", got["full-sort-bounded-prefix"], got)
+	}
+}
+
 const ps6003Prelude = `package p
 type QT int
 const (A QT = iota; B; C; D)

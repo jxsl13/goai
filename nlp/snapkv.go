@@ -84,16 +84,11 @@ func SnapKVKeep(obsAttn [][]float64, budget, kernel int) []int {
 		for i := range cand {
 			cand[i] = i
 		}
-		// pooled scores are non-negative (max-pooled attention), so the stable
-		// radix orders them identically to the closure sort and preserves the
-		// ascending-index tie-break — closure-free / O(n) on the candidate set.
-		sortIdxDescByProb(cand, pooled)
-		if kPrefix > len(cand) {
-			kPrefix = len(cand)
-		}
-		for _, i := range cand[:kPrefix] {
-			keep[i] = true
-		}
+		// Only the top-kPrefix SET is needed (keep-mask, emitted ascending below), not a
+		// full ordering — quickselect the set instead of a full radix sort over all prefix
+		// positions, resolving the equal-score boundary band by ascending index to match
+		// the stable radix's kept set bit-for-bit.
+		keepTopKDescInto(cand, pooled, kPrefix, keep)
 	}
 	out := make([]int, 0, budget)
 	for i := range seq {

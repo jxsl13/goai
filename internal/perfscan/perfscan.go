@@ -4354,6 +4354,10 @@ func fullSortBoundedPrefixFindings(fset *token.FileSet, fn *ast.FuncDecl) []find
 	var sortCall *ast.CallExpr
 	var sortSlice string
 	fullFill := map[string]bool{}
+	// slicePrefix[name] — the sorted slice is consumed via a fixed prefix `name[:k]`
+	// (High bound present). Like an early break, this is a bounded-prefix consumer: only
+	// the top-k SET is used, so a quickselect replaces the full sort (SnapKV keep-mask).
+	slicePrefix := map[string]bool{}
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
 		switch x := n.(type) {
 		case *ast.CallExpr:
@@ -4373,6 +4377,15 @@ func fullSortBoundedPrefixFindings(fset *token.FileSet, fn *ast.FuncDecl) []find
 			if x.Tok == token.BREAK {
 				hasBreak = true
 			}
+		case *ast.RangeStmt:
+			// range over a fixed prefix `for _, i := range cand[:k]` — an order-INDEPENDENT
+			// consumption of the top-k as a set (contrast `return idx[:keep]`, which hands
+			// the caller the sorted ORDER and so genuinely needs the sort).
+			if se, ok := x.X.(*ast.SliceExpr); ok && se.High != nil && se.Low == nil {
+				if id, ok := se.X.(*ast.Ident); ok {
+					slicePrefix[id.Name] = true
+				}
+			}
 		case *ast.AssignStmt:
 			// full-index fill: S[i] = i
 			if len(x.Lhs) == 1 && len(x.Rhs) == 1 {
@@ -4389,7 +4402,7 @@ func fullSortBoundedPrefixFindings(fset *token.FileSet, fn *ast.FuncDecl) []find
 		}
 		return true
 	})
-	if sortCall == nil || guarded || !hasBreak || !fullFill[sortSlice] {
+	if sortCall == nil || guarded || !(hasBreak || slicePrefix[sortSlice]) || !fullFill[sortSlice] {
 		return nil
 	}
 	return []finding{{
