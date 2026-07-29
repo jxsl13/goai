@@ -205,6 +205,7 @@ var checks = []check{
 	{"PS4006", "row-slice-matrix", "a [][]T matrix built row-by-row and then indexed inside a nested loop", false},
 	{"PS4007", "vjp-scalar-elementwise-binop", "a *VJP with a scalar single-op elementwise loop (dst[i]=a[i]∘b[i]) that a SIMD backend op would vectorize+parallelize, and no backend.Execute dispatch", false},
 	{"PS4008", "serial-dot-matmul", "a matmul whose innermost loop is a serial scalar dot accumulator — latency-bound where an ikj/axpy form has independent accumulators", false},
+	{"PS4009", "transposed-gram-colstride", "a symmetric-gram reduction M[k][i]·M[k][j] whose reduction index k is the OUTER (row) index of a row-major/jagged matrix — the innermost loop strides down a column across rows; reblock to k-outer rank-1 (load M[k] once, walk contiguously)", false},
 	// PS5xxx — arithmetic
 	{"PS5001", "loop-invariant-divide", "a divide by a loop-invariant scalar on every element", false},
 	{"PS5004", "multi-sweep-fusable", "three or more consecutive loops over the same range each indexing a shared slice (fuse the passes into one sweep)", false},
@@ -1805,6 +1806,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	}
 	out = append(out, symmetricAccumFindings(fset, fn)...)
 	out = append(out, butterflyFindings(fset, fn)...)
+	out = append(out, transposedGramFindings(fset, fn)...)
 	out = append(out, serialDotMatmulFindings(fset, fn)...)
 	out = append(out, quadraticCacheAppendFindings(fset, fn)...)
 	out = append(out, buildNxNUseOneRowFindings(fset, fn)...)
@@ -3206,6 +3208,106 @@ func butterflyFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 		return true
 	})
 	return out
+}
+
+// transposedGramFindings flags PS4009 — a symmetric-gram reduction accumulated as
+// M[k][i]·M[k][j] where the innermost (reduction) loop var k is the OUTER/row index of a
+// row-major or jagged 2-D matrix. Walking k then strides DOWN a column across separately
+// stored rows: L2-bound (one cache line touched per element) plus a serial dependent-FMA
+// chain. Reblock to k-outer rank-1 accumulation — load M[k] once, walk it contiguously
+// across the (i,j) triangle into a scratch, then blend once. Bit-identical (same ascending-k
+// order into a +0 accumulator). Shipped: SOAP/Shampoo R-gram (-6.5%/-9.3%); same class as
+// dino.go (-88%) and Muon matmulABt (2.09x). Contrast the cache-friendly gram M[i][k]·M[j][k]
+// (k the inner/contiguous index) which is NOT flagged.
+func transposedGramFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		iName, ibody, ok := loopVarBody(n)
+		if !ok {
+			return true
+		}
+		for _, s := range ibody.List {
+			jName, jbody, ok := loopVarBody(s)
+			if !ok || jName == iName {
+				continue
+			}
+			for _, s2 := range jbody.List {
+				kName, kbody, ok := loopVarBody(s2)
+				if !ok || kName == iName || kName == jName {
+					continue
+				}
+				if base, ok := transposedGramProduct(kbody, kName, iName, jName); ok {
+					out = append(out, finding{
+						pos:      fset.Position(n.Pos()),
+						category: "transposed-gram-colstride",
+						msg: fmt.Sprintf("nested %s/%s/%s loop reduces a gram %s[%s][%s]·%s[%s][%s]"+
+							" with the reduction index %s as the OUTER (row) index — the innermost"+
+							" loop strides DOWN a column across %s's rows (L2-bound + serial FMA"+
+							" chain). Reblock to %s-outer rank-1: for %s { load %s[%s] once, walk it"+
+							" contiguously across the (%s,%s) triangle into a scratch }, then blend"+
+							" once — bit-identical (same ascending-%s order). Shipped: SOAP/Shampoo,"+
+							" dino.go, Muon. Benchmark the step.",
+							iName, jName, kName, base, kName, iName, base, kName, jName,
+							kName, base, kName, kName, base, kName, iName, jName, kName),
+					})
+					return false
+				}
+			}
+		}
+		return true
+	})
+	return out
+}
+
+// transposedGramProduct searches root for a multiply M[k][i]·M[k][j] of the SAME base M
+// where k is the row (first) index and the two column (second) indices are exactly the
+// enclosing loop vars i and j — the column-stride signature. Returns the base M.
+func transposedGramProduct(root ast.Node, kName, iName, jName string) (string, bool) {
+	var base string
+	var found bool
+	ast.Inspect(root, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		be, ok := n.(*ast.BinaryExpr)
+		if !ok || be.Op != token.MUL {
+			return true
+		}
+		lb, lc, lok := rowStridedBase(be.X, kName)
+		rb, rc, rok := rowStridedBase(be.Y, kName)
+		if lok && rok && lb == rb &&
+			((lc == iName && rc == jName) || (lc == jName && rc == iName)) {
+			base, found = lb, true
+		}
+		return !found
+	})
+	return base, found
+}
+
+// rowStridedBase matches an access base[k][col] where k is the reduction (row) index and
+// col is a plain identifier. Returns (base, col). Rejects base[col][k] (the contiguous form).
+func rowStridedBase(e ast.Expr, kName string) (string, string, bool) {
+	ix, ok := e.(*ast.IndexExpr)
+	if !ok {
+		return "", "", false
+	}
+	col, ok := ix.Index.(*ast.Ident) // second index = column
+	if !ok {
+		return "", "", false
+	}
+	inner, ok := ix.X.(*ast.IndexExpr) // base[k]
+	if !ok {
+		return "", "", false
+	}
+	row, ok := inner.Index.(*ast.Ident)
+	if !ok || row.Name != kName { // first index must be the reduction var
+		return "", "", false
+	}
+	baseID, ok := inner.X.(*ast.Ident)
+	if !ok {
+		return "", "", false
+	}
+	return baseID.Name, col.Name, true
 }
 
 // exprMentions reports whether e references the identifier name.

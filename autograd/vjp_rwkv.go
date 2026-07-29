@@ -2,6 +2,8 @@ package autograd
 
 import (
 	"math"
+	"runtime"
+	"sync"
 
 	"github.com/jxsl13/goai/backend"
 	"github.com/jxsl13/goai/internal/simd"
@@ -25,6 +27,39 @@ import (
 // stabilization — exact but quadratic; a linear-time backward (the official
 // CUDA kernel's reverse recurrence) is a separate optimization task. Passes
 // the §V2 finite-difference check.
+// wkvParallelChannels runs body over the d independent channels in GOMAXPROCS chunks,
+// each worker with its own loga/p scratch. Channels write disjoint output columns and each
+// channel's accumulation order is unchanged, so the result is bit-identical to the serial
+// loop. The WKV backward is O(T^2) per channel so parallelism always pays here.
+func wkvParallelChannels(d, seq int, body func(clo, chi int, loga, p []float64)) {
+	nw := runtime.GOMAXPROCS(0)
+	if nw > d {
+		nw = d
+	}
+	if nw <= 1 {
+		body(0, d, make([]float64, seq), make([]float64, seq))
+		return
+	}
+	var wg sync.WaitGroup
+	chunk := (d + nw - 1) / nw
+	for w := 0; w < nw; w++ {
+		lo := w * chunk
+		if lo >= d {
+			break
+		}
+		hi := lo + chunk
+		if hi > d {
+			hi = d
+		}
+		wg.Add(1)
+		go func(lo, hi int) {
+			defer wg.Done()
+			body(lo, hi, make([]float64, seq), make([]float64, seq))
+		}(lo, hi)
+	}
+	wg.Wait()
+}
+
 func init() {
 	RegisterVJP(backend.OpWKV, func(_ *backend.Context, in, _ []*tensor.Tensor, _ backend.Attrs, g *tensor.Tensor) ([]*tensor.Tensor, error) {
 		k, v, w, u := in[0], in[1], in[2], in[3]
@@ -56,48 +91,50 @@ func init() {
 				dvs := dv.Storage().F64()
 				dws := dw.Storage().F64()
 				dus := du.Storage().F64()
-				for c := 0; c < d; c++ {
-					wc, uc := ws[c], us[c]
-					var dwc, duc float64
-					for t := 0; t < seq; t++ {
-						gt := gs[t*d+c]
-						m := math.Inf(-1)
-						for i := 0; i <= t; i++ {
-							a := ks[i*d+c] - float64(t-1-i)*wc
-							if i == t {
-								a = uc + ks[t*d+c]
+				wkvParallelChannels(d, seq, func(clo, chi int, loga, p []float64) {
+					for c := clo; c < chi; c++ {
+						wc, uc := ws[c], us[c]
+						var dwc, duc float64
+						for t := 0; t < seq; t++ {
+							gt := gs[t*d+c]
+							m := math.Inf(-1)
+							for i := 0; i <= t; i++ {
+								a := ks[i*d+c] - float64(t-1-i)*wc
+								if i == t {
+									a = uc + ks[t*d+c]
+								}
+								loga[i] = a
+								if a > m {
+									m = a
+								}
 							}
-							loga[i] = a
-							if a > m {
-								m = a
+							// exp(loga[i]-m) with Σ = den in one 4-wide pass; the wkv dot keeps
+							// its strided v access scalar.
+							den := simd.ExpSumF64(p[:t+1], loga[:t+1], m)
+							var wkv float64
+							for i := 0; i <= t; i++ {
+								wkv += p[i] * vs[i*d+c]
+							}
+							wkv /= den
+							if gt == 0 {
+								continue
+							}
+							for i := 0; i <= t; i++ {
+								pi := p[i] / den
+								vi := vs[i*d+c]
+								dvs[i*d+c] += gt * pi
+								dks[i*d+c] += gt * pi * (vi - wkv)
+								if i == t {
+									duc += gt * pi * (vi - wkv)
+								} else {
+									dwc -= float64(t-1-i) * gt * pi * (vi - wkv)
+								}
 							}
 						}
-						// exp(loga[i]-m) with Σ = den in one 4-wide pass; the wkv dot keeps
-						// its strided v access scalar.
-						den := simd.ExpSumF64(p[:t+1], loga[:t+1], m)
-						var wkv float64
-						for i := 0; i <= t; i++ {
-							wkv += p[i] * vs[i*d+c]
-						}
-						wkv /= den
-						if gt == 0 {
-							continue
-						}
-						for i := 0; i <= t; i++ {
-							pi := p[i] / den
-							vi := vs[i*d+c]
-							dvs[i*d+c] += gt * pi
-							dks[i*d+c] += gt * pi * (vi - wkv)
-							if i == t {
-								duc += gt * pi * (vi - wkv)
-							} else {
-								dwc -= float64(t-1-i) * gt * pi * (vi - wkv)
-							}
-						}
+						dws[c] = dwc
+						dus[c] = duc
 					}
-					dws[c] = dwc
-					dus[c] = duc
-				}
+				})
 				return []*tensor.Tensor{dk, dv, dw, du}, nil
 			}
 		case tensor.F32:
@@ -114,46 +151,48 @@ func init() {
 				// Read inputs as float64, keep all scan state in float64, and
 				// round only on store — matching the original AtF64/SetF64
 				// rounding (each accumulating store to an F32 tensor rounds).
-				for c := 0; c < d; c++ {
-					wc, uc := float64(ws[c]), float64(us[c])
-					var dwc, duc float64
-					for t := 0; t < seq; t++ {
-						gt := float64(gs[t*d+c])
-						m := math.Inf(-1)
-						for i := 0; i <= t; i++ {
-							a := float64(ks[i*d+c]) - float64(t-1-i)*wc
-							if i == t {
-								a = uc + float64(ks[t*d+c])
+				wkvParallelChannels(d, seq, func(clo, chi int, loga, p []float64) {
+					for c := clo; c < chi; c++ {
+						wc, uc := float64(ws[c]), float64(us[c])
+						var dwc, duc float64
+						for t := 0; t < seq; t++ {
+							gt := float64(gs[t*d+c])
+							m := math.Inf(-1)
+							for i := 0; i <= t; i++ {
+								a := float64(ks[i*d+c]) - float64(t-1-i)*wc
+								if i == t {
+									a = uc + float64(ks[t*d+c])
+								}
+								loga[i] = a
+								if a > m {
+									m = a
+								}
 							}
-							loga[i] = a
-							if a > m {
-								m = a
+							den := simd.ExpSumF64(p[:t+1], loga[:t+1], m)
+							var wkv float64
+							for i := 0; i <= t; i++ {
+								wkv += p[i] * float64(vs[i*d+c])
+							}
+							wkv /= den
+							if gt == 0 {
+								continue
+							}
+							for i := 0; i <= t; i++ {
+								pi := p[i] / den
+								vi := float64(vs[i*d+c])
+								dvs[i*d+c] = float32(float64(dvs[i*d+c]) + gt*pi)
+								dks[i*d+c] = float32(float64(dks[i*d+c]) + gt*pi*(vi-wkv))
+								if i == t {
+									duc += gt * pi * (vi - wkv)
+								} else {
+									dwc -= float64(t-1-i) * gt * pi * (vi - wkv)
+								}
 							}
 						}
-						den := simd.ExpSumF64(p[:t+1], loga[:t+1], m)
-						var wkv float64
-						for i := 0; i <= t; i++ {
-							wkv += p[i] * float64(vs[i*d+c])
-						}
-						wkv /= den
-						if gt == 0 {
-							continue
-						}
-						for i := 0; i <= t; i++ {
-							pi := p[i] / den
-							vi := float64(vs[i*d+c])
-							dvs[i*d+c] = float32(float64(dvs[i*d+c]) + gt*pi)
-							dks[i*d+c] = float32(float64(dks[i*d+c]) + gt*pi*(vi-wkv))
-							if i == t {
-								duc += gt * pi * (vi - wkv)
-							} else {
-								dwc -= float64(t-1-i) * gt * pi * (vi - wkv)
-							}
-						}
+						dws[c] = float32(dwc)
+						dus[c] = float32(duc)
 					}
-					dws[c] = float32(dwc)
-					dus[c] = float32(duc)
-				}
+				})
 				return []*tensor.Tensor{dk, dv, dw, du}, nil
 			}
 		}

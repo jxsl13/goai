@@ -188,6 +188,7 @@ func reconErrMat(w [][]float64, wq *tensor.Tensor, x *tensor.Tensor, out, in, sa
 	xc, wqc := x.Contiguous(), wq.Contiguous()
 	var ss float64
 	diff := make([]float64, in)
+	acc := make([]float64, samples) // per-r column accumulator (reblocked GEMM error)
 	switch wq.Dtype() {
 	case tensor.F64:
 		if xf, ok := f64Storage(xc); ok {
@@ -197,12 +198,20 @@ func reconErrMat(w [][]float64, wq *tensor.Tensor, x *tensor.Tensor, out, in, sa
 				for i := range diff {
 					diff[i] = wr[i] - wqr[i]
 				}
-				for s := range samples {
-					var v float64
-					for i := 0; i < in; i++ {
-						v += diff[i] * xf[i*samples+s]
+				// i-outer / s-inner reblock: xf[i*samples+s] is contiguous in s (was
+				// column-strided by samples in the s-outer form). acc[s] sums over i in the
+				// same ascending order → bit-identical; ss adds acc[s]^2 in ascending s.
+				for s := range acc {
+					acc[s] = 0
+				}
+				for i := 0; i < in; i++ {
+					di, base := diff[i], i*samples
+					for s := 0; s < samples; s++ {
+						acc[s] += di * xf[base+s]
 					}
-					ss += v * v
+				}
+				for s := 0; s < samples; s++ {
+					ss += acc[s] * acc[s]
 				}
 			}
 			return math.Sqrt(ss)
@@ -215,12 +224,17 @@ func reconErrMat(w [][]float64, wq *tensor.Tensor, x *tensor.Tensor, out, in, sa
 				for i := range diff {
 					diff[i] = wr[i] - float64(wqf[r*in+i])
 				}
-				for s := range samples {
-					var v float64
-					for i := 0; i < in; i++ {
-						v += diff[i] * float64(xf[i*samples+s])
+				for s := range acc {
+					acc[s] = 0
+				}
+				for i := 0; i < in; i++ {
+					di, base := diff[i], i*samples
+					for s := 0; s < samples; s++ {
+						acc[s] += di * float64(xf[base+s])
 					}
-					ss += v * v
+				}
+				for s := 0; s < samples; s++ {
+					ss += acc[s] * acc[s]
 				}
 			}
 			return math.Sqrt(ss)

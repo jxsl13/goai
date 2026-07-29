@@ -49,6 +49,57 @@ func GatedLinearAttention(ctx *backend.Context, q, k, v, gate *tensor.Tensor) (*
 	row := func(t *tensor.Tensor, i int) (*tensor.Tensor, error) { // [1, d]
 		return ex(backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: i, End: i + 1}, t)
 	}
+	dv := v.Shape()[1]
+	// Fused typed-F64 inference path: the per-step recurrence otherwise dispatches ~6
+	// backend ops + tiny-tensor allocs per timestep (O(seq) dispatch/alloc overhead on
+	// [d_k,d_v] state). Run it on raw []float64 with the state S reused in place (kda.go /
+	// ssd.go / retention.go idiom). Gated on ctx.Recorder==nil (inference): training keeps
+	// the dispatch loop so autograd taping is unchanged. Bit-identical: backend
+	// Mul/Add/MatMul are plain ascending-order f64 loops, reproduced op-for-op (the only
+	// reorders are commutative scalar muls; the state add keeps scaled first; the output
+	// dot sums over the key dim ascending; no FMA). Non-F64/non-contiguous falls through.
+	if ctx.Recorder == nil {
+		if qs, ks, vs, gs := flatF64(q), flatF64(k), flatF64(v), flatF64(gate); qs != nil && ks != nil && vs != nil && gs != nil {
+			out := tensor.NewOn(ctx.Device(), q.Dtype(), tensor.Shape{seq, dv})
+			os := flatF64(out)
+			S := make([]float64, dk*dv)
+			for t := range seq {
+				krow := ks[t*dk : t*dk+dk : t*dk+dk]
+				vrow := vs[t*dv : t*dv+dv : t*dv+dv]
+				qrow := qs[t*dk : t*dk+dk : t*dk+dk]
+				if t == 0 { // S_0 = k_0ᵀ v_0
+					for i := range dk {
+						ki := krow[i]
+						base := i * dv
+						for j := range dv {
+							S[base+j] = ki * vrow[j]
+						}
+					}
+				} else {
+					grow := gs[t*dk : t*dk+dk : t*dk+dk]
+					for i := range dk { // S = Diag(α_t)·S_{t-1} + k_tᵀ v_t
+						gi, ki := grow[i], krow[i]
+						base := i * dv
+						for j := range dv {
+							S[base+j] = S[base+j]*gi + ki*vrow[j]
+						}
+					}
+				}
+				orow := os[t*dv : t*dv+dv : t*dv+dv] // o_t = q_t·S_t
+				for j := range dv {
+					orow[j] = 0
+				}
+				for i := range dk {
+					qi := qrow[i]
+					base := i * dv
+					for j := range dv {
+						orow[j] += qi * S[base+j]
+					}
+				}
+			}
+			return out, nil
+		}
+	}
 	var state *tensor.Tensor // [d_k, d_v], nil == zero
 	outs := make([]*tensor.Tensor, seq)
 	for t := range seq {
