@@ -635,22 +635,35 @@ func softCapKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.A
 	if pa.Cap <= 0 {
 		return nil, fmt.Errorf("cpu: softcap cap must be > 0, got %g", pa.Cap)
 	}
-	if in[0].Dtype() != tensor.F64 {
-		return nil, fmt.Errorf("cpu: softcap unsupported dtype %v", in[0].Dtype())
-	}
 	xc := in[0].Contiguous()
-	out := tensor.NewOn(ctx.Device(), tensor.F64, in[0].Shape())
-	d, o := xc.Storage().F64(), out.Storage().F64()
-	if vexpF64Fast {
-		parallel(len(o), func(lo, hi int) { vsoftcapF64(o[lo:hi], d[lo:hi], pa.Cap) })
+	switch xc.Dtype() {
+	case tensor.F64:
+		out := tensor.NewOn(ctx.Device(), tensor.F64, in[0].Shape())
+		d, o := xc.Storage().F64(), out.Storage().F64()
+		if vexpF64Fast {
+			parallel(len(o), func(lo, hi int) { vsoftcapF64(o[lo:hi], d[lo:hi], pa.Cap) })
+			return []*tensor.Tensor{out}, nil
+		}
+		parallel(len(o), func(lo, hi int) {
+			for i := lo; i < hi; i++ {
+				o[i] = pa.Cap * math.Tanh(d[i]/pa.Cap)
+			}
+		})
+		return []*tensor.Tensor{out}, nil
+	case tensor.F32:
+		// F32 falls to the serial ref kernel today; parallelize it. cap·tanh(x/cap)
+		// evaluated in f64 with a single round on store — bit-identical to ref's F32
+		// path (backend/ref/softcap.go); disjoint output elements → race-free.
+		out := tensor.NewOn(ctx.Device(), tensor.F32, in[0].Shape())
+		d, o := xc.Storage().F32(), out.Storage().F32()
+		parallel(len(o), func(lo, hi int) {
+			for i := lo; i < hi; i++ {
+				o[i] = float32(pa.Cap * math.Tanh(float64(d[i])/pa.Cap))
+			}
+		})
 		return []*tensor.Tensor{out}, nil
 	}
-	parallel(len(o), func(lo, hi int) {
-		for i := lo; i < hi; i++ {
-			o[i] = pa.Cap * math.Tanh(d[i]/pa.Cap)
-		}
-	})
-	return []*tensor.Tensor{out}, nil
+	return nil, fmt.Errorf("cpu: softcap unsupported dtype %v", xc.Dtype())
 }
 
 // siluBackwardKernelCPU is the arm64 perf-build F32 SiLU VJP (§T665): dx =
@@ -716,6 +729,7 @@ func init() {
 	std.add(backend.OpSoftplusBackward, tensor.F64, softplusBackwardKernelCPU)
 	// F64-only: soft-cap (Gemma-2 attention/final logits) rides vsoftcapF64.
 	std.add(backend.OpSoftCap, tensor.F64, softCapKernelCPU)
+	std.add(backend.OpSoftCap, tensor.F32, softCapKernelCPU)
 
 	if vexpF32Fast {
 		// SIMD perf build, F32 only (§T664/§T665): the vectorized GELU and SiLU VJPs

@@ -50,3 +50,18 @@ func BenchmarkSigmoidF64_64K_cpu(b *testing.B) {
 func BenchmarkAddBiasF32_512x1024_cpu(b *testing.B) {
 	benchOn(b, backend.CPU, backend.OpAddBias, bench.RandF32(tensor.Shape{512, 1024}, 1), bench.RandF32(tensor.Shape{1024}, 2))
 }
+
+func BenchmarkSoftCapF32_4Mx_cpu(b *testing.B) {
+	be, _ := backend.Get(backend.CPU)
+	ctx := backend.NewContext().WithBackend(be)
+	x := bench.RandF32(tensor.Shape{4096, 1024}, 1)
+	ins := []*tensor.Tensor{x}
+	attrs := backend.SoftCapAttrs{Cap: 30}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if _, err := backend.Execute(ctx, backend.OpSoftCap, ins, attrs); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
