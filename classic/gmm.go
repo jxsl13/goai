@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"runtime"
 
 	"github.com/jxsl13/goai/internal/simd"
 )
@@ -722,28 +723,59 @@ func (m *GaussianMixture) PredictProba(x [][]float64) ([][]float64, error) {
 	for c := range k {
 		logW[c] = math.Log(m.Weights[c])
 	}
-	out := make([][]float64, len(x))
-	// One scratch buffer for the whole scan instead of one per sample: the inner
-	// loop below writes every one of its k entries before softmaxLSE reads it, so
-	// reuse cannot leak a previous sample's values. It stays a function LOCAL
-	// rather than a receiver field — nothing is shared across calls, so concurrent
-	// PredictProba on the same model remains safe. (o cannot be hoisted the same
-	// way: it escapes into out[i] and each sample needs its own.)
-	lr := make([]float64, k)
-	for i, row := range x {
+	for _, row := range x {
 		if len(row) != m.nFeat {
 			return nil, fmt.Errorf("classic: gmm PredictProba feature mismatch: got %d want %d", len(row), m.nFeat)
 		}
+	}
+	out := make([][]float64, len(x))
+	rowBody := func(lr []float64, i int) error {
 		for c := range k {
-			ld, err := m.logGaussian(row, c)
+			ld, err := m.logGaussian(x[i], c)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			lr[c] = logW[c] + ld
 		}
 		o := make([]float64, k)
 		softmaxLSE(o, lr) // o = normalized responsibilities (one fused SIMD exp pass)
 		out[i] = o
+		return nil
+	}
+	// Rows are independent for GMMDiag: logGaussian(diag) only READS per-component
+	// params (Means/invCov/logDetHalf), out[i]/o are per-sample, and lr is made PER
+	// WORKER — so chunk the row loop across GOMAXPROCS bit-identically to the serial
+	// scan. GMMFull stays SERIAL: its logGaussian reuses the shared m.yScratch solve
+	// buffer, so concurrent calls would race. Serial below a small work threshold too.
+	nw := runtime.GOMAXPROCS(0)
+	if nw > len(x) {
+		nw = len(x)
+	}
+	if nw <= 1 || m.cfg.covariance != GMMDiag || len(x)*k < 1<<11 {
+		lr := make([]float64, k)
+		for i := range x {
+			if err := rowBody(lr, i); err != nil {
+				return nil, err
+			}
+		}
+		return out, nil
+	}
+	csz := (len(x) + nw - 1) / nw
+	if err := parallelBuild(nw, func(cw int) error {
+		lo := cw * csz
+		hi := lo + csz
+		if hi > len(x) {
+			hi = len(x)
+		}
+		lr := make([]float64, k) // per-worker scratch
+		for i := lo; i < hi; i++ {
+			if err := rowBody(lr, i); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	return out, nil
 }
