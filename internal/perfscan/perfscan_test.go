@@ -2301,6 +2301,33 @@ func f(n, m int, buf, out []float64) {
 	}
 }
 
+// REGRESSION (the unsoundness that shipped in #488 and was fixed): a transcendental
+// whose argument is a LOCAL that carries the outer index defeats a purely textual
+// "does not mention the outer var" check. The SSM scan's abar := math.Exp(dt*A[d][n])
+// never names t, yet dt := delta[t][d] makes it vary every t — hoisting it above the t
+// loop would be WRONG. The guard must taint on any outer-body assignment, not just those
+// outside the inner loop.
+func TestDetectPS5005_SilentWhenArgIsOuterTaintedLocal(t *testing.T) {
+	src := `package p
+import "math"
+func ssm(L, D, N int, delta, u, A, C [][]float64, h []float64, out [][]float64) {
+	for t := range L {
+		for d := range D {
+			dt := delta[t][d]
+			for n := range N {
+				abar := math.Exp(dt * A[d][n])
+				h[d*N+n] = abar*h[d*N+n] + dt*u[t][d]
+				out[t][d] += C[t][n] * h[d*N+n]
+			}
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["loop-invariant-transcendental"] != 0 {
+		t.Fatalf("want 0 when the arg is an outer-tainted local (dt), got %d (%v)",
+			got["loop-invariant-transcendental"], got)
+	}
+}
+
 const ps6003Prelude = `package p
 type QT int
 const (A QT = iota; B; C; D)
