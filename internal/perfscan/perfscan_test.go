@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"go/ast"
 	"go/parser"
 	"go/token"
 	"os"
@@ -4658,5 +4659,142 @@ func decode(m *M, ctx *C, cfg *Cfg, pos, kv int, q, k T) error {
 }`
 	if got := countCat(scanSrc(t, src))["loop-invariant-literal-arg"]; got != 2 {
 		t.Fatalf("want 2 for two distinct literals of one type, got %d", got)
+	}
+}
+
+// scanSrcPkg runs the package-level pre-pass PS6017 depends on before scanning. scanSrc
+// alone cannot exercise this rule: the sibling registry is built across files, so without
+// the pre-pass the rule has an empty table and every assertion of zero passes vacuously.
+func scanSrcPkg(t *testing.T, src string) []finding {
+	t.Helper()
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "x.go", src, parser.ParseComments)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	variadicSiblings = map[string]map[string]variadicFamily{}
+	collectVariadicSiblings(fset, []*ast.File{f})
+	return scanFile(fset, f, testSets(t))
+}
+
+const variadicFamilySrc = `
+func exec1(ctx *backend.Context, op backend.Op, attrs backend.Attrs, ins ...*tensor.Tensor) (*tensor.Tensor, error) {
+	return nil, nil
+}
+func exec1a(ctx *backend.Context, op backend.Op, attrs backend.Attrs, a *tensor.Tensor) (*tensor.Tensor, error) {
+	return nil, nil
+}
+func exec3(ctx *backend.Context, op backend.Op, attrs backend.Attrs, a, b, c *tensor.Tensor) (*tensor.Tensor, error) {
+	return nil, nil
+}
+`
+
+// The nlp decode shape: a variadic exec called in a layer loop at an arity a pooled sibling
+// covers. Grouped parameters (a, b, c *tensor.Tensor) must expand to three, not one.
+func TestDetectPS6017_UnpooledVariadicSibling(t *testing.T) {
+	src := `package p` + variadicFamilySrc + `
+func decode(m *M, ctx *backend.Context, attn backend.Attrs, q, k, v *tensor.Tensor) error {
+	for l, b := range m.Blocks {
+		if _, err := exec1(ctx, backend.OpMHA, attn, q, k, v); err != nil {
+			return err
+		}
+		use(l, b)
+	}
+	return nil
+}`
+	got := countCat(scanSrcPkg(t, src))["unpooled-variadic-sibling"]
+	if got != 1 {
+		t.Fatalf("want 1 unpooled-variadic-sibling, got %d", got)
+	}
+}
+
+// An arity no sibling covers has nothing to switch to.
+func TestDetectPS6017_SilentOnAnUncoveredArity(t *testing.T) {
+	src := `package p` + variadicFamilySrc + `
+func f(m *M, ctx *backend.Context, attn backend.Attrs, a, b2 *tensor.Tensor) error {
+	for l, b := range m.Blocks {
+		if _, err := exec1(ctx, backend.OpAdd, attn, a, b2); err != nil {
+			return err
+		}
+		use(l, b)
+	}
+	return nil
+}`
+	if got := countCat(scanSrcPkg(t, src))["unpooled-variadic-sibling"]; got != 0 {
+		t.Fatalf("want 0 when no sibling has that arity (2), got %d", got)
+	}
+}
+
+// A spread call has no statically known arity.
+func TestDetectPS6017_SilentOnASpreadCall(t *testing.T) {
+	src := `package p` + variadicFamilySrc + `
+func f(m *M, ctx *backend.Context, attn backend.Attrs, ins []*tensor.Tensor) error {
+	for l, b := range m.Blocks {
+		if _, err := exec1(ctx, backend.OpMHA, attn, ins...); err != nil {
+			return err
+		}
+		use(l, b)
+	}
+	return nil
+}`
+	if got := countCat(scanSrcPkg(t, src))["unpooled-variadic-sibling"]; got != 0 {
+		t.Fatalf("want 0 for a spread call, got %d", got)
+	}
+}
+
+// Outside a loop the allocation is once per invocation, which is rarely worth a diff.
+func TestDetectPS6017_SilentOutsideALoop(t *testing.T) {
+	src := `package p` + variadicFamilySrc + `
+func f(ctx *backend.Context, attn backend.Attrs, q, k, v *tensor.Tensor) error {
+	_, err := exec1(ctx, backend.OpMHA, attn, q, k, v)
+	return err
+}`
+	if got := countCat(scanSrcPkg(t, src))["unpooled-variadic-sibling"]; got != 0 {
+		t.Fatalf("want 0 outside a loop, got %d", got)
+	}
+}
+
+// A variadic function with NO fixed leading parameters has no shared prefix to make a
+// family, and "same trailing types" alone paired concat1D with every two-tensor function in
+// its package. Requiring a prefix is what removed the only wrong pairing in the tree.
+func TestDetectPS6017_SilentWithoutASharedPrefix(t *testing.T) {
+	src := `package p
+func concat1D(parts ...*tensor.Tensor) *tensor.Tensor { return nil }
+func geGLU(a, b *tensor.Tensor) *tensor.Tensor        { return nil }
+func f(m *M, x, y *tensor.Tensor) {
+	for l, b := range m.Blocks {
+		_ = concat1D(x, y)
+		use(l, b)
+	}
+}`
+	if got := countCat(scanSrcPkg(t, src))["unpooled-variadic-sibling"]; got != 0 {
+		t.Fatalf("want 0 without a shared leading prefix, got %d", got)
+	}
+}
+
+// A candidate whose trailing type differs from the variadic element type is not a sibling.
+//
+// The guard against mis-rendered types is the POSITIVE test above, not this one: exprText has
+// no StarExpr case and returns empty for every pointer, which makes the collector skip every
+// candidate and the whole rule go silent. A zero-expecting assertion cannot tell that apart
+// from correct suppression — swapping typeText for exprText leaves this test green and turns
+// TestDetectPS6017_UnpooledVariadicSibling red.
+func TestDetectPS6017_SilentOnADifferingTrailingType(t *testing.T) {
+	src := `package p
+func vexec(ctx *backend.Context, ins ...*tensor.Tensor) (*tensor.Tensor, error) { return nil, nil }
+func notASibling(ctx *backend.Context, other *backend.Context) (*tensor.Tensor, error) {
+	return nil, nil
+}
+func f(m *M, ctx *backend.Context, x *tensor.Tensor) error {
+	for l, b := range m.Blocks {
+		if _, err := vexec(ctx, x); err != nil {
+			return err
+		}
+		use(l, b)
+	}
+	return nil
+}`
+	if got := countCat(scanSrcPkg(t, src))["unpooled-variadic-sibling"]; got != 0 {
+		t.Fatalf("want 0 when the candidate's trailing type differs, got %d", got)
 	}
 }

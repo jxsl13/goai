@@ -1024,6 +1024,48 @@ followed by `return false`, structurally identical and semantically unrelated. A
 adds exactly one finding (56 → 57) instead of fourteen.
 
 
+## PS6017 — a variadic helper called at an arity a sibling already covers  *(scanner: static)*
+
+A variadic function called inside a loop with a fixed number of arguments, when the same
+package declares a non-variadic sibling taking exactly those:
+
+```go
+for l, b := range m.Blocks {
+	a, _ := exec1(ctx, backend.OpMHA, attn, q, kNew, vNew) // allocates a 3-element slice
+}
+```
+
+`exec3` takes the same three tensors as named parameters and pools the slice it builds, so the
+variadic call is a per-iteration allocation with a ready-made replacement. **422 candidates
+tree-wide** across four families — `exec1` against `exec1a`/`exec2`/`exec3` in `nlp`, and
+`rdropExec`/`hcExec` against `execPool1`/`execPool2` in `nn`, which nobody had connected.
+
+**The sibling relation comes from signatures, no config.** A candidate must have identical
+leading parameter types followed by exactly n parameters of the variadic element type, so the
+call transfers argument for argument. The registry is built package-wide in a pre-pass,
+because the variadic form and its siblings are usually declared in one file and called from
+twenty — the same reason `intMapReg` exists.
+
+**At least one FIXED leading parameter is required, and that single condition removed the only
+wrong pairing in the tree.** With none, "same trailing types" is far too weak:
+`concat1D(parts ...*tensor.Tensor)` matched every two-tensor function in its package. The
+shared prefix is what makes a family — for `exec1` it is `(ctx, op, attrs)`, which names the
+operation all the siblings perform.
+
+**Rendering types with `go/printer` is load-bearing.** `exprText` has no `StarExpr` case and
+returns empty for every pointer, which breaks the comparison in both directions: as a
+placeholder all pointers collapse and `*backend.Context` equals `*tensor.Tensor`; as
+unrenderable-and-skipped, every candidate with a pointer parameter drops out and the rule
+reports **nothing at all**. The second is the worse failure, because a silent check reads as a
+clean codebase — and note that a zero-expecting suppression test cannot detect it. The guard
+is the positive test.
+
+**What it cannot check** is whether the sibling is semantically equivalent rather than merely
+type-compatible; that is a judgment about two bodies. Here the siblings pool only when
+`ctx.Recorder == nil` and delegate to the variadic form otherwise, which is exactly the wanted
+equivalence — elsewhere, read before swapping. Restricted to loop bodies: the allocation is
+per call either way, but once per invocation is rarely worth a diff.
+
 ## PS6016 — a struct literal rebuilt every iteration from constants  *(scanner: static)*
 
 A composite literal built inside a loop and passed straight to a call, whose every field

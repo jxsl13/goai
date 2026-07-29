@@ -217,6 +217,7 @@ var checks = []check{
 	{"PS6001", "full-sort-bounded-prefix", "a full-vocabulary descending index sort whose result feeds an early-breaking (threshold-bounded) prefix consumer, with no quickselect/pre-filter guard — an O(n log n) sort for an O(prefix) need", false},
 	{"PS6002", "spatial-bounds-branch", "an innermost window/kernel loop re-testing a compound spatial bounds guard (iy>=0 && iy<h && ix>=0 && ix<wd) per tap, where the in-bounds taps form one contiguous run the guard can be hoisted around", false},
 	{"PS6005", "monotone-index-bound", "an innermost loop guarding its tap work with a single relational bound on an index affine in the loop var (j:=t-(K-1)+k; if j>=0) — the in-bounds iterations are one contiguous run, clamp the loop bound instead of branching per tap", false},
+	{"PS6017", "unpooled-variadic-sibling", "a VARIADIC helper called inside a loop at a fixed argument count, when the same package declares a non-variadic sibling with identical leading parameters and exactly that many trailing ones — the variadic form allocates a slice per call and the sibling exists to avoid it", false},
 	{"PS6016", "loop-invariant-literal-arg", "a struct composite literal built INSIDE a loop and passed straight to a call, whose every field initializer is loop-invariant — the same value is rebuilt every iteration, and when the parameter is an interface it is heap-boxed every iteration; construct it once above the loop", false},
 	{"PS6015", "batch1-call-feeds-only-postloop-slice", "a PURE (pureComputeFuncs) call inside a loop, given a single-element batch, whose result is used ONLY to append to a slice declared outside the loop — nothing in the loop reads it, so N batch-1 calls can become one batched call after the loop", false},
 	{"PS6014", "redundant-pure-recompute", "two syntactically identical calls to a function declared PURE (pureComputeFuncs) in one block, with nothing between them assigning any name the call reads — the second recomputes what the first already holds; keep one and read its result twice", false},
@@ -1860,6 +1861,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	out = append(out, redundantPureRecomputeFindings(fset, fn, ns)...)
 	out = append(out, batch1FeedsPostloopSliceFindings(fset, fn, ns)...)
 	out = append(out, loopInvariantLiteralArgFindings(fset, fn)...)
+	out = append(out, unpooledVariadicSiblingFindings(fset, fn)...)
 	out = append(out, invariantTranscendentalRecomputeFindings(fset, fn)...)
 	out = append(out, partialFastPathFindings(fset, fn)...)
 	out = append(out, outputInvariantReloadFindings(fset, fn)...)
@@ -2399,6 +2401,7 @@ func main() {
 	}
 	collectIntTypes(parsed)
 	collectIntKeyMaps(parsed)
+	collectVariadicSiblings(fset, parsed)
 	for _, f := range parsed {
 		for _, fd := range scanFile(fset, f, ns) {
 			if enabled[fd.category] {
@@ -7366,4 +7369,222 @@ func allElemsInvariant(cl *ast.CompositeLit, moving map[string]bool) bool {
 		})
 	}
 	return ok
+}
+
+// variadicSiblings maps a package name to each variadic function it declares that HAS
+// fixed-arity siblings, and from that function to arity -> sibling name.
+//
+// A sibling is a function with IDENTICAL leading parameter types followed by exactly n
+// parameters of the variadic element type. In this repository that is exec1(ctx, op, attrs,
+// ins ...*tensor.Tensor) against exec1a/exec2/exec3, which exist precisely so a call with a
+// known argument count does not allocate a `[]*tensor.Tensor` to pass three pointers.
+//
+// Package-level, because the variadic form and its siblings are often declared in one file
+// and called from twenty others — the same reason intMapReg exists. Nothing here needs
+// go/types: two parameter types are the same when their source text is, which within one
+// package is what "same type" means for this purpose.
+type variadicFamily struct {
+	fixed   int            // number of non-variadic leading parameters
+	byArity map[int]string // trailing-argument count -> sibling name
+}
+
+var variadicSiblings = map[string]map[string]variadicFamily{}
+
+// collectVariadicSiblings pre-scans every package for variadic functions and pairs each with
+// the fixed-arity siblings that could replace a call of known arity.
+// typeText renders a parameter type to source form. exprText is NOT usable here: it has no
+// StarExpr case and returns empty for every pointer, which breaks this comparison in both
+// directions depending on how the empty is handled. Treated as a placeholder, all pointer
+// types collapse to one value and *backend.Context compares equal to *tensor.Tensor — that is
+// how concat1D(parts ...*tensor.Tensor) acquired project(ctx *backend.Context, …) as a
+// "sibling", the one hit in the tree that was obviously wrong. Treated as unrenderable and
+// skipped, every candidate with a pointer parameter drops out and the rule reports nothing at
+// all — which is the worse failure, because a silent check reads as a clean codebase.
+// Rendering the type properly is what makes the comparison mean anything.
+func typeText(fset *token.FileSet, e ast.Expr) string {
+	var buf bytes.Buffer
+	if err := printer.Fprint(&buf, fset, e); err != nil {
+		return ""
+	}
+	return buf.String()
+}
+
+func collectVariadicSiblings(fset *token.FileSet, files []*ast.File) {
+	type sig struct {
+		name     string
+		lead     []string // rendered leading parameter types
+		elem     string   // rendered variadic element type, "" if not variadic
+		trailing []string // rendered trailing parameter types (non-variadic funcs)
+	}
+	byPkg := map[string][]sig{}
+	for _, f := range files {
+		if f.Name == nil {
+			continue
+		}
+		pkg := f.Name.Name
+		for _, decl := range f.Decls {
+			fd, ok := decl.(*ast.FuncDecl)
+			if !ok || fd.Recv != nil || fd.Type.Params == nil {
+				continue
+			}
+			var flat []string
+			variadic := ""
+			skip := false
+			for _, fld := range fd.Type.Params.List {
+				n := len(fld.Names)
+				if n == 0 {
+					n = 1
+				}
+				if ell, isEll := fld.Type.(*ast.Ellipsis); isEll {
+					variadic = typeText(fset, ell.Elt)
+					if variadic == "" {
+						skip = true // an unrenderable type cannot be compared
+					}
+					break // the variadic parameter is always last
+				}
+				t := typeText(fset, fld.Type)
+				if t == "" {
+					skip = true
+					break
+				}
+				for range n {
+					flat = append(flat, t)
+				}
+			}
+			if skip {
+				continue
+			}
+			if variadic != "" {
+				byPkg[pkg] = append(byPkg[pkg], sig{name: fd.Name.Name, lead: flat, elem: variadic})
+				continue
+			}
+			byPkg[pkg] = append(byPkg[pkg], sig{name: fd.Name.Name, trailing: flat})
+		}
+	}
+	for pkg, sigs := range byPkg {
+		for _, v := range sigs {
+			// At least one FIXED leading parameter is required. With none, "same trailing
+			// types" is far too weak a relation: concat1D(parts ...*tensor.Tensor) matched
+			// every two-tensor function in the package, none of which was a sibling of it in
+			// any useful sense. The shared prefix is what makes a family — for exec1 it is
+			// (ctx, op, attrs), which identifies the operation the siblings all perform.
+			if v.elem == "" || len(v.lead) == 0 {
+				continue
+			}
+			for _, c := range sigs {
+				if c.elem != "" || c.name == v.name || len(c.trailing) <= len(v.lead) {
+					continue
+				}
+				// leading types must match exactly...
+				same := true
+				for i, t := range v.lead {
+					if c.trailing[i] != t {
+						same = false
+						break
+					}
+				}
+				if !same {
+					continue
+				}
+				// ...and every remaining parameter must be the variadic element type.
+				rest := c.trailing[len(v.lead):]
+				for _, t := range rest {
+					if t != v.elem {
+						same = false
+						break
+					}
+				}
+				if !same {
+					continue
+				}
+				if variadicSiblings[pkg] == nil {
+					variadicSiblings[pkg] = map[string]variadicFamily{}
+				}
+				fam, ok := variadicSiblings[pkg][v.name]
+				if !ok {
+					fam = variadicFamily{fixed: len(v.lead), byArity: map[int]string{}}
+				}
+				// A stable pick when two siblings share an arity: shortest name, then
+				// lexicographic, so the report does not change between runs.
+				if prev, seen := fam.byArity[len(rest)]; !seen ||
+					len(c.name) < len(prev) || (len(c.name) == len(prev) && c.name < prev) {
+					fam.byArity[len(rest)] = c.name
+				}
+				variadicSiblings[pkg][v.name] = fam
+			}
+		}
+	}
+}
+
+// unpooledVariadicSiblingFindings flags PS6017 — a variadic helper called in a loop at an
+// arity a fixed-arity sibling already covers:
+//
+//	for l, b := range m.Blocks {
+//		a, _ := exec1(ctx, backend.OpMHA, attn, q, kNew, vNew) // allocates a 3-elem slice
+//	}
+//
+// `exec3` takes the same three tensors as named parameters and pools the slice it builds, so
+// the variadic call is a per-iteration allocation with a ready-made replacement. Switching
+// these by hand across the nlp decode paths was part of a change measured at -3.1% allocs;
+// the point of the rule is that 140 such call sites remained package-wide and no one was
+// going to find them by reading.
+//
+// SOUNDNESS. The sibling must have identical leading parameter types and exactly n trailing
+// ones of the variadic element type, so the call transfers argument for argument. Calls that
+// SPREAD (f(xs...)) are skipped — their arity is not known here. Restricted to loop bodies:
+// the allocation is per call either way, but once per invocation is rarely worth a diff, and
+// keeping the report to per-iteration costs is what makes the output actionable.
+//
+// WHAT IT CANNOT CHECK is whether the sibling is semantically equivalent rather than merely
+// type-compatible — that is a judgment about the two bodies. In this repository the siblings
+// pool only when ctx.Recorder == nil and delegate to the variadic form otherwise, which is
+// exactly the equivalence wanted; elsewhere it must be read before the swap. Advisory, like
+// the rest.
+func unpooledVariadicSiblingFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	sibs := variadicSiblings[curPkg]
+	if fn.Body == nil || len(sibs) == 0 {
+		return nil
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		body := loopBody(n)
+		if body == nil {
+			return true
+		}
+		ast.Inspect(body, func(m ast.Node) bool {
+			call, ok := m.(*ast.CallExpr)
+			if !ok || call.Ellipsis.IsValid() {
+				return true
+			}
+			id, ok := call.Fun.(*ast.Ident)
+			if !ok {
+				return true
+			}
+			fam, ok := sibs[id.Name]
+			if !ok {
+				return true
+			}
+			// Trailing count = total arguments minus the variadic function's fixed leading
+			// parameters. The sibling table is keyed by that count, so one lookup answers
+			// both whether a replacement exists and which one it is.
+			arity := len(call.Args) - fam.fixed
+			sib, ok := fam.byArity[arity]
+			if !ok {
+				return true
+			}
+			out = append(out, finding{
+				pos:      fset.Position(call.Pos()),
+				end:      fset.Position(call.End()),
+				category: "unpooled-variadic-sibling",
+				msg: fmt.Sprintf("%q is variadic and is called here with %d trailing argument(s) inside a loop, so it "+
+					"allocates a slice every iteration — %q takes the same arguments as named parameters and exists to "+
+					"avoid that. Switching these across the nlp decode paths was part of a change measured at -3.1%% "+
+					"allocations. Read the sibling first: the rule proves the signatures transfer, not that the bodies agree.",
+					id.Name, arity, sib),
+			})
+			return true
+		})
+		return true
+	})
+	return out
 }
