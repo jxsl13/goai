@@ -139,3 +139,17 @@ func WKVScanStateF64(k, v, w, u, out, aa0, bb0, pp0 []float64, seq, d int) {
 func SSMScanF64(u, delta, as, bs, cs, dsk, out, h []float64, L, D, N int) {
 	ssmScanScalar(u, delta, as, bs, cs, dsk, out, h, L, D, N, 0, N)
 }
+
+// FWHTF64 applies the UNNORMALIZED in-place Fast Walsh-Hadamard Transform (portable scalar
+// twin of the archsimd override; len a power of two).
+func FWHTF64(a []float64) {
+	n := len(a)
+	for h := 1; h < n; h <<= 1 {
+		for i := 0; i < n; i += h << 1 {
+			for j := i; j < i+h; j++ {
+				x, y := a[j], a[j+h]
+				a[j], a[j+h] = x+y, x-y
+			}
+		}
+	}
+}

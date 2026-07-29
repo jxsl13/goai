@@ -84,6 +84,10 @@ func SSDQuadratic(x, a, b, c *tensor.Tensor) (*tensor.Tensor, error) {
 	}
 	crow := make([]float64, n)
 	yrow := make([]float64, d)
+	// decayrow[j] = arow[j+1]*..*arow[i] (suffix product, rebuilt once per i in O(i))
+	// so the inner (i,j) loop reads decay in O(1) instead of recomputing an O(i-j)
+	// serial-dependent product T²/2 times (the dominant O(T³) un-vectorizable term).
+	decayrow := make([]float64, T)
 	// b_j and x_j are read inside the O(T²) (i,j) loop, so their AtF64 dispatch — ~20× a
 	// bare multiply — dominates even the O(T³) (already-typed) decay product. Walk their
 	// contiguous rows directly on the F64 fast path (a/c/y stay AtF64: O(T)/O(T·n)/O(T·d),
@@ -96,17 +100,17 @@ func SSDQuadratic(x, a, b, c *tensor.Tensor) (*tensor.Tensor, error) {
 			for dd := range d {
 				yrow[dd] = y.AtF64(i, dd)
 			}
+			decayrow[i] = 1.0
+			for j := i - 1; j >= 0; j-- {
+				decayrow[j] = decayrow[j+1] * arow[j+1]
+			}
 			for j := 0; j <= i; j++ {
 				brow := bs[j*n : j*n+n : j*n+n]
 				var cb float64
 				for k := range n {
 					cb += crow[k] * brow[k]
 				}
-				decay := 1.0
-				for k := j + 1; k <= i; k++ {
-					decay *= arow[k]
-				}
-				m := cb * decay
+				m := cb * decayrow[j]
 				xrow := xs[j*d : j*d+d : j*d+d]
 				for dd := range d {
 					yrow[dd] += m * xrow[dd]
@@ -125,16 +129,16 @@ func SSDQuadratic(x, a, b, c *tensor.Tensor) (*tensor.Tensor, error) {
 		for dd := range d {
 			yrow[dd] = y.AtF64(i, dd)
 		}
+		decayrow[i] = 1.0
+		for j := i - 1; j >= 0; j-- {
+			decayrow[j] = decayrow[j+1] * arow[j+1]
+		}
 		for j := 0; j <= i; j++ {
 			var cb float64
 			for k := range n {
 				cb += crow[k] * b.AtF64(j, k)
 			}
-			decay := 1.0
-			for k := j + 1; k <= i; k++ {
-				decay *= arow[k]
-			}
-			m := cb * decay
+			m := cb * decayrow[j]
 			for dd := range d {
 				yrow[dd] += m * x.AtF64(j, dd)
 			}

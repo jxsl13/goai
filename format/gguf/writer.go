@@ -11,6 +11,7 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
+	"unsafe"
 
 	"github.com/jxsl13/goai/tensor"
 )
@@ -212,6 +213,14 @@ func (wr *writer) str(s string) {
 
 func (wr *writer) pad(n int) { wr.write(make([]byte, n)) }
 
+// ggufIsLE reports whether the host is little-endian — then an F32 slice's native
+// bytes ARE the GGUF little-endian tensor bytes (a single memcpy replaces the
+// per-element PutUint32).
+var ggufIsLE = func() bool {
+	x := uint16(1)
+	return *(*byte)(unsafe.Pointer(&x)) == 1
+}()
+
 func (wr *writer) f32Data(t *tensor.Tensor) {
 	if wr.err != nil {
 		return
@@ -219,8 +228,13 @@ func (wr *writer) f32Data(t *tensor.Tensor) {
 	buf := make([]byte, t.Numel()*4)
 	switch c := t.Contiguous(); c.Dtype() {
 	case tensor.F32:
-		for i, v := range c.Storage().F32() {
-			binary.LittleEndian.PutUint32(buf[i*4:], math.Float32bits(v))
+		s := c.Storage().F32()
+		if ggufIsLE && len(s) > 0 {
+			copy(buf, unsafe.Slice((*byte)(unsafe.Pointer(&s[0])), len(s)*4))
+		} else {
+			for i, v := range s {
+				binary.LittleEndian.PutUint32(buf[i*4:], math.Float32bits(v))
+			}
 		}
 	case tensor.F64: // bulk convert (avoids the per-element AtF64/Unravel dispatch)
 		for i, v := range c.Storage().F64() {
