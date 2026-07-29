@@ -217,6 +217,7 @@ var checks = []check{
 	{"PS6001", "full-sort-bounded-prefix", "a full-vocabulary descending index sort whose result feeds an early-breaking (threshold-bounded) prefix consumer, with no quickselect/pre-filter guard — an O(n log n) sort for an O(prefix) need", false},
 	{"PS6002", "spatial-bounds-branch", "an innermost window/kernel loop re-testing a compound spatial bounds guard (iy>=0 && iy<h && ix>=0 && ix<wd) per tap, where the in-bounds taps form one contiguous run the guard can be hoisted around", false},
 	{"PS6005", "monotone-index-bound", "an innermost loop guarding its tap work with a single relational bound on an index affine in the loop var (j:=t-(K-1)+k; if j>=0) — the in-bounds iterations are one contiguous run, clamp the loop bound instead of branching per tap", false},
+	{"PS6015", "batch1-call-feeds-only-postloop-slice", "a PURE (pureComputeFuncs) call inside a loop, given a single-element batch, whose result is used ONLY to append to a slice declared outside the loop — nothing in the loop reads it, so N batch-1 calls can become one batched call after the loop", false},
 	{"PS6014", "redundant-pure-recompute", "two syntactically identical calls to a function declared PURE (pureComputeFuncs) in one block, with nothing between them assigning any name the call reads — the second recomputes what the first already holds; keep one and read its result twice", false},
 	{"PS6013", "sort-feeds-counted-prefix", "a full sort whose result is then read only by a COUNTED prefix loop (for r := 0; r < k; r++ over the sorted slice) — the order past k is computed and discarded; a selection answers the same question in O(n) instead of O(n log n)", false},
 	{"PS6012", "inconsistent-fma-pinning", "a function that rounds SOME products explicitly (float64(a*b)) to stop FMA contraction, but leaves a sibling product feeding an add or subtract unpinned — including one assigned to a named local, which the compiler still inlines and contracts", false},
@@ -1856,6 +1857,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	out = append(out, inconsistentFMAPinningFindings(fset, fn)...)
 	out = append(out, sortFeedsCountedPrefixFindings(fset, fn)...)
 	out = append(out, redundantPureRecomputeFindings(fset, fn, ns)...)
+	out = append(out, batch1FeedsPostloopSliceFindings(fset, fn, ns)...)
 	out = append(out, invariantTranscendentalRecomputeFindings(fset, fn)...)
 	out = append(out, partialFastPathFindings(fset, fn)...)
 	out = append(out, outputInvariantReloadFindings(fset, fn)...)
@@ -2354,6 +2356,9 @@ func main() {
 		// PS6014 cannot judge purity from syntax; with pureComputeFuncs empty it reports
 		// zero on any input, which is the same false assurance.
 		"redundant-pure-recompute": ns.pureCompute,
+		// PS6015 hoists a call across a loop, which is only legal if the call is pure;
+		// same config, same reason, same zero-means-nothing warning.
+		"batch1-call-feeds-only-postloop-slice": ns.pureCompute,
 	}
 	var starved []string
 	for cat, vocab := range domainVocab {
@@ -6994,4 +6999,189 @@ func identNamesIn(e ast.Expr) []string {
 		return true
 	})
 	return out
+}
+
+// batch1FeedsPostloopSliceFindings flags PS6015 — a pure call made once per iteration on a
+// single-element batch, whose result NOTHING IN THE LOOP READS:
+//
+//	for { // per environment step
+//		v, _ := forward(NewContext(), critic, [][]float64{obs}) // batch of one
+//		ro.values = append(ro.values, v.AtF64(0, 0))            // the only use
+//	}
+//	// ro.values consumed here, after the loop
+//
+// Because the result only accumulates into a slice that outlives the loop, the N batch-1
+// calls answer a question one batch-N call answers — the loop does not depend on the answer
+// while it runs. Hoisting the critic out of `rl.rlRollout` this way was **1.59x** on
+// collection (29239 allocations down to 15471) and **1.19x** end to end, since each batch-1
+// forward was five backend dispatches on a one-row tensor.
+//
+// THIS IS DIFFERENT ADVICE FROM PS1003, which matches the same call shape and says "call a
+// single-item API instead" — avoid the wrapper allocation, keep N calls. That is the right
+// fix when the loop READS the result (the actor forward in the same loop feeds a softmax
+// that feeds the action that feeds the environment, so it cannot move). PS1003 also reports
+// once per loop, so where both a hoistable and a non-hoistable call share a loop it flags
+// only the first and the hoistable one can go unmentioned entirely. This check reports per
+// call site and only for the hoistable case, so the two are complementary rather than
+// redundant.
+//
+// SOUNDNESS. Hoisting across a loop is legal only if the call is pure, so the callee must be
+// named in pureComputeFuncs — the same licensing PS6014 uses, and for a stronger reason
+// here, since a call that consumed RNG would move draws out of the stream and change every
+// subsequent iteration. Beyond that, EVERY use of the result inside the loop must be an
+// append to a slice declared outside it. One use in a branch condition, one use handed to
+// another call, one use feeding the iteration state, and the result is loop-carried — the
+// check stays silent rather than proposing a hoist that changes behavior.
+func batch1FeedsPostloopSliceFindings(fset *token.FileSet, fn *ast.FuncDecl, ns nameSets) []finding {
+	if fn.Body == nil || len(ns.pureCompute) == 0 {
+		return nil
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		body := loopBody(n)
+		if body == nil {
+			return true
+		}
+		declared := declaredInBlock(body)
+		for _, st := range body.List {
+			as, ok := st.(*ast.AssignStmt)
+			if !ok || len(as.Rhs) != 1 || len(as.Lhs) == 0 {
+				continue
+			}
+			call, ok := as.Rhs[0].(*ast.CallExpr)
+			if !ok || !ns.pureCompute[calleeName(call.Fun)] || !hasSingleElemBatchArg(call) {
+				continue
+			}
+			res, ok := as.Lhs[0].(*ast.Ident)
+			if !ok || res.Name == "_" {
+				continue
+			}
+			if !onlyAppendedOutside(body, res.Name, declared) {
+				continue
+			}
+			out = append(out, finding{
+				pos:      fset.Position(call.Pos()),
+				end:      fset.Position(call.End()),
+				category: "batch1-call-feeds-only-postloop-slice",
+				msg: fmt.Sprintf("%q runs once per iteration on a batch of one, and %q is only appended to a slice "+
+					"that outlives the loop — nothing in the loop reads it, so these calls can become ONE batched "+
+					"call after the loop. Measured 1.59x on rl.rlRollout (29239 allocations to 15471). Unlike PS1003, "+
+					"which keeps N calls and drops the wrapper, this removes N-1 calls; it applies only because no "+
+					"loop-carried use was found.",
+					calleeName(call.Fun), res.Name),
+			})
+		}
+		return true
+	})
+	return out
+}
+
+// loopBody returns the body of a for/range statement, or nil for any other node.
+func loopBody(n ast.Node) *ast.BlockStmt {
+	switch x := n.(type) {
+	case *ast.ForStmt:
+		return x.Body
+	case *ast.RangeStmt:
+		return x.Body
+	}
+	return nil
+}
+
+// declaredInBlock collects names introduced anywhere inside body (:= or var), so an append
+// target can be told from a per-iteration local.
+func declaredInBlock(body *ast.BlockStmt) map[string]bool {
+	out := map[string]bool{}
+	ast.Inspect(body, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.AssignStmt:
+			if x.Tok == token.DEFINE {
+				for _, lhs := range x.Lhs {
+					if id, ok := lhs.(*ast.Ident); ok {
+						out[id.Name] = true
+					}
+				}
+			}
+		case *ast.ValueSpec:
+			for _, nm := range x.Names {
+				out[nm.Name] = true
+			}
+		case *ast.RangeStmt:
+			for _, e := range []ast.Expr{x.Key, x.Value} {
+				if id, ok := e.(*ast.Ident); ok {
+					out[id.Name] = true
+				}
+			}
+		}
+		return true
+	})
+	return out
+}
+
+// hasSingleElemBatchArg reports whether any argument is a one-element slice literal — the
+// batch-of-one wrapper.
+func hasSingleElemBatchArg(call *ast.CallExpr) bool {
+	for _, arg := range call.Args {
+		cl, ok := arg.(*ast.CompositeLit)
+		if !ok || len(cl.Elts) != 1 {
+			continue
+		}
+		if _, ok := cl.Type.(*ast.ArrayType); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// onlyAppendedOutside reports whether EVERY use of name inside body sits in an
+// `outer = append(outer, …)` whose target is declared outside body. A single use anywhere
+// else means the result is loop-carried and the hoist is not available.
+func onlyAppendedOutside(body *ast.BlockStmt, name string, declared map[string]bool) bool {
+	appendUses, otherUses := 0, 0
+	var walk func(n ast.Node, inAppend bool)
+	walk = func(n ast.Node, inAppend bool) {
+		if n == nil {
+			return
+		}
+		if as, ok := n.(*ast.AssignStmt); ok && len(as.Lhs) == 1 && len(as.Rhs) == 1 {
+			if c, ok := as.Rhs[0].(*ast.CallExpr); ok && calleeName(c.Fun) == "append" && len(c.Args) >= 2 {
+				target := exprText(as.Lhs[0])
+				if target != "" && target == exprText(c.Args[0]) && !declared[baseIdentName(as.Lhs[0])] {
+					// The accumulating append: uses of name in the appended values are fine.
+					for _, arg := range c.Args[1:] {
+						for _, nm := range identNamesIn(arg) {
+							if nm == name {
+								appendUses++
+							}
+						}
+					}
+					// Anything else in this statement still counts as another use.
+					for _, nm := range identNamesIn(as.Lhs[0]) {
+						if nm == name {
+							otherUses++
+						}
+					}
+					return
+				}
+			}
+		}
+		ast.Inspect(n, func(m ast.Node) bool {
+			if m == n {
+				return true
+			}
+			if st, ok := m.(ast.Stmt); ok {
+				walk(st, inAppend)
+				return false
+			}
+			if id, ok := m.(*ast.Ident); ok && id.Name == name {
+				otherUses++
+			}
+			return true
+		})
+	}
+	for _, st := range body.List {
+		walk(st, false)
+	}
+	// The defining assignment itself contributes one non-append use of name (its LHS), so
+	// require exactly that one and at least one append use.
+	return appendUses >= 1 && otherUses <= 1
 }

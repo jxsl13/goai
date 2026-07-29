@@ -1024,6 +1024,42 @@ followed by `return false`, structurally identical and semantically unrelated. A
 adds exactly one finding (56 → 57) instead of fourteen.
 
 
+## PS6015 — a batch-of-one call the loop never reads  *(scanner: domain)*
+
+A pure call made once per iteration on a single-element batch, whose result is used ONLY to
+append to a slice that outlives the loop:
+
+```go
+for { // per environment step
+	v, _ := forward(NewContext(), critic, [][]float64{obs}) // batch of one
+	ro.values = append(ro.values, v.AtF64(0, 0))            // the only use
+}
+// ro.values consumed here, after the loop
+```
+
+The loop does not depend on the answer while it runs, so N batch-1 calls answer what one
+batch-N call answers. Hoisting the critic out of `rl.rlRollout` was **1.59×** on collection
+(29239 allocations down to 15471) and **1.19×** end to end — each batch-1 forward was five
+backend dispatches on a one-row tensor.
+
+**This is different advice from PS1003, not a refinement of it.** PS1003 matches the same
+call shape and says *call a single-item API instead* — drop the wrapper allocation, keep N
+calls. That is correct when the loop READS the result: the actor forward in this very loop
+feeds a softmax that feeds the sampled action that feeds the environment, and it cannot move.
+PS1003 also reports once per loop, so where a hoistable and a non-hoistable call share a
+loop it flags only the first — here that was the actor, and the critic went unmentioned
+entirely. This check reports per call site and only for the hoistable case. Both rules on the
+same loop is the intended outcome.
+
+**Purity licenses the hoist, and for a stronger reason than in PS6014**: a call that consumed
+RNG would move draws out of the stream and change every later iteration, so the callee must
+be named in `pureComputeFuncs`. Beyond that, every use of the result inside the loop must be
+an append to a slice declared outside it. One use in a branch condition, one handed to
+another call, one feeding the iteration state — the result is loop-carried and the check
+stays silent rather than proposing a hoist that changes behavior. That suppression is the
+load-bearing test: the actor case is one line different from the critic case and flagging it
+would be worse than reporting nothing.
+
 ## PS6014 — the same pure call made twice  *(scanner: domain)*
 
 Two syntactically identical calls to a function the project has declared pure, in one block,

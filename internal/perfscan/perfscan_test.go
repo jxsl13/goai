@@ -4375,3 +4375,124 @@ func f(d *D, states, nexts [][]float64) error {
 		t.Fatalf("want 0 for different arguments, got %d", got)
 	}
 }
+
+// The rl.rlRollout critic: a batch-of-one pure call per iteration whose result is only
+// appended to a slice consumed after the loop.
+func TestDetectPS6015_Batch1FeedsPostloopSlice(t *testing.T) {
+	src := `package p
+func rollout(critic *Net, ro *R, obs []float64, steps int) error {
+	for i := 0; i < steps; i++ {
+		v, err := forward(NewContext(), critic, [][]float64{obs})
+		if err != nil {
+			return err
+		}
+		ro.values = append(ro.values, v.AtF64(0, 0))
+	}
+	return nil
+}`
+	if got := countCat(scanSrc(t, src))["batch1-call-feeds-only-postloop-slice"]; got != 1 {
+		t.Fatalf("want 1 batch1-call-feeds-only-postloop-slice, got %d", got)
+	}
+}
+
+// THE case that must stay silent: the actor in the same loop, whose result feeds the action
+// that feeds the environment. It is the same call shape and it cannot be hoisted — PS1003
+// covers it with different advice. A rule that flagged this would propose a hoist that
+// changes behavior, which is worse than saying nothing.
+func TestDetectPS6015_SilentWhenTheResultDrivesTheLoop(t *testing.T) {
+	src := `package p
+func rollout(actor *Net, ro *R, obs []float64, steps int, k int) error {
+	for i := 0; i < steps; i++ {
+		logits, err := forward(NewContext(), actor, [][]float64{obs})
+		if err != nil {
+			return err
+		}
+		a := sampleAction(logits, k)
+		ro.actions = append(ro.actions, a)
+		obs = step(a)
+	}
+	return nil
+}`
+	if got := countCat(scanSrc(t, src))["batch1-call-feeds-only-postloop-slice"]; got != 0 {
+		t.Fatalf("want 0 when the result drives the loop, got %d", got)
+	}
+}
+
+// A use in a branch condition is loop-carried even though an append is also present.
+func TestDetectPS6015_SilentOnABranchUse(t *testing.T) {
+	src := `package p
+func f(critic *Net, ro *R, obs []float64, steps int) error {
+	for i := 0; i < steps; i++ {
+		v, err := forward(NewContext(), critic, [][]float64{obs})
+		if err != nil {
+			return err
+		}
+		ro.values = append(ro.values, v.AtF64(0, 0))
+		if v.AtF64(0, 0) > 1 {
+			break
+		}
+	}
+	return nil
+}`
+	if got := countCat(scanSrc(t, src))["batch1-call-feeds-only-postloop-slice"]; got != 0 {
+		t.Fatalf("want 0 when the result is read in a branch, got %d", got)
+	}
+}
+
+// Appending to a slice declared INSIDE the loop proves nothing outlives the iteration, so
+// there is no batched call to hoist to.
+func TestDetectPS6015_SilentOnALoopLocalTarget(t *testing.T) {
+	src := `package p
+func f(critic *Net, obs []float64, steps int) error {
+	for i := 0; i < steps; i++ {
+		var acc []float64
+		v, err := forward(NewContext(), critic, [][]float64{obs})
+		if err != nil {
+			return err
+		}
+		acc = append(acc, v.AtF64(0, 0))
+		consume(acc)
+	}
+	return nil
+}`
+	if got := countCat(scanSrc(t, src))["batch1-call-feeds-only-postloop-slice"]; got != 0 {
+		t.Fatalf("want 0 for a loop-local append target, got %d", got)
+	}
+}
+
+// A callee outside pureComputeFuncs cannot be hoisted across a loop at all — it might
+// consume RNG, and moving draws out of the stream changes every later iteration.
+func TestDetectPS6015_SilentOnAnUndeclaredCallee(t *testing.T) {
+	src := `package p
+func f(net *Net, ro *R, obs []float64, steps int) error {
+	for i := 0; i < steps; i++ {
+		v, err := sampleForward(NewContext(), net, [][]float64{obs})
+		if err != nil {
+			return err
+		}
+		ro.values = append(ro.values, v.AtF64(0, 0))
+	}
+	return nil
+}`
+	if got := countCat(scanSrc(t, src))["batch1-call-feeds-only-postloop-slice"]; got != 0 {
+		t.Fatalf("want 0 for a callee outside pureComputeFuncs, got %d", got)
+	}
+}
+
+// A multi-element batch is already batched; there is nothing to collapse.
+func TestDetectPS6015_SilentOnAMultiElementBatch(t *testing.T) {
+	src := `package p
+func f(critic *Net, ro *R, a, b []float64, steps int) error {
+	for i := 0; i < steps; i++ {
+		v, err := forward(NewContext(), critic, [][]float64{a, b})
+		if err != nil {
+			return err
+		}
+		ro.values = append(ro.values, v.AtF64(0, 0))
+	}
+	return nil
+}`
+	if got := countCat(scanSrc(t, src))["batch1-call-feeds-only-postloop-slice"]; got != 0 {
+		t.Fatalf("want 0 for a multi-element batch, got %d", got)
+	}
+}
