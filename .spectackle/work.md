@@ -1011,3 +1011,24 @@ PERFSCAN: PS6016 loop-invariant-literal-arg. A composite literal built inside a 
 RULE (i) OF TWO IS DELIBERATELY HALF-BUILT, and the honest statement of why is the durable part. The already-hoisted-but-still-boxed form is NOT detectable by this scanner: recognizing it requires knowing the parameter is an interface type, which requires go/types, and perfscan is deliberately go/ast-only per its design. Approximating it would either miss or fire on correct code. The tool that sees both forms is the compiler - go build -gcflags=<pkg>=-m names every escaping literal, and that is how both forms were actually found here. PATTERNS.md names the exact invocation rather than pretending the parser covers it. This is the first case in the rule set where the right answer was to document a different tool instead of adding a weaker check.
 
 RULE (ii) NOT BUILT this round: unpooled variadic sibling (a variadic helper called at fixed arity where a fixed-arity sibling exists). Detectable from the signature set alone as the task says, and still open. The exec1-to-exec1a/exec3 switch was applied by hand in this batch; 81 unpooled OpRoPE and 59 unpooled OpMHA call sites remain package-wide, so a rule for it would pay.
+
+## R-01KYQY0G81E9TAJH14B744VCWN nlp attrs hoist batch 2: two false readings before the real one - identical allocs meant no coverage, and 1.73x slower meant one sample
+kind: research
+state: draft
+created: 2026-07-29
+
+CONTINUES T-01KYJQZF10F20 and R-01KYQWY75AF2G. Measured on darwin/arm64 M2 Pro, go1.26.5, GOMAXPROCS=12, interleaved, three rounds.
+
+SHIPPED: 23 more call sites across 18 files. Escaping attrs literals in the package go 78 to 40, and 95 to 40 across the whole sweep.
+
+MEASURED, on a benchmark written for this:
+  QuantCohereDecodeStep   1436 -> 1392 allocs  -3.1%, -1530 B/op
+Identical numbers in all three rounds. Wall time a wash, as in batch 1 - garbage pressure, not throughput, and reported as such.
+
+FALSE READING ONE, and the more useful of the two. The first A/B used the benchmarks that already existed and reported allocation counts BIT-IDENTICAL across both arms of three benchmarks. That reads as the change does nothing. It actually meant the benchmark runs different code: BenchmarkCohereDecode builds the FLOAT Cohere while every batch-2 file is a quantized path, and BenchmarkQuantLlamaGenerate500 covers a file already fixed in batch 1. THE DIAGNOSTIC IS THE EXACTNESS: a genuine null still jitters by a few allocations run to run, because map iteration and GC timing move it. An exactly repeated count across arms is the signature of code that never executed. Writing BenchmarkQuantCohereDecodeStep produced the real number immediately. Cast as PROC-BENCH-COVERAGE-NULL-001.
+
+FALSE READING TWO. MixtralPromptPrefill appeared 1.73x SLOWER at benchtime=1x - 137ms against 79ms, and the two rounds agreed closely enough to look like a real regression rather than noise. At benchtime=10x: 77.98ms new against 78.91ms old, no regression. One iteration of an 80ms benchmark is one sample, and two such samples per arm can agree by coincidence. Cast as PROC-BENCH-ONE-SAMPLE-001. Worth noting these two failures point opposite ways - one manufactured a null, one manufactured an effect - and both came from trusting a number without asking what produced it.
+
+A THIRD, SMALLER MISS: the mechanical transformer matched only `for l, b := range m.Blocks` and silently skipped `for _, b := range m.Blocks`, which is how the prefill paths spell the same loop. That was a third of the remaining sites, and it surfaced only because escape analysis still reported literals in files the transformer claimed to have fixed. Cross-checking the transformer against the compiler rather than against its own report is what caught it.
+
+WHAT REMAINS. 40 escaping sites, mostly the NON-LOOP form: attrs built inside a per-layer helper function rather than a loop, so hoisting means lifting them into the caller. PS6016 correctly declines these (there is no loop in the function it can see), and they are the same class as the go/types-requiring variant recorded in PROC-SCANRULE-WRONG-TOOL-001 - escape analysis sees them, a parser does not. Also still open: the unpooled-variadic-sibling rule from the original task, with 81 unpooled OpRoPE and 59 unpooled OpMHA call sites package-wide.
