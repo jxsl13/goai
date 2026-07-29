@@ -56,6 +56,16 @@ func (m *Mixtral) DecodeStep(ctx *backend.Context, cache *MixtralCache, token, p
 	if err != nil {
 		return nil, err
 	}
+	// Box each attrs into the Attrs INTERFACE once per token, above the layer loop. The values
+	// are layer-independent (Base/Heads/KV/scale/pos), and as concrete structs handed to an
+	// interface parameter inside the loop each was heap-boxed once per layer per token —
+	// escape analysis reported every one of these literals escaping. Hoisting only the struct
+	// is not enough: the conversion happens at the CALL SITE, which is what an earlier pass
+	// missed. exec1a/exec3 additionally pool their input slices, and pool only when
+	// ctx.Recorder == nil, so a taped training context keeps the fresh-slice path.
+	qRoPE := backend.Attrs(backend.RoPEAttrs{Base: cfg.RopeBase, Heads: cfg.Heads, PosOffset: pos})
+	kRoPE := backend.Attrs(backend.RoPEAttrs{Base: cfg.RopeBase, Heads: kv, PosOffset: pos})
+	attnA := backend.Attrs(backend.AttnAttrs{Heads: cfg.Heads, KVHeads: kv, Causal: false})
 	for l, b := range m.Blocks {
 		// attention sublayer (identical to Llama; bias-free)
 		xb, err := b.AttnNorm.Forward(ctx, x)
@@ -83,16 +93,16 @@ func (m *Mixtral) DecodeStep(ctx *backend.Context, cache *MixtralCache, token, p
 			return nil, err
 		}
 		// RoPE the single token at its absolute position, then append k,v to the cache
-		if q, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: cfg.Heads, PosOffset: pos}, q); err != nil {
+		if q, err = exec1a(ctx, backend.OpRoPE, qRoPE, q); err != nil {
 			return nil, err
 		}
-		if k, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: kv, PosOffset: pos}, k); err != nil {
+		if k, err = exec1a(ctx, backend.OpRoPE, kRoPE, k); err != nil {
 			return nil, err
 		}
 		kNew, vNew := cache.bufs.appendKV(cache.K, cache.V, l, k, v)
 		cache.K[l], cache.V[l] = kNew, vNew
 		// single query at the last position attends to all cached keys → no causal mask
-		a, err := exec1(ctx, backend.OpMHA, backend.AttnAttrs{Heads: cfg.Heads, KVHeads: kv, Causal: false}, q, kNew, vNew)
+		a, err := exec3(ctx, backend.OpMHA, attnA, q, kNew, vNew)
 		if err != nil {
 			return nil, err
 		}

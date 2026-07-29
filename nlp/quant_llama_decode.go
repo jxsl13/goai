@@ -49,6 +49,16 @@ func (m *QuantLlama) DecodeStep(ctx *backend.Context, cache *LlamaCache, token, 
 	if cfg.AttentionMult != 0 {
 		attn.Scale = cfg.AttentionMult * math.Sqrt(float64(cfg.Dim/cfg.Heads))
 	}
+	// Box each attrs into the Attrs INTERFACE once per token, above the layer loop. The
+	// values are layer-independent (Base/Heads/KV/pos/scale), and as concrete structs handed
+	// to an interface parameter inside the loop they were heap-boxed once per layer per token
+	// — escape analysis reported every one of these literals escaping. Hoisting the struct is
+	// not sufficient: the conversion happens at the CALL SITE, so the box itself has to move
+	// out (the mistake an earlier pass made). exec1a/exec3 also pool their input slices, and
+	// pool only when ctx.Recorder == nil, so a taped training context keeps fresh slices.
+	qRoPE := backend.Attrs(backend.RoPEAttrs{Base: cfg.RopeBase, Heads: cfg.Heads, PosOffset: pos})
+	kRoPE := backend.Attrs(backend.RoPEAttrs{Base: cfg.RopeBase, Heads: kv, PosOffset: pos})
+	attnA := backend.Attrs(attn)
 	for l, b := range m.Blocks {
 		xb, err := b.AttnNorm.Forward(ctx, x)
 		if err != nil {
@@ -72,15 +82,15 @@ func (m *QuantLlama) DecodeStep(ctx *backend.Context, cache *LlamaCache, token, 
 		if q, k, v, err = applyQwenAttnExtras(ctx, b, q, k, v, cfg.Heads, kv); err != nil {
 			return nil, err
 		}
-		if q, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: cfg.Heads, PosOffset: pos}, q); err != nil {
+		if q, err = exec1a(ctx, backend.OpRoPE, qRoPE, q); err != nil {
 			return nil, err
 		}
-		if k, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: kv, PosOffset: pos}, k); err != nil {
+		if k, err = exec1a(ctx, backend.OpRoPE, kRoPE, k); err != nil {
 			return nil, err
 		}
 		kNew, vNew := cache.bufs.appendKV(cache.K, cache.V, l, k, v)
 		cache.K[l], cache.V[l] = kNew, vNew
-		a, err := exec3(ctx, backend.OpMHA, attn, q, kNew, vNew)
+		a, err := exec3(ctx, backend.OpMHA, attnA, q, kNew, vNew)
 		if err != nil {
 			return nil, err
 		}
