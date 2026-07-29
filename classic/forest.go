@@ -177,7 +177,6 @@ func (m *RandomForestClassifier) Predict(x [][]float64) ([]int, error) {
 		return nil, fmt.Errorf("classic: RandomForestClassifier.Predict before Fit")
 	}
 	out := make([]int, len(x))
-	votes := make([]int, len(m.classes))
 	pos := make(map[int]int, len(m.classes))
 	for i, c := range m.classes {
 		pos[c] = i
@@ -205,16 +204,20 @@ func (m *RandomForestClassifier) Predict(x [][]float64) ([]int, error) {
 		if len(row) != m.nFeature {
 			return nil, fmt.Errorf("classic: row %d width %d, want %d", i, len(row), m.nFeature)
 		}
+	}
+	// Single-row tree walk (tree.root.predict) avoids the per-(sample,tree) wrapper +
+	// result-slice allocation. Chunk-parallel across GOMAXPROCS with a PER-WORKER votes
+	// scratch: rows are independent (each writes only out[i]; treeVote/flat are read-only),
+	// so this is bit-identical to the serial loop. NOTE: an earlier per-ROW parallelBuild
+	// channel dispatch measured slower (497µs seq vs 832µs pooled), but COARSE chunking (nw
+	// goroutines, ~len(x)/nw rows each — the shape gbmPredictSum already uses) amortizes the
+	// spawn and wins. Serial below a small work threshold.
+	predictRow := func(votes []int, i int) {
 		for k := range votes {
 			votes[k] = 0
 		}
-		// Single-row tree walk (tree.root.predict) instead of tree.Predict([][]float64{row}):
-		// avoids the per-(sample,tree) wrapper + result-slice allocation (80001 → 1 alloc
-		// per Predict). NOT parallelized — the per-sample work (a few tree walks) is too
-		// fine-grained, so parallelBuild's per-item channel measured SLOWER than sequential
-		// (§C3: 497µs sequential vs 832µs pooled); parallelism is Fit's lever, not predict's.
 		for t, tree := range m.trees {
-			votes[treeVote[t][tree.root.predict(row).predClass]]++
+			votes[treeVote[t][tree.root.predict(x[i]).predClass]]++
 		}
 		best, bc := 0, -1
 		for k, v := range votes {
@@ -224,6 +227,30 @@ func (m *RandomForestClassifier) Predict(x [][]float64) ([]int, error) {
 		}
 		out[i] = m.classes[best]
 	}
+	nw := runtime.GOMAXPROCS(0)
+	if nw > len(x) {
+		nw = len(x)
+	}
+	if nw <= 1 || len(x)*len(m.trees) < 1<<13 {
+		votes := make([]int, len(m.classes))
+		for i := range x {
+			predictRow(votes, i)
+		}
+		return out, nil
+	}
+	csz := (len(x) + nw - 1) / nw
+	_ = parallelBuild(nw, func(c int) error {
+		lo := c * csz
+		hi := lo + csz
+		if hi > len(x) {
+			hi = len(x)
+		}
+		votes := make([]int, len(m.classes)) // per-worker scratch
+		for i := lo; i < hi; i++ {
+			predictRow(votes, i)
+		}
+		return nil
+	})
 	return out, nil
 }
 
