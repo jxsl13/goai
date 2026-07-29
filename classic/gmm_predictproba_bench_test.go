@@ -32,3 +32,33 @@ func BenchmarkGMMPredictProba_2048x8(b *testing.B) { benchPredictProba(b, 2048, 
 func BenchmarkGMMPredictProba_512x4(b *testing.B)  { benchPredictProba(b, 512, 4) }
 func BenchmarkGMMPredictProba_512x8(b *testing.B)  { benchPredictProba(b, 512, 8) }
 func BenchmarkGMMPredictProba_2048x4(b *testing.B) { benchPredictProba(b, 2048, 4) }
+
+// benchPredictProbaD parametrizes the feature dimension: the fused density kernel
+// reuses each x[j] load across 4 components, so its advantage over per-component
+// scalar logGaussian grows with d (the 2-feature cases above understate it).
+func benchPredictProbaD(b *testing.B, n, k, d int) {
+	rng := rand.New(rand.NewSource(1))
+	x := make([][]float64, n)
+	for i := range x {
+		row := make([]float64, d)
+		for j := range row {
+			row[j] = rng.NormFloat64()
+		}
+		x[i] = row
+	}
+	m := classic.NewGaussianMixture(classic.WithGMMComponents(k), classic.WithGMMSeed(1))
+	if err := m.Fit(x); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if _, err := m.PredictProba(x); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkGMMPredictProba_512x8_d16(b *testing.B) { benchPredictProbaD(b, 512, 8, 16) }
+func BenchmarkGMMPredictProba_512x8_d32(b *testing.B) { benchPredictProbaD(b, 512, 8, 32) }
+func BenchmarkGMMPredictProba_512x8_d64(b *testing.B) { benchPredictProbaD(b, 512, 8, 64) }
