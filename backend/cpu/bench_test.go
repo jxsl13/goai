@@ -65,3 +65,7 @@ func BenchmarkSoftCapF32_4Mx_cpu(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkSoftplusF32_4Mx_cpu(b *testing.B) {
+	benchOn(b, backend.CPU, backend.OpSoftplus, bench.RandF32(tensor.Shape{4096, 1024}, 1))
+}
