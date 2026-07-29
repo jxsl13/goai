@@ -475,3 +475,8 @@ Rationale: The attrs-boxing defect has two forms. The inline-literal form is pro
 WHEN an A/B reports allocation or byte counts that are bit-identical across both arms, the implementing agent SHALL treat that as evidence the benchmark does not execute the changed code and confirm coverage before recording a null result, because a real null moves the count by at least the run-to-run jitter.
 
 Rationale: Batch 2 of the nlp attrs hoist measured identical allocs on both arms of three benchmarks. That read as no effect and actually meant no coverage: BenchmarkCohereDecode builds the float Cohere while every changed file was a quantized path. A genuine null still jitters by a few allocations between runs; an exactly repeated count is the signature of code that never ran. A purpose-built QuantCohereDecodeStep benchmark then showed 1436 to 1392 allocs, deterministic across three rounds.
+
+## PROC-BENCH-ONE-SAMPLE-001
+WHEN a ratio is about to be reported from a benchmark whose single iteration takes tens of milliseconds or more, the implementing agent SHALL raise benchtime until the within-arm spread is smaller than the effect being claimed, and only then report the ratio.
+
+Rationale: MixtralPromptPrefill appeared 1.73x slower after the attrs hoist at benchtime=1x, and the two rounds agreed closely enough to look real. At benchtime=10x the arms were 77.98ms and 78.91ms, no regression at all. One iteration of an 80ms benchmark is one sample, and two such samples per arm can agree by coincidence.
