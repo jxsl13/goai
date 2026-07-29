@@ -197,13 +197,15 @@ func (bt *ballTree) enclose(idx []int) ([]float64, float64) {
 	for j := 0; j < d; j++ {
 		c[j] *= inv
 	}
-	var r float64
+	// sqrt is monotone + correctly-rounded, so max_i sqrt(distSq_i) == sqrt(max_i distSq_i)
+	// bit-for-bit — rank by squared distance and take a single toDist, not one sqrt per point.
+	var rsq float64
 	for _, i := range idx {
-		if dd := bt.dist(c, bt.pts[i]); dd > r {
-			r = dd
+		if dd := bt.distSq(c, bt.pts[i]); dd > rsq {
+			rsq = dd
 		}
 	}
-	return c, r
+	return c, bt.toDist(rsq)
 }
 
 // pruneSlack is a tiny relative+absolute tolerance added to every pruning bound
