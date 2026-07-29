@@ -520,3 +520,8 @@ Rationale: Swin headBias is a pure function of the relative-position Table, whic
 WHEN a code path is found excluded from an optimization for a stated reason (a covariance shape, a dtype, a backend), the implementing agent SHALL check whether that same path is also missing benchmark coverage, and add it before measuring the fix.
 
 Rationale: GMM PredictProba parallel row scan was gated to GMMDiag because the full-covariance kernel used receiver scratch. Full covariance also had NO PredictProba benchmark at all - so the shape that could not be parallelized was the shape nothing measured, and a 5.8x sat unnoticed. The two gaps share a cause: whoever excludes a path from an optimization tends to also not benchmark it. Full-cov was where the work was, its solve being O(d^2) per component against the diagonal O(d).
+
+## PERF-RECEIVER-SCRATCH-BLOCKS-PARALLEL-001
+WHEN a PS6006 receiver-scratch-buffer finding is triaged, the implementing agent SHALL search the file for a parallelism gate that names that buffer as its reason, because the real cost is usually the foreclosed parallelism elsewhere rather than cache contention at the site.
+
+Rationale: GMM logGaussianFullBatch read four solve buffers off the receiver. The cost was not contention in that kernel: it was a gate in PredictProba, dozens of lines away, excluding full covariance from a row-parallel scan and citing exactly those buffers. Passing them in as a parameter yielded 3.1x to 5.8x. A per-call temporary on shared state does not merely slow a call down, it forecloses parallelism, and the symptom appears as a conditional somewhere else in the file.
