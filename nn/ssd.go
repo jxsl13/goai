@@ -84,7 +84,41 @@ func SSDQuadratic(x, a, b, c *tensor.Tensor) (*tensor.Tensor, error) {
 	}
 	crow := make([]float64, n)
 	yrow := make([]float64, d)
-	for i := range T {
+	// b_j and x_j are read inside the O(T²) (i,j) loop, so their AtF64 dispatch — ~20× a
+	// bare multiply — dominates even the O(T³) (already-typed) decay product. Walk their
+	// contiguous rows directly on the F64 fast path (a/c/y stay AtF64: O(T)/O(T·n)/O(T·d),
+	// cheap). Bit-identical: same values, same ascending-k / ascending-dd accumulation.
+	if bs, xs := flatF64(b), flatF64(x); bs != nil && xs != nil {
+		for i := range T {
+			for k := range n {
+				crow[k] = c.AtF64(i, k)
+			}
+			for dd := range d {
+				yrow[dd] = y.AtF64(i, dd)
+			}
+			for j := 0; j <= i; j++ {
+				brow := bs[j*n : j*n+n : j*n+n]
+				var cb float64
+				for k := range n {
+					cb += crow[k] * brow[k]
+				}
+				decay := 1.0
+				for k := j + 1; k <= i; k++ {
+					decay *= arow[k]
+				}
+				m := cb * decay
+				xrow := xs[j*d : j*d+d : j*d+d]
+				for dd := range d {
+					yrow[dd] += m * xrow[dd]
+				}
+			}
+			for dd := range d {
+				y.SetF64(yrow[dd], i, dd)
+			}
+		}
+		return y, nil
+	}
+	for i := range T { // exotic-dtype fallback: b/x via AtF64
 		for k := range n {
 			crow[k] = c.AtF64(i, k)
 		}
