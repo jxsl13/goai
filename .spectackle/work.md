@@ -857,3 +857,22 @@ option: Accept a tolerance-gated fused path for Titans only, with an ADR recordi
 option: Drop it: leave Scan on dispatch and spend the effort on targets that validate bit-exactly
 option: Keep chasing bit-exactness: instrument the exact FMA emission and match it
 choice: Scope down: keep matmuls and the outer product on the backend (bit-exact by construction), fuse only slices, transposes and elementwise — fewer allocations saved, no correctness risk
+
+## R-01KYQPKDVQFN3B8HMW3JBEC8JK Bounded-pool decode fan-out: throughput neutral, 4.5x fewer peak goroutines - and the nesting premise was false
+kind: research
+state: draft
+created: 2026-07-29
+
+MEASURED on darwin/arm64 M2 Pro, go1.26.5, GOMAXPROCS=12, min of 3 per arm, 3 alternations in one session (PROC-INTERLEAVE-001, PROC-BENCH-MINOFN-001).
+
+CONTEXT. A rebase onto main put two parallelization mechanisms in format/gguf/quant_matmul.go side by side: main spawned GOMAXPROCS goroutines per call for the m==1 decode paths, this branch routed the m>1 general path through internal/parallel bounded pool (ADR-01KYMWJ76AFA2). Rather than leave one file with two policies, the decode helper was moved onto the pool and the change measured.
+
+THROUGHPUT: a wash. Q8_0/Q4_K/Q6_K at M1, Q8_0/Q6_K at M16, Q8_0 M1 N4096, and a RunParallel batch benchmark all land inside noise (largest gap 3.6 percent, sign not stable across alternations). Nested prefill (BenchmarkQuantMamba2Prefill_256/_512, mixer parallel, QMatMul inside) also a wash: 1.9 percent one way at 256, 0.5 percent the other at 512.
+
+RESOURCE USAGE: real and reproducible. Eight concurrent decode callers, sampled peak live goroutines - 22 through the pool, 98 and 101 spawning per call, across two alternations each. 4.5x. Aggregate throughput identical, so the bound is free.
+
+THE FALSIFIED PREMISE, which is the durable part. The change was first justified by nesting: main recently parallelized the Mamba2 mixers (PR 577, 578), so QMatMul now runs inside a parallel region and a per-call spawn should give GOMAXPROCS squared goroutines. Measured: 37 peak either way. The reason is that prefill is m>1 and takes the general path, which was ALREADY pooled - the decode helper never runs nested there. The mechanism was right in the abstract and wrong about which code path reaches it. Writing the hypothesis into a code comment before measuring it would have shipped a false explanation attached to a true change.
+
+BOTH PROBES SHIP as regression guards: TestGoroutinePeakConcurrentDecode and BenchmarkQMatMulQ8_0ConcurrentDecode in format/gguf.
+
+GENERALIZABLE, and the reason no perfscan rule follows: the finding is that a goroutine-count claim needs a goroutine-count measurement, and that peak-live-goroutines is cheap to sample (a 20us ticker around the workload). That is a MEASUREMENT METHOD, not a source pattern - an AST scanner can see go inside a func but cannot tell whether that func has concurrent callers, which is the entire question. Flagging every per-call spawn would fire on correct code. Recorded here instead of forced into a rule (PERF-SCANRULE-EMPTY-001 reasoning: a rule that cannot separate the good case from the bad one has no signal).
