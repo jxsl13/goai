@@ -1226,3 +1226,26 @@ The defect was ONE MODULO away from the tested case. An unroll-and-jammed kernel
 HOW IT WAS FOUND. Not by review and not by CI - by acting on PERF-RECEIVER-SCRATCH-BLOCKS-PARALLEL-001, cast the iteration before, which prescribes sweeping PS6006 tree-wide and checking each receiver-scratch finding for a parallelism gate that names it. The sweep listed classic/gmm.go m.yScratch, and tracing what its serialization blocked led straight into the tail. THE SWEEP WAS LOOKING FOR THE NEXT OPTIMIZATION AND FOUND A REGRESSION, which is the better outcome and an argument for running these rule-driven sweeps even when the immediate goal is new work rather than verification.
 
 SCOPE OF THE SWEEP, recorded so it is not repeated: PS6006 reports ten receiver-scratch findings tree-wide. Four are in nn and tree.go, the users parallel lanes, and out of scope. Of the remaining four in classic - gmm.go m.yScratch, dbscan.go m.core, gbm.go b.goLeft, spatialindex.go bt.splitKey - only gmm.go carried a comment naming its buffer as forcing serial execution. The other three are per-call temporaries with no parallelism gate citing them, so under PERF-RECEIVER-SCRATCH-BLOCKS-PARALLEL-001 they are ordinary PS6006 candidates rather than structural blockers, and none is currently hot.
+
+## R-01KYR3YV0HF26ACHX0H4C0NYBG One receiver field gated three optimizations: PredictProba 3.1-5.8x, Fit 1.27x/2.69x, and PS6006 tracked its own resolution to zero
+kind: research
+state: draft
+created: 2026-07-29
+
+Completes the GMM arc opened in R-01KYR2YAEBE4Z and corrected in R-01KYR3CE7BFQ4. Measured on darwin/arm64 M2 Pro, go1.26.5, GOMAXPROCS=12, three to four interleaved rounds, all ranges disjoint.
+
+CUMULATIVE, from moving two scratch buffers off the receiver:
+  PredictProba full-cov  3.14x / 4.57x / 5.84x  (512x8 d16, 512x8 d32, 2048x8 d32)
+  Fit diagonal           1.27x  (11.28-11.57ms -> 8.90-9.10ms)
+  Fit full covariance    2.69x  (47.57-52.09ms -> 17.67-18.19ms)
+Full covariance gains most everywhere: its O(d^2) triangular solve dominates and parallelizes cleanly against the diagonal form O(d).
+
+THE STRUCTURAL POINT, now demonstrated three times over: a per-call temporary on a receiver field does not cost cache contention, it FORECLOSES parallelism, and the cost appears as a serial gate somewhere else in the file. Two fields - yScratch4 and yScratch - between them gated the full-covariance PredictProba row scan and the E-step for both covariance shapes. Neither gate was about the math; rows were always independent. Removing the fields removed three gates.
+
+BIT-IDENTITY, where it had to be earned. The E-step running log-likelihood total is the only cross-sample dependency, so it becomes norms[i] summed AFTER the loop in ascending sample order - a chunked reduction would reassociate. n extra words against O(n*k*d) work.
+
+THE PROOF IS A PANIC-PROBED GOLDEN TEST. The package golden test pins Fit output bit-exactly, but a golden test that only runs the serial branch proves nothing about the concurrent one, so the parallel body was panic-probed to confirm the golden case actually reaches it. This is the third time this session that a probe was needed to establish a passing test was not vacuous, and the pattern is consistent: whenever a change adds a guarded second path, the test that covers it must be proven to enter it.
+
+PS6006 TRACKED THE ENTIRE ARC AND NOW REPORTS ZERO in gmm.go: two findings, then one after the PredictProba work exposed the k%4 tail, now none. A rule measuring its own resolution is the property PS6019 deliberately lacks - that one is a standing maintenance hazard rather than a closable defect, and the contrast is worth keeping in mind when deciding whether a new rule should have a quiet state.
+
+SWEEP RESULTS, recorded so they are not repeated. PS6019 (jam-tail-delegates), built this iteration from the shipped race, finds ONE candidate tree-wide - the GMM kernel itself. PS6012 (inconsistent-fma-pinning) finds ZERO across classic, linalg, vision, nlp and rl, so the other stale-tail-property class is clean in my lanes. The tail-hazard sweep is therefore complete: one known delegating tail, no pinning divergence.
