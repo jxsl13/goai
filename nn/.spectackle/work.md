@@ -164,3 +164,47 @@ Nothing here approaches the gguf case, where the flagged loop WAS the decode ste
 A SINGLE-RUN SCARE, recorded because the reflex it tests is the point. BenchmarkSOAPStepOnly read 8.06ms in a one-shot run at -benchtime 20x, against 6.1ms published after parallelizing it — which looks exactly like a change lost to one of the many rebases this branch has taken. It was not: min of 3 at 60x gives 7.83ms at one core and 5.99ms at twelve, a 1.31x that matches the published 1.32x, and the parallel call sites are all still present. The 8.06 was an un-warmed single sample.
 
 That is the third time in this campaign a single run has produced a misleading number (after CholeskyVJP's 0.88x and GBM exact's 0.93x), and the second time it nearly became a claim. PROC-BENCH-MINOFN-001 exists for this; the useful habit is applying it to alarming readings as readily as to favorable ones, since an apparent REGRESSION is exactly the reading one is least inclined to re-measure before reporting.
+
+## R-01KYPCPWZ9EDYRNWF6J9JHF78Y Sinkhorn register-blocked 2.80x; axpy variant measured and rejected; KDA/NSA baselined
+kind: research
+state: draft
+created: 2026-07-29
+
+Sinkhorn, KDA and NSA had no benchmarks at all, so their PS6010 findings
+(output-invariant-operand-reload) could be neither acted on nor declined. Benchmarks now
+exist in nn/sparse_bench_test.go, and all five flagged sites were panic-probed to confirm
+the benchmarks actually enter the flagged loops before any number was trusted.
+
+SHIPPED -- Sinkhorn, 2.80x total, allocs 521 -> 9 at 512x512:
+Host M2 Pro darwin/arm64 go1.26.5 GOMAXPROCS=12; interleaved, 3 alternations, min of 3 runs
+per arm, within-arm spread 0.3%.
+  256x256 / 50 iters   9.05ms -> 3.86ms   2.28-2.36x
+  512x512 / 50 iters  34.83ms -> 12.50ms  2.78-2.83x
+Two changes. (1) Register-block both half-iterations 4 ways over the OUTPUT index. The
+Kt-u half gained more than the K-v half because k is row-major and accumulating a column
+touches one cache line per row while using one of its eight doubles; four adjacent output
+columns per pass reuse the line already paid for. (2) Flatten k from [][]float64 to a
+single [m*n] buffer (PS4006), worth a further 1.06x and collapsing m row allocations into
+one. Bit-identity holds because blocking the OUTPUT index leaves every accumulator walking
+its reduction axis in ascending order; nn/sinkhorn_golden_test.go pins this against an
+in-test transcription of the unblocked form compared on raw float64 bits, at sizes covering
+every remainder class of a 4-way unroll on both axes.
+
+REJECTED -- axpy rewrite of the transposed half:
+Replacing the column walk with a scatter into an acc[] vector touches k ONCE in memory
+order instead of once per output block. It is bit-identical (acc[j] still sums over
+ascending i) and beats the original 2.39x, but it LOSES to register blocking: 14.60ms vs
+13.34ms at 512, all three alternations, within-arm spread 1.2%. The premise was wrong.
+512^2 f64 is 2MB and resident in this machine's L2, so the repeated passes cost no DRAM
+traffic, while acc[j] forces a store-to-load round trip per FMA where four register
+accumulators do not. Not taken.
+
+STILL OPEN: the three remaining PS6010 sites. kda.go:78 is a clean matvec shape over S and
+kt and should block straightforwardly. nsa.go:72 additionally carries a max reduction that
+must be folded across the four accumulators. nsa.go:130 is the weakest candidate -- its
+inner loop calls k.AtF64 per element and takes a keep(j) callback with a continue, so
+per-element dispatch and the indirect call dominate the shared-operand reload the rule is
+pointing at; it should be triaged as PS1001 rather than blocked.
+
+Baselines for the remaining two: KDA seq512/dk64/dv64 5.23ms, 10 allocs; NSABranches
+seq512/dm128/heads4/block32 188ms, 14611 allocs.

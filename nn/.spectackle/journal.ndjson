@@ -26,3 +26,4 @@
 {"t":"2026-07-28T21:55:18Z","eid":"7ccd4174f3eb3671","ag":"ag-0234","ev":"create","id":"T-01KYNBK6PAFA5SCPX7W1SP3BW7","k":"task","ti":"Benchmark sinkhorn, kda and nsa — PS6005 flags them but nothing can validate a change","dir":"nn"}
 {"t":"2026-07-28T21:55:19Z","eid":"0020b358e285c175","ag":"ag-c447","ev":"create","id":"R-01KYNBK7Z7FF0TMW19APKKQQ1R","k":"research","ti":"PS6005 triage: 14 sites in this lane, all low-leverage or unmeasurable — and a single-run scare that was not real","dir":"nn"}
 {"t":"2026-07-28T21:56:01Z","eid":"ff9c4595f28d03bc","ag":"ag-e212","ev":"move","id":"T-01KYNBK6PAFA5SCPX7W1SP3BW7","dir":"nn","fr":"draft","to":"active"}
+{"t":"2026-07-29T07:34:02Z","eid":"a3d44314ed6e4c77","ag":"ag-9aca","ev":"create","id":"R-01KYPCPWZ9EDYRNWF6J9JHF78Y","k":"research","ti":"Sinkhorn register-blocked 2.80x; axpy variant measured and rejected; KDA/NSA baselined","dir":"nn"}
