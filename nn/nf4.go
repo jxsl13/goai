@@ -27,13 +27,33 @@ func NF4Code(idx int) float64 { return nf4Codes[idx] }
 // nearestNF4 returns the index of the codebook value closest to x (argmin, lowest
 // index on ties). x is expected in [-1,1] (block-normalized).
 func nearestNF4(x float64) uint8 {
-	best, bestD := 0, math.Inf(1)
-	for i, c := range nf4Codes {
-		if d := math.Abs(x - c); d < bestD {
-			best, bestD = i, d
+	// nf4Codes is sorted ascending, so the nearest entry is always one of the two that
+	// bracket x — binary-search the insertion point and compare that pair, instead of a
+	// 16-way linear argmin scan. Bit-identical to the scan: for strictly-increasing codes
+	// the bracketing pair IS the global argmin, and picking the lower index when the two
+	// distances tie reproduces the scan's "lowest index on ties" (d < bestD is strict).
+	lo, hi := 0, len(nf4Codes)
+	for lo < hi {
+		mid := int(uint(lo+hi) >> 1)
+		if nf4Codes[mid] < x {
+			lo = mid + 1
+		} else {
+			hi = mid
 		}
 	}
-	return uint8(best)
+	// hi = first index with nf4Codes[hi] >= x (0..16).
+	if hi == 0 {
+		return 0
+	}
+	if hi == len(nf4Codes) {
+		return uint8(len(nf4Codes) - 1)
+	}
+	// codes[hi-1] < x <= codes[hi], so |x-codes[hi-1]| = x-codes[hi-1] and
+	// |x-codes[hi]| = codes[hi]-x (both bit-identical to the scan's math.Abs).
+	if x-nf4Codes[hi-1] <= nf4Codes[hi]-x {
+		return uint8(hi - 1)
+	}
+	return uint8(hi)
 }
 
 // QuantizeNF4 block-quantizes w to NF4 (QLoRA §3): each block of blockSize values
