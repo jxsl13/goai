@@ -192,7 +192,7 @@ func bestGBMSplit(x [][]float64, y []float64, idx []int, minLeaf int) (feat int,
 		// REFERENCE IMPLEMENTATION — deliberately left simple. gbmBuilder is the
 		// production grower and is validated bit-identical against this one; optimizing
 		// an oracle defeats its purpose. Reachable only from gbm_test.go.
-		//perfscan:ignore PS3002,PS3005 reference implementation the production grower is checked against
+		//perfscan:ignore PS3002,PS3005,PS6009 reference implementation the production grower is checked against
 		sort.Slice(sorted, func(a, b int) bool { return x[sorted[a]][ff] < x[sorted[b]][ff] })
 		var leftSum float64
 		for k := 0; k < n-1; k++ {

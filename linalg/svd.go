@@ -2,7 +2,7 @@ package linalg
 
 import (
 	"math"
-	"sort"
+	"slices"
 
 	"github.com/jxsl13/goai/tensor"
 )
@@ -97,7 +97,19 @@ func SVD(a *tensor.Tensor) (u, s, v *tensor.Tensor, err error) {
 	for i := range order {
 		order[i] = i
 	}
-	sort.SliceStable(order, func(a, b int) bool { return sigma[order[a]] > sigma[order[b]] })
+	// SortStableFunc, not SortFunc: this comparator orders on sigma alone and relies on
+	// stability to keep equal singular values in their original index order, which is what
+	// makes the returned basis reproducible. sort.SliceStable reaches its swap through
+	// reflectlite.Swapper and ALLOCATES on every call (PS6009), once per SVD.
+	slices.SortStableFunc(order, func(x, y int) int {
+		switch a, b := sigma[x], sigma[y]; {
+		case a > b:
+			return -1
+		case a < b:
+			return 1
+		}
+		return 0
+	})
 
 	uMat := make([]float64, m*n)
 	sVec := make([]float64, n)
