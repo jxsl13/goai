@@ -50,3 +50,10 @@ func BenchmarkSigmoidF64_64K_cpu(b *testing.B) {
 func BenchmarkAddBiasF32_512x1024_cpu(b *testing.B) {
 	benchOn(b, backend.CPU, backend.OpAddBias, bench.RandF32(tensor.Shape{512, 1024}, 1), bench.RandF32(tensor.Shape{1024}, 2))
 }
+
+func BenchmarkDoRAWeightF64_1024x1024_cpu(b *testing.B) {
+	benchOn(b, backend.CPU, backend.OpDoRAWeight, bench.RandF64(tensor.Shape{1024, 1024}, 1), bench.RandF64(tensor.Shape{1024}, 2))
+}
+func BenchmarkDoRAWeightF32_1024x1024_cpu(b *testing.B) {
+	benchOn(b, backend.CPU, backend.OpDoRAWeight, bench.RandF32(tensor.Shape{1024, 1024}, 1), bench.RandF32(tensor.Shape{1024}, 2))
+}
