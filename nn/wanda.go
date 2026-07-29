@@ -1,9 +1,10 @@
 package nn
 
 import (
+	"cmp"
 	"fmt"
 	"math"
-	"sort"
+	"slices"
 
 	"github.com/jxsl13/goai/tensor"
 )
@@ -93,11 +94,19 @@ func WandaPrune(w, x *tensor.Tensor, sparsity float64) (pruned, mask *tensor.Ten
 		// ascending by score, ties broken by input index for determinism. The total-order
 		// comparator (score, then index) lets the faster unstable sort reproduce the stable
 		// order exactly (indices are unique), and reads the hoisted col instead of dispatching.
-		sort.Slice(idx, func(a, b int) bool {
-			if ca, cb := col[idx[a]], col[idx[b]]; ca != cb {
-				return ca < cb
+		//
+		// slices.SortFunc rather than sort.Slice: the latter reaches its swap through
+		// reflectlite.Swapper, which ALLOCATES on every call (PS6009). This runs once per
+		// output column — 2048 times for a 2048-wide layer. Same comparator, same total
+		// order, so the resulting permutation is identical.
+		slices.SortFunc(idx, func(x, y int) int {
+			if cx, cy := col[x], col[y]; cx != cy {
+				if cx < cy {
+					return -1
+				}
+				return 1
 			}
-			return idx[a] < idx[b]
+			return cmp.Compare(x, y)
 		})
 	}
 	// Typed fast paths: read the score column and write the kept weights / mask through
@@ -201,8 +210,21 @@ func WandaPruneNM(w, x *tensor.Tensor, n, m int) (pruned, mask *tensor.Tensor, e
 	drop := make([]bool, m)   // reused per block
 	// gsc[grp[·]-base] is the score of grp[·]; the SliceStable over identical values in
 	// identical (input) order reproduces the original ordering exactly.
+	// SortStableFunc, not SortFunc: this comparator is NOT total — it orders on the score
+	// alone and relies on stability to keep equal scores in input order, which the comment
+	// above depends on. sort.SliceStable would reach its swap through reflectlite.Swapper
+	// and allocate on EVERY call (PS6009), and this runs once per block per output —
+	// upwards of two million times for a 2048-wide layer at 2:4.
 	sortGrp := func(base int) {
-		sort.SliceStable(grp, func(a, b int) bool { return gsc[grp[a]-base] < gsc[grp[b]-base] })
+		slices.SortStableFunc(grp, func(x, y int) int {
+			switch a, b := gsc[x-base], gsc[y-base]; {
+			case a < b:
+				return -1
+			case a > b:
+				return 1
+			}
+			return 0
+		})
 	}
 	sf64 := s.Storage()
 	if wsF := flatF64(w); wsF != nil {

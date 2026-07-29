@@ -6288,7 +6288,13 @@ func permutationCopy(body *ast.BlockStmt, ix *ast.IndexExpr) bool {
 		if !ok || as.Tok != token.ASSIGN || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
 			return true
 		}
-		if as.Lhs[0] != ast.Expr(ix) && as.Rhs[0] != ast.Expr(ix) {
+		// Only when the flagged index is the WRITE. A transpose is flagged on its
+		// destination, because that is where the inner loop variable is scaled
+		// (dst[j*a+i]). A GATHER is flagged on its source — col[j] = ss[j*cout+o] writes
+		// contiguously and only reads strided — and that is fixable by transposing the
+		// source once, so it must not be suppressed. Suppressing both was a false
+		// negative that hid a 4.2M-strided-read loop in Wanda.
+		if as.Lhs[0] != ast.Expr(ix) {
 			return true
 		}
 		// The destination is exactly one indexed write; the source is a single read —
