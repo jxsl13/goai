@@ -1,29 +1,38 @@
 package nn
 
 import (
+	"math"
 	"testing"
 
 	"github.com/jxsl13/goai/tensor"
 )
 
-// BenchmarkMemAddSegment measures folding a key/value segment into the Memorizing
-// Transformer's memory bank (cap = one segment, so it reaches the add-then-evict steady
-// state). Each row still needs its own retained backing slice, but the detaching copy
-// takes the typed contiguous path instead of m.dim per-element AtF64 dispatches per row.
-func BenchmarkMemAddSegment(b *testing.B) {
-	const s, dim = 128, 512
-	mem := newMemMemory(dim, s)
-	k := tensor.New(tensor.F64, tensor.Shape{s, dim})
-	v := tensor.New(tensor.F64, tensor.Shape{s, dim})
-	kf, vf := k.Storage().F64(), v.Storage().F64()
-	for i := range kf {
-		kf[i] = 0.01 * float64(i%17)
-		vf[i] = 0.01 * float64(i%13)
+// BenchmarkMemGather covers memory retrieval + neighbour gather (retrieveHead sort
+// + gather typed copy) for one head: memory=2048 rows, dim=512, headDim=64,
+// query segment T=128, topM=32, F64.
+func BenchmarkMemGather(b *testing.B) {
+	const n, dim, headDim, tSeg, topM = 2048, 512, 64, 128, 32
+	m := &MemMemory{dim: dim, cap: n}
+	m.keys = make([][]float64, n)
+	m.vals = make([][]float64, n)
+	for i := range m.keys {
+		kr := make([]float64, dim)
+		vr := make([]float64, dim)
+		for d := range kr {
+			kr[d] = math.Sin(float64(i*dim+d) * 0.001)
+			vr[d] = math.Cos(float64(i*dim+d) * 0.0013)
+		}
+		m.keys[i], m.vals[i] = kr, vr
+	}
+	qh := tensor.New(tensor.F64, tensor.Shape{tSeg, headDim})
+	qs := qh.Storage().F64()
+	for i := range qs {
+		qs[i] = math.Sin(float64(i) * 0.007)
 	}
 	b.ReportAllocs()
-	for b.Loop() {
-		if err := mem.AddSegment(k, v); err != nil {
-			b.Fatal(err)
-		}
+	b.ResetTimer()
+	for range b.N {
+		kg, vg := m.gather(tensor.F64, qh, 0, headDim, topM)
+		_, _ = kg, vg
 	}
 }
