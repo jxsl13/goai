@@ -490,3 +490,8 @@ Rationale: PS6017 compares parameter types as rendered text. exprText has no Sta
 WHEN an A/B arm reports no change in allocations, the implementing agent SHALL distinguish the two kinds before recording it: an EXACTLY repeated count across arms means the benchmark never ran the changed code, while an overlapping jittery range means the effect is real but below that benchmark noise floor.
 
 Rationale: A batch of 238 exec1-to-exec2 swaps showed no change on QuantLlamaGenerate500 (283397/283413/283397 against 283399/283405/283403) and a clear -1.8% on QuantCohereDecodeStep. The llama null is genuine: quant_llama.go got two swaps, both in Forward, and Generate steps the prompt through DecodeStep instead. Two batches earlier an identical-looking null was a coverage gap, and the signature there was counts repeating EXACTLY across arms because the code never executed. Both render as zero in a summary and they call for opposite responses - write a covering benchmark, or accept the effect is negligible there.
+
+## PROC-BENCH-BIMODAL-001
+WHEN a benchmark on this host shows a multi-fold spread WITHIN a single arm across rounds, the implementing agent SHALL make no timing claim from it in either direction and say so explicitly, using it only for allocation and byte counts which stay deterministic.
+
+Rationale: MixtralPromptStepwise ranged 166ms to 519ms within one arm on the same host while its allocation counts held to five parts in 127720. A min-of-N over a bimodal distribution reports whichever arm happened to catch the fast mode, which is how an earlier round produced an apparent 1.73x regression that did not exist. The allocation axis remained usable throughout.
