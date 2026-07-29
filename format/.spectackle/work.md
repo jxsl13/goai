@@ -253,3 +253,43 @@ those kernels. Four kernels became unreachable and every benchmark stayed green.
 that passes over dead code is not a merge safety net. The Q6_K and Q2_K benchmarks added
 alongside the fix are the durable guard — if the kernels are orphaned again, those regress by
 about 2x.
+
+## R-01KYQM97E6FQ0893WW8ADCB4ZJ Q3_K decode gap is the format, not a defect: branchless rewrite measured 1.00x and reverted
+kind: research
+state: draft
+created: 2026-07-29
+
+Q3_K is the sole remaining outlier in the QMatMul decode matrix at 4415 MB/s against
+6998-10725 for every other supported type. Investigated and left alone: the gap is the
+format, not a missing optimization.
+
+WHAT WAS TRIED AND MEASURED AS A NULL: the inner loop selects the high-bit offset with four
+`if hmask&m != 0 { h = 0 }` tests per element, one per blocked row — 256 elements per
+superblock times four rows is about a thousand data-dependent branches per superblock, which
+a predictor cannot learn. Rewriting them branchlessly as `4 - 4*int((h>>bit)&1)` measured
+EXACTLY 1.00x across three alternations (61.1 -> 60.9, 61.8 -> 61.9, 61.3 -> 61.4 us).
+Reverted.
+
+The reason is worth keeping: Go's compiler already emits conditional selects for that `if`
+shape on arm64. The "branchless rewrite" optimized something the compiler had done, and the
+identical timing is the evidence. Source-level branch elimination is not worth attempting
+before checking whether the branch survives compilation.
+
+WHY THE GAP IS STRUCTURAL: Q3_K carries the LEAST memory traffic of the three K-quants
+measured here — 3.44 bits/element against Q4_0's 4.50 and Q6_K's 6.56 — and is still the
+slowest. That rules out bandwidth and points at per-element unpacking work. Q3_K splits each
+weight across a 2-bit field and a separate high-bit plane, and applies two-level scales, so
+every element costs two shift-and-mask extractions plus a scale multiply where Q4_0 costs one.
+That is the format's definition, not an implementation defect.
+
+WHAT REMAINS POSSIBLE, and is NOT a small change: the high-bit plane could be expanded once
+per superblock into a byte array, trading 256 bytes of scratch for one extraction per element
+instead of two. That is a different shape of work from the register blocking that fixed Q4_K
+and Q4_0, it needs its own bit-identity argument, and on this evidence it would be chasing the
+smaller half of a compute-bound loop. Not booked as a task because the expected value does not
+justify the correctness surface; recorded so the next person can weigh it with the numbers
+rather than rediscover them.
+
+CONTEXT: the two wins that preceded this (Q4_K 2525 -> 7525 MB/s, Q4_0 3567 -> 10725) came
+from types that were MISSING register blocking entirely. Q3_K already has it. The matrix
+having one slow entry left does not imply another 2x is sitting there.
