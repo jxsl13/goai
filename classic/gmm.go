@@ -302,7 +302,7 @@ func (m *GaussianMixture) eStep(x [][]float64, resp, logResp [][]float64) (float
 				lr[c] = logW[c] + ldBuf[c]
 			}
 		} else {
-			m.logGaussianFullBatch(row, ldBuf) // unroll-and-jam over components
+			m.logGaussianFullBatch(row, ldBuf, &m.yScratch4) // unroll-and-jam over components
 			for c := range k {
 				lr[c] = logW[c] + ldBuf[c]
 			}
@@ -591,7 +591,11 @@ func (m *GaussianMixture) logGaussian(x []float64, c int) (float64, error) {
 // solve subtracts l_c[i][j]·y_c[j] in the same ascending j order, y_c[i]=s·id_c[i]
 // is unchanged, quad accumulates y_c[i]² in the same ascending i order, and the
 // final -0.5·(d·log2π+quad) − logDetHalf op sequence is untouched.
-func (m *GaussianMixture) logGaussianFullBatch(x []float64, ld []float64) {
+// The four solve buffers are a PARAMETER, not m.yScratch4. As a receiver field they were a
+// per-call temporary on shared state (PS6006), and that single fact was what pinned GMMFull to
+// the serial path in PredictProba — the gate there named this buffer as the reason. Passing
+// them in lets each worker own a set.
+func (m *GaussianMixture) logGaussianFullBatch(x []float64, ld []float64, y4 *[4][]float64) {
 	d := m.nFeat
 	k := m.cfg.k
 	const log2pi = 1.8378770664093453
@@ -601,7 +605,7 @@ func (m *GaussianMixture) logGaussianFullBatch(x []float64, ld []float64) {
 		l0, l1, l2, l3 := m.chol[c], m.chol[c+1], m.chol[c+2], m.chol[c+3]
 		id0, id1, id2, id3 := m.invCholDiag[c], m.invCholDiag[c+1], m.invCholDiag[c+2], m.invCholDiag[c+3]
 		mu0, mu1, mu2, mu3 := m.Means[c], m.Means[c+1], m.Means[c+2], m.Means[c+3]
-		y0, y1, y2, y3 := m.yScratch4[0], m.yScratch4[1], m.yScratch4[2], m.yScratch4[3]
+		y0, y1, y2, y3 := y4[0], y4[1], y4[2], y4[3]
 		for i := range d {
 			xi := x[i]
 			s0 := xi - mu0[i]
@@ -711,7 +715,7 @@ func (m *GaussianMixture) ScoreSamples(x [][]float64) ([]float64, error) {
 				buf[c] = logW[c] + buf[c]
 			}
 		} else {
-			m.logGaussianFullBatch(row, buf) // unroll-and-jam over components
+			m.logGaussianFullBatch(row, buf, &m.yScratch4) // unroll-and-jam over components
 			for c := range k {
 				buf[c] = logW[c] + buf[c]
 			}
@@ -753,7 +757,7 @@ func (m *GaussianMixture) PredictProba(x [][]float64) ([][]float64, error) {
 	}
 	out := make([][]float64, len(x))
 	diag := m.cfg.covariance == GMMDiag
-	rowBody := func(lr []float64, i int) error {
+	rowBody := func(lr []float64, y4 *[4][]float64, i int) error {
 		// Fused density: the per-component scalar logGaussian calls collapse into the
 		// unroll-and-jammed batch kernel ScoreSamples already uses — x[j] is loaded once
 		// and reused across 4 components, breaking the single-accumulator FADD/FSUB chain,
@@ -764,7 +768,7 @@ func (m *GaussianMixture) PredictProba(x [][]float64) ([][]float64, error) {
 		if diag {
 			m.logGaussianDiagBatch(x[i], lr)
 		} else {
-			m.logGaussianFullBatch(x[i], lr)
+			m.logGaussianFullBatch(x[i], lr, y4)
 		}
 		for c := range k {
 			lr[c] = logW[c] + lr[c]
@@ -774,19 +778,23 @@ func (m *GaussianMixture) PredictProba(x [][]float64) ([][]float64, error) {
 		out[i] = o
 		return nil
 	}
-	// Rows are independent for GMMDiag: logGaussian(diag) only READS per-component
-	// params (Means/invCov/logDetHalf), out[i]/o are per-sample, and lr is made PER
-	// WORKER — so chunk the row loop across GOMAXPROCS bit-identically to the serial
-	// scan. GMMFull stays SERIAL: its logGaussian reuses the shared m.yScratch solve
-	// buffer, so concurrent calls would race. Serial below a small work threshold too.
+	// Rows are independent for BOTH covariance shapes: the density kernels only READ the
+	// per-component params (Means/invCov/chol/logDetHalf), out[i] and o are per-sample, and
+	// lr plus the four full-cov solve buffers are made PER WORKER — so chunking the row loop
+	// across GOMAXPROCS is bit-identical to the serial scan.
+	//
+	// GMMFull used to be excluded here, and the reason was not the math: its batch kernel read
+	// four solve buffers off the receiver, so concurrent calls would have raced on them. That
+	// buffer is now a parameter, which removes the only obstacle. The work threshold still
+	// keeps small inputs serial.
 	nw := runtime.GOMAXPROCS(0)
 	if nw > len(x) {
 		nw = len(x)
 	}
-	if nw <= 1 || m.cfg.covariance != GMMDiag || len(x)*k < 1<<11 {
+	if nw <= 1 || len(x)*k < 1<<11 {
 		lr := make([]float64, k)
 		for i := range x {
-			if err := rowBody(lr, i); err != nil {
+			if err := rowBody(lr, &m.yScratch4, i); err != nil {
 				return nil, err
 			}
 		}
@@ -800,8 +808,14 @@ func (m *GaussianMixture) PredictProba(x [][]float64) ([][]float64, error) {
 			hi = len(x)
 		}
 		lr := make([]float64, k) // per-worker scratch
+		var y4 [4][]float64      // per-worker full-cov solve buffers
+		if m.cfg.covariance == GMMFull {
+			for t := range y4 {
+				y4[t] = make([]float64, m.nFeat)
+			}
+		}
 		for i := lo; i < hi; i++ {
-			if err := rowBody(lr, i); err != nil {
+			if err := rowBody(lr, &y4, i); err != nil {
 				return err
 			}
 		}

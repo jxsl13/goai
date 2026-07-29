@@ -62,3 +62,36 @@ func benchPredictProbaD(b *testing.B, n, k, d int) {
 func BenchmarkGMMPredictProba_512x8_d16(b *testing.B) { benchPredictProbaD(b, 512, 8, 16) }
 func BenchmarkGMMPredictProba_512x8_d32(b *testing.B) { benchPredictProbaD(b, 512, 8, 32) }
 func BenchmarkGMMPredictProba_512x8_d64(b *testing.B) { benchPredictProbaD(b, 512, 8, 64) }
+
+// benchPredictProbaFull is the FULL-COVARIANCE variant, which had no benchmark at all.
+// PredictProba's parallel row scan was gated to GMMDiag, and the stated reason was that the
+// full-cov density kernel read its four triangular-solve buffers off the receiver — so the one
+// covariance shape that could not be parallelized was also the one nothing measured. Full-cov
+// is where the work is: the solve is O(d^2) per component against the diagonal form's O(d).
+func benchPredictProbaFull(b *testing.B, n, k, d int) {
+	rng := rand.New(rand.NewSource(1))
+	x := make([][]float64, n)
+	for i := range x {
+		row := make([]float64, d)
+		for j := range row {
+			row[j] = rng.NormFloat64()
+		}
+		x[i] = row
+	}
+	m := classic.NewGaussianMixture(classic.WithGMMComponents(k), classic.WithGMMSeed(1),
+		classic.WithGMMCovariance(classic.GMMFull))
+	if err := m.Fit(x); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if _, err := m.PredictProba(x); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkGMMPredictProbaFull_512x8_d16(b *testing.B)  { benchPredictProbaFull(b, 512, 8, 16) }
+func BenchmarkGMMPredictProbaFull_512x8_d32(b *testing.B)  { benchPredictProbaFull(b, 512, 8, 32) }
+func BenchmarkGMMPredictProbaFull_2048x8_d32(b *testing.B) { benchPredictProbaFull(b, 2048, 8, 32) }
