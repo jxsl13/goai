@@ -1207,3 +1207,22 @@ THE COMPOUNDING GAP. Full covariance had NO PredictProba benchmark at all. So th
 BIT-IDENTITY TESTED THROUGH THE REAL GATE rather than a flag: the paths are selected by a work threshold, so the test compares a batch above it against the same rows fed one at a time below it. Race detector clean.
 
 METHOD NOTE. This target was NOT found by profiling or by a scan rule sweep - both had been applied to the packages I own and were largely harvested. It came from re-reading my own deferred task list. Two of the last three iterations opened by profiling a benchmark-matrix outlier; this one opened by asking what I had explicitly postponed and why the reason no longer held.
+
+## R-01KYR3CE7BFQ4SDY12MFJJ0WJ3 A PS6006 sweep looking for the next optimization found a race I had shipped one commit earlier
+kind: research
+state: draft
+created: 2026-07-29
+
+CORRECTS R-01KYR2YAEBE4Z. The GMM full-covariance parallelization measured 3.1x-5.8x and was correct for the cases it tested; it was NOT correct in general.
+
+THE BUG. logGaussianFullBatch is unroll-and-jammed by four over the component index and finishes the remainder by calling the scalar logGaussian. Parallelizing PredictProba required moving the batch kernel four triangular-solve buffers off the receiver - which was done - but the TAIL call still read its own forward-substitution buffer off the receiver. So the parallel row scan raced for any component count not a multiple of four.
+
+WHY THE VALIDATION MISSED IT, and this is the transferable part. Every benchmark and every test in that change used k=8. The k%4 tail therefore never executed, and:
+  - the race detector cannot flag a line that does not run;
+  - the parity test compared parallel against serial on a path where the tail was empty, so it agreed for the wrong reason;
+  - go vet and the build see nothing, since the receiver field is legitimately typed.
+The defect was ONE MODULO away from the tested case. An unroll-and-jammed kernel has two code paths, the wide one and the scalar remainder, and a fix applied to the wide one does not reach the tail - but a test at a convenient trip count never notices. Cast as PROC-UNROLL-TAIL-COVERAGE-001. A k=5,6,7 test now reports four DATA RACEs against the old tail, and the fix passes with the speedups unchanged.
+
+HOW IT WAS FOUND. Not by review and not by CI - by acting on PERF-RECEIVER-SCRATCH-BLOCKS-PARALLEL-001, cast the iteration before, which prescribes sweeping PS6006 tree-wide and checking each receiver-scratch finding for a parallelism gate that names it. The sweep listed classic/gmm.go m.yScratch, and tracing what its serialization blocked led straight into the tail. THE SWEEP WAS LOOKING FOR THE NEXT OPTIMIZATION AND FOUND A REGRESSION, which is the better outcome and an argument for running these rule-driven sweeps even when the immediate goal is new work rather than verification.
+
+SCOPE OF THE SWEEP, recorded so it is not repeated: PS6006 reports ten receiver-scratch findings tree-wide. Four are in nn and tree.go, the users parallel lanes, and out of scope. Of the remaining four in classic - gmm.go m.yScratch, dbscan.go m.core, gbm.go b.goLeft, spatialindex.go bt.splitKey - only gmm.go carried a comment naming its buffer as forcing serial execution. The other three are per-call temporaries with no parallelism gate citing them, so under PERF-RECEIVER-SCRATCH-BLOCKS-PARALLEL-001 they are ordinary PS6006 candidates rather than structural blockers, and none is currently hot.
