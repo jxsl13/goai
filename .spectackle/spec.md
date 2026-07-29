@@ -406,3 +406,6 @@ IF a fused loop claims bit-exactness against a multi-op dispatch path, THEN the 
 
 ## PROC-BENCH-CACHE-THRESHOLD-001
 IF a benchmark validates a memory-access optimization (interchange, blocking, relayout), THEN the implementer SHALL report at least two sizes, one whose working set exceeds cache: SymEig measured 1.05x at n=64 (32KB, resident) and 1.89x at n=128.
+
+## PERF-FUSED-PATH-CHAIN-001
+IF a fused path must reproduce the bits of more than about five chained backend ops, THEN the implementer SHALL scope it down or record an ADR before starting, since every op's rounding must be replicated (see R-01KYQ9CQ3XE1D).
