@@ -49,18 +49,26 @@ func (s *Sampler) applyDRY(logits []float64, history []int) {
 		breaker[b] = true
 	}
 	L := len(window)
+	// Precompute breaker membership for each window position ONCE (L map probes)
+	// so the O(L²) suffix scan below indexes a dense []bool instead of hashing the
+	// breaker map in its innermost loop (was L² map lookups). Bit-identical:
+	// brk[j] == breaker[window[j]] by construction.
+	brk := make([]bool, L)
+	for j, t := range window {
+		brk[j] = breaker[t]
+	}
 	// For each earlier position i: k = longest common suffix of window[:i] and
 	// window[:L] not crossing a breaker. Continuing with window[i] would extend
 	// that k-repetition, so window[i] is penalized by multiplier·base^(k−allowed).
 	pen := map[int]float64{}
 	for i := 0; i < L; i++ {
 		tok := window[i]
-		if tok < 0 || tok >= len(logits) || breaker[tok] {
+		if tok < 0 || tok >= len(logits) || brk[i] {
 			continue
 		}
 		k := 0 // longest common suffix of window[:i] and window[:L] (overlap allowed,
 		// as in the reference implementation — short-period loops must count fully)
-		for k < i && k < L-1 && window[i-1-k] == window[L-1-k] && !breaker[window[i-1-k]] {
+		for k < i && k < L-1 && window[i-1-k] == window[L-1-k] && !brk[i-1-k] {
 			k++
 		}
 		if k < allowed {
