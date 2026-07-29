@@ -179,3 +179,38 @@ COST: allocs per decode step 102 -> 111, the pool's per-call barrier escaping to
 GATE FOR ALL OF IT: TestQMatMulFusedDecodeMatchesGeneralPathExactly, which runs one activation row as m==1 and as row 0 of m==2 and demands exact equality — production as its own oracle. It replaced a suite that compared only against a float reference at 1e-5, under which a sign bug in the fused path passed everything. Its limit is recorded in NUM-ACCUM-NARROW-001: a float64 accumulator narrowing to float32 makes reassociation unobservable, so the gate covers element mapping, sign and scale selection, NOT summation order.
 
 GENERALIZED: PS6003 (partial-fast-path-coverage) for layer 1, PS6005 (output-invariant-operand-reload) for layer 3. Layer 2 was NOT generalized into a rule — proving that a loop's iterations are independent is a dataflow question this AST-only scanner cannot answer soundly, and a rule that guesses at it would advise races. Recorded as a deliberate non-action rather than an oversight.
+
+## T-01KYQ65MEEEN69YZJ0V231F7H5 Compose Q4_K's SIMD row kernel with the 4-row scalar blocking behind an override flag
+kind: task
+state: draft
+created: 2026-07-29
+
+Q4_K is the one quantization type whose fused matmul row kernel has BOTH a SIMD
+implementation and a 4-row register-blocked scalar variant, and the two are currently not
+composed — the merge took main's SIMD-gated dotQ4KRowFn and dropped dot4 for Q4_K.
+
+WHY IT WAS NOT HAND-MERGED: dotQ4KRowFn defaults to the scalar dotQ4_KRow and is overridden
+to dotQ4_KRowASM by an init in format/gguf/dot_q4k_asm_amd64.go. On a host where the
+override is NOT active (arm64, or amd64 without the SIMD build), dot4 = dotQ4_K4Rows is the
+better path and is what every other K-quant uses. Where the asm kernel IS active, it should
+almost certainly win over 4-row scalar blocking — but that is an assumption, not a
+measurement, and it cannot be measured on the darwin/arm64 host this campaign runs on.
+
+APPROACH: export whether the override took effect (a package-level bool set alongside the
+existing init in dot_q4k_asm_amd64.go, false by default), then in QMatMul's kernel switch:
+    case Q4_K:
+        dot = dotQ4KRowFn
+        if !dotQ4KSIMD { dot4 = dotQ4_K4Rows }
+Do NOT compare function values to detect the override; Go does not permit it.
+
+VERIFY:
+- On arm64: the existing Q4_K fused-path tests stay green, and BenchmarkQMatMul for Q4_K
+  recovers the 4-row blocking gain the other K-quants already show.
+- On amd64 WITH the SIMD build: benchmark asm-only against asm-plus-blocking to confirm the
+  asm kernel really is the faster arm. If blocking wins there too, the flag is unnecessary
+  and dot4 should simply be set unconditionally.
+- Bit-exactness: dotQ4_K4Rows must produce results identical to four dotQ4_KRow calls; the
+  4-row variants are blocked over OUTPUT rows, so each row's accumulation order is unchanged.
+
+This is amd64/SIMD territory, so it belongs to whoever owns that lane rather than the
+darwin/arm64 perf loop that found it.
