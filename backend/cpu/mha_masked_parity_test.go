@@ -19,7 +19,10 @@ func TestMHAMaskedCPUByteIdenticalToRef(t *testing.T) {
 		}
 		return tn
 	}
-	for _, cfg := range []struct{ sq, sk, dk, heads, kvh int; perHead bool }{
+	for _, cfg := range []struct {
+		sq, sk, dk, heads, kvh int
+		perHead                bool
+	}{
 		{4, 4, 8, 2, 2, false}, {5, 7, 16, 4, 4, false}, {5, 7, 16, 4, 2, false},
 		{5, 7, 16, 4, 4, true}, {64, 96, 32, 8, 8, false},
 	} {
