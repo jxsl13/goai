@@ -8,7 +8,7 @@ import (
 	"github.com/jxsl13/goai/tensor"
 )
 
-// These three modules carry PS6005 (register-blocking) findings and had NO benchmark at
+// These three modules carry PS6010 (register-blocking) findings and had NO benchmark at
 // all, so no change to them could be validated on this host — the rule's findings were
 // neither actionable nor declinable. Sizes are chosen so the flagged loops dominate:
 // Sinkhorn by the cost matrix, KDA and NSA by sequence length.
@@ -31,7 +31,7 @@ func uniformVec(n int) []float64 {
 }
 
 // BenchmarkSinkhorn times the entropic optimal-transport iteration. Its two inner loops
-// are the PS6005 sites: u = r ⊘ (K v) reads v[j] independently of the output row, and
+// are the PS6010 sites: u = r ⊘ (K v) reads v[j] independently of the output row, and
 // v = c ⊘ (Kᵀ u) reads u[i] independently of the output column.
 func benchSinkhorn(b *testing.B, n, iters int) {
 	cost := benchTensor(0.3, n, n)

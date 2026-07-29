@@ -217,7 +217,7 @@ var checks = []check{
 	{"PS6001", "full-sort-bounded-prefix", "a full-vocabulary descending index sort whose result feeds an early-breaking (threshold-bounded) prefix consumer, with no quickselect/pre-filter guard — an O(n log n) sort for an O(prefix) need", false},
 	{"PS6002", "spatial-bounds-branch", "an innermost window/kernel loop re-testing a compound spatial bounds guard (iy>=0 && iy<h && ix>=0 && ix<wd) per tap, where the in-bounds taps form one contiguous run the guard can be hoisted around", false},
 	{"PS6005", "monotone-index-bound", "an innermost loop guarding its tap work with a single relational bound on an index affine in the loop var (j:=t-(K-1)+k; if j>=0) — the in-bounds iterations are one contiguous run, clamp the loop bound instead of branching per tap", false},
-	{"PS6014", "output-invariant-operand-reload", "an output loop whose accumulator re-reads an operand that does NOT vary with the output index — unrolling the output loop by 4 amortizes that load across 4 accumulators (register blocking / unroll-and-jam)", false},
+	{"PS6010", "output-invariant-operand-reload", "an output loop whose accumulator re-reads an operand that does NOT vary with the output index — unrolling the output loop by 4 amortizes that load across 4 accumulators (register blocking / unroll-and-jam)", false},
 	{"PS6006", "receiver-scratch-buffer", "a method using a receiver SLICE FIELD as a per-call temporary (indexed write, then indexed read, same call) — unsafe to call concurrently, and every caller contends on one cache line", false},
 	{"PS6007", "search-feeds-reduction", "a loop whose expensive per-item CALL produces an index into an accumulation — split it into a parallel search pass and a sequential fold, since chunked partials would reassociate the sums", false},
 	{"PS6008", "alloc-in-parallel-body", "a buffer allocated INSIDE a parallel dispatch body — free when the dispatch is infrequent, ruinous when it sits in a hot loop; hoist to per-chunk buffers indexed by the chunk", false},
@@ -5326,7 +5326,7 @@ var binopBackendOp = map[token.Token][2]string{
 	token.SUB: {"Sub", "subtract"}, token.QUO: {"Div", "divide"},
 }
 
-// outputInvariantReloadFindings flags PS6014 — an output loop whose accumulator reads an
+// outputInvariantReloadFindings flags PS6010 — an output loop whose accumulator reads an
 // operand that does NOT vary with the output index. That operand is re-loaded and
 // re-converted once per output, when unrolling the output loop by 4 would amortize one
 // load across 4 accumulators. This is register blocking, the m==1 dual of unroll-and-jam.

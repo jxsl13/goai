@@ -152,6 +152,6 @@ emits an extra `MB/s` column that shifts everything after `ns/op`, turning
 
 ## See also
 
-- `internal/perfscan/PATTERNS.md` — PS6003, PS6005–PS6009, and the sweep method
+- `internal/perfscan/PATTERNS.md` — PS6003, PS6010–PS6009, and the sweep method
 - `docs/perf-notes-training.md` — the per-element host-loop sweep this follows
 - `docs/perf-notes-lowlevel.md` — bounds checks, dispatch, and the SIMD floor

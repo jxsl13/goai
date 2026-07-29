@@ -829,7 +829,7 @@ repo do (they run the same code twice).
 and the check used a helper that requires a **named** loop variable, so it found nothing.
 Replaying against the pre-fix revision is what exposed it — fixtures written from the same
 mental model as the detector all used named keys. Third rule in this campaign to fail that
-way (see PS6005, PS6006); replay is now part of how a detector is validated.
+way (see PS6010, PS6006); replay is now part of how a detector is validated.
 
 Silent on scalar accumulations (`total += v` is every reduction loop ever written), on
 plain indexed **stores** (idempotent — the last writer wins, no order is preserved), and
@@ -948,7 +948,7 @@ set of formats. That last filter suppresses nothing on its own, since an all-lit
 has no member matching the guard; what it does is keep a bare literal out of the reported
 variant list when a switch mixes the two. Probing is what established the distinction.
 
-## PS6005 — an output loop that re-reads an operand no output varies with  *(scanner: static)*
+## PS6010 — an output loop that re-reads an operand no output varies with  *(scanner: static)*
 
 One accumulator per output, and an operand that is the same for every one of them:
 

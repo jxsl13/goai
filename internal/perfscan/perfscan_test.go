@@ -3358,7 +3358,7 @@ func scale(x, s []float64, y []float64, m, n int) {
 
 // The gguf Q4_0 shape: one activation row shared by every output, one accumulator per
 // output, the shared row re-read on every pass.
-func TestDetectPS6014_OutputInvariantReload(t *testing.T) {
+func TestDetectPS6010_OutputInvariantReload(t *testing.T) {
 	src := `package p
 func f(n, k int, outf, row, w []float64) {
 	for ni := range n {
@@ -3380,7 +3380,7 @@ func f(n, k int, outf, row, w []float64) {
 // operand arrives as a RANGE VALUE, never as an index expression. Walking only
 // assignments when computing what is output-dependent left `q` unclassified, so the
 // check saw no per-output operand and stayed silent on its own motivating case.
-func TestDetectPS6014_PerOutputOperandArrivingAsARangeValue(t *testing.T) {
+func TestDetectPS6010_PerOutputOperandArrivingAsARangeValue(t *testing.T) {
 	src := `package p
 func f(n, k int, outf, row []float64, w []byte) {
 	for ni := range n {
@@ -3400,7 +3400,7 @@ func f(n, k int, outf, row []float64, w []byte) {
 
 // SILENT once blocked: a stride above 1 is the signature of someone having already done
 // this, and re-reporting it would make the check noise on exactly the fixed code.
-func TestDetectPS6014_SilentOnAnAlreadyBlockedLoop(t *testing.T) {
+func TestDetectPS6010_SilentOnAnAlreadyBlockedLoop(t *testing.T) {
 	src := `package p
 func f(n, k int, outf, row, w []float64) {
 	for ni := 0; ni+4 <= n; ni += 4 {
@@ -3423,7 +3423,7 @@ func f(n, k int, outf, row, w []float64) {
 // SILENT when EVERY operand is output-invariant: that is a loop-invariant accumulation,
 // PS5003's finding, and its fix is to hoist the whole thing out rather than unroll —
 // unrolling a computation that should not run n times at all is the wrong advice.
-func TestDetectPS6014_SilentWhenNothingVariesWithTheOutput(t *testing.T) {
+func TestDetectPS6010_SilentWhenNothingVariesWithTheOutput(t *testing.T) {
 	src := `package p
 func f(n, k int, outf, row, other []float64) {
 	for ni := range n {
@@ -3443,7 +3443,7 @@ func f(n, k int, outf, row, other []float64) {
 // SILENT when the accumulator never reaches an output index. Without this the check
 // fires on every scalar reduction that happens to sit inside some loop — it was 145
 // findings tree-wide before this guard and 56 after.
-func TestDetectPS6014_SilentWhenTheAccumulatorIsNotStoredPerOutput(t *testing.T) {
+func TestDetectPS6010_SilentWhenTheAccumulatorIsNotStoredPerOutput(t *testing.T) {
 	src := `package p
 func f(n, k int, row, w []float64) float64 {
 	total := 0.0
