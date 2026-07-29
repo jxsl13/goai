@@ -104,3 +104,42 @@ REMAINING PS6011 after the correction: 71 tree-wide. backend/* (the parallel wor
 holds the bulk. In linalg, the cholesky/qr/linalg.go pairs at adjacent lines are symmetric
 fills and transposes; svd.go and derived.go are unswept and have partial benchmark coverage
 (BenchmarkSVDPCA, BenchmarkPinv). nlp is now clean.
+
+## R-01KYQBJ7BREF4SA4JX1G8VAV56 Rejected: SymEig column-walk cannot use row reads — Jacobi asymmetry accumulates across all rotated pairs
+kind: research
+state: draft
+created: 2026-07-29
+
+REJECTED after implementation and measurement: replacing the column reads in SymEig's Jacobi
+rotation with contiguous row reads. The transform is invalid for bit-identity, and the reason
+is worth recording because it is not visible from the code.
+
+THE IDEA: the rotation reads m[k][p] and m[k][q] down two COLUMNS at stride n (PS6011, the
+last unfixed strided walk in this function, and SymEig is the bottleneck of the whole
+GaLore/SOAP/Shampoo family). m is documented as symmetric, so those values also sit in rows p
+and q, which are contiguous. Snapshot the two rows, read from the snapshots, keep the strided
+writes — halving the strided traffic in the loop.
+
+WHY IT FAILS: m is NOT exactly symmetric during the sweep, even though the input is. For every
+entry outside rows and columns p and q, symmetry survives exactly, because m[p][k] and m[k][p]
+receive identical expression trees on identical operands — that part of the reasoning holds.
+The four entries where p and q intersect do not: m[p][q] and m[q][p] emerge from the two
+rotation loops through DIFFERENT orders of the same operations (one is c*(sA+cB) - s*(sC+cD),
+the other s*(cA-sB) + c*(cC-sD)), so they can differ in the last bit.
+
+The first attempt corrected exactly those two entries from the column and still failed the
+oracle. That is the real lesson: the asymmetry does not stay local. Every rotation leaves a
+possible one-ulp asymmetry at ITS (p,q) pair, and a cyclic sweep visits every pair, so by the
+second sweep the asymmetry is scattered across the matrix. A later rotation reading row p at
+index k lands on some earlier pair's damaged entry. Correcting the current pair is necessary
+and nowhere near sufficient.
+
+CONSEQUENCE: the column walk in the m rotation stays. It cannot be removed by exploiting
+symmetry while the bit-identity oracle stands, and that oracle is the contract — it replays
+the original row-of-slices implementation and is what makes every other change to this
+function safe. The eigenvector accumulator's walk WAS removable (it is only ever
+column-rotated, so transposing its storage is a pure relayout) and shipped 1.89x at n=128.
+
+IF MORE SPEED IS WANTED HERE, attack the algorithm rather than the layout: block the Jacobi
+sweep, or use a different eigensolver for the sizes that matter. Both change the arithmetic
+and would need the oracle relaxed deliberately, with an ADR, rather than by accident.
