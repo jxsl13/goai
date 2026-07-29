@@ -31,6 +31,31 @@ func WandaScore(w, x *tensor.Tensor) (*tensor.Tensor, error) {
 	}
 	norm := actL2Norm(x) // ‖X_j‖₂ per input channel
 	s := tensor.New(w.Dtype(), w.Shape())
+	// Typed fast path: score = |W[j,o]|·‖X_j‖ over the full C_in×C_out weight matrix.
+	// Walk W and the score storage directly; the |·| and the per-row-invariant norm
+	// multiply are unchanged, so bit-identical to the SetF64(|AtF64|·norm) loop.
+	if ws := flatF64(w); ws != nil {
+		ss := s.Storage().F64()
+		for j := 0; j < cin; j++ {
+			nj := norm[j]
+			base := j * cout
+			for o := 0; o < cout; o++ {
+				ss[base+o] = math.Abs(ws[base+o]) * nj
+			}
+		}
+		return s, nil
+	}
+	if ws := flatF32(w); ws != nil {
+		ss := s.Storage().F32()
+		for j := 0; j < cin; j++ {
+			nj := norm[j]
+			base := j * cout
+			for o := 0; o < cout; o++ {
+				ss[base+o] = float32(math.Abs(float64(ws[base+o])) * nj)
+			}
+		}
+		return s, nil
+	}
 	for j := range cin {
 		for o := range cout {
 			s.SetF64(math.Abs(w.AtF64(j, o))*norm[j], j, o)
@@ -63,11 +88,8 @@ func WandaPrune(w, x *tensor.Tensor, sparsity float64) (pruned, mask *tensor.Ten
 	mask = tensor.New(w.Dtype(), w.Shape())
 	idx := make([]int, cin)
 	col := make([]float64, cin) // this output's per-input scores, hoisted out of the comparator
-	for o := range cout {
-		for j := range cin {
-			idx[j] = j
-			col[j] = s.AtF64(j, o) // O(cin) dispatch once, vs O(cin·log·cin) inside the comparator
-		}
+	drop := make([]bool, cin)   // reused across columns (cleared each output)
+	sortCol := func() {
 		// ascending by score, ties broken by input index for determinism. The total-order
 		// comparator (score, then index) lets the faster unstable sort reproduce the stable
 		// order exactly (indices are unique), and reads the hoisted col instead of dispatching.
@@ -77,7 +99,70 @@ func WandaPrune(w, x *tensor.Tensor, sparsity float64) (pruned, mask *tensor.Ten
 			}
 			return idx[a] < idx[b]
 		})
-		drop := make([]bool, cin)
+	}
+	// Typed fast paths: read the score column and write the kept weights / mask through
+	// the contiguous storage instead of AtF64/SetF64 per element. Identical values,
+	// identical sort order, kept entries only (pruned/mask are zero-initialised).
+	sf64 := s.Storage()
+	if wsF := flatF64(w); wsF != nil {
+		ss, ps, ms := sf64.F64(), pruned.Storage().F64(), mask.Storage().F64()
+		for o := 0; o < cout; o++ {
+			for j := 0; j < cin; j++ {
+				idx[j] = j
+				col[j] = ss[j*cout+o]
+			}
+			sortCol()
+			for j := range drop {
+				drop[j] = false
+			}
+			for r := 0; r < k; r++ {
+				drop[idx[r]] = true
+			}
+			for j := 0; j < cin; j++ {
+				if drop[j] {
+					continue
+				}
+				off := j*cout + o
+				ps[off] = wsF[off]
+				ms[off] = 1
+			}
+		}
+		return pruned, mask, nil
+	}
+	if wsF := flatF32(w); wsF != nil {
+		ss, ps, ms := sf64.F32(), pruned.Storage().F32(), mask.Storage().F32()
+		for o := 0; o < cout; o++ {
+			for j := 0; j < cin; j++ {
+				idx[j] = j
+				col[j] = float64(ss[j*cout+o])
+			}
+			sortCol()
+			for j := range drop {
+				drop[j] = false
+			}
+			for r := 0; r < k; r++ {
+				drop[idx[r]] = true
+			}
+			for j := 0; j < cin; j++ {
+				if drop[j] {
+					continue
+				}
+				off := j*cout + o
+				ps[off] = wsF[off]
+				ms[off] = 1
+			}
+		}
+		return pruned, mask, nil
+	}
+	for o := range cout {
+		for j := range cin {
+			idx[j] = j
+			col[j] = s.AtF64(j, o)
+		}
+		sortCol()
+		for j := range drop {
+			drop[j] = false
+		}
 		for r := range k {
 			drop[idx[r]] = true
 		}
@@ -112,14 +197,78 @@ func WandaPruneNM(w, x *tensor.Tensor, n, m int) (pruned, mask *tensor.Tensor, e
 	pruned = tensor.New(w.Dtype(), w.Shape())
 	mask = tensor.New(w.Dtype(), w.Shape())
 	grp := make([]int, m)
+	gsc := make([]float64, m) // block scores, hoisted out of the comparator (was s.AtF64 per compare)
+	drop := make([]bool, m)   // reused per block
+	// gsc[grp[·]-base] is the score of grp[·]; the SliceStable over identical values in
+	// identical (input) order reproduces the original ordering exactly.
+	sortGrp := func(base int) {
+		sort.SliceStable(grp, func(a, b int) bool { return gsc[grp[a]-base] < gsc[grp[b]-base] })
+	}
+	sf64 := s.Storage()
+	if wsF := flatF64(w); wsF != nil {
+		ss, ps, ms := sf64.F64(), pruned.Storage().F64(), mask.Storage().F64()
+		for o := 0; o < cout; o++ {
+			for base := 0; base < cin; base += m {
+				for r := 0; r < m; r++ {
+					grp[r] = base + r
+					gsc[r] = ss[(base+r)*cout+o]
+				}
+				sortGrp(base)
+				for r := range drop {
+					drop[r] = false
+				}
+				for r := 0; r < n; r++ {
+					drop[grp[r]-base] = true
+				}
+				for r := 0; r < m; r++ {
+					if drop[r] {
+						continue
+					}
+					off := (base+r)*cout + o
+					ps[off] = wsF[off]
+					ms[off] = 1
+				}
+			}
+		}
+		return pruned, mask, nil
+	}
+	if wsF := flatF32(w); wsF != nil {
+		ss, ps, ms := sf64.F32(), pruned.Storage().F32(), mask.Storage().F32()
+		for o := 0; o < cout; o++ {
+			for base := 0; base < cin; base += m {
+				for r := 0; r < m; r++ {
+					grp[r] = base + r
+					gsc[r] = float64(ss[(base+r)*cout+o])
+				}
+				sortGrp(base)
+				for r := range drop {
+					drop[r] = false
+				}
+				for r := 0; r < n; r++ {
+					drop[grp[r]-base] = true
+				}
+				for r := 0; r < m; r++ {
+					if drop[r] {
+						continue
+					}
+					off := (base+r)*cout + o
+					ps[off] = wsF[off]
+					ms[off] = 1
+				}
+			}
+		}
+		return pruned, mask, nil
+	}
 	for o := range cout {
 		for base := 0; base < cin; base += m {
 			for r := range m {
 				grp[r] = base + r
+				gsc[r] = s.AtF64(base+r, o)
 			}
-			// ascending by score within the block; drop the n smallest.
-			sort.SliceStable(grp, func(a, b int) bool { return s.AtF64(grp[a], o) < s.AtF64(grp[b], o) })
-			drop := make([]bool, m)
+			sortGrp(base)
+			for r := range drop {
+				drop[r] = false
+			}
 			for r := range n {
 				drop[grp[r]-base] = true
 			}
@@ -141,10 +290,31 @@ func WandaPruneNM(w, x *tensor.Tensor, n, m int) (pruned, mask *tensor.Tensor, e
 func actL2Norm(x *tensor.Tensor) []float64 {
 	tokens, cin := x.Shape()[0], x.Shape()[1]
 	ss := make([]float64, cin)
-	for t := range tokens {
-		for j := range cin {
-			v := x.AtF64(t, j)
-			ss[j] += v * v
+	// Typed fast path: walk X's contiguous storage instead of dispatching AtF64 per
+	// element. Each ss[j] still accumulates over t ascending with the same v*v → the
+	// sum (and its sqrt) is bit-identical; the AtF64 loop stays for exotic dtypes.
+	if xs := flatF64(x); xs != nil {
+		for t := 0; t < tokens; t++ {
+			base := t * cin
+			for j := 0; j < cin; j++ {
+				v := xs[base+j]
+				ss[j] += v * v
+			}
+		}
+	} else if xs := flatF32(x); xs != nil {
+		for t := 0; t < tokens; t++ {
+			base := t * cin
+			for j := 0; j < cin; j++ {
+				v := float64(xs[base+j])
+				ss[j] += v * v
+			}
+		}
+	} else {
+		for t := range tokens {
+			for j := range cin {
+				v := x.AtF64(t, j)
+				ss[j] += v * v
+			}
 		}
 	}
 	for j := range cin {
