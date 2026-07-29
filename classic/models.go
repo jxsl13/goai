@@ -2,6 +2,7 @@ package classic
 
 import (
 	"fmt"
+	"github.com/jxsl13/goai/internal/parallel"
 	"math"
 
 	"github.com/jxsl13/goai/backend"
@@ -221,7 +222,7 @@ func (m *SoftmaxRegression) Fit(x [][]float64, y []int, k, steps int, lr float64
 	}
 	numPairs := kEff * (kEff + 1) / 2
 	grams := make([]float64, numPairs*mAug*mAug)
-	wpair := make([]float64, numPairs)
+	wall := make([]float64, n*numPairs) // per-sample pair weights, filled once per step
 	invN := 1 / float64(n)
 
 	const (
@@ -279,6 +280,9 @@ func (m *SoftmaxRegression) Fit(x [][]float64, y []int, k, steps int, lr float64
 		// pair. Each pair-Gram still sums i ascending with the same (w·row[a])·row[j]
 		// association -> bit-identical; the w==0/wa==0 skips are dropped (adding an
 		// exact 0.0 is identity for the finite softmax weights).
+		// The pair weights depend only on the sample, so they are computed for every sample
+		// ONCE per step into wall[i*numPairs+q] rather than inside the accumulation. That is
+		// what lets the feature index move outside the sample loop.
 		for i := range n {
 			pr := probs[i]
 			pp := 0
@@ -288,24 +292,68 @@ func (m *SoftmaxRegression) Fit(x [][]float64, y []int, k, steps int, lr float64
 					if c1 == c2 {
 						w += pr[c1]
 					}
-					wpair[pp] = w
+					wall[i*numPairs+pp] = w
 					pp++
 				}
 			}
-			row := xa[i]
-			for a := range mAug {
-				ra := row[a]
-				r := row[a:mAug]
-				aoff := a*mAug + a
-				aend := a*mAug + mAug
-				for q := 0; q < numPairs; q++ {
-					wa := wpair[q] * ra
-					g := grams[q*mm+aoff : q*mm+aend]
-					for j := range g {
-						g[j] += wa * r[j]
+		}
+		// PARALLEL over the feature index a, which is the interchange that makes this
+		// concurrent at all. Element grams[q*mm + a*mAug + j] accumulates over exactly one
+		// axis — the sample index i — so its sum stays ascending no matter how a, q and j are
+		// ordered outside it, and distinct a write disjoint ranges [a*mAug+a, a*mAug+mAug)
+		// within each pair's block. Bit-identical, with the same (w·row[a])·row[j]
+		// association as before.
+		//
+		// Parallelizing over SAMPLES instead would not be bit-identical: every worker would
+		// need its own partial Gram and combining them reassociates the i-sum. The axis
+		// choice is the whole difference between a legal rewrite and an illegal one.
+		//
+		// This loop was 76% of Fit's flat time and the whole fit was measured at 0.99x from
+		// GOMAXPROCS=1 to 12 — entirely serial — which is how it was found.
+		// The interchange is NOT free when it cannot be parallelized: sweeping X once per
+		// feature row costs locality that the original sample-outer nest kept, and measured
+		// 23.8ms against 18.0ms at GOMAXPROCS=1. So the original nest is kept for the serial
+		// case and the interchange is used only when the work actually fans out. Both produce
+		// identical bits — each Gram element sums over the sample index ascending either way.
+		if !softmaxFanOutPays(mAug, n*numPairs) {
+			// serial: sample-outer, one sweep of X
+			for i := range n {
+				row := xa[i]
+				wi := wall[i*numPairs : i*numPairs+numPairs]
+				for a := range mAug {
+					ra := row[a]
+					r := row[a:mAug]
+					aoff := a*mAug + a
+					aend := a*mAug + mAug
+					for q := 0; q < numPairs; q++ {
+						wa := wi[q] * ra
+						g := grams[q*mm+aoff : q*mm+aend]
+						for j := range g {
+							g[j] += wa * r[j]
+						}
 					}
 				}
 			}
+		} else {
+			softmaxParallelFeatures(mAug, n*numPairs, func(alo, ahi int) {
+				for a := alo; a < ahi; a++ {
+					aoff := a*mAug + a
+					aend := a*mAug + mAug
+					for i := range n {
+						row := xa[i]
+						ra := row[a]
+						r := row[a:mAug]
+						wi := wall[i*numPairs : i*numPairs+numPairs]
+						for q := 0; q < numPairs; q++ {
+							wa := wi[q] * ra
+							g := grams[q*mm+aoff : q*mm+aend]
+							for j := range g {
+								g[j] += wa * r[j]
+							}
+						}
+					}
+				}
+			})
 		}
 		// Scatter each pair-Gram into blocks (c1,c2) and (c2,c1).
 		pp := 0
@@ -623,3 +671,24 @@ func (p *PCA) Fit(x [][]float64, ncomp int) error {
 	p.Components = vecs[:ncomp]
 	return nil
 }
+
+// softmaxParallelFeatures splits the mAug feature rows of the Hessian Gram accumulation across
+// the shared bounded pool. Each feature row owns a disjoint slice of every pair block, so the
+// partition changes no value. Serial below a work threshold and for a single worker.
+func softmaxParallelFeatures(d, per int, body func(lo, hi int)) {
+	if !softmaxFanOutPays(d, per) {
+		body(0, d)
+		return
+	}
+	parallel.Rows(d, body)
+}
+
+// softmaxFanOutPays reports whether the feature loop should fan out. Callers consult it
+// directly so they can keep a locality-preserving serial nest for the negative case.
+func softmaxFanOutPays(d, per int) bool {
+	return d >= 2 && parallel.Workers() > 1 && d*per >= softmaxParThreshold
+}
+
+// softmaxParThreshold is the total work below which splitting the feature loop costs more than
+// it saves — the same 1<<15 crossover the other classic parallel helpers use.
+const softmaxParThreshold = 1 << 15
