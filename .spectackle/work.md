@@ -876,3 +876,24 @@ THE FALSIFIED PREMISE, which is the durable part. The change was first justified
 BOTH PROBES SHIP as regression guards: TestGoroutinePeakConcurrentDecode and BenchmarkQMatMulQ8_0ConcurrentDecode in format/gguf.
 
 GENERALIZABLE, and the reason no perfscan rule follows: the finding is that a goroutine-count claim needs a goroutine-count measurement, and that peak-live-goroutines is cheap to sample (a 20us ticker around the workload). That is a MEASUREMENT METHOD, not a source pattern - an AST scanner can see go inside a func but cannot tell whether that func has concurrent callers, which is the entire question. Flagging every per-call spawn would fire on correct code. Recorded here instead of forced into a rule (PERF-SCANRULE-EMPTY-001 reasoning: a rule that cannot separate the good case from the bad one has no signal).
+
+## R-01KYQPMA40FVNRC6C38ZABN3DK Rebasing 180 perf commits onto a concurrently-optimized main: what the 16 conflicts taught
+kind: research
+state: draft
+created: 2026-07-29
+
+A 180-commit perf branch rebased onto a main that had been optimizing the SAME files in parallel. 16 conflicting commits. The resolutions split into five kinds, and the classification is the reusable part - blind hunk-picking is wrong in three of the five.
+
+1. IDENTICAL INTENT, DIFFERENT MECHANISM. Both sides parallelized the same loop (QMatMul m>1; KNN Predict). Neither is more correct. Pick on a property that is not throughput - here, whether the fan-out is bounded - and then MEASURE the pick rather than asserting it (see R-01KYQPKDVQFN3, where the stated justification turned out false while the change stayed good).
+
+2. SUPERSET vs SUBSET. Main had this branch scalar 4-way block PLUS a SIMD kernel. Take main wholesale.
+
+3. DISJOINT IMPROVEMENTS TO THE SAME LINES. Main added a component jam, this branch added sample parallelism, both touching the same struct fields. Neither side alone is right and hand-merging six hunks blind is how a race gets shipped. Resolution: take main, drop this branch commit, re-book the work as its own measured task (T-01KYPCP21VFAZ).
+
+4. ID COLLISION. Main claimed PS6005 for a different rule. The branch already contained its own renumber commit (PS6005 to PS6010) further down the todo - so the first resolution invented PS6014 and had to be undone. LESSON: before renumbering a colliding ID, look at the REST OF THE REBASE TODO, not just the current tree. A later commit already knows the answer.
+
+5. FALSE CONFLICTS FROM AN EARLIER RESOLUTION. Once a both-appended tail is merged by hand, git re-flags the whole tail as new on every later commit that appends there - so the naive resolution silently re-adds 300 lines of already-present tests. Two edge cases: (a) both sides ending with the SAME closing lines makes git hoist them into the common tail, so concatenating ours+theirs leaves ours unterminated mid-function (caught by go vet: expected ( found TestDetect...); (b) the duplicate block must be diffed by DECLARATION NAME, not by size.
+
+ORPHANS RUN BOTH WAYS (PROC-MERGE-ORPHAN-001). The known direction - take the other side wholesale, grep this side helper names for surviving call sites - fired once (parallelRows, fully dead, correctly deleted). The UNKNOWN direction bit harder: taking main gmm.go dropped parallelSamples, whose call site arrived cleanly in a LATER commit that had no conflict at all. So the grep must cover the whole remaining todo, not just the commit being resolved. Caught by go vet at the next stop.
+
+GENERALIZABLE, and why no perfscan rule: every one of these is a VCS-state property (what the other side did, what the rest of the todo does). perfscan parses one file at one revision with go/ast and has no access to any of it. The mechanical parts are already covered - unused imports and undefined symbols by go vet, detached godoc by apicheck (PROC-GODOC-DETACH-002 fired again here, main stale helper doc landing above this branch new const). Recording as method.
