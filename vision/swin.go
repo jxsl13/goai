@@ -649,37 +649,62 @@ func (b *SwinBlock) windowedAttention(ctx *backend.Context, xWin *tensor.Tensor,
 	colSlice := func(t *tensor.Tensor, hh int) (*tensor.Tensor, error) {
 		return swinExec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: hh * dk, End: (hh + 1) * dk}, t)
 	}
+	// INFERENCE ONLY: reusable operand buffers for the per-(window, head) blocks. The
+	// dispatch path reaches each block with a row slice and then a column slice — six
+	// tensors per (window, head), plus a transpose — and every one of them is a fresh
+	// allocation. The block is a strided view of a contiguous buffer, so it can be copied
+	// into a buffer that is allocated once and refilled, and khT can be written transposed
+	// while copying rather than dispatched separately.
+	//
+	// Not valid under a tape: the recorder captures these tensors by pointer, so reusing
+	// them across iterations would corrupt the graph. Guarded on ctx.Recorder == nil, the
+	// same condition the score-term fusion above uses.
+	var bufQ, bufKT, bufV *tensor.Tensor
+	blockwise := ctx.Recorder == nil && swinBlockwiseOK(q, k, v)
+	if blockwise {
+		dt := q.Dtype()
+		bufQ = tensor.New(dt, tensor.Shape{n, dk})
+		bufKT = tensor.New(dt, tensor.Shape{dk, n})
+		bufV = tensor.New(dt, tensor.Shape{n, dk})
+	}
 	winOuts := make([]*tensor.Tensor, numWin)
 	for w := range numWin {
-		qw, err := rowSlice(q, w)
-		if err != nil {
-			return nil, err
-		}
-		kw, err := rowSlice(k, w)
-		if err != nil {
-			return nil, err
-		}
-		vw, err := rowSlice(v, w)
-		if err != nil {
-			return nil, err
+		var qw, kw, vw *tensor.Tensor
+		if !blockwise {
+			var err error
+			if qw, err = rowSlice(q, w); err != nil {
+				return nil, err
+			}
+			if kw, err = rowSlice(k, w); err != nil {
+				return nil, err
+			}
+			if vw, err = rowSlice(v, w); err != nil {
+				return nil, err
+			}
 		}
 		heads := make([]*tensor.Tensor, b.Heads)
 		for hh := range b.Heads {
-			qh, err := colSlice(qw, hh)
-			if err != nil {
-				return nil, err
-			}
-			kh, err := colSlice(kw, hh)
-			if err != nil {
-				return nil, err
-			}
-			vh, err := colSlice(vw, hh)
-			if err != nil {
-				return nil, err
-			}
-			khT, err := swinExec1(ctx, backend.OpTranspose, nil, kh) // [dk, n]
-			if err != nil {
-				return nil, err
+			var qh, vh, khT *tensor.Tensor
+			if blockwise {
+				swinFillBlock(bufQ, q, w*n, hh*dk, n, dk, false)
+				swinFillBlock(bufKT, k, w*n, hh*dk, n, dk, true)
+				swinFillBlock(bufV, v, w*n, hh*dk, n, dk, false)
+				qh, khT, vh = bufQ, bufKT, bufV
+			} else {
+				var err error
+				if qh, err = colSlice(qw, hh); err != nil {
+					return nil, err
+				}
+				kh, err := colSlice(kw, hh)
+				if err != nil {
+					return nil, err
+				}
+				if vh, err = colSlice(vw, hh); err != nil {
+					return nil, err
+				}
+				if khT, err = swinExec1(ctx, backend.OpTranspose, nil, kh); err != nil { // [dk, n]
+					return nil, err
+				}
 			}
 			sc, err := swinExec1(ctx, backend.OpMatMul, nil, qh, khT) // [n, n]
 			if err != nil {
@@ -1080,4 +1105,50 @@ func swinFlatF32(t *tensor.Tensor) []float32 {
 	}
 	off := t.Offset()
 	return t.Storage().F32()[off : off+t.Numel()]
+}
+
+// swinBlockwiseOK reports whether q, k and v are all contiguous in a dtype the block copy
+// handles.
+func swinBlockwiseOK(q, k, v *tensor.Tensor) bool {
+	for _, t := range []*tensor.Tensor{q, k, v} {
+		if t == nil || !t.IsContiguous() {
+			return false
+		}
+		if t.Dtype() != tensor.F64 && t.Dtype() != tensor.F32 {
+			return false
+		}
+	}
+	return q.Dtype() == k.Dtype() && k.Dtype() == v.Dtype()
+}
+
+// swinFillBlock copies the [rows, cols] block of src starting at (row0, col0) into dst,
+// transposed when tr is set. src is row-major with src.Shape()[1] columns. Pure data
+// movement — the same values the slice-and-transpose op chain would have produced.
+func swinFillBlock(dst, src *tensor.Tensor, row0, col0, rows, cols int, tr bool) {
+	stride := src.Shape()[1]
+	if src.Dtype() == tensor.F64 {
+		ss, ds := swinFlatF64(src), swinFlatF64(dst)
+		for r := range rows {
+			row := ss[(row0+r)*stride+col0 : (row0+r)*stride+col0+cols]
+			if tr {
+				for c, val := range row {
+					ds[c*rows+r] = val
+				}
+				continue
+			}
+			copy(ds[r*cols:r*cols+cols], row)
+		}
+		return
+	}
+	ss, ds := swinFlatF32(src), swinFlatF32(dst)
+	for r := range rows {
+		row := ss[(row0+r)*stride+col0 : (row0+r)*stride+col0+cols]
+		if tr {
+			for c, val := range row {
+				ds[c*rows+r] = val
+			}
+			continue
+		}
+		copy(ds[r*cols:r*cols+cols], row)
+	}
 }
