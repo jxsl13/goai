@@ -41,15 +41,33 @@ func SmoothQuant(x, w *tensor.Tensor, alpha float64) (xHat, wHat *tensor.Tensor,
 	scale = SmoothQuantScale(actAbsMax(x), weightAbsMax(w), alpha)
 
 	xHat = tensor.New(x.Dtype(), x.Shape())
-	for t := range tokens {
-		for j := range cin {
-			xHat.SetF64(x.AtF64(t, j)/scale[j], t, j) // X̂_j = X_j / s_j
+	if xs, xhs := flatF64(x), flatF64(xHat); xs != nil && xhs != nil {
+		for t := range tokens {
+			base := t * cin
+			for j := range cin {
+				xhs[base+j] = xs[base+j] / scale[j]
+			}
+		}
+	} else {
+		for t := range tokens {
+			for j := range cin {
+				xHat.SetF64(x.AtF64(t, j)/scale[j], t, j) // X̂_j = X_j / s_j
+			}
 		}
 	}
 	wHat = tensor.New(w.Dtype(), w.Shape())
-	for j := range cin {
-		for o := range cout {
-			wHat.SetF64(scale[j]*w.AtF64(j, o), j, o) // Ŵ_j = s_j · W_j (scale input-channel row)
+	if ws, whs := flatF64(w), flatF64(wHat); ws != nil && whs != nil {
+		for j := range cin {
+			sj, base := scale[j], j*cout
+			for o := range cout {
+				whs[base+o] = sj * ws[base+o]
+			}
+		}
+	} else {
+		for j := range cin {
+			for o := range cout {
+				wHat.SetF64(scale[j]*w.AtF64(j, o), j, o) // Ŵ_j = s_j · W_j (scale input-channel row)
+			}
 		}
 	}
 	return xHat, wHat, scale, nil
@@ -77,6 +95,17 @@ func SmoothQuantScale(actAbsMax, weightAbsMax []float64, alpha float64) []float6
 func actAbsMax(x *tensor.Tensor) []float64 {
 	tokens, cin := x.Shape()[0], x.Shape()[1]
 	m := make([]float64, cin)
+	if xs := flatF64(x); xs != nil {
+		for t := range tokens {
+			base := t * cin
+			for j := range cin {
+				if a := math.Abs(xs[base+j]); a > m[j] {
+					m[j] = a
+				}
+			}
+		}
+		return m
+	}
 	for t := range tokens {
 		for j := range cin {
 			if a := math.Abs(x.AtF64(t, j)); a > m[j] {
@@ -92,6 +121,17 @@ func actAbsMax(x *tensor.Tensor) []float64 {
 func weightAbsMax(w *tensor.Tensor) []float64 {
 	cin, cout := w.Shape()[0], w.Shape()[1]
 	m := make([]float64, cin)
+	if ws := flatF64(w); ws != nil {
+		for j := range cin {
+			base := j * cout
+			for o := range cout {
+				if a := math.Abs(ws[base+o]); a > m[j] {
+					m[j] = a
+				}
+			}
+		}
+		return m
+	}
 	for j := range cin {
 		for o := range cout {
 			if a := math.Abs(w.AtF64(j, o)); a > m[j] {
