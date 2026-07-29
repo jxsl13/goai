@@ -1050,6 +1050,22 @@ update. **Blocking four adjacent OUTER indices** keeps register accumulators and
 line that was fetched anyway — the right choice while the buffer is cache-resident, per
 `PERF-ACCUM-RESIDENCY-001`, and the one to reach for when the body accumulates.
 
+**Head-to-head, measured** (`R-01KYQTN083E71`): the two `RetentionChunkwise` output
+accumulations were rewritten *both* ways independently — interchange (accumulate i-outer
+into a `d_v` buffer, scale, then add the V term in a third pass) and 4-way blocking over
+the output channel (four register accumulators carrying both terms in one pass). Blocked
+beat interchanged by **1.62×** chunkwise and **1.68×** recurrent, consistently and with no
+overlap between arms. Interchange fixes the access pattern; blocking fixes it *and* keeps
+the intermediate in registers *and* writes the output row once instead of
+read-modify-writing it twice. When the body accumulates, reach for blocking first.
+
+**When two rewrites both claim bit-identity, test them against each other.** Two
+independent claims of bit-identity with the same original are a claim of bit-identity
+between the rewrites — which is testable, where each claim on its own is only prose.
+Digesting the output (bitwise sum plus xor of every element) under both arms is enough; the
+Retention arms agreed exactly, and the pinned digest now guards the next rewrite. The
+package's own tests were tolerance-based and would not have caught a disagreement.
+
 **Shipped:** NSA's `attendMask` P·V walked `vs[j*dm+off+d]` over `j` for each output
 channel — **2.40×** when blocked four channels at a time. KDA's decay loop scaled a column
 of `S` once per key channel per timestep; interchanging it carried the larger share of that
