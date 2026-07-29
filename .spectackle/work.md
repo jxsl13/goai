@@ -841,3 +841,16 @@ cholSolve (autograd) — 0.93x. Slower. Distinct from the Cholesky VJP work that
 RELATED MEASUREMENT HYGIENE from the same campaign, worth carrying: one Cholesky measurement at n=64 was thrown out as unusable rather than reported — the OLD arm swung 87% within a single set and would have read as 17% SLOWER. Re-run at n=128 it was stable. An arm that will not hold still is not a result, in either direction.
 
 STANDING: none of these four is suppressed in perfscan. They are declined at the measured sizes on this host (Apple M2 Pro, darwin/arm64, go1.26.5). A different shape or a machine with different memory behavior could move them, but the burden is a fresh interleaved measurement, not an argument from the code shape.
+
+## ADR-01KYQ9PHNPEFCVVMRXW6X22XN2 Titans Scan burns 24527 allocations per seq=128 forward but three attempts failed to make a fused path bit-identical (see R-01KYQ9CQ3XE1D) — how should it be resolved?
+kind: adr
+state: submitted
+created: 2026-07-29
+context: Established: the recurrence arithmetic is provably correct at seq=2/d=3; it is not input handling; not the matmul accumulation order or loop shape; the broadcast elementwise kernel is a plain scalar loop. At seq=5/d=8 exactly 3 of 64 memory elements differ by one ulp. PERF-FUSED-PATH-CHAIN-001 says a ~20-op chain needs a decision rather than another attempt.
+status: proposed
+
+kind: radio
+option: Scope down: keep matmuls and the outer product on the backend (bit-exact by construction), fuse only slices, transposes and elementwise — fewer allocations saved, no correctness risk
+option: Accept a tolerance-gated fused path for Titans only, with an ADR recording why bit-exactness was given up
+option: Drop it: leave Scan on dispatch and spend the effort on targets that validate bit-exactly
+option: Keep chasing bit-exactness: instrument the exact FMA emission and match it
