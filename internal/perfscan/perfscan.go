@@ -6863,11 +6863,20 @@ func pureCallSite(st ast.Stmt, ns nameSets) (*ast.CallExpr, string, bool) {
 	if !ok || len(call.Args) < 2 || call.Ellipsis.IsValid() {
 		return nil, "", false
 	}
-	name := calleeName(call.Fun)
-	if !ns.pureCompute[name] {
+	if !ns.pureCompute[calleeName(call.Fun)] {
 		return nil, "", false
 	}
-	key := name
+	// The key carries the FULL callee expression, not just the trailing name. calleeName
+	// collapses a qualified call to its last segment, so `b.Wq.Forward(ctx, xn)` and
+	// `b.Wk.Forward(ctx, xn)` — two different projections of the same input, the most common
+	// three lines in an attention block — keyed identically and reported as a recompute.
+	// Every hit outside the package this rule was built from was that false positive. The
+	// vocabulary is still matched on the trailing name, since that is how a method is named
+	// in config; only the identity comparison needs the receiver.
+	key := exprText(call.Fun)
+	if key == "" {
+		return nil, "", false
+	}
 	for _, arg := range call.Args[1:] {
 		t := exprText(arg)
 		if t == "" {

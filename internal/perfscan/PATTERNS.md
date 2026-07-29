@@ -1095,6 +1095,22 @@ the starved-vocabulary warning. Flagging repeated calls in general would fire on
 the one instance was found and fixed; `PERF-SCANRULE-EMPTY-001` is about rules that never
 found anything, which is not this.
 
+**`Forward` was evaluated for the vocabulary and rejected.** Adding it would widen the rule
+from one package to most of `nlp`, and it is not sound: a `Sequential.Forward` containing a
+Dropout consumes RNG in training mode, and a quantized decode `Forward` mutates its KV cache.
+Either makes a second identical call load-bearing, so declaring it pure would license
+deleting a call that must run. The vocabulary is a purity ASSERTION, not a list of
+expensive functions — that is the whole reason it is config and not a heuristic.
+
+**Widening the vocabulary is how the receiver bug was found**, and the method generalizes:
+run the rule against a deliberately over-broad list, then curate the hits. With only the
+one rl-local name the rule looked clean, because that name is a package-level function with
+the network as an explicit argument. Every hit the broad list produced in `nlp` was the same
+false positive — `b.Wq.Forward(ctx, xn)`, `b.Wk.Forward(ctx, xn)`, `b.Wv.Forward(ctx, xn)`
+keying identically, because `calleeName` collapses a qualified call to its last segment. The
+comparison key now carries the full callee expression. A vocabulary of one hides
+receiver-shaped bugs by construction.
+
 **How the len/cap exemption was found is worth more than the exemption.** Names reachable only
 through `len` or `cap` are excluded from the mutation scan, because reading a size is the
 normal reason a name appears between two identical calls. Without that, `New(F64, Shape{len(states), k})`

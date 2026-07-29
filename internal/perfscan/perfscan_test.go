@@ -4496,3 +4496,55 @@ func f(critic *Net, ro *R, a, b []float64, steps int) error {
 		t.Fatalf("want 0 for a multi-element batch, got %d", got)
 	}
 }
+
+// Different receivers, same method and same argument: the three projections at the top of
+// every attention block. calleeName collapses a qualified call to its last segment, so
+// keying on that alone reported all three as recomputes of each other — and that accounted
+// for EVERY hit this rule produced outside the package it was built from. The key carries
+// the full callee expression to keep them distinct.
+//
+// The method is spelled with the name the configured vocabulary actually contains. Spelled
+// otherwise the assertion passes because nothing here is a pure call at all — which is how
+// this test was first written, and the companion FiresOnTheSameReceiverTwice floor is what
+// exposed it.
+func TestDetectPS6014_SilentOnDifferentReceivers(t *testing.T) {
+	src := `package p
+func attn(b *Block, ctx *C, xn T) error {
+	q, err := b.Wq.forward(ctx, xn)
+	if err != nil {
+		return err
+	}
+	k, err := b.Wk.forward(ctx, xn)
+	if err != nil {
+		return err
+	}
+	v, err := b.Wv.forward(ctx, xn)
+	if err != nil {
+		return err
+	}
+	return use(q, k, v)
+}`
+	if got := countCat(scanSrc(t, src))["redundant-pure-recompute"]; got != 0 {
+		t.Fatalf("want 0 for three different receivers, got %d", got)
+	}
+}
+
+// The same receiver and the same argument IS a recompute, so the receiver fix must not
+// silence the real case — this is the floor against over-suppression.
+func TestDetectPS6014_FiresOnTheSameReceiverTwice(t *testing.T) {
+	src := `package p
+func f(b *Block, ctx *C, xn T) error {
+	a, err := b.Wq.forward(ctx, xn)
+	if err != nil {
+		return err
+	}
+	c, err := b.Wq.forward(tape.Context(), xn)
+	if err != nil {
+		return err
+	}
+	return use(a, c)
+}`
+	if got := countCat(scanSrc(t, src))["redundant-pure-recompute"]; got != 1 {
+		t.Fatalf("want 1 for the same receiver twice, got %d", got)
+	}
+}
