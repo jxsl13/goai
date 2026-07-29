@@ -124,9 +124,23 @@ func (s *Sophia) UpdateHessian(hess GradFn) error {
 		if !hv.Shape().Equal(p.Shape()) {
 			return fmt.Errorf("nn: Sophia hessian shape %v != param %v", hv.Shape(), p.Shape())
 		}
+		h := s.h[pi]
+		// Typed fast paths mirroring Step: flat EMA over the contiguous Hessian slice with
+		// the arithmetic in float64 exactly as the generic path — no per-element Unravel+AtF64.
+		if hf := flatF64(hv); hf != nil {
+			for i, hval := range hf {
+				h[i] = s.Beta2*h[i] + (1-s.Beta2)*hval
+			}
+			continue
+		} else if hf := flatF32(hv); hf != nil {
+			for i := range hf {
+				h[i] = s.Beta2*h[i] + (1-s.Beta2)*float64(hf[i])
+			}
+			continue
+		}
 		for i := range p.Numel() {
 			idx := tensor.Unravel(i, p.Shape())
-			s.h[pi][i] = s.Beta2*s.h[pi][i] + (1-s.Beta2)*hv.AtF64(idx...)
+			h[i] = s.Beta2*h[i] + (1-s.Beta2)*hv.AtF64(idx...)
 		}
 	}
 	return nil
