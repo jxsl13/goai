@@ -24,6 +24,53 @@ func partialRoPE(ctx *backend.Context, x *tensor.Tensor, heads, rotaryDim int, r
 		r.Heads = heads
 		return exec1a(ctx, backend.OpRoPE, r, x)
 	}
+	// FUSED GATHER/SCATTER around the one arithmetic op (ADR-01KYQ9PHNPEFC). The dispatch path
+	// below spends eight backend ops — reshape, two slices, reshape, RoPE, reshape, concat,
+	// reshape — of which exactly one does arithmetic. The other seven are pure layout, and this
+	// helper is called from 31 sites, so it was 51% of a GPTNeoX decode step's allocations.
+	//
+	// Bit-identical by construction, and the layout equivalence is worth spelling out because
+	// it is the whole proof: the dispatch path's rotWide has row s equal to the concatenation
+	// over h of x[s, h*hd : h*hd+rotaryDim], which is exactly what the gather below builds; the
+	// RoPE call is the same op with the same attrs on the same shape; and the scatter rebuilds
+	// row s as the concatenation over h of (rotated prefix, untouched tail), which is what the
+	// concat-plus-reshape produced.
+	//
+	// Gated on ctx.Recorder == nil: under a tape every one of those seven layout ops is a
+	// gradient edge, and replacing them with raw copies would detach the graph.
+	if ctx.Recorder == nil && x.Dtype() == tensor.F32 {
+		xf := x.Contiguous().Storage().F32()
+		if len(xf) >= seq*heads*hd {
+			rotWide := tensor.New(tensor.F32, tensor.Shape{seq, heads * rotaryDim})
+			rw := rotWide.Storage().F32()
+			for sIdx := range seq {
+				for h := range heads {
+					src := sIdx*heads*hd + h*hd
+					dst := sIdx*heads*rotaryDim + h*rotaryDim
+					copy(rw[dst:dst+rotaryDim], xf[src:src+rotaryDim])
+				}
+			}
+			r := rope
+			r.Heads = heads
+			rotated, err := exec1a(ctx, backend.OpRoPE, r, rotWide)
+			if err != nil {
+				return nil, err
+			}
+			rf := rotated.Contiguous().Storage().F32()
+			out := tensor.New(tensor.F32, tensor.Shape{seq, heads * hd})
+			of := out.Storage().F32()
+			for sIdx := range seq {
+				for h := range heads {
+					dst := sIdx*heads*hd + h*hd
+					srcRot := sIdx*heads*rotaryDim + h*rotaryDim
+					copy(of[dst:dst+rotaryDim], rf[srcRot:srcRot+rotaryDim])
+					copy(of[dst+rotaryDim:dst+hd], xf[dst+rotaryDim:dst+hd])
+				}
+			}
+			return out, nil
+		}
+	}
+
 	// Reshape to one row per (position, head) so each head's channels are contiguous.
 	flat, err := exec1(ctx, backend.OpReshape, backend.ReshapeAttrs{Shape: tensor.Shape{seq * heads, hd}}, x)
 	if err != nil {
