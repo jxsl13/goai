@@ -213,6 +213,7 @@ var checks = []check{
 	// PS6xxx — verification gaps
 	{"PS6001", "full-sort-bounded-prefix", "a full-vocabulary descending index sort whose result feeds an early-breaking (threshold-bounded) prefix consumer, with no quickselect/pre-filter guard — an O(n log n) sort for an O(prefix) need", false},
 	{"PS6002", "spatial-bounds-branch", "an innermost window/kernel loop re-testing a compound spatial bounds guard (iy>=0 && iy<h && ix>=0 && ix<wd) per tap, where the in-bounds taps form one contiguous run the guard can be hoisted around", false},
+	{"PS6005", "monotone-index-bound", "an innermost loop guarding its tap work with a single relational bound on an index affine in the loop var (j:=t-(K-1)+k; if j>=0) — the in-bounds iterations are one contiguous run, clamp the loop bound instead of branching per tap", false},
 	{"PS6003", "partial-fast-path-coverage", "a fast path that bypasses the general path for only SOME members of a variant family a switch in the same function enumerates — the uncovered variants silently pay the slow path", false},
 	{"PS6004", "unverified-dual-path", "a devirtualized fast path with a generic fallback — a bit-identity claim needing a bit-exact test", true},
 }
@@ -1784,6 +1785,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	out = append(out, vjpScalarBinopFindings(fset, fn)...)
 	out = append(out, fullSortBoundedPrefixFindings(fset, fn)...)
 	out = append(out, spatialBoundsBranchFindings(fset, fn)...)
+	out = append(out, monotoneIndexBoundFindings(fset, fn)...)
 	return out
 }
 
@@ -4483,6 +4485,112 @@ func spatialBoundsBranchFindings(fset *token.FileSet, fn *ast.FuncDecl) []findin
 					" per tap the in-bounds taps form one contiguous run — hoist the guard out into a" +
 					" [lo,hi) bulk copy / scatter-add (branch-free, bit-identical: padding taps add" +
 					" nothing). See conv2d im2colFillBand / col2im. Verify the stride-1 assumption.",
+			})
+			return false
+		}
+		return true
+	})
+	return out
+}
+
+// usedAsIndex reports whether name appears inside an array/slice INDEX expression within e —
+// the discriminator that the guarded index is a real address offset (xs[j*D+c]) and not a
+// data-dependent value merely fed to a threshold compare (a quantized sample qlo>=16).
+func usedAsIndex(e ast.Node, name string) bool {
+	found := false
+	ast.Inspect(e, func(n ast.Node) bool {
+		if ix, ok := n.(*ast.IndexExpr); ok && exprMentions(ix.Index, name) {
+			found = true
+			return false
+		}
+		return !found
+	})
+	return found
+}
+
+// isTapWork reports whether s is the single "tap work" statement a bounds guard wraps:
+// an accumulate (acc += … / acc -= …) or an indexed scatter/gather move (a[i] = … / a[i] += …).
+func isTapWork(s ast.Stmt) bool {
+	as, ok := s.(*ast.AssignStmt)
+	if !ok || len(as.Lhs) != 1 {
+		return false
+	}
+	switch as.Lhs[0].(type) {
+	case *ast.Ident:
+		return as.Tok == token.ADD_ASSIGN || as.Tok == token.SUB_ASSIGN
+	case *ast.IndexExpr:
+		return true
+	}
+	return false
+}
+
+// monotoneIndexBoundFindings flags PS6003 — an INNERMOST loop that derives an index affine in
+// the loop variable (j := t-(K-1)+k) and then guards its single tap-work statement with ONE
+// relational comparison on that index (if j >= 0). Because the index is monotone in the loop
+// variable, the in-bounds iterations form one contiguous run: hoist a clamped loop bound
+// (kStart := max(0,(K-1)-t)) and drop the per-iteration branch — bit-identical, the skipped
+// iterations are exactly the guard's empty false branch. This is the 1-D causal / left-pad-conv
+// sibling of PS6002 (which handles the compound ≥3-comparison spatial guard around an indexed
+// move). Shipped: conv1d. Conservative: needs the affine index, a SINGLE relational comparison
+// on it, and a one-statement accumulate/indexed-move body — verify the index is monotone (±1
+// coeff in the loop var) before acting.
+func monotoneIndexBoundFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil {
+		return nil
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		kvar, body, ok := loopVarBody(n)
+		if !ok || body == nil || loopHasNested(body) {
+			return true
+		}
+		// indices assigned in the loop body from an expression mentioning the loop var.
+		affine := map[string]bool{}
+		for _, st := range body.List {
+			if as, ok := st.(*ast.AssignStmt); ok && len(as.Lhs) == 1 && len(as.Rhs) == 1 {
+				if id, ok := as.Lhs[0].(*ast.Ident); ok && exprMentions(as.Rhs[0], kvar) {
+					affine[id.Name] = true
+				}
+			}
+		}
+		if len(affine) == 0 {
+			return true
+		}
+		for _, st := range body.List {
+			ifs, ok := st.(*ast.IfStmt)
+			if !ok || ifs.Init != nil || ifs.Else != nil {
+				continue
+			}
+			be, ok := ifs.Cond.(*ast.BinaryExpr)
+			if !ok || andedComparisons(be) != 1 {
+				continue
+			}
+			// the single comparison must bound an affine index, the guarded body must be
+			// exactly one tap-work statement, AND that index must be used as an array index
+			// in it (so a data-dependent value fed to a threshold — a quantized sample — is
+			// not mistaken for a monotone address offset).
+			if len(ifs.Body.List) != 1 || !isTapWork(ifs.Body.List[0]) {
+				continue
+			}
+			idxName := ""
+			for name := range affine {
+				if exprMentions(be, name) {
+					idxName = name
+					break
+				}
+			}
+			if idxName == "" || !usedAsIndex(ifs.Body.List[0], idxName) {
+				continue
+			}
+			out = append(out, finding{
+				pos:      fset.Position(ifs.Pos()),
+				category: "monotone-index-bound",
+				msg: "innermost loop guards its tap work with a single relational bound on an index" +
+					" affine in the loop variable (the j:=t-(K-1)+k; if j>=0 causal-conv shape). If the" +
+					" index is monotone in the loop var the in-bounds iterations are one contiguous run" +
+					" — hoist a clamped loop start/end (kStart := max(0,(K-1)-t)) and drop the per-tap" +
+					" branch (branch-free, bit-identical: the skipped taps hit the guard's empty else)." +
+					" Sibling of PS6002. Verify the ±1 monotonicity before acting.",
 			})
 			return false
 		}
