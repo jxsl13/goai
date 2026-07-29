@@ -194,12 +194,24 @@ func mlaKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs
 						a[j] = math.Exp(a[j] - m)
 						sum += a[j]
 					}
+					// Normalize once (a[j]/sum is invariant in d — keep the division, not a ×1/sum
+					// reciprocal, so the product is unchanged), then accumulate value rows in
+					// j-OUTER order so vs[] is read CONTIGUOUSLY in d. The old d-outer/j-inner loop
+					// strode vs by hdh every step (cache-thrashing); per d the sum is still over j
+					// ascending, so os is bit-identical to the old (a[j]/sum)·vs accumulation.
+					for j := range jmax {
+						a[j] = a[j] / sum
+					}
+					ob := i*hdh + hc
 					for d := range dh {
-						var o float64
-						for j := range jmax {
-							o += a[j] / sum * vs[j*hdh+hc+d]
+						os[ob+d] = 0
+					}
+					for j := range jmax {
+						w := a[j]
+						vb := j*hdh + hc
+						for d := range dh {
+							os[ob+d] += w * vs[vb+d]
 						}
-						os[i*hdh+hc+d] = o
 					}
 				}
 			})
@@ -212,6 +224,7 @@ func mlaKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs
 			os := out.Storage().F32()
 			parallelWork(heads*seq, seq*dh, func(plo, phi int) {
 				a := make([]float64, seq)
+				acc := make([]float64, dh) // float64 output accumulators (the store rounds once)
 				for pidx := plo; pidx < phi; pidx++ {
 					h := pidx / seq
 					i := pidx % seq
@@ -241,12 +254,26 @@ func mlaKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs
 						a[j] = math.Exp(a[j] - m)
 						sum += a[j]
 					}
+					// Normalize once (keep the division), then accumulate value rows j-OUTER so
+					// vs[] is read contiguously in d (vs the cache-thrashing hdh-strided d-outer
+					// loop). Accumulators stay float64 and round to float32 once per output element,
+					// so os is bit-identical to the old d-outer float64-o accumulation.
+					for j := range jmax {
+						a[j] = a[j] / sum
+					}
+					ob := i*hdh + hc
 					for d := range dh {
-						var o float64 // output accumulates in float64; only the store rounds
-						for j := range jmax {
-							o += a[j] / sum * float64(vs[j*hdh+hc+d])
+						acc[d] = 0
+					}
+					for j := range jmax {
+						w := a[j]
+						vb := j*hdh + hc
+						for d := range dh {
+							acc[d] += w * float64(vs[vb+d])
 						}
-						os[i*hdh+hc+d] = float32(o)
+					}
+					for d := range dh {
+						os[ob+d] = float32(acc[d])
 					}
 				}
 			})
@@ -281,10 +308,13 @@ func mlaKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs
 				a[j] = math.Exp(a[j] - m)
 				sum += a[j]
 			}
+			for j := range jmax {
+				a[j] = a[j] / sum // hoist the d-invariant normalization out of the d-loop
+			}
 			for d := range dh {
 				var o float64
 				for j := range jmax {
-					o += a[j] / sum * vC.AtF64(j, hc+d)
+					o += a[j] * vC.AtF64(j, hc+d)
 				}
 				out.SetF64(o, i, hc+d)
 			}

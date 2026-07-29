@@ -142,6 +142,7 @@ func mlaKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) (
 
 	out := tensor.NewOn(ctx.Device(), qC.Dtype(), qC.Shape())
 	a := make([]float64, seq)
+	acc := make([]float64, dh) // float64 output accumulators for the F32 j-outer value-mix
 
 	// Devirtualised fast paths (§T645): the generic AtF64/SetF64 loop below pays a
 	// dtype dispatch + flat-offset per element on the hot heads·seq·(seq·dh) score
@@ -188,12 +189,22 @@ func mlaKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) (
 						a[j] = math.Exp(a[j] - m)
 						sum += a[j]
 					}
+					// Normalize once (keep the division), then accumulate value rows j-OUTER so vs[]
+					// is read contiguously in d (vs the hdh-strided d-outer loop). Per d the sum is
+					// still over j ascending, so os is bit-identical to the old accumulation.
+					for j := range jmax {
+						a[j] = a[j] / sum
+					}
+					ob := i*hdh + hc
 					for d := range dh {
-						var o float64
-						for j := range jmax {
-							o += a[j] / sum * vs[j*hdh+hc+d]
+						os[ob+d] = 0
+					}
+					for j := range jmax {
+						w := a[j]
+						vb := j*hdh + hc
+						for d := range dh {
+							os[ob+d] += w * vs[vb+d]
 						}
-						os[i*hdh+hc+d] = o
 					}
 				}
 			}
@@ -232,12 +243,25 @@ func mlaKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) (
 						a[j] = math.Exp(a[j] - m)
 						sum += a[j]
 					}
+					// Normalize once, then accumulate value rows j-OUTER so vs[] is read contiguously
+					// in d. Accumulators stay float64 and round to float32 once per element, so os is
+					// bit-identical to the old d-outer float64-o accumulation.
+					for j := range jmax {
+						a[j] = a[j] / sum
+					}
+					ob := i*hdh + hc
 					for d := range dh {
-						var o float64 // output accumulates in float64; only the store rounds
-						for j := range jmax {
-							o += a[j] / sum * float64(vs[j*hdh+hc+d])
+						acc[d] = 0
+					}
+					for j := range jmax {
+						w := a[j]
+						vb := j*hdh + hc
+						for d := range dh {
+							acc[d] += w * float64(vs[vb+d])
 						}
-						os[i*hdh+hc+d] = float32(o)
+					}
+					for d := range dh {
+						os[ob+d] = float32(acc[d])
 					}
 				}
 			}
@@ -272,10 +296,13 @@ func mlaKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) (
 				a[j] = math.Exp(a[j] - m)
 				sum += a[j]
 			}
+			for j := range jmax {
+				a[j] = a[j] / sum // hoist the d-invariant normalization out of the d-loop
+			}
 			for d := range dh {
 				var o float64
 				for j := range jmax {
-					o += a[j] / sum * vC.AtF64(j, hc+d)
+					o += a[j] * vC.AtF64(j, hc+d)
 				}
 				out.SetF64(o, i, hc+d)
 			}
