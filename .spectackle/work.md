@@ -1272,3 +1272,28 @@ THE ACTUAL LESSON, which is a measurement error and not a code fact. IN A CPU PR
 WHAT WOULD HAVE ANSWERED IT CHEAPER. The hypothesis was about wall-clock, so the first move should have been a wall-clock experiment, not a structural fix: run the benchmark at GOMAXPROCS=1 against the default and see whether the parallelism helps at all. That is one command and it would have refuted this before any code was written. A CPU profile localizes work; only wall-clock arbitrates a parallelism decision.
 
 NO PERFSCAN RULE, and here the reason is sharper than usual: the pattern I thought I had found - a threshold that checks total rather than per-chunk work - IS AST-detectable, and building a rule for it would have institutionalized a wrong belief. A scan rule asserts that a shape is a defect; this shape is not one, at least not here. The gate on total work is correct for this caller and the borrowed crossover is doing its job.
+
+## R-01KYR4Z7SWFTCRF76GHBNYVDRK The GOMAXPROCS sweep turned a failed hypothesis into a diagnostic: SoftmaxRegression Fit 1.96x, and the reduction axis decides legality
+kind: research
+state: draft
+created: 2026-07-29
+
+Measured on darwin/arm64 M2 Pro, go1.26.5, four interleaved rounds at benchtime=20x.
+
+THE INSTRUMENT CAME FROM THE PREVIOUS FAILURE. R-01KYR494K5ESB rejected an over-parallelization hypothesis and the corrective rule prescribed settling parallelism questions with wall-clock at GOMAXPROCS=1 against the default. Running that as a SWEEP over the classic benchmarks is one command per benchmark and immediately ranks every path by how much parallelism it actually gets:
+  ForestFit 7.93x, KNNPredict 5.87x, DBSCANFit 5.67x, GMMFitFull 3.51x,
+  GBMHist_exact_80k 2.79x, GBMFit 1.73x, GBMHist_hist_80k 1.53x,
+  SoftmaxRegressionFit 0.99x, SVCFit/n4000_rbf 0.97x
+The last two are entirely serial. A failed hypothesis produced a better target-finder than the profile that misled it.
+
+THE TARGET. A line-level profile put ONE loop - the Hessian Gram accumulation - at 76% of Fit flat time, 190ms of 250ms.
+
+THE AXIS CHOICE IS THE ENTIRE CHANGE, and it is the transferable idea. grams[q*mm + a*mAug + j] accumulates over exactly ONE axis, the sample index, so its sum stays ascending however the pair index q, the feature row a and the column j are ordered outside it - and distinct a write disjoint ranges within each pair block. So interchanging a outside the sample loop and parallelizing over it is bit-identical. Parallelizing over SAMPLES is not: each worker needs its own partial Gram and combining partials reassociates the i-sum. Same loop, same speedup target, one axis legal and the other not. The question to ask of any reduction loop is which index carries the accumulation - everything else is free to move.
+
+MEASURED: 17.99-19.69ms to 8.91-9.17ms, 1.96x, ranges disjoint. Mechanism confirmed rather than assumed - the benchmark now scales 2.5x from GOMAXPROCS=1 to 12 against 0.99x before.
+
+A CAVEAT WORTH THE EXTRA CODE. The interchange is NOT free when it cannot fan out: sweeping X once per feature row costs locality the sample-outer nest kept, measured 23.8ms against 18.0ms at GOMAXPROCS=1. Keeping the original nest for the serial branch leaves single-core at parity (18.9ms) instead of 30% worse. Under the standing constraint that an optimization must improve things across systems, a change that regresses a single-core host does not qualify - and this would have, silently, since the default-GOMAXPROCS A/B showed only the 1.96x.
+
+BIT-IDENTITY established by capturing digests from the serial implementation BEFORE the interchange and reproducing them exactly after, over three geometries: the benchmark shape, k=4 with six pair blocks, and k=2 with a single block. Pinned as assertions.
+
+STILL OPEN from the sweep: SVCFit at 0.97x, also entirely serial, with an existing task (T-01KYJQ78WJF57) proposing a flattened kernel matrix. The gradient and Hessian-scatter loops in this same Fit remain serial and cannot be chunked bit-identically over samples for the reason above.
