@@ -217,6 +217,7 @@ var checks = []check{
 	{"PS6001", "full-sort-bounded-prefix", "a full-vocabulary descending index sort whose result feeds an early-breaking (threshold-bounded) prefix consumer, with no quickselect/pre-filter guard — an O(n log n) sort for an O(prefix) need", false},
 	{"PS6002", "spatial-bounds-branch", "an innermost window/kernel loop re-testing a compound spatial bounds guard (iy>=0 && iy<h && ix>=0 && ix<wd) per tap, where the in-bounds taps form one contiguous run the guard can be hoisted around", false},
 	{"PS6005", "monotone-index-bound", "an innermost loop guarding its tap work with a single relational bound on an index affine in the loop var (j:=t-(K-1)+k; if j>=0) — the in-bounds iterations are one contiguous run, clamp the loop bound instead of branching per tap", false},
+	{"PS6012", "inconsistent-fma-pinning", "a function that rounds SOME products explicitly (float64(a*b)) to stop FMA contraction, but leaves a sibling product feeding an add or subtract unpinned — including one assigned to a named local, which the compiler still inlines and contracts", false},
 	{"PS6011", "strided-inner-walk", "an inner loop whose index into a flat buffer MULTIPLIES the inner loop variable by a stride — consecutive iterations jump a whole row, so each touches its own cache line to use one element; interchange the loops, or block four adjacent outer indices so one fetched line serves four accumulators", false},
 	{"PS6010", "output-invariant-operand-reload", "an output loop whose accumulator re-reads an operand that does NOT vary with the output index — unrolling the output loop by 4 amortizes that load across 4 accumulators (register blocking / unroll-and-jam)", false},
 	{"PS6006", "receiver-scratch-buffer", "a method using a receiver SLICE FIELD as a per-call temporary (indexed write, then indexed read, same call) — unsafe to call concurrently, and every caller contends on one cache line", false},
@@ -1842,6 +1843,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	out = append(out, indirectKeyComparatorFindings(fset, fn)...)
 	out = append(out, innerInvariantRecomputeFindings(fset, fn)...)
 	out = append(out, stridedInnerWalkFindings(fset, fn)...)
+	out = append(out, inconsistentFMAPinningFindings(fset, fn)...)
 	out = append(out, invariantTranscendentalRecomputeFindings(fset, fn)...)
 	out = append(out, partialFastPathFindings(fset, fn)...)
 	out = append(out, outputInvariantReloadFindings(fset, fn)...)
@@ -6319,4 +6321,167 @@ func countIndexReads(e ast.Expr) int {
 	}
 	walk(e)
 	return n
+}
+
+// inconsistentFMAPinningFindings flags PS6012 — a product that can be contracted into an
+// FMA inside a function whose author has ALREADY pinned other products against exactly that.
+//
+// Go contracts a*b + c into a single FMADD on arm64 and generally does not on amd64. A fused
+// fast path that must reproduce a chain of separately-rounded backend ops therefore has to
+// round every product explicitly, and float64(a*b) is how that is spelled. The failure this
+// catches is not forgetting the technique — it is applying it incompletely, which looks
+// correct and passes on amd64 CI.
+//
+// The discriminator is INTERNAL CONSISTENCY, which is what keeps it quiet: only functions
+// that already contain at least one float64(a*b) are considered, because those have declared
+// that contraction matters here. A function with no pinning at all is not making the claim
+// and is none of this check's business.
+//
+// The case that motivated it is the one that is hardest to see: naming a subexpression does
+// NOT pin it. `inc := gs[i] * th` used in `s = float64(s*et) - inc` is still inlined and
+// contracted to fma(-gs[i], th, ...) — one rounding where the dispatch path does two. That
+// asymmetry cost three attempts on the Titans fused path, because the branch that computes
+// `s = -inc` (a negation, nothing to fuse into) always matched while every other step was off
+// by one ulp.
+func inconsistentFMAPinningFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil || !hasPinnedProduct(fn.Body) {
+		return nil
+	}
+	// Products pinned by an explicit float64(...) are the baseline, not findings.
+	pinned := map[ast.Expr]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		if p, ok := pinnedProduct(n); ok {
+			pinned[p] = true
+		}
+		return true
+	})
+	// A local whose value is a bare product is a candidate operand: the compiler inlines it.
+	unpinnedLocal := map[string]ast.Expr{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+			return true
+		}
+		id, isID := as.Lhs[0].(*ast.Ident)
+		if !isID {
+			return true
+		}
+		if be, ok := as.Rhs[0].(*ast.BinaryExpr); ok && be.Op == token.MUL && !pinned[be] {
+			unpinnedLocal[id.Name] = be
+		}
+		return true
+	})
+
+	// Index and slice subscripts are INTEGER arithmetic — `ks[t*d : t*d+d]` is a product
+	// feeding an add, and FMA has nothing to do with it. Without types the only way to tell
+	// is structural, so every product appearing inside a subscript is excluded.
+	// Requiring an INDEXED operand is the second half of separating float math from integer
+	// offset math without types: `oy*wo + ox` is all plain identifiers, while real value
+	// arithmetic reads memory (gs[i]*th). It also covers index expressions computed into a
+	// helper call argument, which a subscript-only exclusion cannot see.
+	inSubscript := subscriptProducts(fn.Body)
+
+	var out []finding
+	seen := map[token.Pos]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		add, ok := n.(*ast.BinaryExpr)
+		if !ok || (add.Op != token.ADD && add.Op != token.SUB) {
+			return true
+		}
+		if inSubscript[add.Pos()] {
+			return true
+		}
+		for _, side := range []ast.Expr{add.X, add.Y} {
+			var culprit ast.Expr
+			var why string
+			switch t := side.(type) {
+			case *ast.BinaryExpr:
+				if t.Op == token.MUL && !pinned[t] && hasIndexOperand(t) {
+					culprit, why = t, "this product"
+				}
+			case *ast.Ident:
+				if be, ok := unpinnedLocal[t.Name]; ok && hasIndexOperand(be) {
+					culprit = be
+					why = fmt.Sprintf("the product assigned to %q", t.Name)
+				}
+			}
+			if culprit == nil || seen[culprit.Pos()] {
+				continue
+			}
+			seen[culprit.Pos()] = true
+			out = append(out, finding{
+				pos:      fset.Position(culprit.Pos()),
+				category: "inconsistent-fma-pinning",
+				msg: why + " feeds an add or subtract and is NOT wrapped in float64(...), while this" +
+					" function pins other products against FMA contraction. arm64 will fuse it into one" +
+					" rounding where the path it must match does two, so the bit-exactness claim holds on" +
+					" amd64 CI and fails on Apple silicon. Naming a subexpression does not pin it — the" +
+					" compiler inlines the local. Wrap it: float64(a*b).",
+			})
+		}
+		return true
+	})
+	return out
+}
+
+// hasPinnedProduct reports whether body contains at least one float64(a*b) — the signal that
+// this function is deliberately defending against FMA contraction.
+func hasPinnedProduct(body *ast.BlockStmt) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if _, ok := pinnedProduct(n); ok {
+			found = true
+		}
+		return true
+	})
+	return found
+}
+
+// pinnedProduct matches float64(a*b) and returns the inner product.
+func pinnedProduct(n ast.Node) (ast.Expr, bool) {
+	call, ok := n.(*ast.CallExpr)
+	if !ok || len(call.Args) != 1 {
+		return nil, false
+	}
+	// float64 ONLY. float32(a*b) is overwhelmingly a store rounding on an F32 path, not a
+	// declaration that contraction matters, and treating it as one made this check fire in
+	// every typed F32 branch in the tree.
+	id, ok := call.Fun.(*ast.Ident)
+	if !ok || id.Name != "float64" {
+		return nil, false
+	}
+	be, ok := call.Args[0].(*ast.BinaryExpr)
+	if !ok || be.Op != token.MUL {
+		return nil, false
+	}
+	return be, true
+}
+
+// subscriptProducts collects the positions of every expression that sits inside an index or
+// slice subscript, where arithmetic is integer offsets rather than floating-point values.
+func subscriptProducts(body *ast.BlockStmt) map[token.Pos]bool {
+	out := map[token.Pos]bool{}
+	mark := func(e ast.Expr) {
+		if e == nil {
+			return
+		}
+		ast.Inspect(e, func(n ast.Node) bool {
+			if n != nil {
+				out[n.Pos()] = true
+			}
+			return true
+		})
+	}
+	ast.Inspect(body, func(n ast.Node) bool {
+		switch t := n.(type) {
+		case *ast.IndexExpr:
+			mark(t.Index)
+		case *ast.SliceExpr:
+			mark(t.Low)
+			mark(t.High)
+			mark(t.Max)
+		}
+		return true
+	})
+	return out
 }

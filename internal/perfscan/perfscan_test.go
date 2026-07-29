@@ -4087,3 +4087,83 @@ func Acc(dst, a, b []float64, n, m, stride int) {
 		t.Fatalf("want 1 on a strided accumulation, got %d", got)
 	}
 }
+
+// PS6012 fires on a product assigned to a NAMED LOCAL and then used in a subtract, in a
+// function that pins other products. This is the exact shape that cost three attempts on the
+// Titans fused path: naming a subexpression does not stop the compiler inlining and
+// contracting it.
+func TestDetectPS6012_UnpinnedNamedLocal(t *testing.T) {
+	src := `package p
+func F(g, s []float64, th, et float64, n int) {
+	for i := range n {
+		inc := g[i] * th
+		s[i] = float64(s[i]*et) - inc
+	}
+}`
+	if got := countCat(scanSrc(t, src))["inconsistent-fma-pinning"]; got != 1 {
+		t.Fatalf("want 1 inconsistent-fma-pinning on the named local, got %d", got)
+	}
+}
+
+// SILENT once the product is pinned — the fix must clear the finding.
+func TestDetectPS6012_SilentWhenPinned(t *testing.T) {
+	src := `package p
+func F(g, s []float64, th, et float64, n int) {
+	for i := range n {
+		inc := float64(g[i] * th)
+		s[i] = float64(s[i]*et) - inc
+	}
+}`
+	if got := countCat(scanSrc(t, src))["inconsistent-fma-pinning"]; got != 0 {
+		t.Fatalf("want 0 once pinned, got %d", got)
+	}
+}
+
+// SILENT in a function that pins nothing: it is not claiming bit-exactness against a
+// separately-rounded path, so contraction is none of this check's business.
+func TestDetectPS6012_SilentWithoutAnyPinning(t *testing.T) {
+	src := `package p
+func F(a, b, c []float64, k float64, n int) {
+	for i := range n {
+		c[i] = a[i]*k + b[i]
+	}
+}`
+	if got := countCat(scanSrc(t, src))["inconsistent-fma-pinning"]; got != 0 {
+		t.Fatalf("want 0 without any pinning signal, got %d", got)
+	}
+}
+
+// SILENT on integer offset arithmetic, whether in a subscript or computed into a call
+// argument. FMA has nothing to do with index math, and without types the only tell is that
+// it touches no memory.
+func TestDetectPS6012_SilentOnIndexArithmetic(t *testing.T) {
+	src := `package p
+func F(s, d []float64, get func(int) float64, rows, cols, half int, k float64) {
+	for p := range rows {
+		for e := range half {
+			row := p*cols + e
+			d[row] = float64(s[row] * k)
+			_ = get(p*cols + e)
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src))["inconsistent-fma-pinning"]; got != 0 {
+		t.Fatalf("want 0 on integer offset arithmetic, got %d", got)
+	}
+}
+
+// SILENT when the only conversion is a float32 STORE rounding. float32(a*b) on an F32 path
+// is how a result is written, not a declaration that contraction matters; treating it as a
+// pinning signal made this check fire in every typed F32 branch in the tree.
+func TestDetectPS6012_SilentOnF32StoreRounding(t *testing.T) {
+	src := `package p
+func F(dst []float32, a, b []float64, k float64, n int) {
+	for i := range n {
+		dst[i] = float32(a[i] * k)
+		dst[i] = float32(a[i]*k + b[i])
+	}
+}`
+	if got := countCat(scanSrc(t, src))["inconsistent-fma-pinning"]; got != 0 {
+		t.Fatalf("want 0 when the only conversion is an F32 store rounding, got %d", got)
+	}
+}

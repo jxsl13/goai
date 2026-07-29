@@ -1074,3 +1074,41 @@ the same assignment shape.
 searched only the outer body's direct statements and missed its own motivating case, because
 NSA's P·V loop sits inside an `if sum > 0`. Guarded inner loops are the norm here, not the
 exception. The regression test for it fails if that discovery is narrowed back.
+
+## PS6012 — a fused path that pins some products against FMA but not all  *(scanner: static)*
+
+Go contracts `a*b + c` into a single `FMADD` on arm64 and generally does not on amd64. A
+fused fast path that must reproduce a chain of separately-rounded backend ops therefore has to
+round **every** product explicitly:
+
+```go
+// inc is NOT pinned — one rounding here, and the compiler fuses it into the subtract below
+inc := g[i] * th
+s[i] = float64(s[i]*et) - inc
+```
+
+The failure this catches is not forgetting the technique — it is applying it **incompletely**,
+which looks correct and passes on amd64 CI. The discriminator is therefore internal
+consistency: only functions that already contain a `float64(a*b)` are considered, because
+those have declared that contraction matters here. A function that pins nothing is not making
+the claim.
+
+**Naming a subexpression does not pin it.** `inc` above is a local with a single use, so the
+compiler inlines it and emits `fma(-g[i], th, ...)` — one rounding where the path it must
+match does two.
+
+**Shipped:** this is the defect that cost **three attempts** on the Titans fused path. The
+symptom was maddening rather than obvious: the `t == 0` branch computes `s = -inc`, a negation
+with nothing to fuse into, so it always matched, while every later step was off by one ulp —
+which reads as a bug in the momentum branch. Two other products in the same function were
+already pinned correctly. Fixing it took the path from unverifiable to bit-exact and shipped
+**2.7×** with allocations down from 24,525 to 3,305.
+
+**Two exclusions keep it quiet**, both about separating float math from integer offset math
+without type information. Index and slice subscripts are excluded outright, and the flagged
+product must have an **indexed operand** — real value arithmetic reads memory (`g[i]*th`),
+while offset arithmetic is plain identifiers (`oy*wo + ox`), including when it is computed
+into a helper call where a subscript-only exclusion cannot see it. Separately, only
+`float64(a*b)` counts as a pinning signal: `float32(a*b)` is overwhelmingly a store rounding
+on an F32 path, and counting it fired in every typed F32 branch in the tree. Together these
+took the tree-wide count from 132 to **31**.
