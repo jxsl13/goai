@@ -600,27 +600,45 @@ func siluKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) (
 // OpSoftplus); rides the model f64 tolerance (Mamba goldens gate at 1e-9). The
 // non-SIMD build keeps the scalar formula bit-for-bit.
 func softplusKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*tensor.Tensor, error) {
-	if in[0].Dtype() != tensor.F64 {
-		return nil, fmt.Errorf("cpu: softplus unsupported dtype %v", in[0].Dtype())
-	}
 	xc := in[0].Contiguous()
-	out := tensor.NewOn(ctx.Device(), tensor.F64, in[0].Shape())
-	d, o := xc.Storage().F64(), out.Storage().F64()
-	if vexpF64Fast {
-		parallel(len(o), func(lo, hi int) { vsoftplusF64(o[lo:hi], d[lo:hi]) })
+	switch xc.Dtype() {
+	case tensor.F64:
+		out := tensor.NewOn(ctx.Device(), tensor.F64, in[0].Shape())
+		d, o := xc.Storage().F64(), out.Storage().F64()
+		if vexpF64Fast {
+			parallel(len(o), func(lo, hi int) { vsoftplusF64(o[lo:hi], d[lo:hi]) })
+			return []*tensor.Tensor{out}, nil
+		}
+		parallel(len(o), func(lo, hi int) {
+			for i := lo; i < hi; i++ {
+				x := d[i]
+				if x > 0 {
+					o[i] = x + math.Log1p(math.Exp(-x))
+				} else {
+					o[i] = math.Log1p(math.Exp(x))
+				}
+			}
+		})
+		return []*tensor.Tensor{out}, nil
+	case tensor.F32:
+		// F32 falls to the serial ref kernel today; parallelize it. The stable softplus
+		// (same branch as the F64 path and ref's softplus()) is evaluated in f64 with a
+		// single round on store — bit-identical to ref's F32 path; disjoint outputs.
+		out := tensor.NewOn(ctx.Device(), tensor.F32, in[0].Shape())
+		d, o := xc.Storage().F32(), out.Storage().F32()
+		parallel(len(o), func(lo, hi int) {
+			for i := lo; i < hi; i++ {
+				x := float64(d[i])
+				if x > 0 {
+					o[i] = float32(x + math.Log1p(math.Exp(-x)))
+				} else {
+					o[i] = float32(math.Log1p(math.Exp(x)))
+				}
+			}
+		})
 		return []*tensor.Tensor{out}, nil
 	}
-	parallel(len(o), func(lo, hi int) {
-		for i := lo; i < hi; i++ {
-			x := d[i]
-			if x > 0 {
-				o[i] = x + math.Log1p(math.Exp(-x))
-			} else {
-				o[i] = math.Log1p(math.Exp(x))
-			}
-		}
-	})
-	return []*tensor.Tensor{out}, nil
+	return nil, fmt.Errorf("cpu: softplus unsupported dtype %v", xc.Dtype())
 }
 
 // softCapKernelCPU is the F64 CPU soft-cap (Gemma-2 attn_logit_softcapping /
@@ -635,22 +653,35 @@ func softCapKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.A
 	if pa.Cap <= 0 {
 		return nil, fmt.Errorf("cpu: softcap cap must be > 0, got %g", pa.Cap)
 	}
-	if in[0].Dtype() != tensor.F64 {
-		return nil, fmt.Errorf("cpu: softcap unsupported dtype %v", in[0].Dtype())
-	}
 	xc := in[0].Contiguous()
-	out := tensor.NewOn(ctx.Device(), tensor.F64, in[0].Shape())
-	d, o := xc.Storage().F64(), out.Storage().F64()
-	if vexpF64Fast {
-		parallel(len(o), func(lo, hi int) { vsoftcapF64(o[lo:hi], d[lo:hi], pa.Cap) })
+	switch xc.Dtype() {
+	case tensor.F64:
+		out := tensor.NewOn(ctx.Device(), tensor.F64, in[0].Shape())
+		d, o := xc.Storage().F64(), out.Storage().F64()
+		if vexpF64Fast {
+			parallel(len(o), func(lo, hi int) { vsoftcapF64(o[lo:hi], d[lo:hi], pa.Cap) })
+			return []*tensor.Tensor{out}, nil
+		}
+		parallel(len(o), func(lo, hi int) {
+			for i := lo; i < hi; i++ {
+				o[i] = pa.Cap * math.Tanh(d[i]/pa.Cap)
+			}
+		})
+		return []*tensor.Tensor{out}, nil
+	case tensor.F32:
+		// F32 falls to the serial ref kernel today; parallelize it. cap·tanh(x/cap)
+		// evaluated in f64 with a single round on store — bit-identical to ref's F32
+		// path (backend/ref/softcap.go); disjoint output elements → race-free.
+		out := tensor.NewOn(ctx.Device(), tensor.F32, in[0].Shape())
+		d, o := xc.Storage().F32(), out.Storage().F32()
+		parallel(len(o), func(lo, hi int) {
+			for i := lo; i < hi; i++ {
+				o[i] = float32(pa.Cap * math.Tanh(float64(d[i])/pa.Cap))
+			}
+		})
 		return []*tensor.Tensor{out}, nil
 	}
-	parallel(len(o), func(lo, hi int) {
-		for i := lo; i < hi; i++ {
-			o[i] = pa.Cap * math.Tanh(d[i]/pa.Cap)
-		}
-	})
-	return []*tensor.Tensor{out}, nil
+	return nil, fmt.Errorf("cpu: softcap unsupported dtype %v", xc.Dtype())
 }
 
 // siluBackwardKernelCPU is the arm64 perf-build F32 SiLU VJP (§T665): dx =
@@ -713,9 +744,11 @@ func init() {
 	// F64-only: softplus (Mamba/Jamba Δ) rides the amd64 vsoftplusF64 SIMD kernel;
 	// F32 stays on the ref fallback. The non-SIMD build runs the scalar formula.
 	std.add(backend.OpSoftplus, tensor.F64, softplusKernelCPU)
+	std.add(backend.OpSoftplus, tensor.F32, softplusKernelCPU)
 	std.add(backend.OpSoftplusBackward, tensor.F64, softplusBackwardKernelCPU)
 	// F64-only: soft-cap (Gemma-2 attention/final logits) rides vsoftcapF64.
 	std.add(backend.OpSoftCap, tensor.F64, softCapKernelCPU)
+	std.add(backend.OpSoftCap, tensor.F32, softCapKernelCPU)
 
 	if vexpF32Fast {
 		// SIMD perf build, F32 only (§T664/§T665): the vectorized GELU and SiLU VJPs
