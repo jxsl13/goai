@@ -405,4 +405,4 @@ IF an optimization trades register accumulators for a memory accumulator vector 
 IF a fused loop claims bit-exactness against a multi-op dispatch path, THEN the implementer SHALL round each product explicitly, because arm64 contracts a*b+c to FMADD and amd64 does not, so the claim passes CI and fails on Apple silicon.
 
 ## PROC-BENCH-CACHE-THRESHOLD-001
-IF a benchmark validates a memory-access optimization such as loop interchange, blocking, or relayout, THEN the implementer SHALL size it so the working set exceeds cache and report at least two sizes, because SymEig measured 1.05x at n=64 (32KB, resident) and 1.89x at n=128.
+IF a benchmark validates a memory-access optimization (interchange, blocking, relayout), THEN the implementer SHALL report at least two sizes, one whose working set exceeds cache: SymEig measured 1.05x at n=64 (32KB, resident) and 1.89x at n=128.
