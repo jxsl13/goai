@@ -1056,10 +1056,19 @@ of `S` once per key channel per timestep; interchanging it carried the larger sh
 module's **1.75×**. Sinkhorn's transposed half is the same pathology in `[][]float64` form
 (**2.65×**), where PS4006 sees it instead.
 
-**Two false-positive classes are excluded by construction.** A transpose
+**Three false-positive classes are excluded by construction.** A transpose
 (`out[j*r+i] = x[i*c+j]`) strides on one side whichever way it is iterated, so interchange
-only moves the problem — suppressed by detecting the mirrored shape. And a nest whose two
-loop variables never reach the same index expression has no interchangeable axes at all.
+only moves the problem — suppressed by detecting the mirrored shape. A nest whose two loop
+variables never reach the same index expression has no interchangeable axes at all. And any
+**permutation copy** — one indexed write fed by one read, with or without a conversion or
+accessor — has no reduction to interchange; its real fix is tiling.
+
+That last exclusion exists because the mirrored-shape test is syntactic and loses sight of
+the stride the moment it is hoisted: `row := i * b` outside the inner loop makes `src[row+j]`
+look unstrided, which is how `nlp`'s **already-tiled** gguf transposes were being flagged.
+Suppressing permutation copies cut the tree-wide count from 120 to **71**. The suppression is
+kept honest by a test asserting the check still fires on a strided *accumulation* written in
+the same assignment shape.
 
 **Validated by replay**, per the discipline this file records twice already: the first draft
 searched only the outer body's direct statements and missed its own motivating case, because

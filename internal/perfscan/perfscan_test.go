@@ -4036,3 +4036,54 @@ func F(a, b []float64, n, m, stride int) {
 		t.Fatalf("want 0 when only one loop var reaches the index, got %d", got)
 	}
 }
+
+// SILENT on a permutation copy whose stride was HOISTED out of the inner loop. The
+// transpose check above is syntactic and cannot see the mirrored multiplication once
+// `row := i*b` moves it, which is exactly how nlp's already-tiled gguf transposes were
+// being flagged.
+func TestDetectPS6011_SilentOnHoistedStrideTranspose(t *testing.T) {
+	src := `package p
+func T(dst, src []float64, a, b int) {
+	for i := 0; i < a; i++ {
+		row := i * b
+		for j := 0; j < b; j++ {
+			dst[j*a+i] = src[row+j]
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src))["strided-inner-walk"]; got != 0 {
+		t.Fatalf("want 0 on a hoisted-stride permutation copy, got %d", got)
+	}
+}
+
+// SILENT when the source is read through an ACCESSOR rather than an index — the generic
+// fallback arms of those same transposes.
+func TestDetectPS6011_SilentOnAccessorPermutationCopy(t *testing.T) {
+	src := `package p
+func T(dst []float64, tc *T2, a, b int) {
+	for i := 0; i < a; i++ {
+		for j := 0; j < b; j++ {
+			dst[j*a+i] = tc.AtF64(i, j)
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src))["strided-inner-walk"]; got != 0 {
+		t.Fatalf("want 0 on an accessor permutation copy, got %d", got)
+	}
+}
+
+// STILL FIRES when the strided write is an ACCUMULATION rather than a copy — the
+// suppression must not swallow a genuine reduction that happens to look assignment-shaped.
+func TestDetectPS6011_FiresOnStridedAccumulation(t *testing.T) {
+	src := `package p
+func Acc(dst, a, b []float64, n, m, stride int) {
+	for c := range n {
+		for r := range m {
+			dst[r*stride+c] = dst[r*stride+c] + a[r]*b[c]
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src))["strided-inner-walk"]; got != 1 {
+		t.Fatalf("want 1 on a strided accumulation, got %d", got)
+	}
+}

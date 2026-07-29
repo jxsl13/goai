@@ -6200,6 +6200,16 @@ func stridedInnerWalkFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 				if containsCall(ix.Index) {
 					return true
 				}
+				// A pure PERMUTATION COPY — dst[j*a+i] = src[row+j], with or without a
+				// conversion — has no reduction to interchange: one side must stride
+				// whichever way it runs, and the real fix is tiling. This is the same
+				// exclusion as the transpose check above, but it survives the stride
+				// being hoisted (row := i*b), which makes the mirrored multiplication
+				// invisible to a syntactic test. nlp's gguf transposes are already
+				// tiled and were the false positives that motivated it.
+				if permutationCopy(innerBody, ix) {
+					return true
+				}
 				if seen[buf.Name] {
 					return true
 				}
@@ -6264,4 +6274,49 @@ func scalesVar(body *ast.BlockStmt, name string) bool {
 		return true
 	})
 	return found
+}
+
+// permutationCopy reports whether ix is the target (or source) of a plain assignment whose
+// other side is a single indexed read, i.e. a copy that permutes indices rather than
+// reducing. Conversions are unwrapped so float64(src[k]) counts.
+func permutationCopy(body *ast.BlockStmt, ix *ast.IndexExpr) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || as.Tok != token.ASSIGN || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+			return true
+		}
+		if as.Lhs[0] != ast.Expr(ix) && as.Rhs[0] != ast.Expr(ix) {
+			return true
+		}
+		// The destination is exactly one indexed write; the source is a single read —
+		// an index, or an accessor call in the generic fallback arms. What must NOT
+		// appear is arithmetic combining several reads, which is a reduction rather
+		// than a permutation.
+		if countIndexReads(as.Lhs[0]) == 1 && countIndexReads(as.Rhs[0]) <= 1 {
+			found = true
+		}
+		return true
+	})
+	return found
+}
+
+// countIndexReads counts IndexExprs in e, skipping the index expressions themselves so
+// that the arithmetic inside brackets (j*a+i) is not mistaken for a second read.
+func countIndexReads(e ast.Expr) int {
+	n := 0
+	var walk func(ast.Node)
+	walk = func(node ast.Node) {
+		ast.Inspect(node, func(m ast.Node) bool {
+			ix, ok := m.(*ast.IndexExpr)
+			if !ok {
+				return true
+			}
+			n++
+			walk(ix.X) // descend the operand, never the subscript
+			return false
+		})
+	}
+	walk(e)
+	return n
 }
