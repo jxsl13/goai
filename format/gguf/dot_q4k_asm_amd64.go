@@ -34,7 +34,7 @@ func dotQ4_KRowASM(row []float32, raw []byte, k int) float64 {
 	return float64(dotQ4KRowAsm(&row[0], &raw[0], &scales[0], nsb))
 }
 
-func init() { dotQ4KRowFn = dotQ4_KRowASM }
+func init() { dotQ4KRowFn, dotQ4KRowSIMD = dotQ4_KRowASM, true }
 
 // q4kDotIsAsm is true when the tolerance-gated asm Q4_K row dot is active (simd build).
 var q4kDotIsAsm = true

@@ -154,6 +154,19 @@ func BenchmarkQMatMulQ6_K_M1(b *testing.B)  { benchQMatMul(b, 1, Q6_K) }
 func BenchmarkQMatMulQ6_K_M16(b *testing.B) { benchQMatMul(b, 16, Q6_K) }
 func BenchmarkQMatMulQ2_K_M1(b *testing.B)  { benchQMatMul(b, 1, Q2_K) }
 
+// The remaining supported types. QMatMul handles seven, and until this the suite measured
+// three of them — which is how four K-quant kernels became unreachable with every benchmark
+// green (PROC-MERGE-ORPHAN-001). Both m==1 (decode, the blocked row-dot path) and m>1
+// (prefill, the dequant-into-scratch path) are covered, since they are separate code.
+func BenchmarkQMatMulQ2_K_M16(b *testing.B) { benchQMatMul(b, 16, Q2_K) }
+func BenchmarkQMatMulQ3_K_M1(b *testing.B)  { benchQMatMul(b, 1, Q3_K) }
+func BenchmarkQMatMulQ3_K_M16(b *testing.B) { benchQMatMul(b, 16, Q3_K) }
+func BenchmarkQMatMulQ5_K_M1(b *testing.B)  { benchQMatMul(b, 1, Q5_K) }
+func BenchmarkQMatMulQ5_K_M16(b *testing.B) { benchQMatMul(b, 16, Q5_K) }
+func BenchmarkQMatMulQ4_0_M1(b *testing.B)  { benchQMatMul(b, 1, Q4_0) }
+func BenchmarkQMatMulQ4_0_M16(b *testing.B) { benchQMatMul(b, 16, Q4_0) }
+func BenchmarkQMatMulQ8_0_M16(b *testing.B) { benchQMatMul(b, 16, Q8_0) }
+
 // Write path: F64 tensor forced through the f32Data conversion.
 func BenchmarkWriteF32Tensor(b *testing.B) {
 	vals := make([]float32, benchN)

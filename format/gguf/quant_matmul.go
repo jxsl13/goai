@@ -41,6 +41,12 @@ const (
 // it in init() with the 2.6x VPMOVZXBD/FMA row dot (tolerance-gated).
 var dotQ4KRowFn = dotQ4_KRow
 
+// dotQ4KRowSIMD reports whether the asm kernel above actually replaced the scalar dot. It
+// cannot be derived by comparing function values — Go does not permit that — so the asm
+// init sets it. Where the override is absent (every non-amd64 build, and amd64 without the
+// simd experiment) Q4_K should take the 4-row blocked scalar path like the other K-quants.
+var dotQ4KRowSIMD bool
+
 // q8FusedDecodeM1, when non-nil (amd64+simd build), computes the Q8_0 m==1 decode
 // matmul with the SIMD dequant-dot kernel (tolerance-gated). Nil → scalar fused path.
 var q8FusedDecodeM1 func(row []float32, weight []byte, n, k, rowBytes int, outf []float32)
@@ -272,7 +278,14 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 		case Q3_K:
 			dot, dot4 = dotQ3_KRow, dotQ3_K4Rows
 		case Q4_K:
-			dot, dot4 = dotQ4KRowFn, dotQ4_K4Rows
+			// Blocked only when the asm kernel is NOT in play. With the override active
+			// the asm row dot is expected to beat 4-row scalar blocking; without it Q4_K
+			// was the only K-quant left unblocked, and measured 2525 MB/s against
+			// 7185-7585 for its blocked peers on this host.
+			dot = dotQ4KRowFn
+			if !dotQ4KRowSIMD {
+				dot4 = dotQ4_K4Rows
+			}
 		case Q5_K:
 			dot, dot4 = dotQ5_KRow, dotQ5_K4Rows
 		case Q6_K:
