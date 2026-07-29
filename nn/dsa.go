@@ -55,9 +55,15 @@ func DSAAttention(q, k, v, qIdx, kIdx *tensor.Tensor, w []float64, heads, topK i
 	// ranking and attention.
 	if qis, kis, qs := flatF64(qIdx), flatF64(kIdx), flatF64(q); qis != nil && kis != nil && qs != nil {
 		idxWidth := qIdx.Shape()[1]
+		// Hoisted scratch: a reused rank slice (no per-query realloc growth) and a []bool
+		// membership set (no per-query map alloc + hashing). Both are cleared between
+		// queries, so the selected set, sort order and attention math are IDENTICAL.
+		rank := make([]ranked, 0, seq)
+		sel := make([]bool, seq)
+		var setIdx []int
 		for i := range seq {
 			qir := qis[i*idxWidth : i*idxWidth+idxWidth : i*idxWidth+idxWidth]
-			var rank []ranked
+			rank = rank[:0]
 			for j := 0; j <= i; j++ {
 				kjr := kis[j*idxWidth : j*idxWidth+idxWidth : j*idxWidth+idxWidth]
 				var s float64
@@ -74,14 +80,24 @@ func DSAAttention(q, k, v, qIdx, kIdx *tensor.Tensor, w []float64, heads, topK i
 				rank = append(rank, ranked{j, s})
 			}
 			sort.Slice(rank, func(a, b int) bool { return rank[a].s > rank[b].s })
-			selected := map[int]bool{i: true}
-			for ri := 0; ri < len(rank) && len(selected) < topK; ri++ {
-				selected[rank[ri].j] = true
+			setIdx = setIdx[:0]
+			sel[i] = true
+			setIdx = append(setIdx, i)
+			cnt := 1
+			for ri := 0; ri < len(rank) && cnt < topK; ri++ {
+				if j := rank[ri].j; !sel[j] {
+					sel[j] = true
+					setIdx = append(setIdx, j)
+					cnt++
+				}
 			}
 			for h := range heads {
 				off := h * dk
 				qr := qs[i*dm+off : i*dm+off+dk]
-				attendMask(qr, k, v, out, i, off, dk, scale, scores, func(j int) bool { return selected[j] })
+				attendMask(qr, k, v, out, i, off, dk, scale, scores, func(j int) bool { return sel[j] })
+			}
+			for _, j := range setIdx {
+				sel[j] = false
 			}
 		}
 		return out, nil
