@@ -238,11 +238,14 @@ func (m *Mamba2Mixer) forward(u *tensor.Tensor) (*tensor.Tensor, error) {
 		wbase := c * m.DConv
 		for t := range seq {
 			acc := convB[c]
-			for k := range m.DConv {
-				src := t - (m.DConv - 1) + k
-				if src >= 0 {
-					acc += convW[wbase+k] * xBC[src][c]
-				}
+			// src = t-(DConv-1)+k >= 0  <=>  k >= (DConv-1)-t; src is always < seq (src <= t).
+			// Hoist the causal lower tap bound so the DConv-tap dot drops its per-tap branch.
+			kStart := 0
+			if lo := (m.DConv - 1) - t; lo > 0 {
+				kStart = lo
+			}
+			for k := kStart; k < m.DConv; k++ {
+				acc += convW[wbase+k] * xBC[t-(m.DConv-1)+k][c]
 			}
 			xc[t][c] = acc
 		}
