@@ -72,6 +72,11 @@ func WandaScore(w, x *tensor.Tensor) (*tensor.Tensor, error) {
 // weights are left UNCHANGED (no weight update — the key simplification over SparseGPT).
 // W is [C_in, C_out], X is [tokens, C_in]; sparsity ∈ [0,1]. A pure-f64 post-training
 // compression utility (like the quantizers), not differentiable.
+// wandaPanel is how many output columns are transposed at once. 128 keeps the score panel
+// and its drop flags (about 2.3MB at cin=2048) inside L2 while amortizing each row-major
+// sweep of the weight matrix over 128 outputs.
+const wandaPanel = 128
+
 func WandaPrune(w, x *tensor.Tensor, sparsity float64) (pruned, mask *tensor.Tensor, err error) {
 	if sparsity < 0 || sparsity > 1 {
 		return nil, nil, fmt.Errorf("nn: WandaPrune sparsity=%g out of [0,1]", sparsity)
@@ -90,7 +95,7 @@ func WandaPrune(w, x *tensor.Tensor, sparsity float64) (pruned, mask *tensor.Ten
 	idx := make([]int, cin)
 	col := make([]float64, cin) // this output's per-input scores, hoisted out of the comparator
 	drop := make([]bool, cin)   // reused across columns (cleared each output)
-	sortCol := func() {
+	sortColOf := func(col []float64) {
 		// ascending by score, ties broken by input index for determinism. The total-order
 		// comparator (score, then index) lets the faster unstable sort reproduce the stable
 		// order exactly (indices are unique), and reads the hoisted col instead of dispatching.
@@ -115,25 +120,47 @@ func WandaPrune(w, x *tensor.Tensor, sparsity float64) (pruned, mask *tensor.Ten
 	sf64 := s.Storage()
 	if wsF := flatF64(w); wsF != nil {
 		ss, ps, ms := sf64.F64(), pruned.Storage().F64(), mask.Storage().F64()
-		for o := 0; o < cout; o++ {
+		// Processed in PANELS of output columns. Per output, the scores, the weights and
+		// the mask are all indexed [j*cout+o] — three walks down a column of a row-major
+		// [cin,cout] matrix, one cache line touched per input to use eight of its bytes.
+		// At 2048x2048 that is 4.2M strided reads for the gather and as many again for the
+		// write-back, and it is what the benchmark was spending its time on (PS6011).
+		//
+		// A panel transposes ob columns at a time, so both the gather and the write-back
+		// sweep ss/wsF/ps/ms in ROW order. Bit-identical — same values, same per-column
+		// sort, same entries written; only the visiting order changes.
+		pn := min(wandaPanel, cout)
+		colbuf := make([]float64, pn*cin)
+		dropbuf := make([]bool, pn*cin)
+		for o0 := 0; o0 < cout; o0 += pn {
+			ob := min(pn, cout-o0)
 			for j := 0; j < cin; j++ {
-				idx[j] = j
-				col[j] = ss[j*cout+o]
-			}
-			sortCol()
-			for j := range drop {
-				drop[j] = false
-			}
-			for r := 0; r < k; r++ {
-				drop[idx[r]] = true
-			}
-			for j := 0; j < cin; j++ {
-				if drop[j] {
-					continue
+				row := ss[j*cout+o0 : j*cout+o0+ob]
+				for t, v := range row {
+					colbuf[t*cin+j] = v
 				}
-				off := j*cout + o
-				ps[off] = wsF[off]
-				ms[off] = 1
+			}
+			for t := 0; t < ob; t++ {
+				col := colbuf[t*cin : t*cin+cin : t*cin+cin]
+				for j := 0; j < cin; j++ {
+					idx[j] = j
+				}
+				sortColOf(col)
+				d := dropbuf[t*cin : t*cin+cin : t*cin+cin]
+				clear(d)
+				for r := 0; r < k; r++ {
+					d[idx[r]] = true
+				}
+			}
+			for j := 0; j < cin; j++ {
+				base := j*cout + o0
+				for t := 0; t < ob; t++ {
+					if dropbuf[t*cin+j] {
+						continue
+					}
+					ps[base+t] = wsF[base+t]
+					ms[base+t] = 1
+				}
 			}
 		}
 		return pruned, mask, nil
@@ -145,7 +172,7 @@ func WandaPrune(w, x *tensor.Tensor, sparsity float64) (pruned, mask *tensor.Ten
 				idx[j] = j
 				col[j] = float64(ss[j*cout+o])
 			}
-			sortCol()
+			sortColOf(col)
 			for j := range drop {
 				drop[j] = false
 			}
@@ -168,7 +195,7 @@ func WandaPrune(w, x *tensor.Tensor, sparsity float64) (pruned, mask *tensor.Ten
 			idx[j] = j
 			col[j] = s.AtF64(j, o)
 		}
-		sortCol()
+		sortColOf(col)
 		for j := range drop {
 			drop[j] = false
 		}
