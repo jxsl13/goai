@@ -161,5 +161,27 @@ func (b *T5RelativeBias) Bias(ctx *backend.Context, queryLen, keyLen int) (*tens
 	return ex(backend.OpReshape, backend.ReshapeAttrs{Shape: tensor.Shape{queryLen, keyLen, numHeads}}, flat)
 }
 
+// BiasRow returns the [keyLen, numHeads] relative-position bias for a SINGLE query at absolute
+// position queryPos attending keys 0..keyLen-1 — the incremental-decode row of the full
+// Bias(queryPos+1, keyLen). It builds only the O(keyLen) one-hot for that one row instead of the
+// full O(queryLen·keyLen) table, so a T decode over growing positions costs O(T²) here rather than
+// O(T³). Bit-identical to Bias(queryPos+1, keyLen) sliced at row queryPos: same Table, same bucket
+// map (bucket(j−queryPos)), same one-hot·Table matmul — just without the discarded rows.
+func (b *T5RelativeBias) BiasRow(ctx *backend.Context, queryPos, keyLen int) (*tensor.Tensor, error) {
+	if queryPos < 0 || keyLen <= 0 {
+		return nil, fmt.Errorf("nn: T5RelativeBias.BiasRow needs queryPos≥0, keyLen>0, got %d/%d", queryPos, keyLen)
+	}
+	oneHot := tensor.New(b.Table.Dtype(), tensor.Shape{keyLen, b.NumBuckets})
+	for j := range keyLen {
+		bkt := T5RelativePositionBucket(j-queryPos, b.Bidirectional, b.NumBuckets, b.MaxDistance)
+		oneHot.SetF64(1, j, bkt)
+	}
+	out, err := backend.Execute(ctx, backend.OpMatMul, []*tensor.Tensor{oneHot, b.Table}, nil) // [keyLen, numHeads]
+	if err != nil {
+		return nil, err
+	}
+	return out[0], nil
+}
+
 // Params returns the trainable table.
 func (b *T5RelativeBias) Params() []*tensor.Tensor { return []*tensor.Tensor{b.Table} }
