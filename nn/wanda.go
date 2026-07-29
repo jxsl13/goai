@@ -65,6 +65,69 @@ func WandaScore(w, x *tensor.Tensor) (*tensor.Tensor, error) {
 	return s, nil
 }
 
+// wandaLess is the TOTAL order the column selection and sort share: score ascending, ties
+// broken by input index. Indices are unique, so no two elements compare equal — which is
+// what lets an unstable partition reproduce the same selected SET, and what keeps Lomuto
+// partitioning from degrading on a column of identical scores.
+func wandaLess(a, b int, col []float64) bool {
+	if ca, cb := col[a], col[b]; ca != cb {
+		return ca < cb
+	}
+	return a < b
+}
+
+// wandaSelectK partitions idx in place so idx[:k] holds the k smallest entries under
+// wandaLess, in unspecified order. The consumer only marks membership, so the order inside
+// the prefix is never observed — which is why a selection may replace the full sort.
+//
+// O(n) expected against the sort's O(n log n): about 4k comparisons per column against
+// 22.5k at cin=2048. Median-of-three pivoting is not optional here — score columns are
+// |w|·‖x‖ products, frequently near-sorted, and a first-element pivot degrades to O(n²) on
+// exactly that shape.
+func wandaSelectK(idx []int, col []float64, k int) {
+	if k <= 0 || k >= len(idx) {
+		return
+	}
+	lo, hi := 0, len(idx)-1
+	for lo < hi {
+		p := wandaPartition(idx, col, lo, hi)
+		switch {
+		case p == k-1:
+			return
+		case p < k-1:
+			lo = p + 1
+		default:
+			hi = p - 1
+		}
+	}
+}
+
+// wandaPartition is Lomuto partitioning around a median-of-three pivot, returning the
+// pivot's final position.
+func wandaPartition(idx []int, col []float64, lo, hi int) int {
+	mid := lo + (hi-lo)/2
+	if wandaLess(idx[mid], idx[lo], col) {
+		idx[lo], idx[mid] = idx[mid], idx[lo]
+	}
+	if wandaLess(idx[hi], idx[lo], col) {
+		idx[lo], idx[hi] = idx[hi], idx[lo]
+	}
+	if wandaLess(idx[hi], idx[mid], col) {
+		idx[mid], idx[hi] = idx[hi], idx[mid]
+	}
+	idx[mid], idx[hi] = idx[hi], idx[mid] // pivot to the end
+	pv := idx[hi]
+	i := lo
+	for j := lo; j < hi; j++ {
+		if wandaLess(idx[j], pv, col) {
+			idx[i], idx[j] = idx[j], idx[i]
+			i++
+		}
+	}
+	idx[i], idx[hi] = idx[hi], idx[i]
+	return i
+}
+
 // wandaPanel is how many output columns are transposed at once. 128 keeps the score panel
 // and its drop flags (about 2.3MB at cin=2048) inside L2 while amortizing each row-major
 // sweep of the weight matrix over 128 outputs.
@@ -145,7 +208,10 @@ func WandaPrune(w, x *tensor.Tensor, sparsity float64) (pruned, mask *tensor.Ten
 				for j := 0; j < cin; j++ {
 					idx[j] = j
 				}
-				sortColOf(col)
+				// Only the k SMALLEST are consumed — the full sorted order was never read
+				// (PS6001). A selection produces the identical set because the comparator
+				// is total and only membership is marked.
+				wandaSelectK(idx, col, k)
 				d := dropbuf[t*cin : t*cin+cin : t*cin+cin]
 				clear(d)
 				for r := 0; r < k; r++ {
