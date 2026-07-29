@@ -3069,3 +3069,53 @@ func F(x *T, idx []int) float64 {
 		t.Fatalf("outside a loop, want 0 spread-accessor-in-loop, got %d", got)
 	}
 }
+
+// PS4011: fires on a recurrence dispatching 2+ backend ops/iter with no flatF64 fast path.
+func TestDetectPS4011_OpDispatchRecurrence(t *testing.T) {
+	src := `package p
+func rec(ctx *C, x T, seq int) T {
+	var s T
+	for t := 0; t < seq; t++ {
+		a := ex(backend.OpMul, s, x)
+		s = ex(backend.OpAdd, a, x)
+	}
+	return s
+}`
+	if got := countCat(scanSrc(t, src))["op-dispatch-recurrence"]; got != 1 {
+		t.Fatalf("want 1 op-dispatch-recurrence, got %d", got)
+	}
+}
+
+// Silent when the function already has a flatF64 fused fast path.
+func TestDetectPS4011_SilentWithFlatF64(t *testing.T) {
+	src := `package p
+func rec(ctx *C, x T, seq int) T {
+	if xs := flatF64(x); xs != nil {
+		return x
+	}
+	var s T
+	for t := 0; t < seq; t++ {
+		a := ex(backend.OpMul, s, x)
+		s = ex(backend.OpAdd, a, x)
+	}
+	return s
+}`
+	if got := countCat(scanSrc(t, src))["op-dispatch-recurrence"]; got != 0 {
+		t.Fatalf("want 0 (has flatF64), got %d", got)
+	}
+}
+
+// Silent when the loop dispatches fewer than 2 backend ops.
+func TestDetectPS4011_SilentOnSingleDispatch(t *testing.T) {
+	src := `package p
+func rec(ctx *C, x T, seq int) T {
+	var s T
+	for t := 0; t < seq; t++ {
+		s = ex(backend.OpAdd, s, x)
+	}
+	return s
+}`
+	if got := countCat(scanSrc(t, src))["op-dispatch-recurrence"]; got != 0 {
+		t.Fatalf("want 0 (single dispatch), got %d", got)
+	}
+}
