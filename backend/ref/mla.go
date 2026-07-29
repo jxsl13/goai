@@ -24,18 +24,37 @@ func mlaRoPE(src *tensor.Tensor, nheads, dR int, base float64, dst []float64) {
 	// sin, the two combines) stays float64 on ALL paths — F32 only widens the loaded
 	// input, matching AtF64 on an F32 tensor byte-for-byte. Contiguous() is called
 	// once (returns self when already dense).
+	// theta[e] = base^(-2e/dR) is invariant across BOTH position p and head h, and
+	// cos/sin(p·theta[e]) is invariant across h — yet the original recomputed all three
+	// in the innermost (p,h,e) loop, so the Pow ran seq·nheads× and the Cos/Sin nheads×
+	// for each identical value. Precompute theta once, and the per-position cos/sin into
+	// half-sized scratch before the head loop. Bit-identical: same Pow/Cos/Sin arguments,
+	// same combine order (PS5005). Applies to all three dtype paths.
+	thetas := make([]float64, half)
+	for e := range half {
+		thetas[e] = math.Pow(base, -float64(2*e)/float64(dR))
+	}
+	cosA := make([]float64, half)
+	sinA := make([]float64, half)
+	fillTrig := func(p int) {
+		fp := float64(p)
+		for e := range half {
+			cosA[e], sinA[e] = math.Cos(fp*thetas[e]), math.Sin(fp*thetas[e])
+		}
+	}
 	switch src.Dtype() {
 	case tensor.F64:
 		if sc := src.Contiguous(); sc.Dtype() == tensor.F64 {
 			s := sc.Storage().F64()
 			for p := range seq {
+				fillTrig(p)
 				for h := range nheads {
+					row := p*cols + h*dR
+					out := (p*nheads + h) * dR
 					for e := range half {
-						theta := math.Pow(base, -float64(2*e)/float64(dR))
-						c, sn := math.Cos(float64(p)*theta), math.Sin(float64(p)*theta)
-						x0, x1 := s[p*cols+h*dR+e], s[p*cols+h*dR+e+half]
-						dst[(p*nheads+h)*dR+e] = x0*c - x1*sn
-						dst[(p*nheads+h)*dR+e+half] = x1*c + x0*sn
+						x0, x1 := s[row+e], s[row+e+half]
+						dst[out+e] = x0*cosA[e] - x1*sinA[e]
+						dst[out+e+half] = x1*cosA[e] + x0*sinA[e]
 					}
 				}
 			}
@@ -45,28 +64,29 @@ func mlaRoPE(src *tensor.Tensor, nheads, dR int, base float64, dst []float64) {
 		if sc := src.Contiguous(); sc.Dtype() == tensor.F32 {
 			s := sc.Storage().F32()
 			for p := range seq {
+				fillTrig(p)
 				for h := range nheads {
+					row := p*cols + h*dR
+					out := (p*nheads + h) * dR
 					for e := range half {
-						theta := math.Pow(base, -float64(2*e)/float64(dR))
-						c, sn := math.Cos(float64(p)*theta), math.Sin(float64(p)*theta)
-						x0, x1 := float64(s[p*cols+h*dR+e]), float64(s[p*cols+h*dR+e+half])
-						dst[(p*nheads+h)*dR+e] = x0*c - x1*sn
-						dst[(p*nheads+h)*dR+e+half] = x1*c + x0*sn
+						x0, x1 := float64(s[row+e]), float64(s[row+e+half])
+						dst[out+e] = x0*cosA[e] - x1*sinA[e]
+						dst[out+e+half] = x1*cosA[e] + x0*sinA[e]
 					}
 				}
 			}
 			return
 		}
 	}
-	// Generic fallback for exotic dtypes (verbatim original loop).
+	// Generic fallback for exotic dtypes.
 	for p := range seq {
+		fillTrig(p)
 		for h := range nheads {
+			out := (p*nheads + h) * dR
 			for e := range half {
-				theta := math.Pow(base, -float64(2*e)/float64(dR))
-				c, s := math.Cos(float64(p)*theta), math.Sin(float64(p)*theta)
 				x0, x1 := src.AtF64(p, h*dR+e), src.AtF64(p, h*dR+e+half)
-				dst[(p*nheads+h)*dR+e] = x0*c - x1*s
-				dst[(p*nheads+h)*dR+e+half] = x1*c + x0*s
+				dst[out+e] = x0*cosA[e] - x1*sinA[e]
+				dst[out+e+half] = x1*cosA[e] + x0*sinA[e]
 			}
 		}
 	}
