@@ -57,3 +57,9 @@ func BenchmarkIA3F64_4096x1024_cpu(b *testing.B) {
 func BenchmarkIA3F32_4096x1024_cpu(b *testing.B) {
 	benchOn(b, backend.CPU, backend.OpIA3, bench.RandF32(tensor.Shape{4096, 1024}, 1), bench.RandF32(tensor.Shape{1024}, 2))
 }
+func BenchmarkDoRAWeightF64_1024x1024_cpu(b *testing.B) {
+	benchOn(b, backend.CPU, backend.OpDoRAWeight, bench.RandF64(tensor.Shape{1024, 1024}, 1), bench.RandF64(tensor.Shape{1024}, 2))
+}
+func BenchmarkDoRAWeightF32_1024x1024_cpu(b *testing.B) {
+	benchOn(b, backend.CPU, backend.OpDoRAWeight, bench.RandF32(tensor.Shape{1024, 1024}, 1), bench.RandF32(tensor.Shape{1024}, 2))
+}
