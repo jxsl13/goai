@@ -29,21 +29,49 @@ func init() {
 		}
 		bbar := bbarOut[0]
 
-		// column count + accessor shared by X and B̄ (vector [n] → k=1).
+		// column count shared by X and B̄ (vector [n] → k=1); both are laid out
+		// row-major [n,k] (k=1 collapses to the vector case).
 		vector := b.Ndim() == 1
 		k := 1
 		if !vector {
 			k = b.Shape()[1]
 		}
+
+		// Ā = −½(B̄·Xᵀ + X·B̄ᵀ): Ā[i,j] = −½·Σ_c (B̄[i,c]·X[j,c] + X[i,c]·B̄[j,c]).
+		abar := tensor.New(a.Dtype(), a.Shape())
+		// Fast path: the closure accessor dispatched AtF64 four times per (i,j,c) and
+		// the result went through SetF64 — dispatch dominating the O(n²·k) contraction.
+		// When X/B̄ are contiguous F64 (the §V10 f64 solve), read the storage slices
+		// directly. And Ā is symmetric by construction — the (i,j) inner sum equals the
+		// (j,i) sum term-for-term (IEEE add is commutative: P+Q == Q+P), so compute the
+		// upper triangle once and mirror it, halving the contraction. Bit-identical to
+		// the full double loop.
+		if a.Dtype() == tensor.F64 && x.Dtype() == tensor.F64 && bbar.Dtype() == tensor.F64 {
+			xs := x.Contiguous().Storage().F64()
+			bs := bbar.Contiguous().Storage().F64()
+			as := abar.Storage().F64()
+			for i := 0; i < n; i++ {
+				ib := i * k
+				for j := i; j < n; j++ {
+					jb := j * k
+					var s float64
+					for c := 0; c < k; c++ {
+						s += bs[ib+c]*xs[jb+c] + xs[ib+c]*bs[jb+c]
+					}
+					v := -0.5 * s
+					as[i*n+j] = v
+					as[j*n+i] = v
+				}
+			}
+			return []*tensor.Tensor{abar, bbar}, nil
+		}
+
 		at := func(t *tensor.Tensor, i, c int) float64 {
 			if vector {
 				return t.AtF64(i)
 			}
 			return t.AtF64(i, c)
 		}
-
-		// Ā = −½(B̄·Xᵀ + X·B̄ᵀ): Ā[i,j] = −½·Σ_c (B̄[i,c]·X[j,c] + X[i,c]·B̄[j,c]).
-		abar := tensor.New(a.Dtype(), a.Shape())
 		for i := range n {
 			for j := range n {
 				var s float64
