@@ -225,3 +225,21 @@ func BenchmarkWriteQuantizedModel(b *testing.B) {
 		}
 	}
 }
+
+func benchQMatMulNK(b *testing.B, m, n, k int, qt QuantType) {
+	w := tensor.FromFloat32(tensor.Shape{n * k}, benchF32(n*k))
+	raw, err := Quantize(w, qt)
+	if err != nil {
+		b.Fatal(err)
+	}
+	x := tensor.FromFloat32(tensor.Shape{m, k}, benchF32(m*k))
+	b.SetBytes(int64(m) * int64(n) * int64(k) * 4)
+	b.ResetTimer()
+	for range b.N {
+		if _, err := QMatMul(x, raw, qt, n, k); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkQMatMulQ4_K_M1_N4096(b *testing.B) { benchQMatMulNK(b, 1, 4096, 1024, Q4_K) }

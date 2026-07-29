@@ -46,6 +46,39 @@ var dotQ4KRowFn = dotQ4_KRow
 // matmul with the SIMD dequant-dot kernel (tolerance-gated). Nil → scalar fused path.
 var q8FusedDecodeM1 func(row []float32, weight []byte, n, k, rowBytes int, outf []float32)
 
+// qmatmulParallelChunks runs body over disjoint output-row chunks of [0,n) across
+// GOMAXPROCS. Each output row is an independent dequant-dot (disjoint outf[...ni], no
+// cross-ni reduction), so chunking is bit-identical to the serial loop. Serial below a
+// small total-work threshold.
+func qmatmulParallelChunks(n, workPerRow int, body func(lo, hi int)) {
+	nw := runtime.GOMAXPROCS(0)
+	if nw > n {
+		nw = n
+	}
+	if nw <= 1 || n*workPerRow < 1<<17 {
+		body(0, n)
+		return
+	}
+	csz := (n + nw - 1) / nw
+	var wg sync.WaitGroup
+	for c := 0; c < nw; c++ {
+		lo := c * csz
+		if lo >= n {
+			break
+		}
+		hi := lo + csz
+		if hi > n {
+			hi = n
+		}
+		wg.Add(1)
+		go func(lo, hi int) {
+			defer wg.Done()
+			body(lo, hi)
+		}(lo, hi)
+	}
+	wg.Wait()
+}
+
 func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.Tensor, error) {
 	if x.Ndim() != 2 || x.Shape()[1] != k {
 		return nil, fmt.Errorf("gguf: QMatMul x must be [M,%d], got %v", k, x.Shape())
@@ -206,9 +239,12 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 			dot = dotQ6_KRow
 		}
 		row := xf32[:k]
-		for ni := range n {
-			outf[ni] = float32(dot(row, weight[ni*rowBytes:(ni+1)*rowBytes], k))
-		}
+		// Decode (m==1) K-quant row dots are independent per output row → chunk-parallel.
+		qmatmulParallelChunks(n, k, func(lo, hi int) {
+			for ni := lo; ni < hi; ni++ {
+				outf[ni] = float32(dot(row, weight[ni*rowBytes:(ni+1)*rowBytes], k))
+			}
+		})
 		return out, nil
 	}
 
