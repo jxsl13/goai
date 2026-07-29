@@ -66,14 +66,32 @@ func (vq *VectorQuantizer) Quantize(ctx *backend.Context, ze *tensor.Tensor) (zq
 	switch ze.Dtype() {
 	case tensor.F64:
 		zs, cb := zc.Storage().F64(), cbc.Storage().F64()
-		for i := range batch {
+		i := 0
+		for ; i+4 <= batch; i += 4 { // tile 4 ze rows per codebook pass (4× less codebook traffic)
+			b0, b1, b2, b3 := vqNearest4F64(zs[i*d:i*d+d], zs[(i+1)*d:(i+1)*d+d], zs[(i+2)*d:(i+2)*d+d], zs[(i+3)*d:(i+3)*d+d], cb, k, d)
+			indices[i], indices[i+1], indices[i+2], indices[i+3] = b0, b1, b2, b3
+			sel.SetF64(1, i, b0)
+			sel.SetF64(1, i+1, b1)
+			sel.SetF64(1, i+2, b2)
+			sel.SetF64(1, i+3, b3)
+		}
+		for ; i < batch; i++ { // remainder rows
 			best := vqNearestF64(zs[i*d:i*d+d], cb, k, d)
 			indices[i] = best
 			sel.SetF64(1, i, best)
 		}
 	case tensor.F32:
 		zs, cb := zc.Storage().F32(), cbc.Storage().F32()
-		for i := range batch {
+		i := 0
+		for ; i+4 <= batch; i += 4 {
+			b0, b1, b2, b3 := vqNearest4F32(zs[i*d:i*d+d], zs[(i+1)*d:(i+1)*d+d], zs[(i+2)*d:(i+2)*d+d], zs[(i+3)*d:(i+3)*d+d], cb, k, d)
+			indices[i], indices[i+1], indices[i+2], indices[i+3] = b0, b1, b2, b3
+			sel.SetF64(1, i, b0)
+			sel.SetF64(1, i+1, b1)
+			sel.SetF64(1, i+2, b2)
+			sel.SetF64(1, i+3, b3)
+		}
+		for ; i < batch; i++ {
 			best := vqNearestF32(zs[i*d:i*d+d], cb, k, d)
 			indices[i] = best
 			sel.SetF64(1, i, best)
@@ -211,6 +229,80 @@ func vqNearestF64(row, cb []float64, k, d int) int {
 		}
 	}
 	return best
+}
+
+// vqNearest4F64 is vqNearestF64 for a TILE of 4 ze rows at once: each codebook row cj is
+// loaded once and reused across the 4 rows (4 independent distance accumulators), so the
+// k·d codebook streams once per 4-row tile instead of once per row — a 4× cut in codebook
+// load traffic on this memory-bound (~0.4 flop/byte) scan, while the 4 independent chains
+// keep the same ILP the old 4-wide-j jam had. Bit-identical to four vqNearestF64 calls:
+// each row's distance to cj is the same ascending-t f64 sum over the same (row[t]−cb[j][t])
+// terms, and each row's argmin scans j ascending with the same strict `< bd` tie-break.
+func vqNearest4F64(r0, r1, r2, r3, cb []float64, k, d int) (int, int, int, int) {
+	b0, b1, b2, b3 := 0, 0, 0, 0
+	bd0, bd1, bd2, bd3 := math.Inf(1), math.Inf(1), math.Inf(1), math.Inf(1)
+	for j := 0; j < k; j++ {
+		cj := cb[j*d : j*d+d : j*d+d]
+		var d0, d1, d2, d3 float64
+		for t, cjt := range cj {
+			e0 := r0[t] - cjt
+			d0 += e0 * e0
+			e1 := r1[t] - cjt
+			d1 += e1 * e1
+			e2 := r2[t] - cjt
+			d2 += e2 * e2
+			e3 := r3[t] - cjt
+			d3 += e3 * e3
+		}
+		if d0 < bd0 {
+			bd0, b0 = d0, j
+		}
+		if d1 < bd1 {
+			bd1, b1 = d1, j
+		}
+		if d2 < bd2 {
+			bd2, b2 = d2, j
+		}
+		if d3 < bd3 {
+			bd3, b3 = d3, j
+		}
+	}
+	return b0, b1, b2, b3
+}
+
+// vqNearest4F32 is vqNearest4F64 over float32 storage (widening each read to float64 exactly
+// as AtF64 does), tiling 4 ze rows per codebook pass.
+func vqNearest4F32(r0, r1, r2, r3, cb []float32, k, d int) (int, int, int, int) {
+	b0, b1, b2, b3 := 0, 0, 0, 0
+	bd0, bd1, bd2, bd3 := math.Inf(1), math.Inf(1), math.Inf(1), math.Inf(1)
+	for j := 0; j < k; j++ {
+		cj := cb[j*d : j*d+d : j*d+d]
+		var d0, d1, d2, d3 float64
+		for t := 0; t < d; t++ {
+			cjt := float64(cj[t])
+			e0 := float64(r0[t]) - cjt
+			d0 += e0 * e0
+			e1 := float64(r1[t]) - cjt
+			d1 += e1 * e1
+			e2 := float64(r2[t]) - cjt
+			d2 += e2 * e2
+			e3 := float64(r3[t]) - cjt
+			d3 += e3 * e3
+		}
+		if d0 < bd0 {
+			bd0, b0 = d0, j
+		}
+		if d1 < bd1 {
+			bd1, b1 = d1, j
+		}
+		if d2 < bd2 {
+			bd2, b2 = d2, j
+		}
+		if d3 < bd3 {
+			bd3, b3 = d3, j
+		}
+	}
+	return b0, b1, b2, b3
 }
 
 // vqNearestF32 is vqNearestF64 over float32 storage, widening each read to float64 exactly
