@@ -1032,3 +1032,25 @@ FALSE READING TWO. MixtralPromptPrefill appeared 1.73x SLOWER at benchtime=1x - 
 A THIRD, SMALLER MISS: the mechanical transformer matched only `for l, b := range m.Blocks` and silently skipped `for _, b := range m.Blocks`, which is how the prefill paths spell the same loop. That was a third of the remaining sites, and it surfaced only because escape analysis still reported literals in files the transformer claimed to have fixed. Cross-checking the transformer against the compiler rather than against its own report is what caught it.
 
 WHAT REMAINS. 40 escaping sites, mostly the NON-LOOP form: attrs built inside a per-layer helper function rather than a loop, so hoisting means lifting them into the caller. PS6016 correctly declines these (there is no loop in the function it can see), and they are the same class as the go/types-requiring variant recorded in PROC-SCANRULE-WRONG-TOOL-001 - escape analysis sees them, a parser does not. Also still open: the unpooled-variadic-sibling rule from the original task, with 81 unpooled OpRoPE and 59 unpooled OpMHA call sites package-wide.
+
+## R-01KYQYKZX6FSTSG5HMRMZ3K45Y PS6017 unpooled-variadic-sibling: 422 sites, and two ways a type-comparison helper can break a rule in opposite directions
+kind: research
+state: draft
+created: 2026-07-29
+
+CLOSES the second perfscan rule required by T-01KYJQZF10F20, left open in R-01KYQWY75AF2G.
+
+WHAT IT FINDS. A variadic helper called inside a loop at an arity a non-variadic sibling already covers. The variadic form allocates a slice per call; the sibling takes the same arguments as named parameters and exists to avoid that. 422 candidates tree-wide across four families: exec1 against exec1a/exec2/exec3 in nlp (89 + 292 + 19), and rdropExec/hcExec against execPool1/execPool2 in nn (22), the latter a family nobody had connected. The task estimated 140 from RoPE and MHA call sites alone; exec1 carries many more ops than those two.
+
+NO CONFIG NEEDED, unlike PS6014 and PS6015. The sibling relation is derivable from signatures: identical leading parameter types followed by exactly n parameters of the variadic element type, so the call transfers argument for argument. Built package-wide in a pre-pass, since the variadic form and its siblings are declared in one file and called from twenty - the same reason intMapReg exists.
+
+CONDITION ONE, which removed the only wrong pairing in the tree: at least one FIXED leading parameter. With none, same-trailing-types is far too weak a relation - concat1D(parts ...*tensor.Tensor) matched every two-tensor function in its package. The shared prefix is what constitutes a family; for exec1 it is (ctx, op, attrs), which names the operation all the siblings perform. Found by reading the one outlier in a 401-hit report rather than the three plausible-looking family totals above it.
+
+CONDITION TWO, and the transferable part. Parameter types must be rendered with go/printer. exprText has no StarExpr case and returns empty for every pointer, which breaks the comparison in OPPOSITE directions depending on how the empty is handled:
+  - as a placeholder, all pointer types collapse to one value, *backend.Context compares equal to *tensor.Tensor, and unrelated functions pair up (this produced the concat1D hit);
+  - as unrenderable-and-skipped, every candidate with a pointer parameter drops out and the rule reports ZERO across the entire tree.
+The second is the more dangerous failure because a silent check reads as a clean codebase, and it is exactly the false assurance the starved-vocabulary warning exists to prevent for the config-driven checks.
+
+THE TESTING CONSEQUENCE, verified rather than reasoned: a suppression test written against the pointer case stays GREEN under both failure modes, because it asserts zero and a silenced rule produces zero. Swapping typeText back for exprText leaves every suppression test passing and turns only the POSITIVE test red. So the positive test is the guard for a helper that can return empty, and PROC-SUPPRESSION-FLOOR-001 needs this corollary: the floor is not merely nice to have alongside suppressions, it is the ONLY test that can detect a whole-rule silencing. Cast as PROC-SCANRULE-SILENT-REGRESSION-001.
+
+NOT APPLIED. The 422 candidates are located, not switched. Applying them is a separate change needing its own measurement, and the earlier batches showed why: the alloc delta only appears on a benchmark that executes the changed path, and identical counts across arms mean no coverage rather than no effect (PROC-BENCH-COVERAGE-NULL-001).
