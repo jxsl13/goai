@@ -1805,6 +1805,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 		})
 	}
 	out = append(out, symmetricAccumFindings(fset, fn)...)
+	out = append(out, nestedSubrangeRescanFindings(fset, fn)...)
 	out = append(out, butterflyFindings(fset, fn)...)
 	out = append(out, transposedGramFindings(fset, fn)...)
 	out = append(out, serialDotMatmulFindings(fset, fn)...)
@@ -3308,6 +3309,84 @@ func rowStridedBase(e ast.Expr, kName string) (string, string, bool) {
 		return "", "", false
 	}
 	return baseID.Name, col.Name, true
+}
+
+// nestedSubrangeRescanFindings flags PS5006 — a triple-nested loop where the innermost
+// C-style for-loop iterates k over a [j..i] sub-range (its bounds reference BOTH enclosing
+// loop vars) and accumulates a running reduction acc *= / += arr[k]. Because the sub-range
+// shrinks/grows by one element between adjacent (i,j), the whole product/sum is recomputed
+// from scratch T²/2 times — an O(T³) serial-dependent chain. Precompute a prefix/suffix scan
+// once per outer index i (O(i)), then read the reduction in O(1). Shipped: Mamba-2
+// SSDQuadratic decay (1.92x). Tolerance-gated when the scan reassociates the fold.
+func nestedSubrangeRescanFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		iName, ibody, ok := loopVarBody(n)
+		if !ok {
+			return true
+		}
+		for _, s := range ibody.List {
+			jName, jbody, ok := loopVarBody(s)
+			if !ok || jName == iName {
+				continue
+			}
+			for _, s2 := range jbody.List {
+				fl, ok := s2.(*ast.ForStmt)
+				if !ok || fl.Init == nil || fl.Cond == nil {
+					continue
+				}
+				kName, kbody, ok := loopVarBody(fl)
+				if !ok || kName == iName || kName == jName {
+					continue
+				}
+				// innermost bounds span [j..i]: one end references j, the other i.
+				spans := (stmtMentions(fl.Init, jName) && exprMentions(fl.Cond, iName)) ||
+					(stmtMentions(fl.Init, iName) && exprMentions(fl.Cond, jName))
+				if !spans {
+					continue
+				}
+				if op, arr, ok := subrangeReduce(kbody, kName); ok {
+					out = append(out, finding{
+						pos:      fset.Position(fl.Pos()),
+						category: "nested-subrange-rescan",
+						msg: fmt.Sprintf("innermost %s-loop recomputes a running reduction (%s %s[%s])"+
+							" over the [%s..%s] sub-range for every (%s,%s) — an O(T\u00b3) serial"+
+							" recompute. Precompute a prefix/suffix scan of %s once per %s (O(%s)),"+
+							" then read it in O(1) in the inner loop. Shipped: Mamba-2 SSDQuadratic"+
+							" decay (1.92x). Tolerance-gated if the scan reassociates the fold;"+
+							" benchmark + gate on the existing tolerance test.",
+							kName, op, arr, kName, jName, iName, iName, jName, arr, iName, iName),
+					})
+					return false
+				}
+			}
+		}
+		return true
+	})
+	return out
+}
+
+// subrangeReduce reports whether body accumulates acc *= arr[k] or acc += arr[k] (a running
+// product/sum over the k-indexed array) and returns the operator text and array base.
+func subrangeReduce(body *ast.BlockStmt, kName string) (string, string, bool) {
+	for _, st := range body.List {
+		as, ok := st.(*ast.AssignStmt)
+		if !ok || (as.Tok != token.MUL_ASSIGN && as.Tok != token.ADD_ASSIGN) || len(as.Rhs) != 1 {
+			continue
+		}
+		ix, ok := as.Rhs[0].(*ast.IndexExpr)
+		if !ok || !exprMentions(ix.Index, kName) {
+			continue
+		}
+		if base, ok := ix.X.(*ast.Ident); ok {
+			op := "*="
+			if as.Tok == token.ADD_ASSIGN {
+				op = "+="
+			}
+			return op, base.Name, true
+		}
+	}
+	return "", "", false
 }
 
 // exprMentions reports whether e references the identifier name.

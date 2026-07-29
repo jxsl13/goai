@@ -3172,3 +3172,58 @@ func mm(a, b, c [][]float64, m, n, k int) {
 		t.Fatalf("want 0 (matmul), got %d", got)
 	}
 }
+
+// PS5006: fires on the SSDQuadratic-style [j..i] running product recomputed per (i,j).
+func TestDetectPS5006_SubrangeRescan(t *testing.T) {
+	src := `package p
+func ssd(a, y []float64, T int) {
+	for i := 0; i < T; i++ {
+		for j := 0; j <= i; j++ {
+			decay := 1.0
+			for k := j + 1; k <= i; k++ {
+				decay *= a[k]
+			}
+			y[i] += decay
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src))["nested-subrange-rescan"]; got != 1 {
+		t.Fatalf("want 1 nested-subrange-rescan, got %d", got)
+	}
+}
+
+// Silent when the innermost loop is a FIXED range (bounds do not span [j..i]).
+func TestDetectPS5006_SilentOnFixedRange(t *testing.T) {
+	src := `package p
+func dot(c, b, y []float64, T, n int) {
+	for i := 0; i < T; i++ {
+		for j := 0; j <= i; j++ {
+			var acc float64
+			for k := 0; k < n; k++ {
+				acc += c[k] * b[k]
+			}
+			y[i] += acc
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src))["nested-subrange-rescan"]; got != 0 {
+		t.Fatalf("want 0 (fixed range), got %d", got)
+	}
+}
+
+// Silent when the inner loop does not accumulate a running reduction over k.
+func TestDetectPS5006_SilentOnNonReduce(t *testing.T) {
+	src := `package p
+func f(a, y []float64, T int) {
+	for i := 0; i < T; i++ {
+		for j := 0; j <= i; j++ {
+			for k := j + 1; k <= i; k++ {
+				y[k] = a[k] * 2
+			}
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src))["nested-subrange-rescan"]; got != 0 {
+		t.Fatalf("want 0 (no acc reduction), got %d", got)
+	}
+}
