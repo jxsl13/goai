@@ -63,6 +63,7 @@ func NSABranches(q, k, v *tensor.Tensor, heads, blockSize, topN, window int, sca
 	}
 
 	scores := make([]float64, max(seq, nBlocks))
+	act := make([]int, 0, seq)  // active (unmasked) key indices, reused by attendMask
 	qrow := make([]float64, dk) // q_i[off:off+dk] hoisted per (head,query); all 3 branches re-read it
 	// Every buffer below used to be allocated once per (head, query): blockW, the
 	// importance slice, the selected-set map, and a capturing closure for each of the two
@@ -150,9 +151,9 @@ func NSABranches(q, k, v *tensor.Tensor, heads, blockSize, topN, window int, sca
 				keepSlc[j] = selBlk[j/blockSize]
 				keepWin[j] = i-j < window
 			}
-			attendMask(qrow, k, v, slc, i, off, dk, scale, scores, keepSlc)
+			attendMask(qrow, k, v, slc, i, off, dk, scale, scores, act, keepSlc)
 			// ---- win: last `window` keys.
-			attendMask(qrow, k, v, win, i, off, dk, scale, scores, keepWin)
+			attendMask(qrow, k, v, win, i, off, dk, scale, scores, act, keepWin)
 		}
 	}
 	return cmp, slc, win, nil
@@ -162,7 +163,7 @@ func NSABranches(q, k, v *tensor.Tensor, heads, blockSize, topN, window int, sca
 // keep, writing the head slice [off,off+dk) of out.
 // attendMask takes the query row pre-hoisted as qrow = q_i[off:off+dk] (it is re-read for
 // every key j, so hoisting it out of the caller kills a dk×(i+1) redundant gather).
-func attendMask(qrow []float64, k, v, out *tensor.Tensor, i, off, dk int, scale float64, scores []float64, keep []bool) {
+func attendMask(qrow []float64, k, v, out *tensor.Tensor, i, off, dk int, scale float64, scores []float64, act []int, keep []bool) {
 	// F64 fast path: the score dot reads k[j,off+d] and the P·V reads v[j,off+d] on every
 	// (j,d) — an AtF64 dispatch per element over the O(seq·dk) attention compute. Walk the
 	// contiguous k/v/out storage directly; qrow was already hoisted. Bit-identical (same
@@ -231,6 +232,17 @@ func attendMask(qrow []float64, k, v, out *tensor.Tensor, i, off, dk int, scale 
 				m = sc
 			}
 		}
+		// The ACTIVE keys are collected here, in the pass that already walks every j.
+		// Everything downstream — the normalize and the P·V — then touches only those.
+		// Under a sparse mask that is the difference between O(i·d_k) and O(topK·d_k):
+		// DSA attends 64 of up to 1024 keys, so the P·V was multiplying by an exact zero
+		// fifteen times out of sixteen.
+		//
+		// Bit-identical for finite v: a masked key has scores[j] == 0 exactly, and
+		// o + 0*v is o. (It differs only if a masked key's v were ±Inf or NaN, where the
+		// old code would propagate NaN and this does not — an improvement, but stated
+		// rather than hidden.)
+		act = act[:0]
 		var sum float64
 		for j := 0; j <= i; j++ {
 			if math.IsInf(scores[j], -1) {
@@ -239,9 +251,10 @@ func attendMask(qrow []float64, k, v, out *tensor.Tensor, i, off, dk int, scale 
 			}
 			scores[j] = math.Exp(scores[j] - m)
 			sum += scores[j]
+			act = append(act, j)
 		}
 		if sum > 0 {
-			for j := 0; j <= i; j++ {
+			for _, j := range act {
 				scores[j] /= sum
 			}
 		}
@@ -257,7 +270,7 @@ func attendMask(qrow []float64, k, v, out *tensor.Tensor, i, off, dk int, scale 
 		d := 0
 		for ; d+4 <= dk; d += 4 {
 			var o0, o1, o2, o3 float64
-			for j := 0; j <= i; j++ {
+			for _, j := range act {
 				sj := scores[j]
 				vq := vs[j*dm+off+d : j*dm+off+d+4 : j*dm+off+d+4]
 				o0 += sj * vq[0]
@@ -269,7 +282,7 @@ func attendMask(qrow []float64, k, v, out *tensor.Tensor, i, off, dk int, scale 
 		}
 		for ; d < dk; d++ {
 			var o float64
-			for j := 0; j <= i; j++ {
+			for _, j := range act {
 				o += scores[j] * vs[j*dm+off+d]
 			}
 			orow[d] = o

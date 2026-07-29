@@ -43,6 +43,7 @@ func DSAAttention(q, k, v, qIdx, kIdx *tensor.Tensor, w []float64, heads, topK i
 	}
 	out := tensor.New(q.Dtype(), q.Shape())
 	scores := make([]float64, seq)
+	act := make([]int, 0, seq)  // active (unmasked) key indices, reused by attendMask
 	qrow := make([]float64, dk) // q_i[off:off+dk] hoisted per (query,head) for attendMask
 	// The rank slice, the selected-set map and one closure PER HEAD were all allocated
 	// inside the query loop. Sizes are loop-invariant, so allocate once and reset.
@@ -115,7 +116,7 @@ func DSAAttention(q, k, v, qIdx, kIdx *tensor.Tensor, w []float64, heads, topK i
 			for h := range heads {
 				off := h * dk
 				qr := qs[i*dm+off : i*dm+off+dk]
-				attendMask(qr, k, v, out, i, off, dk, scale, scores, sel)
+				attendMask(qr, k, v, out, i, off, dk, scale, scores, act, sel)
 			}
 			for _, j := range setIdx {
 				sel[j] = false
@@ -172,7 +173,7 @@ func DSAAttention(q, k, v, qIdx, kIdx *tensor.Tensor, w []float64, heads, topK i
 			for d := range dk {
 				qrow[d] = q.AtF64(i, off+d)
 			}
-			attendMask(qrow, k, v, out, i, off, dk, scale, scores, keepBuf)
+			attendMask(qrow, k, v, out, i, off, dk, scale, scores, act, keepBuf)
 		}
 	}
 	return out, nil
