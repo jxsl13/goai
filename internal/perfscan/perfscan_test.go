@@ -2457,6 +2457,51 @@ func quickselectIdxDesc(idx []int, key []float64, k int) {}`
 	}
 }
 
+// PS1005 fires on a manual multi-dimensional tensor walk via AtF64 — the indices are two
+// enclosing-loop variables (the VQ-VAE codebook-scan shape PS1001's Numel check misses).
+func TestDetectPS1005_ManualWalkDispatch(t *testing.T) {
+	src := `package p
+func vq(ze, cb *T, batch, k, d int) {
+	for i := 0; i < batch; i++ {
+		for j := 0; j < k; j++ {
+			for c := 0; c < d; c++ {
+				_ = ze.AtF64(i, c) - cb.AtF64(j, c)
+			}
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src))["manual-walk-dispatch"]; got == 0 {
+		t.Fatalf("want ≥1 manual-walk-dispatch, got 0")
+	}
+}
+
+// SILENT with a single index (a 1-D walk is not the multi-dim dispatch PS1005 targets; a
+// single loop var is often a legitimate row/element access).
+func TestDetectPS1005_SilentOnSingleIndex(t *testing.T) {
+	src := `package p
+func f(t_ *T, n int) {
+	for i := 0; i < n; i++ {
+		_ = t_.AtF64(i)
+	}
+}`
+	if got := countCat(scanSrc(t, src))["manual-walk-dispatch"]; got != 0 {
+		t.Fatalf("want 0 on a single-index access, got %d", got)
+	}
+}
+
+// SILENT when only one index is a loop variable (t.AtF64(0, k) — a fixed row, not a walk).
+func TestDetectPS1005_SilentWhenOneIndexIsConstant(t *testing.T) {
+	src := `package p
+func f(t_ *T, n int) {
+	for k := 0; k < n; k++ {
+		_ = t_.AtF64(0, k)
+	}
+}`
+	if got := countCat(scanSrc(t, src))["manual-walk-dispatch"]; got != 0 {
+		t.Fatalf("want 0 when only one index is a loop var, got %d", got)
+	}
+}
+
 const ps6003Prelude = `package p
 type QT int
 const (A QT = iota; B; C; D)

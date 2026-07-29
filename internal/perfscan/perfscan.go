@@ -182,6 +182,7 @@ var checks = []check{
 	{"PS1002", "per-element-closure", "per-element visitor fed a closure (an indirect call per element)", false},
 	{"PS1003", "batch-single-elt", "a batch API called with a single-element slice literal inside a loop", false},
 	{"PS1004", "spread-accessor-in-loop", "a variadic AtF64/SetF64(idx...) spread call in a loop outside PS1001's Numel/Unravel domain (rebuilds the flat offset + bounds-checks each call)", false},
+	{"PS1005", "manual-walk-dispatch", "a per-element AtF64/SetF64 whose 2+ index args are enclosing-loop variables — a manual multi-dim tensor walk via dispatch that PS1001 Numel-loop check misses", false},
 	// PS2xxx — allocation inside loops
 	{"PS2001", "alloc-in-loop", "a tensor allocation inside a per-element loop", false},
 	{"PS2002", "unsized-builder", "a strings.Builder/bytes.Buffer written in a loop with no .Grow", false},
@@ -1232,6 +1233,33 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 					" precomputed row-major strides once, then index it directly (typed fast path)", name),
 			})
 		}
+		// A3: a per-element accessor whose index arguments are 2+ ENCLOSING-LOOP variables —
+		// a hand-written multi-dimensional tensor walk (t.AtF64(i, j) inside for i { for j }).
+		// PS1001 (A) only fires inside a Numel/Unravel loop, so it misses these explicit
+		// [rows,cols] walks; each element still pays an interface dispatch + flat-offset
+		// recompute. Grab the contiguous typed storage once (Storage().F64()/F32(), a fast
+		// path per dtype) and index it, keeping the accessor as the exotic-dtype fallback.
+		// (VQ-VAE codebook assignment: -94%.)
+		if !perElem && ns.accessors[name] && !call.Ellipsis.IsValid() {
+			lv := enclosingLoopVars(parent, call)
+			loopArgs := 0
+			for _, a := range call.Args {
+				if id, ok := a.(*ast.Ident); ok && lv[id.Name] {
+					loopArgs++
+				}
+			}
+			if loopArgs >= 2 {
+				out = append(out, finding{
+					pos:      fset.Position(loop.Pos()),
+					category: "manual-walk-dispatch",
+					msg: fmt.Sprintf(".%s walks a tensor by explicit loop indices in %s() — an interface"+
+						" dispatch + flat-offset recompute per element that PS1001's Numel-loop check"+
+						" misses. Take the contiguous typed backing slice once (Storage().F64()/F32())"+
+						" and index it directly, keeping the accessor as the exotic-dtype fallback.",
+						name, fn.Name.Name),
+				})
+			}
+		}
 		// B: allocation inside a per-element loop.
 		if perElem && ns.allocators[name] {
 			out = append(out, finding{
@@ -1843,6 +1871,33 @@ func directlyHasUnravel(body *ast.BlockStmt, ns nameSets) bool {
 		return true
 	})
 	return found
+}
+
+// enclosingLoopVars returns the iteration-variable names of every Range/For loop enclosing
+// n. A dispatch call whose index arguments are drawn from this set (t.AtF64(i, j) inside
+// for i { for j { … } }) is a manual per-dimension tensor walk — the shape PS1005 flags.
+func enclosingLoopVars(parent map[ast.Node]ast.Node, n ast.Node) map[string]bool {
+	vars := map[string]bool{}
+	for p := parent[n]; p != nil; p = parent[p] {
+		switch l := p.(type) {
+		case *ast.RangeStmt:
+			if id, ok := l.Key.(*ast.Ident); ok && id.Name != "_" {
+				vars[id.Name] = true
+			}
+			if id, ok := l.Value.(*ast.Ident); ok && id.Name != "_" {
+				vars[id.Name] = true
+			}
+		case *ast.ForStmt:
+			if as, ok := l.Init.(*ast.AssignStmt); ok {
+				for _, lhs := range as.Lhs {
+					if id, ok := lhs.(*ast.Ident); ok && id.Name != "_" {
+						vars[id.Name] = true
+					}
+				}
+			}
+		}
+	}
+	return vars
 }
 
 // nearestLoop walks parent links up from n to the innermost enclosing Range/For
