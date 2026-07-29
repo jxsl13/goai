@@ -510,3 +510,33 @@ func SSMScanF64(u, delta, as, bs, cs, dsk, out, h []float64, L, D, N int) {
 		ssmScanScalar(u, delta, as, bs, cs, dsk, out, h, L, D, N, nMain, N)
 	}
 }
+
+// FWHTF64 applies the UNNORMALIZED in-place Fast Walsh-Hadamard Transform (len a power of
+// two). Stages with h>=4 vectorize the butterfly: the two operand runs a[j:j+h) and
+// a[j+h:j+2h) are contiguous and non-overlapping, so each block of 4 is one Float64x4 Add
+// (stored to a[j:]) and one Sub (stored to a[j+h:]) of the SAME x,y loaded first. Each output
+// is exactly x+y or x-y of the same operands as the scalar form — no cross-lane reduction —
+// so it is BIT-IDENTICAL to the portable twin; the stage order (h=1,2,4,…) is preserved. The
+// h=1,2 stages (intra-vector pairing) and the runtime no-AVX path stay scalar.
+func FWHTF64(a []float64) {
+	n := len(a)
+	for h := 1; h < n; h <<= 1 {
+		if h < 4 || !hasAVX {
+			for i := 0; i < n; i += h << 1 {
+				for j := i; j < i+h; j++ {
+					x, y := a[j], a[j+h]
+					a[j], a[j+h] = x+y, x-y
+				}
+			}
+			continue
+		}
+		for i := 0; i < n; i += h << 1 {
+			for j := i; j < i+h; j += 4 {
+				x := archsimd.LoadFloat64x4Slice(a[j:])
+				y := archsimd.LoadFloat64x4Slice(a[j+h:])
+				x.Add(y).StoreSlice(a[j:])
+				x.Sub(y).StoreSlice(a[j+h:])
+			}
+		}
+	}
+}

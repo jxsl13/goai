@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"math"
 	"math/rand/v2"
+
+	"github.com/jxsl13/goai/internal/simd"
 )
 
 // TurboQuant sub-4-bit KV-cache quantization (Zandieh et al., "TurboQuant", Google Research +
@@ -548,17 +550,7 @@ func nextPow2(n int) int {
 
 // fwht applies the UNNORMALIZED in-place Fast Walsh-Hadamard Transform (len(a) a power of two).
 // H is symmetric and H·H = m·I, so a second call scaled by 1/m inverts it.
-func fwht(a []float64) {
-	n := len(a)
-	for h := 1; h < n; h <<= 1 {
-		for i := 0; i < n; i += h << 1 {
-			for j := i; j < i+h; j++ {
-				x, y := a[j], a[j+h]
-				a[j], a[j+h] = x+y, x-y
-			}
-		}
-	}
-}
+func fwht(a []float64) { simd.FWHTF64(a) }
 
 func newHadamardRotation(d int, seed uint64) (*hadamardRotation, error) {
 	if d < 1 {
