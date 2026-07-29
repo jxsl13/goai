@@ -217,6 +217,7 @@ var checks = []check{
 	{"PS6001", "full-sort-bounded-prefix", "a full-vocabulary descending index sort whose result feeds an early-breaking (threshold-bounded) prefix consumer, with no quickselect/pre-filter guard — an O(n log n) sort for an O(prefix) need", false},
 	{"PS6002", "spatial-bounds-branch", "an innermost window/kernel loop re-testing a compound spatial bounds guard (iy>=0 && iy<h && ix>=0 && ix<wd) per tap, where the in-bounds taps form one contiguous run the guard can be hoisted around", false},
 	{"PS6005", "monotone-index-bound", "an innermost loop guarding its tap work with a single relational bound on an index affine in the loop var (j:=t-(K-1)+k; if j>=0) — the in-bounds iterations are one contiguous run, clamp the loop bound instead of branching per tap", false},
+	{"PS6018", "layout-op-cluster-unfused", "three or more calls dispatching a pure DATA-MOVEMENT op (layoutOpConstants: slice, reshape, transpose, concat) in one function with no fused raw-storage path — movement cannot change a value, so gathering and scattering directly is bit-identical and removes every one of those dispatches", false},
 	{"PS6017", "unpooled-variadic-sibling", "a VARIADIC helper called inside a loop at a fixed argument count, when the same package declares a non-variadic sibling with identical leading parameters and exactly that many trailing ones — the variadic form allocates a slice per call and the sibling exists to avoid it", false},
 	{"PS6016", "loop-invariant-literal-arg", "a struct composite literal built INSIDE a loop and passed straight to a call, whose every field initializer is loop-invariant — the same value is rebuilt every iteration, and when the parameter is an interface it is heap-boxed every iteration; construct it once above the loop", false},
 	{"PS6015", "batch1-call-feeds-only-postloop-slice", "a PURE (pureComputeFuncs) call inside a loop, given a single-element batch, whose result is used ONLY to append to a slice declared outside the loop — nothing in the loop reads it, so N batch-1 calls can become one batched call after the loop", false},
@@ -286,6 +287,10 @@ type Config struct {
 	// PS4002 — hand-vectorized SIMD kernel names; a call to one in a file marks a
 	// scalar math.X in a loop there as a vectorize candidate (e.g. vsiluF32).
 	VectorizedSiblingFuncs []string `json:"vectorizedSiblingFuncs,omitempty"`
+	// PS6018 — backend op constants that only MOVE data (slice, reshape, transpose,
+	// concat). A cluster of these around a little arithmetic is fusable bit-identically,
+	// because a gather and a scatter cannot change a value. Empty by default.
+	LayoutOpConstants []string `json:"layoutOpConstants,omitempty"`
 	// PS6014 — entry points that are PURE with respect to their arguments: same
 	// arguments, same result, no observable side effect (e.g. a network forward pass).
 	// The purity judgment is a project's to make and cannot be derived from syntax, so
@@ -300,6 +305,7 @@ type nameSets struct {
 	shapeMethods                                   map[string]bool
 	allocators, visitors, bulkCopy, vectorized     map[string]bool
 	pureCompute                                    map[string]bool
+	layoutOps                                      map[string]bool
 }
 
 func toSet(xs []string) map[string]bool {
@@ -322,6 +328,7 @@ func (c Config) compile() nameSets {
 		bulkCopy:       toSet(c.BulkCopyHelpers),
 		vectorized:     toSet(c.VectorizedSiblingFuncs),
 		pureCompute:    toSet(c.PureComputeFuncs),
+		layoutOps:      toSet(c.LayoutOpConstants),
 	}
 }
 
@@ -1862,6 +1869,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	out = append(out, batch1FeedsPostloopSliceFindings(fset, fn, ns)...)
 	out = append(out, loopInvariantLiteralArgFindings(fset, fn)...)
 	out = append(out, unpooledVariadicSiblingFindings(fset, fn)...)
+	out = append(out, layoutOpClusterFindings(fset, fn, ns)...)
 	out = append(out, invariantTranscendentalRecomputeFindings(fset, fn)...)
 	out = append(out, partialFastPathFindings(fset, fn)...)
 	out = append(out, outputInvariantReloadFindings(fset, fn)...)
@@ -2363,6 +2371,8 @@ func main() {
 		// PS6015 hoists a call across a loop, which is only legal if the call is pure;
 		// same config, same reason, same zero-means-nothing warning.
 		"batch1-call-feeds-only-postloop-slice": ns.pureCompute,
+		// PS6018 keys on the project's own movement-op constants.
+		"layout-op-cluster-unfused": ns.layoutOps,
 	}
 	var starved []string
 	for cat, vocab := range domainVocab {
@@ -7587,4 +7597,109 @@ func unpooledVariadicSiblingFindings(fset *token.FileSet, fn *ast.FuncDecl) []fi
 		return true
 	})
 	return out
+}
+
+// layoutOpClusterFindings flags PS6018 — a function that spends most of its dispatches moving
+// data rather than computing:
+//
+//	flat, _ := exec1(ctx, backend.OpReshape, …, x)      // 7 layout dispatches
+//	rot, _  := exec1(ctx, backend.OpSlice, …, flat)     // around
+//	pass, _ := exec1(ctx, backend.OpSlice, …, flat)     // exactly
+//	rotWide, _ := exec1(ctx, backend.OpReshape, …, rot) // one
+//	rotWide, _ = exec1a(ctx, backend.OpRoPE, r, rotWide)// arithmetic op
+//	merged, _ := exec1(ctx, backend.OpConcat, …, rot, pass)
+//
+// Movement CANNOT change a value, so gathering the operands out of raw storage and scattering
+// the result back is bit-identical BY CONSTRUCTION — no reassociation, no FMA question, no
+// tolerance argument. That is what makes this class worth flagging on sight where a general
+// "too many dispatches" report would not be: the fix needs no numerical judgment, only index
+// arithmetic. Shipped three times, all in one session: partialRoPE 1.25-1.33x with 38-43%
+// fewer allocations across three architectures, Gemma2 capped attention 1.21x / -27.6%, and
+// DeepSeekV2 absorbed attention 1.12x / -9.3%.
+//
+// PS4011 IS THE LOOP-SHAPED RELATIVE and does not subsume this. It requires the dispatches to
+// sit in a sequential loop; partialRoPE is straight-line code, so PS4011 could not see the
+// largest of the three wins. Together they cover the two shapes.
+//
+// SUPPRESSED once the function already has a fused path — a ctx.Recorder == nil guard, a
+// configured fast-path helper, or a direct Storage() grab. That is what the fix looks like, so
+// a fixed function must stop reporting; without it the rule would keep flagging its own
+// successes.
+//
+// The threshold is three because two movement ops around one arithmetic op is often the
+// irreducible shape of an operation (transpose-then-matmul), while three or more means the
+// layout algebra has outgrown the computation.
+func layoutOpClusterFindings(fset *token.FileSet, fn *ast.FuncDecl, ns nameSets) []finding {
+	if fn.Body == nil || len(ns.layoutOps) == 0 {
+		return nil
+	}
+	if hasFusedStoragePath(fn.Body, ns) {
+		return nil
+	}
+	var sites []token.Pos
+	names := map[string]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		for _, arg := range call.Args {
+			sel, ok := arg.(*ast.SelectorExpr)
+			if !ok || !ns.layoutOps[sel.Sel.Name] {
+				continue
+			}
+			sites = append(sites, call.Pos())
+			names[sel.Sel.Name] = true
+			break
+		}
+		return true
+	})
+	if len(sites) < 3 {
+		return nil
+	}
+	sorted := make([]string, 0, len(names))
+	for nm := range names {
+		sorted = append(sorted, nm)
+	}
+	sort.Strings(sorted)
+	return []finding{{
+		pos:      fset.Position(sites[0]),
+		end:      fset.Position(sites[0]),
+		category: "layout-op-cluster-unfused",
+		msg: fmt.Sprintf("this function dispatches %d pure data-movement ops (%s) and has no fused raw-storage path. "+
+			"Movement cannot change a value, so gathering the operands out of storage and scattering the result back is "+
+			"bit-identical BY CONSTRUCTION — index arithmetic only, no numerical judgment. Gate the fused arm on "+
+			"ctx.Recorder == nil so a taped context keeps the dispatch nodes as gradient edges. Shipped: partialRoPE "+
+			"1.25-1.33x with 38-43%% fewer allocations, Gemma2 capped attention 1.21x, DeepSeekV2 absorbed attention 1.12x.",
+			len(sites), strings.Join(sorted, ", ")),
+	}}
+}
+
+// hasFusedStoragePath reports whether fn already reaches raw storage behind a tape guard —
+// the shape the PS6018 fix takes, and therefore the shape that must silence it.
+func hasFusedStoragePath(body *ast.BlockStmt, ns nameSets) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		switch x := n.(type) {
+		case *ast.BinaryExpr:
+			// ctx.Recorder == nil (either operand order)
+			if x.Op == token.EQL || x.Op == token.NEQ {
+				for _, side := range []ast.Expr{x.X, x.Y} {
+					if sel, ok := side.(*ast.SelectorExpr); ok && sel.Sel.Name == "Recorder" {
+						found = true
+					}
+				}
+			}
+		case *ast.CallExpr:
+			nm := calleeName(x.Fun)
+			if nm == "Storage" || ns.fastPath[nm] {
+				found = true
+			}
+		}
+		return true
+	})
+	return found
 }

@@ -226,9 +226,9 @@ outer one, so the outer loop recomputes the same value on every pass:
 
 ```go
 for i := range n {
-    for j := range m {
-        h[i*m+j] = a*h[i*m+j] + b*(x[off+j] * delta)   // x[off+j]*delta has no i
-    }
+	for j := range m {
+		h[i*m+j] = a*h[i*m+j] + b*(x[off+j]*delta) // x[off+j]*delta has no i
+	}
 }
 ```
 
@@ -802,9 +802,11 @@ read back, which are outputs rather than temporaries.
 
 ```go
 for _, x := range data {
-    b := nearest(x, cent)                       // expensive, independent per item
-    cnt[b]++                                    // …but this is order-dependent
-    for t := range dim { sums[b][t] += x[t] }
+	b := nearest(x, cent) // expensive, independent per item
+	cnt[b]++              // …but this is order-dependent
+	for t := range dim {
+		sums[b][t] += x[t]
+	}
 }
 ```
 
@@ -953,13 +955,13 @@ variant list when a switch mixes the two. Probing is what established the distin
 One accumulator per output, and an operand that is the same for every one of them:
 
 ```go
-for ni := range n {              // one output per iteration
-    wr := w[ni*k:]               // per-output
-    var acc float64
-    for i := range k {
-        acc += row[i] * wr[i]    // row[i] is re-loaded for every ni
-    }
-    outf[ni] = acc
+for ni := range n { // one output per iteration
+	wr := w[ni*k:] // per-output
+	var acc float64
+	for i := range k {
+		acc += row[i] * wr[i] // row[i] is re-loaded for every ni
+	}
+	outf[ni] = acc
 }
 ```
 
@@ -1023,6 +1025,49 @@ followed by `return false`, structurally identical and semantically unrelated. A
 `[]float32` is the signal; asserting `*ast.Ident` is not. Tree-wide the tightened form
 adds exactly one finding (56 → 57) instead of fourteen.
 
+
+## PS6018 — a function that mostly moves data  *(scanner: domain)*
+
+Three or more dispatches of a pure movement op — slice, reshape, transpose, concat — in one
+function with no fused raw-storage path:
+
+```go
+flat, _ := exec1(ctx, backend.OpReshape, wide, x)         // seven layout dispatches
+rot, _ := exec1(ctx, backend.OpSlice, head, flat)         // around
+pass, _ := exec1(ctx, backend.OpSlice, tail, flat)        // exactly
+rotWide, _ := exec1(ctx, backend.OpReshape, flatten, rot) // one
+rotWide, _ = exec1a(ctx, backend.OpRoPE, r, rotWide)      // arithmetic op
+merged, _ := exec1(ctx, backend.OpConcat, axis1, rot, pass)
+```
+
+**Movement cannot change a value**, so gathering the operands out of storage and scattering the
+result back is bit-identical BY CONSTRUCTION — no reassociation, no FMA question, no tolerance
+argument. That is what makes this class worth flagging on sight where a bare "too many
+dispatches" report would not be: the fix needs index arithmetic, not numerical judgment.
+
+**Shipped three times, all measured**: `partialRoPE` **1.25–1.33×** with **38–43% fewer
+allocations** across three architectures (31 call sites, one shared helper); Gemma2 capped
+attention **1.21× / −27.6%**; DeepSeekV2 absorbed attention **1.12× / −9.3%**.
+
+**PS4011 does not subsume this.** That rule requires the dispatches to sit in a sequential
+loop, and `partialRoPE` is straight-line code — so PS4011 could not see the largest of the
+three wins. The two rules cover the two shapes.
+
+**Gate the fused arm on `ctx.Recorder == nil`.** Under a tape every one of those layout ops is
+a gradient edge, and replacing them with raw copies detaches the graph. The rule suppresses
+once a function has that guard, a configured fast-path helper, or a `Storage()` grab — a fixed
+function must stop reporting, or the rule flags its own successes forever.
+
+**Threshold three**: two movement ops around one arithmetic op is often the irreducible shape
+of an operation (transpose then matmul). Three or more means the layout algebra has outgrown
+the computation.
+
+**Prove the layout algebra over a SWEEP of geometries, not one shape.** The claim is index
+arithmetic, and a single `(seq, heads, rotaryDim)` triple can agree by coincidence when an
+offset is wrong; `rotaryDim == hd` also takes a different early-return branch. Compare raw bits
+between a plain and a taped context — that tests the arithmetic and the tape guard at once —
+and panic-probe the fused branch, since a parity test whose arms take the same path passes
+while proving nothing.
 
 ## PS6017 — a variadic helper called at an arity a sibling already covers  *(scanner: static)*
 

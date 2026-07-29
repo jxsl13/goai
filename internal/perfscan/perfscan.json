@@ -77,5 +77,11 @@
   ],
   "pureComputeFuncs": [
     "forward"
+  ],
+  "layoutOpConstants": [
+    "OpSlice",
+    "OpReshape",
+    "OpTranspose",
+    "OpConcat"
   ]
 }

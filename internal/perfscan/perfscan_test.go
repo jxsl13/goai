@@ -4798,3 +4798,112 @@ func f(m *M, ctx *backend.Context, x *tensor.Tensor) error {
 		t.Fatalf("want 0 when the candidate's trailing type differs, got %d", got)
 	}
 }
+
+// The partialRoPE shape: seven layout dispatches around one arithmetic op, straight-line code
+// with no loop — which is why PS4011, the loop-shaped relative, could not see the largest of
+// the three wins this rule was built from.
+func TestDetectPS6018_LayoutOpClusterUnfused(t *testing.T) {
+	src := `package p
+func partialRoPE(ctx *C, x T, heads, rotaryDim int, rope A) (T, error) {
+	flat, err := exec1(ctx, backend.OpReshape, reshapeTo(seq*heads, hd), x)
+	if err != nil {
+		return nil, err
+	}
+	rot, err := exec1(ctx, backend.OpSlice, sliceTo(0, rotaryDim), flat)
+	if err != nil {
+		return nil, err
+	}
+	pass, err := exec1(ctx, backend.OpSlice, sliceTo(rotaryDim, hd), flat)
+	if err != nil {
+		return nil, err
+	}
+	rotWide, err := exec1(ctx, backend.OpReshape, reshapeTo(seq, heads*rotaryDim), rot)
+	if err != nil {
+		return nil, err
+	}
+	if rotWide, err = exec1a(ctx, backend.OpRoPE, rope, rotWide); err != nil {
+		return nil, err
+	}
+	merged, err := exec1(ctx, backend.OpConcat, concatOn(1), rotWide, pass)
+	if err != nil {
+		return nil, err
+	}
+	return exec1(ctx, backend.OpReshape, reshapeTo(seq, heads*hd), merged)
+}`
+	if got := countCat(scanSrc(t, src))["layout-op-cluster-unfused"]; got != 1 {
+		t.Fatalf("want 1 layout-op-cluster-unfused, got %d", got)
+	}
+}
+
+// A function that already has the fused path must stop reporting — otherwise the rule flags
+// its own successes forever. This is the shape the fix takes.
+func TestDetectPS6018_SilentOnceFused(t *testing.T) {
+	src := `package p
+func partialRoPE(ctx *C, x T, heads, rotaryDim int, rope A) (T, error) {
+	if ctx.Recorder == nil {
+		xf := x.Contiguous().Storage().F32()
+		return gatherScatter(xf, heads, rotaryDim), nil
+	}
+	flat, err := exec1(ctx, backend.OpReshape, reshapeTo(seq*heads, hd), x)
+	if err != nil {
+		return nil, err
+	}
+	rot, err := exec1(ctx, backend.OpSlice, sliceTo(0, rotaryDim), flat)
+	if err != nil {
+		return nil, err
+	}
+	merged, err := exec1(ctx, backend.OpConcat, concatOn(1), rot, flat)
+	if err != nil {
+		return nil, err
+	}
+	return exec1(ctx, backend.OpReshape, reshapeTo(seq, heads*hd), merged)
+}`
+	if got := countCat(scanSrc(t, src))["layout-op-cluster-unfused"]; got != 0 {
+		t.Fatalf("want 0 once a fused storage path exists, got %d", got)
+	}
+}
+
+// Two movement ops around one arithmetic op is often irreducible — transpose then matmul —
+// so the threshold is three. This is the floor against the rule firing on ordinary code.
+func TestDetectPS6018_SilentOnTwoLayoutOps(t *testing.T) {
+	src := `package p
+func attn(ctx *C, q, k T) (T, error) {
+	kT, err := exec1a(ctx, backend.OpTranspose, nil, k)
+	if err != nil {
+		return nil, err
+	}
+	scores, err := exec2(ctx, backend.OpMatMul, nil, q, kT)
+	if err != nil {
+		return nil, err
+	}
+	return exec1(ctx, backend.OpReshape, reshapeTo(1, 4), scores)
+}`
+	if got := countCat(scanSrc(t, src))["layout-op-cluster-unfused"]; got != 0 {
+		t.Fatalf("want 0 for two layout ops, got %d", got)
+	}
+}
+
+// Arithmetic ops are not movement, however many there are: fusing them raises reassociation
+// and FMA questions, which is the whole reason this rule keys on a movement-op list rather
+// than on dispatch count.
+func TestDetectPS6018_SilentOnArithmeticOps(t *testing.T) {
+	src := `package p
+func mlp(ctx *C, x, w1, w2, w3 T) (T, error) {
+	a, err := exec2(ctx, backend.OpMatMul, nil, x, w1)
+	if err != nil {
+		return nil, err
+	}
+	b, err := exec2(ctx, backend.OpMul, nil, a, w2)
+	if err != nil {
+		return nil, err
+	}
+	c, err := exec2(ctx, backend.OpAdd, nil, b, w3)
+	if err != nil {
+		return nil, err
+	}
+	return exec1a(ctx, backend.OpSoftmax, nil, c)
+}`
+	if got := countCat(scanSrc(t, src))["layout-op-cluster-unfused"]; got != 0 {
+		t.Fatalf("want 0 for arithmetic ops, got %d", got)
+	}
+}
