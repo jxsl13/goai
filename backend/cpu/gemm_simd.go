@@ -24,6 +24,7 @@ import (
 	"runtime"
 
 	"simd/archsimd"
+	"unsafe"
 )
 
 var gemmHasAVX = archsimd.X86.AVX()
@@ -317,10 +318,10 @@ func gemmF32SmallM(A, B, C []float32, jLo, jHi, m, k, n int) {
 			bo := j
 			for p := 0; p < k; p++ {
 				b := archsimd.BroadcastFloat32x8(ai[p])
-				s0 = b.MulAdd(archsimd.LoadFloat32x8Slice(B[bo:]), s0)
-				s1 = b.MulAdd(archsimd.LoadFloat32x8Slice(B[bo+8:]), s1)
-				s2 = b.MulAdd(archsimd.LoadFloat32x8Slice(B[bo+16:]), s2)
-				s3 = b.MulAdd(archsimd.LoadFloat32x8Slice(B[bo+24:]), s3)
+				s0 = b.MulAdd(archsimd.LoadFloat32x8((*[8]float32)(unsafe.Add(unsafe.Pointer(&B[0]), uintptr(bo)*4))), s0)
+				s1 = b.MulAdd(archsimd.LoadFloat32x8((*[8]float32)(unsafe.Add(unsafe.Pointer(&B[0]), uintptr(bo+8)*4))), s1)
+				s2 = b.MulAdd(archsimd.LoadFloat32x8((*[8]float32)(unsafe.Add(unsafe.Pointer(&B[0]), uintptr(bo+16)*4))), s2)
+				s3 = b.MulAdd(archsimd.LoadFloat32x8((*[8]float32)(unsafe.Add(unsafe.Pointer(&B[0]), uintptr(bo+24)*4))), s3)
 				bo += n
 			}
 			s0.StoreSlice(ci[j:])
@@ -332,7 +333,7 @@ func gemmF32SmallM(A, B, C []float32, jLo, jHi, m, k, n int) {
 			s := archsimd.BroadcastFloat32x8(0)
 			bo := j
 			for p := 0; p < k; p++ {
-				s = archsimd.BroadcastFloat32x8(ai[p]).MulAdd(archsimd.LoadFloat32x8Slice(B[bo:]), s)
+				s = archsimd.BroadcastFloat32x8(ai[p]).MulAdd(archsimd.LoadFloat32x8((*[8]float32)(unsafe.Add(unsafe.Pointer(&B[0]), uintptr(bo)*4))), s)
 				bo += n
 			}
 			s.StoreSlice(ci[j:])
@@ -418,8 +419,8 @@ func gemmF32BandDirectCols(A, B, C []float32, loRow, hiRow, k, n, jLo, jHi int) 
 			s3h := archsimd.BroadcastFloat32x8(0)
 			bo := j
 			for p := 0; p < k; p++ {
-				lo := archsimd.LoadFloat32x8Slice(B[bo:])
-				hi := archsimd.LoadFloat32x8Slice(B[bo+8:])
+				lo := archsimd.LoadFloat32x8((*[8]float32)(unsafe.Add(unsafe.Pointer(&B[0]), uintptr(bo)*4)))
+				hi := archsimd.LoadFloat32x8((*[8]float32)(unsafe.Add(unsafe.Pointer(&B[0]), uintptr(bo+8)*4)))
 				b0 := archsimd.BroadcastFloat32x8(a0[p])
 				b1 := archsimd.BroadcastFloat32x8(a1[p])
 				b2 := archsimd.BroadcastFloat32x8(a2[p])
@@ -450,7 +451,7 @@ func gemmF32BandDirectCols(A, B, C []float32, loRow, hiRow, k, n, jLo, jHi int) 
 			s3 := archsimd.BroadcastFloat32x8(0)
 			bo := j
 			for p := 0; p < k; p++ {
-				bv := archsimd.LoadFloat32x8Slice(B[bo:])
+				bv := archsimd.LoadFloat32x8((*[8]float32)(unsafe.Add(unsafe.Pointer(&B[0]), uintptr(bo)*4)))
 				s0 = archsimd.BroadcastFloat32x8(a0[p]).MulAdd(bv, s0)
 				s1 = archsimd.BroadcastFloat32x8(a1[p]).MulAdd(bv, s1)
 				s2 = archsimd.BroadcastFloat32x8(a2[p]).MulAdd(bv, s2)
@@ -484,7 +485,7 @@ func gemmF32BandDirectCols(A, B, C []float32, loRow, hiRow, k, n, jLo, jHi int) 
 			s := archsimd.BroadcastFloat32x8(0)
 			bo := j
 			for p := 0; p < k; p++ {
-				s = archsimd.BroadcastFloat32x8(ai[p]).MulAdd(archsimd.LoadFloat32x8Slice(B[bo:]), s)
+				s = archsimd.BroadcastFloat32x8(ai[p]).MulAdd(archsimd.LoadFloat32x8((*[8]float32)(unsafe.Add(unsafe.Pointer(&B[0]), uintptr(bo)*4))), s)
 				bo += n
 			}
 			s.StoreSlice(ci[j:])
