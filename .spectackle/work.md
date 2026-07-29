@@ -1054,3 +1054,23 @@ The second is the more dangerous failure because a silent check reads as a clean
 THE TESTING CONSEQUENCE, verified rather than reasoned: a suppression test written against the pointer case stays GREEN under both failure modes, because it asserts zero and a silenced rule produces zero. Swapping typeText back for exprText leaves every suppression test passing and turns only the POSITIVE test red. So the positive test is the guard for a helper that can return empty, and PROC-SUPPRESSION-FLOOR-001 needs this corollary: the floor is not merely nice to have alongside suppressions, it is the ONLY test that can detect a whole-rule silencing. Cast as PROC-SCANRULE-SILENT-REGRESSION-001.
 
 NOT APPLIED. The 422 candidates are located, not switched. Applying them is a separate change needing its own measurement, and the earlier batches showed why: the alloc delta only appears on a benchmark that executes the changed path, and identical counts across arms mean no coverage rather than no effect (PROC-BENCH-COVERAGE-NULL-001).
+
+## R-01KYQZ94HQE7CSK3DT6CBAHKE8 First application of PS6017: 238 sites swapped, -1.8% allocs where coverage exists, and benchmark coverage is now the binding constraint
+kind: research
+state: draft
+created: 2026-07-29
+
+CONSUMES PS6017 from R-01KYQYKZX6FST. Measured on darwin/arm64 M2 Pro, go1.26.5, GOMAXPROCS=12, interleaved, three rounds.
+
+APPLIED: 238 two-argument exec1 call sites across 59 nlp files routed to the pooled exec2 sibling. exec1 is variadic so every call allocates a slice for its inputs; exec2 takes both tensors as named parameters and pools the slice it builds, delegating to exec1 when ctx.Recorder != nil. Bit-identical by construction, and the package equivalence tests (decode-vs-Forward per architecture) stay green.
+
+MEASURED where coverage exists, deterministic in all three rounds:
+  QuantCohereDecodeStep   1393 -> 1368 allocs  -1.8%, -273 B/op
+  QuantCohereForward       300 ->  295 allocs  -1.7%,  -20 B/op
+PS6017 candidates in nlp fall from about 400 to 230, the remainder being the arity-1 and arity-3 forms plus call shapes the mechanical rewrite did not match.
+
+TWO NULLS THAT ARE CORRECTLY NULL, and telling them apart from the coverage trap is the point. QuantLlamaGenerate500 and MixtralPromptStepwise show no change, because neither executes a changed call site: quant_llama.go got two swaps but both are in Forward, and Generate steps the prompt through DecodeStep. The DISTINGUISHING SIGNAL is jitter. These counts vary by a handful of allocations between runs (283397 / 283413 / 283397 against 283399 / 283405 / 283403) rather than repeating exactly. An EXACTLY repeated count across arms means the code never ran (PROC-BENCH-COVERAGE-NULL-001); an overlapping jittery range means the effect is below noise on that benchmark. Both look like zero in a summary table and they mean different things.
+
+THE BINDING CONSTRAINT IS BENCHMARK COVERAGE, not the edits. Forward and DecodeStep are separate layer loops with separate call sites, so a change to one is invisible to a benchmark of the other. Of 59 changed files, exactly one has benchmarks for both paths - and that is only because BenchmarkQuantCohereForward was written this round to pair with the DecodeStep benchmark written last round. The remaining 230 candidates are mostly in paths no benchmark executes, so under the standing constraint that only what is verifiable on this system may ship, the sweep is now gated on writing per-architecture prefill and decode benchmarks rather than on applying rewrites. That is a larger and less interesting body of work than the optimization itself, and it is where the next iterations of this line should go.
+
+NO TIME CLAIM. MixtralPromptStepwise is bimodal across a 3x range WITHIN a single arm on this host (166ms to 519ms), so it cannot resolve a percent-level effect in either direction. Reporting a ratio from it would be noise dressed as a measurement, per PROC-BENCH-ONE-SAMPLE-001 generalized: the guard is not just iteration count but whether the within-arm spread is smaller than the claimed effect.
