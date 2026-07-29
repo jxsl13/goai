@@ -3069,3 +3069,49 @@ func F(x *T, idx []int) float64 {
 		t.Fatalf("outside a loop, want 0 spread-accessor-in-loop, got %d", got)
 	}
 }
+
+// PS4010: fires on the butterfly p,q = x+y,x-y (via temps) in a loop.
+func TestDetectPS4010_Butterfly(t *testing.T) {
+	src := `package p
+func fwht(a []float64) {
+	n := len(a)
+	for h := 1; h < n; h <<= 1 {
+		for i := 0; i < n; i += h << 1 {
+			for j := i; j < i+h; j++ {
+				x, y := a[j], a[j+h]
+				a[j], a[j+h] = x+y, x-y
+			}
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src))["vectorizable-butterfly"]; got != 1 {
+		t.Fatalf("want 1 vectorizable-butterfly, got %d", got)
+	}
+}
+
+// Must stay SILENT on an ordinary swap / non-add-sub tuple assign.
+func TestDetectPS4010_SilentOnSwap(t *testing.T) {
+	src := `package p
+func swap(a []float64, n int) {
+	for i := 0; i < n; i++ {
+		a[i], a[n-i] = a[n-i], a[i]
+	}
+}`
+	if got := countCat(scanSrc(t, src))["vectorizable-butterfly"]; got != 0 {
+		t.Fatalf("want 0 (swap), got %d", got)
+	}
+}
+
+// Must stay SILENT when the two RHS are not x+y / x-y of the same pair.
+func TestDetectPS4010_SilentOnMixedOps(t *testing.T) {
+	src := `package p
+func mix(a []float64, n int) {
+	for i := 0; i < n; i++ {
+		x, y := a[i], a[i+1]
+		a[i], a[i+1] = x+y, x*y
+	}
+}`
+	if got := countCat(scanSrc(t, src))["vectorizable-butterfly"]; got != 0 {
+		t.Fatalf("want 0 (add/mul, not butterfly), got %d", got)
+	}
+}

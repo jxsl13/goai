@@ -217,6 +217,7 @@ var checks = []check{
 	{"PS6005", "monotone-index-bound", "an innermost loop guarding its tap work with a single relational bound on an index affine in the loop var (j:=t-(K-1)+k; if j>=0) — the in-bounds iterations are one contiguous run, clamp the loop bound instead of branching per tap", false},
 	{"PS6003", "partial-fast-path-coverage", "a fast path that bypasses the general path for only SOME members of a variant family a switch in the same function enumerates — the uncovered variants silently pay the slow path", false},
 	{"PS6004", "unverified-dual-path", "a devirtualized fast path with a generic fallback — a bit-identity claim needing a bit-exact test", true},
+	{"PS4010", "vectorizable-butterfly", "an in-loop butterfly p,q = x+y,x-y (add and subtract of the SAME operand pair written to two indexed slots) — a scalar FWHT/FFT/Hadamard stage a SIMD Add/Sub over the contiguous stride-separated runs would vectorize", false},
 }
 
 // catToID indexes the registry for O(1) id lookup at report time.
@@ -1803,6 +1804,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 		})
 	}
 	out = append(out, symmetricAccumFindings(fset, fn)...)
+	out = append(out, butterflyFindings(fset, fn)...)
 	out = append(out, serialDotMatmulFindings(fset, fn)...)
 	out = append(out, quadraticCacheAppendFindings(fset, fn)...)
 	out = append(out, buildNxNUseOneRowFindings(fset, fn)...)
@@ -3147,6 +3149,60 @@ func symmetricAccumFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 				return false
 			}
 		}
+		return true
+	})
+	return out
+}
+
+// butterflyFindings flags PS4010 — an in-loop butterfly assignment p,q = x+y, x-y (the same
+// two operands added AND subtracted, written to two indexed slots of one base). This is the
+// core step of a Fast Walsh-Hadamard / FFT / Hadamard-rotation kernel: an overhead/L1-bound
+// scalar add/sub loop that a SIMD Add/Sub over the contiguous stride-separated operand runs
+// vectorizes (bit-identical — each output is exactly x±y of the same operands, no cross-lane
+// reduction). Shipped: nlp FWHT butterfly (kernel 1.5x, RotationHadamard -25%).
+func butterflyFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	var out []finding
+	seen := map[token.Pos]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		_, body, ok := loopVarBody(n)
+		if !ok {
+			return true
+		}
+		ast.Inspect(body, func(m ast.Node) bool {
+			as, ok := m.(*ast.AssignStmt)
+			if !ok || len(as.Lhs) != 2 || len(as.Rhs) != 2 || seen[as.Pos()] {
+				return true
+			}
+			l0, ok0 := as.Lhs[0].(*ast.IndexExpr)
+			l1, ok1 := as.Lhs[1].(*ast.IndexExpr)
+			if !ok0 || !ok1 {
+				return true
+			}
+			b0, b1 := baseIdentName(l0), baseIdentName(l1)
+			if b0 == "" || b0 != b1 { // both indexed writes into the same base slice
+				return true
+			}
+			add, aok := as.Rhs[0].(*ast.BinaryExpr)
+			sub, sok := as.Rhs[1].(*ast.BinaryExpr)
+			if !aok || !sok || add.Op != token.ADD || sub.Op != token.SUB {
+				return true
+			}
+			if exprEqual(add.X, sub.X) && exprEqual(add.Y, sub.Y) { // x+y and x-y, same x,y
+				seen[as.Pos()] = true
+				out = append(out, finding{
+					pos:      fset.Position(as.Pos()),
+					category: "vectorizable-butterfly",
+					msg: fmt.Sprintf("in-loop butterfly %s[..],%s[..] = x+y, x-y — a scalar"+
+						" FWHT/FFT/Hadamard stage. When the two operand runs are contiguous and"+
+						" stride-separated by >= the SIMD lane count, replace the inner block with"+
+						" one Float64x4/Float32x8 Add (-> first slot) and one Sub (-> second slot)"+
+						" of the same loaded x,y — bit-identical (no cross-lane reduction), keep the"+
+						" stage order. Shipped: nlp FWHT (kernel 1.5x). Gate behind the simd build"+
+						" tag with a scalar fallback + a Float64bits parity test.", b0, b0),
+				})
+			}
+			return true
+		})
 		return true
 	})
 	return out
