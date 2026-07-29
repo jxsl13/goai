@@ -1056,6 +1056,25 @@ of `S` once per key channel per timestep; interchanging it carried the larger sh
 module's **1.75×**. Sinkhorn's transposed half is the same pathology in `[][]float64` form
 (**2.65×**), where PS4006 sees it instead.
 
+**Triage first: is the strided index revisited?** A stride only costs what the cache cannot
+absorb, and the deciding question is not the buffer's size but the FOOTPRINT OF THE STRIDED
+WALK ITSELF. The wins above all share a property — the strided index is the *reduction*
+axis, so each line is touched once per output and never returned to. When instead the same
+addresses recur on every outer iteration, those lines stay resident and there is nothing to
+recover.
+
+The triangular back-substitutions in `linalg` are the recorded null case (`R-01KYQT329EEAD`).
+`out[j*cols+c]` strides by 4KB at n=512 over a 2MB buffer, which reads exactly like the NSA
+case — but for a fixed `c` the pass touches the *same* n addresses on each of its n outer
+iterations. That is n lines, 32KB of footprint at n=512, resident after the first pass.
+Predicted 2–5×; measured 1.005× (LU), 1.001× (Lstsq), 0.994× (Inverse), and 1.041× at one
+site and one size that vanished at the next size up. So: before booking a PS6011 candidate,
+ask whether the outer loop re-reads the strided range. If it does, expect nothing.
+
+No suppression is added for this. Deciding it needs the outer trip count weighed against the
+index expression, and an unsound rule here would hide the 2.40× cases — an advisory false
+positive costs one A/B, a wrong suppression costs the win permanently.
+
 **Three false-positive classes are excluded by construction.** A transpose
 (`out[j*r+i] = x[i*c+j]`) strides on one side whichever way it is iterated, so interchange
 only moves the problem — suppressed by detecting the mirrored shape. A nest whose two loop
