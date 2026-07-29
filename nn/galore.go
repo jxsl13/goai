@@ -108,15 +108,24 @@ func galoreProjection(g [][]float64, rank int) (proj [][]float64, left bool) {
 	m, n := len(g), len(g[0])
 	if m <= n {
 		// GGᵀ [m,m]; its eigenvectors are the left singular vectors of G.
+		// GGᵀ is SYMMETRIC, so only the upper triangle is computed and mirrored — half
+		// the dot products. Bit-identical: gg[j][i] would have summed g[j][k]*g[i][k]
+		// over ascending k, which is the same terms in the same order as gg[i][j] since
+		// multiplication commutes. Nothing is reassociated.
 		gg := make([][]float64, m)
 		for i := range m {
 			gg[i] = make([]float64, m)
-			for j := range m {
+		}
+		for i := range m {
+			gi := g[i]
+			for j := i; j < m; j++ {
+				gj := g[j]
 				var s float64
 				for k := range n {
-					s += g[i][k] * g[j][k]
+					s += gi[k] * gj[k]
 				}
 				gg[i][j] = s
+				gg[j][i] = s
 			}
 		}
 		_, vecs := linalg.SymEig(gg)
@@ -124,15 +133,31 @@ func galoreProjection(g [][]float64, rank int) (proj [][]float64, left bool) {
 		return vecs[:r], true
 	}
 	// GᵀG [n,n]; eigenvectors are the right singular vectors of G.
+	// GᵀG accumulated as k-OUTER rank-1 updates over the upper triangle. Two problems in
+	// one rewrite: the original read g[k][i] with k the reduction index, walking a COLUMN
+	// of a row-of-slices matrix so every step dereferenced a different row (PS4009), and it
+	// filled all n² entries of a symmetric matrix. Now each row g[k] is loaded once and
+	// walked contiguously, and only the triangle is accumulated.
+	//
+	// Bit-identical: every gtg[i][j] still sums its terms over ASCENDING k from zero, which
+	// is exactly what the (i,j)-outer form did — the loops are interchanged, not the sum.
 	gtg := make([][]float64, n)
 	for i := range n {
 		gtg[i] = make([]float64, n)
-		for j := range n {
-			var s float64
-			for k := range m {
-				s += g[k][i] * g[k][j]
+	}
+	for k := range m {
+		gk := g[k]
+		for i := range n {
+			gki := gk[i]
+			row := gtg[i]
+			for j := i; j < n; j++ {
+				row[j] += gki * gk[j]
 			}
-			gtg[i][j] = s
+		}
+	}
+	for i := range n {
+		for j := i + 1; j < n; j++ {
+			gtg[j][i] = gtg[i][j]
 		}
 	}
 	_, vecs := linalg.SymEig(gtg)
