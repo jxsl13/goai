@@ -88,18 +88,47 @@ func MoBAAttention(q, k, v *tensor.Tensor, heads, blockSize, topK int, scale flo
 					selected[gates[gi].block] = true
 				}
 				m := math.Inf(-1)
+				// Score dot is a latency-bound serial reduction over d; jam two
+				// selected output rows (prev,j) so their accumulators are
+				// independent, hiding the FP-add latency. Each scores[x] still
+				// sums d ascending → bit-identical; max is order-free.
+				prev := -1
 				for j := 0; j <= i; j++ {
 					if !selected[j/blockSize] {
 						scores[j] = math.Inf(-1)
 						continue
 					}
-					krow := ks[j*dm+off : j*dm+off+dk]
+					if prev < 0 {
+						prev = j
+						continue
+					}
+					krow0 := ks[prev*dm+off : prev*dm+off+dk]
+					krow1 := ks[j*dm+off : j*dm+off+dk]
+					var sc0, sc1 float64
+					for d := range dk {
+						sc0 += qrow[d] * krow0[d]
+						sc1 += qrow[d] * krow1[d]
+					}
+					sc0 *= scale
+					sc1 *= scale
+					scores[prev] = sc0
+					scores[j] = sc1
+					if sc0 > m {
+						m = sc0
+					}
+					if sc1 > m {
+						m = sc1
+					}
+					prev = -1
+				}
+				if prev >= 0 {
+					krow := ks[prev*dm+off : prev*dm+off+dk]
 					var sc float64
 					for d := range dk {
 						sc += qrow[d] * krow[d]
 					}
 					sc *= scale
-					scores[j] = sc
+					scores[prev] = sc
 					if sc > m {
 						m = sc
 					}
