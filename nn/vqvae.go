@@ -56,20 +56,44 @@ func (vq *VectorQuantizer) Quantize(ctx *backend.Context, ze *tensor.Tensor) (zq
 	// nearest-neighbor assignment k_i = argmin_j ‖ze_i − e_j‖² (non-differentiable).
 	indices = make([]int, batch)
 	sel := tensor.New(ze.Dtype(), tensor.Shape{batch, k}) // one-hot [batch,K] for a differentiable gather
-	for i := range batch {
-		best, bestDist := 0, math.Inf(1)
-		for j := range k {
-			var dist float64
-			for c := range d {
-				diff := ze.AtF64(i, c) - vq.Codebook.AtF64(j, c)
-				dist += diff * diff
-			}
-			if dist < bestDist {
-				best, bestDist = j, dist
-			}
+	// Nearest-codebook assignment argmin_j ‖ze_i−e_j‖². The old scan paid an AtF64 dispatch
+	// d× per (i,j) = batch·k·d dispatches; grab contiguous typed rows once and jam 4 codebook
+	// entries so their argmin distances accumulate on independent chains (mirrors AQLM #467).
+	// Bit-identical: the read floats and the ascending-c f64 accumulation are unchanged, and
+	// the 4-wide `< bd` keeps the lowest index on ties exactly like the sequential scan.
+	zc := ze.Contiguous()
+	cbc := vq.Codebook.Contiguous()
+	switch ze.Dtype() {
+	case tensor.F64:
+		zs, cb := zc.Storage().F64(), cbc.Storage().F64()
+		for i := range batch {
+			best := vqNearestF64(zs[i*d:i*d+d], cb, k, d)
+			indices[i] = best
+			sel.SetF64(1, i, best)
 		}
-		indices[i] = best
-		sel.SetF64(1, i, best)
+	case tensor.F32:
+		zs, cb := zc.Storage().F32(), cbc.Storage().F32()
+		for i := range batch {
+			best := vqNearestF32(zs[i*d:i*d+d], cb, k, d)
+			indices[i] = best
+			sel.SetF64(1, i, best)
+		}
+	default:
+		for i := range batch { // exotic dtype: keep the per-element dispatch
+			best, bestDist := 0, math.Inf(1)
+			for j := range k {
+				var dist float64
+				for c := range d {
+					diff := ze.AtF64(i, c) - vq.Codebook.AtF64(j, c)
+					dist += diff * diff
+				}
+				if dist < bestDist {
+					best, bestDist = j, dist
+				}
+			}
+			indices[i] = best
+			sel.SetF64(1, i, best)
+		}
 	}
 	ex := func(op backend.Op, at backend.Attrs, in ...*tensor.Tensor) (*tensor.Tensor, error) {
 		o, e := backend.Execute(ctx, op, in, at)
@@ -139,4 +163,101 @@ func sq(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, error) {
 		return nil, err
 	}
 	return o[0], nil
+}
+
+// vqNearestF64 returns argmin_j ‖row−cb[j]‖² over k codebook rows of width d (cb is the
+// flat [k·d] codebook), 4-wide unroll-and-jam. `< bd` (strict) keeps the lowest index on ties.
+func vqNearestF64(row, cb []float64, k, d int) int {
+	best, bd := 0, math.Inf(1)
+	j := 0
+	for ; j+4 <= k; j += 4 {
+		c0 := cb[j*d : j*d+d : j*d+d]
+		c1 := cb[(j+1)*d : (j+1)*d+d : (j+1)*d+d]
+		c2 := cb[(j+2)*d : (j+2)*d+d : (j+2)*d+d]
+		c3 := cb[(j+3)*d : (j+3)*d+d : (j+3)*d+d]
+		var d0, d1, d2, d3 float64
+		for t, xv := range row {
+			e0 := xv - c0[t]
+			d0 += e0 * e0
+			e1 := xv - c1[t]
+			d1 += e1 * e1
+			e2 := xv - c2[t]
+			d2 += e2 * e2
+			e3 := xv - c3[t]
+			d3 += e3 * e3
+		}
+		if d0 < bd {
+			bd, best = d0, j
+		}
+		if d1 < bd {
+			bd, best = d1, j+1
+		}
+		if d2 < bd {
+			bd, best = d2, j+2
+		}
+		if d3 < bd {
+			bd, best = d3, j+3
+		}
+	}
+	for ; j < k; j++ {
+		cj := cb[j*d : j*d+d : j*d+d]
+		var dist float64
+		for t, xv := range row {
+			e := xv - cj[t]
+			dist += e * e
+		}
+		if dist < bd {
+			bd, best = dist, j
+		}
+	}
+	return best
+}
+
+// vqNearestF32 is vqNearestF64 over float32 storage, widening each read to float64 exactly
+// as AtF64 on an F32 tensor does — so the accumulated distance (and the argmin) is identical.
+func vqNearestF32(row, cb []float32, k, d int) int {
+	best, bd := 0, math.Inf(1)
+	j := 0
+	for ; j+4 <= k; j += 4 {
+		c0 := cb[j*d : j*d+d : j*d+d]
+		c1 := cb[(j+1)*d : (j+1)*d+d : (j+1)*d+d]
+		c2 := cb[(j+2)*d : (j+2)*d+d : (j+2)*d+d]
+		c3 := cb[(j+3)*d : (j+3)*d+d : (j+3)*d+d]
+		var d0, d1, d2, d3 float64
+		for t := range row {
+			xv := float64(row[t])
+			e0 := xv - float64(c0[t])
+			d0 += e0 * e0
+			e1 := xv - float64(c1[t])
+			d1 += e1 * e1
+			e2 := xv - float64(c2[t])
+			d2 += e2 * e2
+			e3 := xv - float64(c3[t])
+			d3 += e3 * e3
+		}
+		if d0 < bd {
+			bd, best = d0, j
+		}
+		if d1 < bd {
+			bd, best = d1, j+1
+		}
+		if d2 < bd {
+			bd, best = d2, j+2
+		}
+		if d3 < bd {
+			bd, best = d3, j+3
+		}
+	}
+	for ; j < k; j++ {
+		cj := cb[j*d : j*d+d : j*d+d]
+		var dist float64
+		for t := range row {
+			e := float64(row[t]) - float64(cj[t])
+			dist += e * e
+		}
+		if dist < bd {
+			bd, best = dist, j
+		}
+	}
+	return best
 }
