@@ -923,3 +923,26 @@ CONTRAST with the strided walks that DID pay this session (NSA P*V 2.40x, KDA 1.
 PS6011 CONSEQUENCE. PS6011 flags all three of these sites (11 in linalg, 81 tree-wide) and is CORRECT to - it is documented advisory, and its own text says candidates need an A/B. But this is the first recorded case of PS6011 candidates measuring null, and the distinguishing property is stated above: whether the strided index is revisited across the outer loop. That is a genuine refinement, and it is NOT expressible in the current detector - deciding it requires knowing that the same addresses recur, which means reasoning about the outer loop trip count against the index expression. Deliberately NOT adding a suppression: it would need to be sound to avoid hiding the 2.40x cases, and an unsound one is worse than an advisory false positive. The refinement belongs in PATTERNS.md as triage guidance.
 
 WHAT SHIPPED INSTEAD. The scratch hoist found while reading these functions: CholSolve and Lstsq allocated their forward buffer per column, so the Inverse-shaped call (cols == n) paid n allocations. Hoisted: CholSolve n=512 1032 to 521 allocs and 8.40MB to 6.31MB, Lstsq 1546 to 1035 and 10.52MB to 8.43MB, time neutral. Plus the benchmarks - the pre-existing BenchmarkLUSolve topped out at n=128 where the output is 131KB and fits L2 either way, so it could not have detected a traversal effect in the first place.
+
+## R-01KYQTN083E71SB8M9QKZSZYRD Blocking beats interchange 1.62x on the same loops: two independent rewrites, identical bits, and how the winner was picked
+kind: research
+state: draft
+created: 2026-07-29
+
+MEASURED on darwin/arm64 M2 Pro, go1.26.5, GOMAXPROCS=12, min of 3 per arm, 3 interleaved alternations in one session.
+
+SITUATION. The two RetentionChunkwise output accumulations (nn/retention.go) were rewritten twice independently against the same defect - a column walk at stride d_v, once per output channel (PS6011). Main PR 580 chose INTERCHANGE: accumulate the cross term i-outer into a d_v-length crossbuf, scale it into orow in a second pass, then add the inner-chunk V term lm-outer in a third pass. This branch chose 4-WAY BLOCKING over the output channel: four register accumulators carrying BOTH terms, one pass, crossbuf eliminated. Main measured 1.12x against the original, this branch 1.54x/1.70x against the original - but those are two different baselines, so neither number decides it.
+
+HEAD TO HEAD, blocked against interchanged (not against the original):
+  RetentionChunkwise  2.844ms vs 4.613ms  = 1.62x
+  RetentionRecurrent  9.494ms vs 15.930ms = 1.68x
+  allocs 9 vs 10 (crossbuf)
+Consistent across all three alternations with no overlap between arms. Not noise.
+
+WHY BLOCKING WINS HERE, and this is the transferable part. Interchange fixes the ACCESS PATTERN but pays three passes over the output row and keeps the intermediate in memory. Blocking fixes the access pattern AND keeps the intermediate in registers AND fuses the two terms into one pass, so the output row is written once instead of read-modify-written twice. When the strided buffer is already cache-resident, the memory-order win that interchange delivers is the smaller half of what is available - exactly what PERF-ACCUM-RESIDENCY-001 says. PATTERNS.md already states that the choice between the two fixes is a measurement rather than a rule; this is the first head-to-head number for it.
+
+THE CROSS-CHECK THAT MATTERED. Both rewrites carried a bit-identity claim in their comments. Two independent claims of bit-identity with the same original are a claim of bit-identity with EACH OTHER, and that is testable where the individual claims are just prose. Digesting the chunkwise output (bitwise sum plus xor of all elements) under both arms gave 40b2bae2cf78b812 / bf5a8e6dc0e400bb identically. Both claims held. Had they differed, one comment was wrong and the tests would not have caught it - the existing Retention tests are tolerance-based. The digest ships pinned as TestRetentionChunkwiseArmDigest, so the next rewrite of these loops inherits the guard.
+
+NO NEW PERFSCAN RULE. The pattern is already PS6011; what is new is fix SELECTION between two valid rewrites of the same finding, which is a triage question and not a detectable source shape - the scanner sees the defect identically in both cases and by definition cannot see a rewrite that has not been written. Landing in PATTERNS.md as the measured data point behind the existing interchange-versus-blocking guidance.
+
+RELATED: R-01KYQT329EEAD (the PS6011 null case - when neither fix pays because the strided lines stay resident). Together the two records bracket the rule: first ask whether the stride costs anything at all, then if it does, prefer blocking to interchange when the body accumulates.
