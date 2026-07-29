@@ -110,6 +110,36 @@ scores — index tie-breaking means there are no duplicate keys. Median-of-three
 still required: score columns are `|w|·‖x‖` products and frequently near-sorted, exactly the
 shape that takes a first-element pivot quadratic.
 
+## 4. Dispatching backend ops inside a hot loop
+
+A loop issuing several `backend.Execute` calls per step materializes a tensor per call. On a
+per-timestep recurrence or a per-window attention that dominates the arithmetic entirely —
+Titans' `NeuralMemory.Scan` ran at about **0.2 GFLOP/s** because roughly 191 allocations per
+timestep sat in front of a few 64×64 matrix-vector products.
+
+| | allocations | result |
+|---|---|---|
+| Titans, partial fusion (matmuls left on the backend) | 24,525 → 3,305 | **2.7×** |
+| Swin, elementwise chain fused in place | 30,478 → 24,525 | 1.02× |
+| Swin, operand buffers reused per (window, head) | 24,524 → 10,960 | 1.03× |
+| Swin, head outputs placed into one buffer | 10,962 → 10,145 | time neutral |
+
+**Check the trip count first.** Most PS4011 findings are per-layer or per-head loops of order
+32, where the overhead is real but bounded. The wins are in loops whose trip count scales with
+the input.
+
+**Scope the fusion.** A fully fused path must reproduce the bits of every op it replaces;
+`ADR-01KYQ9PHNPEFC` decided to keep matmuls on the backend after a twenty-op chain resisted
+three attempts (`PERF-FUSED-PATH-CHAIN-001`).
+
+**These paths are inference-only for two unrelated reasons**, and conflating them makes one
+look removable. A learnable parameter needs its op on the tape — fusing the bias `Add` in Swin
+made gradcheck report a nil gradient. Separately, a recorder captures tensors *by pointer*, so
+a reused buffer leaves the graph holding whatever the last iteration wrote.
+
+**Zero measured change is a bug signal.** Swin's first fusion showed identical allocations
+because the benchmark is F32 and only the F64 arm existed, so the branch never ran.
+
 ## Allocation is a separate axis, and often the larger one
 
 Several changes moved wall-clock barely and allocations by three orders of magnitude:

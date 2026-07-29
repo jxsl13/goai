@@ -1157,3 +1157,56 @@ selector, so matching `"slices.SortFunc"` never fired. Both are covered by tests
 **Related:** PS6001 is the narrower relative — a descending vocabulary sort feeding a
 consumer that breaks on a threshold. It matches nothing anywhere in this tree; this counted
 form is the one that occurs.
+
+## PS4011 — a loop dispatching backend ops per iteration, with no fused path  *(scanner: static)*
+
+A sequential loop that issues several `backend.Execute` calls per step, in a function with no
+typed fast path. Each dispatch materializes a tensor, and on a per-timestep or per-window loop
+that dominates everything the arithmetic does.
+
+**Read the trip count before believing the finding.** Most of this rule's matches are per-layer
+(`for l, b := range m.Blocks`) or per-head loops — order 32 — where the overhead is real but
+bounded. The wins came from loops whose trip count scales with the *input*: a per-timestep
+recurrence, or a per-window attention. Titans' `NeuralMemory.Scan` was doing roughly **191
+allocations per timestep**; Swin's windowed attention roughly **30k per batched forward**.
+
+### Four fix shapes, in increasing order of risk
+
+| Shape | What it removes | Measured |
+|---|---|---|
+| Fuse an elementwise op chain in place | one tensor per op | Swin scale+bias+mask, 30.5k → 24.5k allocs |
+| Reuse operand buffers, refilled per iteration | slice/transpose dispatches | Swin q/k/v blocks, 24.5k → 11.0k |
+| Place outputs directly into one buffer | concat dispatches | Swin heads, 11.0k → 10.1k, **time neutral** |
+| Fuse the whole step, keeping matmuls on the backend | most dispatches | Titans, **2.7×**, 24.5k → 3.3k allocs |
+
+The last row is the one to scope carefully. A *fully* fused path has to reproduce the bits of
+every op it replaces, and `PERF-FUSED-PATH-CHAIN-001` exists because a twenty-op chain resisted
+three attempts. `ADR-01KYQ9PHNPEFC` decided the rule: keep the matmuls on the backend, where
+their rounding is already correct, and fuse only the slicing and the elementwise work.
+
+### These paths are inference-only, for two unrelated reasons
+
+Both guard on `ctx.Recorder == nil`, and it is worth not conflating them:
+
+1. **A learnable parameter needs its op on the tape.** Fusing an `Add` that applies a trainable
+   bias removes the edge that carries its gradient. Swin's first attempt did exactly this and
+   `TestSwinGradcheck` reported `param 8: nil grad`.
+2. **A recorder captures tensors by pointer.** Refilling a reused buffer across iterations
+   leaves the graph holding whatever the last iteration wrote. This applies even when no
+   parameter is involved.
+
+The dispatch path must stay intact for the taped case, not be restructured around the buffers.
+
+### Verify with a fused-vs-dispatch parity test
+
+A tape context takes the op chain and a plain context takes the fused path, so running both and
+comparing on raw `float64` bits *is* the comparison. Cover **both dtypes**: the F32 chain
+computes each op in float64 and rounds the *store*, so a fused arm must round after every term
+rather than once, and a scalar operand arrives as an F32 *tensor* — multiplying by the float64
+value instead of `float32(v)` is a one-ulp divergence. Swin's F64 arm passed on the first
+attempt while F32 was wrong twice.
+
+**A measurement of exactly zero change is a bug signal, not a null result.** Swin's first fusion
+measured identical allocations because the benchmark model is F32 and only the F64 arm had been
+written — the fused branch was never entered. Probe which branch runs before concluding a change
+does not help.
