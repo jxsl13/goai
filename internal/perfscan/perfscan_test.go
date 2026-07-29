@@ -2355,6 +2355,69 @@ func softmaxRow(dst, src []float64, temp float64) {}`
 	}
 }
 
+// PS6005 — the causal-conv single-bound guard: j := t-(K-1)+k; if j>=0 { acc += w[k]*x[j] }.
+func TestDetectPS6005_CausalConvBound(t *testing.T) {
+	src := `package p
+func conv1d(L, D, K int, xs, ws, os []float64) {
+	for t := range L {
+		for c := range D {
+			var acc float64
+			for k := range K {
+				j := t - (K - 1) + k
+				if j >= 0 {
+					acc += ws[c*K+k] * xs[j*D+c]
+				}
+			}
+			os[t*D+c] = acc
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["monotone-index-bound"] == 0 {
+		t.Fatalf("want ≥1 monotone-index-bound, got 0 (%v)", got)
+	}
+}
+
+// SILENT once the loop bound is clamped (the shipped fix): no per-tap branch left.
+func TestDetectPS6005_SilentWhenHoisted(t *testing.T) {
+	src := `package p
+func conv1d(L, D, K int, xs, ws, os []float64) {
+	for t := range L {
+		kStart := 0
+		if lo := (K - 1) - t; lo > 0 {
+			kStart = lo
+		}
+		for c := range D {
+			var acc float64
+			for k := kStart; k < K; k++ {
+				acc += ws[c*K+k] * xs[(t-(K-1)+k)*D+c]
+			}
+			os[t*D+c] = acc
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["monotone-index-bound"] != 0 {
+		t.Fatalf("want 0 once hoisted, got %d (%v)", got["monotone-index-bound"], got)
+	}
+}
+
+// SILENT on a data-dependent value fed to a threshold: qlo is a quantized sample, not a
+// monotone address offset — it is compared but never used as an array index in the body.
+func TestDetectPS6005_SilentOnDataThreshold(t *testing.T) {
+	src := `package p
+func q5(blk []byte, qh []byte, u1 byte) {
+	for l := range 32 {
+		qlo := quant(blk[l])
+		if qlo >= 16 {
+			qh[l] |= u1
+		}
+	}
+}
+func quant(b byte) int { return int(b) }`
+	if got := countCat(scanSrc(t, src)); got["monotone-index-bound"] != 0 {
+		t.Fatalf("want 0 on a data-threshold guard, got %d (%v)", got["monotone-index-bound"], got)
+	}
+}
+
 const ps6003Prelude = `package p
 type QT int
 const (A QT = iota; B; C; D)

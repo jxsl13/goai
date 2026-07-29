@@ -100,13 +100,16 @@ func conv1dKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([
 			bs = bias.Contiguous().Storage().F64()
 		}
 		for t := range L {
+			// j = t-(K-1)+k >= 0  <=>  k >= (K-1)-t; j is always < L (j <= t). Hoist the
+			// per-t lower tap bound so the innermost dot drops the per-tap branch.
+			kStart := 0
+			if lo := (K - 1) - t; lo > 0 {
+				kStart = lo
+			}
 			for c := range D {
 				var acc float64
-				for k := range K {
-					j := t - (K - 1) + k
-					if j >= 0 {
-						acc += ws[c*K+k] * xs[j*D+c]
-					}
+				for k := kStart; k < K; k++ {
+					acc += ws[c*K+k] * xs[(t-(K-1)+k)*D+c]
 				}
 				if bias != nil {
 					acc += bs[c]
@@ -124,13 +127,14 @@ func conv1dKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([
 			bs = bias.Contiguous().Storage().F32()
 		}
 		for t := range L {
+			kStart := 0
+			if lo := (K - 1) - t; lo > 0 {
+				kStart = lo
+			}
 			for c := range D {
 				var acc float64 // accumulate in float64; only the store rounds
-				for k := range K {
-					j := t - (K - 1) + k
-					if j >= 0 {
-						acc += float64(ws[c*K+k]) * float64(xs[j*D+c])
-					}
+				for k := kStart; k < K; k++ {
+					acc += float64(ws[c*K+k]) * float64(xs[(t-(K-1)+k)*D+c])
 				}
 				if bias != nil {
 					acc += float64(bs[c])
@@ -143,13 +147,14 @@ func conv1dKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([
 
 	// Generic fallback for exotic dtypes (verbatim original loop).
 	for t := range L {
+		kStart := 0
+		if lo := (K - 1) - t; lo > 0 {
+			kStart = lo
+		}
 		for c := range D {
 			var acc float64
-			for k := range K {
-				j := t - (K - 1) + k
-				if j >= 0 {
-					acc += w.AtF64(c, k) * x.AtF64(j, c)
-				}
+			for k := kStart; k < K; k++ {
+				acc += w.AtF64(c, k) * x.AtF64(t-(K-1)+k, c)
 			}
 			if bias != nil {
 				acc += bias.AtF64(c)
