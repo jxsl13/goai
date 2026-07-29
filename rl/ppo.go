@@ -300,10 +300,10 @@ func rlNormAdv(adv []float64) *tensor.Tensor {
 
 // rlVec builds a rank-1 tensor from a slice.
 func rlVec(x []float64) *tensor.Tensor {
+	// Copy into the storage directly. The tensor is freshly made and contiguous, so this
+	// is the same values in the same order without a SetF64 dispatch per element (PS1005).
 	t := tensor.New(tensor.F64, tensor.Shape{len(x)})
-	for i, v := range x {
-		t.SetF64(v, i)
-	}
+	copy(t.Storage().F64(), x)
 	return t
 }
 

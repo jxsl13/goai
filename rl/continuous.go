@@ -244,11 +244,11 @@ func contMLP(inDim, hidden, outDim int, seed uint64) *nn.Sequential {
 // contMat builds a [rows][cols] rank-2 tensor from a slice of equal-length rows.
 func contMat(rows [][]float64) *tensor.Tensor {
 	n, d := len(rows), len(rows[0])
+	// Row-major copy straight into the storage — no SetF64 dispatch per element (PS1005).
 	t := tensor.New(tensor.F64, tensor.Shape{n, d})
+	ts := t.Storage().F64()
 	for i, r := range rows {
-		for j, v := range r {
-			t.SetF64(v, i, j)
-		}
+		copy(ts[i*d:i*d+d], r)
 	}
 	return t
 }

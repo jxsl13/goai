@@ -223,11 +223,12 @@ func contConst(c float64) *tensor.Tensor {
 // sampleNoise draws an n×ActionDim tensor of independent standard-normal values
 // from the agent's RNG — the reparameterisation noise ε for a batch.
 func (s *SAC) sampleNoise(n int) *tensor.Tensor {
+	// The RNG dominates here, not the store, but the store need not dispatch (PS1005).
+	// Draws happen in the same order, so the noise stream is unchanged.
 	t := tensor.New(tensor.F64, tensor.Shape{n, s.actDim})
-	for i := 0; i < n; i++ {
-		for j := 0; j < s.actDim; j++ {
-			t.SetF64(s.rng.NormFloat64(), i, j)
-		}
+	ts := t.Storage().F64()
+	for i := range ts {
+		ts[i] = s.rng.NormFloat64()
 	}
 	return t
 }
