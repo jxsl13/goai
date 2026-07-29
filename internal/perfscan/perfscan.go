@@ -217,6 +217,7 @@ var checks = []check{
 	{"PS6001", "full-sort-bounded-prefix", "a full-vocabulary descending index sort whose result feeds an early-breaking (threshold-bounded) prefix consumer, with no quickselect/pre-filter guard — an O(n log n) sort for an O(prefix) need", false},
 	{"PS6002", "spatial-bounds-branch", "an innermost window/kernel loop re-testing a compound spatial bounds guard (iy>=0 && iy<h && ix>=0 && ix<wd) per tap, where the in-bounds taps form one contiguous run the guard can be hoisted around", false},
 	{"PS6005", "monotone-index-bound", "an innermost loop guarding its tap work with a single relational bound on an index affine in the loop var (j:=t-(K-1)+k; if j>=0) — the in-bounds iterations are one contiguous run, clamp the loop bound instead of branching per tap", false},
+	{"PS6013", "sort-feeds-counted-prefix", "a full sort whose result is then read only by a COUNTED prefix loop (for r := 0; r < k; r++ over the sorted slice) — the order past k is computed and discarded; a selection answers the same question in O(n) instead of O(n log n)", false},
 	{"PS6012", "inconsistent-fma-pinning", "a function that rounds SOME products explicitly (float64(a*b)) to stop FMA contraction, but leaves a sibling product feeding an add or subtract unpinned — including one assigned to a named local, which the compiler still inlines and contracts", false},
 	{"PS6011", "strided-inner-walk", "an inner loop whose index into a flat buffer MULTIPLIES the inner loop variable by a stride — consecutive iterations jump a whole row, so each touches its own cache line to use one element; interchange the loops, or block four adjacent outer indices so one fetched line serves four accumulators", false},
 	{"PS6010", "output-invariant-operand-reload", "an output loop whose accumulator re-reads an operand that does NOT vary with the output index — unrolling the output loop by 4 amortizes that load across 4 accumulators (register blocking / unroll-and-jam)", false},
@@ -1844,6 +1845,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	out = append(out, innerInvariantRecomputeFindings(fset, fn)...)
 	out = append(out, stridedInnerWalkFindings(fset, fn)...)
 	out = append(out, inconsistentFMAPinningFindings(fset, fn)...)
+	out = append(out, sortFeedsCountedPrefixFindings(fset, fn)...)
 	out = append(out, invariantTranscendentalRecomputeFindings(fset, fn)...)
 	out = append(out, partialFastPathFindings(fset, fn)...)
 	out = append(out, outputInvariantReloadFindings(fset, fn)...)
@@ -6490,4 +6492,268 @@ func subscriptProducts(body *ast.BlockStmt) map[token.Pos]bool {
 		return true
 	})
 	return out
+}
+
+// sortFeedsCountedPrefixFindings flags PS6013 — a slice sorted in full whose only subsequent
+// reader is a COUNTED prefix loop.
+//
+// `sort(idx); for r := 0; r < k; r++ { use(idx[r]) }` computes a total order and then throws
+// away everything past position k. When the consumer only asks WHICH elements are the k
+// smallest — membership, not order — a selection answers it in O(n) against the sort's
+// O(n log n).
+//
+// PS6001 covers a narrower relative: a descending vocabulary sort feeding a consumer that
+// breaks early on a threshold. This one is the counted form, and it is the one that occurs:
+// PS6001 matched nothing anywhere in this tree, while this shape was worth 5.1x in
+// WandaPrune (282ms to 55ms) — 2048 sorts of 2048 elements to decide which half of each
+// column to drop.
+//
+// SOUNDNESS rests on the prefix loop being the ONLY reader. If anything else reads the
+// sorted slice afterwards, the full order is load-bearing and the sort must stay. Writes do
+// not count — re-initializing the index slice for the next column is a write.
+//
+// Replacing a sort with a selection is bit-safe only when the comparator is a TOTAL order
+// and the consumer reads membership rather than position; with ties the selected set is not
+// unique and the two disagree. The message says so, because that is the precondition a
+// reviewer has to check rather than assume.
+func sortFeedsCountedPrefixFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil {
+		return nil
+	}
+	// Local closures that sort a CAPTURED slice count as sorters. The motivating case is
+	// written that way — `sortCol := func(col []float64) { slices.SortFunc(idx, …) }` — and
+	// a detector that only matched direct calls missed it, which is the third time a rule in
+	// this file has failed to find the case it was built from.
+	wrapped := closureSorters(fn.Body)
+
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		blk, ok := n.(*ast.BlockStmt)
+		if !ok {
+			return true
+		}
+		for i, st := range blk.List {
+			target, sorter, ok := sortedSliceName(st)
+			if !ok {
+				target, sorter, ok = wrappedSortCall(st, wrapped)
+			}
+			if !ok {
+				continue
+			}
+			// The next statements must contain a counted loop reading target[loopvar]…
+			loop, bound := countedPrefixReader(blk.List[i+1:], target)
+			if loop == nil {
+				continue
+			}
+			// …and nothing else after the sort may READ it.
+			if otherReaderAfter(blk.List[i+1:], target, loop) {
+				continue
+			}
+			out = append(out, finding{
+				pos:      fset.Position(st.Pos()),
+				category: "sort-feeds-counted-prefix",
+				msg: fmt.Sprintf("%s orders %q in full, but the only later reader is a counted loop over"+
+					" its first %s elements — the order past that point is computed and discarded. A"+
+					" selection (quickselect / nth_element) answers the same question in O(n) instead of"+
+					" O(n log n); measured 5.1x on WandaPrune, 282ms to 55ms. Bit-safe ONLY when the"+
+					" comparator is a TOTAL order and the consumer reads membership rather than"+
+					" position — with ties the selected set is not unique.", sorter, target, bound),
+			})
+		}
+		return true
+	})
+	return out
+}
+
+// sortedSliceName reports the slice identifier a statement sorts, and the sorter used.
+func sortedSliceName(st ast.Stmt) (target, sorter string, ok bool) {
+	es, isExpr := st.(*ast.ExprStmt)
+	if !isExpr {
+		return "", "", false
+	}
+	call, isCall := es.X.(*ast.CallExpr)
+	if !isCall || len(call.Args) == 0 {
+		return "", "", false
+	}
+	// calleeName collapses a qualified call to its selector, so match the package
+	// explicitly — a bare "Sort" would catch any method of that name.
+	sel, isSel := call.Fun.(*ast.SelectorExpr)
+	if !isSel {
+		return "", "", false
+	}
+	pkg, isPkg := sel.X.(*ast.Ident)
+	if !isPkg {
+		return "", "", false
+	}
+	name := pkg.Name + "." + sel.Sel.Name
+	switch name {
+	case "sort.Slice", "sort.SliceStable", "slices.SortFunc", "slices.SortStableFunc", "slices.Sort":
+	default:
+		return "", "", false
+	}
+	id, isID := call.Args[0].(*ast.Ident)
+	if !isID {
+		return "", "", false
+	}
+	return id.Name, name, true
+}
+
+// countedPrefixReader finds a `for r := 0; r < k; r++` loop among stmts whose body indexes
+// target with the loop variable, returning the loop and the bound's source text.
+func countedPrefixReader(stmts []ast.Stmt, target string) (*ast.ForStmt, string) {
+	var found *ast.ForStmt
+	var bound string
+	for _, st := range stmts {
+		ast.Inspect(st, func(n ast.Node) bool {
+			if found != nil {
+				return false
+			}
+			f, ok := n.(*ast.ForStmt)
+			if !ok || f.Cond == nil {
+				return true
+			}
+			v, _, ok := loopVarBody(f)
+			if !ok {
+				return true
+			}
+			cmpb, isBin := f.Cond.(*ast.BinaryExpr)
+			if !isBin || cmpb.Op != token.LSS {
+				return true
+			}
+			// The bound must not be the slice's own length — that reads everything.
+			if c, isCall := cmpb.Y.(*ast.CallExpr); isCall && calleeName(c.Fun) == "len" {
+				return true
+			}
+			if !indexesWithVar(f.Body, target, v) {
+				return true
+			}
+			found = f
+			if id, isID := cmpb.Y.(*ast.Ident); isID {
+				bound = id.Name
+			} else {
+				bound = "k"
+			}
+			return false
+		})
+		if found != nil {
+			break
+		}
+	}
+	return found, bound
+}
+
+// indexesWithVar reports whether body contains target[v].
+func indexesWithVar(body *ast.BlockStmt, target, v string) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		ix, ok := n.(*ast.IndexExpr)
+		if !ok {
+			return true
+		}
+		id, isID := ix.X.(*ast.Ident)
+		if !isID || id.Name != target {
+			return true
+		}
+		if iv, isIV := ix.Index.(*ast.Ident); isIV && iv.Name == v {
+			found = true
+		}
+		return true
+	})
+	return found
+}
+
+// otherReaderAfter reports whether target is READ anywhere in stmts outside the given loop.
+// An assignment into target[i] is a write and does not keep the sort alive.
+func otherReaderAfter(stmts []ast.Stmt, target string, skip *ast.ForStmt) bool {
+	found := false
+	for _, st := range stmts {
+		ast.Inspect(st, func(n ast.Node) bool {
+			if n == skip {
+				return false
+			}
+			if as, ok := n.(*ast.AssignStmt); ok {
+				for _, r := range as.Rhs {
+					if exprMentions(r, target) {
+						found = true
+					}
+				}
+				for _, l := range as.Lhs {
+					if ix, isIx := l.(*ast.IndexExpr); isIx {
+						if exprMentions(ix.Index, target) {
+							found = true
+						}
+						continue
+					}
+					if exprMentions(l, target) {
+						found = true
+					}
+				}
+				return false
+			}
+			if call, ok := n.(*ast.CallExpr); ok {
+				for _, a := range call.Args {
+					if exprMentions(a, target) {
+						found = true
+					}
+				}
+			}
+			return true
+		})
+	}
+	return found
+}
+
+// closureSorters maps a local closure's name to the captured slice it sorts.
+func closureSorters(body *ast.BlockStmt) map[string]string {
+	out := map[string]string{}
+	ast.Inspect(body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+			return true
+		}
+		name, isID := as.Lhs[0].(*ast.Ident)
+		if !isID {
+			return true
+		}
+		lit, isLit := as.Rhs[0].(*ast.FuncLit)
+		if !isLit || lit.Body == nil {
+			return true
+		}
+		params := map[string]bool{}
+		for _, f := range lit.Type.Params.List {
+			for _, pn := range f.Names {
+				params[pn.Name] = true
+			}
+		}
+		ast.Inspect(lit.Body, func(m ast.Node) bool {
+			if st, ok := m.(ast.Stmt); ok {
+				if t, _, ok := sortedSliceName(st); ok && !params[t] {
+					out[name.Name] = t // sorts a captured slice, not one handed in
+				}
+			}
+			return true
+		})
+		return true
+	})
+	return out
+}
+
+// wrappedSortCall reports the slice sorted by a call to one of the closures above.
+func wrappedSortCall(st ast.Stmt, wrapped map[string]string) (target, sorter string, ok bool) {
+	es, isExpr := st.(*ast.ExprStmt)
+	if !isExpr {
+		return "", "", false
+	}
+	call, isCall := es.X.(*ast.CallExpr)
+	if !isCall {
+		return "", "", false
+	}
+	id, isID := call.Fun.(*ast.Ident)
+	if !isID {
+		return "", "", false
+	}
+	if t, found := wrapped[id.Name]; found {
+		return t, id.Name, true
+	}
+	return "", "", false
 }

@@ -4167,3 +4167,84 @@ func F(dst []float32, a, b []float64, k float64, n int) {
 		t.Fatalf("want 0 when the only conversion is an F32 store rounding, got %d", got)
 	}
 }
+
+// PS6013 fires when a full sort's only later reader is a counted prefix loop.
+func TestDetectPS6013_SortFeedsCountedPrefix(t *testing.T) {
+	src := `package p
+import "slices"
+func f(idx []int, d []bool, k int) {
+	slices.SortFunc(idx, func(x, y int) int { return 0 })
+	for r := 0; r < k; r++ {
+		d[idx[r]] = true
+	}
+}`
+	if got := countCat(scanSrc(t, src))["sort-feeds-counted-prefix"]; got != 1 {
+		t.Fatalf("want 1 sort-feeds-counted-prefix, got %d", got)
+	}
+}
+
+// The sort is often behind a local CLOSURE that captures the slice — the shape the rule was
+// built from. A detector matching only direct calls missed its own motivating case.
+func TestDetectPS6013_SortBehindClosure(t *testing.T) {
+	src := `package p
+import "slices"
+func f(idx []int, col []float64, d []bool, k int) {
+	sortCol := func(c []float64) {
+		slices.SortFunc(idx, func(x, y int) int { return 0 })
+	}
+	sortCol(col)
+	for r := 0; r < k; r++ {
+		d[idx[r]] = true
+	}
+}`
+	if got := countCat(scanSrc(t, src))["sort-feeds-counted-prefix"]; got != 1 {
+		t.Fatalf("want 1 when the sort is behind a closure, got %d", got)
+	}
+}
+
+// SILENT when something else reads the sorted slice afterwards — then the full order is
+// load-bearing and the sort must stay. This is the soundness condition.
+func TestDetectPS6013_SilentWhenOrderUsedElsewhere(t *testing.T) {
+	src := `package p
+import "slices"
+func f(idx []int, d []bool, out []int, k int) {
+	slices.SortFunc(idx, func(x, y int) int { return 0 })
+	for r := 0; r < k; r++ {
+		d[idx[r]] = true
+	}
+	copy(out, idx)
+}`
+	if got := countCat(scanSrc(t, src))["sort-feeds-counted-prefix"]; got != 0 {
+		t.Fatalf("want 0 when the full order is read again, got %d", got)
+	}
+}
+
+// SILENT when the prefix is the WHOLE slice — len(idx) reads everything, so nothing is
+// discarded and a selection buys nothing.
+func TestDetectPS6013_SilentWhenPrefixIsWholeSlice(t *testing.T) {
+	src := `package p
+import "slices"
+func f(idx []int, d []bool) {
+	slices.SortFunc(idx, func(x, y int) int { return 0 })
+	for r := 0; r < len(idx); r++ {
+		d[idx[r]] = true
+	}
+}`
+	if got := countCat(scanSrc(t, src))["sort-feeds-counted-prefix"]; got != 0 {
+		t.Fatalf("want 0 when the loop covers the whole slice, got %d", got)
+	}
+}
+
+// SILENT when a same-named method is not the sort package — Sort on a receiver is not this.
+func TestDetectPS6013_SilentOnUnrelatedSortMethod(t *testing.T) {
+	src := `package p
+func f(db store, idx []int, d []bool, k int) {
+	db.SortFunc(idx, nil)
+	for r := 0; r < k; r++ {
+		d[idx[r]] = true
+	}
+}`
+	if got := countCat(scanSrc(t, src))["sort-feeds-counted-prefix"]; got != 0 {
+		t.Fatalf("want 0 on an unrelated SortFunc method, got %d", got)
+	}
+}

@@ -1112,3 +1112,48 @@ into a helper call where a subscript-only exclusion cannot see it. Separately, o
 `float64(a*b)` counts as a pinning signal: `float32(a*b)` is overwhelmingly a store rounding
 on an F32 path, and counting it fired in every typed F32 branch in the tree. Together these
 took the tree-wide count from 132 to **31**.
+
+## PS6013 — a full sort whose only reader is a counted prefix  *(scanner: static)*
+
+The order past position k is computed and thrown away:
+
+```go
+slices.SortFunc(idx, byScoreThenIndex)
+for r := 0; r < k; r++ {
+	drop[idx[r]] = true // membership, not order
+}
+```
+
+When the consumer asks only **which** elements are the k smallest, a selection
+(quickselect / nth_element) answers it in O(n) against the sort's O(n log n).
+
+**Shipped:** WandaPrune sorted every output column in full to decide which half to drop —
+2048 sorts of 2048 elements, roughly 46M comparisons per call. Replacing the sort with an
+in-place quickselect measured **282ms → 55ms (5.1×)**, and 348ms → 55ms (6.3×) together with
+the panel transpose that preceded it.
+
+**Bit-safe only under two conditions**, and the message states both because they are what a
+reviewer must check rather than assume. The comparator must be a **total order** — Wanda's is
+score ascending with ties broken by input index, and indices are unique, so no two elements
+compare equal and the k-smallest set is uniquely determined. And the consumer must read
+**membership rather than position**, since a selection leaves the prefix in arbitrary order.
+With ties, or with a consumer that reads `idx[0]` as "the smallest", the two disagree.
+
+That same total order is why Lomuto partitioning cannot degrade here on a column of identical
+scores: index tie-breaking means there are no duplicate keys. Median-of-three pivoting is
+still required — score columns are `|w|·‖x‖` products and frequently near-sorted, exactly the
+shape that takes a first-element pivot quadratic.
+
+**Soundness rests on the prefix loop being the only reader.** If anything else reads the
+sorted slice afterwards the full order is load-bearing, and the check stays silent; writes do
+not count, since re-initializing the index slice for the next column is a write. A loop
+bounded by `len(idx)` is also silent — nothing is discarded.
+
+**Validated by replay**, and it needed two rounds. The first draft matched only direct sort
+calls and missed its own motivating case, because Wanda's sort sits behind a local closure
+capturing the slice; the second failed because `calleeName` collapses a qualified call to its
+selector, so matching `"slices.SortFunc"` never fired. Both are covered by tests now.
+
+**Related:** PS6001 is the narrower relative — a descending vocabulary sort feeding a
+consumer that breaks on a threshold. It matches nothing anywhere in this tree; this counted
+form is the one that occurs.
