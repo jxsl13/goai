@@ -81,9 +81,15 @@ func init() {
 				if hasBias {
 					dbs = db.Storage().F64()
 				}
+				// t-outer / c-inner: gs/xs/dxs are indexed [t*D+c] / [j*D+c], so walking c
+				// contiguously per fixed t (within this goroutine's [clo,chi) channel block)
+				// streams those flat arrays sequentially instead of striding by D each step.
+				// Bit-identical: dbs[c], dws[c*K+k], dxs[j*D+c] are distinct per-c cells, each
+				// still accumulated in ascending-t order (which c we visit at a given t is
+				// irrelevant to a per-c accumulator's summation order).
 				conv1dParallelChannels(D, L*K, func(clo, chi int) {
-					for c := clo; c < chi; c++ {
-						for t := 0; t < L; t++ {
+					for t := 0; t < L; t++ {
+						for c := clo; c < chi; c++ {
 							gv := gs[t*D+c]
 							if hasBias {
 								dbs[c] += gv
@@ -115,9 +121,11 @@ func init() {
 				if hasBias {
 					dbs = db.Storage().F32()
 				}
+				// t-outer / c-inner interchange (see F64 path above): contiguous c-walk over the
+				// [t*D+c] / [j*D+c] flat arrays, bit-identical per-c ascending-t accumulation.
 				conv1dParallelChannels(D, L*K, func(clo, chi int) {
-					for c := clo; c < chi; c++ {
-						for t := 0; t < L; t++ {
+					for t := 0; t < L; t++ {
+						for c := clo; c < chi; c++ {
 							gv := float64(gs[t*D+c])
 							if hasBias {
 								dbs[c] = float32(float64(dbs[c]) + gv)
