@@ -38,6 +38,95 @@ func MoBAAttention(q, k, v *tensor.Tensor, heads, blockSize, topK int, scale flo
 	}
 	out := tensor.New(q.Dtype(), q.Shape())
 	scores := make([]float64, seq)
+	// F64 fast path: the block-gate mean-pools each past block's keys PER QUERY though the
+	// pool is query-independent — precompute the per-head block key-sums once (O(seq·dk) vs
+	// the O(seq²·dk) re-pool) — and walk q/k/v/out contiguously (the query row is hoisted).
+	// Bit-identical: same values, same ascending sums, same gate/score/softmax/P·V order.
+	if qs, ks, vs, os := flatF64(q), flatF64(k), flatF64(v), flatF64(out); qs != nil && ks != nil && vs != nil && os != nil {
+		nBlocks := (seq + blockSize - 1) / blockSize
+		poolSum := make([]float64, nBlocks*dk) // per-block Σ_j k[j,off+d] (rebuilt per head)
+		blockLen := make([]int, nBlocks)
+		qrow := make([]float64, dk)
+		for h := range heads {
+			off := h * dk
+			for b := range nBlocks {
+				lo, hi := b*blockSize, min((b+1)*blockSize, seq)
+				blockLen[b] = hi - lo
+				pb := poolSum[b*dk : b*dk+dk : b*dk+dk]
+				for d := range dk {
+					pb[d] = 0
+				}
+				for j := lo; j < hi; j++ {
+					krow := ks[j*dm+off : j*dm+off+dk]
+					for d := range dk {
+						pb[d] += krow[d]
+					}
+				}
+			}
+			for i := range seq {
+				cur := i / blockSize
+				for d := range dk {
+					qrow[d] = qs[i*dm+off+d]
+				}
+				type gated struct {
+					block int
+					score float64
+				}
+				var gates []gated
+				for b := 0; b < cur; b++ {
+					pb := poolSum[b*dk : b*dk+dk : b*dk+dk]
+					bl := float64(blockLen[b])
+					var sgate float64
+					for d := range dk {
+						sgate += qrow[d] * pb[d] / bl
+					}
+					gates = append(gates, gated{b, sgate})
+				}
+				sort.Slice(gates, func(a, b int) bool { return gates[a].score > gates[b].score })
+				selected := map[int]bool{cur: true}
+				for gi := 0; gi < len(gates) && len(selected) < topK; gi++ {
+					selected[gates[gi].block] = true
+				}
+				m := math.Inf(-1)
+				for j := 0; j <= i; j++ {
+					if !selected[j/blockSize] {
+						scores[j] = math.Inf(-1)
+						continue
+					}
+					krow := ks[j*dm+off : j*dm+off+dk]
+					var sc float64
+					for d := range dk {
+						sc += qrow[d] * krow[d]
+					}
+					sc *= scale
+					scores[j] = sc
+					if sc > m {
+						m = sc
+					}
+				}
+				var sum float64
+				for j := 0; j <= i; j++ {
+					if math.IsInf(scores[j], -1) {
+						scores[j] = 0
+						continue
+					}
+					scores[j] = math.Exp(scores[j] - m)
+					sum += scores[j]
+				}
+				orow := os[i*dm+off : i*dm+off+dk]
+				for d := range dk {
+					var o float64
+					if sum > 0 {
+						for j := 0; j <= i; j++ {
+							o += scores[j] / sum * vs[j*dm+off+d]
+						}
+					}
+					orow[d] = o
+				}
+			}
+		}
+		return out, nil
+	}
 	for h := range heads {
 		off := h * dk
 		for i := range seq {
