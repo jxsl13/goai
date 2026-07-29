@@ -243,3 +243,5 @@ func benchQMatMulNK(b *testing.B, m, n, k int, qt QuantType) {
 }
 
 func BenchmarkQMatMulQ4_K_M1_N4096(b *testing.B) { benchQMatMulNK(b, 1, 4096, 1024, Q4_K) }
+
+func BenchmarkQMatMulQ8_0_M1_N4096(b *testing.B) { benchQMatMulNK(b, 1, 4096, 1024, Q8_0) }
