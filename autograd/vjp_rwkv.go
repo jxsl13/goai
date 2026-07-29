@@ -92,28 +92,49 @@ func init() {
 				dws := dw.Storage().F64()
 				dus := du.Storage().F64()
 				wkvParallelChannels(d, seq, func(clo, chi int, loga, p []float64) {
+					// Every access here strides by d with the channel fixed, and the work is
+					// O(seq^2) PER CHANNEL, so each of those columns is re-walked seq times
+					// (PS6011). Gathering the three inputs into contiguous scratch once per
+					// channel turns O(seq^2) strided reads into O(seq) strided plus O(seq^2)
+					// sequential; the two gradient columns are accumulated contiguously and
+					// scattered back once. Interchanging the loops is not available here —
+					// the recurrence is over t within a channel — so gather-and-scatter is
+					// the form the fix takes.
+					//
+					// Allocated per CHUNK, not per channel: the callback runs once per
+					// worker, so this is O(GOMAXPROCS) allocations for the whole call, and
+					// hoisting them any further would share them across workers.
+					kcol := make([]float64, seq)
+					vcol := make([]float64, seq)
+					gcol := make([]float64, seq)
+					dvcol := make([]float64, seq)
+					dkcol := make([]float64, seq)
 					for c := clo; c < chi; c++ {
 						wc, uc := ws[c], us[c]
 						var dwc, duc float64
+						for i := range seq {
+							kcol[i], vcol[i], gcol[i] = ks[i*d+c], vs[i*d+c], gs[i*d+c]
+						}
+						clear(dvcol)
+						clear(dkcol)
 						for t := 0; t < seq; t++ {
-							gt := gs[t*d+c]
+							gt := gcol[t]
 							m := math.Inf(-1)
 							for i := 0; i <= t; i++ {
-								a := ks[i*d+c] - float64(t-1-i)*wc
+								a := kcol[i] - float64(t-1-i)*wc
 								if i == t {
-									a = uc + ks[t*d+c]
+									a = uc + kcol[t]
 								}
 								loga[i] = a
 								if a > m {
 									m = a
 								}
 							}
-							// exp(loga[i]-m) with Σ = den in one 4-wide pass; the wkv dot keeps
-							// its strided v access scalar.
+							// exp(loga[i]-m) with Σ = den in one 4-wide pass.
 							den := simd.ExpSumF64(p[:t+1], loga[:t+1], m)
 							var wkv float64
 							for i := 0; i <= t; i++ {
-								wkv += p[i] * vs[i*d+c]
+								wkv += p[i] * vcol[i]
 							}
 							wkv /= den
 							if gt == 0 {
@@ -121,15 +142,21 @@ func init() {
 							}
 							for i := 0; i <= t; i++ {
 								pi := p[i] / den
-								vi := vs[i*d+c]
-								dvs[i*d+c] += gt * pi
-								dks[i*d+c] += gt * pi * (vi - wkv)
+								vi := vcol[i]
+								dvcol[i] += gt * pi
+								dkcol[i] += gt * pi * (vi - wkv)
 								if i == t {
 									duc += gt * pi * (vi - wkv)
 								} else {
 									dwc -= float64(t-1-i) * gt * pi * (vi - wkv)
 								}
 							}
+						}
+						// dv/dk start zero and this channel is owned by this worker alone,
+						// so the scatter is a store. Accumulation order over t is unchanged.
+						for i := range seq {
+							dvs[i*d+c] = dvcol[i]
+							dks[i*d+c] = dkcol[i]
 						}
 						dws[c] = dwc
 						dus[c] = duc
@@ -152,16 +179,33 @@ func init() {
 				// round only on store — matching the original AtF64/SetF64
 				// rounding (each accumulating store to an F32 tensor rounds).
 				wkvParallelChannels(d, seq, func(clo, chi int, loga, p []float64) {
+					// Same column gather as the F64 branch (PS6011). The gradient scratch is
+					// []float32, NOT []float64: this branch rounds on every accumulating
+					// store, so accumulating in wider precision and rounding once would be
+					// more accurate and would not reproduce the existing bits. The input
+					// gathers convert once, which is exact.
+					kcol := make([]float64, seq)
+					vcol := make([]float64, seq)
+					gcol := make([]float64, seq)
+					dvcol := make([]float32, seq)
+					dkcol := make([]float32, seq)
 					for c := clo; c < chi; c++ {
 						wc, uc := float64(ws[c]), float64(us[c])
 						var dwc, duc float64
+						for i := range seq {
+							kcol[i] = float64(ks[i*d+c])
+							vcol[i] = float64(vs[i*d+c])
+							gcol[i] = float64(gs[i*d+c])
+						}
+						clear(dvcol)
+						clear(dkcol)
 						for t := 0; t < seq; t++ {
-							gt := float64(gs[t*d+c])
+							gt := gcol[t]
 							m := math.Inf(-1)
 							for i := 0; i <= t; i++ {
-								a := float64(ks[i*d+c]) - float64(t-1-i)*wc
+								a := kcol[i] - float64(t-1-i)*wc
 								if i == t {
-									a = uc + float64(ks[t*d+c])
+									a = uc + kcol[t]
 								}
 								loga[i] = a
 								if a > m {
@@ -171,7 +215,7 @@ func init() {
 							den := simd.ExpSumF64(p[:t+1], loga[:t+1], m)
 							var wkv float64
 							for i := 0; i <= t; i++ {
-								wkv += p[i] * float64(vs[i*d+c])
+								wkv += p[i] * vcol[i]
 							}
 							wkv /= den
 							if gt == 0 {
@@ -179,15 +223,19 @@ func init() {
 							}
 							for i := 0; i <= t; i++ {
 								pi := p[i] / den
-								vi := float64(vs[i*d+c])
-								dvs[i*d+c] = float32(float64(dvs[i*d+c]) + gt*pi)
-								dks[i*d+c] = float32(float64(dks[i*d+c]) + gt*pi*(vi-wkv))
+								vi := vcol[i]
+								dvcol[i] = float32(float64(dvcol[i]) + gt*pi)
+								dkcol[i] = float32(float64(dkcol[i]) + gt*pi*(vi-wkv))
 								if i == t {
 									duc += gt * pi * (vi - wkv)
 								} else {
 									dwc -= float64(t-1-i) * gt * pi * (vi - wkv)
 								}
 							}
+						}
+						for i := range seq {
+							dvs[i*d+c] = dvcol[i]
+							dks[i*d+c] = dkcol[i]
 						}
 						dws[c] = float32(dwc)
 						dus[c] = float32(duc)
