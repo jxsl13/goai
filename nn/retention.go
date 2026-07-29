@@ -59,8 +59,29 @@ func RetentionRecurrent(q, k, v *tensor.Tensor, gamma float64) (*tensor.Tensor, 
 				s[base+j] = gamma*s[base+j] + ki*vrow[j]
 			}
 		}
-		for j := range dv {
-			var acc float64 // out_n = Q_n·S_n
+		// out_n = Q_n·S_n. S is [d_k, d_v] row-major, so accumulating one output channel
+		// walks a COLUMN at stride d_v — a cache line per key channel to consume eight of
+		// its bytes, repeated d_v times (PS6011). Four adjacent channels read
+		// s[i*dv+j .. j+3] from the same line. Each accumulator still sums over ascending
+		// i, so the bits are unchanged.
+		j := 0
+		for ; j+4 <= dv; j += 4 {
+			var a0, a1, a2, a3 float64
+			for i := range dk {
+				qi := qrow[i]
+				sq := s[i*dv+j : i*dv+j+4 : i*dv+j+4]
+				a0 += qi * sq[0]
+				a1 += qi * sq[1]
+				a2 += qi * sq[2]
+				a3 += qi * sq[3]
+			}
+			out.SetF64(a0, n, j)
+			out.SetF64(a1, n, j+1)
+			out.SetF64(a2, n, j+2)
+			out.SetF64(a3, n, j+3)
+		}
+		for ; j < dv; j++ {
+			var acc float64
 			for i := range dk {
 				acc += qrow[i] * s[i*dv+j]
 			}
@@ -108,7 +129,6 @@ func RetentionChunkwise(q, k, v *tensor.Tensor, gamma float64, chunkSize int) (*
 	// times per (lj,lm) before.
 	gpow := make([]float64, chunkSize+1)
 	wbuf := make([]float64, chunkSize)
-	crossbuf := make([]float64, dv) // ζ-scaled cross term Σ_i Q_i·R[i,·], accumulated i-outer
 	// F64 fast path: hoist the query row q_n (read in the Q·K dot AND re-dispatched per value
 	// column jv in the cross term) and walk k/v/out contiguously — the O(cb²·dk) Q·K double
 	// dispatch and the O(cb·dk·dv) state update dominated. Bit-identical: same values, same
@@ -134,32 +154,43 @@ func RetentionChunkwise(q, k, v *tensor.Tensor, gamma float64, chunkSize int) (*
 					wbuf[lm] = gpow[lj-lm] * qk
 				}
 				orow := os[n*dv : n*dv+dv : n*dv+dv]
-				// Cross term ζ·(Q_n·R): accumulate i-OUTER so R[i*dv+jv] is read CONTIGUOUSLY in jv
-				// (the old jv-outer/i-inner loop strode R by dv each step). crossbuf[jv] sums over i
-				// ascending — the same order as the old per-jv dot — and ζ scales it once, so
-				// orow[jv] starts bit-identical to the old zeta*cross.
-				for jv := range dv {
-					crossbuf[jv] = 0
-				}
-				for i := range dk {
-					qi := qrow[i]
-					base := i * dv
-					for jv := range dv {
-						crossbuf[jv] += qi * r[base+jv]
+				// Both accumulations walk a COLUMN at stride d_v — the cross term over R
+				// and the inner-chunk term over V — once per output channel (PS6011).
+				// Four adjacent channels per pass read r[i*dv+jv .. jv+3] and
+				// vs[(start+lm)*dv+jv .. jv+3] from the same line, and share the qrow[i]
+				// and wbuf[lm] loads. Every accumulator still sums in ascending order.
+				jv := 0
+				for ; jv+4 <= dv; jv += 4 {
+					var c0, c1, c2, c3 float64
+					for i := range dk {
+						qi := qrow[i]
+						rq := r[i*dv+jv : i*dv+jv+4 : i*dv+jv+4]
+						c0 += qi * rq[0]
+						c1 += qi * rq[1]
+						c2 += qi * rq[2]
+						c3 += qi * rq[3]
 					}
-				}
-				for jv := range dv {
-					orow[jv] = zeta * crossbuf[jv]
-				}
-				// Inner-chunk Σ_{lm≤lj} wbuf[lm]·V_{start+lm}: accumulate lm-OUTER so V is read
-				// contiguously in jv. Added to orow (already ζ·cross) in lm-ascending order, so each
-				// orow[jv] receives the SAME operation sequence as the old acc — bit-identical.
-				for lm := 0; lm <= lj; lm++ {
-					w := wbuf[lm]
-					vbase := (start + lm) * dv
-					for jv := range dv {
-						orow[jv] += w * vs[vbase+jv]
+					a0, a1, a2, a3 := zeta*c0, zeta*c1, zeta*c2, zeta*c3
+					for lm := 0; lm <= lj; lm++ {
+						w := wbuf[lm]
+						vq := vs[(start+lm)*dv+jv : (start+lm)*dv+jv+4 : (start+lm)*dv+jv+4]
+						a0 += w * vq[0]
+						a1 += w * vq[1]
+						a2 += w * vq[2]
+						a3 += w * vq[3]
 					}
+					orow[jv], orow[jv+1], orow[jv+2], orow[jv+3] = a0, a1, a2, a3
+				}
+				for ; jv < dv; jv++ {
+					var cross float64
+					for i := range dk {
+						cross += qrow[i] * r[i*dv+jv]
+					}
+					acc := zeta * cross
+					for lm := 0; lm <= lj; lm++ {
+						acc += wbuf[lm] * vs[(start+lm)*dv+jv]
+					}
+					orow[jv] = acc
 				}
 			}
 			gB := gpow[cb]
