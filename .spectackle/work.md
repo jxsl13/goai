@@ -1074,3 +1074,25 @@ TWO NULLS THAT ARE CORRECTLY NULL, and telling them apart from the coverage trap
 THE BINDING CONSTRAINT IS BENCHMARK COVERAGE, not the edits. Forward and DecodeStep are separate layer loops with separate call sites, so a change to one is invisible to a benchmark of the other. Of 59 changed files, exactly one has benchmarks for both paths - and that is only because BenchmarkQuantCohereForward was written this round to pair with the DecodeStep benchmark written last round. The remaining 230 candidates are mostly in paths no benchmark executes, so under the standing constraint that only what is verifiable on this system may ship, the sweep is now gated on writing per-architecture prefill and decode benchmarks rather than on applying rewrites. That is a larger and less interesting body of work than the optimization itself, and it is where the next iterations of this line should go.
 
 NO TIME CLAIM. MixtralPromptStepwise is bimodal across a 3x range WITHIN a single arm on this host (166ms to 519ms), so it cannot resolve a percent-level effect in either direction. Reporting a ratio from it would be noise dressed as a measurement, per PROC-BENCH-ONE-SAMPLE-001 generalized: the guard is not just iteration count but whether the within-arm spread is smaller than the claimed effect.
+
+## R-01KYQZTPMPETEA5P4QNR55VF8B Removing the coverage constraint unlocked the sweep: 12-architecture benchmark matrix, then 135 swaps verified on every one
+kind: research
+state: draft
+created: 2026-07-29
+
+CONSUMES the constraint identified in R-01KYQZ94HQE7C. Measured on darwin/arm64 M2 Pro, go1.26.5, GOMAXPROCS=12, interleaved, three rounds.
+
+THE UNLOCK WAS COVERAGE, NOT REWRITES. The previous iteration could apply PS6017 candidates but could only verify the two paths that happened to have benchmarks. Eleven of twelve quantized architectures had no benchmark on either Forward or DecodeStep, so further batches would have shipped on escape analysis alone. Writing the matrix first turned an unverifiable sweep into a measured one, and it took less effort than the optimization work it gated.
+
+BUILT: 24 benchmarks, prefill and decode for all twelve quantized transformer architectures, table-driven over the existing GGUF test fixtures. Three design points worth keeping. (1) SMALL models deliberately - the quantity being guarded is per-layer allocation count, which is geometry-independent, so a production-sized model would multiply runtime without changing the number. (2) NO shared interface: the cache type differs per architecture (CohereCache, FalconCache) and the SSM families take a decode state instead, so each entry supplies its own closures. Twelve small closures beat one wrong abstraction. (3) The quant*GGUFBytes fixtures were widened from *testing.T to testing.TB (plus quantDeepSeekV2Write transitively) so benchmarks reuse them rather than duplicating GGUF construction.
+
+THEN MEASURED, 104 exec1-to-exec1a and 31 exec1-to-exec3 swaps:
+  decode  Gemma2 4952->4862, DeepSeekV2 5241->5167, Nemotron 2752->2722, GPTNeoX 3101->3072, MPT 1106->1086, StableLM 2831->2812, Falcon 1151->1141, Gemma 1441->1431, StarCoder2 1651->1641
+  prefill Gemma2 1071->1053, DeepSeekV2 1119->1103, Nemotron 564->556, GPTNeoX 635->628, StableLM 582->576, and every other architecture down 2 to 4
+Every architecture improves or holds. -292 allocations across the decode matrix, -78 across prefill, deterministic to within two allocations over three rounds.
+
+THREE GENUINE ZEROES: Cohere, Mixtral and OLMo2 decode hold exactly, because earlier batches already consumed their arity-1 and arity-3 sites. These are nulls WITH jitter, which under PROC-BENCH-NULL-KINDS-001 is the signature of a real null rather than a benchmark that misses the code - and having the matrix in place is what made that distinction checkable instead of a judgment call.
+
+CUMULATIVE across the sweep: 373 exec1 call sites moved to pooled siblings, 55 attrs boxes hoisted out of layer loops, PS6017 candidates in nlp down from about 400 to 176. The remainder are call shapes the mechanical rewrite does not match - indexed and call-valued arguments - which need per-site judgment rather than a regex.
+
+METHOD NOTE. Two iterations were spent measuring things that could not be measured before recognizing that the fix was to build the instrument. The signal was available earlier: PROC-BENCH-COVERAGE-NULL-001 was cast one iteration before this, from exactly the same symptom, and treating it as a warning about a single benchmark rather than a systemic gap cost a round.
