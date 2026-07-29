@@ -480,3 +480,8 @@ Rationale: Batch 2 of the nlp attrs hoist measured identical allocs on both arms
 WHEN a ratio is about to be reported from a benchmark whose single iteration takes tens of milliseconds or more, the implementing agent SHALL raise benchtime until the within-arm spread is smaller than the effect being claimed, and only then report the ratio.
 
 Rationale: MixtralPromptPrefill appeared 1.73x slower after the attrs hoist at benchtime=1x, and the two rounds agreed closely enough to look real. At benchtime=10x the arms were 77.98ms and 78.91ms, no regression at all. One iteration of an 80ms benchmark is one sample, and two such samples per arm can agree by coincidence.
+
+## PROC-SCANRULE-SILENT-REGRESSION-001
+WHEN a scan rule depends on a helper that can return an empty or unknown value for an input it must compare, the implementing agent SHALL make the positive test the guard for that helper, because an empty value that silences the whole rule leaves every zero-expecting suppression test green while the check reports nothing at all.
+
+Rationale: PS6017 compares parameter types as rendered text. exprText has no StarExpr case and returns empty for every pointer. Handled as a placeholder it collapsed all pointer types and paired concat1D with an unrelated function; handled as unrenderable-and-skipped it dropped every candidate and the rule found zero across the whole tree. A suppression test written against the pointer case stayed green under both, because it asserts zero and the rule produces zero for the wrong reason. Swapping the renderer turns only the POSITIVE test red. A silent check is the more dangerous failure: it reads as a clean codebase.
