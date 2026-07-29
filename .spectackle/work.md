@@ -897,3 +897,29 @@ A 180-commit perf branch rebased onto a main that had been optimizing the SAME f
 ORPHANS RUN BOTH WAYS (PROC-MERGE-ORPHAN-001). The known direction - take the other side wholesale, grep this side helper names for surviving call sites - fired once (parallelRows, fully dead, correctly deleted). The UNKNOWN direction bit harder: taking main gmm.go dropped parallelSamples, whose call site arrived cleanly in a LATER commit that had no conflict at all. So the grep must cover the whole remaining todo, not just the commit being resolved. Caught by go vet at the next stop.
 
 GENERALIZABLE, and why no perfscan rule: every one of these is a VCS-state property (what the other side did, what the rest of the todo does). perfscan parses one file at one revision with go/ast and has no access to any of it. The mechanical parts are already covered - unused imports and undefined symbols by go vet, detached godoc by apicheck (PROC-GODOC-DETACH-002 fired again here, main stale helper doc landing above this branch new const). Recording as method.
+
+## R-01KYQT329EEAD819VM5DGVSB0M REJECTED: contiguous back-substitution in linalg. Predicted 2-5x, measured 1.00x - the strided column stays cache-resident
+kind: research
+state: draft
+created: 2026-07-29
+
+REJECTS the central claim of T-01KYJQ3QRHFRS. Measured on darwin/arm64 M2 Pro, go1.26.5, GOMAXPROCS=12, min of 3-4 per arm, 3-4 interleaved alternations in one session.
+
+THE CLAIM. All three triangular back-substitutions (LU.Solve linalg.go:126, CholSolve cholesky.go:82, Lstsq qr.go:107) read the already-solved tail as out[j*cols+c] with j innermost, striding by cols. At n=512 consecutive inner iterations sit 4KB apart, on a buffer of 2MB. Predicted 2-5x on the substitution phase and 1.6-3x on Inverse end to end, at medium-high confidence, mechanism called unambiguous.
+
+MEASURED, layout change toggled in and out with the scratch hoist held constant in both arms so the ratio attributes only to the strided read:
+  LUSolve 512x512   1.005x
+  LUSolve 768x768   0.977x (baseline faster)
+  Inverse n=512     0.994x (baseline faster)
+  Lstsq n=512       1.001x
+  CholSolve n=512   1.041x, consistent across four alternations
+  CholSolve n=768   0.996x
+One site, one size, four percent, gone at the next size up. Null.
+
+WHY THE ANALYSIS WAS WRONG, which is the reusable part. The stride is real; the cache cost is not, because the analysis counted cache lines per READ and ignored REUSE. For a fixed column c, the back pass touches exactly the same n addresses (out[j*cols+c] for j in range) on every one of its n outer iterations. Those n lines total n*64 bytes of tag footprint - 32KB at n=512, 48KB at n=768 - and stay resident after the first pass. The working set is n LINES, not the 2MB buffer, so it never leaves L2 on this host and the fix has nothing to recover. A strided walk is only expensive when its footprint exceeds cache OR it is traversed once; this one is small AND re-traversed n/2 times.
+
+CONTRAST with the strided walks that DID pay this session (NSA P*V 2.40x, KDA 1.75x, Sinkhorn 2.80x): in those the strided index was the REDUCTION axis, so each line was touched once per output and never revisited. Same AST shape, opposite locality.
+
+PS6011 CONSEQUENCE. PS6011 flags all three of these sites (11 in linalg, 81 tree-wide) and is CORRECT to - it is documented advisory, and its own text says candidates need an A/B. But this is the first recorded case of PS6011 candidates measuring null, and the distinguishing property is stated above: whether the strided index is revisited across the outer loop. That is a genuine refinement, and it is NOT expressible in the current detector - deciding it requires knowing that the same addresses recur, which means reasoning about the outer loop trip count against the index expression. Deliberately NOT adding a suppression: it would need to be sound to avoid hiding the 2.40x cases, and an unsound one is worse than an advisory false positive. The refinement belongs in PATTERNS.md as triage guidance.
+
+WHAT SHIPPED INSTEAD. The scratch hoist found while reading these functions: CholSolve and Lstsq allocated their forward buffer per column, so the Inverse-shaped call (cols == n) paid n allocations. Hoisted: CholSolve n=512 1032 to 521 allocs and 8.40MB to 6.31MB, Lstsq 1546 to 1035 and 10.52MB to 8.43MB, time neutral. Plus the benchmarks - the pre-existing BenchmarkLUSolve topped out at n=128 where the output is 131KB and fits L2 either way, so it could not have detected a traversal effect in the first place.
