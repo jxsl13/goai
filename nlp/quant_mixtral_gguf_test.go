@@ -76,7 +76,7 @@ func newQuantTestMixtral() *nlp.Mixtral {
 // ffn_gate_inp (the router, which llama.cpp excludes from quantization), token_embd and
 // the 1-D norm gains stay F32. Returns the raw GGUF bytes so a test can parse them BOTH
 // ways (gguf.ReadRaw for the quantized path, gguf.Read for the float pipeline).
-func quantMixtralGGUFBytes(t *testing.T, m *nlp.Mixtral) []byte {
+func quantMixtralGGUFBytes(t testing.TB, m *nlp.Mixtral) []byte {
 	t.Helper()
 	meta, ts := nlp.MixtralToGGUF(m)
 	qm := map[string]gguf.QuantType{}

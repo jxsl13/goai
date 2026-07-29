@@ -83,7 +83,7 @@ func newQuantTestOLMo2() *nlp.OLMo2 {
 // stay F32 — it only feeds the float lookup) and every 1-D norm gain F32 — the storage
 // convention of real llama.cpp-quantized olmo2 files, and exactly the tensor split
 // QuantizeOLMo2 quantizes, which is what makes the exact-anchor gate byte-comparable.
-func quantOLMo2GGUFBytes(t *testing.T, m *nlp.OLMo2) []byte {
+func quantOLMo2GGUFBytes(t testing.TB, m *nlp.OLMo2) []byte {
 	t.Helper()
 	meta, ts := nlp.OLMo2ToGGUF(m)
 	qm := map[string]gguf.QuantType{}

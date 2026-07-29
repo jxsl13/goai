@@ -75,7 +75,7 @@ func newQuantTestFalcon() *nlp.Falcon {
 // byte-comparable. The fused attn_qkv ("jploski" [all-q; k; v] bands) is quantized
 // whole; because ggml blocks never span rows, its per-row Q-blocks are bit-identical
 // to quantizing the split q/k/v.
-func quantFalconGGUFBytes(t *testing.T, m *nlp.Falcon) []byte {
+func quantFalconGGUFBytes(t testing.TB, m *nlp.Falcon) []byte {
 	t.Helper()
 	meta, ts := nlp.FalconToGGUF(m)
 	qm := map[string]gguf.QuantType{}

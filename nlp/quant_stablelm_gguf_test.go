@@ -77,7 +77,7 @@ func newQuantTestStableLM() *nlp.StableLM {
 // storage convention of real llama.cpp-quantized stablelm files, and exactly the
 // tensor split QuantizeStableLM quantizes, which is what makes the exact-anchor gate
 // byte-comparable.
-func quantStableLMGGUFBytes(t *testing.T, m *nlp.StableLM) []byte {
+func quantStableLMGGUFBytes(t testing.TB, m *nlp.StableLM) []byte {
 	t.Helper()
 	meta, ts := nlp.StableLMToGGUF(m)
 	qm := map[string]gguf.QuantType{}

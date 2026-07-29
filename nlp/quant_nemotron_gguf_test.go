@@ -74,7 +74,7 @@ func newQuantTestNemotron() *nlp.Nemotron {
 // storage convention of real llama.cpp-quantized nemotron files, and exactly the
 // tensor split QuantizeNemotron quantizes, which is what makes the exact-anchor gate
 // byte-comparable.
-func quantNemotronGGUFBytes(t *testing.T, m *nlp.Nemotron) []byte {
+func quantNemotronGGUFBytes(t testing.TB, m *nlp.Nemotron) []byte {
 	t.Helper()
 	meta, ts := nlp.NemotronToGGUF(m)
 	qm := map[string]gguf.QuantType{}

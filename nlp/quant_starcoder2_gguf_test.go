@@ -78,7 +78,7 @@ func newQuantTestStarCoder2() *nlp.StarCoder2 {
 // the storage convention of real llama.cpp-quantized starcoder2 files, and exactly the
 // tensor split QuantizeStarCoder2 quantizes, which is what makes the exact-anchor gate
 // byte-comparable.
-func quantStarCoder2GGUFBytes(t *testing.T, m *nlp.StarCoder2) []byte {
+func quantStarCoder2GGUFBytes(t testing.TB, m *nlp.StarCoder2) []byte {
 	t.Helper()
 	meta, ts := nlp.StarCoder2ToGGUF(m)
 	qm := map[string]gguf.QuantType{}

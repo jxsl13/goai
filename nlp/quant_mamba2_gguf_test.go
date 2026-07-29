@@ -107,7 +107,7 @@ func quantMamba2QuantMap(ts map[string]*tensor.Tensor) map[string]gguf.QuantType
 
 // quantMamba2GGUFBytes serializes a Mamba2 through gguf.WriteQuantized with
 // the real-file quantization split of [quantMamba2QuantMap].
-func quantMamba2GGUFBytes(t *testing.T, m *nlp.Mamba2) []byte {
+func quantMamba2GGUFBytes(t testing.TB, m *nlp.Mamba2) []byte {
 	t.Helper()
 	meta, ts := nlp.Mamba2ToGGUF(m)
 	var buf bytes.Buffer

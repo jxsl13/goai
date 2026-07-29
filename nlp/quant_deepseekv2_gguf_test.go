@@ -116,7 +116,7 @@ func newQuantTestDeepSeekV2() *nlp.DeepSeekV2 {
 // norm gain stay F32. token_embd is also kept F32 so the byte-exact anchor can
 // compare the f32 lookup tables directly (the [TestQuantMixtralFromGGUF]
 // precedent; the loader dequantizes a quantized embedding all the same).
-func quantDeepSeekV2GGUFBytes(t *testing.T, m *nlp.DeepSeekV2) []byte {
+func quantDeepSeekV2GGUFBytes(t testing.TB, m *nlp.DeepSeekV2) []byte {
 	t.Helper()
 	meta, ts := nlp.DeepSeekV2ToGGUF(m)
 	return quantDeepSeekV2Write(t, meta, ts, "")
@@ -124,7 +124,7 @@ func quantDeepSeekV2GGUFBytes(t *testing.T, m *nlp.DeepSeekV2) []byte {
 
 // quantDeepSeekV2Write quantizes the standard tensor set (minus skip, for the
 // F32-projection reject probes) and returns the serialized file bytes.
-func quantDeepSeekV2Write(t *testing.T, meta map[string]any, ts map[string]*tensor.Tensor, skip string) []byte {
+func quantDeepSeekV2Write(t testing.TB, meta map[string]any, ts map[string]*tensor.Tensor, skip string) []byte {
 	t.Helper()
 	qm := map[string]gguf.QuantType{}
 	for name, tt := range ts {

@@ -93,7 +93,7 @@ func newQuantTestMamba() *nlp.Mamba {
 // weights") / ssm_a (suffix-less — llama.cpp only quantizes tensors ending in
 // "weight"). This is exactly the tensor split QuantizeMamba quantizes, which is what
 // makes the exact-anchor gate byte-comparable.
-func quantMambaGGUFBytes(t *testing.T, m *nlp.Mamba) []byte {
+func quantMambaGGUFBytes(t testing.TB, m *nlp.Mamba) []byte {
 	t.Helper()
 	meta, ts := nlp.MambaToGGUF(m)
 	qm := map[string]gguf.QuantType{}

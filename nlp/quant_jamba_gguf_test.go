@@ -152,7 +152,7 @@ func newQuantTestJamba() *nlp.Jamba {
 // ffn_gate_inp (llama.cpp excludes it), the suffix-less ssm_a/ssm_d and every 1-D
 // tensor stay F32. This is exactly the tensor split QuantizeJamba quantizes, which
 // is what makes the exact-anchor gate byte-comparable.
-func quantJambaGGUFBytes(t *testing.T, m *nlp.Jamba) []byte {
+func quantJambaGGUFBytes(t testing.TB, m *nlp.Jamba) []byte {
 	t.Helper()
 	meta, ts := nlp.JambaToGGUF(m)
 	qm := map[string]gguf.QuantType{}

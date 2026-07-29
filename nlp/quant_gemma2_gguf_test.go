@@ -84,7 +84,7 @@ func newQuantTestGemma2() *nlp.Gemma2 {
 // norm gain F32, the storage convention of real llama.cpp-quantized gemma2 files.
 // Returns the raw GGUF bytes so a test can parse them BOTH ways (gguf.ReadRaw for the
 // quantized path, gguf.Read for the dequantized float pipeline).
-func quantGemma2GGUFBytes(t *testing.T, m *nlp.Gemma2) []byte {
+func quantGemma2GGUFBytes(t testing.TB, m *nlp.Gemma2) []byte {
 	t.Helper()
 	meta, ts := nlp.Gemma2ToGGUF(m)
 	qm := map[string]gguf.QuantType{}

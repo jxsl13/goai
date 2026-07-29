@@ -78,7 +78,7 @@ func newQuantTestGPTNeoX() *nlp.GPTNeoX {
 // tensor split QuantizeGPTNeoX quantizes, which is what makes the exact-anchor gate
 // byte-comparable. The fused attn_qkv is quantized whole; because ggml blocks never
 // span rows, its per-row Q-blocks are bit-identical to quantizing the split q/k/v.
-func quantGPTNeoXGGUFBytes(t *testing.T, m *nlp.GPTNeoX) []byte {
+func quantGPTNeoXGGUFBytes(t testing.TB, m *nlp.GPTNeoX) []byte {
 	t.Helper()
 	meta, ts := nlp.GPTNeoXToGGUF(m)
 	qm := map[string]gguf.QuantType{}

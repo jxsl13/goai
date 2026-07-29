@@ -74,7 +74,7 @@ func newQuantTestMPT() *nlp.MPT {
 // [QuantLlamaFromGGUF] convention) — and every 1-D norm γ F32: the storage convention
 // of real llama.cpp-quantized mpt files, and exactly the tensor split QuantizeMPT
 // quantizes, which is what makes the exact-anchor gate byte-comparable.
-func quantMPTGGUFBytes(t *testing.T, m *nlp.MPT) []byte {
+func quantMPTGGUFBytes(t testing.TB, m *nlp.MPT) []byte {
 	t.Helper()
 	meta, ts := nlp.MPTToGGUF(m)
 	qm := map[string]gguf.QuantType{}

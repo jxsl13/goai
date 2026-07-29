@@ -75,7 +75,7 @@ func qkNormGain(n, layer int, scale, eps float64) *nn.RMSNorm {
 // — the storage convention of real llama.cpp-quantized files (1-D tensors are never
 // block-quantized). Returns the raw GGUF bytes so a test can parse them BOTH ways
 // (gguf.ReadRaw for the quantized path, gguf.Read for the dequantized float pipeline).
-func quantQwenGGUFBytes(t *testing.T, m *nlp.Llama, to func(*nlp.Llama) (map[string]any, map[string]*tensor.Tensor)) []byte {
+func quantQwenGGUFBytes(t testing.TB, m *nlp.Llama, to func(*nlp.Llama) (map[string]any, map[string]*tensor.Tensor)) []byte {
 	t.Helper()
 	meta, ts := to(m)
 	qm := map[string]gguf.QuantType{}
