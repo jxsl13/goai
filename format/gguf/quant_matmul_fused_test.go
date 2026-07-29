@@ -56,12 +56,22 @@ func TestQMatMulFusedDecodeMatchesGeneralPathExactly(t *testing.T) {
 					t.Fatalf("general qt=%d k=%d n=%d: %v", qt, k, n, err)
 				}
 				gf, ff := general.Storage().F32(), fused.Storage().F32()
+				// Q4_K's row dot is the tolerance-gated asm kernel on the simd build
+				// (f32-vector accumulation vs the scalar f64) → within a tight ulp
+				// tolerance, not bit-identical. Every other format stays exact.
+				q4kTol := qt == Q4_K && q4kDotIsAsm
 				// Q8_0's m==1 fused path is the SIMD dequant-dot (tolerance-gated: f32
 				// within-block sum + per-block factored scale) when that kernel is
 				// registered (amd64+simd build); every other format's fused path stays
 				// bit-identical to the general one.
 				q8Tol := qt == Q8_0 && q8FusedDecodeM1 != nil
 				for ni := range n {
+					if q4kTol {
+						if d := math.Abs(float64(ff[ni] - gf[ni])); d > 2e-3*math.Abs(float64(gf[ni]))+2e-3 {
+							t.Fatalf("qt=Q4_K(asm) k=%d n=%d out[%d]: %v vs %v (|Δ|=%g)", k, n, ni, ff[ni], gf[ni], d)
+						}
+						continue
+					}
 					if q8Tol {
 						if d := math.Abs(float64(ff[ni] - gf[ni])); d > 5e-5*math.Abs(float64(gf[ni]))+1e-6 {
 							t.Fatalf("qt=Q8_0(simd) k=%d n=%d out[%d]: m==1 %v vs general %v (|Δ|=%g > tol)",

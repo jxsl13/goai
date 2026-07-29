@@ -36,6 +36,10 @@ const (
 // quantized model runs without materializing full-precision weights — the point
 // of quantized inference (§T39). Accumulation is f64 (§V10); the dequant per
 // block is the ggml-verified path (§R19/§R21).
+// dotQ4KRowFn is dotQ4_KRow (scalar) by default; the amd64+simd asm kernel overrides
+// it in init() with the 2.6x VPMOVZXBD/FMA row dot (tolerance-gated).
+var dotQ4KRowFn = dotQ4_KRow
+
 // q8FusedDecodeM1, when non-nil (amd64+simd build), computes the Q8_0 m==1 decode
 // matmul with the SIMD dequant-dot kernel (tolerance-gated). Nil → scalar fused path.
 var q8FusedDecodeM1 func(row []float32, weight []byte, n, k, rowBytes int, outf []float32)
@@ -193,7 +197,7 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 		case Q3_K:
 			dot = dotQ3_KRow
 		case Q4_K:
-			dot = dotQ4_KRow
+			dot = dotQ4KRowFn
 		case Q5_K:
 			dot = dotQ5_KRow
 		case Q6_K:
