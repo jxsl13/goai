@@ -465,6 +465,54 @@ func WKVScanStateF64(k, v, w, u, out, aa0, bb0, pp0 []float64, seq, d int) {
 	}
 }
 
+// WKVScanRangeF64 runs the fresh forward scan over ONLY channels [cLo,cHi) of the [seq,d]
+// buffers — the channel-parallel entry point. cLo MUST be a multiple of 4 so the 4-lane
+// SIMD groups align exactly with WKVScanF64's; each channel then lands in the same group
+// and gets the identical expF64x4v bits, so a chunked multi-goroutine scan (4-aligned
+// boundaries) is BIT-IDENTICAL to the single whole-range WKVScanF64. Body is verbatim the
+// fresh (aa0==nil) path of WKVScanStateF64, bounded to [cLo,cHi).
+func WKVScanRangeF64(k, v, w, u, out []float64, seq, d, cLo, cHi int) {
+	if !hasAVX || !hasFMA {
+		wkvScanScalar(k, v, w, u, out, seq, d, cLo, cHi)
+		return
+	}
+	pInit := archsimd.BroadcastFloat64x4(-1e38)
+	c := cLo
+	for ; c+4 <= cHi; c += 4 {
+		wc := archsimd.LoadFloat64x4Slice(w[c:])
+		uc := archsimd.LoadFloat64x4Slice(u[c:])
+		aa, bb, pp := eZero, eZero, pInit
+		for t := 0; t < seq; t++ {
+			base := t*d + c
+			kk := archsimd.LoadFloat64x4Slice(k[base:])
+			vv := archsimd.LoadFloat64x4Slice(v[base:])
+			ww := uc.Add(kk)
+			q := pp.Max(ww)
+			d1 := pp.Sub(q)
+			d2 := ww.Sub(q)
+			e := expF64x4v(d1.Min(d2))
+			ge := d1.GreaterEqual(d2)
+			e1 := eOne.Merge(e, ge)
+			e2 := e.Merge(eOne, ge)
+			e1.Mul(aa).Add(e2.Mul(vv)).Div(e1.Mul(bb).Add(e2)).StoreSlice(out[base:])
+			ppw := pp.Sub(wc)
+			q2 := ppw.Max(kk)
+			d3 := ppw.Sub(q2)
+			d4 := kk.Sub(q2)
+			ek := expF64x4v(d3.Min(d4))
+			gk := d3.GreaterEqual(d4)
+			e3 := eOne.Merge(ek, gk)
+			e4 := ek.Merge(eOne, gk)
+			aa = e3.Mul(aa).Add(e4.Mul(vv))
+			bb = e3.Mul(bb).Add(e4)
+			pp = q2
+		}
+	}
+	if c < cHi {
+		wkvScanScalar(k, v, w, u, out, seq, d, c, cHi)
+	}
+}
+
 // SSMScanF64 runs the Mamba/S6 selective-scan recurrence (Gu & Dao 2023), vectorizing
 // the reduction over the state dim N 4-wide: per (t,d) the decay abar = exp(Δ·A[d,n])
 // (A<0 ⟹ argument ≤ 0, so expF64x4v is valid), the state update h = abar·h + Δ·B·u,

@@ -73,13 +73,18 @@ func PackSequences(seqs [][]int, maxLen int) (blocks, docIDs [][]int) {
 func DocumentCausalMask(docIDs []int) *tensor.Tensor {
 	n := len(docIDs)
 	m := tensor.New(tensor.F64, tensor.Shape{n, n})
+	// The mask is a fresh contiguous [n,n], so SetF64(v,i,j) is exactly md[i*n+j]=v —
+	// write the flat storage directly and skip the per-element Unravel/dispatch.
+	md := m.Storage().F64()
 	neg := math.Inf(-1)
 	for i := range n {
+		di := docIDs[i]
+		row := md[i*n : i*n+n]
 		for j := range n {
-			if docIDs[i] == docIDs[j] && j <= i {
-				m.SetF64(0, i, j)
+			if di == docIDs[j] && j <= i {
+				row[j] = 0
 			} else {
-				m.SetF64(neg, i, j)
+				row[j] = neg
 			}
 		}
 	}
