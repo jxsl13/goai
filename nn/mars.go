@@ -228,6 +228,31 @@ func (a *MARS) Step(grad GradFn) error {
 		// exactly as the generic path computes it, and (γ=0, clip off) identical to [Adam].
 		if pf := flatF64(p); pf != nil {
 			if gf := flatF64(g); gf != nil {
+				if a.ClipRadius <= 0 {
+					// No clip (the default): c_t is consumed only by the moment update,
+					// so fold it inline and skip the separate write+read pass over the c
+					// buffer entirely. Bit-identical — same c_i arithmetic in the same
+					// order, and gp[i] (the previous grad) is still read before being
+					// overwritten with gv.
+					if useCorr {
+						for i, gv := range gf {
+							ci := gv + factor*(gv-gp[i])
+							m[i] = a.Beta1*m[i] + (1-a.Beta1)*ci
+							v[i] = a.Beta2*v[i] + (1-a.Beta2)*ci*ci
+							pf[i] = pf[i]*decay - a.LR*(m[i]/c1)/(math.Sqrt(v[i]/c2)+a.Eps)
+							gp[i] = gv
+						}
+					} else {
+						for i, gv := range gf {
+							m[i] = a.Beta1*m[i] + (1-a.Beta1)*gv
+							v[i] = a.Beta2*v[i] + (1-a.Beta2)*gv*gv
+							pf[i] = pf[i]*decay - a.LR*(m[i]/c1)/(math.Sqrt(v[i]/c2)+a.Eps)
+							gp[i] = gv
+						}
+					}
+					a.seen[pi] = true
+					continue
+				}
 				if useCorr {
 					for i, gv := range gf {
 						c[i] = gv + factor*(gv-gp[i])
@@ -247,6 +272,28 @@ func (a *MARS) Step(grad GradFn) error {
 			}
 		} else if pf := flatF32(p); pf != nil {
 			if gf := flatF32(g); gf != nil {
+				if a.ClipRadius <= 0 {
+					if useCorr {
+						for i := range gf {
+							gv := float64(gf[i])
+							ci := gv + factor*(gv-gp[i])
+							m[i] = a.Beta1*m[i] + (1-a.Beta1)*ci
+							v[i] = a.Beta2*v[i] + (1-a.Beta2)*ci*ci
+							pf[i] = float32(float64(pf[i])*decay - a.LR*(m[i]/c1)/(math.Sqrt(v[i]/c2)+a.Eps))
+							gp[i] = gv
+						}
+					} else {
+						for i := range gf {
+							gv := float64(gf[i])
+							m[i] = a.Beta1*m[i] + (1-a.Beta1)*gv
+							v[i] = a.Beta2*v[i] + (1-a.Beta2)*gv*gv
+							pf[i] = float32(float64(pf[i])*decay - a.LR*(m[i]/c1)/(math.Sqrt(v[i]/c2)+a.Eps))
+							gp[i] = gv
+						}
+					}
+					a.seen[pi] = true
+					continue
+				}
 				if useCorr {
 					for i := range gf {
 						gv := float64(gf[i])
