@@ -2,6 +2,8 @@ package autograd
 
 import (
 	"math"
+	"runtime"
+	"sync"
 
 	"github.com/jxsl13/goai/backend"
 	"github.com/jxsl13/goai/tensor"
@@ -36,38 +38,47 @@ func init() {
 			zss := zs.Contiguous().Storage().F64()
 			zts := zt.Contiguous().Storage().F64()
 			ds := gs.Storage().F64()
-			p := make([]float64, c)
-			q := make([]float64, c)
-			for i := 0; i < b; i++ {
-				base := i * c
-				softmaxRowTInto(p, zts[base:base+c], temp)
-				softmaxRowTInto(q, zss[base:base+c], temp)
-				for j := 0; j < c; j++ {
-					ds[base+j] = scale * (q[j] - p[j])
+			// Rows are independent (each writes only ds[i*c:i*c+c] and reads frozen
+			// zss/zts), so split the batch across workers. p/q are PRIVATIZED per chunk —
+			// pure per-row scratch, fully overwritten before read, never shared across rows.
+			// Bit-identical: each row's softmax + scale·(q−p) uses the same operands in the
+			// same j order regardless of which goroutine runs it.
+			distillParallelRows(b, c, func(rlo, rhi int) {
+				p := make([]float64, c)
+				q := make([]float64, c)
+				for i := rlo; i < rhi; i++ {
+					base := i * c
+					softmaxRowTInto(p, zts[base:base+c], temp)
+					softmaxRowTInto(q, zss[base:base+c], temp)
+					for j := 0; j < c; j++ {
+						ds[base+j] = scale * (q[j] - p[j])
+					}
 				}
-			}
+			})
 			return []*tensor.Tensor{gs, nil}, nil
 		case zs.Dtype() == tensor.F32 && zt.Dtype() == tensor.F32:
 			zss := zs.Contiguous().Storage().F32()
 			zts := zt.Contiguous().Storage().F32()
 			ds := gs.Storage().F32()
-			p := make([]float64, c)
-			q := make([]float64, c)
-			row := make([]float64, c)
-			for i := 0; i < b; i++ {
-				base := i * c
-				for j := 0; j < c; j++ {
-					row[j] = float64(zts[base+j])
+			distillParallelRows(b, c, func(rlo, rhi int) {
+				p := make([]float64, c)
+				q := make([]float64, c)
+				row := make([]float64, c) // privatized: teacher/student widen buffer, per-row only
+				for i := rlo; i < rhi; i++ {
+					base := i * c
+					for j := 0; j < c; j++ {
+						row[j] = float64(zts[base+j])
+					}
+					softmaxRowTInto(p, row, temp)
+					for j := 0; j < c; j++ {
+						row[j] = float64(zss[base+j])
+					}
+					softmaxRowTInto(q, row, temp)
+					for j := 0; j < c; j++ {
+						ds[base+j] = float32(scale * (q[j] - p[j]))
+					}
 				}
-				softmaxRowTInto(p, row, temp)
-				for j := 0; j < c; j++ {
-					row[j] = float64(zss[base+j])
-				}
-				softmaxRowTInto(q, row, temp)
-				for j := 0; j < c; j++ {
-					ds[base+j] = float32(scale * (q[j] - p[j]))
-				}
-			}
+			})
 			return []*tensor.Tensor{gs, nil}, nil
 		}
 
@@ -80,6 +91,36 @@ func init() {
 		}
 		return []*tensor.Tensor{gs, nil}, nil // teacher frozen
 	})
+}
+
+// distillParallelRows splits b independent batch rows across GOMAXPROCS workers (sibling
+// of conv1dParallelChannels): each worker gets a contiguous [rlo,rhi) row range and
+// allocates its own scratch. Serial below a small work threshold (b·workPerRow) so tiny
+// batches skip the fork/join. Row writes are disjoint, so this is bit-identical to the
+// serial scan.
+func distillParallelRows(b, workPerRow int, body func(rlo, rhi int)) {
+	nw := runtime.GOMAXPROCS(0)
+	if nw > b {
+		nw = b
+	}
+	if nw <= 1 || b*workPerRow < 1<<15 {
+		body(0, b)
+		return
+	}
+	var wg sync.WaitGroup
+	chunk := (b + nw - 1) / nw
+	for lo := 0; lo < b; lo += chunk {
+		hi := lo + chunk
+		if hi > b {
+			hi = b
+		}
+		wg.Add(1)
+		go func(lo, hi int) {
+			defer wg.Done()
+			body(lo, hi)
+		}(lo, hi)
+	}
+	wg.Wait()
 }
 
 // softmaxRowTInto writes the stable softmax of the logit row (scaled by 1/temp)
