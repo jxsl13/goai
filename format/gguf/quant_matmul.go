@@ -40,6 +40,10 @@ const (
 // it in init() with the 2.6x VPMOVZXBD/FMA row dot (tolerance-gated).
 var dotQ4KRowFn = dotQ4_KRow
 
+// q8FusedDecodeM1, when non-nil (amd64+simd build), computes the Q8_0 m==1 decode
+// matmul with the SIMD dequant-dot kernel (tolerance-gated). Nil → scalar fused path.
+var q8FusedDecodeM1 func(row []float32, weight []byte, n, k, rowBytes int, outf []float32)
+
 func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.Tensor, error) {
 	if x.Ndim() != 2 || x.Shape()[1] != k {
 		return nil, fmt.Errorf("gguf: QMatMul x must be [M,%d], got %v", k, x.Shape())
@@ -80,6 +84,10 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 	// path — fusing there would re-dequantize the row for every activation row.)
 	if qt == Q8_0 && m == 1 && xf32 != nil {
 		row := xf32[:k]
+		if q8FusedDecodeM1 != nil {
+			q8FusedDecodeM1(row, weight, n, k, rowBytes, outf)
+			return out, nil
+		}
 		// Register-block the OUTPUT (weight-row) loop by 4: m==1 so the single activation
 		// row is shared across all n outputs — reuse each row element's load+f64-convert
 		// across 4 weight rows (and the fixed-length block subslices drop the per-element

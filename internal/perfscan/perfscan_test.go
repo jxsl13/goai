@@ -3069,3 +3069,228 @@ func F(x *T, idx []int) float64 {
 		t.Fatalf("outside a loop, want 0 spread-accessor-in-loop, got %d", got)
 	}
 }
+
+// PS4010: fires on the butterfly p,q = x+y,x-y (via temps) in a loop.
+func TestDetectPS4010_Butterfly(t *testing.T) {
+	src := `package p
+func fwht(a []float64) {
+	n := len(a)
+	for h := 1; h < n; h <<= 1 {
+		for i := 0; i < n; i += h << 1 {
+			for j := i; j < i+h; j++ {
+				x, y := a[j], a[j+h]
+				a[j], a[j+h] = x+y, x-y
+			}
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src))["vectorizable-butterfly"]; got != 1 {
+		t.Fatalf("want 1 vectorizable-butterfly, got %d", got)
+	}
+}
+
+// Must stay SILENT on an ordinary swap / non-add-sub tuple assign.
+func TestDetectPS4010_SilentOnSwap(t *testing.T) {
+	src := `package p
+func swap(a []float64, n int) {
+	for i := 0; i < n; i++ {
+		a[i], a[n-i] = a[n-i], a[i]
+	}
+}`
+	if got := countCat(scanSrc(t, src))["vectorizable-butterfly"]; got != 0 {
+		t.Fatalf("want 0 (swap), got %d", got)
+	}
+}
+
+// Must stay SILENT when the two RHS are not x+y / x-y of the same pair.
+func TestDetectPS4010_SilentOnMixedOps(t *testing.T) {
+	src := `package p
+func mix(a []float64, n int) {
+	for i := 0; i < n; i++ {
+		x, y := a[i], a[i+1]
+		a[i], a[i+1] = x+y, x*y
+	}
+}`
+	if got := countCat(scanSrc(t, src))["vectorizable-butterfly"]; got != 0 {
+		t.Fatalf("want 0 (add/mul, not butterfly), got %d", got)
+	}
+}
+
+// PS4009: fires on the transposed gram M[k][i]·M[k][j] (k = row/reduction index → column-stride).
+func TestDetectPS4009_TransposedGram(t *testing.T) {
+	src := `package p
+func rgram(gm, r [][]float64, m, n int, b2 float64) {
+	for i := range n {
+		for j := i; j < n; j++ {
+			var acc float64
+			for k := range m {
+				acc += gm[k][i] * gm[k][j]
+			}
+			r[i][j] = b2*r[i][j] + (1-b2)*acc
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src))["transposed-gram-colstride"]; got != 1 {
+		t.Fatalf("want 1 transposed-gram-colstride, got %d", got)
+	}
+}
+
+// Must stay SILENT on the cache-friendly L-gram M[i][k]·M[j][k] (k = inner/contiguous index).
+func TestDetectPS4009_SilentOnContiguousGram(t *testing.T) {
+	src := `package p
+func lgram(gm, l [][]float64, m, n int, b2 float64) {
+	for i := range m {
+		for j := i; j < m; j++ {
+			var acc float64
+			for k := range n {
+				acc += gm[i][k] * gm[j][k]
+			}
+			l[i][j] = b2*l[i][j] + (1-b2)*acc
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src))["transposed-gram-colstride"]; got != 0 {
+		t.Fatalf("want 0 (contiguous gram), got %d", got)
+	}
+}
+
+// Must stay SILENT on matmul a[i][k]·b[k][j] — different bases, not a symmetric gram.
+func TestDetectPS4009_SilentOnMatmul(t *testing.T) {
+	src := `package p
+func mm(a, b, c [][]float64, m, n, k int) {
+	for i := range m {
+		for j := range n {
+			var acc float64
+			for kk := range k {
+				acc += a[i][kk] * b[kk][j]
+			}
+			c[i][j] = acc
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src))["transposed-gram-colstride"]; got != 0 {
+		t.Fatalf("want 0 (matmul), got %d", got)
+	}
+}
+
+// PS5006: fires on the SSDQuadratic-style [j..i] running product recomputed per (i,j).
+func TestDetectPS5006_SubrangeRescan(t *testing.T) {
+	src := `package p
+func ssd(a, y []float64, T int) {
+	for i := 0; i < T; i++ {
+		for j := 0; j <= i; j++ {
+			decay := 1.0
+			for k := j + 1; k <= i; k++ {
+				decay *= a[k]
+			}
+			y[i] += decay
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src))["nested-subrange-rescan"]; got != 1 {
+		t.Fatalf("want 1 nested-subrange-rescan, got %d", got)
+	}
+}
+
+// Silent when the innermost loop is a FIXED range (bounds do not span [j..i]).
+func TestDetectPS5006_SilentOnFixedRange(t *testing.T) {
+	src := `package p
+func dot(c, b, y []float64, T, n int) {
+	for i := 0; i < T; i++ {
+		for j := 0; j <= i; j++ {
+			var acc float64
+			for k := 0; k < n; k++ {
+				acc += c[k] * b[k]
+			}
+			y[i] += acc
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src))["nested-subrange-rescan"]; got != 0 {
+		t.Fatalf("want 0 (fixed range), got %d", got)
+	}
+}
+
+// Silent when the inner loop does not accumulate a running reduction over k.
+func TestDetectPS5006_SilentOnNonReduce(t *testing.T) {
+	src := `package p
+func f(a, y []float64, T int) {
+	for i := 0; i < T; i++ {
+		for j := 0; j <= i; j++ {
+			for k := j + 1; k <= i; k++ {
+				y[k] = a[k] * 2
+			}
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src))["nested-subrange-rescan"]; got != 0 {
+		t.Fatalf("want 0 (no acc reduction), got %d", got)
+	}
+}
+
+// PS4011: fires on a recurrence dispatching 2+ backend ops/iter with no flatF64 fast path.
+func TestDetectPS4011_OpDispatchRecurrence(t *testing.T) {
+	src := `package p
+func rec(ctx *C, x T, seq int) T {
+	var s T
+	for t := 0; t < seq; t++ {
+		a := ex(backend.OpMul, s, x)
+		s = ex(backend.OpAdd, a, x)
+	}
+	return s
+}`
+	if got := countCat(scanSrc(t, src))["op-dispatch-recurrence"]; got != 1 {
+		t.Fatalf("want 1 op-dispatch-recurrence, got %d", got)
+	}
+}
+
+// Silent when the function already has a flatF64 fused fast path.
+func TestDetectPS4011_SilentWithFlatF64(t *testing.T) {
+	src := `package p
+func rec(ctx *C, x T, seq int) T {
+	if xs := flatF64(x); xs != nil {
+		return x
+	}
+	var s T
+	for t := 0; t < seq; t++ {
+		a := ex(backend.OpMul, s, x)
+		s = ex(backend.OpAdd, a, x)
+	}
+	return s
+}`
+	if got := countCat(scanSrc(t, src))["op-dispatch-recurrence"]; got != 0 {
+		t.Fatalf("want 0 (has flatF64), got %d", got)
+	}
+}
+
+// Silent when the loop dispatches fewer than 2 backend ops.
+func TestDetectPS4011_SilentOnSingleDispatch(t *testing.T) {
+	src := `package p
+func rec(ctx *C, x T, seq int) T {
+	var s T
+	for t := 0; t < seq; t++ {
+		s = ex(backend.OpAdd, s, x)
+	}
+	return s
+}`
+	if got := countCat(scanSrc(t, src))["op-dispatch-recurrence"]; got != 0 {
+		t.Fatalf("want 0 (single dispatch), got %d", got)
+	}
+}
+
+func TestDetectPS5007_F32AbsViaF64(t *testing.T) {
+	src := `package p
+import "math"
+func f(x []float32) float32 {
+	var m float32
+	for _, v := range x {
+		if a := float32(math.Abs(float64(v))); a > m {
+			m = a
+		}
+	}
+	return m
+}`
+	if got := countCat(scanSrc(t, src))["f32-abs-via-f64"]; got != 1 {
+		t.Fatalf("want 1 f32-abs-via-f64, got %d", got)
+	}
+}

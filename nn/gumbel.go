@@ -106,14 +106,15 @@ func GumbelSoftmaxHard(ctx *backend.Context, logits, noise *tensor.Tensor, tau f
 func SampleGumbelNoise(seed uint64, shape tensor.Shape) *tensor.Tensor {
 	rng := rand.New(rand.NewPCG(seed, 0x9e3779b97f4a7c15))
 	t := tensor.New(tensor.F64, shape)
-	n := t.Numel()
-	for i := range n {
+	// fresh contiguous F64 tensor: flat index i == storage index, so write directly
+	// (byte-identical to the Unravel+SetF64 loop, same RNG draw order).
+	d := t.Storage().F64()
+	for i := range d {
 		u := rng.Float64()
 		if u < 1e-20 {
 			u = 1e-20
 		}
-		g := -math.Log(-math.Log(u))
-		t.SetF64(g, tensor.Unravel(i, shape)...)
+		d[i] = -math.Log(-math.Log(u))
 	}
 	return t
 }

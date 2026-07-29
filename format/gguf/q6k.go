@@ -75,7 +75,7 @@ func quantizeQ6_K(x []float32) []byte {
 		for j := range 16 {
 			var amax float32
 			for i := range 16 {
-				if a := float32(math.Abs(float64(blk[j*16+i]))); a > amax {
+				if a := math.Float32frombits(math.Float32bits(blk[j*16+i]) &^ (1 << 31)); a > amax {
 					amax = a
 				}
 			}
