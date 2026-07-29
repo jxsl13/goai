@@ -3,6 +3,8 @@ package nlp
 import (
 	"fmt"
 	"math"
+	"runtime"
+	"sync"
 
 	"github.com/jxsl13/goai/backend"
 	"github.com/jxsl13/goai/format/gguf"
@@ -10,6 +12,35 @@ import (
 	"github.com/jxsl13/goai/nn"
 	"github.com/jxsl13/goai/tensor"
 )
+
+// parallelChunks runs body over [0,n) in GOMAXPROCS contiguous chunks (used for the independent
+// head, conv-channel and token axes of the mixer). Callers must ensure each chunk writes DISJOINT
+// output and each worker keeps its OWN scratch. work is the total inner-iteration estimate; below
+// a threshold (e.g. single-token decode) it runs serially to avoid goroutine overhead.
+func parallelChunks(n, work int, body func(lo, hi int)) {
+	nw := runtime.GOMAXPROCS(0)
+	if nw > n {
+		nw = n
+	}
+	if nw <= 1 || work < 1<<15 {
+		body(0, n)
+		return
+	}
+	var wg sync.WaitGroup
+	chunk := (n + nw - 1) / nw
+	for lo := 0; lo < n; lo += chunk {
+		hi := lo + chunk
+		if hi > n {
+			hi = n
+		}
+		wg.Add(1)
+		go func(lo, hi int) {
+			defer wg.Done()
+			body(lo, hi)
+		}(lo, hi)
+	}
+	wg.Wait()
+}
 
 // QuantMamba2 is a [Mamba2] whose big projection weights stay QUANTIZED
 // (nn.QuantLinear) and are never materialized as full-precision matrices — the
@@ -256,35 +287,43 @@ func (b *QuantMamba2Mixer) forward(ctx *backend.Context, u *tensor.Tensor) (*ten
 	for t := range seq {
 		xc[t] = make([]float64, b.ConvDim)
 	}
-	cwrow := make([]float64, b.DConv) // conv weights for channel c, hoisted out of the t loop
-	for c := range b.ConvDim {
-		// convB[c] and convW[c,:] are constant across timesteps but were re-dispatched via
-		// AtF64 for every t; hoist them once per channel (bit-identical; ~2× on the conv).
-		cbv := convB.AtF64(c)
-		for k := range b.DConv {
-			cwrow[k] = convW.AtF64(c, k)
-		}
-		for t := range seq {
-			acc := cbv
+	// Depthwise conv: channel c writes only column c of every xc[t] (disjoint), so parallelize
+	// over channels with a per-worker cwrow (sharing it would race). Bit-identical to serial.
+	parallelChunks(b.ConvDim, seq*b.DConv, func(clo, chi int) {
+		cwrow := make([]float64, b.DConv) // conv weights for channel c, hoisted out of the t loop
+		for c := clo; c < chi; c++ {
+			// convB[c] and convW[c,:] are constant across timesteps but were re-dispatched via
+			// AtF64 for every t; hoist them once per channel (bit-identical; ~2× on the conv).
+			cbv := convB.AtF64(c)
 			for k := range b.DConv {
-				src := t - (b.DConv - 1) + k
-				if src >= 0 {
-					acc += cwrow[k] * xBC[src][c]
-				}
+				cwrow[k] = convW.AtF64(c, k)
 			}
-			xc[t][c] = acc // raw conv acc; silu applied vectorized per token row below
+			for t := range seq {
+				acc := cbv
+				for k := range b.DConv {
+					src := t - (b.DConv - 1) + k
+					if src >= 0 {
+						acc += cwrow[k] * xBC[src][c]
+					}
+				}
+				xc[t][c] = acc // raw conv acc; silu applied vectorized per token row below
+			}
 		}
-	}
+	})
 	// silu(acc)=acc·σ(acc): vectorize σ (the exp) per TOKEN ROW ([conv_dim]-length) — the
 	// same grouping the single-token step uses, so forward's rows bit-match it (the quant
 	// decode-vs-forward test is bit-exact).
-	sigRow := make([]float64, b.ConvDim)
-	for t := range seq {
-		simd.SigmoidF64(sigRow, xc[t])
-		for c := range b.ConvDim {
-			xc[t][c] *= sigRow[c]
+	// Token rows are independent (row t reads/writes only xc[t]); parallelize over t with a
+	// per-worker sigRow. Bit-identical — the same per-row SigmoidF64 grouping as serial.
+	parallelChunks(seq, seq*b.ConvDim, func(tlo, thi int) {
+		sigRow := make([]float64, b.ConvDim)
+		for t := tlo; t < thi; t++ {
+			simd.SigmoidF64(sigRow, xc[t])
+			for c := range b.ConvDim {
+				xc[t][c] *= sigRow[c]
+			}
 		}
-	}
+	})
 
 	// Per-head SSD scan — the float mixer's step 4 verbatim, with A read
 	// directly from the stored −exp(A_log) (no re-exponentiation).
@@ -299,41 +338,48 @@ func (b *QuantMamba2Mixer) forward(ctx *backend.Context, u *tensor.Tensor) (*ten
 	// nn.SSDRecurrent (~1300 allocs / tens of MB per mixer); the Δ-scaled value row is
 	// hoisted once per timestep (not re-formed inside the N loop). Forward is thus
 	// bit-identical to the single-token step (TestQuantMamba2DecodeMatchesForward is exact).
-	hst := make([]float64, b.N*b.HeadDim) // per-head [N, head_dim] state, reused
-	xrow := make([]float64, b.HeadDim)    // Δ-scaled value row, hoisted out of the i loop
-	for h := range b.NumHeads {
-		g := h / headsPerGroup
-		A := b.A.AtF64(h)
-		Dh := b.D.AtF64(h)
-		dtB := b.DtBias.AtF64(h)
-		hOff := h * b.HeadDim
-		bOff := b.Intermediate + g*b.N
-		cOff := b.Intermediate + gN + g*b.N
-		for i := range hst {
-			hst[i] = 0
-		}
-		for t := range seq {
-			delta := softplus(dt[t][h] + dtB)
-			at := math.Exp(delta * A)
-			for j := range b.HeadDim {
-				xrow[j] = xc[t][hOff+j] * delta
+	// Heads are INDEPENDENT — head h reads only its own A/D/DtBias and writes only the disjoint
+	// y[·][hOff:hOff+HeadDim] band — so the SSD scan parallelizes over heads. Each worker owns its
+	// hst/xrow scratch (sharing them would race), leaving the recurrence per head byte-for-byte
+	// unchanged: bit-identical to the serial scan (TestQuantMamba2DecodeMatchesForward stays exact).
+	// Gated on total work so single-token decode (seq=1) stays serial and pays no goroutine cost.
+	parallelChunks(b.NumHeads, seq*b.N*b.HeadDim, func(hlo, hhi int) {
+		hst := make([]float64, b.N*b.HeadDim) // per-head [N, head_dim] state, reused across this worker's heads
+		xrow := make([]float64, b.HeadDim)    // Δ-scaled value row, hoisted out of the i loop
+		for h := hlo; h < hhi; h++ {
+			g := h / headsPerGroup
+			A := b.A.AtF64(h)
+			Dh := b.D.AtF64(h)
+			dtB := b.DtBias.AtF64(h)
+			hOff := h * b.HeadDim
+			bOff := b.Intermediate + g*b.N
+			cOff := b.Intermediate + gN + g*b.N
+			for i := range hst {
+				hst[i] = 0
 			}
-			for i := range b.N {
-				bi := xc[t][bOff+i]
-				hb := hst[i*b.HeadDim:]
+			for t := range seq {
+				delta := softplus(dt[t][h] + dtB)
+				at := math.Exp(delta * A)
 				for j := range b.HeadDim {
-					hb[j] = at*hb[j] + bi*xrow[j]
+					xrow[j] = xc[t][hOff+j] * delta
 				}
-			}
-			for j := range b.HeadDim {
-				var s float64
 				for i := range b.N {
-					s += xc[t][cOff+i] * hst[i*b.HeadDim+j]
+					bi := xc[t][bOff+i]
+					hb := hst[i*b.HeadDim:]
+					for j := range b.HeadDim {
+						hb[j] = at*hb[j] + bi*xrow[j]
+					}
 				}
-				y[t][hOff+j] = s + Dh*xc[t][hOff+j]
+				for j := range b.HeadDim {
+					var s float64
+					for i := range b.N {
+						s += xc[t][cOff+i] * hst[i*b.HeadDim+j]
+					}
+					y[t][hOff+j] = s + Dh*xc[t][hOff+j]
+				}
 			}
 		}
-	}
+	})
 
 	// Gated RMSNorm over the full intermediate width: norm(y · SiLU(z)) — the
 	// transformers semantics the float mixer implements (see [Mamba2FromGGUF]
@@ -342,21 +388,25 @@ func (b *QuantMamba2Mixer) forward(ctx *backend.Context, u *tensor.Tensor) (*ten
 	yT := tensor.New(tensor.F32, tensor.Shape{seq, b.Intermediate})
 	// silu(z)=z·σ(z): vectorize σ over the contiguous z row (same [intermediate]-length
 	// grouping the step's gate uses, so rows bit-match). sigZ/gated hoist out of the loop.
-	sigZ := make([]float64, b.Intermediate)
-	gated := make([]float64, b.Intermediate)
-	for t := range seq {
-		simd.SigmoidF64(sigZ, z[t])
-		var variance float64
-		for o := range b.Intermediate {
-			gated[o] = y[t][o] * z[t][o] * sigZ[o]
-			variance += gated[o] * gated[o]
+	// Each token's gated-RMSNorm row is independent (reads y[t]/z[t], writes yT row t); parallelize
+	// over t with per-worker sigZ/gated. Bit-identical — per-row order and reduction unchanged.
+	parallelChunks(seq, seq*b.Intermediate, func(tlo, thi int) {
+		sigZ := make([]float64, b.Intermediate)
+		gated := make([]float64, b.Intermediate)
+		for t := tlo; t < thi; t++ {
+			simd.SigmoidF64(sigZ, z[t])
+			var variance float64
+			for o := range b.Intermediate {
+				gated[o] = y[t][o] * z[t][o] * sigZ[o]
+				variance += gated[o] * gated[o]
+			}
+			variance /= float64(b.Intermediate)
+			inv := 1.0 / math.Sqrt(variance+b.Eps)
+			for o := range b.Intermediate {
+				yT.SetF64(b.NormW.AtF64(o)*gated[o]*inv, t, o)
+			}
 		}
-		variance /= float64(b.Intermediate)
-		inv := 1.0 / math.Sqrt(variance+b.Eps)
-		for o := range b.Intermediate {
-			yT.SetF64(b.NormW.AtF64(o)*gated[o]*inv, t, o)
-		}
-	}
+	})
 	return b.OutProj.Forward(ctx, yT)
 }
 
