@@ -238,3 +238,68 @@ captured from pre-change sources for both retention functions and for MoBA.
 STILL OPEN: 120 candidates tree-wide, unswept outside nn. The AtF64 fallback arms
 (retention.go:238, nsa.go attendMask's) are deliberately left — dead whenever the F64 fast
 path applies.
+
+## T-01KYQ8ZZQ4EAH85BS7XR7DMNGA Fused typed fast path for NeuralMemory.Scan linear memory — 24.5k allocs per forward
+kind: task
+state: draft
+created: 2026-07-29
+
+GOAL: give NeuralMemory.Scan a fused typed fast path for the LINEAR memory variant
+(nn/titans.go, PS4011). The benchmark now exists and quantifies the prize.
+
+MEASURED OVERHEAD (nn/titans_bench_test.go, M2 Pro darwin/arm64):
+  BenchmarkTitansMemLinear_seq128  11.4ms  39,735,661 B/op  24,527 allocs/op
+  BenchmarkTitansMemLinear_seq256  17.2ms  79,526,304 B/op  48,848 allocs/op
+  BenchmarkTitansMemDeep_seq128    17.4ms  82,782,554 B/op  41,928 allocs/op
+That is roughly 191 allocations and 310KB per TIMESTEP for a recurrence whose real work is
+a few 64x64 matrix-vector products — about 0.2 GFLOP/s. The per-step dispatch issues six row
+slices, three transposes, two matmuls, an outer product and the momentum/forget arithmetic,
+each materializing a tensor. This is the single largest dispatch-overhead site found outside
+backend/.
+
+THE RECURRENCE (linear variant), in dispatch order, all ops separately rounded:
+  pred = MatMul(mem, ktT)        [D,1]
+  e    = Sub(pred, vtT); e2 = Add(e, e)
+  grad = MatMul(e2, kt)          [D,1]x[1,D] -> [D,D] outer product
+  inc  = Mul(grad, theta_t)
+  S    = Neg(inc) on the first step, else Sub(Mul(S, eta_t), inc)
+  mem  = Add(Mul(mem, 1-alpha_t), S)
+  out_t = Transpose(MatMul(mem, qtT))
+
+STATE OF THE ATTEMPT — a fused implementation was written and REVERTED because it is not
+bit-identical, and an unverified dual path is exactly what PS6004 exists to prevent. What
+was established, which should save the next attempt most of the work:
+
+- The divergence is LOCALIZED. seq=1 is bit-exact at dim 3, 4 and 8. seq>=2 is bit-exact at
+  dim 1 and dim 2, and diverges at dim 3 by one ulp. So the fault needs BOTH a second
+  timestep (the S-is-non-nil momentum branch) AND a reduction of length >= 3. A difference
+  in the memory matrix after t=0 that is invisible in that step's output dot is the leading
+  hypothesis.
+- It is NOT the backend GEMM's accumulation order. The failure reproduces with
+  backend.Reference() forced on both paths, and ref's matmulKernel is a plain ascending-p
+  dot; hand-tracing it for [D,D]x[D,1], [D,1]x[1,D] and the transposed operands gives
+  exactly the ascending order the fused code used.
+- It is NOT the retrieve or predict dot. Pinning those products against FMA
+  (float64(a*b)) made t=0 wrong, which proves the backend contracts there and the plain
+  `acc += a*b` form was already correct.
+- The elementwise products WERE pinned per NUM-FUSED-PATH-FMA-001, since the dispatch path
+  rounds between each backend op.
+
+NEXT STEP: instrument both paths to dump the memory matrix after t=0 for seq=2 dim=3 and
+diff element by element. That isolates whether the error is in the outer product, the
+momentum branch, or the forget-write, rather than continuing to reason about it. Do not skip
+this — three rounds of careful reading failed to find it, and the localization above is what
+makes the dump cheap to interpret.
+
+VERIFY:
+- A parity test in the shape of nn/gla_fused_parity_test.go: fused (backend.NewContext()) vs
+  dispatch (autograd.NewTape().Context()), compared on raw float64 bits, over dims below, at
+  and above 4 and sequences >= 2 so the momentum branch runs both ways.
+- The DEEP variant must be untouched and must not be routed into the linear kernel; name
+  LinearMem in the guard rather than hiding it behind a dispatch switch, so PS6003 can still
+  see which family member is uncovered.
+- Report allocs/B per op beside ns/op; the allocation collapse is the headline here, not just
+  wall clock.
+
+SCOPE: nn/titans.go only. The deep variant (two weight matrices plus a sigmoid) is a separate
+kernel and a separate task.
