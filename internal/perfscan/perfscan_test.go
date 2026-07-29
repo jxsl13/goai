@@ -3069,3 +3069,60 @@ func F(x *T, idx []int) float64 {
 		t.Fatalf("outside a loop, want 0 spread-accessor-in-loop, got %d", got)
 	}
 }
+
+// PS4009: fires on the transposed gram M[k][i]·M[k][j] (k = row/reduction index → column-stride).
+func TestDetectPS4009_TransposedGram(t *testing.T) {
+	src := `package p
+func rgram(gm, r [][]float64, m, n int, b2 float64) {
+	for i := range n {
+		for j := i; j < n; j++ {
+			var acc float64
+			for k := range m {
+				acc += gm[k][i] * gm[k][j]
+			}
+			r[i][j] = b2*r[i][j] + (1-b2)*acc
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src))["transposed-gram-colstride"]; got != 1 {
+		t.Fatalf("want 1 transposed-gram-colstride, got %d", got)
+	}
+}
+
+// Must stay SILENT on the cache-friendly L-gram M[i][k]·M[j][k] (k = inner/contiguous index).
+func TestDetectPS4009_SilentOnContiguousGram(t *testing.T) {
+	src := `package p
+func lgram(gm, l [][]float64, m, n int, b2 float64) {
+	for i := range m {
+		for j := i; j < m; j++ {
+			var acc float64
+			for k := range n {
+				acc += gm[i][k] * gm[j][k]
+			}
+			l[i][j] = b2*l[i][j] + (1-b2)*acc
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src))["transposed-gram-colstride"]; got != 0 {
+		t.Fatalf("want 0 (contiguous gram), got %d", got)
+	}
+}
+
+// Must stay SILENT on matmul a[i][k]·b[k][j] — different bases, not a symmetric gram.
+func TestDetectPS4009_SilentOnMatmul(t *testing.T) {
+	src := `package p
+func mm(a, b, c [][]float64, m, n, k int) {
+	for i := range m {
+		for j := range n {
+			var acc float64
+			for kk := range k {
+				acc += a[i][kk] * b[kk][j]
+			}
+			c[i][j] = acc
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src))["transposed-gram-colstride"]; got != 0 {
+		t.Fatalf("want 0 (matmul), got %d", got)
+	}
+}
