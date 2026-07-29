@@ -611,7 +611,15 @@ func dequantQ8_0(shape tensor.Shape, raw []byte) (*tensor.Tensor, error) {
 
 // dequantQ8_0Into is dequantQ8_0 writing into a caller-provided dst — lets QMatMul
 // reuse one row buffer across all weight rows. Byte-for-byte the tensor form.
+// dequantQ8Into0, when non-nil (amd64+simd), does the Q8_0 dequant with an AVX2
+// int8→float kernel (bit-exact: same d·float32(int8(q)) per element). Nil → scalar.
+var dequantQ8Into0 func(dst []float32, raw []byte)
+
 func dequantQ8_0Into(dst []float32, raw []byte) {
+	if dequantQ8Into0 != nil {
+		dequantQ8Into0(dst, raw)
+		return
+	}
 	for b := 0; b*blockElems < len(dst); b++ {
 		blk := raw[b*34 : b*34+34]
 		d := f16ToF32(binary.LittleEndian.Uint16(blk))
