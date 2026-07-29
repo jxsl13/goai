@@ -149,6 +149,31 @@ The transform and its correctness argument carry over unchanged, but only the F6
 benchmark and this campaign does not ship unmeasured changes. The F32 half of this task
 therefore remains open; it needs an F32 benchmark first, and the panel transpose from the
 previous commit is in the same position.
+- T-01KYQEBM14EPQT7N7PBMHS1C5N Restore DSA's total-order comparator and slices.SortFunc after main's concurrent rewrite: Both items shipped. DSAAttention seq512 19.40ms -> 18.77ms (1.033-1.036x), allocations
+1,547 -> 13, bytes 584KB -> 538KB; seq1024 3,083 -> 13 allocations. M2 Pro darwin/arm64,
+interleaved over 3 alternations, min of 3 runs of 5x per arm.
+
+The wall-clock win is small because the sort is not the dominant term — the O(seq^2*idxDim)
+indexer scoring is. The allocation collapse is the result worth having: sort.Slice reaches
+its swap through reflectlite.Swapper and allocates once per query.
+
+THE TIE-ORDER ITEM CHANGED NOTHING OBSERVABLE, and that is the honest finding rather than a
+disappointment. Hashing the output over a fully tied input — every indexer row identical —
+gives the same bits before and after: Go's pdqsort already happened to leave tied elements in
+index order. For the same reason a repeated-run determinism test passes on the OLD code,
+because pdqsort is deterministic; the order was stable, merely unspecified. So this is
+hardening against a Go version or sort implementation changing that incidental behavior, not
+the repair of an observed defect. The task body claimed it would be a behavior change; that
+prediction was wrong and is corrected here.
+
+METHOD NOTE: the determinism test was written expecting it to fail on the old code. It
+passed. Rather than delete it or claim it proved something, the check was repeated as a
+direct before/after hash on tied input, which is what actually answered the question. A test
+that passes on the code it was written to indict has not validated that code — it has failed
+to discriminate, and the difference matters.
+
+A benchmark for DSAAttention now exists (seq512 and seq1024); there was none, which is why
+these two changes could not simply be re-applied after the merge took main's version.
 
 ## PROC-BENCH-MINOFN-001
 IF an A/B arm is measured from a single benchmark run, THEN the result SHALL be re-measured as the minimum of at least 3 runs per arm before it is reported; single samples inverted 2 verdicts in one session.
