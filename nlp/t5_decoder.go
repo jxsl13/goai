@@ -114,7 +114,7 @@ func (d *T5Decoder) Decode(ctx *backend.Context, encoderOut *tensor.Tensor, toke
 		if attn, err = exec1(ctx, backend.OpMatMul, nil, attn, b.SWo); err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, attn); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, attn); err != nil {
 			return nil, err
 		}
 		// cross-attention over the encoder output
@@ -140,7 +140,7 @@ func (d *T5Decoder) Decode(ctx *backend.Context, encoderOut *tensor.Tensor, toke
 		if cattn, err = exec1(ctx, backend.OpMatMul, nil, cattn, b.CWo); err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, cattn); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, cattn); err != nil {
 			return nil, err
 		}
 		// FFN
@@ -160,7 +160,7 @@ func (d *T5Decoder) Decode(ctx *backend.Context, encoderOut *tensor.Tensor, toke
 			if err != nil {
 				return nil, err
 			}
-			if ff, err = exec1(ctx, backend.OpMul, nil, g, u); err != nil {
+			if ff, err = exec2(ctx, backend.OpMul, nil, g, u); err != nil {
 				return nil, err
 			}
 		} else {
@@ -174,7 +174,7 @@ func (d *T5Decoder) Decode(ctx *backend.Context, encoderOut *tensor.Tensor, toke
 		if ff, err = exec1(ctx, backend.OpMatMul, nil, ff, b.WOut); err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, ff); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, ff); err != nil {
 			return nil, err
 		}
 	}
@@ -508,7 +508,7 @@ func (d *T5Decoder) DecodeStep(ctx *backend.Context, cache *T5DecoderCache, enco
 		if attn, err = exec1(ctx, backend.OpMatMul, nil, attn, b.SWo); err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, attn); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, attn); err != nil {
 			return nil, err
 		}
 		// cross-attention; project the (fixed) encoder K/V once
@@ -534,7 +534,7 @@ func (d *T5Decoder) DecodeStep(ctx *backend.Context, cache *T5DecoderCache, enco
 		if cattn, err = exec1(ctx, backend.OpMatMul, nil, cattn, b.CWo); err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, cattn); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, cattn); err != nil {
 			return nil, err
 		}
 		// FFN
@@ -554,7 +554,7 @@ func (d *T5Decoder) DecodeStep(ctx *backend.Context, cache *T5DecoderCache, enco
 			if err != nil {
 				return nil, err
 			}
-			if ff, err = exec1(ctx, backend.OpMul, nil, g, u); err != nil {
+			if ff, err = exec2(ctx, backend.OpMul, nil, g, u); err != nil {
 				return nil, err
 			}
 		} else {
@@ -568,7 +568,7 @@ func (d *T5Decoder) DecodeStep(ctx *backend.Context, cache *T5DecoderCache, enco
 		if ff, err = exec1(ctx, backend.OpMatMul, nil, ff, b.WOut); err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, ff); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, ff); err != nil {
 			return nil, err
 		}
 	}

@@ -140,7 +140,7 @@ func (b *QuantBert) Forward(ctx *backend.Context, tokens, segments []int) (*tens
 		if h, err = quantProjBias(ctx, h, l.wo, l.bo); err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, h); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, h); err != nil {
 			return nil, err
 		}
 		if x, err = l.attnLN.Forward(ctx, x); err != nil {
@@ -156,7 +156,7 @@ func (b *QuantBert) Forward(ctx *backend.Context, tokens, segments []int) (*tens
 		if h, err = quantProjBias(ctx, h, l.w2, l.b2); err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, h); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, h); err != nil {
 			return nil, err
 		}
 		if x, err = l.ffnLN.Forward(ctx, x); err != nil {
@@ -207,7 +207,7 @@ func (b *QuantBert) embed(ctx *backend.Context, tokens, segments []int) (*tensor
 	if err != nil {
 		return nil, err
 	}
-	x, err := exec1(ctx, backend.OpAdd, nil, et, ep)
+	x, err := exec2(ctx, backend.OpAdd, nil, et, ep)
 	if err != nil {
 		return nil, err
 	}
@@ -222,7 +222,7 @@ func (b *QuantBert) embed(ctx *backend.Context, tokens, segments []int) (*tensor
 		if err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, es); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, es); err != nil {
 			return nil, err
 		}
 	}

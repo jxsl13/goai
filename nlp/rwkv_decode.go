@@ -108,11 +108,11 @@ func rwkvShiftRows(prev []float64, xn *tensor.Tensor) *tensor.Tensor {
 // sequence of nn.RWKVBlock's unexported mix, dispatched through the same
 // backend kernels (they are elementwise, so batched rows equal stepwise rows).
 func rwkvMix(ctx *backend.Context, x, shift, mu *tensor.Tensor) (*tensor.Tensor, error) {
-	d, err := exec1(ctx, backend.OpSub, nil, x, shift)
+	d, err := exec2(ctx, backend.OpSub, nil, x, shift)
 	if err != nil {
 		return nil, err
 	}
-	md, err := exec1(ctx, backend.OpMul, nil, d, mu)
+	md, err := exec2(ctx, backend.OpMul, nil, d, mu)
 	if err != nil {
 		return nil, err
 	}
@@ -190,7 +190,7 @@ func rwkvBlockPrefill(ctx *backend.Context, b *nn.RWKVBlock, st *nn.RWKVState, x
 			st.PP[c] = q
 		}
 	}
-	gated, err := exec1(ctx, backend.OpMul, nil, r, wkv)
+	gated, err := exec2(ctx, backend.OpMul, nil, r, wkv)
 	if err != nil {
 		return nil, err
 	}
@@ -231,14 +231,14 @@ func rwkvBlockPrefill(ctx *backend.Context, b *nn.RWKVBlock, st *nn.RWKVState, x
 	if ck, err = exec1(ctx, backend.OpReLU, nil, ck); err != nil {
 		return nil, err
 	}
-	if ck, err = exec1(ctx, backend.OpMul, nil, ck, ck); err != nil { // squared ReLU
+	if ck, err = exec2(ctx, backend.OpMul, nil, ck, ck); err != nil { // squared ReLU
 		return nil, err
 	}
 	cv, err := b.CWv.Forward(ctx, ck)
 	if err != nil {
 		return nil, err
 	}
-	if cv, err = exec1(ctx, backend.OpMul, nil, cr, cv); err != nil {
+	if cv, err = exec2(ctx, backend.OpMul, nil, cr, cv); err != nil {
 		return nil, err
 	}
 	copy(st.PrevCM, rows2D(yn)[T-1])

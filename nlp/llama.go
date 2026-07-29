@@ -243,7 +243,7 @@ func scaleScalar(ctx *backend.Context, x *tensor.Tensor, s float64) (*tensor.Ten
 	// mismatch. SetF64 casts into the storage dtype, so f64 paths are unchanged.
 	sc := tensor.New(x.Dtype(), tensor.Shape{})
 	sc.SetF64(s)
-	return exec1(ctx, backend.OpMul, nil, x, sc)
+	return exec2(ctx, backend.OpMul, nil, x, sc)
 }
 
 // divLogits divides logits by the Granite logits_scaling (multiply by 1/logitsScale),
@@ -394,7 +394,7 @@ func (m *Llama) forwardBlock(ctx *backend.Context, x *tensor.Tensor, layer int, 
 	if o, err = scaleScalar(layerCtx, o, cfg.ResidualMult); err != nil {
 		return nil, err
 	}
-	if x, err = exec1(layerCtx, backend.OpAdd, nil, x, o); err != nil {
+	if x, err = exec2(layerCtx, backend.OpAdd, nil, x, o); err != nil {
 		return nil, err
 	}
 
@@ -411,7 +411,7 @@ func (m *Llama) forwardBlock(ctx *backend.Context, x *tensor.Tensor, layer int, 
 	if ff, err = scaleScalar(layerCtx, ff, cfg.ResidualMult); err != nil {
 		return nil, err
 	}
-	return exec1(layerCtx, backend.OpAdd, nil, x, ff)
+	return exec2(layerCtx, backend.OpAdd, nil, x, ff)
 }
 
 // project computes x·W (a bias-free linear layer).
@@ -425,7 +425,7 @@ func addBiasIf(ctx *backend.Context, x, bias *tensor.Tensor) (*tensor.Tensor, er
 	if bias == nil {
 		return x, nil
 	}
-	return exec1(ctx, backend.OpAddBias, nil, x, bias)
+	return exec2(ctx, backend.OpAddBias, nil, x, bias)
 }
 
 // applyQKNorm applies a per-head RMSNorm to a projected q or k tensor x [seq, heads·headDim]

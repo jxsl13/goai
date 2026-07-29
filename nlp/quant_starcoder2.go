@@ -194,7 +194,7 @@ func (m *QuantStarCoder2) Forward(ctx *backend.Context, tokens []int) (*tensor.T
 		if a, err = quantProjBias(ctx, a, b.Wo, b.Bo); err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, a); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, a); err != nil {
 			return nil, err
 		}
 		// MLP sublayer: post_attention_layernorm → biased GELU 2-layer → residual add.
@@ -206,7 +206,7 @@ func (m *QuantStarCoder2) Forward(ctx *backend.Context, tokens []int) (*tensor.T
 		if err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, f); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, f); err != nil {
 			return nil, err
 		}
 	}
@@ -305,7 +305,7 @@ func (m *QuantStarCoder2) DecodeStep(ctx *backend.Context, cache *StarCoder2Cach
 		if a, err = quantProjBias(ctx, a, b.Wo, b.Bo); err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, a); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, a); err != nil {
 			return nil, err
 		}
 		xn2, err := b.PostAttnNorm.Forward(ctx, x)
@@ -316,7 +316,7 @@ func (m *QuantStarCoder2) DecodeStep(ctx *backend.Context, cache *StarCoder2Cach
 		if err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, f); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, f); err != nil {
 			return nil, err
 		}
 	}

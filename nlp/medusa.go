@@ -140,7 +140,7 @@ func (m *MedusaHeads) Params() []*tensor.Tensor { return m.W }
 func (m *MedusaHeads) Logits(ctx *backend.Context, hidden *tensor.Tensor) ([]*tensor.Tensor, error) {
 	out := make([]*tensor.Tensor, len(m.W))
 	for h, w := range m.W {
-		l, err := exec1(ctx, backend.OpMatMul, nil, hidden, w)
+		l, err := exec2(ctx, backend.OpMatMul, nil, hidden, w)
 		if err != nil {
 			return nil, err
 		}

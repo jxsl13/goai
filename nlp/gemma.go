@@ -118,7 +118,7 @@ func (m *Gemma) forwardCapture(ctx *backend.Context, tokens []int, capture func(
 	// into the table — it is a runtime scalar broadcast on the residual stream only.
 	scale := tensor.New(tensor.F64, tensor.Shape{})
 	scale.Storage().F64()[0] = math.Sqrt(float64(m.Config.Dim))
-	if x, err = exec1(ctx, backend.OpMul, nil, x, scale); err != nil {
+	if x, err = exec2(ctx, backend.OpMul, nil, x, scale); err != nil {
 		return nil, err
 	}
 
@@ -167,7 +167,7 @@ func (m *Gemma) forwardCapture(ctx *backend.Context, tokens []int, capture func(
 		if err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, o); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, o); err != nil {
 			return nil, err
 		}
 		// FFN sublayer (GeGLU)
@@ -179,7 +179,7 @@ func (m *Gemma) forwardCapture(ctx *backend.Context, tokens []int, capture func(
 		if err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, ff); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, ff); err != nil {
 			return nil, err
 		}
 	}

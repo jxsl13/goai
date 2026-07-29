@@ -124,7 +124,7 @@ func (g *GPT) ForwardEarlyExit(ctx *backend.Context, tokens []int, layers []int)
 		if h, err = b.Attn.Forward(ctx, h); err != nil {
 			return nil, nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, h); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, h); err != nil {
 			return nil, nil, err
 		}
 		if h, err = b.LN2.Forward(ctx, x); err != nil {
@@ -145,7 +145,7 @@ func (g *GPT) ForwardEarlyExit(ctx *backend.Context, tokens []int, layers []int)
 		if h, err = exec1(ctx, backend.OpAddBias, nil, h, b.B2); err != nil {
 			return nil, nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, h); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, h); err != nil {
 			return nil, nil, err
 		}
 		if next < len(layers) && layers[next] == bi {

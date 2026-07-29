@@ -167,7 +167,7 @@ func (m *Qwen2MoE) forwardCapture(ctx *backend.Context, tokens []int, capture fu
 		if err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, o); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, o); err != nil {
 			return nil, err
 		}
 		// sparse-MoE + shared-expert FFN sublayer
@@ -179,7 +179,7 @@ func (m *Qwen2MoE) forwardCapture(ctx *backend.Context, tokens []int, capture fu
 		if err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, ff); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, ff); err != nil {
 			return nil, err
 		}
 	}
@@ -225,11 +225,11 @@ func (m *Qwen2MoE) ffn(ctx *backend.Context, b *Qwen2MoeBlock, xf *tensor.Tensor
 	if err != nil {
 		return nil, err
 	}
-	sg, err := exec1(ctx, backend.OpMul, nil, shared, g) // [seq,dim] ⊙ [seq,1] → [seq,dim]
+	sg, err := exec2(ctx, backend.OpMul, nil, shared, g) // [seq,dim] ⊙ [seq,1] → [seq,dim]
 	if err != nil {
 		return nil, err
 	}
-	return exec1(ctx, backend.OpAdd, nil, sparse, sg)
+	return exec2(ctx, backend.OpAdd, nil, sparse, sg)
 }
 
 // Params returns every trainable tensor for optimizers: embeddings, per-block attention

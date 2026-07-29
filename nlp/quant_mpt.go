@@ -175,7 +175,7 @@ func (m *QuantMPT) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor, 
 		if a, err = b.Wo.Forward(ctx, a); err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, a); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, a); err != nil {
 			return nil, err
 		}
 		// MLP sublayer: norm_2 → bias-free GELU 2-layer → residual add.
@@ -187,7 +187,7 @@ func (m *QuantMPT) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor, 
 		if err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, f); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, f); err != nil {
 			return nil, err
 		}
 	}
@@ -273,7 +273,7 @@ func (m *QuantMPT) DecodeStep(ctx *backend.Context, cache *MPTCache, token, pos 
 		if a, err = b.Wo.Forward(ctx, a); err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, a); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, a); err != nil {
 			return nil, err
 		}
 		fn, err := b.Norm2.Forward(ctx, x)
@@ -284,7 +284,7 @@ func (m *QuantMPT) DecodeStep(ctx *backend.Context, cache *MPTCache, token, pos 
 		if err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, f); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, f); err != nil {
 			return nil, err
 		}
 	}

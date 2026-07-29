@@ -150,7 +150,7 @@ func (m *Gemma2) forwardCapture(ctx *backend.Context, tokens []int, capture func
 	// residual stream only (mirrors [Gemma.Forward]).
 	scale := tensor.New(tensor.F64, tensor.Shape{})
 	scale.Storage().F64()[0] = math.Sqrt(float64(m.Config.Dim))
-	if x, err = exec1(ctx, backend.OpMul, nil, x, scale); err != nil {
+	if x, err = exec2(ctx, backend.OpMul, nil, x, scale); err != nil {
 		return nil, err
 	}
 
@@ -172,7 +172,7 @@ func (m *Gemma2) forwardCapture(ctx *backend.Context, tokens []int, capture func
 		if a, err = b.PostAttnNorm.Forward(ctx, a); err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, a); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, a); err != nil {
 			return nil, err
 		}
 		// FFN sublayer: pre_feedforward_layernorm → GeGLU →
@@ -188,7 +188,7 @@ func (m *Gemma2) forwardCapture(ctx *backend.Context, tokens []int, capture func
 		if ff, err = b.PostFFNNorm.Forward(ctx, ff); err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, ff); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, ff); err != nil {
 			return nil, err
 		}
 	}
@@ -286,12 +286,12 @@ func (m *Gemma2) cappedAttention(ctx *backend.Context, b *Gemma2Block, xb *tenso
 		if err != nil {
 			return nil, err
 		}
-		scores, err := exec1(ctx, backend.OpMatMul, nil, qh, khT)
+		scores, err := exec2(ctx, backend.OpMatMul, nil, qh, khT)
 		if err != nil {
 			return nil, err
 		}
 		// scores·scale (query_pre_attn_scalar^-0.5)
-		if scores, err = exec1(ctx, backend.OpMul, nil, scores, scaleT); err != nil {
+		if scores, err = exec2(ctx, backend.OpMul, nil, scores, scaleT); err != nil {
 			return nil, err
 		}
 		// attention-logit soft-cap on the scaled scores, before the mask
@@ -301,14 +301,14 @@ func (m *Gemma2) cappedAttention(ctx *backend.Context, b *Gemma2Block, xb *tenso
 			}
 		}
 		// + causal mask, then softmax over keys (last axis)
-		if scores, err = exec1(ctx, backend.OpAdd, nil, scores, mask); err != nil {
+		if scores, err = exec2(ctx, backend.OpAdd, nil, scores, mask); err != nil {
 			return nil, err
 		}
 		probs, err := exec1(ctx, backend.OpSoftmax, nil, scores)
 		if err != nil {
 			return nil, err
 		}
-		oh, err := exec1(ctx, backend.OpMatMul, nil, probs, vh) // [seq,hd]
+		oh, err := exec2(ctx, backend.OpMatMul, nil, probs, vh) // [seq,hd]
 		if err != nil {
 			return nil, err
 		}

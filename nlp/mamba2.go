@@ -83,7 +83,7 @@ func (m *Mamba2) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor, er
 		if err != nil {
 			return nil, err
 		}
-		if h, err = exec1(ctx, backend.OpAdd, nil, h, mix); err != nil {
+		if h, err = exec2(ctx, backend.OpAdd, nil, h, mix); err != nil {
 			return nil, err
 		}
 	}

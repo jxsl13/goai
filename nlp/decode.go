@@ -204,7 +204,7 @@ func (g *GPT) DecodeStep(ctx *backend.Context, cache *KVCache, token, pos int) (
 			return nil, err
 		}
 		cache.K[l], cache.V[l] = kNew, vNew
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, attnOut); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, attnOut); err != nil {
 			return nil, err
 		}
 		h, err = b.LN2.Forward(ctx, x)
@@ -226,7 +226,7 @@ func (g *GPT) DecodeStep(ctx *backend.Context, cache *KVCache, token, pos int) (
 		if h, err = exec1(ctx, backend.OpAddBias, nil, h, b.B2); err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, h); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, h); err != nil {
 			return nil, err
 		}
 	}

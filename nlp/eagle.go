@@ -164,7 +164,7 @@ func (e *EagleHead) Predict(ctx *backend.Context, feats, embs *tensor.Tensor) (*
 	if h, err = exec1(ctx, backend.OpAddBias, nil, h, e.B2); err != nil {
 		return nil, err
 	}
-	if z, err = exec1(ctx, backend.OpAdd, nil, z, h); err != nil {
+	if z, err = exec2(ctx, backend.OpAdd, nil, z, h); err != nil {
 		return nil, err
 	}
 	// final LayerNorm onto the base's (post-LNf) feature scale
@@ -243,11 +243,11 @@ func EagleLoss(ctx *backend.Context, head *EagleHead, base *GPT, tokens []int, h
 	}
 	w := tensor.New(lossT.Dtype(), tensor.Shape{})
 	w.SetF64(eagleCEWeight)
-	lossT, err = exec1(ctx, backend.OpMul, nil, lossT, w)
+	lossT, err = exec2(ctx, backend.OpMul, nil, lossT, w)
 	if err != nil {
 		return nil, err
 	}
-	return exec1(ctx, backend.OpAdd, nil, lossF, lossT)
+	return exec2(ctx, backend.OpAdd, nil, lossF, lossT)
 }
 
 // eagleSmoothL1 is the EAGLE feature-regression term (paper §4.1), averaged
@@ -260,11 +260,11 @@ func EagleLoss(ctx *backend.Context, head *EagleHead, base *GPT, tokens []int, h
 // differentiable ops, so the head's ordinary first-order tape receives the
 // exact Smooth-L1 gradient without a new backend kernel.
 func eagleSmoothL1(ctx *backend.Context, pred, target *tensor.Tensor) (*tensor.Tensor, error) {
-	d, err := exec1(ctx, backend.OpSub, nil, pred, target)
+	d, err := exec2(ctx, backend.OpSub, nil, pred, target)
 	if err != nil {
 		return nil, err
 	}
-	d2, err := exec1(ctx, backend.OpMul, nil, d, d)
+	d2, err := exec2(ctx, backend.OpMul, nil, d, d)
 	if err != nil {
 		return nil, err
 	}
@@ -278,7 +278,7 @@ func eagleSmoothL1(ctx *backend.Context, pred, target *tensor.Tensor) (*tensor.T
 	// narrows to exactly 1 in F32/F64/F16/BF16. eagleSmoothL1 runs on the EAGLE training
 	// forward for every step, so the strided per-element fill was a real cost.
 	one := tensor.Ones(pred.Dtype(), pred.Shape())
-	excess, err := exec1(ctx, backend.OpSub, nil, a, one)
+	excess, err := exec2(ctx, backend.OpSub, nil, a, one)
 	if err != nil {
 		return nil, err
 	}
@@ -286,11 +286,11 @@ func eagleSmoothL1(ctx *backend.Context, pred, target *tensor.Tensor) (*tensor.T
 	if err != nil {
 		return nil, err
 	}
-	excess2, err := exec1(ctx, backend.OpMul, nil, excess, excess)
+	excess2, err := exec2(ctx, backend.OpMul, nil, excess, excess)
 	if err != nil {
 		return nil, err
 	}
-	smooth, err := exec1(ctx, backend.OpSub, nil, d2, excess2)
+	smooth, err := exec2(ctx, backend.OpSub, nil, d2, excess2)
 	if err != nil {
 		return nil, err
 	}
@@ -306,7 +306,7 @@ func eagleSmoothL1(ctx *backend.Context, pred, target *tensor.Tensor) (*tensor.T
 func eagleEmbed(ctx *backend.Context, table *tensor.Tensor, token int) (*tensor.Tensor, error) {
 	idx := tensor.New(table.Dtype(), tensor.Shape{1})
 	idx.SetF64(float64(token), 0)
-	return exec1(ctx, backend.OpEmbed, nil, table, idx)
+	return exec2(ctx, backend.OpEmbed, nil, table, idx)
 }
 
 // EagleGenerate generates up to maxNew tokens after prompt with EAGLE

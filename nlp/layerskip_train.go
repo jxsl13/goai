@@ -200,7 +200,7 @@ func (m *Llama) LayerSkipLoss(ctx *backend.Context, tokens []int, targets *tenso
 			total = loss
 			continue
 		}
-		if total, err = exec1(ctx, backend.OpAdd, nil, total, loss); err != nil {
+		if total, err = exec2(ctx, backend.OpAdd, nil, total, loss); err != nil {
 			return nil, err
 		}
 	}
@@ -216,5 +216,5 @@ func layerSkipScale(ctx *backend.Context, loss *tensor.Tensor, weight float64) (
 	}
 	scale := tensor.New(loss.Dtype(), tensor.Shape{})
 	scale.SetF64(weight)
-	return exec1(ctx, backend.OpMul, nil, loss, scale)
+	return exec2(ctx, backend.OpMul, nil, loss, scale)
 }

@@ -164,7 +164,7 @@ func (m *StableLM) hiddenCapture(ctx *backend.Context, x *tensor.Tensor, capture
 		if err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, a); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, a); err != nil {
 			return nil, err
 		}
 		xn2, err := b.PostAttnNorm.Forward(ctx, x)
@@ -175,7 +175,7 @@ func (m *StableLM) hiddenCapture(ctx *backend.Context, x *tensor.Tensor, capture
 		if err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, f); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, f); err != nil {
 			return nil, err
 		}
 	}

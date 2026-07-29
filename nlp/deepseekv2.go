@@ -174,7 +174,7 @@ func (m *DeepSeekV2) forwardWith(ctx *backend.Context, tokens []int, attnFn func
 		if err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, a); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, a); err != nil {
 			return nil, err
 		}
 		// FFN sublayer: post_attention_layernorm → (dense SwiGLU | DeepSeekMoE) → add residual.
@@ -191,7 +191,7 @@ func (m *DeepSeekV2) forwardWith(ctx *backend.Context, tokens []int, attnFn func
 		if err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, ff); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, ff); err != nil {
 			return nil, err
 		}
 	}
@@ -323,21 +323,21 @@ func (m *DeepSeekV2) mlaAttention(ctx *backend.Context, b *DeepSeekV2Block, xb *
 		if err != nil {
 			return nil, err
 		}
-		scores, err := exec1(ctx, backend.OpMatMul, nil, queryH, keyHT)
+		scores, err := exec2(ctx, backend.OpMatMul, nil, queryH, keyHT)
 		if err != nil {
 			return nil, err
 		}
-		if scores, err = exec1(ctx, backend.OpMul, nil, scores, scaleT); err != nil {
+		if scores, err = exec2(ctx, backend.OpMul, nil, scores, scaleT); err != nil {
 			return nil, err
 		}
-		if scores, err = exec1(ctx, backend.OpAdd, nil, scores, mask); err != nil {
+		if scores, err = exec2(ctx, backend.OpAdd, nil, scores, mask); err != nil {
 			return nil, err
 		}
 		probs, err := exec1(ctx, backend.OpSoftmax, nil, scores)
 		if err != nil {
 			return nil, err
 		}
-		oh, err := exec1(ctx, backend.OpMatMul, nil, probs, valueH) // [seq, VHead]
+		oh, err := exec2(ctx, backend.OpMatMul, nil, probs, valueH) // [seq, VHead]
 		if err != nil {
 			return nil, err
 		}
@@ -413,7 +413,7 @@ func (m *DeepSeekV2) moeFFN(ctx *backend.Context, moe *nn.DeepSeekMoE, x *tensor
 		}
 		if y == nil {
 			y = term
-		} else if y, err = exec1(ctx, backend.OpAdd, nil, y, term); err != nil {
+		} else if y, err = exec2(ctx, backend.OpAdd, nil, y, term); err != nil {
 			return nil, err
 		}
 	}
@@ -424,7 +424,7 @@ func (m *DeepSeekV2) moeFFN(ctx *backend.Context, moe *nn.DeepSeekMoE, x *tensor
 		if err != nil {
 			return nil, err
 		}
-		if y, err = exec1(ctx, backend.OpAdd, nil, y, sh); err != nil {
+		if y, err = exec2(ctx, backend.OpAdd, nil, y, sh); err != nil {
 			return nil, err
 		}
 	}

@@ -167,7 +167,7 @@ func (m *Nemotron) hiddenCapture(ctx *backend.Context, x *tensor.Tensor, capture
 		if err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, a); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, a); err != nil {
 			return nil, err
 		}
 		xn2, err := b.PostAttnNorm.Forward(ctx, x)
@@ -178,7 +178,7 @@ func (m *Nemotron) hiddenCapture(ctx *backend.Context, x *tensor.Tensor, capture
 		if err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, f); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, f); err != nil {
 			return nil, err
 		}
 	}
@@ -197,7 +197,7 @@ func (b *NemotronBlock) mlp(ctx *backend.Context, xn *tensor.Tensor) (*tensor.Te
 	if err != nil {
 		return nil, err
 	}
-	r2, err := exec1(ctx, backend.OpMul, nil, r, r)
+	r2, err := exec2(ctx, backend.OpMul, nil, r, r)
 	if err != nil {
 		return nil, err
 	}

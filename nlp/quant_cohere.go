@@ -156,7 +156,7 @@ func (m *QuantCohere) scaleLogits(ctx *backend.Context, logits *tensor.Tensor) (
 	}
 	scale := tensor.New(tensor.F32, tensor.Shape{})
 	scale.Storage().F32()[0] = float32(s)
-	return exec1(ctx, backend.OpMul, nil, logits, scale)
+	return exec2(ctx, backend.OpMul, nil, logits, scale)
 }
 
 // Forward runs the quantized model on the token ids, returning logits [seq, vocab]
@@ -203,10 +203,10 @@ func (m *QuantCohere) Forward(ctx *backend.Context, tokens []int) (*tensor.Tenso
 		if err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, a); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, a); err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, f); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, f); err != nil {
 			return nil, err
 		}
 	}
@@ -336,10 +336,10 @@ func (m *QuantCohere) DecodeStep(ctx *backend.Context, cache *CohereCache, token
 			return nil, err
 		}
 		// Sum both sublayer outputs onto the raw residual — the float DecodeStep's order.
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, a); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, a); err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, f); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, f); err != nil {
 			return nil, err
 		}
 	}

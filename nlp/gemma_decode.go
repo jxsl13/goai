@@ -43,7 +43,7 @@ func (m *Gemma) embedOne(ctx *backend.Context, token int) (*tensor.Tensor, error
 	x := embedRow(m.TokEmb, token, d)
 	scale := tensor.New(tensor.F64, tensor.Shape{})
 	scale.Storage().F64()[0] = math.Sqrt(float64(d))
-	return exec1(ctx, backend.OpMul, nil, x, scale)
+	return exec2(ctx, backend.OpMul, nil, x, scale)
 }
 
 // DecodeStep advances the Gemma by one token using the KV-cache and returns the

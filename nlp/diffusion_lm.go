@@ -200,7 +200,7 @@ func (m *DiffusionLM) MaskedLoss(ctx *backend.Context, corrupted, original []int
 		idx.SetF64(float64(p), k)
 		targets.SetF64(float64(original[p]), k)
 	}
-	rows, err := exec1(ctx, backend.OpEmbed, nil, logits, idx)
+	rows, err := exec2(ctx, backend.OpEmbed, nil, logits, idx)
 	if err != nil {
 		return nil, err
 	}

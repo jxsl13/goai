@@ -78,7 +78,7 @@ func (g *QuantGeGLU) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Te
 	if err != nil {
 		return nil, err
 	}
-	h, err := exec1(ctx, backend.OpMul, nil, gate, up)
+	h, err := exec2(ctx, backend.OpMul, nil, gate, up)
 	if err != nil {
 		return nil, err
 	}
@@ -245,7 +245,7 @@ func (m *QuantGemma) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor
 		if err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, o); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, o); err != nil {
 			return nil, err
 		}
 		// FFN sublayer (GeGLU)
@@ -257,7 +257,7 @@ func (m *QuantGemma) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor
 		if err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, ff); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, ff); err != nil {
 			return nil, err
 		}
 	}
@@ -343,7 +343,7 @@ func (m *QuantGemma) DecodeStep(ctx *backend.Context, cache *GemmaCache, token, 
 		if err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, o); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, o); err != nil {
 			return nil, err
 		}
 		xf, err := b.FFNNorm.Forward(ctx, x)
@@ -354,7 +354,7 @@ func (m *QuantGemma) DecodeStep(ctx *backend.Context, cache *GemmaCache, token, 
 		if err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, ff); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, ff); err != nil {
 			return nil, err
 		}
 	}

@@ -144,7 +144,7 @@ func (m *OLMoE) hiddenCapture(ctx *backend.Context, x *tensor.Tensor, capture fu
 		if err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, a); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, a); err != nil {
 			return nil, err
 		}
 		// sparse-MoE FFN sublayer (pre-norm): x = x + moe(post_attention_layernorm(x))
@@ -162,7 +162,7 @@ func (m *OLMoE) hiddenCapture(ctx *backend.Context, x *tensor.Tensor, capture fu
 		if err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, ff); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, ff); err != nil {
 			return nil, err
 		}
 	}

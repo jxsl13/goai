@@ -154,7 +154,7 @@ func (m *JambaMixer) Forward(ctx *backend.Context, u *tensor.Tensor) (*tensor.Te
 	if err != nil {
 		return nil, err
 	}
-	if y, err = exec1(ctx, backend.OpMul, nil, y, gate); err != nil {
+	if y, err = exec2(ctx, backend.OpMul, nil, y, gate); err != nil {
 		return nil, err
 	}
 	return b.OutProj.Forward(ctx, y)
@@ -221,7 +221,7 @@ func (m *JambaMoE) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tens
 		}
 		if y == nil {
 			y = term
-		} else if y, err = exec1(ctx, backend.OpAdd, nil, y, term); err != nil {
+		} else if y, err = exec2(ctx, backend.OpAdd, nil, y, term); err != nil {
 			return nil, err
 		}
 	}
@@ -299,7 +299,7 @@ func (m *Jamba) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor, err
 				return nil, err
 			}
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, mix); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, mix); err != nil {
 			return nil, err
 		}
 		// FFN sublayer (sparse MoE or dense SwiGLU)
@@ -316,7 +316,7 @@ func (m *Jamba) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor, err
 		if err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, ff); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, ff); err != nil {
 			return nil, err
 		}
 	}

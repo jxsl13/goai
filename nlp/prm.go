@@ -263,7 +263,7 @@ func rewardLogits(ctx *backend.Context, g *GPT, bias *tensor.Tensor, tokens, pos
 	for k, p := range positions {
 		idx.SetF64(float64(p), k)
 	}
-	rows, err := exec1(ctx, backend.OpEmbed, nil, hidden, idx) // [n, Dim]
+	rows, err := exec2(ctx, backend.OpEmbed, nil, hidden, idx) // [n, Dim]
 	if err != nil {
 		return nil, err
 	}
@@ -271,7 +271,7 @@ func rewardLogits(ctx *backend.Context, g *GPT, bias *tensor.Tensor, tokens, pos
 	if err != nil {
 		return nil, err
 	}
-	return exec1(ctx, backend.OpAddBias, nil, z, bias)
+	return exec2(ctx, backend.OpAddBias, nil, z, bias)
 }
 
 // rewardBCE is the mean binary cross-entropy of score logits z [n,1] against
@@ -305,15 +305,15 @@ func rewardBCE(ctx *backend.Context, logits *tensor.Tensor, labels []float64) (*
 	if err != nil {
 		return nil, err
 	}
-	a, err := exec1(ctx, backend.OpMul, nil, pos, spNegZ)
+	a, err := exec2(ctx, backend.OpMul, nil, pos, spNegZ)
 	if err != nil {
 		return nil, err
 	}
-	b, err := exec1(ctx, backend.OpMul, nil, neg, spZ)
+	b, err := exec2(ctx, backend.OpMul, nil, neg, spZ)
 	if err != nil {
 		return nil, err
 	}
-	sum, err := exec1(ctx, backend.OpAdd, nil, a, b)
+	sum, err := exec2(ctx, backend.OpAdd, nil, a, b)
 	if err != nil {
 		return nil, err
 	}

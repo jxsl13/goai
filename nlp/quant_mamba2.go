@@ -240,7 +240,7 @@ func (m *QuantMamba2) Forward(ctx *backend.Context, tokens []int) (*tensor.Tenso
 		if err != nil {
 			return nil, err
 		}
-		if h, err = exec1(ctx, backend.OpAdd, nil, h, mix); err != nil {
+		if h, err = exec2(ctx, backend.OpAdd, nil, h, mix); err != nil {
 			return nil, err
 		}
 	}
@@ -572,7 +572,7 @@ func (m *QuantMamba2) DecodeStep(ctx *backend.Context, st *Mamba2DecodeState, to
 		if err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, mix); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, mix); err != nil {
 			return nil, err
 		}
 	}

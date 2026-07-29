@@ -252,7 +252,7 @@ func (m *QuantMamba) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor
 		if err != nil {
 			return nil, err
 		}
-		if h, err = exec1(ctx, backend.OpAdd, nil, h, mix); err != nil {
+		if h, err = exec2(ctx, backend.OpAdd, nil, h, mix); err != nil {
 			return nil, err
 		}
 	}
@@ -317,7 +317,7 @@ func (b *QuantMambaMixer) forward(ctx *backend.Context, u *tensor.Tensor) (*tens
 	if err != nil {
 		return nil, err
 	}
-	if y, err = exec1(ctx, backend.OpMul, nil, y, gate); err != nil {
+	if y, err = exec2(ctx, backend.OpMul, nil, y, gate); err != nil {
 		return nil, err
 	}
 	return b.OutProj.Forward(ctx, y)
@@ -446,7 +446,7 @@ func (b *QuantMambaMixer) step(ctx *backend.Context, ls *MambaLayerState, u *ten
 	if err != nil {
 		return nil, err
 	}
-	if y, err = exec1(ctx, backend.OpMul, nil, y, gate); err != nil {
+	if y, err = exec2(ctx, backend.OpMul, nil, y, gate); err != nil {
 		return nil, err
 	}
 	return b.OutProj.Forward(ctx, y)
@@ -477,7 +477,7 @@ func (m *QuantMamba) DecodeStep(ctx *backend.Context, st *MambaDecodeState, toke
 		if err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, mix); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, mix); err != nil {
 			return nil, err
 		}
 	}

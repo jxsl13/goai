@@ -217,7 +217,7 @@ func (g *GPT) Embed(ctx *backend.Context, tokens []int) (*tensor.Tensor, error) 
 	if err != nil {
 		return nil, err
 	}
-	return exec1(ctx, backend.OpAdd, nil, et, ep)
+	return exec2(ctx, backend.OpAdd, nil, et, ep)
 }
 
 // Params returns every trainable tensor (token/pos embeddings, all block
@@ -407,7 +407,7 @@ func (g *GPT) forwardBlock(ctx *backend.Context, x *tensor.Tensor, layer int) (*
 	if h, err = b.Attn.Forward(layerCtx, h); err != nil {
 		return nil, err
 	}
-	if x, err = exec1(layerCtx, backend.OpAdd, nil, x, h); err != nil {
+	if x, err = exec2(layerCtx, backend.OpAdd, nil, x, h); err != nil {
 		return nil, err
 	}
 
@@ -430,5 +430,5 @@ func (g *GPT) forwardBlock(ctx *backend.Context, x *tensor.Tensor, layer int) (*
 	if h, err = exec1(layerCtx, backend.OpAddBias, nil, h, b.B2); err != nil {
 		return nil, err
 	}
-	return exec1(layerCtx, backend.OpAdd, nil, x, h)
+	return exec2(layerCtx, backend.OpAdd, nil, x, h)
 }

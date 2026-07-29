@@ -409,10 +409,10 @@ func (m *BLT) Forward(ctx *backend.Context, data []byte, patchLens []int) (*tens
 	if err != nil {
 		return nil, err
 	}
-	if x, err = exec1(ctx, backend.OpMul, nil, x, gate); err != nil { // zero the patch-0 byte rows
+	if x, err = exec2(ctx, backend.OpMul, nil, x, gate); err != nil { // zero the patch-0 byte rows
 		return nil, err
 	}
-	d, err := exec1(ctx, backend.OpAdd, nil, h, x)
+	d, err := exec2(ctx, backend.OpAdd, nil, h, x)
 	if err != nil {
 		return nil, err
 	}
@@ -506,7 +506,7 @@ func (m *BLT) latentStates(ctx *backend.Context, data []byte, patchLens []int) (
 	// patches Mnorm is the identity), then one residual span-masked
 	// cross-attention refinement (patch queries over byte keys/values).
 	mnorm, span := bltPoolMask(h.Dtype(), patchLens, len(data))
-	p0, err := exec1(ctx, backend.OpMatMul, nil, mnorm, h)
+	p0, err := exec2(ctx, backend.OpMatMul, nil, mnorm, h)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -514,7 +514,7 @@ func (m *BLT) latentStates(ctx *backend.Context, data []byte, patchLens []int) (
 	if err != nil {
 		return nil, nil, err
 	}
-	p, err := exec1(ctx, backend.OpAdd, nil, p0, refine)
+	p, err := exec2(ctx, backend.OpAdd, nil, p0, refine)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -550,7 +550,7 @@ func (m *BLT) embed(ctx *backend.Context, data []byte) (*tensor.Tensor, error) {
 	if err != nil {
 		return nil, err
 	}
-	x, err := exec1(ctx, backend.OpAdd, nil, et, ep)
+	x, err := exec2(ctx, backend.OpAdd, nil, et, ep)
 	if err != nil {
 		return nil, err
 	}
@@ -563,7 +563,7 @@ func (m *BLT) embed(ctx *backend.Context, data []byte) (*tensor.Tensor, error) {
 		if err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, eh); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, eh); err != nil {
 			return nil, err
 		}
 	}
@@ -579,15 +579,15 @@ func (m *BLT) embed(ctx *backend.Context, data []byte) (*tensor.Tensor, error) {
 // Single-head is a documented simplification of the paper's multi-head
 // cross-attention.
 func bltCrossAttention(ctx *backend.Context, q, kv, wq, wk, wv, wo, mask *tensor.Tensor) (*tensor.Tensor, error) {
-	qp, err := exec1(ctx, backend.OpMatMul, nil, q, wq)
+	qp, err := exec2(ctx, backend.OpMatMul, nil, q, wq)
 	if err != nil {
 		return nil, err
 	}
-	kp, err := exec1(ctx, backend.OpMatMul, nil, kv, wk)
+	kp, err := exec2(ctx, backend.OpMatMul, nil, kv, wk)
 	if err != nil {
 		return nil, err
 	}
-	vp, err := exec1(ctx, backend.OpMatMul, nil, kv, wv)
+	vp, err := exec2(ctx, backend.OpMatMul, nil, kv, wv)
 	if err != nil {
 		return nil, err
 	}
@@ -595,27 +595,27 @@ func bltCrossAttention(ctx *backend.Context, q, kv, wq, wk, wv, wo, mask *tensor
 	if err != nil {
 		return nil, err
 	}
-	scores, err := exec1(ctx, backend.OpMatMul, nil, qp, kt)
+	scores, err := exec2(ctx, backend.OpMatMul, nil, qp, kt)
 	if err != nil {
 		return nil, err
 	}
 	scale := tensor.New(scores.Dtype(), tensor.Shape{1, 1})
 	scale.SetF64(1/math.Sqrt(float64(wq.Shape()[1])), 0, 0)
-	if scores, err = exec1(ctx, backend.OpMul, nil, scores, scale); err != nil {
+	if scores, err = exec2(ctx, backend.OpMul, nil, scores, scale); err != nil {
 		return nil, err
 	}
-	if scores, err = exec1(ctx, backend.OpAdd, nil, scores, mask); err != nil {
+	if scores, err = exec2(ctx, backend.OpAdd, nil, scores, mask); err != nil {
 		return nil, err
 	}
 	attn, err := exec1(ctx, backend.OpSoftmax, nil, scores)
 	if err != nil {
 		return nil, err
 	}
-	out, err := exec1(ctx, backend.OpMatMul, nil, attn, vp)
+	out, err := exec2(ctx, backend.OpMatMul, nil, attn, vp)
 	if err != nil {
 		return nil, err
 	}
-	return exec1(ctx, backend.OpMatMul, nil, out, wo)
+	return exec2(ctx, backend.OpMatMul, nil, out, wo)
 }
 
 // runByteBlocks runs pre-LN GPT blocks over x with causal self-attention
@@ -648,7 +648,7 @@ func runByteBlocks(ctx *backend.Context, x *tensor.Tensor, blocks []*Block, wind
 		if a, err = exec1(ctx, backend.OpMatMul, nil, a, b.Attn.Wo); err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, a); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, a); err != nil {
 			return nil, err
 		}
 		if h, err = b.LN2.Forward(ctx, x); err != nil {
@@ -669,7 +669,7 @@ func runByteBlocks(ctx *backend.Context, x *tensor.Tensor, blocks []*Block, wind
 		if h, err = exec1(ctx, backend.OpAddBias, nil, h, b.B2); err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, h); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, h); err != nil {
 			return nil, err
 		}
 	}
@@ -764,7 +764,7 @@ func nextByteCE(ctx *backend.Context, logits *tensor.Tensor, data []byte) (*tens
 		idx.SetF64(float64(i), i)
 		targets.SetF64(float64(data[i+1]), i)
 	}
-	rows, err := exec1(ctx, backend.OpEmbed, nil, logits, idx)
+	rows, err := exec2(ctx, backend.OpEmbed, nil, logits, idx)
 	if err != nil {
 		return nil, err
 	}

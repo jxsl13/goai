@@ -143,7 +143,7 @@ func (m *QuantJambaMixer) forward(ctx *backend.Context, u *tensor.Tensor) (*tens
 	if err != nil {
 		return nil, err
 	}
-	if y, err = exec1(ctx, backend.OpMul, nil, y, gate); err != nil {
+	if y, err = exec2(ctx, backend.OpMul, nil, y, gate); err != nil {
 		return nil, err
 	}
 	return b.OutProj.Forward(ctx, y)
@@ -210,7 +210,7 @@ func (m *QuantJambaMoE) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor
 		}
 		if y == nil {
 			y = term
-		} else if y, err = exec1(ctx, backend.OpAdd, nil, y, term); err != nil {
+		} else if y, err = exec2(ctx, backend.OpAdd, nil, y, term); err != nil {
 			return nil, err
 		}
 	}
@@ -408,7 +408,7 @@ func (m *QuantJamba) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor
 				return nil, err
 			}
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, mix); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, mix); err != nil {
 			return nil, err
 		}
 		// FFN sublayer (sparse MoE or dense SwiGLU)
@@ -425,7 +425,7 @@ func (m *QuantJamba) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor
 		if err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, ff); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, ff); err != nil {
 			return nil, err
 		}
 	}
@@ -573,7 +573,7 @@ func quantJambaMixerStep(ctx *backend.Context, jm *QuantJambaMixer, ls *MambaLay
 	if err != nil {
 		return nil, err
 	}
-	if y, err = exec1(ctx, backend.OpMul, nil, y, gate); err != nil {
+	if y, err = exec2(ctx, backend.OpMul, nil, y, gate); err != nil {
 		return nil, err
 	}
 	return b.OutProj.Forward(ctx, y)
@@ -635,7 +635,7 @@ func (m *QuantJamba) DecodeStep(ctx *backend.Context, st *JambaDecodeState, toke
 				return nil, err
 			}
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, mix); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, mix); err != nil {
 			return nil, err
 		}
 		// FFN sublayer (stateless: sparse MoE or dense SwiGLU)
@@ -652,7 +652,7 @@ func (m *QuantJamba) DecodeStep(ctx *backend.Context, st *JambaDecodeState, toke
 		if err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, ff); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, ff); err != nil {
 			return nil, err
 		}
 	}

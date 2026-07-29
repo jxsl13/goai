@@ -184,7 +184,7 @@ func (m *QuantStableLM) Forward(ctx *backend.Context, tokens []int) (*tensor.Ten
 		if a, err = b.Wo.Forward(ctx, a); err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, a); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, a); err != nil {
 			return nil, err
 		}
 		// FFN sublayer: post_attention_layernorm → SwiGLU → residual add.
@@ -196,7 +196,7 @@ func (m *QuantStableLM) Forward(ctx *backend.Context, tokens []int) (*tensor.Ten
 		if err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, f); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, f); err != nil {
 			return nil, err
 		}
 	}
@@ -280,7 +280,7 @@ func (m *QuantStableLM) DecodeStep(ctx *backend.Context, cache *StableLMCache, t
 		if a, err = b.Wo.Forward(ctx, a); err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, a); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, a); err != nil {
 			return nil, err
 		}
 		xn2, err := b.PostAttnNorm.Forward(ctx, x)
@@ -291,7 +291,7 @@ func (m *QuantStableLM) DecodeStep(ctx *backend.Context, cache *StableLMCache, t
 		if err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, f); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, f); err != nil {
 			return nil, err
 		}
 	}

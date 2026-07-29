@@ -135,7 +135,7 @@ func (m *OLMo2) hiddenCapture(ctx *backend.Context, x *tensor.Tensor, capture fu
 		if a, err = b.PostAttnNorm.Forward(ctx, a); err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, a); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, a); err != nil {
 			return nil, err
 		}
 		// FFN sublayer (post-norm): f = post_feedforward_layernorm(SwiGLU(x)); x = x + f.
@@ -146,7 +146,7 @@ func (m *OLMo2) hiddenCapture(ctx *backend.Context, x *tensor.Tensor, capture fu
 		if f, err = b.PostFFNNorm.Forward(ctx, f); err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, f); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, f); err != nil {
 			return nil, err
 		}
 	}

@@ -109,7 +109,7 @@ func (m *T5) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor, error)
 		if attn, err = exec1(ctx, backend.OpMatMul, nil, attn, b.Wo); err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, attn); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, attn); err != nil {
 			return nil, err
 		}
 		// FFN sublayer
@@ -129,7 +129,7 @@ func (m *T5) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor, error)
 			if err != nil {
 				return nil, err
 			}
-			if ff, err = exec1(ctx, backend.OpMul, nil, g, u); err != nil {
+			if ff, err = exec2(ctx, backend.OpMul, nil, g, u); err != nil {
 				return nil, err
 			}
 		} else { // ReLU (v1.0)
@@ -143,7 +143,7 @@ func (m *T5) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor, error)
 		if ff, err = exec1(ctx, backend.OpMatMul, nil, ff, b.WOut); err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, ff); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, ff); err != nil {
 			return nil, err
 		}
 	}

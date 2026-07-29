@@ -181,7 +181,7 @@ func (m *QuantLlama) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor
 		if o, err = scaleScalar(ctx, o, cfg.ResidualMult); err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, o); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, o); err != nil {
 			return nil, err
 		}
 		xf, err := b.FFNNorm.Forward(ctx, x)
@@ -195,7 +195,7 @@ func (m *QuantLlama) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor
 		if ff, err = scaleScalar(ctx, ff, cfg.ResidualMult); err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, ff); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, ff); err != nil {
 			return nil, err
 		}
 	}

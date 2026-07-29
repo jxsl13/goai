@@ -216,7 +216,7 @@ func (c *Coconut) embedTokensAt(ctx *backend.Context, toks []int, startPos int) 
 	if err != nil {
 		return nil, err
 	}
-	return exec1(ctx, backend.OpAdd, nil, et, ep)
+	return exec2(ctx, backend.OpAdd, nil, et, ep)
 }
 
 // appendRow appends one content row [1,dim] (a thought, marker, or pause
@@ -232,7 +232,7 @@ func (c *Coconut) appendRow(ctx *backend.Context, x, row *tensor.Tensor, pos int
 	if err != nil {
 		return nil, err
 	}
-	sum, err := exec1(ctx, backend.OpAdd, nil, row, pe)
+	sum, err := exec2(ctx, backend.OpAdd, nil, row, pe)
 	if err != nil {
 		return nil, err
 	}
@@ -373,7 +373,7 @@ func (c *Coconut) CurriculumLoss(ctx *backend.Context, question []int, chain [][
 		idx.SetF64(float64(pos+i-1), i)
 		targets.SetF64(float64(tok), i)
 	}
-	rows, err := exec1(ctx, backend.OpEmbed, nil, logits, idx)
+	rows, err := exec2(ctx, backend.OpEmbed, nil, logits, idx)
 	if err != nil {
 		return nil, err
 	}

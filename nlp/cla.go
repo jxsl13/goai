@@ -176,7 +176,7 @@ func (c *CLA) embed(ctx *backend.Context, tokens []int) (*tensor.Tensor, error) 
 	if err != nil {
 		return nil, err
 	}
-	return exec1(ctx, backend.OpAdd, nil, et, ep)
+	return exec2(ctx, backend.OpAdd, nil, et, ep)
 }
 
 // Forward computes logits [seq, vocab] for the prompt tokens. Fully
@@ -226,7 +226,7 @@ func (c *CLA) hiddenFromEmbed(ctx *backend.Context, x *tensor.Tensor) (*tensor.T
 		if attn, err = exec1(ctx, backend.OpMatMul, nil, attn, b.Wo); err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, attn); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, attn); err != nil {
 			return nil, err
 		}
 		// FFN sublayer: x += W2·gelu(W1·LN2(x)+b1)+b2 (gpt.go's block, verbatim)
@@ -249,7 +249,7 @@ func (c *CLA) hiddenFromEmbed(ctx *backend.Context, x *tensor.Tensor) (*tensor.T
 		if h, err = exec1(ctx, backend.OpAddBias, nil, h, b.B2); err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, h); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, h); err != nil {
 			return nil, err
 		}
 	}
@@ -348,7 +348,7 @@ func (c *CLA) DecodeStep(ctx *backend.Context, cache *CLACache, token, pos int) 
 		if attn, err = exec1(ctx, backend.OpMatMul, nil, attn, b.Wo); err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, attn); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, attn); err != nil {
 			return nil, err
 		}
 		h, err := b.LN2.Forward(ctx, x)
@@ -370,7 +370,7 @@ func (c *CLA) DecodeStep(ctx *backend.Context, cache *CLACache, token, pos int) 
 		if h, err = exec1(ctx, backend.OpAddBias, nil, h, b.B2); err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, h); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, h); err != nil {
 			return nil, err
 		}
 	}

@@ -218,19 +218,19 @@ func (m *DeepSeekV2) DecodeStepLatent(ctx *backend.Context, cache *DeepSeekV2Lat
 			}
 			// Content scores directly against the latent cache; rope scores against the
 			// shared rotary cache.
-			scoreC, err := exec1(ctx, backend.OpMatMul, nil, qLat, ckvT) // [1, tokens]
+			scoreC, err := exec2(ctx, backend.OpMatMul, nil, qLat, ckvT) // [1, tokens]
 			if err != nil {
 				return nil, err
 			}
-			scoreP, err := exec1(ctx, backend.OpMatMul, nil, qPeRot, kpeT) // [1, tokens]
+			scoreP, err := exec2(ctx, backend.OpMatMul, nil, qPeRot, kpeT) // [1, tokens]
 			if err != nil {
 				return nil, err
 			}
-			scores, err := exec1(ctx, backend.OpAdd, nil, scoreC, scoreP)
+			scores, err := exec2(ctx, backend.OpAdd, nil, scoreC, scoreP)
 			if err != nil {
 				return nil, err
 			}
-			if scores, err = exec1(ctx, backend.OpMul, nil, scores, scaleT); err != nil {
+			if scores, err = exec2(ctx, backend.OpMul, nil, scores, scaleT); err != nil {
 				return nil, err
 			}
 			// Single query attends all cached positions → no causal mask.
@@ -239,7 +239,7 @@ func (m *DeepSeekV2) DecodeStepLatent(ctx *backend.Context, cache *DeepSeekV2Lat
 				return nil, err
 			}
 			// Attention in latent space, then absorb W_V into the output.
-			ctxLat, err := exec1(ctx, backend.OpMatMul, nil, probs, ckvAll) // [1, KVLoraRank]
+			ctxLat, err := exec2(ctx, backend.OpMatMul, nil, probs, ckvAll) // [1, KVLoraRank]
 			if err != nil {
 				return nil, err
 			}
@@ -258,7 +258,7 @@ func (m *DeepSeekV2) DecodeStepLatent(ctx *backend.Context, cache *DeepSeekV2Lat
 		if err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, a); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, a); err != nil {
 			return nil, err
 		}
 
@@ -276,7 +276,7 @@ func (m *DeepSeekV2) DecodeStepLatent(ctx *backend.Context, cache *DeepSeekV2Lat
 		if err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, ff); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, ff); err != nil {
 			return nil, err
 		}
 	}
@@ -428,22 +428,22 @@ func (m *DeepSeekV2) PrefillLatent(ctx *backend.Context, cache *DeepSeekV2Latent
 			}
 			// Content scores against the latent cache; rope scores against the shared
 			// rotary cache — the same two skinny matmuls as DecodeStepLatent, batched.
-			scoreC, err := exec1(ctx, backend.OpMatMul, nil, qLat, ckvT) // [seq, seq]
+			scoreC, err := exec2(ctx, backend.OpMatMul, nil, qLat, ckvT) // [seq, seq]
 			if err != nil {
 				return nil, err
 			}
-			scoreP, err := exec1(ctx, backend.OpMatMul, nil, qPeRot, kpeT) // [seq, seq]
+			scoreP, err := exec2(ctx, backend.OpMatMul, nil, qPeRot, kpeT) // [seq, seq]
 			if err != nil {
 				return nil, err
 			}
-			scores, err := exec1(ctx, backend.OpAdd, nil, scoreC, scoreP)
+			scores, err := exec2(ctx, backend.OpAdd, nil, scoreC, scoreP)
 			if err != nil {
 				return nil, err
 			}
-			if scores, err = exec1(ctx, backend.OpMul, nil, scores, scaleT); err != nil {
+			if scores, err = exec2(ctx, backend.OpMul, nil, scores, scaleT); err != nil {
 				return nil, err
 			}
-			if scores, err = exec1(ctx, backend.OpAdd, nil, scores, mask); err != nil {
+			if scores, err = exec2(ctx, backend.OpAdd, nil, scores, mask); err != nil {
 				return nil, err
 			}
 			probs, err := exec1(ctx, backend.OpSoftmax, nil, scores)
@@ -451,7 +451,7 @@ func (m *DeepSeekV2) PrefillLatent(ctx *backend.Context, cache *DeepSeekV2Latent
 				return nil, err
 			}
 			// Attention in latent space, then absorb W_V into the output.
-			ctxLat, err := exec1(ctx, backend.OpMatMul, nil, probs, ckvAll) // [seq, KVLoraRank]
+			ctxLat, err := exec2(ctx, backend.OpMatMul, nil, probs, ckvAll) // [seq, KVLoraRank]
 			if err != nil {
 				return nil, err
 			}

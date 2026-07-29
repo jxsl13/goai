@@ -36,7 +36,7 @@ func (c *BertClassifier) Logits(ctx *backend.Context, tokens, segments []int) (*
 	for i := 0; i < seq; i++ {
 		ones.SetF64(1.0/float64(seq), 0, i) // mean-pool weights
 	}
-	pooled, err := exec1(ctx, backend.OpMatMul, nil, ones, hidden) // [1, dim]
+	pooled, err := exec2(ctx, backend.OpMatMul, nil, ones, hidden) // [1, dim]
 	if err != nil {
 		return nil, err
 	}

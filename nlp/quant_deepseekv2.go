@@ -154,7 +154,7 @@ func (m *QuantDeepSeekMoE) Forward(ctx *backend.Context, x *tensor.Tensor) (*ten
 		}
 		if y == nil {
 			y = term
-		} else if y, err = exec1(ctx, backend.OpAdd, nil, y, term); err != nil {
+		} else if y, err = exec2(ctx, backend.OpAdd, nil, y, term); err != nil {
 			return nil, err
 		}
 	}
@@ -164,7 +164,7 @@ func (m *QuantDeepSeekMoE) Forward(ctx *backend.Context, x *tensor.Tensor) (*ten
 	if err != nil {
 		return nil, err
 	}
-	return exec1(ctx, backend.OpAdd, nil, y, sh)
+	return exec2(ctx, backend.OpAdd, nil, y, sh)
 }
 
 // Close frees any device-resident weight buffers held by the routed and shared
@@ -409,7 +409,7 @@ func (m *QuantDeepSeekV2) Forward(ctx *backend.Context, tokens []int) (*tensor.T
 		if err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, a); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, a); err != nil {
 			return nil, err
 		}
 		xf, err := b.PostAttnNorm.Forward(ctx, x)
@@ -425,7 +425,7 @@ func (m *QuantDeepSeekV2) Forward(ctx *backend.Context, tokens []int) (*tensor.T
 		if err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, ff); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, ff); err != nil {
 			return nil, err
 		}
 	}
@@ -522,7 +522,7 @@ func (m *QuantDeepSeekV2) DecodeStep(ctx *backend.Context, cache *QuantDeepSeekV
 		if err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, a); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, a); err != nil {
 			return nil, err
 		}
 		xf, err := b.PostAttnNorm.Forward(ctx, x)
@@ -538,7 +538,7 @@ func (m *QuantDeepSeekV2) DecodeStep(ctx *backend.Context, cache *QuantDeepSeekV
 		if err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, ff); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, ff); err != nil {
 			return nil, err
 		}
 	}
@@ -741,23 +741,23 @@ func (m *QuantDeepSeekV2) attnAbsorbed(ctx *backend.Context, l int, b *QuantDeep
 		if err != nil {
 			return nil, err
 		}
-		scoreC, err := exec1(ctx, backend.OpMatMul, nil, qLat, ckvT) // [T, tokens]
+		scoreC, err := exec2(ctx, backend.OpMatMul, nil, qLat, ckvT) // [T, tokens]
 		if err != nil {
 			return nil, err
 		}
-		scoreP, err := exec1(ctx, backend.OpMatMul, nil, qPeRot, kpeT) // [T, tokens]
+		scoreP, err := exec2(ctx, backend.OpMatMul, nil, qPeRot, kpeT) // [T, tokens]
 		if err != nil {
 			return nil, err
 		}
-		scores, err := exec1(ctx, backend.OpAdd, nil, scoreC, scoreP)
+		scores, err := exec2(ctx, backend.OpAdd, nil, scoreC, scoreP)
 		if err != nil {
 			return nil, err
 		}
-		if scores, err = exec1(ctx, backend.OpMul, nil, scores, scaleT); err != nil {
+		if scores, err = exec2(ctx, backend.OpMul, nil, scores, scaleT); err != nil {
 			return nil, err
 		}
 		if mask != nil {
-			if scores, err = exec1(ctx, backend.OpAdd, nil, scores, mask); err != nil {
+			if scores, err = exec2(ctx, backend.OpAdd, nil, scores, mask); err != nil {
 				return nil, err
 			}
 		}
@@ -766,7 +766,7 @@ func (m *QuantDeepSeekV2) attnAbsorbed(ctx *backend.Context, l int, b *QuantDeep
 			return nil, err
 		}
 		// Attention in latent space, then absorb W_V into the output (quantized).
-		ctxLat, err := exec1(ctx, backend.OpMatMul, nil, probs, ckvAll) // [T, KVLoraRank]
+		ctxLat, err := exec2(ctx, backend.OpMatMul, nil, probs, ckvAll) // [T, KVLoraRank]
 		if err != nil {
 			return nil, err
 		}
@@ -862,15 +862,15 @@ func (m *QuantDeepSeekV2) attnReconstructed(ctx *backend.Context, l int, b *Quan
 		if err != nil {
 			return nil, err
 		}
-		scores, err := exec1(ctx, backend.OpMatMul, nil, queryH, keyHT)
+		scores, err := exec2(ctx, backend.OpMatMul, nil, queryH, keyHT)
 		if err != nil {
 			return nil, err
 		}
-		if scores, err = exec1(ctx, backend.OpMul, nil, scores, scaleT); err != nil {
+		if scores, err = exec2(ctx, backend.OpMul, nil, scores, scaleT); err != nil {
 			return nil, err
 		}
 		if mask != nil {
-			if scores, err = exec1(ctx, backend.OpAdd, nil, scores, mask); err != nil {
+			if scores, err = exec2(ctx, backend.OpAdd, nil, scores, mask); err != nil {
 				return nil, err
 			}
 		}
@@ -878,7 +878,7 @@ func (m *QuantDeepSeekV2) attnReconstructed(ctx *backend.Context, l int, b *Quan
 		if err != nil {
 			return nil, err
 		}
-		oh, err := exec1(ctx, backend.OpMatMul, nil, probs, valueH) // [T, VHead]
+		oh, err := exec2(ctx, backend.OpMatMul, nil, probs, valueH) // [T, VHead]
 		if err != nil {
 			return nil, err
 		}

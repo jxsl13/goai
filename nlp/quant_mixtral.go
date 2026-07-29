@@ -129,7 +129,7 @@ func (m *QuantMoE) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tens
 		if y == nil {
 			y = term
 		} else {
-			if y, err = exec1(ctx, backend.OpAdd, nil, y, term); err != nil {
+			if y, err = exec2(ctx, backend.OpAdd, nil, y, term); err != nil {
 				return nil, err
 			}
 		}
@@ -287,7 +287,7 @@ func (m *QuantMixtral) Forward(ctx *backend.Context, tokens []int) (*tensor.Tens
 		if err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, o); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, o); err != nil {
 			return nil, err
 		}
 		// sparse-MoE FFN sublayer: top-k routing, only the routed experts run
@@ -299,7 +299,7 @@ func (m *QuantMixtral) Forward(ctx *backend.Context, tokens []int) (*tensor.Tens
 		if err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, ff); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, ff); err != nil {
 			return nil, err
 		}
 	}

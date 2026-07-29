@@ -38,3 +38,28 @@ func BenchmarkQuantCohereDecodeStep(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkQuantCohereForward covers the PREFILL path. Forward and DecodeStep are separate
+// layer loops with separate call sites, so a change to one is invisible to a benchmark of the
+// other — the same coverage trap that made an earlier A/B report identical allocation counts
+// on both arms. Both paths need a benchmark before either can be claimed.
+func BenchmarkQuantCohereForward(b *testing.B) {
+	m := newQuantTestCohere()
+	raw := quantCohereGGUFBytes(b, m)
+	rf, err := gguf.ReadRaw(bytes.NewReader(raw))
+	if err != nil {
+		b.Fatal(err)
+	}
+	q, err := nlp.QuantCohereFromGGUF(rf.Metadata, rf.Tensors)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer q.Close()
+	prompt := []int{1, 3, 2, 5, 4}
+	b.ReportAllocs()
+	for b.Loop() {
+		if _, err := q.Forward(backend.NewContext(), prompt); err != nil {
+			b.Fatal(err)
+		}
+	}
+}

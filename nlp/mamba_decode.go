@@ -215,7 +215,7 @@ func mixerStep(ctx *backend.Context, mb *nn.MambaBlock, ls *MambaLayerState, u *
 	if err != nil {
 		return nil, err
 	}
-	if y, err = exec1(ctx, backend.OpMul, nil, y, gate); err != nil {
+	if y, err = exec2(ctx, backend.OpMul, nil, y, gate); err != nil {
 		return nil, err
 	}
 	return mb.OutProj.Forward(ctx, y)
@@ -351,7 +351,7 @@ func mixerPrefill(ctx *backend.Context, mb *nn.MambaBlock, ls *MambaLayerState, 
 	if err != nil {
 		return nil, err
 	}
-	if y, err = exec1(ctx, backend.OpMul, nil, y, gate); err != nil {
+	if y, err = exec2(ctx, backend.OpMul, nil, y, gate); err != nil {
 		return nil, err
 	}
 	return mb.OutProj.Forward(ctx, y)

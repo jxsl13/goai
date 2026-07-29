@@ -43,7 +43,7 @@ func (m *Gemma2) embedOne(ctx *backend.Context, token int) (*tensor.Tensor, erro
 	x := embedRow(m.TokEmb, token, d)
 	scale := tensor.New(tensor.F64, tensor.Shape{})
 	scale.Storage().F64()[0] = math.Sqrt(float64(d))
-	return exec1(ctx, backend.OpMul, nil, x, scale)
+	return exec2(ctx, backend.OpMul, nil, x, scale)
 }
 
 // DecodeStep advances the Gemma 2 by one token using the KV-cache and returns the
@@ -175,12 +175,12 @@ func (m *Gemma2) cappedDecodeAttention(ctx *backend.Context, b *Gemma2Block, xb 
 		if err != nil {
 			return nil, err
 		}
-		scores, err := exec1(ctx, backend.OpMatMul, nil, qh, khT)
+		scores, err := exec2(ctx, backend.OpMatMul, nil, qh, khT)
 		if err != nil {
 			return nil, err
 		}
 		// scores·scale (query_pre_attn_scalar^-0.5)
-		if scores, err = exec1(ctx, backend.OpMul, nil, scores, scaleT); err != nil {
+		if scores, err = exec2(ctx, backend.OpMul, nil, scores, scaleT); err != nil {
 			return nil, err
 		}
 		// attention-logit soft-cap on the scaled scores (no mask for a single query)
@@ -193,7 +193,7 @@ func (m *Gemma2) cappedDecodeAttention(ctx *backend.Context, b *Gemma2Block, xb 
 		if err != nil {
 			return nil, err
 		}
-		oh, err := exec1(ctx, backend.OpMatMul, nil, probs, vh) // [1,hd]
+		oh, err := exec2(ctx, backend.OpMatMul, nil, probs, vh) // [1,hd]
 		if err != nil {
 			return nil, err
 		}

@@ -180,7 +180,7 @@ func (m *QuantNemotron) Forward(ctx *backend.Context, tokens []int) (*tensor.Ten
 		if a, err = b.Wo.Forward(ctx, a); err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, a); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, a); err != nil {
 			return nil, err
 		}
 		// MLP sublayer: post_attention_layernorm → ReLU² 2-layer → residual add.
@@ -192,7 +192,7 @@ func (m *QuantNemotron) Forward(ctx *backend.Context, tokens []int) (*tensor.Ten
 		if err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, f); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, f); err != nil {
 			return nil, err
 		}
 	}
@@ -215,7 +215,7 @@ func (m *QuantNemotron) mlp(ctx *backend.Context, b *QuantNemotronBlock, xn *ten
 	if err != nil {
 		return nil, err
 	}
-	r2, err := exec1(ctx, backend.OpMul, nil, r, r)
+	r2, err := exec2(ctx, backend.OpMul, nil, r, r)
 	if err != nil {
 		return nil, err
 	}
@@ -296,7 +296,7 @@ func (m *QuantNemotron) DecodeStep(ctx *backend.Context, cache *NemotronCache, t
 		if a, err = b.Wo.Forward(ctx, a); err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, a); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, a); err != nil {
 			return nil, err
 		}
 		xn2, err := b.PostAttnNorm.Forward(ctx, x)
@@ -307,7 +307,7 @@ func (m *QuantNemotron) DecodeStep(ctx *backend.Context, cache *NemotronCache, t
 		if err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, f); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, f); err != nil {
 			return nil, err
 		}
 	}

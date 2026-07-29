@@ -79,7 +79,7 @@ func (b *Bert) Embed(ctx *backend.Context, tokens, segments []int) (*tensor.Tens
 	if err != nil {
 		return nil, err
 	}
-	x, err := exec1(ctx, backend.OpAdd, nil, et, ep)
+	x, err := exec2(ctx, backend.OpAdd, nil, et, ep)
 	if err != nil {
 		return nil, err
 	}
@@ -96,7 +96,7 @@ func (b *Bert) Embed(ctx *backend.Context, tokens, segments []int) (*tensor.Tens
 		if err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, es); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, es); err != nil {
 			return nil, err
 		}
 	}
@@ -116,7 +116,7 @@ func (b *Bert) Forward(ctx *backend.Context, tokens, segments []int) (*tensor.Te
 		if err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, h); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, h); err != nil {
 			return nil, err
 		}
 		if x, err = l.AttnLN.Forward(ctx, x); err != nil {
@@ -138,7 +138,7 @@ func (b *Bert) Forward(ctx *backend.Context, tokens, segments []int) (*tensor.Te
 		if h, err = exec1(ctx, backend.OpAddBias, nil, h, l.B2); err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, h); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, h); err != nil {
 			return nil, err
 		}
 		if x, err = l.FFNLN.Forward(ctx, x); err != nil {
