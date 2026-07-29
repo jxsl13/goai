@@ -440,3 +440,39 @@ calls each, so a per-call saving of two allocations is invisible; in a real deco
 saving is per token. Shipped anyway as strictly non-worse, but explicitly not as a speedup.
 The benchmark under-represents the router by roughly the sequence length, which is the thing
 to fix before anyone tries to measure router work again.
+
+## R-01KYQMP3HNFGR8HZABTBMP86RZ Optimizer family sweep: Muon/SOAP/Shampoo slow by algorithm, no hidden defects; Muon dispatch fix 1.04x
+kind: research
+state: draft
+created: 2026-07-29
+
+Applied the family-comparison technique to nn's optimizers — benchmark every member on one
+fixture, compare, investigate outliers. It found two 3x wins in the gguf quant matrix; here it
+found a 4% fix and a useful negative.
+
+THE FAMILY, StepOnly on the shared fixture, ns/op: Muon 41.1M, SOAP 3.97M, Shampoo 3.71M,
+Adafactor 1.13M, GaLore 828k, Sophia 781k, ScheduleFree 578k, Cautious 454k, AdEMAMix 444k,
+LAMB 408k, AdamMini 394k, GrokfastMA 356k, Adam 318k, Grokfast 307k, Lookahead 249k, Lion
+229k, SGD 148k.
+
+MUON IS A 10x OUTLIER AND IT IS EARNED. Its Step walked every element through Unravel +
+AtF64/SetF64 twice — about 590k dispatches per step (PS1005) — which looked like the
+explanation and was not: removing it is 1.008-1.056x. The rest is Newton-Schulz, five
+iterations of three matmuls, roughly 670M multiply-accumulates for the 256x256 and 256x512
+fixture. At ~16 GFLOP/s that IS the 40ms, and matmulFlat is already ikj/axpy, vectorized and
+row-parallel. Nothing is wrong with it.
+
+SOAP and Shampoo are next at ~4ms and are likewise algorithmic — both run SymEig
+preconditioning, and R-01KYQBAAFBF4T already established SymEig dominates that family (its
+Jacobi sweep is O(n^3) per iteration against the Gram's single O(n^2*k) pass).
+
+THE NEGATIVE RESULT IS THE VALUE: the other thirteen optimizers are O(n) elementwise updates
+and sit within 4x of SGD, which is the expected spread for differing numbers of moment buffers.
+No hidden defect in this family. Worth recording so the next sweep does not re-derive it.
+
+COVERAGE GAP, not acted on: 27 optimizers are implemented and about 16 benchmarked. Missing are
+APOLLO, AdamW, DAdaptAdam, EMA, GradAccumulator, MARS, PSGDKron, Prodigy, QGaLore, SAM, SI, SWA
+and ScheduleFreeSGD. Most are elementwise variants where the family evidence predicts nothing
+interesting, but PSGDKron (Kronecker-factored preconditioning) and SAM (two forward-backward
+passes per step) are structurally different from the thirteen measured and are the two worth
+benchmarking if anyone extends this.
