@@ -217,6 +217,7 @@ var checks = []check{
 	{"PS6001", "full-sort-bounded-prefix", "a full-vocabulary descending index sort whose result feeds an early-breaking (threshold-bounded) prefix consumer, with no quickselect/pre-filter guard — an O(n log n) sort for an O(prefix) need", false},
 	{"PS6002", "spatial-bounds-branch", "an innermost window/kernel loop re-testing a compound spatial bounds guard (iy>=0 && iy<h && ix>=0 && ix<wd) per tap, where the in-bounds taps form one contiguous run the guard can be hoisted around", false},
 	{"PS6005", "monotone-index-bound", "an innermost loop guarding its tap work with a single relational bound on an index affine in the loop var (j:=t-(K-1)+k; if j>=0) — the in-bounds iterations are one contiguous run, clamp the loop bound instead of branching per tap", false},
+	{"PS6014", "redundant-pure-recompute", "two syntactically identical calls to a function declared PURE (pureComputeFuncs) in one block, with nothing between them assigning any name the call reads — the second recomputes what the first already holds; keep one and read its result twice", false},
 	{"PS6013", "sort-feeds-counted-prefix", "a full sort whose result is then read only by a COUNTED prefix loop (for r := 0; r < k; r++ over the sorted slice) — the order past k is computed and discarded; a selection answers the same question in O(n) instead of O(n log n)", false},
 	{"PS6012", "inconsistent-fma-pinning", "a function that rounds SOME products explicitly (float64(a*b)) to stop FMA contraction, but leaves a sibling product feeding an add or subtract unpinned — including one assigned to a named local, which the compiler still inlines and contracts", false},
 	{"PS6011", "strided-inner-walk", "an inner loop whose index into a flat buffer MULTIPLIES the inner loop variable by a stride — consecutive iterations jump a whole row, so each touches its own cache line to use one element; interchange the loops, or block four adjacent outer indices so one fetched line serves four accumulators", false},
@@ -282,6 +283,12 @@ type Config struct {
 	// PS4002 — hand-vectorized SIMD kernel names; a call to one in a file marks a
 	// scalar math.X in a loop there as a vectorize candidate (e.g. vsiluF32).
 	VectorizedSiblingFuncs []string `json:"vectorizedSiblingFuncs,omitempty"`
+	// PS6014 — entry points that are PURE with respect to their arguments: same
+	// arguments, same result, no observable side effect (e.g. a network forward pass).
+	// The purity judgment is a project's to make and cannot be derived from syntax, so
+	// naming a function here is what licenses the check to call a second identical call
+	// redundant. Empty by default: without it PS6014 cannot report.
+	PureComputeFuncs []string `json:"pureComputeFuncs,omitempty"`
 }
 
 // nameSets is Config compiled to maps for O(1) lookup during a scan.
@@ -289,6 +296,7 @@ type nameSets struct {
 	accessors, fastPath, elemCount, indexDecompose map[string]bool
 	shapeMethods                                   map[string]bool
 	allocators, visitors, bulkCopy, vectorized     map[string]bool
+	pureCompute                                    map[string]bool
 }
 
 func toSet(xs []string) map[string]bool {
@@ -310,6 +318,7 @@ func (c Config) compile() nameSets {
 		visitors:       toSet(c.PerElementVisitors),
 		bulkCopy:       toSet(c.BulkCopyHelpers),
 		vectorized:     toSet(c.VectorizedSiblingFuncs),
+		pureCompute:    toSet(c.PureComputeFuncs),
 	}
 }
 
@@ -1846,6 +1855,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	out = append(out, stridedInnerWalkFindings(fset, fn)...)
 	out = append(out, inconsistentFMAPinningFindings(fset, fn)...)
 	out = append(out, sortFeedsCountedPrefixFindings(fset, fn)...)
+	out = append(out, redundantPureRecomputeFindings(fset, fn, ns)...)
 	out = append(out, invariantTranscendentalRecomputeFindings(fset, fn)...)
 	out = append(out, partialFastPathFindings(fset, fn)...)
 	out = append(out, outputInvariantReloadFindings(fset, fn)...)
@@ -2341,6 +2351,9 @@ func main() {
 		// elementAccessors empty, hasAccessorFallback is never set and the check
 		// reports zero on any input. Same false assurance, same warning.
 		"unverified-dual-path": ns.accessors,
+		// PS6014 cannot judge purity from syntax; with pureComputeFuncs empty it reports
+		// zero on any input, which is the same false assurance.
+		"redundant-pure-recompute": ns.pureCompute,
 	}
 	var starved []string
 	for cat, vocab := range domainVocab {
@@ -6756,4 +6769,229 @@ func wrappedSortCall(st ast.Stmt, wrapped map[string]string) (target, sorter str
 		return t, id.Name, true
 	}
 	return "", "", false
+}
+
+// redundantPureRecomputeFindings flags PS6014 — the same pure call made twice in one block
+// with nothing between them that could change its answer:
+//
+//	qPred, _ := forward(backend.NewContext(), d.Net, states) // untaped preview
+//	target := buildTargets(qPred, ...)                       // reads qPred only
+//	q, _ := forward(tape.Context(), d.Net, states)           // SAME network, SAME input
+//
+// The second call recomputes what the first already holds. In the motivating case that was
+// one Context, five backend dispatches and their intermediates on a path that runs once per
+// environment step — worth 1.30-1.35x once removed (rl.DQN.learn), because at these widths
+// the cost is dispatch rather than arithmetic. The shape recurs wherever an untaped preview
+// pass precedes the real taped pass, which is a natural way to write a TD target and a
+// natural way to write it twice.
+//
+// PURITY IS NOT DERIVABLE FROM SYNTAX, so it is not guessed: only callees named in
+// pureComputeFuncs qualify. Without that list the check reports nothing (and says so via
+// the starved-vocabulary warning). Flagging any repeated call would fire on every
+// rng.IntN(n) and every env.Step(a) — calls whose whole purpose is to differ.
+//
+// THE LEADING CONTEXT ARGUMENT IS IGNORED when comparing, which is the point: the two calls
+// in the motivating case differ in exactly that argument (a fresh Context versus the tape's)
+// and are otherwise identical. A comparison that included it would miss every instance.
+// Soundness therefore rests on the remaining arguments, and the check requires all of them
+// to be plain names or selector chains, so "identical text" means "identical value" unless
+// something in between reassigns a name — which is what the invalidation scan looks for.
+func redundantPureRecomputeFindings(fset *token.FileSet, fn *ast.FuncDecl, ns nameSets) []finding {
+	if fn.Body == nil || len(ns.pureCompute) == 0 {
+		return nil
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		blk, ok := n.(*ast.BlockStmt)
+		if !ok {
+			return true
+		}
+		type site struct {
+			key  string
+			call *ast.CallExpr
+			idx  int
+		}
+		var sites []site
+		for i, st := range blk.List {
+			call, key, ok := pureCallSite(st, ns)
+			if !ok {
+				continue
+			}
+			sites = append(sites, site{key, call, i})
+		}
+		for a := 0; a < len(sites); a++ {
+			for b := a + 1; b < len(sites); b++ {
+				if sites[a].key != sites[b].key {
+					continue
+				}
+				if pureCallInvalidated(blk.List[sites[a].idx+1:sites[b].idx+1], sites[b].call, ns) {
+					continue
+				}
+				out = append(out, finding{
+					pos:      fset.Position(sites[b].call.Pos()),
+					end:      fset.Position(sites[b].call.End()),
+					category: "redundant-pure-recompute",
+					msg: fmt.Sprintf("this call to %q recomputes what the identical call on line %d already produced "+
+						"(same arguments apart from the leading context, and nothing between them assigns any name it reads) — "+
+						"keep one result and read it twice. Measured 1.30-1.35x on rl.DQN.learn, where the duplicate cost "+
+						"one context plus five backend dispatches per step.",
+						calleeName(sites[b].call.Fun), fset.Position(sites[a].call.Pos()).Line),
+				})
+				break // one report per redundant site
+			}
+		}
+		return true
+	})
+	return out
+}
+
+// pureCallSite recognizes `x, err := PURE(ctx, args…)` and returns a comparison key built
+// from the callee and every argument AFTER the first. Only plain names and selector chains
+// qualify as arguments: a composite literal or a nested call would make textual equality a
+// weaker claim than value equality.
+func pureCallSite(st ast.Stmt, ns nameSets) (*ast.CallExpr, string, bool) {
+	as, ok := st.(*ast.AssignStmt)
+	if !ok || len(as.Rhs) != 1 {
+		return nil, "", false
+	}
+	call, ok := as.Rhs[0].(*ast.CallExpr)
+	if !ok || len(call.Args) < 2 || call.Ellipsis.IsValid() {
+		return nil, "", false
+	}
+	name := calleeName(call.Fun)
+	if !ns.pureCompute[name] {
+		return nil, "", false
+	}
+	key := name
+	for _, arg := range call.Args[1:] {
+		t := exprText(arg)
+		if t == "" {
+			return nil, "", false
+		}
+		switch arg.(type) {
+		case *ast.Ident, *ast.SelectorExpr:
+		default:
+			return nil, "", false
+		}
+		key += "\x00" + t
+	}
+	return call, key, true
+}
+
+// pureCallInvalidated reports whether anything in stmts could change what call returns:
+// an assignment to a name the call reads, or a call to a NON-pure function handed one of
+// those names (which might mutate what it points at). Both scans descend into nested nodes,
+// so a loop or closure in between is covered rather than skipped.
+func pureCallInvalidated(stmts []ast.Stmt, call *ast.CallExpr, ns nameSets) bool {
+	reads := map[string]bool{}
+	for _, arg := range call.Args[1:] {
+		for _, nm := range identNamesIn(arg) {
+			reads[nm] = true
+		}
+	}
+	for _, nm := range identNamesIn(call.Fun) {
+		reads[nm] = true
+	}
+	bad := false
+	for _, st := range stmts {
+		if bad {
+			break
+		}
+		ast.Inspect(st, func(n ast.Node) bool {
+			if bad {
+				return false
+			}
+			switch x := n.(type) {
+			case *ast.AssignStmt:
+				for _, lhs := range x.Lhs {
+					for _, nm := range identNamesIn(lhs) {
+						if reads[nm] {
+							bad = true
+						}
+					}
+				}
+			case *ast.IncDecStmt:
+				for _, nm := range identNamesIn(x.X) {
+					if reads[nm] {
+						bad = true
+					}
+				}
+			case *ast.UnaryExpr:
+				if x.Op == token.AND { // &x — the address escapes, assume a write
+					for _, nm := range identNamesIn(x.X) {
+						if reads[nm] {
+							bad = true
+						}
+					}
+				}
+			case *ast.CallExpr:
+				if ns.pureCompute[calleeName(x.Fun)] {
+					return true
+				}
+				// len and cap are builtins that provably cannot mutate their argument, and
+				// they are how a size gets read between the two calls (Shape{len(batch), k}).
+				// Treating them as potential writers suppressed the very case this rule was
+				// built from when that case was written with the same slice name.
+				if id, ok := x.Fun.(*ast.Ident); ok && (id.Name == "len" || id.Name == "cap") {
+					return true
+				}
+				// A method on something the call reads, or a call handed one of those
+				// names, may mutate it.
+				for _, nm := range identNamesIn(x.Fun) {
+					if reads[nm] {
+						bad = true
+					}
+				}
+				for _, arg := range x.Args {
+					for _, nm := range mutableIdentNamesIn(arg) {
+						if reads[nm] {
+							bad = true
+						}
+					}
+				}
+			}
+			return true
+		})
+	}
+	return bad
+}
+
+// mutableIdentNamesIn is identNamesIn minus anything reachable only through a len or cap
+// call. Those builtins provably cannot mutate their argument, and reading a size is the
+// normal reason a name appears between two otherwise-identical calls —
+// `New(F64, Shape{len(states), k})`. Counting the `states` inside that `len` as a possible
+// write suppressed the exact case this rule was built from.
+//
+// Worth recording HOW that was caught, because the usual order failed here: replaying the
+// detector against the real pre-fix source PASSED, since that source happened to size its
+// tensor from a different slice than it fed the forward. The synthetic positive test is what
+// exposed it. Replay proves a rule finds the case it was built from; it does not prove the
+// rule finds the SHAPE, and one incidental difference in naming is enough to hide the gap.
+func mutableIdentNamesIn(e ast.Expr) []string {
+	var out []string
+	ast.Inspect(e, func(n ast.Node) bool {
+		if c, ok := n.(*ast.CallExpr); ok {
+			if id, ok := c.Fun.(*ast.Ident); ok && (id.Name == "len" || id.Name == "cap") {
+				return false
+			}
+		}
+		if id, ok := n.(*ast.Ident); ok {
+			out = append(out, id.Name)
+		}
+		return true
+	})
+	return out
+}
+
+// identNamesIn collects every identifier name appearing in e, including the base of a
+// selector chain (so `d.Net` contributes both "d" and "Net").
+func identNamesIn(e ast.Expr) []string {
+	var out []string
+	ast.Inspect(e, func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok {
+			out = append(out, id.Name)
+		}
+		return true
+	})
+	return out
 }

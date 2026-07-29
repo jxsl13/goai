@@ -1024,6 +1024,50 @@ followed by `return false`, structurally identical and semantically unrelated. A
 adds exactly one finding (56 → 57) instead of fourteen.
 
 
+## PS6014 — the same pure call made twice  *(scanner: domain)*
+
+Two syntactically identical calls to a function the project has declared pure, in one block,
+with nothing between them that could change the answer:
+
+```go
+qPred, _ := forward(NewContext(), d.Net, states) // untaped preview
+target := New(F64, Shape{len(batch), k})         // reads qPred only
+q, _ := forward(tape.Context(), d.Net, states)   // SAME net, SAME input
+```
+
+The first call exists only to seed the entries of `target` whose gradient must be zero — and
+the second already holds those numbers. Deleting the preview and reading the taped result
+instead was **1.30×** at batch 32 and **1.35×** at batch 128 in `rl.DQN.learn`, because on a
+per-step path at these widths the cost is one Context plus five backend dispatches, not
+arithmetic. The shape recurs wherever an untaped preview precedes the real taped pass, which
+is a natural way to write a TD target and a natural way to write it twice.
+
+**The leading argument is ignored when comparing**, and that is the whole point: the two
+calls differ in exactly that argument (a fresh Context versus the tape's) and are otherwise
+identical. A comparison that included it would miss every instance. Soundness therefore
+rests on the rest — every remaining argument must be a plain name or selector chain, and the
+check scans everything between the two sites for an assignment to any name the call reads, a
+non-pure call handed one of those names, or an `&x` that lets the address escape. The scan
+descends into nested nodes, so a write buried in a loop suppresses correctly.
+
+**Purity is not derivable from syntax, so it is not guessed.** Only callees listed in
+`pureComputeFuncs` qualify; with that list empty the check reports nothing and says so via
+the starved-vocabulary warning. Flagging repeated calls in general would fire on every
+`rng.IntN(n)` and every `env.Step(a)` — calls whose entire purpose is to differ.
+
+**A zero here is the healthy state, not a dead rule.** The tree reports no candidates because
+the one instance was found and fixed; `PERF-SCANRULE-EMPTY-001` is about rules that never
+found anything, which is not this.
+
+**How the len/cap exemption was found is worth more than the exemption.** Names reachable only
+through `len` or `cap` are excluded from the mutation scan, because reading a size is the
+normal reason a name appears between two identical calls. Without that, `New(F64, Shape{len(states), k})`
+counted as a possible write to `states` and suppressed the finding. Replaying the detector
+against the real pre-fix source did **not** catch this — that source happened to size its
+tensor from a different slice than it fed the forward, so it passed for an incidental reason.
+The synthetic positive test is what exposed it. Replay proves a rule finds the case it was
+built from; it does not prove the rule finds the *shape*.
+
 ## PS6011 — an inner loop that walks a flat buffer along the wrong axis  *(scanner: static)*
 
 The inner loop variable appears MULTIPLIED by a stride, so consecutive iterations jump a

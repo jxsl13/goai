@@ -1,20 +1,81 @@
 {
   "_comment": "GoAI's perfscan vocabulary — the project-specific function/method names that drive the four DOMAIN checks (PS1001 per-element-dispatch, PS1002 per-element-closure, PS2001 alloc-in-loop, PS4002 scalar-transcendental-vectorizable). The stdlib/language checks need no config. `make perfscan` passes this file via -config; any other repo supplies its own (or none, for stdlib-only scanning).",
-
-  "elementAccessors": ["AtF64", "SetF64"],
-  "fastPathHelpers": ["flatF64", "flatF32", "F64", "F32", "f64Data", "outF64", "flatRowMajor"],
-  "elementCountMethods": ["Numel"],
-  "shapeMethods": ["Shape"],
-  "indexDecomposeFuncs": ["Unravel"],
-  "allocatorFuncs": ["New", "NewOn", "FromFloat64", "FromFloat32", "Zeros", "Ones", "Full", "Scalar", "scalarTensor", "Cast"],
-  "perElementVisitors": ["readGen", "fillGen", "visitGen", "forEach", "eachElem"],
-  "bulkCopyHelpers": ["rawCopyLE", "rawStoreLE"],
+  "elementAccessors": [
+    "AtF64",
+    "SetF64"
+  ],
+  "fastPathHelpers": [
+    "flatF64",
+    "flatF32",
+    "F64",
+    "F32",
+    "f64Data",
+    "outF64",
+    "flatRowMajor"
+  ],
+  "elementCountMethods": [
+    "Numel"
+  ],
+  "shapeMethods": [
+    "Shape"
+  ],
+  "indexDecomposeFuncs": [
+    "Unravel"
+  ],
+  "allocatorFuncs": [
+    "New",
+    "NewOn",
+    "FromFloat64",
+    "FromFloat32",
+    "Zeros",
+    "Ones",
+    "Full",
+    "Scalar",
+    "scalarTensor",
+    "Cast"
+  ],
+  "perElementVisitors": [
+    "readGen",
+    "fillGen",
+    "visitGen",
+    "forEach",
+    "eachElem"
+  ],
+  "bulkCopyHelpers": [
+    "rawCopyLE",
+    "rawStoreLE"
+  ],
   "vectorizedSiblingFuncs": [
-    "vexpF32", "vexpFullF32", "vexpRowF32", "vexpQuadsNeonF32", "vexpFullQuadsNeonF32",
-    "vsiluF32", "vsiluF64", "vsiluGradF32", "vsiluQuadsNeonF32", "vsiluGradQuadsNeonF32",
-    "vgeluF32", "vgeluGradF32", "vgeluQuadsNeonF32", "vgeluGradQuadsNeonF32",
-    "vtanhF32", "vtanhQuadsNeonF32", "vlogF32", "vlogQuadsNeonF32",
-    "vsigmoidF32", "vsigmoidQuadsNeonF32", "vsoftplusF64", "vsoftcapF64",
-    "vMaxF32", "varSumF32", "expF64x4", "softplusF64x4", "horizF64x4", "max8"
+    "vexpF32",
+    "vexpFullF32",
+    "vexpRowF32",
+    "vexpQuadsNeonF32",
+    "vexpFullQuadsNeonF32",
+    "vsiluF32",
+    "vsiluF64",
+    "vsiluGradF32",
+    "vsiluQuadsNeonF32",
+    "vsiluGradQuadsNeonF32",
+    "vgeluF32",
+    "vgeluGradF32",
+    "vgeluQuadsNeonF32",
+    "vgeluGradQuadsNeonF32",
+    "vtanhF32",
+    "vtanhQuadsNeonF32",
+    "vlogF32",
+    "vlogQuadsNeonF32",
+    "vsigmoidF32",
+    "vsigmoidQuadsNeonF32",
+    "vsoftplusF64",
+    "vsoftcapF64",
+    "vMaxF32",
+    "varSumF32",
+    "expF64x4",
+    "softplusF64x4",
+    "horizF64x4",
+    "max8"
+  ],
+  "pureComputeFuncs": [
+    "forward"
   ]
 }

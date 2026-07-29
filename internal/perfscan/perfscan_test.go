@@ -4248,3 +4248,130 @@ func f(db store, idx []int, d []bool, k int) {
 		t.Fatalf("want 0 on an unrelated SortFunc method, got %d", got)
 	}
 }
+
+// The rl.DQN.learn shape: the same pure forward twice, differing only in the leading
+// context argument, with only a fresh tensor written in between.
+func TestDetectPS6014_RedundantPureRecompute(t *testing.T) {
+	src := `package p
+func learn(d *D, states [][]float64, k int) error {
+	qPred, err := forward(NewContext(), d.Net, states)
+	if err != nil {
+		return err
+	}
+	target := New(F64, Shape{len(states), k})
+	for i := range states {
+		for a := range k {
+			target.SetF64(qPred.AtF64(i, a), i, a)
+		}
+	}
+	q, err := forward(tape.Context(), d.Net, states)
+	if err != nil {
+		return err
+	}
+	return use(q, target)
+}`
+	if got := countCat(scanSrc(t, src))["redundant-pure-recompute"]; got != 1 {
+		t.Fatalf("want 1 redundant-pure-recompute, got %d", got)
+	}
+}
+
+// An assignment to one of the arguments between the two calls means the second genuinely
+// asks a different question.
+func TestDetectPS6014_SilentWhenAnArgumentIsReassigned(t *testing.T) {
+	src := `package p
+func f(d *D, states [][]float64) error {
+	a, err := forward(NewContext(), d.Net, states)
+	if err != nil {
+		return err
+	}
+	states = nextBatch()
+	b, err := forward(NewContext(), d.Net, states)
+	if err != nil {
+		return err
+	}
+	return use(a, b)
+}`
+	if got := countCat(scanSrc(t, src))["redundant-pure-recompute"]; got != 0 {
+		t.Fatalf("want 0 when an argument is reassigned, got %d", got)
+	}
+}
+
+// A non-pure call handed one of the arguments may mutate what it points at — the classic
+// case being an optimizer step between a preview forward and the real one.
+func TestDetectPS6014_SilentWhenAnImpureCallTouchesAnArgument(t *testing.T) {
+	src := `package p
+func f(d *D, states [][]float64) error {
+	a, err := forward(NewContext(), d.Net, states)
+	if err != nil {
+		return err
+	}
+	applyGradients(d.Net)
+	b, err := forward(NewContext(), d.Net, states)
+	if err != nil {
+		return err
+	}
+	return use(a, b)
+}`
+	if got := countCat(scanSrc(t, src))["redundant-pure-recompute"]; got != 0 {
+		t.Fatalf("want 0 when an impure call touches an argument, got %d", got)
+	}
+}
+
+// A mutation hidden inside a loop between the two calls must still suppress: the
+// invalidation scan descends into nested nodes rather than only inspecting top-level
+// statements, which is the failure mode three earlier rules in this file shipped with.
+func TestDetectPS6014_SilentWhenTheWriteIsNestedInALoop(t *testing.T) {
+	src := `package p
+func f(d *D, states [][]float64) error {
+	a, err := forward(NewContext(), d.Net, states)
+	if err != nil {
+		return err
+	}
+	for i := range states {
+		if i > 0 {
+			states[i] = perturb(states[i])
+		}
+	}
+	b, err := forward(NewContext(), d.Net, states)
+	if err != nil {
+		return err
+	}
+	return use(a, b)
+}`
+	if got := countCat(scanSrc(t, src))["redundant-pure-recompute"]; got != 0 {
+		t.Fatalf("want 0 when the write is nested in a loop, got %d", got)
+	}
+}
+
+// A callee NOT declared pure is never flagged, however identical the two calls look —
+// repeated rng draws and repeated env steps are the whole point of those calls.
+func TestDetectPS6014_SilentOnAnUndeclaredCallee(t *testing.T) {
+	src := `package p
+func f(d *D, n int, bound int) int {
+	a, _ := sampleIndex(d.rng, n, bound)
+	b, _ := sampleIndex(d.rng, n, bound)
+	return a + b
+}`
+	if got := countCat(scanSrc(t, src))["redundant-pure-recompute"]; got != 0 {
+		t.Fatalf("want 0 for a callee outside pureComputeFuncs, got %d", got)
+	}
+}
+
+// Differing arguments are not a recompute.
+func TestDetectPS6014_SilentOnDifferentArguments(t *testing.T) {
+	src := `package p
+func f(d *D, states, nexts [][]float64) error {
+	a, err := forward(NewContext(), d.Net, states)
+	if err != nil {
+		return err
+	}
+	b, err := forward(NewContext(), d.Net, nexts)
+	if err != nil {
+		return err
+	}
+	return use(a, b)
+}`
+	if got := countCat(scanSrc(t, src))["redundant-pure-recompute"]; got != 0 {
+		t.Fatalf("want 0 for different arguments, got %d", got)
+	}
+}
