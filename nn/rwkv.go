@@ -38,17 +38,65 @@ func WKV(k, v, w, u *tensor.Tensor) (*tensor.Tensor, error) {
 		return nil, fmt.Errorf("nn: WKV w,u must be [D=%d], got %v, %v", d, w.Shape(), u.Shape())
 	}
 	out := tensor.New(k.Dtype(), k.Shape())
-	for c := range d {
+	// Typed fast paths: the recurrence reads k[t,c]/v[t,c] and writes out[t,c] on every
+	// (c,t) — three interface dispatches per element, comparable to the four math.Exp. Grab
+	// the contiguous typed slices once (w,u are [D]); the AtF64 loop stays as the exotic-dtype
+	// fallback. Bit-identical: the same reads/writes and the same per-channel recurrence order.
+	kc, vc := k.Contiguous(), v.Contiguous()
+	wc0, uc0 := w.Contiguous(), u.Contiguous()
+	switch k.Dtype() {
+	case tensor.F64:
+		ks, vs, os := kc.Storage().F64(), vc.Storage().F64(), out.Storage().F64()
+		ws, us := wc0.Storage().F64(), uc0.Storage().F64()
+		for c := range d {
+			wc, uc := ws[c], us[c]
+			aa, bb, pp := 0.0, 0.0, -1e38
+			for t := range seq {
+				o := t*d + c
+				kk, vv := ks[o], vs[o]
+				ww := uc + kk
+				q := math.Max(pp, ww)
+				e1, e2 := math.Exp(pp-q), math.Exp(ww-q)
+				os[o] = (e1*aa + e2*vv) / (e1*bb + e2)
+				q = math.Max(pp-wc, kk)
+				e1, e2 = math.Exp(pp-wc-q), math.Exp(kk-q)
+				aa = e1*aa + e2*vv
+				bb = e1*bb + e2
+				pp = q
+			}
+		}
+		return out, nil
+	case tensor.F32:
+		ks, vs, os := kc.Storage().F32(), vc.Storage().F32(), out.Storage().F32()
+		ws, us := wc0.Storage().F32(), uc0.Storage().F32()
+		for c := range d {
+			wc, uc := float64(ws[c]), float64(us[c])
+			aa, bb, pp := 0.0, 0.0, -1e38
+			for t := range seq {
+				o := t*d + c
+				kk, vv := float64(ks[o]), float64(vs[o])
+				ww := uc + kk
+				q := math.Max(pp, ww)
+				e1, e2 := math.Exp(pp-q), math.Exp(ww-q)
+				os[o] = float32((e1*aa + e2*vv) / (e1*bb + e2))
+				q = math.Max(pp-wc, kk)
+				e1, e2 = math.Exp(pp-wc-q), math.Exp(kk-q)
+				aa = e1*aa + e2*vv
+				bb = e1*bb + e2
+				pp = q
+			}
+		}
+		return out, nil
+	}
+	for c := range d { // exotic-dtype fallback: per-element dispatch
 		wc, uc := w.AtF64(c), u.AtF64(c)
 		aa, bb, pp := 0.0, 0.0, -1e38 // running numerator, denominator, and max exponent
 		for t := range seq {
 			kk, vv := k.AtF64(t, c), v.AtF64(t, c)
-			// output at t: fold in the current token with its bonus u (no decay).
 			ww := uc + kk
 			q := math.Max(pp, ww)
 			e1, e2 := math.Exp(pp-q), math.Exp(ww-q)
 			out.SetF64((e1*aa+e2*vv)/(e1*bb+e2), t, c)
-			// update the running state for t+1: decay the past by w, add k_t (no bonus).
 			q = math.Max(pp-wc, kk)
 			e1, e2 = math.Exp(pp-wc-q), math.Exp(kk-q)
 			aa = e1*aa + e2*vv
