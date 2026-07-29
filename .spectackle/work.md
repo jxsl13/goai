@@ -1096,3 +1096,24 @@ THREE GENUINE ZEROES: Cohere, Mixtral and OLMo2 decode hold exactly, because ear
 CUMULATIVE across the sweep: 373 exec1 call sites moved to pooled siblings, 55 attrs boxes hoisted out of layer loops, PS6017 candidates in nlp down from about 400 to 176. The remainder are call shapes the mechanical rewrite does not match - indexed and call-valued arguments - which need per-site judgment rather than a regex.
 
 METHOD NOTE. Two iterations were spent measuring things that could not be measured before recognizing that the fix was to build the instrument. The signal was available earlier: PROC-BENCH-COVERAGE-NULL-001 was cast one iteration before this, from exactly the same symptom, and treating it as a warning about a single benchmark rather than a systemic gap cost a round.
+
+## R-01KYR0F8WRFCSSPSJ9ASZS6F3R The benchmark matrix turned out to be a diagnostic: a 4.5x allocation outlier led to Gemma2 decode 1.21x, -27.6% allocs
+kind: research
+state: draft
+created: 2026-07-29
+
+Measured on darwin/arm64 M2 Pro, go1.26.5, GOMAXPROCS=12, five interleaved rounds at benchtime=300x.
+
+HOW IT WAS FOUND, which is the reusable part. The twelve-architecture benchmark matrix was built as a GUARD - to make the allocation sweep verifiable. Reading it as data instead showed Gemma2 decode at 4862 allocations against MPT 1086 on IDENTICAL geometry (all twelve fixtures are two layers, dim 32, five tokens), a 4.5x spread that geometry cannot explain. That pointed a profiler at one function. An instrument built for verification answered a question nobody had asked, and the normalization that made it readable was checking that the fixtures share geometry - without that the spread looks like model size.
+
+THE DEFECT. Gemma2 cannot use the fused OpMHA every other architecture takes, because the attention-logit soft-cap sits between the scores and the softmax. So cappedDecodeAttention hand-rolls attention per head: three slices, a transpose, two matmuls, a scalar multiply, a soft-cap and a softmax, per head per layer per token. The allocation profile put that single function at 78.65% of a decode step, with ref.sliceKernel 17.58% plus SlicePlan 2.51% plus ref.transposeKernel 5.86% - 26% in pure data movement.
+
+THE FIX, scoped by ADR-01KYQ9PHNPEFC: fuse ONLY the movement. The three slices and the transpose are pure gather, so qh/khT/vh are built straight from storage with the transpose done during the copy. Bit-identical by construction - the same values reach the same kernels in the same order - while matmul, mul, soft-cap and softmax stay on the backend, where fusing them would risk reassociation and FMA contraction for no structural gain. One scratch tensor per role reused across heads, each fully overwritten before its head reads it.
+
+MEASURED: 4862 to 3522 allocations, -27.6%, identical in all five rounds. 192-202us to 158-168us, non-overlapping ranges, so 1.21x is the conservative figure. Prefill unchanged at exactly 1054 both arms, correctly - Forward does not call this function.
+
+A MEASUREMENT TRAP, this time on a change that WAS real. At benchtime=50x the same fix looked like 1.90x: the fused arm ranged 157-247us while the baseline sat tight at 299-305us, and min-of-N reported whichever round caught the fast mode. At 300x both arms are tight and the honest ratio is 1.21x. PROC-BENCH-ONE-SAMPLE-001 was cast from a case where low benchtime manufactured a regression that did not exist; it applies equally where low benchtime inflates a real gain, and the failure mode is symmetric.
+
+BIT-IDENTITY TESTED, NOT ARGUED, and the test design is worth reusing: the two arms are selected by ctx.Recorder, so a plain context takes the fused gather and a taped context keeps the dispatch path. Comparing raw float32 bits between them exercises the arithmetic AND the guard in one pass. Panic-probed to confirm the fused branch is reached, because a parity test whose arms take the same path passes while proving nothing.
+
+NO NEW PERFSCAN RULE: PS4011 already flags this file and this shape - a sequential loop dispatching several backend ops per iteration with no fused path - and its recorded remedy is exactly what was applied. The rule was right and unconsumed.
