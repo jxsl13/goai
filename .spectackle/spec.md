@@ -402,4 +402,4 @@ WHEN a speedup below roughly 10 percent is claimed, the a benchmark A/B SHALL to
 IF an optimization trades register accumulators for a memory accumulator vector to cut passes over a matrix, THEN the implementer SHALL reject it unless measured faster than the register-blocked form on a working set too large for cache (see R-01KYPCPWZ9EDY).
 
 ## NUM-FUSED-PATH-FMA-001
-IF a fused loop claims bit-exactness against a multi-op dispatch path, THEN the implementer SHALL round each product explicitly, because the compiler contracts a*b+c to FMADD on arm64 but not amd64, so the claim passes CI and fails on Apple silicon.
+IF a fused loop claims bit-exactness against a multi-op dispatch path, THEN the implementer SHALL round each product explicitly, because arm64 contracts a*b+c to FMADD and amd64 does not, so the claim passes CI and fails on Apple silicon.
