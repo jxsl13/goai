@@ -717,19 +717,52 @@ func (m *QuantDeepSeekV2) attnAbsorbed(ctx *backend.Context, l int, b *QuantDeep
 	}
 	rope := backend.RoPEAttrs{Base: cfg.RopeBase, Heads: 1, PosOffset: ropePos}
 
+	// Fuse the per-head query gather (ADR-01KYQ9PHNPEFC: movement only, arithmetic stays on
+	// the backend). Three slice dispatches per head collapse to two copies, and one of the
+	// three was pure indirection: qh existed only to be re-sliced into qNope and qPe, both of
+	// which are contiguous runs of q's own storage. Bit-identical by construction — the same
+	// floats reach the same RoPE, matmul and add kernels in the same order.
+	//
+	// Gated on ctx.Recorder == nil: under a tape those slices are gradient edges.
+	rows := q.Shape()[0]
+	fusedQ := false
+	var qNopeBuf, qPeBuf *tensor.Tensor
+	var qFlat []float32
+	if ctx.Recorder == nil && q.Dtype() == tensor.F32 {
+		qc := q.Contiguous()
+		qFlat = qc.Storage().F32()
+		if len(qFlat) >= rows*cfg.Heads*qkHead {
+			// One scratch per role, reused across heads: fully overwritten before each
+			// head's first read, and nothing retains them past that head's matmul.
+			qNopeBuf = tensor.New(tensor.F32, tensor.Shape{rows, cfg.QKNope})
+			qPeBuf = tensor.New(tensor.F32, tensor.Shape{rows, qkHead - cfg.QKNope})
+			fusedQ = true
+		}
+	}
+
 	heads := make([]*tensor.Tensor, cfg.Heads)
 	for h := range cfg.Heads {
-		qh, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: h * qkHead, End: (h + 1) * qkHead}, q)
-		if err != nil {
-			return nil, err
-		}
-		qNope, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: 0, End: cfg.QKNope}, qh)
-		if err != nil {
-			return nil, err
-		}
-		qPe, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: cfg.QKNope, End: qkHead}, qh)
-		if err != nil {
-			return nil, err
+		var qNope, qPe *tensor.Tensor
+		if fusedQ {
+			nope, pe := qNopeBuf.Storage().F32(), qPeBuf.Storage().F32()
+			peWidth := qkHead - cfg.QKNope
+			for r := range rows {
+				base := r*cfg.Heads*qkHead + h*qkHead
+				copy(nope[r*cfg.QKNope:(r+1)*cfg.QKNope], qFlat[base:base+cfg.QKNope])
+				copy(pe[r*peWidth:(r+1)*peWidth], qFlat[base+cfg.QKNope:base+qkHead])
+			}
+			qNope, qPe = qNopeBuf, qPeBuf
+		} else {
+			qh, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: h * qkHead, End: (h + 1) * qkHead}, q)
+			if err != nil {
+				return nil, err
+			}
+			if qNope, err = exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: 0, End: cfg.QKNope}, qh); err != nil {
+				return nil, err
+			}
+			if qPe, err = exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: cfg.QKNope, End: qkHead}, qh); err != nil {
+				return nil, err
+			}
 		}
 		qPeRot, err := exec1a(ctx, backend.OpRoPE, rope, qPe)
 		if err != nil {
