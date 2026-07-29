@@ -224,6 +224,7 @@ var checks = []check{
 	{"PS4012", "scaled-serial-dot", "a serial scalar dot accumulator whose result is SCALED/dequantized (acc*scale…) before being stored — a quantized/dequant GEMM inner loop; latency-bound like PS4008 but missed by it (acc isn't stored raw). Break the chain with independent accumulators; bit-identical when the products are integer-valued (int8·int8 partials < 2^53 reassociate exactly), else tolerance-gated", false},
 	{"PS5006", "nested-subrange-rescan", "an innermost loop recomputing a running reduction (acc *= / += arr[k]) over a [j..i] sub-range whose bounds are the two enclosing loop vars — an O(T\u00b3) triangular rescan replaceable by a prefix/suffix scan precomputed once per outer index (O(T\u00b2))", false},
 	{"PS5007", "f32-abs-via-f64", "a float32(math.Abs(float64(x))) round-trip on an f32 value — replace with a direct sign-bit clear math.Float32frombits(math.Float32bits(x) &^ (1<<31)); bit-identical |x|, no f64 conversion or call", false},
+	{"PS5008", "sincos-fusable", "a function calling BOTH math.Sin(x) and math.Cos(x) on the SAME argument expression — each does the full argument reduction of x independently; fuse to `sin, cos := math.Sincos(x)` (one reduction, both polynomials). Go's math.Sincos shares Sin/Cos's exact reduction+polynomials so it is bit-identical. Verified: sinusoidal PE builder, RoPE trig fill (attn_extra.go already uses Sincos)", false},
 }
 
 // catToID indexes the registry for O(1) id lookup at report time.
@@ -1828,6 +1829,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	out = append(out, fullSortBoundedPrefixFindings(fset, fn)...)
 	out = append(out, spatialBoundsBranchFindings(fset, fn)...)
 	out = append(out, monotoneIndexBoundFindings(fset, fn)...)
+	out = append(out, sincosFusableFindings(fset, fn)...)
 	return out
 }
 
@@ -3964,6 +3966,70 @@ func isZeroLit(e ast.Expr) bool {
 		}
 	}
 	return true
+}
+
+// sincosNames is the PS5008 trigger set: the two libm calls that share an argument reduction.
+var sincosNames = map[string]bool{"Sin": true, "Cos": true}
+
+// sincosFusableFindings flags PS5008 — a function that calls BOTH math.Sin(E) and
+// math.Cos(E) on the SAME argument expression E. Each call independently performs the
+// full argument reduction of E and then evaluates its own polynomial; math.Sincos(E)
+// reduces once and evaluates both. Go's math.Sincos shares Sin/Cos's exact reduction
+// and _sin/_cos polynomials, so `sinE, cosE := math.Sincos(E)` is bit-identical to the
+// separate calls (the codebase already treats it so — backend/cpu/attn_extra.go RoPE).
+//
+// Advisory (no auto-fix): the enclosing fill/scan loop still needs an A/B bench to
+// confirm the trig is a real fraction of it, and the rewrite must bind the (sin, cos)
+// return order at a single site the tool cannot always place safely. Verified win:
+// nn/sinusoidal.go PE builder (~15-22% on the trig-fill loop). Argument matching is
+// structural via exprEqual, so it is conservative — args differing only by a value
+// conversion (float64(i)…) are not matched, avoiding false positives.
+func sincosFusableFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil {
+		return nil
+	}
+	var sins, coss []*ast.CallExpr
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok || len(call.Args) != 1 {
+			return true
+		}
+		switch name, ok := pkgFuncCall(call.Fun, "math", sincosNames); {
+		case ok && name == "Sin":
+			sins = append(sins, call)
+		case ok && name == "Cos":
+			coss = append(coss, call)
+		}
+		return true
+	})
+	if len(sins) == 0 || len(coss) == 0 {
+		return nil
+	}
+	var out []finding
+	seen := map[token.Pos]bool{}
+	for _, s := range sins {
+		for _, c := range coss {
+			if !exprEqual(s.Args[0], c.Args[0]) {
+				continue
+			}
+			rep := s // report at the earlier of the two call sites
+			if c.Pos() < s.Pos() {
+				rep = c
+			}
+			if seen[rep.Pos()] {
+				continue
+			}
+			seen[rep.Pos()] = true
+			out = append(out, finding{
+				pos:      fset.Position(rep.Pos()),
+				end:      fset.Position(rep.End()),
+				category: "sincos-fusable",
+				msg:      "math.Sin and math.Cos on the same argument — fuse to `sin, cos := math.Sincos(x)` (one argument reduction, bit-identical)",
+			})
+			break
+		}
+	}
+	return out
 }
 
 // quadraticCacheAppendFindings flags PS2006 — a cache slot reassigned to a concat of

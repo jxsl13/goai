@@ -46,8 +46,9 @@ func SinusoidalPositionalEncoding(seqLen, dModel int, base float64, dtype tensor
 		fp := float64(pos)
 		for i := range half {
 			angle := fp * freqs[i]
-			pe.SetF64(math.Sin(angle), pos, 2*i)
-			pe.SetF64(math.Cos(angle), pos, 2*i+1)
+			sin, cos := math.Sincos(angle) // one argument reduction feeds both (bit-identical to Sin+Cos)
+			pe.SetF64(sin, pos, 2*i)
+			pe.SetF64(cos, pos, 2*i+1)
 		}
 	}
 	return pe, nil
@@ -86,8 +87,9 @@ func SinusoidalPositionalEncodingConcat(seqLen, dModel int, base float64, dtype 
 		fp := float64(pos)
 		for i := range half {
 			angle := fp * freqs[i]
-			pe.SetF64(math.Sin(angle), pos, i)      // first half: sines
-			pe.SetF64(math.Cos(angle), pos, half+i) // second half: cosines
+			sin, cos := math.Sincos(angle) // one argument reduction feeds both (bit-identical)
+			pe.SetF64(sin, pos, i)         // first half: sines
+			pe.SetF64(cos, pos, half+i)    // second half: cosines
 		}
 	}
 	return pe, nil
