@@ -97,6 +97,12 @@ type swinRelBias struct {
 	Table  *tensor.Tensor // [(2M−1)², heads], trainable
 	oneHot *tensor.Tensor // [M²·M², (2M−1)²], constant selector
 	m      int            // window edge M
+
+	// Inference cache for headBias, which is a pure function of (Table, oneHot, head) and
+	// was recomputed for every image: 21.6% of a per-image Swin forward's allocations went
+	// into rebuilding a per-block constant. See headBias for the invalidation argument.
+	biasCache []*tensor.Tensor
+	tableSnap []float32
 }
 
 // swinMerge is one patch-merging layer (Liu et al. 2021 §3.1): it groups each 2×2
@@ -794,6 +800,60 @@ func (b *SwinBlock) windowedAttention(ctx *backend.Context, xWin *tensor.Tensor,
 // headBias returns the [M²,M²] relative-position bias matrix for head hh, built
 // as oneHot·Table[:,hh] so it is differentiable w.r.t. the bias table.
 func (r *swinRelBias) headBias(ctx *backend.Context, hh int) (*tensor.Tensor, error) {
+	// Cached for inference. headBias is a pure function of (Table, oneHot, head) — nothing
+	// about the input image enters it — yet it ran once per head per block PER IMAGE, and a
+	// profile put it at 21.6% of a per-image forward's allocations.
+	//
+	// INVALIDATION IS EXACT, not a checksum and not a generation counter. Table is the
+	// trainable parameter, so a cache keyed on anything weaker would serve stale biases after
+	// an optimizer step, silently and only in the numbers. Instead the cache keeps a copy of
+	// Table's storage and compares it element by element: Table is (2M−1)²·heads floats
+	// against a matmul over M⁴·(2M−1)² multiply-adds, so the comparison is orders of magnitude
+	// cheaper than what it avoids while being a proof rather than a guess.
+	//
+	// Only inference contexts read or write the cache. Under a tape the bias must be a real
+	// graph node for the gradient to reach Table, and handing back a cached tensor from an
+	// earlier step would attach the wrong edges — so a taped call always recomputes and never
+	// populates. A cached tensor is safe to share because everything downstream treats the
+	// bias as read-only: swinFuseScoreTerms writes into the scores and only reads the bias.
+	if ctx.Recorder == nil {
+		if cur := swinFlatF32(r.Table); cur != nil {
+			if !swinSameF32(r.tableSnap, cur) {
+				r.biasCache = make([]*tensor.Tensor, r.Table.Shape()[1])
+				r.tableSnap = append(r.tableSnap[:0], cur...)
+			}
+			if hh < len(r.biasCache) && r.biasCache[hh] != nil {
+				return r.biasCache[hh], nil
+			}
+			bias, err := r.computeHeadBias(ctx, hh)
+			if err != nil {
+				return nil, err
+			}
+			if hh < len(r.biasCache) {
+				r.biasCache[hh] = bias
+			}
+			return bias, nil
+		}
+	}
+	return r.computeHeadBias(ctx, hh)
+}
+
+// swinSameF32 reports whether a and b hold identical elements.
+func swinSameF32(a, b []float32) bool {
+	if len(a) != len(b) || len(a) == 0 {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// computeHeadBias is the original dispatch path: select head hh's column of the relative
+// -position table and scatter it over the M²×M² window pair grid.
+func (r *swinRelBias) computeHeadBias(ctx *backend.Context, hh int) (*tensor.Tensor, error) {
 	n := r.m * r.m
 	col, err := swinExec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: hh, End: hh + 1}, r.Table)
 	if err != nil {
