@@ -410,3 +410,33 @@ nature, so a filter that is genuinely invariant across an enclosing loop does no
 rule for it would be dead weight, and shipping one that finds nothing is the criticism this
 campaign already levelled at PS6001. The optimization remains real and shipped; it is simply
 not a pattern a scanner can find here.
+
+## R-01KYQG2XS5EABR2N8QT4T5DPFD PS6013 misses slice-expression prefixes; MoE router sort conversion measured as a null
+kind: research
+state: draft
+created: 2026-07-29
+
+PS6013 (sort-feeds-counted-prefix) has a recall gap worth recording: it matches a counted
+`for r := 0; r < k; r++` consumer but not a SLICE-EXPRESSION consumer,
+`experts = append([]int(nil), idx[:k]...)`, which is the same shape. nn/moe.go's two routers
+are that form and go unflagged.
+
+NOT FIXED, deliberately, because in this instance the rule being silent is the right answer.
+A selection is unsafe for these sorts: the ORDER of the selected prefix determines the order
+the expert outputs are summed downstream, so leaving it unordered changes the result. Wanda's
+argument — only membership is read, so the arbitrary order inside the prefix is unobservable
+— does not carry over. Extending PS6013 to catch the slice-expression form would therefore
+have produced a finding whose recommended fix is wrong here.
+
+If the rule is ever extended to that form, the message must distinguish the two consumers:
+membership-only (safe to select) versus order-carrying (not). That distinction is the whole
+of the rule's correctness precondition, and a slice-expression consumer makes it harder to
+see than a counted loop does, because `idx[:k]` says nothing about whether the order is read.
+
+Also measured and recorded as a NULL: converting both MoE routers from sort.SliceStable to
+slices.SortStableFunc (PS6009) is 0.991-1.001x on Qwen sparse and 0.914-1.039x on Mixtral
+sparse — noise. Allocations 386 -> 384. The decode benchmarks make only a couple of router
+calls each, so a per-call saving of two allocations is invisible; in a real decode loop the
+saving is per token. Shipped anyway as strictly non-worse, but explicitly not as a speedup.
+The benchmark under-represents the router by roughly the sequence length, which is the thing
+to fix before anyone tries to measure router work again.
