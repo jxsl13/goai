@@ -241,28 +241,34 @@ func (r *rollout) meanReturn() float64 {
 // finishes the running episode so the batch ends at a terminal state (bootstrap 0).
 func rlRollout(env Env, actor, critic *nn.Sequential, rng *rand.Rand, steps int) (*rollout, error) {
 	k := env.NumActions()
-	ro := &rollout{}
+	// Preallocated to the requested step count. The loop overruns steps to finish the
+	// running episode, so these grow a little past capacity, but that is one realloc
+	// instead of the ~9 doubling rounds each slice paid from zero.
+	ro := &rollout{
+		states:  make([][]float64, 0, steps),
+		actions: make([]int, 0, steps),
+		logpOld: make([]float64, 0, steps),
+		rewards: make([]float64, 0, steps),
+		dones:   make([]bool, 0, steps),
+	}
+	// One context for the whole collection instead of two per step.
+	ctx := backend.NewContext()
 	for len(ro.states) < steps {
 		obs := env.Reset()
 		var epR float64
 		for {
-			logits, err := forward(backend.NewContext(), actor, [][]float64{obs})
+			logits, err := forward(ctx, actor, [][]float64{obs})
 			if err != nil {
 				return nil, err
 			}
-			probs, err := backend.Execute(backend.NewContext(), backend.OpSoftmax, []*tensor.Tensor{logits}, nil)
+			probs, err := backend.Execute(ctx, backend.OpSoftmax, []*tensor.Tensor{logits}, nil)
 			if err != nil {
 				return nil, err
 			}
 			a := sampleAction(probs[0], 0, k, rng)
-			v, err := forward(backend.NewContext(), critic, [][]float64{obs})
-			if err != nil {
-				return nil, err
-			}
 			ro.states = append(ro.states, obs)
 			ro.actions = append(ro.actions, a)
 			ro.logpOld = append(ro.logpOld, math.Log(probs[0].AtF64(0, a)))
-			ro.values = append(ro.values, v.AtF64(0, 0))
 			next, rew, done := env.Step(a)
 			ro.rewards = append(ro.rewards, rew)
 			ro.dones = append(ro.dones, done)
@@ -273,6 +279,25 @@ func rlRollout(env Env, actor, critic *nn.Sequential, rng *rand.Rand, steps int)
 				break
 			}
 		}
+	}
+	// The critic is evaluated ONCE over the whole batch rather than once per step. Its value
+	// is not read during collection — it is only appended to ro.values and consumed after
+	// the loop by GAE — and the critic's parameters are never touched inside the loop, so
+	// one [N,obsDim] forward yields the same column that N batch-1 forwards did. This is
+	// where the dispatch count collapses: N forwards of 5 Execute calls each become 5.
+	//
+	// It also cannot perturb the trajectory: the critic consumes no random numbers, and the
+	// actor forward, softmax and sampleAction stay in place and in order, so the RNG stream
+	// and every action, reward and done are unchanged (TestRolloutTrajectoryParity pins
+	// that, and pins the values digest too — batching is only sound if the m=1 and m=N
+	// kernels agree at tolerance 0, which is asserted rather than assumed).
+	vals, err := forward(ctx, critic, ro.states)
+	if err != nil {
+		return nil, err
+	}
+	ro.values = make([]float64, len(ro.states))
+	for i := range ro.values {
+		ro.values[i] = vals.AtF64(i, 0)
 	}
 	return ro, nil
 }

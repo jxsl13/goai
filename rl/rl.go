@@ -406,15 +406,23 @@ func (d *DQN) learn(k int) error {
 	if err != nil {
 		return err
 	}
-	// predictions without tape to fill non-taken entries
-	qPred, err := forward(backend.NewContext(), d.Net, states)
+	// The taped forward is opened BEFORE target is built, so the non-taken entries can be
+	// seeded from q itself. Those entries exist only to make their MSE gradient zero, and q
+	// already holds exactly the numbers a second untaped forward would recompute — same
+	// network, same input, and nothing between the two calls writes a parameter (the only
+	// writes are into the freshly allocated target). Reading AtF64 off a taped tensor
+	// records nothing and target is never taped, so the graph is identical; what goes away
+	// is one Context, five Execute dispatches and their intermediates per learn step.
+	tape := autograd.NewTape()
+	ctx := tape.Context()
+	q, err := forward(ctx, d.Net, states)
 	if err != nil {
 		return err
 	}
 	target := tensor.New(tensor.F64, tensor.Shape{len(batch), k})
 	for i, tr := range batch {
 		for a := range k {
-			target.SetF64(qPred.AtF64(i, a), i, a)
+			target.SetF64(q.AtF64(i, a), i, a)
 		}
 		y := tr.r
 		if !tr.done {
@@ -429,12 +437,6 @@ func (d *DQN) learn(k int) error {
 		target.SetF64(y, i, tr.a)
 	}
 
-	tape := autograd.NewTape()
-	ctx := tape.Context()
-	q, err := forward(ctx, d.Net, states)
-	if err != nil {
-		return err
-	}
 	loss, err := nn.MSE(ctx, q, target)
 	if err != nil {
 		return err
