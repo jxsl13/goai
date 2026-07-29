@@ -220,6 +220,7 @@ var checks = []check{
 	{"PS6004", "unverified-dual-path", "a devirtualized fast path with a generic fallback — a bit-identity claim needing a bit-exact test", true},
 	{"PS4010", "vectorizable-butterfly", "an in-loop butterfly p,q = x+y,x-y (add and subtract of the SAME operand pair written to two indexed slots) — a scalar FWHT/FFT/Hadamard stage a SIMD Add/Sub over the contiguous stride-separated runs would vectorize", false},
 	{"PS4011", "op-dispatch-recurrence", "a sequential loop dispatching 2+ backend ops (calls passing a backend.Op* constant) per iteration in a function with NO fused typed fast path (no flatF64 guard) — O(seq) dispatch+alloc overhead on tiny per-step tensors; add a raw-slice fused path", false},
+	{"PS4012", "scaled-serial-dot", "a serial scalar dot accumulator whose result is SCALED/dequantized (acc*scale…) before being stored — a quantized/dequant GEMM inner loop; latency-bound like PS4008 but missed by it (acc isn't stored raw). Break the chain with independent accumulators; bit-identical when the products are integer-valued (int8·int8 partials < 2^53 reassociate exactly), else tolerance-gated", false},
 	{"PS5006", "nested-subrange-rescan", "an innermost loop recomputing a running reduction (acc *= / += arr[k]) over a [j..i] sub-range whose bounds are the two enclosing loop vars — an O(T\u00b3) triangular rescan replaceable by a prefix/suffix scan precomputed once per outer index (O(T\u00b2))", false},
 	{"PS5007", "f32-abs-via-f64", "a float32(math.Abs(float64(x))) round-trip on an f32 value — replace with a direct sign-bit clear math.Float32frombits(math.Float32bits(x) &^ (1<<31)); bit-identical |x|, no f64 conversion or call", false},
 }
@@ -1814,6 +1815,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	out = append(out, butterflyFindings(fset, fn)...)
 	out = append(out, transposedGramFindings(fset, fn)...)
 	out = append(out, serialDotMatmulFindings(fset, fn)...)
+	out = append(out, scaledSerialDotFindings(fset, fn)...)
 	out = append(out, quadraticCacheAppendFindings(fset, fn)...)
 	out = append(out, buildNxNUseOneRowFindings(fset, fn)...)
 	out = append(out, indirectKeyComparatorFindings(fset, fn)...)
@@ -3512,6 +3514,102 @@ func isSelCall(call *ast.CallExpr, pkg, fn string) bool {
 	}
 	id, ok := sel.X.(*ast.Ident)
 	return ok && id.Name == pkg
+}
+
+// scaledSerialDotFindings flags PS4012 — a serial scalar-dot accumulator whose result is
+// SCALED/dequantized (used in a * or / expression) before being stored, the quantized-GEMM
+// inner loop that PS4008 misses because the accumulator is not written out raw. Same fix as
+// PS4008 (independent accumulators break the latency chain); bit-identical when the products
+// are integer-valued (int8·int8 partials stay < 2^53 so any grouping sums the same exact
+// integer), else tolerance-gated. Shipped: nn.LLMInt8MatMul (~2x).
+func scaledSerialDotFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		_, obody, ok := loopVarBody(n)
+		if !ok {
+			return true
+		}
+		for _, mid := range obody.List {
+			_, mbody, ok := loopVarBody(mid)
+			if !ok {
+				continue
+			}
+			acc, inner := scaledDotAcc(mbody)
+			// require the accumulator to be consumed by a scale (* or /) — the dequant
+			// step — which distinguishes this from PS4008's raw `out[i] = acc` store.
+			if acc == "" || !identInScaleExpr(mbody, acc) {
+				continue
+			}
+			out = append(out, finding{
+				pos:      fset.Position(inner.Pos()),
+				category: "scaled-serial-dot",
+				msg: fmt.Sprintf("%q accumulates a serial scalar dot that is then SCALED/dequantized"+
+					" (acc*scale…) before being stored — a quantized-GEMM inner loop, latency-bound"+
+					" like PS4008 but not stored raw. Break the dependency chain with independent"+
+					" accumulators (e.g. 4-way unroll). Bit-identical when the products are"+
+					" integer-valued (int8·int8 partials < 2^53 reassociate exactly); else"+
+					" tolerance-gate against the sequential form. Shipped: nn.LLMInt8MatMul (~2x).", acc),
+			})
+		}
+		return true
+	})
+	return out
+}
+
+// scaledDotAcc finds a float accumulator declared in mbody (`var acc float64` or `acc := 0.0`)
+// whose value is built by an innermost loop that accumulates a product into it. Returns the
+// accumulator name and the inner-loop node, or ("", nil) if the shape is absent.
+func scaledDotAcc(mbody *ast.BlockStmt) (string, ast.Node) {
+	var acc string
+	var inner ast.Node
+	for _, st := range mbody.List {
+		switch v := st.(type) {
+		case *ast.DeclStmt:
+			if gd, ok := v.Decl.(*ast.GenDecl); ok && gd.Tok == token.VAR {
+				for _, sp := range gd.Specs {
+					if vs, ok := sp.(*ast.ValueSpec); ok && len(vs.Names) == 1 && len(vs.Values) == 0 && isFloatIdent(vs.Type) {
+						acc = vs.Names[0].Name
+					}
+				}
+			}
+		case *ast.AssignStmt:
+			if v.Tok == token.DEFINE && len(v.Lhs) == 1 && len(v.Rhs) == 1 {
+				if id, ok := v.Lhs[0].(*ast.Ident); ok && isZeroLit(v.Rhs[0]) {
+					acc = id.Name
+				}
+			}
+		default:
+			if acc == "" || inner != nil {
+				continue
+			}
+			if _, ibody, ok := loopVarBody(st); ok && accumulatesProduct(ibody, acc) {
+				inner = st
+			}
+		}
+	}
+	if acc == "" || inner == nil {
+		return "", nil
+	}
+	return acc, inner
+}
+
+// identInScaleExpr reports whether name appears inside a multiply or divide expression in root
+// — i.e. the accumulator is scaled (dequantized) rather than stored verbatim.
+func identInScaleExpr(root ast.Node, name string) bool {
+	found := false
+	ast.Inspect(root, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		if be, ok := n.(*ast.BinaryExpr); ok && (be.Op == token.MUL || be.Op == token.QUO) {
+			if exprMentions(be.X, name) || exprMentions(be.Y, name) {
+				found = true
+				return false
+			}
+		}
+		return true
+	})
+	return found
 }
 
 // exprMentions reports whether e references the identifier name.

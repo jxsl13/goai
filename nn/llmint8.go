@@ -36,6 +36,17 @@ func LLMInt8MatMul(x, w *tensor.Tensor, threshold float64) (*tensor.Tensor, []in
 	}
 	cout := w.Shape()[1]
 
+	// Fast path: contiguous F64 inputs (the documented pure-f64 use). Run the whole
+	// scheme on flat storage slices — no per-element AtF64/SetF64 dispatch — and unroll
+	// the int8 inner dot with independent accumulators. Bit-identical to the fallback:
+	// the products are integer-valued (|int8·int8| ≤ 127², summed over ≤ cin terms stays
+	// well under 2⁵³), so the dot accumulator is an EXACT integer regardless of grouping.
+	if xf, wf := flatF64(x), flatF64(w); xf != nil && wf != nil {
+		yt := tensor.New(x.Dtype(), tensor.Shape{tokens, cout})
+		outIdx := llmInt8FlatF64(xf, wf, flatF64(yt), tokens, cin, cout, threshold)
+		return yt, outIdx, nil
+	}
+
 	// (1) find outlier feature dimensions: any column of X with |value| ≥ threshold.
 	outlier := make([]bool, cin)
 	var outIdx []int
@@ -133,4 +144,114 @@ func LLMInt8MatMul(x, w *tensor.Tensor, threshold float64) (*tensor.Tensor, []in
 		}
 	}
 	return y, outIdx, nil
+}
+
+// llmInt8FlatF64 is the contiguous-F64 fast path of LLMInt8MatMul: identical algorithm,
+// but reads/writes flat storage slices (xf=[tokens,cin], wf=[cin,cout], yf=[tokens,cout],
+// all row-major) instead of AtF64/SetF64, and unrolls the int8 inner dot with four
+// independent accumulators. Every value touched is the same float64 the fallback would
+// read (contiguous ⇒ Unravel(i·stride+k) = flat index i·stride+k), and the dot reassociates
+// only EXACT integers (int8·int8 partials stay < 2⁵³), so the result is bit-identical.
+func llmInt8FlatF64(xf, wf, yf []float64, tokens, cin, cout int, threshold float64) []int {
+	// (1) outlier feature dimensions: any column of X with |value| ≥ threshold.
+	outlier := make([]bool, cin)
+	var outIdx []int
+	for c := range cin {
+		var mx float64
+		for t := range tokens {
+			if a := math.Abs(xf[t*cin+c]); a > mx {
+				mx = a
+			}
+		}
+		if mx >= threshold {
+			outlier[c] = true
+			outIdx = append(outIdx, c)
+		}
+	}
+
+	// (2a) high-precision path over the outlier dimensions: Y += X[:,O]·W[O,:].
+	if len(outIdx) > 0 {
+		for i := range tokens {
+			xbase := i * cin
+			ybase := i * cout
+			for j := range cout {
+				var acc float64
+				for _, c := range outIdx {
+					acc += xf[xbase+c] * wf[c*cout+j]
+				}
+				yf[ybase+j] += acc
+			}
+		}
+	}
+
+	// (2b) vector-wise int8 path: per-row X absmax and per-column W absmax (regular cols).
+	sx := make([]float64, tokens)
+	for i := range tokens {
+		base := i * cin
+		for c := range cin {
+			if !outlier[c] {
+				if a := math.Abs(xf[base+c]); a > sx[i] {
+					sx[i] = a
+				}
+			}
+		}
+	}
+	sw := make([]float64, cout)
+	for j := range cout {
+		for c := range cin {
+			if !outlier[c] {
+				if a := math.Abs(wf[c*cout+j]); a > sw[j] {
+					sw[j] = a
+				}
+			}
+		}
+	}
+	q := func(val, scale float64) float64 { // symmetric int8 round
+		if scale == 0 {
+			return 0
+		}
+		return math.Round(127 * val / scale)
+	}
+	qx := make([]float64, tokens*cin)
+	for i := range tokens {
+		base := i * cin
+		for c := range cin {
+			if !outlier[c] {
+				qx[base+c] = q(xf[base+c], sx[i])
+			}
+		}
+	}
+	qwt := make([]float64, cout*cin)
+	for c := range cin {
+		if outlier[c] {
+			continue // leave column c of qwt zero → contributes 0 to every acc
+		}
+		for j := range cout {
+			qwt[j*cin+c] = q(wf[c*cout+j], sw[j])
+		}
+	}
+	for i := range tokens {
+		qxi := qx[i*cin : i*cin+cin : i*cin+cin]
+		ybase := i * cout
+		for j := range cout {
+			qwtj := qwt[j*cin : j*cin+cin : j*cin+cin]
+			// four independent accumulators break the serial-dot latency chain;
+			// exact-integer partials ⇒ same total as the sequential sum.
+			var a0, a1, a2, a3 float64
+			c := 0
+			for ; c+4 <= cin; c += 4 {
+				a0 += qxi[c] * qwtj[c]
+				a1 += qxi[c+1] * qwtj[c+1]
+				a2 += qxi[c+2] * qwtj[c+2]
+				a3 += qxi[c+3] * qwtj[c+3]
+			}
+			acc := a0 + a1 + a2 + a3
+			for ; c < cin; c++ {
+				acc += qxi[c] * qwtj[c]
+			}
+			deq := acc * sx[i] * sw[j] / (127 * 127) // outer-product dequant
+			yf[ybase+j] += deq
+		}
+	}
+	return outIdx
 }
