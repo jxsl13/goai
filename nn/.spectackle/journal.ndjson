@@ -32,3 +32,4 @@
 {"t":"2026-07-29T15:16:33Z","eid":"0773f0ba56786d2f","ag":"ag-2942","ev":"create","id":"R-01KYQ75SC2FZJB9JFV58X8YXVM","k":"research","ti":"PS6011 strided-inner-walk: rule built, replay-validated, 3 wins shipped and 1 rejected","dir":"nn"}
 {"t":"2026-07-29T15:48:20Z","eid":"a5bb2c96ae11ed86","ag":"ag-fe1e","ev":"create","id":"T-01KYQ8ZZQ4EAH85BS7XR7DMNGA","k":"task","ti":"Fused typed fast path for NeuralMemory.Scan linear memory — 24.5k allocs per forward","dir":"nn"}
 {"t":"2026-07-29T15:55:17Z","eid":"aa27f89fd2ca6433","ag":"ag-fae9","ev":"create","id":"R-01KYQ9CQ3XE1DRXF1FRXBEBE8W","k":"research","ti":"Titans fused path attempt 2: recurrence proven correct, divergence localized to broadcast elementwise rounding","dir":"nn"}
+{"t":"2026-07-29T16:01:52Z","eid":"96b60248067568e7","ag":"ag-9352","ev":"create","id":"T-01KYQ9RRGEE2CBVF8TM09P19DX","k":"task","ti":"Partially fuse NeuralMemory.Scan: backend matmuls, fused elementwise (per ADR-01KYQ9PHNPEFC)","dir":"nn"}
