@@ -56,11 +56,21 @@ var q8FusedDecodeM1 func(row []float32, weight []byte, n, k, rowBytes int, outf 
 const qmatDecodeParThreshold = 1 << 17
 
 // qmatmulParallelChunks splits the n output rows of the m==1 decode paths across the
-// shared bounded pool. Spawning GOMAXPROCS goroutines per call instead would multiply
-// against any caller that is ALREADY parallel — the nlp Mamba2 mixers now call QMatMul
-// from inside their own parallel regions, so a per-call spawn would put GOMAXPROCS²
-// goroutines on a 12-core host. Same partition, same bit-identical row independence as
+// shared bounded pool. Same partition and the same bit-identical row independence as
 // parallelRows; only the execution mechanism is shared (ADR-01KYMWJ76AFA2).
+//
+// The pool is here for CONCURRENT CALLERS, not for throughput: measured against a
+// spawn-per-call variant it is a wash on every single-caller benchmark (M1 and M16, all
+// seven quant types) and on batch throughput. What it changes is the goroutine count when
+// callers overlap — eight concurrent decode calls peak at 22 live goroutines through the
+// pool against 98-101 spawning per call, at identical throughput
+// (TestGoroutinePeakConcurrentDecode / BenchmarkQMatMulQ8_0ConcurrentDecode).
+//
+// Worth recording what did NOT hold: the nesting this was first justified by — quantized
+// Mamba2 prefill calling QMatMul from inside its own parallel mixer — shows 37 peak
+// goroutines either way. Prefill is m>1 and takes the general path, which was already
+// pooled, so the decode helper never runs nested there. The bound is real; the scenario
+// originally claimed for it was not.
 func qmatmulParallelChunks(n, workPerRow int, body func(lo, hi int)) {
 	if n*workPerRow < qmatDecodeParThreshold {
 		body(0, n)
