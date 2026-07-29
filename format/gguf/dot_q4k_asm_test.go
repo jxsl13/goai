@@ -27,19 +27,32 @@ func TestDotQ4KAsm(t *testing.T) {
 }
 
 var q4dsink float64
+
 func BenchmarkDotQ4KAsm(b *testing.B) {
 	const k = 4096
-	x := make([]float32, k); w := make([]float32, k)
-	for i := range x { x[i]=float32(i%7); w[i]=float32(i%5) }
+	x := make([]float32, k)
+	w := make([]float32, k)
+	for i := range x {
+		x[i] = float32(i % 7)
+		w[i] = float32(i % 5)
+	}
 	raw := quantizeQ4_K(w)
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ { q4dsink = dotQ4_KRowASM(x, raw, k) }
+	for i := 0; i < b.N; i++ {
+		q4dsink = dotQ4_KRowASM(x, raw, k)
+	}
 }
 func BenchmarkDotQ4KScalar(b *testing.B) {
 	const k = 4096
-	x := make([]float32, k); w := make([]float32, k)
-	for i := range x { x[i]=float32(i%7); w[i]=float32(i%5) }
+	x := make([]float32, k)
+	w := make([]float32, k)
+	for i := range x {
+		x[i] = float32(i % 7)
+		w[i] = float32(i % 5)
+	}
 	raw := quantizeQ4_K(w)
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ { q4dsink = dotQ4_KRow(x, raw, k) }
+	for i := 0; i < b.N; i++ {
+		q4dsink = dotQ4_KRow(x, raw, k)
+	}
 }
