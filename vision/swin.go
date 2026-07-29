@@ -667,6 +667,12 @@ func (b *SwinBlock) windowedAttention(ctx *backend.Context, xWin *tensor.Tensor,
 		bufKT = tensor.New(dt, tensor.Shape{dk, n})
 		bufV = tensor.New(dt, tensor.Shape{n, dk})
 	}
+	// One output buffer for every window and head, filled in place, replacing the
+	// per-window head concat and the final window concat.
+	var catBuf *tensor.Tensor
+	if blockwise {
+		catBuf = tensor.New(q.Dtype(), tensor.Shape{numWin * n, b.Dim})
+	}
 	winOuts := make([]*tensor.Tensor, numWin)
 	for w := range numWin {
 		var qw, kw, vw *tensor.Tensor
@@ -754,17 +760,33 @@ func (b *SwinBlock) windowedAttention(ctx *backend.Context, xWin *tensor.Tensor,
 			if err != nil {
 				return nil, err
 			}
-			if heads[hh], err = swinExec1(ctx, backend.OpMatMul, nil, wgt, vh); err != nil {
+			hout, err := swinExec1(ctx, backend.OpMatMul, nil, wgt, vh)
+			if err != nil {
+				return nil, err
+			}
+			if catBuf != nil {
+				// Write the head straight into its slot of the final [numWin·n, dm]
+				// buffer. The dispatch path instead concatenates heads per window and
+				// then concatenates the windows — numWin+1 more tensors per call, on top
+				// of the per-window intermediates. Pure data movement, so the result is
+				// the same bytes the two concats would have produced.
+				swinPlaceBlock(catBuf, hout, w*n, hh*dk, n, dk)
+				continue
+			}
+			heads[hh] = hout
+		}
+		if catBuf == nil {
+			if winOuts[w], err = swinExec1(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 1}, heads...); err != nil {
 				return nil, err
 			}
 		}
-		if winOuts[w], err = swinExec1(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 1}, heads...); err != nil {
+	}
+	cat := catBuf
+	if cat == nil {
+		var err error
+		if cat, err = swinExec1(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 0}, winOuts...); err != nil {
 			return nil, err
 		}
-	}
-	cat, err := swinExec1(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 0}, winOuts...)
-	if err != nil {
-		return nil, err
 	}
 	return swinExec1(ctx, backend.OpMatMul, nil, cat, b.Wo)
 }
@@ -1150,5 +1172,22 @@ func swinFillBlock(dst, src *tensor.Tensor, row0, col0, rows, cols int, tr bool)
 			continue
 		}
 		copy(ds[r*cols:r*cols+cols], row)
+	}
+}
+
+// swinPlaceBlock copies the [rows, cols] tensor src into dst at (row0, col0). dst is
+// row-major with dst.Shape()[1] columns. Pure data movement.
+func swinPlaceBlock(dst, src *tensor.Tensor, row0, col0, rows, cols int) {
+	stride := dst.Shape()[1]
+	if dst.Dtype() == tensor.F64 {
+		ds, ss := swinFlatF64(dst), swinFlatF64(src)
+		for r := range rows {
+			copy(ds[(row0+r)*stride+col0:(row0+r)*stride+col0+cols], ss[r*cols:r*cols+cols])
+		}
+		return
+	}
+	ds, ss := swinFlatF32(dst), swinFlatF32(src)
+	for r := range rows {
+		copy(ds[(row0+r)*stride+col0:(row0+r)*stride+col0+cols], ss[r*cols:r*cols+cols])
 	}
 }
