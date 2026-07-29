@@ -470,25 +470,69 @@ func (m *QuantGemma2) cappedDecodeAttention(ctx *backend.Context, b *QuantGemma2
 
 	scaleT := m.queryScaleF32()
 
+	// Gemma2 cannot use the fused OpMHA every other architecture takes, because the attention
+	// -logit soft-cap sits between the scores and the softmax. So attention is hand-rolled per
+	// head, and at four heads over two layers this loop was 78% of a decode step's allocations.
+	//
+	// FUSE ONLY THE DATA MOVEMENT (ADR-01KYQ9PHNPEFC): the three per-head slices and the
+	// transpose are pure gather, so building qh/khT/vh directly from storage is bit-identical
+	// by construction — the same values reach the same matmul, mul, soft-cap and softmax
+	// kernels in the same order. The arithmetic stays on the backend, where fusing it would
+	// put reassociation and FMA contraction at risk for no structural gain.
+	//
+	// Gated on ctx.Recorder == nil: under a tape the slice and transpose nodes are gradient
+	// edges, and replacing them with a raw copy would detach the graph.
+	fused := false
+	var qBuf, kTBuf, vBuf *tensor.Tensor
+	var qf, kf, vf []float32
+	if ctx.Recorder == nil && q.Dtype() == tensor.F32 && kNew.Dtype() == tensor.F32 && vNew.Dtype() == tensor.F32 {
+		qc, kc, vc := q.Contiguous(), kNew.Contiguous(), vNew.Contiguous()
+		qf, kf, vf = qc.Storage().F32(), kc.Storage().F32(), vc.Storage().F32()
+		sk := kNew.Shape()[0]
+		if len(qf) >= cfg.Heads*hd && len(kf) >= sk*kv*hd && len(vf) >= sk*kv*hd {
+			// One scratch tensor per role, reused across heads: each is fully overwritten
+			// before its head's first read, and nothing retains it past that head's matmul.
+			qBuf = tensor.New(tensor.F32, tensor.Shape{1, hd})
+			kTBuf = tensor.New(tensor.F32, tensor.Shape{hd, sk})
+			vBuf = tensor.New(tensor.F32, tensor.Shape{sk, hd})
+			fused = true
+		}
+	}
+
 	heads := make([]*tensor.Tensor, cfg.Heads)
 	for h := range cfg.Heads {
 		kvHead := h / rep
-		qh, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: h * hd, End: (h + 1) * hd}, q)
-		if err != nil {
-			return nil, err
-		}
-		kh, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: kvHead * hd, End: (kvHead + 1) * hd}, kNew)
-		if err != nil {
-			return nil, err
-		}
-		vh, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: kvHead * hd, End: (kvHead + 1) * hd}, vNew)
-		if err != nil {
-			return nil, err
-		}
-		// scores = qh·khᵀ  [1,sk]
-		khT, err := exec1a(ctx, backend.OpTranspose, nil, kh)
-		if err != nil {
-			return nil, err
+		var qh, khT, vh *tensor.Tensor
+		if fused {
+			kvWidth := kNew.Shape()[1]
+			sk := kNew.Shape()[0]
+			copy(qBuf.Storage().F32(), qf[h*hd:(h+1)*hd])
+			kt, vd := kTBuf.Storage().F32(), vBuf.Storage().F32()
+			for sIdx := range sk {
+				row := sIdx*kvWidth + kvHead*hd
+				krow, vrow := kf[row:row+hd], vf[row:row+hd]
+				copy(vd[sIdx*hd:sIdx*hd+hd], vrow)
+				for c := range hd { // transpose during the gather: khT[c][s] = kh[s][c]
+					kt[c*sk+sIdx] = krow[c]
+				}
+			}
+			qh, khT, vh = qBuf, kTBuf, vBuf
+		} else {
+			var err error
+			if qh, err = exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: h * hd, End: (h + 1) * hd}, q); err != nil {
+				return nil, err
+			}
+			kh, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: kvHead * hd, End: (kvHead + 1) * hd}, kNew)
+			if err != nil {
+				return nil, err
+			}
+			if vh, err = exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: kvHead * hd, End: (kvHead + 1) * hd}, vNew); err != nil {
+				return nil, err
+			}
+			// scores = qh·khᵀ  [1,sk]
+			if khT, err = exec1a(ctx, backend.OpTranspose, nil, kh); err != nil {
+				return nil, err
+			}
 		}
 		scores, err := exec2(ctx, backend.OpMatMul, nil, qh, khT)
 		if err != nil {
