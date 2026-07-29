@@ -424,3 +424,6 @@ IF a new declaration is inserted immediately above an exported function, THEN th
 
 ## PROC-TASK-HOTNESS-001
 IF a performance task is booked against a specific code site, THEN the implementer SHALL first panic-probe that a benchmark reaches the site and name that benchmark in the task (see T-01KYQGW5MNFWP, a cold fallback that cost an iteration).
+
+## PROC-MERGE-ORPHAN-001
+WHEN a merge resolves a hot file by taking the other side's version wholesale, the implementer SHALL grep the discarded side's helper names for surviving call sites, because PR #573 left four K-quant kernels dead with every test still green.
