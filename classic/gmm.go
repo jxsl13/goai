@@ -293,8 +293,17 @@ func (m *GaussianMixture) eStep(x [][]float64, resp, logResp [][]float64) (float
 		logW[c] = math.Log(m.Weights[c])
 	}
 	diag := m.cfg.covariance == GMMDiag
-	ldBuf := make([]float64, k)
-	for i, row := range x {
+	// PARALLEL over samples. Each iteration writes only logResp[i] and resp[i], and reads the
+	// component params read-only; the per-sample scratch (ldBuf, and the full-cov solve buffers)
+	// is per chunk. This was serial for BOTH covariance shapes until the density kernels stopped
+	// reading their scratch off the receiver — the same field that gated PredictProba.
+	//
+	// The running total is the ONLY cross-sample dependency, so it becomes norms[i] and is summed
+	// AFTER the loop in ascending sample order: bit-identical to the serial accumulation, where a
+	// chunked reduction would reassociate. n extra words against O(n*k*d) work.
+	norms := make([]float64, len(x))
+	rowBody := func(i int, ldBuf []float64, y4 *[4][]float64) {
+		row := x[i]
 		lr := logResp[i]
 		if diag {
 			m.logGaussianDiagBatch(row, ldBuf) // unroll-and-jam over components
@@ -302,7 +311,7 @@ func (m *GaussianMixture) eStep(x [][]float64, resp, logResp [][]float64) (float
 				lr[c] = logW[c] + ldBuf[c]
 			}
 		} else {
-			m.logGaussianFullBatch(row, ldBuf, &m.yScratch4) // unroll-and-jam over components
+			m.logGaussianFullBatch(row, ldBuf, y4) // unroll-and-jam over components
 			for c := range k {
 				lr[c] = logW[c] + ldBuf[c]
 			}
@@ -320,21 +329,25 @@ func (m *GaussianMixture) eStep(x [][]float64, resp, logResp [][]float64) (float
 			}
 		}
 		if math.IsInf(mx, -1) {
-			total += mx // degenerate all-−Inf row: preserve the scalar semantics
+			norms[i] = mx // degenerate all-−Inf row: preserve the scalar semantics
 			for c := range k {
 				lr[c] -= mx
 				resp[i][c] = math.Exp(lr[c])
 			}
-			continue
+			return
 		}
 		s := simd.ExpSumF64(resp[i], lr, mx)
 		norm := mx + math.Log(s)
-		total += norm
+		norms[i] = norm
 		inv := 1 / s
 		for c := range k {
 			lr[c] -= norm
 			resp[i][c] *= inv
 		}
+	}
+	gmmParallelRows(len(x), k*m.nFeat, k, m.nFeat, m.cfg.covariance == GMMFull, rowBody)
+	for _, v := range norms { // ascending sample order: bit-identical to the serial running sum
+		total += v
 	}
 	return total / float64(len(x)), nil
 }
@@ -969,4 +982,53 @@ func parallelSamples(n, per int, body func(lo, hi int)) {
 		return
 	}
 	parallel.Rows(n, body)
+}
+
+// gmmParallelRows runs body over rows [0,n) across GOMAXPROCS, giving each worker its own
+// component buffer and — when full covariance needs them — its own four triangular-solve
+// buffers. Serial below a work threshold and for a single worker.
+//
+// Per-worker scratch is the whole reason this can be concurrent at all: the density kernels used
+// to read those buffers off the receiver, which forced the caller to stay serial. PS6006 as a
+// structural blocker, not a contention cost.
+func gmmParallelRows(n, per, k, d int, full bool, body func(i int, ldBuf []float64, y4 *[4][]float64)) {
+	newScratch := func() ([]float64, *[4][]float64) {
+		ldBuf := make([]float64, k)
+		var y4 [4][]float64
+		if full {
+			for t := range y4 {
+				y4[t] = make([]float64, d)
+			}
+		}
+		return ldBuf, &y4
+	}
+	nw := runtime.GOMAXPROCS(0)
+	if nw > n {
+		nw = n
+	}
+	if nw <= 1 || n*per < gmmParThreshold {
+		ldBuf, y4 := newScratch()
+		for i := range n {
+			body(i, ldBuf, y4)
+		}
+		return
+	}
+	csz := (n + nw - 1) / nw
+	var wg sync.WaitGroup
+	for c := 0; c < nw; c++ {
+		lo := c * csz
+		if lo >= n {
+			break
+		}
+		hi := min(lo+csz, n)
+		wg.Add(1)
+		go func(lo, hi int) {
+			defer wg.Done()
+			ldBuf, y4 := newScratch()
+			for i := lo; i < hi; i++ {
+				body(i, ldBuf, y4)
+			}
+		}(lo, hi)
+	}
+	wg.Wait()
 }
