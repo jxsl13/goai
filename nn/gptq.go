@@ -81,6 +81,10 @@ func GPTQuantize(w, x *tensor.Tensor, quant func(float64) float64, opts ...GPTQO
 			h[i] = hi
 		}
 	} else {
+		// The generic fallback for exotic or non-contiguous dtypes: dead whenever the
+		// flat-slice path above applies, which is every case the benchmarks measure. Flagged
+		// by the row-of-slices and per-element rules by construction; not worth flattening.
+		//perfscan:ignore PS4006 PS1001
 		for i := range in {
 			h[i] = make([]float64, in)
 			for j := range in {

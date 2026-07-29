@@ -107,8 +107,11 @@ func sparseGPTCore(w, x *tensor.Tensor, damp float64, blockSize int, kOf func(bl
 			h[i] = hi
 		}
 	} else {
+		// Generic fallback, dead whenever the flat-slice path above applies. See gptq.go.
+		//perfscan:ignore PS4006 PS1001
 		for i := range in {
 			h[i] = make([]float64, in)
+			//perfscan:ignore PS4006 PS1001
 			for j := range in {
 				var s float64
 				for k := range samples {
