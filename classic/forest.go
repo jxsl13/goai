@@ -321,19 +321,45 @@ func (m *RandomForestRegressor) Predict(x [][]float64) ([]float64, error) {
 	if m.trees == nil {
 		return nil, fmt.Errorf("classic: RandomForestRegressor.Predict before Fit")
 	}
-	out := make([]float64, len(x))
 	for i, row := range x {
 		if len(row) != m.nFeature {
 			return nil, fmt.Errorf("classic: row %d width %d, want %d", i, len(row), m.nFeature)
 		}
-		// Single-row tree walk avoids the per-(sample,tree) wrapper/result allocation; sum
-		// in tree order and divide by the tree count exactly as before → bit-identical.
+	}
+	out := make([]float64, len(x))
+	// Single-row tree walk avoids the per-(sample,tree) wrapper/result allocation; each row
+	// sums in tree order then divides — no shared scratch (s is local, cartNode.predict is
+	// pure), so chunk-parallel across GOMAXPROCS is bit-identical (each out[i] disjoint).
+	// Serial below a small work threshold.
+	predictRow := func(i int) {
 		var s float64
 		for _, tree := range m.trees {
-			s += tree.root.predict(row).value
+			s += tree.root.predict(x[i]).value
 		}
 		out[i] = s / float64(len(m.trees))
 	}
+	nw := runtime.GOMAXPROCS(0)
+	if nw > len(x) {
+		nw = len(x)
+	}
+	if nw <= 1 || len(x)*len(m.trees) < 1<<13 {
+		for i := range x {
+			predictRow(i)
+		}
+		return out, nil
+	}
+	csz := (len(x) + nw - 1) / nw
+	_ = parallelBuild(nw, func(c int) error {
+		lo := c * csz
+		hi := lo + csz
+		if hi > len(x) {
+			hi = len(x)
+		}
+		for i := lo; i < hi; i++ {
+			predictRow(i)
+		}
+		return nil
+	})
 	return out, nil
 }
 

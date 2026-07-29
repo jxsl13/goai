@@ -42,3 +42,32 @@ func BenchmarkForestPredict(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkForestRegressorPredict(b *testing.B) {
+	const nTrain, nFeat = 400, 12
+	X := make([][]float64, nTrain)
+	y := make([]float64, nTrain)
+	for i := range X {
+		X[i] = make([]float64, nFeat)
+		s := 0.0
+		for j := range X[i] {
+			X[i][j] = math.Sin(float64(i*7 + j))
+			s += X[i][j]
+		}
+		y[i] = s
+	}
+	m := classic.NewRandomForestRegressor(classic.WithNumTrees(100), classic.WithSeed(1))
+	if err := m.Fit(X, y); err != nil {
+		b.Fatal(err)
+	}
+	Xq := make([][]float64, 800)
+	for i := range Xq {
+		Xq[i] = X[i%nTrain]
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		if _, err := m.Predict(Xq); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
