@@ -3,10 +3,16 @@ package nn
 import (
 	"fmt"
 	"math"
-	"sort"
+	"slices"
 
 	"github.com/jxsl13/goai/tensor"
 )
+
+// mobaGate ranks one block by its gate score.
+type mobaGate struct {
+	block int
+	score float64
+}
 
 // MoBAAttention computes Mixture of Block Attention (Lu et al. 2025, Moonshot,
 // arXiv:2502.13189, §T557): the MoE principle applied to attention. Keys are
@@ -38,6 +44,12 @@ func MoBAAttention(q, k, v *tensor.Tensor, heads, blockSize, topK int, scale flo
 	}
 	out := tensor.New(q.Dtype(), q.Shape())
 	scores := make([]float64, seq)
+	act := make([]int, 0, seq) // active (unmasked) key indices, reused per query
+	// gates, the selected-block set and the sort were all allocated per (head, query):
+	// a growing slice, sort.Slice's reflectlite.Swapper, and a map. At 8 heads x 512
+	// queries that was ~20k allocations for one call. All three are hoisted and reused.
+	gates := make([]mobaGate, 0, seq)
+	selBlk := make([]bool, seq)
 	// F64 fast path: the block-gate mean-pools each past block's keys PER QUERY though the
 	// pool is query-independent — precompute the per-head block key-sums once (O(seq·dk) vs
 	// the O(seq²·dk) re-pool) — and walk q/k/v/out contiguously (the query row is hoisted).
@@ -68,11 +80,7 @@ func MoBAAttention(q, k, v *tensor.Tensor, heads, blockSize, topK int, scale flo
 				for d := range dk {
 					qrow[d] = qs[i*dm+off+d]
 				}
-				type gated struct {
-					block int
-					score float64
-				}
-				var gates []gated
+				gates = gates[:0]
 				for b := 0; b < cur; b++ {
 					pb := poolSum[b*dk : b*dk+dk : b*dk+dk]
 					bl := float64(blockLen[b])
@@ -80,12 +88,29 @@ func MoBAAttention(q, k, v *tensor.Tensor, heads, blockSize, topK int, scale flo
 					for d := range dk {
 						sgate += qrow[d] * pb[d] / bl
 					}
-					gates = append(gates, gated{b, sgate})
+					gates = append(gates, mobaGate{b, sgate})
 				}
-				sort.Slice(gates, func(a, b int) bool { return gates[a].score > gates[b].score })
-				selected := map[int]bool{cur: true}
-				for gi := 0; gi < len(gates) && len(selected) < topK; gi++ {
-					selected[gates[gi].block] = true
+				// TOTAL order: gate score descending, then block index ascending. Ranking
+				// on score alone leaves tied blocks in whatever order the sort produces,
+				// and that order decides WHICH blocks are attended. slices.SortFunc also
+				// avoids sort.Slice's per-call Swapper allocation (PS6009).
+				slices.SortFunc(gates, func(x, y mobaGate) int {
+					switch {
+					case x.score > y.score:
+						return -1
+					case x.score < y.score:
+						return 1
+					}
+					return x.block - y.block
+				})
+				clear(selBlk)
+				selBlk[cur] = true
+				nSel := 1
+				for gi := 0; gi < len(gates) && nSel < topK; gi++ {
+					if b := gates[gi].block; !selBlk[b] {
+						selBlk[b] = true
+						nSel++
+					}
 				}
 				m := math.Inf(-1)
 				// Score dot is a latency-bound serial reduction over d; jam two
@@ -94,7 +119,7 @@ func MoBAAttention(q, k, v *tensor.Tensor, heads, blockSize, topK int, scale flo
 				// sums d ascending → bit-identical; max is order-free.
 				prev := -1
 				for j := 0; j <= i; j++ {
-					if !selected[j/blockSize] {
+					if !selBlk[j/blockSize] {
 						scores[j] = math.Inf(-1)
 						continue
 					}
@@ -133,6 +158,15 @@ func MoBAAttention(q, k, v *tensor.Tensor, heads, blockSize, topK int, scale flo
 						m = sc
 					}
 				}
+				// Collect the ACTIVE keys in the pass that already walks every j; the
+				// normalize and the P·V below then touch only those. MoBA attends topK
+				// BLOCKS of up to i keys, so most of this range is masked and was being
+				// multiplied by an exact zero once per output channel.
+				//
+				// Bit-identical for finite v: a masked key has scores[j] == 0 exactly and
+				// o + 0*v is o. (It differs only if a masked key's v were ±Inf or NaN,
+				// where the old code propagated NaN through a position the mask excludes.)
+				act = act[:0]
 				var sum float64
 				for j := 0; j <= i; j++ {
 					if math.IsInf(scores[j], -1) {
@@ -141,6 +175,7 @@ func MoBAAttention(q, k, v *tensor.Tensor, heads, blockSize, topK int, scale flo
 					}
 					scores[j] = math.Exp(scores[j] - m)
 					sum += scores[j]
+					act = append(act, j)
 				}
 				orow := os[i*dm+off : i*dm+off+dk]
 				if sum <= 0 {
@@ -150,7 +185,7 @@ func MoBAAttention(q, k, v *tensor.Tensor, heads, blockSize, topK int, scale flo
 				// Normalize ONCE. Dividing inside the P·V loop cost d_k divides per key
 				// instead of one; `scores[j] / sum * v` associates left, so folding the
 				// divide out is the same arithmetic, not a reassociation.
-				for j := 0; j <= i; j++ {
+				for _, j := range act {
 					scores[j] /= sum
 				}
 				// Four output channels per pass. Walking j for a fixed d strides v by dm,
@@ -160,7 +195,7 @@ func MoBAAttention(q, k, v *tensor.Tensor, heads, blockSize, topK int, scale flo
 				d := 0
 				for ; d+4 <= dk; d += 4 {
 					var o0, o1, o2, o3 float64
-					for j := 0; j <= i; j++ {
+					for _, j := range act {
 						sj := scores[j]
 						vq := vs[j*dm+off+d : j*dm+off+d+4 : j*dm+off+d+4]
 						o0 += sj * vq[0]
@@ -172,7 +207,7 @@ func MoBAAttention(q, k, v *tensor.Tensor, heads, blockSize, topK int, scale flo
 				}
 				for ; d < dk; d++ {
 					var o float64
-					for j := 0; j <= i; j++ {
+					for _, j := range act {
 						o += scores[j] * vs[j*dm+off+d]
 					}
 					orow[d] = o
@@ -186,11 +221,7 @@ func MoBAAttention(q, k, v *tensor.Tensor, heads, blockSize, topK int, scale flo
 		for i := range seq {
 			cur := i / blockSize
 			// gate: affinity of q_i to each past block's mean-pooled key.
-			type gated struct {
-				block int
-				score float64
-			}
-			var gates []gated
+			var gates []mobaGate
 			for b := 0; b < cur; b++ {
 				lo, hi := b*blockSize, min((b+1)*blockSize, seq)
 				var s float64
@@ -201,9 +232,18 @@ func MoBAAttention(q, k, v *tensor.Tensor, heads, blockSize, topK int, scale flo
 					}
 					s += q.AtF64(i, off+d) * m / float64(hi-lo)
 				}
-				gates = append(gates, gated{b, s})
+				gates = append(gates, mobaGate{b, s})
 			}
-			sort.Slice(gates, func(a, b int) bool { return gates[a].score > gates[b].score })
+			// Same total order as the typed path above.
+			slices.SortFunc(gates, func(x, y mobaGate) int {
+				switch {
+				case x.score > y.score:
+					return -1
+				case x.score < y.score:
+					return 1
+				}
+				return x.block - y.block
+			})
 			selected := map[int]bool{cur: true} // the current block is always attended
 			for gi := 0; gi < len(gates) && len(selected) < topK; gi++ {
 				selected[gates[gi].block] = true
