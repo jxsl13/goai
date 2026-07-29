@@ -189,3 +189,52 @@ pointing at; it should be triaged as PS1001 rather than blocked.
 
 Baselines for the remaining two: KDA seq512/dk64/dv64 5.23ms, 10 allocs; NSABranches
 seq512/dm128/heads4/block32 188ms, 14611 allocs.
+
+## R-01KYQ75SC2FZJB9JFV58X8YXVM PS6011 strided-inner-walk: rule built, replay-validated, 3 wins shipped and 1 rejected
+kind: research
+state: draft
+created: 2026-07-29
+
+PS6011 (strided-inner-walk) was added because the same pathology paid three times and no
+rule could find it: an inner loop that indexes a flat row-major buffer with the INNER loop
+variable multiplied by a stride, so consecutive iterations jump a whole row. PS4006 covers
+only the [][]T spelling.
+
+DETECTOR: the discriminator needs no type information. In a column walk the inner variable
+is scaled and the outer appears additively (S[r*dk+c] over r, vs[j*dm+off+d] over j);
+correct row-major traversal is the mirror image. Two false-positive classes are excluded by
+construction — a transpose (out[j*r+i] = x[i*c+j]) strides on one side whichever way it
+runs, so interchange only relocates the problem, and a nest whose loop variables never meet
+in one index has no interchangeable axes. Suppressing transposes removed 19 of 139 raw
+findings; 120 remain tree-wide, advisory.
+
+VALIDATION BY REPLAY MATTERED AGAIN. The first draft searched only the outer loop body's
+direct statements and missed its own motivating case, because NSA's P·V loop sits inside an
+`if sum > 0`. That is the third rule in this scanner to have missed the case that motivated
+it and the second caught only by replaying against pre-fix sources. The regression test for
+it was confirmed to fail when the discovery is narrowed back.
+
+VALIDATED AND SHIPPED from the rule's own findings, all bit-identical, all interleaved over
+3 alternations with min of 3 runs per arm on M2 Pro darwin/arm64:
+- MoBA P·V 1.85x (129.8ms -> 70.9ms). Same shape as the NSA fix. The loop also divided by
+  sum on every element, d_k divides per key where one suffices; folding it out is the
+  identical arithmetic because `scores[j] / sum * v` associates left.
+- RetentionRecurrent 1.54x (16.11ms -> 10.52ms). Had no benchmark at all — only the
+  chunkwise form did — so its finding was neither actionable nor declinable until one was
+  added and panic-probed.
+- RetentionChunkwise 1.70x (4.77ms -> 2.80ms). Carries the walk twice per output channel,
+  over R and over V.
+
+REJECTED after measurement: NSA's cmp-branch poolV walk (nsa.go:108) is the same shape but
+measured 0.997-1.010x, inside noise. nPast is only i/blockSize, so the loop is negligible
+beside attendMask's O(seq) work. This is the rule's advisory NOTE earning its place — a
+correct pattern match is not a hot loop, and hotness (SC3) still has to be established
+per site.
+
+Gate quality note: RetentionChunkwise's existing duality test compares against the parallel
+form at 1e-10 and cannot see a reassociation, so checksum gates over raw output bits were
+captured from pre-change sources for both retention functions and for MoBA.
+
+STILL OPEN: 120 candidates tree-wide, unswept outside nn. The AtF64 fallback arms
+(retention.go:238, nsa.go attendMask's) are deliberately left — dead whenever the F64 fast
+path applies.
