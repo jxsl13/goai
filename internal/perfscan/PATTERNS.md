@@ -1026,6 +1026,48 @@ followed by `return false`, structurally identical and semantically unrelated. A
 adds exactly one finding (56 → 57) instead of fourteen.
 
 
+## PS6019 — a jam loop whose remainder delegates  *(scanner: static)*
+
+An unroll-and-jammed loop whose scalar remainder is handled by a **different code path**:
+
+```go
+for ; c+4 <= k; c += 4 {
+	y0, y1, y2, y3 := y4[0], y4[1], y4[2], y4[3] // wide body: buffers passed in
+	// …
+}
+for ; c < k; c++ {
+	ld[c], _ = m.logGaussian(x, c) // tail: reads the buffer off the RECEIVER
+}
+```
+
+Two code paths computing one thing, so every property established for the wide body has to be
+re-established for the tail. **This shipped as a data race.** Parallelizing GMM's caller required
+moving the wide body's four solve buffers off the receiver; the tail still read the receiver, and
+the row scan raced for any component count not a multiple of four. Nothing caught it because
+every benchmark and test used `k=8` — the race detector cannot flag a line that never runs, and a
+parity test compares equal on a path that is empty. The defect was one modulo from the tested
+case.
+
+The properties that go stale in a tail are worth naming: **per-worker scratch** (a race),
+**explicit FMA pinning** (a one-ulp divergence on the remainder only), and **hoisted bounds or
+dtype checks** (a panic on the last elements).
+
+**Delegation is the signal, not the tail.** A tail repeating the wide body inline shares its
+edits by construction — same text. A tail calling a method inherits nothing. So the rule reports
+only when the remainder invokes a receiver method and the wide body does not, which keeps it
+quiet on the ordinary scalar remainder nearly every jammed kernel has.
+
+**This rule does not go quiet when the bug is fixed, and that is deliberate** — unlike every
+other rule here. Threading the scratch through a parameter fixed the race; it did not remove the
+duplication, so the next property established for the wide body meets the same gap. It is a
+maintenance hazard attached to a shape, not a defect with a closing state. Suppressing once state
+is threaded was considered and rejected: telling "argument the wide body uses as a buffer" from
+"argument it merely reads" needs alias analysis — the racy call passed `x`, which the wide body
+reads too — and an unsound suppression here hides a race.
+
+**The actionable response is a test, not an edit**: whenever you touch the wide body, run a trip
+count NOT divisible by N. `PROC-UNROLL-TAIL-COVERAGE-001`.
+
 ## PS6018 — a function that mostly moves data  *(scanner: domain)*
 
 Three or more dispatches of a pure movement op — slice, reshape, transpose, concat — in one

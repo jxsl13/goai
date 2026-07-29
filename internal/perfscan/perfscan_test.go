@@ -4907,3 +4907,80 @@ func mlp(ctx *C, x, w1, w2, w3 T) (T, error) {
 		t.Fatalf("want 0 for arithmetic ops, got %d", got)
 	}
 }
+
+// The GMM shape that shipped a race: a 4-wide jam whose remainder delegates to a receiver
+// method, so the scratch the wide body received as a parameter was not what the tail used.
+func TestDetectPS6019_JamTailDelegates(t *testing.T) {
+	src := `package p
+func (m *M) logGaussianFullBatch(x []float64, ld []float64, y4 *[4][]float64) {
+	c := 0
+	for ; c+4 <= k; c += 4 {
+		y0, y1, y2, y3 := y4[0], y4[1], y4[2], y4[3]
+		for i := range d {
+			y0[i], y1[i], y2[i], y3[i] = f(x, i), f(x, i), f(x, i), f(x, i)
+		}
+		ld[c] = y0[0] + y1[0] + y2[0] + y3[0]
+	}
+	for ; c < k; c++ {
+		ld[c], _ = m.logGaussian(x, c)
+	}
+}`
+	if got := countCat(scanSrc(t, src))["jam-tail-delegates"]; got != 1 {
+		t.Fatalf("want 1 jam-tail-delegates, got %d", got)
+	}
+}
+
+// A tail that repeats the wide body INLINE shares every edit by construction — same text — so
+// it is not the hazard and must not report. This is the floor keeping the rule off the ordinary
+// scalar remainder that nearly every jammed kernel has.
+func TestDetectPS6019_SilentOnInlineTail(t *testing.T) {
+	src := `package p
+func (m *M) batch(x []float64, ld []float64, y4 *[4][]float64) {
+	c := 0
+	for ; c+4 <= k; c += 4 {
+		y0 := y4[0]
+		ld[c] = y0[0] * x[c]
+	}
+	for ; c < k; c++ {
+		y0 := y4[0]
+		ld[c] = y0[0] * x[c]
+	}
+}`
+	if got := countCat(scanSrc(t, src))["jam-tail-delegates"]; got != 0 {
+		t.Fatalf("want 0 for an inline tail, got %d", got)
+	}
+}
+
+// When the WIDE body also delegates to the receiver, both paths go through the same method and
+// share its fixes — the asymmetry is what makes the tail dangerous.
+func TestDetectPS6019_SilentWhenBothDelegate(t *testing.T) {
+	src := `package p
+func (m *M) batch(x []float64, ld []float64) {
+	c := 0
+	for ; c+4 <= k; c += 4 {
+		ld[c] = m.one(x, c) + m.one(x, c+1) + m.one(x, c+2) + m.one(x, c+3)
+	}
+	for ; c < k; c++ {
+		ld[c] = m.one(x, c)
+	}
+}`
+	if got := countCat(scanSrc(t, src))["jam-tail-delegates"]; got != 0 {
+		t.Fatalf("want 0 when both paths delegate, got %d", got)
+	}
+}
+
+// A plain stride-1 loop followed by another loop is not an unroll-and-jam and has no remainder.
+func TestDetectPS6019_SilentWithoutAJamHeader(t *testing.T) {
+	src := `package p
+func (m *M) batch(x []float64, ld []float64) {
+	for c := 0; c < k; c++ {
+		ld[c] = x[c]
+	}
+	for c := 0; c < k; c++ {
+		ld[c] = m.one(x, c)
+	}
+}`
+	if got := countCat(scanSrc(t, src))["jam-tail-delegates"]; got != 0 {
+		t.Fatalf("want 0 without a jam header, got %d", got)
+	}
+}

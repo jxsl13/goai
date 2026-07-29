@@ -130,6 +130,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -217,6 +218,7 @@ var checks = []check{
 	{"PS6001", "full-sort-bounded-prefix", "a full-vocabulary descending index sort whose result feeds an early-breaking (threshold-bounded) prefix consumer, with no quickselect/pre-filter guard — an O(n log n) sort for an O(prefix) need", false},
 	{"PS6002", "spatial-bounds-branch", "an innermost window/kernel loop re-testing a compound spatial bounds guard (iy>=0 && iy<h && ix>=0 && ix<wd) per tap, where the in-bounds taps form one contiguous run the guard can be hoisted around", false},
 	{"PS6005", "monotone-index-bound", "an innermost loop guarding its tap work with a single relational bound on an index affine in the loop var (j:=t-(K-1)+k; if j>=0) — the in-bounds iterations are one contiguous run, clamp the loop bound instead of branching per tap", false},
+	{"PS6019", "jam-tail-delegates", "an unroll-and-jammed loop (i+N <= bound) whose scalar remainder loop DELEGATES to a method on the receiver while the wide body is inlined — the two are separate code paths, so a fix applied to the wide one (per-worker scratch, a pinned product, a bounds hoist) silently misses the tail, and a test at a trip count divisible by N never executes it", false},
 	{"PS6018", "layout-op-cluster-unfused", "three or more calls dispatching a pure DATA-MOVEMENT op (layoutOpConstants: slice, reshape, transpose, concat) in one function with no fused raw-storage path — movement cannot change a value, so gathering and scattering directly is bit-identical and removes every one of those dispatches", false},
 	{"PS6017", "unpooled-variadic-sibling", "a VARIADIC helper called inside a loop at a fixed argument count, when the same package declares a non-variadic sibling with identical leading parameters and exactly that many trailing ones — the variadic form allocates a slice per call and the sibling exists to avoid it", false},
 	{"PS6016", "loop-invariant-literal-arg", "a struct composite literal built INSIDE a loop and passed straight to a call, whose every field initializer is loop-invariant — the same value is rebuilt every iteration, and when the parameter is an interface it is heap-boxed every iteration; construct it once above the loop", false},
@@ -1870,6 +1872,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	out = append(out, loopInvariantLiteralArgFindings(fset, fn)...)
 	out = append(out, unpooledVariadicSiblingFindings(fset, fn)...)
 	out = append(out, layoutOpClusterFindings(fset, fn, ns)...)
+	out = append(out, jamTailDelegatesFindings(fset, fn)...)
 	out = append(out, invariantTranscendentalRecomputeFindings(fset, fn)...)
 	out = append(out, partialFastPathFindings(fset, fn)...)
 	out = append(out, outputInvariantReloadFindings(fset, fn)...)
@@ -7698,6 +7701,157 @@ func hasFusedStoragePath(body *ast.BlockStmt, ns nameSets) bool {
 			if nm == "Storage" || ns.fastPath[nm] {
 				found = true
 			}
+		}
+		return true
+	})
+	return found
+}
+
+// jamTailDelegatesFindings flags PS6019 — an unroll-and-jammed loop whose remainder is handled
+// by a DIFFERENT code path:
+//
+//	for ; c+4 <= k; c += 4 {
+//		y0, y1, y2, y3 := y4[0], y4[1], y4[2], y4[3] // wide body: buffers passed in
+//		…
+//	}
+//	for ; c < k; c++ {
+//		ld[c], _ = m.logGaussian(x, c) // tail: reads the buffer off the RECEIVER
+//	}
+//
+// The two are separate code paths that happen to compute the same thing, and every property
+// established for the wide body has to be re-established for the tail. This shipped as a data
+// race: parallelizing the caller required moving the wide body's scratch off the receiver, the
+// tail still read the receiver, and the scan raced for any k not divisible by four. Nothing
+// caught it because every benchmark and test used k=8 — the race detector cannot flag a line
+// that never runs, and a parity test compares equal on a path that is empty.
+//
+// The properties that go stale in a tail are exactly the ones worth flagging for: per-worker
+// scratch (a race), explicit FMA pinning (§NUM-FUSED-PATH-FMA — a one-ulp divergence on the
+// remainder only), and hoisted bounds or dtype checks (a panic on the last elements).
+//
+// DELEGATION IS THE SIGNAL, not the presence of a tail. A tail that repeats the wide body
+// inline shares its edits by construction, because they sit in the same text. A tail that calls
+// a method inherits nothing. So this reports only when the remainder loop invokes a method on
+// the receiver and the wide body does not — which is also what keeps it quiet on the ordinary
+// scalar-arithmetic tail that most jammed kernels have.
+//
+// THIS RULE DOES NOT GO QUIET WHEN THE BUG IS FIXED, which is deliberate and unlike every other
+// rule here. Threading the scratch through a parameter fixed the race; it did not remove the
+// duplication, so the next property established for the wide body faces the same gap. Reporting
+// it permanently is the point — it is a maintenance hazard attached to a shape, not a defect
+// with a closing state. Suppressing once state is threaded was considered and rejected: telling
+// "argument the wide body also uses as a buffer" from "argument it merely reads" needs alias
+// analysis (the racy call passed x, which the wide body reads too), and an unsound suppression
+// here hides a race.
+func jamTailDelegatesFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil || fn.Recv == nil {
+		return nil
+	}
+	recv := ""
+	if len(fn.Recv.List) > 0 && len(fn.Recv.List[0].Names) > 0 {
+		recv = fn.Recv.List[0].Names[0].Name
+	}
+	if recv == "" {
+		return nil
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		blk, ok := n.(*ast.BlockStmt)
+		if !ok {
+			return true
+		}
+		for i := 0; i+1 < len(blk.List); i++ {
+			wide, ok := blk.List[i].(*ast.ForStmt)
+			if !ok {
+				continue
+			}
+			stride, ok := jamStride(wide)
+			if !ok || stride < 2 {
+				continue
+			}
+			tail, ok := blk.List[i+1].(*ast.ForStmt)
+			if !ok || tail.Body == nil {
+				continue
+			}
+			// The tail must delegate to a receiver method while the wide body does not.
+			if !callsReceiverMethod(tail.Body, recv) || callsReceiverMethod(wide.Body, recv) {
+				continue
+			}
+			out = append(out, finding{
+				pos:      fset.Position(tail.Pos()),
+				end:      fset.Position(tail.Pos()),
+				category: "jam-tail-delegates",
+				msg: fmt.Sprintf("this remainder loop delegates to a method on %q while the loop jammed by %d above it is "+
+					"inlined — two code paths for one computation. A STANDING HAZARD rather than a defect to close: "+
+					"anything established for the wide body (per-worker scratch, explicit FMA pinning, a hoisted bounds "+
+					"check) has to be re-established here, and a test at a trip count divisible by %d never executes it. "+
+					"This exact shape shipped as a data race in GMM's full-covariance density kernel, where the wide body "+
+					"took its scratch as a parameter and the tail still read the receiver. Threading the state through does "+
+					"NOT silence this: the duplication remains and the next change faces it again. Whenever you touch the "+
+					"wide body, test at a trip count NOT divisible by %d.",
+					recv, stride, stride, stride),
+			})
+		}
+		return true
+	})
+	return out
+}
+
+// jamStride returns N from a `for ; i+N <= bound; i += N` header, the unroll-and-jam idiom.
+func jamStride(f *ast.ForStmt) (int, bool) {
+	cond, ok := f.Cond.(*ast.BinaryExpr)
+	if !ok || (cond.Op != token.LEQ && cond.Op != token.LSS) {
+		return 0, false
+	}
+	add, ok := cond.X.(*ast.BinaryExpr)
+	if !ok || add.Op != token.ADD {
+		return 0, false
+	}
+	n, ok := intLit(add.Y)
+	if !ok {
+		return 0, false
+	}
+	// the post statement must advance by the same N
+	as, ok := f.Post.(*ast.AssignStmt)
+	if !ok || as.Tok != token.ADD_ASSIGN || len(as.Rhs) != 1 {
+		return 0, false
+	}
+	if step, ok := intLit(as.Rhs[0]); !ok || step != n {
+		return 0, false
+	}
+	return n, true
+}
+
+// intLit reads a non-negative integer literal.
+func intLit(e ast.Expr) (int, bool) {
+	bl, ok := e.(*ast.BasicLit)
+	if !ok || bl.Kind != token.INT {
+		return 0, false
+	}
+	v, err := strconv.Atoi(bl.Value)
+	if err != nil {
+		return 0, false
+	}
+	return v, true
+}
+
+// callsReceiverMethod reports whether body invokes a method on the named receiver.
+func callsReceiverMethod(body *ast.BlockStmt, recv string) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		if id, ok := sel.X.(*ast.Ident); ok && id.Name == recv {
+			found = true
 		}
 		return true
 	})
