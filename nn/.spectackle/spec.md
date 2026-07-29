@@ -121,6 +121,34 @@ actually fails.
 The eliminated hypotheses from R-01KYQ9CQ3XE1D (input handling, matmul accumulation order,
 matmul loop shape, vectorized broadcast) were all correct eliminations — none of them was the
 cause, and none needs revisiting.
+- T-01KYQCWQ5GF928BSDN480N34B5 Replace WandaPrune's per-column sort with a quickselect; extend the panel transpose to F32: Quickselect shipped: 282ms -> 55ms (5.11-5.15x). Combined with the panel transpose,
+WandaPrune is 348ms -> 55ms, 6.31x cumulative, at unchanged allocations. M2 Pro darwin/arm64,
+interleaved over 3 alternations, min of 3 runs of 2x per arm.
+
+The full sort was answering a membership question. Only `for r := 0; r < k; r++ {
+d[idx[r]] = true }` consumed it, so the order beyond the prefix was never observed — 46M
+comparisons per call to decide which half of each column to drop.
+
+Bit-identity rests on the comparator being TOTAL (score, then input index, indices unique).
+No two elements compare equal, so the k-smallest SET is uniquely determined and the arbitrary
+order the selection leaves inside the prefix is unobservable. The same property is why Lomuto
+partitioning cannot degrade on a column of identical scores: index tie-breaking means there
+are no duplicate keys. Median-of-three pivoting was still required — score columns are
+|w|·‖x‖ products and are frequently near-sorted, the exact shape that takes a first-element
+pivot quadratic.
+
+METHOD NOTE worth carrying forward: the property tests (selected set == sorted prefix, across
+random/constant/sorted/reverse/few-valued/boundary-tied columns, every k, n from 1 to 64) were
+verified non-vacuous by inverting the tie-break and confirming red. That check earned its
+keep immediately — the first draft of the column generator had `return c` inside its fill
+loop, so every column was near-constant and the suite proved almost nothing. It passed
+anyway. A green property test on a generator you have not mutated is not evidence.
+
+NOT DONE, deliberately: the F32 branch and the generic AtF64 fallback keep the full sort.
+The transform and its correctness argument carry over unchanged, but only the F64 path has a
+benchmark and this campaign does not ship unmeasured changes. The F32 half of this task
+therefore remains open; it needs an F32 benchmark first, and the panel transpose from the
+previous commit is in the same position.
 
 ## PROC-BENCH-MINOFN-001
 IF an A/B arm is measured from a single benchmark run, THEN the result SHALL be re-measured as the minimum of at least 3 runs per arm before it is reported; single samples inverted 2 verdicts in one session.
