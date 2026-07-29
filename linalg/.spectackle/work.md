@@ -60,3 +60,47 @@ This is the same family as the self-fulfilling-oracle failure already known here
 CORRECTION TO AN EARLIER SESSION: commit e7b27ee8 removed five bit-identity oracles including qr's, concluding each was "guarded elsewhere" after probing. For applyReflector that conclusion does not hold, whatever site was probed at the time. A frozen FNV hash over every element of Q and R replaces it — red under the exact mutation the existing suite missed, while TestQRReconstruct stays green. Worth noting the removal was itself a correction of over-testing, so the lesson is not "never remove an oracle" but "probe the SITE you are about to change, not the file".
 
 STILL SERIAL: householder (34.7%) computes one reflector from a column norm — a reduction, so not bit-identically splittable, and the vectors shrink as QR proceeds.
+
+## R-01KYQ8DP51EWHRPK3S54912JW4 PS6011 linalg sweep: SymEig 1.89x at n=128; rule corrected for hoisted-stride transposes (120->71)
+kind: research
+state: draft
+created: 2026-07-29
+
+Continued the PS6011 sweep into linalg and nlp. Two outcomes: one shipped optimization and
+one rule correction that mattered more than the optimization.
+
+SHIPPED — SymEig eigenvector accumulator stored transposed (internal/linalg/eigen.go):
+n=64 2.91ms -> 2.72ms (1.04-1.09x), n=128 42.96ms -> 22.70ms (1.87-1.90x). M2 Pro
+darwin/arm64, interleaved over 3 alternations, min of 3 runs of 5x per arm. The Jacobi
+accumulator is ONLY ever column-rotated, so transposing its storage makes the walk
+contiguous with identical arithmetic; the final extraction of an eigenvector (a column of v)
+becomes a single copy for the same reason. SymEig had no benchmark despite backing SOAP,
+Shampoo, GaLore, classic PCA and GMM, and backend/ref's eigh. Bit-identity held by the
+existing oracle test that replays the original row-of-slices implementation.
+
+NOT addressed: the m rotation's column loop. m is both row- and column-rotated in the same
+step, so a transposed copy would have to be maintained in parallel — the traffic moves
+rather than disappears.
+
+THE SIZE THRESHOLD IS THE LESSON. At n=64 the matrix is 32KB and cache-resident, so the
+optimization measures at 1.05x — indistinguishable from noise, and a benchmark sized only
+there would have rejected a 1.9x win. Cast as PROC-BENCH-CACHE-THRESHOLD-001: a benchmark
+validating a memory-access optimization must report at least two sizes, one exceeding cache.
+This is the same residency principle as PERF-ACCUM-RESIDENCY-001 seen from the measurement
+side rather than the design side.
+
+RULE CORRECTION — PS6011 was flagging ALREADY-CORRECT code. The transpose exclusion is
+syntactic and loses the stride once it is hoisted: with `row := i*b` outside the inner loop,
+`dst[j*a+i] = src[row+j]` shows no multiplication of the outer variable. nlp's gguf weight
+transposes are already tiled, the correct form, and were being flagged anyway — the worst
+kind of finding, since it advises rewriting code that is right. Now excludes permutation
+copies generally (one indexed write fed by one read, with or without a conversion or
+accessor), including the generic AtF64 fallback arms. Tree-wide findings 120 -> 71, a 41%
+noise cut, with all three original motivating cases still caught on replay. Kept honest by a
+test asserting the check STILL fires on a strided accumulation written in the same
+assignment shape.
+
+REMAINING PS6011 after the correction: 71 tree-wide. backend/* (the parallel worker's lane)
+holds the bulk. In linalg, the cholesky/qr/linalg.go pairs at adjacent lines are symmetric
+fills and transposes; svd.go and derived.go are unswept and have partial benchmark coverage
+(BenchmarkSVDPCA, BenchmarkPinv). nlp is now clean.
