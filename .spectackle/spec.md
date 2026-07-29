@@ -411,4 +411,4 @@ IF a benchmark validates a memory-access optimization (interchange, blocking, re
 IF a fused path must reproduce the bits of more than about five chained backend ops, THEN the implementer SHALL scope it down or record an ADR before starting, since every op's rounding must be replicated (see R-01KYQ9CQ3XE1D).
 
 ## NUM-SYMMETRY-NOT-EXACT-001
-IF an optimization reads a symmetric matrix transposed to make access contiguous, THEN the implementer SHALL verify the symmetry is EXACT at that point, since an in-place sweep can leave one-ulp asymmetry that accumulates (see R-01KYQBP0G8FN0).
+IF an optimization reads a symmetric matrix transposed to make access contiguous, THEN the implementer SHALL verify the symmetry is EXACT at that point, since an in-place sweep can leave one-ulp asymmetry that accumulates (see R-01KYQBJ7BREF4).
