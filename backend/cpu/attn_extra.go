@@ -508,9 +508,24 @@ func retentionFwd[T normFloat](qs, ks, vs, os []T, l, dk, dv int, decay []float6
 			for j := range acc {
 				acc[j] = 0
 			}
-			for m := 0; m <= n; m++ {
-				pm := p[m]
-				vr := vs[m*dv : m*dv+dv : m*dv+dv]
+			// 2-way unroll-and-jam over the key index m: acc[j] takes its m then m+1
+			// term as two separate roundings in ascending-m order, so the value is
+			// bit-identical (§V9) while two independent V-load streams and one fewer
+			// acc[] read-modify-write per key break the serial FADD-latency chain. This
+			// mirrors the shipped FlashAttn/MHA P·V jams; the score dot above is already
+			// 4-wide.
+			mm := 0
+			for ; mm+2 <= n+1; mm += 2 {
+				p0, p1 := p[mm], p[mm+1]
+				vr0 := vs[mm*dv : mm*dv+dv : mm*dv+dv]
+				vr1 := vs[(mm+1)*dv : (mm+1)*dv+dv : (mm+1)*dv+dv]
+				for j, vv0 := range vr0 {
+					acc[j] = (acc[j] + p0*float64(vv0)) + p1*float64(vr1[j])
+				}
+			}
+			for ; mm <= n; mm++ {
+				pm := p[mm]
+				vr := vs[mm*dv : mm*dv+dv : mm*dv+dv]
 				for j, vv := range vr {
 					acc[j] += pm * float64(vv)
 				}
