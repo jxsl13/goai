@@ -64,3 +64,54 @@ Both routes need per-partition partials and a reduction, and a reduction changes
 OPTIONS IF IT IS EVER WANTED, none cheap: (a) accept non-bit-identical gradient accumulation for dkRrot alone, which is an ADR-level decision because gradients feed optimizers and the repo gates VJPs at tolerance 0; (b) materialize dS for every (h,i,j) and do a second serial pass for dkRrot, costing heads*seq*seq floats; (c) leave it serial. Taken (c) for now, with the analysis recorded so the next session does not re-derive which output is the blocker.
 
 NOTE vjp_mla.go is one of the autograd files the earlier exactness audit found blind, so any attempt at (a) or (b) needs a tolerance-0 gate built FIRST — the same order used for the gguf, GBM and GMM work in this campaign.
+
+## R-01KYQ7TZJJETDA9BEJYC9RWDHX PS6011 autograd sweep: DoRA VJP 2.5x/3.3x, WKV VJP 1.43x/1.60x, gather-and-scatter as a third fix shape
+kind: research
+state: draft
+created: 2026-07-29
+
+Swept the autograd package against PS6011 (strided-inner-walk). Distribution tree-wide was
+backend/ref 31, autograd 26, nlp 16, nn 13, linalg 11, backend/cpu 5, internal/linalg 4,
+backend/cuda 4, llamagpu 3, classic 2, format/gguf 1. backend/* is the parallel worker's
+lane and was left alone; autograd was the largest available target.
+
+Neither hot site had a benchmark, so both findings were unvalidatable until one was built
+and panic-probed. All numbers M2 Pro darwin/arm64, interleaved over 3 alternations, min of 3
+runs per arm, bit-identical against checksum gates captured from the pre-change source on
+BOTH typed branches.
+
+DoRA weight VJP (1024x512): F64 4.55ms -> 1.80ms (2.41-2.64x), F32 3.43ms -> 1.04ms
+(3.11-3.44x). It walked a column of V and G at stride cols TWICE per column — once for the
+norm and the g·v dot, once to write dV. Four adjacent columns per pass. F32 gains more
+because it packs 16 values per cache line, so the strided walk wasted proportionally more of
+each one.
+
+Two bit-identity traps here, both worth remembering. (1) `v*s/(n*n)` associates LEFT, so it
+is (v*s)/(n*n); hoisting s/(n*n) out of the loop changes the arithmetic. Only mj/n and n*n
+could be hoisted, and the remaining divide stays because a reciprocal multiply is the open
+question in ADR-01KYJYY74VE27. (2) A first draft reconstructed s as dms[j]*sqrt(n*n) rather
+than carrying it — that is (s/n)*n, which is not guaranteed to round back to s. The
+checksums happened to agree, which is precisely how that class of bug survives review.
+
+WKV VJP (seq256/d64): F64 5.54ms -> 3.84ms (1.43x), F32 6.13ms -> 3.84ms (1.57-1.64x). The
+backward is O(seq^2) per channel with every access striding by d, so each column is
+re-walked seq times. Interchange is unavailable — the recurrence runs over t within a
+channel — so the fix is GATHER-AND-SCATTER: pull k, v and g columns into contiguous scratch
+once per channel, accumulate the two gradient columns contiguously, scatter back once. This
+is a third fix shape for PS6011, alongside the interchange and the four-wide blocking the
+rule's message already names.
+
+The F32 branch decided its own bit-identity: it rounds on EVERY accumulating store, so its
+gradient scratch must be []float32 accumulated the same way. Accumulating in float64 and
+rounding once is both faster and more accurate, and is the WRONG answer — it does not
+reproduce the existing bits. Scratch is allocated per CHUNK (once per worker), not per
+channel, so it is O(GOMAXPROCS) allocations rather than the per-dispatch allocation PS6008
+exists to catch.
+
+REMAINING in autograd: vjp_transpose.go (2 sites, a transpose VJP — inherently strided on
+one side, the class PS6011 suppresses when the mirrored shape is visible in the same body;
+these two are not suppressed because the mirror is not local, and they are a candidate for
+tiling rather than interchange) and the DoRA remainder-tail and zero-column fallback paths,
+both rare by construction.
+
+STILL UNSWEPT: nlp 16, linalg 11, internal/linalg 4, llamagpu 3, classic 2, format/gguf 1.
