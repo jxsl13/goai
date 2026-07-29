@@ -292,3 +292,44 @@ path with an ADR recording why bit-exactness was given up.
 
 The benchmark (nn/titans_bench_test.go, committed) stands: 11.4ms, 39.7MB and 24,527
 allocations for one seq=128 d=64 linear forward, about 191 allocations per timestep.
+
+## R-01KYQBAAFBF4TRCRNT93WPSYS8 PS4011 remaining sites are per-layer not per-timestep; GaLore Gram 1.06x with SymEig identified as the real bottleneck
+kind: research
+state: draft
+created: 2026-07-29
+
+Two results: a triage that redirects future PS4011 work, and a modest shipped win.
+
+PS4011 TRIAGE — the remaining 110 sites are much lower leverage than the Titans one, and
+future iterations should not assume otherwise. All 71 nlp findings are per-LAYER loops
+(`for l, b := range m.Blocks`), and the nn findings are overwhelmingly per-HEAD. Layer and
+head counts are order 32, so these are O(layers) dispatch per token rather than the O(seq)
+per-timestep recurrence that made NeuralMemory.Scan worth 2.7x. They are also far larger
+units of work: fusing a transformer block is not the same kind of task as fusing a scalar
+recurrence. The rule's premise ("O(seq) dispatch overhead") holds for a small minority of its
+findings. Titans was the outlier, not the representative case.
+
+SHIPPED — GaLore Gram matrices, 1.06x (256x512) and 1.08x (512x256), bit-identical.
+galoreProjection built a full symmetric Gram and, in the GᵀG branch, read g[k][i] with k as
+the reduction index — a column walk over a row-of-slices matrix (PS4009, PS6010). Both
+branches now compute one triangle and mirror; GᵀG is accumulated as k-outer rank-1 updates so
+each row is loaded once.
+
+Order preservation, precisely: the mirror is valid because g[i]·g[j] and g[j]·g[i] sum the
+same products over the same ascending k (multiplication commutes, nothing is reassociated),
+and the k-outer form interchanges loops without changing the order any single entry
+accumulates in.
+
+WHY THE WIN IS SMALL, and this is the useful part: SymEig dominates a GaLore step. The Jacobi
+sweep is O(n³) per iteration against the Gram's single O(n²·k) pass, so halving the Gram moves
+5-8%. The leverage in the GaLore/SOAP/Shampoo family is in SymEig, which was already improved
+1.89x at n=128 last iteration by transposing the eigenvector accumulator. Its remaining
+PS6011 site — the m rotation's column loop — was declined because m is both row- and
+column-rotated in the same step, so a transposed copy relocates the traffic rather than
+removing it. Anyone looking for more in these optimizers should attack the Jacobi sweep
+itself (blocking, or a different eigensolver for the sizes that matter), not the Gram.
+
+BENCHMARK NOTE: the existing GaLore/SOAP/Shampoo benchmarks use 64x64 and 64x128 parameters,
+whose Gram matrices are cache-resident. Larger benchmarks were added per
+PROC-BENCH-CACHE-THRESHOLD-001; measured on the small fixture alone this change would have
+read as noise.
