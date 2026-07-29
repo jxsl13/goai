@@ -143,12 +143,37 @@ func MoBAAttention(q, k, v *tensor.Tensor, heads, blockSize, topK int, scale flo
 					sum += scores[j]
 				}
 				orow := os[i*dm+off : i*dm+off+dk]
-				for d := range dk {
+				if sum <= 0 {
+					clear(orow)
+					continue
+				}
+				// Normalize ONCE. Dividing inside the P·V loop cost d_k divides per key
+				// instead of one; `scores[j] / sum * v` associates left, so folding the
+				// divide out is the same arithmetic, not a reassociation.
+				for j := 0; j <= i; j++ {
+					scores[j] /= sum
+				}
+				// Four output channels per pass. Walking j for a fixed d strides v by dm,
+				// touching one cache line per key to consume eight of its bytes and
+				// repeating that d_k times; four adjacent channels read v[j, off+d..d+3]
+				// from the SAME line (PS6011). Each accumulator still sums over ascending j.
+				d := 0
+				for ; d+4 <= dk; d += 4 {
+					var o0, o1, o2, o3 float64
+					for j := 0; j <= i; j++ {
+						sj := scores[j]
+						vq := vs[j*dm+off+d : j*dm+off+d+4 : j*dm+off+d+4]
+						o0 += sj * vq[0]
+						o1 += sj * vq[1]
+						o2 += sj * vq[2]
+						o3 += sj * vq[3]
+					}
+					orow[d], orow[d+1], orow[d+2], orow[d+3] = o0, o1, o2, o3
+				}
+				for ; d < dk; d++ {
 					var o float64
-					if sum > 0 {
-						for j := 0; j <= i; j++ {
-							o += scores[j] / sum * vs[j*dm+off+d]
-						}
+					for j := 0; j <= i; j++ {
+						o += scores[j] * vs[j*dm+off+d]
 					}
 					orow[d] = o
 				}
