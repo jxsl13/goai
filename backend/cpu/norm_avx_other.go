@@ -20,6 +20,19 @@ func rmsNormNormalizeF32(x, gamma, out []float32, inv float32) {
 	}
 }
 
+func rmsNormDxF32(u, g, x, dx []float32, inv, c float32) {
+	for j := range dx {
+		dx[j] = inv * (u[j]*g[j] - x[j]*c)
+	}
+}
+
+func layerNormDxF32(u, g, x, dx []float32, mu, inv, meanA, meanAX float32) {
+	for j := range dx {
+		xhat := (x[j] - mu) * inv
+		dx[j] = inv * (u[j]*g[j] - meanA - xhat*meanAX)
+	}
+}
+
 // sumF32 returns Σx accumulated in f64, 4-way unrolled.
 func sumF32(x []float32) float64 {
 	var s0, s1, s2, s3 float64
