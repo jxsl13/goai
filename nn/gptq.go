@@ -64,16 +64,32 @@ func GPTQuantize(w, x *tensor.Tensor, quant func(float64) float64, opts ...GPTQO
 		o(&cfg)
 	}
 
-	// H = 2·X·Xᵀ (the layer-wise reconstruction Hessian), in×in.
+	// H = 2·X·Xᵀ (the layer-wise reconstruction Hessian), in×in. X is [in, samples]; route
+	// the gram through the flat-slice matmul when x is contiguous F64 — the AtF64 triple loop
+	// pays in²·samples interface dispatches. Exactly the SparseGPT treatment (#462, -42%/-45%);
+	// matmulABtInto sums Σ_k in ascending order, so 2·c[i,j] is bit-identical. AtF64 fallback.
 	h := make([][]float64, in)
-	for i := range in {
-		h[i] = make([]float64, in)
-		for j := range in {
-			var s float64
-			for k := range samples {
-				s += x.AtF64(i, k) * x.AtF64(j, k)
+	if xf := flatF64(x); xf != nil {
+		var bt []float64
+		c := matmulABtInto(xf, xf, in, samples, bt) // c[i*in+j] = Σ_k X[i,k]·X[j,k]
+		for i := range in {
+			hi := make([]float64, in)
+			base := i * in
+			for j := range in {
+				hi[j] = 2 * c[base+j]
 			}
-			h[i][j] = 2 * s
+			h[i] = hi
+		}
+	} else {
+		for i := range in {
+			h[i] = make([]float64, in)
+			for j := range in {
+				var s float64
+				for k := range samples {
+					s += x.AtF64(i, k) * x.AtF64(j, k)
+				}
+				h[i][j] = 2 * s
+			}
 		}
 	}
 	wm := matAt(w) // working weight [out][in]
