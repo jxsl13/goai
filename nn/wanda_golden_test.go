@@ -8,18 +8,20 @@ import (
 	"github.com/jxsl13/goai/tensor"
 )
 
-func wandaSum(t *testing.T, cout, cin, samples int, sparsity float64, nm bool) uint64 {
+func wandaSum(t *testing.T, cout, cin, samples int, sparsity float64, nm, f32 bool) uint64 {
 	t.Helper()
 	// w is [cin, cout] and x is [tokens, cin] — the shapes wandaInputs builds.
-	w := tensor.New(tensor.F64, tensor.Shape{cin, cout})
-	ws := w.Storage().F64()
-	for i := range ws {
-		ws[i] = math.Sin(float64(i) * 0.37)
+	dt := tensor.F64
+	if f32 {
+		dt = tensor.F32
 	}
-	x := tensor.New(tensor.F64, tensor.Shape{samples, cin})
-	xs := x.Storage().F64()
-	for i := range xs {
-		xs[i] = math.Cos(float64(i) * 0.013)
+	w := tensor.New(dt, tensor.Shape{cin, cout})
+	for i := range w.Numel() {
+		w.SetF64(math.Sin(float64(i)*0.37), tensor.Unravel(i, w.Shape())...)
+	}
+	x := tensor.New(dt, tensor.Shape{samples, cin})
+	for i := range x.Numel() {
+		x.SetF64(math.Cos(float64(i)*0.013), tensor.Unravel(i, x.Shape())...)
 	}
 	var pruned, mask *tensor.Tensor
 	var err error
@@ -50,9 +52,9 @@ func wandaSum(t *testing.T, cout, cin, samples int, sparsity float64, nm bool) u
 // includes shapes where scores repeat.
 func TestWandaBitIdentical(t *testing.T) {
 	for _, c := range wandaGolden {
-		if got := wandaSum(t, c.cout, c.cin, c.samples, c.sparsity, c.nm); got != c.sum {
-			t.Fatalf("cout=%d cin=%d samples=%d nm=%v: checksum %d, want %d",
-				c.cout, c.cin, c.samples, c.nm, got, c.sum)
+		if got := wandaSum(t, c.cout, c.cin, c.samples, c.sparsity, c.nm, c.f32); got != c.sum {
+			t.Fatalf("cout=%d cin=%d samples=%d nm=%v f32=%v: checksum %d, want %d",
+				c.cout, c.cin, c.samples, c.nm, c.f32, got, c.sum)
 		}
 	}
 }
@@ -60,6 +62,6 @@ func TestWandaBitIdentical(t *testing.T) {
 type wandaCase struct {
 	cout, cin, samples int
 	sparsity           float64
-	nm                 bool
+	nm, f32            bool
 	sum                uint64
 }

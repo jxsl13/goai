@@ -46,3 +46,30 @@ func BenchmarkWandaPruneNM(b *testing.B) {
 		}
 	}
 }
+
+// wandaInputsF32 mirrors wandaInputs for the F32 typed branch, which had no benchmark and so
+// could not be validated when the F64 path was panelled and switched to a selection.
+func wandaInputsF32(cin, cout, tokens int) (w, x *tensor.Tensor) {
+	w = tensor.New(tensor.F32, tensor.Shape{cin, cout})
+	ws := w.Storage().F32()
+	for i := range ws {
+		ws[i] = float32(math.Sin(float64(i)*0.001) * 0.5)
+	}
+	x = tensor.New(tensor.F32, tensor.Shape{tokens, cin})
+	xs := x.Storage().F32()
+	for i := range xs {
+		xs[i] = float32(math.Cos(float64(i) * 0.0013))
+	}
+	return w, x
+}
+
+func BenchmarkWandaPruneF32(b *testing.B) {
+	w, x := wandaInputsF32(2048, 2048, 256)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if _, _, err := nn.WandaPrune(w, x, 0.5); err != nil {
+			b.Fatal(err)
+		}
+	}
+}

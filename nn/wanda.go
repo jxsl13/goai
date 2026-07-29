@@ -220,7 +220,14 @@ func WandaPrune(w, x *tensor.Tensor, sparsity float64) (pruned, mask *tensor.Ten
 			}
 			for j := 0; j < cin; j++ {
 				base := j*cout + o0
+				// dropbuf is indexed [t][j], so this reads at stride cin — PS6011 flags
+				// it, deliberately. The transposed [j][t] layout was implemented and
+				// measured SLOWER (0.982-0.993x): it makes this read contiguous but turns
+				// the k selection writes strided and forces a full-buffer clear per panel.
+				// The buffer is 256KB and L2-resident, so the stride costs almost nothing
+				// — PERF-ACCUM-RESIDENCY-001 seen from the measurement side.
 				for t := 0; t < ob; t++ {
+					//perfscan:ignore PS6011
 					if dropbuf[t*cin+j] {
 						continue
 					}
@@ -233,25 +240,48 @@ func WandaPrune(w, x *tensor.Tensor, sparsity float64) (pruned, mask *tensor.Ten
 	}
 	if wsF := flatF32(w); wsF != nil {
 		ss, ps, ms := sf64.F32(), pruned.Storage().F32(), mask.Storage().F32()
-		for o := 0; o < cout; o++ {
+		// Same panel transpose and selection as the F64 branch above; see the commentary
+		// there. The score panel is float64 because the comparator and the scores are,
+		// exactly as the per-column buffer was.
+		pn := min(wandaPanel, cout)
+		colbuf := make([]float64, pn*cin)
+		dropbuf := make([]bool, pn*cin)
+		for o0 := 0; o0 < cout; o0 += pn {
+			ob := min(pn, cout-o0)
 			for j := 0; j < cin; j++ {
-				idx[j] = j
-				col[j] = float64(ss[j*cout+o])
-			}
-			sortColOf(col)
-			for j := range drop {
-				drop[j] = false
-			}
-			for r := 0; r < k; r++ {
-				drop[idx[r]] = true
-			}
-			for j := 0; j < cin; j++ {
-				if drop[j] {
-					continue
+				row := ss[j*cout+o0 : j*cout+o0+ob]
+				for t, v := range row {
+					colbuf[t*cin+j] = float64(v)
 				}
-				off := j*cout + o
-				ps[off] = wsF[off]
-				ms[off] = 1
+			}
+			for t := 0; t < ob; t++ {
+				col := colbuf[t*cin : t*cin+cin : t*cin+cin]
+				for j := 0; j < cin; j++ {
+					idx[j] = j
+				}
+				wandaSelectK(idx, col, k)
+				d := dropbuf[t*cin : t*cin+cin : t*cin+cin]
+				clear(d)
+				for r := 0; r < k; r++ {
+					d[idx[r]] = true
+				}
+			}
+			for j := 0; j < cin; j++ {
+				base := j*cout + o0
+				// dropbuf is indexed [t][j], so this reads at stride cin — PS6011 flags
+				// it, deliberately. The transposed [j][t] layout was implemented and
+				// measured SLOWER (0.982-0.993x): it makes this read contiguous but turns
+				// the k selection writes strided and forces a full-buffer clear per panel.
+				// The buffer is 256KB and L2-resident, so the stride costs almost nothing
+				// — PERF-ACCUM-RESIDENCY-001 seen from the measurement side.
+				for t := 0; t < ob; t++ {
+					//perfscan:ignore PS6011
+					if dropbuf[t*cin+j] {
+						continue
+					}
+					ps[base+t] = wsF[base+t]
+					ms[base+t] = 1
+				}
 			}
 		}
 		return pruned, mask, nil
