@@ -136,6 +136,46 @@ func benchQ4K(b *testing.B, k, n int) {
 	b.ReportMetric(float64(k)*float64(n)*0.5625/(b.Elapsed().Seconds()/float64(b.N))/1e9, "GB/s")
 }
 
+func benchQ4KBatch(b *testing.B, mrows, k, n int) {
+	if !cuda.Available() {
+		b.Skip("no gpu")
+	}
+	rng := rand.New(rand.NewSource(3))
+	w := tensor.New(tensor.F32, tensor.Shape{k, n})
+	wf := w.Storage().F32()
+	for i := range wf {
+		wf[i] = float32(rng.NormFloat64())
+	}
+	a := make([]float32, mrows*k)
+	for i := range a {
+		a[i] = float32(rng.NormFloat64())
+	}
+	rq, err := quantQ4K(w)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer rq.Free()
+	da, _ := cuda.NewDeviceF32(mrows, k)
+	defer da.Free()
+	da.UploadF32(a)
+	out, _ := cuda.NewDeviceF32(mrows, n)
+	defer out.Free()
+	rq.QMatMulInto(da, out)
+	cuda.GraphSync()
+	b.ResetTimer()
+	for range b.N {
+		rq.QMatMulInto(da, out)
+	}
+	cuda.GraphSync()
+	b.StopTimer()
+	b.ReportMetric(float64(k)*float64(n)*0.5625/(b.Elapsed().Seconds()/float64(b.N))/1e9, "GB/s")
+}
+
+func BenchmarkQ4KBatch_m4_2048x5632(b *testing.B) { benchQ4KBatch(b, 4, 2048, 5632) }
+func BenchmarkQ4KBatch_m2_2048x5632(b *testing.B) { benchQ4KBatch(b, 2, 2048, 5632) }
+func BenchmarkQ4KBatch_m3_2048x5632(b *testing.B) { benchQ4KBatch(b, 3, 2048, 5632) }
+
+
 func BenchmarkGemvQ4K_2048x256(b *testing.B)   { benchQ4K(b, 2048, 256) }   // GQA k/v proj (small-N)
 func BenchmarkGemvQ4K_2048(b *testing.B)       { benchQ4K(b, 2048, 2048) }  // q/o proj
 func BenchmarkGemvQ4K_2048x5632(b *testing.B)  { benchQ4K(b, 2048, 5632) }  // gate/up
