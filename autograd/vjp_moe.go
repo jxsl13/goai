@@ -2,10 +2,41 @@ package autograd
 
 import (
 	"math"
+	"runtime"
+	"sync"
 
 	"github.com/jxsl13/goai/backend"
 	"github.com/jxsl13/goai/tensor"
 )
+
+// moeParallelTokens runs body over disjoint token ranges across the worker pool, handing
+// each worker its own per-token scratch buffer (length d). Tokens are independent in the
+// MoE-combine backward (de[i][t,:] and dw[t,:] are per-token disjoint, no cross-token
+// reduction), so parallelizing them is bit-exact. Small work / single core stays serial.
+func moeParallelTokens(tks, d int, body func(tLo, tHi int, scratch []float64)) {
+	nw := runtime.GOMAXPROCS(0)
+	if nw > tks {
+		nw = tks
+	}
+	if nw <= 1 || tks*d < 1<<14 {
+		body(0, tks, make([]float64, d))
+		return
+	}
+	var wg sync.WaitGroup
+	chunk := (tks + nw - 1) / nw
+	for lo := 0; lo < tks; lo += chunk {
+		hi := lo + chunk
+		if hi > tks {
+			hi = tks
+		}
+		wg.Add(1)
+		go func(lo, hi int) {
+			defer wg.Done()
+			body(lo, hi, make([]float64, d))
+		}(lo, hi)
+	}
+	wg.Wait()
+}
 
 // MoE load-balancing loss VJP (Fedus et al. 2021). With L = α·N·Σ_i F_i·P̄_i,
 // F_i = f_i/T the DETACHED dispatch fraction and P̄_i = mean_t softmax(logits_t)_i,
@@ -163,33 +194,35 @@ func init() {
 					es[i], des[i] = ec[i].Storage().F64(), de[i].Storage().F64()
 				}
 				dws := dw.Storage().F64()
-				for t := range tks {
-					wb, eb := t*e, t*d
-					var denom float64
-					for i := range e {
-						denom += ws[wb+i]
-					}
-					if denom <= 0 {
-						continue // no selected expert → zero gradients this token
-					}
-					for j := range d {
-						var acc float64
+				moeParallelTokens(tks, d, func(tLo, tHi int, out []float64) {
+					for t := tLo; t < tHi; t++ {
+						wb, eb := t*e, t*d
+						var denom float64
 						for i := range e {
-							acc += (ws[wb+i] / denom) * es[i][eb+j]
+							denom += ws[wb+i]
 						}
-						out[j] = acc
-					}
-					for i := range e {
-						wi := ws[wb+i] / denom
-						var dwSum float64
+						if denom <= 0 {
+							continue // no selected expert → zero gradients this token
+						}
 						for j := range d {
-							gj := gs[eb+j]
-							des[i][eb+j] = gj * wi               // ∂e_{i,d}
-							dwSum += gj * (es[i][eb+j] - out[j]) // through renorm
+							var acc float64
+							for i := range e {
+								acc += (ws[wb+i] / denom) * es[i][eb+j]
+							}
+							out[j] = acc
 						}
-						dws[wb+i] = dwSum / denom
+						for i := range e {
+							wi := ws[wb+i] / denom
+							var dwSum float64
+							for j := range d {
+								gj := gs[eb+j]
+								des[i][eb+j] = gj * wi               // ∂e_{i,d}
+								dwSum += gj * (es[i][eb+j] - out[j]) // through renorm
+							}
+							dws[wb+i] = dwSum / denom
+						}
 					}
-				}
+				})
 				computed = true
 			}
 		case tensor.F32:
@@ -206,33 +239,35 @@ func init() {
 					es[i], des[i] = ec[i].Storage().F32(), de[i].Storage().F32()
 				}
 				dws := dw.Storage().F32()
-				for t := range tks {
-					wb, eb := t*e, t*d
-					var denom float64
-					for i := range e {
-						denom += float64(ws[wb+i])
-					}
-					if denom <= 0 {
-						continue // no selected expert → zero gradients this token
-					}
-					for j := range d {
-						var acc float64
+				moeParallelTokens(tks, d, func(tLo, tHi int, out []float64) {
+					for t := tLo; t < tHi; t++ {
+						wb, eb := t*e, t*d
+						var denom float64
 						for i := range e {
-							acc += (float64(ws[wb+i]) / denom) * float64(es[i][eb+j])
+							denom += float64(ws[wb+i])
 						}
-						out[j] = acc
-					}
-					for i := range e {
-						wi := float64(ws[wb+i]) / denom
-						var dwSum float64
+						if denom <= 0 {
+							continue // no selected expert → zero gradients this token
+						}
 						for j := range d {
-							gj := float64(gs[eb+j])
-							des[i][eb+j] = float32(gj * wi)               // ∂e_{i,d}
-							dwSum += gj * (float64(es[i][eb+j]) - out[j]) // through renorm
+							var acc float64
+							for i := range e {
+								acc += (float64(ws[wb+i]) / denom) * float64(es[i][eb+j])
+							}
+							out[j] = acc
 						}
-						dws[wb+i] = float32(dwSum / denom)
+						for i := range e {
+							wi := float64(ws[wb+i]) / denom
+							var dwSum float64
+							for j := range d {
+								gj := float64(gs[eb+j])
+								des[i][eb+j] = float32(gj * wi)               // ∂e_{i,d}
+								dwSum += gj * (float64(es[i][eb+j]) - out[j]) // through renorm
+							}
+							dws[wb+i] = float32(dwSum / denom)
+						}
 					}
-				}
+				})
 				computed = true
 			}
 		}
