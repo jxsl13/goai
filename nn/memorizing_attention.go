@@ -450,7 +450,11 @@ func (m *MemMemory) retrieveHead(q []float64, headOff, headDim, topM int) (idx [
 		}
 		all[i].i, all[i].s = i, s
 	}
-	sort.SliceStable(all, func(a, b int) bool {
+	// Total-order comparator (score desc, then unique index asc) → the unstable
+	// sort.Slice reproduces the exact order SliceStable produced, at pdqsort speed
+	// instead of the slower stable symMerge. The score tie is broken deterministically
+	// by index, so the result is bit-identical.
+	sort.Slice(all, func(a, b int) bool {
 		if all[a].s != all[b].s {
 			return all[a].s > all[b].s
 		}
@@ -474,6 +478,64 @@ func (m *MemMemory) gather(dtype tensor.Dtype, qh *tensor.Tensor, headOff, headD
 	kg = tensor.New(dtype, tensor.Shape{t, topM, headDim})
 	vg = tensor.New(dtype, tensor.Shape{t, topM, headDim})
 	qrow := make([]float64, headDim)
+	// The query row was read one cell at a time via qh.AtF64 and each neighbour
+	// element written via kg/vg.SetF64 — interface dispatch over O(t·topM·headDim).
+	// m.keys/m.vals are already []float64, so when the query and output tensors are
+	// contiguous F64/F32 we copy through the storage slices directly. Bit-identical:
+	// the same values into the same [ti,r,d] cells, retrieveHead order unchanged.
+	var qs []float64
+	qTyped := qh.Dtype() == tensor.F64
+	if qTyped {
+		qs = qh.Contiguous().Storage().F64()
+	}
+	switch dtype {
+	case tensor.F64:
+		kgs := kg.Storage().F64()
+		vgs := vg.Storage().F64()
+		for ti := range t {
+			if qTyped {
+				copy(qrow, qs[ti*headDim:ti*headDim+headDim])
+			} else {
+				for d := range headDim {
+					qrow[d] = qh.AtF64(ti, d)
+				}
+			}
+			idx, _ := m.retrieveHead(qrow, headOff, headDim, topM)
+			obase := ti * topM * headDim
+			for r, id := range idx {
+				kr, vr := m.keys[id], m.vals[id]
+				rb := obase + r*headDim
+				for d := range headDim {
+					kgs[rb+d] = kr[headOff+d]
+					vgs[rb+d] = vr[headOff+d]
+				}
+			}
+		}
+		return kg, vg
+	case tensor.F32:
+		kgs := kg.Storage().F32()
+		vgs := vg.Storage().F32()
+		for ti := range t {
+			if qTyped {
+				copy(qrow, qs[ti*headDim:ti*headDim+headDim])
+			} else {
+				for d := range headDim {
+					qrow[d] = qh.AtF64(ti, d)
+				}
+			}
+			idx, _ := m.retrieveHead(qrow, headOff, headDim, topM)
+			obase := ti * topM * headDim
+			for r, id := range idx {
+				kr, vr := m.keys[id], m.vals[id]
+				rb := obase + r*headDim
+				for d := range headDim {
+					kgs[rb+d] = float32(kr[headOff+d])
+					vgs[rb+d] = float32(vr[headOff+d])
+				}
+			}
+		}
+		return kg, vg
+	}
 	for ti := range t {
 		for d := range headDim {
 			qrow[d] = qh.AtF64(ti, d)
