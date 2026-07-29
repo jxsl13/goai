@@ -2,7 +2,7 @@ package nn
 
 import (
 	"math"
-	"sort"
+	"slices"
 
 	"github.com/jxsl13/goai/backend"
 	"github.com/jxsl13/goai/tensor"
@@ -45,7 +45,20 @@ func TopKGating(gateLogits []float64, k int) (experts []int, weights []float64) 
 	for i := range idx {
 		idx[i] = i
 	}
-	sort.SliceStable(idx, func(a, b int) bool { return probs[idx[a]] > probs[idx[b]] })
+	// SortStableFunc, not SortFunc: this comparator is NOT total — it orders on the
+	// probability alone and relies on stability to break ties by expert index, which is
+	// what makes routing reproducible. sort.SliceStable reaches its swap through
+	// reflectlite.Swapper and ALLOCATES on every call (PS6009), and this runs once per
+	// TOKEN on the decode path.
+	slices.SortStableFunc(idx, func(x, y int) int {
+		switch a, b := probs[x], probs[y]; {
+		case a > b:
+			return -1
+		case a < b:
+			return 1
+		}
+		return 0
+	})
 
 	experts = append([]int(nil), idx[:k]...)
 	var wsum float64
@@ -102,13 +115,19 @@ func TopKGatingBiased(gateLogits, bias []float64, k int) (experts []int, weights
 		idx[i] = i
 	}
 	// SELECTION key = sigmoid affinity + bias (the only place bias participates).
-	sort.SliceStable(idx, func(a, b int) bool {
-		ai, bi := affinity[idx[a]], affinity[idx[b]]
+	slices.SortStableFunc(idx, func(x, y int) int {
+		ai, bi := affinity[x], affinity[y]
 		if bias != nil {
-			ai += bias[idx[a]]
-			bi += bias[idx[b]]
+			ai += bias[x]
+			bi += bias[y]
 		}
-		return ai > bi
+		switch {
+		case ai > bi:
+			return -1
+		case ai < bi:
+			return 1
+		}
+		return 0
 	})
 
 	experts = append([]int(nil), idx[:k]...)
