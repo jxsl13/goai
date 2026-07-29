@@ -3,7 +3,37 @@ package classic
 import (
 	"fmt"
 	"math"
+	"runtime"
 )
+
+// nbPredictParallel runs body over the rows of x chunk-parallel across GOMAXPROCS (each
+// row is independent — jointRow only reads the immutable fitted params and body writes only
+// its own out index), so the result is bit-identical to the serial loop. Serial below a
+// small work threshold. Widths are pre-validated by the caller.
+func nbPredictParallel(n, feat int, body func(i int)) {
+	nw := runtime.GOMAXPROCS(0)
+	if nw <= 1 || n*feat < 1<<13 {
+		for i := 0; i < n; i++ {
+			body(i)
+		}
+		return
+	}
+	if nw > n {
+		nw = n
+	}
+	csz := (n + nw - 1) / nw
+	_ = parallelBuild(nw, func(c int) error {
+		lo := c * csz
+		hi := lo + csz
+		if hi > n {
+			hi = n
+		}
+		for i := lo; i < hi; i++ {
+			body(i)
+		}
+		return nil
+	})
+}
 
 // NBOption configures a [GaussianNB]. Options follow the functional-options
 // idiom (§C12) and are prefixed WithNB* so they never collide with the other
@@ -238,13 +268,15 @@ func (m *GaussianNB) JointLogLikelihood(x [][]float64) ([][]float64, error) {
 	if !m.fitted {
 		return nil, fmt.Errorf("classic: GaussianNB.JointLogLikelihood before Fit")
 	}
-	out := make([][]float64, len(x))
 	for i, row := range x {
 		if len(row) != m.nFeat {
 			return nil, fmt.Errorf("classic: row %d width %d, want %d", i, len(row), m.nFeat)
 		}
-		out[i] = m.jointRow(row)
 	}
+	out := make([][]float64, len(x))
+	nbPredictParallel(len(x), m.nFeat, func(i int) {
+		out[i] = m.jointRow(x[i])
+	})
 	return out, nil
 }
 
@@ -255,12 +287,14 @@ func (m *GaussianNB) Predict(x [][]float64) ([]int, error) {
 	if !m.fitted {
 		return nil, fmt.Errorf("classic: GaussianNB.Predict before Fit")
 	}
-	out := make([]int, len(x))
 	for i, row := range x {
 		if len(row) != m.nFeat {
 			return nil, fmt.Errorf("classic: row %d width %d, want %d", i, len(row), m.nFeat)
 		}
-		joint := m.jointRow(row)
+	}
+	out := make([]int, len(x))
+	nbPredictParallel(len(x), m.nFeat, func(i int) {
+		joint := m.jointRow(x[i])
 		best, bestLL := 0, math.Inf(-1)
 		for c, ll := range joint {
 			if ll > bestLL { // strict ⇒ lowest label wins ties
@@ -268,7 +302,7 @@ func (m *GaussianNB) Predict(x [][]float64) ([]int, error) {
 			}
 		}
 		out[i] = m.classes[best]
-	}
+	})
 	return out, nil
 }
 
@@ -281,12 +315,14 @@ func (m *GaussianNB) PredictProba(x [][]float64) ([][]float64, error) {
 	if !m.fitted {
 		return nil, fmt.Errorf("classic: GaussianNB.PredictProba before Fit")
 	}
-	out := make([][]float64, len(x))
 	for i, row := range x {
 		if len(row) != m.nFeat {
 			return nil, fmt.Errorf("classic: row %d width %d, want %d", i, len(row), m.nFeat)
 		}
-		joint := m.jointRow(row)
+	}
+	out := make([][]float64, len(x))
+	nbPredictParallel(len(x), m.nFeat, func(i int) {
+		joint := m.jointRow(x[i])
 		mx := math.Inf(-1)
 		for _, ll := range joint {
 			if ll > mx {
@@ -303,7 +339,7 @@ func (m *GaussianNB) PredictProba(x [][]float64) ([][]float64, error) {
 			p[c] /= sum
 		}
 		out[i] = p
-	}
+	})
 	return out, nil
 }
 
