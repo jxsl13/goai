@@ -275,6 +275,35 @@ func (m *HGRN) ForwardSequential(ctx *backend.Context, x *tensor.Tensor) (*tenso
 		return nil, err
 	}
 	l := x.Shape()[0]
+	d := x.Shape()[1]
+	// Fused typed-F64 inference path: the scan h_t = f_t⊙h_{t-1}+b_t otherwise dispatches
+	// ~4 backend ops + tiny allocs per timestep. Run it elementwise on raw []float64 with
+	// the h state reused in place, writing the [L,d] sequence directly, then hand it to the
+	// same output gate. Gated on ctx.Recorder==nil (inference); training keeps the dispatch
+	// loop so autograd taping is unchanged. Bit-identical: OpMul/OpAdd are plain elementwise
+	// f64 (h_t[j] = f_t[j]·h_{t-1}[j] + b_t[j], same order), and gate() is fed the identical
+	// sequence values. Non-F64/non-contiguous falls through.
+	if ctx.Recorder == nil {
+		if fs, bs := flatF64(f), flatF64(b); fs != nil && bs != nil {
+			seqT := tensor.NewOn(ctx.Device(), x.Dtype(), tensor.Shape{l, d})
+			ss := flatF64(seqT)
+			hbuf := make([]float64, d)
+			for t := range l {
+				frow := fs[t*d : t*d+d : t*d+d]
+				brow := bs[t*d : t*d+d : t*d+d]
+				orow := ss[t*d : t*d+d : t*d+d]
+				if t == 0 {
+					copy(hbuf, brow) // h_0 = f_0·0 + b_0 = b_0
+				} else {
+					for j := range d {
+						hbuf[j] = frow[j]*hbuf[j] + brow[j]
+					}
+				}
+				copy(orow, hbuf)
+			}
+			return m.gate(ctx, x, seqT)
+		}
+	}
 	outs := make([]*tensor.Tensor, l)
 	var h *tensor.Tensor // [1,d]; nil == the zero state before t=0
 	for t := range l {
