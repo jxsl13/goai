@@ -989,3 +989,25 @@ CURATION IS ALSO HOW THE VOCABULARY GETS DECIDED. Forward was evaluated and REJE
 A SECOND DEFECT, caught only by pairing. The regression test for the receiver false positive was first written with a capitalized method name - not in the configured vocabulary - so nothing in it was a pure call at all and the expected zero was reached without exercising the suppression. It passed for the wrong reason. The companion FLOOR test, asserting the rule still fires when the receiver IS the same, failed and exposed it. A zero-expecting test cannot distinguish correct suppression from total non-matching. Reverting the key fix now turns the suppression test red with 2 findings, so the guard is real in both directions.
 
 LANDED AS: PROC-SCANRULE-VOCAB-WIDEN-001 (widen once, curate, restore) and PROC-SUPPRESSION-FLOOR-001 (every suppression test needs a firing floor). Together with PROC-SCANRULE-REPLAY-001 from the previous iteration these bracket scan-rule validation: replay proves the rule finds its instance, a synthetic positive proves it finds the shape, a widened vocabulary proves it does not find non-instances, and a floor proves the suppressions are not vacuous. Each of the four caught something the other three missed.
+
+## R-01KYQWY75AF2G9H56MF9Y3RSV4 nlp attrs-box hoist, batch 1 of the 24-path sweep: -2.9% allocs measured, PS6016 built, and one stale task closed
+kind: research
+state: draft
+created: 2026-07-29
+
+PARTIALLY CONSUMES T-01KYJQZF10F20. Measured on darwin/arm64 M2 Pro, go1.26.5, GOMAXPROCS=12, interleaved, two rounds, deterministic in both.
+
+STALE TASK CLOSED FIRST. T-01KYJQZFEHEFR (route QuantLlama.embedOne through embedRow) was already done - landed by PR 545 (typed row-copy for embedOne, 5.6x, plus KV-evict GatherRows 9.9x). Verified by reading the site rather than assuming the task was current. This is the second stale task found by checking before implementing; the queue predates several merged PRs.
+
+MEASURED, batch of six decode paths (quant_llama, mixtral, olmo2, quant_mixtral, starcoder2, qwen2moe):
+  QuantLlamaGenerate500   294573 -> 286083 allocs  -2.9%, -391KB per op
+  MixtralPromptStepwise   131227 -> 128589 allocs  -2.0%, -121KB per op
+Wall time is a wash and was expected to be - these are small short-lived objects, so the change is garbage pressure and is reported as such rather than dressed up as throughput. 17 of the package 95 escaping attrs sites removed; 78 remain for later batches. The task predicted 1-3 percent per path, which is what landed.
+
+THE NON-OBVIOUS HALF, which the task called out and which held: hoisting the STRUCT is not the fix. quant_llama_decode.go already hoisted its AttnAttrs as a concrete struct and escape analysis still reported it escaping, because the interface conversion happens at the CALL SITE. The box has to move out. An earlier pass on the float paths made exactly this mistake and left the defect in place while looking fixed.
+
+PERFSCAN: PS6016 loop-invariant-literal-arg. A composite literal built inside a loop, passed straight to a call, every field initializer loop-invariant. 155 candidates tree-wide, so the remaining sweep is now automatically located rather than hand-listed. Soundness rests on the literal being passed DIRECTLY and nowhere else - an appended literal needs its per-iteration identity and hoisting it would make every element alias one value, which is a correctness change wearing an optimization costume. Dedup is per SITE not per type: the q and k RoPE attrs are two distinct literals of one type and a per-type key reported one while hiding the other.
+
+RULE (i) OF TWO IS DELIBERATELY HALF-BUILT, and the honest statement of why is the durable part. The already-hoisted-but-still-boxed form is NOT detectable by this scanner: recognizing it requires knowing the parameter is an interface type, which requires go/types, and perfscan is deliberately go/ast-only per its design. Approximating it would either miss or fire on correct code. The tool that sees both forms is the compiler - go build -gcflags=<pkg>=-m names every escaping literal, and that is how both forms were actually found here. PATTERNS.md names the exact invocation rather than pretending the parser covers it. This is the first case in the rule set where the right answer was to document a different tool instead of adding a weaker check.
+
+RULE (ii) NOT BUILT this round: unpooled variadic sibling (a variadic helper called at fixed arity where a fixed-arity sibling exists). Detectable from the signature set alone as the task says, and still open. The exec1-to-exec1a/exec3 switch was applied by hand in this batch; 81 unpooled OpRoPE and 59 unpooled OpMHA call sites remain package-wide, so a rule for it would pay.
