@@ -632,7 +632,8 @@ func (b *SwinBlock) windowedAttention(ctx *backend.Context, xWin *tensor.Tensor,
 	if err != nil {
 		return nil, err
 	}
-	inv := swinScalar(b.dtype(), 1/math.Sqrt(float64(dk)))
+	invScale := 1 / math.Sqrt(float64(dk))
+	inv := swinScalar(b.dtype(), invScale)
 	var biases []*tensor.Tensor
 	if b.Rel != nil {
 		biases = make([]*tensor.Tensor, b.Heads)
@@ -684,19 +685,44 @@ func (b *SwinBlock) windowedAttention(ctx *backend.Context, xWin *tensor.Tensor,
 			if err != nil {
 				return nil, err
 			}
-			if sc, err = swinExec1(ctx, backend.OpMul, nil, sc, inv); err != nil { // B60: scale via OpMul
-				return nil, err
-			}
-			if biases != nil {
-				if sc, err = swinExec1(ctx, backend.OpAdd, nil, sc, biases[hh]); err != nil {
-					return nil, err
-				}
-			}
+			// Scale, relative-position bias and window mask fused into ONE pass over the
+			// score matrix, in place. As three backend ops they were three dispatches and
+			// three [n,n] tensors PER (window, head) — at 224x224 with window 7 that is 64
+			// windows per stage times heads times batch, and it is most of this function's
+			// allocation count (PS4011).
+			//
+			// Each product and sum is rounded exactly where the op chain rounded it:
+			// Mul rounds, then each Add rounds. float64(...) pins the scale against FMA
+			// contraction, since the dispatch path cannot fuse across two ops
+			// (NUM-FUSED-PATH-FMA-001).
+			var mask *tensor.Tensor
 			if masks != nil {
 				// masks describe one image's numWin windows; when this runs over B·numWin batched
 				// windows the geometry (and mask) repeats every numWin, so index modulo (§batched).
-				if sc, err = swinExec1(ctx, backend.OpAdd, nil, sc, masks[w%len(masks)]); err != nil {
+				mask = masks[w%len(masks)]
+			}
+			var bias *tensor.Tensor
+			if biases != nil {
+				bias = biases[hh]
+			}
+			// INFERENCE ONLY. The bias is a learnable parameter, and it is the OpAdd that
+			// records its dependency on the tape; fusing the add bypasses the graph and the
+			// bias comes back with a nil gradient. TestSwinGradcheck catches exactly that.
+			// In-place mutation of sc would also corrupt a recorded graph.
+			fused := ctx.Recorder == nil && swinFuseScoreTerms(sc, invScale, bias, mask)
+			if !fused {
+				if sc, err = swinExec1(ctx, backend.OpMul, nil, sc, inv); err != nil { // B60: scale via OpMul
 					return nil, err
+				}
+				if bias != nil {
+					if sc, err = swinExec1(ctx, backend.OpAdd, nil, sc, bias); err != nil {
+						return nil, err
+					}
+				}
+				if mask != nil {
+					if sc, err = swinExec1(ctx, backend.OpAdd, nil, sc, mask); err != nil {
+						return nil, err
+					}
 				}
 			}
 			wgt, err := swinExec1(ctx, backend.OpSoftmax, nil, sc) // over last axis
@@ -960,4 +986,98 @@ func swinRelIndex(m int) []int {
 		}
 	}
 	return idx
+}
+
+// swinFuseScoreTerms applies the attention scale, the relative-position bias and the window
+// mask to sc IN PLACE, returning false when the tensors are not F64-contiguous so the caller
+// falls back to the op chain.
+//
+// Rounding matches the three ops it replaces exactly: the scale is a Mul (one rounding, pinned
+// against FMA contraction), then each term is an Add.
+func swinFuseScoreTerms(sc *tensor.Tensor, scale float64, bias, mask *tensor.Tensor) bool {
+	if sc != nil && sc.Dtype() == tensor.F32 {
+		return swinFuseScoreTermsF32(sc, scale, bias, mask)
+	}
+	ss := swinFlatF64(sc)
+	if ss == nil {
+		return false
+	}
+	var bs, ms []float64
+	if bias != nil {
+		if bs = swinFlatF64(bias); bs == nil || len(bs) != len(ss) {
+			return false
+		}
+	}
+	if mask != nil {
+		if ms = swinFlatF64(mask); ms == nil || len(ms) != len(ss) {
+			return false
+		}
+	}
+	for i := range ss {
+		v := float64(ss[i] * scale)
+		if bs != nil {
+			v += bs[i]
+		}
+		if ms != nil {
+			v += ms[i]
+		}
+		ss[i] = v
+	}
+	return true
+}
+
+// swinFlatF64 returns t's row-major F64 storage, or nil when it is not F64-contiguous.
+func swinFlatF64(t *tensor.Tensor) []float64 {
+	if t == nil || t.Dtype() != tensor.F64 || !t.IsContiguous() {
+		return nil
+	}
+	off := t.Offset()
+	return t.Storage().F64()[off : off+t.Numel()]
+}
+
+// swinFuseScoreTermsF32 is swinFuseScoreTerms for F32 scores. The op chain it replaces
+// computes each op in float64 and ROUNDS THE STORE to float32, so this rounds after every
+// term rather than once at the end — folding them would be more accurate and would not
+// reproduce the dispatch path's bits.
+func swinFuseScoreTermsF32(sc *tensor.Tensor, scale float64, bias, mask *tensor.Tensor) bool {
+	ss := swinFlatF32(sc)
+	if ss == nil {
+		return false
+	}
+	var bs, ms []float32
+	if bias != nil {
+		if bs = swinFlatF32(bias); bs == nil || len(bs) != len(ss) {
+			return false
+		}
+	}
+	if mask != nil {
+		if ms = swinFlatF32(mask); ms == nil || len(ms) != len(ss) {
+			return false
+		}
+	}
+	// The scale reaches the dispatch path as an F32 SCALAR TENSOR, so the op chain
+	// multiplies by float32(scale), not by the float64 value. Rounding it first is what
+	// makes this bit-identical — using the wider value is a one-ulp divergence the parity
+	// test catches immediately.
+	s32 := float64(float32(scale))
+	for i := range ss {
+		v := float32(float64(ss[i]) * s32)
+		if bs != nil {
+			v = float32(float64(v) + float64(bs[i]))
+		}
+		if ms != nil {
+			v = float32(float64(v) + float64(ms[i]))
+		}
+		ss[i] = v
+	}
+	return true
+}
+
+// swinFlatF32 returns t's row-major F32 storage, or nil when it is not F32-contiguous.
+func swinFlatF32(t *tensor.Tensor) []float32 {
+	if t == nil || t.Dtype() != tensor.F32 || !t.IsContiguous() {
+		return nil
+	}
+	off := t.Offset()
+	return t.Storage().F32()[off : off+t.Numel()]
 }
