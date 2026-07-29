@@ -20,12 +20,9 @@ func (m *QuantLlama) embedOne(token int) (*tensor.Tensor, error) {
 	if token < 0 || token >= m.Config.Vocab {
 		return nil, fmt.Errorf("nlp: token %d outside vocab %d", token, m.Config.Vocab)
 	}
-	d := m.Config.Dim
-	x := tensor.New(tensor.F32, tensor.Shape{1, d})
-	for j := range d {
-		x.SetF64(m.TokEmb.AtF64(token, j), 0, j)
-	}
-	return x, nil
+	// typed row copy (embedRow) instead of a per-element AtF64/SetF64 loop over dim —
+	// bit-identical bytes, ~20-40x on the embed. Matches the other decode models.
+	return embedRow(m.TokEmb, token, m.Config.Dim), nil
 }
 
 // DecodeStep advances the quantized model by one token at absolute position pos, appending its
