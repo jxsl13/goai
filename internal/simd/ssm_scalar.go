@@ -2,6 +2,34 @@ package simd
 
 import "math"
 
+// ssmScanDRangeScalar runs the full selective scan over the CHANNEL range [dLo,dHi) with
+// d-outer/t-inner order — the channel-parallel form. Each (t,d) is independent of every
+// other d (h[d·N+n] and out[t·D+d] are per-d disjoint), so this is byte-for-byte equal to
+// the whole ssmScanScalar(...,0,N) despite the swapped loop order: the y reduction stays
+// ascending-n and h[d·N+n] evolves in the same t sequence. The portable scan and the AVX
+// range scan's non-AVX / N-tail fall back here.
+func ssmScanDRangeScalar(u, delta, as, bs, cs, dsk, out, h []float64, L, D, N, dLo, dHi int) {
+	for d := dLo; d < dHi; d++ {
+		base := d * N
+		for t := 0; t < L; t++ {
+			dt := delta[t*D+d]
+			ut := u[t*D+d]
+			tn := t * N
+			var y float64
+			for n := 0; n < N; n++ {
+				abar := math.Exp(dt * as[base+n])
+				hv := abar*h[base+n] + dt*bs[tn+n]*ut
+				h[base+n] = hv
+				y += cs[tn+n] * hv
+			}
+			if dsk != nil {
+				y += dsk[d] * ut
+			}
+			out[t*D+d] = y
+		}
+	}
+}
+
 // ssmScanScalar runs the Mamba/S6 selective-scan recurrence (Gu & Dao 2023) over the
 // state-dim range [nLo,nHi) — the portable full scan (nLo=0) and the AVX version's
 // len%4 tail. It mirrors the reference kernel (backend/ref/ssm.go) byte-for-byte: per

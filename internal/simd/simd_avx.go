@@ -559,6 +559,53 @@ func SSMScanF64(u, delta, as, bs, cs, dsk, out, h []float64, L, D, N int) {
 	}
 }
 
+// SSMScanRangeF64 runs the state-dim-vectorized scan over ONLY channels [dLo,dHi) with
+// d-outer/t-inner order — the channel-parallel entry point. Each channel d is an
+// independent recurrence (h[d·N+n] and out[t·D+d] are per-d disjoint), so a chunked
+// multi-goroutine scan is BIT-IDENTICAL to the whole SSMScanF64: the N-vectorized main
+// pass and the scalar N-tail are the same per (t,d), and `out = y + yt` reproduces the
+// whole scan's "store main, then += tail" exactly. Body mirrors SSMScanF64, with the tail
+// folded per (t,d) instead of a trailing whole-buffer pass.
+func SSMScanRangeF64(u, delta, as, bs, cs, dsk, out, h []float64, L, D, N, dLo, dHi int) {
+	if !hasAVX || !hasFMA {
+		ssmScanDRangeScalar(u, delta, as, bs, cs, dsk, out, h, L, D, N, dLo, dHi)
+		return
+	}
+	nMain := N - N%4
+	for d := dLo; d < dHi; d++ {
+		base := d * N
+		for t := 0; t < L; t++ {
+			dt := delta[t*D+d]
+			ut := u[t*D+d]
+			tn := t * N
+			dtVec := archsimd.BroadcastFloat64x4(dt)
+			dtut := archsimd.BroadcastFloat64x4(dt * ut)
+			yacc := eZero
+			for n := 0; n < nMain; n += 4 {
+				abar := expF64x4v(dtVec.Mul(archsimd.LoadFloat64x4Slice(as[base+n:])))
+				hv := abar.Mul(archsimd.LoadFloat64x4Slice(h[base+n:])).
+					Add(dtut.Mul(archsimd.LoadFloat64x4Slice(bs[tn+n:])))
+				hv.StoreSlice(h[base+n:])
+				yacc = yacc.Add(archsimd.LoadFloat64x4Slice(cs[tn+n:]).Mul(hv))
+			}
+			var lanes [4]float64
+			yacc.StoreSlice(lanes[:])
+			y := lanes[0] + lanes[1] + lanes[2] + lanes[3]
+			if dsk != nil {
+				y += dsk[d] * ut
+			}
+			var yt float64
+			for n := nMain; n < N; n++ {
+				abar := math.Exp(dt * as[base+n])
+				hv := abar*h[base+n] + dt*bs[tn+n]*ut
+				h[base+n] = hv
+				yt += cs[tn+n] * hv
+			}
+			out[t*D+d] = y + yt
+		}
+	}
+}
+
 // FWHTF64 applies the UNNORMALIZED in-place Fast Walsh-Hadamard Transform (len a power of
 // two). Stages with h>=4 vectorize the butterfly: the two operand runs a[j:j+h) and
 // a[j+h:j+2h) are contiguous and non-overlapping, so each block of 4 is one Float64x4 Add
