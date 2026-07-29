@@ -109,16 +109,37 @@ func conv2dBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backe
 			oy, ox := rr/wo, rr%wo
 			base := r * k
 			kk := 0
+			// Per-output-column horizontal tap window: ix = ixBase+kx must lie in [0,wd),
+			// so only kx in [lo,hi) contribute. Invariant to ci/ky, hoisted out of both
+			// inner loops — the per-tap ix bounds branch (re-tested c·kh times) is gone.
+			ixBase := ox*s - p
+			lo := 0
+			if -ixBase > 0 {
+				lo = -ixBase
+			}
+			hi := kw
+			if wd-ixBase < hi {
+				hi = wd - ixBase
+			}
+			if hi < lo {
+				hi = lo
+			}
 			for ci := range c {
 				for ky := range kh {
 					iy := oy*s + ky - p
-					for kx := range kw {
-						ix := ox*s + kx - p
-						if iy >= 0 && iy < h && ix >= 0 && ix < wd {
-							dXf[((ni*c+ci)*h+iy)*wd+ix] += dXcols[base+kk]
-						}
+					// Vertical bound invariant to kx: skip the whole tap row when iy∉[0,h),
+					// still advancing the flat column index by kw so dXcols stays in sync.
+					if iy < 0 || iy >= h {
+						kk += kw
+						continue
+					}
+					rowBase := ((ni*c+ci)*h+iy)*wd + ixBase
+					kk += lo
+					for kx := lo; kx < hi; kx++ {
+						dXf[rowBase+kx] += dXcols[base+kk]
 						kk++
 					}
+					kk += kw - hi
 				}
 			}
 		}
