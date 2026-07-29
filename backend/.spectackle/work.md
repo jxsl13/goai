@@ -161,3 +161,45 @@ IF IT IS REAL, the fix is not to remove the allocation but to move it: one buffe
 DO NOT ASSUME THESE ARE ALL REAL. Kernels invoked once per large tensor are the AQLM case and cost nothing. The finding is a list to triage, and a site measured harmless should be recorded as such so the next sweep does not re-triage it.
 
 RELATED: R-01KYN3XTYKEAS (GPT decode is 14% slower at 12 Ps than 8) and T-01KYN3YSXCF6H concern the same package from the scheduling angle. If both turn out to be real they are independent — one is allocation, one is dispatch width.
+
+## T-01KYQATYKAE1J99AVPTFPPAKM0 Triage 31 PS6012 unpinned-product sites in backend/cpu and backend/ref (RoPE rotation appears in both)
+kind: task
+state: draft
+created: 2026-07-29
+
+PS6012 (inconsistent-fma-pinning) finds 31 sites tree-wide and they cluster in backend/cpu
+and backend/ref, which is the parallel worker's lane rather than this loop's — handing it over
+rather than touching it.
+
+WHAT THE CHECK MEANS: Go contracts a*b + c into one FMADD on arm64 and generally does not on
+amd64. The rule only considers functions that ALREADY pin some product with float64(a*b),
+i.e. ones whose author has declared that contraction matters there, and flags sibling products
+feeding an add or subtract that were left unpinned.
+
+THE FINDING THAT LOOKS MOST WORTH A LOOK: the same RoPE rotation appears unpinned in BOTH
+implementations —
+    dst[out+e]      = x0*cosA[e] - x1*sinA[e]
+    dst[out+e+half] = x1*cosA[e] + x0*sinA[e]
+at backend/cpu/mla.go around lines 59-60, 76-77 and 91-92, and again in backend/ref/mla.go
+around line 56. backend/ref is the reference the optimized backends are validated against, so
+if those two are expected to agree bit-for-bit, an FMA contraction difference between them is
+exactly the kind of divergence that shows up only on one architecture. backend/cpu/norm.go
+(around 380, 384, 563) is also flagged.
+
+WHY THIS IS WORTH TRIAGING RATHER THAN DISMISSING: this same defect class cost three failed
+attempts on the Titans fused path before being found, and the symptom there was actively
+misleading — one branch of the recurrence always matched (it had nothing to fuse into) while
+every other step was off by one ulp, which reads as a logic bug rather than a rounding one.
+See R-01KYQ9CQ3XE1D and NUM-FUSED-PATH-FMA-001.
+
+WHAT TO DO PER SITE: decide whether the two implementations are required to be bit-identical.
+If they are, wrap each product: float64(x0*cosA[e]) - float64(x1*sinA[e]). If they are not —
+if the contract is a tolerance — then say so at the site, because the presence of pinning
+elsewhere in the same function is what makes the omission read as an oversight.
+
+VERIFY: a cross-backend bit-exactness test for the affected ops on this host (darwin/arm64),
+since amd64 CI will not reproduce the divergence by construction. Report whether each site was
+pinned or deliberately left, so the check can be suppressed by ID where the tolerance is
+intended.
+
+SCOPE: backend/ only. Everything outside backend is already clean under this rule.
