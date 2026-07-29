@@ -25,8 +25,11 @@ func MaxAttentionLogits(q, k *tensor.Tensor, heads int, scale float64, causal bo
 	out := make([]float64, heads)
 	dm2 := k.Shape()[1]
 	// F64 fast path: q[i] and k[j] were re-dispatched via AtF64 across the O(heads·seq²·dk)
-	// score scan (q per j, k per i). Hoist the query row and walk k's row contiguously.
-	// Bit-identical: same ascending-d dot, same max order. AtF64 fallback below.
+	// score scan (q per j, k per i). Hoist the query row, walk k's row contiguously, and
+	// break the serial-dot FADD latency chain with four independent accumulators.
+	// TOLERANCE-GATED ~1 ulp: the 4-way reassociation of the dk-dot shifts each score (and
+	// thus the per-head max, possibly its argmax) by ~1 ulp vs the ascending-d AtF64
+	// fallback below — well within the QK-clip tests' 1e-9/1e-12 gates.
 	if qs, ks := flatF64(q), flatF64(k); qs != nil && ks != nil {
 		for h := range heads {
 			m := math.Inf(-1)
@@ -39,8 +42,16 @@ func MaxAttentionLogits(q, k *tensor.Tensor, heads int, scale float64, causal bo
 				}
 				for j := range jmax {
 					krow := ks[j*dm2+off : j*dm2+off+dk : j*dm2+off+dk]
-					var s float64
-					for d := range dk {
+					var s0, s1, s2, s3 float64
+					d := 0
+					for ; d+4 <= dk; d += 4 {
+						s0 += qrow[d] * krow[d]
+						s1 += qrow[d+1] * krow[d+1]
+						s2 += qrow[d+2] * krow[d+2]
+						s3 += qrow[d+3] * krow[d+3]
+					}
+					s := s0 + s1 + s2 + s3
+					for ; d < dk; d++ {
 						s += qrow[d] * krow[d]
 					}
 					if s*scale > m {
