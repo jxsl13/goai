@@ -418,3 +418,6 @@ IF a new perfscan rule finds no genuine site once its soundness tests are added,
 
 ## PROC-GODOC-DETACH-001
 IF a new declaration is inserted immediately above an exported function, THEN the implementer SHALL place it above that function's doc-comment block, since inserting between comment and func silently detaches the godoc — caught three times by apicheck in one campaign.
+
+## PROC-GODOC-DETACH-002
+IF a new declaration is inserted immediately above an exported function, THEN the implementer SHALL place it above that function's doc-comment block and re-run internal/apicheck, which caught this detachment 3 times in one campaign.
