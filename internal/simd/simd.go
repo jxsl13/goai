@@ -134,6 +134,12 @@ func WKVScanStateF64(k, v, w, u, out, aa0, bb0, pp0 []float64, seq, d int) {
 	wkvScanStateScalar(k, v, w, u, out, aa0, bb0, pp0, seq, d, 0, d)
 }
 
+// WKVScanRangeF64 runs the fresh forward scan over ONLY channels [cLo,cHi) — the
+// channel-parallel entry point (see the AVX variant). Portable scalar fallback.
+func WKVScanRangeF64(k, v, w, u, out []float64, seq, d, cLo, cHi int) {
+	wkvScanScalar(k, v, w, u, out, seq, d, cLo, cHi)
+}
+
 // SSMScanF64 runs the Mamba/S6 selective scan (see the AVX variant). Portable scalar
 // fallback; the amd64 SIMD build vectorizes the reduction over the state dim N.
 func SSMScanF64(u, delta, as, bs, cs, dsk, out, h []float64, L, D, N int) {
