@@ -123,17 +123,56 @@ func AWQuantize(w, x *tensor.Tensor, levels int, opts ...AWQOption) (*tensor.Ten
 // symmetric `levels`-point quantization computed from the scaled row's max-abs.
 func quantizeScaled(w [][]float64, scale []float64, out, in, levels int, dt tensor.Dtype) *tensor.Tensor {
 	q := tensor.New(dt, tensor.Shape{out, in})
-	for r := range out {
-		var maxabs float64 // range of the scaled row
-		for j := range in {
-			maxabs = math.Max(maxabs, math.Abs(w[r][j]*scale[j]))
+	// Write the quantized row through the contiguous typed slice (was a SetF64 dispatch per
+	// element, out·in calls; quantizeScaled runs once per candidate scale in AWQ's search).
+	// Bit-identical: the same grid(w·scale)/scale value stored to the same [r,j] slot.
+	switch dt {
+	case tensor.F64:
+		qs := q.Storage().F64()
+		for r := range out {
+			var maxabs float64
+			for j := range in {
+				maxabs = math.Max(maxabs, math.Abs(w[r][j]*scale[j]))
+			}
+			if maxabs == 0 {
+				continue
+			}
+			grid := UniformQuantizer(levels, -maxabs, maxabs)
+			row := qs[r*in : r*in+in : r*in+in]
+			for j := range in {
+				row[j] = grid(w[r][j]*scale[j]) / scale[j]
+			}
 		}
-		if maxabs == 0 {
-			continue // all-zero row → stays zero
+	case tensor.F32:
+		qs := q.Storage().F32()
+		for r := range out {
+			var maxabs float64
+			for j := range in {
+				maxabs = math.Max(maxabs, math.Abs(w[r][j]*scale[j]))
+			}
+			if maxabs == 0 {
+				continue
+			}
+			grid := UniformQuantizer(levels, -maxabs, maxabs)
+			row := qs[r*in : r*in+in : r*in+in]
+			for j := range in {
+				row[j] = float32(grid(w[r][j]*scale[j]) / scale[j])
+			}
 		}
-		grid := UniformQuantizer(levels, -maxabs, maxabs)
-		for j := range in {
-			q.SetF64(grid(w[r][j]*scale[j])/scale[j], r, j) // quantize scaled, fold 1/scale back
+	default:
+		for r := range out { // exotic dtype: per-element dispatch
+			var maxabs float64
+			for j := range in {
+				maxabs = math.Max(maxabs, math.Abs(w[r][j]*scale[j]))
+			}
+			if maxabs == 0 {
+				continue
+			}
+			grid := UniformQuantizer(levels, -maxabs, maxabs)
+			//perfscan:ignore PS1005 intentional exotic-dtype fallback; F32/F64 take the typed path above
+			for j := range in {
+				q.SetF64(grid(w[r][j]*scale[j])/scale[j], r, j)
+			}
 		}
 	}
 	return q
