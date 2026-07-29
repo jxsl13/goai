@@ -151,7 +151,7 @@ type GaussianMixture struct {
 	// determinant of the precision). For GMMDiag chol is unused.
 	chol        [][][]float64
 	invCholDiag [][]float64  // GMMFull only: per component 1/L_k[i][i], so the triangular solve multiplies
-	yScratch    []float64    // GMMFull only: reused forward-substitution buffer (logGaussian runs serially)
+	yScratch    []float64    // GMMFull only: forward-substitution buffer for the SERIAL callers
 	yScratch4   [4][]float64 // GMMFull only: 4 solve buffers for logGaussianFullBatch's component jam
 	logDetHalf  []float64    // per component: 0.5·log|Σ_k| (density normaliser)
 	invCov      [][]float64  // GMMDiag only: per component 1/Σ_k[j], so logGaussian multiplies instead of dividing
@@ -550,7 +550,12 @@ func (m *GaussianMixture) mStep(x [][]float64, resp [][]float64) error {
 }
 
 // logGaussian returns log N(x; μ_c, Σ_c) for component c.
-func (m *GaussianMixture) logGaussian(x []float64, c int) (float64, error) {
+// The forward-substitution buffer is a PARAMETER for the same reason logGaussianFullBatch's
+// four are: this is the k%4 TAIL of that kernel, so it runs on whatever goroutine the batch
+// runs on. Reading it off the receiver made the parallel full-covariance path race whenever the
+// component count was not a multiple of four — a case no benchmark or test had exercised,
+// because they all used k=8.
+func (m *GaussianMixture) logGaussian(x []float64, c int, y []float64) (float64, error) {
 	d := m.nFeat
 	const log2pi = 1.8378770664093453 // log(2π)
 	if m.cfg.covariance == GMMDiag {
@@ -562,10 +567,10 @@ func (m *GaussianMixture) logGaussian(x []float64, c int) (float64, error) {
 		}
 		return -0.5*(float64(d)*log2pi+quad) - m.logDetHalf[c], nil
 	}
-	// full: solve L y = (x−μ), Mahalanobis = ‖y‖². y reuses a per-model scratch
-	// (logGaussian runs serially) and multiplies the cached 1/L[i][i].
+	// full: solve L y = (x−μ), Mahalanobis = ‖y‖². y is the CALLER's buffer — serial callers
+	// hand over the per-model scratch, the parallel batch hands over its worker's — and the
+	// solve multiplies the cached 1/L[i][i].
 	l, id := m.chol[c], m.invCholDiag[c]
-	y := m.yScratch
 	for i := range d {
 		s := x[i] - m.Means[c][i]
 		for j := range i {
@@ -637,7 +642,7 @@ func (m *GaussianMixture) logGaussianFullBatch(x []float64, ld []float64, y4 *[4
 		ld[c+3] = -0.5*(dlog2pi+q3) - m.logDetHalf[c+3]
 	}
 	for ; c < k; c++ {
-		ld[c], _ = m.logGaussian(x, c)
+		ld[c], _ = m.logGaussian(x, c, y4[0])
 	}
 }
 
@@ -763,7 +768,7 @@ func (m *GaussianMixture) PredictProba(x [][]float64) ([][]float64, error) {
 		// and reused across 4 components, breaking the single-accumulator FADD/FSUB chain,
 		// so lr[c] is bit-identical to k scalar logGaussian calls (same ascending terms,
 		// same -0.5·(d·log2π+quad)-logDetHalf sequence). Diag is race-free (reads only the
-		// shared per-component params); the full-cov batch's shared m.yScratch4 is safe
+		// shared per-component params); the full-cov batch's solve buffers are per-worker
 		// here because GMMFull never takes the parallel path (gated to GMMDiag below).
 		if diag {
 			m.logGaussianDiagBatch(x[i], lr)
