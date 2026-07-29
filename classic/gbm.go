@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"runtime"
 	"sort"
 
 	"github.com/jxsl13/goai/internal/simd"
@@ -588,6 +589,45 @@ func gbmWidthCheck(x [][]float64, nFeat int, who string) error {
 // Predict returns the boosted model's prediction F(x) = F_0 + lr·Σ_m h_m(x) for
 // each row of x (the additive stagewise model of [GradientBoostingRegressor.Fit]).
 // It errors if a row's width differs from the feature count seen at Fit.
+// gbmPredictSum computes out[i] = init + lr·Σ_t tree_t(x[i]) for every row, chunk-parallel
+// across GOMAXPROCS. Each row is independent (writes only out[i]) and its trees are summed in
+// the same ascending order as the serial loop, so the result is BIT-IDENTICAL. Serial below a
+// small work threshold.
+func gbmPredictSum(init, lr float64, trees []*gbmTree, x [][]float64) []float64 {
+	out := make([]float64, len(x))
+	nw := runtime.GOMAXPROCS(0)
+	if nw <= 1 || len(x)*len(trees) < 1<<13 {
+		for i := range x {
+			s := init
+			for _, t := range trees {
+				s += lr * t.root.predict(x[i])
+			}
+			out[i] = s
+		}
+		return out
+	}
+	if nw > len(x) {
+		nw = len(x)
+	}
+	csz := (len(x) + nw - 1) / nw
+	_ = parallelBuild(nw, func(c int) error {
+		lo := c * csz
+		hi := lo + csz
+		if hi > len(x) {
+			hi = len(x)
+		}
+		for i := lo; i < hi; i++ {
+			s := init
+			for _, t := range trees {
+				s += lr * t.root.predict(x[i])
+			}
+			out[i] = s
+		}
+		return nil
+	})
+	return out
+}
+
 func (m *GradientBoostingRegressor) Predict(x [][]float64) ([]float64, error) {
 	if !m.fitted {
 		return nil, fmt.Errorf("classic: GradientBoostingRegressor.Predict before Fit")
@@ -595,16 +635,7 @@ func (m *GradientBoostingRegressor) Predict(x [][]float64) ([]float64, error) {
 	if err := gbmWidthCheck(x, m.nFeat, "GradientBoostingRegressor.Predict"); err != nil {
 		return nil, err
 	}
-	out := make([]float64, len(x))
-	for i := range out {
-		out[i] = m.init
-	}
-	for _, t := range m.trees {
-		for i, row := range x {
-			out[i] += m.cfg.learningRate * t.root.predict(row)
-		}
-	}
-	return out, nil
+	return gbmPredictSum(m.init, m.cfg.learningRate, m.trees, x), nil
 }
 
 func mseLoss(y, f []float64) float64 {
@@ -733,16 +764,7 @@ func (m *GradientBoostingClassifier) Fit(x [][]float64, y []int) error {
 
 // decision returns the raw log-odds F(x) for each row.
 func (m *GradientBoostingClassifier) decision(x [][]float64) []float64 {
-	out := make([]float64, len(x))
-	for i := range out {
-		out[i] = m.init
-	}
-	for _, t := range m.trees {
-		for i, row := range x {
-			out[i] += m.cfg.learningRate * t.root.predict(row)
-		}
-	}
-	return out
+	return gbmPredictSum(m.init, m.cfg.learningRate, m.trees, x)
 }
 
 // PredictProba returns P(y=1|x) = σ(F(x)) for each row. It errors before Fit.

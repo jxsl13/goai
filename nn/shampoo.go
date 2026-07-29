@@ -39,7 +39,7 @@ type Shampoo struct {
 	step int
 	st   []*shampooState
 
-	gmScr, tScr, ghScr [][]float64 // pooled per-step matrix scratch (gradient matrix, T=G·R⁻¹ᐟ⁴, Ĝ), grown on demand
+	gmScr, tScr, ghScr, rgScr [][]float64 // pooled per-step matrix scratch (gradient matrix, T=G·R⁻¹ᐟ⁴, Ĝ), grown on demand
 }
 
 // growMat returns buf reshaped to r×c, reusing the outer slice and each row where they
@@ -156,13 +156,31 @@ func (s *Shampoo) Step(grad GradFn) error {
 					}
 				}
 			}
+			// R-gram reblocked to row-contiguous rank-1 accumulation (see soap.go): k
+			// innermost strides down a column across jagged gm rows; accumulate
+			// ascending-k outer products into a pooled scratch, add once. Same
+			// ascending-k order into a +0 accumulator ⇒ BIT-IDENTICAL.
+			s.rgScr = growMat(s.rgScr, n, n)
+			rg := s.rgScr
+			for i := range n {
+				ri := rg[i]
+				for j := i; j < n; j++ {
+					ri[j] = 0
+				}
+			}
+			for k := range m {
+				gk := gm[k]
+				for i := range n {
+					av := gk[i]
+					ri := rg[i]
+					for j := i; j < n; j++ {
+						ri[j] += av * gk[j]
+					}
+				}
+			}
 			for i := range n {
 				for j := i; j < n; j++ {
-					var acc float64
-					for k := range m {
-						acc += gm[k][i] * gm[k][j]
-					}
-					st.r[i][j] += acc
+					st.r[i][j] += rg[i][j]
 					if j != i {
 						st.r[j][i] = st.r[i][j]
 					}
