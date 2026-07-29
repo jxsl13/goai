@@ -47,6 +47,7 @@ func KimiDeltaAttention(q, k, v, a, beta *tensor.Tensor) (*tensor.Tensor, error)
 	sk := make([]float64, dv)   // S·k scratch
 	qt := make([]float64, dk)   // L2-normalized rows (the DeltaNet convention,
 	kt := make([]float64, dk)   // mirrored from GatedDeltaNet)
+	at := make([]float64, dk)   // per-step decay row, gathered once
 	for t := range seq {
 		bt := beta.AtF64(t, 0)
 		var qn, kn float64
@@ -68,30 +69,78 @@ func KimiDeltaAttention(q, k, v, a, beta *tensor.Tensor) (*tensor.Tensor, error)
 				kt[c] *= kn
 			}
 		}
-		// decay each key channel, then the delta write S += β(v − S·k)·kᵀ.
+		// Decay each key channel, then the delta write S += β(v − S·k)·kᵀ.
+		//
+		// S is [d_v, d_k] row-major, so scaling channel c across all rows walks a COLUMN
+		// at stride d_k — one cache line touched per row to use one of its doubles. The
+		// decay is a pure elementwise scale, so iterating rows instead changes no
+		// individual result while making every access sequential. a's row is gathered once
+		// rather than re-dispatched through AtF64 inside the inner loop.
 		for c := range dk {
-			ac := a.AtF64(t, c)
-			for r := range dv {
-				S[r*dk+c] *= ac
-			}
+			at[c] = a.AtF64(t, c)
 		}
 		for r := range dv {
+			row := S[r*dk : r*dk+dk : r*dk+dk]
+			for c := range at {
+				row[c] *= at[c]
+			}
+		}
+		// sk = S·k. Four output rows per pass, so one kt[c] load feeds four accumulators;
+		// each still sums over ascending c, which is what preserves the bits.
+		r := 0
+		for ; r+4 <= dv; r += 4 {
+			r0 := S[r*dk : r*dk+dk : r*dk+dk]
+			r1 := S[(r+1)*dk : (r+1)*dk+dk : (r+1)*dk+dk]
+			r2 := S[(r+2)*dk : (r+2)*dk+dk : (r+2)*dk+dk]
+			r3 := S[(r+3)*dk : (r+3)*dk+dk : (r+3)*dk+dk]
+			var s0, s1, s2, s3 float64
+			for c, kc := range kt {
+				s0 += r0[c] * kc
+				s1 += r1[c] * kc
+				s2 += r2[c] * kc
+				s3 += r3[c] * kc
+			}
+			sk[r], sk[r+1], sk[r+2], sk[r+3] = s0, s1, s2, s3
+		}
+		for ; r < dv; r++ {
+			row := S[r*dk : r*dk+dk : r*dk+dk]
 			var s float64
-			for c := range dk {
-				s += S[r*dk+c] * kt[c]
+			for c, kc := range kt {
+				s += row[c] * kc
 			}
 			sk[r] = s
 		}
 		for r := range dv {
 			delta := bt * (v.AtF64(t, r) - sk[r])
-			for c := range dk {
-				S[r*dk+c] += delta * kt[c]
+			row := S[r*dk : r*dk+dk : r*dk+dk]
+			for c, kc := range kt {
+				row[c] += delta * kc
 			}
 		}
-		for r := range dv {
+		// out_t = S·q, same 4-way blocking sharing the qt[c] load.
+		r = 0
+		for ; r+4 <= dv; r += 4 {
+			r0 := S[r*dk : r*dk+dk : r*dk+dk]
+			r1 := S[(r+1)*dk : (r+1)*dk+dk : (r+1)*dk+dk]
+			r2 := S[(r+2)*dk : (r+2)*dk+dk : (r+2)*dk+dk]
+			r3 := S[(r+3)*dk : (r+3)*dk+dk : (r+3)*dk+dk]
+			var o0, o1, o2, o3 float64
+			for c, qc := range qt {
+				o0 += r0[c] * qc
+				o1 += r1[c] * qc
+				o2 += r2[c] * qc
+				o3 += r3[c] * qc
+			}
+			out.SetF64(o0, t, r)
+			out.SetF64(o1, t, r+1)
+			out.SetF64(o2, t, r+2)
+			out.SetF64(o3, t, r+3)
+		}
+		for ; r < dv; r++ {
+			row := S[r*dk : r*dk+dk : r*dk+dk]
 			var o float64
-			for c := range dk {
-				o += S[r*dk+c] * qt[c]
+			for c, qc := range qt {
+				o += row[c] * qc
 			}
 			out.SetF64(o, t, r)
 		}
