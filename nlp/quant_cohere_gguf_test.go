@@ -94,7 +94,7 @@ func newQuantTestCohere() *nlp.Cohere {
 // every 1-D norm gain F32. CohereToGGUF stores q/k in the HF INTERLEAVED row layout
 // (the converter's pure rename for a NORM-rope arch), so the file's Q-blocks quantize
 // the interleaved rows: what QuantCohereFromGGUF must permute back on the bytes.
-func quantCohereGGUFBytes(t *testing.T, m *nlp.Cohere) []byte {
+func quantCohereGGUFBytes(t testing.TB, m *nlp.Cohere) []byte {
 	t.Helper()
 	meta, ts := nlp.CohereToGGUF(m)
 	qm := map[string]gguf.QuantType{}

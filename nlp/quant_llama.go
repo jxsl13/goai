@@ -135,6 +135,13 @@ func (m *QuantLlama) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor
 	if cfg.AttentionMult != 0 {
 		attn.Scale = cfg.AttentionMult * math.Sqrt(float64(cfg.Dim/cfg.Heads))
 	}
+	// Box these attrs into the Attrs INTERFACE once per token, above the layer loop: the values
+	// are layer-independent, and as concrete structs handed to an interface parameter inside the
+	// loop each was heap-boxed once per layer per token (escape analysis named every one).
+	// exec1a/exec3 also pool their input slices, and only when ctx.Recorder == nil, so a taped
+	// training context keeps the fresh-slice path.
+	qRoPE := backend.Attrs(backend.RoPEAttrs{Base: cfg.RopeBase, Heads: cfg.Heads})
+	kRoPE := backend.Attrs(backend.RoPEAttrs{Base: cfg.RopeBase, Heads: kv})
 	for _, b := range m.Blocks {
 		xb, err := b.AttnNorm.Forward(ctx, x)
 		if err != nil {
@@ -157,10 +164,10 @@ func (m *QuantLlama) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor
 		if q, k, v, err = applyQwenAttnExtras(ctx, b, q, k, v, cfg.Heads, kv); err != nil {
 			return nil, err
 		}
-		if q, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: cfg.Heads}, q); err != nil {
+		if q, err = exec1a(ctx, backend.OpRoPE, qRoPE, q); err != nil {
 			return nil, err
 		}
-		if k, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: kv}, k); err != nil {
+		if k, err = exec1a(ctx, backend.OpRoPE, kRoPE, k); err != nil {
 			return nil, err
 		}
 		a, err := exec1(ctx, backend.OpMHA, attn, q, k, v)

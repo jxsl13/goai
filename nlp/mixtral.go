@@ -103,6 +103,13 @@ func (m *Mixtral) forwardCapture(ctx *backend.Context, tokens []int, capture fun
 	cfg := m.Config
 	kv := cfg.kvHeads()
 	attn := backend.AttnAttrs{Heads: cfg.Heads, KVHeads: kv, Causal: true}
+	// Box these attrs into the Attrs INTERFACE once per token, above the layer loop: the values
+	// are layer-independent, and as concrete structs handed to an interface parameter inside the
+	// loop each was heap-boxed once per layer per token (escape analysis named every one).
+	// exec1a/exec3 also pool their input slices, and only when ctx.Recorder == nil, so a taped
+	// training context keeps the fresh-slice path.
+	qRoPE := backend.Attrs(backend.RoPEAttrs{Base: cfg.RopeBase, Heads: cfg.Heads})
+	kRoPE := backend.Attrs(backend.RoPEAttrs{Base: cfg.RopeBase, Heads: kv})
 	for l, b := range m.Blocks {
 		// attention sublayer (identical to Llama)
 		xb, err := b.AttnNorm.Forward(ctx, x)
@@ -128,10 +135,10 @@ func (m *Mixtral) forwardCapture(ctx *backend.Context, tokens []int, capture fun
 		if k, err = applyQKNorm(ctx, k, b.KNorm, kv); err != nil {
 			return nil, err
 		}
-		if q, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: cfg.Heads}, q); err != nil {
+		if q, err = exec1a(ctx, backend.OpRoPE, qRoPE, q); err != nil {
 			return nil, err
 		}
-		if k, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: kv}, k); err != nil {
+		if k, err = exec1a(ctx, backend.OpRoPE, kRoPE, k); err != nil {
 			return nil, err
 		}
 		if capture != nil {

@@ -57,6 +57,12 @@ func (m *Nemotron) DecodeStep(ctx *backend.Context, cache *NemotronCache, token,
 	if err != nil {
 		return nil, err
 	}
+	// Box these attrs into the Attrs INTERFACE once per token, above the layer loop: the values
+	// are layer-independent, and as concrete structs handed to an interface parameter inside the
+	// loop each was heap-boxed once per layer per token (escape analysis named every one).
+	// exec1a/exec3 also pool their input slices, and only when ctx.Recorder == nil, so a taped
+	// training context keeps the fresh-slice path.
+	attnA := backend.Attrs(backend.AttnAttrs{Heads: cfg.Heads, KVHeads: kv, Causal: false})
 	for l, b := range m.Blocks {
 		// Attention sublayer: input_layernorm → attention → residual add.
 		xn, err := b.InputNorm.Forward(ctx, x)
@@ -86,7 +92,7 @@ func (m *Nemotron) DecodeStep(ctx *backend.Context, cache *NemotronCache, token,
 		kNew, vNew := cache.bufs.appendKV(cache.K, cache.V, l, k, v)
 		cache.K[l], cache.V[l] = kNew, vNew
 		// single query attends to all cached keys → no causal mask
-		a, err := exec1(ctx, backend.OpMHA, backend.AttnAttrs{Heads: cfg.Heads, KVHeads: kv, Causal: false}, q, kNew, vNew)
+		a, err := exec3(ctx, backend.OpMHA, attnA, q, kNew, vNew)
 		if err != nil {
 			return nil, err
 		}
