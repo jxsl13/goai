@@ -103,46 +103,9 @@ func H2OKeep(scores []float64, recent, budget int) []int {
 	// highest-scoring indices in cand[:heavy] (order within, and membership of the
 	// equal-score boundary band, arbitrary); the boundary tie band is then resolved
 	// by ascending index below to reproduce the stable radix's exact kept set.
-	heavy := budget - recent
-	switch {
-	case heavy <= 0:
-		// keep only the recent window
-	case heavy >= len(cand):
-		for _, ci := range cand {
-			keep[ci] = true
-		}
-	default:
-		quickselectIdxDesc(cand, scores, heavy)
-		// bscore = the heavy-th largest score = smallest among the heavy selected.
-		bscore := scores[cand[0]]
-		for i := 1; i < heavy; i++ {
-			if v := scores[cand[i]]; v < bscore {
-				bscore = v
-			}
-		}
-		// Every token scoring strictly above the boundary is unambiguously kept.
-		need := heavy
-		for i := 0; i < heavy; i++ {
-			if ci := cand[i]; scores[ci] > bscore {
-				keep[ci] = true
-				need--
-			}
-		}
-		// Fill the remaining slots from the score==bscore band, lowest index first —
-		// exactly the ascending-index tie-break the stable radix applied.
-		if need > 0 {
-			tie := make([]int, 0, need)
-			for _, ci := range cand {
-				if scores[ci] == bscore {
-					tie = append(tie, ci)
-				}
-			}
-			sort.Ints(tie)
-			for i := 0; i < need && i < len(tie); i++ {
-				keep[tie[i]] = true
-			}
-		}
-	}
+	// Only the heavy-largest SET is needed (it becomes a keep-mask emitted in ascending
+	// order), not a full ordering — partition with quickselect instead of a full radix sort.
+	keepTopKDescInto(cand, scores, budget-recent, keep)
 
 	out := make([]int, 0, budget)
 	for i := 0; i < n; i++ {
@@ -225,4 +188,54 @@ func (c *KVCache) EvictStreaming(sink, recent int) {
 	// The evicted rows' positions stay consumed, so NextPos keeps counting the stream
 	// rather than the surviving rows.
 	c.pos.drop(n - len(keep))
+}
+
+// keepTopKDescInto marks keep[ci]=true for the k candidates in cand with the highest
+// scores, ties broken by ASCENDING index — reproducing a stable descending-by-score
+// sort's kept SET without a full sort. When the caller only needs the top-k SET (a
+// keep-mask later emitted in ascending order), the full O(n)-pass radix / O(n log n) sort
+// is wasted: a quickselect partition puts the top-k in cand[:k] (arbitrary order, and the
+// equal-score boundary band is arbitrary), then the boundary tie band is resolved by
+// ascending index to reproduce the stable sort's exact kept set. Shipped: H2O
+// heavy-hitters, SnapKV prompt compression.
+func keepTopKDescInto(cand []int, scores []float64, k int, keep []bool) {
+	switch {
+	case k <= 0:
+		return
+	case k >= len(cand):
+		for _, ci := range cand {
+			keep[ci] = true
+		}
+		return
+	}
+	quickselectIdxDesc(cand, scores, k)
+	// bscore = the k-th largest score = smallest among the k selected.
+	bscore := scores[cand[0]]
+	for i := 1; i < k; i++ {
+		if v := scores[cand[i]]; v < bscore {
+			bscore = v
+		}
+	}
+	// Every candidate scoring strictly above the boundary is unambiguously kept.
+	need := k
+	for i := 0; i < k; i++ {
+		if ci := cand[i]; scores[ci] > bscore {
+			keep[ci] = true
+			need--
+		}
+	}
+	// Fill remaining slots from the score==bscore band, lowest index first — exactly the
+	// ascending-index tie-break the stable radix applied.
+	if need > 0 {
+		tie := make([]int, 0, need)
+		for _, ci := range cand {
+			if scores[ci] == bscore {
+				tie = append(tie, ci)
+			}
+		}
+		sort.Ints(tie)
+		for i := 0; i < need && i < len(tie); i++ {
+			keep[tie[i]] = true
+		}
+	}
 }
