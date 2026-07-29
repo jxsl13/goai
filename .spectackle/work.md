@@ -1163,3 +1163,24 @@ PARITY SWEPT OVER SEVEN GEOMETRIES, not one, because the claim is index arithmet
 GENERALIZED INTO PS6018 layout-op-cluster-unfused, three or more pure movement dispatches with no fused raw-storage path. The key property is that MOVEMENT CANNOT CHANGE A VALUE, so the fix is bit-identical by construction - index arithmetic, no numerical judgment - which is what makes the class flaggable on sight where a bare dispatch-count report would not be. PS4011 does not subsume it: that rule needs a sequential loop and partialRoPE is straight-line, so the largest win of the three was invisible to it. 27 candidates tree-wide; the one surviving hit among the three fixed files is attnReconstructed, the DeepSeekV2 loop deliberately left unfused, which is the rule reporting exactly the known gap.
 
 CUMULATIVE, matrix decode allocations: Gemma2 4862 to 3522, DeepSeekV2 5166 to 4686, GPTNeoX 3072 to 1891, StableLM 2812 to 1631, Nemotron 2721 to 1541. The spread that started the investigation - 4.5x between the worst architecture and MPT - is now about 3.2x, and the remaining head is Gemma2 and DeepSeekV2, both of which still carry unfused per-head arithmetic that would need a numerical argument rather than an index one.
+
+## R-01KYR2G61XE669Z658R4GPG6EG Swin per-head bias cache: -21.5% allocs, an exact-snapshot invalidation key, and PS6018 candidates that were all cold
+kind: research
+state: draft
+created: 2026-07-29
+
+Measured on darwin/arm64 M2 Pro, go1.26.5, GOMAXPROCS=12, four interleaved rounds at benchtime=20x.
+
+A NEGATIVE FIRST, because it is the more useful half. PS6018 reported 27 candidates tree-wide. 20 are in nn, the user parallel lane, so out of scope. Of the 5 in vision, ALL FIVE are cold: they sit in top-level Forward and forwardBatched layout, not the per-block path, and the profiles put Swin at windowedAttention 72% and MLPMixer at Linear.Forward 40%. A rule firing is not a target - PROC-TASK-HOTNESS-001 exists for exactly this, and checking cost one profile run per file. The rule is still correct; its vision hits simply are not worth a diff.
+
+WHAT THE PROFILE FOUND INSTEAD. swinRelBias.headBias is a pure function of (Table, oneHot, head) - nothing about the input image enters it - and ran once per head per block PER IMAGE, at 21.6% of a per-image forward allocations.
+
+MEASURED: perimage 19410 to 15229 allocations, -21.5%, deterministic across four rounds, time 38.12-38.79ms to 36.34-36.75ms, non-overlapping, 1.05x. Batched 10142 to 9620, -5.1%, time NOT resolvable because the ranges overlap and no claim is made. The -21.5% lands on the 21.6% the profile predicted. Time moves little because allocation was never the time bottleneck here - matmulKernel is 39.9% - and batching already amortizes headBias across the batch, which is why that arm gains less.
+
+THE INVALIDATION KEY IS THE DESIGN DECISION. Table is the TRAINABLE parameter, so this is a cache over mutable state and the failure mode is silent: a stale bias changes only the numbers, never the shapes or the control flow. Rejected a generation counter (nothing increments it without touching the optimizer) and a checksum (a collision is a wrong answer, and for a cache that is unacceptable when the exact check is affordable). Chose an EXACT element-wise comparison against a stored copy of Table: (2M-1)^2*heads floats compared, against a matmul over M^4*(2M-1)^2 multiply-adds avoided - orders of magnitude cheaper, and a proof rather than a guess.
+
+TWO SAFETY CONDITIONS, both checked rather than assumed. Only inference contexts touch the cache: under a tape the bias must be a real graph node for the gradient to reach Table, so a taped call recomputes and never populates. And a cached tensor is only safe to share if nothing mutates it - swinFuseScoreTerms was read to confirm it writes into the scores and merely reads the bias.
+
+MUTATION-VERIFIED: replacing the exact comparison with a cache-once key makes the invalidation test fail with exactly the stale-value message it was written for. Two further tests pin the cache-hit values and that a taped context is never handed the cached tensor.
+
+NO PERFSCAN RULE, and the reason is structural rather than effort. Recognizing this needs to know the method is pure with respect to its RECEIVER and that callers repeat across images - call-graph and lifetime reasoning, not syntax. PS6014 is the within-a-block relative and cannot reach across calls. Per PROC-SCANRULE-WRONG-TOOL-001 the honest answer is to name the tool that does find it: an allocation profile, which is how it surfaced, and which is now the second time this session that profiling beat scanning on a real target.
