@@ -522,6 +522,17 @@ func (rec *Recorder) QMatMulResidentQ4K(x *DeviceF32, w *ResidentBQ4K, o *Device
 	}
 	// Explicit m / w.k / w.n (like the Q8 recorder path) — the llamagpu scratch buffers are flat, so their
 	// DeviceF32 rows/cols don't carry the logical [m,k]; QMatMulInto's shape check would reject them.
+	//
+	// PREFILL/BATCH (m>=8): route to the weight-read-once M-tiled GEMM so column n's Q4_K block is decoded
+	// ONCE across all M rows, not re-read per row (the dominant weight-bandwidth cost in this bandwidth-bound
+	// path). BIT-IDENTICAL to the GEMV (same fp ops/order — TestCUDAQ4KMatMulMTParity). Mirrors the routing
+	// ResidentBQ4K.qmatmul already has (cuda_quant_q4k.go); this recorder method is the path llamagpu's decoder
+	// actually calls for Q4_K weights, so it was silently stuck on the GEMV for all M. Falls back on error.
+	if m >= 8 {
+		if rc := C.cu_qmatmul_q4k_mt(x.ptr, w.q, o.ptr, C.int(m), C.int(w.k), C.int(w.n), C.float(0)); rc == 0 {
+			return nil
+		}
+	}
 	if rc := C.cu_qmatmul_q4k(x.ptr, w.q, o.ptr, C.int(m), C.int(w.k), C.int(w.n), C.float(0)); rc != 0 {
 		return fmt.Errorf("cuda: rec QMatMulResidentQ4K failed (code %d)", int(rc))
 	}
