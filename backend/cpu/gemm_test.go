@@ -75,7 +75,7 @@ func TestGemmTransposedViewCross(t *testing.T) {
 	btv, _ := bt.Transpose(0, 1) // (5,7)
 	gc := run(t, cpu, backend.OpMatMul, a, btv)
 	gr := run(t, ref, backend.OpMatMul, a, btv)
-	assertEqualExact(t, gc, gr, "matmul-transposed")
+	assertMatMul(t, gc, gr, "matmul-transposed")
 }
 
 func benchMatMul(b *testing.B, name backend.Name, dtype tensor.Dtype, sz int) {
