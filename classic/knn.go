@@ -3,6 +3,7 @@ package classic
 import (
 	"fmt"
 	"math"
+	"runtime"
 	"sort"
 )
 
@@ -231,6 +232,36 @@ func (m *KNNClassifier) knn(row []float64) []neighbour {
 }
 
 // vote returns the per-class summed neighbour weights for one query row.
+// knnParallelRows runs body over the n query rows chunk-parallel across GOMAXPROCS. Each
+// query reads the immutable fitted ball tree / training data and allocates its own result
+// (the tree is concurrency-safe — the same property DBSCAN.Fit relies on), and body writes
+// only its own out index, so the result is bit-identical to the serial loop. Serial below a
+// small work threshold. Callers pre-validate row widths.
+func knnParallelRows(n int, body func(i int)) {
+	nw := runtime.GOMAXPROCS(0)
+	if nw <= 1 || n < 64 {
+		for i := 0; i < n; i++ {
+			body(i)
+		}
+		return
+	}
+	if nw > n {
+		nw = n
+	}
+	csz := (n + nw - 1) / nw
+	_ = parallelBuild(nw, func(c int) error {
+		lo := c * csz
+		hi := lo + csz
+		if hi > n {
+			hi = n
+		}
+		for i := lo; i < hi; i++ {
+			body(i)
+		}
+		return nil
+	})
+}
+
 func (m *KNNClassifier) vote(row []float64) []float64 {
 	nb := m.knn(row)
 	w := knnWeights(nb, m.cfg.weights)
@@ -247,12 +278,14 @@ func (m *KNNClassifier) Predict(x [][]float64) ([]int, error) {
 	if !m.fitted {
 		return nil, fmt.Errorf("classic: KNNClassifier.Predict before Fit")
 	}
-	out := make([]int, len(x))
 	for i, row := range x {
 		if len(row) != m.nFeat {
 			return nil, fmt.Errorf("classic: row %d width %d, want %d", i, len(row), m.nFeat)
 		}
-		scores := m.vote(row)
+	}
+	out := make([]int, len(x))
+	knnParallelRows(len(x), func(i int) {
+		scores := m.vote(x[i])
 		best, bestScore := 0, math.Inf(-1)
 		for c, s := range scores {
 			if s > bestScore { // strict ⇒ lowest label wins ties
@@ -260,7 +293,7 @@ func (m *KNNClassifier) Predict(x [][]float64) ([]int, error) {
 			}
 		}
 		out[i] = m.classes[best]
-	}
+	})
 	return out, nil
 }
 
@@ -272,12 +305,14 @@ func (m *KNNClassifier) PredictProba(x [][]float64) ([][]float64, error) {
 	if !m.fitted {
 		return nil, fmt.Errorf("classic: KNNClassifier.PredictProba before Fit")
 	}
-	out := make([][]float64, len(x))
 	for i, row := range x {
 		if len(row) != m.nFeat {
 			return nil, fmt.Errorf("classic: row %d width %d, want %d", i, len(row), m.nFeat)
 		}
-		scores := m.vote(row)
+	}
+	out := make([][]float64, len(x))
+	knnParallelRows(len(x), func(i int) {
+		scores := m.vote(x[i])
 		var sum float64
 		for _, s := range scores {
 			sum += s
@@ -289,7 +324,7 @@ func (m *KNNClassifier) PredictProba(x [][]float64) ([][]float64, error) {
 			}
 		}
 		out[i] = p
-	}
+	})
 	return out, nil
 }
 
@@ -368,12 +403,14 @@ func (m *KNNRegressor) Predict(x [][]float64) ([]float64, error) {
 	if !m.fitted {
 		return nil, fmt.Errorf("classic: KNNRegressor.Predict before Fit")
 	}
-	out := make([]float64, len(x))
 	for i, row := range x {
 		if len(row) != m.nFeat {
 			return nil, fmt.Errorf("classic: row %d width %d, want %d", i, len(row), m.nFeat)
 		}
-		nb := m.knnReg(row)
+	}
+	out := make([]float64, len(x))
+	knnParallelRows(len(x), func(i int) {
+		nb := m.knnReg(x[i])
 		w := knnWeights(nb, m.cfg.weights)
 		var num, den float64
 		for j, n := range nb {
@@ -381,6 +418,6 @@ func (m *KNNRegressor) Predict(x [][]float64) ([]float64, error) {
 			den += w[j]
 		}
 		out[i] = num / den
-	}
+	})
 	return out, nil
 }
