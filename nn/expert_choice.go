@@ -83,7 +83,15 @@ func ExpertChoiceRoute(scores [][]float64, capacity int) (tokens [][]int, gates 
 		// key[id] == scores[id][ex], so this is the SAME PREDICATE as the direct form and
 		// SliceStable returns the identical permutation — the tie-by-index guarantee in
 		// this function's contract is preserved exactly, not merely "probably unchanged".
-		sort.SliceStable(idx, func(a, b int) bool { return key[idx[a]] > key[idx[b]] })
+		// total-order comparator (key desc, then token index asc) so the faster unstable
+		// sort.Slice reproduces the stable permutation exactly (indices are unique) — the
+		// tie-by-lowest-index contract is preserved.
+		sort.Slice(idx, func(a, b int) bool {
+			if ka, kb := key[idx[a]], key[idx[b]]; ka != kb {
+				return ka > kb
+			}
+			return idx[a] < idx[b]
+		})
 		tokens[ex] = append([]int(nil), idx[:capacity]...)
 		gr := make([]float64, capacity)
 		gates[ex] = gr
