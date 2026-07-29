@@ -83,11 +83,16 @@ func DSAAttention(q, k, v, qIdx, kIdx *tensor.Tensor, w []float64, heads, topK i
 				}
 				rank = append(rank, ranked{j, s})
 			}
-			// Total comparator: score descending, then index ascending. Ranking on score
-			// alone leaves tied candidates in an unspecified order that then decides which
-			// keys are attended. ReLU'd dots tie at exactly zero routinely, so this was
-			// reachable in ordinary use, not a corner case.
 			slices.SortFunc(rank, func(x, y ranked) int {
+				// TOTAL order: score descending, then index ascending. Ranking on score alone
+				// leaves ties in whatever order the sort happens to produce, and that order
+				// decides WHICH keys are attended. DSA's indexer scores are ReLU'd dot
+				// products, so they tie at exactly zero routinely — this is ordinary input,
+				// not a corner case. Tie-breaking by index makes the attended set a property
+				// of the input rather than of the sort implementation.
+				//
+				// slices.SortFunc rather than sort.Slice: the latter reaches its swap through
+				// reflectlite.Swapper and ALLOCATES on every call (PS6009), once per query.
 				switch {
 				case x.s > y.s:
 					return -1
@@ -133,11 +138,16 @@ func DSAAttention(q, k, v, qIdx, kIdx *tensor.Tensor, w []float64, heads, topK i
 			}
 			rank = append(rank, ranked{j, s})
 		}
-		// Total comparator: score descending, then index ascending. Ranking on score
-		// alone leaves tied candidates in an unspecified order that then decides which
-		// keys are attended. ReLU'd dots tie at exactly zero routinely, so this was
-		// reachable in ordinary use, not a corner case.
 		slices.SortFunc(rank, func(x, y ranked) int {
+			// TOTAL order: score descending, then index ascending. Ranking on score alone
+			// leaves ties in whatever order the sort happens to produce, and that order
+			// decides WHICH keys are attended. DSA's indexer scores are ReLU'd dot
+			// products, so they tie at exactly zero routinely — this is ordinary input,
+			// not a corner case. Tie-breaking by index makes the attended set a property
+			// of the input rather than of the sort implementation.
+			//
+			// slices.SortFunc rather than sort.Slice: the latter reaches its swap through
+			// reflectlite.Swapper and ALLOCATES on every call (PS6009), once per query.
 			switch {
 			case x.s > y.s:
 				return -1
@@ -146,6 +156,8 @@ func DSAAttention(q, k, v, qIdx, kIdx *tensor.Tensor, w []float64, heads, topK i
 			}
 			return x.j - y.j
 		})
+		// A []bool rather than a map: attendMask takes the admission mask directly, so the
+		// generic arm mirrors the typed one above. Membership is all that is read.
 		clear(keepBuf)
 		keepBuf[i] = true // the query itself is always attended
 		nSel := 1
