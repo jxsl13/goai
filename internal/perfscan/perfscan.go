@@ -1805,6 +1805,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 		})
 	}
 	out = append(out, symmetricAccumFindings(fset, fn)...)
+	out = append(out, opDispatchRecurrenceFindings(fset, fn)...)
 	out = append(out, nestedSubrangeRescanFindings(fset, fn)...)
 	out = append(out, butterflyFindings(fset, fn)...)
 	out = append(out, transposedGramFindings(fset, fn)...)
@@ -3387,6 +3388,80 @@ func subrangeReduce(body *ast.BlockStmt, kName string) (string, string, bool) {
 		}
 	}
 	return "", "", false
+}
+
+// opDispatchRecurrenceFindings flags PS4011 — a sequential recurrence loop that dispatches
+// 2+ backend ops per iteration (each call passing a backend.Op* constant) while the enclosing
+// function has NO fused typed fast path (no flatF64 guard). Each dispatch is a map lookup + a
+// fresh tensor.New on a microscopic per-step tensor, so the loop is O(seq) dispatch+alloc
+// overhead, not arithmetic. The fix is a raw-[]float64 fused path (grab storage once, run the
+// recurrence in plain Go, reuse the state slice) as in kda.go / retention.go / ssd.go — usually
+// bit-exact (the backend ops are plain ascending-order loops), gated on ctx.Recorder==nil so
+// autograd training keeps the dispatch path. Shipped: DeltaNet/GatedDeltaNet (2.0-3.6x).
+func opDispatchRecurrenceFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil || funcCallsIdent(fn.Body, "flatF64") {
+		return nil // already has (or is) a fused typed fast path
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		_, body, ok := loopVarBody(n)
+		if !ok {
+			return true
+		}
+		count := 0
+		ast.Inspect(body, func(m ast.Node) bool {
+			if call, ok := m.(*ast.CallExpr); ok && callHasBackendOpArg(call) {
+				count++
+			}
+			return true
+		})
+		if count >= 2 {
+			out = append(out, finding{
+				pos:      fset.Position(n.Pos()),
+				category: "op-dispatch-recurrence",
+				msg: fmt.Sprintf("sequential loop dispatches %d backend ops per iteration (calls"+
+					" passing a backend.Op* constant) and the function has no flatF64 fused path —"+
+					" O(seq) dispatch + tiny-tensor alloc overhead. Add a raw-[]float64 fused path"+
+					" (storage grabbed once, state slice reused, plain-Go recurrence) gated on"+
+					" ctx.Recorder==nil so training keeps the dispatch path; usually bit-exact."+
+					" Shipped: DeltaNet/GatedDeltaNet 2.0-3.6x. Benchmark it.", count),
+			})
+			return false
+		}
+		return true
+	})
+	return out
+}
+
+// callHasBackendOpArg reports whether any argument of call is a backend.Op* constant
+// (a selector X.OpName), the marker of a backend op dispatch.
+func callHasBackendOpArg(call *ast.CallExpr) bool {
+	for _, a := range call.Args {
+		if sel, ok := a.(*ast.SelectorExpr); ok {
+			if _, ok := sel.X.(*ast.Ident); ok && strings.HasPrefix(sel.Sel.Name, "Op") && len(sel.Sel.Name) > 2 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// funcCallsIdent reports whether the subtree contains a call to the named function.
+func funcCallsIdent(root ast.Node, name string) bool {
+	found := false
+	ast.Inspect(root, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		if call, ok := n.(*ast.CallExpr); ok {
+			if id, ok := call.Fun.(*ast.Ident); ok && id.Name == name {
+				found = true
+				return false
+			}
+		}
+		return true
+	})
+	return found
 }
 
 // exprMentions reports whether e references the identifier name.
