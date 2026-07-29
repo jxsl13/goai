@@ -3294,3 +3294,64 @@ func f(x []float32) float32 {
 		t.Fatalf("want 1 f32-abs-via-f64, got %d", got)
 	}
 }
+
+// PS4012: fires on a serial dot whose accumulator is dequantized (scaled) before the store.
+func TestDetectPS4012_ScaledSerialDot(t *testing.T) {
+	src := `package p
+func qmatmul(qx, qw, sx, sw []float64, y []float64, m, n, k int) {
+	for i := range m {
+		xi := qx[i*k : i*k+k]
+		for j := range n {
+			wj := qw[j*k : j*k+k]
+			var acc float64
+			for c := range xi {
+				acc += xi[c] * wj[c]
+			}
+			deq := acc * sx[i] * sw[j] / (127 * 127)
+			y[i*n+j] += deq
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["scaled-serial-dot"] == 0 {
+		t.Fatalf("want ≥1 scaled-serial-dot, got 0 (%v)", got)
+	}
+}
+
+// Must stay SILENT when the accumulator is stored RAW (that is PS4008's job, not PS4012).
+func TestDetectPS4012_SilentOnRawStore(t *testing.T) {
+	src := `package p
+func mm(a, b, c []float64, m, k int) {
+	for i := range m {
+		ai := a[i*k : i*k+k]
+		ci := c[i*m : i*m+m]
+		for j := range m {
+			bj := b[j*k : j*k+k]
+			var s float64
+			for p := range ai {
+				s += ai[p] * bj[p]
+			}
+			ci[j] = s
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src))["scaled-serial-dot"]; got != 0 {
+		t.Fatalf("want 0 scaled-serial-dot on a raw-store dot, got %d", got)
+	}
+}
+
+// Must stay SILENT when there is no product accumulator (no serial dot at all).
+func TestDetectPS4012_SilentOnNoDot(t *testing.T) {
+	src := `package p
+func scale(x, s []float64, y []float64, m, n int) {
+	for i := range m {
+		for j := range n {
+			var acc float64
+			acc = x[i*n+j]
+			y[i*n+j] = acc * s[j]
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src))["scaled-serial-dot"]; got != 0 {
+		t.Fatalf("want 0 scaled-serial-dot without a dot loop, got %d", got)
+	}
+}
