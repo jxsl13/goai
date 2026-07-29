@@ -126,6 +126,54 @@ func NSABranches(q, k, v *tensor.Tensor, heads, blockSize, topN, window int, sca
 // attendMask takes the query row pre-hoisted as qrow = q_i[off:off+dk] (it is re-read for
 // every key j, so hoisting it out of the caller kills a dk×(i+1) redundant gather).
 func attendMask(qrow []float64, k, v, out *tensor.Tensor, i, off, dk int, scale float64, scores []float64, keep func(j int) bool) {
+	// F64 fast path: the score dot reads k[j,off+d] and the P·V reads v[j,off+d] on every
+	// (j,d) — an AtF64 dispatch per element over the O(seq·dk) attention compute. Walk the
+	// contiguous k/v/out storage directly; qrow was already hoisted. Bit-identical (same
+	// values, same ascending-d score dot and ascending-j P·V). AtF64 fallback for other dtypes.
+	if ks, vs, os := flatF64(k), flatF64(v), flatF64(out); ks != nil && vs != nil && os != nil {
+		dm := k.Shape()[1]
+		m := math.Inf(-1)
+		for j := 0; j <= i; j++ {
+			if !keep(j) {
+				scores[j] = math.Inf(-1)
+				continue
+			}
+			krow := ks[j*dm+off : j*dm+off+dk : j*dm+off+dk]
+			var sc float64
+			for d := range dk {
+				sc += qrow[d] * krow[d]
+			}
+			sc *= scale
+			scores[j] = sc
+			if sc > m {
+				m = sc
+			}
+		}
+		var sum float64
+		for j := 0; j <= i; j++ {
+			if math.IsInf(scores[j], -1) {
+				scores[j] = 0
+				continue
+			}
+			scores[j] = math.Exp(scores[j] - m)
+			sum += scores[j]
+		}
+		if sum > 0 {
+			for j := 0; j <= i; j++ {
+				scores[j] /= sum
+			}
+		}
+		for d := range dk {
+			var o float64
+			if sum > 0 {
+				for j := 0; j <= i; j++ {
+					o += scores[j] * vs[j*dm+off+d]
+				}
+			}
+			os[i*dm+off+d] = o
+		}
+		return
+	}
 	m := math.Inf(-1)
 	for j := 0; j <= i; j++ {
 		if !keep(j) {
