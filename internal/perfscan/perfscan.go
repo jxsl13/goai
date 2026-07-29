@@ -3876,11 +3876,17 @@ func invariantTranscendentalRecomputeFindings(fset *token.FileSet, fn *ast.FuncD
 			if !ok || innerVar == outerVar {
 				continue
 			}
+			// Everything the outer loop body ASSIGNS — including locals set inside the
+			// inner loop — taints the transcendental: a local like dt := delta[t][d]
+			// carries the outer index t even though math.Exp(dt*A[d][n]) never names t
+			// textually. Only the loop INDEX variables are safe to exclude (indexing the
+			// precomputed scratch by the inner index is the whole point). Subtracting the
+			// full inner assignment set instead of just innerVar was unsound — it dropped
+			// exactly those tainted locals (the SSM scan's dt), so mirror PS5003 and keep
+			// the whole outer-body write set, minus the two index vars.
 			outerWrites := assignedIn(outerBody)
-			for k := range assignedIn(innerBody) {
-				delete(outerWrites, k)
-			}
 			delete(outerWrites, innerVar)
+			delete(outerWrites, outerVar)
 			seen := map[token.Pos]bool{}
 			ast.Inspect(innerBody, func(m ast.Node) bool {
 				call, ok := m.(*ast.CallExpr)
