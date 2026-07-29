@@ -1184,3 +1184,26 @@ TWO SAFETY CONDITIONS, both checked rather than assumed. Only inference contexts
 MUTATION-VERIFIED: replacing the exact comparison with a cache-once key makes the invalidation test fail with exactly the stale-value message it was written for. Two further tests pin the cache-hit values and that a taped context is never handed the cached tensor.
 
 NO PERFSCAN RULE, and the reason is structural rather than effort. Recognizing this needs to know the method is pure with respect to its RECEIVER and that callers repeat across images - call-graph and lifetime reasoning, not syntax. PS6014 is the within-a-block relative and cannot reach across calls. Per PROC-SCANRULE-WRONG-TOOL-001 the honest answer is to name the tool that does find it: an allocation profile, which is how it surfaced, and which is now the second time this session that profiling beat scanning on a real target.
+
+## R-01KYR2YAEBE4ZA09FXT7TFPEQB GMM full-cov PredictProba 3.1-5.8x: the blocker was a receiver scratch buffer, and the unparallelizable shape was also the unmeasured one
+kind: research
+state: draft
+created: 2026-07-29
+
+CONSUMES T-01KYPCP21VFAZ, deferred during an earlier rebase because main had added a component jam this had to be re-applied on top of. Measured on darwin/arm64 M2 Pro, go1.26.5, GOMAXPROCS=12, benchtime=200x, four interleaved rounds.
+
+MEASURED, ranges disjoint, within-arm spreads 2-12% against a 3-6x effect:
+  512x8  d16   412-427us  ->  131-134us   3.14x
+  512x8  d32  1328-1371us ->  291-299us   4.57x
+  2048x8 d32  5355-5981us ->  916-1020us  5.84x
+Speedup grows with row count, as row-parallel scaling should.
+
+THE BLOCKER WAS ONE FIELD. PredictProba parallel row scan was gated to GMMDiag, and the gate own comment named the cause: the full-cov density kernel read its four triangular-solve buffers off the RECEIVER, so concurrent calls would have raced. Rows were always independent for both covariance shapes - the kernels only read per-component params. Passing the buffers in as a parameter removed the obstacle and the covariance condition dropped out of the gate. This is PS6006 (receiver-scratch-buffer) not as a micro-optimization but as a STRUCTURAL BLOCKER: a per-call temporary on shared state does not merely contend, it forecloses parallelism entirely, and the cost shows up as a gate somewhere else in the file rather than as slow code at the site.
+
+PS6006 TRACKED THE FIX, which is worth noting as a rule-quality signal: it flagged both receiver buffers before the change and now flags only m.yScratch, the single-buffer one still used by the scalar logGaussian. Freeing that one would open the E-step by the same argument, and it needs its own measurement.
+
+THE COMPOUNDING GAP. Full covariance had NO PredictProba benchmark at all. So the one covariance shape that could not be parallelized was also the one nothing measured - and full-cov is where the work is, since the solve is O(d^2) per component against the diagonal form O(d). A 5.8x sat unnoticed because the measurement gap and the optimization gap had the same cause: whoever gated the path to GMMDiag also only benchmarked GMMDiag. Worth generalizing: when a code path is excluded from an optimization for a stated reason, check whether it is also excluded from measurement, because the same author-attention pattern produces both.
+
+BIT-IDENTITY TESTED THROUGH THE REAL GATE rather than a flag: the paths are selected by a work threshold, so the test compares a batch above it against the same rows fed one at a time below it. Race detector clean.
+
+METHOD NOTE. This target was NOT found by profiling or by a scan rule sweep - both had been applied to the packages I own and were largely harvested. It came from re-reading my own deferred task list. Two of the last three iterations opened by profiling a benchmark-matrix outlier; this one opened by asking what I had explicitly postponed and why the reason no longer held.
