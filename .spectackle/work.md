@@ -946,3 +946,27 @@ THE CROSS-CHECK THAT MATTERED. Both rewrites carried a bit-identity claim in the
 NO NEW PERFSCAN RULE. The pattern is already PS6011; what is new is fix SELECTION between two valid rewrites of the same finding, which is a triage question and not a detectable source shape - the scanner sees the defect identically in both cases and by definition cannot see a rewrite that has not been written. Landing in PATTERNS.md as the measured data point behind the existing interchange-versus-blocking guidance.
 
 RELATED: R-01KYQT329EEAD (the PS6011 null case - when neither fix pays because the strided lines stay resident). Together the two records bracket the rule: first ask whether the stride costs anything at all, then if it does, prefer blocking to interchange when the body accumulates.
+
+## R-01KYQVST75E6CTJJJ672ERFV9E rl per-step dispatch waste: PPO rollout 1.59x, DQN learn 1.35x, and two new perfscan rules - one of which replaced the refinement the task specified
+kind: research
+state: draft
+created: 2026-07-29
+
+CONFIRMS T-01KYJQ799JEFM on both defects. Measured on darwin/arm64 M2 Pro, go1.26.5, GOMAXPROCS=12, min of 3 per arm, 3 interleaved alternations in one session.
+
+MEASURED, interleaved against the pre-change source:
+  PPORollout        1.146ms -> 0.722ms  1.59x, allocs 29239 -> 15471
+  PPOUpdate         3.857ms -> 3.228ms  1.19x, allocs 33177 -> 19409
+  DQNLearn batch32  68.9us  -> 52.9us   1.30x, allocs 328 -> 281
+  DQNLearn batch128 268.7us -> 199.8us  1.35x, 903KB -> 692KB per step
+The task predicted 30-45 percent off the rollout (measured 37), 15-25 off Update (16), and 12-20 off learn (23-26, better than predicted). One benchmark round produced a 3x outlier on the baseline arm from machine interference; min-of-3 absorbed it, which is what the min-of-N discipline is for.
+
+BOTH FIXES ARE BIT-IDENTICAL, and the risk was never the arithmetic. For PPO it is the RNG STREAM: the actor forward, softmax and sampleAction stay in place and in order, so actions, rewards, dones and logpOld are unchanged. TestRolloutTrajectoryParity pins that digest and is mutation-checked - inserting one extra rng draw turns it red. It also pins the critic values digest, because batching them from 256 batch-1 forwards into one batch-270 forward is only sound if the m=1 and m=N kernels agree at tolerance 0. They do on this host (both reach the scalar band kernel) and that is now asserted rather than assumed, with the failure message naming the kernel disagreement so another host reads the right cause first.
+
+RULE (i) BUILT AS SPECIFIED: PS6014 redundant-pure-recompute. Two syntactically identical calls to a config-declared pure function in one block with nothing between that could change the answer. The leading argument is ignored when comparing, which is essential - the motivating pair differed in exactly that argument (fresh Context versus the tape context) and was otherwise identical.
+
+RULE (ii) REPLACED, and the reason is the finding. The task specified refining PS1003 to distinguish hoistable from non-hoistable single-element-batch calls, on the premise that PS1003 fires on both the actor and the critic and only one is fixable. It does not. PS1003 reports ONCE PER LOOP, not per call site, so it never flagged the critic at all - the actor appears first in the same loop and takes the single report. Refining PS1003 would therefore have suppressed a true-but-unfixable warning rather than surfacing the case that paid 1.59x. Built PS6015 instead, reporting per call site and only for the hoistable case. The two rules also give genuinely DIFFERENT advice, which is the deeper reason not to merge them: PS1003 says keep N calls and drop the wrapper allocation (right when the loop reads the result - the actor feeds the sampled action which feeds the environment and cannot move), PS6015 says remove N-1 calls (right when it does not). Both firing on one loop is correct behavior.
+
+METHOD FINDING, the most transferable item here. Replaying a new detector against the real pre-fix source is necessary but NOT SUFFICIENT. PS6014 passed its replay while carrying a real gap: names reachable only through len or cap were counted as possible writes, so New(F64, Shape{len(states), k}) between the two calls suppressed the finding. The real source passed anyway because it happened to size its tensor from a DIFFERENT slice than it fed the forward - an incidental naming difference. The synthetic positive test is what exposed it. Replay proves a rule finds the case it was built from; it does not prove the rule finds the SHAPE, and the gap between those two is exactly one variable name wide.
+
+BOTH RULES ARE CONFIG-GATED on a new pureComputeFuncs vocabulary and registered in the starved-vocabulary warning, so an unconfigured run says the check cannot report rather than printing a zero that reads as clean. Purity is not derivable from syntax and matters more for PS6015 than PS6014: hoisting a call that consumed RNG out of a loop moves draws out of the stream and changes every later iteration.
