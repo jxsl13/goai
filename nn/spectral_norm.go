@@ -80,6 +80,46 @@ func NewSpectralNorm(dtype tensor.Dtype, in, out int, seed uint64, opts ...Spect
 // CURRENT W, read directly (no tape) so the singular vectors are stop-gradient.
 func (s *SpectralNorm) powerIterate(iters int) {
 	in, out := s.W.Shape()[0], s.W.Shape()[1]
+	// The two matvecs read W[i,j] and u[i]/v[j] through AtF64 on every (i,j) — 2·in·out
+	// dispatches per iteration. Walk the contiguous W/u/v storage directly (u is [1,in],
+	// v is [out,1], W is [in,out] row-major). Bit-identical: same values, same ascending-i /
+	// ascending-j accumulation. AtF64 fallback for exotic dtypes.
+	if ws, us, vs := flatF64(s.W), flatF64(s.u), flatF64(s.v); ws != nil && us != nil && vs != nil {
+		tv := make([]float64, out)
+		tu := make([]float64, in)
+		for range iters {
+			var nv float64
+			for j := range out {
+				var acc float64
+				for i := range in {
+					acc += ws[i*out+j] * us[i]
+				}
+				tv[j] = acc
+				nv += acc * acc
+			}
+			if nv = math.Sqrt(nv); nv > 0 {
+				for j := range out {
+					vs[j] = tv[j] / nv
+				}
+			}
+			var nu float64
+			for i := range in {
+				wrow := ws[i*out : i*out+out : i*out+out]
+				var acc float64
+				for j := range out {
+					acc += wrow[j] * vs[j] // contiguous W row · v
+				}
+				tu[i] = acc
+				nu += acc * acc
+			}
+			if nu = math.Sqrt(nu); nu > 0 {
+				for i := range in {
+					us[i] = tu[i] / nu
+				}
+			}
+		}
+		return
+	}
 	for range iters {
 		// v = normalize(Wᵀu): v[j] = Σ_i W[i,j]·u[i]
 		tv := make([]float64, out)
