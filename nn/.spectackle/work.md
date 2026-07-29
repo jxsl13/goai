@@ -303,3 +303,57 @@ VERIFY:
 
 SCOPE: nn/titans.go only. The deep variant (two weight matrices plus a sigmoid) is a separate
 kernel and a separate task.
+
+## R-01KYQ9CQ3XE1DRXF1FRXBEBE8W Titans fused path attempt 2: recurrence proven correct, divergence localized to broadcast elementwise rounding
+kind: research
+state: draft
+created: 2026-07-29
+
+Second attempt at the Titans fused path (T-01KYQ8ZZQ4EAH). Not shipped, but the fault is
+now localized far more sharply and two hypotheses are eliminated. Recording so the next
+attempt starts from here instead of repeating the search.
+
+METHOD: built the diff harness the task asked for — an internal test that runs the linear
+recurrence BOTH ways for N timesteps and compares S, MEM and OUT element by element after
+every step, with backend.Reference() forced on both sides.
+
+ELIMINATED:
+1. The recurrence arithmetic is CORRECT. At seq=2 d=3 the harness matches bit-for-bit on S,
+   MEM and OUT at every step. The transcription of predict, e2, the outer product, the
+   momentum branch and the forget-write is right.
+2. It is NOT input handling. Driving Scan directly with controlled q/k/v/eta/theta/alpha —
+   bypassing Forward's projections and the q/k L2 normalization — still diverges. The
+   earlier suspicion that flatF64 on a normalized tensor was returning the wrong layout is
+   dead; seq=2 d=3 passes through Scan directly.
+3. It is NOT the matmul's accumulation order or loop shape. ref registers the same plain
+   matmulKernel for F64 and F32. Pinning the dots against FMA changes WHICH elements
+   diverge rather than fixing it, and rewriting the dot to mirror matmulKernel's exact
+   source form (`for p, av := range arow { acc += av * brow[p] }`) reproduces the original
+   failure exactly.
+
+THE REMAINING CLUE, and it is a good one: the divergence is PARTIAL WITHIN A ROW. At seq=5
+d=8 the first failure is t=1, and only S[14], S[15] and S[31] differ — that is (i=1,j=6),
+(i=1,j=7) and (i=3,j=7). A wrong pred or e2 would corrupt every element of row i, since e2[i]
+multiplies the whole row. It does not. So the error is per-element in the
+grad -> inc -> S chain, and it clusters at the TAIL of a length-8 row.
+
+That pattern points away from the matmul and toward the BROADCAST ELEMENTWISE ops —
+Mul(grad, theta) and Mul(S, eta) multiply a [D,D] tensor by a [1,1] tensor, and Sub/Add
+combine [D,D] with [D,D]. A tail-clustered one-ulp difference is what a 4-wide vectorized
+elementwise kernel with a scalar remainder loop produces if the two paths round differently.
+NEXT STEP: read backend/ref's broadcast elementwise implementation for Mul/Sub/Add and check
+whether it processes [D,D] against [1,1] in vectorized blocks with a differently-rounded
+remainder, then reproduce that shape rather than assuming a plain scalar loop.
+
+WIDER LESSON, worth weighing before the next attempt: a fused path that must reproduce the
+bits of a CHAIN of backend ops inherits the rounding behavior of every one of them, not just
+the arithmetic. The existing fused paths in nn (GLA, DeltaNet, GatedDeltaNet, RGLRU, HGRN)
+each reproduce two or three elementwise ops and got away with it. This one reproduces about
+twenty, including two matmuls, an outer product and three broadcast multiplies. If the next
+attempt also fails, the honest options are to call the backend for the ops whose rounding
+cannot be reproduced (keeping the ~15 slice/transpose dispatches fused, which is where most
+of the 24.5k allocations are anyway) or to accept a tolerance-based parity gate for this one
+path with an ADR recording why bit-exactness was given up.
+
+The benchmark (nn/titans_bench_test.go, committed) stands: 11.4ms, 39.7MB and 24,527
+allocations for one seq=128 d=64 linear forward, about 191 allocations per timestep.
