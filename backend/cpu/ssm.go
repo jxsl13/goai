@@ -3,6 +3,8 @@ package cpu
 import (
 	"fmt"
 	"math"
+	"runtime"
+	"sync"
 
 	"github.com/jxsl13/goai/backend"
 	"github.com/jxsl13/goai/internal/simd"
@@ -59,7 +61,7 @@ func ssmKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([
 		if dskip != nil {
 			dsk = dskip.Contiguous().Storage().F64()
 		}
-		simd.SSMScanF64(uc.Storage().F64(), dc.Storage().F64(), ac.Storage().F64(),
+		ssmParallelScanF64(uc.Storage().F64(), dc.Storage().F64(), ac.Storage().F64(),
 			bc.Storage().F64(), cc.Storage().F64(), dsk, out.Storage().F64(), h, L, D, N)
 		return []*tensor.Tensor{out}, nil
 	}
@@ -83,6 +85,34 @@ func ssmKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([
 		}
 	}
 	return []*tensor.Tensor{out}, nil
+}
+
+// ssmParallelScanF64 runs the selective scan across GOMAXPROCS goroutines, each owning a
+// disjoint block of the D channels (each channel is an independent recurrence; the SIMD
+// vectorizes the inner state-dim N reduction, so any D split keeps full vectorization).
+// Chunks need no alignment (unlike WKV): channel d is scanned whole by one worker. Workers
+// write disjoint out columns and disjoint h[d·N:] ranges → race-free, and each result is
+// BIT-IDENTICAL to the single-threaded SSMScanF64 (TestSSMScanRangeF64BitExactVsWhole).
+func ssmParallelScanF64(u, delta, as, bs, cs, dsk, out, h []float64, L, D, N int) {
+	nw := runtime.GOMAXPROCS(0)
+	chunk := (D + nw - 1) / nw
+	if nw <= 1 || chunk >= D || L*D*N < 1<<15 {
+		simd.SSMScanRangeF64(u, delta, as, bs, cs, dsk, out, h, L, D, N, 0, D)
+		return
+	}
+	var wg sync.WaitGroup
+	for lo := 0; lo < D; lo += chunk {
+		hi := lo + chunk
+		if hi > D {
+			hi = D
+		}
+		wg.Add(1)
+		go func(lo, hi int) {
+			defer wg.Done()
+			simd.SSMScanRangeF64(u, delta, as, bs, cs, dsk, out, h, L, D, N, lo, hi)
+		}(lo, hi)
+	}
+	wg.Wait()
 }
 
 func init() {

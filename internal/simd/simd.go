@@ -140,6 +140,12 @@ func SSMScanF64(u, delta, as, bs, cs, dsk, out, h []float64, L, D, N int) {
 	ssmScanScalar(u, delta, as, bs, cs, dsk, out, h, L, D, N, 0, N)
 }
 
+// SSMScanRangeF64 runs the scan over ONLY channels [dLo,dHi) — the channel-parallel entry
+// point (see the AVX variant). Portable scalar fallback.
+func SSMScanRangeF64(u, delta, as, bs, cs, dsk, out, h []float64, L, D, N, dLo, dHi int) {
+	ssmScanDRangeScalar(u, delta, as, bs, cs, dsk, out, h, L, D, N, dLo, dHi)
+}
+
 // FWHTF64 applies the UNNORMALIZED in-place Fast Walsh-Hadamard Transform (portable scalar
 // twin of the archsimd override; len a power of two).
 func FWHTF64(a []float64) {
