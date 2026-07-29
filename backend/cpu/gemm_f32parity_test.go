@@ -18,6 +18,10 @@ func assertMatMul(t *testing.T, got, want *tensor.Tensor, label string) {
 		assertMatMulF32Close(t, got, want, label)
 		return
 	}
+	if got.Dtype() == tensor.F64 && gemmF64Tolerant {
+		assertMatMulF64Close(t, got, want, label)
+		return
+	}
 	assertEqualExact(t, got, want, label)
 }
 
@@ -45,4 +49,29 @@ func assertMatMulF32Close(t *testing.T, got, want *tensor.Tensor, label string) 
 		}
 	}
 	t.Logf("%s: f32-native max rel err %.2e (rtol %g)", label, maxRel, rtol)
+}
+
+// assertMatMulF64Close gates the FUSED-multiply-add f64 GEMM (VFMADD microkernel,
+// single rounding) against the mul+add reference. The per-element deviation is a
+// few ulp accumulated over k (bounded well under the tolerance below); this is the
+// same class of departure numpy/OpenBLAS have from a double-rounded reference.
+func assertMatMulF64Close(t *testing.T, got, want *tensor.Tensor, label string) {
+	t.Helper()
+	if !got.Shape().Equal(want.Shape()) {
+		t.Fatalf("%s: shape %v vs %v", label, got.Shape(), want.Shape())
+	}
+	const rtol, atol = 1e-11, 1e-13
+	var maxRel float64
+	for i := range got.Numel() {
+		idx := tensor.Unravel(i, got.Shape())
+		g, w := got.AtF64(idx...), want.AtF64(idx...)
+		d := math.Abs(g - w)
+		if d > atol+rtol*math.Abs(w) {
+			t.Fatalf("%s [%d]: cpu %v vs ref %v (|Δ|=%g > tol %g)", label, i, g, w, d, atol+rtol*math.Abs(w))
+		}
+		if r := d / (math.Abs(w) + atol); r > maxRel {
+			maxRel = r
+		}
+	}
+	t.Logf("%s: f64-FMA max rel err %.2e (rtol %g)", label, maxRel, rtol)
 }

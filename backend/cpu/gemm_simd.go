@@ -93,14 +93,14 @@ func gemmF64BandCols(A, B, C []float64, loRow, hiRow, k, n, jLo, jHi int) {
 				b1 := archsimd.BroadcastFloat64x4(ar1[p])
 				b2 := archsimd.BroadcastFloat64x4(ar2[p])
 				b3 := archsimd.BroadcastFloat64x4(ar3[p])
-				a0 = a0.Add(b0.Mul(lo))
-				a0h = a0h.Add(b0.Mul(hi))
-				a1 = a1.Add(b1.Mul(lo))
-				a1h = a1h.Add(b1.Mul(hi))
-				a2 = a2.Add(b2.Mul(lo))
-				a2h = a2h.Add(b2.Mul(hi))
-				a3 = a3.Add(b3.Mul(lo))
-				a3h = a3h.Add(b3.Mul(hi))
+				a0 = b0.MulAdd(lo, a0)
+				a0h = b0.MulAdd(hi, a0h)
+				a1 = b1.MulAdd(lo, a1)
+				a1h = b1.MulAdd(hi, a1h)
+				a2 = b2.MulAdd(lo, a2)
+				a2h = b2.MulAdd(hi, a2h)
+				a3 = b3.MulAdd(lo, a3)
+				a3h = b3.MulAdd(hi, a3h)
 				bo += n
 			}
 			a0.StoreSlice(c0[j:])
@@ -120,10 +120,10 @@ func gemmF64BandCols(A, B, C []float64, loRow, hiRow, k, n, jLo, jHi int) {
 			bo := j
 			for p := 0; p < k; p++ {
 				bv := archsimd.LoadFloat64x4Slice(B[bo:])
-				acc0 = acc0.Add(archsimd.BroadcastFloat64x4(ar0[p]).Mul(bv))
-				acc1 = acc1.Add(archsimd.BroadcastFloat64x4(ar1[p]).Mul(bv))
-				acc2 = acc2.Add(archsimd.BroadcastFloat64x4(ar2[p]).Mul(bv))
-				acc3 = acc3.Add(archsimd.BroadcastFloat64x4(ar3[p]).Mul(bv))
+				acc0 = archsimd.BroadcastFloat64x4(ar0[p]).MulAdd(bv, acc0)
+				acc1 = archsimd.BroadcastFloat64x4(ar1[p]).MulAdd(bv, acc1)
+				acc2 = archsimd.BroadcastFloat64x4(ar2[p]).MulAdd(bv, acc2)
+				acc3 = archsimd.BroadcastFloat64x4(ar3[p]).MulAdd(bv, acc3)
 				bo += n
 			}
 			acc0.StoreSlice(c0[j:])
@@ -153,7 +153,7 @@ func gemmF64BandCols(A, B, C []float64, loRow, hiRow, k, n, jLo, jHi int) {
 			acc := archsimd.LoadFloat64x4Slice(ci[j:])
 			bo := j
 			for p := 0; p < k; p++ {
-				acc = acc.Add(archsimd.BroadcastFloat64x4(ai[p]).Mul(archsimd.LoadFloat64x4Slice(B[bo:])))
+				acc = archsimd.BroadcastFloat64x4(ai[p]).MulAdd(archsimd.LoadFloat64x4Slice(B[bo:]), acc)
 				bo += n
 			}
 			acc.StoreSlice(ci[j:])
