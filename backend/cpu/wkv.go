@@ -3,6 +3,8 @@ package cpu
 import (
 	"fmt"
 	"math"
+	"runtime"
+	"sync"
 
 	"github.com/jxsl13/goai/backend"
 	"github.com/jxsl13/goai/internal/simd"
@@ -38,7 +40,7 @@ func wkvKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs
 	kc, vc, wcv, ucv := k.Contiguous(), v.Contiguous(), w.Contiguous(), u.Contiguous()
 	if kc.Dtype() == tensor.F64 && vc.Dtype() == tensor.F64 &&
 		wcv.Dtype() == tensor.F64 && ucv.Dtype() == tensor.F64 {
-		simd.WKVScanF64(kc.Storage().F64(), vc.Storage().F64(),
+		wkvParallelScanF64(kc.Storage().F64(), vc.Storage().F64(),
 			wcv.Storage().F64(), ucv.Storage().F64(), out.Storage().F64(), seq, d)
 		return []*tensor.Tensor{out}, nil
 	}
@@ -61,6 +63,35 @@ func wkvKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs
 		}
 	}
 	return []*tensor.Tensor{out}, nil
+}
+
+// wkvParallelScanF64 runs the channel-vectorized WKV scan across GOMAXPROCS goroutines,
+// each owning a disjoint block of the d channels (channels are independent recurrences).
+// Chunks are rounded up to a multiple of 4 so the SIMD 4-lane channel groups align with
+// the single-threaded WKVScanF64 — each channel lands in the same group and gets the same
+// expF64x4v bits, so the parallel scan is BIT-IDENTICAL to WKVScanF64 (locked by
+// TestWKVScanRangeF64BitExactVsWhole). Workers write disjoint output columns → no race.
+// Small work stays single-threaded (WKVScanRangeF64(0,d) ≡ WKVScanF64).
+func wkvParallelScanF64(k, v, w, u, out []float64, seq, d int) {
+	nw := runtime.GOMAXPROCS(0)
+	chunk := ((d+nw-1)/nw + 3) &^ 3 // per-worker channels, rounded up to a multiple of 4
+	if nw <= 1 || chunk >= d || seq*d < 1<<14 {
+		simd.WKVScanRangeF64(k, v, w, u, out, seq, d, 0, d)
+		return
+	}
+	var wg sync.WaitGroup
+	for lo := 0; lo < d; lo += chunk {
+		hi := lo + chunk
+		if hi > d {
+			hi = d
+		}
+		wg.Add(1)
+		go func(lo, hi int) {
+			defer wg.Done()
+			simd.WKVScanRangeF64(k, v, w, u, out, seq, d, lo, hi)
+		}(lo, hi)
+	}
+	wg.Wait()
 }
 
 func init() {
