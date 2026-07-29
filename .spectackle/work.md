@@ -871,9 +871,14 @@ option: Scope down: keep the matmuls and outer product on the backend (guarantee
 option: Drop it: leave Scan on the dispatch path and spend the effort on targets that can be validated bit-exactly
 option: Keep attempting bit-exactness: instrument the exact FMA emission and match it
 
-## ADR-01KYQ9M92BF5R9W9N844SXJKJP Probe A single line question?
+## ADR-01KYQ9MAAME6NSVTMY0KMBQY81 Probe B line one.
+kind: 
+state: 
+created: 
+
+Line two.
 kind: adr
-state: submitted
+state: draft
 created: 2026-07-29
 status: proposed
 
