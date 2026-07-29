@@ -24,6 +24,7 @@ import (
 	"runtime"
 
 	"simd/archsimd"
+	"unsafe"
 )
 
 var gemmHasAVX = archsimd.X86.AVX()
@@ -86,9 +87,10 @@ func gemmF64BandCols(A, B, C []float64, loRow, hiRow, k, n, jLo, jHi int) {
 			a3 := archsimd.LoadFloat64x4Slice(c3[j:])
 			a3h := archsimd.LoadFloat64x4Slice(c3[j+4:])
 			bo := j
+			bptr := unsafe.Pointer(&B[0])
 			for p := 0; p < k; p++ {
-				lo := archsimd.LoadFloat64x4Slice(B[bo:])
-				hi := archsimd.LoadFloat64x4Slice(B[bo+4:])
+				lo := archsimd.LoadFloat64x4((*[4]float64)(unsafe.Add(bptr, uintptr(bo)*8)))
+				hi := archsimd.LoadFloat64x4((*[4]float64)(unsafe.Add(bptr, uintptr(bo+4)*8)))
 				b0 := archsimd.BroadcastFloat64x4(ar0[p])
 				b1 := archsimd.BroadcastFloat64x4(ar1[p])
 				b2 := archsimd.BroadcastFloat64x4(ar2[p])
@@ -118,8 +120,9 @@ func gemmF64BandCols(A, B, C []float64, loRow, hiRow, k, n, jLo, jHi int) {
 			acc2 := archsimd.LoadFloat64x4Slice(c2[j:])
 			acc3 := archsimd.LoadFloat64x4Slice(c3[j:])
 			bo := j
+			bptr := unsafe.Pointer(&B[0])
 			for p := 0; p < k; p++ {
-				bv := archsimd.LoadFloat64x4Slice(B[bo:])
+				bv := archsimd.LoadFloat64x4((*[4]float64)(unsafe.Add(bptr, uintptr(bo)*8)))
 				acc0 = acc0.Add(archsimd.BroadcastFloat64x4(ar0[p]).Mul(bv))
 				acc1 = acc1.Add(archsimd.BroadcastFloat64x4(ar1[p]).Mul(bv))
 				acc2 = acc2.Add(archsimd.BroadcastFloat64x4(ar2[p]).Mul(bv))
