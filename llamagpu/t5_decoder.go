@@ -120,16 +120,19 @@ func newT5Decoder(m *nlp.T5Decoder, ops backendOps) (*GPUT5Decoder, error) {
 // buffer for sq=1 (element (h,k) at h·(pos+1)+k).
 func (d *GPUT5Decoder) selfBiasRow(pos int) ([]float32, error) {
 	ctx := backend.NewContext().WithBackend(backend.Reference())
-	full, err := d.relBias.Bias(ctx, pos+1, pos+1) // [pos+1, pos+1, heads]
+	kk := pos + 1
+	// Build only the single query row: O(pos) instead of materializing the full O(pos²) bias
+	// table and discarding all but row pos — bit-identical to Bias(pos+1,pos+1)[pos] (§perf).
+	// Row layout is [kk, heads]: element (k,h) at k*heads+h.
+	row, err := d.relBias.BiasRow(ctx, pos, kk)
 	if err != nil {
 		return nil, err
 	}
-	fs := full.Contiguous().Storage().F64()
-	kk := pos + 1
+	rs := row.Contiguous().Storage().F64()
 	out := make([]float32, d.heads*kk)
 	for h := 0; h < d.heads; h++ {
 		for k := 0; k < kk; k++ {
-			out[h*kk+k] = float32(fs[(pos*kk+k)*d.heads+h]) // full[pos][k][h]
+			out[h*kk+k] = float32(rs[k*d.heads+h]) // row[k][h]
 		}
 	}
 	return out, nil
