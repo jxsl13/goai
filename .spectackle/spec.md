@@ -412,3 +412,6 @@ IF a fused path must reproduce the bits of more than about five chained backend 
 
 ## NUM-SYMMETRY-NOT-EXACT-001
 IF an optimization reads a symmetric matrix transposed to make access contiguous, THEN the implementer SHALL verify the symmetry is EXACT at that point, since an in-place sweep can leave one-ulp asymmetry that accumulates (see R-01KYQBJ7BREF4).
+
+## PERF-SCANRULE-EMPTY-001
+IF a new perfscan rule finds no genuine site once its soundness tests are added, THEN the implementer SHALL delete it rather than ship it, and record the negative result so it is not rebuilt (see R-01KYQFAFQVEN3).
