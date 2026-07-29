@@ -1117,3 +1117,24 @@ A MEASUREMENT TRAP, this time on a change that WAS real. At benchtime=50x the sa
 BIT-IDENTITY TESTED, NOT ARGUED, and the test design is worth reusing: the two arms are selected by ctx.Recorder, so a plain context takes the fused gather and a taped context keeps the dispatch path. Comparing raw float32 bits between them exercises the arithmetic AND the guard in one pass. Panic-probed to confirm the fused branch is reached, because a parity test whose arms take the same path passes while proving nothing.
 
 NO NEW PERFSCAN RULE: PS4011 already flags this file and this shape - a sequential loop dispatching several backend ops per iteration with no fused path - and its recorded remedy is exactly what was applied. The rule was right and unconsumed.
+
+## R-01KYR0ZEEFFK6RCAGDRKH14WF0 Matrix diagnostic, second target: DeepSeekV2 decode 1.12x / -9.3% allocs, and min-of-N nearly reported a regression
+kind: research
+state: draft
+created: 2026-07-29
+
+Second application of PROC-BENCH-MATRIX-DIAGNOSTIC-001. Measured on darwin/arm64 M2 Pro, go1.26.5, GOMAXPROCS=12, benchtime=400x, six interleaved rounds.
+
+TARGET SELECTION took no code reading: after the Gemma2 fix, DeepSeekV2 decode was the remaining outlier in the twelve-architecture matrix at 5166 allocations against MPT 1086 on identical two-layer dim-32 fixtures. A profile put attnAbsorbed at 58.48% of a decode step, with QMatMul 23.91% inside it (real work) and ref.sliceKernel 10.93% plus SlicePlan 1.56% as pure movement.
+
+THE FIX. Three slice dispatches per head become two copies. One of the three was pure indirection worth naming: qh was sliced out of q only to be re-sliced into qNope and qPe, and both of those are contiguous runs of q own storage, so the intermediate never needed to exist. Movement only per ADR-01KYQ9PHNPEFC; matmul, RoPE and add stay on the backend.
+
+MEASURED: 5166 to 4686 allocations, -9.3%, identical every round. 281-292us to 250-281us, 1.12x by min-of-six, ranges all but disjoint.
+
+THE MEASUREMENT TRAP, third instance this session and the most dangerous form. At benchtime=300x one BASELINE round came in at 257us against its own cluster of 305-312us. Min-of-N over those four rounds picks 257 for the baseline and 297 for the fused arm, reporting the change as a 15 PERCENT REGRESSION - the exact opposite of the truth. Raising to 400x and taking six rounds separated the arms cleanly. Tally of the three instances: low benchtime manufactured a regression that did not exist (Mixtral prefill, 1.73x phantom), inflated a real gain (Gemma2, 1.90x reported where 1.21x was true), and here nearly inverted the sign of a real gain. MIN-OF-N IS NOT A DEFENSE against a bimodal distribution - it actively amplifies the problem, because it selects on exactly the tail that the bimodality produces. The defense is raising benchtime until the within-arm spread is smaller than the claimed effect, and CHECKING that before computing any ratio.
+
+BOTH FUSIONS SHARE A TEST DESIGN worth reusing: the two arms are selected by ctx.Recorder, so a plain context takes the fused path and a taped one keeps the dispatch path. One raw-bit comparison therefore tests the arithmetic AND the tape guard, and a panic probe confirms the fused branch is reached - a parity test whose arms take the same path passes while proving nothing.
+
+DELIBERATELY NOT DONE: the non-absorbed per-head loop in the same file, which slices kv as well as q. It needs its own parity test and its own measurement, and the benchmark exercises the absorbed path, so shipping it here would have been unverified.
+
+MATRIX STATE after two fixes: Gemma2 decode 4862 to 3522, DeepSeekV2 5166 to 4686. The remaining spread is GPTNeoX 3072 and StableLM 2812 against MPT 1086, which is the next place to look.
