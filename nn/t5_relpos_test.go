@@ -214,3 +214,14 @@ func ExampleT5RelativeBias() {
 	// Output:
 	// 2.5
 }
+
+// BiasRow is the incremental-decode form: one query position against keyLen keys, so a
+// decode step costs O(pos) instead of rebuilding the full O(pos²) bias matrix.
+func ExampleT5RelativeBias_biasRow() {
+	b, _ := nn.NewT5RelativeBias(32, 1, 128, true, tensor.F64)
+	b.Table.SetF64(2.5, nn.T5RelativePositionBucket(1, true, 32, 128), 0) // bias for rel=+1
+	row, _ := b.BiasRow(backend.NewContext(), 0, 2)                       // [keyLen, numHeads]
+	fmt.Printf("%.1f\n", row.AtF64(1, 0))                                 // key one step ahead of query 0
+	// Output:
+	// 2.5
+}
