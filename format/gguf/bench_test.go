@@ -147,6 +147,13 @@ func BenchmarkQMatMulQ8_0_M1(b *testing.B)  { benchQMatMul(b, 1, Q8_0) }
 func BenchmarkQMatMulQ4_K_M1(b *testing.B)  { benchQMatMul(b, 1, Q4_K) }
 func BenchmarkQMatMulQ4_K_M16(b *testing.B) { benchQMatMul(b, 16, Q4_K) }
 
+// Q6_K and Q2_K cover the decode path's 4-ROW BLOCKED kernels, which Q4_K does not reach —
+// its row dot is SIMD-gated and deliberately kept scalar. Without these the blocked kernels
+// are unmeasured, which is how they ended up dead code after a merge.
+func BenchmarkQMatMulQ6_K_M1(b *testing.B)  { benchQMatMul(b, 1, Q6_K) }
+func BenchmarkQMatMulQ6_K_M16(b *testing.B) { benchQMatMul(b, 16, Q6_K) }
+func BenchmarkQMatMulQ2_K_M1(b *testing.B)  { benchQMatMul(b, 1, Q2_K) }
+
 // Write path: F64 tensor forced through the f32Data conversion.
 func BenchmarkWriteF32Tensor(b *testing.B) {
 	vals := make([]float32, benchN)

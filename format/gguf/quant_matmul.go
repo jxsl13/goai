@@ -261,8 +261,10 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 	if m == 1 && xf32 != nil &&
 		(qt == Q2_K || qt == Q3_K || qt == Q4_K || qt == Q5_K || qt == Q6_K) {
 		var dot func([]float32, []byte, int) float64
-		// dot4 is the register-blocked variant where one exists; nil means this type is
-		// still one row at a time and falls through to the scalar loop below.
+		// dot4 computes FOUR output rows at once so a single dequantized activation load
+		// feeds four accumulators — register blocking, orthogonal to the chunk-parallelism
+		// below (that splits ACROSS row groups, this works WITHIN one). Bit-identical:
+		// blocking the OUTPUT rows leaves each row's accumulation order untouched.
 		var dot4 func(row []float32, r0, r1, r2, r3 []byte, k int) (float64, float64, float64, float64)
 		switch qt {
 		case Q2_K:
