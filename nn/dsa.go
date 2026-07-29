@@ -44,12 +44,49 @@ func DSAAttention(q, k, v, qIdx, kIdx *tensor.Tensor, w []float64, heads, topK i
 	out := tensor.New(q.Dtype(), q.Shape())
 	scores := make([]float64, seq)
 	qrow := make([]float64, dk) // q_i[off:off+dk] hoisted per (query,head) for attendMask
-	for i := range seq {
-		// lightning indexer: rank all past tokens once per query (shared by heads).
-		type ranked struct {
-			j int
-			s float64
+	type ranked struct {
+		j int
+		s float64
+	}
+	// F64 fast path: the lightning-indexer ranking scores qIdx·kIdx per (i,j) with a double
+	// AtF64 dispatch over O(seq²·idxHeads·idxDim) — the main attention (attendMask) is already
+	// typed, so this ranking dispatch is now the dominant cost. Walk the index rows contiguously
+	// and pass the query row directly. Bit-identical: same ascending-d dot, ReLU, weighting,
+	// ranking and attention.
+	if qis, kis, qs := flatF64(qIdx), flatF64(kIdx), flatF64(q); qis != nil && kis != nil && qs != nil {
+		idxWidth := qIdx.Shape()[1]
+		for i := range seq {
+			qir := qis[i*idxWidth : i*idxWidth+idxWidth : i*idxWidth+idxWidth]
+			var rank []ranked
+			for j := 0; j <= i; j++ {
+				kjr := kis[j*idxWidth : j*idxWidth+idxWidth : j*idxWidth+idxWidth]
+				var s float64
+				for h := range idxHeads {
+					base := h * idxDim
+					var dot float64
+					for d := range idxDim {
+						dot += qir[base+d] * kjr[base+d]
+					}
+					if dot > 0 {
+						s += w[h] * dot
+					}
+				}
+				rank = append(rank, ranked{j, s})
+			}
+			sort.Slice(rank, func(a, b int) bool { return rank[a].s > rank[b].s })
+			selected := map[int]bool{i: true}
+			for ri := 0; ri < len(rank) && len(selected) < topK; ri++ {
+				selected[rank[ri].j] = true
+			}
+			for h := range heads {
+				off := h * dk
+				qr := qs[i*dm+off : i*dm+off+dk]
+				attendMask(qr, k, v, out, i, off, dk, scale, scores, func(j int) bool { return selected[j] })
+			}
 		}
+		return out, nil
+	}
+	for i := range seq {
 		var rank []ranked
 		for j := 0; j <= i; j++ {
 			var s float64
