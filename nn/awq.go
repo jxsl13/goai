@@ -141,10 +141,57 @@ func quantizeScaled(w [][]float64, scale []float64, out, in, levels int, dt tens
 
 // reconErrMat returns ‖(W − Ŵ)·X‖_F for W as a dense matrix and Ŵ as a tensor.
 func reconErrMat(w [][]float64, wq *tensor.Tensor, x *tensor.Tensor, out, in, samples int) float64 {
+	// The old loop re-dispatched wq.AtF64(r,i) for every sample s (it is invariant across s)
+	// and x.AtF64(i,s) per element — out·samples·in interface calls over a GEMM-shaped kernel.
+	// Grab contiguous typed rows once, hoist the per-row residual diff[i]=w[r][i]−ŵ[r][i]
+	// (invariant across s), then the inner sum is a plain diff·xcol dot. Bit-identical: the
+	// same residual and the same ascending-i f64 accumulation as before.
+	xc, wqc := x.Contiguous(), wq.Contiguous()
 	var ss float64
+	diff := make([]float64, in)
+	switch wq.Dtype() {
+	case tensor.F64:
+		if xf, ok := f64Storage(xc); ok {
+			wqf := wqc.Storage().F64()
+			for r := range out {
+				wr, wqr := w[r], wqf[r*in:r*in+in:r*in+in]
+				for i := range diff {
+					diff[i] = wr[i] - wqr[i]
+				}
+				for s := range samples {
+					var v float64
+					for i := 0; i < in; i++ {
+						v += diff[i] * xf[i*samples+s]
+					}
+					ss += v * v
+				}
+			}
+			return math.Sqrt(ss)
+		}
+	case tensor.F32:
+		if xf, ok := f32Storage(xc); ok {
+			wqf := wqc.Storage().F32()
+			for r := range out {
+				wr := w[r]
+				for i := range diff {
+					diff[i] = wr[i] - float64(wqf[r*in+i])
+				}
+				for s := range samples {
+					var v float64
+					for i := 0; i < in; i++ {
+						v += diff[i] * float64(xf[i*samples+s])
+					}
+					ss += v * v
+				}
+			}
+			return math.Sqrt(ss)
+		}
+	}
+	// Exotic-dtype fallback (verbatim per-element dispatch).
 	for r := range out {
 		for s := range samples {
 			var v float64
+			//perfscan:ignore PS1005 intentional exotic-dtype fallback; F32/F64 take the typed path above
 			for i := range in {
 				v += (w[r][i] - wq.AtF64(r, i)) * x.AtF64(i, s)
 			}
@@ -152,4 +199,20 @@ func reconErrMat(w [][]float64, wq *tensor.Tensor, x *tensor.Tensor, out, in, sa
 		}
 	}
 	return math.Sqrt(ss)
+}
+
+// f64Storage/f32Storage return the contiguous typed backing slice of a tensor whose dtype
+// matches, or ok=false to route the caller to its dispatch fallback.
+func f64Storage(t *tensor.Tensor) ([]float64, bool) {
+	if t.Dtype() != tensor.F64 {
+		return nil, false
+	}
+	return t.Storage().F64(), true
+}
+
+func f32Storage(t *tensor.Tensor) ([]float32, bool) {
+	if t.Dtype() != tensor.F32 {
+		return nil, false
+	}
+	return t.Storage().F32(), true
 }
