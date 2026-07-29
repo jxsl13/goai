@@ -30,6 +30,11 @@ type Mirostat struct {
 	Eta float64 // feedback learning rate η (default 0.1)
 	Mu  float64 // running surprise threshold μ (state; initialized to 2·τ)
 	rng *rand.Rand
+	// per-token vocab-sized scratch, reused across Sample calls (Mirostat is already
+	// stateful/per-sequence via Mu, so a struct-owned buffer — not a fresh make() every
+	// token — is the natural home). Both are fully overwritten before any read.
+	probsBuf []float64 // softmax buffer, filled by simd.ExpSumF64
+	idxBuf   []int     // index buffer for the sortedKeep flat-distribution fallback
 }
 
 // MirostatOption configures a Mirostat sampler (functional-options idiom, §C12).
@@ -101,7 +106,10 @@ func (m *Mirostat) Sample(logits []float64) int {
 			mx = v
 		}
 	}
-	probs := make([]float64, n)
+	if cap(m.probsBuf) < n {
+		m.probsBuf = make([]float64, n)
+	}
+	probs := m.probsBuf[:n]                  // fully written by ExpSumF64 below, so a dirty reuse is defined
 	sum := simd.ExpSumF64(probs, logits, mx) // 4-wide AVX2 f64 softmax exp (see Sampler.Dist)
 	for i := range probs {
 		probs[i] /= sum
@@ -200,7 +208,10 @@ func (m *Mirostat) Sample(logits []float64) int {
 // prob pre-filter admits an unusually large candidate set, so Sample is never slower than the
 // pure sort implementation on a genuinely flat distribution.
 func (m *Mirostat) sortedKeep(probs []float64, n int) []int {
-	idx := make([]int, n)
+	if cap(m.idxBuf) < n {
+		m.idxBuf = make([]int, n)
+	}
+	idx := m.idxBuf[:n] // fully written (idx[i]=i) before the sort, then consumed in-call
 	for i := range idx {
 		idx[i] = i
 	}
