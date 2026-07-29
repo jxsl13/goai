@@ -397,3 +397,6 @@ WHEN a probe reports the test suite still green, the a mutation probe SHALL reje
 
 ## PROC-INTERLEAVE-001
 WHEN a speedup below roughly 10 percent is claimed, the a benchmark A/B SHALL toggle the change in and out within ONE session, at least three alternations, AND discard the run unless each arm spread stays near 5 percent — alternation removes drift between runs, not contention during them.
+
+## PERF-ACCUM-RESIDENCY-001
+IF an optimization replaces register accumulators with a memory accumulator vector (axpy, scatter, or transposed fold) in order to cut the number of passes over a matrix, THEN the implementer SHALL measure it against the register-blocked form on the same host and reject it when the matrix is already cache-resident, because repeated passes over a cache-resident operand cost no DRAM traffic while a memory accumulator forces a store-to-load round trip per FMA: a Sinkhorn axpy rewrite touching k once instead of n/4 times measured 14.60ms against 13.34ms at 512x512 (2MB, L2-resident) over 3 alternations at 1.2% spread, despite being bit-identical and 2.39x over the unoptimized form.
