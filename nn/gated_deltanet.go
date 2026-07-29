@@ -96,7 +96,10 @@ func GatedDeltaNet(ctx *backend.Context, q, k, v, alpha, beta *tensor.Tensor) (*
 						}
 						d := bt * (vrow[r] - p) // β_t·e_r
 						for c := range dk {
-							S[base+c] += d * krow[c] // S += (β_t e) kᵀ
+							// Rounded explicitly: the dispatch path rounds after each
+							// backend op, whereas this product added in one expression
+							// contracts to FMADD on arm64 and broke the parity claim.
+							S[base+c] += float64(d * krow[c]) // S += (β_t e) kᵀ
 						}
 					}
 				}

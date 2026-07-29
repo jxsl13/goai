@@ -8,6 +8,12 @@ import (
 	"github.com/jxsl13/goai/tensor"
 )
 
+// blockImp ranks one compressed block by its cmp-branch importance.
+type blockImp struct {
+	block int
+	w     float64
+}
+
 // NSABranches computes the three attention branches of Native Sparse Attention
 // (Yuan et al. 2025, DeepSeek, arXiv:2502.11089, §T556): per head and query,
 //
@@ -23,12 +29,6 @@ import (
 // the branches are returned separately so callers supply their own gates — the
 // paper's novel mechanics (compression-attention-driven selection) live here.
 // Host f64 analysis utility (SSD/MoBA mold). scale 0 → 1/√dk.
-// blockImp ranks one compressed block by its cmp-branch importance.
-type blockImp struct {
-	block int
-	w     float64
-}
-
 func NSABranches(q, k, v *tensor.Tensor, heads, blockSize, topN, window int, scale float64) (cmp, slc, win *tensor.Tensor, err error) {
 	if q.Ndim() != 2 || !k.Shape().Equal(q.Shape()) || !v.Shape().Equal(q.Shape()) {
 		return nil, nil, nil, fmt.Errorf("nn: NSABranches wants equal rank-2 q,k,v")

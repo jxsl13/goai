@@ -57,7 +57,12 @@ func GatedLinearAttention(ctx *backend.Context, q, k, v, gate *tensor.Tensor) (*
 	// the dispatch loop so autograd taping is unchanged. Bit-identical: backend
 	// Mul/Add/MatMul are plain ascending-order f64 loops, reproduced op-for-op (the only
 	// reorders are commutative scalar muls; the state add keeps scaled first; the output
-	// dot sums over the key dim ascending; no FMA). Non-F64/non-contiguous falls through.
+	// dot sums over the key dim ascending). Non-F64/non-contiguous falls through.
+	//
+	// Every product is rounded explicitly. "No FMA" cannot be asserted, only enforced: the
+	// dispatch path rounds after each backend op, while a*b + c*d written plainly in one
+	// expression is exactly what the compiler contracts to FMADD on arm64 (and generally
+	// not on amd64), so the parity claim held in CI and failed on Apple silicon.
 	if ctx.Recorder == nil {
 		if qs, ks, vs, gs := flatF64(q), flatF64(k), flatF64(v), flatF64(gate); qs != nil && ks != nil && vs != nil && gs != nil {
 			out := tensor.NewOn(ctx.Device(), q.Dtype(), tensor.Shape{seq, dv})
@@ -81,7 +86,7 @@ func GatedLinearAttention(ctx *backend.Context, q, k, v, gate *tensor.Tensor) (*
 						gi, ki := grow[i], krow[i]
 						base := i * dv
 						for j := range dv {
-							S[base+j] = S[base+j]*gi + ki*vrow[j]
+							S[base+j] = float64(S[base+j]*gi) + float64(ki*vrow[j])
 						}
 					}
 				}

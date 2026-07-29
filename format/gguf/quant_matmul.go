@@ -45,10 +45,6 @@ var dotQ4KRowFn = dotQ4_KRow
 // matmul with the SIMD dequant-dot kernel (tolerance-gated). Nil → scalar fused path.
 var q8FusedDecodeM1 func(row []float32, weight []byte, n, k, rowBytes int, outf []float32)
 
-// qmatmulParallelChunks runs body over disjoint output-row chunks of [0,n) across
-// GOMAXPROCS. Each output row is an independent dequant-dot (disjoint outf[...ni], no
-// cross-ni reduction), so chunking is bit-identical to the serial loop. Serial below a
-// small total-work threshold.
 // qmatDecodeParThreshold is the decode path's own crossover — higher than the general
 // path's because a decode chunk carries one dot per output row, not m of them.
 const qmatDecodeParThreshold = 1 << 17
@@ -67,6 +63,12 @@ func qmatmulParallelChunks(n, workPerRow int, body func(lo, hi int)) {
 	parallel.Rows(n, body)
 }
 
+// QMatMul multiplies x by a quantized weight matrix held in its packed GGUF form,
+// dequantizing on the fly rather than materializing the [n,k] f32 matrix. x is [m,k], the
+// result is [m,n], and weight carries n rows of k quantized values in qt's block layout.
+//
+// Single-row inputs (m == 1, the decode step) take fused per-type kernels that dequantize
+// straight into the dot product; wider inputs use the blocked path.
 func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.Tensor, error) {
 	if x.Ndim() != 2 || x.Shape()[1] != k {
 		return nil, fmt.Errorf("gguf: QMatMul x must be [M,%d], got %v", k, x.Shape())

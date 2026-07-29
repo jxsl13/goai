@@ -90,8 +90,13 @@ func DeltaNet(ctx *backend.Context, q, k, v, beta *tensor.Tensor) (*tensor.Tenso
 							p += S[base+c] * krow[c]
 						}
 						d := bt * (vrow[r] - p)
+						// The product is rounded EXPLICITLY. The dispatch path builds this
+						// state update from separate backend ops, each rounding its own
+						// result, while d*krow[c] added in one expression is what the
+						// compiler contracts to FMADD on arm64 — so the parity claim held
+						// on amd64 CI and failed on Apple silicon.
 						for c := range dk {
-							S[base+c] += d * krow[c]
+							S[base+c] += float64(d * krow[c])
 						}
 					}
 				}

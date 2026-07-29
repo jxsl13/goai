@@ -687,6 +687,9 @@ func gbmPredictSum(init, lr float64, trees []*gbmTree, x [][]float64) []float64 
 	return out
 }
 
+// Predict returns one prediction per row of x, summing the base score and every boosted
+// tree's contribution scaled by the learning rate. It returns an error if the model has
+// not been fitted or if a row's length does not match the training feature count.
 func (m *GradientBoostingRegressor) Predict(x [][]float64) ([]float64, error) {
 	if !m.fitted {
 		return nil, fmt.Errorf("classic: GradientBoostingRegressor.Predict before Fit")

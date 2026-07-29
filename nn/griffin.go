@@ -289,8 +289,13 @@ func (m *RGLRU) ForwardSequential(ctx *backend.Context, x *tensor.Tensor) (*tens
 				if t == 0 {
 					copy(hbuf, brow) // h_0 = a_0·0 + b_0 = b_0
 				} else {
+					// The product is rounded EXPLICITLY: the dispatch path computes
+					// this recurrence as a Mul op followed by an Add op, each rounding
+					// its own result, while the same expression written inline contracts
+					// to FMADD on arm64. Without the conversion the bit-exactness claim
+					// holds on amd64 CI and fails on Apple silicon.
 					for j := range d {
-						hbuf[j] = arow[j]*hbuf[j] + brow[j]
+						hbuf[j] = float64(arow[j]*hbuf[j]) + brow[j]
 					}
 				}
 				copy(orow, hbuf)
