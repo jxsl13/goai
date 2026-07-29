@@ -369,3 +369,44 @@ cost/benefit was measured, not assumed.
 REMAINING PS4006 in these lanes after the annotations: aqlm (5, k-means accumulations),
 classic/naivebayes (3, no benchmark), classic/models and gmm (2 each), linalg/svd (2). None
 looks dominant; anything here needs a benchmark first.
+
+## R-01KYQFAFQVEN38F2B0R79HP7ZT Rejected: no scan rule for the sparse-mask rescan — undetectable as written, and the guarded variant is empty once made sound
+kind: research
+state: draft
+created: 2026-07-29
+
+REJECTED: a perfscan rule for the sparse-mask rescan that produced the 1.35x DSA / 1.25x NSA
+win. Built, made sound, measured at ONE tree-wide finding which was itself a false positive,
+and removed. Recording so it is not rebuilt.
+
+WHAT THE OPTIMIZATION WAS: attendMask's normalize and P·V walked every key from 0 to i
+regardless of the admission mask, multiplying by an exact zero for each masked one. Under a
+sparse mask that is most of the work — DSA attends 64 of 1024 keys. Gathering the active
+indices once in the pass that already walks every j turned O(i·d_k) into O(topK·d_k).
+
+WHY IT IS NOT STATICALLY DETECTABLE: the P·V loop had NO guard. It simply multiplied by
+scores[j], which happens to be zero for masked keys. Nothing in the AST says that array is
+sparse; the sparsity is a property of what an earlier loop wrote into it. A rule cannot see
+this without knowing the values.
+
+THE DETECTABLE RELATIVE, and why it is empty here: the guarded form —
+`for d { for j { if !mask[j] { continue }; ... } }` where the mask does not depend on d — IS
+detectable, and a rule for it was written (PS6014, outer-invariant-mask-rescan). Two rounds
+of tightening were needed and both are instructive:
+
+1. Pairing loops across a GAP let a guard that depends on the intervening loop variable look
+   invariant. Wanda's write-back reads dropbuf[t*cin+j] with j the loop in between; restricting
+   the outer to the IMMEDIATELY enclosing loop removed it. 11 findings -> 8.
+2. Textual independence from the outer INDEX is not invariance — the same lesson PS5003
+   already records. Every remaining finding filtered on a mask ARRAY that the outer loop
+   rewrites: Wanda recomputes drop per output column, MoBA rebuilds selected per query,
+   classic/models recomputes counts. Adding the assignedIn test took 8 findings -> 1.
+
+The one survivor was backend/cpu's work-stealing loop skipping its own worker index
+(`if v == w { continue }`) — a one-element skip, not a sparse mask.
+
+THE NEGATIVE RESULT IS THE CONTENT: masks in this codebase are per-query or per-output by
+nature, so a filter that is genuinely invariant across an enclosing loop does not occur. A
+rule for it would be dead weight, and shipping one that finds nothing is the criticism this
+campaign already levelled at PS6001. The optimization remains real and shipped; it is simply
+not a pattern a scanner can find here.
