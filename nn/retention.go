@@ -108,6 +108,7 @@ func RetentionChunkwise(q, k, v *tensor.Tensor, gamma float64, chunkSize int) (*
 	// times per (lj,lm) before.
 	gpow := make([]float64, chunkSize+1)
 	wbuf := make([]float64, chunkSize)
+	crossbuf := make([]float64, dv) // ζ-scaled cross term Σ_i Q_i·R[i,·], accumulated i-outer
 	// F64 fast path: hoist the query row q_n (read in the Q·K dot AND re-dispatched per value
 	// column jv in the cross term) and walk k/v/out contiguously — the O(cb²·dk) Q·K double
 	// dispatch and the O(cb·dk·dv) state update dominated. Bit-identical: same values, same
@@ -133,16 +134,32 @@ func RetentionChunkwise(q, k, v *tensor.Tensor, gamma float64, chunkSize int) (*
 					wbuf[lm] = gpow[lj-lm] * qk
 				}
 				orow := os[n*dv : n*dv+dv : n*dv+dv]
+				// Cross term ζ·(Q_n·R): accumulate i-OUTER so R[i*dv+jv] is read CONTIGUOUSLY in jv
+				// (the old jv-outer/i-inner loop strode R by dv each step). crossbuf[jv] sums over i
+				// ascending — the same order as the old per-jv dot — and ζ scales it once, so
+				// orow[jv] starts bit-identical to the old zeta*cross.
 				for jv := range dv {
-					var cross float64
-					for i := range dk {
-						cross += qrow[i] * r[i*dv+jv]
+					crossbuf[jv] = 0
+				}
+				for i := range dk {
+					qi := qrow[i]
+					base := i * dv
+					for jv := range dv {
+						crossbuf[jv] += qi * r[base+jv]
 					}
-					acc := zeta * cross
-					for lm := 0; lm <= lj; lm++ {
-						acc += wbuf[lm] * vs[(start+lm)*dv+jv]
+				}
+				for jv := range dv {
+					orow[jv] = zeta * crossbuf[jv]
+				}
+				// Inner-chunk Σ_{lm≤lj} wbuf[lm]·V_{start+lm}: accumulate lm-OUTER so V is read
+				// contiguously in jv. Added to orow (already ζ·cross) in lm-ascending order, so each
+				// orow[jv] receives the SAME operation sequence as the old acc — bit-identical.
+				for lm := 0; lm <= lj; lm++ {
+					w := wbuf[lm]
+					vbase := (start + lm) * dv
+					for jv := range dv {
+						orow[jv] += w * vs[vbase+jv]
 					}
-					orow[jv] = acc
 				}
 			}
 			gB := gpow[cb]
