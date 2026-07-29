@@ -19,10 +19,10 @@ func SymEig(a [][]float64) (vals []float64, vecs [][]float64) {
 	// operations, their order and their operands are unchanged, so results are
 	// bit-identical.
 	m := make([]float64, n*n)
-	v := make([]float64, n*n)
+	vT := make([]float64, n*n) // TRANSPOSED: vT[c*n+r] is eigenvector-column c, row r
 	for i := range n {
 		copy(m[i*n:i*n+n], a[i])
-		v[i*n+i] = 1
+		vT[i*n+i] = 1 // identity is its own transpose
 	}
 	for range 100 {
 		off := 0.0
@@ -54,10 +54,16 @@ func SymEig(a [][]float64) (vals []float64, vecs [][]float64) {
 					m[p*n+k] = c*mpk - s*mqk
 					m[q*n+k] = s*mpk + c*mqk
 				}
+				// v is stored TRANSPOSED (vT[p*n+k] is the old v[k*n+p]). The
+				// accumulator is only ever column-rotated, so transposing its storage
+				// turns the walk contiguous without touching the arithmetic — same
+				// operations, same order, same operands (PS6011).
+				rp := vT[p*n : p*n+n : p*n+n]
+				rq := vT[q*n : q*n+n : q*n+n]
 				for k := range n {
-					vkp, vkq := v[k*n+p], v[k*n+q]
-					v[k*n+p] = c*vkp - s*vkq
-					v[k*n+q] = s*vkp + c*vkq
+					vkp, vkq := rp[k], rq[k]
+					rp[k] = c*vkp - s*vkq
+					rq[k] = s*vkp + c*vkq
 				}
 			}
 		}
@@ -84,10 +90,10 @@ func SymEig(a [][]float64) (vals []float64, vecs [][]float64) {
 	vecs = make([][]float64, n) // vecs[k] = k-th eigenvector
 	for k, oi := range order {
 		sorted[k] = vals[oi]
+		// The eigenvector is one COLUMN of v, which in transposed storage is a
+		// contiguous row — the extraction was a strided walk too.
 		col := make([]float64, n)
-		for r := range n {
-			col[r] = v[r*n+oi]
-		}
+		copy(col, vT[oi*n:oi*n+n])
 		vecs[k] = col
 	}
 	return sorted, vecs
