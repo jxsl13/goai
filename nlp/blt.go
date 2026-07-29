@@ -591,7 +591,7 @@ func bltCrossAttention(ctx *backend.Context, q, kv, wq, wk, wv, wo, mask *tensor
 	if err != nil {
 		return nil, err
 	}
-	kt, err := exec1(ctx, backend.OpTranspose, nil, kp)
+	kt, err := exec1a(ctx, backend.OpTranspose, nil, kp)
 	if err != nil {
 		return nil, err
 	}
@@ -607,7 +607,7 @@ func bltCrossAttention(ctx *backend.Context, q, kv, wq, wk, wv, wo, mask *tensor
 	if scores, err = exec2(ctx, backend.OpAdd, nil, scores, mask); err != nil {
 		return nil, err
 	}
-	attn, err := exec1(ctx, backend.OpSoftmax, nil, scores)
+	attn, err := exec1a(ctx, backend.OpSoftmax, nil, scores)
 	if err != nil {
 		return nil, err
 	}
@@ -660,7 +660,7 @@ func runByteBlocks(ctx *backend.Context, x *tensor.Tensor, blocks []*Block, wind
 		if h, err = exec1(ctx, backend.OpAddBias, nil, h, b.B1); err != nil {
 			return nil, err
 		}
-		if h, err = exec1(ctx, backend.OpGELU, nil, h); err != nil {
+		if h, err = exec1a(ctx, backend.OpGELU, nil, h); err != nil {
 			return nil, err
 		}
 		if h, err = exec1(ctx, backend.OpMatMul, nil, h, b.W2); err != nil {

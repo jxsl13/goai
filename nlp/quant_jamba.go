@@ -100,7 +100,7 @@ func (m *QuantJambaMixer) forward(ctx *backend.Context, u *tensor.Tensor) (*tens
 	if err != nil {
 		return nil, err
 	}
-	if xc, err = exec1(ctx, backend.OpSiLU, nil, xc); err != nil {
+	if xc, err = exec1a(ctx, backend.OpSiLU, nil, xc); err != nil {
 		return nil, err
 	}
 	// input-dependent Δ, B, C — each RMSNormed before use (Jamba's addition)
@@ -115,7 +115,7 @@ func (m *QuantJambaMixer) forward(ctx *backend.Context, u *tensor.Tensor) (*tens
 	if err != nil {
 		return nil, err
 	}
-	delta, err := exec1(ctx, backend.OpSoftplus, nil, dtPre)
+	delta, err := exec1a(ctx, backend.OpSoftplus, nil, dtPre)
 	if err != nil {
 		return nil, err
 	}
@@ -139,7 +139,7 @@ func (m *QuantJambaMixer) forward(ctx *backend.Context, u *tensor.Tensor) (*tens
 		return nil, err
 	}
 	// gate y ⊙ SiLU(z), then down-project
-	gate, err := exec1(ctx, backend.OpSiLU, nil, z)
+	gate, err := exec1a(ctx, backend.OpSiLU, nil, z)
 	if err != nil {
 		return nil, err
 	}
@@ -179,7 +179,7 @@ func (m *QuantJambaMoE) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor
 	if err != nil {
 		return nil, err
 	}
-	scores, err := exec1(ctx, backend.OpSoftmax, nil, logits) // softmax over all E experts
+	scores, err := exec1a(ctx, backend.OpSoftmax, nil, logits) // softmax over all E experts
 	if err != nil {
 		return nil, err
 	}
@@ -396,7 +396,7 @@ func (m *QuantJamba) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor
 			if err != nil {
 				return nil, err
 			}
-			a, err := exec1(ctx, backend.OpMHA, attn, q, k, v)
+			a, err := exec3(ctx, backend.OpMHA, attn, q, k, v)
 			if err != nil {
 				return nil, err
 			}
@@ -528,7 +528,7 @@ func quantJambaMixerStep(ctx *backend.Context, jm *QuantJambaMixer, ls *MambaLay
 	if err != nil {
 		return nil, err
 	}
-	delta, err := exec1(ctx, backend.OpSoftplus, nil, dtPre)
+	delta, err := exec1a(ctx, backend.OpSoftplus, nil, dtPre)
 	if err != nil {
 		return nil, err
 	}
@@ -569,7 +569,7 @@ func quantJambaMixerStep(ctx *backend.Context, jm *QuantJambaMixer, ls *MambaLay
 	}
 
 	// Gate y ⊙ SiLU(z), then down-project.
-	gate, err := exec1(ctx, backend.OpSiLU, nil, z)
+	gate, err := exec1a(ctx, backend.OpSiLU, nil, z)
 	if err != nil {
 		return nil, err
 	}
@@ -623,7 +623,7 @@ func (m *QuantJamba) DecodeStep(ctx *backend.Context, st *JambaDecodeState, toke
 			}
 			kNew, vNew := st.bufs.appendKV(st.K, st.V, l, k, v)
 			st.K[l], st.V[l] = kNew, vNew
-			a, err := exec1(ctx, backend.OpMHA, attn, q, kNew, vNew)
+			a, err := exec3(ctx, backend.OpMHA, attn, q, kNew, vNew)
 			if err != nil {
 				return nil, err
 			}

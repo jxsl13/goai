@@ -129,7 +129,7 @@ func (b *Bert) Forward(ctx *backend.Context, tokens, segments []int) (*tensor.Te
 		if h, err = exec1(ctx, backend.OpAddBias, nil, h, l.B1); err != nil {
 			return nil, err
 		}
-		if h, err = exec1(ctx, backend.OpGELU, nil, h); err != nil {
+		if h, err = exec1a(ctx, backend.OpGELU, nil, h); err != nil {
 			return nil, err
 		}
 		if h, err = exec1(ctx, backend.OpMatMul, nil, h, l.W2); err != nil {

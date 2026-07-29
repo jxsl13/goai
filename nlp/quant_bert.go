@@ -133,7 +133,7 @@ func (b *QuantBert) Forward(ctx *backend.Context, tokens, segments []int) (*tens
 		if err != nil {
 			return nil, err
 		}
-		h, err := exec1(ctx, backend.OpMHA, attn, q, k, v)
+		h, err := exec3(ctx, backend.OpMHA, attn, q, k, v)
 		if err != nil {
 			return nil, err
 		}
@@ -150,7 +150,7 @@ func (b *QuantBert) Forward(ctx *backend.Context, tokens, segments []int) (*tens
 		if h, err = quantProjBias(ctx, x, l.w1, l.b1); err != nil {
 			return nil, err
 		}
-		if h, err = exec1(ctx, backend.OpGELU, nil, h); err != nil {
+		if h, err = exec1a(ctx, backend.OpGELU, nil, h); err != nil {
 			return nil, err
 		}
 		if h, err = quantProjBias(ctx, h, l.w2, l.b2); err != nil {

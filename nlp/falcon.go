@@ -203,7 +203,7 @@ func (m *Falcon) attention(ctx *backend.Context, b *FalconBlock, xn *tensor.Tens
 	if capture != nil {
 		capture(k, v)
 	}
-	a, err := exec1(ctx, backend.OpMHA, attn, q, k, v)
+	a, err := exec3(ctx, backend.OpMHA, attn, q, k, v)
 	if err != nil {
 		return nil, err
 	}
@@ -217,7 +217,7 @@ func (m *Falcon) mlp(ctx *backend.Context, b *FalconBlock, xn *tensor.Tensor) (*
 	if err != nil {
 		return nil, err
 	}
-	if h, err = exec1(ctx, backend.OpGELU, nil, h); err != nil {
+	if h, err = exec1a(ctx, backend.OpGELU, nil, h); err != nil {
 		return nil, err
 	}
 	return project(ctx, h, b.Wout)

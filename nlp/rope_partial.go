@@ -22,7 +22,7 @@ func partialRoPE(ctx *backend.Context, x *tensor.Tensor, heads, rotaryDim int, r
 	if rotaryDim >= hd {
 		r := rope
 		r.Heads = heads
-		return exec1(ctx, backend.OpRoPE, r, x)
+		return exec1a(ctx, backend.OpRoPE, r, x)
 	}
 	// Reshape to one row per (position, head) so each head's channels are contiguous.
 	flat, err := exec1(ctx, backend.OpReshape, backend.ReshapeAttrs{Shape: tensor.Shape{seq * heads, hd}}, x)
@@ -45,7 +45,7 @@ func partialRoPE(ctx *backend.Context, x *tensor.Tensor, heads, rotaryDim int, r
 	}
 	r := rope
 	r.Heads = heads
-	if rotWide, err = exec1(ctx, backend.OpRoPE, r, rotWide); err != nil {
+	if rotWide, err = exec1a(ctx, backend.OpRoPE, r, rotWide); err != nil {
 		return nil, err
 	}
 	if rot, err = exec1(ctx, backend.OpReshape, backend.ReshapeAttrs{Shape: tensor.Shape{seq * heads, rotaryDim}}, rotWide); err != nil {

@@ -172,7 +172,7 @@ func (m *DeepSeekV2) DecodeStep(ctx *backend.Context, cache *DeepSeekV2Cache, to
 			cache.K[l][h], cache.V[l][h] = kCache, vCache
 
 			// scores = queryH·kCacheᵀ  [1, tokens]
-			kCacheT, err := exec1(ctx, backend.OpTranspose, nil, kCache)
+			kCacheT, err := exec1a(ctx, backend.OpTranspose, nil, kCache)
 			if err != nil {
 				return nil, err
 			}
@@ -184,7 +184,7 @@ func (m *DeepSeekV2) DecodeStep(ctx *backend.Context, cache *DeepSeekV2Cache, to
 				return nil, err
 			}
 			// Single query attends all cached keys → no causal mask.
-			probs, err := exec1(ctx, backend.OpSoftmax, nil, scores)
+			probs, err := exec1a(ctx, backend.OpSoftmax, nil, scores)
 			if err != nil {
 				return nil, err
 			}

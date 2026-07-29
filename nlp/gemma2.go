@@ -282,7 +282,7 @@ func (m *Gemma2) cappedAttention(ctx *backend.Context, b *Gemma2Block, xb *tenso
 			return nil, err
 		}
 		// scores = Qh·Khᵀ  [seq,seq]
-		khT, err := exec1(ctx, backend.OpTranspose, nil, kh)
+		khT, err := exec1a(ctx, backend.OpTranspose, nil, kh)
 		if err != nil {
 			return nil, err
 		}
@@ -304,7 +304,7 @@ func (m *Gemma2) cappedAttention(ctx *backend.Context, b *Gemma2Block, xb *tenso
 		if scores, err = exec2(ctx, backend.OpAdd, nil, scores, mask); err != nil {
 			return nil, err
 		}
-		probs, err := exec1(ctx, backend.OpSoftmax, nil, scores)
+		probs, err := exec1a(ctx, backend.OpSoftmax, nil, scores)
 		if err != nil {
 			return nil, err
 		}

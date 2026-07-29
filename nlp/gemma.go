@@ -159,7 +159,7 @@ func (m *Gemma) forwardCapture(ctx *backend.Context, tokens []int, capture func(
 		if capture != nil {
 			capture(l, k, v)
 		}
-		a, err := exec1(ctx, backend.OpMHA, attn, q, k, v)
+		a, err := exec3(ctx, backend.OpMHA, attn, q, k, v)
 		if err != nil {
 			return nil, err
 		}

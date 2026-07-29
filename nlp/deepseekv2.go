@@ -255,7 +255,7 @@ func (m *DeepSeekV2) mlaAttention(ctx *backend.Context, b *DeepSeekV2Block, xb *
 		return nil, err
 	}
 	// Decoupled RoPE on the SHARED key (one head of width QKRope), broadcast to all heads.
-	kPeRot, err := exec1(ctx, backend.OpRoPE, rope, kPe)
+	kPeRot, err := exec1a(ctx, backend.OpRoPE, rope, kPe)
 	if err != nil {
 		return nil, err
 	}
@@ -289,7 +289,7 @@ func (m *DeepSeekV2) mlaAttention(ctx *backend.Context, b *DeepSeekV2Block, xb *
 		if err != nil {
 			return nil, err
 		}
-		qPeRot, err := exec1(ctx, backend.OpRoPE, rope, qPe)
+		qPeRot, err := exec1a(ctx, backend.OpRoPE, rope, qPe)
 		if err != nil {
 			return nil, err
 		}
@@ -319,7 +319,7 @@ func (m *DeepSeekV2) mlaAttention(ctx *backend.Context, b *DeepSeekV2Block, xb *
 		}
 
 		// scores = queryH·keyHᵀ  [seq,seq]
-		keyHT, err := exec1(ctx, backend.OpTranspose, nil, keyH)
+		keyHT, err := exec1a(ctx, backend.OpTranspose, nil, keyH)
 		if err != nil {
 			return nil, err
 		}
@@ -333,7 +333,7 @@ func (m *DeepSeekV2) mlaAttention(ctx *backend.Context, b *DeepSeekV2Block, xb *
 		if scores, err = exec2(ctx, backend.OpAdd, nil, scores, mask); err != nil {
 			return nil, err
 		}
-		probs, err := exec1(ctx, backend.OpSoftmax, nil, scores)
+		probs, err := exec1a(ctx, backend.OpSoftmax, nil, scores)
 		if err != nil {
 			return nil, err
 		}
@@ -378,7 +378,7 @@ func (m *DeepSeekV2) moeFFN(ctx *backend.Context, moe *nn.DeepSeekMoE, x *tensor
 	if err != nil {
 		return nil, err
 	}
-	scores, err := exec1(ctx, backend.OpSoftmax, nil, logits) // softmax over all E experts
+	scores, err := exec1a(ctx, backend.OpSoftmax, nil, logits) // softmax over all E experts
 	if err != nil {
 		return nil, err
 	}

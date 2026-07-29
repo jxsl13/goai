@@ -190,7 +190,7 @@ func (m *OLMo2) attention(ctx *backend.Context, b *OLMo2Block, x *tensor.Tensor,
 	if capture != nil {
 		capture(k, v)
 	}
-	a, err := exec1(ctx, backend.OpMHA, attn, q, k, v)
+	a, err := exec3(ctx, backend.OpMHA, attn, q, k, v)
 	if err != nil {
 		return nil, err
 	}

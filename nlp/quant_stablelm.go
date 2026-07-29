@@ -177,7 +177,7 @@ func (m *QuantStableLM) Forward(ctx *backend.Context, tokens []int) (*tensor.Ten
 		if k, err = partialRoPE(ctx, k, kv, rot, backend.RoPEAttrs{Base: cfg.RopeBase}); err != nil {
 			return nil, err
 		}
-		a, err := exec1(ctx, backend.OpMHA, attn, q, k, v)
+		a, err := exec3(ctx, backend.OpMHA, attn, q, k, v)
 		if err != nil {
 			return nil, err
 		}

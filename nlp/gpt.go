@@ -421,7 +421,7 @@ func (g *GPT) forwardBlock(ctx *backend.Context, x *tensor.Tensor, layer int) (*
 	if h, err = exec1(layerCtx, backend.OpAddBias, nil, h, b.B1); err != nil {
 		return nil, err
 	}
-	if h, err = exec1(layerCtx, backend.OpGELU, nil, h); err != nil {
+	if h, err = exec1a(layerCtx, backend.OpGELU, nil, h); err != nil {
 		return nil, err
 	}
 	if h, err = exec1(layerCtx, backend.OpMatMul, nil, h, b.W2); err != nil {

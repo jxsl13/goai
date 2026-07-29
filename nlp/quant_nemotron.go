@@ -173,7 +173,7 @@ func (m *QuantNemotron) Forward(ctx *backend.Context, tokens []int) (*tensor.Ten
 		if k, err = partialRoPE(ctx, k, kv, rot, backend.RoPEAttrs{Base: cfg.RopeBase}); err != nil {
 			return nil, err
 		}
-		a, err := exec1(ctx, backend.OpMHA, attn, q, k, v)
+		a, err := exec3(ctx, backend.OpMHA, attn, q, k, v)
 		if err != nil {
 			return nil, err
 		}
@@ -211,7 +211,7 @@ func (m *QuantNemotron) mlp(ctx *backend.Context, b *QuantNemotronBlock, xn *ten
 	if err != nil {
 		return nil, err
 	}
-	r, err := exec1(ctx, backend.OpReLU, nil, u)
+	r, err := exec1a(ctx, backend.OpReLU, nil, u)
 	if err != nil {
 		return nil, err
 	}

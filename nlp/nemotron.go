@@ -193,7 +193,7 @@ func (b *NemotronBlock) mlp(ctx *backend.Context, xn *tensor.Tensor) (*tensor.Te
 	if err != nil {
 		return nil, err
 	}
-	r, err := exec1(ctx, backend.OpReLU, nil, u)
+	r, err := exec1a(ctx, backend.OpReLU, nil, u)
 	if err != nil {
 		return nil, err
 	}
@@ -235,7 +235,7 @@ func (m *Nemotron) attention(ctx *backend.Context, b *NemotronBlock, xn *tensor.
 	if capture != nil {
 		capture(k, v)
 	}
-	a, err := exec1(ctx, backend.OpMHA, attn, q, k, v)
+	a, err := exec3(ctx, backend.OpMHA, attn, q, k, v)
 	if err != nil {
 		return nil, err
 	}

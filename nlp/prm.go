@@ -93,7 +93,7 @@ func (m *ProcessRewardModel) StepScores(ctx *backend.Context, tokens, stepEnds [
 	if err != nil {
 		return nil, err
 	}
-	s, err := exec1(ctx, backend.OpSigmoid, nil, z)
+	s, err := exec1a(ctx, backend.OpSigmoid, nil, z)
 	if err != nil {
 		return nil, err
 	}
@@ -165,7 +165,7 @@ func (m *OutcomeRewardModel) Score(ctx *backend.Context, tokens []int) (float64,
 	if err != nil {
 		return 0, err
 	}
-	s, err := exec1(ctx, backend.OpSigmoid, nil, z)
+	s, err := exec1a(ctx, backend.OpSigmoid, nil, z)
 	if err != nil {
 		return 0, err
 	}
@@ -293,15 +293,15 @@ func rewardBCE(ctx *backend.Context, logits *tensor.Tensor, labels []float64) (*
 		pos.SetF64(y, k, 0)
 		neg.SetF64(1-y, k, 0)
 	}
-	negZ, err := exec1(ctx, backend.OpNeg, nil, logits)
+	negZ, err := exec1a(ctx, backend.OpNeg, nil, logits)
 	if err != nil {
 		return nil, err
 	}
-	spNegZ, err := exec1(ctx, backend.OpSoftplus, nil, negZ) // −log σ(z)
+	spNegZ, err := exec1a(ctx, backend.OpSoftplus, nil, negZ) // −log σ(z)
 	if err != nil {
 		return nil, err
 	}
-	spZ, err := exec1(ctx, backend.OpSoftplus, nil, logits) // −log(1−σ(z))
+	spZ, err := exec1a(ctx, backend.OpSoftplus, nil, logits) // −log(1−σ(z))
 	if err != nil {
 		return nil, err
 	}
@@ -317,5 +317,5 @@ func rewardBCE(ctx *backend.Context, logits *tensor.Tensor, labels []float64) (*
 	if err != nil {
 		return nil, err
 	}
-	return exec1(ctx, backend.OpMean, nil, sum)
+	return exec1a(ctx, backend.OpMean, nil, sum)
 }

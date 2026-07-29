@@ -168,7 +168,7 @@ func (m *QuantMPT) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor, 
 		if err != nil {
 			return nil, err
 		}
-		a, err := exec1(ctx, backend.OpMHA, attn, q, k, v)
+		a, err := exec3(ctx, backend.OpMHA, attn, q, k, v)
 		if err != nil {
 			return nil, err
 		}
@@ -204,7 +204,7 @@ func (m *QuantMPT) mlp(ctx *backend.Context, b *QuantMPTBlock, fn *tensor.Tensor
 	if err != nil {
 		return nil, err
 	}
-	if h, err = exec1(ctx, backend.OpGELU, nil, h); err != nil {
+	if h, err = exec1a(ctx, backend.OpGELU, nil, h); err != nil {
 		return nil, err
 	}
 	return b.Wdown.Forward(ctx, h)
@@ -266,7 +266,7 @@ func (m *QuantMPT) DecodeStep(ctx *backend.Context, cache *MPTCache, token, pos 
 		}
 		kNew, vNew := cache.bufs.appendKV(cache.K, cache.V, l, k, v)
 		cache.K[l], cache.V[l] = kNew, vNew
-		a, err := exec1(ctx, backend.OpMHA, attn, q, kNew, vNew)
+		a, err := exec3(ctx, backend.OpMHA, attn, q, kNew, vNew)
 		if err != nil {
 			return nil, err
 		}

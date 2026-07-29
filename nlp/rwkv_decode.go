@@ -154,7 +154,7 @@ func rwkvBlockPrefill(ctx *backend.Context, b *nn.RWKVBlock, st *nn.RWKVState, x
 	if err != nil {
 		return nil, err
 	}
-	if r, err = exec1(ctx, backend.OpSigmoid, nil, r); err != nil {
+	if r, err = exec1a(ctx, backend.OpSigmoid, nil, r); err != nil {
 		return nil, err
 	}
 	k, err := proj(b.MuK, b.Wk)
@@ -218,7 +218,7 @@ func rwkvBlockPrefill(ctx *backend.Context, b *nn.RWKVBlock, st *nn.RWKVState, x
 	if err != nil {
 		return nil, err
 	}
-	if cr, err = exec1(ctx, backend.OpSigmoid, nil, cr); err != nil {
+	if cr, err = exec1a(ctx, backend.OpSigmoid, nil, cr); err != nil {
 		return nil, err
 	}
 	if cm, err = rwkvMix(ctx, yn, shift, b.CMuK); err != nil {
@@ -228,7 +228,7 @@ func rwkvBlockPrefill(ctx *backend.Context, b *nn.RWKVBlock, st *nn.RWKVState, x
 	if err != nil {
 		return nil, err
 	}
-	if ck, err = exec1(ctx, backend.OpReLU, nil, ck); err != nil {
+	if ck, err = exec1a(ctx, backend.OpReLU, nil, ck); err != nil {
 		return nil, err
 	}
 	if ck, err = exec2(ctx, backend.OpMul, nil, ck, ck); err != nil { // squared ReLU

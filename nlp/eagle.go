@@ -155,7 +155,7 @@ func (e *EagleHead) Predict(ctx *backend.Context, feats, embs *tensor.Tensor) (*
 	if h, err = exec1(ctx, backend.OpAddBias, nil, h, e.B1); err != nil {
 		return nil, err
 	}
-	if h, err = exec1(ctx, backend.OpGELU, nil, h); err != nil {
+	if h, err = exec1a(ctx, backend.OpGELU, nil, h); err != nil {
 		return nil, err
 	}
 	if h, err = exec1(ctx, backend.OpMatMul, nil, h, e.W2); err != nil {
@@ -268,7 +268,7 @@ func eagleSmoothL1(ctx *backend.Context, pred, target *tensor.Tensor) (*tensor.T
 	if err != nil {
 		return nil, err
 	}
-	a, err := exec1(ctx, backend.OpAbs, nil, d)
+	a, err := exec1a(ctx, backend.OpAbs, nil, d)
 	if err != nil {
 		return nil, err
 	}
@@ -282,7 +282,7 @@ func eagleSmoothL1(ctx *backend.Context, pred, target *tensor.Tensor) (*tensor.T
 	if err != nil {
 		return nil, err
 	}
-	excess, err = exec1(ctx, backend.OpReLU, nil, excess)
+	excess, err = exec1a(ctx, backend.OpReLU, nil, excess)
 	if err != nil {
 		return nil, err
 	}
@@ -294,7 +294,7 @@ func eagleSmoothL1(ctx *backend.Context, pred, target *tensor.Tensor) (*tensor.T
 	if err != nil {
 		return nil, err
 	}
-	mean, err := exec1(ctx, backend.OpMean, nil, smooth)
+	mean, err := exec1a(ctx, backend.OpMean, nil, smooth)
 	if err != nil {
 		return nil, err
 	}

@@ -231,7 +231,7 @@ func (m *Phi) attention(ctx *backend.Context, b *PhiBlock, xn *tensor.Tensor, at
 	if capture != nil {
 		capture(k, v)
 	}
-	a, err := exec1(ctx, backend.OpMHA, attn, q, k, v)
+	a, err := exec3(ctx, backend.OpMHA, attn, q, k, v)
 	if err != nil {
 		return nil, err
 	}
@@ -247,7 +247,7 @@ func (m *Phi) mlp(ctx *backend.Context, b *PhiBlock, xn *tensor.Tensor) (*tensor
 	if err != nil {
 		return nil, err
 	}
-	if h, err = exec1(ctx, backend.OpGELU, nil, h); err != nil {
+	if h, err = exec1a(ctx, backend.OpGELU, nil, h); err != nil {
 		return nil, err
 	}
 	return projBias(ctx, h, b.Wfc2, b.Bfc2)

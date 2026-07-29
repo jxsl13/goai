@@ -226,7 +226,7 @@ func (m *QuantOLMo2) attention(ctx *backend.Context, b *QuantOLMo2Block, x *tens
 	if k, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: kv}, k); err != nil {
 		return nil, err
 	}
-	a, err := exec1(ctx, backend.OpMHA, attn, q, k, v)
+	a, err := exec3(ctx, backend.OpMHA, attn, q, k, v)
 	if err != nil {
 		return nil, err
 	}

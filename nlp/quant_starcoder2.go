@@ -187,7 +187,7 @@ func (m *QuantStarCoder2) Forward(ctx *backend.Context, tokens []int) (*tensor.T
 		if k, err = exec1a(ctx, backend.OpRoPE, kRoPE, k); err != nil {
 			return nil, err
 		}
-		a, err := exec1(ctx, backend.OpMHA, attn, q, k, v)
+		a, err := exec3(ctx, backend.OpMHA, attn, q, k, v)
 		if err != nil {
 			return nil, err
 		}
@@ -225,7 +225,7 @@ func (m *QuantStarCoder2) mlp(ctx *backend.Context, b *QuantStarCoder2Block, xn 
 	if err != nil {
 		return nil, err
 	}
-	if h, err = exec1(ctx, backend.OpGELU, nil, h); err != nil {
+	if h, err = exec1a(ctx, backend.OpGELU, nil, h); err != nil {
 		return nil, err
 	}
 	return quantProjBias(ctx, h, b.Wproj, b.Bproj)

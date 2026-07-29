@@ -153,7 +153,7 @@ func (d *T5Decoder) Decode(ctx *backend.Context, encoderOut *tensor.Tensor, toke
 			if err != nil {
 				return nil, err
 			}
-			if g, err = exec1(ctx, backend.OpGELU, nil, g); err != nil {
+			if g, err = exec1a(ctx, backend.OpGELU, nil, g); err != nil {
 				return nil, err
 			}
 			u, err := exec1(ctx, backend.OpMatMul, nil, h, b.Wi1)
@@ -167,7 +167,7 @@ func (d *T5Decoder) Decode(ctx *backend.Context, encoderOut *tensor.Tensor, toke
 			if ff, err = exec1(ctx, backend.OpMatMul, nil, h, b.Wi0); err != nil {
 				return nil, err
 			}
-			if ff, err = exec1(ctx, backend.OpReLU, nil, ff); err != nil {
+			if ff, err = exec1a(ctx, backend.OpReLU, nil, ff); err != nil {
 				return nil, err
 			}
 		}
@@ -547,7 +547,7 @@ func (d *T5Decoder) DecodeStep(ctx *backend.Context, cache *T5DecoderCache, enco
 			if err != nil {
 				return nil, err
 			}
-			if g, err = exec1(ctx, backend.OpGELU, nil, g); err != nil {
+			if g, err = exec1a(ctx, backend.OpGELU, nil, g); err != nil {
 				return nil, err
 			}
 			u, err := exec1(ctx, backend.OpMatMul, nil, h, b.Wi1)
@@ -561,7 +561,7 @@ func (d *T5Decoder) DecodeStep(ctx *backend.Context, cache *T5DecoderCache, enco
 			if ff, err = exec1(ctx, backend.OpMatMul, nil, h, b.Wi0); err != nil {
 				return nil, err
 			}
-			if ff, err = exec1(ctx, backend.OpReLU, nil, ff); err != nil {
+			if ff, err = exec1a(ctx, backend.OpReLU, nil, ff); err != nil {
 				return nil, err
 			}
 		}

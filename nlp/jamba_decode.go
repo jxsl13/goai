@@ -151,7 +151,7 @@ func jambaMixerStep(ctx *backend.Context, jm *JambaMixer, ls *MambaLayerState, u
 	if err != nil {
 		return nil, err
 	}
-	delta, err := exec1(ctx, backend.OpSoftplus, nil, dtPre)
+	delta, err := exec1a(ctx, backend.OpSoftplus, nil, dtPre)
 	if err != nil {
 		return nil, err
 	}
@@ -192,7 +192,7 @@ func jambaMixerStep(ctx *backend.Context, jm *JambaMixer, ls *MambaLayerState, u
 	}
 
 	// Gate y ⊙ SiLU(z), then down-project.
-	gate, err := exec1(ctx, backend.OpSiLU, nil, z)
+	gate, err := exec1a(ctx, backend.OpSiLU, nil, z)
 	if err != nil {
 		return nil, err
 	}
@@ -233,7 +233,7 @@ func jambaMixerPrefill(ctx *backend.Context, jm *JambaMixer, ls *MambaLayerState
 	if err != nil {
 		return nil, err
 	}
-	if xc, err = exec1(ctx, backend.OpSiLU, nil, xc); err != nil {
+	if xc, err = exec1a(ctx, backend.OpSiLU, nil, xc); err != nil {
 		return nil, err
 	}
 	// Input-dependent Δ, B, C — each RMSNormed before use (Jamba's addition),
@@ -249,7 +249,7 @@ func jambaMixerPrefill(ctx *backend.Context, jm *JambaMixer, ls *MambaLayerState
 	if err != nil {
 		return nil, err
 	}
-	delta, err := exec1(ctx, backend.OpSoftplus, nil, dtPre)
+	delta, err := exec1a(ctx, backend.OpSoftplus, nil, dtPre)
 	if err != nil {
 		return nil, err
 	}
@@ -300,7 +300,7 @@ func jambaMixerPrefill(ctx *backend.Context, jm *JambaMixer, ls *MambaLayerState
 	}
 
 	// Gate y ⊙ SiLU(z), then down-project — batched over all rows.
-	gate, err := exec1(ctx, backend.OpSiLU, nil, z)
+	gate, err := exec1a(ctx, backend.OpSiLU, nil, z)
 	if err != nil {
 		return nil, err
 	}

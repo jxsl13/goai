@@ -208,7 +208,7 @@ func (m *QuantGPTNeoX) attention(ctx *backend.Context, b *QuantGPTNeoXBlock, an 
 	if k, err = partialRoPE(ctx, k, kv, rot, rope); err != nil {
 		return nil, err
 	}
-	a, err := exec1(ctx, backend.OpMHA, attn, q, k, v)
+	a, err := exec3(ctx, backend.OpMHA, attn, q, k, v)
 	if err != nil {
 		return nil, err
 	}
@@ -223,7 +223,7 @@ func (m *QuantGPTNeoX) mlp(ctx *backend.Context, b *QuantGPTNeoXBlock, fn *tenso
 	if err != nil {
 		return nil, err
 	}
-	if h, err = exec1(ctx, backend.OpGELU, nil, h); err != nil {
+	if h, err = exec1a(ctx, backend.OpGELU, nil, h); err != nil {
 		return nil, err
 	}
 	return quantProjBias(ctx, h, b.Wout, b.Bout)

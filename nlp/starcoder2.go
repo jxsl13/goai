@@ -190,7 +190,7 @@ func (m *StarCoder2) attention(ctx *backend.Context, b *StarCoder2Block, xn *ten
 	if capture != nil {
 		capture(k, v)
 	}
-	a, err := exec1(ctx, backend.OpMHA, attn, q, k, v)
+	a, err := exec3(ctx, backend.OpMHA, attn, q, k, v)
 	if err != nil {
 		return nil, err
 	}
@@ -206,7 +206,7 @@ func (m *StarCoder2) mlp(ctx *backend.Context, b *StarCoder2Block, fn *tensor.Te
 	if err != nil {
 		return nil, err
 	}
-	if h, err = exec1(ctx, backend.OpGELU, nil, h); err != nil {
+	if h, err = exec1a(ctx, backend.OpGELU, nil, h); err != nil {
 		return nil, err
 	}
 	return projBias(ctx, h, b.Wproj, b.Bproj)

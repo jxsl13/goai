@@ -283,7 +283,7 @@ func (b *QuantMambaMixer) forward(ctx *backend.Context, u *tensor.Tensor) (*tens
 	if err != nil {
 		return nil, err
 	}
-	if xc, err = exec1(ctx, backend.OpSiLU, nil, xc); err != nil {
+	if xc, err = exec1a(ctx, backend.OpSiLU, nil, xc); err != nil {
 		return nil, err
 	}
 	// input-dependent Δ, B, C
@@ -295,7 +295,7 @@ func (b *QuantMambaMixer) forward(ctx *backend.Context, u *tensor.Tensor) (*tens
 	if err != nil {
 		return nil, err
 	}
-	delta, err := exec1(ctx, backend.OpSoftplus, nil, dtPre)
+	delta, err := exec1a(ctx, backend.OpSoftplus, nil, dtPre)
 	if err != nil {
 		return nil, err
 	}
@@ -313,7 +313,7 @@ func (b *QuantMambaMixer) forward(ctx *backend.Context, u *tensor.Tensor) (*tens
 		return nil, err
 	}
 	// gate y ⊙ SiLU(z), then down-project
-	gate, err := exec1(ctx, backend.OpSiLU, nil, z)
+	gate, err := exec1a(ctx, backend.OpSiLU, nil, z)
 	if err != nil {
 		return nil, err
 	}
@@ -407,7 +407,7 @@ func (b *QuantMambaMixer) step(ctx *backend.Context, ls *MambaLayerState, u *ten
 	if err != nil {
 		return nil, err
 	}
-	delta, err := exec1(ctx, backend.OpSoftplus, nil, dtPre)
+	delta, err := exec1a(ctx, backend.OpSoftplus, nil, dtPre)
 	if err != nil {
 		return nil, err
 	}
@@ -442,7 +442,7 @@ func (b *QuantMambaMixer) step(ctx *backend.Context, ls *MambaLayerState, u *ten
 	}
 
 	// Gate y ⊙ SiLU(z), then down-project.
-	gate, err := exec1(ctx, backend.OpSiLU, nil, z)
+	gate, err := exec1a(ctx, backend.OpSiLU, nil, z)
 	if err != nil {
 		return nil, err
 	}

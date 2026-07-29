@@ -103,7 +103,7 @@ func (m *JambaMixer) Forward(ctx *backend.Context, u *tensor.Tensor) (*tensor.Te
 	if err != nil {
 		return nil, err
 	}
-	if xc, err = exec1(ctx, backend.OpSiLU, nil, xc); err != nil {
+	if xc, err = exec1a(ctx, backend.OpSiLU, nil, xc); err != nil {
 		return nil, err
 	}
 	// input-dependent Δ, B, C — each RMSNormed before use (Jamba's addition)
@@ -118,7 +118,7 @@ func (m *JambaMixer) Forward(ctx *backend.Context, u *tensor.Tensor) (*tensor.Te
 	if err != nil {
 		return nil, err
 	}
-	delta, err := exec1(ctx, backend.OpSoftplus, nil, dtPre)
+	delta, err := exec1a(ctx, backend.OpSoftplus, nil, dtPre)
 	if err != nil {
 		return nil, err
 	}
@@ -141,7 +141,7 @@ func (m *JambaMixer) Forward(ctx *backend.Context, u *tensor.Tensor) (*tensor.Te
 	if err != nil {
 		return nil, err
 	}
-	A, err := exec1(ctx, backend.OpNeg, nil, expA)
+	A, err := exec1a(ctx, backend.OpNeg, nil, expA)
 	if err != nil {
 		return nil, err
 	}
@@ -150,7 +150,7 @@ func (m *JambaMixer) Forward(ctx *backend.Context, u *tensor.Tensor) (*tensor.Te
 	if err != nil {
 		return nil, err
 	}
-	gate, err := exec1(ctx, backend.OpSiLU, nil, z)
+	gate, err := exec1a(ctx, backend.OpSiLU, nil, z)
 	if err != nil {
 		return nil, err
 	}
@@ -189,7 +189,7 @@ func (m *JambaMoE) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tens
 	if err != nil {
 		return nil, err
 	}
-	scores, err := exec1(ctx, backend.OpSoftmax, nil, logits) // softmax over all E experts
+	scores, err := exec1a(ctx, backend.OpSoftmax, nil, logits) // softmax over all E experts
 	if err != nil {
 		return nil, err
 	}
@@ -287,7 +287,7 @@ func (m *Jamba) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor, err
 			if err != nil {
 				return nil, err
 			}
-			a, err := exec1(ctx, backend.OpMHA, attn, q, k, v)
+			a, err := exec3(ctx, backend.OpMHA, attn, q, k, v)
 			if err != nil {
 				return nil, err
 			}

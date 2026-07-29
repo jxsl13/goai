@@ -213,7 +213,7 @@ func (m *StableLM) attention(ctx *backend.Context, b *StableLMBlock, xn *tensor.
 	if capture != nil {
 		capture(k, v)
 	}
-	a, err := exec1(ctx, backend.OpMHA, attn, q, k, v)
+	a, err := exec3(ctx, backend.OpMHA, attn, q, k, v)
 	if err != nil {
 		return nil, err
 	}

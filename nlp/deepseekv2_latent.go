@@ -172,7 +172,7 @@ func (m *DeepSeekV2) DecodeStepLatent(ctx *backend.Context, cache *DeepSeekV2Lat
 		if err != nil {
 			return nil, err
 		}
-		kPeRot, err := exec1(ctx, backend.OpRoPE, rope, kPe) // [1, QKRope] at position pos
+		kPeRot, err := exec1a(ctx, backend.OpRoPE, rope, kPe) // [1, QKRope] at position pos
 		if err != nil {
 			return nil, err
 		}
@@ -183,11 +183,11 @@ func (m *DeepSeekV2) DecodeStepLatent(ctx *backend.Context, cache *DeepSeekV2Lat
 
 		// Transposed caches for the score matmuls, built ONCE per block per step (O(tokens),
 		// not per head).
-		ckvT, err := exec1(ctx, backend.OpTranspose, nil, ckvAll) // [KVLoraRank, tokens]
+		ckvT, err := exec1a(ctx, backend.OpTranspose, nil, ckvAll) // [KVLoraRank, tokens]
 		if err != nil {
 			return nil, err
 		}
-		kpeT, err := exec1(ctx, backend.OpTranspose, nil, kpeAll) // [QKRope, tokens]
+		kpeT, err := exec1a(ctx, backend.OpTranspose, nil, kpeAll) // [QKRope, tokens]
 		if err != nil {
 			return nil, err
 		}
@@ -206,7 +206,7 @@ func (m *DeepSeekV2) DecodeStepLatent(ctx *backend.Context, cache *DeepSeekV2Lat
 			if err != nil {
 				return nil, err
 			}
-			qPeRot, err := exec1(ctx, backend.OpRoPE, rope, qPe)
+			qPeRot, err := exec1a(ctx, backend.OpRoPE, rope, qPe)
 			if err != nil {
 				return nil, err
 			}
@@ -234,7 +234,7 @@ func (m *DeepSeekV2) DecodeStepLatent(ctx *backend.Context, cache *DeepSeekV2Lat
 				return nil, err
 			}
 			// Single query attends all cached positions → no causal mask.
-			probs, err := exec1(ctx, backend.OpSoftmax, nil, scores)
+			probs, err := exec1a(ctx, backend.OpSoftmax, nil, scores)
 			if err != nil {
 				return nil, err
 			}
@@ -382,7 +382,7 @@ func (m *DeepSeekV2) PrefillLatent(ctx *backend.Context, cache *DeepSeekV2Latent
 		}
 		// Full-sequence decoupled RoPE rotates row p for position p — exactly
 		// DecodeStepLatent's PosOffset=p on the shared one-head k_pe.
-		kPeRot, err := exec1(ctx, backend.OpRoPE, rope, kPe) // [seq, QKRope]
+		kPeRot, err := exec1a(ctx, backend.OpRoPE, rope, kPe) // [seq, QKRope]
 		if err != nil {
 			return nil, err
 		}
@@ -393,11 +393,11 @@ func (m *DeepSeekV2) PrefillLatent(ctx *backend.Context, cache *DeepSeekV2Latent
 		cache.CKV[l], cache.KPE[l] = ckvAll, kpeAll
 
 		// Transposed caches for the score matmuls, built ONCE per block (not per head).
-		ckvT, err := exec1(ctx, backend.OpTranspose, nil, ckvAll) // [KVLoraRank, seq]
+		ckvT, err := exec1a(ctx, backend.OpTranspose, nil, ckvAll) // [KVLoraRank, seq]
 		if err != nil {
 			return nil, err
 		}
-		kpeT, err := exec1(ctx, backend.OpTranspose, nil, kpeAll) // [QKRope, seq]
+		kpeT, err := exec1a(ctx, backend.OpTranspose, nil, kpeAll) // [QKRope, seq]
 		if err != nil {
 			return nil, err
 		}
@@ -416,7 +416,7 @@ func (m *DeepSeekV2) PrefillLatent(ctx *backend.Context, cache *DeepSeekV2Latent
 			if err != nil {
 				return nil, err
 			}
-			qPeRot, err := exec1(ctx, backend.OpRoPE, rope, qPe)
+			qPeRot, err := exec1a(ctx, backend.OpRoPE, rope, qPe)
 			if err != nil {
 				return nil, err
 			}
@@ -446,7 +446,7 @@ func (m *DeepSeekV2) PrefillLatent(ctx *backend.Context, cache *DeepSeekV2Latent
 			if scores, err = exec2(ctx, backend.OpAdd, nil, scores, mask); err != nil {
 				return nil, err
 			}
-			probs, err := exec1(ctx, backend.OpSoftmax, nil, scores)
+			probs, err := exec1a(ctx, backend.OpSoftmax, nil, scores)
 			if err != nil {
 				return nil, err
 			}

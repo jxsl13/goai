@@ -382,7 +382,7 @@ func (m *Llama) forwardBlock(ctx *backend.Context, x *tensor.Tensor, layer int, 
 	if capture != nil {
 		capture(layer, k, v)
 	}
-	a, err := exec1(layerCtx, backend.OpMHA, attn, q, k, v)
+	a, err := exec3(layerCtx, backend.OpMHA, attn, q, k, v)
 	if err != nil {
 		return nil, err
 	}

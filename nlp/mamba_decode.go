@@ -173,7 +173,7 @@ func mixerStep(ctx *backend.Context, mb *nn.MambaBlock, ls *MambaLayerState, u *
 	if err != nil {
 		return nil, err
 	}
-	delta, err := exec1(ctx, backend.OpSoftplus, nil, dtPre)
+	delta, err := exec1a(ctx, backend.OpSoftplus, nil, dtPre)
 	if err != nil {
 		return nil, err
 	}
@@ -211,7 +211,7 @@ func mixerStep(ctx *backend.Context, mb *nn.MambaBlock, ls *MambaLayerState, u *
 	}
 
 	// Gate y ⊙ SiLU(z), then down-project.
-	gate, err := exec1(ctx, backend.OpSiLU, nil, z)
+	gate, err := exec1a(ctx, backend.OpSiLU, nil, z)
 	if err != nil {
 		return nil, err
 	}
@@ -256,7 +256,7 @@ func mixerPrefill(ctx *backend.Context, mb *nn.MambaBlock, ls *MambaLayerState, 
 	if err != nil {
 		return nil, err
 	}
-	if xc, err = exec1(ctx, backend.OpSiLU, nil, xc); err != nil {
+	if xc, err = exec1a(ctx, backend.OpSiLU, nil, xc); err != nil {
 		return nil, err
 	}
 	// Input-dependent Δ, B, C for ALL tokens in one dispatch each.
@@ -268,7 +268,7 @@ func mixerPrefill(ctx *backend.Context, mb *nn.MambaBlock, ls *MambaLayerState, 
 	if err != nil {
 		return nil, err
 	}
-	delta, err := exec1(ctx, backend.OpSoftplus, nil, dtPre)
+	delta, err := exec1a(ctx, backend.OpSoftplus, nil, dtPre)
 	if err != nil {
 		return nil, err
 	}
@@ -347,7 +347,7 @@ func mixerPrefill(ctx *backend.Context, mb *nn.MambaBlock, ls *MambaLayerState, 
 	}
 
 	// Gate y ⊙ SiLU(z), then down-project — batched over all rows.
-	gate, err := exec1(ctx, backend.OpSiLU, nil, z)
+	gate, err := exec1a(ctx, backend.OpSiLU, nil, z)
 	if err != nil {
 		return nil, err
 	}

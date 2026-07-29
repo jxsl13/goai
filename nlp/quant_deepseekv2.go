@@ -121,7 +121,7 @@ func (m *QuantDeepSeekMoE) Forward(ctx *backend.Context, x *tensor.Tensor) (*ten
 	if err != nil {
 		return nil, err
 	}
-	scores, err := exec1(ctx, backend.OpSoftmax, nil, logits) // softmax over all E experts
+	scores, err := exec1a(ctx, backend.OpSoftmax, nil, logits) // softmax over all E experts
 	if err != nil {
 		return nil, err
 	}
@@ -662,7 +662,7 @@ func (m *QuantDeepSeekV2) mlaLatents(ctx *backend.Context, b *QuantDeepSeekV2Blo
 		return nil, nil, nil, err
 	}
 	rope := backend.RoPEAttrs{Base: cfg.RopeBase, Heads: 1, PosOffset: pos}
-	if kPeRot, err = exec1(ctx, backend.OpRoPE, rope, kPe); err != nil {
+	if kPeRot, err = exec1a(ctx, backend.OpRoPE, rope, kPe); err != nil {
 		return nil, nil, nil, err
 	}
 	return q, cKV, kPeRot, nil
@@ -707,11 +707,11 @@ func (m *QuantDeepSeekV2) attnAbsorbed(ctx *backend.Context, l int, b *QuantDeep
 		cache.CKV[l], cache.KPE[l] = ckvAll, kpeAll
 	}
 	// Transposed caches for the score matmuls, built once per block (not per head).
-	ckvT, err := exec1(ctx, backend.OpTranspose, nil, ckvAll)
+	ckvT, err := exec1a(ctx, backend.OpTranspose, nil, ckvAll)
 	if err != nil {
 		return nil, err
 	}
-	kpeT, err := exec1(ctx, backend.OpTranspose, nil, kpeAll)
+	kpeT, err := exec1a(ctx, backend.OpTranspose, nil, kpeAll)
 	if err != nil {
 		return nil, err
 	}
@@ -731,7 +731,7 @@ func (m *QuantDeepSeekV2) attnAbsorbed(ctx *backend.Context, l int, b *QuantDeep
 		if err != nil {
 			return nil, err
 		}
-		qPeRot, err := exec1(ctx, backend.OpRoPE, rope, qPe)
+		qPeRot, err := exec1a(ctx, backend.OpRoPE, rope, qPe)
 		if err != nil {
 			return nil, err
 		}
@@ -761,7 +761,7 @@ func (m *QuantDeepSeekV2) attnAbsorbed(ctx *backend.Context, l int, b *QuantDeep
 				return nil, err
 			}
 		}
-		probs, err := exec1(ctx, backend.OpSoftmax, nil, scores)
+		probs, err := exec1a(ctx, backend.OpSoftmax, nil, scores)
 		if err != nil {
 			return nil, err
 		}
@@ -829,7 +829,7 @@ func (m *QuantDeepSeekV2) attnReconstructed(ctx *backend.Context, l int, b *Quan
 		if err != nil {
 			return nil, err
 		}
-		qPeRot, err := exec1(ctx, backend.OpRoPE, rope, qPe)
+		qPeRot, err := exec1a(ctx, backend.OpRoPE, rope, qPe)
 		if err != nil {
 			return nil, err
 		}
@@ -858,7 +858,7 @@ func (m *QuantDeepSeekV2) attnReconstructed(ctx *backend.Context, l int, b *Quan
 			cache.K[l][h], cache.V[l][h] = kCache, vCache
 			keyH, valueH = kCache, vCache
 		}
-		keyHT, err := exec1(ctx, backend.OpTranspose, nil, keyH)
+		keyHT, err := exec1a(ctx, backend.OpTranspose, nil, keyH)
 		if err != nil {
 			return nil, err
 		}
@@ -874,7 +874,7 @@ func (m *QuantDeepSeekV2) attnReconstructed(ctx *backend.Context, l int, b *Quan
 				return nil, err
 			}
 		}
-		probs, err := exec1(ctx, backend.OpSoftmax, nil, scores)
+		probs, err := exec1a(ctx, backend.OpSoftmax, nil, scores)
 		if err != nil {
 			return nil, err
 		}

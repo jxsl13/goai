@@ -170,7 +170,7 @@ func (m *QuantLlama) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor
 		if k, err = exec1a(ctx, backend.OpRoPE, kRoPE, k); err != nil {
 			return nil, err
 		}
-		a, err := exec1(ctx, backend.OpMHA, attn, q, k, v)
+		a, err := exec3(ctx, backend.OpMHA, attn, q, k, v)
 		if err != nil {
 			return nil, err
 		}

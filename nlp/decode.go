@@ -217,7 +217,7 @@ func (g *GPT) DecodeStep(ctx *backend.Context, cache *KVCache, token, pos int) (
 		if h, err = exec1(ctx, backend.OpAddBias, nil, h, b.B1); err != nil {
 			return nil, err
 		}
-		if h, err = exec1(ctx, backend.OpGELU, nil, h); err != nil {
+		if h, err = exec1a(ctx, backend.OpGELU, nil, h); err != nil {
 			return nil, err
 		}
 		if h, err = exec1(ctx, backend.OpMatMul, nil, h, b.W2); err != nil {

@@ -122,7 +122,7 @@ func (m *T5) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor, error)
 			if err != nil {
 				return nil, err
 			}
-			if g, err = exec1(ctx, backend.OpGELU, nil, g); err != nil {
+			if g, err = exec1a(ctx, backend.OpGELU, nil, g); err != nil {
 				return nil, err
 			}
 			u, err := exec1(ctx, backend.OpMatMul, nil, h, b.Wi1)
@@ -136,7 +136,7 @@ func (m *T5) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor, error)
 			if ff, err = exec1(ctx, backend.OpMatMul, nil, h, b.Wi0); err != nil {
 				return nil, err
 			}
-			if ff, err = exec1(ctx, backend.OpReLU, nil, ff); err != nil {
+			if ff, err = exec1a(ctx, backend.OpReLU, nil, ff); err != nil {
 				return nil, err
 			}
 		}

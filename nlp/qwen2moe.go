@@ -159,7 +159,7 @@ func (m *Qwen2MoE) forwardCapture(ctx *backend.Context, tokens []int, capture fu
 		if capture != nil {
 			capture(l, k, v)
 		}
-		a, err := exec1(ctx, backend.OpMHA, attn, q, k, v)
+		a, err := exec3(ctx, backend.OpMHA, attn, q, k, v)
 		if err != nil {
 			return nil, err
 		}
@@ -221,7 +221,7 @@ func (m *Qwen2MoE) ffn(ctx *backend.Context, b *Qwen2MoeBlock, xf *tensor.Tensor
 	if err != nil {
 		return nil, err
 	}
-	g, err := exec1(ctx, backend.OpSigmoid, nil, gl)
+	g, err := exec1a(ctx, backend.OpSigmoid, nil, gl)
 	if err != nil {
 		return nil, err
 	}
