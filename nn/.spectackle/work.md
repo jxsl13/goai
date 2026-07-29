@@ -369,3 +369,53 @@ cost/benefit was measured, not assumed.
 REMAINING PS4006 in these lanes after the annotations: aqlm (5, k-means accumulations),
 classic/naivebayes (3, no benchmark), classic/models and gmm (2 each), linalg/svd (2). None
 looks dominant; anything here needs a benchmark first.
+
+## T-01KYQCWQ5GF928BSDN480N34B5 Replace WandaPrune's per-column sort with a quickselect; extend the panel transpose to F32
+kind: task
+state: draft
+created: 2026-07-29
+
+GOAL: replace WandaPrune's full per-column sort with a selection, and apply the panel
+transpose to the F32 branch. Both are the measured remainder after the panel change shipped
+1.22x (343ms -> 281ms at 2048x2048x256).
+
+WHY THE SORT IS NOW THE TARGET: after the strided sweeps were fixed, the sort dominates —
+2048 columns of 2048 elements is roughly 46M comparisons through a closure. And the full
+order is not used. The consumer is:
+    for r := 0; r < k; r++ { d[idx[r]] = true }
+which reads only a PREFIX of the sorted permutation, marking the k smallest scores for
+dropping. This is the PS6001 shape (a full sort feeding a bounded prefix).
+
+WHY IT IS SAFE: the comparator is TOTAL — score ascending, ties broken by input index, and
+indices are unique — so the set of k smallest is uniquely determined. Only membership in
+`drop` is ever read; the order within the selected prefix is never observed. A quickselect
+using the same total comparator therefore produces the identical drop SET and identical
+output bits, even though it leaves the prefix in a different internal order.
+
+APPROACH: an in-place nth_element over idx with the existing comparator, partitioning around
+a pivot until the k-th position is settled; then mark idx[0:k]. Expected O(n) against the
+sort's O(n log n): about 4096 comparisons per column against roughly 22500, so a 5x cut in
+comparison work on what is now the dominant term. Median-of-three pivot selection matters
+here — the score columns are not random, they are |w|*||x|| products, and a naive
+first-element pivot degrades on sorted or near-sorted input.
+
+DO NOT reach for a partial sort that still sorts the prefix; the prefix order is not needed
+and sorting it puts back the log factor on the part that matters.
+
+VERIFY:
+- nn/wanda_golden_test.go must stay green unchanged. Its checksums cover both prune paths on
+  shapes where scores REPEAT, which is exactly where a different selection could disagree.
+- Add a case with many tied scores at the k boundary (a column of constant scores, and one
+  where the k-th and k+1-th scores are equal), since that is the only place a total
+  comparator earns its keep.
+- BenchmarkWandaPrune interleaved, min of 3 runs per arm, reporting allocs/B beside ns/op.
+- go test ./nn/ -run TestWanda -race must be clean.
+
+SECOND ITEM, same file: the F32 branch still uses the old per-output column sweep. The panel
+transform is mechanically identical and its bit-identity argument carries over unchanged, but
+it was not applied because there is no F32 benchmark to validate it. Add one mirroring
+BenchmarkWandaPrune with an F32 weight, then apply the panel and measure. If it does not win
+on F32, say so and leave the branch alone.
+
+SCOPE: nn/wanda.go and its tests only. The 2:4 structured path (WandaPruneNM) already got its
+allocation fix and is not part of this.

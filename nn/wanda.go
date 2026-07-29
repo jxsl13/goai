@@ -65,6 +65,11 @@ func WandaScore(w, x *tensor.Tensor) (*tensor.Tensor, error) {
 	return s, nil
 }
 
+// wandaPanel is how many output columns are transposed at once. 128 keeps the score panel
+// and its drop flags (about 2.3MB at cin=2048) inside L2 while amortizing each row-major
+// sweep of the weight matrix over 128 outputs.
+const wandaPanel = 128
+
 // WandaPrune returns a pruned copy of W and its 0/1 keep-mask, zeroing the lowest-Wanda-
 // importance weights to reach the target unstructured sparsity. Following the paper, the
 // COMPARISON GROUP is per-OUTPUT: within each output neuron's incoming connections (each
@@ -72,11 +77,6 @@ func WandaScore(w, x *tensor.Tensor) (*tensor.Tensor, error) {
 // weights are left UNCHANGED (no weight update — the key simplification over SparseGPT).
 // W is [C_in, C_out], X is [tokens, C_in]; sparsity ∈ [0,1]. A pure-f64 post-training
 // compression utility (like the quantizers), not differentiable.
-// wandaPanel is how many output columns are transposed at once. 128 keeps the score panel
-// and its drop flags (about 2.3MB at cin=2048) inside L2 while amortizing each row-major
-// sweep of the weight matrix over 128 outputs.
-const wandaPanel = 128
-
 func WandaPrune(w, x *tensor.Tensor, sparsity float64) (pruned, mask *tensor.Tensor, err error) {
 	if sparsity < 0 || sparsity > 1 {
 		return nil, nil, fmt.Errorf("nn: WandaPrune sparsity=%g out of [0,1]", sparsity)
