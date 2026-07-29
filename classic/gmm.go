@@ -729,13 +729,22 @@ func (m *GaussianMixture) PredictProba(x [][]float64) ([][]float64, error) {
 		}
 	}
 	out := make([][]float64, len(x))
+	diag := m.cfg.covariance == GMMDiag
 	rowBody := func(lr []float64, i int) error {
+		// Fused density: the per-component scalar logGaussian calls collapse into the
+		// unroll-and-jammed batch kernel ScoreSamples already uses — x[j] is loaded once
+		// and reused across 4 components, breaking the single-accumulator FADD/FSUB chain,
+		// so lr[c] is bit-identical to k scalar logGaussian calls (same ascending terms,
+		// same -0.5·(d·log2π+quad)-logDetHalf sequence). Diag is race-free (reads only the
+		// shared per-component params); the full-cov batch's shared m.yScratch4 is safe
+		// here because GMMFull never takes the parallel path (gated to GMMDiag below).
+		if diag {
+			m.logGaussianDiagBatch(x[i], lr)
+		} else {
+			m.logGaussianFullBatch(x[i], lr)
+		}
 		for c := range k {
-			ld, err := m.logGaussian(x[i], c)
-			if err != nil {
-				return err
-			}
-			lr[c] = logW[c] + ld
+			lr[c] = logW[c] + lr[c]
 		}
 		o := make([]float64, k)
 		softmaxLSE(o, lr) // o = normalized responsibilities (one fused SIMD exp pass)
