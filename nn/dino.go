@@ -82,6 +82,43 @@ func DINOCenterUpdate(center, teacherLogits *tensor.Tensor, momentum float64) (*
 	}
 	b, k := teacherLogits.Shape()[0], teacherLogits.Shape()[1]
 	out := tensor.New(center.Dtype(), tensor.Shape{1, k})
+	// Fast paths: the column-mean was computed j-outer/i-inner, so teacherLogits.AtF64
+	// walked the [B,K] logits COLUMN-strided (stride K) with an interface dispatch per
+	// element. Accumulate row-major into a mean buffer instead — same i-ascending sum
+	// per column, so bit-identical, but one contiguous sweep of the logits (cache) and
+	// no dispatch. The AtF64 loop stays as the exotic-dtype fallback.
+	if ts := flatF64(teacherLogits); ts != nil {
+		cs := center.Storage().F64()
+		os := out.Storage().F64()
+		mean := make([]float64, k)
+		for i := 0; i < b; i++ {
+			base := i * k
+			for j := 0; j < k; j++ {
+				mean[j] += ts[base+j]
+			}
+		}
+		for j := 0; j < k; j++ {
+			m := mean[j] / float64(b)
+			os[j] = momentum*cs[j] + (1-momentum)*m
+		}
+		return out, nil
+	}
+	if ts := flatF32(teacherLogits); ts != nil {
+		cs := center.Storage().F32()
+		os := out.Storage().F32()
+		mean := make([]float64, k)
+		for i := 0; i < b; i++ {
+			base := i * k
+			for j := 0; j < k; j++ {
+				mean[j] += float64(ts[base+j])
+			}
+		}
+		for j := 0; j < k; j++ {
+			m := mean[j] / float64(b)
+			os[j] = float32(momentum*float64(cs[j]) + (1-momentum)*m)
+		}
+		return out, nil
+	}
 	for j := range k {
 		var mean float64
 		for i := range b {
