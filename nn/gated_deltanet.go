@@ -57,6 +57,61 @@ func GatedDeltaNet(ctx *backend.Context, q, k, v, alpha, beta *tensor.Tensor) (*
 	if err != nil {
 		return nil, err
 	}
+	dv := v.Shape()[1]
+	// Fused typed-F64 fast path: the per-step recurrence otherwise dispatches ~16 backend
+	// ops AND heap-allocates ~16 tiny tensors per timestep — O(seq) dispatch/alloc overhead
+	// on microscopic [d_v,d_k] work. Run the whole recurrence on raw []float64 with the
+	// state S reused in place (same idiom as ssd.go / retention.go / the already-fused
+	// kda.go). Bit-identical: backend Mul/Sub/Add/MatMul are plain ascending-order f64
+	// loops, reproduced op-for-op here (no reduction reorder, no FMA); the kept
+	// qkL2NormalizeLastAxis makes normalization exact. Non-F64 / non-contiguous falls to
+	// the dispatch loop below.
+	if ctx.Recorder == nil { // fused inference path (no autograd taping); training keeps the dispatch loop for backprop
+		if qs, ks, vs, als, bs := flatF64(qn), flatF64(kn), flatF64(v), flatF64(alpha), flatF64(beta); qs != nil && ks != nil && vs != nil && als != nil && bs != nil {
+			out := tensor.NewOn(ctx.Device(), q.Dtype(), tensor.Shape{seq, dv})
+			os := flatF64(out)
+			S := make([]float64, dv*dk)
+			for t := range seq {
+				at, bt := als[t], bs[t]
+				krow := ks[t*dk : t*dk+dk : t*dk+dk]
+				qrow := qs[t*dk : t*dk+dk : t*dk+dk]
+				vrow := vs[t*dv : t*dv+dv : t*dv+dv]
+				if t == 0 { // S_0 = (β_0 v_0) k_0ᵀ
+					for r := range dv {
+						d := bt * vrow[r]
+						base := r * dk
+						for c := range dk {
+							S[base+c] = d * krow[c]
+						}
+					}
+				} else {
+					for i := range S { // decayed = α_t · S_{t-1}
+						S[i] *= at
+					}
+					for r := range dv {
+						base := r * dk
+						var p float64 // pred_r = Σ_c decayed[r,c]·k[c]
+						for c := range dk {
+							p += S[base+c] * krow[c]
+						}
+						d := bt * (vrow[r] - p) // β_t·e_r
+						for c := range dk {
+							S[base+c] += d * krow[c] // S += (β_t e) kᵀ
+						}
+					}
+				}
+				for r := range dv { // o_t = S_t q_t
+					base := r * dk
+					var o float64
+					for c := range dk {
+						o += S[base+c] * qrow[c]
+					}
+					os[t*dv+r] = o
+				}
+			}
+			return out, nil
+		}
+	}
 	row := func(t *tensor.Tensor, i int) (*tensor.Tensor, error) {
 		return ex(backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: i, End: i + 1}, t)
 	}
