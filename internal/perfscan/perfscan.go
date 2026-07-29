@@ -183,6 +183,7 @@ var checks = []check{
 	{"PS1003", "batch-single-elt", "a batch API called with a single-element slice literal inside a loop", false},
 	{"PS1004", "spread-accessor-in-loop", "a variadic AtF64/SetF64(idx...) spread call in a loop outside PS1001's Numel/Unravel domain (rebuilds the flat offset + bounds-checks each call)", false},
 	{"PS1005", "manual-walk-dispatch", "a per-element AtF64/SetF64 whose 2+ index args are enclosing-loop variables — a manual multi-dim tensor walk via dispatch that PS1001 Numel-loop check misses", false},
+	{"PS1006", "strided-inner-reduction", "a reduction whose INNER loop var is the high-stride (multiplied) part of a flat index ARR[inner*stride + outer] while the OUTER loop var is the contiguous (additive) part — the inner loop strides ARR by `stride` every step (cache-thrashing). Interchange to inner-outer/outer-inner so ARR is walked contiguously; per output element the reduction stays in the same order, so it is bit-identical. Shipped: MLA value-mix (cpu 1.13x / ref 1.27x)", false},
 	// PS2xxx — allocation inside loops
 	{"PS2001", "alloc-in-loop", "a tensor allocation inside a per-element loop", false},
 	{"PS2002", "unsized-builder", "a strings.Builder/bytes.Buffer written in a loop with no .Grow", false},
@@ -1814,6 +1815,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	out = append(out, nestedSubrangeRescanFindings(fset, fn)...)
 	out = append(out, butterflyFindings(fset, fn)...)
 	out = append(out, transposedGramFindings(fset, fn)...)
+	out = append(out, stridedInnerReductionFindings(fset, fn)...)
 	out = append(out, serialDotMatmulFindings(fset, fn)...)
 	out = append(out, scaledSerialDotFindings(fset, fn)...)
 	out = append(out, quadraticCacheAppendFindings(fset, fn)...)
@@ -3290,6 +3292,110 @@ func transposedGramProduct(root ast.Node, kName, iName, jName string) (string, b
 		return !found
 	})
 	return base, found
+}
+
+// stridedInnerReductionFindings flags PS1006 — a nested loop (outer o, inner j) whose inner
+// loop reduces over a flat 1-D access ARR[j*stride + o]: the INNER var j is the high-stride
+// (multiplied) part while the OUTER var o is the contiguous (additive) part. Walking j then
+// strides ARR by `stride` every inner step (cache-thrashing). Interchange the loops (j outer,
+// o inner) so ARR[j*stride+o] is walked contiguously in o. Per output element the reduction
+// stays in the same j-ascending order, so it is bit-identical. Requires a += reduction in the
+// inner body so pure strided reads (which may be intentional gathers) are not flagged. Shipped:
+// MLA value-mix (backend/{cpu,ref}/mla.go, cpu 1.13x / ref 1.27x).
+func stridedInnerReductionFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		oName, obody, ok := loopVarBody(n)
+		if !ok {
+			return true
+		}
+		for _, s := range obody.List {
+			jName, jbody, ok := loopVarBody(s)
+			if !ok || jName == oName {
+				continue
+			}
+			if base, stride, ok := stridedInnerAccess(jbody, jName, oName); ok {
+				out = append(out, finding{
+					pos:      fset.Position(n.Pos()),
+					category: "strided-inner-reduction",
+					msg: fmt.Sprintf("nested %s/%s loop reduces over %s[%s*%s + %s] — the INNER var %s is the"+
+						" high-stride (×%s) part while the OUTER var %s is contiguous, so the inner loop strides"+
+						" %s by %s every step (cache-thrashing). Interchange to %s-outer/%s-inner so %s is walked"+
+						" contiguously in %s — bit-identical (same ascending-%s reduction order per element)."+
+						" Shipped: MLA value-mix. Benchmark the kernel.",
+						oName, jName, base, jName, stride, oName, jName, stride, oName, base, stride,
+						jName, oName, base, oName, jName),
+				})
+				return false
+			}
+		}
+		return true
+	})
+	return out
+}
+
+// stridedInnerAccess searches root (an inner loop body over jName, nested in an outer loop over
+// oName) for a flat access ARR[jName*stride + oName] where jName is the multiplied (strided) part
+// and oName the additive (contiguous) part, gated on a += reduction being present. Returns the
+// array base and the textual stride operand.
+func stridedInnerAccess(root ast.Node, jName, oName string) (string, string, bool) {
+	hasReduce := false
+	ast.Inspect(root, func(n ast.Node) bool {
+		if as, ok := n.(*ast.AssignStmt); ok && as.Tok == token.ADD_ASSIGN {
+			hasReduce = true
+		}
+		return true
+	})
+	if !hasReduce {
+		return "", "", false
+	}
+	var base, stride string
+	var found bool
+	ast.Inspect(root, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		ix, ok := n.(*ast.IndexExpr)
+		if !ok {
+			return true
+		}
+		baseID, ok := ix.X.(*ast.Ident) // flat 1-D base
+		if !ok {
+			return true
+		}
+		add, ok := ix.Index.(*ast.BinaryExpr)
+		if !ok || add.Op != token.ADD {
+			return true
+		}
+		if st, ok := strideOperand(add.X, jName); ok && isPlainIdent(add.Y, oName) {
+			base, stride, found = baseID.Name, st, true
+		} else if st, ok := strideOperand(add.Y, jName); ok && isPlainIdent(add.X, oName) {
+			base, stride, found = baseID.Name, st, true
+		}
+		return !found
+	})
+	return base, stride, found
+}
+
+// strideOperand reports whether e is a multiply `v * K` (or `K * v`) and returns the textual
+// stride K. v must appear as one whole factor (the loop var), K as the other.
+func strideOperand(e ast.Expr, v string) (string, bool) {
+	be, ok := e.(*ast.BinaryExpr)
+	if !ok || be.Op != token.MUL {
+		return "", false
+	}
+	if isPlainIdent(be.X, v) {
+		return exprText(be.Y), true
+	}
+	if isPlainIdent(be.Y, v) {
+		return exprText(be.X), true
+	}
+	return "", false
+}
+
+func isPlainIdent(e ast.Expr, name string) bool {
+	id, ok := e.(*ast.Ident)
+	return ok && id.Name == name
 }
 
 // rowStridedBase matches an access base[k][col] where k is the reduction (row) index and
