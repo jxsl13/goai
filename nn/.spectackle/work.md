@@ -369,3 +369,46 @@ cost/benefit was measured, not assumed.
 REMAINING PS4006 in these lanes after the annotations: aqlm (5, k-means accumulations),
 classic/naivebayes (3, no benchmark), classic/models and gmm (2 each), linalg/svd (2). None
 looks dominant; anything here needs a benchmark first.
+
+## T-01KYQEBM14EPQT7N7PBMHS1C5N Restore DSA's total-order comparator and slices.SortFunc after main's concurrent rewrite
+kind: task
+state: draft
+created: 2026-07-29
+
+Re-apply two DSA selection improvements that were dropped when main's independent rewrite of
+the same code won the merge.
+
+WHAT HAPPENED: main rewrote DSA's top-k selection concurrently, adding a setIdx list of the
+selected indices that this branch did not have. Per the standing rule for this situation,
+main's version was taken whole rather than hand-composed in a hot path. Two things this
+branch had were lost in that trade, and both are worth restoring on top:
+
+1. TOTAL COMPARATOR. main sorts with `sort.Slice(rank, func(a,b) bool { return rank[a].s >
+   rank[b].s })` — score alone. Ties are then left in whatever order the unstable sort
+   produces, and that order decides WHICH keys get attended. DSA's scores are ReLU'd dot
+   products, so they tie at exactly zero routinely; this is ordinary behavior, not a corner
+   case. The fix is to break ties by index ascending, making the selected set deterministic.
+
+2. slices.SortFunc INSTEAD OF sort.Slice. sort.Slice reaches its swap through
+   reflectlite.Swapper, which allocates on every call (PS6009). This sort runs once per
+   query, so seq allocations per forward.
+
+Both were verified on this branch before the merge and are mechanical.
+
+NOTE the interaction: fixing (1) CHANGES which keys are attended on tied scores, so it is not
+bit-identical to main's current behavior — it is a determinism fix, and the old behavior was
+not well-defined. Land it as such, with a test that runs the same input twice and asserts
+identical output, plus one constructed to tie (identical key rows) where the current code can
+disagree between runs.
+
+ALSO ADJACENT, already done and not part of this: main's dsa.go called attendMask with a
+closure, and this branch had changed attendMask to take a precomputed []bool mask (removing a
+closure allocation per call and an indirect call per key). The merge adapted main's two call
+sites to the new signature, and converted the generic arm's map[int]bool to a []bool to
+match. That is in the merge commit; only the two items above remain.
+
+VERIFY: go test ./nn/ -run 'TestDSA|TestDeepseek' -count 1, plus -race. Benchmark the DSA
+forward before and after to confirm the allocation drop; there is currently no DSA benchmark,
+so one is needed first — a finding without a benchmark is neither actionable nor declinable.
+
+SCOPE: nn/dsa.go only.
