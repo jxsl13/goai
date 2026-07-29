@@ -175,7 +175,6 @@ func BenchmarkQ4KBatch_m4_2048x5632(b *testing.B) { benchQ4KBatch(b, 4, 2048, 56
 func BenchmarkQ4KBatch_m2_2048x5632(b *testing.B) { benchQ4KBatch(b, 2, 2048, 5632) }
 func BenchmarkQ4KBatch_m3_2048x5632(b *testing.B) { benchQ4KBatch(b, 3, 2048, 5632) }
 
-
 func BenchmarkGemvQ4K_2048x256(b *testing.B)   { benchQ4K(b, 2048, 256) }   // GQA k/v proj (small-N)
 func BenchmarkGemvQ4K_2048(b *testing.B)       { benchQ4K(b, 2048, 2048) }  // q/o proj
 func BenchmarkGemvQ4K_2048x5632(b *testing.B)  { benchQ4K(b, 2048, 5632) }  // gate/up

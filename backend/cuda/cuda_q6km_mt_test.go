@@ -168,7 +168,7 @@ func benchQ6KM(b *testing.B, m, k, n int) {
 	b.ReportMetric(2*float64(m)*float64(k)*float64(n)/(b.Elapsed().Seconds()/float64(b.N))/1e9, "GFLOP/s")
 }
 
-func BenchmarkQ6KM4_5632x2048(b *testing.B) { benchQ6KM(b, 4, 5632, 2048) }
+func BenchmarkQ6KM4_5632x2048(b *testing.B)  { benchQ6KM(b, 4, 5632, 2048) }
 func BenchmarkQ6KM16_2048(b *testing.B)      { benchQ6KM(b, 16, 2048, 2048) } // v/o proj, M=16
 func BenchmarkQ6KM32_2048(b *testing.B)      { benchQ6KM(b, 32, 2048, 2048) } // v/o proj, M=32
 func BenchmarkQ6KM64_5632x2048(b *testing.B) { benchQ6KM(b, 64, 5632, 2048) } // ffn_down (Q6_K in Q4_K_M), M=64
