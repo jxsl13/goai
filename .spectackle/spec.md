@@ -415,3 +415,6 @@ IF an optimization reads a symmetric matrix transposed to make access contiguous
 
 ## PERF-SCANRULE-EMPTY-001
 IF a new perfscan rule finds no genuine site once its soundness tests are added, THEN the implementer SHALL delete it rather than ship it, and record the negative result so it is not rebuilt (see R-01KYQFAFQVEN3).
+
+## PROC-GODOC-DETACH-001
+IF a new declaration is inserted immediately above an exported function, THEN the implementer SHALL place it above that function's doc-comment block, since inserting between comment and func silently detaches the godoc — caught three times by apicheck in one campaign.
