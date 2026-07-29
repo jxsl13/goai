@@ -214,3 +214,42 @@ VERIFY:
 
 This is amd64/SIMD territory, so it belongs to whoever owns that lane rather than the
 darwin/arm64 perf loop that found it.
+
+## R-01KYQKN6FRE0JRRKYXJ3J779PV Rejected: no perfscan rule for orphaned kernels — population is zero; merge-time grep is the cheaper guard
+kind: research
+state: draft
+created: 2026-07-29
+
+Considered and REJECTED a perfscan rule for orphaned optimized kernels — the failure mode
+that left four K-quant 4-row dots dead after PR #573's merge, with every test green.
+
+WHY IT WAS CONSIDERED: an optimized variant that loses its call sites is a silently lost
+optimization, and this campaign hit three concurrent-rewrite collisions (DSA, KNN, QMatMul) of
+which the last cost a measured 2x until it was noticed. A detector would have caught it
+immediately.
+
+WHY IT IS NOT WORTH BUILDING, measured rather than assumed. Sweeping the tree for unexported
+functions with no reference anywhere in their package (tests included, so test-only helpers do
+not count as dead) returns THREE candidates, and the population is effectively zero:
+  - two are `init`, called implicitly — false positives no name-based rule avoids
+  - one is backend/cuda's i8Upload, where build tags and cgo make a text-level scan unreliable
+    and which is the parallel worker's lane in any case
+The one genuine instance is already fixed. Per PERF-SCANRULE-EMPTY-001, a rule that finds
+nothing does not ship.
+
+THE MACHINERY COST IS ALSO REAL: perfscan is deliberately per-file with no go/types and no
+packages.Load, so a dead-code check needs a new cross-file pass that groups by directory and
+does a two-pass declare/reference diff. That is a structural change to the scanner for a
+population of zero.
+
+WHAT WAS DONE INSTEAD: PROC-MERGE-ORPHAN-001 — when a merge resolves a hot file by taking the
+other side wholesale, grep the discarded side's helper names for surviving call sites. That is
+the moment the orphaning happens, and a one-line check there is cheaper and more certain than
+a scanner pass that has to guess at build tags and implicit calls.
+
+THE DEEPER LESSON, worth stating separately: the reason nobody noticed is that the gguf
+benchmark suite covered Q8_0 and Q4_K only, and Q4_K is precisely the type that does NOT use
+those kernels. Four kernels became unreachable and every benchmark stayed green. A test suite
+that passes over dead code is not a merge safety net. The Q6_K and Q2_K benchmarks added
+alongside the fix are the durable guard — if the kernels are orphaned again, those regress by
+about 2x.
