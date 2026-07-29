@@ -250,3 +250,46 @@ FIX: internal/parallel.RowsIdx passes the CHUNK INDEX so a caller can keep one b
 METHOD LESSON, cast as PROC-BENCH-MEMAXIS-001: a benchmark A/B that reports only ns/op can hide an arbitrary regression on every other axis. -benchmem costs nothing and would have caught this at the moment of introduction. More generally, the campaign optimized one axis for many iterations and never re-swept the others; the first sweep on a new axis found a defect immediately, which is the third time in this project that changing the sweep axis has produced a finding where the previous axis looked exhausted.
 
 Residual: 7913 allocs against the original 883, all the pool's per-dispatch closure and WaitGroup, small in bytes (80MB total). Reducing it further means a dispatch API that avoids the closure, which is not worth it at this size.
+
+## T-01KYPCP21VFAZ8CYP84F1X7F21 Re-apply GMM sample parallelism on top of main's component jam, using per-chunk scratch
+kind: task
+state: draft
+created: 2026-07-29
+
+GOAL: recover the sample-level parallelism in GMM Fit's E-step (measured 1.93x on this
+host) WITHOUT losing main's logGaussianFullBatch, the 4-way unroll-and-jam over
+components that landed independently.
+
+WHY THIS IS OPEN: the merge into the perf campaign branch took main's classic/gmm.go
+entirely and discarded the parallel version. The two optimizations are not composable as
+written. The jam holds its forward-substitution scratch in RECEIVER FIELDS -- yScratch and
+yScratch4 [4][]float64 -- and running samples concurrently over shared receiver scratch is
+a data race. This is not hypothetical: -race already caught exactly this bug on this
+function once, when logGaussian used m.yScratch behind a comment asserting it ran
+serially. It is also the pattern perfscan flags as PS6006 receiver-scratch-buffer.
+
+APPROACH: lift the jam's scratch out of the receiver and pass it in, the same way
+logGaussian(x, c, y []float64) already takes its solve buffer as a parameter. Then
+parallelize over samples with one scratch set per CHUNK, not per call -- allocating inside
+the parallel body is PS6008 and cost a 31x memory regression elsewhere in this campaign
+(64MB -> 2007MB) hiding behind a 2.80x speedup. internal/parallel.RowsIdx passes the chunk
+index for exactly this.
+
+BIT-IDENTITY: the E-step's log-likelihood total must stay bit-identical. Do not accumulate
+into a running total inside the parallel loop; give each sample its own norms[i] slot and
+sum them afterward IN SAMPLE ORDER. A chunked reduction associates differently. The frozen
+gate cannot see this (the total only drives a tol=1e-3 convergence check, ~13 orders
+coarser than a ulp), so it must be preserved by construction rather than by test.
+
+VERIFY:
+- go test ./classic/ -run GMM -race -count 1  -- must be clean; the race is the whole risk.
+- The existing classic/gmm_golden_test.go bit-identity gate stays green.
+- Benchmark the FULL fit, not the E-step: a 2000x24 full-covariance fit. An earlier attempt
+  measured an exact null because the work estimate passed to the parallel dispatch counted
+  k components but not the O(d^2) triangular solve, understating cost by a factor of d and
+  keeping every real fit on the serial path.
+- Report allocs/B per op beside ns/op, and interleave the arms (min of 3 runs each).
+
+EXPECTED: below the 1.93x measured for parallelism alone, since main's jam already removed
+some of the serial cost the parallelism was hiding. Report the composed number against
+current main, not against the pre-jam baseline.
