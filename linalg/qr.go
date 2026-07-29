@@ -76,8 +76,15 @@ func Lstsq(a, b *tensor.Tensor) (*tensor.Tensor, error) {
 		cols = b.Shape()[1]
 	}
 	out := make([]float64, n*cols) // [n,cols] row-major
+	// Allocated ONCE for all columns rather than per column, matching what LU.Solve
+	// already does. Safe because the buffer is fully overwritten at the start of its own
+	// pass before anything reads it, so it cannot leak the previous column's values. It is
+	// a function local, not a receiver field: that keeps concurrent calls independent
+	// (PS6006 — a receiver slice used as per-call scratch is a data race waiting for its
+	// second caller). Measured at n=512, cols=512: 1546 allocations per call down to 1035,
+	// B/op 10.52MB down to 8.43MB.
+	cvec := make([]float64, m)
 	for c := range cols {
-		cvec := make([]float64, m)
 		for i := range m {
 			if vec {
 				cvec[i] = b.AtF64(i)

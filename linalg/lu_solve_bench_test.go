@@ -42,3 +42,11 @@ func benchSolve(b *testing.B, n, cols int) {
 func BenchmarkLUSolve_64x64(b *testing.B)   { benchSolve(b, 64, 64) }
 func BenchmarkLUSolve_128x128(b *testing.B) { benchSolve(b, 128, 128) }
 func BenchmarkLUSolve_128x1(b *testing.B)   { benchSolve(b, 128, 1) } // control: single RHS
+
+// Sizes where the [n,cols] output stops fitting in cache — 2MB at 512, 4.5MB at 768,
+// against this host's 128-byte lines. The 64 and 128 cases above cannot see a traversal
+// -order defect in this path at all (131KB of output sits in L2 whichever way it is
+// walked), which is why the strided back-substitution read went unnoticed while they
+// were green. Any benchmark meant to guard cache behavior needs a size that exceeds it.
+func BenchmarkLUSolve_512x512(b *testing.B) { benchSolve(b, 512, 512) }
+func BenchmarkLUSolve_768x768(b *testing.B) { benchSolve(b, 768, 768) }
