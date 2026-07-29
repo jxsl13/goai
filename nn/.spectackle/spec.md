@@ -94,6 +94,33 @@ the real repository, writing core.bare=true and breaking every worktree. Fixed. 
 recurrences (EMA, GLA, DeltaNet, GatedDeltaNet, RGLRU, HGRN) also failed their own
 bit-exactness claims to FMA contraction on arm64 — fixed and cast as NUM-FUSED-PATH-FMA-001.
 go test -short ./... is now clean tree-wide.
+- T-01KYQ9RRGEE2CBVF8TM09P19DX Partially fuse NeuralMemory.Scan: backend matmuls, fused elementwise (per ADR-01KYQ9PHNPEFC): Shipped. seq128 10.46ms -> 4.02ms (2.60-2.96x), allocs 24,525 -> 3,305, bytes 39.7MB -> 5.0MB;
+seq256 17.32ms -> 5.38ms (3.13-3.27x), allocs 48,845 -> 6,378. Deep variant untouched by design
+and measures unchanged. Bit-exact against the dispatch path across dims below/at/above 4 and
+sequences through 33; -race clean.
+
+The scoping decision (ADR-01KYQ9PHNPEFC) was necessary but not sufficient. Keeping the three
+matmuls on the backend removed the dots as a suspect, which is what finally made the remaining
+divergence findable — but the actual defect was in the fused elementwise chain all along, and
+it would have broken a fully fused version too.
+
+ROOT CAUSE, after three failed attempts: one unpinned product. `inc := gs[i] * th` assigned to
+a named local and then used in `s = float64(s*et) - inc` is still inlined by the compiler and
+contracted to fma(-gs[i], th, ...) — one rounding where the dispatch path does two. NAMING A
+SUBEXPRESSION DOES NOT PIN IT. This is why t=0 always matched (it computes `s = -inc`, a
+negation with nothing to fuse into) while every t>0 diverged by one ulp; that asymmetry was
+the visible symptom for three attempts and was misread each time as a momentum-branch bug.
+NUM-FUSED-PATH-FMA-001 has been strengthened to say every product, including named locals.
+
+METHOD LESSON: an earlier probe compared the same elementwise chain on SYNTHETIC inputs,
+passed, and was taken as proof the chain was correct. It was not — the divergence is
+input-dependent. The bug was found only by re-running the diff on the REAL projected and
+L2-normalized inputs. A green probe on convenient data is not evidence about the data that
+actually fails.
+
+The eliminated hypotheses from R-01KYQ9CQ3XE1D (input handling, matmul accumulation order,
+matmul loop shape, vectorized broadcast) were all correct eliminations — none of them was the
+cause, and none needs revisiting.
 
 ## PROC-BENCH-MINOFN-001
 IF an A/B arm is measured from a single benchmark run, THEN the result SHALL be re-measured as the minimum of at least 3 runs per arm before it is reported; single samples inverted 2 verdicts in one session.
