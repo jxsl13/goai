@@ -423,4 +423,4 @@ IF a new declaration is inserted immediately above an exported function, THEN th
 IF a new declaration is inserted immediately above an exported function, THEN the implementer SHALL place it above that function's doc-comment block and re-run internal/apicheck, which caught this detachment 3 times in one campaign.
 
 ## PROC-TASK-HOTNESS-001
-IF a performance task is booked against a specific code site, THEN the implementer SHALL first prove the site is reached by a benchmark (panic-probe it) and record which one, because a KNN task cost a full iteration before the probe showed the site was a cold fallback.
+IF a performance task is booked against a specific code site, THEN the implementer SHALL first panic-probe that a benchmark reaches the site and name that benchmark in the task (see T-01KYQGW5MNFWP, a cold fallback that cost an iteration).
