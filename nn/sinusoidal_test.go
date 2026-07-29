@@ -168,3 +168,35 @@ func ExampleSinusoidalPositionalEncodingConcat() {
 	// Output:
 	// 0 0 0 0 1 1 1 1
 }
+
+// BenchmarkSinusoidalPE covers both the interleaved and concatenated layouts at a representative
+// transformer size (seqLen=512, dModel=512 → 256 frequency terms per row). The per-frequency
+// wavelength 1/base^(2i/dModel) is invariant across positions, so a naive per-(pos,i) math.Pow
+// re-evaluates it seqLen× redundantly — this benchmark guards the loop-invariant hoist.
+func BenchmarkSinusoidalPE(b *testing.B) {
+	const seqLen, dModel = 512, 512
+	b.Run("interleaved/f64", func(b *testing.B) {
+		b.ReportAllocs()
+		for range b.N {
+			if _, err := nn.SinusoidalPositionalEncoding(seqLen, dModel, 10000, tensor.F64); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("interleaved/f32", func(b *testing.B) {
+		b.ReportAllocs()
+		for range b.N {
+			if _, err := nn.SinusoidalPositionalEncoding(seqLen, dModel, 10000, tensor.F32); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("concat/f64", func(b *testing.B) {
+		b.ReportAllocs()
+		for range b.N {
+			if _, err := nn.SinusoidalPositionalEncodingConcat(seqLen, dModel, 10000, tensor.F64); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+}

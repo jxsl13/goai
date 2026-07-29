@@ -2223,6 +2223,84 @@ func f(n, m, off int, out, x, tmp []float64, d float64) {
 	}
 }
 
+// PS5005 — a PURE libm transcendental invariant across the outer loop. The sinusoidal
+// positional-encoding shape: 1/Pow(base, 2i/d) depends on the inner index i, not the
+// outer position pos, so it is re-evaluated pos-many times for the same value.
+func TestDetectPS5005_InvariantTranscendental(t *testing.T) {
+	src := `package p
+import "math"
+func pe(seqLen, dModel int, base float64, out []float64) {
+	for pos := range seqLen {
+		for i := range dModel / 2 {
+			freq := 1.0 / math.Pow(base, float64(2*i)/float64(dModel))
+			out[pos*dModel+2*i] = math.Sin(float64(pos) * freq)
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["loop-invariant-transcendental"] == 0 {
+		t.Fatalf("want ≥1 loop-invariant-transcendental, got 0 (%v)", got)
+	}
+}
+
+// SILENT once the Pow is precomputed into a per-inner-index scratch above the outer loop
+// (the shipped fix) — the math.Sin that remains genuinely varies with pos, so no finding.
+func TestDetectPS5005_SilentWhenHoisted(t *testing.T) {
+	src := `package p
+import "math"
+func pe(seqLen, dModel int, base float64, out []float64) {
+	half := dModel / 2
+	freqs := make([]float64, half)
+	for i := range half {
+		freqs[i] = 1.0 / math.Pow(base, float64(2*i)/float64(dModel))
+	}
+	for pos := range seqLen {
+		for i := range half {
+			out[pos*dModel+2*i] = math.Sin(float64(pos) * freqs[i])
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["loop-invariant-transcendental"] != 0 {
+		t.Fatalf("want 0 once hoisted, got %d (%v)", got["loop-invariant-transcendental"], got)
+	}
+}
+
+// SILENT when the transcendental's argument IS the outer index — it genuinely varies per
+// outer iteration and must not be hoisted.
+func TestDetectPS5005_SilentWhenArgMentionsOuter(t *testing.T) {
+	src := `package p
+import "math"
+func f(n, m int, out []float64) {
+	for i := range n {
+		for j := range m {
+			out[i*m+j] = math.Exp(float64(i) + float64(j))
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["loop-invariant-transcendental"] != 0 {
+		t.Fatalf("want 0 when arg mentions the outer index, got %d (%v)", got["loop-invariant-transcendental"], got)
+	}
+}
+
+// SILENT when the outer loop REWRITES an operand the call reads (the same unsoundness
+// PS5003 guards against): the value is textually outer-independent yet rebuilt each pass.
+func TestDetectPS5005_SilentWhenOperandRewrittenByOuter(t *testing.T) {
+	src := `package p
+import "math"
+func f(n, m int, buf, out []float64) {
+	for i := range n {
+		for j := range m {
+			buf[j] = float64(i * j)
+		}
+		for j := range m {
+			out[i*m+j] = math.Log(buf[j])
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["loop-invariant-transcendental"] != 0 {
+		t.Fatalf("want 0 when the outer loop rewrites the operand, got %d (%v)", got["loop-invariant-transcendental"], got)
+	}
+}
+
 const ps6003Prelude = `package p
 type QT int
 const (A QT = iota; B; C; D)

@@ -35,10 +35,17 @@ func SinusoidalPositionalEncoding(seqLen, dModel int, base float64, dtype tensor
 		base = 10000
 	}
 	pe := tensor.New(dtype, tensor.Shape{seqLen, dModel})
+	// The per-frequency wavelength 1/base^(2i/dModel) depends only on i, not pos, so precompute
+	// it once instead of re-evaluating math.Pow inside the position loop (seqLen× redundant).
+	half := dModel / 2
+	freqs := make([]float64, half)
+	for i := range half {
+		freqs[i] = 1.0 / math.Pow(base, float64(2*i)/float64(dModel))
+	}
 	for pos := range seqLen {
-		for i := range dModel / 2 {
-			freq := 1.0 / math.Pow(base, float64(2*i)/float64(dModel))
-			angle := float64(pos) * freq
+		fp := float64(pos)
+		for i := range half {
+			angle := fp * freqs[i]
 			pe.SetF64(math.Sin(angle), pos, 2*i)
 			pe.SetF64(math.Cos(angle), pos, 2*i+1)
 		}
@@ -70,10 +77,15 @@ func SinusoidalPositionalEncodingConcat(seqLen, dModel int, base float64, dtype 
 	}
 	half := dModel / 2
 	pe := tensor.New(dtype, tensor.Shape{seqLen, dModel})
+	// Loop-invariant wavelength precompute (see SinusoidalPositionalEncoding above).
+	freqs := make([]float64, half)
+	for i := range half {
+		freqs[i] = 1.0 / math.Pow(base, float64(2*i)/float64(dModel))
+	}
 	for pos := range seqLen {
+		fp := float64(pos)
 		for i := range half {
-			freq := 1.0 / math.Pow(base, float64(2*i)/float64(dModel))
-			angle := float64(pos) * freq
+			angle := fp * freqs[i]
 			pe.SetF64(math.Sin(angle), pos, i)      // first half: sines
 			pe.SetF64(math.Cos(angle), pos, half+i) // second half: cosines
 		}
