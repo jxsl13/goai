@@ -427,3 +427,6 @@ IF a performance task is booked against a specific code site, THEN the implement
 
 ## PROC-MERGE-ORPHAN-001
 WHEN a merge resolves a hot file by taking the other side's version wholesale, the implementer SHALL grep the discarded side's helper names for surviving call sites, because PR #573 left four K-quant kernels dead with every test still green.
+
+## PERF-COMPILER-ALREADY-001
+IF an optimization removes source-level branches from a hot loop, THEN the implementer SHALL check the compiler does not already emit a conditional select, since a branchless Q3_K rewrite measured exactly 1.00x (see R-01KYQM4YDNFZ2).
