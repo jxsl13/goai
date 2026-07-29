@@ -65,3 +65,23 @@ BENCHMARK BUILT FIRST AND PANIC-PROBED. No pre-existing quantized benchmark ente
 THE FROZEN-ORACLE CONCERN THE TASK RAISED DID NOT MATERIALIZE, and here is why, so nobody re-derives it: the change reorders WHICH goroutine computes each output, not how any output is computed. TestQMatMulFusedDecodeMatchesGeneralPathExactly compares m==1 against m==2 row 0, and both sides still run the same arithmetic in the same order — no self-fulfilling comparison is possible from a partition change. A frozen reference WOULD be required for a change that alters the general path's arithmetic; this one does not.
 
 LANDED: commit 9b96f04a. STILL OPEN: the `default:` AtF64 fallback that PS6005 flags — deliberately left, it is the declined-shape path for non-contiguous tensors and carries no benchmark. Also not done: any wider parallelization of the surrounding prefill, where a profile shows the remaining time is scheduler churn from OTHER ops' pools (backend/cpu zone, not this one).
+- T-01KYQK0VZ1EQYAC9Z6RKBK5Z2Y Re-integrate the 4-row K-quant dot kernels on main's parallelized QMatMul (currently dead code): Shipped. Q6_K m=1 86.8us -> 43.7us (1.96-2.44x), Q2_K m=1 ~100us -> ~57us (1.73-2.19x), M2
+Pro darwin/arm64, 3 alternations, min of 3 runs of 2000x per arm. Bit-identical — blocking the
+OUTPUT rows leaves each row's accumulation order untouched.
+
+The two optimizations composed exactly as predicted: main's parallelism splits across row
+groups, the register blocking works within one. No conflict existed between them; they were
+simply written at the same time and the merge had to pick one file.
+
+THE REAL FINDING is why the loss went unnoticed. The gguf benchmark suite covered Q8_0 and
+Q4_K only — and Q4_K is the one K-quant type that does NOT use these kernels, because its row
+dot is SIMD-gated and deliberately kept scalar. So four kernels became unreachable and every
+benchmark stayed green. Panic-probing the existing benchmarks showed the blocked path was not
+entered; adding Q6_K and Q2_K benchmarks and re-probing is what confirmed the fix.
+
+A test suite that passes over dead code is not a safety net for merges. The benchmarks added
+here are the durable part of this task, more than the reinstated call sites.
+
+Q4_K remains excluded, stated at the site rather than left implicit: it needs a flag reporting
+whether the SIMD override took effect before it can choose between the asm kernel and 4-row
+blocking (T-01KYQ65MEEEN6, still open).
