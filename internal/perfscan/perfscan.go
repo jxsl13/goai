@@ -217,6 +217,7 @@ var checks = []check{
 	{"PS6001", "full-sort-bounded-prefix", "a full-vocabulary descending index sort whose result feeds an early-breaking (threshold-bounded) prefix consumer, with no quickselect/pre-filter guard — an O(n log n) sort for an O(prefix) need", false},
 	{"PS6002", "spatial-bounds-branch", "an innermost window/kernel loop re-testing a compound spatial bounds guard (iy>=0 && iy<h && ix>=0 && ix<wd) per tap, where the in-bounds taps form one contiguous run the guard can be hoisted around", false},
 	{"PS6005", "monotone-index-bound", "an innermost loop guarding its tap work with a single relational bound on an index affine in the loop var (j:=t-(K-1)+k; if j>=0) — the in-bounds iterations are one contiguous run, clamp the loop bound instead of branching per tap", false},
+	{"PS6011", "strided-inner-walk", "an inner loop whose index into a flat buffer MULTIPLIES the inner loop variable by a stride — consecutive iterations jump a whole row, so each touches its own cache line to use one element; interchange the loops, or block four adjacent outer indices so one fetched line serves four accumulators", false},
 	{"PS6010", "output-invariant-operand-reload", "an output loop whose accumulator re-reads an operand that does NOT vary with the output index — unrolling the output loop by 4 amortizes that load across 4 accumulators (register blocking / unroll-and-jam)", false},
 	{"PS6006", "receiver-scratch-buffer", "a method using a receiver SLICE FIELD as a per-call temporary (indexed write, then indexed read, same call) — unsafe to call concurrently, and every caller contends on one cache line", false},
 	{"PS6007", "search-feeds-reduction", "a loop whose expensive per-item CALL produces an index into an accumulation — split it into a parallel search pass and a sequential fold, since chunked partials would reassociate the sums", false},
@@ -1840,6 +1841,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	out = append(out, buildNxNUseOneRowFindings(fset, fn)...)
 	out = append(out, indirectKeyComparatorFindings(fset, fn)...)
 	out = append(out, innerInvariantRecomputeFindings(fset, fn)...)
+	out = append(out, stridedInnerWalkFindings(fset, fn)...)
 	out = append(out, invariantTranscendentalRecomputeFindings(fset, fn)...)
 	out = append(out, partialFastPathFindings(fset, fn)...)
 	out = append(out, outputInvariantReloadFindings(fset, fn)...)
@@ -6126,4 +6128,140 @@ func reflectSwapperSortFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding
 		return true
 	})
 	return out
+}
+
+// stridedInnerWalkFindings flags PS6011 — a nested loop that walks a flat row-major buffer
+// along the WRONG axis. The signature is that the INNER loop variable appears multiplied by
+// a stride inside the index while the outer one appears additively: S[r*dk+c] iterated over
+// r, or vs[j*dm+off+d] iterated over j. Consecutive inner iterations then jump a whole row,
+// so each one touches a separate cache line to consume a single element of it, and the
+// whole traversal is repeated once per outer index.
+//
+// The correct spelling has the INNER variable additive (S[r*dk+c] iterated over c), which is
+// why the two are distinguishable without types: this check asks only which loop variable is
+// the one being scaled.
+//
+// Two fixes, and which one wins is a measurement, not a rule. Interchanging the loops makes
+// the access sequential and is bit-neutral when the body is a pure elementwise update.
+// Blocking four adjacent OUTER indices instead keeps register accumulators and reuses the
+// line that was fetched anyway — the right choice while the buffer is cache-resident, per
+// PERF-ACCUM-RESIDENCY-001. Measured this campaign: 2.65x on the Sinkhorn transposed half,
+// 2.40x on the NSA P-times-V, and the larger share of KDA's 1.75x on its decay loop.
+func stridedInnerWalkFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		outerVar, outerBody, ok := loopVarBody(n)
+		if !ok {
+			return true
+		}
+		// Inner loops are searched ANYWHERE beneath the outer body, not just among its
+		// direct statements. The first draft of this check walked outerBody.List and
+		// therefore missed its own motivating case — attendMask's P*V loop sits inside an
+		// `if sum > 0`, one block down, and a guard like that is the norm rather than the
+		// exception in this codebase.
+		ast.Inspect(outerBody, func(inner ast.Node) bool {
+			innerVar, innerBody, ok := loopVarBody(inner)
+			if !ok || innerVar == outerVar {
+				return true
+			}
+			// A TRANSPOSE cannot be fixed by interchange: out[j*r+i] = x[i*c+j] strides on
+			// one side whichever way it is iterated, and swapping the loops just moves the
+			// stride to the other operand. Detect it by the mirrored shape — some index in
+			// this body scales the OUTER variable — and stay quiet. (Tiling helps a
+			// transpose, but that is a different rewrite than the one this check advises.)
+			if scalesVar(innerBody, outerVar) {
+				return true
+			}
+			seen := map[string]bool{}
+			ast.Inspect(innerBody, func(m ast.Node) bool {
+				ix, isIx := m.(*ast.IndexExpr)
+				if !isIx {
+					return true
+				}
+				// A flat buffer named by a plain identifier. A [][]T two-deep index is
+				// PS4006's shape, not this one, and double-reporting the same line helps
+				// nobody.
+				buf, isID := ix.X.(*ast.Ident)
+				if !isID {
+					return true
+				}
+				// Both loop variables must reach the SAME index expression, or the two
+				// axes are not interchangeable and there is nothing to advise.
+				if !exprMentions(ix.Index, innerVar) || !exprMentions(ix.Index, outerVar) {
+					return true
+				}
+				// The discriminator: the INNER variable is scaled and the OUTER one is
+				// not. Reversed, this is ordinary row-major iteration and correct.
+				if !multipliedBy(ix.Index, innerVar) || multipliedBy(ix.Index, outerVar) {
+					return true
+				}
+				// A call in the index means the stride is not a plain scalar and the
+				// rewrite is not mechanical.
+				if containsCall(ix.Index) {
+					return true
+				}
+				if seen[buf.Name] {
+					return true
+				}
+				seen[buf.Name] = true
+				out = append(out, finding{
+					pos:      fset.Position(ix.Pos()),
+					category: "strided-inner-walk",
+					msg: fmt.Sprintf("the inner loop over %q indexes %q at a stride, so each iteration jumps a"+
+						" whole row and touches its own cache line to use one element — and the walk repeats"+
+						" once per %q. Interchange the loops so %q runs contiguously (bit-neutral when the body"+
+						" is a pure elementwise update), or block four adjacent %q values so one fetched line"+
+						" feeds four accumulators. Measured 2.40x (NSA P*V) and the larger share of KDA's 1.75x.",
+						innerVar, buf.Name, outerVar, innerVar, outerVar),
+				})
+				return true
+			})
+			return true
+		})
+		return true
+	})
+	return dedupeByPos(out)
+}
+
+// dedupeByPos keeps one finding per source position. Searching inner loops at any depth
+// means a triple-nested loop yields the same index expression once per enclosing loop.
+func dedupeByPos(in []finding) []finding {
+	seen := make(map[token.Position]bool, len(in))
+	out := in[:0:0]
+	for _, f := range in {
+		if seen[f.pos] {
+			continue
+		}
+		seen[f.pos] = true
+		out = append(out, f)
+	}
+	return out
+}
+
+// multipliedBy reports whether name appears as an operand of a multiplication inside e.
+func multipliedBy(e ast.Expr, name string) bool {
+	found := false
+	ast.Inspect(e, func(n ast.Node) bool {
+		be, ok := n.(*ast.BinaryExpr)
+		if !ok || be.Op != token.MUL {
+			return true
+		}
+		if exprMentions(be.X, name) || exprMentions(be.Y, name) {
+			found = true
+		}
+		return true
+	})
+	return found
+}
+
+// scalesVar reports whether any index expression in body multiplies name by something.
+func scalesVar(body *ast.BlockStmt, name string) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if ix, ok := n.(*ast.IndexExpr); ok && multipliedBy(ix.Index, name) {
+			found = true
+		}
+		return true
+	})
+	return found
 }

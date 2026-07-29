@@ -3950,3 +3950,89 @@ func f(db store, xs []int) {
 		t.Fatalf("want 0 on an unrelated Slice call, got %d (%v)", got["reflect-swapper-sort"], got)
 	}
 }
+
+// PS6011 fires on the KDA decay shape: the inner loop scales S by the row stride.
+func TestDetectPS6011_StridedInnerWalk(t *testing.T) {
+	src := `package p
+func Decay(S, at []float64, dv, dk int) {
+	for c := range dk {
+		ac := at[c]
+		for r := range dv {
+			S[r*dk+c] *= ac
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src))["strided-inner-walk"]; got != 1 {
+		t.Fatalf("want 1 strided-inner-walk on the column walk, got %d", got)
+	}
+}
+
+// The inner loop is often GUARDED rather than a direct child of the outer body — NSA's P*V
+// sits inside an `if sum > 0`. The first draft of this check walked outerBody.List only and
+// missed exactly this, its own motivating case.
+func TestDetectPS6011_InnerLoopBehindGuard(t *testing.T) {
+	src := `package p
+func PV(vs, scores, orow []float64, dk, dm, off, i int, sum float64) {
+	for d := range dk {
+		var o float64
+		if sum > 0 {
+			for j := 0; j <= i; j++ {
+				o += scores[j] * vs[j*dm+off+d]
+			}
+		}
+		orow[d] = o
+	}
+}`
+	if got := countCat(scanSrc(t, src))["strided-inner-walk"]; got != 1 {
+		t.Fatalf("want 1 strided-inner-walk behind an if guard, got %d", got)
+	}
+}
+
+// SILENT on correct row-major traversal, where the INNER variable is the additive one.
+func TestDetectPS6011_SilentOnRowMajor(t *testing.T) {
+	src := `package p
+func Scale(S, at []float64, dv, dk int) {
+	for r := range dv {
+		for c := range dk {
+			S[r*dk+c] *= at[c]
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src))["strided-inner-walk"]; got != 0 {
+		t.Fatalf("want 0 on contiguous row-major iteration, got %d", got)
+	}
+}
+
+// SILENT on a transpose: it strides on one side whichever way it is iterated, so the
+// interchange this check advises would only move the stride to the other operand.
+func TestDetectPS6011_SilentOnTranspose(t *testing.T) {
+	src := `package p
+func T(x []float64, r, c int) []float64 {
+	out := make([]float64, r*c)
+	for i := range r {
+		for j := range c {
+			out[j*r+i] = x[i*c+j]
+		}
+	}
+	return out
+}`
+	if got := countCat(scanSrc(t, src))["strided-inner-walk"]; got != 0 {
+		t.Fatalf("want 0 on a transpose, got %d", got)
+	}
+}
+
+// SILENT when the two loop variables never meet in one index — the axes are not
+// interchangeable and there is nothing to advise.
+func TestDetectPS6011_SilentWhenAxesDoNotMeet(t *testing.T) {
+	src := `package p
+func F(a, b []float64, n, m, stride int) {
+	for i := range n {
+		for j := range m {
+			a[j*stride] += b[i]
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src))["strided-inner-walk"]; got != 0 {
+		t.Fatalf("want 0 when only one loop var reaches the index, got %d", got)
+	}
+}

@@ -1023,3 +1023,45 @@ followed by `return false`, structurally identical and semantically unrelated. A
 `[]float32` is the signal; asserting `*ast.Ident` is not. Tree-wide the tightened form
 adds exactly one finding (56 → 57) instead of fourteen.
 
+
+## PS6011 — an inner loop that walks a flat buffer along the wrong axis  *(scanner: static)*
+
+The inner loop variable appears MULTIPLIED by a stride, so consecutive iterations jump a
+whole row:
+
+```go
+for c := range dk { // outer: additive in the index
+	ac := at[c]
+	for r := range dv { // inner: SCALED by dk
+		S[r*dk+c] *= ac // each step lands in a different cache line
+	}
+}
+```
+
+Every iteration touches its own cache line to consume one of its eight doubles, and the
+whole traversal repeats once per outer index. The correct spelling puts the inner variable
+in the additive position (`S[r*dk+c]` iterated over `c`), which is what makes the two
+distinguishable from the AST alone — the check asks only which loop variable is being
+scaled, never what the buffer's type is.
+
+Two fixes, and which one wins is a measurement rather than a rule. **Interchanging** the
+loops makes the access sequential and is bit-neutral when the body is a pure elementwise
+update. **Blocking four adjacent OUTER indices** keeps register accumulators and reuses the
+line that was fetched anyway — the right choice while the buffer is cache-resident, per
+`PERF-ACCUM-RESIDENCY-001`, and the one to reach for when the body accumulates.
+
+**Shipped:** NSA's `attendMask` P·V walked `vs[j*dm+off+d]` over `j` for each output
+channel — **2.40×** when blocked four channels at a time. KDA's decay loop scaled a column
+of `S` once per key channel per timestep; interchanging it carried the larger share of that
+module's **1.75×**. Sinkhorn's transposed half is the same pathology in `[][]float64` form
+(**2.65×**), where PS4006 sees it instead.
+
+**Two false-positive classes are excluded by construction.** A transpose
+(`out[j*r+i] = x[i*c+j]`) strides on one side whichever way it is iterated, so interchange
+only moves the problem — suppressed by detecting the mirrored shape. And a nest whose two
+loop variables never reach the same index expression has no interchangeable axes at all.
+
+**Validated by replay**, per the discipline this file records twice already: the first draft
+searched only the outer body's direct statements and missed its own motivating case, because
+NSA's P·V loop sits inside an `if sum > 0`. Guarded inner loops are the norm here, not the
+exception. The regression test for it fails if that discovery is narrowed back.
