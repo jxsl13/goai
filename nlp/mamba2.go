@@ -234,29 +234,37 @@ func (m *Mamba2Mixer) forward(u *tensor.Tensor) (*tensor.Tensor, error) {
 	// mixer once the projections are matmuls) vectorized per TOKEN ROW — the same
 	// [conv_dim]-length grouping the single-token step uses, so every row bit-matches it
 	// (TestMamba2PrefillStateParity is bit-exact, not just <1e-9).
-	for c := range m.ConvDim {
-		wbase := c * m.DConv
-		for t := range seq {
-			acc := convB[c]
-			// src = t-(DConv-1)+k >= 0  <=>  k >= (DConv-1)-t; src is always < seq (src <= t).
-			// Hoist the causal lower tap bound so the DConv-tap dot drops its per-tap branch.
-			kStart := 0
-			if lo := (m.DConv - 1) - t; lo > 0 {
-				kStart = lo
+	// Depthwise conv: channel c writes only column c of every xc[t] (disjoint) and reads convW
+	// directly (no shared scratch), so parallelize over channels — bit-identical to serial.
+	parallelChunks(m.ConvDim, seq*m.DConv, func(clo, chi int) {
+		for c := clo; c < chi; c++ {
+			wbase := c * m.DConv
+			for t := range seq {
+				acc := convB[c]
+				// src = t-(DConv-1)+k >= 0  <=>  k >= (DConv-1)-t; src is always < seq (src <= t).
+				// Hoist the causal lower tap bound so the DConv-tap dot drops its per-tap branch.
+				kStart := 0
+				if lo := (m.DConv - 1) - t; lo > 0 {
+					kStart = lo
+				}
+				for k := kStart; k < m.DConv; k++ {
+					acc += convW[wbase+k] * xBC[t-(m.DConv-1)+k][c]
+				}
+				xc[t][c] = acc
 			}
-			for k := kStart; k < m.DConv; k++ {
-				acc += convW[wbase+k] * xBC[t-(m.DConv-1)+k][c]
+		}
+	})
+	// Token rows are independent (row t reads/writes only xc[t]); parallelize over t with a
+	// per-worker sigRow. Bit-identical — same per-row SigmoidF64 grouping as serial.
+	parallelChunks(seq, seq*m.ConvDim, func(tlo, thi int) {
+		sigRow := make([]float64, m.ConvDim)
+		for t := tlo; t < thi; t++ {
+			simd.SigmoidF64(sigRow, xc[t])
+			for c := range m.ConvDim {
+				xc[t][c] *= sigRow[c]
 			}
-			xc[t][c] = acc
 		}
-	}
-	sigRow := make([]float64, m.ConvDim)
-	for t := range seq {
-		simd.SigmoidF64(sigRow, xc[t])
-		for c := range m.ConvDim {
-			xc[t][c] *= sigRow[c]
-		}
-	}
+	})
 
 	// 3. split conv output → x [intermediate] | B [n_groups·N] | C [n_groups·N].
 	gN := m.NGroups * m.N
@@ -282,63 +290,73 @@ func (m *Mamba2Mixer) forward(u *tensor.Tensor) (*tensor.Tensor, error) {
 	// AtF64 reads). Forward starts each head from a zero state (h[−1]=0), so hst is reused
 	// across heads. This makes Forward bit-identical to the decode/prefill inline scan
 	// (they already agree to <1e-9; now exactly), all within the HF tolerance.
-	hst := make([]float64, m.N*m.HeadDim) // per-head [N, head_dim] scan state, reused
-	xrow := make([]float64, m.HeadDim)    // Δ-scaled value row, hoisted out of the i loop
-	for h := range m.NumHeads {
-		g := h / headsPerGroup
-		A := -math.Exp(aLog[h])
-		Dh := dSkip[h]
-		hOff := h * m.HeadDim
-		bOff := m.Intermediate + g*m.N      // B lives at [intermediate : intermediate+gN] of xc
-		cOff := m.Intermediate + gN + g*m.N // C lives after B
-		for i := range hst {
-			hst[i] = 0
-		}
-		for t := range seq {
-			delta := softplus(dt[t][h] + dtBias[h])
-			at := math.Exp(delta * A)
-			// Precompute the Δ-scaled value row once (nn.SSDRecurrent's xScaled) rather
-			// than re-forming xc[t][hOff+j]·Δ inside the N loop — same product, so the
-			// scan stays bit-identical to the decode/prefill inline scan.
-			for j := range m.HeadDim {
-				xrow[j] = xc[t][hOff+j] * delta
+	// Heads are INDEPENDENT — head h reads only its own A/D/dt and writes only the disjoint
+	// y[·][hOff:hOff+HeadDim] band — so the SSD scan parallelizes over heads. Each worker owns
+	// its hst/xrow scratch (sharing them would race); the per-head recurrence is byte-for-byte
+	// unchanged, so it stays bit-identical (TestMamba2PrefillStateParity remains exact).
+	parallelChunks(m.NumHeads, seq*m.N*m.HeadDim, func(hlo, hhi int) {
+		hst := make([]float64, m.N*m.HeadDim) // per-head [N, head_dim] scan state, reused across this worker's heads
+		xrow := make([]float64, m.HeadDim)    // Δ-scaled value row, hoisted out of the i loop
+		for h := hlo; h < hhi; h++ {
+			g := h / headsPerGroup
+			A := -math.Exp(aLog[h])
+			Dh := dSkip[h]
+			hOff := h * m.HeadDim
+			bOff := m.Intermediate + g*m.N      // B lives at [intermediate : intermediate+gN] of xc
+			cOff := m.Intermediate + gN + g*m.N // C lives after B
+			for i := range hst {
+				hst[i] = 0
 			}
-			for i := range m.N {
-				bi := xc[t][bOff+i]
-				hb := hst[i*m.HeadDim:]
+			for t := range seq {
+				delta := softplus(dt[t][h] + dtBias[h])
+				at := math.Exp(delta * A)
+				// Precompute the Δ-scaled value row once (nn.SSDRecurrent's xScaled) rather
+				// than re-forming xc[t][hOff+j]·Δ inside the N loop — same product, so the
+				// scan stays bit-identical to the decode/prefill inline scan.
 				for j := range m.HeadDim {
-					hb[j] = at*hb[j] + bi*xrow[j]
+					xrow[j] = xc[t][hOff+j] * delta
 				}
-			}
-			for j := range m.HeadDim {
-				var s float64
 				for i := range m.N {
-					s += xc[t][cOff+i] * hst[i*m.HeadDim+j]
+					bi := xc[t][bOff+i]
+					hb := hst[i*m.HeadDim:]
+					for j := range m.HeadDim {
+						hb[j] = at*hb[j] + bi*xrow[j]
+					}
 				}
-				y[t][hOff+j] = s + Dh*xc[t][hOff+j]
+				for j := range m.HeadDim {
+					var s float64
+					for i := range m.N {
+						s += xc[t][cOff+i] * hst[i*m.HeadDim+j]
+					}
+					y[t][hOff+j] = s + Dh*xc[t][hOff+j]
+				}
 			}
 		}
-	}
+	})
 
 	// 5. Gated RMSNorm over the full intermediate width: norm(y · SiLU(z)).
 	// silu(z)=z·σ(z): vectorize σ over the contiguous z row (same stable σ as the
 	// decode/prefill gate, so the paths stay <1e-9). sigZ/gated hoist out of the t-loop.
 	normW := m.NormW.Storage().F64()
-	sigZ := make([]float64, m.Intermediate)
-	gated := make([]float64, m.Intermediate)
-	for t := range seq {
-		simd.SigmoidF64(sigZ, z[t])
-		var variance float64
-		for o := range m.Intermediate {
-			gated[o] = y[t][o] * z[t][o] * sigZ[o]
-			variance += gated[o] * gated[o]
+	// Each token's gated-RMSNorm row is independent (reads y[t]/z[t], writes y[t]); parallelize
+	// over t with per-worker sigZ/gated. Bit-identical — per-row order and reduction unchanged.
+	parallelChunks(seq, seq*m.Intermediate, func(tlo, thi int) {
+		sigZ := make([]float64, m.Intermediate)
+		gated := make([]float64, m.Intermediate)
+		for t := tlo; t < thi; t++ {
+			simd.SigmoidF64(sigZ, z[t])
+			var variance float64
+			for o := range m.Intermediate {
+				gated[o] = y[t][o] * z[t][o] * sigZ[o]
+				variance += gated[o] * gated[o]
+			}
+			variance /= float64(m.Intermediate)
+			inv := 1.0 / math.Sqrt(variance+m.Eps)
+			for o := range m.Intermediate {
+				y[t][o] = normW[o] * gated[o] * inv
+			}
 		}
-		variance /= float64(m.Intermediate)
-		inv := 1.0 / math.Sqrt(variance+m.Eps)
-		for o := range m.Intermediate {
-			y[t][o] = normW[o] * gated[o] * inv
-		}
-	}
+	})
 
 	// 6. out_proj (no bias): [intermediate] → [d_model], via backend matmul.
 	yT := tensor.New(tensor.F64, tensor.Shape{seq, m.Intermediate})
