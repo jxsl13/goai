@@ -333,3 +333,39 @@ BENCHMARK NOTE: the existing GaLore/SOAP/Shampoo benchmarks use 64x64 and 64x128
 whose Gram matrices are cache-resident. Larger benchmarks were added per
 PROC-BENCH-CACHE-THRESHOLD-001; measured on the small fixture alone this change would have
 read as noise.
+
+## R-01KYQBZRF5FZFT6P1MK3B4GF12 PS4006/PS6010 triage: fallback arms annotated, matmulABtInto already triangles, scanner-side suppression measured and rejected
+kind: research
+state: draft
+created: 2026-07-29
+
+PS4006/PS6010 triage across nn and classic. No optimization shipped — the leverage is not
+there, and the useful output is knowing that.
+
+WHAT WAS CHECKED AND WHY IT IS NOT WORTH DOING:
+- gptq.go:86 and sparsegpt.go:112 are the AtF64 generic fallbacks of functions whose flat-slice
+  fast path already handles every measured case. Dead code for F64.
+- The fast path itself has no win left: matmulABtInto already detects the aliased-operand
+  case (&a[0] == &b[0]) and computes only the triangle, so X·Xᵀ is not doing double work.
+  The obvious "the Hessian is symmetric, halve it" idea is already implemented.
+- sparsegpt.go:160 builds hinv from loF.AtF64 in an O(in²) setup loop — real but dominated by
+  the O(in²·samples) gram (8.4M FMAs against 16K accessor calls at the benchmark size).
+- The remaining PS6010 sites in soap/shampoo sit in the same optimizer family where SymEig,
+  not the flagged loop, is the bottleneck (see R-01KYQBAAFBF4T).
+
+THE RECURRING COST, and the actual finding: generic fallback arms match almost every rule in
+the scanner by construction — a two-deep accessor loop over a [][]T is exactly what a fallback
+looks like. The same arms were re-triaged three times across this campaign (gptq, sparsegpt,
+retention, NSA attendMask). They are now annotated with //perfscan:ignore at the site.
+
+A scanner-side fix was built and REVERTED rather than shipped: suppress findings inside a
+flat-guard's else block, or after a flat-guard that returns. It worked — it correctly
+identified both spellings of the pattern — but suppressed only 4 findings tree-wide for about
+120 lines of line-position heuristics, with a real risk of hiding genuine findings in
+functions that merely happen to have a fast path. A directive at the site is precise,
+self-documenting and carries no false-negative risk. Recorded so the idea is not rebuilt: the
+cost/benefit was measured, not assumed.
+
+REMAINING PS4006 in these lanes after the annotations: aqlm (5, k-means accumulations),
+classic/naivebayes (3, no benchmark), classic/models and gmm (2 each), linalg/svd (2). None
+looks dominant; anything here needs a benchmark first.
