@@ -844,13 +844,16 @@ STANDING: none of these four is suppressed in perfscan. They are declined at the
 
 ## ADR-01KYQ9PHNPEFCVVMRXW6X22XN2 Titans Scan burns 24527 allocations per seq=128 forward but three attempts failed to make a fused path bit-identical (see R-01KYQ9CQ3XE1D) — how should it be resolved?
 kind: adr
-state: submitted
+state: done
 created: 2026-07-29
 context: Established: the recurrence arithmetic is provably correct at seq=2/d=3; it is not input handling; not the matmul accumulation order or loop shape; the broadcast elementwise kernel is a plain scalar loop. At seq=5/d=8 exactly 3 of 64 memory elements differ by one ulp. PERF-FUSED-PATH-CHAIN-001 says a ~20-op chain needs a decision rather than another attempt.
-status: proposed
+decision: Scope down: keep matmuls and the outer product on the backend (bit-exact by construction), fuse only slices, transposes and elementwise — fewer allocations saved, no correctness risk
+consequences: Decided without escalating: the alternatives are worse on their own terms, not merely less preferred. A tolerance gate would make Titans the only fused path in nn whose parity claim is weaker than its siblings' (GLA, DeltaNet, GatedDeltaNet, RGLRU, HGRN are all bit-exact), and it would trade a permanent, invisible correctness weakening for a bounded amount of speed. Continuing to chase FMA emission has already consumed three attempts against a one-ulp mismatch in 3 of 64 elements, with the three obvious causes eliminated; the expected cost of the fourth attempt is not visibly lower than the third. Dropping it forfeits the largest measured dispatch-overhead site outside backend/. Scoping down keeps every rounding decision inside the backend where it is already correct, which is why it carries no correctness risk at all rather than a small one. The cost is a smaller win: about 3 backend calls per timestep (two matmuls plus the outer product) instead of roughly eighteen, so the allocation count should fall by around an order of magnitude rather than to near zero. That is the right trade when the alternative is an unverifiable fast path. Re-measure rather than assume the reduction — the matmul outputs still allocate, and constructing the row tensors the matmuls need may claw back some of the saving; if it does, the honest outcome is to report the smaller number, not to reopen the bit-exactness question.
+status: accepted
 
 kind: radio
 option: Scope down: keep matmuls and the outer product on the backend (bit-exact by construction), fuse only slices, transposes and elementwise — fewer allocations saved, no correctness risk
 option: Accept a tolerance-gated fused path for Titans only, with an ADR recording why bit-exactness was given up
 option: Drop it: leave Scan on dispatch and spend the effort on targets that validate bit-exactly
 option: Keep chasing bit-exactness: instrument the exact FMA emission and match it
+choice: Scope down: keep matmuls and the outer product on the backend (bit-exact by construction), fuse only slices, transposes and elementwise — fewer allocations saved, no correctness risk
