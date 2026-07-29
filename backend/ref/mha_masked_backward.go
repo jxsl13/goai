@@ -60,6 +60,101 @@ func mhaMaskedBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, attrs ba
 
 	row := make([]float64, sk) // softmax weights for the current (head,row)
 	dw := make([]float64, sk)  // dO·V per key
+	// F64 fast path: the correctness-first loop reads q/k/v/g and RMWs dQ/dK/dV/dMask via
+	// AtF64/SetF64 on every element — the score dot, the P·V backward (g re-read per key) and
+	// the dQ/dK projections all dispatch. Walk contiguous typed storage, hoisting the query
+	// and dO rows per (head,i). Bit-identical: same values, same ascending accumulation and
+	// the same h→i→j→d iteration order into every gradient. Original loop kept as fallback.
+	qs, qok := f64Data(q)
+	ks, kok := f64Data(k)
+	vs, vok := f64Data(v)
+	gs, gok := f64Data(g)
+	masks, mok := f64Data(mask)
+	dqs, dqok := f64Data(dQ)
+	dks, dkok := f64Data(dK)
+	dvs, dvok := f64Data(dV)
+	dms, dmok := f64Data(dMask)
+	if qok && kok && vok && gok && mok && dqok && dkok && dvok && dmok {
+		{
+			{
+				qi := make([]float64, dk)
+				gi := make([]float64, dk)
+				for h := 0; h < heads; h++ {
+					qOff := h * dk
+					kvOff := (h / rep) * dk
+					for i := 0; i < sq; i++ {
+						qbase := i * dm
+						for d := 0; d < dk; d++ {
+							qi[d] = qs[qbase+qOff+d]
+							gi[d] = gs[qbase+qOff+d]
+						}
+						mBase := i * sk
+						if perHead {
+							mBase = (h*sq + i) * sk
+						}
+						m := math.Inf(-1)
+						for j := 0; j < sk; j++ {
+							mv := masks[mBase+j]
+							if math.IsInf(mv, -1) {
+								row[j] = math.Inf(-1)
+								continue
+							}
+							krow := ks[j*dm+kvOff : j*dm+kvOff+dk : j*dm+kvOff+dk]
+							var sc float64
+							for d := 0; d < dk; d++ {
+								sc += qi[d] * krow[d]
+							}
+							sc = sc*scale + mv
+							row[j] = sc
+							if sc > m {
+								m = sc
+							}
+						}
+						var sum float64
+						for j := 0; j < sk; j++ {
+							if math.IsInf(row[j], -1) {
+								row[j] = 0
+								continue
+							}
+							row[j] = math.Exp(row[j] - m)
+							sum += row[j]
+						}
+						if sum > 0 {
+							for j := range row {
+								row[j] /= sum
+							}
+						}
+						var wdot float64
+						for j := 0; j < sk; j++ {
+							vrow := vs[j*dm+kvOff : j*dm+kvOff+dk : j*dm+kvOff+dk]
+							dvrow := dvs[j*dm+kvOff : j*dm+kvOff+dk : j*dm+kvOff+dk]
+							rj := row[j]
+							var d float64
+							for c := 0; c < dk; c++ {
+								d += gi[c] * vrow[c]
+								dvrow[c] += rj * gi[c]
+							}
+							dw[j] = d
+							wdot += rj * d
+						}
+						dqrow := dqs[qbase+qOff : qbase+qOff+dk : qbase+qOff+dk]
+						for j := 0; j < sk; j++ {
+							dscore := row[j] * (dw[j] - wdot)
+							dms[mBase+j] += dscore
+							ds := dscore * scale
+							krow := ks[j*dm+kvOff : j*dm+kvOff+dk : j*dm+kvOff+dk]
+							dkrow := dks[j*dm+kvOff : j*dm+kvOff+dk : j*dm+kvOff+dk]
+							for d := 0; d < dk; d++ {
+								dqrow[d] += ds * krow[d]
+								dkrow[d] += ds * qi[d]
+							}
+						}
+					}
+				}
+				return []*tensor.Tensor{dQ, dK, dV, dMask}, nil
+			}
+		}
+	}
 	for h := 0; h < heads; h++ {
 		qOff := h * dk
 		kvOff := (h / rep) * dk
