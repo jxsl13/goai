@@ -246,6 +246,104 @@ func (m *NeuralMemory) Scan(ctx *backend.Context, q, k, v, eta, theta, alpha *te
 	if err != nil {
 		return nil, err
 	}
+	// Partially fused inference path for the LINEAR memory variant, F64 and contiguous
+	// (ADR-01KYQ9PHNPEFC). The dispatch loop below issues roughly eighteen backend ops per
+	// TIMESTEP — six row slices, three transposes, three matmuls and the momentum/forget
+	// arithmetic — each materializing a tensor holding one row or one [Dim,Dim] block.
+	// Measured 24,527 allocations and 39.7MB for a single seq=128 dim=64 forward (PS4011).
+	//
+	// The three MATMULS stay on the backend deliberately. A fully fused version was attempted
+	// three times and could not be made bit-identical: the recurrence arithmetic is provably
+	// correct, but a one-ulp FMA-contraction mismatch in the dot products survived pinning,
+	// un-pinning and mirroring the reference kernel's exact source form (R-01KYQ9CQ3XE1D).
+	// Keeping the dots on the backend leaves every rounding decision where it is already
+	// correct, so this path carries no correctness risk rather than a small one — the reason
+	// PERF-FUSED-PATH-CHAIN-001 exists. Only the slices, transposes and elementwise chain are
+	// fused, and those ARE reproduced exactly: each product below is rounded explicitly,
+	// because the dispatch path rounds between every backend op (NUM-FUSED-PATH-FMA-001).
+	//
+	// The DEEP variant is named out of the guard rather than hidden behind a dispatch switch,
+	// so PS6003 can still see which member of the family is uncovered.
+	if ctx.Recorder == nil && m.LinearMem {
+		ks, qs, vs := flatF64(kn), flatF64(qn), flatF64(v)
+		es, ts, as := flatF64(eta), flatF64(theta), flatF64(alpha)
+		m0 := flatF64(m.M0)
+		if ks != nil && qs != nil && vs != nil && es != nil && ts != nil && as != nil && m0 != nil {
+			d := m.Dim
+			dt := q.Dtype()
+			out := tensor.NewOn(ctx.Device(), dt, tensor.Shape{seq, d})
+			osl := flatF64(out)
+			// Operand tensors are allocated ONCE and rewritten in place each step; the
+			// per-step slices and transposes the dispatch path allocates are exactly what
+			// this replaces.
+			memT := tensor.NewOn(ctx.Device(), dt, tensor.Shape{d, d})
+			mem := flatF64(memT)
+			copy(mem, m0) // M_0 is a parameter; never mutate it
+			ktT := tensor.NewOn(ctx.Device(), dt, tensor.Shape{d, 1})
+			qtT := tensor.NewOn(ctx.Device(), dt, tensor.Shape{d, 1})
+			ktRow := tensor.NewOn(ctx.Device(), dt, tensor.Shape{1, d})
+			e2T := tensor.NewOn(ctx.Device(), dt, tensor.Shape{d, 1})
+			ktTs, qtTs, ktRows, e2s := flatF64(ktT), flatF64(qtT), flatF64(ktRow), flatF64(e2T)
+			if osl != nil && mem != nil && ktTs != nil && qtTs != nil && ktRows != nil && e2s != nil {
+				sM := make([]float64, d*d)
+				haveS := false
+				for t := range seq {
+					kr := ks[t*d : t*d+d : t*d+d]
+					copy(ktTs, kr) // [Dim,1] and [1,Dim] hold the same values
+					copy(ktRows, kr)
+					copy(qtTs, qs[t*d:t*d+d])
+					et, th, al := es[t], ts[t], as[t]
+					keep := 1 - al
+
+					pred, err := ex(backend.OpMatMul, nil, memT, ktT) // M_{t-1}·k
+					if err != nil {
+						return nil, err
+					}
+					ps := flatF64(pred)
+					if ps == nil {
+						break // non-flat result: fall through to the dispatch loop
+					}
+					vr := vs[t*d : t*d+d : t*d+d]
+					for i := range d {
+						e := ps[i] - vr[i]
+						e2s[i] = e + e
+					}
+					grad, err := ex(backend.OpMatMul, nil, e2T, ktRow) // e2·kᵀ → [Dim,Dim]
+					if err != nil {
+						return nil, err
+					}
+					gs := flatF64(grad)
+					if gs == nil {
+						break
+					}
+					for i := range d * d {
+						inc := float64(gs[i] * th)
+						if haveS {
+							sM[i] = float64(sM[i]*et) - inc
+						} else {
+							sM[i] = -inc
+						}
+						mem[i] = float64(mem[i]*keep) + sM[i]
+					}
+					haveS = true
+
+					ot, err := ex(backend.OpMatMul, nil, memT, qtT) // retrieve M_t·q
+					if err != nil {
+						return nil, err
+					}
+					ots := flatF64(ot)
+					if ots == nil {
+						break
+					}
+					copy(osl[t*d:t*d+d], ots)
+					if t == seq-1 {
+						return out, nil
+					}
+				}
+			}
+		}
+	}
+
 	row := func(t *tensor.Tensor, i int) (*tensor.Tensor, error) {
 		return ex(backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: i, End: i + 1}, t)
 	}
