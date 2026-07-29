@@ -170,7 +170,52 @@ func attendMask(qrow []float64, k, v, out *tensor.Tensor, i, off, dk int, scale 
 	if ks, vs, os := flatF64(k), flatF64(v), flatF64(out); ks != nil && vs != nil && os != nil {
 		dm := k.Shape()[1]
 		m := math.Inf(-1)
-		for j := 0; j <= i; j++ {
+		// Four keys per pass so one qrow[d] load feeds four dots. Blocked only across runs
+		// where all four keys are admitted; a partial run falls back to the scalar form
+		// rather than computing scores for masked keys, which must stay -Inf. Each dot
+		// still sums over ascending d and m is still updated in ascending j, so the bits
+		// and the softmax maximum are unchanged.
+		j := 0
+		for ; j+4 <= i+1; j += 4 {
+			if !(keep[j] && keep[j+1] && keep[j+2] && keep[j+3]) {
+				for e := j; e < j+4; e++ {
+					if !keep[e] {
+						scores[e] = math.Inf(-1)
+						continue
+					}
+					krow := ks[e*dm+off : e*dm+off+dk : e*dm+off+dk]
+					var sc float64
+					for d := range dk {
+						sc += qrow[d] * krow[d]
+					}
+					sc *= scale
+					scores[e] = sc
+					if sc > m {
+						m = sc
+					}
+				}
+				continue
+			}
+			k0 := ks[j*dm+off : j*dm+off+dk : j*dm+off+dk]
+			k1 := ks[(j+1)*dm+off : (j+1)*dm+off+dk : (j+1)*dm+off+dk]
+			k2 := ks[(j+2)*dm+off : (j+2)*dm+off+dk : (j+2)*dm+off+dk]
+			k3 := ks[(j+3)*dm+off : (j+3)*dm+off+dk : (j+3)*dm+off+dk]
+			var s0, s1, s2, s3 float64
+			for d, qd := range qrow {
+				s0 += qd * k0[d]
+				s1 += qd * k1[d]
+				s2 += qd * k2[d]
+				s3 += qd * k3[d]
+			}
+			for e, sc := range [4]float64{s0, s1, s2, s3} {
+				sc *= scale
+				scores[j+e] = sc
+				if sc > m {
+					m = sc
+				}
+			}
+		}
+		for ; j <= i; j++ {
 			if !keep[j] {
 				scores[j] = math.Inf(-1)
 				continue
@@ -200,14 +245,34 @@ func attendMask(qrow []float64, k, v, out *tensor.Tensor, i, off, dk int, scale 
 				scores[j] /= sum
 			}
 		}
-		for d := range dk {
-			var o float64
-			if sum > 0 {
-				for j := 0; j <= i; j++ {
-					o += scores[j] * vs[j*dm+off+d]
-				}
+		// P·V. Walking j for a fixed d strides v by dm — one cache line per key to consume
+		// eight of its bytes, repeated d_k times. Four adjacent output channels per pass
+		// read v[j, off+d .. off+d+3], four doubles from the SAME line, so the line that
+		// was fetched anyway serves four accumulators. Each o still sums over ascending j.
+		orow := os[i*dm+off : i*dm+off+dk : i*dm+off+dk]
+		if sum <= 0 {
+			clear(orow)
+			return
+		}
+		d := 0
+		for ; d+4 <= dk; d += 4 {
+			var o0, o1, o2, o3 float64
+			for j := 0; j <= i; j++ {
+				sj := scores[j]
+				vq := vs[j*dm+off+d : j*dm+off+d+4 : j*dm+off+d+4]
+				o0 += sj * vq[0]
+				o1 += sj * vq[1]
+				o2 += sj * vq[2]
+				o3 += sj * vq[3]
 			}
-			os[i*dm+off+d] = o
+			orow[d], orow[d+1], orow[d+2], orow[d+3] = o0, o1, o2, o3
+		}
+		for ; d < dk; d++ {
+			var o float64
+			for j := 0; j <= i; j++ {
+				o += scores[j] * vs[j*dm+off+d]
+			}
+			orow[d] = o
 		}
 		return
 	}
