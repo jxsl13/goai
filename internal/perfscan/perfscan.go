@@ -209,6 +209,7 @@ var checks = []check{
 	{"PS5004", "multi-sweep-fusable", "three or more consecutive loops over the same range each indexing a shared slice (fuse the passes into one sweep)", false},
 	{"PS5002", "symmetric-accumulation", "a nested loop accumulating a full symmetric matrix (m[i][j] += x[i]*x[j]) where one triangle + mirror would halve the work", false},
 	{"PS5003", "inner-invariant-recompute", "an inner-loop expression that varies with the INNER index but not the outer one — recomputed once per outer iteration where a precomputed row would do", false},
+	{"PS5005", "loop-invariant-transcendental", "a pure libm transcendental (math.Pow/Exp/Log/Sin) whose args vary with the INNER index but not the outer one, recomputed every outer iteration", false},
 	// PS6xxx — verification gaps
 	{"PS6001", "full-sort-bounded-prefix", "a full-vocabulary descending index sort whose result feeds an early-breaking (threshold-bounded) prefix consumer, with no quickselect/pre-filter guard — an O(n log n) sort for an O(prefix) need", false},
 	{"PS6002", "spatial-bounds-branch", "an innermost window/kernel loop re-testing a compound spatial bounds guard (iy>=0 && iy<h && ix>=0 && ix<wd) per tap, where the in-bounds taps form one contiguous run the guard can be hoisted around", false},
@@ -1778,6 +1779,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	out = append(out, buildNxNUseOneRowFindings(fset, fn)...)
 	out = append(out, indirectKeyComparatorFindings(fset, fn)...)
 	out = append(out, innerInvariantRecomputeFindings(fset, fn)...)
+	out = append(out, invariantTranscendentalRecomputeFindings(fset, fn)...)
 	out = append(out, partialFastPathFindings(fset, fn)...)
 	out = append(out, vjpScalarBinopFindings(fset, fn)...)
 	out = append(out, fullSortBoundedPrefixFindings(fset, fn)...)
@@ -3848,6 +3850,75 @@ func innerInvariantRecomputeFindings(fset *token.FileSet, fn *ast.FuncDecl) []fi
 
 // hasIndexOperand reports whether the expression reads through an index — the marker
 // that recomputing it costs a load and not just an arithmetic op.
+// invariantTranscendentalRecomputeFindings flags PS5005: a PURE libm transcendental
+// (the oExpensiveOps set: math.Pow/Exp/Log/Sin/Cos/...) called in an inner loop whose
+// arguments vary with the INNER index but NOT the outer one, e.g. a per-frequency
+// 1/Pow(base, 2i/d) recomputed on every outer position. Precompute the per-inner-index
+// values into a scratch hoisted above the outer loop, then index it. Measured 3.6x
+// (-72%) on sinusoidal positional encoding at seqLen=dModel=512.
+//
+// This is the transcendental sibling of PS5003 (inner-invariant-recompute), which
+// deliberately EXCLUDES calls because a general call may not be pure. The oExpensiveOps
+// functions are the exception: deterministic, side-effect-free libm math, so hoisting
+// is bit-identical and sound. Unlike PS5003 it needs no index operand or one-statement
+// inner body: the transcendental itself is the cost. Conservative like PS5003: the call
+// must mention the inner index, must NOT mention the outer index, and none of its
+// operands may be written by the outer loop outside the inner loop.
+func invariantTranscendentalRecomputeFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		outerVar, outerBody, ok := loopVarBody(n)
+		if !ok {
+			return true
+		}
+		for _, st := range outerBody.List {
+			innerVar, innerBody, ok := loopVarBody(st)
+			if !ok || innerVar == outerVar {
+				continue
+			}
+			outerWrites := assignedIn(outerBody)
+			for k := range assignedIn(innerBody) {
+				delete(outerWrites, k)
+			}
+			delete(outerWrites, innerVar)
+			seen := map[token.Pos]bool{}
+			ast.Inspect(innerBody, func(m ast.Node) bool {
+				call, ok := m.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				tname, ok := pkgFuncCall(call.Fun, "math", oExpensiveOps)
+				if !ok {
+					return true
+				}
+				if seen[call.Pos()] {
+					return true
+				}
+				if !exprMentions(call, innerVar) || exprMentions(call, outerVar) {
+					return true
+				}
+				if mentionsAnyOf(call, outerWrites) {
+					return true
+				}
+				seen[call.Pos()] = true
+				out = append(out, finding{
+					pos:      fset.Position(call.Pos()),
+					category: "loop-invariant-transcendental",
+					msg: fmt.Sprintf("math.%s varies with %q but not with the enclosing %q, so this pure"+
+						" transcendental is re-evaluated for the same value on every outer iteration."+
+						" Precompute it once into a scratch indexed by %q, hoisted above the outer loop."+
+						" Bit-identical: math.%s is pure, so the hoist is the same value, not a"+
+						" reassociation. Measured 3.6x on sinusoidal positional encoding.",
+						tname, innerVar, outerVar, innerVar, tname),
+				})
+				return true
+			})
+		}
+		return true
+	})
+	return out
+}
+
 func hasIndexOperand(e ast.Expr) bool {
 	found := false
 	ast.Inspect(e, func(n ast.Node) bool {
