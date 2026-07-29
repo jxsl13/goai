@@ -3277,3 +3277,20 @@ func rec(ctx *C, x T, seq int) T {
 		t.Fatalf("want 0 (single dispatch), got %d", got)
 	}
 }
+
+func TestDetectPS5007_F32AbsViaF64(t *testing.T) {
+	src := `package p
+import "math"
+func f(x []float32) float32 {
+	var m float32
+	for _, v := range x {
+		if a := float32(math.Abs(float64(v))); a > m {
+			m = a
+		}
+	}
+	return m
+}`
+	if got := countCat(scanSrc(t, src))["f32-abs-via-f64"]; got != 1 {
+		t.Fatalf("want 1 f32-abs-via-f64, got %d", got)
+	}
+}
