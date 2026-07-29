@@ -18,6 +18,7 @@
 | Why is X designed this way? | [`decisions/`](decisions/) — Architecture Decision Records (ADR-0001 …), one dated file per decision, including rejected ideas with their measurements |
 | What low-level tricks did the per-backend optimization passes use? | `perf-notes-cpu.md`, `perf-notes-ref.md`, `perf-notes-cuda.md`, `perf-notes-lowlevel.md` — dated technique logs from the §V22 sweeps |
 | Why is a host loop still serial, and what makes parallelizing it safe? | `perf-notes-parallel.md` — the scaling sweep, the bit-identity patterns, and the allocation axis |
+| A loop is slow but the arithmetic looks minimal — what shape is it? | [`perf-notes-memory-order.md`](perf-notes-memory-order.md) — traversal order, sparse masks and sort-vs-selection, with the bit-identity precondition for each fix |
 | What research grounded the project's scope and validation approach? | [`research/`](research/) — the landscape and validation snapshots the spec was built on |
 
 Conventions all pages follow (from [`../SPEC.md`](../SPEC.md) §C10/§C13):
