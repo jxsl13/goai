@@ -1249,3 +1249,26 @@ THE PROOF IS A PANIC-PROBED GOLDEN TEST. The package golden test pins Fit output
 PS6006 TRACKED THE ENTIRE ARC AND NOW REPORTS ZERO in gmm.go: two findings, then one after the PredictProba work exposed the k%4 tail, now none. A rule measuring its own resolution is the property PS6019 deliberately lacks - that one is a standing maintenance hazard rather than a closable defect, and the contrast is worth keeping in mind when deciding whether a new rule should have a quiet state.
 
 SWEEP RESULTS, recorded so they are not repeated. PS6019 (jam-tail-delegates), built this iteration from the shipped race, finds ONE candidate tree-wide - the GMM kernel itself. PS6012 (inconsistent-fma-pinning) finds ZERO across classic, linalg, vision, nlp and rl, so the other stale-tail-property class is clean in my lanes. The tail-hazard sweep is therefore complete: one known delegating tail, no pinning divergence.
+
+## R-01KYR494K5ESBRNPETPAQ39EDC REJECTED: GBM feature fan-out is not over-parallelized. I misread a CPU profile of a parallel program - condvar wait time is idling, not overhead
+kind: research
+state: draft
+created: 2026-07-29
+
+REJECTS a hypothesis I formed and refuted within one iteration. Measured on darwin/arm64 M2 Pro, go1.26.5, GOMAXPROCS=12, three interleaved rounds. Nothing shipped.
+
+THE HYPOTHESIS. A CPU profile of BenchmarkGBMHist_exact_80k (20 features, 80k rows, 50 estimators) showed 52.98% in runtime.pthread_cond_wait, 16.60% in pthread_cond_signal and 4.18% in usleep - about 74% - against 13.94% in gbmBuilder.bestSplit.func1 and 4.06% in partition.func1, roughly 18% in the actual split search. That reads as textbook over-parallelization, and the structure supported it: parallelFeaturesIdx fans out over FEATURES, is called once per tree NODE, and with d=20 on a 12-worker pool each chunk gets one or two features. The threshold was d*n against 1<<15, a crossover borrowed from backend/cpu, which checks TOTAL work and never asks whether a chunk has enough work to earn its wake-up.
+
+THE FIX I BUILT: gate on per-chunk work instead, requiring d*n >= threshold*workers so each chunk clears the same bar.
+
+MEASURED, and it is decisively WORSE:
+  GBMFit             67-71ms   -> 126-129ms   1.88x SLOWER
+  GBMHist_exact_80k  652-681ms -> 785-806ms   1.20x SLOWER
+  GBMHist_hist_80k   unchanged (the histogram grower has its own separate gate)
+Ranges disjoint in both directions. The parallelism was paying at these sizes and the per-chunk gate switched it off where it helped.
+
+THE ACTUAL LESSON, which is a measurement error and not a code fact. IN A CPU PROFILE OF A PARALLEL PROGRAM, TIME IN pthread_cond_wait AND pthread_cond_signal IS NOT NECESSARILY OVERHEAD. A CPU profile sums time across all threads, so a pool of workers idling on a condition variable accumulates large flat percentages while consuming no wall-clock progress at all. The 74% was mostly eleven workers waiting for the twelfth, which is what a correctly-sized pool looks like when sampled this way - it is not evidence of anything. I read a parallel profile with instincts calibrated on serial ones.
+
+WHAT WOULD HAVE ANSWERED IT CHEAPER. The hypothesis was about wall-clock, so the first move should have been a wall-clock experiment, not a structural fix: run the benchmark at GOMAXPROCS=1 against the default and see whether the parallelism helps at all. That is one command and it would have refuted this before any code was written. A CPU profile localizes work; only wall-clock arbitrates a parallelism decision.
+
+NO PERFSCAN RULE, and here the reason is sharper than usual: the pattern I thought I had found - a threshold that checks total rather than per-chunk work - IS AST-detectable, and building a rule for it would have institutionalized a wrong belief. A scan rule asserts that a shape is a defect; this shape is not one, at least not here. The gate on total work is correct for this caller and the borrowed crossover is doing its job.
