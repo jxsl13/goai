@@ -62,12 +62,21 @@ func WandaPrune(w, x *tensor.Tensor, sparsity float64) (pruned, mask *tensor.Ten
 	pruned = tensor.New(w.Dtype(), w.Shape())
 	mask = tensor.New(w.Dtype(), w.Shape())
 	idx := make([]int, cin)
+	col := make([]float64, cin) // this output's per-input scores, hoisted out of the comparator
 	for o := range cout {
 		for j := range cin {
 			idx[j] = j
+			col[j] = s.AtF64(j, o) // O(cin) dispatch once, vs O(cin·log·cin) inside the comparator
 		}
-		// ascending by score, ties broken by input index for determinism.
-		sort.SliceStable(idx, func(a, b int) bool { return s.AtF64(idx[a], o) < s.AtF64(idx[b], o) })
+		// ascending by score, ties broken by input index for determinism. The total-order
+		// comparator (score, then index) lets the faster unstable sort reproduce the stable
+		// order exactly (indices are unique), and reads the hoisted col instead of dispatching.
+		sort.Slice(idx, func(a, b int) bool {
+			if ca, cb := col[idx[a]], col[idx[b]]; ca != cb {
+				return ca < cb
+			}
+			return idx[a] < idx[b]
+		})
 		drop := make([]bool, cin)
 		for r := range k {
 			drop[idx[r]] = true
