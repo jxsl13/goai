@@ -135,10 +135,34 @@ func qkL2NormalizeLastAxis(ctx *backend.Context, x *tensor.Tensor, eps float64) 
 func qkCausalMask(dtype tensor.Dtype, sq, sk int) *tensor.Tensor {
 	m := tensor.New(dtype, tensor.Shape{sq, sk})
 	off := sk - sq // right-align when the query is a suffix of the keys
-	for i := range sq {
-		for j := range sk {
-			if j > i+off {
-				m.SetF64(-1e30, i, j)
+	// Only cells j>i+off get -1e30 (the rest stay 0 from New); write them directly into the
+	// contiguous storage, skipping the lower triangle and the per-element SetF64 dispatch.
+	// Byte-identical to the SetF64 loop.
+	switch dtype {
+	case tensor.F64:
+		d := m.Storage().F64()
+		for i := range sq {
+			for j := i + off + 1; j < sk; j++ {
+				if j >= 0 {
+					d[i*sk+j] = -1e30
+				}
+			}
+		}
+	case tensor.F32:
+		d := m.Storage().F32()
+		for i := range sq {
+			for j := i + off + 1; j < sk; j++ {
+				if j >= 0 {
+					d[i*sk+j] = -1e30
+				}
+			}
+		}
+	default:
+		for i := range sq {
+			for j := range sk {
+				if j > i+off {
+					m.SetF64(-1e30, i, j)
+				}
 			}
 		}
 	}

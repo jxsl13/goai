@@ -148,6 +148,25 @@ func BenchmarkQMatMulQ4_K_M1(b *testing.B)  { benchQMatMul(b, 1, Q4_K) }
 func BenchmarkQMatMulQ4_K_M16(b *testing.B) { benchQMatMul(b, 16, Q4_K) }
 
 // Write path: F64 tensor forced through the f32Data conversion.
+func BenchmarkWriteF32Tensor(b *testing.B) {
+	vals := make([]float32, benchN)
+	for i := range vals {
+		vals[i] = float32(i)
+	}
+	f := &File{
+		Version:  3,
+		Metadata: map[string]any{},
+		Tensors:  map[string]*tensor.Tensor{"w": tensor.FromFloat32(tensor.Shape{benchN}, vals)},
+	}
+	b.SetBytes(4 * benchN)
+	b.ResetTimer()
+	for range b.N {
+		if err := Write(io.Discard, f); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func BenchmarkWriteF64Tensor(b *testing.B) {
 	vals := make([]float64, benchN)
 	for i := range vals {
