@@ -1024,6 +1024,50 @@ followed by `return false`, structurally identical and semantically unrelated. A
 adds exactly one finding (56 → 57) instead of fourteen.
 
 
+## PS6016 — a struct literal rebuilt every iteration from constants  *(scanner: static)*
+
+A composite literal built inside a loop and passed straight to a call, whose every field
+initializer is loop-invariant:
+
+```go
+for l, b := range m.Blocks {
+	q, _ = exec1(ctx, backend.OpRoPE,
+		backend.RoPEAttrs{Base: cfg.RopeBase, Heads: cfg.Heads, PosOffset: pos}, q)
+}
+```
+
+Nothing here depends on `l` or `b`. Rebuilding the struct is cheap on its own; what is not
+cheap is that the parameter is an INTERFACE, so each construction is also a heap box — once
+per layer per decoded token. Hoisting these above the loop across six `nlp` decode paths
+removed **8490 allocations** from a 500-token generate (−2.9%) and 391KB of garbage. Wall
+time was a wash: these are small short-lived objects, so the payoff is garbage pressure, not
+throughput, and it should be reported that way.
+
+**Soundness.** The literal must be passed directly as a call argument and nowhere else — not
+appended, not assigned, not address-taken. A literal that escapes into a slice needs its
+per-iteration identity, and hoisting it would make every element alias one value: a
+correctness change wearing an optimization's clothes. Field initializers must reference no
+loop variable and nothing the loop assigns.
+
+**Dedup is per SITE, not per type.** The q and k RoPE attrs in a decode loop are two distinct
+literals of one type and both need hoisting; keying on the type name reported one and hid the
+other.
+
+**Half of this defect is invisible to any parser, and that is worth knowing.** The same waste
+occurs when the struct is ALREADY hoisted but the interface conversion still happens at the
+call site — `quant_llama_decode.go` hoisted its `AttnAttrs` as a concrete struct and escape
+analysis still reported it escaping. That form is what an earlier pass on the float paths
+produced and then missed, because hoisting the struct *looks* like the fix. Recognizing it
+needs to know the parameter is an interface, which needs `go/types`; this scanner is
+deliberately `go/ast`-only. The tool that sees both forms is the compiler:
+
+```bash
+go build -gcflags='github.com/jxsl13/goai/nlp=-m' ./nlp/
+```
+
+That is how both forms were actually found here. This check covers what a parser can prove
+and points at escape analysis for the rest rather than approximating it unsoundly.
+
 ## PS6015 — a batch-of-one call the loop never reads  *(scanner: domain)*
 
 A pure call made once per iteration on a single-element batch, whose result is used ONLY to

@@ -217,6 +217,7 @@ var checks = []check{
 	{"PS6001", "full-sort-bounded-prefix", "a full-vocabulary descending index sort whose result feeds an early-breaking (threshold-bounded) prefix consumer, with no quickselect/pre-filter guard — an O(n log n) sort for an O(prefix) need", false},
 	{"PS6002", "spatial-bounds-branch", "an innermost window/kernel loop re-testing a compound spatial bounds guard (iy>=0 && iy<h && ix>=0 && ix<wd) per tap, where the in-bounds taps form one contiguous run the guard can be hoisted around", false},
 	{"PS6005", "monotone-index-bound", "an innermost loop guarding its tap work with a single relational bound on an index affine in the loop var (j:=t-(K-1)+k; if j>=0) — the in-bounds iterations are one contiguous run, clamp the loop bound instead of branching per tap", false},
+	{"PS6016", "loop-invariant-literal-arg", "a struct composite literal built INSIDE a loop and passed straight to a call, whose every field initializer is loop-invariant — the same value is rebuilt every iteration, and when the parameter is an interface it is heap-boxed every iteration; construct it once above the loop", false},
 	{"PS6015", "batch1-call-feeds-only-postloop-slice", "a PURE (pureComputeFuncs) call inside a loop, given a single-element batch, whose result is used ONLY to append to a slice declared outside the loop — nothing in the loop reads it, so N batch-1 calls can become one batched call after the loop", false},
 	{"PS6014", "redundant-pure-recompute", "two syntactically identical calls to a function declared PURE (pureComputeFuncs) in one block, with nothing between them assigning any name the call reads — the second recomputes what the first already holds; keep one and read its result twice", false},
 	{"PS6013", "sort-feeds-counted-prefix", "a full sort whose result is then read only by a COUNTED prefix loop (for r := 0; r < k; r++ over the sorted slice) — the order past k is computed and discarded; a selection answers the same question in O(n) instead of O(n log n)", false},
@@ -1858,6 +1859,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	out = append(out, sortFeedsCountedPrefixFindings(fset, fn)...)
 	out = append(out, redundantPureRecomputeFindings(fset, fn, ns)...)
 	out = append(out, batch1FeedsPostloopSliceFindings(fset, fn, ns)...)
+	out = append(out, loopInvariantLiteralArgFindings(fset, fn)...)
 	out = append(out, invariantTranscendentalRecomputeFindings(fset, fn)...)
 	out = append(out, partialFastPathFindings(fset, fn)...)
 	out = append(out, outputInvariantReloadFindings(fset, fn)...)
@@ -7193,4 +7195,175 @@ func onlyAppendedOutside(body *ast.BlockStmt, name string, declared map[string]b
 	// The defining assignment itself contributes one non-append use of name (its LHS), so
 	// require exactly that one and at least one append use.
 	return appendUses >= 1 && otherUses <= 1
+}
+
+// loopInvariantLiteralArgFindings flags PS6016 — a struct literal rebuilt every iteration
+// from values that do not change:
+//
+//	for l, b := range m.Blocks {
+//		q, _ = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: cfg.Heads, PosOffset: pos}, q)
+//	}
+//
+// Nothing in the literal depends on l or b. Rebuilding it is cheap on its own; what is not
+// cheap is that `exec1` takes an INTERFACE, so each construction is also a heap box — once
+// per layer per decoded token. Hoisting these above the loop across six nlp decode paths
+// removed 8490 allocations from a 500-token generate (-2.9%) and 391KB of garbage.
+//
+// SOUNDNESS. The literal must be passed DIRECTLY as a call argument and nowhere else: not
+// appended, not assigned, not address-taken. A literal that escapes into a slice needs its
+// per-iteration identity, and hoisting it would make every element alias one value. Field
+// initializers must reference nothing the loop assigns and no loop variable, so the hoisted
+// value is the value every iteration built.
+//
+// WHAT THIS CANNOT SEE, and it is half the defect. The same waste occurs when the struct is
+// ALREADY hoisted but the interface conversion still happens at the call site — the form an
+// earlier pass in this repo produced and then missed, because hoisting the struct looks like
+// the fix. Recognizing it requires knowing the parameter is an interface type, which needs
+// go/types; this scanner is deliberately go/ast-only. The tool that does see it is the
+// compiler: `go build -gcflags='<pkg>=-m'` names every escaping literal, and that is how
+// both forms were actually found here. This check covers the form a parser can prove and
+// points at escape analysis for the rest rather than guessing.
+func loopInvariantLiteralArgFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil {
+		return nil
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		body := loopBody(n)
+		if body == nil {
+			return true
+		}
+		moving := loopMovingNames(n, body)
+		// Every use of each candidate literal has to be the one call argument, so collect
+		// the literals reached as a direct argument and reject any seen elsewhere.
+		reported := map[string]bool{}
+		ast.Inspect(body, func(m ast.Node) bool {
+			call, ok := m.(*ast.CallExpr)
+			if !ok || calleeName(call.Fun) == "append" {
+				return true
+			}
+			for _, arg := range call.Args {
+				cl, ok := arg.(*ast.CompositeLit)
+				if !ok || len(cl.Elts) == 0 || cl.Type == nil {
+					continue
+				}
+				if _, ok := cl.Type.(*ast.ArrayType); ok {
+					continue // a slice literal is the pooling question (PS2001), not this one
+				}
+				if _, ok := cl.Type.(*ast.MapType); ok {
+					continue
+				}
+				if !allElemsInvariant(cl, moving) {
+					continue
+				}
+				tname := exprText(cl.Type)
+				if tname == "" {
+					continue
+				}
+				// Dedup per SITE, not per type: the q and k RoPE attrs in a decode loop are
+				// two distinct literals of the same type, and both need hoisting. Keying on
+				// the type reported one and hid the other.
+				key := fmt.Sprintf("%s@%d", tname, fset.Position(cl.Pos()).Line)
+				if reported[key] {
+					continue
+				}
+				reported[key] = true
+				out = append(out, finding{
+					pos:      fset.Position(cl.Pos()),
+					end:      fset.Position(cl.End()),
+					category: "loop-invariant-literal-arg",
+					msg: fmt.Sprintf("this %s literal is rebuilt every iteration from values the loop never changes, and it is "+
+						"passed straight to a call — if that parameter is an interface, each construction is also a heap box. "+
+						"Construct it once above the loop. Doing this across six nlp decode paths removed 8490 allocations from a "+
+						"500-token generate (-2.9%%). Confirm with go build -gcflags='<pkg>=-m', which is also the only way to see "+
+						"the variant where the struct is already hoisted but still boxed at the call site.",
+						tname),
+				})
+			}
+			return true
+		})
+		return true
+	})
+	return out
+}
+
+// loopMovingNames is every name that changes across iterations of the loop at n: its
+// induction variables plus anything assigned anywhere in its body.
+func loopMovingNames(n ast.Node, body *ast.BlockStmt) map[string]bool {
+	moving := map[string]bool{}
+	switch x := n.(type) {
+	case *ast.RangeStmt:
+		for _, e := range []ast.Expr{x.Key, x.Value} {
+			if id, ok := e.(*ast.Ident); ok {
+				moving[id.Name] = true
+			}
+		}
+	case *ast.ForStmt:
+		for _, st := range []ast.Stmt{x.Init, x.Post} {
+			if st == nil {
+				continue
+			}
+			ast.Inspect(st, func(m ast.Node) bool {
+				switch y := m.(type) {
+				case *ast.AssignStmt:
+					for _, lhs := range y.Lhs {
+						if id, ok := lhs.(*ast.Ident); ok {
+							moving[id.Name] = true
+						}
+					}
+				case *ast.IncDecStmt:
+					if id, ok := y.X.(*ast.Ident); ok {
+						moving[id.Name] = true
+					}
+				}
+				return true
+			})
+		}
+	}
+	ast.Inspect(body, func(m ast.Node) bool {
+		switch y := m.(type) {
+		case *ast.AssignStmt:
+			for _, lhs := range y.Lhs {
+				for _, nm := range identNamesIn(lhs) {
+					moving[nm] = true
+				}
+			}
+		case *ast.IncDecStmt:
+			for _, nm := range identNamesIn(y.X) {
+				moving[nm] = true
+			}
+		case *ast.RangeStmt:
+			for _, e := range []ast.Expr{y.Key, y.Value} {
+				if id, ok := e.(*ast.Ident); ok {
+					moving[id.Name] = true
+				}
+			}
+		}
+		return true
+	})
+	return moving
+}
+
+// allElemsInvariant reports whether every field initializer of cl references only names the
+// loop leaves alone. A call in an initializer is allowed only if its own arguments are
+// invariant — cfg.attnScale() is fine, next() is not, and neither is distinguishable by name,
+// so any zero-argument call is treated as invariant only when its receiver chain is.
+func allElemsInvariant(cl *ast.CompositeLit, moving map[string]bool) bool {
+	ok := true
+	for _, el := range cl.Elts {
+		val := el
+		if kv, isKV := el.(*ast.KeyValueExpr); isKV {
+			val = kv.Value
+		}
+		ast.Inspect(val, func(n ast.Node) bool {
+			if !ok {
+				return false
+			}
+			if id, isID := n.(*ast.Ident); isID && moving[id.Name] {
+				ok = false
+			}
+			return true
+		})
+	}
+	return ok
 }

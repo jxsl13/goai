@@ -4548,3 +4548,115 @@ func f(b *Block, ctx *C, xn T) error {
 		t.Fatalf("want 1 for the same receiver twice, got %d", got)
 	}
 }
+
+// The nlp decode shape: attrs literals rebuilt per layer from layer-independent config.
+func TestDetectPS6016_LoopInvariantLiteralArg(t *testing.T) {
+	src := `package p
+func decode(m *M, ctx *C, cfg *Cfg, pos, kv int, q T) error {
+	for l, b := range m.Blocks {
+		if _, err := exec1(ctx, OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: cfg.Heads, PosOffset: pos}, q); err != nil {
+			return err
+		}
+		use(l, b)
+	}
+	return nil
+}`
+	if got := countCat(scanSrc(t, src))["loop-invariant-literal-arg"]; got != 1 {
+		t.Fatalf("want 1 loop-invariant-literal-arg, got %d", got)
+	}
+}
+
+// A field initializer that reads the loop variable is not invariant — the whole point.
+func TestDetectPS6016_SilentWhenAFieldReadsTheLoopVar(t *testing.T) {
+	src := `package p
+func decode(m *M, ctx *C, cfg *Cfg, q T) error {
+	for l, b := range m.Blocks {
+		if _, err := exec1(ctx, OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Layer: l}, q); err != nil {
+			return err
+		}
+		use(b)
+	}
+	return nil
+}`
+	if got := countCat(scanSrc(t, src))["loop-invariant-literal-arg"]; got != 0 {
+		t.Fatalf("want 0 when a field reads the loop variable, got %d", got)
+	}
+}
+
+// A field reading something the loop ASSIGNS is not invariant either, even though the name
+// is not an induction variable.
+func TestDetectPS6016_SilentWhenAFieldReadsALoopAssignedName(t *testing.T) {
+	src := `package p
+func decode(m *M, ctx *C, cfg *Cfg, q T) error {
+	pos := 0
+	for l, b := range m.Blocks {
+		pos = pos + 1
+		if _, err := exec1(ctx, OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, PosOffset: pos}, q); err != nil {
+			return err
+		}
+		use(l, b)
+	}
+	return nil
+}`
+	if got := countCat(scanSrc(t, src))["loop-invariant-literal-arg"]; got != 0 {
+		t.Fatalf("want 0 when a field reads a loop-assigned name, got %d", got)
+	}
+}
+
+// Appending the literal needs its per-iteration identity: hoisting would make every element
+// alias one value, which is a correctness change, not an optimization.
+func TestDetectPS6016_SilentOnAnAppendedLiteral(t *testing.T) {
+	src := `package p
+func f(m *M, cfg *Cfg) []T {
+	var out []T
+	for l, b := range m.Blocks {
+		out = append(out, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: cfg.Heads})
+		use(l, b)
+	}
+	return out
+}`
+	if got := countCat(scanSrc(t, src))["loop-invariant-literal-arg"]; got != 0 {
+		t.Fatalf("want 0 for an appended literal, got %d", got)
+	}
+}
+
+// Slice and map literals are a different question (pooling, PS2001), not hoisting.
+func TestDetectPS6016_SilentOnSliceAndMapLiterals(t *testing.T) {
+	src := `package p
+func f(m *M, ctx *C, a, b2 T) error {
+	for l, b := range m.Blocks {
+		if _, err := exec(ctx, []*T{a, b2}); err != nil {
+			return err
+		}
+		if _, err := exec2(ctx, map[string]int{"k": 1}); err != nil {
+			return err
+		}
+		use(l, b)
+	}
+	return nil
+}`
+	if got := countCat(scanSrc(t, src))["loop-invariant-literal-arg"]; got != 0 {
+		t.Fatalf("want 0 for slice/map literals, got %d", got)
+	}
+}
+
+// Two distinct literals of the SAME type in one loop must both report — the q and k RoPE
+// attrs of a decode loop are exactly that, and a per-type dedup hid the second.
+func TestDetectPS6016_ReportsTwoLiteralsOfOneType(t *testing.T) {
+	src := `package p
+func decode(m *M, ctx *C, cfg *Cfg, pos, kv int, q, k T) error {
+	for l, b := range m.Blocks {
+		if _, err := exec1(ctx, OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: cfg.Heads, PosOffset: pos}, q); err != nil {
+			return err
+		}
+		if _, err := exec1(ctx, OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: kv, PosOffset: pos}, k); err != nil {
+			return err
+		}
+		use(l, b)
+	}
+	return nil
+}`
+	if got := countCat(scanSrc(t, src))["loop-invariant-literal-arg"]; got != 2 {
+		t.Fatalf("want 2 for two distinct literals of one type, got %d", got)
+	}
+}
