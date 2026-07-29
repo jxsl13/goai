@@ -108,6 +108,63 @@ func RetentionChunkwise(q, k, v *tensor.Tensor, gamma float64, chunkSize int) (*
 	// times per (lj,lm) before.
 	gpow := make([]float64, chunkSize+1)
 	wbuf := make([]float64, chunkSize)
+	// F64 fast path: hoist the query row q_n (read in the Q·K dot AND re-dispatched per value
+	// column jv in the cross term) and walk k/v/out contiguously — the O(cb²·dk) Q·K double
+	// dispatch and the O(cb·dk·dv) state update dominated. Bit-identical: same values, same
+	// ascending accumulation. AtF64 loop below is the exotic-dtype fallback.
+	if qs, ks, vs, os := flatF64(q), flatF64(k), flatF64(v), flatF64(out); qs != nil && ks != nil && vs != nil && os != nil {
+		for start := 0; start < l; start += chunkSize {
+			end := min(start+chunkSize, l)
+			cb := end - start
+			for kk := 0; kk <= cb; kk++ {
+				gpow[kk] = math.Pow(gamma, float64(kk))
+			}
+			for lj := range cb {
+				n := start + lj
+				qrow := qs[n*dk : n*dk+dk : n*dk+dk]
+				zeta := gpow[lj+1]
+				for lm := 0; lm <= lj; lm++ {
+					m := start + lm
+					krow := ks[m*dk : m*dk+dk : m*dk+dk]
+					var qk float64
+					for i := range dk {
+						qk += qrow[i] * krow[i]
+					}
+					wbuf[lm] = gpow[lj-lm] * qk
+				}
+				orow := os[n*dv : n*dv+dv : n*dv+dv]
+				for jv := range dv {
+					var cross float64
+					for i := range dk {
+						cross += qrow[i] * r[i*dv+jv]
+					}
+					acc := zeta * cross
+					for lm := 0; lm <= lj; lm++ {
+						acc += wbuf[lm] * vs[(start+lm)*dv+jv]
+					}
+					orow[jv] = acc
+				}
+			}
+			gB := gpow[cb]
+			for idx := range r {
+				r[idx] *= gB
+			}
+			for lm := range cb {
+				m := start + lm
+				xi := gpow[cb-1-lm]
+				krow := ks[m*dk : m*dk+dk : m*dk+dk]
+				vrow := vs[m*dv : m*dv+dv : m*dv+dv]
+				for i := range dk {
+					kv := krow[i] * xi
+					ri := r[i*dv : i*dv+dv : i*dv+dv]
+					for jv := range dv {
+						ri[jv] += kv * vrow[jv]
+					}
+				}
+			}
+		}
+		return out, nil
+	}
 	for start := 0; start < l; start += chunkSize {
 		end := min(start+chunkSize, l)
 		cb := end - start // actual chunk length (the last chunk may be shorter)
