@@ -2328,6 +2328,33 @@ func ssm(L, D, N int, delta, u, A, C [][]float64, h []float64, out [][]float64) 
 	}
 }
 
+// REGRESSION (second PS5005 soundness gap): a slice filled by a CALL is mutated
+// invisibly to assignedIn, which only tracks =/:=/++. The distillation KL loop rebuilds
+// p via softmaxRowFlat(p, teacherRow) every outer iteration, so math.Log(p[j]) is NOT
+// outer-invariant though p never appears on an assignment LHS. Hoisting it would be wrong.
+func TestDetectPS5005_SilentWhenSliceFilledByOuterCall(t *testing.T) {
+	src := `package p
+import "math"
+func kl(b, c int, zt, zs []float64, temp float64) float64 {
+	p := make([]float64, c)
+	q := make([]float64, c)
+	var total float64
+	for i := 0; i < b; i++ {
+		softmaxRow(p, zt[i*c:i*c+c], temp)
+		softmaxRow(q, zs[i*c:i*c+c], temp)
+		for j := range c {
+			total += p[j] * (math.Log(p[j]) - math.Log(q[j]))
+		}
+	}
+	return total
+}
+func softmaxRow(dst, src []float64, temp float64) {}`
+	if got := countCat(scanSrc(t, src)); got["loop-invariant-transcendental"] != 0 {
+		t.Fatalf("want 0 when a read slice is filled by an outer call, got %d (%v)",
+			got["loop-invariant-transcendental"], got)
+	}
+}
+
 const ps6003Prelude = `package p
 type QT int
 const (A QT = iota; B; C; D)
