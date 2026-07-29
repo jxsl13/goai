@@ -49,18 +49,38 @@ func gspoKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) 
 	}
 	eps := pa.Epsilon
 
+	// The per-token logp difference is read via AtF64 on every token — two interface
+	// dispatches per token over Σlengths. Walk the contiguous logp slices directly on the
+	// typed fast path (lpNew/lpOld are rank-1). Bit-identical: same ascending-t sum, same
+	// exp/clip. AtF64 fallback for exotic dtypes.
 	var sum float64
 	off := 0
-	for i, l := range pa.Lengths {
-		var d float64
-		for t := range l {
-			d += lpNew.AtF64(off+t) - lpOld.AtF64(off+t)
+	nf, nok := f64Data(lpNew)
+	of, ook := f64Data(lpOld)
+	if nok && ook {
+		for i, l := range pa.Lengths {
+			var d float64
+			for t := 0; t < l; t++ {
+				d += nf[off+t] - of[off+t]
+			}
+			s := math.Exp(d / float64(l))
+			a := adv.AtF64(i)
+			surr := math.Min(s*a, math.Max(1-eps, math.Min(1+eps, s))*a)
+			sum += surr
+			off += l
 		}
-		s := math.Exp(d / float64(l))
-		a := adv.AtF64(i)
-		surr := math.Min(s*a, math.Max(1-eps, math.Min(1+eps, s))*a)
-		sum += surr
-		off += l
+	} else {
+		for i, l := range pa.Lengths {
+			var d float64
+			for t := range l {
+				d += lpNew.AtF64(off+t) - lpOld.AtF64(off+t)
+			}
+			s := math.Exp(d / float64(l))
+			a := adv.AtF64(i)
+			surr := math.Min(s*a, math.Max(1-eps, math.Min(1+eps, s))*a)
+			sum += surr
+			off += l
+		}
 	}
 	out := tensor.NewOn(ctx.Device(), lpNew.Dtype(), tensor.Shape{})
 	out.SetF64(-sum / float64(g))
