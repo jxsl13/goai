@@ -103,20 +103,36 @@ func (mu *Muon) Step(grad GradFn) error {
 		}
 		R, C := p.Shape()[0], p.Shape()[1]
 		beta := mu.Momentum
+		// Both loops in this Step walk every element through Unravel + AtF64/SetF64. At the
+		// benchmark's 256x256 and 256x512 that is roughly 590k dispatches per step, in
+		// front of a Newton-Schulz run that is already a well-optimized flat matmul
+		// (PS1005). Read and write the contiguous storage directly when the dtype allows,
+		// falling back to the accessor form otherwise. Same values, same order.
+		gs, ps := flatF64(g), flatF64(p)
+		flat := gs != nil && ps != nil && len(gs) == R*C && len(ps) == R*C
 		dir := make([]float64, R*C)
+		buf := mu.buf[pi]
 		for i := range dir {
-			idx := tensor.Unravel(i, p.Shape())
-			gv := g.AtF64(idx...)
-			mu.buf[pi][i] = beta*mu.buf[pi][i] + (1-beta)*gv // lerp momentum
-			if mu.Nesterov {
-				dir[i] = (1-beta)*gv + beta*mu.buf[pi][i]
+			var gv float64
+			if flat {
+				gv = gs[i]
 			} else {
-				dir[i] = mu.buf[pi][i]
+				gv = g.AtF64(tensor.Unravel(i, p.Shape())...)
+			}
+			buf[i] = beta*buf[i] + (1-beta)*gv // lerp momentum
+			if mu.Nesterov {
+				dir[i] = (1-beta)*gv + beta*buf[i]
+			} else {
+				dir[i] = buf[i]
 			}
 		}
 		o := newtonSchulz5(dir, R, C, mu.NSSteps)
 		scale := math.Sqrt(math.Max(1, float64(R)/float64(C)))
 		for i := range o {
+			if flat {
+				ps[i] = ps[i]*(1-mu.LR*mu.WeightDecay) - mu.LR*scale*o[i]
+				continue
+			}
 			idx := tensor.Unravel(i, p.Shape())
 			pv := p.AtF64(idx...)
 			pv = pv*(1-mu.LR*mu.WeightDecay) - mu.LR*scale*o[i] // decoupled wd + orthogonal step
