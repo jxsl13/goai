@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -12,10 +13,24 @@ import (
 func scratchRepo(t *testing.T, base, head map[string]string) (string, string, string) {
 	t.Helper()
 	dir := t.TempDir()
+	// cmd.Dir does NOT win against an inherited GIT_DIR: git prefers the environment, so
+	// with GIT_DIR set every command below would operate on the AMBIENT repository while
+	// appearing to work in the temp dir. That is not hypothetical — git exports GIT_DIR to
+	// its hooks, so running this suite from a pre-push hook pointed these commands at the
+	// developer's own repo, failed the tests against unrelated content, and wrote
+	// core.bare=true into the real config, which then made every worktree look bare and
+	// broke go build's VCS stamping repo-wide. Strip the whole GIT_* environment and let
+	// cmd.Dir be the only thing that selects a repository.
+	env := os.Environ()[:0:0]
+	for _, kv := range os.Environ() {
+		if !strings.HasPrefix(kv, "GIT_") {
+			env = append(env, kv)
+		}
+	}
 	run := func(args ...string) string {
 		cmd := exec.Command("git", args...)
 		cmd.Dir = dir
-		cmd.Env = append(os.Environ(),
+		cmd.Env = append(env,
 			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
 		out, err := cmd.CombinedOutput()
 		if err != nil {

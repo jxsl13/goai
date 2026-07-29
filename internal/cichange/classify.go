@@ -6,6 +6,7 @@ import (
 	"go/parser"
 	"go/printer"
 	"go/token"
+	"os"
 	"os/exec"
 	"strings"
 )
@@ -147,8 +148,27 @@ func usesCgo(f *ast.File) bool {
 }
 
 // gitRun executes git with args in dir and returns stdout.
+//
+// The GIT_* environment is stripped because cmd.Dir does not win against it: git resolves
+// GIT_DIR/GIT_WORK_TREE from the environment first, so an inherited GIT_DIR silently
+// redirects every command here at another repository while dir looks respected. git
+// exports exactly that variable to its hooks, and this classifier decides whether CI runs
+// — reading the wrong repository could return DocsOnly for a real code change and skip the
+// build. dir must be the only thing that selects a repository.
 func gitRun(dir string, args ...string) ([]byte, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
+	cmd.Env = gitCleanEnv()
 	return cmd.Output()
+}
+
+// gitCleanEnv returns the process environment with every GIT_* variable removed.
+func gitCleanEnv() []string {
+	env := os.Environ()[:0:0]
+	for _, kv := range os.Environ() {
+		if !strings.HasPrefix(kv, "GIT_") {
+			env = append(env, kv)
+		}
+	}
+	return env
 }
