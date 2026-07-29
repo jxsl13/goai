@@ -23,6 +23,35 @@ func MaxAttentionLogits(q, k *tensor.Tensor, heads int, scale float64, causal bo
 	dk := dm / heads
 	sq, sk := q.Shape()[0], k.Shape()[0]
 	out := make([]float64, heads)
+	dm2 := k.Shape()[1]
+	// F64 fast path: q[i] and k[j] were re-dispatched via AtF64 across the O(heads·seq²·dk)
+	// score scan (q per j, k per i). Hoist the query row and walk k's row contiguously.
+	// Bit-identical: same ascending-d dot, same max order. AtF64 fallback below.
+	if qs, ks := flatF64(q), flatF64(k); qs != nil && ks != nil {
+		for h := range heads {
+			m := math.Inf(-1)
+			off := h * dk
+			for i := range sq {
+				qrow := qs[i*dm+off : i*dm+off+dk : i*dm+off+dk]
+				jmax := sk
+				if causal && i+1 < sk {
+					jmax = i + 1
+				}
+				for j := range jmax {
+					krow := ks[j*dm2+off : j*dm2+off+dk : j*dm2+off+dk]
+					var s float64
+					for d := range dk {
+						s += qrow[d] * krow[d]
+					}
+					if s*scale > m {
+						m = s * scale
+					}
+				}
+			}
+			out[h] = m
+		}
+		return out, nil
+	}
 	for h := range heads {
 		m := math.Inf(-1)
 		off := h * dk
