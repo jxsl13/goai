@@ -3864,6 +3864,37 @@ func innerInvariantRecomputeFindings(fset *token.FileSet, fn *ast.FuncDecl) []fi
 // inner body: the transcendental itself is the cost. Conservative like PS5003: the call
 // must mention the inner index, must NOT mention the outer index, and none of its
 // operands may be written by the outer loop outside the inner loop.
+// outerCallArgTaint collects identifiers passed as a BARE argument to a call in body,
+// skipping the `skip` subtree (the inner loop) and any math.* call (pure, never mutates
+// an argument). A variable filled through such a call — softmaxRowFlat(p, row) — carries
+// whatever the call wrote, so a transcendental that reads it is not outer-invariant even
+// though the variable never appears on an assignment LHS. Bare identifier only: an
+// indexed or expression argument (x[i], 2*i) is a value, not a mutable output slot.
+func outerCallArgTaint(body *ast.BlockStmt, skip ast.Node) map[string]bool {
+	taint := map[string]bool{}
+	ast.Inspect(body, func(n ast.Node) bool {
+		if n == skip {
+			return false
+		}
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+			if id, ok := sel.X.(*ast.Ident); ok && id.Name == "math" {
+				return true
+			}
+		}
+		for _, a := range call.Args {
+			if id, ok := a.(*ast.Ident); ok {
+				taint[id.Name] = true
+			}
+		}
+		return true
+	})
+	return taint
+}
+
 func invariantTranscendentalRecomputeFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 	var out []finding
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
@@ -3887,6 +3918,14 @@ func invariantTranscendentalRecomputeFindings(fset *token.FileSet, fn *ast.FuncD
 			outerWrites := assignedIn(outerBody)
 			delete(outerWrites, innerVar)
 			delete(outerWrites, outerVar)
+			// A slice/pointer filled by a CALL is mutated invisibly to assignedIn (which
+			// only sees =/:=/++): softmaxRowFlat(p, teacherRow) rebuilds p every outer
+			// iteration, so math.Log(p[j]) is NOT outer-invariant though p is never on an
+			// assignment LHS. Taint any bare-identifier passed to a non-math call in the
+			// outer body OUTSIDE the inner loop (math.* is pure and never mutates its args;
+			// restricting to outside-the-inner-loop keeps a helper(i) call in the inner body
+			// from spuriously tainting the index we precompute on).
+			callTaint := outerCallArgTaint(outerBody, st)
 			seen := map[token.Pos]bool{}
 			ast.Inspect(innerBody, func(m ast.Node) bool {
 				call, ok := m.(*ast.CallExpr)
@@ -3904,6 +3943,9 @@ func invariantTranscendentalRecomputeFindings(fset *token.FileSet, fn *ast.FuncD
 					return true
 				}
 				if mentionsAnyOf(call, outerWrites) {
+					return true
+				}
+				if mentionsAnyOf(call, callTaint) {
 					return true
 				}
 				seen[call.Pos()] = true
