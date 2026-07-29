@@ -3,6 +3,8 @@ package gguf
 import (
 	"encoding/binary"
 	"fmt"
+	"runtime"
+	"sync"
 
 	"github.com/jxsl13/goai/tensor"
 )
@@ -220,8 +222,17 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 	// rather than a per-row tensor — the n-allocs-per-matmul anti-pattern is gone for all
 	// of them (Q8_0/Q4_0/Q4_K/Q6_K landed first as the common formats; Q2_K/Q3_K/Q5_K —
 	// aggressive quants — complete the set). Fill + dot are byte-for-byte the per-row form.
-	scratch := make([]float32, k)
-	for ni := range n {
+	// qt is validated once here (loop-invariant), so the per-ni body below cannot error.
+	switch qt {
+	case Q8_0, Q4_0, Q2_K, Q3_K, Q4_K, Q5_K, Q6_K:
+	default:
+		return nil, fmt.Errorf("gguf: QMatMul unsupported quant type %d", qt)
+	}
+	// process dequantizes weight row ni into its OWN scratch and writes the disjoint output
+	// column outf[*n+ni] for all m activation rows. Rows ni are independent (per-ni scratch,
+	// disjoint output column, no cross-ni reduction), so chunk-parallel across GOMAXPROCS is
+	// byte-for-byte identical to the serial loop; the default dtype branch reads x read-only.
+	process := func(scratch []float32, ni int) {
 		rowBits := weight[ni*rowBytes : (ni+1)*rowBytes]
 		switch qt {
 		case Q8_0:
@@ -238,8 +249,6 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 			dequantQ5_KInto(scratch, rowBits)
 		case Q6_K:
 			dequantQ6_KInto(scratch, rowBits)
-		default:
-			return nil, fmt.Errorf("gguf: QMatMul unsupported quant type %d", qt)
 		}
 		wf := scratch
 		// Unroll-and-jam the activation-row (mi) loop by 4: the dequantized weight row wf is
@@ -316,5 +325,37 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 			}
 		}
 	}
+	nw := runtime.GOMAXPROCS(0)
+	if nw > n {
+		nw = n
+	}
+	if nw <= 1 || m*n*k < 1<<20 {
+		scratch := make([]float32, k)
+		for ni := range n {
+			process(scratch, ni)
+		}
+		return out, nil
+	}
+	csz := (n + nw - 1) / nw
+	var wg sync.WaitGroup
+	for c := 0; c < nw; c++ {
+		lo := c * csz
+		if lo >= n {
+			break
+		}
+		hi := lo + csz
+		if hi > n {
+			hi = n
+		}
+		wg.Add(1)
+		go func(lo, hi int) {
+			defer wg.Done()
+			scratch := make([]float32, k)
+			for ni := lo; ni < hi; ni++ {
+				process(scratch, ni)
+			}
+		}(lo, hi)
+	}
+	wg.Wait()
 	return out, nil
 }
