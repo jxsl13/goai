@@ -3,7 +3,7 @@ package nn
 import (
 	"fmt"
 	"math"
-	"sort"
+	"slices"
 
 	"github.com/jxsl13/goai/tensor"
 )
@@ -44,10 +44,14 @@ func DSAAttention(q, k, v, qIdx, kIdx *tensor.Tensor, w []float64, heads, topK i
 	out := tensor.New(q.Dtype(), q.Shape())
 	scores := make([]float64, seq)
 	qrow := make([]float64, dk) // q_i[off:off+dk] hoisted per (query,head) for attendMask
+	// The rank slice, the selected-set map and one closure PER HEAD were all allocated
+	// inside the query loop. Sizes are loop-invariant, so allocate once and reset.
+	keepBuf := make([]bool, seq)
 	type ranked struct {
 		j int
 		s float64
 	}
+	rankBuf := make([]ranked, seq)
 	// F64 fast path: the lightning-indexer ranking scores qIdx·kIdx per (i,j) with a double
 	// AtF64 dispatch over O(seq²·idxHeads·idxDim) — the main attention (attendMask) is already
 	// typed, so this ranking dispatch is now the dominant cost. Walk the index rows contiguously
@@ -79,7 +83,19 @@ func DSAAttention(q, k, v, qIdx, kIdx *tensor.Tensor, w []float64, heads, topK i
 				}
 				rank = append(rank, ranked{j, s})
 			}
-			sort.Slice(rank, func(a, b int) bool { return rank[a].s > rank[b].s })
+			// Total comparator: score descending, then index ascending. Ranking on score
+			// alone leaves tied candidates in an unspecified order that then decides which
+			// keys are attended. ReLU'd dots tie at exactly zero routinely, so this was
+			// reachable in ordinary use, not a corner case.
+			slices.SortFunc(rank, func(x, y ranked) int {
+				switch {
+				case x.s > y.s:
+					return -1
+				case x.s < y.s:
+					return 1
+				}
+				return x.j - y.j
+			})
 			setIdx = setIdx[:0]
 			sel[i] = true
 			setIdx = append(setIdx, i)
@@ -94,7 +110,7 @@ func DSAAttention(q, k, v, qIdx, kIdx *tensor.Tensor, w []float64, heads, topK i
 			for h := range heads {
 				off := h * dk
 				qr := qs[i*dm+off : i*dm+off+dk]
-				attendMask(qr, k, v, out, i, off, dk, scale, scores, func(j int) bool { return sel[j] })
+				attendMask(qr, k, v, out, i, off, dk, scale, scores, sel)
 			}
 			for _, j := range setIdx {
 				sel[j] = false
@@ -103,7 +119,7 @@ func DSAAttention(q, k, v, qIdx, kIdx *tensor.Tensor, w []float64, heads, topK i
 		return out, nil
 	}
 	for i := range seq {
-		var rank []ranked
+		rank := rankBuf[:0]
 		for j := 0; j <= i; j++ {
 			var s float64
 			for h := range idxHeads {
@@ -117,17 +133,34 @@ func DSAAttention(q, k, v, qIdx, kIdx *tensor.Tensor, w []float64, heads, topK i
 			}
 			rank = append(rank, ranked{j, s})
 		}
-		sort.Slice(rank, func(a, b int) bool { return rank[a].s > rank[b].s })
-		selected := map[int]bool{i: true} // the query itself is always attended
-		for ri := 0; ri < len(rank) && len(selected) < topK; ri++ {
-			selected[rank[ri].j] = true
+		// Total comparator: score descending, then index ascending. Ranking on score
+		// alone leaves tied candidates in an unspecified order that then decides which
+		// keys are attended. ReLU'd dots tie at exactly zero routinely, so this was
+		// reachable in ordinary use, not a corner case.
+		slices.SortFunc(rank, func(x, y ranked) int {
+			switch {
+			case x.s > y.s:
+				return -1
+			case x.s < y.s:
+				return 1
+			}
+			return x.j - y.j
+		})
+		clear(keepBuf)
+		keepBuf[i] = true // the query itself is always attended
+		nSel := 1
+		for ri := 0; ri < len(rank) && nSel < topK; ri++ {
+			if j := rank[ri].j; !keepBuf[j] {
+				keepBuf[j] = true
+				nSel++
+			}
 		}
 		for h := range heads {
 			off := h * dk
 			for d := range dk {
 				qrow[d] = q.AtF64(i, off+d)
 			}
-			attendMask(qrow, k, v, out, i, off, dk, scale, scores, func(j int) bool { return selected[j] })
+			attendMask(qrow, k, v, out, i, off, dk, scale, scores, keepBuf)
 		}
 	}
 	return out, nil

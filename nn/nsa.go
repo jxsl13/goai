@@ -3,7 +3,7 @@ package nn
 import (
 	"fmt"
 	"math"
-	"sort"
+	"slices"
 
 	"github.com/jxsl13/goai/tensor"
 )
@@ -23,6 +23,12 @@ import (
 // the branches are returned separately so callers supply their own gates — the
 // paper's novel mechanics (compression-attention-driven selection) live here.
 // Host f64 analysis utility (SSD/MoBA mold). scale 0 → 1/√dk.
+// blockImp ranks one compressed block by its cmp-branch importance.
+type blockImp struct {
+	block int
+	w     float64
+}
+
 func NSABranches(q, k, v *tensor.Tensor, heads, blockSize, topN, window int, scale float64) (cmp, slc, win *tensor.Tensor, err error) {
 	if q.Ndim() != 2 || !k.Shape().Equal(q.Shape()) || !v.Shape().Equal(q.Shape()) {
 		return nil, nil, nil, fmt.Errorf("nn: NSABranches wants equal rank-2 q,k,v")
@@ -58,6 +64,15 @@ func NSABranches(q, k, v *tensor.Tensor, heads, blockSize, topN, window int, sca
 
 	scores := make([]float64, max(seq, nBlocks))
 	qrow := make([]float64, dk) // q_i[off:off+dk] hoisted per (head,query); all 3 branches re-read it
+	// Every buffer below used to be allocated once per (head, query): blockW, the
+	// importance slice, the selected-set map, and a capturing closure for each of the two
+	// attendMask calls. At seq 512 with 4 heads that was ~14.6k allocations for a single
+	// call. They are loop-invariant in SIZE, so they are allocated once and reset per query.
+	blockW := make([]float64, nBlocks)
+	imps := make([]blockImp, nBlocks)
+	selBlk := make([]bool, nBlocks) // set membership as a bitmap, not a map[int]bool
+	keepSlc := make([]bool, seq)    // per-key admission, precomputed instead of a callback
+	keepWin := make([]bool, seq)
 	for h := range heads {
 		off := h * dk
 		for i := range seq {
@@ -66,7 +81,6 @@ func NSABranches(q, k, v *tensor.Tensor, heads, blockSize, topN, window int, sca
 			}
 			// ---- cmp: softmax over complete blocks strictly before the query.
 			nPast := i / blockSize // complete blocks before i
-			blockW := make([]float64, nPast)
 			if nPast > 0 {
 				m := math.Inf(-1)
 				for b := range nPast {
@@ -100,22 +114,45 @@ func NSABranches(q, k, v *tensor.Tensor, heads, blockSize, topN, window int, sca
 				}
 			}
 			// ---- slc: top-n blocks by cmp importance, own block always in.
-			type imp struct {
-				block int
-				w     float64
-			}
-			var imps []imp
+			//
+			// The comparator is TOTAL — weight descending, then block index ascending.
+			// Ranking on weight alone leaves tied blocks in whatever order the sort
+			// happens to produce, which then decides which blocks slc attends; identical
+			// pooled rows tie exactly, so this was reachable, not theoretical.
+			cand := imps[:nPast]
 			for b := range nPast {
-				imps = append(imps, imp{b, blockW[b]})
+				cand[b] = blockImp{b, blockW[b]}
 			}
-			sort.Slice(imps, func(a, b int) bool { return imps[a].w > imps[b].w })
-			selected := map[int]bool{i / blockSize: true}
-			for gi := 0; gi < len(imps) && len(selected) < topN; gi++ {
-				selected[imps[gi].block] = true
+			slices.SortFunc(cand, func(x, y blockImp) int {
+				switch {
+				case x.w > y.w:
+					return -1
+				case x.w < y.w:
+					return 1
+				}
+				return x.block - y.block
+			})
+			clear(selBlk)
+			own := i / blockSize
+			selBlk[own] = true
+			nSel := 1
+			for gi := 0; gi < len(cand) && nSel < topN; gi++ {
+				if b := cand[gi].block; !selBlk[b] {
+					selBlk[b] = true
+					nSel++
+				}
 			}
-			attendMask(qrow, k, v, slc, i, off, dk, scale, scores, func(j int) bool { return selected[j/blockSize] })
+			// Materialize both admission masks instead of passing closures. This drops two
+			// closure allocations per query AND an indirect call per key inside the score
+			// loop, which is what actually dominated there — the shared-operand reload the
+			// scan flagged is second order behind a call that cannot inline.
+			for j := 0; j <= i; j++ {
+				keepSlc[j] = selBlk[j/blockSize]
+				keepWin[j] = i-j < window
+			}
+			attendMask(qrow, k, v, slc, i, off, dk, scale, scores, keepSlc)
 			// ---- win: last `window` keys.
-			attendMask(qrow, k, v, win, i, off, dk, scale, scores, func(j int) bool { return i-j < window })
+			attendMask(qrow, k, v, win, i, off, dk, scale, scores, keepWin)
 		}
 	}
 	return cmp, slc, win, nil
@@ -125,7 +162,7 @@ func NSABranches(q, k, v *tensor.Tensor, heads, blockSize, topN, window int, sca
 // keep, writing the head slice [off,off+dk) of out.
 // attendMask takes the query row pre-hoisted as qrow = q_i[off:off+dk] (it is re-read for
 // every key j, so hoisting it out of the caller kills a dk×(i+1) redundant gather).
-func attendMask(qrow []float64, k, v, out *tensor.Tensor, i, off, dk int, scale float64, scores []float64, keep func(j int) bool) {
+func attendMask(qrow []float64, k, v, out *tensor.Tensor, i, off, dk int, scale float64, scores []float64, keep []bool) {
 	// F64 fast path: the score dot reads k[j,off+d] and the P·V reads v[j,off+d] on every
 	// (j,d) — an AtF64 dispatch per element over the O(seq·dk) attention compute. Walk the
 	// contiguous k/v/out storage directly; qrow was already hoisted. Bit-identical (same
@@ -134,7 +171,7 @@ func attendMask(qrow []float64, k, v, out *tensor.Tensor, i, off, dk int, scale 
 		dm := k.Shape()[1]
 		m := math.Inf(-1)
 		for j := 0; j <= i; j++ {
-			if !keep(j) {
+			if !keep[j] {
 				scores[j] = math.Inf(-1)
 				continue
 			}
@@ -176,7 +213,7 @@ func attendMask(qrow []float64, k, v, out *tensor.Tensor, i, off, dk int, scale 
 	}
 	m := math.Inf(-1)
 	for j := 0; j <= i; j++ {
-		if !keep(j) {
+		if !keep[j] {
 			scores[j] = math.Inf(-1)
 			continue
 		}
