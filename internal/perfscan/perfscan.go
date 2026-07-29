@@ -205,19 +205,20 @@ var checks = []check{
 	{"PS4006", "row-slice-matrix", "a [][]T matrix built row-by-row and then indexed inside a nested loop", false},
 	{"PS4007", "vjp-scalar-elementwise-binop", "a *VJP with a scalar single-op elementwise loop (dst[i]=a[i]∘b[i]) that a SIMD backend op would vectorize+parallelize, and no backend.Execute dispatch", false},
 	{"PS4008", "serial-dot-matmul", "a matmul whose innermost loop is a serial scalar dot accumulator — latency-bound where an ikj/axpy form has independent accumulators", false},
+	{"PS4009", "transposed-gram-colstride", "a symmetric-gram reduction M[k][i]·M[k][j] whose reduction index k is the OUTER (row) index of a row-major/jagged matrix — the innermost loop strides down a column across rows; reblock to k-outer rank-1 (load M[k] once, walk contiguously)", false},
 	// PS5xxx — arithmetic
 	{"PS5001", "loop-invariant-divide", "a divide by a loop-invariant scalar on every element", false},
 	{"PS5004", "multi-sweep-fusable", "three or more consecutive loops over the same range each indexing a shared slice (fuse the passes into one sweep)", false},
 	{"PS5002", "symmetric-accumulation", "a nested loop accumulating a full symmetric matrix (m[i][j] += x[i]*x[j]) where one triangle + mirror would halve the work", false},
 	{"PS5003", "inner-invariant-recompute", "an inner-loop expression that varies with the INNER index but not the outer one — recomputed once per outer iteration where a precomputed row would do", false},
 	{"PS5005", "loop-invariant-transcendental", "a pure libm transcendental (math.Pow/Exp/Log/Sin) whose args vary with the INNER index but not the outer one, recomputed every outer iteration", false},
-	{"PS5006", "nested-subrange-rescan", "an innermost loop recomputing a running reduction (acc *= / += arr[k]) over a [j..i] sub-range whose bounds are the two enclosing loop vars — an O(T\u00b3) triangular rescan replaceable by a prefix/suffix scan precomputed once per outer index (O(T\u00b2))", false},
 	// PS6xxx — verification gaps
 	{"PS6001", "full-sort-bounded-prefix", "a full-vocabulary descending index sort whose result feeds an early-breaking (threshold-bounded) prefix consumer, with no quickselect/pre-filter guard — an O(n log n) sort for an O(prefix) need", false},
 	{"PS6002", "spatial-bounds-branch", "an innermost window/kernel loop re-testing a compound spatial bounds guard (iy>=0 && iy<h && ix>=0 && ix<wd) per tap, where the in-bounds taps form one contiguous run the guard can be hoisted around", false},
 	{"PS6005", "monotone-index-bound", "an innermost loop guarding its tap work with a single relational bound on an index affine in the loop var (j:=t-(K-1)+k; if j>=0) — the in-bounds iterations are one contiguous run, clamp the loop bound instead of branching per tap", false},
 	{"PS6003", "partial-fast-path-coverage", "a fast path that bypasses the general path for only SOME members of a variant family a switch in the same function enumerates — the uncovered variants silently pay the slow path", false},
 	{"PS6004", "unverified-dual-path", "a devirtualized fast path with a generic fallback — a bit-identity claim needing a bit-exact test", true},
+	{"PS4010", "vectorizable-butterfly", "an in-loop butterfly p,q = x+y,x-y (add and subtract of the SAME operand pair written to two indexed slots) — a scalar FWHT/FFT/Hadamard stage a SIMD Add/Sub over the contiguous stride-separated runs would vectorize", false},
 }
 
 // catToID indexes the registry for O(1) id lookup at report time.
@@ -1805,6 +1806,8 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	}
 	out = append(out, symmetricAccumFindings(fset, fn)...)
 	out = append(out, nestedSubrangeRescanFindings(fset, fn)...)
+	out = append(out, butterflyFindings(fset, fn)...)
+	out = append(out, transposedGramFindings(fset, fn)...)
 	out = append(out, serialDotMatmulFindings(fset, fn)...)
 	out = append(out, quadraticCacheAppendFindings(fset, fn)...)
 	out = append(out, buildNxNUseOneRowFindings(fset, fn)...)
@@ -3152,6 +3155,160 @@ func symmetricAccumFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 		return true
 	})
 	return out
+}
+
+// butterflyFindings flags PS4010 — an in-loop butterfly assignment p,q = x+y, x-y (the same
+// two operands added AND subtracted, written to two indexed slots of one base). This is the
+// core step of a Fast Walsh-Hadamard / FFT / Hadamard-rotation kernel: an overhead/L1-bound
+// scalar add/sub loop that a SIMD Add/Sub over the contiguous stride-separated operand runs
+// vectorizes (bit-identical — each output is exactly x±y of the same operands, no cross-lane
+// reduction). Shipped: nlp FWHT butterfly (kernel 1.5x, RotationHadamard -25%).
+func butterflyFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	var out []finding
+	seen := map[token.Pos]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		_, body, ok := loopVarBody(n)
+		if !ok {
+			return true
+		}
+		ast.Inspect(body, func(m ast.Node) bool {
+			as, ok := m.(*ast.AssignStmt)
+			if !ok || len(as.Lhs) != 2 || len(as.Rhs) != 2 || seen[as.Pos()] {
+				return true
+			}
+			l0, ok0 := as.Lhs[0].(*ast.IndexExpr)
+			l1, ok1 := as.Lhs[1].(*ast.IndexExpr)
+			if !ok0 || !ok1 {
+				return true
+			}
+			b0, b1 := baseIdentName(l0), baseIdentName(l1)
+			if b0 == "" || b0 != b1 { // both indexed writes into the same base slice
+				return true
+			}
+			add, aok := as.Rhs[0].(*ast.BinaryExpr)
+			sub, sok := as.Rhs[1].(*ast.BinaryExpr)
+			if !aok || !sok || add.Op != token.ADD || sub.Op != token.SUB {
+				return true
+			}
+			if exprEqual(add.X, sub.X) && exprEqual(add.Y, sub.Y) { // x+y and x-y, same x,y
+				seen[as.Pos()] = true
+				out = append(out, finding{
+					pos:      fset.Position(as.Pos()),
+					category: "vectorizable-butterfly",
+					msg: fmt.Sprintf("in-loop butterfly %s[..],%s[..] = x+y, x-y — a scalar"+
+						" FWHT/FFT/Hadamard stage. When the two operand runs are contiguous and"+
+						" stride-separated by >= the SIMD lane count, replace the inner block with"+
+						" one Float64x4/Float32x8 Add (-> first slot) and one Sub (-> second slot)"+
+						" of the same loaded x,y — bit-identical (no cross-lane reduction), keep the"+
+						" stage order. Shipped: nlp FWHT (kernel 1.5x). Gate behind the simd build"+
+						" tag with a scalar fallback + a Float64bits parity test.", b0, b0),
+				})
+			}
+			return true
+		})
+		return true
+	})
+	return out
+}
+
+// transposedGramFindings flags PS4009 — a symmetric-gram reduction accumulated as
+// M[k][i]·M[k][j] where the innermost (reduction) loop var k is the OUTER/row index of a
+// row-major or jagged 2-D matrix. Walking k then strides DOWN a column across separately
+// stored rows: L2-bound (one cache line touched per element) plus a serial dependent-FMA
+// chain. Reblock to k-outer rank-1 accumulation — load M[k] once, walk it contiguously
+// across the (i,j) triangle into a scratch, then blend once. Bit-identical (same ascending-k
+// order into a +0 accumulator). Shipped: SOAP/Shampoo R-gram (-6.5%/-9.3%); same class as
+// dino.go (-88%) and Muon matmulABt (2.09x). Contrast the cache-friendly gram M[i][k]·M[j][k]
+// (k the inner/contiguous index) which is NOT flagged.
+func transposedGramFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		iName, ibody, ok := loopVarBody(n)
+		if !ok {
+			return true
+		}
+		for _, s := range ibody.List {
+			jName, jbody, ok := loopVarBody(s)
+			if !ok || jName == iName {
+				continue
+			}
+			for _, s2 := range jbody.List {
+				kName, kbody, ok := loopVarBody(s2)
+				if !ok || kName == iName || kName == jName {
+					continue
+				}
+				if base, ok := transposedGramProduct(kbody, kName, iName, jName); ok {
+					out = append(out, finding{
+						pos:      fset.Position(n.Pos()),
+						category: "transposed-gram-colstride",
+						msg: fmt.Sprintf("nested %s/%s/%s loop reduces a gram %s[%s][%s]·%s[%s][%s]"+
+							" with the reduction index %s as the OUTER (row) index — the innermost"+
+							" loop strides DOWN a column across %s's rows (L2-bound + serial FMA"+
+							" chain). Reblock to %s-outer rank-1: for %s { load %s[%s] once, walk it"+
+							" contiguously across the (%s,%s) triangle into a scratch }, then blend"+
+							" once — bit-identical (same ascending-%s order). Shipped: SOAP/Shampoo,"+
+							" dino.go, Muon. Benchmark the step.",
+							iName, jName, kName, base, kName, iName, base, kName, jName,
+							kName, base, kName, kName, base, kName, iName, jName, kName),
+					})
+					return false
+				}
+			}
+		}
+		return true
+	})
+	return out
+}
+
+// transposedGramProduct searches root for a multiply M[k][i]·M[k][j] of the SAME base M
+// where k is the row (first) index and the two column (second) indices are exactly the
+// enclosing loop vars i and j — the column-stride signature. Returns the base M.
+func transposedGramProduct(root ast.Node, kName, iName, jName string) (string, bool) {
+	var base string
+	var found bool
+	ast.Inspect(root, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		be, ok := n.(*ast.BinaryExpr)
+		if !ok || be.Op != token.MUL {
+			return true
+		}
+		lb, lc, lok := rowStridedBase(be.X, kName)
+		rb, rc, rok := rowStridedBase(be.Y, kName)
+		if lok && rok && lb == rb &&
+			((lc == iName && rc == jName) || (lc == jName && rc == iName)) {
+			base, found = lb, true
+		}
+		return !found
+	})
+	return base, found
+}
+
+// rowStridedBase matches an access base[k][col] where k is the reduction (row) index and
+// col is a plain identifier. Returns (base, col). Rejects base[col][k] (the contiguous form).
+func rowStridedBase(e ast.Expr, kName string) (string, string, bool) {
+	ix, ok := e.(*ast.IndexExpr)
+	if !ok {
+		return "", "", false
+	}
+	col, ok := ix.Index.(*ast.Ident) // second index = column
+	if !ok {
+		return "", "", false
+	}
+	inner, ok := ix.X.(*ast.IndexExpr) // base[k]
+	if !ok {
+		return "", "", false
+	}
+	row, ok := inner.Index.(*ast.Ident)
+	if !ok || row.Name != kName { // first index must be the reduction var
+		return "", "", false
+	}
+	baseID, ok := inner.X.(*ast.Ident)
+	if !ok {
+		return "", "", false
+	}
+	return baseID.Name, col.Name, true
 }
 
 // nestedSubrangeRescanFindings flags PS5006 — a triple-nested loop where the innermost

@@ -122,9 +122,25 @@ func H2OKeep(scores []float64, recent, budget int) []int {
 func GatherRows(t *tensor.Tensor, idx []int) *tensor.Tensor {
 	d := t.Shape()[1]
 	out := tensor.New(t.Dtype(), tensor.Shape{len(idx), d})
-	for r, src := range idx {
-		for j := range d {
-			out.SetF64(t.AtF64(src, j), r, j)
+	// typed whole-row block copy instead of a per-element AtF64/SetF64 gather —
+	// byte-identical, ~5-15x. Contiguous() returns t itself when already dense.
+	tc := t.Contiguous()
+	switch tc.Dtype() {
+	case tensor.F32:
+		ts, os := tc.Storage().F32(), out.Storage().F32()
+		for r, src := range idx {
+			copy(os[r*d:(r+1)*d], ts[src*d:(src+1)*d])
+		}
+	case tensor.F64:
+		ts, os := tc.Storage().F64(), out.Storage().F64()
+		for r, src := range idx {
+			copy(os[r*d:(r+1)*d], ts[src*d:(src+1)*d])
+		}
+	default:
+		for r, src := range idx {
+			for j := range d {
+				out.SetF64(tc.AtF64(src, j), r, j)
+			}
 		}
 	}
 	return out
