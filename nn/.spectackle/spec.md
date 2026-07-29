@@ -58,6 +58,42 @@ METHOD FAILURE WORTH CARRYING, and it is mine: two measurements were initially m
 NOT DONE: rotateBackInto's second product remains a dot rather than an ikj/axpy form. That is declined for ALLOCATION, not speed — the ikj rewrite needs a transposed copy of qr, an n*n allocation per call on a path whose entire purpose is pooling. It is now parallel, which was the available win without touching that trade.
 
 Shampoo gains least because its products are the smallest here and more of its step lies outside them — an Amdahl ceiling, not a weaker transform.
+- T-01KYNBK6PAFA5SCPX7W1SP3BW7 Benchmark sinkhorn, kda and nsa — PS6005 flags them but nothing can validate a change: All three modules now have benchmarks, and every PS6010 site is resolved or explained.
+
+Sinkhorn 2.80x (34.83ms -> 12.50ms at 512x512, allocs 521 -> 9): register-blocked both
+half-iterations over the output index, then flattened the kernel matrix. An axpy rewrite of
+the transposed half was measured and REJECTED (14.60ms vs 13.34ms) — cast as
+PERF-ACCUM-RESIDENCY-001.
+
+KDA 1.75x (5.614ms -> 3.15ms): the flagged S·k loop was real but secondary. The decay loop
+next to it scaled a COLUMN of row-major S at stride d_k, once per key channel per timestep;
+interchanging it is bit-neutral because the decay is a pure elementwise scale. Both output
+loops then blocked 4 ways.
+
+NSA 2.70x and allocs 14611 -> 24 (62.1ms -> 23.0ms): two separate findings. Everything
+allocated per (head, query) was loop-invariant in size — blockW, the importance slice,
+sort.Slice's reflect Swapper, a selected-set map, and a closure per attendMask call.
+Replacing the keep callback with a precomputed []bool removed those closures AND an indirect
+call per key, which is the honest answer to the PS6010 finding at old nsa.go:130: the
+shared-operand reload was second order behind a call that cannot inline. attendMask's score
+dot and P·V were then blocked 4 ways for 2.40x on top; P·V had the same column-walk shape as
+Sinkhorn and KDA. Both selection sorts became total orders, since ties decide which blocks
+and keys get attended and were previously left to the sort's whim. DSA shares attendMask and
+gets the same win.
+
+Panic-probed all five flagged sites before trusting any number. Bit-identity gates added for
+each module: transcribed references for Sinkhorn and KDA, FNV checksums over raw output bits
+for NSA, plus a determinism test on deliberately tied importances.
+
+The one PS6010 site NOT taken is the AtF64 fallback arm of attendMask, which is dead whenever
+the F64 fast path applies.
+
+Incidental but blocking: the tree was red and could not be pushed. Root cause was
+internal/cichange's tests inheriting GIT_DIR under the pre-push hook and running git against
+the real repository, writing core.bare=true and breaking every worktree. Fixed. Five fused
+recurrences (EMA, GLA, DeltaNet, GatedDeltaNet, RGLRU, HGRN) also failed their own
+bit-exactness claims to FMA contraction on arm64 — fixed and cast as NUM-FUSED-PATH-FMA-001.
+go test -short ./... is now clean tree-wide.
 
 ## PROC-BENCH-MINOFN-001
 IF an A/B arm is measured from a single benchmark run, THEN the result SHALL be re-measured as the minimum of at least 3 runs per arm before it is reported; single samples inverted 2 verdicts in one session.
