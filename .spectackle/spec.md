@@ -495,3 +495,8 @@ Rationale: A batch of 238 exec1-to-exec2 swaps showed no change on QuantLlamaGen
 WHEN a benchmark on this host shows a multi-fold spread WITHIN a single arm across rounds, the implementing agent SHALL make no timing claim from it in either direction and say so explicitly, using it only for allocation and byte counts which stay deterministic.
 
 Rationale: MixtralPromptStepwise ranged 166ms to 519ms within one arm on the same host while its allocation counts held to five parts in 127720. A min-of-N over a bimodal distribution reports whichever arm happened to catch the fast mode, which is how an earlier round produced an apparent 1.73x regression that did not exist. The allocation axis remained usable throughout.
+
+## PROC-BUILD-THE-INSTRUMENT-001
+WHEN a second consecutive optimization batch cannot be verified because no benchmark executes the changed paths, the implementing agent SHALL stop applying rewrites and build the covering benchmark matrix first, then measure the accumulated batch against it.
+
+Rationale: Two iterations of the nlp allocation sweep produced edits that could only be verified on the one or two paths that happened to have benchmarks; eleven of twelve quantized architectures had none on either Forward or DecodeStep. Writing 24 table-driven benchmarks over the existing GGUF fixtures took less effort than the optimization work it had been blocking, and immediately turned 135 pending swaps into a measured result on every architecture. The warning had already been cast as PROC-BENCH-COVERAGE-NULL-001 an iteration earlier and was read as a fact about one benchmark rather than a systemic gap, which cost a round.
