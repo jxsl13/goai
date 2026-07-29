@@ -160,6 +160,52 @@ func EinsumContract(inSubs [][]byte, outSub []byte, operands []*tensor.Tensor) (
 		}
 		return out, nil
 	}
+	// F32 twin of the fast path above: F32 operands otherwise fall through to the
+	// variadic AtF64/SetF64 loop (common on inference). The generic path reads each
+	// operand via AtF64 (exact widen to f64), accumulates prod in f64, and writes the
+	// output with SetF64 — which NARROWS to f32 after every combination. Reproduce that
+	// exactly: prod in f64 from f64(opF32), and out[of] = f32(f64(out[of]) + prod) per
+	// combo (same ascending order, same per-combo narrowing) → bit-identical.
+	allF32 := out.Dtype() == tensor.F32
+	for _, op := range operands {
+		if op.Dtype() != tensor.F32 {
+			allF32 = false
+			break
+		}
+	}
+	if allF32 {
+		outData := out.Storage().F32()
+		outStride := tensor.RowMajorStrides(outShape)
+		opData := make([][]float32, len(inSubs))
+		opStride := make([]tensor.Strides, len(inSubs))
+		for k := range inSubs {
+			c := operands[k].Contiguous()
+			opData[k] = c.Storage().F32()
+			opStride[k] = tensor.RowMajorStrides(c.Shape())
+		}
+		for combo := range total {
+			rem := combo
+			for _, ix := range order {
+				val[ix] = rem % size[ix]
+				rem /= size[ix]
+			}
+			prod := 1.0
+			for k, sub := range inSubs {
+				st := opStride[k]
+				off := 0
+				for pos := range len(sub) {
+					off += val[sub[pos]] * st[pos]
+				}
+				prod *= float64(opData[k][off])
+			}
+			of := 0
+			for i := range len(outSub) {
+				of += val[outSub[i]] * outStride[i]
+			}
+			outData[of] = float32(float64(outData[of]) + prod)
+		}
+		return out, nil
+	}
 	coords := make([][]int, len(inSubs))
 	for k := range inSubs {
 		coords[k] = make([]int, len(inSubs[k]))
