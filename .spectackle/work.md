@@ -842,35 +842,6 @@ RELATED MEASUREMENT HYGIENE from the same campaign, worth carrying: one Cholesky
 
 STANDING: none of these four is suppressed in perfscan. They are declined at the measured sizes on this host (Apple M2 Pro, darwin/arm64, go1.26.5). A different shape or a machine with different memory behavior could move them, but the burden is a fresh interleaved measurement, not an argument from the code shape.
 
-## ADR-01KYQ9JNYJER7BK3X2RTENC3SS Titans NeuralMemory.Scan wastes 24,527 allocations and 39.7MB per seq=128 forward (about 191
-kind: 
-state: 
-created: 
-
-allocations per timestep) on backend dispatch, running at roughly 0.2 GFLOP/s. A fused typed
-fast path would recover most of that, but three attempts have failed to make it BIT-IDENTICAL
-to the dispatch path, and PERF-FUSED-PATH-CHAIN-001 says a chain this long (about twenty ops,
-including two matmuls, an outer product and three broadcast multiplies) needs a decision
-rather than another attempt.
-
-Established so far (R-01KYQ9CQ3XE1D): the recurrence arithmetic is provably correct at
-seq=2/d=3; it is not input handling; it is not the matmul's accumulation order or loop shape;
-and the broadcast elementwise kernel is a plain scalar loop, so the remaining divergence is a
-one-ulp FMA-contraction mismatch that has resisted pinning, un-pinning, and mirroring the
-kernel's exact source form. At seq=5/d=8 exactly 3 of 64 memory elements differ by one ulp.
-
-How should this be resolved?
-kind: adr
-state: draft
-created: 2026-07-29
-status: proposed
-
-kind: radio
-option: Accept a tolerance-gated fused path for Titans only, with an ADR recording that bit-exactness was given up and why
-option: Scope down: keep the matmuls and outer product on the backend (guaranteed bit-exact) and fuse only the slices, transposes and elementwise ops — fewer allocations saved, no correctness risk
-option: Drop it: leave Scan on the dispatch path and spend the effort on targets that can be validated bit-exactly
-option: Keep attempting bit-exactness: instrument the exact FMA emission and match it
-
 ## ADR-01KYQ9MAAME6NSVTMY0KMBQY81 Probe B line one.
 kind: 
 state: 
