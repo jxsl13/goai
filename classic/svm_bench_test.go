@@ -57,3 +57,18 @@ func svmBenchName(n int) string {
 		return "n_rbf"
 	}
 }
+
+func BenchmarkSVCPredict(b *testing.B) {
+	X, y := svmBenchData(4000, 20)
+	m := NewSVC(WithSVMKernel(SVMKernelRBF))
+	if err := m.Fit(X, y); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := m.DecisionFunction(X); err != nil {
+			b.Fatal(err)
+		}
+	}
+}

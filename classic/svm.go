@@ -3,6 +3,7 @@ package classic
 import (
 	"fmt"
 	"math"
+	"runtime"
 )
 
 // SVMKernel selects the kernel function K(x,z) an [SVC] uses to measure
@@ -555,13 +556,39 @@ func (m *SVC) DecisionFunction(x [][]float64) ([]float64, error) {
 	if !m.fitted {
 		return nil, fmt.Errorf("classic: svc DecisionFunction before Fit")
 	}
-	out := make([]float64, len(x))
 	for i, row := range x {
 		if len(row) != m.nFeat {
 			return nil, fmt.Errorf("classic: SVC.DecisionFunction row %d width %d, want %d", i, len(row), m.nFeat)
 		}
-		out[i] = m.decision(row)
 	}
+	out := make([]float64, len(x))
+	// Rows are independent: decision only READS the immutable fitted support vectors
+	// (sv/dualCoef/b) and m.kernel is a pure function, and each row writes only out[i].
+	// So chunk the row loop across GOMAXPROCS bit-identically to the serial loop (each
+	// decision sums the support vectors in the same ascending order). Serial below a
+	// small work threshold.
+	nw := runtime.GOMAXPROCS(0)
+	if nw > len(x) {
+		nw = len(x)
+	}
+	if nw <= 1 || len(x)*len(m.sv) < 1<<12 {
+		for i := range x {
+			out[i] = m.decision(x[i])
+		}
+		return out, nil
+	}
+	csz := (len(x) + nw - 1) / nw
+	_ = parallelBuild(nw, func(c int) error {
+		lo := c * csz
+		hi := lo + csz
+		if hi > len(x) {
+			hi = len(x)
+		}
+		for i := lo; i < hi; i++ {
+			out[i] = m.decision(x[i])
+		}
+		return nil
+	})
 	return out, nil
 }
 
