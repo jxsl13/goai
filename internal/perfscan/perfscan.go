@@ -211,6 +211,7 @@ var checks = []check{
 	{"PS5002", "symmetric-accumulation", "a nested loop accumulating a full symmetric matrix (m[i][j] += x[i]*x[j]) where one triangle + mirror would halve the work", false},
 	{"PS5003", "inner-invariant-recompute", "an inner-loop expression that varies with the INNER index but not the outer one — recomputed once per outer iteration where a precomputed row would do", false},
 	{"PS5005", "loop-invariant-transcendental", "a pure libm transcendental (math.Pow/Exp/Log/Sin) whose args vary with the INNER index but not the outer one, recomputed every outer iteration", false},
+	{"PS5007", "f32-abs-via-f64", "a float32(math.Abs(float64(x))) round-trip on an f32 value — replace with a direct sign-bit clear math.Float32frombits(math.Float32bits(x) &^ (1<<31)); bit-identical |x|, no f64 conversion or call", false},
 	// PS6xxx — verification gaps
 	{"PS6001", "full-sort-bounded-prefix", "a full-vocabulary descending index sort whose result feeds an early-breaking (threshold-bounded) prefix consumer, with no quickselect/pre-filter guard — an O(n log n) sort for an O(prefix) need", false},
 	{"PS6002", "spatial-bounds-branch", "an innermost window/kernel loop re-testing a compound spatial bounds guard (iy>=0 && iy<h && ix>=0 && ix<wd) per tap, where the in-bounds taps form one contiguous run the guard can be hoisted around", false},
@@ -1803,6 +1804,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 		})
 	}
 	out = append(out, symmetricAccumFindings(fset, fn)...)
+	out = append(out, f32AbsViaF64Findings(fset, fn)...)
 	out = append(out, serialDotMatmulFindings(fset, fn)...)
 	out = append(out, quadraticCacheAppendFindings(fset, fn)...)
 	out = append(out, buildNxNUseOneRowFindings(fset, fn)...)
@@ -3150,6 +3152,52 @@ func symmetricAccumFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 		return true
 	})
 	return out
+}
+
+// f32AbsViaF64Findings flags PS5007 — float32(math.Abs(float64(x))): an f32 abs computed by
+// converting to f64, calling math.Abs, and converting back. The conversions are exact, so a
+// direct f32 sign-bit clear math.Float32frombits(math.Float32bits(x) &^ (1<<31)) is BIT-IDENTICAL
+// and skips two conversions + a call. Hot in quantizer absmax scans. Shipped: quantizeQ8_0/Q6_K.
+func f32AbsViaF64Findings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		outer, ok := n.(*ast.CallExpr)
+		if !ok || !isConvTo(outer, "float32") || len(outer.Args) != 1 {
+			return true
+		}
+		abs, ok := outer.Args[0].(*ast.CallExpr)
+		if !ok || !isSelCall(abs, "math", "Abs") || len(abs.Args) != 1 {
+			return true
+		}
+		if inner, ok := abs.Args[0].(*ast.CallExpr); ok && isConvTo(inner, "float64") {
+			out = append(out, finding{
+				pos:      fset.Position(outer.Pos()),
+				category: "f32-abs-via-f64",
+				msg: "float32(math.Abs(float64(x))) round-trips an f32 through f64 for abs —" +
+					" replace with a direct sign-bit clear math.Float32frombits(math.Float32bits(x)" +
+					" &^ (1<<31)): bit-identical |x|, no conversions or call. Shipped: quantizeQ8_0/Q6_K.",
+			})
+			return false
+		}
+		return true
+	})
+	return out
+}
+
+// isConvTo reports whether call is a conversion T(x) for the builtin numeric type name.
+func isConvTo(call *ast.CallExpr, name string) bool {
+	id, ok := call.Fun.(*ast.Ident)
+	return ok && id.Name == name
+}
+
+// isSelCall reports whether call is pkg.Fn(...).
+func isSelCall(call *ast.CallExpr, pkg, fn string) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != fn {
+		return false
+	}
+	id, ok := sel.X.(*ast.Ident)
+	return ok && id.Name == pkg
 }
 
 // exprMentions reports whether e references the identifier name.
