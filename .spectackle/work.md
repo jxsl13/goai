@@ -1138,3 +1138,28 @@ BOTH FUSIONS SHARE A TEST DESIGN worth reusing: the two arms are selected by ctx
 DELIBERATELY NOT DONE: the non-absorbed per-head loop in the same file, which slices kv as well as q. It needs its own parity test and its own measurement, and the benchmark exercises the absorbed path, so shipping it here would have been unverified.
 
 MATRIX STATE after two fixes: Gemma2 decode 4862 to 3522, DeepSeekV2 5166 to 4686. The remaining spread is GPTNeoX 3072 and StableLM 2812 against MPT 1086, which is the next place to look.
+
+## R-01KYR1VZPWE2TR4REXMP8BDN1S partialRoPE fusion is the sessions largest win: 1.25-1.33x and -38 to -43% allocs across three architectures, and it generalized into PS6018
+kind: research
+state: draft
+created: 2026-07-29
+
+Third and largest application of PROC-BENCH-MATRIX-DIAGNOSTIC-001. Measured on darwin/arm64 M2 Pro, go1.26.5, GOMAXPROCS=12, benchtime=300x, four interleaved rounds.
+
+TARGET. GPTNeoX decode was the next matrix outlier at 3072 allocations. A profile put partialRoPE at 51.39% of the step - and unlike the two previous targets this is a SHARED HELPER with 31 call sites, so the fix lifts every architecture that uses partial RoPE rather than one model.
+
+THE DEFECT. Eight backend dispatches - reshape, two slices, reshape, RoPE, reshape, concat, reshape - of which exactly ONE does arithmetic. The other seven are pure layout algebra.
+
+THE FIX. Gather each head rotated prefix into one [seq, heads*rotaryDim] buffer, call the same RoPE, scatter the result back beside the untouched tail. One dispatch instead of eight. The layout equivalence is the entire proof and is spelled out in the code rather than asserted: the dispatch path rotWide has row s equal to the concatenation over h of x[s, h*hd : h*hd+rotaryDim], which is what the gather builds; the RoPE is the same op with the same attrs on the same shape; the scatter rebuilds what concat-plus-reshape produced.
+
+MEASURED, allocation counts identical every round, timing ranges non-overlapping, within-arm spreads about 5% so the PERF-MINOFN-NOT-A-DEFENSE-001 spread check passes:
+  GPTNeoX   3071 -> 1891 allocs  -38.4%   181-191us -> 145-153us  1.25x
+  StableLM  2811 -> 1631 allocs  -42.0%   122-126us ->  95- 96us  1.28x
+  Nemotron  2721 -> 1541 allocs  -43.4%   120-121us ->  90- 92us  1.33x
+Exactly -1180 allocations on all three - same helper, same call count, which is itself a consistency check. The other nine architectures are unchanged within jitter and do not use partial RoPE.
+
+PARITY SWEPT OVER SEVEN GEOMETRIES, not one, because the claim is index arithmetic: a single (seq, heads, rotaryDim) triple can agree by coincidence when an offset is wrong, and rotaryDim == hd takes a different early-return branch. The sweeps first version included an ODD rotaryDim and failed on the backends own even-head-dim validation - a bad test rather than a finding, and worth recording because a sweep that fails for an invalid-input reason looks exactly like a sweep that found a bug.
+
+GENERALIZED INTO PS6018 layout-op-cluster-unfused, three or more pure movement dispatches with no fused raw-storage path. The key property is that MOVEMENT CANNOT CHANGE A VALUE, so the fix is bit-identical by construction - index arithmetic, no numerical judgment - which is what makes the class flaggable on sight where a bare dispatch-count report would not be. PS4011 does not subsume it: that rule needs a sequential loop and partialRoPE is straight-line, so the largest win of the three was invisible to it. 27 candidates tree-wide; the one surviving hit among the three fixed files is attnReconstructed, the DeepSeekV2 loop deliberately left unfused, which is the rule reporting exactly the known gap.
+
+CUMULATIVE, matrix decode allocations: Gemma2 4862 to 3522, DeepSeekV2 5166 to 4686, GPTNeoX 3072 to 1891, StableLM 2812 to 1631, Nemotron 2721 to 1541. The spread that started the investigation - 4.5x between the worst architecture and MPT - is now about 3.2x, and the remaining head is Gemma2 and DeepSeekV2, both of which still carry unfused per-head arithmetic that would need a numerical argument rather than an index one.
