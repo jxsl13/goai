@@ -56,7 +56,19 @@ func TestQMatMulFusedDecodeMatchesGeneralPathExactly(t *testing.T) {
 					t.Fatalf("general qt=%d k=%d n=%d: %v", qt, k, n, err)
 				}
 				gf, ff := general.Storage().F32(), fused.Storage().F32()
+				// Q8_0's m==1 fused path is the SIMD dequant-dot (tolerance-gated: f32
+				// within-block sum + per-block factored scale) when that kernel is
+				// registered (amd64+simd build); every other format's fused path stays
+				// bit-identical to the general one.
+				q8Tol := qt == Q8_0 && q8FusedDecodeM1 != nil
 				for ni := range n {
+					if q8Tol {
+						if d := math.Abs(float64(ff[ni] - gf[ni])); d > 5e-5*math.Abs(float64(gf[ni]))+1e-6 {
+							t.Fatalf("qt=Q8_0(simd) k=%d n=%d out[%d]: m==1 %v vs general %v (|Δ|=%g > tol)",
+								k, n, ni, ff[ni], gf[ni], d)
+						}
+						continue
+					}
 					if math.Float32bits(ff[ni]) != math.Float32bits(gf[ni]) {
 						t.Fatalf("qt=%d k=%d n=%d out[%d]: m==1 %v (%#x) != m==2 row 0 %v (%#x)"+
 							" — the single-token path is not bit-identical to the general one",
