@@ -59,6 +59,69 @@ func rmsNormNormalizeF32(x, gamma, out []float32, inv float32) {
 	}
 }
 
+// rmsNormDxF32 writes the RMSNorm backward dx row 8-wide: dx[j] = inv·(u[j]·g[j] −
+// x[j]·c), the f32 twin of the scalar-f64 loop in rmsNormBwd (c = inv²·s/d hoisted by
+// the caller). Same associativity as the scalar form — the subtract is folded as one
+// FMA (x·(−c)+a) — evaluated in f32, so it rides the f32 norm budget (rtol 5e-5, ADR-0021)
+// exactly like the forward normalize. 8-lane body + scalar tail; scalar fallback when the
+// CPU lacks AVX/FMA.
+func rmsNormDxF32(u, g, x, dx []float32, inv, c float32) {
+	if !vexpHasAVX {
+		for j := range dx {
+			dx[j] = inv * (u[j]*g[j] - x[j]*c)
+		}
+		return
+	}
+	ivv := archsimd.BroadcastFloat32x8(inv)
+	ncv := archsimd.BroadcastFloat32x8(-c)
+	n8 := len(dx) &^ 7
+	for i := 0; i < n8; i += 8 {
+		uv := archsimd.LoadFloat32x8Slice(u[i:])
+		gv := archsimd.LoadFloat32x8Slice(g[i:])
+		xv := archsimd.LoadFloat32x8Slice(x[i:])
+		a := uv.Mul(gv)               // u·g
+		t := xv.MulAdd(ncv, a)        // x·(−c) + a = a − x·c
+		t.Mul(ivv).StoreSlice(dx[i:]) // inv·(a − x·c)
+	}
+	for i := n8; i < len(dx); i++ {
+		dx[i] = inv * (u[i]*g[i] - x[i]*c)
+	}
+}
+
+// layerNormDxF32 writes the LayerNorm backward dx row 8-wide: dx[j] = inv·(u[j]·g[j] −
+// meanA − x̂·meanAX) with x̂ = (x[j]−mu)·inv, the f32 twin of the scalar-f64 loop in
+// layerNormBwd. Same (a−meanA)−x̂·meanAX association (the last term folded as one FMA),
+// evaluated in f32 on the f32 norm budget. 8-lane body + scalar tail; scalar fallback
+// without AVX/FMA.
+func layerNormDxF32(u, g, x, dx []float32, mu, inv, meanA, meanAX float32) {
+	if !vexpHasAVX {
+		for j := range dx {
+			xhat := (x[j] - mu) * inv
+			dx[j] = inv * (u[j]*g[j] - meanA - xhat*meanAX)
+		}
+		return
+	}
+	muv := archsimd.BroadcastFloat32x8(mu)
+	ivv := archsimd.BroadcastFloat32x8(inv)
+	mAv := archsimd.BroadcastFloat32x8(meanA)
+	nmAXv := archsimd.BroadcastFloat32x8(-meanAX)
+	n8 := len(dx) &^ 7
+	for i := 0; i < n8; i += 8 {
+		uv := archsimd.LoadFloat32x8Slice(u[i:])
+		gv := archsimd.LoadFloat32x8Slice(g[i:])
+		xv := archsimd.LoadFloat32x8Slice(x[i:])
+		a := uv.Mul(gv)              // u·g
+		xhat := xv.Sub(muv).Mul(ivv) // (x−mu)·inv
+		t := a.Sub(mAv)              // a − meanA
+		r := xhat.MulAdd(nmAXv, t)   // x̂·(−meanAX) + t = t − x̂·meanAX
+		r.Mul(ivv).StoreSlice(dx[i:])
+	}
+	for i := n8; i < len(dx); i++ {
+		xhat := (x[i] - mu) * inv
+		dx[i] = inv * (u[i]*g[i] - meanA - xhat*meanAX)
+	}
+}
+
 // The f32 norm reductions, AVX2 8-wide with f64-WIDENED accumulation: each 8-lane f32 load splits
 // into two f32x4 halves, widens to f64x4 (ConvertToFloat64) and accumulates into f64x4 lanes — so the
 // sum stays f64-accurate (8 independent f64 partials, ~1e-15 rel), matching the scalar 4-accumulator

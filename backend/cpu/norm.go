@@ -340,6 +340,7 @@ func rmsNormBwd[T normFloat](x, gamma, up, dx, dgamma []T, rows, d int, eps floa
 	x32, isF32 := any(x).([]float32)
 	u32, _ := any(up).([]float32)
 	g32, _ := any(gamma).([]float32)
+	d32, _ := any(dx).([]float32)
 	gm := gamma[:d:d]
 	parallelWork(rows, 4*d, func(lo, hi int) {
 		for r := lo; r < hi; r++ {
@@ -366,7 +367,11 @@ func rmsNormBwd[T normFloat](x, gamma, up, dx, dgamma []T, rows, d int, eps floa
 					s += a * float64(xr[j])
 				}
 			}
-			if isF32 {
+			if isF32 && normF32Fast {
+				// AVX2 8-wide dx write (f32 budget); scalar f32 kept below for other builds.
+				c := iv * iv * s / float64(d)
+				rmsNormDxF32(u32[base:base+d], g32, x32[base:base+d], d32[base:base+d], float32(iv), float32(c))
+			} else if isF32 {
 				// hoisted c = r²·s/d (f32 budget absorbs the regrouping);
 				// f64 keeps ref's exact per-element expression below.
 				c := iv * iv * s / float64(d)
@@ -510,6 +515,7 @@ func layerNormBwd[T normFloat](x, gamma, up, dx, dgamma, dbeta []T, rows, d int,
 	x32, isF32 := any(x).([]float32)
 	u32, _ := any(up).([]float32)
 	g32, _ := any(gamma).([]float32)
+	d32, _ := any(dx).([]float32)
 	gm := gamma[:d:d]
 	parallelWork(rows, 6*d, func(lo, hi int) {
 		for r := lo; r < hi; r++ {
@@ -548,10 +554,15 @@ func layerNormBwd[T normFloat](x, gamma, up, dx, dgamma, dbeta []T, rows, d int,
 			}
 			meanA /= float64(d)
 			meanAX /= float64(d)
-			for j, g := range gm {
-				xhat := (float64(xr[j]) - mu) * iv
-				a := float64(ur[j]) * float64(g)
-				dr[j] = T(iv * (a - meanA - xhat*meanAX))
+			if isF32 && normF32Fast {
+				layerNormDxF32(u32[base:base+d], g32, x32[base:base+d], d32[base:base+d],
+					float32(mu), float32(iv), float32(meanA), float32(meanAX))
+			} else {
+				for j, g := range gm {
+					xhat := (float64(xr[j]) - mu) * iv
+					a := float64(ur[j]) * float64(g)
+					dr[j] = T(iv * (a - meanA - xhat*meanAX))
+				}
 			}
 		}
 	})
