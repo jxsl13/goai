@@ -435,3 +435,8 @@ IF an optimization removes source-level branches from a hot loop, THEN the imple
 WHEN a globally-unique ID (a perfscan PSxxxx, a task ID) collides while rebasing or merging, the resolving agent SHALL list the remaining commits of the branch being replayed and reuse the replacement ID a later commit already assigns, instead of picking the next number free in the current tree.
 
 Rationale: During a 180-commit rebase, main had claimed PS6005 for a different rule. The first resolution invented PS6014 from the IDs visible in the tree at that point. Six commits later a branch commit titled renumber PS6005 to PS6010 arrived, with PATTERNS.md and docs already citing PS6010, and the whole renumber had to be undone and redone. The rest of the todo already held the answer.
+
+## PROC-RESOURCE-CLAIM-001
+WHEN a change is justified by a resource property (goroutine count, peak memory, allocation residency) rather than by throughput, the implementing agent SHALL measure that resource directly, in the specific scenario the justification names, and record both numbers before writing the claim into a comment or commit message.
+
+Rationale: A bounded-pool change was justified by nested callers: a parallel mixer calling a parallel matmul. Sampling peak live goroutines gave 37 either way, because the nested path took a different branch that was already pooled, so the named scenario never reached the changed code. The change was still worth keeping (22 against 98-101 peak goroutines under concurrent callers, at neutral throughput) but for a different reason than the one nearly committed. Throughput parity is not evidence for a resource claim, and a resource measurement of the wrong scenario is not either.
