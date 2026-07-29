@@ -68,7 +68,8 @@ func qmatmulParallelChunks(n, workPerRow int, body func(lo, hi int)) {
 // result is [m,n], and weight carries n rows of k quantized values in qt's block layout.
 //
 // Single-row inputs (m == 1, the decode step) take fused per-type kernels that dequantize
-// straight into the dot product; wider inputs use the blocked path.
+// straight into the dot product; wider inputs use the blocked path. Both parallelize across
+// output rows.
 func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.Tensor, error) {
 	if x.Ndim() != 2 || x.Shape()[1] != k {
 		return nil, fmt.Errorf("gguf: QMatMul x must be [M,%d], got %v", k, x.Shape())
