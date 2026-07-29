@@ -120,7 +120,8 @@ func quantizeQ8_0(x []float32) []byte {
 		blk := x[b*blockElems : (b+1)*blockElems]
 		var amax float32
 		for _, v := range blk {
-			if a := float32(math.Abs(float64(v))); a > amax {
+			// bit-exact abs via sign-bit clear (no f32->f64->f32 round-trip); |v| identical to math.Abs
+			if a := math.Float32frombits(math.Float32bits(v) &^ (1 << 31)); a > amax {
 				amax = a
 			}
 		}
