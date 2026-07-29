@@ -3,6 +3,8 @@ package gguf
 import (
 	"encoding/binary"
 	"fmt"
+	"runtime"
+	"sync"
 
 	"github.com/jxsl13/goai/tensor"
 )
@@ -44,6 +46,39 @@ var dotQ4KRowFn = dotQ4_KRow
 // matmul with the SIMD dequant-dot kernel (tolerance-gated). Nil → scalar fused path.
 var q8FusedDecodeM1 func(row []float32, weight []byte, n, k, rowBytes int, outf []float32)
 
+// qmatmulParallelChunks runs body over disjoint output-row chunks of [0,n) across
+// GOMAXPROCS. Each output row is an independent dequant-dot (disjoint outf[...ni], no
+// cross-ni reduction), so chunking is bit-identical to the serial loop. Serial below a
+// small total-work threshold.
+func qmatmulParallelChunks(n, workPerRow int, body func(lo, hi int)) {
+	nw := runtime.GOMAXPROCS(0)
+	if nw > n {
+		nw = n
+	}
+	if nw <= 1 || n*workPerRow < 1<<17 {
+		body(0, n)
+		return
+	}
+	csz := (n + nw - 1) / nw
+	var wg sync.WaitGroup
+	for c := 0; c < nw; c++ {
+		lo := c * csz
+		if lo >= n {
+			break
+		}
+		hi := lo + csz
+		if hi > n {
+			hi = n
+		}
+		wg.Add(1)
+		go func(lo, hi int) {
+			defer wg.Done()
+			body(lo, hi)
+		}(lo, hi)
+	}
+	wg.Wait()
+}
+
 func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.Tensor, error) {
 	if x.Ndim() != 2 || x.Shape()[1] != k {
 		return nil, fmt.Errorf("gguf: QMatMul x must be [M,%d], got %v", k, x.Shape())
@@ -84,62 +119,62 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 	// path — fusing there would re-dequantize the row for every activation row.)
 	if qt == Q8_0 && m == 1 && xf32 != nil {
 		row := xf32[:k]
-		if q8FusedDecodeM1 != nil {
-			q8FusedDecodeM1(row, weight, n, k, rowBytes, outf)
-			return out, nil
-		}
-		// Register-block the OUTPUT (weight-row) loop by 4: m==1 so the single activation
-		// row is shared across all n outputs — reuse each row element's load+f64-convert
-		// across 4 weight rows (and the fixed-length block subslices drop the per-element
-		// bounds check). This is the dual of the m>1 unroll-and-jam. Bit-exact: each output
-		// keeps its own accumulator, wv=d·int8(q) is computed as before, ascending-k order
-		// preserved. Scalar tail for n%4.
-		ni := 0
-		for ; ni+4 <= n; ni += 4 {
-			rb0 := weight[(ni+0)*rowBytes:]
-			rb1 := weight[(ni+1)*rowBytes:]
-			rb2 := weight[(ni+2)*rowBytes:]
-			rb3 := weight[(ni+3)*rowBytes:]
-			var a0, a1, a2, a3 float64
-			for b := 0; b*blockElems < k; b++ {
-				o := b * 34
-				d0 := f16ToF32(binary.LittleEndian.Uint16(rb0[o : o+2]))
-				d1 := f16ToF32(binary.LittleEndian.Uint16(rb1[o : o+2]))
-				d2 := f16ToF32(binary.LittleEndian.Uint16(rb2[o : o+2]))
-				d3 := f16ToF32(binary.LittleEndian.Uint16(rb3[o : o+2]))
-				q0 := rb0[o+2 : o+34]
-				q1 := rb1[o+2 : o+34]
-				q2 := rb2[o+2 : o+34]
-				q3 := rb3[o+2 : o+34]
-				rrow := row[b*blockElems : b*blockElems+blockElems]
-				for i := 0; i < blockElems; i++ {
-					xv := float64(rrow[i])
-					a0 += xv * float64(d0*float32(int8(q0[i])))
-					a1 += xv * float64(d1*float32(int8(q1[i])))
-					a2 += xv * float64(d2*float32(int8(q2[i])))
-					a3 += xv * float64(d3*float32(int8(q3[i])))
-				}
+		// Decode (m==1) is chunk-parallel over the independent output rows. The SIMD kernel
+		// is called per weight-offset/output-slice chunk; the scalar 4-way path runs its
+		// register-block + tail within each chunk. Each output row is an independent dot
+		// (own accumulator, ascending-k order, disjoint outf) → bit-identical.
+		qmatmulParallelChunks(n, k, func(lo, hi int) {
+			if q8FusedDecodeM1 != nil {
+				q8FusedDecodeM1(row, weight[lo*rowBytes:], hi-lo, k, rowBytes, outf[lo:hi])
+				return
 			}
-			outf[ni+0] = float32(a0)
-			outf[ni+1] = float32(a1)
-			outf[ni+2] = float32(a2)
-			outf[ni+3] = float32(a3)
-		}
-		for ; ni < n; ni++ {
-			rowBits := weight[ni*rowBytes : (ni+1)*rowBytes]
-			var acc float64
-			for b := 0; b*blockElems < k; b++ {
-				blk := rowBits[b*34 : b*34+34]
-				d := f16ToF32(binary.LittleEndian.Uint16(blk))
-				q := blk[2:34]
-				base := b * blockElems
-				for i := 0; i < blockElems; i++ {
-					wv := d * float32(int8(q[i]))
-					acc += float64(row[base+i]) * float64(wv)
+			ni := lo
+			for ; ni+4 <= hi; ni += 4 {
+				rb0 := weight[(ni+0)*rowBytes:]
+				rb1 := weight[(ni+1)*rowBytes:]
+				rb2 := weight[(ni+2)*rowBytes:]
+				rb3 := weight[(ni+3)*rowBytes:]
+				var a0, a1, a2, a3 float64
+				for b := 0; b*blockElems < k; b++ {
+					o := b * 34
+					d0 := f16ToF32(binary.LittleEndian.Uint16(rb0[o : o+2]))
+					d1 := f16ToF32(binary.LittleEndian.Uint16(rb1[o : o+2]))
+					d2 := f16ToF32(binary.LittleEndian.Uint16(rb2[o : o+2]))
+					d3 := f16ToF32(binary.LittleEndian.Uint16(rb3[o : o+2]))
+					q0 := rb0[o+2 : o+34]
+					q1 := rb1[o+2 : o+34]
+					q2 := rb2[o+2 : o+34]
+					q3 := rb3[o+2 : o+34]
+					rrow := row[b*blockElems : b*blockElems+blockElems]
+					for i := 0; i < blockElems; i++ {
+						xv := float64(rrow[i])
+						a0 += xv * float64(d0*float32(int8(q0[i])))
+						a1 += xv * float64(d1*float32(int8(q1[i])))
+						a2 += xv * float64(d2*float32(int8(q2[i])))
+						a3 += xv * float64(d3*float32(int8(q3[i])))
+					}
 				}
+				outf[ni+0] = float32(a0)
+				outf[ni+1] = float32(a1)
+				outf[ni+2] = float32(a2)
+				outf[ni+3] = float32(a3)
 			}
-			outf[ni] = float32(acc)
-		}
+			for ; ni < hi; ni++ {
+				rowBits := weight[ni*rowBytes : (ni+1)*rowBytes]
+				var acc float64
+				for b := 0; b*blockElems < k; b++ {
+					blk := rowBits[b*34 : b*34+34]
+					d := f16ToF32(binary.LittleEndian.Uint16(blk))
+					q := blk[2:34]
+					base := b * blockElems
+					for i := 0; i < blockElems; i++ {
+						wv := d * float32(int8(q[i]))
+						acc += float64(row[base+i]) * float64(wv)
+					}
+				}
+				outf[ni] = float32(acc)
+			}
+		})
 		return out, nil
 	}
 
@@ -154,24 +189,28 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 	// general path uses.
 	if qt == Q4_0 && m == 1 && xf32 != nil {
 		row := xf32[:k]
-		for ni := range n {
-			rowBits := weight[ni*rowBytes : (ni+1)*rowBytes]
-			var acc float64
-			for b := 0; b*blockElems < k; b++ {
-				blk := rowBits[b*18 : b*18+18]
-				d := f16ToF32(binary.LittleEndian.Uint16(blk))
-				qs := blk[2:18]
-				base := b * blockElems
-				lo, hi := row[base:base+16], row[base+16:base+32]
-				for i, q := range qs {
-					acc += float64(lo[i]) * float64(d*float32(int(q&0x0F)-8))
+		// Decode (m==1) row dots are independent per output row → chunk-parallel (nlo/nhi are
+		// the chunk's output-row bounds; the inner lo/hi are the block's nibble halves).
+		qmatmulParallelChunks(n, k, func(nlo, nhi int) {
+			for ni := nlo; ni < nhi; ni++ {
+				rowBits := weight[ni*rowBytes : (ni+1)*rowBytes]
+				var acc float64
+				for b := 0; b*blockElems < k; b++ {
+					blk := rowBits[b*18 : b*18+18]
+					d := f16ToF32(binary.LittleEndian.Uint16(blk))
+					qs := blk[2:18]
+					base := b * blockElems
+					lo, hi := row[base:base+16], row[base+16:base+32]
+					for i, q := range qs {
+						acc += float64(lo[i]) * float64(d*float32(int(q&0x0F)-8))
+					}
+					for i, q := range qs {
+						acc += float64(hi[i]) * float64(d*float32(int(q>>4)-8))
+					}
 				}
-				for i, q := range qs {
-					acc += float64(hi[i]) * float64(d*float32(int(q>>4)-8))
-				}
+				outf[ni] = float32(acc)
 			}
-			outf[ni] = float32(acc)
-		}
+		})
 		return out, nil
 	}
 
@@ -204,9 +243,12 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 			dot = dotQ6_KRow
 		}
 		row := xf32[:k]
-		for ni := range n {
-			outf[ni] = float32(dot(row, weight[ni*rowBytes:(ni+1)*rowBytes], k))
-		}
+		// Decode (m==1) K-quant row dots are independent per output row → chunk-parallel.
+		qmatmulParallelChunks(n, k, func(lo, hi int) {
+			for ni := lo; ni < hi; ni++ {
+				outf[ni] = float32(dot(row, weight[ni*rowBytes:(ni+1)*rowBytes], k))
+			}
+		})
 		return out, nil
 	}
 
@@ -220,8 +262,17 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 	// rather than a per-row tensor — the n-allocs-per-matmul anti-pattern is gone for all
 	// of them (Q8_0/Q4_0/Q4_K/Q6_K landed first as the common formats; Q2_K/Q3_K/Q5_K —
 	// aggressive quants — complete the set). Fill + dot are byte-for-byte the per-row form.
-	scratch := make([]float32, k)
-	for ni := range n {
+	// qt is validated once here (loop-invariant), so the per-ni body below cannot error.
+	switch qt {
+	case Q8_0, Q4_0, Q2_K, Q3_K, Q4_K, Q5_K, Q6_K:
+	default:
+		return nil, fmt.Errorf("gguf: QMatMul unsupported quant type %d", qt)
+	}
+	// process dequantizes weight row ni into its OWN scratch and writes the disjoint output
+	// column outf[*n+ni] for all m activation rows. Rows ni are independent (per-ni scratch,
+	// disjoint output column, no cross-ni reduction), so chunk-parallel across GOMAXPROCS is
+	// byte-for-byte identical to the serial loop; the default dtype branch reads x read-only.
+	process := func(scratch []float32, ni int) {
 		rowBits := weight[ni*rowBytes : (ni+1)*rowBytes]
 		switch qt {
 		case Q8_0:
@@ -238,8 +289,6 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 			dequantQ5_KInto(scratch, rowBits)
 		case Q6_K:
 			dequantQ6_KInto(scratch, rowBits)
-		default:
-			return nil, fmt.Errorf("gguf: QMatMul unsupported quant type %d", qt)
 		}
 		wf := scratch
 		// Unroll-and-jam the activation-row (mi) loop by 4: the dequantized weight row wf is
@@ -316,5 +365,37 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 			}
 		}
 	}
+	nw := runtime.GOMAXPROCS(0)
+	if nw > n {
+		nw = n
+	}
+	if nw <= 1 || m*n*k < 1<<20 {
+		scratch := make([]float32, k)
+		for ni := range n {
+			process(scratch, ni)
+		}
+		return out, nil
+	}
+	csz := (n + nw - 1) / nw
+	var wg sync.WaitGroup
+	for c := 0; c < nw; c++ {
+		lo := c * csz
+		if lo >= n {
+			break
+		}
+		hi := lo + csz
+		if hi > n {
+			hi = n
+		}
+		wg.Add(1)
+		go func(lo, hi int) {
+			defer wg.Done()
+			scratch := make([]float32, k)
+			for ni := lo; ni < hi; ni++ {
+				process(scratch, ni)
+			}
+		}(lo, hi)
+	}
+	wg.Wait()
 	return out, nil
 }
