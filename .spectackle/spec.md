@@ -430,3 +430,8 @@ WHEN a merge resolves a hot file by taking the other side's version wholesale, t
 
 ## PERF-COMPILER-ALREADY-001
 IF an optimization removes source-level branches from a hot loop, THEN the implementer SHALL check the compiler does not already emit a conditional select, since a branchless Q3_K rewrite measured exactly 1.00x (see R-01KYQM4YDNFZ2).
+
+## PROC-ID-RENUMBER-001
+WHEN a globally-unique ID (a perfscan PSxxxx, a task ID) collides while rebasing or merging, the resolving agent SHALL list the remaining commits of the branch being replayed and reuse the replacement ID a later commit already assigns, instead of picking the next number free in the current tree.
+
+Rationale: During a 180-commit rebase, main had claimed PS6005 for a different rule. The first resolution invented PS6014 from the IDs visible in the tree at that point. Six commits later a branch commit titled renumber PS6005 to PS6010 arrived, with PATTERNS.md and docs already citing PS6010, and the whole renumber had to be undone and redone. The rest of the todo already held the answer.
