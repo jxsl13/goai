@@ -14,6 +14,8 @@ WHEN a //perfscan:ignore directive is written, the a perfscan suppression SHALL 
 ## PROC-PROFILE-PARKED-001
 IF a parallel program profiles as mostly runtime synchronization, THEN the reader SHALL measure the GOMAXPROCS 1/4/12 curve before calling it overhead; parked time is attributed but free, and a spin-before-park replacement measured 2-4% slower.
 
+Rationale: Two directions of the same trap, both measured. Parked worker time: a parallel program profiling as mostly runtime synchronization is not necessarily paying for it — parked time is attributed but free, and a spin-before-park replacement measured 2-4% slower. Scavenger time: a CPU profile of linalg.Lstsq showed runtime.madvise at 24.36% of samples, which reads as a quarter of the wall clock spent reclaiming pages. Cutting the allocation count by 39.7% dropped madvise to 9.97% and moved the wall clock not at all at n>=512 (781.7ms versus 780.6ms, p=0.743), because the scavenger runs concurrently and was never on the critical path. The general rule: a runtime symbol high in a CPU profile is a claim about attributed samples, not about latency, and any optimization aimed at one must be justified by a wall-clock A/B rather than by the share it removes. Such work can still be worth shipping as a RESOURCE improvement — 40% fewer allocations is less allocator and GC-scan work on every machine — but the claim has to be stated as resource usage, not speed.
+
 ## PERF-CHECK-ADVICE-MUST-TRANSFER-001
 WHEN a perfscan check states a remedy generalized from one measured site, the implementing agent SHALL re-measure that remedy on a site with the opposite memory-access shape before stating it unconditionally.
 
