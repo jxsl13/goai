@@ -254,3 +254,32 @@ func BenchmarkGemmF32PackSameBlocks(b *testing.B) {
 		})
 	}
 }
+
+// BenchmarkGemmF32PackRemainder measures the packed band's single-row remainder at a size where the
+// timing is stable. The small-geometry sweeps run 30us ops with 20-40% spread, which cannot resolve
+// a change confined to a few rows; at k=n=512 each op is milliseconds.
+//
+// rem=0 is the CONTROL: the row remainder does not execute there, so any change to it must be inert.
+func BenchmarkGemmF32PackRemainder(b *testing.B) {
+	w := runtime.GOMAXPROCS(0)
+	const k, n = 512, 512
+	for _, rem := range []int{0, 1, 2, 3} {
+		m := (8 + rem) * w // 2 full tile blocks per band, plus rem leftover rows
+		b.Run(fmt.Sprintf("rem=%d", rem), func(b *testing.B) {
+			rng := rand.New(rand.NewSource(int64(rem) + 3))
+			A := make([]float32, m*k)
+			B := make([]float32, k*n)
+			C := make([]float32, m*n)
+			for i := range A {
+				A[i] = rng.Float32()*2 - 1
+			}
+			for i := range B {
+				B[i] = rng.Float32()*2 - 1
+			}
+			b.ResetTimer()
+			for range b.N {
+				gemmF32(A, B, C, m, k, n)
+			}
+		})
+	}
+}

@@ -379,13 +379,38 @@ func gemmF32BandPacked(A, B []float32, pack []float64, acc []float64, loRow, hiR
 			}
 		}
 	}
-	for ; i < hiRow; i++ { // single-row remainder: unchanged, reads B directly
+	// Single-row remainder. It reads the PACKED panel for the full tiles, like the 4-row body
+	// above, rather than streaming B directly: the pack has already been built and paid for by
+	// this point, so a remainder row that ignored it would re-walk B strided for nothing. Only the
+	// columns past the last full tile fall back to B.
+	//
+	// This matters more than "remainder" suggests. A band gets ceil(m/workers) rows and the tile
+	// takes them four at a time, so ANY m that is not a multiple of 4*workers leaves rows here —
+	// which is most shapes.
+	for ; i < hiRow; i++ {
 		ci := acc[i*n : (i+1)*n]
-		for p := range k {
-			aip := float64(A[i*k+p])
-			bp := B[p*n : (p+1)*n]
-			for j, bv := range bp {
-				ci[j] += aip * float64(bv)
+		ar := A[i*k : (i+1)*k]
+		for t := range nt {
+			j := t * 4
+			bcol := pack[t*k*4 : (t+1)*k*4]
+			v0, v1, v2, v3 := ci[j], ci[j+1], ci[j+2], ci[j+3]
+			for p := range k {
+				bp := bcol[p*4 : p*4+4]
+				a := float64(ar[p])
+				v0 += a * bp[0]
+				v1 += a * bp[1]
+				v2 += a * bp[2]
+				v3 += a * bp[3]
+			}
+			ci[j], ci[j+1], ci[j+2], ci[j+3] = v0, v1, v2, v3
+		}
+		if rem := nt * 4; rem < n {
+			for p := range k {
+				aip := float64(ar[p])
+				bp := B[p*n : (p+1)*n]
+				for jj := rem; jj < n; jj++ {
+					ci[jj] += aip * float64(bp[jj])
+				}
 			}
 		}
 	}
