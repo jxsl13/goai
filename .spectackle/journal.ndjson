@@ -282,3 +282,4 @@
 {"t":"2026-07-29T05:21:35Z","eid":"6c85ccc83fe5778d","ag":"ag-5fcc","ev":"bench","id":"M-01KYP54BTCFG8RSMH6ZEY0K3EH","k":"bench","ti":"backend/ref/GSPO/goai-typed","note":"backend/ref/gspo/goai-typed|arch=amd64|cpu=ryzen7-5700g-zen3-16t|gpu=rtx3060-12gb|os=linux|ram=30gib"}
 {"t":"2026-07-30T14:12:19Z","eid":"e3d05e397253a443","ag":"ag-ee8d","ev":"create","id":"T-01KYSNWWK3FA0T31GXB394QAJP","k":"task","ti":"F32 softplus vectorized on vexp (vsoftplusF32) — sibling of #648"}
 {"t":"2026-07-30T14:17:31Z","eid":"4bc7425833c7ff7a","ag":"ag-d70f","ev":"create","id":"T-01KYSP6DEBEJN8M5KDTKKD2GZ5","k":"task","ti":"F32 Softplus vectorized on vexp (vsoftplusF32) SHIPPED #649 2.2-2.6x"}
+{"t":"2026-07-30T14:28:21Z","eid":"f79b54acb0b67f96","ag":"ag-1376","ev":"create","id":"R-01KYSPT8H6EPMVY1DMK5GQ4J9Q","k":"research","ti":"Scout: mainstream F32 inference frontier CONFIRMED worked-through (2026-07-30)"}

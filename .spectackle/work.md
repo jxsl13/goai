@@ -855,3 +855,10 @@ state: draft
 created: 2026-07-30
 
 Sibling of #648. softplusF32x8=max(x,0)+log(1+e^-|x|) via expF32x8+vlogF32 poly (log arg in (1,2] → no specials). Gated vexpF32Fast, default byte-identical, SIMD tol-gated. Bench count=5: MambaΔ 512x5120 2.23x, 1x5120 2.19x, 64K 2.55x. PR #649. F32-activation-SIMD vein now FULLY closed.
+
+## R-01KYSPT8H6EPMVY1DMK5GQ4J9Q Scout: mainstream F32 inference frontier CONFIRMED worked-through (2026-07-30)
+kind: research
+state: draft
+created: 2026-07-30
+
+105k-token read-only scout of backend/cpu vs backend/ref registrations + model drivers. RESULT: NO clean high-leverage un-optimized F32 inference kernel left. Confirmed optimal: RMSNorm/LayerNorm(+bwd) norm.go, Softmax (softmaxWide), AddBias(+bwd), Conv1D fwd, reduce-all Sum/Mean/Max/Min/Prod, MHAMasked F64, all elementwise activations. Leftovers all LOW-EV: (1) axis-reductions fall to ref scalar (bit-exact fixable but rare in inference); (2) MHAMasked/MHASelect F32 unregistered→ref but T5 runs F64 so unexercised; (3) mamba_decode.go mixerStep/mixerPrefill S6 scan serial over independent D channels (SSM-adjacent, parallelizable bit-exact, but scan is fraction of prefill); (4) misc elementwise Sqrt/Clip→ref, Griffin runs F64. Highest-EV=#3 but e2e-dilution risk.
