@@ -54,3 +54,30 @@ qualified as a result.
 - **Pool sets must be sized on `get`.** A process can hold models or caches of
   different geometry; a set recycled from a smaller one has to be grown, not
   silently reused too short.
+
+## Other axes swept, and found clean
+
+Recorded so they are not re-run: each of these was profiled across the lanes
+above and produced nothing actionable.
+
+- **Blocking (`-blockprofile`, vision).** 83% of all delay is `runtime.chanrecv`,
+  and 61% of the total is pool workers parked on their task channel — idle
+  workers waiting for work, not contention. The actual barrier cost, the
+  caller's `sync.WaitGroup.Wait` inside `parallelWork`, is 2.86% of delay. A
+  block profile of any pooled program is dominated by expected idleness; read
+  the `WaitGroup` line, not the total.
+- **Mutex contention (`-mutexprofile`, vision and classic).** ~0.42s of delay in
+  each, of which 78–85% is `runtime.unlock` — runtime-internal locks from the
+  allocator, GC and scheduler, not application mutexes. `sync.(*Mutex).Unlock`
+  is 62ms in vision and 8ms in classic. There is no lock contention to fix, and
+  the runtime-lock share is itself reduced by the allocation work above rather
+  than by anything lock-specific.
+- **`backend/cpu` allocations.** The package allocates almost nothing of its own:
+  `getF64` and `getF64Raw` together are 1.1GB of 91.9GB (1.2%), and those are
+  pool MISSES, i.e. the pools working. Its large cumulative figures — `binOp` at
+  12.3GB, `addBiasKernel` at 6.6GB — are the per-op output tensors, the same
+  ownership question listed under "Declined" above.
+
+The pattern across all four axes is that the remaining allocation mass in this
+repo is output-tensor construction at the backend boundary. That is one design
+decision, not a set of local fixes.
