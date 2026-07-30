@@ -438,32 +438,69 @@ func (m *MemMemory) retrieveHead(q []float64, headOff, headDim, topM int) (idx [
 	if topM > n {
 		topM = n
 	}
-	all := make([]struct {
+	type se struct {
 		i int
 		s float64
-	}, n)
+	}
+	// worse reports whether a ranks AFTER b under the total order (score desc, index
+	// asc): a is worse when it scores lower, or ties and has the higher index.
+	worse := func(a, b se) bool {
+		if a.s != b.s {
+			return a.s < b.s
+		}
+		return a.i > b.i
+	}
+	// Keep only the topM best via a bounded min-heap whose ROOT is the current WORST
+	// kept element, so a better candidate evicts it in O(log topM) — O(n log topM)
+	// total, versus sorting all n (O(n log n) plus reflect.Swapper swaps and an O(n)
+	// scratch alloc per call). The comparator is a STRICT total order (index is a
+	// unique tiebreak → no genuine ties), so the kept set and its order are uniquely
+	// determined: the result is bit-identical to taking the first topM of the full sort.
+	heap := make([]se, 0, topM)
+	siftDown := func(i int) {
+		for {
+			lo := i
+			if l := 2*i + 1; l < len(heap) && worse(heap[l], heap[lo]) {
+				lo = l
+			}
+			if r := 2*i + 2; r < len(heap) && worse(heap[r], heap[lo]) {
+				lo = r
+			}
+			if lo == i {
+				return
+			}
+			heap[i], heap[lo] = heap[lo], heap[i]
+			i = lo
+		}
+	}
 	for i := range m.keys {
 		var s float64
-		row := m.keys[i]
+		row := m.keys[i][headOff : headOff+headDim]
 		for d := range headDim {
-			s += q[d] * row[headOff+d]
+			s += q[d] * row[d]
 		}
-		all[i].i, all[i].s = i, s
+		e := se{i, s}
+		if len(heap) < topM {
+			heap = append(heap, e)
+			for j := len(heap) - 1; j > 0; { // sift up
+				p := (j - 1) / 2
+				if !worse(heap[j], heap[p]) {
+					break
+				}
+				heap[j], heap[p] = heap[p], heap[j]
+				j = p
+			}
+		} else if topM > 0 && worse(heap[0], e) { // root is the worst kept; e is better
+			heap[0] = e
+			siftDown(0)
+		}
 	}
-	// Total-order comparator (score desc, then unique index asc) → the unstable
-	// sort.Slice reproduces the exact order SliceStable produced, at pdqsort speed
-	// instead of the slower stable symMerge. The score tie is broken deterministically
-	// by index, so the result is bit-identical.
-	sort.Slice(all, func(a, b int) bool {
-		if all[a].s != all[b].s {
-			return all[a].s > all[b].s
-		}
-		return all[a].i < all[b].i
-	})
+	// heap now holds the topM best (heap-ordered); order them best-first for the caller.
+	sort.Slice(heap, func(a, b int) bool { return worse(heap[b], heap[a]) })
 	idx = make([]int, topM)
 	scores = make([]float64, topM)
 	for r := range topM {
-		idx[r], scores[r] = all[r].i, all[r].s
+		idx[r], scores[r] = heap[r].i, heap[r].s
 	}
 	return idx, scores
 }

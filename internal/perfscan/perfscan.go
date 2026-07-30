@@ -184,7 +184,7 @@ var checks = []check{
 	{"PS1003", "batch-single-elt", "a batch API called with a single-element slice literal inside a loop", false},
 	{"PS1004", "spread-accessor-in-loop", "a variadic AtF64/SetF64(idx...) spread call in a loop outside PS1001's Numel/Unravel domain (rebuilds the flat offset + bounds-checks each call)", false},
 	{"PS1005", "manual-walk-dispatch", "a per-element AtF64/SetF64 whose 2+ index args are enclosing-loop variables — a manual multi-dim tensor walk via dispatch that PS1001 Numel-loop check misses", false},
-	{"PS1006", "strided-inner-reduction", "a reduction whose INNER loop var is the high-stride (multiplied) part of a flat index ARR[inner*stride + outer] while the OUTER loop var is the contiguous (additive) part — the inner loop strides ARR by `stride` every step (cache-thrashing). Interchange to inner-outer/outer-inner so ARR is walked contiguously; per output element the reduction stays in the same order, so it is bit-identical. Shipped: MLA value-mix (cpu 1.13x / ref 1.27x)", false},
+	{"PS1006", "strided-inner-reduction", "a reduction whose INNER loop var is the high-stride (multiplied) part of a flat index ARR[inner*stride + outer] while the OUTER loop var is the contiguous (additive) part — the inner loop strides ARR by `stride` every step (cache-thrashing). Interchange to inner-outer/outer-inner so ARR is walked contiguously; per output element the reduction stays in the same order, so it is bit-identical. Shipped: MLA value-mix (cpu 1.13x / ref 1.27x), spectral-norm power-iter 2.57x (#592). WIN SCALES WITH `stride`×working-set: big when it EXCEEDS L2 (spectral-norm 512²), ~noise when it stays L1-resident — rank candidates by the strided dim's size. When the strided access sits inside a FUSED per-column O(seq²) scan that can't be interchanged (the outer var `c` is fixed per whole scan, e.g. an RWKV/attention recurrence), the remedy is GATHER/SCATTER: copy column c into contiguous scratch once (O(seq) strided), scan the scratch, scatter grads back once — same bit-exact remedy, shipped WKV backward 2.2-2.9x", false},
 	// PS2xxx — allocation inside loops
 	{"PS2001", "alloc-in-loop", "a tensor allocation inside a per-element loop", false},
 	{"PS2002", "unsized-builder", "a strings.Builder/bytes.Buffer written in a loop with no .Grow", false},
@@ -198,6 +198,7 @@ var checks = []check{
 	{"PS3002", "closure-comparator-sort", "a package sort (sort.Slice/SliceStable) with a comparator closure", false},
 	{"PS3003", "int-key-map-in-loop", "a read of an integer-keyed map inside a loop", false},
 	{"PS3005", "indirect-key-comparator", "a sort of an index slice whose comparator dereferences the sorted element into a 2-D structure — hoist the key into a flat column first", false},
+	{"PS3006", "full-sort-take-topk", "a full sort.Slice/SliceStable (or slices.SortFunc/Sort) of a whole slice whose result is consumed ONLY through a bounded top-K prefix (s[:K] or a loop bounded by K reading s[r], K an identifier that is not len(s)) — an O(n log n) sort for an O(K) need. When K ≪ n, a bounded top-K selection (size-K min-heap or quickselect) then sorting just those is O(n log K), and it drops the O(n) sort-scratch alloc. Bit-identical when the comparator is a strict total order (a unique tiebreak → no genuine ties). Shipped: MemMemory.retrieveHead 2.98x. Silent when the slice is ALSO consumed in full (range s, s[:], s[:len(s)], a len(s) loop) or returned/passed whole. Confirm K ≪ n and the total-order tiebreak, then benchmark.", false},
 	// PS4xxx — vectorization candidates
 	{"PS4001", "le-decode-in-loop", "a per-element little-endian bit decode in a loop with no bulk-copy fast path", false},
 	{"PS4002", "scalar-transcendental-vectorizable", "a scalar libm transcendental in a loop while a vectorized sibling is called", false},
@@ -242,7 +243,7 @@ var checks = []check{
 	{"PS4012", "scaled-serial-dot", "a serial scalar dot accumulator whose result is SCALED/dequantized (acc*scale…) before being stored — a quantized/dequant GEMM inner loop; latency-bound like PS4008 but missed by it (acc isn't stored raw). Break the chain with independent accumulators; bit-identical when the products are integer-valued (int8·int8 partials < 2^53 reassociate exactly), else tolerance-gated", false},
 	{"PS5006", "nested-subrange-rescan", "an innermost loop recomputing a running reduction (acc *= / += arr[k]) over a [j..i] sub-range whose bounds are the two enclosing loop vars — an O(T\u00b3) triangular rescan replaceable by a prefix/suffix scan precomputed once per outer index (O(T\u00b2))", false},
 	{"PS5007", "f32-abs-via-f64", "a float32(math.Abs(float64(x))) round-trip on an f32 value — replace with a direct sign-bit clear math.Float32frombits(math.Float32bits(x) &^ (1<<31)); bit-identical |x|, no f64 conversion or call", false},
-	{"PS5008", "sincos-fusable", "a function calling BOTH math.Sin(x) and math.Cos(x) on the SAME argument expression — each does the full argument reduction of x independently; fuse to `sin, cos := math.Sincos(x)` (one reduction, both polynomials). Go's math.Sincos shares Sin/Cos's exact reduction+polynomials so it is bit-identical. Verified: sinusoidal PE builder, RoPE trig fill (attn_extra.go already uses Sincos)", false},
+	{"PS5008", "sincos-fusable", "a function calling BOTH math.Sin(x) and math.Cos(x) on the SAME argument expression — each does the full argument reduction of x independently; fuse to `sin, cos := math.Sincos(x)` (one reduction, both polynomials). Go's math.Sincos shares Sin/Cos's exact reduction+polynomials so it is bit-identical. Wins ONLY where trig DOMINATES the kernel (pure positional encoding, e.g. nn/sinusoidal.go +33% #587) — NOT where the trig is an amortized seq·half PRECOMPUTE feeding a larger matmul/attention: fusing MLA/self-extend RoPE (11 sites) was bit-exact but measured flat/within-noise because the seq²·heads score+value-mix dwarfs the trig (R-01KYRJ6RW1FJ0). Bench the ENCLOSING op, skip if trig <~10% of its work", false},
 }
 
 // catToID indexes the registry for O(1) id lookup at report time.
@@ -1824,7 +1825,11 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	//
 	// Requires BOTH the per-row allocation loop and a two-deep index inside a nested
 	// loop. A [][]T that is merely passed around, or indexed once outside a loop, is
-	// a legitimate ragged structure and not a candidate.
+	// a legitimate ragged structure and not a candidate. The per-row alloc is matched
+	// whether the fill is direct (m[i] = make(...)) or indirect (r := make(...); m[i] = r),
+	// and the two-deep index whether literal (m[i][j]) or via a hoisted row local
+	// (row := m[i]; … row[j]) — the common idiom that lifts the row pointer once per outer
+	// iteration and columns-walks it in the inner loop.
 	{
 		for name := range rowAllocMatrices(fn) {
 			if pos, ok := nestedDoubleIndex(fn, name); ok {
@@ -1995,6 +2000,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	out = append(out, reflectSwapperSortFindings(fset, fn)...)
 	out = append(out, vjpScalarBinopFindings(fset, fn)...)
 	out = append(out, fullSortBoundedPrefixFindings(fset, fn)...)
+	out = append(out, sortThenTopKFindings(fset, fn)...)
 	out = append(out, spatialBoundsBranchFindings(fset, fn)...)
 	out = append(out, monotoneIndexBoundFindings(fset, fn)...)
 	out = append(out, sincosFusableFindings(fset, fn)...)
@@ -3112,6 +3118,33 @@ func rowAllocMatrices(fn *ast.FuncDecl) map[string]bool {
 		}
 		return true
 	})
+	// Locals bound to a 1-D make (`row := make([]T, …)`) — a single row buffer that the
+	// fill loop may store into arr[i] indirectly (`row := make(...); …; arr[i] = row`)
+	// rather than the direct `arr[i] = make(...)`. Both fills allocate one row per i.
+	makeRow := map[string]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+			return true
+		}
+		id, ok := as.Lhs[0].(*ast.Ident)
+		if !ok {
+			return true
+		}
+		call, ok := as.Rhs[0].(*ast.CallExpr)
+		if !ok || len(call.Args) == 0 {
+			return true
+		}
+		if f, ok := call.Fun.(*ast.Ident); !ok || f.Name != "make" {
+			return true
+		}
+		if at, ok := call.Args[0].(*ast.ArrayType); ok {
+			if _, nested := at.Elt.(*ast.ArrayType); !nested { // 1-D []T row, not [][]T
+				makeRow[id.Name] = true
+			}
+		}
+		return true
+	})
 	filled := map[string]bool{}
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
 		as, ok := n.(*ast.AssignStmt)
@@ -3126,21 +3159,51 @@ func rowAllocMatrices(fn *ast.FuncDecl) map[string]bool {
 		if !ok || !outer[id.Name] {
 			return true
 		}
-		call, ok := as.Rhs[0].(*ast.CallExpr)
-		if !ok {
-			return true
-		}
-		if f, ok := call.Fun.(*ast.Ident); ok && f.Name == "make" {
-			filled[id.Name] = true
+		switch rhs := as.Rhs[0].(type) {
+		case *ast.CallExpr: // arr[i] = make(...)
+			if f, ok := rhs.Fun.(*ast.Ident); ok && f.Name == "make" {
+				filled[id.Name] = true
+			}
+		case *ast.Ident: // arr[i] = row, where row := make([]T, …)
+			if makeRow[rhs.Name] {
+				filled[id.Name] = true
+			}
 		}
 		return true
 	})
 	return filled
 }
 
-// nestedDoubleIndex reports the position of a two-deep index on name (m[i][j])
-// occurring inside at least two nested loops — the region where the row-pointer
-// dereference is paid repeatedly rather than once.
+// rowAliases collects the local variables bound to a single-index ROW of name
+// (`row := name[i]`, including within a tuple `row, pr := name[i], other[i]`). It lets
+// nestedDoubleIndex also recognize the HOISTED-ROW form of a two-deep index — where the
+// row pointer is lifted into a local and then indexed (`row[j]`) — which the literal
+// m[i][j] matcher misses. A `_` binding is ignored.
+func rowAliases(fn *ast.FuncDecl, name string) map[string]bool {
+	locals := map[string]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok {
+			return true
+		}
+		for k := 0; k < len(as.Lhs) && k < len(as.Rhs); k++ {
+			lid, lok := as.Lhs[k].(*ast.Ident)
+			ix, iok := as.Rhs[k].(*ast.IndexExpr)
+			if lok && iok && lid.Name != "_" {
+				if xid, ok := ix.X.(*ast.Ident); ok && xid.Name == name {
+					locals[lid.Name] = true
+				}
+			}
+		}
+		return true
+	})
+	return locals
+}
+
+// nestedDoubleIndex reports the position of a two-deep index on name — either the literal
+// m[i][j] or the hoisted-row form `row := m[i]; … row[j]` — occurring inside at least two
+// nested loops — the region where the row-pointer dereference is paid repeatedly rather
+// than once.
 // It reports the position of the INNERMOST ENCLOSING LOOP, not of the index expression
 // itself. That distinction is not cosmetic: `//perfscan:ignore` applies to a comment
 // block and the statement below it, so a finding anchored to an expression one line
@@ -3149,6 +3212,7 @@ func rowAllocMatrices(fn *ast.FuncDecl) map[string]bool {
 // only a bare directive failing to silence it revealed the cause. PS4005 and PS4008
 // already anchor to the loop; this makes the family consistent.
 func nestedDoubleIndex(fn *ast.FuncDecl, name string) (token.Pos, bool) {
+	rowLocals := rowAliases(fn, name) // locals bound to name[i] — the hoisted-row form
 	var found token.Pos
 	var ok bool
 	var walk func(n ast.Node, depth int, loop token.Pos)
@@ -3177,11 +3241,17 @@ func nestedDoubleIndex(fn *ast.FuncDecl, name string) (token.Pos, bool) {
 			return
 		case *ast.IndexExpr:
 			if depth >= 2 {
+				// literal m[i][j]
 				if inner, isIdx := v.X.(*ast.IndexExpr); isIdx {
 					if id, isID := inner.X.(*ast.Ident); isID && id.Name == name {
 						found, ok = loop, true
 						return
 					}
+				}
+				// hoisted row: row[j] where `row := m[i]` earlier
+				if id, isID := v.X.(*ast.Ident); isID && rowLocals[id.Name] {
+					found, ok = loop, true
+					return
 				}
 			}
 		}
@@ -3549,7 +3619,7 @@ func stridedInnerReductionFindings(fset *token.FileSet, fn *ast.FuncDecl) []find
 		if !ok {
 			return true
 		}
-		for _, s := range obody.List {
+		for _, s := range immediateInnerLoops(obody) {
 			jName, jbody, ok := loopVarBody(s)
 			if !ok || jName == oName {
 				continue
@@ -3603,18 +3673,73 @@ func stridedInnerAccess(root ast.Node, jName, oName string) (string, string, boo
 		if !ok {
 			return true
 		}
-		add, ok := ix.Index.(*ast.BinaryExpr)
-		if !ok || add.Op != token.ADD {
+		// Flatten the additive index into its terms so an intervening constant offset
+		// — ARR[j*stride + off + o], the attention P·V / per-head-offset shape — matches,
+		// not just the exact two-term ARR[j*stride + o]. Flag when SOME term is the inner
+		// var strided (j*stride) and SOME term is the plain outer var o; extra terms (off)
+		// are position-invariant and don't change the stride/contiguity analysis.
+		terms := flattenAdd(ix.Index)
+		if len(terms) < 2 {
 			return true
 		}
-		if st, ok := strideOperand(add.X, jName); ok && isPlainIdent(add.Y, oName) {
-			base, stride, found = baseID.Name, st, true
-		} else if st, ok := strideOperand(add.Y, jName); ok && isPlainIdent(add.X, oName) {
+		var st string
+		strided, contig := false, false
+		for _, t := range terms {
+			if s, ok := strideOperand(t, jName); ok {
+				st, strided = s, true
+			} else if isPlainIdent(t, oName) {
+				contig = true
+			}
+		}
+		if strided && contig {
 			base, stride, found = baseID.Name, st, true
 		}
 		return !found
 	})
 	return base, stride, found
+}
+
+// immediateInnerLoops returns the loop statements nested in body that are not themselves
+// inside a deeper loop — descending through if/else/block wrappers but STOPPING at the first
+// loop on each path. This finds an inner reduction loop even when it is guarded by an `if`
+// (the attention P·V `if sum > 0 { for j … }` shape), without reaching into deeper unrelated
+// loop bodies (those are handled when their own enclosing loop becomes the outer candidate).
+func immediateInnerLoops(body *ast.BlockStmt) []ast.Stmt {
+	var loops []ast.Stmt
+	var walk func(stmts []ast.Stmt)
+	walk = func(stmts []ast.Stmt) {
+		for _, s := range stmts {
+			switch t := s.(type) {
+			case *ast.ForStmt, *ast.RangeStmt:
+				loops = append(loops, s)
+			case *ast.IfStmt:
+				if t.Body != nil {
+					walk(t.Body.List)
+				}
+				switch e := t.Else.(type) {
+				case *ast.BlockStmt:
+					walk(e.List)
+				case *ast.IfStmt:
+					walk([]ast.Stmt{e})
+				}
+			case *ast.BlockStmt:
+				walk(t.List)
+			}
+		}
+	}
+	walk(body.List)
+	return loops
+}
+
+// flattenAdd splits an additive expression tree (a + b + c …) into its addends, recursing
+// only through ADD binary ops. A non-add expression returns itself. Used so a strided index
+// carrying a constant offset (ARR[j*stride + off + o]) is analyzed by its individual terms.
+func flattenAdd(e ast.Expr) []ast.Expr {
+	be, ok := e.(*ast.BinaryExpr)
+	if !ok || be.Op != token.ADD {
+		return []ast.Expr{e}
+	}
+	return append(flattenAdd(be.X), flattenAdd(be.Y)...)
 }
 
 // strideOperand reports whether e is a multiply `v * K` (or `K * v`) and returns the textual
@@ -4276,9 +4401,15 @@ var sincosNames = map[string]bool{"Sin": true, "Cos": true}
 // Advisory (no auto-fix): the enclosing fill/scan loop still needs an A/B bench to
 // confirm the trig is a real fraction of it, and the rewrite must bind the (sin, cos)
 // return order at a single site the tool cannot always place safely. Verified win:
-// nn/sinusoidal.go PE builder (~15-22% on the trig-fill loop). Argument matching is
-// structural via exprEqual, so it is conservative — args differing only by a value
-// conversion (float64(i)…) are not matched, avoiding false positives.
+// nn/sinusoidal.go PE builder (~15-22% on the trig-fill loop, +33% at op level #587)
+// — a kernel that is NOTHING BUT trig. Verified NON-win: MLA/self-extend RoPE (11
+// sites, backend/{cpu,ref}/mla.go + autograd/vjp_mla.go + nlp/self_extend.go) fused
+// bit-exact (12.8M-arg ulp check clean) but benched flat/within-noise, because there
+// the trig is a seq·half per-position PRECOMPUTE dwarfed by the seq²·heads score +
+// value-mix (R-01KYRJ6RW1FJ0). Rule of thumb: ship only if trig is >~10% of the
+// enclosing op's work. Argument matching is structural via exprEqual, so it is
+// conservative — args differing only by a value conversion (float64(i)…) are not
+// matched, avoiding false positives.
 func sincosFusableFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 	if fn.Body == nil {
 		return nil
@@ -5398,6 +5529,186 @@ func fullSortBoundedPrefixFindings(fset *token.FileSet, fn *ast.FuncDecl) []find
 			" candidates with SortStableFunc to match the tie order). Shipped: Mirostat, nucleusTopP"+
 			" §T627. Verify the consumer is genuinely bounded, then benchmark.", sortSlice),
 	}}
+}
+
+// sortThenTopKFindings flags PS3006 — a raw package sort of a WHOLE slice
+// (sort.Slice/SliceStable(s,…) or slices.Sort/SortFunc/SortStableFunc(s,…)) whose result is
+// consumed ONLY through a bounded top-K prefix: a reslice s[:K] or a loop bounded by an
+// identifier K (≠ len(s)) that reads s[r]. That is an O(n log n) sort done for an O(K) need;
+// a size-K min-heap or quickselect (then sorting just those K) is O(n log K) and drops the
+// O(n) sort scratch. Bit-identical when the comparator is a strict total order. Shipped:
+// MemMemory.retrieveHead (2.98×, #597).
+//
+// Consumption is analyzed only AFTER the sort's position (so the comparator closure's own
+// s[i]/s[j] and the pre-sort fill are ignored). Kept SILENT — vetoed as full-use — when the
+// sorted slice is also range-d, resliced s[:] / s[:len(s)], returned, or passed whole to a
+// call, since the caller may then need the entire order.
+func sortThenTopKFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil {
+		return nil
+	}
+	sortEnd := map[string]token.Pos{} // sorted slice → End() of its (last) sort call
+	sortPos := map[string]token.Pos{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		c, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := c.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		pkg, ok := sel.X.(*ast.Ident)
+		if !ok || len(c.Args) < 1 {
+			return true
+		}
+		m := sel.Sel.Name
+		isSort := (pkg.Name == "sort" && (m == "Slice" || m == "SliceStable")) ||
+			(pkg.Name == "slices" && (m == "Sort" || m == "SortFunc" || m == "SortStableFunc"))
+		if !isSort {
+			return true
+		}
+		if s, ok := c.Args[0].(*ast.Ident); ok && c.End() > sortEnd[s.Name] {
+			sortEnd[s.Name], sortPos[s.Name] = c.End(), c.Pos()
+		}
+		return true
+	})
+	if len(sortEnd) == 0 {
+		return nil
+	}
+	after := func(name string, pos token.Pos) bool { e, ok := sortEnd[name]; return ok && pos > e }
+	// makeSize[s] = the identifiers used as the len/cap of `s := make(…, x[, y])`. A prefix
+	// bound that equals one of these means the slice is ALREADY that size (K == len(s), just a
+	// different name — e.g. `heap := make([]T, 0, topM)` consumed as heap[:topM]); such a sort
+	// is already O(K log K), not the full sort, so it must not be flagged.
+	makeSize := map[string]map[string]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+			return true
+		}
+		lhs, ok := as.Lhs[0].(*ast.Ident)
+		if !ok {
+			return true
+		}
+		call, ok := as.Rhs[0].(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if id, ok := call.Fun.(*ast.Ident); !ok || id.Name != "make" {
+			return true
+		}
+		for _, a := range call.Args[1:] { // skip the type arg
+			if id, ok := a.(*ast.Ident); ok {
+				if makeSize[lhs.Name] == nil {
+					makeSize[lhs.Name] = map[string]bool{}
+				}
+				makeSize[lhs.Name][id.Name] = true
+			}
+		}
+		return true
+	})
+	isMakeSize := func(slice, bound string) bool { return makeSize[slice] != nil && makeSize[slice][bound] }
+	isLenOf := func(e ast.Expr, name string) bool {
+		c, ok := e.(*ast.CallExpr)
+		if !ok || len(c.Args) != 1 {
+			return false
+		}
+		id, ok := c.Fun.(*ast.Ident)
+		if !ok || id.Name != "len" {
+			return false
+		}
+		a, ok := c.Args[0].(*ast.Ident)
+		return ok && a.Name == name
+	}
+	bounded, full := map[string]bool{}, map[string]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.SliceExpr:
+			if id, ok := x.X.(*ast.Ident); ok && after(id.Name, x.Pos()) {
+				hi, _ := x.High.(*ast.Ident)
+				switch {
+				case x.High == nil || isLenOf(x.High, id.Name):
+					full[id.Name] = true // s[:] / s[low:] / s[:len(s)] — whole tail
+				case hi != nil && isMakeSize(id.Name, hi.Name):
+					// s[:K] where K is s's own make size → already K-sized, not a full sort
+				default:
+					bounded[id.Name] = true // s[:K]
+				}
+			}
+		case *ast.RangeStmt:
+			if id, ok := x.X.(*ast.Ident); ok && after(id.Name, x.Pos()) {
+				full[id.Name] = true // range s
+			}
+		case *ast.ReturnStmt:
+			for _, r := range x.Results {
+				if id, ok := r.(*ast.Ident); ok && after(id.Name, r.Pos()) {
+					full[id.Name] = true // return s (whole)
+				}
+			}
+		case *ast.CallExpr:
+			for _, a := range x.Args {
+				if id, ok := a.(*ast.Ident); ok && after(id.Name, a.Pos()) {
+					full[id.Name] = true // s passed whole to append/copy/f(s)
+				}
+			}
+		}
+		return true
+	})
+	// Bounded-loop form: `for r := range K { … s[r] … }` or `for …; r < K; … { s[r] }`, K an
+	// identifier that is neither the sorted slice nor len(s) — reads only the top-K prefix.
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		var loopVar, boundName string
+		var body *ast.BlockStmt
+		switch x := n.(type) {
+		case *ast.RangeStmt:
+			if k, ok := x.Key.(*ast.Ident); ok && x.Value == nil {
+				if b, ok := x.X.(*ast.Ident); ok {
+					loopVar, boundName, body = k.Name, b.Name, x.Body
+				}
+			}
+		case *ast.ForStmt:
+			if c, ok := x.Cond.(*ast.BinaryExpr); ok && c.Op == token.LSS {
+				lv, lok := c.X.(*ast.Ident)
+				b, bok := c.Y.(*ast.Ident)
+				if lok && bok {
+					loopVar, boundName, body = lv.Name, b.Name, x.Body
+				}
+			}
+		}
+		if body == nil {
+			return true
+		}
+		ast.Inspect(body, func(m ast.Node) bool {
+			ix, ok := m.(*ast.IndexExpr)
+			if !ok {
+				return true
+			}
+			s, sok := ix.X.(*ast.Ident)
+			iv, iok := ix.Index.(*ast.Ident)
+			if sok && iok && iv.Name == loopVar && boundName != s.Name && after(s.Name, ix.Pos()) && !isMakeSize(s.Name, boundName) {
+				bounded[s.Name] = true
+			}
+			return true
+		})
+		return true
+	})
+	var out []finding
+	for name := range sortEnd {
+		if bounded[name] && !full[name] {
+			out = append(out, finding{
+				pos:      fset.Position(sortPos[name]),
+				category: "full-sort-take-topk",
+				msg: fmt.Sprintf("full sort of %q but only a bounded top-K prefix is consumed — an"+
+					" O(n log n) sort for an O(K) need. Replace with a size-K min-heap or quickselect"+
+					" (then sort just those K); bit-identical when the comparator is a strict total"+
+					" order (a unique tiebreak → no genuine ties). Shipped: retrieveHead 2.98x."+
+					" Confirm K ≪ len(%s), then benchmark.", name, name),
+			})
+		}
+	}
+	sort.Slice(out, func(a, b int) bool { return out[a].pos.Offset < out[b].pos.Offset })
+	return out
 }
 
 // andedComparisons counts the relational comparisons (<, >, <=, >=) joined by && in a boolean

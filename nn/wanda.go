@@ -1,7 +1,6 @@
 package nn
 
 import (
-	"cmp"
 	"fmt"
 	"math"
 	"slices"
@@ -158,25 +157,6 @@ func WandaPrune(w, x *tensor.Tensor, sparsity float64) (pruned, mask *tensor.Ten
 	idx := make([]int, cin)
 	col := make([]float64, cin) // this output's per-input scores, hoisted out of the comparator
 	drop := make([]bool, cin)   // reused across columns (cleared each output)
-	sortColOf := func(col []float64) {
-		// ascending by score, ties broken by input index for determinism. The total-order
-		// comparator (score, then index) lets the faster unstable sort reproduce the stable
-		// order exactly (indices are unique), and reads the hoisted col instead of dispatching.
-		//
-		// slices.SortFunc rather than sort.Slice: the latter reaches its swap through
-		// reflectlite.Swapper, which ALLOCATES on every call (PS6009). This runs once per
-		// output column — 2048 times for a 2048-wide layer. Same comparator, same total
-		// order, so the resulting permutation is identical.
-		slices.SortFunc(idx, func(x, y int) int {
-			if cx, cy := col[x], col[y]; cx != cy {
-				if cx < cy {
-					return -1
-				}
-				return 1
-			}
-			return cmp.Compare(x, y)
-		})
-	}
 	// Typed fast paths: read the score column and write the kept weights / mask through
 	// the contiguous storage instead of AtF64/SetF64 per element. Identical values,
 	// identical sort order, kept entries only (pruned/mask are zero-initialised).
@@ -291,7 +271,12 @@ func WandaPrune(w, x *tensor.Tensor, sparsity float64) (pruned, mask *tensor.Ten
 			idx[j] = j
 			col[j] = s.AtF64(j, o)
 		}
-		sortColOf(col)
+		// Only the k smallest are consumed — the drop loop below marks exactly that set and
+		// nothing reads the order within it, so the selection is bit-identical to the full
+		// sort this replaced (the comparator is a strict total order, ties broken by input
+		// index). This is the same substitution the two flat fast paths above already make;
+		// the generic AtF64 path was the one place still paying O(cin log cin) per output.
+		wandaSelectK(idx, col, k)
 		for j := range drop {
 			drop[j] = false
 		}

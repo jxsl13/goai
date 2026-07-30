@@ -258,34 +258,28 @@ func attendMask(qrow []float64, k, v, out *tensor.Tensor, i, off, dk int, scale 
 				scores[j] /= sum
 			}
 		}
-		// P·V. Walking j for a fixed d strides v by dm — one cache line per key to consume
-		// eight of its bytes, repeated d_k times. Four adjacent output channels per pass
-		// read v[j, off+d .. off+d+3], four doubles from the SAME line, so the line that
-		// was fetched anyway serves four accumulators. Each o still sums over ascending j.
+		// P·V over the ACTIVE keys only, with each v-row read contiguously.
+		//
+		// Two independent optimizations collided here and this is their union, bit-identical
+		// to each. From this branch: iterate act — the keys the mask actually selected —
+		// rather than every j in [0,i]. DSA attends 64 of up to 1024 keys, so the old form
+		// multiplied by an exact zero fifteen times out of sixteen, and adding an exact 0.0
+		// is the identity. From origin/main: read vs[j*dm+off : +dk] contiguously ONCE per
+		// key and axpy it into a dk-wide row accumulator, instead of striding vs by dm and
+		// re-streaming the whole column region once per output channel (PS1006).
+		//
+		// For each fixed d the sum still runs j ascending with the same association, so the
+		// result is unchanged either way.
 		orow := os[i*dm+off : i*dm+off+dk : i*dm+off+dk]
-		if sum <= 0 {
-			clear(orow)
-			return
-		}
-		d := 0
-		for ; d+4 <= dk; d += 4 {
-			var o0, o1, o2, o3 float64
+		clear(orow)
+		if sum > 0 {
 			for _, j := range act {
-				sj := scores[j]
-				vq := vs[j*dm+off+d : j*dm+off+d+4 : j*dm+off+d+4]
-				o0 += sj * vq[0]
-				o1 += sj * vq[1]
-				o2 += sj * vq[2]
-				o3 += sj * vq[3]
+				pj := scores[j]
+				vrow := vs[j*dm+off : j*dm+off+dk : j*dm+off+dk]
+				for d := range dk {
+					orow[d] += pj * vrow[d]
+				}
 			}
-			orow[d], orow[d+1], orow[d+2], orow[d+3] = o0, o1, o2, o3
-		}
-		for ; d < dk; d++ {
-			var o float64
-			for _, j := range act {
-				o += scores[j] * vs[j*dm+off+d]
-			}
-			orow[d] = o
 		}
 		return
 	}

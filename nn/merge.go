@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"math"
 	"runtime"
-	"slices"
 	"sync"
 	"sync/atomic"
 
@@ -171,28 +170,80 @@ func trimTopK(v []float64, keep int) []float64 {
 	for i := range idx {
 		idx[i] = i
 	}
-	// Dominant cost of TIESMerge. Rank by descending |v| with a *total order*:
-	// on |v| ties, break by ascending original index (p<q). A strict total order
-	// makes the unstable pdqsort (slices.SortFunc) produce the identical
-	// permutation the stable sort did (whose 0-on-tie kept idx's ascending order),
-	// so the kept top-k set is bit-identical — while dropping the stable
-	// symMerge's O(n log^2 n) / extra-buffer overhead for pdqsort's O(n log n).
-	slices.SortFunc(idx, func(p, q int) int {
-		xp, xq := math.Abs(v[p]), math.Abs(v[q])
-		if xp > xq {
-			return -1
+	// Dominant cost of TIESMerge. `res` below sets only the top-`keep` positions and is
+	// ORDER-INDEPENDENT (each idx[k] is a distinct destination), so only the top-keep SET
+	// is needed, not its sorted order — a quickselect partitions idx[:keep] to that set in
+	// average O(n) instead of the O(n log n) full sort. Rank by descending |v| with a strict
+	// TOTAL order (on |v| ties break by ascending index): the top-keep set is then uniquely
+	// determined, so the result is bit-identical to the previous full sort's idx[:keep].
+	less := func(a, b int) bool {
+		xa, xb := math.Abs(v[a]), math.Abs(v[b])
+		if xa != xb {
+			return xa > xb
 		}
-		if xp < xq {
-			return 1
-		}
-		if p < q {
-			return -1
-		}
-		return 1
-	})
+		return a < b
+	}
+	selectTopK(idx, keep, less)
 	res := make([]float64, n)
 	for k := range keep {
 		res[idx[k]] = v[idx[k]]
 	}
 	return res
+}
+
+// selectTopK partitions a in place so that a[:k] holds the k elements that rank BEFORE the
+// rest under less (a ranks before b ⟺ less(a,b)), in unspecified order — a Hoare quickselect,
+// average O(len(a)). less MUST be a strict total order (no two elements compare equal), which
+// makes the retained set unique and independent of pivot choice. Small ranges are finished by
+// insertion sort. No-op when k ≤ 0 or k ≥ len(a).
+func selectTopK(a []int, k int, less func(x, y int) bool) {
+	if k <= 0 || k >= len(a) {
+		return
+	}
+	lo, hi := 0, len(a)-1
+	for lo < hi {
+		if hi-lo < 12 { // insertion sort the small range, then the split point is settled
+			for i := lo + 1; i <= hi; i++ {
+				for j := i; j > lo && less(a[j], a[j-1]); j-- {
+					a[j], a[j-1] = a[j-1], a[j]
+				}
+			}
+			return
+		}
+		mid := lo + (hi-lo)/2
+		// median-of-three (lo, mid, hi) so a[lo] ≤ a[mid] ≤ a[hi] under less; pivot = a[mid].
+		// A median pivot bounds the inner scans (a[lo] ≤ pivot ≤ a[hi]) and avoids the O(n²)
+		// blow-up on already-sorted / organ-pipe input.
+		if less(a[mid], a[lo]) {
+			a[lo], a[mid] = a[mid], a[lo]
+		}
+		if less(a[hi], a[lo]) {
+			a[lo], a[hi] = a[hi], a[lo]
+		}
+		if less(a[hi], a[mid]) {
+			a[mid], a[hi] = a[hi], a[mid]
+		}
+		pivot := a[mid]
+		i, j := lo, hi
+		for {
+			for less(a[i], pivot) {
+				i++
+			}
+			for less(pivot, a[j]) {
+				j--
+			}
+			if i >= j {
+				break
+			}
+			a[i], a[j] = a[j], a[i]
+			i++
+			j--
+		}
+		// [lo, j] all rank ≤ pivot, [j+1, hi] all rank ≥ pivot. Recurse into the side holding k.
+		if k <= j {
+			hi = j
+		} else {
+			lo = j + 1
+		}
+	}
 }

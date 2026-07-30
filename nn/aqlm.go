@@ -520,44 +520,57 @@ func refitCodebooksAQLM(groups [][]float64, codes []int, codebooks [][]float64, 
 func solveLinearAQLM(a, b [][]float64) [][]float64 {
 	n := len(a)
 	rhs := len(b[0])
-	aug := make([][]float64, n)
+	// One contiguous augmented matrix [n, n+rhs] instead of n separately-allocated rows:
+	// Gauss-Jordan does column pivoting (aug[r][c], r varying) and full-matrix elimination,
+	// both of which walk ACROSS rows, so a single constant-stride block is cache-friendly
+	// and drops n allocations. Bit-identical — index arithmetic only, and the O(1) row-
+	// POINTER swap becomes a physical swap of the two stride-length segments (same logical
+	// matrix). This O(n³) solve is the dominant cost of EncodeAQLM (iters × refit × solve).
+	stride := n + rhs
+	aug := make([]float64, n*stride)
 	for i := range n {
-		aug[i] = make([]float64, n+rhs)
-		copy(aug[i], a[i])
-		copy(aug[i][n:], b[i])
+		copy(aug[i*stride:i*stride+n], a[i])
+		copy(aug[i*stride+n:i*stride+stride], b[i])
 	}
+	swap := make([]float64, stride)
 	for c := range n {
 		p := c
 		for r := c + 1; r < n; r++ {
-			if math.Abs(aug[r][c]) > math.Abs(aug[p][c]) {
+			if math.Abs(aug[r*stride+c]) > math.Abs(aug[p*stride+c]) {
 				p = r
 			}
 		}
-		aug[c], aug[p] = aug[p], aug[c]
-		piv := aug[c][c]
+		if p != c {
+			copy(swap, aug[c*stride:c*stride+stride])
+			copy(aug[c*stride:c*stride+stride], aug[p*stride:p*stride+stride])
+			copy(aug[p*stride:p*stride+stride], swap)
+		}
+		piv := aug[c*stride+c]
 		if math.Abs(piv) < 1e-300 {
 			continue
 		}
 		inv := 1 / piv
-		for j := c; j < n+rhs; j++ {
-			aug[c][j] *= inv
+		crow := aug[c*stride : c*stride+stride]
+		for j := c; j < stride; j++ {
+			crow[j] *= inv
 		}
 		for r := range n {
 			if r == c {
 				continue
 			}
-			f := aug[r][c]
+			f := aug[r*stride+c]
 			if f == 0 {
 				continue
 			}
-			for j := c; j < n+rhs; j++ {
-				aug[r][j] -= f * aug[c][j]
+			rrow := aug[r*stride : r*stride+stride]
+			for j := c; j < stride; j++ {
+				rrow[j] -= f * crow[j]
 			}
 		}
 	}
 	x := make([][]float64, n)
 	for i := range n {
-		x[i] = append([]float64(nil), aug[i][n:]...)
+		x[i] = append([]float64(nil), aug[i*stride+n:i*stride+stride]...)
 	}
 	return x
 }
