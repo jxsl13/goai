@@ -1464,3 +1464,21 @@ BUILDING THE FIXTURE WAS THE WORK; the fusion was mechanical and identical to th
 ONE ALIASING HAZARD CHECKED RATHER THAN ASSUMED. The value buffer is reused across heads and handed to appendKV, which stores into the KV cache. rowBuf.Append copies its row argument via copyRows and returns a view of its OWN backing, so no head's value block can alias another's. Had it retained the argument the cache would have been corrupted silently, with every head seeing the last head's values - and the parity test would likely have caught it, but only after the fact. Reading the callee is cheaper than debugging that.
 
 PS6018 now reports ZERO in quant_deepseekv2.go, having tracked the file from two findings to one to none across three iterations.
+
+## R-01KYR9KZZ6FSKBGYG9VEXNDBMQ Profiling allocated BYTES instead of object count found a target nine iterations of object-count profiling had walked past
+kind: research
+state: draft
+created: 2026-07-30
+
+Measured on darwin/arm64 M2 Pro, go1.26.5, three interleaved rounds. Allocation counts deterministic.
+
+THE AXIS WAS THE FINDING. Every allocation profile in this sweep so far used alloc_objects. Switching one to alloc_space put QuantMamba2Mixer.forward at 61% of bytes for a 256-token prefill and rows2D at 206MB across the run, roughly 41MB per op and 38% of the per-op footprint. rows2D had never appeared near the top of an object-count profile because its allocations are FEW AND LARGE: one per row, r+1 per call. Object count and byte volume rank differently, and a sweep that only ever asks for one of them has a systematic blind spot the size of the other.
+
+SHIPPED: rows2D sub-slices a single backing array instead of allocating per row, each row capped at its own length so an append cannot reach into the next. Contract unchanged - every row is still an independent copy.
+  QuantMamba2Prefill_256      2023 -> 1516 allocs  -25%   108.57MB -> 104.90MB  -3.4%
+  QuantMamba2PrefillQ8_0_128  1233 ->  980 allocs  -20%     4.77MB ->   4.72MB
+Time parity in both, ranges overlapping.
+
+THE BYTE DROP WAS NOT THE PREDICTED EFFECT and is the larger half of the value. The change targeted allocation COUNT; bytes fell 3.67MB because 256 separate per-row allocations each round up to a size class and waste the remainder, while one array of r*c rounds once. Per-row size-class waste is invisible in both a count profile and a byte profile - it only shows up in the B/op delta of an A/B - which is a third thing worth measuring on any change that consolidates many small allocations into one.
+
+DELIBERATELY NOT DONE, and the reason is a contract rather than effort: returning VIEWS into the tensor storage would remove the remaining bytes, which is where the footprint actually is. rows2D has 30 call sites and that change makes every one of them alias its input. In the mixer the rows are only sliced into read-only views, so it would probably be safe there - but probably, across 30 sites, is not a basis for changing a helper's aliasing contract. The alternative is auditing each site for mutation, which is a task rather than an edit. Recorded in the code at the call site so the next reader inherits the analysis instead of redoing it.
