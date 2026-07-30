@@ -7544,11 +7544,15 @@ func stridedInnerWalkFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 						" traversal, and swapping the loops would read x[j] before it exists (%q is the"+
 						" enclosing loop). The remedy that IS"+
 						" available is to keep the intermediate in CONTIGUOUS per-iteration scratch and"+
-						" scatter the finished row into %q once at the end. Shipped on LU back"+
-						" substitution: LUSolve_512x512 -8.41%%, 768x768 -7.00%%, and the single-RHS"+
-						" control +0.57%% SLOWER, because at one column the access was already contiguous"+
-						" and only the scatter remains — check the stride is really greater than 1 before"+
-						" acting.", buf.Name, outerVar, buf.Name)
+						" scatter the finished row into %q once at the end. RANK BY THE RECURRENCE'S SHARE OF"+
+						" RUNTIME, which is what decides this one: shipped on LU back substitution"+
+						" (LUSolve_512x512 -8.41%%, 768x768 -7.00%%) where a line-level profile put the"+
+						" strided statement at 32%% of the benchmark, and REJECTED on the structurally"+
+						" identical back substitution in Lstsq (geomean -0.02%%, only -0.55%% at n=768)"+
+						" where the Householder factorization and Q-transpose-b dominate and the"+
+						" recurrence is a small fraction. Also check the stride really exceeds 1: the"+
+						" single-RHS LU control came out +0.57%% SLOWER, because at one column the access"+
+						" was already contiguous and only the scatter remains.", buf.Name, outerVar, buf.Name)
 				}
 				out = append(out, finding{
 					pos:      fset.Position(ix.Pos()),
