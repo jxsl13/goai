@@ -1535,28 +1535,33 @@ int cu_rope_f16(void* x, const void* inv, int seq, int heads, int hd, int posOff
     if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto donerpf; }
     if (!gRopeF16 && compile_kernel(
             A1_CVT_HELPERS
+            // Angle (FP64 reduction, 1/64 rate on GA106) + sincosf depend only on (p,i), not the
+            // head — the scalar kernel recomputed them per head. One thread per (p,i) computes them
+            // ONCE and loops the heads. Bit-identical rotation per head (same c,s).
             "extern \"C\" __global__ void rope_f16(unsigned short* x, const float* inv, int seq, int heads, int hd, int posOffset, double posDiv){\n"
             "  int half = hd/2;\n"
-            "  long total = (long)seq*heads*half;\n"
+            "  long total = (long)seq*half;\n"
             "  long gid = (long)blockIdx.x*blockDim.x + threadIdx.x;\n"
             "  if (gid >= total) return;\n"
             "  int i = (int)(gid % half);\n"
-            "  int h = (int)((gid / half) % heads);\n"
-            "  int p = (int)(gid / ((long)half*heads));\n"
+            "  int p = (int)(gid / half);\n"
             "  double pos = (double)(posOffset + p) / posDiv;\n"
             "  double ang = pos * (double)inv[i];\n"
             "  const double TWO_PI = 6.283185307179586476925286766559;\n"
             "  double k = floor(ang / TWO_PI + 0.5);\n"
             "  float r = (float)(ang - k * TWO_PI);\n"
             "  float c, s; sincosf(r, &s, &c);\n"
-            "  unsigned short* xr = x + (size_t)p*heads*hd + (size_t)h*hd;\n"
-            "  float qi = h2f(xr[i]), qih = h2f(xr[i+half]);\n"
-            "  xr[i] = f2h(qi*c - qih*s);\n"
-            "  xr[i+half] = f2h(qih*c + qi*s);\n"
+            "  unsigned short* xp = x + (size_t)p*heads*hd;\n"
+            "  for (int h = 0; h < heads; h++){\n"
+            "    unsigned short* xr = xp + (size_t)h*hd;\n"
+            "    float qi = h2f(xr[i]), qih = h2f(xr[i+half]);\n"
+            "    xr[i] = f2h(qi*c - qih*s);\n"
+            "    xr[i+half] = f2h(qih*c + qi*s);\n"
+            "  }\n"
             "}\n",
             "rope_f16.cu", "rope_f16", &gRopeF16) != 0) { rc = -2; goto donerpf; }
     {
-        long total = (long)seq * heads * (hd / 2);
+        long total = (long)seq * (hd / 2);
         int threads = 256, blocks = (int)((total + threads - 1) / threads);
         if (blocks < 1) blocks = 1;
         void* args[7] = { &x, (void*)&inv, &seq, &heads, &hd, &posOffset, &posDiv };
