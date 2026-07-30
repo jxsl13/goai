@@ -369,7 +369,10 @@ func (s *SPM) EncodeSpecial(text string) []int {
 //
 // Registering never changes [Unigram.Encode]. Not safe for concurrent use with encoding —
 // call it during setup.
-func (u *Unigram) AddSpecialTokens(specials map[string]int) { u.specials.add(specials) }
+func (u *Unigram) AddSpecialTokens(specials map[string]int) {
+	u.specials.add(specials)
+	u.buildDecodeTable() // a marker makes its piece decode verbatim rather than ▁-unescaped
+}
 
 func (u *Unigram) lookupSpecialID(text string) (int, bool) {
 	id, ok := u.id[text]

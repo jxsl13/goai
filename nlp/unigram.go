@@ -114,6 +114,12 @@ type Unigram struct {
 	trie     *unigramTrie   // byte trie over the vocabulary for the Viterbi DP
 
 	specials specialSet // markers parsed only by EncodeSpecial (§B60)
+
+	// decStr[id] is the FINAL decoded text: a blocked marker verbatim, anything else already
+	// ▁-unescaped. Decode re-derived both per TOKEN — a specials map probe plus a strings.Index
+	// over a 3-byte needle — for a value fixed at construction. Rebuilt by AddSpecialTokens, which
+	// can flip a piece from unescaped to verbatim.
+	decStr []string
 }
 
 // unigramTrie is a byte trie over the vocabulary pieces. The Viterbi DP walks it
@@ -266,7 +272,27 @@ func NewUnigram(vocab []UnigramPiece, opts ...UnigramOption) (*Unigram, error) {
 		o(u)
 	}
 	u.trie = buildUnigramTrie(u.pieces)
+	u.buildDecodeTable()
 	return u, nil
+}
+
+// buildDecodeTable precomputes each id's decoded text. Called at the end of NewUnigram and again from
+// AddSpecialTokens, since registering a marker makes its piece decode verbatim. A piece with no ▁
+// aliases the vocabulary string, so the common case allocates nothing per entry.
+func (u *Unigram) buildDecodeTable() {
+	ds := make([]string, len(u.pieces))
+	for id := range u.pieces {
+		p := u.pieces[id].Piece
+		switch {
+		case u.specials.blocked(p):
+			ds[id] = p
+		case !strings.Contains(p, spaceMeta):
+			ds[id] = p
+		default:
+			ds[id] = strings.ReplaceAll(p, spaceMeta, " ")
+		}
+	}
+	u.decStr = ds
 }
 
 // preprocess applies SentencePiece's whitespace escaping: spaces → ▁ and, when
@@ -409,6 +435,24 @@ func (u *Unigram) Encode(text string) []int {
 func (u *Unigram) Decode(ids []int) string {
 	var b strings.Builder
 	b.Grow(len(ids) * 4) // pre-size (§T929): avoid the log(n) growth-buffer churn; Grow is capacity-only, output byte-identical
+	// Fast path: each id's text is already known, so this is a bounds check and a write. Built by
+	// the same two branches below, in the same order, so it is byte-identical.
+	if ds := u.decStr; ds != nil {
+		for _, id := range ids {
+			if uint(id) < uint(len(ds)) {
+				b.WriteString(ds[id])
+				continue
+			}
+			if t, ok := u.specials.textForID(id); ok {
+				b.WriteString(t)
+			}
+		}
+		s := b.String()
+		if u.dummy {
+			s = strings.TrimPrefix(s, " ")
+		}
+		return s
+	}
 	for _, id := range ids {
 		if id < 0 || id >= len(u.pieces) {
 			if t, ok := u.specials.textForID(id); ok {

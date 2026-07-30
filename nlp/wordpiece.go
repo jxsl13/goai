@@ -31,6 +31,12 @@ type WordPiece struct {
 	hasCont      bool           // whether the continuation prefix exists in the trie
 
 	specials specialSet // markers parsed only by EncodeSpecial (§B60)
+
+	// decCont[id] is the piece with the continuation prefix already stripped, and isCont[id] whether
+	// it had one. Decode ran HasPrefix and then TrimPrefix per TOKEN — the same comparison twice —
+	// for a split fixed at construction, since `continuation` is option-only and pieces never change.
+	decCont []string
+	isCont  []bool
 }
 
 // buildWordPieceTrie inserts every vocabulary piece (including the "##…" continuation
@@ -150,7 +156,23 @@ func NewWordPiece(vocab []string, opts ...WordPieceOption) (*WordPiece, error) {
 	}
 	w.trie = buildWordPieceTrie(w.pieces)
 	w.contNode, w.hasCont = w.trie.descend(0, w.continuation)
+	w.buildDecodeTable()
 	return w, nil
+}
+
+// buildDecodeTable splits every piece on the continuation prefix once. Construction-time only:
+// `continuation` is set by option inside NewWordPiece and pieces never change, and Decode does not
+// consult specials, so unlike SPM and Unigram this table needs no rebuild.
+func (w *WordPiece) buildDecodeTable() {
+	cont := make([]string, len(w.pieces))
+	is := make([]bool, len(w.pieces))
+	for id, p := range w.pieces {
+		if strings.HasPrefix(p, w.continuation) {
+			is[id] = true
+			cont[id] = strings.TrimPrefix(p, w.continuation) // aliases p's tail, no allocation
+		}
+	}
+	w.decCont, w.isCont = cont, is
 }
 
 // Encode tokenizes text into ids: it splits on whitespace and applies greedy longest-match-first
@@ -243,6 +265,19 @@ func (w *WordPiece) Decode(ids []int) string {
 			continue
 		}
 		p := w.pieces[id]
+		// A continuation piece joins the previous word; at position 0 there is nothing to join, and
+		// the original wrote the piece WITH its prefix there — so both forms are kept.
+		if w.isCont != nil {
+			if w.isCont[id] && b.Len() > 0 {
+				b.WriteString(w.decCont[id])
+				continue
+			}
+			if b.Len() > 0 {
+				b.WriteByte(' ')
+			}
+			b.WriteString(p)
+			continue
+		}
 		if strings.HasPrefix(p, w.continuation) && b.Len() > 0 {
 			b.WriteString(strings.TrimPrefix(p, w.continuation))
 			continue
