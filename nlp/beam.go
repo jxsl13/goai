@@ -123,12 +123,11 @@ func BeamSearch(next NextLogits, start []int, width, maxNew, eos int, alpha floa
 		// keep >= width retained ones, so it cannot enter the top `width` of `done` — and the
 		// retained ones enter `done` in the same relative order as before, so the trailing
 		// stable sort is unaffected.
-		//perfscan:ignore PS3002 already the optimized form; radix needs a monotonic single key
-		//perfscan:ignore PS6022 the truncation happens BEFORE the sort — that is the fix
 		if keep := width + len(live); keep < len(cand) {
 			selectTopK(cand, keep, beamCndByScore)
 			cand = cand[:keep]
 		}
+		//perfscan:ignore PS3002 composite key (score, parent, tok); a radix needs one monotonic key, and this sorts at most keep elements
 		slices.SortFunc(cand, beamCndByScore)
 
 		// Walk candidates best-first and STOP once the frontier is full.
@@ -168,6 +167,8 @@ func BeamSearch(next NextLogits, start []int, width, maxNew, eos int, alpha floa
 	// order, monomorphized swap. Score-only comparison is NOT a total order, so stability is
 	// load-bearing here and the stable variant is required — this is the one sort in this
 	// function that must not become a selection.
+	//perfscan:ignore PS6022 stability is load-bearing here — score alone is not a total order, so this must stay a stable SORT
+	//perfscan:ignore PS3002 a radix would not preserve the stable order this relies on
 	slices.SortStableFunc(done, func(a, b Beam) int {
 		if a.Score > b.Score {
 			return -1

@@ -218,6 +218,7 @@ var checks = []check{
 	{"PS6001", "full-sort-bounded-prefix", "a full-vocabulary descending index sort whose result feeds an early-breaking (threshold-bounded) prefix consumer, with no quickselect/pre-filter guard — an O(n log n) sort for an O(prefix) need", false},
 	{"PS6002", "spatial-bounds-branch", "an innermost window/kernel loop re-testing a compound spatial bounds guard (iy>=0 && iy<h && ix>=0 && ix<wd) per tap, where the in-bounds taps form one contiguous run the guard can be hoisted around", false},
 	{"PS6005", "monotone-index-bound", "an innermost loop guarding its tap work with a single relational bound on an index affine in the loop var (j:=t-(K-1)+k; if j>=0) — the in-bounds iterations are one contiguous run, clamp the loop bound instead of branching per tap", false},
+	{"PS0001", "unused-ignore-directive", "a //perfscan:ignore directive that suppressed nothing — either the code it guarded moved out from under it (a directive reaches only its own comment block and the following line) or the finding is fixed and the comment should go. An inert suppression reads as though it took effect, which is worse than none", false},
 	{"PS6022", "sort-feeds-truncation", "a slice sorted in FULL and then truncated to a smaller bound — every comparison that ordered the discarded tail was wasted, and a selection answers the same question in O(n). The counted-loop (PS6013) and threshold-break (PS6001) forms miss this one, because the consumer is neither a loop nor a break: it is a reslice", false},
 	{"PS6021", "fanout-without-worker-seam", "a fan-out helper whose callback receives ONLY a single work index and no scratch, with no sibling scratch-constructor parameter — callers have nowhere to hoist a per-item buffer to, so every caller that needs a working buffer must allocate one PER ITEM; give the callback a scratch parameter or take a func() T constructor the helper calls once per worker", false},
 	{"PS6019", "jam-tail-delegates", "an unroll-and-jammed loop (i+N <= bound) whose scalar remainder loop DELEGATES to a method on the receiver while the wide body is inlined — the two are separate code paths, so a fix applied to the wide one (per-worker scratch, a pinned product, a bounds hoist) silently misses the tail, and a test at a trip count divisible by N never executes it", false},
@@ -965,15 +966,31 @@ func hasFuncArg(call *ast.CallExpr) bool {
 // pre-consolidation tool). Naming ≥1 class silences ONLY those classes, leaving
 // every other detector live at that site — the whole point of class-granular
 // ignores. Requires the file to be parsed with parser.ParseComments.
-func ignoreDirectives(fset *token.FileSet, f *ast.File) map[int]map[string]bool {
+// ignoreAnchor records where a directive was written, so an unused one can be reported at the
+// line the author will look at.
+type ignoreAnchor struct {
+	line       int    // the directive comment's own line — where an unused one is reported
+	cat        string // the class it names, or "*" for a bare directive
+	first, end int    // the suppression span this directive participates in
+}
+
+func ignoreDirectives(fset *token.FileSet, f *ast.File) (map[int]map[string]bool, []ignoreAnchor) {
 	out := map[int]map[string]bool{}
+	var anchors []ignoreAnchor
 	for _, cg := range f.Comments {
 		for _, c := range cg.List {
-			i := strings.Index(c.Text, "perfscan:ignore")
-			if i < 0 {
+			// A DIRECTIVE, not a mention. The token must open the comment — strip the
+			// leading marker, then any indentation — so that prose describing the feature
+			// and the indented examples in this file's own package doc are not parsed as
+			// live directives. Matching the token anywhere in the text made four doc
+			// comments register suppressions, which was harmless only because no finding
+			// ever landed on a doc-comment line; it stopped being harmless the moment
+			// unused directives became reportable.
+			body := strings.TrimLeft(strings.TrimPrefix(c.Text, "//"), " \t")
+			if !strings.HasPrefix(body, "perfscan:ignore") {
 				continue
 			}
-			rest := strings.TrimSpace(c.Text[i+len("perfscan:ignore"):])
+			rest := strings.TrimSpace(body[len("perfscan:ignore"):])
 			cats := map[string]bool{}
 			if fields := strings.Fields(rest); len(fields) > 0 {
 				for _, tok := range strings.Split(fields[0], ",") {
@@ -994,6 +1011,16 @@ func ignoreDirectives(fset *token.FileSet, f *ast.File) map[int]map[string]bool 
 			first := fset.Position(cg.Pos()).Line
 			last := fset.Position(cg.End()).Line
 			ln := fset.Position(c.Pos()).Line
+			lo, hi := first, last
+			if lo > ln {
+				lo = ln
+			}
+			if hi < ln {
+				hi = ln
+			}
+			for cat := range cats {
+				anchors = append(anchors, ignoreAnchor{line: ln, cat: cat, first: lo, end: hi + 1})
+			}
 			if first > ln {
 				first = ln
 			}
@@ -1010,7 +1037,7 @@ func ignoreDirectives(fset *token.FileSet, f *ast.File) map[int]map[string]bool 
 			}
 		}
 	}
-	return out
+	return out, anchors
 }
 
 // scanFile runs every detector over one parsed file, drops sites suppressed by
@@ -1055,15 +1082,67 @@ func scanFile(fset *token.FileSet, f *ast.File, ns nameSets) []finding {
 	// per-function trigger attribution, so it runs once over the file's blocks.
 	out = append(out, scanFusableLoops(fset, f)...)
 	// drop sites silenced by an inline //perfscan:ignore directive (per class).
-	ign := ignoreDirectives(fset, f)
+	ign, anchors := ignoreDirectives(fset, f)
+	used := map[int]map[string]bool{}
 	var kept []finding
 	for _, fd := range dedup(out) {
 		if supp := ign[fd.pos.Line]; supp != nil && (supp["*"] || supp[fd.category]) {
+			// Credit the directive that did the suppressing, so an unused one can be told
+			// apart from a working one below.
+			for _, a := range anchors {
+				if !directiveCovers(a, fd.pos.Line) || !(a.cat == "*" || a.cat == fd.category) {
+					continue
+				}
+				if used[a.line] == nil {
+					used[a.line] = map[string]bool{}
+				}
+				used[a.line][a.cat] = true
+			}
 			continue
 		}
 		kept = append(kept, fd)
 	}
+	// REPORT DIRECTIVES THAT SUPPRESSED NOTHING. An inert suppression is worse than no
+	// suppression, because it reads as though it took effect — the same reasoning that made
+	// this file widen a directive's reach to its whole comment block after two directives
+	// here were found dead. Widening reduced the failure mode; it cannot detect it. A
+	// directive goes stale two ways: the code it guarded moved away from it (an edit inserted
+	// statements between the comment and its target), or the finding was genuinely fixed. The
+	// first is a silent hole, the second means the comment should be deleted. Both want the
+	// author's attention, which is exactly how an unused lint suppression behaves.
+	for _, a := range anchors {
+		if used[a.line][a.cat] {
+			continue
+		}
+		name := a.cat
+		if name == "*" {
+			name = "any check"
+		}
+		kept = append(kept, finding{
+			pos:      token.Position{Filename: fset.Position(f.Pos()).Filename, Line: a.line},
+			category: "unused-ignore-directive",
+			msg: fmt.Sprintf("this //perfscan:ignore names %s but suppressed nothing. Either the code it"+
+				" guarded moved out from under it — a directive reaches only its own comment block and the"+
+				" line after, so inserting statements between the two silently voids it — or the finding is"+
+				" fixed and the comment should be deleted. An inert suppression is worse than none: it reads"+
+				" as though it took effect", name),
+		})
+	}
 	return kept
+}
+
+// directiveCovers reports whether the directive reaches the given line. It MUST mirror the
+// span ignoreDirectives applies — the enclosing comment block through the line after it — and
+// not a tighter approximation.
+//
+// A tighter span was tried first, crediting only the directive's own line and the next, on the
+// reasoning that over-crediting merely hides a stale directive while under-crediting is safe.
+// That was backwards. Two directives stacked above one statement form a two-line block: the
+// upper one is more than one line from the statement, so the tight span refused to credit it
+// and reported a working directive as unused. Under-crediting produces false reports, which is
+// the failure this check exists to prevent.
+func directiveCovers(a ignoreAnchor, line int) bool {
+	return line >= a.first && line <= a.end
 }
 
 // scanFunc analyzes a single function body. Fast-path presence (flatF64/flatF32)

@@ -1026,6 +1026,42 @@ followed by `return false`, structurally identical and semantically unrelated. A
 adds exactly one finding (56 → 57) instead of fourteen.
 
 
+## PS0001 — a `//perfscan:ignore` that suppressed nothing  *(scanner: static)*
+
+An inert suppression is **worse than no suppression**, because it reads as though it took
+effect. A directive goes stale two ways:
+
+```go
+//perfscan:ignore PS3002 deliberate
+y := len(x)                 // an edit inserted this…
+sort.Slice(x, less)         // …and the directive no longer reaches its target
+```
+
+or the finding was genuinely fixed and the comment should be deleted. Both want the author's
+attention, exactly as an unused lint suppression does.
+
+This file already widened a directive's reach from its own line to its whole comment block
+after **two directives here were found dead**. Widening reduces the failure mode; it cannot
+detect it. This check detects it.
+
+**It caught its own author.** Three directives written the same day — two in `beam.go`, one in
+`diverse_beam.go` — had been separated from their targets by a later edit that inserted a
+selection block between the comment and the sort. All three read as deliberate, considered
+suppressions. None of them suppressed anything.
+
+**Two preconditions, both mutation-verified:**
+
+- **A directive, not a mention.** The token must open the comment, after the marker and any
+  indentation. Matching it anywhere in the text made four of this file's own doc comments
+  register as live directives — harmless only while no finding ever landed on a doc-comment
+  line, and not harmless once unused directives became reportable.
+- **Crediting must mirror suppression exactly.** A first attempt credited only a directive's
+  own line and the next, on the reasoning that over-crediting merely hides a stale directive
+  while under-crediting is safe. That was backwards: two directives stacked above one statement
+  form a two-line block, so the upper one sits two lines from its target, and the tight span
+  reported a *working* directive as unused. Under-crediting produces false reports — the very
+  failure this check exists to prevent.
+
 ## PS6022 — a full sort feeding a truncation  *(scanner: static)*
 
 A slice sorted in full and then resliced to a smaller bound:

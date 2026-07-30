@@ -151,11 +151,11 @@ func DiverseBeamSearch(next NextLogits, start []int, width, groups, maxNew, eos 
 			// to keep 2. selectTopK is an INTROSELECT — a plain quickselect degenerates on
 			// candidate arrays built parent-outer over a smooth logit curve.
 			fresh := func(c dbsCand) bool { return c.newLen == step+1 }
-			//perfscan:ignore PS6022 the truncation happens BEFORE the sort — that is the fix
 			if bPrime < len(cands) {
 				selectTopK(cands, bPrime, dbsCandByAug)
 				cands = cands[:bPrime]
 			}
+			//perfscan:ignore PS3002 composite key (aug, parent, tok); a radix needs one monotonic key, and this sorts at most bPrime elements
 			slices.SortFunc(cands, dbsCandByAug)
 			// materialize toks ONLY for the B' survivors that advance.
 			survivors := make([]node, len(cands))
@@ -192,6 +192,8 @@ func DiverseBeamSearch(next NextLogits, start []int, width, groups, maxNew, eos 
 	// slices.SortStableFunc rather than sort.SliceStable: the latter reaches its swap through
 	// reflectlite.Swapper and allocates on every call (PS6009). Score-only comparison is not a
 	// total order, so stability is load-bearing and this one must stay a stable SORT.
+	//perfscan:ignore PS6022 stability is load-bearing here — score alone is not a total order, so this must stay a stable SORT
+	//perfscan:ignore PS3002 a radix would not preserve the stable order this relies on
 	slices.SortStableFunc(out, func(a, b Beam) int {
 		if a.Score > b.Score {
 			return -1

@@ -5289,3 +5289,90 @@ func f(x []int, k int) []int {
 		t.Fatalf("want 1 with only a bare len guard in between, got %d", got)
 	}
 }
+
+// A directive that actually suppresses something must not be reported.
+func TestDetectPS0001_SilentOnWorkingDirective(t *testing.T) {
+	src := `package p
+func f(x []int) {
+	//perfscan:ignore PS3002 deliberate
+	sort.Slice(x, func(i, j int) bool { return x[i] < x[j] })
+}`
+	got := countCat(scanSrc(t, src))
+	if got["unused-ignore-directive"] != 0 {
+		t.Fatalf("want 0 unused-ignore-directive for a working directive, got %d", got["unused-ignore-directive"])
+	}
+	if got["closure-comparator-sort"] != 0 {
+		t.Fatalf("the directive did not suppress: %d closure-comparator-sort remain", got["closure-comparator-sort"])
+	}
+}
+
+// THE DEFECT THIS CHECK EXISTS FOR: an edit inserts statements between the directive and its
+// target, so the directive silently stops suppressing while still reading as though it does.
+func TestDetectPS0001_DriftedDirective(t *testing.T) {
+	src := `package p
+func f(x []int) {
+	//perfscan:ignore PS3002 deliberate
+	y := len(x)
+	_ = y
+	sort.Slice(x, func(i, j int) bool { return x[i] < x[j] })
+}`
+	got := countCat(scanSrc(t, src))
+	if got["unused-ignore-directive"] != 1 {
+		t.Fatalf("want 1 unused-ignore-directive for a drifted directive, got %d", got["unused-ignore-directive"])
+	}
+	if got["closure-comparator-sort"] != 1 {
+		t.Fatalf("the drifted directive must NOT suppress; got %d closure-comparator-sort", got["closure-comparator-sort"])
+	}
+}
+
+// FLOOR FOR THE CREDITING SPAN. Two directives stacked above one statement form a two-line
+// comment block, so the upper one sits two lines from its target. Crediting only a directive's
+// own line and the next reported that working directive as unused — a false report, which is
+// the exact failure this check exists to prevent. Both must be credited.
+func TestDetectPS0001_StackedDirectivesBothCredited(t *testing.T) {
+	src := `package p
+func f(x []int) {
+	//perfscan:ignore PS3002 first reason
+	//perfscan:ignore PS3001 second reason
+	sort.Slice(x, func(i, j int) bool { return x[i] < x[j] })
+}`
+	// PS3001 has nothing to suppress here, so exactly one directive is genuinely unused; the
+	// PS3002 one is two lines above its target and must still be credited.
+	got := countCat(scanSrc(t, src))
+	if got["closure-comparator-sort"] != 0 {
+		t.Fatalf("the stacked block did not suppress the sort: %d remain", got["closure-comparator-sort"])
+	}
+	if got["unused-ignore-directive"] != 1 {
+		t.Fatalf("want exactly 1 unused (the PS3001 one), got %d — the PS3002 directive two lines up was not credited",
+			got["unused-ignore-directive"])
+	}
+}
+
+// FLOOR FOR THE DIRECTIVE-VERSUS-MENTION TEST. Prose describing the feature, and indented
+// examples inside a doc comment, must not register as live directives. Matching the token
+// anywhere in a comment made four of this package's own doc comments report as unused.
+func TestDetectPS0001_SilentOnPoseMention(t *testing.T) {
+	src := `package p
+
+// f explains that a //perfscan:ignore directive silences a check.
+//
+//	//perfscan:ignore PS1001 an indented example, not a directive
+func f(x []int) {
+	_ = x
+}`
+	if got := countCat(scanSrc(t, src))["unused-ignore-directive"]; got != 0 {
+		t.Fatalf("want 0 for prose mentioning the directive, got %d", got)
+	}
+}
+
+// A bare directive silences every check at its site, and must be credited when it does.
+func TestDetectPS0001_SilentOnWorkingBareDirective(t *testing.T) {
+	src := `package p
+func f(x []int) {
+	//perfscan:ignore deliberate, all checks
+	sort.Slice(x, func(i, j int) bool { return x[i] < x[j] })
+}`
+	if got := countCat(scanSrc(t, src))["unused-ignore-directive"]; got != 0 {
+		t.Fatalf("want 0 for a working bare directive, got %d", got)
+	}
+}
