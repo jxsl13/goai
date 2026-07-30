@@ -183,24 +183,60 @@ func (bt *ballTree) build(idx []int) *ballNode {
 	for _, id := range idx {
 		key[id] = bt.pts[id][splitDim]
 	}
-	// slices.SortFunc, not sort.Slice: the latter reaches its swap through
-	// reflectlite.Swapper and ALLOCATES on every call, and build recurses once per tree
-	// node. Both are unstable, so ties may land differently — harmless here because the
-	// kNN search is exact and orders its result by (dist, idx), so the SAME k neighbours
-	// come back whatever shape the tree takes.
-	slices.SortFunc(idx, func(a, b int) int {
-		switch ka, kb := key[a], key[b]; {
-		case ka < kb:
-			return -1
-		case ka > kb:
-			return 1
-		}
-		return 0
-	})
+	// A median PARTITION, not a full sort. build only reads idx[:mid] and idx[mid:] and then
+	// recurses, and each child immediately re-partitions its own half — so the ordering a full sort
+	// establishes inside each half is thrown away before anything reads it. Sorting every node costs
+	// sum over nodes of m*log(m) comparisons, each doing two scattered loads into key; selecting the
+	// median costs about 2m per node.
+	//
+	// Three-way (Dutch national flag) partitioning rather than two-way: the split key is a raw
+	// coordinate, so duplicate values are common — the equivalence fixture is about one-sixth exact
+	// duplicates — and a two-way partition degrades toward quadratic on them.
+	//
+	// Same contract as the sort it replaces: every element before mid compares <= the element at
+	// mid, so the same median split and the same child sizes. Ties may land in a different child than
+	// pdqsort put them, which this file already licenses above — the kNN search is exact and orders
+	// its result by (dist, idx), so the SAME k neighbours come back whatever shape the tree takes.
 	mid := len(idx) / 2
+	nthByKey(idx, key, mid)
 	n.left = bt.build(idx[:mid])
 	n.right = bt.build(idx[mid:])
 	return n
+}
+
+// nthByKey rearranges idx in place so that idx[k] holds an element with the k-th smallest key, every
+// element before k has a key <= it, and every element after has a key >= it. This is the partition
+// half of a sort: ballTree.build needs the median boundary and nothing else about the order.
+//
+// Three-way partitioning keeps it linear when keys repeat, which they do here — the split key is one
+// coordinate of the data, so exact duplicates are ordinary rather than exceptional.
+func nthByKey(idx []int, key []float64, k int) {
+	lo, hi := 0, len(idx)-1
+	for lo < hi {
+		pivot := key[idx[lo+(hi-lo)/2]]
+		lt, gt, i := lo, hi, lo
+		for i <= gt {
+			switch v := key[idx[i]]; {
+			case v < pivot:
+				idx[lt], idx[i] = idx[i], idx[lt]
+				lt++
+				i++
+			case v > pivot:
+				idx[gt], idx[i] = idx[i], idx[gt]
+				gt--
+			default:
+				i++
+			}
+		}
+		switch {
+		case k < lt:
+			hi = lt - 1
+		case k > gt:
+			lo = gt + 1
+		default:
+			return // k lands inside the equal-to-pivot run: already in place
+		}
+	}
 }
 
 // enclose returns the centroid (componentwise mean) of the given points and the
