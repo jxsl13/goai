@@ -67,9 +67,14 @@ func (m *LinearRegression) Fit(x [][]float64, y []float64) error {
 	}
 	// Materialise fresh [][]float64 / [] for cholSolve (which overwrites XᵀX).
 	gf := gram[0].Storage().F64()
+	// One slab for the da rows instead of one make() per row (PS2008). Allocation count only: the
+	// four prior measurements of this transform all left the wall clock unchanged. Rows are
+	// disjoint capped views, written in place and never replaced, and every element is overwritten
+	// below, so the values are bit-identical.
 	xtx := make([][]float64, da)
+	xtxSlab := make([]float64, da*da)
 	for i := range xtx {
-		xtx[i] = make([]float64, da)
+		xtx[i] = xtxSlab[i*da : i*da+da : i*da+da]
 		copy(xtx[i], gf[i*da:i*da+da])
 	}
 	xty := make([]float64, da)
@@ -674,9 +679,14 @@ func (p *PCA) Fit(x [][]float64, ncomp int) error {
 		return err
 	}
 	gf := gramRes[0].Storage().F64() // [d,d] = Σ_k Xc[k,i]·Xc[k,j], symmetric
+	// One slab for the d rows instead of one make() per row (PS2008). Allocation count only: the
+	// four prior measurements of this transform all left the wall clock unchanged. Rows are
+	// disjoint capped views, written in place and never replaced, and every element is overwritten
+	// below, so the values are bit-identical.
 	cov := make([][]float64, d)
+	covSlab := make([]float64, d*d)
 	for i := range d {
-		cov[i] = make([]float64, d)
+		cov[i] = covSlab[i*d : i*d+d : i*d+d]
 		base := i * d
 		for j := range d {
 			cov[i][j] = gf[base+j] / float64(n-1)

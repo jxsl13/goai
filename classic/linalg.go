@@ -14,9 +14,14 @@ import (
 // normal-equation OLS (Golub & Van Loan, Matrix Computations §4.2).
 func cholSolve(a [][]float64, b []float64) ([]float64, error) {
 	n := len(a)
+	// One slab for the n rows instead of one make() per row (PS2008). Allocation count only: the
+	// four prior measurements of this transform all left the wall clock unchanged. Rows are
+	// disjoint capped views, written in place and never replaced, and every element is overwritten
+	// below, so the values are bit-identical.
 	l := make([][]float64, n)
+	lslab := make([]float64, n*n)
 	for i := range l {
-		l[i] = make([]float64, n)
+		l[i] = lslab[i*n : i*n+n : i*n+n]
 	}
 	for i := range n {
 		for j := 0; j <= i; j++ {
