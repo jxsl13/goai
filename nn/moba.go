@@ -177,28 +177,40 @@ func MoBAAttention(q, k, v *tensor.Tensor, heads, blockSize, topK int, scale flo
 					sum += scores[j]
 					act = append(act, j)
 				}
-				// P·V over the ACTIVE keys only, with each v-row read contiguously.
-				//
-				// This is the union of two independent optimizations that collided here, and
-				// it is bit-identical to each. From this branch: iterate act, the unmasked
-				// keys, instead of every j in [0,i] — a masked key contributes scores[j]==0,
-				// and adding an exact 0.0 is the identity, so skipping it changes nothing.
-				// From origin/main: read vs[j*dm+off : +dk] contiguously ONCE per key and axpy
-				// it across the output row, instead of striding vs by dm per output channel,
-				// and hoist scores[j]/sum out of the d loop where it was recomputed dk times.
-				//
-				// Each output element still sums over ascending j with the same
-				// (scores[j]/sum)·v association, so the result is unchanged either way.
-				orow := os[i*dm+off : i*dm+off+dk : i*dm+off+dk]
-				clear(orow)
-				if sum > 0 {
+				orow := os[i*dm+off : i*dm+off+dk]
+				if sum <= 0 {
+					clear(orow)
+					continue
+				}
+				// Normalize ONCE. Dividing inside the P·V loop cost d_k divides per key
+				// instead of one; `scores[j] / sum * v` associates left, so folding the
+				// divide out is the same arithmetic, not a reassociation.
+				for _, j := range act {
+					scores[j] /= sum
+				}
+				// Four output channels per pass. Walking j for a fixed d strides v by dm,
+				// touching one cache line per key to consume eight of its bytes and
+				// repeating that d_k times; four adjacent channels read v[j, off+d..d+3]
+				// from the SAME line (PS6011). Each accumulator still sums over ascending j.
+				d := 0
+				for ; d+4 <= dk; d += 4 {
+					var o0, o1, o2, o3 float64
 					for _, j := range act {
-						pj := scores[j] / sum
-						vrow := vs[j*dm+off : j*dm+off+dk : j*dm+off+dk]
-						for d := range dk {
-							orow[d] += pj * vrow[d]
-						}
+						sj := scores[j]
+						vq := vs[j*dm+off+d : j*dm+off+d+4 : j*dm+off+d+4]
+						o0 += sj * vq[0]
+						o1 += sj * vq[1]
+						o2 += sj * vq[2]
+						o3 += sj * vq[3]
 					}
+					orow[d], orow[d+1], orow[d+2], orow[d+3] = o0, o1, o2, o3
+				}
+				for ; d < dk; d++ {
+					var o float64
+					for _, j := range act {
+						o += scores[j] * vs[j*dm+off+d]
+					}
+					orow[d] = o
 				}
 			}
 		}
