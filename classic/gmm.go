@@ -243,9 +243,16 @@ func (m *GaussianMixture) Fit(x [][]float64) error {
 	m.Weights = make([]float64, k)
 	m.Means = make([][]float64, k)
 	m.cov = make([][]float64, k)
+	// ONE slab for the n responsibility rows, not one make() per sample. The bytes are the same;
+	// the allocation COUNT drops from n to 1, and at n=20000 this site plus logResp below were
+	// issuing 2n = 40000 separate allocations per Fit. Rows are disjoint capped views (sample i
+	// owns [i*k, (i+1)*k)), so nothing can append across a boundary, and every row is written in
+	// place by eStep/mStep rather than replaced — so the views stay valid for the whole fit.
+	// Bit-identical: make() zeroes and so does a fresh slab, and no value or order changes.
 	resp := make([][]float64, n) // hard responsibilities from the warm start
+	respSlab := make([]float64, n*k)
 	for i := range resp {
-		resp[i] = make([]float64, k)
+		resp[i] = respSlab[i*k : i*k+k : i*k+k]
 		resp[i][labels[i]] = 1
 	}
 	if err := m.mStep(x, resp); err != nil {
@@ -257,8 +264,9 @@ func (m *GaussianMixture) Fit(x [][]float64) error {
 	prevLL := math.Inf(-1)
 	m.converged = false
 	logResp := make([][]float64, n)
+	logRespSlab := make([]float64, n*k)
 	for i := range logResp {
-		logResp[i] = make([]float64, k)
+		logResp[i] = logRespSlab[i*k : i*k+k : i*k+k]
 	}
 	for iter := 1; iter <= m.cfg.maxIter; iter++ {
 		meanLL, err := m.eStep(x, resp, logResp)
