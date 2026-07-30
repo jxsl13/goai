@@ -521,9 +521,15 @@ func (c *TurboQuantKVCache) Values() [][]float64 { return c.rows(c.vals) }
 
 func (c *TurboQuantKVCache) rows(rs []tqRow) [][]float64 {
 	out := make([][]float64, len(rs))
-	for i, r := range rs {
-		out[i] = c.reconstruct(r)
-	}
+	// Each row's reconstruction is independent: reconstruct writes only out[i] and reads the
+	// immutable rotation/codebook/sketch (applyInverse and decodeResidual allocate all their
+	// buffers locally — no receiver scratch), so the loop fans out over GOMAXPROCS bit-identically
+	// to the serial loop. Gated on len(rs)·dim so a short cache stays serial.
+	parallelChunks(len(rs), len(rs)*c.dim, func(lo, hi int) {
+		for i := lo; i < hi; i++ {
+			out[i] = c.reconstruct(rs[i])
+		}
+	})
 	return out
 }
 
