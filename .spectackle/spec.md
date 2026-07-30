@@ -740,3 +740,8 @@ Rationale: In one comparison three tight arms held one percent spread and genuin
 WHEN a scan check's message quotes a speedup measured at a different site, the author SHALL name the site it came from and the variables the check cannot see, rather than stating it as though it applies where the check fired.
 
 Rationale: A triage of all 59 checks found six asserting a measured magnitude with no hedge, across 290 hits. That is the failure mode that made one check useless for months: a reader trusts the number, acts, and finds nothing. Attribution costs a clause and changes nothing about what fires.
+
+## PROC-CORRECTNESS-SUPPRESSION-THRESHOLD-001
+WHEN a narrowing would suppress a recommendation that is not merely useless but WRONG, the implementing agent SHALL ship it on high precision even at low recall, unlike a performance narrowing which needs enough instances to justify itself.
+
+Rationale: A divide check recommended a reciprocal multiply that evaluates to zero on integer operands. Two proofs caught three of ten such sites with zero false positives. Suppressing a wrong recommendation costs nothing, and what is given up is a perf suggestion at sites where it would have produced zero. For a perf check the failure mode is low precision; for a correctness hazard it is low precision that must be avoided and low recall that is tolerable.
