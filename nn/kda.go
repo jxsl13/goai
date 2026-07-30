@@ -70,6 +70,7 @@ func KimiDeltaAttention(q, k, v, a, beta *tensor.Tensor) (*tensor.Tensor, error)
 	sk := make([]float64, dv)   // S·k scratch
 	qt := make([]float64, dk)   // L2-normalized rows (the DeltaNet convention,
 	kt := make([]float64, dk)   // mirrored from GatedDeltaNet)
+	ar := make([]float64, dk)   // per-step decay row a_t (hoisted for the interchanged decay)
 	for t := range seq {
 		bt := beta.AtF64(t, 0)
 		var qn, kn float64
@@ -91,11 +92,17 @@ func KimiDeltaAttention(q, k, v, a, beta *tensor.Tensor) (*tensor.Tensor, error)
 				kt[c] *= kn
 			}
 		}
-		// decay each key channel, then the delta write S += β(v − S·k)·kᵀ.
+		// decay each key channel, then the delta write S += β(v − S·k)·kᵀ. Hoist a_t's row
+		// once (same dk AtF64 as before), then interchange the decay to r-outer so the inner
+		// loop scales S's CONTIGUOUS row instead of striding S[r*dk+c] down a column (stride
+		// dk) per channel. Bit-exact: an element-wise scale, no reduction to reorder.
 		for c := range dk {
-			ac := a.AtF64(t, c)
-			for r := range dv {
-				S[r*dk+c] *= ac
+			ar[c] = a.AtF64(t, c)
+		}
+		for r := range dv {
+			Srow := S[r*dk : r*dk+dk]
+			for c := range dk {
+				Srow[c] *= ar[c]
 			}
 		}
 		for r := range dv {
