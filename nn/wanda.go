@@ -3,7 +3,6 @@ package nn
 import (
 	"fmt"
 	"math"
-	"sort"
 
 	"github.com/jxsl13/goai/tensor"
 )
@@ -257,6 +256,25 @@ func selectPartition(a []int, k int, less func(x, y int) bool) {
 	}
 }
 
+// stableSortGrpByScore sorts grp ascending by gsc[grp[r]-base], STABLE (equal scores keep their
+// input order) — an alloc-free manual insertion sort replacing sort.SliceStable, which allocated
+// an interface closure PER CALL (~2.1M allocs on a 2048² N:M prune, GC-capping the throughput).
+// m = len(grp) is the N:M block size (tiny, typically 4), so insertion sort is both faster and
+// zero-alloc. Bit-identical ordering to SliceStable with less = gsc[a]<gsc[b]: the strict `>`
+// stop condition never reorders equal scores, so ties keep their ascending input order.
+func stableSortGrpByScore(grp []int, gsc []float64, base int) {
+	for i := 1; i < len(grp); i++ {
+		gi := grp[i]
+		ki := gsc[gi-base]
+		j := i - 1
+		for j >= 0 && gsc[grp[j]-base] > ki {
+			grp[j+1] = grp[j]
+			j--
+		}
+		grp[j+1] = gi
+	}
+}
+
 // WandaPruneNM applies N:M structured Wanda pruning: within every group of m consecutive
 // input weights feeding one output, the n lowest-importance weights are zeroed (e.g. 2:4
 // keeps 2 of every 4). This is the sparsity pattern accelerated by NVIDIA sparse tensor
@@ -282,7 +300,7 @@ func WandaPruneNM(w, x *tensor.Tensor, n, m int) (pruned, mask *tensor.Tensor, e
 	// gsc[grp[·]-base] is the score of grp[·]; the SliceStable over identical values in
 	// identical (input) order reproduces the original ordering exactly.
 	sortGrp := func(base int) {
-		sort.SliceStable(grp, func(a, b int) bool { return gsc[grp[a]-base] < gsc[grp[b]-base] })
+		stableSortGrpByScore(grp, gsc, base)
 	}
 	sf64 := s.Storage()
 	if wsF := flatF64(w); wsF != nil {
@@ -295,7 +313,7 @@ func WandaPruneNM(w, x *tensor.Tensor, n, m int) (pruned, mask *tensor.Tensor, e
 			gsc := make([]float64, m)
 			drop := make([]bool, m)
 			sortGrp := func(base int) {
-				sort.SliceStable(grp, func(a, b int) bool { return gsc[grp[a]-base] < gsc[grp[b]-base] })
+				stableSortGrpByScore(grp, gsc, base)
 			}
 			for o := olo; o < ohi; o++ {
 				for base := 0; base < cin; base += m {
@@ -330,7 +348,7 @@ func WandaPruneNM(w, x *tensor.Tensor, n, m int) (pruned, mask *tensor.Tensor, e
 			gsc := make([]float64, m)
 			drop := make([]bool, m)
 			sortGrp := func(base int) {
-				sort.SliceStable(grp, func(a, b int) bool { return gsc[grp[a]-base] < gsc[grp[b]-base] })
+				stableSortGrpByScore(grp, gsc, base)
 			}
 			for o := olo; o < ohi; o++ {
 				for base := 0; base < cin; base += m {
