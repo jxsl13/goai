@@ -1767,7 +1767,11 @@ int cu_softmax_f32(void* x, int rows, int cols) {
                          "  for(int s=nt/2;s>0;s>>=1){ if(t<s && sh[t+s]>sh[t]) sh[t]=sh[t+s]; __syncthreads(); }\n"
                          "  double rowmax=sh[0]; __syncthreads();\n"
                          "  double local=0.0;\n"
-                         "  for(int j=t;j<cols;j+=nt){ double e=exp((double)xr[j]-rowmax); xr[j]=(float)e; local+=e; }\n"
+                         // GA106 runs FP64 at 1/64 the FP32 rate, so the double exp() dominated this
+                         // kernel (~28 GB/s, 8% of peak). Use FP32 expf on the reduced argument (~1e-7
+                         // rel, inside the softmax tolerance gate) but keep the SUM in double for
+                         // stability. The row-max shift keeps expf's argument <= 0 (no overflow).
+                         "  for(int j=t;j<cols;j+=nt){ float e=expf((float)((double)xr[j]-rowmax)); xr[j]=e; local+=(double)e; }\n"
                          "  sh[t]=local; __syncthreads();\n"
                          "  for(int s=nt/2;s>0;s>>=1){ if(t<s) sh[t]+=sh[t+s]; __syncthreads(); }\n"
                          "  double inv=1.0/sh[0];\n"
@@ -2073,14 +2077,15 @@ int cu_rope_partial(void* x, const void* inv, int seq, int heads, int hd, int ro
     if (ensure_init() != 0) { rc = -1; goto done; }
     if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
     if (!gRopePartial && compile_kernel(
+                      // Angle (FP64 reduction + sincosf) depends only on (p,i), not head — hoist it
+                      // out of the head loop (one thread per (p,i), loops heads). Bit-identical.
                       "extern \"C\" __global__ void rope_partial(float* x, const float* inv, int seq, int heads, int hd, int rotaryDim, int posOffset, double posDiv){\n"
                       "  int half = rotaryDim/2;\n"
-                      "  long total = (long)seq*heads*half;\n"
+                      "  long total = (long)seq*half;\n"
                       "  long gid = (long)blockIdx.x*blockDim.x + threadIdx.x;\n"
                       "  if (gid >= total) return;\n"
                       "  int i = (int)(gid % half);\n"
-                      "  int h = (int)((gid / half) % heads);\n"
-                      "  int p = (int)(gid / ((long)half*heads));\n"
+                      "  int p = (int)(gid / half);\n"
                       "  double pos = (double)(posOffset + p) / posDiv;\n"
                       "  double ang = pos * (double)inv[i];\n"
                       "  const double TWO_PI = 6.283185307179586476925286766559;\n"
@@ -2088,14 +2093,17 @@ int cu_rope_partial(void* x, const void* inv, int seq, int heads, int hd, int ro
                       "  float r = (float)(ang - k2 * TWO_PI);\n"
                       "  float c, s;\n"
                       "  sincosf(r, &s, &c);\n"
-                      "  float* xr = x + (size_t)p*heads*hd + (size_t)h*hd;\n"
-                      "  float qi = xr[i], qih = xr[i+half];\n"
-                      "  xr[i] = qi*c - qih*s;\n"
-                      "  xr[i+half] = qih*c + qi*s;\n"
+                      "  float* xp = x + (size_t)p*heads*hd;\n"
+                      "  for (int h = 0; h < heads; h++){\n"
+                      "    float* xr = xp + (size_t)h*hd;\n"
+                      "    float qi = xr[i], qih = xr[i+half];\n"
+                      "    xr[i] = qi*c - qih*s;\n"
+                      "    xr[i+half] = qih*c + qi*s;\n"
+                      "  }\n"
                       "}\n",
                       "rope_partial.cu", "rope_partial", &gRopePartial) != 0) { rc = -2; goto done; }
     {
-        long total = (long)seq * heads * (rotaryDim / 2);
+        long total = (long)seq * (rotaryDim / 2);
         int threads = 256, blocks = (int)((total + threads - 1) / threads);
         if (blocks < 1) blocks = 1;
         void* args[8];
@@ -2120,14 +2128,15 @@ int cu_rope_f32_band(void* x, const void* inv, int seq, int stride, int off, int
     if (ensure_init() != 0) { rc = -1; goto done; }
     if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
     if (!gRopeBand && compile_kernel(
+                      // Angle (FP64 reduction + sincosf) depends only on (p,i), not head — hoist it
+                      // out of the head loop (one thread per (p,i), loops heads). Bit-identical.
                       "extern \"C\" __global__ void rope_band(float* x, const float* inv, int seq, int stride, int off, int heads, int hd, int posOffset, double posDiv){\n"
                       "  int half = hd/2;\n"
-                      "  long total = (long)seq*heads*half;\n"
+                      "  long total = (long)seq*half;\n"
                       "  long gid = (long)blockIdx.x*blockDim.x + threadIdx.x;\n"
                       "  if (gid >= total) return;\n"
                       "  int i = (int)(gid % half);\n"
-                      "  int h = (int)((gid / half) % heads);\n"
-                      "  int p = (int)(gid / ((long)half*heads));\n"
+                      "  int p = (int)(gid / half);\n"
                       "  double pos = (double)(posOffset + p) / posDiv;\n"
                       "  double ang = pos * (double)inv[i];\n"
                       "  const double TWO_PI = 6.283185307179586476925286766559;\n"
@@ -2135,14 +2144,17 @@ int cu_rope_f32_band(void* x, const void* inv, int seq, int stride, int off, int
                       "  float r = (float)(ang - k2 * TWO_PI);\n"
                       "  float c, s;\n"
                       "  sincosf(r, &s, &c);\n"
-                      "  float* xr = x + (size_t)p*stride + off + (size_t)h*hd;\n"
-                      "  float qi = xr[i], qih = xr[i+half];\n"
-                      "  xr[i] = qi*c - qih*s;\n"
-                      "  xr[i+half] = qih*c + qi*s;\n"
+                      "  float* xb = x + (size_t)p*stride + off;\n"
+                      "  for (int h = 0; h < heads; h++){\n"
+                      "    float* xr = xb + (size_t)h*hd;\n"
+                      "    float qi = xr[i], qih = xr[i+half];\n"
+                      "    xr[i] = qi*c - qih*s;\n"
+                      "    xr[i+half] = qih*c + qi*s;\n"
+                      "  }\n"
                       "}\n",
                       "rope_band.cu", "rope_band", &gRopeBand) != 0) { rc = -2; goto done; }
     {
-        long total = (long)seq * heads * (hd / 2);
+        long total = (long)seq * (hd / 2);
         int threads = 256, blocks = (int)((total + threads - 1) / threads);
         if (blocks < 1) blocks = 1;
         void* args[9];
@@ -2173,14 +2185,15 @@ int cu_rope_partial_band(void* x, const void* inv, int seq, int stride, int off,
     if (ensure_init() != 0) { rc = -1; goto done; }
     if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
     if (!gRopePartialBand && compile_kernel(
+                      // Angle (FP64 reduction + sincosf) depends only on (p,i), not head — hoist it
+                      // out of the head loop (one thread per (p,i), loops heads). Bit-identical.
                       "extern \"C\" __global__ void rope_partial_band(float* x, const float* inv, int seq, int stride, int off, int heads, int hd, int rotaryDim, int posOffset, double posDiv){\n"
                       "  int half = rotaryDim/2;\n"
-                      "  long total = (long)seq*heads*half;\n"
+                      "  long total = (long)seq*half;\n"
                       "  long gid = (long)blockIdx.x*blockDim.x + threadIdx.x;\n"
                       "  if (gid >= total) return;\n"
                       "  int i = (int)(gid % half);\n"
-                      "  int h = (int)((gid / half) % heads);\n"
-                      "  int p = (int)(gid / ((long)half*heads));\n"
+                      "  int p = (int)(gid / half);\n"
                       "  double pos = (double)(posOffset + p) / posDiv;\n"
                       "  double ang = pos * (double)inv[i];\n"
                       "  const double TWO_PI = 6.283185307179586476925286766559;\n"
@@ -2188,14 +2201,17 @@ int cu_rope_partial_band(void* x, const void* inv, int seq, int stride, int off,
                       "  float r = (float)(ang - k2 * TWO_PI);\n"
                       "  float c, s;\n"
                       "  sincosf(r, &s, &c);\n"
-                      "  float* xr = x + (size_t)p*stride + off + (size_t)h*hd;\n"
-                      "  float qi = xr[i], qih = xr[i+half];\n"
-                      "  xr[i] = qi*c - qih*s;\n"
-                      "  xr[i+half] = qih*c + qi*s;\n"
+                      "  float* xb = x + (size_t)p*stride + off;\n"
+                      "  for (int h = 0; h < heads; h++){\n"
+                      "    float* xr = xb + (size_t)h*hd;\n"
+                      "    float qi = xr[i], qih = xr[i+half];\n"
+                      "    xr[i] = qi*c - qih*s;\n"
+                      "    xr[i+half] = qih*c + qi*s;\n"
+                      "  }\n"
                       "}\n",
                       "rope_partial_band.cu", "rope_partial_band", &gRopePartialBand) != 0) { rc = -2; goto done; }
     {
-        long total = (long)seq * heads * (rotaryDim / 2);
+        long total = (long)seq * (rotaryDim / 2);
         int threads = 256, blocks = (int)((total + threads - 1) / threads);
         if (blocks < 1) blocks = 1;
         void* args[10];
