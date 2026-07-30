@@ -45,3 +45,38 @@ func BenchmarkMHAMaskedBackward(b *testing.B) {
 		}
 	}
 }
+
+// benchMHAMaskedBwdShape times the masked-attention backward at a given shape; higher
+// head counts exercise the head-parallel path's scaling (each head is an independent
+// dQ/dK/dV band; the shared dMask reduces in head order).
+func benchMHAMaskedBwdShape(b *testing.B, seq, dm, heads int) {
+	mk := func(r, c int, s float64) *tensor.Tensor {
+		t := tensor.New(tensor.F64, tensor.Shape{r, c})
+		d := t.Storage().F64()
+		for i := range d {
+			d[i] = math.Sin(float64(i)*0.01 + s)
+		}
+		return t
+	}
+	q, k, v, g := mk(seq, dm, 0), mk(seq, dm, 1), mk(seq, dm, 2), mk(seq, dm, 3)
+	mask := tensor.New(tensor.F64, tensor.Shape{seq, seq})
+	ms := mask.Storage().F64()
+	for i := 0; i < seq; i++ {
+		for j := i + 1; j < seq; j++ {
+			ms[i*seq+j] = math.Inf(-1)
+		}
+	}
+	in := []*tensor.Tensor{q, k, v, mask, g}
+	attrs := backend.AttnAttrs{Heads: heads}
+	ctx := backend.NewContext()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if _, err := backend.Execute(ctx, backend.OpMHAMaskedBackward, in, attrs); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkMHAMaskedBackward_256h8(b *testing.B) { benchMHAMaskedBwdShape(b, 256, 512, 8) }
+func BenchmarkMHAMaskedBackward_512h8(b *testing.B) { benchMHAMaskedBwdShape(b, 512, 512, 8) }

@@ -5,6 +5,7 @@ import (
 	"math"
 
 	"github.com/jxsl13/goai/backend"
+	"github.com/jxsl13/goai/internal/parallel"
 	"github.com/jxsl13/goai/tensor"
 )
 
@@ -75,6 +76,113 @@ func mhaMaskedBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, attrs ba
 	dvs, dvok := f64Data(dV)
 	dms, dmok := f64Data(dMask)
 	if qok && kok && vok && gok && mok && dqok && dkok && dvok && dmok {
+		// Parallel-over-heads path. With rep==1 every head owns DISJOINT query/key/value
+		// columns, so dQ/dK/dV are written race-free directly. The only cross-head
+		// accumulation is a shared 2-D dMask (perHead==false): each head writes its own
+		// [sq,sk] contribution slice, then a serial pass sums them IN HEAD ORDER — the same
+		// h=0,1,2… order the serial loop accumulates in, so the result is bit-identical.
+		// Falls through to the serial fast path for GQA (rep>1, shared dK/dV), <2 heads, no
+		// worker pool, or when the dMask contribution buffer would be too large.
+		const maskBufCap = 128 << 20 // bytes
+		if rep == 1 && heads >= 2 && parallel.Workers() > 1 && (perHead || heads*sq*sk*8 <= maskBufCap) {
+			var maskBuf []float64 // [heads*sq*sk] per-head dMask contributions (perHead==false only)
+			if !perHead {
+				maskBuf = make([]float64, heads*sq*sk)
+			}
+			parallel.Rows(heads, func(hlo, hhi int) {
+				row := make([]float64, sk)
+				dw := make([]float64, sk)
+				qi := make([]float64, dk)
+				gi := make([]float64, dk)
+				for h := hlo; h < hhi; h++ {
+					qOff := h * dk
+					kvOff := h * dk // rep==1: each head owns its own kv columns
+					for i := 0; i < sq; i++ {
+						qbase := i * dm
+						for d := 0; d < dk; d++ {
+							qi[d] = qs[qbase+qOff+d]
+							gi[d] = gs[qbase+qOff+d]
+						}
+						mBase := i * sk
+						if perHead {
+							mBase = (h*sq + i) * sk
+						}
+						m := math.Inf(-1)
+						for j := 0; j < sk; j++ {
+							mv := masks[mBase+j]
+							if math.IsInf(mv, -1) {
+								row[j] = math.Inf(-1)
+								continue
+							}
+							krow := ks[j*dm+kvOff : j*dm+kvOff+dk : j*dm+kvOff+dk]
+							var sc float64
+							for d := 0; d < dk; d++ {
+								sc += qi[d] * krow[d]
+							}
+							sc = sc*scale + mv
+							row[j] = sc
+							if sc > m {
+								m = sc
+							}
+						}
+						var sum float64
+						for j := 0; j < sk; j++ {
+							if math.IsInf(row[j], -1) {
+								row[j] = 0
+								continue
+							}
+							row[j] = math.Exp(row[j] - m)
+							sum += row[j]
+						}
+						if sum > 0 {
+							for j := range row {
+								row[j] /= sum
+							}
+						}
+						var wdot float64
+						for j := 0; j < sk; j++ {
+							vrow := vs[j*dm+kvOff : j*dm+kvOff+dk : j*dm+kvOff+dk]
+							dvrow := dvs[j*dm+kvOff : j*dm+kvOff+dk : j*dm+kvOff+dk]
+							rj := row[j]
+							var d float64
+							for c := 0; c < dk; c++ {
+								d += gi[c] * vrow[c]
+								dvrow[c] += rj * gi[c]
+							}
+							dw[j] = d
+							wdot += rj * d
+						}
+						dqrow := dqs[qbase+qOff : qbase+qOff+dk : qbase+qOff+dk]
+						mbBase := h*sq*sk + i*sk
+						for j := 0; j < sk; j++ {
+							dscore := row[j] * (dw[j] - wdot)
+							if perHead {
+								dms[mBase+j] += dscore
+							} else {
+								maskBuf[mbBase+j] = dscore
+							}
+							ds := dscore * scale
+							krow := ks[j*dm+kvOff : j*dm+kvOff+dk : j*dm+kvOff+dk]
+							dkrow := dks[j*dm+kvOff : j*dm+kvOff+dk : j*dm+kvOff+dk]
+							for d := 0; d < dk; d++ {
+								dqrow[d] += ds * krow[d]
+								dkrow[d] += ds * qi[d]
+							}
+						}
+					}
+				}
+			})
+			if !perHead { // sum per-head dMask contributions in head order → bit-identical to serial
+				plane := sq * sk
+				for h := 0; h < heads; h++ {
+					base := h * plane
+					for idx := 0; idx < plane; idx++ {
+						dms[idx] += maskBuf[base+idx]
+					}
+				}
+			}
+			return []*tensor.Tensor{dQ, dK, dV, dMask}, nil
+		}
 		{
 			{
 				qi := make([]float64, dk)
