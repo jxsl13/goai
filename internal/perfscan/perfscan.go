@@ -7534,19 +7534,33 @@ func stridedInnerWalkFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 					return true
 				}
 				seen[buf.Name] = true
+				remedy := fmt.Sprintf("Interchange the loops so %q runs contiguously (bit-neutral when"+
+					" the body is a pure elementwise update), or block four adjacent %q values so one"+
+					" fetched line feeds four accumulators.", innerVar, outerVar)
+				if readsBackItsOwnWrites(outerBody, buf.Name) {
+					remedy = fmt.Sprintf("INTERCHANGE IS NOT AVAILABLE HERE: this nest both READS and"+
+						" WRITES %q at differing indices, so the strided accesses are values earlier"+
+						" iterations of this same loop produced — a recurrence, not an independent"+
+						" traversal, and swapping the loops would read x[j] before it exists (%q is the"+
+						" enclosing loop). The remedy that IS"+
+						" available is to keep the intermediate in CONTIGUOUS per-iteration scratch and"+
+						" scatter the finished row into %q once at the end. Shipped on LU back"+
+						" substitution: LUSolve_512x512 -8.41%%, 768x768 -7.00%%, and the single-RHS"+
+						" control +0.57%% SLOWER, because at one column the access was already contiguous"+
+						" and only the scatter remains — check the stride is really greater than 1 before"+
+						" acting.", buf.Name, outerVar, buf.Name)
+				}
 				out = append(out, finding{
 					pos:      fset.Position(ix.Pos()),
 					category: "strided-inner-walk",
 					msg: fmt.Sprintf("the inner loop over %q indexes %q at a stride, so each iteration jumps a"+
 						" whole row and touches its own cache line to use one element — and the walk repeats"+
-						" once per %q. Interchange the loops so %q runs contiguously (bit-neutral when the body"+
-						" is a pure elementwise update), or block four adjacent %q values so one fetched line"+
-						" feeds four accumulators. THE PREMISE IS A CACHE CLAIM THIS CHECK CANNOT MAKE: below"+
+						" once per %q. %s THE PREMISE IS A CACHE CLAIM THIS CHECK CANNOT MAKE: below"+
 						" one cache line of stride, consecutive iterations share a line, and a buffer that"+
 						" fits L1 pays nothing for striding either — read the stride value and the buffer"+
 						" size before acting. 2.40x on NSA P*V and part of KDA's 1.75x were measured AT"+
 						" THOSE SITES, not here.",
-						innerVar, buf.Name, outerVar, innerVar, outerVar),
+						innerVar, buf.Name, outerVar, remedy),
 				})
 				return true
 			})
@@ -7555,6 +7569,102 @@ func stridedInnerWalkFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 		return true
 	})
 	return dedupeByPos(out)
+}
+
+// readsBackItsOwnWrites reports whether the nest both READS and WRITES name at index expressions
+// that DIFFER — the signature of a recurrence, where the strided reads are values earlier
+// iterations of this same loop produced.
+//
+// That combination changes the remedy completely. When a loop reads back what it wrote,
+// interchanging is not merely unprofitable but WRONG: the swapped order would read a value before
+// the iteration producing it has run. LU back substitution is the shipped example — x[i] depends
+// on every x[j] with j > i — and the fix that works there is to keep the intermediate in
+// contiguous scratch and scatter once, which the generic advice does not mention.
+//
+// The comparison is SYMMETRIC on purpose. PS6011 reports whichever access it matched first, and on
+// a three-deep nest (column, row, inner) it reported the WRITE rather than the read — an earlier
+// version of this helper assumed the reported access was the read and classified nothing.
+//
+// Requiring the two index expressions to differ is what separates a recurrence from an
+// elementwise in-place update: src[j*cols+c] = src[j*cols+c] * 2 reads and writes the same slot,
+// so interchange still applies to it.
+func readsBackItsOwnWrites(body *ast.BlockStmt, name string) bool {
+	// Compared by the set of variables MULTIPLIED in the index, not by index text. exprText
+	// renders only identifiers and selectors, so an index like i*cols+c keys to the empty string
+	// and every access collapses to one key — which is what made a first version classify
+	// nothing. The multiplied set is the structural fact that matters anyway: the write strides by
+	// the recurrence variable and the read by the inner one, and an elementwise in-place update
+	// strides both by the same variable.
+	var writes, reads []map[string]bool
+	collect := func(e ast.Expr, into *[]map[string]bool) {
+		ix, ok := e.(*ast.IndexExpr)
+		if !ok {
+			return
+		}
+		if id, ok := ast.Unparen(ix.X).(*ast.Ident); ok && id.Name == name {
+			*into = append(*into, multipliedVars(ix.Index))
+		}
+	}
+	ast.Inspect(body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok {
+			return true
+		}
+		for _, lhs := range as.Lhs {
+			collect(lhs, &writes)
+		}
+		for _, rhs := range as.Rhs {
+			ast.Inspect(rhs, func(m ast.Node) bool {
+				if e, ok := m.(ast.Expr); ok {
+					collect(e, &reads)
+				}
+				return true
+			})
+		}
+		return true
+	})
+	for _, w := range writes {
+		for _, r := range reads {
+			if len(w) == 0 || len(r) == 0 {
+				continue // an unstrided access says nothing about a recurrence
+			}
+			if !sameStringSet(w, r) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// multipliedVars returns the identifiers appearing as an operand of a multiplication anywhere in
+// e — the variables the index strides by.
+func multipliedVars(e ast.Expr) map[string]bool {
+	out := map[string]bool{}
+	ast.Inspect(e, func(n ast.Node) bool {
+		be, ok := n.(*ast.BinaryExpr)
+		if !ok || be.Op != token.MUL {
+			return true
+		}
+		for _, side := range []ast.Expr{be.X, be.Y} {
+			if id, ok := ast.Unparen(side).(*ast.Ident); ok {
+				out[id.Name] = true
+			}
+		}
+		return true
+	})
+	return out
+}
+
+func sameStringSet(a, b map[string]bool) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k := range a {
+		if !b[k] {
+			return false
+		}
+	}
+	return true
 }
 
 // dedupeByPos keeps one finding per source position. Searching inner loops at any depth
