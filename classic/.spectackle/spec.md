@@ -49,3 +49,8 @@ IF an outer loop already parallelizes to near machine width, THEN the inner loop
 
 ## PROC-BENCH-MEMAXIS-001
 IF a parallelization allocates scratch inside the parallel body, THEN the change SHALL report allocs and bytes per op alongside the speedup; GBM hid a 31x memory regression (64MB to 2007MB) behind a 2.80x.
+
+## TEST-SWEEP-EVERY-REMAINDER-001
+IF a kernel unroll-and-jams by N and hands the remainder to another path, THEN the implementing agent SHALL sweep the count over all N remainders, since a golden at a multiple of 4 reached none of them.
+
+Rationale: logGaussianFullBatch jams 4 components and passes k%4 to the scalar per-component path, so it has five dispatch shapes: below the jam width, exactly the width, and each remainder. Adding a 2-wide jam for remainders 2 and 3 was worth 4.37% on BenchmarkGMMFitFull, which runs k=6, and provably nothing on the k=8 benchmarks where the remainder is zero — the flat results are the check on the explanation. But a one-ulp perturbation of the new 2-jam left the ENTIRE classic suite green. Two separate reasons, both worth knowing. The k=5/6/7 parity test compares the parallel row scan against the serial one and both arms call the same batch kernel, so a defect inside the jam moves them together. And TestGMMFullBitIdenticalToGolden does catch a one-ulp perturbation of the 4-jam, so the kernel looked covered — but its k is a multiple of 4, so no remainder path is reachable from it at all. The oracle a jam needs is the per-component path it claims to reproduce, compared bit-for-bit, with the count swept over every remainder and the dimension varied; measured coverage per path beats one fixture that happens to hit the widest case.
