@@ -396,21 +396,20 @@ func kmeansAQLM(data [][]float64, k, dim int, rng *rand.Rand, iters int) [][]flo
 // width 1): sweeping the codebooks, it repeatedly re-selects code_m as the entry nearest to the
 // group minus the sum of the OTHER codebooks' current contributions. A few sweeps converge.
 func icmEncodeAQLM(groups [][]float64, codes []int, codebooks [][]float64, m, k, g int) {
-	// PARALLEL over groups, ON TOP OF the 4-way unroll of the entry scan below. The two
-	// optimizations are on different axes and compose: the unroll amortizes each
-	// target[t] load across four squared-distance accumulators WITHIN one group's scan,
-	// while this splits the groups themselves. Group i reads its own codes[i*m : i*m+m]
-	// and the shared read-only codebooks, and writes only its own codes.
-	//
-	// target was a SHARED residual scratch — the receiver-scratch shape PS6006 exists
-	// for — so it moves into the chunk.
-	//
-	// BIT-IDENTICAL: every ICM step is an argmin decided by a strict <, keeping the FIRST
-	// minimum, and neither the unrolled scan's ascending-j fold nor the per-group
-	// comparison sequence is touched by a partition.
-	parallelRowsMM(len(groups), 3*m*k*g, func(lo, hi int) {
+	// This composes with the 4-way unroll of the entry scan below rather than competing with
+	// it: the unroll amortizes each target[t] load across four squared-distance accumulators
+	// WITHIN one group's scan, while this splits the groups themselves — different axes, so
+	// both wins apply. target had been a SHARED residual scratch on the receiver, the shape
+	// PS6006 exists for, which is what had to move into the chunk to make the split legal.
+	// Each group's re-encode is self-contained: it writes only codes[i*m : i*m+m] and reads
+	// groups[i] plus the shared read-only codebooks, so the group loop fans out over GOMAXPROCS
+	// bit-identically to the serial loop (the entry scan's argmin is deterministic — ascending-j
+	// strict-< ties to the lowest j regardless of worker interleaving). Each worker owns a private
+	// target scratch. Gated on ng·(3·m·k·g) so a tiny re-encode stays serial. This is the
+	// parallelizable half of EncodeAQLM's refit/re-encode alternation.
+	parallelRows(len(groups), 3*m*k*g, func(glo, ghi int) {
 		target := make([]float64, g)
-		for i := lo; i < hi; i++ {
+		for i := glo; i < ghi; i++ {
 			for range 3 { // sweeps
 				for a := range m {
 					copy(target, groups[i])
