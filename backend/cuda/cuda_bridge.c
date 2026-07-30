@@ -1213,10 +1213,15 @@ int cu_wkv_step(const void* k, const void* v, const void* w, const void* u,
                       "  int c = blockIdx.x*blockDim.x + threadIdx.x; if(c>=D) return;\n"
                       "  double kk=(double)k[c], vv=(double)v[c], wc=(double)w[c], uc=(double)u[c];\n"
                       "  double a=(double)aa[c], b=(double)bb[c], p=(double)pp[c];\n"
+                      // FP32 expf for all four transcendentals (GA106 FP64 = 1/64 rate). The
+                      // max-tracked stabilization keeps every exp argument <= 0 (exp in (0,1]) and the
+                      // state decays (contractive), so the ~1e-7 per-exp error stays bounded; the
+                      // numerator/denominator ratio and the aa/bb accumulation stay in double. Inside
+                      // the WKV tolerance gate (1e-4 vs the f64 ref).
                       "  double ww=uc+kk; double q=fmax(p,ww);\n"
-                      "  double e1=exp(p-q), e2=exp(ww-q);\n"
+                      "  double e1=(double)expf((float)(p-q)), e2=(double)expf((float)(ww-q));\n"
                       "  out[c]=(float)((e1*a+e2*vv)/(e1*b+e2));\n"
-                      "  q=fmax(p-wc,kk); e1=exp(p-wc-q); e2=exp(kk-q);\n"
+                      "  q=fmax(p-wc,kk); e1=(double)expf((float)(p-wc-q)); e2=(double)expf((float)(kk-q));\n"
                       "  aa[c]=(float)(e1*a+e2*vv); bb[c]=(float)(e1*b+e2); pp[c]=(float)q;\n"
                       "}\n",
                       "wkv_step.cu", "wkv_step", &gWkvStep) != 0) { rc = -2; goto done; }
