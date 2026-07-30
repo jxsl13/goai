@@ -160,9 +160,15 @@ func (m *SoftmaxRegression) Fit(x [][]float64, y []int, k, steps int, lr float64
 	// Parameters are flattened feature-major as theta[a*kEff+c], c∈[0,kEff).
 	mAug := d + 1
 	kEff := k - 1
+	// Augmented design and per-sample probability rows, each backed by ONE contiguous
+	// buffer instead of n separate make()s: the [][]float64 view still hands each consumer
+	// an mAug- / k-long row, but xa[i]/probs[i] are sub-slices of xaFlat/probFlat, so this
+	// drops ~2n allocations per Fit and streams the rows contiguously. Bit-identical: same
+	// values, same slice lengths — only the backing storage layout changes.
+	xaFlat := make([]float64, n*mAug)
 	xa := make([][]float64, n)
 	for i := range n {
-		row := make([]float64, mAug)
+		row := xaFlat[i*mAug : i*mAug+mAug : i*mAug+mAug]
 		copy(row, x[i])
 		row[d] = 1
 		xa[i] = row
@@ -170,9 +176,10 @@ func (m *SoftmaxRegression) Fit(x [][]float64, y []int, k, steps int, lr float64
 	p := mAug * kEff
 	theta := make([]float64, p)
 
+	probFlat := make([]float64, n*k)
 	probs := make([][]float64, n)
 	for i := range probs {
-		probs[i] = make([]float64, k)
+		probs[i] = probFlat[i*k : i*k+k : i*k+k]
 	}
 	// forward computes softmax probabilities into probs and returns mean
 	// cross-entropy loss, both from the given weights. The reference class k−1
@@ -222,6 +229,12 @@ func (m *SoftmaxRegression) Fit(x [][]float64, y []int, k, steps int, lr float64
 	numPairs := kEff * (kEff + 1) / 2
 	grams := make([]float64, numPairs*mAug*mAug)
 	wpair := make([]float64, numPairs)
+	// Per-step line-search trial point, hoisted out of the Newton loop: it is fully
+	// overwritten (trial[i] = theta[i] − α·delta[i] over all p) before forward(trial)
+	// reads it each line-search iteration, single-threaded, and never escapes (only
+	// copy(theta, trial) out) — so one reused buffer is bit-identical to a fresh make
+	// per step, dropping O(steps) allocations.
+	trial := make([]float64, p)
 	invN := 1 / float64(n)
 
 	const (
@@ -356,7 +369,6 @@ func (m *SoftmaxRegression) Fit(x [][]float64, y []int, k, steps int, lr float64
 		for i := range delta {
 			gd += grad[i] * delta[i]
 		}
-		trial := make([]float64, p)
 		alpha := 1.0
 		var newLoss float64
 		accepted := false
