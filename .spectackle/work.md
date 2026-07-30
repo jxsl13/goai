@@ -1344,3 +1344,23 @@ BIT-IDENTITY was free here and worth noting why: column c writes only out[i*cols
 A SMALL-SIZE FALSE REGRESSION, the fourth distinct benchmark-reading failure this session. LUSolve_128x1 reported a 2.09x regression at benchtime=5x - 115 microseconds of total measurement on a 20us benchmark. At 20000x it is 20.1us against 19.4us with overlapping ranges. The pattern across all four: phantom regression from one sample, inverted sign from a bimodal min-of-N, spread on a path the change does not reach, and now insufficient total measurement time on a fast benchmark.
 
 STILL OPEN, from the same sweep: rl DQNLearn and PPORollout are SLOWER at 12 cores than at 1 (71.4us vs 50.2us, and 1.03ms vs 0.74ms). That is the opposite of everything else found so far and deserves its own investigation - but PROC-PROFILE-PARALLEL-CONDVAR-001 and the GBM rejection say to establish it by wall-clock first, which the sweep has now done.
+
+## R-01KYR63H61E179XJFQ7QWQ6VA8 CORRECTION: rl is not anti-parallel. The slower-at-12-cores reading was a fifth insufficient-benchtime artifact
+kind: research
+state: draft
+created: 2026-07-30
+
+CORRECTS the open item left in R-01KYR5ZS7RF7H, which reported rl DQNLearn and PPORollout as SLOWER at 12 cores than at 1 and flagged it as deserving investigation.
+
+THE ORIGINAL READING came from the GOMAXPROCS sweep at benchtime=5x: DQNLearn/batch32 71.4us at P12 against 50.2us at P1, and PPORollout 1.03ms against 0.74ms. On a 50-70us benchmark, five iterations is roughly 300us of total measurement.
+
+RE-MEASURED at benchtime=2000x, two rounds each:
+  PPORollout        P12 659-665us   P1 688-751us   P12 slightly FASTER
+  DQNLearn/batch32  P12  64- 66us   P1  62- 64us   flat, ranges nearly overlap
+So neither path is anti-parallel. Both are approximately flat - parallelism neither helps nor hurts - which is what a dispatch-bound path on tiny tensors looks like. There is no pathology to investigate.
+
+THE METHOD FAILURE IS THE POINT, and it is the fifth distinct instance this session, all from the same root: reading a ratio before checking that the measurement was long enough or that the arms differ in the way assumed. The five are a phantom 1.73x regression from a single sample (Mixtral prefill), an inverted sign from a bimodal min-of-N (DeepSeekV2), a spread on a code path the change never reached (SVC n=1000), insufficient total time on a 20us benchmark (LUSolve_128x1), and now insufficient total time inside a diagnostic SWEEP.
+
+THE SWEEP ITSELF NEEDS THE SAME DISCIPLINE, which I had not applied to it. PROC-BENCH-TOTAL-TIME-001 was cast about A/B comparisons; a GOMAXPROCS sweep is an A/B in disguise - the two arms are core counts - and its cheapness was exactly what made me run it at benchtime=5x across dozens of benchmarks. The sweep is still the right instrument: it correctly found SoftmaxRegression at 0.99x, SVC at 0.97x and the entire linalg package at 1.00-1.10x, all three confirmed and all three fixed for real wins. But a sweep entry is a HYPOTHESIS to re-measure, never a result, and the ones worth acting on are the large clear signals rather than the marginal ones.
+
+NO ACTION on rl. Its two flat paths were already optimized earlier this session (PPO rollout 1.59x, DQN learn 1.35x) by removing dispatch waste rather than by adding parallelism, which is the correct treatment for a dispatch-bound path and is why they are flat rather than slow.
