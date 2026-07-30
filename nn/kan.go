@@ -222,7 +222,7 @@ func (l *KANLayer) buildBasis(x *tensor.Tensor) *tensor.Tensor {
 	B := x.Shape()[0]
 	nbasis := l.gridSize + l.splineOrder
 	out := tensor.New(l.dtype, tensor.Shape{B, l.inDim, nbasis})
-	scratch := make([]float64, len(l.knots)) // reused per coordinate
+	nk := len(l.knots)
 	// buildBasis runs on every Forward; for a contiguous, offset-0 input whose
 	// dtype matches the layer's, read x and write out through their typed backing
 	// slices (flat row-major index) instead of the per-element AtF64/SetF64
@@ -233,30 +233,40 @@ func (l *KANLayer) buildBasis(x *tensor.Tensor) *tensor.Tensor {
 		switch l.dtype {
 		case tensor.F64:
 			xd, od := x.Storage().F64(), out.Storage().F64()
-			for b := range B {
-				for i := range l.inDim {
-					vals := evalBSplineBasis(xd[b*l.inDim+i], l.knots, l.splineOrder, scratch)
-					dst := (b*l.inDim + i) * nbasis
-					for c := range nbasis {
-						od[dst+c] = vals[c]
+			// Every (b,i) B-spline evaluation is independent, so fan the batch out over
+			// GOMAXPROCS with a PER-WORKER knot scratch (evalBSplineBasis writes its result
+			// into that scratch, so it must not be shared). Bit-identical to the serial loop.
+			parallelRows(B, l.inDim*nk, func(blo, bhi int) {
+				scratch := make([]float64, nk)
+				for b := blo; b < bhi; b++ {
+					for i := range l.inDim {
+						vals := evalBSplineBasis(xd[b*l.inDim+i], l.knots, l.splineOrder, scratch)
+						dst := (b*l.inDim + i) * nbasis
+						for c := range nbasis {
+							od[dst+c] = vals[c]
+						}
 					}
 				}
-			}
+			})
 			return out
 		case tensor.F32:
 			xd, od := x.Storage().F32(), out.Storage().F32()
-			for b := range B {
-				for i := range l.inDim {
-					vals := evalBSplineBasis(float64(xd[b*l.inDim+i]), l.knots, l.splineOrder, scratch)
-					dst := (b*l.inDim + i) * nbasis
-					for c := range nbasis {
-						od[dst+c] = float32(vals[c])
+			parallelRows(B, l.inDim*nk, func(blo, bhi int) {
+				scratch := make([]float64, nk)
+				for b := blo; b < bhi; b++ {
+					for i := range l.inDim {
+						vals := evalBSplineBasis(float64(xd[b*l.inDim+i]), l.knots, l.splineOrder, scratch)
+						dst := (b*l.inDim + i) * nbasis
+						for c := range nbasis {
+							od[dst+c] = float32(vals[c])
+						}
 					}
 				}
-			}
+			})
 			return out
 		}
 	}
+	scratch := make([]float64, nk) // exotic/strided-dtype fallback: serial per-element dispatch
 	for b := range B {
 		for i := range l.inDim {
 			vals := evalBSplineBasis(x.AtF64(b, i), l.knots, l.splineOrder, scratch)
