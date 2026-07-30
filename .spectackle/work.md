@@ -848,3 +848,10 @@ state: draft
 created: 2026-07-30
 
 KimiDeltaAttention (Kimi Linear) host recurrence read q/k/v/a/beta via AtF64 + wrote via SetF64. Added typed F64/F32 fast path (hoist to []float64). BENCHED no-win: F64 256x128 1.02×, F32 0.92× (slight regression), F64 512x64 0.96×. ROOT CAUSE: the AtF64 reads are at O(seq·(dk+dv)) (per (t,c)/(t,r)), NOT in the O(seq·dk·dv) inner loops — those decay/S·k/delta/output loops ALREADY use []float64 scratch (S, kt, qt, sk). So devirt saves a negligible O(n²) fraction while the F32-widening copies + outf buffer add overhead. REVERTED. Reject reason recorded per document-rejections directive.
+
+## R-01KYSY0ZS3FD4TG9QX86Z242AK REJECT: DeltaNet/GatedDeltaNet dot4 blocked by fused-vs-dispatch bit-identity invariant
+kind: research
+state: draft
+created: 2026-07-30
+
+Applied dot4 (4-way multi-accumulator, tol-gated) to DeltaNet + GatedDeltaNet fused-path prediction+output dots (same KDA #658 pattern). Benched WIN (DeltaNet 512x128 faster, GatedDeltaNet too) BUT TestDeltaNetFusedBitExactVsDispatch FAILED: 0.014035367660534544 vs 0.01403536766053455 (~1e-17). The fused Recorder==nil path is PINNED bit-identical to the OpMatMul dispatch path (comment: Bit-identical ascending-order dots no reorder no FMA) so inference==training bit-for-bit. dot4 reassociation breaks it. REVERTED. Relaxing needs a spec/invariant change (loosen the test to tolerance) — not unilateral. CONTRAST KDA #658: standalone host utility, no dispatch-parity test, only 1e-12/1e-15 tolerance tests → dot4 OK.
