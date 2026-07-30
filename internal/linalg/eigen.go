@@ -118,11 +118,15 @@ func SymEig(a [][]float64) (vals []float64, vecs [][]float64) {
 	}
 	sorted := make([]float64, n)
 	vecs = make([][]float64, n) // vecs[k] = k-th eigenvector
+	// One slab for the n eigenvector rows instead of one make() per vector: n allocations become
+	// one, and every element is overwritten by the copy below so the zeroing is irrelevant
+	// (PS2008). Rows are disjoint capped views and are never replaced afterwards.
+	vslab := make([]float64, n*n)
 	for k, oi := range order {
 		sorted[k] = vals[oi]
 		// The eigenvector is one COLUMN of v, which in transposed storage is a
 		// contiguous row — the extraction was a strided walk too.
-		col := make([]float64, n)
+		col := vslab[k*n : k*n+n : k*n+n]
 		copy(col, vT[oi*n:oi*n+n])
 		vecs[k] = col
 	}

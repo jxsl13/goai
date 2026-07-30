@@ -986,9 +986,15 @@ func (m *GaussianMixture) Predict(x [][]float64) ([]int, error) {
 // 0.5·log|a| = Σ log L_ii. It mirrors the package cholSolve factorization but
 // also yields the log-determinant the Gaussian normaliser needs.
 func gmmCholesky(a []float64, d int) ([][]float64, float64, error) {
+	// ONE slab for the d rows of L. gmmCholesky runs once per COMPONENT per M-step, so at d=24,
+	// k=6 and 15 EM iterations that is 2160 separate allocations per Fit replaced by 15 slabs.
+	// Rows are disjoint capped views written in place; make() zeroes and so does a fresh slab, so
+	// this is bit-identical (PS2008). Allocation count only — the three prior measurements of this
+	// transform all moved allocs without moving the wall clock.
 	l := make([][]float64, d)
+	lslab := make([]float64, d*d)
 	for i := range l {
-		l[i] = make([]float64, d)
+		l[i] = lslab[i*d : i*d+d : i*d+d]
 	}
 	var half float64
 	for i := range d {
