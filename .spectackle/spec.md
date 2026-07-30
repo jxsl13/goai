@@ -660,3 +660,8 @@ Rationale: A softUpdate parity test computed its reference through Unravel and A
 WHEN a full sort is replaced by a quickselect, the implementing agent SHALL bound the partition count and finish with a sort, and measure on the real input distribution rather than synthetic random data.
 
 Rationale: A beam-search selection beat pdqsort 61us to 1236us on varied candidates and LOST at 1442us against 1170us on a fixture where the model returns identical logits per prefix, making the array several copies of one smooth curve that defeats median-of-three. A 2*log2(n) budget with a sort fallback capped the bad case at 1201us while keeping the good case at 61us. Random test data would not have surfaced this.
+
+## BENCH-ARM-MUST-BUILD-001
+WHEN an A/B swaps arms by restoring files, the measuring agent SHALL assert the arm compiles before timing it, not merely that its source text is right.
+
+Rationale: Restoring the base beam.go while deleting a new helper left a test file referencing the missing symbol, so the base arm failed to build and produced zero samples. Benchstat then printed a single-column report of the new arm alone with no error, which reads as a completed comparison. A source-text check passes in exactly this case; only a build check catches it.
