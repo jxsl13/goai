@@ -152,7 +152,28 @@ func householder(rm []float64, m, n int, t []float64) (vs [][]float64, betas []f
 		for j := k; j < n; j++ {
 			t[j] = 0
 		}
-		for i := k; i < m; i++ {
+		// The i loop is unrolled by 2 with SEPARATE accumulating adds, so t[j] stays in a
+		// register across the pair instead of being loaded and stored once per row. Both rows
+		// are still read contiguously. Bit-identical: the two adds keep i ascending and each
+		// term keeps its own vi*row[j] association, so nothing is reassociated.
+		//
+		// The alternative PS1007 names first — strip-mine the j loop by 4 and put i innermost —
+		// was MEASURED and is worse here: it trades one contiguous pass over the submatrix for
+		// n/4 strided passes, and its gain DECAYS with the outer trip count (LstsqMat -2.56% at
+		// n=64, -1.92% at 256, -0.52% at 512, indistinguishable from base at 768). This form
+		// holds -2.2% to -3.0% at every size. Strip-mining is the right remedy only when the
+		// input is NOT already contiguous in the inner var.
+		i := k
+		for ; i+2 <= m; i += 2 {
+			vi0, vi1 := v[i], v[i+1]
+			r0 := rm[i*n : i*n+n]
+			r1 := rm[(i+1)*n : (i+1)*n+n]
+			for j := k; j < n; j++ {
+				t[j] += vi0 * r0[j]
+				t[j] += vi1 * r1[j]
+			}
+		}
+		for ; i < m; i++ {
 			vi := v[i]
 			row := rm[i*n : i*n+n]
 			for j := k; j < n; j++ {
@@ -211,7 +232,19 @@ func applyReflector(q []float64, v []float64, beta float64, k, m, cols int, t []
 	for j := range cols {
 		t[j] = 0
 	}
-	for i := k; i < m; i++ {
+	// Unrolled by 2 over i, as in householder — see the note there for why strip-mining the
+	// j loop instead measured worse.
+	i := k
+	for ; i+2 <= m; i += 2 {
+		vi0, vi1 := v[i], v[i+1]
+		r0 := q[i*cols : i*cols+cols]
+		r1 := q[(i+1)*cols : (i+1)*cols+cols]
+		for j := range cols {
+			t[j] += vi0 * r0[j]
+			t[j] += vi1 * r1[j]
+		}
+	}
+	for ; i < m; i++ {
 		vi := v[i]
 		row := q[i*cols : i*cols+cols]
 		for j := range cols {

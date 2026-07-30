@@ -145,3 +145,57 @@ func mix(os, vs, a []float64, dh, hdh, jmax int) {
 }`
 	silent("ps1006Positive", ps1006Positive)
 }
+
+// TestOutputRowRestreamed_HoistedIndexBoundary pins the documented boundary in
+// loopBoundVarsBody: an outer `for ; cond; post` loop whose index was hoisted above it has no
+// Init and is not recognized, so PS1007 stays silent. This is the exact shape of the shipped
+// remedy in linalg/qr.go, so the silence is wanted — but it comes from the recognizer's shape
+// requirement, not from detecting that the fix is present.
+//
+// The test exists so that widening the recognizer cannot happen silently: whoever adds
+// hoisted-index support will see this go red and has to decide deliberately, adding the
+// already-unrolled exclusions at the same time rather than shipping a check that nags about
+// its own recommended fix.
+func TestOutputRowRestreamed_HoistedIndexBoundary(t *testing.T) {
+	// Already unrolled by 2 with separate adds — PS1007's remedy (b), as shipped in QR.
+	unrolled := `package p
+func rank1(rm, v, t []float64, k, m, n int) {
+	i := k
+	for ; i+2 <= m; i += 2 {
+		vi0, vi1 := v[i], v[i+1]
+		r0 := rm[i*n : i*n+n]
+		r1 := rm[(i+1)*n : (i+1)*n+n]
+		for j := k; j < n; j++ {
+			t[j] += vi0 * r0[j]
+			t[j] += vi1 * r1[j]
+		}
+	}
+	for ; i < m; i++ {
+		vi := v[i]
+		row := rm[i*n : i*n+n]
+		for j := k; j < n; j++ {
+			t[j] += vi * row[j]
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, unrolled))["output-row-restreamed"]; got != 0 {
+		t.Fatalf("hoisted-index outer loops are outside the recognizer (see loopBoundVarsBody); "+
+			"got %d findings — if this is an intentional widening, add the already-unrolled and "+
+			"remainder-loop exclusions with it and update this test", got)
+	}
+	// Control: the SAME body with the index declared in the loop's Init must still fire, so
+	// this test proves a boundary in the recognizer rather than in the accumulation predicate.
+	inInit := `package p
+func rank1(rm, v, t []float64, k, m, n int) {
+	for i := k; i < m; i++ {
+		vi := v[i]
+		row := rm[i*n : i*n+n]
+		for j := k; j < n; j++ {
+			t[j] += vi * row[j]
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, inInit))["output-row-restreamed"]; got != 1 {
+		t.Fatalf("the same accumulation with an Init-declared index must fire, got %d", got)
+	}
+}
