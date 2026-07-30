@@ -5,6 +5,7 @@ import (
 	"math"
 
 	"github.com/jxsl13/goai/backend"
+	"github.com/jxsl13/goai/internal/parallel"
 	"github.com/jxsl13/goai/nn"
 	"github.com/jxsl13/goai/tensor"
 )
@@ -655,68 +656,73 @@ func (b *SwinBlock) windowedAttention(ctx *backend.Context, xWin *tensor.Tensor,
 	colSlice := func(t *tensor.Tensor, hh int) (*tensor.Tensor, error) {
 		return swinExec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: hh * dk, End: (hh + 1) * dk}, t)
 	}
-	// INFERENCE ONLY: reusable operand buffers for the per-(window, head) blocks. The
-	// dispatch path reaches each block with a row slice and then a column slice — six
-	// tensors per (window, head), plus a transpose — and every one of them is a fresh
-	// allocation. The block is a strided view of a contiguous buffer, so it can be copied
-	// into a buffer that is allocated once and refilled, and khT can be written transposed
-	// while copying rather than dispatched separately.
+	// INFERENCE ONLY: the blockwise arm reaches each (window, head) block by copying it out of
+	// q/k/v into reusable buffers — writing khT transposed while copying — instead of the
+	// dispatch path's row slice, column slice and separate transpose, which is six tensors per
+	// block. It also writes each head straight into its slot of one [numWin·n, dm] output,
+	// replacing the per-window head concat and the final window concat.
 	//
-	// Not valid under a tape: the recorder captures these tensors by pointer, so reusing
-	// them across iterations would corrupt the graph. Guarded on ctx.Recorder == nil, the
-	// same condition the score-term fusion above uses.
-	var bufQ, bufKT, bufV *tensor.Tensor
+	// Not valid under a tape: the recorder captures those tensors by pointer, so reusing them
+	// would corrupt the graph, and writing the output in place would too. Guarded on
+	// ctx.Recorder == nil, the same condition the score-term fusion uses.
 	blockwise := ctx.Recorder == nil && swinBlockwiseOK(q, k, v)
+	// The blockwise (window, head) units are independent: each reads q/k/v read-only, owns its
+	// own score matrix, and writes a disjoint [n, dk] slot of catBuf. Nothing accumulates
+	// across units — the softmax maximum and denominator are computed inside one unit over
+	// that unit's own score row — so splitting them cannot move a bit.
+	//
+	// It is worth splitting because this loop is the SERIAL FLOOR of the whole forward. A
+	// single-core profile puts windowedAttention at 24.1% of the forward and the Linear
+	// projections at 46.6%; the projections are large enough that the backend parallelizes
+	// them, while these matrices are 16x16 and stay inline under the backend's own threshold.
+	// So at twelve cores the projections shrink and this does not: single-core
+	// windowedAttention is 15.1 ms/op against a 17.2 ms/op twelve-core forward, i.e. it had
+	// become nearly the entire wall clock.
+	//
+	// The three fill buffers were shared mutable state, which is what blocked this. They are
+	// now allocated per CHUNK inside the fan-out, so no two workers touch the same buffer.
 	if blockwise {
-		dt := q.Dtype()
-		bufQ = tensor.New(dt, tensor.Shape{n, dk})
-		bufKT = tensor.New(dt, tensor.Shape{dk, n})
-		bufV = tensor.New(dt, tensor.Shape{n, dk})
+		catBuf := tensor.New(q.Dtype(), tensor.Shape{numWin * n, b.Dim})
+		if err := b.attendUnits(ctx, numWin, n, dk, q, k, v, catBuf, biases, masks, invScale); err != nil {
+			return nil, err
+		}
+		return swinExec1(ctx, backend.OpMatMul, nil, catBuf, b.Wo)
 	}
-	// One output buffer for every window and head, filled in place, replacing the
-	// per-window head concat and the final window concat.
-	var catBuf *tensor.Tensor
-	if blockwise {
-		catBuf = tensor.New(q.Dtype(), tensor.Shape{numWin * n, b.Dim})
-	}
+	// Below here is the DISPATCH path only — blockwise returned above, so every branch that
+	// tested it has been removed rather than left as an unreachable second copy of the unit
+	// body (PS6019: two code paths computing one thing let a property established for one go
+	// stale in the other).
 	winOuts := make([]*tensor.Tensor, numWin)
 	for w := range numWin {
-		var qw, kw, vw *tensor.Tensor
-		if !blockwise {
-			var err error
-			if qw, err = rowSlice(q, w); err != nil {
-				return nil, err
-			}
-			if kw, err = rowSlice(k, w); err != nil {
-				return nil, err
-			}
-			if vw, err = rowSlice(v, w); err != nil {
-				return nil, err
-			}
+		qw, err := rowSlice(q, w)
+		if err != nil {
+			return nil, err
+		}
+		kw, err := rowSlice(k, w)
+		if err != nil {
+			return nil, err
+		}
+		vw, err := rowSlice(v, w)
+		if err != nil {
+			return nil, err
 		}
 		heads := make([]*tensor.Tensor, b.Heads)
 		for hh := range b.Heads {
-			var qh, vh, khT *tensor.Tensor
-			if blockwise {
-				swinFillBlock(bufQ, q, w*n, hh*dk, n, dk, false)
-				swinFillBlock(bufKT, k, w*n, hh*dk, n, dk, true)
-				swinFillBlock(bufV, v, w*n, hh*dk, n, dk, false)
-				qh, khT, vh = bufQ, bufKT, bufV
-			} else {
-				var err error
-				if qh, err = colSlice(qw, hh); err != nil {
-					return nil, err
-				}
-				kh, err := colSlice(kw, hh)
-				if err != nil {
-					return nil, err
-				}
-				if vh, err = colSlice(vw, hh); err != nil {
-					return nil, err
-				}
-				if khT, err = swinExec1(ctx, backend.OpTranspose, nil, kh); err != nil { // [dk, n]
-					return nil, err
-				}
+			qh, err := colSlice(qw, hh)
+			if err != nil {
+				return nil, err
+			}
+			kh, err := colSlice(kw, hh)
+			if err != nil {
+				return nil, err
+			}
+			vh, err := colSlice(vw, hh)
+			if err != nil {
+				return nil, err
+			}
+			khT, err := swinExec1(ctx, backend.OpTranspose, nil, kh) // [dk, n]
+			if err != nil {
+				return nil, err
 			}
 			sc, err := swinExec1(ctx, backend.OpMatMul, nil, qh, khT) // [n, n]
 			if err != nil {
@@ -770,29 +776,15 @@ func (b *SwinBlock) windowedAttention(ctx *backend.Context, xWin *tensor.Tensor,
 			if err != nil {
 				return nil, err
 			}
-			if catBuf != nil {
-				// Write the head straight into its slot of the final [numWin·n, dm]
-				// buffer. The dispatch path instead concatenates heads per window and
-				// then concatenates the windows — numWin+1 more tensors per call, on top
-				// of the per-window intermediates. Pure data movement, so the result is
-				// the same bytes the two concats would have produced.
-				swinPlaceBlock(catBuf, hout, w*n, hh*dk, n, dk)
-				continue
-			}
 			heads[hh] = hout
 		}
-		if catBuf == nil {
-			if winOuts[w], err = swinExec1(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 1}, heads...); err != nil {
-				return nil, err
-			}
-		}
-	}
-	cat := catBuf
-	if cat == nil {
-		var err error
-		if cat, err = swinExec1(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 0}, winOuts...); err != nil {
+		if winOuts[w], err = swinExec1(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 1}, heads...); err != nil {
 			return nil, err
 		}
+	}
+	cat, err := swinExec1(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 0}, winOuts...)
+	if err != nil {
+		return nil, err
 	}
 	return swinExec1(ctx, backend.OpMatMul, nil, cat, b.Wo)
 }
@@ -1250,4 +1242,121 @@ func swinPlaceBlock(dst, src *tensor.Tensor, row0, col0, rows, cols int) {
 	for r := range rows {
 		copy(ds[(row0+r)*stride+col0:(row0+r)*stride+col0+cols], ss[r*cols:r*cols+cols])
 	}
+}
+
+// swinAttendParThreshold is the total (window, head) unit count above which the window
+// attention fans out. It is set by UNITS PER WORKER, not by absolute work: the fan-out
+// allocates three scratch tensors per chunk and parallel.Rows makes roughly one chunk per
+// worker, so a call with barely more units than workers pays a full set of allocations to run
+// one or two units.
+//
+// Measured at 8: the batched arm (96 and 48 units) gained 11.0% while the per-image arm (12
+// and 6 units) gained 3.3% and paid 21.3% MORE allocations, spreading 12 units over eleven
+// chunks. At 32 the per-image stages stay serial.
+// A var, not a const, so the parity test can force the serial arm and compare the two
+// bit-for-bit. Nothing outside tests writes it.
+var swinAttendParThreshold = 32
+
+// attendUnits runs the blockwise (window, head) attention units, in parallel above the
+// threshold. It is the single implementation of that body: the serial path below the
+// threshold calls the same closure, so a property established for one arm cannot go stale in
+// the other (PS6019).
+//
+// LEGALITY. Units are independent. Each reads q, k and v read-only, builds its own score
+// matrix, and writes the disjoint [n, dk] slot (w, hh) of catBuf. No floating-point
+// accumulation crosses a unit — the softmax maximum and denominator are per-unit, over that
+// unit's own row — so the result is bit-identical regardless of how units are grouped.
+//
+// The caller has already established ctx.Recorder == nil (blockwise implies it), so there is
+// no tape to order and no recorded graph to corrupt. The inner matmuls are far below the CPU
+// backend's own parallel threshold and therefore run inline, so this does not nest one worker
+// pool inside another.
+func (b *SwinBlock) attendUnits(ctx *backend.Context, numWin, n, dk int, q, k, v, catBuf *tensor.Tensor,
+	biases, masks []*tensor.Tensor, invScale float64,
+) error {
+	units := numWin * b.Heads
+	dt := q.Dtype()
+
+	// unit runs one (window, head) pair against caller-owned scratch. Every buffer it writes
+	// is either its own scratch or its own slot of catBuf.
+	unit := func(u int, bufQ, bufKT, bufV *tensor.Tensor) error {
+		w, hh := u/b.Heads, u%b.Heads
+		swinFillBlock(bufQ, q, w*n, hh*dk, n, dk, false)
+		swinFillBlock(bufKT, k, w*n, hh*dk, n, dk, true)
+		swinFillBlock(bufV, v, w*n, hh*dk, n, dk, false)
+		sc, err := swinExec1(ctx, backend.OpMatMul, nil, bufQ, bufKT) // [n, n]
+		if err != nil {
+			return err
+		}
+		var mask *tensor.Tensor
+		if masks != nil {
+			mask = masks[w%len(masks)]
+		}
+		var bias *tensor.Tensor
+		if biases != nil {
+			bias = biases[hh]
+		}
+		// blockwise implies ctx.Recorder == nil, so the fused arm is the one that runs; the
+		// dispatch fallback stays for the dtypes swinFuseScoreTerms declines.
+		if !swinFuseScoreTerms(sc, invScale, bias, mask) {
+			inv := swinScalar(dt, invScale)
+			if sc, err = swinExec1(ctx, backend.OpMul, nil, sc, inv); err != nil {
+				return err
+			}
+			if bias != nil {
+				if sc, err = swinExec1(ctx, backend.OpAdd, nil, sc, bias); err != nil {
+					return err
+				}
+			}
+			if mask != nil {
+				if sc, err = swinExec1(ctx, backend.OpAdd, nil, sc, mask); err != nil {
+					return err
+				}
+			}
+		}
+		wgt, err := swinExec1(ctx, backend.OpSoftmax, nil, sc)
+		if err != nil {
+			return err
+		}
+		hout, err := swinExec1(ctx, backend.OpMatMul, nil, wgt, bufV)
+		if err != nil {
+			return err
+		}
+		swinPlaceBlock(catBuf, hout, w*n, hh*dk, n, dk)
+		return nil
+	}
+
+	if units < swinAttendParThreshold || parallel.Workers() <= 1 {
+		bufQ := tensor.New(dt, tensor.Shape{n, dk})
+		bufKT := tensor.New(dt, tensor.Shape{dk, n})
+		bufV := tensor.New(dt, tensor.Shape{n, dk})
+		for u := range units {
+			if err := unit(u, bufQ, bufKT, bufV); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	// One error slot per unit rather than a shared first-error: a shared one would need a
+	// mutex, and picking the LOWEST failing index makes the reported error deterministic
+	// regardless of how chunks are scheduled.
+	errs := make([]error, units)
+	parallel.Rows(units, func(lo, hi int) {
+		bufQ := tensor.New(dt, tensor.Shape{n, dk})
+		bufKT := tensor.New(dt, tensor.Shape{dk, n})
+		bufV := tensor.New(dt, tensor.Shape{n, dk})
+		for u := lo; u < hi; u++ {
+			if err := unit(u, bufQ, bufKT, bufV); err != nil {
+				errs[u] = err
+				return
+			}
+		}
+	})
+	for _, err := range errs {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
