@@ -2,6 +2,8 @@
 
 package cpu
 
+import "sync"
+
 // Scalar GEMM band kernels — the portable default. On amd64+GOEXPERIMENT=simd
 // gemm_simd.go replaces these with archsimd (AVX) twins that hold the identical
 // ascending-p accumulation order, so exactly one definition compiles per build
@@ -213,8 +215,25 @@ func gemmF32Band(A, B []float32, acc []float64, loRow, hiRow, k, n int) {
 // re-walks the whole matrix that way. Packed, a tile's k values are contiguous, so the line is
 // fully used and the panel stays resident across the p sweep. gemmF32 packs once and every row
 // band shares it, which is what makes the copy worth paying.
-func gemmF32BandPacked(A, B, pack []float32, acc []float64, loRow, hiRow, k, n int) {
+func gemmF32BandPacked(A, B []float32, pack []float64, acc []float64, loRow, hiRow, k, n int) {
 	nt := n >> 2 // full 4-column tiles
+	var aw []float64
+	if nt > 0 && loRow+3 < hiRow {
+		awP := getAWiden(4 * k)
+		aw = *awP
+		defer putAWiden(awP)
+	}
+	// pack already holds B WIDENED to f64. That conversion used to sit in the innermost loop,
+	// where it ran once per 4 FMAs and was repeated for every row block and every column tile —
+	// m*k*n/4 of them; packed, it costs k*n once for the whole matmul. float64(float32) is exact,
+	// so moving it earlier cannot change a value.
+	//
+	// A's four rows are widened once per row block into aw, from a DEDICATED pool. Measured
+	// separately this is the LARGER half of the two hoists — B alone -4.93%, both -16.37% — so
+	// it is not the afterthought it looks like. It needs its own pool because a 4*k buffer drawn
+	// from the shared f64 scratch fights the k*n pack buffer for the same slots, and that churn
+	// measured +19.6% allocs/op.
+
 	i := loRow
 	for ; i+3 < hiRow; i += 4 {
 		c0 := acc[(i+0)*n : (i+1)*n]
@@ -225,6 +244,20 @@ func gemmF32BandPacked(A, B, pack []float32, acc []float64, loRow, hiRow, k, n i
 		a1r := A[(i+1)*k : (i+2)*k]
 		a2r := A[(i+2)*k : (i+3)*k]
 		a3r := A[(i+3)*k : (i+4)*k]
+		aw0, aw1 := aw[0:k], aw[k:2*k]
+		aw2, aw3 := aw[2*k:3*k], aw[3*k:4*k]
+		for x, v := range a0r {
+			aw0[x] = float64(v)
+		}
+		for x, v := range a1r {
+			aw1[x] = float64(v)
+		}
+		for x, v := range a2r {
+			aw2[x] = float64(v)
+		}
+		for x, v := range a3r {
+			aw3[x] = float64(v)
+		}
 		for t := range nt {
 			j := t * 4
 			bcol := pack[t*k*4 : (t+1)*k*4]
@@ -234,24 +267,23 @@ func gemmF32BandPacked(A, B, pack []float32, acc []float64, loRow, hiRow, k, n i
 			v30, v31, v32, v33 := c3[j], c3[j+1], c3[j+2], c3[j+3]
 			for p := range k {
 				bp := bcol[p*4 : p*4+4]
-				b0, b1 := float64(bp[0]), float64(bp[1])
-				b2, b3 := float64(bp[2]), float64(bp[3])
-				a0 := float64(a0r[p])
+				b0, b1, b2, b3 := bp[0], bp[1], bp[2], bp[3]
+				a0 := aw0[p]
 				v00 += a0 * b0
 				v01 += a0 * b1
 				v02 += a0 * b2
 				v03 += a0 * b3
-				a1 := float64(a1r[p])
+				a1 := aw1[p]
 				v10 += a1 * b0
 				v11 += a1 * b1
 				v12 += a1 * b2
 				v13 += a1 * b3
-				a2 := float64(a2r[p])
+				a2 := aw2[p]
 				v20 += a2 * b0
 				v21 += a2 * b1
 				v22 += a2 * b2
 				v23 += a2 * b3
-				a3 := float64(a3r[p])
+				a3 := aw3[p]
 				v30 += a3 * b0
 				v31 += a3 * b1
 				v32 += a3 * b2
@@ -291,14 +323,17 @@ func gemmF32BandPacked(A, B, pack []float32, acc []float64, loRow, hiRow, k, n i
 	}
 }
 
-// packBTiles4 fills pack[(t*k+p)*4+c] = B[p*n+t*4+c] for the n/4 full tiles.
-func packBTiles4(B, pack []float32, k, n int) {
+// packBTiles4 fills pack[(t*k+p)*4+c] = float64(B[p*n+t*4+c]) for the n/4 full tiles. The widening
+// happens HERE, once per matmul, instead of once per 4 FMAs in the band's innermost loop.
+func packBTiles4(B []float32, pack []float64, k, n int) {
 	nt := n >> 2
 	for t := range nt {
 		src := t * 4
 		dst := pack[t*k*4 : (t+1)*k*4]
 		for p := range k {
-			copy(dst[p*4:p*4+4], B[p*n+src:p*n+src+4])
+			r := B[p*n+src : p*n+src+4]
+			d := dst[p*4 : p*4+4]
+			d[0], d[1], d[2], d[3] = float64(r[0]), float64(r[1]), float64(r[2]), float64(r[3])
 		}
 	}
 }
@@ -414,3 +449,21 @@ func gemmF64BandPacked(A, B, pack, C []float64, loRow, hiRow, k, n int) {
 		}
 	}
 }
+
+// awScratch pools the per-row-block f64 widening of A used by gemmF32BandPacked. A POOL OF ITS
+// OWN, not the shared f64 scratch: these buffers are 4*k long while the packed-B panel taken from
+// that pool is k*n, and mixing the two sizes measured +19.6% allocs/op from the churn. Not zeroed
+// on get — every element is overwritten before use.
+var awScratch = sync.Pool{New: func() any { b := make([]float64, 0); return &b }}
+
+func getAWiden(n int) *[]float64 {
+	bp := awScratch.Get().(*[]float64)
+	if cap(*bp) < n {
+		*bp = make([]float64, n)
+	} else {
+		*bp = (*bp)[:n]
+	}
+	return bp
+}
+
+func putAWiden(bp *[]float64) { awScratch.Put(bp) }

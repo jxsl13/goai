@@ -19,13 +19,13 @@ func gemmF32(A, B, C []float32, m, k, n int) {
 	// once enough row blocks reuse it. Below the gate the unpacked band runs, which is what
 	// shipped before this and is unchanged.
 	if m >= gemmPackMinRows && n >= 4 && k*n >= gemmPackMinWorkF32 {
-		packP := getF32Raw((n >> 2) * k * 4)
+		packP := getF64Raw((n >> 2) * k * 4)
 		pack := *packP
 		packBTiles4(B, pack, k, n)
 		parallelWork(m, k*n, func(loRow, hiRow int) {
 			gemmF32BandPacked(A, B, pack, acc, loRow, hiRow, k, n)
 		})
-		putF32(packP)
+		putF64(packP)
 	} else {
 		parallelWork(m, k*n, func(loRow, hiRow int) {
 			gemmF32Band(A, B, acc, loRow, hiRow, k, n)
