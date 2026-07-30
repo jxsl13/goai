@@ -1059,21 +1059,40 @@ int cu_moe_gate(const void* logits, void* weights, int rows, int E, int K, int r
     // raw (raw==1, DeepSeek-V2): weight[sel] = softmax over ALL E logits · scale, NOT renormalized.
     if (!gMoeGate && compile_kernel(
                       "extern \"C\" __global__ void moe_gate(const float* logits, float* weights, int rows, int E, int K, int raw, float scale){\n"
-                      "  int r=blockIdx.x; if(r>=rows) return; if(threadIdx.x!=0) return;\n"
+                      "  int r=blockIdx.x; if(r>=rows) return;\n"
+                      "  int lane=threadIdx.x & 31;\n"       // 32-lane warp cooperates on ONE row
                       "  const float* lg = logits + (size_t)r*E;\n"
                       "  float* w = weights + (size_t)r*E;\n"
-                      "  for(int e=0;e<E;e++) w[e]=0.0f;\n"
+                      "  for(int e=lane;e<E;e+=32) w[e]=0.0f;\n"
+                      "  __syncwarp();\n"
                       "  int kk = K<E ? K : E;\n"
                       "  for(int p=0;p<kk;p++){\n"           // K passes: mark the p-th largest with -1
-                      "    int best=-1; double bv=-1e300;\n"
-                      "    for(int e=0;e<E;e++){ if(w[e]==0.0f && (double)lg[e]>bv){ bv=(double)lg[e]; best=e; } }\n"
-                      "    if(best>=0) w[best]=-1.0f;\n"
+                      // Warp-parallel argmax over the UNSELECTED logits (the K*E hot loop): each lane
+                      // scans its strided slice, then a shfl_down tree-reduce finds the global max +
+                      // lowest index. Argmax is an EXACT index selection (no float reassociation), so
+                      // the selected set is bit-identical to the serial scan; ties (measure-zero for
+                      // real logits) break to the lowest index, matching the reference's strict '>'.
+                      "    double lv=-1e300; int li=-1;\n"
+                      "    for(int e=lane;e<E;e+=32){ if(w[e]==0.0f && (double)lg[e]>lv){ lv=(double)lg[e]; li=e; } }\n"
+                      "    for(int off=16;off>0;off>>=1){\n"
+                      "      double ov=__shfl_down_sync(0xffffffffu, lv, off);\n"
+                      "      int oi=__shfl_down_sync(0xffffffffu, li, off);\n"
+                      "      if(oi>=0 && (li<0 || ov>lv || (ov==lv && oi<li))){ lv=ov; li=oi; }\n"
+                      "    }\n"
+                      "    li=__shfl_sync(0xffffffffu, li, 0);\n"
+                      "    if(lane==0 && li>=0) w[li]=-1.0f;\n"
+                      "    __syncwarp();\n"
                       "  }\n"
-                      "  double mx=-1e300;\n"                // max over ALL (raw) or SELECTED (renorm)
-                      "  for(int e=0;e<E;e++){ if((raw || w[e]==-1.0f) && (double)lg[e]>mx) mx=(double)lg[e]; }\n"
-                      "  double s=0.0;\n"
-                      "  for(int e=0;e<E;e++){ if(raw || w[e]==-1.0f) s+=exp((double)lg[e]-mx); }\n"
-                      "  for(int e=0;e<E;e++){ w[e] = (w[e]==-1.0f) ? (float)(exp((double)lg[e]-mx)/s*(raw?(double)scale:1.0)) : 0.0f; }\n"
+                      // Softmax stays SERIAL on lane 0 (only ~3*E work, dominated by the K*E argmax
+                      // above): keeping the ascending-e f64 sum order makes the combine weights
+                      // BIT-IDENTICAL to the reference, not merely tolerance-close.
+                      "  if(lane==0){\n"
+                      "    double mx=-1e300;\n"              // max over ALL (raw) or SELECTED (renorm)
+                      "    for(int e=0;e<E;e++){ if((raw || w[e]==-1.0f) && (double)lg[e]>mx) mx=(double)lg[e]; }\n"
+                      "    double s=0.0;\n"
+                      "    for(int e=0;e<E;e++){ if(raw || w[e]==-1.0f) s+=exp((double)lg[e]-mx); }\n"
+                      "    for(int e=0;e<E;e++){ w[e] = (w[e]==-1.0f) ? (float)(exp((double)lg[e]-mx)/s*(raw?(double)scale:1.0)) : 0.0f; }\n"
+                      "  }\n"
                       "}\n",
                       "moe_gate.cu", "moe_gate", &gMoeGate) != 0) { rc = -2; goto done; }
     {
