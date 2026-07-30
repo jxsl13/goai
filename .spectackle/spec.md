@@ -705,3 +705,8 @@ Rationale: An eigensolver loop already had the row-slice hoist and still carried
 WHEN bounds-check removal is estimated for a loop containing a data-dependent branch, the estimating agent SHALL discount the estimate sharply, because the mispredicted branch dominates and the check is not what the loop waits on.
 
 Rationale: The same transformation was worth 15 percent in a Jacobi rotation - pure arithmetic, two loads, four multiplies, two adds, two stores, so the checks were two of thirteen uops - and 3.3 percent in a ball-tree distance kernel whose loop carries an early-exit compare that mispredicts on far points. Counting uops against issue width predicts the first correctly and overshoots the second by four times.
+
+## PERF-MEASURE-UNLOCKS-THE-NEXT-001
+WHEN a survey conditions a candidate on whether a loop turns out to be issue-bound, the implementing agent SHALL ship and measure the cheapest bit-identical candidate first, then revisit the conditioned ones with that answer in hand.
+
+Rationale: An eigensolver survey estimated bounds-check removal at 1.03 to 1.10 times and framed it as the calibration deciding whether fusion and unrolling were worth attempting. It measured 1.18 times, establishing the loop was issue-bound, and the fusion it unlocked then added a further 3.5 and 7.2 percent. Dismissing the cheap candidate on its small estimate would have closed the expensive one too.
