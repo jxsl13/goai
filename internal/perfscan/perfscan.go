@@ -3669,6 +3669,9 @@ func opDispatchRecurrenceFindings(fset *token.FileSet, fn *ast.FuncDecl) []findi
 		if !ok {
 			return true
 		}
+		if loopIteratesArchitectureCount(n) {
+			return true
+		}
 		count := 0
 		ast.Inspect(body, func(m ast.Node) bool {
 			if call, ok := m.(*ast.CallExpr); ok && callHasBackendOpArg(call) {
@@ -3680,18 +3683,68 @@ func opDispatchRecurrenceFindings(fset *token.FileSet, fn *ast.FuncDecl) []findi
 			out = append(out, finding{
 				pos:      fset.Position(n.Pos()),
 				category: "op-dispatch-recurrence",
-				msg: fmt.Sprintf("sequential loop dispatches %d backend ops per iteration (calls"+
-					" passing a backend.Op* constant) and the function has no flatF64 fused path —"+
-					" O(seq) dispatch + tiny-tensor alloc overhead. Add a raw-[]float64 fused path"+
-					" (storage grabbed once, state slice reused, plain-Go recurrence) gated on"+
-					" ctx.Recorder==nil so training keeps the dispatch path; usually bit-exact."+
-					" Shipped: DeltaNet/GatedDeltaNet 2.0-3.6x. Benchmark it.", count),
+				msg: fmt.Sprintf("loop dispatches %d backend ops per iteration (calls passing a"+
+					" backend.Op* constant) and the function has no flatF64 fused path. If the trip"+
+					" count is a SEQUENCE LENGTH, that is per-step dispatch and tiny-tensor alloc"+
+					" overhead, and a raw-[]float64 fused path (storage grabbed once, state slice"+
+					" reused, plain-Go recurrence) gated on ctx.Recorder==nil is usually bit-exact"+
+					" — shipped DeltaNet/GatedDeltaNet 2.0-3.6x. VERIFY THE TRIP COUNT FIRST: this"+
+					" check cannot see it, and an audit of every hit found the architectural"+
+					" shapes (layer stacks, per-head and per-expert fan-outs) outnumbered genuine"+
+					" recurrences by two orders of magnitude before the iterated-expression filter"+
+					" was added. Benchmark it.", count),
 			})
 			return false
 		}
 		return true
 	})
 	return out
+}
+
+// loopIteratesArchitectureCount reports whether the loop's trip count comes from a FIELD —
+// `range m.Blocks`, `range cfg.Heads`, `range m.Experts`, or a three-clause loop bounded by
+// `m.MaxRecursion`. Those are architecture counts: layer, head and expert collections sized by
+// the model, on the order of tens, iterated once per forward. A sequence length, by contrast,
+// arrives as a local or a parameter — `range seq`, `for t := 0; t < seq; t++`.
+//
+// THIS IS A SUPPRESSION, AND IT WAS COUNTED BEFORE IT WAS WRITTEN
+// (PROC-CHECK-PREDICATE-FIRST-001). An audit classified all 110 hits of this check: ZERO were
+// the sequential recurrence its message described, 57 were transformer layer stacks, and 35
+// more were per-head, per-window or per-expert fan-outs. The genuine class exists — six loops
+// in this tree, all carrying explicit scalar-or-small state across a `range seq` — and every
+// one of them iterates a LOCAL, so none is suppressed here. This filter prunes 84 of the 110
+// and keeps 6 of 6 on the real class.
+//
+// Four richer predicates were counted and REJECTED rather than shipped. Loop-carried state
+// fires on every layer stack too — the residual is exactly that, so it is what the two shapes
+// have in common. Requiring the carried value to feed two or more dispatches loses the
+// canonical single-chain recurrence, dropping recall to four of six. Filtering on elementwise
+// versus matmul ops has recall ZERO: 22 layer stacks show no visible matmul because theirs sit
+// behind method calls, while all six real recurrences do show one. And matching a literal
+// row-slice attribute has recall zero as well.
+//
+// An AST walker cannot tell `range m.Blocks` (a slice field) from `range cfg.Heads` (an int
+// field), and does not need to: both are architecture counts and both belong on this side.
+//
+// The known cost: a recurrence written `for t := range m.Config.Ctx` would be missed. There
+// are none in this tree today.
+func loopIteratesArchitectureCount(n ast.Node) bool {
+	switch v := n.(type) {
+	case *ast.RangeStmt:
+		_, isSel := ast.Unparen(v.X).(*ast.SelectorExpr)
+		return isSel
+	case *ast.ForStmt:
+		cmp, ok := v.Cond.(*ast.BinaryExpr)
+		if !ok {
+			return false
+		}
+		if _, isSel := ast.Unparen(cmp.Y).(*ast.SelectorExpr); isSel {
+			return true
+		}
+		_, isSel := ast.Unparen(cmp.X).(*ast.SelectorExpr)
+		return isSel
+	}
+	return false
 }
 
 // callHasBackendOpArg reports whether any argument of call is a backend.Op* constant

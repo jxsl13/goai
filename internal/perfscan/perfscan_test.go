@@ -5376,3 +5376,64 @@ func f(x []int) {
 		t.Fatalf("want 0 for a working bare directive, got %d", got)
 	}
 }
+
+// THE FIXTURE PAIR THAT LOCKS PS4011's ITERATED-EXPRESSION FILTER. Before it, an audit of all
+// 110 hits found ZERO were the sequential recurrence the check describes: 57 were transformer
+// layer stacks and 35 more were per-head, per-window or per-expert fan-outs.
+//
+// This is the genuine shape — a sequence length in a local, with explicit state carried across
+// iterations. All six real instances in this repository have exactly this form.
+func TestDetectPS4011_RecurrenceOverLocalStillFires(t *testing.T) {
+	src := `package p
+func f(ctx *backend.Context, seq int, x *tensor.Tensor) (*tensor.Tensor, error) {
+	var state *tensor.Tensor
+	for t := range seq {
+		k, err := exec(ctx, backend.OpSlice, nil, x)
+		if err != nil { return nil, err }
+		state, err = exec2(ctx, backend.OpAdd, nil, state, k)
+		if err != nil { return nil, err }
+	}
+	return state, nil
+}`
+	if got := countCat(scanSrc(t, src))["op-dispatch-recurrence"]; got != 1 {
+		t.Fatalf("want 1 op-dispatch-recurrence for a recurrence over a local, got %d", got)
+	}
+}
+
+// FLOOR: a layer stack. The residual is carried exactly as a recurrence's state would be, so
+// loop-carried state cannot separate the two shapes — that signal was counted and rejected for
+// precisely this reason. What separates them is that the trip count comes from a FIELD.
+func TestDetectPS4011_SilentOnLayerStack(t *testing.T) {
+	src := `package p
+func f(ctx *backend.Context, m *Model, x *tensor.Tensor) (*tensor.Tensor, error) {
+	for l, b := range m.Blocks {
+		h, err := exec(ctx, backend.OpMatMul, nil, x, b.Wq)
+		if err != nil { return nil, err }
+		x, err = exec2(ctx, backend.OpAdd, nil, x, h)
+		if err != nil { return nil, err }
+		_ = l
+	}
+	return x, nil
+}`
+	if got := countCat(scanSrc(t, src))["op-dispatch-recurrence"]; got != 0 {
+		t.Fatalf("want 0 for a layer stack over a field, got %d", got)
+	}
+}
+
+// FLOOR: the three-clause form of the same thing, bounded by a field rather than ranged over
+// one — a depth stack over one shared block.
+func TestDetectPS4011_SilentOnFieldBoundedLoop(t *testing.T) {
+	src := `package p
+func f(ctx *backend.Context, m *Model, x *tensor.Tensor) (*tensor.Tensor, error) {
+	for r := 0; r < m.MaxRecursion; r++ {
+		h, err := exec(ctx, backend.OpMatMul, nil, x, m.W)
+		if err != nil { return nil, err }
+		x, err = exec2(ctx, backend.OpAdd, nil, x, h)
+		if err != nil { return nil, err }
+	}
+	return x, nil
+}`
+	if got := countCat(scanSrc(t, src))["op-dispatch-recurrence"]; got != 0 {
+		t.Fatalf("want 0 for a loop bounded by a field, got %d", got)
+	}
+}

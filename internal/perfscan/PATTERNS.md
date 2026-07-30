@@ -1581,6 +1581,33 @@ form is the one that occurs.
 
 ## PS4011 — a loop dispatching backend ops per iteration, with no fused path  *(scanner: static)*
 
+**Its precision was audited, and the result changed the check.** Every one of its 110 hits was
+classified: **zero** were the sequential recurrence the message described. 57 were transformer
+layer stacks, 35 more were per-head, per-window or per-expert fan-outs, 12 were movement-only
+prep loops. The genuine class exists — six loops in this tree, every one carrying explicit state
+across a `range seq` — and all six were already suppressed by the fused-path guard, so none
+appeared in the hit list at all.
+
+The fix is one negative condition: **skip the loop when its trip count comes from a field.**
+`range m.Blocks`, `range cfg.Heads`, `range m.Experts`, `for r := 0; r < m.MaxRecursion; r++`
+are architecture counts on the order of tens; a sequence length arrives as a local or a
+parameter. Counted before it was written: prunes 84 of 110, keeps 6 of 6 on the real class,
+leaves the three existing fixtures unchanged. Layer stacks drop from 57 sites to 1.
+
+Four richer predicates were counted and **rejected**:
+
+| signal | why it fails |
+|---|---|
+| loop-carried state | fires on every layer stack too — the residual *is* carried state, so this is what the two shapes have in common |
+| carried value feeds ≥2 dispatches | loses the canonical single-chain recurrence; recall 4/6 |
+| elementwise vs matmul ops | recall **0/6** — 22 layer stacks show no visible matmul (theirs sit behind method calls) while all six real recurrences do |
+| literal row-slice attribute | recall 0/6 |
+
+An AST walker cannot tell `range m.Blocks` (slice field) from `range cfg.Heads` (int field), and
+does not need to: both are architecture counts, both belong on the suppressed side. Known cost:
+a recurrence written `for t := range m.Config.Ctx` would be missed. There are none today.
+
+
 A sequential loop that issues several `backend.Execute` calls per step, in a function with no
 typed fast path. Each dispatch materializes a tensor, and on a per-timestep or per-window loop
 that dominates everything the arithmetic does.
