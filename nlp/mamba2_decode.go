@@ -259,9 +259,9 @@ func mixer2Prefill(mx *Mamba2Mixer, ls *Mamba2LayerState, u *tensor.Tensor) (*te
 	// order in which distinct (t,c) pairs are visited changes.
 	for t := range seq {
 		xt := xc[t]
-		for c := range D {
-			xt[c] = convB[c]
-		}
+		// The bias seed is a full contiguous row on both sides (PS1008), and xt is exactly D long
+		// (allocated above), so one copy replaces D bounds-checked stores per timestep.
+		copy(xt, convB[:D])
 		for k := range K {
 			src := t - (K - 1) + k
 			if src < 0 {

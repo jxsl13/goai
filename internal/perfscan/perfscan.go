@@ -186,6 +186,7 @@ var checks = []check{
 	{"PS1005", "manual-walk-dispatch", "a per-element AtF64/SetF64 whose 2+ index args are enclosing-loop variables — a manual multi-dim tensor walk via dispatch that PS1001 Numel-loop check misses", false},
 	{"PS1006", "strided-inner-reduction", "a reduction whose INNER loop var is the high-stride (multiplied) part of a flat index ARR[inner*stride + outer] while the OUTER loop var is the contiguous (additive) part — the inner loop strides ARR by `stride` every step (cache-thrashing). Interchange to inner-outer/outer-inner so ARR is walked contiguously; per output element the reduction stays in the same order, so it is bit-identical. Shipped: MLA value-mix (cpu 1.13x / ref 1.27x), spectral-norm power-iter 2.57x (#592). WIN SCALES WITH `stride`×working-set: big when it EXCEEDS L2 (spectral-norm 512²), ~noise when it stays L1-resident — rank candidates by the strided dim's size. When the strided access sits inside a FUSED per-column O(seq²) scan that can't be interchanged (the outer var `c` is fixed per whole scan, e.g. an RWKV/attention recurrence), the remedy is GATHER/SCATTER: copy column c into contiguous scratch once (O(seq) strided), scan the scratch, scatter grads back once — same bit-exact remedy, shipped WKV backward 2.2-2.9x", false},
 	{"PS1007", "output-row-restreamed", "an inner loop that accumulates into a loop-INVARIANT output row — OUT[d] += f(outer)*IN[outer*stride+d] — so all of OUT is loaded and stored once per OUTER step instead of once in total. TWO remedies, and WHICH ONE depends on whether IN is already contiguous in the inner var; both are bit-identical when OUT enters zeroed, since each element still sums the outer var ascending over the same terms with the same association. (a) IN is NOT contiguous in d (the d-strided gather, e.g. a sparse P·V reading IN[key*stride+d]): strip-mine the d loop by 4 and hold four partial sums in registers with the outer loop INNERMOST. Measured on the sparse P·V against the axpy form: MoBAAttention 57.20ms->46.07ms (1.24x), DSAAttention_seq1024 53.14ms->48.89ms (1.09x). (b) IN IS already contiguous in d (a row-major rank-1 update, IN[i*n+d] read as a row slice): do NOT strip-mine — that trades one contiguous pass over the whole submatrix for n/4 strided passes, and the measurement shows its gain DECAYING with the outer trip count (LstsqMat -2.56% at n=64, -1.92% at 256, -0.52% at 512, indistinguishable from base at 768). Instead unroll the OUTER loop by 2 and emit SEPARATE accumulating adds (`OUT[d] += v0*r0[d]` then `OUT[d] += v1*r1[d]`), so OUT[d] stays in a register across the pair while both input rows stay contiguous: -2.31% to -3.16% at every size, geomean -2.69% (linalg QR, shipped). Case (b) was found by measuring case (a)'s advice on a contiguous site and watching it decay. Also the MIRROR of PS1006, and interchange is NEVER the remedy here — the inner var is already the contiguous part. RANKING for case (b) is NOT about cache residency, and an earlier version of this text got that wrong: the loop visits outer*|OUT| elements and does 3 memory ops per visit (load IN, load OUT, store OUT), which an unroll by U cuts to 1+2/U — 2.0 at U=2, 1.5 at U=4 — so the saving is a fixed fraction of the loop's own traffic whether OUT is L1-resident or not. Both shipped sites confirm it: linalg QR unrolled by 2 with a 6 KB L1-resident accumulator, and nlp SnapKV unrolled by 4 with a 57 KB one. What actually decides the payoff is the loop's SHARE of runtime and the unroll factor the outer trip count allows: QR's accumulate is one of several phases in Lstsq and gave geomean -2.69%, while SnapKV's aggregate dominates its function and gave -21.08% at U=4 (-17.6% at U=2, so the third and fourth rows earned their registers). Rank by share-of-runtime x achievable U, not by whether OUT fits in cache", false},
+	{"PS1008", "elementwise-copy-loop", "a loop whose ENTIRE body is one unit-stride element move — DST[a+v] = SRC[b+v] with a and b invariant in v — so the whole loop is a contiguous run that copy() does in one call. Measured on this host (M2 Pro, darwin/arm64) against the elementwise loop, three run shapes x three sizes, copy() wins EVERY cell: full row 4.13x at n=64, 2.67x at 256, 2.51x at 512; upper-triangular run (j from i) 3.16x/2.39x/2.35x; lower-triangular (j to i) 3.46x/2.27x/2.40x. The compiler does NOT rescue these — even the full-row case stays 2.5x off copy() when the index is written ARR[i*n+j] rather than as a bare range over the destination, so the memmove idiom does not apply and the ratio only decays toward the memory-bandwidth floor as n grows. PRECONDITIONS the AST cannot check: (1) element types must be IDENTICAL, not merely assignable — copy() rejects a []any destination fed a []string source, which the loop accepts; (2) if the two slices ALIAS with the destination offset ABOVE the source, an ascending element loop propagates values forward while copy() has memmove semantics and does not, so the two differ — copy() is the safer of the pair but it is not bit-identical there, and an in-place forward shift is the one shape to leave alone. Otherwise bit-identical: the same values land at the same indices, and no arithmetic or ordering is involved. Distinct from PS1005, which needs an AtF64/SetF64 accessor to fire and so cannot see a pure slice-to-slice move; the two overlap only where the destination is a tensor. RANKING, and this is the part that decides whether a site is worth touching: the ratios above are for the LOOP IN ISOLATION, and all four sites fixed when this check was written moved end-to-end runtime by NOTHING. linalg Cholesky and QR assemble their output in an O(n^2) loop inside an O(n^3) factorization (geomean -0.48% over six cells, every cell within spread, one cell nominally +1.83% with overlapping ranges), and the nlp Mamba2 prefill bias seed is one D-length run against a K*D convolution per timestep (six cells, all indistinguishable). So PS1008 is a WORK reduction that holds on every system - fewer instructions and fewer bounds checks for the same bytes moved, which is why the sites were still converted - but it shows up in a wall clock only where the run is a meaningful SHARE of the enclosing function. Rank by that share, not by the run length: a per-token copy on an inference path is worth it, an output-assembly loop bolted to a cubic kernel is not. PERF-HOTNESS-IS-NOT-SYNTAX-001 applies", false},
 	// PS2xxx — allocation inside loops
 	{"PS2001", "alloc-in-loop", "a tensor allocation inside a per-element loop", false},
 	{"PS2002", "unsized-builder", "a strings.Builder/bytes.Buffer written in a loop with no .Grow", false},
@@ -2006,6 +2007,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	out = append(out, allocInParallelBodyFindings(fset, fn)...)
 	out = append(out, reflectSwapperSortFindings(fset, fn)...)
 	out = append(out, perRowMakeSlabFindings(fset, fn)...)
+	out = append(out, elementwiseCopyLoopFindings(fset, fn)...)
 	out = append(out, vjpScalarBinopFindings(fset, fn)...)
 	out = append(out, fullSortBoundedPrefixFindings(fset, fn)...)
 	out = append(out, sortThenTopKFindings(fset, fn)...)
@@ -7328,6 +7330,178 @@ func permutationSortComparator(call *ast.CallExpr) (outer, inner string, ok bool
 		return !ok
 	})
 	return outer, inner, ok
+}
+
+// srcText renders a node back to its source form. exprText cannot be used for PS1008: it handles
+// only Ident/Selector/Index/Paren, so it renders a composite index as the empty string — `os[i*n+j]`
+// came out as `os[]` and an integer loop start came out as nothing at all, which is exactly the
+// failure mode already recorded for it on PS6011's index comparison. PS1008's message has to name
+// the two runs precisely to be actionable, so it needs the real text.
+//
+// Scoped to PS1008 on purpose rather than swapped in everywhere: the other checks' messages have
+// floors asserting their exact wording, and widening exprText would move all of them at once.
+func srcText(fset *token.FileSet, n ast.Node) string {
+	var b strings.Builder
+	if err := printer.Fprint(&b, fset, n); err != nil {
+		return ""
+	}
+	return b.String()
+}
+
+// elementwiseCopyLoopFindings flags PS1008 — a loop whose entire body is one unit-stride element
+// move, so the loop IS a contiguous run and copy() replaces it with a single call.
+//
+// The predicate is deliberately narrow, because everything wider stops being a copy:
+//
+//   - the body must be EXACTLY one statement, a plain assignment. Two statements, or any arithmetic
+//     on the value, and the loop is doing work copy() cannot do.
+//   - both sides must be index expressions whose LAST index advances by exactly 1 per step: either
+//     the bare loop variable, or `X + v` with X not mentioning v. A coefficient other than 1
+//     (ARR[v*stride+c]) is a strided gather, which is PS1006's domain and NOT a copy.
+//   - the additive part must be invariant in v on BOTH sides, or the two runs do not stay in step.
+//
+// Counted before it was written: 14 sites across the tree, every one a genuine contiguous run, so
+// the predicate needed no survivor filtering. That is unusually clean for a check here and it is a
+// consequence of the narrowness — the same narrowness means PS1008 will miss copies written with a
+// multiplied index, which is the right trade.
+//
+// The measurements in the registry entry are what justify the advice: this is one of the few
+// transforms in this tool that is a wall-clock win at every size measured, because it replaces a
+// per-element bounds-checked store with memmove. See the entry for the two preconditions the AST
+// cannot verify (identical element types, and the aliasing forward-shift case).
+func elementwiseCopyLoopFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil {
+		return nil
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		lv, body, ok := loopVarBody(n)
+		if !ok || body == nil || lv == "" || len(body.List) != 1 {
+			return true
+		}
+		as, isAs := body.List[0].(*ast.AssignStmt)
+		if !isAs || as.Tok != token.ASSIGN || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+			return true
+		}
+		dstOff, dstOK := unitStrideOffset(fset, as.Lhs[0], lv)
+		srcOff, srcOK := unitStrideOffset(fset, as.Rhs[0], lv)
+		if !dstOK || !srcOK {
+			return true
+		}
+		lo, hi, bounded := loopExtent(fset, n, lv)
+		howMany := "the loop's trip count"
+		if bounded {
+			howMany = fmt.Sprintf("[%s, %s)", lo, hi)
+		}
+		out = append(out, finding{
+			pos:      fset.Position(n.Pos()),
+			category: "elementwise-copy-loop",
+			msg: fmt.Sprintf("this loop's whole body is one unit-stride element move, so the loop IS a"+
+				" contiguous run over %s: the destination advances from %s and the source from %s, both"+
+				" by 1, with no arithmetic between them. Replace the entire loop with a single copy() over"+
+				" those two runs. Measured on this host against the elementwise form, copy() wins every"+
+				" shape and size tried: full row 4.13x at n=64 down to 2.51x at 512, upper-triangular"+
+				" 3.16x to 2.35x, lower-triangular 3.46x to 2.40x — the compiler does not turn ARR[i*n+j]"+
+				" stores into memmove, so this is not a redundant rewrite. Bit-identical: same values,"+
+				" same indices. TWO preconditions this check cannot see — the element types must be"+
+				" IDENTICAL rather than assignable (copy() refuses a []any fed from []string), and if the"+
+				" two slices ALIAS with the destination offset above the source then the ascending loop"+
+				" propagates forward while copy() does not; leave an in-place forward shift alone."+
+				" RANK BY SHARE OF RUNTIME: those ratios are for the loop in isolation, and all four sites"+
+				" converted when this check was written moved end-to-end runtime by nothing — an O(n^2)"+
+				" assembly loop inside an O(n^3) factorization (linalg geomean -0.48%%, every cell within"+
+				" spread) and a per-timestep bias seed against a K*D convolution (nlp, all cells"+
+				" indistinguishable). It is a work reduction that holds on every system, so it is still"+
+				" worth doing, but expect a wall-clock change only where the run is a real share of the"+
+				" enclosing function.",
+				howMany, dstOff, srcOff),
+		})
+		return true
+	})
+	return out
+}
+
+// unitStrideOffset reports whether e is an index expression whose LAST index advances by exactly 1
+// per increment of v, returning that index rendered with v in place so the message can name where
+// the run starts. Accepts the bare `v` and `X + v` / `v + X` with X free of v; rejects anything
+// multiplied, which is a stride rather than a run.
+func unitStrideOffset(fset *token.FileSet, e ast.Expr, v string) (string, bool) {
+	ix, ok := e.(*ast.IndexExpr)
+	if !ok {
+		return "", false
+	}
+	if !unitStrideIn(ix.Index, v) {
+		return "", false
+	}
+	// The BASE must be invariant in v too, or the walk is not a run. `out[j][j] = m.cov[k][j]`
+	// passes the last-index test and is a DIAGONAL write across a slice-of-slices, which copy()
+	// cannot express at all. Found by reading the 14 reported sites rather than trusting the count:
+	// classic/gmm.go's GMMDiag branch is exactly that shape, and it was the one false positive.
+	if mentionsVar(ix.X, v) {
+		return "", false
+	}
+	return srcText(fset, e), true
+}
+
+// unitStrideIn is the stride test itself: `v`, or a sum of `v` with a term that does not mention v.
+// Anything else — a product, a shift, a call, a nested index — is not a unit stride.
+func unitStrideIn(e ast.Expr, v string) bool {
+	switch x := e.(type) {
+	case *ast.Ident:
+		return x.Name == v
+	case *ast.ParenExpr:
+		return unitStrideIn(x.X, v)
+	case *ast.BinaryExpr:
+		if x.Op != token.ADD {
+			return false
+		}
+		if unitStrideIn(x.X, v) && !mentionsVar(x.Y, v) {
+			return true
+		}
+		return unitStrideIn(x.Y, v) && !mentionsVar(x.X, v)
+	}
+	return false
+}
+
+// mentionsVar reports whether v appears anywhere in e.
+func mentionsVar(e ast.Expr, v string) bool {
+	found := false
+	ast.Inspect(e, func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok && id.Name == v {
+			found = true
+		}
+		return !found
+	})
+	return found
+}
+
+// loopExtent renders the half-open interval the loop covers, when it is syntactically apparent:
+// `for v := LO; v < HI; v++` exactly, and `v <= HI` as HI+1. A range loop is left unbounded rather
+// than guessed at, because `range E` iterates E times for an integer and len(E) times for a slice
+// and the AST alone cannot tell which.
+func loopExtent(fset *token.FileSet, n ast.Node, v string) (string, string, bool) {
+	f, ok := n.(*ast.ForStmt)
+	if !ok || f.Cond == nil {
+		return "", "", false
+	}
+	as, ok := f.Init.(*ast.AssignStmt)
+	if !ok || len(as.Rhs) != 1 {
+		return "", "", false
+	}
+	cond, ok := f.Cond.(*ast.BinaryExpr)
+	if !ok {
+		return "", "", false
+	}
+	if id, ok := cond.X.(*ast.Ident); !ok || id.Name != v {
+		return "", "", false
+	}
+	switch cond.Op {
+	case token.LSS:
+		return srcText(fset, as.Rhs[0]), srcText(fset, cond.Y), true
+	case token.LEQ:
+		return srcText(fset, as.Rhs[0]), srcText(fset, cond.Y) + "+1", true
+	}
+	return "", "", false
 }
 
 // perRowMakeSlabFindings flags PS2008 — a loop that allocates one slice per iteration into

@@ -196,10 +196,10 @@ func (m *GaussianMixture) Covariance(k int) [][]float64 {
 		}
 		return out
 	}
+	// Row i of the packed covariance is the contiguous run [i*d, (i+1)*d) (PS1008). out rows are
+	// freshly allocated above and m.cov[k] is the model's own storage, so they never alias.
 	for i := range d {
-		for j := range d {
-			out[i][j] = m.cov[k][i*d+j]
-		}
+		copy(out[i], m.cov[k][i*d:i*d+d])
 	}
 	return out
 }
