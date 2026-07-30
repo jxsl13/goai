@@ -204,7 +204,17 @@ func (t *BPETokenizer) bpeInto(mapped string, out []int, parts []ggufPart) ([]in
 // into O(1) heap traffic for the whole text. mapped stays contiguous so the merge key
 // [2]string{mapped[a:b],mapped[b:c]} aliases its backing and the pair lookup allocates nothing.
 func (t *BPETokenizer) Encode(text string) []int {
-	var ids []int
+	// Reserve for the token count up front. ids grew by doubling from empty on every call,
+	// which an alloc_space profile put at 99.93% of the bytes this encode allocates — 616MB
+	// across 200 iterations of the GGUF benchmark. BPE emits at most one token per byte and
+	// typically about one per three to four bytes of English, so len(text)/3 covers the common
+	// case in one allocation while a token-dense input simply falls back to doubling from a
+	// higher floor. The +8 keeps very short inputs off the growth path entirely.
+	//
+	// This is an ESTIMATE, not a bound, which is why it is a capacity rather than a length: over
+	// -reserving wastes a fraction of one allocation, under-reserving costs the doublings it
+	// would otherwise have paid anyway.
+	ids := make([]int, 0, len(text)/3+8)
 	var parts []ggufPart // merge scratch, reused across pieces
 	var mapped []byte    // byte→Unicode buffer, reused (truncated) across pieces
 	for piece := range gpt2SplitSeq(text) {
