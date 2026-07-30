@@ -2,6 +2,7 @@ package nn
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/jxsl13/goai/backend"
 	"github.com/jxsl13/goai/tensor"
@@ -302,6 +303,113 @@ func (m *NeuralMemory) Scan(ctx *backend.Context, q, k, v, eta, theta, alpha *te
 					}
 				}
 				return out, nil
+			}
+		}
+	}
+	// Fused typed-F64 inference path for the DEEP (2-layer MLP) memory — the default/headline
+	// mode. Same idiom as the linear path and the hand-derived gradient in the type doc:
+	// h=σ(W1·k), o=W2·h, e2=2(o−v); ∇W2=e2·hᵀ, ∇W1=(W2ᵀ·e2 ⊙ h(1−h))·kᵀ; S=η·S−θ·∇;
+	// W=(1−α)·W+S; retrieve W2·σ(W1·q). Runs on raw []float64 with W1/W2 and momentum S1/S2
+	// reused in place — eliminating ~33 backend-op dispatches + tiny-tensor allocs per token.
+	// Gated on inference; training keeps the dispatch loop below for backprop. Matmuls are
+	// ascending-order dots (matching OpMatMul), e+e is the exact 2·e, and the grad·θ / η·S /
+	// (1−α)·W / +S order matches per element; the sigmoid replicates the CPU backend's stable
+	// scalar form → BIT-EXACT on the default build. On the amd64 SIMD build the backend's
+	// OpSigmoid uses a ~1ulp-approx vsigmoidF64, so this path is then tolerance-gated at the same
+	// f64 tolerance the backend sigmoid already rides (the memory's forget gate keeps it bounded).
+	if ctx.Recorder == nil && !m.LinearMem {
+		if qs, ks, vs := flatF64(qn), flatF64(kn), flatF64(v); qs != nil && ks != nil && vs != nil {
+			if w1i, w2i := flatF64(m.W1), flatF64(m.W2); w1i != nil && w2i != nil {
+				if ets, tts, ats := flatF64(eta), flatF64(theta), flatF64(alpha); ets != nil && tts != nil && ats != nil {
+					dim, hid := m.Dim, m.Hidden
+					out := tensor.NewOn(ctx.Device(), q.Dtype(), tensor.Shape{seq, dim})
+					os := flatF64(out)
+					W1 := append([]float64(nil), w1i...) // [hid,dim] mutable copies (params never mutated)
+					W2 := append([]float64(nil), w2i...) // [dim,hid]
+					S1 := make([]float64, hid*dim)       // momentum, zero == "nil" first token
+					S2 := make([]float64, dim*hid)
+					h := make([]float64, hid)
+					e2 := make([]float64, dim)
+					back := make([]float64, hid)
+					started := false
+					for t := range seq {
+						krow := ks[t*dim : t*dim+dim : t*dim+dim]
+						qrow := qs[t*dim : t*dim+dim : t*dim+dim]
+						vrow := vs[t*dim : t*dim+dim : t*dim+dim]
+						etaT, thetaT, keep := ets[t], tts[t], 1-ats[t]
+						for j := range hid { // h = σ(W1_{t-1}·k)
+							b1 := j * dim
+							var z float64
+							for c := range dim {
+								z += W1[b1+c] * krow[c]
+							}
+							h[j] = sigmoidStableF64(z)
+						}
+						for i := range dim { // e2 = 2·(W2_{t-1}·h − v)
+							b2 := i * hid
+							var o float64
+							for j := range hid {
+								o += W2[b2+j] * h[j]
+							}
+							e := o - vrow[i]
+							e2[i] = e + e
+						}
+						for j := range hid { // back = W2_{t-1}ᵀ·e2 (uses OLD W2, before the write)
+							back[j] = 0
+						}
+						for i := range dim {
+							b2 := i * hid
+							ei := e2[i]
+							for j := range hid {
+								back[j] += W2[b2+j] * ei
+							}
+						}
+						for i := range dim { // ∇W2[i,j]=e2[i]·h[j]; S2=η·S2−θ·∇W2; W2=keep·W2+S2
+							b2 := i * hid
+							ei := e2[i]
+							for j := range hid {
+								ginc := (ei * h[j]) * thetaT
+								if started {
+									S2[b2+j] = S2[b2+j]*etaT - ginc
+								} else {
+									S2[b2+j] = -ginc
+								}
+								W2[b2+j] = W2[b2+j]*keep + S2[b2+j]
+							}
+						}
+						for j := range hid { // ∇W1[j,c]=(back[j]·(h−h²))·k[c]; S1/W1 as above
+							b1 := j * dim
+							gpre := back[j] * (h[j] - h[j]*h[j])
+							for c := range dim {
+								ginc := (gpre * krow[c]) * thetaT
+								if started {
+									S1[b1+c] = S1[b1+c]*etaT - ginc
+								} else {
+									S1[b1+c] = -ginc
+								}
+								W1[b1+c] = W1[b1+c]*keep + S1[b1+c]
+							}
+						}
+						started = true
+						for j := range hid { // retrieve: h = σ(W1_t·q)
+							b1 := j * dim
+							var z float64
+							for c := range dim {
+								z += W1[b1+c] * qrow[c]
+							}
+							h[j] = sigmoidStableF64(z)
+						}
+						for i := range dim { // o_t = W2_t·h
+							b2 := i * hid
+							var o float64
+							for j := range hid {
+								o += W2[b2+j] * h[j]
+							}
+							os[t*dim+i] = o
+						}
+					}
+					return out, nil
+				}
 			}
 		}
 	}
@@ -698,4 +806,16 @@ func (b *Titans) Params() []*tensor.Tensor {
 		ps = append(ps, b.Persistent)
 	}
 	return ps
+}
+
+// sigmoidStableF64 replicates the CPU backend's stable scalar sigmoid (elementwise.go): the
+// branch on the sign of x avoids overflow of exp(-x)/exp(x). Bit-identical to backend.OpSigmoid
+// on the default (non-SIMD) build, so the fused deep-memory path matches the dispatch path
+// element-for-element there; the amd64 SIMD build's vectorized sigmoid differs by ~1ulp.
+func sigmoidStableF64(x float64) float64 {
+	if x >= 0 {
+		return 1 / (1 + math.Exp(-x))
+	}
+	z := math.Exp(x)
+	return z / (1 + z)
 }
