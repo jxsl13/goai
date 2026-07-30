@@ -113,6 +113,13 @@ func Lstsq(a, b *tensor.Tensor) (*tensor.Tensor, error) {
 func householder(rm []float64, m, n int, t []float64) (vs [][]float64, betas []float64) {
 	vs = make([][]float64, n)
 	betas = make([]float64, n)
+	// ONE slab for all n reflector vectors instead of one make() per column. The bytes are the
+	// same; the allocation COUNT drops from n to 1, which is what the allocator was paying for —
+	// at 768x768 this call site alone issued 768 separate 6 KB allocations, and a profile of
+	// Lstsq showed 24.4% of samples inside runtime.madvise, the scavenger returning and
+	// re-faulting those spans. The views are disjoint (column k owns [k*m, (k+1)*m)) and each is
+	// capped, so nothing can append across a boundary; vs[k] is only read after construction.
+	slab := make([]float64, n*m)
 	for k := range n {
 		// x = rm[k:m, k]; norm below (incl.) the diagonal
 		var norm float64
@@ -121,7 +128,7 @@ func householder(rm []float64, m, n int, t []float64) (vs [][]float64, betas []f
 			norm += x * x
 		}
 		norm = math.Sqrt(norm)
-		v := make([]float64, m)
+		v := slab[k*m : k*m+m : k*m+m]
 		vs[k] = v
 		if norm == 0 {
 			continue // column already zero → β=0, no reflection
@@ -291,6 +298,14 @@ func shapeMN(a *tensor.Tensor) (m, n int, err error) {
 // toFlat copies a into a fresh m×n row-major []float64 (one contiguous allocation).
 func toFlat(a *tensor.Tensor, m, n int) []float64 {
 	r := make([]float64, m*n)
+	// A contiguous row-major f64 input is already in the target layout, so the whole matrix is
+	// one copy instead of m*n AtF64 dispatches — 590k of them at 768x768 (PS1001). The COPY is
+	// load-bearing and must not become an alias: householder mutates this buffer in place, and
+	// both QR and Lstsq document that the input tensor is left untouched.
+	if src, ok := flatRowMajor(a); ok {
+		copy(r, src[:m*n])
+		return r
+	}
 	for i := range m {
 		for j := range n {
 			r[i*n+j] = a.AtF64(i, j)
