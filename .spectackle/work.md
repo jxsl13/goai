@@ -1503,3 +1503,22 @@ SAFETY WAS CHECKED IN BOTH GROWERS, not the one the benchmark exercises. histBui
 RNG DETERMINISM IS THE NON-OBVIOUS PART of the bit-identity argument. Reusing the buffer is only safe because idx is refilled with the identity permutation before each shuffle - the same draws must act on the same starting order. A version that skipped the refill would consume identical draws and select a different sample, and the golden tests would catch it, but the reason is worth stating rather than leaving to the test.
 
 A FALSE TARGET REJECTED IN THE SAME PROFILE. newGBMBuilder is the largest byte site at 53%, and it is a ONE-TIME presort per fit rather than per round - already hoisted outside the boosting loop. The benchmark constructs a fresh model each iteration, which makes a one-time cost look recurring in a profile aggregated over iterations. There is no reuse to exploit; the fix would have been across calls that do not exist. Reading the call site before believing the profile is what separated it from the real target sitting just below it.
+
+## R-01KYRADWTWFGSVJZ2QWTD3TGHQ CORRECTION: the three alloc_space wins are three DIFFERENT patterns, not one. The rule I built from them found none of them
+kind: research
+state: draft
+created: 2026-07-30
+
+CORRECTS a claim made in the KNN heap commit message, which asserted the three alloc_space findings shared one shape: a container left at its zero value and grown by append where the final size is known at construction. That was wrong, and building the rule is what proved it.
+
+WHAT THE THREE ACTUALLY ARE:
+  nlp rows2D        out := make([][]float64, r) with LENGTH r, rows assigned BY INDEX. The fix was consolidating r separate per-row make calls into one backing array - an allocation-count consolidation, no append anywhere.
+  GBM subsampleIdx  idx := make([]int, n) with LENGTH n, filled by index. The fix was REUSING one buffer across boosting rounds - a lifetime change, not a sizing one.
+  KNN knnHeap       items left nil in a struct literal and grown by append to k. The fix was preallocating to the known bound - the only one matching the claimed shape, and even it is a zero-value struct FIELD rather than a local slice.
+Three distinct interventions: consolidation, reuse, preallocation. What they share is only the axis that found them (alloc_space) and the fact that alloc_objects had walked past all three.
+
+HOW THE ERROR SURFACED. I implemented PS6020 append-grown-known-size for the claimed shape, then replayed it against the pre-fix source of all three instances per PROC-SCANRULE-REPLAY-001. It found ZERO of them while reporting 13 candidates elsewhere in the tree. A rule that fires thirteen times and matches none of its motivating cases is not a rule for those cases; it is a rule for something else that happens to be syntactically nearby.
+
+REVERTED, and the reason is PROC-NO-RULE-FROM-UNVALIDATED-001 rather than the miss itself. The 13 candidates might well be real - a nil slice grown by append under a known bound genuinely costs log2(n) allocations plus overshoot - but I have no MEASUREMENT for any of them in this repository. Shipping the rule would have asserted that shape is a defect here on the strength of three wins that were not instances of it. The honest move is to keep the rule out until one of the 13 is measured; the shape is recorded here so that is cheap to do later.
+
+THE PROCESS LESSON, which is why this is worth a record rather than a silent revert: the pull to generalize is strongest right after a win, and the standing mandate to turn generalizable findings into scan rules makes it feel obligatory. Two guards caught it - replay against the motivating source, and the requirement that a rule cite a measurement. Both were cast earlier in this session after similar failures, and both fired exactly as intended. The pattern-recognition step between measurement and rule is where the error lives, and it is not covered by either guard: nothing forced me to check that the three cases were the SAME case before naming their shape.
