@@ -236,6 +236,16 @@ func vsoftplusF64(dst, src []float64) {
 	}
 }
 
+// vsoftplusF32 evaluates softplus f32-native via the scalar softplusF32 twin
+// (max(x,0)+log(1+e^(−|x|)) on the NEON expF32/logF32 primitives). The caller
+// parallelizes across chunks; a NEON softplus lane can replace this later. Rides
+// the model f32 tolerance (ADR-0021), same as vtanhF32.
+func vsoftplusF32(dst, src []float32) {
+	for i, v := range src {
+		dst[i] = softplusF32(v)
+	}
+}
+
 // vsoftcapF64 exists only so softCapKernelCPU type-checks on arm64; vexpF64Fast is
 // false here (amd64-only for now), so it is dead code.
 func vsoftcapF64(dst, src []float64, cap float64) {
