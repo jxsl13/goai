@@ -29,6 +29,13 @@ type SPM struct {
 	byteID [256]int       // id of the <0xNN> byte piece, −1 when absent
 
 	specials specialSet // markers parsed only by EncodeSpecial (§B60)
+
+	// decStr[id] is the FINAL output text for that id — byte piece already decoded to its raw
+	// byte, blocked marker kept verbatim, ordinary piece already ▁-unescaped. Decode used to
+	// re-derive all three per TOKEN, and the per-token work was a strings.Index over a 3-byte
+	// needle plus a specials map probe, for a result fixed at construction. Rebuilt by
+	// AddSpecialTokens, which can flip a piece from "unescape" to "verbatim".
+	decStr []string
 }
 
 // SPMOption configures an SPM tokenizer (functional-options idiom, §C12).
@@ -89,6 +96,7 @@ func NewSPM(vocab []UnigramPiece, opts ...SPMOption) (*SPM, error) {
 	for _, o := range opts {
 		o(s)
 	}
+	s.buildDecodeTable()
 	return s, nil
 }
 
@@ -318,6 +326,25 @@ func (s *SPM) spmBounds(str string) []int {
 func (s *SPM) Decode(ids []int) string {
 	var b strings.Builder
 	b.Grow(len(ids) * 4) // pre-size (§T929): avoid the log(n) growth-buffer churn; Grow is capacity-only, output byte-identical
+	// Fast path: every id's output text is already known, so this is a bounds check and a write.
+	// Byte-identical — the table is built by the same three branches this replaces, in the same
+	// order, and ids outside the base vocabulary still take the specials lookup below.
+	if ds := s.decStr; ds != nil {
+		for _, id := range ids {
+			if uint(id) < uint(len(ds)) {
+				b.WriteString(ds[id])
+				continue
+			}
+			if t, ok := s.specials.textForID(id); ok {
+				b.WriteString(t)
+			}
+		}
+		out := b.String()
+		if s.dummy {
+			out = strings.TrimPrefix(out, " ")
+		}
+		return out
+	}
 	for _, id := range ids {
 		if id < 0 || id >= len(s.pieces) {
 			if t, ok := s.specials.textForID(id); ok {
@@ -366,6 +393,33 @@ func writeUnescapedMeta(b *strings.Builder, p string) {
 		b.WriteByte(' ')
 		p = p[j+len(spaceMeta):]
 	}
+}
+
+// buildDecodeTable precomputes each id's final decoded text. Called at the end of NewSPM and again
+// from AddSpecialTokens, since registering a marker flips its piece from "unescape ▁" to "verbatim".
+// A piece with no ▁ aliases the original string, so the common case allocates nothing.
+func (s *SPM) buildDecodeTable() {
+	ds := make([]string, len(s.pieces))
+	for id := range s.pieces {
+		p := s.pieces[id].Piece
+		if len(p) == 6 && p[0] == '<' && p[1] == '0' && p[2] == 'x' {
+			var v int
+			if n, _ := fmt.Sscanf(p, "<0x%02X>", &v); n == 1 {
+				ds[id] = string([]byte{byte(v)}) // BYTE: raw, no unescaping
+				continue
+			}
+		}
+		if s.specials.blocked(p) {
+			ds[id] = p // CONTROL / USER_DEFINED: ▁ is part of its name
+			continue
+		}
+		if !strings.Contains(p, spaceMeta) {
+			ds[id] = p // aliases the vocabulary string
+			continue
+		}
+		ds[id] = strings.ReplaceAll(p, spaceMeta, " ")
+	}
+	s.decStr = ds
 }
 
 // SPMFromGGUF builds the SPM (llama-family SentencePiece BPE) tokenizer from the

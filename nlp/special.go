@@ -335,7 +335,10 @@ func (t *BPETokenizer) EncodeSpecial(text string) []int {
 //
 // Registering never changes [SPM.Encode]. Not safe for concurrent use with encoding —
 // call it during setup.
-func (s *SPM) AddSpecialTokens(specials map[string]int) { s.specials.add(specials) }
+func (s *SPM) AddSpecialTokens(specials map[string]int) {
+	s.specials.add(specials)
+	s.buildDecodeTable() // a marker flips its piece from ▁-unescaped to verbatim
+}
 
 func (s *SPM) lookupSpecialID(text string) (int, bool) {
 	id, ok := s.id[text]
