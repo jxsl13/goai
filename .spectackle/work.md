@@ -1591,3 +1591,20 @@ SECOND PREDICATE ATTEMPT, ALSO REJECTED: rank or suppress by loop nesting, on th
 THE ACTUAL DISCRIMINATOR, and it is not syntax. What separates the three wins from this reject is that each winning function is entered once per layer per decoded token, while EagleLoss is entered once per training step. That is a call frequency: cross-function, and a runtime fact. This is the second consecutive check whose precision ceiling is set by call frequency rather than by shape - PS6020's was a guard's hit rate. The conclusion is not that perfscan needs a better proxy; it is that the tool is already correctly scoped as a candidate generator whose output line says to measure hotness before shipping. Attempts to push hotness into the AST should stop.
 
 WHAT WOULD ACTUALLY HELP, recorded but not built: annotate each candidate with whether any benchmark in the tree reaches the enclosing function, which converts a flat list of 26 into the triage the workflow actually needs - measurable now versus needs a new benchmark first. That requires a name-based cross-package call graph, which is a real feature rather than a predicate tweak, and is a separate task.
+
+## R-01KYRCQS8BEQS8EK3BG0EHACBX Declined a perfscan rule for the declined-reuse-buffer shape: one instance tree-wide, zero remaining after the fix
+kind: research
+state: draft
+created: 2026-07-30
+
+The DBSCAN neighbour-list win has a clean, AST-visible generalization, and it was still the wrong thing to build. Recording the arithmetic so nobody re-derives it.
+
+THE CANDIDATE SHAPE. A callee advertises a reuse contract by taking a destination slice parameter and truncating it on entry (dst = dst[:0]), which means a caller can hand back the same buffer every iteration. A caller that instead passes a literal nil inside a loop declines that contract and pays a fresh growing allocation per iteration. Both halves are visible to a parser: the truncation-on-entry marks the contract, and a nil argument in a loop body marks the declined call. Precision would be high because the callee explicitly opts in.
+
+WHY IT IS NOT WORTH BUILDING. Swept the tree for the contract first, as the predicate-first rule requires. Exactly one function advertises it - the ball tree's radius query - and its only nil-in-a-loop caller was the DBSCAN site just fixed. So the rule would ship with one historical instance and zero live ones, and would sit dormant until someone independently invents the same contract elsewhere. That is the PS6020 mistake with the sign flipped: there the shape had too little discriminating power, here it has plenty but nothing left to discriminate.
+
+THIS IS THE THIRD CONSECUTIVE ITERATION where checking the predicate against the tree before writing the detector killed the detector, and each kill cost two commands. The check is now clearly cheaper than the build in expectation, not just in principle.
+
+WHAT DID GENERALIZE was not a code shape but a measurement failure, cast as the benchmark-regime rule: assert the regime a benchmark's parameters put the code in, because a benchmark whose input silently makes the target path unreachable keeps reporting healthy numbers. That is the transferable lesson from this work, and it is a validation rule rather than a scan rule.
+
+RESIDUAL, deliberately not done: a rule for the second half of the DBSCAN win - storing a value into a container when every read of that element is guarded by a condition, making the store dead - would need dataflow rather than shape matching, and perfscan is a parser with no type or flow information by design.
