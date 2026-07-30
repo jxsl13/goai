@@ -70,7 +70,7 @@ func QuantizeNF4(w []float64, blockSize int) (packed []uint8, absmax []float64) 
 	nblocks := (n + blockSize - 1) / blockSize
 	absmax = make([]float64, nblocks)
 	packed = make([]uint8, (n+1)/2)
-	for b := range nblocks {
+	quantBlock := func(b int) {
 		lo := b * blockSize
 		hi := min(lo+blockSize, n)
 		var am float64
@@ -86,6 +86,21 @@ func QuantizeNF4(w []float64, blockSize int) (packed []uint8, absmax []float64) 
 				idx = nearestNF4(w[i] / am)
 			}
 			packed[i/2] |= idx << (4 * (i % 2))
+		}
+	}
+	// Each block's absmax + quantize is self-contained. With an EVEN blockSize every block
+	// starts on a whole byte, so blocks write DISJOINT bytes of the 4-bit-packed output and
+	// the loop fans out race-free over GOMAXPROCS — bit-identical to the serial loop. An odd
+	// blockSize lets adjacent blocks share a packed byte (`packed[i/2] |=`), so it stays serial.
+	if blockSize%2 == 0 {
+		parallelRows(nblocks, blockSize, func(blo, bhi int) {
+			for b := blo; b < bhi; b++ {
+				quantBlock(b)
+			}
+		})
+	} else {
+		for b := range nblocks {
+			quantBlock(b)
 		}
 	}
 	return packed, absmax
