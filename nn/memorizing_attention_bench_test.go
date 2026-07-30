@@ -36,3 +36,32 @@ func BenchmarkMemGather(b *testing.B) {
 		_, _ = kg, vg
 	}
 }
+
+// BenchmarkMemGatherLarge exposes the per-token parallel fan-out at a larger query segment and
+// memory (T=512 tokens, n=4096 keys), where each token's brute-force top-M search dominates.
+func BenchmarkMemGatherLarge(b *testing.B) {
+	const n, dim, headDim, tSeg, topM = 4096, 512, 64, 512, 32
+	m := &MemMemory{dim: dim, cap: n}
+	m.keys = make([][]float64, n)
+	m.vals = make([][]float64, n)
+	for i := range m.keys {
+		kr := make([]float64, dim)
+		vr := make([]float64, dim)
+		for d := range kr {
+			kr[d] = math.Sin(float64(i*dim+d) * 0.001)
+			vr[d] = math.Cos(float64(i*dim+d) * 0.0013)
+		}
+		m.keys[i], m.vals[i] = kr, vr
+	}
+	qh := tensor.New(tensor.F64, tensor.Shape{tSeg, headDim})
+	qs := qh.Storage().F64()
+	for i := range qs {
+		qs[i] = math.Sin(float64(i) * 0.007)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		kg, vg := m.gather(tensor.F64, qh, 0, headDim, topM)
+		_, _ = kg, vg
+	}
+}
