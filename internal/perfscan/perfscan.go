@@ -220,6 +220,7 @@ var checks = []check{
 	{"PS6001", "full-sort-bounded-prefix", "a full-vocabulary descending index sort whose result feeds an early-breaking (threshold-bounded) prefix consumer, with no quickselect/pre-filter guard — an O(n log n) sort for an O(prefix) need", false},
 	{"PS6002", "spatial-bounds-branch", "an innermost window/kernel loop re-testing a compound spatial bounds guard (iy>=0 && iy<h && ix>=0 && ix<wd) per tap, where the in-bounds taps form one contiguous run the guard can be hoisted around", false},
 	{"PS6005", "monotone-index-bound", "an innermost loop guarding its tap work with a single relational bound on an index affine in the loop var (j:=t-(K-1)+k; if j>=0) — the in-bounds iterations are one contiguous run, clamp the loop bound instead of branching per tap", false},
+	{"PS6023", "threshold-path-uncovered", "a package-level tuning constant that gates two code paths through a relational comparison, where NO test file in the package names it — so nothing pins which arm the tests take. The guarded path may be entirely unexercised, and coverage that exists only incidentally (a test whose geometry happens to clear the bound) vanishes silently the moment the constant is retuned. Found by hand three times in three packages before this check existed: linalg goldens ran 384 elements against a 65536 bound and a one-ulp perturbation of the parallel arm left them green; every SnapKV test used 2-3 rows against a group of 4; WandaPrune's fan-out needs 2+ panels and every test capped cout below the panel width, so making the worker scratch SHARED left all eleven Wanda tests passing with the race detector firing. REMEDY: one gate whose two arms are the SAME source selected by the threshold — never a separately written reference, which contracts to FMA differently and fails by an ulp on arithmetic that never changed. If the package's tests are EXTERNAL (package X_test) and the constant is unexported they cannot name it at all, so add an internal test file that asserts the geometry clears the bound, or select the arms through an exported knob such as GOMAXPROCS. VERIFICATION-GAP check: it reports missing evidence, not a defect — a hit is a test to write, never a code change", false},
 	{"PS0001", "unused-ignore-directive", "a //perfscan:ignore directive that suppressed nothing — either the code it guarded moved out from under it (a directive reaches only its own comment block and the following line) or the finding is fixed and the comment should go. An inert suppression reads as though it took effect, which is worse than none", false},
 	{"PS6022", "sort-feeds-truncation", "a slice sorted in FULL and then truncated to a smaller bound — every comparison that ordered the discarded tail was wasted, and a selection answers the same question in O(n). The counted-loop (PS6013) and threshold-break (PS6001) forms miss this one, because the consumer is neither a loop nor a break: it is a reslice", false},
 	{"PS6021", "fanout-without-worker-seam", "a fan-out helper whose callback receives ONLY a single work index and no scratch, with no sibling scratch-constructor parameter — callers have nowhere to hoist a per-item buffer to, so every caller that needs a working buffer must allocate one PER ITEM; give the callback a scratch parameter or take a func() T constructor the helper calls once per worker", false},
@@ -1070,6 +1071,9 @@ func scanFile(fset *token.FileSet, f *ast.File, ns nameSets) []finding {
 	// tables, memo caches. Indexing a map is not buffer reuse, and a map field is never
 	// the thing standing between a loop and its parallel form.
 	curSliceFields = sliceTypedFields(f)
+	// PS6023 is FILE-level (it reports at a declaration) but reads PACKAGE-level facts the
+	// pre-pass gathered, since a threshold is usually declared in one file and used in another.
+	out = append(out, thresholdUncoveredFindings(fset, f)...)
 	for name := range intMapReg[curPkg] { // cross-file dispatch registries
 		intKeyMaps[name] = true
 	}
@@ -2597,6 +2601,7 @@ func main() {
 	collectIntTypes(parsed)
 	collectIntKeyMaps(parsed)
 	collectVariadicSiblings(fset, parsed)
+	collectThresholdUse(fset, parsed)
 	for _, f := range parsed {
 		for _, fd := range scanFile(fset, f, ns) {
 			if enabled[fd.category] {
@@ -3920,6 +3925,212 @@ func identAssignedIn(root ast.Node, name string) bool {
 		return !found
 	})
 	return found
+}
+
+// Package-scoped state for PS6023. Keyed by directory, because a threshold is routinely
+// DECLARED in one file and used as a bound in another (linalg's factorParThreshold is declared
+// in solvecols.go and gates loops in qr.go, cholesky.go and linalg.go), so neither the
+// declaration nor the gate is decidable from a single file.
+var (
+	thrGated     = map[string]bool{} // dir/name -> used in a relational comparison
+	thrInTest    = map[string]bool{} // dir/name -> named by some _test.go in that dir
+	thrExtOnly   = map[string]bool{} // dir -> every test file there is an external X_test package
+	thrTestSeen  = map[string]bool{} // dir -> at least one test file was read
+	thrProcsKnob = map[string]bool{} // dir -> some test there selects arms via GOMAXPROCS
+)
+
+// bailOnlyBlock reports whether every statement in b is a bail-out: a return, a panic, or a
+// break/continue. Such a branch rejects its input rather than choosing an alternative
+// computation, which is what separates a validation limit from a two-path performance gate.
+func bailOnlyBlock(b *ast.BlockStmt) bool {
+	if b == nil || len(b.List) == 0 {
+		return false
+	}
+	for _, st := range b.List {
+		switch t := st.(type) {
+		case *ast.ReturnStmt, *ast.BranchStmt:
+		case *ast.ExprStmt:
+			call, ok := t.X.(*ast.CallExpr)
+			if !ok {
+				return false
+			}
+			id, ok := call.Fun.(*ast.Ident)
+			if !ok || id.Name != "panic" {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// collectThresholdUse is the PS6023 pre-pass. It records, per directory, which candidate
+// threshold names are used as a bound and which are named by a test.
+//
+// It parses the sibling _test.go files ITSELF rather than relying on the scan set, because the
+// default run excludes tests — and a check about test coverage that could only see test files
+// when -tests was passed would silently report every threshold as uncovered on a normal run.
+// Test files are read for identifier mentions only; nothing in them is ever reported.
+func collectThresholdUse(fset *token.FileSet, files []*ast.File) {
+	dirs := map[string]bool{}
+	for _, f := range files {
+		dir := filepath.Dir(fset.Position(f.Pos()).Filename)
+		dirs[dir] = true
+		ast.Inspect(f, func(n ast.Node) bool {
+			// ONLY an if-condition counts. A relational use in a FOR condition is a loop
+			// bound, not a choice between two code paths, and reporting one would ask for a
+			// two-arm test where there is only one arm.
+			is, ok := n.(*ast.IfStmt)
+			if !ok || is.Cond == nil {
+				return true
+			}
+			// A branch that only BAILS OUT — return, panic, break, continue, with no else —
+			// is a validation limit, not a path gate: the alternative is an error, not a
+			// second implementation of the same result, so there are no two arms to compare
+			// and no bit-identity to prove. format/npy's maxHeaderLen and maxElems,
+			// format/npz's maxEntries and format/pytorch's maxTensors are all this shape, and
+			// an earlier version of this check asked all of them for an arm-selecting test.
+			if is.Else == nil && bailOnlyBlock(is.Body) {
+				return true
+			}
+			ast.Inspect(is.Cond, func(m ast.Node) bool {
+				be, ok := m.(*ast.BinaryExpr)
+				if !ok {
+					return true
+				}
+				switch be.Op {
+				case token.LSS, token.GTR, token.LEQ, token.GEQ:
+				default:
+					return true
+				}
+				for _, side := range []ast.Expr{be.X, be.Y} {
+					ast.Inspect(side, func(q ast.Node) bool {
+						if id, ok := q.(*ast.Ident); ok {
+							thrGated[dir+"/"+id.Name] = true
+						}
+						return true
+					})
+				}
+				return true
+			})
+			return true
+		})
+	}
+	for dir := range dirs {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		external, internal := false, false
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), "_test.go") {
+				continue
+			}
+			tf, err := parser.ParseFile(fset, filepath.Join(dir, e.Name()), nil, 0)
+			if err != nil {
+				continue
+			}
+			thrTestSeen[dir] = true
+			if strings.HasSuffix(tf.Name.Name, "_test") {
+				external = true
+			} else {
+				internal = true
+			}
+			ast.Inspect(tf, func(n ast.Node) bool {
+				switch t := n.(type) {
+				case *ast.Ident:
+					thrInTest[dir+"/"+t.Name] = true
+				case *ast.SelectorExpr:
+					if t.Sel.Name == "GOMAXPROCS" {
+						thrProcsKnob[dir] = true
+					}
+				}
+				return true
+			})
+		}
+		thrExtOnly[dir] = external && !internal
+	}
+}
+
+// thresholdUncoveredFindings flags PS6023 at the DECLARATION of a tuning constant that gates two
+// paths but is named by no test in its package. See the registry entry for why that matters and
+// what the remedy is.
+//
+// Deliberately keyed on the constant being NAMED by a test rather than on whether some test
+// geometry clears it. Whether a given test input exceeds a bound is not decidable from syntax —
+// it depends on values computed at runtime — and incidental coverage is exactly what this check
+// exists to distrust: it evaporates when the constant is retuned, without any test turning red.
+// Naming the threshold is what makes the coverage provable and durable, and it is the shape the
+// tests in this repo that DO cover their fast paths already use.
+func thresholdUncoveredFindings(fset *token.FileSet, f *ast.File) []finding {
+	dir := filepath.Dir(fset.Position(f.Pos()).Filename)
+	if !thrTestSeen[dir] {
+		return nil // no tests at all in this package: PS6023 has nothing to say that is specific
+	}
+	var out []finding
+	for _, d := range f.Decls {
+		gd, ok := d.(*ast.GenDecl)
+		if !ok || (gd.Tok != token.CONST && gd.Tok != token.VAR) {
+			continue
+		}
+		for _, sp := range gd.Specs {
+			vs, ok := sp.(*ast.ValueSpec)
+			if !ok || len(vs.Values) != len(vs.Names) {
+				continue
+			}
+			for i, name := range vs.Names {
+				if !isTuningLiteral(vs.Values[i]) {
+					continue
+				}
+				key := dir + "/" + name.Name
+				if !thrGated[key] || thrInTest[key] {
+					continue
+				}
+				remedy := "add a gate whose two arms are the SAME source selected by " + name.Name
+				if thrExtOnly[dir] && !name.IsExported() {
+					remedy = "this package's tests are all external (X_test) and " + name.Name +
+						" is unexported, so no test CAN name it — add an internal test file that" +
+						" asserts its geometry clears the bound, or select the arms through an" +
+						" exported knob such as GOMAXPROCS"
+					if thrProcsKnob[dir] {
+						remedy += " (some test here already uses GOMAXPROCS, but nothing ties it to" +
+							" this threshold)"
+					}
+				}
+				out = append(out, finding{
+					pos:      fset.Position(name.Pos()),
+					category: "threshold-path-uncovered",
+					msg: fmt.Sprintf("%s gates two code paths through a relational comparison, and no"+
+						" test in this package names it — so nothing pins which arm the tests take and"+
+						" the guarded path may be entirely unexercised. Coverage that exists only"+
+						" because some test's geometry happens to clear the bound disappears the moment"+
+						" %s is retuned, with nothing turning red. %s. This reports MISSING EVIDENCE,"+
+						" not a defect: the fix is a test, never a code change.",
+						name.Name, name.Name, remedy),
+				})
+			}
+		}
+	}
+	return out
+}
+
+// isTuningLiteral reports whether e is a compile-time numeric constant expression — a literal, a
+// shift or arithmetic combination of literals, or a parenthesized one. It is what separates a
+// tuning knob from configuration read at runtime: only the former is a threshold a test can
+// reason about, and only the former stays fixed across a package's tests.
+func isTuningLiteral(e ast.Expr) bool {
+	switch t := e.(type) {
+	case *ast.BasicLit:
+		return t.Kind == token.INT || t.Kind == token.FLOAT
+	case *ast.ParenExpr:
+		return isTuningLiteral(t.X)
+	case *ast.UnaryExpr:
+		return isTuningLiteral(t.X)
+	case *ast.BinaryExpr:
+		return isTuningLiteral(t.X) && isTuningLiteral(t.Y)
+	}
+	return false
 }
 
 // immediateInnerLoops returns the loop statements nested in body that are not themselves
