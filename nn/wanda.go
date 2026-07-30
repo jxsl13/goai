@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"sync"
 
 	"github.com/jxsl13/goai/tensor"
 )
@@ -172,50 +173,65 @@ func WandaPrune(w, x *tensor.Tensor, sparsity float64) (pruned, mask *tensor.Ten
 		// A panel transposes ob columns at a time, so both the gather and the write-back
 		// sweep ss/wsF/ps/ms in ROW order. Bit-identical — same values, same per-column
 		// sort, same entries written; only the visiting order changes.
+		// PANELS ARE INDEPENDENT, so the panel loop fans out. Panel o0 reads ss/wsF only in
+		// its own column range [o0, o0+ob) and writes ps/ms only there, so no two panels
+		// touch the same element and the partition changes no value — each column's selection
+		// and its marked drop set are unchanged. Scratch must be PER WORKER: colbuf, dropbuf
+		// and idx are all written per panel, so a shared copy would race.
+		//
+		// This composes the two independent fixes that collided in the merge — the panel
+		// transpose for locality and the fan-out for throughput — rather than choosing one.
+		// The composition was measured against each half separately, because a composition of
+		// two validated wins can lose to one of them (PERF-MEASURE-THE-COMPOSITION-001).
 		pn := min(wandaPanel, cout)
-		colbuf := make([]float64, pn*cin)
-		dropbuf := make([]bool, pn*cin)
-		for o0 := 0; o0 < cout; o0 += pn {
-			ob := min(pn, cout-o0)
-			for j := 0; j < cin; j++ {
-				row := ss[j*cout+o0 : j*cout+o0+ob]
-				for t, v := range row {
-					colbuf[t*cin+j] = v
-				}
-			}
-			for t := 0; t < ob; t++ {
-				col := colbuf[t*cin : t*cin+cin : t*cin+cin]
+		nPanels := (cout + pn - 1) / pn
+		parallelRows(nPanels, pn*cin, func(plo, phi int) {
+			sc := wandaScratchGet(pn*cin, cin)
+			defer wandaScratchPut(sc)
+			idx, colbuf, dropbuf := sc.idx, sc.colbuf, sc.dropbuf
+			for p := plo; p < phi; p++ {
+				o0 := p * pn
+				ob := min(pn, cout-o0)
 				for j := 0; j < cin; j++ {
-					idx[j] = j
-				}
-				// Only the k SMALLEST are consumed — the full sorted order was never read
-				// (PS6001). A selection produces the identical set because the comparator
-				// is total and only membership is marked.
-				wandaSelectK(idx, col, k)
-				d := dropbuf[t*cin : t*cin+cin : t*cin+cin]
-				clear(d)
-				for r := 0; r < k; r++ {
-					d[idx[r]] = true
-				}
-			}
-			for j := 0; j < cin; j++ {
-				base := j*cout + o0
-				// dropbuf is indexed [t][j], so this reads at stride cin — PS6011 flags
-				// it, deliberately. The transposed [j][t] layout was implemented and
-				// measured SLOWER (0.982-0.993x): it makes this read contiguous but turns
-				// the k selection writes strided and forces a full-buffer clear per panel.
-				// The buffer is 256KB and L2-resident, so the stride costs almost nothing
-				// — PERF-ACCUM-RESIDENCY-001 seen from the measurement side.
-				for t := 0; t < ob; t++ {
-					//perfscan:ignore PS6011
-					if dropbuf[t*cin+j] {
-						continue
+					row := ss[j*cout+o0 : j*cout+o0+ob]
+					for t, v := range row {
+						colbuf[t*cin+j] = v
 					}
-					ps[base+t] = wsF[base+t]
-					ms[base+t] = 1
+				}
+				for t := 0; t < ob; t++ {
+					col := colbuf[t*cin : t*cin+cin : t*cin+cin]
+					for j := 0; j < cin; j++ {
+						idx[j] = j
+					}
+					// Only the k SMALLEST are consumed — the full sorted order was never read
+					// (PS6001). A selection produces the identical set because the comparator
+					// is total and only membership is marked.
+					wandaSelectK(idx, col, k)
+					d := dropbuf[t*cin : t*cin+cin : t*cin+cin]
+					clear(d)
+					for r := 0; r < k; r++ {
+						d[idx[r]] = true
+					}
+				}
+				for j := 0; j < cin; j++ {
+					base := j*cout + o0
+					// dropbuf is indexed [t][j], so this reads at stride cin — PS6011 flags
+					// it, deliberately. The transposed [j][t] layout was implemented and
+					// measured SLOWER (0.982-0.993x): it makes this read contiguous but turns
+					// the k selection writes strided and forces a full-buffer clear per panel.
+					// The buffer is 256KB and L2-resident, so the stride costs almost nothing
+					// — PERF-ACCUM-RESIDENCY-001 seen from the measurement side.
+					for t := 0; t < ob; t++ {
+						//perfscan:ignore PS6011
+						if dropbuf[t*cin+j] {
+							continue
+						}
+						ps[base+t] = wsF[base+t]
+						ms[base+t] = 1
+					}
 				}
 			}
-		}
+		})
 		return pruned, mask, nil
 	}
 	if wsF := flatF32(w); wsF != nil {
@@ -223,47 +239,62 @@ func WandaPrune(w, x *tensor.Tensor, sparsity float64) (pruned, mask *tensor.Ten
 		// Same panel transpose and selection as the F64 branch above; see the commentary
 		// there. The score panel is float64 because the comparator and the scores are,
 		// exactly as the per-column buffer was.
+		// PANELS ARE INDEPENDENT, so the panel loop fans out. Panel o0 reads ss/wsF only in
+		// its own column range [o0, o0+ob) and writes ps/ms only there, so no two panels
+		// touch the same element and the partition changes no value — each column's selection
+		// and its marked drop set are unchanged. Scratch must be PER WORKER: colbuf, dropbuf
+		// and idx are all written per panel, so a shared copy would race.
+		//
+		// This composes the two independent fixes that collided in the merge — the panel
+		// transpose for locality and the fan-out for throughput — rather than choosing one.
+		// The composition was measured against each half separately, because a composition of
+		// two validated wins can lose to one of them (PERF-MEASURE-THE-COMPOSITION-001).
 		pn := min(wandaPanel, cout)
-		colbuf := make([]float64, pn*cin)
-		dropbuf := make([]bool, pn*cin)
-		for o0 := 0; o0 < cout; o0 += pn {
-			ob := min(pn, cout-o0)
-			for j := 0; j < cin; j++ {
-				row := ss[j*cout+o0 : j*cout+o0+ob]
-				for t, v := range row {
-					colbuf[t*cin+j] = float64(v)
-				}
-			}
-			for t := 0; t < ob; t++ {
-				col := colbuf[t*cin : t*cin+cin : t*cin+cin]
+		nPanels := (cout + pn - 1) / pn
+		parallelRows(nPanels, pn*cin, func(plo, phi int) {
+			sc := wandaScratchGet(pn*cin, cin)
+			defer wandaScratchPut(sc)
+			idx, colbuf, dropbuf := sc.idx, sc.colbuf, sc.dropbuf
+			for p := plo; p < phi; p++ {
+				o0 := p * pn
+				ob := min(pn, cout-o0)
 				for j := 0; j < cin; j++ {
-					idx[j] = j
-				}
-				wandaSelectK(idx, col, k)
-				d := dropbuf[t*cin : t*cin+cin : t*cin+cin]
-				clear(d)
-				for r := 0; r < k; r++ {
-					d[idx[r]] = true
-				}
-			}
-			for j := 0; j < cin; j++ {
-				base := j*cout + o0
-				// dropbuf is indexed [t][j], so this reads at stride cin — PS6011 flags
-				// it, deliberately. The transposed [j][t] layout was implemented and
-				// measured SLOWER (0.982-0.993x): it makes this read contiguous but turns
-				// the k selection writes strided and forces a full-buffer clear per panel.
-				// The buffer is 256KB and L2-resident, so the stride costs almost nothing
-				// — PERF-ACCUM-RESIDENCY-001 seen from the measurement side.
-				for t := 0; t < ob; t++ {
-					//perfscan:ignore PS6011
-					if dropbuf[t*cin+j] {
-						continue
+					row := ss[j*cout+o0 : j*cout+o0+ob]
+					for t, v := range row {
+						colbuf[t*cin+j] = float64(v)
 					}
-					ps[base+t] = wsF[base+t]
-					ms[base+t] = 1
+				}
+				for t := 0; t < ob; t++ {
+					col := colbuf[t*cin : t*cin+cin : t*cin+cin]
+					for j := 0; j < cin; j++ {
+						idx[j] = j
+					}
+					wandaSelectK(idx, col, k)
+					d := dropbuf[t*cin : t*cin+cin : t*cin+cin]
+					clear(d)
+					for r := 0; r < k; r++ {
+						d[idx[r]] = true
+					}
+				}
+				for j := 0; j < cin; j++ {
+					base := j*cout + o0
+					// dropbuf is indexed [t][j], so this reads at stride cin — PS6011 flags
+					// it, deliberately. The transposed [j][t] layout was implemented and
+					// measured SLOWER (0.982-0.993x): it makes this read contiguous but turns
+					// the k selection writes strided and forces a full-buffer clear per panel.
+					// The buffer is 256KB and L2-resident, so the stride costs almost nothing
+					// — PERF-ACCUM-RESIDENCY-001 seen from the measurement side.
+					for t := 0; t < ob; t++ {
+						//perfscan:ignore PS6011
+						if dropbuf[t*cin+j] {
+							continue
+						}
+						ps[base+t] = wsF[base+t]
+						ms[base+t] = 1
+					}
 				}
 			}
-		}
+		})
 		return pruned, mask, nil
 	}
 	for o := range cout {
@@ -452,3 +483,41 @@ func actL2Norm(x *tensor.Tensor) []float64 {
 	}
 	return ss
 }
+
+// wandaScratch is one worker's panel scratch. Fanning the panel loop out multiplies this
+// allocation by the worker count — 12 workers at a 128-column panel over 2048 inputs is about
+// 27 MB per call — which showed up as +23.6% B/op against the serial panel version even though
+// the wall clock fell 73%. Pooling returns the buffers between calls, so the cost is paid once
+// per worker for the process rather than once per worker per call.
+//
+// Sized on demand and never shrunk: the panel geometry is fixed per call but varies across
+// calls, so a buffer that is large enough is kept and a smaller request reuses it by reslicing.
+type wandaScratch struct {
+	idx     []int
+	colbuf  []float64
+	dropbuf []bool
+}
+
+var wandaScratchPool sync.Pool
+
+func wandaScratchGet(panel, cin int) *wandaScratch {
+	sc, _ := wandaScratchPool.Get().(*wandaScratch)
+	if sc == nil {
+		sc = &wandaScratch{}
+	}
+	if cap(sc.idx) < cin {
+		sc.idx = make([]int, cin)
+	}
+	sc.idx = sc.idx[:cin]
+	if cap(sc.colbuf) < panel {
+		sc.colbuf = make([]float64, panel)
+	}
+	sc.colbuf = sc.colbuf[:panel]
+	if cap(sc.dropbuf) < panel {
+		sc.dropbuf = make([]bool, panel)
+	}
+	sc.dropbuf = sc.dropbuf[:panel]
+	return sc
+}
+
+func wandaScratchPut(sc *wandaScratch) { wandaScratchPool.Put(sc) }

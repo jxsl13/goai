@@ -66,36 +66,40 @@ func (vq *VectorQuantizer) Quantize(ctx *backend.Context, ze *tensor.Tensor) (zq
 	switch ze.Dtype() {
 	case tensor.F64:
 		zs, cb := zc.Storage().F64(), cbc.Storage().F64()
-		i := 0
-		for ; i+4 <= batch; i += 4 { // tile 4 ze rows per codebook pass (4× less codebook traffic)
-			b0, b1, b2, b3 := vqNearest4F64(zs[i*d:i*d+d], zs[(i+1)*d:(i+1)*d+d], zs[(i+2)*d:(i+2)*d+d], zs[(i+3)*d:(i+3)*d+d], cb, k, d)
-			indices[i], indices[i+1], indices[i+2], indices[i+3] = b0, b1, b2, b3
-			sel.SetF64(1, i, b0)
-			sel.SetF64(1, i+1, b1)
-			sel.SetF64(1, i+2, b2)
-			sel.SetF64(1, i+3, b3)
-		}
-		for ; i < batch; i++ { // remainder rows
-			best := vqNearestF64(zs[i*d:i*d+d], cb, k, d)
-			indices[i] = best
-			sel.SetF64(1, i, best)
-		}
+		ss := sel.Storage().F64()
+		// Each latent's argmin is independent (reads only its own row + the shared read-only
+		// codebook, writes only indices[i] and the disjoint one-hot row i of sel), so the batch
+		// fans out over GOMAXPROCS. Each worker keeps the 4-row codebook tiling within its own
+		// range; a row's argmin is identical regardless of tile boundary → bit-identical.
+		parallelRows(batch, k*d, func(lo, hi int) {
+			i := lo
+			for ; i+4 <= hi; i += 4 { // tile 4 ze rows per codebook pass (4× less codebook traffic)
+				b0, b1, b2, b3 := vqNearest4F64(zs[i*d:i*d+d], zs[(i+1)*d:(i+1)*d+d], zs[(i+2)*d:(i+2)*d+d], zs[(i+3)*d:(i+3)*d+d], cb, k, d)
+				indices[i], indices[i+1], indices[i+2], indices[i+3] = b0, b1, b2, b3
+				ss[i*k+b0], ss[(i+1)*k+b1], ss[(i+2)*k+b2], ss[(i+3)*k+b3] = 1, 1, 1, 1
+			}
+			for ; i < hi; i++ { // remainder rows
+				best := vqNearestF64(zs[i*d:i*d+d], cb, k, d)
+				indices[i] = best
+				ss[i*k+best] = 1
+			}
+		})
 	case tensor.F32:
 		zs, cb := zc.Storage().F32(), cbc.Storage().F32()
-		i := 0
-		for ; i+4 <= batch; i += 4 {
-			b0, b1, b2, b3 := vqNearest4F32(zs[i*d:i*d+d], zs[(i+1)*d:(i+1)*d+d], zs[(i+2)*d:(i+2)*d+d], zs[(i+3)*d:(i+3)*d+d], cb, k, d)
-			indices[i], indices[i+1], indices[i+2], indices[i+3] = b0, b1, b2, b3
-			sel.SetF64(1, i, b0)
-			sel.SetF64(1, i+1, b1)
-			sel.SetF64(1, i+2, b2)
-			sel.SetF64(1, i+3, b3)
-		}
-		for ; i < batch; i++ {
-			best := vqNearestF32(zs[i*d:i*d+d], cb, k, d)
-			indices[i] = best
-			sel.SetF64(1, i, best)
-		}
+		ss := sel.Storage().F32()
+		parallelRows(batch, k*d, func(lo, hi int) {
+			i := lo
+			for ; i+4 <= hi; i += 4 {
+				b0, b1, b2, b3 := vqNearest4F32(zs[i*d:i*d+d], zs[(i+1)*d:(i+1)*d+d], zs[(i+2)*d:(i+2)*d+d], zs[(i+3)*d:(i+3)*d+d], cb, k, d)
+				indices[i], indices[i+1], indices[i+2], indices[i+3] = b0, b1, b2, b3
+				ss[i*k+b0], ss[(i+1)*k+b1], ss[(i+2)*k+b2], ss[(i+3)*k+b3] = 1, 1, 1, 1
+			}
+			for ; i < hi; i++ {
+				best := vqNearestF32(zs[i*d:i*d+d], cb, k, d)
+				indices[i] = best
+				ss[i*k+best] = 1
+			}
+		})
 	default:
 		for i := range batch { // exotic dtype: keep the per-element dispatch
 			best, bestDist := 0, math.Inf(1)
