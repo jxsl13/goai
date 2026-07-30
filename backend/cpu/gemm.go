@@ -29,8 +29,23 @@ import (
 // (512×2048×2048 f32 ran at ~half the 1024³ rate), and packing-free COLUMN
 // blocking (j-splits sized to ~256 KiB of B per block, no packed buffer, no
 // extra memory) recovered it: f32 +88%, f64 +60% on that shape, squares
-// neutral, numerics untouched. Lives in gemm_simd.go (amd64+simd only); the
-// portable scalar kernels below stay unblocked per the arm64 result.
+// neutral, numerics untouched. Lives in gemm_simd.go (amd64+simd only).
+//
+// Update 2 (arm64, this branch): THE arm64 DISCARD ABOVE NO LONGER HOLDS, and the reason is
+// that it was measured against a different kernel. At the time, the portable band ran p-outer
+// with j inner and STREAMED its accumulator — four f64 loads and four stores per j to issue
+// four FMAs — so it was load/store bound on C and B locality could not be the limit. Packing B
+// against that kernel was indeed net overhead, exactly as recorded.
+//
+// Giving the band a 4x4 register tile removed the C traffic, and B locality then became the
+// binding constraint. Packing measured -11.1% (f32) and -28.1% (f64) at n=1024 on this same
+// M-series host, and the portable bands now pack behind measured per-dtype gates. Cumulatively
+// the tile, the pack, the operand-widening hoist and the packed remainder took the vision
+// benchmark suite -17.76% geomean end to end.
+//
+// The general lesson, since it cost a real win: a "measured and discarded" verdict is scoped to
+// the code it was measured against. Re-open it when that code changes shape
+// (PERF-THRESHOLD-IS-STALE-WHEN-ITS-ARM-CHANGES-001).
 
 // matContiguousF32 returns a dense row-major copy of a rank-2 F32 tensor,
 // parallelizing the gather over output ROWS. matmulKernel's backward calls

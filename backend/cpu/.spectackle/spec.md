@@ -37,3 +37,8 @@ Rationale: The portable GEMM golden guarded only the row gate while the kernel g
 IF a threshold is about to be refined on two axes and the sweep over them is non-monotonic, THEN the implementing agent SHALL pin both axes and vary a suspected third before fitting anything, and leave the gate conservative if the outcome still moves.
 
 Rationale: The GEMM pack grid looked ready to fit until a control run held blocks-per-band at 1 and pack size at 16KB and varied only the leftover rows past the tile: the result ran from +71.02% to -28.09%. A gate fit to the original grid would have been fit to a variable it does not read.
+
+## PERF-A-DISCARD-IS-SCOPED-TO-ITS-KERNEL-001
+IF a documented measured-and-discarded verdict is used to skip an optimization, THEN the implementing agent SHALL check whether the kernel it was measured against still has the same shape, and re-open the verdict if the bottleneck it assumed has moved.
+
+Rationale: gemm.go recorded that BLIS-style panel packing was built, measured on this arm64 host and discarded as net overhead. That was true of the band as it stood, which streamed its accumulator and was load/store bound on C. A 4x4 register tile removed that traffic and made B locality the limit, after which the same packing measured -11.1% f32 and -28.1% f64. The note also told docs/perf-notes-cpu.md to list the kernels as not worth touching.

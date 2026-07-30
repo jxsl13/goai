@@ -136,12 +136,67 @@ callee is cheap relative to an indirect call.
 
 ## Not touched, deliberately
 
-- `gemm.go`/`gemm_nosimd.go` band kernels: BLIS-style blocking was already
-  built, measured and discarded on this host (§T74/§B28 note in gemm.go);
-  the remaining headroom is wider FMA SIMD, host-blocked on arm64 (§T11b).
+- ~~`gemm.go`/`gemm_nosimd.go` band kernels~~ — **this entry was wrong, and it
+  is left here rather than deleted because it actively discouraged the largest
+  win in the package.** The §T74/§B28 discard was real, but it measured panel
+  packing against a band that streamed its accumulator (p-outer, j-inner: four
+  f64 loads and stores per j for four FMAs). That kernel was load/store bound on
+  C, so B locality could not be the limit and packing was correctly net
+  overhead. A 4×4 register tile removed the C traffic; B locality then *became*
+  the limit and packing measured −11.1% (f32) / −28.1% (f64) at n=1024 on the
+  same host. See "Portable GEMM band kernels" below.
 - `binOp`/`broadcastContig`: elementwise binaries are memory-bound through the
   simd primitives already; the Add/Mul benches are dominated by tensor
   allocation, not the loop.
 - `parThreshold`/pool dispatch internals: retuning the crossover or chunk
   count reproduced current behavior at the measured break-even; the fused-pass
   work (§4) attacks the same overhead with better returns.
+
+## Portable GEMM band kernels (arm64 default build)
+
+The kernels behind `gemmF32`/`gemmF64` on any build without
+`GOEXPERIMENT=simd` — which is what darwin/arm64 runs, so these execute rather
+than Accelerate or NEON. They had **no benchmark on that build** before this
+work: the existing head-to-heads in `gemm_amx_bench_test.go` are behind
+`//go:build goexperiment.simd`, so nothing measured the code that actually ran,
+despite it being ~16% of the vision suite's profile.
+
+Applied in order, each measured on its own and each bit-identical (every C cell
+still sums its k products in ascending p from its incoming value):
+
+| change | f32 | f64 |
+|---|---|---|
+| 4×4 register tile (C held in locals across the k pass) | −34.8% | −50.5% |
+| pack B into 4-column panels, gated | −11.1% @ n=1024 | −28.1% @ n=1024 |
+| hoist both f32→f64 widenings out of the inner loop | −18.1% | n/a |
+| packed panel read from the single-row remainder too | −3.6% | −1.4% |
+
+**End to end: vision −17.76% geomean** (ViT batched −28.1%, MLPMixer batched
+−29.9%, Swin batched −19.7%). `classic` is mostly unmoved as expected — only
+`GMMFit` at −8.1%; it is not matmul-dominated.
+
+### Gates
+
+Packing is gated on two axes, each swept separately by forcing both arms inside
+one binary (`BenchmarkGemmF32Portable`, `BenchmarkGemmF64Portable`):
+
+- **pack size** — f32 turns over between 2304 and 4096 B elements, f64 between
+  16384 and 65536. The gates differ by an order of magnitude, so they are
+  per-dtype.
+- **tile blocks per band** — `parallelWork` gives each worker `ceil(m/workers)`
+  rows and the tile takes four at a time. Below one block the tile never runs
+  and the pack is pure cost. f32 needs 2 blocks, f64 needs 5. Expressed in
+  blocks, not rows, so the gate follows GOMAXPROCS instead of hardcoding a
+  12-core host.
+
+### Measured rejections — do not retry blind
+
+- **The same widening hoist in the *unpacked* band**: +11.7% / +11.1%. The
+  packed band's B arrives from a compact panel so the extra pass fits; the
+  unpacked tile is already streaming B with fourfold line waste and the pass
+  evicts what it is walking.
+- **A two-axis gate fit to (blocks, pack size)**: the sweep is non-monotonic.
+  Pinning both at 1 block / 16KB and varying only the leftover rows past the
+  tile swings the result from +71.0% to −28.1% — a hundred points on a variable
+  neither axis reads. The gate stays conservative instead.
+- **A wider tile (4×8)**: 44 live doubles against 32 FP registers; it spills.
