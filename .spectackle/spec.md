@@ -680,3 +680,8 @@ Rationale: Three suppressions written in one session were separated from their t
 WHEN a parallelization is sized from a single-core profile, the estimating agent SHALL measure the candidate's share at the target core count instead, because shares shift when other parts of the workload already parallelize.
 
 Rationale: A single-core profile put Swin window attention at 24.1 percent of the forward, 15.1 ms against a 17.2 ms twelve-core forward, implying it was nearly the entire twelve-core wall clock and predicting up to 3.3x. Measured gain was 1.11x. The large projections parallelize through the backend and shrink at twelve cores while this stayed serial, so the one-core shares did not describe the twelve-core mix.
+
+## PERF-DELETE-THE-SUPERSEDED-ARM-001
+WHEN a faster arm is added that returns before an existing branch, the implementing agent SHALL delete the branches the early return makes unreachable rather than leaving them as a second copy.
+
+Rationale: After the Swin blockwise path returned early, its old in-loop branches became dead but textually identical. A mutation applied to the first textual match landed on the dead copy and the whole suite stayed green, which reads exactly like a test with no teeth. Two code paths computing one thing also let a property established for one go stale in the other.
