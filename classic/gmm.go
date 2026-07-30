@@ -5,9 +5,45 @@ import (
 	"math"
 	"math/rand"
 	"runtime"
+	"sync"
 
 	"github.com/jxsl13/goai/internal/simd"
 )
+
+// gmmScratch is one worker's density-evaluation buffers: the per-component log-responsibility
+// row, the four-wide triangular-solve scratch the full-covariance kernel jams over, and its
+// single-column twin. Every element is overwritten before use.
+type gmmScratch struct {
+	lr []float64
+	y4 [4][]float64
+	y  []float64
+}
+
+// gmmScratchPool recycles those sets across calls. Each fan-out allocated one set PER WORKER per
+// call — twelve on a twelve-way host — which an allocation profile put at 226MB across the classic
+// suite for PredictProba alone. Pooled, a steady-state predict loop allocates none.
+//
+// Sized on get rather than assumed, since one process can hold models of different k and nFeat.
+var gmmScratchPool = sync.Pool{New: func() any { return new(gmmScratch) }}
+
+func gmmFit(b []float64, n int) []float64 {
+	if cap(b) < n {
+		return make([]float64, n)
+	}
+	return b[:n]
+}
+
+func getGMMScratch(k, nFeat int) *gmmScratch {
+	sc := gmmScratchPool.Get().(*gmmScratch)
+	sc.lr = gmmFit(sc.lr, k)
+	for t := range sc.y4 {
+		sc.y4[t] = gmmFit(sc.y4[t], nFeat)
+	}
+	sc.y = gmmFit(sc.y, nFeat)
+	return sc
+}
+
+func putGMMScratch(sc *gmmScratch) { gmmScratchPool.Put(sc) }
 
 // GMMCovariance selects the shape of the per-component covariance matrix a
 // [GaussianMixture] fits. A richer covariance captures more structure but has
@@ -348,12 +384,9 @@ func (m *GaussianMixture) eStep(x [][]float64, resp, logResp [][]float64) (float
 	// ldBuf and the full-cov solve buffers were m.yScratch4/m.yScratch, receiver state every
 	// worker would race on — the same shape this package already had to remove from the
 	// full-covariance density path.
-	newScratch := func() ([]float64, [4][]float64, []float64) {
-		var y4 [4][]float64
-		for t := range y4 {
-			y4[t] = make([]float64, m.nFeat)
-		}
-		return make([]float64, k), y4, make([]float64, m.nFeat)
+	newScratch := func() (*gmmScratch, func()) {
+		sc := getGMMScratch(k, m.nFeat)
+		return sc, func() { putGMMScratch(sc) }
 	}
 
 	n := len(x)
@@ -363,7 +396,9 @@ func (m *GaussianMixture) eStep(x [][]float64, resp, logResp [][]float64) (float
 		nw = n
 	}
 	if nw <= 1 || n*k < 1<<11 {
-		ldBuf, y4, y := newScratch()
+		scr, rel := newScratch()
+		defer rel()
+		ldBuf, y4, y := scr.lr, scr.y4, scr.y
 		for i := range x {
 			llBuf[i] = rowBody(logResp[i], ldBuf, y4, y, i)
 		}
@@ -375,7 +410,9 @@ func (m *GaussianMixture) eStep(x [][]float64, resp, logResp [][]float64) (float
 			if hi > n {
 				hi = n
 			}
-			ldBuf, y4, y := newScratch() // per-worker scratch
+			scr, rel := newScratch() // per-worker scratch, pooled
+			defer rel()
+			ldBuf, y4, y := scr.lr, scr.y4, scr.y
 			for i := lo; i < hi; i++ {
 				llBuf[i] = rowBody(logResp[i], ldBuf, y4, y, i)
 			}
@@ -891,19 +928,18 @@ func (m *GaussianMixture) ScoreSamples(x [][]float64) ([]float64, error) {
 		}
 		out[i] = softmaxLSE(buf, buf) // buf is scratch; we keep only the log-sum-exp
 	}
-	newScratch := func() ([]float64, [4][]float64, []float64) {
-		var y4 [4][]float64
-		for t := range y4 {
-			y4[t] = make([]float64, m.nFeat)
-		}
-		return make([]float64, k), y4, make([]float64, m.nFeat)
+	newScratch := func() (*gmmScratch, func()) {
+		sc := getGMMScratch(k, m.nFeat)
+		return sc, func() { putGMMScratch(sc) }
 	}
 	nw := runtime.GOMAXPROCS(0)
 	if nw > len(x) {
 		nw = len(x)
 	}
 	if nw <= 1 || len(x)*k < 1<<11 {
-		buf, y4, y := newScratch()
+		scr, rel := newScratch()
+		defer rel()
+		buf, y4, y := scr.lr, scr.y4, scr.y
 		for i := range x {
 			rowScore(buf, y4, y, i)
 		}
@@ -916,7 +952,9 @@ func (m *GaussianMixture) ScoreSamples(x [][]float64) ([]float64, error) {
 		if hi > len(x) {
 			hi = len(x)
 		}
-		buf, y4, y := newScratch() // per-worker scratch
+		scr, rel := newScratch() // per-worker scratch, pooled
+		defer rel()
+		buf, y4, y := scr.lr, scr.y4, scr.y
 		for i := lo; i < hi; i++ {
 			rowScore(buf, y4, y, i)
 		}
@@ -985,12 +1023,9 @@ func (m *GaussianMixture) PredictProba(x [][]float64) ([][]float64, error) {
 		}
 		softmaxLSE(out[i], lr) // out[i] = normalized responsibilities (one fused SIMD exp pass)
 	}
-	newScratch := func() ([]float64, [4][]float64, []float64) {
-		var y4 [4][]float64
-		for t := range y4 {
-			y4[t] = make([]float64, m.nFeat)
-		}
-		return make([]float64, k), y4, make([]float64, m.nFeat)
+	newScratch := func() (*gmmScratch, func()) {
+		sc := getGMMScratch(k, m.nFeat)
+		return sc, func() { putGMMScratch(sc) }
 	}
 	// Each sample is independent (reads only shared read-only params, writes only out[i]/o);
 	// full-cov's solve now uses PER-WORKER scratch, so BOTH diag and full fan out
@@ -1000,7 +1035,9 @@ func (m *GaussianMixture) PredictProba(x [][]float64) ([][]float64, error) {
 		nw = len(x)
 	}
 	if nw <= 1 || len(x)*k < 1<<11 {
-		lr, y4, y := newScratch()
+		sc, release := newScratch()
+		defer release()
+		lr, y4, y := sc.lr, sc.y4, sc.y
 		for i := range x {
 			rowBody(lr, y4, y, i)
 		}
@@ -1013,7 +1050,9 @@ func (m *GaussianMixture) PredictProba(x [][]float64) ([][]float64, error) {
 		if hi > len(x) {
 			hi = len(x)
 		}
-		lr, y4, y := newScratch() // per-worker scratch
+		sc, release := newScratch()
+		defer release()
+		lr, y4, y := sc.lr, sc.y4, sc.y // per-worker scratch
 		for i := lo; i < hi; i++ {
 			rowBody(lr, y4, y, i)
 		}
