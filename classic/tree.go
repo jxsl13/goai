@@ -902,13 +902,19 @@ func (m *DecisionTreeClassifier) Predict(x [][]float64) ([]int, error) {
 	if m.root == nil {
 		return nil, fmt.Errorf("classic: DecisionTreeClassifier.Predict before Fit")
 	}
-	out := make([]int, len(x))
 	for i, row := range x {
 		if len(row) != m.nFeature {
 			return nil, fmt.Errorf("classic: row %d width %d, want %d", i, len(row), m.nFeature)
 		}
-		out[i] = m.classes[m.root.predict(row).predClass]
 	}
+	// Each row is an independent root-to-leaf walk of the immutable fitted tree (predict is
+	// pure and reads no shared mutable state), writing only out[i], so the row loop fans out
+	// over GOMAXPROCS bit-identically to the serial loop. Widths are pre-validated above so
+	// the parallel body is error-free.
+	out := make([]int, len(x))
+	knnParallelRows(len(x), func(i int) {
+		out[i] = m.classes[m.root.predict(x[i]).predClass]
+	})
 	return out, nil
 }
 
@@ -967,13 +973,18 @@ func (m *DecisionTreeRegressor) Predict(x [][]float64) ([]float64, error) {
 	if m.root == nil {
 		return nil, fmt.Errorf("classic: DecisionTreeRegressor.Predict before Fit")
 	}
-	out := make([]float64, len(x))
 	for i, row := range x {
 		if len(row) != m.nFeature {
 			return nil, fmt.Errorf("classic: row %d width %d, want %d", i, len(row), m.nFeature)
 		}
-		out[i] = m.root.predict(row).value
 	}
+	// Each row is an independent root-to-leaf walk of the immutable fitted tree (predict is
+	// pure), writing only out[i], so the row loop fans out over GOMAXPROCS bit-identically to
+	// the serial loop. Widths are pre-validated above so the parallel body is error-free.
+	out := make([]float64, len(x))
+	knnParallelRows(len(x), func(i int) {
+		out[i] = m.root.predict(x[i]).value
+	})
 	return out, nil
 }
 
