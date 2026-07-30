@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"math"
 	"regexp/syntax"
-	"sort"
+	"slices"
 	"strconv"
 )
 
@@ -261,7 +261,12 @@ func (g *RegexGuide) closure(raw []uint32) []uint32 {
 			// drop
 		}
 	}
-	sort.Slice(rest, func(i, j int) bool { return rest[i] < rest[j] })
+	// slices.Sort, not sort.Slice: the latter reaches its swap through reflectlite.Swapper and
+	// ALLOCATES on every call (PS6009), and this runs once per (state, token) pair explored — a
+	// few thousand times while an automaton warms up. The comparator was the IDENTITY on a
+	// []uint32, so the ordered generic needs no closure at all: same ascending order, no
+	// indirect call per comparison, no swapper.
+	slices.Sort(rest)
 	return rest
 }
 

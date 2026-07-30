@@ -3,7 +3,7 @@ package nlp
 import (
 	"fmt"
 	"math"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -273,7 +273,18 @@ func (g *GrammarGuide) internStacks(stacks []gStack) int {
 		keys[i] = stackKey(st)
 		order[i] = i
 	}
-	sort.Slice(order, func(a, b int) bool { return keys[order[a]] < keys[order[b]] })
+	// slices.SortFunc, not sort.Slice, for the reflect-swapper allocation PS6009 names; this
+	// runs once per (state, token) pair explored.
+	//
+	// THE COMPARATOR IS RE-DERIVED: sort.Slice passed POSITIONS in order, so the old body read
+	// keys[order[a]]; slices.SortFunc passes the ELEMENTS, so it is keys[x]. Transcribing the old
+	// expression would compile and sort by the wrong key.
+	//
+	// Stability is NOT required even though sort.Slice was unstable and this is too. stackKey is
+	// injective on stack contents, so two equal keys mean two identical stacks: reordering them
+	// changes neither the concatenated intern key (equal keys contribute equal text) nor the
+	// stored stacks (they are the same value). So any correct sort by key yields the same state.
+	slices.SortFunc(order, func(x, y int) int { return strings.Compare(keys[x], keys[y]) })
 	var sb strings.Builder
 	sorted := make([]gStack, len(stacks))
 	accept := false
