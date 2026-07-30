@@ -18,7 +18,7 @@ func gemmF32(A, B, C []float32, m, k, n int) {
 	// GATED ON m, because the copy is k*n and the work it serves is m*k*n: the pack only pays
 	// once enough row blocks reuse it. Below the gate the unpacked band runs, which is what
 	// shipped before this and is unchanged.
-	if m >= gemmPackMinRowsF32 && n >= 4 && k*n >= gemmPackMinWorkF32 {
+	if n >= 4 && k*n >= gemmPackMinWorkF32 && gemmPackBands(m, k, n, gemmPackTileBlocksF32) {
 		packP := getF64Raw((n >> 2) * k * 4)
 		pack := *packP
 		packBTiles4(B, pack, k, n)

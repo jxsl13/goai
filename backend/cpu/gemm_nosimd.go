@@ -2,7 +2,10 @@
 
 package cpu
 
-import "sync"
+import (
+	"runtime"
+	"sync"
+)
 
 // Scalar GEMM band kernels — the portable default. On amd64+GOEXPERIMENT=simd
 // gemm_simd.go replaces these with archsimd (AVX) twins that hold the identical
@@ -17,28 +20,46 @@ import "sync"
 // default — are shared by every non-amd64-simd build, including arm64+simd
 // (whose experiment only replaces the F32 matmul entry point, ADR-0026).
 
-// gemmPackMinRowsF32 / gemmPackMinRowsF64 are the row counts above which B is packed. The pack
-// costs one k*n copy and is reused by m/4 row blocks, so few rows means the copy is never amortized.
+// gemmPackTileBlocksF32 / gemmPackTileBlocksF64 are the number of 4-row TILE BLOCKS a single band
+// must get before packing B pays. The gate is expressed in blocks per band, not in rows, because
+// that is the quantity the mechanism actually turns on — and stating it in rows hardcodes this
+// machine's core count into the kernel.
 //
-// A SHARED GATE OF 32 WAS WRONG ON BOTH DTYPES, and only a row-axis sweep could show it: the square
-// sweeps that calibrated the work gates move m and n together, so every one of them had m in the
-// hundreds and none exercised the shape this gates. At k=n=512, forcing each arm:
+// parallelWork hands each worker ceil(m/workers) rows, and the packed kernel's tile consumes them
+// four at a time, so a band gets ceil(m/workers)/4 blocks. Below one block the tile never executes
+// at all and every row falls to the single-row remainder, which reads B directly — the pack is then
+// pure cost. Measured at k=n=512 on a 12-way host, forcing each arm, with blocks computed that way:
 //
-//	f32  m=24 +16.92%  m=32 +13.59%  m=48 +0.16%  m=64 +0.14%  m=96 -8.01%  m=192 -17.69%
-//	f64  m=32 +17.51%  m=64 +9.10%   m=96 +5.85%  m=192 +6.76%  m=256 -5.47%  m=512 -8.16%
+//	blocks 0 → f32 +13.59% (m=32)     blocks 1 → f32 +0.16% (m=48), +0.14% (m=64)
+//	blocks 2 → f32  -8.01% (m=96)     blocks 4 → f32 -17.69% (m=192)
+//	blocks 4 → f64  +6.76% (m=192)    blocks 5 → f64  -5.47% (m=256), -8.16% (m=512)
 //
-// So f32 turns over near 96 rows and f64 not until 256 — at the old gate of 32 both were paying
-// 13-18% for a pack neither could amortize. Decode- and attention-shaped matmuls are exactly this
-// shape: few rows against a wide, deep B.
+// So f32 needs 2 blocks and f64 5 — f64's pack moves twice the bytes for the same element count, so
+// it takes more reuse to amortize. On this host those work out to m>=96 and m>=240, which is what
+// the previous fixed constants encoded; expressed in blocks they now follow GOMAXPROCS instead of
+// assuming twelve of them.
 //
-// KNOWN LIMIT of these numbers: the row and work axes interact and only the k=n=512 slice was
-// swept. The f32 square case at n=64 (k*n=4096, m=64) measured -9.29% when packed, and the row gate
-// now declines it — a cheap pack at small k*n can amortize over fewer rows than an expensive one.
-// Capturing that needs a two-dimensional rule and more measurement than a single slice supports.
+// KNOWN LIMIT, unchanged: blocks and pack cost interact and only the k=n=512 slice was swept. The
+// f32 square case at n=64 gets 1 block yet measured -9.29% packed, because a 16KB pack amortizes on
+// reuse a 1MB pack cannot. This gate still declines it. A rule capturing both axes needs more
+// measurement than one slice supports.
+// Vars, not consts, so the sweeps in gemm_portable_bench_test.go and the parity tests can force
+// either arm without a rebuild.
 var (
-	gemmPackMinRowsF32 = 96
-	gemmPackMinRowsF64 = 256
+	gemmPackTileBlocksF32 = 2
+	gemmPackTileBlocksF64 = 5
 )
+
+// gemmPackBands reports whether each band will get at least minBlocks 4-row tile blocks, mirroring
+// parallelWork's own partitioning — including its serial branch, where the single band gets all m
+// rows and the block count is m/4 regardless of how many cores the machine has.
+func gemmPackBands(m, k, n, minBlocks int) bool {
+	w := runtime.GOMAXPROCS(0)
+	if w <= 1 || m*k*n < parThreshold {
+		w = 1
+	}
+	return ((m+w-1)/w)/4 >= minBlocks
+}
 
 // gemmPackMinWorkF32 / gemmPackMinWorkF64 are the B element counts above which packing pays.
 // BOTH dtypes need a gate and they need DIFFERENT ones, because packing is a cache fix and the two
@@ -370,7 +391,7 @@ func packBTiles4(B []float32, pack []float64, k, n int) {
 // directly: they pass a B whose shape is the kernel matrix, not a large operand, so they sit below
 // the gate anyway and there is no reason to route them through an extra decision.
 func gemmF64Rows(A, B, C []float64, m, k, n int) {
-	if m >= gemmPackMinRowsF64 && n >= 4 && k*n >= gemmPackMinWorkF64 {
+	if n >= 4 && k*n >= gemmPackMinWorkF64 && gemmPackBands(m, k, n, gemmPackTileBlocksF64) {
 		packP := getF64Raw((n >> 2) * k * 4)
 		pack := *packP
 		packBTiles4F64(B, pack, k, n)

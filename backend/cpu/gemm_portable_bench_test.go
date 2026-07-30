@@ -124,9 +124,9 @@ func BenchmarkGemmF32PortableRows(b *testing.B) {
 				rows int
 			}{{"unpacked", 1 << 30}, {"packed", 0}} {
 				b.Run(arm.name, func(b *testing.B) {
-					saved := gemmPackMinRowsF32
-					gemmPackMinRowsF32 = arm.rows
-					defer func() { gemmPackMinRowsF32 = saved }()
+					saved := gemmPackTileBlocksF32
+					gemmPackTileBlocksF32 = arm.rows
+					defer func() { gemmPackTileBlocksF32 = saved }()
 					b.ResetTimer()
 					for range b.N {
 						gemmF32(A, B, C, m, k, n)
@@ -158,9 +158,9 @@ func BenchmarkGemmF64PortableRows(b *testing.B) {
 				rows int
 			}{{"unpacked", 1 << 30}, {"packed", 0}} {
 				b.Run(arm.name, func(b *testing.B) {
-					saved := gemmPackMinRowsF64
-					gemmPackMinRowsF64 = arm.rows
-					defer func() { gemmPackMinRowsF64 = saved }()
+					saved := gemmPackTileBlocksF64
+					gemmPackTileBlocksF64 = arm.rows
+					defer func() { gemmPackTileBlocksF64 = saved }()
 					b.ResetTimer()
 					for range b.N {
 						gemmF64Rows(A, Bm, C, m, k, n)

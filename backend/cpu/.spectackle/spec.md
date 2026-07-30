@@ -27,3 +27,8 @@ Rationale: The f32 GEMM pack gate was set at 1<<19 elements when packing measure
 IF a gate reads more than one input and only one axis was swept to calibrate it, THEN the implementing agent SHALL sweep each axis the condition names before shipping, since a square sweep moves rows and columns together and can never exercise the row term.
 
 Rationale: The GEMM pack gate reads both m and k*n. Its work term was calibrated on square matrices, where m was always in the hundreds, so the row term went unmeasured and shipped at 32. A row sweep at k=n=512 later showed packing costing 13.59% for f32 and 17.51% for f64 at exactly that value, on the few-rows-wide-B shape decode and attention matmuls use.
+
+## TEST-GUARD-MUST-ASK-THE-KERNELS-QUESTION-001
+IF a coverage guard checks a subset of the conditions the code under test actually branches on, THEN the implementing agent SHALL make the guard call the same predicate the code calls, since a partial guard reports coverage the test does not have.
+
+Rationale: The portable GEMM golden guarded only the row gate while the kernel gated on rows AND a work threshold. Its geometries had k*n=72 against a 4096 threshold, so it had not reached the packed band since that threshold was introduced, and the guard reported it as covered throughout. Pointing the guard at the kernel predicate rejected the set immediately.
