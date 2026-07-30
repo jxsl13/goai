@@ -730,3 +730,8 @@ Rationale: A variadic-call check could not see five per-iteration allocations be
 WHEN a sound scan check leaves dozens of hits whose individual payoff is one small allocation, the implementing agent SHALL convert only the sites a benchmark reaches, in that order, and declare the queue exhausted for measurable value when those run out.
 
 Rationale: A check with perfect precision had 198 hits of which 148 were on no measured path. The first pass over its reachable sites gave six percent fewer allocations on two decode paths; the second gave one to three percent. The 119 that remain cannot be validated on this host, so further conversion is mechanical hygiene rather than optimization, and saying so prevents an unbounded sweep that looks like progress.
+
+## BENCH-SPREAD-DECIDES-WHAT-YOU-MAY-CONCLUDE-001
+WHEN a comparison reports no significant change, the measuring agent SHALL state the within-arm spread alongside it, because no-change on a one-percent-spread benchmark is a result while no-change on a fifty-percent-spread benchmark is an absence of resolution.
+
+Rationale: In one comparison three tight arms held one percent spread and genuinely showed no time change, while two long generation benchmarks in the same run held fifteen to fifty-three percent and their timing columns supported no conclusion at all. Both printed as insignificant. Quoting the second as evidence of no regression would have been unfounded.
