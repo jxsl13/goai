@@ -62,100 +62,114 @@ func NSABranches(q, k, v *tensor.Tensor, heads, blockSize, topN, window int, sca
 		}
 	}
 
-	scores := make([]float64, max(seq, nBlocks))
-	act := make([]int, 0, seq)  // active (unmasked) key indices, reused by attendMask
-	qrow := make([]float64, dk) // q_i[off:off+dk] hoisted per (head,query); all 3 branches re-read it
-	// Every buffer below used to be allocated once per (head, query): blockW, the
-	// importance slice, the selected-set map, and a capturing closure for each of the two
-	// attendMask calls. At seq 512 with 4 heads that was ~14.6k allocations for a single
-	// call. They are loop-invariant in SIZE, so they are allocated once and reset per query.
-	blockW := make([]float64, nBlocks)
-	imps := make([]blockImp, nBlocks)
-	selBlk := make([]bool, nBlocks) // set membership as a bitmap, not a map[int]bool
-	keepSlc := make([]bool, seq)    // per-key admission, precomputed instead of a callback
-	keepWin := make([]bool, seq)
-	for h := range heads {
-		off := h * dk
-		for i := range seq {
-			for d := range dk {
-				qrow[d] = q.AtF64(i, off+d)
-			}
-			// ---- cmp: softmax over complete blocks strictly before the query.
-			nPast := i / blockSize // complete blocks before i
-			if nPast > 0 {
-				m := math.Inf(-1)
-				for b := range nPast {
-					var s float64
-					for d := range dk {
-						s += qrow[d] * poolK[b*dm+off+d]
-					}
-					s *= scale
-					scores[b] = s
-					if s > m {
-						m = s
-					}
-				}
-				var sum float64
-				for b := range nPast {
-					scores[b] = math.Exp(scores[b] - m)
-					sum += scores[b]
-				}
-				for b := range nPast {
-					scores[b] /= sum // normalize once, not per channel d
-				}
+	// PARALLEL over heads, WITH every per-query buffer owned by the worker. The two halves of
+	// this came from different branches and compose: head h writes only the disjoint output
+	// columns [off:off+dk] of cmp/slc/win and reads its own slice of q/k/v plus the shared
+	// read-only poolK/poolV, with no cross-head reduction — so a partition runs each head's exact
+	// serial computation and is bit-identical whatever the internal softmax or sort does. Gated on
+	// heads·seq²·dk so a tiny problem stays serial.
+	//
+	// The buffers had to move INSIDE the closure rather than stay at function scope. Hoisted out
+	// of the query loop they removed about 14.6k allocations per call at seq 512 with 4 heads, but
+	// shared across workers they would race; allocated per worker they keep that win (one set per
+	// worker instead of one set per query) and the fan-out becomes legal. Keeping them at function
+	// scope and parallelizing anyway is the bug this arrangement exists to avoid.
+	parallelRows(heads, seq*seq*dk, func(hlo, hhi int) {
+		scores := make([]float64, max(seq, nBlocks))
+		act := make([]int, 0, seq)  // active (unmasked) key indices, reused by attendMask
+		qrow := make([]float64, dk) // q_i[off:off+dk] hoisted per (head,query); all 3 branches re-read it
+		// Every buffer below used to be allocated once per (head, query): blockW, the
+		// importance slice, the selected-set map, and a capturing closure for each of the two
+		// attendMask calls. At seq 512 with 4 heads that was ~14.6k allocations for a single
+		// call. They are loop-invariant in SIZE, so they are allocated once and reset per query.
+		blockW := make([]float64, nBlocks)
+		imps := make([]blockImp, nBlocks)
+		selBlk := make([]bool, nBlocks) // set membership as a bitmap, not a map[int]bool
+		keepSlc := make([]bool, seq)    // per-key admission, precomputed instead of a callback
+		keepWin := make([]bool, seq)
+		for h := hlo; h < hhi; h++ {
+			off := h * dk
+			for i := range seq {
 				for d := range dk {
-					var o float64
+					qrow[d] = q.AtF64(i, off+d)
+				}
+				// ---- cmp: softmax over complete blocks strictly before the query.
+				nPast := i / blockSize // complete blocks before i
+				if nPast > 0 {
+					m := math.Inf(-1)
 					for b := range nPast {
-						o += scores[b] * poolV[b*dm+off+d]
+						var s float64
+						for d := range dk {
+							s += qrow[d] * poolK[b*dm+off+d]
+						}
+						s *= scale
+						scores[b] = s
+						if s > m {
+							m = s
+						}
 					}
-					cmp.SetF64(o, i, off+d)
+					var sum float64
+					for b := range nPast {
+						scores[b] = math.Exp(scores[b] - m)
+						sum += scores[b]
+					}
+					for b := range nPast {
+						scores[b] /= sum // normalize once, not per channel d
+					}
+					for d := range dk {
+						var o float64
+						for b := range nPast {
+							o += scores[b] * poolV[b*dm+off+d]
+						}
+						cmp.SetF64(o, i, off+d)
+					}
+					for b := range nPast {
+						blockW[b] = scores[b] // already normalized
+					}
 				}
+				// ---- slc: top-n blocks by cmp importance, own block always in.
+				//
+				// The comparator is TOTAL — weight descending, then block index ascending.
+				// Ranking on weight alone leaves tied blocks in whatever order the sort
+				// happens to produce, which then decides which blocks slc attends; identical
+				// pooled rows tie exactly, so this was reachable, not theoretical.
+				cand := imps[:nPast]
 				for b := range nPast {
-					blockW[b] = scores[b] // already normalized
+					cand[b] = blockImp{b, blockW[b]}
 				}
-			}
-			// ---- slc: top-n blocks by cmp importance, own block always in.
-			//
-			// The comparator is TOTAL — weight descending, then block index ascending.
-			// Ranking on weight alone leaves tied blocks in whatever order the sort
-			// happens to produce, which then decides which blocks slc attends; identical
-			// pooled rows tie exactly, so this was reachable, not theoretical.
-			cand := imps[:nPast]
-			for b := range nPast {
-				cand[b] = blockImp{b, blockW[b]}
-			}
-			slices.SortFunc(cand, func(x, y blockImp) int {
-				switch {
-				case x.w > y.w:
-					return -1
-				case x.w < y.w:
-					return 1
+				slices.SortFunc(cand, func(x, y blockImp) int {
+					switch {
+					case x.w > y.w:
+						return -1
+					case x.w < y.w:
+						return 1
+					}
+					return x.block - y.block
+				})
+				clear(selBlk)
+				own := i / blockSize
+				selBlk[own] = true
+				nSel := 1
+				for gi := 0; gi < len(cand) && nSel < topN; gi++ {
+					if b := cand[gi].block; !selBlk[b] {
+						selBlk[b] = true
+						nSel++
+					}
 				}
-				return x.block - y.block
-			})
-			clear(selBlk)
-			own := i / blockSize
-			selBlk[own] = true
-			nSel := 1
-			for gi := 0; gi < len(cand) && nSel < topN; gi++ {
-				if b := cand[gi].block; !selBlk[b] {
-					selBlk[b] = true
-					nSel++
+				// Materialize both admission masks instead of passing closures. This drops two
+				// closure allocations per query AND an indirect call per key inside the score
+				// loop, which is what actually dominated there — the shared-operand reload the
+				// scan flagged is second order behind a call that cannot inline.
+				for j := 0; j <= i; j++ {
+					keepSlc[j] = selBlk[j/blockSize]
+					keepWin[j] = i-j < window
 				}
+				attendMask(qrow, k, v, slc, i, off, dk, scale, scores, act, keepSlc)
+				// ---- win: last `window` keys.
+				attendMask(qrow, k, v, win, i, off, dk, scale, scores, act, keepWin)
 			}
-			// Materialize both admission masks instead of passing closures. This drops two
-			// closure allocations per query AND an indirect call per key inside the score
-			// loop, which is what actually dominated there — the shared-operand reload the
-			// scan flagged is second order behind a call that cannot inline.
-			for j := 0; j <= i; j++ {
-				keepSlc[j] = selBlk[j/blockSize]
-				keepWin[j] = i-j < window
-			}
-			attendMask(qrow, k, v, slc, i, off, dk, scale, scores, act, keepSlc)
-			// ---- win: last `window` keys.
-			attendMask(qrow, k, v, win, i, off, dk, scale, scores, act, keepWin)
 		}
-	}
+	})
 	return cmp, slc, win, nil
 }
 
