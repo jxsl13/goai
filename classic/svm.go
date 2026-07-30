@@ -663,4 +663,9 @@ func svcParallelColumn(n, per int, body func(lo, hi int)) {
 
 // svcParThreshold is the total work below which splitting a kernel column costs more than it
 // saves — the same 1<<15 crossover the other classic parallel helpers use.
-const svcParThreshold = 1 << 15
+//
+// A var, not a const, so TestSVCParThresholdArmsAgree can force each arm and diff them. The
+// partition is supposed to change no value, and nothing pinned that (PS6023): the correctness
+// tests here use small fixtures that stay serial, so the fanned-out path was reached only by
+// whatever happened to be large enough.
+var svcParThreshold = 1 << 15
