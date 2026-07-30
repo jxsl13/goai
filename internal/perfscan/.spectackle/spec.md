@@ -55,3 +55,8 @@ Rationale: The bare two-deep-index predicate matches 225 sites repo-wide (105 at
 WHEN choosing which perfscan finding to spend time on, the implementing agent SHALL intersect the findings with a line-level profile first and work the overlap, treating the check list as a candidate generator rather than a ranking.
 
 Rationale: In one sweep of five packages, 436 of 439 findings sat on lines carrying no measurable profile time, and the three that did were in files locked by open PRs. Every win this session came from the profile first and the check second; the tool is hotness-blind by design (PERF-HOTNESS-IS-NOT-SYNTAX-001). Caveat for whoever repeats this: pprof -lines -top reports only the hottest lines, so the overlap is understated, not zero.
+
+## PERF-ROW-COUNT-DECIDES-STRIP-MINE-001
+IF a contiguous-input accumulation loop is judged against PS1007 case (b) refusal to strip-mine, THEN the implementing agent SHALL count how many output rows the loop already accumulates together first, since four rows turn a strip-mine into a register tile that won 35 to 50 percent where one row lost.
+
+Rationale: PS1007 case (b) was measured on a single-row rank-1 update (linalg QR) where strip-mining decayed to nothing by n=768. The portable GEMM bands hold four output rows, so strip-mining by 4 builds a 4x4 register tile: f32 -34.8% and f64 -50.5% geomean, growing with size. The separating quantity is arithmetic intensity, 16 FMAs per 8 loads versus 4 per 5.
