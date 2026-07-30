@@ -1482,3 +1482,24 @@ Time parity in both, ranges overlapping.
 THE BYTE DROP WAS NOT THE PREDICTED EFFECT and is the larger half of the value. The change targeted allocation COUNT; bytes fell 3.67MB because 256 separate per-row allocations each round up to a size class and waste the remainder, while one array of r*c rounds once. Per-row size-class waste is invisible in both a count profile and a byte profile - it only shows up in the B/op delta of an A/B - which is a third thing worth measuring on any change that consolidates many small allocations into one.
 
 DELIBERATELY NOT DONE, and the reason is a contract rather than effort: returning VIEWS into the tensor storage would remove the remaining bytes, which is where the footprint actually is. rows2D has 30 call sites and that change makes every one of them alias its input. In the mixer the rows are only sliced into read-only views, so it would probably be safe there - but probably, across 30 sites, is not a basis for changing a helper's aliasing contract. The alternative is auditing each site for mutation, which is a task rather than an edit. Recorded in the code at the call site so the next reader inherits the analysis instead of redoing it.
+
+## R-01KYRA0Y9PE81B8VQGQ6PQCXND The alloc_space sweep found a second target immediately: GBM subsample buffer, up to -55% of a fit's bytes
+kind: research
+state: draft
+created: 2026-07-30
+
+CONSUMES PROC-PROFILE-BOTH-ALLOC-AXES-001 one iteration after casting it. Measured on darwin/arm64 M2 Pro, go1.26.5, three interleaved rounds; byte and allocation counts deterministic.
+
+MEASURED:
+  GBMHist_exact_20k  20.25MB -> 12.22MB  -39.7%
+  GBMHist_hist_20k   15.16MB ->  7.13MB  -53.0%
+  GBMFit              5.95MB ->  2.71MB  -54.5%
+Time parity everywhere, ranges overlapping - a footprint change, not a throughput one. The mechanism confirms to three digits: 50 rounds x 20000 ints x 8 bytes is 8MB and the observed drop is 8.03MB on both 20k benchmarks.
+
+THE SWEEP PAID OFF IMMEDIATELY, which is the point worth recording. Running alloc_space over four benchmarks in my lanes took one command each and produced two actionable sites - nlp rows2D last iteration and GBM subsampleIdx this one - both invisible in the alloc_objects profiles that had been run repeatedly over the same code. subsampleIdx is 31% of a fit's bytes and about 50 of its 6700 allocations, so a count profile ranks it near the bottom while a byte profile ranks it second.
+
+SAFETY WAS CHECKED IN BOTH GROWERS, not the one the benchmark exercises. histBuilder.grow copies idx into idxbuf because its partition works in place; gbmBuilder.fit only reads idx to filter its presorted columns. GBMHist_exact_20k runs the exact grower only, so checking that one and shipping would have left the histogram path unverified for a change that alters both.
+
+RNG DETERMINISM IS THE NON-OBVIOUS PART of the bit-identity argument. Reusing the buffer is only safe because idx is refilled with the identity permutation before each shuffle - the same draws must act on the same starting order. A version that skipped the refill would consume identical draws and select a different sample, and the golden tests would catch it, but the reason is worth stating rather than leaving to the test.
+
+A FALSE TARGET REJECTED IN THE SAME PROFILE. newGBMBuilder is the largest byte site at 53%, and it is a ONE-TIME presort per fit rather than per round - already hoisted outside the boosting loop. The benchmark constructs a fresh model each iteration, which makes a one-time cost look recurring in a profile aggregated over iterations. There is no reuse to exploit; the fix would have been across calls that do not exist. Reading the call site before believing the profile is what separated it from the real target sitting just below it.
