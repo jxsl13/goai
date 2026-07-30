@@ -142,14 +142,28 @@ func (m *MixtureOfDepths) Combine(ctx *backend.Context, x, processed, weights *t
 // as ascending token positions (ties resolve to the lower position).
 func topKIndices(col *tensor.Tensor, k int) []int {
 	seq := col.Shape()[0]
+	// Hoist the score column once (was re-dispatched via col.AtF64 on EVERY comparison,
+	// O(seq·log seq) interface hops) so the comparator is a plain slice read.
+	scores := make([]float64, seq)
+	for i := range scores {
+		scores[i] = col.AtF64(i, 0)
+	}
 	pos := make([]int, seq)
 	for i := range pos {
 		pos[i] = i
 	}
-	sort.SliceStable(pos, func(a, b int) bool { return col.AtF64(pos[a], 0) > col.AtF64(pos[b], 0) })
-	sel := pos[:k]
+	// Unstable pdqsort with an EXPLICIT strict-total-order comparator (score desc, ties to
+	// the lower position) — identical order to the previous SliceStable (which, from the
+	// pos=0..seq-1 identity, resolved equal scores by ascending position), but pdqsort is
+	// ~2-5× faster than SliceStable's symMerge. Bit-identical selection.
+	sort.Slice(pos, func(a, b int) bool {
+		if sa, sb := scores[pos[a]], scores[pos[b]]; sa != sb {
+			return sa > sb
+		}
+		return pos[a] < pos[b]
+	})
 	out := make([]int, k)
-	copy(out, sel)
+	copy(out, pos[:k])
 	sort.Ints(out)
 	return out
 }
