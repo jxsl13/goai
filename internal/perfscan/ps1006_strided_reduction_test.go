@@ -20,6 +20,28 @@ func mix(os, vs, a []float64, dh, hdh, jmax int) {
 	}
 }
 
+// The attention P·V mold: the strided index carries a constant head offset
+// (vs[j*dm + off + d]) AND the inner reduction loop is guarded by an `if` — both of
+// which the original two-term/direct-child detector missed. Shipped: nsa/moba P·V
+// (#594/#595), spectral-norm/WKV. Must fire exactly once.
+func TestDetectStridedInnerReduction_OffsetAndGuarded(t *testing.T) {
+	src := `package p
+func attend(os, vs, scores []float64, dk, dm, off, i int, sum float64) {
+	for d := 0; d < dk; d++ {
+		var o float64
+		if sum > 0 {
+			for j := 0; j <= i; j++ {
+				o += scores[j] * vs[j*dm+off+d]
+			}
+		}
+		os[i*dm+off+d] = o
+	}
+}`
+	if got := countCat(scanSrc(t, src))["strided-inner-reduction"]; got != 1 {
+		t.Fatalf("want 1 strided-inner-reduction for the offset+guarded P·V shape, got %d", got)
+	}
+}
+
 // The contiguous form (inner var is the ADDITIVE part) must NOT fire, nor a strided
 // read with no reduction.
 func TestDetectStridedInnerReduction_Silent(t *testing.T) {
