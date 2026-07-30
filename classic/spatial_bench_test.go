@@ -51,16 +51,86 @@ func BenchmarkKNNPredict(b *testing.B) {
 	}
 }
 
-// BenchmarkDBSCANFit times a DBSCAN fit at n=4000/d=20 (eps=2, minSamples=5) —
-// the §V22 A/B probe for the eps-neighbourhood search. Run:
+// BenchmarkDBSCANFit times a DBSCAN fit at n=4000/d=20, minSamples=5. Run:
 //
 //	go test ./classic/ -run x -bench BenchmarkDBSCANFit -benchmem
+//
+// eps IS THE WHOLE BENCHMARK, and the original single eps=2 arm was degenerate.
+// spatialData puts blob centres at N(0,9) per dim and points at centre+N(0,1) per dim, so
+// for two points in the same blob d² = 2·χ²₂₀ with mean 40. eps=2 demands d² ≤ 4, i.e.
+// χ²₂₀ ≤ 2, probability ~1e-7 — across ~5.3M same-blob pairs that is well under one
+// expected pair. Measured: eps=2 yields 0 clusters, 0 core points and all 4000 points
+// noise, so every neighbourhood is the singleton {i} and the cluster-expansion flood fill
+// at dbscan.go:213 never runs a single iteration. That arm times a ball-tree build plus
+// 4000 empty radius queries and NOTHING else — it cannot A/B the labeling phase, and it
+// cannot A/B neighbour-list handling either, because there are no neighbours.
+//
+// So the arms are explicit about which regime they cover:
+//
+//	eps2 — kept for continuity with previously recorded numbers, and as the empty-result
+//	       edge case. Labeled degenerate so nobody reads it as covering expansion.
+//	eps4 — the load-bearing arm: 3 clusters, 2339 core points, 675 noise, so core, border
+//	       and noise points all occur, the flood fill runs, and neighbour lists are long
+//	       enough for their allocation to be visible.
+//
+// Both hold minSamples=5 and the fixed spatialData seed, so the arms differ only in eps.
 func BenchmarkDBSCANFit(b *testing.B) {
 	X, _ := spatialData(4000, 20)
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		if _, err := NewDBSCAN(WithDBSCANEps(2), WithDBSCANMinSamples(5)).Fit(X); err != nil {
-			b.Fatal(err)
+	for _, eps := range []float64{2, 4} {
+		b.Run(dbscanBenchName(eps), func(b *testing.B) {
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if _, err := NewDBSCAN(WithDBSCANEps(eps), WithDBSCANMinSamples(5)).Fit(X); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func dbscanBenchName(eps float64) string {
+	switch eps {
+	case 2:
+		return "eps2_degenerate_all_noise"
+	case 4:
+		return "eps4"
+	}
+	return "eps"
+}
+
+// TestDBSCANBenchRegimes pins the two benchmark arms' cluster structure. A benchmark whose
+// input silently drifts into a degenerate regime measures the wrong thing while still
+// looking healthy — which is exactly what happened to the original eps=2 arm — so the
+// regime each arm claims to cover is asserted rather than described in a comment.
+func TestDBSCANBenchRegimes(t *testing.T) {
+	X, _ := spatialData(4000, 20)
+	for _, tc := range []struct {
+		eps                   float64
+		clusters, core, noise int
+	}{
+		{2, 0, 0, 4000},
+		{4, 3, 2339, 675},
+	} {
+		m := NewDBSCAN(WithDBSCANEps(tc.eps), WithDBSCANMinSamples(5))
+		labels, err := m.Fit(X)
+		if err != nil {
+			t.Fatal(err)
+		}
+		noise := 0
+		for _, l := range labels {
+			if l == DBSCANLabelNoise {
+				noise++
+			}
+		}
+		if got := m.NumClusters(); got != tc.clusters {
+			t.Errorf("eps=%g: %d clusters, want %d", tc.eps, got, tc.clusters)
+		}
+		if got := len(m.CoreSampleIndices()); got != tc.core {
+			t.Errorf("eps=%g: %d core points, want %d", tc.eps, got, tc.core)
+		}
+		if noise != tc.noise {
+			t.Errorf("eps=%g: %d noise points, want %d", tc.eps, noise, tc.noise)
 		}
 	}
 }

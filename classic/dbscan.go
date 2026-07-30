@@ -156,29 +156,44 @@ func (m *DBSCAN) Fit(x [][]float64) ([]int, error) {
 	tree := buildBallTree(x, ballMetricOfDBSCAN(m.cfg.metric))
 	neighbors := make([][]int, n)
 	m.core = make([]bool, n)
-	// Neighbour search is ~94% of Fit and each query is independent: tree.radius
-	// reads the immutable tree and allocates its own (sorted) result via the nil
-	// buffer, and the brute-force fallback only reads x — so distributing the
-	// outer loop over goroutines writes each neighbors[i]/core[i] exactly once
-	// and is bit-identical to the serial scan (§V1 exact-label parity holds).
+	// Neighbour search dominates Fit and each query is independent: tree.radius reads the
+	// immutable tree, and the brute-force fallback only reads x — so distributing the outer
+	// loop over goroutines writes each neighbors[i]/core[i] exactly once and is
+	// bit-identical to the serial scan (§V1 exact-label parity holds). (The share is
+	// regime-dependent: at the degenerate eps of the original single benchmark arm there
+	// are no neighbours at all and the tree BUILD is most of Fit. See BenchmarkDBSCANFit.)
 	ng := runtime.GOMAXPROCS(0)
 	if ng > n {
 		ng = n
 	}
 	neigh := func(lo, hi int) {
+		// One reuse buffer per GOROUTINE, declared inside the body that each goroutine
+		// runs — a buffer declared outside this closure would be captured by all ng
+		// goroutines and raced on. radius() opens with dst = dst[:0], so a passed buffer
+		// is truncated rather than appended to and needs no reset here; the brute-force
+		// branch truncates explicitly.
+		var buf []int
 		for i := lo; i < hi; i++ {
-			var nb []int
 			if tree != nil {
-				nb = tree.radius(x[i], m.cfg.eps, nil) // nil ⇒ a fresh slice per query
+				buf = tree.radius(x[i], m.cfg.eps, buf)
 			} else {
+				buf = buf[:0]
 				for j := range n {
 					if m.dist(x[i], x[j], eps2) {
-						nb = append(nb, j)
+						buf = append(buf, j)
 					}
 				}
 			}
-			neighbors[i] = nb
-			m.core[i] = len(nb) >= m.cfg.minSamples
+			core := len(buf) >= m.cfg.minSamples
+			m.core[i] = core
+			// Only CORE neighbourhoods are ever read: the flood fill below dereferences
+			// neighbors[cur] solely under `if m.core[cur]`, and nothing else in the file
+			// touches the slice. Retaining a non-core list allocates a result no code
+			// path will read, so it is skipped — which also means Fit holds only the core
+			// lists after it returns instead of all n.
+			if core {
+				neighbors[i] = append(make([]int, 0, len(buf)), buf...)
+			}
 		}
 	}
 	if ng <= 1 {
