@@ -89,6 +89,7 @@ func buildBallTree(pts [][]float64, metric ballMetric) *ballTree {
 // DBSCAN's squared comparison — so neighbours the tree scores match the brute
 // paths exactly.
 func (bt *ballTree) dist(a, b []float64) float64 {
+	b = b[:len(a)] // discharges the per-iteration bounds check on b[i]; see distSq
 	switch bt.metric {
 	case ballL1:
 		var s float64
@@ -113,6 +114,12 @@ func (bt *ballTree) dist(a, b []float64) float64 {
 // results (per query) — sqrt(Σd²) is bit-identical to dist's, so the returned neighbours and
 // distances are unchanged. For L1 both are identities.
 func (bt *ballTree) distSq(a, b []float64) float64 {
+	// Ranging over a while indexing b leaves prove no relation between i and len(b), so
+	// every iteration carried a live bounds check on b[i] (confirmed with
+	// -d=ssa/check_bce/debug=1). Clamping b to a's length once discharges it. Callers pass
+	// two rows of the same width, so this cannot truncate; a shorter b panicked on the index
+	// before and panics on this slice now, one iteration earlier.
+	b = b[:len(a)]
 	if bt.metric == ballL1 {
 		var s float64
 		for i := range a {
@@ -420,6 +427,7 @@ func (bt *ballTree) searchRadius(n *ballNode, query []float64, eps, eps2 float64
 // brute-force DBSCAN scan uses: squared distance ≤ eps² for L2, |·| sum ≤ eps
 // for L1.
 func (bt *ballTree) within(a, b []float64, eps, eps2 float64) bool {
+	b = b[:len(a)] // discharges the per-iteration bounds check on b[i]; see distSq
 	// Early-exit: the accumulator is monotonically non-decreasing (each term is ≥0),
 	// so once it exceeds the threshold the point is out and the remaining dimensions
 	// can only push it further out. Bailing returns the SAME boolean the full sum
