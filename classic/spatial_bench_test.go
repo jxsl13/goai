@@ -1,6 +1,7 @@
 package classic
 
 import (
+	"fmt"
 	"math/rand/v2"
 	"sort"
 	"testing"
@@ -82,6 +83,32 @@ func BenchmarkDBSCANFit(b *testing.B) {
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				if _, err := NewDBSCAN(WithDBSCANEps(eps), WithDBSCANMinSamples(5)).Fit(X); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+// BenchmarkDBSCANFitManhattan drives the ball tree's L1 leaf test, which no benchmark reached.
+//
+// That gap had a consequence: when the L2 arm's per-dimension bail-out was moved to every fourth
+// dimension, the L1 arm next to it was left alone precisely because a change there could not have
+// been validated. PS3008 reported it as a candidate; this is what lets the candidate be measured
+// instead of argued.
+//
+// eps is larger than the Euclidean sweep's because a Manhattan radius sums coordinates rather than
+// squaring them, so the same geometry needs a bigger radius to produce comparable neighbourhoods.
+func BenchmarkDBSCANFitManhattan(b *testing.B) {
+	X, _ := spatialData(4000, 20)
+	for _, eps := range []float64{8, 16} {
+		b.Run(fmt.Sprintf("eps%g", eps), func(b *testing.B) {
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				_, err := NewDBSCAN(WithDBSCANEps(eps), WithDBSCANMinSamples(5),
+					WithDBSCANMetric(DBSCANManhattan)).Fit(X)
+				if err != nil {
 					b.Fatal(err)
 				}
 			}

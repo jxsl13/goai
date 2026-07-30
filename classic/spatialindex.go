@@ -499,14 +499,29 @@ func (bt *ballTree) within(a, b []float64, eps, eps2 float64) bool {
 	// the tail dims of the far points that dominate a leaf test.
 	switch bt.metric {
 	case ballL1:
+		// Same treatment as the L2 arm below, and for the same reason: |x| is non-negative, so the
+		// accumulator only grows and testing it every fourth dimension returns the same answer.
+		//
+		// This arm was left alone when L2 was converted, because no benchmark drove it and a change
+		// that cannot be measured does not ship. BenchmarkDBSCANFitManhattan was added to close
+		// that, and it earns the conversion: eps=8 -28.78% (p=0.000, n=8), eps=16 -16.03%
+		// (p=0.000, n=10), allocations unchanged. The win is larger here than in the L2 arm because
+		// math.Abs is cheaper than a multiply, so the branch was an even bigger share of the work.
 		var s float64
-		for i := range a {
+		i := 0
+		for ; i+4 <= len(a); i += 4 {
 			s += math.Abs(a[i] - b[i])
+			s += math.Abs(a[i+1] - b[i+1])
+			s += math.Abs(a[i+2] - b[i+2])
+			s += math.Abs(a[i+3] - b[i+3])
 			if s > eps {
 				return false
 			}
 		}
-		return true
+		for ; i < len(a); i++ {
+			s += math.Abs(a[i] - b[i])
+		}
+		return !(s > eps) // not s <= eps — see the NaN note in the L2 arm
 	default: // ballL2
 		// The bail-out is checked every FOUR dimensions rather than every one. A profile of the
 		// DBSCAN fit put that single branch at 450ms against 30ms for the subtraction and square
