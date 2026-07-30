@@ -85,35 +85,35 @@ func (m *DeepSeekV2) DecodeStep(ctx *backend.Context, cache *DeepSeekV2Cache, to
 		}
 
 		// Query path: q = q_b_proj(q_a_layernorm(q_a_proj(h))).
-		cQ, err := exec1(ctx, backend.OpMatMul, nil, xb, b.WqA)
+		cQ, err := exec2(ctx, backend.OpMatMul, nil, xb, b.WqA)
 		if err != nil {
 			return nil, err
 		}
 		if cQ, err = b.QANorm.Forward(ctx, cQ); err != nil {
 			return nil, err
 		}
-		q, err := exec1(ctx, backend.OpMatMul, nil, cQ, b.WqB) // [1, heads·qkHead]
+		q, err := exec2(ctx, backend.OpMatMul, nil, cQ, b.WqB) // [1, heads·qkHead]
 		if err != nil {
 			return nil, err
 		}
 
 		// KV path: compressed = kv_a_proj_with_mqa(h) → [kv_latent | k_pe]; k_pe is shared.
-		compressed, err := exec1(ctx, backend.OpMatMul, nil, xb, b.WkvA)
+		compressed, err := exec2(ctx, backend.OpMatMul, nil, xb, b.WkvA)
 		if err != nil {
 			return nil, err
 		}
-		kvLatent, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: 0, End: cfg.KVLoraRank}, compressed)
+		kvLatent, err := exec1a(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: 0, End: cfg.KVLoraRank}, compressed)
 		if err != nil {
 			return nil, err
 		}
-		kPe, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: cfg.KVLoraRank, End: cfg.KVLoraRank + cfg.QKRope}, compressed)
+		kPe, err := exec1a(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: cfg.KVLoraRank, End: cfg.KVLoraRank + cfg.QKRope}, compressed)
 		if err != nil {
 			return nil, err
 		}
 		if kvLatent, err = b.KvANorm.Forward(ctx, kvLatent); err != nil {
 			return nil, err
 		}
-		kv, err := exec1(ctx, backend.OpMatMul, nil, kvLatent, b.WkvB) // [1, heads·kvHead]
+		kv, err := exec2(ctx, backend.OpMatMul, nil, kvLatent, b.WkvB) // [1, heads·kvHead]
 		if err != nil {
 			return nil, err
 		}
@@ -125,15 +125,15 @@ func (m *DeepSeekV2) DecodeStep(ctx *backend.Context, cache *DeepSeekV2Cache, to
 
 		heads := make([]*tensor.Tensor, cfg.Heads)
 		for h := range cfg.Heads {
-			qh, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: h * qkHead, End: (h + 1) * qkHead}, q)
+			qh, err := exec1a(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: h * qkHead, End: (h + 1) * qkHead}, q)
 			if err != nil {
 				return nil, err
 			}
-			qNope, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: 0, End: cfg.QKNope}, qh)
+			qNope, err := exec1a(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: 0, End: cfg.QKNope}, qh)
 			if err != nil {
 				return nil, err
 			}
-			qPe, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: cfg.QKNope, End: qkHead}, qh)
+			qPe, err := exec1a(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: cfg.QKNope, End: qkHead}, qh)
 			if err != nil {
 				return nil, err
 			}
@@ -141,24 +141,24 @@ func (m *DeepSeekV2) DecodeStep(ctx *backend.Context, cache *DeepSeekV2Cache, to
 			if err != nil {
 				return nil, err
 			}
-			queryH, err := exec1(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 1}, qNope, qPeRot) // [1, qkHead]
+			queryH, err := exec2(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 1}, qNope, qPeRot) // [1, qkHead]
 			if err != nil {
 				return nil, err
 			}
 
-			kvh, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: h * kvHead, End: (h + 1) * kvHead}, kv)
+			kvh, err := exec1a(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: h * kvHead, End: (h + 1) * kvHead}, kv)
 			if err != nil {
 				return nil, err
 			}
-			kNope, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: 0, End: cfg.QKNope}, kvh)
+			kNope, err := exec1a(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: 0, End: cfg.QKNope}, kvh)
 			if err != nil {
 				return nil, err
 			}
-			valueH, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: cfg.QKNope, End: kvHead}, kvh)
+			valueH, err := exec1a(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: cfg.QKNope, End: kvHead}, kvh)
 			if err != nil {
 				return nil, err
 			}
-			keyH, err := exec1(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 1}, kNope, kPeRot) // [1, qkHead]
+			keyH, err := exec2(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 1}, kNope, kPeRot) // [1, qkHead]
 			if err != nil {
 				return nil, err
 			}
@@ -199,7 +199,7 @@ func (m *DeepSeekV2) DecodeStep(ctx *backend.Context, cache *DeepSeekV2Cache, to
 		if err != nil {
 			return nil, err
 		}
-		a, err := exec1(ctx, backend.OpMatMul, nil, concat, b.Wo)
+		a, err := exec2(ctx, backend.OpMatMul, nil, concat, b.Wo)
 		if err != nil {
 			return nil, err
 		}
