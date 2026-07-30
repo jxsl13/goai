@@ -1,6 +1,7 @@
 package linalg
 
 import (
+	"github.com/jxsl13/goai/internal/parallel"
 	"runtime"
 	"sync"
 )
@@ -47,4 +48,24 @@ func solveCols(cols, per, scratch int, body func(lo, hi int, buf []float64)) {
 		}(lo, hi)
 	}
 	wg.Wait()
+}
+
+// factorParThreshold is the trailing-submatrix element count below which splitting an
+// elimination step costs more than it saves. A factorization runs n steps whose work shrinks
+// quadratically, so most of the later steps fall under this and stay serial.
+const factorParThreshold = 1 << 16
+
+// parallelRowsIf runs body over disjoint ranges of [0,n) when want is true, and inline
+// otherwise. Callers decide the predicate because the work per step varies.
+//
+// It routes through the SHARED BOUNDED POOL rather than spawning. A factorization calls this
+// once per elimination step — 768 of them at n=768 — and spawning a worker set per step took
+// Inverse from 823 allocations to 17463, a 21x regression on the resource axis that a 1.74x
+// wall-clock win does not excuse. The pool's workers already exist.
+func parallelRowsIf(want bool, n int, body func(lo, hi int)) {
+	if !want || n < 2 || parallel.Workers() <= 1 {
+		body(0, n)
+		return
+	}
+	parallel.Rows(n, body)
 }

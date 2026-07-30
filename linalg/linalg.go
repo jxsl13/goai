@@ -11,6 +11,7 @@ package linalg
 
 import (
 	"fmt"
+	"github.com/jxsl13/goai/internal/parallel"
 	"math"
 
 	"github.com/jxsl13/goai/tensor"
@@ -57,13 +58,47 @@ func Factor(a *tensor.Tensor) (*LU, error) {
 			piv[k], piv[p] = piv[p], piv[k]
 			sign = -sign
 		}
-		for i := k + 1; i < n; i++ {
-			mult := m[i][k] / m[k][k]
-			m[i][k] = mult // store the L multiplier
-			for j := k + 1; j < n; j++ {
-				m[i][j] -= mult * m[k][j]
+		// PARALLEL over the rows of the trailing submatrix. Within elimination step k every row
+		// i > k reads only the pivot row m[k], which this step does not modify, and writes only
+		// its own m[i] — so the rows are independent and the partition changes no value. Each
+		// element m[i][j] still receives exactly one update per k, with k ascending, which is the
+		// only ordering that matters.
+		//
+		// The pivot search and the row swap above stay serial: they are O(n) against the O(n-k)²
+		// update, and the swap has to be complete before any row is eliminated.
+		//
+		// Factor became the bottleneck only after the solve phase was parallelized — it is 18% of
+		// the CPU profile but serial, which at the ~3x average parallelism of the rest made it
+		// about 60% of the wall clock for Inverse at n=768.
+		pivRow := m[k]
+		pivD := m[k][k]
+		rows := n - k - 1
+		// The serial branch is written out rather than routed through the closure. A
+		// factorization runs n elimination steps and most of them fall under the threshold, so
+		// passing a closure every step cost one heap allocation per step — 64 extra allocations
+		// at n=64, which is the whole factorization's worth of garbage for no benefit.
+		if rows*rows < factorParThreshold || parallel.Workers() <= 1 {
+			for i := k + 1; i < n; i++ {
+				mult := m[i][k] / pivD
+				m[i][k] = mult // store the L multiplier
+				ri := m[i]
+				for j := k + 1; j < n; j++ {
+					ri[j] -= mult * pivRow[j]
+				}
 			}
+			continue
 		}
+		parallelRowsIf(true, rows, func(lo, hi int) {
+			for t := lo; t < hi; t++ {
+				i := k + 1 + t
+				mult := m[i][k] / pivD
+				m[i][k] = mult // store the L multiplier
+				ri := m[i]
+				for j := k + 1; j < n; j++ {
+					ri[j] -= mult * pivRow[j]
+				}
+			}
+		})
 	}
 	return &LU{lu: m, piv: piv, sign: sign, n: n}, nil
 }
