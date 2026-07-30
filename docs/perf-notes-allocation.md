@@ -29,15 +29,18 @@ qualified as a result.
 - **`nlp.MLMMaskExcluding`, `Watermark.BiasLogits`.** API-inherent: they return
   freshly allocated slices.
 - **`tensor.heapAllocator.Alloc` (89.6% of `tensor`, 51.5% of `classic`).** Every
-  backend op allocates its output tensor. Pooling them is a question about
-  ownership and lifetime across the backend API, not a local fix.
+  backend op allocates its output tensor, and every op's INPUTS may outlive the
+  call. This was investigated to a conclusion rather than left as a vague
+  ownership question — see "Why tensors cannot be pooled locally" below.
 - **`tensor.(*Tensor).Permute` / `.Slice`.** Already optimal: `copyShapeStrides`
   packs shape and strides into a single `make([]int, 2*n)` with capped views. What
   remains is the `&Tensor{}` view struct itself, ~1.3% of the package's
   allocations; folding it into one allocation means embedding a fixed-size dim
   array in a foundational type, which is not worth 1.3%.
 - **`classic.SoftmaxRegression.PredictProba`'s input tensor (1.39GB).**
-  `tensor.New` per call. Same ownership question as the allocator entry above.
+  `tensor.New` per call, and dead immediately after the matmul reads it — the
+  most tempting pooling candidate in the repo. Still declined; the reason is
+  below and it is not caution.
 - **`classic/tree.go` (`buildIdx`, `DecisionTreeClassifier.Predict`).** Not this
   branch's lane.
 
@@ -81,3 +84,31 @@ above and produced nothing actionable.
 The pattern across all four axes is that the remaining allocation mass in this
 repo is output-tensor construction at the backend boundary. That is one design
 decision, not a set of local fixes.
+
+## Why tensors cannot be pooled locally
+
+`backend.Execute` is the single dispatch choke-point, and its contract includes:
+when a Recorder is attached it hands the op to autograd for taping.
+`Tape.Record` stores the input and output slices **directly** into the node it
+appends — it does not copy them. So **any tensor passed to `Execute` may be
+retained indefinitely**, and reusing one after the call would silently corrupt a
+later backward pass. That is the mechanism, and it rules out pooling op inputs
+or outputs at the call site as a general technique.
+
+There is one exception, and it is checkable: `backend.NewContext()` returns a
+context with a nil Recorder, so a computation that builds its own context can
+never tape. `SoftmaxRegression.PredictProba` is exactly that shape — it creates
+its own context, so its 1.39GB input tensor is provably dead after the matmul.
+
+It is still not fixed here, for a different reason: `tensor` has no wrapping
+constructor. `FromFloat64` copies into a fresh tensor, and `New`/`NewOn` always
+allocate, so reusing storage means holding a pooled `*Tensor` and reshaping it
+per call through the view API. That is a workaround in `classic` reaching into
+`tensor`'s representation, and it would break the moment someone passed a
+recording context into that function.
+
+**The clean fix is a pooling-aware constructor in `tensor`** — an arena or a
+`NewFrom(shape, data)` that wraps rather than copies, with the retention
+contract stated on `Execute`. That is a design decision for the tensor package,
+not something to approximate from a caller. Recording it here so the next reader
+starts from the mechanism instead of rediscovering the tape.

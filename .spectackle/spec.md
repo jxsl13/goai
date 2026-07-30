@@ -890,3 +890,8 @@ Rationale: go build -gcflags=-m reports a fully constant composite literal as es
 IF a scan-rule suppression tests len(src) to decide code already took the advice, THEN the implementing agent SHALL require a non-zero compared bound, since len(x) > 0 is an emptiness guard and not a threshold.
 
 Rationale: An emptiness guard fronts the only path, not a large-input fallback. Read as a threshold it made PS3007 silent on the one genuine site in the repo, while every zero-expecting suppression test stayed green.
+
+## PERF-EXECUTE-MAY-RETAIN-ITS-TENSORS-001
+IF a tensor passed to backend.Execute is about to be pooled or reused after the call, THEN the implementing agent SHALL treat it as retained unless the context provably has no Recorder, since Tape.Record stores the input and output slices directly rather than copying them.
+
+Rationale: Execute hands the op to autograd for taping when a Recorder is attached, and Tape.Record appends a node holding the input and output slices themselves. Reusing such a tensor corrupts a later backward pass. backend.NewContext() leaves Recorder nil, so a computation that builds its own context is the checkable exception — but tensor has no wrapping constructor, so exploiting it from a caller means reshaping a pooled tensor through the view API and breaks if a recording context is ever passed in.
