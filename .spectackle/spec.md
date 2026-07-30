@@ -650,3 +650,8 @@ Rationale: A broken stash left identical code in both arms of a vision A/B; it r
 WHEN an A/B swaps arms with git stash and the change adds a new file, the measuring agent SHALL verify the base arm by grepping for pre-change text before timing it, since stash refuses untracked paths and leaves the new code in place.
 
 Rationale: git stash push with an untracked pathspec fails, the subsequent pop reports no stash entries, and both loop iterations then time the new code. The run completed with plausible numbers and no visible error in the benchstat output. A one-line assertion that the base arm actually contains the old text turns a silent wrong answer into a loud failure.
+
+## BENCH-REFERENCE-MIRRORS-SHAPE-001
+WHEN a bit-identity test writes a reference implementation of the code under test, the test author SHALL transcribe the pre-change expression verbatim — same operand forms, same variable-versus-constant status — rather than rewriting it for readability.
+
+Rationale: A softUpdate parity test computed its reference through Unravel and AtF64 into a separate slice with the blend factor declared constant, and failed by exactly 1 ulp while the change under test was innocent. Against a reference written in the implementation own flat-slice form with the factor as a variable, zero of 131841 elements differed. FMA contraction depends on the expression shape, so a readable rewrite measures the compiler instead of the change. Const folding was ruled out by direct comparison.
