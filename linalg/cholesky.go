@@ -93,12 +93,30 @@ func CholSolve(a, b *tensor.Tensor) (*tensor.Tensor, error) {
 				}
 				y[i] = s / l[i][i]
 			}
+			// Back-substitution accumulates in the CONTIGUOUS scratch, not through out — the same
+			// transform LU.Solve already carries, and for the same reason: reading out[k*cols+c]
+			// with c fixed jumps a whole output row per step, 4 KB at n=cols=512, touching a fresh
+			// cache line to use eight bytes of it. A line-level profile put the equivalent
+			// statement in LU.Solve at 32% of BenchmarkInverse. The values read are the x[k] this
+			// same loop wrote on earlier iterations, so they can live in y: x[i] overwrites y[i]
+			// only AFTER y[i] has been read into s, and the forward pass's y[k] for k > i was
+			// already consumed at step k, so nothing still needed is clobbered.
+			//
+			// Bit-identical: same operands, same descending-i order, same ascending-k accumulation
+			// into s, same final divide. Only where the intermediate lives changes.
+			//
+			// The l[k][i] stream is still column-strided — l is row-major, so stepping k with i
+			// fixed walks a column — and that is a SEPARATE transform (transpose L once) left
+			// alone here so this one can be measured on its own.
 			for i := n - 1; i >= 0; i-- { // back: Lᵀ·x = y (Lᵀ[i,k] = L[k,i])
 				s := y[i]
 				for k := i + 1; k < n; k++ {
-					s -= l[k][i] * out[k*cols+c]
+					s -= l[k][i] * y[k]
 				}
-				out[i*cols+c] = s / l[i][i]
+				y[i] = s / l[i][i]
+			}
+			for i := range n {
+				out[i*cols+c] = y[i]
 			}
 		}
 	})
