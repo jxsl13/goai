@@ -6531,6 +6531,25 @@ var binopBackendOp = map[token.Token][2]string{
 // The remedy is NOT the ikj rewrite PS4008 asks for. Here the dependency chain is already
 // broken by having one accumulator per output; what is wasted is the repeated load of the
 // SHARED operand. Different defect, different fix, so it is a separate check.
+
+// KNOWN FALSE NEGATIVES, recorded because "PS6010 reports nothing here" must not be read as
+// "there is no load to amortize". linalg.Lstsq's right-hand-side column loop is the measured
+// case: jamming it four wide was worth -13.9% to -29.5% across the size sweep, and this check
+// was silent on it. It fails three of the predicates above at once — the body calls AtF64, it
+// carries two accumulators rather than one, and neither is stored to an index varying with the
+// column. Those filters are what hold precision at 95.7%, so they stay.
+//
+// One of the three rationales does NOT survive that site, though, and the message repeats it:
+// that a body containing a call is bottlenecked on the call, so the reload is already free. In
+// Lstsq the call is a per-element AtF64 that a line-level profile puts at 30ms of 13.58s — 0.2%
+// — while the reloaded operands were the top three lines at 61%. The exclusion is a precision
+// tradeoff that loses real sites, not a statement about where the time goes.
+//
+// The shape this check cannot see is the wider one: an INDEPENDENT outer dimension whose whole
+// body re-reads a large shared read-only array, where the fix replicates the body rather than
+// one accumulator. No detector is proposed for it — see PERF-NO-CHECK-FOR-ROW-HOIST-001 and
+// PERF-NO-CHECK-FOR-JAM-REMAINDER-001 for the two nearest predicates that were counted and
+// declined on population.
 func outputInvariantReloadFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 	if fn.Body == nil {
 		return nil
