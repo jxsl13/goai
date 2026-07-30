@@ -243,9 +243,13 @@ func squareN(a *tensor.Tensor) (int, error) {
 
 // toMatrix copies a into a fresh n×n [][]float64 (so the factorization never mutates the input).
 func toMatrix(a *tensor.Tensor, n int) [][]float64 {
+	// One slab for the n rows, as in cholFactor: n allocations become one. Every element is
+	// overwritten immediately below, so the zeroing a slab and a make() share is irrelevant here
+	// and the copy is bit-identical either way (PS2008).
 	m := make([][]float64, n)
+	slab := make([]float64, n*n)
 	for i := range n {
-		m[i] = make([]float64, n)
+		m[i] = slab[i*n : i*n+n : i*n+n]
 		for j := range n {
 			m[i][j] = a.AtF64(i, j)
 		}

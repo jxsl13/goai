@@ -110,9 +110,17 @@ func CholSolve(a, b *tensor.Tensor) (*tensor.Tensor, error) {
 // cholFactor computes the lower-triangular Cholesky factor L (as [][]float64) of the n×n SPD matrix a,
 // erroring if a is not positive definite.
 func cholFactor(a *tensor.Tensor, n int) ([][]float64, error) {
+	// ONE slab for the n rows of L, not one make() per row: at n=768 that is 768 separate
+	// allocations per factorization replaced by one. Rows are disjoint capped views, they are
+	// written in place rather than replaced, and nothing appends across a boundary. Bit-identical
+	// — make() zeroes and so does a fresh slab (PS2008).
+	//
+	// Allocation count only: the two prior measurements of this transform (QR reflectors, GMM
+	// responsibilities) both moved the wall clock not at all, so no latency claim is made here.
 	l := make([][]float64, n)
+	lslab := make([]float64, n*n)
 	for i := range n {
-		l[i] = make([]float64, n)
+		l[i] = lslab[i*n : i*n+n : i*n+n]
 	}
 	// One contiguous view of a for the whole factorization: the column update below reads
 	// a[i,j] for every i>j, so the naive walk costs n²/2 interface dispatches per factorization
