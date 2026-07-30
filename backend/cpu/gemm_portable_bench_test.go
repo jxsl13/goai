@@ -42,3 +42,37 @@ func BenchmarkGemmF32Portable(b *testing.B) {
 		})
 	}
 }
+
+// BenchmarkGemmF64Portable is the f64 twin, driven the way gemm.go drives it for a large matmul
+// (parallelWork over row bands). The f64 band kernel is also reached by the conv forward and
+// backward im2col paths, so it is not only the F64 matmul that pays for it.
+//
+// C accumulates across iterations rather than being cleared, which is what this kernel's contract
+// says it does; the values stay far from overflow at these sizes and the arithmetic cost does not
+// depend on them.
+func BenchmarkGemmF64Portable(b *testing.B) {
+	for _, sz := range []int{256, 512, 1024} {
+		b.Run(fmt.Sprintf("%d", sz), func(b *testing.B) {
+			m, k, n := sz, sz, sz
+			rng := rand.New(rand.NewSource(7))
+			A := make([]float64, m*k)
+			Bm := make([]float64, k*n)
+			C := make([]float64, m*n)
+			for i := range A {
+				A[i] = rng.Float64()*2 - 1
+			}
+			for i := range Bm {
+				Bm[i] = rng.Float64()*2 - 1
+			}
+			b.ResetTimer()
+			for range b.N {
+				parallelWork(m, k*n, func(loRow, hiRow int) {
+					gemmF64Band(A, Bm, C, loRow, hiRow, k, n)
+				})
+			}
+			b.StopTimer()
+			flops := 2 * float64(m) * float64(k) * float64(n)
+			b.ReportMetric(flops/(b.Elapsed().Seconds()/float64(b.N))/1e9, "GFLOP/s")
+		})
+	}
+}
