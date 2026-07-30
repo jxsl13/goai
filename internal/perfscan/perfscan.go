@@ -5627,6 +5627,25 @@ func outputInvariantReloadFindings(fset *token.FileSet, fn *ast.FuncDecl) []find
 		}
 		// Already blocked: a stride > 1 means someone has done this. `range n` and `i++`
 		// are the unblocked forms.
+		// A body that calls something the compiler will not fold away is bottlenecked on that
+		// call, not on the reloaded operand, so blocking the loop buys nothing.
+		//
+		// COUNTED against all 65 hits before shipping (PROC-CHECK-PREDICATE-FIRST-001).
+		// Removes 19, of which 18 are false positives — 13 are sites this repository itself
+		// labels a generic fallback for exotic or mixed dtypes, reaching every element through
+		// AtF64. Precision 69.2% -> 95.7% at 97.8% recall. The single genuine casualty is
+		// backend/ref/mha_masked_backward.go, where math.Inf and math.IsInf sit in a mask
+		// bail-out branch and never in the dot product.
+		//
+		// CONVERSIONS AND BUILTINS ARE NOT CALLS, and this is the whole reason the obvious
+		// version of this predicate is wrong. Go models float64(x) as an *ast.CallExpr, so
+		// "the body contains a call" removes 28 and loses TEN genuine sites — and seven of
+		// those are the f32-widening twin of an f64 hit the same predicate keeps, the same
+		// kernel in the same file differing only by float64(...) around each load. math.Inf
+		// likewise compiles to a constant load and no call at all.
+		if loopCallsNonTrivial(outBody) {
+			return true
+		}
 		if f, isFor := n.(*ast.ForStmt); isFor && stridesByMoreThanOne(f.Post) {
 			return true
 		}
@@ -5695,6 +5714,41 @@ func outputInvariantReloadFindings(fset *token.FileSet, fn *ast.FuncDecl) []find
 
 // stridesByMoreThanOne reports whether a for-post is `i += c` with c > 1 — the signature
 // of a loop that is already register-blocked.
+// loopCallsNonTrivial reports whether body calls something the compiler will not fold away.
+//
+// A predeclared type conversion and a builtin are deliberately NOT such calls. Go's AST models
+// float64(x) as an *ast.CallExpr, and treating that as a call was measured to lose ten genuine
+// sites out of forty-five — seven of them the f32-widening twin of an f64 site the same test
+// keeps. len and cap likewise compile to a field load, not a call.
+func loopCallsNonTrivial(body ast.Node) bool {
+	trivial := map[string]bool{
+		"float64": true, "float32": true, "int": true, "int8": true, "int16": true,
+		"int32": true, "int64": true, "uint": true, "uint8": true, "uint16": true,
+		"uint32": true, "uint64": true, "uintptr": true, "byte": true, "rune": true,
+		"bool": true, "string": true, "complex64": true, "complex128": true,
+		"len": true, "cap": true, "make": true, "new": true, "append": true,
+		"copy": true, "delete": true, "min": true, "max": true, "clear": true,
+		"panic": true, "print": true, "println": true, "recover": true,
+		"complex": true, "real": true, "imag": true,
+	}
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if id, isID := ast.Unparen(call.Fun).(*ast.Ident); isID && trivial[id.Name] {
+			return true // a conversion or a builtin — keep descending into its arguments
+		}
+		found = true
+		return false
+	})
+	return found
+}
+
 func stridesByMoreThanOne(post ast.Stmt) bool {
 	as, ok := post.(*ast.AssignStmt)
 	if !ok || as.Tok != token.ADD_ASSIGN || len(as.Rhs) != 1 {

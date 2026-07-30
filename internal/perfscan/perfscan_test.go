@@ -5498,3 +5498,101 @@ func f(ps []float64, den float64, out []float64, gt float64) {
 		t.Fatalf("want 1 when the quotient is multiplied (a float shape), got %d", got)
 	}
 }
+
+// The shape PS6010 exists for: a Gram-style contraction whose accumulator re-reads an operand
+// that does not vary with the output index.
+func TestDetectPS6010_ContractionStillFires(t *testing.T) {
+	src := `package p
+func f(a []float64, b [][]float64, out []float64, n int) {
+	for j := 0; j < n; j++ {
+		var s float64
+		for k := 0; k < n; k++ {
+			s += b[k][j] * a[k]
+		}
+		out[j] = s
+	}
+}`
+	if got := countCat(scanSrc(t, src))["output-invariant-operand-reload"]; got != 1 {
+		t.Fatalf("want 1 output-invariant-operand-reload, got %d", got)
+	}
+}
+
+// THE FLOOR THAT DECIDES THIS PREDICATE. A conversion is an *ast.CallExpr in Go's AST, so
+// "the body contains a call" would silence this — and this is the f32-widening TWIN of the
+// test above, the same kernel differing only by float64(...) around each load. Counted across
+// the check's 65 hits, that naive form removed 28 and lost TEN genuine sites, seven of them
+// twins of an f64 hit the same predicate kept.
+func TestDetectPS6010_ConversionIsNotACall(t *testing.T) {
+	src := `package p
+func f(a []float32, b [][]float32, out []float32, n int) {
+	for j := 0; j < n; j++ {
+		var s float64
+		for k := 0; k < n; k++ {
+			s += float64(b[k][j]) * float64(a[k])
+		}
+		out[j] = float32(s)
+	}
+}`
+	if got := countCat(scanSrc(t, src))["output-invariant-operand-reload"]; got != 1 {
+		t.Fatalf("want 1 for the f32-widening twin — a conversion is not a call, got %d", got)
+	}
+}
+
+// FLOOR: len is a field load, not a call.
+func TestDetectPS6010_BuiltinIsNotACall(t *testing.T) {
+	src := `package p
+func f(a []float64, b [][]float64, out []float64) {
+	for j := 0; j < len(out); j++ {
+		var s float64
+		for k := 0; k < len(a); k++ {
+			s += b[k][j] * a[k]
+		}
+		out[j] = s
+	}
+}`
+	if got := countCat(scanSrc(t, src))["output-invariant-operand-reload"]; got != 1 {
+		t.Fatalf("want 1 when the body uses only builtins, got %d", got)
+	}
+}
+
+// FLOOR: a real call the compiler will not fold away means the loop is bottlenecked there, not
+// on the reloaded operand. 13 of the 19 sites this removes are labelled in-tree as generic
+// fallbacks for exotic dtypes, reaching every element through an accessor method.
+//
+// The body keeps its INDEX-witnessed shared operand deliberately. A first version used only
+// accessor calls and passed vacuously — the detector can witness a shared operand solely
+// through an *ast.IndexExpr, so with no index there was nothing to report either way, and
+// removing the exclusion left the test green. This form fires without the exclusion and is
+// silent with it, which is what makes it a floor.
+func TestDetectPS6010_SilentOnRealCall(t *testing.T) {
+	src := `package p
+func f(a []float64, b [][]float64, out []float64, n int) {
+	for j := 0; j < n; j++ {
+		var s float64
+		for k := 0; k < n; k++ {
+			s += b[k][j] * a[k] * weight(k)
+		}
+		out[j] = s
+	}
+}`
+	if got := countCat(scanSrc(t, src))["output-invariant-operand-reload"]; got != 0 {
+		t.Fatalf("want 0 when the body makes a real call, got %d", got)
+	}
+}
+
+// FLOOR: a transcendental in the inner loop dominates it.
+func TestDetectPS6010_SilentOnTranscendental(t *testing.T) {
+	src := `package p
+func f(a []float64, b [][]float64, out []float64, n int) {
+	for j := 0; j < n; j++ {
+		var s float64
+		for k := 0; k < n; k++ {
+			s += math.Exp(b[k][j]) * a[k]
+		}
+		out[j] = s
+	}
+}`
+	if got := countCat(scanSrc(t, src))["output-invariant-operand-reload"]; got != 0 {
+		t.Fatalf("want 0 when the inner loop calls a transcendental, got %d", got)
+	}
+}
