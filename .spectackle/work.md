@@ -1318,3 +1318,29 @@ BIT-IDENTITY IS PINNED ON THE FITTED MODEL, not on a column, and the reason gene
 A SIZE BELOW THE THRESHOLD LOOKED LIKE A REGRESSION. The n=1000 arm showed 1.39ms in one baseline round against 1.93-2.01ms for the new arm - a 1.4x apparent regression. Both arms run IDENTICAL SERIAL CODE at that size: d=20 puts the work at 20000 against the 32768 threshold. A panic probe confirmed n=1000 never enters the parallel path and n=4000 always does. That is a structural answer in one command, against re-running the benchmark until the noise settles - and it is the third distinct way this session that a benchmark number has misled (phantom regression from one sample, inverted sign from a bimodal min-of-N, and now a spread on a code path the change does not reach).
 
 THE SWEEP IS NOW EXHAUSTED FOR classic. Both 0.97-0.99x paths are fixed. The remaining ranking is ForestFit 7.93x, KNNPredict 5.87x, DBSCANFit 5.67x, GMMFitFull 3.51x, GBMHist_exact 2.79x, GBMFit 1.73x, GBMHist_hist 1.53x - all genuinely parallel, and the two GBM figures were separately confirmed NOT to be over-parallelization (R-01KYR494K5ESB). Applying the same sweep to another package is the cheapest next move; it costs one command per benchmark and needs no code reading.
+
+## R-01KYR5ZS7RF7HTDA18JVHTR9EN linalg solve phase up to 7.87x: the sweep found an entirely serial package, and the blocker was a hoist I had made myself
+kind: research
+state: draft
+created: 2026-07-30
+
+Second application of the GOMAXPROCS sweep, and the largest win of the session. Measured on darwin/arm64 M2 Pro, go1.26.5, three interleaved rounds, all ranges disjoint.
+
+THE SWEEP FOUND A WHOLE PACKAGE. Applied to linalg and rl, it showed linalg at 1.00-1.10x from one core to twelve on EVERY benchmark - LUSolve, Inverse, CholSolve, Lstsq, SVDPCA - while holding the largest absolute numbers in my lanes: LstsqMat/768 at 1.3s, Inverse/768 676ms, CholSolveMat/768 629ms. One command per benchmark located that; no code reading and no profiling.
+
+MEASURED:
+  LUSolve_768x768   549-564ms  ->  70- 76ms   7.87x  (pure solve, Factor hoisted out)
+  CholSolveMat/768  629-657ms  -> 172-177ms   3.66x
+  Inverse/768       676-686ms  -> 197-221ms   3.43x
+  LstsqMat/768     1325-1350ms -> 702-722ms   1.89x
+  Inverse/64          704us    ->   362us     1.94x
+  CholSolveMat/64     545us    ->   280us     1.95x
+The spread across these is Amdahl, not effort: LUSolve is highest because its benchmark hoists the factorization out, while the others include a sequential factorization whose share bounds them.
+
+THE BLOCKER WAS A HOIST I MADE MYSELF, which is the finding worth carrying. An earlier commit in this same session moved the forward-substitution buffer out of the column loop to cut cols allocations per call - a real, measured allocation win at the time - and in doing so coupled every column to every other, foreclosing a 7.87x. Per-worker scratch restores independence and keeps the allocation win. This is the third instance of the same structural story after GMM yScratch4 and yScratch: A PER-CALL TEMPORARY SHARED ACROSS ITERATIONS FORECLOSES PARALLELISM, AND THE COST APPEARS NOWHERE NEAR THE BUFFER. The generalization is uncomfortable: allocation-reduction and parallelizability pull in opposite directions on scratch buffers, so hoisting one out of a loop should be paired with asking whether that loop could otherwise fan out.
+
+BIT-IDENTITY was free here and worth noting why: column c writes only out[i*cols+c], reads only its own scratch, and its substitution order is untouched - no accumulation crosses columns. The tolerance-0 goldens written for these three functions many iterations ago held unchanged, which is the payoff for having written them then.
+
+A SMALL-SIZE FALSE REGRESSION, the fourth distinct benchmark-reading failure this session. LUSolve_128x1 reported a 2.09x regression at benchtime=5x - 115 microseconds of total measurement on a 20us benchmark. At 20000x it is 20.1us against 19.4us with overlapping ranges. The pattern across all four: phantom regression from one sample, inverted sign from a bimodal min-of-N, spread on a path the change does not reach, and now insufficient total measurement time on a fast benchmark.
+
+STILL OPEN, from the same sweep: rl DQNLearn and PPORollout are SLOWER at 12 cores than at 1 (71.4us vs 50.2us, and 1.03ms vs 0.74ms). That is the opposite of everything else found so far and deserves its own investigation - but PROC-PROFILE-PARALLEL-CONDVAR-001 and the GBM rejection say to establish it by wall-clock first, which the sweep has now done.
