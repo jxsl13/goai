@@ -391,7 +391,26 @@ func rows2D(t *tensor.Tensor) [][]float64 {
 			copy(row, src[i*c:(i+1)*c])
 			out[i] = row
 		}
+	case tensor.F32:
+		// Every quantized model reaches this: activations are f32, so the accessor arm below was
+		// walking r*c elements through an interface dispatch plus a flat-offset recompute for a
+		// widening the compiler does in one instruction. Verified reached rather than assumed — a
+		// panic here fires under both QuantMamba2Prefill benchmarks and not under the f64
+		// Mamba2Prefill, which takes the F64 arm above.
+		//
+		// Bit-identical: AtF64 on an f32 tensor IS float64(value), an exact widening.
+		src := tc.Storage().F32()
+		for i := range r {
+			row := buf[i*c : (i+1)*c : (i+1)*c]
+			s32 := src[i*c : (i+1)*c]
+			for j := range c {
+				row[j] = float64(s32[j])
+			}
+			out[i] = row
+		}
 	default:
+		// F16/BF16 and anything else keep the accessor: their storage is u16 and needs a real
+		// conversion, not a widening, so there is no equivalent one-liner here.
 		for i := range r {
 			row := buf[i*c : (i+1)*c : (i+1)*c]
 			for j := range c {
