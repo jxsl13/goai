@@ -25,6 +25,17 @@ import "math"
 // it already did before, and the more of it it is about to repeat, the stronger the
 // discouragement.
 
+// dryBreakerScanMax is the breaker-set size up to which applyDRY tests membership by scanning the
+// set directly instead of hashing it into a map.
+//
+// Chosen by measurement, not by feel. BenchmarkApplyDRYBreakerSets, forced onto each arm, puts the
+// crossover between 8 and 16 breakers on an M2 Pro: at 8 the scan wins (62.7µs vs 64.7µs), at 16 it
+// has already lost (68.0µs vs 65.4µs), and by 64 it loses badly (97.7µs vs 66.3µs). 8 is therefore
+// the last size measured to favor the scan. Those absolute numbers are larger than
+// BenchmarkApplyDRY's because that sweep uses breakers absent from the window, which both denies
+// the scan an early exit and lets the suffix loop run to full depth.
+const dryBreakerScanMax = 8
+
 // applyDRY subtracts the DRY penalty from logits in place, scanning the last
 // s.DRYRange tokens of history (0 = all). O(window²) worst case — windows are
 // bounded by DRYRange in practice.
@@ -44,18 +55,34 @@ func (s *Sampler) applyDRY(logits []float64, history []int) {
 	if base <= 0 {
 		base = 1.75
 	}
-	breaker := map[int]bool{}
-	for _, b := range s.DRYBreakers {
-		breaker[b] = true
-	}
 	L := len(window)
-	// Precompute breaker membership for each window position ONCE (L map probes)
-	// so the O(L²) suffix scan below indexes a dense []bool instead of hashing the
-	// breaker map in its innermost loop (was L² map lookups). Bit-identical:
-	// brk[j] == breaker[window[j]] by construction.
+	// Precompute breaker membership for each window position ONCE so the O(L²) suffix scan below
+	// indexes a dense []bool instead of testing membership in its innermost loop (was L² lookups).
+	//
+	// The set is scanned DIRECTLY rather than hashed into a map first. That prepass still cost L
+	// map probes, and they profiled at 57% of this function's own time — DRYBreakers holds a
+	// handful of token ids in practice (the reference implementation's defaults are newline,
+	// colon, quote, asterisk), so L scans over a slice the compiler keeps in registers beat L
+	// hashes. The map is retained for large breaker sets, where O(L·B) would lose instead.
+	// Bit-identical either way: brk[j] is set exactly when window[j] appears in DRYBreakers.
 	brk := make([]bool, L)
-	for j, t := range window {
-		brk[j] = breaker[t]
+	if len(s.DRYBreakers) <= dryBreakerScanMax {
+		for j, t := range window {
+			for _, b := range s.DRYBreakers {
+				if t == b {
+					brk[j] = true
+					break
+				}
+			}
+		}
+	} else {
+		breaker := make(map[int]bool, len(s.DRYBreakers))
+		for _, b := range s.DRYBreakers {
+			breaker[b] = true
+		}
+		for j, t := range window {
+			brk[j] = breaker[t]
+		}
 	}
 	// For each earlier position i: k = longest common suffix of window[:i] and
 	// window[:L] not crossing a breaker. Continuing with window[i] would extend
