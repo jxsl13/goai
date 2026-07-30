@@ -715,3 +715,8 @@ Rationale: An eigensolver survey estimated bounds-check removal at 1.03 to 1.10 
 WHEN a scan check accumulates dozens of hits without any being acted on, the implementing agent SHALL classify every hit and report the false-positive fraction before treating the check as a work queue.
 
 Rationale: One check reached 110 hits and an audit found ZERO matched the shape its own message described: 57 were layer stacks, 35 were per-head or per-expert fan-outs. Its six genuine instances were all suppressed by another guard, so it had never once reported the class it was built for. A high hit count reads as high yield and can mean the opposite.
+
+## PROC-RECOUNT-AFTER-FILTERING-001
+WHEN a second precision fix is proposed for a check whose hit list has already been filtered, the implementing agent SHALL recount the second predicate against the SURVIVORS, not against the original population.
+
+Rationale: An audit put a guard's blind spot at 36 of 110 hit functions, which read as a substantial second win. After a trip-count filter cut the check to 26, only 4 survivors carried any fused-path signal and only 1 carried the tight one. The two filters overlapped almost completely, so the second fix was worth a single hit at real recall cost rather than the 36 the pre-filter count implied.
