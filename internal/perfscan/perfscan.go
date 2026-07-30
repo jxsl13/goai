@@ -187,6 +187,7 @@ var checks = []check{
 	{"PS1006", "strided-inner-reduction", "a reduction whose INNER loop var is the high-stride (multiplied) part of a flat index ARR[inner*stride + outer] while the OUTER loop var is the contiguous (additive) part — the inner loop strides ARR by `stride` every step (cache-thrashing). Interchange to inner-outer/outer-inner so ARR is walked contiguously; per output element the reduction stays in the same order, so it is bit-identical. Shipped: MLA value-mix (cpu 1.13x / ref 1.27x), spectral-norm power-iter 2.57x (#592). WIN SCALES WITH `stride`×working-set: big when it EXCEEDS L2 (spectral-norm 512²), ~noise when it stays L1-resident — rank candidates by the strided dim's size. When the strided access sits inside a FUSED per-column O(seq²) scan that can't be interchanged (the outer var `c` is fixed per whole scan, e.g. an RWKV/attention recurrence), the remedy is GATHER/SCATTER: copy column c into contiguous scratch once (O(seq) strided), scan the scratch, scatter grads back once — same bit-exact remedy, shipped WKV backward 2.2-2.9x", false},
 	{"PS1007", "output-row-restreamed", "an inner loop that accumulates into a loop-INVARIANT output row — OUT[d] += f(outer)*IN[outer*stride+d] — so all of OUT is loaded and stored once per OUTER step instead of once in total. TWO remedies, and WHICH ONE depends on whether IN is already contiguous in the inner var; both are bit-identical when OUT enters zeroed, since each element still sums the outer var ascending over the same terms with the same association. (a) IN is NOT contiguous in d (the d-strided gather, e.g. a sparse P·V reading IN[key*stride+d]): strip-mine the d loop by 4 and hold four partial sums in registers with the outer loop INNERMOST. Measured on the sparse P·V against the axpy form: MoBAAttention 57.20ms->46.07ms (1.24x), DSAAttention_seq1024 53.14ms->48.89ms (1.09x). (b) IN IS already contiguous in d (a row-major rank-1 update, IN[i*n+d] read as a row slice): do NOT strip-mine — that trades one contiguous pass over the whole submatrix for n/4 strided passes, and the measurement shows its gain DECAYING with the outer trip count (LstsqMat -2.56% at n=64, -1.92% at 256, -0.52% at 512, indistinguishable from base at 768). Instead unroll the OUTER loop by 2 and emit SEPARATE accumulating adds (`OUT[d] += v0*r0[d]` then `OUT[d] += v1*r1[d]`), so OUT[d] stays in a register across the pair while both input rows stay contiguous: -2.31% to -3.16% at every size, geomean -2.69% (linalg QR, shipped). Case (b) was found by measuring case (a)'s advice on a contiguous site and watching it decay. Also the MIRROR of PS1006, and interchange is NEVER the remedy here — the inner var is already the contiguous part. RANKING for case (b) is NOT about cache residency, and an earlier version of this text got that wrong: the loop visits outer*|OUT| elements and does 3 memory ops per visit (load IN, load OUT, store OUT), which an unroll by U cuts to 1+2/U — 2.0 at U=2, 1.5 at U=4 — so the saving is a fixed fraction of the loop's own traffic whether OUT is L1-resident or not. Both shipped sites confirm it: linalg QR unrolled by 2 with a 6 KB L1-resident accumulator, and nlp SnapKV unrolled by 4 with a 57 KB one. What actually decides the payoff is the loop's SHARE of runtime and the unroll factor the outer trip count allows: QR's accumulate is one of several phases in Lstsq and gave geomean -2.69%, while SnapKV's aggregate dominates its function and gave -21.08% at U=4 (-17.6% at U=2, so the third and fourth rows earned their registers). Rank by share-of-runtime x achievable U, not by whether OUT fits in cache", false},
 	{"PS1009", "unconverted-dtype-arm", "a per-element accessor walk sitting in one clause of a Dtype() switch whose SIBLING clause already takes typed storage — a fast path that covers some dtypes and leaves the rest on interface dispatch. PS1001 CANNOT REPORT THIS, structurally: it suppresses on hasFlat, which is satisfied by the sibling arm, so a helper that is fast for f64 and slow for everything else reads as already optimized. Which arm is hot is a workload fact, not a syntax one — nlp rows2D had an f64 copy arm and an accessor default, and every QUANTIZED model went through the default because activations are f32. Adding an f32 arm measured geomean -6.46% on the whole QuantMamba2 prefill (Q4_K_128 -6.34%, Q8_0_128 -6.56%, seq256 -4.79%, seq512 -8.09%, all p=0.000, 18 samples per arm) — a whole-benchmark win from one helper, since rows2D has 20+ call sites. Bit-identical where the missing arm is a WIDENING: AtF64 on an f32 tensor is exactly float64(v). NOT every arm is worth adding — f16/bf16 store as u16 and need a real conversion rather than a widening, so those clauses are legitimately left on the accessor; this check reports the population and the reader picks. Confirm which dtype the workload actually takes (a panic in the clause under the relevant benchmark settles it in one run) before converting. NARROWED AFTER SHIPPING, and the reason is the useful part: the first version reported 23 sites and an audit of every one found that ALL 23 already had both an f64 and an f32 arm, so once rows2D was fixed the check had zero actionable findings and 23 pieces of permanent noise. A switch that already covers F32 and leaves only its DEFAULT on the accessor is the FINISHED state - what remains there is f16/bf16 and the quantized dtypes, which live in u16 or packed storage and need a real conversion rather than an exact widening - so that shape is now suppressed. A NAMED case left on the accessor still fires, since listing a dtype and not converting it is a choice rather than an accepted tail. rows2D BEFORE its fix is the canonical hit: typed arms for f64 only, f32 falling through, every quantized model on that path", false},
+	{"PS1010", "column-walk-slice-of-slices", "a nested loop over a SLICE OF SLICES whose INNER loop varies the ROW index — for j { for i { X[i][j] } } — so every step jumps a whole row, re-dereferences a row header and touches a fresh cache line to read eight bytes. The flat-array analogues (PS1006, PS6011) cannot see this: they match ARR[inner*stride + outer] index arithmetic, and X[i][j] has none. That blind spot was expensive — this check exists because the tool MISSED two measured wins in one session. classic GaussianNB.Fit computed its var-smoothing epsilon with 2*d such passes while every other loop in the same function was already row-major: -23.74% once folded into two row-major passes. classic ballTree.build chose its split dimension with one such pass per dimension, next to an enclose() that already walked rows contiguously: -18.71% on BenchmarkKNNFit once the lo/hi rode along in that pass. REPORTED ONLY WHEN INTERCHANGE IS PROFITABLE: the inner loop must assign to something that does not mention the inner variable — a scalar accumulator, or a slot indexed only by the outer one. A transpose (out[j][i] = in[i][j]) strides whichever way it is run and is excluded by that clause. Bit-identity is usually free, since interchanging preserves each accumulator's summation order when the accumulation is per-outer-index, but CONFIRM that per site rather than assuming it", false},
 	// PS2xxx — allocation inside loops
 	{"PS2001", "alloc-in-loop", "a tensor allocation inside a per-element loop", false},
 	{"PS2002", "unsized-builder", "a strings.Builder/bytes.Buffer written in a loop with no .Grow", false},
@@ -2157,6 +2158,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	out = append(out, allocInParallelBodyFindings(fset, fn)...)
 	out = append(out, unconvertedDtypeArmFindings(fset, fn, ns)...)
 	out = append(out, compositeKeyMapProbeFindings(fset, fn)...)
+	out = append(out, columnWalkFindings(fset, fn)...)
 	out = append(out, reflectSwapperSortFindings(fset, fn)...)
 	out = append(out, perRowMakeSlabFindings(fset, fn)...)
 	out = append(out, vjpScalarBinopFindings(fset, fn)...)
@@ -7252,6 +7254,137 @@ func anyLoopBody(n ast.Node) (*ast.BlockStmt, bool) {
 		return v.Body, v.Body != nil
 	}
 	return nil, false
+}
+
+// columnWalkFindings flags PS1010 — a nested loop over a slice of slices whose INNER loop varies the
+// ROW index, so consecutive iterations jump a whole row.
+//
+// WHY THIS IS NOT PS1006 OR PS6011. Those match a flat array indexed as ARR[inner*stride + outer] and
+// reason about the stride arithmetic. A slice of slices has no such arithmetic — X[i][j] is two
+// index operations — so both checks are structurally blind to it. The cost is the same or worse: a
+// row-header dereference per step on top of the cache miss.
+//
+// THE INTERCHANGE CLAUSE is what keeps this from flagging every transpose in the tree. Interchanging
+// only helps when the inner loop accumulates into something that does not depend on the inner
+// variable, so the whole nest can be rewritten as one row-major pass. A transpose writes
+// out[j][i], which mentions the inner variable, and strides whichever way it is run.
+func columnWalkFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil {
+		return nil
+	}
+	var out []finding
+	seen := map[int]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		outer, obody, ok := loopIndexVar(n)
+		if !ok || obody == nil {
+			return true
+		}
+		ast.Inspect(obody, func(m ast.Node) bool {
+			inner, ibody, ok := loopIndexVar(m)
+			if !ok || ibody == nil || inner == outer {
+				return true
+			}
+			if !assignsOutsideVar(ibody, inner) {
+				return true // a transpose or an in-place shuffle: interchange buys nothing
+			}
+			ast.Inspect(ibody, func(k ast.Node) bool {
+				ix, ok := k.(*ast.IndexExpr)
+				if !ok {
+					return true
+				}
+				col, ok := ix.Index.(*ast.Ident)
+				if !ok || col.Name != outer {
+					return true
+				}
+				row, ok := ix.X.(*ast.IndexExpr)
+				if !ok {
+					return true
+				}
+				rid, ok := row.Index.(*ast.Ident)
+				if !ok || rid.Name != inner {
+					return true
+				}
+				line := fset.Position(ix.Pos()).Line
+				if seen[line] {
+					return true
+				}
+				seen[line] = true
+				out = append(out, finding{
+					pos:      fset.Position(ix.Pos()),
+					end:      fset.Position(ix.End()),
+					category: "column-walk-slice-of-slices",
+					msg: fmt.Sprintf("%s is read with the INNER loop varying the ROW index (%q inner,"+
+						" %q outer), so every step jumps a whole row — a row-header dereference plus a"+
+						" fresh cache line to use eight bytes of it. The inner loop assigns to something"+
+						" that does not mention %q, so the nest is interchangeable: run rows outer and"+
+						" accumulate all the outer-indexed targets in ONE contiguous pass."+
+						" PS1006 and PS6011 cannot see this — they match ARR[inner*stride+outer]"+
+						" arithmetic and a slice of slices has none, which is why this check exists:"+
+						" the tool MISSED two measured wins of exactly this shape. classic"+
+						" GaussianNB.Fit did 2*d such passes for its epsilon prepass, -23.74%% once"+
+						" folded into two row-major passes; classic ballTree.build did one per"+
+						" dimension beside an enclose() that already walked rows, -18.71%% on"+
+						" BenchmarkKNNFit. Interchange usually preserves each accumulator's summation"+
+						" order, but CONFIRM that at the site rather than assuming it.",
+						srcText(fset, ix), inner, outer, inner),
+				})
+				return true
+			})
+			return true
+		})
+		return true
+	})
+	return out
+}
+
+// loopIndexVar returns the index variable a loop advances and its body. A range statement may bind
+// the index as the KEY (for i := range xs) or as the VALUE (for _, i := range idx, where idx holds
+// point ids) — the ball-tree scan that motivated this check uses the second form.
+func loopIndexVar(n ast.Node) (string, *ast.BlockStmt, bool) {
+	switch x := n.(type) {
+	case *ast.RangeStmt:
+		if id, ok := x.Value.(*ast.Ident); ok && id.Name != "_" {
+			return id.Name, x.Body, true
+		}
+		if id, ok := x.Key.(*ast.Ident); ok && id.Name != "_" {
+			return id.Name, x.Body, true
+		}
+	case *ast.ForStmt:
+		if as, ok := x.Init.(*ast.AssignStmt); ok && len(as.Lhs) == 1 {
+			if id, ok := as.Lhs[0].(*ast.Ident); ok && id.Name != "_" {
+				return id.Name, x.Body, true
+			}
+		}
+	}
+	return "", nil, false
+}
+
+// assignsOutsideVar reports whether the body writes any target that never mentions v — a scalar
+// accumulator, or a slot indexed only by the outer variable. That is the signal that interchanging
+// the nest is profitable rather than merely moving the stride somewhere else.
+func assignsOutsideVar(body *ast.BlockStmt, v string) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		var lhs []ast.Expr
+		switch x := n.(type) {
+		case *ast.AssignStmt:
+			lhs = x.Lhs
+		case *ast.IncDecStmt:
+			lhs = []ast.Expr{x.X}
+		default:
+			return true
+		}
+		for _, l := range lhs {
+			if !mentionsVar(l, v) {
+				found = true
+			}
+		}
+		return !found
+	})
+	return found
 }
 
 // compositeKeyMapProbeFindings flags PS3004 — a map probed with a composite-literal key.
