@@ -2,6 +2,7 @@ package linalg
 
 import (
 	"fmt"
+	"github.com/jxsl13/goai/internal/parallel"
 	"math"
 
 	"github.com/jxsl13/goai/tensor"
@@ -113,12 +114,38 @@ func cholFactor(a *tensor.Tensor, n int) ([][]float64, error) {
 			return nil, fmt.Errorf("linalg: matrix is not positive definite (non-positive pivot %g at leading minor %d)", d, j)
 		}
 		l[j][j] = math.Sqrt(d)
-		for i := j + 1; i < n; i++ {
-			s := a.AtF64(i, j)
-			for k := range j {
-				s -= l[i][k] * l[j][k]
+		// PARALLEL over the rows below the diagonal. Row i reads its OWN already-computed columns
+		// l[i][k] for k < j and the fixed row l[j][k], and writes only l[i][j] — so the rows are
+		// independent within column j and the partition changes no value. Each subtraction still
+		// runs k ascending.
+		//
+		// Column j must complete before j+1 begins, which is why the outer loop stays serial; the
+		// serial branch is written out inline because this runs once per column (n times per
+		// factorization) and a closure would allocate per call.
+		rows := n - j - 1
+		ljj := l[j][j]
+		lj := l[j]
+		if rows*j < factorParThreshold || parallel.Workers() <= 1 {
+			for i := j + 1; i < n; i++ {
+				s := a.AtF64(i, j)
+				li := l[i]
+				for k := range j {
+					s -= li[k] * lj[k]
+				}
+				li[j] = s / ljj
 			}
-			l[i][j] = s / l[j][j]
+		} else {
+			parallelRowsIf(true, rows, func(lo, hi int) {
+				for t := lo; t < hi; t++ {
+					i := j + 1 + t
+					s := a.AtF64(i, j)
+					li := l[i]
+					for k := range j {
+						s -= li[k] * lj[k]
+					}
+					li[j] = s / ljj
+				}
+			})
 		}
 	}
 	return l, nil

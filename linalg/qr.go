@@ -158,16 +158,44 @@ func householder(rm [][]float64, m, n int) (vs [][]float64, betas []float64) {
 		}
 		beta := 2 / vtv
 		betas[k] = beta
-		// apply H_k to the trailing submatrix rm[k:m, k:n]
-		for j := k; j < n; j++ {
-			s := 0.0
-			for i := k; i < m; i++ {
-				s += v[i] * rm[i][j]
+		// apply H_k to the trailing submatrix rm[k:m, k:n], PARALLEL over its columns. Column j
+		// reads the reflector v — fixed for this step — and only its own rm[i][j], and writes
+		// only its own rm[i][j]. So the columns are independent and the partition changes no
+		// value: each dot product still accumulates over i ascending, and each element is
+		// updated exactly once per k with k ascending.
+		//
+		// householder was 78% of Lstsq's wall clock at n=768 once the solve phase was
+		// parallelized — the largest single serial block left in the package.
+		//
+		// The serial branch is written out rather than routed through the closure: this runs once
+		// per reflector, n times per factorization, and a closure capturing step state costs one
+		// allocation per call (PERF-CLOSURE-ON-SERIAL-BRANCH-001).
+		cols := n - k
+		if cols*(m-k) < factorParThreshold || parallel.Workers() <= 1 {
+			for j := k; j < n; j++ {
+				s := 0.0
+				for i := k; i < m; i++ {
+					s += v[i] * rm[i][j]
+				}
+				bs := beta * s
+				for i := k; i < m; i++ {
+					rm[i][j] -= bs * v[i]
+				}
 			}
-			bs := beta * s
-			for i := k; i < m; i++ {
-				rm[i][j] -= bs * v[i]
-			}
+		} else {
+			parallelRowsIf(true, cols, func(lo, hi int) {
+				for t := lo; t < hi; t++ {
+					j := k + t
+					s := 0.0
+					for i := k; i < m; i++ {
+						s += v[i] * rm[i][j]
+					}
+					bs := beta * s
+					for i := k; i < m; i++ {
+						rm[i][j] -= bs * v[i]
+					}
+				}
+			})
 		}
 		rm[k][k] = alpha // exact diagonal
 		for i := k + 1; i < m; i++ {
