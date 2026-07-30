@@ -2091,11 +2091,18 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 			msg := fmt.Sprintf("%s uses an indirect comparator. An LSD radix on the key bits can"+
 				" replace it (math.Float64bits is monotonic for non-negative f64) — measured 1.9–2.25×"+
 				" on top-p / typical sampling. BOTH preconditions must hold, and this check can verify"+
-				" NEITHER: (1) the sort key is a numeric float/int, not a string or a composite —"+
-				" radix-on-float-bits does not apply to a string key at all; (2) the slice is long"+
-				" (vocab-sized), not rank- or dimension-sized — on a short slice the radix loses and"+
-				" the measurement is noise. Confirm both by reading the site before acting, then prove"+
-				" identical output order and benchmark.", sname)
+				" NEITHER: (1) the sort key is numeric, not a string — radix-on-float-bits does not"+
+				" apply to a string key at all. A COMPOSITE OF NUMERICS IS NOT DISQUALIFYING, and"+
+				" reading it as such is the easy mistake here: an LSD radix is stable, so passing over"+
+				" the TIEBREAK key first and the primary key last yields exactly the lexicographic"+
+				" composite order. It costs one pass per key, so a (score, index) comparator roughly"+
+				" halves the payoff instead of removing it. classic spatialindex's (dist, idx) kNN sort"+
+				" and nlp embed's (Score, Index) rerank both clear this axis and were declined on the"+
+				" LENGTH one; (2) the slice is long (vocab-sized), not rank- or dimension-sized — on a"+
+				" short slice the radix loses and the measurement is noise, and a k-nearest result is"+
+				" k-length BY CONSTRUCTION however large the dataset behind it is, which is the trap"+
+				" that makes a kNN sort look like a vocab-sized one. Confirm both by reading the site"+
+				" before acting, then prove identical output order and benchmark.", sname)
 			if isSortPkg {
 				// sort.Slice/SliceStable dispatch every element swap through reflect.Swapper.
 				// For a multi-key total order over a struct slice (radix infeasible), switching to
