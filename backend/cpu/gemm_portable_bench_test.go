@@ -311,3 +311,45 @@ func BenchmarkGemmF64PackRemainder(b *testing.B) {
 		})
 	}
 }
+
+// BenchmarkMatmulInlineGate sweeps the F64 matmul's serial fast path against the parallel fan-out
+// around the shapes where matmulInlineWork decides between them.
+//
+// The threshold was calibrated against the pre-tile band. Making that band roughly twice as fast
+// moves the crossover: the fork/join cost is unchanged while the work it is being weighed against
+// shrank, so the point where fanning out starts to pay should have moved UP.
+func BenchmarkMatmulInlineGate(b *testing.B) {
+	for _, sz := range []int{32, 64, 80, 84, 88, 96, 128} {
+		m, k, n := sz, sz, sz
+		b.Run(fmt.Sprintf("mkn=%d", m*k*n), func(b *testing.B) {
+			rng := rand.New(rand.NewSource(int64(sz)))
+			A := make([]float64, m*k)
+			B := make([]float64, k*n)
+			C := make([]float64, m*n)
+			for i := range A {
+				A[i] = rng.Float64()*2 - 1
+			}
+			for i := range B {
+				B[i] = rng.Float64()*2 - 1
+			}
+			for _, arm := range []struct {
+				name string
+				gate int
+			}{{"serial", 1 << 30}, {"parallel", 0}} {
+				b.Run(arm.name, func(b *testing.B) {
+					saved := matmulInlineWork
+					matmulInlineWork = arm.gate
+					defer func() { matmulInlineWork = saved }()
+					b.ResetTimer()
+					for range b.N {
+						if matmulInlineWork > m*k*n {
+							gemmF64Band(A, B, C, 0, m, k, n)
+						} else {
+							gemmF64Rows(A, B, C, m, k, n)
+						}
+					}
+				})
+			}
+		})
+	}
+}

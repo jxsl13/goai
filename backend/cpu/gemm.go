@@ -90,9 +90,25 @@ func matContiguousF32(t *tensor.Tensor) *tensor.Tensor {
 }
 
 // matmulInlineWork gates the F64 matmul's serial fast path: below this m·k·n it runs on
-// the caller (see matmulKernel). Tuned above a training step's tiny layers (~1.3e5) and
-// well below the isolated-throughput matmuls that still need the pool.
-const matmulInlineWork = 1 << 18
+// the caller (see matmulKernel), above it the row bands fan out.
+//
+// RE-SWEPT after the band kernels were register-tiled. The old value, 1<<18, was calibrated
+// against a band roughly twice as slow; fork/join cost did not change while the work being
+// weighed against it shrank, so the crossover moved UP and the old gate was fanning out shapes
+// that had stopped paying for it. Forcing each arm (BenchmarkMatmulInlineGate), square k=n:
+//
+//	m*k*n  262144 (n=64)  parallel +37.26%    592704 (n=84)  parallel  +9.41%
+//	       512000 (n=80)  parallel +22.85%    681472 (n=88)  parallel -37.66%
+//	                                          884736 (n=96)  parallel -45.07%
+//
+// So the crossover now sits between 592704 and 681472, not at 262144: everything in that band
+// was paying 9-37% for a fan-out that no longer earned it. 640000 sits between the last loss and
+// the first win. Not a power of two, deliberately — the measured boundary is not one, and
+// rounding to 1<<19 would re-admit the +9.41% case while 1<<20 would forgo the -37.66% one.
+//
+// A var, not a const, so the benchmark can force each arm and this can be re-swept whenever the
+// band kernels change again (PERF-THRESHOLD-IS-STALE-WHEN-ITS-ARM-CHANGES-001).
+var matmulInlineWork = 640000
 
 func matmulKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*tensor.Tensor, error) {
 	if len(in) != 2 {
