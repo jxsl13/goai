@@ -700,3 +700,8 @@ Rationale: More than ten thresholds in this tree share the constant 1<<15, two d
 WHEN a hot loop is given a hoisted row slice to remove bounds checks, the implementing agent SHALL verify with the compiler's bounds-check debug output that they actually went away, and range over one slice with the others clamped to its length rather than over a separate count.
 
 Rationale: An eigensolver loop already had the row-slice hoist and still carried both of its per-iteration checks, because ranging over a separate element count gives the prove pass no relation between that count and the slice length. Clamping the second slice to the first and ranging over it removed them, and the four checks removed this way were worth 15 percent at one size and 12 at another.
+
+## PERF-BCE-PAYOFF-NEEDS-BRANCHLESS-001
+WHEN bounds-check removal is estimated for a loop containing a data-dependent branch, the estimating agent SHALL discount the estimate sharply, because the mispredicted branch dominates and the check is not what the loop waits on.
+
+Rationale: The same transformation was worth 15 percent in a Jacobi rotation - pure arithmetic, two loads, four multiplies, two adds, two stores, so the checks were two of thirteen uops - and 3.3 percent in a ball-tree distance kernel whose loop carries an early-exit compare that mispredicts on far points. Counting uops against issue width predicts the first correctly and overshoots the second by four times.
