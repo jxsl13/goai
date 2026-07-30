@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"math"
 	"slices"
-	"sort"
 	"sync"
 
 	"github.com/jxsl13/goai/tensor"
@@ -376,8 +375,29 @@ func WandaPruneNM(w, x *tensor.Tensor, n, m int) (pruned, mask *tensor.Tensor, e
 			grp := make([]int, m)
 			gsc := make([]float64, m)
 			drop := make([]bool, m)
+			// slices.SortStableFunc, not sort.SliceStable: the latter reaches its swap through
+			// reflectlite.Swapper and ALLOCATES on every call regardless of slice length
+			// (PS6009). This runs once per N:M block per output column — cin/m * cout times, so
+			// 32768 calls at 2048x2048 with m=4 — which is exactly the "short slice, called
+			// very often" case the check says to convert.
+			//
+			// THE COMPARATOR IS RE-DERIVED, NOT TRANSCRIBED. sort.SliceStable passed POSITIONS
+			// in grp, so the old body indexed gsc[grp[a]-base]; slices.SortStableFunc passes the
+			// ELEMENTS themselves, so it is gsc[x-base]. Transcribing the old expression would
+			// have compiled and silently sorted by the wrong key. Same total preorder as the
+			// original `<`, and stability is retained, so the permutation and therefore every
+			// kept weight is unchanged.
 			sortGrp := func(base int) {
-				sort.SliceStable(grp, func(a, b int) bool { return gsc[grp[a]-base] < gsc[grp[b]-base] })
+				slices.SortStableFunc(grp, func(x, y int) int {
+					switch {
+					case gsc[x-base] < gsc[y-base]:
+						return -1
+					case gsc[x-base] > gsc[y-base]:
+						return 1
+					default:
+						return 0
+					}
+				})
 			}
 			for o := olo; o < ohi; o++ {
 				for base := 0; base < cin; base += m {
@@ -411,8 +431,29 @@ func WandaPruneNM(w, x *tensor.Tensor, n, m int) (pruned, mask *tensor.Tensor, e
 			grp := make([]int, m)
 			gsc := make([]float64, m)
 			drop := make([]bool, m)
+			// slices.SortStableFunc, not sort.SliceStable: the latter reaches its swap through
+			// reflectlite.Swapper and ALLOCATES on every call regardless of slice length
+			// (PS6009). This runs once per N:M block per output column — cin/m * cout times, so
+			// 32768 calls at 2048x2048 with m=4 — which is exactly the "short slice, called
+			// very often" case the check says to convert.
+			//
+			// THE COMPARATOR IS RE-DERIVED, NOT TRANSCRIBED. sort.SliceStable passed POSITIONS
+			// in grp, so the old body indexed gsc[grp[a]-base]; slices.SortStableFunc passes the
+			// ELEMENTS themselves, so it is gsc[x-base]. Transcribing the old expression would
+			// have compiled and silently sorted by the wrong key. Same total preorder as the
+			// original `<`, and stability is retained, so the permutation and therefore every
+			// kept weight is unchanged.
 			sortGrp := func(base int) {
-				sort.SliceStable(grp, func(a, b int) bool { return gsc[grp[a]-base] < gsc[grp[b]-base] })
+				slices.SortStableFunc(grp, func(x, y int) int {
+					switch {
+					case gsc[x-base] < gsc[y-base]:
+						return -1
+					case gsc[x-base] > gsc[y-base]:
+						return 1
+					default:
+						return 0
+					}
+				})
 			}
 			for o := olo; o < ohi; o++ {
 				for base := 0; base < cin; base += m {
