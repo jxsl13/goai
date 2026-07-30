@@ -550,3 +550,8 @@ Rationale: The SoftmaxRegression Hessian Gram accumulates grams[q*mm + a*mAug + 
 WHEN a loop interchange is introduced to enable parallelism, the implementing agent SHALL measure the interchanged nest at GOMAXPROCS=1 against the original and keep the original for the serial branch if it is faster, because the interchange usually trades locality for a parallelizable axis and a default-GOMAXPROCS A/B hides that regression entirely.
 
 Rationale: Interchanging the SoftmaxRegression Gram nest to put the feature row outermost sweeps X once per feature row instead of once total, costing 23.8ms against the original 18.0ms at GOMAXPROCS=1 while delivering 1.96x at 12. The default-GOMAXPROCS A/B showed only the win. Keeping the original nest for the serial branch left single-core at parity. An optimization that regresses a single-core host is not one.
+
+## PERF-PARITY-TARGET-SOLVER-001
+WHEN a change alters values that a solver iteration reads to decide its control flow (SMO working-set selection, EM responsibilities, a line search), the implementing agent SHALL pin bit-identity on the FITTED MODEL rather than on the changed intermediate, because a divergence there does not stay small - the solver compounds it into a different iteration path and a different result set.
+
+Rationale: Parallelizing SVC kernel-column evaluation changes values SMO reads to pick its maximal-violating pair. Comparing columns would have shown agreement without proving the fit agrees; a single differing entry would redirect the working-set selection and end at a different support vector set. Digests over the dual coefficients, the intercept and the support-vector count are what actually establish parity, and they reproduced exactly at both benchmark sizes.
