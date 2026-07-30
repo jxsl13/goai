@@ -53,7 +53,13 @@ func solveCols(cols, per, scratch int, body func(lo, hi int, buf []float64)) {
 // factorParThreshold is the trailing-submatrix element count below which splitting an
 // elimination step costs more than it saves. A factorization runs n steps whose work shrinks
 // quadratically, so most of the later steps fall under this and stay serial.
-const factorParThreshold = 1 << 16
+//
+// A var, not a const, so a parity test can raise it to force the serial arm and diff the two
+// arms against each other. That is not a cosmetic difference: every golden in this package ran
+// at a geometry FAR below this threshold (QR's is 24x16 = 384 elements against a bound of
+// 65536), so the parallel arms had no bit-identity coverage at all — the goldens were pinning
+// the serial path and reading as though they pinned both. Treat as read-only outside tests.
+var factorParThreshold = 1 << 16
 
 // parallelRowsIf runs body over disjoint ranges of [0,n) when want is true, and inline
 // otherwise. Callers decide the predicate because the work per step varies.

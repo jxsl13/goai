@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 
+	"github.com/jxsl13/goai/internal/parallel"
 	"github.com/jxsl13/goai/tensor"
 )
 
@@ -161,12 +162,36 @@ func householder(rm []float64, m, n int, t []float64) (vs [][]float64, betas []f
 		for j := k; j < n; j++ {
 			t[j] *= beta
 		}
-		for i := k; i < m; i++ {
-			vi := v[i]
-			row := rm[i*n : i*n+n]
-			for j := k; j < n; j++ {
-				row[j] -= t[j] * vi
+		// The APPLY phase parallelizes over rows; the ACCUMULATE above cannot, and the
+		// asymmetry is the whole point. Accumulating t[j] = Σ_i v[i]·rm[i,j] is a reduction
+		// over i, so splitting i across workers would need per-worker partials and a merge —
+		// that reassociates the sum and is not bit-identical. Here row i reads only t (fixed
+		// for this reflector) and its own row segment, and writes only that segment: the rows
+		// are independent, every element is still updated exactly once per k with k ascending,
+		// and no value crosses a chunk. So this half is bit-identical under any partition and
+		// the other half stays serial and contiguous.
+		//
+		// The serial branch is written out rather than routed through the closure: this runs
+		// once per reflector, n times per factorization, and a closure capturing step state
+		// costs an allocation per call (PERF-CLOSURE-ON-SERIAL-BRANCH-001).
+		if rows := m - k; (n-k)*rows < factorParThreshold || parallel.Workers() <= 1 {
+			for i := k; i < m; i++ {
+				vi := v[i]
+				row := rm[i*n : i*n+n]
+				for j := k; j < n; j++ {
+					row[j] -= t[j] * vi
+				}
 			}
+		} else {
+			parallel.Rows(rows, func(lo, hi int) {
+				for i := k + lo; i < k+hi; i++ {
+					vi := v[i]
+					row := rm[i*n : i*n+n]
+					for j := k; j < n; j++ {
+						row[j] -= t[j] * vi
+					}
+				}
+			})
 		}
 		rm[k*n+k] = alpha // exact diagonal
 		for i := k + 1; i < m; i++ {
@@ -196,12 +221,25 @@ func applyReflector(q []float64, v []float64, beta float64, k, m, cols int, t []
 	for j := range cols {
 		t[j] *= beta
 	}
-	for i := k; i < m; i++ {
-		vi := v[i]
-		row := q[i*cols : i*cols+cols]
-		for j := range cols {
-			row[j] -= t[j] * vi
+	// Rows are independent here for the same reason as in householder — see the note there.
+	if rows := m - k; cols*rows < factorParThreshold || parallel.Workers() <= 1 {
+		for i := k; i < m; i++ {
+			vi := v[i]
+			row := q[i*cols : i*cols+cols]
+			for j := range cols {
+				row[j] -= t[j] * vi
+			}
 		}
+	} else {
+		parallel.Rows(rows, func(lo, hi int) {
+			for i := k + lo; i < k+hi; i++ {
+				vi := v[i]
+				row := q[i*cols : i*cols+cols]
+				for j := range cols {
+					row[j] -= t[j] * vi
+				}
+			}
+		})
 	}
 }
 
