@@ -106,8 +106,18 @@ func CholSolve(a, b *tensor.Tensor) (*tensor.Tensor, error) {
 			// into s, same final divide. Only where the intermediate lives changes.
 			//
 			// The l[k][i] stream is still column-strided — l is row-major, so stepping k with i
-			// fixed walks a column — and that is a SEPARATE transform (transpose L once) left
-			// alone here so this one can be measured on its own.
+			// fixed walks a column. TRANSPOSING L ONCE WAS TRIED AND MEASURED AND DOES NOT PAY, so
+			// this reads the column deliberately rather than for want of the idea.
+			//
+			// The arithmetic looked convincing: n*n/2 writes once against n*n*cols/2 strided reads
+			// saved, a 1/cols overhead, 0.2% at cols=512. Measured over 18 samples per arm,
+			// interleaved: CholSolveMat/64 +3.74% (p=0.000), /256 -0.63% (p=0.031), /512 and /768
+			// indistinguishable; Inverse/64 -2.23%, its other three sizes indistinguishable. A wash
+			// with a real regression at the small end, where the extra n*n allocation and the full
+			// pass over L cost more than a stride the prefetcher was already handling.
+			//
+			// perfscan PS1010 reports this line, correctly by its own predicate — the check finds
+			// the shape, not the payoff, which is why its output says candidates rather than wins.
 			for i := n - 1; i >= 0; i-- { // back: Lᵀ·x = y (Lᵀ[i,k] = L[k,i])
 				s := y[i]
 				for k := i + 1; k < n; k++ {
