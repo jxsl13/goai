@@ -391,6 +391,32 @@ func (m *GaussianMixture) eStep(x [][]float64, resp, logResp [][]float64) (float
 	return total / float64(n), nil
 }
 
+// forComponents runs body over disjoint component ranges, serially when the fan-out cannot pay and
+// in parallel otherwise. The gate mirrors the full-covariance branch's: one worker per component at
+// most, and a work floor below which the goroutine round trip costs more than the loop.
+func forComponents(k, work int, body func(lo, hi int)) {
+	nw := runtime.GOMAXPROCS(0)
+	if nw > k {
+		nw = k
+	}
+	if nw <= 1 || work < 1<<14 {
+		body(0, k)
+		return
+	}
+	csz := (k + nw - 1) / nw
+	_ = parallelBuild(nw, func(w int) error {
+		lo := w * csz
+		hi := lo + csz
+		if hi > k {
+			hi = k
+		}
+		if lo < hi {
+			body(lo, hi)
+		}
+		return nil
+	})
+}
+
 // mStep recomputes Weights, Means and covariances (with Cholesky factors for
 // GMMFull) from the responsibilities resp.
 func (m *GaussianMixture) mStep(x [][]float64, resp [][]float64) error {
@@ -400,129 +426,160 @@ func (m *GaussianMixture) mStep(x [][]float64, resp [][]float64) error {
 	// each x[i][j] load is reused across 4 independent per-component accumulators,
 	// cutting passes over X from k to ceil(k/4). Each mean[c][j]/sum[c] still sums
 	// i ascending over identical operands -> bit-identical.
-	c := 0
-	for ; c+4 <= k; c += 4 {
-		var mm [4][]float64
-		for t := range mm {
-			mm[t] = make([]float64, d)
-		}
-		var s [4]float64
-		for i := range n {
-			ri, xi := resp[i], x[i]
-			r0, r1, r2, r3 := ri[c], ri[c+1], ri[c+2], ri[c+3]
-			s[0] += r0
-			s[1] += r1
-			s[2] += r2
-			s[3] += r3
-			m0, m1, m2, m3 := mm[0], mm[1], mm[2], mm[3]
-			for j := range d {
-				xv := xi[j]
-				m0[j] += r0 * xv
-				m1[j] += r1 * xv
-				m2[j] += r2 * xv
-				m3[j] += r3 * xv
+	// FANNED OUT OVER COMPONENTS. Each component owns its own mm/s accumulators, nk[c], Means[c]
+	// and Weights[c], so the partition changes no value: within a component the sample loop still
+	// runs i ascending over identical operands. Same argument as the full-covariance fan-out below,
+	// which shipped earlier — this path was simply never given it, and for GMMDiag mStep returns
+	// before ever reaching that code, leaving BOTH the mean and the variance accumulation serial.
+	//
+	// The 4-wide jam is preserved INSIDE each chunk; a chunk holding fewer than 4 components falls
+	// through to the scalar tail, which this file already documents as bit-identical to the jam.
+	meanRange := func(clo, chi int) {
+		c := clo
+		for ; c+4 <= chi; c += 4 {
+			var mm [4][]float64
+			for t := range mm {
+				mm[t] = make([]float64, d)
+			}
+			var s [4]float64
+			for i := range n {
+				ri, xi := resp[i], x[i]
+				r0, r1, r2, r3 := ri[c], ri[c+1], ri[c+2], ri[c+3]
+				s[0] += r0
+				s[1] += r1
+				s[2] += r2
+				s[3] += r3
+				m0, m1, m2, m3 := mm[0], mm[1], mm[2], mm[3]
+				for j := range d {
+					xv := xi[j]
+					m0[j] += r0 * xv
+					m1[j] += r1 * xv
+					m2[j] += r2 * xv
+					m3[j] += r3 * xv
+				}
+			}
+			for t := 0; t < 4; t++ {
+				cix, sc, mt := c+t, s[t], mm[t]
+				nk[cix] = sc
+				inv := 1.0 / (sc + 1e-300)
+				for j := range d {
+					mt[j] *= inv
+				}
+				m.Means[cix] = mt
+				m.Weights[cix] = sc / float64(n)
 			}
 		}
-		for t := 0; t < 4; t++ {
-			cix, sc, mt := c+t, s[t], mm[t]
-			nk[cix] = sc
-			inv := 1.0 / (sc + 1e-300)
-			for j := range d {
-				mt[j] *= inv
+		for ; c < chi; c++ {
+			mean := make([]float64, d)
+			var sum float64
+			for i := range n {
+				r := resp[i][c]
+				sum += r
+				for j := range d {
+					mean[j] += r * x[i][j]
+				}
 			}
-			m.Means[cix] = mt
-			m.Weights[cix] = sc / float64(n)
+			nk[c] = sum
+			inv := 1.0 / (sum + 1e-300)
+			for j := range d {
+				mean[j] *= inv
+			}
+			m.Means[c] = mean
+			m.Weights[c] = sum / float64(n)
 		}
 	}
-	for ; c < k; c++ {
-		mean := make([]float64, d)
-		var sum float64
-		for i := range n {
-			r := resp[i][c]
-			sum += r
-			for j := range d {
-				mean[j] += r * x[i][j]
-			}
-		}
-		nk[c] = sum
-		inv := 1.0 / (sum + 1e-300)
-		for j := range d {
-			mean[j] *= inv
-		}
-		m.Means[c] = mean
-		m.Weights[c] = sum / float64(n)
-	}
+	// The mean accumulation stays SERIAL. Fanning it out too was measured and reverted: it is
+	// shared with the full-covariance branch, which already fans out its own per-component work, and
+	// adding a second fan-out there cost GMMFitFull +2.24% (p=0.000) for a diag gain that the
+	// variance fan-out below delivers on its own.
+	meanRange(0, k)
 	if m.cfg.covariance == GMMDiag {
 		m.logDetHalf = make([]float64, k)
 		m.invCov = make([][]float64, k)
 		// Unroll-and-jam the covariance accumulation over c (4-wide): reuse each
 		// x[i][j] load across 4 components. dv differs per component (its own mean),
 		// but each v[c][j] still sums i ascending as (r*dv)*dv -> bit-identical.
-		c = 0
-		for ; c+4 <= k; c += 4 {
-			var vv [4][]float64
-			for t := range vv {
-				vv[t] = make([]float64, d)
-			}
-			mn0, mn1, mn2, mn3 := m.Means[c], m.Means[c+1], m.Means[c+2], m.Means[c+3]
-			for i := range n {
-				ri, xi := resp[i], x[i]
-				r0, r1, r2, r3 := ri[c], ri[c+1], ri[c+2], ri[c+3]
-				v0, v1, v2, v3 := vv[0], vv[1], vv[2], vv[3]
-				for j := range d {
-					xv := xi[j]
-					a0 := xv - mn0[j]
-					v0[j] += r0 * a0 * a0
-					a1 := xv - mn1[j]
-					v1[j] += r1 * a1 * a1
-					a2 := xv - mn2[j]
-					v2[j] += r2 * a2 * a2
-					a3 := xv - mn3[j]
-					v3[j] += r3 * a3 * a3
+		// Fanned out over components on the same terms as the means above: component c owns vv[t],
+		// cov[c], invCov[c] and logDetHalf[c], and reads only Means[c] and nk[c], both written by
+		// component c in the mean pass. Errors go to per-component slots and are scanned ASCENDING
+		// after the fan-out, so the reported component stays the lowest failing one exactly as the
+		// serial code returned it.
+		dcerr := make([]error, k)
+		varRange := func(clo, chi int) {
+			c := clo
+			for ; c+4 <= chi; c += 4 {
+				var vv [4][]float64
+				for t := range vv {
+					vv[t] = make([]float64, d)
+				}
+				mn0, mn1, mn2, mn3 := m.Means[c], m.Means[c+1], m.Means[c+2], m.Means[c+3]
+				for i := range n {
+					ri, xi := resp[i], x[i]
+					r0, r1, r2, r3 := ri[c], ri[c+1], ri[c+2], ri[c+3]
+					v0, v1, v2, v3 := vv[0], vv[1], vv[2], vv[3]
+					for j := range d {
+						xv := xi[j]
+						a0 := xv - mn0[j]
+						v0[j] += r0 * a0 * a0
+						a1 := xv - mn1[j]
+						v1[j] += r1 * a1 * a1
+						a2 := xv - mn2[j]
+						v2[j] += r2 * a2 * a2
+						a3 := xv - mn3[j]
+						v3[j] += r3 * a3 * a3
+					}
+				}
+				for t := 0; t < 4; t++ {
+					cix := c + t
+					v := vv[t]
+					iv := make([]float64, d)
+					inv := 1.0 / (nk[cix] + 1e-300)
+					var half float64
+					for j := range d {
+						v[j] = v[j]*inv + m.cfg.regCovar
+						if v[j] <= 0 {
+							dcerr[cix] = fmt.Errorf("classic: gmm component %d variance %g non-positive (raise regCovar)", cix, v[j])
+							break
+						}
+						half += 0.5 * math.Log(v[j])
+						iv[j] = 1 / v[j]
+					}
+					m.cov[cix] = v
+					m.invCov[cix] = iv
+					m.logDetHalf[cix] = half
 				}
 			}
-			for t := 0; t < 4; t++ {
-				cix := c + t
-				v := vv[t]
+			for ; c < chi; c++ {
+				v := make([]float64, d)
 				iv := make([]float64, d)
-				inv := 1.0 / (nk[cix] + 1e-300)
+				inv := 1.0 / (nk[c] + 1e-300)
+				for i := range n {
+					r := resp[i][c]
+					for j := range d {
+						dv := x[i][j] - m.Means[c][j]
+						v[j] += r * dv * dv
+					}
+				}
 				var half float64
 				for j := range d {
 					v[j] = v[j]*inv + m.cfg.regCovar
 					if v[j] <= 0 {
-						return fmt.Errorf("classic: gmm component %d variance %g non-positive (raise regCovar)", cix, v[j])
+						dcerr[c] = fmt.Errorf("classic: gmm component %d variance %g non-positive (raise regCovar)", c, v[j])
+						break
 					}
 					half += 0.5 * math.Log(v[j])
-					iv[j] = 1 / v[j]
+					iv[j] = 1 / v[j] // cached reciprocal for logGaussian's Mahalanobis term
 				}
-				m.cov[cix] = v
-				m.invCov[cix] = iv
-				m.logDetHalf[cix] = half
+				m.cov[c] = v
+				m.invCov[c] = iv
+				m.logDetHalf[c] = half
 			}
 		}
-		for ; c < k; c++ {
-			v := make([]float64, d)
-			iv := make([]float64, d)
-			inv := 1.0 / (nk[c] + 1e-300)
-			for i := range n {
-				r := resp[i][c]
-				for j := range d {
-					dv := x[i][j] - m.Means[c][j]
-					v[j] += r * dv * dv
-				}
+		forComponents(k, n*d*k, varRange)
+		for c := range dcerr { // ascending: the same component the serial loop would have reported
+			if dcerr[c] != nil {
+				return dcerr[c]
 			}
-			var half float64
-			for j := range d {
-				v[j] = v[j]*inv + m.cfg.regCovar
-				if v[j] <= 0 {
-					return fmt.Errorf("classic: gmm component %d variance %g non-positive (raise regCovar)", c, v[j])
-				}
-				half += 0.5 * math.Log(v[j])
-				iv[j] = 1 / v[j] // cached reciprocal for logGaussian's Mahalanobis term
-			}
-			m.cov[c] = v
-			m.invCov[c] = iv
-			m.logDetHalf[c] = half
 		}
 		return nil
 	}

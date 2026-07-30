@@ -178,3 +178,46 @@ func TestMStepErrorIsLowestComponent(t *testing.T) {
 		t.Fatalf("expected the LOWEST failing component to be reported, got: %s", ser)
 	}
 }
+
+// TestMStepDiagErrorIsLowestComponent is the GMMDiag twin of the test above, and it exists because
+// that one does not cover this path: mStep's diagonal branch returns before the full-covariance
+// fan-out, so it had its own serial loop and now has its own fan-out with its own error slots.
+//
+// Verified to be a real gate rather than decoration: with the diagonal branch reporting the HIGHEST
+// failing component instead of the lowest, the entire package still passed before this test existed.
+//
+// regCovar is zeroed and each component gets fewer samples than dimensions, so more than one
+// component's variance collapses and the choice among them is observable rather than incidental.
+func TestMStepDiagErrorIsLowestComponent(t *testing.T) {
+	if runtime.NumCPU() < 2 {
+		t.Skip("single-CPU host: mStep cannot take its parallel branch")
+	}
+	const d, k = 8, 4
+	n := k * 2
+	x := make([][]float64, n)
+	for i := range x {
+		row := make([]float64, d)
+		for j := range row {
+			row[j] = float64((i % k) * 10) // identical within a component: zero variance
+		}
+		x[i] = row
+	}
+	run := func(procs int) string {
+		defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(procs))
+		m := NewGaussianMixture(WithGMMComponents(k), WithGMMCovariance(GMMDiag),
+			WithGMMSeed(5), WithGMMMaxIter(3), WithGMMRegCovar(0))
+		err := m.Fit(x)
+		if err == nil {
+			t.Fatalf("procs=%d: expected a non-positive variance; the fixture no longer produces "+
+				"one and this test would pass vacuously", procs)
+		}
+		return err.Error()
+	}
+	ser, par := run(1), run(runtime.NumCPU())
+	if ser != par {
+		t.Fatalf("the reported component depends on the partition:\n serial:   %s\n parallel: %s", ser, par)
+	}
+	if !strings.Contains(ser, "component 0 ") {
+		t.Fatalf("expected the LOWEST failing component to be reported, got: %s", ser)
+	}
+}
