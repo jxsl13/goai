@@ -655,3 +655,8 @@ Rationale: git stash push with an untracked pathspec fails, the subsequent pop r
 WHEN a bit-identity test writes a reference implementation of the code under test, the test author SHALL transcribe the pre-change expression verbatim — same operand forms, same variable-versus-constant status — rather than rewriting it for readability.
 
 Rationale: A softUpdate parity test computed its reference through Unravel and AtF64 into a separate slice with the blend factor declared constant, and failed by exactly 1 ulp while the change under test was innocent. Against a reference written in the implementation own flat-slice form with the factor as a variable, zero of 131841 elements differed. FMA contraction depends on the expression shape, so a readable rewrite measures the compiler instead of the change. Const folding was ruled out by direct comparison.
+
+## PERF-SELECTION-NEEDS-INTROSELECT-001
+WHEN a full sort is replaced by a quickselect, the implementing agent SHALL bound the partition count and finish with a sort, and measure on the real input distribution rather than synthetic random data.
+
+Rationale: A beam-search selection beat pdqsort 61us to 1236us on varied candidates and LOST at 1442us against 1170us on a fixture where the model returns identical logits per prefix, making the array several copies of one smooth curve that defeats median-of-three. A 2*log2(n) budget with a sort fallback capped the bad case at 1201us while keeping the good case at 61us. Random test data would not have surfaced this.
