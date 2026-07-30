@@ -372,17 +372,28 @@ func rows2D(t *tensor.Tensor) [][]float64 {
 	r, c := t.Shape()[0], t.Shape()[1]
 	tc := t.Contiguous()
 	out := make([][]float64, r)
+	// ONE backing array for every row, sub-sliced, instead of r separate allocations. The
+	// contract is unchanged — each row is still an independent COPY that a caller may mutate
+	// without touching the tensor — but a [256, dim] prefill goes from 257 allocations to 2.
+	//
+	// Deliberately still a copy. Returning views into the tensor's storage would remove the
+	// bytes as well, and is where the remaining footprint is, but this helper has 30 call sites
+	// and the change would make every one of them alias its input; that needs each site checked
+	// for mutation rather than a comment claiming they only read.
+	//
+	// Rows are capped at their own length so append on one cannot reach into the next.
+	buf := make([]float64, r*c)
 	switch tc.Dtype() {
 	case tensor.F64:
 		src := tc.Storage().F64()
 		for i := range r {
-			row := make([]float64, c)
+			row := buf[i*c : (i+1)*c : (i+1)*c]
 			copy(row, src[i*c:(i+1)*c])
 			out[i] = row
 		}
 	default:
 		for i := range r {
-			row := make([]float64, c)
+			row := buf[i*c : (i+1)*c : (i+1)*c]
 			for j := range c {
 				row[j] = tc.AtF64(i, j)
 			}
