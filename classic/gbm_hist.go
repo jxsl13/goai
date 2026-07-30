@@ -9,7 +9,9 @@ import (
 // histRadixCutoff is the column length above which the per-feature quantile sort switches
 // from sort.Float64s to the O(n) LSD radix (tree.go's proven transform). Below it the
 // comparison sort's lower constant wins.
-const histRadixCutoff = 512
+// A var, not a const, so a parity test can force each arm and diff them: the two sorts must agree
+// exactly, and nothing pinned that (PS6023).
+var histRadixCutoff = 512
 
 // radixSortF64 sorts col ascending with an 8-pass LSD radix on the order-preserving u64
 // transform of the float64 bits (negatives → ^bits, non-negatives → bits|sign — monotone in
@@ -369,7 +371,9 @@ func newGBMGrower(c gbmConfig, x [][]float64, n, d int) gbmGrower {
 // histParThreshold is the total work (features x samples) below which splitting the
 // per-feature loops costs more than it saves. Same 1<<15 crossover backend/cpu measured
 // on this class of core; a small fit stays serial.
-const histParThreshold = 1 << 15
+// A var for the same reason as histRadixCutoff: the serial and fanned-out arms must produce
+// identical models, and no test forced both.
+var histParThreshold = 1 << 15
 
 // parallelFeatures splits the d features across the shared bounded pool. Feature-indexed
 // work in this file writes only into its own feature's slice of the output, so a

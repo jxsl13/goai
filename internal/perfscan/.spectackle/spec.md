@@ -60,3 +60,8 @@ Rationale: In one sweep of five packages, 436 of 439 findings sat on lines carry
 IF a contiguous-input accumulation loop is judged against PS1007 case (b) refusal to strip-mine, THEN the implementing agent SHALL count how many output rows the loop already accumulates together first, since four rows turn a strip-mine into a register tile that won 35 to 50 percent where one row lost.
 
 Rationale: PS1007 case (b) was measured on a single-row rank-1 update (linalg QR) where strip-mining decayed to nothing by n=768. The portable GEMM bands hold four output rows, so strip-mining by 4 builds a 4x4 register tile: f32 -34.8% and f64 -50.5% geomean, growing with size. The separating quantity is arithmetic intensity, 16 FMAs per 8 loads versus 4 per 5.
+
+## PROC-CHECK-THE-SCANNER-BEFORE-DERIVING-001
+WHEN a defect class has been hit more than once and is about to be reasoned about from first principles, the implementing agent SHALL run the scanner for an existing check reporting that class first, since PS6023 had already flagged the stale threshold that was later re-derived by hand.
+
+Rationale: matmulInlineWork appeared in PS6023 output as gemm.go:95 throughout the session while four thresholds went stale. It was found instead by reasoning about which constants the GEMM work invalidated, and the re-sweep then measured +37.26% at the gate value. The tool was right and unread.
