@@ -186,7 +186,6 @@ var checks = []check{
 	{"PS1005", "manual-walk-dispatch", "a per-element AtF64/SetF64 whose 2+ index args are enclosing-loop variables — a manual multi-dim tensor walk via dispatch that PS1001 Numel-loop check misses", false},
 	{"PS1006", "strided-inner-reduction", "a reduction whose INNER loop var is the high-stride (multiplied) part of a flat index ARR[inner*stride + outer] while the OUTER loop var is the contiguous (additive) part — the inner loop strides ARR by `stride` every step (cache-thrashing). Interchange to inner-outer/outer-inner so ARR is walked contiguously; per output element the reduction stays in the same order, so it is bit-identical. Shipped: MLA value-mix (cpu 1.13x / ref 1.27x), spectral-norm power-iter 2.57x (#592). WIN SCALES WITH `stride`×working-set: big when it EXCEEDS L2 (spectral-norm 512²), ~noise when it stays L1-resident — rank candidates by the strided dim's size. When the strided access sits inside a FUSED per-column O(seq²) scan that can't be interchanged (the outer var `c` is fixed per whole scan, e.g. an RWKV/attention recurrence), the remedy is GATHER/SCATTER: copy column c into contiguous scratch once (O(seq) strided), scan the scratch, scatter grads back once — same bit-exact remedy, shipped WKV backward 2.2-2.9x", false},
 	{"PS1007", "output-row-restreamed", "an inner loop that accumulates into a loop-INVARIANT output row — OUT[d] += f(outer)*IN[outer*stride+d] — so all of OUT is loaded and stored once per OUTER step instead of once in total. TWO remedies, and WHICH ONE depends on whether IN is already contiguous in the inner var; both are bit-identical when OUT enters zeroed, since each element still sums the outer var ascending over the same terms with the same association. (a) IN is NOT contiguous in d (the d-strided gather, e.g. a sparse P·V reading IN[key*stride+d]): strip-mine the d loop by 4 and hold four partial sums in registers with the outer loop INNERMOST. Measured on the sparse P·V against the axpy form: MoBAAttention 57.20ms->46.07ms (1.24x), DSAAttention_seq1024 53.14ms->48.89ms (1.09x). (b) IN IS already contiguous in d (a row-major rank-1 update, IN[i*n+d] read as a row slice): do NOT strip-mine — that trades one contiguous pass over the whole submatrix for n/4 strided passes, and the measurement shows its gain DECAYING with the outer trip count (LstsqMat -2.56% at n=64, -1.92% at 256, -0.52% at 512, indistinguishable from base at 768). Instead unroll the OUTER loop by 2 and emit SEPARATE accumulating adds (`OUT[d] += v0*r0[d]` then `OUT[d] += v1*r1[d]`), so OUT[d] stays in a register across the pair while both input rows stay contiguous: -2.31% to -3.16% at every size, geomean -2.69% (linalg QR, shipped). Case (b) was found by measuring case (a)'s advice on a contiguous site and watching it decay. Also the MIRROR of PS1006, and interchange is NEVER the remedy here — the inner var is already the contiguous part. RANKING for case (b) is NOT about cache residency, and an earlier version of this text got that wrong: the loop visits outer*|OUT| elements and does 3 memory ops per visit (load IN, load OUT, store OUT), which an unroll by U cuts to 1+2/U — 2.0 at U=2, 1.5 at U=4 — so the saving is a fixed fraction of the loop's own traffic whether OUT is L1-resident or not. Both shipped sites confirm it: linalg QR unrolled by 2 with a 6 KB L1-resident accumulator, and nlp SnapKV unrolled by 4 with a 57 KB one. What actually decides the payoff is the loop's SHARE of runtime and the unroll factor the outer trip count allows: QR's accumulate is one of several phases in Lstsq and gave geomean -2.69%, while SnapKV's aggregate dominates its function and gave -21.08% at U=4 (-17.6% at U=2, so the third and fourth rows earned their registers). Rank by share-of-runtime x achievable U, not by whether OUT fits in cache", false},
-	{"PS1008", "elementwise-copy-loop", "a loop whose ENTIRE body is one unit-stride element move — DST[a+v] = SRC[b+v] with a and b invariant in v — so the whole loop is a contiguous run that copy() does in one call. Measured on this host (M2 Pro, darwin/arm64) against the elementwise loop, three run shapes x three sizes, copy() wins EVERY cell: full row 4.13x at n=64, 2.67x at 256, 2.51x at 512; upper-triangular run (j from i) 3.16x/2.39x/2.35x; lower-triangular (j to i) 3.46x/2.27x/2.40x. The compiler does NOT rescue these — even the full-row case stays 2.5x off copy() when the index is written ARR[i*n+j] rather than as a bare range over the destination, so the memmove idiom does not apply and the ratio only decays toward the memory-bandwidth floor as n grows. PRECONDITIONS the AST cannot check: (1) element types must be IDENTICAL, not merely assignable — copy() rejects a []any destination fed a []string source, which the loop accepts; (2) if the two slices ALIAS with the destination offset ABOVE the source, an ascending element loop propagates values forward while copy() has memmove semantics and does not, so the two differ — copy() is the safer of the pair but it is not bit-identical there, and an in-place forward shift is the one shape to leave alone. Otherwise bit-identical: the same values land at the same indices, and no arithmetic or ordering is involved. Distinct from PS1005, which needs an AtF64/SetF64 accessor to fire and so cannot see a pure slice-to-slice move; the two overlap only where the destination is a tensor. RANKING, and this is the part that decides whether a site is worth touching: the ratios above are for the LOOP IN ISOLATION, and all four sites fixed when this check was written moved end-to-end runtime by NOTHING. linalg Cholesky and QR assemble their output in an O(n^2) loop inside an O(n^3) factorization (geomean -0.48% over six cells, every cell within spread, one cell nominally +1.83% with overlapping ranges), and the nlp Mamba2 prefill bias seed is one D-length run against a K*D convolution per timestep (six cells, all indistinguishable). So PS1008 is a WORK reduction that holds on every system - fewer instructions and fewer bounds checks for the same bytes moved, which is why the sites were still converted - but it shows up in a wall clock only where the run is a meaningful SHARE of the enclosing function. Rank by that share, not by the run length: a per-token copy on an inference path is worth it, an output-assembly loop bolted to a cubic kernel is not. PERF-HOTNESS-IS-NOT-SYNTAX-001 applies", false},
 	// PS2xxx — allocation inside loops
 	{"PS2001", "alloc-in-loop", "a tensor allocation inside a per-element loop", false},
 	{"PS2002", "unsized-builder", "a strings.Builder/bytes.Buffer written in a loop with no .Grow", false},
@@ -206,7 +205,7 @@ var checks = []check{
 	{"PS4001", "le-decode-in-loop", "a per-element little-endian bit decode in a loop with no bulk-copy fast path", false},
 	{"PS4002", "scalar-transcendental-vectorizable", "a scalar libm transcendental in a loop while a vectorized sibling is called", false},
 	{"PS4003", "transcendental-wrapper-in-loop", "a loop calls a helper that wraps a libm transcendental", false},
-	{"PS4004", "scalar-copy-loop", "an element-by-element slice copy in a loop where a bulk copy would do", false},
+	{"PS4004", "scalar-copy-loop", "an element-by-element slice copy in a loop where a bulk copy would do. Reported in TWO strengths. ADVISORY when the index pattern only SUGGESTS a run: the message asks for the run length to be verified, because a wrong run is a wrong-value bug rather than a rounding one. PROVEN when the loop body is exactly that one assignment and both sides advance by exactly 1 per step over a base that does not move — then the bounds are computable, the whole loop IS the run, and one copy() replaces it. Measured on this host (M2 Pro, darwin/arm64) against the elementwise form, three run shapes x three sizes, copy() wins EVERY cell: full row 4.13x at n=64, 2.67x at 256, 2.51x at 512; upper-triangular (j from i) 3.16x/2.39x/2.35x; lower-triangular (j to i) 3.46x/2.27x/2.40x. The compiler does NOT rescue these — even the full-row case stays 2.5x off copy() when the index is written ARR[i*n+j] rather than as a bare range over the destination, so the memmove idiom does not apply. RANKING, which decides whether a site is worth touching: those ratios are for the LOOP IN ISOLATION, and all 4 sites converted when the proven classification was added moved end-to-end runtime by NOTHING — linalg Cholesky and QR assemble output in an O(n^2) loop inside an O(n^3) factorization (geomean -0.48% over six cells, all within spread), and the nlp Mamba2 prefill bias seed is one D-length run against a K*D convolution per timestep (six cells indistinguishable). So this is a WORK reduction that holds on every system — fewer instructions and fewer bounds checks for the same bytes moved, which is why those sites were still converted — but it shows in a wall clock only where the run is a meaningful SHARE of the enclosing function. Rank by that share, not by run length; PERF-HOTNESS-IS-NOT-SYNTAX-001 applies. PRECONDITIONS the AST cannot check: (1) element types must be IDENTICAL, not merely assignable — copy() rejects a []any destination fed a []string source, which the loop accepts; (2) if the two slices ALIAS with the destination offset ABOVE the source, an ascending element loop propagates values forward while copy() has memmove semantics and does not, so an in-place forward shift is the one shape to leave alone. SILENCE conditions: any call in the loop body (already fixed, or doing real per-element work), a same-identifier source and destination (a permutation, not a move), a conditional store (a filtered scatter), a sibling branch that already bulk-copies the same pair (the flagged loop is the strided arm that must stay), and — for the ADVISORY strength only — a loop that is not element-counted, which keeps rank-sized setup loops out. The counted-loop gate applies at BOTH strengths: exempting proven runs would cover four range-over-identifier sites but is indistinguishable from a rank loop (`range k` vs `range shape`), so the precision contract wins and those four are a recorded recall gap. A base that is not a bare identifier (a row of a slice-of-slices, l[i][j]) is matched ONLY at the PROVEN strength: allowing it advisorily added 12 findings to the tree and all 12 were gathers with no contiguous run — column gathers, permutation gathers through an index array, and bit-shift sources — so proving the stride is what separates the real shape from them", false},
 	{"PS4005", "per-element-odometer", "an N-D coordinate odometer ticked once per element instead of once per run", false},
 	{"PS4006", "row-slice-matrix", "a [][]T matrix built row-by-row and then indexed inside a nested loop", false},
 	{"PS4007", "vjp-scalar-elementwise-binop", "a *VJP with a scalar single-op elementwise loop (dst[i]=a[i]∘b[i]) that a SIMD backend op would vectorize+parallelize, and no backend.Execute dispatch", false},
@@ -1717,11 +1716,38 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 			if !ok {
 				return true
 			}
-			dstID, ok1 := lhs.X.(*ast.Ident)
-			srcID, ok2 := rhs.X.(*ast.Ident)
-			if !ok1 || !ok2 || dstID.Name == srcID.Name {
+			// The BASE may be an index/selector chain, not just a bare identifier: `out[i*n+j] =
+			// l[i][j]` — a flat destination fed from a row of a slice-of-slices — is a real shape in
+			// this repo (linalg Cholesky assembled its output that way) and an Ident-only base
+			// silently dropped it. Distinctness is compared on the rendered base TEXT so in-place
+			// permutations (out[...] = out[...], a transpose) stay excluded, and the ROOT identifier
+			// is still required so the sibling-branch check below has a name to look for.
+			dstBase, srcBase := srcText(fset, lhs.X), srcText(fset, rhs.X)
+			dstRoot, ok1 := rootIdentName(lhs.X)
+			srcRoot, ok2 := rootIdentName(rhs.X)
+			// Distinctness is on the ROOT identifier, not the rendered base. Comparing base text
+			// looked equivalent and was not: `dst[i][j] = dst[j][i]` renders bases `dst[i]` and
+			// `dst[j]`, which differ, so a TRANSPOSE would have passed as a copy — the exact class
+			// the original identifier comparison existed to exclude. Caught by the tree count
+			// jumping 37 to 50 on a change that was supposed to add 0 sites beyond the four known
+			// shapes.
+			if !ok1 || !ok2 || dstBase == "" || srcBase == "" || dstRoot == srcRoot {
 				return true
 			}
+			// A non-identifier base is admitted ONLY on the proven path, decided below. The advisory
+			// path keeps the original bare-identifier requirement, and the reason is measured: relaxing
+			// it for both strengths took the tree from 33 findings to 45, and every one of the 12 added
+			// was noise — column gathers (`col[i] = x[i][f]`, `key[i] = scores[i][ex]`), permutation
+			// gathers through an index array (`vals[k] = b.x[order[k]][f]`) and bit-shift sources
+			// (`grid[e][b*4+k] = gridMap[(packed>>(2*k))&0x3]`). None of those has a contiguous run at
+			// all, so the advisory message's "where the index pattern has a contiguous run" had nothing
+			// to point at. What made the relaxation worth keeping is one real shape — a flat destination
+			// fed from a row of a slice-of-slices, `out[i*n+j] = l[i][j]`, which linalg Cholesky used —
+			// and that shape is always PROVEN, because proving the run is what tells it apart from a
+			// gather in the first place.
+			_, dstIsIdent := lhs.X.(*ast.Ident)
+			_, srcIsIdent := rhs.X.(*ast.Ident)
+			bareBases := dstIsIdent && srcIsIdent
 			loop := nearestLoop(parent, n)
 			if loop == nil || reportedCopy[loop] || loopBodyHasCall(loop) {
 				return true
@@ -1733,7 +1759,45 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 			// `for i := 0; i < n; i++`, or a range over a call such as `range t.Numel()`
 			// — whereas ranging over a named container is the shape/rank idiom. This
 			// keeps PS4004 a language-shape check that needs no repo configuration.
+			// PROVEN-RUN CLASSIFICATION, and it also relaxes the gate above. When the loop body is
+			// EXACTLY this assignment and both sides advance by exactly 1 per step with a base that
+			// does not move, the run is not a guess: its bounds are computable and the whole loop is
+			// one copy(). That is the difference between this check's advisory form ("verify the run
+			// length") and an actionable one, so the message says which it is.
+			//
+			// The single-statement requirement is load-bearing. A body that also writes something
+			// else still contains a movable run, but the loop cannot be REPLACED by a copy, and
+			// promising that would be a wrong-value bug rather than a rounding one.
+			lv, lbody, haveVar := loopVarBody(loop)
+			proven := false
+			var runLo, runHi, dstRun, srcRun string
+			if haveVar && lbody != nil && len(lbody.List) == 1 {
+				dr, dok := unitStrideOffset(fset, as.Lhs[0], lv)
+				sr, sok := unitStrideOffset(fset, as.Rhs[0], lv)
+				if dok && sok {
+					proven, dstRun, srcRun = true, dr, sr
+					if lo, hi, ok := loopExtent(fset, loop, lv); ok {
+						runLo, runHi = lo, hi
+					}
+				}
+			}
+			// The counted-loop gate keeps rank-sized setup loops out — `for a := range shape { eff[a]
+			// = strides[a] }` is structurally a copy but runs 2-4 times, so a bulk copy there is
+			// noise — and it applies at BOTH strengths, including proven runs.
+			//
+			// Exempting proven runs was tried and reverted. It is tempting because the advice is
+			// correct whatever the trip count, and it would cover four range-over-identifier sites
+			// (`for j := range k { codebooks[m*k+j] = cb[j] }` and three like it). But that shape is
+			// INDISTINGUISHABLE from the rank loop: both range over a bare identifier, and the AST
+			// cannot tell an element count from a slice of dimensions. TestDetectPS4004_SilentOnRankLoop
+			// pins the exclusion, and trading a standing precision contract for four findings is the
+			// wrong way round — especially since every measured conversion of this class moved
+			// end-to-end runtime by nothing, so the four are low-value by this check's own numbers.
+			// Recorded as a recall gap rather than closed.
 			if !isCountedLoop(loop) {
+				return true
+			}
+			if !proven && !bareBases {
 				return true
 			}
 			// The copy must be UNCONDITIONAL. A guarded store (`if ok { ds[i] = gs[of] }`)
@@ -1748,19 +1812,44 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 			// flagged loop IS the strided alternative that has to stay — reporting it
 			// asks for a change that would be wrong. loopBodyHasCall cannot see this,
 			// because the copy() sits in the sibling branch, outside the loop body.
-			if siblingBranchBulkCopies(parent, loop, dstID.Name, srcID.Name) {
+			if siblingBranchBulkCopies(parent, loop, dstRoot, srcRoot) {
 				return true
 			}
 			reportedCopy[loop] = true
+			msg := fmt.Sprintf("%s[...] = %s[...] in a loop with no arithmetic on the value — an"+
+				" element-at-a-time memmove. Where the index pattern has a contiguous run, hoist the"+
+				" run out of the loop and move it with one copy() (a constant source index becomes a"+
+				" fill). Bit-identical by construction: a same-dtype copy does no arithmetic, so there"+
+				" is no accumulation order to change. Verify the run length before acting — a wrong"+
+				" run is a wrong-value bug, not a rounding one.", dstBase, srcBase)
+			if proven {
+				where := "the loop's trip count"
+				if runLo != "" || runHi != "" {
+					where = fmt.Sprintf("exactly [%s, %s)", runLo, runHi)
+				}
+				msg = fmt.Sprintf("this loop's whole body is one unit-stride element move, so the LOOP"+
+					" ITSELF is a contiguous run over %s: the destination advances from %s and the source"+
+					" from %s, both by 1, with no arithmetic between them. Replace the entire loop with a"+
+					" single copy(). Measured on this host against the elementwise form, copy() wins every"+
+					" shape and size tried: full row 4.13x at n=64 down to 2.51x at 512, upper-triangular"+
+					" 3.16x to 2.35x, lower-triangular 3.46x to 2.40x — the compiler does not turn"+
+					" ARR[i*n+j] stores into memmove, so this is not a redundant rewrite. TWO"+
+					" preconditions the AST cannot check: element types must be IDENTICAL rather than"+
+					" assignable (copy() refuses a []any fed from []string), and if the slices ALIAS with"+
+					" the destination offset above the source then the ascending loop propagates forward"+
+					" while copy() does not — leave an in-place forward shift alone. RANK BY SHARE OF"+
+					" RUNTIME: those ratios are for the loop in isolation, and all 4 sites converted when"+
+					" this classification was added moved end-to-end runtime by nothing — an O(n^2)"+
+					" assembly loop inside an O(n^3) factorization (linalg geomean -0.48%%, every cell"+
+					" within spread) and a per-timestep bias seed against a K*D convolution (nlp, all"+
+					" cells indistinguishable). It is a work reduction that holds on every system, so it"+
+					" is still worth doing, but expect a wall-clock change only where the run is a real"+
+					" share of the enclosing function.", where, dstRun, srcRun)
+			}
 			out = append(out, finding{
 				pos:      fset.Position(loop.Pos()),
 				category: "scalar-copy-loop",
-				msg: fmt.Sprintf("%s[...] = %s[...] in a loop with no arithmetic on the value — an"+
-					" element-at-a-time memmove. Where the index pattern has a contiguous run, hoist the"+
-					" run out of the loop and move it with one copy() (a constant source index becomes a"+
-					" fill). Bit-identical by construction: a same-dtype copy does no arithmetic, so there"+
-					" is no accumulation order to change. Verify the run length before acting — a wrong"+
-					" run is a wrong-value bug, not a rounding one.", dstID.Name, srcID.Name),
+				msg:      msg,
 			})
 			return true
 		})
@@ -2014,7 +2103,6 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	out = append(out, allocInParallelBodyFindings(fset, fn)...)
 	out = append(out, reflectSwapperSortFindings(fset, fn)...)
 	out = append(out, perRowMakeSlabFindings(fset, fn)...)
-	out = append(out, elementwiseCopyLoopFindings(fset, fn)...)
 	out = append(out, vjpScalarBinopFindings(fset, fn)...)
 	out = append(out, fullSortBoundedPrefixFindings(fset, fn)...)
 	out = append(out, sortThenTopKFindings(fset, fn)...)
@@ -7339,6 +7427,26 @@ func permutationSortComparator(call *ast.CallExpr) (outer, inner string, ok bool
 	return outer, inner, ok
 }
 
+// rootIdentName returns the leftmost identifier of an index/selector chain — `l` for `l[i]`, `m` for
+// `m.cov[k]`, `dst` for `dst`. PS4004 needs it because siblingBranchBulkCopies searches for a copy()
+// naming the same operands, and that search works on names rather than on rendered expressions.
+func rootIdentName(e ast.Expr) (string, bool) {
+	for {
+		switch x := e.(type) {
+		case *ast.Ident:
+			return x.Name, true
+		case *ast.IndexExpr:
+			e = x.X
+		case *ast.SelectorExpr:
+			e = x.X
+		case *ast.ParenExpr:
+			e = x.X
+		default:
+			return "", false
+		}
+	}
+}
+
 // srcText renders a node back to its source form. exprText cannot be used for PS1008: it handles
 // only Ident/Selector/Index/Paren, so it renders a composite index as the empty string — `os[i*n+j]`
 // came out as `os[]` and an integer loop start came out as nothing at all, which is exactly the
@@ -7353,79 +7461,6 @@ func srcText(fset *token.FileSet, n ast.Node) string {
 		return ""
 	}
 	return b.String()
-}
-
-// elementwiseCopyLoopFindings flags PS1008 — a loop whose entire body is one unit-stride element
-// move, so the loop IS a contiguous run and copy() replaces it with a single call.
-//
-// The predicate is deliberately narrow, because everything wider stops being a copy:
-//
-//   - the body must be EXACTLY one statement, a plain assignment. Two statements, or any arithmetic
-//     on the value, and the loop is doing work copy() cannot do.
-//   - both sides must be index expressions whose LAST index advances by exactly 1 per step: either
-//     the bare loop variable, or `X + v` with X not mentioning v. A coefficient other than 1
-//     (ARR[v*stride+c]) is a strided gather, which is PS1006's domain and NOT a copy.
-//   - the additive part must be invariant in v on BOTH sides, or the two runs do not stay in step.
-//
-// Counted before it was written: 14 sites across the tree, every one a genuine contiguous run, so
-// the predicate needed no survivor filtering. That is unusually clean for a check here and it is a
-// consequence of the narrowness — the same narrowness means PS1008 will miss copies written with a
-// multiplied index, which is the right trade.
-//
-// The measurements in the registry entry are what justify the advice: this is one of the few
-// transforms in this tool that is a wall-clock win at every size measured, because it replaces a
-// per-element bounds-checked store with memmove. See the entry for the two preconditions the AST
-// cannot verify (identical element types, and the aliasing forward-shift case).
-func elementwiseCopyLoopFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
-	if fn.Body == nil {
-		return nil
-	}
-	var out []finding
-	ast.Inspect(fn.Body, func(n ast.Node) bool {
-		lv, body, ok := loopVarBody(n)
-		if !ok || body == nil || lv == "" || len(body.List) != 1 {
-			return true
-		}
-		as, isAs := body.List[0].(*ast.AssignStmt)
-		if !isAs || as.Tok != token.ASSIGN || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
-			return true
-		}
-		dstOff, dstOK := unitStrideOffset(fset, as.Lhs[0], lv)
-		srcOff, srcOK := unitStrideOffset(fset, as.Rhs[0], lv)
-		if !dstOK || !srcOK {
-			return true
-		}
-		lo, hi, bounded := loopExtent(fset, n, lv)
-		howMany := "the loop's trip count"
-		if bounded {
-			howMany = fmt.Sprintf("[%s, %s)", lo, hi)
-		}
-		out = append(out, finding{
-			pos:      fset.Position(n.Pos()),
-			category: "elementwise-copy-loop",
-			msg: fmt.Sprintf("this loop's whole body is one unit-stride element move, so the loop IS a"+
-				" contiguous run over %s: the destination advances from %s and the source from %s, both"+
-				" by 1, with no arithmetic between them. Replace the entire loop with a single copy() over"+
-				" those two runs. Measured on this host against the elementwise form, copy() wins every"+
-				" shape and size tried: full row 4.13x at n=64 down to 2.51x at 512, upper-triangular"+
-				" 3.16x to 2.35x, lower-triangular 3.46x to 2.40x — the compiler does not turn ARR[i*n+j]"+
-				" stores into memmove, so this is not a redundant rewrite. Bit-identical: same values,"+
-				" same indices. TWO preconditions this check cannot see — the element types must be"+
-				" IDENTICAL rather than assignable (copy() refuses a []any fed from []string), and if the"+
-				" two slices ALIAS with the destination offset above the source then the ascending loop"+
-				" propagates forward while copy() does not; leave an in-place forward shift alone."+
-				" RANK BY SHARE OF RUNTIME: those ratios are for the loop in isolation, and all four sites"+
-				" converted when this check was written moved end-to-end runtime by nothing — an O(n^2)"+
-				" assembly loop inside an O(n^3) factorization (linalg geomean -0.48%%, every cell within"+
-				" spread) and a per-timestep bias seed against a K*D convolution (nlp, all cells"+
-				" indistinguishable). It is a work reduction that holds on every system, so it is still"+
-				" worth doing, but expect a wall-clock change only where the run is a real share of the"+
-				" enclosing function.",
-				howMany, dstOff, srcOff),
-		})
-		return true
-	})
-	return out
 }
 
 // unitStrideOffset reports whether e is an index expression whose LAST index advances by exactly 1
